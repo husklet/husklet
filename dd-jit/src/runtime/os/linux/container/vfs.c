@@ -348,6 +348,24 @@ static char g_inotify_wpath[1024][512];
 static char *g_inotify_snap[1024]; // newline-joined entry names of the last snapshot (malloc'd)
 // pinned O_DIRECTORY fd to the rootfs (set at startup)
 static int g_root_fd = -1;
+// Engine-private host fds (the rootfs dir-fd + each bind-mount volume dir-fd) share the guest's descriptor
+// table in dd's in-process model. Opened at startup, right after stdio, they otherwise squat the LOW numbers
+// Linux would leave free for the guest: g_root_fd lands on fd 3, shifting every guest fd allocation up by one
+// AND becoming visible to the guest at a number a native run has free. s6-linux-init (#299) reads its
+// notification pipe on the by-convention-lowest fd 3, which under dd was g_root_fd -- a DIRECTORY -> the
+// read returns EISDIR ("unable to read from fd 3: Is a directory") and stage 1 aborts. Hoist each startup
+// engine fd above a high floor so the guest's low fd space is exactly as on Linux (only 0/1/2 taken). Mirrors
+// engine_fd_reloc's F_DUPFD floor (io.c) but relocates unconditionally, not just off a collision. Lazily
+// created engine fds (the timer kqueue, the signalfd self-pipe) are made after the guest is running and take
+// whatever is free then, so they never squat a fd the just-started guest relies on.
+static int engine_fd_hoist(int fd) {
+    if (fd < 3) return fd; // stdio (or a failed open) -> nothing to move
+    int hi = fcntl(fd, F_DUPFD, 1 << 20); // high floor; F_DUPFD returns the lowest free fd >= floor
+    if (hi < 0) hi = fcntl(fd, F_DUPFD, 64); // floor beyond the guest's active low fds under a small RLIMIT
+    if (hi < 0) return fd;                    // relocation failed -> keep the original (still functional)
+    close(fd);
+    return hi;
+}
 // Bind-mount volumes: a guest path prefix -> a host directory, each its own confined jail root.
 struct vol {
     char guest[256];
@@ -420,6 +438,7 @@ static void add_vol(const char *spec) { // "[ro:]guestpath:hostdir" -> a confine
         if ((v->fd = open(par, O_RDONLY | O_DIRECTORY)) < 0) return;
     } else if ((v->fd = open(v->hcanon, O_RDONLY | O_DIRECTORY)) < 0)
         return;
+    v->fd = engine_fd_hoist(v->fd); // keep this engine dir-fd out of the guest's low fd range (#299)
     g_nvols++;
     vol_mkmountpoint(v->guest, v->isfile);
 }
