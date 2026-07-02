@@ -450,9 +450,22 @@ static int svc_event(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint6
     }
     case 73: {
         struct pollfd *fds = (void *)a0;
-        // ppoll -> poll
+        // ppoll -> poll. macOS has no ppoll, so collapse the timespec deadline into poll's int-ms timeout.
+        // #290: skalibs iopause (s6-supervise et al.) hands a huge but FINITE relative deadline for an
+        // idle-but-up service -- settimeout_infinite() makes the delta exactly tain_infinite_relative,
+        // whose tv_sec = 2^61 = 2305843009213693952. On real Linux ppoll takes that timespec and blocks.
+        // Here the naive (int)(tv_sec*1000) truncates: 2^61 * 1000 == 0 (mod 2^32), so tmo became 0 ->
+        // poll returned immediately -> s6 saw a spurious timeout in the UP state and busy-looped printing
+        // "can't happen: timeout while the service is up!". Clamp the conversion to [0, 0x7fffffff] ms.
         struct timespec *ts = (void *)a2;
-        int tmo = ts ? (int)(ts->tv_sec * 1000 + ts->tv_nsec / 1000000) : -1;
+        int tmo;
+        if (!ts) tmo = -1;                                     // NULL timespec -> block forever
+        else if (ts->tv_sec < 0) tmo = 0;                      // past/negative deadline -> don't block
+        else if (ts->tv_sec >= 0x7fffffff / 1000) tmo = 0x7fffffff; // would overflow ms range -> cap (~24.8d)
+        else {
+            long long ms = (long long)ts->tv_sec * 1000 + ts->tv_nsec / 1000000;
+            tmo = ms > 0x7fffffff ? 0x7fffffff : (int)ms;
+        }
         int r;
         // #146: poll/ppoll is never restarted by a handler; retry only on a spurious EINTR (see svc_poll_retry).
         do { r = poll(fds, (nfds_t)a1, tmo); } while (r < 0 && svc_poll_retry(c));
