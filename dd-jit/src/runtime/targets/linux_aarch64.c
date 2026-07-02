@@ -298,11 +298,23 @@ int dd_run(const char *rootfs, int argc, char *const argv[]) {
             for (char *t = strtok_r(tb, ":", &sv); t; t = strtok_r(NULL, ":", &sv))
                 add_lower(t);
         }
-        const char *nn = getenv("DD_NETNS");
-        if (nn && nn[0] && !g_netns[0]) {
-            snprintf(g_netns, sizeof g_netns, "/tmp/.ddnet-%.40s", nn);
-            mkdir(g_netns, 0700);
-            // private loopback ns
+        // Private-loopback netns (#273): derive g_netns from the DD_NETNS KEY (set per-container by the
+        // daemon; a `docker exec` reuses the target container's key so the exec shares its 127.0.0.1).
+        // When DD_NETNS is UNSET (a bare engine launch / the basics matrix), MINT a per-process key and
+        // export it — so loopback isolation is ALWAYS on. Otherwise g_netns stayed empty, lo_on() was
+        // false, and 127.0.0.1 fell through to the REAL host TCP stack shared by every concurrent guest,
+        // so two containers' 127.0.0.1:PORT collided (nc-loopback intermittently reached another
+        // container's published listener). Mirrors linux_x86_64.c. Opt out via DD_NONETNS.
+        if (!getenv("DD_NONETNS") && !g_netns[0]) {
+            const char *nn = getenv("DD_NETNS");
+            char key[40];
+            if (nn && nn[0]) snprintf(key, sizeof key, "%.39s", nn);
+            else snprintf(key, sizeof key, "%d", (int)getpid());
+            snprintf(g_netns, sizeof g_netns, "/tmp/.ddnet-%.40s", key);
+            // Export the minted key so children/exec + abstract-AF_UNIX/IPC/bridge share this
+            // container's namespace (getenv("DD_NETNS")); a daemon-supplied key is already in the env.
+            if ((mkdir(g_netns, 0700) == 0 || errno == EEXIST) && !(nn && nn[0]))
+                setenv("DD_NETNS", key, 1);
         }
         const char *eu = getenv("DD_UID");
         if (eu && g_uid < 0) g_uid = dd_parse_id("DD_UID", eu);
