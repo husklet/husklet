@@ -10,3 +10,7 @@ dd.sock
 /target-*
 # Claude Code worktrees + transcripts
 .claude/
+
+# maintainer/agent local dev helpers (never committed)
+.dev/
+target-*/
