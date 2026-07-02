@@ -652,6 +652,9 @@ static int svc_proc(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64
                                // (on the child's close) crashes; drop it so the child re-fdopendir's fresh
             kqueue_rebuild_after_fork(); // macOS kqueue() fds (epoll/timerfd/inotify) don't survive fork ->
                                          // rebuild them so the child doesn't EBADF on its inherited event fds
+                                         // (also reinits g_ep_mtx, inherited-locked if a peer forked mid-epoll)
+            thread_after_fork(); // reset process-private thread/futex locks a dead peer may have held at fork
+            sysv_after_fork();   // reset the SysV-shm lock (same fork-unsafe-mutex class)
 #ifdef DD_HAS_MACH_EXC
             // The CRASHDBG Mach exception port + its receiver thread do NOT survive fork, so a crash in the
             // child silently dies. Clear the inherited task exception port so a fault falls through to the
@@ -871,6 +874,8 @@ static int svc_proc(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64
             G_SHADOW_RESET(c);
             rc_reset();
             kqueue_rebuild_after_fork(); // macOS kqueue() fds don't survive fork -> rebuild epoll/timer/inotify
+            thread_after_fork(); // reset process-private thread/futex/epoll locks inherited-locked across fork
+            sysv_after_fork();
         }
         // CLONE_PIDFD: clone3 stores the child pidfd via the `pidfd` field (clone_args[1]); back it the same
         // way as case 220 so a clone3-based spawn (newer glibc/runtimes) can epoll_wait/poll it to reap.

@@ -131,6 +131,11 @@ static void kqueue_rebuild_after_fork(void) {
     memset(g_ep_os, 0, sizeof g_ep_os);
     // the rebuilt kqueues carry no EVFILT_USER wake knote either -> re-arm lazily on next epoll op
     memset(g_ep_wake_armed, 0, sizeof g_ep_wake_armed);
+    // fork() only clones the calling thread: if a peer M held g_ep_mtx (mid epoll_ctl/epoll_wait) at fork
+    // time the child inherits it LOCKED with no owner, so its next svc_event ep_lock() deadlocks forever
+    // (the go-build compile child hit exactly this after the g_jit_lock fix). The child is single-threaded
+    // now, so reinitialising it to unlocked is always correct. (Same fork-unsafe-mutex class as g_jit_lock.)
+    pthread_mutex_init(&g_ep_mtx, NULL);
 }
 
 static int svc_event(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3,
