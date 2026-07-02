@@ -124,11 +124,41 @@ static int chown_xattr_get(const char *hostpath, int fd, int *uid, int *gid) {
 static int g_cred_init = 0;
 static int g_ruid, g_euid, g_suid; // real / effective / saved-set uid
 static int g_rgid, g_egid, g_sgid; // real / effective / saved-set gid
+// #257: model the CAP_SETUID/CAP_SETGID capability that actually governs set*id -- not just euid==0. Real
+// Linux clears a task's EFFECTIVE caps when euid transitions 0->nonzero, and clears the PERMITTED set too
+// once every uid (r/e/s) is nonzero UNLESS PR_SET_KEEPCAPS is armed; a later capset() can then re-raise
+// effective from permitted. setpriv relies on exactly this: it sets KEEPCAPS, does setresuid(1000,...),
+// capset()s to re-raise, then setresgid(1000,...) -- which our euid==0-only gate wrongly rejected (EPERM).
+// apt/gosu drop WITHOUT keepcaps, so permitted->0 and they correctly can never regain root (#242/#255).
+static int g_keepcaps = 0;                  // PR_SET_KEEPCAPS armed (caps survive the all-nonzero uid drop)
+static int g_cap_setid_perm, g_cap_setid_eff; // permitted / effective CAP_SETUID+CAP_SETGID (move together)
 static void cred_init(void) {
     if (g_cred_init) return;
     g_ruid = g_euid = g_suid = cuid();
     g_rgid = g_egid = g_sgid = cgid();
+    // A container starts as root (uid 0 by default) with full caps; a non-root container default holds none.
+    g_cap_setid_perm = g_cap_setid_eff = (g_euid == 0);
     g_cred_init = 1;
+}
+// Recompute the CAP_SETID state after a uid change, per the kernel's credential rules (call from every
+// set*uid handler AFTER it mutates g_ruid/euid/suid). effective is cleared the moment euid != 0; permitted
+// is cleared once all three uids are nonzero unless KEEPCAPS is armed; root (euid 0) holds both.
+static void cred_uid_changed(void) {
+    if (g_euid == 0) {
+        g_cap_setid_perm = g_cap_setid_eff = 1;
+        return;
+    }
+    g_cap_setid_eff = 0; // euid left 0 -> effective caps dropped (a capset can re-raise from permitted)
+    if (g_ruid != 0 && g_suid != 0 && !g_keepcaps) g_cap_setid_perm = 0; // all-nonzero, no keepcaps -> gone
+}
+// #257: execve of an ordinary (non-setuid, no-file-cap) binary recomputes the capability state: a non-root
+// task loses all caps, root keeps them, and PR_SET_KEEPCAPS is cleared -- so a program that dropped uid and
+// then exec'd cannot silently retain CAP_SETUID/SETGID. The uid/gid values THEMSELVES persist across exec
+// (the engine reloads the image in-process), exactly as the kernel carries credentials over an execve.
+static void cred_after_exec(void) {
+    cred_init();
+    g_keepcaps = 0;
+    g_cap_setid_perm = g_cap_setid_eff = (g_euid == 0);
 }
 static int cred_euid(void) {
     cred_init();
@@ -138,13 +168,14 @@ static int cred_egid(void) {
     cred_init();
     return g_egid;
 }
-// An unprivileged task (euid != 0) may only set an id it already holds (real/effective/saved). -1 means
-// "leave unchanged". Returns 1 if id is permitted, 0 -> EPERM.
+// A task may set an id it already holds (real/effective/saved) or ANY id while it holds effective
+// CAP_SETUID/CAP_SETGID (which root does, and which KEEPCAPS+capset preserves across a uid drop). -1 means
+// "leave unchanged".
 static int uid_permitted(int id) {
-    return id == -1 || g_euid == 0 || id == g_ruid || id == g_euid || id == g_suid;
+    return id == -1 || g_cap_setid_eff || id == g_ruid || id == g_euid || id == g_suid;
 }
 static int gid_permitted(int id) {
-    return id == -1 || g_euid == 0 || id == g_rgid || id == g_egid || id == g_sgid;
+    return id == -1 || g_cap_setid_eff || id == g_rgid || id == g_egid || id == g_sgid;
 }
 // ---- BUG #255: new-file ownership stamp (runtime setuid/setgid drop) ----------------------------
 // A guest that drops privilege at runtime (setuid/setresuid/setfsuid -> gosu's postgres) and then

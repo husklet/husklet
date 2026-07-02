@@ -149,14 +149,60 @@ static int svc_proc(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64
                     uint64_t a4, uint64_t a5) {
     switch (nr) {
     // ===================== Process & scheduling — clone/exec/wait/ids/prctl/futex/caps/sched =====================
+    // capget(hdrp, datap): the container runs as root, so report every capability present -- but ALSO
+    // honour the kernel's ABI-version negotiation, which libcap-ng/libcap (and thus setpriv, #257) probe
+    // for. hdrp->version selects the layout; an UNSUPPORTED value makes the real kernel rewrite it to its
+    // preferred version (v3) and fail EINVAL. The old stub ignored the header entirely and always returned
+    // 0, so libcap-ng negotiated a bogus (0) version and capng_apply() then failed WITHOUT setting errno
+    // -> setpriv aborts "activate capabilities: Success" before it ever reaches capset. Model it properly.
     case 90: {
-        if (a1) memset((void *)a1, 0xff, 12);
+        if (!a0 || !host_range_mapped(a0, 8)) {
+            G_RET(c) = (uint64_t)(-EFAULT);
+            break;
+        }
+        uint32_t ver = *(uint32_t *)a0;
+        int u32s; // number of __user_cap_data_struct the version spans
+        switch (ver) {
+        case 0x19980330: u32s = 1; break; // _LINUX_CAPABILITY_VERSION_1 (1 u32 mask)
+        case 0x20071026:                  // _LINUX_CAPABILITY_VERSION_2 (deprecated)
+        case 0x20080522: u32s = 2; break; // _LINUX_CAPABILITY_VERSION_3 (2 u32 masks, 64 caps)
+        default:
+            *(uint32_t *)a0 = 0x20080522;   // kernel overwrites with its preferred version ...
+            G_RET(c) = (uint64_t)(-EINVAL); // ... and reports EINVAL (this IS the probe libcap-ng runs)
+            goto cap_done;
+        }
+        // datap (a1) is an array of {effective, permitted, inheritable} per u32 block; NULL on a pure probe.
+        if (a1 && host_range_mapped(a1, (size_t)u32s * 12)) {
+            uint32_t *d = (uint32_t *)a1;
+            for (int i = 0; i < u32s; i++) {
+                d[i * 3 + 0] = 0xffffffff; // effective
+                d[i * 3 + 1] = 0xffffffff; // permitted
+                d[i * 3 + 2] = 0xffffffff; // inheritable
+            }
+        }
+        G_RET(c) = 0;
+    cap_done:
+        break;
+    }
+    // capset(hdrp, datap): reject an unsupported ABI version the same way the kernel does (EINVAL, header
+    // rewritten to v3), so a libcap-ng probe sees a consistent kernel; otherwise honour the request (the
+    // container is root -- we don't model per-cap enforcement, so any well-formed set "succeeds").
+    case 91: {
+        if (a0 && host_range_mapped(a0, 4)) {
+            uint32_t ver = *(uint32_t *)a0;
+            if (ver != 0x19980330 && ver != 0x20071026 && ver != 0x20080522) {
+                *(uint32_t *)a0 = 0x20080522;
+                G_RET(c) = (uint64_t)(-EINVAL);
+                break;
+            }
+        }
+        // #257: a capset re-raises EFFECTIVE caps from the PERMITTED set (the only bits it may set). After a
+        // KEEPCAPS uid drop this is how setpriv restores effective CAP_SETGID so its following setresgid works.
+        cred_init();
+        g_cap_setid_eff = g_cap_setid_perm;
         G_RET(c) = 0;
         break;
-        // capget -> all caps present
     }
-    // capset -> ok
-    case 91: G_RET(c) = 0; break;
     // chroot(path): re-root the guest WITHIN the rootfs jail. Resolve the target through the active jail to
     // its host backing -- this validates it exists as a directory inside the rootfs and can NEVER name a
     // host path -- then record it as the new chroot prefix. Subsequent absolute guest paths are walked
@@ -303,10 +349,11 @@ static int svc_proc(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64
             G_RET(c) = (uint64_t)(-(int64_t)EPERM);
             break;
         }
-        if (g_euid == 0)
+        if (g_cap_setid_eff)
             g_ruid = g_suid = u;
         g_euid = u;
         g_fsuid_ovr = -1; // #255: fsuid follows the new euid (POSIX) -> new files stamped with it
+        cred_uid_changed(); // #257: recompute CAP_SETID after the uid transition (drop vs keepcaps)
         G_RET(c) = 0;
         break;
     }
@@ -318,7 +365,7 @@ static int svc_proc(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64
             G_RET(c) = (uint64_t)(-(int64_t)EPERM);
             break;
         }
-        if (g_euid == 0)
+        if (g_cap_setid_eff)
             g_rgid = g_sgid = gg;
         g_egid = gg;
         g_fsgid_ovr = -1; // #255: fsgid follows the new egid
@@ -341,6 +388,7 @@ static int svc_proc(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64
         if (s != -1)
             g_suid = s;
         g_fsuid_ovr = -1; // #255: fsuid follows euid
+        cred_uid_changed(); // #257: recompute CAP_SETID after the uid transition (drop vs keepcaps)
         G_RET(c) = 0;
         break;
     }
@@ -378,6 +426,7 @@ static int svc_proc(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64
         if (r != -1 || (e != -1 && e != old_ruid))
             g_suid = g_euid;
         g_fsuid_ovr = -1; // #255: fsuid follows euid
+        cred_uid_changed(); // #257: recompute CAP_SETID after the uid transition (drop vs keepcaps)
         G_RET(c) = 0;
         break;
     }
@@ -520,12 +569,22 @@ static int svc_proc(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64
             G_RET(c) = 0;
             break;
         } // PR_GET_NAME
+        // #257: PR_SET_KEEPCAPS(8)/PR_GET_KEEPCAPS(7) drive the CAP_SETID retention model -- setpriv arms
+        // KEEPCAPS so its post-uid-drop capset can re-raise CAP_SETGID (see cred_uid_changed/capset).
+        if ((int)a0 == 8) {
+            g_keepcaps = (a1 != 0);
+            G_RET(c) = 0;
+            break;
+        }
+        if ((int)a0 == 7) {
+            G_RET(c) = (uint64_t)g_keepcaps;
+            break;
+        }
         // 0 for known no-ops; EINVAL for unknown (kernel does)
         switch ((int)a0) {
         case 1:
         case 3:
         case 4:
-        case 8:
         case 15:
         case 35:
         case 36:
@@ -687,6 +746,7 @@ static int svc_proc(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64
         // e.g. gosu/su-exec, leaves netpoller/idle Ms live; a surviving M would run the old image against the
         // freed state). Blocks until all peers have left run_guest, so the teardown below is race-free.
         thread_exit_others(c);
+        cred_after_exec(); // #257: exec recomputes caps (non-root loses them) + clears KEEPCAPS; ids persist
         // emulate the kernel's close-on-exec sweep. No real host exec runs below -- we re-load the new image
         // in this same process -- so FD_CLOEXEC fds must be closed by hand or they leak into the new program.
         exec_close_cloexec();
