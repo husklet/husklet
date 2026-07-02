@@ -1,0 +1,11 @@
+workload,arch,metric,unit,dd,docker_mac,ratio,higher_is_better
+redis-SET,arm64,redis SET throughput,ops/s,247524.75,322061.19,0.769,yes
+redis-GET,arm64,redis GET throughput,ops/s,267022.69,322061.19,0.829,yes
+sqlite-insert,arm64,insert 200k rows in txn,ms,325.9,84.3,3.866,no
+sqlite-select,arm64,20k point selects,ms,315.1,44.8,7.034,no
+openssl-aesgcm,arm64,openssl speed aes-128-gcm 16KB,MB/s,7980.7,8388.4,0.951,yes
+openssl-sha256,arm64,openssl speed sha256 16KB,MB/s,3139.3,3219.5,0.975,yes
+targz,arm64,tar czf - /usr | wc -c,ms,2787,1717,1.623,no
+compile-go,arm64,go build incremental (warm cache),ms,3623,144,25.160,no
+compile-cold,arm64,go build cold (full stdlib rebuild),ms,75674,,,no
+postgres-tps,arm64,pgbench -T15 -c4 -j2,tps,DD_INIT_HANGS,ORB_FLAKED,,yes

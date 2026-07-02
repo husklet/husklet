@@ -213,6 +213,7 @@ fn op_x86_misc() -> Group {
         x("x87",         "completeness/x86_x87.c"),
         x("repstring",   "completeness/x86_repstring.c"),   // rep movs/stos/cmps — handled
         x("movnt",       "completeness/x86_movnt.c"),      // jit86 UNIMPL 0F E7 (MOVNTDQ)
+        x("sbb-acc-imm", "completeness/x86_sbb.c"),        // acc-imm SBB 0x1C/0x1D (+REX.W) — result+flags vs qemu
     ])
 }
 

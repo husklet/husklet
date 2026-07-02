@@ -110,20 +110,18 @@ pub fn group() -> ScenGroup {
             .has("AWK=500500"),
 
         // ======================= Python C-extensions (libcrypto / zlib / FFI) ==================
-        // CPython through python:3.12-slim → xfail amd64 (jit86-opcode-1c: silent exit 255 on x86_64).
         // zlib deflate/inflate roundtrip (C extension, zlib asm).
         scen("weird/python-zlib", "python:3.12-slim")
             .exec("python3 -c \"import zlib;d=bytes(range(256))*100;print('ZLIB='+str(len(zlib.decompress(zlib.compress(d,9)))))\"")
-            .has("ZLIB=25600").xfail(&[Target::AmdLinux]),
+            .has("ZLIB=25600"),
         // hashlib → OpenSSL libcrypto SHA-256 (SHA-NI / armv8 crypto-ext path).
         scen("weird/python-hashlib", "python:3.12-slim")
             .exec("python3 -c \"import hashlib;print('SHA='+hashlib.sha256(b'abc').hexdigest())\"")
-            .has("SHA=ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad")
-            .xfail(&[Target::AmdLinux]),
+            .has("SHA=ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"),
         // ctypes FFI: dlopen(NULL) + call libc strlen — the foreign-call / trampoline path.
         scen("weird/python-ctypes", "python:3.12-slim")
             .exec("python3 -c \"import ctypes;libc=ctypes.CDLL(None);print('CTYPES='+str(libc.strlen(b'hello')))\"")
-            .has("CTYPES=5").xfail(&[Target::AmdLinux]),
+            .has("CTYPES=5"),
 
         // ====================== self-modifying / dynamic code (native) =========================
         // mmap(RWX), write machine code, jump to it — the canonical SMC / DBT translate-on-execute test.
