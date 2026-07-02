@@ -15,6 +15,13 @@ pub mod soak;       // long-run JIT machinery: code-cache/IBTC/SMC/churn enduran
 pub mod darwin;     // macOS-native (lighter-touch): kqueue/sysctl/mach/Mach-O ABI corners
 pub mod completeness; // syscall-table + x86-64/aarch64 opcode COMPLETENESS probes (no images)
 pub mod memory;     // RSS leak / sustainability probes (guest-visible memory growth over churn)
+// task #311 compatibility-coverage expansion (one file per category, each self-owned):
+pub mod fsx;        // extended fs: *at() family, xattr, fadvise/close_range/O_PATH
+pub mod memx;       // vm: MAP_FIXED, mlock, mremap, mincore
+pub mod signalx;    // signals: sigaltstack/SA_RESTART/itimer/pause/sigwait/siginfo/tgkill
+pub mod processx;   // process: posix_spawn/vfork/waitid/getrusage/prlimit/clone3/futex
+pub mod timex;      // clocks: clock_getres/gettimeofday/clock_nanosleep/linux clock ids
+pub mod clitools;   // real CLI tools (busybox coreutils) in the alpine rootfs
 
 pub fn all() -> Vec<Group> {
     let mut g = vec![];
@@ -29,5 +36,11 @@ pub fn all() -> Vec<Group> {
     g.extend(soak::groups());
     g.extend(darwin::groups());
     g.extend(completeness::groups());
+    g.extend(fsx::groups());
+    g.extend(memx::groups());
+    g.extend(signalx::groups());
+    g.extend(processx::groups());
+    g.extend(timex::groups());
+    g.extend(clitools::groups());
     g
 }
