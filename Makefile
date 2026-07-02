@@ -48,7 +48,7 @@ scenarios-prune: ## DISK reclaim: drop UNUSED images from the mac docker ORACLE 
 	  echo "oracle disk AFTER:"; mac docker system df </dev/null 2>&1 | head -2
 coverage: jit  ## report unimplemented syscalls/opcodes (static switch-diff + dynamic corpus run); MODE=static|dynamic|all
 	bash dd-tests/tools/coverage.sh $(or $(MODE),all)
-bench: jit      ## speed: same Linux binary in the VM (native/qemu) vs through dd's JIT (no VM)
+bench: jit      ## TRUE DBT overhead: self-timed compute kernels (startup EXCLUDED) — native-arm64 vs dd-arm64/dd-x86/qemu-x86; BENCH_N=median (3), BENCH_K=alu,fp to narrow; writes target/dd-tests/bench.{csv,json}
 	cargo run -q -p dd-tests --release --bin bench
 fmt:            ## clang-format the decomposed C (jit/ os/linux/ frontend/ include/ targets/)
 	cd dd-jit/src/runtime && find jit os/linux frontend include targets -name '*.c' -o -name '*.h' | xargs clang-format -i
