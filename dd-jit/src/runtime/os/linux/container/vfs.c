@@ -600,20 +600,72 @@ static const char *xresolve_exec(const char *p, char *buf, size_t n) {
     return buf;
 }
 
+// Copy the container's PATH value (from the daemon-forwarded DD_GUEST_ENV, "K=V\nK=V") into `out`, or
+// leave "" if PATH is unset/empty. This is the image-config PATH (e.g. golang's /usr/local/go/bin:...)
+// merged with any `docker run/exec -e PATH=` override -- the authoritative search path for bare commands.
+static void container_path_env(char *out, size_t n) {
+    out[0] = 0;
+    const char *ge = getenv("DD_GUEST_ENV");
+    if (!ge) return;
+    for (const char *s = ge; *s;) {
+        const char *e = s;
+        while (*e && *e != '\n')
+            e++;
+        if (!strncmp(s, "PATH=", 5)) {
+            size_t L = (size_t)(e - s) - 5;
+            if (L >= n) L = n - 1;
+            memcpy(out, s + 5, L);
+            out[L] = 0;
+            return;
+        }
+        s = *e ? e + 1 : e;
+    }
+}
 // Resolve a bare program name (no '/') against the container PATH, like execvp -- docker passes `sh`,
 // not `/bin/sh`. Returns a guest path ("/bin/sh") that exists in the rootfs, or `prog` unchanged.
+// Searches the guest's ACTUAL PATH (image-config ENV + `-e PATH=`), split on ':' in order, so programs
+// outside the FHS bin dirs (golang's /usr/local/go/bin, rust's /usr/local/cargo/bin) are found; falls
+// back to the historical FHS defaults only when PATH is unset/empty (manual/direct mode, no daemon env).
 static const char *find_in_path(const char *prog, char *gbuf, size_t n) {
-    if (!prog || strchr(prog, '/')) return prog;
+    if (!prog || strchr(prog, '/')) return prog; // absolute/relative name: execvp bypasses PATH search
+    char hb[4200];
+    char pathenv[4200];
+    container_path_env(pathenv, sizeof pathenv);
+    if (pathenv[0]) {
+        for (const char *s = pathenv;;) {
+            const char *e = s;
+            while (*e && *e != ':')
+                e++;
+            size_t dl = (size_t)(e - s);
+            // An empty entry ("::", or a leading/trailing ':') means the cwd per POSIX; a relative dir is
+            // likewise cwd-relative. Anchor both at the guest cwd so the result is a rootfs-absolute guest
+            // path -- secure_resolve/xresolve_overlay then confine it inside the jail (an escaping dir lands
+            // on .jail-escape-denied and simply fails to match), so this is safe.
+            if (dl == 0)
+                snprintf(gbuf, n, "%s/%s", g_cwd, prog);
+            else {
+                char dir[4200];
+                if (dl >= sizeof dir) dl = sizeof dir - 1;
+                memcpy(dir, s, dl);
+                dir[dl] = 0;
+                if (dir[0] == '/')
+                    snprintf(gbuf, n, "%s/%s", dir, prog);
+                else
+                    snprintf(gbuf, n, "%s/%s/%s", g_cwd, dir, prog);
+            }
+            // Search the FULL overlay (upper THEN lowers): a fresh container's upper is empty and the program
+            // lives only in a read-only image lower, so a bare xresolve_exec would ENOENT every PATH dir.
+            if (access(xresolve_overlay(gbuf, hb, sizeof hb), X_OK) == 0) return gbuf;
+            if (!*e) break;
+            s = e + 1;
+        }
+        return gbuf; // not found on PATH: let the loader report ENOENT against the last attempted path
+    }
+    // No container PATH forwarded: historical FHS defaults.
     static const char *const dirs[] = {"/usr/local/sbin", "/usr/local/bin", "/usr/sbin",
                                        "/usr/bin",        "/sbin",          "/bin", NULL};
-    char hb[4200];
     for (int i = 0; dirs[i]; i++) {
         snprintf(gbuf, n, "%s/%s", dirs[i], prog);
-        // Search the FULL overlay (upper THEN lowers), not the upper alone: a fresh container's upper is
-        // empty and the program (e.g. python/node/ruby) lives only in a read-only image lower, so a bare
-        // xresolve_exec ENOENTs every PATH dir -> the fallback /bin/<prog> doesn't exist -> the loader
-        // reports "open: No such file". The ELF-loader sites already use the overlay resolver; this was the
-        // one missed call site. No-op with no lowers (flat rootfs): xresolve_overlay == xresolve_exec there.
         if (access(xresolve_overlay(gbuf, hb, sizeof hb), X_OK) == 0) return gbuf;
     }
     snprintf(gbuf, n, "/bin/%s", prog); // not found anywhere: let the loader report the error against /bin
