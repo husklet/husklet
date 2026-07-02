@@ -13,8 +13,14 @@ static int svc_rare(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64
     // the feature -- replicate the blocked-syscall result so guests that probe for it agree with Linux.
     case 280: // bpf(2)            -- needs CAP_BPF/CAP_SYS_ADMIN
     case 282: // userfaultfd(2)    -- blocked by default profile
-    case 425: // io_uring_setup(2) -- blocked by default profile
         G_RET(c) = (uint64_t)(-EPERM);
+        break;
+    // io_uring: we don't implement it. Return ENOSYS ("absent") not EPERM ("present but blocked"),
+    // else runtime probers read EPERM as retryable and retry/hang (#271). All three entry points agree.
+    case 425: // io_uring_setup(2)
+    case 426: // io_uring_enter(2)
+    case 427: // io_uring_register(2)
+        G_RET(c) = (uint64_t)(-ENOSYS);
         break;
     // seccomp(2): a guest installing its OWN allow-all filter (SECCOMP_SET_MODE_FILTER) self-sandboxes;
     // accept the install as a no-op (we don't actually enforce a BPF filter) so the call SUCCEEDS like

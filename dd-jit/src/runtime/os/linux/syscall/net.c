@@ -417,7 +417,10 @@ static int svc_net(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_
                     g_br_ip[(int)a0] = g_myip;
                 }
             }
-            G_RET(c) = r < 0 ? (uint64_t)(-errno) : 0;
+            // #274: a redirected TCP dial to a port with no listener fails ENOENT (the per-port unix
+            // inode doesn't exist); Linux returns ECONNREFUSED for a closed TCP port. Map it (host
+            // errno, m2l_errno -> Linux 111); other errnos incl. EINPROGRESS pass through.
+            G_RET(c) = r < 0 ? (uint64_t)(-(errno == ENOENT ? ECONNREFUSED : errno)) : 0;
             break;
         }
         // NET bridge: connect(peer-ip:port in our subnet) -> dial /tmp/.ddbr-<netid>/<peerip>:<port>
