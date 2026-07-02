@@ -256,6 +256,13 @@ static int smc_on_write(uint64_t a) {
             (c)->exit_code = 136;                                                                                      \
             break;                                                                                                     \
         }                                                                                                              \
+        if ((c)->r[RDX] >= d) { /* quotient overflow (high half >= divisor): x86 #DE, same as /0 */          \
+            if (raise_guest_de(c)) continue;                                                                            \
+            fprintf(stderr, "[dd] #DE divide overflow\n");                                                           \
+            (c)->exited = 1;                                                                                           \
+            (c)->exit_code = 136;                                                                                      \
+            break;                                                                                                     \
+        }                                                                                                              \
         unsigned __int128 num = ((unsigned __int128)(c)->r[RDX] << 64) | (c)->r[RAX];                                  \
         (c)->r[RAX] = (uint64_t)(num / d);                                                                             \
         (c)->r[RDX] = (uint64_t)(num % d);                                                                             \
@@ -271,7 +278,15 @@ static int smc_on_write(uint64_t a) {
             break;                                                                                                     \
         }                                                                                                              \
         __int128 num = ((__int128)(int64_t)(c)->r[RDX] << 64) | (c)->r[RAX];                                           \
-        (c)->r[RAX] = (uint64_t)(num / d);                                                                             \
+        __int128 q = num / d;                                                                                          \
+        if ((__int128)(int64_t)q != q) { /* quotient doesn't fit int64 (incl. INT_MIN/-1): x86 #DE */ \
+            if (raise_guest_de(c)) continue;                                                                            \
+            fprintf(stderr, "[dd] #DE divide overflow\n");                                                           \
+            (c)->exited = 1;                                                                                           \
+            (c)->exit_code = 136;                                                                                      \
+            break;                                                                                                     \
+        }                                                                                                              \
+        (c)->r[RAX] = (uint64_t)q;                                                                                     \
         (c)->r[RDX] = (uint64_t)(num % d);                                                                             \
         continue;                                                                                                      \
     }                                                                                                                  \

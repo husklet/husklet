@@ -85,6 +85,292 @@ static void flock_on_close(int fd) {
         fcntl(g_flkcomp[idx].fd, F_SETLK, &fl);
     }
 }
+
+// ---- fcntl(2) POSIX advisory byte-range locks -- IN-ENGINE cross-process manager (#340) --------------
+// SQLite/postgres take ~2 fcntl(F_SETLK/F_GETLK) byte-range locks PER query on the DB file; routing each to
+// a real macOS fcntl() was ~57% of a file-backed point-select's runtime (~20% the host round-trip itself +
+// ~30% dispatch and the Linux<->macOS `struct flock` translation). We service these ops from a SHARED-MEMORY
+// lock table INSIDE the engine instead, eliminating the host syscall entirely (mirrors getpid, which the
+// profiler measured FASTER than native).
+//
+// CORRECTNESS -- POSIX record locks coordinate ACROSS the container's guest processes (multi-connection
+// SQLite, postgres backends), which are SEPARATE host processes all descended from container init by fork().
+// The table lives in a MAP_SHARED|MAP_ANON region created at engine startup (constructor, before any guest
+// fork), so every forked worker inherits the SAME physical table -- identical to the cross-process futex
+// table in thread.c. dd's guest execve reloads the image IN-PROCESS, so the region (and a process's locks)
+// survive exec, exactly as POSIX requires. Records are keyed by host-file identity (dev,ino) + absolute byte
+// range + type, owned PER-PROCESS by host pid (threads of a process share the pid, hence share their locks;
+// a fork child gets a NEW pid so it does NOT inherit the parent's locks -- POSIX). This is fully INDEPENDENT
+// of flock(2) (serviced on a companion file, above), so the #237 flock<->fcntl independence is preserved.
+// A crashed owner's stale records are reclaimed lazily on conflict (kill(pid,0)==ESRCH) and swept when the
+// table fills; they are released eagerly on close (poslk_on_close, POSIX "any close drops all this file's
+// locks") and on process exit (poslk_on_exit). The table lock is an atomic spinlock (macOS has no robust
+// pthread mutex) that STEALS the lock from a crashed holder, so a fault mid-update can't wedge the table.
+#include <signal.h>
+#include <sched.h>
+#include <stdint.h>
+#define POSLK_MAX 8192
+struct poslk_rec {
+    dev_t dev;
+    ino_t ino;
+    int64_t lo, hi; // absolute byte range [lo,hi); hi==INT64_MAX => to-EOF (Linux l_len 0)
+    int32_t type;   // F_RDLCK / F_WRLCK (F_UNLCK is never stored)
+    int32_t owner;  // owning process = host pid (0 == free slot)
+};
+struct poslk_shm {
+    _Atomic int32_t lockword; // 0 = free, else host pid of the holder (spinlock; stolen from a dead holder)
+    int32_t hi;               // high-water slot count (bounds the linear scan)
+    struct poslk_rec rec[POSLK_MAX];
+};
+static struct poslk_shm *g_poslk;
+// PERF: the hot path must issue ZERO host syscalls (the point of #340). Two process-local caches make that
+// so: (a) g_lk{dev,ino,val}[fd] memoises a guest fd's host (dev,ino) so a repeated F_SETLK on the same DB fd
+// never re-fstat()s (cleared on close in fd_reset_emul); (b) g_mypid caches getpid(). Both are per-process
+// (NOT in the shared region); fork inherits a valid COW copy (same fds/files) and the clone child resets
+// g_mypid/g_i_locked via poslk_after_fork.
+static dev_t g_lkdev[1024];
+static ino_t g_lkino[1024];
+static uint8_t g_lkval[1024]; // 1 == g_lk{dev,ino}[fd] valid
+static int32_t g_mypid;       // cached getpid() (0 = not cached yet)
+static int g_i_locked;        // this process has held >=1 fcntl record lock (gates the close-time fstat)
+static inline int32_t poslk_mypid(void) {
+    if (!g_mypid) g_mypid = getpid();
+    return g_mypid;
+}
+static void poslk_after_fork(void) {
+    g_mypid = 0;    // child has a new host pid -> re-cache lazily
+    g_i_locked = 0; // POSIX: a fork child inherits NONE of the parent's record locks
+}
+static void poslk_init(void) {
+    if (g_poslk) return;
+    void *m = mmap(NULL, sizeof(struct poslk_shm), PROT_READ | PROT_WRITE, MAP_SHARED | MAP_ANON, -1, 0);
+    if (m == MAP_FAILED) return; // no shared table -> every op falls back to the host fcntl path
+    g_poslk = (struct poslk_shm *)m; // MAP_ANON is zero-filled: lockword=0, hi=0, all owner=0
+}
+__attribute__((constructor)) static void poslk_ctor(void) { poslk_init(); }
+// Is host pid `p` still a live process? A dead owner's records/locks are reclaimable.
+static inline int poslk_alive(int32_t p) {
+    if (p <= 0) return 0;
+    return !(kill(p, 0) < 0 && errno == ESRCH);
+}
+static void poslk_lock(void) {
+    int32_t me = poslk_mypid();
+    for (int spin = 0;; spin++) {
+        int32_t expect = 0;
+        if (atomic_compare_exchange_weak_explicit(&g_poslk->lockword, &expect, me, memory_order_acquire,
+                                                   memory_order_relaxed))
+            return;
+        if ((spin & 1023) == 1023) {
+            int32_t owner = atomic_load_explicit(&g_poslk->lockword, memory_order_relaxed);
+            if (owner && !poslk_alive(owner)) // holder crashed mid-update -> steal the spinlock
+                atomic_compare_exchange_strong_explicit(&g_poslk->lockword, &owner, me, memory_order_acquire,
+                                                        memory_order_relaxed);
+            sched_yield();
+        }
+    }
+}
+static void poslk_unlock(void) { atomic_store_explicit(&g_poslk->lockword, 0, memory_order_release); }
+// A free slot (reuse a vacated one, else grow the high-water). NULL when the table is full.
+static struct poslk_rec *poslk_slot(void) {
+    for (int i = 0; i < g_poslk->hi; i++)
+        if (!g_poslk->rec[i].owner) return &g_poslk->rec[i];
+    if (g_poslk->hi < POSLK_MAX) return &g_poslk->rec[g_poslk->hi++];
+    return NULL;
+}
+static void poslk_sweep_dead(void) {
+    for (int i = 0; i < g_poslk->hi; i++)
+        if (g_poslk->rec[i].owner && !poslk_alive(g_poslk->rec[i].owner)) g_poslk->rec[i].owner = 0;
+}
+// Ranges overlap AND at least one is a write lock (two read locks never conflict).
+static inline int poslk_conflict(const struct poslk_rec *r, int64_t lo, int64_t hi, int type) {
+    if (r->hi <= lo || hi <= r->lo) return 0;     // disjoint
+    return r->type == F_WRLCK || type == F_WRLCK; // a writer on either side conflicts
+}
+// Remove owner `own`'s locks over [lo,hi) on (dev,ino), SPLITTING any record that straddles a boundary so the
+// non-overlapping fragments survive with their original type (POSIX unlock / replace-on-set). Held under the
+// spinlock. New fragments land in reused slots and, being disjoint from [lo,hi), are skipped by this scan.
+static void poslk_clear_own(dev_t dev, ino_t ino, int32_t own, int64_t lo, int64_t hi) {
+    int n = g_poslk->hi;
+    for (int i = 0; i < n; i++) {
+        struct poslk_rec *r = &g_poslk->rec[i];
+        if (r->owner != own || r->dev != dev || r->ino != ino) continue;
+        if (r->hi <= lo || hi <= r->lo) continue; // disjoint -> keep
+        int64_t olo = r->lo, ohi = r->hi;
+        int32_t ot = r->type;
+        r->owner = 0; // drop the straddling original; re-add surviving fragments below
+        if (olo < lo) {
+            struct poslk_rec *f = poslk_slot();
+            if (f) { f->dev = dev; f->ino = ino; f->lo = olo; f->hi = lo; f->type = ot; f->owner = own; }
+        }
+        if (ohi > hi) {
+            struct poslk_rec *f = poslk_slot();
+            if (f) { f->dev = dev; f->ino = ino; f->lo = hi; f->hi = ohi; f->type = ot; f->owner = own; }
+        }
+    }
+}
+// Resolve a Linux `struct flock` at `lf` on guest `fd` to (dev,ino,[lo,hi),type). Returns 0 on success,
+// -2 if the fd is not a regular file (caller must use the host fcntl path), or -1 with errno set on error.
+static int poslk_resolve(int fd, const uint8_t *lf, dev_t *dev, ino_t *ino, int64_t *lo, int64_t *hi, int *type) {
+    short lt = *(const short *)(lf + 0);
+    *type = lt == 0 ? F_RDLCK : lt == 1 ? F_WRLCK : F_UNLCK; // Linux RDLCK=0/WRLCK=1/UNLCK=2
+    short whence = *(const short *)(lf + 2);
+    int64_t start = *(const int64_t *)(lf + 8);
+    int64_t len = *(const int64_t *)(lf + 16);
+    int cached = fd >= 0 && fd < 1024 && g_lkval[fd];
+    int64_t base;
+    // Hot path: SEEK_SET on a cached fd -> (dev,ino) from the cache, base 0, and NOT A SINGLE host syscall.
+    if (cached && whence == SEEK_SET) {
+        *dev = g_lkdev[fd];
+        *ino = g_lkino[fd];
+        base = 0;
+    } else {
+        struct stat st; // cache miss, or SEEK_CUR/SEEK_END need the live offset/size -> one fstat
+        if (fstat(fd, &st) < 0) return -1;
+        if (!S_ISREG(st.st_mode)) return -2; // POSIX record locks are only meaningful on regular files
+        *dev = st.st_dev;
+        *ino = st.st_ino;
+        if (fd >= 0 && fd < 1024) { g_lkdev[fd] = st.st_dev; g_lkino[fd] = st.st_ino; g_lkval[fd] = 1; }
+        if (whence == SEEK_SET)
+            base = 0;
+        else if (whence == SEEK_CUR) {
+            off_t cur = lseek(fd, 0, SEEK_CUR);
+            if (cur == (off_t)-1) return -1;
+            base = cur;
+        } else if (whence == SEEK_END)
+            base = st.st_size;
+        else {
+            errno = EINVAL;
+            return -1;
+        }
+    }
+    int64_t s = base + start, e;
+    if (len == 0)
+        e = INT64_MAX; // to EOF and any future growth
+    else if (len > 0)
+        e = s + len;
+    else { // negative len: the range ends at s and starts len bytes before it
+        e = s;
+        s = s + len;
+    }
+    if (s < 0) {
+        errno = EINVAL;
+        return -1;
+    }
+    *lo = s;
+    *hi = e;
+    return 0;
+}
+// Service one fcntl POSIX-lock op in-engine: lcmd 5=F_GETLK, 6=F_SETLK, 7=F_SETLKW. Returns 1 when serviced
+// (*out = the value to return to the guest: 0 / -EAGAIN / -EBADF / -EINVAL / -ENOLCK) or 0 when the fd is not
+// a regular file (the caller must fall back to a real host fcntl). F_SETLKW is a single non-blocking attempt
+// here (returns -EAGAIN on conflict); io.c wraps it in a signal-aware poll-retry loop.
+static int poslk_op(int fd, int lcmd, uint8_t *lf, int *out) {
+    if (!g_poslk) return 0; // shared table unavailable -> host path
+    dev_t dev;
+    ino_t ino;
+    int64_t lo, hi;
+    int type;
+    int rr = poslk_resolve(fd, lf, &dev, &ino, &lo, &hi, &type);
+    if (rr == -2) return 0;
+    if (rr < 0) {
+        *out = -(errno ? errno : EINVAL);
+        return 1;
+    }
+    int32_t me = poslk_mypid();
+    poslk_lock();
+    if (lcmd == 5) { // F_GETLK: report the first conflicting lock held by ANOTHER process, else F_UNLCK
+        struct poslk_rec *hit = NULL;
+        for (int i = 0; i < g_poslk->hi; i++) {
+            struct poslk_rec *r = &g_poslk->rec[i];
+            if (!r->owner || r->owner == me || r->dev != dev || r->ino != ino) continue;
+            if (!poslk_conflict(r, lo, hi, type)) continue;
+            if (!poslk_alive(r->owner)) { r->owner = 0; continue; } // reclaim a dead holder
+            hit = r;
+            break;
+        }
+        if (hit) {
+            *(short *)(lf + 0) = hit->type == F_RDLCK ? 0 : 1;
+            *(short *)(lf + 2) = SEEK_SET;
+            *(int64_t *)(lf + 8) = hit->lo;
+            *(int64_t *)(lf + 16) = hit->hi == INT64_MAX ? 0 : (hit->hi - hit->lo);
+            // report the holder's GUEST pid (container init's host pid shows through as guest pid 1)
+            *(int32_t *)(lf + 24) = (g_init_hostpid && hit->owner == g_init_hostpid) ? 1 : hit->owner;
+        } else {
+            *(short *)(lf + 0) = 2; // F_UNLCK -> Linux 2: the requested lock could be placed
+        }
+        *out = 0;
+        poslk_unlock();
+        return 1;
+    }
+    if (type == F_UNLCK) { // F_SETLK/W unlock: drop this process's locks over the range (with splitting)
+        poslk_clear_own(dev, ino, me, lo, hi);
+        *out = 0;
+        poslk_unlock();
+        return 1;
+    }
+    for (int i = 0; i < g_poslk->hi; i++) { // conflict scan vs OTHER owners
+        struct poslk_rec *r = &g_poslk->rec[i];
+        if (!r->owner || r->owner == me || r->dev != dev || r->ino != ino) continue;
+        if (!poslk_conflict(r, lo, hi, type)) continue;
+        if (!poslk_alive(r->owner)) { r->owner = 0; continue; }
+        *out = -EAGAIN; // blocked (F_SETLK: EAGAIN; F_SETLKW: caller retries)
+        poslk_unlock();
+        return 1;
+    }
+    poslk_clear_own(dev, ino, me, lo, hi); // replace/upgrade/downgrade: drop own overlap, then insert
+    struct poslk_rec *slot = poslk_slot();
+    if (!slot) { // table full -> reclaim dead owners and retry once
+        poslk_sweep_dead();
+        slot = poslk_slot();
+    }
+    if (!slot) {
+        *out = -ENOLCK;
+        poslk_unlock();
+        return 1;
+    }
+    slot->dev = dev;
+    slot->ino = ino;
+    slot->lo = lo;
+    slot->hi = hi;
+    slot->type = type;
+    slot->owner = me;
+    g_i_locked = 1; // this process now holds a record lock -> its regular-file closes must check for release
+    *out = 0;
+    poslk_unlock();
+    return 1;
+}
+// close() hook: POSIX releases ALL a process's locks on a file when ANY fd for it is closed. Called from
+// fd_reset_emul BEFORE the real close(). Fast path: the fd's (dev,ino) is cached (it took a lock op) -> no
+// fstat. A process that never held any fcntl lock does nothing. Only the residual case (a never-locked fd
+// aliasing a file this process HAS locked via another fd) needs the fstat -- and only for lock-holders.
+static void poslk_on_close(int fd) {
+    if (!g_poslk) return;
+    int32_t me = poslk_mypid();
+    if (fd >= 0 && fd < 1024 && g_lkval[fd]) { // fast: release by the cached identity, then forget the fd
+        poslk_lock();
+        poslk_clear_own(g_lkdev[fd], g_lkino[fd], me, 0, INT64_MAX);
+        poslk_unlock();
+        g_lkval[fd] = 0;
+        return;
+    }
+    if (!g_i_locked) return; // never took a lock -> nothing of ours to release (the common close: no syscall)
+    struct stat st;
+    if (fstat(fd, &st) < 0 || !S_ISREG(st.st_mode)) return;
+    poslk_lock();
+    poslk_clear_own(st.st_dev, st.st_ino, me, 0, INT64_MAX);
+    poslk_unlock();
+}
+// process-exit hook (exit_group): drop every lock this process holds. Belt-and-suspenders over the lazy
+// dead-owner reclaim, keeping the shared table tidy for long-lived containers.
+static void poslk_on_exit(void) {
+    if (!g_poslk) return;
+    int32_t me = poslk_mypid();
+    poslk_lock();
+    for (int i = 0; i < g_poslk->hi; i++)
+        if (g_poslk->rec[i].owner == me) g_poslk->rec[i].owner = 0;
+    poslk_unlock();
+}
+
 // Configurable fsync durability policy (S3DB_DURABILITY=none|fast|strict), read once and cached.
 //   0 = fast   (DEFAULT, and when env unset): plain fsync() -- the macOS fast path, unchanged legacy
 //               behavior. NOTE: a plain fsync() only reaches the drive's write cache on macOS; this is
