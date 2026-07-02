@@ -748,6 +748,17 @@ static void stw_after_fork(void) {
 // Must run in the child after fork(), before its next run_block.
 static void jit_after_fork(void) {
     stw_after_fork(); // single-threaded child: shed the inherited thread registry (also for the MAP_JIT path)
+    // fork() only clones the CALLING thread. If a peer M was translating (holding g_jit_lock, and g_cache_lock
+    // under it in map_put) at the instant the guest forked, the child inherits those mutexes LOCKED with no
+    // owner thread left to release them -- so the child's very first dispatcher iteration deadlocks forever in
+    // run_guest's `pthread_mutex_lock(&g_jit_lock)` (0% CPU) while its parent blocks reaping it. This is THE
+    // go/npm/cargo build hang (#285/#175): a heavily-threaded driver (Go compiler, node) forks a child while
+    // sibling Ms are mid-translate. The child is single-threaded now, so reinitialising both locks to a clean
+    // unlocked state is always correct (no surviving peer can hold or want them; the calling thread never holds
+    // an engine lock across a guest syscall). Must run before the !g_dualmap early return so the MAP_JIT path
+    // is covered too.
+    pthread_mutex_init(&g_jit_lock, NULL);
+    pthread_mutex_init(&g_cache_lock, NULL);
     // The child inherited the parent's retired-cache list as COW copies but will never resume a parent peer
     // into them; drop the bookkeeping and unmap them so the child does not carry the parent's retired VA.
     for (int i = 0; i < g_nretired; i++)

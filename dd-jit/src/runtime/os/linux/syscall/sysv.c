@@ -30,6 +30,11 @@ static struct {
 } g_shm_segsz[SHM_SEGSZ_MAX];
 static pthread_mutex_t g_shm_segsz_m = PTHREAD_MUTEX_INITIALIZER;
 
+// fork() only clones the calling thread: a peer that held this lock at fork time leaves it inherited-locked
+// with no owner, deadlocking the single-threaded child on its next SysV-shm op. Reinit to unlocked in the
+// child (always safe: no peer survives). Same fork-unsafe-mutex class as g_jit_lock. Called from proc.c.
+static void sysv_after_fork(void) { pthread_mutex_init(&g_shm_segsz_m, NULL); }
+
 static void shm_segsz_remember(int id, size_t segsz) {
     pthread_mutex_lock(&g_shm_segsz_m);
     int slot = -1;

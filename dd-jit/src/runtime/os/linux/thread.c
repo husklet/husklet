@@ -336,6 +336,19 @@ static struct {
 } g_threg[THREAD_REG_MAX];
 static pthread_mutex_t g_threg_m = PTHREAD_MUTEX_INITIALIZER;
 
+// fork() only clones the calling thread. Any process-PRIVATE engine mutex a dead peer held at the instant
+// the guest forked is inherited LOCKED with no owner to release it, so the single-threaded child deadlocks
+// the first time it takes that lock (the go/npm/cargo build hang, #285/#175). Reinitialise this module's
+// private locks to a clean unlocked state in the child (the calling thread never holds one across a guest
+// syscall, and no peer survives, so this is always safe). The g_fbk futex buckets are deliberately NOT reset
+// here: they live in a PROCESS_SHARED MAP_SHARED page so a cross-fork FUTEX_WAKE/WAIT still matches (glibc
+// process-shared semaphores), which is the opposite requirement. Called from the fork child path in proc.c.
+static void thread_after_fork(void) {
+    pthread_mutex_init(&g_threg_m, NULL);  // thread registry (tkill/tgkill lookup, thread_register)
+    pthread_mutex_init(&g_futex_m, NULL);  // legacy global futex lock (NOFUTEXQ path)
+    pthread_cond_init(&g_futex_c, NULL);
+}
+
 // A dedicated host signal used only to INTERRUPT a sibling guest thread out of a blocking host syscall
 // (kevent/read/poll/nanosleep/...) so it observes cpu->exited and leaves the dispatcher -- see
 // thread_exit_others (execve teardown). macOS has no realtime signals; SIGINFO(29) is unused by the guest
