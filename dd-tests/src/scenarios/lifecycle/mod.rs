@@ -29,13 +29,12 @@ sleep 0.6
 docker logs ${C}c 2>&1"#).has("GOT_HUP"),
 
         // restart : StartedAt advances and the container is Running again
-        // GAP (dd, arm): after `docker restart` the container is not Running again / StartedAt unchanged. xfail.
         s("lifecycle/restart").host(r#"
 docker run -d --name ${C}c $PLAT $IMG sleep 300 >/dev/null; sleep 0.4
 S1=$(docker inspect -f "{{.State.StartedAt}}" ${C}c)
 docker restart -t 2 ${C}c >/dev/null; sleep 0.4
 S2=$(docker inspect -f "{{.State.StartedAt}}" ${C}c)
-[ "$S1" != "$S2" ] && docker inspect -f "{{.State.Running}}" ${C}c | grep -q true && echo RESTARTED"#).has("RESTARTED").xfail(&[Target::ArmLinux]),
+[ "$S1" != "$S2" ] && docker inspect -f "{{.State.Running}}" ${C}c | grep -q true && echo RESTARTED"#).has("RESTARTED"),
 
         // pause / unpause : Status transitions paused -> running
         s("lifecycle/pause-unpause").host(r#"

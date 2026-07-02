@@ -470,6 +470,7 @@ pub(crate) async fn spawn_live(app: &App, c: &Container, vols: &[Vol], live: Arc
                 cc.status = "exited".into();
                 cc.exit_code = code;
                 cc.finished_at = now_secs();
+                cc.finished_at_ns = now_nanos();
             }
             let (cname, cimage) = g.containers.get(&cid).map(|c| (c.name.clone(), c.image.clone())).unwrap_or_default();
             crate::events::emit_event(&app.events, "container", "die", &cid, serde_json::json!({"exitCode": code.to_string(), "name": cname, "image": cimage}));
@@ -586,6 +587,7 @@ fn maybe_restart<'a>(app: &'a App, cid: &'a str, code: i64)
         if let Some(cc) = g.containers.get_mut(cid) {
             cc.status = "running".into();
             cc.started_at = now_secs();
+            cc.started_at_ns = now_nanos();
             cc.restart_count += 1;
         }
         save_state(&g, &app.state_path);

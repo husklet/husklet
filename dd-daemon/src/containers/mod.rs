@@ -123,7 +123,7 @@ async fn do_stop(a: &App, id: &str, sig: i32, t: i64) -> Response {
     }
     // mark exited (as before); the reaper sets the real exit_code when the signalled process dies.
     let mut g = a.inner.lock().await;
-    if let Some(c) = g.containers.get_mut(&full) { c.status = "exited".into(); c.finished_at = now_secs(); }
+    if let Some(c) = g.containers.get_mut(&full) { c.status = "exited".into(); c.finished_at = now_secs(); c.finished_at_ns = now_nanos(); }
     let (cname, cimage) = g.containers.get(&full).map(|c| (c.name.clone(), c.image.clone())).unwrap_or_default();
     crate::events::emit_event(&a.events, "container", "stop", &full, json!({"name": cname, "image": cimage}));
     save_state(&g, &a.state_path);

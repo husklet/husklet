@@ -1480,15 +1480,17 @@ static int sysnet_dir_open(const char *gp) {
     if (!gp || strncmp(gp, "/sys/class/net", 14)) return -2;
     const char *r = gp + 14;
     const char *const *entries;
+    // --network none: loopback-only, so /sys/class/net lists just `lo` (no eth0).
     static const char *const ifaces[] = {"lo", "eth0", 0};
+    static const char *const ifaces_lo[] = {"lo", 0};
     static const char *const attrs[] = {"address",   "addr_len",  "broadcast", "flags",   "mtu",
                                         "operstate", "type",      "carrier",   "ifindex", "iflink",
                                         "tx_queue_len", "speed",   "duplex",    0};
     int as_dirs; // class dir -> iface subdirs; iface dir -> attribute files
     if (r[0] == 0 || (r[0] == '/' && r[1] == 0)) {
-        entries = ifaces;
+        entries = net_isolate() ? ifaces_lo : ifaces;
         as_dirs = 1;
-    } else if (r[0] == '/' && (!strcmp(r + 1, "lo") || !strcmp(r + 1, "eth0"))) {
+    } else if (r[0] == '/' && (!strcmp(r + 1, "lo") || (!net_isolate() && !strcmp(r + 1, "eth0")))) {
         entries = attrs;
         as_dirs = 0;
     } else
@@ -1656,14 +1658,20 @@ static int proc_open(const char *rp) {
     // ---- container network introspection (#289): lo + eth0 (see netif_* in state.c) --------------
     } else if (!strcmp(rp, "/proc/net/dev")) {
         // per-interface counters; zeros are fine (dd runs no real stack -- this is introspection only).
+        // --network none: loopback-only, so eth0 is omitted (only the lo counters line).
         n = snprintf(buf, sizeof buf,
                      "Inter-|   Receive                                                |  Transmit\n"
                      " face |bytes    packets errs drop fifo frame compressed multicast|bytes    packets "
                      "errs drop fifo colls carrier compressed\n"
-                     "    lo: 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0\n"
-                     "  eth0: 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0\n");
+                     "    lo: 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0\n%s",
+                     net_isolate() ? "" : "  eth0: 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0\n");
     } else if (!strcmp(rp, "/proc/net/route")) {
         // Destination/Gateway/Mask are %08X of the network-order addr (netif_* already store that form).
+        // --network none: no eth0 routes -> just the header (loopback carries no routing table entries).
+        if (net_isolate()) {
+            n = snprintf(buf, sizeof buf,
+                         "Iface\tDestination\tGateway \tFlags\tRefCnt\tUse\tMetric\tMask\t\tMTU\tWindow\tIRTT\n");
+        } else {
         uint32_t net = netif_eth0_net(), gw = netif_eth0_gw();
         int pfx = netif_eth0_prefix();
         uint32_t mask = pfx >= 32 ? 0xffffffffu : ((1u << pfx) - 1u);
@@ -1672,6 +1680,7 @@ static int proc_open(const char *rp) {
                      "eth0\t00000000\t%08X\t0003\t0\t0\t0\t00000000\t0\t0\t0\n"
                      "eth0\t%08X\t00000000\t0001\t0\t0\t0\t%08X\t0\t0\t0\n",
                      gw, net, mask);
+        }
     } else if (!strcmp(rp, "/proc/net/if_inet6")) {
         // addr(32 hex) ifindex(hex) prefix(hex) scope(hex) flags(hex) devname -- lo ::1 only.
         n = snprintf(buf, sizeof buf, "00000000000000000000000000000001 01 80 10 80        lo\n");

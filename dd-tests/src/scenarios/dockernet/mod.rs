@@ -35,13 +35,10 @@ docker network create "$NET" >/dev/null
 docker network inspect "$NET" >/dev/null 2>&1 && echo NET_INSPECT_OK"#).has("NET_INSPECT_OK"),
 
         // multi-container: client reaches server BY NAME over TCP on a user network (embedded DNS)
-        // GAP (dd, arm): cross-container reach by name fails (both ICMP ping and TCP return nothing) on
-        // this build -> embedded-DNS / cross-container routing gap (same class as the netcontainer group).
-        // xfail; passes on the Real oracle.
         s("dockernet/reach-by-name").host(r#"
 docker network create "$NET" >/dev/null
 docker run -d --name ${C}srv --network "$NET" $PLAT $IMG sh -c "while true; do echo BYNAMEOK | nc -l -p 9000 -w 1; done" >/dev/null
 sleep 1
-docker run --rm --network "$NET" $PLAT $IMG nc -w 3 ${C}srv 9000"#).has("BYNAMEOK").xfail(&[Target::ArmLinux]),
+docker run --rm --network "$NET" $PLAT $IMG nc -w 3 ${C}srv 9000"#).has("BYNAMEOK"),
     ])
 }

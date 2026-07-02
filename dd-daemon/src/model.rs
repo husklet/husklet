@@ -111,9 +111,15 @@ pub(crate) struct Container {
     #[serde(default)]
     pub(crate) user: String, // `docker run --user` / `docker exec -u` -> DD_UID/DD_GID
     #[serde(default)]
-    pub(crate) started_at: i64, // unix secs, set on start (inspect State.StartedAt)
+    pub(crate) started_at: i64, // unix secs, set on start (ps sort / logs since-until / human status)
     #[serde(default)]
-    pub(crate) finished_at: i64, // unix secs, set on stop/natural exit (inspect State.FinishedAt)
+    pub(crate) finished_at: i64, // unix secs, set on stop/natural exit
+    // Nanosecond-precision copies for the inspect State.StartedAt/FinishedAt strings — docker reports
+    // these to the nanosecond, so a quick `docker restart` (same wall-clock second) still advances StartedAt.
+    #[serde(default)]
+    pub(crate) started_at_ns: i64,
+    #[serde(default)]
+    pub(crate) finished_at_ns: i64,
     // ---- HostConfig fidelity (docker run extras) ----
     #[serde(default)]
     pub(crate) restart_policy: RestartPolicy, // `--restart` (supervisor restarts on exit per policy)
