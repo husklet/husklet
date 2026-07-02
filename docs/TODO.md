@@ -1,71 +1,102 @@
-# dd — todo
+# dd — GA readiness
 
-Shipped **v0.9.0 → v0.9.5**. **v0.9.6 batch = 44 commits (~34 fixes) staged since v0.9.5, NOT yet
-tagged.** FINALIZING FOR SHOWCASE (2026-07-01): TAG + PUSH once the release gate is green (push now
-authorized). Showcase validation matrix: base `docker run`, interactive `run -it`, `docker exec -it`,
-lifecycle = READY (alpine/ubuntu, both arches). DATABASE blockers ALL FIXED this session:
-- **B2** — /proc/self/exe stat resolved via overlay lowers → gosu/su-exec work → official
-  postgres/mariadb/mongo entrypoints get past privilege-drop.
-- **B3** — AF_UNIX bind/connect at the full overlay-upper path via fchdir (macOS sun_path 104B was
-  silently truncating the long upper path) → DB unix sockets usable.
-- **B4** — docker exec joins the container's emulated loopback netns → exec'd DB clients reach 127.0.0.1.
-Plus #224a getrandom non-PIE rebase, #219b TIOCGPTPEER (glibc openpty/forkpty).
-**RELEASE GATE ran (commit 568613d, clean both-arch engine): NOT READY — 1 blocker.**
-- Basics: arm64 473/0 clean; x86_64 433/5 — the 5 = missing untracked `guests/x86/*` fixtures (absent
-  on main too, env/pre-existing, NOT a regression, NOT an engine bug).
-- Base `docker run` / `run -it` / `exec -it` / interactive PTY / lifecycle: PASS both arches.
-- **B5 (THE remaining DB blocker, agent active):** postgres/mariadb/mysql hang forever — gosu/su-exec
-  get past B2's stat but hang at the actual privilege-drop. Go `syscall.Setuid`→`doAllThreadsSyscall`
-  RT-signal-33 to sibling M threads via tgkill; engine never runs the sibling's handler → coordinator
-  spins on sched_yield forever. Fix = engine cross-thread RT-signal delivery (signal.c 130/131 +
-  thread.c). Blocks every gosu/su-exec image.
-- redis WORKS via direct `redis-server --ignore-warnings ARM64-COW-BUG` (bypasses entrypoint gosu).
-- Non-gating: nats scratch-image exec gap (both arches); B1 bookworm-amd64 flake (use ubuntu); B4b
-  0.0.0.0→127.0.0.1 on bridge (stock redis needs --bind 127.0.0.1); 8 stale .xfail markers to remove.
-- #201 (x86-only, NOT gating, agent active).
-**Next: land B5 → re-gate real postgres/mariadb round-trip → TAG v0.9.6 + PUSH.**
+**GA target:** "download the DMG → reliably run your Linux containers/images on macOS."
+**Scope decision:** **arm64-first GA** (native Apple-Silicon path). `x86_64`-guest ships **beta**
+(functional, but the codegen/guest-JIT cluster is post-1.0). Flip to "hold GA until x86 is
+production-grade" only on explicit call.
 
-## Proven working this session (both arches, real software, correct output — not just "no crash")
-postgres · mariadb · nginx (1000/1000 req) · redis (500k ops) · sqlite (WAL, 100k rows) · ruby · perl ·
-python + multiprocessing · pip install (six, cryptography — AES vectors correct) · make -j4 · cmake ·
-npm · node (incl. heavy heaps) · php (json_encode 50k) · gcc/cc1 (C compile→run, arm) · R (Rscript,
-OpenBLAS) · numpy/scipy/pandas (arm) · tmux · git · openssl · tar · sed/awk/grep · coreutils · full
-basics matrix (fs, net, mmap, fork/exec, signals, eventfd/epoll) 0-failed both arches.
+**State:** `main` at v0.9.11 + N commits. Basics matrix **1265 / 0** both arches. Perf harness live
+(`make perf`); genuine self-timed bench in progress (#326). Docker-command conformance **60/69**.
 
-## GA BLOCKERS (the real, re-verified open bugs)
-- [ ] **#201 — x86 indirect/virtual-dispatch codegen miscompile** *(agent active; THE #1 GA blocker)*.
-  A GC'd managed runtime's heap-address→metadata machinery miscompiles on x86: a base pointer loads as
-  ~0/truncated, then `base+offset` faults (caddy 0x1d8, dotnet 0x2f8). CRASHES **go build, .NET, clang
-  -O2, CPython-x86** (and almost certainly **rustc #210**); plain C++ vtables PASS. Smallest repro: a Go
-  `map[string]int` hot loop (`target/tsordr201/mapt`). Nondeterminism = macOS guest-heap ASLR. Plan:
-  deterministic-heap mode (mem.c) → instruction-trace mapt → fix in translate/x86_64. One fix cascades
-  to 5+ runtimes.
-- [ ] **#158 — memcached-arm crash on client connect** *(parked, real, deterministic; NARROWED)*.
-  dev-day proved tmux (musl, libevent) runs 3/3 clean on arm (full event-loop + accept/dispatch) →
-  #158 does NOT generalize to libevent; it is memcached-CONNECTION-specific (its own per-conn-struct,
-  the 0x9e0 offset). Likely a deterministic aarch64 codegen miscompile (bad/truncated pointer) hit only
-  by memcached's per-connection layout. translate/aarch64. De-risked for GA: only memcached affected.
-- [ ] **#188 — CPUID extended brand-string empty** (maxext=0x80000001 too low) → **java-x86** only
-  ("SSE2 not supported" is a fallback, SSE2 bit IS set). numpy/feature-bit libs unaffected. Fix: raise
-  maxext ≥0x80000004 + brand string (+ synth /proc/cpuinfo flags). Behind #201 (translate/x86_64).
-- [ ] **#224 — python-x86 startup** — (a) getrandom EFAULT *(ROOT FOUND, agent active)*: getrandom(278)
-  buffer missing from the dispatch.c nonpie_p rebase table → non-PIE low BSS buffer not rebased to
-  +bias → guard + arc4random_buf hit the unmapped low addr. Fix = add case 278 (+audit other engine-
-  manual-copy syscalls). (b) separate #201-class segfault after random-init. Blocks x86 python/numpy.
-- [ ] **#215 — erlang full boot** — multithreaded-fork (beam.smp) JIT corruption (fd EBADF now fixed).
+---
 
-## Tail (lower priority)
-#225 CRASHDBG gcc -c full-driver [MACH] fault (fork→execve child Mach exc-port, proc.c — diagnostic-
-only) · #226 x86 FAULT_ON jit86_faulth skips nonpie_fixup (#221 analogue, diagnostic-only) · #223 pty-
-master poll/EOF (script hangs) · #135 PyPy-x86 · #119 mongosh SEA · #104 V8 large-array · #190 MOVNTPS (dnf/rpm)
-· #183 x86 0x8c · #161 pg fast-shutdown SIGSYS · #167 amd jobctl · #218 vDSO ptr-check · #208 syscall-65573
-spam · #193 procfs follow-ups · #170 mkdir-EPERM (re-confirm) · #171 docker.sh gate · #178 PCACHE execve ·
-#220 xfail-sync (c-primes/cpp-stl now XPASS) · #93 encoder de-dup · #78 fixture.
+## ✅ Shipped this arc (v0.9.8 → v0.9.11+)
+BUG201 (16KB-host-page MADV_DONTNEED) · #286 host-page-safe mmap-FIXED/munmap · #292 async-signal
+preemption · #297 pcache 2nd-run-SIGSEGV · #285/#305 go build + npm/ruby (fork mutex + phantom
+thread-registry) · #301/#302 exec-from-volume + venv symlink · #273 loopback isolation · #306/#308
+pty winsize (htop/node `-it`) · #289/#293/#294/#277 netlink + busybox ip/ifconfig + minio · #287 image
+$PATH · #282/#283/#257/#264/#258 postgres16-17 / nginx / redis-setpriv / mysql-shebang / image-config ·
+#290/#298/#299 s6-overlay chain · #274/#271 connect-errno / io_uring · #259/#272/#265/#266 htop-procfs
+/ /dev / .NET · #309 perf table · #311 +49 compat cases · #310 +69 docker scenarios.
+**docker run serves out-of-box (arm64):** postgres 15/16/17, redis/valkey, mysql, mariadb, mongo,
+nginx/caddy/httpd, nats, etcd, prometheus/vault/grafana, traefik. go build / npm / ruby / python-venv work.
 
-## Process (what's working)
-dev-day = permanent discovery agent (real software, **normal-run crash detection** — CRASHDBG false-
-crashes non-PIE binaries; verify **correct output**, not just no-crash; pin engine md5, repeat runs, note
-load+free-mem, cross-check a 2nd workload before naming a trigger). Manager delegates each real bug to a
-disjoint isolated-build-dir agent, **merges by extracting only the agent's hunks** (worktree bases often
-predate HEAD — blind-copy reverts recent fixes), verifies fresh-binary md5, then commits. Gate + tag when
-builders idle at low load. No push without explicit OK.
+**Genuine perf (self-timed, startup excluded):** arm64-guest ≈ native (ALU 1.00×, FP 1.15×); x86→ARM
+≈ 1.5–3× native compute (competitive with / better than QEMU — 5.8× faster on FP).
+
+---
+
+## GA gates (must-fix, arm64)
+
+### G1 — Distribution / release
+- [x] Developer-ID **signing** — each release is already signed. ✅
+- [ ] **GA-DIST**: confirm **notarize + staple** on the signed DMG so Gatekeeper is clean on other
+      Macs (notarization was flaky via orbstack clock skew + `xcrun` PATH — verify it's now done, or
+      confirm signed-only is acceptable for the distribution channel). Downgraded from blocker → verify.
+- [ ] **#197** verify clean release engine == debug (no release-only regressions).
+- [ ] **#171** release engine placement plumbing (daemon reliably uses the shipped engine).
+
+### G2 — Docker daemon conformance (gaps from #310)
+- [ ] **#320** `run -p` host port publishing (+ `ps` Ports / `docker port`) — VERIFY then fix. HIGH.
+- [ ] **#321** `docker build` (no `/build` endpoint) — feature.
+- [ ] **#322** cross-container reach by name on a user network (embedded DNS + routing).
+- [ ] **#323** `docker restart` leaves container not-Running.
+- [ ] **#324** `docker cp` host→ctr single-file-to-new-path.
+- [ ] **#325** `run --network none` not honored.
+- [ ] **#295 / #303** stale image-store config on pull / cross-repo basename collision (nginx→linuxserver).
+- [ ] **#276** container-ID entropy + default hostname cosmetics.
+
+### G3 — Showcase services that still don't come up (arm64)
+- [ ] **#300** s6-rc-init `/run/s6-rc/servicedirs` (unblocks linuxserver/* images).
+- [ ] **#281** clickhouse (arm64 JIT mistranslation) · **#284** influxd SIGSEGV (Go codegen).
+- [ ] **#267 / #270** Erlang/BEAM (rabbitmq/elixir) arm64 SIGBUS + erl_child_setup.
+- [ ] **#187 / #188** JVM arm hang / x86 `/proc/cpuinfo` CPUID flags.
+- [ ] **#268 / #269** cargo build of real crates / go build-cache unlinkat.
+- [ ] **#291** victoria-metrics — retest post-#286 (likely fixed) · **#304** mariadb initdb intermittent under load.
+
+### G4 — Engine correctness gaps (from #311 + audits)
+- [ ] **#312** SA_RESTART not honored (interrupted read → EINTR) — servers rely on it.
+- [ ] **#313** sigwait/sigwaitinfo no delivery · **#314** xattr set/remove is a no-op.
+- [ ] **#315** prlimit set not reflected · **#316** SA_SIGINFO si_pid=0 · **#317** readlinkat(dirfd) wrong · **#318** O_PATH readable · **#319** x86 mincore under-reports.
+- [ ] **#296** elf.c lazy-fault MAP_FIXED (16KB-host-page class) · **#212** munmap partial-tail tracking leak.
+- [ ] **#218** vDSO time ptr unchecked (x86) · **#226** FAULT_ON skips nonpie_fixup · g_inotify not cleared on close.
+
+### G5 — Isolation / security
+- [ ] **#238** ptrace is a stub (strace/gdb/ltrace broken).
+- [ ] **#239** overlay rm-r stale-positive + per-container upper leak across `--rm`.
+- [ ] **#228** 0.0.0.0 bind unreachable via 127.0.0.1 on bridge · **#229** AF_UNIX datagram (/dev/log) not overlay-routed.
+
+### G6 — Interactive / terminal
+- [ ] **#223** pty master poll/EOF (script hangs) · **#227** musl openpty /dev/pts · **#280** pty devpts naming/ttyname.
+- [ ] **#307** apt `archives/partial` chmod ENOENT (cosmetic).
+
+### G7 — Stability / soak (release confidence)
+- [ ] **GA-SOAK**: N-container × multi-hour endurance run — RSS/fd/deadlock must stay flat; leak- & hang-free.
+- [ ] **#326** genuine `make bench` (in progress) → track perf over time.
+
+### G8 — Networking
+- [ ] **#261** apt IPv4-only (defaults to IPv6, stalls) · **#231** nats scratch-image exec.
+
+---
+
+## Beta / post-1.0 (NOT arm64-GA blocking)
+- **x86_64-guest cluster:** #210 rustc, #240 gcc, #263 julia, #248 x87, #249 Go1.25, #183 MOV-Sreg,
+  #208 syscall-65573, #213 ELF-loader, #139 clang, #123 node-e, #119 mongosh-SEA, #135 PyPy.
+- **Guest-JIT (hard):** #113 V8 TurboFan / .NET RyuJIT, #104 TurboFan large-array.
+- **aarch64 residual:** #251 LDRSW-literal.
+- **Darwin-container lane:** #233 darwinjail cd coverage, #234 no-mount DD_VOLUMES leak.
+- **Housekeeping:** #220 stale xfail-marker sweep, #93 refactor (asm.c extract / encoder de-dup), #78 test-lane hello.c.
+
+---
+
+## Distance to GA (read)
+Functionally **close** on arm64 — container / dev-loop / service surface is largely there. The real
+distance is **G1 (notarized DMG)** + **G2 docker-conformance (esp. -p publish, build, cross-container
+DNS)** + **G7 soak**. G3–G6 are a finite, enumerated list (mostly 1-file engine or daemon changes).
+x86_64-guest is deferred to beta so GA stays a focused push.
+
+## Process
+dev-day = discovery agent (verify CORRECT output, not just no-crash; pin engine, repeat, note load).
+Manager delegates each bug to a disjoint isolated-build-dir/worktree agent, 3-way-merges by explicit
+path (worktree bases often predate HEAD), validates fresh-engine matrix (1265/0), commits, tags at
+batch boundaries. Push authorized. Bench/perf: `make perf` (oracle-vs-jit) + `make bench` (self-timed).
