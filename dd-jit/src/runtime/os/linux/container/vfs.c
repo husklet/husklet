@@ -1453,6 +1453,55 @@ static int proc_root_dir_open(void) {
     proc_dir_register(fd, tmpl, "/proc"); // tag the fd's guest path so relative opens re-enter /proc synth
     return fd;
 }
+// #289: materialize a /sys/class/net directory as a real temp dir the guest's opendir/getdents can
+// walk. The class dir lists the two interfaces (lo, eth0) as subdirs; an interface dir lists its
+// attribute files. FILE content is served live via proc_open on the (re-intercepted) relative/absolute
+// open. Returns the fd, -1 on error, or -2 if `gp` is not a sysfs-net directory we synthesize.
+static int sysnet_dir_open(const char *gp) {
+    if (!gp || strncmp(gp, "/sys/class/net", 14)) return -2;
+    const char *r = gp + 14;
+    const char *const *entries;
+    static const char *const ifaces[] = {"lo", "eth0", 0};
+    static const char *const attrs[] = {"address",   "addr_len",  "broadcast", "flags",   "mtu",
+                                        "operstate", "type",      "carrier",   "ifindex", "iflink",
+                                        "tx_queue_len", "speed",   "duplex",    0};
+    int as_dirs; // class dir -> iface subdirs; iface dir -> attribute files
+    if (r[0] == 0 || (r[0] == '/' && r[1] == 0)) {
+        entries = ifaces;
+        as_dirs = 1;
+    } else if (r[0] == '/' && (!strcmp(r + 1, "lo") || !strcmp(r + 1, "eth0"))) {
+        entries = attrs;
+        as_dirs = 0;
+    } else
+        return -2;
+    static int registered = 0;
+    if (!registered) {
+        atexit(procfd_dirs_atexit);
+        registered = 1;
+    }
+    procfd_dirs_reap(0);
+    char tmpl[] = "/tmp/.ddnetXXXXXX";
+    if (!mkdtemp(tmpl)) return -1;
+    for (int i = 0; entries[i]; i++) {
+        char p[96];
+        snprintf(p, sizeof p, "%s/%s", tmpl, entries[i]);
+        if (as_dirs)
+            mkdir(p, 0555);
+        else {
+            int f = open(p, O_WRONLY | O_CREAT | O_TRUNC, 0444);
+            if (f >= 0) close(f);
+        }
+    }
+    int fd = open(tmpl, O_RDONLY | O_DIRECTORY);
+    if (fd < 0) {
+        procfd_dir_rm(tmpl);
+        return -1;
+    }
+    char gpath[64];
+    snprintf(gpath, sizeof gpath, "/sys/class/net%s", (r[0] == '/') ? r : "");
+    proc_dir_register(fd, tmpl, gpath); // tag guest path so a relative reopen re-enters this synth
+    return fd;
+}
 // Real macOS stat -> Linux struct stat (the fake S_IFCHR version corrupted libc buffering).
 // fill_linux_stat (the guest struct-stat layout) is per-arch -> frontend/<arch>/fill_stat.c
 // Synthesize the common /proc files Linux programs read (macOS has no /proc). Returns an fd
@@ -1585,6 +1634,66 @@ static int proc_open(const char *rp) {
         n = snprintf(buf, sizeof buf, "0::/\n");
     } else if (!strcmp(rp, "/proc/version")) {
         n = snprintf(buf, sizeof buf, "Linux version 6.1.0 (ddockerd) aarch64\n");
+    // ---- container network introspection (#289): lo + eth0 (see netif_* in state.c) --------------
+    } else if (!strcmp(rp, "/proc/net/dev")) {
+        // per-interface counters; zeros are fine (dd runs no real stack -- this is introspection only).
+        n = snprintf(buf, sizeof buf,
+                     "Inter-|   Receive                                                |  Transmit\n"
+                     " face |bytes    packets errs drop fifo frame compressed multicast|bytes    packets "
+                     "errs drop fifo colls carrier compressed\n"
+                     "    lo: 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0\n"
+                     "  eth0: 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0\n");
+    } else if (!strcmp(rp, "/proc/net/route")) {
+        // Destination/Gateway/Mask are %08X of the network-order addr (netif_* already store that form).
+        uint32_t net = netif_eth0_net(), gw = netif_eth0_gw();
+        int pfx = netif_eth0_prefix();
+        uint32_t mask = pfx >= 32 ? 0xffffffffu : ((1u << pfx) - 1u);
+        n = snprintf(buf, sizeof buf,
+                     "Iface\tDestination\tGateway \tFlags\tRefCnt\tUse\tMetric\tMask\t\tMTU\tWindow\tIRTT\n"
+                     "eth0\t00000000\t%08X\t0003\t0\t0\t0\t00000000\t0\t0\t0\n"
+                     "eth0\t%08X\t00000000\t0001\t0\t0\t0\t%08X\t0\t0\t0\n",
+                     gw, net, mask);
+    } else if (!strcmp(rp, "/proc/net/if_inet6")) {
+        // addr(32 hex) ifindex(hex) prefix(hex) scope(hex) flags(hex) devname -- lo ::1 only.
+        n = snprintf(buf, sizeof buf, "00000000000000000000000000000001 01 80 10 80        lo\n");
+    } else if (!strcmp(rp, "/proc/net/tcp") || !strcmp(rp, "/proc/net/tcp6")) {
+        n = snprintf(buf, sizeof buf,
+                     "  sl  local_address rem_address   st tx_queue rx_queue tr tm->when retrnsmt   uid  "
+                     "timeout inode\n");
+    } else if (!strcmp(rp, "/proc/net/udp") || !strcmp(rp, "/proc/net/udp6")) {
+        n = snprintf(buf, sizeof buf,
+                     "  sl  local_address rem_address   st tx_queue rx_queue tr tm->when retrnsmt   uid  "
+                     "timeout inode ref pointer drops\n");
+    } else if (!strncmp(rp, "/sys/class/net/", 15)) {
+        // per-interface attribute files tools stat/read (address, flags, mtu, operstate, type, ...).
+        const char *rest = rp + 15;
+        int islo = !strncmp(rest, "lo/", 3), iseth = !strncmp(rest, "eth0/", 5);
+        const char *file = islo ? rest + 3 : iseth ? rest + 5 : NULL;
+        if (file) {
+            if (!strcmp(file, "address")) {
+                if (islo)
+                    n = snprintf(buf, sizeof buf, "00:00:00:00:00:00\n");
+                else {
+                    uint8_t m[6];
+                    netif_eth0_mac(m);
+                    n = snprintf(buf, sizeof buf, "%02x:%02x:%02x:%02x:%02x:%02x\n", m[0], m[1], m[2], m[3],
+                                 m[4], m[5]);
+                }
+            } else if (!strcmp(file, "addr_len")) n = snprintf(buf, sizeof buf, "6\n");
+            else if (!strcmp(file, "broadcast"))
+                n = snprintf(buf, sizeof buf, islo ? "00:00:00:00:00:00\n" : "ff:ff:ff:ff:ff:ff\n");
+            else if (!strcmp(file, "flags")) n = snprintf(buf, sizeof buf, islo ? "0x9\n" : "0x1003\n");
+            else if (!strcmp(file, "mtu")) n = snprintf(buf, sizeof buf, islo ? "65536\n" : "1500\n");
+            else if (!strcmp(file, "operstate")) n = snprintf(buf, sizeof buf, islo ? "unknown\n" : "up\n");
+            else if (!strcmp(file, "type")) n = snprintf(buf, sizeof buf, islo ? "772\n" : "1\n");
+            else if (!strcmp(file, "carrier")) n = snprintf(buf, sizeof buf, "1\n");
+            else if (!strcmp(file, "ifindex")) n = snprintf(buf, sizeof buf, islo ? "1\n" : "2\n");
+            else if (!strcmp(file, "iflink")) n = snprintf(buf, sizeof buf, islo ? "1\n" : "2\n");
+            else if (!strcmp(file, "tx_queue_len")) n = snprintf(buf, sizeof buf, islo ? "0\n" : "1000\n");
+            else if (!strcmp(file, "mtu")) n = snprintf(buf, sizeof buf, islo ? "65536\n" : "1500\n");
+            else if (!strcmp(file, "speed")) n = snprintf(buf, sizeof buf, "-1\n");
+            else if (!strcmp(file, "duplex")) n = snprintf(buf, sizeof buf, "unknown\n");
+        }
     // cgroup v2: memory limit
     } else if (!strcmp(rp, "/sys/fs/cgroup/memory.max")) {
         if (g_mem_max)
@@ -1660,6 +1769,28 @@ static int synth_stat_raw(const char *gp, struct stat *s) {
     // Pseudo /dev char devices: stat the host node so type/existence agree with open().
     const char *dev = dev_node_hostpath(gp);
     if (dev) return stat(dev, s) == 0;
+    // /sys/class/net (#289): the class dir + per-iface dirs are directories; attribute files are regular.
+    if (gp && !strncmp(gp, "/sys/class/net", 14)) {
+        const char *r = gp + 14;
+        int isdir = (r[0] == 0 || (r[0] == '/' && r[1] == 0) || // /sys/class/net
+                     (r[0] == '/' && (!strcmp(r + 1, "lo") || !strcmp(r + 1, "eth0")))); // iface dir
+        if (isdir) {
+            memset(s, 0, sizeof *s);
+            s->st_mode = S_IFDIR | 0555;
+            s->st_nlink = 2;
+            return 1;
+        }
+        int fd = proc_open(gp); // attribute file -> confirm we serve it, then present as a regular file
+        if (fd < 0) return 0;
+        if (fstat(fd, s) != 0) {
+            close(fd);
+            return 0;
+        }
+        close(fd);
+        s->st_mode = S_IFREG | 0444;
+        s->st_nlink = 1;
+        return 1;
+    }
     if (!gp || (strncmp(gp, "/proc/", 6) && strncmp(gp, "/sys/fs/cgroup/", 15))) return 0;
     // A bare /proc/self (the magic symlink) or /proc/<pid> directory for an introspectable pid (this
     // process, the container init "1", or our container pid): report the right type so stat()/opendir()

@@ -962,6 +962,208 @@ static void abs_path(const uint8_t *sa, socklen_t l, char *out, size_t n) {
     }
 }
 
+// ===== AF_NETLINK / NETLINK_ROUTE (#289): a minimal RTNETLINK responder ==========================
+// macOS has no AF_NETLINK, so socket(AF_NETLINK,...) returned EAFNOSUPPORT and every interface-
+// enumeration path (getifaddrs via glibc/musl, go-sockaddr, `ip`, ifconfig, minio #277, consul)
+// failed with "Address family not supported". dd models exactly two interfaces (lo + eth0; see
+// netif_* in state.c). A guest netlink socket is backed by an AF_UNIX SOCK_DGRAM socketpair: the
+// guest holds one end; when it sends an RTM_GET* dump request we parse the nlmsghdr and WRITE the
+// synthesized dump into OUR peer end, which queues on the guest end so the guest's ordinary
+// recv/recvmsg/poll reads it back -- no read-side blocking or extra threads. We only synthesize the
+// three dumps real enumeration uses (RTM_GETLINK / RTM_GETADDR / RTM_GETROUTE); any other request
+// just gets an NLMSG_DONE so nothing hangs.
+#define LX_AF_NETLINK 16
+#define NL_RTM_NEWLINK 16
+#define NL_RTM_GETLINK 18
+#define NL_RTM_NEWADDR 20
+#define NL_RTM_GETADDR 22
+#define NL_RTM_NEWROUTE 24
+#define NL_RTM_GETROUTE 26
+#define NL_NLMSG_DONE 3
+#define NL_NLM_F_MULTI 2
+// guest netlink fd -> our peer socketpair fd, stored +1 (0 = not a netlink socket). Mirrors the
+// g_eventfd_peer +1 convention so close()/fd_reset_emul can tear the peer down.
+static int g_nl_peer[1024];
+static int nl_is(int fd) { return fd >= 0 && fd < 1024 && g_nl_peer[fd]; }
+// close a netlink fd's peer (called from fd_reset_emul on the guest close). Idempotent.
+static void nl_close(int fd) {
+    if (fd >= 0 && fd < 1024 && g_nl_peer[fd]) {
+        close(g_nl_peer[fd] - 1);
+        g_nl_peer[fd] = 0;
+    }
+}
+// socket(AF_NETLINK,...): back it with an AF_UNIX SOCK_DGRAM socketpair. Any requested type
+// (SOCK_RAW/SOCK_DGRAM) collapses to SOCK_DGRAM (AF_UNIX has no SOCK_RAW). Returns the guest fd or
+// -errno. Honors SOCK_CLOEXEC(0x80000)/SOCK_NONBLOCK(0x800) on the guest end.
+static int nl_open(int type, int proto) {
+    (void)proto; // only NETLINK_ROUTE is modelled; others still get a working (empty-dump) socket
+    int sv[2];
+    if (socketpair(AF_UNIX, SOCK_DGRAM, 0, sv) < 0) return -errno;
+    int g = sv[0], peer = sv[1];
+    if (g < 0 || g >= 1024) { // untracked fd range -> can't route sends; refuse cleanly
+        close(g);
+        close(peer);
+        return -EMFILE;
+    }
+    if (type & 0x80000) fcntl(g, F_SETFD, FD_CLOEXEC);
+    if (type & 0x800) fcntl(g, F_SETFL, O_NONBLOCK);
+    fcntl(peer, F_SETFD, FD_CLOEXEC); // keep our end out of a guest execve
+    g_nl_peer[g] = peer + 1;
+    return g;
+}
+// getsockname on a netlink fd: report a sockaddr_nl { u16 family; u16 pad; u32 pid; u32 groups } with
+// pid = getpid() (the port id our dump replies also stamp in nlmsg_pid, so go's pid check matches).
+static void nl_getsockname(uint8_t *sa, socklen_t *sl) {
+    if (sa && sl && *sl >= 12) {
+        memset(sa, 0, 12);
+        *(uint16_t *)(sa + 0) = LX_AF_NETLINK;
+        *(uint32_t *)(sa + 4) = (uint32_t)getpid();
+        *sl = 12;
+    } else if (sl)
+        *sl = 12;
+}
+// Fill a Linux sockaddr_nl "from the kernel" (pid 0) as a recv source address; 12 bytes.
+static void nl_fill_src(uint8_t *sa, socklen_t cap) {
+    if (!sa || cap < 12) return;
+    memset(sa, 0, 12);
+    *(uint16_t *)(sa + 0) = LX_AF_NETLINK; // nl_pid=0 => from kernel (glibc/go accept only pid 0 source)
+}
+// rtattr append: { u16 rta_len; u16 rta_type; data } padded to RTA_ALIGN(4).
+static void nl_put_attr(uint8_t *b, size_t *o, uint16_t type, const void *data, uint16_t dlen) {
+    *(uint16_t *)(b + *o) = (uint16_t)(4 + dlen);
+    *(uint16_t *)(b + *o + 2) = type;
+    if (data && dlen) memcpy(b + *o + 4, data, dlen);
+    *o += (size_t)((4 + dlen + 3) & ~3);
+}
+// begin an nlmsg (16-byte header); returns its offset for nl_end() to backpatch nlmsg_len.
+static size_t nl_begin(uint8_t *b, size_t *o, uint16_t type, uint32_t seq) {
+    size_t h = *o;
+    memset(b + h, 0, 16);
+    *(uint16_t *)(b + h + 4) = type;
+    *(uint16_t *)(b + h + 6) = NL_NLM_F_MULTI;
+    *(uint32_t *)(b + h + 8) = seq;
+    *(uint32_t *)(b + h + 12) = (uint32_t)getpid();
+    *o = h + 16;
+    return h;
+}
+static void nl_end(uint8_t *b, size_t *o, size_t h) {
+    *(uint32_t *)(b + h) = (uint32_t)(*o - h); // nlmsg_len (unpadded); attrs already 4-aligned
+    *o = (*o + 3) & ~(size_t)3;
+}
+// one RTM_NEWLINK message
+static void nl_link(uint8_t *b, size_t *o, uint32_t seq, const char *name, int idx, uint16_t iftype,
+                    uint32_t flags, const uint8_t *mac, uint32_t mtu, const uint8_t *bcast) {
+    size_t h = nl_begin(b, o, NL_RTM_NEWLINK, seq);
+    uint8_t *ii = b + *o; // ifinfomsg (16B): family,pad,type(2),index(4),flags(4),change(4)
+    memset(ii, 0, 16);
+    *(uint16_t *)(ii + 2) = iftype;
+    *(int32_t *)(ii + 4) = idx;
+    *(uint32_t *)(ii + 8) = flags;
+    *(uint32_t *)(ii + 12) = 0xffffffffu;
+    *o += 16;
+    nl_put_attr(b, o, 3, name, (uint16_t)(strlen(name) + 1)); // IFLA_IFNAME
+    nl_put_attr(b, o, 1, mac, 6);                             // IFLA_ADDRESS
+    nl_put_attr(b, o, 2, bcast, 6);                           // IFLA_BROADCAST
+    uint32_t v = mtu;
+    nl_put_attr(b, o, 4, &v, 4);          // IFLA_MTU
+    v = (iftype == 772) ? 0u : 1000u;     // IFLA_TXQLEN
+    nl_put_attr(b, o, 13, &v, 4);
+    uint8_t op = 6, lm = 0;               // IF_OPER_UP / IFLA_LINKMODE
+    nl_put_attr(b, o, 16, &op, 1);        // IFLA_OPERSTATE
+    nl_put_attr(b, o, 17, &lm, 1);        // IFLA_LINKMODE
+    nl_end(b, o, h);
+}
+// one RTM_NEWADDR message (v4: alen=4; v6: alen=16). bcast!=NULL adds IFA_BROADCAST (v4 eth0 only).
+static void nl_addr(uint8_t *b, size_t *o, uint32_t seq, uint8_t family, uint8_t prefix, uint8_t scope,
+                    int idx, const char *label, const void *addr, int alen, const void *bcast) {
+    size_t h = nl_begin(b, o, NL_RTM_NEWADDR, seq);
+    uint8_t *ia = b + *o; // ifaddrmsg (8B): family,prefixlen,flags,scope,index(4)
+    memset(ia, 0, 8);
+    ia[0] = family;
+    ia[1] = prefix;
+    ia[3] = scope;
+    *(uint32_t *)(ia + 4) = (uint32_t)idx;
+    *o += 8;
+    nl_put_attr(b, o, 1, addr, (uint16_t)alen); // IFA_ADDRESS
+    nl_put_attr(b, o, 2, addr, (uint16_t)alen); // IFA_LOCAL
+    if (bcast) nl_put_attr(b, o, 4, bcast, (uint16_t)alen); // IFA_BROADCAST
+    if (label) nl_put_attr(b, o, 3, label, (uint16_t)(strlen(label) + 1)); // IFA_LABEL
+    nl_end(b, o, h);
+}
+// one RTM_NEWROUTE message
+static void nl_route(uint8_t *b, size_t *o, uint32_t seq, uint8_t dst_len, uint8_t scope, uint8_t type,
+                     const uint32_t *dst, const uint32_t *gw, const uint32_t *prefsrc, int oif) {
+    size_t h = nl_begin(b, o, NL_RTM_NEWROUTE, seq);
+    uint8_t *rm = b + *o; // rtmsg (12B): family,dst_len,src_len,tos,table,protocol,scope,type,flags(4)
+    memset(rm, 0, 12);
+    rm[0] = 2;         // AF_INET
+    rm[1] = dst_len;
+    rm[4] = 254;       // RT_TABLE_MAIN
+    rm[5] = 3;         // RTPROT_BOOT
+    rm[6] = scope;
+    rm[7] = type;      // RTN_UNICAST=1
+    *o += 12;
+    if (dst) nl_put_attr(b, o, 1, dst, 4);         // RTA_DST
+    if (oif) { uint32_t v = (uint32_t)oif; nl_put_attr(b, o, 4, &v, 4); } // RTA_OIF
+    if (gw) nl_put_attr(b, o, 5, gw, 4);           // RTA_GATEWAY
+    if (prefsrc) nl_put_attr(b, o, 7, prefsrc, 4); // RTA_PREFSRC
+    nl_end(b, o, h);
+}
+static void nl_done(uint8_t *b, size_t *o, uint32_t seq) {
+    uint8_t *h = b + *o;
+    memset(h, 0, 16);
+    *(uint32_t *)(h + 0) = 16;
+    *(uint16_t *)(h + 4) = NL_NLMSG_DONE;
+    *(uint16_t *)(h + 6) = NL_NLM_F_MULTI;
+    *(uint32_t *)(h + 8) = seq;
+    *(uint32_t *)(h + 12) = (uint32_t)getpid();
+    *o += 16;
+}
+// Build + queue (one datagram to `peer`) the dump for request `type` with echoed `seq`.
+static void nl_emit_dump(int peer, uint16_t type, uint32_t seq) {
+    uint8_t out[4096];
+    size_t o = 0;
+    if (type == NL_RTM_GETLINK) {
+        uint8_t zero6[6] = {0}, ff6[6] = {0xff, 0xff, 0xff, 0xff, 0xff, 0xff}, mac[6];
+        netif_eth0_mac(mac);
+        nl_link(out, &o, seq, "lo", 1, 772 /*ARPHRD_LOOPBACK*/, 0x10049u /*UP|LOOP|RUN|LOWER_UP*/, zero6,
+                65536, zero6);
+        nl_link(out, &o, seq, "eth0", 2, 1 /*ARPHRD_ETHER*/, 0x11043u /*UP|BCAST|RUN|MCAST|LOWER_UP*/, mac,
+                1500, ff6);
+    } else if (type == NL_RTM_GETADDR) {
+        uint32_t lo4 = 0x0100007fu; // 127.0.0.1
+        uint8_t lo6[16] = {0};
+        lo6[15] = 1; // ::1
+        uint32_t e4 = netif_eth0_ip(), eb = netif_eth0_bcast();
+        nl_addr(out, &o, seq, 2 /*AF_INET*/, 8, 254 /*RT_SCOPE_HOST*/, 1, "lo", &lo4, 4, NULL);
+        nl_addr(out, &o, seq, 10 /*AF_INET6*/, 128, 254, 1, NULL, lo6, 16, NULL);
+        nl_addr(out, &o, seq, 2, (uint8_t)netif_eth0_prefix(), 0 /*RT_SCOPE_UNIVERSE*/, 2, "eth0", &e4, 4, &eb);
+    } else if (type == NL_RTM_GETROUTE) {
+        uint32_t net = netif_eth0_net(), gw = netif_eth0_gw(), src = netif_eth0_ip();
+        nl_route(out, &o, seq, 0, 0 /*UNIVERSE*/, 1, NULL, &gw, NULL, 2);          // default via gw dev eth0
+        nl_route(out, &o, seq, (uint8_t)netif_eth0_prefix(), 253 /*LINK*/, 1, &net, NULL, &src, 2); // subnet
+    }
+    // (unknown request types fall through to just NLMSG_DONE -> an empty, harmless dump)
+    nl_done(out, &o, seq);
+    ssize_t w = send(peer, out, o, 0); // one datagram; guest reads it via its own recv/recvmsg
+    (void)w;
+}
+// A send on a netlink fd: walk the request's nlmsghdr(s) and queue each one's dump. Returns bytes
+// consumed (== len; requests are tiny) so the guest's send returns success.
+static int64_t nl_send(int fd, const uint8_t *buf, size_t len) {
+    int peer = g_nl_peer[fd] - 1;
+    size_t off = 0;
+    while (off + 16 <= len) {
+        uint32_t nlen = *(const uint32_t *)(buf + off);
+        uint16_t ntype = *(const uint16_t *)(buf + off + 4);
+        uint32_t nseq = *(const uint32_t *)(buf + off + 8);
+        nl_emit_dump(peer, ntype, nseq);
+        if (nlen < 16 || off + ((nlen + 3) & ~3u) <= off) break; // malformed -> stop
+        off += (nlen + 3) & ~3u;
+    }
+    return (int64_t)len;
+}
+
 struct loaded {
     uint64_t entry, phdr, base;
     int phent, phnum;

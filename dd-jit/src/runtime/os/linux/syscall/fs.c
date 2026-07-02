@@ -94,6 +94,7 @@ static void fd_reset_emul(int fd) {
         g_sock_seqpacket[fd] = 0;
         g_br_port[fd] = 0;
         g_br_ip[fd] = 0;
+        nl_close(fd); // #289: tear down a netlink socket's socketpair peer
         g_eventfd_count[fd] = 0;
         g_eventfd_sema[fd] = 0;
         ep_fd_reset(fd);
@@ -943,6 +944,21 @@ static int svc_fs(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t
             }
             // cgroup v2 limit files (JVM/Go self-size on these)
             if (rp && !strncmp(rp, "/sys/fs/cgroup/", 15)) {
+                int pf = proc_open(rp);
+                if (pf != -2) {
+                    G_RET(c) = pf < 0 ? (uint64_t)(-errno) : (uint64_t)pf;
+                    break;
+                }
+            }
+            // /sys/class/net (#289): interface introspection. Directory opens (the class dir + per-iface
+            // dirs) materialize a temp dir for getdents; attribute files are served by proc_open.
+            if (rp && !strncmp(rp, "/sys/class/net", 14)) {
+                int d = sysnet_dir_open(rp);
+                if (d != -2) {
+                    if (d >= 0 && (lf & 0x80000)) fcntl(d, F_SETFD, FD_CLOEXEC); // honor O_CLOEXEC
+                    G_RET(c) = d < 0 ? (uint64_t)(-errno) : (uint64_t)d;
+                    break;
+                }
                 int pf = proc_open(rp);
                 if (pf != -2) {
                     G_RET(c) = pf < 0 ? (uint64_t)(-errno) : (uint64_t)pf;
