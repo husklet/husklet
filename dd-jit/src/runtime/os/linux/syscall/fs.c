@@ -68,6 +68,44 @@ static const char *shm_hostpath(const char *guest, char *buf, size_t n) {
     return buf;
 }
 
+// Tear down EVERY dd-side emulation-table entry keyed by this fd NUMBER (eventfd peer/counter/sema, timerfd,
+// overlay-dir, the socket/loopback/bridge maps, epoll armed-state, flock, pidfd, RAM-scratch memf, and the
+// getdents/overlay-dents caches + the path map). Shared by close(2) (case 57) AND the emulated
+// close-on-exec sweep (proc.c exec_close_cloexec*). #282: dd's execve reloads the new image IN-PROCESS, so the
+// sweep hand-closes each FD_CLOEXEC descriptor -- but it used to close ONLY the real fd, leaving these tables
+// stamped. A CLOEXEC eventfd thus left g_eventfd_peer[fd] set after exec; the new program (postgres) opened
+// postgresql.conf onto that freed fd number and read() was misrouted to the eventfd emulation -> 0 bytes of
+// real content -> `syntax error in file "postgresql.conf" line 1, near token ""` and the server never starts
+// (PG16/17 only -- PG15's streaming conf reader tolerated the short read; hence the version gate). Does NOT
+// close(fd) itself -- the caller owns the real fd's lifetime. Safe on a non-emulated fd (every branch is
+// guarded / idempotent). Mirrors case 57's teardown exactly so close(2) semantics are unchanged.
+static void fd_reset_emul(int fd) {
+    if (fd >= 0 && fd < 1024) {
+        if (g_eventfd_peer[fd]) {
+            close(g_eventfd_peer[fd] - 1);
+            g_eventfd_peer[fd] = 0;
+        }
+        g_timerfd[fd] = 0;
+        g_ovldir[fd][0] = 0;
+        g_lo_port[fd] = 0;
+        g_sock_stream[fd] = 0;
+        g_sock_dgram[fd] = 0;
+        seq_send_eof(fd);
+        g_sock_seqpacket[fd] = 0;
+        g_br_port[fd] = 0;
+        g_br_ip[fd] = 0;
+        g_eventfd_count[fd] = 0;
+        g_eventfd_sema[fd] = 0;
+        ep_fd_reset(fd);
+        flock_on_close(fd);
+    }
+    pidfd_forget(fd);
+    memf_close(fd);
+    dirs_drop(fd);
+    ovldents_drop(fd);
+    fd_clear(fd);
+}
+
 static int svc_fs(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3,
                   uint64_t a4, uint64_t a5) {
     switch (nr) {
@@ -1126,35 +1164,12 @@ static int svc_fs(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t
     case 57: {
         int cf = (int)a0;
         engine_fd_vacate(cf); // guest close must not clobber an engine-private fd (g_root_fd etc.) on this number
-        if (cf >= 0 && cf < 1024) {
-            if (g_eventfd_peer[cf]) {
-                close(g_eventfd_peer[cf] - 1);
-                g_eventfd_peer[cf] = 0;
-            }
-            g_timerfd[cf] = 0;
-            g_ovldir[cf][0] = 0;
-            g_lo_port[cf] = 0;
-            g_sock_stream[cf] = 0;
-            g_sock_dgram[cf] = 0;
-            // SEQPACKET/O_DIRECT-pipe EOF: this end is backed by a DGRAM socket whose peer would otherwise
-            // never see EOF on macOS. Inject a zero-length datagram so a blocked peer recv wakes and returns
-            // 0 (it queues after any pending data, preserving order), then drop the marker. (See case 199.)
-            seq_send_eof(cf);
-            g_sock_seqpacket[cf] = 0;
-            g_br_port[cf] = 0;
-            g_br_ip[cf] = 0;
-            g_eventfd_count[cf] = 0;
-            g_eventfd_sema[cf] = 0;
-            ep_fd_reset(cf); // w3e: drop epoll armed-state (kqueue auto-removes a closed fd)
-            flock_on_close(cf); // release any flock this fd held on its companion (before the real fd is closed)
-            // reap eventfd peer / timerfd / overlay dir / loopback
-        }
-        pidfd_forget(cf); // free the pidfd->pid slot so a spawn-heavy driver can't exhaust the table
-        memf_close(cf);   // release any RAM-backed scratch buffer
-        dirs_drop(cf);    // invalidate the getdents DIR* cache so a reused fd re-opendir's
-        ovldents_drop(cf); // invalidate the overlay getdents snapshot so a reused fd re-snapshots (not stale tail)
+        // Drop every dd-side emulation-table entry for this fd (eventfd peer/timerfd/overlay-dir/socket/epoll/
+        // flock/pidfd/memf/getdents caches/path) BEFORE the real close, so a reused number can't be misrouted.
+        // SEQPACKET/O_DIRECT-pipe EOF is injected here (inside fd_reset_emul's seq_send_eof) while this end is
+        // still open, so a blocked peer recv wakes and returns 0. Shared with the execve CLOEXEC sweep (#282).
+        fd_reset_emul(cf);
         int r = close(cf);
-        fd_clear(cf);
         G_RET(c) = r < 0 ? (uint64_t)(-errno) : 0;
         break;
         // close: -errno on fail
