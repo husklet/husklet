@@ -1,5 +1,5 @@
 # dd workspace.
-.PHONY: all jit fmt test test-ci test-docker test-docker-full test-compose test-docker-net test-macos test-realsw test-smoke scenarios scenarios-real scenarios-long scenarios-count scenarios-clean coverage bench clean app dmg install uninstall mac-image mac-push
+.PHONY: all jit fmt test test-ci perf test-docker test-docker-full test-compose test-docker-net test-macos test-realsw test-smoke scenarios scenarios-real scenarios-long scenarios-count scenarios-clean coverage bench clean app dmg install uninstall mac-image mac-push
 # Version is the git tag (v0.2.0 -> 0.2.0); falls back to 0.0.0-dev with no tags. CI passes it too.
 TAG := $(shell git describe --tags --abbrev=0 2>/dev/null | sed 's/^v//')
 VERSION ?= $(or $(TAG),0.0.0-dev)
@@ -12,6 +12,8 @@ test: jit       ## run the engine × case matrix (grouped report); FILTER=name E
 	cargo run -q -p dd-tests -- $(if $(ENGINE),-e $(ENGINE)) $(FILTER)
 test-ci: jit    ## the cargo-test path (one matrix test; for CI)
 	cargo test -p dd-tests
+perf: jit       ## same matrix + an oracle-vs-JIT slowdown table & summary (PERF_N=median runs; writes target/dd-tests/perf.{csv,json}); FILTER/ENGINE narrow
+	PERF=1 cargo run -q -p dd-tests -- $(if $(ENGINE),-e $(ENGINE)) $(FILTER)
 test-docker: jit ## end-to-end Docker-CLI scenarios against dd-daemon (run/logs/stop/kill/volumes/networks)
 	bash dd-tests/scenarios/docker.sh
 test-docker-full: jit ## FULL Docker CLI/API compliance matrix (every command; maps each failure to a non-compliant verb)
