@@ -124,6 +124,21 @@ static int x86_normalize(struct cpu *c) {
     // getpgrp takes no args, so rdi is garbage -> zero it, then run as x86 getpgid(121) -> canonical 155.
     case 111:
         r[7] = 0; r[0] = 121; return 0;
+    // alarm(seconds): x86-only (aarch64 glibc uses setitimer, so there is no canonical `alarm` and sysmap
+    // biases 37 into the x86-only range -> it fell to the shared default = "unhandled syscall" and glibc's
+    // x86 alarm() got -ENOSYS, so a caught SIGALRM never armed and alarm()-bounded loops hung. Serve it here
+    // as host setitimer(ITIMER_REAL) (the host SIGALRM handler is host_sigh, installed by rt_sigaction, and
+    // #292's back-edge poll then delivers it into a no-syscall loop). Returns the seconds left on any prior
+    // timer, rounding a sub-second remainder up, exactly as Linux alarm() does.
+    case 37: {
+        struct itimerval nw = {{0, 0}, {0, 0}}, old = {{0, 0}, {0, 0}};
+        nw.it_value.tv_sec = (time_t)r[7];
+        if (setitimer(ITIMER_REAL, &nw, &old) < 0)
+            r[0] = (uint64_t)(-errno);
+        else
+            r[0] = (uint64_t)old.it_value.tv_sec + (old.it_value.tv_usec ? 1 : 0);
+        return 1;
+    }
     default: break;
     }
     return 0;

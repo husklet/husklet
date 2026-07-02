@@ -60,6 +60,12 @@ static void host_sigh(int sig) {
     // host(macOS) signo -> Linux
     int ls = sig_m2l(sig);
     __atomic_or_fetch(&g_pending, 1ull << ls, __ATOMIC_SEQ_CST);
+    // #292: kick this thread out of any no-syscall in-cache loop so the caught signal is delivered at the
+    // next block boundary (the emitted body check polls cpu->irq). host_sigh runs on the thread the OS
+    // picked, which for a process-directed signal to a busy single-threaded guest IS the spinner.
+    // pthread_getspecific is a plain TLS read; the store is a single aligned word.
+    struct cpu *c = (struct cpu *)pthread_getspecific(g_cpu_key);
+    if (c) __atomic_store_n(&c->irq, 1, __ATOMIC_SEQ_CST);
     if ((g_sigfd_mask & (1ull << ls)) && g_sigfd_pipe[1] >= 0) {
         char b = (char)ls;
         if (write(g_sigfd_pipe[1], &b, 1) < 0) {}

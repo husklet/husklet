@@ -410,6 +410,9 @@ static int thread_target_signal(int tid, int sig) {
     for (int i = 0; i < THREAD_REG_MAX; i++)
         if (g_threg[i].c && cpu_tid(g_threg[i].c) == tid) {
             __atomic_or_fetch(&g_threg[i].c->tpending, 1ull << sig, __ATOMIC_SEQ_CST);
+            // #292: also kick the target out of any no-syscall in-cache loop so its emitted body check
+            // (cpu->irq) exits to the dispatcher and maybe_deliver_signal runs the handler at a boundary.
+            __atomic_store_n(&g_threg[i].c->irq, 1, __ATOMIC_SEQ_CST);
             // Load waitc AFTER storing tpending: the seq_cst StoreLoad here pairs with the target's
             // publish-then-recheck in futex_op so the wakeup is never lost. Only wake for a signal that is
             // actionable now (unblocked) -- a blocked one stays pending without interrupting the wait.

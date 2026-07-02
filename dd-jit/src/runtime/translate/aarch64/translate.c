@@ -1129,6 +1129,36 @@ static void smc_icflush(uint64_t va) {
     g_smc_flushes++;
 }
 
+// #292 async-interrupt poll: emit a CHEAP flag-free check of cpu->irq at the block body entry (the target
+// of every fall-through, direct chain `b body`, self-loop fold, tier-1 back-edge, and IBTC hit). When irq
+// is set (a caught async guest signal became pending while spinning in-cache with no syscalls), exit the
+// block to the dispatcher at a safe boundary -- all guest regs are live in host regs here, so the standard
+// emit_exit_const spill materializes consistent guest state and maybe_deliver_signal builds the sigframe
+// exactly as the syscall-boundary path does. Fast path is ldr+cbz (2 insns); cbz never touches NZCV, so a
+// self-loop back-edge that lands here keeps the guest condition flags. x16 is engine scratch (dead at body
+// entry when x16/x17 are stolen -- the default), so no guest reg is disturbed; the legacy NOSTEAL1617 path
+// spills x9 to the red zone instead. `gpc` is the block start = the guest pc to resume at.
+static void emit_irq_check(uint64_t gpc) {
+    if (g_steal1617) {
+        e_ldr(16, CPUREG, OFF_IRQ); // ldr x16, [x28, #irq]
+        uint32_t *p = (uint32_t *)g_cp;
+        emit32(0); // cbz x16, Lcont  (patched below)
+        emit_exit_const(gpc, R_BRANCH);
+        uint8_t *cont = g_cp;
+        *p = 0xB4000000u | (((uint32_t)(((uint8_t *)cont - (uint8_t *)p) / 4) & 0x7FFFF) << 5) | 16;
+    } else {
+        e_stur(9, 31, -16); // save guest x9 to the red zone
+        e_ldr(9, CPUREG, OFF_IRQ);
+        uint32_t *p = (uint32_t *)g_cp;
+        emit32(0);          // cbz x9, Lcont
+        e_ldur(9, 31, -16); // restore guest x9 before the exit (emit_spill saves the real value)
+        emit_exit_const(gpc, R_BRANCH);
+        uint8_t *cont = g_cp;
+        *p = 0xB4000000u | (((uint32_t)(((uint8_t *)cont - (uint8_t *)p) / 4) & 0x7FFFF) << 5) | 9;
+        e_ldur(9, 31, -16); // Lcont: restore guest x9 and fall into the body
+    }
+}
+
 static void *translate_block(uint64_t gpc) {
     // W4E tier-2: read NOTIER2 / TIER2_THRESHOLD once (idempotent) before any self-loop detection.
     tier2_env_init();
@@ -1138,6 +1168,8 @@ static void *translate_block(uint64_t gpc) {
     emit_prologue();
     // chained jumps land here (regs already live)
     void *body = g_cp;
+    // #292: poll cpu->irq at the body entry so a caught async signal reaches a no-syscall guest loop.
+    emit_irq_check(start);
     // ldxr/ldaxr..stxr/stlxr exclusive regions must stay in ONE block with no injected
     // memory ops between them, else the monitor clears and stxr retries forever. While
     // inside such a region, conditional branches are emitted inline and their exits are

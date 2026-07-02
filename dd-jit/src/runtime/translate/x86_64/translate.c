@@ -735,12 +735,31 @@ static void emit_sigill(uint64_t pc) {
     emit_guest_trap(pc, 0x00000000u); // udf #0 -> host SIGILL
 }
 
+// #292 async-interrupt poll: emit a CHEAP flag-free check of cpu->irq at the block body entry (the target
+// of every fall-through, direct chain `b body`, self-loop fold, and IBTC hit). When irq is set (a caught
+// async guest signal became pending while the guest spins in-cache making no syscalls), exit to the
+// dispatcher at a safe boundary -- all guest regs are live in host regs here, so emit_exit_const's spill
+// materializes consistent guest state and maybe_deliver_signal builds the sigframe as the syscall path
+// does. Fast path is ldr+cbz (2 insns); cbz never touches NZCV, so a self-loop back-edge that lands here
+// keeps the guest flags (incl. x86 lazy flags live in NZCV). x16 is engine scratch (dead at body entry),
+// so no guest reg is disturbed. `rip` is the block start = the guest pc to resume at.
+static void emit_irq_check(uint64_t rip) {
+    e_ldr(16, 28, (int)OFF_IRQ); // ldr x16, [x28(cpu), #irq]
+    uint32_t *p = (uint32_t *)g_cp;
+    emit32(0); // cbz x16, Lcont  (patched below)
+    emit_exit_const(rip, R_BRANCH);
+    uint8_t *cont = g_cp;
+    *p = 0xB4000000u | (((uint32_t)(((uint8_t *)cont - (uint8_t *)p) / 4) & 0x7FFFF) << 5) | 16;
+}
+
 // Translate the basic block at guest address gpc; returns host entry pointer.
 static void *translate_block(uint64_t gpc) {
     uint64_t start = gpc;
     void *host = g_cp;
     emit_prologue();
     void *body = g_cp;
+    // #292: poll cpu->irq at the body entry so a caught async signal reaches a no-syscall guest loop.
+    emit_irq_check(start);
     g_fl_pending = FL_NONE; // lazy flags: nothing deferred at block entry
     g_df = 0;               // direction flag: forward at block entry (std/cld are block-local around string ops)
     g_fp_known = 0;         // x87: top unknown at block entry until a finit anchors it
