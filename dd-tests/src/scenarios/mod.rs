@@ -23,6 +23,18 @@ pub mod volumes;      // -v bind mounts (incl. #118 nested `..`)
 pub mod networking;   // single-container loopback / DNS / gated outbound
 pub mod netcontainer; // between containers on a user-defined network
 pub mod process;      // env / workdir / exit / streams / signals / exec
+// Docker-command CONFORMANCE lane (task #310) — one docker CLI flag/verb per scenario so a GA-readiness
+// failure is attributable to a specific command. Host-orchestrated, alpine, ArmLinux-scoped (the daemon
+// Docker-API path is arch-independent); every case verified GREEN on the Real docker oracle.
+pub mod runflags;     // docker run flags: -d/-e/-p/-v/-w/--rm/--name/--entrypoint/--user/--network/--restart/-i/-t/--memory/--cpus
+pub mod execcmd;      // docker exec: -e/-w/-u/-d/-i, exit-code, output capture
+pub mod lifecycle;    // create/start/stop/kill -s/restart/pause/unpause/wait/rm/rm -f/rename
+pub mod observe;      // inspect/ps/ps -a/logs/logs --tail/logs -f/top/stats/port
+pub mod cpcmd;        // docker cp host<->container, file + dir
+pub mod imagescmd;    // images/tag/rmi/history/image inspect
+pub mod buildcmd;     // docker build a small Dockerfile -> image -> run
+pub mod dockernet;    // network create/ls/rm/connect/inspect + reach-by-name
+pub mod dockervol;    // volume create/ls/rm/inspect + named-volume persistence
 
 pub fn all() -> Vec<ScenGroup> {
     vec![
@@ -39,5 +51,14 @@ pub fn all() -> Vec<ScenGroup> {
         networking::group(),
         netcontainer::group(),
         process::group(),
+        runflags::group(),
+        execcmd::group(),
+        lifecycle::group(),
+        observe::group(),
+        cpcmd::group(),
+        imagescmd::group(),
+        buildcmd::group(),
+        dockernet::group(),
+        dockervol::group(),
     ]
 }
