@@ -347,6 +347,24 @@ static void thread_after_fork(void) {
     pthread_mutex_init(&g_threg_m, NULL);  // thread registry (tkill/tgkill lookup, thread_register)
     pthread_mutex_init(&g_futex_m, NULL);  // legacy global futex lock (NOFUTEXQ path)
     pthread_cond_init(&g_futex_c, NULL);
+    // fork() clones ONLY the calling thread, but the tid->thread registry still lists every PARENT thread.
+    // Those phantom entries never unregister (no thread backs them in the child), so they (1) poison
+    // tgkill/tkill routing -- thread_target_signal matches a phantom by tid (or pid 1 for the main thread)
+    // and "delivers" the signal onto a dead cpu, dropping a real thread's SIGURG/preempt (Go's async
+    // preemption then spins one goroutine at 100% while its peers park -- the #305 livelock) -- and (2) make
+    // the child's next execve teardown (thread_exit_others) busy-wait its full ~10s ceiling for phantom peers
+    // that can never leave (the go build fork+exec stall: ~14s PER compile child, measured). Rebuild the
+    // registry to hold ONLY the surviving (calling) thread, exactly as stw_after_fork() does for the STW
+    // registry -- #285 reinitialised this module's LOCKS but left the registry CONTENTS inherited.
+    struct cpu *self = (g_my_threg >= 0) ? g_threg[g_my_threg].c : NULL;
+    memset(g_threg, 0, sizeof g_threg);
+    if (self) {
+        g_threg[0].c = self;
+        g_threg[0].th = pthread_self();
+        g_my_threg = 0;
+    } else {
+        g_my_threg = -1;
+    }
 }
 
 // A dedicated host signal used only to INTERRUPT a sibling guest thread out of a blocking host syscall
