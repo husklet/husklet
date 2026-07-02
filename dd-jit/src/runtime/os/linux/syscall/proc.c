@@ -685,8 +685,12 @@ static int svc_proc(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64
         memf_materialize_all(); // non-CLOEXEC scratch fds survive exec -> flush RAM into the real files
         char pb[4200];
         const char *p =
-            // follow symlink rootfs-relative (busybox applets), through the overlay (upper then lowers)
-            xresolve_overlay((const char *)a0, pb, sizeof pb);
+            // #301: resolve the exec path through the SAME resolver openat uses (atpath): overlay-aware
+            // (upper then lowers), bind-mount/volume aware, AND relative-path aware -- a RELATIVE exec
+            // (`./x`, `./binary` from `go build`/`make`, `./script`) is joined to the guest cwd (g_cwd),
+            // not the host cwd. The old xresolve_overlay bailed on any non-'/' path and returned it raw,
+            // so `./x` was access()'d against the host process cwd (never the mounted guest cwd) -> ENOENT.
+            atpath(-100, (const char *)a0, pb, sizeof pb, 0);
         if (access(p, F_OK) != 0) {
             G_RET(c) = (uint64_t)(-2);
             break;
