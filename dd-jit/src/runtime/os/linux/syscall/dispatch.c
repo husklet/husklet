@@ -371,7 +371,6 @@ static void service_local(struct cpu *c) {
         case 64:                           // write(fd, BUF, count)
         case 67:                           // pread64(fd, BUF, count, off)
         case 68:                           // pwrite64(fd, BUF, count, off)
-        case 65:                           // readv(fd, IOVEC, n)  -- array base only
         case 200:                          // bind(fd, SOCKADDR, alen)
         case 203:                          // connect(fd, SOCKADDR, alen)
         case 204:                          // getsockname(fd, ADDR, alen)
@@ -379,8 +378,32 @@ static void service_local(struct cpu *c) {
         case 202:                          // accept(fd, ADDR, alen)
         case 242:                          // accept4(fd, ADDR, alen, flags)
         case 61:                           // getdents64(fd, DIRENT_BUF, count)
-        case 113:                          // clock_gettime(clkid, TIMESPEC)
-        case 66: a1 = nonpie_p(a1); break; // writev(fd, IOVEC, n) -- array base only
+        case 113: a1 = nonpie_p(a1); break; // clock_gettime(clkid, TIMESPEC)
+        // #298: iovec-carrying calls -- rebase the array base AND every entry's iov_base. A non-PIE's
+        // gather/scatter buffers can themselves be low link-vaddr pointers (skalibs' buffer_1 flush issues
+        // writev(fd, iov, n) whose iov_base entries point at .rodata baked at 0x40xxxx). Rebasing only the
+        // array base (the old behaviour) left the inner pointers LOW, where nothing is mapped -> the host
+        // writev EFAULTs and writes nothing. That is exactly why s6-overlay-stat printed an EMPTY line:
+        // s6-overlay preinit's `eval $(s6-overlay-stat /run)` then left $uid unset, so `test "$UID" -ne ""`
+        // hit busybox's empty-operand path -> "sh: out of range" and the s6-overlay-v3 boot aborted (111).
+        // The rebased copy lives in a per-thread scratch array consumed synchronously by svc_io below.
+        case 65:  // readv(fd, IOVEC, n)
+        case 66:  // writev(fd, IOVEC, n)
+        case 69:  // preadv(fd, IOVEC, n, off)
+        case 70: { // pwritev(fd, IOVEC, n, off)
+            a1 = nonpie_p(a1);
+            int niov = (int)a2;
+            if (niov > 0 && niov <= 1024 && host_range_mapped((uintptr_t)a1, (size_t)niov * sizeof(struct iovec))) {
+                static _Thread_local struct iovec reb[1024];
+                const struct iovec *src = (const struct iovec *)a1;
+                for (int i = 0; i < niov; i++) {
+                    reb[i].iov_base = (void *)nonpie_p((uint64_t)(uintptr_t)src[i].iov_base);
+                    reb[i].iov_len = src[i].iov_len;
+                }
+                a1 = (uint64_t)(uintptr_t)reb;
+            }
+            break;
+        }
         case 17:                           // getcwd(BUF, size)
         case 160:                          // uname(UTSBUF)
         case 73: a0 = nonpie_p(a0); break; // ppoll(FDS, n, tmo, sigmask, sz)
