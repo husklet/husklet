@@ -40,8 +40,80 @@ static int ip6_opt_l2m(int o) {
 }
 static int svc_net(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4,
                    uint64_t a5) {
+    // AF_NETLINK/NETLINK_ROUTE (#289): a guest netlink socket is a socketpair we RTNETLINK-respond on
+    // (see netns.c). bind/getsockname/send/recv are handled here; everything else (setsockopt/getsockopt/
+    // close) falls through to the generic paths, which work on the underlying AF_UNIX socket.
+    if (nl_is((int)a0)) {
+        switch (nr) {
+        case 200: // bind(sockaddr_nl): no-op success (our socketpair is already connected)
+            G_RET(c) = 0;
+            return svc_done(c);
+        case 204: // getsockname -> sockaddr_nl { family, pid=getpid() }
+            nl_getsockname((uint8_t *)a1, (socklen_t *)a2);
+            G_RET(c) = 0;
+            return svc_done(c);
+        case 206: { // sendto/send: parse the RTNETLINK request, queue the dump
+            int64_t s = nl_send((int)a0, (const uint8_t *)a1, (size_t)a2);
+            G_RET(c) = (uint64_t)s;
+            return svc_done(c);
+        }
+        case 211: { // sendmsg: gather the iov into a scratch buffer, then queue the dump
+            uint8_t *g = (uint8_t *)a1;
+            struct iovec *iv = (struct iovec *)*(uint64_t *)(g + 16);
+            int ivn = (int)*(uint64_t *)(g + 24);
+            uint8_t tmp[4096];
+            size_t tl = 0;
+            for (int i = 0; iv && i < ivn && tl < sizeof tmp; i++) {
+                size_t n = iv[i].iov_len;
+                if (tl + n > sizeof tmp) n = sizeof tmp - tl;
+                memcpy(tmp + tl, iv[i].iov_base, n);
+                tl += n;
+            }
+            nl_send((int)a0, tmp, tl);
+            G_RET(c) = (uint64_t)tl;
+            return svc_done(c);
+        }
+        case 207: { // recvfrom/recv: drain our queued dump; report a kernel (pid 0) source addr
+            ssize_t r;
+            do { r = recv((int)a0, (void *)a1, (size_t)a2, msgflags_l2m((int)a3)); } while (r < 0 && SVC_EINTR_RESTART(c));
+            if (r >= 0 && a4) {
+                nl_fill_src((uint8_t *)a4, a5 ? *(socklen_t *)a5 : 0);
+                if (a5) *(socklen_t *)a5 = 12;
+            }
+            G_RET(c) = r < 0 ? (uint64_t)(-errno) : (uint64_t)r;
+            return svc_done(c);
+        }
+        case 212: { // recvmsg: read into the guest iov; report a kernel source addr, no control/flags
+            uint8_t *g = (uint8_t *)a1;
+            struct msghdr mh;
+            memset(&mh, 0, sizeof mh);
+            mh.msg_iov = (void *)*(uint64_t *)(g + 16);
+            mh.msg_iovlen = (int)*(uint64_t *)(g + 24);
+            ssize_t r;
+            do { r = recvmsg((int)a0, &mh, msgflags_l2m((int)a2)); } while (r < 0 && SVC_EINTR_RESTART(c));
+            if (r >= 0) {
+                uint8_t *gname = (uint8_t *)*(uint64_t *)(g + 0);
+                uint32_t gnl = *(uint32_t *)(g + 8);
+                if (gname && gnl >= 12) {
+                    nl_fill_src(gname, gnl);
+                    *(uint32_t *)(g + 8) = 12;
+                } else
+                    *(uint32_t *)(g + 8) = 0;
+                *(uint64_t *)(g + 40) = 0; // msg_controllen
+                *(uint32_t *)(g + 48) = 0; // msg_flags
+            }
+            G_RET(c) = r < 0 ? (uint64_t)(-errno) : (uint64_t)r;
+            return svc_done(c);
+        }
+        default: break; // setsockopt/getsockopt/shutdown/etc.: generic path on the AF_UNIX socket
+        }
+    }
     switch (nr) {
     case 198: {
+        if ((int)a0 == LX_AF_NETLINK) { // socket(AF_NETLINK, ...) -> socketpair-backed netlink (#289)
+            G_RET(c) = (uint64_t)nl_open((int)a1, (int)a2); // -host_errno on fail -> svc_done translates
+            break;
+        }
         int ty = (int)a1;
         // socket (translate Linux domain -> macOS: AF_INET6 10->30, others unchanged)
         int r = socket(af_l2m((int)a0), ty & 0xf, (int)a2);

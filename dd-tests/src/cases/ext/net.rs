@@ -50,6 +50,16 @@ fn ext_net() -> Group {
         port("getaddrinfo", "ext_net/net_getaddrinfo.c").out("getaddrinfo r=0 ip=127.0.0.1 port_ok=1\n"),
         port("inet-pton", "ext_net/net_inet_pton.c").out("inet_pton v4=192.168.1.42 v6=2001:db8::1 bad=0\n"),
         port("gethostname", "ext_net/net_gethostname.c").out("gethostname r=0 nonempty=1\n"),
+        // ---- interface introspection (#289) — Linux-only synth (getifaddrs/netlink/procfs/sysfs) ----
+        // dd models lo + eth0; with no DD_IP in the bare matrix eth0 is the synthetic 172.17.0.2/16.
+        // Covers getifaddrs, AF_NETLINK RTM_GETADDR (glibc/go-sockaddr/minio/consul path), /proc/net/dev
+        // and /sys/class/net. Fixed golden (differs from a native-macOS host) -> src, both Linux engines.
+        src("ifaces", "ext_net/net_ifaces.c").out(
+            "getifaddrs eth0 ip=172.17.0.2\n\
+             getifaddrs lo=1 eth0=1 lo_v4=1 lo_v6=1 eth_v4=1\n\
+             netlink RTM_NEWADDR count=3\n\
+             procnetdev lo=1 eth0=1\n\
+             sysclassnet lo=1 eth0=1 eth0_addr=02:42:ac:11:00:02\n"),
         // ---- error semantics ----
         port("connect-refused", "ext_net/net_connect_refused.c").out("connect_refused refused=1\n"),
         // ---- Linux-only extensions — diffed vs native oracle ----

@@ -18,6 +18,50 @@ static int container_pid(void) {
     int h = getpid();
     return (g_init_hostpid && h == g_init_hostpid) ? 1 : h;
 }
+// ---- container network-interface model (#289) --------------------------------------------------
+// dd runs no real network stack, so a container had NO interface introspection at all: /sys/class/net
+// and /proc/net/* were absent and AF_NETLINK sockets failed EAFNOSUPPORT, breaking getifaddrs /
+// go-sockaddr / netlink (consul, minio, `ip`, ifconfig). To fix that coherently we model exactly two
+// interfaces -- lo (127.0.0.1/8, ::1) and eth0 (the container's bridge IP, or a stable synthetic
+// 172.17.0.2/16). This ONE model is consumed by the RTNETLINK responder (netns.c) and the procfs /
+// sysfs synthesis (vfs.c) so every path agrees. eth0's IPv4 is the bridge IP from DD_IP (set by the
+// daemon for a bridged container); with no bridge (--network none/host) it falls back to the synthetic.
+// Returns the address as a network-order u32 held in host byte order (a | b<<8 | c<<16 | d<<24), the
+// same encoding netns.c's br_parse_ip produces and /proc/net/route prints with %08X.
+static uint32_t netif_eth0_ip(void) {
+    const char *ip = getenv("DD_IP");
+    if (ip && ip[0]) {
+        unsigned a = 0, b = 0, cc = 0, d = 0;
+        if (sscanf(ip, "%u.%u.%u.%u", &a, &b, &cc, &d) == 4 && a < 256 && b < 256 && cc < 256 && d < 256)
+            return (uint32_t)(a | (b << 8) | (cc << 16) | (d << 24));
+    }
+    return (uint32_t)(172 | (17 << 8) | (0 << 16) | (2 << 24)); // 172.17.0.2 (docker default bridge)
+}
+static int netif_eth0_prefix(void) { return 16; } // docker default bridge is /16 (cf. br_in_subnet)
+// eth0 broadcast = (ip | ~mask); mask = the top prefixlen bits (in network-order-as-host-u32 form).
+static uint32_t netif_eth0_bcast(void) {
+    int pfx = netif_eth0_prefix();
+    uint32_t host_mask = pfx >= 32 ? 0xffffffffu : ((1u << pfx) - 1u); // low `pfx` bits set (= net bytes)
+    return netif_eth0_ip() | ~host_mask;
+}
+// eth0 network base (ip & mask) and gateway (base | .1, i.e. host-octet 1 -> byte3 in this encoding).
+static uint32_t netif_eth0_net(void) {
+    int pfx = netif_eth0_prefix();
+    uint32_t host_mask = pfx >= 32 ? 0xffffffffu : ((1u << pfx) - 1u);
+    return netif_eth0_ip() & host_mask;
+}
+static uint32_t netif_eth0_gw(void) { return netif_eth0_net() | 0x01000000u; } // .1 = octet4 = high byte
+// eth0 MAC = 02:42:<4 ip bytes> (docker's bridge-container MAC convention). out[6].
+static void netif_eth0_mac(uint8_t *out) {
+    uint32_t ip = netif_eth0_ip();
+    out[0] = 0x02;
+    out[1] = 0x42;
+    out[2] = (uint8_t)(ip & 0xff);
+    out[3] = (uint8_t)((ip >> 8) & 0xff);
+    out[4] = (uint8_t)((ip >> 16) & 0xff);
+    out[5] = (uint8_t)((ip >> 24) & 0xff);
+}
+
 static int g_uid = -1,
            // USER ns: container uid/gid (-1 = passthrough host id; container defaults to 0=root)
            g_gid = -1;
