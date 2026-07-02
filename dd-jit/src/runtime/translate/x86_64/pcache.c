@@ -9,9 +9,13 @@
 //   * The guest image + interp are mapped at FIXED addresses (PC_IMG_BASE / PC_INTERP_BASE), so guest
 //     PCs (the block-map keys) and any guest address baked into host code are stable, and arena-internal
 //     absolute pointers (g_map host/body, g_pend slots) + PC-relative chaining are valid as-is on reload.
-//   * The ONLY host addresses baked into emitted blocks are block_return and &g_ibtc. The ddjit binary
-//     itself is PIE, so those move per run; we recorded each baked site in g_reloc (a fixed 4-insn
-//     movz/movk slot) and rewrite them on load.
+//   * The host addresses baked into emitted blocks (block_return, &g_ibtc, &g_fast_count, &g_pending,
+//     &g_sig_inline_count, &g_yield_inline_count, &dd_rep_movs/stos, ...) ALL live in this one PIE binary,
+//     which dyld slides as a unit; each baked site is emitted as a fixed 4-insn movz/movk slot and recorded
+//     in g_reloc, and rewritten on load by the single image slide. #297: if the g_reloc table ever fills we
+//     poison the arena (g_pcache_poison) so save() refuses -- a persisted arena has EVERY baked site
+//     recorded by construction, so a reload can never keep a stale absolute host address (was: silent drop
+//     -> intermittent, ASLR-slide-dependent SIGSEGV once the arena grew past the old 1<<16 cap).
 //   * The JIT arena does NOT need fixing (MAP_JIT can't be MAP_FIXED anyway): g_map/g_pend are persisted
 //     as arena OFFSETS and rebuilt against the live g_cache.
 //
@@ -117,7 +121,7 @@ static int pcache_load(uint64_t entry_jump) {
     if (h.magic != PC_MAGIC || h.version != PC_VERSION || h.cpu_sz != sizeof(struct cpu) || h.map_n != MAP_N ||
         h.ibtc_n != IBTC_N || h.img_base != PC_IMG_BASE || h.interp_base != PC_INTERP_BASE ||
         h.bin_id != g_pc_binid || h.entry_jump != entry_jump || h.arena_used > CACHE_SZ || h.n_mapent > MAP_N ||
-        h.n_pend > (1u << 16) || h.n_reloc > (1u << 16)) {
+        h.n_pend > (1u << 16) || h.n_reloc > PC_RELOC_CAP) { // #297: n_reloc bound tracks the g_reloc cap
         close(fd);
         return 0;
     }
@@ -180,7 +184,16 @@ static int pcache_load(uint64_t entry_jump) {
 // Persist the current arena + maps (atomic temp+rename). Called at guest exit.
 static void pcache_save(void) {
     if (!g_pcache || !g_pc_binid || g_cp == g_cache) return;
-    if (g_pcache_loaded && g_prof_xlate == 0) return; // full hit, nothing new to persist
+    if (g_pcache_poison) return; // #297: arena has un-recorded baked host pointers -> not safely relocatable
+    // #297: NEVER re-save after a load. A warm run keeps translating -- notably tier-2 hot-block recompiles,
+    // which re-emit into the arena WITHOUT a map entry (g_tier2_build) -- so g_cp (arena_used) grows every
+    // run. Re-persisting that snowballs the on-disk arena across sequential `--rm` runs of the same image
+    // (~5 MB/run here) until it overflows CACHE_SZ; the next load's `arena_used > CACHE_SZ` check then makes
+    // it graceful-miss, but before that the in-memory arena has already run past its end -> silent guest
+    // SIGSEGV (docker rc 255, empty output, no daemon-log error). The cold (miss) arena already covers the
+    // startup/common path; any block missing from it is simply re-translated in-memory on each warm run
+    // (correct, just not cached). So we persist exactly once, on the cold miss, and never grow the file.
+    if (g_pcache_loaded) return;
     uint64_t _t0 = g_coldprof ? coldprof_now_ns() : 0;
     // count occupied map slots
     uint64_t nmap = 0;

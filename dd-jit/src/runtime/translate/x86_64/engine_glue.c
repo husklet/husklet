@@ -73,11 +73,24 @@ enum {
     PRELOC_IBTC = 2,
     PRELOC_HOSTGLOBAL = 3 // any other &host-global / &host-func baked into a block (slid by the image slide)
 };
+// #297: the reloc table records EVERY baked host pointer in the arena so pcache_load() can re-slide it.
+// A 64 MB arena (CACHE_SZ) can in principle hold up to CACHE_SZ/16 baked-pointer slots (each is a fixed
+// 4-insn / 16-byte movz/movk), so a large guest (e.g. the go toolchain) can emit far more than the old
+// 1<<16 cap. When the table overflowed the OLD code silently kept emitting the baked pointer WITHOUT
+// recording it -> on reload it escaped relocation and held the SAVE-time absolute host address, which is
+// only correct when this process happens to get the same ASLR slide as the saver -> intermittent,
+// slide-dependent guest SIGSEGV (near-100% once the arena is large). Fix: (1) a generous cap that covers
+// realistic programs so they still warm-start, and (2) g_pcache_poison -- if we ever cannot record a
+// baked pointer, we mark the arena un-persistable so pcache_save() refuses to write a file we could not
+// fully relocate. That makes the invariant "a persisted arena has EVERY baked pointer recorded" hold by
+// construction regardless of table size, so a reload can NEVER jump/read a stale absolute host address.
+#define PC_RELOC_CAP (1u << 20)
 static struct {
     uint32_t off; // byte offset into the arena of a fixed 4-insn movz/movk host-pointer load
     uint8_t kind; // PRELOC_* (documentary)
-} g_reloc[1 << 16];
+} g_reloc[PC_RELOC_CAP];
 static int g_nreloc;
+static int g_pcache_poison; // set if a baked host pointer could not be recorded -> do NOT persist this arena
 
 static uint64_t g_tracecap;             // if >0 under trace: stop after this many blocks (runaway guard)
 int g_diag;                             // diagnostics (FAULT_ON): print LOADED bases etc. (extern'd by elf.c)

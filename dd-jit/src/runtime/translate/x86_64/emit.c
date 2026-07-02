@@ -43,6 +43,12 @@ static void emit_host_ptr(int rd, uint64_t v, int kind) {
         g_reloc[g_nreloc].off = (uint32_t)(g_cp - g_cache);
         g_reloc[g_nreloc].kind = (uint8_t)kind;
         g_nreloc++;
+    } else {
+        // #297: table full -> this baked pointer can't be recorded, so the arena is not fully
+        // relocatable. Poison it: pcache_save() will refuse to persist, and we NEVER serve a file we
+        // could not re-slide (the fixed-slot bytes we emit here still run correctly IN this process --
+        // they hold the live address -- they just must not be written to disk for a future process).
+        g_pcache_poison = 1;
     }
     e_movconst_fixed(rd, v);
 }
