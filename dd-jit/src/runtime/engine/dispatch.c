@@ -89,6 +89,12 @@ static void run_guest(struct cpu *c) {
     // Frontend hook: one-time per-thread entry setup (x86 publishes the 2-way IBTC base; empty on aarch64).
     G_DISPATCH_ENTER(c);
     while (!c->exited) {
+        // #292: reset the async-interrupt poll each dispatcher iteration. The emitted body check sets us
+        // here when cpu->irq is seen; delivery happens at the bottom of the loop (maybe_deliver_signal).
+        // Clearing here is what stops a masked-but-pending signal (which stays in g_pending, undelivered)
+        // from bouncing a hot loop out of the code cache every iteration -- a fresh signal simply re-sets
+        // irq (host_sigh / thread-directed path) and the next body check catches it.
+        c->irq = 0;
         if (G_PC(c) == SIGRETURN_PC) {
             do_sigreturn(c);
             continue;

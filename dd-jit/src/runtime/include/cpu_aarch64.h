@@ -28,6 +28,15 @@ struct cpu {
     uint64_t nzcv;
     // 0x408 (1032) IBTC: cache-literal addr to fill after an inline-cache miss
     uint64_t ic_site;
+    // 0x410 (1040) #292 async-interrupt poll flag. Set (via g_cpu_key) by the host async-signal handler
+    // and the thread-directed tkill/tgkill path when a CAUGHT guest signal becomes pending; polled by a
+    // 2-insn (ldr+cbz) check emitted at every block body so a CPU-bound guest loop that makes no syscalls
+    // still exits to the dispatcher (maybe_deliver_signal) at a safe block boundary. Placed here -- the LAST
+    // baked field is ic_site, so everything below is non-baked C-only state -- to share the hot nzcv cache
+    // line the prologue already loads (zero extra cache miss on the fast path). Cleared each dispatcher
+    // iteration (a masked-but-pending signal must not bounce the loop). uint64_t so the poll is a clean
+    // 64-bit ldr+cbz.
+    volatile uint64_t irq;
     int exited;
     int exit_code;
     // execve set pc/sp directly -> dispatcher must NOT advance pc
@@ -66,6 +75,8 @@ struct cpu {
 #define OFF_HOSTV 896
 #define OFF_NZCV 1024
 #define OFF_ICSITE 1032
+// #292 async-poll flag offset (non-baked -> use the real offset, computed after the struct shifts).
+#define OFF_IRQ ((int)offsetof(struct cpu, irq))
 #define OFF_SP 248
 #define OFF_PC 256
 #define OFF_TLS 264

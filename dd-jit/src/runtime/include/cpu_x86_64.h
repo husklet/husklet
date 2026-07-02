@@ -16,6 +16,14 @@ struct cpu {
     uint64_t host_v[16];    // 0x110 (272) host v8..v15 (callee-saved)
     uint64_t v[32];         // 0x190 (400) guest xmm0..15 (128-bit each)
     uint64_t mmscratch[2];  // 0x290 (656) 16-byte scratch for pmovmskb etc.
+    // 0x2A0 (672) #292 async-interrupt poll flag. Set (via g_cpu_key) by the host async-signal handler and
+    // the thread-directed tkill/tgkill path when a CAUGHT guest signal becomes pending; polled by a 2-insn
+    // (ldr+cbz) check emitted at every block body so a CPU-bound guest loop that makes no syscalls still
+    // exits to the dispatcher (maybe_deliver_signal) at a safe block boundary. The last BAKED field is
+    // mmscratch, so this non-baked field leaves the OFF_* offsets above unchanged; it lands in the same
+    // cache line as the last xmm the prologue loads (warm on the fast path). Cleared each dispatcher
+    // iteration so a masked-but-pending signal does not bounce the loop.
+    volatile uint64_t irq;
     int exited;
     int exit_code;
     int redirect;  // execve/sigreturn set rip directly -> don't advance
@@ -85,6 +93,8 @@ struct cpu {
 #define OFF_HOSTV 272
 #define OFF_V 400
 #define OFF_MM 656
+// #292 async-poll flag offset (non-baked -> real offset, computed after the struct).
+#define OFF_IRQ __builtin_offsetof(struct cpu, irq)
 // Offset safety (C3): the baked numeric OFF_* above are duplicated into emitted machine code AND the
 // run_block/block_return asm. A struct edit that shifts any of them must fail the BUILD, not corrupt a
 // guest at runtime -- so assert each baked offset against the real field. (See REFACTOR.md "Offset safety".)
