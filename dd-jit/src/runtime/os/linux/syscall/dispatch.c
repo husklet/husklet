@@ -430,6 +430,9 @@ static void service_local(struct cpu *c) {
         case 169: // gettimeofday(TIMEVAL, tz)       -- tz ignored by the handler
         case 236: // get_mempolicy(MODE, ...)        -- mode ptr is a0
         case 161: // sethostname(NAME, len)          -- name buffer is a0
+        case 59:  // pipe2(FDS, flags) -- the two result fds are written into a0 by the engine itself, so a
+                  //   low non-PIE fds[] (skalibs/s6-linux-init pass a .bss array at 0x42xxxx) must be rebased
+                  //   or the handler's host_range_mapped() guard EFAULTs ("unable to pipe: Bad address", #299)
             a0 = nonpie_p(a0);
             break;
         case 165: // getrusage(who, RUSAGEBUF)       -- buffer is a1
