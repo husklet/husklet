@@ -477,9 +477,16 @@ static void service_local(struct cpu *c) {
     if (svc_rare(c, nr, a0, a1, a2, a3, a4, a5)) return;
     // ===================== unhandled =====================
     // Every Linux syscall is now owned by one of the svc_*() family modules above; reaching here means no
-    // family claimed this number -> ENOSYS (keep going so we can see what the guest tries next).
-    fprintf(stderr, "[jit] unhandled syscall %llu (a0=%llx a1=%llx) at pc=%llx\n", (unsigned long long)nr,
-            (unsigned long long)a0, (unsigned long long)a1, (unsigned long long)G_PC(c));
+    // family claimed this number -> ENOSYS (the guest sees ENOSYS and falls back, exactly as on a real kernel
+    // that lacks the syscall). BUG#256: this report used to be UNCONDITIONAL and went to fd 2 -- i.e. the
+    // GUEST's stderr, not the engine's. A guest that pokes an unimplemented number in a hot loop (the arm64 Go
+    // toolchain does, per goroutine/child) then floods its OWN stderr with thousands of engine lines, both
+    // corrupting the guest's stream and stalling the build on pipe backpressure. It is a debug aid, so gate it
+    // behind the same JT/JTS syscall-tracing flags as the [sys] trace above -- silent by default. The ENOSYS
+    // return below is the real, correct behaviour and stays unconditional.
+    if (g_trace || g_systrace)
+        fprintf(stderr, "[jit] unhandled syscall %llu (a0=%llx a1=%llx) at pc=%llx\n", (unsigned long long)nr,
+                (unsigned long long)a0, (unsigned long long)a1, (unsigned long long)G_PC(c));
     G_RET(c) = (uint64_t)(-ENOSYS);
     // Boundary errno translation: every case sets G_RET(c) to a host(macOS) errno on error
     // (-errno, saved e, helper returns, or a macOS E* constant). Map to the Linux errno the guest
