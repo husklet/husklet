@@ -5,8 +5,10 @@
 //!   cargo run -p dd-tests -- -e x86_64    # only the x86-64 engine
 //!   cargo run -p dd-tests -- --list       # list groups + cases without running
 
-use dd_tests::{cases, run, Ctx, Engine, Status};
+use dd_tests::{cases, run, run_perf, Ctx, Engine, Status};
 use std::time::Instant;
+
+mod report;
 
 fn parse_engine(s: &str) -> Option<Engine> {
     match s {
@@ -14,6 +16,17 @@ fn parse_engine(s: &str) -> Option<Engine> {
         "linux/x86_64" | "x86_64" | "amd64" => Some(Engine::LinuxX86_64),
         "darwin/aarch64" | "darwin" | "macos" => Some(Engine::DarwinAarch64),
         _ => None,
+    }
+}
+
+/// Machine-readable status tag for a perf row (skips never reach here).
+fn status_label(st: &Status) -> &'static str {
+    match st {
+        Status::Pass => "pass",
+        Status::Fail(_) => "fail",
+        Status::Xfail(_) => "xfail",
+        Status::Xpass => "xpass",
+        Status::Skip(_) => "skip",
     }
 }
 
@@ -47,6 +60,13 @@ fn main() {
         .collect::<Vec<_>>().join("   "));
 
     let ctx = Ctx::discover();
+    // PERF mode: `PERF=1 make test` (or `make perf`). Times each executed cell's guest execution (median
+    // of PERF_N runs, compilation excluded) and — for Oracle cases — the native run too, then renders the
+    // oracle-vs-JIT slowdown table + summary and dumps perf.csv/perf.json. OFF by default → the matrix
+    // output below is byte-identical to before.
+    let perf = std::env::var("PERF").is_ok();
+    let perf_n: usize = std::env::var("PERF_N").ok().and_then(|s| s.parse().ok()).filter(|&n| n >= 1).unwrap_or(3);
+    let mut perf_rows: Vec<report::Row> = Vec::new();
     let (mut pass, mut fail, mut skip, mut xfail, mut xpass, mut busy_ms) = (0u32, 0u32, 0u32, 0u32, 0u32, 0u128);
     let mut failures: Vec<String> = Vec::new();
     let mut xpasses: Vec<String> = Vec::new();
@@ -60,9 +80,23 @@ fn main() {
         for c in group_cases {
             print!("  {:<16}", c.name);
             for &e in &engines {
-                let t0 = Instant::now();
-                let st = run(&ctx, c, e);
-                let ms = t0.elapsed().as_millis();
+                // Default: single wall-clock run() (the historical "111ms"). Perf: median jit execution
+                // (compilation excluded) + timed native oracle, recorded as a Row for the table.
+                let (st, ms) = if perf {
+                    let t = run_perf(&ctx, c, e, perf_n);
+                    let ms = t.jit_ms.unwrap_or(0);
+                    if !matches!(t.status, Status::Skip(_)) {
+                        perf_rows.push(report::Row {
+                            group: g.name.to_string(), test: c.name.to_string(), arch: e.label(),
+                            oracle_ms: t.oracle_ms, jit_ms: ms, status: status_label(&t.status),
+                        });
+                    }
+                    (t.status, ms)
+                } else {
+                    let t0 = Instant::now();
+                    let st = run(&ctx, c, e);
+                    (st, t0.elapsed().as_millis())
+                };
                 match st {
                     Status::Skip(_) => { skip += 1; print!("  \x1b[90m· {}\x1b[0m", e.label()); }
                     Status::Pass => { pass += 1; busy_ms += ms; slowest.push((ms, format!("{}/{} [{}]", g.name, c.name, e.label())));
@@ -91,5 +125,16 @@ fn main() {
     let xp = if xpass > 0 { format!("  \x1b[35m{xpass} xpass\x1b[0m") } else { String::new() };
     println!("\x1b[1;{color}m{pass} passed\x1b[0m  {fail} failed{xf}{xp}  \x1b[90m{skip} skipped   {busy_ms}ms run, {}ms wall\x1b[0m",
         wall.elapsed().as_millis());
+
+    if perf {
+        print!("{}", report::table(&perf_rows));
+        print!("{}", report::summary(&perf_rows));
+        println!("\x1b[90m(perf: median of {perf_n} run(s) per cell; oracle timed only for Oracle-checked cases)\x1b[0m");
+        match report::write_machine(&ctx.cache, &perf_rows) {
+            Ok((csv, json)) => println!("\x1b[90mwrote {} and {}\x1b[0m", csv.display(), json.display()),
+            Err(e) => eprintln!("\x1b[33mperf: failed to write machine-readable output: {e}\x1b[0m"),
+        }
+    }
+
     std::process::exit(if fail > 0 { 1 } else { 0 });   // xfail/xpass don't fail the suite
 }
