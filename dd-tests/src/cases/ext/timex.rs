@@ -1,0 +1,22 @@
+//! timex — clock/time-syscall coverage (task #311). Owner: timex-coverage agent. Edit ONLY this file.
+//! Builders: src(name,file).oracle()/.exit()/.out()/.has(); port(name,file) for cross-engine golden.
+//! Keep this module compiling at all times (`cargo build -p dd-tests`).
+//!
+//! Beyond ext/posix's clockid/nanosleep: clock_getres across the four standard clocks, gettimeofday
+//! cross-checked against clock_gettime, and relative clock_nanosleep — portable golden verdicts. Plus
+//! the Linux-only clock ids (BOOTTIME/MONOTONIC_RAW/COARSE) diffed against a native oracle.
+#![allow(unused_imports)]
+use crate::{group, src, port, fixture, in_rootfs, Case, Engine, Group};
+
+pub fn groups() -> Vec<Group> { vec![timex()] }
+
+fn timex() -> Group {
+    group("ext-clock", vec![
+        port("clockres", "ext_timex/clockres.c").out("clockres real=1 mono=1 pcpu=1 tcpu=1\n"),
+        port("gettimeofday", "ext_timex/gettimeofday.c").out("gettimeofday usec=1 agrees=1 mono=1 positive=1\n"),
+        // clock_nanosleep does not exist on macOS libc, so this is Linux-only, diffed vs native oracle.
+        src("clocknanosleep", "ext_timex/clocknanosleep.c").oracle(),
+        // Linux-specific clock ids (no macOS equivalent) -> native oracle
+        src("clockids", "ext_timex/clockids.c").oracle(),
+    ])
+}
