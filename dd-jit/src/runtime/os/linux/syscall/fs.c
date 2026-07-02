@@ -293,8 +293,14 @@ static int svc_fs(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t
             if (isatty(fd)) (void)ioctl(fd, TIOCSCTTY, 0);
             G_RET(c) = 0;
             break;
-        // ENOTTY
-        default: G_RET(c) = (uint64_t)(-25); break;
+        default: {
+            // Socket ioctls (SIOCGIF*, #294): answer from the shared lo+eth0 model (netns.c) when `fd`
+            // is a socket; otherwise ENOTTY.
+            int64_t r;
+            if (net_ioctl(fd, rq, (uint8_t *)arg, &r)) { G_RET(c) = (uint64_t)r; break; }
+            G_RET(c) = (uint64_t)(-25); // ENOTTY
+            break;
+        }
         }
         break;
     }

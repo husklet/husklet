@@ -66,6 +66,13 @@ static int svc_io(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t
     }
     case 63: {
         int rfd = (int)a0;
+        // AF_NETLINK socket read (#293): busybox `ip` receives its RTNETLINK dump with read(2)/recvmsg;
+        // drain our queued reply with the Linux MSG_PEEK/MSG_TRUNC semantics (see netns.c nl_recv).
+        if (nl_is(rfd)) {
+            struct iovec iov = {(void *)a1, (size_t)a2};
+            G_RET(c) = (uint64_t)nl_recv(rfd, &iov, 1, 0, NULL);
+            break;
+        }
         // RAM-backed scratch file: serve the read from memory
         if (memf_get(rfd)) {
             ssize_t r = memf_read_pos(g_memf[rfd], (void *)a1, (size_t)a2);
@@ -209,6 +216,14 @@ static int svc_io(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t
     }
     case 64: {
         int wfd = (int)a0;
+        // AF_NETLINK socket write (#293): busybox `ip` (libbb) sends its RTM_GET* dump request via
+        // write(2), NOT sendto/sendmsg -- so the netlink responder (which only hooked send*) never saw
+        // it, no dump was queued, and the follow-up recvmsg blocked forever ("container stuck Up").
+        // Route it to nl_send so the dump is synthesized exactly as for the send* path.
+        if (nl_is(wfd)) {
+            G_RET(c) = (uint64_t)nl_send(wfd, (const uint8_t *)a1, (size_t)a2);
+            break;
+        }
         // RAM-backed scratch file: serve the write from memory (spill to the host file past the cap)
         if (memf_get(wfd) && memf_room_or_spill(wfd, (off_t)g_memf[wfd]->pos + (off_t)a2)) {
             ssize_t r = memf_write_pos(g_memf[wfd], (void *)a1, (size_t)a2);
@@ -246,6 +261,10 @@ static int svc_io(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t
         break;
     }
     case 65: {
+        if (nl_is((int)a0)) { // netlink readv (#293): drain the queued dump into the guest iov
+            G_RET(c) = (uint64_t)nl_recv((int)a0, (struct iovec *)a1, (int)a2, 0, NULL);
+            break;
+        }
         if (memf_get((int)a0)) {
             ssize_t r = memf_preadv(g_memf[(int)a0], (const struct iovec *)a1, (int)a2, -1, 1);
             G_RET(c) = r < 0 ? (uint64_t)(int64_t)r : (uint64_t)r;
@@ -257,6 +276,20 @@ static int svc_io(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t
     // readv
     }
     case 66: {
+        if (nl_is((int)a0)) { // netlink writev (#293): gather the request iov + queue the dump
+            const struct iovec *iv = (const struct iovec *)a1;
+            uint8_t tmp[4096];
+            size_t tl = 0;
+            for (int i = 0; iv && i < (int)a2 && tl < sizeof tmp; i++) {
+                size_t n = iv[i].iov_len;
+                if (tl + n > sizeof tmp) n = sizeof tmp - tl;
+                memcpy(tmp + tl, iv[i].iov_base, n);
+                tl += n;
+            }
+            nl_send((int)a0, tmp, tl);
+            G_RET(c) = (uint64_t)tl;
+            break;
+        }
         if (memf_get((int)a0)) {
             // The iovec array a1 is read directly by the engine (the regular writev path lets the host
             // syscall validate it, but the memf path dereferences it here) -> guard it before the loop.

@@ -73,24 +73,22 @@ static int svc_net(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_
             G_RET(c) = (uint64_t)tl;
             return svc_done(c);
         }
-        case 207: { // recvfrom/recv: drain our queued dump; report a kernel (pid 0) source addr
-            ssize_t r;
-            do { r = recv((int)a0, (void *)a1, (size_t)a2, msgflags_l2m((int)a3)); } while (r < 0 && SVC_EINTR_RESTART(c));
+        case 207: { // recvfrom/recv: drain our queued dump (Linux MSG_PEEK/TRUNC); kernel (pid 0) source
+            struct iovec iov = {(void *)a1, (size_t)a2};
+            int64_t r = nl_recv((int)a0, &iov, 1, (int)a3, NULL);
             if (r >= 0 && a4) {
                 nl_fill_src((uint8_t *)a4, a5 ? *(socklen_t *)a5 : 0);
                 if (a5) *(socklen_t *)a5 = 12;
             }
-            G_RET(c) = r < 0 ? (uint64_t)(-errno) : (uint64_t)r;
+            G_RET(c) = (uint64_t)r; // nl_recv already returns -errno on failure
             return svc_done(c);
         }
-        case 212: { // recvmsg: read into the guest iov; report a kernel source addr, no control/flags
+        case 212: { // recvmsg: read into the guest iov (Linux MSG_PEEK/TRUNC); report a kernel source addr
             uint8_t *g = (uint8_t *)a1;
-            struct msghdr mh;
-            memset(&mh, 0, sizeof mh);
-            mh.msg_iov = (void *)*(uint64_t *)(g + 16);
-            mh.msg_iovlen = (int)*(uint64_t *)(g + 24);
-            ssize_t r;
-            do { r = recvmsg((int)a0, &mh, msgflags_l2m((int)a2)); } while (r < 0 && SVC_EINTR_RESTART(c));
+            struct iovec *iov = (struct iovec *)*(uint64_t *)(g + 16);
+            int iovn = (int)*(uint64_t *)(g + 24);
+            int mf = 0;
+            int64_t r = nl_recv((int)a0, iov, iovn, (int)a2, &mf);
             if (r >= 0) {
                 uint8_t *gname = (uint8_t *)*(uint64_t *)(g + 0);
                 uint32_t gnl = *(uint32_t *)(g + 8);
@@ -99,10 +97,10 @@ static int svc_net(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_
                     *(uint32_t *)(g + 8) = 12;
                 } else
                     *(uint32_t *)(g + 8) = 0;
-                *(uint64_t *)(g + 40) = 0; // msg_controllen
-                *(uint32_t *)(g + 48) = 0; // msg_flags
+                *(uint64_t *)(g + 40) = 0;             // msg_controllen
+                *(uint32_t *)(g + 48) = (uint32_t)mf;  // msg_flags (Linux MSG_TRUNC iff the copy truncated)
             }
-            G_RET(c) = r < 0 ? (uint64_t)(-errno) : (uint64_t)r;
+            G_RET(c) = (uint64_t)r; // nl_recv already returns -errno on failure
             return svc_done(c);
         }
         default: break; // setsockopt/getsockopt/shutdown/etc.: generic path on the AF_UNIX socket
