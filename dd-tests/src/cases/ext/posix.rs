@@ -51,6 +51,10 @@ fn portable() -> Group {
         port("fcntlmisc", "ext_posix/fcntlmisc.c").out("fcntlmisc rw=1 nonblock=1 dupfd=1 cloexec=1\n"),
         port("flock", "ext_posix/ftruncate_lock.c").out("flock locked=1 child_blocked=1\n"),
         port("fsync", "ext_posix/fsync.c").out("fsync fsync=1 fdatasync=1 survived=1\n"),
+        // pty (#306/#308): termios + winsize on the MASTER (apt/dpkg) and raw-mode round-trip on the
+        // SLAVE (htop winsize / node readline). All must succeed on the pty master, not ENOTTY.
+        port("pty", "ext_posix/pty.c")
+            .out("pty mget=1 mset=1 mswin=1 mgwin=1 sgwin=1 sraw=1 rawrt=1\n"),
         // --- readiness ---
         port("pollpipe", "ext_posix/pollpipe.c").out("pollpipe timeout=1 writable=1 readable=1\n"),
         port("selectpipe", "ext_posix/selectpipe.c").out("selectpipe timeout=1 ready=1 pselect=1\n"),

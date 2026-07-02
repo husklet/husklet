@@ -611,8 +611,14 @@ pub(crate) async fn live_fail(app: &App, cid: &str, live: &Arc<Live>, msg: Strin
 /// Allocate a pseudo-terminal; returns (master, slave) owned fds.
 pub(crate) fn open_pty() -> std::io::Result<(OwnedFd, OwnedFd)> {
     let (mut m, mut s): (RawFd, RawFd) = (-1, -1);
-    // termios/winsize are *mut on macOS, *const on linux; null_mut() coerces to both.
-    let r = unsafe { libc::openpty(&mut m, &mut s, std::ptr::null_mut(), std::ptr::null_mut(), std::ptr::null_mut()) };
+    // Seed a sane 80x24 winsize at creation (matches docker/containerd's default ConsoleSize) instead of
+    // the kernel's 0x0. A TUI (htop, vim, less) reads TIOCGWINSZ at startup -- possibly BEFORE the client's
+    // first /resize lands, or when the client is `-t` without a real terminal (no resize at all) -- and a
+    // 0x0 size makes ncurses compute an empty screen -> a BLANK render. The real size still arrives via the
+    // /resize endpoint (TIOCSWINSZ + kernel SIGWINCH), which reflows to the client's actual dimensions.
+    let ws = libc::winsize { ws_row: 24, ws_col: 80, ws_xpixel: 0, ws_ypixel: 0 };
+    // termios is *mut on macOS, *const on linux; null_mut() coerces to both.
+    let r = unsafe { libc::openpty(&mut m, &mut s, std::ptr::null_mut(), std::ptr::null_mut(), &ws as *const _ as *mut _) };
     if r != 0 { return Err(std::io::Error::last_os_error()); }
     Ok(unsafe { (OwnedFd::from_raw_fd(m), OwnedFd::from_raw_fd(s)) })
 }
