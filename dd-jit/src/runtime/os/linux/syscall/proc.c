@@ -91,7 +91,10 @@ static void exec_close_cloexec_scan(int maxfd) {
     for (int fd = 0; fd < maxfd; fd++) {
         if (exec_fd_is_engine(fd)) continue;
         int fl = fcntl(fd, F_GETFD);
-        if (fl >= 0 && (fl & FD_CLOEXEC)) close(fd);
+        if (fl >= 0 && (fl & FD_CLOEXEC)) {
+            fd_reset_emul(fd); // #282: drop dd's emulation tables for this fd so a reused number isn't misrouted
+            close(fd);
+        }
     }
 }
 #include <libproc.h> // proc_pidinfo(PROC_PIDLISTFDS): enumerate only the OPEN fds (see below)
@@ -127,7 +130,10 @@ static void exec_close_cloexec(void) {
         int fd = fds[i].proc_fd;
         if (exec_fd_is_engine(fd)) continue;
         int fl = fcntl(fd, F_GETFD);
-        if (fl >= 0 && (fl & FD_CLOEXEC)) close(fd);
+        if (fl >= 0 && (fl & FD_CLOEXEC)) {
+            fd_reset_emul(fd); // #282: drop dd's emulation tables for this fd so a reused number isn't misrouted
+            close(fd);
+        }
     }
     free(fds);
 }

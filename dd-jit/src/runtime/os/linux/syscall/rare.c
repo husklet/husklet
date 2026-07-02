@@ -64,6 +64,7 @@ static int svc_rare(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64
                 if (fl >= 0) fcntl((int)fd, F_SETFD, fl | FD_CLOEXEC);
             } else {
                 if (exec_fd_is_engine((int)fd)) continue; // never close a (relocated) live engine fd
+                fd_reset_emul((int)fd); // #282: drop dd's emulation tables so a reused fd number isn't misrouted
                 close((int)fd);
             }
         }
