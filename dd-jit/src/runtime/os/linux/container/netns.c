@@ -1148,6 +1148,46 @@ static void nl_emit_dump(int peer, uint16_t type, uint32_t seq) {
     ssize_t w = send(peer, out, o, 0); // one datagram; guest reads it via its own recv/recvmsg
     (void)w;
 }
+// Copy `n` bytes from `src` into the guest scatter buffer (iov array). Returns bytes actually copied.
+static size_t nl_scatter(const uint8_t *src, size_t n, struct iovec *iov, int iovn) {
+    size_t off = 0;
+    for (int i = 0; i < iovn && off < n; i++) {
+        size_t take = iov[i].iov_len;
+        if (take > n - off) take = n - off;
+        if (take && iov[i].iov_base) memcpy(iov[i].iov_base, src + off, take);
+        off += take;
+    }
+    return off;
+}
+// Receive one queued netlink datagram into the guest iov, emulating the Linux MSG_PEEK / MSG_TRUNC
+// semantics that macOS lacks (#293). Two macOS gaps break busybox `ip`/libnetlink here:
+//   (1) recv(...,MSG_TRUNC) on Linux returns the datagram's TRUE length (not the copied length) so a
+//       caller can size a buffer; macOS ignores MSG_TRUNC on input and returns only what it copied.
+//   (2) macOS short-circuits ANY zero-length receive to 0 without touching the queue, so busybox's
+//       "peek the size first" idiom -- recvmsg(fd, {iov_len=0}, MSG_PEEK|MSG_TRUNC) -- reports 0, so it
+//       reads nothing, never advances past the request, and its recv-loop spins/blocks forever.
+// We first PEEK the whole datagram into a host scratch (buffer >= our <=4KB dumps, so the host recv
+// returns the real length even on macOS), then honor the guest's flags precisely: MSG_PEEK leaves the
+// datagram queued; a real read consumes it (excess discarded, as for any DGRAM); MSG_TRUNC makes the
+// return value the true length. *msgflags (if set) gets Linux MSG_TRUNC when the copy was truncated.
+// gflags are Linux MSG_* flags. Returns bytes (per Linux) or -errno.
+static int64_t nl_recv(int fd, struct iovec *iov, int iovn, int gflags, int *msgflags) {
+    uint8_t hb[8192]; // dumps are <=4096 (see nl_emit_dump's out[]); big enough to peek the full length
+    ssize_t truelen;
+    do { truelen = recv(fd, hb, sizeof hb, MSG_PEEK); } while (truelen < 0 && errno == EINTR);
+    if (truelen < 0) { if (msgflags) *msgflags = 0; return -errno; }
+    size_t cap = 0;
+    for (int i = 0; i < iovn; i++) cap += iov[i].iov_len;
+    size_t copylen = (size_t)truelen < cap ? (size_t)truelen : cap;
+    if (!(gflags & 0x2 /*MSG_PEEK*/)) { // real read: consume the whole datagram (rest discarded, DGRAM)
+        ssize_t consumed;
+        do { consumed = recv(fd, hb, sizeof hb, 0); } while (consumed < 0 && errno == EINTR);
+        if (consumed < 0) { if (msgflags) *msgflags = 0; return -errno; }
+    }
+    size_t got = nl_scatter(hb, copylen, iov, iovn);
+    if (msgflags) *msgflags = ((size_t)truelen > got) ? 0x20 /*Linux MSG_TRUNC*/ : 0;
+    return (gflags & 0x20 /*MSG_TRUNC*/) ? (int64_t)truelen : (int64_t)got;
+}
 // A send on a netlink fd: walk the request's nlmsghdr(s) and queue each one's dump. Returns bytes
 // consumed (== len; requests are tiny) so the guest's send returns success.
 static int64_t nl_send(int fd, const uint8_t *buf, size_t len) {
@@ -1162,6 +1202,168 @@ static int64_t nl_send(int fd, const uint8_t *buf, size_t len) {
         off += (nlen + 3) & ~3u;
     }
     return (int64_t)len;
+}
+
+// ===== Socket ioctls (SIOCGIF*, #294): the ioctl half of the shared lo+eth0 model ================
+// busybox `ifconfig` (and any getifaddrs-free tool) enumerates via socket ioctls, not netlink: an
+// AF_INET SOCK_DGRAM socket + SIOCGIFCONF/SIOCGIFADDR/SIOCGIFFLAGS/... . macOS has these too, but its
+// kernel knows nothing of our synthesized container interfaces, so it returned ENOTTY -> "ioctl 0x8912
+// failed: Not a tty". We answer them from the SAME lo+eth0 model the netlink responder + procfs use
+// (netif_* in state.c), writing the Linux struct layouts directly (guest expects Linux sockaddr_in:
+// family u16 @0). Dispatched from the ioctl handler (fs.c) for socket fds; guest result pointers are
+// range-checked (-EFAULT) since we memcpy into them directly rather than via a bounds-checking syscall.
+#define LX_IFNAMSIZ 16
+#define LX_IFREQ_SZ 40 // sizeof(struct ifreq) on 64-bit Linux: name[16] + 24-byte union
+// The two modelled interfaces, filled per slot (0=lo, 1=eth0). All IPv4 fields are network-order held
+// as a host u32 (a | b<<8 | c<<16 | d<<24), matching netif_eth0_ip()'s encoding.
+struct nif {
+    const char *name;
+    int index, mtu;
+    uint32_t ip, mask, bcast;
+    uint16_t flags, arphrd;
+    uint8_t mac[6];
+};
+// prefixlen -> IPv4 netmask (network-order-as-host-u32). /16 -> 255.255.0.0 (0x0000ffff).
+static uint32_t netif_mask_be(int prefix) {
+    uint8_t m[4] = {0, 0, 0, 0};
+    for (int i = 0; i < 4; i++) {
+        int bits = prefix - i * 8;
+        m[i] = bits >= 8 ? 0xff : bits > 0 ? (uint8_t)(0xff << (8 - bits)) : 0;
+    }
+    return (uint32_t)(m[0] | (m[1] << 8) | (m[2] << 16) | (m[3] << 24));
+}
+static void nif_get(int slot, struct nif *o) {
+    memset(o, 0, sizeof *o);
+    if (slot == 0) { // lo: 127.0.0.1/8, UP|LOOPBACK|RUNNING
+        o->name = "lo";
+        o->index = 1;
+        o->ip = 0x0100007fu; // 127.0.0.1
+        o->mask = 0x000000ffu; // 255.0.0.0 (/8)
+        o->mtu = 65536;
+        o->flags = 0x49;   // IFF_UP|IFF_LOOPBACK|IFF_RUNNING
+        o->arphrd = 772;   // ARPHRD_LOOPBACK
+    } else { // eth0: the bridge IP, UP|BROADCAST|RUNNING|MULTICAST
+        o->name = "eth0";
+        o->index = 2;
+        o->ip = netif_eth0_ip();
+        o->mask = netif_mask_be(netif_eth0_prefix());
+        o->bcast = netif_eth0_bcast();
+        o->mtu = 1500;
+        o->flags = 0x1043; // IFF_UP|IFF_BROADCAST|IFF_RUNNING|IFF_MULTICAST
+        o->arphrd = 1;     // ARPHRD_ETHER
+        netif_eth0_mac(o->mac);
+    }
+}
+static int nif_by_name(const char *name, struct nif *o) {
+    for (int i = 0; i < 2; i++) {
+        nif_get(i, o);
+        if (strcmp(o->name, name) == 0) return 1;
+    }
+    return 0;
+}
+static int nif_by_index(int idx, struct nif *o) {
+    for (int i = 0; i < 2; i++) {
+        nif_get(i, o);
+        if (o->index == idx) return 1;
+    }
+    return 0;
+}
+// Write a Linux sockaddr_in { u16 family=AF_INET(2); u16 port=0; u32 addr; u8 pad[8] } into the 24-byte
+// ifreq union at `u` (whole union cleared so stale caller bytes don't leak).
+static void ifr_set_in(uint8_t *u, uint32_t addr_be) {
+    memset(u, 0, 24);
+    *(uint16_t *)(u + 0) = 2; // AF_INET (Linux value)
+    *(uint32_t *)(u + 4) = addr_be;
+}
+// Handle a socket ioctl against the lo+eth0 model. Returns 1 if `rq` is one we own (result in *out,
+// 0 or -errno), 0 to let the caller fall through (non-socket-ioctl request).
+static int net_ioctl(int fd, unsigned long rq, uint8_t *arg, int64_t *out) {
+    if (rq < 0x8900 || rq > 0x89ff) return 0; // not a socket-device (SIOC*) ioctl -> caller's normal path
+    // Must be a socket (Linux returns ENOTTY for these on a non-socket fd).
+    {
+        int ty;
+        socklen_t tl = sizeof ty;
+        if (getsockopt(fd, SOL_SOCKET, SO_TYPE, &ty, &tl) < 0) { *out = -ENOTTY; return 1; }
+    }
+    if (rq == 0x8942) { // SIOCETHTOOL: busybox `ip link` probes it per interface. A real kernel answers
+        // it (driver/link info); we don't model ethtool, but must not FAIL -- busybox prints
+        // "ioctl 0x8942 failed" on ANY error (incl. EOPNOTSUPP). Report success, leaving the guest's
+        // ethtool struct as it pre-zeroed it (plain `ip link`/`ip addr` display nothing from it), so the
+        // output matches real docker's clean listing.
+        *out = 0;
+        return 1;
+    }
+    switch (rq) {
+    case 0x8912: // SIOCGIFCONF
+    case 0x8910: // SIOCGIFNAME
+    case 0x8913: // SIOCGIFFLAGS
+    case 0x8915: // SIOCGIFADDR
+    case 0x8919: // SIOCGIFBRDADDR
+    case 0x891b: // SIOCGIFNETMASK
+    case 0x8921: // SIOCGIFMTU
+    case 0x8927: // SIOCGIFHWADDR
+    case 0x8933: // SIOCGIFINDEX
+        break;
+    default:
+        // A socket ioctl we don't model (e.g. SIOCETHTOOL 0x8942). Report EOPNOTSUPP like a kernel that
+        // lacks the op -- NOT ENOTTY: busybox `ip` prints "ioctl 0x.. failed" on any error except
+        // EOPNOTSUPP, which it silently tolerates (matching real docker's clean `ip link` output). We
+        // return the macOS ENOTSUP(45) value: svc_done's host->Linux errno xlate maps it to Linux
+        // EOPNOTSUPP(95) (whereas macOS EOPNOTSUPP(102) would wrongly map to EINVAL).
+        *out = -ENOTSUP;
+        return 1;
+    }
+    if (rq == 0x8912) { // SIOCGIFCONF: fill an ifreq array (one per interface with an AF_INET addr)
+        if (!host_range_mapped((uintptr_t)arg, 16)) { *out = -EFAULT; return 1; }
+        int32_t ifc_len = *(int32_t *)(arg + 0);
+        uint8_t *buf = (uint8_t *)*(uint64_t *)(arg + 8);
+        int total = 2; // lo + eth0
+        if (!buf) { *(int32_t *)(arg + 0) = total * LX_IFREQ_SZ; *out = 0; return 1; } // size probe
+        int maxn = ifc_len / LX_IFREQ_SZ;
+        int n = maxn < total ? maxn : total;
+        if (n > 0 && !host_range_mapped((uintptr_t)buf, (size_t)n * LX_IFREQ_SZ)) { *out = -EFAULT; return 1; }
+        for (int i = 0; i < n; i++) {
+            struct nif nif;
+            nif_get(i, &nif);
+            uint8_t *e = buf + (size_t)i * LX_IFREQ_SZ;
+            memset(e, 0, LX_IFREQ_SZ);
+            snprintf((char *)e, LX_IFNAMSIZ, "%s", nif.name);
+            ifr_set_in(e + LX_IFNAMSIZ, nif.ip);
+        }
+        *(int32_t *)(arg + 0) = n * LX_IFREQ_SZ;
+        *out = 0;
+        return 1;
+    }
+    // The remaining requests all operate on a single struct ifreq.
+    if (!host_range_mapped((uintptr_t)arg, LX_IFREQ_SZ)) { *out = -EFAULT; return 1; }
+    struct nif nif;
+    uint8_t *u = arg + LX_IFNAMSIZ; // the ifreq union
+    if (rq == 0x8910) { // SIOCGIFNAME: index -> name
+        if (!nif_by_index(*(int32_t *)u, &nif)) { *out = -ENODEV; return 1; }
+        memset(arg, 0, LX_IFNAMSIZ);
+        snprintf((char *)arg, LX_IFNAMSIZ, "%s", nif.name);
+        *out = 0;
+        return 1;
+    }
+    char name[LX_IFNAMSIZ + 1];
+    memcpy(name, arg, LX_IFNAMSIZ);
+    name[LX_IFNAMSIZ] = 0;
+    if (!nif_by_name(name, &nif)) { *out = -ENODEV; return 1; }
+    switch (rq) {
+    case 0x8915: ifr_set_in(u, nif.ip); break;    // SIOCGIFADDR
+    case 0x8919: ifr_set_in(u, nif.bcast); break; // SIOCGIFBRDADDR
+    case 0x891b: ifr_set_in(u, nif.mask); break;  // SIOCGIFNETMASK
+    case 0x8913: memset(u, 0, 24); *(int16_t *)u = (int16_t)nif.flags; break; // SIOCGIFFLAGS
+    case 0x8921: memset(u, 0, 24); *(int32_t *)u = nif.mtu; break;            // SIOCGIFMTU
+    case 0x8933: memset(u, 0, 24); *(int32_t *)u = nif.index; break;          // SIOCGIFINDEX
+    case 0x8927: // SIOCGIFHWADDR: sockaddr { u16 sa_family=ARPHRD_*; u8 mac[6] ... }
+        memset(u, 0, 24);
+        *(uint16_t *)u = nif.arphrd;
+        memcpy(u + 2, nif.mac, 6);
+        break;
+    }
+    *out = 0;
+    return 1;
 }
 
 struct loaded {
