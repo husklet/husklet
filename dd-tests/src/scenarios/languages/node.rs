@@ -1,8 +1,7 @@
 //! Node.js — V8 JIT-in-JIT (PRIME engine stress: V8 emits machine code the dd JIT must in turn
 //! translate), 18/20/22 on glibc (slim) + musl (alpine). Markers per IMAGE-MANIFEST §2.
-//! Known gap: node:20-slim → jit86 UNIMPL opcode 0x1c on amd64 (GAPS jit86-opcode-1c) → xfail AmdLinux.
 
-use crate::scenario::{scen, Scenario, Target};
+use crate::scenario::{scen, Scenario};
 
 pub fn scenarios() -> Vec<Scenario> {
     vec![
@@ -11,8 +10,7 @@ pub fn scenarios() -> Vec<Scenario> {
             .has("500500"),
         scen("languages/node-bigint-20-slim", "node:20-slim")
             .run(&["node", "-e", "let a=0n,b=1n;for(let i=0;i<50;i++){[a,b]=[b,a+b]}console.log(a.toString())"])
-            .has("12586269025")
-            .xfail(&[Target::AmdLinux]), // GAPS jit86-opcode-1c: node:20-slim UNIMPL 0x1c on amd64
+            .has("12586269025"),
         scen("languages/node-json-22-slim", "node:22-slim")
             .run(&["node", "-e", "console.log(JSON.stringify({s:[...Array(1000)].reduce((a,_,i)=>a+i+1,0)}))"])
             .has("{\"s\":500500}"),
