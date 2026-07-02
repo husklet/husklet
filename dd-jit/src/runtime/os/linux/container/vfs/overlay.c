@@ -91,14 +91,14 @@ static void layer_follow(const char *jc, size_t jcl, const char *guest, char *ou
     }
     confine_in(jc, jcl, cur, out, n, nofollow);
 }
-// Overlay READ resolve (follow symlinks): topmost layer that has `guest`. 1 + host on hit; 0 if absent
-// or whiteout-hidden. The upper (rootfs) is searched first via xresolve_exec (handles its symlinks).
-static int overlay_resolve(const char *guest, char *host, size_t hn, int nofollow) {
+// ONE overlay lookup, final component NOT followed: the topmost layer (upper, then lowers top->down)
+// that has `guest`. 1 + its host path in `host`; 0 if absent or whiteout-hidden (host = the upper path,
+// for ENOENT/O_CREAT). A volume path routes to its bind backing via secure_resolve. This is the single-hop
+// primitive; overlay_resolve() drives the cross-layer symlink-follow loop on top of it. Both the upper and
+// the lowers are probed nofollow so the FINAL component stays a symlink for the loop to re-resolve.
+static int overlay_lookup(const char *guest, char *host, size_t hn) {
     char up[4300];
-    if (nofollow)
-        secure_resolve(guest, up, sizeof up, 1);
-    else
-        xresolve_exec(guest, up, sizeof up);
+    secure_resolve(guest, up, sizeof up, 1); // upper (or volume), final NOT followed
     struct stat st;
     if (lstat(up, &st) == 0) {
         snprintf(host, hn, "%s", up);
@@ -113,7 +113,7 @@ static int overlay_resolve(const char *guest, char *host, size_t hn, int nofollo
     // search lowers top->down
     for (int i = 0; i < g_nlower; i++) {
         char lp[4300];
-        layer_follow(g_lower[i].canon, g_lower[i].clen, guest, lp, sizeof lp, nofollow);
+        layer_follow(g_lower[i].canon, g_lower[i].clen, guest, lp, sizeof lp, 1);
         if (lstat(lp, &st) == 0) {
             snprintf(host, hn, "%s", lp);
             return 1;
@@ -126,6 +126,41 @@ static int overlay_resolve(const char *guest, char *host, size_t hn, int nofollo
     snprintf(host, hn, "%s", up);
     // absent -> upper path (for ENOENT/O_CREAT)
     return 0;
+}
+// Overlay READ resolve: topmost layer that has `guest`, FOLLOWING a final symlink across the WHOLE overlay
+// stack. 1 + host on hit; 0 if absent/whiteout-hidden. #302: a symlink CREATED AT RUNTIME in the upper whose
+// target lands in a read-only lower (venv's /tmp/ve/bin/python -> /usr/local/bin/python, /etc/hostname,
+// /bin/busybox) must resolve to that lower file. The old code followed the link only inside the upper
+// (xresolve_exec) and then searched the lowers under the ORIGINAL (link) path, so an upper->lower link
+// dead-ended at a nonexistent upper path -> ENOENT for open/exec/stat even though lstat/readlink worked.
+// We now re-resolve each symlink target through overlay_lookup (upper THEN lowers + volumes), exactly like
+// a fresh path, so the chain crosses layers. nofollow keeps the final component (lstat/readlink/unlink).
+// Bounded to 40 hops; a symlink loop terminates as absent (ENOENT), never hangs.
+static int overlay_resolve(const char *guest, char *host, size_t hn, int nofollow) {
+    char cur[4200];
+    snprintf(cur, sizeof cur, "%s", guest);
+    for (int hop = 0; hop < 40; hop++) {
+        if (!overlay_lookup(cur, host, hn)) return 0; // absent/whiteout -> host is the upper path
+        if (nofollow) return 1;                       // want the link itself, not its target
+        struct stat st;
+        if (lstat(host, &st) != 0 || !S_ISLNK(st.st_mode)) return 1; // real file/dir -> done
+        char tgt[4200];
+        ssize_t k = readlink(host, tgt, sizeof tgt - 1);
+        if (k <= 0) return 1; // unreadable link -> hand back the link's host path
+        tgt[k] = 0;
+        if (tgt[0] == '/')
+            snprintf(cur, sizeof cur, "%s", tgt); // absolute -> overlay-root-relative
+        else {                                    // relative -> resolve against the link's own dir
+            char d[4200];
+            snprintf(d, sizeof d, "%s", cur);
+            char *sl = strrchr(d, '/');
+            if (sl) *sl = 0;
+            char j[8400];
+            snprintf(j, sizeof j, "%s/%s", d, tgt);
+            snprintf(cur, sizeof cur, "%s", j);
+        }
+    }
+    return 0; // chain too deep -> ENOENT (host holds the last upper path)
 }
 // Resolve an executable/interpreter path through the FULL overlay (upper THEN lowers), returning the host
 // path in `buf`. Drop-in for xresolve_exec at the ELF-loader sites so a program that lives only in a
