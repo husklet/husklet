@@ -274,11 +274,23 @@ static int in6_is_any(const uint8_t *a) { return in6_all_zero(a, 16); }
 static int lo6_is(const uint8_t *sa, socklen_t l) {
     return sa && l >= 24 && *(const uint16_t *)sa == LX_AF_INET6_FAM && in6_is_loopback(sa + 8);
 }
-// bind(addr): v6 loopback if AF_INET6 and addr is ::1 or :: (mirrors lo_any_is; :: includes loopback and,
-// with no v6 bridge, the only reachable v6 address under isolation IS loopback).
+static int br_on(void); // defined below (per-network bridge on); used by the v6 bind classifiers here
+// bind(addr): v6 loopback if AF_INET6 and addr is ::1, OR :: (unspecified) ONLY when the bridge is off.
+// `::1` always stays on the private per-container loopback. `::` (dual-stack "any", as busybox nc / many
+// servers bind when listening) is the v6 analogue of IPv4 0.0.0.0: with a user network attached it must
+// defer to the bridge (br6_any_is below) so a peer container can reach it, instead of landing on the
+// isolated loopback (where a cross-container connect would ENOENT). Mirrors lo_any_is's `&& !br_on()`.
 static int lo6_any_is(const uint8_t *sa, socklen_t l) {
     if (!sa || l < 24 || *(const uint16_t *)sa != LX_AF_INET6_FAM) return 0;
-    return in6_is_loopback(sa + 8) || in6_is_any(sa + 8);
+    if (in6_is_loopback(sa + 8)) return 1;
+    return in6_is_any(sa + 8) && !br_on();
+}
+// bind(::): the IPv6 unspecified address, routed to the per-network bridge (== IPv4 0.0.0.0's br path) so
+// a dual-stack listener that binds `::` is reachable by peer containers over the AF_UNIX switch. Only when
+// a user network is attached (br_on()); with no bridge, `::` is handled by lo6_any_is (isolated loopback).
+static int br6_any_is(const uint8_t *sa, socklen_t l) {
+    if (!sa || l < 24 || *(const uint16_t *)sa != LX_AF_INET6_FAM) return 0;
+    return in6_is_any(sa + 8) && br_on();
 }
 static void lo_path(uint16_t port, char *out, size_t n) { snprintf(out, n, "%s/p%u", g_netns, (unsigned)port); }
 // Allocate an ephemeral loopback port for a bind(127.0.0.1:0). The kernel would assign a real port;
@@ -509,6 +521,7 @@ static void *fwd_relay_thread(void *p) {
     close(r.b);
     return NULL;
 }
+static int switch_dial(const char *path); // defined below; gap-tolerant AF_UNIX switch dial
 struct fwd_listen {
     uint16_t hport;
     char upath[200]; // full switch path; truncated into sun_path exactly as the guest's bind did
@@ -536,14 +549,13 @@ static void *fwd_listen_thread(void *p) {
             if (errno == EINTR) continue;
             break;
         }
-        // dial the guest's switch listen socket (same truncation the guest used when it bound it)
-        int gc = socket(AF_UNIX, SOCK_STREAM, 0);
+        // Dial the guest's switch listen socket (same truncation the guest used when it bound it),
+        // retrying briefly across a re-listen gap: a published server looping `nc -l -w N` rebinds the
+        // switch inode between connections, so a host connection that lands in the gap sees ENOENT (inode
+        // gone) or ECONNREFUSED (stale inode, nothing accepting). Recreate + retry for ~600ms (mirrors TCP
+        // SYN retransmit), then drop the host connection. A genuinely-dead guest still fails after the cap.
+        int gc = switch_dial(fl.upath);
         if (gc < 0) { close(hc); continue; }
-        struct sockaddr_un un;
-        memset(&un, 0, sizeof un);
-        un.sun_family = AF_UNIX;
-        snprintf(un.sun_path, sizeof un.sun_path, "%s", fl.upath);
-        if (connect(gc, (struct sockaddr *)&un, sizeof un) < 0) { close(gc); close(hc); continue; }
         struct fwd_relay *fr = malloc(sizeof *fr);
         if (!fr) { close(gc); close(hc); continue; }
         fr->a = hc;
@@ -554,6 +566,54 @@ static void *fwd_listen_thread(void *p) {
     }
     close(ls);
     return NULL;
+}
+// Dial an AF_UNIX switch socket at `path`, retrying briefly across a peer's re-listen gap: a server
+// looping `nc -l -w N` (or any accept-one-then-rebind pattern) unbinds+rebinds the switch inode between
+// connections, so a dial that lands in that window sees ENOENT (inode gone) or ECONNREFUSED (stale inode,
+// nothing accepting yet). Recreate the socket + retry for ~600ms (mirrors TCP SYN retransmission across a
+// transient backlog gap); a genuinely-absent peer still fails after the cap. Returns a connected fd or -1.
+// A connection that immediately HUPs with no readable data is a peer that's mid-exit: a `-w N` listener
+// whose accept-window just closed (busybox `nc -l -w 1` loops align their 1-second boundary with the
+// scenario's `sleep 1`, so a single-shot client connects exactly as the current listener is exiting). It
+// accepts nothing and the socket closes with 0 bytes. Distinguish that from a live connection (data
+// pending, or a client-first protocol where the server waits for the request) by a brief poll: only a
+// POLLHUP/POLLERR WITHOUT POLLIN means "dead on arrival" -> retry a fresh listener. Anything else is live.
+static int switch_dead_on_arrival(int fd) {
+    struct pollfd pf = {fd, POLLIN, 0};
+    int pr = poll(&pf, 1, 40); // returns at once when readable/closed; ~40ms only for a truly-idle live peer
+    if (pr <= 0) return 0;     // idle but live: a client-first protocol (server awaits the request) or slow
+    // Readable: could be real data OR a peer-closed EOF. PEEK (consumes nothing, so the guest's later read
+    // still sees any data): 0 bytes == the peer closed with nothing to serve == dead on arrival.
+    char b[1];
+    ssize_t n = recv(fd, b, 1, MSG_PEEK | MSG_DONTWAIT);
+    if (n == 0) return 1;                                           // clean EOF, no data -> dead
+    if (n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) return 0; // spurious wake, live
+    if (n < 0) return 1;                                            // ECONNRESET/ECONNREFUSED -> dead
+    return 0;                                                        // real data pending -> live
+}
+static int switch_dial(const char *path) {
+    struct sockaddr_un un;
+    memset(&un, 0, sizeof un);
+    un.sun_family = AF_UNIX;
+    snprintf(un.sun_path, sizeof un.sun_path, "%s", path);
+    for (int attempt = 0; attempt < 60; attempt++) {
+        int fd = socket(AF_UNIX, SOCK_STREAM, 0);
+        if (fd < 0) return -1;
+        if (connect(fd, (struct sockaddr *)&un, sizeof un) == 0) {
+            // Peer mid-exit guard: a `-w N` listener whose window just closed accepts nothing and the
+            // connection HUPs with no data. Detect that and retry a fresh listener; a live peer (data
+            // pending, or a client-first published service) is kept.
+            if (!switch_dead_on_arrival(fd)) return fd;
+            close(fd);
+        } else {
+            int e = errno;
+            close(fd);
+            if (e != ENOENT && e != ECONNREFUSED) return -1;
+        }
+        struct timespec ts = {0, 20000000}; // 20ms
+        nanosleep(&ts, NULL);
+    }
+    return -1;
 }
 // Called from listen(): if `fd` is a published switch-backed listening socket, start its host forwarder.
 static void fwd_maybe_start(int fd) {
@@ -1128,8 +1188,10 @@ static void nl_emit_dump(int peer, uint16_t type, uint32_t seq) {
         netif_eth0_mac(mac);
         nl_link(out, &o, seq, "lo", 1, 772 /*ARPHRD_LOOPBACK*/, 0x10049u /*UP|LOOP|RUN|LOWER_UP*/, zero6,
                 65536, zero6);
-        nl_link(out, &o, seq, "eth0", 2, 1 /*ARPHRD_ETHER*/, 0x11043u /*UP|BCAST|RUN|MCAST|LOWER_UP*/, mac,
-                1500, ff6);
+        // --network none: loopback-only, so eth0 is absent from the link dump (`ip link` sees just lo).
+        if (!net_isolate())
+            nl_link(out, &o, seq, "eth0", 2, 1 /*ARPHRD_ETHER*/, 0x11043u /*UP|BCAST|RUN|MCAST|LOWER_UP*/, mac,
+                    1500, ff6);
     } else if (type == NL_RTM_GETADDR) {
         uint32_t lo4 = 0x0100007fu; // 127.0.0.1
         uint8_t lo6[16] = {0};
@@ -1137,11 +1199,14 @@ static void nl_emit_dump(int peer, uint16_t type, uint32_t seq) {
         uint32_t e4 = netif_eth0_ip(), eb = netif_eth0_bcast();
         nl_addr(out, &o, seq, 2 /*AF_INET*/, 8, 254 /*RT_SCOPE_HOST*/, 1, "lo", &lo4, 4, NULL);
         nl_addr(out, &o, seq, 10 /*AF_INET6*/, 128, 254, 1, NULL, lo6, 16, NULL);
-        nl_addr(out, &o, seq, 2, (uint8_t)netif_eth0_prefix(), 0 /*RT_SCOPE_UNIVERSE*/, 2, "eth0", &e4, 4, &eb);
+        if (!net_isolate()) // --network none: no eth0 address
+            nl_addr(out, &o, seq, 2, (uint8_t)netif_eth0_prefix(), 0 /*RT_SCOPE_UNIVERSE*/, 2, "eth0", &e4, 4, &eb);
     } else if (type == NL_RTM_GETROUTE) {
-        uint32_t net = netif_eth0_net(), gw = netif_eth0_gw(), src = netif_eth0_ip();
-        nl_route(out, &o, seq, 0, 0 /*UNIVERSE*/, 1, NULL, &gw, NULL, 2);          // default via gw dev eth0
-        nl_route(out, &o, seq, (uint8_t)netif_eth0_prefix(), 253 /*LINK*/, 1, &net, NULL, &src, 2); // subnet
+        if (!net_isolate()) { // --network none: no eth0 routes (loopback carries no L3 routing table)
+            uint32_t net = netif_eth0_net(), gw = netif_eth0_gw(), src = netif_eth0_ip();
+            nl_route(out, &o, seq, 0, 0 /*UNIVERSE*/, 1, NULL, &gw, NULL, 2);          // default via gw dev eth0
+            nl_route(out, &o, seq, (uint8_t)netif_eth0_prefix(), 253 /*LINK*/, 1, &net, NULL, &src, 2); // subnet
+        }
     }
     // (unknown request types fall through to just NLMSG_DONE -> an empty, harmless dump)
     nl_done(out, &o, seq);
@@ -1317,7 +1382,7 @@ static int net_ioctl(int fd, unsigned long rq, uint8_t *arg, int64_t *out) {
         if (!host_range_mapped((uintptr_t)arg, 16)) { *out = -EFAULT; return 1; }
         int32_t ifc_len = *(int32_t *)(arg + 0);
         uint8_t *buf = (uint8_t *)*(uint64_t *)(arg + 8);
-        int total = 2; // lo + eth0
+        int total = net_isolate() ? 1 : 2; // lo (+ eth0 unless --network none)
         if (!buf) { *(int32_t *)(arg + 0) = total * LX_IFREQ_SZ; *out = 0; return 1; } // size probe
         int maxn = ifc_len / LX_IFREQ_SZ;
         int n = maxn < total ? maxn : total;

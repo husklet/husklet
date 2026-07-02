@@ -64,6 +64,40 @@ pub(crate) fn publish_str(pb: &HashMap<String, Vec<PortBinding>>) -> String {
     v.join(",")
 }
 
+/// Like [`publish_str`] but AUTO-ASSIGNS a free host port for any binding with an empty `HostPort` —
+/// docker's `-p <container>` / `-p 127.0.0.1::<container>` "publish to an ephemeral host port" form. The
+/// daemon picks the port here (from the IANA dynamic range 49152-65535) so `docker port`/`ps`/inspect
+/// report a concrete host port and the engine's `-p` host forwarder binds it. Ports already published by
+/// existing containers are skipped to avoid intra-daemon collisions. Bindings with an explicit HostPort
+/// are emitted verbatim (byte-identical to `publish_str`).
+pub(crate) fn publish_str_alloc(pb: &HashMap<String, Vec<PortBinding>>, g: &Inner) -> String {
+    let mut used: std::collections::HashSet<u16> = g.containers.values()
+        .flat_map(|c| c.publish.split(','))
+        .filter_map(|p| p.split_once(':')).filter_map(|(h, _)| h.parse::<u16>().ok())
+        .collect();
+    let mut next: u16 = 49152;
+    let mut alloc = || -> u16 {
+        while next < 65535 && used.contains(&next) { next += 1; }
+        let p = next; used.insert(p); next = next.saturating_add(1); p
+    };
+    // Sort by container port so auto-assignment is deterministic (HashMap iteration order is not).
+    let mut keys: Vec<&String> = pb.keys().collect();
+    keys.sort();
+    let mut v = Vec::new();
+    for k in keys {
+        let cport = k.split('/').next().unwrap_or("");
+        if cport.is_empty() { continue; }
+        for b in &pb[k] {
+            let hp = match &b.host_port {
+                Some(h) if !h.is_empty() => h.clone(),
+                _ => alloc().to_string(),
+            };
+            v.push(format!("{hp}:{cport}"));
+        }
+    }
+    v.join(",")
+}
+
 #[derive(Deserialize)]
 pub(crate) struct CreateQ { name: Option<String>, platform: Option<String> }
 
@@ -151,7 +185,7 @@ pub(crate) async fn containers_create(State(a): State<App>, Query(cq): Query<Cre
         hostname: body.hostname.unwrap_or_default(),
         memory: hc.as_ref().and_then(|h| h.memory).unwrap_or(0),
         pids_limit: hc.as_ref().and_then(|h| h.pids_limit).unwrap_or(0),
-        publish: hc.as_ref().and_then(|h| h.port_bindings.as_ref()).map(publish_str).unwrap_or_default(),
+        publish: hc.as_ref().and_then(|h| h.port_bindings.as_ref()).map(|pb| publish_str_alloc(pb, &g)).unwrap_or_default(),
         created: now_secs(), tty,
         name: want_name,
         working_dir, env,
@@ -202,7 +236,7 @@ pub(crate) async fn containers_start(State(a): State<App>, Path(id): Path<String
         let full = match resolve_cid(&g, &id) { Some(f) => f, None => return no_such(&id) };
         let c = match g.containers.get(&full).cloned() { Some(c) => c, None => return no_such(&id) };
         let live = g.live.entry(full.clone()).or_insert_with(|| Live::new(c.tty)).clone();
-        if let Some(cc) = g.containers.get_mut(&full) { cc.status = "running".into(); cc.started_at = now_secs(); }
+        if let Some(cc) = g.containers.get_mut(&full) { cc.status = "running".into(); cc.started_at = now_secs(); cc.started_at_ns = now_nanos(); }
         (c, g.volumes.clone(), live)
     };
     if std::env::var("DD_DEBUG").is_ok() { eprintln!("[start] {} cmd={:?}", &c.id[..12], c.cmd); }
@@ -242,7 +276,7 @@ pub(crate) async fn containers_kill(State(a): State<App>, Path(id): Path<String>
         l.stop_requested.store(true, std::sync::atomic::Ordering::SeqCst); // deliberate stop: no auto-restart
         if let Some(pid) = *l.pid.lock().unwrap() { kill_group(pid as i32, sig); } // whole group, not just the leader
     }
-    if let Some(c) = g.containers.get_mut(&full) { c.status = "exited".into(); c.finished_at = now_secs(); }
+    if let Some(c) = g.containers.get_mut(&full) { c.status = "exited".into(); c.finished_at = now_secs(); c.finished_at_ns = now_nanos(); }
     let (cname, cimage) = g.containers.get(&full).map(|c| (c.name.clone(), c.image.clone())).unwrap_or_default();
     crate::events::emit_event(&a.events, "container", "kill", &full, json!({"name": cname, "image": cimage}));
     save_state(&g, &a.state_path);
@@ -269,7 +303,7 @@ pub(crate) async fn containers_restart(State(a): State<App>, Path(id): Path<Stri
         // Replace the spent Live with a fresh one (mirrors maybe_restart / start's spawn).
         let live = Live::new(c.tty);
         g.live.insert(full.clone(), live.clone());
-        if let Some(cc) = g.containers.get_mut(&full) { cc.status = "running".into(); cc.started_at = now_secs(); }
+        if let Some(cc) = g.containers.get_mut(&full) { cc.status = "running".into(); cc.started_at = now_secs(); cc.started_at_ns = now_nanos(); }
         (c, g.volumes.clone(), live)
     };
     if std::env::var("DD_DEBUG").is_ok() { eprintln!("[restart] {} cmd={:?}", &c.id[..12], c.cmd); }

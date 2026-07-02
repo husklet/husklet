@@ -18,6 +18,16 @@ static int container_pid(void) {
     int h = getpid();
     return (g_init_hostpid && h == g_init_hostpid) ? 1 : h;
 }
+// `docker run --network none`: the daemon sets DD_NET_ISOLATE=1. The container is then LOOPBACK-ONLY — no
+// eth0 is presented in the interface model (netlink RTM_GETLINK/GETADDR/GETROUTE dumps + SIOCGIFCONF in
+// netns.c, and /proc/net/dev·route + /sys/class/net in vfs.c), matching docker's `none` network (only lo).
+// Defined here (state.c is the FIRST container TU include) so both vfs.c and netns.c can consume it. Lazily
+// cached. Off (eth0 present) for the default bridge / user networks, so it never affects a normal container.
+static int g_net_isolate = -1;
+static int net_isolate(void) {
+    if (g_net_isolate < 0) g_net_isolate = getenv("DD_NET_ISOLATE") != NULL;
+    return g_net_isolate;
+}
 // ---- container network-interface model (#289) --------------------------------------------------
 // dd runs no real network stack, so a container had NO interface introspection at all: /sys/class/net
 // and /proc/net/* were absent and AF_NETLINK sockets failed EAFNOSUPPORT, breaking getifaddrs /

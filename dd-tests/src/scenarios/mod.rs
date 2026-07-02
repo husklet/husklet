@@ -21,6 +21,7 @@ pub mod terminal;
 pub mod filesystem;   // rootfs + overlay VFS (no volume)
 pub mod volumes;      // -v bind mounts (incl. #118 nested `..`)
 pub mod networking;   // single-container loopback / DNS / gated outbound
+pub mod netinstall;   // apt-get update + install + run (htop) over the network — the field regression net
 pub mod netcontainer; // between containers on a user-defined network
 pub mod process;      // env / workdir / exit / streams / signals / exec
 // Docker-command CONFORMANCE lane (task #310) — one docker CLI flag/verb per scenario so a GA-readiness
@@ -49,6 +50,7 @@ pub fn all() -> Vec<ScenGroup> {
         filesystem::group(),
         volumes::group(),
         networking::group(),
+        netinstall::group(),
         netcontainer::group(),
         process::group(),
         runflags::group(),

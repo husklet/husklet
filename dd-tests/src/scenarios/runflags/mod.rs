@@ -24,8 +24,13 @@ docker inspect -f "{{.State.Running}}" ${C}c"#).has("true").timeout(30),
 docker run --rm $PLAT -e FOO=barbaz $IMG printenv FOO"#).has("barbaz"),
 
         // -p : publish a container port to a host port; the published port is reachable from the host
-        // GAP (dd, arm): the daemon does not publish the port to the host ("no public port … published")
-        // -> also breaks observe/ps-ports and observe/port. xfail until host port-publishing lands.
+        // PARTIAL (dd, arm): the daemon now ALLOCATES the host port for the `-p 127.0.0.1::9000` auto-assign
+        // form and reports it via `docker port`/`ps`/inspect (so observe/ps-ports/port pass), and the engine's
+        // host forwarder reaches a stable long-lived listener. This recipe re-listens every second
+        // (`nc -l -w 1` loop); the forwarder is bound to the guest process that called listen(), so it churns
+        // on each re-listen and the single host connect races that window -> still xfail. A normal server that
+        // binds once (nginx/redis) is reachable. Fixing the re-listen case needs a process-independent
+        // forwarder (engine architecture).
         s("runflags/publish-p").host(r#"
 docker run -d --name ${C}svc $PLAT -p 127.0.0.1::9000 $IMG sh -c "while true; do echo PUBOK | nc -l -p 9000 -w 1; done" >/dev/null
 sleep 1
@@ -65,10 +70,9 @@ docker run --rm --user 1000:1000 $PLAT $IMG id"#).has("uid=1000").has("gid=1000"
         s("runflags/user-name").host(r#"
 docker run --rm --user nobody $PLAT $IMG id -u"#).has("65534"),
 
-        // --network none : no eth0, container is isolated
-        // GAP (dd, arm): --network none still attaches an eth0 (bridge) -> not honored. xfail.
+        // --network none : no eth0, container is isolated (loopback-only)
         s("runflags/network-none").host(r#"
-docker run --rm --network none $PLAT $IMG sh -c "ip -o link 2>/dev/null | grep -q eth0 && echo HAS_ETH || echo NO_ETH""#).has("NO_ETH").xfail(&[Target::ArmLinux]),
+docker run --rm --network none $PLAT $IMG sh -c "ip -o link 2>/dev/null | grep -q eth0 && echo HAS_ETH || echo NO_ETH""#).has("NO_ETH"),
 
         // default bridge network : eth0 present
         s("runflags/network-bridge").host(r#"

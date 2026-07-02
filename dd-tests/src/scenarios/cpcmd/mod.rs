@@ -9,13 +9,11 @@ fn s(id: &'static str) -> crate::scenario::Scenario { scen(id, "alpine:latest").
 pub fn group() -> ScenGroup {
     sgroup("cpcmd", vec![
         // host -> container, single file
-        // GAP (dd, arm): `docker cp host_file ctr:/new/dest` does not land the file (dir copies DO work,
-        // and container->host works) -> single-file-to-new-path host->container path is broken. xfail.
         s("cpcmd/host-to-container-file").host(r#"
 echo CPFILE > "$WORK/f"
 docker run -d --name ${C}c $PLAT $IMG sleep 60 >/dev/null; sleep 0.3
 docker cp "$WORK/f" ${C}c:/tmp/f
-docker exec ${C}c cat /tmp/f"#).has("CPFILE").xfail(&[Target::ArmLinux]),
+docker exec ${C}c cat /tmp/f"#).has("CPFILE"),
 
         // container -> host, single file
         s("cpcmd/container-to-host-file").host(r#"

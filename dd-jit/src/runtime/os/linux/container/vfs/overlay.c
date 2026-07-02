@@ -245,9 +245,24 @@ static void overlay_copyup(const char *guest, char *host, size_t hn) {
         else if (wh_exists(g_lower[i].canon, g_lower[i].clen, guest))
             break;
     }
-    // brand-new file: nothing to copy, but its parent dir may be lower-only -> materialize it in the upper
-    // so the caller's open(O_CREAT) lands there (otherwise the create ENOENTs on a missing upper parent).
     if (!have) {
+        // A lower-only DIRECTORY target (e.g. the image's /var/cache/apt/archives/partial) is absent from the
+        // upper, so a metadata syscall (chmod/chown/utimensat) that jail_at confines to the upper would ENOENT
+        // even though the guest plainly sees the dir. Materialize the directory itself in the upper (the dir
+        // analogue of the file copy-up below; overlay_copyup only handled regular files) so the op lands on a
+        // real upper inode -- its lower contents still surface through the normal upper+lower readdir merge.
+        for (int i = 0; i < g_nlower; i++) {
+            char lp[4300];
+            struct stat ds;
+            layer_follow(g_lower[i].canon, g_lower[i].clen, guest, lp, sizeof lp, 0);
+            if (lstat(lp, &ds) == 0) {
+                if (S_ISDIR(ds.st_mode)) { overlay_mkparents(guest); mkdir(up, ds.st_mode & 0777); return; }
+                break; // lower provides it as a non-dir (symlink/special): leave to the caller's fallback
+            }
+            if (wh_exists(g_lower[i].canon, g_lower[i].clen, guest)) break; // hidden by a whiteout below here
+        }
+        // brand-new file: nothing to copy, but its parent dir may be lower-only -> materialize it in the upper
+        // so the caller's open(O_CREAT) lands there (otherwise the create ENOENTs on a missing upper parent).
         overlay_mkparents(guest);
         return;
     }

@@ -204,8 +204,12 @@ static int svc_net(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_
             G_RET(c) = r < 0 ? (uint64_t)(-errno) : 0;
             break;
         }
-        // NET bridge: bind(0.0.0.0 / own-ip / in-subnet :port) -> LISTEN on /tmp/.ddbr-<netid>/<ownip>:<port>
-        if (br_on() && (int)a0 >= 0 && (int)a0 < 1024 && g_sock_stream[(int)a0] && br_bind_is(sa, (socklen_t)a2)) {
+        // NET bridge: bind(0.0.0.0 / own-ip / in-subnet :port) -> LISTEN on /tmp/.ddbr-<netid>/<ownip>:<port>.
+        // A dual-stack listener that binds `::` (busybox nc's default, and many servers') is the IPv6 analogue
+        // of 0.0.0.0 and takes the same path (br6_any_is), so it's reachable by peer containers over the switch
+        // instead of landing on the isolated per-container loopback (which broke cross-container reach-by-name).
+        if (br_on() && (int)a0 >= 0 && (int)a0 < 1024 && g_sock_stream[(int)a0] &&
+            (br_bind_is(sa, (socklen_t)a2) || br6_any_is(sa, (socklen_t)a2))) {
             uint16_t p = ntohs(*(uint16_t *)(sa + 2));
             if (p == 0) p = br_alloc_ephemeral(); // bind(:0) -> a real, round-trippable port
             char up[200];
@@ -429,15 +433,34 @@ static int svc_net(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_
             uint16_t p = ntohs(*(uint16_t *)(sa + 2));
             char up[200];
             br_path(dip, p, up, sizeof up);
-            if (lo_swap((int)a0) < 0) {
-                G_RET(c) = (uint64_t)(-errno);
-                break;
-            }
             struct sockaddr_un un;
             memset(&un, 0, sizeof un);
             un.sun_family = AF_UNIX;
             snprintf(un.sun_path, sizeof un.sun_path, "%s", up);
-            int r = connect((int)a0, (struct sockaddr *)&un, sizeof un);
+            // Retry across a peer's brief re-listen gap: a server looping `nc -l -w N` unbinds+rebinds the
+            // switch inode between connections, so a dial that lands in the window sees ENOENT (inode gone)
+            // or ECONNREFUSED (stale inode). Recreate the guest fd (lo_swap) + retry for ~600ms, mirroring
+            // TCP SYN retransmission; a genuinely-absent peer still fails after the cap. This is what makes
+            // a single-shot client (`nc -w 3 <peer> <port>`) reliably reach a `-w 1`-looping listener.
+            int r = -1;
+            for (int attempt = 0; attempt < 60; attempt++) {
+                if (lo_swap((int)a0) < 0) { r = -1; break; }
+                r = connect((int)a0, (struct sockaddr *)&un, sizeof un);
+                if (r == 0) {
+                    // A blocking connect succeeded: verify it isn't a peer mid-exit (a `-w N` listener whose
+                    // window just closed accepts nothing and HUPs with no data). If dead-on-arrival, retry a
+                    // fresh listener; otherwise it's live (data pending, or a client-first protocol).
+                    if (!switch_dead_on_arrival((int)a0)) break;
+                } else if (errno == EINPROGRESS) {
+                    break; // non-blocking: the guest polls the result itself
+                } else if (errno != ENOENT && errno != ECONNREFUSED) {
+                    break; // a genuine error -> report it
+                }
+                r = -1;               // not connected yet
+                errno = ECONNREFUSED; // if this was the last attempt, report a closed-port error
+                struct timespec ts = {0, 20000000}; // 20ms
+                nanosleep(&ts, NULL);
+            }
             if (r == 0 || errno == EINPROGRESS) {
                 g_br_port[(int)a0] = p ? p : 1;
                 g_br_ip[(int)a0] = dip; // peer ip for getpeername

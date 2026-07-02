@@ -352,8 +352,12 @@ pub(crate) async fn containers_inspect(State(a): State<App>, Path(id): Path<Stri
             // Pid = the live JIT process pid while running, else 0 (docker reports 0 for stopped).
             let pid = if running { g.live.get(&full).and_then(|l| *l.pid.lock().unwrap()).unwrap_or(0) } else { 0 };
             // StartedAt/FinishedAt as RFC3339; docker's zero value is "0001-01-01T00:00:00Z".
-            let started_at = if c.started_at == 0 { "0001-01-01T00:00:00Z".to_string() } else { fmt_rfc3339(c.started_at) };
-            let finished_at = if c.finished_at == 0 { "0001-01-01T00:00:00Z".to_string() } else { fmt_rfc3339(c.finished_at) };
+            // Nanosecond precision (docker's shape) so a quick `docker restart` advances StartedAt even
+            // within one wall-clock second; fall back to the second-precise field for pre-upgrade state.
+            let started_at = if c.started_at == 0 { "0001-01-01T00:00:00Z".to_string() }
+                else if c.started_at_ns > 0 { fmt_rfc3339_nanos(c.started_at_ns) } else { fmt_rfc3339(c.started_at) };
+            let finished_at = if c.finished_at == 0 { "0001-01-01T00:00:00Z".to_string() }
+                else if c.finished_at_ns > 0 { fmt_rfc3339_nanos(c.finished_at_ns) } else { fmt_rfc3339(c.finished_at) };
             // Networks the container has joined -> NetworkSettings.Networks, with the IPAM-assigned
             // identity (IP/gateway/mac) per network.
             let networks: serde_json::Map<String, Value> = g.networks.iter()
