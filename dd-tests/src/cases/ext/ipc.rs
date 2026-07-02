@@ -46,6 +46,14 @@ fn ext_ipc() -> Group {
         port("dup-offset", "ext_ipc/ipc_dup_offset.c").out("dup_offset a=012 b=345\n"),
         // ---- advisory locks across fork ----
         port("flock-fork", "ext_ipc/ipc_flock_fork.c").out("flock child_blocked=1 child_acquired=1\n"),
+        // #340: the in-engine cross-process fcntl POSIX-lock manager. Two child processes serialize N
+        // read-inc-write cycles under a whole-file F_SETLKW write lock (final==2*N, no lost updates),
+        // F_GETLK sees a conflicting holder across processes, and flock<->fcntl stay independent (#237).
+        // Linux engines only: the flock<->fcntl independence (indep=1) is a Linux semantic the engine
+        // emulates; native macOS (darwin) routes both through one vnode lock list, so it reports indep=0.
+        port("poslk-xproc", "ext_ipc/ipc_poslk_xproc.c")
+            .out("poslk final=400 noloss=1 getlk=1 indep=1\n")
+            .only(&[Engine::LinuxAarch64, Engine::LinuxX86_64]),
         // lockf() POSIX record-lock conflicts aren't enforced across processes under the JIT (child's
         // F_TLOCK succeeds while the parent holds the lock) — flock() above works, macOS works. xfail
         // Linux; see GAPS "ext-lockf-fork".

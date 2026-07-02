@@ -99,6 +99,7 @@ static void fd_reset_emul(int fd) {
         g_eventfd_sema[fd] = 0;
         ep_fd_reset(fd);
         flock_on_close(fd);
+        poslk_on_close(fd); // #340: POSIX drops all this process's fcntl record locks when any fd closes
     }
     pidfd_forget(fd);
     memf_close(fd);

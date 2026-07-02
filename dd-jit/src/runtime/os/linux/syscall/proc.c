@@ -276,6 +276,7 @@ static int svc_proc(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64
         PCACHE_SAVE_HOOK; // opt8: persist the translated arena before the one-shot _exit (DDJIT_PCACHE only)
 #endif
         proc_reg_unlink(); // drop our /proc process-table entry (_exit bypasses the atexit handler)
+        poslk_on_exit();   // #340: release this process's in-engine fcntl advisory locks
         _exit((int)a0);
     case 96:
         G_RET(c) = (uint64_t)getpid();
@@ -655,6 +656,7 @@ static int svc_proc(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64
                                          // (also reinits g_ep_mtx, inherited-locked if a peer forked mid-epoll)
             thread_after_fork(); // reset process-private thread/futex locks a dead peer may have held at fork
             sysv_after_fork();   // reset the SysV-shm lock (same fork-unsafe-mutex class)
+            poslk_after_fork();  // #340: re-cache pid; child inherits NONE of the parent's fcntl record locks
 #ifdef DD_HAS_MACH_EXC
             // The CRASHDBG Mach exception port + its receiver thread do NOT survive fork, so a crash in the
             // child silently dies. Clear the inherited task exception port so a fault falls through to the
@@ -880,6 +882,7 @@ static int svc_proc(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64
             kqueue_rebuild_after_fork(); // macOS kqueue() fds don't survive fork -> rebuild epoll/timer/inotify
             thread_after_fork(); // reset process-private thread/futex/epoll locks inherited-locked across fork
             sysv_after_fork();
+            poslk_after_fork();  // #340: re-cache pid; child inherits NONE of the parent's fcntl record locks
         }
         // CLONE_PIDFD: clone3 stores the child pidfd via the `pidfd` field (clone_args[1]); back it the same
         // way as case 220 so a clone3-based spawn (newer glibc/runtimes) can epoll_wait/poll it to reap.

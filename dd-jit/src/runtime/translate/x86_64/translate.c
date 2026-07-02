@@ -722,6 +722,86 @@ static void emit_div_zero_check(int divreg, uint64_t next, int idiv) {
     *patch = 0xB5000000u | (((uint32_t)d & 0x7FFFF) << 5) | (uint32_t)divreg; // cbnz x[divreg], ok
 }
 
+// x86 DIV/IDIV also raise #DE when the quotient does not fit the RESULT width (e.g. DIV 0x1FF/1 with an
+// 8-bit result, or IDIV INT_MIN/-1). ARM UDIV/SDIV silently truncate, so after an inline (width w<8) divide
+// computes the quotient in qreg, trap the overflow: branch over the trap when the quotient is in range,
+// else route to the C #DE path (divop=0 -> raise_guest_de delivers SIGFPE/FPE_INTDIV, si_addr = the div
+// insn). Cheap: two insns on the in-range fast path (compare/shift + a taken-forward branch).
+static void emit_div_ovf_check(int qreg, int tmp, int w, int is_signed, uint64_t gpc, int idiv) {
+    uint32_t *br;
+    if (is_signed) {
+        // The 8/16-bit inline divides use a 32-bit ARM SDIV (sf=0) whose quotient is zero-extended into
+        // the upper 32 bits, so normalize to a true 64-bit signed value first; the 32-bit divide is sf=1
+        // (already 64-bit signed). Then the quotient fits the result width w iff sxt(q,w) == q.
+        if (w == 4) e_mov_rr(tmp, qreg, 1);
+        else        e_sxt(tmp, qreg, 4);    // sxtw: 32-bit quotient -> 64-bit signed
+        e_sxt(16, tmp, w);                  // sign-extend the low w bytes
+        e_rrr(A_SUBS, 31, 16, tmp, 1, 0);   // cmp: in range iff equal
+        br = (uint32_t *)g_cp;
+        emit32(0);                          // b.eq skip  (patched below)
+    } else {
+        e_lsr_i(tmp, qreg, 8 * w, 1);       // any bits above the width -> quotient overflows
+        br = (uint32_t *)g_cp;
+        emit32(0);                          // cbz tmp, skip  (patched below)
+    }
+    e_movconst(16, 0);
+    e_str(16, 28, OFF_DIVOP);                 // divop = 0 -> the C R_DIV/R_IDIV path raises #DE
+    emit_exit_const(gpc, idiv ? R_IDIV : R_DIV);
+    int64_t d = ((uint8_t *)g_cp - (uint8_t *)br) / 4; // offset from the branch to the skip target
+    if (is_signed)
+        *br = 0x54000000u | (((uint32_t)d & 0x7FFFF) << 5); // b.eq skip (cond EQ = 0)
+    else
+        *br = 0xB4000000u | (((uint32_t)d & 0x7FFFF) << 5) | (uint32_t)tmp; // cbz x[tmp], skip
+}
+
+// 64-bit DIV/IDIV. ARM has no 128/64 divide, but the compiler-emitted common case is a 64/64 divide
+// (`xor edx,edx; div r` or `cqo; idiv r`) whose dividend fits 64 bits -- DIV: RDX==0; IDIV: RDX==
+// sign_ext(RAX). Fast-path those with a single hardware UDIV/SDIV (+ MSUB for the remainder), guarded
+// by the shared zero-check (divisor==0 -> #DE). The rare true 128/64 case, and IDIV by -1 (which can
+// overflow: INT_MIN/-1), route to the C R_DIV/R_IDIV helper, which does the exact 128/64 division and
+// raises #DE on quotient overflow. On the fast path we resume inline (no block exit); the slow path
+// exits to the dispatcher, which resumes at `next` after computing the division.
+static void emit_div64_fast(uint64_t next, uint64_t gpc, int idiv, int rmv) {
+    e_mov_rr(23, rmv, 1);               // snapshot divisor (may alias RAX/RDX, which we overwrite below)
+    emit_div_zero_check(23, gpc, idiv); // divisor==0 -> #DE(rip=gpc); else fall through (divisor != 0)
+    uint32_t *b_slow1, *b_slow2 = 0;
+    if (!idiv) {                          // DIV: fast when RDX==0 (dividend==RAX, quotient always fits)
+        b_slow1 = (uint32_t *)g_cp;
+        emit32(0);                        // cbnz RDX, Lslow  (RDX!=0 -> true 128/64 in C)
+        e_udiv(20, RAX, 23, 1);           // q   = RAX / divisor
+        e_msub(21, 20, 23, RAX, 1);       // rem = RAX - q*divisor
+    } else {                              // IDIV: fast when RDX==sign_ext(RAX) AND divisor != -1
+        e_asr_i(22, RAX, 63, 1);          // x22 = sign extension of RAX
+        e_rrr(A_SUBS, 31, RDX, 22, 1, 0); // cmp RDX, x22
+        b_slow1 = (uint32_t *)g_cp;
+        emit32(0);                        // b.ne Lslow  (RDX != sign_ext(RAX): 128-bit dividend)
+        e_addi(21, 23, 1, 1);             // x21 = divisor + 1
+        b_slow2 = (uint32_t *)g_cp;
+        emit32(0);                        // cbz x21, Lslow  (divisor == -1: INT_MIN/-1 may overflow)
+        e_sdiv(20, RAX, 23, 1);           // q   = RAX / divisor
+        e_msub(21, 20, 23, RAX, 1);       // rem = RAX - q*divisor
+    }
+    e_mov_rr(RAX, 20, 1); // RAX = quotient
+    e_mov_rr(RDX, 21, 1); // RDX = remainder
+    uint32_t *b_done = (uint32_t *)g_cp;
+    emit32(0);            // b Ldone  (skip the slow exit)
+    // ---- Lslow: divisor is nonzero here; C helper does 128/64 exact + quotient-overflow #DE ----
+    int64_t d1 = ((uint8_t *)g_cp - (uint8_t *)b_slow1) / 4;
+    if (!idiv)
+        *b_slow1 = 0xB5000000u | (((uint32_t)d1 & 0x7FFFF) << 5) | (uint32_t)RDX; // cbnz RDX, Lslow
+    else
+        *b_slow1 = 0x54000000u | (((uint32_t)d1 & 0x7FFFF) << 5) | 0x1; // b.ne Lslow (cond NE = 1)
+    if (b_slow2) {
+        int64_t d2 = ((uint8_t *)g_cp - (uint8_t *)b_slow2) / 4;
+        *b_slow2 = 0xB4000000u | (((uint32_t)d2 & 0x7FFFF) << 5) | 21; // cbz x21, Lslow
+    }
+    e_str(23, 28, OFF_DIVOP);                    // divisor -> cpu->divop
+    emit_exit_const(next, idiv ? R_IDIV : R_DIV); // -> dispatcher (resumes at next after the division)
+    // ---- Ldone ----
+    int64_t dd = ((uint8_t *)g_cp - (uint8_t *)b_done) / 4;
+    *b_done = 0x14000000u | ((uint32_t)dd & 0x3FFFFFF); // b Ldone
+}
+
 // 0F 0B (UD2): an explicitly-undefined opcode that real software (e.g. ruby's unreachable/trap paths,
 // libc CPU-feature probes) uses as a deliberate trap. On x86 it raises #UD -> SIGILL; with a guest
 // handler that runs, otherwise the process dies with status 128+SIGILL = 132. Emit a host UDF so the
@@ -926,7 +1006,8 @@ static void *translate_block(uint64_t gpc) {
                             emit_div_zero_check(20, gpc, 1);
                             e_sdiv(21, 19, 20, 0);
                         } // AX sxth, src sxtb
-                        e_msub(22, 21, 20, 19, 0); // rem = dividend - quot*divisor
+                        e_msub(22, 21, 20, 19, 0);                   // rem = dividend - quot*divisor
+                        emit_div_ovf_check(21, 23, 1, k == 7, gpc, k == 7); // AL overflow -> #DE
                         e_bfi(RAX, 21, 0, 8, 1);   // AL = quotient
                         e_bfi(RAX, 22, 8, 8, 1);   // AH = remainder
                     }
@@ -962,7 +1043,8 @@ static void *translate_block(uint64_t gpc) {
                             emit_div_zero_check(20, gpc, 1);
                             e_sdiv(21, 19, 20, 0);
                         } // signed: x19 already the 32-bit pattern
-                        e_msub(22, 21, 20, 19, 0); // rem = dividend - quot*divisor
+                        e_msub(22, 21, 20, 19, 0);                   // rem = dividend - quot*divisor
+                        emit_div_ovf_check(21, 23, 2, k == 7, gpc, k == 7); // AX overflow -> #DE
                         e_bfi(RAX, 21, 0, 16, 1);  // AX = quotient
                         e_bfi(RDX, 22, 0, 16, 1);  // DX = remainder
                     }
@@ -1025,10 +1107,10 @@ static void *translate_block(uint64_t gpc) {
                     }
                     if (k == 6 || k == 7) { // div / idiv
                         int rmv = rm_load(&I, next, w, &mem);
-                        if (w == 8) { // 128/64: rdx may be nonzero -> exact division in C
-                            e_str(rmv, 28, OFF_DIVOP);
-                            emit_exit_const(next, k == 6 ? R_DIV : R_IDIV);
-                            break;
+                        if (w == 8) { // 64-bit: fast inline UDIV/SDIV for 64/64; C helper for true 128/64
+                            emit_div64_fast(next, gpc, k == 7, rmv);
+                            gpc = next;
+                            continue;
                         }
                         // 32-bit: dividend = edx:eax (64-bit), 32-bit divisor (zero/sign-extend), 32-bit quotient
                         e_lsl_i(19, RDX, 32, 1);
@@ -1043,7 +1125,8 @@ static void *translate_block(uint64_t gpc) {
                             emit_div_zero_check(22, gpc, 1);
                             e_sdiv(20, 19, 22, 1);
                         } // signed: sign-extend divisor (edx:eax already 64-bit signed)
-                        e_msub(21, 20, 22, 19, 1); // rem = x19 - q*divisor
+                        e_msub(21, 20, 22, 19, 1);                   // rem = x19 - q*divisor
+                        emit_div_ovf_check(20, 23, 4, k == 7, gpc, k == 7); // EAX overflow -> #DE
                         e_mov_rr(RAX, 20, 0);
                         e_mov_rr(RDX, 21, 0); // eax=quot, edx=rem (32-bit)
                         gpc = next;

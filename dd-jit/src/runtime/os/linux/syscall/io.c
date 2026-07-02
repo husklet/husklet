@@ -468,6 +468,31 @@ static int svc_io(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t
             // The Linux struct flock at a2 (fields up to lf+24) is read directly and written back for F_GETLK;
             // validate the 32-byte struct before any deref so a bad pointer returns -EFAULT, not a crash.
             if (!host_range_mapped((uintptr_t)a2, 32)) { G_RET(c) = (uint64_t)(-EFAULT); break; }
+            // #340: service advisory byte-range locks on regular files from the in-engine cross-process
+            // table (no host round-trip). F_SETLKW blocks by poll-retry, interruptible by a deliverable
+            // pending signal (g_pending/tpending, honouring the per-thread block mask) -> EINTR, exactly
+            // as a real F_SETLKW returns. poslk_op returns 0 only for non-regular fds -> host path below.
+            {
+                int pout = 0, claimed;
+                for (;;) {
+                    claimed = poslk_op((int)a0, lcmd, (uint8_t *)a2, &pout);
+                    if (!claimed) break; // not a regular file -> fall through to the host fcntl path
+                    if (lcmd == 7 && pout == -EAGAIN) {
+                        uint64_t p = __atomic_load_n(&g_pending, __ATOMIC_SEQ_CST) |
+                                     __atomic_load_n(&c->tpending, __ATOMIC_SEQ_CST);
+                        int intr = 0;
+                        for (int s = 1; s < 64; s++)
+                            if ((p & (1ull << s)) && !(c->sigmask & (1ull << (s - 1)))) { intr = 1; break; }
+                        if (intr) { G_RET(c) = (uint64_t)(-EINTR); break; }
+                        struct timespec ts = {0, 1000000}; // 1 ms poll
+                        nanosleep(&ts, NULL);
+                        continue;
+                    }
+                    G_RET(c) = (uint64_t)(int64_t)pout;
+                    break;
+                }
+                if (claimed) break; // handled in-engine (or interrupted); done
+            }
             struct flock fl;
             // Linux flock: type/whence/pad/start@8/len@16/pid@24
             memset(&fl, 0, sizeof fl);
