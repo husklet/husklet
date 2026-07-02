@@ -1,11 +1,12 @@
-workload,arch,metric,unit,dd,docker_mac,ratio,higher_is_better
-redis-SET,arm64,redis SET throughput,ops/s,247524.75,322061.19,0.769,yes
-redis-GET,arm64,redis GET throughput,ops/s,267022.69,322061.19,0.829,yes
-sqlite-insert,arm64,insert 200k rows in txn,ms,325.9,84.3,3.866,no
-sqlite-select,arm64,20k point selects,ms,315.1,44.8,7.034,no
-openssl-aesgcm,arm64,openssl speed aes-128-gcm 16KB,MB/s,7980.7,8388.4,0.951,yes
-openssl-sha256,arm64,openssl speed sha256 16KB,MB/s,3139.3,3219.5,0.975,yes
-targz,arm64,tar czf - /usr | wc -c,ms,2787,1717,1.623,no
-compile-go,arm64,go build incremental (warm cache),ms,3623,144,25.160,no
-compile-cold,arm64,go build cold (full stdlib rebuild),ms,75674,,,no
-postgres-tps,arm64,pgbench -T15 -c4 -j2,tps,DD_INIT_HANGS,ORB_FLAKED,,yes
+workload,metric,unit,higher_is_better,dd_arm,orb_arm,ratio_arm_dd_over_orb,dd_amd,orb_amd,ratio_amd_dd_over_orb,notes
+redis-SET,redis-benchmark SET -n100000,ops/s,yes,280898.9,327868.8,0.857,X86_JIT_CRASH,215982.7,,dd-amd redis-server segfaults/never binds on x86 JIT (e_machine load warning); orbstack-amd via Rosetta
+redis-GET,redis-benchmark GET -n100000,ops/s,yes,301204.8,338983.1,0.889,X86_JIT_CRASH,215517.2,,same redis-server x86 startup crash on dd-amd
+sqlite-insert,python sqlite3 insert 200k rows in one txn,ms,no,324.0,93.6,3.462,600.5,143.2,4.193,timed with python perf_counter (validated correct on both dd arches)
+sqlite-select,python sqlite3 20k point selects by pk,ms,no,320.5,44.5,7.202,379.5,63.5,5.976,largest arm gap; syscall/btree-heavy
+openssl-aesgcm,openssl speed -evp aes-128-gcm 16KB block,MB/s,yes,7984.2,8513.2,0.938,36.5,3905.5,0.009,"dd-amd software-emulates x86 AES-NI (~36 MB/s); orbstack-amd Rosetta maps AES-NI to ARM crypto; dd-arm uses ARM crypto"
+openssl-sha256,openssl speed -evp sha256 16KB block,MB/s,yes,3158.4,3242.2,0.974,45.2,506.2,0.089,"dd-amd software SHA (validated by fixed-input host-clock: 45.3 MB/s); dd doesn't accelerate x86 SHA/crypto instrs"
+targz,tar czf - /usr | wc -c (external host wall-clock),ms,no,2859,1733,1.650,4135,1960,2.110,"dd-amd shell date+%s%N clock is broken (vDSO bug) so measured externally for ALL cells; gzip compute-bound"
+python-cpu,"python integer loop 5e6 iters (i*i)%7",ms,no,906,327,2.771,1561,598,2.610,timed with python perf_counter; interpreter dispatch heavy
+compile-go,go build incremental (warm cache),ms,no,3623,144,25.160,SKIPPED,SKIPPED,,arm values carried from prior run; go build skipped on amd (x86 JIT too slow / known #285 go-build issues)
+compile-cold,go build cold (full stdlib rebuild),ms,no,75674,,,SKIPPED,SKIPPED,,arm value carried from prior run; not measured 4-way
+postgres-tps,pgbench -T15 -c4 -j2,tps,yes,DD_INIT_HANGS,ORB_FLAKED,,NOT_RUN,NOT_RUN,,carried from prior run; not re-measured in this 4-way pass
