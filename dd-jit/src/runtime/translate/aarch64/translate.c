@@ -1159,11 +1159,24 @@ static void emit_irq_check(uint64_t gpc) {
     }
 }
 
+// Lever #3 (SIMD-clean syscall exit): SOUND over-approximation of "this guest instruction WRITES a vector
+// (V) register." Over-marks read-only vector ops (vector stores, FCMP), the GPR-destination FP conversions
+// (FCVTZS/FMOV-to-GPR), and UMOV/SMOV -> that only ever costs the optimization (a full spill), never
+// correctness. It covers every V-writing form: the SIMD&FP data-processing box (scalar FP + AdvSIMD, bits
+// [27:25]=111), SIMD&FP loads/stores (the V bit, [26]=1, in the load/store box), and AdvSIMD load/store
+// STRUCTURES (LD1..LD4). A block containing any of these must take the full V spill on its syscall exit.
+static int insn_touches_vreg(uint32_t in) {
+    if ((in & 0x0E000000u) == 0x0E000000u) return 1;                    // SIMD&FP data-processing
+    if ((in & 0x0A000000u) == 0x08000000u && ((in >> 26) & 1)) return 1; // SIMD&FP load/store (V=1)
+    if ((in & 0xBE000000u) == 0x0C000000u) return 1;                    // AdvSIMD load/store structures
+    return 0;
+}
 static void *translate_block(uint64_t gpc) {
     // W4E tier-2: read NOTIER2 / TIER2_THRESHOLD once (idempotent) before any self-loop detection.
     tier2_env_init();
     // gpc is mutated by the decode loop; key the cache by START
     uint64_t start = gpc;
+    g_blk_vdirty = 0; // Lever #3: reset per block; set below when a V-writing insn is emitted
     void *host = g_cp;
     emit_prologue();
     // chained jumps land here (regs already live)
@@ -1193,6 +1206,15 @@ static void *translate_block(uint64_t gpc) {
     for (;;) {
         uint32_t in = *(uint32_t *)gpc;
         g_emit_gpc = gpc; // ARM-B1 IBPROF: tag indirect-branch sites with their guest PC
+        // Lever #3: at the FIRST vector-touching instruction of the region, store the (nonzero) cpu pointer
+        // into cpu->vdirty so a later (possibly chained-to) syscall exit takes the full V spill. Emitted
+        // once per region (g_blk_vdirty latch); flag-neutral `str` runs before the vector write. Regions are
+        // linear (taken branches exit, only fall-through continues), so the first write dominates all later
+        // vector writes -> one store covers every path. Zero cost on vector-free (integer/syscall) blocks.
+        if (!g_blk_vdirty && insn_touches_vreg(in)) {
+            e_str(CPUREG, CPUREG, (int)OFF_VDIRTY);
+            g_blk_vdirty = 1;
+        }
 
         if (!in_excl && !getenv("NOLSE")) {
             int n = try_lse_atomic(gpc);

@@ -43,6 +43,33 @@ static void emit_prologue(void) {
         e_ldur(17, 31, -24);
     }
 }
+// Lever #3 (SIMD-clean syscall exit): when the guest vector file is already current in cpu->V, a plain
+// R_SYSCALL block-exit can skip the 16 stp_q V-register save (emit_spill_gpr); the always-full prologue
+// reload republishes cpu->V on re-entry, and every non-slim exit keeps the FULL spill. Currency is tracked
+// at RUNTIME in cpu->vdirty: the first vector-writing instruction of a region stores the (nonzero) cpu
+// pointer there (translate.c, gated by insn_touches_vreg over-approximating any V reference), and every
+// FULL spill clears it. Runtime rather than a static per-block flag because blocks CHAIN without spilling,
+// so a vector-dirty region can reach a statically-"clean" syscall block with host V != cpu->V. A syscall
+// that itself writes cpu->V (sigreturn) is republished by the prologue reload, so V state is never lost.
+static int g_blk_vdirty;   // per-region latch: has the vdirty-set store already been emitted this region?
+static int g_slimsys = -1; // DDJIT_NOSLIMSYS=1 -> 0 = byte-identical full-spill baseline (A/B kill switch)
+static int slimsys_on(void) {
+    if (g_slimsys < 0) g_slimsys = getenv("DDJIT_NOSLIMSYS") ? 0 : 1;
+    return g_slimsys;
+}
+// GPR + flags + SP spill, WITHOUT the V-register save. Leaves x0 = &cpu (callers rely on it). Must NOT
+// touch the guest red zone [sp,#-16..] (see emit_spill).
+static void emit_spill_gpr(void) {
+    for (int r = 0; r <= 30; r++)
+        // guest x0..x30 (x0 included -> no red-zone stash needed); skip x18 (volatile) + x28 (= cpu)
+        if (!is_stolen(r)) e_str(r, CPUREG, r * 8);
+    // x0 is saved now; reuse it as scratch
+    emit32(0xD53B4200u | 0); // mrs x0, nzcv -> cpu->nzcv
+    e_str(0, CPUREG, OFF_NZCV);
+    e_mov_from_sp(0);
+    e_str(0, CPUREG, OFF_SP); // cpu->sp
+    e_movr(0, CPUREG);        // callers expect x0 = &cpu after the spill
+}
 // Spill: store all guest GPRs+sp+flags+V to cpu-> via x28 (= &cpu, stolen/maintained for the whole
 // block). Must NOT touch the guest red zone [sp,#-16..]: the guest (e.g. Go runtime.clone.abi0) keeps
 // live data just below SP across a syscall block-exit, and a real kernel preserves it. Leaves x0 = &cpu.
@@ -50,22 +77,30 @@ static void emit_spill(void) {
     for (int t = 0; t < 32; t += 2)
         // guest V0..V31 (paired)
         e_stp_q(t, t + 1, CPUREG, OFF_V + t * 16);
-    for (int r = 0; r <= 30; r++)
-        // guest x0..x30 (x0 included -> no red-zone stash needed); skip x18 (volatile) + x28 (= cpu)
-        if (!is_stolen(r)) e_str(r, CPUREG, r * 8);
-    // x0 is saved now; reuse it as scratch
-    emit32(0xD53B4200u | 0);
-    // mrs x0, nzcv -> cpu->nzcv
-    e_str(0, CPUREG, OFF_NZCV);
-    e_mov_from_sp(0);
-    // cpu->sp
-    e_str(0, CPUREG, OFF_SP);
-    // callers expect x0 = &cpu after the spill
-    e_movr(0, CPUREG);
+    emit_spill_gpr();
+    // A full spill republishes host V -> cpu->V, so cpu->V is now current: clear the dirty flag (str xzr).
+    e_str(31, CPUREG, (int)OFF_VDIRTY);
 }
 static void emit_exit_const(uint64_t pc, uint64_t reason) {
-    // x0 = cpu
-    emit_spill();
+    // Lever #3: a plain R_SYSCALL exit skips the V spill WHEN cpu->V is current (cpu->vdirty==0). The
+    // decision is at RUNTIME because blocks chain without spilling -- a vectorized region can chain into
+    // this (statically clean) syscall block, leaving host V dirty vs cpu->V. x16 is engine scratch (stolen)
+    // so it is dead here; gate on g_steal1617 so a free scratch reg exists. x0 = cpu after either spill.
+    if (reason == R_SYSCALL && slimsys_on() && g_steal1617) {
+        e_ldr(16, CPUREG, (int)OFF_VDIRTY);
+        uint32_t *p_cb = (uint32_t *)g_cp;
+        emit32(0); // cbnz x16, Lfull
+        emit_spill_gpr();
+        uint32_t *p_b = (uint32_t *)g_cp;
+        emit32(0x14000000u); // b Lcont
+        uint8_t *Lfull = g_cp;
+        *p_cb = 0xB5000000u | (((uint32_t)(((uint8_t *)Lfull - (uint8_t *)p_cb) / 4) & 0x7FFFF) << 5) | 16;
+        emit_spill();
+        uint8_t *Lcont = g_cp;
+        *p_b = 0x14000000u | ((uint32_t)(((uint8_t *)Lcont - (uint8_t *)p_b) / 4) & 0x3FFFFFF);
+    } else {
+        emit_spill();
+    }
     e_movconst(9, pc);
     e_str(9, 0, OFF_PC);
     e_movconst(9, reason);
