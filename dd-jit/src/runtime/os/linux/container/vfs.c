@@ -1430,8 +1430,9 @@ static int proc_root_dir_open(void) {
     if (!mkdtemp(tmpl)) return -1;
     // ONLY names proc_open()/synth_stat actually serve -- listing an unserved name makes `ls /proc` stat it
     // and print "No such file or directory". "self" is the magic symlink (handled in synth_stat).
-    static const char *const st[] = {"meminfo", "stat",   "cpuinfo", "uptime", "loadavg",
-                                     "version", "mounts", "self",    0};
+    static const char *const st[] = {"meminfo",  "stat",        "cpuinfo", "uptime",  "loadavg",
+                                     "version",  "mounts",      "self",    "cmdline", "filesystems",
+                                     "swaps",    "vmstat",      "modules", "devices", 0};
     for (int i = 0; st[i]; i++) {
         char p[96];
         snprintf(p, sizeof p, "%s/%s", tmpl, st[i]);
@@ -1523,6 +1524,70 @@ static int sysnet_dir_open(const char *gp) {
     proc_dir_register(fd, tmpl, gpath); // tag guest path so a relative reopen re-enters this synth
     return fd;
 }
+// Format 16 raw bytes as a Linux UUID string ("xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx\n"), stamping the
+// RFC-4122 version-4 (b[6]) and variant (b[8]) bits so the result parses as a valid random UUID. Writes
+// 37 bytes (36 + '\n') plus a NUL into out (needs >= 38). Returns the byte count (37).
+static int uuid_fmt(char *out, size_t cap, uint8_t b[16]) {
+    b[6] = (uint8_t)((b[6] & 0x0f) | 0x40);
+    b[8] = (uint8_t)((b[8] & 0x3f) | 0x80);
+    return snprintf(out, cap,
+                    "%02x%02x%02x%02x-%02x%02x-%02x%02x-%02x%02x-%02x%02x%02x%02x%02x%02x\n", b[0], b[1],
+                    b[2], b[3], b[4], b[5], b[6], b[7], b[8], b[9], b[10], b[11], b[12], b[13], b[14], b[15]);
+}
+// The 16 raw bytes of the container's boot identity. Must be STABLE for the container's whole life AND
+// IDENTICAL across every process in it (each guest process is a separate host engine, so a per-process
+// arc4random value would disagree between peers). Derived DETERMINISTICALLY from the per-container
+// registry key (DD_NETNS, minted+exported at startup and inherited across fork/execve so every peer
+// agrees -- see proc_reg_key) via FNV-1a expanded to 16 bytes. Same container -> same bytes everywhere;
+// different containers -> different bytes. Backs both boot_id (UUID) and machine-id (32 hex).
+static void boot_id_bytes(uint8_t b[16]) {
+    char key[80];
+    proc_reg_key(key, sizeof key); // DD_NETNS -> DD_HOSTNAME -> session id fallback
+    uint64_t h = 1469598103934665603ULL; // FNV-1a offset basis
+    for (const char *p = key; *p; p++) {
+        h ^= (uint8_t)*p;
+        h *= 1099511628211ULL;
+    }
+    for (int i = 0; i < 16; i++) {
+        b[i] = (uint8_t)(h >> ((i & 7) * 8));
+        if ((i & 7) == 7) h = h * 6364136223846793005ULL + 1442695040888963407ULL; // advance for hi 8 bytes
+    }
+}
+// /proc/sys/kernel/random/boot_id (systemd/dbus/libuuid/journald key machine state off it).
+static int proc_boot_id(char *out, size_t cap) {
+    uint8_t b[16];
+    boot_id_bytes(b);
+    return uuid_fmt(out, cap, b);
+}
+// /proc/[self|<pid>]/limits -- the rlimit table (Go runtime, nginx, java, systemd read RLIMIT_NOFILE from
+// it). Values mirror the engine's own getrlimit/prlimit answers (svc_fill_rlimit: stack 8MB, nofile
+// 1024/1048576, everything else unlimited) so the file and the syscall agree.
+static int proc_limits_text(char *buf, size_t cap) {
+    // name, soft, hard, units ("" -> no unit column value). "unlimited" for RLIM_INFINITY rows.
+    static const struct { const char *nm, *soft, *hard, *unit; } L[] = {
+        {"Max cpu time", "unlimited", "unlimited", "seconds"},
+        {"Max file size", "unlimited", "unlimited", "bytes"},
+        {"Max data size", "unlimited", "unlimited", "bytes"},
+        {"Max stack size", "8388608", "unlimited", "bytes"},
+        {"Max core file size", "unlimited", "unlimited", "bytes"},
+        {"Max resident set", "unlimited", "unlimited", "bytes"},
+        {"Max processes", "unlimited", "unlimited", "processes"},
+        {"Max open files", "1024", "1048576", "files"},
+        {"Max locked memory", "unlimited", "unlimited", "bytes"},
+        {"Max address space", "unlimited", "unlimited", "bytes"},
+        {"Max file locks", "unlimited", "unlimited", "locks"},
+        {"Max pending signals", "unlimited", "unlimited", "signals"},
+        {"Max msgqueue size", "unlimited", "unlimited", "bytes"},
+        {"Max nice priority", "0", "0", ""},
+        {"Max realtime priority", "0", "0", ""},
+        {"Max realtime timeout", "unlimited", "unlimited", "us"},
+    };
+    int n = snprintf(buf, cap, "%-25s %-20s %-20s %-10s\n", "Limit", "Soft Limit", "Hard Limit", "Units");
+    for (size_t i = 0; i < sizeof L / sizeof *L; i++)
+        n += snprintf(buf + n, cap - (size_t)n, "%-25s %-20s %-20s %-10s\n", L[i].nm, L[i].soft, L[i].hard,
+                      L[i].unit);
+    return n;
+}
 // Real macOS stat -> Linux struct stat (the fake S_IFCHR version corrupted libc buffering).
 // fill_linux_stat (the guest struct-stat layout) is per-arch -> frontend/<arch>/fill_stat.c
 // Synthesize the common /proc files Linux programs read (macOS has no /proc). Returns an fd
@@ -1559,6 +1624,10 @@ static int proc_open(const char *rp) {
         else if (!strcmp(leaf, "cmdline")) n = proc_cmdline_text(buf, sizeof buf);
         else if (!strcmp(leaf, "comm")) n = proc_comm_text(buf, sizeof buf);
         else if (!strcmp(leaf, "mountinfo")) n = proc_mountinfo_text(buf, sizeof buf);
+        else if (!strcmp(leaf, "limits")) n = proc_limits_text(buf, sizeof buf); // #348: rlimit table
+        else if (!strcmp(leaf, "oom_score_adj") || !strcmp(leaf, "oom_adj") || !strcmp(leaf, "oom_score"))
+            n = snprintf(buf, sizeof buf, "0\n"); // #348: not OOM-adjusted (systemd/containerd read/probe)
+        else if (!strcmp(leaf, "loginuid")) n = snprintf(buf, sizeof buf, "4294967295\n"); // #348: unset (pam)
         if (n >= 0) return proc_text_fd(buf, n);
     }
     // A PEER container process: /proc/<otherpid>/{stat,status,cmdline,comm}. proc_self_leaf matched only
@@ -1650,6 +1719,24 @@ static int proc_open(const char *rp) {
     } else if (!strcmp(rp, "/proc/sys/kernel/hostname")) {
         // UTS ns (hostname cmd reads this)
         n = snprintf(buf, sizeof buf, "%s\n", g_hostname[0] ? g_hostname : "jit");
+    } else if (!strcmp(rp, "/proc/sys/kernel/random/boot_id")) {
+        // #348: stable per-boot UUID (systemd/dbus/libuuid/curl/journald read it; without it tools print
+        // "cannot find current boot id"). Deterministic from the container key -> same for every peer.
+        n = proc_boot_id(buf, sizeof buf);
+    } else if (!strcmp(rp, "/proc/sys/kernel/random/uuid")) {
+        // #348: Linux yields a FRESH type-4 UUID on every read of this file -- glibc/libuuid use it as a
+        // uuid_generate_random source, so it must differ each open.
+        uint8_t b[16];
+        arc4random_buf(b, sizeof b);
+        n = uuid_fmt(buf, sizeof buf, b);
+    } else if (!strcmp(rp, "/proc/sys/kernel/random/entropy_avail")) {
+        n = snprintf(buf, sizeof buf, "256\n"); // pool always "full" (host arc4random backs /dev/*random)
+    } else if (!strcmp(rp, "/proc/sys/kernel/ostype")) {
+        n = snprintf(buf, sizeof buf, "Linux\n");
+    } else if (!strcmp(rp, "/proc/sys/kernel/osrelease")) {
+        n = snprintf(buf, sizeof buf, "6.1.0\n");
+    } else if (!strcmp(rp, "/proc/sys/kernel/version")) {
+        n = snprintf(buf, sizeof buf, "#1 SMP ddockerd\n");
     } else if (!strcmp(rp, "/proc/self/cgroup")) {
         // cgroup v2 unified
         n = snprintf(buf, sizeof buf, "0::/\n");
@@ -1737,6 +1824,116 @@ static int proc_open(const char *rp) {
             n = snprintf(buf, sizeof buf, "max\n");
     } else if (!strcmp(rp, "/sys/fs/cgroup/pids.current")) {
         n = snprintf(buf, sizeof buf, "%d\n", atomic_load(&g_pids_cur));
+    // ---- #348: the broad /proc + /proc/sys surface real software reads --------------------------------
+    } else if (!strcmp(rp, "/proc/cmdline")) {
+        n = snprintf(buf, sizeof buf, "root=/dev/sda1 ro quiet\n"); // kernel cmdline (distinct from self/cmdline)
+    } else if (!strcmp(rp, "/proc/filesystems")) {
+        n = snprintf(buf, sizeof buf,
+                     "nodev\tsysfs\nnodev\ttmpfs\nnodev\tproc\nnodev\tdevtmpfs\nnodev\tdevpts\n"
+                     "nodev\tmqueue\nnodev\tcgroup2\nnodev\toverlay\n\text3\n\text2\n\text4\n");
+    } else if (!strcmp(rp, "/proc/swaps")) {
+        n = snprintf(buf, sizeof buf, "Filename\t\t\t\tType\t\tSize\t\tUsed\t\tPriority\n"); // no swap
+    } else if (!strcmp(rp, "/proc/modules")) {
+        n = 0; buf[0] = 0; // no loadable modules
+    } else if (!strcmp(rp, "/proc/devices")) {
+        n = snprintf(buf, sizeof buf,
+                     "Character devices:\n  1 mem\n  5 /dev/tty\n  5 /dev/console\n  5 /dev/ptmx\n"
+                     "136 pts\n\nBlock devices:\n");
+    } else if (!strcmp(rp, "/proc/vmstat")) {
+        n = snprintf(buf, sizeof buf,
+                     "nr_free_pages 262144\nnr_zone_inactive_anon 0\nnr_zone_active_anon 0\n"
+                     "nr_dirty 0\nnr_writeback 0\nnr_slab_reclaimable 0\nnr_slab_unreclaimable 0\n"
+                     "pgpgin 0\npgpgout 0\npswpin 0\npswpout 0\npgfault 0\npgmajfault 0\n");
+    } else if (!strcmp(rp, "/proc/net/unix")) {
+        n = snprintf(buf, sizeof buf, "Num       RefCount Protocol Flags    Type St Inode Path\n");
+    } else if (!strcmp(rp, "/proc/net/snmp")) {
+        n = snprintf(buf, sizeof buf, "Ip: Forwarding DefaultTTL\nIp: 2 64\n"); // minimal (readers tolerate)
+    } else if (!strcmp(rp, "/proc/pressure/cpu")) {
+        n = snprintf(buf, sizeof buf, "some avg10=0.00 avg60=0.00 avg300=0.00 total=0\n");
+    } else if (!strcmp(rp, "/proc/pressure/memory") || !strcmp(rp, "/proc/pressure/io")) {
+        n = snprintf(buf, sizeof buf,
+                     "some avg10=0.00 avg60=0.00 avg300=0.00 total=0\n"
+                     "full avg10=0.00 avg60=0.00 avg300=0.00 total=0\n");
+    } else {
+        // Constant sysctl-style files (values mirror a modern Linux default). A single table keeps the
+        // /proc/sys/{kernel,vm,net,fs} surface complete for the sysctl/config probes Go/JVM/nginx/redis/
+        // postgres/systemd issue. Multi-value files use TAB separators exactly like the kernel.
+        static const struct { const char *p, *v; } K[] = {
+            // kernel
+            {"/proc/sys/kernel/pid_max", "4194304\n"},
+            {"/proc/sys/kernel/threads-max", "63488\n"},
+            {"/proc/sys/kernel/cap_last_cap", "40\n"},
+            {"/proc/sys/kernel/ngroups_max", "65536\n"},
+            {"/proc/sys/kernel/tainted", "0\n"},
+            {"/proc/sys/kernel/domainname", "(none)\n"},
+            {"/proc/sys/kernel/overflowuid", "65534\n"},
+            {"/proc/sys/kernel/overflowgid", "65534\n"},
+            {"/proc/sys/kernel/core_pattern", "core\n"},
+            {"/proc/sys/kernel/sched_child_runs_first", "0\n"},
+            {"/proc/sys/kernel/shmmax", "18446744073692774399\n"},
+            {"/proc/sys/kernel/shmall", "18446744073692774399\n"},
+            {"/proc/sys/kernel/shmmni", "4096\n"},
+            {"/proc/sys/kernel/sem", "32000\t1024000000\t500\t32000\n"},
+            {"/proc/sys/kernel/msgmax", "8192\n"},
+            {"/proc/sys/kernel/msgmnb", "16384\n"},
+            {"/proc/sys/kernel/msgmni", "32000\n"},
+            {"/proc/sys/kernel/yama/ptrace_scope", "1\n"},
+            {"/proc/sys/kernel/random/poolsize", "256\n"},
+            {"/proc/sys/kernel/printk", "4\t4\t1\t7\n"},
+            {"/proc/sys/kernel/panic", "0\n"},
+            // vm
+            {"/proc/sys/vm/overcommit_ratio", "50\n"},
+            {"/proc/sys/vm/overcommit_kbytes", "0\n"},
+            {"/proc/sys/vm/max_map_count", "65530\n"},
+            {"/proc/sys/vm/mmap_min_addr", "65536\n"},
+            {"/proc/sys/vm/swappiness", "60\n"},
+            {"/proc/sys/vm/dirty_ratio", "20\n"},
+            {"/proc/sys/vm/dirty_background_ratio", "10\n"},
+            {"/proc/sys/vm/nr_hugepages", "0\n"},
+            {"/proc/sys/vm/panic_on_oom", "0\n"},
+            {"/proc/sys/vm/vfs_cache_pressure", "100\n"},
+            // net.core
+            {"/proc/sys/net/core/somaxconn", "4096\n"},
+            {"/proc/sys/net/core/netdev_max_backlog", "1000\n"},
+            {"/proc/sys/net/core/rmem_max", "212992\n"},
+            {"/proc/sys/net/core/wmem_max", "212992\n"},
+            {"/proc/sys/net/core/rmem_default", "212992\n"},
+            {"/proc/sys/net/core/wmem_default", "212992\n"},
+            {"/proc/sys/net/core/optmem_max", "20480\n"},
+            // net.ipv4
+            {"/proc/sys/net/ipv4/ip_local_port_range", "32768\t60999\n"},
+            {"/proc/sys/net/ipv4/ip_unprivileged_port_start", "1024\n"},
+            {"/proc/sys/net/ipv4/ip_forward", "0\n"},
+            {"/proc/sys/net/ipv4/ip_nonlocal_bind", "0\n"},
+            {"/proc/sys/net/ipv4/tcp_fin_timeout", "60\n"},
+            {"/proc/sys/net/ipv4/tcp_keepalive_time", "7200\n"},
+            {"/proc/sys/net/ipv4/tcp_keepalive_intvl", "75\n"},
+            {"/proc/sys/net/ipv4/tcp_keepalive_probes", "9\n"},
+            {"/proc/sys/net/ipv4/tcp_max_syn_backlog", "128\n"},
+            {"/proc/sys/net/ipv4/tcp_syncookies", "1\n"},
+            {"/proc/sys/net/ipv4/tcp_tw_reuse", "2\n"},
+            {"/proc/sys/net/ipv4/tcp_rmem", "4096\t131072\t6291456\n"},
+            {"/proc/sys/net/ipv4/tcp_wmem", "4096\t16384\t4194304\n"},
+            {"/proc/sys/net/ipv4/tcp_congestion_control", "cubic\n"},
+            {"/proc/sys/net/ipv4/tcp_available_congestion_control", "reno cubic\n"},
+            // fs
+            {"/proc/sys/fs/file-max", "1048576\n"},
+            {"/proc/sys/fs/nr_open", "1048576\n"},
+            {"/proc/sys/fs/file-nr", "1024\t0\t1048576\n"},
+            {"/proc/sys/fs/pipe-max-size", "1048576\n"},
+            {"/proc/sys/fs/pipe-user-pages-hard", "0\n"},
+            {"/proc/sys/fs/pipe-user-pages-soft", "16384\n"},
+            {"/proc/sys/fs/aio-max-nr", "65536\n"},
+            {"/proc/sys/fs/aio-nr", "0\n"},
+            {"/proc/sys/fs/protected_hardlinks", "1\n"},
+            {"/proc/sys/fs/protected_symlinks", "1\n"},
+            {"/proc/sys/fs/suid_dumpable", "0\n"},
+            {"/proc/sys/fs/inotify/max_user_watches", "524288\n"},
+            {"/proc/sys/fs/inotify/max_user_instances", "128\n"},
+            {"/proc/sys/fs/inotify/max_queued_events", "16384\n"},
+        };
+        for (size_t i = 0; i < sizeof K / sizeof *K; i++)
+            if (!strcmp(rp, K[i].p)) { n = snprintf(buf, sizeof buf, "%s", K[i].v); break; }
     }
     if (n < 0) return -2;
     return proc_text_fd(buf, n);
@@ -1791,6 +1988,37 @@ static void container_populate_dev(void) {
     mkdir(DEVP("shm"), 01777); // POSIX shm dir (shm_open names get redirected to a host tmp file in fs.c)
     mkdir(DEVP("mqueue"), 01777);
 #undef DEVP
+}
+// #348: materialize /etc/machine-id (32 lowercase hex + newline) so libdbus/systemd/journald/gnome find a
+// stable machine identity that AGREES with /proc/sys/kernel/random/boot_id (both derive from the same
+// per-container boot bytes). Only written when the image ships no machine-id (missing or empty) -- an
+// image/user-provisioned id is left untouched. Written straight into the writable upper (a real file), so
+// reads need no interception. /var/lib/dbus/machine-id (the legacy dbus path) is filled the same way when
+// its directory exists. Idempotent.
+static void container_populate_machine_id(void) {
+    if (!g_rootfs_canon[0]) return;
+    uint8_t b[16];
+    boot_id_bytes(b);
+    char id[40];
+    int idn = 0;
+    for (int i = 0; i < 16; i++) idn += snprintf(id + idn, sizeof id - (size_t)idn, "%02x", b[i]);
+    id[idn++] = '\n';
+    static const char *const paths[] = {"/etc/machine-id", "/var/lib/dbus/machine-id", 0};
+    for (int i = 0; paths[i]; i++) {
+        char p[4200];
+        if ((size_t)snprintf(p, sizeof p, "%s%s", g_rootfs_canon, paths[i]) >= sizeof p) continue;
+        struct stat s;
+        if (stat(p, &s) == 0) {
+            if (S_ISREG(s.st_mode) && s.st_size > 0) continue; // a real id already present -> keep it
+        } else if (i == 1) {
+            continue; // don't create the legacy dbus dir if the image lacks it
+        }
+        int fd = open(p, O_WRONLY | O_CREAT | O_TRUNC, 0444);
+        if (fd >= 0) {
+            if (write(fd, id, (size_t)idn) < 0) { /* best-effort */ }
+            close(fd);
+        }
+    }
 }
 // -> macOS struct stat for a synth file
 static int synth_stat_raw(const char *gp, struct stat *s) {

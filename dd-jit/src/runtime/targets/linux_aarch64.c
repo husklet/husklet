@@ -355,6 +355,7 @@ int dd_run(const char *rootfs, int argc, char *const argv[]) {
         g_root_fd = open(g_rootfs_canon, O_RDONLY | O_DIRECTORY);
         g_root_fd = engine_fd_hoist(g_root_fd); // #299: keep it off the guest's low fds (else it squats fd 3)
         container_populate_dev(); // /dev/{fd,stdin,stdout,stderr,ptmx,pts,shm,console,...} the unpacker stripped
+        container_populate_machine_id(); // #348: /etc/machine-id agreeing with boot_id (if image ships none)
         if (g_uid < 0) g_uid = 0;
         // container default: run as root (0); unless DD_UID/--uid set
         if (g_gid < 0) g_gid = 0;
