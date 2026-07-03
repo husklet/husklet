@@ -4,6 +4,22 @@
 // unhandled form (RCL/RCR by CL) defers to C via report_unimpl. Returns TX_FALL (not a shift), TX_NEXT
 // (caller: gpc = next; continue) or TX_BREAK (deferred form -> end the block). #included after the other
 // class files (uses emit_rcl_rcr/rm_load/rm_store/report_unimpl above + the e_* shift/flag emitters).
+// Dead-flag elision for value-only IMMEDIATE shifts. `shl r,3` (address/index scaling), `shr r,N`
+// (bitfield extraction), etc. set CF/SF/ZF/PF (+OF for a 1-bit shift) that in real code are usually
+// never read before the next flag producer overwrites them. The shift path always materializes them
+// eagerly (e_tst + e_nzcv_save[_setcf] + e_pf_save), unlike the lazy ALU deferral. When the successor
+// guest-byte liveness scan (translate/trace.c, the same proven scanner as the cross-block elision)
+// proves EVERY written flag is dead before any read, skip the whole synthesis -- the value store is
+// unaffected. Conservative + safe: block enders => all live => never elided; AF is left untouched by
+// the shift either way (the shift path writes no AF), so eliding cannot perturb it.
+// Gate: NOSHIFTFLAGELIDE=1 (independent A/B); also off under NOFLAGELIDE and whenever xblkflags is off.
+static int noshiftflagelide(void) {
+    static int v = -1;
+    if (v < 0) v = (getenv("NOSHIFTFLAGELIDE") || getenv("NOFLAGELIDE")) ? 1 : 0;
+    return v;
+}
+// PROF: SHL/SHR/SAR immediate flag-materializations elided by the successor-dead-flag scan.
+static uint64_t g_prof_shflag;
 static int translate_shift(struct insn *I, uint64_t gpc, uint64_t next) {
     uint8_t op = I->op;
     int sf = I->opsize == 8;
@@ -145,6 +161,18 @@ static int translate_shift(struct insn *I, uint64_t gpc, uint64_t next) {
                     else if (cnt != 0)
                         e_rot_flags_const(16, k, rwidth, cnt);
                     rm_store(I, w, 16);
+                    return TX_NEXT;
+                }
+                // Dead-flag elision: an IMMEDIATE SHL/SHR/SAR (cnt is a compile-time constant here; the
+                // by-CL/variable path is left to materialize -- its flag effect is count-dependent) whose
+                // WHOLE architectural flag output {CF,SF,ZF,OF,PF} is provably dead before any read at every
+                // successor entry (guest-byte scan). AF is never written by this path either way, so it is
+                // excluded from the mask (eliding leaves it byte-identical to the materialized path). The
+                // value in x16 is final; skip the tst + nzcv/PF synthesis entirely and just store.
+                if (!bycl && !noshiftflagelide() && xblkflags_on() &&
+                    !(x86_flags_livein(next, gpc) & (XF_ALL & ~XF_AF))) {
+                    rm_store(I, w, 16);
+                    g_prof_shflag++;
                     return TX_NEXT;
                 }
                 // SF/ZF from result (byte/word via high-bits); CF exact for immediate SHL/SHR/SAR, else approximate

@@ -53,8 +53,9 @@ static void xs_dump(void); // EXITSTAT diagnostic histogram (defined in avx.c; n
 #define G_PROF_EXTRA                                                                                                    \
     do {                                                                                                                \
         if (getenv("PROF"))                                                                                            \
-            fprintf(stderr, "[prof] tier2=%llu tier2_fold_elide=%llu xflag_elide=%llu xflag_scan=%llu\n",              \
+            fprintf(stderr, "[prof] tier2=%llu tier2_fold_elide=%llu xflag_elide=%llu xflag_scan=%llu shflag_elide=%llu\n", \
                     (unsigned long long)g_prof_t2, (unsigned long long)g_prof_t2fold,                                   \
-                    (unsigned long long)g_prof_xflag, (unsigned long long)g_prof_xflag_scan);                           \
+                    (unsigned long long)g_prof_xflag, (unsigned long long)g_prof_xflag_scan,                            \
+                    (unsigned long long)g_prof_shflag);                                                                  \
         xs_dump();                                                                                                      \
     } while (0)
