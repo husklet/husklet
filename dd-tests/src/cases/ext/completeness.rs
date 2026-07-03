@@ -241,6 +241,14 @@ fn op_x86_misc() -> Group {
         x("parity-edge",      "completeness/x86_parity_edge.c"),
         x("xflags-sig",       "completeness/x86_xflags_sig.c"),
         x("xflags-sig-nostitch", "completeness/x86_xflags_sig.c").env("NOSTITCH", "1"),
+        // Shift/rotate dead-flag elision: an immediate SHL/SHR/SAR whose flag output is dead at every
+        // successor (incl. across chained/stitched edges) skips its eager nzcv/PF synthesis. Run default
+        // (elision on) AND with the elision off (NOSHIFTFLAGELIDE) + NOSTITCH (force chained edges) +
+        // NOLAZY — all four must be byte-identical vs qemu (a wrong elide or wrong keep diverges).
+        x("shflag",            "completeness/x86_shflag.c"),
+        x("shflag-off",        "completeness/x86_shflag.c").env("NOSHIFTFLAGELIDE", "1"),
+        x("shflag-nostitch",   "completeness/x86_shflag.c").env("NOSTITCH", "1"),
+        x("shflag-nolazy",     "completeness/x86_shflag.c").env("NOLAZY", "1"),
     ])
 }
 
