@@ -28,6 +28,7 @@ static inline uint64_t repstr_g2h(uint64_t a) {
     return (g_nonpie_lo && a >= g_nonpie_lo && a < g_nonpie_hi) ? a + g_nonpie_bias : a;
 }
 static void dd_rep_movs(uint8_t *dst, const uint8_t *src, uint64_t nbytes, int w) {
+    g_repmovs_n++;
     dst = (uint8_t *)repstr_g2h((uint64_t)dst);
     src = (const uint8_t *)repstr_g2h((uint64_t)src);
     if (nbytes == 0) return;
@@ -62,6 +63,7 @@ static void dd_rep_movs(uint8_t *dst, const uint8_t *src, uint64_t nbytes, int w
 
 // Host helper for `rep stos`: fill `n` elements of width `w` with `val` (AL/AX/EAX/RAX).
 static void dd_rep_stos(uint8_t *dst, uint64_t val, uint64_t n, int w) {
+    g_repstos_n++;
     dst = (uint8_t *)repstr_g2h((uint64_t)dst);
     switch (w) {
     case 2: {
@@ -102,6 +104,8 @@ static void emit_reload(void) {
 // host x0..x15 (caller-saved) so the spill/reload around the call is mandatory; x28 (cpu) is
 // callee-saved and survives; the host SP is untouched (guest RSP is x4), so ABI alignment holds.
 static void emit_rep_string(int movs, int w, int shift) {
+    // Lever #3: emit_spill (below) clears cpu->vdirty and republishes cpu->V, and emit_reload restores host
+    // v0..v15 FROM cpu->V, so this leaves cpu->V current -> no vdirty mark needed (a later syscall may slim).
     emit_spill();                          // x0..x15 + xmm0..15 + flags -> cpu (membank)
     e_ldr(0, 28, R_OFF(RDI));              // x0 = dst (rdi)
     e_ldr(1, 28, R_OFF(movs ? RSI : RAX)); // x1 = src (rsi) / fill value (rax)

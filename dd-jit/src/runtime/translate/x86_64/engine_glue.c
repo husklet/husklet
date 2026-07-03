@@ -20,6 +20,8 @@ static uint64_t g_disp_n, g_ibtc_fill;  // PROF: dispatcher round-trips, IBTC fi
 // ---- W4-C: rep cmps/scas idiom (R_REPSTR) globals + the NOREPCMP A/B kill-switch ----
 static uint64_t g_repstr_n;     // PROF: rep cmps/scas idiom firings
 static uint64_t g_repstr_elems; // PROF: elements consumed by the rep cmps/scas idiom
+static uint64_t g_repmovs_n;    // PROF: rep movs -> host memcpy fast-path firings (ERMS funnel meter)
+static uint64_t g_repstos_n;    // PROF: rep stos -> host memset fast-path firings
 static int g_norepcmp = -1;     // gate: NOREPCMP=1 -> rep cmps/scas use the naive per-element loop
 static int norepcmp(void) {     // (the A/B kill-switch; also the bit-exact per-element oracle path)
     if (g_norepcmp < 0) g_norepcmp = getenv("NOREPCMP") ? 1 : 0;

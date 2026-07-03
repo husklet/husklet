@@ -176,7 +176,17 @@ static void do_cpuid(struct cpu *c) {
         cc = 0x6c65746e;
         break; // max-leaf=7, "GenuineIntel"
     case 1:
-        a = 0x000306c3; // family/model (Haswell-ish id, harmless)
+        // Report a pre-AVX Intel Westmere (family 6, model 0x2c). Rationale: dd deliberately withholds
+        // AVX (xgetbv reports only x87+SSE), so guest glibc takes its SSE path for memcpy/memmove. glibc's
+        // memmove ifunc, when AVX is unusable, picks `__memmove_ssse3` (NO rep movsb) UNLESS the internal
+        // `Fast_Unaligned_Copy` preferred bit is set -- and glibc only sets that bit for Nehalem/Westmere
+        // models (Haswell+ is assumed to have AVX, so its SSE fast-copy heuristic was never wired). A
+        // Haswell id (old value 0x000306c3) therefore left memcpy on the non-rep ssse3 path; Westmere makes
+        // glibc select `__memmove_sse2_unaligned_erms` -> `rep movsb` above threshold, which dd lowers to a
+        // single host memcpy. All features dd advertises (SSE4.2/AES-NI/PCLMUL/POPCNT below, BMI2/SHA/ERMS/
+        // FSRM in leaf 7) are consumed by guests via their CPUID FEATURE bits, which stay set regardless of
+        // this model id -- the model only steers glibc's SSE-vs-rep tuning toward the dd-fast rep path.
+        a = 0x000206c2; // Intel Westmere (fam 6, model 0x2c) -- trips glibc Fast_Unaligned_Copy (SSE memcpy -> rep movsb)
         d = (1u << 0) | (1u << 4) | (1u << 8) | (1u << 11) | (1u << 13) | (1u << 15) | (1u << 19) | (1u << 23) |
             (1u << 24) | (1u << 25) | (1u << 26); // FPU,TSC,CX8,SEP,PGE,CMOV,CLFSH,MMX,FXSR,SSE,SSE2
         // SSE3, PCLMULQDQ, SSSE3, CMPXCHG16B, SSE4.1, SSE4.2, MOVBE, POPCNT, AES-NI -- all backed by the
@@ -185,8 +195,19 @@ static void do_cpuid(struct cpu *c) {
              (1u << 25);
         break;
     case 7:
-        if ((uint32_t)c->r[RCX] == 0) // subleaf 0
-            b = (1u << 3) | (1u << 8) | (1u << 29); // BMI1, BMI2, SHA (GP-register / XMM ops, no YMM state)
+        if ((uint32_t)c->r[RCX] == 0) {                     // subleaf 0
+            b = (1u << 3) | (1u << 8) | (1u << 9) | (1u << 29); // BMI1, BMI2, ERMS, SHA
+            // ERMS (EBX[9]) + FSRM (EDX[4]): "REP MOVSB/STOSB is fast" + "fast for short lengths". We
+            // advertise these because dd lowers `rep movs`/`rep stos` to ONE bit-exact host memcpy/memset
+            // (translate/repstr.c: forward, all widths/alignments/0-length, forward-overlap smear replayed
+            // element-granular; DF=1/backward falls back to the exact per-element scalar loop). glibc's
+            // memcpy/memmove/memset ERMS paths only ever issue `rep movsb/stosb` in the FORWARD direction
+            // (they take the backward SSE loop for dst>src overlap), which is exactly the case dd's fast
+            // path serves -- so routing bulk libc copies here is byte-exact and avoids translating glibc's
+            // SSE/AVX copy loops (which also hit the SSSE3/SSE4 softmulator exits). max-subleaf stays 0
+            // (a==0): FSRM lives in subleaf 0, so no subleaf-1 emulation is needed.
+            d = (1u << 4); // FSRM (Fast Short REP MOV); only bit 4 set -- no AVX512/security bits implied
+        }
         break;
     case 0x80000000: a = 0x80000001; break;
     case 0x80000001:

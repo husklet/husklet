@@ -260,6 +260,11 @@ fn compat() -> Group {
         src("recursion", "recursion.c").oracle(),     // fib(30) + ackermann (§B depth gate)
         src("fnptr", "fnptr.c").oracle(),             // function pointers -> IBTC / inline cache
         src("jumptable", "jumptable.c").oracle(),     // dense switch -> jump table
+        // IBTC stress (perf lever #4): a 128-target MEGAMORPHIC computed-goto bytecode VM (CPython/VDBE
+        // shape -> hammers the inline indirect-branch target cache) + a MONOMORPHIC deep recursion
+        // (real call/ret). A wrong IBTC prediction that jumped to the wrong handler/return would corrupt
+        // the deterministic checksum, so this golden runs byte-identically on both Linux engines.
+        src("ibtc-dispatch", "ibtc_dispatch.c").out("ibtc vm=10240120795314104034 rec=2178309 chk=12619423276023875997\n"),
         src("floatmath", "floatmath.c").oracle(),
     ])
 }

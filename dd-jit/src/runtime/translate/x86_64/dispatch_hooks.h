@@ -172,6 +172,12 @@ static int smc_on_write(uint64_t a) {
         if (!g_threaded) {                                                                                             \
             void *body = map_body((c)->rip);                                                                           \
             if (body) {                                                                                                \
+                /* The emitted indirect probe (emit_ibranch) branches ABSOLUTELY to slot.body                          \
+                 * (ldr x21,[slot+8]; br x21), so under the dual-mapped code cache the stored body must be the         \
+                 * EXECUTOR (RX) alias -- map_body returns the RW writer alias. J_RX converts it (a no-op when         \
+                 * g_rw2rx==0, i.e. NODUALMAP/single-MAP_JIT fallback -> byte-identical to the prior path). Mirrors    \
+                 * the aarch64 IBTC fill's J_RX(bd) in translate/aarch64/dispatch_hooks.h. */                          \
+                body = J_RX(body);                                                                                     \
                 if (ibtc1way()) { /* IBTC1WAY=1: exact prior 1-way shared-g_ibtc fill */                               \
                     uint32_t h = (uint32_t)(((c)->rip >> 2) & (IBTC_N - 1));                                           \
                     g_ibtc[h].target = (c)->rip;                                                                       \

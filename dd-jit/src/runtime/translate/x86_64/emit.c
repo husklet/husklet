@@ -451,15 +451,56 @@ static void emit_prologue(void) {
 // Spill: x28 is live (== cpu), so store the 16 GPRs + flags + xmm. The flag save reads the
 // LIVE ARM nzcv -- which is kept == cpu->nzcv by every flag producer (the borrow-convention
 // helpers below `msr` their corrected value back into ARM nzcv so this stays consistent).
+// Lever #3 (SIMD-clean syscall exit): when guest xmm (host v0..v15) is already current in cpu->V, a plain
+// R_SYSCALL exit can skip the 8 stp_q xmm save (emit_spill_gpr); the always-full prologue reload republishes
+// cpu->V on re-entry, and every non-slim exit keeps the FULL spill. Currency is tracked at RUNTIME in
+// cpu->vdirty: the first xmm-writing region instruction (SSE/x87 lowering, emit_rep_string -- the only
+// in-block writers of v0..v15) stores the nonzero cpu pointer there via mark_vdirty(); every FULL spill
+// clears it. Runtime rather than a static per-block flag because blocks CHAIN without spilling, so a
+// vector-dirty region can reach a statically-"clean" syscall block with host xmm != cpu->V. A syscall that
+// writes cpu->V (sigreturn) is republished by the prologue reload, so xmm state is never lost.
+static int g_slimsys = -1; // DDJIT_NOSLIMSYS=1 -> 0 = byte-identical full-spill baseline (A/B kill switch)
+static int slimsys_on(void) {
+    if (g_slimsys < 0) g_slimsys = getenv("DDJIT_NOSLIMSYS") ? 0 : 1;
+    return g_slimsys;
+}
+// Mark cpu->V as possibly-stale for a later syscall exit, emitted before EVERY xmm write (x28 is the nonzero
+// cpu pointer, so storing it flags dirty). Per-write (not once-per-region) because a mid-region full spill --
+// e.g. emit_rep_string -- clears cpu->vdirty at runtime, so a once-per-region mark would be lost before a
+// later xmm write reached the syscall. Only xmm-writing code pays this store; integer/syscall blocks do not.
+static void mark_vdirty(void) { e_str(28, 28, OFF_VDIRTY); }
+// GPR + flags spill, WITHOUT the xmm save. Leaves x28 = cpu (unchanged).
+static void emit_spill_gpr(void) {
+    for (int r = 0; r <= 15; r++)
+        e_str(r, 28, R_OFF(r));
+    e_nzcv_save();
+}
 static void emit_spill(void) {
     for (int r = 0; r <= 15; r++)
         e_str(r, 28, R_OFF(r));
     for (int t = 0; t < 16; t += 2)
         e_stp_q(t, t + 1, 28, OFF_V + t * 16); // v0..v15 -> guest xmm
     e_nzcv_save();
+    e_str(31, 28, OFF_VDIRTY); // full spill republishes cpu->V -> clear the dirty flag (str xzr)
 }
 static void emit_exit_const(uint64_t rip, uint64_t reason) {
-    emit_spill();
+    // Lever #3: a plain R_SYSCALL exit skips the xmm spill WHEN cpu->V is current (cpu->vdirty==0); else
+    // full. Runtime check (blocks chain without spilling). x16 is engine scratch here (guest is x0..x15).
+    if (reason == R_SYSCALL && slimsys_on()) {
+        e_ldr(16, 28, OFF_VDIRTY);
+        uint32_t *p_cb = (uint32_t *)g_cp;
+        emit32(0); // cbnz x16, Lfull
+        emit_spill_gpr();
+        uint32_t *p_b = (uint32_t *)g_cp;
+        emit32(0x14000000u); // b Lcont
+        uint8_t *Lfull = g_cp;
+        *p_cb = 0xB5000000u | (((uint32_t)(((uint8_t *)Lfull - (uint8_t *)p_cb) / 4) & 0x7FFFF) << 5) | 16;
+        emit_spill();
+        uint8_t *Lcont = g_cp;
+        *p_b = 0x14000000u | ((uint32_t)(((uint8_t *)Lcont - (uint8_t *)p_b) / 4) & 0x3FFFFFF);
+    } else {
+        emit_spill();
+    }
     e_movconst(16, rip);
     e_str(16, 28, OFF_RIP);
     e_movconst(16, reason);

@@ -68,7 +68,15 @@ struct cpu {
     // bit 21 here and pushfq(9C) reads it back -- a software toggle of ID round-trips, which is exactly the
     // CPUID-availability probe 32-bit code uses (flip ID via pushf/popf and check it changed). 0/1 valued.
     uint64_t idflag;
+    // Lever #3 (SIMD-clean syscall exit): RUNTIME "guest xmm may be stale in cpu->V" flag. Set (to the
+    // nonzero cpu pointer) by the first xmm-writing region instruction; cleared by every FULL spill. A
+    // plain R_SYSCALL exit reads it: 0 -> slim GPR-only spill, else FULL. Runtime (not a static per-block
+    // flag) because blocks chain without spilling, so a vectorized region can reach a clean syscall block.
+    uint64_t vdirty;
 };
+#define OFF_VDIRTY ((int)__builtin_offsetof(struct cpu, vdirty))
+_Static_assert(__builtin_offsetof(struct cpu, vdirty) % 8 == 0 && __builtin_offsetof(struct cpu, vdirty) <= 32760,
+               "OFF_VDIRTY out of ldr/str imm12 range");
 #define OFF_ID ((int)__builtin_offsetof(struct cpu, idflag))
 #define OFF_PF ((int)__builtin_offsetof(struct cpu, pf))
 #define OFF_AF ((int)__builtin_offsetof(struct cpu, af))

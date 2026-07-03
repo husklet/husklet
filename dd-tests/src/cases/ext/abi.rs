@@ -53,6 +53,7 @@ fn abi_float() -> Group {
         s("fp-minmax",   "ext_abi/fp_minmax.c"),        // fmin/fmax/fdim/copysign NaN semantics
         s("fp-cmp",      "ext_abi/fp_cmp.c"), // jit86: NaN unordered-compare predicate wrong (lt 36 vs 21)
         s("float32",     "ext_abi/float32.c"),          // single-precision transcendental + rounding
+        s("simd-syscall","ext_abi/simd_syscall.c"),     // vector regs survive syscall block-exits (perf Lever #3 slim spill)
     ])
 }
 

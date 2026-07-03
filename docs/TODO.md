@@ -1,9 +1,15 @@
 # dd — comprehensive TODO (what needs to be fixed / improved)
 
-State: `main` at v0.9.16. Read `docs/AGENTS.md` first (build/run + COMPLETENESS + CROSS-PLATFORM +
+State: `main` at v0.9.18. Read `docs/AGENTS.md` first (build/run + COMPLETENESS + CROSS-PLATFORM +
 zero-tolerance on terminal/internals). Goals: (1) x86-on-par-with-arm; (2) full Docker/Linux compliance
 on all 3 platforms; (3) every basic Linux internal flawless & oracle-validated, no stubs. Moby reference:
 `.dev/research/moby-mapping.md` (`§N` = section). Shipped work is in git history, not here.
+
+ACTIVE MISSION (perf): beat the #328 benchmark on BOTH arches, safely — no runtime corruption, every
+perf change gated behind byte-exact differential + matrix subset. Worst gaps: arm sqlite-select 4.50x /
+python 3.05x (call/ret + indirect dispatch -> #341 RAS returns); amd openssl AES-GCM 0.10x / SHA 0.31x
+(x86 crypto -> ARM crypto + CPUID path-selection); amd redis 0.52x (x86 codegen/flags/syscall). Levers &
+findings tracked in `docs/perf-profile-v0.9.18.md` (profiler output). See §C (x86 perf) / §D (arm perf).
 
 ## Recently shipped (v0.9.14 → v0.9.16)
 DNS via host resolver (#261) · reach-by-name (#322) · `-p` process-independent forwarder (#320) ·

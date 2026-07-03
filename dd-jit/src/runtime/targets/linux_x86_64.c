@@ -178,10 +178,29 @@ static int engine_global_init(void) {
         perror("pthread_key_create");
         return 1;
     }
-    g_cache = mmap(NULL, CACHE_SZ, PROT_READ | PROT_WRITE | PROT_EXEC, MAP_PRIVATE | MAP_ANON | MAP_JIT, -1, 0);
-    if (g_cache == MAP_FAILED) {
-        perror("mmap jit");
-        return 1;
+    // Code cache. Default: dual-mapped RW/RX so the engine never toggles W^X (identical mechanism the
+    // aarch64 target ships -- see targets/linux_aarch64.c). Allocate a plain anon RW region (the writer
+    // alias = g_cache) and vm_remap the SAME physical pages to a second address marked RX (the executor
+    // alias). Writes through g_cache become visible to execution at g_cache+g_rw2rx after an icache flush,
+    // with NO per-region pthread_jit_write_protect_np() flip (no per-translation / per-IC-fill toggle).
+    // NODUALMAP=1 reverts to a single MAP_JIT mapping that toggles W^X per translation/IC-fill.
+    if (!getenv("NODUALMAP")) {
+        uint8_t *rw;
+        ptrdiff_t d;
+        if (dualmap_alloc(&rw, &d) == 0) {
+            g_cache = rw;
+            g_rw2rx = d;
+            g_dualmap = 1;
+        } else {
+            fprintf(stderr, "[jit] dual-map unavailable -> W^X-toggle fallback\n");
+        }
+    }
+    if (!g_dualmap) {
+        g_cache = mmap(NULL, CACHE_SZ, PROT_READ | PROT_WRITE | PROT_EXEC, MAP_PRIVATE | MAP_ANON | MAP_JIT, -1, 0);
+        if (g_cache == MAP_FAILED) {
+            perror("mmap jit");
+            return 1;
+        }
     }
     g_cp = g_cache;
     g_trace = getenv("JT") != NULL;

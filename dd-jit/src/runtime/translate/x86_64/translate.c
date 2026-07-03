@@ -1683,6 +1683,7 @@ static void *translate_block(uint64_t gpc) {
             }
             // ===== x87 FPU (D8-DF): double-precision stack emulation =====
             if (op >= 0xD8 && op <= 0xDF) {
+                mark_vdirty(); // Lever #3: x87 lowering touches the vector file -> mark cpu->V dirty
                 int reg = I.reg & 7, rm = I.rm_reg & 7;
 #define FAd(d, n, m) emit32(0x1E602800u | ((m) << 16) | ((n) << 5) | (d)) /* fadd d */
 #define FSd(d, n, m) emit32(0x1E603800u | ((m) << 16) | ((n) << 5) | (d)) /* fsub d */
@@ -2173,6 +2174,7 @@ static void *translate_block(uint64_t gpc) {
             // mandatory prefix selects the variant: 66=packed-int/double, F3=scalar-single,
             // F2=scalar-double, none=packed-single. reg/rm fields index xmm directly.
             {
+                mark_vdirty(); // Lever #3: SSE lowering writes guest xmm (v0..v15) -> mark cpu->V dirty
                 int handled = 1, mem;
                 int vd = I.reg, vm = I.rm_reg;
                 if (op == 0x6E) { // movd/movq xmm, r/m  (66)

@@ -69,7 +69,18 @@ struct cpu {
     // when that guest page was actually translated, instead of nuking everything on every guest icache
     // flush (V8 issues one per freshly-written line). Appended after the baked-offset fields.
     uint64_t smc_va;
+    // Lever #3 (SIMD-clean syscall exit): RUNTIME "guest vector state may be stale in cpu->V" flag. Set
+    // (to the nonzero cpu pointer) by the first vector-writing instruction of a region; the static per-
+    // region flag is UNSOUND because blocks CHAIN without spilling (a vectorized region can chain into a
+    // statically-clean syscall block), so the decision must be at runtime. Cleared by every FULL spill
+    // (which republishes cpu->V). A plain R_SYSCALL exit reads this: 0 -> slim GPR-only spill, else FULL.
+    // Appended after the baked-offset fields so the emitted-code offsets above are unaffected.
+    uint64_t vdirty;
 };
+#define OFF_VDIRTY ((int)offsetof(struct cpu, vdirty))
+// OFF_VDIRTY is used in a scaled unsigned ldr/str (F9, imm12*8), so it must be 8-aligned and <= 32760.
+_Static_assert(offsetof(struct cpu, vdirty) % 8 == 0 && offsetof(struct cpu, vdirty) <= 32760,
+               "OFF_VDIRTY out of ldr/str imm12 range");
 #define OFF_SMCVA offsetof(struct cpu, smc_va)
 #define OFF_V 384
 #define OFF_HOSTV 896

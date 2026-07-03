@@ -282,8 +282,9 @@ static int svc_proc(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64
         }
 #ifdef R_REPSTR // W4-C: x86-only rep cmps/scas idiom firing counts
         if (getenv("PROF"))
-            fprintf(stderr, "[prof] repstr=%llu repstr_elems=%llu\n", (unsigned long long)g_repstr_n,
-                    (unsigned long long)g_repstr_elems);
+            fprintf(stderr, "[prof] repstr=%llu repstr_elems=%llu repmovs=%llu repstos=%llu\n",
+                    (unsigned long long)g_repstr_n, (unsigned long long)g_repstr_elems,
+                    (unsigned long long)g_repmovs_n, (unsigned long long)g_repstos_n);
 #endif
 #ifdef G_PROF_EXTRA
         G_PROF_EXTRA; // W5B: x86 tier-2 promotion counters
@@ -696,6 +697,13 @@ static int svc_proc(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64
             pthread_jit_write_protect_np(1);
             jit_after_fork();  // dual map: COW split the RW/RX aliases -> rebuild a fresh aliased cache
             G_SHADOW_RESET(c); // §B: child's pre-fork host_rets crossed run_block -> drop, use IBTC
+            // Under the dual map, jit_after_fork() rebuilt the child's cache at a FRESH VA (and munmap'd the
+            // old RW/RX aliases), so every cached body pointer is now stale. It zeroed the shared g_map +
+            // g_ibtc, but the x86-only 2-way g_xibtc it cannot see must ALSO be dropped -- else the child's
+            // first indirect branch resolves a stale body into the freed parent RX alias -> SIGSEGV (the same
+            // class the execve path documents below). No-op under the MAP_JIT fallback: there the cache VA is
+            // inherited unchanged, so the inherited g_xibtc stays valid (and this keeps that path byte-exact).
+            if (g_dualmap) G_SHADOW_CLEAR(c);
             rc_reset();        // S2: drop the inherited (COW) path-resolution cache so the child can never
                                // serve a guest->host mapping that the parent populated before the FS diverged
             g_ndirs = 0;       // the getdents DIR* cache is the PARENT's -- closedir'ing inherited handles
@@ -944,6 +952,11 @@ static int svc_proc(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64
         if (pid == 0) {
             jit_after_fork(); // dual map: rebuild the child's aliased cache (COW split RW/RX)
             G_SHADOW_RESET(c);
+            // Dual map only: the rebuilt cache moved to a fresh VA, so drop the x86-only 2-way g_xibtc that
+            // jit_after_fork() can't see (stale bodies -> freed parent RX alias -> SIGSEGV on the child's
+            // first indirect branch). No-op on the MAP_JIT fallback (cache VA inherited unchanged). See the
+            // fork/vfork child above for the full rationale.
+            if (g_dualmap) G_SHADOW_CLEAR(c);
             rc_reset();
             kqueue_rebuild_after_fork(); // macOS kqueue() fds don't survive fork -> rebuild epoll/timer/inotify
             thread_after_fork(); // reset process-private thread/futex/epoll locks inherited-locked across fork
