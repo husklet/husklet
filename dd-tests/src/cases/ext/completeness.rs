@@ -203,6 +203,9 @@ fn op_x86_crypto() -> Group {
         x("sha",    "completeness/x86_sha.c"),    // full SHA-NI surface -> ARM SHA ext (incl. mem/alias/xmm0 shapes)
         x("sha-kat", "completeness/x86_sha_kat.c"), // FIPS-180 KATs (self-assert) + random-length msgs, SHA-1+SHA-256
         x("crc32",  "completeness/x86_crc32.c"),  // jit86 UNIMPL 0F 38 F0 (CRC32 r/m8) abort
+        // sse4x: the inline 0F38/0F3A GPR+lane glue (MOVBE/CRC32/PEXTR/PINSR/INSERTPS/AESKEYGENASSIST)
+        // + the constant-hoist (v26 zero / v27 mask) and PMULL2 / PSHUFD fast-path regressions.
+        x("sse4x",  "completeness/x86_sse4x.c"),
     ])
 }
 

@@ -50,6 +50,14 @@ Success = "download it, `docker run` your image, it just works, and it's fast."
 3. PARALLEL BUILDS MUST USE ISOLATED BUILD DIRS. Two builds sharing one `target/` poison each other's
    cache. Each concurrent worker: `--target-dir target-<yourname>` and pin `DDJIT_DIR` into that dir.
 
+4. CODEGEN THAT BAKES A HOST POINTER MUST USE THE RECORDED EMITTERS. Any emitter that embeds a host
+   address in emitted code (`e_movconst(.., (uint64_t)<host symbol>)`, `e_adrp_add` to an engine global)
+   breaks the persistent translation cache: a restored arena lives at a different base in a different
+   process, so an unrecorded raw bake becomes a garbage branch on a warm load (silent death, warm-only —
+   the default matrix won't catch it; the pcachex group will). Use `emit_blockret`/`emit_ibtcptr`/
+   `pc_record_*` (see `translate/*/pcache.c`) or add a recorded emitter. Review lint: grep new codegen
+   for `e_movconst.*\(uint64_t\)` / `e_adrp_add.*g_` outside pcache.c.
+
 > Maintainer/CI dev-env note (contributors can ignore this box): this repo may contain a local,
 > gitignored `.dev/` with helper scripts (`.dev/build.sh`, `.dev/test.sh`) and a private playbook
 > (`.dev/AGENTS.local.md`) that wrap the maintainer's specific build path. If `.dev/` exists, use those

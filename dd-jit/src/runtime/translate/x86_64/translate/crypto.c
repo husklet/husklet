@@ -37,6 +37,7 @@
 #define A_AESIMC 0x4E287800u // AESIMC Vd.16B, Vn.16B = InvMixColumns(Vn)
 #define A_EOR16 0x6E201C00u  // EOR   Vd.16B, Vn.16B, Vm.16B  (via e_v3)
 #define A_PMULL 0x0EE0E000u  // PMULL Vd.1Q, Vn.1D, Vm.1D     (poly multiply, low lanes)
+#define A_PMULL2 0x4EE0E000u // PMULL2 Vd.1Q, Vn.2D, Vm.2D    (poly multiply, HIGH lanes)
 #define A_TBL 0x4E000000u    // TBL   Vd.16B, {Vn.16B}, Vm.16B  (byte table lookup; idx>=16 -> 0)
 #define A_BIT 0x6EA01C00u    // BIT   Vd.16B, Vn.16B, Vm.16B  = Vd ^ ((Vd ^ Vn) & Vm)  (Vm bit set -> Vn)
 
@@ -156,8 +157,23 @@ static void e_rev4s(int vd, int vn) {
     e_ext(vd, vd, vd, 8);
 }
 
+// AES-endgame perf: straight-line hoisting of the two loop-invariant scratch constants the crypto glue
+// re-materializes per instruction: the ZERO round key the AESENC/AESDEC mapping feeds AESE/AESD, and the
+// 0x8f control mask PSHUFB ANDs into its TBL index. openssl's hot loops run 60+ back-to-back aesenc and
+// 4 pshufb per ghash iteration -- re-emitting the constant each time wastes an insn AND a rename
+// dependency per op. The constants live in v26 (zero) / v27 (0x8f): v20..v31 are used by NOTHING in the
+// x86 translator except the SHA-NI cases below (verified by sweep), so the claims survive the ordinary
+// legacy-SSE/GPR lowerings interleaved in real loops (all scratch there is x16..x25 / v16..v19).
+//   g_v26z / g_v27m == 1  =>  the emitted code at this point provably left v26 == 0 / v27 == 0x8f.
+// Cleared at: translate_block entry, the SHA-NI cases (clobber v20+), and the rep-movs/stos string
+// idiom (its ERMS funnel `blr`s a host helper, which may clobber all of v16..v31). Stitched superblock
+// constituents are never entered externally (no map entry is registered for them) and every C-emulation
+// transition ends the emitted block, so the straight-line assumption holds everywhere else.
+// NOSSEOPT=1 disables the hoist (constants re-emitted every op -- the pre-hoist codegen) for A/B.
+static int g_v26z, g_v27m;
+
 // Try to lower a legacy 0F38/0F3A crypto opcode to inline ARM crypto. Returns TX_NEXT if emitted,
-// TX_FALL to defer to the C softmulator (do_sse3b) for the ops we don't map (aeskeygenassist, ...).
+// TX_FALL to defer to the C softmulator (do_sse3b) for the rare ops we don't map (pcmpistri, ...).
 static int translate_crypto(struct insn *I, uint64_t next) {
     uint8_t op = I->op;
     int D = I->reg; // dst xmm == src1 (destructive) for AES/PCLMUL
@@ -173,17 +189,18 @@ static int translate_crypto(struct insn *I, uint64_t next) {
             int enc = (op == 0xDC || op == 0xDD);
             int last = (op == 0xDD || op == 0xDF);
             uint32_t aes = enc ? A_AESE : A_AESD, mc = enc ? A_AESMC : A_AESIMC;
-            e_v3(A_EOR16, 16, 16, 16); // v16 = 0  (the "zero round key" for AESE/AESD)
+            if (!g_v26z || nosseopt()) e_v3(A_EOR16, 26, 26, 26); // v26 = 0 ("zero round key"); hoisted across runs
+            g_v26z = 1; // v26 stays zero through this case (AESE/AESD only READ it)
             if (key == D) {
                 // AESENC xmm,xmm aliases state==key: the ^key reads the ORIGINAL state, so keep D intact
                 // and compute through scratch v17 (5 insns).
                 e_vmov(17, D);
-                emit32(aes | (16 << 5) | 17);
+                emit32(aes | (26 << 5) | 17);
                 if (!last) emit32(mc | (17 << 5) | 17);
                 e_v3(A_EOR16, D, 17, key);
             } else {
-                // hot path (key != state): transform D in place, XOR the round key after (4 insns).
-                emit32(aes | (16 << 5) | D); // D = Sub(Shift(D ^ 0))
+                // hot path (key != state): transform D in place, XOR the round key after (3 insns).
+                emit32(aes | (26 << 5) | D); // D = Sub(Shift(D ^ 0))
                 if (!last) emit32(mc | (D << 5) | D);
                 e_v3(A_EOR16, D, D, key); // d = MixColumns(...) ^ round key
             }
@@ -197,6 +214,7 @@ static int translate_crypto(struct insn *I, uint64_t next) {
         }
         case 0xC8: { // SHA1NEXTE d, s: d = s + (0,0,0, rol30(d.lane3))   [E folded into the next W0]
             if (g_fp_known) fp_drop();
+            g_v26z = g_v27m = 0; // the SHA round lowering clobbers v20..v31
             int s = crypto_rm_vec(I, next);
             e_dup_s(16, D, 3);               // v16.s[0] = d.lane3 (the A from 4 rounds ago)
             emit32(A_SHA1H | (16 << 5) | 16); // s16 = rol30(d3)
@@ -262,8 +280,9 @@ static int translate_crypto(struct insn *I, uint64_t next) {
             int s = crypto_rm_vec(I, next);
             // x86 uses low 4 index bits + bit7-zeroing; ARM TBL zeroes when index >= 16. Mask control to
             // 0x8f: bit7-clear -> 0..15 (valid lookup), bit7-set -> 128..143 (>=16 -> TBL yields 0). Exact.
-            e_movi16b(16, 0x8f);
-            e_v3(A_AND16, 16, s, 16);        // v16 = control & 0x8f
+            if (!g_v27m || nosseopt()) e_movi16b(27, 0x8f); // loop-invariant mask, hoisted across the run
+            g_v27m = 1;
+            e_v3(A_AND16, 16, s, 27);        // v16 = control & 0x8f
             emit32(A_TBL | (16 << 16) | (D << 5) | D); // D = table[D] indexed by v16 (out-of-range -> 0)
             return TX_NEXT;
         }
@@ -331,6 +350,10 @@ static int translate_crypto(struct insn *I, uint64_t next) {
             int selA = imm & 1;         // which 64-bit half of d
             int selB = (imm >> 4) & 1;  // which 64-bit half of s
             int s = crypto_rm_vec(I, next);
+            if (selA && selB) { // imm 0x11 (both high halves): single PMULL2 reads lane 1 of each source
+                emit32(A_PMULL2 | (s << 16) | (D << 5) | D);
+                return TX_NEXT;
+            }
             // PMULL reads lane 0 (low 64) of each source. If the low half is selected, feed the operand
             // register directly; only stage the HIGH half into lane 0 of a scratch when selected.
             int vn = D, vm = s;

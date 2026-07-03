@@ -743,6 +743,8 @@ static int emit_parity_jcc_cond(int lo) {
 
 #include "translate/crypto.c"
 
+#include "translate/sse4x.c"
+
 // SSE2 variable-count packed shift (PSLLW/D/Q, PSRLW/D/Q, PSRAW/D by xmm/m): shift every
 // `esize`-bit lane of `vn` by the SCALAR count held in the low 64 bits of `vs`, result -> `vd`.
 // x86 saturates the count: any count >= esize yields 0 (logical) or the sign bit replicated
@@ -927,6 +929,7 @@ static void *translate_block(uint64_t gpc) {
     // #292: poll cpu->irq at the body entry so a caught async signal reaches a no-syscall guest loop.
     emit_irq_check(start);
     g_fl_pending = FL_NONE; // lazy flags: nothing deferred at block entry
+    g_v26z = g_v27m = 0;    // crypto constant hoist: no v26==0 / v27==0x8f claim survives a block entry
     g_df = 0;               // direction flag: forward at block entry (std/cld are block-local around string ops)
     g_fp_known = 0;         // x87: top unknown at block entry until a finit anchors it
     g_fp_dirty = 0;
@@ -977,6 +980,12 @@ static void *translate_block(uint64_t gpc) {
                 // (Marking after emission is fine: the latch/mark are translate-time; any exit emitted
                 // before this point ends the region, and translate_crypto emits no exits on TX_NEXT.)
                 mark_vdirty();
+                gpc = next;
+                continue;
+            }
+            // perf wave 2: MOVBE/CRC32 + PINSR/PEXTR/INSERTPS + AESKEYGENASSIST lowered inline
+            // (translate/sse4x.c) -- the residual per-block exits in openssl's stitched CTR loop.
+            if (translate_sse4x(&I, next) == TX_NEXT) {
                 gpc = next;
                 continue;
             }
@@ -1427,6 +1436,9 @@ static void *translate_block(uint64_t gpc) {
             {
                 int s = translate_string(&I, next);
                 if (s == TX_NEXT) {
+                    // A string idiom was emitted; its ERMS funnel may `blr` a host helper, which can
+                    // clobber ALL of v16..v31 -- drop the crypto constant-hoist claims (v26/v27).
+                    g_v26z = g_v27m = 0;
                     gpc = next;
                     continue;
                 }
@@ -2380,14 +2392,18 @@ static void *translate_block(uint64_t gpc) {
                         e_vshr_imm(x, x, esz, sh, 1); // psra
                     else if (sub == 6)
                         e_vshl_imm(x, x, esz, sh); // psll
-                    else if (op == 0x73 && sub == 3) {
-                        e_v3(0x6E201C00u, 18, 18, 18);
-                        e_ext(x, x, 18, sh & 0xF);
-                    } // psrldq
-                    else if (op == 0x73 && sub == 7) {
-                        e_v3(0x6E201C00u, 18, 18, 18);
-                        e_ext(x, 18, x, (16 - (sh & 0xF)) & 0xF);
-                    } // pslldq
+                    else if (op == 0x73 && (sub == 3 || sub == 7)) { // psrldq / pslldq (byte shifts)
+                        if (sh > 15) {                     // x86: count > 15 -> result is all-zero
+                            e_v3(0x6E201C00u, x, x, x);
+                        } else if (sh) {                   // count 0 is the identity -> emit nothing
+                            if (!g_v26z || nosseopt()) e_v3(0x6E201C00u, 26, 26, 26); // hoisted zero (crypto.c claim)
+                            g_v26z = 1;
+                            if (sub == 3)
+                                e_ext(x, x, 26, sh); // psrldq
+                            else
+                                e_ext(x, 26, x, 16 - sh); // pslldq
+                        }
+                    }
                     else {
                         report_unimpl(gpc, &I);
                         break;
@@ -2398,10 +2414,24 @@ static void *translate_block(uint64_t gpc) {
                         emit_ea(&I, next);
                         e_ldr_q(16, 17, 0);
                     }
-                    unsigned im = (unsigned)I.imm;
-                    for (int i = 0; i < 4; i++)
-                        e_ins_s(17, i, s, (im >> (2 * i)) & 3); // build in v17
-                    e_vmov(vd, 17);
+                    unsigned im = (unsigned)I.imm & 0xff;
+                    // AES-endgame perf: single-insn forms for the shuffles crypto/ghash loops actually use.
+                    if (im == 0xE4) { // identity {0,1,2,3}
+                        if (vd != s) e_vmov(vd, s);
+                    } else if (im == 0x4E) { // {2,3,0,1}: swap 64-bit halves = EXT #8
+                        e_ext(vd, s, s, 8);
+                    } else if (im == 0xB1) { // {1,0,3,2}: swap dwords in each qword = REV64 .4s
+                        emit32(0x4EA00800u | (s << 5) | vd);
+                    } else if (im == 0x00 || im == 0x55 || im == 0xAA || im == 0xFF) { // broadcast one lane
+                        e_dup_s(vd, s, (int)(im & 3));
+                    } else if (vd != s) { // no self-overlap: build directly in the destination (4 insns)
+                        for (int i = 0; i < 4; i++)
+                            e_ins_s(vd, i, s, (im >> (2 * i)) & 3);
+                    } else {
+                        for (int i = 0; i < 4; i++)
+                            e_ins_s(17, i, s, (im >> (2 * i)) & 3); // build in v17
+                        e_vmov(vd, 17);
+                    }
                 } else if (op == 0x70 && (I.rep || I.repne)) { // pshufhw(F3=high) / pshuflw(F2=low): shuffle 4 words
                     int s = I.is_mem ? 16 : vm;
                     if (I.is_mem) {
@@ -3427,6 +3457,19 @@ static void *translate_block(uint64_t gpc) {
         g_irq_patch = NULL;
         *p = 0xB5000000u | (((uint32_t)(((uint8_t *)g_cp - (uint8_t *)p) / 4) & 0x7FFFF) << 5) | 16; // cbnz x16
         emit_exit_const(start, R_BRANCH);
+    }
+    // BLKDUMP=<hex guest pc> diagnostic: print the emitted host words for one translated block (any tier).
+    {
+        static uint64_t s_blkdump = ~0ull;
+        if (s_blkdump == ~0ull) {
+            const char *e = getenv("BLKDUMP");
+            s_blkdump = e ? strtoull(e, NULL, 16) : 0;
+        }
+        if (s_blkdump && (start == s_blkdump || (s_blkdump < 0x1000000ull && (start & 0xFFFFFFull) == s_blkdump))) {
+            fprintf(stderr, "[blkdump] gpc=%llx tier%d:", (unsigned long long)start, g_tier2_build ? 2 : 1);
+            for (uint32_t *p = (uint32_t *)host; (uint8_t *)p < g_cp; p++) fprintf(stderr, " %08x", *p);
+            fprintf(stderr, "\n");
+        }
     }
     // W5B tier-2: the promoter (g_tier2_build) recompiles in place and updates the EXISTING map entry
     // itself, so don't insert a duplicate and don't chain pending edges here (the promoter does both
