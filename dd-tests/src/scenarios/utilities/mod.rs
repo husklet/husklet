@@ -164,6 +164,31 @@ pub fn group() -> ScenGroup {
                    echo overlay-metadata-ok")
             .has("overlay-metadata-ok"),
 
+        // ---- positive dentry-cache coherence under the OVERLAY (#372; guards fscache.c dc_*) ------
+        // The engine memoizes successful per-directory path resolutions (the realpath climb), keyed on
+        // the shared namespace epoch. This storm interleaves the overlay-specific ways a POSITIVE
+        // resolution can go stale -- rename/unlink/symlink-flip in the upper, chmod copy-up (relocates
+        // a lower file's host path with NO creating syscall in dispatch's bump set), rm of a lower file
+        // (whiteout: the old positive path must die), recreate over the whiteout, and a lower-only dir
+        // renamed in place -- with immediate lookups that would read through any stale cached path.
+        scen("utilities/dentry-storm-overlay", "alpine")
+            .exec("ok=1; i=0; while [ $i -lt 15 ]; do \
+                     echo v$i > /tmp/f; mv /tmp/f /tmp/g; [ -e /tmp/f ] && ok=0; \
+                     read w < /tmp/g; [ \"$w\" = v$i ] || ok=0; rm /tmp/g; [ -e /tmp/g ] && ok=0; \
+                     echo A > /tmp/a; echo B > /tmp/b; ln -s a /tmp/l; read w < /tmp/l; [ \"$w\" = A ] || ok=0; \
+                     rm /tmp/l; ln -s b /tmp/l; read w < /tmp/l; [ \"$w\" = B ] || ok=0; \
+                     rm /tmp/l /tmp/a /tmp/b; i=$((i+1)); \
+                   done; \
+                   ls /usr/share/udhcpc >/dev/null; \
+                   chmod 600 /usr/share/udhcpc/default.script || ok=0; \
+                   grep -q . /usr/share/udhcpc/default.script || ok=0; \
+                   rm /etc/services; [ -e /etc/services ] && ok=0; \
+                   echo re-created > /etc/services; read w < /etc/services; [ \"$w\" = re-created ] || ok=0; \
+                   mv /usr/share/udhcpc /usr/share/udhcpc2; [ -e /usr/share/udhcpc/default.script ] && ok=0; \
+                   [ -e /usr/share/udhcpc2/default.script ] || ok=0; \
+                   echo dentry-overlay ok=$ok")
+            .has("dentry-overlay ok=1"),
+
         // ---- busybox (single static musl multi-call binary) --------------------------------------
         scen("utilities/busybox-arith", "busybox:latest")
             .run(&["sh", "-c", "echo $((7*6))"])

@@ -18,13 +18,43 @@
 //     -> intermittent, ASLR-slide-dependent SIGSEGV once the arena grew past the old 1<<16 cap).
 //   * The JIT arena does NOT need fixing (MAP_JIT can't be MAP_FIXED anyway): g_map/g_pend are persisted
 //     as arena OFFSETS and rebuilt against the live g_cache.
+//   * #178: LIBRARY blocks. The dynamic linker's library maps land wherever the host kernel places them,
+//     which used to make every library block's gpc key non-reusable (dead weight in the restored map --
+//     and worse, a LIVE hazard: a later run mapping a DIFFERENT lib over a cached gpc range would HIT a
+//     stale translation of the old bytes -> intermittent warm-only SIGSEGV). Now, when the cache is on,
+//     the guest's file-backed non-fixed mmaps get DETERMINISTIC base hints from a per-process bump
+//     allocator at PC_LIB_BASE (os/linux/syscall/mem.c hook), and each hinted map that lands on its hint
+//     is recorded in a MANIFEST {base, len, file-identity}. Library blocks are persisted with the
+//     manifest, and on a warm run they are NOT inserted into the block map at load -- they are DEFERRED
+//     and only activated when the guest actually maps a file with the SAME identity at the SAME base
+//     (pcache_note_libmap). Identity mismatch / different layout -> those blocks are dropped. So a
+//     restored block can never shadow different guest bytes, by construction.
 //
-// Invalidation: the cache file is keyed by (engine version, cpu-struct size, MAP_N, IBTC_N, both fixed
-// bases, entry PC, and the identity -- dev/ino/size/mtime -- of the guest binary AND its interpreter).
-// Any mismatch / truncation / corruption -> graceful MISS: ignore the file and translate fresh, re-save.
+// Invalidation: the cache file is keyed by (engine version, cpu-struct size, map/IBTC sizes, both fixed
+// bases, entry PC, argv[0] basename, and the identity -- dev/ino/size/mtime -- of the guest binary AND
+// its interpreter). Any mismatch / truncation / corruption -> graceful MISS: ignore the file and
+// translate fresh, re-save.
+//
+// #373b EXEC RE-KEY: an in-process execve (proc.c case 221) flushes the arena and re-loads a NEW image;
+// both the save AND load side re-key at that boundary (pcache_exec_reload). g_pc_binid/g_pc_entry are
+// ONLY ever assigned (a) at initial load, before any translation, and (b) inside pcache_exec_reload,
+// immediately after the exec flushed the arena -- so the key can never describe a different image than
+// the arena content. (Pre-#373 the x86 engine never re-keyed: a `sh -c tar` run persisted tar's arena
+// under busybox-sh's key -- an accidental win for that chain, silent poison for every other exec.)
+//
+// #373a WARM-STAT SELF-TUNING: a sidecar "<file>.warm" records how much of the restored map a warm run
+// actually reused (waste = restored blocks that never became usable -- deferred library entries whose
+// image never re-mapped with the matching identity). When waste*2 >= restored, the restore is dead
+// weight (layout drifted / lib changed) -> later runs SKIP the restore entirely (header-only read, no
+// arena I/O, no map pollution) instead of paying for it. Fresh translations of NEW code never count
+// against the restore (a bigger workload under the same key must not poison the policy). The sidecar is
+// advisory only: it never gates correctness, only the restore/skip decision, and it is written with the
+// same atomic temp+rename protocol (the .pcache file itself is NEVER modified after publication).
 
 #define PC_MAGIC 0x31304350544a4444ull // "DDJPCT01" (LE)
-#define PC_VERSION 5 // BUMP on ANY codegen change (different emitted bytes -> stale). v5: IRQSLIM layout.
+#define PC_VERSION 6 // BUMP on ANY codegen change (different emitted bytes -> stale). v5: IRQSLIM layout.
+                     // v6 (#373/#178): exec re-key, argv0 key, full-width (JIT_MAP_N) map persistence,
+                     // library manifest + deferred activation, warm-stat sidecar.
 // IRQSLIM changes the block-entry layout (2-insn poll header + body+8 forward entries), and it is
 // env-toggleable (NOIRQSLIM/NOIRQCHECK) -- mix the mode into the version so a cache written in one
 // mode can never be reloaded into the other (a +8 chain into a legacy-layout block would land mid-exit).
@@ -33,18 +63,39 @@
 // cache). Probed stable on Apple silicon; PIE images so we choose the base.
 #define PC_IMG_BASE 0x0000040000000000ull    // 4 TB
 #define PC_INTERP_BASE 0x0000048000000000ull // 4.5 TB
+// #178: deterministic library window (file-backed non-fixed guest mmaps get bump-allocated hints here).
+#define PC_LIB_BASE 0x0000050000000000ull // 5 TB
+#define PC_LIB_SPAN (1ull << 38)          // 256 GB window (beyond it: no hint, kernel placement)
+#define PC_LIB_MAX 512                    // manifest entries persisted (beyond: unhinted, not cached)
 
 struct pc_hdr {
     uint64_t magic, version;
     uint64_t cpu_sz, map_n, ibtc_n;
     uint64_t img_base, interp_base;
-    uint64_t bin_id;     // identity of guest binary + interp
+    uint64_t bin_id;     // identity of guest binary + interp + argv0 + engine build
     uint64_t entry_jump; // initial rip (sanity)
     uint64_t arena_used; // bytes of translated code
-    uint64_t n_mapent, n_pend, n_reloc;
+    uint64_t n_mapent, n_pend, n_reloc, n_lib;
+    uint64_t csum;            // v6: FNV-1a over every byte after this header (parity with the aarch64 pcache)
     uint64_t block_return_at; // block_return's host addr at save time -> the image-slide anchor on load
     uint64_t ibtc_at;         // g_ibtc host addr at save time (diagnostic)
 };
+// word-wise FNV-1a (8 bytes/step): runs over multi-MB arenas on every load AND save; same detection
+// strength as byte-wise for the threat model (accidental truncation/corruption, torn writers).
+static uint64_t pc_fnv(uint64_t h, const void *buf, size_t n) {
+    const uint8_t *p = (const uint8_t *)buf;
+    for (; n >= 8; p += 8, n -= 8) {
+        uint64_t w;
+        memcpy(&w, p, 8);
+        h ^= w;
+        h *= 1099511628211ull;
+    }
+    for (; n; p++, n--) {
+        h ^= *p;
+        h *= 1099511628211ull;
+    }
+    return h;
+}
 struct pc_mapent {
     uint64_t gpc, host_off, body_off;
 }; // host/body as arena offsets
@@ -52,8 +103,35 @@ struct pc_pend {
     uint64_t slot_off, target;
     uint32_t is_bl;
 };
+struct pc_lib {
+    uint64_t base, len, id; // #178 manifest: a deterministic-hinted file map (id = fstat identity hash)
+};
+// #373a warm-stat sidecar ("<cachefile>.warm"): written by warm runs, read by the next load's
+// restore-or-skip decision. Advisory only -- validated against the .pcache generation via arena_used/
+// restored, ignored (and the restore performed as usual) on any mismatch.
+struct pc_warm {
+    uint64_t magic, arena_used, restored, waste; // waste = restored blocks that never became usable
+};
+#define PC_WARM_MAGIC 0x314d525750434444ull // "DDCPWRM1"
 
 static int g_pcache_forked; // #339: set in a fork child (fresh arena, inherited bookkeeping) -> never save
+static int g_pcache_skip;   // #373a: this run intentionally skipped a dead-weight restore -> don't churn-resave
+static int g_pc_flushed;    // a wholesale cache flush ran this epoch (restored blocks are gone)
+static uint64_t g_pc_restored_n;     // mapents the last load restored (0 = no load this epoch)
+static uint64_t g_pc_restored_arena; // arena_used of the loaded file (sidecar generation tie)
+// The two fixed images' live guest spans, recorded by load_elf when it consumes g_force_base. Everything
+// outside these spans (and outside the #178 manifest) is unrevivable by key construction and is neither
+// persisted nor restored into the block map.
+static uint64_t g_pc_img_lo, g_pc_img_hi, g_pc_interp_lo, g_pc_interp_hi;
+// #178 runtime state: the deterministic-hint bump pointer, the manifest this run RECORDS (cold path),
+// the manifest the load RESTORED (warm path), and the deferred (not-yet-activated) restored map entries.
+static uint64_t g_pc_lib_next = PC_LIB_BASE;
+static struct pc_lib g_pc_libs[PC_LIB_MAX]; // cold: recorded as the guest maps; warm: the file's manifest
+static int g_pc_nlib;
+static struct pc_mapent *g_pc_defer; // deferred restored entries (library gpc ranges), until activation
+static uint64_t g_pc_ndefer;
+static uint64_t g_pc_live_n;      // restored entries that went live at load (fixed-image ranges)
+static uint64_t g_pc_activated;   // deferred entries activated by identity-matching library maps
 
 static uint64_t pcache_id_of(const char *path) {
     struct stat st;
@@ -80,16 +158,157 @@ static uint64_t pcache_engine_id(void) {
     for (const char *p = __DATE__ " " __TIME__; *p; p++) { h ^= (uint8_t)*p; h *= 1099511628211ull; }
     return h;
 }
-static uint64_t pcache_make_id(const char *prog_host, const char *interp_host) {
+// #373b: hash the BASENAME of argv[0]. A multicall binary (busybox, toolchain drivers) runs a DIFFERENT
+// code path per applet, and with the exec re-key each epoch persists its own arena -- so the key must
+// separate `sh` from `tar` or one applet's arena would shadow the other's. Basename (not full argv) so a
+// single-purpose binary invoked with varying flags keeps ONE cache (mirrors the aarch64 pcache).
+static uint64_t pcache_argv0_id(const char *argv0) {
+    if (!argv0) return 0x1357ull;
+    const char *base = argv0;
+    for (const char *p = argv0; *p; p++)
+        if (*p == '/') base = p + 1;
+    uint64_t h = 1469598103934665603ull;
+    for (const char *p = base; *p; p++) { h ^= (uint8_t)*p; h *= 1099511628211ull; }
+    return h;
+}
+static uint64_t pcache_make_id(const char *prog_host, const char *interp_host, const char *argv0) {
     uint64_t a = pcache_id_of(prog_host);
     uint64_t b = interp_host ? pcache_id_of(interp_host) : 0xABCDEFull;
-    return (a ^ (b * 1099511628211ull)) ^ pcache_engine_id();
+    return (a ^ (b * 1099511628211ull)) ^ pcache_engine_id() ^ (pcache_argv0_id(argv0) * 0x100000001B3ull);
 }
 static void pcache_file(char *out, size_t n) {
     const char *dir = getenv("DDJIT_PCACHE_DIR");
     if (!dir || !dir[0]) dir = "/tmp/ddjit-pcache";
     mkdir(dir, 0700);
     snprintf(out, n, "%s/%016llx.pcache", dir, (unsigned long long)g_pc_binid);
+}
+
+// ---- #178: deterministic library-map hints + the identity manifest ----
+// load_elf (translate/x86_64/elf.c) records the two fixed images' spans when it consumes g_force_base;
+// everything else revivable must come from a manifest-validated library map.
+static void pcache_note_fixed_img(uint64_t base, uint64_t span) {
+    if (base >= PC_INTERP_BASE) {
+        g_pc_interp_lo = base;
+        g_pc_interp_hi = base + span;
+    } else if (base >= PC_IMG_BASE) {
+        g_pc_img_lo = base;
+        g_pc_img_hi = base + span;
+    }
+}
+static int pc_gpc_fixed(uint64_t gpc) {
+    return (gpc >= g_pc_img_lo && gpc < g_pc_img_hi) || (gpc >= g_pc_interp_lo && gpc < g_pc_interp_hi);
+}
+static int pc_gpc_in_lib(uint64_t gpc) { // in the RECORDED (cold) / RESTORED (warm) manifest?
+    for (int i = 0; i < g_pc_nlib; i++)
+        if (gpc >= g_pc_libs[i].base && gpc < g_pc_libs[i].base + g_pc_libs[i].len) return 1;
+    return 0;
+}
+// Bump-allocated deterministic hint for a file-backed non-fixed guest mmap. 2 MB-aligned spans with a
+// 2 MB hole between neighbours; deterministic because the SAME binary issues the SAME ordered sequence
+// of library maps. Beyond the window (or when the cache is off): 0 = no hint, kernel placement.
+static uint64_t pcache_mmap_hint(uint64_t len) {
+    if (!g_pcache) return 0;
+    uint64_t span = ((len + 0x1fffffull) & ~0x1fffffull) + 0x200000ull;
+    uint64_t a = __atomic_fetch_add(&g_pc_lib_next, span, __ATOMIC_RELAXED);
+    if (a + span > PC_LIB_BASE + PC_LIB_SPAN) return 0;
+    return a;
+}
+#define PCACHE_MMAP_HINT 1
+static uint64_t pc_fd_id(int fd) { // file identity for the manifest (dev/ino/size/mtime; no path needed)
+    struct stat st;
+    if (fstat(fd, &st) != 0 || !S_ISREG(st.st_mode)) return 0;
+    uint64_t h = 1469598103934665603ull;
+    uint64_t fields[5] = {(uint64_t)st.st_dev, (uint64_t)st.st_ino, (uint64_t)st.st_size,
+                          (uint64_t)st.st_mtimespec.tv_sec, (uint64_t)st.st_mtimespec.tv_nsec};
+    for (int i = 0; i < 5; i++) { h ^= fields[i]; h *= 1099511628211ull; }
+    return h;
+}
+// Called by mem.c after a hinted file-backed mmap SUCCEEDED AT ITS HINT (r == hint). Cold epoch: record
+// the mapping in the manifest so its blocks persist. Warm epoch: this is the activation gate -- if the
+// mapped file's identity matches the manifest entry restored for this base, the deferred blocks in
+// [base, base+len) become live (map_put); otherwise they are dropped (different lib/layout -> a restored
+// translation must never shadow different guest bytes).
+static void pcache_note_libmap(uint64_t base, uint64_t len, int fd) {
+    if (!g_pcache) return;
+    uint64_t id = pc_fd_id(fd);
+    if (!id) return;
+    if (!g_pcache_loaded) { // cold epoch: record for save
+        if (g_pc_nlib < PC_LIB_MAX) {
+            g_pc_libs[g_pc_nlib].base = base;
+            g_pc_libs[g_pc_nlib].len = len;
+            g_pc_libs[g_pc_nlib].id = id;
+            g_pc_nlib++;
+        }
+        return;
+    }
+    if (!g_pc_ndefer) return; // warm epoch, nothing deferred (or all activated/dropped already)
+    for (int i = 0; i < g_pc_nlib; i++) {
+        if (g_pc_libs[i].base != base) continue;
+        if (g_pc_libs[i].id != id || g_pc_libs[i].len != len) return; // identity drifted: leave deferred (never activates)
+        // Activate every deferred block in this range. map_put is a shared-map mutation: take the
+        // translation lock when guest threads exist (same discipline as the dispatcher).
+        if (g_threaded) pthread_mutex_lock(&g_jit_lock);
+        for (uint64_t j = 0; j < g_pc_ndefer; j++) {
+            uint64_t gpc = g_pc_defer[j].gpc;
+            if (gpc >= base && gpc < base + len && g_pc_defer[j].host_off) {
+                map_put(gpc, g_cache + g_pc_defer[j].host_off, g_cache + g_pc_defer[j].body_off);
+                g_pc_defer[j].host_off = 0; // consumed
+                g_pc_activated++;
+            }
+        }
+        if (g_threaded) pthread_mutex_unlock(&g_jit_lock);
+        return;
+    }
+}
+
+// ---- #373a warm-stat sidecar ----
+static void pcache_warm_file(char *out, size_t n) {
+    char p[1024];
+    pcache_file(p, sizeof p);
+    snprintf(out, n, "%s.warm", p);
+}
+// Should this load be skipped as dead weight? Only when a PREVIOUS warm run of the SAME file generation
+// reported that it re-translated at least half of what the restore brought in.
+static int pcache_warm_should_skip(const struct pc_hdr *h) {
+    char wp[1200];
+    pcache_warm_file(wp, sizeof wp);
+    int fd = open(wp, O_RDONLY | O_NOFOLLOW | O_CLOEXEC);
+    if (fd < 0) return 0;
+    struct pc_warm w;
+    struct stat st;
+    int ok = fstat(fd, &st) == 0 && S_ISREG(st.st_mode) && st.st_uid == geteuid() && !(st.st_mode & 022) &&
+             st.st_size == (off_t)sizeof w && read(fd, &w, sizeof w) == (ssize_t)sizeof w;
+    close(fd);
+    if (!ok || w.magic != PC_WARM_MAGIC) return 0;
+    if (w.arena_used != h->arena_used || w.restored != h->n_mapent) return 0; // different file generation
+    if (w.waste > JIT_MAP_N || w.restored > JIT_MAP_N) return 0;              // implausible: ignore
+    return w.restored && w.waste * 2 >= w.restored;
+}
+// Record this warm run's revival stats (called instead of a save when the epoch was loaded). waste =
+// restored entries that never became usable: deferred library blocks whose image never mapped with the
+// matching identity at the recorded base (layout drift / changed lib). Fresh translations of NEW code do
+// NOT count against the restore (a bigger workload under the same key must not poison the policy). A
+// wholesale flush mid-run dropped the restored blocks -> the restore was oversized for this guest anyway,
+// report it fully dead so later runs skip.
+static void pcache_warm_note(void) {
+    if (!g_pc_binid || !g_pc_restored_n || g_pcache_forked) return;
+    uint64_t used = g_pc_live_n + g_pc_activated;
+    uint64_t waste = (g_pc_flushed || used > g_pc_restored_n) ? g_pc_restored_n : g_pc_restored_n - used;
+    struct pc_warm w = {PC_WARM_MAGIC, g_pc_restored_arena, g_pc_restored_n, waste};
+    char wp[1200], tmp[1280];
+    pcache_warm_file(wp, sizeof wp);
+    snprintf(tmp, sizeof tmp, "%s.%d.tmp", wp, (int)getpid());
+    int fd = open(tmp, O_WRONLY | O_CREAT | O_TRUNC | O_NOFOLLOW | O_CLOEXEC, 0600);
+    if (fd < 0) return;
+    int ok = write(fd, &w, sizeof w) == (ssize_t)sizeof w;
+    close(fd);
+    if (ok)
+        rename(tmp, wp);
+    else
+        unlink(tmp);
+    if (g_coldprof)
+        fprintf(stderr, "[pcache] warm-note restored=%llu waste=%llu%s\n", (unsigned long long)g_pc_restored_n,
+                (unsigned long long)waste, waste * 2 >= g_pc_restored_n ? " (dead-weight: next run skips)" : "");
 }
 
 // Rewrite every recorded host-pointer slot for THIS process. Every baked pointer lives in this PIE
@@ -117,60 +336,109 @@ static void pcache_relocate(uint64_t saved_block_return) {
 static int pcache_load(uint64_t entry_jump) {
     char path[1024];
     pcache_file(path, sizeof path);
-    int fd = open(path, O_RDONLY);
+    int fd = open(path, O_RDONLY | O_NOFOLLOW | O_CLOEXEC);
     if (fd < 0) return 0;
+    // Trust gate (parity with the aarch64 pcache): a regular file, owned by us, not group/world-writable
+    // (the cache dir may live in /tmp).
+    struct stat st;
+    if (fstat(fd, &st) != 0 || !S_ISREG(st.st_mode) || st.st_uid != geteuid() || (st.st_mode & 022)) {
+        close(fd);
+        return 0;
+    }
     struct pc_hdr h;
     if (read(fd, &h, sizeof h) != (ssize_t)sizeof h) {
         close(fd);
         return 0;
     }
-    if (h.magic != PC_MAGIC || h.version != PC_VERSION_EFF || h.cpu_sz != sizeof(struct cpu) || h.map_n != MAP_N ||
-        h.ibtc_n != IBTC_N || h.img_base != PC_IMG_BASE || h.interp_base != PC_INTERP_BASE ||
-        h.bin_id != g_pc_binid || h.entry_jump != entry_jump || h.arena_used > CACHE_SZ || h.n_mapent > MAP_N ||
-        h.n_pend > (1u << 16) || h.n_reloc > PC_RELOC_CAP) { // #297: n_reloc bound tracks the g_reloc cap
+    if (h.magic != PC_MAGIC || h.version != PC_VERSION_EFF || h.cpu_sz != sizeof(struct cpu) ||
+        h.map_n != JIT_MAP_N || h.ibtc_n != IBTC_N || h.img_base != PC_IMG_BASE ||
+        h.interp_base != PC_INTERP_BASE || h.bin_id != g_pc_binid || h.entry_jump != entry_jump ||
+        h.arena_used > CACHE_SZ || h.n_mapent > JIT_MAP_N || h.n_pend > (1u << 16) ||
+        h.n_reloc > PC_RELOC_CAP || h.n_lib > PC_LIB_MAX) { // #297: n_reloc bound tracks the g_reloc cap
         close(fd);
+        return 0;
+    }
+    // #373a: a previous warm run of this same generation proved the restore is dead weight -> skip it
+    // (header-only read: no arena I/O, no map pollution, no resave churn). The file stays for the day
+    // the layout becomes deterministic again (engine update re-keys everything anyway).
+    if (pcache_warm_should_skip(&h)) {
+        close(fd);
+        g_pcache_skip = 1;
+        if (g_coldprof) fprintf(stderr, "[pcache] SKIP (previous warm run re-translated >=1/2 of restore)\n");
         return 0;
     }
     // pull the variable-size sections
     struct pc_mapent *me = h.n_mapent ? malloc(h.n_mapent * sizeof *me) : NULL;
     struct pc_pend *pe = h.n_pend ? malloc(h.n_pend * sizeof *pe) : NULL;
-    int ok = (h.n_mapent == 0 || me) && (h.n_pend == 0 || pe);
+    uint8_t *abuf = h.arena_used ? malloc(h.arena_used) : NULL;
+    int ok = (h.n_mapent == 0 || me) && (h.n_pend == 0 || pe) && (h.arena_used == 0 || abuf);
     if (ok && h.n_reloc)
         ok = read(fd, g_reloc, h.n_reloc * sizeof g_reloc[0]) == (ssize_t)(h.n_reloc * sizeof g_reloc[0]);
     if (ok && h.n_mapent) ok = read(fd, me, h.n_mapent * sizeof *me) == (ssize_t)(h.n_mapent * sizeof *me);
     if (ok && h.n_pend) ok = read(fd, pe, h.n_pend * sizeof *pe) == (ssize_t)(h.n_pend * sizeof *pe);
-    // Arena bytes: read into a heap buffer, then memcpy into the W^X arena under write mode.
-    // (read()'s kernel copyout cannot target a MAP_JIT page gated by the thread's W^X state;
-    //  a userspace memcpy can, once pthread_jit_write_protect_np(0) opens the write window.)
-    uint8_t *abuf = NULL;
-    if (ok && h.arena_used) {
-        abuf = malloc(h.arena_used);
-        ok = abuf != NULL;
-        for (uint64_t got = 0; ok && got < h.arena_used;) {
-            ssize_t r = read(fd, abuf + got, h.arena_used - got);
-            if (r <= 0) {
-                ok = 0;
-                break;
-            }
-            got += (uint64_t)r;
+    if (ok && h.n_lib) ok = read(fd, g_pc_libs, h.n_lib * sizeof g_pc_libs[0]) == (ssize_t)(h.n_lib * sizeof g_pc_libs[0]);
+    // Arena bytes: read into a heap buffer -- checksummed below BEFORE anything is trusted, and only then
+    // memcpy'd into the W^X arena under write mode. (read()'s kernel copyout cannot target a MAP_JIT page
+    // gated by the thread's W^X state; a userspace memcpy can, once the write window is open.)
+    for (uint64_t got = 0; ok && got < h.arena_used;) {
+        ssize_t r = read(fd, abuf + got, h.arena_used - got);
+        if (r <= 0) {
+            ok = 0;
+            break;
         }
-        if (ok) {
-            pthread_jit_write_protect_np(0);
-            memcpy(g_cache, abuf, h.arena_used);
-            pthread_jit_write_protect_np(1);
-        }
-        free(abuf);
+        got += (uint64_t)r;
     }
     close(fd);
+    // v6: whole-payload checksum BEFORE trusting any record (bit rot / short file / foreign writer) --
+    // the same validation-before-trust discipline as the aarch64 pcache.
+    if (ok) {
+        uint64_t cs = 1469598103934665603ull;
+        cs = pc_fnv(cs, g_reloc, h.n_reloc * sizeof g_reloc[0]);
+        cs = pc_fnv(cs, me, h.n_mapent * sizeof *me);
+        cs = pc_fnv(cs, pe, h.n_pend * sizeof *pe);
+        cs = pc_fnv(cs, g_pc_libs, h.n_lib * sizeof g_pc_libs[0]);
+        cs = pc_fnv(cs, abuf, h.arena_used);
+        ok = cs == h.csum;
+    }
+    // Bounds-validate every record whose offset a later pass writes or branches through.
+    for (uint64_t i = 0; ok && i < h.n_reloc; i++) ok = (uint64_t)g_reloc[i].off + 16 <= h.arena_used;
+    for (uint64_t i = 0; ok && i < h.n_mapent; i++) ok = me[i].host_off < h.arena_used && me[i].body_off < h.arena_used;
+    for (uint64_t i = 0; ok && i < h.n_pend; i++) ok = pe[i].slot_off + 4 <= h.arena_used;
     if (!ok) {
         free(me);
         free(pe);
+        free(abuf);
+        g_pc_nlib = 0;
         return 0;
     }
-    // rebuild the engine state from the offset-relative records
+    pthread_jit_write_protect_np(0);
+    memcpy(g_cache, abuf, h.arena_used);
+    pthread_jit_write_protect_np(1);
+    free(abuf);
+    // rebuild the engine state from the offset-relative records. #178: fixed-image blocks (main+interp,
+    // identity-validated by the cache key itself) go live NOW; manifest (library) blocks are DEFERRED
+    // until the guest maps the same file identity at the same base (pcache_note_libmap); anything else
+    // is unrevivable and dropped (belt-and-braces: the save side never persists such entries).
     g_nreloc = (int)h.n_reloc;
-    for (uint64_t i = 0; i < h.n_mapent; i++)
-        map_put(me[i].gpc, g_cache + me[i].host_off, g_cache + me[i].body_off);
+    g_pc_nlib = (int)h.n_lib;
+    g_pc_defer = NULL;
+    g_pc_ndefer = 0;
+    uint64_t nlive = 0, ndefer = 0;
+    for (uint64_t i = 0; i < h.n_mapent; i++) {
+        if (pc_gpc_fixed(me[i].gpc)) {
+            map_put(me[i].gpc, g_cache + me[i].host_off, g_cache + me[i].body_off);
+            nlive++;
+        } else if (pc_gpc_in_lib(me[i].gpc)) {
+            ndefer++;
+        }
+    }
+    if (ndefer) {
+        g_pc_defer = malloc(ndefer * sizeof *g_pc_defer);
+        if (g_pc_defer) {
+            for (uint64_t i = 0; i < h.n_mapent; i++)
+                if (!pc_gpc_fixed(me[i].gpc) && pc_gpc_in_lib(me[i].gpc)) g_pc_defer[g_pc_ndefer++] = me[i];
+        }
+    }
     g_npend = 0;
     for (uint64_t i = 0; i < h.n_pend; i++)
         add_pend2((uint32_t *)(g_cache + pe[i].slot_off), pe[i].target, (int)pe[i].is_bl);
@@ -184,10 +452,19 @@ static int pcache_load(uint64_t entry_jump) {
     sys_icache_invalidate(g_cache, h.arena_used);
     memset(g_ibtc, 0, sizeof g_ibtc); // runtime cache: repopulates lazily
     g_pcache_loaded = 1;
+    g_pc_restored_n = nlive + g_pc_ndefer; // what the warm-stat measures waste against
+    g_pc_restored_arena = h.arena_used;
+    g_pc_live_n = nlive;
+    g_pc_activated = 0;
+    g_pc_flushed = 0;
+    if (g_coldprof)
+        fprintf(stderr, "[pcache] restore live=%llu deferred-lib=%llu dropped=%llu\n", (unsigned long long)nlive,
+                (unsigned long long)g_pc_ndefer, (unsigned long long)(h.n_mapent - nlive - g_pc_ndefer));
     return 1;
 }
 
-// Persist the current arena + maps (atomic temp+rename). Called at guest exit.
+// Persist the current arena + maps (atomic temp+rename). Called at guest exit AND (#373b) at execve,
+// right before the exec flushes the arena -- each image epoch persists under its OWN key exactly once.
 static void pcache_save(void) {
     if (!g_pcache || !g_pc_binid || g_cp == g_cache) return;
     if (g_pcache_poison) return; // #297: arena has un-recorded baked host pointers -> not safely relocatable
@@ -196,6 +473,8 @@ static void pcache_save(void) {
     // PARENT's reloc offsets against the child's re-translated arena, and the next load's relocation pass
     // would stomp fixed-slot rewrites over live code at those stale offsets (intermittent SIGSEGV/hang,
     // the aarch64 #339 concurrent-hit crash). The child's arena is only the post-fork slice anyway.
+    // (An in-process execve fully re-keys + resets this state -- pcache_exec_reload -- so a forked child
+    // that exec'd a new image saves that image normally: the go-build storm case.)
     if (g_pcache_forked) return;
     // #297: NEVER re-save after a load. A warm run keeps translating -- notably tier-2 hot-block recompiles,
     // which re-emit into the arena WITHOUT a map entry (g_tier2_build) -- so g_cp (arena_used) grows every
@@ -205,23 +484,30 @@ static void pcache_save(void) {
     // SIGSEGV (docker rc 255, empty output, no daemon-log error). The cold (miss) arena already covers the
     // startup/common path; any block missing from it is simply re-translated in-memory on each warm run
     // (correct, just not cached). So we persist exactly once, on the cold miss, and never grow the file.
-    if (g_pcache_loaded) return;
+    // #373a: instead of a no-op, a loaded epoch records its revival stats for the restore-or-skip policy.
+    if (g_pcache_loaded) {
+        pcache_warm_note();
+        return;
+    }
+    if (g_pcache_skip) return; // #373a: we intentionally skipped the restore; re-saving would churn the file
     uint64_t _t0 = g_coldprof ? coldprof_now_ns() : 0;
-    // count occupied map slots
+    // count occupied map slots that are REVIVABLE (fixed images + manifest libs). Anything else is keyed
+    // by a kernel-chosen address that the next run won't reproduce -- persisting it would be dead weight
+    // at best, and a stale-translation hazard if the next run reuses the address range for other code.
     uint64_t nmap = 0;
-    for (int i = 0; i < MAP_N; i++)
-        if (g_map[i].host) nmap++;
+    for (uint32_t i = 0; i < JIT_MAP_N; i++)
+        if (g_map[i].host && (pc_gpc_fixed(g_map[i].gpc) || pc_gpc_in_lib(g_map[i].gpc))) nmap++;
     char path[1024], tmp[1056];
     pcache_file(path, sizeof path);
     snprintf(tmp, sizeof tmp, "%s.%d.tmp", path, (int)getpid());
-    int fd = open(tmp, O_WRONLY | O_CREAT | O_TRUNC, 0600);
+    int fd = open(tmp, O_WRONLY | O_CREAT | O_TRUNC | O_NOFOLLOW | O_CLOEXEC, 0600);
     if (fd < 0) return;
     struct pc_hdr h;
     memset(&h, 0, sizeof h);
     h.magic = PC_MAGIC;
     h.version = PC_VERSION_EFF;
     h.cpu_sz = sizeof(struct cpu);
-    h.map_n = MAP_N;
+    h.map_n = JIT_MAP_N;
     h.ibtc_n = IBTC_N;
     h.img_base = PC_IMG_BASE;
     h.interp_base = PC_INTERP_BASE;
@@ -231,21 +517,22 @@ static void pcache_save(void) {
     h.n_mapent = nmap;
     h.n_pend = (uint64_t)g_npend;
     h.n_reloc = (uint64_t)g_nreloc;
+    h.n_lib = (uint64_t)g_pc_nlib;
     h.block_return_at = (uint64_t)block_return;
     h.ibtc_at = (uint64_t)g_ibtc;
     // Build the whole image in one heap buffer and write it with a single syscall (per-record write()s
     // were ~1300 syscalls and dominated the one-time save cost).
     size_t total = sizeof h + (size_t)g_nreloc * sizeof g_reloc[0] + (size_t)nmap * sizeof(struct pc_mapent) +
-                   (size_t)g_npend * sizeof(struct pc_pend) + h.arena_used;
+                   (size_t)g_npend * sizeof(struct pc_pend) + (size_t)g_pc_nlib * sizeof(struct pc_lib) +
+                   h.arena_used;
     uint8_t *buf = malloc(total), *w = buf;
     int ok = buf != NULL;
     if (ok) {
-        memcpy(w, &h, sizeof h);
-        w += sizeof h;
+        w += sizeof h; // header written last: its csum covers everything after it
         memcpy(w, g_reloc, (size_t)g_nreloc * sizeof g_reloc[0]);
         w += (size_t)g_nreloc * sizeof g_reloc[0];
-        for (int i = 0; i < MAP_N; i++) {
-            if (!g_map[i].host) continue;
+        for (uint32_t i = 0; i < JIT_MAP_N; i++) {
+            if (!g_map[i].host || !(pc_gpc_fixed(g_map[i].gpc) || pc_gpc_in_lib(g_map[i].gpc))) continue;
             struct pc_mapent e = {g_map[i].gpc, (uint64_t)((uint8_t *)g_map[i].host - g_cache),
                                   (uint64_t)((uint8_t *)g_map[i].body - g_cache)};
             memcpy(w, &e, sizeof e);
@@ -257,19 +544,27 @@ static void pcache_save(void) {
             memcpy(w, &e, sizeof e);
             w += sizeof e;
         }
+        memcpy(w, g_pc_libs, (size_t)g_pc_nlib * sizeof(struct pc_lib));
+        w += (size_t)g_pc_nlib * sizeof(struct pc_lib);
         memcpy(w, g_cache, h.arena_used); // read from W^X arena is always permitted
         w += h.arena_used;
+        h.csum = pc_fnv(1469598103934665603ull, buf + sizeof h, total - sizeof h);
+        memcpy(buf, &h, sizeof h);
         ok = write(fd, buf, total) == (ssize_t)total;
     }
     free(buf);
     close(fd);
-    if (ok)
+    if (ok) {
         rename(tmp, path);
-    else
+        char wp[1200];
+        pcache_warm_file(wp, sizeof wp);
+        unlink(wp); // fresh generation: any old warm-stat sidecar no longer describes this file
+    } else
         unlink(tmp);
     if (g_coldprof)
-        fprintf(stderr, "[pcache] save %s (%llu B arena, %llu blocks) in %.3f ms\n", ok ? "ok" : "FAILED",
-                (unsigned long long)h.arena_used, (unsigned long long)nmap, (coldprof_now_ns() - _t0) / 1e6);
+        fprintf(stderr, "[pcache] save %s (%llu B arena, %llu blocks, %d libs) in %.3f ms\n", ok ? "ok" : "FAILED",
+                (unsigned long long)h.arena_used, (unsigned long long)nmap, g_pc_nlib,
+                (coldprof_now_ns() - _t0) / 1e6);
 }
 // #339 hygiene hooks (shared proc.c / engine/dispatch.c call these on both engines):
 //  - fork child: its arena is now a fork-private slice (kept warm by the #371 preserved-arena fork, or
@@ -284,7 +579,47 @@ static void pcache_after_fork(void) {
 #define PCACHE_FORK_HOOK pcache_after_fork()
 static void pcache_after_wholesale_flush(void) {
     g_nreloc = 0;
+    g_pc_flushed = 1; // #373a: any restored blocks are gone; the warm-stat must report the restore dead
+    g_pc_ndefer = 0;  // #178: deferred entries pointed into the dropped arena content
 }
 #define PCACHE_FLUSH_HOOK pcache_after_wholesale_flush()
+
+// ---- #373b guest execve (proc.c case 221) hooks ----
+// An in-process exec re-loads a NEW image after flushing the arena; the cache identity re-keys with it.
+// proc.c calls PCACHE_SAVE_HOOK (above) BEFORE the flush -- persisting the outgoing image under the
+// OUTGOING key -- then these force the new image onto the fixed bases and re-key + reload. This is what
+// makes a wrong-key save impossible: g_pc_binid is only ever assigned in lockstep with an arena reset.
+static void pcache_exec_force_main(void) {
+    if (g_pcache) {
+        g_force_base = PC_IMG_BASE;
+        g_pc_img_lo = g_pc_img_hi = g_pc_interp_lo = g_pc_interp_hi = 0; // re-recorded by load_elf
+    }
+}
+static void pcache_exec_force_interp(void) {
+    if (g_pcache) g_force_base = PC_INTERP_BASE;
+}
+static void pcache_exec_reload(const char *prog_host, const char *interp_host, const char *argv0, uint64_t jump) {
+    if (!g_pcache) return;
+    // execve is a full identity + arena reset (thread_exit_others ran; the old image was unmapped and the
+    // arena/map/ibtc flushed by case 221), so the recording state resets with it and saving becomes safe
+    // again -- including for a fork child (the fork+execve toolchain storm is exactly the case we cache).
+    g_nreloc = 0;
+    g_pcache_loaded = 0;
+    g_pcache_forked = 0;
+    g_pcache_skip = 0;
+    g_pc_flushed = 0;
+    g_pc_restored_n = g_pc_restored_arena = 0;
+    g_pc_live_n = g_pc_activated = 0;
+    free(g_pc_defer);
+    g_pc_defer = NULL;
+    g_pc_ndefer = 0;
+    g_pc_nlib = 0;
+    __atomic_store_n(&g_pc_lib_next, PC_LIB_BASE, __ATOMIC_RELAXED); // #178: fresh image, fresh hint sequence
+    g_pc_binid = pcache_make_id(prog_host, interp_host, argv0);
+    g_pc_entry = jump;
+    int hit = pcache_load(jump);
+    if (g_coldprof) fprintf(stderr, "[pcache] exec %s reloc=%d\n", hit ? "HIT" : "MISS", g_nreloc);
+}
+#define PCACHE_EXEC_HOOKS 1
 
 #define PCACHE_SAVE_HOOK pcache_save()

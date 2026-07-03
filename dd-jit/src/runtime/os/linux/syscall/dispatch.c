@@ -291,10 +291,19 @@ static int proc_self_exe(const char *p, char *tgt, size_t cap) {
     const char *rest = p + 6;
     if (!strncmp(rest, "self/", 5)) {
         rest += 5;
+    } else if (!strncmp(rest, "thread-self/", 12)) {
+        rest += 12; // /proc/thread-self/exe: same file (single thread group leader identity)
     } else {
         char *end;
         long pid = strtol(rest, &end, 10);
-        if (end == rest || *end != '/' || (int)pid != container_pid()) return 0;
+        if (end == rest || *end != '/') return 0;
+        if ((int)pid != container_pid() && (int)pid != (int)getpid()) {
+            // a PEER container process's /proc/<pid>/exe: serve its published canonical exe path
+            // (each engine process publishes it at boot + execve -- see proc_reg_publish).
+            int host;
+            if (strcmp(end + 1, "exe") || !proc_pid_member((int)pid, &host)) return 0;
+            return proc_reg_exe_read(host, tgt, cap);
+        }
         rest = end + 1;
     }
     if (strcmp(rest, "exe")) return 0;
@@ -307,6 +316,47 @@ static int proc_self_exe(const char *p, char *tgt, size_t cap) {
     memcpy(tgt, src, l);
     tgt[l] = 0;
     return 1;
+}
+// Guest-ABSOLUTE, lexically-normalized form of an *at() path -- so the /proc magic-link synthesis
+// matches however the caller names the link: absolute, relative to the guest cwd, or relative to a
+// dir-fd (readlinkat(pid_dirfd, "exe") -- #317/#370 readlink-vs-readlinkat consistency). Symlinks are
+// NOT resolved; a joined path that matches no /proc form simply falls through to real resolution.
+static void guest_abspath_at(int dirfd, const char *raw, char *out, size_t n) {
+    char j[8600];
+    if (!raw) {
+        snprintf(out, n, "/");
+        return;
+    }
+    if (raw[0] == '/')
+        snprintf(j, sizeof j, "%s", raw);
+    else if (dirfd >= 0) {
+        if (dirfd < 1024 && g_fdpath[dirfd][0]) {
+            if (g_rootfs)
+                abs_guest(dirfd, raw, j, sizeof j);
+            else
+                snprintf(j, sizeof j, "%s/%s", g_fdpath[dirfd], raw); // bare: guest view == host view
+        } else {
+            char db[4200];
+            if (fcntl(dirfd, F_GETPATH, db) == 0) {
+                if (g_rootfs) {
+                    char gd[4200];
+                    guest_from_host_raw(db, gd, sizeof gd);
+                    snprintf(j, sizeof j, "%s/%s", gd, raw);
+                } else
+                    snprintf(j, sizeof j, "%s/%s", db, raw);
+            } else
+                snprintf(j, sizeof j, "%s/%s", g_cwd, raw);
+        }
+    } else { // AT_FDCWD
+        if (g_rootfs)
+            snprintf(j, sizeof j, "%s/%s", g_cwd[0] ? g_cwd : "/", raw);
+        else {
+            char cw[4200];
+            if (!getcwd(cw, sizeof cw)) cw[0] = 0; // bare: the engine chdir()s for real
+            snprintf(j, sizeof j, "%s/%s", cw, raw);
+        }
+    }
+    path_norm_lex(j, out, n);
 }
 // svc_fs/svc_proc/svc_rare live here (not with the other family includes at the top): their cases call
 // this file's local helpers (overlay_*/proc_self_exe/synth_str_fd for fs; nonpie_p/cpu_online_mask/
@@ -427,6 +477,10 @@ static void service_local(struct cpu *c) {
             a1 = nonpie_p(a1);
             break; // execve(PATH, ARGV, envp); argv base here,
                    //   each argv[] element rebased at case 221
+        case 281: // execveat(dfd, PATH, ARGV, envp, flags) -- mirrors 221 (path + argv base; elements
+            a1 = nonpie_p(a1);
+            a2 = nonpie_p(a2);
+            break; //   rebased at the shared case-221 body after the case-281 arg shift)
         // Syscalls whose result the ENGINE writes/reads into the guest buffer ITSELF (memset/memcpy/
         // struct fill / arc4random_buf), not via a host syscall -- so there is no host EFAULT fixup to
         // rescue a low, un-rebased non-PIE pointer; the handler's host_range_mapped() guard would simply
@@ -465,6 +519,10 @@ static void service_local(struct cpu *c) {
         default: break;
         }
     }
+    // #374 daemon-write coherence: notice a daemon-side write into this container's fs (docker cp /
+    // exec-spawn /etc rewrites) and drop the path/metadata caches BEFORE any handler below can consult
+    // them -- one shared-page atomic load per syscall (see fscache.c fsgen_poll).
+    fsgen_poll();
     // S2 path-resolution-cache invalidation: bump the epoch BEFORE dispatch on any syscall that mutates
     // the FS namespace, so no cached guest->host string mapping can survive a create/unlink/rename/mkdir/
     // symlink (over-invalidates, never under -- when in doubt, the next lookup MISSES and re-resolves).

@@ -18,12 +18,10 @@ fn fsx_portable() -> Group {
     group("ext-fsx", vec![
         port("atflags", "ext_fsx/atflags.c")
             .out("atflags chmod=1 mode=1 chown=1 acc=1 accmiss=1 unlink=1 gone=1\n"),
-        // readlinkat(dirfd, relpath) returns the wrong result on the Linux JIT (readlink=0: the link
-        // text isn't read back), though the symlink resolves for other ops — passes native-on-macOS.
-        // xfail Linux; GAPS `fsx-readlinkat-dirfd`.
+        // readlinkat(dirfd, relpath): fixed by #317 — a relative link path resolves against the
+        // caller's dirfd now (fs.c case 78), so this passes on the Linux JIT too (xfail removed).
         port("linkat", "ext_fsx/linkat.c")
-            .out("linkat sym=1 readlink=1 link=1 nlink2=1 rename=1 oldgone=1 newhas=1 mkdir=1 isdir=1\n")
-            .xfail(LIN),
+            .out("linkat sym=1 readlink=1 link=1 nlink2=1 rename=1 oldgone=1 newhas=1 mkdir=1 isdir=1\n"),
         port("mkfifoat", "ext_fsx/mkfifoat.c").out("mkfifoat made=1 isfifo=1 ready=1 got=1\n"),
         // xattr round-trips on the Linux JIT too: guest xattrs are namespaced under `user.ddx.` on the
         // host backing inode (set/get/list/remove all persist), and copy-up carries them (overlay G5).

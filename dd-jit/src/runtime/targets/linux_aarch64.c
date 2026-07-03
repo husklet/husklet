@@ -278,8 +278,16 @@ static void nonpie_guard_count(int sig, siginfo_t *si, void *uc) {
     }
     nonpie_guard(sig, si, uc);
 }
-int dd_run(const char *rootfs, int argc, char *const argv[]) {
-    if (argc < 1 || !argv || !argv[0]) return 2;
+// W3D/#369 fork-server seam (mirrors targets/linux_x86_64.c): the original dd_run inlined (1)
+// container init, (2) engine init (signal handlers + pthread key + code-cache arena + env flags), and
+// (3) per-launch load+run. The resident ddjitd parent must pay (1)+(2) ONCE and share them COW with
+// every forked worker, so those phases are factored into container_init()/engine_global_init().
+// engine_global_init() is idempotent (g_engine_inited) so the standalone path is unchanged: standalone
+// dd_run() composes container_init -> engine_global_init -> load_program -> run_loaded in the exact
+// original order, with the identical operations in each phase.
+static int g_engine_inited;
+
+static void container_init(const char *rootfs) {
     // PID ns: only containers (rootfs) get PID 1
     if (rootfs) g_init_hostpid = getpid();
     {
@@ -326,30 +334,6 @@ int dd_run(const char *rootfs, int argc, char *const argv[]) {
         if (eg && g_gid < 0) g_gid = dd_parse_id("DD_GID", eg);
         // USER ns (process.user)
     }
-    if (getenv("CRASHDBG")) {
-        // SA_ONSTACK + an alternate signal stack so the handler survives a corrupted/overflowed guest
-        // stack (otherwise diag_crash double-faults and the process is signal-killed before it can report).
-        static char altstk[64 * 1024];
-        stack_t ss = {.ss_sp = altstk, .ss_size = sizeof altstk, .ss_flags = 0};
-        sigaltstack(&ss, NULL);
-        struct sigaction sa;
-        memset(&sa, 0, sizeof sa);
-        sa.sa_sigaction = diag_crash;
-        sa.sa_flags = SA_SIGINFO | SA_ONSTACK;
-        sigaction(SIGSEGV, &sa, NULL);
-        sigaction(SIGBUS, &sa, NULL);
-        install_mach_exc();
-    } else {
-        // Normal runs: serve a non-PIE ET_EXEC's absolute DATA refs (baked at the low link vaddr) at +bias
-        // and resume. Inert for PIE/static-PIE (nonpie_guard checks g_nonpie_lo, set only for ET_EXEC by
-        // load_elf below); a fault it doesn't own re-raises with the default action.
-        struct sigaction sa;
-        memset(&sa, 0, sizeof sa);
-        sa.sa_sigaction = getenv("DD_FAULTCOUNT") ? nonpie_guard_count : nonpie_guard;
-        sa.sa_flags = SA_SIGINFO;
-        sigaction(SIGSEGV, &sa, NULL);
-        sigaction(SIGBUS, &sa, NULL);
-    }
     if (rootfs && rootfs[0]) {
         g_rootfs = (char *)rootfs;
         if (!realpath(g_rootfs, g_rootfs_canon)) snprintf(g_rootfs_canon, sizeof g_rootfs_canon, "%s", g_rootfs);
@@ -378,8 +362,38 @@ int dd_run(const char *rootfs, int argc, char *const argv[]) {
         const char *icwd = getenv("DD_CWD");
         if (icwd && icwd[0]) confine(icwd, g_cwd, sizeof g_cwd);
     }
-    const char *prog = argv[0];
+}
 
+// W3D/#369: idempotent engine init (fault handlers + pthread key + code-cache arena + env-flag reads).
+// Returns 0 on success, nonzero exit code on failure. First call wins; later calls are no-ops
+// (g_engine_inited), so the resident fork-server parent pays this once and the standalone path runs it
+// exactly as before.
+static int engine_global_init(void) {
+    if (g_engine_inited) return 0;
+    if (getenv("CRASHDBG")) {
+        // SA_ONSTACK + an alternate signal stack so the handler survives a corrupted/overflowed guest
+        // stack (otherwise diag_crash double-faults and the process is signal-killed before it can report).
+        static char altstk[64 * 1024];
+        stack_t ss = {.ss_sp = altstk, .ss_size = sizeof altstk, .ss_flags = 0};
+        sigaltstack(&ss, NULL);
+        struct sigaction sa;
+        memset(&sa, 0, sizeof sa);
+        sa.sa_sigaction = diag_crash;
+        sa.sa_flags = SA_SIGINFO | SA_ONSTACK;
+        sigaction(SIGSEGV, &sa, NULL);
+        sigaction(SIGBUS, &sa, NULL);
+        install_mach_exc();
+    } else {
+        // Normal runs: serve a non-PIE ET_EXEC's absolute DATA refs (baked at the low link vaddr) at +bias
+        // and resume. Inert for PIE/static-PIE (nonpie_guard checks g_nonpie_lo, set only for ET_EXEC by
+        // load_elf below); a fault it doesn't own re-raises with the default action.
+        struct sigaction sa;
+        memset(&sa, 0, sizeof sa);
+        sa.sa_sigaction = getenv("DD_FAULTCOUNT") ? nonpie_guard_count : nonpie_guard;
+        sa.sa_flags = SA_SIGINFO;
+        sigaction(SIGSEGV, &sa, NULL);
+        sigaction(SIGBUS, &sa, NULL);
+    }
     // verify the purity gate, PoC-style: pure->1, impure->0
     if (getenv("TIER2_SELFTEST")) {
         // add x0,x0,x1; mul x0,x0,x2; ret
@@ -471,17 +485,95 @@ int dd_run(const char *rootfs, int argc, char *const argv[]) {
     // Untrusted-guest isolation (the sentry process-split). OFF by default -> trusted path unchanged.
     g_untrusted = getenv("DDJIT_UNTRUSTED") != NULL;
     g_sentry_sandbox = getenv("DDJIT_SANDBOX") != NULL;
+    // pcache_poison_check runs AFTER the codegen-mode flags above so it can refuse to persist an arena
+    // that a non-default mode (PROF/VDBETRACE/IBPROF/VTHITCOUNT/CTXDISP) baked unrecorded host pointers
+    // into. (g_pcache itself is read at the top of dd_run -- per-invocation, mirroring linux_x86_64.c,
+    // so a fork-server runner honors the CLIENT's DDJIT_PCACHE; the check is mode-only and independent.)
+    pcache_poison_check();
+    g_engine_inited = 1;
+    return 0;
+}
+
+// W3D/#369: load main program + (optional) interp, recording the load base/entry/at_base into *lm/*li.
+// Used both by the standalone path and by the fork-server's parent preload (so the COW-inherited image
+// is byte-identical and the warm worker re-runs from the same entry at the same base). The gb/pb/ib
+// buffers are static because g_exe_path = prog points into gb and must outlive this call.
+static const char *load_program(const char *prog, struct loaded *lm, struct loaded *li, uint64_t *jump,
+                                uint64_t *at_base, int *have_interp) {
+    // #339 cache id keys the INVOKED name (argv[0] pre-resolution), exactly as before this refactor.
+    const char *argv0 = prog;
+    static char gb[1024];
+    prog = find_in_path(prog, gb, sizeof gb); // bare "sh" (docker) -> "/bin/sh" via the container PATH
+    g_exe_path = prog;
+    static char pb[4200];
+    const char *prog_host =
+        // resolve through the overlay (upper, then lowers) + follow the entry symlink (/bin/sh->busybox)
+        xresolve_overlay(prog, pb, sizeof pb);
+    // #339: when the persistent cache is on, map the image + interp at FIXED VAs so the translated arena
+    // (block-map keys + baked guest addresses) is byte-identical across runs -> reusable from the cache.
+    if (g_pcache) g_force_base = PC_IMG_BASE;
+    load_elf(prog_host, lm);
+
+    // Dynamic: load the PT_INTERP (ld.so) and enter THERE; it loads libs + relocates.
+    *jump = lm->entry;
+    *at_base = 0;
+    *have_interp = 0;
+    const char *interp_host = NULL;
+    char interp[256];
+    if (elf_interp(prog_host, interp, sizeof interp) == 0) {
+        static char ib[4200];
+        // follow+confine ld.so symlink (through the overlay)
+        interp_host = xresolve_overlay(interp, ib, sizeof ib);
+        if (g_pcache) g_force_base = PC_INTERP_BASE;
+        load_elf(interp_host, li);
+        *jump = li->entry;
+        *at_base = li->base;
+        *have_interp = 1;
+    }
+    // #339: key the cache by the identity of the guest binary + interp (+ the invoked name).
+    if (g_pcache) g_pc_binid = pcache_make_id(prog_host, interp_host, argv0);
+    return prog;
+}
+
+// W3D/#369: fresh per-launch guest run from a loaded image. Allocates a private heap + a guest stack +
+// cpu and runs from `jump`. Shared by dd_run (standalone/cold) and the fork-server's warm worker (which
+// restores a pristine COW image first, then calls this against the parent-preloaded base). Body is the
+// original dd_run tail verbatim, so standalone behavior is byte-identical.
+static int run_loaded(int argc, char *const argv[], struct loaded *lm, uint64_t jump, uint64_t at_base) {
+    uint8_t *heap = mmap(NULL, 256u << 20, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON, -1, 0);
+    gmap_add((uint64_t)heap, 256u << 20); // track so a later execve() can reclaim the inherited heap
+    brk_lo = brk_cur = (uint64_t)heap;
+    brk_hi = brk_lo + (256u << 20);
+
+    struct cpu c;
+    memset(&c, 0, sizeof c);
+    // guest argv = prog + its args
+    c.sp = build_stack(argc, (char **)argv, lm, at_base);
+    c.pc = jump;
+
+    proc_reg_publish(g_exe_path, argc, argv); // publish this process into the /proc table
+    if (g_untrusted) sentry_init(); // fork the host-authority sentry + (optionally) confine the worker
+    run_guest(&c);
+    if (g_untrusted) sentry_shutdown(); // signal quit + waitpid (reap, no orphan)
+    return c.exit_code;
+}
+
+int dd_run(const char *rootfs, int argc, char *const argv[]) {
+    if (argc < 1 || !argv || !argv[0]) return 2;
     // #339 persistent cross-process translated-code cache. Landed OPT-IN (DDJIT_PCACHE=1, same gating as
     // the x86 opt8 pcache) so the default correctness matrix stays byte-identical to the baseline; the
     // one-line flip to default-on (`getenv("DDJIT_NOPCACHE") == NULL`) is gated on a green full pcache-on
-    // matrix soak (see #339 plan). DDJIT_NOPCACHE=1 is the kill-switch and always wins.
-    // Read AFTER the codegen-mode flags above so pcache_poison_check() can refuse to persist an arena that
-    // a non-default mode (PROF/VDBETRACE/IBPROF/VTHITCOUNT) baked unrecorded host pointers into.
+    // matrix soak (see #339 plan). DDJIT_NOPCACHE=1 is the kill-switch and always wins. Read here (per
+    // dd_run, like linux_x86_64.c) so a fork-server cold runner honors the CLIENT's env.
     g_pcache = getenv("DDJIT_PCACHE") != NULL && getenv("DDJIT_NOPCACHE") == NULL;
     g_coldprof = getenv("COLDPROF") != NULL;
-    pcache_poison_check();
-    char gb[1024];
+    container_init(rootfs);
+    int irc = engine_global_init();
+    if (irc) return irc;
+    const char *prog = argv[0];
+    static char gb[1024];
     prog = find_in_path(prog, gb, sizeof gb); // bare "sh" (docker) -> "/bin/sh" via the container PATH
+    set_guest_comm(prog); // Linux comm = basename of the exec NAME (stays the script's for a shebang entry)
     g_exe_path = prog;
     char pb[4200];
     const char *prog_host =
@@ -513,67 +605,80 @@ int dd_run(const char *rootfs, int argc, char *const argv[]) {
     if (sb_new != sb_argc) { // a shebang chain resolved -> run the final interpreter, not the script
         argc = sb_new;
         argv = (char *const *)sb_argv;
-        prog = sb_argv[0];
-        g_exe_path = sb_argv[0]; // the binary actually loaded (matches /proc/self/exe for a script exec)
-        prog_host = sb_finalhost;
+        // load_program below re-resolves argv[0] and re-sets g_exe_path to the binary actually loaded
+        // (matches /proc/self/exe for a script exec).
     }
-    struct loaded lm;
-    // #339: when the persistent cache is on, map the image + interp at FIXED VAs so the translated arena
-    // (block-map keys + baked guest addresses) is byte-identical across runs -> reusable from the cache.
-    if (g_pcache) g_force_base = PC_IMG_BASE;
-    load_elf(prog_host, &lm);
-
-    // Dynamic: load the PT_INTERP (ld.so) and enter THERE; it loads libs + relocates.
-    uint64_t jump = lm.entry, at_base = 0;
-    char interp[256];
-    char pc_ihost[4200];
-    const char *pc_interp_host = NULL;
-    if (elf_interp(prog_host, interp, sizeof interp) == 0) {
-        char ib[4200];
-        // follow+confine ld.so symlink (through the overlay)
-        const char *ihost = xresolve_overlay(interp, ib, sizeof ib);
-        snprintf(pc_ihost, sizeof pc_ihost, "%s", ihost); // outlive `ib` for the cache-id below
-        pc_interp_host = pc_ihost;
-        if (g_pcache) g_force_base = PC_INTERP_BASE;
-        struct loaded li;
-        load_elf(ihost, &li);
-        jump = li.entry;
-        at_base = li.base;
-    }
-    // #339: key the cache by the identity of the guest binary + interp, then try to restore the arena.
+    // /proc/self/exe must be the ABSOLUTE, CANONICAL guest path of the loaded image: a RELATIVE guest
+    // invocation ("./x" from a harness) or an entry symlink otherwise leaks straight into the link value,
+    // and glibc static-pie ASSERTS on it at startup ("dl-origin.c: linkval[0]=='/'", #370). `bootexe` is
+    // static because g_exe_path must outlive this frame across run_guest.
+    static char bootexe[4200];
+    exe_canon(g_exe_path, bootexe, sizeof bootexe);
+    g_exe_path = bootexe;
+    struct loaded lm, li;
+    uint64_t jump, at_base;
+    int have_interp;
+    load_program(argv[0], &lm, &li, &jump, &at_base, &have_interp); // (sets g_pc_binid + fixed bases when g_pcache)
+    // #339: try to restore the arena from the persistent cache.
     if (g_pcache) {
-        g_pc_binid = pcache_make_id(prog_host, pc_interp_host, argv[0]);
         g_pc_entry = jump;
         int hit = pcache_load(jump); // graceful MISS on any stale/corrupt/truncated cache -> translate fresh
         if (g_coldprof) fprintf(stderr, "[pcache] %s reloc=%d\n", hit ? "HIT" : "MISS", g_nreloc);
     }
-
-    uint8_t *heap = mmap(NULL, 256u << 20, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON, -1, 0);
-    gmap_add((uint64_t)heap, 256u << 20); // track so a later execve() can reclaim the inherited heap
-    brk_lo = brk_cur = (uint64_t)heap;
-    brk_hi = brk_lo + (256u << 20);
-
-    struct cpu c;
-    memset(&c, 0, sizeof c);
-    // guest argv = prog + its args
-    c.sp = build_stack(argc, (char **)argv, &lm, at_base);
-    c.pc = jump;
-
-    proc_reg_publish(g_exe_path, argc, (char *const *)argv); // publish this process into the /proc table
-    if (g_untrusted) sentry_init(); // fork the host-authority sentry + (optionally) confine the worker
-    run_guest(&c);
-    if (g_untrusted) sentry_shutdown(); // signal quit + waitpid (reap, no orphan)
+    int ec = run_loaded(argc, argv, &lm, jump, at_base);
     pcache_save(); // #339: persist on a cold miss (guest exit via case 93 returns here; case 94 saves + _exit)
     if (getenv("DD_FAULTCOUNT"))
         fprintf(stderr, "[faultcount] pid=%d nonpie_served=%llu\n", getpid(),
                 (unsigned long long)g_nonpie_faults);
-    return c.exit_code;
+    return ec;
 }
+
+// W3D/#369: resident ddjitd fork-server (server/client/worker), SHARED with linux_x86_64.c through the
+// container_init/engine_global_init/load_program/run_loaded/dd_run seam above. aarch64 has no
+// g_loadbase and its container model never chdir()s the engine into the rootfs (those knobs stay
+// default no-ops), but its load_elf applies per-segment W^X to the guest image (.text R+X, .rodata R;
+// the prewarm run's guest may mprotect more, e.g. musl RELRO) -- so the fork-server's pristine-image
+// restore must open the span RW and re-apply the PRISTINE load-time protections afterwards, mirroring
+// load_elf's p_flags loop. Without this the first restore memcpy SIGBUSes on the R+X .text.
+static void fsrv_restore_prep_a64(const struct loaded *L, uint64_t span) {
+    mprotect((void *)L->base, span, PROT_READ | PROT_WRITE);
+}
+static void fsrv_restore_done_a64(const struct loaded *L, uint64_t span) {
+    (void)span;
+    const uint8_t *ph = (const uint8_t *)L->phdr;
+    uint64_t minv = ~0ull;
+    for (int i = 0; i < L->phnum; i++) {
+        const uint8_t *p = ph + (size_t)i * (size_t)L->phent;
+        if (rd32(p) != 1) continue; // PT_LOAD
+        uint64_t v = rd64(p + 16);
+        if (v < minv) minv = v;
+    }
+    uint64_t bias = L->base - (minv & ~0xFFFull); // load_elf: bias = host base - link basepage
+    for (int i = 0; i < L->phnum; i++) {
+        const uint8_t *p = ph + (size_t)i * (size_t)L->phent;
+        if (rd32(p) != 1) continue;
+        uint32_t fl = rd32(p + 4); // PF_X=1, PF_W=2, PF_R=4
+        uint64_t v = rd64(p + 16), msz = rd64(p + 40);
+        uint64_t s = (v + bias) & ~0xFFFull, e = (v + bias + msz + 0xFFFull) & ~0xFFFull;
+        int prot = PROT_READ | ((fl & 2) ? PROT_WRITE : 0) | ((fl & 1) ? PROT_EXEC : 0);
+        if (e > s) mprotect((void *)s, e - s, prot);
+    }
+}
+#define FSRV_RESTORE_PREP(L, span) fsrv_restore_prep_a64((L), (span))
+#define FSRV_RESTORE_DONE(L, span) fsrv_restore_done_a64((L), (span))
+#include "../os/linux/forkserver.c"
 
 #ifndef DDJIT_LIB
 int main(int argc, char **argv) {
     int ai = 1;
     const char *rootfs = NULL;
+    // W3D/#369 fork-server dispatch (gated; standalone path untouched when neither flag is present):
+    //   --server SOCK [--rootfs DIR] [--prewarm PROG] : run resident ddjitd, listen on SOCK
+    //   --client SOCK [--rootfs DIR] PROG [args...]   : forward a launch request to a ddjitd
+    for (int i = 1; i < argc; i++) {
+        if (strcmp(argv[i], "--server") == 0) return ddjitd_server_main(argc, argv);
+        if (strcmp(argv[i], "--client") == 0) return ddjitd_client_main(argc, argv);
+    }
     // container flags (SentryConfig)
     while (ai < argc && argv[ai][0] == '-' && argv[ai][1] == '-') {
         if (!strcmp(argv[ai], "--rootfs") && ai + 1 < argc) {

@@ -383,6 +383,27 @@ pub fn run(ctx: &Ctx, c: &Case, e: Engine) -> Status {
     let rootfs = c.rootfs.and_then(|r| ctx.rootfs_path(r, e));
     if c.rootfs.is_some() && rootfs.is_none() { return Status::Skip(format!("no {} rootfs", e.label())); }
 
+    // A COMPILED guest + a rootfs on a Linux engine: the engine resolves argv[0] INSIDE the jail
+    // (xresolve_overlay at startup), so a host path outside the rootfs can never load. Copy the built
+    // guest into the image's /tmp under a unique name and run it by its in-guest path (removed after
+    // the run; the fixture rootfs' /tmp is already scratch for the sh-based cases). Darwin keeps the
+    // host path: darwinjail runs our own Mach-O natively and only arms the jail around it.
+    let mut jail_copy: Option<(String, String)> = None; // (host file to clean up, in-guest argv[0])
+    if let Some(rfs) = &rootfs {
+        if !matches!(c.bin, Bin::InRootfs) && e != Engine::DarwinAarch64 {
+            let leaf = format!("ddguest_{}_{}_{}", c.name.replace('/', "_"), e.arch(), std::process::id());
+            let host = format!("{rfs}/tmp/{leaf}");
+            match std::fs::copy(&guest, &host) {
+                Ok(_) => {
+                    use std::os::unix::fs::PermissionsExt;
+                    let _ = std::fs::set_permissions(&host, std::fs::Permissions::from_mode(0o755));
+                    jail_copy = Some((host, format!("/tmp/{leaf}")));
+                }
+                Err(err) => return Status::Fail(format!("copy guest into rootfs: {err}")),
+            }
+        }
+    }
+
     let mut cfg = ddjit::SpawnConfig::new(String::new(), rootfs.unwrap_or_default());
     cfg.lowers = c.lowers.clone();
     cfg.mem_max = c.mem_max;
@@ -394,14 +415,17 @@ pub fn run(ctx: &Ctx, c: &Case, e: Engine) -> Status {
     // bridge that drops ambient env). DDJIT_SANDBOX is left unset on purpose (ring/forwarding, not Seatbelt).
     if c.untrusted { cfg.env.push(("DDJIT_UNTRUSTED".into(), "1".into())); }
     for (k, v) in &c.env { cfg.env.push((k.clone(), v.clone())); }
+    let argv0 = jail_copy.as_ref().map(|(_, g)| g.clone()).unwrap_or_else(|| guest.clone());
     cfg.argv = match &c.bin {
         Bin::InRootfs => c.args.clone(),
-        _ => std::iter::once(guest.clone()).chain(c.args.iter().cloned()).collect(),
+        _ => std::iter::once(argv0).chain(c.args.iter().cloned()).collect(),
     };
     let (prog, args) = match cfg.command(e.jit()) { Some(x) => x, None => return Status::Skip("no command".into()) };
     // Wrap in `timeout` so a hung/looping guest can't block the matrix (the x86 JIT can mistranslate
     // into an infinite loop). 124 = timed out.
-    let out = match Command::new("timeout").arg("25").arg(&prog).args(&args).output() {
+    let out = Command::new("timeout").arg("25").arg(&prog).args(&args).output();
+    if let Some((host, _)) = &jail_copy { let _ = std::fs::remove_file(host); }
+    let out = match out {
         Ok(o) => o,
         Err(err) => return Status::Fail(format!("spawn: {err}")),
     };

@@ -275,7 +275,15 @@ static const char *load_program(const char *prog, struct loaded *lm, struct load
                                 uint64_t *at_base, int *have_interp) {
     static char gb[1024];
     prog = find_in_path(prog, gb, sizeof gb); // bare "sh" (docker) -> "/bin/sh" via the container PATH
+    if (!g_comm_store[0]) set_guest_comm(prog); // dd_run recorded the pre-shebang name; preload lands here
     g_exe_path = prog;
+    // /proc/self/exe must be the ABSOLUTE, CANONICAL guest path of the loaded image: a RELATIVE guest
+    // invocation ("./x" from a harness) or an entry symlink otherwise leaks into the link value, and
+    // glibc static-pie ASSERTS on it at startup ("dl-origin.c: linkval[0]=='/'", #370). Static: the
+    // value must outlive this call, like gb above.
+    static char bootexe[4200];
+    exe_canon(prog, bootexe, sizeof bootexe);
+    g_exe_path = bootexe;
 
     static char pb[4200];
     const char *prog_host = xresolve_overlay(prog, pb, sizeof pb); // upper, then lowers (pure --lower image)
@@ -298,8 +306,10 @@ static const char *load_program(const char *prog, struct loaded *lm, struct load
         *at_base = li->base;
         *have_interp = 1;
     }
-    // opt8: key the cache by the identity (dev/ino/size/mtime) of the guest binary AND its interpreter.
-    if (g_pcache) g_pc_binid = pcache_make_id(prog_host, interp_host);
+    // opt8: key the cache by the identity (dev/ino/size/mtime) of the guest binary AND its interpreter,
+    // plus (#373b) the argv[0] basename -- a multicall binary (busybox) runs a different applet per
+    // argv[0], and with the exec re-key each image epoch persists its own arena under its own key.
+    if (g_pcache) g_pc_binid = pcache_make_id(prog_host, interp_host, prog);
     return prog;
 }
 
@@ -354,6 +364,7 @@ int dd_run(const char *rootfs, int argc, char *const argv[]) {
     static char sb_store[SHEBANG_MAX * 2][256];
     static char *sb_argv[256];
     const char *sb_prog = find_in_path(argv[0], sb_gb, sizeof sb_gb); // bare "sh" -> "/bin/sh" via PATH
+    set_guest_comm(sb_prog); // Linux comm = basename of the exec NAME (stays the script's for a shebang entry)
     const char *sb_prog_host = xresolve_overlay(sb_prog, sb_pb, sizeof sb_pb);
     int sb_argc = 0;
     sb_argv[sb_argc++] = (char *)sb_prog;
@@ -386,7 +397,18 @@ int dd_run(const char *rootfs, int argc, char *const argv[]) {
     return ec;
 }
 
-#include "../translate/x86_64/forkserver.c" // W3D: resident ddjitd fork-server (server/client/worker)
+// W3D/#369: resident ddjitd fork-server (server/client/worker) -- SHARED with linux_aarch64.c, driven
+// through the container_init/engine_global_init/load_program/run_loaded/dd_run seam defined above.
+// x86-only knobs: the warm re-run must re-point g_loadbase, and the x86 container model chdir()s the
+// engine process into the rootfs (container_init does; the warm path must match it per request).
+#define FSRV_SET_LOADBASE(b) (g_loadbase = (b))
+#define FSRV_WARM_CHDIR_ROOTFS() \
+    do { \
+        if (g_rootfs) { \
+            if (chdir(g_rootfs)) {} \
+        } \
+    } while (0)
+#include "../os/linux/forkserver.c"
 
 #ifndef DDJIT_LIB
 int main(int argc, char **argv) {

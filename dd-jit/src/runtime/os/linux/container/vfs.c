@@ -514,6 +514,16 @@ static int jail_pick(const char *abs, const char **canon, size_t *clen, const ch
 // the canonical result is inside g_rootfs_canon; anything that escapes is redirected to a
 // guaranteed-nonexistent in-jail path (-> ENOENT). `nofollow` keeps the final component
 // unresolved (for readlink/lstat). Returns 1 if inside the jail, 0 if an escape was blocked.
+// ---- positive dentry/climb cache (dc_*; impl in fscache.c next to the rc_/oc_/updirneg caches) ----
+// Memoizes confine_in_m's realpath climb per DIRECTORY: key = the exact pre-realpath host string
+// (jail canon + normalized rel, final component peeled in nofollow mode); value = (canonical deepest
+// EXISTING prefix, #trailing components missing). Epoch-gated on the container-shared g_res_epoch,
+// hard-reset on fork/chroot (rc_reset), volumes never cached, DD_NOPATHCACHE=1 kills it. See the full
+// correctness model at the impl. DC_KEYMAX bounds the fixed-size slots (longer paths bypass, safely).
+#define DC_KEYMAX 320
+static int dc_lookup(const char *key, char *canon, size_t n, int *nmiss);
+static void dc_store(const char *key, const char *canon, int nmiss);
+static int dc_jail_cacheable(const char *jcanon);
 // Core: confine `rel` within an explicit jail root (jcanon). Generalized from secure_resolve so the
 // overlay can resolve the SAME guest path inside each layer's root, reusing the realpath boundary.
 // `missing` (optional): the number of trailing DIRECTORY components that did NOT exist under the jail
@@ -536,6 +546,37 @@ static int confine_in_m(const char *jcanon, size_t jclen, const char *rel, char 
         }
         if (!h[0]) snprintf(h, sizeof h, "/");
     }
+    // Dentry-cache fast path: `h` is exactly the string the climb below would hand to realpath() first,
+    // so an epoch-valid entry replays the recorded outcome verbatim -- out = canon + the nmiss trailing
+    // components the climb popped (a plain suffix of the key) + rem -- with ZERO realpath calls. In
+    // nofollow mode the final component was already peeled into `rem` above, so all files in one
+    // directory share the key (the per-DIRECTORY sharing a stat/open storm needs). Only rootfs/lower
+    // jails are cached; a miss or an over-length path falls through to the untouched climb.
+    int dcok = dc_jail_cacheable(jcanon);
+    char hkey[DC_KEYMAX];
+    if (dcok) {
+        size_t hl = strlen(h);
+        if (hl < sizeof hkey)
+            memcpy(hkey, h, hl + 1);
+        else
+            dcok = 0;
+    }
+    if (dcok) {
+        char dcanon[DC_KEYMAX];
+        int k;
+        if (dc_lookup(hkey, dcanon, sizeof dcanon, &k)) {
+            const char *p = hkey + strlen(hkey); // start of the k popped components ("" when k == 0)
+            for (int i = 0; i < k; i++) {
+                p--;
+                while (p > hkey && *p != '/')
+                    p--;
+            }
+            snprintf(out, n, "%s%s%s", dcanon, p, rem);
+            if (missing) *missing = k;
+            return 1;
+        }
+    }
+    int pops = 0;
     for (;;) {
         char canon[4200];
         if (realpath(h, canon)) {
@@ -545,6 +586,9 @@ static int confine_in_m(const char *jcanon, size_t jclen, const char *rel, char 
                 return 0;
             }
             snprintf(out, n, "%s%s", canon, rem);
+            // Memoize the successful in-jail climb (canon was verified inside the jail just above);
+            // escapes and exhausted climbs (the return-0 paths) are never cached.
+            if (dcok) dc_store(hkey, canon, pops);
             return 1;
         }
         // final missing? climb to the deepest existing dir
@@ -557,6 +601,7 @@ static int confine_in_m(const char *jcanon, size_t jclen, const char *rel, char 
         snprintf(tmp, sizeof tmp, "/%s%s", sl + 1, rem);
         snprintf(rem, sizeof rem, "%s", tmp);
         *sl = 0;
+        pops++;
         if (missing) (*missing)++;
     }
 }
@@ -755,8 +800,101 @@ static int proc_text_fd(const char *buf, int n) {
     }
     return fd;
 }
-// The guest task name (Linux comm, max 15 chars): the basename of the running image (g_exe_path).
+// ---- guest comm + canonical-exe tracking (#370/#317: the /proc/self/exe surface) ----
+// Linux sets a task's comm from the LAST component of the path PASSED to execve, BEFORE binfmt_script
+// rewrites it -- so "./run.sh" keeps comm "run.sh" (not "sh"), and execve("/proc/self/exe") gets comm
+// "exe" -- while /proc/<pid>/exe names the canonical FILE that was actually loaded. Track the two
+// separately: set_guest_comm() records the exec-name at boot and on every execve; g_exe_path holds the
+// canonical exe path (see exe_canon below).
+static char g_comm_store[16];
+static void set_guest_comm(const char *execpath) {
+    const char *b = (execpath && execpath[0]) ? execpath : "init";
+    const char *s = strrchr(b, '/');
+    if (s) b = s + 1;
+    snprintf(g_comm_store, sizeof g_comm_store, "%.15s", b[0] ? b : "init");
+}
+// Normalize a guest path LEXICALLY: collapse "//" and "." components and fold ".." (clamped at "/").
+// No fs access and no symlink resolution (exe_canon below adds that); always emits an absolute path.
+static void path_norm_lex(const char *in, char *out, size_t n) {
+    if (!n) return;
+    size_t o = 0;
+    const char *p = in;
+    while (*p) {
+        while (*p == '/')
+            p++;
+        if (!*p) break;
+        const char *e = p;
+        while (*e && *e != '/')
+            e++;
+        size_t cl = (size_t)(e - p);
+        if (cl == 1 && p[0] == '.') { p = e; continue; }
+        if (cl == 2 && p[0] == '.' && p[1] == '.') { // pop the previous component (stays at root)
+            while (o > 0 && out[o - 1] != '/')
+                o--;
+            if (o > 0) o--;
+            p = e;
+            continue;
+        }
+        if (o + 1 + cl < n) {
+            out[o++] = '/';
+            memcpy(out + o, p, cl);
+            o += cl;
+        }
+        p = e;
+    }
+    if (o == 0) out[o++] = '/';
+    out[o < n ? o : n - 1] = 0;
+}
+// Canonical ABSOLUTE guest path of an executable -- what readlink("/proc/self/exe") must return. Joins
+// a relative exec path to the guest cwd, folds "."/".."/"//", then resolves symlinks the way the
+// kernel's d_path would: through the overlay to the backing host file, mapped back into the guest view
+// (an exec of the /bin/sh -> busybox symlink reports /bin/busybox, exactly like Linux). glibc's
+// static-pie startup ASSERTS on a non-absolute link value ("dl-origin.c: linkval[0]=='/'") and ld.so
+// resolves $ORIGIN RUNPATHs through this path, so it must be absolute and canonical (#370).
+static void exe_canon(const char *guest, char *out, size_t n) {
+    if (!guest || !guest[0]) {
+        snprintf(out, n, "/");
+        return;
+    }
+    char joined[8600];
+    if (guest[0] != '/') {
+        char cwd[4200];
+        if (g_rootfs)
+            snprintf(cwd, sizeof cwd, "%s", g_cwd[0] ? g_cwd : "/");
+        else if (!getcwd(cwd, sizeof cwd))
+            snprintf(cwd, sizeof cwd, "/");
+        snprintf(joined, sizeof joined, "%s/%s", cwd, guest);
+    } else
+        snprintf(joined, sizeof joined, "%s", guest);
+    char lex[4200];
+    path_norm_lex(joined, lex, sizeof lex);
+    // resolve symlinks to the backing file, then map back into the guest namespace
+    char hb[4200];
+    const char *hp = xresolve_overlay(lex, hb, sizeof hb); // confined resolution (upper, then lowers)
+    if (!g_rootfs) {
+        // bare mode: guest view == host view; host realpath IS the canonical answer
+        char rp[4200];
+        snprintf(out, n, "%s", realpath(hp, rp) ? rp : lex);
+        return;
+    }
+    struct stat st;
+    if (stat(hp, &st) != 0) { // unresolvable/dangling: keep the (absolute) lexical form
+        snprintf(out, n, "%s", lex);
+        return;
+    }
+    char gb[4200];
+    guest_from_host_raw(hp, gb, sizeof gb);
+    // guest_from_host_raw answers "/" for a host path outside every layer (fail-safe); keep the lexical
+    // guest path then rather than claiming the exe is "/".
+    snprintf(out, n, "%s", (gb[0] == '/' && gb[1] == 0 && !(lex[0] == '/' && lex[1] == 0)) ? lex : gb);
+}
+// The guest task name (Linux comm, max 15 chars): the recorded exec-name (set_guest_comm), falling back
+// to the basename of the running image (g_exe_path) for paths that never went through an exec hook.
 static void proc_comm(char *out, size_t n) {
+    if (g_comm_store[0]) {
+        snprintf(out, n, "%s", g_comm_store);
+        return;
+    }
     const char *p = (g_exe_path && g_exe_path[0]) ? g_exe_path : "init";
     const char *base = strrchr(p, '/');
     base = base ? base + 1 : p;
@@ -1102,10 +1240,15 @@ static void proc_reg_key(char *out, size_t n) {
 // This process's own registry file (unlinked on exit; the exit_group path calls proc_reg_unlink since
 // _exit bypasses atexit). Stale files from a crash are pruned lazily by the enumerator (dead-pid check).
 static char g_reg_file[128];
+static char g_reg_exe_file[128]; // sibling "x<pid>" record: the canonical exe path (for /proc/<pid>/exe)
 static void proc_reg_unlink(void) {
     if (g_reg_file[0]) {
         unlink(g_reg_file);
         g_reg_file[0] = 0;
+    }
+    if (g_reg_exe_file[0]) {
+        unlink(g_reg_exe_file);
+        g_reg_exe_file[0] = 0;
     }
 }
 // Publish THIS process's guest identity: "<comm>\n" then the full argv NUL-separated. Written to a temp
@@ -1121,10 +1264,8 @@ static void proc_reg_publish(const char *exe, int argc, char *const argv[]) {
         reg = 1;
     }
     char comm[16];
-    const char *b = (exe && exe[0]) ? exe : "init";
-    const char *s = strrchr(b, '/');
-    if (s) b = s + 1;
-    snprintf(comm, sizeof comm, "%.15s", b[0] ? b : "init");
+    proc_comm(comm, sizeof comm); // the recorded exec-name (set_guest_comm), NOT basename(exe): a script
+                                  // exec keeps the script's name even though `exe` is the interpreter
     char buf[4096];
     int o = snprintf(buf, sizeof buf, "%s\n", comm), wrote = 0;
     if (argv)
@@ -1155,6 +1296,37 @@ static void proc_reg_publish(const char *exe, int argc, char *const argv[]) {
     snprintf(final, sizeof final, "%s/%d", dir, (int)getpid());
     if (rename(tmp, final) == 0) snprintf(g_reg_file, sizeof g_reg_file, "%s", final);
     else unlink(tmp);
+    // Publish the CANONICAL exe path as a sibling "x<pid>" record so a PEER process can serve
+    // readlink("/proc/<pid>/exe") for this one (`ls -l /proc/<pid>`, ps tooling). The non-digit-leading
+    // name keeps it invisible to the pid enumerators (proc_reg_count / the /proc listing digit scan).
+    if (exe && exe[0] == '/') {
+        char xtmp[152], xfin[144];
+        snprintf(xtmp, sizeof xtmp, "%s/.xt%d", dir, (int)getpid());
+        snprintf(xfin, sizeof xfin, "%s/x%d", dir, (int)getpid());
+        int xfd = open(xtmp, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+        if (xfd >= 0) {
+            if (write(xfd, exe, strlen(exe)) < 0) {}
+            close(xfd);
+            if (rename(xtmp, xfin) == 0) snprintf(g_reg_exe_file, sizeof g_reg_exe_file, "%s", xfin);
+            else unlink(xtmp);
+        }
+    }
+}
+// Read a peer's published canonical exe path (the "x<hostpid>" registry record). Returns 1 + fills out.
+static int proc_reg_exe_read(int hostpid, char *out, size_t n) {
+    char dir[80], path[144];
+    proc_reg_key(dir, sizeof dir);
+    snprintf(path, sizeof path, "%s/x%d", dir, hostpid);
+    int fd = open(path, O_RDONLY);
+    if (fd < 0) return 0;
+    char buf[4200];
+    ssize_t nr = read(fd, buf, sizeof buf - 1);
+    close(fd);
+    if (nr <= 0) return 0;
+    buf[nr] = 0;
+    if (buf[0] != '/') return 0;
+    snprintf(out, n, "%s", buf);
+    return 1;
 }
 // Read back a peer's published identity by host pid. Returns 1 + fills comm and the NUL-separated
 // cmdline (cmdlen bytes); 0 if no record. The comm line is stripped from the returned cmdline.
@@ -1456,10 +1628,19 @@ static int proc_leaf_dir_open(const char *guestpath, int with_task) {
         char p[64];
         snprintf(p, sizeof p, "%s/task", tmpl);
         mkdir(p, 0555);
+        snprintf(p, sizeof p, "%s/fd", tmpl);
+        mkdir(p, 0555); // placeholder: an open of /proc/<pid>/fd re-enters the synthesis (proc_fd_dir_open)
     }
-    // NB: no "exe" placeholder -- a symlink here would name a GUEST path that doesn't exist on the host,
-    // so a plain `ls /proc/<pid>` (which stat()s each entry) would print a spurious ENOENT. /proc/<pid>/exe
-    // by full PATH is served by proc_self_exe (fs.c) for self/init, which is what realpath(3) reads (#266).
+    // Magic-link placeholders (exe/cwd/root) so getdents lists them with d_type DT_LNK, like Linux. Every
+    // ACCESS to them goes by path or by (tagged dirfd, relative) and is intercepted -- readlink/stat/open
+    // of /proc/<pid>/{exe,cwd,root} are served by proc_self_exe / the root|cwd synthesis in fs.c (#370);
+    // the inert "." target exists only so a host-side follow can never dangle out of the temp dir.
+    static const char *const links[] = {"exe", "cwd", "root", 0};
+    for (int i = 0; links[i]; i++) {
+        char p[64];
+        snprintf(p, sizeof p, "%s/%s", tmpl, links[i]);
+        symlink(".", p);
+    }
     int fd = open(tmpl, O_RDONLY | O_DIRECTORY);
     if (fd < 0) {
         procfd_dir_rm(tmpl);
@@ -2434,12 +2615,10 @@ static int synth_stat_raw(const char *gp, struct stat *s) {
             for (const char *t = leaf + 3; *t; t++)
                 if (*t < '0' || *t > '9') isnum = 0;
             if (isnum) {
-                int fdn = atoi(leaf + 3);
-                char tgt[4200];
                 memset(s, 0, sizeof *s);
                 s->st_mode = S_IFLNK | 0777;
                 s->st_nlink = 1;
-                s->st_size = (fcntl(fdn, F_GETPATH, tgt) == 0 && tgt[0]) ? (off_t)strlen(tgt) : 64;
+                s->st_size = 64; // Linux reports a fixed 64 for /proc/<pid>/fd/N links
                 return 1;
             }
         }
