@@ -1,15 +1,20 @@
 # dd — comprehensive TODO (what needs to be fixed / improved)
 
-State: `main` at v0.9.18. Read `docs/AGENTS.md` first (build/run + COMPLETENESS + CROSS-PLATFORM +
-zero-tolerance on terminal/internals). Goals: (1) x86-on-par-with-arm; (2) full Docker/Linux compliance
-on all 3 platforms; (3) every basic Linux internal flawless & oracle-validated, no stubs. Moby reference:
-`.dev/research/moby-mapping.md` (`§N` = section). Shipped work is in git history, not here.
+State: `main` at v0.9.20. Read `docs/AGENTS.md` first (build/run + COMPLETENESS + CROSS-PLATFORM +
+zero-tolerance on terminal/internals + golden rule 4: recorded emitters for baked host pointers).
+Goals: (1) x86-on-par-with-arm; (2) full Docker/Linux compliance on all 3 platforms; (3) every basic
+Linux internal flawless & oracle-validated, no stubs. Moby reference: `.dev/research/moby-mapping.md`.
 
-ACTIVE MISSION (perf): beat the #328 benchmark on BOTH arches, safely — no runtime corruption, every
-perf change gated behind byte-exact differential + matrix subset. Worst gaps: arm sqlite-select 4.50x /
-python 3.05x (call/ret + indirect dispatch -> #341 RAS returns); amd openssl AES-GCM 0.10x / SHA 0.31x
-(x86 crypto -> ARM crypto + CPUID path-selection); amd redis 0.52x (x86 codegen/flags/syscall). Levers &
-findings tracked in `docs/perf-profile-v0.9.18.md` (profiler output). See §C (x86 perf) / §D (arm perf).
+ACTIVE MISSION (perf): parity-or-better vs OrbStack on BOTH arches, safely. v0.9.19+v0.9.20 shipped the
+first two waves (see git log; findings in docs/perf-profile-v0.9.18.md + perf-opportunities-v0.9.18.md +
+dd-bench2/results-*.md): amd AES 0.10->0.92x, SHA ~parity, targz-arm ~0.9x (beats orb), sqlite syscall
+layer 7x, call/ret -30% arm, cross-block flags, arm pcache (opt-in), ERMS memcpy funnel. IN FLIGHT
+(wave 3): #371 fork cost (5x churn ceiling), #372 dentry cache (metadata 2-3x), #373 pcache policy +
+#178 exec/library coverage, #369 arm forkserver (spawn floor), #375 interpreter deep profile (last
+python/sqlite arm gap), #370/#317 proc-self-exe surface, #374 docker-cp epoch. Measured DEAD ENDS (do
+not revisit): shadow-RAS, IBTC associativity/mono-guess, history-keyed ctx dispatch (ITTAGE wins), TSO
+per-op barriers (none emitted), regalloc, block chaining, x86 scalar-FP lowering, rep-string xmm-spill
+removal (load-bearing), fastsys inline-ladder extension (round-trip already 26ns).
 
 ## Recently shipped (v0.9.14 → v0.9.16)
 DNS via host resolver (#261) · reach-by-name (#322) · `-p` process-independent forwarder (#320) ·
