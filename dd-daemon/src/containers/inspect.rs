@@ -381,6 +381,8 @@ pub(crate) async fn containers_inspect(State(a): State<App>, Path(id): Path<Stri
                 .collect::<Vec<_>>(),
             // HostConfig round-trips the fidelity extras verbatim so docker clients diff them cleanly.
             "HostConfig": {"Binds": c.binds, "Memory": c.memory, "PidsLimit": c.pids_limit,
+                "NanoCpus": c.nano_cpus, "ReadonlyRootfs": c.readonly_rootfs,
+                "Ulimits": c.ulimits.iter().map(|u| json!({"Name": u.name, "Soft": u.soft, "Hard": u.hard})).collect::<Vec<_>>(),
                 "RestartPolicy": {"Name": c.restart_policy.name, "MaximumRetryCount": c.restart_policy.max_retry},
                 "CapAdd": c.cap_add, "CapDrop": c.cap_drop, "Devices": c.devices, "Mounts": c.mounts,
                 "Privileged": c.privileged, "SecurityOpt": c.security_opt},

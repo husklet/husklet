@@ -22,6 +22,7 @@ pub mod signalx;    // signals: sigaltstack/SA_RESTART/itimer/pause/sigwait/sigi
 pub mod processx;   // process: posix_spawn/vfork/waitid/getrusage/prlimit/clone3/futex
 pub mod timex;      // clocks: clock_getres/gettimeofday/clock_nanosleep/linux clock ids
 pub mod clitools;   // real CLI tools (busybox coreutils) in the alpine rootfs
+pub mod isolation;  // container isolation + resource fidelity: --cpus/--read-only/--ulimit, masked/ro /proc paths
 
 pub fn all() -> Vec<Group> {
     let mut g = vec![];
@@ -42,5 +43,6 @@ pub fn all() -> Vec<Group> {
     g.extend(processx::groups());
     g.extend(timex::groups());
     g.extend(clitools::groups());
+    g.extend(isolation::groups());
     g
 }

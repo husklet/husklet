@@ -331,6 +331,19 @@ static void emit_rcl_rcr(struct insn *I, uint64_t next, int w, int rcr, int cnt_
 enum { FL_NONE, FL_SUB, FL_ADD, FL_LOGIC };
 static int g_fl_pending;
 
+// #346 PF/AF dead-flag elimination: 1 iff the CURRENT instruction's x86 PF (parity) and AF (aux-carry)
+// substrate is provably DEAD -- the immediately-following instruction fully overwrites BOTH PF and AF
+// while reading neither, so no consumer (lahf/pushfq/jp/jnp/setp/setnp/cmovp/fcmovu/sahf/popfq) can ever
+// observe this op's PF/AF before it is clobbered. Set once per instruction in the translate loop from a
+// one-step lookahead (mirrors the NZCV insn_is_flagkill scheme); the PF/AF emitters (e_pf_save /
+// e_af_addsub, and the gated e_af_save call sites) no-op when it is set. Unlike NZCV there is nothing to
+// "materialize later": when NOT dead we emit eagerly right here, so a stale-true value must never leak to
+// a non-producer -- it is reset to 0 every iteration and only raised for a genuine PF/AF producer.
+// Reset per iteration; only the PF/AF-producing families raise it. Never consulted by the sahf/popfq
+// materializers (they call e_af_save directly, ungated). No EFLAGS snapshot in C (sigframe
+// nzcv_to_eflags, ptrace, core) reads cpu->pf/cpu->af, so block boundaries are not PF/AF consumers.
+static int g_pfaf_dead;
+
 // x86 direction flag (DF), tracked at translate time. Compilers/libc emit `std`/`cld` straight-line
 // around the string op they govern (e.g. runtime.memmove's backward `std; rep movsq; cld`), so the
 // flag is always block-local -- no runtime cpu state needed. Reset to 0 (forward) at each block entry;
@@ -418,6 +431,51 @@ static int insn_is_carry_consumer(const struct insn *I) {
     return 0;
 }
 
+// #346 kill-switch: NOPFAFELIM=1 (any non-"0") disables PF/AF dead-flag elimination -> revert to the
+// always-eager PF/AF substrate (every ALU op materializes cpu->pf/cpu->af). Read once, cached.
+static int pfaf_elim_on(void) {
+    static int v = -1;
+    if (v < 0) {
+        const char *s = getenv("NOPFAFELIM");
+        v = (s && *s && *s != '0') ? 0 : 1;
+    }
+    return v;
+}
+
+// #346: 1 iff I's handler EMITS the PF/AF substrate (so the translate loop knows a lookahead is worth
+// doing -- and, crucially, that I falls through to a real successor at `next`, making the lookahead
+// decode memory-safe). PF/AF producers: primary ALU 00..3D (incl adc/sbb), group1 80/81/83, test,
+// inc/dec (FE/FF /0/1), group3 test/neg (F6/F7 /0/3), and shifts C0/C1/D0..D3 (which set PF). mul/div
+// (F6/F7 /4..7) leave PF/AF x86-undefined and store nothing -> excluded.
+static int insn_writes_pfaf(const struct insn *I) {
+    if (I->two) return 0;
+    uint8_t op = I->op;
+    if (op < 0x40 && alu_kind_primary(op) >= 0) return 1;
+    if (op == 0x80 || op == 0x81 || op == 0x83) return 1;
+    if (op == 0x84 || op == 0x85 || op == 0xA8 || op == 0xA9) return 1; // test
+    if (op == 0xFE || op == 0xFF) { int k = I->reg & 7; return (k == 0 || k == 1); }
+    if (op == 0xF6 || op == 0xF7) { int k = I->reg & 7; return (k == 0 || k == 3); }
+    if (op == 0xC0 || op == 0xC1 || (op >= 0xD0 && op <= 0xD3)) return 1; // shifts set PF
+    return 0;
+}
+
+// #346: 1 iff I DEFINITELY overwrites BOTH x86 PF and AF and reads NEITHER -- so a preceding producer's
+// PF/AF are dead (clobbered before any consumer could read them). Sound under-approximation: any op not
+// on this list (readers jp/jnp/setp/lahf/pushfq/cmovp/fcmovu; mul/div & shifts which leave AF/PF x86-
+// undefined; `not`/mov/branch/call/string ops; every two-byte op; unknown opcodes) returns 0 -> the
+// producer materializes (the always-correct direction). The set is the ALU/inc-dec/neg/test family:
+// every one writes PF and AF as defined outputs, and none reads PF or AF (adc/sbb read CF, not PF/AF).
+static int insn_kills_pfaf(const struct insn *I) {
+    if (I->two) return 0;
+    uint8_t op = I->op;
+    if (op < 0x40 && alu_kind_primary(op) >= 0) return 1;               // add/or/adc/sbb/and/sub/xor/cmp
+    if (op == 0x80 || op == 0x81 || op == 0x83) return 1;              // group1 ALU r/m,imm (all 8 forms)
+    if (op == 0x84 || op == 0x85 || op == 0xA8 || op == 0xA9) return 1; // test
+    if (op == 0xFE || op == 0xFF) { int k = I->reg & 7; return (k == 0 || k == 1); } // inc/dec
+    if (op == 0xF6 || op == 0xF7) { int k = I->reg & 7; return (k == 0 || k == 3); } // group3 test /0, neg /3
+    return 0; // NOT mul/div (undefined), NOT shifts (AF undefined), NOT `not` (untouched), NOT readers
+}
+
 // opt3 carry-flow: adjust ONLY the C bit of the LIVE ARM NZCV in place (no cpu->nzcv round-trip), so an
 // adc/sbb can read its x86 CF carry-in directly from a deferred producer's live flags. `alu_base` selects
 // the bit op on bit 29 (C): A_EOR flips it, A_BIC clears it, A_ORR sets it. Scratch x20/x22 match the
@@ -431,7 +489,10 @@ static void e_nzcv_C_op(uint32_t alu_base) {
 
 // Stash the x86 PF source: the low byte of an integer op's result (the consumer computes even-parity).
 // A non-flag str -> leaves the live ARM NZCV untouched (safe to interleave with the lazy-flag path).
-static void e_pf_save(int reg) { e_str(reg, 28, OFF_PF); }
+static void e_pf_save(int reg) {
+    if (g_pfaf_dead) return; // #346: PF dead (next insn overwrites it) -- skip the store entirely
+    e_str(reg, 28, OFF_PF);
+}
 // x86 AF (auxiliary carry) substrate. `reg` must hold a value whose BIT 4 is the carry out of bit 3:
 // for add/sub/adc/sbb/cmp that is (a ^ b ^ result); for inc/dec, (a ^ result) (the +/-1 operand only
 // flips bit 0, never bit 4). Logical ops store xzr (AF=0, matching qemu's CC_OP_LOGIC). The consumers
@@ -440,6 +501,7 @@ static void e_af_save(int reg) { e_str(reg, 28, OFF_AF); }
 // Compute x86 AF for an add/sub-class op: store (a ^ b ^ result) -- its bit 4 is the carry out of bit 3.
 // `tmp` is a scratch reg (clobbered). Read a/b/res before they may be reused (they are value regs).
 static void e_af_addsub(int a, int b, int res, int tmp) {
+    if (g_pfaf_dead) return; // #346: AF dead (next insn overwrites it) -- skip the compute+store entirely
     e_rrr(A_EOR, tmp, a, b, 0, 0);
     e_rrr(A_EOR, tmp, tmp, res, 0, 0);
     e_af_save(tmp);
@@ -483,7 +545,7 @@ static void do_alu(int kind, int dst, int a, int b, int w) {
             e_rrr(opc, out, a, b, sf, 0);         //   x23 is never an operand reg, unlike x19=imm)
             e_pf_save(out);                       // x86 PF source = result low byte (incl. carry)
             e_rrr(A_EOR, 23, 23, out, 0, 0);      // x23 = a ^ b ^ result -> bit 4 is x86 AF
-            e_af_save(23);
+            if (!g_pfaf_dead) e_af_save(23);      // #346: skip when AF dead
             g_fl_pending = adc ? FL_ADD : FL_SUB; // defer own flags (FL_ADC==FL_ADD, FL_SBB==FL_SUB)
             return;
         }
@@ -496,7 +558,7 @@ static void do_alu(int kind, int dst, int a, int b, int w) {
         e_rrr(opc, out, a, b, sf, 0); //   an operand reg, unlike x19=imm)
         e_pf_save(out);                  // x86 PF source = result low byte (incl. carry)
         e_rrr(A_EOR, 23, 23, out, 0, 0); // x23 = a ^ b ^ result -> bit 4 is x86 AF
-        e_af_save(23);
+        if (!g_pfaf_dead) e_af_save(23);  // #346: skip when AF dead
         if (lazyflags_on())
             g_fl_pending = adc ? FL_ADD : FL_SUB; // keep the chain alive: defer (same finalizer bytes)
         else if (adc)
@@ -508,15 +570,16 @@ static void do_alu(int kind, int dst, int a, int b, int w) {
     int logical = (kind == 1 || kind == 4 || kind == 6); // or/and/xor (and test): x86 clears CF
     // x86 PF: stash the result's low byte (computed from pristine a,b before alu_core may overwrite `out`).
     // PF depends only on the low 8 bits, so a non-flag, non-width-extended op gives the right source byte.
-    {
+    // #346: when g_pfaf_dead the whole PF+AF substrate (parity source op, AF xors, both stores) is skipped.
+    if (!g_pfaf_dead) {
         uint32_t pfop = (kind == 0) ? A_ADD : (kind == 1) ? A_ORR : (kind == 6) ? A_EOR : (kind == 4) ? A_AND : A_SUB;
         e_rrr(pfop, 25, a, b, 0, 0);
         e_pf_save(25);
         // x86 AF: add/sub/cmp -> bit 4 of (a ^ b ^ result); logical (and/or/xor/test) leave AF
         // undefined, store 0 (matches qemu CC_OP_LOGIC). x25 already holds the (low) result.
-        if (logical)
-            e_af_save(31);
-        else
+        if (logical) {
+            if (!g_pfaf_dead) e_af_save(31); // #346: skip when AF dead (logical AF=0)
+        } else
             e_af_addsub(a, b, 25, 26);
     }
     if (w >= 4) {
@@ -914,6 +977,21 @@ static void *translate_block(uint64_t gpc) {
                 g_fl_pending = FL_NONE; // dead: next op fully overwrites the flags before any read
             else
                 flags_materialize();
+        }
+
+        // #346 PF/AF dead-flag elimination: decide, one step ahead, whether THIS instruction's PF/AF
+        // substrate is dead. It is dead iff I is a PF/AF producer AND the immediately-following insn at
+        // `next` fully overwrites both PF and AF while reading neither (insn_kills_pfaf) -- then no
+        // consumer can observe I's PF/AF. Gating on insn_writes_pfaf(&I) both scopes the work to
+        // producers and guarantees `next` is a real fall-through (producers never terminate a block), so
+        // the lookahead decode reads only bytes the successor iteration would decode anyway. Reset every
+        // iteration so a stale value never reaches a non-producer; the e_pf_save/e_af_addsub emitters and
+        // the do_alu e_af_save sites no-op when it is set. VEX/0F38-3A/x87 already `continue`d above.
+        g_pfaf_dead = 0;
+        if (pfaf_elim_on() && insn_writes_pfaf(&I)) {
+            struct insn NI;
+            decode(next, &NI);
+            g_pfaf_dead = insn_kills_pfaf(&NI);
         }
 
         // x87 static-top tracking ends at any non-x87 instruction: spill the shadow top to

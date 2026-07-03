@@ -219,6 +219,7 @@ fn op_x86_misc() -> Group {
         x("movntps",     "completeness/x86_movntps.c"),    // MOVNTPS/MOVNTPD 0F 2B + MOVNTDQ (#190)
         x("movseg",      "completeness/x86_movseg.c"),     // MOV r/m,Sreg (8C) / MOV Sreg,r/m (8E) (#183)
         x("rcl",         "completeness/x86_rcl.c"),        // RCL/RCR by CL (group2 D2/D3 /2,/3), all widths + mem
+        x("pfaf",        "completeness/x86_pfaf.c"),       // #346 lazy PF/AF dead-elim: live/dead/block vs qemu
     ])
 }
 

@@ -49,6 +49,14 @@ static void exec_forward_env(uint64_t envp_guest) {
 // RLIMIT_NOFILE(7) reports a finite fd cap (soft 1024 / hard 1048576, the typical Linux default) -- a guest
 // like memcached does calloc(rlim_cur, sizeof(conn)), which overflows if the soft limit is RLIM_INFINITY.
 static void svc_fill_rlimit(int resource, uint64_t *o) {
+    // docker --ulimit override wins (g_ulimit, seeded from DD_ULIMITS in state.c): a guest that reads its
+    // limits (memcached calloc's off RLIMIT_NOFILE, the JVM sizes threads off RLIMIT_NPROC) must see the
+    // requested value, not the dd default. `set` gates each resource so unspecified ones keep the defaults.
+    if (resource >= 0 && resource < DD_RLIM_MAX && g_ulimit[resource].set) {
+        o[0] = g_ulimit[resource].cur;
+        o[1] = g_ulimit[resource].max;
+        return;
+    }
     switch (resource) {
     case 3: // RLIMIT_STACK
         o[0] = 8ull << 20;

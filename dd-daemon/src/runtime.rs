@@ -53,6 +53,23 @@ async fn push_log(live: &Live, ts: i64, stream: u8, bytes: Vec<u8>) {
 }
 
 
+/// Write the LIVE reach-by-name table for one user-defined network into the engine's per-network switch
+/// dir (`/tmp/.ddbr-<netid[..40]>/.names`), one `ip\tname` line per endpoint. The in-engine 127.0.0.11
+/// resolver reads this file per DNS query (net.c `dns_local_lookup`) BEFORE falling through to the macOS
+/// host resolver, so a container resolves a same-network peer by name even if that peer joined AFTER this
+/// container launched (its `/etc/hosts` snapshot, seeded once at start, can't see it). The `.40s`
+/// truncation matches the engine's `snprintf` for `DD_NETBR`, so the path byte-matches what the engine
+/// computes. Best-effort: never fail a spawn on an I/O error.
+fn write_net_names(netid: &str, endpoints: &HashMap<String, Endpoint>) {
+    let dir = format!("/tmp/.ddbr-{}", &netid[..netid.len().min(40)]);
+    let _ = std::fs::create_dir_all(&dir); // the engine also mkdir 0700's this; either creating it is fine
+    let mut body = String::new();
+    for e in endpoints.values() {
+        if !e.ip.is_empty() && !e.name.is_empty() { body.push_str(&format!("{}\t{}\n", e.ip, e.name)); }
+    }
+    let _ = std::fs::write(format!("{dir}/.names"), body);
+}
+
 /// Resolve a docker `--user`/`Config.User` spec to a numeric `(uid, gid)` against the container's
 /// rootfs. Accepts every docker form: `uid`, `name`, `uid:gid`, `name:group`, `uid:group`, `name:gid`.
 /// A numeric component is taken verbatim (no file access needed — keeps the numeric path independent of
@@ -139,6 +156,14 @@ pub(crate) fn spawn_cfg(c: &Container, volumes_dir: &str, vols: &[Vol], bridge: 
     cfg.hostname = (!c.hostname.is_empty()).then(|| c.hostname.clone());
     cfg.mem_max = c.memory.max(0) as u64;
     cfg.pids_max = c.pids_limit.max(0) as u32;
+    // Resource fidelity: --cpus (NanoCpus -> ceil to whole online CPUs), --read-only, --ulimit. Threaded to
+    // the engine (DD_CPUS/DD_ROOTFS_RO/DD_ULIMITS via SpawnConfig.resource_env) so the container reports its
+    // CPU allotment, fails rootfs writes with EROFS, and getrlimit reflects the requested ulimits.
+    cfg.cpus = if c.nano_cpus > 0 { ((c.nano_cpus + 999_999_999) / 1_000_000_000) as u32 } else { 0 };
+    cfg.read_only = c.readonly_rootfs;
+    cfg.ulimits = c.ulimits.iter()
+        .map(|u| (u.name.clone(), u.soft.max(0) as u64, u.hard.max(0) as u64))
+        .collect();
     // ---- JIT performance: developer-optimal defaults (see dd-daemon/PERFORMANCE.md) ----
     // The transparent codegen/syscall speedups (addressing, lazy flags, traces, tier-up, inline
     // clock_gettime/sigprocmask, epoll batching, path/openat caches, SSE->NEON, rep-string) are ON by
@@ -222,8 +247,16 @@ pub(crate) fn spawn_cfg(c: &Container, volumes_dir: &str, vols: &[Vol], bridge: 
         if host.is_empty() { continue; }
         cfg.volumes.push(Volume { container: m.target.clone(), host, ro: m.read_only });
     }
-    cfg.publish = c.publish.split(',').filter(|s| !s.is_empty()).filter_map(|p| p.split_once(':'))
-        .filter_map(|(h, cc)| Some(PortMap { host: h.parse().ok()?, container: cc.parse().ok()? })).collect();
+    // Published ports. The daemon now OWNS the process-independent host forwarder (see containers/ports.rs
+    // + #320), so we tell the engine NOT to spin up its own in-process host TCP listener — that listener
+    // lived in whichever guest process called listen(), which broke prefork/re-listening servers and raced
+    // EADDRINUSE. We still pass the port map (the engine reports container ports via getsockname and keeps
+    // the guest-side switch redirect + the UDP host path). DD_PUBLISH_DAEMON=1 gates the engine's TCP
+    // fwd_maybe_start off. Parsed from the full `[hostIP]:hostPort:cport/proto` publish string.
+    cfg.publish = crate::containers::parse_publish(&c.publish).into_iter()
+        .filter(|p| p.proto == "tcp")
+        .map(|p| PortMap { host: p.host_port, container: p.container_port }).collect();
+    if !c.publish.is_empty() { cfg.env.push(("DD_PUBLISH_DAEMON".into(), "1".into())); }
     // macOS containers (darwinjail): the userland (nix arm64 tools) is on PATH at /profile/bin, and the
     // host filesystem is the read-only lower so native binaries find their /nix deps; writes land in the
     // rootfs + volumes. The entry argv[0] is run by the mac shell, so it must be a real host path -- we
@@ -275,28 +308,45 @@ pub(crate) async fn spawn_live(app: &App, c: &Container, vols: &[Vol], live: Arc
     if live.started.swap(true, Ordering::SeqCst) {
         return true; // already started
     }
+    // Reach-by-name identity key. A `docker exec` runs with `c.id` set to the EXEC id (not a network
+    // endpoint), but it JOINS the target container's network (`netns_key`), so it must inherit that
+    // container's bridge (netid, ip) + /etc/hosts view — otherwise the exec'd process gets no DD_NETBR/
+    // DD_IP and can neither reach peers by IP nor consult the live resolver. A normal container has
+    // `netns_key == None` and this resolves to its own id (unchanged behaviour).
+    let lookup_id = c.netns_key.clone().unwrap_or_else(|| c.id.clone());
     // netstack PR2: this container's (network-id, assigned-ip) from PR1's per-network endpoints map,
-    // plus the /etc/hosts reach-by-name table (this container + same-network peers, name -> ip).
+    // plus the /etc/hosts reach-by-name table (this container + same-network peers, name -> ip). We also
+    // refresh a LIVE per-user-network names file the in-engine 127.0.0.11 resolver consults, so a peer
+    // that appears AFTER this container launched (its /etc/hosts snapshot is frozen at launch) is still
+    // resolvable — the #322 reach-by-name fix (see net.c dns_build_response local-name lookup).
     let (bridge, hosts) = {
         let g = app.inner.lock().await;
-        let bridge = g.networks.iter().find_map(|n| n.endpoints.get(&c.id).map(|e| (n.id.clone(), e.ip.clone())));
+        let bridge = g.networks.iter().find_map(|n| n.endpoints.get(&lookup_id).map(|e| (n.id.clone(), e.ip.clone())));
         // netstack reach-by-name: a guest's getaddrinfo("peer") must resolve to the peer's network IP so
         // the per-network br_* switch (PR2) can carry the connect. Docker drives this via embedded DNS;
         // the equivalent here is to seed /etc/hosts with every endpoint on the network(s) this container
         // is attached to. musl/glibc read /etc/hosts before any nameserver, so the resolve is local.
         let mut hosts = String::from("127.0.0.1\tlocalhost\n");
         // own entry (once): own-ip  own-name [hostname]. Absent for --network host/none (no endpoint).
-        if let Some(own) = g.networks.iter().find_map(|n| n.endpoints.get(&c.id)) {
+        if let Some(own) = g.networks.iter().find_map(|n| n.endpoints.get(&lookup_id)) {
             let mut names = own.name.clone();
             if !c.hostname.is_empty() && c.hostname != own.name { names.push(' '); names.push_str(&c.hostname); }
             hosts.push_str(&format!("{}\t{}\n", own.ip, names));
         }
         // peers: every OTHER endpoint on any network this container is a member of.
         for n in &g.networks {
-            if !n.endpoints.contains_key(&c.id) { continue; }
+            if !n.endpoints.contains_key(&lookup_id) { continue; }
             for (cid, e) in &n.endpoints {
-                if cid != &c.id { hosts.push_str(&format!("{}\t{}\n", e.ip, e.name)); }
+                if cid != &lookup_id { hosts.push_str(&format!("{}\t{}\n", e.ip, e.name)); }
             }
+        }
+        // Refresh the live resolver name file for every USER-defined network this container is on. Docker
+        // withholds reach-by-name on the default `bridge` (only user networks get embedded-DNS names), so
+        // predefined networks are skipped. The file is rewritten on EVERY start, so it always reflects the
+        // current endpoint set (late-joining peers included). The engine reads it per DNS query.
+        for n in &g.networks {
+            if !n.endpoints.contains_key(&lookup_id) || is_predefined(&n.name) { continue; }
+            write_net_names(&n.id, &n.endpoints);
         }
         (bridge, hosts)
     };
@@ -327,6 +377,12 @@ pub(crate) async fn spawn_live(app: &App, c: &Container, vols: &[Vol], live: Arc
             if std::env::var("DD_DEBUG").is_ok() { eprintln!("[live] {} write /etc/resolv.conf failed: {e}", &c.id[..c.id.len().min(12)]); }
         }
     }
+    // #320: start the daemon-owned, process-independent host→container port forwarders. Idempotent (the
+    // restart path re-enters here but the listeners persist), a no-op for a container that publishes
+    // nothing, and a no-op for an exec (empty publish). Bound now so `docker port`/`ps`/inspect report a
+    // live, deterministic host port and a re-listening server stays reachable. `bridge` is still owned here
+    // (spawn_cfg consumes it just below); we only borrow it.
+    crate::containers::ports::start_for(c, &bridge);
     // No launch command means the JIT engine for this guest arch isn't bundled (e.g. a darwin-only build
     // shipped without ddjit-linux_*). Surface a CLEAN error (exit 127, like every other spawn failure) so an
     // interactive `docker run -it` exits with a message instead of hanging forever on a stream that never
@@ -537,6 +593,7 @@ pub(crate) async fn spawn_live(app: &App, c: &Container, vols: &[Vol], live: Arc
         // removed container is never a restart candidate — return before the supervisor runs. Anything
         // waiting on the exit watch (the `docker run --rm` foreground client) already saw Some(code).
         if auto_remove {
+            crate::containers::ports::stop(&cid); // free published host ports on `--rm` teardown
             let mut g = app.inner.lock().await;
             if let Some(dc) = g.containers.remove(&cid) {
                 crate::events::emit_event(&app.events, "container", "destroy", &cid, serde_json::json!({"name": dc.name, "image": dc.image}));

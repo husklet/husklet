@@ -617,8 +617,21 @@ static int switch_dial(const char *path) {
     }
     return -1;
 }
+// Is the daemon owning the process-independent host->container TCP forwarder (dd #320)? When set
+// (DD_PUBLISH_DAEMON=1), the engine must NOT open its own in-process host AF_INET listener — that listener
+// lived in whichever guest process called listen(), so a prefork / re-listening server tore it down on
+// every rebind and two guest processes raced EADDRINUSE. The daemon's listener (dd-daemon/containers/
+// ports.rs) outlives every guest process and dials this container's switch inode per connection instead.
+// The guest-side bind/listen->switch redirect + getsockname->cport reporting below are UNCHANGED (the
+// daemon relies on them). Cached (env is fixed for the process).
+static int g_hostfwd_daemon = -1;
+static int hostfwd_by_daemon(void) {
+    if (g_hostfwd_daemon < 0) g_hostfwd_daemon = (getenv("DD_PUBLISH_DAEMON") != NULL);
+    return g_hostfwd_daemon;
+}
 // Called from listen(): if `fd` is a published switch-backed listening socket, start its host forwarder.
 static void fwd_maybe_start(int fd) {
+    if (hostfwd_by_daemon()) return; // daemon owns the TCP host listener (#320) -> don't race it
     if (fd < 0 || fd >= 1024) return;
     uint16_t cport = 0;
     char upath[200];
@@ -1619,6 +1632,43 @@ static int dns_answer_ptr(const char *qname, uint8_t *a, int ao, int cap, int *p
     (*pan)++;
     return nao;
 }
+// #322 reach-by-name: resolve a bare container/alias name to a same-network peer's IP from the daemon's
+// LIVE per-network table at `<g_netbr>/.names` (one "ip\tname" line per endpoint, rewritten by the daemon
+// on every container start -- so a peer that joined AFTER this container launched, and is therefore absent
+// from this container's frozen /etc/hosts snapshot, is still resolvable). Consulted BEFORE the macOS host
+// resolver so container names stay instant + offline and never leak to external DNS. Gated to user networks
+// (the file is only written for those -- Docker withholds embedded-DNS names on the default bridge).
+// Returns 1 + fills *ip_be (network byte order) on a case-insensitive name match; 0 otherwise.
+static int dns_local_lookup(const char *qname, uint32_t *ip_be) {
+    if (!qname || !qname[0]) return 0;
+    br_init(); // ensure g_netbr is populated from DD_NETBR (idempotent)
+    if (!g_netbr[0]) return 0;
+    char path[256];
+    snprintf(path, sizeof path, "%s/.names", g_netbr);
+    FILE *f = fopen(path, "re");
+    if (!f) return 0;
+    char line[512];
+    int found = 0;
+    while (fgets(line, sizeof line, f)) {
+        char *tab = strchr(line, '\t');
+        if (!tab) continue;
+        *tab = 0;
+        char *name = tab + 1;
+        size_t nl = strlen(name);
+        while (nl && (name[nl - 1] == '\n' || name[nl - 1] == '\r' || name[nl - 1] == ' ' || name[nl - 1] == '\t'))
+            name[--nl] = 0;
+        if (strcasecmp(name, qname) == 0) {
+            uint32_t ip = br_parse_ip(line);
+            if (ip) {
+                if (ip_be) *ip_be = ip;
+                found = 1;
+                break;
+            }
+        }
+    }
+    fclose(f);
+    return found;
+}
 // Build a wire-format response for a wire-format query. Returns the response length, or -1 if the query is
 // too malformed to answer at all.
 static int dns_build_response(const uint8_t *q, int qlen, uint8_t *out, int cap) {
@@ -1643,6 +1693,22 @@ static int dns_build_response(const uint8_t *q, int qlen, uint8_t *out, int cap)
     if (opcode != 0 || qclass != 1) {
         rcode = 4; // not a standard IN query -> NOTIMP
     } else if (qtype == 1 || qtype == 28) { // A / AAAA
+        // Reach-by-name: a same-network peer resolved from the daemon's live table wins over the host
+        // resolver (instant, offline, and container names must never escape to external DNS). Local
+        // endpoints are IPv4 only: A -> one A RR; AAAA -> NOERROR with no answer (NODATA, name exists but
+        // has no v6), which is exactly what Docker's embedded DNS returns for a v4-only service.
+        uint32_t local_ip = 0;
+        if (dns_local_lookup(qname, &local_ip)) {
+            if (qtype == 1) {
+                int nao = dns_put_rr(ans, ao, sizeof ans, 1, (uint8_t *)&local_ip, 4);
+                if (nao >= 0) {
+                    ao = nao;
+                    ancount++;
+                }
+            }
+            // rcode stays 0 (NOERROR); AAAA falls through with 0 answers (NODATA). Skip the host resolver.
+            goto emit;
+        }
         struct addrinfo hints, *res = NULL, *ai;
         memset(&hints, 0, sizeof hints);
         hints.ai_family = AF_UNSPEC; // learn whether the name exists at ALL (so we can tell NXDOMAIN vs NODATA)
@@ -1679,6 +1745,7 @@ static int dns_build_response(const uint8_t *q, int qlen, uint8_t *out, int cap)
         rcode = 0;
     }
 
+emit:; // local-name A/AAAA answer assembled above jumps here, skipping the host resolver
     int need = 12 + qsectlen + ao;
     int tc = 0;
     if (need > cap) { // would overflow (UDP 512) -> truncate: drop answers + set TC so the client retries via TCP

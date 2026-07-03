@@ -34,11 +34,27 @@ docker inspect -f "{{range \$k,\$v := .NetworkSettings.Networks}}{{\$k}} {{end}}
 docker network create "$NET" >/dev/null
 docker network inspect "$NET" >/dev/null 2>&1 && echo NET_INSPECT_OK"#).has("NET_INSPECT_OK"),
 
-        // multi-container: client reaches server BY NAME over TCP on a user network (embedded DNS)
-        s("dockernet/reach-by-name").host(r#"
+        // multi-container: client reaches server BY NAME over TCP on a user network (embedded DNS).
+        // Server launches BEFORE the client, so the client's launch-time /etc/hosts snapshot already
+        // carries the peer — the baseline reach-by-name path. Both Linux arches.
+        s("dockernet/reach-by-name").only(&Target::LINUX).host(r#"
 docker network create "$NET" >/dev/null
 docker run -d --name ${C}srv --network "$NET" $PLAT $IMG sh -c "while true; do echo BYNAMEOK | nc -l -p 9000 -w 1; done" >/dev/null
 sleep 1
 docker run --rm --network "$NET" $PLAT $IMG nc -w 3 ${C}srv 9000"#).has("BYNAMEOK"),
+
+        // #322 the REAL reach-by-name gap: a peer that appears AFTER the resolving container launched. The
+        // client idles first (its /etc/hosts is frozen at launch, WITHOUT the server); the server joins the
+        // network only afterwards; then the client resolves it BY NAME via `docker exec`. A static
+        // /etc/hosts snapshot can't see the late peer — only the live in-engine 127.0.0.11 resolver
+        // (consulting the daemon's live per-network names file) can. Real docker's embedded DNS passes;
+        // dd passes once the resolver reads live daemon state.
+        s("dockernet/reach-by-name-late").only(&Target::LINUX).host(r#"
+docker network create "$NET" >/dev/null
+docker run -d --name ${C}cli --network "$NET" $PLAT $IMG sleep 120 >/dev/null
+sleep 0.5
+docker run -d --name ${C}srv --network "$NET" $PLAT $IMG sh -c "while true; do echo LATEOK | nc -l -p 9000 -w 1; done" >/dev/null
+sleep 1.5
+docker exec ${C}cli nc -w 3 ${C}srv 9000"#).has("LATEOK").timeout(40),
     ])
 }

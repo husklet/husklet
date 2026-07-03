@@ -75,6 +75,15 @@ pub(crate) struct Mount {
     #[serde(rename = "ReadOnly", default)] pub(crate) read_only: bool,
 }
 
+/// `--ulimit` entry (HostConfig.Ulimits[]). `name` is docker's resource name (nofile/nproc/stack/...),
+/// `soft`/`hard` the limits. Reflected in the container's getrlimit via the engine's DD_ULIMITS contract.
+#[derive(Clone, Default, Serialize, Deserialize)]
+pub(crate) struct Ulimit {
+    #[serde(rename = "Name", default)] pub(crate) name: String,
+    #[serde(rename = "Soft", default)] pub(crate) soft: i64,
+    #[serde(rename = "Hard", default)] pub(crate) hard: i64,
+}
+
 #[derive(Clone, Default, Serialize, Deserialize)]
 pub(crate) struct Container {
     pub(crate) id: String,
@@ -92,6 +101,17 @@ pub(crate) struct Container {
     pub(crate) hostname: String,
     pub(crate) memory: i64,
     pub(crate) pids_limit: i64,
+    // `--cpus` (HostConfig.NanoCpus, billionths of a CPU): the container's CPU allotment. Threaded to the
+    // engine as DD_CPUS=ceil(NanoCpus/1e9) so nproc / GOMAXPROCS / the JVM self-size to the allotment.
+    #[serde(default)]
+    pub(crate) nano_cpus: i64,
+    // `--read-only` (HostConfig.ReadonlyRootfs): the rootfs is EROFS (writes to /proc /dev /sys /tmp /run
+    // stay allowed). Threaded to the engine as DD_ROOTFS_RO=1.
+    #[serde(default)]
+    pub(crate) readonly_rootfs: bool,
+    // `--ulimit` (HostConfig.Ulimits): (name, soft, hard) triples reflected in the container's getrlimit.
+    #[serde(default)]
+    pub(crate) ulimits: Vec<Ulimit>,
     pub(crate) publish: String,
     pub(crate) created: i64,
     pub(crate) status: String,

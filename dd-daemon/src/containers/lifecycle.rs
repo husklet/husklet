@@ -36,6 +36,10 @@ pub(crate) struct HostConfig {
     #[serde(rename = "Binds")] binds: Option<Vec<String>>,
     #[serde(rename = "Memory")] memory: Option<i64>,
     #[serde(rename = "PidsLimit")] pids_limit: Option<i64>,
+    // Resource fidelity: `--cpus` (NanoCpus), `--read-only` (ReadonlyRootfs), `--ulimit` (Ulimits).
+    #[serde(rename = "NanoCpus")] nano_cpus: Option<i64>,
+    #[serde(rename = "ReadonlyRootfs")] readonly_rootfs: Option<bool>,
+    #[serde(rename = "Ulimits")] ulimits: Option<Vec<crate::model::Ulimit>>,
     #[serde(rename = "PortBindings")] port_bindings: Option<HashMap<String, Vec<PortBinding>>>,
     #[serde(rename = "NetworkMode")] network_mode: Option<String>,
     // HostConfig fidelity extras (parsed + persisted; round-tripped back through inspect).
@@ -53,13 +57,31 @@ pub(crate) struct HostConfig {
 }
 
 #[derive(Deserialize, Clone)]
-pub(crate) struct PortBinding { #[serde(rename = "HostPort")] host_port: Option<String> }
+pub(crate) struct PortBinding {
+    #[serde(rename = "HostPort")] host_port: Option<String>,
+    // `docker -p 127.0.0.1:8080:80` sets HostIp so the publish is loopback-only (NOT world-reachable).
+    // Empty/absent ⇒ 0.0.0.0. Previously dropped — the reason `127.0.0.1` publishes leaked to every iface.
+    #[serde(rename = "HostIp")] host_ip: Option<String>,
+}
+
+/// Split a PortBindings key (`"<cport>/<proto>"`, e.g. `"9000/tcp"`) into (container-port, proto).
+fn split_key(k: &str) -> (&str, &str) {
+    k.split_once('/').unwrap_or((k, "tcp"))
+}
 
 pub(crate) fn publish_str(pb: &HashMap<String, Vec<PortBinding>>) -> String {
     let mut v = Vec::new();
     for (k, binds) in pb {
-        let cport = k.split('/').next().unwrap_or("");
-        for b in binds { if let Some(hp) = &b.host_port { if !hp.is_empty() && !cport.is_empty() { v.push(format!("{hp}:{cport}")); } } }
+        let (cport, proto) = split_key(k);
+        if cport.is_empty() { continue; }
+        for b in binds {
+            if let Some(hp) = &b.host_port {
+                if !hp.is_empty() {
+                    let ip = b.host_ip.as_deref().unwrap_or("");
+                    v.push(format!("{ip}:{hp}:{cport}/{proto}"));
+                }
+            }
+        }
     }
     v.join(",")
 }
@@ -72,8 +94,8 @@ pub(crate) fn publish_str(pb: &HashMap<String, Vec<PortBinding>>) -> String {
 /// are emitted verbatim (byte-identical to `publish_str`).
 pub(crate) fn publish_str_alloc(pb: &HashMap<String, Vec<PortBinding>>, g: &Inner) -> String {
     let mut used: std::collections::HashSet<u16> = g.containers.values()
-        .flat_map(|c| c.publish.split(','))
-        .filter_map(|p| p.split_once(':')).filter_map(|(h, _)| h.parse::<u16>().ok())
+        .flat_map(|c| crate::containers::parse_publish(&c.publish))
+        .map(|p| p.host_port)
         .collect();
     let mut next: u16 = 49152;
     let mut alloc = || -> u16 {
@@ -85,14 +107,15 @@ pub(crate) fn publish_str_alloc(pb: &HashMap<String, Vec<PortBinding>>, g: &Inne
     keys.sort();
     let mut v = Vec::new();
     for k in keys {
-        let cport = k.split('/').next().unwrap_or("");
+        let (cport, proto) = split_key(k);
         if cport.is_empty() { continue; }
         for b in &pb[k] {
             let hp = match &b.host_port {
                 Some(h) if !h.is_empty() => h.clone(),
                 _ => alloc().to_string(),
             };
-            v.push(format!("{hp}:{cport}"));
+            let ip = b.host_ip.as_deref().unwrap_or("");
+            v.push(format!("{ip}:{hp}:{cport}/{proto}"));
         }
     }
     v.join(",")
@@ -185,6 +208,9 @@ pub(crate) async fn containers_create(State(a): State<App>, Query(cq): Query<Cre
         hostname: body.hostname.unwrap_or_default(),
         memory: hc.as_ref().and_then(|h| h.memory).unwrap_or(0),
         pids_limit: hc.as_ref().and_then(|h| h.pids_limit).unwrap_or(0),
+        nano_cpus: hc.as_ref().and_then(|h| h.nano_cpus).unwrap_or(0),
+        readonly_rootfs: hc.as_ref().and_then(|h| h.readonly_rootfs).unwrap_or(false),
+        ulimits: hc.as_ref().and_then(|h| h.ulimits.clone()).unwrap_or_default(),
         publish: hc.as_ref().and_then(|h| h.port_bindings.as_ref()).map(|pb| publish_str_alloc(pb, &g)).unwrap_or_default(),
         created: now_secs(), tty,
         name: want_name,
@@ -276,6 +302,7 @@ pub(crate) async fn containers_kill(State(a): State<App>, Path(id): Path<String>
         l.stop_requested.store(true, std::sync::atomic::Ordering::SeqCst); // deliberate stop: no auto-restart
         if let Some(pid) = *l.pid.lock().unwrap() { kill_group(pid as i32, sig); } // whole group, not just the leader
     }
+    crate::containers::ports::stop(&full); // free published host ports (docker kill releases the binding)
     if let Some(c) = g.containers.get_mut(&full) { c.status = "exited".into(); c.finished_at = now_secs(); c.finished_at_ns = now_nanos(); }
     let (cname, cimage) = g.containers.get(&full).map(|c| (c.name.clone(), c.image.clone())).unwrap_or_default();
     crate::events::emit_event(&a.events, "container", "kill", &full, json!({"name": cname, "image": cimage}));
@@ -405,6 +432,7 @@ pub(crate) async fn containers_delete(State(a): State<App>, Path(id): Path<Strin
         l.stop_requested.store(true, std::sync::atomic::Ordering::SeqCst);
         if force && running { if let Some(pid) = *l.pid.lock().unwrap() { kill_group(pid as i32, libc::SIGKILL); } } // whole group, not just the leader
     }
+    crate::containers::ports::stop(&full); // free any published host ports before the container is gone
     if let Some(dc) = g.containers.remove(&full) {
         crate::events::emit_event(&a.events, "container", "destroy", &full, json!({"name": dc.name, "image": dc.image}));
         // Drop the container from any network membership too.

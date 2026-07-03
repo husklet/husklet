@@ -218,6 +218,13 @@ impl Client {
             })?;
             progress(PullEvent::DownloadComplete { id: id.to_string() });
             progress(PullEvent::Extracting { id: id.to_string(), current: size, total: size });
+            // OPAQUE (`.wh..wh..opq`): a layer marks a directory opaque to hide ALL lower-layer entries in
+            // it (e.g. `RUN rm -rf /var/lib/apt/lists/* && …`, a wholesale node_modules replace). Because
+            // we FLATTEN every layer into one rootfs, honor it by clearing that dir's already-extracted
+            // lower content BEFORE laying this layer down — otherwise stale lower files leak into the
+            // squashed image (silent corruption of the pulled image). Must run before extract so the
+            // layer's own entries repopulate the cleared dir.
+            clear_opaque_dirs(rootfs, &opaque_dirs_in_tar(&tmp));
             http::extract_targz(&tmp, rootfs)
         })();
         let _ = std::fs::remove_file(&tmp);
@@ -374,6 +381,40 @@ fn apply_whiteouts(rootfs: &Path) -> Result<(), String> {
         let _ = std::fs::remove_file(marker);
     }
     Ok(())
+}
+
+/// Directories a layer marks OPAQUE via a `.wh..wh..opq` entry, as rootfs-relative paths (an empty string
+/// means the rootfs root itself). Read straight from the layer tar (before extraction) so we can clear the
+/// dir's flattened lower content first.
+fn opaque_dirs_in_tar(tar_gz: &Path) -> Vec<String> {
+    let out = match Command::new("tar").arg("tzf").arg(tar_gz).output() {
+        Ok(o) if o.status.success() => o.stdout,
+        _ => return Vec::new(),
+    };
+    String::from_utf8_lossy(&out).lines().filter_map(|l| {
+        let p = l.trim_end_matches('/');
+        let name = p.rsplit('/').next()?;
+        if name != WH_OPAQUE { return None; }
+        // the marker's parent dir, normalized (drop the leading "./" tar prefix and any leading '/').
+        let parent = p[..p.len() - name.len()].trim_end_matches('/');
+        Some(parent.trim_start_matches("./").trim_start_matches('/').to_string())
+    }).collect()
+}
+
+/// Clear the flattened lower-layer content of each opaque dir (remove the subtree, recreate it empty) so
+/// that only the current layer's entries survive when it extracts on top.
+fn clear_opaque_dirs(rootfs: &Path, dirs: &[String]) {
+    for d in dirs {
+        let target = if d.is_empty() { rootfs.to_path_buf() } else { rootfs.join(d) };
+        // A base layer may have left the dir read-only (see reset_dir); re-add owner-write so it can be
+        // cleared, then remove + recreate empty.
+        if target.exists() {
+            let _ = Command::new("find").arg(&target)
+                .args(["-type", "d", "-exec", "chmod", "u+w", "{}", "+"]).output();
+        }
+        let _ = std::fs::remove_dir_all(&target);
+        let _ = std::fs::create_dir_all(&target);
+    }
 }
 
 /// Collect every `.wh.*` marker under `dir`, recursing into real subdirectories only (symlinks are not
@@ -655,6 +696,45 @@ mod tests {
             assert!(!sub.join(m).exists(), "marker {m} removed");
         }
         let _ = std::fs::remove_dir_all(&root);
+    }
+    #[test]
+    fn opaque_clears_lower_content() {
+        // dd flattens all layers into one rootfs. Simulate a rootfs already holding LOWER content in
+        // `app/`, then apply a new layer (a tar) that replaces `app/` wholesale via a `.wh..wh..opq`
+        // marker. Real overlayfs would hide every lower entry of `app/`; the flattened image must too.
+        let base = std::env::temp_dir().join(format!("dd-opq-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let root = base.join("rootfs");
+        std::fs::create_dir_all(root.join("app/oldsub")).unwrap();
+        std::fs::write(root.join("app/stale.txt"), b"stale").unwrap(); // lower file, must be hidden
+        std::fs::write(root.join("app/oldsub/deep"), b"deep").unwrap(); // lower subtree, must be hidden
+        std::fs::write(root.join("keep"), b"keep").unwrap();            // unrelated, must survive
+
+        // The new layer's tar: app/.wh..wh..opq (opaque) + app/new.txt (this layer's own entry).
+        let layerdir = base.join("layer");
+        std::fs::create_dir_all(layerdir.join("app")).unwrap();
+        std::fs::write(layerdir.join("app/.wh..wh..opq"), b"").unwrap();
+        std::fs::write(layerdir.join("app/new.txt"), b"new").unwrap();
+        let tar = base.join("layer.tar.gz");
+        let st = Command::new("sh").arg("-c")
+            .arg(format!("tar czf '{}' -C '{}' .", tar.display(), layerdir.display()))
+            .status().unwrap();
+        assert!(st.success(), "build layer tar");
+
+        // The opaque dir is detected from the tar.
+        assert_eq!(opaque_dirs_in_tar(&tar), vec!["app".to_string()]);
+
+        // Apply the layer exactly as unpack_layer does: clear opaque dirs, extract, apply whiteouts.
+        clear_opaque_dirs(&root, &opaque_dirs_in_tar(&tar));
+        http::extract_targz(&tar, &root).unwrap();
+        apply_whiteouts(&root).unwrap();
+
+        assert!(!root.join("app/stale.txt").exists(), "opaque must clear the stale lower file");
+        assert!(!root.join("app/oldsub").exists(), "opaque must clear the stale lower subtree");
+        assert!(root.join("app/new.txt").exists(), "the current layer's file must remain");
+        assert!(root.join("keep").exists(), "unrelated content must survive");
+        assert!(!root.join("app/.wh..wh..opq").exists(), "the opaque marker must be removed");
+        let _ = std::fs::remove_dir_all(&base);
     }
     #[test]
     fn challenge() {

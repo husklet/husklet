@@ -177,8 +177,8 @@ static int translate_shift(struct insn *I, uint64_t gpc, uint64_t next) {
                     }
                     e_csel(20, 24, 20, 0 /*EQ: count==0*/, 1);
                     e_str(20, 28, OFF_NZCV);
-                    if (k == 4 || k == 5 || k == 7) {   // SHL/SHR/SAR set PF from the result; rotates leave it
-                        e_ldr(25, 28, OFF_PF);          // old PF
+                    if (!g_pfaf_dead && (k == 4 || k == 5 || k == 7)) { // SHL/SHR/SAR set PF; rotates leave it
+                        e_ldr(25, 28, OFF_PF);          // old PF (#346: skipped when PF dead)
                         e_csel(23, 25, 16, 0, 1);       // EQ -> keep old PF, else result low byte (x16)
                         e_pf_save(23);
                     }
@@ -233,7 +233,8 @@ static int translate_shift(struct insn *I, uint64_t gpc, uint64_t next) {
                     } else
                         e_nzcv_save();
                     // x86 PF: SHL/SHR/SAR set SF/ZF/PF from the result; rotates (ROL/ROR) leave PF unchanged.
-                    if (k == 4 || k == 5 || k == 7) e_pf_save(16); // result low byte -> PF lane (x16 holds result)
+                    if (!g_pfaf_dead && (k == 4 || k == 5 || k == 7))
+                        e_pf_save(16); // result low byte -> PF lane (x16 holds result; #346 skip when dead)
                 }
                 rm_store(I, w, 16);
                 return TX_NEXT;
