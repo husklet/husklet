@@ -99,6 +99,68 @@ static void do_repstr(struct cpu *c) {
     g_repstr_elems += k;
 }
 
+// ---- RCL/RCR by CL (R_RCL) ---------------------------------------------------------------
+// Rotate-through-carry with a runtime count. Descriptor in cpu->divop:
+//   [0:8]=w(1/2/4/8)  bit8=rcr  bit9=is_mem  bit10=hi8(byte high reg AH/CH/DH/BH)  [16:21]=r/m reg.
+// A memory operand's already-host-biased effective address is in cpu->x87_ea. Carry-in/out use cpu->nzcv
+// in the engine's borrow convention (stored ARM C = NOT x86 CF) -- byte-identical to the inline
+// emit_rcl_rcr() constant-count path and the membank flag ABI, so the following block reloads flags
+// verbatim. x86: count is masked to 5 bits (operand size 8/16/32) or 6 bits (64), then MOD (width+1);
+// a masked count of 0 changes NO flags; OF is defined only when the masked count is exactly 1.
+static void do_rcl(struct cpu *c) {
+    uint64_t d = c->divop;
+    int w = (int)(d & 0xff), rcr = (d >> 8) & 1, is_mem = (d >> 9) & 1, hi8 = (d >> 10) & 1;
+    int reg = (int)((d >> 16) & 0x1f);
+    int W = 8 * w;
+    uint64_t mask = (w == 8) ? ~0ull : ((1ull << W) - 1);
+    uint64_t ea = c->x87_ea;
+    uint64_t val = is_mem ? repstr_rd(ea, w) : (hi8 ? ((c->r[reg] >> 8) & 0xff) : (c->r[reg] & mask));
+    int countMask = (w == 8) ? 0x3f : 0x1f;
+    int masked = (int)(c->r[RCX] & 0xff) & countMask;
+    int ec = masked % (W + 1);
+    int cf = !((c->nzcv >> 29) & 1); // x86 CF carry-in = NOT stored ARM C
+    // ec==0 (incl. a nonzero masked count that is a multiple of width+1, e.g. CL=9 for a byte) is a no-op:
+    // x86 leaves the operand AND all flags unchanged. Only ec!=0 rotates; OF is written only for masked==1.
+    if (ec != 0) {
+        uint64_t res;
+        int newcf;
+        if (!rcr) { // RCL: (W+1)-bit left rotate of {CF, val} by ec
+            res = (ec < W) ? ((val << ec) & mask) : 0;
+            res |= (ec == 1) ? (uint64_t)cf : (((uint64_t)cf << (ec - 1)) & mask);
+            if (ec >= 2) res |= (val >> (W + 1 - ec)) & mask; // top (ec-1) operand bits wrap in below CF
+            newcf = (val >> (W - ec)) & 1;
+        } else { // RCR: (W+1)-bit right rotate
+            res = (ec < W) ? (val >> ec) : 0;
+            res |= ((uint64_t)cf << (W - ec)) & mask;         // carry-in lands at bit (W-ec)
+            if (ec >= 2) res |= (val << (W - ec + 1)) & mask; // low (ec-1) operand bits wrap to the top
+            newcf = (val >> (ec - 1)) & 1;
+        }
+        cf = newcf;
+        val = res & mask;
+        c->nzcv = (c->nzcv & ~(1ull << 29)) | ((uint64_t)(cf ? 0 : 1) << 29); // stored C = NOT x86 CF
+        if (masked == 1) {                                                    // OF defined only for a 1-bit rotate
+            int of = !rcr ? (int)(((val >> (W - 1)) & 1) ^ (uint64_t)cf)      // RCL: MSB(result) XOR newCF
+                          : (int)(((val >> (W - 1)) & 1) ^ ((val >> (W - 2)) & 1)); // RCR: top two result bits
+            c->nzcv = (c->nzcv & ~(1ull << 28)) | ((uint64_t)of << 28);
+        }
+    }
+    if (is_mem) {
+        switch (w) {
+        case 1: *(uint8_t *)ea = (uint8_t)val; break;
+        case 2: *(uint16_t *)ea = (uint16_t)val; break;
+        case 4: *(uint32_t *)ea = (uint32_t)val; break;
+        default: *(uint64_t *)ea = val; break;
+        }
+    } else if (hi8)
+        c->r[reg] = (c->r[reg] & ~0xff00ull) | ((val & 0xff) << 8);
+    else if (w == 1)
+        c->r[reg] = (c->r[reg] & ~0xffull) | (val & 0xff);
+    else if (w == 2)
+        c->r[reg] = (c->r[reg] & ~0xffffull) | (val & 0xffff);
+    else
+        c->r[reg] = val & mask; // w==4 zero-extends (upper 32 cleared); w==8 full
+}
+
 // CPUID emulation. We advertise EXACTLY the feature set the engine actually translates (legacy-SSE in
 // emit.c + the 0F38/0F3A SSSE3/SSE4/AES/PCLMUL/SHA/CRC32/MOVBE and BMI lanes in avx.c do_sse3b/do_avx),
 // mirroring a real x86-64 baseline. We deliberately do NOT advertise AVX/AVX2/FMA/F16C/XSAVE/OSXSAVE: those

@@ -136,6 +136,11 @@ _Static_assert(__builtin_offsetof(struct cpu, mmscratch) == OFF_MM, "OFF_MM drif
 // block and compute it in C (x87_func) via host libm on the double-precision ST stack. These have no
 // ARM/SSE counterpart. cpu->x87_ea carries the X87_* selector below. See x86_ops.c x87_func().
 #define R_X87FUNC 11
+// RCL/RCR by CL (group2 D2/D3 /2,/3): rotate-through-carry with a RUNTIME count. The constant-count forms
+// are lowered inline (emit_rcl_rcr); the by-CL form needs the count MOD (width+1) reduction (mod 9/17 for
+// byte/word) which is awkward in emitted code, so the translator exits here and do_rcl() performs the whole
+// rotate + CF/OF update in C. Descriptor in cpu->divop; a memory operand's host EA in cpu->x87_ea.
+#define R_RCL 12
 enum { X87_F2XM1, X87_FYL2X, X87_FPTAN, X87_FPATAN, X87_FYL2XP1, X87_FSINCOS, X87_FSIN, X87_FCOS };
 // x86 register encodings (== host reg numbers)
 enum { RAX, RCX, RDX, RBX, RSP, RBP, RSI, RDI };

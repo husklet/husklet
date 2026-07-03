@@ -139,6 +139,7 @@ static int svc_net(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_
                 g_lo_v6[r] = 0;
                 g_br_port[r] = 0;
                 g_br_ip[r] = 0;
+                g_dns_sock[r] = 0;
             }
         }
         G_RET(c) = r < 0 ? (uint64_t)(-errno) : (uint64_t)r;
@@ -381,6 +382,15 @@ static int svc_net(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_
         static int net_isolate = -1;
         if (net_isolate < 0) net_isolate = getenv("DD_NET_ISOLATE") != NULL;
         uint8_t *sa = (uint8_t *)a1;
+        // Container DNS: connect(127.0.0.11:53) -> swap the socket to a socketpair we answer on (host
+        // resolver). Subsequent send/recv on the connected fd are handled by the DNS paths below.
+        if (dns_enabled() && dns_dest_is(sa, (socklen_t)a2)) {
+            int stream = ((int)a0 >= 0 && (int)a0 < 1024) ? g_sock_stream[(int)a0] : 0;
+            if (dns_swap((int)a0, stream) == 0) {
+                G_RET(c) = 0;
+                break;
+            } // swap failed -> fall through to the normal (host loopback) connect
+        }
         if (net_isolate && sa && (socklen_t)a2 >= 8 && *(uint16_t *)(sa + 0) == AF_INET &&
             (ntohl(*(uint32_t *)(sa + 4)) >> 24) != 127) {
             G_RET(c) = (uint64_t)(-ENETUNREACH);
@@ -510,6 +520,16 @@ static int svc_net(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_
     case 204: {
         // getsockname
         int fd = (int)a0;
+        if (fd >= 0 && fd < 1024 && g_dns_sock[fd]) { // DNS socket: report an AF_INET local addr (0.0.0.0:0)
+            if (a1) {
+                uint8_t *g = (uint8_t *)a1;
+                memset(g, 0, 8);
+                *(uint16_t *)g = AF_INET;
+                if (a2) *(socklen_t *)a2 = 16;
+            }
+            G_RET(c) = 0;
+            break;
+        }
         if (fd >= 0 && fd < 1024 && g_lo_port[fd]) {
             if (g_lo_v6[fd])
                 fill_inet6_lo((uint8_t *)a1, (socklen_t *)a2, g_lo_port[fd]);
@@ -549,6 +569,11 @@ static int svc_net(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_
     case 205: {
         // getpeername
         int fd = (int)a0;
+        if (fd >= 0 && fd < 1024 && g_dns_sock[fd]) { // DNS socket: peer is the nameserver 127.0.0.11:53
+            dns_fill_ns((uint8_t *)a1, (socklen_t *)a2);
+            G_RET(c) = 0;
+            break;
+        }
         if (fd >= 0 && fd < 1024 && g_lo_port[fd]) {
             if (g_lo_v6[fd])
                 fill_inet6_lo((uint8_t *)a1, (socklen_t *)a2, g_lo_port[fd]);
@@ -581,6 +606,15 @@ static int svc_net(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_
         break;
     }
     case 206: {
+        // Container DNS: a query sent to 127.0.0.11:53 (connected send, or first unconnected sendto) is
+        // parsed + answered via the host resolver; nothing hits the wire. a4/a5 are the optional dest addr.
+        {
+            int64_t dret;
+            if (dns_try_send((int)a0, (const uint8_t *)a1, (size_t)a2, (const uint8_t *)a4, (socklen_t)a5, &dret)) {
+                G_RET(c) = (uint64_t)dret;
+                break;
+            }
+        }
         // MSG_NOSIGNAL(0x4000) has no per-call equivalent on macOS; emulate it with the SO_NOSIGPIPE
         // socket option so the send returns EPIPE instead of raising a fatal SIGPIPE.
         if ((int)a3 & 0x4000) {
@@ -617,7 +651,11 @@ static int svc_net(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_
         // SEQPACKET-as-DGRAM EOF: a peer-closed DGRAM recv reports ECONNRESET, but Linux SEQPACKET
         // returns 0 (EOF). Translate so the guest sees the expected end-of-stream. (See case 199.)
         if (r < 0 && errno == ECONNRESET && seq_is((int)a0)) r = 0;
-        if (r >= 0 && want) {
+        if (r >= 0 && want && (int)a0 >= 0 && (int)a0 < 1024 && g_dns_sock[(int)a0]) {
+            // DNS socket: report the source as the nameserver (127.0.0.11:53) so the guest resolver's
+            // "answer came from the server we queried" anti-spoof check passes (the real src is AF_UNIX).
+            dns_fill_ns((uint8_t *)a4, (socklen_t *)a5);
+        } else if (r >= 0 && want) {
             socklen_t gcap = a5 ? *(socklen_t *)a5 : 0;
             int ll = sa_m2l((struct sockaddr *)&hss, (uint8_t *)a4, gcap);
             if (ll < 0) {
@@ -720,6 +758,23 @@ static int svc_net(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_
     // sendmsg/recvmsg -- translate Linux msghdr -> macOS
     case 212: {
         uint8_t *g = (uint8_t *)a1;
+        // Container DNS: a sendmsg carrying a query to 127.0.0.11:53 (or on an already-swapped DNS socket).
+        if (nr == 211 && dns_enabled()) {
+            int dfd = (int)a0;
+            uint8_t *nm = (uint8_t *)*(uint64_t *)(g + 0);
+            socklen_t nml = *(uint32_t *)(g + 8);
+            if ((dfd >= 0 && dfd < 1024 && g_dns_sock[dfd]) || dns_dest_is(nm, nml)) {
+                struct iovec *iv = (struct iovec *)*(uint64_t *)(g + 16);
+                int ivn = (int)*(uint64_t *)(g + 24);
+                uint8_t tmp[2048];
+                size_t tl = dns_gather(iv, ivn, tmp, sizeof tmp);
+                int64_t dret;
+                if (dns_try_send(dfd, tmp, tl, nm, nml, &dret)) {
+                    G_RET(c) = (uint64_t)dret;
+                    break;
+                }
+            }
+        }
         struct msghdr mh;
         // Linux: iovlen/controllen are 8-byte; macOS 4
         memset(&mh, 0, sizeof mh);
@@ -788,7 +843,11 @@ static int svc_net(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_
         if (nr == 212 && r < 0 && errno == ECONNRESET && seq_is((int)a0)) r = 0;
         if (nr == 212 && r >= 0) {
             // recvmsg writes back name len + (host->guest) control + translated flags
-            if (gname && gnamelen) { // translate received host sockaddr back to Linux layout
+            if (gname && gnamelen && (int)a0 >= 0 && (int)a0 < 1024 && g_dns_sock[(int)a0]) {
+                // DNS socket: report the nameserver (127.0.0.11:53) as the source (see case 207).
+                dns_fill_ns(gname, NULL);
+                *(uint32_t *)(g + 8) = 16;
+            } else if (gname && gnamelen) { // translate received host sockaddr back to Linux layout
                 int ll = sa_m2l((struct sockaddr *)&nss, gname, gnamelen);
                 *(uint32_t *)(g + 8) = (ll >= 0) ? (uint32_t)ll : mh.msg_namelen;
                 if (ll < 0 && mh.msg_namelen) // non-inet: copy raw host bytes back
@@ -808,6 +867,32 @@ static int svc_net(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_
         uint8_t *vec = (uint8_t *)a1;
         unsigned vlen = (unsigned)a2;
         // mmsghdr = msghdr(56) + msg_len(4) + pad
+        // Container DNS: glibc's default parallel A+AAAA lookup sends BOTH queries to the nameserver in one
+        // sendmmsg. Answer each submessage via the host resolver; the responses are drained by recvfrom (207).
+        if (nr == 269 && dns_enabled() && vlen) {
+            int dfd = (int)a0;
+            uint8_t *g0 = vec;
+            uint8_t *nm0 = (uint8_t *)*(uint64_t *)(g0 + 0);
+            socklen_t nml0 = *(uint32_t *)(g0 + 8);
+            int is_dns = (dfd >= 0 && dfd < 1024 && g_dns_sock[dfd]);
+            if (!is_dns && dns_dest_is(nm0, nml0) && dns_swap(dfd, (dfd >= 0 && dfd < 1024) ? g_sock_stream[dfd] : 0) == 0)
+                is_dns = 1;
+            if (is_dns) {
+                int stream = (dfd >= 0 && dfd < 1024) ? g_sock_stream[dfd] : 0;
+                unsigned n;
+                for (n = 0; n < vlen; n++) {
+                    uint8_t *g = vec + (size_t)n * 64;
+                    struct iovec *iv = (struct iovec *)*(uint64_t *)(g + 16);
+                    int ivn = (int)*(uint64_t *)(g + 24);
+                    uint8_t tmp[2048];
+                    size_t tl = dns_gather(iv, ivn, tmp, sizeof tmp);
+                    dns_send(dfd, tmp, tl, stream);
+                    *(uint32_t *)(g + 56) = (uint32_t)tl; // msg_len: whole query accepted
+                }
+                G_RET(c) = (uint64_t)vlen;
+                break;
+            }
+        }
         int done = 0, err = 0;
         // MSG_NOSIGNAL(0x4000) -> SO_NOSIGPIPE once before the fan-out (macOS has no per-call flag).
         if (nr == 269 && ((int)a3 & 0x4000)) {
@@ -860,7 +945,10 @@ static int svc_net(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_
             // msg_len
             *(uint32_t *)(g + 56) = (uint32_t)r;
             if (nr == 243) {
-                if (gname && gnamelen) { // translate received host sockaddr back to Linux layout
+                if (gname && gnamelen && (int)a0 >= 0 && (int)a0 < 1024 && g_dns_sock[(int)a0]) {
+                    dns_fill_ns(gname, NULL); // DNS socket: source is the nameserver (see case 207)
+                    *(uint32_t *)(g + 8) = 16;
+                } else if (gname && gnamelen) { // translate received host sockaddr back to Linux layout
                     int ll = sa_m2l((struct sockaddr *)&nss, gname, gnamelen);
                     *(uint32_t *)(g + 8) = (ll >= 0) ? (uint32_t)ll : mh.msg_namelen;
                     if (ll < 0 && mh.msg_namelen)

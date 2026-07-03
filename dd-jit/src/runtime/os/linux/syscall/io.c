@@ -224,6 +224,12 @@ static int svc_io(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t
             G_RET(c) = (uint64_t)nl_send(wfd, (const uint8_t *)a1, (size_t)a2);
             break;
         }
+        // Container DNS: a query write(2)'d on a DNS socket (TCP DNS via write, or a connected-UDP write) is
+        // parsed + answered by the host resolver (net.c/netns.c dns_send); nothing reaches the wire.
+        if (wfd >= 0 && wfd < 1024 && g_dns_sock[wfd]) {
+            G_RET(c) = (uint64_t)dns_send(wfd, (const uint8_t *)a1, (size_t)a2, g_sock_stream[wfd]);
+            break;
+        }
         // RAM-backed scratch file: serve the write from memory (spill to the host file past the cap)
         if (memf_get(wfd) && memf_room_or_spill(wfd, (off_t)g_memf[wfd]->pos + (off_t)a2)) {
             ssize_t r = memf_write_pos(g_memf[wfd], (void *)a1, (size_t)a2);
@@ -288,6 +294,13 @@ static int svc_io(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t
             }
             nl_send((int)a0, tmp, tl);
             G_RET(c) = (uint64_t)tl;
+            break;
+        }
+        // Container DNS: TCP DNS is commonly writev(len-prefix, query) (glibc send_vc). Gather + answer it.
+        if ((int)a0 >= 0 && (int)a0 < 1024 && g_dns_sock[(int)a0]) {
+            uint8_t tmp[2048];
+            size_t tl = dns_gather((const struct iovec *)a1, (int)a2, tmp, sizeof tmp);
+            G_RET(c) = (uint64_t)dns_send((int)a0, tmp, tl, g_sock_stream[(int)a0]);
             break;
         }
         if (memf_get((int)a0)) {

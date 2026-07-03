@@ -215,6 +215,10 @@ fn op_x86_misc() -> Group {
         x("movnt",       "completeness/x86_movnt.c"),      // jit86 UNIMPL 0F E7 (MOVNTDQ)
         x("sbb-acc-imm", "completeness/x86_sbb.c"),        // acc-imm SBB 0x1C/0x1D (+REX.W) — result+flags vs qemu
         x("div",         "completeness/x86_div.c"),        // DIV/IDIV (F6/F7 /6 /7) 8/16/32/64-bit + #DE (SIGFPE) traps
+        x("memshift-cl", "completeness/x86_memshift.c"),   // D3 /4,/5,/7 mem-dest SHL/SHR/SAR by CL — EA-clobber regression (redis jemalloc)
+        x("movntps",     "completeness/x86_movntps.c"),    // MOVNTPS/MOVNTPD 0F 2B + MOVNTDQ (#190)
+        x("movseg",      "completeness/x86_movseg.c"),     // MOV r/m,Sreg (8C) / MOV Sreg,r/m (8E) (#183)
+        x("rcl",         "completeness/x86_rcl.c"),        // RCL/RCR by CL (group2 D2/D3 /2,/3), all widths + mem
     ])
 }
 

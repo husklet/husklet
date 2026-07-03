@@ -48,6 +48,11 @@ fn ext_net() -> Group {
         port("select-multi", "ext_net/net_select_multi.c").out("select_multi ready=2 both=1\n"),
         // ---- address conversion / resolution ----
         port("getaddrinfo", "ext_net/net_getaddrinfo.c").out("getaddrinfo r=0 ip=127.0.0.1 port_ok=1\n"),
+        // ---- container DNS (#261): a query to the embedded nameserver 127.0.0.11:53 is intercepted and
+        // resolved via the macOS host resolver, with the source reported as the nameserver. "localhost"
+        // is deterministic (127.0.0.1) and needs no external network. Linux-only golden (macOS has no
+        // 127.0.0.11 responder -> no native oracle); the same syscall path serves both Linux engines.
+        src("dns-hostresolver", "ext_net/net_dns.c").out("dns localhost=127.0.0.1 rcode=0 an=1 src_ok=1\n"),
         port("inet-pton", "ext_net/net_inet_pton.c").out("inet_pton v4=192.168.1.42 v6=2001:db8::1 bad=0\n"),
         port("gethostname", "ext_net/net_gethostname.c").out("gethostname r=0 nonempty=1\n"),
         // ---- interface introspection (#289) — Linux-only synth (getifaddrs/netlink/procfs/sysfs) ----

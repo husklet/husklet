@@ -673,6 +673,8 @@ static int emit_parity_jcc_cond(int lo) {
 
 #include "translate/shift.c"
 
+#include "translate/crypto.c"
+
 // SSE2 variable-count packed shift (PSLLW/D/Q, PSRLW/D/Q, PSRAW/D by xmm/m): shift every
 // `esize`-bit lane of `vn` by the SCALAR count held in the low 64 bits of `vs`, result -> `vd`.
 // x86 saturates the count: any count >= esize yields 0 (logical) or the sign bit replicated
@@ -879,6 +881,12 @@ static void *translate_block(uint64_t gpc) {
         // (cmp-string sets flags but writes them through cpu->nzcv in C), so just spill any pending flags.
         if (I.map3) {
             if (g_fl_pending) flags_materialize();
+            // #342: map the AES-NI / PCLMULQDQ / SHA-NI crypto opcodes to inline ARM crypto (near-native);
+            // everything else (SSSE3/SSE4/CRC32/MOVBE/SHA-1/aeskeygenassist) still exits to do_sse3b.
+            if (translate_crypto(&I, next) == TX_NEXT) {
+                gpc = next;
+                continue;
+            }
             emit_exit_const(gpc, R_SSE3B);
             break;
         }
@@ -2691,6 +2699,9 @@ static void *translate_block(uint64_t gpc) {
                     e_vmov(vd, 17);
                 } else if (op == 0xE7 && I.p66) { // movntdq (66): non-temporal store xmm -> m128
                     emit_ea(&I, next);
+                    e_str_q(vd, 17, 0);
+                } else if (op == 0x2B && I.is_mem) { // movntps (NP) / movntpd (66): non-temporal store xmm -> m128
+                    emit_ea(&I, next);               // (aligned, non-temporal -> a plain 128-bit store on ARM; #190)
                     e_str_q(vd, 17, 0);
                 } else
                     handled = 0;

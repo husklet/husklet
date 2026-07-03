@@ -95,6 +95,32 @@ static int translate_mov(struct insn *I, uint64_t next) {
                 e_mov_rr(I->reg, 17, sf);
                 return TX_NEXT;
             }
+            // ---- mov r/m16, Sreg (8C) / mov Sreg, r/m16 (8E) ----  (#183)
+            // 64-bit userspace segment model: the six selectors are fixed -- ES/DS/FS/GS = 0, CS = 0x33,
+            // SS = 0x2b -- exactly what Linux sets at process start and what the qemu-user oracle reports.
+            // The architecturally-visible FS/GS *bases* live in cpu->fs_base/gs_base (set via arch_prctl),
+            // NOT the selector, so a selector move touches neither. MOV-from-Sreg materializes the constant
+            // selector; MOV-to-Sreg accepts and discards it (loading a userspace selector has no visible
+            // effect without a modify_ldt(2) descriptor, which this engine does not model). The ModRM.reg
+            // field (low 3 bits) picks ES(0),CS(1),SS(2),DS(3),FS(4),GS(5); 6/7 are reserved (#UD on HW).
+            if (op == 0x8C) {
+                static const int sel[8] = {0, 0x33, 0x2b, 0, 0, 0, 0, 0};
+                int s = sel[I->reg & 7];
+                if (I->is_mem) { // selector -> m16 (always a 16-bit store, regardless of opsize)
+                    emit_ea(I, next);
+                    e_movconst(16, (uint64_t)s);
+                    e_store(2, 16, 17);
+                } else if (I->opsize == 2) { // r16 dest: write low 16, preserve bits 63:16
+                    e_movconst(16, (uint64_t)s);
+                    e_bfi(I->rm_reg, 16, 0, 16, 1);
+                } else { // r32/r64 dest: selector zero-extended to the full register
+                    e_movconst(I->rm_reg, (uint64_t)s);
+                }
+                return TX_NEXT;
+            }
+            if (op == 0x8E) { // mov Sreg, r/m16 -- accept + discard (no userspace-visible effect; see above)
+                return TX_NEXT;
+            }
             // ---- push/pop r (50-5F) ----
             if (op >= 0x50 && op <= 0x57) {
                 int r = (op - 0x50) | (I->rexB << 3);
