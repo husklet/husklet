@@ -94,6 +94,34 @@ static int cgid(void) { return g_gid >= 0 ? g_gid : (int)getgid(); }
 #include <sys/xattr.h>
 #define DD_XATTR_UID "user.dd.uid"
 #define DD_XATTR_GID "user.dd.gid"
+// PERF (sqlite-select / any stat-heavy workload): reading the guest-chown xattr back on EVERY stat cost
+// two macOS fgetxattr/getxattr per stat (~2.5us each on APFS even for a MISS -> ~5us/stat, 40-50x native
+// fstat). But the dd.uid/dd.gid xattr is set ONLY by an explicit guest chown or a cred-dropped create
+// (chown_xattr_set_*); the overwhelmingly common file has none. So keep a per-inode NEGATIVE cache: once
+// we confirm an inode carries no dd xattr, skip the syscalls on repeat stats of the same inode. A global
+// generation counter (bumped on every set) invalidates the whole cache the instant any chown xattr is
+// written, so a stale "no xattr" verdict can never outlive the xattr appearing. Cross-process correctness
+// is free: a new engine process starts with an empty cache, so its first stat of any inode does the real
+// read and sees a pre-existing (persisted-on-disk) xattr. fork inherits the cache (same host files, same
+// xattr state); in-process execve keeps it (idem). Kill switch: DDJIT_NOXATTRCACHE=1 forces the old
+// always-read path. Keyed on (st_dev,st_ino) which fill_linux_stat already has from the just-done stat.
+static uint32_t g_chown_gen = 1; // 0 reserved for "empty slot"
+static int g_noxattrcache = -1;  // -1 = uninit; 1 = cache disabled (kill switch)
+#define DD_NOXC_N 4096           // direct-mapped; power of two
+static struct {
+    uint64_t dev, ino;
+    uint32_t gen;
+} g_noxc[DD_NOXC_N];
+static inline uint32_t noxc_slot(uint64_t dev, uint64_t ino) {
+    uint64_t h = (ino * 0x9E3779B97F4A7C15ull) ^ (dev * 0xC2B2AE3D27D4EB4Full);
+    return (uint32_t)(h >> 33) & (DD_NOXC_N - 1);
+}
+static void chown_gen_bump(void) { // any new xattr invalidates every cached "no xattr" verdict
+    if (++g_chown_gen == 0) {       // wrap: reset to a fresh generation and clear stale slots
+        g_chown_gen = 1;
+        memset(g_noxc, 0, sizeof g_noxc);
+    }
+}
 static void chown_xattr_set_path(const char *hostpath, int uid, int gid, int nofollow) {
     int opt = nofollow ? XATTR_NOFOLLOW : 0;
     if (uid >= 0) {
@@ -104,6 +132,7 @@ static void chown_xattr_set_path(const char *hostpath, int uid, int gid, int nof
         uint32_t v = (uint32_t)gid;
         setxattr(hostpath, DD_XATTR_GID, &v, sizeof v, 0, opt);
     }
+    if (uid >= 0 || gid >= 0) chown_gen_bump();
 }
 static void chown_xattr_set_fd(int fd, int uid, int gid) {
     if (uid >= 0) {
@@ -114,21 +143,38 @@ static void chown_xattr_set_fd(int fd, int uid, int gid) {
         uint32_t v = (uint32_t)gid;
         fsetxattr(fd, DD_XATTR_GID, &v, sizeof v, 0, 0);
     }
+    if (uid >= 0 || gid >= 0) chown_gen_bump();
 }
 // Read back the guest-set ids (fd preferred when fd>=0, else hostpath). Each out is the set id or -1
-// (no xattr -> keep the #156 cuid/cgid default). Returns 1 if either id was guest-set.
-static int chown_xattr_get(const char *hostpath, int fd, int *uid, int *gid) {
+// (no xattr -> keep the #156 cuid/cgid default). Returns 1 if either id was guest-set. dev/ino identify
+// the just-stat'd inode for the negative cache above (0/0 = skip caching, e.g. synthetic entries).
+static int chown_xattr_get(const char *hostpath, int fd, uint64_t dev, uint64_t ino, int *uid, int *gid) {
     *uid = -1;
     *gid = -1;
-    uint32_t v;
-    if (fd >= 0) {
-        if (fgetxattr(fd, DD_XATTR_UID, &v, sizeof v, 0, 0) == (ssize_t)sizeof v) *uid = (int)v;
-        if (fgetxattr(fd, DD_XATTR_GID, &v, sizeof v, 0, 0) == (ssize_t)sizeof v) *gid = (int)v;
-    } else if (hostpath) {
-        if (getxattr(hostpath, DD_XATTR_UID, &v, sizeof v, 0, 0) == (ssize_t)sizeof v) *uid = (int)v;
-        if (getxattr(hostpath, DD_XATTR_GID, &v, sizeof v, 0, 0) == (ssize_t)sizeof v) *gid = (int)v;
+    if (fd < 0 && !hostpath) return 0; // synthetic: no backing file to read
+    if (g_noxattrcache < 0) g_noxattrcache = getenv("DDJIT_NOXATTRCACHE") != NULL ? 1 : 0;
+    int use_cache = !g_noxattrcache && ino != 0;
+    uint32_t slot = 0;
+    if (use_cache) {
+        slot = noxc_slot(dev, ino);
+        if (g_noxc[slot].gen == g_chown_gen && g_noxc[slot].dev == dev && g_noxc[slot].ino == ino)
+            return 0; // cached: this inode carries no dd chown xattr (verified at the current generation)
     }
-    return (*uid >= 0 || *gid >= 0);
+    uint32_t v;
+    int present = 0;
+    if (fd >= 0) {
+        if (fgetxattr(fd, DD_XATTR_UID, &v, sizeof v, 0, 0) == (ssize_t)sizeof v) { *uid = (int)v; present = 1; }
+        if (fgetxattr(fd, DD_XATTR_GID, &v, sizeof v, 0, 0) == (ssize_t)sizeof v) { *gid = (int)v; present = 1; }
+    } else {
+        if (getxattr(hostpath, DD_XATTR_UID, &v, sizeof v, 0, 0) == (ssize_t)sizeof v) { *uid = (int)v; present = 1; }
+        if (getxattr(hostpath, DD_XATTR_GID, &v, sizeof v, 0, 0) == (ssize_t)sizeof v) { *gid = (int)v; present = 1; }
+    }
+    if (use_cache && !present) { // record the confirmed miss so a repeat stat of this inode skips the reads
+        g_noxc[slot].dev = dev;
+        g_noxc[slot].ino = ino;
+        g_noxc[slot].gen = g_chown_gen;
+    }
+    return present;
 }
 // ---- runtime credential overlay (USER ns) -- defined here (BEFORE fs.c AND proc.c in the unity TU) --
 // cuid()/cgid() give the container's CONFIGURED identity (default 0=root); a privileged guest may drop
