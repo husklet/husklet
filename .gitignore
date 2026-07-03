@@ -14,3 +14,4 @@ dd.sock
 # maintainer/agent local dev helpers (never committed)
 .dev/
 target-*/
+/pclib_blob_*.bin
