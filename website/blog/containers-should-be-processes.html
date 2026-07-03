@@ -181,6 +181,39 @@
 
   <p class="mt-5 leading-relaxed text-muted2 text-sm">Method: the same x86-64 binary run two ways on one Apple-Silicon Mac — <code class="rounded bg-code px-1.5 py-0.5 font-mono text-[13px] text-blue1">qemu-x86_64</code> user-mode vs dd's JIT — medians of 5, qemu and dd runs alternated so a busy host can't bias the ratio. openssl/python/sqlite are the real image binaries and <em>self-time</em> (throughput / <code class="font-mono text-[12px]">perf_counter</code>), so startup is excluded from both lanes; compute kernels are external wall-clock, where the dd lane even pays a bridge/startup tax qemu doesn't — so those ratios are conservative. Runs were on a matrix-busy build host; alternation keeps ratios fair while absolutes stay conservative. Raw numbers in <code class="rounded bg-code px-1.5 py-0.5 font-mono text-[13px] text-blue1">docs/benchmarks-qemu.csv</code>; reproduce the compute lane with <code class="rounded bg-code px-1.5 py-0.5 font-mono text-[13px] text-blue1">make bench</code>. The OrbStack table is a separate pass — each runtime running the same images through its own <code class="font-mono text-[12px]">docker</code>.</p>
 
+  <!-- WHY WE CAN WIN -->
+  <h2 class="mt-14 text-2xl font-bold tracking-tight md:text-3xl">Why no VM wins</h2>
+  <p class="mt-4 leading-relaxed text-muted">The interesting question isn&rsquo;t how dd beats <em>emulation</em> &mdash; a JIT to native code will always lap a software interpreter. It&rsquo;s how a plain process keeps up with a <strong class="text-txt">Rosetta VM</strong>, whose x86&rarr;ARM translation is genuinely excellent. The answer isn&rsquo;t out-translating Rosetta. It&rsquo;s that <strong class="text-txt">Rosetta runs <em>inside</em> the VM, and dd runs with no VM at all</strong> &mdash; and every advantage below is structural, not a tuning trick.</p>
+
+  <p class="mt-5 leading-relaxed text-muted">A Linux VM &mdash; even a fast one on Apple&rsquo;s Virtualization.framework &mdash; is a whole second computer. To serve one container it runs a <strong class="text-txt">guest Linux kernel</strong>, <strong class="text-txt">virtual devices</strong>, a <strong class="text-txt">second scheduler</strong>, its own page cache, and a <strong class="text-txt">filesystem bridge</strong> back to the Mac. dd deletes all of it: a container is just macOS processes, and a small userspace kernel serves their Linux syscalls by calling macOS directly. So on everything that touches the system &mdash; a syscall, a socket, a file, the clock, starting a process &mdash; dd takes <em>one</em> host-kernel crossing where a VM takes several:</p>
+
+  <div class="mt-6 grid gap-4 sm:grid-cols-2">
+    <div class="rounded-2xl border border-edge bg-panel p-5">
+      <div class="text-sm font-semibold text-muted2">A VM pays, per operation</div>
+      <ul class="mt-3 space-y-1.5 text-sm leading-relaxed text-muted">
+        <li>guest syscall &rarr; guest kernel &rarr; hypervisor &rarr; host</li>
+        <li>disk &amp; network through a virtio + 9p/virtiofs bridge</li>
+        <li>nested page tables &mdash; guest <em>and</em> host translation</li>
+        <li>boot cost, plus cores and RAM held even when idle</li>
+      </ul>
+    </div>
+    <div class="rounded-2xl border border-edge bg-panel p-5">
+      <div class="text-sm font-semibold text-blue1">dd pays</div>
+      <ul class="mt-3 space-y-1.5 text-sm leading-relaxed text-muted">
+        <li>guest syscall &rarr; userspace kernel &rarr; host &mdash; one hop</li>
+        <li>the Mac&rsquo;s real filesystem &amp; page cache, directly</li>
+        <li>guest memory <em>is</em> host memory &mdash; no second walk</li>
+        <li>nothing resident; a container starts in <strong class="text-txt">~20&nbsp;ms</strong>, not hundreds</li>
+      </ul>
+    </div>
+  </div>
+
+  <p class="mt-6 leading-relaxed text-muted">That&rsquo;s why dd beats a Rosetta VM on <strong class="text-txt">redis (~1.45×)</strong>: it&rsquo;s syscall- and network-bound, and dd runs that path with no VM in the way &mdash; Rosetta&rsquo;s instruction translation can be flawless and still lose, because the request never had to leave the process. The same structural fact is why a dd container starts in tens of milliseconds instead of a VM&rsquo;s quarter-second.</p>
+
+  <p class="mt-5 leading-relaxed text-muted">The second advantage: <strong class="text-txt">dd is the translator <em>and</em> the kernel</strong>, so it owns the whole stack and can reach the bare metal. It lowers x86 <code class="rounded bg-code px-1 py-0.5 font-mono text-[12px] text-blue1">AES-NI</code> and <code class="rounded bg-code px-1 py-0.5 font-mono text-[12px] text-blue1">SHA-NI</code> instructions straight onto the Apple chip&rsquo;s <strong class="text-txt">hardware crypto units</strong> (<code class="font-mono text-[12px]">AESE</code>, <code class="font-mono text-[12px]">PMULL</code>, <code class="font-mono text-[12px]">SHA256H</code>) &mdash; so encrypting a stream runs at native ARM speed, where emulation does it in software (~6× slower) and a VM can never beat the metal underneath it. It fast-paths hot syscalls at the emulation boundary, and it translates <em>live</em>, specializing the code cache to the program actually running &mdash; adaptivity a frozen VM image doesn&rsquo;t have.</p>
+
+  <p class="mt-5 leading-relaxed text-muted">Where does that leave the honest gap? dd&rsquo;s edge is the <strong class="text-txt">system path</strong> &mdash; syscalls, IO, startup, crypto, memory &mdash; not raw x86 compute, where Rosetta&rsquo;s ahead-of-time translation is great and a userspace kernel still pays for indirect-branch dispatch (the sqlite/python rows). But that&rsquo;s the half we keep shaving, and every microsecond we take out there compounds on top of an advantage the VM can never claw back: <strong class="text-txt">there is no VM.</strong></p>
+
   <!-- WHAT -->
   <h2 class="mt-14 text-2xl font-bold tracking-tight md:text-3xl">What you get today</h2>
   <p class="mt-4 leading-relaxed text-muted">It’s a single native macOS app. It runs the daemon in the background, shows your containers, images, networks and volumes at a glance, and lets you point Docker at dd from inside the app — no config files, no <code class="rounded bg-code px-1.5 py-0.5 font-mono text-[13px] text-blue1">sudo</code>.</p>
