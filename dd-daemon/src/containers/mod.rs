@@ -126,8 +126,11 @@ async fn do_stop(a: &App, id: &str, sig: i32, t: i64) -> Response {
     // re-publish the same host port). Idempotent + no-op when nothing was published.
     ports::stop(&full);
     // mark exited (as before); the reaper sets the real exit_code when the signalled process dies.
+    // `manually_stopped` is the DURABLE (persisted) equivalent of Moby's HasBeenManuallyStopped: it
+    // survives a daemon restart so `unless-stopped` won't resurrect a container the user stopped (the
+    // in-memory `Live.stop_requested` set above is lost across a restart; this is not). §8.3-5.
     let mut g = a.inner.lock().await;
-    if let Some(c) = g.containers.get_mut(&full) { c.status = "exited".into(); c.finished_at = now_secs(); c.finished_at_ns = now_nanos(); }
+    if let Some(c) = g.containers.get_mut(&full) { c.status = "exited".into(); c.finished_at = now_secs(); c.finished_at_ns = now_nanos(); c.manually_stopped = true; }
     let (cname, cimage) = g.containers.get(&full).map(|c| (c.name.clone(), c.image.clone())).unwrap_or_default();
     crate::events::emit_event(&a.events, "container", "stop", &full, json!({"name": cname, "image": cimage}));
     save_state(&g, &a.state_path);

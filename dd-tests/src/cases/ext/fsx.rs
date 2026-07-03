@@ -37,8 +37,13 @@ fn fsx_linux() -> Group {
     group("ext-fsx-lin", vec![
         src("fadvise", "ext_fsx/fadvise.c").oracle(),        // posix_fadvise hints
         src("close-range", "ext_fsx/closerange.c").oracle(), // close_range(2) bulk fd close
-        // An O_PATH fd is readable on the Linux JIT (read_ebadf=0) — Linux rejects reads through it with
-        // EBADF. xfail Linux; GAPS `fsx-opath-readable`.
-        src("opath", "ext_fsx/opath.c").oracle().xfail(LIN),
+        // O_PATH fds are now tracked (g_opath); the read/write family through one returns EBADF as Linux
+        // does, while fstat and use as an openat dirfd still work (#318).
+        src("opath", "ext_fsx/opath.c").oracle(),
+        // /dev/full: reads yield zeros, writes fail ENOSPC (macOS has no /dev/full; the container fs
+        // synthesizes it). Verdict-only so the golden line is a plain Linux truth.
+        src("devfull", "ext_fsx/devfull.c").out("devfull opened=1 zeros=1 enospc=1\n"),
+        // /proc/self/{root,cwd} magic symlinks: root -> "/", cwd -> an absolute path (#container-fs).
+        src("procself", "ext_fsx/procself.c").out("procself root=1 cwd=1\n"),
     ])
 }

@@ -129,6 +129,19 @@ static int host_fixed_map286(uint64_t a0, uint64_t a1, int prot, int anon, int f
     return 0;
 }
 
+// The guest's page size (as it sees via AT_PAGESZ / sysconf(_SC_PAGESIZE)): 4 KB for x86_64 guests,
+// 16 KB for aarch64. Read straight from the auxv the loader built (type 6 = AT_PAGESZ), so this shared
+// TU needs no per-arch macro. Falls back to the host granularity if the auxv isn't populated yet.
+static size_t guest_pagesz(void) {
+    for (int i = 0; i + 16 <= g_auxv_len; i += 16) {
+        uint64_t t, v;
+        memcpy(&t, g_auxv_data + i, 8);
+        memcpy(&v, g_auxv_data + i + 8, 8);
+        if (t == 6 && v) return (size_t)v;
+    }
+    return (size_t)getpagesize();
+}
+
 static int svc_mem(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4,
                    uint64_t a5) {
     switch (nr) {
@@ -495,14 +508,40 @@ static int svc_mem(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_
     // so sub-host-page granularity is coarser than a real 4 KB kernel, but residency of the covering
     // page is faithful.) Untouched trailing bytes (the guest zero-filled its vector) stay 0 = absent.
     case 232: {
-        int r = mincore((void *)a0, (size_t)a1, (char *)a2);
-        if (r == 0 && a1) {
-            size_t hps = (size_t)getpagesize();
-            size_t npages = ((size_t)a1 + hps - 1) / hps;
-            unsigned char *vec = (unsigned char *)a2;
-            for (size_t i = 0; i < npages; i++)
-                vec[i] &= 1u; // Linux: bit0 = resident
+        size_t hps = (size_t)getpagesize();  // host mmap granularity (16 KB on Apple Silicon)
+        size_t gps = guest_pagesz();          // page size the GUEST believes in (4 KB x86 / 16 KB arm)
+        size_t len = (size_t)a1;
+        // Fast path: guest page == host page (aarch64) -- the host vec is already one byte per guest page.
+        if (gps == hps || gps == 0 || len == 0) {
+            int r = mincore((void *)a0, len, (char *)a2);
+            if (r == 0 && a2) {
+                size_t npages = (len + hps - 1) / hps;
+                unsigned char *vec = (unsigned char *)a2;
+                for (size_t i = 0; i < npages; i++)
+                    vec[i] &= 1u; // Linux: bit0 = resident
+            }
+            G_RET(c) = (r < 0) ? (uint64_t)(-errno) : 0;
+            break;
         }
+        // Guest pages SMALLER than host pages (x86_64: 4 KB guest vs 16 KB host). The host mincore fills
+        // one status byte per 16 KB page, but the guest allocated ceil(len/4KB) bytes and indexes them at
+        // 4 KB granularity -- so writing the host-granular vector directly leaves 3 of every 4 guest-page
+        // slots at 0 (the #319 x86 under-report). Run mincore into a host-granular scratch buffer, then
+        // project each guest page's residency from the host page that physically covers it.
+        size_t hpages = (len + hps - 1) / hps;
+        size_t gpages = (len + gps - 1) / gps;
+        size_t per = hps / gps; // guest pages per host page (== 4)
+        unsigned char stackbuf[1024], *hv = stackbuf;
+        if (hpages > sizeof stackbuf) { hv = (unsigned char *)malloc(hpages); if (!hv) { G_RET(c) = (uint64_t)(-ENOMEM); break; } }
+        int r = mincore((void *)a0, len, (char *)hv);
+        if (r == 0 && a2) {
+            unsigned char *vec = (unsigned char *)a2;
+            for (size_t i = 0; i < gpages; i++) {
+                size_t h = per ? i / per : i;
+                vec[i] = (h < hpages) ? (unsigned char)(hv[h] & 1u) : 0;
+            }
+        }
+        if (hv != stackbuf) free(hv);
         G_RET(c) = (r < 0) ? (uint64_t)(-errno) : 0;
         break;
     }

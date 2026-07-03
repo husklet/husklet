@@ -16,8 +16,9 @@ fn memx() -> Group {
         port("mlock", "ext_mm/mlock.c").out("mlock lock=1 usable=1 unlock=1 lockall=1 unlockall=1\n"),
         // Linux-only (no macOS mremap) -> native oracle
         src("mremap", "ext_mm/mremap.c").oracle(),
-        // mincore under-reports residency on the x86_64 JIT (resident=1 vs native 4; only the first
-        // touched page is marked present); aarch64 is correct. GAPS `memx-mincore-x86`.
-        src("mincore", "ext_mm/mincore.c").oracle().xfail(&[Engine::LinuxX86_64]),
+        // mincore now projects host-page (16 KB) residency onto the guest's page granularity, so the
+        // x86_64 guest's 4 KB-page residency vector is filled correctly (resident=4), matching aarch64
+        // and the native oracle (#319).
+        src("mincore", "ext_mm/mincore.c").oracle(),
     ])
 }

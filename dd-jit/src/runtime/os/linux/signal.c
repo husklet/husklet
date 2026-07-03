@@ -12,6 +12,11 @@ static volatile uint64_t g_pending;
 // rt_sigqueueinfo extras carried to the handler's siginfo: si_code + si_value (consumed on delivery)
 static int g_sigcode[65];
 static uint64_t g_sigval[65];
+// SA_SIGINFO sender identity (si_pid/si_uid) captured from the host siginfo for a kill(2)/tgkill-delivered
+// signal (consumed on delivery). g_sigpid==0 means "no sender identity" (async fault/internal), so a kill
+// stamp is distinguishable from the sigfault si_addr that shares the same union offset.
+static int g_sigpid[65];
+static int g_siguid[65];
 // synchronous-fault address carried to the handler's siginfo (si_addr; consumed on delivery, 0 for async)
 static uint64_t g_sigaddr[65];
 // sentinel lr: handler return -> sigreturn
@@ -56,13 +61,13 @@ static int g_sigfd_pipe[2] = {-1, -1};
 static int g_sigfd_read = -1;
 // signals routed to the signalfd (1<<signo)
 static volatile uint64_t g_sigfd_mask;
-static void host_sigh(int sig) {
-    // host(macOS) signo -> Linux
-    int ls = sig_m2l(sig);
+// Shared body: mark Linux signal `ls` pending, kick the running thread out of any in-cache loop (#292),
+// and wake a signalfd routed to it.
+static void host_sig_pend(int ls) {
     __atomic_or_fetch(&g_pending, 1ull << ls, __ATOMIC_SEQ_CST);
     // #292: kick this thread out of any no-syscall in-cache loop so the caught signal is delivered at the
-    // next block boundary (the emitted body check polls cpu->irq). host_sigh runs on the thread the OS
-    // picked, which for a process-directed signal to a busy single-threaded guest IS the spinner.
+    // next block boundary (the emitted body check polls cpu->irq). This runs on the thread the OS picked,
+    // which for a process-directed signal to a busy single-threaded guest IS the spinner.
     // pthread_getspecific is a plain TLS read; the store is a single aligned word.
     struct cpu *c = (struct cpu *)pthread_getspecific(g_cpu_key);
     if (c) __atomic_store_n(&c->irq, 1, __ATOMIC_SEQ_CST);
@@ -71,6 +76,19 @@ static void host_sigh(int sig) {
         if (write(g_sigfd_pipe[1], &b, 1) < 0) {}
     // wake signalfd/epoll
     }
+}
+static void host_sigh(int sig) { host_sig_pend(sig_m2l(sig)); } // host(macOS) signo -> Linux
+// SA_SIGINFO host handler: same delivery as host_sigh, plus it captures the sender's pid/uid so an
+// SA_SIGINFO guest handler (or sigwaitinfo) sees si_pid/si_uid. macOS populates si_pid for a kill(2) but
+// does NOT set the Linux SI_USER si_code, so gate on si_pid>0 (a real sender) rather than the code.
+static void host_sigh_si(int sig, siginfo_t *si, void *uc) {
+    (void)uc;
+    int ls = sig_m2l(sig);
+    if (si && si->si_pid > 0) {
+        g_sigpid[ls] = (int)si->si_pid;
+        g_siguid[ls] = (int)si->si_uid;
+    }
+    host_sig_pend(ls);
 }
 
 // build_signal_frame + do_sigreturn are per-arch (the sigframe register layout) -> frontend/<arch>/sigframe.c

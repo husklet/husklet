@@ -240,7 +240,12 @@ pub(crate) fn discover_images(images_dir: &str) -> Vec<Image> {
                 env = recovered;
             }
         }
-        out.push(Image { name, rootfs: rootfs.to_string_lossy().into_owned(), arch, cmd, env, entrypoint, workdir, user, exposed_ports, created, ..Default::default() });
+        // Lifecycle/volume image config (Moby §6/§8) — restored from the sidecar so `docker stop` picks
+        // the right signal and anon volumes / healthcheck survive a daemon restart.
+        let stop_signal = meta.as_ref().and_then(|m| m["stop_signal"].as_str()).unwrap_or("").to_string();
+        let img_volumes = arr("img_volumes");
+        let healthcheck = meta.as_ref().and_then(|m| serde_json::from_value::<crate::model::HealthConfig>(m["healthcheck"].clone()).ok());
+        out.push(Image { name, rootfs: rootfs.to_string_lossy().into_owned(), arch, cmd, env, entrypoint, workdir, user, exposed_ports, created, stop_signal, img_volumes, healthcheck, ..Default::default() });
     }
     dedup_images(out)
 }

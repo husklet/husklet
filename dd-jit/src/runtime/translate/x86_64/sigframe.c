@@ -46,7 +46,10 @@ static void build_signal_frame(struct cpu *c, int sig) {
     *(int *)(info + 8) = g_sigcode[sig];                  // si_code (SI_QUEUE for sigqueue, else 0)
     *(uint64_t *)(info + 16) = g_sigaddr[sig];            // si_addr (synchronous fault address; 0 for async)
     *(uint64_t *)(info + 24) = g_sigval[sig];             // si_value
-    g_sigcode[sig] = 0; g_sigval[sig] = 0; g_sigaddr[sig] = 0; // consumed
+    // SA_SIGINFO sender identity for a kill/tgkill signal: _kill/_rt union overlays si_addr@16 -> si_pid@16,
+    // si_uid@20 (async kill has si_addr==0, so this fills those 8 bytes).
+    if (g_sigpid[sig]) { *(int *)(info + 16) = g_sigpid[sig]; *(int *)(info + 20) = g_siguid[sig]; }
+    g_sigcode[sig] = 0; g_sigval[sig] = 0; g_sigaddr[sig] = 0; g_sigpid[sig] = 0; g_siguid[sig] = 0; // consumed
     uint64_t rsp = sp - 8;
     *(uint64_t *)rsp = SIGRETURN_PC; // pushed return address
     c->r[7] = (uint64_t)sig;

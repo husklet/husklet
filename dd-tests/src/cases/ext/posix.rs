@@ -27,24 +27,23 @@ fn portable() -> Group {
         port("statfam", "ext_posix/statfam.c").out("statfam reg=1 size=1 ino=1 lnk=1 follow=1\n"),
         port("access", "ext_posix/access.c").out("access f=1 r=1 w=1 missing=1 at=1\n"),
         port("fstatat", "ext_posix/fstatat.c").out("fstatat rel=1 nofollow=1 follow=1\n"),
-        // fchmod(2) (fd-based chmod) is a no-op on the Linux JIT — mode stays unchanged (m755=0). chmod()
-        // by path works. darwin native applies it. See GAPS `posix-fchmod`.
-        port("chmodchown", "ext_posix/chmodchown.c").out("chmodchown chmod=1 m600=1 fchmod=1 m755=1 chown=1\n")
-            .xfail(&[Engine::LinuxAarch64, Engine::LinuxX86_64]),
+        // fchmod(2) now invalidates the file's cached stat (case 52 evicts the mc/ac caches by the fd's
+        // canonical path), so a stat() after fchmod reports the new mode on all three engines (#chmodchown).
+        port("chmodchown", "ext_posix/chmodchown.c").out("chmodchown chmod=1 m600=1 fchmod=1 m755=1 chown=1\n"),
         port("utimensat", "ext_posix/utimensat.c").out("utimensat set=1 atime=1 mtime=1 futimens=1 fmtime=1\n"),
         port("umask", "ext_posix/umask.c").out("umask prev_set=1 masked=1\n"),
         // --- directory / namespace ops ---
         port("mkdirrmdir", "ext_posix/mkdirrmdir.c").out("mkdirrmdir made=1 isdir=1 eexist=1 removed=1 gone=1\n"),
         port("rename", "ext_posix/rename.c").out("rename moved=1 oldgone=1 newhas=1 overwrote=1\n"),
-        // hardlink count: link() bumps st_nlink to 2 (seen), but after unlink() of the extra link the
-        // Linux JIT still reports nlink!=1 (stale link count). darwin native is correct. GAPS `posix-nlink`.
-        port("linksym", "ext_posix/linksym.c").out("linksym hardlink=1 nlink2=1 symlink=1 readlink=1 nlink1=1\n")
-            .xfail(&[Engine::LinuxAarch64, Engine::LinuxX86_64]),
+        // hardlink count: link()/unlink() of a multiply-linked inode now evict every alias's cached stat
+        // by (dev,ino) (mc_evict_ino), so after unlink()ing the extra link a stat of the original reports
+        // nlink==1 on all three engines (#linksym).
+        port("linksym", "ext_posix/linksym.c").out("linksym hardlink=1 nlink2=1 symlink=1 readlink=1 nlink1=1\n"),
         port("truncate", "ext_posix/truncate.c").out("truncate shrunk=1 grew=1 zeros=1 pathtrunc=1\n"),
-        // rewinddir() (lseek(dirfd,0) on the getdents stream) does not reset enumeration on the Linux
-        // JIT — the second pass sees 0 entries (rewind=0). darwin native rewinds. GAPS `posix-rewinddir`.
-        port("readdir-dtype", "ext_posix/readdir_dtype.c").out("readdir_dtype files=2 dirs=1 rewind=3\n")
-            .xfail(&[Engine::LinuxAarch64, Engine::LinuxX86_64]),
+        // rewinddir() issues lseek(dirfd,0); the getdents stream is backed by a private DIR*/overlay
+        // snapshot, so case 62 now redirects that lseek to rewinddir()/reset the snapshot cursor -- the
+        // second pass re-enumerates all 3 entries on all three engines (#readdir-dtype).
+        port("readdir-dtype", "ext_posix/readdir_dtype.c").out("readdir_dtype files=2 dirs=1 rewind=3\n"),
         port("getcwdchdir", "ext_posix/getcwdchdir.c").out("getcwdchdir before=1 chdir=1 ends=1\n"),
         // --- fd plumbing ---
         port("dup", "ext_posix/dup.c").out("dup dupped=1 sharedoff=1 dup2=1 read=1\n"),

@@ -195,6 +195,20 @@ static void mc_evict(const char *p) {
     if (e->hash == h && !strcmp(e->path, p)) e->hash = 0;
     CUL;
 }
+// Hardlink coherence: creating or removing a link changes st_nlink on EVERY path that aliases the same
+// inode, but the mc cache is keyed by PATH -- so a sibling link's cached stat keeps the pre-mutation
+// nlink. link()/unlink() of a multiply-linked inode call this to drop every POSITIVE cached stat for that
+// (dev,ino), so the next stat of any alias re-reads the true link count. Rare op (only when nlink>=2), so
+// the full-table scan is acceptable; negative entries carry no inode and are left alone.
+static void mc_evict_ino(dev_t dev, ino_t ino) {
+    if (!ino) return;
+    CLK;
+    for (int i = 0; i < MCACHE_N; i++) {
+        struct mcent *e = &g_mc[i];
+        if (e->hash && e->rc == 0 && e->st.st_ino == ino && e->st.st_dev == dev) e->hash = 0;
+    }
+    CUL;
+}
 // readlink cache (ld.so resolves symlinks on every library search path)
 static struct rlent {
     uint64_t hash;

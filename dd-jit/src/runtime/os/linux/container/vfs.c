@@ -90,6 +90,16 @@ static size_t g_rootfs_canon_len;
 static char g_fdpath[1024][192];
 // overlay: dir-fd -> its GUEST path (for merged getdents); "" = not an overlay dir
 static char g_ovldir[1024][192];
+// O_PATH: fd opened with Linux O_PATH -- it names a file (fstat / *at dirfd / fchdir) but is NOT open for
+// I/O, so read/write/pread/pwrite/readv/writev through it must fail EBADF (macOS has no O_PATH; we open a
+// normal read fd for the metadata ops and gate the I/O family on this flag). 1 = O_PATH.
+static uint8_t g_opath[1024];
+// /dev/full: reads return zeros (backed by /dev/zero) but every WRITE fails ENOSPC. macOS has no
+// /dev/full, so we flag the fd here and gate the write family in svc_io. 1 = /dev/full.
+static uint8_t g_devfull[1024];
+// Overlay merged-getdents snapshot cursor reset (rewinddir/seekdir on an overlay dir). Defined in fs.c
+// where g_ovldents lives, but the lseek handler (io.c) is included before fs.c, so forward-declare it.
+static void ovldents_rewind(int fd, int pos);
 // eventfd(read-end) -> pipe write-end + 1 (0 = not an eventfd)
 static int g_eventfd_peer[1024];
 // eventfd accumulating counter: write() adds, read() returns + resets (the pipe is only readiness).
@@ -758,9 +768,10 @@ static const char *proc_self_leaf(const char *rp) {
 // Shared_Dirty on real Linux (parent+child map it until COW breaks), so reporting the dirty bytes there
 // both matches Linux for that query and clears the false positive. Rss stays == Shared_Clean +
 // Shared_Dirty + Private_Clean + Private_Dirty (the kernel's invariant), so a summing parser is consistent.
-static int proc_map_region(char *b, size_t n, unsigned long lo, unsigned long hi, const char *name, int smaps) {
+static int proc_map_region_p(char *b, size_t n, unsigned long lo, unsigned long hi, const char *perms,
+                             const char *name, int smaps) {
     unsigned long kb = (hi - lo) / 1024;
-    int m = snprintf(b, n, "%012lx-%012lx rw-p 00000000 00:00 0 %*s%s\n", lo, hi, name[0] ? 20 : 0, "", name);
+    int m = snprintf(b, n, "%012lx-%012lx %s 00000000 00:00 0 %*s%s\n", lo, hi, perms, name[0] ? 20 : 0, "", name);
     if (smaps)
         m += snprintf(b + m, (size_t)n - (size_t)m,
                       "Size:%15lu kB\nKernelPageSize:%6d kB\nMMUPageSize:%9d kB\n"
@@ -770,6 +781,51 @@ static int proc_map_region(char *b, size_t n, unsigned long lo, unsigned long hi
                       "VmFlags: rd wr mr mw me ac\n",
                       kb, 4, 4, kb, kb, 0, kb, 0, 0UL, kb, kb, 0, 0, 0);
     return m;
+}
+// back-compat wrapper: the old rw-p default for anon/heap/stack regions with no per-segment prot.
+static int proc_map_region(char *b, size_t n, unsigned long lo, unsigned long hi, const char *name, int smaps) {
+    return proc_map_region_p(b, n, lo, hi, "rw-p", name, smaps);
+}
+// PT_LOAD segments of the main executable, read from the auxv the loader planted (AT_PHDR/AT_PHENT/
+// AT_PHNUM) so /proc/self/maps shows the text as r-xp, rodata r--p, data rw-p -- the real per-segment
+// protection, not a single flat rw-p span. Cross-arch (the Elf64_Phdr layout is arch-independent).
+struct mseg { uint64_t lo, hi; int prot; };
+static int maps_phdr_segs(struct mseg *seg, int maxn) {
+    uint64_t phdr = 0, phent = 0, phnum = 0;
+    for (int i = 0; i + 16 <= g_auxv_len; i += 16) {
+        uint64_t t, v;
+        memcpy(&t, g_auxv_data + i, 8);
+        memcpy(&v, g_auxv_data + i + 8, 8);
+        if (t == 3) phdr = v; else if (t == 4) phent = v; else if (t == 5) phnum = v;
+    }
+    if (!phdr || phent < 56 || phnum == 0 || phnum > 256) return 0;
+    const uint8_t *ph = (const uint8_t *)(uintptr_t)phdr;
+    // load bias: PT_PHDR's runtime address (AT_PHDR) minus its link vaddr; 0 for a non-PIE.
+    uint64_t bias = 0;
+    for (uint64_t i = 0; i < phnum; i++) {
+        const uint8_t *e = ph + i * phent;
+        uint32_t type; memcpy(&type, e, 4);
+        if (type == 6) { uint64_t pv; memcpy(&pv, e + 16, 8); bias = phdr - pv; break; } // PT_PHDR
+    }
+    int nseg = 0;
+    for (uint64_t i = 0; i < phnum && nseg < maxn; i++) {
+        const uint8_t *e = ph + i * phent;
+        uint32_t type, flags; uint64_t vaddr, memsz;
+        memcpy(&type, e, 4); memcpy(&flags, e + 4, 4); memcpy(&vaddr, e + 16, 8); memcpy(&memsz, e + 40, 8);
+        if (type != 1 || memsz == 0) continue; // PT_LOAD only
+        uint64_t lo = (bias + vaddr) & ~0xfffULL;
+        uint64_t hi = (bias + vaddr + memsz + 0xfff) & ~0xfffULL;
+        int prot = ((flags & 4) ? 4 : 0) | ((flags & 2) ? 2 : 0) | ((flags & 1) ? 1 : 0); // R|W|X
+        seg[nseg].lo = lo; seg[nseg].hi = hi; seg[nseg].prot = prot; nseg++;
+    }
+    return nseg;
+}
+static void maps_perms_str(int prot, char *out) { // prot bits: 4=R 2=W 1=X
+    out[0] = (prot & 4) ? 'r' : '-';
+    out[1] = (prot & 2) ? 'w' : '-';
+    out[2] = (prot & 1) ? 'x' : '-';
+    out[3] = 'p';
+    out[4] = 0;
 }
 // Synthesize /proc/[pid]/maps (smaps=0) or /proc/[pid]/smaps (smaps=1) from the tracked guest mappings
 // (g_gmap) plus the published main-stack bounds. The [stack] line (with a guard line below it, as the
@@ -781,6 +837,17 @@ static int proc_maps_fd(int smaps) {
     if (fd < 0) return -1;
     unlink(tn);
     char b[768];
+    // The main executable's PT_LOAD segments FIRST, with their real per-segment protection (text r-xp,
+    // rodata r--p, data rw-p) and the exe path as the mapping name -- read from the auxv program headers.
+    struct mseg seg[16];
+    int nseg = maps_phdr_segs(seg, 16);
+    const char *exe = (g_exe_path && g_exe_path[0]) ? g_exe_path : "";
+    for (int i = 0; i < nseg; i++) {
+        char perms[5];
+        maps_perms_str(seg[i].prot, perms);
+        int m = proc_map_region_p(b, sizeof b, (unsigned long)seg[i].lo, (unsigned long)seg[i].hi, perms, exe, smaps);
+        if (write(fd, b, (size_t)m) < 0) {}
+    }
     if (g_stack_hi) {
         unsigned long lo = (unsigned long)g_stack_lo, hi = (unsigned long)g_stack_hi;
         int m = snprintf(b, sizeof b, "%012lx-%012lx ---p 00000000 00:00 0 \n", lo > 0x1000 ? lo - 0x1000 : 0, lo);
@@ -792,6 +859,11 @@ static int proc_maps_fd(int smaps) {
         unsigned long lo = (unsigned long)g_gmap[i].addr, hi = lo + (unsigned long)g_gmap[i].len;
         if (g_stack_hi && lo >= (unsigned long)g_stack_lo && hi <= (unsigned long)g_stack_hi)
             continue; // already emitted as [stack]
+        // skip a region already rendered as PT_LOAD segments (the image span the loader tracks as one entry)
+        int covered = 0;
+        for (int s = 0; s < nseg; s++)
+            if (lo >= seg[s].lo && lo < seg[s].hi) { covered = 1; break; }
+        if (covered) continue;
         int m = proc_map_region(b, sizeof b, lo, hi, "", smaps);
         if (write(fd, b, (size_t)m) < 0) {}
     }
@@ -1691,6 +1763,32 @@ static int proc_masked_open(const char *rp) {
 // fill_linux_stat (the guest struct-stat layout) is per-arch -> frontend/<arch>/fill_stat.c
 // Synthesize the common /proc files Linux programs read (macOS has no /proc). Returns an fd
 // holding the content, -1 on mkstemp error, or -2 if rp isn't a path we synthesize.
+// Guest ISA from the auxv AT_PLATFORM string (type 15: "x86_64" vs "aarch64") the loader planted -- lets
+// this shared TU tailor arch-specific pseudo-file content (e.g. /proc/cpuinfo) without a per-arch macro.
+static int guest_is_x86(void) {
+    for (int i = 0; i + 16 <= g_auxv_len; i += 16) {
+        uint64_t t, v;
+        memcpy(&t, g_auxv_data + i, 8);
+        memcpy(&v, g_auxv_data + i + 8, 8);
+        if (t == 15 && v) return strncmp((const char *)(uintptr_t)v, "x86", 3) == 0;
+    }
+    return 0;
+}
+// x86-64 /proc/cpuinfo block for one logical CPU. The `flags` list mirrors EXACTLY the feature set the JIT's
+// CPUID leaf reports (x86_ops.c do_cpuid: the SSE..SSE4.2/AES/PCLMUL/SHA/BMI baseline, NO AVX) so a guest
+// that reads cpuinfo for feature detection sees precisely what the engine can execute.
+static int cpuinfo_x86_block(char *b, size_t n, int idx, int ncpu) {
+    return snprintf(b, n,
+        "processor\t: %d\nvendor_id\t: GenuineIntel\ncpu family\t: 6\nmodel\t\t: 60\n"
+        "model name\t: dd JIT x86-64 processor\nstepping\t: 3\nmicrocode\t: 0x1\ncpu MHz\t\t: 2500.000\n"
+        "cache size\t: 8192 KB\nphysical id\t: 0\nsiblings\t: %d\ncore id\t\t: %d\ncpu cores\t: %d\n"
+        "apicid\t\t: %d\ninitial apicid\t: %d\nfpu\t\t: yes\nfpu_exception\t: yes\ncpuid level\t: 7\nwp\t\t: yes\n"
+        "flags\t\t: fpu tsc cx8 sep pge cmov clflush mmx fxsr sse sse2 syscall lm constant_tsc nopl "
+        "pni pclmulqdq ssse3 cx16 sse4_1 sse4_2 movbe popcnt aes lahf_lm bmi1 bmi2 sha_ni\n"
+        "bugs\t\t:\nbogomips\t: 5000.00\nclflush size\t: 64\ncache_alignment\t: 64\n"
+        "address sizes\t: 39 bits physical, 48 bits virtual\npower management:\n\n",
+        idx, ncpu, idx, ncpu, idx, idx);
+}
 static int proc_open(const char *rp) {
     char buf[8192];
     int n = -1;
@@ -1750,11 +1848,17 @@ static int proc_open(const char *rp) {
     if (!strcmp(rp, "/proc/cpuinfo")) {
         int nc = container_online_cpus(); // docker --cpus cap (state.c), else all host cores
         n = 0;
-        for (int i = 0; i < nc; i++)
-            n += snprintf(buf + n, sizeof buf - (size_t)n,
-                          "processor\t: %d\nBogoMIPS\t: 100.00\nFeatures\t: fp asimd\nCPU implementer\t: 0x61\n"
-                          "CPU architecture: 8\nCPU variant\t: 0x0\nCPU part\t: 0x000\nCPU revision\t: 0\n\n",
-                          i);
+        if (guest_is_x86()) {
+            // x86-64 guests need the x86 cpuinfo shape (vendor_id/model name/flags), not the ARM one.
+            for (int i = 0; i < nc; i++)
+                n += cpuinfo_x86_block(buf + n, sizeof buf - (size_t)n, i, nc);
+        } else {
+            for (int i = 0; i < nc; i++)
+                n += snprintf(buf + n, sizeof buf - (size_t)n,
+                              "processor\t: %d\nBogoMIPS\t: 100.00\nFeatures\t: fp asimd\nCPU implementer\t: 0x61\n"
+                              "CPU architecture: 8\nCPU variant\t: 0x0\nCPU part\t: 0x000\nCPU revision\t: 0\n\n",
+                              i);
+        }
     } else if (!strcmp(rp, "/proc/meminfo")) {
         // Real-ish figures: a cgroup memory.max caps MemTotal (used = the tracked anon charge); otherwise
         // report the host machine's memory (total from hw.memsize, free/available/cached from the Mach VM
@@ -1942,7 +2046,30 @@ static int proc_open(const char *rp) {
     } else if (!strcmp(rp, "/proc/net/unix")) {
         n = snprintf(buf, sizeof buf, "Num       RefCount Protocol Flags    Type St Inode Path\n");
     } else if (!strcmp(rp, "/proc/net/snmp")) {
-        n = snprintf(buf, sizeof buf, "Ip: Forwarding DefaultTTL\nIp: 2 64\n"); // minimal (readers tolerate)
+        // The full protocol-counter table `netstat -s` / `ss -s` parse: paired header+value lines for
+        // Ip/Icmp/IcmpMsg/Tcp/Udp/UdpLite. dd runs no real IP stack, so the counters are zero -- but the
+        // SECTIONS must exist with the exact kernel column names or the parser aborts. Tcp's RtoAlgorithm/
+        // RtoMin/RtoMax/MaxConn carry the conventional 1/200/120000/-1 the kernel reports.
+        n = snprintf(buf, sizeof buf,
+            "Ip: Forwarding DefaultTTL InReceives InHdrErrors InAddrErrors ForwDatagrams InUnknownProtos "
+            "InDiscards InDelivers OutRequests OutDiscards OutNoRoutes ReasmTimeout ReasmReqds ReasmOKs "
+            "ReasmFails FragOKs FragFails FragCreates\n"
+            "Ip: 2 64 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0\n"
+            "Icmp: InMsgs InErrors InCsumErrors InDestUnreachs InTimeExcds InParmProbs InSrcQuenchs "
+            "InRedirects InEchos InEchoReps InTimestamps InTimestampReps InAddrMasks InAddrMaskReps OutMsgs "
+            "OutErrors OutDestUnreachs OutTimeExcds OutParmProbs OutSrcQuenchs OutRedirects OutEchos "
+            "OutEchoReps OutTimestamps OutTimestampReps OutAddrMasks OutAddrMaskReps\n"
+            "Icmp: 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0\n"
+            "IcmpMsg: InType3 OutType3\nIcmpMsg: 0 0\n"
+            "Tcp: RtoAlgorithm RtoMin RtoMax MaxConn ActiveOpens PassiveOpens AttemptFails EstabResets "
+            "CurrEstab InSegs OutSegs RetransSegs InErrs OutRsts InCsumErrors\n"
+            "Tcp: 1 200 120000 -1 0 0 0 0 0 0 0 0 0 0 0\n"
+            "Udp: InDatagrams NoPorts InErrors OutDatagrams RcvbufErrors SndbufErrors InCsumErrors IgnoredMulti "
+            "MemErrors\n"
+            "Udp: 0 0 0 0 0 0 0 0 0\n"
+            "UdpLite: InDatagrams NoPorts InErrors OutDatagrams RcvbufErrors SndbufErrors InCsumErrors "
+            "IgnoredMulti MemErrors\n"
+            "UdpLite: 0 0 0 0 0 0 0 0 0\n");
     } else if (!strcmp(rp, "/proc/pressure/cpu")) {
         n = snprintf(buf, sizeof buf, "some avg10=0.00 avg60=0.00 avg300=0.00 total=0\n");
     } else if (!strcmp(rp, "/proc/pressure/memory") || !strcmp(rp, "/proc/pressure/io")) {
@@ -2065,7 +2192,7 @@ static const char *dev_node_hostpath(const char *gp) {
     if (!gp) return NULL;
     return !strcmp(gp, "/dev/null")     ? "/dev/null"
            : !strcmp(gp, "/dev/zero")    ? "/dev/zero"
-           : !strcmp(gp, "/dev/full")    ? "/dev/null" // macOS has no /dev/full -> back it with /dev/null
+           : !strcmp(gp, "/dev/full")    ? "/dev/zero" // /dev/full reads return zeros (writes ENOSPC, gated by fd flag)
            : !strcmp(gp, "/dev/random")  ? "/dev/random"
            : !strcmp(gp, "/dev/urandom") ? "/dev/urandom"
            : !strcmp(gp, "/dev/tty")     ? "/dev/tty"
@@ -2154,9 +2281,25 @@ static int synth_stat_raw(const char *gp, struct stat *s) {
         int a = ctty_anchor();
         if (a >= 0 && fstat(a, s) == 0) return 1;
     }
-    // Pseudo /dev char devices: stat the host node so type/existence agree with open().
+    // Pseudo /dev char devices: stat the host node so type/existence agree with open(), then OVERRIDE the
+    // rdev + mode with the Linux-canonical values. The host node carries macOS's own major/minor, but Linux
+    // fixes these numbers (null 1:3, zero 1:5, full 1:7, random 1:8, urandom 1:9, tty 5:0, console 5:1) and
+    // software that checks st_rdev (or `ls -l` which renders "major, minor") must see the Linux encoding.
     const char *dev = dev_node_hostpath(gp);
-    if (dev) return stat(dev, s) == 0;
+    if (dev) {
+        if (stat(dev, s) != 0) return 0;
+        static const struct { const char *p; int maj, min; unsigned mode; } D[] = {
+            {"/dev/null", 1, 3, 0666},   {"/dev/zero", 1, 5, 0666},    {"/dev/full", 1, 7, 0666},
+            {"/dev/random", 1, 8, 0666}, {"/dev/urandom", 1, 9, 0666}, {"/dev/tty", 5, 0, 0666},
+            {"/dev/console", 5, 1, 0600}, {0, 0, 0, 0}};
+        for (int i = 0; D[i].p; i++)
+            if (!strcmp(gp, D[i].p)) {
+                s->st_rdev = (dev_t)(((uint64_t)D[i].maj << 8) | (unsigned)D[i].min); // Linux dev_t encoding
+                s->st_mode = S_IFCHR | D[i].mode;
+                break;
+            }
+        return 1;
+    }
     // runc MaskedPaths / ReadonlyPaths: these must EXIST (a masked file is an empty regular file; a masked or
     // read-only dir is an empty directory), so stat()/`test -e` see them present -- matching runc, not ENOENT.
     if (g_rootfs) {

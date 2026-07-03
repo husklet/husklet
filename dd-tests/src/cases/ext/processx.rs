@@ -23,9 +23,9 @@ fn processx_portable() -> Group {
 
 fn processx_linux() -> Group {
     group("ext-process-lin", vec![
-        // prlimit(2) set is not reflected on the Linux JIT: it returns success but a subsequent get
-        // still shows the old soft limit (lowered=0). xfail Linux; GAPS `processx-prlimit-set`.
-        src("prlimit", "ext_proc/prlimit.c").oracle().xfail(LIN),
+        // prlimit(2) set now persists into the per-resource limit store (g_ulimit), so a subsequent get
+        // reflects the lowered soft limit (lowered=1) on both Linux engines (#315).
+        src("prlimit", "ext_proc/prlimit.c").oracle(),
         // clone3(2): the aarch64 JIT does it correctly vs the native kernel. On x86_64 the JIT ALSO does
         // it correctly (made/reaped/exit11 all 1) but the qemu-x86_64 oracle lacks clone3 (ENOSYS →
         // made=0) — an oracle artifact, not an engine gap (cf. pidfd/process_vm). xfail x86_64.
