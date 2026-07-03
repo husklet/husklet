@@ -74,6 +74,13 @@ it in tracked structured batches, and drive it to zero. Never close a task as "d
 remain. "Done" = the subsystem is complete and correct, not "the error went away." The deliverable is
 implementation plus (if large) an executed completion plan, never a catalog of what is missing.
 
+**Cross-platform is part of "complete."** Compliance and its tests must cover ALL THREE matrix engines:
+`linux/x86_64`, `linux/aarch64`, and `darwin/aarch64` (the macOS container via darwinjail). A fix is not
+done until it is correct — and tested — on every platform that can support the feature. Where the darwin
+container uses a different mechanism than Linux (darwinjail + host FS instead of overlayfs, host
+networking, etc.), implement the equivalent correct behavior there and add a darwin test. A per-platform
+exclusion (e.g. an x86-only opcode) must be *justified in the test*, never silently assumed.
+
 ---
 
 ## 4. Build
