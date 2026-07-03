@@ -20,9 +20,26 @@ static int translate_shift(struct insn *I, uint64_t gpc, uint64_t next) {
                     emit_rcl_rcr(I, next, w, k == 3, by1 ? 1 : ((int)I->imm & cmask));
                     return TX_NEXT;
                 }
-                if (k != 0 && k != 1 && k != 4 && k != 5 && k != 7) {
-                    return TX_BREAK;
-                } // RCL/RCR by CL defer
+                if (k == 2 || k == 3) {
+                    // RCL/RCR by CL: the count MOD (width+1) reduction (mod 9/17 for byte/word) is awkward in
+                    // emitted code, so exit to do_rcl (R_RCL) which does the whole rotate + CF/OF in C. The
+                    // lazy-flag pre-pass in translate_block has already materialized cpu->nzcv, so do_rcl's
+                    // CF carry-in (and the following block's flag reload) sees the canonical membank flags.
+                    uint64_t desc = (uint64_t)w | ((uint64_t)(k == 3) << 8);
+                    if (I->is_mem) {
+                        emit_ea(I, next);         // x17 = host effective address
+                        e_str(17, 28, OFF_X87EA); // stash the EA for do_rcl to dereference
+                        desc |= (1ull << 9);
+                    } else {
+                        int hi8 = (w == 1 && !I->has_rex && I->rm_reg >= 4 && I->rm_reg <= 7);
+                        int rr = hi8 ? (I->rm_reg - 4) : I->rm_reg; // AH/CH/DH/BH -> base reg RAX/RCX/RDX/RBX
+                        desc |= ((uint64_t)(hi8 ? 1 : 0) << 10) | ((uint64_t)(rr & 0x1f) << 16);
+                    }
+                    e_movconst(16, desc);
+                    e_str(16, 28, OFF_DIVOP);
+                    emit_exit_const(next, R_RCL);
+                    return TX_BREAK; // block ends at the exit (rip = next; do_rcl resumes there)
+                } // RCL/RCR by CL -> C helper
                 int raw = rm_load(I, next, w, &mem);
                 if ((k == 0 || k == 1) && w < 4) {        // 8/16-bit ROL/ROR -- rotate WITHIN the operand width
                     int width = 8 * w;                    // (a 64-bit ROR would wrap the wrong bits, e.g. rolw $8)
@@ -85,9 +102,12 @@ static int translate_shift(struct insn *I, uint64_t gpc, uint64_t next) {
                         return TX_NEXT;
                     }
                     uint32_t b = k == 4 ? S_LSLV : k == 5 ? S_LSRV : k == 7 ? S_ASRV : S_RORV;
-                    // SHL/SHR/SAR by CL: stash the ORIGINAL operand (x17) so the exact x86 CF (the last bit
-                    // shifted out) can be recovered after the destructive shift, below.
-                    if (w >= 4 && (k == 4 || k == 5 || k == 7)) e_mov_rr(17, src, ssf);
+                    // SHL/SHR/SAR by CL: stash the ORIGINAL operand (x26) so the exact x86 CF (the last bit
+                    // shifted out) can be recovered after the destructive shift, below. Use x26 (a
+                    // trampoline-preserved scratch) -- NOT x17, which holds the EA for a MEMORY destination and
+                    // must survive to rm_store (a `shr [mem],cl` stashed the operand over the EA -> rm_store
+                    // wrote the result to a garbage address = the operand value; jemalloc bitmap_init crash).
+                    if (w >= 4 && (k == 4 || k == 5 || k == 7)) e_mov_rr(26, src, ssf);
                     e_shv(b, 16, src, RCX, ssf);
                 } else {
                     if (cnt == 0) {
@@ -137,7 +157,7 @@ static int translate_shift(struct insn *I, uint64_t gpc, uint64_t next) {
                     e_movconst(19, width - 1);
                     e_rrr(A_ANDS, 22, RCX, 19, ssf, 0); // x22 = n = CL & (width-1); Z = (n == 0)
                     if (w >= 4 && (k == 4 || k == 5 || k == 7)) {
-                        // Exact x86 CF = last bit shifted out of the ORIGINAL operand (x17): SHL -> bit
+                        // Exact x86 CF = last bit shifted out of the ORIGINAL operand (x26): SHL -> bit
                         // (width - n), SHR/SAR -> bit (n - 1) (n>0 here; the n==0 csel below discards this).
                         // ARM tst left C=0; replace the stored borrow C with NOT CF. All ops below are
                         // flag-free, so the ANDS's Z survives to the csel.
@@ -147,7 +167,7 @@ static int translate_shift(struct insn *I, uint64_t gpc, uint64_t next) {
                         } else {
                             e_subi(23, 22, 1, ssf);           // x23 = n - 1
                         }
-                        e_shv(S_LSRV, 23, 17, 23, ssf);       // x23 = orig >> bit
+                        e_shv(S_LSRV, 23, 26, 23, ssf);       // x23 = orig >> bit
                         e_movconst(19, 1);
                         e_rrr(A_AND, 23, 23, 19, ssf, 0);     // x23 = x86 CF (0/1)
                         e_rrr(A_EOR, 23, 23, 19, 0, 0);       // x23 = NOT CF
@@ -165,7 +185,7 @@ static int translate_shift(struct insn *I, uint64_t gpc, uint64_t next) {
                     // x86 OF is DEFINED only for a 1-bit shift; for SHL/SHR by CL set V=OF in the stored
                     // NZCV only when the masked count is exactly 1 (SAR OF=0 / count!=1 OF undefined -> leave).
                     if (w >= 4 && (k == 4 || k == 5)) {
-                        e_lsr_i(23, 17, width - 1, ssf); // MSB(original x17)
+                        e_lsr_i(23, 26, width - 1, ssf); // MSB(original x26)
                         e_movconst(19, 1);
                         e_rrr(A_AND, 23, 23, 19, ssf, 0);
                         if (k == 4) { // SHL OF = MSB(result) XOR CF; for count==1 CF = MSB(original)

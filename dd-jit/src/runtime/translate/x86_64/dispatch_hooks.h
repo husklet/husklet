@@ -247,6 +247,10 @@ static int smc_on_write(uint64_t a) {
         x87_func(c);                                                                                                  \
         continue;                                                                                                      \
     } /* x87 transcendental (rip already = next) */                                                                    \
+    if ((c)->reason == R_RCL) { /* RCL/RCR by CL: rotate-through-carry in C (rip already = next) */                    \
+        do_rcl(c);                                                                                                     \
+        continue;                                                                                                      \
+    }                                                                    \
     if ((c)->reason == R_DIV) { /* 128/64 unsigned div (rip already = next) */                                         \
         uint64_t d = (c)->divop;                                                                                       \
         if (d == 0) {                                                                                                  \

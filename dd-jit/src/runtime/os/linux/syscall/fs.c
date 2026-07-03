@@ -94,6 +94,11 @@ static void fd_reset_emul(int fd) {
         g_sock_seqpacket[fd] = 0;
         g_br_port[fd] = 0;
         g_br_ip[fd] = 0;
+        if (g_dns_sock[fd]) { // container DNS: close the engine-held socketpair peer
+            if (g_dns_peer[fd] >= 0) close(g_dns_peer[fd]);
+            g_dns_peer[fd] = -1;
+            g_dns_sock[fd] = 0;
+        }
         nl_close(fd); // #289: tear down a netlink socket's socketpair peer
         g_eventfd_count[fd] = 0;
         g_eventfd_sema[fd] = 0;

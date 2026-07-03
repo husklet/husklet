@@ -312,6 +312,20 @@ pub(crate) async fn spawn_live(app: &App, c: &Container, vols: &[Vol], live: Arc
         if let Err(e) = std::fs::write(format!("{etc}/hosts"), &hosts) {
             if std::env::var("DD_DEBUG").is_ok() { eprintln!("[live] {} write /etc/hosts failed: {e}", &c.id[..c.id.len().min(12)]); }
         }
+        // Provision /etc/resolv.conf with dd's embedded nameserver (mirrors Docker's 127.0.0.11). Many base
+        // images ship an EMPTY /etc/resolv.conf (Docker fills it at runtime); without this the guest has no
+        // nameserver at all and every DNS lookup fails (apt-get "Ign"/"failed to fetch"). The engine
+        // intercepts UDP/TCP :53 to this address and resolves via the macOS host resolver (net.c dns_*),
+        // so the container inherits the host's DNS config -- including a corporate VPN's split-DNS -- exactly
+        // like the ddcli-mac container. `ndots:0` matches Docker's embedded-DNS resolv.conf (names are tried
+        // as-is first; we have no search domains to append). Written into the SAME writable layer as
+        // /etc/hosts so it shadows the image's file via the overlay. --network none still gets the file, but
+        // the engine leaves :53 un-intercepted under DD_NET_ISOLATE, so name resolution fails as Docker's
+        // null network does. Best-effort: never fail the spawn on an I/O error.
+        let resolv = "nameserver 127.0.0.11\noptions ndots:0\n";
+        if let Err(e) = std::fs::write(format!("{etc}/resolv.conf"), resolv) {
+            if std::env::var("DD_DEBUG").is_ok() { eprintln!("[live] {} write /etc/resolv.conf failed: {e}", &c.id[..c.id.len().min(12)]); }
+        }
     }
     // No launch command means the JIT engine for this guest arch isn't bundled (e.g. a darwin-only build
     // shipped without ddjit-linux_*). Surface a CLEAN error (exit 127, like every other spawn failure) so an
