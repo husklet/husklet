@@ -119,6 +119,38 @@ pty `/dev/pts/0` naming (tty/ttyname/reopen).
 
 ---
 
+## H. xfail census — the harness's known-broken inventory (138 markers)
+
+Every `.xfail()` is a case the engine/daemon currently fails; XPASS fires the moment it's fixed. Scan:
+`grep -rn '\.xfail(' dd-tests/src/`. Grouped:
+
+- **Syscall gaps (14, `cases/ext/linuxsys.rs`)** — unimplemented / wrong-value vs oracle:
+  `timerfd-gettime`, `signalfd-rt`, `inotify-moves`, `memfd-seal`, `tee`, `vmsplice`, `prctl-nnp`,
+  `prctl-dumpable`, `prctl-pdeathsig`, `pidfd-signal`, `personality` (both arches);
+  `io-uring`, `fanotify` (arm); `process-vm` (x86 = **oracle artifact**, qemu lacks it — dd is correct).
+- **Signals (3, `signalx.rs`)** — `sarestart` #312, `sigwait` #313, `siginfo` #316 (retry carefully).
+- **FS / posix (8)** — `posix/{chmodchown, linksym, readdir-dtype}` diverge vs oracle (basic FS-op
+  fidelity — nlink/dtype/mode); `fsx/opath` #318 + one xattr; `memx/mincore` #319 (x86); `processx/prlimit` #315.
+- **Toolchains (34, `toolchains/mod.rs`)** — the big cluster: gcc/cc1/go/rustc/cargo **compile-AND-run**
+  and even `gcc/go/rustc/cargo --version` → **exec-loader-noent** (#333) + gcc BSS-16KB (#240) + go/rust
+  driver fork+exec + gcc-image-rootfs-leak. Highest-count gap; unblocking exec-loader-noent flips ~half.
+- **Databases (31, `databases.rs`)** — postgres/mysql/mariadb/redis scenarios `xfail(arm)` =
+  fork-per-conn/jemalloc test-lane (#333, note real `docker run` of these WORKS — it's the harness lane);
+  mongo/valkey/nats/etcd/memcached/couchdb `xfail(both)` = mongo tcmalloc cpu-topology (#334) + others.
+- **Web (10, `web/mod.rs`)** — nginx serve/headers/config scenarios `xfail(both)` (verify vs the shipped
+  #283 nginx fix — likely a scenario-lane gap, not the engine).
+- **docker build (3, `buildcmd/mod.rs`)** — #321 (no `/build` endpoint).
+- **apt on amd (8, `netinstall.rs` + `distros.rs`)** — x86 gpgv `divq`→SIGFPE (#331/#232 recheck).
+- **darwin (2, `darwin.rs`)** — `kq-signal` (EVFILT), `bsd-spawn`.
+- **misc** — `threads/spinlock` (x86), `weird/id`, `utilities/*`, `completeness/{clone3,process-vm}`
+  (x86 = **oracle artifacts**), `completeness/auxval` (arm), `languages/{golang,rust}` (exec-loader-noent).
+
+**Action:** the biggest wins are **exec-loader-noent (#333 → ~34 toolchain + language + version xfails)**
+and the **DB fork-per-conn/mongo-tcmalloc test-lanes (#333/#334 → ~31)**. The 14 linuxsys syscalls are a
+clean, bounded implement-list. Do NOT "fix" the oracle-artifact xfails (process-vm/clone3 x86) — instead
+mark them oracle-only so they stop counting as gaps (#220 xfail-sync). Every fix must re-check the marker
+flips to XPASS on all applicable engines, then remove the `.xfail()`.
+
 ## Process (short)
 Manager coordinates: delegate each gap to a minimal-scope isolated-worktree agent (TDD: write the
 failing test first, then repair the whole subsystem — see AGENTS.md COMPLETENESS + CROSS-PLATFORM).
