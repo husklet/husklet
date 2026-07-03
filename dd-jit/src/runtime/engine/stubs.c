@@ -500,7 +500,11 @@ static void emit_vdbe_sdc(int rn) {
 // (shared-hash-only fill: there are no per-site literals here).
 static void emit_hash_tail(int rn) {
     emit32(0xD3424400u | (rn << 5) | 16); // ubfx x16, xRn, #2, #16  ((xRn>>2) & (IBTC_N-1))
-    e_adrp_add(17, (uint64_t)g_ibtc);
+    // #339: RECORDED bakes only (emit_ibtcptr / emit_blockret, byte-identical to the raw emitters when
+    // the pcache is off). A raw e_adrp_add/e_movconst here escaped pcache relocation, so a WARM run's
+    // first recognized-dispatch miss branched to the SAVING process's block_return / read the saving
+    // process's &g_ibtc (adrp is PC-relative to a differently-based arena) -> silent death on load.
+    emit_ibtcptr(17);
     emit32(0x8B000000u | (16 << 16) | (4 << 10) | (17 << 5) | 16); // add x16, x17, x16, lsl #4
     e_ldp(17, 16, 16, 0);                              // {x17,x16} = {slot.target, slot.body} (LSE2)
     emit32(0xCB000000u | (rn << 16) | (17 << 5) | 17); // sub x17, x17, xRn (no flags)
@@ -515,7 +519,7 @@ static void emit_hash_tail(int rn) {
     e_str(9, 0, OFF_RSN);
     e_movconst(9, 1); // ic_site = 1 -> dispatcher fills the shared hash only
     e_str(9, 0, OFF_ICSITE);
-    e_movconst(9, (uint64_t)block_return);
+    emit_blockret(9); // #339: recorded (see the emit_ibtcptr note above)
     e_br(9);
     *p_cbnz = 0xB5000000u | (((uint32_t)(((uint8_t *)miss - (uint8_t *)p_cbnz) / 4) & 0x7FFFF) << 5) | 17;
 }

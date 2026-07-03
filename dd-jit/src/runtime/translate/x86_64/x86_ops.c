@@ -189,9 +189,13 @@ static void do_cpuid(struct cpu *c) {
         a = 0x000206c2; // Intel Westmere (fam 6, model 0x2c) -- trips glibc Fast_Unaligned_Copy (SSE memcpy -> rep movsb)
         d = (1u << 0) | (1u << 4) | (1u << 8) | (1u << 11) | (1u << 13) | (1u << 15) | (1u << 19) | (1u << 23) |
             (1u << 24) | (1u << 25) | (1u << 26); // FPU,TSC,CX8,SEP,PGE,CMOV,CLFSH,MMX,FXSR,SSE,SSE2
-        // SSE3, PCLMULQDQ, SSSE3, CMPXCHG16B, SSE4.1, SSE4.2, MOVBE, POPCNT, AES-NI -- all backed by the
+        // SSE3, PCLMULQDQ, SSSE3, CMPXCHG16B, SSE4.1, SSE4.2, POPCNT, AES-NI -- all backed by the
         // legacy/0F38/0F3A lowerings; none need YMM state (XMM only, covered by xgetbv's SSE bit).
-        cc = (1u << 0) | (1u << 1) | (1u << 9) | (1u << 13) | (1u << 19) | (1u << 20) | (1u << 22) | (1u << 23) |
+        // MOVBE (bit 22) is deliberately NOT advertised even though dd lowers it inline: real Westmere
+        // has no MOVBE, and "MOVBE && !XSAVE" is the Intel-Atom fingerprint openssl's ia32cap checks key
+        // their SLOW Atom-tuned paths on (2-block ghash instead of the 4-block Karatsuba ghash, 6-block
+        // movbe ctr32 instead of the 8-block loop) -- advertising it cost ~40% of real AES-GCM throughput.
+        cc = (1u << 0) | (1u << 1) | (1u << 9) | (1u << 13) | (1u << 19) | (1u << 20) | (1u << 23) |
              (1u << 25);
         break;
     case 7:

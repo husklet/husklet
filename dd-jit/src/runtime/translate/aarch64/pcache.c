@@ -71,7 +71,13 @@
 // DDJIT_NOPCACHE=1 is the kill-switch that wins over everything.
 
 #define PC_MAGIC 0x3436414350544a44ull       // "DDJTPCA4" (LE tag)
-#define PC_VERSION 2                          // BUMP on ANY aarch64 codegen or layout change
+#define PC_VERSION 3 // BUMP on ANY aarch64 codegen/layout change. v3: IRQSLIM/IBSLIM layout + pend.fwd.
+// IRQSLIM changes the block-entry layout (fixed 2-insn poll header + poll-free forward-chain entry at
+// body+8), and it is env-toggleable (NOIRQSLIM/NOIRQCHECK/NOSTEAL1617) -- mix the LIVE mode into the
+// version (mirrors the x86 pcache's PC_VERSION_EFF) so a cache written in one layout can never be
+// reloaded into the other: a +8 forward chain into a legacy-layout block would land mid-instruction,
+// and a legacy chain into an IRQSLIM block would double-run the poll header's cbnz target.
+#define PC_VERSION_EFF (PC_VERSION | ((uint64_t)(g_fwdskip ? 0x100 : 0)))
 #define PC_IMG_BASE 0x0000040000000000ull     // 4 TB -- fixed guest image base (probed free on Apple silicon)
 #define PC_INTERP_BASE 0x0000048000000000ull  // 4.5 TB -- fixed interp (ld.so) base
 #define PC_RELOC_CAP (1u << 20)               // recorded baked-host-pointer slots (poison if exceeded)
@@ -170,7 +176,7 @@ struct pc_mapent {
 };
 struct pc_pend {
     uint64_t slot_off, target;
-    uint32_t is_bl, pad;
+    uint32_t is_bl, fwd; // fwd: IRQSLIM forward edge -> patch_links_to targets body+g_fwdskip, not body+0
 };
 struct pc_t2 {
     uint64_t gpc, cnt;
@@ -209,7 +215,12 @@ static uint64_t pcache_engine_id(void) {
 // an arena saved under one mode is never loaded under another (each mode gets its own cache file).
 static uint64_t pcache_mode_id(void) {
     static const char *envs[] = {"NOSTEAL1617", "NOGUESTFOLD", "NOSHADOWTUNE", "SHADOWGATE",
-                                 "NOSTITCH",    "NOLSE",       "NOTIER2"};
+                                 "NOSTITCH",    "NOLSE",       "NOTIER2",
+                                 // perf-wave-2 codegen toggles: IRQSLIM (2-insn poll header + body+8
+                                 // forward entries; also mixed into PC_VERSION_EFF via the LIVE
+                                 // g_fwdskip), IBSLIM (set_x30 + hash_tail shapes), CTXDISP (also
+                                 // poisons the save -- its in-cache stubs hold unrecorded pointers).
+                                 "NOIRQSLIM",   "NOIRQCHECK",  "NOIBSLIM",    "CTXDISP"};
     uint64_t h = 1469598103934665603ull;
     for (size_t i = 0; i < sizeof envs / sizeof envs[0]; i++) {
         const char *v = getenv(envs[i]);
@@ -300,7 +311,7 @@ static int pcache_load(uint64_t entry_jump) {
     }
     struct pc_hdr h;
     if (read(fd, &h, sizeof h) != (ssize_t)sizeof h) { close(fd); return 0; }
-    if (h.magic != PC_MAGIC || h.version != PC_VERSION || h.cpu_sz != sizeof(struct cpu) ||
+    if (h.magic != PC_MAGIC || h.version != PC_VERSION_EFF || h.cpu_sz != sizeof(struct cpu) ||
         h.jit_map_n != JIT_MAP_N || h.ibtc_n != IBTC_N || h.img_base != PC_IMG_BASE ||
         h.interp_base != PC_INTERP_BASE || h.bin_id != g_pc_binid || h.entry_jump != entry_jump ||
         h.arena_used > CACHE_SZ || (h.arena_used & 3) || h.n_reloc > PC_RELOC_CAP ||
@@ -358,8 +369,8 @@ static int pcache_load(uint64_t entry_jump) {
     for (uint64_t i = 0; i < h.n_mapent; i++)
         map_put(me[i].gpc, g_cache + me[i].host_off, g_cache + me[i].body_off);
     g_npend = 0;
-    for (uint64_t i = 0; i < h.n_pend; i++)
-        add_pend2((uint32_t *)(g_cache + pe[i].slot_off), pe[i].target, (int)pe[i].is_bl);
+    for (uint64_t i = 0; i < h.n_pend; i++) // fwd restored too: a forward pend must patch to body+8 (IRQSLIM)
+        add_pend3((uint32_t *)(g_cache + pe[i].slot_off), pe[i].target, (int)pe[i].is_bl, (int)pe[i].fwd);
     g_t2n = (int)h.n_t2;
     for (uint64_t i = 0; i < h.n_t2; i++) {
         g_t2gpc[i] = te[i].gpc;
@@ -414,7 +425,7 @@ static void pcache_save(void) {
     struct pc_hdr h;
     memset(&h, 0, sizeof h);
     h.magic = PC_MAGIC;
-    h.version = PC_VERSION;
+    h.version = PC_VERSION_EFF; // layout-mode-mixed (IRQSLIM on/off) -- cross-mode loads are guaranteed MISSes
     h.cpu_sz = sizeof(struct cpu);
     h.jit_map_n = JIT_MAP_N;
     h.ibtc_n = IBTC_N;
@@ -449,7 +460,7 @@ static void pcache_save(void) {
         }
         for (int i = 0; i < g_npend; i++) {
             struct pc_pend e = {(uint64_t)((uint8_t *)g_pend[i].slot - g_cache), g_pend[i].target,
-                                (uint32_t)g_pend[i].is_bl, 0};
+                                (uint32_t)g_pend[i].is_bl, (uint32_t)g_pend[i].fwd};
             memcpy(w, &e, sizeof e);
             w += sizeof e;
         }
@@ -480,6 +491,12 @@ static void pcache_save(void) {
 // at engine init, after the mode flags are read.
 static void pcache_poison_check(void) {
     if (g_prof || g_vdbetrace || g_ibprof || g_vt_hitcount) g_pcache_poison = 1;
+    // CTXDISP (experimental, default OFF): its ctx-dispatch sites bake &g_ctxsite[slot] + block_return
+    // raw (unrecorded), and each site's in-cache 64B stub array holds runtime-filled {target,body} pairs
+    // whose bodies are arena pointers -- none of it is relocatable/neutralizable by the current record
+    // kinds, so a CTXDISP arena must never be persisted. (CTXDISP is also folded into the cache id, so a
+    // CTXDISP run can never LOAD a default-mode file either.)
+    if (g_ctxdisp) g_pcache_poison = 1;
 }
 
 // ---- guest fork hook (proc.c, both clone/fork sites, in the child, right after jit_after_fork) ----

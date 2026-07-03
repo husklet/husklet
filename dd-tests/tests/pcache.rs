@@ -159,6 +159,27 @@ fn pcache_lifecycle_aarch64() {
     assert!(s3.stderr.contains("[pcache] MISS"), "replaced binary must MISS: {}", s3.stderr);
     assert_eq!(s3.stdout, cold.stdout);
 
+    // ---- 4b. CROSS-LAYOUT loads must MISS (v0.9.20 integration bug): an arena saved under the default
+    // IRQSLIM layout must never load into a NOIRQSLIM engine (nor vice versa) — the block-entry layout
+    // differs (2-insn poll header, forward chains at body+8), so a cross-mode load would enter
+    // mid-instruction. Both the mode-hashed cache id AND PC_VERSION_EFF (live g_fwdskip mixed into the
+    // header version, mirroring x86) guarantee the MISS. Same contract for NOIBSLIM (hash_tail shape).
+    for flip in ["NOIRQSLIM", "NOIBSLIM"] {
+        let mut menv = base.clone();
+        menv.push((flip, "1"));
+        let m1 = run_engine(&hello, &menv);
+        assert_eq!(m1.code, 0, "{flip} run failed: {}", m1.stderr);
+        assert_eq!(m1.stdout, cold.stdout, "{flip} output must match");
+        assert!(m1.stderr.contains("[pcache] MISS"), "{flip}=1 must not load a default-layout save: {}", m1.stderr);
+        let m2 = run_engine(&hello, &menv);
+        assert!(m2.stderr.contains("[pcache] HIT"), "{flip}=1 second run must HIT its own entry: {}", m2.stderr);
+        assert_eq!(m2.stdout, cold.stdout);
+    }
+    // ...and the default layout still HITs its own entry afterwards (no cross-mode clobber).
+    let back = run_engine(&hello, &base);
+    assert!(back.stderr.contains("[pcache] HIT"), "default layout must still HIT: {}", back.stderr);
+    assert_eq!(back.stdout, cold.stdout);
+
     // ---- 5. kill-switch: DDJIT_NOPCACHE=1 wins over DDJIT_PCACHE=1 (cache fully inert) ----
     let mut kenv = base.clone();
     kenv.push(("DDJIT_NOPCACHE", "1"));

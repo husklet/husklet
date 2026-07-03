@@ -12,6 +12,48 @@
 
 static int g_avx_warned;
 
+// ---- EXITSTAT diagnostic (env-gated, zero-cost when off): histogram of the per-insn C-emulation
+// block exits (do_avx / do_sse3b) by (map, opcode) and by guest rip, dumped at process exit. Used to
+// find which instructions in a real binary's hot loop still shatter translated blocks. ----
+static int g_xs_on = -1;
+static uint64_t g_xs_sse3b[4][256]; // [map3][op]  (map3 = 2:0F38, 3:0F3A)
+static uint64_t g_xs_avx[4][256];   // [vex_map][op]
+static struct { uint64_t rip, n; uint16_t map, op; uint8_t vex; } g_xs_rip[4096];
+static int g_xs_nrip;
+static void xs_note(int vex, int map, int op, uint64_t rip) {
+    if (g_xs_on < 0) g_xs_on = (getenv("EXITSTAT") != NULL);
+    if (!g_xs_on) return;
+    if (vex) g_xs_avx[map & 3][op & 255]++; else g_xs_sse3b[map & 3][op & 255]++;
+    for (int i = 0; i < g_xs_nrip; i++)
+        if (g_xs_rip[i].rip == rip) { g_xs_rip[i].n++; return; }
+    if (g_xs_nrip < 4096) {
+        g_xs_rip[g_xs_nrip].rip = rip; g_xs_rip[g_xs_nrip].n = 1;
+        g_xs_rip[g_xs_nrip].map = (uint16_t)map; g_xs_rip[g_xs_nrip].op = (uint16_t)op;
+        g_xs_rip[g_xs_nrip].vex = (uint8_t)vex; g_xs_nrip++;
+    }
+}
+static void xs_dump(void) { // called from G_PROF_EXTRA at exit_group (destructors are bypassed by _exit)
+    if (g_xs_on != 1) return;
+    fprintf(stderr, "[exitstat] per-insn C-emulation exits:\n");
+    for (int m = 0; m < 4; m++)
+        for (int o = 0; o < 256; o++) {
+            if (g_xs_sse3b[m][o])
+                fprintf(stderr, "[exitstat] sse3b map%d op %02x  %llu\n", m, o, (unsigned long long)g_xs_sse3b[m][o]);
+            if (g_xs_avx[m][o])
+                fprintf(stderr, "[exitstat] avx map%d op %02x  %llu\n", m, o, (unsigned long long)g_xs_avx[m][o]);
+        }
+    for (int k = 0; k < 40; k++) { // top 40 hottest exit sites
+        int best = -1;
+        for (int i = 0; i < g_xs_nrip; i++)
+            if (g_xs_rip[i].n && (best < 0 || g_xs_rip[i].n > g_xs_rip[best].n)) best = i;
+        if (best < 0 || g_xs_rip[best].n < 2) break;
+        fprintf(stderr, "[exitstat] rip %llx %s map%d op %02x  %llu\n", (unsigned long long)g_xs_rip[best].rip,
+                g_xs_rip[best].vex ? "avx" : "sse3b", g_xs_rip[best].map, g_xs_rip[best].op,
+                (unsigned long long)g_xs_rip[best].n);
+        g_xs_rip[best].n = 0;
+    }
+}
+
 static void avx_get(struct cpu *c, int r, uint8_t out[64]) {
     if (r < 16) {
         memcpy(out + 0, &c->v[2 * r], 16);
@@ -114,6 +156,7 @@ static void do_avx(struct cpu *c) {
     int W = (L == 0) ? 16 : (L == 1) ? 32 : 64; // operation width in bytes
     int map = I.vex_map, op = I.op, pp = I.vex_pp;
     int rd = I.reg, vv = I.vvvv;
+    xs_note(1, map, op, c->rip); // EXITSTAT diagnostic (no-op unless env set)
     uint8_t a[64], b[64], d[64];
 
     // ---- BMI2 / BMI1: VEX-encoded but operate on GENERAL registers (not vector). Routed here by the VEX
@@ -1101,6 +1144,7 @@ static void do_sse3b(struct cpu *c) {
     decode(c->rip, &I);
     uint64_t next = c->rip + I.len;
     int map = I.map3, op = I.op;
+    xs_note(0, map, op, c->rip); // EXITSTAT diagnostic (no-op unless env set)
     uint8_t *D = (uint8_t *)&c->v[2 * I.reg]; // dst xmm == src1 (destructive)
     uint8_t s[16], r[16];
 
