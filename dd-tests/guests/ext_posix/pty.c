@@ -32,7 +32,11 @@ int main(void) {
     struct winsize sg = {0, 0, 0, 0};                  // htop/ncurses read the size from the slave
     int sgwin = s >= 0 && ioctl(s, TIOCGWINSZ, &sg) == 0 && sg.ws_row == 40 && sg.ws_col == 120;
 
-    // node/readline raw mode on the slave, then verify the round-trip.
+    // ALL tcsetattr actions must succeed on the MASTER too (apt uses TCSANOW; drain/flush must not ENOTTY).
+    int mdrain = mget && tcsetattr(m, TCSADRAIN, &mt) == 0;
+    int mflush = mget && tcsetattr(m, TCSAFLUSH, &mt) == 0;
+
+    // node/readline raw mode on the slave (cfmakeraw-equivalent), then verify the round-trip incl. c_cc.
     int sraw = 0, rawrt = 0;
     if (s >= 0) {
         struct termios t;
@@ -43,15 +47,16 @@ int main(void) {
             t.c_cc[VMIN] = 1;
             t.c_cc[VTIME] = 0;
             t.c_cc[VERASE] = 0x7f;
+            t.c_cc[VINTR] = 3; // ^C
             sraw = tcsetattr(s, TCSANOW, &t) == 0;
             struct termios r;
             if (tcgetattr(s, &r) == 0)
                 rawrt = !(r.c_lflag & ICANON) && !(r.c_lflag & ECHO) && !(r.c_oflag & OPOST) &&
-                        r.c_cc[VERASE] == 0x7f && r.c_cc[VMIN] == 1;
+                        r.c_cc[VERASE] == 0x7f && r.c_cc[VINTR] == 3 && r.c_cc[VMIN] == 1;
         }
     }
 
-    printf("pty mget=%d mset=%d mswin=%d mgwin=%d sgwin=%d sraw=%d rawrt=%d\n", mget, mset, mswin, mgwin,
-           sgwin, sraw, rawrt);
+    printf("pty mget=%d mset=%d mdrain=%d mflush=%d mswin=%d mgwin=%d sgwin=%d sraw=%d rawrt=%d\n", mget,
+           mset, mdrain, mflush, mswin, mgwin, sgwin, sraw, rawrt);
     return 0;
 }

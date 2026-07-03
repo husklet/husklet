@@ -328,7 +328,10 @@ static void load_elf(const char *path, struct loaded *out) {
             for (int i = 0; i < shnum; i++) {
                 const uint8_t *sh = f + shoff + (uint64_t)i * shentsize;
                 const char *nm = (const char *)shstr + rd32(sh + 0);
-                if (strcmp(nm, ".data.rel.ro") != 0 && strcmp(nm, ".data") != 0) continue;
+                int is_data = strcmp(nm, ".data") == 0, is_relro = strcmp(nm, ".data.rel.ro") == 0;
+                if (!is_data && !is_relro) continue;
+                if (getenv("DDONLYDATA") && !is_data) continue;
+                if (getenv("DDONLYRELRO") && !is_relro) continue;
                 uint64_t saddr = rd64(sh + 16), ssize = rd64(sh + 32);
                 for (uint64_t o = 0; o + 8 <= ssize; o += 8) {
                     uint64_t *slot = (uint64_t *)(saddr + bias + o);

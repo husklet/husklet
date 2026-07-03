@@ -5,10 +5,17 @@
 //! + a readiness poll), then drives a deterministic aggregate over loopback (canonical sum(1..1000) =
 //! 500500, or a fixed SET/GET). Every marker is verified against the Real docker oracle.
 //!
-//! Known dd gaps (see GAPS.md): postgres/redis/mysql/mariadb/valkey full bring-up hit the
-//! fork+exec / jemalloc gaps on arm → `.xfail(ArmLinux)`; mongo's tcmalloc aborts on CPU-topology on
-//! both linux arches → `.xfail(both)`. The test stays correct (passes on Real) so XPASS fires the moment
-//! the engine lane fixes it. Owner: databases agent. Edit ONLY this folder.
+//! Status (db-web-scenarios pass, 2026-07): postgres/redis/valkey bring-up now WORKS under dd (servers
+//! boot + serve correct results; verified arm via single-daemon probe, zero engine signals) — the old
+//! fork+exec/jemalloc arm `.xfail`s were removed (now XPASS). Still `.xfail(ArmLinux)`: mysql + mariadb
+//! (server boots under dd, but the `my()`/`maria()` drivers only poll `mysqladmin/mariadb-admin ping`,
+//! which races the entrypoint's root-grant/init — an auth/readiness HARNESS-LANE bug, not an engine gap;
+//! harden the poll to wait for the real "ready for connections" marker like `pg()` does) and redis
+//! setget-74/ping-glibc (images absent from the local store — unverified). mongo stays `.xfail(both)`
+//! (didn't finish boot within 5min under load — unresolved; engine has full cpu-topology handling and
+//! showed NO tcmalloc abort, so likely slow-boot rather than the old cpu-topology gap — re-verify on a
+//! quiet host). The test stays correct (passes on Real) so XPASS fires the moment dd matches.
+//! Owner: databases agent. Edit ONLY this folder.
 
 use crate::scenario::{scen, sgroup, ScenGroup, Target};
 
@@ -83,36 +90,28 @@ pub fn group() -> ScenGroup {
         // ---- postgres (15/16, alpine + glibc): postmaster fork-per-connection, shared memory ---------
         scen("databases/postgres-agg-16-alpine", "postgres:16-alpine")
             .exec(&pg("CREATE TABLE t(n int); INSERT INTO t SELECT generate_series(1,1000); SELECT sum(n) FROM t;"))
-            .has("500500").timeout(120)
-            .xfail(&[Target::ArmLinux]),       // fork-per-conn / jemalloc gap — GAPS.md (_fork-exec_)
+            .has("500500").timeout(120),
         scen("databases/postgres-agg-16", "postgres:16")
             .exec(&pg("CREATE TABLE t(n int); INSERT INTO t SELECT generate_series(1,1000); SELECT sum(n) FROM t;"))
-            .has("500500").timeout(120).long()
-            .xfail(&[Target::ArmLinux]),
+            .has("500500").timeout(120).long(),
         scen("databases/postgres-agg-15-alpine", "postgres:15-alpine")
             .exec(&pg("CREATE TABLE t(n int); INSERT INTO t SELECT generate_series(1,1000); SELECT sum(n) FROM t;"))
-            .has("500500").timeout(120).long()
-            .xfail(&[Target::ArmLinux]),
+            .has("500500").timeout(120).long(),
         scen("databases/postgres-join-16-alpine", "postgres:16-alpine")
             .exec(&pg("SELECT count(DISTINCT n%30) FROM generate_series(1,900) n;"))
-            .has("30").timeout(120)
-            .xfail(&[Target::ArmLinux]),
+            .has("30").timeout(120),
         scen("databases/postgres-version-15", "postgres:15")
             .exec(&pg("SELECT version();"))
-            .has("PostgreSQL 15.").timeout(120).long()
-            .xfail(&[Target::ArmLinux]),
+            .has("PostgreSQL 15.").timeout(120).long(),
         scen("databases/postgres-version-16-alpine", "postgres:16-alpine")
             .exec(&pg("SELECT version();"))
-            .has("PostgreSQL 16.").timeout(120)
-            .xfail(&[Target::ArmLinux]),
+            .has("PostgreSQL 16.").timeout(120),
         scen("databases/postgres-agg-15", "postgres:15")
             .exec(&pg("CREATE TABLE t(n int); INSERT INTO t SELECT generate_series(1,1000); SELECT sum(n) FROM t;"))
-            .has("500500").timeout(120).long()
-            .xfail(&[Target::ArmLinux]),
+            .has("500500").timeout(120).long(),
         scen("databases/postgres-count-series", "postgres:16-alpine")
             .exec(&pg("SELECT count(*) FROM generate_series(1,1000);"))
-            .has("1000").timeout(120)
-            .xfail(&[Target::ArmLinux]),
+            .has("1000").timeout(120),
 
         // ---- mysql (8.0/8.4): thread-per-connection, large mmap buffer pool, slow boot --------------
         scen("databases/mysql-agg-80", "mysql:8.0")
@@ -153,24 +152,20 @@ pub fn group() -> ScenGroup {
         // ---- redis (7 alpine + glibc): single-thread event loop, jemalloc, loopback ----------------
         scen("databases/redis-roundtrip", "redis:alpine")
             .exec(&redis("redis-cli ping; redis-cli set k hello-redis >/dev/null; redis-cli get k"))
-            .has("PONG").has("hello-redis")
-            .xfail(&[Target::ArmLinux]),       // jemalloc / fork gap — GAPS.md
+            .has("PONG").has("hello-redis"),
         scen("databases/redis-agg-7-alpine", "redis:7-alpine")
             .exec(&redis("for i in $(seq 1 1000); do redis-cli rpush L $i >/dev/null; done\nredis-cli eval \"local s=0 for _,v in ipairs(redis.call('lrange','L',0,-1)) do s=s+v end return s\" 0"))
-            .has("500500").timeout(90)
-            .xfail(&[Target::ArmLinux]),
+            .has("500500").timeout(90),
         scen("databases/redis-lua-sum", "redis:7-alpine")
             .exec(&redis("redis-cli eval \"local s=0 for i=1,1000 do s=s+i end return s\" 0"))
-            .has("500500")
-            .xfail(&[Target::ArmLinux]),
+            .has("500500"),
         scen("databases/redis-setget-74", "redis:7.4-alpine")
             .exec(&redis("redis-cli set k dd-value-42 >/dev/null; redis-cli get k"))
             .has("dd-value-42")
             .xfail(&[Target::ArmLinux]),
         scen("databases/redis-incr-1000", "redis:alpine")
             .exec(&redis("for i in $(seq 1 1000); do redis-cli incr c >/dev/null; done\nredis-cli get c"))
-            .has("1000").timeout(90)
-            .xfail(&[Target::ArmLinux]),
+            .has("1000").timeout(90),
         scen("databases/redis-ping-glibc", "redis:7")
             .exec(&redis("redis-cli ping"))
             .has("PONG").long()
@@ -180,8 +175,7 @@ pub fn group() -> ScenGroup {
             .has("3"),
         scen("databases/redis-strlen", "redis:7-alpine")
             .exec(&redis("redis-cli set k 0123456789 >/dev/null; redis-cli strlen k"))
-            .has("10")
-            .xfail(&[Target::ArmLinux]),
+            .has("10"),
         scen("databases/redis-hash-hlen", "redis:7-alpine")
             .exec(&redis("redis-cli hset h a 1 b 2 c 3 >/dev/null; redis-cli hlen h"))
             .has("3"),
@@ -189,16 +183,13 @@ pub fn group() -> ScenGroup {
         // ---- valkey (OSS redis fork) ----------------------------------------------------------------
         scen("databases/valkey-agg-8", "valkey/valkey:8-alpine")
             .exec(&valkey("for i in $(seq 1 1000); do valkey-cli rpush L $i >/dev/null; done\nvalkey-cli eval \"local s=0 for _,v in ipairs(redis.call('lrange','L',0,-1)) do s=s+v end return s\" 0"))
-            .has("500500").timeout(90).long()
-            .xfail(&[Target::ArmLinux]),
+            .has("500500").timeout(90).long(),
         scen("databases/valkey-ping", "valkey/valkey:8-alpine")
             .exec(&valkey("valkey-cli ping; valkey-cli set k dd-value-42 >/dev/null; valkey-cli get k"))
-            .has("PONG").has("dd-value-42")
-            .xfail(&[Target::ArmLinux]),
+            .has("PONG").has("dd-value-42"),
         scen("databases/valkey-incr", "valkey/valkey:8-alpine")
             .exec(&valkey("for i in $(seq 1 1000); do valkey-cli incr c >/dev/null; done\nvalkey-cli get c"))
-            .has("1000").timeout(90)
-            .xfail(&[Target::ArmLinux]),
+            .has("1000").timeout(90),
 
         // ---- mongo (7/8): wiredtiger, mmap, threads, tcmalloc -> CPU-topology abort on both arches ---
         scen("databases/mongo-agg-7", "mongo:7")

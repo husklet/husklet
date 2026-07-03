@@ -457,6 +457,94 @@ static int snap_has(const char *snap, const char *name, size_t nl) {
     }
     return 0;
 }
+// inotify rename events (lsys-inotify-moves): the snapshot diff only sees entry NAMES, so it cannot pair a
+// rename into IN_MOVED_FROM/IN_MOVED_TO with a shared cookie. rename(2) calls inotify_notify_move(), which
+// queues the paired events against every watch on the source / destination directory; inotify read() then
+// drains the queue (inomv_drain) alongside the usual create/delete diff.
+static struct { int wd; uint32_t mask, cookie; char name[256]; } g_inomv[64];
+static int g_inomv_n;
+static uint32_t g_inomv_cookie;
+static void inomv_push(int wd, uint32_t mask, uint32_t cookie, const char *name) {
+    if (g_inomv_n >= (int)(sizeof g_inomv / sizeof g_inomv[0])) return;
+    g_inomv[g_inomv_n].wd = wd;
+    g_inomv[g_inomv_n].mask = mask;
+    g_inomv[g_inomv_n].cookie = cookie;
+    snprintf(g_inomv[g_inomv_n].name, sizeof g_inomv[0].name, "%s", name);
+    g_inomv_n++;
+}
+// Queue IN_MOVED_FROM(src basename) + IN_MOVED_TO(dst basename), sharing one cookie, against any inotify
+// watch whose directory is the source / destination parent. host paths are resolved exactly as add_watch
+// resolved g_inotify_wpath (atpath), so their parent-dir prefixes compare equal. No-op when nothing watches.
+static void inotify_notify_move(int sdirfd, const char *spath, int ddirfd, const char *dpath) {
+    if (!spath || !dpath) return;
+    char sb[4300], db[4300];
+    const char *sh = atpath(sdirfd, spath, sb, sizeof sb, 1);
+    const char *dh = atpath(ddirfd, dpath, db, sizeof db, 1);
+    if (!sh || !dh) return;
+    uint32_t cookie = ++g_inomv_cookie;
+    if (!cookie) cookie = ++g_inomv_cookie; // a rename cookie is always nonzero on Linux
+    const char *full[2] = {sh, dh};
+    uint32_t mask[2] = {0x00000040u, 0x00000080u}; // IN_MOVED_FROM / IN_MOVED_TO
+    for (int side = 0; side < 2; side++) {
+        const char *slash = strrchr(full[side], '/');
+        if (!slash || slash == full[side]) continue;
+        size_t dlen = (size_t)(slash - full[side]);
+        const char *base = slash + 1;
+        for (int wd = 0; wd < 1024; wd++) {
+            if (!g_inotify_wpath[wd][0]) continue;
+            if (strlen(g_inotify_wpath[wd]) == dlen && !strncmp(g_inotify_wpath[wd], full[side], dlen))
+                inomv_push(wd, mask[side], cookie, base);
+        }
+    }
+}
+// Emit any queued rename events belonging to inotify instance `instfd` into the read() buffer; returns the
+// bytes written and removes the drained entries.
+static size_t inomv_drain(int instfd, uint8_t *out, size_t cap) {
+    size_t off = 0;
+    for (int i = 0; i < g_inomv_n;) {
+        int wd = g_inomv[i].wd;
+        if (wd < 0 || wd >= 1024 || g_inotify_owner[wd] != instfd) { i++; continue; }
+        size_t l = strlen(g_inomv[i].name);
+        size_t nlen = (l + 1 + 15) & ~(size_t)15; // padded name field
+        if (off + 16 + nlen > cap) break;
+        *(int32_t *)(out + off) = wd;
+        *(uint32_t *)(out + off + 4) = g_inomv[i].mask;
+        *(uint32_t *)(out + off + 8) = g_inomv[i].cookie;
+        *(uint32_t *)(out + off + 12) = (uint32_t)nlen;
+        memcpy(out + off + 16, g_inomv[i].name, l);
+        memset(out + off + 16 + l, 0, nlen - l);
+        off += 16 + nlen;
+        g_inomv[i] = g_inomv[--g_inomv_n]; // remove drained entry (order among distinct events is unspecified)
+    }
+    return off;
+}
+// pipe read-pushback (tee(2)): consume up to `cap` bytes from fd's pushback into buf (removing them).
+static size_t pipe_pushback_take(int fd, void *buf, size_t cap) {
+    if (fd < 0 || fd >= 1024 || g_fd_pb_len[fd] == 0 || cap == 0) return 0;
+    size_t k = g_fd_pb_len[fd] < cap ? g_fd_pb_len[fd] : cap;
+    memcpy(buf, g_fd_pushback[fd], k);
+    if (k < g_fd_pb_len[fd]) {
+        memmove(g_fd_pushback[fd], g_fd_pushback[fd] + k, g_fd_pb_len[fd] - k);
+        g_fd_pb_len[fd] -= k;
+    } else {
+        free(g_fd_pushback[fd]);
+        g_fd_pushback[fd] = NULL;
+        g_fd_pb_len[fd] = 0;
+    }
+    return k;
+}
+// Replace fd's pushback with `len` bytes of `data` (tee restores the source it peeked out of the pipe).
+static void pipe_pushback_set(int fd, const void *data, size_t len) {
+    if (fd < 0 || fd >= 1024) return;
+    free(g_fd_pushback[fd]);
+    g_fd_pushback[fd] = NULL;
+    g_fd_pb_len[fd] = 0;
+    if (len == 0) return;
+    g_fd_pushback[fd] = malloc(len);
+    if (!g_fd_pushback[fd]) return;
+    memcpy(g_fd_pushback[fd], data, len);
+    g_fd_pb_len[fd] = len;
+}
 static char g_procname[16]; // prctl PR_SET_NAME / PR_GET_NAME (the 15-char process/thread name)
 // getdents directory-stream cache (guest fd -> host DIR*). MUST be invalidated on close(), else a reused
 // fd gets a stale DIR* already at EOF (a second opendir of the same path then reads nothing -- broke glob).
