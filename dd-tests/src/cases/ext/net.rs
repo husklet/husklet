@@ -30,6 +30,17 @@ fn ext_net() -> Group {
         // ---- AF_UNIX ----
         port("unix-stream", "ext_net/net_unix_stream.c").out("unix_stream reply=UNIX-STREAM\n"),
         port("unix-dgram", "ext_net/net_unix_dgram.c").out("unix_dgram reply=dgram-unix\n"),
+        // #229: a datagram sendto()/sendmsg() to a NAMED AF_UNIX dest must route through the same mapping
+        // bind/connect use (abstract-ns here; overlay pathname like /dev/log in the container scenarios).
+        // Without it the datagram is dropped (macOS has no abstract ns). Linux-only; diffed vs native.
+        src("unix-dgram-abstract", "ext_net/net_unix_dgram_abstract.c").oracle(),
+        // #228: a server that binds 0.0.0.0 must answer a 127.0.0.1 client in the SAME container even with a
+        // user network (bridge) attached. The 0.0.0.0 bind lands on the per-network AF_UNIX switch (our IP);
+        // the 127.0.0.1 dial must fall back there on a FRESH socket. Enable the switch via DD_NETNS/DD_NETBR/
+        // DD_IP (as the daemon does for a user network); golden PONG. Linux-only (the switch is Linux).
+        src("lo-any-bridge", "ext_net/net_lo_any.c")
+            .env("DD_NETNS", "ddc228").env("DD_NETBR", "ddc228br").env("DD_IP", "172.28.0.5")
+            .out("lo_any reply=PONG\n"),
         // ---- socket options ----
         port("sockopt-buf", "ext_net/net_sockopt_buf.c").out("sockopt_buf set_ok=1 snd_ge=1 rcv_ge=1\n"),
         port("so-linger", "ext_net/net_so_linger.c").out("so_linger on=1 t=5 keepalive=1 type_stream=1\n"),

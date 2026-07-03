@@ -63,6 +63,53 @@ static int unix_sock_at(int fd, const char *host, int connecting) {
     errno = e;
     return rc;
 }
+// AF_UNIX DATAGRAM send to a host pathname `host`, path-length safe (fchdir-shortens past macOS's 104-byte
+// sun_path, exactly like unix_sock_at above). Used by sendto/sendmsg when a container's datagram dest is an
+// AF_UNIX PATHNAME (e.g. syslog to /dev/log): the socket inode lives at the overlay-resolved host path, which
+// a plain sockaddr_un would truncate. `mh` carries the payload iov/control; we only own msg_name. Returns
+// bytes sent (>=0) or -1 with errno. (#229)
+static int64_t unix_dgram_sendmsg_at(int fd, const char *host, struct msghdr *mh, int flags) {
+    struct sockaddr_un un;
+    memset(&un, 0, sizeof un);
+    un.sun_family = AF_UNIX;
+    if (strlen(host) < sizeof un.sun_path) {
+        snprintf(un.sun_path, sizeof un.sun_path, "%s", host);
+        mh->msg_name = &un;
+        mh->msg_namelen = sizeof un;
+        return sendmsg(fd, mh, flags);
+    }
+    char dir[1024];
+    snprintf(dir, sizeof dir, "%s", host);
+    char *sl = strrchr(dir, '/');
+    if (!sl || !sl[1] || strlen(sl + 1) >= sizeof un.sun_path) {
+        errno = ENAMETOOLONG;
+        return -1;
+    }
+    snprintf(un.sun_path, sizeof un.sun_path, "%s", sl + 1);
+    *sl = 0;
+    int pfd = open(dir[0] ? dir : "/", O_RDONLY | O_DIRECTORY | O_CLOEXEC);
+    if (pfd < 0) return -1;
+    int cwd = open(".", O_RDONLY | O_DIRECTORY | O_CLOEXEC);
+    if (cwd < 0) {
+        close(pfd);
+        return -1;
+    }
+    int64_t rc = -1;
+    int e = 0;
+    if (fchdir(pfd) == 0) {
+        mh->msg_name = &un;
+        mh->msg_namelen = sizeof un;
+        rc = sendmsg(fd, mh, flags);
+        e = errno;
+        fchdir(cwd);
+    } else {
+        e = errno;
+    }
+    close(cwd);
+    close(pfd);
+    errno = e;
+    return rc;
+}
 static uint32_t map_bits(uint32_t v, const uint32_t t[][2], int n, int fwd) {
     uint32_t o = 0;
     for (int i = 0; i < n; i++) {

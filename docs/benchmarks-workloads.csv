@@ -1,12 +1,11 @@
 workload,metric,unit,higher_is_better,dd_arm,orb_arm,ratio_arm_dd_over_orb,dd_amd,orb_amd,ratio_amd_dd_over_orb,notes
-redis-SET,redis-benchmark SET -n100000,ops/s,yes,280898.9,327868.8,0.857,X86_JIT_CRASH,215982.7,,dd-amd redis-server segfaults/never binds on x86 JIT (e_machine load warning); orbstack-amd via Rosetta
-redis-GET,redis-benchmark GET -n100000,ops/s,yes,301204.8,338983.1,0.889,X86_JIT_CRASH,215517.2,,same redis-server x86 startup crash on dd-amd
-sqlite-insert,python sqlite3 insert 200k rows in one txn,ms,no,324.0,93.6,3.462,600.5,143.2,4.193,timed with python perf_counter (validated correct on both dd arches)
-sqlite-select,python sqlite3 20k point selects by pk,ms,no,320.5,44.5,7.202,379.5,63.5,5.976,largest arm gap; syscall/btree-heavy
-openssl-aesgcm,openssl speed -evp aes-128-gcm 16KB block,MB/s,yes,7984.2,8513.2,0.938,36.5,3905.5,0.009,"dd-amd software-emulates x86 AES-NI (~36 MB/s); orbstack-amd Rosetta maps AES-NI to ARM crypto; dd-arm uses ARM crypto"
-openssl-sha256,openssl speed -evp sha256 16KB block,MB/s,yes,3158.4,3242.2,0.974,45.2,506.2,0.089,"dd-amd software SHA (validated by fixed-input host-clock: 45.3 MB/s); dd doesn't accelerate x86 SHA/crypto instrs"
-targz,tar czf - /usr | wc -c (external host wall-clock),ms,no,2859,1733,1.650,4135,1960,2.110,"dd-amd shell date+%s%N clock is broken (vDSO bug) so measured externally for ALL cells; gzip compute-bound"
-python-cpu,"python integer loop 5e6 iters (i*i)%7",ms,no,906,327,2.771,1561,598,2.610,timed with python perf_counter; interpreter dispatch heavy
-compile-go,go build incremental (warm cache),ms,no,3623,144,25.160,SKIPPED,SKIPPED,,arm values carried from prior run; go build skipped on amd (x86 JIT too slow / known #285 go-build issues)
-compile-cold,go build cold (full stdlib rebuild),ms,no,75674,,,SKIPPED,SKIPPED,,arm value carried from prior run; not measured 4-way
-postgres-tps,pgbench -T15 -c4 -j2,tps,yes,DD_INIT_HANGS,ORB_FLAKED,,NOT_RUN,NOT_RUN,,carried from prior run; not re-measured in this 4-way pass
+redis-SET,redis-benchmark SET -n100000 (own -q rps),ops/s,yes,284090.9,333333.3,0.852,118624.0,227790.4,0.521,"dd-amd redis NOW SERVES (was X86_JIT_CRASH in #328) after two x86-engine fixes this pass: CLI --hostname/--mem-max/--pids-max parse + initial-exec #! shebang chain; median of 3 (warm-up discarded)"
+redis-GET,redis-benchmark GET -n100000 (own -q rps),ops/s,yes,299401.2,334448.2,0.895,145138.0,236406.6,0.614,"same dd-amd redis unblock; steady-state own-rps (startup excluded)"
+sqlite-insert,python sqlite3 insert 200k rows one txn,ms,no,208.0,85.0,2.447,320.0,115.5,2.771,"python perf_counter (CLOCK_MONOTONIC ok on x86); dd-arm 324->208 & dd-amd 600->320 vs #328 (fcntl in-engine lock fix)"
+sqlite-select,python sqlite3 20k point selects by pk,ms,no,115.3,25.6,4.504,151.0,38.1,3.963,"dd-arm 320->115 & dd-amd 379->151 vs #328 — biggest per-op syscall/btree gain from fcntl-lock fix"
+openssl-aesgcm,openssl speed -evp aes-128-gcm 16KB block,MB/s,yes,7936.7,8551.7,0.928,390.4,3923.7,0.099,"dd-amd 36.5->390.4 MB/s (10.7x) vs #328 — x86 AES-NI now maps to ARM crypto; still ~10x behind Rosetta (translation overhead); run via --entrypoint openssl"
+openssl-sha256,openssl speed -evp sha256 16KB block,MB/s,yes,3156.0,3252.5,0.970,157.1,506.4,0.310,"dd-amd 45.2->157.1 MB/s (3.5x) vs #328 — x86 SHA now accelerated on ARM crypto"
+targz,tar czf - /usr | wc -c (external host wall-clock),ms,no,3395,1997,1.700,4603,2219,2.074,"whole docker-run wall time incl. container create/teardown -> startup-dominated & contention-sensitive (2-3 other agents active); gzip compute-bound"
+python-cpu,python integer loop 5e6 iters (i*i)%7,ms,no,956,314,3.045,1265,609,2.077,"python perf_counter; interpreter dispatch heavy; dd-amd 1561->1265 vs #328"
+compile-go,go build incremental (warm cache),ms,no,3623,144,25.160,NOT_RUN,SKIPPED,,"NOT re-measured in bench2; arm value carried from #328"
+postgres-tps,pgbench -T15 -c4 -j2,tps,yes,NOT_RUN,NOT_RUN,,NOT_RUN,NOT_RUN,,"NOT re-measured in bench2; postgres-amd entrypoint blocked by a PRE-EXISTING x86 bash-reads-script-file bug (bash loses newlines reading a script; independent of this pass's shebang fix)"

@@ -98,6 +98,10 @@ pub struct Case {
     pub read_only: bool,
     /// docker `--ulimit` (name, soft, hard) triples. Threads to SpawnConfig.ulimits -> DD_ULIMITS.
     pub ulimits: Vec<(String, u64, u64)>,
+    /// Extra engine env (`(KEY, VALUE)`) baked into the launch script — used to exercise the container
+    /// network model in-process (e.g. `DD_NETNS`/`DD_NETBR`/`DD_IP` turn on the private-loopback + per-
+    /// network AF_UNIX switch a bare guest otherwise never sees). Inert on the native oracle run.
+    pub env: Vec<(String, String)>,
     pub checks: Vec<Check>,
 }
 
@@ -116,7 +120,7 @@ fn base(name: &'static str, bin: Bin) -> Case {
         Bin::Fixture(fx) => fx.iter().map(|(e, _)| *e).collect(),
         Bin::InRootfs => vec![Engine::LinuxAarch64], // container rootfs fixtures are aarch64 today
     };
-    Case { name, bin, args: vec![], rootfs: None, lowers: vec![], mem_max: 0, engines, xfail: vec![], untrusted: false, cpus: 0, read_only: false, ulimits: vec![], checks: vec![] }
+    Case { name, bin, args: vec![], rootfs: None, lowers: vec![], mem_max: 0, engines, xfail: vec![], untrusted: false, cpus: 0, read_only: false, ulimits: vec![], env: vec![], checks: vec![] }
 }
 /// A case whose guest is compiled from a Linux/aarch64 C source under `guests/`.
 pub fn src(name: &'static str, source: &'static str) -> Case { base(name, Bin::Source(source)) }
@@ -150,6 +154,9 @@ impl Case {
     pub fn read_only(mut self) -> Self { self.read_only = true; self }
     /// Add a docker `--ulimit NAME=SOFT:HARD` for this case.
     pub fn ulimit(mut self, name: &str, soft: u64, hard: u64) -> Self { self.ulimits.push((name.into(), soft, hard)); self }
+    /// Set an extra engine env var for this case (e.g. `DD_NETNS`/`DD_NETBR`/`DD_IP` to enable the
+    /// container network switch). Baked into the JIT launch env; not passed to the native oracle.
+    pub fn env(mut self, k: &str, v: &str) -> Self { self.env.push((k.into(), v.into())); self }
     pub fn only(mut self, e: &[Engine]) -> Self { self.engines = e.to_vec(); self }
     pub fn exit(mut self, c: i32) -> Self { self.checks.push(Check::Exit(c)); self }
     pub fn out(mut self, s: &'static str) -> Self { self.checks.push(Check::Out(s)); self }
@@ -386,6 +393,7 @@ pub fn run(ctx: &Ctx, c: &Case, e: Engine) -> Status {
     // `env`, which serializes into the `exec env …` prefix of the launch script — so it survives the `mac`
     // bridge that drops ambient env). DDJIT_SANDBOX is left unset on purpose (ring/forwarding, not Seatbelt).
     if c.untrusted { cfg.env.push(("DDJIT_UNTRUSTED".into(), "1".into())); }
+    for (k, v) in &c.env { cfg.env.push((k.clone(), v.clone())); }
     cfg.argv = match &c.bin {
         Bin::InRootfs => c.args.clone(),
         _ => std::iter::once(guest.clone()).chain(c.args.iter().cloned()).collect(),
@@ -485,6 +493,7 @@ fn perf_cmd(ctx: &Ctx, c: &Case, e: Engine) -> Option<(String, (String, Vec<Stri
     cfg.read_only = c.read_only;
     cfg.ulimits = c.ulimits.clone();
     if c.untrusted { cfg.env.push(("DDJIT_UNTRUSTED".into(), "1".into())); }
+    for (k, v) in &c.env { cfg.env.push((k.clone(), v.clone())); }
     cfg.argv = match &c.bin {
         Bin::InRootfs => c.args.clone(),
         _ => std::iter::once(guest.clone()).chain(c.args.iter().cloned()).collect(),

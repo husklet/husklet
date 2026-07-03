@@ -57,7 +57,7 @@ static int translate_shift(struct insn *I, uint64_t gpc, uint64_t next) {
                         }
                         e_shv(S_RORV, 16, 16, 20, 0); // 32-bit RORV of the replicated value -> low `width` bits correct
                     } else {
-                        int ce = (((int)(I->imm) % width) + width) % width;
+                        int ce = ((((by1 ? 1 : (int)I->imm) % width) + width) % width);
                         int rr = (k == 1) ? ce : (width - ce) % width;
                         if (rr) e_ror_i(16, 16, rr, 0); // 32-bit ROR; low `width` bits are the answer
                     }
@@ -65,7 +65,7 @@ static int translate_shift(struct insn *I, uint64_t gpc, uint64_t next) {
                     if (bycl) {
                         e_rot_flags_cl(16, k, width);
                     } else {
-                        int ce = (((int)(I->imm) % width) + width) % width;
+                        int ce = ((((by1 ? 1 : (int)I->imm) % width) + width) % width);
                         if (ce) e_rot_flags_const(16, k, width, ce);
                     }
                     rm_store(I, w, 16); // stores low w bytes
@@ -83,9 +83,9 @@ static int translate_shift(struct insn *I, uint64_t gpc, uint64_t next) {
                 } else if (raw != 16)
                     e_mov_rr(16, raw, sf);
                 int src = 16;
-                int cnt = by1 ? 1 : (bycl ? -1 : (int)(I->imm & (ssf ? 63 : 31)));
-                // exact x86 CF (last bit shifted out) for SHL/SHR/SAR immediate at 32/64-bit
-                int want_cf = (!bycl && w >= 4 && (k == 4 || k == 5 || k == 7) && cnt >= 1);
+                int cnt = by1 ? 1 : (bycl ? -1 : (int)(I->imm & (w == 8 ? 63 : 31)));
+                // exact x86 CF (last bit shifted out) for SHL/SHR/SAR immediate at ALL widths (8/16/32/64)
+                int want_cf = (!bycl && (k == 4 || k == 5 || k == 7) && cnt >= 1);
                 if (want_cf) e_mov_rr(19, src, ssf); // save original operand for CF
                 if (bycl) {
                     if (k == 0) { // ROL r/m32|64 by CL == ROR by (width - n); leaves SF/ZF unchanged (no flag save)
@@ -107,7 +107,13 @@ static int translate_shift(struct insn *I, uint64_t gpc, uint64_t next) {
                     // trampoline-preserved scratch) -- NOT x17, which holds the EA for a MEMORY destination and
                     // must survive to rm_store (a `shr [mem],cl` stashed the operand over the EA -> rm_store
                     // wrote the result to a garbage address = the operand value; jemalloc bitmap_init crash).
-                    if (w >= 4 && (k == 4 || k == 5 || k == 7)) e_mov_rr(26, src, ssf);
+                    if (k == 4 || k == 5 || k == 7) {
+                        if (w < 4 && k == 4) { // byte/word SHL: mask CF source to operand width (drop high bits)
+                            e_movconst(19, (1u << (8 * w)) - 1);
+                            e_rrr(A_AND, 26, src, 19, 1, 0);
+                        } else
+                            e_mov_rr(26, src, ssf); // SHR uxt / SAR sxt already width-correct
+                    }
                     e_shv(b, 16, src, RCX, ssf);
                 } else {
                     if (cnt == 0) {
@@ -151,12 +157,15 @@ static int translate_shift(struct insn *I, uint64_t gpc, uint64_t next) {
                     // x86 leaves ALL flags unchanged when the runtime count (CL masked to the operand width) is
                     // 0 -- exactly when the emitted variable shift was a no-op. Capture the would-be flags, then
                     // keep the OLD nzcv (and PF, for the SHL/SHR/SAR forms) if the masked count is zero.
-                    int width = ssf ? 64 : 32;
+                    // width = architectural operand bits (CF/OF positions); cmask = x86 count mask (31 for
+                    // 8/16/32-bit, 63 for 64-bit) -- NOT width-1, so a byte shift by CL=8 is a real count of 8.
+                    int width = (w >= 4) ? (ssf ? 64 : 32) : (8 * w);
+                    int cmask = (w == 8) ? 63 : 31;
                     emit32(0xD53B4200u | 20);           // mrs x20, nzcv  (new N/Z from result; C/V from the tst)
                     e_ldr(24, 28, OFF_NZCV);            // x24 = old nzcv
-                    e_movconst(19, width - 1);
-                    e_rrr(A_ANDS, 22, RCX, 19, ssf, 0); // x22 = n = CL & (width-1); Z = (n == 0)
-                    if (w >= 4 && (k == 4 || k == 5 || k == 7)) {
+                    e_movconst(19, cmask);
+                    e_rrr(A_ANDS, 22, RCX, 19, ssf, 0); // x22 = n = CL & cmask; Z = (n == 0)
+                    if (k == 4 || k == 5 || k == 7) {
                         // Exact x86 CF = last bit shifted out of the ORIGINAL operand (x26): SHL -> bit
                         // (width - n), SHR/SAR -> bit (n - 1) (n>0 here; the n==0 csel below discards this).
                         // ARM tst left C=0; replace the stored borrow C with NOT CF. All ops below are
@@ -184,7 +193,7 @@ static int translate_shift(struct insn *I, uint64_t gpc, uint64_t next) {
                     }
                     // x86 OF is DEFINED only for a 1-bit shift; for SHL/SHR by CL set V=OF in the stored
                     // NZCV only when the masked count is exactly 1 (SAR OF=0 / count!=1 OF undefined -> leave).
-                    if (w >= 4 && (k == 4 || k == 5)) {
+                    if (k == 4 || k == 5) {
                         e_lsr_i(23, 26, width - 1, ssf); // MSB(original x26)
                         e_movconst(19, 1);
                         e_rrr(A_AND, 23, 23, 19, ssf, 0);
@@ -193,7 +202,7 @@ static int translate_shift(struct insn *I, uint64_t gpc, uint64_t next) {
                             e_rrr(A_AND, 22, 22, 19, ssf, 0);
                             e_rrr(A_EOR, 23, 23, 22, 0, 0); // x23 = OF
                         }
-                        e_movconst(19, width - 1);
+                        e_movconst(19, cmask);
                         e_rrr(A_AND, 22, RCX, 19, ssf, 0); // x22 = n
                         e_subi_s(22, 22, 1, ssf);          // Z = (n == 1)
                         e_ldr(20, 28, OFF_NZCV);
@@ -206,8 +215,19 @@ static int translate_shift(struct insn *I, uint64_t gpc, uint64_t next) {
                     }
                 } else {
                     if (want_cf) {
-                        int width = ssf ? 64 : 32, bit = (k == 4) ? (width - cnt) : (cnt - 1);
-                        if (bit > width - 1) bit = width - 1;
+                        // Architectural operand width (8/16/32/64); the shift ran on a 64-bit-extended value
+                        // for w<4, but CF/OF are defined over the true operand width.
+                        int width = (w >= 4) ? (ssf ? 64 : 32) : (8 * w);
+                        // CF = last bit shifted out: SHL -> bit(width-cnt), SHR/SAR -> bit(cnt-1). A count
+                        // that clears every bit (cnt>width) leaves CF=0 for SHL/SHR; SAR keeps the sign bit.
+                        int cf_zero = 0, bit;
+                        if (k == 4) {
+                            if (cnt > width) { cf_zero = 1; bit = 0; }
+                            else bit = width - cnt;
+                        } else { // SHR (5) / SAR (7)
+                            if (k == 5 && cnt > width) { cf_zero = 1; bit = 0; }
+                            else bit = (cnt - 1 > width - 1) ? (width - 1) : (cnt - 1);
+                        }
                         // x86 OF is DEFINED only for a 1-bit shift: SHL OF = MSB(result) XOR CF; SHR OF =
                         // MSB(original); SAR OF = 0 (already, since the tst left V=0). For count>1 OF is
                         // undefined -> leave it. x19 still holds the ORIGINAL operand here.
@@ -217,9 +237,13 @@ static int translate_shift(struct insn *I, uint64_t gpc, uint64_t next) {
                             e_movconst(23, 1);
                             e_rrr(A_AND, 21, 21, 23, ssf, 0);
                         }
-                        e_lsr_i(19, 19, bit, ssf);
-                        e_movconst(23, 1);
-                        e_rrr(A_AND, 19, 19, 23, ssf, 0); // x19 = x86 CF bit
+                        if (cf_zero) {
+                            e_movconst(19, 0); // every bit shifted out -> CF=0
+                        } else {
+                            e_lsr_i(19, 19, bit, ssf);
+                            e_movconst(23, 1);
+                            e_rrr(A_AND, 19, 19, 23, ssf, 0); // x19 = x86 CF bit
+                        }
                         e_nzcv_save_setcf(19);
                         if (set_of && k == 4) { // SHL: OF = MSB(result x16) XOR CF (x19)
                             e_lsr_i(22, 16, width - 1, ssf);

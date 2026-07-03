@@ -1443,6 +1443,10 @@ static void do_sse3b(struct cpu *c) {
             memcpy(r, o, 16);
             break;
         }
+        case 0x2A: { // movntdqa (66): streaming aligned load m128 -> xmm reg (src already in s)
+            memcpy(r, s, 16);
+            break;
+        }
         case 0x2B: { // packusdw: pack signed dword -> unsigned word (saturate); dst low, src high
             int32_t a[4], b[4];
             uint16_t o[8];

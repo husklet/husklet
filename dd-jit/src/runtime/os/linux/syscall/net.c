@@ -38,6 +38,27 @@ static int ip6_opt_l2m(int o) {
     default: return -1;  // unknown -> ignore (never pass a Linux number straight to macOS IPPROTO_IPV6)
     }
 }
+// #229: an AF_UNIX DATAGRAM send to a PATHNAME/abstract dest (sendto/sendmsg with an explicit dest addr --
+// e.g. syslog's `logger` writing to /dev/log) must resolve the dest through the SAME overlay/abstract-ns
+// mapping bind/connect use, or macOS looks for the socket inode at the literal host path (outside the jail)
+// / the wrong abstract-ns dir and the datagram is silently dropped. Mirrors the connect (case 203) and bind
+// (case 200) AF_UNIX handling. Returns 1 + fills `host` when the dest should be overlay/abstract-routed
+// (caller sends via unix_dgram_sendmsg_at); 0 otherwise (AF_INET, unnamed, or a non-jail pathname whose raw
+// sockaddr already round-trips -> caller sends unchanged, keeping the bare-metal AF_UNIX dgram path intact).
+static int unix_dgram_dest(const uint8_t *sa, socklen_t l, char *host, size_t hn) {
+    if (abs_is(sa, l)) { // abstract namespace (sun_path[0]==0): DD_NETNS-keyed fs socket (same as bind/connect)
+        abs_path(sa, l, host, hn);
+        return 1;
+    }
+    if (g_rootfs && unix_path_is(sa, l)) { // pathname socket in the overlay: resolve to the topmost layer
+        char gp[200], hb[1024];
+        unix_path_copy(sa, l, gp, sizeof gp);
+        const char *hp = atpath(-100, gp, hb, sizeof hb, 0); // guest path -> host path (upper then lowers)
+        snprintf(host, hn, "%s", hp);
+        return 1;
+    }
+    return 0;
+}
 static int svc_net(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4,
                    uint64_t a5) {
     // AF_NETLINK/NETLINK_ROUTE (#289): a guest netlink socket is a socketpair we RTNETLINK-respond on
@@ -415,20 +436,27 @@ static int svc_net(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_
             if (r == 0 || errno == EINPROGRESS) {
                 g_lo_port[(int)a0] = p ? p : 1;
                 g_lo_v6[(int)a0] = (uint8_t)c_lo6;
-            } else if (errno == ENOENT && br_on() && g_myip) {
+            } else if ((errno == ENOENT || errno == ECONNREFUSED) && br_on() && g_myip) {
                 // Same-container localhost dial of a server that bound INADDR_ANY on the bridge (br_path,
                 // keyed by OUR own IP -- not lo_path): retry there so 127.0.0.1 still reaches a 0.0.0.0
-                // listener in bridge mode.
+                // listener in bridge mode. The first connect() already POISONED this AF_UNIX socket (a
+                // failed BSD connect leaves the fd unusable -- a second connect() on it hangs/EINVALs, which
+                // is why a 0.0.0.0 server was unreachable via 127.0.0.1 with a user network attached, #228),
+                // so swap in a FRESH AF_UNIX fd before the retry -- exactly as the br_connect loop does.
                 char bp[200];
                 br_path(g_myip, p, bp, sizeof bp);
                 struct sockaddr_un bu;
                 memset(&bu, 0, sizeof bu);
                 bu.sun_family = AF_UNIX;
                 snprintf(bu.sun_path, sizeof bu.sun_path, "%s", bp);
-                r = connect((int)a0, (struct sockaddr *)&bu, sizeof bu);
-                if (r == 0 || errno == EINPROGRESS) {
-                    g_br_port[(int)a0] = p ? p : 1;
-                    g_br_ip[(int)a0] = g_myip;
+                if (lo_swap((int)a0) < 0) {
+                    r = -1;
+                } else {
+                    r = connect((int)a0, (struct sockaddr *)&bu, sizeof bu);
+                    if (r == 0 || errno == EINPROGRESS) {
+                        g_br_port[(int)a0] = p ? p : 1;
+                        g_br_ip[(int)a0] = g_myip;
+                    }
                 }
             }
             // #274: a redirected TCP dial to a port with no listener fails ENOENT (the per-port unix
@@ -621,6 +649,21 @@ static int svc_net(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_
             int on = 1;
             setsockopt((int)a0, SOL_SOCKET, SO_NOSIGPIPE, &on, sizeof on);
         }
+        // #229: AF_UNIX pathname/abstract dest -> overlay/abstract-route it (syslog `logger` -> /dev/log).
+        if (a4 && (socklen_t)a5 >= 2 && *(const uint16_t *)a4 == AF_UNIX) {
+            char uhost[1200];
+            if (unix_dgram_dest((const uint8_t *)a4, (socklen_t)a5, uhost, sizeof uhost)) {
+                struct iovec iov = {(void *)a1, (size_t)a2};
+                struct msghdr mh;
+                memset(&mh, 0, sizeof mh);
+                mh.msg_iov = &iov;
+                mh.msg_iovlen = 1;
+                int64_t ur;
+                do { ur = unix_dgram_sendmsg_at((int)a0, uhost, &mh, msgflags_l2m((int)a3)); } while (ur < 0 && SVC_EINTR_RESTART(c));
+                G_RET(c) = ur < 0 ? (uint64_t)(-errno) : (uint64_t)ur;
+                break;
+            }
+        }
         // dest addr (UDP): translate Linux AF_INET/INET6 sockaddr -> macOS; NULL/non-inet pass through.
         struct sockaddr_storage dss;
         socklen_t dhl = a4 ? sa_l2m((uint8_t *)a4, (socklen_t)a5, &dss) : (socklen_t)-1;
@@ -787,11 +830,18 @@ static int svc_net(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_
         struct sockaddr_storage nss;
         uint8_t *gname = (uint8_t *)mh.msg_name;
         socklen_t gnamelen = mh.msg_namelen;
+        char ud_host[1200];
+        int ud_route = 0; // #229: AF_UNIX pathname/abstract dgram dest -> overlay/abstract route on send
         if (nr == 211 && gname && gnamelen) { // sendmsg: guest -> host
-            socklen_t hl = sa_l2m(gname, gnamelen, &nss);
-            if (hl != (socklen_t)-1) {
-                mh.msg_name = &nss;
-                mh.msg_namelen = hl;
+            if (gnamelen >= 2 && *(const uint16_t *)gname == AF_UNIX &&
+                unix_dgram_dest(gname, gnamelen, ud_host, sizeof ud_host)) {
+                ud_route = 1; // sent via unix_dgram_sendmsg_at below (it owns msg_name)
+            } else {
+                socklen_t hl = sa_l2m(gname, gnamelen, &nss);
+                if (hl != (socklen_t)-1) {
+                    mh.msg_name = &nss;
+                    mh.msg_namelen = hl;
+                }
             }
         } else if (nr == 212 && gname && gnamelen) { // recvmsg: receive into host scratch
             mh.msg_name = &nss;
@@ -836,7 +886,9 @@ static int svc_net(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_
         }
         ssize_t r;
         do {
-            r = (nr == 211) ? sendmsg((int)a0, &mh, msgflags_l2m((int)a2)) : recvmsg((int)a0, &mh, msgflags_l2m((int)a2));
+            r = (nr == 211) ? (ud_route ? (ssize_t)unix_dgram_sendmsg_at((int)a0, ud_host, &mh, msgflags_l2m((int)a2))
+                                        : sendmsg((int)a0, &mh, msgflags_l2m((int)a2)))
+                            : recvmsg((int)a0, &mh, msgflags_l2m((int)a2));
         } while (r < 0 && SVC_EINTR_RESTART(c));
         if (r > 0 && peekaddr) r = 0; // guest supplied no data room; only the source address was wanted
         // SEQPACKET-as-DGRAM EOF: coerce a peer-closed recvmsg's ECONNRESET to 0 (EOF). (See case 199.)
@@ -912,11 +964,18 @@ static int svc_net(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_
             struct sockaddr_storage nss;
             uint8_t *gname = (uint8_t *)mh.msg_name;
             socklen_t gnamelen = mh.msg_namelen;
+            char ud_host[1200];
+            int ud_route = 0; // #229: AF_UNIX pathname/abstract dgram dest -> overlay/abstract route on send
             if (nr == 269 && gname && gnamelen) { // sendmmsg: guest -> host
-                socklen_t hl = sa_l2m(gname, gnamelen, &nss);
-                if (hl != (socklen_t)-1) {
-                    mh.msg_name = &nss;
-                    mh.msg_namelen = hl;
+                if (gnamelen >= 2 && *(const uint16_t *)gname == AF_UNIX &&
+                    unix_dgram_dest(gname, gnamelen, ud_host, sizeof ud_host)) {
+                    ud_route = 1; // sent via unix_dgram_sendmsg_at below (it owns msg_name)
+                } else {
+                    socklen_t hl = sa_l2m(gname, gnamelen, &nss);
+                    if (hl != (socklen_t)-1) {
+                        mh.msg_name = &nss;
+                        mh.msg_namelen = hl;
+                    }
                 }
             } else if (nr == 243 && gname && gnamelen) { // recvmmsg: receive into host scratch
                 mh.msg_name = &nss;
@@ -937,7 +996,9 @@ static int svc_net(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_
             int rf = (int)a3;
             // after the first, don't block (MSG_WAITFORONE-ish)
             if (nr == 243 && i > 0) rf |= 0x40;
-            ssize_t r = (nr == 269) ? sendmsg((int)a0, &mh, msgflags_l2m(rf)) : recvmsg((int)a0, &mh, msgflags_l2m(rf));
+            ssize_t r = (nr == 269) ? (ud_route ? (ssize_t)unix_dgram_sendmsg_at((int)a0, ud_host, &mh, msgflags_l2m(rf))
+                                                : sendmsg((int)a0, &mh, msgflags_l2m(rf)))
+                                    : recvmsg((int)a0, &mh, msgflags_l2m(rf));
             if (r < 0) {
                 err = errno;
                 break;

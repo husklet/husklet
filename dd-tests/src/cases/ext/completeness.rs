@@ -172,12 +172,12 @@ fn op_x86_sse() -> Group {
 /// AVX / AVX2 / FMA / F16C 256-bit vector lane.
 fn op_x86_avx() -> Group {
     group("comp-x86-avx", vec![
-        // The entire VEX-encoded (AVX) lane is unimplemented: jit86 UNIMPL 1B opcode 0xC5/0xC4
-        // (2- and 3-byte VEX prefixes) → abort on the first 256-bit op.
-        x("avx",  "completeness/x86_avx.c"),  // jit86 UNIMPL VEX 0xC5
-        x("avx2", "completeness/x86_avx2.c"), // jit86 UNIMPL VEX 0xC5
-        x("fma",  "completeness/x86_fma.c"),  // jit86 UNIMPL VEX 0xC4 (3-byte)
-        x("f16c", "completeness/x86_f16c.c"), // jit86 UNIMPL VEX 0xC5
+        // VEX-encoded AVX/AVX2 256-bit ops, FMA (VFMADD/VFMSUB…) and F16C (VCVTPH2PS/VCVTPS2PH) are
+        // lowered in do_avx() (byte-exact vs qemu). These formerly aborted on the first 256-bit op.
+        x("avx",  "completeness/x86_avx.c"),
+        x("avx2", "completeness/x86_avx2.c"),
+        x("fma",  "completeness/x86_fma.c"),
+        x("f16c", "completeness/x86_f16c.c"),
     ])
 }
 
@@ -220,6 +220,10 @@ fn op_x86_misc() -> Group {
         x("movseg",      "completeness/x86_movseg.c"),     // MOV r/m,Sreg (8C) / MOV Sreg,r/m (8E) (#183)
         x("rcl",         "completeness/x86_rcl.c"),        // RCL/RCR by CL (group2 D2/D3 /2,/3), all widths + mem
         x("pfaf",        "completeness/x86_pfaf.c"),       // #346 lazy PF/AF dead-elim: live/dead/block vs qemu
+        x("flags",       "completeness/x86_flags.c"),      // #145 shift/rotate/imul/mul DEFINED flags (CF/OF/SF/ZF/PF) all widths
+        x("x87b",        "completeness/x86_x87b.c"),       // #248/#249 FCOMI/FUCOMI, FDIV/FDIVR/FSUBR/FSCALE/FPREM/FIDIV/FXTRACT
+        x("ntload",      "completeness/x86_ntload.c"),     // MOVNTDQA (66 0F38 2A) + MASKMOVDQU (66 0F F7)
+        x("vdsoclk",     "completeness/x86_vdsoclk.c"),    // #344 vDSO clock_gettime ns scaling (monotonic sleep window)
     ])
 }
 
