@@ -146,16 +146,18 @@
     <table class="w-full border-collapse text-[13px] sm:text-sm">
       <thead><tr class="text-left text-xs uppercase tracking-wide text-muted2"><th class="p-3">workload</th><th class="p-3">dd vs OrbStack — arm64</th><th class="p-3">dd vs OrbStack — x86 (Rosetta)</th></tr></thead>
       <tbody class="[&>tr]:border-t [&>tr]:border-edge">
-        <tr><td class="p-3 font-medium">redis SET / GET</td><td class="p-3 font-semibold text-emerald-400">1.45–1.46× faster</td><td class="p-3 text-muted">0.4–0.6×</td></tr>
-        <tr><td class="p-3 font-medium">openssl AES-128-GCM</td><td class="p-3">≈ parity (0.99×)</td><td class="p-3">≈ parity (0.99×)</td></tr>
+        <tr><td class="p-3 font-medium">container startup</td><td class="p-3 font-semibold text-emerald-400">1.07× faster</td><td class="p-3 font-semibold text-emerald-400">2.06× faster — beats Rosetta</td></tr>
+        <tr><td class="p-3 font-medium">redis SET / GET</td><td class="p-3 font-semibold text-emerald-400">1.43–1.46× faster</td><td class="p-3 text-muted">0.41–0.54×</td></tr>
+        <tr><td class="p-3 font-medium">openssl AES-128-GCM</td><td class="p-3">≈ parity (0.97×)</td><td class="p-3">≈ parity (0.98×)</td></tr>
         <tr><td class="p-3 font-medium">openssl SHA-256</td><td class="p-3">≈ parity (0.99×)</td><td class="p-3 font-semibold text-emerald-400">1.15× — beats Rosetta</td></tr>
-        <tr><td class="p-3 font-medium">sqlite insert / select</td><td class="p-3 text-muted">1.9–2.1× slower</td><td class="p-3 text-muted">2.0–2.2× slower</td></tr>
-        <tr><td class="p-3 font-medium">python integer loop</td><td class="p-3 text-muted">2.5× slower</td><td class="p-3 text-muted">1.9× slower</td></tr>
+        <tr><td class="p-3 font-medium">tar / gzip</td><td class="p-3">≈ parity (1.09×)</td><td class="p-3 text-muted">1.43× slower</td></tr>
+        <tr><td class="p-3 font-medium">sqlite insert / select</td><td class="p-3 text-muted">1.6–1.7× slower</td><td class="p-3 text-muted">1.9–2.1× slower</td></tr>
+        <tr><td class="p-3 font-medium">python integer loop</td><td class="p-3 text-muted">1.9× slower</td><td class="p-3 text-muted">1.8× slower</td></tr>
       </tbody>
     </table>
   </div>
 
-  <p class="mt-6 leading-relaxed text-muted">Read honestly: against a <em>full Rosetta VM</em>, dd already <strong class="text-txt">beats OrbStack on redis (~1.45×, arm64)</strong> and <strong class="text-txt">matches or beats Rosetta on crypto</strong> — as a plain process, nothing resident when idle. It still trails on syscall/interpreter-heavy x86 (sqlite, python), where Rosetta's kernel and tuning win — but that gap is closing fast (sqlite-select went 4.5× → 1.9× recently).</p>
+  <p class="mt-6 leading-relaxed text-muted">Read honestly: against a <em>full Rosetta VM</em>, dd is <strong class="text-txt">at or above parity on 5 of these rows</strong> and closing the rest. It <strong class="text-txt">starts x86 containers 2× faster than Rosetta</strong> (no VM to boot), <strong class="text-txt">beats OrbStack on redis by ~1.44× (arm64)</strong>, and matches or beats Rosetta on crypto — as a plain process, nothing resident when idle. It still trails on interpreter- and fork-heavy x86 (sqlite, python, in-guest fork loops), where Rosetta's kernel and tuning win — but the gap is closing fast: sqlite-select went 4.5× → 1.6× and python 3.0× → 1.9× in the last few passes, and a per-stat fix just took SQLite to <em>native</em> arm64 speed in the build after this one.</p>
 
   <p class="mt-6 leading-relaxed text-muted">For <strong class="text-txt">arm64 images</strong> there's no emulation to beat — it's native either way, so the bar is a <em>native</em> Linux VM, the hardest one. dd is at or above parity on compute and the honest losses are <strong class="text-txt">allocation/syscall-heavy</strong> work:</p>
 
