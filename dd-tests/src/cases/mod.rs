@@ -161,10 +161,26 @@ fn edge() -> Group {
         // times(): tms_utime works on x86_64 but is 0 on aarch64 (clock() works on both) — engine split.
         src("times", "edge_times.c").has("utime_ok=1 clock_ok=1 ret_ok=1"),
         src("statfs", "edge_statfs.c").oracle().xfail(lin),                            // real fs geometry (not hardcoded)
+        // #383: statx (nr 291) must report the SAME uid/gid/mode/nlink/rdev/dev/size as fstat/newfstatat
+        // for the same file -- through dd's #156 cuid/cgid + #181 guest-chown virtualization. Self-checking
+        // agreement booleans, byte-identical native-vs-dd; before the fix statx diverged (raw uid, rdev 0:0).
+        src("statx-agree", "statx_agree.c").oracle(),
         // Guest-pointer validation (access_ok): bad syscall buffers -> EFAULT, exactly as native Linux.
         // The differential test for host_range_mapped's fault-guarded probe fast path (perf lever #5),
         // incl. the probe-guard re-arm (again=) and PROT_NONE (copy_from_user) cases.
         src("efault", "edge_efault.c").oracle(),
+        // #384 wall-clock RATE: REALTIME/MONOTONIC/gettimeofday must advance at the real host rate across a
+        // nanosleep (regression guard for the x86 vDSO fast-syscall timebase — a 40x-slow REALTIME read
+        // would fail real_ok/agree). Portable golden. The `-slow` sibling forces the svc_time slow path
+        // (DDJIT_NOFASTSYS) so both the inline and the syscall computations are covered.
+        port("clockelapsed", "clockelapsed.c").out("clockelapsed real_ok=1 mono_ok=1 gtod_ok=1 mono_fwd=1 agree=1\n"),
+        port("clockelapsed-slow", "clockelapsed.c").env("DDJIT_NOFASTSYS", "1")
+            .out("clockelapsed real_ok=1 mono_ok=1 gtod_ok=1 mono_fwd=1 agree=1\n").only(lin),
+        // #218/#215 bad/NULL RESULT pointer -> -EFAULT (never crash), via the x86 vDSO fast path AND the
+        // slow path (the `-slow` sibling under DDJIT_NOFASTSYS). Per-syscall NULL policy matches the kernel.
+        // Diffed byte-exact vs the native/qemu oracle; before the fix the fast-path variant crashed (exit 255).
+        src("clockefault", "clockefault.c").oracle(),
+        src("clockefault-slow", "clockefault.c").env("DDJIT_NOFASTSYS", "1").oracle(),
     ])
 }
 

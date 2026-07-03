@@ -165,12 +165,14 @@ static int svc_time(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64
         }
         struct timespec ts;
         clock_gettime(mc, &ts);
+        // clock_gettime(clk, NULL) is -EFAULT on Linux -- UNLIKE gettimeofday(NULL)/clock_getres(clk,NULL),
+        // which are legal no-ops that return 0. The kernel unconditionally copies the result out, so a NULL
+        // or otherwise-bad buffer faults. Validate the full 16 bytes; host_range_mapped(NULL,16) probes addr
+        // 0 -> unmapped -> EFAULT, so the NULL case falls out here too (the old `if (g)` wrongly returned 0).
+        if (!host_range_mapped((uintptr_t)a1, 16)) { G_RET(c) = (uint64_t)(int64_t)(-EFAULT); break; }
         uint64_t *g = (uint64_t *)a1;
-        if (g) {
-            if (!host_range_mapped((uintptr_t)a1, 16)) { G_RET(c) = (uint64_t)(int64_t)(-EFAULT); break; }
-            g[0] = ts.tv_sec;
-            g[1] = ts.tv_nsec;
-        }
+        g[0] = ts.tv_sec;
+        g[1] = ts.tv_nsec;
         G_RET(c) = 0;
         break;
     }

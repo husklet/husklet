@@ -73,7 +73,22 @@ struct cpu {
     // plain R_SYSCALL exit reads it: 0 -> slim GPR-only spill, else FULL. Runtime (not a static per-block
     // flag) because blocks chain without spilling, so a vectorized region can reach a clean syscall block.
     uint64_t vdirty;
+    // #218/#215 fast-clock guard: while the S1 vDSO fast path (emit.c emit_fast_syscall) is about to write
+    // the guest clock_gettime/gettimeofday result buffer, it arms this window so a BAD guest result pointer
+    // returns -EFAULT to the guest instead of faulting the engine (the kernel's access_ok() contract) --
+    // WITHOUT the per-call cost of a host_range_mapped() probe on the always-valid common case. The emitted
+    // store sets fastclk_ptr = the guest buffer base and fastclk_resume = the host PC of an in-block EFAULT
+    // tail, then clears fastclk_resume once the store succeeds. On a store fault, fastclk_fault_fixup()
+    // (sigframe.c, called first by jit86_lazyguard) sets guest rax=-EFAULT and resumes at fastclk_resume.
+    // fastclk_resume==0 => disarmed (no interference with ordinary guest faults). Non-baked (struct tail).
+    uint64_t fastclk_ptr;
+    uint64_t fastclk_resume;
 };
+#define OFF_FCPTR ((int)__builtin_offsetof(struct cpu, fastclk_ptr))
+#define OFF_FCRES ((int)__builtin_offsetof(struct cpu, fastclk_resume))
+_Static_assert(__builtin_offsetof(struct cpu, fastclk_resume) % 8 == 0 &&
+                   __builtin_offsetof(struct cpu, fastclk_resume) <= 32760,
+               "OFF_FCRES out of ldr/str imm12 range");
 #define OFF_VDIRTY ((int)__builtin_offsetof(struct cpu, vdirty))
 _Static_assert(__builtin_offsetof(struct cpu, vdirty) % 8 == 0 && __builtin_offsetof(struct cpu, vdirty) <= 32760,
                "OFF_VDIRTY out of ldr/str imm12 range");

@@ -691,6 +691,9 @@ void jit86_lazyguard(int sig, siginfo_t *si, void *uc) {
     // serve the probe fault with a fresh mapping, flipping a correct EFAULT into a bogus success (and
     // burning lazy-map budget); nonpie_fixup would likewise emulate the probe load at +bias and resume.
     if (hrm_fault_hook(si)) return; // never actually returns on a claim (siglongjmp); shape-only
+    // #218/#215: a bad guest RESULT pointer in the vDSO fast-clock inline path (emit_fast_syscall). Recover
+    // it as -EFAULT BEFORE the lazy-map/guest-fault paths below, matching the slow svc_time() path exactly.
+    if (fastclk_fault_fixup(si, uc)) return;
     // W6A item 1: a non-PIE absolute DATA ref into the low link range -> serve the access at +bias and
     // advance the host PC. Inert unless g_nonpie_lo is set (ET_EXEC only).
     if (nonpie_fixup(si, uc)) return;

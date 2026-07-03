@@ -15,6 +15,13 @@ static void e_ldr(int rt, int rn, int off) {
     emit32(0xF9400000u | (((unsigned)off / 8) << 10) | (rn << 5) | rt);
 } // ldr x
 static void e_movz(int rd, uint32_t imm16, int sh) { emit32(0xD2800000u | (sh << 21) | (imm16 << 5) | rd); }
+// ADR rd, <target>: PC-relative address of an already-emitted (backward) label into rd. PC-relative =>
+// pcache-safe (survives a warm reload at a different arena base). Emitted code is 4-aligned so imm[1:0]=0.
+static void e_adr(int rd, const void *target) {
+    int64_t d = (const uint8_t *)target - (const uint8_t *)g_cp; // byte offset from THIS adr
+    uint32_t immlo = (uint32_t)(d & 3), immhi = (uint32_t)((d >> 2) & 0x7FFFF);
+    emit32(0x10000000u | (immlo << 29) | (immhi << 5) | rd);
+}
 static void e_movk(int rd, uint32_t imm16, int sh) { emit32(0xF2800000u | (sh << 21) | (imm16 << 5) | rd); }
 static void e_br(int rn) { emit32(0xD61F0000u | (rn << 5)); }
 static void e_movconst(int rd, uint64_t v) {
@@ -602,6 +609,20 @@ static void emit_fast_syscall(uint64_t next) {
     uint32_t *to_slow[8];
     int nsl = 0; // slots: b.ne slow_restore   [W4F: grew 2->8]
 
+    // #218/#215: shared EFAULT resume tail for the fast-clock GUARDED stores below. A bad guest result
+    // pointer makes the store fault; fastclk_fault_fixup() (sigframe.c, run first by jit86_lazyguard) sets
+    // guest rax=-EFAULT and redirects the host PC HERE. x17 still holds the guest flags saved at entry (no
+    // path rewrites it), so we restore them and fall into the shared L_after continuation -- semantically a
+    // clock_gettime/gettimeofday that returned -EFAULT, exactly like the slow (svc_time) path. Skipped on the
+    // normal entry path.
+    uint32_t *skip_ef = (uint32_t *)g_cp;
+    emit32(0x14000000u); // b Lskip_ef  (patched just below)
+    uint32_t *L_efault = (uint32_t *)g_cp;
+    emit32(0xD51B4211u); // msr nzcv, x17   (rax already = -EFAULT, set by the fixup)
+    after[na++] = (uint32_t *)g_cp;
+    emit32(0x14000000u);                                                             // b L_after
+    *skip_ef = 0x14000000u | (uint32_t)(((uint32_t *)g_cp - skip_ef) & 0x3FFFFFF);   // Lskip_ef:
+
     // ---- clock_gettime: rax == 228 ----
     e_subi_s(16, 0, 228, 1); // subs x16, x0, #228
     uint32_t *m1 = (uint32_t *)g_cp;
@@ -631,8 +652,19 @@ static void emit_fast_syscall(uint64_t next) {
     e_movconst(25, 1000000000ull);
     e_udiv(26, 24, 25, 1);     // sec
     e_msub(27, 26, 25, 24, 1); // nsec = total - sec*1e9
-    e_str(26, 6, 0);           // ts->tv_sec   (rsi=x6)
-    e_str(27, 6, 8);           // ts->tv_nsec
+    // #218/#215: NULL buffer -> slow path (clock_gettime(NULL) is -EFAULT per the kernel; svc_time enforces
+    // it). Routing NULL to slow keeps the per-syscall NULL policy in ONE place -- gettimeofday(NULL) is a
+    // legal no-op there, so a uniform inline "NULL==EFAULT" would be wrong for it.
+    to_slow[nsl++] = (uint32_t *)g_cp;
+    emit32(0xB4000000u | 6);   // cbz x6, slow
+    // Arm the fast-clock guard, do the two guarded stores, then disarm. A bad (non-NULL) rsi faults the
+    // store -> fastclk_fault_fixup -> L_efault (rax=-EFAULT), never crashes the engine.
+    e_str(6, 28, OFF_FCPTR);   // cpu->fastclk_ptr = &guest ts
+    e_adr(20, L_efault);
+    e_str(20, 28, OFF_FCRES);  // cpu->fastclk_resume = &L_efault  (window armed)
+    e_str(26, 6, 0);           // ts->tv_sec   (rsi=x6)   [guarded]
+    e_str(27, 6, 8);           // ts->tv_nsec             [guarded]
+    e_str(31, 28, OFF_FCRES);  // cpu->fastclk_resume = 0  (window disarmed; xzr)
     emit_host_ptr(20, (uint64_t)&g_fast_count, PRELOC_HOSTGLOBAL);
     e_ldr(21, 20, 0);
     e_addi(21, 21, 1, 1);
@@ -661,8 +693,16 @@ static void emit_fast_syscall(uint64_t next) {
     e_msub(27, 26, 25, 24, 1); // nsec
     e_movconst(20, 1000);
     e_udiv(27, 27, 20, 1); // usec = nsec/1000
-    e_str(26, 7, 0);       // tv->tv_sec   (rdi=x7)
-    e_str(27, 7, 8);       // tv->tv_usec
+    // #218/#215: gettimeofday(NULL) is a legal no-op that returns 0 -> route NULL to the slow path. A
+    // bad (non-NULL) tv faults the guarded store -> fastclk_fault_fixup -> -EFAULT (never a crash).
+    to_slow[nsl++] = (uint32_t *)g_cp;
+    emit32(0xB4000000u | 7);  // cbz x7, slow
+    e_str(7, 28, OFF_FCPTR);  // cpu->fastclk_ptr = &guest tv
+    e_adr(20, L_efault);
+    e_str(20, 28, OFF_FCRES); // cpu->fastclk_resume = &L_efault  (armed)
+    e_str(26, 7, 0);          // tv->tv_sec   (rdi=x7)   [guarded]
+    e_str(27, 7, 8);          // tv->tv_usec             [guarded]
+    e_str(31, 28, OFF_FCRES); // disarm
     emit_host_ptr(20, (uint64_t)&g_fast_count, PRELOC_HOSTGLOBAL);
     e_ldr(21, 20, 0);
     e_addi(21, 21, 1, 1);

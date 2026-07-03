@@ -99,8 +99,13 @@ static void e_rot_flags_const(int res, int k, int width, int cnt) {
 // x86-undefined, so emitting that legal value is fine). Reads CL (RCX); scratch x18..x25.
 static void e_rot_flags_cl(int res, int k, int width) {
     int wsf = width == 64;
-    e_movconst(19, width - 1);
-    e_rrr(A_ANDS, 24, RCX, 19, wsf, 0); // x24 = n = CL & (width-1); Z = (n == 0)
+    // #389: "flags affected?" is decided by the 5-bit (0x1f) / 6-bit (0x3f, REX.W) masked count -- NOT the
+    // rotate amount (count MOD width). For 8/16-bit rotates these differ: e.g. `rolb %cl` with CL=8 rotates
+    // by 8%8==0 (value unchanged) but (CL&0x1f)==8!=0 so x86 DOES set CF = LSB(result). Masking by width-1
+    // here (7 for a byte) wrongly took the count==0 keep-old path and left stale CF. Use the true x86 cmask;
+    // for width 32/64 this is width-1 (unchanged), so only byte/word behavior moves.
+    e_movconst(19, (width == 64) ? 63 : 31);
+    e_rrr(A_ANDS, 24, RCX, 19, wsf, 0); // x24 = n = CL & cmask (x86 5/6-bit); Z = (n == 0) -> flags unchanged
     e_ldr(18, 28, OFF_NZCV);            // old NZCV (kept when n == 0)
     e_lsr_i(20, res, k == 1 ? width - 1 : 0, wsf);
     e_movconst(21, 1);
