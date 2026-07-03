@@ -500,10 +500,11 @@ static void pcache_poison_check(void) {
 }
 
 // ---- guest fork hook (proc.c, both clone/fork sites, in the child, right after jit_after_fork) ----
-// The child got a FRESH EMPTY arena but inherited the parent's recording state. Reset the reloc table so
-// it matches the (empty) arena, and bar this process from saving: its arena will only ever hold the
-// post-fork slice, and the inherited g_pc_binid/g_pc_entry identity belongs to the parent's complete
-// image. An in-process execve re-keys everything and lifts the bar (pcache_exec_reload).
+// The child either KEPT the parent's warm arena (#371 preserved-arena fork: single-threaded parent /
+// MAP_JIT fallback) or got a fresh empty one (threaded rebuild); either way its arena from here on is a
+// fork-private slice whose inherited g_pc_binid/g_pc_entry identity belongs to the PARENT's complete
+// image -- so drop the inherited reloc records and bar this process from saving. An in-process execve
+// re-keys everything and lifts the bar (pcache_exec_reload).
 static void pcache_after_fork(void) {
     g_nreloc = 0;
     g_pcache_forked = 1;
