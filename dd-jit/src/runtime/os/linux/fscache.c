@@ -396,6 +396,87 @@ static void updirneg_store(const char *d) {
     strcpy(e->dir, d);
     CUL;
 }
+// ---- positive dentry/climb cache (dc_*; #372) -----------------------------------------------------
+// The rc_/oc_ caches memoize FULL guest-path -> host-path resolutions, so a metadata storm that touches
+// each file ONCE (tar/find/du: readdir + one lstat + one open per file) never hits them -- every file
+// still pays confine_in_m's realpath() climb (per LAYER, per probe: entry + whiteout + opaque) and, on
+// open, resolve_at's per-component openat walk. This cache memoizes the climb itself, PER DIRECTORY:
+//   key   = the exact pre-realpath host string confine_in_m hands to realpath() first (jail canon +
+//           normalized rel, final component already peeled in nofollow mode). The jail canon prefix
+//           makes the key unique per layer (upper vs each lower) with no extra discriminator.
+//   value = (canon, nmiss): realpath() of the deepest EXISTING prefix -- already verified inside the
+//           jail by the caller before dc_store -- plus how many trailing components of the key did NOT
+//           exist (0 = the whole key resolved). A hit replays the recorded climb outcome exactly:
+//           out = canon + (the nmiss popped components, a plain substring of the key) + rem.
+// Files in one directory share the key, so a storm pays ONE realpath per (layer, dir) instead of one
+// per file; the caller's real lstat/open ALWAYS still runs on the result, so existence and contents
+// are never fabricated -- the only possible staleness is a wrong PATH STRING, prevented exactly as in
+// rc_/oc_:
+//   * EVERY entry (including the nmiss>0 "parent chain missing here" ones) is epoch-gated on the
+//     container-shared g_res_epoch: any create/unlink/rename/mkdir/symlink/link/mount -- and every
+//     overlay copy-up relocation (res_bump in overlay.c) -- invalidates the WHOLE cache. A symlink
+//     flip inside a cached prefix is a symlinkat/unlinkat/renameat -> bumped. Over-invalidate, never
+//     under.
+//   * fork/chroot drop via rc_reset() below: each entry also carries the #371 g_fs_fgen stamp and only
+//     hits while it matches, so the O(1) generation bump in the fork child drops every inherited (COW)
+//     entry -- same discipline as rc_/oc_/mc_ (COW/re-root hazard).
+//   * volume jails are NEVER cached (host-mutable backing): enforced by dc_jail_cacheable, which
+//     recognizes only the rootfs upper + the read-only image lowers by pointer identity.
+//   * kill switch: DD_NOPATHCACHE=1 (res_enabled), same switch as the other path caches.
+// resolve_at (the TOCTOU-safe open walk) additionally CONSUMES entries with canon == key && nmiss == 0:
+// such an entry proves every component of the key existed as a real, non-symlink directory (realpath
+// returning its input verbatim admits no symlink hop), which is precisely the condition under which
+// the lexical fast path and the per-component walk agree -- see the guard comments at that site.
+// No dir-fds are cached (path strings only), so there is no fd-exhaustion/LRU concern.
+#define DCACHE_N 8192
+static struct dcent {
+    uint64_t hash;
+    uint32_t epoch;
+    uint32_t fgen;  // #371 fork/chroot generation stamp (rc_reset bumps g_fs_fgen, O(1), instead of memset)
+    uint16_t nmiss; // trailing components of key that did NOT exist when resolved (0 = fully exists)
+    uint16_t clen;  // strlen(canon)
+    char key[DC_KEYMAX];
+    char canon[DC_KEYMAX];
+} g_dc[DCACHE_N];
+static int dc_jail_cacheable(const char *jcanon) {
+    if (!res_enabled()) return 0;
+    if (jcanon == g_rootfs_canon) return 1; // the writable upper (mutations bump g_res_epoch)
+    for (int i = 0; i < g_nlower; i++)
+        if (jcanon == g_lower[i].canon) return 1; // read-only image lowers
+    return 0; // anything else (bind-mount volumes, unknown roots): host-mutable -> never cache
+}
+static int dc_lookup(const char *key, char *canon, size_t n, int *nmiss) {
+    if (!res_enabled() || !key || !key[0] || strlen(key) >= DC_KEYMAX) return 0;
+    CLK;
+    int hit = 0;
+    uint64_t h = mc_hash(key);
+    struct dcent *e = &g_dc[h & (DCACHE_N - 1)];
+    if (e->hash == h && e->fgen == g_fs_fgen && e->epoch == g_res_epoch && !strcmp(e->key, key)) {
+        if (e->clen < n) {
+            memcpy(canon, e->canon, (size_t)e->clen + 1);
+            *nmiss = e->nmiss;
+            hit = 1;
+        }
+    }
+    CUL;
+    return hit;
+}
+static void dc_store(const char *key, const char *canon, int nmiss) {
+    if (!res_enabled() || !key || !key[0] || !canon || nmiss < 0 || nmiss > 0xffff) return;
+    size_t cl = strlen(canon);
+    if (strlen(key) >= DC_KEYMAX || cl >= DC_KEYMAX) return; // over-length: bypass, re-resolved safely
+    CLK;
+    uint64_t h = mc_hash(key);
+    struct dcent *e = &g_dc[h & (DCACHE_N - 1)];
+    e->hash = h;
+    e->epoch = g_res_epoch; // stamp the CURRENT epoch; any later namespace mutation invalidates it
+    e->fgen = g_fs_fgen;    // #371 fork/chroot generation; a fork child's rc_reset bump drops this entry
+    e->nmiss = (uint16_t)nmiss;
+    e->clen = (uint16_t)cl;
+    strcpy(e->key, key);
+    memcpy(e->canon, canon, cl + 1);
+    CUL;
+}
 // fork child: drop every inherited (COW) entry so it cannot outlive a parent-side mutation.
 // This covers BOTH the path-string caches (rc_/oc_) and the metadata caches (mc_/rl_/ac_). The
 // metadata caches memoize stat/readlink/access RESULTS -- including NEGATIVE (ENOENT) ones -- and a
@@ -407,8 +488,8 @@ static void updirneg_store(const char *d) {
 // makes the child re-resolve against the real FS.
 static void rc_reset(void) {
     CLK;
-    // #371: O(1) GENERATION BUMP instead of memset'ing all six arrays (~13MB: rc+oc ~3.8MB each, mc
-    // ~2.9MB, rl/ac/ud ~2MB) in the fork child's critical path -- those memsets were a fixed ~ms-scale
+    // #371: O(1) GENERATION BUMP instead of memset'ing all arrays (~13MB: rc+oc ~3.8MB each, mc
+    // ~2.9MB, rl/ac/ud/dc) in the fork child's critical path -- those memsets were a fixed ~ms-scale
     // tax on EVERY guest fork. Every entry is stamped with g_fs_fgen at store time and only hits while
     // the stamp still matches, so bumping the (process-local, COW-private) counter atomically drops every
     // inherited entry -- exactly the semantics the memsets had -- while the parent's counter (and its
@@ -421,6 +502,7 @@ static void rc_reset(void) {
         memset(g_rl, 0, sizeof g_rl);
         memset(g_ac, 0, sizeof g_ac);
         memset(g_ud, 0, sizeof g_ud); // overlay upper-parent negative memo: same COW/re-root hazard
+        memset(g_dc, 0, sizeof g_dc); // #372 positive dentry/climb cache: same COW/re-root hazard
         oc_reset(); // W4D: the open-resolution cache too (same COW hazard, under the same lock)
     }
     // NB: do NOT reset g_res_epoch here -- it is a container-wide SHARED counter (see its definition); a
@@ -536,6 +618,69 @@ static void oc_store(const char *g, const char *host) {
 // rc_reset() which already holds the cache lock, so this does NOT re-take it (non-recursive mutex).
 static void oc_reset(void) {
     memset(g_oc, 0, sizeof g_oc);
+}
+
+// ---- #374 daemon-write coherence: the external-writer generation (docker cp epoch blind spot) ----
+// Everything above invalidates on GUEST-initiated mutations: the guest's own syscalls bump g_res_epoch
+// (dispatch.c/overlay.c) or evict precisely. But the DAEMON also writes into a LIVE container's fs from
+// OUTSIDE any engine -- `docker cp` (PUT /containers/{id}/archive) extracts a tar into the overlay upper
+// or a bind/volume source, and an exec/health-probe spawn rewrites /etc/{hosts,resolv.conf,hostname} in
+// the upper -- and no guest syscall ever announces those. A cached NEGATIVE would then hide a file
+// docker-cp just delivered (guest polls ENOENT forever), and a stale POSITIVE would survive a cp OVER an
+// existing file (old size/mtime -- positive mc_/rl_/ac_ entries are NOT epoch-gated, only
+// precise-evicted, and the daemon can't call the evictors). Bumping g_res_epoch alone can't fix this:
+// (a) its page is MAP_ANON, shared only by THIS engine's fork tree, unreachable from the daemon; and
+// (b) it wouldn't invalidate the positives anyway.
+//
+// Mechanism: the daemon owns a 4-byte generation file, <dd-home>/containers/<cid>/fsgen, created before
+// the first engine of the container spawns and handed to EVERY engine of that container (run + exec +
+// health probe) as DD_FSGEN_FILE. The daemon atomically increments the mapped u32 AFTER completing any
+// external write; each engine process maps the SAME file MAP_SHARED (ctor below; fork children inherit
+// the mapping) and polls it once per syscall (dispatch.c service_local, before any handler can consult a
+// cache). On a change it drops ALL its caches via rc_reset() -- the same conservative fork-grade full
+// flush -- so a daemon write is visible no later than the guest's NEXT syscall, exactly like the
+// kernel-coherent dcache on real Linux. Hot-path cost: ONE shared-page atomic load per syscall. Without
+// the env (bench/tests/direct `ddjit` runs) the pointer stays on a local counter that never moves, so
+// the poll is a single always-equal load and behaviour is byte-identical. Same 32-bit width and atomics
+// discipline as g_res_epoch (daemon side increments with release; the poll loads with acquire so the
+// flush is ordered after the daemon's completed file writes).
+//
+// HOT-PATH DISCIPLINE (this runs on EVERY guest syscall -- a metadata-storm workload like `tar` over a
+// big tree is millions of syscalls, so even a mispriced check regresses the overlay-metadata cache win):
+// the poll is a `static inline` two-word compare with a RELAXED load (plain LDR, not the pricier acquire
+// LDAR) and a predicted-not-taken branch; the acquire barrier + rc_reset() live in an out-of-line `cold`
+// helper reached only when the generation actually moved (i.e. only right after a real daemon write).
+static _Atomic uint32_t g_fsgen_local = 0;             // fallback: "no external writer exists"
+static _Atomic uint32_t *g_fsgen_ptr = &g_fsgen_local; // -> the daemon's file page once the ctor runs
+static _Atomic uint32_t g_fsgen_seen = 0;              // last generation this process acted on
+__attribute__((constructor)) static void fsgen_ctor(void) {
+    const char *p = getenv("DD_FSGEN_FILE");
+    if (!p || !p[0]) return;
+    int fd = open(p, O_RDONLY | O_CLOEXEC); // engine only READS the counter; the daemon writes it
+    if (fd < 0) return;
+    void *m = mmap(NULL, sizeof(uint32_t), PROT_READ, MAP_SHARED, fd, 0);
+    close(fd);
+    if (m == MAP_FAILED) return; // degrade to the local never-moving counter; never crash
+    g_fsgen_ptr = (_Atomic uint32_t *)m;
+    // Snapshot the current generation so startup doesn't pay a spurious flush; the caches are empty.
+    atomic_store(&g_fsgen_seen, atomic_load(g_fsgen_ptr));
+}
+// COLD path: the generation moved -> the daemon finished a write into this container's fs since we last
+// looked. Re-read with ACQUIRE (pairs with the daemon's release fetch_add, so the flush is ordered after
+// its completed file writes), drop ALL caches, and record the acquire-loaded value so a bump that arrives
+// DURING the reset is re-noticed next syscall (never lost). Racing guest threads may both flush (harmless).
+__attribute__((noinline, cold)) static void fsgen_flush(void) {
+    uint32_t g = atomic_load_explicit(g_fsgen_ptr, memory_order_acquire);
+    rc_reset(); // drops rc_/oc_/mc_/rl_/ac_/ud_ alike (the fork-grade conservative full flush)
+    atomic_store_explicit(&g_fsgen_seen, g, memory_order_relaxed);
+}
+// The per-syscall poll (called from dispatch.c service_local BEFORE dispatch). Relaxed compare only; a
+// stale relaxed read at worst defers the flush to the very next syscall, still within "visible by the
+// guest's next syscall". Both operands are one word: the shared page (clean/shared -> L1) and a local.
+static inline void fsgen_poll(void) {
+    if (__builtin_expect(atomic_load_explicit(g_fsgen_ptr, memory_order_relaxed)
+                         != atomic_load_explicit(&g_fsgen_seen, memory_order_relaxed), 0))
+        fsgen_flush();
 }
 
 static void fd_setpath(int fd, const char *p) {

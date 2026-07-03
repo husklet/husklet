@@ -39,5 +39,15 @@ fn pcachex() -> Group {
         // threaded guest: exit_group saves while peer threads are still live — the snapshot must be taken
         // under the translation lock (a torn arena here corrupts every later warm run).
         pc(src("pc-threads", "threads_mutex.c").out("queue produced=40000 consumed=40000\n")),
+        // #373b exec re-key: the driver epoch execve's itself as a DIFFERENT argv[0] basename (the
+        // multicall applet switch). The driver epoch saves at the exec boundary under ITS key; the applet
+        // epoch re-keys, reloads, and saves under its own — two distinct cache files, byte-identical
+        // output on every cold/warm alternation. (The two-file protocol is asserted in tests/pcache.rs.)
+        pc(src("pc-execchain", "pcachex/execchain.c").out("pcache execchain applet ok argc=1\n")),
+        // #178 selective restore: a file-backed executable (library-like) map. Cold saves it in the
+        // manifest; a warm run DEFERS its blocks and activates them only on the identity-matched re-map, so
+        // a restored translation can never shadow different guest bytes. Output is deterministic either way
+        // (the accumulator), which is the correctness contract this case guards on both engines.
+        pc(src("pc-libmap", "pcachex/libmap.c").out("pcache libmap acc=506500\n")),
     ])
 }

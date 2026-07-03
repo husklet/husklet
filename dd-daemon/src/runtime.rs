@@ -217,6 +217,15 @@ pub(crate) fn spawn_cfg(c: &Container, volumes_dir: &str, vols: &[Vol], bridge: 
     // network) instead of being isolated in its own loopback. Truncated to 40 chars to match the engine.
     let ns_key = c.netns_key.as_deref().unwrap_or(&c.id);
     cfg.netns = (c.network_mode != "host").then(|| ns_key[..ns_key.len().min(40)].to_string());
+    // #374 daemon-write coherence: hand every Linux engine of this container the shared external-writer
+    // generation file (run/exec/health probes all key to the TARGET container, like tmpfs/netns). The
+    // daemon bumps it after any daemon-side write into the live fs (docker cp's archive PUT, the exec
+    // /etc rewrites below in spawn_live) and the engine then drops its path/metadata caches, so the write
+    // is guest-visible by its next syscall (see fscache.c fsgen_* / util.rs fsgen_bump).
+    if guest.os() != "darwin" {
+        let key = c.netns_key.as_deref().unwrap_or(&c.id);
+        cfg.env.push(("DD_FSGEN_FILE".into(), crate::util::fsgen_ensure(key).to_string_lossy().into_owned()));
+    }
     // `--network none`: no external egress -- the JIT refuses non-loopback connects (DD_NET_ISOLATE).
     if c.network_mode == "none" { cfg.env.push(("DD_NET_ISOLATE".into(), "1".into())); }
     // netstack PR2 — per-network AF_UNIX virtual switch: container<->container TCP for in-subnet peers.
@@ -425,6 +434,11 @@ pub(crate) async fn spawn_live(app: &App, c: &Container, vols: &[Vol], live: Arc
         if let Err(e) = std::fs::write(format!("{etc}/hostname"), format!("{eff_hostname}\n")) {
             if std::env::var("DD_DEBUG").is_ok() { eprintln!("[live] {} write /etc/hostname failed: {e}", &c.id[..c.id.len().min(12)]); }
         }
+        // #374: for an exec/health-probe spawn those /etc writes just landed in a LIVE container's upper
+        // (the container's engine is already running with warm caches) — bump its external-writer
+        // generation so every running engine drops its caches. For a fresh container start this is a
+        // harmless no-op signal: no engine is up yet, and the engine snapshots the current value at boot.
+        crate::util::fsgen_bump(&lookup_id);
     }
     // #320: start the daemon-owned, process-independent host→container port forwarders. Idempotent (the
     // restart path re-enters here but the listeners persist), a no-op for a container that publishes

@@ -781,9 +781,95 @@ static int svc_proc(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64
         G_FORK_PRESERVE(c);
         break;
     }
+    // execveat(dirfd, path, argv, envp, flags) -- canonical 281 (x86 322 maps here via sysmap). Resolve
+    // (dirfd, path, flags) to a guest-absolute exec path, shift the args into execve positions, and fall
+    // through to the shared case-221 body (glibc fexecve() and Rust/Go re-exec helpers use this).
+    case 281: {
+        static char eat_pb[4200]; // static: referenced via a0 across the fallthrough into case 221
+        const char *ep = (const char *)a1;
+        int eflags = (int)a4;
+        if (ep && !ep[0] && (eflags & 0x1000)) { // AT_EMPTY_PATH: exec the file dirfd itself names (fexecve)
+            char hb[4200];
+            if ((int)a0 < 0 || fcntl((int)a0, F_GETPATH, hb) != 0 || !hb[0]) {
+                G_RET(c) = (uint64_t)(int64_t)(((int)a0 < 0) ? -EBADF : -EACCES);
+                break;
+            }
+            if (g_rootfs) {
+                char gb[4200];
+                guest_from_host_raw(hb, gb, sizeof gb);
+                snprintf(eat_pb, sizeof eat_pb, "%s", gb);
+            } else
+                snprintf(eat_pb, sizeof eat_pb, "%s", hb);
+        } else if (!ep || !ep[0]) {
+            G_RET(c) = (uint64_t)(int64_t)(-ENOENT); // empty path without AT_EMPTY_PATH
+            break;
+        } else {
+            if (eflags & 0x100) { // AT_SYMLINK_NOFOLLOW: a symlink final component is ELOOP, never followed
+                char lpb[4200];
+                struct stat ls;
+                const char *lp = atpath((int)a0, ep, lpb, sizeof lpb, 1);
+                if (fstatat(ATFD(a0), lp, &ls, AT_SYMLINK_NOFOLLOW) == 0 && S_ISLNK(ls.st_mode)) {
+                    G_RET(c) = (uint64_t)(int64_t)(-ELOOP);
+                    break;
+                }
+            }
+            if (ep[0] == '/')
+                snprintf(eat_pb, sizeof eat_pb, "%s", ep);
+            else if (g_rootfs)
+                abs_guest((int)a0, ep, eat_pb, sizeof eat_pb);
+            else if ((int)a0 == -100)
+                snprintf(eat_pb, sizeof eat_pb, "%s", ep); // bare cwd-relative: case 221 resolves it as-is
+            else { // bare mode, relative to a real dirfd: absolutize via the fd's host path
+                char hb[4200];
+                if (fcntl((int)a0, F_GETPATH, hb) != 0) {
+                    G_RET(c) = (uint64_t)(int64_t)(-EBADF);
+                    break;
+                }
+                snprintf(eat_pb, sizeof eat_pb, "%s/%s", hb, ep);
+            }
+        }
+        a0 = (uint64_t)(uintptr_t)eat_pb;
+        a1 = a2; // argv
+        a2 = a3; // envp
+    }
+        /* fall through */
     // execve(path, argv, envp)
     case 221: {
         memf_materialize_all(); // non-CLOEXEC scratch fds survive exec -> flush RAM into the real files
+        // Linux comm = last component of the path PASSED to execve, captured BEFORE the /proc magic-link
+        // rewrite below and before binfmt_script (execve("/proc/self/exe") -> comm "exe"; "./run.sh"
+        // keeps "run.sh"). Applied at the committed point further down, only once the exec cannot fail.
+        char comm_src[256];
+        {
+            const char *cb = (const char *)a0, *cs = cb ? strrchr(cb, '/') : NULL;
+            snprintf(comm_src, sizeof comm_src, "%s", cs ? cs + 1 : (cb ? cb : ""));
+        }
+        // exec THROUGH the /proc magic links: execve("/proc/self/exe") (busybox re-exec, daemons,
+        // test harnesses) and execve("/proc/self/fd/N") (glibc fexecve fallback) must exec the link's
+        // TARGET -- the rootfs /proc is empty, so resolving them as ordinary paths ENOENTed (#370).
+        static char pse_pb[4200];
+        {
+            char lnk[4200];
+            const char *xp = (const char *)a0;
+            if (proc_self_exe(xp, lnk, sizeof lnk)) {
+                snprintf(pse_pb, sizeof pse_pb, "%s", lnk);
+                a0 = (uint64_t)(uintptr_t)pse_pb;
+            } else {
+                int pfn = procfd_num(xp);
+                if (pfn >= 0) {
+                    char hb[4200];
+                    if (fcntl(pfn, F_GETPATH, hb) == 0 && hb[0]) {
+                        if (g_rootfs) {
+                            char gb[4200];
+                            guest_from_host_raw(hb, gb, sizeof gb);
+                            snprintf(pse_pb, sizeof pse_pb, "%s", gb);
+                        } else
+                            snprintf(pse_pb, sizeof pse_pb, "%s", hb);
+                        a0 = (uint64_t)(uintptr_t)pse_pb;
+                    }
+                }
+            }
+        }
         char pb[4200];
         const char *p =
             // #301: resolve the exec path through the SAME resolver openat uses (atpath): overlay-aware
@@ -815,7 +901,12 @@ static int svc_proc(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64
         // /proc/self/exe; a stale value makes an exec'd dynamic binary fail to find its own libraries (e.g.
         // rustup's proxy execs the real rustc, whose RUNPATH $ORIGIN/../lib must point into the toolchain).
         char gexe[4200];
-        abs_guest(-100, (const char *)a0, gexe, sizeof gexe);
+        if (g_rootfs)
+            abs_guest(-100, (const char *)a0, gexe, sizeof gexe);
+        else
+            // bare mode: abs_guest would join the untracked g_cwd ("/"); keep the raw path and let
+            // exe_canon below join the LIVE host cwd (the engine chdir()s for real without a rootfs)
+            snprintf(gexe, sizeof gexe, "%s", (const char *)a0);
         // shebang: exec the #! interpreter instead (resolve_shebang_chain is shared with the initial loader).
         // RECURSIVE -- the interpreter may itself be a #! script (e.g. /usr/bin/env -> coreutils multicall);
         // resolve the whole chain (Linux binfmt_script, up to SHEBANG_MAX levels) and load the FINAL interp.
@@ -848,13 +939,33 @@ static int svc_proc(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64
                 argv[i] = na[i];
             ac = sh_new;
         }
+        // /proc/self/exe must name the new image as an ABSOLUTE, CANONICAL guest path -- fold "."/".."
+        // and resolve symlinks to the backing file (an exec of /bin/sh -> busybox reports /bin/busybox,
+        // and a relative "./x" exec reports "<cwd>/x", exactly like Linux d_path). glibc static-pie
+        // asserts on a non-canonical value at startup (dl-origin.c, #370).
+        {
+            char gcanon[4200];
+            exe_canon(gexe, gcanon, sizeof gcanon);
+            snprintf(gexe, sizeof gexe, "%s", gcanon);
+        }
         // Committed to the exec now (all ENOENT early-returns are behind us). execve makes the process
         // single-threaded -- the kernel terminates every OTHER thread in the group -- so before we flush the
         // address space and CLOEXEC fds below, tear down any sibling guest threads (a Go all-threads setuid,
         // e.g. gosu/su-exec, leaves netpoller/idle Ms live; a surviving M would run the old image against the
         // freed state). Blocks until all peers have left run_guest, so the teardown below is race-free.
         thread_exit_others(c);
+        set_guest_comm(comm_src); // comm := basename of the exec'd NAME (captured pre-rewrite above)
         cred_after_exec(); // #257: exec recomputes caps (non-root loses them) + clears KEEPCAPS; ids persist
+#ifdef PCACHE_SAVE_HOOK
+        // #373b: the exec below flushes this image's translated arena and RE-KEYS the cache identity for
+        // the new image (pcache_exec_reload), so the exit-time save can never again cover this epoch.
+        // Persist the outgoing image under its OWN (current) key now -- e.g. the `sh` of a `sh -c tar`
+        // chain, which otherwise never gets cached because the shell always ends in an exec. Every save
+        // refusal gate applies unchanged (fork child, restored-from-cache, poisoned, SMC, mixed-base); a
+        // restored epoch records its revival stats instead (pcache_warm_note, the #373a policy input).
+        // Single-threaded here by construction (thread_exit_others above), so the snapshot cannot tear.
+        PCACHE_SAVE_HOOK;
+#endif
         // emulate the kernel's close-on-exec sweep. No real host exec runs below -- we re-load the new image
         // in this same process -- so FD_CLOEXEC fds must be closed by hand or they leak into the new program.
         exec_close_cloexec();

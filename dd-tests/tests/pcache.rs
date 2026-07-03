@@ -211,3 +211,175 @@ fn pcache_lifecycle_aarch64() {
     let c3 = run_engine(&hello, &base);
     assert!(c3.stderr.contains("[pcache] HIT"), "self-healed file must HIT again: {}", c3.stderr);
 }
+
+/// #373a exec re-key on the aarch64 engine: the two-file protocol (a save AT the execve boundary keyed to
+/// the OUTGOING image, a re-key + reload for the new image), byte-identical warm output, no warm-run churn,
+/// and self-heal. (The warm-stat sidecar + dead-weight SKIP + #178 deferred-library restore land on the
+/// aarch64 engine via the separate arm-pcache warm-fix; this lane covers what the shared exec-rekey adds.)
+#[test]
+fn pcache_policy_aarch64() {
+    if !ddjit::available(ddjit::Guest::LinuxAarch64) {
+        eprintln!("linux/aarch64 engine not built — skipping (pin DDJIT_DIR to a built engine)");
+        return;
+    }
+    let dir = repo().join("target/dd-tests/pcache/dir-policy");
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let dirs = dir.to_string_lossy().into_owned();
+    let base: Vec<(&str, &str)> = vec![("DDJIT_PCACHE", "1"), ("DDJIT_PCACHE_DIR", &dirs), ("COLDPROF", "1")];
+
+    // ---- #373b exec re-key: driver epoch saved AT THE EXEC under its own key, applet epoch under its own
+    // -> exactly TWO cache files; the warm run HITs both epochs (initial HIT + exec HIT) and re-saves neither.
+    let chain = compile_guest("execchain.c", "execchain");
+    let cold = run_engine(&chain, &base);
+    assert_eq!(cold.code, 0, "execchain cold failed: {}\n{}", cold.stdout, cold.stderr);
+    assert_eq!(cold.stdout, "pcache execchain applet ok argc=1\n", "cold stdout");
+    assert!(cold.stderr.contains("[pcache] MISS"), "driver epoch must MISS cold: {}", cold.stderr);
+    assert!(cold.stderr.contains("[pcache] exec MISS"), "applet epoch must MISS cold: {}", cold.stderr);
+    assert_eq!(
+        cold.stderr.matches("save ok").count(),
+        2,
+        "cold run must save BOTH epochs (driver at exec, applet at exit): {}",
+        cold.stderr
+    );
+    let files = cache_files(&dir);
+    assert_eq!(files.len(), 2, "exec re-key must produce two distinct cache files: {files:?}");
+    let warm = run_engine(&chain, &base);
+    assert_eq!(warm.code, 0, "execchain warm failed: {}", warm.stderr);
+    assert_eq!(warm.stdout, cold.stdout, "warm stdout must be byte-identical");
+    assert!(warm.stderr.contains("[pcache] HIT"), "driver epoch must HIT warm: {}", warm.stderr);
+    assert!(warm.stderr.contains("[pcache] exec HIT"), "applet epoch must HIT warm: {}", warm.stderr);
+    assert!(!warm.stderr.contains("save ok"), "a warm (restored) epoch must never re-save: {}", warm.stderr);
+    // no churn: warm runs must not rewrite either published cache file
+    let mtimes = |fs: &Vec<PathBuf>| -> Vec<std::time::SystemTime> {
+        fs.iter().map(|f| std::fs::metadata(f).unwrap().modified().unwrap()).collect()
+    };
+    let m1 = mtimes(&files);
+    let warm2 = run_engine(&chain, &base);
+    assert_eq!(warm2.stdout, cold.stdout);
+    assert_eq!(m1, mtimes(&files), "warm runs must never rewrite the published cache files");
+
+    // ---- self-heal: remove both files -> both epochs MISS + re-save -> HIT again ----
+    for f in cache_files(&dir) { std::fs::remove_file(f).unwrap(); }
+    let re = run_engine(&chain, &base);
+    assert!(re.stderr.contains("[pcache] MISS"), "removed files must MISS: {}", re.stderr);
+    assert!(re.stderr.contains("save ok"), "cold run must re-save: {}", re.stderr);
+    let re2 = run_engine(&chain, &base);
+    assert!(re2.stderr.contains("[pcache] HIT"), "fresh save must HIT again: {}", re2.stderr);
+    assert_eq!(re2.stdout, cold.stdout);
+}
+
+// ---- x86 lane helpers (cross-compiled guest + x86 engine) ----
+fn compile_guest_x86(name: &str, out_name: &str) -> PathBuf {
+    let src = repo().join("dd-tests/guests/pcachex").join(name);
+    let outdir = repo().join("target/dd-tests/pcache");
+    std::fs::create_dir_all(&outdir).unwrap();
+    let out = outdir.join(out_name);
+    let o = Command::new("x86_64-linux-gnu-gcc")
+        .args(["-O2", "-static-pie", "-o"])
+        .arg(&out).arg(&src)
+        .output()
+        .unwrap_or_else(|e| panic!("x86_64-linux-gnu-gcc spawn: {e}"));
+    assert!(o.status.success(), "compile x86 {name}: {}", String::from_utf8_lossy(&o.stderr));
+    out
+}
+fn run_engine_x86(guest: &PathBuf, guest_args: &[&str], env: &[(&str, &str)]) -> Run {
+    let mut cfg = ddjit::SpawnConfig::new(String::new(), String::new());
+    for (k, v) in env {
+        cfg.env.push(((*k).into(), (*v).into()));
+    }
+    cfg.argv = vec![guest.to_string_lossy().into_owned()];
+    for a in guest_args {
+        cfg.argv.push((*a).to_string());
+    }
+    let (prog, args) = cfg.command(ddjit::Guest::LinuxX86_64).expect("engine command");
+    let out = Command::new("timeout").arg("30").arg(&prog).args(&args).output().expect("spawn engine");
+    Run {
+        stdout: String::from_utf8_lossy(&out.stdout).into_owned(),
+        stderr: String::from_utf8_lossy(&out.stderr).into_owned(),
+        code: out.status.code().unwrap_or(-1),
+    }
+}
+
+/// #373/#178 FULL policy lane on the x86 engine (the mission engine, which owns exec re-key + selective
+/// restore + the warm-stat sidecar + #178 deferred-library activation):
+///   1. exec re-key two-file protocol (execchain).
+///   2. #178 selective restore: a file-backed executable (library-like) map is DEFERRED on load and
+///      activated only when the same file identity re-maps at the same base -> waste=0 (libmap).
+///   3. dead-weight SKIP: a sidecar reporting waste==restored makes the next load skip the restore
+///      (header-only, correct output, no resave churn), sticky until a fresh cold save clears it.
+#[test]
+fn pcache_policy_x86_64() {
+    if !ddjit::available(ddjit::Guest::LinuxX86_64) {
+        eprintln!("linux/x86_64 engine not built — skipping (pin DDJIT_DIR to a built engine)");
+        return;
+    }
+    let dir = repo().join("target/dd-tests/pcache/dir-policy-x86");
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let dirs = dir.to_string_lossy().into_owned();
+    let base: Vec<(&str, &str)> = vec![("DDJIT_PCACHE", "1"), ("DDJIT_PCACHE_DIR", &dirs), ("COLDPROF", "1")];
+
+    // ---- 1. exec re-key: two distinct cache files, both epochs saved cold (driver at exec, applet at
+    // exit), both HIT warm with no re-save. Proves a save can never key to the exec'd binary. ----
+    let chain = compile_guest_x86("execchain.c", "execchain.x86");
+    let cold = run_engine_x86(&chain, &[], &base);
+    assert_eq!(cold.code, 0, "x86 execchain cold: {}\n{}", cold.stdout, cold.stderr);
+    assert_eq!(cold.stdout, "pcache execchain applet ok argc=1\n", "x86 cold stdout");
+    assert!(cold.stderr.contains("[pcache] MISS"), "driver MISS: {}", cold.stderr);
+    assert!(cold.stderr.contains("[pcache] exec MISS"), "applet MISS: {}", cold.stderr);
+    assert_eq!(cold.stderr.matches("save ok").count(), 2, "cold must save both epochs: {}", cold.stderr);
+    assert_eq!(cache_files(&dir).len(), 2, "exec re-key must produce two distinct cache files");
+    let warm = run_engine_x86(&chain, &[], &base);
+    assert_eq!(warm.stdout, cold.stdout, "x86 warm stdout byte-identical");
+    assert!(warm.stderr.contains("[pcache] HIT"), "driver HIT: {}", warm.stderr);
+    assert!(warm.stderr.contains("[pcache] exec HIT"), "applet exec HIT: {}", warm.stderr);
+    assert!(!warm.stderr.contains("save ok"), "warm epoch must never re-save: {}", warm.stderr);
+
+    // ---- 2. #178 selective restore of a file-backed executable (library-like) map: cold persists it in a
+    // 1-entry manifest; warm DEFERS it and activates it on the identity-matched re-map -> waste=0. ----
+    let ldir = repo().join("target/dd-tests/pcache/dir-lib-x86");
+    let _ = std::fs::remove_dir_all(&ldir);
+    std::fs::create_dir_all(&ldir).unwrap();
+    let ldirs = ldir.to_string_lossy().into_owned();
+    let lbase: Vec<(&str, &str)> = vec![("DDJIT_PCACHE", "1"), ("DDJIT_PCACHE_DIR", &ldirs), ("COLDPROF", "1")];
+    let blob = ldir.join("blob.bin").to_string_lossy().into_owned();
+    let lib = compile_guest_x86("libmap.c", "libmap.x86");
+    let lc = run_engine_x86(&lib, &[&blob], &lbase);
+    assert_eq!(lc.code, 0, "libmap cold: {}\n{}", lc.stdout, lc.stderr);
+    assert_eq!(lc.stdout, "pcache libmap acc=506500\n", "libmap cold stdout");
+    assert!(lc.stderr.contains(" libs) in "), "cold save must record a library manifest: {}", lc.stderr);
+    let lw = run_engine_x86(&lib, &[&blob], &lbase);
+    assert_eq!(lw.stdout, lc.stdout, "libmap warm stdout byte-identical");
+    assert!(lw.stderr.contains("deferred-lib=1"), "the library map's block must be DEFERRED on load: {}", lw.stderr);
+    assert!(lw.stderr.contains("[pcache] warm-note restored="), "warm run must record revival stats: {}", lw.stderr);
+    assert!(
+        lw.stderr.contains("waste=0"),
+        "the deferred block must ACTIVATE on the identity-matched re-map (no waste): {}",
+        lw.stderr
+    );
+
+    // ---- 3. dead-weight SKIP: flip the sidecar the warm run just wrote to waste==restored; the next load
+    // must SKIP the restore (header-only: MISS, correct output), never re-save, and stay sticky until a
+    // fresh cold save clears it. This is the mechanism that keeps a library-heavy warm run <= pcache-off. ----
+    let sidecar = std::fs::read_dir(&ldir).unwrap()
+        .filter_map(|e| e.ok().map(|e| e.path()))
+        .find(|p| p.to_string_lossy().ends_with(".warm"))
+        .expect("warm run must publish a .warm sidecar");
+    let mut bytes = std::fs::read(&sidecar).unwrap(); // 32 B: magic, arena_used, restored, waste
+    assert_eq!(bytes.len(), 32, "sidecar layout");
+    let restored = u64::from_le_bytes(bytes[16..24].try_into().unwrap());
+    bytes[24..32].copy_from_slice(&restored.to_le_bytes()); // waste := restored -> the restore is all dead weight
+    std::fs::write(&sidecar, &bytes).unwrap();
+    let sk = run_engine_x86(&lib, &[&blob], &lbase);
+    assert_eq!(sk.code, 0, "skip run must still succeed: {}", sk.stderr);
+    assert_eq!(sk.stdout, lc.stdout, "skip run output byte-identical");
+    assert!(sk.stderr.contains("[pcache] SKIP"), "dead-weight sidecar must trigger a SKIP: {}", sk.stderr);
+    assert!(!sk.stderr.contains("save ok"), "a skipped epoch must not churn-resave: {}", sk.stderr);
+    let sk2 = run_engine_x86(&lib, &[&blob], &lbase);
+    assert!(sk2.stderr.contains("[pcache] SKIP"), "the skip verdict must be sticky: {}", sk2.stderr);
+    // self-heal: a fresh cold save (files removed) clears the stale skip verdict -> HIT again
+    for f in cache_files(&ldir) { std::fs::remove_file(f).unwrap(); }
+    assert!(run_engine_x86(&lib, &[&blob], &lbase).stderr.contains("[pcache] MISS"), "removed file must MISS");
+    assert!(run_engine_x86(&lib, &[&blob], &lbase).stderr.contains("[pcache] HIT"), "fresh save must HIT again");
+}

@@ -24,8 +24,10 @@ pub mod timex;      // clocks: clock_getres/gettimeofday/clock_nanosleep/linux c
 pub mod clitools;   // real CLI tools (busybox coreutils) in the alpine rootfs
 pub mod isolation;  // container isolation + resource fidelity: --cpus/--read-only/--ulimit, masked/ro /proc paths
 pub mod procfs;     // /proc /sys /dev pseudo-file CONTENT conformance + permission/mode fidelity (zero-stub gate)
+pub mod procexe;    // /proc/self/exe + readlink/readlinkat surface: exe canonicalization, magic links, execveat (#370/#317)
 pub mod pcachex;    // #339 persistent translated-code cache: fork/exec/thread lifecycle under DDJIT_PCACHE=1
 pub mod forkx;      // #371 preserved-arena fork: 1000-fork mixed-pattern storm (exit/work/cold/exec/nested)
+pub mod dentry;     // #372 positive dentry/path-resolution cache: mutation<->lookup coherence storms
 
 pub fn all() -> Vec<Group> {
     let mut g = vec![];
@@ -48,7 +50,9 @@ pub fn all() -> Vec<Group> {
     g.extend(clitools::groups());
     g.extend(isolation::groups());
     g.extend(procfs::groups());
+    g.extend(procexe::groups());
     g.extend(pcachex::groups());
     g.extend(forkx::groups());
+    g.extend(dentry::groups());
     g
 }

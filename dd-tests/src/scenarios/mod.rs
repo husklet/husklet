@@ -33,6 +33,7 @@ pub mod execcmd;      // docker exec: -e/-w/-u/-d/-i, exit-code, output capture
 pub mod lifecycle;    // create/start/stop/kill -s/restart/pause/unpause/wait/rm/rm -f/rename
 pub mod observe;      // inspect/ps/ps -a/logs/logs --tail/logs -f/top/stats/port
 pub mod cpcmd;        // docker cp host<->container, file + dir
+pub mod cpcoherence;  // #374: docker cp into a RUNNING container is visible to the live guest's warm caches
 pub mod imagescmd;    // images/tag/rmi/history/image inspect
 pub mod buildcmd;     // docker build a small Dockerfile -> image -> run
 pub mod dockernet;    // network create/ls/rm/connect/inspect + reach-by-name
@@ -60,6 +61,7 @@ pub fn all() -> Vec<ScenGroup> {
         lifecycle::group(),
         observe::group(),
         cpcmd::group(),
+        cpcoherence::group(),
         imagescmd::group(),
         buildcmd::group(),
         dockernet::group(),

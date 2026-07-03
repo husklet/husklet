@@ -337,6 +337,20 @@ static int svc_mem(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_
         size_t hp = (size_t)getpagesize();
         void *r;
         int off_emul = 0;
+        uint64_t pc_hint = 0;
+        (void)pc_hint;
+#ifdef PCACHE_MMAP_HINT
+        // #178 (pcache): give the dynamic linker's file-backed, non-fixed, kernel-placed maps (library
+        // loads) a DETERMINISTIC base hint so their translated blocks are reusable across runs of the same
+        // binary. A plain hint, never MAP_FIXED: if the range is busy the kernel places it elsewhere and
+        // the map simply isn't cacheable this run (pcache_note_libmap below only records hint-honored
+        // maps, and a warm run only ACTIVATES restored blocks when the same file identity lands on the
+        // same base). No-op unless DDJIT_PCACHE is on.
+        if (a0 == 0 && !(a3 & 0x10) && !(a3 & 0x20) && (int)a4 >= 0) {
+            pc_hint = pcache_mmap_hint((uint64_t)a1);
+            a0 = pc_hint;
+        }
+#endif
         // BUG #286: a MAP_FIXED map that REPLACES a 4 KB-granular sub-range of one of the guest's own
         // reservations (V8/Go committing fresh pages, or ld.so laying a segment inside its reserved span)
         // has a partial 16 KB host-page edge shared with a LIVE 4 KB neighbour. A direct host MAP_FIXED
@@ -467,6 +481,12 @@ static int svc_mem(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_
                 anon_track((uint64_t)r, (uint64_t)a1 + guard, prot);
             else
                 anon_untrack((uint64_t)r, (uint64_t)a1 + guard);
+#ifdef PCACHE_MMAP_HINT
+            // #178 (pcache): a hinted library map that landed ON its deterministic hint. Cold epoch:
+            // record {base, len, file identity} in the save manifest. Warm epoch: the activation gate for
+            // the restored blocks deferred over this range (identity must match, or they stay dead).
+            if (pc_hint && (uint64_t)(uintptr_t)r == pc_hint) pcache_note_libmap((uint64_t)(uintptr_t)r, (uint64_t)a1, (int)a4);
+#endif
         }
         G_RET(c) = (r == MAP_FAILED) ? (uint64_t)(-errno) : (uint64_t)r;
         break;

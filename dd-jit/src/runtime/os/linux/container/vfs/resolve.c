@@ -62,6 +62,14 @@ static int jail_pick_idx(const char *abs, const char **rel, int *vi) {
     *vi = -1;
     return g_root_fd;
 }
+// Does the path contain a `..` component? The dentry-cache fast path in resolve_at must skip such
+// paths: this walk resolves `..` AFTER any preceding symlink (POSIX), while confine()/the dc_ keys
+// collapse it lexically -- the two only provably agree on '..'-free paths.
+static int path_has_dotdot(const char *p) {
+    for (const char *s = p; *s; s++)
+        if (s[0] == '.' && s[1] == '.' && (s == p || s[-1] == '/') && (s[2] == '/' || s[2] == 0)) return 1;
+    return 0;
+}
 // TOCTOU-FREE confinement. Resolve `guest` (absolute) one component at a time on PINNED dir-fds,
 // never following a symlink out of the jail. Returns a fresh dir-fd to the confined parent (caller
 // closes) + the final component in `final`. -1 on escape/error. No check/use gap: each step
@@ -92,6 +100,51 @@ restart:;
         snprintf(final, fn, "%s", vol_fbase(volidx));
         int d = openat(root_fd, ".", O_RDONLY | O_DIRECTORY);
         return d < 0 ? -errno : d;
+    }
+    // ---- positive dentry-cache fast path (consume-only; entries produced by confine_in_m) ----------
+    // A dc entry whose canon == key with nmiss == 0 proves every component of the key existed as a
+    // real, NON-symlink directory when it was realpath'd (realpath returning its input verbatim admits
+    // no symlink hop), under an epoch every namespace mutation bumps. On such a chain this walk and the
+    // lexical key construction provably agree, so the one-openat-per-component climb collapses to ONE
+    // open of the already-canonical parent dir. Exact-semantics guards (any doubt -> the full walk):
+    //   * '..' paths skip (lexical vs after-symlink `..` differ -- path_has_dotdot above);
+    //   * canon != key skips (a symlink was involved: realpath follows host-side, this walk resplices
+    //     jail-side; the two can diverge for absolute link targets);
+    //   * in follow mode a final component that IS a symlink skips, so the walk resplices it exactly
+    //     as before (nofollow mode wants the link itself -- same contract as the walk's early break);
+    //   * volumes (volidx >= 0) are never cached; a failed open falls through to the walk.
+    // The caller's openat(pfd, final, ...) still runs -- existence/contents are never fabricated; a
+    // stale path is impossible while the epoch matches (see the dc_ model in fscache.c). Kill switch:
+    // DD_NOPATHCACHE=1 disables dc_lookup itself.
+    if (volidx < 0 && !path_has_dotdot(gbuf)) {
+        char dnorm[4200];
+        confine(gbuf, dnorm, sizeof dnorm);
+        char *dsl = strrchr(dnorm, '/');
+        if (dsl && dsl[1] && strlen(dsl + 1) < 255) {
+            char fcomp[256];
+            snprintf(fcomp, sizeof fcomp, "%s", dsl + 1);
+            *dsl = 0; // dnorm = the parent dir ("" when the parent is the jail root itself)
+            char dkey[DC_KEYMAX];
+            int kl = snprintf(dkey, sizeof dkey, "%s%s", g_rootfs_canon, dnorm);
+            char dcanon[DC_KEYMAX];
+            int dk;
+            if (kl > 0 && (size_t)kl < sizeof dkey && dc_lookup(dkey, dcanon, sizeof dcanon, &dk) && dk == 0 &&
+                !strcmp(dcanon, dkey)) {
+                int d = open(dcanon, O_RDONLY | O_DIRECTORY);
+                if (d >= 0) {
+                    if (nofollow) {
+                        snprintf(final, fn, "%s", fcomp);
+                        return d;
+                    }
+                    struct stat fst;
+                    if (fstatat(d, fcomp, &fst, AT_SYMLINK_NOFOLLOW) != 0 || !S_ISLNK(fst.st_mode)) {
+                        snprintf(final, fn, "%s", fcomp);
+                        return d;
+                    }
+                    close(d); // final component is a symlink: the full walk must resplice it
+                }
+            }
+        }
     }
     char rest[8192];
     snprintf(rest, sizeof rest, "%s", rel);

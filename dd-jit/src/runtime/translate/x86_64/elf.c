@@ -272,6 +272,9 @@ static void load_elf(const char *path, struct loaded *out) {
         base = mmap((void *)(g_force_base + basepage), span, PROT_READ | PROT_WRITE,
                     MAP_PRIVATE | MAP_ANON | MAP_FIXED, -1, 0);
         g_force_base = 0;
+        // #373a/#178: record the fixed image's live guest span -- the pcache's save/restore policy keys
+        // "revivable by identity" off these ranges (translate/x86_64/pcache.c pcache_note_fixed_img).
+        if (base != MAP_FAILED) pcache_note_fixed_img((uint64_t)base, span);
     } else {
         base = mmap(NULL, span, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON, -1, 0);
     }
