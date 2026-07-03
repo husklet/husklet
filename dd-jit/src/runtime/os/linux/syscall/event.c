@@ -426,6 +426,7 @@ static int svc_event(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint6
             snprintf(g_inotify_wpath[wfd], sizeof g_inotify_wpath[wfd], "%s", p);
             free(g_inotify_snap[wfd]);
             g_inotify_snap[wfd] = dir_snapshot(p);
+            g_inotify_owner[wfd] = (int)a0; // the inotify instance this watch belongs to (for the move queue)
         }
         G_RET(c) = (uint64_t)wfd;
         break;
@@ -529,12 +530,27 @@ static int svc_event(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint6
         int64_t period_ns = (iv_s || iv_n) ? (int64_t)(iv_s * 1000000000ull + iv_n)
                                            // one-shot uses it_value
                                            : (int64_t)(vl_s * 1000000000ull + vl_n);
-        if (period_ns <= 0) {
+        int64_t interval_ns = (int64_t)(iv_s * 1000000000ull + iv_n);
+        int64_t value_ns = (int64_t)(vl_s * 1000000000ull + vl_n);
+        // itimerspec.it_value==0 disarms (regardless of it_interval), same as Linux.
+        if (value_ns <= 0 && period_ns <= 0) {
             EV_SET(&kv, 1, EVFILT_TIMER, EV_DELETE, 0, 0, NULL);
             kevent((int)a0, &kv, 1, NULL, 0, NULL);
+            if ((int)a0 >= 0 && (int)a0 < 1024) { g_tfd_deadline[(int)a0] = 0; g_tfd_interval[(int)a0] = 0; }
             G_RET(c) = 0;
             break;
             // disarm
+        }
+        // Record the absolute next-expiry deadline + interval so timerfd_gettime can report the remaining
+        // time. TFD_TIMER_ABSTIME (flags bit 1, a1&1) gives an absolute it_value on CLOCK_MONOTONIC; a
+        // relative value is now+value. (The kevent below fires on the same delay either way.)
+        if ((int)a0 >= 0 && (int)a0 < 1024) {
+            struct timespec now;
+            clock_gettime(CLOCK_MONOTONIC, &now);
+            int64_t now_ns = (int64_t)now.tv_sec * 1000000000LL + now.tv_nsec;
+            int64_t first = value_ns > 0 ? value_ns : interval_ns;
+            g_tfd_deadline[(int)a0] = ((int)a1 & 1) ? first : now_ns + first; // TFD_TIMER_ABSTIME=1
+            g_tfd_interval[(int)a0] = interval_ns;
         }
         // no interval -> one-shot
         uint16_t fl = EV_ADD | ((iv_s || iv_n) ? 0 : EV_ONESHOT);
@@ -543,10 +559,30 @@ static int svc_event(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint6
         break;
     }
     case 87: {
-        if (a1) memset((void *)a1, 0, 32);
+        // timerfd_gettime(fd, curr): report the remaining time to the next expiry (it_value) and the
+        // interval (it_interval), computed from the deadline timerfd_settime stashed. A disarmed timer
+        // (deadline 0) reports {0,0}; an expired periodic timer reports the time to its next tick.
+        if (a1) {
+            if (!host_range_mapped((uintptr_t)a1, 32)) { G_RET(c) = (uint64_t)(-EFAULT); break; }
+            memset((void *)a1, 0, 32);
+            int fd = (int)a0;
+            int64_t deadline = (fd >= 0 && fd < 1024) ? g_tfd_deadline[fd] : 0;
+            int64_t interval = (fd >= 0 && fd < 1024) ? g_tfd_interval[fd] : 0;
+            if (deadline > 0) {
+                struct timespec now;
+                clock_gettime(CLOCK_MONOTONIC, &now);
+                int64_t now_ns = (int64_t)now.tv_sec * 1000000000LL + now.tv_nsec;
+                int64_t rem = deadline - now_ns;
+                if (rem < 0 && interval > 0) rem += ((-rem) / interval + 1) * interval; // next periodic tick
+                if (rem < 0) rem = 0;
+                *(int64_t *)(a1 + 0) = interval / 1000000000LL;  // it_interval.tv_sec
+                *(int64_t *)(a1 + 8) = interval % 1000000000LL;  // it_interval.tv_nsec
+                *(int64_t *)(a1 + 16) = rem / 1000000000LL;      // it_value.tv_sec
+                *(int64_t *)(a1 + 24) = rem % 1000000000LL;      // it_value.tv_nsec
+            }
+        }
         G_RET(c) = 0;
         break;
-        // timerfd_gettime -> best-effort 0
     }
     default:
         return 0;

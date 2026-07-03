@@ -95,6 +95,12 @@ has "linux-tty-isatty" "$(d run --rm -t alpine sh -c '[ -t 0 ] && [ -t 1 ] && ec
 has "linux-tty-name"   "$(d run --rm -t alpine sh -c 'tty' | tr -d '\r')" "/dev/pts/0"
 has "macos-tty-isatty" "$(d run --rm -t macos bash -lc '[ -t 0 ] && [ -t 1 ] && echo TTY-ALL')" "TTY-ALL"
 has "macos-tty-name"   "$(d run --rm -t macos bash -lc 'tty' | tr -d '\r')" "/dev/tty"
+# $TERM propagation (docker parity): a `-t` container gets TERM=xterm on BOTH platforms so readline/ncurses
+# use a real (non-dumb) frontend; a non-tty container gets NO TERM. Regression guard for the TERM=dumb bug
+# that broke node/python REPL backspace + debconf. (The darwin container inherits it via the same daemon env.)
+has "linux-tty-term"    "$(d run --rm -t alpine sh -c 'echo T=[$TERM]' | tr -d '\r')" "T=[xterm]"
+has "linux-notty-term"  "$(d run --rm alpine sh -c 'echo T=[$TERM]' | tr -d '\r')" "T=[]"
+has "macos-tty-term"    "$(d run --rm -t macos bash -lc 'echo T=[$TERM]' | tr -d '\r')" "T=[xterm]"
 
 # ---- darwinjail path confinement: `cd` / `cd ..` + bind-mount parents (#347, #233, #234) ----------
 # #233 flagged that darwinjail had NO cd test at all, which let #347 regress. These lock the behaviour.

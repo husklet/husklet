@@ -153,9 +153,25 @@ static void exec_close_cloexec(void) {
 // unity TU -- so the fs.c create paths and these set*id handlers share one view. See there for the
 // apt `_apt` / gosu postgres drop rationale.
 
+// prctl per-process flags the kernel tracks and reports back on the matching GET (lsys-prctl-*):
+// no-new-privs is sticky (once set it can never clear), dumpable defaults to 1, pdeathsig defaults to 0.
+static int g_nnp;               // PR_SET/GET_NO_NEW_PRIVS
+static int g_dumpable = 1;      // PR_SET/GET_DUMPABLE
+static int g_pdeathsig;         // PR_SET/GET_PDEATHSIG
+// personality(2) persona (lsys-personality): query with 0xffffffff, set returns the previous value.
+static unsigned g_persona;
+
 static int svc_proc(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3,
                     uint64_t a4, uint64_t a5) {
     switch (nr) {
+    // personality(persona): 0xffffffff queries (returns the current persona); any other value sets it and
+    // returns the PREVIOUS persona. We track the persona word (incl. ADDR_NO_RANDOMIZE) so it round-trips.
+    case 92: {
+        unsigned prev = g_persona;
+        if ((unsigned)a0 != 0xffffffffu) g_persona = (unsigned)a0;
+        G_RET(c) = (uint64_t)prev;
+        break;
+    }
     // ===================== Process & scheduling — clone/exec/wait/ids/prctl/futex/caps/sched =====================
     // capget(hdrp, datap): the container runs as root, so report every capability present -- but ALSO
     // honour the kernel's ABI-version negotiation, which libcap-ng/libcap (and thus setpriv, #257) probe
@@ -589,18 +605,43 @@ static int svc_proc(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64
             G_RET(c) = (uint64_t)g_keepcaps;
             break;
         }
+        // PR_SET_PDEATHSIG(1)/PR_GET_PDEATHSIG(2): the parent-death signal round-trips (no real delivery
+        // under the JIT, but the value the guest set is reported back).
+        if ((int)a0 == 1) { g_pdeathsig = (int)a1; G_RET(c) = 0; break; }
+        if ((int)a0 == 2) {
+            if (!host_range_mapped((uintptr_t)a1, sizeof(int))) { G_RET(c) = (uint64_t)(-EFAULT); break; }
+            *(int *)a1 = g_pdeathsig;
+            G_RET(c) = 0;
+            break;
+        }
+        // PR_GET_DUMPABLE(3)/PR_SET_DUMPABLE(4): the dumpable flag round-trips (kernel accepts 0,1,2).
+        if ((int)a0 == 3) { G_RET(c) = (uint64_t)(unsigned)g_dumpable; break; }
+        if ((int)a0 == 4) {
+            if (a1 > 2) { G_RET(c) = (uint64_t)(-EINVAL); break; }
+            g_dumpable = (int)a1;
+            G_RET(c) = 0;
+            break;
+        }
+        // PR_SET_NO_NEW_PRIVS(38)/PR_GET_NO_NEW_PRIVS(39): sticky once set; SET requires arg2==1.
+        if ((int)a0 == 38) {
+            if (a1 != 1 || a2 || a3 || a4) { G_RET(c) = (uint64_t)(-EINVAL); break; }
+            g_nnp = 1;
+            G_RET(c) = 0;
+            break;
+        }
+        if ((int)a0 == 39) {
+            if (a1 || a2 || a3 || a4) { G_RET(c) = (uint64_t)(-EINVAL); break; }
+            G_RET(c) = (uint64_t)(unsigned)g_nnp;
+            break;
+        }
         // 0 for known no-ops; EINVAL for unknown (kernel does)
         switch ((int)a0) {
-        case 1:
-        case 3:
-        case 4:
         case 15:
         case 35:
         case 36:
-        case 38:
         case 53:
         case 55:
-        // PDEATHSIG/DUMPABLE/NAME/SECCOMP/TIMERSLACK/THP/SPECCTRL...
+        // NAME/SECCOMP/TIMERSLACK/THP/SPECCTRL...
         case 59: G_RET(c) = 0; break;
         // EINVAL -- so feature probes (e.g. magic "AUXV") fail as on Linux
         default: G_RET(c) = (uint64_t)(-22); break;

@@ -610,7 +610,10 @@ static void load_elf(const char *path, struct loaded *out) {
 // Build the Linux process stack: [argc][argv..][NULL][envp..][NULL][auxv..][AT_NULL].
 extern char **environ;
 static char *g_guest_env[] = {
-    "PATH=/usr/bin:/bin", "HOME=/root", "TERM=dumb", "LANG=C", "GLIBC_TUNABLES=glibc.cpu.aarch64_gcs=0", NULL,
+    // No TERM default: docker leaves TERM unset for a non-tty container and injects TERM=xterm (via the
+    // daemon's DD_GUEST_ENV) for a `-t` one. A hardcoded TERM=dumb here shadowed both -> node/debconf/ncurses
+    // degraded. Keep PATH/HOME/LANG as harmless fallbacks the image usually overrides.
+    "PATH=/usr/bin:/bin", "HOME=/root", "LANG=C", "GLIBC_TUNABLES=glibc.cpu.aarch64_gcs=0", NULL,
 };
 static uint64_t build_stack(int argc, char **argv, struct loaded *lm, uint64_t at_base) {
     size_t SZ = 8u << 20;

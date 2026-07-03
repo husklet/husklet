@@ -346,6 +346,21 @@ static uint8_t g_inotify[1024];
 // watched dir's path + a snapshot of its names and diff on read() to synthesize IN_CREATE/IN_DELETE+name.
 static char g_inotify_wpath[1024][512];
 static char *g_inotify_snap[1024]; // newline-joined entry names of the last snapshot (malloc'd)
+// inotify: which inotify-instance fd owns each watch fd (wd) -> read(instance) drains that wd's move queue.
+static int g_inotify_owner[1024];
+// timerfd remaining-time tracking (lsys-timerfd-gettime): absolute CLOCK_MONOTONIC deadline (ns) of the
+// next expiry + the interval (ns). timerfd_settime records them so timerfd_gettime reports it_value/interval.
+static int64_t g_tfd_deadline[1024];
+static int64_t g_tfd_interval[1024];
+// memfd sealing (lsys-memfd-seal): g_memfd_is[fd]=1 marks an anonymous memfd; g_memfd_seal[fd] carries the
+// F_SEAL_* bitmask (F_SEAL_SEAL=1,SHRINK=2,GROW=4,WRITE=8,FUTURE_WRITE=16). A non-ALLOW_SEALING memfd starts
+// already F_SEAL_SEAL'd, so further F_ADD_SEALS fail EPERM exactly as on Linux.
+static uint8_t g_memfd_is[1024];
+static int g_memfd_seal[1024];
+// pipe read-pushback (tee(2)): tee() consumes bytes from the source pipe to copy them, then re-queues them
+// here so the next read()/readv() on that fd re-serves them -> tee leaves the source pipe intact.
+static uint8_t *g_fd_pushback[1024];
+static size_t g_fd_pb_len[1024];
 // pinned O_DIRECTORY fd to the rootfs (set at startup)
 static int g_root_fd = -1;
 // Engine-private host fds (the rootfs dir-fd + each bind-mount volume dir-fd) share the guest's descriptor
@@ -839,7 +854,7 @@ static int proc_environ_text(char *b, size_t n) {
             s = *e ? e + 1 : e;
         }
     } else {
-        static const char *const def[] = {"PATH=/usr/bin:/bin", "HOME=/root", "TERM=dumb", "LANG=C", NULL};
+        static const char *const def[] = {"PATH=/usr/bin:/bin", "HOME=/root", "LANG=C", NULL}; // no TERM (docker parity: unset unless -t)
         for (int i = 0; def[i]; i++) {
             int L = (int)strlen(def[i]);
             if (o + L + 1 > (int)n) break;

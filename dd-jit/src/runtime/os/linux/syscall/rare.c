@@ -13,6 +13,12 @@ static int svc_rare(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64
     // the feature -- replicate the blocked-syscall result so guests that probe for it agree with Linux.
     case 280: // bpf(2)            -- needs CAP_BPF/CAP_SYS_ADMIN
     case 282: // userfaultfd(2)    -- blocked by default profile
+    // fanotify_init(262)/fanotify_mark(263): the whole API needs CAP_SYS_ADMIN, which the container lacks.
+    // Real Linux returns EPERM (the feature is PRESENT but unprivileged) -- NOT ENOSYS -- so a probe agrees
+    // with the kernel. (The qemu-x86_64 oracle lacks the syscall and reports ENOSYS, so the x86 differential
+    // treats this as an oracle artifact; the aarch64 native oracle gives EPERM and matches.)
+    case 262: // fanotify_init(flags, event_f_flags)
+    case 263: // fanotify_mark(fd, flags, mask, dirfd, path)
         G_RET(c) = (uint64_t)(-EPERM);
         break;
     // io_uring: we don't implement it. Return ENOSYS ("absent") not EPERM ("present but blocked"),
@@ -43,6 +49,13 @@ static int svc_rare(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64
         if (fd >= 0) {
             unlink(tn);
             if (a1 & 1) fcntl(fd, F_SETFD, FD_CLOEXEC); // MFD_CLOEXEC
+            // Track it as a memfd so F_ADD_SEALS/F_GET_SEALS (io.c fcntl) and the F_SEAL_WRITE write-guard
+            // apply. Without MFD_ALLOW_SEALING (2) the file is born F_SEAL_SEAL'd -> later F_ADD_SEALS EPERMs,
+            // exactly as on Linux.
+            if (fd < 1024) {
+                g_memfd_is[fd] = 1;
+                g_memfd_seal[fd] = (a1 & 2) ? 0 : 0x1 /*F_SEAL_SEAL*/;
+            }
         }
         G_RET(c) = fd < 0 ? (uint64_t)(-errno) : (uint64_t)fd;
         break;

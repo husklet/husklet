@@ -86,6 +86,12 @@ static void fd_reset_emul(int fd) {
             g_eventfd_peer[fd] = 0;
         }
         g_timerfd[fd] = 0;
+        g_tfd_deadline[fd] = 0;
+        g_tfd_interval[fd] = 0;
+        g_memfd_is[fd] = 0;
+        g_memfd_seal[fd] = 0;
+        g_inotify_owner[fd] = 0;
+        if (g_fd_pushback[fd]) { free(g_fd_pushback[fd]); g_fd_pushback[fd] = NULL; g_fd_pb_len[fd] = 0; }
         g_ovldir[fd][0] = 0;
         g_lo_port[fd] = 0;
         g_sock_stream[fd] = 0;
@@ -266,10 +272,28 @@ static int svc_fs(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t
         // it worked there). This makes both forms match, fixing musl tmux/script/openpty and any high-bit ioctl. (#219)
         unsigned long rq = (uint32_t)a1;
         void *arg = (void *)a2;
+        // macOS pty MASTERS reject every termios/winsize ioctl with ENOTTY -- unlike Linux, where the master
+        // accepts them and they act on the shared line discipline (dpkg's openpty master does TIOCSWINSZ +
+        // tcsetattr(TCSANOW) on it; that ENOTTY is apt's "Setting TIOCSWINSZ for master fd N failed" and the
+        // debconf frontend-fallback that follows). termios + winsize are properties of the pty PAIR, so when
+        // the request targets a master (not itself a tty, but ptsname() resolves its slave) we retarget the
+        // op to a transient slave fd -- giving the guest exact Linux master semantics on x86 and arm alike.
+        int tfd = fd, pts_slave = -1;
+        switch (rq) {
+        case 0x5401: case 0x5402: case 0x5403: case 0x5404:               // TCGETS / TCSETS{,W,F}
+        case 0x5413: case 0x5414:                                         // TIOCGWINSZ / TIOCSWINSZ
+        case 0x802c542a: case 0x402c542b: case 0x402c542c: case 0x402c542d: // TCGETS2 / TCSETS2{,W,F}
+            if (!isatty(fd)) {
+                char *sn = ptsname(fd);
+                if (sn) { pts_slave = open(sn, O_RDWR | O_NOCTTY); if (pts_slave >= 0) tfd = pts_slave; }
+            }
+            break;
+        default: break;
+        }
         switch (rq) {
         case 0x5401: {
             struct termios t;
-            if (tcgetattr(fd, &t) < 0) {
+            if (tcgetattr(tfd, &t) < 0) {
                 G_RET(c) = (uint64_t)(-errno);
                 break;
                 // TCGETS
@@ -287,13 +311,13 @@ static int svc_fs(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t
             int act = rq == 0x5402 ? TCSANOW : rq == 0x5403 ? TCSADRAIN : TCSAFLUSH;
             sigset_t sv;
             tty_ctl_block(&sv); // a bg-group tcsetattr would otherwise SIGTTOU-stop the caller
-            G_RET(c) = tcsetattr(fd, act, &t) < 0 ? (uint64_t)(-errno) : 0;
+            G_RET(c) = tcsetattr(tfd, act, &t) < 0 ? (uint64_t)(-errno) : 0;
             tty_ctl_restore(&sv);
             break;
         }
         case 0x802c542a: {
             struct termios t;
-            if (tcgetattr(fd, &t) < 0) {
+            if (tcgetattr(tfd, &t) < 0) {
                 G_RET(c) = (uint64_t)(-errno);
                 break;
                 // TCGETS2 (glibc aarch64 uses this)
@@ -315,16 +339,16 @@ static int svc_fs(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t
             int act = rq == 0x402c542b ? TCSANOW : rq == 0x402c542c ? TCSADRAIN : TCSAFLUSH;
             sigset_t sv;
             tty_ctl_block(&sv); // a bg-group tcsetattr would otherwise SIGTTOU-stop the caller
-            G_RET(c) = tcsetattr(fd, act, &t) < 0 ? (uint64_t)(-errno) : 0;
+            G_RET(c) = tcsetattr(tfd, act, &t) < 0 ? (uint64_t)(-errno) : 0;
             tty_ctl_restore(&sv);
             break;
         }
         case 0x5413:
-            G_RET(c) = ioctl(fd, TIOCGWINSZ, arg) < 0 ? (uint64_t)(-errno) : 0;
+            G_RET(c) = ioctl(tfd, TIOCGWINSZ, arg) < 0 ? (uint64_t)(-errno) : 0;
             // TIOCGWINSZ (struct same)
             break;
         // TIOCSWINSZ
-        case 0x5414: G_RET(c) = ioctl(fd, TIOCSWINSZ, arg) < 0 ? (uint64_t)(-errno) : 0; break;
+        case 0x5414: G_RET(c) = ioctl(tfd, TIOCSWINSZ, arg) < 0 ? (uint64_t)(-errno) : 0; break;
         case 0x80045430:
             if (arg && fd >= 0 && fd < 1024) *(uint32_t *)arg = (uint32_t)fd;
             G_RET(c) = 0;
@@ -412,6 +436,7 @@ static int svc_fs(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t
             break;
         }
         }
+        if (pts_slave >= 0) close(pts_slave); // transient slave used to service a master's termios/winsize op
         break;
     }
     // mknodat(dirfd, path, mode, dev)
@@ -716,6 +741,10 @@ static int svc_fs(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t
             G_RET(c) = (uint64_t)(int64_t)(-EROFS);
             break;
         }
+        // inotify: a rename generates IN_MOVED_FROM(src)/IN_MOVED_TO(dst) with a shared cookie on any watch
+        // covering the source / destination directory. Queue them now (before the move) so a watch's read()
+        // can pair them -- the snapshot diff cannot. No-op when nothing watches either directory.
+        inotify_notify_move((int)a0, (const char *)a1, (int)a2, (const char *)a3);
         unsigned int rxflags = 0;
         if (nr == 276) {
             int lf = (int)a4;

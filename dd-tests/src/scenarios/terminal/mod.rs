@@ -43,6 +43,19 @@ pub fn group() -> ScenGroup {
         scen("terminal/bash52-isatty", "bash:5.2").tty()
             .run(&["bash", "-c", "[ -t 1 ] && echo TTY-OK"]).has("TTY-OK").timeout(60),
 
+        // ---- $TERM propagation (docker parity) ----------------------------------------------------
+        // A `docker run -t` container gets TERM=xterm (the docker daemon's default); a non-tty container
+        // gets NO TERM. dd used to hardcode the engine's TERM=dumb fallback for BOTH, which pushed
+        // node/python readline into a no-cursor "dumb" line editor (backspace didn't erase) and made
+        // debconf's Dialog frontend fail ("unable to initialize frontend: Dialog" -> Term::ReadLine ->
+        // Teletype). These lock the docker-exact behaviour so it can't regress.
+        scen("terminal/tty-term-xterm", "alpine").tty()
+            .exec("echo TERM=[$TERM]").has("TERM=[xterm]").timeout(60),
+        scen("terminal/notty-term-unset", "alpine")
+            .exec("echo TERM=[$TERM]").has("TERM=[]").timeout(60),
+        scen("terminal/tty-term-override", "alpine")
+            .host("docker run --rm -t -e TERM=screen $PLAT $IMG sh -c 'echo TERM=[$TERM]'").has("TERM=[screen]").timeout(60),
+
         // ---- window size: ioctl TIOCGWINSZ (read) / TIOCSWINSZ (set) ------------------------------
         scen("terminal/ubuntu-tput-cols", "ubuntu:latest").tty()
             .exec("tput cols").has("80").timeout(60),

@@ -54,7 +54,7 @@ fn portable() -> Group {
         // pty (#306/#308): termios + winsize on the MASTER (apt/dpkg) and raw-mode round-trip on the
         // SLAVE (htop winsize / node readline). All must succeed on the pty master, not ENOTTY.
         port("pty", "ext_posix/pty.c")
-            .out("pty mget=1 mset=1 mswin=1 mgwin=1 sgwin=1 sraw=1 rawrt=1\n"),
+            .out("pty mget=1 mset=1 mdrain=1 mflush=1 mswin=1 mgwin=1 sgwin=1 sraw=1 rawrt=1\n"),
         // --- readiness ---
         port("pollpipe", "ext_posix/pollpipe.c").out("pollpipe timeout=1 writable=1 readable=1\n"),
         port("selectpipe", "ext_posix/selectpipe.c").out("selectpipe timeout=1 ready=1 pselect=1\n"),

@@ -119,7 +119,13 @@ const DEFAULT_GUEST_PATH: &str = "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:
 /// followed by `docker run -e` overrides). Duplicate keys collapse to their LAST value (so an explicit
 /// `-e KEY=` overrides the image's), forward order is preserved, and a default PATH is injected when the
 /// image set none -- mirroring docker's env semantics. Returns the lines ready to join into DD_GUEST_ENV.
-fn guest_env(env: &[String]) -> Vec<String> {
+///
+/// `tty`: when a pseudo-terminal is allocated (`docker run -t`) and the container hasn't set TERM itself,
+/// inject `TERM=xterm` -- EXACTLY what the docker daemon does. Without it the guest saw the engine's
+/// `TERM=dumb` fallback, which made node/python readline drop to a no-cursor "dumb" line editor (backspace
+/// didn't erase), debconf's Dialog frontend fail ("unable to initialize frontend: Dialog" -> Term::ReadLine
+/// -> Teletype fallback), and every ncurses TUI degrade. A non-tty container gets NO TERM (docker parity).
+fn guest_env(env: &[String], tty: bool) -> Vec<String> {
     let key = |kv: &str| kv.split('=').next().unwrap_or(kv).to_string();
     let mut seen = std::collections::HashSet::new();
     let mut out: Vec<String> = Vec::with_capacity(env.len());
@@ -129,6 +135,7 @@ fn guest_env(env: &[String]) -> Vec<String> {
     }
     out.reverse();
     if !seen.contains("PATH") { out.push(DEFAULT_GUEST_PATH.to_string()); }
+    if tty && !seen.contains("TERM") { out.push("TERM=xterm".to_string()); }
     out
 }
 
@@ -151,7 +158,7 @@ pub(crate) fn spawn_cfg(c: &Container, volumes_dir: &str, vols: &[Vol], bridge: 
     // container env (image ENV + `docker run -e`) -> one DD_GUEST_ENV var so the JIT forwards EXACTLY
     // these to the guest, never the daemon/host environment. Deduped (last assignment of a key wins, so
     // an explicit `-e KEY=` overrides the image) with a docker-default PATH when the image set none.
-    let genv = guest_env(&c.env);
+    let genv = guest_env(&c.env, c.tty);
     if !genv.is_empty() { cfg.env.push(("DD_GUEST_ENV".into(), genv.join("\n"))); }
     cfg.hostname = (!c.hostname.is_empty()).then(|| c.hostname.clone());
     cfg.mem_max = c.memory.max(0) as u64;

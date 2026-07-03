@@ -66,6 +66,11 @@ static int svc_io(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t
     }
     case 63: {
         int rfd = (int)a0;
+        // tee(2) pushback: bytes a prior tee() peeked out of this pipe are re-served here first, in order.
+        if (rfd >= 0 && rfd < 1024 && g_fd_pb_len[rfd]) {
+            G_RET(c) = (uint64_t)pipe_pushback_take(rfd, (void *)a1, (size_t)a2);
+            break;
+        }
         // AF_NETLINK socket read (#293): busybox `ip` receives its RTNETLINK dump with read(2)/recvmsg;
         // drain our queued reply with the Linux MSG_PEEK/MSG_TRUNC semantics (see netns.c nl_recv).
         if (nl_is(rfd)) {
@@ -88,14 +93,11 @@ static int svc_io(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t
                 G_RET(c) = (uint64_t)(int64_t)(pr < 0 ? -errno : -EAGAIN);
                 break;
             }
-            int sig = 0;
-            uint64_t p = __atomic_load_n(&g_pending, __ATOMIC_SEQ_CST);
-            for (int s = 1; s < 64; s++)
-                if ((p & (1ull << s)) && (g_sigfd_mask & (1ull << s))) {
-                    sig = s;
-                    break;
-                }
-            if (sig) __atomic_and_fetch(&g_pending, ~(1ull << (unsigned)sig), __ATOMIC_SEQ_CST);
+            // Each wake byte IS the queued signal number (host_sigh / raise_guest_signal write (char)signo),
+            // so realtime signals delivered N times read back as N siginfo records each carrying the right
+            // ssi_signo -- unlike the single-bit g_pending, which cannot represent a queue of the same signo.
+            int sig = (unsigned char)b;
+            if (sig > 0 && sig < 64) __atomic_and_fetch(&g_pending, ~(1ull << (unsigned)sig), __ATOMIC_SEQ_CST);
             if (a1 && a2 >= 128) {
                 // a1 is a raw guest buffer we write directly -> EFAULT a bad pointer instead of faulting the engine
                 if (!host_range_mapped((uintptr_t)a1, 128)) { G_RET(c) = (uint64_t)(-EFAULT); break; }
@@ -111,16 +113,21 @@ static int svc_io(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t
             // The whole [a1, a1+a2) buffer is written directly by the engine below; validate it up front so a
             // bad/unmapped pointer returns -EFAULT (without consuming events) instead of faulting the engine.
             if (!host_range_mapped((uintptr_t)a1, (size_t)a2)) { G_RET(c) = (uint64_t)(-EFAULT); break; }
+            uint8_t *out = (uint8_t *)a1;
+            size_t off = 0;
+            // First drain any queued rename events (IN_MOVED_FROM/IN_MOVED_TO) for this instance; the
+            // snapshot diff below can only synthesize IN_CREATE/IN_DELETE, not paired moves.
+            off += inomv_drain(rfd, out, (size_t)a2);
             struct kevent kv[32];
             struct timespec zero = {0, 0};
             int nb = fcntl(rfd, F_GETFL) & O_NONBLOCK;
-            int n = kevent(rfd, NULL, 0, kv, 32, nb ? &zero : NULL);
+            // If we already produced move events, poll the kqueue non-blocking so we never wait behind them.
+            int n = kevent(rfd, NULL, 0, kv, 32, (nb || off > 0) ? &zero : NULL);
             if (n <= 0) {
+                if (off > 0) { G_RET(c) = (uint64_t)off; break; } // return the moves we already have
                 G_RET(c) = (uint64_t)(int64_t)(n < 0 ? -errno : -EAGAIN);
                 break;
             }
-            uint8_t *out = (uint8_t *)a1;
-            size_t off = 0;
             for (int i = 0; i < n; i++) {
                 int wd = (int)kv[i].ident;
                 if (wd >= 0 && wd < 1024 && g_inotify_wpath[wd][0]) {
@@ -216,6 +223,8 @@ static int svc_io(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t
     }
     case 64: {
         int wfd = (int)a0;
+        // memfd F_SEAL_WRITE: a write to a write-sealed memfd fails EPERM (emulated seal state).
+        if (wfd >= 0 && wfd < 1024 && (g_memfd_seal[wfd] & 0x8)) { G_RET(c) = (uint64_t)(-EPERM); break; }
         // AF_NETLINK socket write (#293): busybox `ip` (libbb) sends its RTM_GET* dump request via
         // write(2), NOT sendto/sendmsg -- so the netlink responder (which only hooked send*) never saw
         // it, no dump was queued, and the follow-up recvmsg blocked forever ("container stuck Up").
@@ -267,6 +276,17 @@ static int svc_io(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t
         break;
     }
     case 65: {
+        if ((int)a0 >= 0 && (int)a0 < 1024 && g_fd_pb_len[(int)a0]) { // tee(2) pushback served first
+            const struct iovec *iv = (const struct iovec *)a1;
+            size_t tot = 0;
+            for (int i = 0; i < (int)a2 && (int)a0 < 1024 && g_fd_pb_len[(int)a0]; i++) {
+                size_t k = pipe_pushback_take((int)a0, iv[i].iov_base, iv[i].iov_len);
+                tot += k;
+                if (k < iv[i].iov_len) break;
+            }
+            G_RET(c) = (uint64_t)tot;
+            break;
+        }
         if (nl_is((int)a0)) { // netlink readv (#293): drain the queued dump into the guest iov
             G_RET(c) = (uint64_t)nl_recv((int)a0, (struct iovec *)a1, (int)a2, 0, NULL);
             break;
@@ -282,6 +302,7 @@ static int svc_io(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t
     // readv
     }
     case 66: {
+        if ((int)a0 >= 0 && (int)a0 < 1024 && (g_memfd_seal[(int)a0] & 0x8)) { G_RET(c) = (uint64_t)(-EPERM); break; } // F_SEAL_WRITE
         if (nl_is((int)a0)) { // netlink writev (#293): gather the request iov + queue the dump
             const struct iovec *iv = (const struct iovec *)a1;
             uint8_t tmp[4096];
@@ -339,6 +360,7 @@ static int svc_io(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t
     }
     case 68: {
         // pwrite64
+        if ((int)a0 >= 0 && (int)a0 < 1024 && (g_memfd_seal[(int)a0] & 0x8)) { G_RET(c) = (uint64_t)(-EPERM); break; } // F_SEAL_WRITE
         if (memf_get((int)a0) && memf_room_or_spill((int)a0, (off_t)a3 + (off_t)a2)) {
             ssize_t r = memf_pwrite(g_memf[(int)a0], (void *)a1, (size_t)a2, (off_t)a3);
             G_RET(c) = r < 0 ? (uint64_t)(int64_t)r : (uint64_t)r;
@@ -375,40 +397,84 @@ static int svc_io(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t
         G_RET(c) = tot;
         break;
     }
-    case 76:
-    // splice(fd_in,off_in,fd_out,off_out,len,fl) / tee -> emulate
-    case 77: {
-        int fin = (int)a0, fout = (int)a2;
-        // splice (nr==76) reads/writes the optional off_in (a1) / off_out (a3) pointers directly; validate
-        // them before moving any bytes so a bad pointer returns -EFAULT instead of faulting the engine.
-        if (nr == 76) {
-            if (a1 && !host_range_mapped((uintptr_t)a1, sizeof(off_t))) { G_RET(c) = (uint64_t)(-EFAULT); break; }
-            if (a3 && !host_range_mapped((uintptr_t)a3, sizeof(off_t))) { G_RET(c) = (uint64_t)(-EFAULT); break; }
+    // vmsplice(fd, iov, nr_segs, flags): gather user memory INTO a pipe (write end) or scatter a pipe's
+    // bytes back into user memory (read end). Direction follows the pipe fd's access mode, matching Linux.
+    case 75: {
+        int vfd = (int)a0;
+        const struct iovec *iv = (const struct iovec *)a1;
+        int niov = (int)a2;
+        if (niov > 0 && !host_range_mapped((uintptr_t)a1, (size_t)niov * sizeof(struct iovec))) {
+            G_RET(c) = (uint64_t)(-EFAULT);
+            break;
         }
-        memf_materialize(fin); // splice/tee move bytes via the real fds -> flush RAM cache first
+        memf_materialize(vfd);
+        int fl = fcntl(vfd, F_GETFL);
+        int to_pipe = (fl < 0) || ((fl & O_ACCMODE) != O_RDONLY); // write end -> user pages into the pipe
+        fd_evict(vfd);
+        ssize_t r = to_pipe ? writev(vfd, iv, niov) : readv(vfd, iv, niov);
+        G_RET(c) = r < 0 ? (uint64_t)(-errno) : (uint64_t)r;
+        break;
+    }
+    // splice(fd_in,off_in,fd_out,off_out,len,fl): move bytes between two fds (consumes the source).
+    case 76: {
+        int fin = (int)a0, fout = (int)a2;
+        // splice reads/writes the optional off_in (a1) / off_out (a3) pointers directly; validate them
+        // before moving any bytes so a bad pointer returns -EFAULT instead of faulting the engine.
+        if (a1 && !host_range_mapped((uintptr_t)a1, sizeof(off_t))) { G_RET(c) = (uint64_t)(-EFAULT); break; }
+        if (a3 && !host_range_mapped((uintptr_t)a3, sizeof(off_t))) { G_RET(c) = (uint64_t)(-EFAULT); break; }
+        memf_materialize(fin); // splice moves bytes via the real fds -> flush RAM cache first
         memf_materialize(fout);
         size_t len = (size_t)a4;
         if (len > 65536) len = 65536;
         static __thread char sb[65536];
         ssize_t n;
         fd_evict(fout);
-        if (nr == 76 && a1)
+        if (a1) {
             n = pread(fin, sb, len, *(off_t *)a1);
-        else
-            // splice off_in
-            n = read(fin, sb, len);
+        } else {
+            // a pipe source may carry tee()'d pushback -> serve that first (splice consumes it).
+            size_t pb = pipe_pushback_take(fin, sb, len);
+            n = pb > 0 ? (ssize_t)pb : read(fin, sb, len);
+        }
         if (n <= 0) {
             G_RET(c) = n < 0 ? (uint64_t)(-errno) : 0;
             break;
         }
-        ssize_t w = (nr == 76 && a3) ? pwrite(fout, sb, n, *(off_t *)a3) : write(fout, sb, n);
+        ssize_t w = a3 ? pwrite(fout, sb, n, *(off_t *)a3) : write(fout, sb, n);
         if (w < 0) {
             G_RET(c) = (uint64_t)(-errno);
             break;
         }
-        if (nr == 76 && a1) *(off_t *)a1 += w;
-        if (nr == 76 && a3) *(off_t *)a3 += w;
+        if (a1) *(off_t *)a1 += w;
+        if (a3) *(off_t *)a3 += w;
         G_RET(c) = (uint64_t)w;
+        break;
+    }
+    // tee(fd_in, fd_out, len, flags): duplicate up to `len` bytes between two pipes WITHOUT consuming the
+    // source. macOS has no tee, so peek fd_in (drain then re-queue as read-pushback) and copy to fd_out.
+    case 77: {
+        int fin = (int)a0, fout = (int)a1; // tee(fd_in, fd_out, len, flags) -- NOT the splice arg layout
+        memf_materialize(fin);
+        memf_materialize(fout);
+        size_t len = (size_t)a2;
+        if (len > 65536) len = 65536;
+        static __thread char sb[65536];
+        fd_evict(fout);
+        // front of the source stream = existing pushback ++ kernel-buffered bytes
+        size_t oldlen = (fin >= 0 && fin < 1024) ? g_fd_pb_len[fin] : 0;
+        if (oldlen > sizeof sb) oldlen = sizeof sb;
+        if (oldlen) memcpy(sb, g_fd_pushback[fin], oldlen);
+        size_t pos = oldlen;
+        if (oldlen < len) {
+            ssize_t kn = read(fin, sb + oldlen, len - oldlen);
+            if (kn > 0) pos += (size_t)kn;
+        }
+        if (pos == 0) { G_RET(c) = (uint64_t)(int64_t)(-EAGAIN); break; } // nothing available (nonblocking)
+        size_t dup = pos < len ? pos : len;
+        ssize_t w = write(fout, sb, dup);
+        // tee never consumes the source: restore the whole peeked front as pushback.
+        pipe_pushback_set(fin, sb, pos);
+        G_RET(c) = w < 0 ? (uint64_t)(-errno) : (uint64_t)w;
         break;
     }
     case 23: {
@@ -553,10 +619,25 @@ static int svc_io(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t
             mcmd = F_GETOWN;
         else if (lcmd == 1030)
             mcmd = F_DUPFD_CLOEXEC;
-        else if (lcmd == 1024 || lcmd == 1025 || lcmd == 1026 || lcmd == 1033 || lcmd == 1034) {
+        // memfd sealing: F_ADD_SEALS(1033) / F_GET_SEALS(1034) are honoured on an anonymous memfd (macOS has
+        // no native seals, so the state + the F_SEAL_WRITE write-guard are emulated). On a non-memfd both
+        // return EINVAL, as on Linux.
+        else if (lcmd == 1033) { // F_ADD_SEALS(fd, seals)
+            int fd = (int)a0;
+            if (fd < 0 || fd >= 1024 || !g_memfd_is[fd]) { G_RET(c) = (uint64_t)(-EINVAL); break; }
+            if (g_memfd_seal[fd] & 0x1) { G_RET(c) = (uint64_t)(-EPERM); break; } // already F_SEAL_SEAL'd
+            g_memfd_seal[fd] |= (int)a2 & 0x1f; // SEAL|SHRINK|GROW|WRITE|FUTURE_WRITE
             G_RET(c) = 0;
             break;
-        // lease/notify/seals: no-op
+        } else if (lcmd == 1034) { // F_GET_SEALS(fd)
+            int fd = (int)a0;
+            if (fd < 0 || fd >= 1024 || !g_memfd_is[fd]) { G_RET(c) = (uint64_t)(-EINVAL); break; }
+            G_RET(c) = (uint64_t)(unsigned)g_memfd_seal[fd];
+            break;
+        } else if (lcmd == 1024 || lcmd == 1025 || lcmd == 1026) {
+            G_RET(c) = 0;
+            break;
+        // lease/notify: no-op
         }
         int r = fcntl((int)a0, mcmd, a2);
         if (r >= 0 && (lcmd == 0 || lcmd == 1030) && r < 1024 && (int)a0 >= 0 && (int)a0 < 1024) {
