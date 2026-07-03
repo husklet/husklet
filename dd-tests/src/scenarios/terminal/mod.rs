@@ -17,6 +17,25 @@ pub fn group() -> ScenGroup {
             .exec("tty").has("/dev/pts/").timeout(60),
         scen("terminal/ubuntu-notty-dev", "ubuntu:latest")
             .exec("tty || true").has("not a tty").timeout(60),
+        // The controlling terminal must be named /dev/pts/0 (as on Linux/devpts), NOT the leaked host pty
+        // device (dd's slave is a mac /dev/ttysNNN). Regression for `tty`/ttyname(3)/`ps` reporting "not a
+        // tty" on `docker run -t`: readlink(/proc/self/fd/0) and ttyname(0) must both resolve /dev/pts/0,
+        // /dev/pts/0 must stat as a character device, and reopening it (open(ttyname(0))) must reach the
+        // same terminal. Verified against the real-docker oracle (which always shows /dev/pts/0).
+        scen("terminal/ubuntu-tty-name", "ubuntu:latest").tty()
+            .exec("tty").has("/dev/pts/0").timeout(60),
+        scen("terminal/ubuntu-fd0-link", "ubuntu:latest").tty()
+            .exec("readlink /proc/self/fd/0").has("/dev/pts/0").timeout(60),
+        scen("terminal/ubuntu-pts-listing", "ubuntu:latest").tty()
+            .exec("ls /dev/pts").has("0").timeout(60),
+        scen("terminal/ubuntu-pts0-chardev", "ubuntu:latest").tty()
+            .exec("[ -c /dev/pts/0 ] && echo PTS0-CHARDEV").has("PTS0-CHARDEV").timeout(60),
+        scen("terminal/ubuntu-reopen-tty", "ubuntu:latest").tty()
+            .exec("echo REOPEN-OK > \"$(tty)\"").has("REOPEN-OK").timeout(60),
+        scen("terminal/alpine-tty-name", "alpine").tty()
+            .exec("tty").has("/dev/pts/0").timeout(60),
+        scen("terminal/py-ttyname", "python:alpine").tty()
+            .exec("python3 -c 'import os; print(\"TTYNAME\", os.ttyname(0))'").has("TTYNAME /dev/pts/0").timeout(60),
         scen("terminal/debian-isatty", "debian:bookworm").tty()
             .exec("[ -t 1 ] && echo TTY-OK").has("TTY-OK").timeout(60),
         scen("terminal/alpine-isatty", "alpine").tty()

@@ -8,6 +8,13 @@ static char g_hostname[65] = "";
 static uint64_t g_mem_max = 0;
 // cgroup pids.max (0 = unlimited); checked in clone
 static int g_pids_max = 0;
+// docker --cpus: online-cpu count the container advertises = ceil(NanoCpus/1e9). 0 = unlimited (all host cores).
+static int g_cpu_max = 0;
+// docker --read-only: writes to the rootfs/overlay-upper jail fail EROFS (/proc /dev /sys /tmp /run stay writable).
+static int g_rootfs_ro = 0;
+// docker --ulimit overrides, indexed by Linux RLIMIT_* resource number; .set gates the override.
+#define DD_RLIM_MAX 16
+static struct { int set; uint64_t cur, max; } g_ulimit[DD_RLIM_MAX];
 // current anon charge (bytes)
 static _Atomic uint64_t g_mem_charged = 0;
 // live task count (init = 1)
@@ -271,6 +278,97 @@ static uint64_t parse_size(const char *s) {
         fprintf(stderr, "dd: invalid size '%s': bad suffix\n", s);
         exit(2);
     }
+}
+
+// ---- resource fidelity: docker --cpus / --read-only / --ulimit (SentryConfig: ddockerd -> jit) ----
+// The online-CPU count the container advertises to the guest: the host's online cores, capped by the
+// container's --cpus allotment (ceil(NanoCpus/1e9)) and the 64-CPU mask ceiling. A guest's nproc / glibc
+// __get_nprocs / GOMAXPROCS / JVM availableProcessors all derive from this (via sched_getaffinity, the
+// cpu-topology sysfs, and /proc/{cpuinfo,stat}), so a --cpus-limited container self-sizes to its allotment
+// instead of spinning one worker per HOST core and over-subscribing the machine.
+static int container_online_cpus(void) {
+    long n = sysconf(_SC_NPROCESSORS_ONLN);
+    if (n < 1) n = 1;
+    if (g_cpu_max > 0 && (long)g_cpu_max < n) n = g_cpu_max;
+    if (n > 64) n = 64; // one CPU bit per byte fits the 8-byte affinity mask /proc/cpuinfo caps at
+    return (int)n;
+}
+// Map a docker --ulimit NAME to its Linux RLIMIT_* resource number (-1 = unknown). Names per setrlimit(2)
+// and docker's ulimit set (docker/opts/opts.go ParseUlimit).
+static int ulimit_resource(const char *name) {
+    static const struct { const char *n; int r; } t[] = {
+        {"cpu", 0},       {"fsize", 1},   {"data", 2},       {"stack", 3},   {"core", 4},
+        {"rss", 5},       {"nproc", 6},   {"nofile", 7},     {"memlock", 8}, {"as", 9},
+        {"locks", 10},    {"sigpending", 11}, {"msgqueue", 12}, {"nice", 13}, {"rtprio", 14},
+        {"rttime", 15},   {0, 0}};
+    for (int i = 0; t[i].n; i++)
+        if (!strcmp(name, t[i].n)) return t[i].r;
+    return -1;
+}
+// Parse one ulimit numeric value; "unlimited"/"-1" -> RLIM_INFINITY. Fails loud on garbage (trust boundary).
+static uint64_t ulimit_val(const char *s) {
+    if (!strcmp(s, "unlimited") || !strcmp(s, "-1")) return ~0ull;
+    errno = 0;
+    char *e = NULL;
+    unsigned long long v = strtoull(s, &e, 10);
+    if (errno != 0 || e == s || *e) {
+        fprintf(stderr, "dd: invalid DD_ULIMITS value '%s': not a number\n", s);
+        exit(2);
+    }
+    return (uint64_t)v;
+}
+// Parse DD_ULIMITS="name=soft:hard,name=soft:hard,name=both,..." into g_ulimit[] (docker --ulimit set).
+static void parse_ulimits(const char *spec) {
+    char tb[2048];
+    snprintf(tb, sizeof tb, "%s", spec);
+    char *sv = NULL;
+    for (char *t = strtok_r(tb, ",", &sv); t; t = strtok_r(NULL, ",", &sv)) {
+        char *eq = strchr(t, '=');
+        if (!eq) {
+            fprintf(stderr, "dd: invalid DD_ULIMITS entry '%s': expected NAME=SOFT[:HARD]\n", t);
+            exit(2);
+        }
+        *eq = 0;
+        int r = ulimit_resource(t);
+        if (r < 0 || r >= DD_RLIM_MAX) continue; // unknown resource -> ignore (forward-compat)
+        char *colon = strchr(eq + 1, ':');
+        uint64_t soft, hard;
+        if (colon) {
+            *colon = 0;
+            soft = ulimit_val(eq + 1);
+            hard = ulimit_val(colon + 1);
+        } else {
+            soft = hard = ulimit_val(eq + 1);
+        }
+        g_ulimit[r].set = 1;
+        g_ulimit[r].cur = soft;
+        g_ulimit[r].max = hard;
+    }
+}
+// Shared resource-config reader (docker --cpus/--read-only/--ulimit). BOTH the aarch64 and x86_64 frontends
+// call this from container init, so the contract is engine-identical. Env-only: DD_* survive the mac bridge
+// and the x86 fork-server (both inherit env), and the daemon serializes the HostConfig into these vars.
+static void container_read_resource_env(void) {
+    const char *c = getenv("DD_CPUS");
+    if (c && c[0] && !g_cpu_max) {
+        int v = dd_parse_id("DD_CPUS", c);
+        if (v > 0) g_cpu_max = v;
+    }
+    if (!g_rootfs_ro && getenv("DD_ROOTFS_RO")) g_rootfs_ro = 1;
+    const char *u = getenv("DD_ULIMITS");
+    if (u && u[0]) parse_ulimits(u);
+}
+// 1 if the rootfs is read-only AND `abs` is not under a still-writable pseudo-mount. /proc /dev /sys are
+// synthetic (their writes never touch the rootfs); /tmp /run are the container's scratch, kept writable to
+// mirror docker's --read-only defaults (runc leaves /proc,/dev,/sys mounted rw + the tmpfses writable).
+static int rootfs_ro_denies(const char *abs) {
+    if (!g_rootfs_ro || !abs || abs[0] != '/') return 0;
+    static const char *const w[] = {"/proc", "/dev", "/sys", "/tmp", "/run", 0};
+    for (int i = 0; w[i]; i++) {
+        size_t L = strlen(w[i]);
+        if (!strncmp(abs, w[i], L) && (abs[L] == 0 || abs[L] == '/')) return 0;
+    }
+    return 1;
 }
 
 // guest PC -> (host = prologue entry for a fresh dispatcher entry,

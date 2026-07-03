@@ -133,6 +133,12 @@ pub struct SpawnConfig {
     pub mem_max: u64,
     /// cgroup `pids.max` (0 = unlimited).
     pub pids_max: u32,
+    /// docker `--cpus`: online-CPU count the container advertises = ceil(NanoCpus/1e9). 0 = unlimited.
+    pub cpus: u32,
+    /// docker `--read-only`: writes to the rootfs/overlay-upper fail EROFS (/proc /dev /sys /tmp /run stay rw).
+    pub read_only: bool,
+    /// docker `--ulimit`: (name, soft, hard) triples, e.g. ("nofile", 1024, 2048). Serialized to DD_ULIMITS.
+    pub ulimits: Vec<(String, u64, u64)>,
     /// USER-ns uid / gid (default: root = 0).
     pub uid: Option<u32>,
     pub gid: Option<u32>,
@@ -153,6 +159,24 @@ fn shq(s: &str) -> String {
 impl SpawnConfig {
     pub fn new(work_dir: impl Into<String>, rootfs: impl Into<String>) -> Self {
         SpawnConfig { work_dir: work_dir.into(), rootfs: rootfs.into(), ..Default::default() }
+    }
+
+    /// Serialize the docker resource knobs (`--cpus`/`--read-only`/`--ulimit`) into the engine's env
+    /// contract (DD_CPUS / DD_ROOTFS_RO / DD_ULIMITS), shared by the linux and darwin launch scripts. Env,
+    /// not flags, so it survives the mac bridge + the x86 fork-server and is read identically by all three
+    /// engines (linux frontends' container_read_resource_env(); the darwinjail init()). Empty when unset ->
+    /// byte-identical launch for containers that use none of these.
+    fn resource_env(&self) -> String {
+        let mut s = String::new();
+        if self.cpus > 0 { s += &format!("DD_CPUS={} ", self.cpus); }
+        if self.read_only { s += "DD_ROOTFS_RO=1 "; }
+        if !self.ulimits.is_empty() {
+            let u = self.ulimits.iter()
+                .map(|(n, soft, hard)| format!("{}={}:{}", n, soft, hard))
+                .collect::<Vec<_>>().join(",");
+            s += &format!("DD_ULIMITS={} ", shq(&u));
+        }
+        s
     }
 
     /// The `bash -lc` script that launches the container in the given guest's JIT. The flag/env contract
@@ -179,6 +203,7 @@ impl SpawnConfig {
             if let Some(h) = &self.hostname { if !h.is_empty() { env += &format!("DD_HOSTNAME={} ", shq(h)); } }
             if self.mem_max > 0 { env += &format!("DD_MEM_MAX={} ", self.mem_max); }
             if self.pids_max > 0 { env += &format!("DD_PIDS_MAX={} ", self.pids_max); }
+            env += &self.resource_env(); // DD_CPUS / DD_ROOTFS_RO / DD_ULIMITS (docker --cpus/--read-only/--ulimit)
             if !self.publish.is_empty() {
                 let p = self.publish.iter().map(|p| format!("{}:{}", p.host, p.container)).collect::<Vec<_>>().join(",");
                 env += &format!("DD_PUBLISH={} ", shq(&p));
@@ -205,6 +230,7 @@ impl SpawnConfig {
                 env += &format!("DDVOL={} ", shq(&v));
             }
             if let Some(ns) = &self.netns { env += &format!("DD_NETNS={} ", shq(ns)); }
+            env += &self.resource_env(); // DD_CPUS / DD_ROOTFS_RO / DD_ULIMITS (docker --cpus/--read-only/--ulimit)
             for (k, val) in &self.env { env += &format!("{}={} ", k, shq(val)); }
             let mut f = String::new();
             if let Some(h) = &self.hostname { if !h.is_empty() { f += &format!("--hostname {} ", shq(h)); } }
@@ -293,5 +319,27 @@ mod tests {
         if let Some(s) = c.script(Guest::LinuxAarch64) {
             assert!(s.contains("DDVOL='/rw:/h1,ro:/ro:/h2'"));
         }
+    }
+    #[test]
+    fn resource_env_serializes_cpus_readonly_ulimits() {
+        let mut c = SpawnConfig::new("/work", "img/upper");
+        c.argv = vec!["/bin/sh".into()];
+        c.cpus = 2;
+        c.read_only = true;
+        c.ulimits = vec![("nofile".into(), 1024, 2048), ("nproc".into(), 512, 1024)];
+        // env contract is engine-agnostic (linux flags path + darwin env path both emit it).
+        let re = c.resource_env();
+        assert!(re.contains("DD_CPUS=2"));
+        assert!(re.contains("DD_ROOTFS_RO=1"));
+        assert!(re.contains("DD_ULIMITS='nofile=1024:2048,nproc=512:1024'"));
+        for g in [Guest::LinuxAarch64, Guest::DarwinAarch64] {
+            if let Some(s) = c.script(g) {
+                assert!(s.contains("DD_CPUS=2") && s.contains("DD_ROOTFS_RO=1") && s.contains("DD_ULIMITS="));
+            }
+        }
+        // unset -> empty (byte-identical launch for containers that use none of these)
+        let mut d = SpawnConfig::new("/work", "img/upper");
+        d.argv = vec!["/bin/sh".into()];
+        assert_eq!(d.resource_env(), "");
     }
 }

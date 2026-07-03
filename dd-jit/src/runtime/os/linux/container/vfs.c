@@ -1583,11 +1583,95 @@ static int proc_limits_text(char *buf, size_t cap) {
         {"Max realtime timeout", "unlimited", "unlimited", "us"},
     };
     int n = snprintf(buf, cap, "%-25s %-20s %-20s %-10s\n", "Limit", "Soft Limit", "Hard Limit", "Units");
-    for (size_t i = 0; i < sizeof L / sizeof *L; i++)
-        n += snprintf(buf + n, cap - (size_t)n, "%-25s %-20s %-20s %-10s\n", L[i].nm, L[i].soft, L[i].hard,
-                      L[i].unit);
+    for (size_t i = 0; i < sizeof L / sizeof *L; i++) {
+        const char *soft = L[i].soft, *hard = L[i].hard;
+        // docker --ulimit override (g_ulimit, resource number == table index): render the requested values
+        // so /proc/self/limits agrees with getrlimit (svc_fill_rlimit). RLIM_INFINITY -> "unlimited".
+        char sb[24], hb[24];
+        if (i < DD_RLIM_MAX && g_ulimit[i].set) {
+            if (g_ulimit[i].cur == ~0ull) soft = "unlimited";
+            else { snprintf(sb, sizeof sb, "%llu", (unsigned long long)g_ulimit[i].cur); soft = sb; }
+            if (g_ulimit[i].max == ~0ull) hard = "unlimited";
+            else { snprintf(hb, sizeof hb, "%llu", (unsigned long long)g_ulimit[i].max); hard = hb; }
+        }
+        n += snprintf(buf + n, cap - (size_t)n, "%-25s %-20s %-20s %-10s\n", L[i].nm, soft, hard, L[i].unit);
+    }
     return n;
 }
+// ---- runc/containerd MaskedPaths + ReadonlyPaths (container isolation, spec.go DefaultSpec) ----
+// Masked paths must EXIST but be empty/inaccessible (NOT ENOENT), so monitoring agents and systemd unit
+// `ConditionPathExists` checks that stat them behave as under runc. Kind: 1 = masked FILE (opens as an empty
+// file, reads 0 bytes -- runc binds /dev/null over it); 2 = masked DIR (opens as an empty dir -- runc mounts
+// an empty tmpfs). `rp` is the container-absolute path. Exact list = containerd pkg/oci spec.go MaskedPaths.
+static int proc_masked_kind(const char *rp) {
+    if (!rp) return 0;
+    static const char *const files[] = {"/proc/kcore",     "/proc/keys",        "/proc/latency_stats",
+                                        "/proc/timer_list", "/proc/timer_stats", "/proc/sched_debug", 0};
+    static const char *const dirs[] = {"/proc/asound", "/proc/acpi", "/proc/scsi",
+                                       "/sys/firmware", "/sys/devices/virtual/powercap", 0};
+    for (int i = 0; files[i]; i++)
+        if (!strcmp(rp, files[i])) return 1;
+    for (int i = 0; dirs[i]; i++) {
+        size_t L = strlen(dirs[i]);
+        if (!strncmp(rp, dirs[i], L) && (rp[L] == 0 || rp[L] == '/')) return 2; // the dir or anything within it
+    }
+    return 0;
+}
+// 1 if `rp` is a runc ReadonlyPath (/proc/bus /proc/fs /proc/irq /proc/sys /proc/sysrq-trigger): reads are
+// allowed (served by the /proc synth or an empty dir), writes fail EROFS -- runc bind-mounts these read-only.
+static int proc_ro_path(const char *rp) {
+    if (!rp) return 0;
+    if (!strcmp(rp, "/proc/sysrq-trigger")) return 1;
+    static const char *const dirs[] = {"/proc/bus", "/proc/fs", "/proc/irq", "/proc/sys", 0};
+    for (int i = 0; dirs[i]; i++) {
+        size_t L = strlen(dirs[i]);
+        if (!strncmp(rp, dirs[i], L) && (rp[L] == 0 || rp[L] == '/')) return 1;
+    }
+    return 0;
+}
+// 1 if `rp` is one of the ReadonlyPath DIRECTORIES that has no other synth (so stat/opendir see an empty,
+// read-only directory). /proc/sys is served by proc_open; /proc/sysrq-trigger is a file (handled separately).
+static int proc_ro_dir(const char *rp) {
+    if (!rp) return 0;
+    static const char *const dirs[] = {"/proc/bus", "/proc/fs", "/proc/irq", 0};
+    for (int i = 0; dirs[i]; i++) {
+        size_t L = strlen(dirs[i]);
+        if (!strncmp(rp, dirs[i], L) && (rp[L] == 0 || rp[L] == '/')) return 1;
+    }
+    return 0;
+}
+// Materialize a fresh EMPTY temp directory and return an O_DIRECTORY fd to it (reaped when the guest closes
+// the fd, via the shared g_procfd_dirs machinery). Backs masked dirs + read-only proc dirs: getdents yields
+// nothing, exactly like runc's empty-tmpfs mask. -1 on error.
+static int empty_dir_fd(const char *guestpath) {
+    static int registered = 0;
+    if (!registered) {
+        atexit(procfd_dirs_atexit);
+        registered = 1;
+    }
+    procfd_dirs_reap(0);
+    char tmpl[] = "/tmp/.ddmaskXXXXXX";
+    if (!mkdtemp(tmpl)) return -1;
+    int fd = open(tmpl, O_RDONLY | O_DIRECTORY);
+    if (fd < 0) {
+        procfd_dir_rm(tmpl);
+        return -1;
+    }
+    proc_dir_register(fd, tmpl, guestpath);
+    return fd;
+}
+// Serve a masked / read-only-dir proc path as an open fd (empty file or empty dir). Returns the fd, or -2 if
+// `rp` is not one dd masks (so the caller falls through to the normal path). Reserved for READ opens; the
+// write-intent EROFS for ReadonlyPaths is enforced in openat before this is reached.
+static int proc_masked_open(const char *rp) {
+    int mk = proc_masked_kind(rp);
+    if (mk == 1) return proc_text_fd("", 0);        // empty regular file
+    if (mk == 2) return empty_dir_fd(rp);           // empty directory
+    if (proc_ro_dir(rp)) return empty_dir_fd(rp);   // /proc/bus,/fs,/irq: exist, empty, read-only
+    if (!strcmp(rp, "/proc/sysrq-trigger")) return proc_text_fd("", 0); // exists, empty on read
+    return -2;
+}
+
 // Real macOS stat -> Linux struct stat (the fake S_IFCHR version corrupted libc buffering).
 // fill_linux_stat (the guest struct-stat layout) is per-arch -> frontend/<arch>/fill_stat.c
 // Synthesize the common /proc files Linux programs read (macOS has no /proc). Returns an fd
@@ -1649,9 +1733,7 @@ static int proc_open(const char *rp) {
         }
     }
     if (!strcmp(rp, "/proc/cpuinfo")) {
-        int nc = (int)sysconf(_SC_NPROCESSORS_ONLN);
-        if (nc < 1) nc = 1;
-        if (nc > 64) nc = 64;
+        int nc = container_online_cpus(); // docker --cpus cap (state.c), else all host cores
         n = 0;
         for (int i = 0; i < nc; i++)
             n += snprintf(buf + n, sizeof buf - (size_t)n,
@@ -1683,9 +1765,7 @@ static int proc_open(const char *rp) {
         // aggregate `cpu` line plus one per online CPU (aggregate split evenly) so per-core meters populate.
         unsigned long long t[4];
         host_cpu_ticks(t);
-        int nc = (int)sysconf(_SC_NPROCESSORS_ONLN);
-        if (nc < 1) nc = 1;
-        if (nc > 64) nc = 64;
+        int nc = container_online_cpus(); // docker --cpus cap (state.c), else all host cores
         n = snprintf(buf, sizeof buf, "cpu  %llu %llu %llu %llu 0 0 0 0 0 0\n", t[0], t[3], t[1], t[2]);
         for (int i = 0; i < nc; i++)
             n += snprintf(buf + n, sizeof buf - (size_t)n, "cpu%d %llu %llu %llu %llu 0 0 0 0 0 0\n", i,
@@ -1945,6 +2025,27 @@ static void fill_linux_stat(uint8_t *d, const struct stat *s, const char *hostpa
 // host path open() would use, else NULL. stat()/access() consult this so the nodes report as EXISTING
 // character devices -- e.g. libgcrypt detects its RNG via access("/dev/urandom",R_OK); an ENOENT there
 // makes it abort ("no entropy gathering module detected"), which breaks gpgv and thus `apt-get update`.
+// The container's controlling terminal. `docker run -t` makes the daemon call login_tty, which hands the
+// guest fd 0/1/2 as ONE pty slave. On Linux/devpts that slave is /dev/pts/0, but dd's host pty is a mac
+// /dev/ttysNNN (or a host /dev/pts/N) whose raw name would otherwise leak into the guest via
+// F_GETPATH -- so `tty`, ttyname(3), the `ps` TTY column, and any program that reopens open(ttyname(0))
+// would see a device that doesn't exist in the container. We present it uniformly as /dev/pts/0.
+// ctty_anchor() returns the host fd that IS the controlling terminal (the first of 0/1/2 that is a tty),
+// or -1 when stdio is piped (no tty) -- exactly matching real docker, where a non -t container has no tty.
+static int ctty_anchor(void) {
+    for (int fd = 0; fd < 3; fd++)
+        if (isatty(fd)) return fd;
+    return -1;
+}
+// Is host fd `pfn` the controlling terminal (the same char device as the stdio pty)? True for fd 0/1/2 and
+// for any dup of them; used to rename its /proc/self/fd/N link to /dev/pts/0. A guest-opened pty (its own
+// /dev/pts/M master/slave) has a DIFFERENT rdev, so it is left alone.
+static int fd_is_ctty(int pfn) {
+    int a = ctty_anchor();
+    if (a < 0 || pfn < 0 || !isatty(pfn)) return 0;
+    struct stat sa, sp;
+    return fstat(a, &sa) == 0 && fstat(pfn, &sp) == 0 && S_ISCHR(sp.st_mode) && sa.st_rdev == sp.st_rdev;
+}
 static const char *dev_node_hostpath(const char *gp) {
     if (!gp) return NULL;
     return !strcmp(gp, "/dev/null")     ? "/dev/null"
@@ -1985,6 +2086,14 @@ static void container_populate_dev(void) {
         if (fd >= 0) close(fd);
     }
     mkdir(DEVP("pts"), 0755);  // devpts mount point; /dev/pts/N slaves resolve via ptsname in fs.c
+    // When the container was handed a controlling terminal (docker run -t: the daemon's login_tty made fd
+    // 0/1/2 the pty slave), Linux/devpts names it /dev/pts/0. Materialize that entry so `ls /dev/pts` lists
+    // it; stat()/open()/readlink of /dev/pts/0 are intercepted (synth_stat_raw + fs.c) and routed to the
+    // real controlling tty, so ttyname(3)/`tty`/`ps` resolve it instead of leaking the host pty device name.
+    if (isatty(0) || isatty(1) || isatty(2)) {
+        int fd = open(DEVP("pts/0"), O_CREAT | O_WRONLY, 0620);
+        if (fd >= 0) close(fd);
+    }
     mkdir(DEVP("shm"), 01777); // POSIX shm dir (shm_open names get redirected to a host tmp file in fs.c)
     mkdir(DEVP("mqueue"), 01777);
 #undef DEVP
@@ -2022,9 +2131,40 @@ static void container_populate_machine_id(void) {
 }
 // -> macOS struct stat for a synth file
 static int synth_stat_raw(const char *gp, struct stat *s) {
+    // The controlling terminal, named /dev/pts/0 in the container: fstat the real pty slave so it reports as
+    // a character device with the correct rdev. ttyname(3) reads /proc/self/fd/0 -> "/dev/pts/0", then
+    // stat()s it and checks S_ISCHR + rdev == fstat(0).rdev; this makes that check pass so `tty` prints
+    // /dev/pts/0 instead of "not a tty".
+    if (gp && !strcmp(gp, "/dev/pts/0")) {
+        int a = ctty_anchor();
+        if (a >= 0 && fstat(a, s) == 0) return 1;
+    }
     // Pseudo /dev char devices: stat the host node so type/existence agree with open().
     const char *dev = dev_node_hostpath(gp);
     if (dev) return stat(dev, s) == 0;
+    // runc MaskedPaths / ReadonlyPaths: these must EXIST (a masked file is an empty regular file; a masked or
+    // read-only dir is an empty directory), so stat()/`test -e` see them present -- matching runc, not ENOENT.
+    if (g_rootfs) {
+        int mk = proc_masked_kind(gp);
+        if (mk == 1) { // masked file -> empty regular file
+            memset(s, 0, sizeof *s);
+            s->st_mode = S_IFREG | 0444;
+            s->st_nlink = 1;
+            return 1;
+        }
+        if (mk == 2 || proc_ro_dir(gp)) { // masked dir / read-only proc dir -> empty directory
+            memset(s, 0, sizeof *s);
+            s->st_mode = S_IFDIR | 0555;
+            s->st_nlink = 2;
+            return 1;
+        }
+        if (!strcmp(gp, "/proc/sysrq-trigger")) { // write-only trigger file: present, empty on read
+            memset(s, 0, sizeof *s);
+            s->st_mode = S_IFREG | 0644;
+            s->st_nlink = 1;
+            return 1;
+        }
+    }
     // /sys/class/net (#289): the class dir + per-iface dirs are directories; attribute files are regular.
     if (gp && !strncmp(gp, "/sys/class/net", 14)) {
         const char *r = gp + 14;

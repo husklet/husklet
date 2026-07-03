@@ -75,6 +75,15 @@ static void overlay_copyup_at(int dirfd, const char *raw) {
     abs_guest(dirfd, raw, gp, sizeof gp);
     overlay_copyup(gp, host, sizeof host);
 }
+// Overlay: like overlay_copyup_at but RECURSIVE for a lower-only directory -- used by rename(2), where the
+// whole subtree must exist in the upper before the move (a plain copyup would materialize an EMPTY dir and
+// rename LOSES the contents). A file target falls through to the byte copyup. No-op outside overlay mode.
+static void overlay_copyup_at_tree(int dirfd, const char *raw) {
+    if (!g_nlower || !raw) return;
+    char gp[4200];
+    abs_guest(dirfd, raw, gp, sizeof gp);
+    overlay_copyup_tree(gp);
+}
 // Overlay: does a read-only lower still provide `guest` (so it would re-surface once the upper copy is moved
 // away)? Mirrors overlay_copyup's lower scan; rootfs-routed paths only (a volume has its own backing dir).
 // Used by rename to decide whether the source needs a whiteout. False outside overlay mode (g_nlower==0).
@@ -224,10 +233,9 @@ static void mq_maybe_free(int qi) {
 // and tcmalloc enumerate CPUs via sched_getaffinity and /sys/devices/system/cpu/{online,possible};
 // reporting only CPU 0 makes tcmalloc's NumPossibleCPUs() assert (`cpus.has_value()`) and mongod abort.
 static int dd_online_cpus(void) {
-    long n = sysconf(_SC_NPROCESSORS_ONLN);
-    if (n < 1) n = 1;
-    if (n > 64) n = 64; // matches /proc/cpuinfo's cap; one CPU bit fits in 8 bytes of mask
-    return (int)n;
+    // container_online_cpus() (state.c) applies the docker --cpus cap (ceil(NanoCpus/1e9)) on top of the
+    // host online count, so sched_getaffinity / the cpu-topology sysfs advertise the container's allotment.
+    return container_online_cpus();
 }
 // Build the "all online CPUs" bitmask into the caller's buffer (CPU i -> bit i, little-endian bytes).
 static void cpu_online_mask(uint8_t *m, size_t n) {

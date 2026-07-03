@@ -25,11 +25,10 @@ fn fsx_portable() -> Group {
             .out("linkat sym=1 readlink=1 link=1 nlink2=1 rename=1 oldgone=1 newhas=1 mkdir=1 isdir=1\n")
             .xfail(LIN),
         port("mkfifoat", "ext_fsx/mkfifoat.c").out("mkfifoat made=1 isfifo=1 ready=1 got=1\n"),
-        // xattr is a success-returning no-op on the Linux JIT: setxattr/removexattr return 0 but the
-        // value never persists (roundtrip=0, listed=0) — passes native-on-macOS (real APFS xattrs).
-        // xfail Linux; GAPS `fsx-xattr-noop`. (darwin uses the 6-arg setxattr, branched in-source.)
-        port("xattr", "ext_fsx/xattr.c").out("xattr set=1 roundtrip=1 listed=1 removed=1 gone=1\n")
-            .xfail(LIN),
+        // xattr round-trips on the Linux JIT too: guest xattrs are namespaced under `user.ddx.` on the
+        // host backing inode (set/get/list/remove all persist), and copy-up carries them (overlay G5).
+        // (darwin uses the 6-arg setxattr, branched in-source.)
+        port("xattr", "ext_fsx/xattr.c").out("xattr set=1 roundtrip=1 listed=1 removed=1 gone=1\n"),
     ])
 }
 

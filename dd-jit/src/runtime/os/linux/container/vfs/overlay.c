@@ -91,6 +91,17 @@ static void layer_follow(const char *jc, size_t jcl, const char *guest, char *ou
     }
     confine_in(jc, jcl, cur, out, n, nofollow);
 }
+// Is `guestdir` marked OPAQUE in layer (jc,jcl)? An opaque dir hides ALL entries from lower layers (a
+// directory that was removed-and-recreated at runtime). Represented on disk as a `.wh..wh..opq` marker
+// file inside the dir -- the same wire name real overlayfs uses.
+static int dir_is_opaque(const char *jc, size_t jcl, const char *guestdir) {
+    char host[4300];
+    layer_follow(jc, jcl, guestdir, host, sizeof host, 0);
+    char opq[4400];
+    snprintf(opq, sizeof opq, "%s/%s", host, ".wh..wh..opq");
+    struct stat st;
+    return lstat(opq, &st) == 0;
+}
 // ONE overlay lookup, final component NOT followed: the topmost layer (upper, then lowers top->down)
 // that has `guest`. 1 + its host path in `host`; 0 if absent or whiteout-hidden (host = the upper path,
 // for ENOENT/O_CREAT). A volume path routes to its bind backing via secure_resolve. This is the single-hop
@@ -109,6 +120,20 @@ static int overlay_lookup(const char *guest, char *host, size_t hn) {
         snprintf(host, hn, "%s", up);
         return 0;
     // deleted
+    }
+    // OPAQUE parent: if the guest's parent dir is opaque in the upper (a recreated dir), every lower copy
+    // of a child is hidden -- don't descend to the lowers (the child is absent, host = the upper path).
+    {
+        char par[4200];
+        snprintf(par, sizeof par, "%s", guest);
+        char *psl = strrchr(par, '/');
+        if (psl && psl != par) {
+            *psl = 0;
+            if (dir_is_opaque(g_rootfs_canon, g_rootfs_canon_len, par)) {
+                snprintf(host, hn, "%s", up);
+                return 0;
+            }
+        }
     }
     // search lowers top->down
     for (int i = 0; i < g_nlower; i++) {
@@ -220,6 +245,85 @@ static void overlay_mkparents(const char *guest) {
         seg = next + 1;
     }
 }
+// ---- copy-up metadata + opaque + whiteout helpers ------------------------------------------------
+// Real overlayfs copy-up preserves the lower inode's mode (INCLUDING setuid/setgid/sticky), its
+// atime/mtime, and its xattrs (file caps, security labels). dd used to keep only `st_mode & 0777`, reset
+// mtime to now, and drop all xattrs -> `sudo`/`ping`/`passwd` lost setuid and file-caps the moment any
+// write touched them, and reproducible builds saw wrong timestamps. These helpers carry the full metadata.
+
+// Copy every xattr from src host file to dst (final component; NOFOLLOW). Carries guest-visible xattrs
+// (the user.ddx.* namespace, file caps) AND dd's own owner xattrs (user.dd.uid/gid) across a copy-up.
+static void ovl_copy_xattrs(const char *src, const char *dst) {
+    char names[16384];
+    ssize_t n = listxattr(src, names, sizeof names, XATTR_NOFOLLOW);
+    for (ssize_t i = 0; n > 0 && i < n;) {
+        const char *nm = names + i;
+        i += strlen(nm) + 1;
+        char val[65536];
+        ssize_t vn = getxattr(src, nm, val, sizeof val, 0, XATTR_NOFOLLOW);
+        if (vn >= 0) setxattr(dst, nm, val, (size_t)vn, 0, XATTR_NOFOLLOW);
+    }
+}
+// Apply the lower's mode (incl S_ISUID/S_ISGID/S_ISVTX), atime/mtime and xattrs to a copied-up inode.
+static void ovl_copy_meta(const char *src, const char *dst, const struct stat *st) {
+    chmod(dst, st->st_mode & 07777);
+    struct timespec ts[2] = {st->st_atimespec, st->st_mtimespec};
+    utimensat(AT_FDCWD, dst, ts, AT_SYMLINK_NOFOLLOW);
+    ovl_copy_xattrs(src, dst);
+}
+// Recursively remove a host path (file, symlink, or a whole directory subtree). Used to whiteout a
+// lower-backed directory: a plain remove() cannot drop an upper dir that still holds child `.wh.` markers
+// (ENOTEMPTY), which left the directory wrongly still resolving as present after `rm -rf`.
+static void ovl_rm_rf(const char *path) {
+    DIR *d = opendir(path);
+    if (!d) {
+        unlink(path);
+        return;
+    }
+    struct dirent *e;
+    while ((e = readdir(d))) {
+        if (!strcmp(e->d_name, ".") || !strcmp(e->d_name, "..")) continue;
+        char child[8600];
+        snprintf(child, sizeof child, "%s/%s", path, e->d_name);
+        struct stat st;
+        if (lstat(child, &st) == 0 && S_ISDIR(st.st_mode))
+            ovl_rm_rf(child);
+        else
+            unlink(child);
+    }
+    closedir(d);
+    rmdir(path);
+}
+// Drop any `.wh.NAME` whiteout shadowing `guest` in the upper (a name is being re-created there).
+static void overlay_clear_whiteout(const char *guest) {
+    if (!g_nlower) return;
+    char wh[4300];
+    wh_hostpath(g_rootfs_canon, g_rootfs_canon_len, guest, wh, sizeof wh);
+    unlink(wh);
+}
+// Does a read-only lower provide `guest` as a DIRECTORY (so recreating it in the upper must be opaque to
+// keep the lower's stale children hidden)?
+static int overlay_lower_has_dir(const char *guest) {
+    if (!g_nlower) return 0;
+    for (int i = 0; i < g_nlower; i++) {
+        char lp[4300];
+        struct stat st;
+        layer_follow(g_lower[i].canon, g_lower[i].clen, guest, lp, sizeof lp, 0);
+        if (lstat(lp, &st) == 0) return S_ISDIR(st.st_mode);
+        if (wh_exists(g_lower[i].canon, g_lower[i].clen, guest)) return 0;
+    }
+    return 0;
+}
+// Mark the upper copy of `guest` opaque (drop a `.wh..wh..opq` marker inside it).
+static void overlay_set_opaque(const char *guest) {
+    if (!g_nlower) return;
+    char up[4300];
+    xresolve_exec(guest, up, sizeof up);
+    char opq[4400];
+    snprintf(opq, sizeof opq, "%s/%s", up, ".wh..wh..opq");
+    int fd = open(opq, O_CREAT | O_WRONLY, 0644);
+    if (fd >= 0) close(fd);
+}
 // Copy-up: bring a lower file into the UPPER so it can be modified, then return the upper host path.
 // If the file is only in a lower, copy its bytes up; if absent everywhere, return the upper path (create).
 static void overlay_copyup(const char *guest, char *host, size_t hn) {
@@ -281,7 +385,7 @@ static void overlay_copyup(const char *guest, char *host, size_t hn) {
         mkdir(dir, 0755);
     }
     int in = open(src, O_RDONLY),
-        // copy lower -> upper
+        // copy lower -> upper (full mode incl setuid/setgid/sticky; fchmod below is authoritative past umask)
         out = open(up, O_CREAT | O_WRONLY | O_TRUNC, st.st_mode & 0777);
     if (in >= 0 && out >= 0) {
         char b[1 << 16];
@@ -291,6 +395,50 @@ static void overlay_copyup(const char *guest, char *host, size_t hn) {
     }
     if (in >= 0) close(in);
     if (out >= 0) close(out);
+    // Preserve the lower inode's mode (incl S_ISUID/S_ISGID/S_ISVTX), atime/mtime and xattrs -- real
+    // overlayfs copy-up semantics (security-critical for setuid/file-cap binaries; correctness for mtime).
+    ovl_copy_meta(src, up, &st);
+}
+// Recursively copy a lower-only subtree rooted at `guest` into the writable upper, preserving metadata at
+// every level. Used by rename(2) of a lower-only directory: real overlayfs (without redirect_dir) returns
+// EXDEV and userspace `mv` copies recursively; we do the equivalent copy-up so a plain rename never loses
+// the subtree (the old code materialised the lower dir as an EMPTY upper, then moved that -> DATA LOSS).
+// A non-directory target falls through to the byte-copy overlay_copyup. Idempotent (skips upper entries).
+static void overlay_copyup_tree(const char *guest) {
+    if (!g_nlower || !guest || guest[0] != '/') return;
+    char lo[4300];
+    struct stat lst;
+    int have = 0;
+    for (int i = 0; i < g_nlower; i++) {
+        layer_follow(g_lower[i].canon, g_lower[i].clen, guest, lo, sizeof lo, 0);
+        if (lstat(lo, &lst) == 0) {
+            have = 1;
+            break;
+        }
+        if (wh_exists(g_lower[i].canon, g_lower[i].clen, guest)) break;
+    }
+    char up[4300];
+    if (!have || !S_ISDIR(lst.st_mode)) { // absent, file, or symlink -> the byte/whiteout copyup path
+        overlay_copyup(guest, up, sizeof up);
+        return;
+    }
+    // Directory: materialize it (+ ancestors) in the upper, copy its metadata, then recurse into children.
+    overlay_mkparents(guest);
+    xresolve_exec(guest, up, sizeof up);
+    struct stat ust;
+    if (lstat(up, &ust) != 0) mkdir(up, lst.st_mode & 0777);
+    ovl_copy_meta(lo, up, &lst);
+    DIR *d = opendir(lo);
+    if (!d) return;
+    struct dirent *e;
+    while ((e = readdir(d))) {
+        if (!strcmp(e->d_name, ".") || !strcmp(e->d_name, "..")) continue;
+        if (!strncmp(e->d_name, ".wh.", 4)) continue; // stray marker: skip (its target stays hidden)
+        char childg[4600];
+        snprintf(childg, sizeof childg, "%s/%s", guest, e->d_name);
+        overlay_copyup_tree(childg);
+    }
+    closedir(d);
 }
 // Absolute GUEST path for (dirfd, raw) -- combines a dir-fd's guest path (upper or lower) with raw.
 static void abs_guest(int dirfd, const char *raw, char *out, size_t n) {
@@ -429,6 +577,10 @@ static int overlay_readdir(const char *gdir, char (**names_out)[256], uint8_t **
             }
         }
         closedir(d);
+        // OPAQUE: if this layer marks `gdir` opaque (`.wh..wh..opq`), every LOWER layer is hidden -- stop
+        // merging. A dir removed-and-recreated (or an image's opaque layer) thus never re-exposes stale
+        // lower children through the readdir merge.
+        if (dir_is_opaque(jc, jcl, gdir)) break;
     }
     // Bind-mount mount points: a volume is its own jail (in no layer), so a NESTED mount's parent dirs are
     // invisible to the layer scan above -- and the empty placeholder we create in the writable upper can be
@@ -511,8 +663,9 @@ static int overlay_readdir(const char *gdir, char (**names_out)[256], uint8_t **
 static void overlay_whiteout(const char *guest) {
     char up[4300];
     xresolve_exec(guest, up, sizeof up);
-    // drop any upper copy (file or empty dir)
-    remove(up);
+    // drop any upper copy (file, or a whole dir subtree -- a plain remove() cannot unlink a dir that still
+    // holds child `.wh.` markers, which left the path wrongly resolving as present after `rm -rf`).
+    ovl_rm_rf(up);
     char wh[4300];
     wh_hostpath(g_rootfs_canon, g_rootfs_canon_len, guest, wh, sizeof wh);
     char dir[4300];

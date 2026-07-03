@@ -113,27 +113,131 @@ static void fd_reset_emul(int fd) {
     fd_clear(fd);
 }
 
+// ---- guest xattr passthrough (overlay G5) -----------------------------------------------------------
+// Real overlayfs exposes a file's xattrs (file caps, SELinux labels, user.* attrs) and copies them up on
+// write; dd used to stub set->ignore / get->ENODATA / list->empty, silently dropping them (a correctness
+// trap -- setcap "succeeded" but getcap saw nothing). We namespace guest xattrs under `user.ddx.` on the
+// host backing inode so they round-trip AND survive copy-up (ovl_copy_xattrs carries `user.ddx.*`),
+// without colliding with dd's own `user.dd.*` owner attrs or host/macOS attrs. The macOS errno is mapped
+// to Linux at the dispatch boundary (ENOATTR->ENODATA).
+#define DDX_PFX "user.ddx."
+// Host backing path for a path-based xattr op. forwrite copies a lower-only file up first (attr lands on
+// the writable upper). Returns 0 (host filled) or -errno.
+static int xattr_hostpath(const char *path, int nofollow, int forwrite, char *host, size_t hn) {
+    if (!g_rootfs) {
+        snprintf(host, hn, "%s", path ? path : "");
+        return 0;
+    }
+    char gp[4200];
+    abs_guest(-100 /*AT_FDCWD*/, path, gp, sizeof gp);
+    if (g_nlower) {
+        if (forwrite) {
+            overlay_copyup(gp, host, hn);
+            return 0;
+        }
+        return overlay_resolve(gp, host, hn, nofollow) ? 0 : -ENOENT;
+    }
+    secure_resolve(gp, host, hn, nofollow);
+    return 0;
+}
+static int ddx_opt(uint64_t flags, int nofollow) {
+    int o = nofollow ? XATTR_NOFOLLOW : 0;
+    if (flags & 1) o |= XATTR_CREATE;  // Linux XATTR_CREATE
+    if (flags & 2) o |= XATTR_REPLACE; // Linux XATTR_REPLACE
+    return o;
+}
+static long ddx_set(const char *host, const char *name, const void *val, size_t sz, int opt) {
+    char hn[512];
+    snprintf(hn, sizeof hn, "%s%s", DDX_PFX, name ? name : "");
+    return setxattr(host, hn, val, sz, 0, opt) < 0 ? -errno : 0;
+}
+static long ddx_get(const char *host, const char *name, void *val, size_t sz, int opt) {
+    char hn[512];
+    snprintf(hn, sizeof hn, "%s%s", DDX_PFX, name ? name : "");
+    ssize_t r = getxattr(host, hn, val, sz, 0, opt);
+    return r < 0 ? -errno : r;
+}
+static long ddx_remove(const char *host, const char *name, int opt) {
+    char hn[512];
+    snprintf(hn, sizeof hn, "%s%s", DDX_PFX, name ? name : "");
+    return removexattr(host, hn, opt) < 0 ? -errno : 0;
+}
+// List only the guest-visible (user.ddx.*) attrs, prefix stripped, into the guest buffer. sz==0 -> size.
+static long ddx_list(const char *host, char *out, size_t sz, int opt) {
+    char raw[65536];
+    ssize_t n = listxattr(host, raw, sizeof raw, opt);
+    if (n < 0) return -errno;
+    size_t need = 0, pl = strlen(DDX_PFX);
+    for (ssize_t i = 0; i < n;) {
+        const char *nm = raw + i;
+        size_t l = strlen(nm);
+        i += l + 1;
+        if (l > pl && !strncmp(nm, DDX_PFX, pl)) {
+            const char *g = nm + pl;
+            size_t gl = strlen(g) + 1;
+            if (sz) {
+                if (need + gl > sz) return -ERANGE;
+                memcpy(out + need, g, gl);
+            }
+            need += gl;
+        }
+    }
+    return (long)need;
+}
+
 static int svc_fs(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3,
                   uint64_t a4, uint64_t a5) {
     switch (nr) {
     // ===================== Filesystem — open/stat/dir/link/perm/xattr/cwd, all path-confined to the rootfs jail
     // =====================
+    // setxattr(5)/lsetxattr(6)/fsetxattr(7): a0=path|fd, a1=name, a2=val, a3=size, a4=flags
     case 5:
     case 6:
-    // setxattr/lsetxattr/fsetxattr -> ignore
-    case 7: G_RET(c) = 0; break;
+    case 7: {
+        char host[4300];
+        int e;
+        if (nr == 7) e = fcntl((int)a0, F_GETPATH, host) == 0 ? 0 : -EBADF;
+        else e = xattr_hostpath((const char *)a0, nr == 6, 1, host, sizeof host);
+        if (e < 0) { G_RET(c) = (uint64_t)(int64_t)e; break; }
+        G_RET(c) = (uint64_t)(int64_t)ddx_set(host, (const char *)a1, (const void *)a2, (size_t)a3, ddx_opt(a4, nr == 6));
+        break;
+    }
+    // getxattr(8)/lgetxattr(9)/fgetxattr(10): a0=path|fd, a1=name, a2=val, a3=size
     case 8:
     case 9:
-    // getxattr/... -> ENODATA (no such attr)
-    case 10: G_RET(c) = (uint64_t)(-ENODATA); break;
+    case 10: {
+        char host[4300];
+        int e;
+        if (nr == 10) e = fcntl((int)a0, F_GETPATH, host) == 0 ? 0 : -EBADF;
+        else e = xattr_hostpath((const char *)a0, nr == 9, 0, host, sizeof host);
+        if (e < 0) { G_RET(c) = (uint64_t)(int64_t)e; break; }
+        G_RET(c) = (uint64_t)(int64_t)ddx_get(host, (const char *)a1, (void *)a2, (size_t)a3, nr == 9 ? XATTR_NOFOLLOW : 0);
+        break;
+    }
+    // listxattr(11)/llistxattr(12)/flistxattr(13): a0=path|fd, a1=list, a2=size
     case 11:
     case 12:
-    // listxattr/... -> empty list
-    case 13: G_RET(c) = 0; break;
+    case 13: {
+        char host[4300];
+        int e;
+        if (nr == 13) e = fcntl((int)a0, F_GETPATH, host) == 0 ? 0 : -EBADF;
+        else e = xattr_hostpath((const char *)a0, nr == 12, 0, host, sizeof host);
+        if (e < 0) { G_RET(c) = (uint64_t)(int64_t)e; break; }
+        G_RET(c) = (uint64_t)(int64_t)ddx_list(host, (char *)a1, (size_t)a2, nr == 12 ? XATTR_NOFOLLOW : 0);
+        break;
+    }
+    // removexattr(14)/lremovexattr(15)/fremovexattr(16): a0=path|fd, a1=name
     case 14:
     case 15:
-    // removexattr/... -> ok
-    case 16: G_RET(c) = 0; break;
+    case 16: {
+        char host[4300];
+        int e;
+        if (nr == 16) e = fcntl((int)a0, F_GETPATH, host) == 0 ? 0 : -EBADF;
+        else e = xattr_hostpath((const char *)a0, nr == 15, 1, host, sizeof host);
+        if (e < 0) { G_RET(c) = (uint64_t)(int64_t)e; break; }
+        G_RET(c) = (uint64_t)(int64_t)ddx_remove(host, (const char *)a1, nr == 15 ? XATTR_NOFOLLOW : 0);
+        break;
+    }
     case 17: {
         if (g_rootfs) {
             // getcwd -> the GUEST cwd (not the host path)
@@ -317,6 +421,11 @@ static int svc_fs(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t
             break;
         }
         if (g_rootfs) {
+            if (g_nlower) { // recreating a whiteout'd name -> clear its stale `.wh.NAME` marker first
+                char gpm[4200];
+                abs_guest((int)a0, (const char *)a1, gpm, sizeof gpm);
+                overlay_clear_whiteout(gpm);
+            }
             char fin[512];
             int pfd = jail_at((int)a0, (const char *)a1, fin, sizeof fin, 1);
             if (pfd < 0) {
@@ -354,6 +463,16 @@ static int svc_fs(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t
             break;
         }
         if (g_rootfs) {
+            // OVERLAY: recreating a name a lower still provides -> drop any stale `.wh.NAME` whiteout first
+            // (else the new dir can be hidden by an order-dependent readdir dedup), and if a lower dir of the
+            // same name exists, mark the new upper dir OPAQUE so the lower's stale children never re-surface.
+            char gpm[4200];
+            int had_lower_dir = 0;
+            if (g_nlower) {
+                abs_guest((int)a0, (const char *)a1, gpm, sizeof gpm);
+                overlay_clear_whiteout(gpm);
+                had_lower_dir = overlay_lower_has_dir(gpm);
+            }
             char fin[512];
             int pfd = jail_at((int)a0, (const char *)a1, fin, sizeof fin, 1);
             if (pfd < 0) {
@@ -370,6 +489,7 @@ static int svc_fs(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t
                 if (newfile_stamp_wanted()) newfile_stamp_path(hp, 1); // #255: dropped-cred creator owns the dir
             }
             close(pfd);
+            if (r >= 0 && had_lower_dir) overlay_set_opaque(gpm);
             G_RET(c) = r < 0 ? (uint64_t)(-(int64_t)e) : 0;
             break;
         }
@@ -435,6 +555,18 @@ static int svc_fs(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t
             int isdir = lstat(host, &lst) == 0 && S_ISDIR(lst.st_mode);
             if ((a2 & 0x200) && !isdir) { G_RET(c) = (uint64_t)(int64_t)(-ENOTDIR); break; }
             if (!(a2 & 0x200) && isdir) { G_RET(c) = (uint64_t)(int64_t)(-EISDIR); break; }
+            // rmdir must fail ENOTEMPTY on a non-empty MERGED dir. The upper-only branch below lets the
+            // kernel enforce this, but a lower-backed dir is whiteout-masked unconditionally -- so it would
+            // wrongly "succeed" and hide live lower children. Check the merged listing first (overlay_readdir
+            // always includes "." and ".." -> a count > 2 means the directory still has real children).
+            if ((a2 & 0x200) && isdir) {
+                char(*nm)[256] = NULL;
+                uint8_t *ty = NULL;
+                int nent = overlay_readdir(gp, &nm, &ty);
+                free(nm);
+                free(ty);
+                if (nent > 2) { G_RET(c) = (uint64_t)(int64_t)(-ENOTEMPTY); break; }
+            }
             if (overlay_lower_has(gp)) {
                 overlay_whiteout(gp);
                 G_RET(c) = 0;
@@ -512,6 +644,11 @@ static int svc_fs(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t
             // target is the link CONTENT (unresolved); follow-time confinement guards it
             (const char *)a0;
         if (g_rootfs) {
+            if (g_nlower) { // recreating a whiteout'd name -> clear its stale `.wh.NAME` marker first
+                char gpm[4200];
+                abs_guest((int)a1, (const char *)a2, gpm, sizeof gpm);
+                overlay_clear_whiteout(gpm);
+            }
             char fin[512];
             int pfd = jail_at((int)a1, (const char *)a2, fin, sizeof fin, 1);
             if (pfd < 0) {
@@ -595,9 +732,13 @@ static int svc_fs(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t
             break;
         }
         if (g_rootfs) {
-            // both ends confined (TOCTOU-free). Copy a lower-only SOURCE up first so renameatx_np finds it
-            // in the writable upper (jail_at already materializes the dest's upper parent via overlay_mkparents).
-            overlay_copyup_at((int)a0, (const char *)a1);
+            // both ends confined (TOCTOU-free). Copy a lower-only SOURCE up first so renameatx_np finds it in
+            // the writable upper (jail_at already materializes the dest's upper parent via overlay_mkparents).
+            // RECURSIVE for a lower-only directory: the whole subtree must be in the upper before the move,
+            // else the rename moves an EMPTY dir and loses the contents. For an EXCHANGE, the DEST must also
+            // be copied up (both ends land in the upper before the atomic swap).
+            overlay_copyup_at_tree((int)a0, (const char *)a1);
+            if (rxflags & RENAME_SWAP) overlay_copyup_at_tree((int)a2, (const char *)a3);
             char ofin[512], nfin[512];
             int opfd = jail_at((int)a0, (const char *)a1, ofin, sizeof ofin, 1);
             if (opfd < 0) {
@@ -904,6 +1045,23 @@ static int svc_fs(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t
             // makes htop's relative openat(pid_dirfd, "stat"/"task"/...) re-enter the /proc synthesis.
             while (rp && rp[0] == '/' && rp[1] == '/')
                 rp++;
+            // runc MaskedPaths / ReadonlyPaths (container isolation). A ReadonlyPath opened for WRITE fails
+            // EROFS BEFORE the /proc synth can hand back a (falsely writable) temp fd -- so `sysctl -w` and a
+            // write to /proc/sysrq-trigger diverge from Linux exactly like runc's read-only bind. Masked paths
+            // are then served as empty file/dir for BOTH read and write intent (an empty, inert stand-in).
+            if (rp && g_rootfs) {
+                int write_intent = (lf & 3) || (lf & 0x40) || (lf & 0x200) || (lf & 0x400); // RW/CREAT/TRUNC/APPEND
+                if (proc_ro_path(rp) && !proc_masked_kind(rp) && write_intent) {
+                    G_RET(c) = (uint64_t)(int64_t)(-EROFS);
+                    break;
+                }
+                int md = proc_masked_open(rp);
+                if (md != -2) {
+                    if (md >= 0 && (lf & 0x80000)) fcntl(md, F_SETFD, FD_CLOEXEC); // honor O_CLOEXEC
+                    G_RET(c) = md < 0 ? (uint64_t)(-errno) : (uint64_t)md;
+                    break;
+                }
+            }
             // opendir("/proc"): materialize the process table (numeric pid dir per live container process
             // + the synthesized static files) so getdents enumerates the whole container -- `ps`/top/htop
             // read this to find processes. Without it the empty rootfs /proc dir yielded an empty table.
@@ -1055,6 +1213,19 @@ static int svc_fs(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t
                 }
                 G_RET(c) = m < 0 ? (uint64_t)(-errno) : (uint64_t)m;
                 break;
+            }
+            // /dev/pts/0 is the container's controlling terminal (not a guest-created master's slave): a
+            // program that does open(ttyname(0)) must get a fresh fd to the SAME pty. Reopen the anchor's
+            // host device (F_GETPATH) or dup it. Guest-opened ptys use /dev/pts/N with N == their master fd
+            // (>=3), so this never shadows them.
+            if (rp && !strcmp(rp, "/dev/pts/0")) {
+                int a = ctty_anchor();
+                if (a >= 0) {
+                    char hp[4200];
+                    int s = (fcntl(a, F_GETPATH, hp) == 0) ? open(hp, mf) : dup(a);
+                    G_RET(c) = s < 0 ? (uint64_t)(-errno) : (uint64_t)s;
+                    break;
+                }
             }
             if (rp && !strncmp(rp, "/dev/pts/", 9) && rp[9] >= '0' && rp[9] <= '9') {
                 char *sn = ptsname(atoi(rp + 9));
@@ -1293,6 +1464,17 @@ static int svc_fs(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t
         // /proc/self/fd/N -> the path host fd N currently points at (recovered via F_GETPATH on macOS).
         int pfn = procfd_num(p);
         if (pfn >= 0) {
+            // The controlling terminal (stdio pty from `docker run -t`) is named /dev/pts/0 in the
+            // container -- return that instead of leaking the host pty device (mac /dev/ttysNNN), so
+            // ttyname(3)/`tty`/`ps` resolve a device that actually exists in the guest.
+            if (fd_is_ctty(pfn)) {
+                static const char *const cn = "/dev/pts/0";
+                size_t l = strlen(cn);
+                if (l > bs) l = bs;
+                memcpy(buf, cn, l);
+                G_RET(c) = l;
+                break;
+            }
             char gp[4200];
             if (fcntl(pfn, F_GETPATH, gp) != 0) {
                 G_RET(c) = (uint64_t)(-errno); // bad fd -> EBADF

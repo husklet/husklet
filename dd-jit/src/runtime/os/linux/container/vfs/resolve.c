@@ -10,7 +10,10 @@ static int jail_ro(const char *abs) {
     // Test the volume the path actually routes to (longest match), so a read-write inner mount nested in a
     // read-only outer one is correctly writable (and vice-versa) -- the innermost mount governs, as in Linux.
     int i = jail_match(abs);
-    return i >= 0 && g_vols[i].ro;
+    if (i >= 0) return g_vols[i].ro; // a bind volume governs its own subtree (rw or ro), even under --read-only
+    // Routes to the rootfs/overlay jail: docker --read-only makes it EROFS, except the still-writable
+    // pseudo-mounts (/proc /dev /sys /tmp /run) -- exactly as runc leaves those mounted rw over a ro root.
+    return rootfs_ro_denies(abs);
 }
 // 1 if the absolute guest path falls under ANY bind-mount volume (rw or ro). A volume is its OWN jail
 // root, not the overlay rootfs/lowers, so a volume directory must be listed via plain readdir of its
@@ -25,7 +28,7 @@ static int jail_is_vol(const char *abs) {
 }
 // Convenience: resolve a (dirfd, raw) target to its guest abs path (same as abs_guest) and test RO.
 static int jail_ro_at(int dirfd, const char *raw) {
-    if (g_nvols == 0) return 0; // no volumes -> skip work; behavior identical to before
+    if (g_nvols == 0 && !g_rootfs_ro) return 0; // no RO surface at all -> skip work; behavior identical to before
     char abs[8192];
     abs_guest(dirfd, raw, abs, sizeof abs);
     return jail_ro(abs);

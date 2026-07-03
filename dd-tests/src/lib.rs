@@ -92,6 +92,12 @@ pub struct Case {
     /// default → the existing matrix is byte-identical. `DDJIT_SANDBOX` is intentionally NOT set: this
     /// validates the ring marshaling/forwarding, not the (macOS) Seatbelt confinement.
     pub untrusted: bool,
+    /// docker `--cpus` online-CPU cap (0 = unset). Threads to SpawnConfig.cpus -> DD_CPUS.
+    pub cpus: u32,
+    /// docker `--read-only` rootfs. Threads to SpawnConfig.read_only -> DD_ROOTFS_RO.
+    pub read_only: bool,
+    /// docker `--ulimit` (name, soft, hard) triples. Threads to SpawnConfig.ulimits -> DD_ULIMITS.
+    pub ulimits: Vec<(String, u64, u64)>,
     pub checks: Vec<Check>,
 }
 
@@ -110,7 +116,7 @@ fn base(name: &'static str, bin: Bin) -> Case {
         Bin::Fixture(fx) => fx.iter().map(|(e, _)| *e).collect(),
         Bin::InRootfs => vec![Engine::LinuxAarch64], // container rootfs fixtures are aarch64 today
     };
-    Case { name, bin, args: vec![], rootfs: None, lowers: vec![], mem_max: 0, engines, xfail: vec![], untrusted: false, checks: vec![] }
+    Case { name, bin, args: vec![], rootfs: None, lowers: vec![], mem_max: 0, engines, xfail: vec![], untrusted: false, cpus: 0, read_only: false, ulimits: vec![], checks: vec![] }
 }
 /// A case whose guest is compiled from a Linux/aarch64 C source under `guests/`.
 pub fn src(name: &'static str, source: &'static str) -> Case { base(name, Bin::Source(source)) }
@@ -138,6 +144,12 @@ impl Case {
     pub fn rootfs(mut self, r: &'static str) -> Self { self.rootfs = Some(r); self }
     pub fn lower(mut self, l: &str) -> Self { self.lowers.push(l.into()); self }
     pub fn mem(mut self, m: u64) -> Self { self.mem_max = m; self }
+    /// docker `--cpus` online-CPU cap for this case (container isolation / resource fidelity).
+    pub fn cpus(mut self, n: u32) -> Self { self.cpus = n; self }
+    /// docker `--read-only` rootfs for this case.
+    pub fn read_only(mut self) -> Self { self.read_only = true; self }
+    /// Add a docker `--ulimit NAME=SOFT:HARD` for this case.
+    pub fn ulimit(mut self, name: &str, soft: u64, hard: u64) -> Self { self.ulimits.push((name.into(), soft, hard)); self }
     pub fn only(mut self, e: &[Engine]) -> Self { self.engines = e.to_vec(); self }
     pub fn exit(mut self, c: i32) -> Self { self.checks.push(Check::Exit(c)); self }
     pub fn out(mut self, s: &'static str) -> Self { self.checks.push(Check::Out(s)); self }
@@ -367,6 +379,9 @@ pub fn run(ctx: &Ctx, c: &Case, e: Engine) -> Status {
     let mut cfg = ddjit::SpawnConfig::new(String::new(), rootfs.unwrap_or_default());
     cfg.lowers = c.lowers.clone();
     cfg.mem_max = c.mem_max;
+    cfg.cpus = c.cpus;
+    cfg.read_only = c.read_only;
+    cfg.ulimits = c.ulimits.clone();
     // Untrusted-guest SENTRY split: bake DDJIT_UNTRUSTED=1 into the engine's launch env (via SpawnConfig's
     // `env`, which serializes into the `exec env …` prefix of the launch script — so it survives the `mac`
     // bridge that drops ambient env). DDJIT_SANDBOX is left unset on purpose (ring/forwarding, not Seatbelt).
@@ -466,6 +481,9 @@ fn perf_cmd(ctx: &Ctx, c: &Case, e: Engine) -> Option<(String, (String, Vec<Stri
     let mut cfg = ddjit::SpawnConfig::new(String::new(), rootfs.unwrap_or_default());
     cfg.lowers = c.lowers.clone();
     cfg.mem_max = c.mem_max;
+    cfg.cpus = c.cpus;
+    cfg.read_only = c.read_only;
+    cfg.ulimits = c.ulimits.clone();
     if c.untrusted { cfg.env.push(("DDJIT_UNTRUSTED".into(), "1".into())); }
     cfg.argv = match &c.bin {
         Bin::InRootfs => c.args.clone(),

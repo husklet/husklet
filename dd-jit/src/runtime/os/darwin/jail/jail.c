@@ -17,6 +17,7 @@
 #include <spawn.h>
 #include <sys/stat.h>
 #include <sys/resource.h>
+#include <sys/sysctl.h>
 #include <sys/mount.h>
 #include <sys/mman.h>
 #include <netinet/in.h>
@@ -37,6 +38,9 @@ extern int sandbox_init(const char *profile, uint64_t flags, char **errorbuf);
 extern void dj_clear_cache(void *start, void *end) __asm__("___clear_cache");
 
 static const char *g_rootfs, *g_hostname; static int g_pid1;
+// docker --read-only: writes that route to the rootfs (not a volume / not the writable pseudo-mounts) fail
+// EROFS. docker --cpus: online-CPU count the container advertises (0 = unlimited) -- capped in sysconf/sysctl.
+static int g_rootfs_ro, g_cpu_max;
 // The container-side (guest) current working directory, kept as a canonical absolute container path.
 // getcwd() returns THIS (never the leaked host rootfs path), and chdir() resolves its argument against
 // it -- so "cd .." ascends to the real parent and clamps at the jail root "/". See dj_canon below.
@@ -68,6 +72,44 @@ static void add_pub(char *hc){
 
 static const char *jail(const char *p, char *out); // defined below; used by init for DD_CWD
 static void dj_canon(const char *base, const char *in, char *out, size_t outsz); // path canonicalizer
+
+// docker --ulimit: apply DD_ULIMITS="name=soft:hard,..." via native setrlimit. Docker's ulimit NAMEs map to
+// the macOS RLIMIT_* set (a subset of Linux -- macOS has no locks/sigpending/msgqueue/nice/rt* resources, so
+// those names are silently ignored, as they'd be a no-op anyway). Runs in init(), before the guest starts.
+static void dj_apply_ulimits(const char *spec){
+    if(!spec || !spec[0]) return;
+    static const struct { const char *n; int r; } t[] = {
+        {"cpu",RLIMIT_CPU},{"fsize",RLIMIT_FSIZE},{"data",RLIMIT_DATA},{"stack",RLIMIT_STACK},
+        {"core",RLIMIT_CORE},{"rss",RLIMIT_RSS},{"as",RLIMIT_RSS},{"memlock",RLIMIT_MEMLOCK},
+        {"nproc",RLIMIT_NPROC},{"nofile",RLIMIT_NOFILE},{0,0}};
+    char *s=strdup(spec); if(!s) return; char *sv=0;
+    for(char *tok=strtok_r(s,",",&sv); tok; tok=strtok_r(0,",",&sv)){
+        char *eq=strchr(tok,'='); if(!eq) continue; *eq=0;
+        int res=-1; for(int i=0;t[i].n;i++) if(!strcmp(tok,t[i].n)){ res=t[i].r; break; }
+        if(res<0) continue;
+        char *colon=strchr(eq+1,':'); rlim_t soft,hard;
+        #define DJ_ULV(x) (!strcmp((x),"unlimited")||!strcmp((x),"-1") ? RLIM_INFINITY : (rlim_t)dd_parse_u64("DD_ULIMITS",(x),0,RLIM_INFINITY))
+        if(colon){ *colon=0; soft=DJ_ULV(eq+1); hard=DJ_ULV(colon+1); } else { soft=hard=DJ_ULV(eq+1); }
+        #undef DJ_ULV
+        struct rlimit r={soft,hard}; setrlimit(res,&r);
+    }
+    free(s);
+}
+// docker --read-only: 1 if a WRITE to container path `cont` must fail EROFS -- i.e. the rootfs is read-only
+// and `cont` routes to it (not a bind volume, not a writable pseudo-mount /proc /dev /sys /tmp /run). Mirrors
+// the linux engine's rootfs_ro_denies() so the three engines agree. Pure string math on the container path.
+static int dj_ro_denies(const char *cont){
+    if(!g_rootfs_ro || !cont || cont[0]!='/') return 0;
+    char c[1024]; dj_canon("/", cont, c, sizeof c);
+    for(int i=0;i<g_nvol;i++){ size_t L=strlen(g_vol[i].cont);
+        if(!strncmp(c,g_vol[i].cont,L) && (c[L]=='/'||c[L]==0)) return 0; } // a bind volume governs (writable)
+    static const char *const w[]={"/proc","/dev","/sys","/tmp","/run",0};
+    for(int i=0;w[i];i++){ size_t L=strlen(w[i]);
+        if(!strncmp(c,w[i],L) && (c[L]=='/'||c[L]==0)) return 0; }
+    return 1;
+}
+// A write mode string for fopen/freopen ("w","a","r+","w+","a+",...) requests write access.
+static int dj_fopen_writes(const char *m){ return m && (strchr(m,'w')||strchr(m,'a')||strchr(m,'+')); }
 
 // Materialize a bind volume's mount point (and every ancestor) as a real, empty directory in the
 // writable rootfs, so listing a mount's PARENT shows the mount as a directory entry -- exactly what
@@ -109,6 +151,12 @@ __attribute__((constructor)) static void init(void){
     char *mm=getenv("DD_MEM_MAX"), *pm=getenv("DD_PIDS_MAX");
     if(mm){ rlim_t v=dd_parse_u64("DD_MEM_MAX",mm,0,RLIM_INFINITY); struct rlimit r={v,v}; setrlimit(RLIMIT_AS,&r); }
     if(pm){ rlim_t v=dd_parse_u64("DD_PIDS_MAX",pm,0,INT_MAX); struct rlimit r={v,v}; setrlimit(RLIMIT_NPROC,&r); }
+    // docker --read-only / --cpus / --ulimit (the darwinjail equivalents of the linux engine's DD_ROOTFS_RO
+    // EROFS jail, --cpus reporting cap, and DD_ULIMITS setrlimit set). CPU cap is applied in the sysconf/
+    // sysctl interposers below; the rlimits are set natively here so the guest's getrlimit reflects them.
+    g_rootfs_ro = getenv("DD_ROOTFS_RO") != 0;
+    { char *cs=getenv("DD_CPUS"); if(cs && cs[0]){ int v=(int)dd_parse_u64("DD_CPUS",cs,1,1024); g_cpu_max=v; } }
+    dj_apply_ulimits(getenv("DD_ULIMITS"));
     if(getenv("DD_SANDBOX") && g_rootfs){
         char prof[4096]; int n=snprintf(prof,sizeof prof,
             "(version 1)(allow default)(deny file-write* (subpath \"/\"))"
@@ -173,12 +221,15 @@ static const char *jail(const char *p, char *out){
 static const char *jail2(const char *p, char *out){ return jail(p, out); }
 #define JAIL_A(p) ({ static __thread char _a[1024]; jail2((p),_a); })
 
+#define DJ_WRFLAGS (O_WRONLY|O_RDWR|O_CREAT|O_TRUNC|O_APPEND)
 int jail_open(const char *path, int flags, ...){
     mode_t m=0; if(flags & O_CREAT){ va_list ap; va_start(ap,flags); m=(mode_t)va_arg(ap,int); va_end(ap); }
+    if((flags & DJ_WRFLAGS) && dj_ro_denies(path)){ errno=EROFS; return -1; } // docker --read-only
     return open(JAIL(path), flags, m);
 }
 int jail_openat(int fd,const char*path,int flags,...){
     mode_t m=0; if(flags&O_CREAT){ va_list ap; va_start(ap,flags); m=(mode_t)va_arg(ap,int); va_end(ap); }
+    if((flags & DJ_WRFLAGS) && path && path[0]=='/' && dj_ro_denies(path)){ errno=EROFS; return -1; }
     return openat(fd, path&&path[0]=='/'?JAIL(path):path, flags, m);
 }
 int   jail_stat (const char*p, struct stat*s){ return stat (JAIL(p), s); }
@@ -188,11 +239,11 @@ int   jail_access(const char*p,int m){ return access(JAIL(p), m); }
 int   jail_faccessat(int fd,const char*p,int m,int f){ return faccessat(fd, p&&p[0]=='/'?JAIL(p):p, m, f); }
 ssize_t jail_readlink(const char*p,char*b,size_t n){ return readlink(JAIL(p), b, n); }
 ssize_t jail_readlinkat(int fd,const char*p,char*b,size_t n){ return readlinkat(fd, p&&p[0]=='/'?JAIL(p):p, b, n); }
-int   jail_unlink(const char*p){ return unlink(JAIL(p)); }
-int   jail_unlinkat(int fd,const char*p,int f){ return unlinkat(fd, p&&p[0]=='/'?JAIL(p):p, f); }
-int   jail_mkdir(const char*p,mode_t m){ return mkdir(JAIL(p), m); }
-int   jail_mkdirat(int fd,const char*p,mode_t m){ return mkdirat(fd, p&&p[0]=='/'?JAIL(p):p, m); }
-int   jail_rmdir(const char*p){ return rmdir(JAIL(p)); }
+int   jail_unlink(const char*p){ if(dj_ro_denies(p)){ errno=EROFS; return -1; } return unlink(JAIL(p)); }
+int   jail_unlinkat(int fd,const char*p,int f){ if(p&&p[0]=='/'&&dj_ro_denies(p)){ errno=EROFS; return -1; } return unlinkat(fd, p&&p[0]=='/'?JAIL(p):p, f); }
+int   jail_mkdir(const char*p,mode_t m){ if(dj_ro_denies(p)){ errno=EROFS; return -1; } return mkdir(JAIL(p), m); }
+int   jail_mkdirat(int fd,const char*p,mode_t m){ if(p&&p[0]=='/'&&dj_ro_denies(p)){ errno=EROFS; return -1; } return mkdirat(fd, p&&p[0]=='/'?JAIL(p):p, m); }
+int   jail_rmdir(const char*p){ if(dj_ro_denies(p)){ errno=EROFS; return -1; } return rmdir(JAIL(p)); }
 // chdir confined to the container: resolve the (relative-or-absolute) target against the guest cwd, with
 // ".." clamped at the jail root, then chdir into its host mapping. On success record the new guest cwd so
 // getcwd() and subsequent relative chdirs stay consistent. "cd .." at "/" stays at "/" (never escapes).
@@ -213,17 +264,17 @@ char *jail_getcwd(char *buf, size_t size){
     memcpy(buf, g_cwd, n+1);
     return buf;
 }
-int   jail_chmod(const char*p,mode_t m){ return chmod(JAIL(p), m); }
-int   jail_chown(const char*p,uid_t u,gid_t g){ return chown(JAIL(p), u, g); }
-int   jail_lchown(const char*p,uid_t u,gid_t g){ return lchown(JAIL(p), u, g); }
+int   jail_chmod(const char*p,mode_t m){ if(dj_ro_denies(p)){ errno=EROFS; return -1; } return chmod(JAIL(p), m); }
+int   jail_chown(const char*p,uid_t u,gid_t g){ if(dj_ro_denies(p)){ errno=EROFS; return -1; } return chown(JAIL(p), u, g); }
+int   jail_lchown(const char*p,uid_t u,gid_t g){ if(dj_ro_denies(p)){ errno=EROFS; return -1; } return lchown(JAIL(p), u, g); }
 int   jail_statfs(const char*p,struct statfs*s){ return statfs(JAIL(p), s); }
-int   jail_utimes(const char*p,const struct timeval t[2]){ return utimes(JAIL(p), t); }
-int   jail_rename(const char*a,const char*b){ char x[1024]; snprintf(x,sizeof x,"%s",JAIL_A(a)); return rename(x, JAIL(b)); }
-int   jail_link  (const char*a,const char*b){ char x[1024]; snprintf(x,sizeof x,"%s",JAIL_A(a)); return link  (x, JAIL(b)); }
-int   jail_symlink(const char*t,const char*l){ return symlink(t, JAIL(l)); } // target is stored verbatim
+int   jail_utimes(const char*p,const struct timeval t[2]){ if(dj_ro_denies(p)){ errno=EROFS; return -1; } return utimes(JAIL(p), t); }
+int   jail_rename(const char*a,const char*b){ if(dj_ro_denies(a)||dj_ro_denies(b)){ errno=EROFS; return -1; } char x[1024]; snprintf(x,sizeof x,"%s",JAIL_A(a)); return rename(x, JAIL(b)); }
+int   jail_link  (const char*a,const char*b){ if(dj_ro_denies(b)){ errno=EROFS; return -1; } char x[1024]; snprintf(x,sizeof x,"%s",JAIL_A(a)); return link  (x, JAIL(b)); }
+int   jail_symlink(const char*t,const char*l){ if(dj_ro_denies(l)){ errno=EROFS; return -1; } return symlink(t, JAIL(l)); } // target is stored verbatim
 DIR  *jail_opendir(const char*p){ return opendir(JAIL(p)); }
-FILE *jail_fopen(const char*p,const char*m){ char b[1024]; return fopen(jail(p,b), m); }
-FILE *jail_freopen(const char*p,const char*m,FILE*s){ char b[1024]; return freopen(jail(p,b), m, s); }
+FILE *jail_fopen(const char*p,const char*m){ if(dj_fopen_writes(m)&&dj_ro_denies(p)){ errno=EROFS; return 0; } char b[1024]; return fopen(jail(p,b), m); }
+FILE *jail_freopen(const char*p,const char*m,FILE*s){ if(dj_fopen_writes(m)&&dj_ro_denies(p)){ errno=EROFS; return 0; } char b[1024]; return freopen(jail(p,b), m, s); }
 int jail_gethostname(char*name,size_t len){ if(g_hostname){ strlcpy(name,g_hostname,len); return 0; } return gethostname(name,len); }
 pid_t jail_getpid(void){ return g_pid1 ? 1 : getpid(); }
 // raise() on Darwin is pthread_kill(pthread_self(), sig) -- a THREAD-directed signal. The kqueue
@@ -233,6 +284,36 @@ pid_t jail_getpid(void){ return g_pid1 ? 1 : getpid(); }
 // BSD kqueue model. In a single-threaded guest this is equivalent to raise(); getpid() here is the
 // real pid (intra-dylib calls are not interposed, as jail_getpid itself relies on).
 int jail_raise(int sig){ return kill(getpid(), sig); }
+// docker --cpus: cap the online-CPU count native macOS binaries read, so a --cpus-limited darwin container
+// self-sizes to its allotment (the darwinjail analog of the linux engine's container_online_cpus()). nproc /
+// most libc consumers use sysconf(_SC_NPROCESSORS_*); Go and many runtimes read hw.ncpu / hw.activecpu /
+// hw.logicalcpu via sysctl(byname). We cap every path so GOMAXPROCS / thread-pool sizing honour --cpus.
+long jail_sysconf(int name){
+    long v=sysconf(name);
+    if(g_cpu_max>0 && (name==_SC_NPROCESSORS_ONLN||name==_SC_NPROCESSORS_CONF) && v>g_cpu_max) return g_cpu_max;
+    return v;
+}
+static void dj_cap_cpu_buf(void *oldp,size_t *oldlenp){
+    if(g_cpu_max<=0 || !oldp || !oldlenp) return;              // sysctl returns int OR int64 for hw.* cpu keys
+    if(*oldlenp==sizeof(int)){ int *p=oldp; if(*p>g_cpu_max) *p=g_cpu_max; }
+    else if(*oldlenp==sizeof(int64_t)){ int64_t *p=oldp; if(*p>(int64_t)g_cpu_max) *p=g_cpu_max; }
+}
+static int dj_is_cpu_name(const char *n){
+    static const char *const k[]={"hw.ncpu","hw.activecpu","hw.logicalcpu","hw.logicalcpu_max",
+        "hw.physicalcpu","hw.physicalcpu_max","hw.availcpu",0};
+    for(int i=0;k[i];i++) if(!strcmp(n,k[i])) return 1;
+    return 0;
+}
+int jail_sysctlbyname(const char *name,void *oldp,size_t *oldlenp,void *newp,size_t newlen){
+    int r=sysctlbyname(name,oldp,oldlenp,newp,newlen);
+    if(r==0 && name && dj_is_cpu_name(name)) dj_cap_cpu_buf(oldp,oldlenp);
+    return r;
+}
+int jail_sysctl(int *mib,u_int namelen,void *oldp,size_t *oldlenp,void *newp,size_t newlen){
+    int r=sysctl(mib,namelen,oldp,oldlenp,newp,newlen);
+    if(r==0 && mib && namelen>=2 && mib[0]==CTL_HW && (mib[1]==HW_NCPU||mib[1]==HW_AVAILCPU)) dj_cap_cpu_buf(oldp,oldlenp);
+    return r;
+}
 int jail_bind(int s,const struct sockaddr*a,socklen_t l){
     if(a && a->sa_family==AF_INET){ struct sockaddr_in in=*(struct sockaddr_in*)a; int p=ntohs(in.sin_port);
         for(int i=0;i<g_npub;i++) if(g_pub[i].cont==p){ in.sin_port=htons(g_pub[i].host); return bind(s,(struct sockaddr*)&in,l); } }
@@ -347,6 +428,7 @@ INTERPOSE(jail_link, link)         INTERPOSE(jail_symlink, symlink)    INTERPOSE
 INTERPOSE(jail_fopen, fopen)       INTERPOSE(jail_freopen, freopen)
 INTERPOSE(jail_gethostname, gethostname) INTERPOSE(jail_bind, bind)    INTERPOSE(jail_getpid, getpid)
 INTERPOSE(jail_raise, raise)
+INTERPOSE(jail_sysconf, sysconf)   INTERPOSE(jail_sysctlbyname, sysctlbyname) INTERPOSE(jail_sysctl, sysctl)
 INTERPOSE(jail_execve, execve)     INTERPOSE(jail_posix_spawn, posix_spawn) INTERPOSE(jail_posix_spawnp, posix_spawnp)
 INTERPOSE(jail_mmap, mmap)         INTERPOSE(jail_sys_icache_invalidate, sys_icache_invalidate)
 INTERPOSE(jail_clear_cache, dj_clear_cache)

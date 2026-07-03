@@ -40,6 +40,7 @@ use ddjit::{Guest, PortMap, SpawnConfig, Volume};
 mod lifecycle;
 mod exec;
 mod inspect;
+pub(crate) mod ports;
 pub(crate) use lifecycle::*;
 pub(crate) use exec::*;
 pub(crate) use inspect::*;
@@ -121,6 +122,9 @@ async fn do_stop(a: &App, id: &str, sig: i32, t: i64) -> Response {
             waited += 100;
         }
     }
+    // Release the published-port host listeners — `docker stop` frees the binding (a later container may
+    // re-publish the same host port). Idempotent + no-op when nothing was published.
+    ports::stop(&full);
     // mark exited (as before); the reaper sets the real exit_code when the signalled process dies.
     let mut g = a.inner.lock().await;
     if let Some(c) = g.containers.get_mut(&full) { c.status = "exited".into(); c.finished_at = now_secs(); c.finished_at_ns = now_nanos(); }
@@ -134,10 +138,42 @@ fn q_truthy(s: &Option<String>) -> bool {
     matches!(s.as_deref(), Some("1") | Some("true") | Some("True"))
 }
 
-/// Build the `Ports` array Docker clients expect from our "host:container,..." publish string.
+/// One parsed published-port binding. The internal `publish` string (stored on the container, threaded to
+/// the engine + forwarder) is a comma-list of `[hostIP]:hostPort:containerPort[/proto]` entries — the full
+/// docker `-p [[hostIP:]hostPort:]containerPort[/proto]` shape (empty hostIP ⇒ 0.0.0.0, absent proto ⇒ tcp).
+pub(crate) struct PubPort {
+    pub host_ip: String,
+    pub host_port: u16,
+    pub container_port: u16,
+    pub proto: String,
+}
+
+/// Parse the internal `publish` string into structured bindings. Tolerates the legacy 2-field
+/// `hostPort:containerPort` form (hostIP defaults to 0.0.0.0) so a state file written by an older daemon
+/// still loads. IPv6 host addresses (which themselves contain `:`) are handled: we split the port fields
+/// off the RIGHT, leaving the remainder as the host IP.
+pub(crate) fn parse_publish(publish: &str) -> Vec<PubPort> {
+    publish.split(',').filter(|s| !s.is_empty()).filter_map(|entry| {
+        // proto is an optional `/tcp` | `/udp` suffix on the whole entry.
+        let (rest, proto) = entry.rsplit_once('/').map(|(r, p)| (r, p.to_string())).unwrap_or((entry, "tcp".into()));
+        let (rest, cport) = rest.rsplit_once(':')?;               // rightmost field = container port
+        let (host_ip, hport) = match rest.rsplit_once(':') {      // next field = host port; rest = host IP
+            Some((ip, hp)) => (ip, hp),
+            None => ("", rest),                                   // legacy 2-field: only hostPort:cport
+        };
+        Some(PubPort {
+            host_ip: if host_ip.is_empty() { "0.0.0.0".into() } else { host_ip.into() },
+            host_port: hport.parse().ok()?,
+            container_port: cport.parse().ok()?,
+            proto,
+        })
+    }).collect()
+}
+
+/// Build the `Ports` array Docker clients expect (top-level `docker ps` / list JSON).
 pub(crate) fn ports_json(publish: &str) -> Vec<Value> {
-    publish.split(',').filter(|s| !s.is_empty()).filter_map(|p| p.split_once(':')).filter_map(|(h, c)| {
-        Some(json!({"PublicPort": h.parse::<u16>().ok()?, "PrivatePort": c.parse::<u16>().ok()?, "Type": "tcp", "IP": "0.0.0.0"}))
+    parse_publish(publish).into_iter().map(|p| {
+        json!({"PublicPort": p.host_port, "PrivatePort": p.container_port, "Type": p.proto, "IP": p.host_ip})
     }).collect()
 }
 
@@ -145,10 +181,11 @@ pub(crate) fn ports_json(publish: &str) -> Vec<Value> {
 /// (it panics if `.NetworkSettings` is absent). Distinct from the top-level `Ports` array above.
 pub(crate) fn ports_map_json(publish: &str) -> Value {
     let mut m = serde_json::Map::new();
-    for p in publish.split(',').filter(|s| !s.is_empty()) {
-        if let Some((h, c)) = p.split_once(':') {
-            m.insert(format!("{c}/tcp"), json!([{"HostIp": "0.0.0.0", "HostPort": h}]));
-        }
+    for p in parse_publish(publish) {
+        m.entry(format!("{}/{}", p.container_port, p.proto))
+            .or_insert_with(|| Value::Array(vec![]))
+            .as_array_mut().unwrap()
+            .push(json!({"HostIp": p.host_ip, "HostPort": p.host_port.to_string()}));
     }
     Value::Object(m)
 }

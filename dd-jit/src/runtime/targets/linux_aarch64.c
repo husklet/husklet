@@ -287,6 +287,7 @@ int dd_run(const char *rootfs, int argc, char *const argv[]) {
         if (m && !g_mem_max) g_mem_max = parse_size(m);
         const char *p = getenv("DD_PIDS_MAX");
         if (p && !g_pids_max) g_pids_max = dd_parse_id("DD_PIDS_MAX", p);
+        container_read_resource_env(); // docker --cpus / --read-only / --ulimit (DD_CPUS/DD_ROOTFS_RO/DD_ULIMITS)
         const char *pub = getenv("DD_PUBLISH");
         if (pub && !g_nportmap) parse_publish(pub);
         const char *low = getenv("DD_LOWER");

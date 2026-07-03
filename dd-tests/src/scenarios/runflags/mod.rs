@@ -23,19 +23,26 @@ docker inspect -f "{{.State.Running}}" ${C}c"#).has("true").timeout(30),
         s("runflags/env-e").host(r#"
 docker run --rm $PLAT -e FOO=barbaz $IMG printenv FOO"#).has("barbaz"),
 
-        // -p : publish a container port to a host port; the published port is reachable from the host
-        // PARTIAL (dd, arm): the daemon now ALLOCATES the host port for the `-p 127.0.0.1::9000` auto-assign
-        // form and reports it via `docker port`/`ps`/inspect (so observe/ps-ports/port pass), and the engine's
-        // host forwarder reaches a stable long-lived listener. This recipe re-listens every second
-        // (`nc -l -w 1` loop); the forwarder is bound to the guest process that called listen(), so it churns
-        // on each re-listen and the single host connect races that window -> still xfail. A normal server that
-        // binds once (nginx/redis) is reachable. Fixing the re-listen case needs a process-independent
-        // forwarder (engine architecture).
-        s("runflags/publish-p").host(r#"
+        // -p : publish a container port to a host port; the published port is reachable from the host.
+        // #320: the host listener is now owned by the DAEMON (containers/ports.rs), not the guest engine
+        // process, so a RE-LISTENING server stays continuously reachable. This recipe re-binds every second
+        // (`nc -l -w 1` loop, a fresh process each iteration); with the old in-engine forwarder the host
+        // listener died with each nc and the connect raced the rebind gap (xfail). The daemon listener
+        // outlives every guest process and dials the container's switch inode fresh per connection
+        // (gap-tolerant), so this is GREEN. Runs on both Linux arches (the guest nc goes through the JIT).
+        s("runflags/publish-p").only(&Target::LINUX).host(r#"
 docker run -d --name ${C}svc $PLAT -p 127.0.0.1::9000 $IMG sh -c "while true; do echo PUBOK | nc -l -p 9000 -w 1; done" >/dev/null
 sleep 1
 HP=$(docker port ${C}svc 9000/tcp | head -1 | sed "s/.*://")
-nc -w 2 127.0.0.1 $HP"#).has("PUBOK").timeout(30).xfail(&[Target::ArmLinux]),
+nc -w 2 127.0.0.1 $HP"#).has("PUBOK").timeout(30),
+
+        // -p : an EXPLICIT host port (not auto-assigned), reachable from the host, and honoring the bound
+        // host IP (127.0.0.1 publish is loopback-only). A single long-lived server (binds once) — the
+        // common nginx/redis shape. Verifies the explicit `H:C` publish path + fixed-port forwarder.
+        s("runflags/publish-p-explicit").only(&Target::LINUX).host(r#"
+docker run -d --name ${C}svc2 $PLAT -p 127.0.0.1:38080:9000 $IMG sh -c "while true; do echo EXPLICITOK | nc -l -p 9000 -w 5; done" >/dev/null
+sleep 1
+nc -w 2 127.0.0.1 38080"#).has("EXPLICITOK").timeout(30),
 
         // -v : bind mount, data readable + writable both ways
         s("runflags/bind-mount-v").host(r#"
