@@ -10,7 +10,7 @@ static int cgid(void);
 // BUG #181: a guest chown is persisted as a host xattr on the overlay-upper file; prefer it over the
 // #156 cuid/cgid default (defined in os/linux/container/state.c, later in this unity TU). hostpath/fd
 // identify the just-stat'd backing file (NULL/-1 when synthetic or unavailable -> default applies).
-static int chown_xattr_get(const char *hostpath, int fd, int *uid, int *gid);
+static int chown_xattr_get(const char *hostpath, int fd, uint64_t dev, uint64_t ino, int *uid, int *gid);
 
 static void fill_linux_stat(uint8_t *d, const struct stat *s, const char *hostpath, int fd) {
     memset(d, 0, 128);
@@ -21,7 +21,7 @@ static void fill_linux_stat(uint8_t *d, const struct stat *s, const char *hostpa
     uint32_t uid = (s->st_uid == (uid_t)getuid()) ? (uint32_t)cuid() : s->st_uid;
     uint32_t gid = (s->st_gid == (gid_t)getgid()) ? (uint32_t)cgid() : s->st_gid;
     int xu, xg;
-    if (chown_xattr_get(hostpath, fd, &xu, &xg)) {
+    if (chown_xattr_get(hostpath, fd, (uint64_t)s->st_dev, (uint64_t)s->st_ino, &xu, &xg)) {
         if (xu >= 0) uid = (uint32_t)xu;
         if (xg >= 0) gid = (uint32_t)xg;
     }
