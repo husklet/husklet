@@ -319,6 +319,34 @@ int dd_run(const char *rootfs, int argc, char *const argv[]) {
     container_init(rootfs);
     int rc = engine_global_init();
     if (rc) return rc;
+    // Initial-exec shebang handling -- mirror of linux_aarch64.c (and execve case 221) via the shared
+    // resolve_shebang_chain(). The container entry may itself be a "#!" script (redis/postgres'
+    // docker-entrypoint.sh), and that script's interpreter may ITSELF be a "#!" script (nested, Linux
+    // binfmt_script). load_elf has no ELF-magic/#! check, so without this it parses the script text as a
+    // bogus ELF (e_machine garbage) and faults before any guest syscall runs. Resolve the whole chain,
+    // rewriting argv to [finalInterp, ..., scriptpath, args...] and loading the FINAL interpreter. A
+    // non-shebang ELF entry falls straight through unchanged (argc/argv untouched -> byte-identical).
+    static char sb_gb[1024], sb_pb[4200], sb_fhb[4200];
+    static char sb_store[SHEBANG_MAX * 2][256];
+    static char *sb_argv[256];
+    const char *sb_prog = find_in_path(argv[0], sb_gb, sizeof sb_gb); // bare "sh" -> "/bin/sh" via PATH
+    const char *sb_prog_host = xresolve_overlay(sb_prog, sb_pb, sizeof sb_pb);
+    int sb_argc = 0;
+    sb_argv[sb_argc++] = (char *)sb_prog;
+    for (int i = 1; i < argc && sb_argc < 255; i++)
+        sb_argv[sb_argc++] = (char *)argv[i];
+    sb_argv[sb_argc] = NULL;
+    const char *sb_finalhost;
+    int sb_new = resolve_shebang_chain(sb_argv, sb_argc, 256, sb_prog_host, sb_store, sb_fhb, sizeof sb_fhb,
+                                       &sb_finalhost);
+    if (sb_new < 0) {
+        fprintf(stderr, "dd: too many nested #! interpreters (ELOOP): %s\n", argv[0]);
+        return 40; // ELOOP
+    }
+    if (sb_new != sb_argc) { // a shebang chain resolved -> run the final interpreter, not the script
+        argc = sb_new;
+        argv = (char *const *)sb_argv;
+    }
     struct loaded lm, li;
     uint64_t jump, at_base;
     int have_interp;
@@ -367,7 +395,17 @@ int main(int argc, char **argv) {
             add_lower(argv[ai + 1]);
             ai += 2;
         } // overlay read-only layer
-        else if (strcmp(argv[ai], "--uid") == 0) { // docker --user uid (USER-ns uid); else container default 0
+        else if (strcmp(argv[ai], "--hostname") == 0) { // docker --hostname -> uname/gethostname + /etc/hostname
+            strncpy(g_hostname, argv[ai + 1], 64);
+            g_hostname[64] = 0;
+            ai += 2;
+        } else if (strcmp(argv[ai], "--mem-max") == 0) { // docker --memory -> brk/mmap charge + /proc reporting
+            g_mem_max = parse_size(argv[ai + 1]);
+            ai += 2;
+        } else if (strcmp(argv[ai], "--pids-max") == 0) { // docker --pids-limit -> pids.max reporting
+            g_pids_max = dd_parse_id("--pids-max", argv[ai + 1]);
+            ai += 2;
+        } else if (strcmp(argv[ai], "--uid") == 0) { // docker --user uid (USER-ns uid); else container default 0
             g_uid = dd_parse_id("--uid", argv[ai + 1]);
             ai += 2;
         } else if (strcmp(argv[ai], "--gid") == 0) {

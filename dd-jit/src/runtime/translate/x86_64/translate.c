@@ -2778,6 +2778,15 @@ static void *translate_block(uint64_t gpc) {
                 } else if (op == 0xE7 && I.p66) { // movntdq (66): non-temporal store xmm -> m128
                     emit_ea(&I, next);
                     e_str_q(vd, 17, 0);
+                } else if (op == 0xF7 && I.p66) { // maskmovdqu (66): per-byte masked store xmm(vd) -> [RDI],
+                    // mask = xmm(vm); only each mask byte's MSB selects. Read-modify-write blend at [RDI]
+                    // (the region is writable; unselected bytes keep their memory value == architecturally
+                    // "not stored"). sel = sshr(mask,#7) -> 0xFF where store; BSL sel?src:mem; store back.
+                    e_vshr_imm(18, vm, 8, 7, 1);       // sshr v18.16b, vmask.16b, #7
+                    e_mov_rr(17, RDI, 1);              // x17 = RDI (guest addr == host addr, in-process)
+                    e_ldr_q(16, 17, 0);               // v16 = [RDI]
+                    e_v3(0x6E601C00u, 18, vd, 16);    // bsl v18.16b, vsrc.16b, v16.16b (sel?src:mem)
+                    e_str_q(18, 17, 0);               // [RDI] = blended
                 } else if (op == 0x2B && I.is_mem) { // movntps (NP) / movntpd (66): non-temporal store xmm -> m128
                     emit_ea(&I, next);               // (aligned, non-temporal -> a plain 128-bit store on ARM; #190)
                     e_str_q(vd, 17, 0);
@@ -2861,9 +2870,51 @@ static void *translate_block(uint64_t gpc) {
                 int isleft = (op == 0xA4 || op == 0xA5), bycl = (op == 0xA5 || op == 0xAD);
                 int w = I.opsize, mem;
                 if (w == 2) {
-                    report_unimpl(gpc, &I);
-                    break;
-                } // 16-bit shld/shrd: rare, EXTR can't do 16-bit lanes
+                    // 16-bit SHLD/SHRD: EXTR can't do 16-bit lanes, so build a 32-bit concatenation and
+                    // shift it. SHLD: t = (dst<<16)|src; t<<=n; result = t>>16. SHRD: t = (src<<16)|dst;
+                    // t>>=n; result = t&0xffff. Exact for n in [0,16] (x86 leaves n>15 undefined for 16-bit).
+                    int dst = rm_load(&I, next, 2, &mem), src = I.reg;
+                    e_uxt(19, dst, 2); // x19 = dst & 0xffff
+                    e_uxt(20, src, 2); // x20 = src & 0xffff
+                    if (!bycl) {
+                        int n = (int)(I.imm & 31);
+                        if (n == 0) {
+                            if (mem) e_store(2, dst, 17);
+                            gpc = next;
+                            continue;
+                        } // count 0 -> no change, flags intact
+                        if (isleft) {
+                            e_lsl_i(19, 19, 16, 0);         // dst<<16
+                            e_rrr(A_ORR, 19, 19, 20, 0, 0); // (dst<<16)|src
+                            e_lsl_i(19, 19, n, 0);          // <<= n
+                            e_lsr_i(16, 19, 16, 0);         // result = >>16
+                        } else {
+                            e_lsl_i(20, 20, 16, 0);         // src<<16
+                            e_rrr(A_ORR, 19, 20, 19, 0, 0); // (src<<16)|dst
+                            e_lsr_i(16, 19, n, 0);          // >>= n (low 16 = result)
+                        }
+                    } else {
+                        e_movconst(23, 31);
+                        e_rrr(A_AND, 17, RCX, 23, 0, 0); // n = cl & 31
+                        if (isleft) {
+                            e_lsl_i(19, 19, 16, 0);
+                            e_rrr(A_ORR, 19, 19, 20, 0, 0); // (dst<<16)|src
+                            e_shv(S_LSLV, 19, 19, 17, 0);   // <<= n
+                            e_lsr_i(16, 19, 16, 0);
+                        } else {
+                            e_lsl_i(20, 20, 16, 0);
+                            e_rrr(A_ORR, 19, 20, 19, 0, 0); // (src<<16)|dst
+                            e_shv(S_LSRV, 16, 19, 17, 0);   // >>= n
+                        }
+                        // n==0: dst unchanged. The concat-shift already yields dst for n==0, so no csel needed.
+                    }
+                    e_lsl_i(21, 16, 16, 0); // 16-bit SF/ZF via high-bit test
+                    e_tst(21, 0);
+                    e_nzcv_save();
+                    rm_store(&I, 2, 16);
+                    gpc = next;
+                    continue;
+                }
                 int ssf = (w == 8) ? 1 : 0, width = ssf ? 64 : 32;
                 int dst = rm_load(&I, next, w, &mem), src = I.reg;
                 if (!bycl) {
