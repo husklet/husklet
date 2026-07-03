@@ -98,16 +98,18 @@ static struct {
 // is unchanged. Reset whenever g_map is wholesale-cleared (the set then re-fills as blocks re-translate).
 #define TXPG_N (1u << 18) // 256K slots * 8B = 2MB; guest code spans at most a few thousand pages
 static uint64_t g_txpg[TXPG_N]; // value = guest page (addr>>12); 0 = empty (page 0 never holds guest code)
+static void txpg_put(uint64_t p) { // insert one guest page (addr>>12) into the set
+    uint32_t h = (uint32_t)(p * 2654435761u) & (TXPG_N - 1);
+    for (uint32_t i = 0; i < TXPG_N; i++) {
+        uint32_t j = (h + i) & (TXPG_N - 1);
+        if (g_txpg[j] == p) break;                    // already present
+        if (g_txpg[j] == 0) { g_txpg[j] = p; break; } // insert into the first empty slot
+    }
+}
 static void txpg_mark(uint64_t lo, uint64_t hi) {
     if (hi <= lo) hi = lo + 1;
-    for (uint64_t p = lo >> 12; p <= ((hi - 1) >> 12); p++) {
-        uint32_t h = (uint32_t)(p * 2654435761u) & (TXPG_N - 1);
-        for (uint32_t i = 0; i < TXPG_N; i++) {
-            uint32_t j = (h + i) & (TXPG_N - 1);
-            if (g_txpg[j] == p) break;                    // already present
-            if (g_txpg[j] == 0) { g_txpg[j] = p; break; } // insert into the first empty slot
-        }
-    }
+    for (uint64_t p = lo >> 12; p <= ((hi - 1) >> 12); p++)
+        txpg_put(p);
 }
 static int txpg_has(uint64_t addr) {
     uint64_t p = addr >> 12;
@@ -224,6 +226,12 @@ static uint64_t g_prof_bl_shadow, g_prof_bl_leaf;
 #endif
 static int g_ibprof;    // IBPROF=1
 static int g_vdbetrace; // VDBETRACE=1 (ARM-B1 prototype gate; defined here, used in translate.c)
+// IBSLIM (perf lever #4): indirect-dispatch/call-path slimming (aarch64; defined here -- shared TU --
+// used in translate/aarch64). NOIBSLIM=1 reverts every piece (steal-aware emit_set_x30 + the dead
+// per-site-IC skip at recognized interpreter-dispatch `br`s) for A/B. CTXDISP=1 additionally enables
+// the experimental history-keyed context dispatch at recognized dispatch sites (measurement gate).
+static int g_noibslim; // NOIBSLIM=1
+static int g_ctxdisp;  // CTXDISP=1
 #define IBSITE_N 8192
 static struct ibsite {
     uint64_t site, count, last_tgt, mono; // mono = #times target==previous target at this site
@@ -334,6 +342,51 @@ static void vt_dump(void) {
         fprintf(stderr, "[vdbetrace] guard_hits=%llu (threaded direct chains taken; VTHITCOUNT perturbs timing)\n",
                 (unsigned long long)g_vt_hit);
 }
+
+// ---- CTXDISP (lever #4 experiment): history-keyed context dispatch at recognized interpreter-
+// dispatch sites (computed-goto / jump-table `br xN`). Each site gets an in-cache array of CTX_N
+// 64-byte stubs, one per rolling-history hash bucket: {16B atomic {target,body} pair | guard code}.
+// The main site indexes the array by a hash of the last ~3 guest targets ONLY (never the current
+// one), so each history context owns a PRIVATE `br` whose target the host BTB predicts per-address
+// (the order-3 Markov signal: 83% at the CPython-shaped megamorphic site). The guard is an exact
+// 64-bit compare of the REAL computed target against the stub's filled target before the jump, so a
+// stale/colliding stub can never land wrong -- it falls into the ordinary shared-hash IBTC probe.
+// Stubs are (re)filled by the dispatcher (ctx_fill), throttled by a per-site countdown so steady-
+// state refills cost ~1/CTX_REFILL of ctx misses. Gated CTXDISP=1 (measurement; default OFF).
+#define CTX_N 256      // history buckets (stubs) per site; 64B each -> 16KB in-cache per site
+#define CTX_REFILL 64  // ctx misses between dispatcher refills (throttle)
+#define CTXSITE_MAX 256
+static struct {
+    uint64_t gpc;  // dispatch-site guest pc (dedup on re-translate)
+    uint64_t hist; // rolling target history (h = (h<<16) ^ (target>>2)); emitted code reads+writes
+    uint64_t ctr;  // refill throttle countdown (emitted code decrements; dispatcher resets)
+} g_ctxsite[CTXSITE_MAX];
+static int g_nctxsite;
+static uint64_t g_ctx_fills; // dispatcher stub (re)specializations
+static int ctxsite_slot(uint64_t gpc) {
+    for (int i = 0; i < g_nctxsite; i++)
+        if (g_ctxsite[i].gpc == gpc) return i;
+    if (g_nctxsite >= CTXSITE_MAX) return -1;
+    int i = g_nctxsite++;
+    g_ctxsite[i].gpc = gpc;
+    g_ctxsite[i].hist = 0;
+    g_ctxsite[i].ctr = CTX_REFILL;
+    return i;
+}
+// A ctx stub missed to the dispatcher (throttled): (re)specialize the stub whose 16B pair sits at
+// pair_rx (RX alias; tag bits already stripped) to the just-resolved target. Same publish contract
+// as the shared hash: single 128-bit release store (atomic under LSE2), so a lock-free reader can
+// never observe a torn {target,body} -- and the emitted guard re-verifies target equality anyway.
+static void ctx_fill(uint64_t pair_rx, uint64_t target) {
+    void *bd = map_body(target);
+    if (!bd) return; // not translated (dispatcher translates target first, so this is defensive)
+    ibtc_publish((ibtc_ent *)J_RW((void *)pair_rx), target, J_RX(bd));
+    g_ctx_fills++;
+}
+static void ctx_dump(void) {
+    if (!g_ctxdisp) return;
+    fprintf(stderr, "[ctxdisp] sites=%d fills=%llu\n", g_nctxsite, (unsigned long long)g_ctx_fills);
+}
 // ARM-B1: recognize a clang jump-table switch dispatch at a guest `br xN`. The compiler emits
 //   ldrh wM,[xB,wI,uxtw #1] ; adr xA,. ; add xN,xA,wM,sxth #2 ; br xN
 // (an indexed 16-bit offset table). Bit-exact opcode match on the 3 predecessors + Rd==br.Rn.
@@ -361,6 +414,29 @@ static int is_jt_dispatch_block(uint64_t tgt) {
         if ((in & 0xFC000000u) == 0x14000000u) return 0; // unconditional b: block ends before any br
     }
     return 0;
+}
+// IBSLIM: recognize an interpreter-dispatch indirect `br xN` -- a jump through a table of CODE
+// POINTERS: `ldr xN, [xB, {w|x}M, {uxtw|lsl|sxtw} #3]` feeding `br xN` (gcc/clang computed goto --
+// CPython's eval loop, sqlite's VDBE -- and any switch over a pointer table), or clang's
+// 16-bit-offset jump table (is_jt_dispatch_br). Such a site is megamorphic by construction, so its
+// per-site monomorphic IC is dead weight (measured 5.4% hit at the CPython-shaped bench site).
+// Pure heuristic: a false negative keeps the ordinary emit_ibranch; a false positive merely skips
+// a per-site IC that would have hit. Both are correct.
+static int is_ptrtable_ldr(uint32_t in, int rt) {
+    if ((in & 0xFFE00C00u) != 0xF8600800u) return 0; // LDR Xt, [Xn, Rm, ext/lsl {#3}] (64-bit)
+    if ((int)(in & 31) != rt) return 0;              // must define the branch register
+    unsigned opt = (in >> 13) & 7;                   // uxtw(2) / lsl(3) / sxtw(6)
+    if (opt != 2 && opt != 3 && opt != 6) return 0;
+    return (int)((in >> 12) & 1);                    // S=1: scaled #3 (an 8-byte pointer table)
+}
+static int is_interp_dispatch_br(uint64_t gpc, int brn) {
+    if ((gpc & 0xFFFu) < 12) return 0; // never scan backwards across a page boundary
+    uint32_t p1 = *(uint32_t *)(gpc - 4);
+    if (is_ptrtable_ldr(p1, brn)) return 1;
+    // allow ONE scheduled insn between the table load and the br, provided it does not redefine
+    // the branch register (Rd is bits 4:0 for the data-processing forms gcc schedules here).
+    if (is_ptrtable_ldr(*(uint32_t *)(gpc - 8), brn) && (int)(p1 & 31) != brn) return 1;
+    return is_jt_dispatch_br(gpc);
 }
 static int ibsite_cmp(const void *a, const void *b) {
     uint64_t ca = ((const struct ibsite *)a)->count, cb = ((const struct ibsite *)b)->count;
@@ -464,22 +540,34 @@ static int t2_slot(uint64_t gpc) {
 
 // Direct-branch edges whose target wasn't translated yet: remembered so the branch
 // can be back-patched into a direct `b target.body` once the target is translated.
+//
+// IRQSLIM (aarch64, lever #4): when the #292 async-signal poll is emitted as a fixed 2-insn block
+// header (ldr+cbnz, see emit_irq_check), a FORWARD direct chain may land at body+8 and skip the
+// poll: a cycle of direct branches must contain a backward edge (code addresses strictly increase
+// along forward-only paths), and every indirect entry (IBTC/IC/ctx/SDC) still lands on body+0 --
+// so every possible in-cache loop keeps polling, while straight-line chains (the common case in
+// branchy interpreter code) stop paying a load+branch per block. g_fwdskip is 8 when that layout
+// is active (aarch64 default), 0 otherwise (x86 engine, NOIRQSLIM/NOIRQCHECK/NOSTEAL1617).
+static int g_fwdskip;
 static struct {
     uint32_t *slot;
     uint64_t target;
     int is_bl;
-// is_bl: §B host bl, patch as bl
+    // is_bl: §B host bl, patch as bl
+    int fwd; // IRQSLIM: forward direct edge -> patch to body+g_fwdskip (skip the entry poll)
 } g_pend[1 << 16];
 static int g_npend;
-static void add_pend2(uint32_t *slot, uint64_t target, int is_bl) {
+static void add_pend3(uint32_t *slot, uint64_t target, int is_bl, int fwd) {
     if (g_npend < (1 << 16)) {
         g_pend[g_npend].slot = slot;
         g_pend[g_npend].target = target;
         g_pend[g_npend].is_bl = is_bl;
+        g_pend[g_npend].fwd = fwd;
         g_npend++;
     }
 }
-static void add_pend(uint32_t *slot, uint64_t target) { add_pend2(slot, target, 0); }
+static void add_pend2(uint32_t *slot, uint64_t target, int is_bl) { add_pend3(slot, target, is_bl, 0); }
+static void add_pend(uint32_t *slot, uint64_t target) { add_pend3(slot, target, 0, 0); }
 static void patch_links_to(uint64_t gpc, void *body) {
     // body == NULL means gpc has no live translation (e.g. map_put silently failed on a full map).
     // Patching `b (body - slot)` would then bake a wild branch; leave the pends unresolved so they keep
@@ -487,9 +575,10 @@ static void patch_links_to(uint64_t gpc, void *body) {
     if (!body) return;
     for (int i = 0; i < g_npend;) {
         if (g_pend[i].target == gpc) {
-            int64_t d = ((uint8_t *)body - (uint8_t *)g_pend[i].slot) / 4;
+            uint8_t *entry = (uint8_t *)body + (g_pend[i].fwd ? g_fwdskip : 0);
+            int64_t d = (entry - (uint8_t *)g_pend[i].slot) / 4;
             *g_pend[i].slot =
-                // bl / b target.body
+                // bl / b target.body (+8: forward edge skips the entry poll under IRQSLIM)
                 (g_pend[i].is_bl ? 0x94000000u : 0x14000000u) | ((uint32_t)d & 0x3FFFFFFu);
             sys_icache_invalidate(g_pend[i].slot, 4);
             // swap-remove

@@ -449,8 +449,18 @@ static void emit_prof_bump(void *ctr) {
     e_ldur(9, 31, -16);
     e_ldur(10, 31, -24);
 }
-// §B: store a constant to cpu->x[30] (the stolen guest link reg). x28=cpu; x0 scratched via mscratch.
+// §B: store a constant to cpu->x[30] (the stolen guest link reg). x28=cpu.
+// IBSLIM: with x16/x17 stolen (A1 default) x16 is engine-private scratch here, so the legacy
+// x0 spill/restore dance through cpu->mscratch (5 insns, 3 memory ops PER GUEST CALL: bl and blr
+// both pass through this) collapses to movconst+str (typically 3 insns, 1 store). Guest x16 is
+// untouched -- its value lives only in cpu->x[16] under the steal. NOIBSLIM=1 restores the exact
+// legacy sequence for A/B.
 static void emit_set_x30(uint64_t val) {
+    if (g_steal1617 && !g_noibslim) {
+        e_movconst(16, val);
+        e_str(16, CPUREG, 30 * 8);
+        return;
+    }
     e_str(0, CPUREG, (int)OFF_MSCRATCH);
     e_movconst(0, val);
     e_str(0, CPUREG, 30 * 8);
@@ -733,7 +743,7 @@ static void emit_ret_ic(void) {
     // adr x9, Lsite_tgt -> dispatcher fills the site
     emit32(0);
     e_str(9, 0, OFF_ICSITE);
-    e_movconst(9, (uint64_t)block_return);
+    emit_blockret(9); // #339: recorded block_return bake (fixed 4-insn + reloc when g_pcache)
     e_br(9);
     if ((uint64_t)g_cp & 7) emit32(0);
     uint8_t *Lt = g_cp;
@@ -747,6 +757,7 @@ static void emit_ret_ic(void) {
     *p_ldrb = 0x58000000u | (((uint32_t)((Lb - (uint8_t *)p_ldrb) / 4) & 0x7FFFF) << 5) | 16;
     int64_t ao = Lt - (uint8_t *)p_adr;
     *p_adr = 0x10000000u | ((uint32_t)(ao & 3) << 29) | (((uint32_t)((ao >> 2) & 0x7FFFF)) << 5) | 9;
+    pc_record_icsite(Lt); // #339: {target,body} cache holds an arena body ptr -> neutralize on reload
 }
 
 // ---------------- the translator ----------------
@@ -771,7 +782,7 @@ static void emit_t2_counter(int slot, uint64_t start, void *body) {
     e_stur(9, 31, -16);
     e_stur(10, 31, -24);
     // x9 = &g_t2cnt[slot] (plain RW data; adrp+add reaches it)
-    e_adrp_add(9, (uint64_t)&g_t2cnt[slot]);
+    emit_t2cntptr(9, slot); // #339: recorded &g_t2cnt[slot] bake (fixed 4-insn + reloc when g_pcache)
     e_ldr(10, 9, 0);
     // --count (sub immediate: flag-free)
     e_subi(10, 10, 1);
@@ -1138,7 +1149,25 @@ static void smc_icflush(uint64_t va) {
 // self-loop back-edge that lands here keeps the guest condition flags. x16 is engine scratch (dead at body
 // entry when x16/x17 are stolen -- the default), so no guest reg is disturbed; the legacy NOSTEAL1617 path
 // spills x9 to the red zone instead. `gpc` is the block start = the guest pc to resume at.
+// IRQSLIM: when active (g_fwdskip == 8; aarch64 steal-mode default), the poll is emitted as a FIXED
+// 2-insn header (ldr + cbnz to an out-of-line exit stub at the end of the block), so a forward direct
+// chain can enter at body+8 and skip it -- every cycle still polls through its backward or indirect
+// edge (see the g_fwdskip invariant note in cache.c). g_irq_patch carries the cbnz to the end-of-block
+// stub emitter (emit_irq_stub). NOIRQSLIM=1 -> the legacy inline poll on every entry, chains to body+0.
+static uint32_t *g_irq_patch;
 static void emit_irq_check(uint64_t gpc) {
+    // NOIRQCHECK=1: MEASUREMENT-ONLY kill switch (quantifies the per-block-entry cost of the #292
+    // async-signal poll). Unsafe for async signal delivery into syscall-free loops -- never default.
+    static int noirq = -1;
+    if (noirq < 0) noirq = getenv("NOIRQCHECK") != NULL;
+    if (noirq) return;
+    (void)gpc;
+    if (g_fwdskip) {
+        e_ldr(16, CPUREG, OFF_IRQ); // ldr x16, [x28, #irq]
+        g_irq_patch = (uint32_t *)g_cp;
+        emit32(0); // cbnz x16, Lirq (the out-of-line exit stub; patched by emit_irq_stub)
+        return;
+    }
     if (g_steal1617) {
         e_ldr(16, CPUREG, OFF_IRQ); // ldr x16, [x28, #irq]
         uint32_t *p = (uint32_t *)g_cp;
@@ -1303,7 +1332,17 @@ static void *translate_block(uint64_t gpc) {
             // for a compiler switch dispatch.) Bit-exact: SDC guard falls back to the shared-hash IBTC.
             if (g_vdbetrace && brn < 16 && is_jt_dispatch_br(gpc))
                 emit_vdbe_sdc(brn);
-            else
+            else if (g_steal1617 && !g_noibslim && !g_ibprof && !is_stolen(brn) &&
+                     is_interp_dispatch_br(gpc, brn)) {
+                // IBSLIM: a recognized interpreter-dispatch site (megamorphic by construction) --
+                // skip the dead per-site IC, go straight to the shared hash. CTXDISP=1 additionally
+                // fronts it with the history-keyed stub array (see emit_ctx_dispatch).
+                int slot = g_ctxdisp ? ctxsite_slot(gpc) : -1;
+                if (slot >= 0)
+                    emit_ctx_dispatch(brn, slot);
+                else
+                    emit_hash_tail(brn);
+            } else
                 emit_ibranch(brn);
             break;
         }
@@ -1670,6 +1709,14 @@ static void *translate_block(uint64_t gpc) {
         *defer[i].patch = recode_cond(defer[i].in, d);
         emit_chain_exit(defer[i].target);
     }
+    // IRQSLIM: the out-of-line #292 poll exit stub the body-entry cbnz targets (irq set -> exit to
+    // the dispatcher at the block start, exactly like the legacy inline poll).
+    if (g_irq_patch) {
+        uint32_t *p = g_irq_patch;
+        g_irq_patch = NULL;
+        *p = 0xB5000000u | (((uint32_t)(((uint8_t *)g_cp - (uint8_t *)p) / 4) & 0x7FFFF) << 5) | 16; // cbnz x16
+        emit_exit_const(start, R_BRANCH);
+    }
     // Only the REGION HEAD (start) is registered; intermediate inlined block-starts are left
     // unregistered so a later mid-region entry self-heals via re-translate + back-patch.
     // W4E tier-2: the promoter (g_tier2_build) recompiles in place and updates the EXISTING map entry
@@ -1731,7 +1778,13 @@ static void tier2_promote(uint64_t gpc) {
     void *old_body = g_map[mi].body;
     int64_t bd = ((uint8_t *)nb - (uint8_t *)old_body) / 4;
     *(uint32_t *)old_body = 0x14000000u | ((uint32_t)bd & 0x3FFFFFFu);
-    sys_icache_invalidate(old_body, 4);
+    // IRQSLIM: forward chains enter at body+8 (past the 2-insn poll) and would miss the body+0
+    // bounce -- give the poll-skipping entry its own bounce to nb+8 (tier-2 has the same layout).
+    if (g_fwdskip) {
+        int64_t bd8 = (((uint8_t *)nb + 8) - ((uint8_t *)old_body + 8)) / 4;
+        ((uint32_t *)old_body)[2] = 0x14000000u | ((uint32_t)bd8 & 0x3FFFFFFu);
+    }
+    sys_icache_invalidate(old_body, 4 + (g_fwdskip ? 8 : 0));
     // swap the live map entry: future dispatcher lookups + IBTC fills resolve to tier-2 directly
     g_map[mi].host = nh;
     g_map[mi].body = nb;

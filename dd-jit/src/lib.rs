@@ -218,6 +218,11 @@ impl SpawnConfig {
             // The `mac` bridge drops the ambient env, so forward CRASHDBG explicitly when the host sets it
             // (the JIT installs its crash diagnostics on getenv("CRASHDBG")).
             if std::env::var("CRASHDBG").is_ok() { env += "CRASHDBG=1 "; }
+            // #339: forward the persistent-translated-code-cache controls the same way (opt-in; each is a
+            // plain getenv() in the engine). Lets `docker run`/tests enable the cross-process cache.
+            for k in ["DDJIT_PCACHE", "DDJIT_PCACHE_DIR", "DDJIT_NOPCACHE", "COLDPROF"] {
+                if let Ok(v) = std::env::var(k) { env += &format!("{}={} ", k, shq(&v)); }
+            }
             if !self.volumes.is_empty() {
                 // Per-volume token is `guest:host`; a read-only bind gets a leading `ro:` marker. A guest
                 // path always starts with '/', so the `ro:` prefix is unambiguous even if `host` contains

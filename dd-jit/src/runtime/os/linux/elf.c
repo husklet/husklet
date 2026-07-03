@@ -425,6 +425,10 @@ static int nonpie_fixup(siginfo_t *si, void *ucv) {
 // SIGSEGV/SIGBUS guard installed on the normal aarch64 run path. Serves a non-PIE absolute data access at
 // +bias (nonpie_fixup); anything else re-raises with the default action (a real crash). Inert for PIE.
 static void nonpie_guard(int sig, siginfo_t *si, void *uc) {
+    // host_range_mapped's fault-guarded probe (thread.c): a probe load on an unmapped guest page long-jumps
+    // back to report "unmapped" -> the syscall returns -EFAULT. MUST run first: nonpie_fixup would otherwise
+    // emulate a probe load of a low un-rebased pointer at +bias and resume, mis-reporting it as mapped.
+    if (hrm_fault_hook(si)) return; // never actually returns on a claim (siglongjmp); shape-only
     if (nonpie_fixup(si, uc)) return;
     // A genuine guest fault (wild pointer / null deref) with a registered guest handler is the guest's
     // to handle: synthesize+deliver the guest signal. nonpie_fixup (absolute-data) already won above.
@@ -569,7 +573,24 @@ static void load_elf(const char *path, struct loaded *out) {
     // and narrow protections per segment below. elf_map_checked retries under transient host memory
     // pressure and aborts loudly on persistent failure, so the full range is guaranteed backed here (a
     // partial/failed map never slips through to become a SIGSEGV on the guest's own text/data -- BUG#207).
-    uint8_t *base = elf_map_checked(NULL, span, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON, "image base");
+    uint8_t *base;
+    if (g_force_base) {
+        // #339: map this image at a FIXED VA (one-shot) so the translated arena -- block-map keys AND any
+        // guest address baked into host code (pcrel_base literals, non-PIE ranges) -- is byte-identical
+        // across runs, hence reusable from the persistent cache. On failure fall back to a kernel-chosen
+        // base AND latch g_force_base_failed: this run's arena mixes bases, so the pcache must neither
+        // serve it a fixed-base file (keys wouldn't match the live layout) nor persist it (a fixed-base
+        // loader could later HIT a file whose block keys/baked guest addresses belong to a random base).
+        void *want = (void *)(g_force_base + basepage);
+        g_force_base = 0; // one-shot (consumed here for THIS load)
+        base = mmap(want, span, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON | MAP_FIXED, -1, 0);
+        if (base == MAP_FAILED) {
+            g_force_base_failed = 1;
+            base = elf_map_checked(NULL, span, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON, "image base");
+        }
+    } else {
+        base = elf_map_checked(NULL, span, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON, "image base");
+    }
     gmap_add((uint64_t)base, span); // track so execve() can reclaim the inherited image
     uint64_t bias = (uint64_t)base - basepage;
     if (etype == 2) {

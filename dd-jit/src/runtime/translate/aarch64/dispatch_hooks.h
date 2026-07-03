@@ -52,6 +52,13 @@ static uint64_t g_smc_flushes;
         if (g_vdbetrace && ((c)->ic_site & 1)) {                                                            \
             sdc_fill((c)->ic_site & ~1ull, (c)->pc);                                                        \
             (c)->ic_site = 1;                                                                               \
+        } else if (g_ctxdisp && ((c)->ic_site & 2)) {                                                       \
+            /* CTXDISP: a history-keyed ctx stub missed (throttled) -- (re)specialize the stub whose   */   \
+            /* 16B pair addr is ic_site&~3 to the just-resolved target, then fall through with          */   \
+            /* ic_site=1 so G_IBTC_FILL also fills the shared hash. Same SMC gate as the per-site IC:  */   \
+            /* a code-generating guest never gets fresh ctx fills (stale stubs only ever guard-miss).  */   \
+            if (!(g_rwx_guest || g_smc_seen)) ctx_fill((c)->ic_site & ~3ull, (c)->pc);                      \
+            (c)->ic_site = 1;                                                                               \
         }                                                                                                   \
     } while (0)
 #define G_IBPROF_LOG(c)                                                                                     \

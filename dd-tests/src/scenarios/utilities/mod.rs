@@ -144,6 +144,26 @@ pub fn group() -> ScenGroup {
             .exec("printf 'dd-gzip-ok\\n' | gzip | gunzip")
             .has("dd-gzip-ok"),
 
+        // ---- overlay VFS metadata semantics (guards the overlay_lookup fast path + updirneg memo) --
+        // The engine short-circuits per-entry UPPER probes when a path's parent dir is provably absent
+        // from the upper (a negative memo, invalidated by the shared namespace epoch). This scenario
+        // exercises every way that proof can go stale: create-after-walk (same + child process),
+        // whiteout after delete, upper-shadows-lower, chmod copy-up (a NON-creating syscall that
+        // mutates the upper), and rm-rf+recreate (opaque dir hiding lower children).
+        scen("utilities/overlay-metadata", "alpine")
+            .exec("set -e; \
+                   ls -laR /usr/lib >/dev/null; \
+                   touch /usr/lib/NEWFILE && test -f /usr/lib/NEWFILE || { echo FAIL-create-after-walk; exit 1; }; \
+                   sh -c 'echo x > /usr/lib/XPROC'; test -f /usr/lib/XPROC || { echo FAIL-xproc-create; exit 1; }; \
+                   rm /etc/os-release; test ! -e /etc/os-release || { echo FAIL-whiteout; exit 1; }; \
+                   ls /etc | grep -q '^os-release$' && { echo FAIL-whiteout-readdir; exit 1; }; \
+                   echo SHADOW > /etc/hostname.d; :; \
+                   chmod 600 /etc/passwd && [ \"$(stat -c %a /etc/passwd)\" = 600 ] || { echo FAIL-chmod-copyup; exit 1; }; \
+                   grep -q root /etc/passwd || { echo FAIL-copyup-content; exit 1; }; \
+                   rm -rf /usr/share/apk && mkdir /usr/share/apk && [ -z \"$(ls /usr/share/apk)\" ] || { echo FAIL-opaque; exit 1; }; \
+                   echo overlay-metadata-ok")
+            .has("overlay-metadata-ok"),
+
         // ---- busybox (single static musl multi-call binary) --------------------------------------
         scen("utilities/busybox-arith", "busybox:latest")
             .run(&["sh", "-c", "echo $((7*6))"])

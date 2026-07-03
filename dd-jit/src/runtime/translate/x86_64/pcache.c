@@ -24,7 +24,11 @@
 // Any mismatch / truncation / corruption -> graceful MISS: ignore the file and translate fresh, re-save.
 
 #define PC_MAGIC 0x31304350544a4444ull // "DDJPCT01" (LE)
-#define PC_VERSION 4                    // BUMP on ANY codegen change (different emitted bytes -> stale)
+#define PC_VERSION 5 // BUMP on ANY codegen change (different emitted bytes -> stale). v5: IRQSLIM layout.
+// IRQSLIM changes the block-entry layout (2-insn poll header + body+8 forward entries), and it is
+// env-toggleable (NOIRQSLIM/NOIRQCHECK) -- mix the mode into the version so a cache written in one
+// mode can never be reloaded into the other (a +8 chain into a legacy-layout block would land mid-exit).
+#define PC_VERSION_EFF (PC_VERSION | ((uint64_t)(g_fwdskip ? 0x100 : 0)))
 // Fixed guest VA bases (high, reliably free above the kernel-chosen heap/stack and below the dyld shared
 // cache). Probed stable on Apple silicon; PIE images so we choose the base.
 #define PC_IMG_BASE 0x0000040000000000ull    // 4 TB
@@ -48,6 +52,8 @@ struct pc_pend {
     uint64_t slot_off, target;
     uint32_t is_bl;
 };
+
+static int g_pcache_forked; // #339: set in a fork child (fresh arena, inherited bookkeeping) -> never save
 
 static uint64_t pcache_id_of(const char *path) {
     struct stat st;
@@ -118,7 +124,7 @@ static int pcache_load(uint64_t entry_jump) {
         close(fd);
         return 0;
     }
-    if (h.magic != PC_MAGIC || h.version != PC_VERSION || h.cpu_sz != sizeof(struct cpu) || h.map_n != MAP_N ||
+    if (h.magic != PC_MAGIC || h.version != PC_VERSION_EFF || h.cpu_sz != sizeof(struct cpu) || h.map_n != MAP_N ||
         h.ibtc_n != IBTC_N || h.img_base != PC_IMG_BASE || h.interp_base != PC_INTERP_BASE ||
         h.bin_id != g_pc_binid || h.entry_jump != entry_jump || h.arena_used > CACHE_SZ || h.n_mapent > MAP_N ||
         h.n_pend > (1u << 16) || h.n_reloc > PC_RELOC_CAP) { // #297: n_reloc bound tracks the g_reloc cap
@@ -185,6 +191,12 @@ static int pcache_load(uint64_t entry_jump) {
 static void pcache_save(void) {
     if (!g_pcache || !g_pc_binid || g_cp == g_cache) return;
     if (g_pcache_poison) return; // #297: arena has un-recorded baked host pointers -> not safely relocatable
+    // #339: NEVER save from a fork child. jit_after_fork() rebuilt a FRESH EMPTY arena in the child, but
+    // the g_reloc table (and binid/entry identity) survived the fork -- a child save would persist the
+    // PARENT's reloc offsets against the child's re-translated arena, and the next load's relocation pass
+    // would stomp fixed-slot rewrites over live code at those stale offsets (intermittent SIGSEGV/hang,
+    // the aarch64 #339 concurrent-hit crash). The child's arena is only the post-fork slice anyway.
+    if (g_pcache_forked) return;
     // #297: NEVER re-save after a load. A warm run keeps translating -- notably tier-2 hot-block recompiles,
     // which re-emit into the arena WITHOUT a map entry (g_tier2_build) -- so g_cp (arena_used) grows every
     // run. Re-persisting that snowballs the on-disk arena across sequential `--rm` runs of the same image
@@ -207,7 +219,7 @@ static void pcache_save(void) {
     struct pc_hdr h;
     memset(&h, 0, sizeof h);
     h.magic = PC_MAGIC;
-    h.version = PC_VERSION;
+    h.version = PC_VERSION_EFF;
     h.cpu_sz = sizeof(struct cpu);
     h.map_n = MAP_N;
     h.ibtc_n = IBTC_N;
@@ -259,4 +271,19 @@ static void pcache_save(void) {
         fprintf(stderr, "[pcache] save %s (%llu B arena, %llu blocks) in %.3f ms\n", ok ? "ok" : "FAILED",
                 (unsigned long long)h.arena_used, (unsigned long long)nmap, (coldprof_now_ns() - _t0) / 1e6);
 }
+// #339 hygiene hooks (shared proc.c / engine/dispatch.c call these on both engines):
+//  - fork child: jit_after_fork() gave it a fresh empty arena -> drop the inherited reloc records and bar
+//    this process from saving (see the g_pcache_forked comment in pcache_save).
+//  - wholesale cache-full flush: the arena content the records described is gone -> reset so records stay
+//    in lockstep with what is re-emitted (every baked pointer recorded, by construction).
+static void pcache_after_fork(void) {
+    g_nreloc = 0;
+    g_pcache_forked = 1;
+}
+#define PCACHE_FORK_HOOK pcache_after_fork()
+static void pcache_after_wholesale_flush(void) {
+    g_nreloc = 0;
+}
+#define PCACHE_FLUSH_HOOK pcache_after_wholesale_flush()
+
 #define PCACHE_SAVE_HOOK pcache_save()

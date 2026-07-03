@@ -15,6 +15,9 @@
 // Must be #included AFTER os/linux/container/state.c and BEFORE engine/cache.c + emit.c in the TU.
 
 static int g_trace, g_noibtc, g_itrace; // g_itrace: 1 instruction per block (per-insn register dump)
+// IRQSLIM: guest rip of the instruction currently being translated (set per decode step in
+// translate_block); emit_chain_exit compares chain targets against it to classify forward edges.
+static uint64_t g_emit_gpc;
 static int g_systrace;                  // JTS=1: syscall-entry trace only (no per-block dump) -- debug aid
 static uint64_t g_disp_n, g_ibtc_fill;  // PROF: dispatcher round-trips, IBTC fills
 // ---- W4-C: rep cmps/scas idiom (R_REPSTR) globals + the NOREPCMP A/B kill-switch ----
@@ -157,6 +160,9 @@ static int guestfold_on(void) {
 // onto the loop-exit edge. See frontend/x86_64/translate.c (emit_selfloop_x86 / tier2_promote).
 static int g_notier2x = -1;    // NOTIER2X=1 kill switch (pure tier-1 baseline); -1 = uninitialized
 static uint64_t g_prof_t2fold; // PROF: of the promoted loops, how many also elided the per-iteration flag save
+// x86-xflags (cross-block dead-flag elimination; gate NOXBLOCKFLAGS=1 -- see translate/trace.c):
+static uint64_t g_prof_xflag;      // PROF: block-edge flag materializations elided (per edge)
+static uint64_t g_prof_xflag_scan; // PROF: successor liveness scans performed
 static int notier2x(void) {
     if (g_notier2x < 0) g_notier2x = (getenv("NOTIER2X") != NULL);
     return g_notier2x;

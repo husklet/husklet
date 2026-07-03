@@ -25,6 +25,9 @@
 #include <string.h>
 #include <time.h>
 #include <unistd.h>
+#include <fcntl.h>
+#include <sys/epoll.h>
+#include <sys/socket.h>
 #include <sys/syscall.h>
 
 static inline uint64_t now_ns(void) {
@@ -183,6 +186,65 @@ static uint64_t k_syscall(void) {
     return N;
 }
 
+// sqlite-like syscall mix (perf lever #5): per "query", the fcntl(F_SETLK) shared-lock /
+// lseek / pread(page) / unlock dance a file-backed SQLite point-select issues. Isolates the
+// per-syscall service round-trip on the exact sqlite-select hot mix (fcntl+pread+lseek).
+static uint64_t k_sqlsys(void) {
+    const uint64_t N = 400000ull;
+    char path[] = "/tmp/ddbench_sql.XXXXXX";
+    int fd = mkstemp(path);
+    if (fd < 0) { perror("mkstemp"); exit(1); }
+    unlink(path);
+    static char page[4096];
+    for (int i = 0; i < 16; i++)
+        if (write(fd, page, sizeof page) != (ssize_t)sizeof page) { perror("write"); exit(1); }
+    uint64_t acc = 0;
+    struct flock lk;
+    for (uint64_t i = 0; i < N; i++) {
+        memset(&lk, 0, sizeof lk);
+        lk.l_type = F_RDLCK; lk.l_whence = SEEK_SET; lk.l_start = 0; lk.l_len = 1;
+        if (fcntl(fd, F_SETLK, &lk) < 0) { perror("F_SETLK"); exit(1); }
+        acc += (uint64_t)lseek(fd, (off_t)((i & 15) * 4096), SEEK_SET);
+        ssize_t r = pread(fd, page, sizeof page, (off_t)((i & 15) * 4096));
+        if (r != (ssize_t)sizeof page) { perror("pread"); exit(1); }
+        lk.l_type = F_UNLCK;
+        if (fcntl(fd, F_SETLK, &lk) < 0) { perror("F_UNLCK"); exit(1); }
+        acc += (uint64_t)(uint8_t)page[0];
+    }
+    close(fd);
+    sink_u64 = acc;
+    return N * 4; // 4 syscalls per iteration
+}
+
+// redis-like syscall mix (perf lever #5): an epoll echo loop -- write a byte, epoll_wait for
+// readiness, read it back. The exact epoll_wait/read/write per-request mix of a redis server,
+// minus the network stack (AF_UNIX socketpair), so it isolates the syscall service path.
+static uint64_t k_epollsys(void) {
+    const uint64_t N = 400000ull;
+    int sp[2];
+    if (socketpair(AF_UNIX, SOCK_STREAM, 0, sp) < 0) { perror("socketpair"); exit(1); }
+    int ep = epoll_create1(0);
+    if (ep < 0) { perror("epoll_create1"); exit(1); }
+    struct epoll_event ev = {0};
+    ev.events = EPOLLIN;
+    ev.data.fd = sp[0];
+    if (epoll_ctl(ep, EPOLL_CTL_ADD, sp[0], &ev) < 0) { perror("epoll_ctl"); exit(1); }
+    uint64_t acc = 0;
+    char b = 42;
+    struct epoll_event out[8];
+    for (uint64_t i = 0; i < N; i++) {
+        if (write(sp[1], &b, 1) != 1) { perror("write"); exit(1); }
+        int n = epoll_wait(ep, out, 8, 1000);
+        if (n != 1) { fprintf(stderr, "epoll_wait: %d\n", n); exit(1); }
+        char rb;
+        if (read(out[0].data.fd, &rb, 1) != 1) { perror("read"); exit(1); }
+        acc += (uint64_t)(uint8_t)rb;
+    }
+    close(ep); close(sp[0]); close(sp[1]);
+    sink_u64 = acc;
+    return N * 3; // 3 syscalls per iteration
+}
+
 // ─────────────────────────────────── driver ───────────────────────────────────
 
 struct kern { const char *name; uint64_t (*fn)(void); };
@@ -196,6 +258,8 @@ static const struct kern KERNELS[] = {
     { "memcpy",  k_memcpy },
     { "call",    k_call },
     { "syscall", k_syscall },
+    { "sqlsys",  k_sqlsys },
+    { "epollsys", k_epollsys },
 };
 static const int NKERN = (int)(sizeof(KERNELS) / sizeof(KERNELS[0]));
 

@@ -105,7 +105,7 @@ static void emit_exit_const(uint64_t pc, uint64_t reason) {
     e_str(9, 0, OFF_PC);
     e_movconst(9, reason);
     e_str(9, 0, OFF_RSN);
-    e_movconst(9, (uint64_t)block_return);
+    emit_blockret(9);
     // x0=cpu -> block_return
     e_br(9);
 }
@@ -123,7 +123,7 @@ static void emit_exit_icflush(uint64_t pc, int va_reg) {
     e_str(9, 0, OFF_PC);
     e_movconst(9, R_ICFLUSH);
     e_str(9, 0, OFF_RSN);
-    e_movconst(9, (uint64_t)block_return);
+    emit_blockret(9);
     e_br(9);
 }
 static void emit_exit_reg(int rn, uint64_t reason) {
@@ -134,7 +134,7 @@ static void emit_exit_reg(int rn, uint64_t reason) {
     e_str(9, 0, OFF_PC);
     e_movconst(9, reason);
     e_str(9, 0, OFF_RSN);
-    e_movconst(9, (uint64_t)block_return);
+    emit_blockret(9);
     e_br(9);
 }
 // IBTC: inline-cache an indirect branch (br/blr/ret). If the guest target equals this
@@ -154,7 +154,7 @@ static void emit_ibtc_miss(int rn) {
     e_movconst(9, 1);
     // flag: indirect miss -> insert into IBTC
     e_str(9, 0, OFF_ICSITE);
-    e_movconst(9, (uint64_t)block_return);
+    emit_blockret(9);
     e_br(9);
 }
 // A1 steal path: x16/x17 are engine-private, so the probe needs NO red-zone stash/restore and the
@@ -188,7 +188,7 @@ static void emit_ibranch_steal(int rn) {
     // ubfx x16, xTreg, #2, #16  ((xTreg>>2) & (IBTC_N-1), IBTC_N=64Ki)
     emit32(0xD3424400u | (treg << 5) | 16);
     // x17 = &g_ibtc
-    e_adrp_add(17, (uint64_t)g_ibtc);
+    emit_ibtcptr(17);
     // add x16, x17, x16, lsl #4  (slot ptr)
     emit32(0x8B000000u | (16 << 16) | (4 << 10) | (17 << 5) | 16);
     // atomic 128-bit load {target,body} (LSE2): x17=slot.target, x16=slot.body
@@ -212,7 +212,7 @@ static void emit_ibranch_steal(int rn) {
     // adr x9, Lsite_tgt -> dispatcher fills both caches
     emit32(0);
     e_str(9, 0, OFF_ICSITE);
-    e_movconst(9, (uint64_t)block_return);
+    emit_blockret(9);
     e_br(9);
     if ((uint64_t)g_cp & 7) emit32(0);
     uint8_t *Lt = g_cp;
@@ -227,6 +227,7 @@ static void emit_ibranch_steal(int rn) {
     *p_cbnz = 0xB5000000u | (((uint32_t)(((uint8_t *)miss - (uint8_t *)p_cbnz) / 4) & 0x7FFFF) << 5) | 17;
     int64_t ao = Lt - (uint8_t *)p_adr;
     *p_adr = 0x10000000u | ((uint32_t)(ao & 3) << 29) | (((uint32_t)(ao >> 2) & 0x7FFFF) << 5) | 9;
+    pc_record_icsite(Lt); // #339: {target,body} cache holds an arena body ptr -> neutralize on reload
 }
 // ARM-B1 IBPROF: route an indirect transfer through the C dispatcher (reason R_IBLOG) so
 // ib_log() can record (site -> guest target). The guest target is cpu->x[rn] after the spill;
@@ -239,7 +240,7 @@ static void emit_iblog(int rn) {
     e_str(9, 0, OFF_ICSITE); // cpu->ic_site = branch site gpc
     e_movconst(9, R_IBLOG);
     e_str(9, 0, OFF_RSN);
-    e_movconst(9, (uint64_t)block_return);
+    emit_blockret(9);
     e_br(9);
 }
 static void emit_ibranch(int rn) {
@@ -292,7 +293,7 @@ static void emit_ibranch(int rn) {
         emit32(0xD342FC00u | (16 << 5) | 17);
         // and x17, x17, #0xFFFF   (IBTC_N-1, IBTC_N=64Ki)
         emit32(0x92403C00u | (17 << 5) | 17);
-        e_adrp_add(16, (uint64_t)g_ibtc);
+        emit_ibtcptr(16);
         emit32(0x8B000000u | (17 << 16) | (4 << 10) | (16 << 5) | 16); // x16 = slot ptr
         // W5C: atomic 128-bit load of the {target,body} pair (single-copy atomic under LSE2 since the
         // slot is 16-byte aligned) -> a peer's 128-bit release publish is never observed torn. Non-
@@ -323,7 +324,7 @@ static void emit_ibranch(int rn) {
         // adr x9, Lsite_tgt -> dispatcher fills both caches
         emit32(0);
         e_str(9, 0, OFF_ICSITE);
-        e_movconst(9, (uint64_t)block_return);
+        emit_blockret(9);
         e_br(9);
         if ((uint64_t)g_cp & 7) emit32(0);
         uint8_t *Lt = g_cp;
@@ -338,6 +339,7 @@ static void emit_ibranch(int rn) {
         *p_cbnz = 0xB5000000u | (((uint32_t)(((uint8_t *)miss - (uint8_t *)p_cbnz) / 4) & 0x7FFFF) << 5) | 17;
         int64_t ao = Lt - (uint8_t *)p_adr;
         *p_adr = 0x10000000u | ((uint32_t)(ao & 3) << 29) | (((uint32_t)(ao >> 2) & 0x7FFFF) << 5) | 9;
+        pc_record_icsite(Lt); // #339: {target,body} cache holds an arena body ptr -> neutralize on reload
         return;
     }
     e_stur(16, 31, -16);
@@ -361,7 +363,7 @@ static void emit_ibranch(int rn) {
     // ubfx x16, xRn, #2, #16  ((xRn>>2) & (IBTC_N-1), IBTC_N=64Ki)
     emit32(0xD3424400u | (rn << 5) | 16);
     // x17 = &g_ibtc  (2 instr)
-    e_adrp_add(17, (uint64_t)g_ibtc);
+    emit_ibtcptr(17);
     // add x16, x17, x16, lsl #4  (slot ptr)
     emit32(0x8B000000u | (16 << 16) | (4 << 10) | (17 << 5) | 16);
     // W5C: atomic 128-bit load of {target,body} (single-copy atomic, LSE2) -> never torn.
@@ -390,7 +392,7 @@ static void emit_ibranch(int rn) {
     // adr x9, Lsite_tgt -> dispatcher fills the per-site cache
     emit32(0);
     e_str(9, 0, OFF_ICSITE);
-    e_movconst(9, (uint64_t)block_return);
+    emit_blockret(9);
     e_br(9);
     if ((uint64_t)g_cp & 7) emit32(0);
     uint8_t *Lt = g_cp;
@@ -407,6 +409,7 @@ static void emit_ibranch(int rn) {
     *p_cbnz = 0xB5000000u | (((uint32_t)(((uint8_t *)miss - (uint8_t *)p_cbnz) / 4) & 0x7FFFF) << 5) | 17;
     int64_t ao = Lt - (uint8_t *)p_adr;
     *p_adr = 0x10000000u | ((uint32_t)(ao & 3) << 29) | (((uint32_t)(ao >> 2) & 0x7FFFF) << 5) | 9;
+    pc_record_icsite(Lt); // #339: {target,body} cache holds an arena body ptr -> neutralize on reload
 }
 
 // ARM-B1 VDBETRACE prototype: speculative direct-chain (SDC) for a (path-specific) JT-dispatch `br xN`.
@@ -451,7 +454,7 @@ static void emit_vdbe_sdc(int rn) {
     uint32_t *Lhash = (uint32_t *)g_cp;
     e_stur(17, 31, -24); // stash x17 (the shared hash + miss path need the pair)
     emit32(0xD3424400u | (rn << 5) | 16); // ubfx x16,xRn,#2,#16  (IBTC_N=64Ki)
-    e_adrp_add(17, (uint64_t)g_ibtc);
+    emit_ibtcptr(17);
     emit32(0x8B000000u | (16 << 16) | (4 << 10) | (17 << 5) | 16); // add x16,x17,x16,lsl#4
     e_ldp(17, 16, 16, 0);                                          // x17=slot.target, x16=slot.body
     emit32(0xCB000000u | (rn << 16) | (17 << 5) | 17);            // sub x17,x17,xRn
@@ -470,7 +473,7 @@ static void emit_vdbe_sdc(int rn) {
     emit32(0);          // adr x9, Lrec
     e_addi(9, 9, 1);    // tag bit0=1 -> "SDC fill" (Lrec is 8-aligned, so +1 == |1)
     e_str(9, 0, OFF_ICSITE);
-    e_movconst(9, (uint64_t)block_return);
+    emit_blockret(9);
     e_br(9);
     if ((uint64_t)g_cp & 7) emit32(0);
     uint8_t *Lt = g_cp;
@@ -487,6 +490,103 @@ static void emit_vdbe_sdc(int rn) {
     (void)Lbs;
 }
 
+// ---- IBSLIM + CTXDISP (lever #4): recognized interpreter-dispatch `br` sites ----
+// A site recognized by is_interp_dispatch_br (a `br xN` fed by a load from a table of code
+// pointers -- CPython computed goto, sqlite VDBE, any switch-dispatch interpreter) is megamorphic
+// by construction: its per-site monomorphic IC hits ~5% (measured, CPython-shaped bench) yet costs
+// a literal load + compare + branch on EVERY dispatch. emit_hash_tail is the slimmed replacement:
+// straight to the shared-hash IBTC (whose hit rate at such sites is ~99.997%). Steal-mode only
+// (x16/x17/x30 engine-private); rn is a live, never-stolen guest reg. Miss exits with ic_site=1
+// (shared-hash-only fill: there are no per-site literals here).
+static void emit_hash_tail(int rn) {
+    emit32(0xD3424400u | (rn << 5) | 16); // ubfx x16, xRn, #2, #16  ((xRn>>2) & (IBTC_N-1))
+    e_adrp_add(17, (uint64_t)g_ibtc);
+    emit32(0x8B000000u | (16 << 16) | (4 << 10) | (17 << 5) | 16); // add x16, x17, x16, lsl #4
+    e_ldp(17, 16, 16, 0);                              // {x17,x16} = {slot.target, slot.body} (LSE2)
+    emit32(0xCB000000u | (rn << 16) | (17 << 5) | 17); // sub x17, x17, xRn (no flags)
+    uint32_t *p_cbnz = (uint32_t *)g_cp;
+    emit32(0); // cbnz x17, Lmiss
+    e_br(16);  // HIT -> body (regs live)
+    uint32_t *miss = (uint32_t *)g_cp;
+    emit_spill();
+    e_ldr(9, 0, rn * 8);
+    e_str(9, 0, OFF_PC); // cpu->pc = guest target
+    e_movconst(9, R_BRANCH);
+    e_str(9, 0, OFF_RSN);
+    e_movconst(9, 1); // ic_site = 1 -> dispatcher fills the shared hash only
+    e_str(9, 0, OFF_ICSITE);
+    e_movconst(9, (uint64_t)block_return);
+    e_br(9);
+    *p_cbnz = 0xB5000000u | (((uint32_t)(((uint8_t *)miss - (uint8_t *)p_cbnz) / 4) & 0x7FFFF) << 5) | 17;
+}
+// CTXDISP (gated CTXDISP=1): history-keyed context dispatch. Index an in-cache array of CTX_N
+// 64-byte stubs by a hash of the site's last ~3 guest targets (the PRE-update rolling history --
+// never the current target, which is what is being predicted). Each stub owns a PRIVATE
+// {target,body} pair and a PRIVATE final `br`, so the host BTB predicts each history context at its
+// own branch address (the order-3 Markov signal: 83% at the CPython-shaped megamorphic site, vs
+// 5.4% order-0). CORRECTNESS: the stub compares its filled target against the REAL computed target
+// (exact 64-bit equality) before jumping; any mismatch (cold stub, hash collision, phase change)
+// falls into the ordinary shared-hash IBTC probe, and the pair itself is only ever published
+// atomically (16B, LSE2) by the dispatcher (ctx_fill) -- a wrong-target jump is impossible.
+// Refills are throttled: 1 dispatcher round-trip per CTX_REFILL ctx-misses at the site.
+static void emit_ctx_dispatch(int rn, int slot) {
+    uint64_t hist_addr = (uint64_t)&g_ctxsite[slot].hist; // .ctr at +8 (plain RW data, adrp-reachable)
+    // --- main probe: pick the stub from h_pre, then advance the history ---
+    e_adrp_add(17, hist_addr);                            // x17 = &site.hist
+    e_ldr(16, 17, 0);                                     // x16 = h_pre
+    emit32(0xD342FC00u | (rn << 5) | 30);                 // lsr x30, xRn, #2
+    emit32(0xCA000000u | (16 << 16) | (16 << 10) | (30 << 5) | 30); // eor x30, x30, x16, lsl #16
+    e_str(30, 17, 0);                                     // site.hist = (h_pre << 16) ^ (tgt >> 2)
+    emit32(0xCA400000u | (16 << 16) | (16 << 10) | (16 << 5) | 16); // eor x16, x16, x16, lsr #16
+    emit32(0xCA400000u | (16 << 16) | (32 << 10) | (16 << 5) | 16); // eor x16, x16, x16, lsr #32
+    emit32(0x92401C00u | (16 << 5) | 16);                 // and x16, x16, #0xFF  (CTX_N-1)
+    uint32_t *p_adr = (uint32_t *)g_cp;
+    emit32(0);                                            // adr x30, stubs[0].code (backpatched)
+    emit32(0x8B000000u | (16 << 16) | (6 << 10) | (30 << 5) | 16); // add x16, x30, x16, lsl #6
+    e_br(16);                                             // -> the history context's private stub
+    // --- Lctxmiss: guard failed (x16 = stub CODE addr, xRn live). Throttle, then shared hash ---
+    uint8_t *Lctxmiss = g_cp;
+    e_adrp_add(17, hist_addr);
+    e_ldr(30, 17, 8);  // x30 = site.ctr
+    e_subi(30, 30, 1); // (sub, not subs: guest flags stay live)
+    e_str(30, 17, 8);
+    uint32_t *p_cbz = (uint32_t *)g_cp;
+    emit32(0);           // cbz x30, Lfill (every CTX_REFILL'th miss -> dispatcher refill)
+    emit_hash_tail(rn);  // ordinary shared-hash IBTC probe (its own miss exit inside)
+    // --- Lfill: dispatcher round-trip that also (re)specializes THIS stub (ic_site = pair|2) ---
+    uint8_t *Lfill = g_cp;
+    e_movz(30, CTX_REFILL, 0);
+    e_str(30, 17, 8); // reset the throttle
+    emit_spill();     // x0 = cpu; x16 (stub code addr) is stolen -> survives the spill
+    e_ldr(9, 0, rn * 8);
+    e_str(9, 0, OFF_PC); // cpu->pc = guest target
+    e_movconst(9, R_BRANCH);
+    e_str(9, 0, OFF_RSN);
+    e_subi(9, 16, 14); // x9 = (stub code - 16) + 2 = the stub's 16B pair addr, tag bit1 = ctx fill
+    e_str(9, 0, OFF_ICSITE);
+    e_movconst(9, (uint64_t)block_return);
+    e_br(9);
+    *p_cbz = 0xB4000000u | (((uint32_t)((Lfill - (uint8_t *)p_cbz) / 4) & 0x7FFFF) << 5) | 30;
+    // --- the stub array: CTX_N entries of {16B {target,body} pair | 5-insn guard} in one 64B line ---
+    while ((uintptr_t)g_cp & 63) emit32(0xD503201Fu); // 64-align (pair 16-aligned for the atomic ldp)
+    uint8_t *stubs = g_cp;
+    for (int i = 0; i < CTX_N; i++) {
+        *(uint64_t *)g_cp = 0; // pair.target: 0 never equals a real target -> cold guard always misses
+        g_cp += 8;
+        *(uint64_t *)g_cp = 0; // pair.body
+        g_cp += 8;
+        emit32(0x10000000u | ((0x7FFFCu) << 5) | 17);      // adr x17, .-16 (this stub's pair)
+        e_ldp(17, 30, 17, 0);                              // {x17,x30} = {target, body} (LSE2 atomic)
+        emit32(0xCB000000u | (rn << 16) | (17 << 5) | 17); // sub x17, x17, xRn
+        int64_t d = (Lctxmiss - g_cp) / 4;
+        emit32(0xB5000000u | (((uint32_t)d & 0x7FFFF) << 5) | 17); // cbnz x17, Lctxmiss
+        e_br(30); // HIT: the context's private branch -> body (host-BTB-predicted per stub)
+        while ((uintptr_t)g_cp & 63) emit32(0xD503201Fu); // pad to the 64B stride
+    }
+    int64_t ao = (stubs + 16) - (uint8_t *)p_adr; // stubs[0].code
+    *p_adr = 0x10000000u | ((uint32_t)(ao & 3) << 29) | (((uint32_t)((ao >> 2) & 0x7FFFF)) << 5) | 30;
+}
+
 // A direct-branch exit to a CONSTANT target. If the target is already translated,
 // emit a single `b target.body` (regs stay live, no dispatcher round-trip). Otherwise
 // emit a full spill-exit whose first instruction is remembered so it can later be
@@ -494,14 +594,18 @@ static void emit_vdbe_sdc(int rn) {
 static void emit_chain_exit(uint64_t target) {
     void *body = map_body(target);
     uint32_t *slot = (uint32_t *)g_cp;
+    // IRQSLIM: a FORWARD direct edge may enter past the block's 2-insn #292 poll (body+8) -- any
+    // in-cache cycle still polls via its backward or indirect edge (see g_fwdskip in cache.c).
+    // g_emit_gpc is the guest pc of the branch being translated.
+    int fwd = g_fwdskip && target > g_emit_gpc;
     if (body) {
-        int64_t d = ((uint8_t *)body - (uint8_t *)slot) / 4;
-        // b target.body
+        int64_t d = (((uint8_t *)body + (fwd ? g_fwdskip : 0)) - (uint8_t *)slot) / 4;
+        // b target.body(+8)
         emit32(0x14000000u | ((uint32_t)d & 0x3FFFFFFu));
         return;
     }
-    add_pend(slot, target);
-    // slot (= first insn) is patched to `b body` later
+    add_pend3(slot, target, 0, fwd);
+    // slot (= first insn) is patched to `b body(+8)` later
     emit_exit_const(target, R_BRANCH);
 }
 

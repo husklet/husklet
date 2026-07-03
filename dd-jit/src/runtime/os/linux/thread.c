@@ -99,13 +99,63 @@ static int host_addr_mapped(uintptr_t a) {
 // guest-supplied syscall buffer (a result struct to write, an argument struct to read) BEFORE dereferencing
 // it, so a bad/garbage user pointer returns -EFAULT to the guest instead of faulting the engine (the
 // kernel's access_ok() role). A zero length is vacuously OK; an address-space-wrapping range is rejected.
+//
+// PERF (lever #5, sqlite/fcntl): the original implementation issued one mach_vm_region() -- a full Mach
+// message round-trip (~200ns+) -- PER PAGE PER CALL. `sample` showed ~97% of the dd-side overhead of the
+// sqlite syscall mix (2 fcntl(F_SETLK) per query, each validating the guest flock*) inside
+// host_range_mapped->mach_vm_region->mach_msg2_trap. Replace it with the kernel's own access_ok() idiom:
+// a FAULT-GUARDED PROBE READ of each page under a per-thread sigsetjmp. Mapped pointer (the always case)
+// = one L1 load per page, no syscall; unmapped pointer = the SIGSEGV/SIGBUS guard long-jumps back and we
+// report 0 exactly as mach_vm_region did. Every fault handler on the normal run path checks
+// hrm_fault_hook() FIRST (before non-PIE fixup / the x86 lazy zero-page mapper), so a probe fault can
+// never be mis-served as a lazy mapping (which would flip an EFAULT into a bogus success), never burns
+// lazy-map budget, and never reaches guest-signal delivery. PROT_NONE pages now probe as UNMAPPED ->
+// -EFAULT, which is what a real Linux copy_from_user() returns (the old region query called them mapped
+// and the later engine deref crashed) -- strictly closer to the oracle. CRASHDBG runs (whose Mach
+// exception port intercepts EXC_BAD_ACCESS before the POSIX guards) and DDJIT_NOFASTHRM=1 keep the
+// byte-identical mach_vm_region path.
+#include <setjmp.h>
+static _Thread_local sigjmp_buf g_hrm_jb;                   // probe return point (valid while g_hrm_hi != 0)
+static _Thread_local volatile uintptr_t g_hrm_lo, g_hrm_hi; // page range being probed; probing iff hi != 0
+static int g_hrm_slow = -1; // DDJIT_NOFASTHRM=1 / CRASHDBG -> per-page mach_vm_region (A/B kill switch)
+// Called FIRST by every SIGSEGV/SIGBUS handler on the run path: when the fault is this thread's own probe
+// load, long-jump back to host_range_mapped ("unmapped"). The faulting signal was auto-blocked at handler
+// entry and siglongjmp(.,0) does not restore masks, so unblock it here or the NEXT probe fault would be
+// force-killed instead of caught. Returns 0 (fault not ours) in every other case.
+static int hrm_fault_hook(siginfo_t *si) {
+    if (!g_hrm_hi) return 0;
+    uintptr_t va = (uintptr_t)(si ? si->si_addr : NULL);
+    if (va < g_hrm_lo || va >= g_hrm_hi) return 0; // not the probe access -> normal fault handling
+    sigset_t s;
+    sigemptyset(&s);
+    sigaddset(&s, SIGSEGV);
+    sigaddset(&s, SIGBUS);
+    pthread_sigmask(SIG_UNBLOCK, &s, NULL);
+    siglongjmp(g_hrm_jb, 1); // never returns
+}
 static int host_range_mapped(uintptr_t a, size_t len) {
     if (!len) return 1;
     uintptr_t end = a + len;
     if (end < a) return 0; // wrap -> bogus pointer
-    for (uintptr_t p = a & ~(uintptr_t)0xfff; p < end; p += 0x1000)
-        if (!host_addr_mapped(p)) return 0;
-    return 1;
+    uintptr_t lo = a & ~(uintptr_t)0xfff;
+    if (g_hrm_slow < 0) g_hrm_slow = (getenv("DDJIT_NOFASTHRM") || getenv("CRASHDBG")) ? 1 : 0;
+    if (g_hrm_slow) {
+        for (uintptr_t p = lo; p < end; p += 0x1000)
+            if (!host_addr_mapped(p)) return 0;
+        return 1;
+    }
+    volatile int ok = 1;
+    if (sigsetjmp(g_hrm_jb, 0)) {
+        ok = 0; // a probe load faulted -> some page in the range is unmapped
+    } else {
+        g_hrm_lo = lo;
+        g_hrm_hi = end;
+        for (uintptr_t p = lo; p < end; p += 0x1000)
+            (void)*(volatile const uint8_t *)p;
+    }
+    g_hrm_lo = 0;
+    g_hrm_hi = 0; // probe window closed (hook inert again)
+    return ok;
 }
 
 static void abs_from_rel(struct timespec *abs, const struct timespec *ts) {

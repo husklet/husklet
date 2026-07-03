@@ -45,6 +45,9 @@
 #include "../engine/cache.c"
 // host ARM64 assembler (emit32 + e_* encoders) -- the lowest layer
 #include "../host/arm64/asm.c"
+// #339 persistent cross-process translated-code cache (recorded emitters used by stubs.c/translate.c;
+// load/save/relocate). MUST precede stubs.c + translate.c (they call the recorded emitters).
+#include "../translate/aarch64/pcache.c"
 // engine block-ABI stubs: prologue/spill + IBTC/IC + exit/chain trampolines (built on the assembler above)
 #include "../engine/stubs.c"
 // transliterate + mangle + §B + LSE + depth-gate
@@ -450,6 +453,15 @@ int dd_run(const char *rootfs, int argc, char *const argv[]) {
     // A1: steal host x16/x17 for the engine (default on). NOSTEAL1617=1 -> legacy 3-reg stolen set
     // (guest x16/x17 in host regs, per-branch red-zone stash/restore). Read once before any translation.
     if (getenv("NOSTEAL1617")) g_steal1617 = 0;
+    // IBSLIM (lever #4): NOIBSLIM=1 reverts the dispatch/call-path slimming (legacy emit_set_x30 +
+    // the per-site IC at recognized interpreter-dispatch `br`s) for A/B. CTXDISP=1 opts in to the
+    // experimental history-keyed context dispatch at recognized dispatch sites (measurement gate).
+    if (getenv("NOIBSLIM")) g_noibslim = 1;
+    if (getenv("CTXDISP")) g_ctxdisp = 1;
+    // IRQSLIM (lever #4): fixed 2-insn #292 poll header + poll-free forward-chain entry at body+8
+    // (every cycle still polls via its backward/indirect edge -- see cache.c). Requires the steal
+    // layout and an emitted poll. NOIRQSLIM=1 -> legacy poll-on-every-entry for A/B.
+    if (g_steal1617 && !getenv("NOIRQSLIM") && !getenv("NOIRQCHECK")) g_fwdskip = 8;
     // guest_base bias-fold (non-PIE ET_EXEC): default on; NOGUESTFOLD=1 reverts to the SIGSEGV-per-low-
     // access fault path (A/B kill-switch). Read once before any translation; inert for PIE (gated on the
     // non-PIE marker g_nonpie_lo, set only for ET_EXEC by load_elf).
@@ -459,6 +471,15 @@ int dd_run(const char *rootfs, int argc, char *const argv[]) {
     // Untrusted-guest isolation (the sentry process-split). OFF by default -> trusted path unchanged.
     g_untrusted = getenv("DDJIT_UNTRUSTED") != NULL;
     g_sentry_sandbox = getenv("DDJIT_SANDBOX") != NULL;
+    // #339 persistent cross-process translated-code cache. Landed OPT-IN (DDJIT_PCACHE=1, same gating as
+    // the x86 opt8 pcache) so the default correctness matrix stays byte-identical to the baseline; the
+    // one-line flip to default-on (`getenv("DDJIT_NOPCACHE") == NULL`) is gated on a green full pcache-on
+    // matrix soak (see #339 plan). DDJIT_NOPCACHE=1 is the kill-switch and always wins.
+    // Read AFTER the codegen-mode flags above so pcache_poison_check() can refuse to persist an arena that
+    // a non-default mode (PROF/VDBETRACE/IBPROF/VTHITCOUNT) baked unrecorded host pointers into.
+    g_pcache = getenv("DDJIT_PCACHE") != NULL && getenv("DDJIT_NOPCACHE") == NULL;
+    g_coldprof = getenv("COLDPROF") != NULL;
+    pcache_poison_check();
     char gb[1024];
     prog = find_in_path(prog, gb, sizeof gb); // bare "sh" (docker) -> "/bin/sh" via the container PATH
     g_exe_path = prog;
@@ -497,19 +518,34 @@ int dd_run(const char *rootfs, int argc, char *const argv[]) {
         prog_host = sb_finalhost;
     }
     struct loaded lm;
+    // #339: when the persistent cache is on, map the image + interp at FIXED VAs so the translated arena
+    // (block-map keys + baked guest addresses) is byte-identical across runs -> reusable from the cache.
+    if (g_pcache) g_force_base = PC_IMG_BASE;
     load_elf(prog_host, &lm);
 
     // Dynamic: load the PT_INTERP (ld.so) and enter THERE; it loads libs + relocates.
     uint64_t jump = lm.entry, at_base = 0;
     char interp[256];
+    char pc_ihost[4200];
+    const char *pc_interp_host = NULL;
     if (elf_interp(prog_host, interp, sizeof interp) == 0) {
         char ib[4200];
         // follow+confine ld.so symlink (through the overlay)
         const char *ihost = xresolve_overlay(interp, ib, sizeof ib);
+        snprintf(pc_ihost, sizeof pc_ihost, "%s", ihost); // outlive `ib` for the cache-id below
+        pc_interp_host = pc_ihost;
+        if (g_pcache) g_force_base = PC_INTERP_BASE;
         struct loaded li;
         load_elf(ihost, &li);
         jump = li.entry;
         at_base = li.base;
+    }
+    // #339: key the cache by the identity of the guest binary + interp, then try to restore the arena.
+    if (g_pcache) {
+        g_pc_binid = pcache_make_id(prog_host, pc_interp_host, argv[0]);
+        g_pc_entry = jump;
+        int hit = pcache_load(jump); // graceful MISS on any stale/corrupt/truncated cache -> translate fresh
+        if (g_coldprof) fprintf(stderr, "[pcache] %s reloc=%d\n", hit ? "HIT" : "MISS", g_nreloc);
     }
 
     uint8_t *heap = mmap(NULL, 256u << 20, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON, -1, 0);
@@ -527,6 +563,7 @@ int dd_run(const char *rootfs, int argc, char *const argv[]) {
     if (g_untrusted) sentry_init(); // fork the host-authority sentry + (optionally) confine the worker
     run_guest(&c);
     if (g_untrusted) sentry_shutdown(); // signal quit + waitpid (reap, no orphan)
+    pcache_save(); // #339: persist on a cold miss (guest exit via case 93 returns here; case 94 saves + _exit)
     if (getenv("DD_FAULTCOUNT"))
         fprintf(stderr, "[faultcount] pid=%d nonpie_served=%llu\n", getpid(),
                 (unsigned long long)g_nonpie_faults);

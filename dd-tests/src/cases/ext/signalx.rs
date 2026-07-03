@@ -14,6 +14,10 @@ fn signalx() -> Group {
     group("ext-signal", vec![
         port("sigaltstack", "ext_sig/sigaltstack.c").out("sigaltstack set=1 ran=1 on_alt=1 query=1\n"),
         port("itimer", "ext_sig/itimer.c").out("itimer pending=1 fired=1 alarm=1\n"),
+        // #292 + IRQSLIM: an interval timer must preempt a syscall-free spin -- one direct-branch loop
+        // (poll on the backward edge) and one computed-goto cycle (poll on the indirect entry). A lost
+        // preemption hangs the guest -> harness timeout.
+        port("sigspin", "ext_sig/sigspin.c").out("sigspin loop1=1 loop2=1\n"),
         port("pausesig", "ext_sig/pausesig.c").out("pausesig got=1 eintr=1\n"),
         // sigwait(): case 137 installs a host handler for each awaited signal lacking a guest handler so a
         // cross-process kill becomes pending, then dequeues it synchronously and returns the signo.

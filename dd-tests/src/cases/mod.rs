@@ -119,6 +119,9 @@ fn linuxsys() -> Group {
 fn heavy() -> Group {
     group("heavy", vec![
         port("busyloop", "busyloop.c").out("busyloop acc=14881893564601462335\n"), // 300M-iter mixing loop
+        // lever #4 dispatch shapes, golden-checked: a 128-target megamorphic computed-goto VM (one wrong
+        // IBTC/ctx prediction corrupts the checksum) + monomorphic deep recursion (real call/ret traffic).
+        src("ibtc-dispatch", "ibtc_dispatch.c").out("ibtc vm=10240120795314104034 rec=2178309 chk=12619423276023875997\n"),
         port("bigmem", "bigmem.c").out("bigmem pages=131072 sum=16711680\n"),       // mmap 512 MiB, fault pages
         // fork-per-connection TCP server backed by real SQLite (WAL) + a 50-connection client (links
         // libsqlite3 -> Linux/aarch64 only), diffed against a native run.
@@ -158,6 +161,10 @@ fn edge() -> Group {
         // times(): tms_utime works on x86_64 but is 0 on aarch64 (clock() works on both) — engine split.
         src("times", "edge_times.c").has("utime_ok=1 clock_ok=1 ret_ok=1"),
         src("statfs", "edge_statfs.c").oracle().xfail(lin),                            // real fs geometry (not hardcoded)
+        // Guest-pointer validation (access_ok): bad syscall buffers -> EFAULT, exactly as native Linux.
+        // The differential test for host_range_mapped's fault-guarded probe fast path (perf lever #5),
+        // incl. the probe-guard re-arm (again=) and PROT_NONE (copy_from_user) cases.
+        src("efault", "edge_efault.c").oracle(),
     ])
 }
 
