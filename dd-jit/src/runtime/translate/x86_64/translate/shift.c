@@ -130,7 +130,13 @@ static int translate_shift(struct insn *I, uint64_t gpc, uint64_t next) {
                         } else
                             e_mov_rr(26, src, ssf); // SHR uxt / SAR sxt already width-correct
                     }
-                    e_shv(b, 16, src, RCX, ssf);
+                    // #389: byte/word SHL/SHR/SAR by CL run on the 64-bit-extended operand (ssf=1), but x86
+                    // masks the count to 5 bits (0x1f) for every size < 64-bit -- so shift as a 32-bit ARM op
+                    // (count masked by 31, matching x86), NOT 64-bit (mask 63). Without this, `shrw %cl` with
+                    // CL=32 shifted the extended value by 32 (result 0) instead of x86's count&0x1f==0 (no-op).
+                    // 32-bit ASRV sign-fills from bit 31, which the sxt-to-64 already set for SAR, so the low
+                    // `w` bytes stay correct; the exact CF still comes from the 64-bit x26 stash below.
+                    e_shv(b, 16, src, RCX, (w < 4) ? 0 : ssf);
                 } else {
                     if (cnt == 0) {
                         // x86: a 0 effective count changes NO flags and leaves the value unchanged --
@@ -216,9 +222,17 @@ static int translate_shift(struct insn *I, uint64_t gpc, uint64_t next) {
                     e_str(20, 28, OFF_NZCV);
                     if (!g_pfaf_dead && (k == 4 || k == 5 || k == 7)) { // SHL/SHR/SAR set PF; rotates leave it
                         e_ldr(25, 28, OFF_PF);          // old PF (#346: skipped when PF dead)
-                        e_csel(23, 25, 16, 0, 1);       // EQ -> keep old PF, else result low byte (x16)
+                        e_csel(23, 25, 16, 0, 1);       // EQ (count==0) -> keep old PF, else result low byte (x16)
                         e_pf_save(23);
                     }
+                    // #389: sync the LIVE ARM NZCV to the just-stored value (x20 is unchanged since the str).
+                    // SHL/SHR (k==4/5) re-store+msr in the OF block below, but SAR (k==7) never reaches it -- so
+                    // without this msr the live NZCV stays stale (Z=0 from the count ANDS, C junk). A stitched
+                    // successor reads the correct membank value, but a CHAINED edge's boundary spill persists the
+                    // stale LIVE NZCV over cpu->nzcv -> wrong CF/ZF (sarq %cl a=0 cl=1 gave CF=1/ZF=0). Emitted
+                    // AFTER the PF csel above, which still needs the ANDS's live Z (=count==0) as its condition.
+                    // The rotate helpers (e_rot_flags_cl/const) already keep this invariant; the shift path must too.
+                    if (k == 7) emit32(0xD51B4200u | 20); // msr nzcv, x20
                     // x86 OF is DEFINED only for a 1-bit shift; for SHL/SHR by CL set V=OF in the stored
                     // NZCV only when the masked count is exactly 1 (SAR OF=0 / count!=1 OF undefined -> leave).
                     if (k == 4 || k == 5) {

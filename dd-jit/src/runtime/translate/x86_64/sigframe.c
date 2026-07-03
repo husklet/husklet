@@ -95,6 +95,27 @@ static void sigframe_resume_dispatch(struct cpu *c, void *ucv) {
     uc->uc_mcontext->__ss.__pc = (uint64_t)block_return;
 }
 
+// #218/#215: recover a fast-clock GUARDED store fault (emit_fast_syscall's clock_gettime/gettimeofday inline
+// path) as -EFAULT. Called FIRST by the run-path SIGSEGV/SIGBUS guard (jit86_lazyguard) -- before non-PIE
+// fixup / SMC / lazy-map / guest-signal delivery -- so a bad guest RESULT pointer returns -EFAULT to the
+// guest exactly like the slow (svc_time host_range_mapped) path: it must NOT lazy-map the store target
+// (which would flip a correct EFAULT into a bogus success) and must never fault the engine. The emitted
+// store armed the window: cpu->fastclk_ptr = the 16-byte guest buffer, cpu->fastclk_resume = the host PC of
+// the in-block EFAULT tail (which does `msr nzcv,x17; b L_after`). Guest rax lives in host x0 at the fault,
+// so we set mcontext x0 = -EFAULT and redirect the PC to that tail. Inert unless armed (resume != 0), so
+// ordinary guest wild-pointer faults fall straight through to deliver_guest_fault as before.
+static int fastclk_fault_fixup(siginfo_t *si, void *ucv) {
+    struct cpu *c = (struct cpu *)pthread_getspecific(g_cpu_key);
+    if (!c || !c->fastclk_resume) return 0;
+    uintptr_t va = (uintptr_t)(si ? si->si_addr : NULL);
+    if (va < c->fastclk_ptr || va >= c->fastclk_ptr + 16) return 0; // fault outside the guarded 16B window
+    ucontext_t *uc = (ucontext_t *)ucv;
+    uc->uc_mcontext->__ss.__x[0] = (uint64_t)(int64_t)(-EFAULT); // guest rax = -EFAULT
+    uc->uc_mcontext->__ss.__pc = c->fastclk_resume;             // resume at the in-block EFAULT tail
+    c->fastclk_resume = 0;                                       // window closed
+    return 1;
+}
+
 // Integer divide-by-zero (#DE) reaches the dispatcher as R_DIV/R_IDIV with divop==0. The host cannot
 // synthesize a real SIGFPE here -- on Apple Silicon udiv/0 quietly returns 0 and FP /0 traps as SIGILL --
 // so deliver it from C, mirroring deliver_guest_fault's queue-and-resume for a synchronous SIGSEGV/SIGBUS.

@@ -239,6 +239,14 @@ fn op_x86_misc() -> Group {
         x("xflags-off",       "completeness/x86_xflags.c").env("NOXBLOCKFLAGS", "1"),
         x("xflags-nolazy",    "completeness/x86_xflags.c").env("NOLAZY", "1"),
         x("parity-edge",      "completeness/x86_parity_edge.c"),
+        // #389 by-CL (variable-count) shift/rotate flag materialization across a block boundary. The
+        // producer runs SHL/SHR/SAR/ROL/ROR/RCL/RCR by %cl (all widths, counts {0,1,2,7,8,31,32,63,64,65})
+        // and the flags are read (pushfq) in a SEPARATE block reached by a backward jmp (chained edge). SAR
+        // by CL left the live ARM NZCV stale -> a chained-edge spill wrote CF=1/ZF=0 for `sarq %cl` a=0 cl=1;
+        // also fixes byte/word count masking (CL&0x1f) and byte/word rotate CF (flags-affected uses CL&0x1f,
+        // not CL%width). Run default (backward-jmp chain) AND NOSTITCH=1 (every edge chained) vs qemu.
+        x("bycl",             "completeness/x86_bycl.c"),
+        x("bycl-nostitch",    "completeness/x86_bycl.c").env("NOSTITCH", "1"),
         x("xflags-sig",       "completeness/x86_xflags_sig.c"),
         x("xflags-sig-nostitch", "completeness/x86_xflags_sig.c").env("NOSTITCH", "1"),
         // Shift/rotate dead-flag elision: an immediate SHL/SHR/SAR whose flag output is dead at every

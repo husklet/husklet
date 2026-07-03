@@ -176,6 +176,25 @@ static int chown_xattr_get(const char *hostpath, int fd, uint64_t dev, uint64_t 
     }
     return present;
 }
+// #383: the SINGLE source of truth for guest-visible file ownership. Map a host stat's raw uid/gid to
+// the ids the guest must see: the #156 cuid/cgid container default for engine-owned files, overridden by
+// the #181 guest-chown xattr (read through the #382 negative cache). EVERY stat-family syscall routes its
+// owner fields through here -- fill_linux_stat (fstat/stat/newfstatat) AND the statx handler -- so all of
+// them report identical ownership for the same file (statx previously copied the RAW host uid/gid,
+// diverging from fstat wherever cuid/cgid or a guest chown applied). hostpath/fd identify the backing file
+// for the xattr read (NULL/-1 when synthetic -> the cuid/cgid default applies).
+static void stat_virt_ids(const struct stat *s, const char *hostpath, int fd, uint32_t *out_uid,
+                          uint32_t *out_gid) {
+    uint32_t uid = (s->st_uid == (uid_t)getuid()) ? (uint32_t)cuid() : (uint32_t)s->st_uid;
+    uint32_t gid = (s->st_gid == (gid_t)getgid()) ? (uint32_t)cgid() : (uint32_t)s->st_gid;
+    int xu, xg;
+    if (chown_xattr_get(hostpath, fd, (uint64_t)s->st_dev, (uint64_t)s->st_ino, &xu, &xg)) {
+        if (xu >= 0) uid = (uint32_t)xu;
+        if (xg >= 0) gid = (uint32_t)xg;
+    }
+    *out_uid = uid;
+    *out_gid = gid;
+}
 // ---- runtime credential overlay (USER ns) -- defined here (BEFORE fs.c AND proc.c in the unity TU) --
 // cuid()/cgid() give the container's CONFIGURED identity (default 0=root); a privileged guest may drop
 // to an unprivileged id at runtime (apt forks /usr/lib/apt/methods/http, switching to `_apt`; gosu

@@ -20,6 +20,17 @@ static void tty_ctl_block(sigset_t *saved) {
 }
 static void tty_ctl_restore(const sigset_t *saved) { sigprocmask(SIG_SETMASK, saved, NULL); }
 
+// #383: statx returns device numbers as separate major/minor u32s, whereas struct stat packs them into a
+// single st_dev/st_rdev field that the guest decodes with glibc's gnu_dev_major/minor. fill_linux_stat
+// copies the host dev value into st_dev/st_rdev VERBATIM, so for statx to report the SAME major:minor a
+// caller would compute from fstat/newfstatat, statx must apply those very macros to that same raw value.
+static inline uint32_t lin_dev_major(uint64_t dev) {
+    return (uint32_t)(((dev >> 8) & 0xfffu) | ((uint32_t)(dev >> 32) & ~0xfffu));
+}
+static inline uint32_t lin_dev_minor(uint64_t dev) {
+    return (uint32_t)((dev & 0xffu) | ((uint32_t)(dev >> 12) & ~0xffu));
+}
+
 // Overlay getdents64 snapshot cache (case 61): the merged cross-layer listing for a directory fd is taken
 // once on the first getdents call and consumed across the many small reads libc makes. Keyed by guest
 // fd+1 (0 == free). A slot MUST be invalidated on close() -- ovldents_drop, called from case 57 -- so a
@@ -1889,6 +1900,11 @@ static int svc_fs(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t
         const char *p = atpath((int)a0, raw, pb, sizeof pb, nofollow);
         int rc, empty = (raw && !raw[0] && (a2 & 0x1000));
         const char *gp = (g_rootfs && !strncmp(p, g_rootfs_canon, g_rootfs_canon_len)) ? p + g_rootfs_canon_len : p;
+        // Track the host backing file so ownership virtualization reads the SAME guest-chown xattr that
+        // fstat/newfstatat do (#383): xpath = the host path we stat'd, or xfd = the fd for AT_EMPTY_PATH;
+        // both stay NULL/-1 for synthetic entries (no backing file -> cuid/cgid default applies).
+        const char *xpath = NULL;
+        int xfd = -1;
         char ep[1024];
         if (proc_self_exe(gp, ep, sizeof ep)) {
             // /proc/[self|pid]/exe magic symlink -> the running executable
@@ -1902,10 +1918,11 @@ static int svc_fs(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t
                 char hb[4200];
                 const char *hp = xresolve_overlay(ep, hb, sizeof hb);
                 rc = stat(hp, &s) == 0 ? 0 : -errno;
+                if (rc == 0) xpath = hp;
             }
         } else if (synth_stat_raw(gp, &s)) {
             rc = 0;
-            // synth /proc or /sys -> fill from s below
+            // synth /proc or /sys -> fill from s below (synthetic: no backing file, xpath/xfd stay NULL/-1)
         }
         // cacheable (only the follow case -- the path cache doesn't distinguish follow vs nofollow)
         else if (raw && raw[0] && !empty && !nofollow) {
@@ -1914,28 +1931,38 @@ static int svc_fs(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t
                 rc = rr < 0 ? -errno : 0;
                 mc_store(p, rc, &s);
             }
+            if (rc == 0) xpath = p;
         } else {
-            int rr = (empty && memf_get((int)a0)) ? memf_fstat((int)a0, &s)
-                     : empty                      ? fstat((int)a0, &s)
-                                                  : fstatat(ATFD(a0), p, &s, nofollow ? AT_SYMLINK_NOFOLLOW : 0);
+            int esf = empty && memf_get((int)a0);
+            int rr = esf                            ? memf_fstat((int)a0, &s)
+                     : empty                        ? fstat((int)a0, &s)
+                                                    : fstatat(ATFD(a0), p, &s, nofollow ? AT_SYMLINK_NOFOLLOW : 0);
             rc = rr < 0 ? -errno : 0;
+            if (rc == 0) {
+                if (empty) xfd = (int)a0; // AT_EMPTY_PATH: xattr lives on the fd's backing file
+                else xpath = p;
+            }
         }
         if (rc < 0) {
             G_RET(c) = (uint64_t)(int64_t)rc;
             break;
         }
+        // Route ownership through the SHARED virtualization (cuid/cgid default + #181 guest-chown xattr via
+        // the #382 cache) so statx's uid/gid are byte-identical to fstat/newfstatat for the same file.
+        uint32_t vuid, vgid;
+        stat_virt_ids(&s, xpath, xfd, &vuid, &vgid);
         uint8_t *d = (uint8_t *)a4;
-        // struct statx (correct offsets)
+        // struct statx (Linux uapi offsets). We fill STATX_BASIC_STATS | STATX_BTIME.
         memset(d, 0, 256);
-        *(uint32_t *)(d + 0) = 0x17ff;
-        // stx_mask (BTIME|basic), stx_blksize
+        // stx_mask @0 = basic(0x7ff) | btime(0x800); stx_blksize @4
+        *(uint32_t *)(d + 0) = 0x7ff | 0x800;
         *(uint32_t *)(d + 4) = 4096;
-        // stx_nlink @16
-        *(uint32_t *)(d + 16) = s.st_nlink ? s.st_nlink : 1;
-        *(uint32_t *)(d + 20) = s.st_uid;
-        // stx_uid@20 stx_gid@24
-        *(uint32_t *)(d + 24) = s.st_gid;
-        // stx_mode @28  <-- was @36 (the bug)
+        // stx_nlink @16 (raw, matching fill_linux_stat)
+        *(uint32_t *)(d + 16) = (uint32_t)s.st_nlink;
+        // stx_uid @20  stx_gid @24 (virtualized)
+        *(uint32_t *)(d + 20) = vuid;
+        *(uint32_t *)(d + 24) = vgid;
+        // stx_mode @28
         *(uint16_t *)(d + 28) = (uint16_t)s.st_mode;
         // stx_ino @32
         *(uint64_t *)(d + 32) = s.st_ino;
@@ -1943,11 +1970,21 @@ static int svc_fs(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t
         *(uint64_t *)(d + 40) = (uint64_t)s.st_size;
         // stx_blocks @48
         *(uint64_t *)(d + 48) = (uint64_t)s.st_blocks;
-        *(int64_t *)(d + 64) = s.st_atime;
-        // stx_atime@64 stx_ctime@96
-        *(int64_t *)(d + 96) = s.st_ctime;
-        // stx_mtime @112 (sec)
-        *(int64_t *)(d + 112) = s.st_mtime;
+        // stx_{atime,btime,ctime,mtime} @64/80/96/112: {s64 tv_sec; u32 tv_nsec} each 16 bytes
+        *(int64_t *)(d + 64) = (int64_t)s.st_atimespec.tv_sec;
+        *(uint32_t *)(d + 72) = (uint32_t)s.st_atimespec.tv_nsec;
+        *(int64_t *)(d + 80) = (int64_t)s.st_birthtimespec.tv_sec;
+        *(uint32_t *)(d + 88) = (uint32_t)s.st_birthtimespec.tv_nsec;
+        *(int64_t *)(d + 96) = (int64_t)s.st_ctimespec.tv_sec;
+        *(uint32_t *)(d + 104) = (uint32_t)s.st_ctimespec.tv_nsec;
+        *(int64_t *)(d + 112) = (int64_t)s.st_mtimespec.tv_sec;
+        *(uint32_t *)(d + 120) = (uint32_t)s.st_mtimespec.tv_nsec;
+        // stx_rdev_major @128 / minor @132, stx_dev_major @136 / minor @140 -- decoded from the SAME raw
+        // dev values fill_linux_stat packs into st_rdev/st_dev, so a caller sees identical major:minor.
+        *(uint32_t *)(d + 128) = lin_dev_major((uint64_t)s.st_rdev);
+        *(uint32_t *)(d + 132) = lin_dev_minor((uint64_t)s.st_rdev);
+        *(uint32_t *)(d + 136) = lin_dev_major((uint64_t)s.st_dev);
+        *(uint32_t *)(d + 140) = lin_dev_minor((uint64_t)s.st_dev);
         G_RET(c) = 0;
         break;
     }
