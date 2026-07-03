@@ -128,7 +128,10 @@ static int smc_on_write(uint64_t a) {
 
 // A3 (aarch64-only lever): no §B-off block-entry alignment on x86. Defined so the shared jit/dispatch.c
 // compiles; expands to a compile-time 0 -> the alignment `while` is dead-stripped on x86.
-#define G_BLOCK_ALIGN 0
+// IRQSLIM moved the per-block poll exit stub out of line, which shifts downstream block layout;
+// 16-align each block entry (same rationale as the aarch64 A3 alignment: stabilize hot-loop/BTB
+// placement; the pad precedes the entry and never executes). Costs only pad bytes.
+#define G_BLOCK_ALIGN (g_fwdskip != 0)
 
 // ARM-B1 (aarch64-only lever): no VDBE meta-trace on x86 (the x86 IBTC keys differently -- no ic_site/pc
 // seam). Defined empty so the shared jit/dispatch.c compiles for the x86_64 engine; both levers are

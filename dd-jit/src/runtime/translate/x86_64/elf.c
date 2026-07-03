@@ -683,6 +683,11 @@ static int nonpie_fixup(siginfo_t *si, void *ucv) {
     return 1;
 }
 void jit86_lazyguard(int sig, siginfo_t *si, void *uc) {
+    // host_range_mapped's fault-guarded probe (thread.c): a probe load on an unmapped guest page long-jumps
+    // back to report "unmapped" -> -EFAULT. MUST run first: the lazy zero-page mapper below would otherwise
+    // serve the probe fault with a fresh mapping, flipping a correct EFAULT into a bogus success (and
+    // burning lazy-map budget); nonpie_fixup would likewise emulate the probe load at +bias and resume.
+    if (hrm_fault_hook(si)) return; // never actually returns on a claim (siglongjmp); shape-only
     // W6A item 1: a non-PIE absolute DATA ref into the low link range -> serve the access at +bias and
     // advance the host PC. Inert unless g_nonpie_lo is set (ET_EXEC only).
     if (nonpie_fixup(si, uc)) return;
@@ -776,6 +781,9 @@ __attribute__((constructor)) static void jit86_install_sync_fault_guards(void) {
     sigaction(SIGTRAP, &sa, NULL);
 }
 void jit86_faulth(int sig, siginfo_t *si, void *uc) {
+    // host_range_mapped probe fault (thread.c) -- resolve it silently even on this diagnostic path, so a
+    // FAULT_ON trace run doesn't dump a bogus [FAULT] for every EFAULT-probing syscall and die.
+    if (hrm_fault_hook(si)) return; // never actually returns on a claim (siglongjmp); shape-only
     struct cpu *c = (struct cpu *)pthread_getspecific(g_cpu_key);
     static const char *nm[16] = {"rax", "rcx", "rdx", "rbx", "rsp", "rbp", "rsi", "rdi",
                                  "r8",  "r9",  "r10", "r11", "r12", "r13", "r14", "r15"};

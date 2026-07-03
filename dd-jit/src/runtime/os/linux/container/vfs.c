@@ -516,7 +516,12 @@ static int jail_pick(const char *abs, const char **canon, size_t *clen, const ch
 // unresolved (for readlink/lstat). Returns 1 if inside the jail, 0 if an escape was blocked.
 // Core: confine `rel` within an explicit jail root (jcanon). Generalized from secure_resolve so the
 // overlay can resolve the SAME guest path inside each layer's root, reusing the realpath boundary.
-static int confine_in(const char *jcanon, size_t jclen, const char *rel, char *out, size_t n, int nofollow) {
+// `missing` (optional): the number of trailing DIRECTORY components that did NOT exist under the jail
+// root (the climb-loop pops below). 0 => the parent chain fully exists. The overlay uses this to prove
+// "this entry cannot exist in the upper" (and no whiteout/opaque marker can either) without extra probes.
+static int confine_in_m(const char *jcanon, size_t jclen, const char *rel, char *out, size_t n, int nofollow,
+                        int *missing) {
+    if (missing) *missing = 0;
     char norm[4200];
     confine(rel, norm, sizeof norm);
     char h[8400];
@@ -552,9 +557,22 @@ static int confine_in(const char *jcanon, size_t jclen, const char *rel, char *o
         snprintf(tmp, sizeof tmp, "/%s%s", sl + 1, rem);
         snprintf(rem, sizeof rem, "%s", tmp);
         *sl = 0;
+        if (missing) (*missing)++;
     }
 }
-static int secure_resolve(const char *guest, char *out, size_t n, int nofollow) {
+static int confine_in(const char *jcanon, size_t jclen, const char *rel, char *out, size_t n, int nofollow) {
+    return confine_in_m(jcanon, jclen, rel, out, n, nofollow, NULL);
+}
+// secure_resolve + two probe outputs the overlay's fast path uses (both optional):
+//   `missing` -- trailing dir components of the path that do NOT exist under the chosen jail root
+//                (see confine_in_m); lets overlay_lookup prove an upper entry/whiteout/opaque marker
+//                cannot exist without paying the extra lstat probes.
+//   `isvol`   -- the path routed to a bind-mount VOLUME jail, not the rootfs/overlay upper. Volume
+//                backings are host-mutable (the user can create files from macOS at any time), so the
+//                overlay's negative memo must never cache them (mirrors mc_store's volume exclusion).
+static int secure_resolve_probe(const char *guest, char *out, size_t n, int nofollow, int *missing, int *isvol) {
+    if (isvol) *isvol = 0;
+    if (missing) *missing = 0;
     // Normalize '.'/'//'/'..' and clamp at the ROOTFS root FIRST, then route. Jail selection must see the
     // post-`..` path: a `..` that pops above a volume's own root crosses the bind-mount boundary back to
     // the dir holding the mount point ("/x/y/.." -> "/x"), which lives in the rootfs/overlay jail, not the
@@ -573,6 +591,7 @@ static int secure_resolve(const char *guest, char *out, size_t n, int nofollow) 
     // here IS that file -- emit it directly; confine_in would append rel ("/") and ENOTDIR on the file.
     int fvi = jail_match(norm);
     if (fvi >= 0 && g_vols[fvi].isfile) {
+        if (isvol) *isvol = 1;
         snprintf(out, n, "%s", g_vols[fvi].hcanon);
         return 1;
     }
@@ -581,7 +600,11 @@ static int secure_resolve(const char *guest, char *out, size_t n, int nofollow) 
     const char *rel;
     // rootfs or a volume root (jcanon is absolute)
     jail_pick(norm, &jcanon, &jclen, &rel);
-    return confine_in(jcanon, jclen, rel, out, n, nofollow);
+    if (isvol && jcanon != g_rootfs_canon) *isvol = 1; // jail_pick hands back the global array for rootfs
+    return confine_in_m(jcanon, jclen, rel, out, n, nofollow, missing);
+}
+static int secure_resolve(const char *guest, char *out, size_t n, int nofollow) {
+    return secure_resolve_probe(guest, out, n, nofollow, NULL, NULL);
 }
 #include "vfs/overlay.c"
 // final NOT followed (readlink/lstat)

@@ -28,7 +28,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 /// Every kernel the guest implements (must match `microbench.c`'s KERNELS table), in a fixed order.
-const KERNELS: &[&str] = &["alu", "muldiv", "branch", "mem", "fp", "simd", "memcpy", "call", "syscall"];
+const KERNELS: &[&str] = &["alu", "muldiv", "branch", "mem", "fp", "simd", "memcpy", "call", "syscall", "sqlsys", "epollsys"];
 
 /// Per-run wall-clock guard (seconds). The kernels are ~0.5–1s native; even a slow dd/qemu lane on
 /// the heaviest kernel stays well under this, so `timeout` only ever fires on a genuine hang.

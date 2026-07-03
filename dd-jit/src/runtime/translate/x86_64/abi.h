@@ -52,6 +52,7 @@
 #define G_PROF_EXTRA                                                                                                    \
     do {                                                                                                                \
         if (getenv("PROF"))                                                                                            \
-            fprintf(stderr, "[prof] tier2=%llu tier2_fold_elide=%llu\n", (unsigned long long)g_prof_t2,               \
-                    (unsigned long long)g_prof_t2fold);                                                                 \
+            fprintf(stderr, "[prof] tier2=%llu tier2_fold_elide=%llu xflag_elide=%llu xflag_scan=%llu\n",              \
+                    (unsigned long long)g_prof_t2, (unsigned long long)g_prof_t2fold,                                   \
+                    (unsigned long long)g_prof_xflag, (unsigned long long)g_prof_xflag_scan);                           \
     } while (0)

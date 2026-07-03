@@ -292,6 +292,7 @@ static int svc_proc(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64
         ep_prof_dump(); // w3e: flush epoll kevent-syscall counter (atexit is bypassed by _exit)
         ib_dump();      // ARM-B1 IBPROF: indirect-branch traffic + stability report (no-op unless IBPROF)
         vt_dump();      // ARM-B1 VDBETRACE: threading prototype counters (no-op unless VDBETRACE)
+        ctx_dump();     // CTXDISP: history-keyed-dispatch counters (no-op unless CTXDISP)
         if (g_noexit) { // W3D fork-server prewarm: don't kill the resident parent; unwind run_guest instead
             c->exited = 1;
             c->exit_code = (int)a0;
@@ -696,6 +697,9 @@ static int svc_proc(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64
             // cache -> the intermittent fork+exec SIGBUS. pthread_jit_write_protect_np(1) = RX (executable).
             pthread_jit_write_protect_np(1);
             jit_after_fork();  // dual map: COW split the RW/RX aliases -> rebuild a fresh aliased cache
+#ifdef PCACHE_FORK_HOOK
+            PCACHE_FORK_HOOK; // #339: fresh arena -> drop inherited reloc records + bar child saves
+#endif
             G_SHADOW_RESET(c); // §B: child's pre-fork host_rets crossed run_block -> drop, use IBTC
             // Under the dual map, jit_after_fork() rebuilt the child's cache at a FRESH VA (and munmap'd the
             // old RW/RX aliases), so every cached body pointer is now stale. It zeroed the shared g_map +
@@ -832,6 +836,13 @@ static int svc_proc(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64
             argv[i] = xargv[i];
         argv[ac < 255 ? ac : 255] = NULL;
         struct loaded lm;
+        char pc_ihost[4200];
+        const char *pc_interp_host = NULL;
+        (void)pc_ihost;
+        (void)pc_interp_host;
+#ifdef PCACHE_EXEC_HOOKS
+        pcache_exec_force_main(); // #339: map the new image at the fixed VA so its cached arena is reusable
+#endif
         load_elf(p, &lm);
         uint64_t jump = lm.entry, at_base = 0;
         char interp[256];
@@ -839,6 +850,11 @@ static int svc_proc(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64
             char ib[4200];
             // follow+confine ld.so symlink (through the overlay)
             const char *ih = xresolve_overlay(interp, ib, sizeof ib);
+#ifdef PCACHE_EXEC_HOOKS
+            snprintf(pc_ihost, sizeof pc_ihost, "%s", ih); // outlive `ib` for the cache id below
+            pc_interp_host = pc_ihost;
+            pcache_exec_force_interp();
+#endif
             struct loaded li;
             load_elf(ih, &li);
             jump = li.entry;
@@ -849,6 +865,12 @@ static int svc_proc(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64
         // flush old translations
         g_npend = 0;
         memset(g_ibtc, 0, sizeof g_ibtc);
+#ifdef PCACHE_EXEC_HOOKS
+        // #339: the new image is loaded + the arena is flushed -> try to restore its warm translated arena
+        // from the persistent cache (this is what makes the go-build fork+execve storm fast). Graceful MISS
+        // translates fresh + saves on exit.
+        pcache_exec_reload(p, pc_interp_host, argv[0], jump);
+#endif
         // execve is a wholesale code-cache flush (g_cp reset + g_map/g_ibtc zeroed above), so it must ALSO
         // run the per-arch wholesale-flush hook the dispatcher uses (jit/dispatch.c) -- not just the lighter
         // fork/exec G_SHADOW_RESET. On x86 that hook drops the 2-way g_xibtc (G_SHADOW_RESET is a NO-OP there,
@@ -951,6 +973,9 @@ static int svc_proc(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64
         // §B: same -- child drops the inherited shadow; S2: and the inherited path-resolution cache
         if (pid == 0) {
             jit_after_fork(); // dual map: rebuild the child's aliased cache (COW split RW/RX)
+#ifdef PCACHE_FORK_HOOK
+            PCACHE_FORK_HOOK; // #339: fresh arena -> drop inherited reloc records + bar child saves
+#endif
             G_SHADOW_RESET(c);
             // Dual map only: the rebuilt cache moved to a fresh VA, so drop the x86-only 2-way g_xibtc that
             // jit_after_fork() can't see (stale bodies -> freed parent RX alias -> SIGSEGV on the child's

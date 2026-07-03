@@ -206,6 +206,10 @@ static int engine_global_init(void) {
     g_trace = getenv("JT") != NULL;
     g_systrace = getenv("JTS") != NULL;
     g_prof = getenv("PROF") != NULL;
+    // IRQSLIM (lever #4): fixed 2-insn #292 poll header + poll-free forward-chain entry at body+8
+    // (every cycle still polls via its backward/indirect edge -- see engine/cache.c).
+    // NOIRQSLIM=1 -> legacy poll-on-every-entry for A/B.
+    if (!getenv("NOIRQSLIM") && !getenv("NOIRQCHECK")) g_fwdskip = 8;
     // W5B adaptive tier-2 controls (x86 engine)
     g_notier2x = getenv("NOTIER2X") != NULL;
     { const char *t = getenv("TIER2X_THRESHOLD"); if (t && atoll(t) > 0) g_t2thresh = (uint64_t)atoll(t); }
@@ -332,9 +336,10 @@ static int run_loaded(int argc, char *const argv[], struct loaded *lm, uint64_t 
 int dd_run(const char *rootfs, int argc, char *const argv[]) {
     if (argc < 1 || !argv || !argv[0]) return 2;
     // opt8 persistent translated-code cache: OPT-IN via DDJIT_PCACHE (default OFF -> byte-identical to the
-    // baseline; the cross-engine matrix never sets it, so it is unaffected). Read once.
+    // baseline; the cross-engine matrix never sets it, so it is unaffected). DDJIT_NOPCACHE=1 is the
+    // kill-switch and always wins (same contract as the aarch64 #339 pcache). Read once.
     g_coldprof = getenv("COLDPROF") != NULL;
-    g_pcache = getenv("DDJIT_PCACHE") != NULL;
+    g_pcache = getenv("DDJIT_PCACHE") != NULL && getenv("DDJIT_NOPCACHE") == NULL;
     container_init(rootfs);
     int rc = engine_global_init();
     if (rc) return rc;

@@ -4,6 +4,18 @@
 // ---- Overlay (OCI image layers): --rootfs is the writable UPPER; --lower dirs are read-only,
 // searched top->down when a path isn't in the upper. Whiteout (.wh.NAME) hides a lower entry;
 // copy-up brings a lower file into the upper on write. Off entirely when g_nlower==0.
+// Same-TU forward decls into fscache.c (defined later; all files are #included into one unity TU):
+//   res_bump          -- the FS-namespace epoch bump; called here whenever a copy-up MUTATES the upper
+//                        (mkdir/byte-copy), so the guest->host path caches AND the negative memo below
+//                        can never serve a pre-copy-up answer (fchmodat/utimensat/setxattr copy-ups
+//                        reach here WITHOUT a bumping syscall in dispatch.c).
+//   updirneg_*        -- the "this GUEST DIR does not exist in the upper" negative memo (epoch-gated,
+//                        fork/chroot-reset via rc_reset). overlay_lookup consults it so a fresh
+//                        container's metadata storm (tar/find/ld.so over a still-empty upper) skips
+//                        the per-entry upper realpath climb + whiteout + opaque probes entirely.
+static void res_bump(void);
+static int updirneg_lookup(const char *dir);
+static void updirneg_store(const char *dir);
 static const char *xresolve_exec(const char *p, char *buf,
                                  // fwd (defined below; overlay uses it for the upper)
                                  size_t n);
@@ -108,31 +120,45 @@ static int dir_is_opaque(const char *jc, size_t jcl, const char *guestdir) {
 // primitive; overlay_resolve() drives the cross-layer symlink-follow loop on top of it. Both the upper and
 // the lowers are probed nofollow so the FINAL component stays a symlink for the loop to re-resolve.
 static int overlay_lookup(const char *guest, char *host, size_t hn) {
-    char up[4300];
-    secure_resolve(guest, up, sizeof up, 1); // upper (or volume), final NOT followed
     struct stat st;
-    if (lstat(up, &st) == 0) {
-        snprintf(host, hn, "%s", up);
-        return 1;
-    // upper shadows lowers
-    }
-    if (wh_exists(g_rootfs_canon, g_rootfs_canon_len, guest)) {
-        snprintf(host, hn, "%s", up);
-        return 0;
-    // deleted
-    }
-    // OPAQUE parent: if the guest's parent dir is opaque in the upper (a recreated dir), every lower copy
-    // of a child is hidden -- don't descend to the lowers (the child is absent, host = the upper path).
-    {
-        char par[4200];
-        snprintf(par, sizeof par, "%s", guest);
-        char *psl = strrchr(par, '/');
-        if (psl && psl != par) {
-            *psl = 0;
-            if (dir_is_opaque(g_rootfs_canon, g_rootfs_canon_len, par)) {
+    char up[4300];
+    up[0] = 0; // computed lazily: the memo fast path never needs it unless the entry is absent EVERYWHERE
+    // Parent guest dir ("/usr/lib/x.py" -> "/usr/lib"); a root-level entry ("/etc") has no memo key.
+    char par[4200];
+    snprintf(par, sizeof par, "%s", guest);
+    char *psl = strrchr(par, '/');
+    int have_par = psl && psl != par;
+    if (have_par) *psl = 0;
+    // FAST PATH: the negative memo proves `par` does not exist in the UPPER (epoch-valid entry). Then the
+    // entry itself, its `.wh.` whiteout, and its parent's `.wh..wh..opq` opaque marker -- all of which
+    // would live under that missing upper dir -- cannot exist either, so the three upper probes below are
+    // provably ENOENT and we go straight to the lowers. A later mkdir/copy-up in the upper bumps
+    // g_res_epoch (dispatch.c res_bump + the copy-up bumps in this file), instantly invalidating the memo.
+    if (!(have_par && updirneg_lookup(par))) {
+        int upmiss = 0, isvol = 0;
+        int injail = secure_resolve_probe(guest, up, sizeof up, 1, &upmiss, &isvol); // upper (or volume)
+        if (upmiss == 0) { // parent chain exists in the upper (or a volume): full probe, as before
+            if (lstat(up, &st) == 0) {
+                snprintf(host, hn, "%s", up);
+                return 1;
+            // upper shadows lowers
+            }
+            if (wh_exists(g_rootfs_canon, g_rootfs_canon_len, guest)) {
+                snprintf(host, hn, "%s", up);
+                return 0;
+            // deleted
+            }
+            // OPAQUE parent: if the guest's parent dir is opaque in the upper (a recreated dir), every lower
+            // copy of a child is hidden -- don't descend to the lowers (absent, host = the upper path).
+            if (have_par && dir_is_opaque(g_rootfs_canon, g_rootfs_canon_len, par)) {
                 snprintf(host, hn, "%s", up);
                 return 0;
             }
+        } else if (have_par && injail && !isvol) {
+            // Parent dir chain missing in the upper -> entry/whiteout/opaque provably absent there. Memoize
+            // (rootfs-routed paths only: a volume's backing dir is host-mutable and must never be
+            // negative-cached -- same exclusion mc_store applies to volume paths).
+            updirneg_store(par);
         }
     }
     // search lowers top->down
@@ -143,13 +169,11 @@ static int overlay_lookup(const char *guest, char *host, size_t hn) {
             snprintf(host, hn, "%s", lp);
             return 1;
         }
-        if (wh_exists(g_lower[i].canon, g_lower[i].clen, guest)) {
-            snprintf(host, hn, "%s", up);
-            return 0;
-        }
+        if (wh_exists(g_lower[i].canon, g_lower[i].clen, guest)) break; // deleted below this layer
     }
+    // absent -> upper path (for ENOENT/O_CREAT); compute it now if the memo fast path skipped it
+    if (!up[0]) secure_resolve(guest, up, sizeof up, 1);
     snprintf(host, hn, "%s", up);
-    // absent -> upper path (for ENOENT/O_CREAT)
     return 0;
 }
 // Overlay READ resolve: topmost layer that has `guest`, FOLLOWING a final symlink across the WHOLE overlay
@@ -221,6 +245,7 @@ static void overlay_mkparents(const char *guest) {
     char acc[4200];
     size_t al = 0;
     acc[0] = 0;
+    int made = 0; // any upper mkdir below must bump the namespace epoch (memo + path-cache coherence)
     for (char *seg = par + 1;;) {
         char *next = strchr(seg, '/');
         if (next) *next = 0;
@@ -236,7 +261,7 @@ static void overlay_mkparents(const char *guest) {
                 char lo[4300];
                 layer_follow(g_lower[i].canon, g_lower[i].clen, acc, lo, sizeof lo, 0);
                 if (lstat(lo, &st) == 0 && S_ISDIR(st.st_mode)) {
-                    mkdir(up, st.st_mode & 0777);
+                    if (mkdir(up, st.st_mode & 0777) == 0) made = 1;
                     break;
                 }
             }
@@ -244,6 +269,10 @@ static void overlay_mkparents(const char *guest) {
         *next = '/';
         seg = next + 1;
     }
+    // Dirs appeared in the upper: invalidate the epoch-gated caches (updirneg memo, rc_/oc_ path strings)
+    // so no pre-copy-up "absent in upper" answer survives. Bumped ONCE per call, only when something was
+    // actually created -- the common already-materialized case stays bump-free.
+    if (made) res_bump();
 }
 // ---- copy-up metadata + opaque + whiteout helpers ------------------------------------------------
 // Real overlayfs copy-up preserves the lower inode's mode (INCLUDING setuid/setgid/sticky), its
@@ -360,7 +389,11 @@ static void overlay_copyup(const char *guest, char *host, size_t hn) {
             struct stat ds;
             layer_follow(g_lower[i].canon, g_lower[i].clen, guest, lp, sizeof lp, 0);
             if (lstat(lp, &ds) == 0) {
-                if (S_ISDIR(ds.st_mode)) { overlay_mkparents(guest); mkdir(up, ds.st_mode & 0777); return; }
+                if (S_ISDIR(ds.st_mode)) {
+                    overlay_mkparents(guest);
+                    if (mkdir(up, ds.st_mode & 0777) == 0) res_bump(); // dir materialized in the upper
+                    return;
+                }
                 break; // lower provides it as a non-dir (symlink/special): leave to the caller's fallback
             }
             if (wh_exists(g_lower[i].canon, g_lower[i].clen, guest)) break; // hidden by a whiteout below here
@@ -398,6 +431,12 @@ static void overlay_copyup(const char *guest, char *host, size_t hn) {
     // Preserve the lower inode's mode (incl S_ISUID/S_ISGID/S_ISVTX), atime/mtime and xattrs -- real
     // overlayfs copy-up semantics (security-critical for setuid/file-cap binaries; correctness for mtime).
     ovl_copy_meta(src, up, &st);
+    // The file (and possibly its parent dirs) now lives in the UPPER: its resolved host path relocated
+    // lower->upper. Bump the namespace epoch so the guest->host path caches (rc_/oc_) and the updirneg
+    // memo can't keep serving the stale LOWER path -- fchmodat/fchownat/utimensat/setxattr copy-ups reach
+    // here with NO bumping syscall in dispatch.c (openat write-mode copy-ups bump there as well; a second
+    // bump is harmless).
+    res_bump();
 }
 // Recursively copy a lower-only subtree rooted at `guest` into the writable upper, preserving metadata at
 // every level. Used by rename(2) of a lower-only directory: real overlayfs (without redirect_dir) returns
@@ -426,7 +465,7 @@ static void overlay_copyup_tree(const char *guest) {
     overlay_mkparents(guest);
     xresolve_exec(guest, up, sizeof up);
     struct stat ust;
-    if (lstat(up, &ust) != 0) mkdir(up, lst.st_mode & 0777);
+    if (lstat(up, &ust) != 0 && mkdir(up, lst.st_mode & 0777) == 0) res_bump(); // dir appeared in the upper
     ovl_copy_meta(lo, up, &lst);
     DIR *d = opendir(lo);
     if (!d) return;

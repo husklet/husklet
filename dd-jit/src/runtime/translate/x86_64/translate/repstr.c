@@ -134,6 +134,10 @@ static void emit_rep_string(int movs, int w, int shift) {
     }
     e_str(31, 28, R_OFF(RCX)); // rcx = 0 (str xzr); EFLAGS unchanged by movs/stos
     emit_reload();
+    // Lever #3: the emit_spill above cleared cpu->vdirty at RUNTIME, so the once-per-trace mark latch must
+    // reset -- a later xmm write in this same region has to re-mark or a following slim syscall exit would
+    // skip the xmm save with host v0..v15 newer than cpu->V.
+    g_vmark_done = 0;
 }
 
 // translate_block control code: a per-class translate helper cannot continue/break the caller's for(;;)

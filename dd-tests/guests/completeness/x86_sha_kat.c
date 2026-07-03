@@ -1,53 +1,18 @@
-// Crypto throughput microbench for the x86->ARM64 JIT: exercises the exact hot instruction mix of
-// openssl AES-128-GCM (AES-NI CTR + PCLMULQDQ GHASH, both wrapped in PSHUFB byte-swaps) and SHA-256-NI
-// (SHA256RNDS2/MSG1/MSG2 wrapped in PSHUFB/PALIGNR/PSHUFD). Self-times with CLOCK_MONOTONIC and prints
-// MB/s so the same binary can be run under the JIT with NOSSEOPT=1 (shuffle glue exits to the C
-// softmulator = "before") vs unset (shuffle glue lowered inline = "after"). Timing only; not a KAT.
+// SHA-NI FIPS-180 known-answer + random-length differential suite. Complete SHA-256 and SHA-1
+// implementations (padding included) built on the SHA-NI instructions the JIT lowers to the ARM SHA
+// extension (SHA256RNDS2/MSG1/MSG2, SHA1RNDS4/NEXTE/MSG1/MSG2). The FIPS-180 vectors (empty, "abc",
+// the 448-bit two-block message, one million 'a') SELF-ASSERT against the published digests -- a wrong
+// hash is silent corruption, so these must hold on any host. On top, 48 xorshift-generated messages of
+// pseudo-random lengths (0..~600 bytes, crossing every padding/block boundary class) are digested and
+// printed; the harness byte-compares all stdout jit-vs-qemu (.oracle()).
 #include <stdio.h>
 #include <stdint.h>
 #include <string.h>
-#include <time.h>
 #include <immintrin.h>
 #include <x86intrin.h>
 
-#define BUFSZ (16 * 1024)
-#define ITERS 24000
-
-static double now_s(void) {
-    struct timespec t; clock_gettime(CLOCK_MONOTONIC, &t);
-    return (double)t.tv_sec + (double)t.tv_nsec * 1e-9;
-}
-
-// ---- AES-128-GCM proxy: CTR keystream (10 rounds) XOR data, then a GHASH fold. Keys are dummy (timing
-// only). Per 16-byte block: pshufb(counter bswap) + 10 aesenc/last + pshufb(ghash) + 4 pclmulqdq. ----
-__attribute__((target("aes,pclmul,ssse3,sse4.1")))
-static __m128i aesgcm_pass(uint8_t *buf, const __m128i rk[11], __m128i H, __m128i acc) {
-    const __m128i bswap = _mm_set_epi64x(0x0001020304050607ULL, 0x08090a0b0c0d0e0fULL);
-    __m128i ctr = _mm_set_epi64x(0, 1);
-    for (int off = 0; off < BUFSZ; off += 16) {
-        __m128i cb = _mm_shuffle_epi8(ctr, bswap);      // counter byte-swap (pshufb)
-        __m128i ks = _mm_xor_si128(cb, rk[0]);
-        ks = _mm_aesenc_si128(ks, rk[1]);  ks = _mm_aesenc_si128(ks, rk[2]);
-        ks = _mm_aesenc_si128(ks, rk[3]);  ks = _mm_aesenc_si128(ks, rk[4]);
-        ks = _mm_aesenc_si128(ks, rk[5]);  ks = _mm_aesenc_si128(ks, rk[6]);
-        ks = _mm_aesenc_si128(ks, rk[7]);  ks = _mm_aesenc_si128(ks, rk[8]);
-        ks = _mm_aesenc_si128(ks, rk[9]);  ks = _mm_aesenclast_si128(ks, rk[10]);
-        __m128i pt = _mm_loadu_si128((const __m128i *)(buf + off));
-        __m128i ct = _mm_xor_si128(pt, ks);
-        _mm_storeu_si128((__m128i *)(buf + off), ct);
-        // GHASH fold: x = bswap(ct) ^ acc; acc = clmul-reduce(x * H)  (4x pclmulqdq, Karatsuba-ish)
-        __m128i x = _mm_xor_si128(_mm_shuffle_epi8(ct, bswap), acc);
-        __m128i t0 = _mm_clmulepi64_si128(x, H, 0x00);
-        __m128i t1 = _mm_clmulepi64_si128(x, H, 0x11);
-        __m128i t2 = _mm_xor_si128(_mm_clmulepi64_si128(x, H, 0x10), _mm_clmulepi64_si128(x, H, 0x01));
-        acc = _mm_xor_si128(_mm_xor_si128(t0, t1), _mm_slli_si128(t2, 8));
-        acc = _mm_xor_si128(acc, _mm_srli_si128(t2, 8));
-        ctr = _mm_add_epi64(ctr, _mm_set_epi64x(0, 1));
-    }
-    return acc;
-}
-
-static const uint32_t SHA256K[64] = {
+// ---------------- SHA-256 via SHA-NI ----------------
+static const uint32_t K256[64] = {
     0x428a2f98,0x71374491,0xb5c0fbcf,0xe9b5dba5,0x3956c25b,0x59f111f1,0x923f82a4,0xab1c5ed5,
     0xd807aa98,0x12835b01,0x243185be,0x550c7dc3,0x72be5d74,0x80deb1fe,0x9bdc06a7,0xc19bf174,
     0xe49b69c1,0xefbe4786,0x0fc19dc6,0x240ca1cc,0x2de92c6f,0x4a7484aa,0x5cb0a9dc,0x76f988da,
@@ -57,7 +22,6 @@ static const uint32_t SHA256K[64] = {
     0x19a4c116,0x1e376c08,0x2748774c,0x34b0bcb5,0x391c0cb3,0x4ed8aa4a,0x5b9cca4f,0x682e6ff3,
     0x748f82ee,0x78a5636f,0x84c87814,0x8cc70208,0x90befffa,0xa4506ceb,0xbef9a3f7,0xc67178f2};
 
-// SHA-256-NI one block (identical to the validated x86_sha.c): pshufb + palignr + pshufd + sha256rnds2/msg.
 __attribute__((target("sha,sse4.1,ssse3")))
 static void sha256_block(uint32_t state[8], const uint8_t *data) {
     __m128i STATE0, STATE1, MSG, TMP, M[4], ABEF, CDGH;
@@ -70,7 +34,7 @@ static void sha256_block(uint32_t state[8], const uint8_t *data) {
     for (int i = 0; i < 4; i++) M[i] = _mm_shuffle_epi8(_mm_loadu_si128((const __m128i *)(data + 16 * i)), MASK);
     for (int i = 0; i < 16; i++) {
         __m128i cur = M[i & 3];
-        MSG = _mm_add_epi32(cur, _mm_loadu_si128((const __m128i *)&SHA256K[4 * i]));
+        MSG = _mm_add_epi32(cur, _mm_loadu_si128((const __m128i *)&K256[4 * i]));
         STATE1 = _mm_sha256rnds2_epu32(STATE1, STATE0, MSG);
         if (i >= 3 && i <= 14) {
             TMP = _mm_alignr_epi8(cur, M[(i + 3) & 3], 4);
@@ -88,8 +52,24 @@ static void sha256_block(uint32_t state[8], const uint8_t *data) {
     _mm_storeu_si128((__m128i *)&state[4], _mm_alignr_epi8(STATE1, TMP, 8));
 }
 
+// full message digest: init + blocks + FIPS-180 padding (len < 2^32 bytes here)
+static void sha256(const uint8_t *msg, uint64_t len, uint32_t out[8]) {
+    uint32_t st[8] = {0x6a09e667,0xbb67ae85,0x3c6ef372,0xa54ff53a,0x510e527f,0x9b05688c,0x1f83d9ab,0x5be0cd19};
+    uint64_t off = 0;
+    for (; off + 64 <= len; off += 64) sha256_block(st, msg + off);
+    uint8_t last[128]; memset(last, 0, sizeof last);
+    uint64_t rem = len - off;
+    memcpy(last, msg + off, rem);
+    last[rem] = 0x80;
+    uint64_t bits = len * 8;
+    int n = (rem <= 55) ? 64 : 128;
+    for (int i = 0; i < 8; i++) last[n - 1 - i] = (uint8_t)(bits >> (8 * i));
+    sha256_block(st, last);
+    if (n == 128) sha256_block(st, last + 64);
+    memcpy(out, st, 32);
+}
 
-// SHA-1-NI blocks (same generated round body as the validated x86_sha_kat.c): sha1rnds4/nexte/msg1/msg2.
+// ---------------- SHA-1 via SHA-NI ----------------
 __attribute__((target("sha,sse4.1,ssse3")))
 static void sha1_blocks(uint32_t state[5], const uint8_t *data, uint64_t length) {
     __m128i ABCD, ABCD_SAVE, E0, E0_SAVE, E1, MSG0, MSG1, MSG2, MSG3;
@@ -99,6 +79,11 @@ static void sha1_blocks(uint32_t state[5], const uint8_t *data, uint64_t length)
     ABCD = _mm_shuffle_epi32(ABCD, 0x1B);
     while (length >= 64) {
         ABCD_SAVE = ABCD; E0_SAVE = E0;
+        // round body generated systematically: at group g (rounds 4g..4g+3, K-imm g/5, E via
+        // SHA1NEXTE alternating E0/E1), the schedule quads live in slots MSG[k&3]:
+        //   q_{g+1} completed:  MSG[(g+1)&3] = SHA1MSG2(MSG[(g+1)&3], MSG[g&3])      (g in 3..18)
+        //   q_{g+3} started:    MSG[(g+3)&3] = SHA1MSG1(MSG[(g+3)&3], MSG[g&3])      (g in 1..16)
+        //   q_{g+2} W[t-8] term: MSG[(g+2)&3] ^= MSG[g&3]                            (g in 2..17)
         /* rounds 0-3 */
         MSG0 = _mm_shuffle_epi8(_mm_loadu_si128((const __m128i *)(data + 0)), MASK);
         E0 = _mm_add_epi32(E0, MSG0);
@@ -241,44 +226,79 @@ static void sha1_blocks(uint32_t state[5], const uint8_t *data, uint64_t length)
     state[4] = (uint32_t)_mm_extract_epi32(E0, 3);
 }
 
+static void sha1(const uint8_t *msg, uint64_t len, uint32_t out[5]) {
+    uint32_t st[5] = {0x67452301, 0xEFCDAB89, 0x98BADCFE, 0x10325476, 0xC3D2E1F0};
+    uint64_t full = len & ~63ULL;
+    sha1_blocks(st, msg, full);
+    uint8_t last[128]; memset(last, 0, sizeof last);
+    uint64_t rem = len - full;
+    memcpy(last, msg + full, rem);
+    last[rem] = 0x80;
+    uint64_t bits = len * 8;
+    int n = (rem <= 55) ? 64 : 128;
+    for (int i = 0; i < 8; i++) last[n - 1 - i] = (uint8_t)(bits >> (8 * i));
+    sha1_blocks(st, last, (uint64_t)n);
+    memcpy(out, st, 20);
+}
+
+// ---------------- vectors ----------------
+static void p256(const char *tag, const uint32_t d[8]) {
+    printf("%s ", tag);
+    for (int i = 0; i < 8; i++) printf("%08x", d[i]);
+    printf("\n");
+}
+static void p160(const char *tag, const uint32_t d[5]) {
+    printf("%s ", tag);
+    for (int i = 0; i < 5; i++) printf("%08x", d[i]);
+    printf("\n");
+}
+static int eq(const uint32_t *a, const uint32_t *b, int n) {
+    for (int i = 0; i < n; i++) if (a[i] != b[i]) return 0;
+    return 1;
+}
+
 int main(void) {
-    static uint8_t buf[BUFSZ];
-    for (int i = 0; i < BUFSZ; i++) buf[i] = (uint8_t)(i * 31 + 7);
-    __m128i rk[11];
-    for (int i = 0; i < 11; i++) rk[i] = _mm_set_epi32(i * 0x01010101 + 3, i * 7 + 1, ~i, i);
-    __m128i H = _mm_set_epi64x(0x0388dace60b6a392ULL, 0x66e94bd4ef8a2c3bULL);
+    static uint8_t buf[1000000];
+    uint32_t d8[8], d5[5];
+    int ok = 1;
 
-    // AES-GCM
-    __m128i acc = _mm_setzero_si128();
-    acc = aesgcm_pass(buf, rk, H, acc); // warm
-    double t0 = now_s();
-    for (int it = 0; it < ITERS; it++) acc = aesgcm_pass(buf, rk, H, acc);
-    double t1 = now_s();
-    double bytes = (double)BUFSZ * ITERS;
-    double aes_mbps = bytes / (t1 - t0) / 1e6;
+    // FIPS-180-4 SHA-256 KATs
+    static const uint32_t k256_empty[8] = {0xe3b0c442,0x98fc1c14,0x9afbf4c8,0x996fb924,0x27ae41e4,0x649b934c,0xa495991b,0x7852b855};
+    static const uint32_t k256_abc[8]   = {0xba7816bf,0x8f01cfea,0x414140de,0x5dae2223,0xb00361a3,0x96177a9c,0xb410ff61,0xf20015ad};
+    static const uint32_t k256_448[8]   = {0x248d6a61,0xd20638b8,0xe5c02693,0x0c3e6039,0xa33ce459,0x64ff2167,0xf6ecedd4,0x19db06c1};
+    static const uint32_t k256_mil[8]   = {0xcdc76e5c,0x9914fb92,0x81a1c7e2,0x84d73e67,0xf1809a48,0xa497200e,0x046d39cc,0xc7112cd0};
+    sha256((const uint8_t *)"", 0, d8);                  p256("sha256-empty", d8); ok &= eq(d8, k256_empty, 8);
+    sha256((const uint8_t *)"abc", 3, d8);               p256("sha256-abc", d8);   ok &= eq(d8, k256_abc, 8);
+    sha256((const uint8_t *)"abcdbcdecdefdefgefghfghighijhijkijkljklmklmnlmnomnopnopq", 56, d8);
+    p256("sha256-448", d8); ok &= eq(d8, k256_448, 8);
+    memset(buf, 'a', 1000000);
+    sha256(buf, 1000000, d8);                            p256("sha256-million-a", d8); ok &= eq(d8, k256_mil, 8);
 
-    // SHA-256
-    uint32_t st[8] = {0x6a09e667,0xbb67ae85,0x3c6ef372,0xa54ff53a,0x510e527f,0x9b05688c,0x1f83d9ab,0x5be0cd19};
-    for (int off = 0; off < BUFSZ; off += 64) sha256_block(st, buf + off); // warm
-    double s0 = now_s();
-    for (int it = 0; it < ITERS; it++)
-        for (int off = 0; off < BUFSZ; off += 64) sha256_block(st, buf + off);
-    double s1 = now_s();
-    double sha_mbps = bytes / (s1 - s0) / 1e6;
+    // FIPS-180-4 SHA-1 KATs
+    static const uint32_t k1_empty[5] = {0xda39a3ee,0x5e6b4b0d,0x3255bfef,0x95601890,0xafd80709};
+    static const uint32_t k1_abc[5]   = {0xa9993e36,0x4706816a,0xba3e2571,0x7850c26c,0x9cd0d89d};
+    static const uint32_t k1_448[5]   = {0x84983e44,0x1c3bd26e,0xbaae4aa1,0xf95129e5,0xe54670f1};
+    static const uint32_t k1_mil[5]   = {0x34aa973c,0xd4c4daa4,0xf61eeb2b,0xdbad2731,0x6534016f};
+    sha1((const uint8_t *)"", 0, d5);                    p160("sha1-empty", d5); ok &= eq(d5, k1_empty, 5);
+    sha1((const uint8_t *)"abc", 3, d5);                 p160("sha1-abc", d5);   ok &= eq(d5, k1_abc, 5);
+    sha1((const uint8_t *)"abcdbcdecdefdefgefghfghighijhijkijkljklmklmnlmnomnopnopq", 56, d5);
+    p160("sha1-448", d5); ok &= eq(d5, k1_448, 5);
+    sha1(buf, 1000000, d5);                              p160("sha1-million-a", d5); ok &= eq(d5, k1_mil, 5);
 
-    // SHA-1
-    uint32_t st1[5] = {0x67452301, 0xEFCDAB89, 0x98BADCFE, 0x10325476, 0xC3D2E1F0};
-    sha1_blocks(st1, buf, BUFSZ); // warm
-    double u0 = now_s();
-    for (int it = 0; it < ITERS; it++) sha1_blocks(st1, buf, BUFSZ);
-    double u1 = now_s();
-    double sha1_mbps = bytes / (u1 - u0) / 1e6;
+    // random-length messages (xorshift content + lengths crossing all padding boundaries: 0..~600,
+    // incl. exact block multiples and the 55/56/63/64 pad edges). Not self-asserted (no published
+    // digest) -- validated by the jit-vs-qemu byte diff.
+    uint64_t x = 0x243F6A8885A308D3ULL;
+    static const int lens[] = {1, 3, 8, 31, 55, 56, 57, 63, 64, 65, 119, 120, 127, 128, 129,
+                               191, 255, 256, 300, 447, 448, 511, 512, 577};
+    for (unsigned i = 0; i < sizeof lens / sizeof lens[0]; i++) {
+        int L = lens[i];
+        for (int j = 0; j < L; j++) { x ^= x << 13; x ^= x >> 7; x ^= x << 17; buf[j] = (uint8_t)x; }
+        char tag[32];
+        sha256(buf, (uint64_t)L, d8); snprintf(tag, sizeof tag, "r256-%d", L); p256(tag, d8);
+        sha1(buf, (uint64_t)L, d5);   snprintf(tag, sizeof tag, "r1-%d", L);   p160(tag, d5);
+    }
 
-    // sink to prevent dead-code elimination
-    volatile uint64_t sink = (uint64_t)_mm_extract_epi64(acc, 0) ^ st[0] ^ st1[0];
-    printf("AESGCM_MBps %.1f\n", aes_mbps);
-    printf("SHA256_MBps %.1f\n", sha_mbps);
-    printf("SHA1_MBps %.1f\n", sha1_mbps);
-    printf("sink %llx\n", (unsigned long long)sink);
-    return 0;
+    printf("kat=%d\n", ok);
+    return ok ? 0 : 1;
 }

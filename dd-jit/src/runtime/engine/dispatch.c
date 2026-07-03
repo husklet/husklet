@@ -132,6 +132,12 @@ static void run_guest(struct cpu *c) {
                     G_SHADOW_CLEAR(c);
                     jit_wprot(1);
                 }
+#ifdef PCACHE_FLUSH_HOOK
+                // #339: the reloc records described the arena we just dropped/renewed; reset so the
+                // records stay in lockstep with what is actually emitted (a later save must never
+                // relocate offsets into content that no longer matches).
+                PCACHE_FLUSH_HOOK;
+#endif
             }
             jit_wprot(0);
             // A3 §B-off: align each new block ENTRY to 16B. §B-off shrinks the per-bl stubs, which

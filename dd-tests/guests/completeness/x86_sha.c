@@ -1,6 +1,9 @@
-// SHA-NI (task #342): SHA256RNDS2 / SHA256MSG1 / SHA256MSG2 (mapped to inline ARM crypto/NEON) over many
-// vectors, SHA1RNDS4 (still C-emulated) for coverage, PLUS a SHA-256("abc") known-answer digest computed
-// with SHA-NI. Full stdout byte-compared jit-vs-qemu; the KAT line self-asserts.
+// SHA-NI (task #342): the FULL SHA-NI surface -- SHA256RNDS2 / SHA256MSG1 / SHA256MSG2 and
+// SHA1RNDS4 (all 4 imm2) / SHA1NEXTE / SHA1MSG1 / SHA1MSG2 -- all lowered to the inline ARM SHA
+// extension -- over many vectors, PLUS operand-shape corners (memory operands, aliased dst==src,
+// dst/src == the implicit xmm0) via inline asm, PLUS a SHA-256("abc") known-answer digest. Full
+// stdout byte-compared jit-vs-qemu; the KAT line self-asserts. (Full FIPS-180 digest KATs +
+// random-length messages live in x86_sha_kat.c.)
 #include <stdio.h>
 #include <stdint.h>
 #include <string.h>
@@ -69,7 +72,49 @@ __attribute__((target("sha,sse4.1,ssse3"))) static long go(void) {
             case 2: ph("sha1r4", _mm_sha1rnds4_epu32(a, b, 2)); break;
             default: ph("sha1r4", _mm_sha1rnds4_epu32(a, b, 3)); break;
             }
+            ph("sha1nexte", _mm_sha1nexte_epu32(a, b));
+            ph("sha1msg1", _mm_sha1msg1_epu32(a, b));
+            ph("sha1msg2", _mm_sha1msg2_epu32(a, b));
         }
+    // ---- operand-shape corners (inline asm; intrinsics never emit these shapes) ----
+    // Every SHA-NI op with a MEMORY r/m operand, aliased dst==src, and rnds2 where dst or src IS the
+    // implicit xmm0 -- exercises crypto_rm_vec + the register-alias paths of the ARM lowering.
+    {
+        __m128i mem[2];
+        mem[0] = _mm_set_epi32(0x00010203, 0x8899aabb, 0x7f7f7f7f, 0xdeadbeef);
+        mem[1] = _mm_set_epi32(0xcafebabe, 0x31415926, 0x27182818, 0x00000001);
+        __m128i a = _mm_set_epi32(0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a);
+        __m128i wk = _mm_set_epi32(0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5);
+        __m128i t;
+        register __m128i x0 asm("xmm0");
+        // memory r/m forms
+        x0 = wk; t = a;
+        asm("sha256rnds2 %1, %0" : "+x"(t) : "m"(mem[0]), "x"(x0));
+        ph("m_rnds2", t);
+        t = a; asm("sha256msg1 %1, %0" : "+x"(t) : "m"(mem[0])); ph("m_msg1", t);
+        t = a; asm("sha256msg2 %1, %0" : "+x"(t) : "m"(mem[1])); ph("m_msg2", t);
+        t = a; asm("sha1rnds4 $2, %1, %0" : "+x"(t) : "m"(mem[0])); ph("m_sha1r4", t);
+        t = a; asm("sha1nexte %1, %0" : "+x"(t) : "m"(mem[1])); ph("m_sha1nexte", t);
+        t = a; asm("sha1msg1 %1, %0" : "+x"(t) : "m"(mem[0])); ph("m_sha1msg1", t);
+        t = a; asm("sha1msg2 %1, %0" : "+x"(t) : "m"(mem[1])); ph("m_sha1msg2", t);
+        // aliased dst==src (the SU1 alias path in sha256msg2; read-before-write everywhere else)
+        x0 = wk; t = a;
+        asm("sha256rnds2 %0, %0" : "+x"(t) : "x"(x0)); ph("al_rnds2", t);
+        t = a; asm("sha256msg1 %0, %0" : "+x"(t)); ph("al_msg1", t);
+        t = a; asm("sha256msg2 %0, %0" : "+x"(t)); ph("al_msg2", t);
+        t = a; asm("sha1rnds4 $1, %0, %0" : "+x"(t)); ph("al_sha1r4", t);
+        t = a; asm("sha1nexte %0, %0" : "+x"(t)); ph("al_sha1nexte", t);
+        t = a; asm("sha1msg1 %0, %0" : "+x"(t)); ph("al_sha1msg1", t);
+        t = a; asm("sha1msg2 %0, %0" : "+x"(t)); ph("al_sha1msg2", t);
+        // rnds2 with dst == xmm0 (state, key and WK all in one reg) and src == xmm0
+        x0 = wk;
+        asm("sha256rnds2 %1, %0" : "+x"(x0) : "x"(a)); ph("x0_rnds2d", x0);
+        x0 = wk; t = a;
+        asm("sha256rnds2 %1, %0" : "+x"(t) : "x"(x0)); ph("x0_rnds2s", t);
+        // all-in-one: dst == src == xmm0
+        x0 = wk;
+        asm("sha256rnds2 %0, %0" : "+x"(x0)); ph("x0_rnds2ds", x0);
+    }
     // SHA-256("abc") = ba7816bf 8f01cfea 414140de 5dae2223 b00361a3 96177a9c b410ff61 f20015ad
     uint32_t st[8] = {0x6a09e667,0xbb67ae85,0x3c6ef372,0xa54ff53a,0x510e527f,0x9b05688c,0x1f83d9ab,0x5be0cd19};
     uint8_t blk[64]; memset(blk, 0, 64);

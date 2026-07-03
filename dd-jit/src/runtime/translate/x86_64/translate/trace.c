@@ -158,6 +158,270 @@ static int loop_flags_dead(uint64_t start) {
     return 0;
 }
 
+// ==================== x86-xflags: cross-block dead-flag elimination ====================
+// Extends the intra-block dead-flag elision (opt3 NZCV, #346 PF/AF) ACROSS direct block edges. The
+// per-instruction elisions stop at block boundaries today: every block exit materializes the full
+// flag state because the successor's needs are unknown. This pass computes, at translate time, a
+// conservative FLAG LIVE-IN set for a direct successor by scanning ITS OWN GUEST BYTES (depth-1:
+// anything past the successor's first control transfer is unknown -> live), and elides the
+// materialization on edges whose successor provably overwrites the flag before any read.
+//
+// Soundness rules (each is load-bearing):
+//  * The summary is derived from GUEST BYTES only -- never from another block's translation -- so
+//    translation order, tier-2 retranslation and chain re-patching cannot make it stale. Guest code
+//    MODIFICATION invalidates it exactly as it invalidates stitched-in successor bytes: smc_on_write
+//    drops the whole g_map, so every block that baked an assumption is retranslated from the new
+//    bytes before it can be re-entered through the map (baked `b body` chains into orphaned old code
+//    share the pre-existing stitch/chain staleness window, no wider).
+//  * The live ARM NZCV stays CANONICAL (borrow convention) at every block boundary even when the
+//    membank store is elided: FL_SUB's live flags already are canonical, FL_ADD/FL_LOGIC get the
+//    msr-only fixup (e_nzcv_fix_ci/_c1). Every exit to the dispatcher spills the LIVE flags
+//    (emit_spill -> e_nzcv_save), so the successor's #292 irq-poll exit -- the only place an ASYNC
+//    signal can observe RFLAGS -- persists the true flag bytes before maybe_deliver_signal reads
+//    cpu->nzcv. The membank may go stale only ACROSS a chained edge whose successor provably
+//    overwrites CF/ZF/SF/OF before any read (same observable class as the existing intra-block
+//    deferral between a producer and its consumer).
+//  * The scan never dereferences a byte outside (a) the 4KB page(s) of the branch instruction doing
+//    the asking (bytes the translator is already decoding) or (b) pages with a live translation
+//    (txpg_has -> mapped, executable guest code). A speculative jcc target on a never-mapped page is
+//    simply "all flags live".
+//  * Classification is a sound under-approximation of WRITES and over-approximation of READS with
+//    respect to dd's OWN emitters (not just the x86 architecture): e.g. rotates and by-CL shifts
+//    load-modify-store cpu->nzcv (membank readers!) -> unknown; inc/dec merge the stored C (which
+//    they can never kill, so a live CF always blocks the elision before it matters); imm shifts
+//    store a full fresh NZCV word + PF but never AF.
+// Gate: NOXBLOCKFLAGS=1 disables ONLY this cross-block pass; it is also off under the pre-existing
+// broader switches NOFLAGELIDE (all flag-save elision) and NOLAZY (whole lazy-flag model).
+#define XF_CF 0x01
+#define XF_PF 0x02
+#define XF_AF 0x04
+#define XF_ZF 0x08
+#define XF_SF 0x10
+#define XF_OF 0x20
+#define XF_ALL 0x3F
+#define XF_NZCV (XF_CF | XF_ZF | XF_SF | XF_OF)
+
+static int xblkflags_on(void) {
+    static int v = -1;
+    if (v < 0) {
+        const char *s = getenv("NOXBLOCKFLAGS");
+        v = (lazyflags_on() && !(s && *s && *s != '0') && !getenv("NOFLAGELIDE")) ? 1 : 0;
+    }
+    return v;
+}
+
+// x86 condition code (opcode low nibble) -> the RFLAGS bits the condition READS.
+static const uint8_t xf_cond_rd[16] = {
+    XF_OF,         XF_OF,                     // o / no
+    XF_CF,         XF_CF,                     // b / ae
+    XF_ZF,         XF_ZF,                     // e / ne
+    XF_CF | XF_ZF, XF_CF | XF_ZF,             // be / a
+    XF_SF,         XF_SF,                     // s / ns
+    XF_PF,         XF_PF,                     // p / np
+    XF_SF | XF_OF, XF_SF | XF_OF,             // l / ge
+    XF_ZF | XF_SF | XF_OF, XF_ZF | XF_SF | XF_OF, // le / g
+};
+
+// Per-insn flag read/write classification for the liveness scan. *rd = flags possibly read,
+// *wr = flags DEFINITELY overwritten (with a fresh, input-independent storage write by dd's
+// emitter). Returns the scan step kind.
+enum { XRW_OK, XRW_JMP, XRW_END, XRW_UNK };
+static int x86_flag_rw(const struct insn *I, int *rd, int *wr) {
+    uint8_t op = I->op;
+    *rd = 0;
+    *wr = 0;
+    if (I->vex || I->map3) return XRW_UNK; // AVX / 0F38-3A: C-emulated, may touch flags -> unknown
+    if (I->two) {
+        if ((op & 0xF0) == 0x80) { *rd = xf_cond_rd[op & 0xF]; return XRW_END; } // jcc rel32
+        if ((op & 0xF0) == 0x90) { *rd = xf_cond_rd[op & 0xF]; return XRW_OK; }  // setcc
+        if ((op & 0xF0) == 0x40) { *rd = xf_cond_rd[op & 0xF]; return XRW_OK; }  // cmovcc
+        if (op == 0xB6 || op == 0xB7 || op == 0xBE || op == 0xBF) return XRW_OK; // movzx/movsx
+        if (op == 0x1E || op == 0x1F) return XRW_OK; // endbr64 / long-nop (reserved hint-nop space)
+        if (op == 0xAF) { *wr = XF_NZCV; return XRW_OK; } // imul r,r/m: e_mul_set_oc builds a fresh
+                                                          // full NZCV word; PF/AF untouched
+        return XRW_UNK;
+    }
+    if (op < 0x40 && alu_kind_primary(op) >= 0) { // primary ALU add/or/adc/sbb/and/sub/xor/cmp
+        int k = alu_kind_primary(op);
+        if (k == 2 || k == 3) *rd = XF_CF; // adc/sbb read CF
+        *wr = XF_ALL;
+        return XRW_OK;
+    }
+    if (op == 0x80 || op == 0x81 || op == 0x83) { // group1 ALU r/m, imm
+        int k = I->reg & 7;
+        if (k == 2 || k == 3) *rd = XF_CF;
+        *wr = XF_ALL;
+        return XRW_OK;
+    }
+    if (op == 0x84 || op == 0x85 || op == 0xA8 || op == 0xA9) { *wr = XF_ALL; return XRW_OK; } // test
+    if (op == 0xF6 || op == 0xF7) { // group3
+        int k = I->reg & 7;
+        if (k == 0 || k == 3) { *wr = XF_ALL; return XRW_OK; } // test imm / neg
+        if (k == 2) return XRW_OK;                             // not: no flags
+        return XRW_UNK;                                        // mul/imul/div/idiv (div block-exits)
+    }
+    if (op == 0xFE || op == 0xFF) { // group4/5
+        int k = I->reg & 7;
+        if (k == 0 || k == 1) { *wr = XF_PF | XF_AF | XF_ZF | XF_SF | XF_OF; return XRW_OK; } // inc/dec keep CF
+        if (op == 0xFF && k == 6) return XRW_OK;               // push r/m
+        if (op == 0xFF && (k == 2 || k == 4)) return XRW_END;  // call/jmp indirect
+        return XRW_UNK;
+    }
+    if ((op >= 0x88 && op <= 0x8B) || op == 0x8D || op == 0x63) return XRW_OK; // mov / lea / movsxd
+    if (op >= 0xB0 && op <= 0xBF) return XRW_OK;                               // mov r, imm
+    if ((op == 0xC6 || op == 0xC7) && (I->reg & 7) == 0) return XRW_OK;        // mov r/m, imm (/0 only)
+    if ((op >= 0x50 && op <= 0x5F) || op == 0x68 || op == 0x6A) return XRW_OK; // push/pop/push imm
+    if (op == 0x8F && (I->reg & 7) == 0) return XRW_OK;                        // pop r/m
+    if (op >= 0x90 && op <= 0x97) return XRW_OK;                               // nop / xchg acc
+    if (op == 0x86 || op == 0x87) return XRW_OK;                               // xchg r/m
+    if (op == 0x98 || op == 0x99) return XRW_OK;                               // cwde/cdq
+    if (op == 0x9E) { *wr = XF_CF | XF_PF | XF_AF | XF_ZF | XF_SF; return XRW_OK; } // sahf (not OF)
+    if (op == 0x9F) { *rd = XF_CF | XF_PF | XF_AF | XF_ZF | XF_SF; return XRW_OK; } // lahf
+    if (op == 0x9C) { *rd = XF_ALL; return XRW_OK; }                           // pushfq
+    if (op == 0x9D) { *wr = XF_ALL; return XRW_OK; }                           // popfq rewrites all lanes
+    if (op == 0xF5) { *rd = XF_CF; *wr = XF_CF; return XRW_OK; }               // cmc
+    if (op == 0xF8 || op == 0xF9) { *wr = XF_CF; return XRW_OK; }              // clc/stc
+    if (op == 0xFC || op == 0xFD) return XRW_OK;                               // cld/std (DF only)
+    if (op == 0xC0 || op == 0xC1 || op == 0xD0 || op == 0xD1) { // group2, constant count
+        int k = I->reg & 7;
+        if (k == 6) k = 4;
+        if (k == 4 || k == 5 || k == 7) { // SHL/SHR/SAR: fresh full NZCV word + PF; AF untouched
+            int w = (op & 1) ? I->opsize : 1;
+            int cnt = (op == 0xD0 || op == 0xD1) ? 1 : (int)(I->imm & (w == 8 ? 63 : 31));
+            if (cnt == 0) return XRW_OK; // count 0: no flag change at all
+            *wr = XF_NZCV | XF_PF;
+            return XRW_OK;
+        }
+        return XRW_UNK; // rol/ror/rcl/rcr: load-modify-store cpu->nzcv (membank readers)
+    }
+    if (op >= 0x70 && op <= 0x7F) { *rd = xf_cond_rd[op & 0xF]; return XRW_END; } // jcc rel8
+    if (op == 0xE9 || op == 0xEB) return XRW_JMP;                                 // jmp rel: follow
+    if (op == 0xE8 || op == 0xC3 || op == 0xC2) return XRW_END;                   // call / ret
+    if (op == 0xE0 || op == 0xE1) { *rd = XF_ZF; return XRW_END; }                // loope/loopne
+    if (op == 0xE2 || op == 0xE3) return XRW_END;                                 // loop / jrcxz
+    return XRW_UNK;
+}
+
+// Is it safe to READ guest bytes [a, a+15] at translate time? Only when every touched 4KB page is
+// the anchor's own page (the branch insn being translated -- provably mapped) or a page some live
+// translation was decoded from (txpg_has). Never fault on a speculative target.
+static int xf_scan_ok(uint64_t a, uint64_t anchor) {
+    uint64_t apg = anchor & ~0xFFFull;
+    uint64_t pg = a & ~0xFFFull, pg2 = (a + 15) & ~0xFFFull;
+    if (pg != apg && !txpg_has(a)) return 0;
+    if (pg2 != pg && pg2 != apg && !txpg_has(a + 15)) return 0;
+    return 1;
+}
+
+// Flag live-in mask at guest pc: the {CF,PF,AF,ZF,SF,OF} that MAY be read before being definitely
+// overwritten, scanning straight-line successor code (following unconditional jmps) up to a budget.
+// Anything unproven is live: unknown insn, control transfer (depth-1), undecodable byte, unsafe page,
+// budget exhaustion.
+#define XSCAN_INSNS 32
+static int x86_flags_livein(uint64_t pc, uint64_t anchor) {
+    int killed = 0, live = 0;
+    g_prof_xflag_scan++;
+    for (int n = 0; n < XSCAN_INSNS; n++) {
+        if (!xf_scan_ok(pc, anchor)) break;
+        struct insn I;
+        decode(pc, &I);
+        if (I.len <= 0) break;
+        int rd, wr;
+        int kind = x86_flag_rw(&I, &rd, &wr);
+        if (kind == XRW_UNK) break;
+        live |= rd & ~killed;
+        if (kind == XRW_END) return live | (XF_ALL & ~killed); // successors unknown -> rest live
+        if (kind == XRW_JMP) {
+            pc = pc + (uint64_t)I.len + (uint64_t)I.imm;
+            continue;
+        }
+        killed |= wr;
+        if ((killed | live) == XF_ALL) return live; // every flag decided
+        pc += (uint64_t)I.len;
+    }
+    return live | (XF_ALL & ~killed);
+}
+
+// Deferred-flag emission for a DIRECT unconditional edge to `target` (jmp rel / call rel):
+// materialize the pending producer unless the successor provably overwrites CF/ZF/SF/OF first.
+//  - FL_SUB: the live NZCV is already canonical -> elide = emit NOTHING.
+//  - FL_ADD/FL_LOGIC: the msr fixup must still run (live NZCV must be canonical at every boundary:
+//    x86cc_to_arm consumers and every exit's LIVE-flag spill assume it) -> elide only the str.
+static void flags_edge(uint64_t target, uint64_t anchor) {
+    if (g_fl_pending == FL_NONE) return;
+    if (xblkflags_on() && !(x86_flags_livein(target, anchor) & XF_NZCV)) {
+        if (g_fl_pending == FL_ADD)
+            e_nzcv_fix_ci();
+        else if (g_fl_pending == FL_LOGIC)
+            e_nzcv_fix_c1();
+        // FL_SUB: nothing -- live NZCV already holds the canonical borrow-convention flags
+        g_fl_pending = FL_NONE;
+        g_prof_xflag++;
+        return;
+    }
+    flags_materialize();
+}
+
+// Flag emission for a block-ending Jcc with edges (taken, fall) -- generalizes the tier-2 self-loop
+// elide (emit_selfloop_x86, FL_SUB save-on-exit-edge-only) to every conditional edge pair:
+//  - FL_SUB: branch off the live NZCV (already canonical); the producer's spill (e_nzcv_save == its
+//    exact finalizer bytes) is pushed onto only the edge(s) whose successor may read cpu->nzcv --
+//    reported via *save_taken/*save_fall, emitted by the caller inside the per-edge stubs. When the
+//    fall side is being stitched inline (stitch_fall), g_fl_pending is KEPT: the continuation is the
+//    same host block and its own consumers handle the deferral exactly as intra-block code.
+//  - FL_ADD/FL_LOGIC: the msr fixup must precede the b.cond either way; only the membank str can be
+//    elided, and only when BOTH edges are provably dead. Otherwise materialize (pre-change bytes).
+//  - FL_NONE: reload the canonical membank flags (unchanged consumer path).
+static void jcc_edge_flags(uint64_t taken, uint64_t fall, uint64_t anchor, int stitch_fall,
+                           int *save_taken, int *save_fall) {
+    *save_taken = 0;
+    *save_fall = 0;
+    if (!g_fl_pending) {
+        e_nzcv_load();
+        return;
+    }
+    if (!xblkflags_on()) {
+        flags_materialize();
+        return;
+    }
+    if (g_fl_pending == FL_SUB) {
+        *save_taken = (x86_flags_livein(taken, anchor) & XF_NZCV) != 0;
+        if (!*save_taken) g_prof_xflag++;
+        if (stitch_fall) return; // keep g_fl_pending live for the inline continuation
+        *save_fall = (x86_flags_livein(fall, anchor) & XF_NZCV) != 0;
+        if (!*save_fall) g_prof_xflag++;
+        g_fl_pending = FL_NONE;
+        return;
+    }
+    if (!(x86_flags_livein(taken, anchor) & XF_NZCV) && !(x86_flags_livein(fall, anchor) & XF_NZCV)) {
+        if (g_fl_pending == FL_ADD)
+            e_nzcv_fix_ci();
+        else
+            e_nzcv_fix_c1();
+        g_fl_pending = FL_NONE;
+        g_prof_xflag += 2;
+        return;
+    }
+    flags_materialize();
+}
+
+// #346 cross-block PF/AF: NI (the insn after a PF/AF producer) is a direct control transfer -> the
+// producer's PF/AF are dead iff provably overwritten-before-read at EVERY successor entry. jp/jnp
+// read PF themselves -> never dead. Indirect branches / ret / syscall -> unknown -> live.
+static int pfaf_dead_thru(const struct insn *NI, uint64_t ni_pc, uint64_t anchor) {
+    uint64_t n2 = ni_pc + (uint64_t)NI->len;
+    uint8_t op = NI->op;
+    if (!NI->two && (op == 0xE9 || op == 0xEB || op == 0xE8))
+        return !(x86_flags_livein(n2 + (uint64_t)NI->imm, anchor) & (XF_PF | XF_AF));
+    int lo = -1;
+    if (!NI->two && op >= 0x70 && op <= 0x7F) lo = op & 0xF;
+    if (NI->two && (op & 0xF0) == 0x80) lo = op & 0xF;
+    if (lo >= 0 && lo != 0xA && lo != 0xB) // any jcc except jp/jnp (those READ PF)
+        return !(x86_flags_livein(n2 + (uint64_t)NI->imm, anchor) & (XF_PF | XF_AF)) &&
+               !(x86_flags_livein(n2, anchor) & (XF_PF | XF_AF));
+    return 0;
+}
+
 // Emit a single-block self-loop terminating jcc (taken target == block start). `cc` is the ARM cond.
 // TIER-1 (with counter): flag handling byte-identical to the baseline jcc handler (opt3 lazy flags:
 //   if a producer's flags are deferred, flags_materialize() spills them to cpu->nzcv AND leaves the

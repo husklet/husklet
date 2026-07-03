@@ -200,7 +200,8 @@ fn op_x86_crypto() -> Group {
     group("comp-x86-crypto", vec![
         x("aesni",  "completeness/x86_aesni.c"),  // jit86 UNIMPL 0F 38 DC (AESENC) abort
         x("pclmul", "completeness/x86_pclmul.c"), // jit86 UNIMPL 0F 3A 44 (PCLMULQDQ) abort
-        x("sha",    "completeness/x86_sha.c"),    // jit86 UNIMPL 0F 3A CC (SHA1RNDS4) abort
+        x("sha",    "completeness/x86_sha.c"),    // full SHA-NI surface -> ARM SHA ext (incl. mem/alias/xmm0 shapes)
+        x("sha-kat", "completeness/x86_sha_kat.c"), // FIPS-180 KATs (self-assert) + random-length msgs, SHA-1+SHA-256
         x("crc32",  "completeness/x86_crc32.c"),  // jit86 UNIMPL 0F 38 F0 (CRC32 r/m8) abort
     ])
 }
@@ -225,6 +226,18 @@ fn op_x86_misc() -> Group {
         x("x87b",        "completeness/x86_x87b.c"),       // #248/#249 FCOMI/FUCOMI, FDIV/FDIVR/FSUBR/FSCALE/FPREM/FIDIV/FXTRACT
         x("ntload",      "completeness/x86_ntload.c"),     // MOVNTDQA (66 0F38 2A) + MASKMOVDQU (66 0F F7)
         x("vdsoclk",     "completeness/x86_vdsoclk.c"),    // #344 vDSO clock_gettime ns scaling (monotonic sleep window)
+        // x86-xflags: cross-block dead-flag elimination (NZCV + PF/AF liveness across direct edges).
+        // The same guest runs in four engine configs so every emission path is oracle-diffed:
+        // default (stitch), NOSTITCH=1 (every direct edge chained -> flags_edge/jcc_edge_flags chain
+        // paths), NOXBLOCKFLAGS=1 (cross-block pass off -> must equal the old behavior), NOLAZY=1
+        // (whole lazy model off). Plus the parity-consumer boundary probe and the SIGALRM timing case.
+        x("xflags",           "completeness/x86_xflags.c"),
+        x("xflags-nostitch",  "completeness/x86_xflags.c").env("NOSTITCH", "1"),
+        x("xflags-off",       "completeness/x86_xflags.c").env("NOXBLOCKFLAGS", "1"),
+        x("xflags-nolazy",    "completeness/x86_xflags.c").env("NOLAZY", "1"),
+        x("parity-edge",      "completeness/x86_parity_edge.c"),
+        x("xflags-sig",       "completeness/x86_xflags_sig.c"),
+        x("xflags-sig-nostitch", "completeness/x86_xflags_sig.c").env("NOSTITCH", "1"),
     ])
 }
 

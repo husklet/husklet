@@ -340,6 +340,45 @@ static void res_bump(void) {
     if (!g_res_epoch) g_res_epoch = 1;
     CUL;
 }
+// ---- overlay upper-parent negative memo ("this guest dir does not exist in the UPPER") ----
+// overlay_lookup() (vfs/overlay.c) pays, PER PATH, an upper realpath climb + whiteout lstat + opaque
+// probe -- all provably-ENOENT whenever the path's parent dir chain is absent from the (near-empty,
+// fresh-container) upper. This memoizes exactly that proof, keyed by the parent GUEST dir, so a
+// metadata storm over the read-only image (tar/find/du/ld.so: thousands of lstats, one per file) pays
+// the upper probe once per DIRECTORY instead of once per file. Correctness model is identical to rc_*:
+//   * epoch-gated: every namespace mutation bumps g_res_epoch (dispatch.c res_bump on create/unlink/
+//     rename/mkdir/..., PLUS the copy-up bumps in overlay.c for the non-syscall upper mutations), so an
+//     entry can never outlive an upper dir appearing. The epoch is container-SHARED (MAP_SHARED page),
+//     so another engine process (docker exec) creating upper dirs invalidates this process's memo too.
+//   * fork/chroot hard reset via rc_reset() below.
+//   * volume paths are never stored (host-mutable backing; enforced at the overlay_lookup call site).
+//   * kill switch: DD_NOPATHCACHE=1 disables it together with the other path caches (res_enabled).
+#define UDCACHE_N 4096
+static struct udent {
+    uint64_t hash;
+    uint32_t epoch;
+    char dir[200];
+} g_ud[UDCACHE_N];
+static int updirneg_lookup(const char *d) {
+    if (!res_enabled() || !d || d[0] != '/' || strlen(d) >= sizeof(((struct udent *)0)->dir)) return 0;
+    CLK;
+    int hit = 0;
+    uint64_t h = mc_hash(d);
+    struct udent *e = &g_ud[h & (UDCACHE_N - 1)];
+    if (e->hash == h && e->epoch == g_res_epoch && !strcmp(e->dir, d)) hit = 1;
+    CUL;
+    return hit;
+}
+static void updirneg_store(const char *d) {
+    if (!res_enabled() || !d || d[0] != '/' || strlen(d) >= sizeof(((struct udent *)0)->dir)) return;
+    CLK;
+    uint64_t h = mc_hash(d);
+    struct udent *e = &g_ud[h & (UDCACHE_N - 1)];
+    e->hash = h;
+    e->epoch = g_res_epoch;
+    strcpy(e->dir, d);
+    CUL;
+}
 // fork child: drop every inherited (COW) entry so it cannot outlive a parent-side mutation.
 // This covers BOTH the path-string caches (rc_/oc_) and the metadata caches (mc_/rl_/ac_). The
 // metadata caches memoize stat/readlink/access RESULTS -- including NEGATIVE (ENOENT) ones -- and a
@@ -355,6 +394,7 @@ static void rc_reset(void) {
     memset(g_mc, 0, sizeof g_mc);
     memset(g_rl, 0, sizeof g_rl);
     memset(g_ac, 0, sizeof g_ac);
+    memset(g_ud, 0, sizeof g_ud); // overlay upper-parent negative memo: same COW/re-root hazard
     // NB: do NOT reset g_res_epoch here -- it is now a container-wide SHARED counter (see its definition); a
     // fork child / chroot must not rewind the whole tree's epoch. Clearing the local arrays above (hash=0 =>
     // never hits) already drops every inherited entry, which is all this reset needs to do.

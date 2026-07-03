@@ -156,6 +156,25 @@ static void e_nzcv_save_c1(void) { // logical ops: x86 CF=0,OF=0; ARM ANDS/TST l
     e_str(20, 28, OFF_NZCV);
     emit32(0xD51B4200u | 20); // sync live ARM nzcv
 }
+// x86-xflags (cross-block dead-flag elimination): canonicalize ONLY the live ARM NZCV -- the exact
+// e_nzcv_save_ci / e_nzcv_save_c1 correction with the (provably dead) cpu->nzcv str elided. The live
+// NZCV must stay canonical at every block boundary regardless of elision: an immediately-following
+// Jcc's x86cc_to_arm condition and any successor exit's emit_spill (which persists the LIVE flags,
+// e.g. the #292 irq-poll exit that feeds async-signal delivery) both assume the borrow convention.
+static void e_nzcv_fix_ci(void) { // deferred x86 add: invert the live ARM add-carry (C = NOT x86 CF)
+    emit32(0xD53B4200u | 20);     // mrs x20, nzcv
+    e_movconst(22, 1u << 29);
+    e_rrr(A_EOR, 20, 20, 22, 1, 0);
+    emit32(0xD51B4200u | 20); // msr nzcv, x20 (no membank store: successor overwrites before reading)
+}
+static void e_nzcv_fix_c1(void) { // deferred logical op: x86 CF=0,OF=0 in the borrow convention
+    emit32(0xD53B4200u | 20);     // mrs x20, nzcv
+    e_movconst(22, 1u << 28);
+    e_rrr(A_BIC, 20, 20, 22, 1, 0); // V=0 (OF=0)
+    e_movconst(22, 1u << 29);
+    e_rrr(A_ORR, 20, 20, 22, 1, 0); // C=1 (stored borrow for CF=0)
+    emit32(0xD51B4200u | 20);       // msr nzcv, x20 (no membank store)
+}
 static void e_nzcv_save_setcf(int cfreg) { // save N/Z (from ARM nzcv), set stored C = NOT x86CF (cfreg holds 0/1)
     // Capture NOT cf into x23 FIRST -- the mrs/movconst below clobber x20 and x22, so reading cfreg up
     // front lets the carry-VALUE live in x20 (the narrow_adcsbb caller passes cfreg==20).
@@ -454,8 +473,9 @@ static void emit_prologue(void) {
 // Lever #3 (SIMD-clean syscall exit): when guest xmm (host v0..v15) is already current in cpu->V, a plain
 // R_SYSCALL exit can skip the 8 stp_q xmm save (emit_spill_gpr); the always-full prologue reload republishes
 // cpu->V on re-entry, and every non-slim exit keeps the FULL spill. Currency is tracked at RUNTIME in
-// cpu->vdirty: the first xmm-writing region instruction (SSE/x87 lowering, emit_rep_string -- the only
-// in-block writers of v0..v15) stores the nonzero cpu pointer there via mark_vdirty(); every FULL spill
+// cpu->vdirty: the first xmm-writing region instruction (SSE/x87 lowering, the inline 0F38/0F3A crypto
+// glue, emit_rep_string -- the in-block writers of v0..v15) stores the nonzero cpu pointer there via
+// mark_vdirty() (once per trace, see the latch below); every FULL spill
 // clears it. Runtime rather than a static per-block flag because blocks CHAIN without spilling, so a
 // vector-dirty region can reach a statically-"clean" syscall block with host xmm != cpu->V. A syscall that
 // writes cpu->V (sigreturn) is republished by the prologue reload, so xmm state is never lost.
@@ -464,11 +484,21 @@ static int slimsys_on(void) {
     if (g_slimsys < 0) g_slimsys = getenv("DDJIT_NOSLIMSYS") ? 0 : 1;
     return g_slimsys;
 }
-// Mark cpu->V as possibly-stale for a later syscall exit, emitted before EVERY xmm write (x28 is the nonzero
-// cpu pointer, so storing it flags dirty). Per-write (not once-per-region) because a mid-region full spill --
-// e.g. emit_rep_string -- clears cpu->vdirty at runtime, so a once-per-region mark would be lost before a
-// later xmm write reached the syscall. Only xmm-writing code pays this store; integer/syscall blocks do not.
-static void mark_vdirty(void) { e_str(28, 28, OFF_VDIRTY); }
+// Mark cpu->V as possibly-stale for a later syscall exit (x28 is the nonzero cpu pointer, so storing it
+// flags dirty). ONCE-PER-TRACE latch (g_vmark_done), not per-write: the v0.9.19-as-shipped per-instruction
+// store regressed every SSE-dense guest ~15-35% (redis SET/GET, CPython float; the tax ran inside glibc's
+// SSE string loops and scalar-double chains). The latch is sound because a translate_block region is a
+// LINEAR trace entered only at its head: emission order == execution order, so the mark at the first xmm
+// write dominates every later xmm write in the region. The one mid-trace runtime clear of cpu->vdirty is
+// emit_rep_string's full spill; it resets the latch (repstr.c), so a later xmm write re-marks. Also gated
+// on slimsys_on(): with DDJIT_NOSLIMSYS=1 every exit full-spills and never reads cpu->vdirty, so the
+// kill-switch now truly restores the pre-lever baseline (as shipped it left the marking stores in place).
+static int g_vmark_done; // translate-time latch; reset at translate_block entry + after emit_rep_string
+static void mark_vdirty(void) {
+    if (g_vmark_done || !slimsys_on()) return;
+    e_str(28, 28, OFF_VDIRTY);
+    g_vmark_done = 1;
+}
 // GPR + flags spill, WITHOUT the xmm save. Leaves x28 = cpu (unchanged).
 static void emit_spill_gpr(void) {
     for (int r = 0; r <= 15; r++)
@@ -741,6 +771,9 @@ static void emit_fast_syscall(uint64_t next) {
 }
 // Direct-branch chaining: if target already translated, single `b body`; else a full
 // exit whose first insn is remembered and back-patched to `b body` later. (from jit.c)
+// IRQSLIM: a FORWARD direct edge (target past the branch's own rip, g_emit_gpc) enters at body+8,
+// past the fixed 2-insn #292 poll header -- every in-cache cycle still polls via its backward or
+// indirect edge (see the g_fwdskip invariant note in engine/cache.c).
 static void emit_chain_exit(uint64_t target) {
     if (g_trace || g_nochain || g_threaded) {
         emit_exit_const(target, R_BRANCH);
@@ -748,12 +781,13 @@ static void emit_chain_exit(uint64_t target) {
     } // debug: no chaining -> exact rip per block
     void *body = map_body(target);
     uint32_t *slot = (uint32_t *)g_cp;
+    int fwd = g_fwdskip && target > g_emit_gpc;
     if (body) {
-        int64_t d = ((uint8_t *)body - (uint8_t *)slot) / 4;
+        int64_t d = (((uint8_t *)body + (fwd ? g_fwdskip : 0)) - (uint8_t *)slot) / 4;
         emit32(0x14000000u | ((uint32_t)d & 0x3FFFFFFu));
         return;
     }
-    add_pend(slot, target);
+    add_pend3(slot, target, 0, fwd);
     emit_exit_const(target, R_BRANCH);
 }
 // Indirect branch (ret / jmp reg / call reg) with the guest target already in x16.

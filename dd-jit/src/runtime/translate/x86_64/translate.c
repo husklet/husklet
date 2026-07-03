@@ -717,6 +717,11 @@ static int x86cc_to_arm(int cc) {
 // successor blocks), then compute the real x86 PF lane into the live ARM Z flag and return the ARM
 // condition the branch machinery should test. Mirrors setp/setnp + cmovp/cmovnp, which already read
 // cpu->pf instead of the stale ARM V flag. `lo` is the opcode low nibble (0xA=jp, 0xB=jnp).
+// NOTE (parity-edge fix): the SUBS below CLOBBERS the live ARM NZCV with parity scratch. The jcc
+// handlers MUST restore the canonical flags (e_nzcv_load from the just-materialized membank) on
+// EVERY outgoing edge after the b.cond -- otherwise the edge's exit spill (emit_spill ->
+// e_nzcv_save) persists the scratch NZCV over cpu->nzcv and the successor blocks read corrupted
+// CF/ZF/SF/OF (caught by the comp-x86-misc/parity-edge differential: cmp; jp; jb diverged).
 static int emit_parity_jcc_cond(int lo) {
     if (g_fl_pending) flags_materialize(); // spill the deferred producer to membank (boundary)
     e_pf_compute(19);                      // x19 = x86 PF in {0,1} (scratch x16; x17/EA preserved)
@@ -888,7 +893,23 @@ static void emit_sigill(uint64_t pc) {
 // does. Fast path is ldr+cbz (2 insns); cbz never touches NZCV, so a self-loop back-edge that lands here
 // keeps the guest flags (incl. x86 lazy flags live in NZCV). x16 is engine scratch (dead at body entry),
 // so no guest reg is disturbed. `rip` is the block start = the guest pc to resume at.
+// IRQSLIM: when active (g_fwdskip == 8, the default) the poll is a FIXED 2-insn header (ldr + cbnz
+// to an out-of-line exit stub emitted at the end of the block), so a forward direct chain can land
+// at body+8 and skip it -- every in-cache cycle still polls through its backward or indirect edge
+// (invariant note in engine/cache.c). NOIRQSLIM=1 -> the legacy inline poll, chains to body+0.
+static uint32_t *g_irq_patch;
 static void emit_irq_check(uint64_t rip) {
+    // NOIRQCHECK=1: MEASUREMENT-ONLY kill switch (quantifies the per-block-entry poll cost).
+    // Unsafe for async signal delivery into syscall-free loops -- never default.
+    static int noirq = -1;
+    if (noirq < 0) noirq = getenv("NOIRQCHECK") != NULL;
+    if (noirq) return;
+    if (g_fwdskip) {
+        e_ldr(16, 28, (int)OFF_IRQ); // ldr x16, [x28(cpu), #irq]
+        g_irq_patch = (uint32_t *)g_cp;
+        emit32(0); // cbnz x16, Lirq (out-of-line exit stub; patched at end of translate_block)
+        return;
+    }
     e_ldr(16, 28, (int)OFF_IRQ); // ldr x16, [x28(cpu), #irq]
     uint32_t *p = (uint32_t *)g_cp;
     emit32(0); // cbz x16, Lcont  (patched below)
@@ -909,6 +930,7 @@ static void *translate_block(uint64_t gpc) {
     g_df = 0;               // direction flag: forward at block entry (std/cld are block-local around string ops)
     g_fp_known = 0;         // x87: top unknown at block entry until a finit anchors it
     g_fp_dirty = 0;
+    g_vmark_done = 0;       // Lever #3: fresh region -> first xmm write must re-mark cpu->vdirty
     g_prof_xlate++; // PROF (measurement-only): translate_block calls
     if (g_stitch < 0) g_stitch = (getenv("NOSTITCH") == NULL);
     // W3-A superblock state: guest block-starts already laid in this region + region budget.
@@ -926,6 +948,7 @@ static void *translate_block(uint64_t gpc) {
             break;
         } // 1 insn/block: per-instruction register dump
         struct insn I;
+        g_emit_gpc = gpc; // IRQSLIM: tag chain emission with the current branch's rip
         decode(gpc, &I);
         uint64_t next = gpc + I.len;
         uint8_t op = I.op;
@@ -944,9 +967,16 @@ static void *translate_block(uint64_t gpc) {
         // (cmp-string sets flags but writes them through cpu->nzcv in C), so just spill any pending flags.
         if (I.map3) {
             if (g_fl_pending) flags_materialize();
-            // #342: map the AES-NI / PCLMULQDQ / SHA-NI crypto opcodes to inline ARM crypto (near-native);
-            // everything else (SSSE3/SSE4/CRC32/MOVBE/SHA-1/aeskeygenassist) still exits to do_sse3b.
+            // #342: map the AES-NI / PCLMULQDQ / SHA-NI (SHA-1 + SHA-256, via the hardware ARM SHA
+            // extension) crypto opcodes to inline ARM crypto (near-native); everything else
+            // (SSSE3/SSE4/CRC32/MOVBE/aeskeygenassist) still exits to do_sse3b.
             if (translate_crypto(&I, next) == TX_NEXT) {
+                // Lever #3 (missed in v0.9.19-as-shipped): the inline crypto/shuffle glue WRITES guest xmm
+                // (pshufb->TBL, palignr->EXT, AESENC, PCLMUL, ...) without passing the SSE region's mark, so
+                // a following slim R_SYSCALL exit could skip the xmm save with cpu->V stale. Mark here.
+                // (Marking after emission is fine: the latch/mark are translate-time; any exit emitted
+                // before this point ends the region, and translate_crypto emits no exits on TX_NEXT.)
+                mark_vdirty();
                 gpc = next;
                 continue;
             }
@@ -968,7 +998,12 @@ static void *translate_block(uint64_t gpc) {
         // Both keep the cross-block cpu->nzcv ABI byte-identical (intra-block only). NOLAZY disables
         // dead-flag elimination, so the pending sub/cmp always materializes (PR1 behavior).
         int is_jcc = (!I.two && op >= 0x70 && op <= 0x7F) || (I.two && (op & 0xF0) == 0x80);
-        if (g_fl_pending && !is_jcc) {
+        // x86-xflags: jmp rel (E9/EB) and call rel (E8) are flag-transparent block enders whose
+        // handlers do the edge-aware flag handling themselves (stitch keeps the deferral alive;
+        // a chained edge consults the successor's live-in set via flags_edge). Everything else
+        // keeps the eager top-of-loop materialization below.
+        int is_xedge = xblkflags_on() && !I.two && (op == 0xE9 || op == 0xEB || op == 0xE8);
+        if (g_fl_pending && !is_jcc && !is_xedge) {
             int lazy = lazyflags_on();
             if (lazy && insn_is_carry_consumer(&I)) {
                 // opt3 carry-flow: leave the producer's flags LIVE; do_alu's adc/sbb pulls its x86 CF
@@ -992,6 +1027,11 @@ static void *translate_block(uint64_t gpc) {
             struct insn NI;
             decode(next, &NI);
             g_pfaf_dead = insn_kills_pfaf(&NI);
+            // x86-xflags: the producer is the LAST flag op before a direct branch (cmp/test + jcc is
+            // THE hot pattern) -> its PF/AF are still dead if EVERY successor entry provably
+            // overwrites both before any read (guest-byte liveness scan, translate/trace.c).
+            if (!g_pfaf_dead && xblkflags_on() && NI.len > 0)
+                g_pfaf_dead = pfaf_dead_thru(&NI, next, gpc);
         }
 
         // x87 static-top tracking ends at any non-x87 instruction: spill the shadow top to
@@ -1395,24 +1435,32 @@ static void *translate_block(uint64_t gpc) {
             // ---- jmp rel (E9/EB) ----
             if (op == 0xE9 || op == 0xEB) {
                 uint64_t tgt = next + (uint64_t)I.imm;
-                // STITCH: follow the unconditional edge inline. g_fl_pending is FL_NONE here -- the
-                // top-of-loop materialized any deferred flags before this non-Jcc insn, so the membank
-                // cpu->nzcv is current for the inlined successor. Skip if the target is the region head,
-                // already laid in this region, an already-registered block, or a dead trap arm.
+                // STITCH: follow the unconditional edge inline. Under x86-xflags the top-of-loop
+                // did NOT materialize a deferred producer for this jmp: the inlined continuation is
+                // the same host block, so g_fl_pending simply stays live across the (vanished) edge
+                // and the continuation's own consumers handle it exactly as intra-block code.
+                // (Without x86-xflags, g_fl_pending is FL_NONE here as before.) Skip if the target
+                // is the region head, already laid in this region, an already-registered block, or
+                // a dead trap arm.
                 if (STITCH_OK && tgt != start && !seen_has(seen, nseen, tgt) && !map_body(tgt) && !trap_head(tgt)) {
                     seen[nseen++] = tgt;
                     trace_blk++;
                     gpc = tgt;
                     continue;
                 }
+                // x86-xflags: chained/exit edge -- materialize unless the successor provably kills
+                // the flags first (no-op when nothing is pending).
+                flags_edge(tgt, gpc);
                 emit_chain_exit(tgt);
                 break;
             }
             // ---- call rel32 (E8) ----
             if (op == 0xE8) {
-                e_subi(RSP, RSP, 8, 1);
+                e_subi(RSP, RSP, 8, 1); // flag-free push of the return address
                 e_movconst(16, next);
                 e_store(8, 16, RSP);
+                // x86-xflags: consult the CALLEE's flag live-in (function prologues kill flags fast).
+                flags_edge(next + (uint64_t)I.imm, gpc);
                 emit_chain_exit(next + (uint64_t)I.imm);
                 break;
             }
@@ -1495,30 +1543,37 @@ static void *translate_block(uint64_t gpc) {
                         break;
                     }
                 }
+                uint64_t fall = next;
+                int stitch_fall =
+                    (STITCH_OK && fall != start && !seen_has(seen, nseen, fall) && !map_body(fall) && !trap_head(fall));
+                int save_taken = 0, save_fall = 0;
                 if (parity) {
                     // live ARM Z already holds (PF==0) from emit_parity_jcc_cond; flags spilled there.
-                } else if (g_fl_pending) {
-                    // Fast path: live NZCV still holds the immediately-preceding width-4/8 producer's
-                    // flags. flags_materialize() spills them to membank for the successor blocks (the
-                    // exact finalizer bytes the producer deferred) AND leaves the live ARM NZCV
-                    // canonical (each finalizer msr's the corrected value back) -- so we branch
-                    // straight off the live flags, dropping the redundant e_nzcv_load (ldr;msr).
-                    flags_materialize();
                 } else {
-                    e_nzcv_load();
+                    // Fast path: live NZCV still holds the immediately-preceding width-4/8 producer's
+                    // flags, so branch straight off them. jcc_edge_flags (x86-xflags, trace.c) spills
+                    // the deferred producer exactly as flags_materialize() did -- EXCEPT on edges whose
+                    // successor provably overwrites the flags before reading: FL_SUB pushes its spill
+                    // onto only the flag-live edge(s) (save_taken/save_fall, emitted below), a stitched
+                    // fall keeps g_fl_pending for the inline continuation, and FL_ADD/FL_LOGIC drop the
+                    // dead store after the mandatory msr fixup. FL_NONE reloads membank as before.
+                    jcc_edge_flags(taken, fall, gpc, stitch_fall, &save_taken, &save_fall);
                 }
-                uint64_t fall = next;
                 // STITCH: lay the fall-through (`next`) inline; the taken side becomes a tiny
-                // out-of-line exit reached by the INVERTED condition. cpu->nzcv was just materialized
-                // above (membank canonical, live NZCV msr'd back), so the inline fall-through and the
-                // out-of-line taken exit agree, and g_fl_pending == FL_NONE for the inlined successor.
-                if (STITCH_OK && fall != start && !seen_has(seen, nseen, fall) && !map_body(fall) && !trap_head(fall)) {
+                // out-of-line exit reached by the INVERTED condition. Both arms see canonical live
+                // flags; the taken stub spills cpu->nzcv iff its successor may read it. A parity jcc
+                // clobbered the live NZCV with its PF scratch -> restore the canonical membank flags
+                // on EVERY outgoing edge (parity-edge fix; see emit_parity_jcc_cond).
+                if (stitch_fall) {
                     int inv = (cc ^ 1) & 0xF; // not-taken -> branch over the taken exit (x86cc_to_arm is 0..13)
                     uint32_t *patch = (uint32_t *)g_cp;
                     emit32(0); // b.inv -> fall (inline)
+                    if (parity) e_nzcv_load();     // taken edge: restore canonical live NZCV
+                    if (save_taken) e_nzcv_save(); // FL_SUB spill on the (flag-live) taken edge only
                     emit_chain_exit(taken);
                     int64_t d = ((uint8_t *)g_cp - (uint8_t *)patch) / 4;
                     *patch = 0x54000000u | (((uint32_t)d & 0x7FFFF) << 5) | (uint32_t)inv;
+                    if (parity) e_nzcv_load(); // inline fall: restore before continuing
                     seen[nseen++] = fall;
                     trace_blk++;
                     gpc = fall;
@@ -1526,9 +1581,13 @@ static void *translate_block(uint64_t gpc) {
                 }
                 uint32_t *patch = (uint32_t *)g_cp;
                 emit32(0); // b.cond -> taken
+                if (parity) e_nzcv_load();    // fall edge: restore canonical live NZCV
+                if (save_fall) e_nzcv_save(); // FL_SUB spill for a flag-live fall successor
                 emit_chain_exit(next);
                 int64_t d = ((uint8_t *)g_cp - (uint8_t *)patch) / 4;
                 *patch = 0x54000000u | (((uint32_t)d & 0x7FFFF) << 5) | (cc & 0xF);
+                if (parity) e_nzcv_load();     // taken edge: restore canonical live NZCV
+                if (save_taken) e_nzcv_save(); // FL_SUB spill for a flag-live taken successor
                 emit_chain_exit(taken);
                 break;
             }
@@ -3230,25 +3289,28 @@ static void *translate_block(uint64_t gpc) {
                         break;
                     }
                 }
+                uint64_t fall = next;
+                int stitch_fall =
+                    (STITCH_OK && fall != start && !seen_has(seen, nseen, fall) && !map_body(fall) && !trap_head(fall));
+                int save_taken = 0, save_fall = 0;
                 if (parity) {
                     // live ARM Z already holds (PF==0) from emit_parity_jcc_cond; flags spilled there.
-                } else if (g_fl_pending) {
-                    // Fast path (see jcc rel8): spill the deferred flags for successors AND leave
-                    // the live NZCV canonical, then branch off it; drop the redundant e_nzcv_load.
-                    flags_materialize();
                 } else {
-                    e_nzcv_load();
+                    // x86-xflags edge-aware flag handling -- see jcc rel8 (identical semantics).
+                    jcc_edge_flags(taken, fall, gpc, stitch_fall, &save_taken, &save_fall);
                 }
-                uint64_t fall = next;
                 // STITCH (see jcc rel8): inline the fall-through, invert the cond, taken exit OOL.
-                // cpu->nzcv is materialized above, so both arms see canonical flags.
-                if (STITCH_OK && fall != start && !seen_has(seen, nseen, fall) && !map_body(fall) && !trap_head(fall)) {
+                // Parity jcc: restore the canonical live NZCV on every edge (parity-edge fix).
+                if (stitch_fall) {
                     int inv = (cc ^ 1) & 0xF;
                     uint32_t *patch = (uint32_t *)g_cp;
                     emit32(0); // b.inv -> fall (inline)
+                    if (parity) e_nzcv_load();     // taken edge: restore canonical live NZCV
+                    if (save_taken) e_nzcv_save(); // FL_SUB spill on the (flag-live) taken edge only
                     emit_chain_exit(taken);
                     int64_t d = ((uint8_t *)g_cp - (uint8_t *)patch) / 4;
                     *patch = 0x54000000u | (((uint32_t)d & 0x7FFFF) << 5) | (uint32_t)inv;
+                    if (parity) e_nzcv_load(); // inline fall: restore before continuing
                     seen[nseen++] = fall;
                     trace_blk++;
                     gpc = fall;
@@ -3256,9 +3318,13 @@ static void *translate_block(uint64_t gpc) {
                 }
                 uint32_t *patch = (uint32_t *)g_cp;
                 emit32(0);
+                if (parity) e_nzcv_load();    // fall edge: restore canonical live NZCV
+                if (save_fall) e_nzcv_save(); // FL_SUB spill for a flag-live fall successor
                 emit_chain_exit(next);
                 int64_t d = ((uint8_t *)g_cp - (uint8_t *)patch) / 4;
                 *patch = 0x54000000u | (((uint32_t)d & 0x7FFFF) << 5) | (cc & 0xF);
+                if (parity) e_nzcv_load();     // taken edge: restore canonical live NZCV
+                if (save_taken) e_nzcv_save(); // FL_SUB spill for a flag-live taken successor
                 emit_chain_exit(taken);
                 break;
             }
@@ -3306,6 +3372,10 @@ static void *translate_block(uint64_t gpc) {
                     int rmv = rm_load(&I, next, I.opsize, &mem);
                     e_rrr(A_SUBS, 31, 19, 31, 0, 0);                     // Z = (PF == 0)
                     e_csel(I.reg, rmv, I.reg, (lo == 0xA) ? 1 : 0, sf); // cmovp: NE(PF==1); cmovnp: EQ(PF==0)
+                    // parity-edge fix: the SUBS above clobbered the live ARM NZCV; restore the
+                    // canonical flags (membank is current: the top-of-loop materialized any pending
+                    // producer before this consumer) so a following block exit spills true flags.
+                    e_nzcv_load();
                     gpc = next;
                     continue;
                 }
@@ -3349,6 +3419,14 @@ static void *translate_block(uint64_t gpc) {
         }
         report_unimpl(gpc, &I);
         break;
+    }
+    // IRQSLIM: the out-of-line #292 poll exit stub the body-entry cbnz targets (irq set -> exit to
+    // the dispatcher at the block start, exactly like the legacy inline poll).
+    if (g_irq_patch) {
+        uint32_t *p = g_irq_patch;
+        g_irq_patch = NULL;
+        *p = 0xB5000000u | (((uint32_t)(((uint8_t *)g_cp - (uint8_t *)p) / 4) & 0x7FFFF) << 5) | 16; // cbnz x16
+        emit_exit_const(start, R_BRANCH);
     }
     // W5B tier-2: the promoter (g_tier2_build) recompiles in place and updates the EXISTING map entry
     // itself, so don't insert a duplicate and don't chain pending edges here (the promoter does both
@@ -3394,7 +3472,13 @@ static void tier2_promote(uint64_t gpc) {
     void *old_body = g_map[mi].body;
     int64_t bd = ((uint8_t *)nb - (uint8_t *)old_body) / 4;
     *(uint32_t *)old_body = 0x14000000u | ((uint32_t)bd & 0x3FFFFFFu);
-    sys_icache_invalidate(old_body, 4);
+    // IRQSLIM: forward chains enter at body+8 (past the 2-insn poll) and would miss the body+0
+    // bounce -- give the poll-skipping entry its own bounce to nb+8 (tier-2 has the same layout).
+    if (g_fwdskip) {
+        int64_t bd8 = (((uint8_t *)nb + 8) - ((uint8_t *)old_body + 8)) / 4;
+        ((uint32_t *)old_body)[2] = 0x14000000u | ((uint32_t)bd8 & 0x3FFFFFFu);
+    }
+    sys_icache_invalidate(old_body, 4 + (g_fwdskip ? 8 : 0));
     // swap the live map entry: future dispatcher lookups + IBTC fills resolve to tier-2 directly
     g_map[mi].host = nh;
     g_map[mi].body = nb;
