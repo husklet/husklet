@@ -205,14 +205,16 @@
         <table class="w-full border-collapse text-[13px] sm:text-sm">
           <thead><tr class="text-left text-xs uppercase tracking-wide text-muted2"><th class="p-3">Workload</th><th class="p-3">dd vs OrbStack — arm64</th><th class="p-3">dd vs OrbStack — x86 (Rosetta)</th></tr></thead>
           <tbody class="[&>tr]:border-t [&>tr]:border-edge">
-            <tr><td class="p-3 font-medium">redis SET / GET</td><td class="p-3 font-semibold text-emerald-400">1.45–1.46× faster</td><td class="p-3 text-muted">0.4–0.6×</td></tr>
-            <tr><td class="p-3 font-medium">openssl AES-128-GCM</td><td class="p-3">≈ parity (0.99×)</td><td class="p-3">≈ parity (0.99×)</td></tr>
+            <tr><td class="p-3 font-medium">container startup</td><td class="p-3 font-semibold text-emerald-400">1.07× faster</td><td class="p-3 font-semibold text-emerald-400">2.06× faster — beats Rosetta</td></tr>
+            <tr><td class="p-3 font-medium">redis SET / GET</td><td class="p-3 font-semibold text-emerald-400">1.43–1.46× faster</td><td class="p-3 text-muted">0.41–0.54×</td></tr>
+            <tr><td class="p-3 font-medium">openssl AES-128-GCM</td><td class="p-3">≈ parity (0.97×)</td><td class="p-3">≈ parity (0.98×)</td></tr>
             <tr><td class="p-3 font-medium">openssl SHA-256</td><td class="p-3">≈ parity (0.99×)</td><td class="p-3 font-semibold text-emerald-400">1.15× — beats Rosetta</td></tr>
-            <tr><td class="p-3 font-medium">sqlite / python</td><td class="p-3 text-muted">1.9–2.5× slower</td><td class="p-3 text-muted">1.9–2.2× slower</td></tr>
+            <tr><td class="p-3 font-medium">tar / gzip</td><td class="p-3">≈ parity (1.09×)</td><td class="p-3 text-muted">1.43× slower</td></tr>
+            <tr><td class="p-3 font-medium">sqlite / python</td><td class="p-3 text-muted">1.6–1.9× slower</td><td class="p-3 text-muted">1.8–2.1× slower</td></tr>
           </tbody>
         </table>
       </div>
-      <p class="mt-4 text-sm text-muted">Against a full Rosetta VM, dd <strong class="text-txt">already beats OrbStack on redis by ~1.45×</strong> (arm64) and <strong class="text-txt">matches or beats Rosetta on crypto</strong> — with nothing resident when idle. Where it still trails is syscall- and interpreter-heavy x86 work; that gap is closing fast (sqlite-select went 4.5× → 1.9× in recent passes).</p>
+      <p class="mt-4 text-sm text-muted">Against a full Rosetta VM, dd is <strong class="text-txt">at or above parity on 5 rows</strong> — it <strong class="text-txt">starts x86 containers 2× faster than Rosetta</strong> (no VM to boot), <strong class="text-txt">beats OrbStack on redis by ~1.44×</strong> (arm64), and matches or beats Rosetta on crypto — with nothing resident when idle. Where it still trails is interpreter- and fork-heavy x86 work; that gap is closing fast (sqlite-select went 4.5× → 1.6×, python 3.0× → 1.9× in recent passes).</p>
     </div>
 
     <p class="mt-6 text-base"><a href="./blog/containers-should-be-processes.html" class="font-semibold text-blue2 hover:underline">Read the full benchmark writeup — the method, the crypto story, and the honest losses&nbsp;→</a></p>
