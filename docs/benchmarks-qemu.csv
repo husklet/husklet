@@ -1,0 +1,27 @@
+workload,metric,unit,qemu_x86,dd_x86,dd_speedup_over_qemu,baseline,notes
+openssl AES-128-GCM (16KB),throughput,MB/s,640.0,3888.5,6.08x,qemu-x86_64 user-mode (software emulation),"real x86 openssl `speed -evp aes-128-gcm`, 16384-byte block; dd maps AES-NI/GHASH to ARM AESE/PMULL, qemu emulates in software. self-timed MB/s"
+openssl SHA-256 (16KB),throughput,MB/s,372.2,577.8,1.55x,qemu-x86_64 user-mode (software emulation),"real x86 openssl `speed -evp sha256`, 16384-byte block; dd maps SHA-NI to ARM SHA256H. self-timed MB/s"
+python int loop 5e6,time,ms,10548.0,1137.0,9.28x,qemu-x86_64 user-mode (software emulation),"real x86 python3.12, 5e6-iter integer loop, self-timed perf_counter"
+sqlite insert 200k rows,time,ms,1472.7,217.5,6.77x,qemu-x86_64 user-mode (software emulation),"real x86 python3.12 sqlite3, 200k-row insert in one txn (WAL), self-timed"
+sqlite select 20k pk,time,ms,424.4,82.5,5.14x,qemu-x86_64 user-mode (software emulation),"real x86 python3.12 sqlite3, 20k point-selects by pk, self-timed"
+float n-body,wall,s,5.43,0.24,22.99x,qemu-x86_64 user-mode (software emulation),"static x86-64 kernel, external wall-clock (dd lane also pays bridge/startup tax qemu does not = conservative)"
+matrix multiply,wall,s,8.27,1.15,7.21x,qemu-x86_64 user-mode (software emulation),"static x86-64 kernel, external wall-clock (conservative for dd)"
+mandelbrot,wall,s,8.02,0.87,9.23x,qemu-x86_64 user-mode (software emulation),"static x86-64 kernel, external wall-clock (conservative for dd)"
+int sieve,wall,s,1.36,0.70,1.93x,qemu-x86_64 user-mode (software emulation),"static x86-64 kernel, external wall-clock (conservative for dd)"
+qsort,wall,s,3.93,1.52,2.58x,qemu-x86_64 user-mode (software emulation),"static x86-64 kernel, external wall-clock (conservative for dd)"
+memcpy,wall,s,2.42,0.51,4.73x,qemu-x86_64 user-mode (software emulation),"static x86-64 kernel, external wall-clock (conservative for dd)"
+base64,wall,s,4.33,5.09,0.85x,qemu-x86_64 user-mode (software emulation),"static x86-64 kernel; the one dd loss — thin compute + heavy dispatch, the optimization frontier"
+text scan,wall,s,1.43,0.93,1.54x,qemu-x86_64 user-mode (software emulation),"static x86-64 kernel (wc/grep-style), external wall-clock (conservative for dd)"
+AES-GCM microbench,throughput,MB/s,333.9,4559.5,13.66x,qemu-x86_64 user-mode (software emulation),self-contained AES-NI CTR + PCLMUL GHASH loop (no libs); isolates crypto instructions from openssl's scalar code
+SHA-256-NI microbench,throughput,MB/s,212.3,544.1,2.56x,qemu-x86_64 user-mode (software emulation),self-contained SHA256RNDS2/MSG loop (no libs)
+SHA-1-NI microbench,throughput,MB/s,366.1,1043.8,2.85x,qemu-x86_64 user-mode (software emulation),self-contained SHA1RNDS4 loop (no libs)
+
+# dd vs OrbStack (Apple Virtualization.framework VM + Rosetta 2) — a tougher bar than qemu; source: docs/benchmarks-workloads.csv / dd-bench2 v0.9.20
+workload,metric,unit,,,dd_vs_orbstack (arm / amd),notes
+redis SET,own -q rps,ops/s,,,arm 1.45x FASTER / amd 0.42x,OrbStack = Apple Virtualization.framework VM + Rosetta 2; dd redis-arm BEATS OrbStack by 45%
+redis GET,own -q rps,ops/s,,,arm 1.46x FASTER / amd 0.56x,dd redis-arm beats OrbStack; amd (Rosetta) still ahead
+openssl AES-128-GCM,speed 16KB,MB/s,,,arm 0.99x / amd 0.99x,≈ parity with Rosetta (was 0.10x at mission start)
+openssl SHA-256,speed 16KB,MB/s,,,arm 0.99x / amd 1.15x FASTER,dd SHA-NI map BEATS Rosetta on amd (was 0.31x)
+sqlite insert 200k,one txn,ms,,,arm 2.13x / amd 1.96x slower,syscall-heavy; Rosetta VM still ahead — the frontier
+sqlite select 20k,point selects,ms,,,arm 1.93x / amd 2.23x slower,was 4.5x/3.96x — closing fast
+python int loop,5e6 iters,ms,,,arm 2.47x / amd 1.88x slower,interpreter dispatch; the translation-quality ceiling
