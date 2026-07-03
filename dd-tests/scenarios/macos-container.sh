@@ -85,6 +85,44 @@ has "linux-uid-root"  "$(d run --rm alpine id -u 2>/dev/null)" "0"
 mu="$(d run --rm macos bash -lc 'id -u' 2>/dev/null | tr -dc 0-9)"
 has "macos-uid-numeric" "$([ -n "$mu" ] && echo "uid=$mu")" "uid="
 
+# ---- darwinjail path confinement: `cd` / `cd ..` + bind-mount parents (#347, #233, #234) ----------
+# #233 flagged that darwinjail had NO cd test at all, which let #347 regress. These lock the behaviour.
+echo "== [macos] darwinjail cd / cd .. within the rootfs (#233 gap) =="
+has "macos-cd-dotdot-rootfs" "$(d run --rm macos bash -c 'cd /profile/bin && cd .. && pwd')" "/profile"
+
+echo "== [macos] a container with NO bind mounts starts cleanly (#234: DD_VOLUMES leak) =="
+# The daemon's OWN DD_VOLUMES (its named-volume ROOT dir, set above) must NOT leak into the jail, which
+# parses DD_VOLUMES as `HOST:CONT` bind specs -- a colon-less dir path once aborted every no-mount mac
+# container ("dd: invalid DD_VOLUMES"). If it regresses the guest prints nothing and this fails.
+has "macos-no-volume-clean" "$(d run --rm macos bash -c 'echo NOVOL_OK')" "NOVOL_OK"
+
+echo '== [macos] cd .. out of a bind mount lists the mount point (#347) =='
+MP="$STATE_DIR/mp"; mkdir -p "$MP"; echo inside-vol > "$MP/inside.txt"
+# From inside a NESTED bind mount, `cd ..` must land in the (materialized) parent and `ls` show the
+# mount dir. The bug: the mount's parent existed only as an empty/absent rootfs dir, so `cd .. ; ls`
+# black-holed (showed nothing / cd .. ENOENT). Docker mkdir -ps every mount point; now the jail does too.
+has "macos-cd-dotdot-mount-ls" "$(d run --rm -v "$MP:/probe/sub" macos bash -c 'cd /probe/sub && cd .. && ls')" "sub"
+# the mount itself still routes to the host dir (the placeholder dir never shadows the real volume)
+has "macos-mount-routes"       "$(d run --rm -v "$MP:/probe/sub" macos bash -c 'cat /probe/sub/inside.txt')" "inside-vol"
+# a TOP-level mount is visible in `ls /` too (docker parity)
+has "macos-top-mount-in-root"  "$(d run --rm -v "$MP:/toplevel/sub" macos bash -c 'ls /')" "toplevel"
+
+echo "== [macos] leaving the container returns PROMPTLY, even with a lingering child (#347) =="
+# A background child (`sleep 30 &`) keeps the guest's stdout pipe open after the shell exits. The daemon
+# must still report the container exited PROMPTLY (its reader drain is bounded) instead of blocking on
+# the surviving child -- regressing that made `exit`/Ctrl-D "hang forever". Run in the background under a
+# hard 10s deadline so a regression (which would take ~30s) FAILS fast instead of hanging the suite.
+( printf 'sleep 30 & exit\n' | d run --rm -i macos bash >/dev/null 2>&1 ) &
+rpid=$!
+w=0; while kill -0 "$rpid" 2>/dev/null && [ "$w" -lt 10 ]; do sleep 1; w=$((w+1)); done
+if kill -0 "$rpid" 2>/dev/null; then
+    kill -9 "$rpid" 2>/dev/null; wait "$rpid" 2>/dev/null
+    echo "  FAIL macos-exit-prompt: still running after ${w}s (exit hang regressed)"; fail=$((fail+1))
+else
+    wait "$rpid" 2>/dev/null
+    echo "  ok   macos-exit-prompt (returned within ${w}s despite a lingering child)"; pass=$((pass+1))
+fi
+
 echo ""
 echo "macos-container scenarios: $pass passed, $fail failed"
 [ "$fail" -eq 0 ]

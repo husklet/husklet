@@ -11,7 +11,7 @@ use crate::{group, src, port, fixture, in_rootfs, Case, Engine, Group};
 
 const LIN: &[Engine] = &[Engine::LinuxAarch64, Engine::LinuxX86_64];
 
-pub fn groups() -> Vec<Group> { vec![epoll(), events(), fsx(), procx(), schedx(), miscx()] }
+pub fn groups() -> Vec<Group> { vec![epoll(), events(), fsx(), procx(), randx(), schedx(), miscx()] }
 
 /// epoll readiness-model corners: edge-trigger, MOD/DEL, oneshot rearm, pwait sigmask.
 fn epoll() -> Group {
@@ -85,6 +85,15 @@ fn procx() -> Group {
         // correctly (read=32 ok=1) but the qemu-user oracle lacks process_vm_readv (read=-1) -> oracle
         // artifact, not an engine gap (cf. clone3). GAPS `lsys-process-vm`.
         src("process-vm", "ext_linuxsys/process_vm.c").oracle().xfail(&[Engine::LinuxX86_64]),
+    ])
+}
+
+/// #348: /proc/sys/kernel/random/{boot_id,uuid} synth. Self-checking (NOT oracle: the exact UUID value is
+/// host/boot-specific, but the format + stable-boot_id / fresh-uuid invariants are universal). Without
+/// boot_id, curl/systemd/dbus/libuuid print "cannot find current boot id".
+fn randx() -> Group {
+    group("lsys-rand", vec![
+        src("proc-bootid", "ext_linuxsys/proc_bootid.c").has("BOOTID_OK").has("UUID_OK").has("SURFACE_OK").exit(0),
     ])
 }
 

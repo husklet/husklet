@@ -168,10 +168,14 @@ impl SpawnConfig {
             let mut env = format!("DYLD_INSERT_LIBRARIES={} DD_SANDBOX=1 ", shq(&jail));
             if !self.rootfs.is_empty() { env += &format!("DD_ROOTFS={} ", shq(&self.rootfs)); }
             if !self.lowers.is_empty() { env += &format!("DD_LOWERS={} ", shq(&self.lowers.join(","))); }
-            if !self.volumes.is_empty() {
-                let v = self.volumes.iter().map(|v| format!("{}:{}", v.host, v.container)).collect::<Vec<_>>().join(",");
-                env += &format!("DD_VOLUMES={} ", shq(&v));
-            }
+            // ALWAYS set DD_VOLUMES (empty when there are no binds), never conditionally: the daemon's OWN
+            // process env carries a DD_VOLUMES (its named-volume ROOT dir, a plain path) that the container
+            // would otherwise inherit -- and the jail parses DD_VOLUMES as `HOST:CONT,…` bind specs, so a
+            // colon-less dir path made it abort every no-bind mac container with "invalid DD_VOLUMES"
+            // (#234). Emitting an explicit (possibly empty) value here shadows the inherited one; empty =>
+            // zero binds. (Linux uses DDVOL, a different name, so only darwin hit this collision.)
+            let v = self.volumes.iter().map(|v| format!("{}:{}", v.host, v.container)).collect::<Vec<_>>().join(",");
+            env += &format!("DD_VOLUMES={} ", shq(&v));
             if let Some(h) = &self.hostname { if !h.is_empty() { env += &format!("DD_HOSTNAME={} ", shq(h)); } }
             if self.mem_max > 0 { env += &format!("DD_MEM_MAX={} ", self.mem_max); }
             if self.pids_max > 0 { env += &format!("DD_PIDS_MAX={} ", self.pids_max); }

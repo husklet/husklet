@@ -69,9 +69,36 @@ static void add_pub(char *hc){
 static const char *jail(const char *p, char *out); // defined below; used by init for DD_CWD
 static void dj_canon(const char *base, const char *in, char *out, size_t outsz); // path canonicalizer
 
+// Materialize a bind volume's mount point (and every ancestor) as a real, empty directory in the
+// writable rootfs, so listing a mount's PARENT shows the mount as a directory entry -- exactly what
+// docker does (it mkdir -ps every mount target). Without this a `-v H:/Users/x` left /Users as an
+// EMPTY (or absent) rootfs dir, so `cd .. ; ls` from inside the mount showed NOTHING even though the
+// mount exists (bug #347 / the darwin analogue of the linux #118/#107 vol_mkmountpoint fix). The
+// created dir is only ever a directory ENTRY: an actual open of the mount path still routes to the
+// volume host via jail() (the volume prefix-match wins), so this placeholder is never read from.
+// Direct libc mkdir here (intra-dylib calls are NOT interposed); best-effort -- an existing path
+// (EEXIST) or a read-only rootfs is fine. Runs before DD_SANDBOX so the writes are unrestricted.
+static void dj_mkmountpoint(const char *cont){
+    if(!g_rootfs || !cont || cont[0]!='/') return;
+    char c[1024]; dj_canon("/", cont, c, sizeof c);          // canonical, root-clamped container path
+    char path[1024]; size_t n=strlen(g_rootfs);
+    if(n+1 >= sizeof path) return;                            // rootfs too long to append a path onto
+    memcpy(path, g_rootfs, n); path[n]=0;                    // seed with the rootfs prefix
+    for(const char *p=c; *p; ){
+        while(*p=='/') p++;
+        if(!*p) break;
+        const char *slash=strchr(p,'/'); size_t len=slash?(size_t)(slash-p):strlen(p);
+        if(n+1+len >= sizeof path) break;
+        path[n++]='/'; memcpy(path+n,p,len); n+=len; path[n]=0;
+        mkdir(path, 0755);                                   // best-effort per component (EEXIST ok)
+        p += len;
+    }
+}
+
 __attribute__((constructor)) static void init(void){
     g_rootfs = getenv("DD_ROOTFS"); g_hostname = getenv("DD_HOSTNAME"); g_pid1 = getenv("DD_PID1")!=0;
     split(getenv("DD_LOWERS"), add_low); split(getenv("DD_VOLUMES"), add_vol); split(getenv("DD_PUBLISH"), add_pub);
+    for(int i=0;i<g_nvol;i++) dj_mkmountpoint(g_vol[i].cont); // show mount points in their parent's `ls`
     // initial working directory (docker -w / the cwd ddcli mounts): chdir into the container path.
     const char *cwd = getenv("DD_CWD");
     if(cwd && cwd[0] && g_rootfs){
