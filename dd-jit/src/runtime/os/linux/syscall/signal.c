@@ -85,7 +85,12 @@ static int svc_signal(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint
             // lost. This is exactly the postgres fast-shutdown deadlock: the postmaster's kill(checkpointer,
             // SIGUSR2=12) was delivered as macOS 12 (SIGSYS), the checkpointer never ran ShutdownXLOG, and
             // `pg_ctl -w stop` hung ("server does not shut down"). sig 0 (existence check) maps to 0 unchanged.
-            G_RET(c) = kill((pid_t)a0, sig_l2m((int)a1)) < 0 ? (uint64_t)(-errno) : 0;
+            // The container init is guest pid 1 <-> its real host pid (g_init_hostpid): a sibling process that
+            // kill()s pid 1 must reach the init's host process, not host pid 1 (launchd).
+            {
+                pid_t tgt = ((int)a0 == 1 && g_init_hostpid) ? g_init_hostpid : (pid_t)a0;
+                G_RET(c) = kill(tgt, sig_l2m((int)a1)) < 0 ? (uint64_t)(-errno) : 0;
+            }
         break;
     case 130:
         // tkill(tid, sig)
@@ -211,25 +216,49 @@ static int svc_signal(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint
         // negative/zero timeout -> single non-blocking poll; else a deadline.
         long long budget_ns = to ? (long long)to->tv_sec * 1000000000LL + to->tv_nsec : -1;
         long long waited_ns = 0;
+        // An awaited signal with NO guest handler is invisible to g_pending unless a host handler catches it:
+        // a cross-process (or host) kill(2) would otherwise hit the default disposition and terminate us
+        // instead of being consumed synchronously here (this is what made a plain sigwait() fail). Install the
+        // engine's SA_SIGINFO host handler on each such awaited signal's macOS number so it becomes pending,
+        // then restore the prior disposition after the wait. (Signals that already have a guest handler route
+        // to g_pending via that handler's host_sigh_si; unmaskable/synchronous signals are skipped.)
+        struct sigaction saved[65];
+        uint64_t installed = 0;
+        for (int s = 1; s <= 64; s++) {
+            if (!(set & (1ull << (s - 1))) || s == 9 || s == 19 || sig_is_sync(s)) continue;
+            if (g_sigact[s].handler > 1) continue;
+            struct sigaction sa;
+            memset(&sa, 0, sizeof sa);
+            sa.sa_sigaction = host_sigh_si;
+            sa.sa_flags = SA_SIGINFO;
+            sigfillset(&sa.sa_mask);
+            if (sigaction(sig_l2m(s), &sa, &saved[s]) == 0) installed |= (1ull << s);
+        }
+        int got = 0;
         for (;;) {
-            uint64_t p = __atomic_load_n(&g_pending, __ATOMIC_SEQ_CST);
-            int got = 0;
+            // Both queues: process-directed (g_pending) and thread-directed (tpending via tkill/tgkill).
+            uint64_t p = __atomic_load_n(&g_pending, __ATOMIC_SEQ_CST) | __atomic_load_n(&c->tpending, __ATOMIC_SEQ_CST);
             for (int s = 1; s <= 64; s++)
                 if ((p & (1ull << s)) && (set & (1ull << (s - 1)))) { got = s; break; }
             if (got) {
-                __atomic_and_fetch(&g_pending, ~(1ull << got), __ATOMIC_SEQ_CST); // dequeue
-                if (a1 && a3 >= 128) {                                            // fill siginfo_t
+                __atomic_and_fetch(&g_pending, ~(1ull << got), __ATOMIC_SEQ_CST); // dequeue from both
+                __atomic_and_fetch(&c->tpending, ~(1ull << got), __ATOMIC_SEQ_CST);
+                if (a1) { // fill siginfo_t whenever info != NULL (a3 is the sigsetsize, not a size threshold)
                     memset((void *)a1, 0, 128);
                     *(int *)(a1 + 0) = got;            // si_signo
                     *(int *)(a1 + 8) = g_sigcode[got]; // si_code
+                    if (g_sigpid[got]) { *(int *)(a1 + 16) = g_sigpid[got]; *(int *)(a1 + 20) = g_siguid[got]; }
                     *(uint64_t *)(a1 + 24) = g_sigval[got];
                     g_sigcode[got] = 0;
                     g_sigval[got] = 0;
+                    g_sigpid[got] = 0;
+                    g_siguid[got] = 0;
                 }
                 G_RET(c) = (uint64_t)got;
                 break;
             }
-            if (budget_ns == 0 || (budget_ns > 0 && waited_ns >= budget_ns) || c->exited) {
+            if (budget_ns == 0 || (budget_ns > 0 && waited_ns >= budget_ns) ||
+                __atomic_load_n(&c->exited, __ATOMIC_SEQ_CST)) {
                 G_RET(c) = (uint64_t)(-EAGAIN);
                 break;
             }
@@ -237,6 +266,8 @@ static int svc_signal(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint
             nanosleep(&slice, NULL);
             waited_ns += 2 * 1000 * 1000;
         }
+        for (int s = 1; s <= 64; s++)
+            if (installed & (1ull << s)) sigaction(sig_l2m(s), &saved[s], NULL); // restore disposition
         break;
     }
     // rt_sigaction(sig, *act, *old)
@@ -275,10 +306,12 @@ static int svc_signal(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint
                     // honor SIG_IGN (e.g. SIGPIPE)
                     signal(ms, SIG_IGN);
                 else {
-                    // async: flag pending, deliver in dispatcher
+                    // async: flag pending, deliver in dispatcher. SA_SIGINFO so host_sigh_si can capture the
+                    // sender's si_pid/si_uid for an SA_SIGINFO guest handler (#316).
                     struct sigaction sa;
                     memset(&sa, 0, sizeof sa);
-                    sa.sa_handler = host_sigh;
+                    sa.sa_sigaction = host_sigh_si;
+                    sa.sa_flags = SA_SIGINFO;
                     sigfillset(&sa.sa_mask);
                     sigaction(ms, &sa, NULL);
                 }

@@ -45,6 +45,27 @@ static void engine_fd_vacate_range(unsigned first, unsigned last) {
 }
 
 static int svc_io(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4, uint64_t a5) {
+    // An O_PATH fd names a file but is not open for I/O -- Linux rejects the read/write family through it
+    // with EBADF (fs/read_write.c). It stays valid as a dirfd for *at() and for fstat/fchdir (served by
+    // svc_fs), so only the I/O syscalls are gated here.
+    if ((int)a0 >= 0 && (int)a0 < 1024 && g_opath[(int)a0]) {
+        switch (nr) {
+        case 63: case 64: case 65: case 66: case 67: case 68: case 69: case 70:
+            G_RET(c) = (uint64_t)(int64_t)(-EBADF);
+            return svc_done(c);
+        default: break;
+        }
+    }
+    // /dev/full: any write fails ENOSPC (reads are served from the /dev/zero backing). Installers and
+    // test suites probe this to check out-of-space handling.
+    if ((int)a0 >= 0 && (int)a0 < 1024 && g_devfull[(int)a0]) {
+        switch (nr) {
+        case 64: case 66: case 68: case 70:
+            G_RET(c) = (uint64_t)(int64_t)(-ENOSPC);
+            return svc_done(c);
+        default: break;
+        }
+    }
     switch (nr) {
     // ===================== I/O — read/write/seek (+ eventfd/timerfd/signalfd fd redirection) =====================
     case 62: {
@@ -52,6 +73,27 @@ static int svc_io(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t
         // Linux SEEK_DATA=3,SEEK_HOLE=4 ; macOS SEEK_HOLE=3,SEEK_DATA=4. Translate so sparse-file
         // probing finds holes/data correctly.
         int whence = (int)a2;
+        // Directory streams are read via getdents, backed by a private DIR* (fdopendir(dup(fd))) in the
+        // plain path or a merged snapshot in the overlay path -- neither moves when the guest lseeks its
+        // own fd. glibc rewinddir()/seekdir() ARE exactly this lseek, so redirect it here or the
+        // enumeration never restarts (the readdir-dtype xfail: rewinddir's 2nd pass saw 0 entries).
+        if ((int)a0 >= 0 && (int)a0 < 1024 && g_nlower && g_ovldir[(int)a0][0]) {
+            if (whence == 0 /*SEEK_SET*/) {
+                ovldents_rewind((int)a0, (int)(off_t)a1);
+                G_RET(c) = (uint64_t)a1;
+                break;
+            }
+        }
+        for (int i = 0; i < g_ndirs; i++)
+            if (g_dirs[i].fd == (int)a0) {
+                if (whence == 0 /*SEEK_SET*/) {
+                    if ((off_t)a1 <= 0) rewinddir(g_dirs[i].d);
+                    else seekdir(g_dirs[i].d, (long)(off_t)a1);
+                    G_RET(c) = (uint64_t)a1;
+                    goto lseek_out; // handled the directory stream
+                }
+                break; // SEEK_CUR/END on a dir stream: fall through to the raw lseek below
+            }
         struct memf *mm = memf_get((int)a0);
         if (mm) {
             off_t mr = memf_lseek(mm, (off_t)a1, whence);
@@ -62,6 +104,7 @@ static int svc_io(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t
         else if (whence == 4) whence = 3; // Linux SEEK_HOLE -> macOS SEEK_HOLE
         off_t r = lseek((int)a0, (off_t)a1, whence);
         G_RET(c) = r < 0 ? (uint64_t)(-errno) : (uint64_t)r;
+    lseek_out:
         break;
     }
     case 63: {
@@ -214,7 +257,12 @@ static int svc_io(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t
             G_RET(c) = 8;
             break;
         }
-        ssize_t r = read(rfd, (void *)a1, (size_t)a2);
+        // SA_RESTART: a blocking read interrupted by a signal whose guest handler asked for restart is
+        // resumed in place (the dispatcher runs the handler after the read finally returns); a handler
+        // WITHOUT SA_RESTART lets EINTR through. (Well-behaved programs block in poll/select/epoll -- which
+        // always return EINTR -- and only read when ready, so this never defers a needed handler.)
+        ssize_t r;
+        do { r = read(rfd, (void *)a1, (size_t)a2); } while (r < 0 && SVC_EINTR_RESTART(c));
         // SEQPACKET/O_DIRECT-pipe EOF over a DGRAM backing: a peer-closed read reports ECONNRESET, but the
         // emulated endpoint must return 0 (EOF) like the Linux original. (See netns.c / case 199 / pipe2.)
         if (r < 0 && errno == ECONNRESET && seq_is(rfd)) r = 0;
@@ -271,7 +319,8 @@ static int svc_io(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t
             break;
         }
         fd_evict(wfd);
-        ssize_t r = write(wfd, (void *)a1, (size_t)a2);
+        ssize_t r; // SA_RESTART: restart a signal-interrupted blocking write in place (see case 63)
+        do { r = write(wfd, (void *)a1, (size_t)a2); } while (r < 0 && SVC_EINTR_RESTART(c));
         G_RET(c) = r < 0 ? (uint64_t)(-errno) : (uint64_t)r;
         break;
     }
@@ -296,7 +345,8 @@ static int svc_io(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t
             G_RET(c) = r < 0 ? (uint64_t)(int64_t)r : (uint64_t)r;
             break;
         }
-        ssize_t r = readv((int)a0, (void *)a1, (int)a2);
+        ssize_t r; // SA_RESTART: restart a signal-interrupted blocking readv in place (see case 63)
+        do { r = readv((int)a0, (void *)a1, (int)a2); } while (r < 0 && SVC_EINTR_RESTART(c));
         G_RET(c) = r < 0 ? (uint64_t)(-errno) : (uint64_t)r;
         break;
     // readv
@@ -342,7 +392,8 @@ static int svc_io(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t
             }
         }
         fd_evict((int)a0);
-        ssize_t r = writev((int)a0, (void *)a1, (int)a2);
+        ssize_t r; // SA_RESTART: restart a signal-interrupted blocking writev in place (see case 63)
+        do { r = writev((int)a0, (void *)a1, (int)a2); } while (r < 0 && SVC_EINTR_RESTART(c));
         G_RET(c) = r < 0 ? (uint64_t)(-errno) : (uint64_t)r;
         break;
     // writev
@@ -354,7 +405,8 @@ static int svc_io(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t
             G_RET(c) = r < 0 ? (uint64_t)(int64_t)r : (uint64_t)r;
             break;
         }
-        ssize_t r = pread((int)a0, (void *)a1, (size_t)a2, (off_t)a3);
+        ssize_t r; // SA_RESTART: restart a signal-interrupted blocking pread in place (see case 63)
+        do { r = pread((int)a0, (void *)a1, (size_t)a2, (off_t)a3); } while (r < 0 && SVC_EINTR_RESTART(c));
         G_RET(c) = r < 0 ? (uint64_t)(-errno) : (uint64_t)r;
         break;
     }
@@ -367,7 +419,8 @@ static int svc_io(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t
             break;
         }
         fd_evict((int)a0);
-        ssize_t r = pwrite((int)a0, (void *)a1, (size_t)a2, (off_t)a3);
+        ssize_t r; // SA_RESTART: restart a signal-interrupted blocking pwrite in place (see case 63)
+        do { r = pwrite((int)a0, (void *)a1, (size_t)a2, (off_t)a3); } while (r < 0 && SVC_EINTR_RESTART(c));
         G_RET(c) = r < 0 ? (uint64_t)(-errno) : (uint64_t)r;
         break;
     }

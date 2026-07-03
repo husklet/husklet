@@ -24,6 +24,14 @@ pub(crate) struct CreateBody {
     // names the *primary* network; EndpointsConfig enumerates ALL of them (compose puts every
     // `networks:` entry of a service here). We join each so a multi-network service lands on them all.
     #[serde(rename = "NetworkingConfig")] networking_config: Option<NetworkingConfig>,
+    // Config-level lifecycle fields (top of the create body, NOT under HostConfig): `--stop-signal`,
+    // `--stop-timeout`, and `--health-*` (Healthcheck). Each overrides the image's; absent ⇒ inherit.
+    #[serde(rename = "StopSignal")] stop_signal: Option<String>,
+    #[serde(rename = "StopTimeout")] stop_timeout: Option<i64>,
+    #[serde(rename = "Healthcheck")] healthcheck: Option<crate::model::HealthConfig>,
+    // `Config.Volumes` — the docker CLI puts a bare `-v /path` (anonymous volume) HERE (a set of dirs),
+    // the same channel as an image `VOLUME`. Each uncovered dir gets a fresh anonymous volume at run.
+    #[serde(rename = "Volumes")] volumes: Option<HashMap<String, Value>>,
 }
 
 #[derive(Deserialize)]
@@ -48,6 +56,9 @@ pub(crate) struct HostConfig {
     #[serde(rename = "CapDrop")] cap_drop: Option<Vec<String>>,
     #[serde(rename = "Devices")] devices: Option<Vec<DeviceMapping>>,
     #[serde(rename = "Mounts")] mounts: Option<Vec<Mount>>,
+    // `--tmpfs DST[:opts]` (HostConfig.Tmpfs): a map of container-path -> mount options ("size=64m,mode=1777").
+    // A fresh empty in-memory-equivalent mount. `--mount type=tmpfs` arrives via Mounts instead (folded in).
+    #[serde(rename = "Tmpfs")] tmpfs: Option<HashMap<String, String>>,
     #[serde(rename = "Privileged")] privileged: Option<bool>,
     // `--security-opt` (Vec<String> like ["sandbox"], ["seccomp=untrusted"], ["no-new-privileges"]).
     // Parsed + persisted verbatim; an entry matching sandbox/untrusted opts into the JIT sentry (spawn_cfg).
@@ -119,6 +130,40 @@ pub(crate) fn publish_str_alloc(pb: &HashMap<String, Vec<PortBinding>>, g: &Inne
         }
     }
     v.join(",")
+}
+
+/// Normalize a container mount target for dedup: strip a trailing slash (except root). `/data/` and
+/// `/data` name the same mount point, so an image VOLUME at a `-v`-covered path isn't duplicated.
+fn norm_dir(p: &str) -> String { let t = p.trim_end_matches('/'); if t.is_empty() { "/".into() } else { t.to_string() } }
+
+/// Recursively copy the contents of `src` INTO `dst` (files, dirs, symlinks) — Moby's `populateVolumes`:
+/// a freshly-created anonymous volume is seeded with the image's existing content at the mount point, so
+/// a `VOLUME /var/lib/postgresql/data` over a populated image dir keeps those files instead of hiding
+/// them behind an empty mount. Best-effort (never fails the create on an I/O error).
+fn copy_dir_into(src: &std::path::Path, dst: &std::path::Path) {
+    let Ok(rd) = std::fs::read_dir(src) else { return };
+    for e in rd.flatten() {
+        let from = e.path();
+        let to = dst.join(e.file_name());
+        match e.file_type() {
+            Ok(ft) if ft.is_dir() => { let _ = std::fs::create_dir_all(&to); copy_dir_into(&from, &to); }
+            Ok(ft) if ft.is_symlink() => { if let Ok(t) = std::fs::read_link(&from) { let _ = std::os::unix::fs::symlink(t, &to); } }
+            _ => { let _ = std::fs::copy(&from, &to); }
+        }
+    }
+}
+
+/// Create an ANONYMOUS local volume (64-hex name, docker-style) backing container path `target`, seeding
+/// it from the image's content at that path (populateVolumes). Returns the [`Vol`]; the caller registers
+/// it + records the name in the container's `anon_volumes` (so `rm -v`/prune can reclaim it).
+fn anon_volume(volumes_dir: &str, image_rootfs: &str, target: &str, cid: &str) -> Vol {
+    let name = fake_id(&format!("anon:{cid}:{target}:{}", now_nanos()));
+    let mountpoint = PathBuf::from(volumes_dir).join(&name);
+    let _ = std::fs::create_dir_all(&mountpoint);
+    let src = PathBuf::from(image_rootfs).join(target.trim_start_matches('/'));
+    if src.is_dir() { copy_dir_into(&src, &mountpoint); }
+    Vol { name, mountpoint: mountpoint.to_string_lossy().into_owned(), created_at: now_secs(),
+        driver: "local".into(), options: HashMap::new(), labels: HashMap::new() }
 }
 
 #[derive(Deserialize)]
@@ -202,9 +247,75 @@ pub(crate) async fn containers_create(State(a): State<App>, Query(cq): Query<Cre
         }
         dir.to_string_lossy().into_owned()
     };
+    // ---- Volumes/mounts: tmpfs, `--mount type=tmpfs`, bare `-v /path` + image `VOLUME` anon volumes ----
+    // Moby wires every mount through one list; here we (1) fold tmpfs specs out of Binds/Mounts into the
+    // `tmpfs` map, (2) turn a bare `-v /path` and each uncovered image `VOLUME` dir into an anonymous
+    // volume seeded from the image (populateVolumes) so data dirs persist as a real volume rather than a
+    // vanishing overlay upper. `covered` tracks targets an explicit mount already claims (no duplication).
+    let img_rootfs = img.rootfs.clone();
+    let mut binds = hc.as_ref().and_then(|h| h.binds.clone()).unwrap_or_default();
+    let mut mounts = hc.as_ref().and_then(|h| h.mounts.clone()).unwrap_or_default();
+    let mut tmpfs = hc.as_ref().and_then(|h| h.tmpfs.clone()).unwrap_or_default();
+    let mut anon_volumes: Vec<String> = Vec::new();
+    // Fold `--mount type=tmpfs` (Type=tmpfs, empty Source) into the tmpfs map; drop them from `mounts`.
+    mounts.retain(|m| {
+        if m.typ == "tmpfs" { if !m.target.is_empty() { tmpfs.entry(m.target.clone()).or_default(); } false } else { true }
+    });
+    // An ANONYMOUS volume mount (Type=volume with empty Source) — the shape the docker CLI often sends for
+    // a bare `-v /path` and for `--mount type=volume,destination=/x` with no source. Materialize it into a
+    // real anonymous volume seeded from the image (populateVolumes), so it persists/GCs like a named one.
+    for m in mounts.iter_mut() {
+        if m.typ == "volume" && m.source.is_empty() && !m.target.is_empty() {
+            let v = anon_volume(&a.volumes_dir, &img_rootfs, &m.target, &id);
+            let name = v.name.clone();
+            g.volumes.push(v);
+            crate::events::emit_event(&a.events, "volume", "create", &name, json!({"driver": "local"}));
+            anon_volumes.push(name.clone());
+            m.source = name;
+        }
+    }
+    let mut covered: std::collections::HashSet<String> = std::collections::HashSet::new();
+    for m in &mounts { if !m.target.is_empty() { covered.insert(norm_dir(&m.target)); } }
+    for t in tmpfs.keys() { covered.insert(norm_dir(t)); }
+    // Bare `-v /path` (single field, absolute) ⇒ anonymous volume at /path; `name:/dst` and `/host:/dst`
+    // (both contain ':') are real named/bind mounts, left verbatim (their dst is marked covered).
+    let mut new_binds = Vec::with_capacity(binds.len());
+    for b in binds.drain(..) {
+        if !b.contains(':') && b.starts_with('/') {
+            let v = anon_volume(&a.volumes_dir, &img_rootfs, &b, &id);
+            let name = v.name.clone();
+            g.volumes.push(v);
+            crate::events::emit_event(&a.events, "volume", "create", &name, json!({"driver": "local"}));
+            covered.insert(norm_dir(&b));
+            anon_volumes.push(name.clone());
+            new_binds.push(format!("{name}:{b}"));
+        } else {
+            if let Some((_, dst, _)) = parse_bind(&b) { covered.insert(norm_dir(dst)); }
+            new_binds.push(b);
+        }
+    }
+    let mut binds = new_binds;
+    // Anonymous volumes from the image `VOLUME` set AND the create-body `Config.Volumes` (where the docker
+    // CLI puts a bare `-v /path`): each uncovered dir gets a fresh anonymous volume seeded from the image.
+    let mut anon_dirs: Vec<String> = img.img_volumes.clone();
+    if let Some(cv) = body.volumes.as_ref() { for k in cv.keys() { anon_dirs.push(k.clone()); } }
+    for vdir in &anon_dirs {
+        if vdir.is_empty() || covered.contains(&norm_dir(vdir)) { continue; }
+        let v = anon_volume(&a.volumes_dir, &img_rootfs, vdir, &id);
+        let name = v.name.clone();
+        g.volumes.push(v);
+        crate::events::emit_event(&a.events, "volume", "create", &name, json!({"driver": "local"}));
+        covered.insert(norm_dir(vdir));
+        anon_volumes.push(name.clone());
+        mounts.push(Mount { typ: "volume".into(), source: name, target: vdir.clone(), read_only: false });
+    }
+    // Resolved stop signal / timeout / healthcheck: the create-body override, else the image's.
+    let stop_signal = body.stop_signal.filter(|s| !s.is_empty()).unwrap_or_else(|| img.stop_signal.clone());
+    let stop_timeout = body.stop_timeout.unwrap_or(0).max(0);
+    let healthcheck = body.healthcheck.or_else(|| img.healthcheck.clone());
     let c = Container {
         id: id.clone(), image, rootfs: img.rootfs, upper, cmd, arch: Some(img.arch),
-        binds: hc.as_ref().and_then(|h| h.binds.clone()).unwrap_or_default(),
+        binds: std::mem::take(&mut binds),
         hostname: body.hostname.unwrap_or_default(),
         memory: hc.as_ref().and_then(|h| h.memory).unwrap_or(0),
         pids_limit: hc.as_ref().and_then(|h| h.pids_limit).unwrap_or(0),
@@ -226,10 +337,14 @@ pub(crate) async fn containers_create(State(a): State<App>, Query(cq): Query<Cre
         cap_add: hc.as_ref().and_then(|h| h.cap_add.clone()).unwrap_or_default(),
         cap_drop: hc.as_ref().and_then(|h| h.cap_drop.clone()).unwrap_or_default(),
         devices: hc.as_ref().and_then(|h| h.devices.clone()).unwrap_or_default(),
-        mounts: hc.as_ref().and_then(|h| h.mounts.clone()).unwrap_or_default(),
+        mounts: std::mem::take(&mut mounts),
         privileged: hc.as_ref().and_then(|h| h.privileged).unwrap_or(false),
         security_opt: hc.as_ref().and_then(|h| h.security_opt.clone()).unwrap_or_default(),
         auto_remove: hc.as_ref().and_then(|h| h.auto_remove).unwrap_or(false),
+        // Lifecycle/volume fidelity (Moby §6/§8): resolved stop signal/timeout, tmpfs mounts, the anon
+        // volumes this container owns (for `rm -v`/prune GC), and the resolved HEALTHCHECK.
+        stop_signal, stop_timeout, tmpfs, anon_volumes,
+        healthcheck,
         status: "created".into(), ..Default::default()
     };
     // Join the network now (fixes the bug where `docker run --network X` never added the container to
@@ -262,7 +377,8 @@ pub(crate) async fn containers_start(State(a): State<App>, Path(id): Path<String
         let full = match resolve_cid(&g, &id) { Some(f) => f, None => return no_such(&id) };
         let c = match g.containers.get(&full).cloned() { Some(c) => c, None => return no_such(&id) };
         let live = g.live.entry(full.clone()).or_insert_with(|| Live::new(c.tty)).clone();
-        if let Some(cc) = g.containers.get_mut(&full) { cc.status = "running".into(); cc.started_at = now_secs(); cc.started_at_ns = now_nanos(); }
+        // An explicit start clears the durable manual-stop flag (the container is deliberately up again).
+        if let Some(cc) = g.containers.get_mut(&full) { cc.status = "running".into(); cc.started_at = now_secs(); cc.started_at_ns = now_nanos(); cc.manually_stopped = false; }
         (c, g.volumes.clone(), live)
     };
     if std::env::var("DD_DEBUG").is_ok() { eprintln!("[start] {} cmd={:?}", &c.id[..12], c.cmd); }
@@ -279,9 +395,23 @@ pub(crate) struct KillQ { signal: Option<String> }
 
 /// POST /containers/:id/stop?t=N&signal=SIG -- default signal SIGTERM, default t=10s.
 pub(crate) async fn containers_stop(State(a): State<App>, Path(id): Path<String>, Query(q): Query<StopQ>) -> Response {
-    let sig = q.signal.as_deref().map(|s| parse_signal(s, libc::SIGTERM)).unwrap_or(libc::SIGTERM);
-    let t = q.t.unwrap_or(10).max(0);
+    let (def_sig, def_t) = resolve_stop_defaults(&a, &id).await;
+    let sig = q.signal.as_deref().map(|s| parse_signal(s, def_sig)).unwrap_or(def_sig);
+    let t = q.t.unwrap_or(def_t).max(0);
     do_stop(&a, &id, sig, t).await
+}
+
+/// The `(signal, timeout)` a signal-less `docker stop`/`restart` uses for this container: its configured
+/// StopSignal (image `Config.StopSignal` / `--stop-signal` — nginx SIGQUIT, postgres SIGINT) and
+/// StopTimeout (`--stop-timeout`), each falling back to docker's defaults SIGTERM / 10s when unset. This
+/// is the §8.3-3 repair: the stop path was hardcoded SIGTERM/10s and ignored both.
+async fn resolve_stop_defaults(a: &App, id: &str) -> (i32, i64) {
+    let g = a.inner.lock().await;
+    resolve_cid(&g, id).and_then(|f| g.containers.get(&f)).map(|c| {
+        let s = if c.stop_signal.is_empty() { libc::SIGTERM } else { parse_signal(&c.stop_signal, libc::SIGTERM) };
+        let t = if c.stop_timeout > 0 { c.stop_timeout } else { 10 };
+        (s, t)
+    }).unwrap_or((libc::SIGTERM, 10))
 }
 
 /// Signal a container's whole process group. The JIT leader is its own group leader (setpgid at spawn
@@ -303,7 +433,7 @@ pub(crate) async fn containers_kill(State(a): State<App>, Path(id): Path<String>
         if let Some(pid) = *l.pid.lock().unwrap() { kill_group(pid as i32, sig); } // whole group, not just the leader
     }
     crate::containers::ports::stop(&full); // free published host ports (docker kill releases the binding)
-    if let Some(c) = g.containers.get_mut(&full) { c.status = "exited".into(); c.finished_at = now_secs(); c.finished_at_ns = now_nanos(); }
+    if let Some(c) = g.containers.get_mut(&full) { c.status = "exited".into(); c.finished_at = now_secs(); c.finished_at_ns = now_nanos(); c.manually_stopped = true; }
     let (cname, cimage) = g.containers.get(&full).map(|c| (c.name.clone(), c.image.clone())).unwrap_or_default();
     crate::events::emit_event(&a.events, "container", "kill", &full, json!({"name": cname, "image": cimage}));
     save_state(&g, &a.state_path);
@@ -318,8 +448,9 @@ pub(crate) async fn containers_kill(State(a): State<App>, Path(id): Path<String>
 /// (a deliberate `docker restart` must not be double-counted as a crash); this handler owns the respawn.
 /// The new `Live` starts with `stop_requested=false`, so a *future* crash still follows `--restart`.
 pub(crate) async fn containers_restart(State(a): State<App>, Path(id): Path<String>, Query(q): Query<StopQ>) -> Response {
-    let sig = q.signal.as_deref().map(|s| parse_signal(s, libc::SIGTERM)).unwrap_or(libc::SIGTERM);
-    let t = q.t.unwrap_or(10).max(0);
+    let (def_sig, def_t) = resolve_stop_defaults(&a, &id).await;
+    let sig = q.signal.as_deref().map(|s| parse_signal(s, def_sig)).unwrap_or(def_sig);
+    let t = q.t.unwrap_or(def_t).max(0);
     // Stop the running process (if any). `do_stop` blocks until the old reaper flips status to "exited"
     // (or the container had no live process), so its state writes are done before we install the new Live.
     let _ = do_stop(&a, &id, sig, t).await;
@@ -330,7 +461,7 @@ pub(crate) async fn containers_restart(State(a): State<App>, Path(id): Path<Stri
         // Replace the spent Live with a fresh one (mirrors maybe_restart / start's spawn).
         let live = Live::new(c.tty);
         g.live.insert(full.clone(), live.clone());
-        if let Some(cc) = g.containers.get_mut(&full) { cc.status = "running".into(); cc.started_at = now_secs(); cc.started_at_ns = now_nanos(); }
+        if let Some(cc) = g.containers.get_mut(&full) { cc.status = "running".into(); cc.started_at = now_secs(); cc.started_at_ns = now_nanos(); cc.manually_stopped = false; }
         (c, g.volumes.clone(), live)
     };
     if std::env::var("DD_DEBUG").is_ok() { eprintln!("[restart] {} cmd={:?}", &c.id[..12], c.cmd); }
@@ -433,8 +564,20 @@ pub(crate) async fn containers_delete(State(a): State<App>, Path(id): Path<Strin
         if force && running { if let Some(pid) = *l.pid.lock().unwrap() { kill_group(pid as i32, libc::SIGKILL); } } // whole group, not just the leader
     }
     crate::containers::ports::stop(&full); // free any published host ports before the container is gone
+    let rm_vols = q_truthy(&q.v);
     if let Some(dc) = g.containers.remove(&full) {
         crate::events::emit_event(&a.events, "container", "destroy", &full, json!({"name": dc.name, "image": dc.image}));
+        // `docker rm -v`: reclaim this container's ANONYMOUS volumes (bare `-v /path` + image `VOLUME`
+        // dirs) — Moby removes only anonymous volumes on rm, never named ones (mounts.go:removeMountPoints).
+        if rm_vols {
+            for name in &dc.anon_volumes {
+                if let Some(v) = g.volumes.iter().find(|v| &v.name == name) { let _ = std::fs::remove_dir_all(&v.mountpoint); }
+                g.volumes.retain(|v| &v.name != name);
+                crate::events::emit_event(&a.events, "volume", "destroy", name, json!({"driver": "local"}));
+            }
+        }
+        // Reclaim any tmpfs scratch dirs this container owns (never persisted; always safe to drop).
+        let _ = std::fs::remove_dir_all(dd_home().join("containers").join(&full).join("tmpfs"));
         // Drop the container from any network membership too.
         for n in g.networks.iter_mut() { leave_network(n, &full); }
         // Reclaim the container's private writable upper layer (Docker discards the writable layer on rm).

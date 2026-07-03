@@ -343,6 +343,43 @@ pub(crate) async fn containers_logs(State(a): State<App>, Path(id): Path<String>
         .body(Body::from_stream(body)).unwrap()
 }
 
+/// The resolved `Mounts[]` array a docker client reads — the §6.3-9 repair. Covers ALL mount surfaces
+/// with the fidelity docker reports: `-v`/Binds split into Type=bind (absolute host src) vs Type=volume
+/// (a named volume, carrying Name + resolved Source mountpoint + Driver), `--mount` bind/volume specs
+/// (volume ones likewise carry Name/Driver), and `--tmpfs`/`type=tmpfs` as Type=tmpfs. Previously only
+/// `c.binds` were enumerated and everything was hardcoded Type=bind (Name/Driver/tmpfs all dropped).
+pub(crate) fn container_mounts_json(vols: &[Vol], c: &Container) -> Vec<Value> {
+    let vol_mp = |name: &str| vols.iter().find(|v| v.name == name).map(|v| v.mountpoint.clone()).unwrap_or_default();
+    let mut out: Vec<Value> = Vec::new();
+    for b in &c.binds {
+        if let Some((src, dst, ro)) = parse_bind(b) {
+            if src.starts_with('/') {
+                out.push(json!({"Type": "bind", "Source": src, "Destination": dst, "Mode": if ro {"ro"} else {""}, "RW": !ro, "Propagation": "rprivate"}));
+            } else {
+                out.push(json!({"Type": "volume", "Name": src, "Source": vol_mp(src), "Destination": dst, "Driver": "local", "Mode": if ro {"ro"} else {"z"}, "RW": !ro, "Propagation": ""}));
+            }
+        }
+    }
+    for m in &c.mounts {
+        if m.typ == "volume" {
+            out.push(json!({"Type": "volume", "Name": m.source, "Source": vol_mp(&m.source), "Destination": m.target, "Driver": "local", "RW": !m.read_only, "Propagation": ""}));
+        } else {
+            out.push(json!({"Type": m.typ, "Source": m.source, "Destination": m.target, "RW": !m.read_only, "Propagation": "rprivate"}));
+        }
+    }
+    for target in c.tmpfs.keys() {
+        out.push(json!({"Type": "tmpfs", "Source": "", "Destination": target, "RW": true, "Mode": ""}));
+    }
+    out
+}
+
+/// `State.Health` (inspect) when a HEALTHCHECK is configured — else None (docker omits the key). Mirrors
+/// Moby's `container.Health` shape: Status (starting/healthy/unhealthy), FailingStreak, Log[].
+pub(crate) fn health_json(c: &Container) -> Option<Value> {
+    c.health.as_ref().map(|h| json!({"Status": h.status, "FailingStreak": h.failing_streak,
+        "Log": h.log.iter().map(|l| json!({"Start": l.start, "End": l.end, "ExitCode": l.exit_code, "Output": l.output})).collect::<Vec<_>>()}))
+}
+
 pub(crate) async fn containers_inspect(State(a): State<App>, Path(id): Path<String>) -> Response {
     let g = a.inner.lock().await;
     let Some(full) = resolve_cid(&g, &id) else { return no_such(&id) };
@@ -368,23 +405,34 @@ pub(crate) async fn containers_inspect(State(a): State<App>, Path(id): Path<Stri
                 .collect();
             // Top-level NetworkSettings.IPAddress = the primary endpoint IP (first joined network).
             let primary = g.networks.iter().find_map(|n| n.endpoints.get(&c.id).map(|e| (e.ip.clone(), n.gateway.clone()))).unwrap_or_default();
+            // State, adding `Health` only when a HEALTHCHECK is configured (docker omits it otherwise).
+            // §8.3-4: the always-present state booleans docker emits (Restarting from the backoff window;
+            // OOMKilled/Dead not modelled by dd's reaper, reported false; Error empty). Running stays true
+            // through the restart backoff (Moby keeps Running=true while restarting).
+            let restarting = c.status == "restarting";
+            let mut state = json!({"Status": c.status, "ExitCode": c.exit_code, "Running": running || restarting,
+                "Paused": c.status == "paused", "Restarting": restarting, "OOMKilled": false, "Dead": false, "Error": "",
+                "Pid": pid, "StartedAt": started_at, "FinishedAt": finished_at});
+            if let Some(h) = health_json(c) { state["Health"] = h; }
+            // Config.Healthcheck / StopSignal round-trip so a client diffs the resolved lifecycle config.
+            let cfg_health = c.healthcheck.as_ref().map(|h| json!({"Test": h.test, "Interval": h.interval,
+                "Timeout": h.timeout, "Retries": h.retries, "StartPeriod": h.start_period})).unwrap_or(Value::Null);
+            let stop_signal = if c.stop_signal.is_empty() { Value::Null } else { json!(c.stop_signal) };
             Json(json!({"Id": c.id, "Image": c.image, "Created": fmt_rfc3339(c.created),
             "Name": format!("/{}", if c.name.is_empty() { c.id[..12.min(c.id.len())].to_string() } else { c.name.clone() }),
-            "State": {"Status": c.status, "ExitCode": c.exit_code, "Running": running, "Paused": c.status == "paused",
-                "Pid": pid, "StartedAt": started_at, "FinishedAt": finished_at},
-            "Config": {"Cmd": c.cmd, "Hostname": c.hostname, "Image": c.image, "Env": c.env, "Labels": c.labels},
+            "State": state,
+            "Config": {"Cmd": c.cmd, "Hostname": c.hostname, "Image": c.image, "Env": c.env, "Labels": c.labels,
+                "Healthcheck": cfg_health, "StopSignal": stop_signal},
             "RestartCount": c.restart_count,
-            // Top-level resolved Mounts: the `-v`/Binds path (Type=bind) plus any `--mount` specs (their
-            // declared bind/volume Type), honoring ReadOnly (RW=false) for the mount specs.
-            "Mounts": c.binds.iter().filter_map(|b| parse_bind(b).map(|(s, d, ro)| json!({"Source": s, "Destination": d, "Type": "bind", "RW": !ro})))
-                .chain(c.mounts.iter().map(|m| json!({"Type": m.typ, "Source": m.source, "Destination": m.target, "RW": !m.read_only})))
-                .collect::<Vec<_>>(),
+            // Top-level resolved Mounts (bind/volume/tmpfs, with volume Name/Driver) — see container_mounts_json.
+            "Mounts": container_mounts_json(&g.volumes, c),
             // HostConfig round-trips the fidelity extras verbatim so docker clients diff them cleanly.
             "HostConfig": {"Binds": c.binds, "Memory": c.memory, "PidsLimit": c.pids_limit,
                 "NanoCpus": c.nano_cpus, "ReadonlyRootfs": c.readonly_rootfs,
                 "Ulimits": c.ulimits.iter().map(|u| json!({"Name": u.name, "Soft": u.soft, "Hard": u.hard})).collect::<Vec<_>>(),
                 "RestartPolicy": {"Name": c.restart_policy.name, "MaximumRetryCount": c.restart_policy.max_retry},
                 "CapAdd": c.cap_add, "CapDrop": c.cap_drop, "Devices": c.devices, "Mounts": c.mounts,
+                "Tmpfs": c.tmpfs, "StopTimeout": c.stop_timeout,
                 "Privileged": c.privileged, "SecurityOpt": c.security_opt},
             // NetworkSettings present so `docker port` (reads .NetworkSettings.Ports) doesn't panic.
             "NetworkSettings": {"Ports": ports_map_json(&c.publish), "IPAddress": primary.0, "Gateway": primary.1,
@@ -452,7 +500,10 @@ fn human_status(c: &Container) -> String {
         else if secs < 3600 { format!("{} minutes", secs / 60) }
         else if secs < 86400 { format!("{} hours", secs / 3600) }
         else { format!("{} days", secs / 86400) };
-    if c.status == "running" || c.status == "paused" {
+    if c.status == "restarting" {
+        // Docker shows a container in its restart-backoff window as "Restarting (code) …".
+        format!("Restarting ({}) {dur} ago", c.exit_code)
+    } else if c.status == "running" || c.status == "paused" {
         format!("Up {dur}")
     } else if c.status == "created" {
         // A created-but-never-started container shows a bare "Created" (no elapsed time), matching docker.
@@ -500,13 +551,16 @@ pub(crate) async fn containers_json(State(a): State<App>, Query(q): Query<PsQ>) 
         // A before/since (like status) filter implies "show all matching", not just running.
         let order_filter = filters.contains_key("before") || filters.contains_key("since");
         g.containers.values()
-            .filter(|c| all || status_filter || order_filter || c.status == "running")
+            .filter(|c| all || status_filter || order_filter || c.status == "running" || c.status == "restarting")
             .filter(|c| {
                 let name = if c.name.is_empty() { c.id[..12.min(c.id.len())].to_string() } else { c.name.clone() };
                 ps_match(c, &name, &filters, before_ts, since_ts)
             })
             .cloned().collect()
     };
+    // Resolve named-volume mountpoints for the Mounts array below (the g lock is released after the block
+    // above, so snapshot the volume set here).
+    let vols_snapshot: Vec<Vol> = { a.inner.lock().await.volumes.clone() };
     // Docker lists containers newest-first (by creation time); our container map is unordered, so a raw
     // walk yields an arbitrary order and `docker ps`/`ps -q` would return IDs in an unpredictable order.
     // Sort descending by `created` (tie-break on `started_at`) to match docker's ordering.
@@ -516,7 +570,7 @@ pub(crate) async fn containers_json(State(a): State<App>, Query(q): Query<PsQ>) 
         "Id": c.id, "Image": c.image, "Command": c.cmd.join(" "), "Created": c.created,
         "State": c.status, "Status": human_status(c), "ExitCode": c.exit_code, "Ports": ports_json(&c.publish),
         "Labels": c.labels,
-        "Mounts": c.binds.iter().filter_map(|b| parse_bind(b).map(|(s, d, ro)| json!({"Source": s, "Destination": d, "Type": "bind", "RW": !ro}))).collect::<Vec<_>>(),
+        "Mounts": container_mounts_json(&vols_snapshot, c),
         "Names": [format!("/{}", if c.name.is_empty() { c.id[..12.min(c.id.len())].to_string() } else { c.name.clone() })]});
         // Only emit the size keys when requested -- docker omits them otherwise.
         if want_size {

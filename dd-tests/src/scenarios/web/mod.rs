@@ -5,12 +5,18 @@
 //!
 //! Every case below is verified against the REAL docker oracle (`--backend real`). Known dd gaps are
 //! `.xfail()`-marked so the gate stays green and XPASS fires when the engine lane fixes them:
-//!   * httpd (alpine AND glibc): the exec-loader gap (`exec-loader-noent`, GAPS.md) — httpd's entry
-//!     binary fails to load under dd; nginx works (binary-link-shape dependent). xfail both arches.
+//!   * httpd MUSL (httpd:alpine) — NOW WORKS on x86 under dd (verified: `docker exec` starts httpd and it
+//!     serves "It works!"; XPASS on amd, Real amd green). No xfail. On arm it SKIPS: the single-arch
+//!     `poc/images` store holds httpd:alpine at x86_64 only, so the arm cell can't be served (skip, not a
+//!     gap — see scenario.rs `store_arch`). Seeding an arm httpd:alpine needs a network pull (egress
+//!     blocked here), so arm stays a clean skip until the store carries it.
+//!   * httpd GLIBC (httpd:2.4) — still fails under dd on ARM (the residual glibc dynamic-linker/exec path
+//!     gap). The store holds httpd:2.4 at aarch64 only, so it runs (and xfails) on arm and SKIPS on amd.
+//!     `.xfail(ArmLinux)`.
 
 use crate::scenario::{scen, sgroup, ScenGroup, Target};
 
-const BOTH: &[Target] = &[Target::ArmLinux, Target::AmdLinux];
+const ARM: &[Target] = &[Target::ArmLinux];
 
 pub fn group() -> ScenGroup {
     sgroup("web", vec![
@@ -146,35 +152,31 @@ haproxy -f /tmp/h.cfg -D; sleep 1; wget -qO- http://127.0.0.1/")
             .exec("varnishd -C -f /etc/varnish/default.vcl 2>&1 | grep -o VRT_ | head -1")
             .has("VRT_").timeout(45),
 
-        // ---- httpd / apache — xfail both Linux arches (exec-loader-noent gap, GAPS.md) ------------
-        // httpd's entry binary fails to load under dd (open: No such file or directory); proven correct
-        // on Real. nginx works → binary-link-shape dependent. Same family as fork-exec.
+        // ---- httpd / apache — MUSL (httpd:alpine) now serves under dd on x86 (XPASS on amd; Real green).
+        // No xfail: amd PASSES, arm SKIPS (store holds httpd:alpine at x86_64 only → single-arch skip).
         scen("web/httpd-serve", "httpd:alpine")
             .exec("httpd -k start 2>/dev/null; sleep 1; wget -qO- http://127.0.0.1/")
-            .has("It works!").timeout(60)
-            .xfail(BOTH),
+            .has("It works!").timeout(60),
         scen("web/httpd-version", "httpd:alpine")
             .exec("httpd -v 2>&1")
-            .has("Apache/2.4").timeout(45)
-            .xfail(BOTH),
+            .has("Apache/2.4").timeout(45),
         scen("web/httpd-custom", "httpd:alpine")
             .exec("echo dd-served-ok > /usr/local/apache2/htdocs/dd.txt; httpd -k start 2>/dev/null; \
                    sleep 1; wget -qO- http://127.0.0.1/dd.txt")
-            .has("dd-served-ok").timeout(60)
-            .xfail(BOTH),
+            .has("dd-served-ok").timeout(60),
         scen("web/httpd-config-test", "httpd:alpine")
             .exec("httpd -t 2>&1")
-            .has("Syntax OK").timeout(45)
-            .xfail(BOTH),
-        // glibc apache (debian).
+            .has("Syntax OK").timeout(45),
+        // glibc apache (debian) — still fails on arm under dd (residual glibc linker/exec gap); the store
+        // holds httpd:2.4 at aarch64 only → runs+xfails on arm, skips on amd. `.xfail(ARM)`.
         scen("web/httpd-glibc-version", "httpd:2.4")
             .exec("httpd -v 2>&1")
             .has("Apache/2.4").timeout(45)
-            .xfail(BOTH),
+            .xfail(ARM),
         // glibc apache config-test (debian httpd ships no wget/curl, so no loopback fetch here).
         scen("web/httpd-glibc-config", "httpd:2.4")
             .exec("httpd -t 2>&1")
             .has("Syntax OK").timeout(45)
-            .xfail(BOTH),
+            .xfail(ARM),
     ])
 }

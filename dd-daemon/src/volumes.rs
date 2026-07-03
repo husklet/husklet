@@ -31,6 +31,19 @@ use ddjit::{Guest, PortMap, SpawnConfig, Volume};
 
 // ---- volumes ---------------------------------------------------------------
 
+/// Whether any container currently references the volume named `name` (mountpoint `mp`). Covers BOTH
+/// mount surfaces — `-v name:/dst` / bind-by-mountpoint (`c.binds`) AND `--mount type=volume,source=name`
+/// (`c.mounts`) — so a volume wired via `--mount` (or an anonymous volume) is no longer prunable/removable
+/// while a container uses it. Previously only `c.binds` was scanned, so a `--mount` volume looked unused
+/// and could be reclaimed out from under a live container (§6.3-6).
+pub(crate) fn volume_in_use(g: &Inner, name: &str, mp: Option<&str>) -> bool {
+    g.containers.values().any(|c| {
+        c.binds.iter().any(|b| b.split(':').next().map_or(false, |src| src == name || mp == Some(src)))
+            || c.mounts.iter().any(|m| m.typ == "volume" && m.source == name)
+            || c.anon_volumes.iter().any(|a| a == name)
+    })
+}
+
 pub(crate) fn vol_json(v: &Vol) -> Value {
     let driver = if v.driver.is_empty() { "local".to_string() } else { v.driver.clone() };
     json!({"Name": v.name, "Driver": driver, "Mountpoint": v.mountpoint,
@@ -84,9 +97,7 @@ pub(crate) async fn volume_inspect(State(a): State<App>, Path(name): Path<String
 pub(crate) async fn volume_delete(State(a): State<App>, Path(name): Path<String>) -> Response {
     let mut g = a.inner.lock().await;
     let mountpoint = g.volumes.iter().find(|v| v.name == name).map(|v| v.mountpoint.clone());
-    let in_use = g.containers.values().any(|c| c.binds.iter().any(|b| {
-        b.split(':').next().map_or(false, |src| src == name || mountpoint.as_deref() == Some(src))
-    }));
+    let in_use = volume_in_use(&g, &name, mountpoint.as_deref());
     if in_use {
         return (StatusCode::CONFLICT, Json(json!({"message": format!("remove {name}: volume is in use")}))).into_response();
     }
@@ -106,11 +117,10 @@ pub(crate) async fn volume_delete(State(a): State<App>, Path(name): Path<String>
 /// binds and reports reclaimed names. (No space accounting yet.)
 pub(crate) async fn volumes_prune(State(a): State<App>) -> Json<Value> {
     let mut g = a.inner.lock().await;
-    let in_use: std::collections::HashSet<String> = g.containers.values()
-        .flat_map(|c| c.binds.iter().filter_map(|b| b.split(':').next().map(str::to_string)))
-        .collect();
+    // Prune every volume no container references — scanning BOTH `-v`/Binds AND `--mount`/anon volumes
+    // (via `volume_in_use`), so an in-use `--mount type=volume` volume is no longer wrongly reclaimed.
     let pruned: Vec<String> = g.volumes.iter()
-        .filter(|v| !in_use.contains(&v.name) && !in_use.contains(&v.mountpoint))
+        .filter(|v| !volume_in_use(&g, &v.name, Some(&v.mountpoint)))
         .map(|v| v.name.clone()).collect();
     g.volumes.retain(|v| !pruned.contains(&v.name));
     for name in &pruned { let _ = std::fs::remove_dir_all(std::path::Path::new(&a.volumes_dir).join(name)); }

@@ -110,6 +110,26 @@ fn resolve_user(rootfs: &str, spec: &str) -> Option<(u32, u32)> {
 }
 
 
+/// Per-container host scratch dir backing a `--tmpfs`/`--mount type=tmpfs` mount at `target`. A plain
+/// host dir (path-spliced over the guest target like a bind); it is cleared fresh on every container
+/// start (see [`clear_tmpfs`]), so the guest sees an empty mount each run — the "in-memory tmpfs" contract
+/// that matters to callers. Keyed by CONTAINER id (an exec passes the container's id via `netns_key`) so
+/// an exec into the container sees the same tmpfs. Size/mode options are metadata only (not a real tmpfs).
+pub(crate) fn tmpfs_hostdir(cid: &str, target: &str) -> String {
+    let slug: String = target.chars().map(|c| if c.is_ascii_alphanumeric() { c } else { '_' }).collect();
+    crate::util::dd_home().join("containers").join(cid).join("tmpfs").join(slug).to_string_lossy().into_owned()
+}
+
+/// Reset every `--tmpfs` target of a container to a FRESH empty dir. Called on each real container start
+/// (never on an exec, which must not wipe the container's live tmpfs). Best-effort.
+pub(crate) fn clear_tmpfs(c: &Container) {
+    for target in c.tmpfs.keys() {
+        let d = tmpfs_hostdir(&c.id, target);
+        let _ = std::fs::remove_dir_all(&d);
+        let _ = std::fs::create_dir_all(&d);
+    }
+}
+
 /// Docker's default container PATH (moby's `system.DefaultPathEnv` for unix). Used when neither the
 /// image config nor a `-e PATH=` override supplies one, so bare commands in the standard sbin/bin dirs
 /// (e.g. alpine's `apk` in /sbin) resolve without an absolute path.
@@ -160,7 +180,11 @@ pub(crate) fn spawn_cfg(c: &Container, volumes_dir: &str, vols: &[Vol], bridge: 
     // an explicit `-e KEY=` overrides the image) with a docker-default PATH when the image set none.
     let genv = guest_env(&c.env, c.tty);
     if !genv.is_empty() { cfg.env.push(("DD_GUEST_ENV".into(), genv.join("\n"))); }
-    cfg.hostname = (!c.hostname.is_empty()).then(|| c.hostname.clone());
+    // Effective UTS hostname: the user's `--hostname`, else Docker's default of the 12-char short id.
+    // Passed to the engine (DD_HOSTNAME -> gethostname/uname) AND written to /etc/hostname in spawn_live,
+    // so both agree and match Docker (previously an unset hostname left gethostname reporting the "jit"
+    // fallback and /etc/hostname was never generated at all).
+    cfg.hostname = Some(if c.hostname.is_empty() { c.id[..c.id.len().min(12)].to_string() } else { c.hostname.clone() });
     cfg.mem_max = c.memory.max(0) as u64;
     cfg.pids_max = c.pids_limit.max(0) as u32;
     // Resource fidelity: --cpus (NanoCpus -> ceil to whole online CPUs), --read-only, --ulimit. Threaded to
@@ -254,6 +278,14 @@ pub(crate) fn spawn_cfg(c: &Container, volumes_dir: &str, vols: &[Vol], bridge: 
         if host.is_empty() { continue; }
         cfg.volumes.push(Volume { container: m.target.clone(), host, ro: m.read_only });
     }
+    // `--tmpfs DST` / `--mount type=tmpfs`: a fresh empty scratch dir path-spliced over the guest target
+    // (same Volume mechanism as a bind). Keyed by the CONTAINER id (`netns_key` for an exec) so an exec
+    // shares the container's tmpfs. The dir is cleared to empty on each container start (clear_tmpfs).
+    let tmpfs_key = c.netns_key.as_deref().unwrap_or(&c.id);
+    for target in c.tmpfs.keys() {
+        if target.is_empty() { continue; }
+        cfg.volumes.push(Volume { container: target.clone(), host: tmpfs_hostdir(tmpfs_key, target), ro: false });
+    }
     // Published ports. The daemon now OWNS the process-independent host forwarder (see containers/ports.rs
     // + #320), so we tell the engine NOT to spin up its own in-process host TCP listener — that listener
     // lived in whichever guest process called listen(), which broke prefork/re-listening servers and raced
@@ -315,6 +347,9 @@ pub(crate) async fn spawn_live(app: &App, c: &Container, vols: &[Vol], live: Arc
     if live.started.swap(true, Ordering::SeqCst) {
         return true; // already started
     }
+    // `--tmpfs`: reset this container's tmpfs targets to a fresh empty dir for the new run. Skipped for an
+    // exec (netns_key is Some) — an exec must see the container's LIVE tmpfs, not wipe it.
+    if c.netns_key.is_none() { clear_tmpfs(c); }
     // Reach-by-name identity key. A `docker exec` runs with `c.id` set to the EXEC id (not a network
     // endpoint), but it JOINS the target container's network (`netns_key`), so it must inherit that
     // container's bridge (netid, ip) + /etc/hosts view — otherwise the exec'd process gets no DD_NETBR/
@@ -382,6 +417,13 @@ pub(crate) async fn spawn_live(app: &App, c: &Container, vols: &[Vol], live: Arc
         let resolv = "nameserver 127.0.0.11\noptions ndots:0\n";
         if let Err(e) = std::fs::write(format!("{etc}/resolv.conf"), resolv) {
             if std::env::var("DD_DEBUG").is_ok() { eprintln!("[live] {} write /etc/resolv.conf failed: {e}", &c.id[..c.id.len().min(12)]); }
+        }
+        // /etc/hostname: Docker generates this beside /etc/hosts and /etc/resolv.conf (the container's UTS
+        // name + newline), shadowing any image copy via the overlay upper. Same value spawn_cfg passes as
+        // DD_HOSTNAME -> gethostname(), so the two agree (user --hostname, else the 12-char short id).
+        let eff_hostname = if c.hostname.is_empty() { c.id[..c.id.len().min(12)].to_string() } else { c.hostname.clone() };
+        if let Err(e) = std::fs::write(format!("{etc}/hostname"), format!("{eff_hostname}\n")) {
+            if std::env::var("DD_DEBUG").is_ok() { eprintln!("[live] {} write /etc/hostname failed: {e}", &c.id[..c.id.len().min(12)]); }
         }
     }
     // #320: start the daemon-owned, process-independent host→container port forwarders. Idempotent (the
@@ -526,6 +568,19 @@ pub(crate) async fn spawn_live(app: &App, c: &Container, vols: &[Vol], live: Arc
     };
 
     *live.pid.lock().unwrap() = child.id(); // remember the pid so pause can SIGSTOP/SIGCONT it
+    // HEALTHCHECK (§8.3-1): a real container (not an exec) with a resolved probe gets a background monitor
+    // tied to THIS Live — it probes on `interval`, flips `State.Health` starting→healthy/unhealthy per
+    // `retries`/`start_period`, and exits when this Live's process dies (so a restart spawns a fresh one).
+    if c.netns_key.is_none() {
+        if let Some(hcfg) = c.healthcheck.clone() {
+            let app2 = app.clone();
+            let cid2 = c.id.clone();
+            let cont = c.clone();
+            let vols2 = vols.to_vec();
+            let exit_rx = live.exit_rx.clone();
+            tokio::spawn(async move { health_monitor(app2, cid2, cont, vols2, hcfg, exit_rx).await; });
+        }
+    }
     let app = app.clone();
     let cid = c.id.clone();
     let auto_remove = c.auto_remove; // `--rm`: drop the container from state once it exits (see below)
@@ -632,8 +687,10 @@ fn maybe_restart<'a>(app: &'a App, cid: &'a str, code: i64)
     let (name, max_retry, count, c, vols) = {
         let g = app.inner.lock().await;
         let Some(c) = g.containers.get(cid) else { return };
-        // Don't restart a container that's already been removed or re-started elsewhere.
-        if c.status != "exited" { return; }
+        // Don't restart a container that's already been removed or re-started elsewhere, nor one the user
+        // deliberately stopped (durable `manually_stopped` — the persisted HasBeenManuallyStopped; keeps
+        // `unless-stopped`/`always` from resurrecting a `docker stop`ped container even across a restart).
+        if c.status != "exited" || c.manually_stopped { return; }
         (c.restart_policy.name.clone(), c.restart_policy.max_retry, c.restart_count, c.clone(), g.volumes.clone())
     };
     let should = match name.as_str() {
@@ -642,6 +699,13 @@ fn maybe_restart<'a>(app: &'a App, cid: &'a str, code: i64)
         _ => false, // "no" / "" / unknown
     };
     if !should { return; }
+    // §8.3-4 state machine: the container is `restarting` for the duration of the backoff window (Moby's
+    // `SetRestarting` keeps Running=true through it) — inspect reports State.Restarting=true meanwhile.
+    {
+        let mut g = app.inner.lock().await;
+        if let Some(cc) = g.containers.get_mut(cid) { if cc.status == "exited" { cc.status = "restarting".into(); } }
+        save_state(&g, &app.state_path);
+    }
     // Backoff (capped) so a container that exits immediately doesn't spin the daemon.
     let backoff = (100u64 << (count.clamp(0, 6) as u32)).min(10_000);
     tokio::time::sleep(std::time::Duration::from_millis(backoff)).await;
@@ -650,8 +714,9 @@ fn maybe_restart<'a>(app: &'a App, cid: &'a str, code: i64)
     {
         let mut g = app.inner.lock().await;
         match g.containers.get(cid) {
-            // Re-check: a stop/rm may have raced in during the backoff.
-            Some(cc) if cc.status == "exited" => {}
+            // Re-check: a stop/rm may have raced in during the backoff. Accept the `restarting` status we
+            // set before the backoff (as well as `exited` for the legacy path).
+            Some(cc) if cc.status == "exited" || cc.status == "restarting" => {}
             _ => return,
         }
         // A deliberate `docker stop`/`kill`/`rm` during the backoff sets `stop_requested` on the OLD,
@@ -674,6 +739,90 @@ fn maybe_restart<'a>(app: &'a App, cid: &'a str, code: i64)
     spawn_live(app, &c, &vols, live).await;
     }) }
 
+
+/// Run ONE health probe: spawn the container's HEALTHCHECK test command as a fresh JIT process that JOINS
+/// the container's loopback (so `curl localhost`/`pg_isready -h localhost` reach the container's server),
+/// bounded by the probe timeout. Returns (exit_code, captured stdout+stderr). Docker's `Test` forms:
+/// `["CMD", argv…]` execs directly, `["CMD-SHELL", script]` runs via `/bin/sh -c`, a bare list is a
+/// legacy shell command. A timeout is recorded as exit -1 (matching docker).
+async fn run_health_probe(app: &App, cont: &Container, vols: &[Vol], hcfg: &HealthConfig) -> (i64, String) {
+    let mut test = hcfg.test.clone();
+    let argv = match test.first().map(|s| s.as_str()) {
+        Some("CMD-SHELL") => vec!["/bin/sh".to_string(), "-c".to_string(), test.get(1).cloned().unwrap_or_default()],
+        Some("CMD") => test.split_off(1),
+        Some("NONE") | None => return (0, String::new()),
+        _ => test,
+    };
+    if argv.is_empty() { return (0, String::new()); }
+    let mut temp = cont.clone();
+    temp.id = format!("health-{}", cont.id);
+    temp.netns_key = Some(cont.id.clone()); // share the container's 127.0.0.1 so localhost probes work
+    temp.cmd = argv;
+    temp.tty = false;
+    temp.healthcheck = None; // the probe process is not itself health-checked
+    let Some((prog, args)) = spawn_cfg(&temp, &app.volumes_dir, vols, None) else { return (-1, String::new()); };
+    let mut cmd = tokio::process::Command::new(prog);
+    cmd.args(args).stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped());
+    let timeout_ns = if hcfg.timeout > 0 { hcfg.timeout } else { 30_000_000_000 };
+    let child = match cmd.spawn() { Ok(c) => c, Err(e) => return (-1, format!("probe spawn: {e}")) };
+    match tokio::time::timeout(std::time::Duration::from_nanos(timeout_ns as u64), child.wait_with_output()).await {
+        Ok(Ok(out)) => {
+            let mut s = String::from_utf8_lossy(&out.stdout).into_owned();
+            s.push_str(&String::from_utf8_lossy(&out.stderr));
+            (out.status.code().unwrap_or(-1) as i64, s.chars().take(4096).collect())
+        }
+        Ok(Err(e)) => (-1, format!("probe: {e}")),
+        Err(_) => (-1, "Health check exceeded timeout".into()),
+    }
+}
+
+/// The HEALTHCHECK monitor loop for one running container (§8.3-1). Probes every `interval` (default 30s),
+/// maintaining inspect `State.Health`: exit 0 ⇒ healthy + streak reset; a non-zero probe increments the
+/// failing streak and, once it reaches `retries` (default 3) AND the `start_period` grace has elapsed,
+/// flips to unhealthy. Keeps the last 5 probe results in `Log[]`. Emits `health_status: …` events on a
+/// transition. Exits when the container's process dies (this Live's `exit` fires) or it stops running.
+async fn health_monitor(app: App, cid: String, cont: Container, vols: Vec<Vol>, hcfg: HealthConfig, mut exit_rx: watch::Receiver<Option<i64>>) {
+    let interval = std::time::Duration::from_nanos(if hcfg.interval > 0 { hcfg.interval } else { 30_000_000_000 } as u64);
+    let retries = if hcfg.retries > 0 { hcfg.retries } else { 3 };
+    let start_ns = hcfg.start_period.max(0);
+    let started = std::time::Instant::now();
+    {
+        let mut g = app.inner.lock().await;
+        let Some(c) = g.containers.get_mut(&cid) else { return };
+        c.health = Some(HealthState { status: "starting".into(), failing_streak: 0, log: Vec::new() });
+        save_state(&g, &app.state_path);
+    }
+    crate::events::emit_event(&app.events, "container", "health_status: starting", &cid, serde_json::json!({}));
+    loop {
+        tokio::select! {
+            _ = tokio::time::sleep(interval) => {}
+            _ = exit_rx.changed() => { if exit_rx.borrow().is_some() { break; } }
+        }
+        if { let g = app.inner.lock().await; g.containers.get(&cid).map(|c| c.status != "running").unwrap_or(true) } { break; }
+        let start_ts = now_secs();
+        let (code, output) = run_health_probe(&app, &cont, &vols, &hcfg).await;
+        let end_ts = now_secs();
+        let in_start_period = (started.elapsed().as_nanos() as i64) < start_ns;
+        let mut g = app.inner.lock().await;
+        let Some(c) = g.containers.get_mut(&cid) else { break };
+        if c.status != "running" { break; }
+        let h = c.health.get_or_insert_with(|| HealthState { status: "starting".into(), failing_streak: 0, log: Vec::new() });
+        let prev = h.status.clone();
+        h.log.push(HealthLog { start: fmt_rfc3339(start_ts), end: fmt_rfc3339(end_ts), exit_code: code, output });
+        let n = h.log.len(); if n > 5 { h.log.drain(..n - 5); }
+        if code == 0 {
+            h.failing_streak = 0;
+            h.status = "healthy".into();
+        } else {
+            h.failing_streak += 1;
+            if !in_start_period && h.failing_streak >= retries { h.status = "unhealthy".into(); }
+        }
+        let cur = h.status.clone();
+        save_state(&g, &app.state_path);
+        drop(g);
+        if cur != prev { crate::events::emit_event(&app.events, "container", &format!("health_status: {cur}"), &cid, serde_json::json!({})); }
+    }
+}
 
 /// Record the failure on a Live and finalize the container as exit 127. Returns false (spawn failed).
 pub(crate) async fn live_fail(app: &App, cid: &str, live: &Arc<Live>, msg: String) -> bool {

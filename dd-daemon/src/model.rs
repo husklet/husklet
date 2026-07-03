@@ -43,6 +43,42 @@ pub(crate) struct Image {
     pub(crate) exposed_ports: Vec<String>, // Config.ExposedPorts keys, e.g. "5432/tcp" (reported by inspect)
     pub(crate) created: i64,            // unix secs; image creation/discovery time
     pub(crate) labels: std::collections::HashMap<String, String>, // LABEL + build --label
+    // Lifecycle/volume image config a container inherits at run (Moby §6/§8):
+    pub(crate) stop_signal: String,     // Config.StopSignal — the signal `docker stop` sends (nginx SIGQUIT, postgres SIGINT); "" ⇒ SIGTERM
+    pub(crate) img_volumes: Vec<String>, // Config.Volumes keys — dirs that get an anonymous volume at run (postgres /var/lib/postgresql/data)
+    pub(crate) healthcheck: Option<HealthConfig>, // Config.Healthcheck — the container HEALTHCHECK probe (None / Test=["NONE"] ⇒ no probe)
+}
+
+/// Image `HEALTHCHECK` / `docker run --health-*` (Config.Healthcheck). Durations are nanoseconds (Go
+/// `time.Duration`, exactly how the OCI config + docker API encode them). `test` is docker's form:
+/// `["NONE"]` disables, `["CMD", argv…]` execs directly, `["CMD-SHELL", script]` runs via `/bin/sh -c`.
+/// Serde-renamed so it deserializes from the create body AND round-trips through inspect Config.Healthcheck.
+#[derive(Clone, Default, Serialize, Deserialize)]
+pub(crate) struct HealthConfig {
+    #[serde(rename = "Test", default)] pub(crate) test: Vec<String>,
+    #[serde(rename = "Interval", default)] pub(crate) interval: i64,       // ns between probes (0 ⇒ 30s)
+    #[serde(rename = "Timeout", default)] pub(crate) timeout: i64,         // ns a probe may run (0 ⇒ 30s)
+    #[serde(rename = "Retries", default)] pub(crate) retries: i64,         // consecutive failures ⇒ unhealthy (0 ⇒ 3)
+    #[serde(rename = "StartPeriod", default)] pub(crate) start_period: i64, // ns grace where a failure doesn't count
+}
+
+/// A container's live health, surfaced as inspect `State.Health`. `status` is starting/healthy/unhealthy;
+/// `failing_streak` is the current run of consecutive failing probes; `log` keeps the most recent probe
+/// results (docker caps this at 5). Mirrors Moby `container.Health`.
+#[derive(Clone, Default, Serialize, Deserialize)]
+pub(crate) struct HealthState {
+    #[serde(rename = "Status", default)] pub(crate) status: String,
+    #[serde(rename = "FailingStreak", default)] pub(crate) failing_streak: i64,
+    #[serde(rename = "Log", default)] pub(crate) log: Vec<HealthLog>,
+}
+
+/// One probe result in `State.Health.Log[]` (RFC3339 start/end, the probe's exit code + captured output).
+#[derive(Clone, Default, Serialize, Deserialize)]
+pub(crate) struct HealthLog {
+    #[serde(rename = "Start", default)] pub(crate) start: String,
+    #[serde(rename = "End", default)] pub(crate) end: String,
+    #[serde(rename = "ExitCode", default)] pub(crate) exit_code: i64,
+    #[serde(rename = "Output", default)] pub(crate) output: String,
 }
 
 
@@ -160,7 +196,38 @@ pub(crate) struct Container {
     // matching sandbox/untrusted opts the container into the JIT's untrusted-guest sentry (see spawn_cfg).
     #[serde(default)]
     pub(crate) auto_remove: bool, // `--rm` (HostConfig.AutoRemove): the daemon removes the container on exit.
-    // Mutually exclusive with restart_policy in docker; the reaper drops the container after finalizing exit.
+    // ---- Lifecycle/volume fidelity (Moby §6/§8) ----
+    // `--stop-signal` / image `Config.StopSignal`: the signal `docker stop` sends before the SIGKILL grace
+    // (nginx SIGQUIT, postgres SIGINT fast-shutdown). Empty ⇒ SIGTERM. Resolved at create (create-body
+    // override else the image's), so `docker stop` reads it here without touching the image.
+    #[serde(default)]
+    pub(crate) stop_signal: String,
+    // `--stop-timeout` / `Config.StopTimeout` (seconds): the SIGKILL grace after the stop signal. 0 ⇒ the
+    // daemon default (10s). A `docker stop -t N` still overrides per-call.
+    #[serde(default)]
+    pub(crate) stop_timeout: i64,
+    // `--tmpfs DST[:opts]` / `--mount type=tmpfs`: an in-memory-equivalent mount — a FRESH, empty writable
+    // dir cleared on every container start (never persisted). Keyed by container target path -> raw options
+    // (size=/mode=, kept for inspect fidelity). Backed by a per-container host dir path-spliced like a bind.
+    #[serde(default)]
+    pub(crate) tmpfs: std::collections::HashMap<String, String>,
+    // Names of ANONYMOUS volumes this container created (bare `-v /path` + image `VOLUME` dirs). Removed on
+    // `docker rm -v` and eligible for `volume prune`; NAMED volumes are never auto-removed. Mirrors Moby's
+    // "remove only anonymous volumes on rm" (mounts.go:removeMountPoints).
+    #[serde(default)]
+    pub(crate) anon_volumes: Vec<String>,
+    // Durable manual-stop flag — the persisted equivalent of Moby's `HasBeenManuallyStopped`. Set true by
+    // stop/kill/rm, cleared on an explicit start/restart. Survives a daemon restart so `unless-stopped`
+    // does NOT resurrect a container the user deliberately stopped (the in-memory `Live.stop_requested` is
+    // lost across a daemon restart; this is not).
+    #[serde(default)]
+    pub(crate) manually_stopped: bool,
+    // Resolved HEALTHCHECK config (create-body `--health-*` override else the image's), and the live probe
+    // state surfaced as inspect `State.Health`. `health` is None until the first probe runs.
+    #[serde(default)]
+    pub(crate) healthcheck: Option<HealthConfig>,
+    #[serde(default)]
+    pub(crate) health: Option<HealthState>,
     // Re-derived from the image at load; never serialized.
     #[serde(skip)]
     pub(crate) arch: Option<Guest>,

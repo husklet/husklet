@@ -319,7 +319,17 @@ static void load_elf(const char *path, struct loaded *out) {
     // Skip GO binaries: go_rebase_nonpie above already rebased their moduledata/.data pointers; a blind
     // .data scan here double-biases the Go name/type tables (etcd -> "nameOff ... not in ranges"). Detect
     // Go via .gopclntab (present in every Go binary, stripped or not).
-    if (g_nonpie_lo && !getenv("NORELRO") &&
+    // Restrict the blind .data rebasing to STATIC non-PIE images (no PT_INTERP). A static binary (musl jq,
+    // busybox) has no ld.so and its baked-absolute .data pointers are compared against rip-relative-lea
+    // HIGH values, so the words must move HIGH too. A DYNAMIC non-PIE (glibc gcc/cc1 driver) instead
+    // materializes those same pointers as LOW link addresses in code (mov-imm / data loads that dd's
+    // ea_bias17 folds on access), so it compares LOW==LOW natively -- rebasing its words HIGH is what broke
+    // gcc's set_static_spec pointer-identity check (gcc_unreachable ICE). Gating on static cleanly separates
+    // the two: jq/busybox stay rebased, gcc/cc1 stay low-consistent. DDRELRODYN=1 forces the old behavior.
+    int has_interp = 0;
+    for (int i = 0; i < phnum; i++)
+        if (rd32(f + phoff + (uint64_t)i * phentsize) == 3) { has_interp = 1; break; } // PT_INTERP
+    if (g_nonpie_lo && !getenv("NORELRO") && (!has_interp || getenv("DDRELRODYN")) &&
         !go_section_by_name(f, st.st_size, ".gopclntab", NULL, NULL, NULL)) {
         uint64_t shoff = rd64(f + 40);
         uint16_t shentsize = rd16(f + 58), shnum = rd16(f + 60), shstrndx = rd16(f + 62);
@@ -328,10 +338,7 @@ static void load_elf(const char *path, struct loaded *out) {
             for (int i = 0; i < shnum; i++) {
                 const uint8_t *sh = f + shoff + (uint64_t)i * shentsize;
                 const char *nm = (const char *)shstr + rd32(sh + 0);
-                int is_data = strcmp(nm, ".data") == 0, is_relro = strcmp(nm, ".data.rel.ro") == 0;
-                if (!is_data && !is_relro) continue;
-                if (getenv("DDONLYDATA") && !is_data) continue;
-                if (getenv("DDONLYRELRO") && !is_relro) continue;
+                if (strcmp(nm, ".data.rel.ro") != 0 && strcmp(nm, ".data") != 0) continue;
                 uint64_t saddr = rd64(sh + 16), ssize = rd64(sh + 32);
                 for (uint64_t o = 0; o + 8 <= ssize; o += 8) {
                     uint64_t *slot = (uint64_t *)(saddr + bias + o);

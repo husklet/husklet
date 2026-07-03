@@ -69,5 +69,60 @@ docker run -d --name ${C}old $PLAT $IMG sleep 300 >/dev/null
 docker rename ${C}old ${C}new
 docker inspect -f "{{.Name}}" ${C}new | grep -q "${C}new" && echo RENAMED
 echo "OLDGONE=$(docker ps -a -q -f name=${C}old | wc -l | tr -d " ")""#).has("RENAMED").has("OLDGONE=0"),
+
+        // §8.3-3 StopSignal: an image whose Config.StopSignal is SIGQUIT (or --stop-signal) makes a
+        // signal-less `docker stop` deliver SIGQUIT, not SIGTERM. The container traps SIGQUIT and exits 0;
+        // a TERM-only trap would never fire. Proves stop reads the configured StopSignal.
+        s("lifecycle/stop-signal-quit").host(r#"
+docker run -d --name ${C}c --stop-signal=SIGQUIT $PLAT $IMG \
+  sh -c 'trap "echo GOT_QUIT; exit 0" QUIT; trap "echo GOT_TERM; exit 3" TERM; while true; do sleep 0.2; done' >/dev/null
+sleep 0.6
+docker stop -t 5 ${C}c >/dev/null
+docker logs ${C}c 2>&1
+echo "RC=$(docker inspect -f '{{.State.ExitCode}}' ${C}c)""#).has("GOT_QUIT").has("RC=0"),
+
+        // §8.3-3 the configured StopSignal round-trips through inspect Config.StopSignal.
+        s("lifecycle/stop-signal-inspect").host(r#"
+docker create --name ${C}c --stop-signal=SIGINT $PLAT $IMG sleep 30 >/dev/null
+docker inspect -f "{{.Config.StopSignal}}" ${C}c"#).has("SIGINT"),
+
+        // §8.3-2 restart on-failure:N — a container that always fails is restarted EXACTLY N times, then
+        // stays stopped. RestartCount settles at N.
+        s("lifecycle/restart-on-failure-count").host(r#"
+docker run -d --name ${C}c --restart on-failure:2 $PLAT $IMG sh -c "exit 1" >/dev/null
+sleep 6
+docker inspect -f "count={{.RestartCount}} running={{.State.Running}}" ${C}c"#).has("count=2").has("running=false"),
+
+        // §8.3-5 unless-stopped: a deliberately `docker stop`ped container is NOT resurrected (durable
+        // manual-stop). It stays exited after the stop.
+        s("lifecycle/unless-stopped-manual").host(r#"
+docker run -d --name ${C}c --restart unless-stopped $PLAT $IMG sleep 300 >/dev/null; sleep 0.5
+docker stop -t 2 ${C}c >/dev/null; sleep 1.5
+docker inspect -f "{{.State.Running}}" ${C}c"#).has("false"),
+
+        // §8.3-1 HEALTHCHECK: a passing `--health-cmd` flips State.Health to healthy; the probe cadence is
+        // sub-second so the check resolves quickly.
+        s("lifecycle/healthcheck-healthy").host(r#"
+docker run -d --name ${C}c $PLAT \
+  --health-cmd="true" --health-interval=1s --health-retries=2 --health-timeout=3s \
+  $IMG sleep 300 >/dev/null
+for i in $(seq 1 15); do
+  H=$(docker inspect -f "{{.State.Health.Status}}" ${C}c 2>/dev/null)
+  [ "$H" = "healthy" ] && break
+  sleep 1
+done
+echo "HEALTH=$H""#).has("HEALTH=healthy").timeout(40),
+
+        // §8.3-1 HEALTHCHECK: a failing probe flips State.Health to unhealthy after `retries` failures.
+        s("lifecycle/healthcheck-unhealthy").host(r#"
+docker run -d --name ${C}c $PLAT \
+  --health-cmd="false" --health-interval=1s --health-retries=2 --health-timeout=3s \
+  $IMG sleep 300 >/dev/null
+for i in $(seq 1 20); do
+  H=$(docker inspect -f "{{.State.Health.Status}}" ${C}c 2>/dev/null)
+  [ "$H" = "unhealthy" ] && break
+  sleep 1
+done
+echo "HEALTH=$H""#).has("HEALTH=unhealthy").timeout(45),
     ])
 }

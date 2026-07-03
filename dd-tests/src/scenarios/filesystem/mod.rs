@@ -86,5 +86,28 @@ pub fn group() -> ScenGroup {
             .exec("mkdir -p /t/a/b/c && cd /t/a/b/c && cd ../../.. && pwd").has("/t"),
         scen("filesystem/busybox-symlink", "busybox:latest")
             .exec("echo bb > /r && ln -s /r /l && cat /l").has("bb"),
+
+        // ---- device nodes (/dev) + generated /etc + magic /proc symlinks ----------------------------
+        // The container's /dev is a fresh set of standard nodes (runc mounts a tmpfs); dd synthesizes them.
+        scen("filesystem/dev-null", "alpine:latest")
+            .exec("echo discard > /dev/null && head -c1 /dev/null | wc -c").has("0"),
+        scen("filesystem/dev-zero", "alpine:latest")
+            .exec("head -c8 /dev/zero | tr '\\0' '0'").has("00000000"),
+        // /dev/full: reads are zeros, but every write fails ENOSPC (Docker/runc semantics).
+        scen("filesystem/dev-full-enospc", "alpine:latest")
+            .exec("if echo x 2>/dev/null > /dev/full; then echo WROTE; else echo FULL_ENOSPC; fi").has("FULL_ENOSPC"),
+        // /dev/shm is a writable shared tmpfs: a file created there reads back.
+        scen("filesystem/dev-shm-rw", "alpine:latest")
+            .exec("echo shmdata > /dev/shm/t && cat /dev/shm/t").has("shmdata"),
+        // /proc/self/root -> "/", /proc/self/cwd -> the process cwd (magic symlinks).
+        scen("filesystem/proc-self-root", "alpine:latest")
+            .exec("readlink /proc/self/root").has("/"),
+        scen("filesystem/proc-self-cwd", "alpine:latest")
+            .exec("cd /usr && readlink /proc/self/cwd").has("/usr"),
+        // /etc/hostname is generated beside /etc/hosts and agrees with gethostname()/`hostname`.
+        scen("filesystem/etc-hostname", "alpine:latest")
+            .exec("test \"$(cat /etc/hostname)\" = \"$(hostname)\" && echo HN_MATCH").has("HN_MATCH"),
+        scen("filesystem/etc-files-present", "alpine:latest")
+            .exec("test -f /etc/hosts && test -f /etc/resolv.conf && test -f /etc/hostname && echo ETC_OK").has("ETC_OK"),
     ])
 }

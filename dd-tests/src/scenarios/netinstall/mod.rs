@@ -9,12 +9,12 @@
 //! They run under `--long` (the full compatibility sweep), which assumes the network is up; a runner
 //! with no egress simply omits `--long`. Verified against the Real docker oracle (orbstack, linux/arm64).
 //!
-//! ARCH: arm64-first (GA target). apt/dpkg on the x86 guest additionally trips the queued gpgv `divq`
-//! SIGFPE during Release verification (jit86 translate/x86_64, tracked separately as #232/#331), so the
-//! amd targets are `.xfail(&[AmdLinux])` — the Real oracle still runs them (proving the test), while dd
-//! amd is known-broken. Determinism: markers are fixed strings the harness greps out of the guest output.
+//! ARCH: arm64-first (GA target). The x86 guest's gpgv `divq` SIGFPE during Release verification
+//! (#232/#331) is RESOLVED — apt update/install + gpgv RSA verify complete byte-clean on dd amd — so the
+//! amd targets are no longer xfailed and run on both arches. Determinism: markers are fixed strings the
+//! harness greps out of the guest output.
 
-use crate::scenario::{scen, sgroup, ScenGroup, Target};
+use crate::scenario::{scen, sgroup, ScenGroup};
 
 // Shell snippet: run `apt-get update`, then emit a single deterministic verdict token. Success = the
 // InRelease/Release metadata lists actually landed on disk AND apt printed no `Ign:`/`Err:`/`W:`/`E:`
@@ -31,10 +31,10 @@ pub fn group() -> ScenGroup {
         // ---- apt-get update: must fetch cleanly, NO Ign:/Err: (the exact field regression) ----------
         scen("netinstall/ubuntu-apt-update-clean", "ubuntu:22.04")
             .exec(APT_UPDATE_CLEAN).has("APT_UPDATE_CLEAN")
-            .long().timeout(180).xfail(&[Target::AmdLinux]),
+            .long().timeout(180),
         scen("netinstall/debian-apt-update-clean", "debian:bookworm-slim")
             .exec(APT_UPDATE_CLEAN).has("APT_UPDATE_CLEAN")
-            .long().timeout(180).xfail(&[Target::AmdLinux]),
+            .long().timeout(180),
 
         // ---- apt-get install <pkg>: fetch + unpack + configure a real package end-to-end. htop pulls a
         // dep (libnl) too, so this exercises multi-package unpack/config + the overlay copy-up path that
@@ -46,7 +46,7 @@ apt-get update >/dev/null 2>&1
 apt-get install -y htop >/dev/null 2>&1
 rc=$?
 command -v htop >/dev/null && dpkg -s htop 2>/dev/null | grep -q '^Status: install ok installed' && [ $rc -eq 0 ] && echo HTOP_INSTALLED")
-            .has("HTOP_INSTALLED").long().timeout(240).xfail(&[Target::AmdLinux]),
+            .has("HTOP_INSTALLED").long().timeout(240),
 
         // ---- run htop: it must not just launch but RENDER a full, correct frame from live /proc data:
         // the CPU/Mem meter header, the `PID USER … Command` column header, REAL process rows (the shell +
@@ -68,7 +68,7 @@ echo \"$f\" | grep -q 'Tasks' \\
   && echo \"$f\" | grep -q 'Help' && echo \"$f\" | grep -q 'Quit' \\
   && echo \"$f\" | grep -q 'sleep 4242' \\
   && [ $rc -eq 0 ] && echo HTOP_RENDER_OK")
-            .has("HTOP_RENDER_OK").long().timeout(240).xfail(&[Target::AmdLinux]),
+            .has("HTOP_RENDER_OK").long().timeout(240),
 
         // ---- run top (procps): batch mode renders one full sample — the summary header (uptime/load,
         // Tasks:, %Cpu, Mem) AND the process table with a real row. `top -b -n1` is plain text (no PTY), so
@@ -85,6 +85,6 @@ grep -q 'Tasks:' /tmp/top.out \\
   && grep -q 'PID USER' /tmp/top.out \\
   && grep -q 'sleep' /tmp/top.out \\
   && [ $rc -eq 0 ] && echo TOP_RENDER_OK")
-            .has("TOP_RENDER_OK").long().timeout(240).xfail(&[Target::AmdLinux]),
+            .has("TOP_RENDER_OK").long().timeout(240),
     ])
 }

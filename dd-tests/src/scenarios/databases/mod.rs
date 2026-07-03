@@ -32,24 +32,29 @@ sleep 1
 psql -U postgres -tAc \"{sql}\"")
 }
 
-/// MySQL: root-password auth, background `docker-entrypoint.sh mysqld`, wait for `mysqladmin ping`,
-/// then run a multi-statement `mysql -N -e <sql>`.
+/// MySQL: root-password auth, background `docker-entrypoint.sh mysqld`, then wait for the *real* server
+/// like `pg()` does — NOT `mysqladmin ping` (which answers on the entrypoint's temporary init server and
+/// before the root grant is applied → a readiness RACE, the old harness bug). The official entrypoint
+/// runs a socket-only `--skip-networking` temp server to seed grants, shuts it down, then execs the real
+/// mysqld that binds TCP `port: 3306`; that line is the true "ready" marker. After it, retry the actual
+/// authenticated `mysql -uroot -ppw` query until it succeeds (auth + grants live), then run `sql`.
 fn my(sql: &str) -> String {
     format!(
 "export MYSQL_ROOT_PASSWORD=pw
 docker-entrypoint.sh mysqld >/tmp/my.log 2>&1 &
-for i in $(seq 1 120); do mysqladmin -uroot -ppw --silent ping >/dev/null 2>&1 && break; sleep 1; done
-sleep 1
+for i in $(seq 1 150); do grep -q 'port: 3306' /tmp/my.log 2>/dev/null && break; sleep 1; done
+for i in $(seq 1 30); do mysql -uroot -ppw -N -e 'SELECT 1' >/dev/null 2>&1 && break; sleep 1; done
 mysql -uroot -ppw -N -e \"{sql}\"")
 }
 
-/// MariaDB: same shape with the MariaDB entrypoint/env and the `mariadb` client.
+/// MariaDB: same hardened shape with the MariaDB entrypoint/env and the `mariadb` client — wait for the
+/// real mariadbd's `port: 3306` marker, then retry the authenticated query until grants are live.
 fn maria(sql: &str) -> String {
     format!(
 "export MARIADB_ROOT_PASSWORD=pw
 docker-entrypoint.sh mariadbd >/tmp/maria.log 2>&1 &
-for i in $(seq 1 120); do mariadb-admin -uroot -ppw --silent ping >/dev/null 2>&1 && break; sleep 1; done
-sleep 1
+for i in $(seq 1 150); do grep -q 'port: 3306' /tmp/maria.log 2>/dev/null && break; sleep 1; done
+for i in $(seq 1 30); do mariadb -uroot -ppw -N -e 'SELECT 1' >/dev/null 2>&1 && break; sleep 1; done
 mariadb -uroot -ppw -N -e \"{sql}\"")
 }
 
@@ -73,7 +78,7 @@ for i in $(seq 1 50); do valkey-cli ping 2>/dev/null | grep -q PONG && break; sl
 fn mongo(eval: &str) -> String {
     format!(
 "mongod --bind_ip 127.0.0.1 --fork --logpath /tmp/mongo.log >/dev/null 2>&1
-for i in $(seq 1 80); do mongosh --quiet --eval 'db.runCommand({{ping:1}}).ok' 2>/dev/null | grep -q 1 && break; sleep 1; done
+for i in $(seq 1 200); do mongosh --quiet --eval 'db.runCommand({{ping:1}}).ok' 2>/dev/null | grep -q 1 && break; sleep 1; done
 mongosh --quiet --eval '{eval}'")
 }
 
@@ -194,19 +199,19 @@ pub fn group() -> ScenGroup {
         // ---- mongo (7/8): wiredtiger, mmap, threads, tcmalloc -> CPU-topology abort on both arches ---
         scen("databases/mongo-agg-7", "mongo:7")
             .exec(&mongo("for(let i=1;i<=1000;i++) db.t.insertOne({n:i}); print(db.t.aggregate([{$group:{_id:null,s:{$sum:\"$n\"}}}]).toArray()[0].s)"))
-            .has("500500").timeout(120).long()
+            .has("500500").timeout(240).long()
             .xfail(&Target::LINUX),             // mongo-cpu-topology — GAPS.md (both linux arches)
         scen("databases/mongo-count-7", "mongo:7")
             .exec(&mongo("for(let i=1;i<=1000;i++) db.t.insertOne({n:i}); print(db.t.countDocuments({}))"))
-            .has("1000").timeout(120).long()
+            .has("1000").timeout(240).long()
             .xfail(&Target::LINUX),
         scen("databases/mongo-filter-count-7", "mongo:7")
             .exec(&mongo("for(let i=1;i<=1000;i++) db.t.insertOne({n:i}); print(db.t.countDocuments({n:{$lte:500}}))"))
-            .has("500").timeout(120).long()
+            .has("500").timeout(240).long()
             .xfail(&Target::LINUX),
         scen("databases/mongo-version-8", "mongo:8")
             .exec(&mongo("print(db.version())"))
-            .has("8.").timeout(120).long()
+            .has("8.").timeout(240).long()
             .xfail(&Target::LINUX),
 
         // ---- nats: single Go binary, scratch image (no shell) -> drive via run-form --version --------

@@ -900,9 +900,26 @@ static int svc_proc(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64
         break;
     }
     case 261: {
-        if (a3) {
-            // prlimit64(pid,res,new,OLD): old=a3!
-            svc_fill_rlimit((int)a1, (uint64_t *)a3);
+        // prlimit64(pid, resource, NEW, OLD): report the CURRENT limit into OLD first (so a combined
+        // get+set returns the pre-change value), THEN apply NEW into the per-resource store so a later
+        // get reflects it. glibc's getrlimit/setrlimit/prlimit all funnel through this syscall, so the
+        // store (g_ulimit, also seeded by docker --ulimit) is the single source of truth. #315: without
+        // applying NEW, setrlimit "succeeded" but the value never took -- the next getrlimit saw the old.
+        int res = (int)a1;
+        if (a3) svc_fill_rlimit(res, (uint64_t *)a3);
+        if (a2) {
+            const uint64_t *nl = (const uint64_t *)a2;
+            uint64_t ncur = nl[0], nmax = nl[1];
+            // Linux: soft may not exceed hard -> EINVAL (RLIM_INFINITY == ~0 is the max, so it never trips).
+            if (ncur != ~0ull && nmax != ~0ull && ncur > nmax) {
+                G_RET(c) = (uint64_t)(int64_t)(-EINVAL);
+                break;
+            }
+            if (res >= 0 && res < DD_RLIM_MAX) {
+                g_ulimit[res].set = 1;
+                g_ulimit[res].cur = ncur;
+                g_ulimit[res].max = nmax;
+            }
         }
         G_RET(c) = 0;
         break;

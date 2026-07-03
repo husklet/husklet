@@ -115,6 +115,12 @@ pub(crate) async fn image_inspect(State(a): State<App>, Path(name): Path<String>
                     "ExposedPorts": i.exposed_ports.iter().map(|p| (p.clone(), json!({})))
                         .collect::<serde_json::Map<String, Value>>(),
                     "Labels": i.labels,
+                    // Lifecycle/volume config docker clients diff (StopSignal null when unset; Volumes a
+                    // set of dirs; Healthcheck the probe or null).
+                    "StopSignal": if i.stop_signal.is_empty() { Value::Null } else { json!(i.stop_signal) },
+                    "Volumes": i.img_volumes.iter().map(|p| (p.clone(), json!({}))).collect::<serde_json::Map<String, Value>>(),
+                    "Healthcheck": i.healthcheck.as_ref().map(|h| json!({"Test": h.test, "Interval": h.interval,
+                        "Timeout": h.timeout, "Retries": h.retries, "StartPeriod": h.start_period})).unwrap_or(Value::Null),
                 },
                 "RootFS": {"Type": "layers", "Layers": []}})).into_response()
         }
@@ -292,6 +298,10 @@ pub(crate) fn pull_image(images_dir: &str, from_image: &str, tag: &str, creds: C
     let user = pulled.config["config"]["User"].as_str().unwrap_or("").to_string();
     let exposed_ports = config_exposed_ports(&pulled.config);
     let labels = config_labels(&pulled.config);
+    // Lifecycle/volume image config a container inherits at run (Moby §6/§8).
+    let stop_signal = config_stop_signal(&pulled.config);
+    let img_volumes = config_volumes(&pulled.config);
+    let healthcheck = config_healthcheck(&pulled.config);
     // A pulled macOS image's `dd-image.json` sidecar doesn't survive the registry round-trip and its
     // userland shell lives on the in-jail PATH (`/profile/bin/bash`), not `/bin/sh` — so default a
     // darwin image to a bare `bash` (resolved via PATH by the darwinjail) rather than `/bin/sh`. Only fall
@@ -307,12 +317,15 @@ pub(crate) fn pull_image(images_dir: &str, from_image: &str, tag: &str, creds: C
     let mut meta = json!({ "name": name.clone(), "cmd": cmd.clone(), "env": env.clone(),
                            "entrypoint": entrypoint.clone(), "workdir": workdir.clone(),
                            "user": user.clone(), "exposed_ports": exposed_ports.clone(),
+                           "stop_signal": stop_signal.clone(), "img_volumes": img_volumes.clone(),
+                           "healthcheck": healthcheck.clone(),
                            "arch": arch.arch(), "os": arch.os() });
     if darwin { meta["os"] = json!("darwin"); }
     let _ = std::fs::write(format!("{images_dir}/{}/dd-image.json", safe_name(&iref)), meta.to_string());
     Ok(Image {
         name, rootfs: rootfs.to_string_lossy().into_owned(), arch,
         cmd, env, entrypoint, workdir, user, exposed_ports, labels, created: now_secs(),
+        stop_signal, img_volumes, healthcheck,
     })
 }
 
@@ -378,6 +391,35 @@ pub(crate) fn config_labels(config: &Value) -> std::collections::HashMap<String,
     config["config"]["Labels"].as_object()
         .map(|m| m.iter().filter_map(|(k, v)| v.as_str().map(|s| (k.clone(), s.to_string()))).collect())
         .unwrap_or_default()
+}
+
+/// The `config.config.StopSignal` of an OCI image config (e.g. `"SIGQUIT"`) — the signal `docker stop`
+/// sends this image's container. Empty when the image sets none (the container then defaults to SIGTERM).
+pub(crate) fn config_stop_signal(config: &Value) -> String {
+    config["config"]["StopSignal"].as_str().unwrap_or("").to_string()
+}
+
+/// The keys of `config.config.Volumes` (an OCI set: object with empty values) — the dirs the image
+/// declared via `VOLUME`, each of which gets an ANONYMOUS volume at `docker run`. Sorted; absent -> empty.
+pub(crate) fn config_volumes(config: &Value) -> Vec<String> {
+    let mut v: Vec<String> = config["config"]["Volumes"].as_object()
+        .map(|m| m.keys().cloned().collect()).unwrap_or_default();
+    v.sort();
+    v
+}
+
+/// The `config.config.Healthcheck` of an OCI image config → [`HealthConfig`]. `Test=["NONE"]` (or absent)
+/// yields None — no probe. Durations are the config's nanoseconds, carried through verbatim.
+pub(crate) fn config_healthcheck(config: &Value) -> Option<crate::model::HealthConfig> {
+    let hc = config["config"]["Healthcheck"].as_object()?;
+    let test: Vec<String> = hc.get("Test").and_then(|t| t.as_array())
+        .map(|a| a.iter().filter_map(|x| x.as_str().map(String::from)).collect()).unwrap_or_default();
+    if test.is_empty() || test.first().map(|s| s.as_str()) == Some("NONE") { return None; }
+    let num = |k: &str| hc.get(k).and_then(|v| v.as_i64()).unwrap_or(0);
+    Some(crate::model::HealthConfig {
+        test, interval: num("Interval"), timeout: num("Timeout"),
+        retries: num("Retries"), start_period: num("StartPeriod"),
+    })
 }
 
 /// Fallback default command for an image whose config has no Cmd: prefer /bin/sh, else /bin/bash.
@@ -637,15 +679,21 @@ pub(crate) async fn image_load(State(a): State<App>, body: axum::body::Bytes) ->
     let workdir = meta.as_ref().and_then(|m| m["workdir"].as_str()).unwrap_or("").to_string();
     let user = meta.as_ref().and_then(|m| m["user"].as_str()).unwrap_or("").to_string();
     let exposed_ports = strs("exposed_ports");
+    // Lifecycle/volume image config (round-trips through the sidecar written by pull/load).
+    let stop_signal = meta.as_ref().and_then(|m| m["stop_signal"].as_str()).unwrap_or("").to_string();
+    let img_volumes = strs("img_volumes");
+    let healthcheck = meta.as_ref().and_then(|m| serde_json::from_value::<crate::model::HealthConfig>(m["healthcheck"].clone()).ok());
     let img = Image {
         name: name.clone(), rootfs: rootfs.to_string_lossy().into_owned(), arch,
         cmd: cmd.clone(), env: env.clone(), entrypoint: entrypoint.clone(), workdir: workdir.clone(),
         user: user.clone(), exposed_ports: exposed_ports.clone(),
+        stop_signal: stop_signal.clone(), img_volumes: img_volumes.clone(), healthcheck: healthcheck.clone(),
         created: now_secs(), ..Default::default()
     };
     // Persist a dd-image.json so the image round-trips through `discover_images` after a daemon restart.
     let mut dd = json!({ "name": name, "cmd": cmd, "env": env, "entrypoint": entrypoint, "workdir": workdir,
-                         "user": user, "exposed_ports": exposed_ports });
+                         "user": user, "exposed_ports": exposed_ports,
+                         "stop_signal": stop_signal, "img_volumes": img_volumes, "healthcheck": healthcheck });
     if darwin { dd["os"] = json!("darwin"); }
     let _ = std::fs::write(target.join("dd-image.json"), dd.to_string());
     register_image(&a, img).await;

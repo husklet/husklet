@@ -51,6 +51,13 @@ static void ovldents_drop(int fd) {
     if (fd >= 0 && fd < 1024 && g_ovldents[fd].taken)
         ovldents_free(fd);
 }
+// rewinddir/seekdir on an overlay-merged dir: reset the replay cursor. pos<=0 (or out of range) restarts
+// from the top; an untaken snapshot is left alone (the next getdents re-snapshots from 0). Forward-declared
+// in vfs.c for the lseek handler (io.c), which is compiled into this TU before fs.c.
+static void ovldents_rewind(int fd, int pos) {
+    if (fd < 0 || fd >= 1024 || !g_ovldents[fd].taken) return;
+    g_ovldents[fd].pos = (pos > 0 && pos <= g_ovldents[fd].n) ? pos : 0;
+}
 
 // POSIX shm / named semaphores live under /dev/shm, for which the rootfs has no tmpfs; glibc backs them
 // with files there (shm_open -> /dev/shm/<name>, sem_open -> a temp /dev/shm/sem.<rnd> then link()ed to
@@ -93,6 +100,8 @@ static void fd_reset_emul(int fd) {
         g_inotify_owner[fd] = 0;
         if (g_fd_pushback[fd]) { free(g_fd_pushback[fd]); g_fd_pushback[fd] = NULL; g_fd_pb_len[fd] = 0; }
         g_ovldir[fd][0] = 0;
+        g_opath[fd] = 0;
+        g_devfull[fd] = 0;
         g_lo_port[fd] = 0;
         g_sock_stream[fd] = 0;
         g_sock_dgram[fd] = 0;
@@ -608,6 +617,9 @@ static int svc_fs(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t
             mc_evict(host);
             ac_evict(host);
             rl_evict(host);
+            // hardlink coherence: removing one link drops the sibling links' nlink -- evict their cached
+            // stats by inode (lst was captured before the removal, so nlink>=2 means aliases still exist).
+            if (S_ISREG(lst.st_mode) && lst.st_nlink >= 2) mc_evict_ino(lst.st_dev, lst.st_ino);
             break;
         }
         if (g_rootfs) {
@@ -617,13 +629,13 @@ static int svc_fs(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t
                 G_RET(c) = (uint64_t)(int64_t)pfd;
                 break;
             }
-            uint64_t adev = 0, aino = 0;
-            if (try_adopt) {
-                struct stat ps;
-                if (fstatat(pfd, fin, &ps, AT_SYMLINK_NOFOLLOW) == 0 && S_ISREG(ps.st_mode)) {
-                    adev = (uint64_t)ps.st_dev;
-                    aino = (uint64_t)ps.st_ino;
-                }
+            // Capture the pre-unlink identity: (dev,ino) drives the delete-on-close adopt AND the hardlink
+            // nlink-coherence eviction below; st_nlink>=2 means other links alias this inode.
+            uint64_t adev = 0, aino = 0, nlink = 0;
+            struct stat ps;
+            if (fstatat(pfd, fin, &ps, AT_SYMLINK_NOFOLLOW) == 0) {
+                nlink = (uint64_t)ps.st_nlink;
+                if (try_adopt && S_ISREG(ps.st_mode)) { adev = (uint64_t)ps.st_dev; aino = (uint64_t)ps.st_ino; }
             }
             // AT_REMOVEDIR: linux 0x200
             int r = unlinkat(pfd, fin, (a2 & 0x200) ? AT_REMOVEDIR : 0), e = errno;
@@ -637,25 +649,25 @@ static int svc_fs(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t
             }
             close(pfd);
             if (r >= 0 && aino) memf_try_adopt(adev, aino);
+            if (r >= 0 && nlink >= 2) mc_evict_ino((dev_t)ps.st_dev, (ino_t)ps.st_ino);
             G_RET(c) = r < 0 ? (uint64_t)(-(int64_t)e) : 0;
             break;
         }
         char pb[4200];
         // unlink: never follow the final symlink (remove the link itself, not its target).
         const char *p = atpath((int)a0, (const char *)a1, pb, sizeof pb, 1);
-        uint64_t adev = 0, aino = 0;
-        if (try_adopt) {
-            struct stat ps;
-            if (fstatat(ATFD(a0), p, &ps, AT_SYMLINK_NOFOLLOW) == 0 && S_ISREG(ps.st_mode)) {
-                adev = (uint64_t)ps.st_dev;
-                aino = (uint64_t)ps.st_ino;
-            }
+        uint64_t adev = 0, aino = 0, nlink = 0;
+        struct stat ps;
+        if (fstatat(ATFD(a0), p, &ps, AT_SYMLINK_NOFOLLOW) == 0) {
+            nlink = (uint64_t)ps.st_nlink;
+            if (try_adopt && S_ISREG(ps.st_mode)) { adev = (uint64_t)ps.st_dev; aino = (uint64_t)ps.st_ino; }
         }
         int r = unlinkat(ATFD(a0), p, (a2 & 0x200) ? AT_REMOVEDIR : 0);
         mc_evict(p);
         ac_evict(p);
         rl_evict(p);
         if (r >= 0 && aino) memf_try_adopt(adev, aino);
+        if (r >= 0 && nlink >= 2) mc_evict_ino((dev_t)ps.st_dev, (ino_t)ps.st_ino);
         G_RET(c) = r < 0 ? (uint64_t)(-errno) : 0;
         break;
     }
@@ -722,6 +734,11 @@ static int svc_fs(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t
                 break;
             }
             int r = linkat(opfd, ofin, npfd, nfin, fl), e = errno;
+            // the new link bumped the shared inode's nlink -> the source path's cached stat is now stale.
+            if (r == 0) {
+                struct stat ls;
+                if (fstatat(npfd, nfin, &ls, AT_SYMLINK_NOFOLLOW) == 0) mc_evict_ino(ls.st_dev, ls.st_ino);
+            }
             close(opfd);
             close(npfd);
             G_RET(c) = r < 0 ? (uint64_t)(-(int64_t)e) : 0;
@@ -730,7 +747,12 @@ static int svc_fs(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t
         char ob[4200], nb[4200];
         const char *op = atpath((int)a0, (const char *)a1, ob, sizeof ob, 0);
         const char *np = atpath((int)a2, (const char *)a3, nb, sizeof nb, 0);
-        G_RET(c) = linkat(ATFD(a0), op, ATFD(a2), np, fl) < 0 ? (uint64_t)(-errno) : 0;
+        int r = linkat(ATFD(a0), op, ATFD(a2), np, fl);
+        if (r == 0) {
+            struct stat ls;
+            if (fstatat(ATFD(a2), np, &ls, AT_SYMLINK_NOFOLLOW) == 0) mc_evict_ino(ls.st_dev, ls.st_ino);
+        }
+        G_RET(c) = r < 0 ? (uint64_t)(-errno) : 0;
         break;
     }
     case 38:
@@ -928,8 +950,15 @@ static int svc_fs(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t
         G_RET(c) = 0;
         break;
     }
-    // fchmod(fd, mode)
-    case 52: G_RET(c) = fchmod((int)a0, (mode_t)a1) < 0 ? (uint64_t)(-errno) : 0; break;
+    // fchmod(fd, mode) -- like fchmodat, the new mode must invalidate this file's cached stat, or a
+    // subsequent stat() of the same path serves the stale pre-chmod mode from the mc cache (the fd's
+    // canonical host path in g_fdpath is the SAME key case 79 memoizes under).
+    case 52: {
+        int r = fchmod((int)a0, (mode_t)a1);
+        if (r == 0 && (int)a0 >= 0 && (int)a0 < 1024 && g_fdpath[(int)a0][0]) fc_evict_path(g_fdpath[(int)a0]);
+        G_RET(c) = r < 0 ? (uint64_t)(-errno) : 0;
+        break;
+    }
     case 53:
     // fchmodat(dirfd,path,mode,flags) / fchmodat2
     case 452: {
@@ -1002,6 +1031,8 @@ static int svc_fs(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t
     case 55: {
         fchown((int)a0, (uid_t)a1, (gid_t)a2);
         chown_xattr_set_fd((int)a0, (int)(int32_t)(uint32_t)a1, (int)(int32_t)(uint32_t)a2);
+        // the guest-owner xattr just changed -> drop this path's cached stat so a later stat reports it
+        if ((int)a0 >= 0 && (int)a0 < 1024 && g_fdpath[(int)a0][0]) fc_evict_path(g_fdpath[(int)a0]);
         G_RET(c) = 0;
         break;
         // fchown(fd,uid,gid) -- best-effort
@@ -1017,6 +1048,11 @@ static int svc_fs(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t
     case 56: {
         // openat -- Linux O_* -> macOS O_* (they differ!)
         int lf = (int)a2, mf = lf & 0x3;
+        // O_PATH (Linux 0x200000, arch-independent): the fd only NAMES the file -- fstat / *at dirfd /
+        // fchdir work through it, but read/write are rejected EBADF. macOS has no O_PATH, so we open a
+        // normal read fd (O_RDONLY, +O_DIRECTORY for a dir) for the metadata ops and record the flag so the
+        // I/O family (svc_io) returns EBADF. Marked on every open-success path below.
+        int is_opath = (lf & 0x200000) != 0;
         // Read-only bind mount: any write-intent open (O_WRONLY/O_RDWR/O_CREAT/O_TRUNC/O_APPEND, incl.
         // O_TMPFILE which carries O_RDWR) under an `-v …:ro` volume fails EROFS -- exactly as the kernel
         // rejects a write-open on a read-only mount. A pure O_RDONLY open still succeeds. Checked up front
@@ -1181,6 +1217,8 @@ static int svc_fs(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t
                 const char *hd = dev_node_hostpath(rp);
                 if (hd) {
                     int d = open(hd, mf);
+                    // /dev/full is backed by /dev/zero for reads; flag the fd so its writes fail ENOSPC.
+                    if (d >= 0 && d < 1024) g_devfull[d] = !strcmp(rp, "/dev/full");
                     G_RET(c) = d < 0 ? (uint64_t)(-errno) : (uint64_t)d;
                     break;
                 }
@@ -1285,6 +1323,7 @@ static int svc_fs(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t
             int nf_new = nf_want && access(host, F_OK) != 0;
             int r = open(host, mf | ((lf & G_O_NOFOLLOW) ? O_NOFOLLOW : 0), (mode_t)a3);
             if (r >= 0 && nf_new) newfile_stamp_fd(r);
+            if (r >= 0 && r < 1024) g_opath[r] = is_opath;
             if (r >= 0) {
                 char gpa[4200];
                 int have_canon = fcntl(r, F_GETPATH, gpa) == 0;
@@ -1329,6 +1368,7 @@ static int svc_fs(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t
                 // ONE atomic open replaces the per-component walk; hostc is already canonical+symlink-free.
                 int r = open(hostc, mf | O_NOFOLLOW, (mode_t)a3);
                 int e = errno;
+                if (r >= 0 && r < 1024) g_opath[r] = is_opath;
                 if (r >= 0) {
                     fd_setpath(r, hostc);
                     if (lf & 3) { // write-open: keep the metadata caches coherent (same as the walk path)
@@ -1354,6 +1394,7 @@ static int svc_fs(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t
             int e = errno;
             close(pfd);
             if (r >= 0 && nf_new) newfile_stamp_fd(r);
+            if (r >= 0 && r < 1024) g_opath[r] = is_opath;
             if (r >= 0) {
                 char gp[4200];
                 // canonical host path for tracking
@@ -1378,6 +1419,7 @@ static int svc_fs(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t
         int nf_new = nf_want && faccessat(ATFD(a0), p, F_OK, AT_SYMLINK_NOFOLLOW) != 0; // #255: stamp only fresh
         int r = openat(ATFD(a0), p, mf, (mode_t)a3);
         if (r >= 0 && nf_new) newfile_stamp_fd(r);
+        if (r >= 0 && r < 1024) g_opath[r] = is_opath;
         if (r >= 0) {
             fd_setpath(r, p);
             if ((lf & 3) || (lf & 0x40) || (lf & 0x200)) {
@@ -1506,7 +1548,31 @@ static int svc_fs(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t
             }
             char gp[4200];
             if (fcntl(pfn, F_GETPATH, gp) != 0) {
-                G_RET(c) = (uint64_t)(-errno); // bad fd -> EBADF
+                // A pathless fd (pipe/socket/eventfd/timerfd/anon inode): Linux still resolves
+                // /proc/self/fd/N to a synthetic "pipe:[ino]" / "socket:[ino]" / "anon_inode:[...]" name --
+                // never EBADF for an OPEN fd. Reproduce that so `ls -l /proc/self/fd`, lsof, and Go's
+                // os.Readlink on a pipe fd work instead of erroring.
+                if (fcntl(pfn, F_GETFD) < 0) {
+                    G_RET(c) = (uint64_t)(-EBADF); // genuinely not open
+                    break;
+                }
+                struct stat ss;
+                int have = fstat(pfn, &ss) == 0;
+                char syn[64];
+                int sl;
+                if (have && S_ISFIFO(ss.st_mode))
+                    sl = snprintf(syn, sizeof syn, "pipe:[%llu]", (unsigned long long)ss.st_ino);
+                else if (have && S_ISSOCK(ss.st_mode))
+                    sl = snprintf(syn, sizeof syn, "socket:[%llu]", (unsigned long long)ss.st_ino);
+                else if (pfn >= 0 && pfn < 1024 && g_eventfd_peer[pfn])
+                    sl = snprintf(syn, sizeof syn, "anon_inode:[eventfd]");
+                else if (pfn >= 0 && pfn < 1024 && g_timerfd[pfn])
+                    sl = snprintf(syn, sizeof syn, "anon_inode:[timerfd]");
+                else
+                    sl = snprintf(syn, sizeof syn, "anon_inode:inode");
+                size_t l = (size_t)sl > bs ? bs : (size_t)sl;
+                memcpy(buf, syn, l);
+                G_RET(c) = (uint64_t)l;
                 break;
             }
             // map the host path back into the guest's view (strip the rootfs prefix if jailed)
@@ -1518,6 +1584,19 @@ static int svc_fs(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t
             memcpy(buf, gpath, l);
             G_RET(c) = l;
             break;
+        }
+        // /proc/[self|pid]/root and /proc/[self|pid]/cwd are magic symlinks: root -> the container's "/",
+        // cwd -> the process's current working dir (Go/Rust path code and some init resolve these).
+        if (p) {
+            const char *leaf = proc_self_leaf(p);
+            if (leaf && (!strcmp(leaf, "root") || !strcmp(leaf, "cwd"))) {
+                const char *tgt = !strcmp(leaf, "cwd") ? (g_cwd[0] ? g_cwd : "/") : "/";
+                size_t l = strlen(tgt);
+                if (l > bs) l = bs;
+                memcpy(buf, tgt, l);
+                G_RET(c) = (uint64_t)l;
+                break;
+            }
         }
         char ep[1024];
         if (proc_self_exe(p, ep, sizeof ep)) {
@@ -1573,6 +1652,30 @@ static int svc_fs(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t
                     break;
                 }
                 // file unexpectedly missing -> fall through to the generic ENOENT path
+            }
+            // /proc/[self|pid]/{root,cwd} magic symlinks: lstat reports the link, stat follows to the dir.
+            {
+                const char *sleaf = proc_self_leaf(gp);
+                if (sleaf && (!strcmp(sleaf, "root") || !strcmp(sleaf, "cwd"))) {
+                    const char *tgt = !strcmp(sleaf, "cwd") ? (g_cwd[0] ? g_cwd : "/") : "/";
+                    struct stat es;
+                    if (a3 & 0x100) { // lstat: the symlink itself
+                        memset(&es, 0, sizeof es);
+                        es.st_mode = S_IFLNK | 0777;
+                        es.st_size = (off_t)strlen(tgt);
+                        es.st_nlink = 1;
+                        fill_linux_stat((uint8_t *)a2, &es, NULL, -1);
+                        G_RET(c) = 0;
+                        break;
+                    }
+                    char hb[4200];
+                    const char *hp = xresolve_overlay(tgt, hb, sizeof hb);
+                    if (stat(hp, &es) == 0) {
+                        fill_linux_stat((uint8_t *)a2, &es, hp, -1);
+                        G_RET(c) = 0;
+                        break;
+                    }
+                }
             }
             if (synth_stat(gp, (uint8_t *)a2)) {
                 G_RET(c) = 0;

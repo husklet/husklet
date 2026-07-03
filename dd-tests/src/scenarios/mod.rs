@@ -19,6 +19,7 @@ pub mod weird;
 pub mod terminal;
 // Core container-behaviour regression net (fast, no heavy installs):
 pub mod filesystem;   // rootfs + overlay VFS (no volume)
+pub mod permissions;  // file mode/owner semantics + `ls -l` render fidelity (perm strings, maj/min, DAC)
 pub mod volumes;      // -v bind mounts (incl. #118 nested `..`)
 pub mod networking;   // single-container loopback / DNS / gated outbound
 pub mod netinstall;   // apt-get update + install + run (htop) over the network — the field regression net
@@ -48,6 +49,7 @@ pub fn all() -> Vec<ScenGroup> {
         weird::group(),
         terminal::group(),
         filesystem::group(),
+        permissions::group(),
         volumes::group(),
         networking::group(),
         netinstall::group(),
