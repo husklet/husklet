@@ -63,7 +63,7 @@ fn ext_threads() -> Group {
         src("barrier", "ext_threads/th_barrier.c").oracle(),         // pthread_barrier (no macOS)
         // spinlock hangs under the x86_64 JIT only (the tight spin loop mistranslates); arm64 passes.
         // xfail x86_64; see GAPS "ext-spinlock-x86".
-        src("spinlock", "ext_threads/th_spinlock.c").oracle().xfail(&[Engine::LinuxX86_64]),
+        src("spinlock", "ext_threads/th_spinlock.c").oracle(),
         src("sem-unnamed", "ext_threads/th_sem_unnamed.c").oracle(), // sem_init pshared=0 (no macOS)
     ])
 }

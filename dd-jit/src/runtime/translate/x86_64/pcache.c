@@ -272,8 +272,9 @@ static void pcache_save(void) {
                 (unsigned long long)h.arena_used, (unsigned long long)nmap, (coldprof_now_ns() - _t0) / 1e6);
 }
 // #339 hygiene hooks (shared proc.c / engine/dispatch.c call these on both engines):
-//  - fork child: jit_after_fork() gave it a fresh empty arena -> drop the inherited reloc records and bar
-//    this process from saving (see the g_pcache_forked comment in pcache_save).
+//  - fork child: its arena is now a fork-private slice (kept warm by the #371 preserved-arena fork, or
+//    fresh from the threaded rebuild) under the PARENT's identity -> drop the inherited reloc records and
+//    bar this process from saving (see the g_pcache_forked comment in pcache_save).
 //  - wholesale cache-full flush: the arena content the records described is gone -> reset so records stay
 //    in lockstep with what is re-emitted (every baked pointer recorded, by construction).
 static void pcache_after_fork(void) {

@@ -108,6 +108,22 @@ static int uses_x18(uint32_t in, int mask) {
     return field_is(in, mask & 1, 0) || field_is(in, mask & 2, 5) || field_is(in, mask & 4, 16) ||
            field_is(in, mask & 8, 10);
 }
+// ---- steal-mode stolen-reg FAST PATHS (perf: the mangle machinery measured ~20% of CPython wall) ----
+// Under the default x16/x17 steal (g_steal1617), host x16/x17 are ENGINE-PRIVATE at every point inside a
+// block body: the prologue never loads them, chained entries keep them dead, and every IBTC probe/irq
+// poll clobbers them freely (emit_set_x30 and emit_irq_check already rely on exactly this). So stolen-reg
+// traffic does not need the legacy mscratch spill/restore dance (which cost 4+ extra memory ops per
+// mangled instruction) or the 3-insn TLS-based cpu reload of x18_prolog (x28 IS the cpu pointer,
+// maintained for the whole block): load cpu->x[stolen] straight into host x16/x17, run the rewritten
+// instruction, store back. Sampled attribution on the CPython eval loop showed the mscratch dance +
+// cpu->x[] traffic at ~20% of total run time (PLT stubs -- adrp x16/ldr x17/add x16/br x17, all-stolen --
+// alone were 19% of samples), so this is the single biggest engine tax on call-heavy aarch64 guests.
+// NOSTEALFAST=1 restores the exact legacy sequences (A/B kill switch); NOSTEAL1617 implies legacy.
+static int g_stealfast = -1;
+static int stealfast_on(void) {
+    if (g_stealfast < 0) g_stealfast = (g_steal1617 && !getenv("NOSTEALFAST")) ? 1 : 0;
+    return g_stealfast;
+}
 // Emit a guest insn that references stolen reg(s): for each, a scratch S = cpu->x[stolen]; run the
 // insn with the stolen field(s) replaced by scratch(es); store back. Real x28 = cpu is the base;
 // scratch originals are spilled to cpu->mscratch (NOT the stack -- that would collide with the
@@ -129,6 +145,35 @@ static void emit_mangled_x18(uint32_t in, int mask) {
                 if (!seen) stolen[ns++] = rf;
             }
         }
+    // FAST PATH (stealfast): host x16/x17 are engine-dead here, so a mangle with <= 2 distinct stolen
+    // regs needs no mscratch spill/restore. Same loads, same rewritten insn, same store-backs as the
+    // legacy path below -- ONLY the scratch registers differ (engine-dead x16/x17 instead of spilled
+    // guest regs), so guest-visible state is identical by construction. >2 distinct stolen regs (a
+    // 3-source madd naming three of x16/x17/x18/x28/x30 -- vanishingly rare) falls to the legacy path
+    // (host x30 is NOT usable as a third scratch: §B, when enabled, keeps a live host return address
+    // in it across the block body).
+    if (stealfast_on() && ns <= 2) {
+        static const int hsc[2] = {16, 17};
+        for (int i = 0; i < ns; i++)
+            // scratch = cpu->x[stolen]
+            e_ldr(hsc[i], CPUREG, stolen[i] * 8);
+        uint32_t m = in;
+        for (int k = 0; k < 4; k++)
+            if (mask & mbits[k]) {
+                int rf = (m >> shifts[k]) & 0x1F;
+                if (is_stolen(rf)) {
+                    int s = hsc[0];
+                    for (int i = 0; i < ns; i++)
+                        if (stolen[i] == rf) s = hsc[i];
+                    m = (m & ~(0x1Fu << shifts[k])) | ((unsigned)s << shifts[k]);
+                }
+            }
+        emit32(m);
+        for (int i = 0; i < ns; i++)
+            // cpu->x[stolen] = scratch
+            e_str(hsc[i], CPUREG, stolen[i] * 8);
+        return;
+    }
     int sc[4], nsc = 0;
     for (int r = 0; r <= 27 && nsc < ns; r++)
         if (!(used & (1 << r)) && !is_stolen(r)) sc[nsc++] = r;
@@ -1429,6 +1474,19 @@ static void *translate_block(uint64_t gpc) {
             }
             // tested reg stolen -> test cpu->x[rt] via a saved scratch
             if (is_stolen(rt)) {
+                // stealfast: x16 is engine-dead across both successor edges -> no spill/restore at all
+                if (stealfast_on()) {
+                    e_ldr(16, CPUREG, rt * 8);
+                    uint32_t *patch = (uint32_t *)g_cp;
+                    // cbz/cbnz x16 -> taken
+                    emit32(0);
+                    emit_chain_exit(fall);
+                    int64_t d = ((uint8_t *)g_cp - (uint8_t *)patch) / 4;
+                    *patch = 0x34000000u | ((unsigned)sf << 31) | ((unsigned)op << 24) |
+                             ((uint32_t)(d & 0x7FFFF) << 5) | 16;
+                    emit_chain_exit(taken);
+                    break;
+                }
                 int S = 0;
                 e_str(S, CPUREG, (int)OFF_MSCRATCH);
                 e_ldr(S, CPUREG, rt * 8);
@@ -1487,6 +1545,19 @@ static void *translate_block(uint64_t gpc) {
             }
             // tested reg stolen -> test cpu->x[rt] via a saved scratch
             if (is_stolen(rt)) {
+                // stealfast: x16 is engine-dead across both successor edges -> no spill/restore at all
+                if (stealfast_on()) {
+                    e_ldr(16, CPUREG, rt * 8);
+                    uint32_t *patch = (uint32_t *)g_cp;
+                    // tbz/tbnz x16,#bit -> taken
+                    emit32(0);
+                    emit_chain_exit(fall);
+                    int64_t d = ((uint8_t *)g_cp - (uint8_t *)patch) / 4;
+                    *patch = 0x36000000u | ((unsigned)bit5 << 31) | ((unsigned)op << 24) | ((unsigned)b40 << 19) |
+                             ((uint32_t)(d & 0x3FFF) << 5) | 16;
+                    emit_chain_exit(taken);
+                    break;
+                }
                 int S = 0;
                 e_str(S, CPUREG, (int)OFF_MSCRATCH);
                 e_ldr(S, CPUREG, rt * 8);
@@ -1517,14 +1588,23 @@ static void *translate_block(uint64_t gpc) {
 
         // --- TLS: the whole point. mrs/msr tpidr_el0 become a single NATIVE
         //     load/store from cpu->tls. No trap, no Mach round-trip. ---
-        // mrs xN, tpidr_el0  (TLS read, hot)
+        // mrs xN, tpidr_el0  (TLS read, hot: CPython reads its thread state through this constantly).
+        // stealfast: x28 IS the cpu pointer for the whole block, so the read is ONE ldr (legacy paid a
+        // 3-insn TLS-based cpu reload via e_load_cpu, or the full x18_prolog dance for a stolen rd).
         if ((in & 0xFFFFFFE0u) == 0xD53BD040u) {
             int n = in & 31;
             if (is_stolen(n)) {
-                x18_prolog();
-                e_ldr(0, 1, OFF_TLS);
-                e_str(0, 1, n * 8);
-                x18_epilog();
+                if (stealfast_on()) {
+                    e_ldr(16, CPUREG, OFF_TLS);
+                    e_str(16, CPUREG, n * 8);
+                } else {
+                    x18_prolog();
+                    e_ldr(0, 1, OFF_TLS);
+                    e_str(0, 1, n * 8);
+                    x18_epilog();
+                }
+            } else if (stealfast_on()) {
+                e_ldr(n, CPUREG, OFF_TLS);
             } else {
                 e_load_cpu(n);
                 e_ldr(n, n, OFF_TLS);
@@ -1536,10 +1616,17 @@ static void *translate_block(uint64_t gpc) {
         if ((in & 0xFFFFFFE0u) == 0xD51BD040u) {
             int n = in & 31, t = (n == 16) ? 15 : 16;
             if (is_stolen(n)) {
-                x18_prolog();
-                e_ldr(0, 1, n * 8);
-                e_str(0, 1, OFF_TLS);
-                x18_epilog();
+                if (stealfast_on()) {
+                    e_ldr(16, CPUREG, n * 8);
+                    e_str(16, CPUREG, OFF_TLS);
+                } else {
+                    x18_prolog();
+                    e_ldr(0, 1, n * 8);
+                    e_str(0, 1, OFF_TLS);
+                    x18_epilog();
+                }
+            } else if (stealfast_on()) {
+                e_str(n, CPUREG, OFF_TLS);
             } else {
                 e_stur(t, 31, -16);
                 e_load_cpu(t);
@@ -1562,10 +1649,15 @@ static void *translate_block(uint64_t gpc) {
             int rd = in & 31;
             uint64_t ctr = 0x9444C004ull;
             if (is_stolen(rd)) {
-                x18_prolog();
-                e_movconst(0, ctr);
-                e_str(0, 1, rd * 8);
-                x18_epilog();
+                if (stealfast_on()) {
+                    e_movconst(16, ctr);
+                    e_str(16, CPUREG, rd * 8);
+                } else {
+                    x18_prolog();
+                    e_movconst(0, ctr);
+                    e_str(0, 1, rd * 8);
+                    x18_epilog();
+                }
             } else
                 e_movconst(rd, ctr);
             gpc += 4;
@@ -1601,10 +1693,17 @@ static void *translate_block(uint64_t gpc) {
             int64_t imm = sext((((in >> 5) & 0x7FFFF) << 2) | ((in >> 29) & 3), 21);
             uint64_t v = pcrel_base(gpc) + imm;
             if (is_stolen(rd)) {
-                x18_prolog();
-                e_movconst(0, v);
-                e_str(0, 1, rd * 8);
-                x18_epilog();
+                // stealfast: host x16 is engine-dead -> movconst + one store (no red-zone stash, no
+                // TLS-based cpu reload; x28 = cpu). adrp x16 is the PLT-stub head, so this is HOT.
+                if (stealfast_on()) {
+                    e_movconst(16, v);
+                    e_str(16, CPUREG, rd * 8);
+                } else {
+                    x18_prolog();
+                    e_movconst(0, v);
+                    e_str(0, 1, rd * 8);
+                    x18_epilog();
+                }
             } else
                 e_movconst(rd, v);
             gpc += 4;
@@ -1616,10 +1715,15 @@ static void *translate_block(uint64_t gpc) {
             int64_t imm = sext((((in >> 5) & 0x7FFFF) << 2) | ((in >> 29) & 3), 21) << 12;
             uint64_t v = (pcrel_base(gpc) & ~0xFFFull) + imm;
             if (is_stolen(rd)) {
-                x18_prolog();
-                e_movconst(0, v);
-                e_str(0, 1, rd * 8);
-                x18_epilog();
+                if (stealfast_on()) {
+                    e_movconst(16, v);
+                    e_str(16, CPUREG, rd * 8);
+                } else {
+                    x18_prolog();
+                    e_movconst(0, v);
+                    e_str(0, 1, rd * 8);
+                    x18_epilog();
+                }
             } else
                 e_movconst(rd, v);
             gpc += 4;
@@ -1630,14 +1734,23 @@ static void *translate_block(uint64_t gpc) {
             int rt = in & 31, is64 = (in >> 30) & 1;
             int64_t off = sext((in >> 5) & 0x7FFFF, 19) << 2;
             if (is_stolen(rt)) {
-                x18_prolog();
-                e_movconst(0, gpc + off);
-                if (is64)
-                    e_ldr(0, 0, 0);
-                else
-                    emit32(0xB9400000u | (0 << 5) | 0);
-                e_str(0, 1, rt * 8);
-                x18_epilog();
+                if (stealfast_on()) {
+                    e_movconst(16, gpc + off);
+                    if (is64)
+                        e_ldr(16, 16, 0);
+                    else
+                        emit32(0xB9400000u | (16 << 5) | 16);
+                    e_str(16, CPUREG, rt * 8);
+                } else {
+                    x18_prolog();
+                    e_movconst(0, gpc + off);
+                    if (is64)
+                        e_ldr(0, 0, 0);
+                    else
+                        emit32(0xB9400000u | (0 << 5) | 0);
+                    e_str(0, 1, rt * 8);
+                    x18_epilog();
+                }
             } else {
                 e_movconst(rt, gpc + off);
                 if (is64)
@@ -1660,10 +1773,16 @@ static void *translate_block(uint64_t gpc) {
             int64_t off = sext((in >> 5) & 0x7FFFF, 19) << 2;
             // ldr (V), [Xn] unsigned-offset #0 base forms, Rn=x0: S=0xBD400000 D=0xFD400000 Q=0x3DC00000
             uint32_t ld = sz == 0 ? 0xBD400000u : (sz == 1 ? 0xFD400000u : 0x3DC00000u);
-            x18_prolog();               // stash x0/x1 in the red zone; x0 becomes the address scratch
-            e_movconst(0, gpc + off);   // x0 = guest literal address (PIE: pcrel_base is identity)
-            emit32(ld | (0u << 5) | (uint32_t)vt); // ldr St/Dt/Qt, [x0]
-            x18_epilog();
+            if (stealfast_on()) {
+                // stealfast: x16 is engine-dead -> no stash/restore around the address materialization
+                e_movconst(16, gpc + off);             // x16 = guest literal address
+                emit32(ld | (16u << 5) | (uint32_t)vt); // ldr St/Dt/Qt, [x16]
+            } else {
+                x18_prolog();               // stash x0/x1 in the red zone; x0 becomes the address scratch
+                e_movconst(0, gpc + off);   // x0 = guest literal address (PIE: pcrel_base is identity)
+                emit32(ld | (0u << 5) | (uint32_t)vt); // ldr St/Dt/Qt, [x0]
+                x18_epilog();
+            }
             gpc += 4;
             continue;
         }

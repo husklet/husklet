@@ -80,7 +80,7 @@ fn procx() -> Group {
         // pair (killed=0), while dd's SIGTERM (a host kill to the separate child engine, whose host default
         // terminates it) frequently lands first (killed=1). The winner varies run-to-run on BOTH arches, so
         // it can never be byte-stable against the oracle -- not an engine gap. Timing/oracle artifact (#220).
-        src("pidfd-signal", "ext_linuxsys/pidfd_signal.c").oracle().xfail(&[Engine::LinuxAarch64, Engine::LinuxX86_64]),
+        src("pidfd-signal", "ext_linuxsys/pidfd_signal.c").oracle().xfail(&[Engine::LinuxAarch64]),
         src("unshare-files", "ext_linuxsys/unshare_files.c").oracle(),
         // process_vm_readv: the aarch64 JIT now implements it (matches native). On x86_64 the JIT reads
         // correctly (read=32 ok=1) but the qemu-user oracle lacks process_vm_readv (read=-1) -> oracle

@@ -146,6 +146,73 @@ static void exec_close_cloexec(void) {
     free(fds);
 }
 
+// ---- fork child-side engine hooks (shared by clone/case-220 and clone3/case-435) -----------------
+// Everything the CHILD must reset before it re-enters guest code. Factored so the two fork sites can
+// never drift (clone3 was missing the W^X re-assert and the DIR*-cache drop), and instrumented: #371's
+// fork-cost histogram (DD_FORKPROF=1, read once) prints one stderr line per fork with per-hook wall-ns
+// deltas so a regression in the fork path is measurable, at zero cost when unset.
+static int forkprof_on(void) {
+    static int on = -1;
+    if (on < 0) {
+        const char *e = getenv("DD_FORKPROF");
+        on = (e && e[0] == '1') ? 1 : 0;
+    }
+    return on;
+}
+static void fork_child_hooks(struct cpu *c) {
+    uint64_t t[6] = {0};
+    int fp = forkprof_on();
+    if (fp) t[0] = now_ns();
+    // Re-assert MAP_JIT execute mode: the per-thread W^X/APRR state isn't reliable across fork(),
+    // so the child's first run_block can instruction-abort fetching from the (non-executable) code
+    // cache -> the intermittent fork+exec SIGBUS. pthread_jit_write_protect_np(1) = RX (executable).
+    // (No-op under the dual map, which never toggles W^X.)
+    pthread_jit_write_protect_np(1);
+    jit_after_fork(); // dual map: re-alias RX from the child's COW RW pages at the same VA (~1us; keeps
+                      // every inherited translation valid) -- or, threaded parent, rebuild a fresh cache
+#ifdef PCACHE_FORK_HOOK
+    PCACHE_FORK_HOOK; // #339: drop inherited reloc records + bar child saves (an execve re-keys + unbars)
+#endif
+    G_SHADOW_RESET(c); // §B: child's pre-fork host_rets crossed run_block -> drop, use IBTC
+    // Only when jit_after_fork REBUILT the cache at a fresh VA (threaded parent) is every cached body
+    // pointer stale: it zeroed the shared g_map + g_ibtc, but the x86-only 2-way g_xibtc it cannot see
+    // must ALSO be dropped -- else the child's first indirect branch resolves a stale body into the freed
+    // parent RX alias -> SIGSEGV (the same class the execve path documents below). On the preserved-arena
+    // path (#371: single-threaded parent, or the MAP_JIT fallback) the cache VA and content are unchanged,
+    // so the inherited g_xibtc stays valid and is kept warm.
+    if (g_dualmap && !g_fork_preserved) G_SHADOW_CLEAR(c);
+    if (fp) t[1] = now_ns();
+    rc_reset(); // S2: invalidate the inherited (COW) path/metadata caches so the child can never serve
+                // an entry the parent populated before the FS diverged (generation bump; see fscache.c)
+    if (fp) t[2] = now_ns();
+    g_ndirs = 0; // the getdents DIR* cache is the PARENT's -- closedir'ing inherited handles
+                 // (on the child's close) crashes; drop it so the child re-fdopendir's fresh
+    kqueue_rebuild_after_fork(); // macOS kqueue() fds (epoll/timerfd/inotify) don't survive fork ->
+                                 // rebuild them so the child doesn't EBADF on its inherited event fds
+                                 // (also reinits g_ep_mtx, inherited-locked if a peer forked mid-epoll)
+    if (fp) t[3] = now_ns();
+    thread_after_fork(); // reset process-private thread/futex locks a dead peer may have held at fork
+    sysv_after_fork();   // reset the SysV-shm lock (same fork-unsafe-mutex class)
+    poslk_after_fork();  // #340: re-cache pid; child inherits NONE of the parent's fcntl record locks
+    if (fp) t[4] = now_ns();
+#ifdef DD_HAS_MACH_EXC
+    // The CRASHDBG Mach exception port + its receiver thread do NOT survive fork, so a crash in the
+    // child silently dies. Clear the inherited task exception port so a fault falls through to the
+    // POSIX diag_crash handler (which IS inherited) and reports fault=/pc=.
+    if (getenv("CRASHDBG"))
+        task_set_exception_ports(mach_task_self(), EXC_MASK_BAD_ACCESS | EXC_MASK_BAD_INSTRUCTION,
+                                 MACH_PORT_NULL, EXCEPTION_DEFAULT, 0);
+#endif
+    if (fp) {
+        t[5] = now_ns();
+        fprintf(stderr,
+                "[forkprof] child jit=%llu rc=%llu kq=%llu locks=%llu total=%llu ns preserved=%d rw=%p rx=%p\n",
+                (unsigned long long)(t[1] - t[0]), (unsigned long long)(t[2] - t[1]),
+                (unsigned long long)(t[3] - t[2]), (unsigned long long)(t[4] - t[3]),
+                (unsigned long long)(t[5] - t[0]), g_fork_preserved, (void *)g_cache, J_RX(g_cache));
+    }
+}
+
 // ---- runtime credential overlay (USER ns) -------------------------------------------------------
 // The credential overlay state + accessors (g_ruid/euid/suid, g_rgid/egid/sgid, cred_init/cred_euid/
 // cred_egid/uid_permitted/gid_permitted) and the #255 new-file ownership stamp (g_fs*_ovr, newfile_*)
@@ -293,6 +360,7 @@ static int svc_proc(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64
         ib_dump();      // ARM-B1 IBPROF: indirect-branch traffic + stability report (no-op unless IBPROF)
         vt_dump();      // ARM-B1 VDBETRACE: threading prototype counters (no-op unless VDBETRACE)
         ctx_dump();     // CTXDISP: history-keyed-dispatch counters (no-op unless CTXDISP)
+        md_dump();      // MAPDUMP: translation-map + code-cache dump for offline PC attribution (profiling)
         if (g_noexit) { // W3D fork-server prewarm: don't kill the resident parent; unwind run_guest instead
             c->exited = 1;
             c->exit_code = (int)a0;
@@ -685,6 +753,7 @@ static int svc_proc(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64
         // parent and child see one coherent file via the inherited description, exactly as POSIX requires
         // (the heap-resident buffers would otherwise COW-diverge while the fd stays shared).
         memf_materialize_all();
+        uint64_t fk0 = forkprof_on() ? now_ns() : 0; // #371: parent-side fork() latency (DD_FORKPROF=1)
         pid_t pid = fork();
         if (pid == 0) {
             // clone(CLONE_VM, child_stack): glibc posix_spawn/popen/vfork pass a separate child stack in a1
@@ -692,40 +761,9 @@ static int svc_proc(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64
             // the VM, but the child MUST run on a1 or glibc reads the trampoline off the parent's SP ->
             // garbage branch (SIGILL — broke initdb). a1==0 for a plain fork (bash), keeping the inherited SP.
             if ((a0 & 0x100) && a1) G_SP(c) = a1;
-            // Re-assert MAP_JIT execute mode: the per-thread W^X/APRR state isn't reliable across fork(),
-            // so the child's first run_block can instruction-abort fetching from the (non-executable) code
-            // cache -> the intermittent fork+exec SIGBUS. pthread_jit_write_protect_np(1) = RX (executable).
-            pthread_jit_write_protect_np(1);
-            jit_after_fork();  // dual map: COW split the RW/RX aliases -> rebuild a fresh aliased cache
-#ifdef PCACHE_FORK_HOOK
-            PCACHE_FORK_HOOK; // #339: fresh arena -> drop inherited reloc records + bar child saves
-#endif
-            G_SHADOW_RESET(c); // §B: child's pre-fork host_rets crossed run_block -> drop, use IBTC
-            // Under the dual map, jit_after_fork() rebuilt the child's cache at a FRESH VA (and munmap'd the
-            // old RW/RX aliases), so every cached body pointer is now stale. It zeroed the shared g_map +
-            // g_ibtc, but the x86-only 2-way g_xibtc it cannot see must ALSO be dropped -- else the child's
-            // first indirect branch resolves a stale body into the freed parent RX alias -> SIGSEGV (the same
-            // class the execve path documents below). No-op under the MAP_JIT fallback: there the cache VA is
-            // inherited unchanged, so the inherited g_xibtc stays valid (and this keeps that path byte-exact).
-            if (g_dualmap) G_SHADOW_CLEAR(c);
-            rc_reset();        // S2: drop the inherited (COW) path-resolution cache so the child can never
-                               // serve a guest->host mapping that the parent populated before the FS diverged
-            g_ndirs = 0;       // the getdents DIR* cache is the PARENT's -- closedir'ing inherited handles
-                               // (on the child's close) crashes; drop it so the child re-fdopendir's fresh
-            kqueue_rebuild_after_fork(); // macOS kqueue() fds (epoll/timerfd/inotify) don't survive fork ->
-                                         // rebuild them so the child doesn't EBADF on its inherited event fds
-                                         // (also reinits g_ep_mtx, inherited-locked if a peer forked mid-epoll)
-            thread_after_fork(); // reset process-private thread/futex locks a dead peer may have held at fork
-            sysv_after_fork();   // reset the SysV-shm lock (same fork-unsafe-mutex class)
-            poslk_after_fork();  // #340: re-cache pid; child inherits NONE of the parent's fcntl record locks
-#ifdef DD_HAS_MACH_EXC
-            // The CRASHDBG Mach exception port + its receiver thread do NOT survive fork, so a crash in the
-            // child silently dies. Clear the inherited task exception port so a fault falls through to the
-            // POSIX diag_crash handler (which IS inherited) and reports fault=/pc=.
-            if (getenv("CRASHDBG"))
-                task_set_exception_ports(mach_task_self(), EXC_MASK_BAD_ACCESS | EXC_MASK_BAD_INSTRUCTION,
-                                         MACH_PORT_NULL, EXCEPTION_DEFAULT, 0);
-#endif
+            fork_child_hooks(c); // shared child-side engine reset (cache re-alias, caches, kqueues, locks)
+        } else if (fk0) {
+            fprintf(stderr, "[forkprof] parent fork()=%llu ns\n", (unsigned long long)(now_ns() - fk0));
         }
         // CLONE_PIDFD(0x1000): the kernel stores a pidfd for the new child at the address in `parent_tid`
         // (a2, the aarch64 clone slot). macOS has no pidfd, so mint a kqueue that fires on the child's exit
@@ -970,24 +1008,10 @@ static int svc_proc(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64
             break;
         }
         pid_t pid = fork();
-        // §B: same -- child drops the inherited shadow; S2: and the inherited path-resolution cache
-        if (pid == 0) {
-            jit_after_fork(); // dual map: rebuild the child's aliased cache (COW split RW/RX)
-#ifdef PCACHE_FORK_HOOK
-            PCACHE_FORK_HOOK; // #339: fresh arena -> drop inherited reloc records + bar child saves
-#endif
-            G_SHADOW_RESET(c);
-            // Dual map only: the rebuilt cache moved to a fresh VA, so drop the x86-only 2-way g_xibtc that
-            // jit_after_fork() can't see (stale bodies -> freed parent RX alias -> SIGSEGV on the child's
-            // first indirect branch). No-op on the MAP_JIT fallback (cache VA inherited unchanged). See the
-            // fork/vfork child above for the full rationale.
-            if (g_dualmap) G_SHADOW_CLEAR(c);
-            rc_reset();
-            kqueue_rebuild_after_fork(); // macOS kqueue() fds don't survive fork -> rebuild epoll/timer/inotify
-            thread_after_fork(); // reset process-private thread/futex/epoll locks inherited-locked across fork
-            sysv_after_fork();
-            poslk_after_fork();  // #340: re-cache pid; child inherits NONE of the parent's fcntl record locks
-        }
+        // child: the same shared engine reset as the clone/fork site above (cache re-alias / §B shadow /
+        // path caches / kqueues / fork-unsafe locks). clone3 historically lacked the W^X re-assert and the
+        // DIR*-cache drop the clone site had; the shared helper closes that drift.
+        if (pid == 0) fork_child_hooks(c);
         // CLONE_PIDFD: clone3 stores the child pidfd via the `pidfd` field (clone_args[1]); back it the same
         // way as case 220 so a clone3-based spawn (newer glibc/runtimes) can epoll_wait/poll it to reap.
         if (pid > 0 && (flags & 0x1000) && ca[1]) {

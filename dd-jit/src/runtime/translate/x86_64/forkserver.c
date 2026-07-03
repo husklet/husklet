@@ -153,6 +153,12 @@ static void ddjitd_worker(int conn, int *fds, int nfd, int argc, char **argv) {
     // (see os/linux/service.c fork path) -- re-assert RX so the first run_block can fetch from the
     // (COW-inherited, warm) MAP_JIT arena instead of instruction-aborting.
     pthread_jit_write_protect_np(1);
+    // #371: under the DUAL-MAPPED cache the worker must re-couple the RW/RX aliases (the RX alias is
+    // VM_INHERIT_NONE -> a hole in this child; and even pre-#371 the two aliases COW-split at fork, so a
+    // worker's fresh translations were written to an RW the RX never saw). jit_after_fork() re-remaps RX
+    // from the worker's own COW pages at the same VA, keeping the ENTIRE prewarmed arena + maps valid --
+    // exactly the warm-start this fork-server exists for. Also sheds inherited engine locks/registries.
+    jit_after_fork();
     // The cpu struct (incl. the shadow return stack) is memset fresh inside run_loaded below, so no
     // explicit shadow reset is needed here.
     // Make the guest's exit_group UNWIND run_guest (return the code) instead of _exit()ing the worker

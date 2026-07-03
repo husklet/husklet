@@ -141,10 +141,19 @@ __attribute__((constructor)) static void res_epoch_ctor(void) {
         g_res_epoch_ptr = (_Atomic uint32_t *)m;
     }
 }
+// #371: process-local fork/chroot GENERATION for every cache in this file (mc/rl/ac + rc/ud/oc).
+// Each entry is stamped with g_fs_fgen at store time and only hits while its stamp still matches;
+// rc_reset() (the fork-child / chroot hard reset) just bumps the counter -- O(1) -- instead of
+// memset'ing ~13MB of arrays inside the fork child's critical path. The counter is ordinary process
+// memory (COW-private), so a child's bump never disturbs the parent's warm caches. Reads/writes happen
+// under the same CLK lock as the entries themselves.
+static uint32_t g_fs_fgen;
+
 #define MCACHE_N 8192
 static struct mcent {
     uint64_t hash;
     uint32_t epoch; // stamp at store; a negative (rc<0) entry only hits while it still equals g_res_epoch
+    uint32_t fgen;  // #371 fork/chroot generation stamp (see g_fs_fgen)
     char path[192];
     int rc;
     struct stat st;
@@ -165,7 +174,7 @@ static int mc_lookup(const char *p, int *rc, struct stat *out) {
     struct mcent *e = &g_mc[h & (MCACHE_N - 1)];
     // A negative (ENOENT) entry is only valid within the epoch it was recorded: a later create/rename can
     // turn it positive, and every such mutation bumps g_res_epoch -> miss and re-stat the now-real file.
-    if (e->hash == h && (e->rc >= 0 || e->epoch == g_res_epoch) && !strcmp(e->path, p)) {
+    if (e->hash == h && e->fgen == g_fs_fgen && (e->rc >= 0 || e->epoch == g_res_epoch) && !strcmp(e->path, p)) {
         *rc = e->rc;
         *out = e->st;
         hit = 1;
@@ -182,6 +191,7 @@ static void mc_store(const char *p, int rc, const struct stat *s) {
     struct mcent *e = &g_mc[h & (MCACHE_N - 1)];
     e->hash = h;
     e->epoch = g_res_epoch;
+    e->fgen = g_fs_fgen;
     strcpy(e->path, p);
     e->rc = rc;
     e->st = *s;
@@ -213,6 +223,7 @@ static void mc_evict_ino(dev_t dev, ino_t ino) {
 static struct rlent {
     uint64_t hash;
     uint32_t epoch; // negative (rc<0) entries are epoch-gated; see the mcent rationale above
+    uint32_t fgen;  // #371 fork/chroot generation stamp
     char path[176];
     int rc;
     char link[200];
@@ -226,7 +237,7 @@ static int rl_lookup(const char *p, int *rc, char *out, int bs, int *len) {
     struct rlent *e = &g_rl[h & 2047];
     // a negative readlink (ENOENT/EINVAL) only hits within its epoch -- a later symlink/create can make it
     // resolve, and that mutation bumps g_res_epoch.
-    if (e->hash == h && (e->rc >= 0 || e->epoch == g_res_epoch) && !strcmp(e->path, p)) {
+    if (e->hash == h && e->fgen == g_fs_fgen && (e->rc >= 0 || e->epoch == g_res_epoch) && !strcmp(e->path, p)) {
         *rc = e->rc;
         int n = e->linklen < bs ? e->linklen : bs;
         if (e->rc >= 0) memcpy(out, e->link, n);
@@ -243,6 +254,7 @@ static void rl_store(const char *p, int rc, const char *link, int len) {
     struct rlent *e = &g_rl[h & 2047];
     e->hash = h;
     e->epoch = g_res_epoch;
+    e->fgen = g_fs_fgen;
     strcpy(e->path, p);
     e->rc = rc;
     e->linklen = len;
@@ -261,6 +273,7 @@ static void rl_evict(const char *p) {
 static struct acent {
     uint64_t hash;
     uint32_t epoch; // negative (rc<0) entries are epoch-gated; see the mcent rationale above
+    uint32_t fgen;  // #371 fork/chroot generation stamp
     char path[176];
     int rc;
 } g_ac[2048];
@@ -272,7 +285,7 @@ static int ac_lookup(const char *p, int *rc) {
     struct acent *e = &g_ac[h & 2047];
     // a negative existence probe only hits within its epoch -- a later create can make the path exist, and
     // that mutation bumps g_res_epoch -> miss and re-probe.
-    if (e->hash == h && (e->rc >= 0 || e->epoch == g_res_epoch) && !strcmp(e->path, p)) {
+    if (e->hash == h && e->fgen == g_fs_fgen && (e->rc >= 0 || e->epoch == g_res_epoch) && !strcmp(e->path, p)) {
         *rc = e->rc;
         hit = 1;
     }
@@ -286,6 +299,7 @@ static void ac_store(const char *p, int rc) {
     struct acent *e = &g_ac[h & 2047];
     e->hash = h;
     e->epoch = g_res_epoch;
+    e->fgen = g_fs_fgen;
     strcpy(e->path, p);
     e->rc = rc;
     CUL;
@@ -317,6 +331,7 @@ static void ac_evict(const char *p) {
 static struct rcent {
     uint64_t hash;
     uint32_t epoch;
+    uint32_t fgen; // #371 fork/chroot generation stamp
     uint16_t hlen; // strlen(host), cached so a hit copies via memcpy instead of re-scanning/snprintf
     char guest[200];
     char host[256];
@@ -357,6 +372,7 @@ static void res_bump(void) {
 static struct udent {
     uint64_t hash;
     uint32_t epoch;
+    uint32_t fgen; // #371 fork/chroot generation stamp
     char dir[200];
 } g_ud[UDCACHE_N];
 static int updirneg_lookup(const char *d) {
@@ -365,7 +381,7 @@ static int updirneg_lookup(const char *d) {
     int hit = 0;
     uint64_t h = mc_hash(d);
     struct udent *e = &g_ud[h & (UDCACHE_N - 1)];
-    if (e->hash == h && e->epoch == g_res_epoch && !strcmp(e->dir, d)) hit = 1;
+    if (e->hash == h && e->fgen == g_fs_fgen && e->epoch == g_res_epoch && !strcmp(e->dir, d)) hit = 1;
     CUL;
     return hit;
 }
@@ -376,6 +392,7 @@ static void updirneg_store(const char *d) {
     struct udent *e = &g_ud[h & (UDCACHE_N - 1)];
     e->hash = h;
     e->epoch = g_res_epoch;
+    e->fgen = g_fs_fgen;
     strcpy(e->dir, d);
     CUL;
 }
@@ -390,15 +407,25 @@ static void updirneg_store(const char *d) {
 // makes the child re-resolve against the real FS.
 static void rc_reset(void) {
     CLK;
-    memset(g_rc, 0, sizeof g_rc);
-    memset(g_mc, 0, sizeof g_mc);
-    memset(g_rl, 0, sizeof g_rl);
-    memset(g_ac, 0, sizeof g_ac);
-    memset(g_ud, 0, sizeof g_ud); // overlay upper-parent negative memo: same COW/re-root hazard
-    // NB: do NOT reset g_res_epoch here -- it is now a container-wide SHARED counter (see its definition); a
-    // fork child / chroot must not rewind the whole tree's epoch. Clearing the local arrays above (hash=0 =>
-    // never hits) already drops every inherited entry, which is all this reset needs to do.
-    oc_reset(); // W4D: drop the inherited open-resolution cache too (same COW hazard, under the same lock)
+    // #371: O(1) GENERATION BUMP instead of memset'ing all six arrays (~13MB: rc+oc ~3.8MB each, mc
+    // ~2.9MB, rl/ac/ud ~2MB) in the fork child's critical path -- those memsets were a fixed ~ms-scale
+    // tax on EVERY guest fork. Every entry is stamped with g_fs_fgen at store time and only hits while
+    // the stamp still matches, so bumping the (process-local, COW-private) counter atomically drops every
+    // inherited entry -- exactly the semantics the memsets had -- while the parent's counter (and its
+    // warm caches) are untouched. On the in-practice-unreachable 32-bit wrap (2^32 forks/chroots in one
+    // process lineage), fall back to the hard clear so an entry stamped 2^32 generations ago (if it
+    // somehow survived unoverwritten) can never alias the new generation.
+    if (++g_fs_fgen == 0) {
+        memset(g_rc, 0, sizeof g_rc);
+        memset(g_mc, 0, sizeof g_mc);
+        memset(g_rl, 0, sizeof g_rl);
+        memset(g_ac, 0, sizeof g_ac);
+        memset(g_ud, 0, sizeof g_ud); // overlay upper-parent negative memo: same COW/re-root hazard
+        oc_reset(); // W4D: the open-resolution cache too (same COW hazard, under the same lock)
+    }
+    // NB: do NOT reset g_res_epoch here -- it is a container-wide SHARED counter (see its definition); a
+    // fork child / chroot must not rewind the whole tree's epoch. The generation bump above drops every
+    // inherited entry of THIS process, which is all this reset needs to do.
     CUL;
 }
 static int rc_lookup(const char *g, char *out, size_t n) {
@@ -407,7 +434,7 @@ static int rc_lookup(const char *g, char *out, size_t n) {
     int hit = 0;
     uint64_t h = mc_hash(g);
     struct rcent *e = &g_rc[h & (RCACHE_N - 1)];
-    if (e->hash == h && e->epoch == g_res_epoch && !strcmp(e->guest, g)) {
+    if (e->hash == h && e->fgen == g_fs_fgen && e->epoch == g_res_epoch && !strcmp(e->guest, g)) {
         if (e->hlen < n) {
             memcpy(out, e->host, (size_t)e->hlen + 1); // hot path: bounded copy incl. NUL, no format parse
         } else {
@@ -429,6 +456,7 @@ static void rc_store(const char *g, const char *host) {
     struct rcent *e = &g_rc[h & (RCACHE_N - 1)];
     e->hash = h;
     e->epoch = g_res_epoch; // stamp with the CURRENT epoch; a later mutation invalidates it
+    e->fgen = g_fs_fgen;
     e->hlen = (uint16_t)hl;
     strcpy(e->guest, g);
     memcpy(e->host, host, hl + 1);
@@ -455,6 +483,7 @@ static void rc_store(const char *g, const char *host) {
 static struct ocent {
     uint64_t hash;
     uint32_t epoch;
+    uint32_t fgen; // #371 fork/chroot generation stamp
     uint16_t hlen; // strlen(host), cached so a hit copies via memcpy instead of re-scanning/snprintf
     char guest[200];
     char host[256];
@@ -473,7 +502,7 @@ static int oc_lookup(const char *g, char *out, size_t n) {
     int hit = 0;
     uint64_t h = mc_hash(g);
     struct ocent *e = &g_oc[h & (OCACHE_N - 1)];
-    if (e->hash == h && e->epoch == g_res_epoch && !strcmp(e->guest, g)) {
+    if (e->hash == h && e->fgen == g_fs_fgen && e->epoch == g_res_epoch && !strcmp(e->guest, g)) {
         if (e->hlen < n) {
             memcpy(out, e->host, (size_t)e->hlen + 1); // hot path: bounded copy incl. NUL, no format parse
         } else {
@@ -497,6 +526,7 @@ static void oc_store(const char *g, const char *host) {
     struct ocent *e = &g_oc[h & (OCACHE_N - 1)];
     e->hash = h;
     e->epoch = g_res_epoch; // stamp the CURRENT epoch; a later mutation invalidates it
+    e->fgen = g_fs_fgen;
     e->hlen = (uint16_t)hl;
     strcpy(e->guest, g);
     memcpy(e->host, host, hl + 1);

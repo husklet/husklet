@@ -37,8 +37,14 @@ static int dualmap_alloc(uint8_t **rw_out, ptrdiff_t *delta_out) {
     if (rw == MAP_FAILED) return -1;
     mach_vm_address_t rx = 0;
     vm_prot_t cur = 0, max = 0;
+    // #371: the RX alias is created VM_INHERIT_NONE, so a fork child gets a HOLE at the RX VA instead of
+    // an independently-COW'd (silently diverged) second copy. jit_after_fork() then re-remaps a fresh RX
+    // alias of the child's OWN (COW-inherited) RW pages at that same VA -- ~1us -- which re-couples the
+    // two views, so the child keeps every inherited translation AND its later writes propagate to RX
+    // (empirically verified, incl. 4 nested fork generations). Every fork path runs jit_after_fork()
+    // before any guest code executes, so nothing ever fetches from the hole.
     kern_return_t kr = mach_vm_remap(mach_task_self(), &rx, CACHE_SZ, 0, VM_FLAGS_ANYWHERE, mach_task_self(),
-                                     (mach_vm_address_t)rw, FALSE, &cur, &max, VM_INHERIT_DEFAULT);
+                                     (mach_vm_address_t)rw, FALSE, &cur, &max, VM_INHERIT_NONE);
     if (kr == KERN_SUCCESS) kr = mach_vm_protect(mach_task_self(), rx, CACHE_SZ, FALSE, VM_PROT_READ | VM_PROT_EXECUTE);
     if (kr != KERN_SUCCESS) {
         munmap(rw, CACHE_SZ);
@@ -386,6 +392,28 @@ static void ctx_fill(uint64_t pair_rx, uint64_t target) {
 static void ctx_dump(void) {
     if (!g_ctxdisp) return;
     fprintf(stderr, "[ctxdisp] sites=%d fills=%llu\n", g_nctxsite, (unsigned long long)g_ctx_fills);
+}
+// MAPDUMP=<prefix> (profiling-only, this worktree): at exit_group, dump the translation map + the raw
+// code cache so an offline tool can attribute sampled host PCs to guest blocks/instructions.
+// <prefix>.map is text: "CACHE <rw> <rx> <cp>" then one "MAP <gpc> <host> <body>" per live block.
+// <prefix>.bin is the raw [g_cache, g_cp) bytes. Zero cost unless the env is set.
+static void md_dump(void) {
+    const char *pfx = getenv("MAPDUMP");
+    if (!pfx || !g_cache) return;
+    char p[1024];
+    snprintf(p, sizeof p, "%s.map", pfx);
+    FILE *f = fopen(p, "w");
+    if (!f) return;
+    fprintf(f, "CACHE %p %p %p\n", (void *)g_cache, J_RX(g_cache), (void *)g_cp);
+    for (uint32_t i = 0; i < JIT_MAP_N; i++)
+        if (g_map[i].host)
+            fprintf(f, "MAP %llx %p %p\n", (unsigned long long)g_map[i].gpc, g_map[i].host, g_map[i].body);
+    fclose(f);
+    snprintf(p, sizeof p, "%s.bin", pfx);
+    f = fopen(p, "wb");
+    if (!f) return;
+    fwrite(g_cache, 1, (size_t)(g_cp - g_cache), f);
+    fclose(f);
 }
 // ARM-B1: recognize a clang jump-table switch dispatch at a guest `br xN`. The compiler emits
 //   ldrh wM,[xB,wI,uxtw #1] ; adr xA,. ; add xN,xA,wM,sxth #2 ; br xN
@@ -829,13 +857,28 @@ static void stw_after_fork(void) {
     g_my_exec_gen = &g_stw_threads[0].exec_gen;
 }
 
-// fork() COWs the RW and RX aliases independently, so after a guest fork the child's two views of the
-// SAME cache silently diverge (writes through RW never reach the COW'd RX -> the child executes stale/
-// zero pages). In the child we build a FRESH dual map (private, correctly re-aliased) and drop the
-// inherited translations; the child re-translates on demand. No-op without dual mapping -- the MAP_JIT
-// RWX fallback's execute permission lives in the page tables and is inherited across fork() correctly.
-// Must run in the child after fork(), before its next run_block.
+// fork() and the dual-mapped cache. Left alone, fork() would COW the RW and RX aliases independently and
+// the child's two views of the SAME cache would silently diverge (writes through RW never reach the COW'd
+// RX -> the child executes stale/zero pages). dualmap_alloc therefore marks the RX alias VM_INHERIT_NONE
+// (the child gets a hole at the RX VA), and here -- in the child, before its next run_block -- we re-remap
+// a fresh RX alias of the child's OWN COW-inherited RW pages at that SAME VA. That re-couples the aliases
+// (child RW writes are visible through child RX again; verified empirically incl. nested forks) at the
+// SAME addresses, so EVERY inherited translation, g_map/g_ibtc entry, cross-block chain and IC stays
+// valid: a fork child resumes on the parent's warm code with ~zero rebuild cost (#371; was a full 64MB
+// dual-map rebuild + ~13MB of map memsets = ~0.7ms per fork, plus a full re-translate of everything).
+//
+// Preserving translations across fork is exactly what the single-mapping MAP_JIT fallback has always done
+// (its page-table execute permission and content are inherited correctly), so the preserved-arena
+// semantics are the long-proven fallback semantics -- the dual map now just matches them.
+//
+// THREADED parent: a peer M may be mid-translate at the fork instant (holding g_jit_lock), so the
+// inherited arena/g_map can be a torn snapshot. The single surviving thread cannot tell, so in that case
+// we keep the conservative pre-#371 behaviour: build a FRESH dual map and drop the inherited translations
+// (the child re-translates on demand). g_fork_preserved tells proc.c whether the per-arch caches keyed on
+// cache VAs (x86 g_xibtc) survived (1) or must be dropped (0).
+static int g_fork_preserved;
 static void jit_after_fork(void) {
+    g_fork_preserved = 1; // MAP_JIT fallback + successful re-remap keep the arena; rebuild paths clear it
     stw_after_fork(); // single-threaded child: shed the inherited thread registry (also for the MAP_JIT path)
     // fork() only clones the CALLING thread. If a peer M was translating (holding g_jit_lock, and g_cache_lock
     // under it in map_put) at the instant the guest forked, the child inherits those mutexes LOCKED with no
@@ -854,15 +897,53 @@ static void jit_after_fork(void) {
         cache_unmap(g_retired[i].rw, g_retired[i].rw2rx);
     g_nretired = 0;
     if (!g_dualmap) return;
-    uint8_t *old_rw = g_cache, *old_rx = (uint8_t *)J_RX(g_cache);
+    if (!g_threaded) {
+        // Single-threaded parent (shells, make, configure -- the fork-storm case): the inherited RW arena
+        // is a consistent snapshot (no peer could be mid-emit; the forking thread never forks while
+        // translating). Re-alias RX from the child's RW at the SAME VA the parent used -- the RX range is
+        // a guaranteed hole here (VM_INHERIT_NONE in dualmap_alloc). ~1us, preserves everything.
+        mach_vm_address_t rx = (mach_vm_address_t)(g_cache + g_rw2rx);
+        vm_prot_t cur = 0, max = 0;
+        kern_return_t kr = mach_vm_remap(mach_task_self(), &rx, CACHE_SZ, 0, VM_FLAGS_FIXED, mach_task_self(),
+                                         (mach_vm_address_t)g_cache, FALSE, &cur, &max, VM_INHERIT_NONE);
+        if (kr == KERN_SUCCESS) {
+            if (mach_vm_protect(mach_task_self(), rx, CACHE_SZ, FALSE, VM_PROT_READ | VM_PROT_EXECUTE) ==
+                KERN_SUCCESS)
+                return; // arena + g_map/g_ibtc/chains all still valid -- nothing to drop
+            // we own the new mapping but could not make it executable: scrub OUR mapping, then rebuild.
+            mach_vm_deallocate(mach_task_self(), rx, CACHE_SZ);
+        }
+        // Defensive fall-through (the FIXED remap can only fail if something else occupied the RX hole,
+        // which nothing between fork() and this hook should do): leave whatever occupies the range alone
+        // -- it is not ours to deallocate -- and take the full rebuild below, which allocates elsewhere.
+    }
+    // Threaded parent (or the defensive fall-through): conservative rebuild -- fresh dual map, drop the
+    // (possibly torn) inherited translations; the child re-translates on demand.
+    //
+    // NB: do NOT munmap the old RX range here. In this child it is a hole (VM_INHERIT_NONE at
+    // dualmap_alloc; or scrubbed/foreign after the defensive fall-through above), and dualmap_alloc below
+    // is free to place the FRESH arena exactly inside that 64MB gap -- a post-alloc munmap of the old RX
+    // range would then silently unmap the brand-new cache and the child's first emission faults
+    // (SIGSEGV at new-RW+0x10; hit by every fork from a threaded parent until this note existed).
+    g_fork_preserved = 0;
+    uint8_t *old_rw = g_cache;
     uint8_t *rw;
     ptrdiff_t d;
-    if (dualmap_alloc(&rw, &d) != 0) return; // alloc failure (extremely rare): leave map as-is
+    if (dualmap_alloc(&rw, &d) != 0) { // alloc failure (extremely rare): leave map as-is. The RX range is
+        // a hole in the child (INHERIT_NONE), so re-alias it in place as a last resort; if even that
+        // fails the child aborts on its first fetch, which is still better than executing stale bytes.
+        mach_vm_address_t rx = (mach_vm_address_t)(g_cache + g_rw2rx);
+        vm_prot_t cur = 0, max = 0;
+        if (mach_vm_remap(mach_task_self(), &rx, CACHE_SZ, 0, VM_FLAGS_FIXED, mach_task_self(),
+                          (mach_vm_address_t)g_cache, FALSE, &cur, &max, VM_INHERIT_NONE) == KERN_SUCCESS)
+            mach_vm_protect(mach_task_self(), rx, CACHE_SZ, FALSE, VM_PROT_READ | VM_PROT_EXECUTE);
+        return;
+    }
     g_cache = g_cp = rw;
     g_rw2rx = d;
     memset(g_map, 0, sizeof g_map);
     memset(g_ibtc, 0, sizeof g_ibtc);
     g_npend = 0;
-    munmap(old_rw, CACHE_SZ);
-    munmap(old_rx, CACHE_SZ);
+    munmap(old_rw, CACHE_SZ); // the old RW was still mapped through the alloc, so it cannot overlap the
+                              // fresh arena; the old RX range is a pre-existing hole (see the NB above)
 }

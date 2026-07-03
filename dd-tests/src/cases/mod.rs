@@ -144,7 +144,7 @@ fn edge() -> Group {
         src("scmrights", "edge_scmrights.c").oracle(),             // fd passing over AF_UNIX (SCM_RIGHTS) — FIXED (cmsg l2m/m2l)
         src("fallocate", "edge_fallocate.c").oracle(),   // FALLOC_FL_PUNCH_HOLE sparse hole
         src("lseekhole", "edge_lseekhole.c").oracle(),   // SEEK_HOLE / SEEK_DATA
-        src("otmpfile", "edge_otmpfile.c").oracle().xfail(lin),     // O_TMPFILE unnamed file
+        src("otmpfile", "edge_otmpfile.c").oracle(),                // O_TMPFILE unnamed file
         src("pipepacket", "edge_pipepacket.c").oracle(), // pipe2(O_DIRECT) packet boundaries
         src("msgflags", "edge_msgpeek.c").oracle(),                 // recv MSG_PEEK + MSG_DONTWAIT — WORKS
         src("abstract", "edge_abstract.c").oracle(),               // abstract-namespace AF_UNIX — FIXED (DD_NETNS fs-socket map)
@@ -157,7 +157,7 @@ fn edge() -> Group {
         // as relative.
         src("clockabstime", "edge_clockabstime.c").only(&[Engine::LinuxAarch64]).has("abstime_ok=1"),
         src("sigpipe", "edge_sigpipe.c").has("survived=1 epipe=1"), // SO_NOSIGPIPE set on every guest socket at creation (socket/socketpair/accept) -> write/send to a broken socket returns EPIPE, never a fatal SIGPIPE
-        src("procfd", "edge_procfd.c").has("resolves=1 enough_fds=1").xfail(lin), // /proc/self/fd
+        src("procfd", "edge_procfd.c").has("resolves=1 enough_fds=1"), // /proc/self/fd
         // times(): tms_utime works on x86_64 but is 0 on aarch64 (clock() works on both) — engine split.
         src("times", "edge_times.c").has("utime_ok=1 clock_ok=1 ret_ok=1"),
         src("statfs", "edge_statfs.c").oracle().xfail(lin),                            // real fs geometry (not hardcoded)
@@ -273,6 +273,12 @@ fn compat() -> Group {
         // the deterministic checksum, so this golden runs byte-identically on both Linux engines.
         src("ibtc-dispatch", "ibtc_dispatch.c").out("ibtc vm=10240120795314104034 rec=2178309 chk=12619423276023875997\n"),
         src("floatmath", "floatmath.c").oracle(),
+        // Stolen-register codegen surface (aarch64: x16/x17/x18/x28/x30 live in cpu->x[]): inline-asm
+        // coverage of every mangle shape -- data-processing (1..3 distinct stolen regs), loads/stores
+        // (stolen Rt/base/writeback/pairs), adr + ldr-literal INTO a stolen reg, TLS via tpidr_el0
+        // (stolen + non-stolen), and cbz/tbz TESTING a stolen reg. Pins both the legacy mscratch dance
+        // and the steal-mode fast paths (stealfast) byte-exactly against a native run.
+        src("stolen-regs", "stolen_regs.c").only(&[Engine::LinuxAarch64]).oracle(),
     ])
 }
 
