@@ -57,6 +57,38 @@ fn resources() -> Group {
         // --ulimit nofile: getrlimit(RLIMIT_NOFILE) returns exactly the requested soft/hard pair.
         port("ulimit-nofile", "ext_iso/ulimit.c").ulimit("nofile", 1024, 2048)
             .out("nofile soft=1024 hard=2048\n"),
+        // cgroup v2: the surface the JVM (-XX:+UseContainerSupport), the Go runtime (GOMAXPROCS via
+        // cpu.max quota/period, GOMEMLIMIT via memory.max), Node/libuv and systemd SIZE THEMSELVES from.
+        // Unconstrained -> the kernel "max" sentinels (cpu.max="max 100000", memory.max/swap.max="max");
+        // the v2 markers (statfs CGROUP2 magic, cgroup.controllers, cgroup.type=domain) present; the v1
+        // fallback ENOENT (pure-v2 host, exactly like docker/OrbStack -- NOT fabricated). Linux-only: cgroup
+        // is a kernel concept with no darwin analogue. Golden byte-identical to `docker run` (runc oracle).
+        src("cgroup-v2-default", "ext_iso/cgroup.c")
+            .only(&[Engine::LinuxAarch64, Engine::LinuxX86_64])
+            .out("cgv2=1 controllers=OK type=domain v1absent=1 cpu.max=[max 100000] mem.max=[max] \
+mem.swap.max=[max] mem.high=[max] cpu.weight=[100] pids.max=[max]\n"),
+        // docker --cpus=2: cpu.max quota MUST equal 2*period ("200000 100000"). A runtime computes
+        // cpus=quota/period, so this is what makes Go GOMAXPROCS / JVM availableProcessors self-size to the
+        // allotment instead of one worker per HOST core. Verified vs `docker run --cpus=2`.
+        src("cgroup-cpu-cap2", "ext_iso/cgroup.c").cpus(2)
+            .only(&[Engine::LinuxAarch64, Engine::LinuxX86_64])
+            .out("cgv2=1 controllers=OK type=domain v1absent=1 cpu.max=[200000 100000] mem.max=[max] \
+mem.swap.max=[max] mem.high=[max] cpu.weight=[100] pids.max=[max]\n"),
+        // docker --memory=512m: memory.max == the byte cap (536870912) and memory.swap.max == the same
+        // (docker's default --memory-swap=2*mem -> the v2 swap-ONLY ceiling = mem). This is what the JVM
+        // UseContainerSupport + GOMEMLIMIT read to bound the heap. Verified vs `docker run --memory=512m`.
+        src("cgroup-mem-cap512m", "ext_iso/cgroup.c").mem(536870912)
+            .only(&[Engine::LinuxAarch64, Engine::LinuxX86_64])
+            .out("cgv2=1 controllers=OK type=domain v1absent=1 cpu.max=[max 100000] mem.max=[536870912] \
+mem.swap.max=[536870912] mem.high=[max] cpu.weight=[100] pids.max=[max]\n"),
+        // The REAL overlay-rootfs `docker run --cpus --memory` path a JVM/Go image takes: a busybox shell in
+        // an alpine image reads the sizing files through the overlay relative-open re-entry (which a bare
+        // guest doesn't exercise). cpu.max reflects --cpus=2, memory.max reflects --memory=512m, and the
+        // controller set is present. Golden byte-identical to `docker run --cpus=2 --memory=512m`.
+        in_rootfs("cgroup-rootfs-caps", "alpine", &["/bin/sh", "-c", CGROUP_PROBE])
+            .cpus(2).mem(536870912)
+            .only(&[Engine::LinuxAarch64, Engine::LinuxX86_64])
+            .out("cpu.max=[200000 100000] mem.max=[536870912] controllers=[cpuset cpu io memory pids]\n"),
         // #412 part 2, the REAL overlay-rootfs path `docker run htop` takes: a busybox shell in an alpine
         // image counts the /sys/devices/system/cpu/cpuN dirs (htop's source) and asserts it equals nproc.
         // Host-count-independent MATCH verdict (stable across engines/arches/hosts). Exercises the overlay
@@ -72,6 +104,13 @@ fn resources() -> Group {
 const CPUDIR_PROBE: &str = "\
 n=$(ls -d /sys/devices/system/cpu/cpu[0-9]* 2>/dev/null | wc -l); \
 if [ \"$n\" -eq \"$(nproc)\" ]; then echo cpudirs=MATCH; else echo cpudirs=MISMATCH n=$n nproc=$(nproc); fi";
+
+// Read the JVM/Go self-sizing cgroup files through the overlay rootfs (busybox cat). The values reflect
+// docker --cpus/--memory exactly; the controller set proves the v2 hierarchy is present in the overlay view.
+const CGROUP_PROBE: &str = "\
+printf 'cpu.max=[%s] mem.max=[%s] controllers=[%s]\\n' \
+\"$(cat /sys/fs/cgroup/cpu.max)\" \"$(cat /sys/fs/cgroup/memory.max)\" \
+\"$(cat /sys/fs/cgroup/cgroup.controllers)\"";
 
 // A busybox shell probe: a write to the rootfs root must fail "Read-only file system", while /tmp stays
 // writable. Under --read-only -> root=RO tmp=OK; without it (the old behaviour) -> root=RW.
