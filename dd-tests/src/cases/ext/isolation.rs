@@ -42,6 +42,13 @@ fn resources() -> Group {
         // (deltas_differ=1); before the fix dd showed deltas_differ=0 (every core the same split share).
         src("procstat-percpu", "ext_iso/procstat_percpu.c").oracle()
             .only(&[Engine::LinuxAarch64, Engine::LinuxX86_64]),
+        // lscpu / util-linux reconstruct sockets/cores/threads from /sys/devices/system/cpu/cpuN/topology/*
+        // (core_id, physical_package_id, thread_siblings_list, core_cpus_list, core_siblings_list, ...). dd
+        // materialized the cpuN dirs (#412) but served NONE of the topology attribute files -> every open
+        // ENOENT'd and lscpu mis-counted. This probe drives lscpu's exact per-CPU reads and asserts a
+        // host-independent structural verdict (values are host-variant; STRUCTURE is not). Linux-only (/sys).
+        src("cpu-topology", "ext_iso/cputopo.c").out("cputopo ok=1\n")
+            .only(&[Engine::LinuxAarch64, Engine::LinuxX86_64]),
         // --cpus: nproc / sched_getaffinity / sysconf all report the CAP, not the host core count.
         port("cpucap-1", "ext_iso/cpucount.c").cpus(1).out("cpucount=1\n"),
         port("cpucap-2", "ext_iso/cpucount.c").cpus(2).out("cpucount=2\n"),

@@ -1413,6 +1413,15 @@ static int svc_fs(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t
                     G_RET(c) = d < 0 ? (uint64_t)(-errno) : (uint64_t)d;
                     break;
                 }
+                // cpuN/topology/<core_id|physical_package_id|thread_siblings[_list]|...>: lscpu/util-linux
+                // reconstruct sockets/cores/threads from these; an ENOENT makes lscpu mis-count (dd-only).
+                char tb[96];
+                int tn = syscpu_topology_content(rp, tb, sizeof tb);
+                if (tn >= 0) {
+                    int d = synth_str_fd(tb);
+                    G_RET(c) = d < 0 ? (uint64_t)(-errno) : (uint64_t)d;
+                    break;
+                }
             }
             // #412: the CPU-topology sysfs DIRECTORY itself (and each cpuN subdir). htop opendir()s
             // /sys/devices/system/cpu and counts cpuN subdirs to size its CPU meters; finding none it keeps
