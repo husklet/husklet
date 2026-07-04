@@ -1343,7 +1343,8 @@ static int svc_fs(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t
             // #255: after copy-up, `host` (the upper path) exists iff the file was already present in the
             // overlay -> a missing upper means this open will CREATE it fresh; stamp its owner post-open.
             int nf_new = nf_want && access(host, F_OK) != 0;
-            int r = open(host, mf | ((lf & G_O_NOFOLLOW) ? O_NOFOLLOW : 0), (mode_t)a3);
+            // Gate the new fd against the guest's soft RLIMIT_NOFILE -> EMFILE past the cap (host table larger).
+            int r = nofile_gate(open(host, mf | ((lf & G_O_NOFOLLOW) ? O_NOFOLLOW : 0), (mode_t)a3));
             if (r >= 0 && nf_new) newfile_stamp_fd(r);
             if (r >= 0 && r < 1024) g_opath[r] = is_opath;
             if (r >= 0) {
@@ -1403,6 +1404,8 @@ static int svc_fs(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t
                 // ONE atomic open replaces the per-component walk; hostc is already canonical+symlink-free.
                 int r = open(hostc, mf | O_NOFOLLOW, (mode_t)a3);
                 int e = errno;
+                r = nofile_gate(r); // fd past the guest's soft RLIMIT_NOFILE -> EMFILE
+                if (r < 0 && errno == EMFILE) e = EMFILE;
                 if (r >= 0 && r < 1024) g_opath[r] = is_opath;
                 if (r >= 0) {
                     fd_setpath(r, hostc);
@@ -1428,6 +1431,8 @@ static int svc_fs(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t
             int r = openat(pfd, fin, mf | O_NOFOLLOW, (mode_t)a3);
             int e = errno;
             close(pfd);
+            r = nofile_gate(r); // fd past the guest's soft RLIMIT_NOFILE -> EMFILE (host table is far larger)
+            if (r < 0 && errno == EMFILE) e = EMFILE;
             if (r >= 0 && nf_new) newfile_stamp_fd(r);
             if (r >= 0 && r < 1024) g_opath[r] = is_opath;
             if (r >= 0) {
@@ -1452,7 +1457,9 @@ static int svc_fs(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t
         // no jail
         const char *p = atpath((int)a0, (const char *)a1, pb, sizeof pb, 0);
         int nf_new = nf_want && faccessat(ATFD(a0), p, F_OK, AT_SYMLINK_NOFOLLOW) != 0; // #255: stamp only fresh
-        int r = openat(ATFD(a0), p, mf, (mode_t)a3);
+        // Gate the new fd against the guest's soft RLIMIT_NOFILE -> EMFILE past the cap (the shared host fd
+        // table is far larger; engine-private fds are hoisted above 1<<20, so the guest limit is emulated).
+        int r = nofile_gate(openat(ATFD(a0), p, mf, (mode_t)a3));
         if (r >= 0 && nf_new) newfile_stamp_fd(r);
         if (r >= 0 && r < 1024) g_opath[r] = is_opath;
         if (r >= 0) {

@@ -4,6 +4,76 @@
 // the requested (page-rounded) size per-fd and report it back, so size-probing programs see it stick.
 static int g_pipesz[1024];
 
+// ---- guest RLIMIT_NOFILE enforcement -------------------------------------------------------------
+// dd shares the host descriptor table, whose real cap is far larger than the guest's (engine-private fds
+// are hoisted above 1<<20, see engine_fd_hoist), so the guest's soft RLIMIT_NOFILE is purely EMULATED
+// (svc_fill_rlimit reports 1024, or the docker --ulimit / guest setrlimit override in g_ulimit[7]). The
+// host therefore never enforces it: a raw dup/open/dup2 at or past the guest cap wrongly succeeds. These
+// helpers restore the Linux contract -- Linux allocates the lowest free fd and fails EMFILE if it would be
+// >= the soft limit; an explicit dup2/dup3 newfd >= the limit is EBADF. (LTP dup03/dup201.)
+static int guest_nofile_cur(void) {
+    uint64_t cur = 1024; // dd default soft RLIMIT_NOFILE (mirror svc_fill_rlimit, defined later in proc.c)
+    if (g_ulimit[7].set) cur = g_ulimit[7].cur; // docker --ulimit / guest setrlimit(RLIMIT_NOFILE)
+    return cur > 0x7fffffff ? 0x7fffffff : (int)cur;
+}
+// Gate a freshly-allocated host fd (from a lowest-free allocator: dup, open, pipe, socket, ...) against the
+// guest cap. A number at/above the cap is one Linux would never have handed out -> close it and report
+// EMFILE. Returns r unchanged when in range (or already an error). Pass-through when no cap applies.
+static int nofile_gate(int r) {
+    if (r >= 0 && r >= guest_nofile_cur()) {
+        int e = errno;
+        close(r);
+        (void)e;
+        errno = EMFILE;
+        return -1;
+    }
+    return r;
+}
+
+// ---- guest PROT_NONE region registry -------------------------------------------------------------
+// dd force-maps guest anonymous memory host-writable (case 222) so its no-op mprotect model works, which
+// means a host syscall that writes into a guest PROT_NONE buffer does NOT get the EFAULT a real Linux
+// copy_to_user would (the host page is really RW). Track the guest's PROT_NONE regions so the
+// buffer-consuming syscall paths (read/write family) can return EFAULT exactly as Linux. Page-granular,
+// overlap-tested; maintained by mmap(222)/mprotect(226)/munmap(215). (LTP read02: read into a PROT_NONE mmap.)
+#define G_PN_MAX 512
+static struct { uint64_t lo, hi; } g_pn[G_PN_MAX];
+static int g_npn;
+static void pn_add(uint64_t addr, uint64_t len) {
+    if (!len) return;
+    uint64_t lo = addr & ~(uint64_t)0xfff, hi = (addr + len + 0xfff) & ~(uint64_t)0xfff;
+    if (hi <= lo) return;
+    if (g_npn >= G_PN_MAX) return; // registry full -> best effort (query simply misses)
+    g_pn[g_npn].lo = lo;
+    g_pn[g_npn].hi = hi;
+    g_npn++;
+}
+// Remove [addr,addr+len) from the PROT_NONE set (mprotect to an accessible prot, or munmap), splitting any
+// straddled entry so surviving sub-ranges stay tracked.
+static void pn_del(uint64_t addr, uint64_t len) {
+    if (!len || !g_npn) return;
+    uint64_t rlo = addr & ~(uint64_t)0xfff, rhi = (addr + len + 0xfff) & ~(uint64_t)0xfff;
+    for (int i = 0; i < g_npn;) {
+        uint64_t lo = g_pn[i].lo, hi = g_pn[i].hi;
+        if (rhi <= lo || rlo >= hi) { i++; continue; } // no overlap
+        int keep_head = lo < rlo, keep_tail = rhi < hi;
+        if (!keep_head && !keep_tail) { g_pn[i] = g_pn[--g_npn]; continue; } // fully covered -> drop
+        if (keep_head) g_pn[i].hi = rlo;              // trim to surviving head
+        else g_pn[i].lo = rhi;                        // keep_tail only -> surviving tail
+        if (keep_head && keep_tail) pn_add(rhi, hi - rhi); // middle removed -> tail becomes a new entry
+        i++;
+    }
+}
+// True if [addr,addr+len) intersects any tracked PROT_NONE region (guest access would fault on Linux).
+static int pn_hit(uint64_t addr, uint64_t len) {
+    if (!g_npn || !len) return 0;
+    uint64_t end = addr + len;
+    if (end < addr) return 1; // wrap -> bogus
+    for (int i = 0; i < g_npn; i++)
+        if (addr < g_pn[i].hi && end > g_pn[i].lo) return 1;
+    return 0;
+}
+
 // ---- flock(2) emulation on a private companion file (BSD whole-file advisory locks) ----------------
 // On Linux, flock() (BSD, whole-file, per-open-file-description) and fcntl() POSIX record locks are
 // INDEPENDENT lock spaces: one process can hold both on the same fd at once. macOS instead routes BOTH

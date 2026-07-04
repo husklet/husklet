@@ -66,6 +66,18 @@ static int svc_io(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t
         default: break;
         }
     }
+    // Guest PROT_NONE buffer in the fd-I/O family (fd, BUF=a1, count=a2): dd force-maps guest anon pages
+    // host-writable (mem.c case 222) so the host read/write does NOT fault on a guest PROT_NONE page the way
+    // Linux's copy_{to,from}_user would. Reject it here with -EFAULT, exactly as Linux. Near-free when no
+    // PROT_NONE region exists (g_npn==0). read/pread WRITE the buffer, write/pwrite READ it; both fault. (read02)
+    if (g_npn) {
+        switch (nr) {
+        case 63: case 64: case 67: case 68: // read / write / pread64 / pwrite64
+            if (pn_hit(a1, a2)) { G_RET(c) = (uint64_t)(int64_t)(-EFAULT); return svc_done(c); }
+            break;
+        default: break;
+        }
+    }
     switch (nr) {
     // ===================== I/O — read/write/seek (+ eventfd/timerfd/signalfd fd redirection) =====================
     case 62: {
@@ -539,7 +551,7 @@ static int svc_io(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t
     case 23: {
         // dup -- a 2nd fd would share the description; flush the RAM cache so both see the real file
         memf_materialize((int)a0);
-        int r = dup((int)a0);
+        int r = nofile_gate(dup((int)a0)); // EMFILE if the new fd would be >= the guest's soft RLIMIT_NOFILE
         // carry path + socket-emulation metadata to the new fd
         if (r >= 0 && r < 1024 && (int)a0 >= 0 && (int)a0 < 1024) { strcpy(g_fdpath[r], g_fdpath[(int)a0]); fd_carry_sock(r, (int)a0); }
         G_RET(c) = r < 0 ? (uint64_t)(-errno) : (uint64_t)r;
@@ -553,15 +565,23 @@ static int svc_io(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t
         unsigned d3flags = (unsigned)a2;
         int is_dup2 = (d3flags & 0x40000000u) != 0;
         d3flags &= ~0x40000000u;
-        if ((int)a0 == (int)a1) {
+        int oldfd = (int)a0, newfd = (int)a1, nofile = guest_nofile_cur();
+        if (oldfd == newfd) {
             if (is_dup2) {
                 // dup2(fd,fd): a no-op returning fd iff it is a valid open fd, else EBADF.
-                G_RET(c) = (fcntl((int)a0, F_GETFD) < 0) ? (uint64_t)(-EBADF) : (uint64_t)(unsigned)(int)a1;
+                G_RET(c) = (oldfd < 0 || fcntl(oldfd, F_GETFD) < 0) ? (uint64_t)(-EBADF) : (uint64_t)(unsigned)newfd;
                 break;
             }
-            G_RET(c) = (uint64_t)(-EINVAL); // genuine dup3(old,old,*)
+            G_RET(c) = (uint64_t)(-EINVAL); // genuine dup3(old,old,*): EINVAL (before any fd/flag validation)
             break;
         }
+        // dup3 flag validation: only O_CLOEXEC is a valid flag (dup2 carries none -> the marker was stripped).
+        if (!is_dup2 && (d3flags & ~0x80000u)) { G_RET(c) = (uint64_t)(-EINVAL); break; }
+        // newfd must lie within the guest's descriptor range (the emulated soft RLIMIT_NOFILE); the host fd
+        // table is far larger, so a raw dup2/dup3(.., newfd>=cap) would wrongly succeed -> EBADF. (LTP dup201)
+        if (newfd < 0 || newfd >= nofile) { G_RET(c) = (uint64_t)(-EBADF); break; }
+        // oldfd must be an open descriptor -> EBADF, and (per Linux) checked WITHOUT closing newfd first.
+        if (oldfd < 0 || fcntl(oldfd, F_GETFD) < 0) { G_RET(c) = (uint64_t)(-EBADF); break; }
         memf_materialize((int)a0); // source: a 2nd fd shares the description -> flush RAM cache
         memf_close((int)a1);       // target fd is about to be reused; drop any cache it held
         engine_fd_vacate((int)a1); // move any engine-private fd off the target before dup2 overwrites it
@@ -579,6 +599,12 @@ static int svc_io(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t
     case 25: {
         // fcntl -- Linux cmd# -> macOS (they diverge!)
         int lcmd = (int)a1;
+        // F_DUPFD(_CLOEXEC): the floor arg must be a valid descriptor index -- Linux rejects a negative or
+        // >= RLIMIT_NOFILE floor with EINVAL (before allocating). (LTP: fcntl bad-arg matrix.)
+        if (lcmd == 0 || lcmd == 1030) {
+            int floor = (int)a2;
+            if (floor < 0 || floor >= guest_nofile_cur()) { G_RET(c) = (uint64_t)(-EINVAL); break; }
+        }
         // F_DUPFD(_CLOEXEC) makes a 2nd fd sharing the description; F_SETFL O_APPEND changes write-offset
         // semantics. Either way, flush a RAM-backed fd so the real host fd takes over with correct bytes.
         if (lcmd == 0 || lcmd == 1030 || (lcmd == 4 && ((int)a2 & 0x400))) memf_materialize((int)a0);
@@ -614,9 +640,20 @@ static int svc_io(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t
             // macOS F_GETLK=7,SETLK=8,SETLKW=9
             int mc = lcmd == 5 ? F_GETLK : lcmd == 6 ? F_SETLK : F_SETLKW;
             uint8_t *lf = (uint8_t *)a2;
+            // Linux order (SYSCALL_DEFINE3(fcntl) -> fcntl_getlk/setlk): the fd is validated (EBADF) BEFORE the
+            // flock is copied in, so a bad fd wins over a bad pointer / bad l_whence. (LTP fcntl13: fcntl(-1,...).)
+            if ((int)a0 < 0 || fcntl((int)a0, F_GETFD) < 0) { G_RET(c) = (uint64_t)(-EBADF); break; }
             // The Linux struct flock at a2 (fields up to lf+24) is read directly and written back for F_GETLK;
-            // validate the 32-byte struct before any deref so a bad pointer returns -EFAULT, not a crash.
-            if (!host_range_mapped((uintptr_t)a2, 32)) { G_RET(c) = (uint64_t)(-EFAULT); break; }
+            // validate the 32-byte struct before any deref so a bad pointer returns -EFAULT, not a crash. A guest
+            // PROT_NONE flock buffer (LTP fcntl13 uses one) is force-mapped host-writable by dd, so the
+            // host_range_mapped probe passes -- pn_hit catches the guest's intent so it still EFAULTs like Linux.
+            if (!host_range_mapped((uintptr_t)a2, 32) || pn_hit((uintptr_t)a2, 32)) { G_RET(c) = (uint64_t)(-EFAULT); break; }
+            // l_whence must be SEEK_SET/SEEK_CUR/SEEK_END; Linux rejects anything else with EINVAL in
+            // flock_to_posix_lock -- BEFORE the fd type is consulted, so it applies to a pipe fd too. (LTP fcntl13)
+            {
+                short whence = *(short *)(lf + 2);
+                if (whence != 0 && whence != 1 && whence != 2) { G_RET(c) = (uint64_t)(-EINVAL); break; }
+            }
             // #340: service advisory byte-range locks on regular files from the in-engine cross-process
             // table (no host round-trip). F_SETLKW blocks by poll-retry, interruptible by a deliverable
             // pending signal (g_pending/tpending, honouring the per-thread block mask) -> EINTR, exactly
@@ -709,13 +746,27 @@ static int svc_io(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t
             break;
         // lease/notify: no-op
         }
+        // A command this kernel does not recognize is EINVAL (Linux do_fcntl default), NOT forwarded to
+        // macOS -- whose fcntl cmd numbering DIVERGES, so a stray Linux cmd# would mean a different op there.
+        // Everything valid was handled above or is one of these benign pass-throughs; reject the rest. (LTP
+        // fcntl13 F_BADCMD=999.) 10/11=SETSIG/GETSIG, 15/16/17=SET/GETOWN_EX+GETOWNER_UIDS, 36/37/38=OFD locks.
+        switch (lcmd) {
+        case 0: case 1: case 2: case 8: case 9: case 10: case 11:
+        case 15: case 16: case 17: case 36: case 37: case 38: case 1030:
+            break; // recognized Linux command -> proceed to the host fcntl
+        default:
+            G_RET(c) = (uint64_t)(-EINVAL);
+            goto fcntl_done;
+        }
         int r = fcntl((int)a0, mcmd, a2);
+        if (lcmd == 0 || lcmd == 1030) r = nofile_gate(r); // F_DUPFD(_CLOEXEC): EMFILE past the guest fd cap
         if (r >= 0 && (lcmd == 0 || lcmd == 1030) && r < 1024 && (int)a0 >= 0 && (int)a0 < 1024) {
             // F_DUPFD(_CLOEXEC)
             strcpy(g_fdpath[r], g_fdpath[(int)a0]);
             fd_carry_sock(r, (int)a0);
         }
         G_RET(c) = r < 0 ? (uint64_t)(-errno) : (uint64_t)r;
+    fcntl_done:
         break;
     }
     case 29: {
@@ -746,6 +797,12 @@ static int svc_io(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t
         if (mk < 0) {
             G_RET(c) = (uint64_t)(-errno);
             break;
+        }
+        // Either new fd past the guest's soft RLIMIT_NOFILE -> EMFILE (the host table is far larger). Close
+        // both so no descriptor leaks, exactly as Linux fails a pipe2 that would exceed the limit.
+        {
+            int cap = guest_nofile_cur();
+            if (fds[0] >= cap || fds[1] >= cap) { close(fds[0]); close(fds[1]); G_RET(c) = (uint64_t)(-EMFILE); break; }
         }
         if (fl & 0x80000) {
             fcntl(fds[0], F_SETFD, FD_CLOEXEC);

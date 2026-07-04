@@ -134,8 +134,9 @@ static int svc_net(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_
             break;
         }
         int ty = (int)a1;
-        // socket (translate Linux domain -> macOS: AF_INET6 10->30, others unchanged)
-        int r = socket(af_l2m((int)a0), ty & 0xf, (int)a2);
+        // socket (translate Linux domain -> macOS: AF_INET6 10->30, others unchanged). Gate the new fd
+        // against the guest's soft RLIMIT_NOFILE -> EMFILE past the cap (the host table is far larger).
+        int r = nofile_gate(socket(af_l2m((int)a0), ty & 0xf, (int)a2));
         if (r >= 0) {
             // SIGPIPE suppression: Linux delivers EPIPE (not a fatal signal) to a guest that has
             // SIG_IGN'd SIGPIPE or passes MSG_NOSIGNAL; macOS has no per-call MSG_NOSIGNAL, so make the
@@ -174,6 +175,11 @@ static int svc_net(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_
         int lty = (int)a1 & 0xf;
         int hty = (lty == SOCK_SEQPACKET) ? SOCK_DGRAM : lty;
         int r = socketpair(af_l2m((int)a0), hty, (int)a2, sv);
+        // Either new fd past the guest's soft RLIMIT_NOFILE -> EMFILE; close both so nothing leaks.
+        if (r == 0) {
+            int cap = guest_nofile_cur();
+            if (sv[0] >= cap || sv[1] >= cap) { close(sv[0]); close(sv[1]); G_RET(c) = (uint64_t)(-EMFILE); break; }
+        }
         if (r == 0) {
             // SO_NOSIGPIPE on both ends so a write/send to a peer-closed pair returns EPIPE, never a
             // fatal SIGPIPE (matches Linux EPIPE-to-guest behaviour). See case 198 for the rationale.
@@ -357,6 +363,7 @@ static int svc_net(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_
                     ? accept(lfd, NULL, NULL)
                     : accept(lfd, want_peer ? (struct sockaddr *)&hss : NULL, want_peer ? &hsl : (socklen_t *)a2);
         } while (r < 0 && SVC_EINTR_RESTART(c));
+        r = nofile_gate(r); // accepted fd past the guest's soft RLIMIT_NOFILE -> EMFILE (host table is larger)
         if (r >= 0) {
             // Accepted connections are sockets too: make SIGPIPE suppression sticky on the new fd so a
             // write/send to a peer that closes returns EPIPE instead of killing the guest (see case 198).

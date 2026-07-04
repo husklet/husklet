@@ -523,6 +523,12 @@ static void service_local(struct cpu *c) {
         case 242:                          // accept4(fd, ADDR, alen, flags)
         case 61:                           // getdents64(fd, DIRENT_BUF, count)
         case 113: a1 = nonpie_p(a1); break; // clock_gettime(clkid, TIMESPEC)
+        case 25:                            // fcntl(fd, cmd, ARG): ARG is a struct flock* ONLY for the record-lock
+            if (a1 == 5 || a1 == 6 || a1 == 7) a2 = nonpie_p(a2); // cmds F_GETLK/F_SETLK/F_SETLKW (else it is an
+            break;                          //   int flag/floor arg, never a pointer, so leave it untouched). The
+                                            //   handler dereferences the flock directly (host_range_mapped + reads),
+                                            //   so a low link-vaddr flock in a non-PIE (LTP fcntl05/fcntl13) must be
+                                            //   rebased or the guard EFAULTs on the unmapped low address.
         // #298: iovec-carrying calls -- rebase the array base AND every entry's iov_base. A non-PIE's
         // gather/scatter buffers can themselves be low link-vaddr pointers (skalibs' buffer_1 flush issues
         // writev(fd, iov, n) whose iov_base entries point at .rodata baked at 0x40xxxx). Rebasing only the
