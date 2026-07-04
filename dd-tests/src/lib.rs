@@ -448,7 +448,7 @@ pub fn run(ctx: &Ctx, c: &Case, e: Engine) -> Status {
     cfg.lowers = c.lowers.clone();
     // .overlay(): inject the rootfs as its own lower so g_nlower>0 turns on the overlay open/lseek path
     // (linux engines only; darwin has no overlayfs). Reproduces overlay-only bugs like #391 in the matrix.
-    if c.overlay && !rootfs_str.is_empty() && e != Engine::DarwinAarch64 { cfg.lowers.push(rootfs_str); }
+    if c.overlay && !rootfs_str.is_empty() && e != Engine::DarwinAarch64 { cfg.lowers.push(rootfs_str.clone()); }
     cfg.mem_max = c.mem_max;
     cfg.cpus = c.cpus;
     cfg.read_only = c.read_only;
@@ -480,8 +480,34 @@ pub fn run(ctx: &Ctx, c: &Case, e: Engine) -> Status {
     // on the pipe (diagnostics only, never asserted) and the exit code is unchanged (still the guest's,
     // propagated by the bridge). On a real Mac there is no bridge and no race — the same file capture
     // is equally correct — so the path is unified (no per-guest fflush/usleep workaround needed).
-    let drain_file = ctx.cache.join("stdout").join(format!("{}_{}_{}.out",
-        c.name.replace('/', "_"), e.arch(), std::process::id()));
+    //
+    // Darwin (darwinjail) shares this run()/redirect path — the `> file` below binds to the darwin launch
+    // script exactly as it does for linux — but the DRAIN FILE LOCATION needs two darwin-only adjustments,
+    // or the capture silently drops to empty on the darwin engine:
+    //   (1) Seatbelt. The darwinjail arms a Seatbelt profile (DD_SANDBOX, only WHEN a rootfs is set) whose
+    //       body is `(deny file-write* (subpath "/")) (allow file-write* (subpath "<rootfs>") …)` — writes
+    //       outside the rootfs are DENIED. A drain under target/dd-tests/stdout/ (i.e. under /Users) is
+    //       outside that set, so a rootfs darwin case's guest write to it is refused → empty file. (On a
+    //       host that already confines the process, e.g. OrbStack, sandbox_init fails and this is masked —
+    //       but on a real mac the deny is live.) Fix: for a rootfs darwin case, drain INTO the rootfs's
+    //       /tmp — a Seatbelt-allowed subpath that is on the shared tree (so this Linux runner reads it
+    //       back by the same host path) and stays writable even under docker --read-only.
+    //   (2) Filename collision. darwin/aarch64 and linux/aarch64 share e.arch()=="aarch64", so the
+    //       `{name}_{arch}_{pid}` file would be the SAME for both engines within one runner process — tag
+    //       the darwin drain with the OS too so its file can never be clobbered by the same-arch linux run.
+    // The linux drain path is left byte-identical (the `else` arm below).
+    let drain_file = if e == Engine::DarwinAarch64 && !rootfs_str.is_empty() {
+        // rootfs armed → the Seatbelt profile only permits writes under the rootfs; /tmp is rw even RO.
+        PathBuf::from(&rootfs_str).join("tmp").join(format!("ddstdout_{}_{}_{}.out",
+            c.name.replace('/', "_"), e.os(), std::process::id()))
+    } else if e == Engine::DarwinAarch64 {
+        // bare darwin → no Seatbelt; keep the shared drain dir but OS-tag the name (no arch collision).
+        ctx.cache.join("stdout").join(format!("{}_{}_{}_{}.out",
+            c.name.replace('/', "_"), e.os(), e.arch(), std::process::id()))
+    } else {
+        ctx.cache.join("stdout").join(format!("{}_{}_{}.out",
+            c.name.replace('/', "_"), e.arch(), std::process::id()))
+    };
     let mut args = args;
     let drained = std::fs::create_dir_all(drain_file.parent().unwrap()).is_ok();
     if drained {
