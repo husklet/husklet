@@ -98,6 +98,12 @@ fn regress() -> Group {
         // is independent of the emit-time kill-switch and both routes serve the low image byte-exact.
         src_nopie("nonpie-vec-fixup", "nonpie_vec.c").env("NOGUESTFOLD", "1").oracle()
             .only(&[Engine::LinuxX86_64]),
+        // #424: rep cmps/scas whose string operand is a LOW .rodata pointer in a biased non-PIE image
+        // (node:20 x86 `node --version` emits `mov edi,<flagstr>; rep cmpsb`). The do_repstr C helper
+        // dereferenced rsi/rdi 1:1 (unlike rep movs/stos, which rebase via repstr_g2h) -> SIGSEGV on the
+        // unmapped low vaddr. Fixed in translate/x86_64/x86_ops.c. Byte-exact vs the qemu-x86_64 oracle.
+        src_nopie("repcmps-nonpie", "repcmps_nopie.c").oracle()
+            .only(&[Engine::LinuxX86_64]), // rep cmps/scas are x86 opcodes; no aarch64 analogue
     ])
 }
 

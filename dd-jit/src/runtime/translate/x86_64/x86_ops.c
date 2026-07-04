@@ -35,7 +35,16 @@ static void do_repstr(struct cpu *c) {
     int isscas = (d >> 8) & 1, isrepne = (d >> 9) & 1, isrep = (d >> 10) & 1, df = (d >> 11) & 1;
     uint64_t n = isrep ? c->r[RCX] : 1; // REP uses RCX; a bare cmps/scas does exactly one step
     if (n == 0) return;                 // REP with RCX==0: no element executed, flags+pointers UNCHANGED
-    uint64_t rsi = c->r[RSI], rdi = c->r[RDI];
+    // W6A/non-PIE: a biased ET_EXEC guest pointer may still hold a low LINK address -- e.g. rdi loaded via
+    // `mov edi,imm32` pointing at a baked .rodata string (node20's non-PIE argv/flag parser emits
+    // `mov edi,<flagstr>; rep cmpsb`). This helper dereferences rsi/rdi DIRECTLY from C (memcmp/memchr/typed
+    // loads), so a low link address must be rebased to the real high mapping first -- the single-access fault
+    // path nonpie_fixup cannot serve a bulk memcmp. rep movs/stos already do this (repstr_g2h); cmps/scas did
+    // not -> the low deref SIGSEGV'd (node:20 x86 `node --version`, #424). Bias ONLY the dereferenced pointers;
+    // the RSI/RDI write-back below advances the GUEST (unbiased) values. Inert for PIE/static-PIE (g_nonpie_lo
+    // == 0 makes repstr_g2h the identity), so no behavior change for the common case.
+    uint64_t gsi = c->r[RSI], gdi = c->r[RDI];       // guest (unbiased) pointers for the write-back
+    uint64_t rsi = repstr_g2h(gsi), rdi = repstr_g2h(gdi); // host pointers for the dereferences
     int64_t step = df ? -(int64_t)w : (int64_t)w; // DF=1 (std) scans high->low, DF=0 low->high
     uint64_t wmask = (w == 8) ? ~0ull : ((1ull << (8 * w)) - 1);
     uint64_t acc = c->r[RAX] & wmask;     // scas accumulator (AL/AX/EAX/RAX)
@@ -92,8 +101,8 @@ static void do_repstr(struct cpu *c) {
         }
     }
     if (isrep) c->r[RCX] = n - k;
-    if (!isscas) c->r[RSI] = rsi + k * (uint64_t)step;
-    c->r[RDI] = rdi + k * (uint64_t)step;
+    if (!isscas) c->r[RSI] = gsi + k * (uint64_t)step; // advance the GUEST pointers (not the host-biased ones)
+    c->r[RDI] = gdi + k * (uint64_t)step;
     c->nzcv = repstr_nzcv(av, bv, w);
     g_repstr_n++;
     g_repstr_elems += k;
