@@ -278,9 +278,75 @@ static int svc_mem(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_
         // The original anon mmap (case 222) reserved a 64 KB guard tail past the guest's logical length,
         // so the tracked extent is a1+guard; a grow whose new length still fits inside that already-mapped
         // extent needs neither new memory nor a move.
+        // EFAULT when the OLD range [a0,a1) is not fully mapped, the way Linux mremap validates its source
+        // (LTP mremap03 mremaps a tst_get_bad_addr guard: one PROT_NONE page then unmapped space). Gated on
+        // the source NOT being one of the guest's OWN tracked mappings, so the hot glibc realloc path (a
+        // gmap-tracked region) and any fully-tracked PROT_NONE reservation skip the page-walk probe -- zero
+        // cost and no false EFAULT there; only an untracked / partially-covered source is validated against
+        // the live address space (host_range_mapped rejects both an unmapped page and a PROT_NONE page).
+        if (a1 && !gmap_contains(a0, (uint64_t)a1) && !host_range_mapped((uintptr_t)a0, (size_t)a1)) {
+            G_RET(c) = (uint64_t)(int64_t)(-EFAULT);
+            break;
+        }
         const uint64_t guard = 0x10000;
         uint64_t tracked = gmap_find_len(a0);          // full mapped extent at a0 (incl. guard), 0 if untracked
         uint64_t phys = tracked ? tracked : (uint64_t)a1; // bytes we can assume are mapped at a0
+        // MREMAP_FIXED(2): relocate the mapping to EXACTLY new_addr (a4), the way mremap(MREMAP_FIXED) does.
+        // Linux (mm/mremap.c) requires MREMAP_MAYMOVE to also be set, a page-aligned new_addr, and that the
+        // new range not overlap the old -- otherwise -EINVAL. It then unmaps whatever sat at the destination
+        // (MAP_FIXED semantics) and moves the mapping there. Must be handled BEFORE the in-place shrink/grow
+        // paths below (a FIXED remap ALWAYS moves, even to a smaller length).
+        if (a3 & 2) {
+            size_t gpg = guest_pagesz();
+            uint64_t nlo = a4, nhi = a4 + (uint64_t)a2, olo = a0, ohi = a0 + (uint64_t)a1;
+            // Flag/arg validation runs for every source (Linux checks it before touching the mapping).
+            if (!(a3 & 1) || a2 == 0 || (a4 & (gpg - 1)) || (nlo < ohi && olo < nhi)) {
+                G_RET(c) = (uint64_t)(-EINVAL);
+                break;
+            }
+            // Relocate ONLY a PRIVATE-ANON source: emulate by placing a fresh private-anon region
+            // (+guard tail for glibc over-reads) at a4, copying min(old,new) bytes, then freeing the old
+            // extent. A host MAP_FIXED needs a host-page-aligned base; when a4 is only guest-page- (4 KB-)
+            // aligned it may fall inside a tracked writable anon reservation, so use the #286 edge-safe
+            // fixed map there. A FILE-backed / MAP_SHARED source is intentionally NOT relocated here (we do
+            // not track the fd/offset needed to re-map the file at a4); it falls through to the pre-existing
+            // shrink/grow/relocate logic below, where a same-size/shrink FIXED stays coherent via the shared
+            // file exactly as before #417 (LTP mremap06 moves a MAP_SHARED sub-mapping this way).
+            if (anon_prot_if_contained(a0, (size_t)a1) >= 0) {
+                size_t hp = (size_t)getpagesize();
+                void *r;
+                if ((a4 & (hp - 1)) == 0) {
+                    r = mmap((void *)a4, (size_t)a2 + guard, PROT_READ | PROT_WRITE,
+                             MAP_FIXED | MAP_ANON | MAP_PRIVATE, -1, 0);
+                } else {
+                    int aprot = anon_prot_if_contained(a4, (size_t)a2);
+                    r = (aprot >= 0 && (aprot & PROT_WRITE) &&
+                         host_fixed_map286(a4, (uint64_t)a2, PROT_READ | PROT_WRITE, 1, -1, 0) == 0)
+                            ? (void *)a4
+                            : MAP_FAILED;
+                }
+                if (r != MAP_FAILED) {
+                    size_t n = (size_t)a1 < (size_t)a2 ? (size_t)a1 : (size_t)a2;
+                    if (n) memcpy((void *)a4, (void *)a0, n);
+                    if (a0) {
+                        munmap((void *)a0, (size_t)phys); // free the full old extent (incl. its guard tail)
+                        gmap_del(a0);
+                        anon_untrack(a0, (size_t)phys);
+                        gna_clear(a0 & ~(uint64_t)0xfff, (ohi + 0xfff) & ~(uint64_t)0xfff);
+                        mlk_del(a0, (uint64_t)a1);
+                        wipefork_del(a0, (uint64_t)a1);
+                    }
+                    gmap_add(a4, (uint64_t)a2 + guard);
+                    gmap_set_glen(a4, (uint64_t)a2);
+                    anon_track(a4, (uint64_t)a2 + guard, PROT_READ | PROT_WRITE);
+                    gna_clear(a4 & ~(uint64_t)0xfff, (nhi + 0xfff) & ~(uint64_t)0xfff);
+                    G_RET(c) = a4;
+                    break;
+                }
+                // anon placement failed -> fall through to the generic logic below (best effort)
+            }
+            // file-backed source (or anon placement failed): fall through -- do NOT break.
+        }
         // Shrink, or a grow that still fits within the already-mapped extent: stay in place, touch nothing.
         if ((uint64_t)a2 <= phys) {
             G_RET(c) = a0;
@@ -576,6 +642,14 @@ static int svc_mem(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_
         // Default/fast/none keep the no-op (page-cache coherent). Only `strict` issues a real host
         // msync for on-platter writeback durability, translating Linux MS_* flags to macOS (macOS
         // MS_SYNC=16 != Linux 4; MS_ASYNC=1/MS_INVALIDATE=2 match), tolerating EINVAL.
+        // Linux validates the flags BEFORE any writeback (mm/msync.c): an unknown bit, or MS_SYNC and
+        // MS_ASYNC both set (they are mutually exclusive), is -EINVAL. Emulate that here so the no-op
+        // fast path still rejects a malformed flag word exactly as the kernel does (LTP msync surface).
+        // Linux values: MS_ASYNC=1, MS_INVALIDATE=2, MS_SYNC=4.
+        if (((int)a2 & ~(0x1 | 0x2 | 0x4)) || (((int)a2 & 0x1) && ((int)a2 & 0x4))) {
+            G_RET(c) = (uint64_t)(-EINVAL);
+            break;
+        }
         if (s3db_durability() == 2) {
             int lf = (int)a2, mf = 0;
             if (lf & 0x1) mf |= MS_ASYNC;                    // Linux MS_ASYNC=1

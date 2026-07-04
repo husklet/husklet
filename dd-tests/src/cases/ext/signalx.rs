@@ -35,5 +35,17 @@ fn signalx() -> Group {
         src("siginfo", "ext_sig/siginfo.c").oracle(),
         // Linux-only thread-directed signal -> native oracle
         src("tgkill", "ext_sig/tgkill.c").oracle(),
+        // #415 rt_sigaction edge semantics: SIGKILL/SIGSTOP + out-of-range signo -> EINVAL (and a "handler"
+        // for SIGKILL never prevents the kill), SA_RESETHAND one-shot reset, SA_NODEFER re-entry, oldact
+        // query (LTP signal01/signal02). Portable POSIX -> golden on every engine.
+        port("sigactedge", "ext_sig/sigactedge.c")
+            .out("sigact kill_einval=1 stop_einval=1 range_einval=1 kill_kills=1 old_reports=1 reset_ran=1 reset_dfl=1 nodefer_nested=1\n"),
+        // #415 sigsuspend restores the EXACT pre-suspend mask after a caught signal (LTP sigsuspend01) --
+        // regression guard for the g_force_deliver fix (the awaited signal is delivered without clearing its
+        // bit from the restored mask). Portable POSIX -> golden.
+        port("sigsuspendmask", "ext_sig/sigsuspendmask.c").out("sigsuspend eintr=1 ran=1 restored=1\n"),
+        // #415 sigpending/rt_sigpending: pending set union, no handler until unblocked, raw-syscall parity,
+        // and EFAULT on a bad set pointer (LTP sigpending02). Linux syscalls -> native oracle.
+        src("sigpendingx", "ext_sig/sigpendingx.c").only(&[Engine::LinuxAarch64, Engine::LinuxX86_64]).oracle(),
     ])
 }

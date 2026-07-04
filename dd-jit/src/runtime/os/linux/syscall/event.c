@@ -727,14 +727,10 @@ static int svc_event(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint6
                 *(int64_t *)(a3 + 24) = orem % 1000000000LL;
             }
         }
-        // periodic uses it_interval
-        int64_t period_ns = (iv_s || iv_n) ? (int64_t)(iv_s * 1000000000ull + iv_n)
-                                           // one-shot uses it_value
-                                           : (int64_t)(vl_s * 1000000000ull + vl_n);
         int64_t interval_ns = (int64_t)(iv_s * 1000000000ull + iv_n);
         int64_t value_ns = (int64_t)(vl_s * 1000000000ull + vl_n);
         // itimerspec.it_value==0 disarms (regardless of it_interval), same as Linux.
-        if (value_ns <= 0 && period_ns <= 0) {
+        if (value_ns <= 0) {
             EV_SET(&kv, 1, EVFILT_TIMER, EV_DELETE, 0, 0, NULL);
             kevent((int)a0, &kv, 1, NULL, 0, NULL);
             if ((int)a0 >= 0 && (int)a0 < 1024) { g_tfd_deadline[(int)a0] = 0; g_tfd_interval[(int)a0] = 0; }
@@ -742,20 +738,26 @@ static int svc_event(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint6
             break;
             // disarm
         }
-        // Record the absolute next-expiry deadline + interval so timerfd_gettime can report the remaining
-        // time. TFD_TIMER_ABSTIME (flags bit 1, a1&1) gives an absolute it_value on CLOCK_MONOTONIC; a
-        // relative value is now+value. (The kevent below fires on the same delay either way.)
+        struct timespec now;
+        clock_gettime(CLOCK_MONOTONIC, &now);
+        int64_t now_ns = (int64_t)now.tv_sec * 1000000000LL + now.tv_nsec;
+        // TFD_TIMER_ABSTIME (flags bit 1): it_value is an ABSOLUTE CLOCK_MONOTONIC deadline. The kqueue
+        // EVFILT_TIMER delay is always RELATIVE, so convert -- arming it with the absolute deadline (billions
+        // of ns) made the timerfd fire ~years later (a blocking read hung). A past deadline fires asap (0).
+        int64_t first_delay = ((int)a1 & 1) ? (value_ns - now_ns) : value_ns;
+        if (first_delay < 0) first_delay = 0;
+        // Record the absolute next-expiry deadline + interval so timerfd_gettime can report the remaining time.
         if ((int)a0 >= 0 && (int)a0 < 1024) {
-            struct timespec now;
-            clock_gettime(CLOCK_MONOTONIC, &now);
-            int64_t now_ns = (int64_t)now.tv_sec * 1000000000LL + now.tv_nsec;
-            int64_t first = value_ns > 0 ? value_ns : interval_ns;
-            g_tfd_deadline[(int)a0] = ((int)a1 & 1) ? first : now_ns + first; // TFD_TIMER_ABSTIME=1
+            g_tfd_deadline[(int)a0] = now_ns + first_delay;
             g_tfd_interval[(int)a0] = interval_ns;
         }
-        // no interval -> one-shot
+        // Arm the kqueue: a periodic timer (it_interval>0) uses a recurring EV_ADD at the interval; a one-shot
+        // uses EV_ONESHOT at the (relative) first delay. kqueue can't express "first at it_value, then every
+        // it_interval" in one entry, so a periodic timer whose first fire differs from its interval fires
+        // first after `interval` -- close enough for the timerfd read-count contract and never hangs.
         uint16_t fl = EV_ADD | ((iv_s || iv_n) ? 0 : EV_ONESHOT);
-        EV_SET(&kv, 1, EVFILT_TIMER, fl, NOTE_NSECONDS, period_ns, NULL);
+        int64_t arm_ns = (iv_s || iv_n) ? interval_ns : first_delay;
+        EV_SET(&kv, 1, EVFILT_TIMER, fl, NOTE_NSECONDS, arm_ns, NULL);
         G_RET(c) = kevent((int)a0, &kv, 1, NULL, 0, NULL) < 0 ? (uint64_t)(-errno) : 0;
         break;
     }

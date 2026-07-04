@@ -852,6 +852,37 @@ static void ep_fd_reset(int fd) {
     g_ep_chgn[fd] = g_ep_chgcap[fd] = 0;
     g_epoll[fd] = 0; // a reused fd number is no longer an epoll instance
 }
+// close() hook for the inotify family (event.c cases 26/27/28). dd emulates inotify with a kqueue: the
+// INSTANCE fd carries g_inotify[fd]=1, while each WATCH descriptor (wd) is itself a host O_EVTONLY fd with
+// g_inotify_wpath/_snap/_owner keyed by that wd NUMBER. Both roles live in the shared fd table, so on close
+// a reused fd number must shed whichever role it held or a later read()/epoll_wait/inotify read misroutes to
+// a dead watch. #224: fd_reset_emul used to clear only g_inotify_owner[fd], leaving g_inotify[fd] stamped --
+// a recycled inotify-instance number then still routed read() into the inotify drain (io.c) against a stale
+// kqueue. Called from fd_reset_emul BEFORE the real close(); idempotent and a no-op on a plain fd.
+static void inotify_fd_reset(int fd) {
+    if (fd < 0 || fd >= 1024) return;
+    if (g_inotify[fd]) { // this fd is an inotify INSTANCE -> Linux drops every watch it owned
+        for (int i = 0; i < g_inomv_n;) { // discard the instance's pending move-queue entries (keyed by owner)
+            int w = g_inomv[i].wd;
+            if (w >= 0 && w < 1024 && g_inotify_owner[w] == fd) g_inomv[i] = g_inomv[--g_inomv_n];
+            else i++;
+        }
+        for (int w = 0; w < 1024; w++) { // tear down every directory-watch this instance owned
+            if (g_inotify_owner[w] == fd && (g_inotify_wpath[w][0] || g_inotify_snap[w])) {
+                free(g_inotify_snap[w]); g_inotify_snap[w] = NULL;
+                g_inotify_wpath[w][0] = 0; g_inotify_owner[w] = 0;
+                close(w); // the watch's own host O_EVTONLY fd; kqueue auto-removes its EVFILT_VNODE registration
+            }
+        }
+        g_inotify[fd] = 0;
+    }
+    // this fd may itself be a WATCH descriptor (freed via inotify_rm_watch or a stray close) -> drop its
+    // cached snapshot/path/owner so a reused number can't inherit a stale directory diff.
+    if (g_inotify_wpath[fd][0] || g_inotify_snap[fd]) {
+        free(g_inotify_snap[fd]); g_inotify_snap[fd] = NULL; g_inotify_wpath[fd][0] = 0;
+    }
+    g_inotify_owner[fd] = 0;
+}
 // Shared boundary errno translation for every svc_<family>() module tail. Each family early-returns from
 // service_local (before its trailing m2l_errno), so each must map G_RET's host(macOS) errno to the Linux
 // errno the guest expects (e.g. macOS EAGAIN=35 = Linux EDEADLK). Skip when c->redirect is set: a redirect

@@ -132,7 +132,9 @@ static void fd_reset_emul(int fd) {
         g_memfd_is[fd] = 0;
         g_memfd_seal[fd] = 0;
         g_pagemap_fd[fd] = 0;
-        g_inotify_owner[fd] = 0;
+        g_pipesz[fd] = 0;      // #224: drop this fd's emulated F_SETPIPE_SZ so a reused number reports the default
+        g_fd_cport[fd] = 0;    // #224: drop the captured container port so getpeername on a reused fd isn't misrouted
+        inotify_fd_reset(fd);  // #224: instance/watch teardown -- g_inotify[fd] used to stay stamped (stale routing)
         if (g_fd_pushback[fd]) { free(g_fd_pushback[fd]); g_fd_pushback[fd] = NULL; g_fd_pb_len[fd] = 0; }
         g_ovldir[fd][0] = 0;
         g_opath[fd] = 0;
@@ -164,6 +166,23 @@ static void fd_reset_emul(int fd) {
     dirs_drop(fd);
     ovldents_drop(fd);
     fd_clear(fd);
+}
+
+// #416: Linux *at() dirfd precondition, shared by the fstatat/statx/link/symlink/rename/unlink/... family.
+// For a RELATIVE path with dirfd != AT_FDCWD the kernel resolves the descriptor FIRST: EBADF if it is not an
+// open fd, ENOTDIR if it is open but not a directory. dd folds the dirfd into an absolute host path via
+// g_fdpath, which silently accepts a bad/regular-file dirfd -- so those errnos were never produced (fstatat
+// on a non-dir dirfd wrongly "succeeded", symlinkat/linkat leaked macOS EOPNOTSUPP, statx returned EBADF for
+// a non-dir dirfd). dd shares the host descriptor table, so validate against the real fd. Returns 0 (ok) or
+// -errno. Absolute paths, AT_FDCWD, and the empty path (AT_EMPTY_PATH / the ENOENT case) never consult the
+// dirfd. (LTP fstatat01 / statx03 / symlinkat01 / linkat01.)
+static int at_dirfd_check(int dirfd, const char *raw) {
+    if (!raw || !raw[0] || raw[0] == '/') return 0; // empty or absolute: the dirfd is not walked
+    if (dirfd == -100 /*AT_FDCWD*/) return 0;        // cwd-relative
+    struct stat ds;
+    if (fstat(dirfd, &ds) < 0) return -EBADF;        // not an open descriptor
+    if (!S_ISDIR(ds.st_mode)) return -ENOTDIR;       // open, but not a directory
+    return 0;
 }
 
 // ---- guest xattr passthrough (overlay G5) -----------------------------------------------------------
@@ -602,6 +621,11 @@ static int svc_fs(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t
     }
     // unlinkat(dirfd, path, flags) -- confined
     case 35: {
+        // #416: a bad pathname pointer -> EFAULT (getname copy_from_user), before any resolution; and a
+        // relative path under a bad/non-dir dirfd -> EBADF/ENOTDIR. (LTP unlink07.) guest_bad_ptr also faults
+        // a PROT_NONE guard page (tst_get_bad_addr), which dd force-maps host-readable.
+        if (!a1 || guest_bad_ptr(a1, 1)) { G_RET(c) = (uint64_t)(int64_t)(-EFAULT); break; }
+        { int adc = at_dirfd_check((int)a0, (const char *)a1); if (adc) { G_RET(c) = (uint64_t)(int64_t)adc; break; } }
         // shm/sem files are flat host files under /tmp (see shm_hostpath); sem_unlink/shm_unlink and glibc's
         // temp-file cleanup must hit that backing, not the jail's <rootfs>/dev/shm. AT_REMOVEDIR never applies.
         char shb[300];
@@ -736,6 +760,9 @@ static int svc_fs(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t
     }
     // symlinkat(target, newdirfd, linkpath) -- the link is CREATED at (newdirfd, linkpath)
     case 36: {
+        // #416: a relative linkpath under a bad/non-dir newdirfd -> EBADF/ENOTDIR (dd's g_fdpath fold used to
+        // leak macOS EOPNOTSUPP for a non-dir dirfd). (LTP symlinkat01.)
+        { int adc = at_dirfd_check((int)a1, (const char *)a2); if (adc) { G_RET(c) = (uint64_t)(int64_t)adc; break; } }
         if (jail_ro_at((int)a1, (const char *)a2)) {
             G_RET(c) = (uint64_t)(int64_t)(-EROFS);
             break;
@@ -767,6 +794,25 @@ static int svc_fs(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t
     }
     // linkat(odir,opath,ndir,npath,flags) -- writes both ends (new link + source link count)
     case 37: {
+        // #416: reject unknown linkat flag bits with EINVAL (valid: AT_SYMLINK_FOLLOW 0x400 | AT_EMPTY_PATH
+        // 0x1000). dd otherwise ignored the flags and the link wrongly succeeded. (LTP linkat01 case 22.)
+        if (a4 & ~(uint64_t)0x1400) { G_RET(c) = (uint64_t)(int64_t)(-EINVAL); break; }
+        // #416: a relative old/new path under a bad/non-dir dirfd -> EBADF/ENOTDIR, before any resolution
+        // (dd's g_fdpath fold leaked macOS EOPNOTSUPP for a non-dir dirfd). (LTP linkat01 cases 8/9.)
+        { int adc = at_dirfd_check((int)a0, (const char *)a1); if (!adc) adc = at_dirfd_check((int)a2, (const char *)a3);
+          if (adc) { G_RET(c) = (uint64_t)(int64_t)adc; break; } }
+        // A hardlink whose SOURCE lives on a dd-synthetic pseudo-filesystem (/proc, /sys, /dev) crosses a
+        // device boundary -> EXDEV, exactly as on Linux where those are separate mounts. (LTP linkat01 case 20.)
+        {
+            char sgp[4200];
+            abs_guest((int)a0, (const char *)a1, sgp, sizeof sgp);
+            if (!strncmp(sgp, "/proc/", 6) || !strncmp(sgp, "/sys/", 5) || !strncmp(sgp, "/dev/", 5)) {
+                char dgp[4200];
+                abs_guest((int)a2, (const char *)a3, dgp, sizeof dgp);
+                // only when the destination is NOT on the same pseudo-fs (a shm/sem /dev link is handled below)
+                if (strncmp(dgp, "/dev/shm/", 9)) { G_RET(c) = (uint64_t)(int64_t)(-EXDEV); break; }
+            }
+        }
         // glibc's sem_open/shm_open creation links a temp /dev/shm/sem.<rnd> to the final /dev/shm/<name>;
         // both ends are shm-backed host files under /tmp, so link them directly (the jail branch below would
         // resolve them into the empty <rootfs>/dev/shm and ENOENT).
@@ -822,6 +868,16 @@ static int svc_fs(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t
     // renameat(38) / renameat2(276): translate the renameat2 flags onto macOS renameatx_np --
     // RENAME_NOREPLACE(1)->RENAME_EXCL (fail if dst exists), RENAME_EXCHANGE(2)->RENAME_SWAP (atomic swap).
     case 276: {
+        // #416: renameat2 flag validation (LTP renameat201). Valid flags are RENAME_NOREPLACE(1) |
+        // RENAME_EXCHANGE(2) | RENAME_WHITEOUT(4); any unknown bit -> EINVAL, and RENAME_EXCHANGE is exclusive
+        // of NOREPLACE and WHITEOUT. Checked before touching the fs (Linux orders this ahead of the path walk).
+        if (nr == 276) {
+            int lf = (int)a4;
+            if ((lf & ~0x7) || ((lf & 2) && (lf & (1 | 4)))) { G_RET(c) = (uint64_t)(int64_t)(-EINVAL); break; }
+        }
+        // A relative old/new path under a bad/non-dir dirfd -> EBADF/ENOTDIR.
+        { int adc = at_dirfd_check((int)a0, (const char *)a1); if (!adc) adc = at_dirfd_check((int)a2, (const char *)a3);
+          if (adc) { G_RET(c) = (uint64_t)(int64_t)adc; break; } }
         if (jail_ro_at((int)a0, (const char *)a1) || jail_ro_at((int)a2, (const char *)a3)) {
             G_RET(c) = (uint64_t)(int64_t)(-EROFS);
             break;
@@ -1840,7 +1896,13 @@ static int svc_fs(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t
         // newfstatat(dfd, path, buf, flags)
         char pb[4200];
         // AT_SYMLINK_NOFOLLOW (0x100): lstat -- resolve the final component WITHOUT following it.
-        const char *raw = (const char *)a1, *p = atpath((int)a0, raw, pb, sizeof pb, (a3 & 0x100) ? 1 : 0);
+        const char *raw = (const char *)a1;
+        // #416: reject unknown flag bits with EINVAL, and validate the dirfd (EBADF/ENOTDIR) for a relative
+        // path -- both BEFORE resolving, matching the kernel. Valid flags: AT_SYMLINK_NOFOLLOW | AT_NO_AUTOMOUNT
+        // | AT_EMPTY_PATH = 0x1900. dd's g_fdpath fold otherwise accepts a bad/non-dir dirfd. (LTP fstatat01.)
+        if (a3 & ~(uint64_t)0x1900) { G_RET(c) = (uint64_t)(int64_t)(-EINVAL); break; }
+        { int adc = at_dirfd_check((int)a0, raw); if (adc) { G_RET(c) = (uint64_t)(int64_t)adc; break; } }
+        const char *p = atpath((int)a0, raw, pb, sizeof pb, (a3 & 0x100) ? 1 : 0);
         {
             const char *gp = (g_rootfs && !strncmp(p, g_rootfs_canon, g_rootfs_canon_len)) ? p + g_rootfs_canon_len : p;
             // A dirfd-RELATIVE name (fstatat(pid_dirfd, "exe")) that lands in /proc must hit the same
@@ -2031,10 +2093,17 @@ static int svc_fs(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t
         char pb[4200];
         int nofollow = (a2 & 0x100); // AT_SYMLINK_NOFOLLOW: stat the link itself, don't dereference
         const char *raw = (const char *)a1;
-        // Validate the guest pointers before any deref: a bad path or result buffer must return -EFAULT,
-        // not fault the engine (guest memory is identity-mapped host memory). atpath/raw[0] read the path;
-        // the 256-byte struct statx is written to a4 below.
-        if (raw && !host_addr_mapped((uintptr_t)raw)) { G_RET(c) = (uint64_t)(int64_t)(-EFAULT); break; }
+        // #416: statx error-path fidelity, in the kernel's pre-walk order (LTP statx03). EINVAL on any unknown
+        // flag bit or both AT_STATX_SYNC_TYPE bits set; EINVAL on a reserved mask bit (STATX__RESERVED);
+        // EBADF/ENOTDIR on a bad/non-dir dirfd for a relative path -- all BEFORE resolving the path.
+        if ((a2 & ~(uint64_t)0x7900) || (a2 & 0x6000) == 0x6000) { G_RET(c) = (uint64_t)(int64_t)(-EINVAL); break; }
+        if (a3 & 0x80000000u) { G_RET(c) = (uint64_t)(int64_t)(-EINVAL); break; }
+        { int adc = at_dirfd_check((int)a0, raw); if (adc) { G_RET(c) = (uint64_t)(int64_t)adc; break; } }
+        // Validate the guest pointers before any deref: a bad path or result buffer must return -EFAULT, not
+        // fault the engine. guest_bad_ptr (not host_addr_mapped) also faults a PROT_NONE guard page -- the LTP
+        // tst_get_bad_addr idiom -- which dd force-maps host-readable (and zero-filled, so raw[0] must NOT be
+        // consulted here or the guard page reads as an empty "" path). host_addr_mapped wrongly passed it.
+        if (raw && guest_bad_ptr((uintptr_t)raw, 1)) { G_RET(c) = (uint64_t)(int64_t)(-EFAULT); break; }
         if (!host_range_mapped((uintptr_t)a4, 256)) { G_RET(c) = (uint64_t)(int64_t)(-EFAULT); break; }
         const char *p = atpath((int)a0, raw, pb, sizeof pb, nofollow);
         int rc, empty = (raw && !raw[0] && (a2 & 0x1000));

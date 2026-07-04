@@ -95,6 +95,9 @@ static int ptrace_wait_active(void);        // is ptrace in use in this session?
 struct sigaction;                           // fwd (signal.h is included by the target before this TU)
 static int pt_wait_arm(struct sigaction *saved);            // scoped SIGCHLD wake around a blocking wait4
 static void pt_wait_disarm(int armed, const struct sigaction *saved);
+// #224: the shared per-fd emulation-table teardown (defined in fs.c, included after io.c) -- fwd-declared so
+// the dup2/dup3-overwrite path in io.c can shed the destination fd's tables before dup2 reuses the number.
+static void fd_reset_emul(int fd);
 
 #include "helpers.c"
 #include "sysv.c"

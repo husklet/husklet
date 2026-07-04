@@ -26,5 +26,10 @@ pub fn groups() -> Vec<Group> {
         src("neterr", "ltp_neterr.c").oracle(),
         // prctl02/prctl03/nanosleep02/sched_getaffinity01/read02: option/flag + error-path fidelity.
         src("procmisc", "ltp_procmisc.c").oracle(),
+        // #416 fstatat01/statx03/symlinkat01/linkat01/renameat201/unlink07: the *at() dirfd/flag/EFAULT/EXDEV
+        // error-path surface. dd folded a bad/non-dir dirfd into a host path via g_fdpath (missing EBADF/
+        // ENOTDIR), ignored invalid flag/mask bits (missing EINVAL), read a PROT_NONE path as "" (ENOENT not
+        // EFAULT), and ENOENT'd a pseudo-fs hardlink (not EXDEV). All standard kernel paths -> oracle-diffed.
+        src("aterr", "ltp_aterr.c").oracle(),
     ])]
 }
