@@ -688,13 +688,27 @@ static void load_elf(const char *path, struct loaded *out) {
         int prot = PROT_READ | ((fl & 2) ? PROT_WRITE : 0) | ((fl & 1) ? PROT_EXEC : 0);
         if (e > s) elf_mprotect_besteffort((void *)s, e - s, prot, "image segment");
     }
-    out->entry = e_entry + bias;
+    // #281: for a non-PIE ET_EXEC the engine maps the image HIGH (+bias) but keeps every GUEST-VISIBLE
+    // address at its LOW link value (baked absolute pointers, un-biased `bl` return vaddrs, the dispatcher
+    // re-biases only at execution). The auxv AT_ENTRY/AT_PHDR must therefore ALSO be LOW: glibc derives the
+    // main map's l_addr from `AT_PHDR - PT_PHDR.p_vaddr`, so a HIGH AT_PHDR yields l_addr=bias and a HIGH
+    // link_map [l_map_start,l_map_end). Then _dl_find_dso_for_object / dladdr / dlsym(RTLD_NEXT) compare a
+    // LOW query (a baked &func or the un-biased return addr) against those HIGH ranges and MISS -> dladdr
+    // fails, RTLD_NEXT returns NULL. clickhouse's sanitizer dl_iterate_phdr interceptor resolves the real
+    // fn via dlsym(RTLD_NEXT,"dl_iterate_phdr"); the NULL makes it throw, and throwing captures a StackTrace
+    // that unwinds through the same interceptor -> unbounded recursion -> guest stack overflow. Keeping the
+    // auxv LOW makes glibc set l_addr=0 and the link_map ranges LOW, matching the guest's LOW addresses.
+    // (ld.so's own reads of the phdrs at the LOW vaddr are served at +bias by the nonpie fold/fixup.) PIE is
+    // unaffected: bias==0 there, so LOW==HIGH.
+    int nonpie = (etype == 2);
+    out->entry = nonpie ? e_entry : (e_entry + bias);
     out->base = (uint64_t)base;
     if (getenv("JT"))
         fprintf(stderr, "[LOADED] %s base=%llx entry=%llx\n", path, (unsigned long long)base,
                 (unsigned long long)out->entry);
-    // phdrs live at file offset phoff in seg 0
-    out->phdr = (uint64_t)base + phoff;
+    // phdrs live at file offset phoff in seg 0. Non-PIE: report the LOW link vaddr (base+phoff-bias) so the
+    // main link_map is built LOW; PIE: the real HIGH address.
+    out->phdr = nonpie ? ((uint64_t)base + phoff - bias) : ((uint64_t)base + phoff);
     out->phent = phentsize;
     out->phnum = phnum;
     // #423 INTERIM: latch whether this is a cgo (iscgo) Go image so signal delivery can auto-suppress Go's
