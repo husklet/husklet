@@ -72,6 +72,17 @@ fn portable() -> Group {
         port("apt-pty-devpts", "ext_posix/apt_pty_devpts.c")
             .only(&[Engine::LinuxAarch64, Engine::LinuxX86_64])
             .out("aptptsdev mget=1 mset=1 mswin=1 mgwin=1 ptn=1 sopen=1 sgwin=1 sterm=1\n"),
+        // pty-fork-devpts (#420): apt's SetupSlavePtyMagic runs in the forked CHILD -- it closes the
+        // inherited pty MASTER, then opens the slave BY NAME (/dev/pts/N) while the PARENT keeps the master
+        // open. dd's per-process (COW) devpts table freed index N on the child's master close (pts_on_close),
+        // so the child's later open("/dev/pts/N") ENOENTed -> apt's "E: Can not write log (Is /dev/pts
+        // mounted?)". Real Linux keeps the pty alive as long as ANY process holds the master, so the child
+        // opens the slave and its write reaches the parent's master: childopen=1 roundtrip=1. Pre-#420 dd
+        // returned childopen=0 roundtrip=0 (oracle mismatch). Linux/devpts fork semantics -> both Linux
+        // engines, oracle-diffed vs native (aarch64 direct / x86_64 qemu-user).
+        port("pty-fork-devpts", "ext_posix/pts_fork.c")
+            .only(&[Engine::LinuxAarch64, Engine::LinuxX86_64])
+            .oracle(),
         // pty-devpts (#227/#280): a guest-created pty must present a Linux devpts identity. Both the
         // musl-style (ptmx + TIOCGPTN + open /dev/pts/N) and glibc openpty() paths must open the slave
         // (#227) and expose /dev/pts/N -- not the host device -- via ptsname/ttyname/readlink(/proc/self/

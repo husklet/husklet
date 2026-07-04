@@ -1517,21 +1517,25 @@ static int svc_fs(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t
             if (rp && !strncmp(rp, "/dev/pts/", 9) && rp[9] >= '0' && rp[9] <= '9') {
                 int n = atoi(rp + 9);
                 int mfd = pts_master_fd(n);
-                if (mfd < 0) {
-                    G_RET(c) = (uint64_t)(int64_t)(-2); // ENOENT: no such pts index (matches Linux)
-                    break;
-                }
-                char *sn = ptsname(mfd);
+                // #420: when this process no longer holds the master (apt's SetupSlavePtyMagic closes it in
+                // the forked child), fall back to the host slave path cached at pts_alloc -- the pty is still
+                // alive if the PARENT holds the master, so this open succeeds; it fails once the pty is truly
+                // gone. Without this the child's open ENOENTed -> apt "Can not write log (Is /dev/pts mounted?)".
+                const char *sn = (mfd >= 0) ? ptsname(mfd) : pts_slave_name(n);
                 if (!sn) {
-                    G_RET(c) = (uint64_t)(int64_t)(-2);
+                    G_RET(c) = (uint64_t)(int64_t)(-2); // ENOENT: no such pts index (matches Linux)
                     break;
                 }
                 int s = open(sn, mf);
                 if (s >= 0) {
-                    ptm_apply_to_slave(mfd, s);   // #411: slave inherits the master's cached termios/winsize
+                    if (mfd >= 0) ptm_apply_to_slave(mfd, s); // #411: slave inherits the master's cached termios/winsize
                     pts_note_slave(s, n);         // #280: stamp /dev/pts/N onto the slave fd + publish the node
+                    G_RET(c) = (uint64_t)s;
+                } else {
+                    // A cached-name open that fails means the pty is gone -> Linux reports ENOENT for the index,
+                    // not the host's device errno; a live-master open reports its real errno faithfully.
+                    G_RET(c) = (mfd < 0) ? (uint64_t)(int64_t)(-2) : (uint64_t)(-errno);
                 }
-                G_RET(c) = s < 0 ? (uint64_t)(-errno) : (uint64_t)s;
                 break;
             }
         }
