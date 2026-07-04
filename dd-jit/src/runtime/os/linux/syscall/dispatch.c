@@ -625,6 +625,57 @@ static void service_local(struct cpu *c) {
             a0 = nonpie_p(a0);
             a1 = nonpie_p(a1);
             break;
+        // #409: the remaining PATH-taking fs syscalls a non-PIE hands a low .rodata/.bss pointer to. Without
+        // the rebase the host syscall (or the engine's own resolve/copy) dereferences the un-relocated low
+        // link vaddr -> EFAULT/SIGSEGV on a VALID guest pointer (arm64 LTP truncate02/getcwd02 static-EXEC).
+        // These mirror the *at family above but are the "bare path" (a0) or fd+name/value forms.
+        case 45:  // truncate(PATH, length)            -- path a0 (length is a scalar, never rebased)
+        case 49:  // chdir(PATH)                        -- path a0
+        case 51:  // chroot(PATH)                       -- path a0
+            a0 = nonpie_p(a0);
+            break;
+        case 5:   // setxattr(PATH, NAME, VALUE, size, flags)
+        case 6:   // lsetxattr(PATH, NAME, VALUE, size, flags)
+        case 8:   // getxattr(PATH, NAME, VALUE, size)
+        case 9:   // lgetxattr(PATH, NAME, VALUE, size)
+            a0 = nonpie_p(a0);
+            a1 = nonpie_p(a1);
+            a2 = nonpie_p(a2);
+            break;
+        case 7:   // fsetxattr(fd, NAME, VALUE, size, flags)   -- a0 is an fd
+        case 10:  // fgetxattr(fd, NAME, VALUE, size)          -- a0 is an fd
+            a1 = nonpie_p(a1);
+            a2 = nonpie_p(a2);
+            break;
+        case 11:  // listxattr(PATH, LIST, size)
+        case 12:  // llistxattr(PATH, LIST, size)
+        case 14:  // removexattr(PATH, NAME)
+        case 15:  // lremovexattr(PATH, NAME)
+            a0 = nonpie_p(a0);
+            a1 = nonpie_p(a1);
+            break;
+        case 13:  // flistxattr(fd, LIST, size)                -- a0 is an fd
+        case 16:  // fremovexattr(fd, NAME)                    -- a0 is an fd
+            a1 = nonpie_p(a1);
+            break;
+        case 264: // name_to_handle_at(dfd, PATH, HANDLE, MOUNT_ID, flags)
+            a1 = nonpie_p(a1);
+            a2 = nonpie_p(a2);
+            a3 = nonpie_p(a3);
+            break;
+        // Struct-writer/reader time syscalls the engine fills/reads via the guest pointer directly (same
+        // class as sysinfo/times/gettimeofday/getrusage above) -- rebase the low non-PIE struct pointer.
+        case 102: // getitimer(which, CURR_VALUE)       -- itimerval written to a1
+        case 266: // clock_adjtime(clkid, TIMEX)        -- timex read+written at a1
+            a1 = nonpie_p(a1);
+            break;
+        case 103: // setitimer(which, NEW_VALUE, OLD_VALUE)
+            a1 = nonpie_p(a1);
+            a2 = nonpie_p(a2);
+            break;
+        case 171: // adjtimex(TIMEX)                     -- timex read+written at a0
+            a0 = nonpie_p(a0);
+            break;
         default: break;
         }
     }
