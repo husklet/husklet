@@ -464,23 +464,62 @@ pub fn run(ctx: &Ctx, c: &Case, e: Engine) -> Status {
         _ => std::iter::once(argv0).chain(c.args.iter().cloned()).collect(),
     };
     let (prog, args) = match cfg.command(e.jit()) { Some(x) => x, None => return Status::Skip("no command".into()) };
+
+    // ── Reliable guest-stdout capture across the `mac` bridge ─────────────────────────────────────
+    // On a Linux dev host the engine runs mac-side and its stdout is streamed back to this runner by
+    // the OrbStack `mac` bridge. Under host load that bridge occasionally DROPS a guest's FINAL
+    // buffered stdout write at teardown while STILL propagating the exit code — so an otherwise-correct
+    // result (rc=0, right value or empty, never a *wrong* value) is truncated to empty and the case
+    // spuriously fails. Seen on epoll_oneshot / pidfd / posixtimer / threadrss (#390). `.output()`
+    // already drains the bridge's pipe to EOF, but the bytes were lost UPSTREAM in the bridge, so no
+    // reader-side drain can recover them. Fix: redirect the guest's stdout into a file on the shared
+    // repo tree (the SAME absolute path is visible to both the mac-side engine and this Linux runner,
+    // Golden Rule 4) and read it back AFTER the process exits. A file write is durable — the final line
+    // survives any bridge-teardown race. Proven: a minimal `mac` write dropped 2/800 through the pipe
+    // under a mac-side CPU flood; the file redirect dropped 0/800 under a heavier flood. stderr stays
+    // on the pipe (diagnostics only, never asserted) and the exit code is unchanged (still the guest's,
+    // propagated by the bridge). On a real Mac there is no bridge and no race — the same file capture
+    // is equally correct — so the path is unified (no per-guest fflush/usleep workaround needed).
+    let drain_file = ctx.cache.join("stdout").join(format!("{}_{}_{}.out",
+        c.name.replace('/', "_"), e.arch(), std::process::id()));
+    let mut args = args;
+    let drained = std::fs::create_dir_all(drain_file.parent().unwrap()).is_ok();
+    if drained {
+        let _ = std::fs::remove_file(&drain_file);
+        // The launch script is the last arg (`… bash -lc <script>`); appending a stdout redirect binds
+        // it to the trailing `exec … argv` command, so the guest inherits fd 1 = this file. fd 1 stays
+        // a NON-tty (isatty(1)==0 for both a pipe and a regular file), so guest behaviour is unchanged.
+        if let Some(script) = args.last_mut() {
+            *script = format!("{} > {}", script, shq(&drain_file.to_string_lossy()));
+        }
+    }
+
     // Wrap in `timeout` so a hung/looping guest can't block the matrix (the x86 JIT can mistranslate
     // into an infinite loop). 124 = timed out.
     let out = Command::new("timeout").arg("25").arg(&prog).args(&args).output();
     if let Some((host, _)) = &jail_copy { let _ = std::fs::remove_file(host); }
     let out = match out {
         Ok(o) => o,
-        Err(err) => return Status::Fail(format!("spawn: {err}")),
+        Err(err) => { let _ = std::fs::remove_file(&drain_file); return Status::Fail(format!("spawn: {err}")); }
+    };
+    // Recover the guest's stdout from the drained file (durable; immune to the bridge-teardown drop);
+    // fall back to the bridge pipe only if the redirect could not be set up. Then remove the file.
+    let stdout_bytes: Vec<u8> = if drained {
+        let b = std::fs::read(&drain_file).unwrap_or_default();
+        let _ = std::fs::remove_file(&drain_file);
+        b
+    } else {
+        out.stdout.clone()
     };
     // a known failure on this engine is reported xfail, not a regression
     let fail = |msg: String| if c.xfail.contains(&e) { Status::Xfail(msg) } else { Status::Fail(msg) };
     if out.status.code() == Some(124) { return fail(format!("timeout (>25s) [{}]", e.label())); }
     if std::env::var("DD_DEBUG").is_ok() {
         eprintln!("\n[dbg] {} {:?}\n[dbg] out={:?}\n[dbg] err={:?}\n[dbg] code={:?}", prog, args,
-            String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr), out.status.code());
+            String::from_utf8_lossy(&stdout_bytes), String::from_utf8_lossy(&out.stderr), out.status.code());
     }
 
-    let stdout = strip_noise(&out.stdout);
+    let stdout = strip_noise(&stdout_bytes);
     let code = out.status.code().unwrap_or(-1);
     for chk in &c.checks {
         if let Err(msg) = eval(chk, &stdout, code, &guest, &c.args, e) {
@@ -509,6 +548,16 @@ fn eval(chk: &Check, stdout: &str, code: i32, guest: &str, args: &[String], e: E
             if eo != stdout || ec != code { Err(format!("oracle mismatch (jit {code}/{stdout:?} vs native {ec}/{eo:?})")) } else { Ok(()) }
         }
     }
+}
+
+/// Single-quote a string for safe inclusion in the mac-side `bash -lc` launch script (used to append
+/// the stdout-drain redirect target). Mirrors `SpawnConfig::shq`.
+fn shq(s: &str) -> String {
+    let mut o = String::with_capacity(s.len() + 2);
+    o.push('\'');
+    for c in s.chars() { if c == '\'' { o.push_str("'\\''"); } else { o.push(c); } }
+    o.push('\'');
+    o
 }
 
 /// Drop the JIT's diagnostic "unhandled syscall ..." lines so they don't pollute stdout checks.

@@ -21,16 +21,11 @@ int main(void) {
     int rearmed = epoll_wait(ep, out, 4, 100) == 1;
     close(ep); close(fds[0]); close(fds[1]);
     printf("epoll_oneshot first=%d disabled=%d rearmed=%d\n", first, disabled, rearmed);
-    // #390: this case is the matrix's slowest (three 100ms epoll_waits, one a full timeout) and was flaky
-    // under host load with a *fully empty* stdout (rc=0, no stderr, never a wrong value -- so NOT an
-    // EPOLLONESHOT/rearm bug: the epoll verdict is always correct). Root cause is a mac-bridge teardown
-    // race: stdout is a pipe, so libc holds the whole line in a userspace buffer and emits it as a single
-    // write() at exit -- and that final write, landing at the same instant as exit_group, occasionally has
-    // its tail dropped by the `mac` bridge before it drains the stream (the exit code still propagates).
-    // Deterministic fix (no retry, assertion unchanged): flush explicitly, then open a small drain gap so
-    // the output reaches the harness well before teardown. An unbuffered write() only shrinks the window;
-    // a gap between the write and exit closes it (0 empties / 700 under the same flood that flaked this).
-    fflush(stdout);
-    usleep(50 * 1000);
+    // #390: this case was flaky under host load with a *fully empty* stdout (rc=0, never a wrong value)
+    // — a `mac`-bridge teardown race that dropped the guest's final buffered stdout write. The former
+    // per-guest workaround (fflush + a 50ms drain gap before exit) is now REDUNDANT: the dd-tests runner
+    // captures guest stdout via a durable file on the shared repo tree instead of the bridge pipe (see
+    // `run()` in dd-tests/src/lib.rs), so the final line can no longer be lost in the stream teardown.
+    // Verified 0 flakes / 50 runs under a mac-side CPU flood with no guest-side flush/sleep.
     return 0;
 }
