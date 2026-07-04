@@ -487,8 +487,13 @@ static int svc_event(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint6
     case 72: { // pselect6(nfds, readfds, writefds, exceptfds, timeout(timespec), sigmask) -> pselect.
         // The Linux/macOS fd_set byte-layout is identical (bit N at byte N/8), so pass the sets through.
         int have_to = a4 != 0;
-        if (have_to && !host_range_mapped((uintptr_t)a4, sizeof(struct timespec))) {
-            G_RET(c) = (uint64_t)(-EFAULT); // faulty timeout pointer -> EFAULT, like the Linux kernel
+        // EFAULT on any inaccessible fd_set / timeout pointer -- incl. a PROT_NONE guard page (LTP's
+        // tst_get_bad_addr), which host_range_mapped alone misses since dd force-maps guest anon host-RW.
+        int selnfds = (int)a0;
+        size_t nb = selnfds > 0 ? ((size_t)selnfds + 7) / 8 : 0; if (nb > sizeof(fd_set)) nb = sizeof(fd_set);
+        if ((a1 && guest_bad_ptr(a1, nb)) || (a2 && guest_bad_ptr(a2, nb)) || (a3 && guest_bad_ptr(a3, nb)) ||
+            (have_to && guest_bad_ptr(a4, sizeof(struct timespec)))) {
+            G_RET(c) = (uint64_t)(-EFAULT);
             break;
         }
         // #396: a spurious EINTR (a signal dd hooks with host_sigh but the guest has BLOCKED or defaults to
@@ -545,8 +550,10 @@ static int svc_event(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint6
         // poll returned immediately -> s6 saw a spurious timeout in the UP state and busy-looped printing
         // "can't happen: timeout while the service is up!". Clamp the conversion to [0, 0x7fffffff] ms.
         struct timespec *ts = (void *)a2;
-        if (ts && !host_range_mapped((uintptr_t)a2, sizeof(struct timespec))) {
-            G_RET(c) = (uint64_t)(-EFAULT); // faulty timeout pointer -> EFAULT, like the Linux kernel
+        // EFAULT on an inaccessible pollfd array (a0, a1=nfds) or timeout (a2), PROT_NONE guard page too.
+        if ((a0 && a1 && guest_bad_ptr(a0, (size_t)a1 * sizeof(struct pollfd))) ||
+            (ts && guest_bad_ptr(a2, sizeof(struct timespec)))) {
+            G_RET(c) = (uint64_t)(-EFAULT);
             break;
         }
         int have_to = ts != NULL;
