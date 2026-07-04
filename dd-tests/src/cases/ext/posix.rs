@@ -64,6 +64,14 @@ fn portable() -> Group {
         port("apt-pty", "ext_posix/apt_pty.c")
             .only(&[Engine::LinuxAarch64, Engine::LinuxX86_64])
             .out("aptpty ptsname=1 mget=1 mset=1 mswin=1 mgwin=1 mdrain=1 mflush=1 sgwin=1\n"),
+        // apt-pty-devpts (#411 hardening): the SAME master termios/winsize ops with NO slave open, but the
+        // master is recognized via dd's AUTHORITATIVE devpts registry (not just the host ptsname heuristic),
+        // and the slave is then opened via the devpts route (TIOCGPTN -> /dev/pts/N, #280) to prove the
+        // master's cached size + termios propagate. All 1s == native Linux; pre-#411 (isatty-gated) the
+        // master ops ENOTTY and every m* field is 0. Linux-guest bug -> Linux engines only (see apt-pty).
+        port("apt-pty-devpts", "ext_posix/apt_pty_devpts.c")
+            .only(&[Engine::LinuxAarch64, Engine::LinuxX86_64])
+            .out("aptptsdev mget=1 mset=1 mswin=1 mgwin=1 ptn=1 sopen=1 sgwin=1 sterm=1\n"),
         // pty-devpts (#227/#280): a guest-created pty must present a Linux devpts identity. Both the
         // musl-style (ptmx + TIOCGPTN + open /dev/pts/N) and glibc openpty() paths must open the slave
         // (#227) and expose /dev/pts/N -- not the host device -- via ptsname/ttyname/readlink(/proc/self/
