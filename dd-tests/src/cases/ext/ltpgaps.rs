@@ -13,6 +13,10 @@ pub fn groups() -> Vec<Group> {
         src("dupfcntl", "ltp_dupfcntl.c").oracle(),
         // link02/link05/lstat01/lstat02: link nlink/shared-content/EEXIST/ENOENT, lstat-on-symlink.
         src("linkstat", "ltp_linkstat.c").oracle(),
+        // pause01/pause02/mincore04/fork04 setup: LTP tst_checkpoint over a MAP_SHARED /dev/shm page +
+        // cross-process futex. FUTEX_WAKE must return the ACTUAL waiters woken (not the requested max),
+        // else tst_checkpoint_wake() spins to ETIMEDOUT and BROKs setup (#402/#400 shared root cause).
+        src("checkpoint", "ltp_checkpoint.c").oracle(),
         // connect01/bind01/sendto02: EBADF/ENOTSOCK/EFAULT/EINVAL error paths (connect EFAULT = the crash).
         src("neterr", "ltp_neterr.c").oracle(),
         // prctl02/prctl03/nanosleep02/sched_getaffinity01/read02: option/flag + error-path fidelity.

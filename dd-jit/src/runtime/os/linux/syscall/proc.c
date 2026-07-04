@@ -80,33 +80,8 @@ static void svc_fill_rlimit(int resource, uint64_t *o) {
     }
 }
 
-// Signals whose default disposition is "Core" (terminate + dump), per signal(7). Used to synthesize the
-// WCOREDUMP (0x80) bit in a wait status the way the Linux kernel decides it.
-static int sig_coredumps(int lsig) {
-    switch (lsig) {
-    case 3:  // SIGQUIT
-    case 4:  // SIGILL
-    case 5:  // SIGTRAP
-    case 6:  // SIGABRT
-    case 7:  // SIGBUS
-    case 8:  // SIGFPE
-    case 11: // SIGSEGV
-    case 24: // SIGXCPU
-    case 25: // SIGXFSZ
-    case 31: // SIGSYS
-        return 1;
-    default:
-        return 0;
-    }
-}
-
-// The guest's effective RLIMIT_CORE soft limit (rlim_cur), from the same store getrlimit reads (docker
-// --ulimit seed, or a guest setrlimit). >0 means a core-dumping signal produces a core -> WCOREDUMP set.
-static uint64_t svc_core_rlimit_cur(void) {
-    uint64_t rl[2] = {0, 0};
-    svc_fill_rlimit(4 /* RLIMIT_CORE */, rl);
-    return rl[0];
-}
+// sig_coredumps() and svc_core_rlimit_cur() are defined in os/linux/signal.c (included before this TU);
+// wait4/waitid below use them to synthesize WCOREDUMP. (#401/#403 reconciled to a single definition.)
 
 // Emulate the kernel's close-on-exec sweep. The JIT's execve re-loads the new image IN-PROCESS (no real
 // host exec happens -- see case 221), so the kernel never closes FD_CLOEXEC descriptors for us. We must do
@@ -804,6 +779,8 @@ static int svc_proc(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64
         // parent and child see one coherent file via the inherited description, exactly as POSIX requires
         // (the heap-resident buffers would otherwise COW-diverge while the fd stays shared).
         memf_materialize_all();
+        sigexit_init(); // #403: create the shared guest-signal-death relay in the PARENT before forking, so
+                        // this child (and its descendants) inherit the same MAP_SHARED page it may die into.
         uint64_t fk0 = forkprof_on() ? now_ns() : 0; // #371: parent-side fork() latency (DD_FORKPROF=1)
         pid_t pid = fork();
         if (pid == 0) {
@@ -1175,6 +1152,14 @@ static int svc_proc(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64
         // WIFSTOPPED: macOS stopsig -> Linux
         else if ((st & 0xff) == 0x7f)
             st = (st & ~0xff00) | ((sig_m2l((st >> 8) & 0xff) & 0xff) << 8);
+        // WIFEXITED from the host, but the child may have relayed a guest signal death (#403): a fatal-default
+        // signal with no faithful fatal host mapping is delivered by the child _exit()ing after recording its
+        // Linux signo in the shared table. Reconstruct the SIGNALED status here. A genuine guest _exit(n)
+        // recorded nothing, so it is left as WIFEXITED(n).
+        else if ((st & 0x7f) == 0) {
+            int gsig, gcore;
+            if (sigexit_lookup(r, &gsig, &gcore, 1)) st = (gsig & 0x7f) | (gcore ? 0x80 : 0);
+        }
         if (a1) *(int *)a1 = st;
         G_RET(c) = (uint64_t)r;
         wait_done:; // #238: the EINTR reroute jumps here (G_RET + *status already set)
@@ -1220,6 +1205,7 @@ static int svc_proc(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64
             G_RET(c) = (uint64_t)spawn_thread(c, flags, ca[5] + ca[6], ca[7], ca[3], ca[2]);
             break;
         }
+        sigexit_init(); // #403: shared signal-death relay must exist in the parent before fork (see case 220)
         pid_t pid = fork();
         // child: the same shared engine reset as the clone/fork site above (cache re-alias / §B shadow /
         // path caches / kqueues / fork-unsafe locks). clone3 historically lacked the W^X re-assert and the

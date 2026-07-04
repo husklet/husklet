@@ -61,6 +61,97 @@ static int sig_default_terminates(int sig) {
     default: return sig >= 1 && sig <= 64;
     }
 }
+// Does signal `sig`'s DEFAULT action produce a core dump (Linux "Core" disposition)? Exactly the set LTP
+// waitpid01 expects: QUIT/ILL/TRAP/ABRT/BUS/FPE/SEGV/XCPU/XFSZ/SYS. Everything else that terminates does
+// so as plain "Term" (no core). Used to set WCOREDUMP faithfully on a guest signal death (#401/#403).
+static int sig_coredumps(int sig) {
+    switch (sig) {
+    case 3:  // SIGQUIT
+    case 4:  // SIGILL
+    case 5:  // SIGTRAP
+    case 6:  // SIGABRT
+    case 7:  // SIGBUS
+    case 8:  // SIGFPE
+    case 11: // SIGSEGV
+    case 24: // SIGXCPU
+    case 25: // SIGXFSZ
+    case 31: // SIGSYS
+        return 1;
+    default: return 0;
+    }
+}
+// Current soft RLIMIT_CORE (resource 4), guest-visible: a docker --ulimit / the guest's own
+// setrlimit/prlimit64 store (g_ulimit, seeded in state.c) wins, else the dd default (unlimited). A core
+// dump only happens when a coredumping signal kills a process whose SOFT core limit is nonzero, so this is
+// the single input WCOREDUMP is gated on. g_ulimit/DD_RLIM_MAX come from container/state.c (included first).
+static uint64_t svc_core_rlimit_cur(void) {
+    if (4 < DD_RLIM_MAX && g_ulimit[4].set) return g_ulimit[4].cur;
+    return ~0ull; // RLIM_INFINITY
+}
+
+// ---------------- guest signal-death relay (#403) ----------------
+// Every guest process is a real host (macOS) process, so a guest parent reaps its children with the host
+// wait4/waitid and reads the host termination status. When a guest child must die from a fatal-default
+// signal, dd normally lets it die BY the mapped host signal, and the parent's wait4 translates the host
+// termsig back (sig_m2l). That fails for signals with NO faithful fatal host mapping: SIGPOLL(29)->host
+// SIGIO / SIGSTKFLT(16)->host SIGURG both DEFAULT-IGNORE on macOS (so raising them does not terminate),
+// and SIGPWR(30)->host SIGUSR1 maps BACK to a different signo (10). dd then fell back to _exit(128+signo),
+// which the parent reads as WIFEXITED(128+signo) instead of WIFSIGNALED/WTERMSIG=signo.
+//
+// Fix: the dying child records its intended Linux termination signo (+ the WCOREDUMP verdict it computed
+// from its own RLIMIT_CORE) into this MAP_SHARED table, keyed by its pid, then _exit()s. The reaping
+// parent's wait4 (proc.c case 260) / waitid (rare.c case 95) looks the reaped pid up and reconstructs the
+// exact Linux SIGNALED status. A NORMAL guest _exit(n) writes NOTHING here, so it is never misread as a
+// signal death — that is the disambiguation guard between a real exit(128+n) and a signal termination.
+//
+// The page is created pre-fork (sigexit_init, called at every fork site) so every descendant inherits the
+// same shared mapping. A slot is claimed by the dying child and cleared by the parent when it reaps the
+// zombie, so a pid can never be reused while a stale entry survives (the zombie holds the pid until reap).
+struct sigexit_ent {
+    int pid; // 0 = free, -1 = claimed (mid-write), >0 = published guest pid; accessed via __atomic_* only
+    int signo;
+    int core;
+};
+#define SIGEXIT_SLOTS 4096
+static struct sigexit_ent *g_sigexit;
+
+static void sigexit_init(void) {
+    if (g_sigexit) return;
+    void *m = mmap(NULL, sizeof(struct sigexit_ent) * SIGEXIT_SLOTS, PROT_READ | PROT_WRITE,
+                   MAP_SHARED | MAP_ANON, -1, 0);
+    if (m != MAP_FAILED) g_sigexit = (struct sigexit_ent *)m;
+}
+// Dying child: publish (signo, core) for its own pid. Claim a free slot (0 -> -1), fill the payload, then
+// store the real pid LAST so a concurrent parent scan never sees a half-written entry. Best-effort: if the
+// table is full the child just _exit()s and the parent falls back to WIFEXITED(128+signo).
+static void sigexit_record(int signo, int core) {
+    if (!g_sigexit) return;
+    int me = (int)getpid();
+    for (int i = 0; i < SIGEXIT_SLOTS; i++) {
+        int expect = 0;
+        if (__atomic_compare_exchange_n(&g_sigexit[i].pid, &expect, -1, 0, __ATOMIC_ACQ_REL,
+                                        __ATOMIC_RELAXED)) {
+            g_sigexit[i].signo = signo;
+            g_sigexit[i].core = core;
+            __atomic_store_n(&g_sigexit[i].pid, me, __ATOMIC_RELEASE); // publish last
+            return;
+        }
+    }
+}
+// Reaping parent: if `pid` recorded a guest signal death, set *signo/*core and return 1. `consume` clears
+// the slot (a real reap); pass 0 for a WNOWAIT peek so a later real reap can still find it.
+static int sigexit_lookup(int pid, int *signo, int *core, int consume) {
+    if (!g_sigexit || pid <= 0) return 0;
+    for (int i = 0; i < SIGEXIT_SLOTS; i++) {
+        if (__atomic_load_n(&g_sigexit[i].pid, __ATOMIC_ACQUIRE) == pid) {
+            *signo = g_sigexit[i].signo;
+            *core = g_sigexit[i].core;
+            if (consume) __atomic_store_n(&g_sigexit[i].pid, 0, __ATOMIC_RELEASE);
+            return 1;
+        }
+    }
+    return 0;
+}
 // Signal numbers diverge: Linux SIGUSR1=10/CHLD=17/BUS=7/SYS=31/USR2=12/URG=23/IO=29/STOP=19/
 // CONT=18/TSTP=20 vs macOS 30/20/10/12/31/16/23/17/19/18. Translate at the host boundary.
 static int sig_l2m(int s) {
@@ -223,13 +314,28 @@ static void raise_guest_signal(struct cpu *c, int sig) {
         c->exit_code = 128 + sig;
         return;
     }
+    // Non-init guest process dying from a fatal-default signal. A guest process IS a real host process, so
+    // its parent reaps it with the host wait4/waitid. Raising the mapped HOST signal cannot faithfully carry
+    // the Linux signo for every signal: SIGPOLL(29)/SIGSTKFLT(16) map to host signals that DEFAULT-IGNORE on
+    // macOS (raise() then returns without terminating) and SIGPWR(30) maps to a host signal that reports a
+    // DIFFERENT signo back (10). So instead of raising, record the intended Linux termination signal in the
+    // shared relay and _exit(128+signo); the parent's wait4/waitid reconstructs WIFSIGNALED/WTERMSIG=sig
+    // (proc.c case 260 / rare.c case 95). WCOREDUMP per Linux rules: a coredumping signal with soft
+    // RLIMIT_CORE > 0. If the relay slot table is exhausted the parent simply sees the WIFEXITED(128+signo)
+    // fallback — the same graceful degradation as before this fix.
+    if (sig_default_terminates(sig)) {
+        int core = sig_coredumps(sig) && svc_core_rlimit_cur() > 0;
+        sigexit_record(sig, core);
+        c->exited = 1;
+        c->exit_code = 128 + sig;
+        return;
+    }
+    // Non-terminating default reaching here = a stop signal (STOP/TSTP/TTIN/TTOU): mirror it onto the host so
+    // a real job-control stop happens (the host mask mirrors these too — see rt_sigprocmask).
     signal(sig_l2m(sig), SIG_DFL);
-    // default: a non-init guest process IS the engine process -- a real host signal both terminates it and
-    // yields the correct WIFSIGNALED status to its parent's waitpid (host signo).
     raise(sig_l2m(sig));
     c->exited = 1;
-    // fallback if raise returns / signo invalid on host
-    c->exit_code = 128 + sig;
+    c->exit_code = 128 + sig; // fallback if raise returns / signo invalid on host
 }
 
 // A synchronous CPU fault (SIGSEGV/SIGBUS) taken inside translated code is the GUEST's own fault. If the

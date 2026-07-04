@@ -487,6 +487,15 @@ static void service_local(struct cpu *c) {
             a1 = nonpie_p(a1);
             a2 = nonpie_p(a2);
             break; // readlinkat(dfd, PATH, BUF, sz)
+        case 88:   // utimensat(dfd, PATH, TIMES[2], flags) -- sibling of fchmodat/fchownat in the *at
+                   // metadata family. Both the path (a1) and the struct timespec[2] TIMES (a2) can be
+                   // low link-vaddr pointers in a non-PIE (glibc's utime/utimes/utimensat + LTP's
+                   // SAFE_TOUCH pass .rodata/.bss addresses); without the rebase the host utimensat reads
+                   // an unmapped low address and EFAULTs (LTP link02/link05/lstat01/lstat02 BROK in
+                   // SAFE_TOUCH setup). a1==NULL (futimens-by-fd) / a2==NULL (times=now) stay 0 via nonpie_p.
+            a1 = nonpie_p(a1);
+            a2 = nonpie_p(a2);
+            break;
         case 291:
             a1 = nonpie_p(a1);
             a4 = nonpie_p(a4);

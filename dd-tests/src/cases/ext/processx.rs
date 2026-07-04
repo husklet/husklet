@@ -35,6 +35,13 @@ fn processx_linux() -> Group {
         // A FUTEX_WAKE in one process must wake a FUTEX_WAIT in another on the same shared physical
         // page (both directions), plus WAIT-timeout=ETIMEDOUT and WAKE(N) of N cross-process waiters.
         src("futex-xproc", "ext_proc/futex_xproc.c").oracle(),
+        // #403: a child killed by a fatal-default signal with no faithful fatal host mapping (SIGPOLL/
+        // SIGSTKFLT map to host signals that default-ignore, SIGPWR maps to a different signo) must reach
+        // the parent's wait4 as WIFSIGNALED/WTERMSIG=signo, not WIFEXITED(128+signo). Plus a real exit(157)
+        // stays WIFEXITED (disambiguation) and the SIGKILL/SIGSEGV paths don't regress. LTP waitpid01 shape.
+        src("waitsig", "ext_proc/waitsig.c")
+            .out("waitsig sigpoll=1 sigsys=1 sigstkflt=1 sigpwr=1 exit157=1 sigkill=1 sigsegv=1\n")
+            .oracle(),
         // ptrace(2) real tracer/tracee coordination (#238). dd emulates the ptrace relationship BETWEEN two
         // guest processes (both translated) over a shared arena -- NOT the host macOS ptrace. A golden
         // verdict (both Linux arches): TRACEME + group-stop + PTRACE_SYSCALL entry/exit stops observe the
