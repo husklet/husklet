@@ -2076,16 +2076,24 @@ static int guest_is_x86(void) {
     return 0;
 }
 // x86-64 /proc/cpuinfo block for one logical CPU. The `flags` list mirrors EXACTLY the feature set the JIT's
-// CPUID leaf reports (x86_ops.c do_cpuid: the SSE..SSE4.2/AES/PCLMUL/SHA/BMI baseline, NO AVX) so a guest
-// that reads cpuinfo for feature detection sees precisely what the engine can execute.
+// CPUID leaf reports (x86_ops.c do_cpuid) -- every token here is backed by a CPUID bit dd actually sets, and
+// every CPUID bit dd sets appears here, so a guest gets the SAME answer from `cpuid` and from /proc:
+//   leaf 1 EDX:   fpu tsc cx8 sep pge cmov clflush mmx fxsr sse sse2
+//   leaf 1 ECX:   pni(sse3) pclmulqdq ssse3 cx16 sse4_1 sse4_2 popcnt aes  (movbe is deliberately WITHHELD --
+//                 see do_cpuid: the "movbe && !xsave" Atom fingerprint pessimizes openssl -- so it is absent here too)
+//   leaf 7 EBX/EDX: bmi1 bmi2 erms sha_ni fsrm
+//   ext 0x80000001: syscall nx rdtscp lm lahf_lm     ext 0x80000007: constant_tsc/nonstop_tsc (invariant TSC)
+//   synthetic (Linux always adds): cpuid nopl. NO AVX/xsave (xgetbv reports only x87+SSE). family 6 model 44
+//   stepping 2 decode leaf-1 EAX 0x000206c2; model name matches the CPUID brand string (0x80000002..4).
 static int cpuinfo_x86_block(char *b, size_t n, int idx, int ncpu) {
     return snprintf(b, n,
-        "processor\t: %d\nvendor_id\t: GenuineIntel\ncpu family\t: 6\nmodel\t\t: 60\n"
-        "model name\t: dd JIT x86-64 processor\nstepping\t: 3\nmicrocode\t: 0x1\ncpu MHz\t\t: 2500.000\n"
+        "processor\t: %d\nvendor_id\t: GenuineIntel\ncpu family\t: 6\nmodel\t\t: 44\n"
+        "model name\t: dd JIT x86-64 processor\nstepping\t: 2\nmicrocode\t: 0x1\ncpu MHz\t\t: 2500.000\n"
         "cache size\t: 8192 KB\nphysical id\t: 0\nsiblings\t: %d\ncore id\t\t: %d\ncpu cores\t: %d\n"
         "apicid\t\t: %d\ninitial apicid\t: %d\nfpu\t\t: yes\nfpu_exception\t: yes\ncpuid level\t: 7\nwp\t\t: yes\n"
-        "flags\t\t: fpu tsc cx8 sep pge cmov clflush mmx fxsr sse sse2 syscall lm constant_tsc nopl "
-        "pni pclmulqdq ssse3 cx16 sse4_1 sse4_2 movbe popcnt aes lahf_lm bmi1 bmi2 sha_ni\n"
+        "flags\t\t: fpu tsc cx8 sep pge cmov clflush mmx fxsr sse sse2 syscall nx rdtscp lm constant_tsc "
+        "nonstop_tsc cpuid nopl pni pclmulqdq ssse3 cx16 sse4_1 sse4_2 popcnt aes lahf_lm bmi1 bmi2 erms "
+        "sha_ni fsrm\n"
         "bugs\t\t:\nbogomips\t: 5000.00\nclflush size\t: 64\ncache_alignment\t: 64\n"
         "address sizes\t: 39 bits physical, 48 bits virtual\npower management:\n\n",
         idx, ncpu, idx, ncpu, idx, idx);
