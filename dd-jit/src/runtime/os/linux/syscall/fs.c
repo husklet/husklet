@@ -1030,6 +1030,18 @@ static int svc_fs(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t
             const char *p = atpath(-100, (const char *)a0, pb, sizeof pb, 0);
             if (g_rootfs) guest_abspath_at(-100, (const char *)a0, gpath, sizeof gpath);
             r = statfs(p, &hs);
+            // The cgroup2 hierarchy is a SYNTHETIC mount dd presents at /sys/fs/cgroup (its files are served
+            // by the /proc·/sys synth, not the image), so an overlay rootfs has no such directory to
+            // host-statfs -> ENOENT. A runtime's UseContainerSupport still statfs()es the mount to confirm
+            // the CGROUP2 magic. Populate the base geometry from the rootfs root (always present) and let
+            // the pseudo-fs classification below stamp CGROUP2 + zero the block/inode counts, exactly like
+            // /proc and /sys (which happen to exist in the image so their host-statfs succeeds).
+            if (r < 0 && g_rootfs && gpath[0] &&
+                (!strcmp(gpath, "/sys/fs/cgroup") || !strncmp(gpath, "/sys/fs/cgroup/", 15))) {
+                char rb[4200];
+                const char *rroot = atpath(-100, "/", rb, sizeof rb, 0);
+                r = statfs(rroot, &hs);
+            }
         } else {
             r = fstatfs((int)a0, &hs);
             if (g_rootfs && (int)a0 >= 0 && (int)a0 < 1024 && g_fdpath[(int)a0][0])

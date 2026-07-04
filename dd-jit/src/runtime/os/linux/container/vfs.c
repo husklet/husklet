@@ -1289,7 +1289,11 @@ static int proc_mountinfo_text(char *b, size_t n) {
                     "24 23 0:22 / /proc rw,nosuid,nodev,noexec,relatime - proc proc rw\n"
                     "25 23 0:23 / /sys rw,nosuid,nodev,noexec,relatime - sysfs sysfs rw\n"
                     "26 23 0:24 / /dev rw,nosuid - tmpfs tmpfs rw,mode=755\n"
-                    "27 23 0:25 / /sys/fs/cgroup rw,nosuid,nodev,noexec,relatime - cgroup2 cgroup2 rw\n");
+                    // runc bind-mounts the container's cgroup2 leaf READ-ONLY (ro) with source name
+                    // "cgroup" and the nsdelegate super-option -- matching the OrbStack/runc oracle exactly.
+                    // The JVM/systemd cgroup-v2 detection keys on the "cgroup2" fstype + "/sys/fs/cgroup"
+                    // mount point (both present); the ro flag mirrors what a real container exposes.
+                    "27 23 0:25 / /sys/fs/cgroup ro,nosuid,nodev,noexec,relatime - cgroup2 cgroup rw,nsdelegate\n");
 }
 // ================= REAL /proc process table (top/htop/ps) =====================================
 // dd's process model: every guest process is its OWN host (macOS) process running this DBT; the
@@ -2551,6 +2555,102 @@ static int proc_open(const char *rp) {
             n = snprintf(buf, sizeof buf, "max\n");
     } else if (!strcmp(rp, "/sys/fs/cgroup/pids.current")) {
         n = snprintf(buf, sizeof buf, "%d\n", atomic_load(&g_pids_cur));
+    // ---- cgroup v2 unified-hierarchy surface real runtimes SIZE THEMSELVES from ----------------------
+    // The JVM (-XX:+UseContainerSupport), the Go runtime (GOMAXPROCS/GOMEMLIMIT tooling), Node/libuv, and
+    // systemd read these to pick heap size, GC/CommonPool/worker thread counts, and to detect that they are
+    // in a v2 container at all. Values MUST reflect the docker --cpus/--memory caps (state.c g_cpu_max /
+    // g_mem_max); unconstrained -> the kernel "max" sentinels. Verified byte-identical to runc (OrbStack
+    // Docker 29.4) both unconstrained and under --memory=512m --cpus=2. Host-variant accounting figures
+    // (memory.stat/cpu.stat live counters) are structural-only: the KEYS a runtime parses must be present,
+    // the values are informational so we report zeros (a bare-guest deterministic baseline).
+    // ---- cgroup core interface files (v2 markers a runtime detects the unified hierarchy by) ----------
+    } else if (!strcmp(rp, "/sys/fs/cgroup/cgroup.controllers")) {
+        // The controllers available in this cgroup. runc enables exactly these for a container leaf.
+        n = snprintf(buf, sizeof buf, "cpuset cpu io memory pids\n");
+    } else if (!strcmp(rp, "/sys/fs/cgroup/cgroup.subtree_control")) {
+        n = 0; buf[0] = 0; // a leaf cgroup delegates nothing downward -> empty (matches runc)
+    } else if (!strcmp(rp, "/sys/fs/cgroup/cgroup.type")) {
+        n = snprintf(buf, sizeof buf, "domain\n");
+    } else if (!strcmp(rp, "/sys/fs/cgroup/cgroup.procs") ||
+               !strcmp(rp, "/sys/fs/cgroup/cgroup.threads")) {
+        // The pids/tids in this cgroup. The container is one cgroup, so this is the guest task set; report
+        // the introspectable init pid (guest sees itself as 1). A reader (systemd, cgexec) just needs a
+        // valid, present pid list -- the exact membership is host-variant.
+        n = snprintf(buf, sizeof buf, "%d\n", container_pid());
+    } else if (!strcmp(rp, "/sys/fs/cgroup/cgroup.events")) {
+        n = snprintf(buf, sizeof buf, "populated 1\nfrozen 0\n");
+    } else if (!strcmp(rp, "/sys/fs/cgroup/cgroup.max.depth") ||
+               !strcmp(rp, "/sys/fs/cgroup/cgroup.max.descendants")) {
+        n = snprintf(buf, sizeof buf, "max\n");
+    } else if (!strcmp(rp, "/sys/fs/cgroup/cgroup.stat")) {
+        n = snprintf(buf, sizeof buf, "nr_descendants 0\nnr_dying_descendants 0\n");
+    // ---- memory controller: JVM UseContainerSupport + GOMEMLIMIT tooling read memory.max/.high/.swap ---
+    } else if (!strcmp(rp, "/sys/fs/cgroup/memory.min") ||
+               !strcmp(rp, "/sys/fs/cgroup/memory.low")) {
+        n = snprintf(buf, sizeof buf, "0\n"); // no reclaim protection reserved (runc default)
+    } else if (!strcmp(rp, "/sys/fs/cgroup/memory.high")) {
+        n = snprintf(buf, sizeof buf, "max\n"); // docker sets only the hard limit (memory.max), never .high
+    } else if (!strcmp(rp, "/sys/fs/cgroup/memory.swap.max")) {
+        // v2 memory.swap.max is the SWAP-ONLY ceiling. Docker's default --memory-swap (unset) = 2*--memory,
+        // and runc writes swap.max = memoryswap - memory = --memory. So under --memory it equals g_mem_max;
+        // unconstrained -> "max". (Verified: --memory=512m -> 536870912, matching --memory bytes.)
+        if (g_mem_max)
+            n = snprintf(buf, sizeof buf, "%llu\n", (unsigned long long)g_mem_max);
+        else
+            n = snprintf(buf, sizeof buf, "max\n");
+    } else if (!strcmp(rp, "/sys/fs/cgroup/memory.swap.current")) {
+        n = snprintf(buf, sizeof buf, "0\n"); // no swap accounted (dd runs no swap)
+    } else if (!strcmp(rp, "/sys/fs/cgroup/memory.swap.high")) {
+        n = snprintf(buf, sizeof buf, "max\n");
+    } else if (!strcmp(rp, "/sys/fs/cgroup/memory.peak")) {
+        n = snprintf(buf, sizeof buf, "%llu\n", (unsigned long long)atomic_load(&g_mem_charged));
+    } else if (!strcmp(rp, "/sys/fs/cgroup/memory.stat")) {
+        // The per-type breakdown. The JVM's CgroupSubsystemController reads this for "file" (page cache) to
+        // refine its container-memory estimate; the exact byte figures are host-variant, so we present the
+        // full canonical key set with the tracked anon charge and zeros elsewhere (structural fidelity).
+        unsigned long long anon = (unsigned long long)atomic_load(&g_mem_charged);
+        n = snprintf(buf, sizeof buf,
+                     "anon %llu\nfile 0\nkernel %llu\nkernel_stack 0\npagetables 0\nsec_pagetables 0\n"
+                     "percpu 0\nsock 0\nvmalloc 0\nshmem 0\nfile_mapped 0\nfile_dirty 0\nfile_writeback 0\n"
+                     "swapcached 0\nanon_thp 0\nfile_thp 0\nshmem_thp 0\ninactive_anon %llu\nactive_anon 0\n"
+                     "inactive_file 0\nactive_file 0\nunevictable 0\nslab_reclaimable 0\nslab_unreclaimable 0\n"
+                     "slab 0\nworkingset_refault_anon 0\nworkingset_refault_file 0\npgfault 0\npgmajfault 0\n",
+                     anon, anon, anon);
+    } else if (!strcmp(rp, "/sys/fs/cgroup/memory.events") ||
+               !strcmp(rp, "/sys/fs/cgroup/memory.events.local")) {
+        n = snprintf(buf, sizeof buf, "low 0\nhigh 0\nmax 0\noom 0\noom_kill 0\noom_group_kill 0\n");
+    // ---- cpu controller: JVM ActiveProcessorCount + Go GOMAXPROCS derive from cpu.max quota/period ------
+    } else if (!strcmp(rp, "/sys/fs/cgroup/cpu.max")) {
+        // "<quota> <period>" under --cpus, "max <period>" unconstrained. Docker's period is 100000us; the
+        // quota is --cpus * period. g_cpu_max is the container's integer core allotment (state.c). A runtime
+        // computes cpus = quota/period, so this is what makes a --cpus=2 container self-size Go GOMAXPROCS /
+        // JVM availableProcessors to 2. (Verified: --cpus=2 -> "200000 100000".)
+        if (g_cpu_max > 0)
+            n = snprintf(buf, sizeof buf, "%lld 100000\n", (long long)g_cpu_max * 100000);
+        else
+            n = snprintf(buf, sizeof buf, "max 100000\n");
+    } else if (!strcmp(rp, "/sys/fs/cgroup/cpu.max.burst")) {
+        n = snprintf(buf, sizeof buf, "0\n");
+    } else if (!strcmp(rp, "/sys/fs/cgroup/cpu.weight")) {
+        n = snprintf(buf, sizeof buf, "100\n"); // docker default share weight (no --cpu-shares override)
+    } else if (!strcmp(rp, "/sys/fs/cgroup/cpu.weight.nice")) {
+        n = snprintf(buf, sizeof buf, "0\n");
+    } else if (!strcmp(rp, "/sys/fs/cgroup/cpu.idle")) {
+        n = snprintf(buf, sizeof buf, "0\n");
+    } else if (!strcmp(rp, "/sys/fs/cgroup/cpu.stat")) {
+        // usage/throttling counters. The KEY NAMES are what a runtime/systemd parse; the values are
+        // host-variant accounting, so zeros are a correct deterministic baseline (dd tracks no per-cgroup
+        // cpu accounting). nr_throttled/throttled_usec present so a throttle-aware scheduler sees "0".
+        n = snprintf(buf, sizeof buf,
+                     "usage_usec 0\nuser_usec 0\nsystem_usec 0\nnr_periods 0\nnr_throttled 0\n"
+                     "throttled_usec 0\nnr_bursts 0\nburst_usec 0\n");
+    // ---- io controller (lower value; present so a full-cgroup walk finds it) --------------------------
+    } else if (!strcmp(rp, "/sys/fs/cgroup/io.max")) {
+        n = 0; buf[0] = 0; // no per-device io limits set (docker without --device-*-bps) -> empty
+    } else if (!strcmp(rp, "/sys/fs/cgroup/io.stat")) {
+        n = 0; buf[0] = 0; // no real block device backs the overlay -> empty (host-variant otherwise)
+    } else if (!strcmp(rp, "/sys/fs/cgroup/io.weight")) {
+        n = snprintf(buf, sizeof buf, "default 100\n");
     // ---- #348: the broad /proc + /proc/sys surface real software reads --------------------------------
     } else if (!strcmp(rp, "/proc/cmdline")) {
         n = snprintf(buf, sizeof buf, "root=/dev/sda1 ro quiet\n"); // kernel cmdline (distinct from self/cmdline)
@@ -2558,6 +2658,15 @@ static int proc_open(const char *rp) {
         n = snprintf(buf, sizeof buf,
                      "nodev\tsysfs\nnodev\ttmpfs\nnodev\tproc\nnodev\tdevtmpfs\nnodev\tdevpts\n"
                      "nodev\tmqueue\nnodev\tcgroup2\nnodev\toverlay\n\text3\n\text2\n\text4\n");
+    } else if (!strcmp(rp, "/proc/cgroups")) {
+        // The v1 subsystem summary. On a pure-v2 (unified) host every controller lives in hierarchy 0; some
+        // older runtimes (and `lscgroup`) read this to enumerate available controllers. Mirror the OrbStack
+        // oracle: all subsystems enabled, hierarchy 0 (v2 unified), num_cgroups is host-variant -> report 1.
+        n = snprintf(buf, sizeof buf,
+                     "#subsys_name\thierarchy\tnum_cgroups\tenabled\n"
+                     "cpuset\t0\t1\t1\ncpu\t0\t1\t1\ncpuacct\t0\t1\t1\nblkio\t0\t1\t1\nmemory\t0\t1\t1\n"
+                     "devices\t0\t1\t1\nfreezer\t0\t1\t1\nnet_cls\t0\t1\t1\nperf_event\t0\t1\t1\n"
+                     "net_prio\t0\t1\t1\npids\t0\t1\t1\n");
     } else if (!strcmp(rp, "/proc/swaps")) {
         n = snprintf(buf, sizeof buf, "Filename\t\t\t\tType\t\tSize\t\tUsed\t\tPriority\n"); // no swap
     } else if (!strcmp(rp, "/proc/modules")) {
