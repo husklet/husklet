@@ -236,6 +236,16 @@ static void fork_child_hooks(struct cpu *c) {
 static int g_nnp;               // PR_SET/GET_NO_NEW_PRIVS
 static int g_dumpable = 1;      // PR_SET/GET_DUMPABLE
 static int g_pdeathsig;         // PR_SET/GET_PDEATHSIG
+static int g_thp_disable;       // PR_SET/GET_THP_DISABLE (per-process transparent-hugepage opt-out)
+static int g_subreaper;         // PR_SET/GET_CHILD_SUBREAPER (this process is a reaper for orphans)
+// The process EFFECTIVE capability set. The container starts as full root (all caps); we don't model
+// per-capability ENFORCEMENT in general, but we DO track what capset(2) leaves in the effective set so the
+// few prctl options the kernel gates on a specific capability (PR_SET_SECUREBITS / PR_CAPBSET_DROP need
+// CAP_SETPCAP) return -EPERM after that cap has been dropped -- exactly as LTP prctl02 (which drops
+// CAP_SETPCAP via libcap before those subtests) expects. Defaults to all-set so nothing changes until a
+// guest actually narrows its effective set.
+static uint64_t g_cap_eff = ~0ull;
+#define CAP_SETPCAP 8
 // personality(2) persona (lsys-personality): query with 0xffffffff, set returns the previous value.
 static unsigned g_persona;
 
@@ -302,6 +312,19 @@ static int svc_proc(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64
         // KEEPCAPS uid drop this is how setpriv restores effective CAP_SETGID so its following setresgid works.
         cred_init();
         g_cap_setid_eff = g_cap_setid_perm;
+        // Track the effective set the guest just asked for, so a capability-gated prctl (PR_SET_SECUREBITS /
+        // PR_CAPBSET_DROP) reflects a dropped CAP_SETPCAP. datap is {effective,permitted,inheritable}[u32s];
+        // effective words are at data[i*3+0]. v1 spans the low 32 caps, v3 the full 64.
+        if (a1 && host_range_mapped(a1, 12)) {
+            uint32_t ver = (a0 && host_range_mapped(a0, 4)) ? *(uint32_t *)a0 : 0x20080522u;
+            int u32s = (ver == 0x19980330u) ? 1 : 2;
+            uint32_t *d = (uint32_t *)a1;
+            if (u32s == 1 || host_range_mapped(a1, 24)) {
+                uint64_t eff = d[0];
+                if (u32s == 2) eff |= (uint64_t)d[3] << 32;
+                g_cap_eff = eff;
+            }
+        }
         G_RET(c) = 0;
         break;
     }
@@ -681,11 +704,15 @@ static int svc_proc(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64
     // prctl(option,...)
     case 167: {
         if ((int)a0 == 15) {
+            // PR_SET_NAME: kernel copies up to 16 bytes from arg2 -> -EFAULT on an unreadable pointer
+            // (LTP prctl02 PR_SET_NAME/bad_addr). Validate before the deref.
+            if (guest_bad_ptr((uintptr_t)a1, 1)) { G_RET(c) = (uint64_t)(-EFAULT); break; }
             snprintf(g_procname, sizeof g_procname, "%.15s", (const char *)a1);
             G_RET(c) = 0;
             break;
         } // PR_SET_NAME
         if ((int)a0 == 16) {
+            if (guest_bad_ptr((uintptr_t)a1, 16)) { G_RET(c) = (uint64_t)(-EFAULT); break; }
             snprintf((char *)a1, 16, "%s", g_procname);
             G_RET(c) = 0;
             break;
@@ -702,18 +729,24 @@ static int svc_proc(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64
             break;
         }
         // PR_SET_PDEATHSIG(1)/PR_GET_PDEATHSIG(2): the parent-death signal round-trips (no real delivery
-        // under the JIT, but the value the guest set is reported back).
-        if ((int)a0 == 1) { g_pdeathsig = (int)a1; G_RET(c) = 0; break; }
+        // under the JIT, but the value the guest set is reported back). arg2 must be 0 (clear) or a valid
+        // signal number 1..64; anything else is -EINVAL (LTP prctl02 PR_SET_PDEATHSIG/ULONG_MAX).
+        if ((int)a0 == 1) {
+            if (a1 > 64) { G_RET(c) = (uint64_t)(-EINVAL); break; }
+            g_pdeathsig = (int)a1; G_RET(c) = 0; break;
+        }
         if ((int)a0 == 2) {
-            if (!host_range_mapped((uintptr_t)a1, sizeof(int))) { G_RET(c) = (uint64_t)(-EFAULT); break; }
+            if (guest_bad_ptr((uintptr_t)a1, sizeof(int))) { G_RET(c) = (uint64_t)(-EFAULT); break; }
             *(int *)a1 = g_pdeathsig;
             G_RET(c) = 0;
             break;
         }
-        // PR_GET_DUMPABLE(3)/PR_SET_DUMPABLE(4): the dumpable flag round-trips (kernel accepts 0,1,2).
+        // PR_GET_DUMPABLE(3)/PR_SET_DUMPABLE(4): the dumpable flag round-trips. SET accepts ONLY
+        // SUID_DUMP_DISABLE(0) and SUID_DUMP_USER(1); any other value (incl. 2 = the internal
+        // SUID_DUMP_ROOT, which is not settable from userspace) is -EINVAL (LTP prctl02 PR_SET_DUMPABLE/2).
         if ((int)a0 == 3) { G_RET(c) = (uint64_t)(unsigned)g_dumpable; break; }
         if ((int)a0 == 4) {
-            if (a1 > 2) { G_RET(c) = (uint64_t)(-EINVAL); break; }
+            if (a1 > 1) { G_RET(c) = (uint64_t)(-EINVAL); break; }
             g_dumpable = (int)a1;
             G_RET(c) = 0;
             break;
@@ -730,11 +763,80 @@ static int svc_proc(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64
             G_RET(c) = (uint64_t)(unsigned)g_nnp;
             break;
         }
+        // PR_SET_CHILD_SUBREAPER(36)/PR_GET_CHILD_SUBREAPER(37): the subreaper flag round-trips. SET stores
+        // arg2 as a boolean; GET writes it through the int* in arg2 (LTP prctl03). NOTE: only the flag itself
+        // round-trips here -- the ACTUAL reparenting of an orphaned descendant onto a subreaper is a
+        // process-tree feature dd's 1:1 host-fork model does not implement (an orphaned guest grandchild is
+        // reparented by the host kernel, not routed back to the guest subreaper), so prctl03's reparent/
+        // SIGCHLD/wait subtests are a known process-model gap, out of this syscall layer's scope.
+        if ((int)a0 == 36) { g_subreaper = (a1 != 0); G_RET(c) = 0; break; }
+        if ((int)a0 == 37) {
+            if (guest_bad_ptr((uintptr_t)a1, sizeof(int))) { G_RET(c) = (uint64_t)(-EFAULT); break; }
+            *(int *)a1 = g_subreaper;
+            G_RET(c) = 0;
+            break;
+        }
+        // PR_GET_THP_DISABLE(42)/PR_SET_THP_DISABLE(41): the per-process transparent-hugepage opt-out flag
+        // round-trips. GET rejects any nonzero unused arg; SET treats arg2 as a boolean and rejects nonzero
+        // arg3/arg4/arg5 (LTP prctl02 PR_{GET,SET}_THP_DISABLE). Modeling it (rather than the old blanket
+        // EINVAL) makes the feature probe succeed so its dependent LTP subtests run, matching real Linux.
+        if ((int)a0 == 42) {
+            if (a1 || a2 || a3 || a4) { G_RET(c) = (uint64_t)(-EINVAL); break; }
+            G_RET(c) = (uint64_t)(unsigned)g_thp_disable;
+            break;
+        }
+        if ((int)a0 == 41) {
+            if (a2 || a3 || a4) { G_RET(c) = (uint64_t)(-EINVAL); break; }
+            g_thp_disable = (a1 != 0);
+            G_RET(c) = 0;
+            break;
+        }
+        // PR_CAP_AMBIENT(47): the ambient capability set is empty in this all-root container, so RAISE/LOWER
+        // are accepted no-ops and IS_SET always reports "not set"; the value of this handler is matching
+        // Linux's argument validation exactly (LTP prctl02 PR_CAP_AMBIENT/*). Sub-command in arg2:
+        //   4=CLEAR_ALL (arg3/4/5 must be 0), 2=RAISE, 3=LOWER, 1=IS_SET (arg3=cap, must be <= CAP_LAST_CAP;
+        //   arg4/5 must be 0). Any other sub-command is -EINVAL.
+        if ((int)a0 == 47) {
+            if (a1 == 4) { // PR_CAP_AMBIENT_CLEAR_ALL
+                if (a2 || a3 || a4) { G_RET(c) = (uint64_t)(-EINVAL); break; }
+                G_RET(c) = 0;
+                break;
+            }
+            if (a3 || a4) { G_RET(c) = (uint64_t)(-EINVAL); break; } // arg4/arg5 unused for the rest
+            if (a1 == 1 || a1 == 2 || a1 == 3) {                    // IS_SET / RAISE / LOWER
+                if (a2 > 40 /* CAP_LAST_CAP (CAP_CHECKPOINT_RESTORE) */) { G_RET(c) = (uint64_t)(-EINVAL); break; }
+                G_RET(c) = (a1 == 1) ? 0 /* IS_SET: not in the (empty) ambient set */ : 0;
+                break;
+            }
+            G_RET(c) = (uint64_t)(-EINVAL); // unknown sub-command
+            break;
+        }
+        // PR_GET_SPECULATION_CTRL(52): report a plausible speculation-control status. arg3/arg4/arg5 must be
+        // 0 (LTP prctl02 PR_GET_SPECULATION_CTRL/arg-nonzero -> EINVAL); the feature must NOT report EINVAL
+        // for the all-zero probe, or its dependent subtests would be skipped where real Linux runs them.
+        if ((int)a0 == 52) {
+            if (a2 || a3 || a4) { G_RET(c) = (uint64_t)(-EINVAL); break; }
+            G_RET(c) = 2; // PR_SPEC_PRCTL is off, mitigation not forced: PR_SPEC_ENABLE
+            break;
+        }
+        // PR_SET_SECUREBITS(28) and PR_CAPBSET_DROP(24) require CAP_SETPCAP in the effective set; without it
+        // the kernel returns -EPERM before any further validation (LTP prctl02 drops CAP_SETPCAP first). With
+        // the cap held (the container default) they succeed for a well-formed argument.
+        if ((int)a0 == 28) {
+            if (!(g_cap_eff & (1ull << CAP_SETPCAP))) { G_RET(c) = (uint64_t)(-EPERM); break; }
+            G_RET(c) = 0; // securebits accepted (we don't enforce them, but the value round-trips as 0)
+            break;
+        }
+        if ((int)a0 == 24) {
+            if (!(g_cap_eff & (1ull << CAP_SETPCAP))) { G_RET(c) = (uint64_t)(-EPERM); break; }
+            if (a1 > 40 /* CAP_LAST_CAP */) { G_RET(c) = (uint64_t)(-EINVAL); break; }
+            G_RET(c) = 0; // drop from the bounding set (unenforced) -> success
+            break;
+        }
         // 0 for known no-ops; EINVAL for unknown (kernel does)
         switch ((int)a0) {
         case 15:
         case 35:
-        case 36:
         case 53:
         case 55:
         // NAME/SECCOMP/TIMERSLACK/THP/SPECCTRL...
@@ -1007,6 +1109,7 @@ static int svc_proc(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64
             xargv[i] = strdup(argv[i]);
         xargv[ac < 255 ? ac : 255] = NULL;
         gmap_reset_all();
+        pn_reset();            // the old image's PROT_NONE ranges are gone with its address space
         g_nonpie_lo = g_nonpie_hi = 0; // reset; load_elf re-sets it iff the new main image is non-PIE
         p = xpath;
         for (int i = 0; i < ac && i < 255; i++)

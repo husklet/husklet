@@ -73,6 +73,8 @@ static int pn_hit(uint64_t addr, uint64_t len) {
         if (addr < g_pn[i].hi && end > g_pn[i].lo) return 1;
     return 0;
 }
+// execve replaces the whole address space -> drop all tracked PROT_NONE ranges (they're gone).
+static void pn_reset(void) { g_npn = 0; }
 
 // ---- flock(2) emulation on a private companion file (BSD whole-file advisory locks) ----------------
 // On Linux, flock() (BSD, whole-file, per-open-file-description) and fcntl() POSIX record locks are

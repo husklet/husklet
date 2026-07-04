@@ -1,76 +1,103 @@
-// connect()/bind()/sendto() ERROR-path semantics — LTP connect01/bind01/sendto02 surface. The priority is
-// that a BAD ADDRESS POINTER returns EFAULT rather than CRASHING the engine. Deterministic, oracle-diffed
-// dd-vs-native on both arches. Uses a loopback listener for the success/EISCONN cases so it needs no net.
+// Permanent guard for the connect(2)/bind(2) errno matrix that upstream LTP's connect01 + bind01 check.
+// dd emulates the Linux socket ABI on top of macOS BSD sockets, and macOS reports a DIFFERENT errno than
+// Linux for several bad inputs; net.c's net_precheck() re-derives the Linux errno + ORDER up front. This
+// guest asserts every case against the exact Linux errno (arch-independent numbers) so a regression in
+// that path fails the matrix on both engines. Golden-compared (deterministic); see cases/ext/net.rs.
+//
+// The values mirror connect01 (EBADF/EFAULT/EINVAL/ENOTSOCK/EISCONN/ECONNREFUSED/EAFNOSUPPORT) and
+// bind01 (EINVAL/ENOTSOCK/EAFNOSUPPORT/EADDRNOTAVAIL/EBADF). EFAULT is exercised with a mmap(PROT_NONE)
+// guard page exactly as LTP's tst_get_bad_addr does — the case dd force-maps host-readable, so net.c
+// consults its guest-PROT_NONE registry to still fault.
 #include <errno.h>
+#include <fcntl.h>
 #include <netinet/in.h>
 #include <stdio.h>
 #include <string.h>
+#include <sys/mman.h>
 #include <sys/socket.h>
+#include <sys/un.h>
+#include <sys/wait.h>
 #include <unistd.h>
 
+// Run one connect()/bind() and return the errno it failed with (0 if it unexpectedly succeeded).
+static int err_of(int rc) { return rc < 0 ? errno : 0; }
+
 int main(void) {
-    setbuf(stdout, NULL); // unbuffered: no output is lost if a bad-pointer case were to fault
-    // ---- connect() error paths ----
-    int s = socket(AF_INET, SOCK_STREAM, 0);
-    struct sockaddr_in sa;
-    memset(&sa, 0, sizeof sa);
-    sa.sin_family = AF_INET;
-    sa.sin_port = htons(1); // nothing listening
-    sa.sin_addr.s_addr = htonl(0x7f000001);
+    void *bad = mmap(0, 1, PROT_NONE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
 
-    // connect on a non-socket fd -> ENOTSOCK.
-    errno = 0;
-    int r_ns = connect(0, (struct sockaddr *)&sa, sizeof sa); // fd 0 is stdin, not a socket
-    printf("connect ENOTSOCK: ret=%d ok=%d\n", r_ns, r_ns < 0 && errno == ENOTSOCK);
+    // A real, currently-listening loopback server (for the EISCONN case) + its bound address.
+    int srv = socket(AF_INET, SOCK_STREAM, 0);
+    struct sockaddr_in la = {0};
+    la.sin_family = AF_INET;
+    la.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    la.sin_port = 0;
+    bind(srv, (struct sockaddr *)&la, sizeof la);
+    listen(srv, 8);
+    socklen_t ll = sizeof la;
+    getsockname(srv, (struct sockaddr *)&la, &ll); // la now holds the live port
 
-    // connect with a bad address POINTER -> EFAULT (must NOT crash the engine).
-    errno = 0;
-    int r_ef = connect(s, (struct sockaddr *)0x8, sizeof sa);
-    printf("connect EFAULT: ret=%d ok=%d\n", r_ef, r_ef < 0 && errno == EFAULT);
+    pid_t pid = fork();
+    if (pid == 0) {
+        int a = accept(srv, NULL, NULL);
+        if (a >= 0) close(a);
+        _exit(0);
+    }
+    int conn = socket(AF_INET, SOCK_STREAM, 0);
+    connect(conn, (struct sockaddr *)&la, sizeof la); // now connected -> a 2nd connect is EISCONN
+    waitpid(pid, NULL, 0);
 
-    // connect with a too-short addrlen -> EINVAL.
-    errno = 0;
-    int r_iv = connect(s, (struct sockaddr *)&sa, 1);
-    printf("connect EINVAL: ret=%d ok=%d\n", r_iv, r_iv < 0 && errno == EINVAL);
+    // An address whose port nobody listens on (bind an ephemeral socket, read its port, close it).
+    int tmp = socket(AF_INET, SOCK_STREAM, 0);
+    struct sockaddr_in dead = {0};
+    dead.sin_family = AF_INET;
+    dead.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    dead.sin_port = 0;
+    bind(tmp, (struct sockaddr *)&dead, sizeof dead);
+    socklen_t dl = sizeof dead;
+    getsockname(tmp, (struct sockaddr *)&dead, &dl);
+    close(tmp); // port is now free -> connecting to it is refused
 
-    // connect on a bad fd -> EBADF.
-    errno = 0;
-    int r_bf = connect(400, (struct sockaddr *)&sa, sizeof sa);
-    printf("connect EBADF: ret=%d ok=%d\n", r_bf, r_bf < 0 && errno == EBADF);
-    close(s);
+    struct sockaddr_in ok = {0}; // a well-formed AF_INET addr (the live server)
+    ok.sin_family = AF_INET;
+    ok.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    ok.sin_port = la.sin_port;
 
-    // ---- bind() error paths ----
-    int s2 = socket(AF_INET, SOCK_STREAM, 0);
-    // bind with a bad address pointer -> EFAULT.
-    errno = 0;
-    int b_ef = bind(s2, (struct sockaddr *)0x8, sizeof sa);
-    printf("bind EFAULT: ret=%d ok=%d\n", b_ef, b_ef < 0 && errno == EFAULT);
-    // bind on a non-socket fd -> ENOTSOCK.
-    errno = 0;
-    int b_ns = bind(1, (struct sockaddr *)&sa, sizeof sa);
-    printf("bind ENOTSOCK: ret=%d ok=%d\n", b_ns, b_ns < 0 && errno == ENOTSOCK);
-    // bind on a bad fd -> EBADF.
-    errno = 0;
-    int b_bf = bind(400, (struct sockaddr *)&sa, sizeof sa);
-    printf("bind EBADF: ret=%d ok=%d\n", b_bf, b_bf < 0 && errno == EBADF);
-    close(s2);
+    struct sockaddr_in badfam = {0}; // wrong sa_family
+    badfam.sin_family = 47;
+    badfam.sin_addr.s_addr = htonl(0x0AFFFEFD);
 
-    // ---- sendto() error paths ----
-    int s3 = socket(AF_INET, SOCK_DGRAM, 0);
-    char msg[4] = "abc";
-    // sendto with a bad buffer POINTER -> EFAULT.
-    errno = 0;
-    long t_ef = sendto(s3, (void *)0x8, 4, 0, (struct sockaddr *)&sa, sizeof sa);
-    printf("sendto EFAULT: ret=%ld ok=%d\n", t_ef, t_ef < 0 && errno == EFAULT);
-    // sendto on a bad fd -> EBADF.
-    errno = 0;
-    long t_bf = sendto(400, msg, 4, 0, (struct sockaddr *)&sa, sizeof sa);
-    printf("sendto EBADF: ret=%ld ok=%d\n", t_bf, t_bf < 0 && errno == EBADF);
-    // sendto on a non-socket fd -> ENOTSOCK.
-    errno = 0;
-    long t_ns = sendto(1, msg, 4, 0, (struct sockaddr *)&sa, sizeof sa);
-    printf("sendto ENOTSOCK: ret=%ld ok=%d\n", t_ns, t_ns < 0 && errno == ENOTSOCK);
-    close(s3);
+    struct sockaddr_in nonlocal = {0}; // an address not assigned to any local interface
+    nonlocal.sin_family = AF_INET;
+    nonlocal.sin_addr.s_addr = htonl(0x0AFFFEFD); // 10.255.254.253
+    nonlocal.sin_port = 0;
 
+    struct sockaddr_un un = {0}; // AF_UNIX address handed to an AF_INET socket
+    un.sun_family = AF_UNIX;
+    strncpy(un.sun_path, "/tmp/ltp_neterr.sock", sizeof un.sun_path - 1);
+
+    int fdnull = open("/dev/null", O_WRONLY); // a valid fd that is not a socket
+    int s = socket(AF_INET, SOCK_STREAM, 0);  // a fresh, unconnected INET stream socket
+
+    // ---- connect(2) matrix (order + value must match Linux) ----
+    int c_ebadf = err_of(connect(-1, (struct sockaddr *)bad, sizeof(struct sockaddr_in)));
+    int c_efault = err_of(connect(s, (struct sockaddr *)bad, sizeof(struct sockaddr_in)));
+    int c_einval = err_of(connect(s, (struct sockaddr *)&ok, 3));
+    int c_enotsock = err_of(connect(fdnull, (struct sockaddr *)&ok, sizeof ok));
+    int c_eisconn = err_of(connect(conn, (struct sockaddr *)&ok, sizeof ok));
+    int c_erefused = err_of(connect(s, (struct sockaddr *)&dead, sizeof dead));
+    int c_eafnos = err_of(connect(s, (struct sockaddr *)&badfam, sizeof badfam));
+
+    printf("ltp_neterr connect %d %d %d %d %d %d %d\n", c_ebadf, c_efault, c_einval, c_enotsock, c_eisconn,
+           c_erefused, c_eafnos);
+
+    // ---- bind(2) matrix ----
+    int b_sock = socket(AF_INET, SOCK_STREAM, 0);
+    int b_einval = err_of(bind(b_sock, (struct sockaddr *)&ok, 3));
+    int b_enotsock = err_of(bind(fdnull, (struct sockaddr *)&ok, sizeof ok));
+    int b_eafnos = err_of(bind(b_sock, (struct sockaddr *)&un, sizeof un));
+    int b_eaddrna = err_of(bind(b_sock, (struct sockaddr *)&nonlocal, sizeof nonlocal));
+    int b_ebadf = err_of(bind(-1, (struct sockaddr *)&ok, sizeof ok));
+
+    printf("ltp_neterr bind %d %d %d %d %d\n", b_einval, b_enotsock, b_eafnos, b_eaddrna, b_ebadf);
     return 0;
 }

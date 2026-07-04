@@ -59,6 +59,59 @@ static int unix_dgram_dest(const uint8_t *sa, socklen_t l, char *host, size_t hn
     }
     return 0;
 }
+// Linux-faithful errno pre-screen for bind(200)/connect(203). macOS hands dd's translated (or raw)
+// sockaddr to its own bind()/connect(), which then reports the WRONG errno for several inputs the LTP
+// net-errno suite (bind01/connect01) checks — a bad sockaddr pointer, a wrong sa_family, an
+// already-connected socket. Replicate the kernel's ORDER + values here, up front, so every path (real
+// host, private-lo, bridge, unix) inherits the correct errno:
+//   1. fd lookup   -> EBADF (bad fd) / ENOTSOCK (fd is not a socket)          [before the addr is read]
+//   2. addr copy   -> EINVAL (addrlen > sockaddr_storage) / EFAULT (unreadable sockaddr buffer)
+//   3. proto layer -> EISCONN (connect on a connected stream socket),
+//                     EAFNOSUPPORT (sa_family != the socket's family),
+//                     EINVAL (addrlen < sizeof(sockaddr_in/in6))              [AF_INET/INET6 sockets only]
+// Returns 0 to continue, or a negative *macOS* errno to return now (svc_done does the m2l boundary xlate,
+// exactly as for a real failed syscall). Family/length checks are gated on the socket actually being
+// AF_INET/AF_INET6 (the family recorded at socket()/accept(), see g_sock_fam) so AF_UNIX / AF_NETLINK /
+// AF_PACKET bind+connect are untouched.
+static int net_precheck(int fd, uintptr_t addr, socklen_t alen, int is_connect) {
+    int sotype = 0;
+    socklen_t sl = sizeof sotype;
+    if (getsockopt(fd, SOL_SOCKET, SO_TYPE, &sotype, &sl) < 0) return -errno; // EBADF / ENOTSOCK
+    if (alen > (socklen_t)sizeof(struct sockaddr_storage)) return -EINVAL;    // move_addr_to_kernel range
+    // Unreadable sockaddr -> EFAULT: unmapped (host_range_mapped) OR a guest PROT_NONE page that this DBT
+    // force-mapped host-readable (pn_hit; see thread.c). pn_hit is only consulted here on
+    // the cold connect/bind path, so the hot host_range_mapped callers keep their fast path.
+    if (addr && guest_bad_ptr(addr, alen)) return -EFAULT;
+    int lfam = (addr && alen >= 2) ? *(const uint16_t *)addr : 0;            // guest (Linux) sa_family
+    // connect() on an already-connected stream socket -> EISCONN (kernel checks the socket state before
+    // the protocol connect). AF_UNSPEC is the "dissolve association" idiom and is never EISCONN.
+    if (is_connect && sotype == SOCK_STREAM && lfam != 0) {
+        struct sockaddr_storage pn;
+        socklen_t pnl = sizeof pn;
+        int connected = (getpeername(fd, (struct sockaddr *)&pn, &pnl) == 0) ||
+                        (fd >= 0 && fd < 1024 && g_sock_conn[fd]); // sticky: survives a peer FIN (see decl)
+        if (connected) return -EISCONN;
+    }
+    // The socket's own family: prefer the value recorded at socket()/accept() (robust even after a prior
+    // failed connect on this fd); fall back to a getsockname() probe for an untracked (e.g. inherited) fd.
+    int sfam = (fd >= 0 && fd < 1024) ? g_sock_fam[fd] : 0;
+    if (sfam == 0) {
+        struct sockaddr_storage ln;
+        socklen_t lnl = sizeof ln;
+        if (getsockname(fd, (struct sockaddr *)&ln, &lnl) == 0) {
+            if (ln.ss_family == AF_INET) sfam = LX_AF_INET;
+            else if (ln.ss_family == AF_INET6) sfam = LX_AF_INET6;
+        }
+    }
+    if (sfam == LX_AF_INET || sfam == LX_AF_INET6) {
+        if (!(is_connect && lfam == 0)) { // AF_UNSPEC connect on an INET socket = disconnect: allow
+            socklen_t need = (sfam == LX_AF_INET) ? 16 : 24;
+            if (lfam != sfam) return -EAFNOSUPPORT;
+            if (alen < need) return -EINVAL;
+        }
+    }
+    return 0;
+}
 static int svc_net(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4,
                    uint64_t a5) {
     // AF_NETLINK/NETLINK_ROUTE (#289): a guest netlink socket is a socketpair we RTNETLINK-respond on
@@ -157,6 +210,8 @@ static int svc_net(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_
                     ((ty & 0xf) == SOCK_STREAM && ((int)a0 == AF_INET || (int)a0 == LX_AF_INET6_FAM));
                 g_sock_dgram[r] = ((ty & 0xf) == SOCK_DGRAM && (int)a0 == AF_INET);
                 g_sock_seqpacket[r] = 0;
+                g_sock_conn[r] = 0;             // fresh socket: not yet connected (see g_sock_conn decl)
+                g_sock_fam[r] = (uint16_t)a0;   // guest address family, for connect/bind EAFNOSUPPORT check
                 g_lo_port[r] = 0;
                 g_lo_v6[r] = 0;
                 g_br_port[r] = 0;
@@ -203,6 +258,14 @@ static int svc_net(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_
     }
     // bind -- port-map: bind the published host port
     case 200: {
+        // Linux errno pre-screen (EBADF/ENOTSOCK/EFAULT/EINVAL/EAFNOSUPPORT) before any addr deref.
+        {
+            int pc = net_precheck((int)a0, a1, (socklen_t)a2, 0);
+            if (pc) {
+                G_RET(c) = (uint64_t)(int64_t)pc;
+                return svc_done(c);
+            }
+        }
         // GUEST Linux sockaddr_in: family@0(u16 LE), port@2(BE)
         uint8_t *sa = (uint8_t *)a1;
         // Bad address POINTER -> EFAULT, not an engine fault: the loopback/bridge/AF_UNIX classifiers
@@ -371,6 +434,10 @@ static int svc_net(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_
                 int on = 1;
                 setsockopt(r, SOL_SOCKET, SO_NOSIGPIPE, &on, sizeof on);
             }
+            if (r >= 0 && r < 1024) {
+                g_sock_conn[r] = 1; // an accepted socket is already connected
+                if (lfd >= 0 && lfd < 1024) g_sock_fam[r] = g_sock_fam[lfd]; // inherit listener's family
+            }
             if (nr == 242) {
                 if ((int)a3 & 0x800) fcntl(r, F_SETFL, fcntl(r, F_GETFL) | O_NONBLOCK);
                 if ((int)a3 & 0x80000) fcntl(r, F_SETFD, FD_CLOEXEC);
@@ -412,6 +479,14 @@ static int svc_net(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_
     }
     // connect
     case 203: {
+        // Linux errno pre-screen (EBADF/ENOTSOCK/EFAULT/EINVAL/EISCONN/EAFNOSUPPORT) before any addr deref.
+        {
+            int pc = net_precheck((int)a0, a1, (socklen_t)a2, 1);
+            if (pc) {
+                G_RET(c) = (uint64_t)(int64_t)pc;
+                return svc_done(c);
+            }
+        }
         // --network none: no external egress (DD_NET_ISOLATE). Loopback is redirected by the lo_* path
         // below; any non-127/8 AF_INET destination is refused, matching docker's null network.
         static int net_isolate = -1;
@@ -485,6 +560,7 @@ static int svc_net(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_
             // inode doesn't exist); Linux returns ECONNREFUSED for a closed TCP port. Map it (host
             // errno, m2l_errno -> Linux 111); other errnos incl. EINPROGRESS pass through.
             G_RET(c) = r < 0 ? (uint64_t)(-(errno == ENOENT ? ECONNREFUSED : errno)) : 0;
+            if (r == 0 && (int)a0 >= 0 && (int)a0 < 1024) g_sock_conn[(int)a0] = 1; // sticky-connected
             break;
         }
         // NET bridge: connect(peer-ip:port in our subnet) -> dial /tmp/.ddbr-<netid>/<peerip>:<port>
@@ -526,6 +602,7 @@ static int svc_net(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_
                 g_br_ip[(int)a0] = dip; // peer ip for getpeername
             }
             G_RET(c) = r < 0 ? (uint64_t)(-errno) : 0;
+            if (r == 0 && (int)a0 >= 0 && (int)a0 < 1024) g_sock_conn[(int)a0] = 1; // sticky-connected
             break;
         }
         // abstract AF_UNIX (sun_path[0]==0): dial the same DD_NETNS-keyed fs socket bind used. Must run
@@ -539,6 +616,7 @@ static int svc_net(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_
             snprintf(un.sun_path, sizeof un.sun_path, "%s", up);
             int r = connect((int)a0, (struct sockaddr *)&un, sizeof un);
             G_RET(c) = (r < 0 && errno != EINPROGRESS) ? (uint64_t)(-errno) : 0;
+            if (r == 0 && (int)a0 >= 0 && (int)a0 < 1024) g_sock_conn[(int)a0] = 1; // sticky-connected
             break;
         }
         // AF_UNIX pathname connect: resolve through the overlay (same resolver as stat/open) so we dial the
@@ -552,6 +630,7 @@ static int svc_net(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_
             int r;
             do { r = unix_sock_at((int)a0, hp, 1); } while (r < 0 && SVC_EINTR_RESTART(c));
             G_RET(c) = (r < 0 && errno != EINPROGRESS) ? (uint64_t)(-errno) : 0;
+            if (r == 0 && (int)a0 >= 0 && (int)a0 < 1024) g_sock_conn[(int)a0] = 1; // sticky-connected
             break;
         }
         // Real host connect: translate Linux AF_INET/INET6 sockaddr -> macOS; others pass through.
@@ -564,6 +643,7 @@ static int svc_net(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_
                                            : connect((int)a0, (void *)a1, (socklen_t)a2);
             } while (cr < 0 && SVC_EINTR_RESTART(c));
             G_RET(c) = cr < 0 ? (uint64_t)(-errno) : 0;
+            if (cr == 0 && (int)a0 >= 0 && (int)a0 < 1024) g_sock_conn[(int)a0] = 1; // sticky-connected
         }
         break;
     }

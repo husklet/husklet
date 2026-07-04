@@ -201,7 +201,9 @@ static int svc_event(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint6
         if (a0 & ~0x80000u) { G_RET(c) = (uint64_t)(-EINVAL); break; }
         int r = kqueue();
         // EPOLL_CLOEXEC
-        if (r >= 0 && (a0 & 0x80000)) fcntl(r, F_SETFD, FD_CLOEXEC);
+        // macOS kqueue() defaults FD_CLOEXEC SET; Linux epoll_create1(0) leaves it CLEAR. Set it exactly
+        // per the EPOLL_CLOEXEC flag (clear when absent) so epoll_create1_01's no-CLOEXEC assertion holds.
+        if (r >= 0) fcntl(r, F_SETFD, (a0 & 0x80000) ? FD_CLOEXEC : 0);
         // a reused fd number must start with an empty prime buffer + no stale wake knote + no stale membership
         // (close() doesn't clear ours -- this is how an epoll fd's per-instance state is reset on reuse)
         if (r >= 0 && r < 1024) { g_ep_primen[r] = 0; g_ep_wake_armed[r] = 0; g_epoll[r] = 1; ep_mem_clear(r); }

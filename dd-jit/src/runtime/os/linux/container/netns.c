@@ -289,8 +289,17 @@ static uint16_t g_lo_port[1024];
 static uint8_t g_lo_v6[1024];
 // fd -> 1 if created SOCK_STREAM (only those get loopback isolation)
 static uint8_t g_sock_stream[1024];
+// fd -> 1 once a stream connect() SUCCEEDED on it. Linux keeps a connected stream socket in SS_CONNECTED
+// (a second connect -> EISCONN) until close, even after the peer sends FIN; macOS drops the peer
+// association after FIN so getpeername() there returns ENOTCONN. This sticky flag lets connect(203) report
+// EISCONN faithfully (LTP connect01). Cleared on close (fd_reset_emul) and at socket()/accept re-init.
+static uint8_t g_sock_conn[1024];
 // fd -> 1 if created AF_INET SOCK_DGRAM (only those get the published-UDP switch redirect, below)
 static uint8_t g_sock_dgram[1024];
+// fd -> the socket's guest (Linux) address family, recorded at socket()/accept() so connect(203)/bind(200)
+// can validate the guest sockaddr's sa_family against it (EAFNOSUPPORT) without a getsockname() probe --
+// which is unreliable after a prior failed connect on the same fd. 0 = untracked (best-effort fallback).
+static uint16_t g_sock_fam[1024];
 // fd -> 1 if this DGRAM socket emulates a connection-oriented endpoint that owes its peer an EOF on
 // close (a SEQPACKET socketpair or an O_DIRECT "packet" pipe). macOS DGRAM sockets never deliver EOF on
 // peer close, so close() injects a zero-length EOF datagram and recv/read coerce ECONNRESET -> 0 for these.
@@ -424,6 +433,8 @@ static void fd_carry_sock(int dst, int src) {
     g_sock_stream[dst] = g_sock_stream[src];
     g_sock_dgram[dst] = g_sock_dgram[src];
     g_sock_seqpacket[dst] = g_sock_seqpacket[src];
+    g_sock_conn[dst] = g_sock_conn[src];
+    g_sock_fam[dst] = g_sock_fam[src];
     g_lo_port[dst] = g_lo_port[src];
     g_lo_v6[dst] = g_lo_v6[src];
     g_br_port[dst] = g_br_port[src];
