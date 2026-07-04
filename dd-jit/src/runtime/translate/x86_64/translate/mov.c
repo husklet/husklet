@@ -31,6 +31,34 @@ static int translate_mov(struct insn *I, uint64_t next) {
                     e_movconst(I->rm_reg, sf ? (uint64_t)I->imm : (uint64_t)(uint32_t)I->imm);
                 return TX_NEXT;
             }
+            // ---- mov accumulator <-> moffs (A0-A3): the only x86 form with a full direct-ADDRESS immediate ----
+            // A0: mov AL,moffs8 ; A1: mov eAX/rAX,moffs ; A2: mov moffs8,AL ; A3: mov moffs,eAX/rAX. moffs is
+            // an absolute offset (64-bit; 32-bit zero-extended under a 0x67 addr-size prefix), NOT a ModRM
+            // operand. Present it to emit_ea as an absolute-[disp] memory operand so the segment base
+            // (fs/gs) and the non-PIE bias-fold are applied exactly as for any other guest memory access.
+            // The accumulator is register 0 (RAX); byte forms are AL, opsize picks AX/EAX/RAX.
+            if (op == 0xA0 || op == 0xA1 || op == 0xA2 || op == 0xA3) {
+                int w = (op & 1) ? I->opsize : 1; // A0/A2 -> byte; A1/A3 -> opsize (2/4/8)
+                int load = op < 0xA2;             // A0/A1 load acc<-[moffs]; A2/A3 store [moffs]<-acc
+                I->is_mem = 1;                    // route the moffs through the standard EA path
+                I->m_hasbase = I->m_hasindex = I->rip_rel = 0;
+                I->disp = I->imm; // absolute address (already addr-size sized by the decoder)
+                emit_ea(I, next); // x17 = host address (seg base + non-PIE bias applied)
+                if (load) {
+                    if (w == 1) {
+                        e_load(1, 16, 17);
+                        byte_wb(I, 0, 16); // AL (preserve bits 63:8)
+                    } else if (w == 2) {
+                        e_load(2, 16, 17);
+                        e_bfi(0, 16, 0, 16, 1); // AX (preserve bits 63:16)
+                    } else
+                        e_load(w, 0, 17); // EAX zero-extends to RAX (w==4); RAX (w==8)
+                } else {
+                    int sv = (w == 1) ? byte_val(I, 0, 16) : 0; // byte src = AL; else RAX
+                    e_store(w, sv, 17);
+                }
+                return TX_NEXT;
+            }
             // ---- mov r/m,r (88/89) and r,r/m (8A/8B) ----
             if (op == 0x88 || op == 0x89 || op == 0x8A || op == 0x8B) {
                 int w = (op & 1) ? I->opsize : 1;
