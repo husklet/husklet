@@ -18,6 +18,18 @@
 # Re-run safe / incremental: an existing ltp-src/ checkout is reused.
 set -uo pipefail
 
+# The curated list drives ~900 sequential `cc` invocations (2 arches x the
+# full tests.list). Each compile is a fresh process, but an ambient nofile
+# soft limit that's already low (macOS default is 256; some CI/agent shells
+# inherit a similarly small value from a long-lived session) leaves too
+# little headroom once a few hundred short-lived compiler/linker fds have
+# cycled through, and `cc` starts failing with "Too many open files" partway
+# through the run. Raise the soft limit for this script's own process tree
+# (capped at whatever hard limit the host allows — never fails the build if
+# the host refuses the change, e.g. a sandboxed environment without
+# CAP_SYS_RESOURCE and a hard limit below 8192).
+ulimit -n 8192 2>/dev/null || ulimit -n "$(ulimit -Hn)" 2>/dev/null || true
+
 HERE="$(cd "$(dirname "$0")" && pwd)"
 OUT="${LTP_OUT:-$HERE/out}"
 SRC="$OUT/ltp-src"
@@ -75,6 +87,9 @@ build_lib "$CC_ARM" arm64
 build_lib "$CC_X86" x86_64
 
 # ---- 4. compile the curated test subset per arch ------------------------------
+# One `cc` at a time, on purpose: each compile fully exits (and its fds with
+# it) before the next starts, so there's no concurrent-job fd pile-up to
+# bound here — the ulimit bump above is what covers the sequential total.
 CFLAGS_T="-O2 -w -D_GNU_SOURCE -static -pthread -I $INC -I $INC/old"
 : > "$OUT/build.log"
 compile_arch() {
