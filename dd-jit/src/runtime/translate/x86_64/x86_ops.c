@@ -166,6 +166,10 @@ static void do_rcl(struct cpu *c) {
 // mirroring a real x86-64 baseline. We deliberately do NOT advertise AVX/AVX2/FMA/F16C/XSAVE/OSXSAVE: those
 // are gated on YMM state being enabled in XCR0, but our xgetbv reports only x87+SSE (translate.c), so a
 // conformant guest would correctly decline them anyway -- advertising them would only mislead.
+// Coverage: leaf 0 (max std leaf 7 + vendor), leaf 1 (EDX/ECX baseline feature bits), leaf 7 subleaf 0
+// (BMI1/BMI2/ERMS/SHA + FSRM), and the extended range 0x80000000..0x80000008 (LM/SYSCALL/NX/RDTSCP/LAHF,
+// the 48-byte brand string, invariant TSC, and address sizes). The exact bit-for-bit set is mirrored into
+// /proc/cpuinfo's `flags:` line (os/linux/container/vfs.c cpuinfo_x86_block) so CPUID and /proc agree.
 static void do_cpuid(struct cpu *c) {
     uint32_t leaf = (uint32_t)c->r[RAX], a = 0, b = 0, cc = 0, d = 0;
     switch (leaf) {
@@ -213,12 +217,29 @@ static void do_cpuid(struct cpu *c) {
             d = (1u << 4); // FSRM (Fast Short REP MOV); only bit 4 set -- no AVX512/security bits implied
         }
         break;
-    case 0x80000000: a = 0x80000001; break;
+    case 0x80000000: a = 0x80000008; break; // max ext leaf 0x80000008 (brand string 2..4 + addr sizes below)
     case 0x80000001:
-        d = (1u << 11) | (1u << 29);
+        // EDX: SYSCALL(11), NX(20), RDTSCP(27), LM(29). NX is a paging/MMU capability EVERY x86-64 CPU
+        // reports; guests never touch page tables, and dd honors PROT_EXEC page permissions in its mmap
+        // emulation (os/linux/syscall/mem.c), so software that requires NX (glibc, dynamic loaders, managed
+        // runtimes) is satisfied. RDTSCP is lowered inline (translate.c: rdtscp -> cntvct, ecx=TSC_AUX=0),
+        // so it is real; advertise it. ECX: LAHF/SAHF-in-long-mode (bit 0), which the engine implements.
+        d = (1u << 11) | (1u << 20) | (1u << 27) | (1u << 29);
         cc = (1u << 0);
-        break;                          // SYSCALL, LM(64-bit), LAHF
-    case 0x80000008: a = 0x3027; break; // 48-bit phys, 39-bit virt
+        break;
+    case 0x80000002:
+    case 0x80000003:
+    case 0x80000004: { // processor brand string (48 bytes across 3 leaves); MUST match /proc/cpuinfo model name
+        static const char brand[48] = "dd JIT x86-64 processor";
+        const uint8_t *p = (const uint8_t *)brand + (leaf - 0x80000002) * 16;
+        memcpy(&a, p, 4);
+        memcpy(&b, p + 4, 4);
+        memcpy(&cc, p + 8, 4);
+        memcpy(&d, p + 12, 4);
+        break;
+    }
+    case 0x80000007: d = (1u << 8); break; // EDX[8] Invariant TSC (ARM cntvct is fixed-rate) -> constant/nonstop_tsc
+    case 0x80000008: a = 0x3027; break;    // EAX[7:0]=39 phys bits, EAX[15:8]=48 virt bits
     default: break;
     }
     c->r[RAX] = a;

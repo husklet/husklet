@@ -541,5 +541,14 @@ fn x86() -> Group {
         // heap addresses). go_goro exercises the goroutine scheduler + channels; go_heapgc adds heavy GC.
         fixture("go-static-goro", &[(Engine::LinuxX86_64, "guests/x86/go_goro_x86")]).has("goro tot= 202063750"),
         fixture("go-static-heapgc", &[(Engine::LinuxX86_64, "guests/x86/go_heapgc_x86")]).has("OK heapgc total= 8228000"),
+        // #187: CPUID feature-flag completeness. Executes real CPUID and asserts every feature dd's
+        // translator implements is ADVERTISED (SSE2/SSE4.2/POPCNT/AES/PCLMUL/BMI/SHA/ERMS/FSRM/NX/RDTSCP/LM
+        // + the GenuineIntel vendor + "dd JIT x86-64 processor" brand) while AVX/AVX2/AVX512/FMA/XSAVE stay
+        // OFF (dd can't translate VEX/EVEX -> advertising them would crash guests). Self-check verdict,
+        // golden on dd (qemu advertises its own limited model, so exact bits can't be oracle-diffed).
+        src("cpuid-features", "cpuid_features.c").only(&[Engine::LinuxX86_64]).out("cpuid ok=1\n"),
+        // #120: RFLAGS.ID (bit 21) round-trip through pushfq/popfq (the 32-bit CPUID-availability probe).
+        // Byte-exact vs the qemu-x86_64 oracle -- qemu models EFLAGS.ID correctly, so set=1/clr=0 must match.
+        src("rflags-id", "rflags_id.c").only(&[Engine::LinuxX86_64]).oracle(),
     ])
 }
