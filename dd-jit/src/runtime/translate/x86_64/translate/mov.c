@@ -94,7 +94,12 @@ static int translate_mov(struct insn *I, uint64_t next) {
                 // PIE/static-PIE (g_nonpie_lo == 0). NOGUESTFOLD leaves lea biased for A/B bisection.
                 if (sf && I->rip_rel && g_nonpie_lo && guestfold_on()) {
                     uint64_t lo = (next - g_nonpie_bias) + (uint64_t)I->disp; // low link target
-                    if (lo >= g_nonpie_lo && lo < g_nonpie_hi) {
+                    // EXPERIMENT(diagnosis #250): for a Go image restrict the low-rewrite to the type
+                    // section only (the pre-v0.9.40 behavior). Whole-image low-rewrite wrongly caught
+                    // code-address leas (LEAQ asyncPreempt(SB)) that findfunc needs HIGH -> crash.
+                    uint64_t rlo = g_nonpie_types_lo ? g_nonpie_types_lo : g_nonpie_lo;
+                    uint64_t rhi = g_nonpie_types_lo ? g_nonpie_types_hi : g_nonpie_hi;
+                    if (lo >= rlo && lo < rhi) {
                         e_movconst(I->reg, lo);
                         return TX_NEXT;
                     }

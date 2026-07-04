@@ -529,5 +529,17 @@ fn x86() -> Group {
         fixture("glibc-min", &[(Engine::LinuxX86_64, "guests/x86/gw")]).has("glibc-min ok"),
         fixture("ctest", &[(Engine::LinuxX86_64, "guests/x86/ctest_x64")]).exit(7),
         fixture("hx", &[(Engine::LinuxX86_64, "guests/x86/hx")]).has("42"),
+        // #250 REGRESSION GUARD: a static -no-pie x86_64 Go binary exercising the runtime scheduler + GC.
+        // The non-PIE Go path rebases moduledata code PCs (text/minpc/maxpc) HIGH (elf.c go_rebase_nonpie)
+        // so findfunc resolves the biased return PCs; but a rip-relative `LEAQ funcsym(SB)` materializes a
+        // CODE address that findfunc must ALSO see HIGH. The whole-image lea->low rewrite over-applied to
+        // these code leas -> findmoduledatap(low pc) failed -> zero funcInfo -> pctab[0:] empty -> step()
+        // "index out of range" in runtime.init (asyncPreempt funcMaxSPDelta). Fix: for a Go image the
+        // lea->low rewrite is confined to the type section (translate/x86_64/translate/mov.c), so code
+        // pointers stay HIGH while type/data pointers stay LOW. Golden totals cross-checked byte-exact vs
+        // native aarch64 Go (qemu-x86_64 cannot oracle Go GC: its lfstack pointer-packing breaks at high
+        // heap addresses). go_goro exercises the goroutine scheduler + channels; go_heapgc adds heavy GC.
+        fixture("go-static-goro", &[(Engine::LinuxX86_64, "guests/x86/go_goro_x86")]).has("goro tot= 202063750"),
+        fixture("go-static-heapgc", &[(Engine::LinuxX86_64, "guests/x86/go_heapgc_x86")]).has("OK heapgc total= 8228000"),
     ])
 }
