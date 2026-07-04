@@ -537,10 +537,17 @@ static int svc_fs(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t
             break;
         }
         if (g_rootfs) {
-            if (g_nlower) { // recreating a whiteout'd name -> clear its stale `.wh.NAME` marker first
+            if (g_nlower) {
                 char gpm[4200];
                 abs_guest((int)a0, (const char *)a1, gpm, sizeof gpm);
-                overlay_clear_whiteout(gpm);
+                // Merged-view errno the upper-only host mknodat can't produce (lower name -> EEXIST; a
+                // lower-only non-dir ancestor -> ENOTDIR; missing ancestor -> ENOENT). Before whiteout clear.
+                int pc = overlay_create_precheck(gpm);
+                if (pc) {
+                    G_RET(c) = (uint64_t)(int64_t)pc;
+                    break;
+                }
+                overlay_clear_whiteout(gpm); // recreating a whiteout'd name -> clear its stale `.wh.NAME` marker
             }
             char fin[512];
             int pfd = jail_at((int)a0, (const char *)a1, fin, sizeof fin, 1);
@@ -586,6 +593,13 @@ static int svc_fs(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t
             int had_lower_dir = 0;
             if (g_nlower) {
                 abs_guest((int)a0, (const char *)a1, gpm, sizeof gpm);
+                // Merged-view errno the upper-only host mkdirat can't produce (a lower still provides the
+                // name -> EEXIST; a lower-only non-dir ancestor -> ENOTDIR; missing ancestor -> ENOENT).
+                int pc = overlay_create_precheck(gpm);
+                if (pc) {
+                    G_RET(c) = (uint64_t)(int64_t)pc;
+                    break;
+                }
                 overlay_clear_whiteout(gpm);
                 had_lower_dir = overlay_lower_has_dir(gpm);
             }
@@ -771,10 +785,17 @@ static int svc_fs(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t
             // target is the link CONTENT (unresolved); follow-time confinement guards it
             (const char *)a0;
         if (g_rootfs) {
-            if (g_nlower) { // recreating a whiteout'd name -> clear its stale `.wh.NAME` marker first
+            if (g_nlower) {
                 char gpm[4200];
                 abs_guest((int)a1, (const char *)a2, gpm, sizeof gpm);
-                overlay_clear_whiteout(gpm);
+                // Merged-view errno the upper-only host symlinkat can't produce (lower name -> EEXIST; a
+                // lower-only non-dir ancestor -> ENOTDIR; missing ancestor -> ENOENT). Before whiteout clear.
+                int pc = overlay_create_precheck(gpm);
+                if (pc) {
+                    G_RET(c) = (uint64_t)(int64_t)pc;
+                    break;
+                }
+                overlay_clear_whiteout(gpm); // recreating a whiteout'd name -> clear its stale `.wh.NAME` marker
             }
             char fin[512];
             int pfd = jail_at((int)a1, (const char *)a2, fin, sizeof fin, 1);

@@ -83,6 +83,18 @@ fn build_layers(arch: &str) -> (PathBuf, PathBuf) {
     write(&lower.join("ex_c"), b"CCC");
     write(&lower.join("ex_d"), b"DDD");
 
+    // M-series (#169) fixtures: a nested lower-only directory (mkdir/rename must copy up its parents),
+    // a lower-only regular file used both as a bad path COMPONENT (ENOTDIR) and as an rmdir-of-a-file
+    // target, and a lower-only file removed+recreated-as-dir to exercise mkdir over a whiteout.
+    write(&lower.join("mkp/a/b/keep"), b"lower-keep");
+    write(&lower.join("mnotdir"), b"i-am-a-file");
+    write(&lower.join("wf"), b"wf-lower");
+    // a lower-only EMPTY directory (rmdir of it must succeed via whiteout).
+    std::fs::create_dir_all(lower.join("mkp_empty")).unwrap();
+    // a PRISTINE lower-only directory never touched by the probe — mkdir over it must be EEXIST purely by
+    // lower detection (not because a prior copy-up put it in the upper).
+    write(&lower.join("ld_pristine/child"), b"c");
+
     (lower, upper)
 }
 
@@ -153,6 +165,38 @@ fn check(arch: &str) {
     assert_eq!(g("g7_exchange2_ret"), "0", "[{arch}] G7 exchange of two lower-only files must succeed");
     assert_eq!(g("g7_c"), "DDD", "[{arch}] G7 exchange (both lower): /ex_c must swap to /ex_d's content");
     assert_eq!(g("g7_d"), "CCC", "[{arch}] G7 exchange (both lower): /ex_d must swap to /ex_c's content");
+
+    // ---- M-series (#169): directory-CREATION ops through the overlay must return the real-overlayfs
+    // errno (success / EEXIST / ENOENT / ENOTDIR), never a blanket EPERM and never a spurious success that
+    // masks a lower entry. Ground truth from `mount -t overlay` on Linux. ----
+    assert_eq!(g("m1_mkdir_new"), "0", "[{arch}] M1 plain mkdir into the upper must succeed (not EPERM)");
+    assert_eq!(g("m1_mkdir_again"), "17", "[{arch}] M1 mkdir of an existing upper name must be EEXIST");
+    assert_eq!(g("m2_mode"), "755", "[{arch}] M2 mkdir mode must honor umask 022 (0777 -> 0755)");
+    assert_eq!(g("m3_mkdirat"), "0", "[{arch}] M3 mkdirat via an explicit dir-fd must succeed");
+    assert_eq!(g("m3_visible"), "1", "[{arch}] M3 mkdirat result must be visible");
+    assert_eq!(g("m4_nested_lower_parent"), "0", "[{arch}] M4 mkdir under a lower-only parent chain must succeed (copy-up)");
+    assert_eq!(g("m4_visible"), "1", "[{arch}] M4 nested mkdir result must be visible");
+    assert_eq!(g("m5_enoent"), "1", "[{arch}] M5 mkdir under a missing parent must be ENOENT (got errno {})", g("m5_enoent"));
+    assert_eq!(g("m6_enotdir"), "1", "[{arch}] M6 mkdir with a lower-only FILE as an intermediate component must be ENOTDIR (got errno {})", g("m6_enotdir"));
+    assert_eq!(g("m7_mkdir_over_wh"), "0", "[{arch}] M7 mkdir over a whiteout (recreate a removed name) must succeed");
+    assert_eq!(g("m7_isdir"), "1", "[{arch}] M7 recreated name must be a directory");
+    assert_eq!(g("m8_creat"), "0", "[{arch}] M8 creat into an overlay upper dir must succeed");
+    assert_eq!(g("m8_symlink"), "0", "[{arch}] M8 symlink into an overlay upper dir must succeed");
+    assert_eq!(g("m8_mknod_fifo"), "0", "[{arch}] M8 mknod(FIFO) into an overlay upper dir must succeed");
+    assert_eq!(g("m9_rmdir"), "0", "[{arch}] M9 rmdir of an upper-created empty dir must succeed");
+    assert_eq!(g("m9_rmdir_gone"), "1", "[{arch}] M9 rmdir of an already-removed dir must be ENOENT");
+    assert_eq!(g("m10_rmdir_file"), "1", "[{arch}] M10 rmdir of a regular file must be ENOTDIR (got errno {})", g("m10_rmdir_file"));
+    assert_eq!(g("m10_unlinkat_rmdir"), "0", "[{arch}] M10 unlinkat AT_REMOVEDIR of an empty dir must succeed");
+    assert_eq!(g("m11_rename_into_overlay"), "0", "[{arch}] M11 rename of an upper file into a lower-only (copied-up) dir must succeed");
+    assert_eq!(g("m11_dst"), "REN", "[{arch}] M11 renamed file must be readable at its destination");
+    assert_eq!(g("m12_mkdir_over_lowerdir"), "1", "[{arch}] M12 mkdir over a lower-only DIR must be EEXIST (got errno {})", g("m12_mkdir_over_lowerdir"));
+    assert_eq!(g("m12_mkdir_over_lowerfile"), "1", "[{arch}] M12 mkdir over a lower-only FILE must be EEXIST, not a spurious success (got errno {})", g("m12_mkdir_over_lowerfile"));
+    assert_eq!(g("m13_symlink_eexist"), "1", "[{arch}] M13 symlink over a lower-only name must be EEXIST (got errno {})", g("m13_symlink_eexist"));
+    assert_eq!(g("m13_openexcl_eexist"), "1", "[{arch}] M13 open(O_CREAT|O_EXCL) over a lower-only name must be EEXIST (got errno {})", g("m13_openexcl_eexist"));
+    assert_eq!(g("m14_rmdir_lower_empty"), "0", "[{arch}] M14 rmdir of a lower-only EMPTY dir must succeed (whiteout)");
+    assert_eq!(g("m14_gone"), "1", "[{arch}] M14 rmdir'd lower dir must then be gone");
+    assert_eq!(g("m15_mkdirat_lower_dirfd"), "0", "[{arch}] M15 mkdirat under a lower-only (copied-up) dir-fd must succeed");
+    assert_eq!(g("m15_visible"), "1", "[{arch}] M15 mkdirat-under-lower-dirfd result must be visible");
 }
 
 #[test]

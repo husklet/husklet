@@ -220,6 +220,46 @@ static const char *xresolve_overlay(const char *p, char *buf, size_t n) {
     overlay_resolve(p, buf, n, 0);
     return buf;
 }
+// Overlay CREATE-op pre-flight (mkdirat / mknodat / symlinkat). The host create these syscalls issue is
+// confined to the writable UPPER (jail_at), so it cannot see a name a read-only lower still provides, nor a
+// non-directory ancestor that lives only in a lower. Without this the create would wrongly SUCCEED (silently
+// masking the lower entry with a fresh upper inode) where real overlayfs returns EEXIST, and would report
+// ENOENT where a real overlay reports ENOTDIR. Return the negative errno the syscall must fail with, or 0 to
+// proceed with the host create:
+//   * a missing intermediate path component (merged view)          -> ENOENT;
+//   * an intermediate component that is NOT a directory (merged)    -> ENOTDIR;
+//   * the final NAME already present -- upper OR a non-whited-out lower, incl. a symlink -> EEXIST.
+// MUST be called BEFORE overlay_clear_whiteout so a name currently masked by a `.wh.` whiteout is correctly
+// seen as ABSENT (recreatable). Prefix components are resolved following symlinks, exactly like the kernel.
+// Rootfs/overlay-jail paths only (a bind-mount volume has its own real backing dir whose host create already
+// observes the true state). No-op outside overlay mode (g_nlower==0) -> non-overlay behavior is byte-identical.
+static int overlay_create_precheck(const char *guest) {
+    if (!g_nlower || !guest || guest[0] != '/') return 0;
+    const char *canon;
+    size_t clen;
+    const char *rel;
+    if (jail_pick(guest, &canon, &clen, &rel) != g_root_fd) return 0; // volume jail -> real backing governs
+    char g[4200];
+    snprintf(g, sizeof g, "%s", guest);
+    size_t gl = strlen(g);
+    while (gl > 1 && g[gl - 1] == '/')
+        g[--gl] = 0; // "mkdir foo/" -> strip trailing slash
+    char host[4300];
+    struct stat st;
+    // 1) prefix: every ancestor directory must exist and be a directory in the merged view.
+    for (size_t i = 1; i < gl; i++) {
+        if (g[i] != '/') continue;
+        char pfx[4200];
+        memcpy(pfx, g, i);
+        pfx[i] = 0;
+        if (!overlay_resolve(pfx, host, sizeof host, 0)) return -ENOENT; // ancestor absent in every layer
+        if (lstat(host, &st) != 0) return -ENOENT;
+        if (!S_ISDIR(st.st_mode)) return -ENOTDIR; // a file/symlink-to-file used as a directory
+    }
+    // 2) final name already present (nofollow: a symlink hit is still EEXIST) -> EEXIST.
+    if (overlay_lookup(g, host, sizeof host)) return -EEXIST;
+    return 0;
+}
 // Overlay: ensure every PARENT directory of `guest` exists in the writable upper, copying up (mkdir, with
 // the lower's mode) each ancestor that currently lives only in a read-only lower layer. A create syscall
 // (openat O_CREAT via overlay_copyup, or mkdirat/symlinkat/mknodat/renameat via jail_at) confines to the

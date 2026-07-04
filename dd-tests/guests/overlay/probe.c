@@ -143,6 +143,126 @@ int main(void) {
     printf("g7_c=%s\n", rd("/ex_c", buf, sizeof buf) >= 0 ? buf : "<none>");
     printf("g7_d=%s\n", rd("/ex_d", buf, sizeof buf) >= 0 ? buf : "<none>");
 
+    // ==== M-series (task #169): directory-CREATION ops through the overlay must match real overlayfs, ====
+    // never blanket-EPERM. Covers mkdir/mkdirat (plain, nested, over a lower-only parent, over a whiteout,
+    // mode/umask) + the sibling create/remove ops that share the jail_at/copy-up path (creat, symlinkat,
+    // mknodat, rmdir, unlinkat AT_REMOVEDIR, renameat into the upper) and the real-Linux errno matrix
+    // (EEXIST/ENOENT/ENOTDIR). Values were checked against `mount -t overlay`/docker on Linux.
+
+    // M1: plain mkdir of a brand-new name in the writable upper -> 0; a repeat -> EEXIST.
+    errno = 0;
+    int m1 = mkdir("/m_new", 0755);
+    printf("m1_mkdir_new=%d\n", m1 < 0 ? errno : 0);
+    errno = 0;
+    int m1b = mkdir("/m_new", 0755);
+    printf("m1_mkdir_again=%d\n", m1b < 0 ? errno : 0); // expect EEXIST=17
+
+    // M2: mode honored under umask (umask 022; mkdir 0777 -> 0755).
+    umask(022);
+    mkdir("/m_mode", 0777);
+    if (stat("/m_mode", &st) == 0) printf("m2_mode=%o\n", st.st_mode & 07777);
+    else printf("m2_mode=stat-fail\n");
+
+    // M3: mkdirat relative to an explicit upper dir-fd.
+    int df = open("/m_new", O_RDONLY | O_DIRECTORY);
+    errno = 0;
+    int m3 = df >= 0 ? mkdirat(df, "sub", 0755) : -1;
+    printf("m3_mkdirat=%d\n", m3 < 0 ? errno : 0);
+    printf("m3_visible=%d\n", access("/m_new/sub", F_OK) == 0 ? 1 : 0);
+    if (df >= 0) close(df);
+
+    // M4: nested mkdir whose PARENT chain lives only in a lower layer (copy-up of the parents).
+    // The lower provides /mkp/a/b as a directory; creating /mkp/a/b/newc must succeed and be visible.
+    errno = 0;
+    int m4 = mkdir("/mkp/a/b/newc", 0755);
+    printf("m4_nested_lower_parent=%d\n", m4 < 0 ? errno : 0);
+    printf("m4_visible=%d\n", access("/mkp/a/b/newc", F_OK) == 0 ? 1 : 0);
+
+    // M5: mkdir under a NONEXISTENT parent -> ENOENT (not EPERM).
+    errno = 0;
+    int m5 = mkdir("/no_such_parent/child", 0755);
+    printf("m5_enoent=%d\n", (m5 < 0 && errno == ENOENT) ? 1 : errno);
+
+    // M6: mkdir where a path component is a regular file (lower-only /mnotdir) -> ENOTDIR.
+    errno = 0;
+    int m6 = mkdir("/mnotdir/child", 0755);
+    printf("m6_enotdir=%d\n", (m6 < 0 && errno == ENOTDIR) ? 1 : errno);
+
+    // M7: mkdir over a WHITEOUT — a lower-only file removed, then a dir created with the same name.
+    unlink("/wf"); // /wf is a lower regular file -> drops a whiteout
+    errno = 0;
+    int m7 = mkdir("/wf", 0755);
+    printf("m7_mkdir_over_wh=%d\n", m7 < 0 ? errno : 0);
+    printf("m7_isdir=%d\n", (stat("/wf", &st) == 0 && S_ISDIR(st.st_mode)) ? 1 : 0);
+
+    // M8: sibling create ops into an overlay upper dir — creat, symlinkat, mknodat(FIFO).
+    errno = 0;
+    int cf = creat("/m_new/cf", 0644);
+    printf("m8_creat=%d\n", cf < 0 ? errno : 0);
+    if (cf >= 0) close(cf);
+    errno = 0;
+    int sl = symlink("target", "/m_new/sl");
+    printf("m8_symlink=%d\n", sl < 0 ? errno : 0);
+    errno = 0;
+    int mn = mknod("/m_new/fifo", S_IFIFO | 0644, 0);
+    printf("m8_mknod_fifo=%d\n", mn < 0 ? errno : 0);
+
+    // M9: rmdir of an upper-created empty dir -> 0; a repeat -> ENOENT.
+    mkdir("/m_rmdir", 0755);
+    errno = 0;
+    int r9 = rmdir("/m_rmdir");
+    printf("m9_rmdir=%d\n", r9 < 0 ? errno : 0);
+    errno = 0;
+    int r9b = rmdir("/m_rmdir");
+    printf("m9_rmdir_gone=%d\n", (r9b < 0 && errno == ENOENT) ? 1 : errno);
+
+    // M10: rmdir a regular file -> ENOTDIR; unlinkat AT_REMOVEDIR on a dir -> 0.
+    errno = 0;
+    int r10 = rmdir("/mnotdir");
+    printf("m10_rmdir_file=%d\n", (r10 < 0 && errno == ENOTDIR) ? 1 : errno);
+    mkdir("/m_rd2", 0755);
+    errno = 0;
+    int r10b = unlinkat(AT_FDCWD, "/m_rd2", AT_REMOVEDIR);
+    printf("m10_unlinkat_rmdir=%d\n", r10b < 0 ? errno : 0);
+
+    // M11: renameat a fresh upper file into a lower-only (copied-up) directory -> 0, then readable there.
+    fd = open("/m_ren_src", O_CREAT | O_WRONLY | O_TRUNC, 0644);
+    if (fd >= 0) { write(fd, "REN", 3); close(fd); }
+    errno = 0;
+    int m11 = rename("/m_ren_src", "/mkp/a/b/ren_dst");
+    printf("m11_rename_into_overlay=%d\n", m11 < 0 ? errno : 0);
+    printf("m11_dst=%s\n", rd("/mkp/a/b/ren_dst", buf, sizeof buf) >= 0 ? buf : "<none>");
+
+    // M12: mkdir where the FINAL name already exists in a LOWER layer -> EEXIST (dir or file).
+    errno = 0;
+    int m12a = mkdir("/ld_pristine", 0755); // a pristine lower-only directory (never copied up)
+    printf("m12_mkdir_over_lowerdir=%d\n", (m12a < 0 && errno == EEXIST) ? 1 : errno);
+    errno = 0;
+    int m12b = mkdir("/mnotdir", 0755); // /mnotdir is a lower-only regular file
+    printf("m12_mkdir_over_lowerfile=%d\n", (m12b < 0 && errno == EEXIST) ? 1 : errno);
+
+    // M13: symlink/creat where the name already exists in a lower layer -> EEXIST.
+    errno = 0;
+    int m13a = symlink("x", "/mnotdir");
+    printf("m13_symlink_eexist=%d\n", (m13a < 0 && errno == EEXIST) ? 1 : errno);
+    errno = 0;
+    int m13b = open("/mkp", O_CREAT | O_EXCL | O_WRONLY, 0644);
+    printf("m13_openexcl_eexist=%d\n", (m13b < 0 && errno == EEXIST) ? 1 : (m13b >= 0 ? (close(m13b), -100) : errno));
+
+    // M14: rmdir a lower-only EMPTY directory -> success (real overlayfs drops a whiteout), then gone.
+    errno = 0;
+    int m14 = rmdir("/mkp_empty"); // lower-only empty dir
+    printf("m14_rmdir_lower_empty=%d\n", m14 < 0 ? errno : 0);
+    printf("m14_gone=%d\n", access("/mkp_empty", F_OK) < 0 ? 1 : 0);
+
+    // M15: mkdirat where the dir-fd points at a lower-only (copied-up) directory.
+    int df2 = open("/mkp/a", O_RDONLY | O_DIRECTORY); // /mkp/a is lower-only
+    errno = 0;
+    int m15 = df2 >= 0 ? mkdirat(df2, "atchild", 0755) : -1;
+    printf("m15_mkdirat_lower_dirfd=%d\n", df2 < 0 ? -1 : (m15 < 0 ? errno : 0));
+    printf("m15_visible=%d\n", access("/mkp/a/atchild", F_OK) == 0 ? 1 : 0);
+    if (df2 >= 0) close(df2);
+
     printf("PROBE_DONE\n");
     return 0;
 }
