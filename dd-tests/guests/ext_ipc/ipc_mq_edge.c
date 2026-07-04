@@ -1,15 +1,18 @@
-// POSIX message-queue errno/edge fidelity (mq_open/mq_timedsend/mq_timedreceive/mq_getattr) — diffed
-// vs the native oracle. Verdict-only (errno NAMES + booleans, never raw descriptors), so dd must be
+// POSIX message-queue errno/edge fidelity (mq_open/mq_timedsend/mq_timedreceive/mq_getattr) — diffed vs
+// the native oracle. Verdict-only (errno NAMES + booleans, never raw descriptors), so dd must be
 // byte-identical to native Linux (aarch64) / qemu (x86_64). macOS has no POSIX mqueue kernel object, so
 // dd emulates a named in-process priority queue; this pins that emulation to the real kernel's errnos.
-// Exercises: ENOENT (open missing w/o O_CREAT), EEXIST (O_CREAT|O_EXCL on existing), attr maxmsg/msgsize,
-// EMSGSIZE (oversized send / undersized receive), O_NONBLOCK EAGAIN (recv-empty / send-full), curmsgs,
-// and strict highest-priority-first delivery.
+// Exercises: ENOENT (open missing w/o O_CREAT), EEXIST (O_CREAT|O_EXCL on existing), ENAMETOOLONG, attr
+// maxmsg/msgsize, EMSGSIZE (oversized send / undersized receive), O_NONBLOCK EAGAIN (recv-empty / send-full),
+// curmsgs, strict highest-priority-first delivery, and the mq_timed{send,receive} blocking matrix
+// EINVAL(tv_nsec)/ETIMEDOUT on a blocking (non-O_NONBLOCK) descriptor. (mq_notify lives in ipc_mq_notify.c,
+// aarch64-only — qemu-user's mq_notify is not a faithful oracle.)
 #include <errno.h>
 #include <fcntl.h>
 #include <mqueue.h>
 #include <stdio.h>
 #include <string.h>
+#include <time.h>
 
 static const char *en(int e) {
     switch (e) {
@@ -19,8 +22,24 @@ static const char *en(int e) {
     case EMSGSIZE: return "EMSGSIZE";
     case EAGAIN: return "EAGAIN";
     case EINVAL: return "EINVAL";
+    case EBUSY: return "EBUSY";
+    case ETIMEDOUT: return "ETIMEDOUT";
+    case ENAMETOOLONG: return "ENAMETOOLONG";
     default: return "OTHER";
     }
+}
+
+// A CLOCK_REALTIME deadline `ms` milliseconds from now (mq_timed* absolute timeouts are CLOCK_REALTIME).
+static struct timespec deadline_in(long ms) {
+    struct timespec t;
+    clock_gettime(CLOCK_REALTIME, &t);
+    t.tv_sec += ms / 1000;
+    t.tv_nsec += (ms % 1000) * 1000000L;
+    if (t.tv_nsec >= 1000000000L) {
+        t.tv_nsec -= 1000000000L;
+        t.tv_sec++;
+    }
+    return t;
 }
 
 int main(void) {
@@ -90,5 +109,38 @@ int main(void) {
     printf("unlink=%s\n", en(mq_unlink(name) == 0 ? 0 : errno));
     // re-open after unlink without O_CREAT -> ENOENT
     printf("open_after_unlink=%s\n", en(mq_open(name, O_RDWR) == (mqd_t)-1 ? errno : 0));
+
+    // ---- ENAMETOOLONG: a name component longer than NAME_MAX(255) ----
+    char toolong[300];
+    toolong[0] = '/';
+    memset(toolong + 1, 'a', 257);
+    toolong[258] = 0; // 257-char component > 255
+    printf("open_toolong=%s\n", en(mq_open(toolong, O_CREAT | O_RDWR, 0600, &at) == (mqd_t)-1 ? errno : 0));
+
+    // ---- blocking (non-O_NONBLOCK) timed matrix: EINVAL(tv_nsec) / ETIMEDOUT ----
+    const char *tn = "/dd_mq_timed";
+    mq_unlink(tn);
+    struct mq_attr tat = {0};
+    tat.mq_maxmsg = 1;
+    tat.mq_msgsize = 8;
+    mqd_t tq = mq_open(tn, O_CREAT | O_RDWR, 0600, &tat); // NO O_NONBLOCK -> blocking descriptor
+    if (tq == (mqd_t)-1) return 1;
+    // send with an out-of-range tv_nsec is validated before the queue state -> EINVAL (queue has room here)
+    struct timespec bad_ts = {0, 1000000000L};
+    printf("tsend_einval=%s\n", en(mq_timedsend(tq, "x", 1, 0, &bad_ts) == 0 ? 0 : errno));
+    // receive on the (still empty) queue with a bad tv_nsec -> EINVAL
+    char tb[8];
+    unsigned tp;
+    printf("trecv_einval=%s\n", en(mq_timedreceive(tq, tb, sizeof tb, &tp, &bad_ts) < 0 ? errno : 0));
+    // fill the single slot, then a blocking send with a short future deadline on the full queue -> ETIMEDOUT
+    mq_send(tq, "a", 1, 0);
+    struct timespec dl = deadline_in(50);
+    printf("tsend_timeout=%s\n", en(mq_timedsend(tq, "b", 1, 0, &dl) == 0 ? 0 : errno));
+    // drain it, then a blocking receive with a short future deadline on the empty queue -> ETIMEDOUT
+    mq_receive(tq, tb, sizeof tb, &tp);
+    dl = deadline_in(50);
+    printf("trecv_timeout=%s\n", en(mq_timedreceive(tq, tb, sizeof tb, &tp, &dl) < 0 ? errno : 0));
+    mq_close(tq);
+    printf("tunlink=%s\n", en(mq_unlink(tn) == 0 ? 0 : errno));
     return 0;
 }

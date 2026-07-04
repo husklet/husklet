@@ -253,10 +253,14 @@ static int pidfd_make(pid_t pid) {
 // POSIX message queues (mq_*): macOS has no POSIX mqueue, so emulate an in-process named priority queue.
 // Each queue keeps messages highest-priority-first (FIFO within a priority); descriptors are real
 // (/dev/null-backed) fds so close()/poll() stay valid, with an fd->queue table to map them back. This
-// covers single-process producers/consumers; it is not shared across fork and does not block (full/empty
-// return EAGAIN), which is sufficient for the queue depths POSIX mqueue programs exercise here.
+// covers single-process producers/consumers. It is not shared across fork; a *blocking* mq_timed{send,
+// receive} (O_NONBLOCK clear) honours the abs_timeout and polls the queue so another THREAD of the same
+// process draining/filling it is observed, then returns ETIMEDOUT past the deadline (see rare.c). A NULL
+// timeout blocks indefinitely, exactly as Linux would for the single-process case where nothing can change
+// the queue -- genuinely unemulatable to "unblock" (documented at the call site), so it is left faithful.
 #define MQ_MAXQ 16
 #define MQ_MAXMSG 64
+#define MQ_O_NONBLOCK 0x800 // Linux O_NONBLOCK (04000) on both x86_64 and aarch64; mq's per-descriptor flag
 struct mq_qmsg {
     unsigned prio;
     size_t len;
@@ -264,13 +268,21 @@ struct mq_qmsg {
 };
 struct mq_queue {
     int used, unlinked, refs, n;
-    char name[80];
+    char name[260]; // POSIX mq name: leading '/' + component up to NAME_MAX(255) + NUL (ENAMETOOLONG beyond)
     long maxmsg, msgsize;
     struct mq_qmsg msg[MQ_MAXMSG];
+    // mq_notify: the single registered one-shot notification, delivered on the empty->non-empty edge (see
+    // mq_timedsend). Single-process-tree emulation, so notify_pid only backs the errno/one-shot semantics
+    // (EBUSY when already owned), not real cross-process routing.
+    int notify_set;      // 1 = a notification is currently registered
+    int notify_notify;   // SIGEV_SIGNAL(0) / SIGEV_NONE(1) / SIGEV_THREAD(2)
+    int notify_signo;    // signal to raise on the edge (SIGEV_SIGNAL)
+    uint64_t notify_val; // sigev_value.sival_ptr/int -> the notification siginfo's si_value
+    int notify_pid;      // registered owner (guest tgid)
 };
 static struct mq_queue g_mqq[MQ_MAXQ];
 static struct {
-    int fd, qi;
+    int fd, qi, flags; // flags: per-descriptor O_NONBLOCK (mq_flags is a per-open-file-description flag on Linux)
 } g_mqfd[64];
 static int mq_find(const char *name) {
     for (int i = 0; i < MQ_MAXQ; i++)
@@ -287,6 +299,21 @@ static void mq_bind(int fd, int qi) {
         if (g_mqfd[i].fd == 0 || g_mqfd[i].fd == fd) {
             g_mqfd[i].fd = fd;
             g_mqfd[i].qi = qi;
+            return;
+        }
+}
+// Per-descriptor O_NONBLOCK: report/set the mq_flags of the open file description behind fd. Recorded at
+// mq_open time and toggled by mq_getsetattr (the mq equivalent of F_SETFL) so a blocking descriptor and a
+// non-blocking one to the same queue behave differently, as on Linux.
+static int mq_fd_nonblock(int fd) {
+    for (int i = 0; i < 64; i++)
+        if (g_mqfd[i].fd == fd) return (g_mqfd[i].flags & MQ_O_NONBLOCK) != 0;
+    return 0;
+}
+static void mq_fd_setnb(int fd, int on) {
+    for (int i = 0; i < 64; i++)
+        if (g_mqfd[i].fd == fd) {
+            g_mqfd[i].flags = on ? MQ_O_NONBLOCK : 0;
             return;
         }
 }

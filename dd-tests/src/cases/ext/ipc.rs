@@ -68,9 +68,15 @@ fn ext_ipc() -> Group {
         // getuid), so root-dd and the unprivileged native oracle print byte-identically. Both Linux arches.
         src("sysv-ctl", "ext_ipc/sysv_ctl.c").oracle(),
         // ---- POSIX mqueue errno/edge fidelity (mq_open/timedsend/timedreceive/getattr) — diffed ----
-        // O_CREAT|O_EXCL EEXIST, ENOENT w/o O_CREAT, priority ordering, EMSGSIZE, O_NONBLOCK EAGAIN,
-        // getattr maxmsg/msgsize/curmsgs. dd emulates POSIX mq in-process (macOS has no mqueue kernel).
+        // O_CREAT|O_EXCL EEXIST, ENOENT w/o O_CREAT, ENAMETOOLONG, priority ordering, EMSGSIZE, O_NONBLOCK
+        // EAGAIN, getattr maxmsg/msgsize/curmsgs, and the blocking mq_timed{send,receive} matrix
+        // EINVAL(tv_nsec)/ETIMEDOUT. dd emulates POSIX mq in-process (macOS has no mqueue kernel).
         src("mq-edge", "ext_ipc/ipc_mq_edge.c").oracle(),
+        // mq_notify register/EBUSY/unregister/EINVAL + SIGEV_SIGNAL SI_MESGQ delivery on the empty->non-empty
+        // edge. aarch64-only: qemu-user's mq_notify is not a faithful oracle (it fails the SIGEV path), and
+        // dd runs the SAME arch-normalized handler for both guest arches, so the real-kernel aarch64 diff
+        // also covers the x86 path.
+        src("mq-notify", "ext_ipc/ipc_mq_notify.c").oracle().only(&[Engine::LinuxAarch64]),
         // ---- Linux-only IPC (no portable POSIX form) — diffed vs native oracle ----
         // POSIX mq priority ordering. macOS has no mqueue kernel object, so dd emulates a named
         // in-process priority queue (rare.c) — byte-exact vs native here; errno edges in `mq-edge` above.
