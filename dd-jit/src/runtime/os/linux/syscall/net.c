@@ -216,6 +216,8 @@ static int svc_net(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_
                 g_lo_v6[r] = 0;
                 g_br_port[r] = 0;
                 g_br_ip[r] = 0;
+                g_tcp_lport[r] = 0;
+                g_tcp_listen[r] = 0;
                 g_dns_sock[r] = 0;
             }
         }
@@ -274,6 +276,17 @@ static int svc_net(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_
             size_t alc = (size_t)(socklen_t)a2;
             if (alc > sizeof(struct sockaddr_storage)) alc = sizeof(struct sockaddr_storage);
             if (!host_range_mapped((uintptr_t)a1, alc)) { G_RET(c) = (uint64_t)(-EFAULT); break; }
+        }
+        // #289: remember the guest-requested (addr,port) of a stream socket so a later listen() can surface a
+        // LISTEN row in /proc/net/tcp[6] (ss/netstat -l). Independent of which network mode the bind resolves
+        // to below -- the synthesized table has no real IP stack to read back from. AF is the guest sockaddr
+        // family at offset 0 (LE u16); port is BE at offset 2 (identical v4/v6 layout).
+        if ((int)a0 >= 0 && (int)a0 < 1024 && g_sock_stream[(int)a0] && a2 >= 8) {
+            uint16_t fam = *(uint16_t *)(sa + 0), bp = ntohs(*(uint16_t *)(sa + 2));
+            if (fam == AF_INET)
+                netns_tcp_bind_note((int)a0, bp, 0, *(uint32_t *)(sa + 4), NULL);
+            else if (fam == LX_AF_INET6_FAM && a2 >= 24)
+                netns_tcp_bind_note((int)a0, bp, 1, 0, sa + 8);
         }
         // private loopback: v4 127/8 (and 0.0.0.0 in direct mode -- a 0.0.0.0 server must answer 127.0.0.1),
         // or v6 ::1/:: (dual-stack servers bind v6 too; route it to the SAME per-container loopback so it is
@@ -404,6 +417,8 @@ static int svc_net(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_
         // Published-port (`-p H:C`) host bridge: if this is a switch-backed listen on a published
         // container port, spin up a real host AF_INET listener on :H that relays into the guest.
         if (lr == 0) fwd_maybe_start((int)a0);
+        if (lr == 0) netns_tcp_listen_note((int)a0); // #289: arm the /proc/net/tcp[6] LISTEN row
+
         G_RET(c) = lr < 0 ? (uint64_t)(-errno) : 0;
         break;
     }

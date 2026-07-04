@@ -27,6 +27,9 @@ fn proc_content() -> Group {
         src("pf-cpuinfo", "ext_procfs/cpuinfo.c").out("cpuinfo ok=1\n"),
         src("pf-misc", "ext_procfs/miscfiles.c").out("miscfiles ok=1\n"),
         src("pf-net", "ext_procfs/netfiles.c").out("netfiles ok=1\n"),
+        // #289 round 2 (networking tool class): tcp6/udp6 wide v6 header, /proc/net/{netstat,snmp6,ipv6_route},
+        // and the /proc/[self|pid]/net/* namespaced mirrors -- each a dd-only divergence vs docker before the fix.
+        src("pf-net2", "ext_procfs/netfiles2.c").out("netfiles2 ok=1\n"),
         src("pf-maps", "ext_procfs/maps.c").out("maps ok=1\n"),
     ])
 }
