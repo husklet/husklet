@@ -458,6 +458,7 @@ static int svc_proc(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64
 #endif
         proc_reg_unlink(); // drop our /proc process-table entry (_exit bypasses the atexit handler)
         poslk_on_exit();   // #340: release this process's in-engine fcntl advisory locks
+        sysv_on_exit();    // #421: apply SEM_UNDO + GC this container's SysV objects (_exit skips atexit)
         _exit((int)a0);
     case 96:
         G_RET(c) = (uint64_t)getpid();
@@ -1301,6 +1302,7 @@ static int svc_proc(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64
         // emulate the kernel's close-on-exec sweep. No real host exec runs below -- we re-load the new image
         // in this same process -- so FD_CLOEXEC fds must be closed by hand or they leak into the new program.
         exec_close_cloexec();
+        sysv_after_exec(); // #421: detach SysV shm + clear semadj across execve (registry itself survives)
         // Tear down the inherited guest address space before loading the new image: a post-fork exec
         // otherwise keeps the parent's DENSE layout, and load_elf must bias a non-PIE ET_EXEC off its
         // fixed vaddr (__PAGEZERO blocks the low 4 GB) -> its baked absolute refs collide -> SIGSEGV.
