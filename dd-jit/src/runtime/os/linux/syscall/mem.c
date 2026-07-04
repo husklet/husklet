@@ -240,6 +240,7 @@ static int svc_mem(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_
             gmap_split_unmap(u_lo, u_hi);
             anon_split_unmap(u_lo, u_hi);
             wipefork_del(u_lo, u_hi - u_lo); // a wipe-on-fork range that was unmapped no longer applies
+            pn_del(u_lo, u_hi - u_lo);       // drop PROT_NONE coverage for the unmapped range
         }
         if (r == 0 && g_mem_max) {
             // uncharge (clamp >=0)
@@ -504,6 +505,13 @@ static int svc_mem(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_
             // not survive the region being remapped) -- drop stale wipe coverage so a reused address is
             // never wrongly zeroed in a child.
             wipefork_del((uint64_t)r, (uint64_t)a1 + guard);
+            // PROT_NONE registry: dd force-maps this region host-writable regardless of the guest's request
+            // (see `prot` above), so a guest PROT_NONE mmap is really RW under the host -- a host syscall
+            // writing into it would NOT fault. Record the guest's REQUESTED protection so the buffer-checking
+            // paths can still return EFAULT (LTP read02). A fresh accessible map also clears any stale
+            // PROT_NONE coverage that a reused address previously carried.
+            if ((int)a2 == 0) pn_add((uint64_t)r, (uint64_t)a1);
+            else pn_del((uint64_t)r, (uint64_t)a1 + guard);
 #ifdef PCACHE_MMAP_HINT
             // #178 (pcache): a hinted library map that landed ON its deterministic hint. Cold epoch:
             // record {base, len, file identity} in the save manifest. Warm epoch: the activation gate for
@@ -515,9 +523,14 @@ static int svc_mem(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_
         break;
     }
     // mprotect
-    case 226: // mprotect: NO-OP. The JIT translates guest code and never executes guest pages, so it does
-        // not enforce guest page protection. Actually calling mprotect is harmful on macOS -- it would make
-        // a region truly read-only and then fault the guest's own legitimate writes to it (e.g. RELRO).
+    case 226: // mprotect: NO-OP for enforcement. The JIT translates guest code and never executes guest
+        // pages, so it does not enforce guest page protection. Actually calling mprotect is harmful on macOS
+        // -- it would make a region truly read-only and then fault the guest's own legitimate writes to it
+        // (e.g. RELRO). We DO track the guest's PROT_NONE intent, though, so a host syscall writing into a
+        // guest-PROT_NONE buffer still returns EFAULT (LTP read02): mark the range on PROT_NONE, clear it on
+        // any access-granting reprotect (the reserve-then-commit pattern: mmap PROT_NONE then mprotect RW).
+        if ((int)a2 == 0) pn_add(a0, a1);
+        else pn_del(a0, a1);
         G_RET(c) = 0;
         break;
     case 227: // msync: stores through a MAP_SHARED mapping are already in the unified page cache, so the
