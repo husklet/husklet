@@ -64,11 +64,16 @@ fn threads() -> Group {
         // Main-thread only: the spawned-thread path is covered by the portable tls-models above, and a
         // spawned thread in a non-PIE ET_EXEC currently SEGVs on the x86_64 engine (see threads-nopie).
         src_nopie("tls-models-nopie", "tlsmodels_main.c").oracle(),
-        // GAP (discovered #281 TLS sweep): a spawned pthread inside a non-PIE ET_EXEC (static -no-pie)
-        // SEGVs on the x86_64 engine — a non-PIE clone/thread-setup bug, NOT TLS (a bare thread with no
-        // TLS access also crashes). aarch64 handles it fine; tracked here as an x86_64 xfail.
+        // FIXED (was an x86_64 xfail): a spawned pthread inside a non-PIE ET_EXEC (static -no-pie) SEGV'd
+        // on the x86 engine — rip-relative `lea` materialized the biased-HIGH address while baked pointers
+        // (glibc's .tdata tcache sentinel &__tcache_dummy) sit at the LOW link address, so glibc's
+        // thread-exit sentinel check diverged and freed the sentinel as a real chunk. Fixed by emitting the
+        // low link address for low-image lea targets (x86 analogue of aarch64's adr/adrp un-biasing).
         src_nopie("threads-nopie", "threads_mutex.c")
-            .out("queue produced=40000 consumed=40000\n").xfail(&[Engine::LinuxX86_64]),
+            .out("queue produced=40000 consumed=40000\n"),
+        // Minimized differential guard: a spawned thread that also reads a __thread var and a
+        // -fstack-protector %fs:0x28 canary frame, byte-exact vs the qemu-x86_64 oracle (both arches).
+        src_nopie("threads-nopie-tls-canary", "threads_nopie_tls.c").oracle(),
     ])
 }
 

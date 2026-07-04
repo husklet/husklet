@@ -75,18 +75,26 @@ static int translate_mov(struct insn *I, uint64_t next) {
             }
             // ---- lea (8D) ----
             if (op == 0x8D) {
-                // W6A item 1: a rip-relative lea that materializes a *_type pointer in a biased non-PIE Go
-                // image. The image maps high (+bias) but its baked-absolute type pointers keep their low link
-                // addresses, so a high lea result compared against a baked low type pointer (Go type identity:
-                // interface assertions, SetFinalizer's `fint == etyp`, itab keys) diverges. When the target
-                // lands in the type section [md.types, md.etypes) emit the low link address so every *_type
-                // pointer is low-consistent; the eventual low type-struct access is served by nonpie_fixup.
-                // The rewrite is confined to the type section so string/rodata pointers (used as bulk memory
-                // operands, e.g. by rep movs) and code/data pointers keep their high mapped addresses. Only
-                // the 64-bit form (sf). Inert for PIE/static-PIE and non-Go images (types range == 0).
-                if (sf && I->rip_rel && g_nonpie_types_lo) {
+                // Non-PIE pointer identity: a biased ET_EXEC maps HIGH (+g_nonpie_bias), but its baked
+                // absolute pointers keep their LOW link addresses -- in .data, in the .tdata TLS template
+                // (e.g. glibc's per-thread `tcache` initialized to &__tcache_dummy), and in 32-bit `mov
+                // $imm` materializations. A rip-relative lea materializes a pointer VALUE, so it must produce
+                // the SAME (low) address a baked pointer holds, or an identity comparison of the two diverges.
+                // The concrete failure this fixes: at thread exit __malloc_arena_thread_freeres compares the
+                // thread's tcache pointer (the low template value &__tcache_dummy, never overwritten by a
+                // never-malloc'ing bare worker thread) against `lea __tcache_dummy(%rip)`; a HIGH lea result
+                // != the LOW stored value, so the "is this the dummy sentinel?" guard fails and glibc frees
+                // the sentinel -> SIGSEGV (every spawned pthread in a static -no-pie x86 binary crashed). So
+                // for a rip-relative lea whose target lands in the low image range, emit the LOW link address.
+                // This is the exact analogue of the aarch64 engine's adr/adrp PC un-biasing (translate.c
+                // pcrel_base) and generalizes the earlier Go-type-section-only rewrite (which was one instance
+                // of the same class). Derefs of the resulting low pointer are folded to the high mapping by
+                // ea_bias17 / the rep-string helpers (repstr_g2h) / nonpie_fixup; an indirect call/jmp through
+                // it is redirected by the dispatcher (run_guest). Only the 64-bit form (sf); inert for
+                // PIE/static-PIE (g_nonpie_lo == 0). NOGUESTFOLD leaves lea biased for A/B bisection.
+                if (sf && I->rip_rel && g_nonpie_lo && guestfold_on()) {
                     uint64_t lo = (next - g_nonpie_bias) + (uint64_t)I->disp; // low link target
-                    if (lo >= g_nonpie_types_lo && lo < g_nonpie_types_hi) {
+                    if (lo >= g_nonpie_lo && lo < g_nonpie_hi) {
                         e_movconst(I->reg, lo);
                         return TX_NEXT;
                     }
