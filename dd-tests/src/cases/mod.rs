@@ -122,6 +122,15 @@ fn regress() -> Group {
         src("ldrsw-literal-pcache", "ldrsw_literal.c")
             .env("DDJIT_PCACHE", "1").env("DDJIT_PCACHE_DIR", "/tmp/ddjit-pcache-ldrsw")
             .oracle().only(&[Engine::LinuxAarch64]),
+        // #425: V8's embedded-builtins CODE base (symbol v8_Default_embedded_blob_code_) is a baked LOW .text
+        // address loaded via `mov r,imm`; the builtins execute at the HIGH mapping, so V8's
+        // InnerPointerToCodeCache range check (LOW base vs a HIGH stack return address) missed -> V8_Fatal
+        // maybe_code.has_value() (node:20 `new Error().stack` / mongosh). The loader records that symbol and
+        // the frontend rebases its mov-imm materialization HIGH (translate/x86_64), so the code range matches
+        // execution WITHOUT touching return addresses (Go's HIGH-PC stack-walk stays intact -- see go-static).
+        // This guard reproduces the base-vs-return-address same-half invariant. Oracle-diffed; NOV8BLOB=1 = off.
+        src_nopie("nonpie-v8blob", "nonpie_v8blob.c").oracle()
+            .only(&[Engine::LinuxX86_64]),
     ])
 }
 

@@ -309,6 +309,15 @@ static void load_elf(const char *path, struct loaded *out) {
     // resolves the biased code PCs (otherwise runtime.pcdatavalue nil-derefs). Gated on g_nonpie_lo
     // (ET_EXEC only); NOGOREBASE=1 disables for A/B testing.
     if (g_nonpie_lo && !getenv("NOGOREBASE")) go_rebase_nonpie(f, st.st_size, bias, g_nonpie_lo, g_nonpie_hi);
+    // #425: record V8's embedded-builtins CODE base symbol (LOW link value) so the frontend can bias its one
+    // baked `mov r32,imm` materialization to the high mapping -- see translate.c g_nonpie_blob_code. Only for a
+    // biased non-PIE image that actually carries the symbol (node/mongosh/any embedded-V8 ET_EXEC); 0 otherwise
+    // (PIE, Go, stripped, non-V8) -> inert. NOV8BLOB=1 disables for A/B.
+    // Gate on THIS image being the non-PIE ET_EXEC (etype==2), not on the persistent g_nonpie_lo: the
+    // interpreter (ld.so, a DYN loaded by a SECOND load_elf in the same process) has no v8 symbol and would
+    // otherwise reset the value the main image just recorded. Only the main non-PIE exe carries the blob.
+    if (etype == 2 && !getenv("NOV8BLOB"))
+        g_nonpie_blob_code = go_symval(f, st.st_size, "v8_Default_embedded_blob_code_");
     // BUG#132: a biased non-PIE ET_EXEC (e.g. static glibc jq) carries baked ABSOLUTE pointers in
     // .data.rel.ro AND .data (pointer tables) that the static linker resolved to LINK addresses with NO
     // runtime relocation entry. After we bias the image high (macOS __PAGEZERO blocks the low link range)
