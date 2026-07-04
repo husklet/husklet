@@ -1800,6 +1800,35 @@ static void *translate_block(uint64_t gpc) {
             gpc += 4;
             continue;
         }
+        // ldrsw (literal): opc=10, V=0 -> top byte 0x98 (unique: bits[29:27]=011, bits[25:24]=00, bit26=0).
+        // The integer ldr-literal above masks 0xBF (only bit30), so opc=10 does NOT match it and this
+        // sign-extending 32->64 word literal load would fall through to the verbatim emit -- executing
+        // PC-relative from the HOST code cache and loading a garbage word (then sign-extended into Xt).
+        // Compilers emit LDRSW-literal for switch/jump tables (sign-extended word offsets). Same hazard
+        // and same fix as the integer/SIMD forms: materialize the GUEST literal address and LDRSW from it,
+        // so the value is correct regardless of host arena placement or a warm pcache load.
+        if ((in & 0xFF000000u) == 0x98000000u) {
+            int rt = in & 31;
+            int64_t off = sext((in >> 5) & 0x7FFFF, 19) << 2;
+            if (is_stolen(rt)) {
+                if (stealfast_on()) {
+                    e_movconst(16, gpc + off);            // x16 = guest literal address
+                    emit32(0xB9800000u | (16 << 5) | 16); // ldrsw x16, [x16]
+                    e_str(16, CPUREG, rt * 8);
+                } else {
+                    x18_prolog();
+                    e_movconst(0, gpc + off);
+                    emit32(0xB9800000u | (0 << 5) | 0);    // ldrsw x0, [x0]
+                    e_str(0, 1, rt * 8);
+                    x18_epilog();
+                }
+            } else {
+                e_movconst(rt, gpc + off);
+                emit32(0xB9800000u | (rt << 5) | rt);      // ldrsw xt, [xt]
+            }
+            gpc += 4;
+            continue;
+        }
         // ldr (literal), SIMD&FP: `ldr St/Dt/Qt, [pc, #imm]`. The integer ldr-literal above only matches
         // V=0; the SIMD/FP form (V=1, bit26) would otherwise fall through to the verbatim emit and execute
         // PC-relative from the HOST code cache -- loading garbage instead of the guest literal pool. LuaJIT
@@ -1822,6 +1851,17 @@ static void *translate_block(uint64_t gpc) {
                 emit32(ld | (0u << 5) | (uint32_t)vt); // ldr St/Dt/Qt, [x0]
                 x18_epilog();
             }
+            gpc += 4;
+            continue;
+        }
+        // prfm (literal): opc=11, V=0 -> top byte 0xD8. A prefetch HINT that reads its target address
+        // PC-relative from the guest literal pool. It has no destination register and never faults, but a
+        // verbatim emit would prefetch a host-PC-relative (garbage) address -- useless work, never the
+        // intended guest line. Prefetch is architecturally optional, so honoring it as "no prefetch" is
+        // always legal: drop it to a nop. This completes the PC-relative literal-load family (0x18/0x58
+        // LDR-lit, 0x98 LDRSW-lit, 0x1C/0x5C/0x9C LDR-lit-SIMD, 0xD8 PRFM-lit) -- every form rewritten.
+        if ((in & 0xFF000000u) == 0xD8000000u) {
+            emit32(0xD503201Fu); // nop
             gpc += 4;
             continue;
         }
