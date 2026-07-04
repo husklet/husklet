@@ -2612,6 +2612,13 @@ static int fd_is_ctty(int pfn) {
 // fd->path surface can rewrite it. Keeps the existing #411/#219 master-termios cache (keyed by master fd).
 #define DEVPTS_MAX 1024
 static int g_pts_master[DEVPTS_MAX];      // pts index N -> (host master fd + 1); 0 = free
+static char g_pts_slavename[DEVPTS_MAX][64]; // pts index N -> host slave device path (ptsname of the master),
+                                          // cached at pts_alloc. #420: after a (forked) process closes its
+                                          // master fd, pts_master_fd(N) can no longer resolve the slave via
+                                          // ptsname(master), yet the pty is still alive if ANY other process
+                                          // (e.g. the parent) holds the master -- so /dev/pts/N must resolve
+                                          // by this cached host path. A host open() of it naturally succeeds
+                                          // iff the pty is still alive and fails once it is truly gone.
 static int g_fd_ptsn[1024];               // host fd -> (pts index + 1); 0 = not a pty fd
 static uint8_t g_fd_ptsmaster[1024];      // 1 = this fd is the MASTER end, 0 = a slave
 // Materialize/remove the on-disk /dev/pts/<N> node so `ls /dev/pts` reflects the live slaves (devpts
@@ -2639,6 +2646,11 @@ static int pts_alloc(int masterfd) {
         if (!g_pts_master[n]) {
             g_pts_master[n] = masterfd + 1;
             if (masterfd >= 0 && masterfd < 1024) { g_fd_ptsn[masterfd] = n + 1; g_fd_ptsmaster[masterfd] = 1; }
+            // #420: cache the host slave device path now, while the master is open, so /dev/pts/N still
+            // resolves after a forked child closes its master (the parent keeps the pty alive).
+            g_pts_slavename[n][0] = 0;
+            char *sn = ptsname(masterfd);
+            if (sn) { strncpy(g_pts_slavename[n], sn, sizeof g_pts_slavename[n] - 1); g_pts_slavename[n][sizeof g_pts_slavename[n] - 1] = 0; }
             return n;
         }
     }
@@ -2648,6 +2660,11 @@ static int pts_master_fd(int n) { return (n >= 0 && n < DEVPTS_MAX && g_pts_mast
 static int pts_index_of_master(int fd) { return (fd >= 0 && fd < 1024 && g_fd_ptsmaster[fd]) ? g_fd_ptsn[fd] - 1 : -1; }
 static int pts_index_of_fd(int fd) { return (fd >= 0 && fd < 1024 && g_fd_ptsn[fd]) ? g_fd_ptsn[fd] - 1 : -1; }
 static int pts_fd_is_master(int fd) { return fd >= 0 && fd < 1024 && g_fd_ptsmaster[fd]; }
+// #420: the cached host slave device path for index N (empty string -> NULL). Used to resolve /dev/pts/N
+// when this process no longer holds the master fd (a forked child closed it) but the pty is still alive.
+static const char *pts_slave_name(int n) {
+    return (n >= 0 && n < DEVPTS_MAX && g_pts_slavename[n][0]) ? g_pts_slavename[n] : NULL;
+}
 // Record a freshly-opened slave fd's pts index and publish its /dev/pts/N node.
 static void pts_note_slave(int slavefd, int n) {
     if (slavefd >= 0 && slavefd < 1024) { g_fd_ptsn[slavefd] = n + 1; g_fd_ptsmaster[slavefd] = 0; }
@@ -2670,8 +2687,8 @@ static void pts_on_close(int fd) {
 // compares. Returns 1 (char device) on success. N==0 with a ctty is handled by the caller (synth_stat_raw).
 static int devpts_slave_stat(int n, struct stat *s) {
     int mfd = pts_master_fd(n);
-    if (mfd < 0) return 0;
-    char *sn = ptsname(mfd);
+    const char *sn = (mfd >= 0) ? ptsname(mfd) : NULL;
+    if (!sn) sn = pts_slave_name(n); // #420: master closed in this (forked) process; use the cached path
     if (!sn) return 0;
     int t = open(sn, O_RDWR | O_NOCTTY);
     if (t < 0) t = open(sn, O_RDONLY | O_NOCTTY);
