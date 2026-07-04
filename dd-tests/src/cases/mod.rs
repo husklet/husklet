@@ -349,6 +349,11 @@ fn soak() -> Group {
         // machine code, so Linux/aarch64 only (the real JIT path); diffed vs native. xfail: mmap(RWX)
         // is EPERM under macOS W^X (no MAP_JIT) -> guest-JIT runtimes can't get exec pages (see PLAN.md).
         src("smc", "soak_smc.c").only(&[Engine::LinuxAarch64]).oracle(),
+        // #267: MULTITHREADED self-modifying code sharing code pages (the BeamAsm/Erlang crash class) --
+        // 8 threads append+rewrite `movz;ret` slots off a shared bump pointer so translations from
+        // different threads collide on the same pages while `ic ivau` fires. Regressed as a
+        // non-deterministic SIGSEGV/SIGBUS (unlocked page-granular SMC drop racing peers). aarch64 only.
+        src("smcthreads", "smc_threads.c").only(&[Engine::LinuxAarch64]).oracle(),
     ])
 }
 

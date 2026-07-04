@@ -112,10 +112,41 @@ static void txpg_put(uint64_t p) { // insert one guest page (addr>>12) into the 
         if (g_txpg[j] == 0) { g_txpg[j] = p; break; } // insert into the first empty slot
     }
 }
+// ---- SMC precise gate, CACHE-LINE granularity (64B = the unit `ic ivau, Xt` actually invalidates) ----
+// The page-granular set below over-approximates badly for a guest whose code arena packs many functions per
+// 4KB page (BeamAsm): appending function F2 onto a page that already holds a translated F1 makes txpg_has()
+// true for F2's `ic ivau`, forcing a wholesale drop even though NO translated byte changed. This finer set
+// records the exact 64B source lines a live block was translated from, so the gate fires only when the
+// invalidated line genuinely overlaps translated code (real in-place self-modification), not mere same-page
+// appends. Sized 2^21 slots (16MB) so even a large JIT working set (~1M lines = 64MB of guest code) keeps
+// the open-addressed load factor low; saturation degrades conservatively (assume present -> wholesale drop).
+#define TXLN_N (1u << 21)
+static uint64_t g_txln[TXLN_N]; // value = guest line (addr>>6); 0 = empty
+static void txln_put(uint64_t l) {
+    uint32_t h = (uint32_t)(l * 2654435761u) & (TXLN_N - 1);
+    for (uint32_t i = 0; i < TXLN_N; i++) {
+        uint32_t j = (h + i) & (TXLN_N - 1);
+        if (g_txln[j] == l) break;
+        if (g_txln[j] == 0) { g_txln[j] = l; break; }
+    }
+}
+static int txln_has(uint64_t addr) { // is the 64B line at addr the source of any live translation?
+    uint64_t l = addr >> 6;
+    uint32_t h = (uint32_t)(l * 2654435761u) & (TXLN_N - 1);
+    for (uint32_t i = 0; i < TXLN_N; i++) {
+        uint32_t j = (h + i) & (TXLN_N - 1);
+        if (g_txln[j] == l) return 1;
+        if (g_txln[j] == 0) return 0;
+    }
+    return 1; // saturated -> conservative
+}
+static void txln_clear(void) { memset(g_txln, 0, sizeof g_txln); }
 static void txpg_mark(uint64_t lo, uint64_t hi) {
     if (hi <= lo) hi = lo + 1;
     for (uint64_t p = lo >> 12; p <= ((hi - 1) >> 12); p++)
         txpg_put(p);
+    for (uint64_t l = lo >> 6; l <= ((hi - 1) >> 6); l++) // finer line-granular set (see txln_has)
+        txln_put(l);
 }
 static int txpg_has(uint64_t addr) {
     uint64_t p = addr >> 12;
@@ -842,6 +873,23 @@ static void stw_flush(void) {
         nanosleep(&ts, NULL);
     }
     pthread_mutex_unlock(&g_stw_reg_lock);
+}
+// #267 SMC coherence: the guest overwrote already-translated code -> drop the cross-block link tables so the
+// modified bytes re-translate on next dispatch. Only ever called with NO other guest thread live (single-
+// threaded, or the caller holds g_jit_lock and stw_peers_live()==0); a wholesale drop cannot be made
+// coherent while peers execute (see smc_icflush).
+// NOTE: deliberately does NOT txln_clear(). The single-threaded in-place SMC soak (soak_smc / smc2) fires
+// this drop on EVERY iteration (200k+); memset'ing the 16MB line-set each time added ~12s and timed the soak
+// out. g_txln is kept MONOTONIC instead -- it only ever marks lines a translation WAS emitted from, so it
+// never yields a stale "no-op" for a genuine in-place rewrite (the rewritten line stays marked -> the gate
+// keeps firing the drop -> re-translation -> correct). Not un-marking a line whose block was dropped only
+// ever causes an EXTRA (safe) drop later, never a missed one. (txpg_clear stays: 8x smaller, prior behaviour;
+// the pcache paths still txln_clear on a new image, off the hot path.)
+static void smc_inplace_drop(void) {
+    memset(g_map, 0, sizeof g_map);
+    memset(g_ibtc, 0, sizeof g_ibtc);
+    g_npend = 0;
+    txpg_clear();
 }
 // fork(): drop the inherited (parent-only) thread registry -- host fork() duplicates only the calling
 // thread -- so a later flush in the child never signals a dead handle. Re-register the child's own thread.
