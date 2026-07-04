@@ -49,6 +49,8 @@ fileio  access      access/access02.c
 fileio  access      access/access03.c
 fileio  access      access/access04.c
 fileio  faccessat   faccessat/faccessat01.c
+fileio  fchmodat    fchmodat/fchmodat02.c
+fileio  statfs      statfs/statfs02.c
 fileio  fcntl       fcntl/fcntl02.c
 fileio  fcntl       fcntl/fcntl03.c
 fileio  fcntl       fcntl/fcntl04.c
@@ -98,6 +100,8 @@ mm      msync       msync/msync04.c
 mm      mincore     mincore/mincore02.c
 mm      mincore     mincore/mincore03.c
 mm      mincore     mincore/mincore04.c
+mm      mlock       mlock/mlock05.c
+mm      munlockall  munlockall/munlockall01.c
 
 # ---- process / scheduling ----
 proc    fork        fork/fork01.c
@@ -122,6 +126,10 @@ proc    exit_group  exit_group/exit_group01.c
 proc    prctl       prctl/prctl01.c
 proc    prctl       prctl/prctl02.c
 proc    prctl       prctl/prctl03.c
+proc    capget      capget/capget01.c
+proc    capget      capget/capget02.c
+proc    getcpu      getcpu/getcpu01.c
+proc    getcpu      getcpu/getcpu02.c
 proc    getrlimit   getrlimit/getrlimit01.c
 proc    getrlimit   getrlimit/getrlimit02.c
 proc    setrlimit   setrlimit/setrlimit02.c

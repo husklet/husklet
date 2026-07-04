@@ -322,6 +322,17 @@ static const uint8_t *affinity_mask(void) {
     }
     return g_affinity;
 }
+// Lowest CPU id in the current affinity mask. getcpu(2) must return a CPU the task is allowed to run
+// on; when the guest has pinned itself to a single CPU via sched_setaffinity, that is the exact value
+// LTP getcpu01 expects back. Falls back to CPU 0 for an (impossible) empty mask.
+static unsigned affinity_first_cpu(void) {
+    const uint8_t *m = affinity_mask();
+    for (size_t i = 0; i < sizeof g_affinity; i++)
+        if (m[i])
+            for (int b = 0; b < 8; b++)
+                if (m[i] & (1u << b)) return (unsigned)(i * 8 + b);
+    return 0;
+}
 // Back a short synthesized sysfs string with an anonymous temp fd (the same trick proc_open uses for
 // the macOS-has-no-/proc case). Returns a readable fd positioned at offset 0, or -1 on error.
 static int synth_str_fd(const char *s) {

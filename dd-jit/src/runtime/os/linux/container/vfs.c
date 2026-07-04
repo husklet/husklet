@@ -1015,15 +1015,18 @@ static const char *proc_self_leaf(const char *rp) {
 static int proc_map_region_p(char *b, size_t n, unsigned long lo, unsigned long hi, const char *perms,
                              const char *name, int smaps) {
     unsigned long kb = (hi - lo) / 1024;
+    // "Locked:" reports the mlock/mlockall'd bytes of THIS region (LTP mlock05 mlock()s a whole mapping
+    // and reads its Locked back == the mapping size).
+    unsigned long lockkb = (unsigned long)(mlk_region_locked(lo, hi) / 1024);
     int m = snprintf(b, n, "%012lx-%012lx %s 00000000 00:00 0 %*s%s\n", lo, hi, perms, name[0] ? 20 : 0, "", name);
     if (smaps)
         m += snprintf(b + m, (size_t)n - (size_t)m,
                       "Size:%15lu kB\nKernelPageSize:%6d kB\nMMUPageSize:%9d kB\n"
                       "Rss:%16lu kB\nPss:%16lu kB\nShared_Clean:%7d kB\nShared_Dirty:%7lu kB\n"
                       "Private_Clean:%6d kB\nPrivate_Dirty:%6lu kB\nReferenced:%9lu kB\n"
-                      "Anonymous:%10lu kB\nAnonHugePages:%6d kB\nSwap:%15d kB\nLocked:%13d kB\n"
+                      "Anonymous:%10lu kB\nAnonHugePages:%6d kB\nSwap:%15d kB\nLocked:%13lu kB\n"
                       "VmFlags: rd wr mr mw me ac\n",
-                      kb, 4, 4, kb, kb, 0, kb, 0, 0UL, kb, kb, 0, 0, 0);
+                      kb, 4, 4, kb, kb, 0, kb, 0, 0UL, kb, kb, 0, 0, lockkb);
     return m;
 }
 // back-compat wrapper: the old rw-p default for anon/heap/stack regions with no per-segment prot.
@@ -1100,7 +1103,9 @@ static int proc_maps_fd(int smaps) {
         if (write(fd, b, (size_t)m) < 0) {}
     }
     for (int i = 0; i < g_ngmap; i++) {
-        unsigned long lo = (unsigned long)g_gmap[i].addr, hi = lo + (unsigned long)g_gmap[i].len;
+        // report the guest-VISIBLE length (glen) so a mapping's Size/Rss matches the guest's mmap length,
+        // not dd's full extent including the 64 KB guard tail it reserves past anon maps (LTP mlock05 Rss).
+        unsigned long lo = (unsigned long)g_gmap[i].addr, hi = lo + (unsigned long)g_gmap[i].glen;
         if (g_stack_hi && lo >= (unsigned long)g_stack_lo && hi <= (unsigned long)g_stack_hi)
             continue; // already emitted as [stack]
         // skip a region already rendered as PT_LOAD segments (the image span the loader tracks as one entry)
@@ -1124,16 +1129,17 @@ static int proc_status_text(char *b, size_t n) {
     unsigned long rss = (unsigned long)(atomic_load(&g_mem_charged) / 1024);
     unsigned long vsz = g_mem_max ? (unsigned long)(g_mem_max / 1024) : rss + 4096;
     if (vsz < rss) vsz = rss;
+    unsigned long vmlck = (unsigned long)(mlk_total_locked() / 1024); // mlock/mlockall'd bytes (LTP munlockall01)
     return snprintf(b, n,
                     "Name:\t%s\nUmask:\t0022\nState:\tR (running)\nTgid:\t%d\nNgid:\t0\nPid:\t%d\nPPid:\t%d\n"
                     "TracerPid:\t0\nUid:\t0\t0\t0\t0\nGid:\t0\t0\t0\t0\nFDSize:\t256\nGroups:\t\n"
-                    "VmPeak:\t%8lu kB\nVmSize:\t%8lu kB\nVmLck:\t       0 kB\nVmHWM:\t%8lu kB\nVmRSS:\t%8lu kB\n"
+                    "VmPeak:\t%8lu kB\nVmSize:\t%8lu kB\nVmLck:\t%8lu kB\nVmHWM:\t%8lu kB\nVmRSS:\t%8lu kB\n"
                     "VmData:\t%8lu kB\nVmStk:\t     132 kB\nVmExe:\t     512 kB\nVmLib:\t    2048 kB\nVmPTE:\t      32 kB\n"
                     "VmSwap:\t       0 kB\nThreads:\t1\nSigQ:\t0/31000\nSigPnd:\t0000000000000000\n"
                     "SigBlk:\t0000000000000000\nSigIgn:\t0000000000000000\nSigCgt:\t0000000000000000\n"
                     "Cpus_allowed:\t1\nCpus_allowed_list:\t0\nvoluntary_ctxt_switches:\t1\n"
                     "nonvoluntary_ctxt_switches:\t0\n",
-                    comm, pid, pid, ppid, vsz, vsz, rss, rss, rss);
+                    comm, pid, pid, ppid, vsz, vsz, vmlck, rss, rss, rss);
 }
 // /proc/[pid]/stat -- the 52-field single line (pid (comm) state ppid ...). Field 23 = vsize (bytes),
 // field 24 = rss (pages); the rest are plausible zeros. mongod's FTDC collector parses this.

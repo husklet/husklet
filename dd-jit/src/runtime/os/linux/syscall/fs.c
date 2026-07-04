@@ -858,6 +858,9 @@ static int svc_fs(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t
         struct statfs hs;
         int r;
         if (nr == 43) {
+            // A path pointer outside the address space -> EFAULT (kernel getname copy_from_user), before
+            // the buffer is examined (LTP statfs02 "bad path"). guest_bad_ptr catches a PROT_NONE page.
+            if (!a0 || guest_bad_ptr(a0, 1)) { G_RET(c) = (uint64_t)(int64_t)(-EFAULT); break; }
             char pb[4200];
             const char *p = atpath(-100, (const char *)a0, pb, sizeof pb, 0);
             r = statfs(p, &hs);
@@ -869,7 +872,9 @@ static int svc_fs(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t
             break;
         }
         uint8_t *b = (uint8_t *)a1;
-        if (!host_range_mapped((uintptr_t)a1, 120)) { G_RET(c) = (uint64_t)(int64_t)(-EFAULT); break; }
+        // The result buffer must be writable -> EFAULT on a bad/unmapped/PROT_NONE pointer (LTP statfs02
+        // "bad buf"; the engine fills this buffer itself, so guard before the writes below).
+        if (guest_bad_ptr((uintptr_t)a1, 120)) { G_RET(c) = (uint64_t)(int64_t)(-EFAULT); break; }
         memset(b, 0, 120);
         *(int64_t *)(b + 0) = 0x01021994;              // f_type (TMPFS_MAGIC; geometry is what matters)
         *(int64_t *)(b + 8) = (int64_t)hs.f_bsize;     // f_bsize
@@ -980,6 +985,23 @@ static int svc_fs(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t
     case 53:
     // fchmodat(dirfd,path,mode,flags) / fchmodat2
     case 452: {
+        // A pathname pointer outside the accessible address space -> EFAULT (kernel getname
+        // copy_from_user), before the dirfd/target is examined (LTP fchmodat02 "invalid address").
+        // guest_bad_ptr catches the PROT_NONE tst_get_bad_addr page; the reads below (jail/atpath) would
+        // otherwise consume garbage from dd's force-mapped shadow of that page and mis-report the error.
+        // fchmodat2 (452) additionally rejects unknown flag bits with EINVAL (AT_SYMLINK_NOFOLLOW|
+        // AT_EMPTY_PATH only); glibc screens fchmodat(53)'s flags in userspace so 53's a3 is never trusted.
+        if (nr == 452 && (a3 & ~((uint64_t)0x100 | 0x1000))) { G_RET(c) = (uint64_t)(int64_t)(-EINVAL); break; }
+        if (!a1 || guest_bad_ptr((uintptr_t)a1, 1)) { G_RET(c) = (uint64_t)(int64_t)(-EFAULT); break; }
+        // The kernel screens the pathname (getname) BEFORE it examines the dir-fd, so an empty path (no
+        // AT_EMPTY_PATH) is ENOENT and an over-long path is ENAMETOOLONG -- even when the dir-fd is a file
+        // (which the host fchmodat would otherwise report as ENOTDIR first). LTP fchmodat02 "path is
+        // empty" / "pathname too long" pass file_fd (a regular file) as the dir-fd.
+        {
+            const char *fp = (const char *)a1;
+            if (fp[0] == '\0') { G_RET(c) = (uint64_t)(int64_t)(-ENOENT); break; }
+            if (strnlen(fp, 4096) >= 4096) { G_RET(c) = (uint64_t)(int64_t)(-ENAMETOOLONG); break; }
+        }
         if (jail_ro_at((int)a0, (const char *)a1)) {
             G_RET(c) = (uint64_t)(int64_t)(-EROFS);
             break;

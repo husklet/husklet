@@ -67,9 +67,9 @@ static void gmap_split_unmap(uint64_t ustart, uint64_t uend) {
             continue;
         }
         if (keep_head)
-            g_gmap[i].len = ustart - base; // addr unchanged; trim to the surviving head
-        else                               // keep_tail only
-            g_gmap[i].addr = uend, g_gmap[i].len = end - uend;
+            g_gmap[i].len = g_gmap[i].glen = ustart - base; // addr unchanged; trim to the surviving head
+        else                                                // keep_tail only
+            g_gmap[i].addr = uend, g_gmap[i].len = g_gmap[i].glen = end - uend;
         if (keep_head && keep_tail) gmap_add(uend, end - uend); // middle unmap -> tail becomes a 2nd entry
         i++;
     }
@@ -255,6 +255,7 @@ static int svc_mem(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_
             anon_split_unmap(u_lo, u_hi);
             wipefork_del(u_lo, u_hi - u_lo); // a wipe-on-fork range that was unmapped no longer applies
             pn_del(u_lo, u_hi - u_lo);       // drop PROT_NONE coverage for the unmapped range
+            mlk_del(u_lo, u_hi - u_lo);      // an unmapped range is implicitly unlocked (mlock -> VmLck)
         }
         if (r == 0 && g_mem_max) {
             // uncharge (clamp >=0)
@@ -294,6 +295,7 @@ static int svc_mem(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_
             if (ext == (void *)end) {
                 gmap_del(a0);
                 gmap_add(a0, want); // track the grown extent (incl. fresh guard) for execve() teardown
+                gmap_set_glen(a0, (uint64_t)a2); // /proc maps report the guest length (sans guard)
                 anon_track(a0, want, PROT_READ | PROT_WRITE);
                 G_RET(c) = a0;
                 break;
@@ -321,6 +323,7 @@ static int svc_mem(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_
             anon_untrack(a0, (size_t)phys);
         }
         gmap_add((uint64_t)r, (uint64_t)a2 + guard);                         // track for execve() teardown
+        gmap_set_glen((uint64_t)r, (uint64_t)a2);                            // /proc maps: guest length (sans guard)
         anon_track((uint64_t)r, (uint64_t)a2 + guard, PROT_READ | PROT_WRITE); // fresh private-anon copy
         G_RET(c) = (uint64_t)r;
         break;
@@ -526,6 +529,7 @@ static int svc_mem(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_
         if (r == MAP_FAILED && charge) atomic_fetch_sub(&g_mem_charged, (uint64_t)a1);
         if (r != MAP_FAILED) {
             gmap_add((uint64_t)r, (uint64_t)a1 + guard); // track for execve() teardown
+            gmap_set_glen((uint64_t)r, (uint64_t)a1);    // /proc maps report the guest length (sans guard)
             // DONTNEED anon registry: record PRIVATE-ANON ranges (incl. the guard tail); for any other
             // (file-backed/shared) mapping, forget overlapping anon coverage -- a MAP_FIXED file map may
             // now sit where anon used to, and we must never anon-remap over it.
@@ -589,18 +593,17 @@ static int svc_mem(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_
             G_RET(c) = 0;
         }
         break;
-    // mlock(addr,len): Linux guarantees the range is RESIDENT (faulted in + wired) on return, and mincore()
-    // must then report those pages present (LTP mincore03 mlocks untouched anon pages and checks residency).
-    // The old no-op left the demand-zero pages non-resident, so mincore under-reported. macOS mlock(2) both
-    // faults the range in and wires it, giving the exact residency Linux promises. Best-effort: a failure
-    // (e.g. RLIMIT_MEMLOCK on a huge range) is swallowed and reported as success, exactly as the prior
-    // no-op did, so guests that mlock large arenas (databases) are never newly broken.
+    // mlock(addr,len): wire+fault via macOS mlock so the range is RESIDENT (LTP mincore03), AND track the
+    // range so the guest observes the lock STATE back through /proc/self/{smaps Locked:, status VmLck:}
+    // (LTP mlock05). Best-effort: a host mlock failure (RLIMIT_MEMLOCK) is swallowed as success as before.
     case 228:
         if (a1) mlock((void *)a0, (size_t)a1);
+        mlk_add(a0, (uint64_t)a1);
         G_RET(c) = 0;
         break;
-    case 229: // munlock: unwire (harmless best-effort; the pages stay valid, just swappable again).
+    case 229: // munlock: unwire + drop the tracked range.
         if (a1) munlock((void *)a0, (size_t)a1);
+        mlk_del(a0, (uint64_t)a1);
         G_RET(c) = 0;
         break;
     // Container-init compat: in the single-process model these are no-ops that return success so

@@ -283,9 +283,13 @@ static int svc_rare(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64
         }
         G_RET(c) = 0;
         break;
-    // mlockall/munlockall: no macOS equivalent; the guest's "don't swap" intent is a safe no-op
-    case 230:
-    case 231: G_RET(c) = 0; break;
+    // mlockall/munlockall: no host pinning, but the lock state is reported back via /proc VmLck:
+    // (LTP munlockall01). MCL_CURRENT|MCL_FUTURE -> whole-process lock flag; munlockall clears all.
+    case 230: g_mlock_all = 1; G_RET(c) = 0; break;
+    case 231:
+        mlk_reset();
+        G_RET(c) = 0;
+        break;
     // NUMA memory-policy syscalls (mbind/{set,get}_mempolicy/migrate_pages/move_pages). The host is a
     // single NUMA node and these are advisory placement hints, so accept them as permissive no-ops --
     // e.g. R/OpenBLAS calls mbind(2) on its large matrix buffers at startup. (arm64-normalized numbers;
@@ -320,8 +324,15 @@ static int svc_rare(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64
     case 143: G_RET(c) = setregid((gid_t)a0, (gid_t)a1) < 0 ? (uint64_t)(-errno) : 0; break; // setregid
     case 151: G_RET(c) = (uint64_t)cuid(); break; // setfsuid -> previous fsuid (container uid)
     case 152: G_RET(c) = (uint64_t)cgid(); break; // setfsgid -> previous fsgid
-    case 168:                                     // getcpu(cpu, node, tcache) -> cpu 0 / node 0
-        if (a0) *(unsigned *)a0 = 0;
+    // getcpu(cpu, node, tcache): report a CPU from the guest's affinity set (LTP getcpu01 pins to one
+    // CPU and expects it back), node 0 (single NUMA node). A cpu/node pointer outside the address space
+    // -> EFAULT (LTP getcpu02; guest_bad_ptr also catches a PROT_NONE tst_get_bad_addr page).
+    case 168:
+        if ((a0 && guest_bad_ptr(a0, sizeof(unsigned))) || (a1 && guest_bad_ptr(a1, sizeof(unsigned)))) {
+            G_RET(c) = (uint64_t)(int64_t)(-EFAULT);
+            break;
+        }
+        if (a0) *(unsigned *)a0 = affinity_first_cpu();
         if (a1) *(unsigned *)a1 = 0;
         G_RET(c) = 0;
         break;
@@ -494,8 +505,11 @@ static int svc_rare(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64
         G_RET(c) = 0;
         break;
     }
-    // mlock2(addr, len, flags): no macOS equivalent for "keep resident"; safe no-op (like mlockall)
-    case 284: G_RET(c) = 0; break;
+    // mlock2(addr, len, flags): like mlock (228) -- track the range so /proc reports it locked.
+    case 284:
+        mlk_add(a0, (uint64_t)a1);
+        G_RET(c) = 0;
+        break;
     // rt_tgsigqueueinfo(tgid, tid, sig, siginfo): thread-targeted sibling of rt_sigqueueinfo (case 138).
     // Carry si_code + si_value to the guest handler's siginfo, then raise the signal to the guest.
     case 240: {

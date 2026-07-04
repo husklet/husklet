@@ -206,6 +206,7 @@ static void fork_child_hooks(struct cpu *c) {
     ts_after_fork();     // #404: drop the inherited task-state slot cache so the child re-claims its own
     poslk_after_fork();  // #340: re-cache pid; child inherits NONE of the parent's fcntl record locks
     wipefork_apply_child(); // MADV_WIPEONFORK: zero-fill the ranges the guest marked wipe-on-fork
+    mlk_reset();            // mlock(2): memory locks are NOT inherited across fork -> child starts unlocked
     if (fp) t[4] = now_ns();
 #ifdef DD_HAS_MACH_EXC
     // The CRASHDBG Mach exception port + its receiver thread do NOT survive fork, so a crash in the
@@ -295,7 +296,9 @@ static int svc_proc(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64
     // 0, so libcap-ng negotiated a bogus (0) version and capng_apply() then failed WITHOUT setting errno
     // -> setpriv aborts "activate capabilities: Success" before it ever reaches capset. Model it properly.
     case 90: {
-        if (!a0 || !host_range_mapped(a0, 8)) {
+        // header (version + pid = 8 bytes) must be readable; NULL / outside the address space -> EFAULT
+        // (LTP capget02 "bad address header"). guest_bad_ptr also catches a PROT_NONE tst_get_bad_addr page.
+        if (!a0 || guest_bad_ptr(a0, 8)) {
             G_RET(c) = (uint64_t)(-EFAULT);
             break;
         }
@@ -306,17 +309,40 @@ static int svc_proc(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64
         case 0x20071026:                  // _LINUX_CAPABILITY_VERSION_2 (deprecated)
         case 0x20080522: u32s = 2; break; // _LINUX_CAPABILITY_VERSION_3 (2 u32 masks, 64 caps)
         default:
-            *(uint32_t *)a0 = 0x20080522;   // kernel overwrites with its preferred version ...
-            G_RET(c) = (uint64_t)(-EINVAL); // ... and reports EINVAL (this IS the probe libcap-ng runs)
+            // kernel cap_validate_magic: rewrite header->version to its preferred (v3). A pure version
+            // probe (data==NULL) then succeeds; otherwise it is EINVAL (LTP capget02 "bad version" +
+            // the libcap-ng negotiation probe). The rewrite is what the test asserts on afterwards.
+            *(uint32_t *)a0 = 0x20080522;
+            G_RET(c) = a1 ? (uint64_t)(-EINVAL) : 0;
             goto cap_done;
         }
-        // datap (a1) is an array of {effective, permitted, inheritable} per u32 block; NULL on a pure probe.
-        if (a1 && host_range_mapped(a1, (size_t)u32s * 12)) {
+        // header->pid selects the target task: <0 -> EINVAL, a dead pid -> ESRCH (LTP capget02
+        // "bad pid"/"unused pid"). 0/self/our own tid/pid resolve to this process (capget01 uses getpid()).
+        int tpid = *(int *)(a0 + 4);
+        if (tpid < 0) {
+            G_RET(c) = (uint64_t)(-EINVAL);
+            break;
+        }
+        if (tpid != 0 && tpid != container_pid() && tpid != (int)getpid() &&
+            kill((pid_t)tpid, 0) < 0 && errno == ESRCH) {
+            G_RET(c) = (uint64_t)(-ESRCH);
+            break;
+        }
+        // datap (a1) is {effective, permitted, inheritable}[u32s]; NULL on a pure version probe. A bad
+        // non-NULL datap -> EFAULT (kernel copy_to_user; capget02 "bad address data"). Report the guest's
+        // ACTUAL effective set -- g_cap_eff, narrowed by any capset() drop (e.g. a dropped CAP_NET_RAW,
+        // LTP capget01 / task D) -- rather than a blanket all-ones that over-reports capabilities.
+        if (a1) {
+            if (guest_bad_ptr(a1, (size_t)u32s * 12)) {
+                G_RET(c) = (uint64_t)(-EFAULT);
+                break;
+            }
             uint32_t *d = (uint32_t *)a1;
             for (int i = 0; i < u32s; i++) {
-                d[i * 3 + 0] = 0xffffffff; // effective
-                d[i * 3 + 1] = 0xffffffff; // permitted
-                d[i * 3 + 2] = 0xffffffff; // inheritable
+                uint32_t eff = (i == 0) ? (uint32_t)g_cap_eff : (uint32_t)(g_cap_eff >> 32);
+                d[i * 3 + 0] = eff;        // effective: the guest's live effective set (respects drops)
+                d[i * 3 + 1] = 0xffffffff; // permitted: container root holds the full set
+                d[i * 3 + 2] = 0;          // inheritable: empty (Docker default)
             }
         }
         G_RET(c) = 0;
@@ -1286,6 +1312,7 @@ static int svc_proc(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64
         xargv[ac < 255 ? ac : 255] = NULL;
         gmap_reset_all();
         pn_reset();            // the old image's PROT_NONE ranges are gone with its address space
+        mlk_reset();           // ... and so are its mlock'd ranges (VmLck resets across execve)
         g_nonpie_lo = g_nonpie_hi = 0; // reset; load_elf re-sets it iff the new main image is non-PIE
         p = xpath;
         for (int i = 0; i < ac && i < 255; i++)
