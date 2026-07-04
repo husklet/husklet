@@ -371,8 +371,21 @@ static int svc_fs(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t
         case 0x5413: case 0x5414:                                         // TIOCGWINSZ / TIOCSWINSZ
         case 0x802c542a: case 0x402c542b: case 0x402c542c: case 0x402c542d: // TCGETS2 / TCSETS2{,W,F}
             {
-                char *sn = ptsname(fd); // non-NULL only for a pty master (host master already grantpt/unlockpt'd at open)
-                if (sn) { is_master = 1; pts_slave = open(sn, O_RDWR | O_NOCTTY); if (pts_slave >= 0) tfd = pts_slave; }
+                // "Is fd a pty master?" -- apt/dpkg StartPtyMagic does TIOCSWINSZ + tcsetattr(TCSANOW) on the
+                // master WITHOUT ever opening the slave, and a macOS master ENOTTYs every termios/winsize ioctl,
+                // so mis-detecting the master here is exactly #411 ("Setting TIOCSWINSZ/TCSANOW for master fd N
+                // failed"). Consult dd's AUTHORITATIVE devpts registry first (pts_fd_is_master, stamped at
+                // /dev/ptmx-open time): it is the source of truth for every master dd handed out and costs no
+                // host syscall. ptsname(fd) is kept as an independent confirmation AND to resolve the host
+                // slave device so a SET can be live-pushed to a transient slave. A slave or ordinary tty is
+                // neither (bit clear, ptsname==NULL) -> operate on fd directly, which is correct there. (Prior
+                // code detected the master by ptsname ALONE; adding the registry makes detection authoritative
+                // rather than dependent solely on a host heuristic, so a master dd tracks is recognized even if
+                // ptsname ever fails to resolve it.)
+                is_master = pts_fd_is_master(fd);
+                char *sn = ptsname(fd); // non-NULL only for a real host pty master
+                if (sn) is_master = 1;
+                if (is_master && sn) { pts_slave = open(sn, O_RDWR | O_NOCTTY); if (pts_slave >= 0) tfd = pts_slave; }
             }
             break;
         default: break;
