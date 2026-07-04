@@ -428,6 +428,7 @@ fn compat() -> Group {
         src("math", "math.c").oracle(),
         src("strings", "strings.c").oracle(),
         src("bitops", "bitops.c").oracle(),          // popcount/clz/ctz/bswap
+        src("mov-moffs", "moffs.c").only(&[Engine::LinuxX86_64]).oracle(), // MOV A0-A3 (acc<->abs64 addr; node/V8/mongosh #119)
         src("varargs", "varargs.c").oracle(),         // stdarg + snprintf formats
         src("longjmp", "longjmp.c").out("longjmp r=42\n"),
         src("recursion", "recursion.c").oracle(),     // fib(30) + ackermann (§B depth gate)

@@ -121,6 +121,7 @@ static int x86_flag_class(struct insn *I) {
     if (op == 0xFE) { int k = I->reg & 7; return (k == 0 || k == 1) ? 0 : -1; } // inc/dec byte
     if (op == 0xFF) { int k = I->reg & 7; return (k == 0 || k == 1) ? 0 : -1; } // inc/dec (call/jmp/push -> -1)
     if ((op >= 0x88 && op <= 0x8B) || op == 0x8D) return 0;        // mov r/m,r ; r,r/m ; lea
+    if (op >= 0xA0 && op <= 0xA3) return 0;                        // mov acc <-> moffs (touches no flags)
     if ((op >= 0xB0 && op <= 0xBF) || op == 0xC6 || op == 0xC7) return 0; // mov imm
     if ((op >= 0x50 && op <= 0x5F) || op == 0x68 || op == 0x6A) return 0; // push/pop
     if (op == 0x90) return 0;                                      // nop
@@ -268,6 +269,7 @@ static int x86_flag_rw(const struct insn *I, int *rd, int *wr) {
         return XRW_UNK;
     }
     if ((op >= 0x88 && op <= 0x8B) || op == 0x8D || op == 0x63) return XRW_OK; // mov / lea / movsxd
+    if (op >= 0xA0 && op <= 0xA3) return XRW_OK;                               // mov acc <-> moffs (no flags)
     if (op >= 0xB0 && op <= 0xBF) return XRW_OK;                               // mov r, imm
     if ((op == 0xC6 || op == 0xC7) && (I->reg & 7) == 0) return XRW_OK;        // mov r/m, imm (/0 only)
     if ((op >= 0x50 && op <= 0x5F) || op == 0x68 || op == 0x6A) return XRW_OK; // push/pop/push imm

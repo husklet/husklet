@@ -57,6 +57,7 @@ static int op_has_modrm(int two, uint8_t op) {
     if (op == 0x9C || op == 0x9D || op == 0xFC || op == 0xFD || op == 0xCC || op == 0xF5 || op == 0xF8 ||
         op == 0xF9)
         return 0;                                                // pushf/popf/cld/std/int3/cmc/clc/stc
+    if (op >= 0xA0 && op <= 0xA3) return 0;                      // mov AL/eAX/rAX <-> moffs (direct addr imm, no modrm)
     if (op >= 0xA4 && op <= 0xAF) return 0;                      // movs/cmps/stos/lods/scas + test al,imm(A8/A9)
     if (op >= 0xB0 && op <= 0xBF) return 0;                      // mov r8/r, imm
     if (op < 0x40 && ((op & 7) == 4 || (op & 7) == 5)) return 0; // ALU al/eAX, imm (04/05,0C/0D,...,3C/3D)
@@ -95,6 +96,7 @@ static int op_imm_bytes(struct insn *I) {
     if (op == 0xEB || op == 0xE3) return 1;                               // jmp rel8 / jrcxz rel8
     if (op == 0xE0 || op == 0xE1 || op == 0xE2) return 1;                 // loopne/loope/loop rel8
     if (op == 0xE9 || op == 0xE8) return 4;                               // jmp/call rel32
+    if (op >= 0xA0 && op <= 0xA3) return I->addr32 ? 4 : 8;               // mov moffs: address-size direct offset (64-bit default; 4 under 0x67)
     if (op >= 0xB0 && op <= 0xB7) return 1;                               // mov r8, imm8
     if (op >= 0xB8 && op <= 0xBF) return os == 8 ? 8 : (os == 2 ? 2 : 4); // mov r,imm (movabs if W)
     if (op < 0x40 && (op & 7) == 4) return 1;                             // ALU al, imm8
