@@ -196,6 +196,9 @@ static int gna_hit(uint64_t a, uint64_t len) {
         if (a < g_gna[i].hi && end > g_gna[i].lo) return 1;
     return 0;
 }
+// execve replaces the whole address space -> drop all tracked PROT_NONE ranges (they're gone with the old
+// image; a stale entry could otherwise wrongly EFAULT a fresh mapping the new image lays at the same address).
+static void gna_reset(void) { __atomic_store_n(&g_ngna, 0, __ATOMIC_RELEASE); }
 
 // True iff host virtual address `a` is currently mapped. mincore() is useless on macOS (returns 0 for ANY
 // address), so query the VM map directly: mach_vm_region returns the first region at-or-above `a`, and `a`
