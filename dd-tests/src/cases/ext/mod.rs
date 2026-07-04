@@ -27,6 +27,7 @@ pub mod procfs;     // /proc /sys /dev pseudo-file CONTENT conformance + permiss
 pub mod procexe;    // /proc/self/exe + readlink/readlinkat surface: exe canonicalization, magic links, execveat (#370/#317)
 pub mod pcachex;    // #339 persistent translated-code cache: fork/exec/thread lifecycle under DDJIT_PCACHE=1
 pub mod forkx;      // #371 preserved-arena fork: 1000-fork mixed-pattern storm (exit/work/cold/exec/nested)
+pub mod execfaultx; // #139/#222 fork->execve child faults + CRASHDBG Mach exception-port guest-fault delivery
 pub mod dentry;     // #372 positive dentry/path-resolution cache: mutation<->lookup coherence storms
 pub mod ltpgaps;    // #398 LTP gap cluster: dup/fcntl flags, link/lstat, socket error paths, prctl/nanosleep/sched/read
 
@@ -54,6 +55,7 @@ pub fn all() -> Vec<Group> {
     g.extend(procexe::groups());
     g.extend(pcachex::groups());
     g.extend(forkx::groups());
+    g.extend(execfaultx::groups());
     g.extend(dentry::groups());
     g.extend(ltpgaps::groups());
     g
