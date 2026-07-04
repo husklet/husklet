@@ -31,6 +31,7 @@ pub mod execfaultx; // #139/#222 fork->execve child faults + CRASHDBG Mach excep
 pub mod dentry;     // #372 positive dentry/path-resolution cache: mutation<->lookup coherence storms
 pub mod ltpgaps;    // #398 LTP gap cluster: dup/fcntl flags, link/lstat, socket error paths, prctl/nanosleep/sched/read
 pub mod scratchx;   // #231 scratch/distroless loader-exec: a static binary as the sole file in an empty rootfs
+pub mod fs;         // FILESYSTEM/STORAGE: statfs f_type+geometry per mount, /proc/mounts+mountinfo+filesystems
 
 pub fn all() -> Vec<Group> {
     let mut g = vec![];
@@ -60,5 +61,6 @@ pub fn all() -> Vec<Group> {
     g.extend(dentry::groups());
     g.extend(ltpgaps::groups());
     g.extend(scratchx::groups());
+    g.extend(fs::groups());
     g
 }
