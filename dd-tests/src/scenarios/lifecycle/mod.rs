@@ -56,6 +56,25 @@ docker run --name ${C}c $PLAT $IMG true >/dev/null
 docker rm ${C}c >/dev/null
 docker ps -a -q -f name=${C}c | wc -l | tr -d " ""#).has("0"),
 
+        // rm <a> <b> <c> : `docker rm` takes MULTIPLE ids/names in one invocation (the CLI issues one
+        // DELETE /containers/<ref> per ref). All three stopped containers must be gone after a single rm,
+        // and rm must print each removed ref. Parity-verified against the real docker oracle.
+        s("lifecycle/rm-multi").host(r#"
+docker run --name ${C}a $PLAT $IMG true >/dev/null
+docker run --name ${C}b $PLAT $IMG true >/dev/null
+docker run --name ${C}c $PLAT $IMG true >/dev/null
+OUT=$(docker rm ${C}a ${C}b ${C}c)
+echo "printed=$(echo "$OUT" | grep -c "${C}")"
+echo "left=$(docker ps -a -q -f name=${C}a -f name=${C}b -f name=${C}c | wc -l | tr -d " ")""#)
+            .has("printed=3").has("left=0"),
+
+        // rm -f <a> <b> : force-remove MULTIPLE running containers in one invocation.
+        s("lifecycle/rm-multi-force").host(r#"
+docker run -d --name ${C}a $PLAT $IMG sleep 300 >/dev/null
+docker run -d --name ${C}b $PLAT $IMG sleep 300 >/dev/null; sleep 0.3
+docker rm -f ${C}a ${C}b >/dev/null
+echo "left=$(docker ps -a -q -f name=${C}a -f name=${C}b | wc -l | tr -d " ")""#).has("left=0"),
+
         // rm -f : plain rm refuses a running container; -f force-removes it
         s("lifecycle/rm-force").host(r#"
 docker run -d --name ${C}c $PLAT $IMG sleep 300 >/dev/null; sleep 0.3
