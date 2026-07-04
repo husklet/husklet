@@ -602,6 +602,9 @@ static int svc_io(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t
         memf_materialize((int)a0); // source: a 2nd fd shares the description -> flush RAM cache
         memf_close((int)a1);       // target fd is about to be reused; drop any cache it held
         engine_fd_vacate((int)a1); // move any engine-private fd off the target before dup2 overwrites it
+        fd_reset_emul((int)a1);    // #224: dup2 atomically closes newfd -> shed ALL its emulation tables (timerfd/
+                                   // eventfd/inotify/epoll/sock/...) so the reused number isn't left misrouted; the
+                                   // real close is dup2's, and fd_carry_sock below repopulates from oldfd
         int r = dup2((int)a0, (int)a1);
         if (r >= 0) {
             if (d3flags & 0x80000) fcntl(r, F_SETFD, FD_CLOEXEC); // O_CLOEXEC

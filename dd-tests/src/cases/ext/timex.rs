@@ -18,5 +18,12 @@ fn timex() -> Group {
         src("clocknanosleep", "ext_timex/clocknanosleep.c").oracle(),
         // Linux-specific clock ids (no macOS equivalent) -> native oracle
         src("clockids", "ext_timex/clockids.c").oracle(),
+        // #415 POSIX per-process timers (timer_create/settime/gettime/getoverrun/delete): SIGEV_SIGNAL on
+        // REALTIME+MONOTONIC with si_code/si_value, remaining-time, overrun accumulation, SIGEV_NONE, and the
+        // EINVAL/EFAULT error surface. timer_create has no macOS libc -> Linux-only, diffed vs native oracle.
+        src("posixtimer", "ext_timex/posixtimer.c").only(&[Engine::LinuxAarch64, Engine::LinuxX86_64]).oracle(),
+        // #415 timerfd (create/settime/gettime + expiration-count read): relative + periodic + TFD_TIMER_ABSTIME,
+        // remaining time, disarm, and the EINVAL/EFAULT error surface. No macOS equivalent -> Linux-only oracle.
+        src("timerfdx", "ext_timex/timerfdx.c").only(&[Engine::LinuxAarch64, Engine::LinuxX86_64]).oracle(),
     ])
 }

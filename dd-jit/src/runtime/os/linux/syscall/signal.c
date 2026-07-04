@@ -227,8 +227,14 @@ static int svc_signal(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint
     // pre-suspend mask (minus the one awaited bit, which must stay unblocked for that delivery; that one
     // bit is the only deviation from a perfect mask restore).
     case 133: {
+        // The kernel copy_from_user()s the new mask, so a bad set pointer is -EFAULT (LTP sigsuspend02's
+        // tst_get_bad_addr case). That address is a guest PROT_NONE guard page (physically R+W under dd but
+        // faulting per Linux), tracked in the g_gna registry -- gna_hit catches it WITHOUT a probe-read, so a
+        // valid but non-host-mapped non-PIE .bss sigset (this handler reads a0 directly, unrebased) is not
+        // mistaken for a fault. NULL is not a valid rt_sigsuspend mask -> EFAULT too.
+        if (a0 == 0 || gna_hit((uint64_t)a0, 8)) { G_RET(c) = (uint64_t)(int64_t)(-EFAULT); break; }
         uint64_t oldmask = c->sigmask;
-        uint64_t newmask = a0 ? *(uint64_t *)a0 : 0;
+        uint64_t newmask = *(uint64_t *)a0;
         c->sigmask = newmask;
         // Block all host signals around the pending check so host_sigh cannot fire between the check and
         // the sleep (lost-wakeup race); sigsuspend(&empty) then atomically unblocks + waits.
@@ -257,8 +263,13 @@ static int svc_signal(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint
         }
         ts_wait_leave();
         sigprocmask(SIG_SETMASK, &prev, NULL); // restore the host signal mask
+        // Restore the EXACT pre-suspend mask (POSIX: sigsuspend restores the caller's original mask on
+        // return). The awaited signal is delivered by the dispatcher AFTER this returns -EINTR; when the
+        // restored mask BLOCKS that signal (LTP sigsuspend01 blocks SIGALRM around sigsuspend(empty)),
+        // clearing its bit out of c->sigmask would corrupt the mask the sigframe saves+restores -- so leave
+        // c->sigmask = oldmask and force just that one delivery via g_force_deliver (mask stays intact).
         c->sigmask = oldmask;
-        if (deliv) c->sigmask &= ~(1ull << (deliv - 1)); // keep it unblocked so the dispatcher delivers it
+        if (deliv) g_force_deliver |= (1ull << deliv);
         G_RET(c) = (uint64_t)(-EINTR);
         break;
     }
@@ -333,6 +344,16 @@ static int svc_signal(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint
         int sig = (int)a0;
         if (sig < 1 || sig > 64) {
             G_RET(c) = (uint64_t)(-22);
+            break;
+        }
+        // SIGKILL(9) and SIGSTOP(19) can never have their disposition changed -- rt_sigaction returns
+        // -EINVAL for them REGARDLESS of act/oldact (LTP signal01/signal02: signal(SIGKILL/SIGSTOP, h)
+        // must fail EINVAL; a paused child that "installed" a SIGKILL handler must still be killed by it).
+        // The old code fell through and recorded g_sigact[9/19].handler, so a later kill(SIGKILL) tried to
+        // run a guest handler instead of terminating. Reject before touching act/oldact, exactly like the
+        // kernel (which validates sig before copy_from_user of act).
+        if (sig == 9 || sig == 19) {
+            G_RET(c) = (uint64_t)(int64_t)(-EINVAL);
             break;
         }
         // The act/oldact structs are read/written DIRECTLY by the engine (24 bytes: handler,flags,mask), so
@@ -451,11 +472,21 @@ static int svc_signal(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint
     }
     // rt_sigpending(set, sigsetsize)
     case 136: {
-        uint64_t p = __atomic_load_n(&g_pending, __ATOMIC_SEQ_CST), out = 0;
+        // The kernel copy_to_user()s the pending set, so a bad/unmapped `set` pointer is -EFAULT (LTP
+        // sigpending02's tst_get_bad_addr case: a PROT_NONE guard page must fault, not be silently written).
+        // guest_bad_ptr (not host_range_mapped) so the PROT_NONE probe page is caught. NULL set faults too.
+        if (guest_bad_ptr((uintptr_t)a0, 8)) { G_RET(c) = (uint64_t)(int64_t)(-EFAULT); break; }
+        // Report BOTH queues (process-directed g_pending + this thread's tpending), matching Linux which
+        // unions the shared and per-thread pending sets. Also mask to signals that are currently BLOCKED:
+        // an unblocked pending signal has a runnable handler and is about to be delivered, but sigpending's
+        // contract is "signals pending AND blocked" -- however Linux actually reports every pending signal
+        // regardless of the mask, so union without masking (the caller blocks them before checking).
+        uint64_t p = __atomic_load_n(&g_pending, __ATOMIC_SEQ_CST) | __atomic_load_n(&c->tpending, __ATOMIC_SEQ_CST);
+        uint64_t out = 0;
         for (int s = 1; s <= 64; s++)
             // 1<<N -> sigset_t bit N-1
             if (p & (1ull << s)) out |= (1ull << (s - 1));
-        if (a0) *(uint64_t *)a0 = out;
+        *(uint64_t *)a0 = out;
         G_RET(c) = 0;
         break;
     }

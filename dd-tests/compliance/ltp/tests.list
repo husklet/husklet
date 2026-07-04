@@ -355,7 +355,12 @@ ipc     msgrcv      msgrcv/msgrcv01.c
 ipc     semget      semget/semget01.c
 ipc     semget      semget/semget02.c
 ipc     semget      semget/semget05.c
-ipc     semctl      semctl/semctl01.c
+# semctl01: excluded — build-incompat, not a dd gap. Its test table uses
+# unprototyped `void (*func_setup)()` fields but calls them with an argument;
+# gcc-14 reads empty-paren as (void) and rejects "too many arguments", and no
+# -fpermissive/-std flag rescues it (gnu89 then breaks the modern tst_safe
+# headers it also pulls). Would need a source patch (out of scope for the lane).
+# ipc     semctl      semctl/semctl01.c
 ipc     semctl      semctl/semctl02.c
 ipc     semop       semop/semop01.c
 ipc     semop       semop/semop02.c
@@ -465,8 +470,14 @@ mm      madvise     madvise/madvise05.c
 mm      madvise     madvise/madvise06.c
 mm      madvise     madvise/madvise08.c
 mm      madvise     madvise/madvise11.c
-mm      mbind       mbind/mbind01.c
-mm      mbind       mbind/mbind02.c
+# mbind01/02: excluded — build-env limitation, not a dd gap. Both #include the
+# NUMA helper (testcases/kernel/include/numa_helper.h -> numa_helper.c) which
+# needs libnuma / <numaif.h>; libnuma-dev is not installed on the cross-build
+# host, so they cannot link here. (dd could still be exercised on mbind if the
+# devel lib were present — re-enable then, adding -I testcases/kernel/include,
+# building numa_helper.c and linking -lnuma.)
+# mm      mbind       mbind/mbind01.c
+# mm      mbind       mbind/mbind02.c
 
 # ---- epoll / eventfd / signalfd / inotify ----
 poll    epoll_create    epoll_create/epoll_create01.c

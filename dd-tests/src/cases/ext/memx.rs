@@ -25,5 +25,11 @@ fn memx() -> Group {
         // out-of-range EINVAL, MAP_POPULATE zero-fill, mincore residency + EINVAL, MADV_DONTNEED zeroing,
         // MADV_WILLNEED/FREE, and MADV_WIPEONFORK/KEEPONFORK. Diffed vs native on both Linux arches.
         src("mmsem", "ext_mm/mmsem.c").oracle(),
+        // #417: the mmap/msync/madvise/mremap errno+flag surface not pinned above -- MAP_NORESERVE usable,
+        // MAP_SHARED-write of an O_RDONLY fd -> EACCES (private ok), msync flag validation (MS_SYNC/ASYNC
+        // ok, both-set/unknown-bit -> EINVAL), MADV_DONTFORK/DOFORK accepted, and mremap(MREMAP_FIXED)
+        // relocate-to-exact-addr + its FIXED-without-MAYMOVE / mis-aligned EINVAL guards. Byte-exact vs
+        // native on both Linux arches (fixes: mem.c mremap MREMAP_FIXED + msync flag EINVAL).
+        src("mmerr", "ext_mm/mmerr.c").oracle(),
     ])
 }

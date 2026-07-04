@@ -164,6 +164,14 @@ static int sig_m2l(int s) {
                                         23, 19, 20, 18, 17, 21, 22, 29, 24, 25, 26, 27, 28, 29, 10, 12};
     return (s >= 1 && s <= 31) ? T[s] : s;
 }
+// sigsuspend/pause force-delivery mask (per-thread, bit = 1<<signo, same convention as g_pending). When
+// rt_sigsuspend is interrupted by a signal it awaited, POSIX runs that handler DURING the suspend and then
+// restores the pre-suspend mask on return -- so the handler must be delivered even when the restored mask
+// BLOCKS it. Rather than clear the bit out of c->sigmask (which corrupted the mask the sigframe saves and
+// restores -- LTP sigsuspend01), the syscall leaves c->sigmask at the correct post-suspend value and marks
+// the awaited signal here; maybe_deliver_signal then delivers it once, ignoring the mask, and the sigframe
+// saves/restores the true post-suspend mask. Cleared as the signal is claimed for delivery.
+static __thread uint64_t g_force_deliver;
 // signalfd self-pipe (write end poked from host_sigh)
 static int g_sigfd_pipe[2] = {-1, -1};
 // its read end (the guest's signalfd)
@@ -238,11 +246,15 @@ static void maybe_deliver_signal(struct cpu *c) {
     uint64_t p = __atomic_load_n(&g_pending, __ATOMIC_SEQ_CST) | __atomic_load_n(&c->tpending, __ATOMIC_SEQ_CST);
     for (int sig = 1; sig <= 64; sig++) {
         uint64_t bit = 1ull << sig;
-        // sigmask is sigset_t (bit N-1)
-        if (!(p & bit) || (c->sigmask & (1ull << (sig - 1)))) continue;
+        // sigmask is sigset_t (bit N-1). A signal blocked by the mask is normally not delivered -- UNLESS it
+        // was force-marked by rt_sigsuspend/pause (POSIX: the awaited handler runs during the suspend even
+        // though the restored mask blocks it). g_force_deliver overrides the mask for exactly that one bit.
+        if (!(p & bit)) continue;
+        if ((c->sigmask & (1ull << (sig - 1))) && !(g_force_deliver & bit)) continue;
         uint64_t h = g_sigact[sig].handler;
         if (h <= 1) {
-            // No guest handler -- clear this pending instance from both queues.
+            // No guest handler -- clear this pending instance from both queues (and any force mark).
+            g_force_deliver &= ~bit;
             __atomic_and_fetch(&g_pending, ~bit, __ATOMIC_SEQ_CST);
             __atomic_and_fetch(&c->tpending, ~bit, __ATOMIC_SEQ_CST);
             // A SIG_DFL signal whose default action TERMINATES, still pending at the container init, was NOT
@@ -264,7 +276,17 @@ static void maybe_deliver_signal(struct cpu *c) {
         uint64_t had_t = __atomic_fetch_and(&c->tpending, ~bit, __ATOMIC_SEQ_CST) & bit;
         uint64_t had_p = __atomic_fetch_and(&g_pending, ~bit, __ATOMIC_SEQ_CST) & bit;
         if (had_t || had_p) {
-            build_signal_frame(c, sig);
+            g_force_deliver &= ~bit; // consumed: the sigframe (built below) saves the true post-suspend mask
+            uint64_t flags = g_sigact[sig].flags;
+            build_signal_frame(c, sig); // captures g_sigact[sig].handler as the target PC -- must run first
+            // SA_RESETHAND (SA_ONESHOT, 0x80000000): the disposition reverts to SIG_DFL after this single
+            // delivery (the handler PC is already baked into the frame above). Reset both the recorded
+            // disposition and the emulated host disposition, so a second occurrence takes the default action
+            // (LTP-style signal()-with-caller-reset semantics; glibc's legacy signal() sets SA_RESETHAND).
+            if (flags & 0x80000000ull) {
+                g_sigact[sig].handler = 0;
+                if (sig != 9 && sig != 19 && !sig_is_sync(sig)) signal(sig_l2m(sig), SIG_DFL);
+            }
             return;
         }
     }

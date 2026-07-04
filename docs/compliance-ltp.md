@@ -82,6 +82,95 @@ on both arches, none are x86-only in this subset.
 
 ---
 
+## Wave-3 update (2026-07-03): support-lib build-glue expansion (#414)
+
+The curated list had **80 tests/arch that failed to COMPILE** (missing LTP
+support-library glue, not dd bugs). Those are now built and scored. Nothing in
+the engine changed; only the lane's `build.sh` / `config.h` / `tests.list`.
+
+**Compile coverage (both arches, identical):**
+
+| | before | after |
+|---|---|---|
+| tests compiling | 353 / 433 | **430 / 433** |
+| fail-to-compile | 80 | **0** (3 excluded, justified below) |
+
+**Build-glue fixes** (all in `dd-tests/compliance/ltp/`):
+- `-fpermissive` added to the test CFLAGS — down-grades gcc-14's now-hard
+  *incompatible-pointer* permerror (old-API tests pass `void(*)(int)` where
+  `tst_sig`/`signal` want `void(*)(void)`). Fixed ~16 fileio/mm/proc/sched tests.
+- `-I testcases/kernel/syscalls/utils` — supplies the shared per-family test
+  headers that live there, not in `include/`: `compat_16.h` + `compat_tst_16.h`
+  (the 16-bit uid/gid chown + cred tests) and `mq.h` + `mq_timed.h` (mqueue).
+- `config.h`: `HAVE_STRUCT_FILE_ATTR` (modern UAPI `<linux/fs.h>` now defines
+  `struct file_attr` — stop lapi re-declaring it: statx04/05/08/09, setxattr03,
+  utimensat01) and `HAVE_SYS_TIMERFD_H` + `HAVE_TIMERFD_{CREATE,GETTIME,SETTIME}`
+  (pull `TFD_*` from glibc `<sys/timerfd.h>`: timerfd01/02/04, timerfd_settime02).
+- `build.sh` lib build now folds in the SysV-IPC helper
+  `libs/newipc/tse_newipc.c` (`getipckey`, `probe_free_addr`, …) so msg*/sem*/
+  shm*/kill05 link, and adds a **`-std=gnu89` fallback** (modern flags first,
+  gnu89 only on failure) for the K&R-flavoured old-API sources — `parse_opts.c`
+  (`usc_test_looping`, `usc_global_setup_hook`), `tst_sig.c`, `random_range.c` —
+  and the handful of old-API tests (signalfd4, mremap05, renameat201/202).
+
+**Excluded (3, build-env limits — NOT dd gaps, justified in `tests.list`):**
+- `mbind01`, `mbind02` — need `libnuma`/`<numaif.h>` (`numa_helper.c`); the
+  cross-build host has no `libnuma-dev`. Re-enable when the devel lib is present.
+- `semctl01` — its test table uses unprototyped `void (*func_setup)()` fields but
+  calls them with an argument; gcc-14 reads `()` as `(void)` and rejects it, and
+  no flag rescues it (gnu89 then breaks the modern `tst_safe_*` headers it pulls).
+
+**Newly-compiling tests scored (77/arch, dd vs native/qemu):**
+
+| lane | ok | DD-GAP | oracle-nonpass (skip) |
+|------|----|--------|-----------------------|
+| dd-arm64   | 17 | 25 | 35 |
+| dd-x86_64  | 20 | 21 | 36 |
+
+`ok` (pass both, added coverage): chown01, fchown01, getresgid01, getresuid01,
+getuid01, geteuid01, mremap04, rename14, renameat202, sched_yield01, setgid01,
+setsid01, setuid01, shmdt02, signalfd4_01, signalfd4_02, timerfd02, plus
+getgroups01/msgget01/semop01 on x86_64.
+
+### New gaps found (grouped by root cause)
+
+- **GAP-W3a — SysV IPC control ops unimplemented (both arches).** `msgctl()` and
+  `semctl()` return **ENOSYS(38)** → msgctl01, semget01 (setup), and cascades.
+  `msgget01`/`msgrcv01` setup also break. dd does not implement the System V
+  msg/sem control surface.
+- **GAP-W3b — arm64-only EFAULT on pointer-arg syscalls (x86 PASSes).** On
+  aarch64, `getgroups()` (getgroups01), `semop()` (semop01: 4× `TFAIL semop()
+  EFAULT`), and `msgsnd()` (msgsnd01) all return **EFAULT(14)** for a *valid*
+  user buffer; the same tests pass under the x86_64 engine. Strong signal of an
+  arm64 argument-pointer translation/validation bug for these handlers.
+- **GAP-W3c — POSIX mqueue.** `mq_notify()` → **ENOSYS** (mq_notify01, both).
+  `mq_timedsend`/`mq_timedreceive` return the wrong errno (**EAGAIN** where
+  **EINVAL** is expected for a bad `msg_len`/abs-timeout) — mq_timedsend01,
+  mq_timedreceive01, both arches.
+- **GAP-W3d — timerfd absolute-time / settime hangs.** `timerfd_settime02`
+  **TIMES OUT** (both); `timerfd01` completes 1 of 12 assertions then hangs at
+  the `TFD_TIMER_ABSTIME` re-arm. timerfd02 (flags only) passes — the abs-time
+  settime path is the gap.
+- **GAP-W3e — mremap MREMAP_FIXED.** `mremap03` **HANGS on arm64 / CRASHes
+  (exit 255) on x86_64**. `mremap05` (both): `MREMAP_FIXED` returns a live
+  address where the kernel rejects the request (`MREMAP_FIXED` w/o `MAYMOVE`,
+  unaligned new_addr, overlap all wrongly succeed).
+- **GAP-W3f — *at() family errno/flag handling.** `fstatat01`: `fstatat()`
+  *succeeds* where the oracle expects a failure (missing error path).
+  `linkat01`: returns **EOPNOTSUPP(95)** where **ENOTDIR/EXDEV** expected.
+  `symlinkat01`: **EOPNOTSUPP** where success expected. `renameat201`: **ENOENT**
+  where **EINVAL** expected for a bad `renameat2` flag.
+- **GAP-W3g — /proc SysV-IPC surface missing.** `/proc/sysvipc/shm` (shmget03)
+  and `/proc/sys/kernel/sem` (semget05) return **ENOENT** — the tests BROK/CONF.
+- **GAP-W3h — bare-binary uid mapping (low priority / environment).** cred tests
+  run as a bare static binary see the *host* uid **501** while
+  `/proc/self/status` reports **0**, and `getpwuid()` has no matching passwd
+  entry → getegid01/02, geteuid02, getgid03, getuid03 TFAIL/TBROK. This is the
+  no-container-userns bare-run harness, not a syscall bug; would resolve under a
+  real container rootfs. Noted, not ranked with the syscall gaps.
+
+---
+
 ## Per-category breakdown (dd-arm64: syscall-PASS / oracle-PASS)
 
 | category | score | notes |

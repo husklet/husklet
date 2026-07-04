@@ -21,7 +21,11 @@ struct gtimer {
     uint64_t sigval;     // sigev_value (carried into the delivered siginfo si_value)
     uint64_t interval_ns;// it_interval (0 => one-shot)
     uint64_t next_ns;    // absolute CLOCK_MONOTONIC ns of the next expiry (0 => disarmed)
+    uint64_t sched_ns;   // absolute CLOCK_MONOTONIC ns of the next UNDELIVERED expiry (may be in the PAST for
+                         // a TIMER_ABSTIME arm whose deadline already elapsed) -- drives the true overrun count
     int periodic_armed;  // the kqueue entry is already periodic (no re-arm needed on fire)
+    int64_t overrun_accum; // expirations piled up while the signal is still queued (not yet consumed); the
+                           // drain thread grows this each time it fires with the signal already pending
     int overrun;         // overrun count of the LAST delivered expiry (timer_getoverrun) [atomic]
 };
 static struct gtimer g_gtimer[GTIMER_MAX];
@@ -57,6 +61,8 @@ static void gtimer_disarm(int id) {
     EV_SET(&kv, (uintptr_t)id, EVFILT_TIMER, EV_DELETE, 0, 0, NULL);
     kevent(g_gtimer_kq, &kv, 1, NULL, 0, NULL); // ENOENT if the one-shot already fired -> ignore
     g_gtimer[id].next_ns = 0;
+    g_gtimer[id].sched_ns = 0;
+    g_gtimer[id].overrun_accum = 0;
     g_gtimer[id].periodic_armed = 0;
 }
 // fill an itimerspec at `out`: it_interval [0..16), it_value=remaining [16..32). A disarmed timer
@@ -85,18 +91,42 @@ static void *gtimer_loop(void *arg) {
         struct gtimer *t = &g_gtimer[id];
         pthread_mutex_lock(&g_gtimer_lk);
         if (!t->used || t->next_ns == 0) { pthread_mutex_unlock(&g_gtimer_lk); continue; } // raced delete/disarm
-        int fires = (int)ev.data; // kqueue coalesces missed fires into .data
-        if (fires < 1) fires = 1;
+        // Overrun = extra expirations that piled up since the last delivery, counted from the SCHEDULED
+        // deadline (sched_ns) rather than kqueue's coalesced .data -- which under-counts a periodic timer
+        // whose first ABSTIME deadline was already in the past (its .data on the promoting one-shot is 1,
+        // but the kernel reports every elapsed period). Capped at INT_MAX, exactly like the kernel's
+        // timer_overrun (LTP timer_settime03). For a one-shot (interval 0) overrun is always 0.
+        uint64_t now = gtimer_now_ns();
+        int64_t missed = 0;
+        if (t->interval_ns > 0 && t->sched_ns && now > t->sched_ns)
+            missed = (int64_t)((now - t->sched_ns) / t->interval_ns);
         if (!t->periodic_armed && t->interval_ns > 0) {
             gtimer_arm(id, t->interval_ns, t->interval_ns); // two-phase: promote to periodic now
-            t->next_ns = gtimer_now_ns() + t->interval_ns;
+            t->next_ns = now + t->interval_ns;
+            t->sched_ns += (uint64_t)(missed + 1) * t->interval_ns; // advance past the delivered expiries
         } else if (t->periodic_armed) {
-            t->next_ns = gtimer_now_ns() + t->interval_ns;  // advance bookkeeping deadline
+            t->next_ns = now + t->interval_ns;              // advance bookkeeping deadline
+            t->sched_ns += (uint64_t)(missed + 1) * t->interval_ns;
         } else {
             t->next_ns = 0;                                 // pure one-shot is done -> disarmed
+            t->sched_ns = 0;
         }
-        __atomic_store_n(&t->overrun, fires - 1, __ATOMIC_SEQ_CST);
-        int notify = t->notify, signo = t->signo;
+        // Overrun accounting: the count returned by timer_getoverrun is the number of EXTRA expirations that
+        // occurred for the expiry currently being delivered. Two independent sources pile up: (a) `missed`
+        // periods already elapsed against the scheduled deadline (a past TIMER_ABSTIME start, or a slow drain
+        // thread) and (b) whole expirations that arrived while a PRIOR signal from this timer was still queued
+        // and unconsumed (the guest blocked it, or hasn't reached a delivery point). g_pending having this
+        // timer's signo bit set means the previous expiry hasn't been consumed yet -> this expiry is itself an
+        // overrun, so accumulate; otherwise the prior signal was consumed and a fresh generation starts, whose
+        // overrun-so-far is just `missed`. Capped at INT_MAX exactly like the kernel (LTP timer_settime03).
+        int signo = t->signo;
+        int already_queued = (signo >= 1 && signo <= 64) &&
+                             ((__atomic_load_n(&g_pending, __ATOMIC_SEQ_CST) >> signo) & 1);
+        if (already_queued) t->overrun_accum += missed + 1;
+        else t->overrun_accum = missed;
+        if (t->overrun_accum > 2147483647LL) t->overrun_accum = 2147483647LL;
+        __atomic_store_n(&t->overrun, (int)t->overrun_accum, __ATOMIC_SEQ_CST);
+        int notify = t->notify;
         uint64_t sv = t->sigval;
         pthread_mutex_unlock(&g_gtimer_lk);
         // SIGEV_NONE: pollable only (timer_gettime/_getoverrun) -- the bookkeeping above is enough.
@@ -384,6 +414,13 @@ static int svc_time(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64
         // REALTIME(0)..MONOTONIC_RAW(4), the COARSE pair (5/6), BOOTTIME(7), the ALARM clocks (8/9) and
         // TAI(11); anything outside [0,11] is rejected. (LTP timer_create: bad clockid case.)
         if ((int)a0 < 0 || (int)a0 > 11) { t->used = 0; pthread_mutex_unlock(&g_gtimer_lk); G_RET(c) = (uint64_t)(-EINVAL); break; }
+        // EFAULT (after the clockid EINVAL, matching the kernel: clockid_to_kclock before copy_from_user):
+        // a non-NULL sigevent must be a readable 16-byte struct (the engine memcpys it below), and the
+        // timerid out-pointer must be writable -- a bad address is -EFAULT, not an engine fault (LTP
+        // timer_create02: bad sigevent / bad timer-id addr via tst_get_bad_addr). NULL sigevent is the POSIX
+        // default (checked separately below); NULL timerid, however, has nowhere to store the id -> EFAULT.
+        if (a1 && guest_bad_ptr((uintptr_t)a1, 16)) { t->used = 0; pthread_mutex_unlock(&g_gtimer_lk); G_RET(c) = (uint64_t)(int64_t)(-EFAULT); break; }
+        if (guest_bad_ptr((uintptr_t)a2, 4)) { t->used = 0; pthread_mutex_unlock(&g_gtimer_lk); G_RET(c) = (uint64_t)(int64_t)(-EFAULT); break; }
         if (a1) {
             // struct sigevent: sigev_value [0..8), sigev_signo [8..12), sigev_notify [12..16)
             uint64_t sigval; int signo, notify;
@@ -423,13 +460,23 @@ static int svc_time(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64
         pthread_mutex_lock(&g_gtimer_lk);
         struct gtimer *t = &g_gtimer[id];
         if (!t->used) { pthread_mutex_unlock(&g_gtimer_lk); G_RET(c) = (uint64_t)(-EINVAL); break; }
-        if (a3) gtimer_fill_curr(t, (void *)a3); // report the current setting before re-arming
+        // timer_settime(2) error surface, matching the kernel + LTP timer_settime02:
+        //   NULL new_value        -> EINVAL (the kernel's `if (!new_setting) return -EINVAL`)
+        //   bad (non-NULL) new    -> EFAULT (copy_from_user)
+        //   bad (non-NULL) old    -> EFAULT (copy_to_user of the previous setting)
+        //   tv_nsec out of [0,1e9) or negative tv_sec -> EINVAL (itimerspec64_valid)
+        // Validate BEFORE reporting old / re-arming so a bad pointer never faults the engine or half-applies.
+        if (a2 == 0) { pthread_mutex_unlock(&g_gtimer_lk); G_RET(c) = (uint64_t)(int64_t)(-EINVAL); break; }
+        if (guest_bad_ptr((uintptr_t)a2, 32)) { pthread_mutex_unlock(&g_gtimer_lk); G_RET(c) = (uint64_t)(int64_t)(-EFAULT); break; }
+        if (a3 && guest_bad_ptr((uintptr_t)a3, 32)) { pthread_mutex_unlock(&g_gtimer_lk); G_RET(c) = (uint64_t)(int64_t)(-EFAULT); break; }
         // itimerspec: it_interval [0..16), it_value [16..32)
         uint64_t ivs = 0, ivn = 0, vls = 0, vln = 0;
-        if (a2) {
-            memcpy(&ivs, (void *)a2, 8);          memcpy(&ivn, (void *)(a2 + 8), 8);
-            memcpy(&vls, (void *)(a2 + 16), 8);   memcpy(&vln, (void *)(a2 + 24), 8);
+        memcpy(&ivs, (void *)a2, 8);          memcpy(&ivn, (void *)(a2 + 8), 8);
+        memcpy(&vls, (void *)(a2 + 16), 8);   memcpy(&vln, (void *)(a2 + 24), 8);
+        if (ivn >= 1000000000ull || vln >= 1000000000ull || (int64_t)ivs < 0 || (int64_t)vls < 0) {
+            pthread_mutex_unlock(&g_gtimer_lk); G_RET(c) = (uint64_t)(int64_t)(-EINVAL); break;
         }
+        if (a3) gtimer_fill_curr(t, (void *)a3); // report the current setting before re-arming
         if (vls == 0 && vln == 0) { // it_value all-zero => disarm (regardless of it_interval)
             gtimer_disarm(id);
             t->interval_ns = 0;
@@ -439,17 +486,29 @@ static int svc_time(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64
         }
         uint64_t interval_ns = ivs * 1000000000ull + ivn;
         uint64_t value_ns;
+        // Track the SIGNED offset to the first expiry too: a TIMER_ABSTIME deadline already in the past has a
+        // negative offset, which the kqueue arm clamps to 0 (fire asap) but the overrun count must NOT clamp
+        // -- a periodic timer whose start is far in the past has already "overrun" (now-deadline)/interval
+        // times by its first delivery (LTP timer_settime03: overrun capped at INT_MAX). sched_ns preserves
+        // that true (possibly-past) absolute deadline so the drain thread can count elapsed periods.
+        int64_t offset_ns;
         if (a1 & 1) { // TIMER_ABSTIME: it_value is an absolute deadline in the timer's clock
             struct timespec cn;
             clock_gettime(gtimer_hostclock(t->clockid), &cn);
             uint64_t cnow = (uint64_t)cn.tv_sec * 1000000000ull + (uint64_t)cn.tv_nsec;
             uint64_t deadline = vls * 1000000000ull + vln;
-            value_ns = (deadline > cnow) ? (deadline - cnow) : 0; // past deadline -> fire asap
+            offset_ns = (int64_t)deadline - (int64_t)cnow; // may be negative (deadline already passed)
+            value_ns = offset_ns > 0 ? (uint64_t)offset_ns : 0; // past deadline -> fire asap
         } else {
             value_ns = vls * 1000000000ull + vln;
+            offset_ns = (int64_t)value_ns;
         }
         t->interval_ns = interval_ns;
-        t->next_ns = gtimer_now_ns() + value_ns;
+        uint64_t mono = gtimer_now_ns();
+        t->next_ns = mono + value_ns;
+        t->sched_ns = (uint64_t)((int64_t)mono + offset_ns); // true first-expiry deadline (may be < mono)
+        t->overrun_accum = 0;                                // a fresh arming resets the overrun accounting
+        __atomic_store_n(&t->overrun, 0, __ATOMIC_SEQ_CST);
         int rc = gtimer_arm(id, value_ns, interval_ns);
         pthread_mutex_unlock(&g_gtimer_lk);
         G_RET(c) = rc < 0 ? (uint64_t)rc : 0;
@@ -462,7 +521,11 @@ static int svc_time(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64
         pthread_mutex_lock(&g_gtimer_lk);
         struct gtimer *t = &g_gtimer[id];
         if (!t->used) { pthread_mutex_unlock(&g_gtimer_lk); G_RET(c) = (uint64_t)(-EINVAL); break; }
-        if (a1) gtimer_fill_curr(t, (void *)a1);
+        // The kernel copy_to_user()s the itimerspec, so a NULL/bad curr pointer is -EFAULT (checked AFTER
+        // the timerid EINVAL, matching LTP timer_gettime01: gettime(-1)->EINVAL, gettime(valid,NULL)->EFAULT).
+        // guest_bad_ptr catches NULL and a PROT_NONE guard page; gtimer_fill_curr writes 32 bytes.
+        if (guest_bad_ptr((uintptr_t)a1, 32)) { pthread_mutex_unlock(&g_gtimer_lk); G_RET(c) = (uint64_t)(int64_t)(-EFAULT); break; }
+        gtimer_fill_curr(t, (void *)a1);
         pthread_mutex_unlock(&g_gtimer_lk);
         G_RET(c) = 0;
         break;

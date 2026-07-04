@@ -49,4 +49,16 @@
 #define HAVE_PWRITEV2 1
 #define HAVE_EPOLL_PWAIT 1
 #define HAVE_EPOLL_PWAIT2 1
+/* struct file_attr is now provided by modern kernel UAPI <linux/fs.h>, so
+ * lapi/fs.h must NOT re-declare it (would be a redefinition). Guards
+ * statx04/05/08/09, setxattr03, utimensat01. */
+#define HAVE_STRUCT_FILE_ATTR 1
+/* glibc's <sys/timerfd.h> provides timerfd_create/settime/gettime and the
+ * TFD_* flags (TFD_CLOEXEC, TFD_TIMER_ABSTIME). Tell lapi/timerfd.h to include
+ * it and NOT emit its own conflicting fallback wrappers. Guards timerfd01/02/04,
+ * timerfd_settime02. */
+#define HAVE_SYS_TIMERFD_H 1
+#define HAVE_TIMERFD_CREATE 1
+#define HAVE_TIMERFD_GETTIME 1
+#define HAVE_TIMERFD_SETTIME 1
 #endif

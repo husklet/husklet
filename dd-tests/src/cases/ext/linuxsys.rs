@@ -55,6 +55,11 @@ fn fsx() -> Group {
         src("inotify-modify", "ext_linuxsys/inotify_modify.c").oracle(),
         // inotify rename events: rename(2) queues the paired IN_MOVED_FROM/IN_MOVED_TO with a shared cookie.
         src("inotify-moves", "ext_linuxsys/inotify_moves.c").oracle(),
+        // #224: a closed emulated fd (inotify/timerfd/eventfd/memfd) must shed its per-fd emulation table so
+        // a RECYCLED fd number reads/fcntls as a plain file — never misrouted to the dead emulation. Oracle-
+        // diffable: fd-number reuse + plain-file semantics are exact real-Linux behaviour on both arches.
+        src("fdreuse-guard", "ext_linuxsys/fd_reuse_guard.c")
+            .out("fdreuse inotify=1 timerfd=1 eventfd=1 memfd=1\n").oracle(),
         // memfd F_ADD_SEALS / F_SEAL_WRITE enforced (a write after F_SEAL_WRITE fails EPERM).
         src("memfd-seal", "ext_linuxsys/memfd_seal.c").oracle(),
         // tee(2): duplicate pipe->pipe via peek+pushback so the source pipe is left intact.
