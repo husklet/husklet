@@ -126,6 +126,11 @@ proc    getrlimit   getrlimit/getrlimit01.c
 proc    getrlimit   getrlimit/getrlimit02.c
 proc    setrlimit   setrlimit/setrlimit02.c
 proc    setrlimit   setrlimit/setrlimit03.c
+proc    sched_setscheduler    sched_setscheduler/sched_setscheduler01.c
+proc    sched_getscheduler    sched_getscheduler/sched_getscheduler02.c
+proc    sched_getparam        sched_getparam/sched_getparam03.c
+proc    sched_get_priority_max sched_get_priority_max/sched_get_priority_max02.c
+proc    sched_get_priority_min sched_get_priority_min/sched_get_priority_min02.c
 
 # ---- signals ----
 # NOTE: rt_sigaction/rt_sigprocmask/sigaltstack have only LEGACY-API tests in
@@ -144,6 +149,7 @@ signal  sigpending      sigpending/sigpending02.c
 signal  rt_sigqueueinfo rt_sigqueueinfo/rt_sigqueueinfo01.c
 signal  pause           pause/pause01.c
 signal  pause           pause/pause02.c
+signal  signalfd        signalfd/signalfd02.c
 
 # ---- time ----
 time    clock_gettime   clock_gettime/clock_gettime01.c
@@ -155,11 +161,19 @@ time    gettimeofday    gettimeofday/gettimeofday01.c
 time    gettimeofday    gettimeofday/gettimeofday02.c
 time    times           times/times01.c
 time    times           times/times03.c
+time    clock_getres    clock_getres/clock_getres01.c
+time    clock_nanosleep clock_nanosleep/clock_nanosleep01.c
+time    timer_create    timer_create/timer_create03.c
+time    timerfd_create  timerfd/timerfd_create01.c
+time    timerfd_settime timerfd/timerfd_settime01.c
+time    timerfd_gettime timerfd/timerfd_gettime01.c
 
 # ---- poll / select / epoll ----
 poll    poll            poll/poll01.c
 poll    poll            poll/poll02.c
 poll    epoll_create1   epoll_create1/epoll_create1_01.c
+poll    epoll_create1   epoll_create1/epoll_create1_02.c
+poll    epoll_ctl       epoll_ctl/epoll_ctl02.c
 poll    select          select/select01.c
 poll    select          select/select02.c
 poll    pselect         pselect/pselect01.c

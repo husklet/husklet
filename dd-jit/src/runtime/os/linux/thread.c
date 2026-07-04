@@ -649,6 +649,22 @@ static int thread_target_signal(int tid, int sig) {
     return found;
 }
 
+// Is `tid` a LIVE guest thread of this process? tkill/tgkill (syscall/signal.c) use it to return ESRCH for
+// a tid no thread carries -- e.g. a joined/exited thread whose id LTP tgkill03 reuses ("defunct tid"). The
+// process shares one thread-group, so a tid absent from the registry is gone. (The caller's own tid is
+// checked separately at the call site: it is always live even if not yet enumerated here.)
+static int thread_tid_alive(int tid) {
+    int alive = 0;
+    pthread_mutex_lock(&g_threg_m);
+    for (int i = 0; i < THREAD_REG_MAX; i++)
+        if (g_threg[i].c && cpu_tid(g_threg[i].c) == tid) {
+            alive = 1;
+            break;
+        }
+    pthread_mutex_unlock(&g_threg_m);
+    return alive;
+}
+
 // execve makes the process single-threaded: the kernel terminates every OTHER thread in the group before the
 // new image runs. The JIT re-loads the new image IN-PROCESS, so we must do that teardown by hand -- BEFORE
 // flushing the address space and closing CLOEXEC fds -- or a surviving sibling M keeps running the old image

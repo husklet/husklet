@@ -361,6 +361,20 @@ static int svc_rare(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64
     case 95: {
         siginfo_t si;
         memset(&si, 0, sizeof si);
+        // Linux validates waitid() arguments BEFORE any child lookup (waitid02), in this order:
+        //   1. reject option bits outside WNOHANG|WNOWAIT|WEXITED|WSTOPPED|WCONTINUED -> EINVAL;
+        //   2. require at least one of WEXITED|WSTOPPED|WCONTINUED -> else EINVAL (a bare WNOHANG, as
+        //      waitid02 passes, is invalid; the host would instead report ECHILD after finding no child);
+        //   3. reject an idtype outside P_ALL/P_PID/P_PGID/P_PIDFD (0/1/2/3) -> EINVAL;
+        //   4. a non-NULL infop that isn't writable -> EFAULT (the kernel copies the siginfo out).
+        {
+            int lo = (int)a3;
+            if (lo & ~(1 | 2 | 4 | 8 | 0x01000000)) { G_RET(c) = (uint64_t)(int64_t)(-EINVAL); break; }
+            if (!(lo & (2 | 4 | 8))) { G_RET(c) = (uint64_t)(int64_t)(-EINVAL); break; }
+            int id0 = (int)a0;
+            if (id0 != 0 && id0 != 1 && id0 != 2 && id0 != 3) { G_RET(c) = (uint64_t)(int64_t)(-EINVAL); break; }
+            if (a2 && !host_range_mapped((uintptr_t)a2, 128)) { G_RET(c) = (uint64_t)(int64_t)(-EFAULT); break; }
+        }
         // P_PIDFD (Linux idtype 3): macOS has no pidfd, so resolve the emulated pidfd back to its pid and
         // wait on P_PID. Go's os.(*Process).pidfdWait reaps a CLONE_PIDFD child exactly this way.
         int idt = (int)a0;

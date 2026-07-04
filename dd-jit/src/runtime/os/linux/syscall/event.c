@@ -212,28 +212,46 @@ static int svc_event(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint6
     }
     // epoll_ctl(epfd, op, fd, event) -> kevent
     case 21: {
-        int op = (int)a1, fd = (int)a2;
+        int op = (int)a1, fd = (int)a2, epfd = (int)a0;
         uint32_t ev = 0;
         uint64_t data = (uint64_t)(unsigned)fd;
+        // #408 (extends #396): epoll_ctl(2) full error surface, in the kernel's exact ORDER (LTP
+        // epoll_ctl02). kqueue silently accepts bad ops/fds and never faults on a NULL event, so enforce
+        // each Linux return explicitly. Every check below fires ONLY on input that already errors on Linux,
+        // so a well-formed ADD/MOD/DEL is behaviourally unchanged (it costs one extra fstat for the EBADF/
+        // EPERM probe -- the #396 ADD path already did that fstat).
+        // (1) EFAULT: ADD(1)/MOD(3) -- any op that "has an event" (op != DEL) -- dereference `event`.
+        if (op != 2 && (!a3 || guest_bad_ptr((uintptr_t)a3, G_EPEV_SZ))) { G_RET(c) = (uint64_t)(-EFAULT); break; }
+        // (2) EBADF: epfd must be an open fd. A dd-tracked epoll (g_epoll set) is known-valid -> only an
+        // untracked epfd is probed (a dup'd/large epoll fd keeps the best-effort immediate path).
+        if (!(epfd >= 0 && epfd < 1024 && g_epoll[epfd]) && fcntl(epfd, F_GETFD) == -1) { G_RET(c) = (uint64_t)(-EBADF); break; }
+        // (3) EINVAL: cannot add the epoll fd to itself. Checked before the fd fstat -- epfd is a kqueue,
+        // which is a valid pollable fd, so this avoids relying on fstat's shape for a kqueue.
+        if (fd == epfd) { G_RET(c) = (uint64_t)(-EINVAL); break; }
+        // (4) EBADF if fd is not open; (5) EPERM if it is open but cannot be polled (a regular file /
+        // directory is not epoll-watchable). One fstat serves both -- gated to ADD only (as the #396 path
+        // was) so the hot MOD/DEL rearm path (Go's EPOLLONESHOT netpoller) stays fstat-free; a MOD/DEL of a
+        // bad/unregistered fd still resolves correctly via the ENOENT membership check below.
+        if (op == 1) {
+            struct stat st;
+            if (fstat(fd, &st) == -1) { G_RET(c) = (uint64_t)(-EBADF); break; }
+            if (S_ISREG(st.st_mode) || S_ISDIR(st.st_mode)) { G_RET(c) = (uint64_t)(-EPERM); break; }
+        }
+        // (6) EINVAL: op must be ADD/DEL/MOD.
+        if (op != 1 && op != 2 && op != 3) { G_RET(c) = (uint64_t)(-EINVAL); break; }
         if (a3) {
             ev = *(uint32_t *)a3;
             memcpy(&data, (void *)(a3 + G_EPEV_DOFF), 8);
             // struct epoll_event {u32 events; [pad;] u64 data} -- layout per guest arch (see G_EPEV_*)
         }
-        // #396: epoll_ctl error surface (Linux return-value semantics kqueue does not enforce). Confined to a
-        // dd-tracked epoll instance (< 1024, g_epoll set) watching an fd < 1024 -- these fire ONLY on inputs
-        // that already error on Linux, so correct software's ADD/MOD/DEL readiness path is byte-unchanged.
-        if ((int)a0 >= 0 && (int)a0 < 1024 && g_epoll[(int)a0] && fd >= 0 && fd < 1024) {
-            int ep = (int)a0;
-            if (fd == ep) { G_RET(c) = (uint64_t)(-EINVAL); break; }                    // can't watch the epoll fd itself
+        // (7/8/9) EEXIST (ADD an already-registered fd) / ENOENT (MOD|DEL an absent fd) on a dd-tracked epoll
+        // instance (#396 membership bitmap). Confined to fd < 1024, matching the readiness path below.
+        if (epfd >= 0 && epfd < 1024 && g_epoll[epfd] && fd >= 0 && fd < 1024) {
+            int ep = epfd;
             int member = ep_mem_test(ep, fd);
             if (op == 1 && member) { G_RET(c) = (uint64_t)(-EEXIST); break; }            // ADD an already-registered fd
             if ((op == 2 || op == 3) && !member) { G_RET(c) = (uint64_t)(-ENOENT); break; } // MOD/DEL an absent fd
-            if (op == 1) {
-                struct stat st;
-                if (fstat(fd, &st) == 0 && (S_ISREG(st.st_mode) || S_ISDIR(st.st_mode))) { G_RET(c) = (uint64_t)(-EPERM); break; }
-            }
-            if (op == 1 || op == 3 || op == 2) ep_mem_set(ep, fd, op != 2);             // commit membership
+            ep_mem_set(ep, fd, op != 2);                                                 // commit membership
         }
         // op: 1=ADD 2=DEL 3=MOD ; EPOLLET=0x80000000 -> EV_CLEAR ; EPOLLONESHOT=0x40000000 -> EV_ONESHOT
         uint16_t xf = (uint16_t)((ev & 0x80000000u ? EV_CLEAR : 0) | (ev & 0x40000000u ? EV_ONESHOT : 0));
@@ -609,6 +627,16 @@ static int svc_event(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint6
     }
     // signalfd4(fd, mask, sizemask, flags)
     case 74: {
+        // #408: signalfd4(2) error surface, in Linux order (LTP signalfd02).
+        // (1) EINVAL: the only valid flag bits are SFD_CLOEXEC(0x80000) and SFD_NONBLOCK(0x800).
+        if ((int)a3 & ~(int)(0x80000 | 0x800)) { G_RET(c) = (uint64_t)(-EINVAL); break; }
+        // (2) fd == -1 creates a new signalfd; otherwise it must reference an EXISTING signalfd -- EBADF if
+        // it is not an open fd at all, EINVAL if it is open but not our signalfd (dd backs signalfd with a
+        // single shared self-pipe, whose read end is g_sigfd_pipe[0]).
+        if ((int)a0 != -1) {
+            if (fcntl((int)a0, F_GETFD) == -1) { G_RET(c) = (uint64_t)(-EBADF); break; }
+            if ((int)a0 != g_sigfd_pipe[0]) { G_RET(c) = (uint64_t)(-EINVAL); break; }
+        }
         // sigset bit (signo-1) -> g_pending bit signo
         uint64_t lm = a1 ? *(uint64_t *)a1 : 0, pm = 0;
         for (int s = 1; s < 64; s++)
@@ -635,12 +663,20 @@ static int svc_event(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint6
         break;
     }
     case 85: {
-        // timerfd_create(clockid, flags) -> kqueue
+        // timerfd_create(clockid, flags) -> kqueue. #408: validate args per Linux (LTP timerfd_create01).
+        // Only these clocks back a timerfd: REALTIME(0), MONOTONIC(1), BOOTTIME(7) and the ALARM pair
+        // (REALTIME_ALARM=8 / BOOTTIME_ALARM=9); anything else (e.g. -1) is -EINVAL. The only valid flag
+        // bits are TFD_NONBLOCK(O_NONBLOCK=0x800) and TFD_CLOEXEC(O_CLOEXEC=0x80000); any other bit
+        // (e.g. flags=-1) is -EINVAL. (The old code both accepted every clock/flag AND read NONBLOCK from
+        // the wrong bit -- 0x1 instead of 0x800 -- so a TFD_NONBLOCK timerfd was left blocking.)
+        int clk = (int)a0;
+        if (clk != 0 && clk != 1 && clk != 7 && clk != 8 && clk != 9) { G_RET(c) = (uint64_t)(-EINVAL); break; }
+        if ((int)a1 & ~(int)(0x800 | 0x80000)) { G_RET(c) = (uint64_t)(-EINVAL); break; }
         int r = kqueue();
         if (r >= 0) {
             if (r < 1024) g_timerfd[r] = 1;
-            if (a1 & 1) fcntl(r, F_SETFL, O_NONBLOCK);
-            // TFD_NONBLOCK=1
+            if (a1 & 0x800) fcntl(r, F_SETFL, O_NONBLOCK);  // TFD_NONBLOCK
+            if (a1 & 0x80000) fcntl(r, F_SETFD, FD_CLOEXEC); // TFD_CLOEXEC
         }
         G_RET(c) = r < 0 ? (uint64_t)(-errno) : (uint64_t)r;
         break;
@@ -648,12 +684,48 @@ static int svc_event(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint6
     // timerfd_settime(fd, flags, new, old)
     case 86: {
         struct kevent kv;
+        // #408: timerfd_settime(2) error surface, in Linux order (LTP timerfd_settime01).
+        // (1) EFAULT: new_value must be a readable itimerspec (the kernel copy_from_user's it first).
+        if (guest_bad_ptr((uintptr_t)a2, 32)) { G_RET(c) = (uint64_t)(-EFAULT); break; }
+        // (2) EINVAL: only TFD_TIMER_ABSTIME(1) and TFD_TIMER_CANCEL_ON_SET(2) are valid flag bits.
+        if ((int)a1 & ~(int)(1 | 2)) { G_RET(c) = (uint64_t)(-EINVAL); break; }
         uint64_t iv_s = 0, iv_n = 0, vl_s = 0, vl_n = 0;
-        if (a2) {
-            memcpy(&iv_s, (void *)a2, 8);
-            memcpy(&iv_n, (void *)(a2 + 8), 8);
-            memcpy(&vl_s, (void *)(a2 + 16), 8);
-            memcpy(&vl_n, (void *)(a2 + 24), 8);
+        memcpy(&iv_s, (void *)a2, 8);
+        memcpy(&iv_n, (void *)(a2 + 8), 8);
+        memcpy(&vl_s, (void *)(a2 + 16), 8);
+        memcpy(&vl_n, (void *)(a2 + 24), 8);
+        // (3) EINVAL: itimerspec tv_nsec must be in [0,1e9) and tv_sec non-negative (itimerspec64_valid).
+        if (iv_n >= 1000000000ull || vl_n >= 1000000000ull || (int64_t)iv_s < 0 || (int64_t)vl_s < 0) {
+            G_RET(c) = (uint64_t)(-EINVAL); break;
+        }
+        // (4) EBADF if fd is not an open descriptor; EINVAL if it is open but not a timerfd (e.g. a plain
+        // file). Our timerfds are dd-tracked kqueues (< 1024, g_timerfd set); a larger valid fd is left to
+        // the best-effort path below.
+        {
+            int fd = (int)a0;
+            if (fcntl(fd, F_GETFD) == -1) { G_RET(c) = (uint64_t)(-EBADF); break; }
+            if (fd >= 0 && fd < 1024 && !g_timerfd[fd]) { G_RET(c) = (uint64_t)(-EINVAL); break; }
+        }
+        // (5) EFAULT: a non-NULL old_value must be writable -- the kernel reports the previous setting there.
+        if (a3 && guest_bad_ptr((uintptr_t)a3, 32)) { G_RET(c) = (uint64_t)(-EFAULT); break; }
+        // Report the PREVIOUS setting into old_value before re-arming (remaining it_value + it_interval),
+        // mirroring timerfd_gettime's math against the stashed deadline.
+        if (a3) {
+            memset((void *)a3, 0, 32);
+            int ofd = (int)a0;
+            int64_t odl = (ofd >= 0 && ofd < 1024) ? g_tfd_deadline[ofd] : 0;
+            int64_t oiv = (ofd >= 0 && ofd < 1024) ? g_tfd_interval[ofd] : 0;
+            if (odl > 0) {
+                struct timespec onow; clock_gettime(CLOCK_MONOTONIC, &onow);
+                int64_t onow_ns = (int64_t)onow.tv_sec * 1000000000LL + onow.tv_nsec;
+                int64_t orem = odl - onow_ns;
+                if (orem < 0 && oiv > 0) orem += ((-orem) / oiv + 1) * oiv;
+                if (orem < 0) orem = 0;
+                *(int64_t *)(a3 + 0) = oiv / 1000000000LL;
+                *(int64_t *)(a3 + 8) = oiv % 1000000000LL;
+                *(int64_t *)(a3 + 16) = orem / 1000000000LL;
+                *(int64_t *)(a3 + 24) = orem % 1000000000LL;
+            }
         }
         // periodic uses it_interval
         int64_t period_ns = (iv_s || iv_n) ? (int64_t)(iv_s * 1000000000ull + iv_n)
@@ -691,8 +763,15 @@ static int svc_event(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint6
         // timerfd_gettime(fd, curr): report the remaining time to the next expiry (it_value) and the
         // interval (it_interval), computed from the deadline timerfd_settime stashed. A disarmed timer
         // (deadline 0) reports {0,0}; an expired periodic timer reports the time to its next tick.
+        // #408: validate the fd FIRST (Linux order) -- EBADF if not open, EINVAL if open but not a timerfd,
+        // and only then EFAULT on a bad curr pointer (LTP timerfd_gettime01).
+        {
+            int fd = (int)a0;
+            if (fcntl(fd, F_GETFD) == -1) { G_RET(c) = (uint64_t)(-EBADF); break; }
+            if (fd >= 0 && fd < 1024 && !g_timerfd[fd]) { G_RET(c) = (uint64_t)(-EINVAL); break; }
+        }
         if (a1) {
-            if (!host_range_mapped((uintptr_t)a1, 32)) { G_RET(c) = (uint64_t)(-EFAULT); break; }
+            if (guest_bad_ptr((uintptr_t)a1, 32)) { G_RET(c) = (uint64_t)(-EFAULT); break; }
             memset((void *)a1, 0, 32);
             int fd = (int)a0;
             int64_t deadline = (fd >= 0 && fd < 1024) ? g_tfd_deadline[fd] : 0;
