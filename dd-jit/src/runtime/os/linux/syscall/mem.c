@@ -6,13 +6,14 @@
 // the src vectors into the dst vectors in order, stopping when either side is exhausted. Returns the
 // number of bytes copied.
 // Is guest range [a,a+len) inaccessible to a userspace read/write, the way the Linux kernel would EFAULT?
-// TWO cases dd must catch: (1) not mapped at all (host_range_mapped), and (2) mapped but PROT_NONE — dd
-// force-maps guest anon memory host-RW so mprotect can stay a near-noop, which discards the guest's
-// PROT_NONE intent, so a guest guard page (LTP tst_get_bad_addr = mmap(PROT_NONE)) stays host-readable;
-// the single PROT_NONE registry (pn_add/pn_del/pn_hit in helpers.c, fed by mmap/mprotect/munmap) records
-// it. ONE helper so connect/bind/pselect/ppoll/... all agree (consolidates three agents' duplicates).
+// TWO cases dd must catch: (1) not mapped at all, and (2) mapped but PROT_NONE — dd force-maps guest anon
+// memory host-RW so mprotect can stay a near-noop, which discards the guest's PROT_NONE intent, so a guest
+// guard page (LTP tst_get_bad_addr = mmap(PROT_NONE)) stays host-readable. Both are handled by
+// host_range_mapped: it rejects the wrap/unmapped case AND queries the single PROT_NONE registry g_gna
+// (gna_hit, thread.c; fed by mmap/mprotect/munmap) up front. ONE helper so connect/bind/pselect/ppoll/...
+// all agree (consolidates three agents' duplicates).
 static int guest_bad_ptr(uintptr_t a, size_t len) {
-    return !host_range_mapped(a, len) || pn_hit((uint64_t)a, len);
+    return !host_range_mapped(a, len);
 }
 
 static ssize_t svc_vm_iov_copy(const struct iovec *dst, unsigned long dcnt, const struct iovec *src,
@@ -247,14 +248,14 @@ static int svc_mem(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_
             u_lo = lo, u_hi = (lo < hi) ? hi : lo;
         }
         if (r == 0 && u_hi > u_lo) {
-            // Update both registries against the range actually unmapped. A full-cover unmap drops the
+            // Update the registries against the range actually unmapped. A full-cover unmap drops the
             // entry; a partial unmap (guest trimming the head/middle of a larger mapping, e.g. ZendMM
             // freeing an aligned over-allocation) SPLITS it so the surviving sub-region(s) stay tracked --
             // reclaimed at execve() teardown and still findable by gmap_find_len (the mremap grow path).
+            // (PROT_NONE coverage was already dropped above via gna_clear over the guest-logical range.)
             gmap_split_unmap(u_lo, u_hi);
             anon_split_unmap(u_lo, u_hi);
             wipefork_del(u_lo, u_hi - u_lo); // a wipe-on-fork range that was unmapped no longer applies
-            pn_del(u_lo, u_hi - u_lo);       // drop PROT_NONE coverage for the unmapped range
             mlk_del(u_lo, u_hi - u_lo);      // an unmapped range is implicitly unlocked (mlock -> VmLck)
         }
         if (r == 0 && g_mem_max) {
@@ -541,13 +542,9 @@ static int svc_mem(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_
             // not survive the region being remapped) -- drop stale wipe coverage so a reused address is
             // never wrongly zeroed in a child.
             wipefork_del((uint64_t)r, (uint64_t)a1 + guard);
-            // TWO PROT_NONE registries (both fed here, pending #407 dedup): pn_ (helpers.c, read by
-            // guest_bad_ptr in io/net/poll) + g_gna (thread.c, read INSIDE host_range_mapped). dd force-maps
-            // this region host-RW, so a guest PROT_NONE mmap is really RW -- record the guest's REQUESTED
-            // prot in both so a syscall buffer landing in it still EFAULTs (LTP read02); an accessible map
-            // clears stale coverage.
-            if ((int)a2 == 0) pn_add((uint64_t)r, (uint64_t)a1);
-            else pn_del((uint64_t)r, (uint64_t)a1 + guard);
+            // PROT_NONE registry (g_gna, thread.c; read INSIDE host_range_mapped). dd force-maps this region
+            // host-RW, so a guest PROT_NONE mmap is really RW -- record the guest's REQUESTED prot so a
+            // syscall buffer landing in it still EFAULTs (LTP read02); an accessible map clears stale coverage.
             {
                 uint64_t glo = (uint64_t)r, ghi = ((uint64_t)r + (uint64_t)a1 + 0xfff) & ~(uint64_t)0xfff;
                 if ((int)a2 == PROT_NONE) gna_add(glo, ghi);
@@ -565,10 +562,8 @@ static int svc_mem(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_
     }
     // mprotect
     case 226: // mprotect: NO-OP for physical page protection (JIT never executes guest pages; a real
-        // mprotect is harmful on macOS -- would fault the guest's own RELRO writes). BOTH PROT_NONE
-        // registries track the guest's INTENT (reserve PROT_NONE -> commit RW) so buffer checks EFAULT.
-        if ((int)a2 == 0) pn_add(a0, a1);
-        else pn_del(a0, a1);
+        // mprotect is harmful on macOS -- would fault the guest's own RELRO writes). The g_gna PROT_NONE
+        // registry tracks the guest's INTENT (reserve PROT_NONE -> commit RW) so buffer checks EFAULT.
         if (a1) {
             uint64_t glo = a0 & ~(uint64_t)0xfff, ghi = (a0 + a1 + 0xfff) & ~(uint64_t)0xfff;
             if ((int)a2 == PROT_NONE) gna_add(glo, ghi);

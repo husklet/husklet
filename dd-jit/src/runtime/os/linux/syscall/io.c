@@ -69,11 +69,11 @@ static int svc_io(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t
     // Guest PROT_NONE buffer in the fd-I/O family (fd, BUF=a1, count=a2): dd force-maps guest anon pages
     // host-writable (mem.c case 222) so the host read/write does NOT fault on a guest PROT_NONE page the way
     // Linux's copy_{to,from}_user would. Reject it here with -EFAULT, exactly as Linux. Near-free when no
-    // PROT_NONE region exists (g_npn==0). read/pread WRITE the buffer, write/pwrite READ it; both fault. (read02)
-    if (g_npn) {
+    // PROT_NONE region exists (g_ngna==0). read/pread WRITE the buffer, write/pwrite READ it; both fault. (read02)
+    if (g_ngna) {
         switch (nr) {
         case 63: case 64: case 67: case 68: // read / write / pread64 / pwrite64
-            if (pn_hit(a1, a2)) { G_RET(c) = (uint64_t)(int64_t)(-EFAULT); return svc_done(c); }
+            if (gna_hit(a1, a2)) { G_RET(c) = (uint64_t)(int64_t)(-EFAULT); return svc_done(c); }
             break;
         default: break;
         }
@@ -662,9 +662,9 @@ static int svc_io(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t
             if ((int)a0 < 0 || fcntl((int)a0, F_GETFD) < 0) { G_RET(c) = (uint64_t)(-EBADF); break; }
             // The Linux struct flock at a2 (fields up to lf+24) is read directly and written back for F_GETLK;
             // validate the 32-byte struct before any deref so a bad pointer returns -EFAULT, not a crash. A guest
-            // PROT_NONE flock buffer (LTP fcntl13 uses one) is force-mapped host-writable by dd, so the
-            // host_range_mapped probe passes -- pn_hit catches the guest's intent so it still EFAULTs like Linux.
-            if (!host_range_mapped((uintptr_t)a2, 32) || pn_hit((uintptr_t)a2, 32)) { G_RET(c) = (uint64_t)(-EFAULT); break; }
+            // PROT_NONE flock buffer (LTP fcntl13 uses one) is force-mapped host-writable by dd, but
+            // host_range_mapped rejects it via its internal gna_hit check so it still EFAULTs like Linux.
+            if (!host_range_mapped((uintptr_t)a2, 32)) { G_RET(c) = (uint64_t)(-EFAULT); break; }
             // l_whence must be SEEK_SET/SEEK_CUR/SEEK_END; Linux rejects anything else with EINVAL in
             // flock_to_posix_lock -- BEFORE the fd type is consulted, so it applies to a pipe fd too. (LTP fcntl13)
             {

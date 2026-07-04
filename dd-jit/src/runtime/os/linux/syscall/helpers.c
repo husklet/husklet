@@ -31,50 +31,14 @@ static int nofile_gate(int r) {
 }
 
 // ---- guest PROT_NONE region registry -------------------------------------------------------------
-// dd force-maps guest anonymous memory host-writable (case 222) so its no-op mprotect model works, which
-// means a host syscall that writes into a guest PROT_NONE buffer does NOT get the EFAULT a real Linux
-// copy_to_user would (the host page is really RW). Track the guest's PROT_NONE regions so the
-// buffer-consuming syscall paths (read/write family) can return EFAULT exactly as Linux. Page-granular,
-// overlap-tested; maintained by mmap(222)/mprotect(226)/munmap(215). (LTP read02: read into a PROT_NONE mmap.)
-#define G_PN_MAX 512
-static struct { uint64_t lo, hi; } g_pn[G_PN_MAX];
-static int g_npn;
-static void pn_add(uint64_t addr, uint64_t len) {
-    if (!len) return;
-    uint64_t lo = addr & ~(uint64_t)0xfff, hi = (addr + len + 0xfff) & ~(uint64_t)0xfff;
-    if (hi <= lo) return;
-    if (g_npn >= G_PN_MAX) return; // registry full -> best effort (query simply misses)
-    g_pn[g_npn].lo = lo;
-    g_pn[g_npn].hi = hi;
-    g_npn++;
-}
-// Remove [addr,addr+len) from the PROT_NONE set (mprotect to an accessible prot, or munmap), splitting any
-// straddled entry so surviving sub-ranges stay tracked.
-static void pn_del(uint64_t addr, uint64_t len) {
-    if (!len || !g_npn) return;
-    uint64_t rlo = addr & ~(uint64_t)0xfff, rhi = (addr + len + 0xfff) & ~(uint64_t)0xfff;
-    for (int i = 0; i < g_npn;) {
-        uint64_t lo = g_pn[i].lo, hi = g_pn[i].hi;
-        if (rhi <= lo || rlo >= hi) { i++; continue; } // no overlap
-        int keep_head = lo < rlo, keep_tail = rhi < hi;
-        if (!keep_head && !keep_tail) { g_pn[i] = g_pn[--g_npn]; continue; } // fully covered -> drop
-        if (keep_head) g_pn[i].hi = rlo;              // trim to surviving head
-        else g_pn[i].lo = rhi;                        // keep_tail only -> surviving tail
-        if (keep_head && keep_tail) pn_add(rhi, hi - rhi); // middle removed -> tail becomes a new entry
-        i++;
-    }
-}
-// True if [addr,addr+len) intersects any tracked PROT_NONE region (guest access would fault on Linux).
-static int pn_hit(uint64_t addr, uint64_t len) {
-    if (!g_npn || !len) return 0;
-    uint64_t end = addr + len;
-    if (end < addr) return 1; // wrap -> bogus
-    for (int i = 0; i < g_npn; i++)
-        if (addr < g_pn[i].hi && end > g_pn[i].lo) return 1;
-    return 0;
-}
-// execve replaces the whole address space -> drop all tracked PROT_NONE ranges (they're gone).
-static void pn_reset(void) { g_npn = 0; }
+// The SINGLE source of truth is g_gna (gna_add/gna_clear/gna_hit/gna_reset) in os/linux/thread.c, which the
+// target TU #includes BEFORE this file. dd force-maps guest anon memory host-RW (case 222) so its no-op
+// mprotect model works, which means a host syscall writing into a guest PROT_NONE buffer does NOT get the
+// EFAULT a real Linux copy_to_user would (the host page is really RW). g_gna tracks the guest's requested
+// PROT_NONE ranges; the check lives INSIDE host_range_mapped (thread.c), so every guest-buffer validator
+// (guest_bad_ptr in mem.c -> io/net/poll) gets the EFAULT for free, and the read/write family (io.c) queries
+// gna_hit directly. Fed by mmap(222)/mprotect(226)/munmap(215) in mem.c; reset on execve (gna_reset).
+// (#407 removed the duplicate pn_add/pn_del/pn_hit registry that used to live here.)
 
 // ---- flock(2) emulation on a private companion file (BSD whole-file advisory locks) ----------------
 // On Linux, flock() (BSD, whole-file, per-open-file-description) and fcntl() POSIX record locks are

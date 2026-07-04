@@ -78,9 +78,9 @@ static int net_precheck(int fd, uintptr_t addr, socklen_t alen, int is_connect) 
     socklen_t sl = sizeof sotype;
     if (getsockopt(fd, SOL_SOCKET, SO_TYPE, &sotype, &sl) < 0) return -errno; // EBADF / ENOTSOCK
     if (alen > (socklen_t)sizeof(struct sockaddr_storage)) return -EINVAL;    // move_addr_to_kernel range
-    // Unreadable sockaddr -> EFAULT: unmapped (host_range_mapped) OR a guest PROT_NONE page that this DBT
-    // force-mapped host-readable (pn_hit; see thread.c). pn_hit is only consulted here on
-    // the cold connect/bind path, so the hot host_range_mapped callers keep their fast path.
+    // Unreadable sockaddr -> EFAULT: unmapped OR a guest PROT_NONE page that this DBT force-mapped
+    // host-readable. Both are caught by guest_bad_ptr -> host_range_mapped (its internal gna_hit check
+    // handles the PROT_NONE case; see thread.c).
     if (addr && guest_bad_ptr(addr, alen)) return -EFAULT;
     int lfam = (addr && alen >= 2) ? *(const uint16_t *)addr : 0;            // guest (Linux) sa_family
     // connect() on an already-connected stream socket -> EISCONN (kernel checks the socket state before
