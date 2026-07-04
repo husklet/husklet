@@ -1,5 +1,6 @@
 // dd/runtime/os/linux/container -- container config state (UTS/cgroup/USER-ns/port-map) + parsers.
 #include "../../container_parse.h" // strict numeric parsing (the config trust boundary; see LAUNCH.md)
+#include <sys/sysctl.h>            // sysctlbyname("hw.activecpu") -- true host core count (see container_online_cpus)
 
 // ---- container namespace + cgroup state (SentryConfig: ddockerd -> jit) ----
 // UTS ns: container hostname (uname/sethostname); "" = host default
@@ -352,9 +353,20 @@ static uint64_t parse_size(const char *s) {
 // cpu-topology sysfs, and /proc/{cpuinfo,stat}), so a --cpus-limited container self-sizes to its allotment
 // instead of spinning one worker per HOST core and over-subscribing the machine.
 static int container_online_cpus(void) {
-    long n = sysconf(_SC_NPROCESSORS_ONLN);
+    // Probe the TRUE host core count via macOS sysctl, NOT sysconf(_SC_NPROCESSORS_ONLN): in the mac-side
+    // engine process (the `mac` bridge / x86 fork-server spawn context) macOS sysconf reports 1, which would
+    // pin every unconstrained container to a single CPU (nproc=1, affinity mask=1 bit, /sys .../cpu/online="0")
+    // and stop guests scaling. hw.activecpu is what Go / the JVM / most runtimes read anyway; mirror the darwin
+    // jail (os/darwin/jail/jail.c hw.ncpu/hw.activecpu). Fallbacks: hw.logicalcpu -> hw.ncpu -> sysconf.
+    long n = 0;
+    int v = 0;
+    size_t sz = sizeof v;
+    if (sysctlbyname("hw.activecpu", &v, &sz, NULL, 0) == 0 && v > 0) n = v;
+    else if (sz = sizeof v, sysctlbyname("hw.logicalcpu", &v, &sz, NULL, 0) == 0 && v > 0) n = v;
+    else if (sz = sizeof v, sysctlbyname("hw.ncpu", &v, &sz, NULL, 0) == 0 && v > 0) n = v;
+    if (n < 1) n = sysconf(_SC_NPROCESSORS_ONLN); // last-resort (non-darwin build / sysctl failure)
     if (n < 1) n = 1;
-    if (g_cpu_max > 0 && (long)g_cpu_max < n) n = g_cpu_max;
+    if (g_cpu_max > 0 && (long)g_cpu_max < n) n = g_cpu_max; // docker --cpus allotment clamp
     if (n > 64) n = 64; // one CPU bit per byte fits the 8-byte affinity mask /proc/cpuinfo caps at
     return (int)n;
 }

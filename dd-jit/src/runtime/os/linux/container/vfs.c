@@ -2149,18 +2149,24 @@ static int proc_open(const char *rp) {
     }
     if (!strcmp(rp, "/proc/cpuinfo")) {
         int nc = container_online_cpus(); // docker --cpus cap (state.c), else all host cores
-        n = 0;
-        if (guest_is_x86()) {
-            // x86-64 guests need the x86 cpuinfo shape (vendor_id/model name/flags), not the ARM one.
-            for (int i = 0; i < nc; i++)
-                n += cpuinfo_x86_block(buf + n, sizeof buf - (size_t)n, i, nc);
-        } else {
-            for (int i = 0; i < nc; i++)
-                n += snprintf(buf + n, sizeof buf - (size_t)n,
-                              "processor\t: %d\nBogoMIPS\t: 100.00\nFeatures\t: fp asimd\nCPU implementer\t: 0x61\n"
-                              "CPU architecture: 8\nCPU variant\t: 0x0\nCPU part\t: 0x000\nCPU revision\t: 0\n\n",
-                              i);
+        // One block per online CPU. The x86 block is ~570 bytes, so up to 64 CPUs need ~37KB -- far past the
+        // shared 8KB `buf` (which silently truncated cpuinfo to ~14 processors on a many-core host, #412).
+        // Use a dedicated buffer sized for the 64-CPU ceiling and clamp each snprintf so a would-be overflow
+        // can never inflate `cn` past the buffer (proc_text_fd writes exactly `cn` bytes).
+        char cib[64 * 640]; // per-call (proc_open is reentrant across guest threads); ~40KB stack
+        int cn = 0;
+        for (int i = 0; i < nc; i++) {
+            size_t rem = sizeof cib - (size_t)cn;
+            int w = guest_is_x86()
+                ? cpuinfo_x86_block(cib + cn, rem, i, nc)
+                : snprintf(cib + cn, rem,
+                           "processor\t: %d\nBogoMIPS\t: 100.00\nFeatures\t: fp asimd\nCPU implementer\t: 0x61\n"
+                           "CPU architecture: 8\nCPU variant\t: 0x0\nCPU part\t: 0x000\nCPU revision\t: 0\n\n",
+                           i);
+            if (w < 0 || (size_t)w >= rem) break; // truncated -> stop rather than over-report length
+            cn += w;
         }
+        return proc_text_fd(cib, cn);
     } else if (!strcmp(rp, "/proc/meminfo")) {
         // Real-ish figures: a cgroup memory.max caps MemTotal (used = the tracked anon charge); otherwise
         // report the host machine's memory (total from hw.memsize, free/available/cached from the Mach VM

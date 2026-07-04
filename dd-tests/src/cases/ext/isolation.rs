@@ -20,9 +20,15 @@ pub fn groups() -> Vec<Group> { vec![resources(), rootfs_ro(), proc_masking()] }
 /// Portable -> runs on linux/x86_64, linux/aarch64, and darwin/aarch64.
 fn resources() -> Group {
     group("iso-resources", vec![
+        // NO --cpus (#412): nproc / sched_getaffinity / /proc/cpuinfo / /sys .../cpu/online must ALL report
+        // the true HOST core count (via macOS hw.activecpu), not 1. Oracle -> the JIT must byte-match native
+        // (the real host count) on both Linux engines; before the fix the mac-side engine's sysconf gave 1.
+        src("cpu-default", "ext_iso/cpudefault.c").oracle(),
         // --cpus: nproc / sched_getaffinity / sysconf all report the CAP, not the host core count.
         port("cpucap-1", "ext_iso/cpucount.c").cpus(1).out("cpucount=1\n"),
         port("cpucap-2", "ext_iso/cpucount.c").cpus(2).out("cpucount=2\n"),
+        // --cpus=2 with the 4-path cross-check guest: the allotment clamp still holds on every path.
+        src("cpu-default-cap2", "ext_iso/cpudefault.c").cpus(2).out("cpus=2\n"),
         // --ulimit nofile: getrlimit(RLIMIT_NOFILE) returns exactly the requested soft/hard pair.
         port("ulimit-nofile", "ext_iso/ulimit.c").ulimit("nofile", 1024, 2048)
             .out("nofile soft=1024 hard=2048\n"),

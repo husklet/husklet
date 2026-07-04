@@ -71,7 +71,14 @@ static int svc_signal(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint
     switch (nr) {
     // ===================== Signals — Linux signal numbers -> macOS; kill/sigaction/sigreturn =====================
     // kill(pid,sig)
-    case 129:
+    case 129: {
+        // Linux kill() validates the signal number FIRST: 0 (an existence probe) and 1..64 are legal, any
+        // other value is -EINVAL (kill03: kill(self, 2000) must fail EINVAL, not be swallowed by the self
+        // path below). This gate precedes the self/own-group/cross-process routing so every path agrees.
+        if ((int)a1 < 0 || (int)a1 > 64) {
+            G_RET(c) = (uint64_t)(int64_t)(-EINVAL);
+            break;
+        }
         if ((int)a0 == container_pid() || (int)a0 == 0 || (int)a0 == -1) {
             // SELF (kill(self,sig)) or the caller's OWN group / broadcast (kill(0)/kill(-1)): deliver via
             // our own machinery. dd does not put the engine in its own host session/process-group at
@@ -111,16 +118,42 @@ static int svc_signal(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint
                 G_RET(c) = kill(tgt, sig_l2m((int)a1)) < 0 ? (uint64_t)(-errno) : 0;
             }
         break;
-    case 130:
-        // tkill(tid, sig)
-        thread_kill(c, (int)a0, (int)a1);
+    }
+    case 130: {
+        // tkill(tid, sig). Linux rejects tid <= 0 and an out-of-range signal with EINVAL, then ESRCH if no
+        // live thread carries that tid. (raise() lowers to tgkill on modern glibc; keep tkill correct too.)
+        int tid = (int)a0, sig = (int)a1;
+        if (tid <= 0 || sig < 0 || sig > 64) {
+            G_RET(c) = (uint64_t)(int64_t)(-EINVAL);
+            break;
+        }
+        if (tid != cpu_tid(c) && !thread_tid_alive(tid)) {
+            G_RET(c) = (uint64_t)(int64_t)(-ESRCH);
+            break;
+        }
+        thread_kill(c, tid, sig);
         G_RET(c) = 0;
         break;
-    case 131:
-        // tgkill(tgid, tid, sig)
-        thread_kill(c, (int)a1, (int)a2);
+    }
+    case 131: {
+        // tgkill(tgid, tid, sig). Linux validation, in order (tgkill03):
+        //   tgid <= 0 || tid <= 0 || sig out of [0,64] -> EINVAL;
+        //   otherwise the thread `tid` must be live AND belong to thread-group `tgid` -> else ESRCH.
+        // The whole guest process is one thread-group (container_pid()), so a tgid that names anything else
+        // (tgkill03 "Defunct tgid") or a tid no live thread carries ("Defunct tid") is ESRCH.
+        int tgid = (int)a0, tid = (int)a1, sig = (int)a2;
+        if (tgid <= 0 || tid <= 0 || sig < 0 || sig > 64) {
+            G_RET(c) = (uint64_t)(int64_t)(-EINVAL);
+            break;
+        }
+        if (tgid != container_pid() || (tid != cpu_tid(c) && !thread_tid_alive(tid))) {
+            G_RET(c) = (uint64_t)(int64_t)(-ESRCH);
+            break;
+        }
+        thread_kill(c, tid, sig);
         G_RET(c) = 0;
         break;
+    }
     case 138: { // rt_sigqueueinfo(tgid, sig, siginfo): carry si_code + si_value to the handler's siginfo
         int sig = (int)a1;
         if (sig >= 1 && sig <= 64 && a2) {

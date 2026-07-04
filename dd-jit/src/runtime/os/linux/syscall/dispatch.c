@@ -676,6 +676,32 @@ static void service_local(struct cpu *c) {
         case 171: // adjtimex(TIMEX)                     -- timex read+written at a0
             a0 = nonpie_p(a0);
             break;
+        // #408: timer / timerfd / sched / signalfd / epoll_ctl handlers dereference their struct pointers
+        // directly (itimerspec / sigevent / sched_param / sigset / epoll_event), so a low link-vaddr pointer
+        // in a non-PIE (LTP's static test binaries put these in .bss/.data at ~0x52xxxx) must be rebased or
+        // the handler's guest_bad_ptr guard EFAULTs on the unmapped low address.
+        case 74:  // signalfd4(fd, MASK, sizemask, flags)     -- sigset read directly
+        case 87:  // timerfd_gettime(fd, CURR)                -- itimerspec written by the engine
+        case 108: // timer_gettime(timerid, CURR)
+        case 118: // sched_setparam(pid, PARAM)               -- sched_param read directly
+        case 121: // sched_getparam(pid, PARAM)               -- sched_param written by the engine
+            a1 = nonpie_p(a1);
+            break;
+        case 119: // sched_setscheduler(pid, policy, PARAM)   -- sched_param read directly
+            a2 = nonpie_p(a2);
+            break;
+        case 21:  // epoll_ctl(epfd, op, fd, EVENT)           -- epoll_event read directly
+            a3 = nonpie_p(a3);
+            break;
+        case 86:  // timerfd_settime(fd, flags, NEW, OLD)     -- new read / old written
+        case 110: // timer_settime(timerid, flags, NEW, OLD)
+            a2 = nonpie_p(a2);
+            a3 = nonpie_p(a3);
+            break;
+        case 107: // timer_create(clockid, SIGEVENT, TIMERID) -- sigevent read / timer id written
+            a1 = nonpie_p(a1);
+            a2 = nonpie_p(a2);
+            break;
         default: break;
         }
     }

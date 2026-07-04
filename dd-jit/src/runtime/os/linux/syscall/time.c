@@ -224,6 +224,11 @@ static int svc_time(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64
         break;
     }
     case 114: {
+        // clock_getres(clockid, res) -> 1ns. #408: validate the clockid FIRST -- an unknown/negative clock
+        // is -EINVAL on Linux EVEN with a NULL res (unlike gettimeofday(NULL), the kernel rejects the clock
+        // before it would have copied anything out). The POSIX clocks REALTIME(0)..BOOTTIME_ALARM(9) plus
+        // TAI(11) all report a 1ns resolution here; clk_id=-1 (LTP clock_getres01) -> EINVAL.
+        if ((int)a0 < 0 || (int)a0 > 11) { G_RET(c) = (uint64_t)(int64_t)(-EINVAL); break; }
         if (a1) {
             if (!host_range_mapped((uintptr_t)a1, 16)) { G_RET(c) = (uint64_t)(int64_t)(-EFAULT); break; }
             *(uint64_t *)a1 = 0;
@@ -231,17 +236,27 @@ static int svc_time(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64
         }
         G_RET(c) = 0;
         break;
-    // clock_getres -> 1ns
     }
     case 115: {
         // clock_nanosleep(clockid, flags, request, remain). macOS has no clock_nanosleep, and TIMER_ABSTIME
         // means "sleep UNTIL the absolute deadline" -- treating it as relative would sleep for ~uptime
         // seconds and hang. Emulate ABSTIME by sleeping (deadline - now); relative falls back to nanosleep.
         int flags = (int)a1;
+        int clk = (int)a0;
         const struct timespec *req = (const struct timespec *)a2;
+        // #408: validate the clockid before touching anything (LTP clock_nanosleep01). An unknown/negative
+        // clock is -EINVAL; CLOCK_THREAD_CPUTIME_ID(3) has no kernel nsleep so the raw syscall returns
+        // -EOPNOTSUPP (Linux errno 95 -- svc_time is NOT run through svc_done's m2l map, so hard-code the
+        // Linux value; glibc's wrapper remaps this to EINVAL, which the libc variant of the test expects).
+        if (clk < 0 || clk > 11) { G_RET(c) = (uint64_t)(int64_t)(-EINVAL); break; }
+        if (clk == 3) { G_RET(c) = (uint64_t)(int64_t)(-95); break; }
         // The request timespec is dereferenced by both paths below -> a bad pointer must EFAULT, not fault
         // the engine (glibc's nanosleep() lands here as clock_nanosleep(CLOCK_REALTIME,0,req,rem)).
-        if (!host_range_mapped((uintptr_t)a2, sizeof(struct timespec))) { G_RET(c) = (uint64_t)(int64_t)(-EFAULT); break; }
+        // guest_bad_ptr (not host_range_mapped) so a PROT_NONE guard page (LTP tst_get_bad_addr) faults too.
+        if (guest_bad_ptr((uintptr_t)a2, sizeof(struct timespec))) { G_RET(c) = (uint64_t)(int64_t)(-EFAULT); break; }
+        // #408: timespec range validity -> EINVAL (tv_nsec out of [0,1e9) or negative tv_sec). LTP passes
+        // tv_nsec=-1 and tv_nsec=1000000000; macOS nanosleep is lax about the upper bound, so check here.
+        if ((unsigned long)req->tv_nsec >= 1000000000ul || req->tv_sec < 0) { G_RET(c) = (uint64_t)(int64_t)(-EINVAL); break; }
         if (flags & 1) { // TIMER_ABSTIME
             clockid_t mc;
             switch ((int)a0) {
@@ -365,6 +380,10 @@ static int svc_time(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64
         memset(t, 0, sizeof *t);
         t->used = 1;
         t->clockid = (int)a0;
+        // #408: an unknown/negative clockid is -EINVAL on Linux (no such POSIX clock). The mappable set is
+        // REALTIME(0)..MONOTONIC_RAW(4), the COARSE pair (5/6), BOOTTIME(7), the ALARM clocks (8/9) and
+        // TAI(11); anything outside [0,11] is rejected. (LTP timer_create: bad clockid case.)
+        if ((int)a0 < 0 || (int)a0 > 11) { t->used = 0; pthread_mutex_unlock(&g_gtimer_lk); G_RET(c) = (uint64_t)(-EINVAL); break; }
         if (a1) {
             // struct sigevent: sigev_value [0..8), sigev_signo [8..12), sigev_notify [12..16)
             uint64_t sigval; int signo, notify;
@@ -375,6 +394,17 @@ static int svc_time(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64
         } else {
             // POSIX default: SIGEV_SIGNAL, SIGALRM(14), si_value = timer id
             t->notify = 0; t->signo = 14; t->sigval = (uint64_t)id;
+        }
+        // #408 / CVE-2017-18344: the kernel accepts ONLY these sigev_notify values -- SIGEV_SIGNAL(0),
+        // SIGEV_NONE(1), SIGEV_THREAD(2) and SIGEV_SIGNAL|SIGEV_THREAD_ID(4). Any other value (e.g. the
+        // test's SIGEV_SIGNAL|54321) is -EINVAL; before the fix this field went unverified and let a caller
+        // read arbitrary kernel memory. For a signal-bearing notify the signo must be a real signal (1..64,
+        // SIGRTMAX); SIGEV_NONE carries no signal so its signo is not checked. (LTP timer_create03.)
+        if (t->notify != 0 && t->notify != 1 && t->notify != 2 && t->notify != 4) {
+            t->used = 0; pthread_mutex_unlock(&g_gtimer_lk); G_RET(c) = (uint64_t)(-EINVAL); break;
+        }
+        if (t->notify != 1 && (t->signo < 1 || t->signo > 64)) {
+            t->used = 0; pthread_mutex_unlock(&g_gtimer_lk); G_RET(c) = (uint64_t)(-EINVAL); break;
         }
         // SIGEV_THREAD(2) needs to run a guest callback in a fresh guest thread -- not expressible
         // from the host syscall layer. glibc lowers SIGEV_THREAD to SIGEV_THREAD_ID(4)+a real-time

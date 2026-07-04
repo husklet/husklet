@@ -250,6 +250,32 @@ static uint64_t g_cap_eff = ~0ull;
 // personality(2) persona (lsys-personality): query with 0xffffffff, set returns the previous value.
 static unsigned g_persona;
 
+// ===================== sched_setscheduler / sched_*param family (#408) =====================
+// macOS has no Linux scheduling policies, so dd does not actually change host scheduling; it validates the
+// arguments exactly as the Linux kernel does (policy/priority/pid/pointer -> EINVAL/ESRCH/EFAULT) and keeps
+// a per-process record of the requested policy+priority so sched_getscheduler/sched_getparam round-trip.
+static int g_sched_policy = 0;    // SCHED_OTHER
+static int g_sched_prio;          // sched_priority last set
+#define DD_SCHED_RESET_ON_FORK 0x40000000
+// Priority band for a policy (Linux sched_get_priority_min/max): FIFO(1)/RR(2) use 1..99, every other
+// valid policy uses 0..0. Returns 0 for a known policy (filling *lo/*hi), -1 for an unknown one (EINVAL).
+static int sched_prio_band(int policy, int *lo, int *hi) {
+    switch (policy) {
+    case 1: case 2: *lo = 1; *hi = 99; return 0;               // SCHED_FIFO / SCHED_RR
+    case 0: case 3: case 5: *lo = 0; *hi = 0; return 0;        // SCHED_OTHER / SCHED_BATCH / SCHED_IDLE
+    default: return -1;
+    }
+}
+// Does guest pid `gpid` name a live task? pid 0 (and the container init pid) is the caller itself; init pid 1
+// maps to its real host pid; any other pid passes through as a real host pid and is probed with kill(pid,0).
+// Returns 0 if it exists, -ESRCH otherwise. Caller rejects gpid<0 (EINVAL) before calling.
+static int sched_pid_live(int gpid) {
+    if (gpid == 0 || gpid == container_pid()) return 0;
+    pid_t hp = (gpid == 1 && g_init_hostpid) ? g_init_hostpid : (pid_t)gpid;
+    if (kill(hp, 0) == 0) return 0;
+    return (errno == ESRCH) ? -ESRCH : 0; // EPERM etc. -> the task exists, just not signalable
+}
+
 static int svc_proc(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3,
                     uint64_t a4, uint64_t a5) {
     switch (nr) {
@@ -480,16 +506,115 @@ static int svc_proc(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64
     }
     // sched_yield
     case 124: G_RET(c) = 0; break;
-    case 140:
-        setpriority((int)a0, (int)a1, (int)a2);
+    // ---- #408: sched_setscheduler / sched_*param arg-validation family (LTP sched_*01..03). dd has no real
+    // Linux scheduling classes, so these validate exactly like the kernel and record the requested
+    // policy/priority for round-trip reads; the errno ORDER matches the kernel line-for-line.
+    // sched_setparam(pid, param)
+    case 118: {
+        int pid = (int)a0;
+        if (!a1 || pid < 0) { G_RET(c) = (uint64_t)(-EINVAL); break; }        // do_sched_setscheduler: !param||pid<0
+        if (guest_bad_ptr(a1, sizeof(int))) { G_RET(c) = (uint64_t)(-EFAULT); break; }
+        int prio; memcpy(&prio, (void *)a1, sizeof(int));
+        if (sched_pid_live(pid) < 0) { G_RET(c) = (uint64_t)(-ESRCH); break; }
+        int lo, hi; sched_prio_band(g_sched_policy, &lo, &hi);                // current policy is always valid
+        if (prio < lo || prio > hi) { G_RET(c) = (uint64_t)(-EINVAL); break; }
+        g_sched_prio = prio;
         G_RET(c) = 0;
-        // setpriority (best-effort)
         break;
+    }
+    // sched_setscheduler(pid, policy, param)
+    case 119: {
+        int pid = (int)a0, policy = (int)a1;
+        if (!a2 || pid < 0) { G_RET(c) = (uint64_t)(-EINVAL); break; }        // !param || pid<0
+        if (guest_bad_ptr(a2, sizeof(int))) { G_RET(c) = (uint64_t)(-EFAULT); break; } // copy_from_user(param)
+        int prio; memcpy(&prio, (void *)a2, sizeof(int));
+        if (sched_pid_live(pid) < 0) { G_RET(c) = (uint64_t)(-ESRCH); break; } // find_process_by_pid
+        int base = policy & ~DD_SCHED_RESET_ON_FORK, lo, hi;
+        if (sched_prio_band(base, &lo, &hi) < 0) { G_RET(c) = (uint64_t)(-EINVAL); break; } // unknown policy
+        if (prio < lo || prio > hi) { G_RET(c) = (uint64_t)(-EINVAL); break; }             // priority out of band
+        g_sched_policy = base; g_sched_prio = prio;
+        G_RET(c) = 0;
+        break;
+    }
+    // sched_getscheduler(pid)
+    case 120: {
+        int pid = (int)a0;
+        if (pid < 0) { G_RET(c) = (uint64_t)(-EINVAL); break; }
+        if (sched_pid_live(pid) < 0) { G_RET(c) = (uint64_t)(-ESRCH); break; }
+        G_RET(c) = (uint64_t)g_sched_policy;
+        break;
+    }
+    // sched_getparam(pid, param)
+    case 121: {
+        int pid = (int)a0;
+        if (!a1 || pid < 0) { G_RET(c) = (uint64_t)(-EINVAL); break; }        // kernel: !param || pid<0
+        if (sched_pid_live(pid) < 0) { G_RET(c) = (uint64_t)(-ESRCH); break; }
+        if (guest_bad_ptr(a1, sizeof(int))) { G_RET(c) = (uint64_t)(-EFAULT); break; }
+        memcpy((void *)a1, &g_sched_prio, sizeof(int));                       // struct sched_param{int sched_priority}
+        G_RET(c) = 0;
+        break;
+    }
+    // sched_get_priority_max(policy)
+    case 125: {
+        int lo, hi;
+        if (sched_prio_band((int)a0, &lo, &hi) < 0) { G_RET(c) = (uint64_t)(-EINVAL); break; }
+        G_RET(c) = (uint64_t)hi;
+        break;
+    }
+    // sched_get_priority_min(policy)
+    case 126: {
+        int lo, hi;
+        if (sched_prio_band((int)a0, &lo, &hi) < 0) { G_RET(c) = (uint64_t)(-EINVAL); break; }
+        G_RET(c) = (uint64_t)lo;
+        break;
+    }
+    // sched_rr_get_interval(pid, tp): report a nominal RR quantum (100ms). Validation order matches the
+    // kernel: pid<0 -> EINVAL, missing task -> ESRCH, bad tp -> EFAULT.
+    case 127: {
+        int pid = (int)a0;
+        if (pid < 0) { G_RET(c) = (uint64_t)(-EINVAL); break; }
+        if (sched_pid_live(pid) < 0) { G_RET(c) = (uint64_t)(-ESRCH); break; }
+        if (guest_bad_ptr(a1, sizeof(struct timespec))) { G_RET(c) = (uint64_t)(-EFAULT); break; }
+        ((uint64_t *)a1)[0] = 0;          // tv_sec
+        ((uint64_t *)a1)[1] = 100000000;  // tv_nsec = 100ms
+        G_RET(c) = 0;
+        break;
+    }
+    case 140: {
+        // setpriority(which, who, prio). Linux CLAMPS the resulting nice to [-20, 19]; macOS PRIO_MAX is
+        // 20, so an unclamped host setpriority(...,>=20) leaves nice==20 and a following getpriority reads
+        // 20 -- the nice02 off-by-one ("Process priority 20, expected 19"). Clamp to the Linux range first.
+        // `which` is validated as on Linux (EINVAL); the priority set itself stays best-effort success (the
+        // container is root, so a host EACCES/EPERM for lowering nice must not surface to a root guest).
+        int which = (int)a0;
+        if (which != PRIO_PROCESS && which != PRIO_PGRP && which != PRIO_USER) {
+            G_RET(c) = (uint64_t)(int64_t)(-EINVAL);
+            break;
+        }
+        int prio = (int)a2;
+        if (prio > 19) prio = 19;
+        else if (prio < -20) prio = -20;
+        setpriority(which, (int)a1, prio);
+        G_RET(c) = 0;
+        break;
+    }
     case 141: {
+        // getpriority(which, who) -> Linux raw kernel encoding (20 - nice). Linux validates `which` first
+        // (EINVAL for anything but PRIO_PROCESS/PGRP/USER), then fails ESRCH when no process matches
+        // (which,who) -- e.g. getpriority02's who==-1. macOS can report the wrong errno family here, so
+        // enforce the Linux contract directly: bad which -> EINVAL, any other failure -> ESRCH.
+        int which = (int)a0;
+        if (which != PRIO_PROCESS && which != PRIO_PGRP && which != PRIO_USER) {
+            G_RET(c) = (uint64_t)(int64_t)(-EINVAL);
+            break;
+        }
         errno = 0;
-        // getpriority -> Linux raw (20-nice)
-        int r = getpriority((int)a0, (int)a1);
-        G_RET(c) = (r == -1 && errno) ? (uint64_t)(-errno) : (uint64_t)(20 - r);
+        int r = getpriority(which, (int)a1);
+        if (r == -1 && errno) { // a real -1 nice value keeps errno==0; only a genuine failure sets it
+            G_RET(c) = (uint64_t)(int64_t)(-ESRCH);
+            break;
+        }
+        G_RET(c) = (uint64_t)(20 - r);
         break;
     }
     // setuid(uid): a privileged task sets real+eff+saved; an unprivileged one may only set euid to an id
@@ -645,10 +770,28 @@ static int svc_proc(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64
         // Map the guest's view of the init (pid/pgid 1) to its real host pid/group, then do the REAL setpgid.
         // Children already carry real host pids, so they pass straight through and get real process groups.
         // EPERM is benign (the init is a session leader, already its own group leader) -> report success.
+        // Linux validates the requested pgid >= 0 first (setpgid02 case 1: pgid < 0 -> EINVAL).
+        if ((int)a1 < 0) {
+            G_RET(c) = (uint64_t)(int64_t)(-EINVAL);
+            break;
+        }
         pid_t pid = ((pid_t)a0 == 1 && g_init_hostpid) ? g_init_hostpid : (pid_t)a0;
         pid_t pgid = ((pid_t)a1 == 1 && g_init_hostpid) ? g_init_hostpid : (pid_t)a1;
         int r = setpgid(pid, pgid);
-        G_RET(c) = (r < 0 && errno != EPERM) ? (uint64_t)(-errno) : 0;
+        if (r == 0) {
+            G_RET(c) = 0;
+            break;
+        }
+        // EPERM is benign ONLY for bash's job-control self-move into the container init's own (virtual)
+        // group -- setpgid(0, 1): the init is a session leader already its own group leader, so the host
+        // rejects it but the container is its own session and guest groups are virtual. Gate the swallow on
+        // the guest having named group 1; a genuine EPERM (setpgid02 case 3: joining a NONEXISTENT group)
+        // must propagate, along with EINVAL/ESRCH (bad pgid / target that is neither caller nor its child).
+        if (errno == EPERM && (pid_t)a1 == 1) {
+            G_RET(c) = 0;
+            break;
+        }
+        G_RET(c) = (uint64_t)(int64_t)(-errno);
         break;
     }
     // getpgid / getsid -- translate the init's real host group/session id to the guest's pgid 1 so the guest's
@@ -657,13 +800,29 @@ static int svc_proc(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64
     // warning -- it enables job control cleanly, and the real terminal handoff works (see TIOCSPGRP above +
     // the rt_sigprocmask stop-signal mirroring).
     case 155: {
-        pid_t r = getpgid((pid_t)a0);
+        // Map the guest's view of the init (pid 1) to its real host pid, then query. Linux getpgid fails
+        // ONLY with ESRCH (no process with that pid) -- never EPERM/EINVAL. The old handler returned the
+        // raw -1 on failure, which svc_done then misread as -EPERM (errno "1"): getpgid02's -99/unused_pid
+        // wrongly reported EPERM instead of ESRCH. Force ESRCH for any lookup failure.
+        pid_t pid = ((pid_t)a0 == 1 && g_init_hostpid) ? g_init_hostpid : (pid_t)a0;
+        pid_t r = getpgid(pid);
+        if (r < 0) {
+            G_RET(c) = (uint64_t)(int64_t)(-ESRCH);
+            break;
+        }
         if (g_init_hostpid && r == g_init_hostpid) r = 1;
         G_RET(c) = (uint64_t)r;
         break;
     }
     case 156: {
-        pid_t r = getsid((pid_t)a0);
+        // getsid: same contract as getpgid above -- fails only with ESRCH for a pid that names no process
+        // (getsid02's unused_pid), so map a raw -1 to ESRCH rather than let svc_done coin it into EPERM.
+        pid_t pid = ((pid_t)a0 == 1 && g_init_hostpid) ? g_init_hostpid : (pid_t)a0;
+        pid_t r = getsid(pid);
+        if (r < 0) {
+            G_RET(c) = (uint64_t)(int64_t)(-ESRCH);
+            break;
+        }
         if (g_init_hostpid && r == g_init_hostpid) r = 1;
         G_RET(c) = (uint64_t)r;
         break;
@@ -1210,6 +1369,21 @@ static int svc_proc(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64
     case 260: {
         int st = 0;
         pid_t r;
+        // Linux validates the option bits BEFORE any child lookup: anything outside
+        // WNOHANG|WUNTRACED|WCONTINUED|__WNOTHREAD|__WALL|__WCLONE is -EINVAL (waitpid04 case 3 passes
+        // options 0xffffffff and expects EINVAL, not the ECHILD a permissive host wait4 returns). macOS
+        // ignores unknown bits, so gate here rather than trust the host.
+        if ((int)a2 & ~(int)0xE000000B) {
+            G_RET(c) = (uint64_t)(int64_t)(-EINVAL);
+            break;
+        }
+        // waitpid(INT_MIN, ...) is the one negative pid Linux answers with ESRCH rather than ECHILD:
+        // pid < -1 means "any child in process group -pid", and -INT_MIN overflows, so the kernel
+        // special-cases it to -ESRCH (waitpid04 case 4). Any other invalid pgroup is a normal ECHILD.
+        if ((int)a0 == INT_MIN) {
+            G_RET(c) = (uint64_t)(int64_t)(-ESRCH);
+            break;
+        }
         // #238: when ptrace is already in use in this session (a tracee link exists -> nactive>0) route the
         // wait through the ptrace pump, which surfaces tracee ptrace-stops (Linux-encoded) AND real child
         // exits and tears a link down when its tracee dies. For the ENTIRE non-ptrace matrix nactive is 0,
