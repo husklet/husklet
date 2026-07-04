@@ -4,6 +4,50 @@
 // handled, 0 otherwise. Included by service.c AFTER its local helpers (svc_adjtimex/pidfd_*/mq_* it
 // calls) and before service() -- same TU scope.
 
+// ---- POSIX message-queue helpers (mq_timed{send,receive} timeout + blocking; backing state in dispatch.c)
+#define DD_SI_MESGQ (-3) // Linux si_code SI_MESGQ: an mq_notify(SIGEV_SIGNAL) delivery (what the guest expects)
+// Validate an mq_timed{send,receive} abs_timeout argument (a4/a5 depending on the op). Mirrors the kernel
+// wrapper's prepare_timeout, which runs BEFORE the fd lookup: EFAULT for an unreadable pointer, EINVAL for
+// tv_nsec outside [0,1e9) or tv_sec < 0. A NULL pointer means "block indefinitely" (*have_dl = 0). The
+// deadline is against CLOCK_REALTIME (struct __kernel_timespec: two 8-byte longs on LP64).
+// EFAULT via gna_hit (the guest's PROT_NONE registry — what LTP's tst_get_bad_addr installs), NOT the
+// host_range_mapped probe: that probe reports a valid non-PIE static buffer (a `-static` LTP binary's .bss)
+// as unmapped, which would wrongly EFAULT a legitimate on-stack/.bss timespec.
+static int mq_check_timeout(uint64_t p, struct timespec *dl, int *have_dl) {
+    *have_dl = 0;
+    if (!p) return 0;
+    if (gna_hit(p, 16)) return -EFAULT;
+    const long *ts = (const long *)(uintptr_t)p;
+    long sec = ts[0], nsec = ts[1];
+    if (nsec < 0 || nsec >= 1000000000L || sec < 0) return -EINVAL;
+    dl->tv_sec = sec;
+    dl->tv_nsec = nsec;
+    *have_dl = 1;
+    return 0;
+}
+// One blocking step for a full/empty queue with O_NONBLOCK clear. Returns 0 to retry the queue op (after a
+// short sleep, so a concurrent thread's drain/fill is observed), -ETIMEDOUT once the absolute CLOCK_REALTIME
+// deadline has passed, or -EINTR if a signal interrupted the sleep (matches the kernel's EINTR on a blocked
+// mq op). have_dl==0 => no deadline => poll indefinitely (faithful to a NULL abs_timeout; in the truly stuck
+// single-thread case it blocks exactly as Linux does, since nothing else can change the queue).
+static int mq_block_wait(int have_dl, const struct timespec *dl) {
+    struct timespec now;
+    clock_gettime(CLOCK_REALTIME, &now);
+    struct timespec slice = {0, 2 * 1000 * 1000}; // 2ms poll granularity
+    if (have_dl) {
+        long ds = dl->tv_sec - now.tv_sec;
+        long dn = dl->tv_nsec - now.tv_nsec;
+        if (dn < 0) {
+            dn += 1000000000L;
+            ds--;
+        }
+        if (ds < 0 || (ds == 0 && dn <= 0)) return -ETIMEDOUT; // deadline reached/passed
+        if (ds == 0 && dn < slice.tv_nsec) slice.tv_nsec = dn; // never overshoot the deadline
+    }
+    if (nanosleep(&slice, NULL) < 0 && errno == EINTR) return -EINTR;
+    return 0;
+}
+
 static int svc_rare(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3,
                     uint64_t a4, uint64_t a5) {
     switch (nr) {
@@ -125,6 +169,8 @@ static int svc_rare(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64
         break;
     }
     // mq_open(name, oflag, mode, attr): find-or-create the named queue, hand back a real fd bound to it.
+    // (glibc already rejects a name that lacks a leading '/' or is empty with EINVAL before the syscall,
+    // so the raw-syscall path only has to police ENAMETOOLONG, EFAULT, ENOENT, EEXIST, ENOSPC + a bad attr.)
     case 180: {
         const char *name = (const char *)a0;
         int oflag = (int)a1;
@@ -133,10 +179,24 @@ static int svc_rare(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64
             G_RET(c) = (uint64_t)(int64_t)(-EINVAL);
             break;
         }
+        // ENAMETOOLONG: the name COMPONENT (after the leading '/') must be <= NAME_MAX (255). (glibc already
+        // rejects an empty/no-leading-slash name and copies the name in, so the raw path only bounds length.)
+        size_t nl = strnlen(name, sizeof g_mqq[0].name + 2);
+        size_t comp = (nl && name[0] == '/') ? nl - 1 : nl;
+        if (comp > 255) {
+            G_RET(c) = (uint64_t)(int64_t)(-ENAMETOOLONG);
+            break;
+        }
         int qi = mq_find(name);
         if (qi < 0) {
             if (!(oflag & 0x40)) { // O_CREAT
                 G_RET(c) = (uint64_t)(int64_t)(-ENOENT);
+                break;
+            }
+            // When creating with an explicit attr, mq_maxmsg and mq_msgsize must both be > 0 else EINVAL
+            // (Linux validates the attr only on the create path; an existing queue ignores it).
+            if (at && (at[1] <= 0 || at[2] <= 0)) {
+                G_RET(c) = (uint64_t)(int64_t)(-EINVAL);
                 break;
             }
             for (int i = 0; i < MQ_MAXQ; i++)
@@ -165,6 +225,7 @@ static int svc_rare(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64
         }
         g_mqq[qi].refs++;
         mq_bind(fd, qi);
+        mq_fd_setnb(fd, (oflag & MQ_O_NONBLOCK) != 0); // O_NONBLOCK is a per-descriptor mq_flag
         G_RET(c) = (uint64_t)fd;
         break;
     }
@@ -181,7 +242,24 @@ static int svc_rare(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64
         break;
     }
     // mq_timedsend(mqdes, msg, len, prio, abs_timeout): insert highest-priority-first, FIFO within a prio.
+    // Errno order mirrors the kernel: abs_timeout EFAULT/EINVAL (validated first, in the wrapper), then prio
+    // EINVAL, EBADF, EMSGSIZE, msg-buffer EFAULT, then full-queue handling: O_NONBLOCK -> EAGAIN, else block
+    // until space or the abs_timeout expires (-> ETIMEDOUT) / a signal (-> EINTR). Real cross-PROCESS blocking
+    // is not emulated (queues aren't shared across fork); a full queue with a blocking descriptor and a NULL
+    // timeout therefore blocks forever exactly as Linux would when nothing can drain it.
     case 182: {
+        struct timespec dl;
+        int have_dl;
+        int terr = mq_check_timeout(a4, &dl, &have_dl);
+        if (terr) {
+            G_RET(c) = (uint64_t)(int64_t)terr;
+            break;
+        }
+        unsigned prio = (unsigned)a3;
+        if (prio >= 32768) { // MQ_PRIO_MAX
+            G_RET(c) = (uint64_t)(int64_t)(-EINVAL);
+            break;
+        }
         int qi = mq_qof((int)a0);
         if (qi < 0) {
             G_RET(c) = (uint64_t)(int64_t)(-EBADF);
@@ -189,13 +267,26 @@ static int svc_rare(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64
         }
         struct mq_queue *q = &g_mqq[qi];
         size_t len = (size_t)a2;
-        unsigned prio = (unsigned)a3;
         if ((long)len > q->msgsize) {
             G_RET(c) = (uint64_t)(int64_t)(-EMSGSIZE);
             break;
         }
-        if (q->n >= q->maxmsg) {
-            G_RET(c) = (uint64_t)(int64_t)(-EAGAIN); // no blocking sender
+        if (len && gna_hit(a1, len)) { // the kernel copies the message in before enqueue (gna_hit: PIE-safe EFAULT)
+            G_RET(c) = (uint64_t)(int64_t)(-EFAULT);
+            break;
+        }
+        int nb = mq_fd_nonblock((int)a0);
+        int werr = 0;
+        while (q->n >= q->maxmsg) { // full: block (unless O_NONBLOCK)
+            if (nb) {
+                werr = -EAGAIN;
+                break;
+            }
+            werr = mq_block_wait(have_dl, &dl); // 0 retry, -ETIMEDOUT, -EINTR
+            if (werr) break;
+        }
+        if (werr) {
+            G_RET(c) = (uint64_t)(int64_t)werr;
             break;
         }
         char *buf = malloc(len ? len : 1);
@@ -204,6 +295,7 @@ static int svc_rare(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64
             break;
         }
         memcpy(buf, (const void *)a1, len);
+        int was_empty = (q->n == 0);
         int pos = q->n;
         while (pos > 0 && q->msg[pos - 1].prio < prio) {
             q->msg[pos] = q->msg[pos - 1];
@@ -213,11 +305,34 @@ static int svc_rare(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64
         q->msg[pos].len = len;
         q->msg[pos].data = buf;
         q->n++;
+        // mq_notify one-shot: a message arriving on a previously-EMPTY queue with a registered notification
+        // fires it (SIGEV_SIGNAL raises the signal with an SI_MESGQ siginfo; SIGEV_NONE/THREAD just consume
+        // the registration). Real Linux suppresses this if a process is blocked in mq_receive on the queue;
+        // the single-process emulation tracks no such blocked receiver, so it always fires on the edge.
+        if (was_empty && q->notify_set) {
+            if (q->notify_notify == 0 /*SIGEV_SIGNAL*/ && q->notify_signo >= 1 && q->notify_signo <= 64) {
+                g_sigcode[q->notify_signo] = DD_SI_MESGQ;
+                g_sigval[q->notify_signo] = q->notify_val;
+                g_sigpid[q->notify_signo] = container_pid(); // si_pid: the sender (this process, self-notify)
+                g_siguid[q->notify_signo] = cuid();          // si_uid
+                raise_guest_signal(c, q->notify_signo);
+            }
+            q->notify_set = 0;
+        }
         G_RET(c) = 0;
         break;
     }
     // mq_timedreceive(mqdes, msg, len, prio*, abs_timeout): pop the head (highest priority, oldest first).
+    // Same errno order as mq_timedsend: abs_timeout EFAULT/EINVAL, EBADF, EMSGSIZE (buffer < mq_msgsize),
+    // then empty-queue handling: O_NONBLOCK -> EAGAIN, else block until a message / deadline / signal.
     case 183: {
+        struct timespec dl;
+        int have_dl;
+        int terr = mq_check_timeout(a4, &dl, &have_dl);
+        if (terr) {
+            G_RET(c) = (uint64_t)(int64_t)terr;
+            break;
+        }
         int qi = mq_qof((int)a0);
         if (qi < 0) {
             G_RET(c) = (uint64_t)(int64_t)(-EBADF);
@@ -228,11 +343,29 @@ static int svc_rare(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64
             G_RET(c) = (uint64_t)(int64_t)(-EMSGSIZE);
             break;
         }
-        if (q->n == 0) {
-            G_RET(c) = (uint64_t)(int64_t)(-EAGAIN); // no blocking receiver
+        int nb = mq_fd_nonblock((int)a0);
+        int werr = 0;
+        while (q->n == 0) { // empty: block (unless O_NONBLOCK)
+            if (nb) {
+                werr = -EAGAIN;
+                break;
+            }
+            werr = mq_block_wait(have_dl, &dl);
+            if (werr) break;
+        }
+        if (werr) {
+            G_RET(c) = (uint64_t)(int64_t)werr;
             break;
         }
         struct mq_qmsg m = q->msg[0];
+        if (m.len && gna_hit(a1, m.len)) { // don't fault the engine on an unwritable dest; keep the msg
+            G_RET(c) = (uint64_t)(int64_t)(-EFAULT);
+            break;
+        }
+        if (a3 && gna_hit(a3, sizeof(unsigned))) {
+            G_RET(c) = (uint64_t)(int64_t)(-EFAULT);
+            break;
+        }
         for (int j = 1; j < q->n; j++)
             q->msg[j - 1] = q->msg[j];
         q->n--;
@@ -242,20 +375,83 @@ static int svc_rare(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64
         G_RET(c) = (uint64_t)m.len;
         break;
     }
-    // mq_getsetattr(mqdes, newattr, oldattr): report flags/maxmsg/msgsize/curmsgs; flag-set is ignored.
+    // mq_notify(mqdes, sevp): register/unregister the single one-shot notification the queue fires on its
+    // empty->non-empty edge (delivered in mq_timedsend). Errno order matches the kernel: for a non-NULL sevp,
+    // EFAULT (unreadable sigevent) then EINVAL (sigev_notify not SIGEV_SIGNAL/NONE/THREAD, or SIGEV_SIGNAL
+    // with an invalid signo) are checked BEFORE the fd -> EBADF -> EBUSY (already registered). A NULL sevp
+    // removes this process's registration (always 0). SIGEV_THREAD is accepted like the kernel but its glibc
+    // helper-thread/netlink callback is not driven in-process, so only the registration/EBUSY semantics hold
+    // for it (SIGEV_SIGNAL and SIGEV_NONE are fully emulated).
+    case 184: {
+        const uint8_t *sev = (const uint8_t *)a1;
+        if (sev) {
+            if (gna_hit(a1, 16)) { // struct sigevent: sigev_value[8], sigev_signo[4], sigev_notify[4] (PIE-safe)
+                G_RET(c) = (uint64_t)(int64_t)(-EFAULT);
+                break;
+            }
+            int notify = *(const int *)(sev + 12); // sigev_notify
+            if (notify != 0 /*SIGEV_SIGNAL*/ && notify != 1 /*SIGEV_NONE*/ && notify != 2 /*SIGEV_THREAD*/) {
+                G_RET(c) = (uint64_t)(int64_t)(-EINVAL);
+                break;
+            }
+            int signo = *(const int *)(sev + 8); // sigev_signo
+            if (notify == 0 && (signo < 1 || signo > 64)) {
+                G_RET(c) = (uint64_t)(int64_t)(-EINVAL);
+                break;
+            }
+            int qi = mq_qof((int)a0);
+            if (qi < 0) {
+                G_RET(c) = (uint64_t)(int64_t)(-EBADF);
+                break;
+            }
+            struct mq_queue *q = &g_mqq[qi];
+            if (q->notify_set) {
+                G_RET(c) = (uint64_t)(int64_t)(-EBUSY);
+                break;
+            }
+            q->notify_set = 1;
+            q->notify_notify = notify;
+            q->notify_signo = signo;
+            q->notify_val = *(const uint64_t *)(sev + 0); // sigev_value
+            q->notify_pid = container_pid();
+            G_RET(c) = 0;
+        } else {
+            // Unregister: drop this process's registration if it owns it (matches the kernel's remove path,
+            // which is a no-op returning 0 when nothing is registered).
+            int qi = mq_qof((int)a0);
+            if (qi < 0) {
+                G_RET(c) = (uint64_t)(int64_t)(-EBADF);
+                break;
+            }
+            g_mqq[qi].notify_set = 0;
+            G_RET(c) = 0;
+        }
+        break;
+    }
+    // mq_getsetattr(mqdes, newattr, oldattr): report mq_flags(O_NONBLOCK)/maxmsg/msgsize/curmsgs into oldattr
+    // (the state BEFORE any change), then, if newattr is set, apply it -- only O_NONBLOCK is settable (the
+    // kernel masks mq_flags to O_NONBLOCK and ignores the rest), so this is the mq analogue of F_SETFL.
     case 185: {
+        if ((a1 && gna_hit(a1, 32)) || (a2 && gna_hit(a2, 32))) {
+            G_RET(c) = (uint64_t)(int64_t)(-EFAULT);
+            break;
+        }
         int qi = mq_qof((int)a0);
         if (qi < 0) {
             G_RET(c) = (uint64_t)(int64_t)(-EBADF);
             break;
         }
         struct mq_queue *q = &g_mqq[qi];
-        if (a2) {
+        if (a2) { // oldattr: current flags/geometry (reported before applying newattr)
             long *o = (long *)a2;
-            o[0] = 0;
+            o[0] = mq_fd_nonblock((int)a0) ? MQ_O_NONBLOCK : 0;
             o[1] = q->maxmsg;
             o[2] = q->msgsize;
             o[3] = q->n;
+        }
+        if (a1) { // newattr: only mq_flags' O_NONBLOCK bit is honoured
+            long nf = ((const long *)a1)[0];
+            mq_fd_setnb((int)a0, (nf & MQ_O_NONBLOCK) != 0);
         }
         G_RET(c) = 0;
         break;
