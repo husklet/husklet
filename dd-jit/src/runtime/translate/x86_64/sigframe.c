@@ -108,7 +108,11 @@ static int fastclk_fault_fixup(siginfo_t *si, void *ucv) {
     struct cpu *c = (struct cpu *)pthread_getspecific(g_cpu_key);
     if (!c || !c->fastclk_resume) return 0;
     uintptr_t va = (uintptr_t)(si ? si->si_addr : NULL);
-    if (va < c->fastclk_ptr || va >= c->fastclk_ptr + 16) return 0; // fault outside the guarded 16B window
+    // #406: overflow-safe window test. LTP passes tv=(void*)-1 (fastclk_ptr near UINT64_MAX), where
+    // `va >= fastclk_ptr + 16` wraps and wrongly rejects the fault -> SIGSEGV. Compare the unsigned
+    // offset instead: an in-window fault has (va - fastclk_ptr) in [0,16); every other value (including
+    // va < fastclk_ptr, which underflows to a huge number) is >= 16. Correct for both bounds and wrap.
+    if ((uint64_t)(va - c->fastclk_ptr) >= 16) return 0; // fault outside the guarded 16B window
     ucontext_t *uc = (ucontext_t *)ucv;
     uc->uc_mcontext->__ss.__x[0] = (uint64_t)(int64_t)(-EFAULT); // guest rax = -EFAULT
     uc->uc_mcontext->__ss.__pc = c->fastclk_resume;             // resume at the in-block EFAULT tail

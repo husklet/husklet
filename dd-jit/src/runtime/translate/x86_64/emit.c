@@ -1,5 +1,8 @@
 // dd/runtime/frontend/x86_64 -- arm64 host emitters + NEON/SSE encoders (xmm->v0..15) + x87 FPU stack
 // (ST(i) at double precision) + prologue/spill/exits.
+#ifdef __APPLE__
+#include <mach/mach_time.h> // #406: mach_timebase_info -- authoritative CNTVCT tick->ns on Apple Silicon
+#endif
 
 // ---------------- ARM64 instruction emitters ----------------
 // (the same-ISA-independent half: these emit HOST code, copied from jit.c +
@@ -552,6 +555,10 @@ static void emit_exit_const(uint64_t rip, uint64_t reason) {
 // timespec/timeval WITHOUT entering service() -- the guest's clock_gettime/gettimeofday never
 // trap. ns = base_ns + ((ticks-base_ticks)*mult)>>FAST_SHIFT (Q30, overflow-safe 128-bit).
 static int g_fastsys = 1;         // master switch (DDJIT_NOFASTSYS=1 -> 0 = byte-identical old path)
+static int g_fastclk = 1;         // #406: gates ONLY the clock_gettime/gettimeofday time arms. Auto-0 on
+                                  // a host whose effective CNTVCT rate is decoupled from cntfrq_el0 (the
+                                  // vDSO time math is then unsound); the W4F rt_sigprocmask/sched_yield
+                                  // inline arms (no cntvct) stay on, so only the time arms fall to slow.
 static uint64_t g_fast_count;     // # of guest time syscalls satisfied inline (written by emitted code)
 static uint64_t g_cal_base_ticks; // CNTVCT at calibration
 static uint64_t g_cal_mono_ns;    // CLOCK_MONOTONIC ns at calibration
@@ -585,7 +592,48 @@ static void s1_calibrate(void) {
         g_fastsys = 0; // no readable counter frequency -> safe fallback
         return;
     }
+    // Tick->ns scale (Q30) from cntfrq_el0. On a well-behaved host cntfrq_el0 IS the rate the guest's
+    // inline fast path reads via `mrs cntvct_el0`, so this is exact and the fast path stays enabled.
     g_cal_mult = (uint64_t)(((unsigned __int128)1000000000ull << FAST_SHIFT) / freq);
+    // #406 test hook: force the fast path ON with the cntfrq-only scale even on a host the mach cross-
+    // check below would reject. Lets the guarded-store / EFAULT / tz paths be exercised on a virtualized
+    // dev/CI host where the fast path is otherwise auto-disabled. NOT for production use.
+    if (getenv("DDJIT_FASTSYS_FORCE")) goto anchor;
+#ifdef __APPLE__
+    // #406: guard against a host that virtualizes CNTVCT inconsistently. mach_timebase_info gives the
+    // AUTHORITATIVE tick->ns for the generic-timer counter mach_absolute_time reads (ns = ticks*numer/
+    // denom). If that disagrees with cntfrq_el0's implied scale beyond a small tolerance, the effective
+    // CNTVCT rate is decoupled from the advertised CNTFRQ_EL0 (observed here: cntfrq_el0 reports 1 GHz
+    // but the hardware counter runs at 24 MHz -- the mach-timebase ratio, ~41.67x). Worse, on such a
+    // host the rate is NOT even uniform across processes: the initial process reads the nominal 1 GHz
+    // counter while fork() children read the 24 MHz hardware counter (proven with a fork+clock_gettime
+    // probe). A single baked g_cal_mult cannot be correct for both, so the inline vDSO fast path is
+    // fundamentally unsound here. Disable it and fall back to the real clock_gettime/gettimeofday
+    // syscall, which the host converts per-process and is therefore always correct (the LTP time/mm
+    // cluster passes on the slow path). Cost: the vDSO fast path is off on such (typically virtualized)
+    // hosts; on real Apple Silicon cntfrq_el0 and mach_timebase agree, so the fast path stays enabled
+    // with zero overhead change.
+    mach_timebase_info_data_t tb = {0, 0};
+    if (mach_timebase_info(&tb) == KERN_SUCCESS && tb.numer && tb.denom) {
+        uint64_t mach_mult = (uint64_t)(((unsigned __int128)tb.numer << FAST_SHIFT) / tb.denom);
+        // Relative disagreement between the two authoritative scales; >~1% => untrustworthy host.
+        uint64_t lo = mach_mult < g_cal_mult ? mach_mult : g_cal_mult;
+        uint64_t hi = mach_mult < g_cal_mult ? g_cal_mult : mach_mult;
+        if (mach_mult == 0 || hi > lo + lo / 100) {
+            // CNTVCT rate decoupled from cntfrq_el0 -> the inline time math is unsound (and not even
+            // uniform across fork children). Disable ONLY the time arms; the real clock_gettime/
+            // gettimeofday syscall is per-process-correct. W4F (rt_sigprocmask/sched_yield) is unaffected.
+            g_fastclk = 0;
+            return; // skip the anchor sampling (unused when the time arms are off)
+        }
+    }
+#endif
+anchor:;
+    if (!g_cal_mult) {
+        g_fastsys = 0; // implausible scale -> safe fallback to the real syscall path
+        return;
+    }
+    // Anchor CNTVCT against the host clocks in one tight instant (base_ticks <-> base_ns).
     struct timespec tm, tr;
     __asm__ volatile("mrs %0, cntvct_el0" : "=r"(g_cal_base_ticks));
     clock_gettime(CLOCK_MONOTONIC, &tm);
@@ -604,10 +652,10 @@ static void s1_calibrate(void) {
 // chained branch to `next`); we never continue decoding past the syscall (would run off the end).
 static void emit_fast_syscall(uint64_t next) {
     emit32(0xD53B4211u); // mrs x17, nzcv   (preserve guest flags across our compares)
-    uint32_t *after[8];
-    int na = 0; // slots: b L_after            [W4F: grew 2->8 for the inline-syscall arms]
-    uint32_t *to_slow[8];
-    int nsl = 0; // slots: b.ne slow_restore   [W4F: grew 2->8]
+    uint32_t *after[12];
+    int na = 0; // slots: b L_after            [W4F: grew 2->8; #406: +tz + 2 time-gate arms -> 12]
+    uint32_t *to_slow[12];
+    int nsl = 0; // slots: b.ne slow_restore   [W4F: grew 2->8; #406: +tz + 2 time-gate arms -> 12]
 
     // #218/#215: shared EFAULT resume tail for the fast-clock GUARDED stores below. A bad guest result
     // pointer makes the store fault; fastclk_fault_fixup() (sigframe.c, run first by jit86_lazyguard) sets
@@ -627,6 +675,10 @@ static void emit_fast_syscall(uint64_t next) {
     e_subi_s(16, 0, 228, 1); // subs x16, x0, #228
     uint32_t *m1 = (uint32_t *)g_cp;
     e_bcond(1, 0);         // b.ne -> gettimeofday
+    if (!g_fastclk) {      // #406: time arm disabled (untrustworthy CNTVCT) -> real clock_gettime syscall
+        to_slow[nsl++] = (uint32_t *)g_cp;
+        e_bcond(14, 0);    // b.al -> slow
+    }
     e_subi_s(16, 7, 1, 1); // cmp clockid(rdi=x7), #1 (MONOTONIC)
     uint32_t *cs = (uint32_t *)g_cp;
     e_bcond(1, 0);                 // b.ne -> check REALTIME
@@ -679,6 +731,15 @@ static void emit_fast_syscall(uint64_t next) {
     e_subi_s(16, 0, 96, 1);                 // subs x16, x0, #96
     uint32_t *gtod_miss = (uint32_t *)g_cp; // W4F: rax!=96 -> fall into the W4F arms (was straight to slow)
     e_bcond(1, 0);                          // b.ne -> W4F arms (or slow when g_siginline off)
+    if (!g_fastclk) {                       // #406: time arm disabled -> real gettimeofday syscall
+        to_slow[nsl++] = (uint32_t *)g_cp;
+        e_bcond(14, 0);                     // b.al -> slow
+    }
+    // #406: gettimeofday(tv, tz) -- a non-NULL tz (rsi=x6) must have the timezone struct written (and a
+    // bad tz must fault EFAULT), which the fast path does not produce. Route any non-NULL tz to the slow
+    // path so the real gettimeofday handles it exactly (incl. tz=(void*)-1 -> EFAULT, LTP gettimeofday01).
+    to_slow[nsl++] = (uint32_t *)g_cp;
+    emit32(0xB5000000u | 6);                 // cbnz x6, slow  (tz != NULL -> real syscall)
     e_movconst(19, g_cal_real_ns);          // gettimeofday is REALTIME
     emit32(0xD53BE050u);                    // mrs x16, cntvct_el0
     e_movconst(20, g_cal_base_ticks);
