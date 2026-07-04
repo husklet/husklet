@@ -263,6 +263,46 @@ int main(void) {
     printf("m15_visible=%d\n", access("/mkp/a/atchild", F_OK) == 0 ? 1 : 0);
     if (df2 >= 0) close(df2);
 
+    // ==== N-series (#239/#269): STALE POSITIVE after removing a lower-backed directory ====
+    // Real overlayfs whiteouts the removed dir, which hides EVERY read-only lower child beneath it: a later
+    // stat/access of a child must be ENOENT. dd resolved a whole path inside one layer, so it kept finding
+    // the lower child through the whited-out parent -> the child wrongly stat'd as present after `rm -r`
+    // (#239), and a merged view under an opaque/removed parent leaked stale lower entries (#269). Values
+    // verified against `docker` on real overlayfs (fixtures baked into an image lower layer).
+
+    // N1: flat lower-backed dir removed; warm the positive caches FIRST (so a precise-evict miss would show).
+    access("/rmparent", F_OK);
+    access("/rmparent/c1", F_OK);
+    (void)stat("/rmparent/c1", &st);
+    unlink("/rmparent/c1");
+    unlink("/rmparent/c2");
+    rmdir("/rmparent");
+    printf("n1_parent_gone=%d\n", access("/rmparent", F_OK) < 0 ? 1 : 0);
+    printf("n1_child_access=%d\n", access("/rmparent/c1", F_OK) < 0 ? 1 : 0);
+    printf("n1_child_stat=%d\n", stat("/rmparent/c1", &st) < 0 ? 1 : 0);
+
+    // N2: a DEEP lower-only subtree removed bottom-up; no descendant may stale-resolve after the top is gone.
+    access("/rmdeep/a/b/c/leaf", F_OK);
+    unlink("/rmdeep/a/b/c/leaf");
+    rmdir("/rmdeep/a/b/c");
+    rmdir("/rmdeep/a/b");
+    rmdir("/rmdeep/a");
+    printf("n2_leaf_gone=%d\n", access("/rmdeep/a/b/c/leaf", F_OK) < 0 ? 1 : 0);
+    printf("n2_midc_gone=%d\n", access("/rmdeep/a/b/c", F_OK) < 0 ? 1 : 0);
+    printf("n2_top_gone=%d\n", access("/rmdeep/a", F_OK) < 0 ? 1 : 0);
+
+    // N3 (#269): a lower-backed dir with a copied-up child AND a lower child; empty it, then rmdir must
+    // SUCCEED (no ENOTEMPTY from leftover upper copy / `.wh.` markers) and a later child stat is ENOENT.
+    fd = open("/rmcopy/up", O_CREAT | O_WRONLY, 0644); // brand-new upper child
+    if (fd >= 0) close(fd);
+    fd = open("/rmcopy/k1", O_WRONLY); // write-open copies the lower child up into the upper
+    if (fd >= 0) close(fd);
+    unlink("/rmcopy/up");
+    unlink("/rmcopy/k1");
+    errno = 0;
+    printf("n3_rmdir=%d\n", rmdir("/rmcopy") == 0 ? 0 : errno);
+    printf("n3_child_gone=%d\n", access("/rmcopy/k1", F_OK) < 0 ? 1 : 0);
+
     printf("PROBE_DONE\n");
     return 0;
 }

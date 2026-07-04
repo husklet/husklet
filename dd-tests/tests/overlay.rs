@@ -95,6 +95,15 @@ fn build_layers(arch: &str) -> (PathBuf, PathBuf) {
     // lower detection (not because a prior copy-up put it in the upper).
     write(&lower.join("ld_pristine/child"), b"c");
 
+    // N-series (#239/#269): a lower-backed directory removed at runtime must HIDE its read-only lower
+    // children from a later stat/access (the per-layer resolve used to still find the child through the
+    // whited-out parent -> stale positive). rmparent = flat dir; rmdeep = a deep subtree removed
+    // bottom-up; rmcopy = a dir with a copied-up child + a lower child, emptied then rmdir'd (#269).
+    write(&lower.join("rmparent/c1"), b"one");
+    write(&lower.join("rmparent/c2"), b"two");
+    write(&lower.join("rmdeep/a/b/c/leaf"), b"deepleaf");
+    write(&lower.join("rmcopy/k1"), b"kk");
+
     (lower, upper)
 }
 
@@ -197,6 +206,18 @@ fn check(arch: &str) {
     assert_eq!(g("m14_gone"), "1", "[{arch}] M14 rmdir'd lower dir must then be gone");
     assert_eq!(g("m15_mkdirat_lower_dirfd"), "0", "[{arch}] M15 mkdirat under a lower-only (copied-up) dir-fd must succeed");
     assert_eq!(g("m15_visible"), "1", "[{arch}] M15 mkdirat-under-lower-dirfd result must be visible");
+
+    // ---- N-series (#239/#269): after a lower-backed directory is removed, its read-only lower children
+    // must be HIDDEN from a later stat/access (no stale positive), and a deep subtree removed bottom-up
+    // must leave no resolvable descendant. Ground truth from `docker` on real overlayfs. ----
+    assert_eq!(g("n1_parent_gone"), "1", "[{arch}] N1 removed lower-backed dir must be gone");
+    assert_eq!(g("n1_child_access"), "1", "[{arch}] #239: access() of a child after its lower-backed dir was rm'd must be ENOENT (stale positive)");
+    assert_eq!(g("n1_child_stat"), "1", "[{arch}] #239: stat() of a child after its lower-backed dir was rm'd must be ENOENT (stale positive)");
+    assert_eq!(g("n2_leaf_gone"), "1", "[{arch}] #239/#269: deep descendant of a removed lower subtree must not stale-resolve");
+    assert_eq!(g("n2_midc_gone"), "1", "[{arch}] #239/#269: mid-level dir of a removed lower subtree must not stale-resolve");
+    assert_eq!(g("n2_top_gone"), "1", "[{arch}] N2 removed subtree top must be gone");
+    assert_eq!(g("n3_rmdir"), "0", "[{arch}] #269: rmdir of an emptied copied-up lower dir must succeed (not ENOTEMPTY)");
+    assert_eq!(g("n3_child_gone"), "1", "[{arch}] #269: child of an rmdir'd copied-up lower dir must be ENOENT afterward");
 }
 
 #[test]
