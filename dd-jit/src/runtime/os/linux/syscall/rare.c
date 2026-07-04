@@ -392,8 +392,16 @@ static int svc_rare(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64
             memset(gi, 0, 128);
             if (si.si_pid != 0) {
                 int code = si.si_code, status = si.si_status;
+                int gsig, gcore;
+                // #403: the child relayed a guest signal death (it _exit()d after recording its Linux signo in
+                // the shared table because no faithful fatal host mapping exists). The host reports CLD_EXITED;
+                // rebuild the CLD_KILLED/CLD_DUMPED siginfo. WNOWAIT (does not reap) must NOT consume the slot.
+                if (code == CLD_EXITED && sigexit_lookup((int)si.si_pid, &gsig, &gcore, !(lopt & 0x01000000))) {
+                    code = gcore ? CLD_DUMPED : CLD_KILLED;
+                    status = gsig;
+                }
                 // si_status carries a signal number for kill/dump/stop/cont -> translate macOS->Linux
-                if (code == CLD_KILLED || code == CLD_DUMPED || code == CLD_STOPPED || code == CLD_CONTINUED)
+                else if (code == CLD_KILLED || code == CLD_DUMPED || code == CLD_STOPPED || code == CLD_CONTINUED)
                     status = sig_m2l(status);
                 // Linux reports CLD_DUMPED (not CLD_KILLED) when a core-dumping signal killed the child with
                 // cores enabled. macOS rarely dumps the host child, so synthesize it the way wait4 encodes

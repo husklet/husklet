@@ -904,6 +904,7 @@ static void proc_comm(char *out, size_t n) {
 // If `rp` addresses THIS process -- "/proc/self/<leaf>" or "/proc/<our-pid>/<leaf>" (host pid, container
 // pid, or init's "1") -- return the <leaf> tail; else NULL. Foreign pids are not introspectable.
 static const char *proc_self_leaf(const char *rp) {
+    if (!rp) return NULL; // a NULL (bad) guest path resolves to NULL here; let the caller's host syscall EFAULT
     if (!strncmp(rp, "/proc/self/", 11)) return rp + 11;
     if (strncmp(rp, "/proc/", 6)) return NULL;
     const char *q = rp + 6;
@@ -2477,6 +2478,7 @@ static void container_populate_machine_id(void) {
 }
 // -> macOS struct stat for a synth file
 static int synth_stat_raw(const char *gp, struct stat *s) {
+    if (!gp) return 0; // NULL (bad) guest path: not a synthetic node; let the caller's host stat EFAULT
     // The controlling terminal, named /dev/pts/0 in the container: fstat the real pty slave so it reports as
     // a character device with the correct rdev. ttyname(3) reads /proc/self/fd/0 -> "/dev/pts/0", then
     // stat()s it and checks S_ISCHR + rdev == fstat(0).rdev; this makes that check pass so `tty` prints

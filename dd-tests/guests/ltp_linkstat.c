@@ -2,11 +2,23 @@
 // oracle-diffed dd-vs-native on both arches. Covers: link increments st_nlink; link content is shared;
 // link error paths (EEXIST/ENOENT/EPERM-on-dir); lstat reports the SYMLINK itself (size=len, S_ISLNK), not
 // its target; lstat error paths (ENOENT/ENOTDIR).
+//
+// Also guards the #402 setup-phase regressions that made all four LTP tests BROK under dd:
+//   (a) utimensat(AT_FDCWD, path, NULL, 0) — the exact syscall LTP's SAFE_TOUCH issues in setup — must
+//       SUCCEED (NULL `times` == set atime/mtime to now). Syscall 88 was missing from dd's non-PIE
+//       path-pointer rebase list, so on the static non-PIE LTP binaries the host got an un-rebased low
+//       link-vaddr and returned EFAULT. (The static-PIE self-check here documents the NULL-times contract;
+//       the non-PIE trigger is exercised by the LTP compliance lane binaries themselves.)
+//   (b) lstat/stat/statx on a NULL (bad) path pointer must return EFAULT, not SIGSEGV. dd's /proc
+//       magic-link synthesis helpers (proc_self_leaf / synth_stat_raw) dereferenced a NULL resolved path
+//       and crashed the engine before the host stat could EFAULT — a crash that reproduces on ORDINARY
+//       static-PIE guests (exit 255), which is what this self-check pins.
 #include <errno.h>
 #include <fcntl.h>
 #include <stdio.h>
 #include <string.h>
 #include <sys/stat.h>
+#include <sys/syscall.h>
 #include <unistd.h>
 
 int main(void) {
@@ -72,6 +84,32 @@ int main(void) {
     errno = 0;
     int nd = lstat("/tmp/ltp_ls_a/x", &ns);
     printf("lstat ENOTDIR: ret=%d ok=%d\n", nd, nd < 0 && errno == ENOTDIR);
+
+    // #402(a): utimensat with NULL `times` (LTP SAFE_TOUCH) sets atime/mtime to now and SUCCEEDS.
+    errno = 0;
+    int ur = utimensat(AT_FDCWD, base, NULL, 0);
+    printf("utimensat NULL-times: ret=%d ok=%d\n", ur, ur == 0);
+    // The AT_SYMLINK_NOFOLLOW form (utimensat on the link itself) also succeeds on our symlink.
+    errno = 0;
+    int url = utimensat(AT_FDCWD, sym, NULL, AT_SYMLINK_NOFOLLOW);
+    printf("utimensat NULL-times nofollow: ret=%d ok=%d\n", url, url == 0);
+
+    // #402(b): a NULL (bad) path pointer must return EFAULT, never crash the engine. `volatile` keeps the
+    // compiler from folding away the known-NULL argument under -O2 (the harness builds -O2 -static-pie).
+    const char *volatile bad = 0;
+    struct stat bs;
+    errno = 0;
+    int le = lstat((const char *)bad, &bs);
+    printf("lstat(NULL): ret=%d efault=%d\n", le, le < 0 && errno == EFAULT);
+    errno = 0;
+    int se = stat((const char *)bad, &bs);
+    printf("stat(NULL): ret=%d efault=%d\n", se, se < 0 && errno == EFAULT);
+    // statx(AT_FDCWD, NULL, ...) shares the same NULL-path -> EFAULT contract (glibc may lack a wrapper on
+    // older headers, so issue the raw syscall). STATX_BASIC_STATS = 0x7ff.
+    unsigned char stxbuf[256];
+    errno = 0;
+    long xe = syscall(SYS_statx, (int)AT_FDCWD, (const char *)bad, 0, 0x7ffu, stxbuf);
+    printf("statx(NULL): ret=%d efault=%d\n", (int)xe, xe < 0 && errno == EFAULT);
 
     unlink(base); unlink(l1); unlink(l2); unlink(sym);
     return 0;
