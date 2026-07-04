@@ -2068,6 +2068,27 @@ static int svc_fs(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t
     // utimensat(dirfd, path, times, flags)
     case 88: {
         struct timespec *ts = (struct timespec *)a2;
+        struct timespec lts[2];
+        // Linux and macOS disagree on the tv_nsec "special" sentinels: Linux UTIME_NOW = 0x3fffffff /
+        // UTIME_OMIT = 0x3ffffffe, but the host (macOS) wants UTIME_NOW = -1 / UTIME_OMIT = -2. The host
+        // utimensat/futimens only honor the macOS values, so a guest passing the Linux sentinels (glibc's
+        // futimens/utimensat, and dd's own utime/utimes/futimesat -> utimensat rewrites whenever a field is
+        // "set to now") would otherwise write the raw 0x3ffffffe nanoseconds instead of omitting/now-ing the
+        // field. Copy out to a local (never mutate guest memory) and translate both slots. a2==NULL stays
+        // NULL (= set both to now). EFAULT a bad non-NULL times pointer (we now dereference it in-engine).
+        if (a2) {
+            if (guest_bad_ptr((uintptr_t)a2, sizeof(struct timespec) * 2)) {
+                G_RET(c) = (uint64_t)(int64_t)(-EFAULT);
+                break;
+            }
+            lts[0] = ts[0];
+            lts[1] = ts[1];
+            for (int i = 0; i < 2; i++) {
+                if (lts[i].tv_nsec == 0x3fffffff) lts[i].tv_nsec = UTIME_NOW;       // Linux UTIME_NOW  -> macOS
+                else if (lts[i].tv_nsec == 0x3ffffffe) lts[i].tv_nsec = UTIME_OMIT; // Linux UTIME_OMIT -> macOS
+            }
+            ts = lts;
+        }
         if (!a1) {
             G_RET(c) = futimens((int)a0, ts) < 0 ? (uint64_t)(-errno) : 0;
             break;

@@ -229,6 +229,12 @@ fn edge() -> Group {
         src("procfd", "edge_procfd.c").has("resolves=1 enough_fds=1"), // /proc/self/fd
         // times(): tms_utime works on x86_64 but is 0 on aarch64 (clock() works on both) — engine split.
         src("times", "edge_times.c").has("utime_ok=1 clock_ok=1 ret_ok=1"),
+        // Legacy x86 time-setters with NO aarch64 canonical syscall number (utime=132/utimes=235/
+        // futimesat=261) — used to return ENOSYS-by-normalization on x86 (arm64 261 is prlimit64). dd now
+        // rewrites each to utimensat(dfd,path,timespec[2],flags) with the struct utimbuf/timeval[2] -> timespec
+        // conversion, NULL times = "now", and honors utimensat's UTIME_OMIT/UTIME_NOW (Linux tv_nsec sentinels
+        // translated to the macOS host's). Byte-identical vs native/qemu on both Linux engines.
+        src("utimes-family", "utimes_family.c").oracle().has("utimes-family OK"),
         src("statfs", "edge_statfs.c").oracle().xfail(lin),                            // real fs geometry (not hardcoded)
         // #383: statx (nr 291) must report the SAME uid/gid/mode/nlink/rdev/dev/size as fstat/newfstatat
         // for the same file -- through dd's #156 cuid/cgid + #181 guest-chown virtualization. Self-checking

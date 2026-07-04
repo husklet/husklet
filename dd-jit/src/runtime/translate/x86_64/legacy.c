@@ -10,6 +10,30 @@
 // x86-64 ABI reg map: rax=r[0], rdi=r[7], rsi=r[6], rdx=r[2], r10=r[10], r8=r[8], r9=r[9].
 #define ATFD ((uint64_t) - 100) // AT_FDCWD
 
+// A legacy TIME syscall (utime/utimes/futimesat) hands us a `struct utimbuf` / `struct timeval[2]` POINTER
+// that we must dereference HERE to convert it to a `struct timespec[2]` for utimensat -- and we run BEFORE
+// dispatch.c's non-PIE pointer-arg rebase (nonpie_p) block. So a non-PIE ET_EXEC's .data/.bss times pointer
+// (a low link vaddr, real bytes at +bias in the high-mapped image) must be rebased by us before the deref.
+// g_nonpie_lo/g_nonpie_bias are the (tentative) globals engine_glue.c declares above; g_nonpie_hi is defined
+// later by container/vfs.c -- forward it tentatively here (all three tentative defs merge to one object, the
+// exact pattern engine_glue.c documents). Inert identity for PIE/static-PIE (g_nonpie_lo == 0).
+static uint64_t g_nonpie_hi;
+static inline uint64_t x86_nonpie(uint64_t a) {
+    return (g_nonpie_lo && a >= g_nonpie_lo && a < g_nonpie_hi) ? a + g_nonpie_bias : a;
+}
+// Convert a guest `struct timeval[2]` (utimes/futimesat) at guest pointer `p` into `ts`. On x86-64 Linux a
+// `struct timeval` is {s64 tv_sec; s64 tv_usec} (16 bytes) -- NOT the host macOS layout (suseconds_t is 32b)
+// -- so read the four fields as raw s64 rather than casting to the host struct. Returns 1 if `ts` was filled,
+// 0 if p==NULL ("set to now": the caller then passes a NULL times pointer, which utimensat maps to UTIME_NOW
+// on both fields, matching Linux utimes(NULL)/futimesat(...,NULL)).
+static int x86_tv2ts(uint64_t p, struct timespec ts[2]) {
+    if (!p) return 0;
+    int64_t *tv = (int64_t *)x86_nonpie(p);
+    ts[0].tv_sec = (time_t)tv[0]; ts[0].tv_nsec = (long)tv[1] * 1000L;
+    ts[1].tv_sec = (time_t)tv[2]; ts[1].tv_nsec = (long)tv[3] * 1000L;
+    return 1;
+}
+
 // fork/vfork register snapshot. The fork(57)/vfork(58) -> clone(SIGCHLD) rewrite below repurposes the
 // guest's argument registers, but glibc's __vfork/__fork asm wrappers keep LIVE state in them across the
 // syscall (the kernel ABI preserves every GPR but rax/rcx/r11). The shared clone handler restores them
@@ -67,6 +91,48 @@ static int x86_normalize(struct cpu *c) {
         r[8] = 0x100; r[10] = r[2]; r[2] = r[6]; r[6] = r[7]; r[7] = ATFD; r[0] = 260; return 0;
     case 133: // mknod(path,mode,dev) -> mknodat(AT_FDCWD,path,mode,dev)
         r[10] = r[2]; r[2] = r[6]; r[6] = r[7]; r[7] = ATFD; r[0] = 259; return 0;
+    // --- legacy time-setters: no aarch64 canonical form (arm64 261 is prlimit64, 132/235 are absent), so
+    //     canon_x86 biases them into the x86-only range and they returned ENOSYS-by-normalization. Rewrite
+    //     each to x86 utimensat(280) [-> canonical 88], converting the legacy struct utimbuf / struct
+    //     timeval[2] into the struct timespec[2] the shared handler wants. The times buffer is a static
+    //     __thread scratch (a high engine address, so dispatch.c's nonpie_p leaves it untouched); the PATH
+    //     pointer is left raw for dispatch.c to rebase. NULL times -> pass a NULL times pointer, which the
+    //     host utimensat maps to UTIME_NOW on both fields -- exactly Linux utime(NULL)/utimes(NULL).
+    case 132: { // utime(path, const struct utimbuf{s64 actime; s64 modtime}* | NULL)
+        static __thread struct timespec ts[2];
+        uint64_t tp = r[6];
+        if (tp) {
+            int64_t *ub = (int64_t *)x86_nonpie(tp);
+            ts[0].tv_sec = (time_t)ub[0]; ts[0].tv_nsec = 0;
+            ts[1].tv_sec = (time_t)ub[1]; ts[1].tv_nsec = 0;
+            r[2] = (uint64_t)ts;
+        } else r[2] = 0;
+        r[6] = r[7]; r[7] = ATFD; r[10] = 0; r[0] = 280; return 0;
+    }
+    case 235: { // utimes(path, const struct timeval[2] | NULL)
+        static __thread struct timespec ts[2];
+        r[2] = x86_tv2ts(r[6], ts) ? (uint64_t)ts : 0;
+        r[6] = r[7]; r[7] = ATFD; r[10] = 0; r[0] = 280; return 0;
+    }
+    case 261: { // futimesat(dirfd, path, const struct timeval[2] | NULL) -- dirfd(rdi)/path(rsi) already sit
+                // in the utimensat arg slots; only the times buffer (rdx) needs conversion.
+        static __thread struct timespec ts[2];
+        r[2] = x86_tv2ts(r[2], ts) ? (uint64_t)ts : 0;
+        r[10] = 0; r[0] = 280; return 0;
+    }
+    // time(time_t *tloc): x86-only (aarch64 glibc reads the vDSO / clock_gettime, so there is no `time`
+    // syscall and sysmap biases 201 into the x86-only range -> ENOSYS, and glibc's raw-syscall fallback in
+    // x86 `time()` failed). Serve from host time(): return seconds since the epoch, and store into *tloc when
+    // non-NULL (a non-PIE .bss slot -> rebase before the store).
+    case 201: {
+        time_t t = time(NULL);
+        if (r[7]) *(int64_t *)x86_nonpie(r[7]) = (int64_t)t;
+        r[0] = (uint64_t)(int64_t)t; return 1;
+    }
+    // pause(): x86-only (aarch64 glibc's pause() already lands in ppoll -- event.c case 73 notes it). Block
+    // until a signal by rewriting to ppoll(NULL, 0, NULL, NULL): the shared ppoll handler poll(NULL,0,-1)s
+    // and returns -EINTR when a handler runs (#292's back-edge poll delivers it), matching Linux pause().
+    case 34: r[7] = 0; r[6] = 0; r[2] = 0; r[10] = 0; r[0] = 271; return 0;
     case 82: // rename(old,new) -> renameat(AT_FDCWD,old,AT_FDCWD,new)
         r[10] = r[6]; r[2] = ATFD; r[6] = r[7]; r[7] = ATFD; r[0] = 264; return 0;
     case 86: // link(old,new) -> linkat(AT_FDCWD,old,AT_FDCWD,new,0)
