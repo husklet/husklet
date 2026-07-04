@@ -17,6 +17,11 @@ fn proc_content() -> Group {
         src("pf-stat", "ext_procfs/pstat.c").out("pstat ok=1\n"),
         src("pf-selfstat", "ext_procfs/selfstat.c").out("selfstat ok=1\n"),
         src("pf-selfstatus", "ext_procfs/selfstatus.c").out("selfstatus ok=1\n"),
+        // top/htop/ps read a process's RES from /proc/self/status VmRSS, /proc/self/statm resident, and
+        // /proc/self/stat field 24. dd derived the SELF pid's rss from the guest's tracked anon charge,
+        // which is 0 for a process resident only in its static image -> RES=0 (a PEER pid already showed a
+        // live rss via libproc; only self read 0). Asserts all three are non-zero (fails on the pre-fix engine).
+        src("pf-selfrss", "ext_procfs/selfrss.c").out("selfrss ok=1\n"),
         src("pf-procstate", "ext_procfs/procstate.c").out("procstate ok=1\n"), // #404: cross-proc R/S state
 
         src("pf-cpuinfo", "ext_procfs/cpuinfo.c").out("cpuinfo ok=1\n"),

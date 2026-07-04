@@ -1121,12 +1121,13 @@ static int proc_maps_fd(int smaps) {
 }
 // /proc/[pid]/status -- the Name:/State:/VmRSS: key:value format (NOT the stat one-liner). VmRSS/VmSize
 // reflect the cgroup memory charge so a reader sees a plausible footprint.
+static unsigned long long self_rss_bytes(void); // defined after dd_get_procinfo (real engine resident floor)
 static int proc_status_text(char *b, size_t n) {
     char comm[16];
     proc_comm(comm, sizeof comm);
     int pid = container_pid();
     int ppid = pid == 1 ? 0 : (int)getppid();
-    unsigned long rss = (unsigned long)(atomic_load(&g_mem_charged) / 1024);
+    unsigned long rss = (unsigned long)(self_rss_bytes() / 1024);
     unsigned long vsz = g_mem_max ? (unsigned long)(g_mem_max / 1024) : rss + 4096;
     if (vsz < rss) vsz = rss;
     unsigned long vmlck = (unsigned long)(mlk_total_locked() / 1024); // mlock/mlockall'd bytes (LTP munlockall01)
@@ -1150,7 +1151,7 @@ static int proc_stat_text(char *b, size_t n) {
     int ppid = pid == 1 ? 0 : (int)getppid();
     long pg = sysconf(_SC_PAGESIZE);
     unsigned long pgsz = pg > 0 ? (unsigned long)pg : 4096;
-    unsigned long rss_pg = (unsigned long)(atomic_load(&g_mem_charged)) / pgsz;
+    unsigned long rss_pg = (unsigned long)(self_rss_bytes() / pgsz);
     unsigned long vsize = g_mem_max ? (unsigned long)g_mem_max : rss_pg * pgsz + (1ul << 20);
     return snprintf(b, n,
                     "%d (%s) R %d %d %d 0 -1 4194560 0 0 0 0 0 0 0 0 20 0 1 0 100 %lu %lu 18446744073709551615 "
@@ -1479,6 +1480,17 @@ static int dd_get_procinfo(int pid, struct dd_procinfo *pi) {
     }
     return 1;
 }
+// Resident footprint (bytes) for OUR OWN pid's VmRSS / statm-resident / stat-rss. The guest's tracked anon
+// charge (g_mem_charged) is 0 for a process that has only faulted its static image, but a real Linux process
+// ALWAYS has a non-zero VmRSS -- top/htop/ps would otherwise show this process at RES=0, a dd-only divergence
+// (a PEER pid already reports a live resident size via libproc; self must not read 0). Floor the tracked
+// charge with this engine process's real resident size so the reported RSS is non-zero and plausible.
+static unsigned long long self_rss_bytes(void) {
+    unsigned long long charged = (unsigned long long)atomic_load(&g_mem_charged);
+    struct dd_procinfo pi;
+    unsigned long long real = dd_get_procinfo((int)getpid(), &pi) ? pi.rss : 0;
+    return real > charged ? real : charged;
+}
 // Host boot epoch (seconds) -- the base for /proc/<pid> starttime and /proc/uptime. Cached.
 static long host_btime(void) {
     static long bt = 0;
@@ -1677,7 +1689,7 @@ static int proc_statm_common(char *b, size_t n, unsigned long size_pg, unsigned 
 static int proc_statm_text(char *b, size_t n) { // our own pid
     long pg = sysconf(_SC_PAGESIZE);
     unsigned long pgsz = pg > 0 ? (unsigned long)pg : 4096;
-    unsigned long rss_pg = (unsigned long)(atomic_load(&g_mem_charged)) / pgsz;
+    unsigned long rss_pg = (unsigned long)(self_rss_bytes() / pgsz);
     unsigned long size_pg = g_mem_max ? (unsigned long)(g_mem_max / pgsz) : rss_pg + 256;
     if (size_pg < rss_pg) size_pg = rss_pg;
     return proc_statm_common(b, n, size_pg, rss_pg);
@@ -1976,6 +1988,60 @@ static int syscpu_dir_open(const char *gp) {
     }
     proc_dir_register(fd, tmpl, gpath); // tag guest path so a relative openat(cpuN)/readfileat re-enters synth
     return fd;
+}
+// Format a Linux cpumask hex string (as /sys topology mask files print it): zero-padded groups of up to 32
+// bits, most-significant group first, comma-separated. `all` -> every online CPU set; else just bit `bit`.
+// `ndig` is the low-group width the kernel pads to for this machine (DIV_ROUND_UP(nc,4)); e.g. nc=18 -> 5.
+static void cpumask_hex(char *out, size_t n, int nc, int all, int bit, int ndig) {
+    unsigned long long v = all ? (nc >= 64 ? ~0ULL : ((1ULL << nc) - 1ULL)) : (1ULL << (bit & 63));
+    if (nc <= 32) {
+        snprintf(out, n, "%0*llx", ndig, v & 0xffffffffULL);
+        return;
+    }
+    int hidig = ((nc - 32) + 3) / 4;
+    if (hidig < 1) hidig = 1;
+    snprintf(out, n, "%0*x,%08x", hidig, (unsigned)(v >> 32), (unsigned)(v & 0xffffffffULL));
+}
+// The CONTENT of one /sys/devices/system/cpu/cpuN/topology/<leaf> attribute. dd advertises a FLAT topology:
+// single socket (physical_package_id 0), no SMT (each logical CPU is its own core -> core_id = cpuN, thread
+// siblings = {cpuN}), all online CPUs in one package. lscpu/util-linux reconstruct sockets/cores/threads
+// from exactly these files; real docker always serves them, so an ENOENT here is a dd-only divergence that
+// makes lscpu mis-count or error. Returns the NUL-terminated length, or -1 if `leaf` is not one we serve.
+static int syscpu_topology_str(const char *leaf, int cpuN, int nc, char *out, size_t n) {
+    int ndig = (nc + 3) / 4;
+    if (ndig < 1) ndig = 1;
+    if (!strcmp(leaf, "core_id")) return snprintf(out, n, "%d\n", cpuN);
+    if (!strcmp(leaf, "physical_package_id") || !strcmp(leaf, "cluster_id")) return snprintf(out, n, "0\n");
+    if (!strcmp(leaf, "thread_siblings_list") || !strcmp(leaf, "core_cpus_list"))
+        return snprintf(out, n, "%d\n", cpuN);
+    if (!strcmp(leaf, "core_siblings_list") || !strcmp(leaf, "package_cpus_list") ||
+        !strcmp(leaf, "cluster_cpus_list"))
+        return nc > 1 ? snprintf(out, n, "0-%d\n", nc - 1) : snprintf(out, n, "0\n");
+    char m[96];
+    if (!strcmp(leaf, "thread_siblings") || !strcmp(leaf, "core_cpus")) {
+        cpumask_hex(m, sizeof m, nc, 0, cpuN, ndig);
+        return snprintf(out, n, "%s\n", m);
+    }
+    if (!strcmp(leaf, "core_siblings") || !strcmp(leaf, "package_cpus") || !strcmp(leaf, "cluster_cpus")) {
+        cpumask_hex(m, sizeof m, nc, 1, 0, ndig);
+        return snprintf(out, n, "%s\n", m);
+    }
+    return -1;
+}
+// Parse+serve a full /sys/devices/system/cpu/cpuN/topology/<leaf> path. Returns content length (out is
+// NUL-terminated) or -1 if `rp` is not a topology file we synthesize (bad cpuN, unknown leaf, wrong shape).
+static int syscpu_topology_content(const char *rp, char *out, size_t n) {
+    if (!rp || strncmp(rp, "/sys/devices/system/cpu/cpu", 27)) return -1;
+    const char *d = rp + 27;
+    if (*d < '0' || *d > '9') return -1;
+    int cpuN = 0;
+    for (; *d >= '0' && *d <= '9'; d++) cpuN = cpuN * 10 + (*d - '0');
+    if (strncmp(d, "/topology/", 10)) return -1;
+    const char *leaf = d + 10;
+    if (!*leaf || strchr(leaf, '/')) return -1;
+    int nc = container_online_cpus();
+    if (cpuN < 0 || cpuN >= nc) return -1;
+    return syscpu_topology_str(leaf, cpuN, nc, out, n);
 }
 // Format 16 raw bytes as a Linux UUID string ("xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx\n"), stamping the
 // RFC-4122 version-4 (b[6]) and variant (b[8]) bits so the result parses as a valid random UUID. Writes
@@ -2883,9 +2949,14 @@ static int synth_stat_raw(const char *gp, struct stat *s) {
                 const char *d = leaf + 3;
                 int n = 0;
                 for (; *d >= '0' && *d <= '9'; d++) n = n * 10 + (*d - '0');
-                if (*d == 0 && n < container_online_cpus()) {
-                    hit = 1;
-                    isdir = 1; // a cpuN directory we advertise
+                if (n < container_online_cpus()) {
+                    if (*d == 0 || !strcmp(d, "/topology")) {
+                        hit = 1;
+                        isdir = 1; // the cpuN directory (or its topology/ subdir) we advertise
+                    } else if (!strncmp(d, "/topology/", 10)) {
+                        char tb[96];
+                        if (syscpu_topology_content(gp, tb, sizeof tb) >= 0) hit = 1; // a topology attribute file
+                    }
                 }
             }
         }
