@@ -36,6 +36,15 @@ fn regress() -> Group {
         port("offset-track", "offset_track.c").has("offset-track OK"), // off_t/position bookkeeping + re-seek
         port("sha512-kat", "sha512_kat.c").has("135000 : be56780ee49bdf84968811e70c492d018b91274b0c94b5d2196545ceeacc43ed4b45415ce5a51a3f68608d3f232bba4f279230fc95319934f6ce9ec52e711cf8"),
         port("ccmp-chain", "ccmp_test.c").has("ccmp OK"),          // conditional-compare/branch chains
+        // #186: sched_getaffinity(tid) for a NON-main guest thread must not spuriously return ESRCH. glibc's
+        // pthread_getattr_np (HotSpot's os::current_stack_region on EVERY JVM thread bring-up, also Go)
+        // calls sched_getaffinity(pd->tid) first; dd validated that pid with host kill(guest_tid,0) -> ESRCH
+        // (a guest tid is a dd-internal id, not a host pid) -> pthread_getattr_np returned 3 -> `java -version`
+        // aborted "pthread_getattr_np failed with error = 3". Fix resolves guest tids via the live-thread
+        // registry. Pre-fix: tid=0 wrap=0 getattr=0; post-fix matches native. Linux-only (no pthread_getattr_np
+        // on macOS libc). Shared proc.c fix -> both arches.
+        port("getaffinity-tid", "getaffinity_tid.c").only(&[Engine::LinuxAarch64, Engine::LinuxX86_64])
+            .out("getaffinity-tid tid=1 self=1 wrap=1 getattr=1\n"),
         // #281: LDAPR/LDAPRH/LDAPRB (Load-Acquire RCpc) on a NON-PIE image's low absolute data. The RCpc
         // load aliases the LSE atomic-RMW encoding box, so both the bias-fold (emit_fold_mem) and the
         // SIGSEGV fallback (nonpie_fixup) must serve it; nonpie_fixup formerly matched it as an atomic
