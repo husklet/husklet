@@ -49,6 +49,10 @@ impl Engine {
 pub enum Bin {
     /// Compile a Linux C source under `guests/` (gcc -static-pie, per Linux arch). Linux engines only.
     Source(&'static str),
+    /// Like `Source`, but linked STATIC NON-PIE (`-static -no-pie`) so the guest is an ET_EXEC that the
+    /// loader biases high (`g_nonpie_lo` set) — the ONLY state that exercises dispatch.c's non-PIE g2h
+    /// pointer-arg rebase switch. Used to guard that whole class (#409/#419) against regression. Linux only.
+    SourceNoPie(&'static str),
     /// A portable POSIX C source under `guests/` built for *every* engine: gcc -static-pie for the two
     /// Linux engines, clang (full libSystem) Mach-O for darwin. The one source proves the behaviour is
     /// identical on Linux (JIT-emulated) and macOS (native under darwinjail) — so coverage isn't
@@ -117,6 +121,7 @@ pub fn group(name: &'static str, cases: Vec<Case>) -> Group { Group { name, case
 fn base(name: &'static str, bin: Bin) -> Case {
     let engines = match &bin {
         Bin::Source(_) => vec![Engine::LinuxAarch64, Engine::LinuxX86_64], // same source, both Linux engines
+        Bin::SourceNoPie(_) => vec![Engine::LinuxAarch64, Engine::LinuxX86_64], // non-PIE ET_EXEC, both Linux
         Bin::Portable(_) => Engine::ALL.to_vec(),                          // every engine: Linux x2 + darwin
         Bin::DarwinSource(_) => vec![Engine::DarwinAarch64],
         Bin::DarwinLibc(_) => vec![Engine::DarwinAarch64],
@@ -127,6 +132,10 @@ fn base(name: &'static str, bin: Bin) -> Case {
 }
 /// A case whose guest is compiled from a Linux/aarch64 C source under `guests/`.
 pub fn src(name: &'static str, source: &'static str) -> Case { base(name, Bin::Source(source)) }
+/// A case whose guest is compiled STATIC NON-PIE (ET_EXEC) — the only build that turns on dispatch.c's
+/// non-PIE pointer-arg rebase (`g_nonpie_lo`). Pair with `.oracle()` to prove every rebased syscall
+/// dereferences a valid low .bss/stack pointer identically to native (regression guard for #409/#419).
+pub fn src_nopie(name: &'static str, source: &'static str) -> Case { base(name, Bin::SourceNoPie(source)) }
 /// A case whose guest is a portable POSIX source under `guests/`, run on EVERY engine (Linux x2 +
 /// darwin). Use golden checks — the same deterministic output must appear on Linux and macOS.
 pub fn port(name: &'static str, source: &'static str) -> Case { base(name, Bin::Portable(source)) }
@@ -316,11 +325,37 @@ fn compile(ctx: &Ctx, source: &str, e: Engine) -> Result<String, String> {
     Ok(out.to_string_lossy().into_owned())
 }
 
+/// Compile a guest STATIC NON-PIE (`-static -no-pie` → ET_EXEC), so the loader biases it high and turns
+/// on dispatch.c's non-PIE pointer-arg rebase (`g_nonpie_lo`). Cached under cache/<arch>/nopie/ so it
+/// never collides with the same source's static-PIE build. Same native/qemu oracle as `compile`.
+fn compile_nopie(ctx: &Ctx, source: &str, e: Engine) -> Result<String, String> {
+    let src = ctx.guests.join(source);
+    let out = ctx.cache.join(e.arch()).join("nopie").join(source.trim_end_matches(".c"));
+    std::fs::create_dir_all(out.parent().unwrap()).ok();
+    let needs = !out.exists()
+        || std::fs::metadata(&src).and_then(|m| m.modified()).ok()
+            >= std::fs::metadata(&out).and_then(|m| m.modified()).ok();
+    if needs {
+        let (cc, libs): (&str, &[&str]) = match e {
+            Engine::LinuxAarch64 => ("gcc", &["-lm"]),
+            Engine::LinuxX86_64 => ("x86_64-linux-gnu-gcc", &["-lm"]),
+            _ => return Err(format!("{} is not a compilable Linux target", e.label())),
+        };
+        let o = Command::new(cc).args(["-O2", "-static", "-no-pie", "-pthread"])
+            .arg("-o").arg(&out).arg(&src).args(libs).output()
+            .map_err(|err| format!("{cc} spawn: {err}"))?;
+        if !o.status.success() { return Err(format!("compile-nopie {source} [{}]: {}", e.arch(), String::from_utf8_lossy(&o.stderr).trim())); }
+    }
+    Ok(out.to_string_lossy().into_owned())
+}
+
 /// Provision the guest binary path for a case on an engine. `Ok(None)` = skip (no guest for this arch).
 fn provision(ctx: &Ctx, c: &Case, e: Engine) -> Result<Option<String>, String> {
     match &c.bin {
         Bin::Source(s) if e.can_compile() => compile(ctx, s, e).map(Some),
         Bin::Source(_) => Ok(None),
+        Bin::SourceNoPie(s) if e.can_compile() => compile_nopie(ctx, s, e).map(Some),
+        Bin::SourceNoPie(_) => Ok(None),
         // portable POSIX: Linux engines via gcc (same as Source), darwin via clang+libSystem.
         Bin::Portable(s) if e.can_compile() => compile(ctx, s, e).map(Some),
         Bin::Portable(s) if e == Engine::DarwinAarch64 => compile_darwin_libc(ctx, s).map(Some),
