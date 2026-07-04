@@ -36,6 +36,19 @@ pub fn group() -> ScenGroup {
             .exec("tty").has("/dev/pts/0").timeout(60),
         scen("terminal/py-ttyname", "python:alpine").tty()
             .exec("python3 -c 'import os; print(\"TTYNAME\", os.ttyname(0))'").has("TTYNAME /dev/pts/0").timeout(60),
+        // A GUEST-created pty (#227/#280): python's pty.openpty() opens the slave and it must present a
+        // Linux devpts identity, NOT the leaked host device. With the ctty holding index 0, the guest slave
+        // is /dev/pts/1 -- ttyname(slave) and readlink(/proc/self/fd/slave) both resolve it, and `ls /dev/pts`
+        // lists {0,1,ptmx}. Oracle-diffed against real docker (which shows exactly these).
+        scen("terminal/py-openpty-ttyname", "python:alpine").tty()
+            .exec("python3 -c 'import pty,os; m,s=pty.openpty(); print(\"SLAVE\", os.ttyname(s))'")
+            .has("SLAVE /dev/pts/1").timeout(60),
+        scen("terminal/py-openpty-fdlink", "python:alpine").tty()
+            .exec("python3 -c 'import pty,os; m,s=pty.openpty(); print(\"LINK\", os.readlink(\"/proc/self/fd/%d\"%s))'")
+            .has("LINK /dev/pts/1").timeout(60),
+        scen("terminal/py-openpty-pts-listing", "python:alpine").tty()
+            .exec("python3 -c 'import pty,os; m,s=pty.openpty(); print(\"LS\", \" \".join(sorted(os.listdir(\"/dev/pts\"))))'")
+            .has("LS 0 1 ptmx").timeout(60),
         scen("terminal/debian-isatty", "debian:bookworm").tty()
             .exec("[ -t 1 ] && echo TTY-OK").has("TTY-OK").timeout(60),
         scen("terminal/alpine-isatty", "alpine").tty()

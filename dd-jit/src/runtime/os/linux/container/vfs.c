@@ -2510,6 +2510,86 @@ static int fd_is_ctty(int pfn) {
     struct stat sa, sp;
     return fstat(a, &sa) == 0 && fstat(pfn, &sp) == 0 && S_ISCHR(sp.st_mode) && sa.st_rdev == sp.st_rdev;
 }
+// ---- devpts: a guest-created pty must look like /dev/pts/<N> everywhere (#227/#280) --------------
+// Real Linux/devpts numbers pty slaves sequentially from the lowest free index. `docker run -t` takes
+// index 0 for the container's controlling terminal, so a guest that then openpty()s gets 1, 2, ...; with
+// no controlling terminal the guest may take 0. dd's host pty is a macOS /dev/ttysNNN (or a host
+// /dev/pts/M) whose raw name must NEVER leak into the guest -- the slave has to appear as /dev/pts/<N>
+// everywhere: open() (ahead of the overlay resolver, #227), ptsname(3)/ttyname(3), readlink(/proc/self/
+// fd/K), `ls /dev/pts`, and stat as a char device whose dev/ino/rdev match the real slave (glibc/musl
+// ttyname compare these; #280). We map each index N to the host pty MASTER fd -- ptsname(master) resolves
+// the host slave device the slave opens -- and stamp the index onto every open master/slave fd so the
+// fd->path surface can rewrite it. Keeps the existing #411/#219 master-termios cache (keyed by master fd).
+#define DEVPTS_MAX 1024
+static int g_pts_master[DEVPTS_MAX];      // pts index N -> (host master fd + 1); 0 = free
+static int g_fd_ptsn[1024];               // host fd -> (pts index + 1); 0 = not a pty fd
+static uint8_t g_fd_ptsmaster[1024];      // 1 = this fd is the MASTER end, 0 = a slave
+// Materialize/remove the on-disk /dev/pts/<N> node so `ls /dev/pts` reflects the live slaves (devpts
+// creates the node when a slave is allocated and drops it when the pty is gone). Backed by an empty upper
+// file; its stat()/open()/readlink are intercepted. No-op when the container has no rootfs (bare guest).
+static void pts_node_path(int n, char *buf, size_t bn) { snprintf(buf, bn, "%s/dev/pts/%d", g_rootfs_canon, n); }
+static void pts_publish(int n) {
+    if (!g_rootfs_canon[0] || n < 0 || n >= DEVPTS_MAX) return;
+    char p[4200];
+    pts_node_path(n, p, sizeof p);
+    int fd = open(p, O_CREAT | O_WRONLY, 0620);
+    if (fd >= 0) close(fd);
+}
+static void pts_unpublish(int n) {
+    if (!g_rootfs_canon[0] || n < 0 || n >= DEVPTS_MAX) return;
+    char p[4200];
+    pts_node_path(n, p, sizeof p);
+    unlink(p);
+}
+// Allocate the lowest free pts index for a new host master fd. Index 0 is reserved for the controlling
+// terminal whenever the container has one (matching devpts, where the ctty grabbed 0 first).
+static int pts_alloc(int masterfd) {
+    int start = (ctty_anchor() >= 0) ? 1 : 0;
+    for (int n = start; n < DEVPTS_MAX; n++) {
+        if (!g_pts_master[n]) {
+            g_pts_master[n] = masterfd + 1;
+            if (masterfd >= 0 && masterfd < 1024) { g_fd_ptsn[masterfd] = n + 1; g_fd_ptsmaster[masterfd] = 1; }
+            return n;
+        }
+    }
+    return -1;
+}
+static int pts_master_fd(int n) { return (n >= 0 && n < DEVPTS_MAX && g_pts_master[n]) ? g_pts_master[n] - 1 : -1; }
+static int pts_index_of_master(int fd) { return (fd >= 0 && fd < 1024 && g_fd_ptsmaster[fd]) ? g_fd_ptsn[fd] - 1 : -1; }
+static int pts_index_of_fd(int fd) { return (fd >= 0 && fd < 1024 && g_fd_ptsn[fd]) ? g_fd_ptsn[fd] - 1 : -1; }
+static int pts_fd_is_master(int fd) { return fd >= 0 && fd < 1024 && g_fd_ptsmaster[fd]; }
+// Record a freshly-opened slave fd's pts index and publish its /dev/pts/N node.
+static void pts_note_slave(int slavefd, int n) {
+    if (slavefd >= 0 && slavefd < 1024) { g_fd_ptsn[slavefd] = n + 1; g_fd_ptsmaster[slavefd] = 0; }
+    pts_publish(n);
+}
+// close(2) / CLOEXEC-sweep teardown: a master frees its index (and its /dev/pts/N node); a slave clears
+// only its own entry (other slaves / the master keep the pty alive).
+static void pts_on_close(int fd) {
+    if (fd < 0 || fd >= 1024 || !g_fd_ptsn[fd]) return;
+    if (g_fd_ptsmaster[fd]) {
+        int n = g_fd_ptsn[fd] - 1;
+        if (n >= 0 && n < DEVPTS_MAX) g_pts_master[n] = 0;
+        pts_unpublish(n);
+    }
+    g_fd_ptsn[fd] = 0;
+    g_fd_ptsmaster[fd] = 0;
+}
+// Fill *s from the REAL host slave for /dev/pts/N (a guest-created pty), by opening a transient slave via
+// the master's host device -- so st_dev/st_ino/st_rdev EXACTLY equal fstat(slavefd), which ttyname(3)
+// compares. Returns 1 (char device) on success. N==0 with a ctty is handled by the caller (synth_stat_raw).
+static int devpts_slave_stat(int n, struct stat *s) {
+    int mfd = pts_master_fd(n);
+    if (mfd < 0) return 0;
+    char *sn = ptsname(mfd);
+    if (!sn) return 0;
+    int t = open(sn, O_RDWR | O_NOCTTY);
+    if (t < 0) t = open(sn, O_RDONLY | O_NOCTTY);
+    if (t < 0) return 0;
+    int ok = fstat(t, s) == 0;
+    close(t);
+    return ok && S_ISCHR(s->st_mode);
+}
 static const char *dev_node_hostpath(const char *gp) {
     if (!gp) return NULL;
     return !strcmp(gp, "/dev/null")     ? "/dev/null"
@@ -2550,6 +2630,9 @@ static void container_populate_dev(void) {
         if (fd >= 0) close(fd);
     }
     mkdir(DEVP("pts"), 0755);  // devpts mount point; /dev/pts/N slaves resolve via ptsname in fs.c
+    // devpts publishes a /dev/pts/ptmx multiplexer node (docker mounts it with ptmxmode=0666); `ls /dev/pts`
+    // lists it, and open("/dev/pts/ptmx") is intercepted like /dev/ptmx in fs.c.
+    { int fd = open(DEVP("pts/ptmx"), O_CREAT | O_WRONLY, 0666); if (fd >= 0) close(fd); }
     // When the container was handed a controlling terminal (docker run -t: the daemon's login_tty made fd
     // 0/1/2 the pty slave), Linux/devpts names it /dev/pts/0. Materialize that entry so `ls /dev/pts` lists
     // it; stat()/open()/readlink of /dev/pts/0 are intercepted (synth_stat_raw + fs.c) and routed to the
@@ -2603,7 +2686,12 @@ static int synth_stat_raw(const char *gp, struct stat *s) {
     if (gp && !strcmp(gp, "/dev/pts/0")) {
         int a = ctty_anchor();
         if (a >= 0 && fstat(a, s) == 0) return 1;
+        // no ctty: /dev/pts/0 may instead be a guest-allocated slave -> handled by the devpts case below
     }
+    // A guest-created pty slave /dev/pts/N (openpty/posix_openpt): fstat the real host slave so it reports
+    // as a char device with dev/ino/rdev matching fstat(slavefd) -- what ptsname(3)/ttyname(3) verify.
+    if (gp && !strncmp(gp, "/dev/pts/", 9) && gp[9] >= '0' && gp[9] <= '9' && devpts_slave_stat(atoi(gp + 9), s))
+        return 1;
     // Pseudo /dev char devices: stat the host node so type/existence agree with open(), then OVERRIDE the
     // rdev + mode with the Linux-canonical values. The host node carries macOS's own major/minor, but Linux
     // fixes these numbers (null 1:3, zero 1:5, full 1:7, random 1:8, urandom 1:9, tty 5:0, console 5:1) and
