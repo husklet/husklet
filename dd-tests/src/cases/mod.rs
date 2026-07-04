@@ -47,6 +47,19 @@ fn regress() -> Group {
         // Byte-exact vs native proves the fixup now serves the acquire load correctly.
         src_nopie("ldapr-nonpie-fixup", "nonpie_ldapr.c").env("NOGUESTFOLD", "1").oracle()
             .only(&[Engine::LinuxAarch64]),
+        // #423 REGRESSION GUARD: an externally-linked / cgo (runtime.iscgo==1) aarch64 Go binary that forces
+        // heavy goroutine stack growth + GC (64 goroutines, morestack copies, runtime.GC). Go async-preempts
+        // running goroutines with SIGURG; dd's delivery of SIGURG into a preempted cgo thread (Go's
+        // cgoSigtramp) corrupted a stack return address via a signal-frame/SP overlap -> SIGSEGV/SIGBUS mid-run
+        // (proven: this fixture, influxd, and victoria-metrics all crashed). The interim fix auto-suppresses
+        // SIGURG for exactly the iscgo aarch64 Go class (os/linux/elf.c detects it from the Go build-info
+        // CGO_ENABLED setting; os/linux/signal.c drops the delivery) -- equivalent to GODEBUG=asyncpreemptoff=1,
+        // so cooperative preemption keeps the program correct. Without the fix this crashes (rc=139/138); with
+        // it, it completes. Prebuilt aarch64-only (no local Go cross-compiler); Go GC can't be qemu-oracled, so
+        // the total is a GOLDEN cross-checked byte-exact vs native arm64 Go. Source: guests/arm/go_cgo_stackgrow.go
+        // built `CGO_ENABLED=1 go build -ldflags='-linkmode external -extldflags -static'`.
+        fixture("go-cgo-sigurg", &[(Engine::LinuxAarch64, "guests/arm/go_cgo_stackgrow_arm")])
+            .has("OK stackgrow total= 2016"),
     ])
 }
 
