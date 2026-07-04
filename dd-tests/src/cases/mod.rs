@@ -60,6 +60,22 @@ fn regress() -> Group {
         // built `CGO_ENABLED=1 go build -ldflags='-linkmode external -extldflags -static'`.
         fixture("go-cgo-sigurg", &[(Engine::LinuxAarch64, "guests/arm/go_cgo_stackgrow_arm")])
             .has("OK stackgrow total= 2016"),
+        // #392 STACK-OVERFLOW GUARD: a guest that recurses off the bottom of its stack must hit the
+        // PROT_NONE guard gap dd now places immediately below every guest stack -> a deliverable SIGSEGV
+        // (like Linux's stack guard gap), NOT a silent write into the adjacent 64MB RX code cache (the
+        // clickhouse corruption). The guest first proves the usable stack is intact (a bounded-but-deep
+        // recursion prints "deep ok"), then overruns and dies of SIGSEGV. Byte-exact vs native arm64 /
+        // qemu-x86_64: identical surviving stdout and identical signal-death. Pre-fix the x86 engine's lazy
+        // stack-grow silently swallowed the overflow into the cache (wild crash / hang) -> mismatch.
+        src("stackoverflow", "stackoverflow.c").oracle()
+            .only(&[Engine::LinuxAarch64, Engine::LinuxX86_64]),
+        // #392 item 3: a guest that installs its OWN SIGSEGV handler on an alternate signal stack (glibc's
+        // stack-overflow detection / a JIT guard-page trap) must, on overflow, get that handler invoked with
+        // signo SIGSEGV and a non-NULL si_addr in the guard region -- delivered on the altstack because the
+        // main stack is exhausted (requires dd's per-thread host altstack + host-SIGBUS->SIGSEGV mapping).
+        // Byte-exact "caught SIGSEGV addr=1" + exit 42 vs native arm64 / qemu-x86_64.
+        src("stackoverflow-catch", "stackoverflow_catch.c").oracle()
+            .only(&[Engine::LinuxAarch64, Engine::LinuxX86_64]),
     ])
 }
 

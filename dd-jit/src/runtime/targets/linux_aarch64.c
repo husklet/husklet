@@ -393,7 +393,8 @@ static int engine_global_init(void) {
         struct sigaction sa;
         memset(&sa, 0, sizeof sa);
         sa.sa_sigaction = getenv("DD_FAULTCOUNT") ? nonpie_guard_count : nonpie_guard;
-        sa.sa_flags = SA_SIGINFO;
+        sa.sa_flags = SA_SIGINFO | SA_ONSTACK; // #392: run on the per-thread altstack so a guest stack
+                                               // overflow's guard fault is deliverable (host SP == guest SP)
         sigaction(SIGSEGV, &sa, NULL);
         sigaction(SIGBUS, &sa, NULL);
     }

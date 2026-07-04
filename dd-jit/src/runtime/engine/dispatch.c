@@ -93,6 +93,9 @@ static void run_guest(struct cpu *c) {
     thread_register(c);
     // Frontend hook: one-time per-thread entry setup (x86 publishes the 2-way IBTC base; empty on aarch64).
     G_DISPATCH_ENTER(c);
+    // #392: a per-thread alternate signal stack so a guest stack overflow's guard fault can be delivered
+    // even when the (aarch64) host SP == the exhausted guest SP. No-op reservation on x86 (host SP differs).
+    install_host_sigaltstack();
     while (!c->exited) {
         // #292: reset the async-interrupt poll each dispatcher iteration. The emitted body check sets us
         // here when cpu->irq is seen; delivery happens at the bottom of the loop (maybe_deliver_signal).
@@ -212,4 +215,5 @@ static void run_guest(struct cpu *c) {
     // Leave the registries: this thread will never execute in the cache again, nor be a signal target.
     thread_unregister(c);
     stw_unregister();
+    uninstall_host_sigaltstack(); // #392: release this thread's alternate signal stack
 }

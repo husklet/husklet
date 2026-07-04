@@ -215,6 +215,41 @@ static int host_addr_mapped(uintptr_t a) {
         return 0; // nothing at/above -> unmapped
     return a >= (uintptr_t)addr && a < (uintptr_t)addr + (uintptr_t)size;
 }
+
+// #392: per-thread ALTERNATE signal stack for the synchronous-fault guards. On the aarch64 frontend the
+// host SP == the guest SP while a translated block runs, so a guest STACK OVERFLOW leaves no room for the
+// kernel to push the SIGSEGV/SIGBUS guard's signal frame -- without an altstack the handler double-faults
+// and the guest dies of a spurious SIGILL/SIGBUS instead of a clean, guard-delivered SIGSEGV. Installed
+// once per thread (main + every guest thread) from run_guest, before any guest code executes, and torn down
+// at run_guest exit. (x86 keeps host SP != guest SP, so its guards don't take SA_ONSTACK and never use it;
+// the reservation is uncommitted there.)
+#define HOST_ALTSTK_SZ (512u << 10)
+static _Thread_local void *g_altstk_mem;
+// Idempotent: (re)registers the alternate signal stack for THIS thread, allocating one on first use and
+// reusing the existing region otherwise. The sigaltstack() registration is not reliably inherited across
+// fork() on Apple Silicon (like the W^X/APRR state -- see fork_child_hooks), so the fork child re-arms via
+// this same call with its COW-inherited region.
+static void install_host_sigaltstack(void) {
+    void *mem = g_altstk_mem;
+    if (!mem) {
+        mem = mmap(NULL, HOST_ALTSTK_SZ, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON, -1, 0);
+        if (mem == MAP_FAILED) return;
+    }
+    stack_t ss = {.ss_sp = mem, .ss_size = HOST_ALTSTK_SZ, .ss_flags = 0};
+    if (sigaltstack(&ss, NULL) != 0) {
+        if (mem != g_altstk_mem) munmap(mem, HOST_ALTSTK_SZ);
+        return;
+    }
+    g_altstk_mem = mem;
+}
+static void uninstall_host_sigaltstack(void) {
+    if (!g_altstk_mem) return;
+    stack_t ss = {.ss_flags = SS_DISABLE};
+    sigaltstack(&ss, NULL);
+    munmap(g_altstk_mem, HOST_ALTSTK_SZ);
+    g_altstk_mem = 0;
+}
+
 // Range form of host_addr_mapped: true iff every page spanning [a, a+len) is mapped. Used to validate a
 // guest-supplied syscall buffer (a result struct to write, an argument struct to read) BEFORE dereferencing
 // it, so a bad/garbage user pointer returns -EFAULT to the guest instead of faulting the engine (the
