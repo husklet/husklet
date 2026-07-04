@@ -203,6 +203,7 @@ static void fork_child_hooks(struct cpu *c) {
     if (fp) t[3] = now_ns();
     thread_after_fork(); // reset process-private thread/futex locks a dead peer may have held at fork
     sysv_after_fork();   // reset the SysV-shm lock (same fork-unsafe-mutex class)
+    ts_after_fork();     // #404: drop the inherited task-state slot cache so the child re-claims its own
     poslk_after_fork();  // #340: re-cache pid; child inherits NONE of the parent's fcntl record locks
     wipefork_apply_child(); // MADV_WIPEONFORK: zero-fill the ranges the guest marked wipe-on-fork
     if (fp) t[4] = now_ns();
@@ -1220,6 +1221,7 @@ static int svc_proc(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64
         int pt_armed = ((int)a2 & 1 /*WNOHANG*/) ? 0 : pt_wait_arm(&pt_saved);
         // SA_RESTART: a wait interrupted by a handler that asked to restart (e.g. a SIGCHLD reaper, or
         // gcc's driver) must transparently retry instead of failing the guest with EINTR.
+        ts_wait_enter(); // #404: 'S' while blocked waiting on a child (WNOHANG returns immediately, harmless)
         do {
             r = wait4((pid_t)(int)a0, &st, (int)a2, (struct rusage *)a3);
             // Reroute to the ptrace pump if the interrupt was a tracee of ours stopping (we became a tracer
@@ -1228,6 +1230,7 @@ static int svc_proc(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64
                 pid_t pr;
                 if (ptrace_wait(c, (pid_t)(int)a0, (int)a2, (struct rusage *)a3, &st, &pr)) {
                     pt_wait_disarm(pt_armed, &pt_saved);
+                    ts_wait_leave();
                     if (pr < 0) { G_RET(c) = (uint64_t)(int64_t)pr; goto wait_done; }
                     if (a1) *(int *)a1 = st;
                     G_RET(c) = (uint64_t)pr;
@@ -1236,6 +1239,7 @@ static int svc_proc(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64
             }
         } while (r < 0 && SVC_EINTR_RESTART(c));
         pt_wait_disarm(pt_armed, &pt_saved);
+        ts_wait_leave();
         if (r < 0) {
             G_RET(c) = (uint64_t)(-errno);
             break;

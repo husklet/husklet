@@ -356,12 +356,14 @@ static int svc_event(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint6
             // #146: epoll_wait is never restarted by a handler -- re-wait only on a SPURIOUS EINTR (nothing to
             // deliver); the moment a guest handler is runnable we return -EINTR and let the dispatcher run it.
             // kevent applies the changelist before blocking, so a retry re-waits only (changes consumed -> none).
+            ts_wait_enter(); // #404: 'S' while blocked in epoll_wait/epoll_pwait
             do {
                 r = kevent(ep, chg, nchg, kv, maxev, tp);
                 ep_count();
                 chg = NULL;
                 nchg = 0;
             } while (r < 0 && svc_poll_retry(c));
+            ts_wait_leave();
             if (opt && !lk) g_ep_chgn[ep] = 0; // consumed (threaded flushed it under the lock already)
             if (r < 0) {
                 G_RET(c) = (uint64_t)(-errno);
@@ -523,7 +525,7 @@ static int svc_event(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint6
                 rem.tv_nsec = (long)(ns % 1000000000LL);
                 tsp = &rem;
             }
-            r = pselect((int)a0, (fd_set *)a1, (fd_set *)a2, (fd_set *)a3, tsp, NULL);
+            ts_wait_enter(); r = pselect((int)a0, (fd_set *)a1, (fd_set *)a2, (fd_set *)a3, tsp, NULL); ts_wait_leave(); // #404: S while blocked (glibc pause on aarch64 lands in ppoll below; select here)
             // #146: pselect is never restarted by a handler; loop only on a spurious EINTR (svc_poll_retry),
             // and then only for the time that remains (recomputed above), never the full budget again.
             if (r < 0 && svc_poll_retry(c)) continue;
@@ -585,7 +587,7 @@ static int svc_event(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint6
                 int64_t ms = (int64_t)(deadline.tv_sec - now.tv_sec) * 1000LL + (deadline.tv_nsec - now.tv_nsec) / 1000000LL;
                 tmo = ms < 0 ? 0 : (ms > 0x7fffffff ? 0x7fffffff : (int)ms);
             }
-            r = poll(fds, (nfds_t)a1, tmo);
+            ts_wait_enter(); r = poll(fds, (nfds_t)a1, tmo); ts_wait_leave(); // #404: S while blocked (glibc pause() on aarch64 -> ppoll)
             // #146: poll/ppoll is never restarted by a handler; loop only on a spurious EINTR (svc_poll_retry).
             if (r < 0 && svc_poll_retry(c)) continue;
             break;

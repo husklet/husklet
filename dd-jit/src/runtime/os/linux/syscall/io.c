@@ -277,7 +277,9 @@ static int svc_io(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t
         // WITHOUT SA_RESTART lets EINTR through. (Well-behaved programs block in poll/select/epoll -- which
         // always return EINTR -- and only read when ready, so this never defers a needed handler.)
         ssize_t r;
+        ts_wait_enter(); // #404: 'S' while a read may block (pipe/socket/tty; a ready/regular fd returns at once)
         do { r = read(rfd, (void *)a1, (size_t)a2); } while (r < 0 && SVC_EINTR_RESTART(c));
+        ts_wait_leave();
         // SEQPACKET/O_DIRECT-pipe EOF over a DGRAM backing: a peer-closed read reports ECONNRESET, but the
         // emulated endpoint must return 0 (EOF) like the Linux original. (See netns.c / case 199 / pipe2.)
         if (r < 0 && errno == ECONNRESET && seq_is(rfd)) r = 0;
@@ -364,7 +366,9 @@ static int svc_io(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t
             break;
         }
         ssize_t r; // SA_RESTART: restart a signal-interrupted blocking readv in place (see case 63)
+        ts_wait_enter(); // #404: 'S' while readv may block
         do { r = readv((int)a0, (void *)a1, (int)a2); } while (r < 0 && SVC_EINTR_RESTART(c));
+        ts_wait_leave();
         G_RET(c) = r < 0 ? (uint64_t)(-errno) : (uint64_t)r;
         break;
     // readv
