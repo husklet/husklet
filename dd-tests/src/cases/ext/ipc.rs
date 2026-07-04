@@ -34,6 +34,18 @@ fn ext_ipc() -> Group {
         port("sysv-sem", "ext_ipc/ipc_sysv_sem.c").out("sysv_sem v0=3 v1=13 v2=10 all=3,13,10\n"),
         port("sysv-msg", "ext_ipc/ipc_sysv_msg.c").out("sysv_msg t2=type2 any=type1 t3=type3\n"),
         port("msgget-ftok", "ext_ipc/ipc_msgget_ftok.c").out("ftok key_ok=1 msg=ftok-msg\n"),
+        // #421: the dd-internal per-container SysV registry (was: the macOS host 32-slot table). Allocates
+        // >32 shm segments concurrently, a cross-fork shmat shared-memory write, and cross-process BLOCKING
+        // semop + msgsnd/msgrcv round-trips — every one of which the old host-backed path could not do
+        // (shmmni=32, no cross-process shm). Confirmed byte-exact vs the native Linux oracle during bring-up;
+        // pinned as a Linux-engine GOLDEN (not `.oracle()`) because the oracle would create 64 *native*
+        // IPC_PRIVATE segments in the shared HOST SysV table, whose churn destabilises the concurrent
+        // `sysv-ctl` badidx oracle (a `*_STAT(0x40000000)` maps via `idx % IPCMNI == 0` onto whatever host
+        // object sits at index 0) — the very host-table contention #421 removes on the dd side. Golden keeps
+        // this to dd's own per-container registry (macOS host can't do >32, so darwin is excluded).
+        port("sysv-stress", "ext_ipc/ipc_sysv_stress.c")
+            .out("many_segs over32=1 allmapped=1 dataok=1\nxfork shm_shared=1 sem_blockwait=1 msg_roundtrip=1\n")
+            .only(&[Engine::LinuxAarch64, Engine::LinuxX86_64]),
         // ---- POSIX shm / sem ----
         port("posix-shm", "ext_ipc/ipc_posix_shm.c").out("posix_shm total=40000\n"),
         // sem_open ENOENT under the JIT (same gap as threads/sem-named) — passes native-on-macOS.

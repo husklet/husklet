@@ -111,10 +111,16 @@ int main(void) {
     printf("einval shm=%s sem=%s msg=%s\n", en(c_shm), en(c_sem), en(c_msg));
 
     // ============================ EINVAL on an out-of-range *_STAT index ============================
-    int x_shm = shmctl(0x40000000, SHM_STAT, &sds) < 0 ? errno : 0;
+    // Use a NEGATIVE index: *_STAT reads its arg as a kernel array index, and a positive OOR value like
+    // 0x40000000 maps via `idx % IPCMNI` back onto a REAL low index (0x40000000 % 32768 == 0) — so on the
+    // native oracle it can spuriously find whatever object a *concurrent* test left at host index 0 in the
+    // SHARED host SysV table (the exact contention #421 removes on dd's side) and return "ok". A negative
+    // index is out of range on both dd and any real kernel's IDR, so this stays deterministic under
+    // concurrency while testing the same thing (an out-of-range *_STAT index -> EINVAL).
+    int x_shm = shmctl(-1, SHM_STAT, &sds) < 0 ? errno : 0;
     su.buf = &semds;
-    int x_sem = semctl(0x40000000, 0, SEM_STAT, su) < 0 ? errno : 0;
-    int x_msg = msgctl(0x40000000, MSG_STAT, &mds) < 0 ? errno : 0;
+    int x_sem = semctl(-1, 0, SEM_STAT, su) < 0 ? errno : 0;
+    int x_msg = msgctl(-1, MSG_STAT, &mds) < 0 ? errno : 0;
     printf("badidx shm=%s sem=%s msg=%s\n", en(x_shm), en(x_sem), en(x_msg));
 
     // ============================ EFAULT on a bad IPC_STAT buffer ============================
