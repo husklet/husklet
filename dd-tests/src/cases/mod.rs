@@ -57,6 +57,18 @@ fn threads() -> Group {
         port("mutex", "threads_mutex.c").out("queue produced=40000 consumed=40000\n"), // mutex + condvar
         port("contention", "threads_many.c").out("threads mutex=640000 atomic=640000\n"), // 64 threads
         port("tls", "tls.c").out("tls ok=8\n"),                                          // __thread storage
+        // TLS access models (LE/IE/GD/LD) x {main, spawned} threads, value survives alloc churn.
+        port("tls-models", "tlsmodels.c").out("tlsmodels main=5 thread=5\n"),
+        // The non-PIE ET_EXEC local-exec model clickhouse's DB::current_thread actually uses (#281),
+        // oracle-diffed on both Linux arches to prove the TP-relative address matches native exactly.
+        // Main-thread only: the spawned-thread path is covered by the portable tls-models above, and a
+        // spawned thread in a non-PIE ET_EXEC currently SEGVs on the x86_64 engine (see threads-nopie).
+        src_nopie("tls-models-nopie", "tlsmodels_main.c").oracle(),
+        // GAP (discovered #281 TLS sweep): a spawned pthread inside a non-PIE ET_EXEC (static -no-pie)
+        // SEGVs on the x86_64 engine — a non-PIE clone/thread-setup bug, NOT TLS (a bare thread with no
+        // TLS access also crashes). aarch64 handles it fine; tracked here as an x86_64 xfail.
+        src_nopie("threads-nopie", "threads_mutex.c")
+            .out("queue produced=40000 consumed=40000\n").xfail(&[Engine::LinuxX86_64]),
     ])
 }
 
