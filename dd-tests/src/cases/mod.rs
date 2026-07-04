@@ -6,7 +6,7 @@
 //! `in_rootfs(name, img, a)` run a program already inside an image's rootfs (container behaviour).
 //! `fixture(name, &[(e,p)])` run a prebuilt binary on engine `e` (the only way to exercise x86-64 now).
 
-use crate::{darwin_libc, darwin_src, fixture, group, in_rootfs, port, src, Case, Engine, Group};
+use crate::{darwin_libc, darwin_src, fixture, group, in_rootfs, port, src, src_nopie, Case, Engine, Group};
 
 pub mod ext;   // per-category basics expansion (one file per agent, appended below)
 
@@ -36,6 +36,17 @@ fn regress() -> Group {
         port("offset-track", "offset_track.c").has("offset-track OK"), // off_t/position bookkeeping + re-seek
         port("sha512-kat", "sha512_kat.c").has("135000 : be56780ee49bdf84968811e70c492d018b91274b0c94b5d2196545ceeacc43ed4b45415ce5a51a3f68608d3f232bba4f279230fc95319934f6ce9ec52e711cf8"),
         port("ccmp-chain", "ccmp_test.c").has("ccmp OK"),          // conditional-compare/branch chains
+        // #281: LDAPR/LDAPRH/LDAPRB (Load-Acquire RCpc) on a NON-PIE image's low absolute data. The RCpc
+        // load aliases the LSE atomic-RMW encoding box, so both the bias-fold (emit_fold_mem) and the
+        // SIGSEGV fallback (nonpie_fixup) must serve it; nonpie_fixup formerly matched it as an atomic
+        // (opc==4/o3==1) and returned 0 → a hard SIGSEGV. Diffed byte-exact vs the native aarch64 oracle.
+        src_nopie("ldapr-nonpie", "nonpie_ldapr.c").oracle()
+            .only(&[Engine::LinuxAarch64]), // LDAPR is an aarch64 RCpc opcode; no x86 analogue
+        // Same guest with the bias-fold DISABLED (NOGUESTFOLD) so every LDAPR* on the low image faults into
+        // nonpie_fixup — the exact path that formerly declined LDAPR (opc==4/o3==1 → return 0 → SIGSEGV).
+        // Byte-exact vs native proves the fixup now serves the acquire load correctly.
+        src_nopie("ldapr-nonpie-fixup", "nonpie_ldapr.c").env("NOGUESTFOLD", "1").oracle()
+            .only(&[Engine::LinuxAarch64]),
     ])
 }
 
