@@ -273,13 +273,13 @@ fn soak() -> Group {
 /// output. If the JIT can host a compiler building+running correct code, it can host almost anything.
 /// Sources are embedded base64 (self-contained, no host source needed). Linux/aarch64 (the gcc image).
 fn compile() -> Group {
-    // The GCC driver currently segfaults under the aarch64 JIT (a large dynamically-linked C++ binary;
-    // no missing-syscall/UNIMPL diagnostic -> codegen/runtime bug — perl, another big dynamic binary,
-    // works). Marked xfail so the gap is tracked (XPASS will fire the moment the engine fixes it).
-    let gcc = |name, sh| in_rootfs(name, "gcc-bundle", &["/bin/sh", "-c", sh]).xfail(&[Engine::LinuxAarch64]);
+    let gcc = |name, sh| in_rootfs(name, "gcc-bundle", &["/bin/sh", "-c", sh]);
     group("compile", vec![
-        // the staged /hello.c — gcc -> cc1 -> as -> ld -> run.
-        gcc("hello", "cd /tmp && gcc-14 -O2 -o h /hello.c && ./h && rm -f h").has("compiled by gcc"),
+        // the staged /hello.c — gcc -> cc1 -> as -> ld -> run. Still segfaults under the aarch64 JIT
+        // (large dynamically-linked driver; no missing-syscall/UNIMPL diagnostic -> codegen/runtime bug).
+        // Marked xfail so the gap is tracked (XPASS will fire the moment the engine fixes it).
+        gcc("hello", "cd /tmp && gcc-14 -O2 -o h /hello.c && ./h && rm -f h").has("compiled by gcc")
+            .xfail(&[Engine::LinuxAarch64]),
         // a prime sieve (pure integer -> optimizer-independent output); proves compiled code is correct.
         gcc("c-primes", "cd /tmp && echo I2luY2x1ZGUgPHN0ZGlvLmg+CmludCBtYWluKHZvaWQpe2ludCBjPTA7Zm9yKGludCBuPTI7bjwxMDAwMDA7bisrKXtpbnQgcD0xO2ZvcihpbnQgZD0yO2QqZDw9bjtkKyspaWYobiVkPT0wKXtwPTA7YnJlYWs7fWMrPXA7fXByaW50ZigicHJpbWVzPSVkXG4iLGMpO3JldHVybiAwO30K \
             | base64 -d > p.c && gcc-14 -O2 -o p p.c && ./p && rm -f p p.c").has("primes=9592"),

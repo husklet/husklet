@@ -11,8 +11,6 @@
 #![allow(unused_imports)]
 use crate::{group, src, port, darwin_src, darwin_libc, fixture, in_rootfs, Case, Engine, Group};
 
-const MAC: &[Engine] = &[Engine::DarwinAarch64];
-
 pub fn groups() -> Vec<Group> {
     vec![
         // ---- kqueue/kevent: the BSD event-notification primitive (epoll/inotify/timerfd/eventfd
@@ -20,10 +18,7 @@ pub fn groups() -> Vec<Group> {
         group("darwin-kqueue", vec![
             darwin_libc("kq-timer", "darwin/kqueue_timer.c").out("kqueue timer fired=1\n"),
             darwin_libc("kq-write", "darwin/kqueue_write.c").out("kqueue writable=1\n"),
-            // EVFILT_SIGNAL never fires under the darwin engine — kevent blocks the full timeout and
-            // returns 0 even though SIGUSR1 was raised (the other four filters all work). GAPS:
-            // darwin-kqueue-signal.
-            darwin_libc("kq-signal", "darwin/kqueue_signal.c").out("kqueue signal=1\n").xfail(MAC),
+            darwin_libc("kq-signal", "darwin/kqueue_signal.c").out("kqueue signal=1\n"),
             darwin_libc("kq-vnode", "darwin/kqueue_vnode.c").out("kqueue vnode write=1\n"),
             darwin_libc("kq-user", "darwin/kqueue_user.c").out("kqueue user=1\n"),
         ]),
@@ -90,11 +85,7 @@ pub fn groups() -> Vec<Group> {
             darwin_libc("bsd-progname", "darwin/bsd_progname.c").out("progname=ddtest\n"),
             darwin_libc("bsd-copyfile", "darwin/bsd_copyfile.c").out("copyfile ok=1\n"),
             darwin_libc("bsd-gettimeofday", "darwin/bsd_gettimeofday.c").out("gettimeofday mono=1\n"),
-            // posix_spawn of a system binary fails under the darwin engine: the guest runs natively
-            // under the arm64 darwinjail.dylib (DYLD_INSERT_LIBRARIES), which is inherited by the
-            // spawned child — but /usr/bin/true is arm64e, so dyld aborts the child on an arch
-            // mismatch and the spawn never completes. GAPS: darwin-spawn-jail-arch.
-            darwin_libc("bsd-spawn", "darwin/bsd_spawn.c").out("spawn true=0 false=1\n").xfail(MAC),
+            darwin_libc("bsd-spawn", "darwin/bsd_spawn.c").out("spawn true=0 false=1\n"),
         ]),
 
         // ---- raw syscall-ABI Mach-O guests (no libc, _start entry) — bare BSD svc path + the darwin
