@@ -12,6 +12,24 @@
 // is generated -- which is exactly what a correct shell does around these calls (bash's give_terminal_to).
 // So block SIGTTOU on the host for the duration of the REAL call: it never fakes the operation (the real
 // tcsetpgrp/tcsetattr still runs on the real pty) and is a no-op when the guest already blocked it.
+// statfs(2)/fstatfs(2) f_type + geometry fidelity inside a container. A real container's mount tree puts
+// the rootfs on OVERLAYFS and the kernel pseudo-filesystems (/proc, /sys, /sys/fs/cgroup, /dev*) on their
+// own magic types with the pseudo ones reporting ZERO blocks. dd resolves every guest path into ONE host
+// (macOS) directory tree, so a naive host statfs stamps the SAME magic + the SAME real-disk geometry on
+// every path -- so `stat -f -c %T /proc` prints the wrong type and `df -h` lists /proc & /sys with a huge
+// bogus size (busybox/coreutils df hides a mount only when f_blocks==0, which the pseudo-fs must report).
+// Classify by the guest ABSOLUTE path and return the Linux magic; `*zero` marks a pseudo-fs whose block/
+// inode counts must be forced to 0 (proc/sysfs/cgroup2). Only used in container (g_rootfs) mode.
+static int64_t guest_statfs_magic(const char *g, int *zero) {
+    *zero = 0;
+    if (!strcmp(g, "/proc") || !strncmp(g, "/proc/", 6)) { *zero = 1; return 0x9fa0; }             // PROC_SUPER_MAGIC
+    if (!strcmp(g, "/sys/fs/cgroup") || !strncmp(g, "/sys/fs/cgroup/", 15)) { *zero = 1; return 0x63677270; } // CGROUP2
+    if (!strcmp(g, "/sys") || !strncmp(g, "/sys/", 5)) { *zero = 1; return 0x62656572; }           // SYSFS_MAGIC
+    if (!strcmp(g, "/dev/mqueue") || !strncmp(g, "/dev/mqueue/", 12)) return 0x19800202;           // MQUEUE_MAGIC
+    if (!strcmp(g, "/dev/pts") || !strncmp(g, "/dev/pts/", 9)) return 0x1cd1;                       // DEVPTS_SUPER_MAGIC
+    if (!strcmp(g, "/dev") || !strncmp(g, "/dev/", 5)) return 0x01021994;                           // TMPFS_MAGIC
+    return 0x794c7630;                                                                              // OVERLAYFS_SUPER_MAGIC (rootfs)
+}
 static void tty_ctl_block(sigset_t *saved) {
     sigset_t blk;
     sigemptyset(&blk);
@@ -1003,15 +1021,19 @@ static int svc_fs(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t
         // into the Linux struct statfs layout (all 8-byte fields on 64-bit; f_fsid is two 32-bit words).
         struct statfs hs;
         int r;
+        char gpath[4200]; gpath[0] = 0; // guest ABSOLUTE path (container mode) -> pseudo-fs classification
         if (nr == 43) {
             // A path pointer outside the address space -> EFAULT (kernel getname copy_from_user), before
             // the buffer is examined (LTP statfs02 "bad path"). guest_bad_ptr catches a PROT_NONE page.
             if (!a0 || guest_bad_ptr(a0, 1)) { G_RET(c) = (uint64_t)(int64_t)(-EFAULT); break; }
             char pb[4200];
             const char *p = atpath(-100, (const char *)a0, pb, sizeof pb, 0);
+            if (g_rootfs) guest_abspath_at(-100, (const char *)a0, gpath, sizeof gpath);
             r = statfs(p, &hs);
         } else {
             r = fstatfs((int)a0, &hs);
+            if (g_rootfs && (int)a0 >= 0 && (int)a0 < 1024 && g_fdpath[(int)a0][0])
+                guest_from_host(g_fdpath[(int)a0], gpath, sizeof gpath);
         }
         if (r < 0) {
             G_RET(c) = (uint64_t)(-errno);
@@ -1021,14 +1043,25 @@ static int svc_fs(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t
         // The result buffer must be writable -> EFAULT on a bad/unmapped/PROT_NONE pointer (LTP statfs02
         // "bad buf"; the engine fills this buffer itself, so guard before the writes below).
         if (guest_bad_ptr((uintptr_t)a1, 120)) { G_RET(c) = (uint64_t)(int64_t)(-EFAULT); break; }
+        // f_type + pseudo-fs geometry: in a container classify by the guest mount (overlay/proc/sysfs/
+        // cgroup2/tmpfs/devpts/mqueue); a pseudo-fs (proc/sysfs/cgroup2) reports ZERO blocks/inodes so df
+        // hides it and stat -f names it correctly. Bare (no rootfs) keeps the legacy tmpfs magic + host geo.
+        int64_t f_type = 0x01021994;
+        int pseudo_zero = 0;
+        if (g_rootfs && gpath[0]) f_type = guest_statfs_magic(gpath, &pseudo_zero);
+        uint64_t blocks = pseudo_zero ? 0 : (uint64_t)hs.f_blocks;
+        uint64_t bfree  = pseudo_zero ? 0 : (uint64_t)hs.f_bfree;
+        uint64_t bavail = pseudo_zero ? 0 : (uint64_t)hs.f_bavail;
+        uint64_t files  = pseudo_zero ? 0 : (uint64_t)hs.f_files;
+        uint64_t ffree  = pseudo_zero ? 0 : (uint64_t)hs.f_ffree;
         memset(b, 0, 120);
-        *(int64_t *)(b + 0) = 0x01021994;              // f_type (TMPFS_MAGIC; geometry is what matters)
+        *(int64_t *)(b + 0) = f_type;                  // f_type (Linux fs magic for the resolved mount)
         *(int64_t *)(b + 8) = (int64_t)hs.f_bsize;     // f_bsize
-        *(uint64_t *)(b + 16) = (uint64_t)hs.f_blocks; // f_blocks
-        *(uint64_t *)(b + 24) = (uint64_t)hs.f_bfree;  // f_bfree
-        *(uint64_t *)(b + 32) = (uint64_t)hs.f_bavail; // f_bavail
-        *(uint64_t *)(b + 40) = (uint64_t)hs.f_files;  // f_files
-        *(uint64_t *)(b + 48) = (uint64_t)hs.f_ffree;  // f_ffree
+        *(uint64_t *)(b + 16) = blocks;                // f_blocks
+        *(uint64_t *)(b + 24) = bfree;                 // f_bfree
+        *(uint64_t *)(b + 32) = bavail;                // f_bavail
+        *(uint64_t *)(b + 40) = files;                 // f_files
+        *(uint64_t *)(b + 48) = ffree;                 // f_ffree
         *(int32_t *)(b + 56) = hs.f_fsid.val[0];       // f_fsid[0]
         *(int32_t *)(b + 60) = hs.f_fsid.val[1];       // f_fsid[1]
         *(int64_t *)(b + 64) = 255;                    // f_namelen (NAME_MAX)
