@@ -45,6 +45,17 @@ fn main() {
     let engines: Vec<Engine> = Engine::ALL.into_iter().filter(|e| engine_filter.map_or(true, |f| f == *e)).collect();
     let matches = |g: &str, c: &str| name_filter.as_ref().map_or(true, |n| g.contains(n.as_str()) || c.contains(n.as_str()));
 
+    // Which engines MUST be present for this run to be a valid gate. The DEFAULT full run must exercise
+    // ALL three engines — if the dd-jit build failed to compile one (empty `DDJIT_<T>` env), its whole
+    // lane would otherwise SILENTLY skip and the matrix would still report "0 failed" while the primary
+    // arch was completely dark (the #419 regression that shipped v0.9.56). An explicit `-e`/ENGINE=
+    // narrowed run is the escape hatch: it opts into a single engine, so only that one is required.
+    // A `FILTER=` narrows CASES, not engines, so it does NOT relax the all-three invariant.
+    let required: Vec<Engine> = match engine_filter { Some(f) => vec![f], None => Engine::ALL.to_vec() };
+    let missing: Vec<Engine> = required.iter().copied().filter(|e| !e.available()).collect();
+    // Env-var-style short name ("linux/aarch64" -> "linux_aarch64") for the footer / red gate lines.
+    let ekey = |e: Engine| e.label().replace('/', "_");
+
     if list {
         let mut n = 0;
         for g in cases::all() {
@@ -112,6 +123,18 @@ fn main() {
         }
     }
 
+    // HARD GATE (#419): a required engine whose JIT binary didn't build is a FAILURE, not a silent skip.
+    // Fold each missing engine into the fail count and name it loudly, so a dark lane can never coexist
+    // with a green "0 failed". `available()` is false when dd-jit's build.rs set an empty `DDJIT_<T>` env
+    // after a failed C-engine compile (or the binary is otherwise absent).
+    for &e in &missing {
+        fail += 1;
+        failures.push(format!(
+            "engine {} MISSING — its JIT binary was not built (failed dd-jit compile / empty DDJIT_{} env); \
+             the ENTIRE {} lane was DARK (every case on it skipped, NOT tested)",
+            e.label(), ekey(e).to_uppercase(), e.label()));
+    }
+
     println!("\n{}", "─".repeat(56));
     for f in &failures { println!("\x1b[31m✗\x1b[0m {f}"); }
     slowest.sort_unstable_by(|a, b| b.0.cmp(&a.0));
@@ -125,6 +148,16 @@ fn main() {
     let xp = if xpass > 0 { format!("  \x1b[35m{xpass} xpass\x1b[0m") } else { String::new() };
     println!("\x1b[1;{color}m{pass} passed\x1b[0m  {fail} failed{xf}{xp}  \x1b[90m{skip} skipped   {busy_ms}ms run, {}ms wall\x1b[0m",
         wall.elapsed().as_millis());
+
+    // Engines FOOTER — ALWAYS printed so every gate shows at a glance which lanes actually ran. Each of
+    // the three engines is OK (built), MISSING (required but not built → the hard failure above), or n/a
+    // (not required in this `-e`-narrowed run). Red when any required engine is MISSING.
+    let footer: Vec<String> = Engine::ALL.iter().map(|&e| {
+        let tag = if e.available() { "OK" } else if required.contains(&e) { "MISSING" } else { "n/a" };
+        format!("{}={}", ekey(e), tag)
+    }).collect();
+    let fcolor = if missing.is_empty() { "90" } else { "1;31" };
+    println!("\x1b[{fcolor}mengines: {}\x1b[0m", footer.join(" "));
 
     if perf {
         print!("{}", report::table(&perf_rows));
