@@ -58,8 +58,17 @@ fn ext_ipc() -> Group {
         // F_TLOCK succeeds while the parent holds the lock) — flock() above works, macOS works. xfail
         // Linux; see GAPS "ext-lockf-fork".
         port("lockf-fork", "ext_ipc/ipc_lockf.c").out("lockf blocked=1 acquired=1\n"),
+        // ---- SysV IPC errno/edge fidelity (LTP msgget/semget/shmget + *ctl) — diffed vs native ----
+        // IPC_EXCL EEXIST on re-create, ENOENT for a missing key w/o IPC_CREAT, shm data+IPC_STAT size,
+        // sem SETVAL/GETVAL/semop, msg IPC_NOWAIT ENOMSG + selective/any receive. Byte-exact vs native.
+        src("sysv-edge", "ext_ipc/ipc_sysv_edge.c").oracle(),
+        // ---- POSIX mqueue errno/edge fidelity (mq_open/timedsend/timedreceive/getattr) — diffed ----
+        // O_CREAT|O_EXCL EEXIST, ENOENT w/o O_CREAT, priority ordering, EMSGSIZE, O_NONBLOCK EAGAIN,
+        // getattr maxmsg/msgsize/curmsgs. dd emulates POSIX mq in-process (macOS has no mqueue kernel).
+        src("mq-edge", "ext_ipc/ipc_mq_edge.c").oracle(),
         // ---- Linux-only IPC (no portable POSIX form) — diffed vs native oracle ----
-        // mq_open unsupported under the JIT (no /dev/mqueue) → empty. xfail Linux; GAPS "ext-mq".
+        // POSIX mq priority ordering. macOS has no mqueue kernel object, so dd emulates a named
+        // in-process priority queue (rare.c) — byte-exact vs native here; errno edges in `mq-edge` above.
         src("mq", "ext_ipc/ipc_mq.c").oracle(),
         // eventfd counters aren't shared across fork under the JIT (child's writes don't reach the
         // parent's object → reads 0; native reads 100). xfail Linux; see GAPS "ext-eventfd-fork".
