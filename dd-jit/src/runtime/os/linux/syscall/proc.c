@@ -271,12 +271,18 @@ static int sched_prio_band(int policy, int *lo, int *hi) {
     }
 }
 // Does guest pid `gpid` name a live task? pid 0 (and the container init pid) is the caller itself; init pid 1
-// maps to its real host pid; any other pid passes through as a real host pid and is probed with kill(pid,0).
-// Returns 0 if it exists, -ESRCH otherwise. Caller rejects gpid<0 (EINVAL) before calling.
+// maps to its real host pid. A guest THREAD tid (glibc's pthread_getaffinity_np passes pd->tid, which the
+// JVM/Go/etc. do heavily) is a dd-internal id (g_next_tid, base 1000) that is NOT a host pid -- probing it
+// with kill() checks an unrelated host process and wrongly returns ESRCH (the JVM's pthread_getattr_np then
+// fails "pthread_getattr_np failed with error = 3"). Resolve those against the live-thread registry FIRST;
+// only a pid that is neither the caller, init, nor a known guest thread falls through to the host kill()
+// probe (another guest PROCESS pid passes through 1:1). Returns 0 if it exists, -ESRCH otherwise. Caller
+// rejects gpid<0 (EINVAL) before calling.
 static int sched_pid_live(int gpid) {
     if (gpid == 0 || gpid == container_pid()) return 0;
-    pid_t hp = (gpid == 1 && g_init_hostpid) ? g_init_hostpid : (pid_t)gpid;
-    if (kill(hp, 0) == 0) return 0;
+    if (gpid == 1 && g_init_hostpid) return 0;   // guest init
+    if (thread_tid_alive(gpid)) return 0;          // a live guest thread of THIS process (pd->tid)
+    if (kill((pid_t)gpid, 0) == 0) return 0;
     return (errno == ESRCH) ? -ESRCH : 0; // EPERM etc. -> the task exists, just not signalable
 }
 
@@ -327,7 +333,7 @@ static int svc_proc(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64
             break;
         }
         if (tpid != 0 && tpid != container_pid() && tpid != (int)getpid() &&
-            kill((pid_t)tpid, 0) < 0 && errno == ESRCH) {
+            !thread_tid_alive(tpid) && kill((pid_t)tpid, 0) < 0 && errno == ESRCH) {
             G_RET(c) = (uint64_t)(-ESRCH);
             break;
         }
@@ -514,14 +520,11 @@ static int svc_proc(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64
         }
         // The target task must exist. Linux looks the pid up AFTER the size check and BEFORE the copy-out,
         // returning -ESRCH for a pid that names no live task (LTP sched_getaffinity01 uses an unused pid).
-        // pid 0 == the calling thread (always valid); guest pid 1 is the container init (g_init_hostpid).
-        {
-            pid_t pid = (pid_t)a0;
-            if (pid == 1 && g_init_hostpid) pid = g_init_hostpid;
-            if (pid != 0 && pid != container_pid() && kill(pid, 0) < 0 && errno == ESRCH) {
-                G_RET(c) = (uint64_t)(int64_t)(-ESRCH);
-                break;
-            }
+        // pid 0 == the caller; a live guest thread tid (glibc's pthread_getaffinity_np -> pd->tid, on the
+        // JVM/Go bootstrap path) resolves via the registry, not a host kill() of an unrelated host pid.
+        if (sched_pid_live((int)(int32_t)a0) < 0) {
+            G_RET(c) = (uint64_t)(int64_t)(-ESRCH);
+            break;
         }
         // The mask itself must be writable -> EFAULT on a bad pointer (matches Linux copy_to_user).
         if (a2 && n && !host_range_mapped((uintptr_t)a2, n < 128 ? n : 128)) {
