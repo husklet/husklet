@@ -150,10 +150,47 @@ static int svc_time(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64
         // SPURIOUS/internal EINTR (nothing deliverable to the guest); surface a real EINTR so the
         // dispatcher runs the pending handler, exactly like poll/read. (LTP nanosleep02)
         if (!host_range_mapped((uintptr_t)a0, sizeof(struct timespec))) { G_RET(c) = (uint64_t)(int64_t)(-EFAULT); break; }
-        // `rem`(a1) is left to the host: Linux only writes it on interruption, so validating it up front
-        // would wrongly EFAULT the common uninterrupted sleep (#395); the host faults it if it must write.
-        int r;
-        do { r = nanosleep((const struct timespec *)a0, (struct timespec *)a1); } while (r < 0 && svc_poll_retry(c));
+        const struct timespec *req = (const struct timespec *)a0;
+        if (req->tv_sec < 0 || req->tv_nsec < 0 || req->tv_nsec >= 1000000000L) {
+            G_RET(c) = (uint64_t)(int64_t)(-EINVAL); // out-of-range/negative timespec (LTP nanosleep02)
+            break;
+        }
+        // Sleep against a FIXED absolute deadline. dd preempts a blocking syscall with an internal async
+        // signal (block-back-edge preemption, #292) that is invisible to the guest; the old code retried
+        // with `nanosleep(a0, a1)`, so when rem(a1) was NULL every such interruption RESTARTED the whole
+        // duration -- one extra full sleep per preemption (LTP nanosleep01 "slept for too long", ~request +
+        // a full re-sleep). Compute the deadline once and re-sleep only the true remainder, so an internal
+        // wakeup never extends the sleep and a deliverable guest signal returns EINTR with rem correctly set.
+        struct timespec now, deadline;
+        clock_gettime(CLOCK_MONOTONIC, &deadline);
+        deadline.tv_sec += req->tv_sec;
+        deadline.tv_nsec += req->tv_nsec;
+        if (deadline.tv_nsec >= 1000000000L) { deadline.tv_sec++; deadline.tv_nsec -= 1000000000L; }
+        sleep_precise_begin(); // uncoalesced (precise) wakeup for this sleep; restored below
+        int r = 0;
+        for (;;) {
+            struct timespec d;
+            clock_gettime(CLOCK_MONOTONIC, &now);
+            d.tv_sec = deadline.tv_sec - now.tv_sec;
+            d.tv_nsec = deadline.tv_nsec - now.tv_nsec;
+            if (d.tv_nsec < 0) { d.tv_sec--; d.tv_nsec += 1000000000L; }
+            if (d.tv_sec < 0 || (d.tv_sec == 0 && d.tv_nsec <= 0)) { r = 0; break; } // deadline reached
+            r = nanosleep(&d, NULL);
+            if (r == 0) break;
+            if (svc_poll_retry(c)) continue; // internal/spurious wakeup -> re-sleep the true remainder
+            // A deliverable guest signal (or a real error): surface it, writing the remaining time to rem.
+            if (a1 && host_range_mapped((uintptr_t)a1, sizeof(struct timespec))) {
+                struct timespec rem;
+                clock_gettime(CLOCK_MONOTONIC, &now);
+                rem.tv_sec = deadline.tv_sec - now.tv_sec;
+                rem.tv_nsec = deadline.tv_nsec - now.tv_nsec;
+                if (rem.tv_nsec < 0) { rem.tv_sec--; rem.tv_nsec += 1000000000L; }
+                if (rem.tv_sec < 0) { rem.tv_sec = 0; rem.tv_nsec = 0; }
+                *(struct timespec *)a1 = rem;
+            }
+            break;
+        }
+        sleep_precise_end(); // drop back to normal timeshare scheduling
         G_RET(c) = r < 0 ? (uint64_t)(int64_t)(-errno) : 0;
         break;
     }
@@ -238,8 +275,45 @@ static int svc_time(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64
         // deliverable to the guest); surface a real EINTR so the dispatcher runs the pending handler. (LTP
         // nanosleep02: an out-of-range tv_nsec / negative tv_sec is EINVAL, not a silent success.)
         if (a3 && !host_range_mapped((uintptr_t)a3, sizeof(struct timespec))) { G_RET(c) = (uint64_t)(int64_t)(-EFAULT); break; }
-        int rr;
-        do { rr = nanosleep(req, (struct timespec *)a3); } while (rr < 0 && svc_poll_retry(c));
+        if (req->tv_sec < 0 || req->tv_nsec < 0 || req->tv_nsec >= 1000000000L) {
+            G_RET(c) = (uint64_t)(int64_t)(-EINVAL); // out-of-range/negative request (LTP nanosleep02)
+            break;
+        }
+        // Relative sleep against a FIXED monotonic deadline (glibc's nanosleep() arrives here). Two host
+        // realities are corrected: (1) dd's internal block-preemption (#292) interrupts the sleep with a
+        // signal invisible to the guest -- re-sleep only the TRUE remainder, never restart the duration
+        // (the old `nanosleep(req,rem)` retry restarted the full sleep when rem was NULL, +1 period each
+        // preemption); (2) macOS coalesces timer wakeups by ~1-2.5ms, blowing LTP nanosleep01's 450us
+        // threshold, so a scoped real-time policy makes the wakeup precise. (LTP nanosleep01/nanosleep02.)
+        struct timespec now, deadline;
+        clock_gettime(CLOCK_MONOTONIC, &deadline);
+        deadline.tv_sec += req->tv_sec;
+        deadline.tv_nsec += req->tv_nsec;
+        if (deadline.tv_nsec >= 1000000000L) { deadline.tv_sec++; deadline.tv_nsec -= 1000000000L; }
+        sleep_precise_begin();
+        int rr = 0;
+        for (;;) {
+            struct timespec d;
+            clock_gettime(CLOCK_MONOTONIC, &now);
+            d.tv_sec = deadline.tv_sec - now.tv_sec;
+            d.tv_nsec = deadline.tv_nsec - now.tv_nsec;
+            if (d.tv_nsec < 0) { d.tv_sec--; d.tv_nsec += 1000000000L; }
+            if (d.tv_sec < 0 || (d.tv_sec == 0 && d.tv_nsec <= 0)) { rr = 0; break; } // deadline reached
+            rr = nanosleep(&d, NULL);
+            if (rr == 0) break;
+            if (svc_poll_retry(c)) continue; // internal/spurious wakeup -> re-sleep the true remainder
+            if (a3) { // deliverable guest signal: report the remaining time in rem
+                struct timespec rem;
+                clock_gettime(CLOCK_MONOTONIC, &now);
+                rem.tv_sec = deadline.tv_sec - now.tv_sec;
+                rem.tv_nsec = deadline.tv_nsec - now.tv_nsec;
+                if (rem.tv_nsec < 0) { rem.tv_sec--; rem.tv_nsec += 1000000000L; }
+                if (rem.tv_sec < 0) { rem.tv_sec = 0; rem.tv_nsec = 0; }
+                *(struct timespec *)a3 = rem;
+            }
+            break;
+        }
+        sleep_precise_end();
         G_RET(c) = rr < 0 ? (uint64_t)(int64_t)(-errno) : 0;
         break;
     }
@@ -256,14 +330,24 @@ static int svc_time(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64
         break;
     }
     case 169: {
+        // gettimeofday(tv, tz). LTP gettimeofday01 exercises the RAW syscall (not the vDSO fast path) with
+        // a bad `tv` AND/OR a bad `tz`: EITHER unmapped pointer must return -EFAULT, matching the kernel,
+        // which copy_to_user()s tv first and then tz. The old handler validated only `tv` and silently
+        // ignored `tz`, so a valid-tv/bad-tz call wrongly succeeded. Validate both (tz is obsolete but the
+        // kernel still writes the 8-byte struct timezone when the pointer is non-NULL).
         struct timeval tv;
         gettimeofday(&tv, 0);
-        // gettimeofday
         uint64_t *g = (uint64_t *)a0;
         if (g) {
             if (!host_range_mapped((uintptr_t)a0, 16)) { G_RET(c) = (uint64_t)(int64_t)(-EFAULT); break; }
             g[0] = tv.tv_sec;
             g[1] = tv.tv_usec;
+        }
+        if (a1) { // struct timezone (deprecated). Validate for EFAULT like the kernel's copy_to_user, but do
+                  // NOT write it: modern Linux fills it with zeros and no caller reads it, while writing a
+                  // caller-supplied-but-read-only tz page would fault the engine (host_range_mapped only
+                  // read-probes). Validation alone satisfies LTP gettimeofday01's bad-tz EFAULT case.
+            if (!host_range_mapped((uintptr_t)a1, 8)) { G_RET(c) = (uint64_t)(int64_t)(-EFAULT); break; }
         }
         G_RET(c) = 0;
         break;

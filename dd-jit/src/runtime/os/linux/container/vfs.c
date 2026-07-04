@@ -121,6 +121,11 @@ static void eventfd_count_init(void) {
 }
 __attribute__((constructor)) static void eventfd_count_ctor(void) { eventfd_count_init(); }
 static uint8_t g_eventfd_sema[1024]; // EFD_SEMAPHORE: read() returns 1 and decrements by 1, not the whole counter
+// /proc/<pid>/pagemap emulation: the file is VA-indexed (8 bytes per page, addressed by lseek to
+// vaddr/pagesize*8), so it can't be materialized as static text. We back it with a real empty seekable fd
+// (lseek to any offset works natively) and synthesize the 8-byte entries in the read path (io.c). This
+// marks which fds are pagemap backings; cleared on close (fd_reset_emul).
+static uint8_t g_pagemap_fd[1024];
 
 // ===================== cross-process guest task-state table (#404) =====================
 // Linux's /proc/<pid>/stat field 3 is the task run state (R/S/D/T/Z). dd used to synthesize it from the
@@ -2102,6 +2107,13 @@ static int proc_open(const char *rp) {
     const char *leaf = proc_self_leaf(rp);
     if (leaf) {
         if (!strcmp(leaf, "fd")) return proc_fd_dir_open();
+        if (!strcmp(leaf, "pagemap")) {
+            // VA-indexed binary pagemap: back it with an empty seekable regular fd (lseek to vaddr/pg*8
+            // works natively) and synthesize the 8-byte-per-page entries on read (io.c). LTP mmap12.
+            int fd = proc_text_fd("", 0);
+            if (fd >= 0 && fd < 1024) g_pagemap_fd[fd] = 1;
+            return fd;
+        }
         if (!strcmp(leaf, "maps") || !strcmp(leaf, "task/1/maps")) return proc_maps_fd(0);
         if (!strcmp(leaf, "smaps")) return proc_maps_fd(1);
         if (!strcmp(leaf, "status")) n = proc_status_text(buf, sizeof buf);
