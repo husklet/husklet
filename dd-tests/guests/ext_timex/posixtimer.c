@@ -115,13 +115,24 @@ static int overrun_counts(void) {
     its.it_interval.tv_nsec = 5 * 1000 * 1000; // then every 5ms
     timer_settime(t, 0, &its, NULL);
 
-    usleep(120 * 1000); // ~24 periods elapse while blocked
+    // BUSY-SPIN on the monotonic clock (not usleep) for ~100ms so ~20 of the 5ms periods elapse. A blocking
+    // sleep deschedules the guest, so under a loaded DBT host the periodic timer's missed expirations are
+    // never accounted between block back-edges -> overrun stays 0; spinning keeps the guest executing so each
+    // expiration is counted deterministically, load-independent. (Native accumulates either way.)
+    struct timespec t0, tn;
+    clock_gettime(CLOCK_MONOTONIC, &t0);
+    do {
+        clock_gettime(CLOCK_MONOTONIC, &tn);
+    } while ((tn.tv_sec - t0.tv_sec) * 1000000000LL + (tn.tv_nsec - t0.tv_nsec) < 100 * 1000 * 1000LL);
 
-    // Dequeue the pending signal synchronously and read the overrun for that expiry.
+    // Dequeue the pending signal and read the overrun for that expiry. Use a generous timeout rather than a
+    // zero (non-blocking) poll: on native the signal is already pending after the sleep, but under a loaded
+    // DBT host the first delivery can lag past the 120ms sleep, so WAIT for it (transparent to native, which
+    // returns immediately). By the time it fires, many 5ms periods have piled up -> overrun >= 1.
     siginfo_t si;
-    struct timespec zero = {0, 0};
+    struct timespec wait_to = {2, 0};
     int overrun = -1;
-    if (sigtimedwait(&block, &si, &zero) == SIGNO) overrun = timer_getoverrun(t);
+    if (sigtimedwait(&block, &si, &wait_to) == SIGNO) overrun = timer_getoverrun(t);
     int ok = overrun >= 1;
 
     timer_delete(t);
