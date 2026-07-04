@@ -417,6 +417,15 @@ static void raise_guest_signal(struct cpu *c, int sig) {
 static int deliver_guest_fault(int hostsig, siginfo_t *si, void *ucv) {
     int sig = sig_m2l(hostsig);
     if (sig < 1 || sig > 64 || !ucv) return 0;
+    // #392: Linux reports a BAD-ADDRESS fault (unmapped page / PROT_NONE guard / a stack overflow into the
+    // guard gap) as SIGSEGV, but macOS raises a PROT_NONE access as host SIGBUS (-> Linux SIGBUS(7)). Rewrite
+    // it to SIGSEGV(11) when the address is a tracked guard (gna_hit) or is unmapped, so a guest's own SIGSEGV
+    // handler (glibc stack-overflow detection, a JIT/VM's guard-page trap) catches it. A genuine SIGBUS on
+    // MAPPED memory (misalignment, file mapping past EOF) is left as SIGBUS. Only host SIGBUS needs the check
+    // (host SIGSEGV already maps to Linux SIGSEGV), so the common fault path pays no extra probe.
+    if (hostsig == SIGBUS && si && si->si_addr &&
+        (gna_hit((uint64_t)si->si_addr, 1) || !host_addr_mapped((uintptr_t)si->si_addr)))
+        sig = 11;
     // SIG_DFL/SIG_IGN: not the guest's to handle -> let the guard re-raise (a real crash).
     if (g_sigact[sig].handler <= 1) return 0;
     struct cpu *c = (struct cpu *)pthread_getspecific(g_cpu_key);
@@ -448,6 +457,42 @@ static int deliver_guest_fault(int hostsig, siginfo_t *si, void *ucv) {
     __atomic_or_fetch(&g_pending, 1ull << sig, __ATOMIC_SEQ_CST);
     sigframe_resume_dispatch(c, ucv);
     return 1;
+}
+
+// #392: a GENUINE synchronous CPU fault (SIGSEGV/SIGBUS/...) taken in translated code for which the guest
+// installed NO handler. Such a fault is fatal and cannot be masked or ignored (a stack overflow into the
+// guard gap, a wild pointer, a NULL deref). Terminate the guest process the SAME way dd terminates any
+// fatal-default signal, so the exit status crosses dd's fork faithfully: the container init ends with
+// 128+signo; a non-init guest records the intended Linux termination signal (sigexit_record) then exits
+// via the normal c->exited path so its parent's wait4/waitid reconstructs WIFSIGNALED/WTERMSIG=signo. A
+// raw host raise() cannot carry the signo across dd's fork and, from a MAP_JIT thread, degrades to a plain
+// exit(255) (the parent then wrongly sees WIFEXITED, not WIFSIGNALED). Called by the per-arch SIGSEGV/SIGBUS
+// guard AFTER deliver_guest_fault (the guest-handler path) declines. Returns 1 iff this was a genuine
+// in-translated-code guest fault (caller stops); 0 for an engine fault / external async signal, so the
+// caller re-raises the real crash unchanged.
+static int deliver_guest_fatal_fault(int hostsig, siginfo_t *si, void *ucv) {
+    int sig = sig_m2l(hostsig);
+    if (sig < 1 || sig > 64 || !ucv) return 0;
+    // Bad-address fault normalization (see deliver_guest_fault): macOS raises a PROT_NONE/guard access as host
+    // SIGBUS -> Linux SIGBUS(7), but Linux reports SIGSEGV. Rewrite to SIGSEGV(11) for a guard/unmapped fault.
+    if (hostsig == SIGBUS && si && si->si_addr &&
+        (gna_hit((uint64_t)si->si_addr, 1) || !host_addr_mapped((uintptr_t)si->si_addr)))
+        sig = 11;
+    if (g_sigact[sig].handler > 1) return 0; // a guest handler exists -> not ours (deliver_guest_fault owns it)
+    struct cpu *c = (struct cpu *)pthread_getspecific(g_cpu_key);
+    if (!c) return 0;
+    if (!sigframe_capture_fault(c, ucv)) return 0; // host PC not in translated code -> engine/async: re-raise
+    // A genuine, fatal, unmaskable guest fault. Terminate the guest process HERE (async-signal-safe _exit),
+    // not by resuming the dispatcher: the guest state is captured mid-fault (e.g. SP overrun into the guard),
+    // so re-entering the code cache would run off into garbage. A non-init guest records its Linux
+    // termination signo so the parent's wait4/waitid reconstructs WIFSIGNALED/WTERMSIG=sig (proc.c case 260);
+    // the container init just exits 128+signo (what `docker run` reports for a crash). This is dd's standard
+    // fatal-signal relay -- the same mechanism as a fatal-default signal in maybe_deliver_signal.
+    if (container_pid() != 1) {
+        int core = sig_coredumps(sig) && svc_core_rlimit_cur() > 0;
+        sigexit_record(sig, core);
+    }
+    _exit(128 + sig);
 }
 
 // Linux mmap flags -> macOS.

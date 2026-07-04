@@ -449,9 +449,14 @@ static void nonpie_guard(int sig, siginfo_t *si, void *uc) {
     // emulate a probe load of a low un-rebased pointer at +bias and resume, mis-reporting it as mapped.
     if (hrm_fault_hook(si)) return; // never actually returns on a claim (siglongjmp); shape-only
     if (nonpie_fixup(si, uc)) return;
-    // A genuine guest fault (wild pointer / null deref) with a registered guest handler is the guest's
-    // to handle: synthesize+deliver the guest signal. nonpie_fixup (absolute-data) already won above.
+    // A genuine guest fault (wild pointer / null deref / stack overflow into the guard gap) with a
+    // registered guest handler is the guest's to handle: synthesize+deliver the guest signal. nonpie_fixup
+    // (absolute-data) already won above.
     if (deliver_guest_fault(sig, si, uc)) return;
+    // #392: no guest handler -> a fatal, unmaskable synchronous fault. Terminate the guest process through
+    // dd's fatal-signal machinery so its parent's wait4 sees WIFSIGNALED/WTERMSIG=sig (a raw host raise()
+    // degrades to exit(255) across dd's fork). Declines (returns 0) for a genuine ENGINE fault -> re-raise.
+    if (deliver_guest_fatal_fault(sig, si, uc)) return;
     signal(sig, SIG_DFL);
     raise(sig);
 }
@@ -470,7 +475,7 @@ __attribute__((constructor)) static void install_sync_fault_guards(void) {
     struct sigaction sa;
     memset(&sa, 0, sizeof sa);
     sa.sa_sigaction = nonpie_guard;
-    sa.sa_flags = SA_SIGINFO;
+    sa.sa_flags = SA_SIGINFO | SA_ONSTACK; // #392: share the guards' per-thread altstack (host SP==guest SP)
     sigaction(SIGILL, &sa, NULL);
     sigaction(SIGFPE, &sa, NULL);
     sigaction(SIGTRAP, &sa, NULL);
@@ -712,7 +717,19 @@ static char *g_guest_env[] = {
 };
 static uint64_t build_stack(int argc, char **argv, struct loaded *lm, uint64_t at_base) {
     size_t SZ = 8u << 20;
-    uint8_t *stk = mmap(NULL, SZ, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON, -1, 0);
+    // #392 stack-overflow safety: a PROT_NONE guard gap immediately BELOW the usable stack (Linux's
+    // stack_guard_gap, 1MB). Without it the main stack sits adjacent-above the 64MB RX code cache, so a deep
+    // recursion / huge frame runs off the stack bottom straight into the executable cache -> silent
+    // corruption (the clickhouse crash) instead of a clean fault. A store past the bottom now hits PROT_NONE
+    // -> a real host fault -> deliver_guest_fault -> SIGSEGV(si_addr=fault, SEGV_MAPERR), byte-exact with the
+    // native oracle. gna_add registers it in the guest PROT_NONE registry so the fault guards treat the
+    // overrun as a HARD fault (never growable memory). The 1MB guard is a bounded PROT_NONE reservation (no
+    // committed pages) below g_stack_lo; not gmap-tracked so /proc/self/maps stays a clean [stack] + guard.
+    size_t GUARD = 1u << 20;
+    uint8_t *base = mmap(NULL, GUARD + SZ, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON, -1, 0);
+    mprotect(base, GUARD, PROT_NONE);
+    gna_add((uint64_t)base, (uint64_t)base + GUARD);
+    uint8_t *stk = base + GUARD;
     gmap_add((uint64_t)stk, SZ); // track so execve() can reclaim the inherited stack
     // Publish the main-stack bounds so /proc/self/maps synthesizes a [stack] line (glibc's
     // pthread_getattr_np scans for it) and the maps/smaps builder can label the region.

@@ -368,10 +368,21 @@ static void load_elf(const char *path, struct loaded *out) {
 static char *g_guest_env[] = {"PATH=/usr/bin:/bin", "HOME=/root", "TERM=dumb", "LANG=C", NULL};
 static uint64_t build_stack(int argc, char **argv, struct loaded *lm, uint64_t at_base) {
     size_t SZ = 8u << 20, GUARD = 0x10000;
-    // GUARD bytes are mapped ABOVE the logical top: the topmost stack objects are the
+    // #392 stack-overflow safety: a PROT_NONE guard gap immediately BELOW the usable stack (Linux's
+    // stack_guard_gap, 1MB). Without it the stack sits adjacent-above the 64MB RX code cache and a deep
+    // recursion / huge frame overruns straight into the executable cache -> silent corruption (clickhouse)
+    // instead of a fault. A store past the bottom now hits PROT_NONE; jit86_lazyguard sees the gna_add'd HARD
+    // guard (NOT growable -- so its lazy zero-page grower can't silently swallow the overflow) and delivers
+    // SIGSEGV(SEGV_MAPERR), byte-exact with the qemu oracle. The separate top GUARD stays R+W for the SSE
+    // over-read past the logical top below.
+    size_t LOGUARD = 1u << 20;
+    // The top GUARD bytes are mapped ABOVE the logical top: the topmost stack objects are the
     // AT_PLATFORM "x86_64" string and the 16 AT_RANDOM bytes, which glibc strlen/reads
     // with 16-byte SSE loads -> those over-read past the top. Keep that region mapped.
-    uint8_t *stk = mmap(NULL, SZ + GUARD, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON, -1, 0);
+    uint8_t *base = mmap(NULL, LOGUARD + SZ + GUARD, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON, -1, 0);
+    mprotect(base, LOGUARD, PROT_NONE);
+    gna_add((uint64_t)base, (uint64_t)base + LOGUARD);
+    uint8_t *stk = base + LOGUARD;
     uint8_t *top = stk + SZ;
     extern uint64_t g_stack_lo, g_stack_hi; // publish for /proc/self/maps [stack] synthesis (vfs.c)
     g_stack_lo = (uint64_t)stk;
@@ -697,6 +708,20 @@ void jit86_lazyguard(int sig, siginfo_t *si, void *uc) {
     // W6A item 1: a non-PIE absolute DATA ref into the low link range -> serve the access at +bias and
     // advance the host PC. Inert unless g_nonpie_lo is set (ET_EXEC only).
     if (nonpie_fixup(si, uc)) return;
+    // #392: a fault inside a tracked guest PROT_NONE region -- dd's main-stack guard gap OR a page the guest
+    // itself made PROT_NONE (glibc thread-stack guard, malloc-arena guard, an mmap(PROT_NONE) reservation) --
+    // is a HARD fault. Deliver SIGSEGV to the guest (or, with no handler, die of it) and NEVER fall into the
+    // lazy zero-page grower below: it would see the mapped stack/heap neighbor, mprotect the guard R+W, and
+    // silently swallow a stack overflow into the executable code cache (the clickhouse corruption class).
+    // Matches Linux: a write to a PROT_NONE page always faults. Run before smc/lazy; hrm/fastclk (syscall
+    // probes, above) still win first so a bad guest buffer into the guard returns -EFAULT as before.
+    if (si && si->si_addr && gna_hit((uint64_t)si->si_addr, 1)) {
+        if (deliver_guest_fault(sig, si, uc)) return;       // guest handler
+        if (deliver_guest_fatal_fault(sig, si, uc)) return; // no handler -> faithful WIFSIGNALED termination
+        signal(sig, SIG_DFL);
+        raise(sig);
+        return;
+    }
     // W6A item 3 (SMC): a guest write to a translated, write-protected JIT code page. Drop the cached
     // translations + IBTC (they're stale; do NOT reset g_cp -> the currently-running block's host code
     // stays intact, orphaned translations are reclaimed by the normal wholesale flush), unprotect the
@@ -752,6 +777,10 @@ void jit86_lazyguard(int sig, siginfo_t *si, void *uc) {
                     (unsigned long long)c->r[4], (unsigned long long)c->r[5]);
         }
     }
+    // #392: a genuine in-translated-code guest fault with no handler and no legitimate lazy mapping ->
+    // terminate the guest process faithfully (WIFSIGNALED/WTERMSIG=sig for its parent) instead of a raw host
+    // raise() that degrades to exit(255) across dd's fork. Declines for an engine fault -> real crash below.
+    if (deliver_guest_fatal_fault(sig, si, uc)) return;
     signal(sig, SIG_DFL);
     raise(sig); // out of budget / mmap failed -> real crash
 }

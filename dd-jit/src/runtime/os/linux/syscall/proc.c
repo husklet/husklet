@@ -178,6 +178,9 @@ static void fork_child_hooks(struct cpu *c) {
     // cache -> the intermittent fork+exec SIGBUS. pthread_jit_write_protect_np(1) = RX (executable).
     // (No-op under the dual map, which never toggles W^X.)
     pthread_jit_write_protect_np(1);
+    install_host_sigaltstack(); // #392: the altstack registration doesn't survive fork() on Apple Silicon --
+                                // re-arm it (COW-inherited region) so the child can still take a stack-overflow
+                                // guard fault (host SP == guest SP) instead of double-faulting into SIGILL.
     jit_after_fork(); // dual map: re-alias RX from the child's COW RW pages at the same VA (~1us; keeps
                       // every inherited translation valid) -- or, threaded parent, rebuild a fresh cache
 #ifdef PCACHE_FORK_HOOK
