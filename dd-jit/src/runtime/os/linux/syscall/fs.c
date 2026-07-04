@@ -268,22 +268,26 @@ static int svc_fs(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t
         break;
     }
     case 17: {
+        // getcwd(BUF, size). Resolve the guest cwd into an ENGINE-local buffer first, then apply the exact
+        // kernel order (fs/dcache.c SYSCALL_DEFINE2(getcwd)): the path length is compared to `size` BEFORE any
+        // copy_to_user, so a too-small buffer is -ERANGE regardless of BUF's validity, and only when the path
+        // FITS does the copy run -> -EFAULT on a NULL/bad BUF. The old code passed the guest BUF straight to
+        // the host getcwd(BUF,size): a NULL/huge-size probe (LTP getcwd01 case 2: buf=NULL,size=(size_t)-1)
+        // made libc getcwd write through NULL -> SIGSEGV in the engine instead of returning EFAULT. (#409)
+        char cwbuf[4200];
+        const char *cw;
         if (g_rootfs) {
-            // getcwd -> the GUEST cwd (not the host path)
-            size_t l = strlen(g_cwd);
-            if (a0 && l + 1 <= a1) {
-                if (!host_range_mapped((uintptr_t)a0, l + 1)) { G_RET(c) = (uint64_t)(int64_t)(-EFAULT); break; }
-                memcpy((void *)a0, g_cwd, l + 1);
-                G_RET(c) = l + 1;
-            } else
-                G_RET(c) = (uint64_t)(-ERANGE);
-            break;
+            cw = g_cwd[0] ? g_cwd : "/"; // the GUEST cwd (not the host path)
+        } else {
+            // bare mode: the engine chdir()s for real, so the live host cwd IS the guest cwd
+            if (!getcwd(cwbuf, sizeof cwbuf)) { G_RET(c) = (uint64_t)(-errno); break; }
+            cw = cwbuf;
         }
-        if (a0 && !host_range_mapped((uintptr_t)a0, (size_t)a1)) { G_RET(c) = (uint64_t)(int64_t)(-EFAULT); break; }
-        if (getcwd((char *)a0, (size_t)a1))
-            G_RET(c) = strlen((char *)a0) + 1;
-        else
-            G_RET(c) = (uint64_t)(-errno);
+        size_t len = strlen(cw) + 1; // path length INCLUDING the terminating NUL, exactly like the kernel
+        if (len > (size_t)a1) { G_RET(c) = (uint64_t)(-ERANGE); break; }
+        if (!a0 || !host_range_mapped((uintptr_t)a0, len)) { G_RET(c) = (uint64_t)(int64_t)(-EFAULT); break; }
+        memcpy((void *)a0, cw, len);
+        G_RET(c) = len;
         break;
     }
     // ioctl(fd, req, arg) -- Linux req# -> macOS
@@ -1067,6 +1071,13 @@ static int svc_fs(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t
         // normal read fd (O_RDONLY, +O_DIRECTORY for a dir) for the metadata ops and record the flag so the
         // I/O family (svc_io) returns EBADF. Marked on every open-success path below.
         int is_opath = (lf & 0x200000) != 0;
+        // O_PATH|O_NOFOLLOW naming a SYMLINK: Linux opens the LINK ITSELF (so readlinkat(fd,"",..) and
+        // fstatat(fd,"",AT_EMPTY_PATH) operate on the symlink -- #317). macOS has no O_PATH, and a plain
+        // follow-open would open the TARGET (F_GETPATH then names the target, breaking the empty-path
+        // readlink). Use macOS O_SYMLINK for exactly this combination so the fd names the symlink node; a
+        // regular file opens normally under O_SYMLINK too, and a plain (non-O_PATH) O_NOFOLLOW open still
+        // ELOOPs on a symlink as Linux requires. (#409)
+        int osymlink = (is_opath && (lf & G_O_NOFOLLOW)) ? O_SYMLINK : 0;
         // Read-only bind mount: any write-intent open (O_WRONLY/O_RDWR/O_CREAT/O_TRUNC/O_APPEND, incl.
         // O_TMPFILE which carries O_RDWR) under an `-v …:ro` volume fails EROFS -- exactly as the kernel
         // rejects a write-open on a read-only mount. A pure O_RDONLY open still succeeds. Checked up front
@@ -1431,7 +1442,9 @@ static int svc_fs(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t
             // fin is resolved -> O_NOFOLLOW safe
             // #255: probe pre-existence (relative to the resolved parent) so we stamp ONLY a fresh create.
             int nf_new = nf_want && faccessat(pfd, fin, F_OK, AT_SYMLINK_NOFOLLOW) != 0;
-            int r = openat(pfd, fin, mf | O_NOFOLLOW, (mode_t)a3);
+            // O_PATH|O_NOFOLLOW on a symlink -> open the LINK via O_SYMLINK (else O_NOFOLLOW ELOOPs); a
+            // regular O_NOFOLLOW open keeps ELOOPing on a symlink as Linux does. (#409)
+            int r = openat(pfd, fin, mf | (osymlink ? O_SYMLINK : O_NOFOLLOW), (mode_t)a3);
             int e = errno;
             close(pfd);
             r = nofile_gate(r); // fd past the guest's soft RLIMIT_NOFILE -> EMFILE (host table is far larger)
@@ -1458,11 +1471,12 @@ static int svc_fs(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t
         }
         char pb[4200];
         // no jail
-        const char *p = atpath((int)a0, (const char *)a1, pb, sizeof pb, 0);
+        const char *p = atpath((int)a0, (const char *)a1, pb, sizeof pb, osymlink ? 1 : 0);
         int nf_new = nf_want && faccessat(ATFD(a0), p, F_OK, AT_SYMLINK_NOFOLLOW) != 0; // #255: stamp only fresh
         // Gate the new fd against the guest's soft RLIMIT_NOFILE -> EMFILE past the cap (the shared host fd
         // table is far larger; engine-private fds are hoisted above 1<<20, so the guest limit is emulated).
-        int r = nofile_gate(openat(ATFD(a0), p, mf, (mode_t)a3));
+        // O_PATH|O_NOFOLLOW on a symlink -> O_SYMLINK opens the link itself (#317/#409).
+        int r = nofile_gate(openat(ATFD(a0), p, mf | osymlink, (mode_t)a3));
         if (r >= 0 && nf_new) newfile_stamp_fd(r);
         if (r >= 0 && r < 1024) g_opath[r] = is_opath;
         if (r >= 0) {
@@ -1570,6 +1584,21 @@ static int svc_fs(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t
         // Linux validates the buffer size FIRST: bufsiz <= 0 is EINVAL even for a nonexistent path.
         if ((int64_t)a3 <= 0) {
             G_RET(c) = (uint64_t)(int64_t)(-EINVAL);
+            break;
+        }
+        // AT_EMPTY_PATH form: readlinkat(dirfd, "", buf, sz) with an EMPTY pathname operates on the file the
+        // DIRFD itself names -- an O_PATH|O_NOFOLLOW fd opened directly on a symlink. macOS has no
+        // AT_EMPTY_PATH (and passing "" to host readlinkat yields ENOTDIR/ENOENT), so recover the fd's own
+        // host path via F_GETPATH and readlink THAT link. (#317/#409 -- LTP readlinkat01 dir_fd2/emptypath;
+        // AT_FDCWD is excluded: an empty path there is a genuine ENOENT, handled by the normal path below.)
+        if (p && !p[0] && (int)a0 >= 0) {
+            char fp[4200];
+            if (fcntl((int)a0, F_GETPATH, fp) == 0) {
+                ssize_t r = readlink(fp, buf, bs);
+                G_RET(c) = r < 0 ? (uint64_t)(-errno) : (uint64_t)r;
+            } else {
+                G_RET(c) = (uint64_t)(int64_t)(-EBADF);
+            }
             break;
         }
         // Match every /proc magic link on the GUEST-ABSOLUTE path, so readlink("/proc/self/exe"),

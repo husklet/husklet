@@ -57,6 +57,12 @@ fileio  fcntl       fcntl/fcntl08.c
 fileio  fcntl       fcntl/fcntl13.c
 fileio  readlink    readlink/readlink01.c
 fileio  readlink    readlink/readlink03.c
+fileio  readlinkat  readlinkat/readlinkat01.c
+fileio  readlinkat  readlinkat/readlinkat02.c
+fileio  truncate    truncate/truncate02.c
+fileio  getcwd      getcwd/getcwd01.c
+fileio  getcwd      getcwd/getcwd02.c
+fileio  chmod       chmod/chmod08.c
 fileio  rename      rename/rename01.c
 fileio  link        link/link02.c
 fileio  link        link/link05.c
