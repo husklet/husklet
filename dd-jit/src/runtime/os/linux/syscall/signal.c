@@ -159,6 +159,7 @@ static int svc_signal(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint
         sigfillset(&allblk);
         sigemptyset(&empty);
         sigprocmask(SIG_BLOCK, &allblk, &prev); // close the check/sleep race (see case 133)
+        ts_wait_enter(); // #404: pause() -> interruptible sleep ('S') until a deliverable signal arrives
         while (!c->exited) {
             uint64_t p = __atomic_load_n(&g_pending, __ATOMIC_SEQ_CST);
             int deliv = 0;
@@ -175,6 +176,7 @@ static int svc_signal(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint
             if (deliv) break;
             sigsuspend(&empty); // sleep until any host signal (host_sigh sets g_pending); EINTR-returns
         }
+        ts_wait_leave();
         sigprocmask(SIG_SETMASK, &prev, NULL);
         G_RET(c) = (uint64_t)(-EINTR);
         break;
@@ -201,6 +203,7 @@ static int svc_signal(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint
         sigfillset(&allblk);
         sigemptyset(&empty);
         sigprocmask(SIG_BLOCK, &allblk, &prev);
+        ts_wait_enter(); // #404: rt_sigsuspend -> interruptible sleep ('S')
         int deliv = 0;
         while (!c->exited) {
             uint64_t p = __atomic_load_n(&g_pending, __ATOMIC_SEQ_CST);
@@ -219,6 +222,7 @@ static int svc_signal(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint
             if (deliv) break;
             sigsuspend(&empty); // sleep until any host signal (host_sigh sets g_pending); EINTR-returns
         }
+        ts_wait_leave();
         sigprocmask(SIG_SETMASK, &prev, NULL); // restore the host signal mask
         c->sigmask = oldmask;
         if (deliv) c->sigmask &= ~(1ull << (deliv - 1)); // keep it unblocked so the dispatcher delivers it
@@ -254,6 +258,7 @@ static int svc_signal(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint
             if (sigaction(sig_l2m(s), &sa, &saved[s]) == 0) installed |= (1ull << s);
         }
         int got = 0;
+        ts_wait_enter(); // #404: rt_sigtimedwait blocks in interruptible sleep ('S') until a signal/timeout
         for (;;) {
             // Both queues: process-directed (g_pending) and thread-directed (tpending via tkill/tgkill).
             uint64_t p = __atomic_load_n(&g_pending, __ATOMIC_SEQ_CST) | __atomic_load_n(&c->tpending, __ATOMIC_SEQ_CST);
@@ -285,6 +290,7 @@ static int svc_signal(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint
             nanosleep(&slice, NULL);
             waited_ns += 2 * 1000 * 1000;
         }
+        ts_wait_leave();
         for (int s = 1; s <= 64; s++)
             if (installed & (1ull << s)) sigaction(sig_l2m(s), &saved[s], NULL); // restore disposition
         break;

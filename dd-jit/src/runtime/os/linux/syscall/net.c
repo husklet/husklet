@@ -795,11 +795,13 @@ static int svc_net(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_
         void *rbuf = peekaddr ? &one : (void *)a1;
         size_t rlen = peekaddr ? 1 : (size_t)a2;
         ssize_t r;
+        ts_wait_enter(); // #404: 'S' while blocked in recvfrom/recv
         do {
             hsl = sizeof hss;
             r = recvfrom((int)a0, rbuf, rlen, msgflags_l2m((int)a3),
                          want ? (struct sockaddr *)&hss : NULL, want ? &hsl : NULL);
         } while (r < 0 && SVC_EINTR_RESTART(c));
+        ts_wait_leave();
         if (r > 0 && peekaddr) r = 0; // guest asked for 0 bytes; the address is what it wanted
         // SEQPACKET-as-DGRAM EOF: a peer-closed DGRAM recv reports ECONNRESET, but Linux SEQPACKET
         // returns 0 (EOF). Translate so the guest sees the expected end-of-stream. (See case 199.)

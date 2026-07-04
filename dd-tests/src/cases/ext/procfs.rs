@@ -17,6 +17,8 @@ fn proc_content() -> Group {
         src("pf-stat", "ext_procfs/pstat.c").out("pstat ok=1\n"),
         src("pf-selfstat", "ext_procfs/selfstat.c").out("selfstat ok=1\n"),
         src("pf-selfstatus", "ext_procfs/selfstatus.c").out("selfstatus ok=1\n"),
+        src("pf-procstate", "ext_procfs/procstate.c").out("procstate ok=1\n"), // #404: cross-proc R/S state
+
         src("pf-cpuinfo", "ext_procfs/cpuinfo.c").out("cpuinfo ok=1\n"),
         src("pf-misc", "ext_procfs/miscfiles.c").out("miscfiles ok=1\n"),
         src("pf-net", "ext_procfs/netfiles.c").out("netfiles ok=1\n"),

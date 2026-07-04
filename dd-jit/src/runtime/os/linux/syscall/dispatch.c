@@ -453,6 +453,10 @@ static void service_local(struct cpu *c) {
     // Frontends whose guest has legacy syscalls without a canonical (aarch64) equivalent rewrite them
     // into their *at form here (x86: open->openat, ...); a no-op where the guest is already canonical.
     if (G_NORMALIZE(c)) return;
+    // #404: we reached service() by executing a guest syscall instruction, so this task was RUNNING; publish
+    // 'R' (and claim/refresh our cross-process task-state slot -- also re-claims after fork on getpid change).
+    // A handler that then parks in a blocking host wait stamps 'S' for its duration and 'R' again on wake.
+    ts_running();
     uint64_t nr = G_NR(c), a0 = G_A0(c), a1 = G_A1(c), a2 = G_A2(c), a3 = G_A3(c), a4 = G_A4(c), a5 = G_A5(c);
     if (g_trace || g_systrace)
         fprintf(stderr, "[sys pid=%d] %llu (%llx,%llx,%llx,%llx,%llx,%llx)\n", (int)getpid(), (unsigned long long)nr,

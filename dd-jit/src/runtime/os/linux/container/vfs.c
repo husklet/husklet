@@ -122,6 +122,83 @@ static void eventfd_count_init(void) {
 __attribute__((constructor)) static void eventfd_count_ctor(void) { eventfd_count_init(); }
 static uint8_t g_eventfd_sema[1024]; // EFD_SEMAPHORE: read() returns 1 and decrements by 1, not the whole counter
 
+// ===================== cross-process guest task-state table (#404) =====================
+// Linux's /proc/<pid>/stat field 3 is the task run state (R/S/D/T/Z). dd used to synthesize it from the
+// macOS process status (proc_bsdinfo.pbi_status): but that BSD p_stat only ever reports SRUN/SSTOP/SZOMB
+// for the whole PROCESS -- it has NO way to express "every thread is asleep in a blocking syscall". A
+// guest parked in pause()/ppoll()/wait4() therefore showed 'R' (running) where real Linux shows 'S'
+// (interruptible sleep). LTP pause01/pause02 poll a CHILD's /proc/<pid>/stat waiting for that 'S' and
+// timed out. Since the reader is a DIFFERENT process (parent reads child), the guest's own idea of its
+// run state must be PUBLISHED where any peer can see it: a MAP_SHARED table created pre-fork (like the
+// eventfd counters / futex buckets above), keyed by HOST pid (== guest pid for every non-init task; init
+// maps gp==1 -> g_init_hostpid, which is init's own getpid()). Each guest stamps 'S' before it parks in a
+// host blocking wait inside service() and 'R' when it wakes / on every other syscall; the /proc synthesis
+// overrides the (coarse) pbi_status with this authoritative value. Inert & O(1): a thread-cached slot
+// pointer + one relaxed atomic store per blocking wait; zombie/stopped stay pbi-authoritative (see below).
+struct ts_slot {
+    _Atomic int pid;         // host pid owning this slot (0 = free)
+    _Atomic unsigned char st; // Linux state char: 'R' 'S' 'D' 'T' 'Z'
+};
+#define TS_N 4096 // power of two; open-addressed by host pid
+static struct ts_slot *g_ts_tab;
+static void ts_init(void) {
+    if (g_ts_tab) return;
+    size_t sz = sizeof(struct ts_slot) * TS_N;
+    void *m = mmap(NULL, sz, PROT_READ | PROT_WRITE, MAP_SHARED | MAP_ANON, -1, 0);
+    if (m == MAP_FAILED) // cross-process state degrades to pbi_status, but self-reads still work
+        m = mmap(NULL, sz, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON, -1, 0);
+    g_ts_tab = (m == MAP_FAILED) ? NULL : (struct ts_slot *)m;
+}
+__attribute__((constructor)) static void ts_ctor(void) { ts_init(); }
+// Find (or, when claim, atomically allocate) the slot for host pid `pid`. Open addressing with linear
+// probe; a freshly claimed slot defaults to 'R' (running), overwriting any stale value a recycled pid left.
+static struct ts_slot *ts_slot_for(int pid, int claim) {
+    if (!g_ts_tab || pid <= 0) return NULL;
+    unsigned h = ((unsigned)pid * 2654435761u) & (TS_N - 1);
+    for (unsigned i = 0; i < TS_N; i++) {
+        struct ts_slot *s = &g_ts_tab[(h + i) & (TS_N - 1)];
+        int p = atomic_load_explicit(&s->pid, memory_order_acquire);
+        if (p == pid) return s;
+        if (claim && p == 0) {
+            int expect = 0;
+            if (atomic_compare_exchange_strong(&s->pid, &expect, pid)) {
+                atomic_store_explicit(&s->st, 'R', memory_order_release);
+                return s;
+            }
+            if (atomic_load_explicit(&s->pid, memory_order_acquire) == pid) return s; // raced to same pid
+        }
+    }
+    return NULL; // table full: caller falls back to pbi_status
+}
+// This thread's/process's own slot, cached. getpid() is libc-cached and re-derived after fork(), so a
+// child that inherited the parent's ts_self value transparently re-claims a fresh slot on its first use.
+static _Thread_local struct ts_slot *ts_self;
+static _Thread_local int ts_self_pid;
+static struct ts_slot *ts_mine(void) {
+    int pid = (int)getpid();
+    if (ts_self && ts_self_pid == pid) return ts_self;
+    ts_self = ts_slot_for(pid, 1);
+    ts_self_pid = pid;
+    return ts_self;
+}
+static inline void ts_set_self(unsigned char st) {
+    struct ts_slot *s = ts_mine();
+    if (s) atomic_store_explicit(&s->st, st, memory_order_release);
+}
+// Bracket a host blocking wait: 'S' (interruptible sleep) on entry, 'R' (running) on wake. Errno-safe --
+// getpid() + an atomic store never clobber the caller's errno on the wait's return path.
+static inline void ts_wait_enter(void) { ts_set_self('S'); }
+static inline void ts_wait_leave(void) { ts_set_self('R'); }
+static inline void ts_running(void) { ts_set_self('R'); } // every non-blocking syscall = we were running
+// Reader side: the published state char for host pid `host`, or 0 if this task has no published slot.
+static int ts_lookup(int host) {
+    struct ts_slot *s = ts_slot_for(host, 0);
+    return s ? (int)atomic_load_explicit(&s->st, memory_order_acquire) : 0;
+}
+// A guest fork child re-claims its own slot lazily (getpid mismatch), but drop the inherited cache eagerly
+// so its very first published state is its OWN, not a stale pointer into the parent's slot.
+static void ts_after_fork(void) { ts_self = NULL; ts_self_pid = 0; }
+
 // ===================== in-memory temp-file backing (sqlite sorter/index spill) =====================
 // A genuinely-PRIVATE scratch file is served from a host RAM buffer instead of issuing pread/pwrite to
 // a host temp file. SQLite's sorter/index spill ("etilqs_*") opens O_RDWR|O_CREAT|O_EXCL under the temp
@@ -1487,6 +1564,11 @@ static int proc_stat_pid_text(char *b, size_t n, int gp, int host) {
     if (!proc_reg_read(host, comm, sizeof comm, cmd, sizeof cmd, &cl))
         snprintf(comm, sizeof comm, "%.15s", ok ? pi.hostcomm : "proc");
     char state = ok ? pi.state : 'S';
+    // pbi_status can't distinguish a running task from one asleep in a blocking wait (BSD p_stat is SRUN
+    // for both). Prefer the guest's own published run state when it has one; keep pbi authoritative for the
+    // states it CAN report faithfully -- 'Z' (zombie, post-exit) and 'T' (SIGSTOP/traced host-suspended).
+    int ov = ts_lookup(host);
+    if (ov && state != 'Z' && state != 'T') state = (char)ov;
     int ppid = 0;
     if (gp != 1 && ok) {
         int hp;
@@ -1529,6 +1611,9 @@ static int proc_status_pid_text(char *b, size_t n, int gp, int host) {
     }
     unsigned long rss = ok ? (unsigned long)(pi.rss / 1024) : 0;
     unsigned long vsz = rss + (128UL << 10); // bounded footprint, not the huge host DBT vsize (see stat text)
+    char state = ok ? pi.state : 'S'; // same run-state override as proc_stat_pid_text (see there)
+    int ov = ts_lookup(host);
+    if (ov && state != 'Z' && state != 'T') state = (char)ov;
     return snprintf(b, n,
                     "Name:\t%s\nUmask:\t0022\nState:\t%c\nTgid:\t%d\nNgid:\t0\nPid:\t%d\nPPid:\t%d\n"
                     "TracerPid:\t0\nUid:\t0\t0\t0\t0\nGid:\t0\t0\t0\t0\nFDSize:\t256\nGroups:\t\n"
@@ -1538,7 +1623,7 @@ static int proc_status_pid_text(char *b, size_t n, int gp, int host) {
                     "SigBlk:\t0000000000000000\nSigIgn:\t0000000000000000\nSigCgt:\t0000000000000000\n"
                     "Cpus_allowed:\t1\nCpus_allowed_list:\t0\nvoluntary_ctxt_switches:\t1\n"
                     "nonvoluntary_ctxt_switches:\t0\n",
-                    comm, ok ? pi.state : 'S', gp, gp, ppid, vsz, vsz, rss, rss, rss, ok ? pi.nthreads : 1);
+                    comm, state, gp, gp, ppid, vsz, vsz, rss, rss, rss, ok ? pi.nthreads : 1);
 }
 // /proc/<pid>/cmdline for a peer -- the published NUL-separated argv (fallback: the comm).
 static int proc_cmdline_pid_text(char *b, size_t n, int host) {
