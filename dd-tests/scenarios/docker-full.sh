@@ -110,6 +110,22 @@ ucid="$(d run -d alpine sh -c 'sleep 4')"
 has "update" "$(d update --memory 64m "$ucid" 2>&1 | head -c 12)$(echo "$ucid" | head -c 12)" "$(echo "$ucid" | head -c 12)"
 d rm -f "$ucid" >/dev/null
 
+echo "== container id entropy + default hostname (#276) =="
+# #276: a real Docker container id is 64 hex of full entropy, and the default hostname (no --hostname)
+# is the 12-char short id (NOT a hardcoded "jit"). Assert the shape matches `docker -c orbstack`.
+idc="$(d run -d alpine sh -c 'sleep 5')"
+full_id="$(d inspect --format '{{.Id}}' "$idc")"
+ok  "id-len-64"        "$(printf '%s' "$full_id" | tr -d '\n' | wc -c | tr -d ' ')" "64"
+has "id-is-hex"        "$(printf '%s' "$full_id" | grep -cE '^[0-9a-f]{64}$')" "1"
+# The old bug tiled a single 16-hex value 4x: the first three quarters were identical. Reject that.
+q0="${full_id:0:16}"; q1="${full_id:16:16}"; q2="${full_id:32:16}"
+if [ "$q0" = "$q1" ] && [ "$q1" = "$q2" ]; then no "id-not-tiled" "tiled" "tiled"; else ok "id-not-tiled" "ok" "ok"; fi
+short_id="$(printf '%s' "$full_id" | head -c 12)"
+ok  "default-hostname-cfg" "$(d inspect --format '{{.Config.Hostname}}' "$idc")" "$short_id"
+ok  "default-hostname-in"  "$(d exec "$idc" hostname 2>&1)" "$short_id"
+ok  "default-hostname-not-jit" "$(d exec "$idc" hostname 2>&1 | grep -c '^jit$')" "0"
+d rm -f "$idc" >/dev/null
+
 echo "== run data flags: -v / -w / --user / --label / --hostname =="
 vol="$ROOT/full-vol"; rm -rf "$vol"; mkdir -p "$vol"; echo "vol-content" > "$vol/f.txt"
 has "run-v-bind"   "$(d run --rm -v "$vol":/mnt alpine cat /mnt/f.txt 2>&1)" "vol-content"

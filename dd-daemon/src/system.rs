@@ -68,8 +68,9 @@ pub(crate) async fn system_df(State(a): State<App>) -> Json<Value> {
     let g = a.inner.lock().await;
     let images: Vec<Value> = g.images.iter().map(|i| {
         let size = image_size(&i.rootfs, &i.name);
-        // Containers backed by this image (by bare ref name) — Docker's `system df` shows this count.
-        let containers = g.containers.values().filter(|c| ref_name(&c.image) == ref_name(&i.name)).count();
+        // Containers backed by this image (by fully qualified repository, issue #304) — Docker's
+        // `system df` shows this count; a bare `nginx` must not absorb `linuxserver/nginx`'s containers.
+        let containers = g.containers.values().filter(|c| ref_repo(&c.image) == ref_repo(&i.name)).count();
         json!({"Id": format!("sha256:{}", fake_id(&i.name)), "ParentId": "",
             "RepoTags": [repo_tag(&i.name)], "Created": 0, "Size": size,
             "SharedSize": 0, "VirtualSize": size, "Containers": containers})

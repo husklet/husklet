@@ -337,11 +337,14 @@ fn dedup_images(mut imgs: Vec<Image>) -> Vec<Image> {
 ///   2. then the richest metadata (a real environment beats an empty one — see [`image_score`]),
 ///   3. then the name string (reversed so the lexicographically smallest wins) to settle any remainder.
 pub(crate) fn find_image<'a>(images: &'a [Image], reference: &str) -> Option<&'a Image> {
+    let want_repo = ref_repo(reference);
     let want = ref_name(reference);
     let want_rt = repo_tag(reference);
     let want_latest = format!("{want}:latest");
     images.iter()
-        .filter(|i| ref_name(&i.name) == want)
+        // Match on the fully-qualified repository (registry+namespace+name), NOT the bare basename, so a
+        // bare official `nginx` never resolves to a third-party `linuxserver/nginx` (issue #304).
+        .filter(|i| ref_repo(&i.name) == want_repo)
         .max_by_key(|i| {
             (repo_tag(&i.name) == want_rt, repo_tag(&i.name) == want_latest,
              image_score(i), std::cmp::Reverse(i.name.clone()))
@@ -533,12 +536,101 @@ pub(crate) fn ref_name(s: &str) -> &str {
 }
 
 
-/// A unique container id. Seeded from a never-reset process counter + nanosecond clock, so it stays
-/// unique even as containers are created and deleted (a count-based seed would collide after a rm).
+/// The FULLY-QUALIFIED canonical repository of an image reference — registry + namespace + name, tag
+/// stripped, with Docker Hub's implicit `library/` namespace made explicit. This is the correct key
+/// for "is this the same image?" because it distinguishes repositories that merely share a final path
+/// component: `nginx`, `library/nginx`, `docker.io/library/nginx:1.25` all map to
+/// `registry-1.docker.io/library/nginx`, but `linuxserver/nginx` maps to
+/// `registry-1.docker.io/linuxserver/nginx`. Using the bare basename ([`ref_name`]) instead made
+/// `docker run nginx` resolve to a locally-present `linuxserver/nginx` (issue #304) — a cross-repo
+/// collision. Prefer this for run/inspect resolution; `ref_name` remains only for loose display uses.
+pub(crate) fn ref_repo(s: &str) -> String {
+    let r = ImageRef::parse(s);
+    format!("{}/{}", r.registry, r.repository)
+}
+
+
+/// A fresh container/exec id with real entropy, shaped exactly like Docker's: 32 random bytes
+/// (256 bits) hex-encoded to 64 lowercase chars. Docker derives the 12-char short id that clients
+/// display/round-trip from the leading bytes of this, so the short id inherits the full entropy too.
+/// (The previous implementation hashed a seed to a single 64-bit value and TILED it 4x — a 64-hex
+/// string with only 16 hex of real entropy, trivially collidable and visibly not a real Docker id.)
+/// Reads the OS CSPRNG (`/dev/urandom`); if that is somehow unavailable it falls back to a splitmix64
+/// stream seeded from the nanosecond clock, pid and a never-reset per-process counter (the `image`
+/// arg only seeds this fallback), so ids stay unique even across create/rm churn.
 pub(crate) fn new_id(image: &str) -> String {
-    use std::sync::atomic::{AtomicU64, Ordering};
-    static SEQ: AtomicU64 = AtomicU64::new(0);
-    let seq = SEQ.fetch_add(1, Ordering::Relaxed);
-    let nanos = SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_nanos() as u64).unwrap_or(0);
-    fake_id(&format!("{image}-{seq}-{nanos}"))
+    let mut buf = [0u8; 32];
+    if std::fs::File::open("/dev/urandom")
+        .and_then(|mut f| std::io::Read::read_exact(&mut f, &mut buf)).is_err()
+    {
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static SEQ: AtomicU64 = AtomicU64::new(0);
+        let seq = SEQ.fetch_add(1, Ordering::Relaxed);
+        let nanos = SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_nanos() as u64).unwrap_or(0);
+        let mut s = nanos
+            ^ (std::process::id() as u64).rotate_left(32)
+            ^ seq.wrapping_mul(0x9E37_79B9_7F4A_7C15)
+            ^ md5_like(image);
+        for chunk in buf.chunks_mut(8) {
+            // splitmix64: distinct 64-bit output per 8-byte chunk.
+            s = s.wrapping_add(0x9E37_79B9_7F4A_7C15);
+            let mut z = s;
+            z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+            z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+            z ^= z >> 31;
+            for (i, b) in chunk.iter_mut().enumerate() { *b = (z >> (i * 8)) as u8; }
+        }
+    }
+    let mut out = String::with_capacity(64);
+    for b in &buf { out.push_str(&format!("{b:02x}")); }
+    out
+}
+
+
+#[cfg(test)]
+mod id_resolution_tests {
+    use super::*;
+
+    fn img(name: &str) -> Image { Image { name: name.into(), ..Default::default() } }
+
+    // #276: a container id must be 64 hex of REAL entropy, not a 16-hex value tiled 4x.
+    #[test]
+    fn new_id_is_full_entropy_64_hex() {
+        let a = new_id("alpine");
+        assert_eq!(a.len(), 64, "docker container ids are 64 hex chars");
+        assert!(a.chars().all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase()),
+                "id must be lowercase hex: {a}");
+        // The old bug tiled one 16-hex value 4x: the first three quarters were identical. Reject that.
+        let (q0, q1, q2) = (&a[0..16], &a[16..32], &a[32..48]);
+        assert!(!(q0 == q1 && q1 == q2), "id looks tiled (low entropy): {a}");
+        // Consecutive ids differ (no counter/clock collision).
+        assert_ne!(a, new_id("alpine"));
+        // The 12-char short id is also unique across many draws (entropy reaches the leading bytes).
+        let mut shorts = std::collections::HashSet::new();
+        for _ in 0..1000 { assert!(shorts.insert(new_id("x")[..12].to_string())); }
+    }
+
+    // #304: the fully qualified repository distinguishes cross-repo basename collisions.
+    #[test]
+    fn ref_repo_distinguishes_cross_repo_basenames() {
+        assert_eq!(ref_repo("nginx"), ref_repo("library/nginx"));
+        assert_eq!(ref_repo("nginx"), ref_repo("docker.io/library/nginx:1.25"));
+        assert_eq!(ref_repo("nginx"), ref_repo("nginx:latest"));
+        assert_ne!(ref_repo("nginx"), ref_repo("linuxserver/nginx"));
+        assert_ne!(ref_repo("nginx"), ref_repo("ghcr.io/o/nginx"));
+    }
+
+    // #304: `docker run nginx` must NOT resolve to a locally-present `linuxserver/nginx`.
+    #[test]
+    fn find_image_does_not_cross_repo_collide() {
+        let only_third_party = vec![img("linuxserver/nginx:latest")];
+        assert!(find_image(&only_third_party, "nginx").is_none(),
+                "bare official nginx must not resolve to linuxserver/nginx");
+        let both = vec![img("linuxserver/nginx:latest"), img("nginx:latest")];
+        assert_eq!(find_image(&both, "nginx").unwrap().name, "nginx:latest");
+        // The third-party image still resolves to itself when its full repo is named.
+        assert_eq!(find_image(&both, "linuxserver/nginx").unwrap().name, "linuxserver/nginx:latest");
+        // library/ prefix and docker.io/ registry are equivalent to the bare name.
+        assert_eq!(find_image(&both, "library/nginx").unwrap().name, "nginx:latest");
+    }
 }
