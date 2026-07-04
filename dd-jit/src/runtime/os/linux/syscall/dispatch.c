@@ -663,7 +663,14 @@ static void service_local(struct cpu *c) {
             a0 = nonpie_p(a0);
             a1 = nonpie_p(a1);
             break;
-        case 261: // prlimit64(pid, res, new, OLD)   -- old rlimit written to a3
+        case 261: // prlimit64(pid, res, NEW, OLD) -- NEW read (a2) + OLD written (a3), both derefed by the
+                  // handler (proc.c case 261) with NO host_range_mapped guard. glibc's setrlimit() funnels to
+                  // prlimit64(pid,res,&new,NULL), so a non-PIE static binary's `static struct rlimit` NEW is a
+                  // low .bss link vaddr -- rebase a2 as well or the unguarded `nl[0]/nl[1]` read SIGSEGVs on
+                  // the unmapped low address. (Latent until x86 lea stopped pre-biasing pointers HIGH: on
+                  // aarch64 the low a2 fault was silently served by nonpie_fixup; x86 hard-crashed. Rebasing
+                  // here fixes both arches directly, no fault-path reliance.)
+            a2 = nonpie_p(a2);
             a3 = nonpie_p(a3);
             break;
         case 43:  // statfs(PATH, STATFSBUF)         -- path read + buffer written
