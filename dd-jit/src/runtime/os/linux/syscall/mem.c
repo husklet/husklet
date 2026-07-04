@@ -200,6 +200,10 @@ static int svc_mem(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_
                 break;
             }
         }
+        // Drop any guest PROT_NONE coverage for the unmapped range (the EFAULT registry, thread.c): the
+        // addresses no longer name an inaccessible mapping. Uses the guest logical [a0,a1) even when the
+        // physical release below is partial (BUG #286) -- the guest's mapping is logically gone either way.
+        gna_clear(a0 & ~(uint64_t)0xfff, (a0 + a1 + 0xfff) & ~(uint64_t)0xfff);
         // A non-fixed anon mapping carries a 64 KB guard tail that mmap (case 222) reserved
         // past the guest's logical length (so glibc's vectorized over-reads land in mapped memory).
         // The guest only knows its logical length a1, so a plain munmap(a0, a1) leaves that tail mapped
@@ -323,6 +327,14 @@ static int svc_mem(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_
     }
     // mmap
     case 222: {
+        // A file-backed mmap (not MAP_ANON) whose fd is not a valid open descriptor is -EBADF, and Linux's
+        // fget() rejects it BEFORE the length check -- so this must precede the len==0 EINVAL below (LTP
+        // mmap08 maps a CLOSED/-1 fd with len 0 and expects EBADF, not EINVAL). macOS mmap otherwise reports
+        // EINVAL for a stale fd, so validate explicitly to return the kernel's errno.
+        if (!(a3 & 0x20) && ((int)a4 < 0 || fcntl((int)a4, F_GETFD) < 0)) {
+            G_RET(c) = (uint64_t)(int64_t)(-EBADF);
+            break;
+        }
         // Linux mmap with length 0 is EINVAL (must return before the anon guard tail would otherwise map
         // a nonzero region and wrongly succeed). LTP mmap08 companion / general POSIX contract.
         if (a1 == 0) {
@@ -360,9 +372,19 @@ static int svc_mem(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_
         // generated code, "executes" it (guest PC enters the page -> map_host miss -> translate), and runs.
         // Setting g_rwx_guest also arms the (otherwise inert) SMC write-fault invalidation in frontend/x86_64
         // so a guest that OVERWRITES already-translated code re-translates. NORWXFIX=1 disables the strip.
-        if (!getenv("NORWXFIX") && (a3 & 0x20) && (prot & PROT_EXEC)) {
-            prot = (prot & ~PROT_EXEC) | PROT_READ | PROT_WRITE;
-            g_rwx_guest = 1; // a JIT guest is present (informational + SMC gate)
+        if (!getenv("NORWXFIX") && (prot & PROT_EXEC)) {
+            if (a3 & 0x20) {
+                // Anon JIT arena: strip EXEC and map R+W so the guest can write its generated code.
+                prot = (prot & ~PROT_EXEC) | PROT_READ | PROT_WRITE;
+                g_rwx_guest = 1; // a JIT guest is present (informational + SMC gate)
+            } else if (prot & PROT_WRITE) {
+                // File-backed WRITE+EXEC map: macOS W^X rejects it (EACCES) without MAP_JIT, but the JIT
+                // never executes guest pages, so EXEC is meaningless -- drop it, keeping the file map R+W.
+                // A file-backed READ+EXEC map (no write) is permitted by macOS -- that is how ld.so loads a
+                // .so's text -- so it is left untouched. (LTP mincore02 maps a file PROT_READ|WRITE|EXEC.)
+                prot &= ~PROT_EXEC;
+                g_rwx_guest = 1;
+            }
         }
         size_t hp = (size_t)getpagesize();
         void *r;
@@ -515,13 +537,18 @@ static int svc_mem(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_
             // not survive the region being remapped) -- drop stale wipe coverage so a reused address is
             // never wrongly zeroed in a child.
             wipefork_del((uint64_t)r, (uint64_t)a1 + guard);
-            // PROT_NONE registry: dd force-maps this region host-writable regardless of the guest's request
-            // (see `prot` above), so a guest PROT_NONE mmap is really RW under the host -- a host syscall
-            // writing into it would NOT fault. Record the guest's REQUESTED protection so the buffer-checking
-            // paths can still return EFAULT (LTP read02). A fresh accessible map also clears any stale
-            // PROT_NONE coverage that a reused address previously carried.
+            // TWO PROT_NONE registries (both fed here, pending #407 dedup): pn_ (helpers.c, read by
+            // guest_bad_ptr in io/net/poll) + g_gna (thread.c, read INSIDE host_range_mapped). dd force-maps
+            // this region host-RW, so a guest PROT_NONE mmap is really RW -- record the guest's REQUESTED
+            // prot in both so a syscall buffer landing in it still EFAULTs (LTP read02); an accessible map
+            // clears stale coverage.
             if ((int)a2 == 0) pn_add((uint64_t)r, (uint64_t)a1);
             else pn_del((uint64_t)r, (uint64_t)a1 + guard);
+            {
+                uint64_t glo = (uint64_t)r, ghi = ((uint64_t)r + (uint64_t)a1 + 0xfff) & ~(uint64_t)0xfff;
+                if ((int)a2 == PROT_NONE) gna_add(glo, ghi);
+                else gna_clear(glo, ghi);
+            }
 #ifdef PCACHE_MMAP_HINT
             // #178 (pcache): a hinted library map that landed ON its deterministic hint. Cold epoch:
             // record {base, len, file identity} in the save manifest. Warm epoch: the activation gate for
@@ -533,14 +560,16 @@ static int svc_mem(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_
         break;
     }
     // mprotect
-    case 226: // mprotect: NO-OP for enforcement. The JIT translates guest code and never executes guest
-        // pages, so it does not enforce guest page protection. Actually calling mprotect is harmful on macOS
-        // -- it would make a region truly read-only and then fault the guest's own legitimate writes to it
-        // (e.g. RELRO). We DO track the guest's PROT_NONE intent, though, so a host syscall writing into a
-        // guest-PROT_NONE buffer still returns EFAULT (LTP read02): mark the range on PROT_NONE, clear it on
-        // any access-granting reprotect (the reserve-then-commit pattern: mmap PROT_NONE then mprotect RW).
+    case 226: // mprotect: NO-OP for physical page protection (JIT never executes guest pages; a real
+        // mprotect is harmful on macOS -- would fault the guest's own RELRO writes). BOTH PROT_NONE
+        // registries track the guest's INTENT (reserve PROT_NONE -> commit RW) so buffer checks EFAULT.
         if ((int)a2 == 0) pn_add(a0, a1);
         else pn_del(a0, a1);
+        if (a1) {
+            uint64_t glo = a0 & ~(uint64_t)0xfff, ghi = (a0 + a1 + 0xfff) & ~(uint64_t)0xfff;
+            if ((int)a2 == PROT_NONE) gna_add(glo, ghi);
+            else gna_clear(glo, ghi);
+        }
         G_RET(c) = 0;
         break;
     case 227: // msync: stores through a MAP_SHARED mapping are already in the unified page cache, so the
@@ -560,10 +589,19 @@ static int svc_mem(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_
             G_RET(c) = 0;
         }
         break;
+    // mlock(addr,len): Linux guarantees the range is RESIDENT (faulted in + wired) on return, and mincore()
+    // must then report those pages present (LTP mincore03 mlocks untouched anon pages and checks residency).
+    // The old no-op left the demand-zero pages non-resident, so mincore under-reported. macOS mlock(2) both
+    // faults the range in and wires it, giving the exact residency Linux promises. Best-effort: a failure
+    // (e.g. RLIMIT_MEMLOCK on a huge range) is swallowed and reported as success, exactly as the prior
+    // no-op did, so guests that mlock large arenas (databases) are never newly broken.
     case 228:
-    case 229:
+        if (a1) mlock((void *)a0, (size_t)a1);
         G_RET(c) = 0;
-        // mlock/munlock (no-op)
+        break;
+    case 229: // munlock: unwire (harmless best-effort; the pages stay valid, just swappable again).
+        if (a1) munlock((void *)a0, (size_t)a1);
+        G_RET(c) = 0;
         break;
     // Container-init compat: in the single-process model these are no-ops that return success so
     // entrypoints (mount /proc, unshare, drop caps, set hostname) proceed; the path-jail is the

@@ -582,10 +582,13 @@ static void service_local(struct cpu *c) {
         // rescue a low, un-rebased non-PIE pointer; the handler's host_range_mapped() guard would simply
         // fail on the unmapped low address. Rebase the buffer arg BEFORE the handler runs. (#224(a):
         // getrandom's a0 was the one that made python3.11-x86 EFAULT in _Py_HashRandomization_Init.)
+        case 169: // gettimeofday(TIMEVAL, TZ) -- the engine writes BOTH tv (a0) and the deprecated tz (a1)
+            a0 = nonpie_p(a0);
+            a1 = nonpie_p(a1);
+            break;
         case 278: // getrandom(BUF, len, flags)      -- buffer is a0
         case 179: // sysinfo(INFOBUF)
         case 153: // times(TMSBUF)
-        case 169: // gettimeofday(TIMEVAL, tz)       -- tz ignored by the handler
         case 236: // get_mempolicy(MODE, ...)        -- mode ptr is a0
         case 161: // sethostname(NAME, len)          -- name buffer is a0
         case 59:  // pipe2(FDS, flags) -- the two result fds are written into a0 by the engine itself, so a
@@ -603,6 +606,16 @@ static void service_local(struct cpu *c) {
         case 123: // sched_getaffinity(pid, len, MASK)  -- mask written directly
         case 115: // clock_nanosleep(clkid, flags, REQUEST, remain) -- req read directly in the ABSTIME loop
             a2 = nonpie_p(a2);
+            break;
+        case 232: // mincore(ADDR, len, VEC) -- vec is written directly by the engine; addr may name image
+                  //   pages (mincore of the binary's own mapping) so rebase both. An mmap result is high and
+                  //   outside [nonpie_lo,hi) so nonpie_p leaves it. (LTP mincore02's vec is a .bss static.)
+            a0 = nonpie_p(a0);
+            a2 = nonpie_p(a2);
+            break;
+        case 101: // nanosleep(REQUEST, remain) -- both read/written directly by the engine's deadline loop
+            a0 = nonpie_p(a0);
+            a1 = nonpie_p(a1);
             break;
         case 261: // prlimit64(pid, res, new, OLD)   -- old rlimit written to a3
             a3 = nonpie_p(a3);

@@ -456,6 +456,17 @@ static int svc_proc(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64
             G_RET(c) = (uint64_t)(-EINVAL);
             break;
         }
+        // The target task must exist. Linux looks the pid up AFTER the size check and BEFORE the copy-out,
+        // returning -ESRCH for a pid that names no live task (LTP sched_getaffinity01 uses an unused pid).
+        // pid 0 == the calling thread (always valid); guest pid 1 is the container init (g_init_hostpid).
+        {
+            pid_t pid = (pid_t)a0;
+            if (pid == 1 && g_init_hostpid) pid = g_init_hostpid;
+            if (pid != 0 && pid != container_pid() && kill(pid, 0) < 0 && errno == ESRCH) {
+                G_RET(c) = (uint64_t)(int64_t)(-ESRCH);
+                break;
+            }
+        }
         // The mask itself must be writable -> EFAULT on a bad pointer (matches Linux copy_to_user).
         if (a2 && n && !host_range_mapped((uintptr_t)a2, n < 128 ? n : 128)) {
             G_RET(c) = (uint64_t)(-EFAULT);
@@ -674,8 +685,13 @@ static int svc_proc(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64
     // getrusage(who, *usage) -- a1 is the buffer, not a0!
     case 165: {
         struct rusage ru;
-        // Linux RUSAGE_THREAD(1) -> SELF
-        int who = ((int)a0 == -1) ? RUSAGE_CHILDREN : RUSAGE_SELF;
+        // Linux validates `who` FIRST: only RUSAGE_SELF(0), RUSAGE_CHILDREN(-1) and RUSAGE_THREAD(1) are
+        // legal; anything else is -EINVAL BEFORE the buffer is touched (LTP getrusage02 passes who=-2). The
+        // old handler mapped every non-(-1) value to SELF and always "succeeded".
+        int who_g = (int)a0;
+        if (who_g != 0 && who_g != -1 && who_g != 1) { G_RET(c) = (uint64_t)(int64_t)(-EINVAL); break; }
+        // RUSAGE_THREAD(1) -> SELF (macOS has no per-thread rusage; SELF is the closest faithful account).
+        int who = (who_g == -1) ? RUSAGE_CHILDREN : RUSAGE_SELF;
         if (a1) {
             // The 144-byte struct rusage is written directly by the engine (not via a host syscall), so a
             // bad/unmapped pointer must return -EFAULT here rather than fault the engine (#395, access_ok).

@@ -2,6 +2,31 @@
 
 #include <mach/mach.h>
 #include <mach/mach_vm.h> // mach_vm_region: probe whether a guest address is still mapped (see cleartid)
+#include <mach/mach_time.h>     // mach_timebase_info: ns<->mach-abs for the precise-sleep RT window
+#include <mach/thread_policy.h> // THREAD_TIME_CONSTRAINT_POLICY: precise (uncoalesced) timer wakeups
+
+// macOS coalesces ordinary timer wakeups by ~1-2.5ms to save power (nanosleep/mach_wait_until alike),
+// which blows LTP nanosleep01's 450us threshold -- Linux hrtimers are exact. A THREAD_TIME_CONSTRAINT
+// (soft real-time) policy makes THIS thread's next wakeup precise (~10us). We apply it only for the
+// duration of a guest sleep and drop back to the standard timeshare policy after, so the thread's normal
+// scheduling is unchanged outside the sleep and no thread is left permanently real-time.
+static void sleep_precise_begin(void) {
+    mach_timebase_info_data_t tb;
+    if (mach_timebase_info(&tb) != KERN_SUCCESS || tb.numer == 0) return;
+    double ns2abs = (double)tb.denom / (double)tb.numer; // nanoseconds -> mach abs ticks
+    thread_time_constraint_policy_data_t p;
+    p.period = (uint32_t)(500000.0 * ns2abs);      // 0.5ms nominal cadence
+    p.computation = (uint32_t)(100000.0 * ns2abs); // 0.1ms of "work" (we only need a timely wake)
+    p.constraint = (uint32_t)(500000.0 * ns2abs);  // wake within 0.5ms of the deadline
+    p.preemptible = 1;                             // fully preemptible: never starves other threads
+    thread_policy_set(mach_thread_self(), THREAD_TIME_CONSTRAINT_POLICY, (thread_policy_t)&p,
+                      THREAD_TIME_CONSTRAINT_POLICY_COUNT);
+}
+static void sleep_precise_end(void) {
+    thread_standard_policy_data_t sp = {0}; // back to the default timeshare scheduling
+    thread_policy_set(mach_thread_self(), THREAD_STANDARD_POLICY, (thread_policy_t)&sp,
+                      THREAD_STANDARD_POLICY_COUNT);
+}
 
 // ---------------- syscalls ----------------
 // ---------------- threads & futex ----------------
@@ -120,6 +145,58 @@ static int g_futex_parked;
 // PROF: fast (no-lock) wakes, slow (locked) wakes, eagain pre-checks
 static uint64_t g_futex_wake_fast, g_futex_wake_slow, g_futex_wait_n;
 
+// ===================== guest PROT_NONE region registry ==========================================
+// dd maps every guest anon page R+W on the host (case 222 ORs in PROT_READ|WRITE) so that a later
+// mprotect-to-writable -- which dd no-ops, since the JIT never enforces guest page protection -- is
+// already in effect. A consequence: a guest mapping the guest genuinely made INACCESSIBLE (mmap
+// PROT_NONE, e.g. LTP's tst_get_bad_addr, a malloc-arena guard page, a Go/V8 reservation) is still
+// PHYSICALLY readable, so host_range_mapped's page probe wrongly reports it mapped -- and a syscall
+// whose user buffer lands there returns success instead of -EFAULT (LTP sched_getaffinity01's EFAULT
+// case). Track the guest-requested PROT_NONE ranges so host_range_mapped can fault them exactly as the
+// kernel's copy_to_user would. Lock-free like g_gmap/g_anonmap (mem.c): a race can at worst mis-window a
+// concurrently-changing mapping, never corrupt memory. Updated by mmap/mprotect/munmap in mem.c.
+#define GNA_MAX 512
+static struct { uint64_t lo, hi; } g_gna[GNA_MAX];
+static int g_ngna;
+static void gna_clear(uint64_t lo, uint64_t hi);
+static void gna_add(uint64_t lo, uint64_t hi) {
+    if (hi <= lo) return;
+    gna_clear(lo, hi); // coalesce: drop any prior coverage so re-marking never double-counts
+    if (g_ngna < GNA_MAX) {
+        g_gna[g_ngna].lo = lo;
+        g_gna[g_ngna].hi = hi;
+        __atomic_store_n(&g_ngna, g_ngna + 1, __ATOMIC_RELEASE);
+    }
+}
+// Remove [lo,hi) from the set (access granted, or the range unmapped/re-mapped), splitting any interval
+// that straddles the boundary so a partial grant (mprotect of a sub-range of a big PROT_NONE reservation)
+// keeps the still-inaccessible remainder tracked.
+static void gna_clear(uint64_t lo, uint64_t hi) {
+    if (hi <= lo) return;
+    for (int i = 0; i < g_ngna;) {
+        uint64_t b = g_gna[i].lo, e = g_gna[i].hi;
+        if (lo >= e || hi <= b) { i++; continue; }
+        int keep_head = b < lo, keep_tail = hi < e;
+        if (!keep_head && !keep_tail) { g_gna[i] = g_gna[--g_ngna]; continue; }
+        if (keep_head) g_gna[i].hi = lo; // trim to the surviving head [b,lo)
+        else g_gna[i].lo = hi;           // keep_tail only: [hi,e)
+        if (keep_head && keep_tail && g_ngna < GNA_MAX) { // middle grant -> tail becomes a 2nd entry
+            g_gna[g_ngna].lo = hi;
+            g_gna[g_ngna].hi = e;
+            __atomic_store_n(&g_ngna, g_ngna + 1, __ATOMIC_RELEASE);
+        }
+        i++;
+    }
+}
+// True iff any byte of [a,a+len) lies in a tracked guest PROT_NONE region.
+static int gna_hit(uint64_t a, uint64_t len) {
+    if (!len || __atomic_load_n(&g_ngna, __ATOMIC_ACQUIRE) == 0) return 0; // lock-free fast path (common)
+    uint64_t end = a + len;
+    for (int i = 0; i < g_ngna; i++)
+        if (a < g_gna[i].hi && end > g_gna[i].lo) return 1;
+    return 0;
+}
+
 // True iff host virtual address `a` is currently mapped. mincore() is useless on macOS (returns 0 for ANY
 // address), so query the VM map directly: mach_vm_region returns the first region at-or-above `a`, and `a`
 // is mapped iff it falls inside [start, start+size). Same technique as the x86 loader's lazy_addr_mapped.
@@ -177,6 +254,9 @@ static int host_range_mapped(uintptr_t a, size_t len) {
     if (!len) return 1;
     uintptr_t end = a + len;
     if (end < a) return 0; // wrap -> bogus pointer
+    // A guest PROT_NONE mapping is physically R+W under dd (see the g_gna registry above), so the page
+    // probe below would call it mapped; the kernel's copy_to/from_user faults it. Reject up front.
+    if (gna_hit((uint64_t)a, (uint64_t)len)) return 0;
     uintptr_t lo = a & ~(uintptr_t)0xfff;
     if (g_hrm_slow < 0) g_hrm_slow = (getenv("DDJIT_NOFASTHRM") || getenv("CRASHDBG")) ? 1 : 0;
     if (g_hrm_slow) {

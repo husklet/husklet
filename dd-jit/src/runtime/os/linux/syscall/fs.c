@@ -108,6 +108,7 @@ static void fd_reset_emul(int fd) {
         g_tfd_interval[fd] = 0;
         g_memfd_is[fd] = 0;
         g_memfd_seal[fd] = 0;
+        g_pagemap_fd[fd] = 0;
         g_inotify_owner[fd] = 0;
         if (g_fd_pushback[fd]) { free(g_fd_pushback[fd]); g_fd_pushback[fd] = NULL; g_fd_pb_len[fd] = 0; }
         g_ovldir[fd][0] = 0;

@@ -272,6 +272,19 @@ static int svc_io(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t
             G_RET(c) = 8;
             break;
         }
+        // /proc/<pid>/pagemap (vfs.c backs it with an empty seekable fd; g_pagemap_fd marks it): synthesize
+        // one 64-bit entry per page with the PRESENT bit (63) set. The guest lseek'd to vaddr/pagesize*8 and
+        // reads sequentially; advance the real fd offset so its position tracks what we "read" (LTP mmap12).
+        if (rfd >= 0 && rfd < 1024 && g_pagemap_fd[rfd]) {
+            size_t want = (size_t)a2 & ~(size_t)7; // whole 8-byte pagemap entries only
+            if (want == 0) { G_RET(c) = 0; break; }
+            if (a1 && !host_range_mapped((uintptr_t)a1, want)) { G_RET(c) = (uint64_t)(-EFAULT); break; }
+            uint64_t *out = (uint64_t *)a1;
+            for (size_t i = 0; i < want / 8; i++) out[i] = (1ULL << 63); // PM_PRESENT
+            lseek(rfd, (off_t)want, SEEK_CUR);
+            G_RET(c) = (uint64_t)want;
+            break;
+        }
         // SA_RESTART: a blocking read interrupted by a signal whose guest handler asked for restart is
         // resumed in place (the dispatcher runs the handler after the read finally returns); a handler
         // WITHOUT SA_RESTART lets EINTR through. (Well-behaved programs block in poll/select/epoll -- which
