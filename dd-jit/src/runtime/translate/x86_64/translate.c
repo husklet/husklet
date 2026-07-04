@@ -195,6 +195,15 @@ static void byte_wb(struct insn *I, int regnum, int val) {
 // declarations so the rip-relative `lea` rewrite below can see them. All zero for PIE/static-PIE / non-Go
 // images -> the rewrite is inert.
 static uint64_t g_nonpie_lo, g_nonpie_hi, g_nonpie_bias, g_nonpie_types_lo, g_nonpie_types_hi;
+// #425: V8's embedded-builtins CODE base (symbol v8_Default_embedded_blob_code_) -- a baked LOW .text
+// address the binary loads via `mov r32,imm32`. dd runs the code at the HIGH mapping (+bias), so V8's
+// InnerPointerToCodeCache range check compares its LOW registered base against a HIGH frame return address
+// and MISSES -> V8_Fatal "maybe_code.has_value()" (node:20 `new Error().stack` / mongosh). We record the
+// symbol's LOW link value at load (0 if absent / PIE / non-V8) and bias just THIS one materialization to the
+// high mapping (translate/mov.c), so V8's code range lives where the code executes -- the same idea as
+// go_rebase_nonpie for Go's moduledata code range. Exact-value match -> no other constant is touched, and
+// return addresses stay HIGH (Go's gentraceback/findfunc keep working). 0 for PIE / non-V8 / stripped.
+static uint64_t g_nonpie_blob_code;
 
 // r/m operand: mem -> EA to x17, load value to x16 (returns 16); reg -> value reg.
 static void emit_ea(struct insn *I, uint64_t next_rip);

@@ -17,7 +17,13 @@ static int translate_mov(struct insn *I, uint64_t next) {
             // ---- mov r, imm (B8+r) ----
             if (op >= 0xB8 && op <= 0xBF) {
                 int rd = (op - 0xB8) | (I->rexB << 3);
-                e_movconst(rd, sf ? (uint64_t)I->imm : (uint64_t)(uint32_t)I->imm);
+                uint64_t v = sf ? (uint64_t)I->imm : (uint64_t)(uint32_t)I->imm;
+                // #425: bias the ONE baked immediate that materializes V8's embedded-builtins code base
+                // (v8_Default_embedded_blob_code_) to the high mapping so V8's InnerPointerToCodeCache range
+                // matches where the builtins actually execute (return addresses stay HIGH). Exact-value match
+                // on the symbol recorded at load -> inert for every other constant / PIE / non-V8 image.
+                if (g_nonpie_blob_code && v == g_nonpie_blob_code) v += g_nonpie_bias;
+                e_movconst(rd, v);
                 return TX_NEXT;
             }
             // ---- mov r/m, imm (C7 /0, C6 /0) ----
@@ -27,8 +33,13 @@ static int translate_mov(struct insn *I, uint64_t next) {
                     emit_ea(I, next);
                     e_movconst(16, (uint64_t)I->imm);
                     e_store(w, 16, 17);
-                } else
-                    e_movconst(I->rm_reg, sf ? (uint64_t)I->imm : (uint64_t)(uint32_t)I->imm);
+                } else {
+                    uint64_t v = sf ? (uint64_t)I->imm : (uint64_t)(uint32_t)I->imm;
+                    // #425: the C7 /0 `mov r,imm` form of the V8 embedded-blob code-base load (see the B8-BF
+                    // note above). Same exact-value rebase; C6 is byte-imm (never a code address) so op==0xC7.
+                    if (op == 0xC7 && g_nonpie_blob_code && v == g_nonpie_blob_code) v += g_nonpie_bias;
+                    e_movconst(I->rm_reg, v);
+                }
                 return TX_NEXT;
             }
             // ---- mov accumulator <-> moffs (A0-A3): the only x86 form with a full direct-ADDRESS immediate ----
