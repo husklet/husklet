@@ -20,5 +20,10 @@ fn memx() -> Group {
         // x86_64 guest's 4 KB-page residency vector is filled correctly (resident=4), matching aarch64
         // and the native oracle (#319).
         src("mincore", "ext_mm/mincore.c").oracle(),
+        // #397: the mmap/munmap/mincore/madvise semantics surface behind LTP mmap08/mmap12/munmap01/
+        // munmap03/mincore02/mincore04/madvise10 -- mmap len0 & bad-fd errors, munmap len0/misaligned/
+        // out-of-range EINVAL, MAP_POPULATE zero-fill, mincore residency + EINVAL, MADV_DONTNEED zeroing,
+        // MADV_WILLNEED/FREE, and MADV_WIPEONFORK/KEEPONFORK. Diffed vs native on both Linux arches.
+        src("mmsem", "ext_mm/mmsem.c").oracle(),
     ])
 }

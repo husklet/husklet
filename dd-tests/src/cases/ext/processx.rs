@@ -31,5 +31,24 @@ fn processx_linux() -> Group {
         // made=0) — an oracle artifact, not an engine gap (cf. pidfd/process_vm). xfail x86_64.
         src("clone3", "ext_proc/clone3.c").oracle().xfail(&[Engine::LinuxX86_64]),
         src("futex", "ext_proc/futex.c").oracle(),       // direct FUTEX_WAIT/FUTEX_WAKE
+        // #400: cross-process futex on a MAP_SHARED page across fork() (LTP fork04 / tst_checkpoint).
+        // A FUTEX_WAKE in one process must wake a FUTEX_WAIT in another on the same shared physical
+        // page (both directions), plus WAIT-timeout=ETIMEDOUT and WAKE(N) of N cross-process waiters.
+        src("futex-xproc", "ext_proc/futex_xproc.c").oracle(),
+        // ptrace(2) real tracer/tracee coordination (#238). dd emulates the ptrace relationship BETWEEN two
+        // guest processes (both translated) over a shared arena -- NOT the host macOS ptrace. A golden
+        // verdict (both Linux arches): TRACEME + group-stop + PTRACE_SYSCALL entry/exit stops observe the
+        // child's arch-native syscall numbers via GETREGS, with the TRACESYSGOOD 0x80 bit, and PEEKDATA
+        // reads the tracee's memory. Linux-only (ptrace is Linux-specific; darwin uses a different model).
+        // .out() golden rather than .oracle() because qemu-user's guest-ptrace-guest support is incomplete
+        // (an oracle artifact); the golden is the correct native-Linux result.
+        port("ptrace-tracer", "ext_proc/ptrace_tracer.c").only(LIN)
+            .out("ptrace ok stopsig=1 sysgood=1 getpid=1 write=1 exit=1 peek=1 status=7\n"),
+        // ^ peek=1: PEEKDATA reads the tracee's marker string out of its (separate host process) address
+        // space via the stopped-tracee request/response channel.
+        // ptrace exec-stop -- the strace -f initial event: TRACEME + execve stops the tracee with SIGTRAP
+        // before the new image runs; PTRACE_CONT lets it finish.
+        port("ptrace-exec", "ext_proc/ptrace_exec.c").only(LIN)
+            .out("ptrace-exec ok execstop=1 exit=0\n"),
     ])
 }

@@ -681,6 +681,39 @@ static int anon_prot_if_contained(uint64_t addr, uint64_t len) {
         if (g_anonmap[i].addr <= addr && end <= g_anonmap[i].addr + g_anonmap[i].len) return g_anonmap[i].prot;
     return -1;
 }
+// MADV_WIPEONFORK(18) ranges: PRIVATE-ANON regions the guest asked to be presented ZERO-FILLED to a
+// child after fork(2) (Linux 4.14+). Tracked here; fork_child_hooks() memsets each range to 0 in the
+// child, so the child (and, since it inherits this registry across fork, any grandchild) sees zeros
+// while the parent keeps its data. MADV_KEEPONFORK(19) undoes it by dropping the range. Only private-
+// anon pages are valid (the madvise handler EINVALs anything else, exactly like Linux).
+static struct {
+    uint64_t addr, len;
+} g_wipefork[256];
+static int g_nwipefork;
+static void wipefork_add(uint64_t addr, uint64_t len) {
+    if (!addr || !len) return;
+    for (int i = 0; i < g_nwipefork; i++)
+        if (g_wipefork[i].addr == addr && g_wipefork[i].len == len) return; // already tracked
+    if (g_nwipefork >= (int)(sizeof g_wipefork / sizeof g_wipefork[0])) return;
+    g_wipefork[g_nwipefork].addr = addr;
+    g_wipefork[g_nwipefork].len = len;
+    g_nwipefork++;
+}
+static void wipefork_del(uint64_t addr, uint64_t len) {
+    uint64_t end = addr + len;
+    for (int i = 0; i < g_nwipefork;) {
+        uint64_t a = g_wipefork[i].addr, e = a + g_wipefork[i].len;
+        if (a < end && addr < e)
+            g_wipefork[i] = g_wipefork[--g_nwipefork]; // overlaps the KEEPONFORK range -> forget it
+        else
+            i++;
+    }
+}
+// Called in the fork CHILD (from fork_child_hooks): present each MADV_WIPEONFORK range as zero-filled.
+static void wipefork_apply_child(void) {
+    for (int i = 0; i < g_nwipefork; i++)
+        memset((void *)g_wipefork[i].addr, 0, (size_t)g_wipefork[i].len);
+}
 // /proc/self/fd/N (and /proc/<pid>/fd/N for our own pid -- host pid, container pid, or init's "1")
 // names an already-open fd. macOS has no /proc, so detect this form and recover the fd number; the
 // caller then resolves it via F_GETPATH (readlinkat) or dup()/reopen (openat). Returns N>=0 on an

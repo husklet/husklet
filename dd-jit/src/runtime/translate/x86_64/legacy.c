@@ -100,10 +100,16 @@ static int x86_normalize(struct cpu *c) {
     case 232: r[8] = 0; r[0] = 281; return 0; // epoll_wait(epfd,ev,max,timeout) -> epoll_pwait(...,NULL sigmask)
     // --- flag-arg variants (append a 0 flags) ---
     case 22: r[6] = 0; r[0] = 293; return 0;  // pipe(fds) -> pipe2(fds,0)
-    case 33: r[2] = 0; r[0] = 292; return 0;  // dup2(old,new) -> dup3(old,new,0)
+    // dup2(old,new) -> dup3(old,new, DUP2_COMPAT). dup2 and dup3 DIVERGE on old==new: dup3 -> EINVAL, but
+    // dup2 -> returns new unchanged (EBADF if old is invalid). The shared canonical handler (io.c case 24)
+    // reads flag bit 30 (0x40000000, a private marker no real dup3 flag uses) to apply dup2 semantics.
+    case 33: r[2] = 0x40000000u; r[0] = 292; return 0;
     case 284: r[6] = 0; r[0] = 290; return 0; // eventfd(n) -> eventfd2(n,0)
     case 282: r[10] = 0; r[0] = 289; return 0; // signalfd(fd,mask,sz) -> signalfd4(...,0)
-    case 213: r[7] = 0; r[0] = 291; return 0; // epoll_create(size) -> epoll_create1(0)
+    case 213: // epoll_create(size) -> epoll_create1(0). Linux rejects size <= 0 with EINVAL (LTP
+              // epoll_create01); the size is otherwise ignored since 2.6.8.
+        if ((int)r[7] <= 0) { r[0] = (uint64_t)-22; return 1; } // EINVAL
+        r[7] = 0; r[0] = 291; return 0;
     case 253: r[7] = 0; r[0] = 294; return 0; // inotify_init() -> inotify_init1(0)
     // clone(flags,stack,ptid,ctid,tls): x86-64 orders the last two args ctid(r10),tls(r8), but the shared
     // service is written against the canonical/aarch64 clone(flags,stack,ptid,tls,ctid) order (tls=a3=r10,

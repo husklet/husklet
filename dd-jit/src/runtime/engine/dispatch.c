@@ -72,6 +72,11 @@ __attribute__((naked)) static void block_return(void) {
         fprintf(stderr, "[blk] pc=%llx x19=%llx x20=%llx sp=%llx | %08x %08x %08x %08x %08x %08x\n",                     \
                 (unsigned long long)G_PC(c), (unsigned long long)(c)->x[19], (unsigned long long)(c)->x[20],            \
                 (unsigned long long)(c)->sp, ci[0], ci[1], ci[2], ci[3], ci[4], ci[5]);                                 \
+        if (g_dbg_gprdump) {                                                                                             \
+            fprintf(stderr, "[gpr] pc=%llx", (unsigned long long)G_PC(c));                                               \
+            for (int _i = 0; _i < 31; _i++) fprintf(stderr, " x%d=%llx", _i, (unsigned long long)(c)->x[_i]);            \
+            fprintf(stderr, " sp=%llx\n", (unsigned long long)(c)->sp);                                                  \
+        }                                                                                                                \
     }
 #endif
 
@@ -153,7 +158,9 @@ static void run_guest(struct cpu *c) {
             sys_icache_invalidate(J_RX(g_emit_start), (size_t)(g_cp - g_emit_start));
             // THEN chain existing blocks to it (still write mode). Frontend hook: aarch64 chains here;
             // x86's translate_block already chained internally, so its hook is a no-op.
-            G_DISPATCH_CHAIN(c);
+            // DDDBG_NOCHAIN (debug-only, default OFF): skip so every block re-enters the dispatcher and the
+            // JT trace records every execution (exact per-block PC attribution). Correct but slow.
+            if (!g_dbg_nochain) G_DISPATCH_CHAIN(c);
             // back to execute AFTER all cache writes
             jit_wprot(1);
             // Frontend hook: post-translate per-arch step (x86 W6A SMC source-page write-protect; empty aarch64).

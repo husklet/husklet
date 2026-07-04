@@ -13,9 +13,30 @@ pub mod ext;   // per-category basics expansion (one file per agent, appended be
 /// Every group, in display order. Base groups here + the per-agent extension groups in `ext`.
 pub fn all() -> Vec<Group> {
     let mut g = vec![compat(), libc(), system(), net(), proc(), threads(), posix(), ipc(), clib(), linuxsys(),
-         heavy(), soak(), edge(), compile(), realsw(), containersw(), perf(), busybox(), container(), sandbox(), x86(), darwin()];
+         heavy(), soak(), edge(), compile(), realsw(), containersw(), perf(), busybox(), container(), sandbox(), x86(), darwin(), regress()];
     g.extend(ext::all());
     g
+}
+
+/// Regression guards for shipped correctness bugs. Portable, golden-checked.
+/// - lseek/offset: #391 — apt-get update BADSIG. gpg's keyring_get_keyblock lseek(fd,found.offset,SEEK_SET)s
+///   to the matched keyblock then read()s it; a stale/miswired seek served the read from offset 0, so the
+///   FIRST key was re-read -> "BADSIG <Ubuntu Archive key>". Root cause: the overlay open path tagged a
+///   REGULAR file as a directory stream (g_ovldir), so lseek(SEEK_SET) on it was redirected to a directory
+///   rewind and never seeked the host fd. lseek_read/offset_track assert seek-then-read coherence.
+/// - sha512/ccmp/lse: crypto + comparison + atomic primitives exercised during the #391 investigation.
+fn regress() -> Group {
+    group("regress", vec![
+        port("lseek-read", "lseek_read.c").has("lseek-read OK"),   // #391 seek-then-read coherence (bare)
+        // #391 REPRODUCER: same test under an OVERLAY (rootfs injected as its own lower) so the overlay
+        // open path runs -- this is the configuration that tagged a regular file as a directory stream and
+        // broke lseek(SEEK_SET). Fails pre-fix, passes post-fix. Linux engines only (darwin has no overlay).
+        port("lseek-read-overlay", "lseek_read.c").rootfs("alpine").overlay()
+            .only(&[Engine::LinuxAarch64, Engine::LinuxX86_64]).has("lseek-read OK"),
+        port("offset-track", "offset_track.c").has("offset-track OK"), // off_t/position bookkeeping + re-seek
+        port("sha512-kat", "sha512_kat.c").has("135000 : be56780ee49bdf84968811e70c492d018b91274b0c94b5d2196545ceeacc43ed4b45415ce5a51a3f68608d3f232bba4f279230fc95319934f6ce9ec52e711cf8"),
+        port("ccmp-chain", "ccmp_test.c").has("ccmp OK"),          // conditional-compare/branch chains
+    ])
 }
 
 /// Threads — mutex/condvar producer-consumer, 64-way contention, and thread-local storage. Portable
@@ -70,11 +91,38 @@ fn net() -> Group {
     ])
 }
 
+/// Real-Linux-correct decode of every waitcore.c case (see guests/waitcore.c). WCOREDUMP is set (core=1)
+/// for core-dumping signals with RLIMIT_CORE>0, clear otherwise. Verified byte-exact vs a native aarch64 run.
+const WAITCORE_OUT: &str = "\
+quit-nocore signaled=1 term=3 core=0 expect=0 OK
+quit signaled=1 term=3 core=1 expect=1 OK
+abrt signaled=1 term=6 core=1 expect=1 OK
+segv signaled=1 term=11 core=1 expect=1 OK
+fpe signaled=1 term=8 core=1 expect=1 OK
+ill signaled=1 term=4 core=1 expect=1 OK
+bus signaled=1 term=7 core=1 expect=1 OK
+trap signaled=1 term=5 core=1 expect=1 OK
+sys signaled=1 term=31 core=1 expect=1 OK
+kill signaled=1 term=9 core=0 expect=0 OK
+term signaled=1 term=15 core=0 expect=0 OK
+int signaled=1 term=2 core=0 expect=0 OK
+exit exited=1 code=7 signaled=0
+waitcore done
+";
+
 /// Process trees — fork/wait/exit-status propagation and parent<->child pipes. Portable across engines.
 fn proc() -> Group {
     group("proc", vec![
         port("forkwait", "forkwait.c").out("forkwait reaped=8 sum=36\n"), // fork 8, reap, sum exit codes
+        port("procreap", "procreap.c").oracle(),                           // #394: fork/wait/exit-code + process-group teardown (kill(-pgid)) — parent MUST survive & exit-match native
         port("pipeproc", "pipeproc.c").out("pipeproc sum=500500\n"),       // producer/consumer over a pipe
+        // #401 wait4/waitpid status must carry WCOREDUMP (0x80) exactly as Linux: core-dumping signal +
+        // RLIMIT_CORE>0 sets it, non-core signals / zero limit clear it. Golden values are the REAL-Linux
+        // truth (verified byte-exact vs the native aarch64 run); dd emits them identically on x86_64 too.
+        // (Not oracle-diffed on x86_64: qemu-user doesn't reproduce WCOREDUMP for emulated fatal signals.)
+        src("waitcore", "waitcore.c").out(WAITCORE_OUT),
+        // Continuous dd==native proof on the arch whose oracle is a real Linux run (aarch64 executes bare).
+        src("waitcore-oracle", "waitcore.c").only(&[Engine::LinuxAarch64]).oracle(),
     ])
 }
 
@@ -83,6 +131,10 @@ fn proc() -> Group {
 fn posix() -> Group {
     group("posix", vec![
         port("pollselect", "pollselect.c").out("poll=1 select=1 timeout=1\n"), // poll() + select() + timeout
+        // #396: poll/select/pselect readiness (read+write), ready-fd COUNT, and 0/finite-timeout return-0,
+        // all as deterministic booleans -> golden across x86/aarch64/darwin.
+        port("pollselect-ext", "pollselect_ext.c")
+            .out("poll rd=1 wr=1 to0=1 to=1\nselect rd=1 wr=1 count2=1 to=1\npselect rd=1 to=1 nfds0=1\n"),
         port("mmapshared", "mmapshared.c").out("mmapshared ok=1 sum=520192\n"), // file-backed MAP_SHARED + msync
         port("filelock", "filelock.c").out("filelock blocked=1 free_after=1\n"), // fcntl F_SETLK/F_GETLK + fork
         port("clock", "clockmono.c").has("mono_ok=1 slept_ge=1 realtime_ok=1"),  // clock_gettime + nanosleep
@@ -100,6 +152,12 @@ fn posix() -> Group {
 fn linuxsys() -> Group {
     group("linuxsys", vec![
         src("epoll", "epoll.c").oracle(),           // epoll_create1/ctl/wait readiness loop
+        // #396 epoll surface: create1/create flag+size validation, EPOLLIN/OUT readiness, oneshot re-arm,
+        // and the epoll_ctl EEXIST/ENOENT/EINVAL/EPERM error return values.
+        src("epoll-edge", "epoll_edge.c").oracle(),
+        // #396 poll/select/pselect/ppoll signal+timeout corners: the select02 HANG regression (a blocked,
+        // dd-hooked signal must NOT restart the full timeout), EINTR on a delivered handler, EFAULT/EINVAL.
+        src("pollselect-eintr", "pollselect_eintr.c").oracle(),
         src("eventfd", "eventfd.c").oracle(),       // eventfd2 counter semantics
         src("eventfd-sema", "eventfd_sema.c").oracle(), // EFD_SEMAPHORE decrement-by-1 contract
         src("signalfd", "signalfd.c").oracle(),     // sigprocmask + signalfd4 read of a raised signal
@@ -181,6 +239,13 @@ fn edge() -> Group {
         // Diffed byte-exact vs the native/qemu oracle; before the fix the fast-path variant crashed (exit 255).
         src("clockefault", "clockefault.c").oracle(),
         src("clockefault-slow", "clockefault.c").env("DDJIT_NOFASTSYS", "1").oracle(),
+        // #395 generic slow-path syscall ARGUMENT validation: a bad/unmapped guest pointer to a syscall
+        // whose result the ENGINE fills via memcpy/struct-write (nanosleep/getrusage/mincore/fstat/
+        // newfstatat/rt_sigaction) must return -EFAULT, exactly as native — never crash the engine, never
+        // wrongly succeed. Complements clockefault.c (the clock family) and edge_efault.c (fcntl). RAW
+        // syscalls hit dd's dispatch directly; the `-slow` sibling forces DDJIT_NOFASTSYS. Byte-exact oracle.
+        src("sysfault", "sysfault.c").oracle(),
+        src("sysfault-slow", "sysfault.c").env("DDJIT_NOFASTSYS", "1").oracle().only(lin),
     ])
 }
 

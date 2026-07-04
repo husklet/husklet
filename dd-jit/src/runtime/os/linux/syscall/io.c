@@ -121,8 +121,11 @@ static int svc_io(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t
             G_RET(c) = (uint64_t)nl_recv(rfd, &iov, 1, 0, NULL);
             break;
         }
-        // RAM-backed scratch file: serve the read from memory
+        // RAM-backed scratch file: serve the read from memory. Unlike a host-fd read (whose kernel copyout
+        // faults a bad buffer to EFAULT), this copies straight into the guest buffer, so a bad/unmapped
+        // pointer must be validated here or the engine memcpy faults (#395, access_ok).
         if (memf_get(rfd)) {
+            if (a2 && !host_range_mapped((uintptr_t)a1, (size_t)a2)) { G_RET(c) = (uint64_t)(-EFAULT); break; }
             ssize_t r = memf_read_pos(g_memf[rfd], (void *)a1, (size_t)a2);
             G_RET(c) = r < 0 ? (uint64_t)(int64_t)r : (uint64_t)r;
             break;
@@ -287,8 +290,11 @@ static int svc_io(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t
             G_RET(c) = (uint64_t)dns_send(wfd, (const uint8_t *)a1, (size_t)a2, g_sock_stream[wfd]);
             break;
         }
-        // RAM-backed scratch file: serve the write from memory (spill to the host file past the cap)
+        // RAM-backed scratch file: serve the write from memory (spill to the host file past the cap).
+        // Copies straight from the guest buffer, so validate it (a host-fd write's kernel copyin would fault
+        // a bad pointer to EFAULT; this engine memcpy would instead crash) -- #395, access_ok.
         if (memf_get(wfd) && memf_room_or_spill(wfd, (off_t)g_memf[wfd]->pos + (off_t)a2)) {
+            if (a2 && !host_range_mapped((uintptr_t)a1, (size_t)a2)) { G_RET(c) = (uint64_t)(-EFAULT); break; }
             ssize_t r = memf_write_pos(g_memf[wfd], (void *)a1, (size_t)a2);
             G_RET(c) = r < 0 ? (uint64_t)(int64_t)r : (uint64_t)r;
             break;
@@ -540,9 +546,20 @@ static int svc_io(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t
         break;
     }
     case 24: {
-        // dup3(old,new,flags) -- unlike dup2, equal oldfd==newfd is an error (EINVAL) on Linux
+        // dup3(old,new,flags). x86's legacy dup2 arrives here rewritten to the dup3 form + a private
+        // DUP2_COMPAT marker (bit 30) in the flags (see translate/x86_64/legacy.c) because the two calls
+        // DIVERGE on oldfd==newfd: dup3 -> EINVAL, but dup2 -> returns newfd unchanged (EBADF if oldfd is
+        // invalid), with no close and no CLOEXEC change. (LTP dup201)
+        unsigned d3flags = (unsigned)a2;
+        int is_dup2 = (d3flags & 0x40000000u) != 0;
+        d3flags &= ~0x40000000u;
         if ((int)a0 == (int)a1) {
-            G_RET(c) = (uint64_t)(-EINVAL);
+            if (is_dup2) {
+                // dup2(fd,fd): a no-op returning fd iff it is a valid open fd, else EBADF.
+                G_RET(c) = (fcntl((int)a0, F_GETFD) < 0) ? (uint64_t)(-EBADF) : (uint64_t)(unsigned)(int)a1;
+                break;
+            }
+            G_RET(c) = (uint64_t)(-EINVAL); // genuine dup3(old,old,*)
             break;
         }
         memf_materialize((int)a0); // source: a 2nd fd shares the description -> flush RAM cache
@@ -550,7 +567,7 @@ static int svc_io(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t
         engine_fd_vacate((int)a1); // move any engine-private fd off the target before dup2 overwrites it
         int r = dup2((int)a0, (int)a1);
         if (r >= 0) {
-            if ((int)a2 & 0x80000) fcntl(r, F_SETFD, FD_CLOEXEC); // O_CLOEXEC
+            if (d3flags & 0x80000) fcntl(r, F_SETFD, FD_CLOEXEC); // O_CLOEXEC
             if ((int)a1 >= 0 && (int)a1 < 1024 && (int)a0 >= 0 && (int)a0 < 1024) {
                 strcpy(g_fdpath[(int)a1], g_fdpath[(int)a0]);
                 fd_carry_sock((int)a1, (int)a0);

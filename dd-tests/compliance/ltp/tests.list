@@ -1,0 +1,174 @@
+# dd LTP compliance lane — curated CORE syscall subset.
+# Format:  <category>  <syscall>  <relpath-under-testcases/kernel/syscalls>
+# Lines beginning with '#' are comments. One test per line.
+# Curated to the surface dd emulates; multi-binary/helper-dependent, device-,
+# hugepage-, cgroup-, module-, and privilege-heavy tests are intentionally
+# excluded (see docs/compliance-ltp.md "Skipped / out-of-scope").
+
+# ---- file I/O ----
+fileio  openat      openat/openat01.c
+fileio  read        read/read01.c
+fileio  read        read/read02.c
+fileio  read        read/read03.c
+fileio  read        read/read04.c
+fileio  write       write/write01.c
+fileio  write       write/write02.c
+fileio  write       write/write03.c
+fileio  write       write/write04.c
+fileio  write       write/write05.c
+fileio  pread       pread/pread01.c
+fileio  pread       pread/pread02.c
+fileio  pwrite      pwrite/pwrite01.c
+fileio  pwrite      pwrite/pwrite02.c
+fileio  pwrite      pwrite/pwrite03.c
+fileio  lseek       lseek/lseek01.c
+fileio  lseek       lseek/lseek02.c
+fileio  lseek       lseek/lseek07.c
+fileio  close       close/close01.c
+fileio  close       close/close02.c
+fileio  dup         dup/dup01.c
+fileio  dup         dup/dup02.c
+fileio  dup         dup/dup03.c
+fileio  dup         dup/dup04.c
+fileio  dup         dup/dup05.c
+fileio  dup2        dup2/dup201.c
+fileio  dup2        dup2/dup202.c
+fileio  dup2        dup2/dup203.c
+fileio  dup3        dup3/dup3_01.c
+fileio  pipe2       pipe2/pipe2_01.c
+fileio  stat        stat/stat03.c
+fileio  fstat       fstat/fstat02.c
+fileio  fstat       fstat/fstat03.c
+fileio  statx       statx/statx01.c
+fileio  statx       statx/statx02.c
+fileio  statx       statx/statx03.c
+fileio  lstat       lstat/lstat01.c
+fileio  lstat       lstat/lstat02.c
+fileio  access      access/access01.c
+fileio  access      access/access02.c
+fileio  access      access/access03.c
+fileio  access      access/access04.c
+fileio  faccessat   faccessat/faccessat01.c
+fileio  fcntl       fcntl/fcntl02.c
+fileio  fcntl       fcntl/fcntl03.c
+fileio  fcntl       fcntl/fcntl04.c
+fileio  fcntl       fcntl/fcntl05.c
+fileio  fcntl       fcntl/fcntl08.c
+fileio  fcntl       fcntl/fcntl13.c
+fileio  readlink    readlink/readlink01.c
+fileio  readlink    readlink/readlink03.c
+fileio  rename      rename/rename01.c
+fileio  link        link/link02.c
+fileio  link        link/link05.c
+fileio  symlink     symlink/symlink02.c
+fileio  symlink     symlink/symlink04.c
+fileio  unlink      unlink/unlink07.c
+fileio  unlink      unlink/unlink08.c
+fileio  mkdir       mkdir/mkdir02.c
+fileio  mkdir       mkdir/mkdir03.c
+fileio  mkdir       mkdir/mkdir05.c
+fileio  getdents    getdents/getdents01.c
+fileio  getdents    getdents/getdents02.c
+
+# ---- memory management ----
+mm      mmap        mmap/mmap01.c
+mm      mmap        mmap/mmap02.c
+mm      mmap        mmap/mmap03.c
+mm      mmap        mmap/mmap06.c
+mm      mmap        mmap/mmap08.c
+mm      mmap        mmap/mmap09.c
+mm      mmap        mmap/mmap12.c
+mm      munmap      munmap/munmap01.c
+mm      munmap      munmap/munmap03.c
+mm      mprotect    mprotect/mprotect05.c
+mm      madvise     madvise/madvise01.c
+mm      madvise     madvise/madvise02.c
+mm      madvise     madvise/madvise10.c
+mm      brk         brk/brk01.c
+mm      brk         brk/brk02.c
+mm      mremap      mremap/mremap06.c
+mm      mremap      mremap/mremap07.c
+mm      msync       msync/msync04.c
+mm      mincore     mincore/mincore02.c
+mm      mincore     mincore/mincore03.c
+mm      mincore     mincore/mincore04.c
+
+# ---- process / scheduling ----
+proc    fork        fork/fork01.c
+proc    fork        fork/fork03.c
+proc    fork        fork/fork04.c
+proc    fork        fork/fork07.c
+proc    fork        fork/fork08.c
+proc    fork        fork/fork10.c
+proc    clone       clone/clone01.c
+proc    clone       clone/clone03.c
+proc    clone       clone/clone04.c
+proc    clone       clone/clone06.c
+proc    clone       clone/clone07.c
+proc    wait4       wait4/wait401.c
+proc    wait4       wait4/wait402.c
+proc    waitpid     waitpid/waitpid01.c
+proc    getpid      getpid/getpid01.c
+proc    getpid      getpid/getpid02.c
+proc    getppid     getppid/getppid01.c
+proc    getppid     getppid/getppid02.c
+proc    exit_group  exit_group/exit_group01.c
+proc    prctl       prctl/prctl01.c
+proc    prctl       prctl/prctl02.c
+proc    prctl       prctl/prctl03.c
+proc    getrlimit   getrlimit/getrlimit01.c
+proc    getrlimit   getrlimit/getrlimit02.c
+proc    setrlimit   setrlimit/setrlimit02.c
+proc    setrlimit   setrlimit/setrlimit03.c
+
+# ---- signals ----
+# NOTE: rt_sigaction/rt_sigprocmask/sigaltstack have only LEGACY-API tests in
+# LTP; those don't build against glibc-2.34+/gcc-15 (non-constant SIGSTKSZ,
+# tst_sig() prototype tightening) — see docs "Skipped". Signal-delivery
+# coverage is provided instead by the new-API tests below, which exercise the
+# same rt_sig* kernel surface (mask/queue/wait/suspend/deliver).
+signal  signal          signal/signal01.c
+signal  signal          signal/signal02.c
+signal  signal          signal/signal03.c
+signal  signal          signal/signal04.c
+signal  signal          signal/signal05.c
+signal  sigsuspend      sigsuspend/sigsuspend01.c
+signal  sigsuspend      sigsuspend/sigsuspend02.c
+signal  sigpending      sigpending/sigpending02.c
+signal  rt_sigqueueinfo rt_sigqueueinfo/rt_sigqueueinfo01.c
+signal  pause           pause/pause01.c
+signal  pause           pause/pause02.c
+
+# ---- time ----
+time    clock_gettime   clock_gettime/clock_gettime01.c
+time    clock_gettime   clock_gettime/clock_gettime02.c
+time    clock_gettime   clock_gettime/clock_gettime03.c
+time    nanosleep       nanosleep/nanosleep01.c
+time    nanosleep       nanosleep/nanosleep02.c
+time    gettimeofday    gettimeofday/gettimeofday01.c
+time    gettimeofday    gettimeofday/gettimeofday02.c
+time    times           times/times01.c
+time    times           times/times03.c
+
+# ---- poll / select / epoll ----
+poll    poll            poll/poll01.c
+poll    poll            poll/poll02.c
+poll    epoll_create1   epoll_create1/epoll_create1_01.c
+poll    select          select/select01.c
+poll    select          select/select02.c
+poll    pselect         pselect/pselect01.c
+poll    pselect         pselect/pselect03.c
+
+# ---- basic net / misc ----
+net     socket      socket/socket01.c
+net     socket      socket/socket02.c
+net     bind        bind/bind01.c
+net     bind        bind/bind02.c
+net     connect     connect/connect01.c
+net     sendto      sendto/sendto02.c
+misc    uname       uname/uname01.c
+misc    uname       uname/uname02.c
+misc    getrusage   getrusage/getrusage01.c
+misc    getrusage   getrusage/getrusage02.c
+misc    sched_getaffinity  sched_getaffinity/sched_getaffinity01.c
+misc    getdomainname      getdomainname/getdomainname01.c

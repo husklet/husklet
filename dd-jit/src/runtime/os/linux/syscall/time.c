@@ -142,11 +142,21 @@ static int svc_time(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64
     switch (nr) {
     // ===================== Time — clock_gettime/nanosleep/gettimeofday (Linux clock-id translation)
     // =====================
-    case 101:
-        nanosleep((const struct timespec *)a0, (struct timespec *)a1);
-        G_RET(c) = 0;
-        // nanosleep
+    case 101: {
+        // nanosleep(req, rem). Validate the pointers (EFAULT), then PROPAGATE the host result -- the old
+        // code swallowed everything and always returned 0, so an out-of-range tv_nsec / negative tv_sec
+        // (EINVAL) or a signal interruption (EINTR + remaining) was lost. macOS nanosleep already rejects
+        // an out-of-range/negative timespec with EINVAL, matching Linux. Retry in place only on a
+        // SPURIOUS/internal EINTR (nothing deliverable to the guest); surface a real EINTR so the
+        // dispatcher runs the pending handler, exactly like poll/read. (LTP nanosleep02)
+        if (!host_range_mapped((uintptr_t)a0, sizeof(struct timespec))) { G_RET(c) = (uint64_t)(int64_t)(-EFAULT); break; }
+        // `rem`(a1) is left to the host: Linux only writes it on interruption, so validating it up front
+        // would wrongly EFAULT the common uninterrupted sleep (#395); the host faults it if it must write.
+        int r;
+        do { r = nanosleep((const struct timespec *)a0, (struct timespec *)a1); } while (r < 0 && svc_poll_retry(c));
+        G_RET(c) = r < 0 ? (uint64_t)(int64_t)(-errno) : 0;
         break;
+    }
     case 113: {
         // clock_gettime -- Linux clockid -> macOS
         clockid_t mc;
@@ -192,6 +202,9 @@ static int svc_time(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64
         // seconds and hang. Emulate ABSTIME by sleeping (deadline - now); relative falls back to nanosleep.
         int flags = (int)a1;
         const struct timespec *req = (const struct timespec *)a2;
+        // The request timespec is dereferenced by both paths below -> a bad pointer must EFAULT, not fault
+        // the engine (glibc's nanosleep() lands here as clock_nanosleep(CLOCK_REALTIME,0,req,rem)).
+        if (!host_range_mapped((uintptr_t)a2, sizeof(struct timespec))) { G_RET(c) = (uint64_t)(int64_t)(-EFAULT); break; }
         if (flags & 1) { // TIMER_ABSTIME
             clockid_t mc;
             switch ((int)a0) {
@@ -217,8 +230,16 @@ static int svc_time(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64
             G_RET(c) = 0; // absolute sleep has no remainder to report
             break;
         }
-        nanosleep(req, (struct timespec *)a3);
-        G_RET(c) = 0;
+        // Relative sleep (flags==0): back it with the host nanosleep and PROPAGATE its result. macOS
+        // nanosleep rejects an out-of-range/negative timespec with EINVAL and returns EINTR on a delivered
+        // signal (writing the unslept remainder into `rem`), matching Linux clock_nanosleep -- the old code
+        // swallowed all of that and always returned 0. Retry only on a spurious/internal EINTR (nothing
+        // deliverable to the guest); surface a real EINTR so the dispatcher runs the pending handler. (LTP
+        // nanosleep02: an out-of-range tv_nsec / negative tv_sec is EINVAL, not a silent success.)
+        if (a3 && !host_range_mapped((uintptr_t)a3, sizeof(struct timespec))) { G_RET(c) = (uint64_t)(int64_t)(-EFAULT); break; }
+        int rr;
+        do { rr = nanosleep(req, (struct timespec *)a3); } while (rr < 0 && svc_poll_retry(c));
+        G_RET(c) = rr < 0 ? (uint64_t)(int64_t)(-errno) : 0;
         break;
     }
     // times(struct tms*): real CPU accounting. The Linux + macOS struct tms layouts match (4 clock_t

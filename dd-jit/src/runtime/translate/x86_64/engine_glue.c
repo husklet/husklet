@@ -100,6 +100,8 @@ static int g_pcache_poison; // set if a baked host pointer could not be recorded
 static uint64_t g_tracecap;             // if >0 under trace: stop after this many blocks (runaway guard)
 int g_diag;                             // diagnostics (FAULT_ON): print LOADED bases etc. (extern'd by elf.c)
 static int g_nochain;                   // WATCH file: disable chaining (exact per-block rip attribution)
+static int g_dbg_nochain;               // aarch64 DDDBG_NOCHAIN gate in the SHARED dispatch.c; inert on x86 (chain hook is a no-op)
+static int g_dbg_gprdump;               // aarch64 DDDBG_GPRDUMP gate in the SHARED dispatch.c; inert on x86 (aarch64 dump only)
 static uint64_t g_loadbase;             // main program load base (for file-offset mapping)
 static uint8_t *g_w8;
 static uint8_t g_w8v;                   // debug byte-watchpoint (armed via magic syscall 500)

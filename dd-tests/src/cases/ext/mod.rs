@@ -28,6 +28,7 @@ pub mod procexe;    // /proc/self/exe + readlink/readlinkat surface: exe canonic
 pub mod pcachex;    // #339 persistent translated-code cache: fork/exec/thread lifecycle under DDJIT_PCACHE=1
 pub mod forkx;      // #371 preserved-arena fork: 1000-fork mixed-pattern storm (exit/work/cold/exec/nested)
 pub mod dentry;     // #372 positive dentry/path-resolution cache: mutation<->lookup coherence storms
+pub mod ltpgaps;    // #398 LTP gap cluster: dup/fcntl flags, link/lstat, socket error paths, prctl/nanosleep/sched/read
 
 pub fn all() -> Vec<Group> {
     let mut g = vec![];
@@ -54,5 +55,6 @@ pub fn all() -> Vec<Group> {
     g.extend(pcachex::groups());
     g.extend(forkx::groups());
     g.extend(dentry::groups());
+    g.extend(ltpgaps::groups());
     g
 }

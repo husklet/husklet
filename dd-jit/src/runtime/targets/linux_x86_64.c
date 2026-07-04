@@ -60,6 +60,9 @@
 #include "../translate/x86_64/abi.h"          // cpu-interface seam (G_* contract + sysmap + normalize)
 #include "../translate/x86_64/dispatch_hooks.h" // x86 dispatch seam for the SHARED engine/dispatch.c (engine-dedup)
 #include "../translate/x86_64/fill_stat.c"    // per-arch struct-stat layout os/linux fills
+// Byte size of the guest `struct stat` fill_stat.c writes -- the shared stat syscalls (os/linux/syscall/
+// fs.c cases 79/80) validate exactly this many guest bytes before filling the buffer (#395 EFAULT guard).
+#define GUEST_LINUX_STAT_BYTES 144
 
 #include "../os/linux/container/state.c"     // SHARED: container globals (rootfs/cwd/netns/ids/fd tables)
 #include "../translate/x86_64/engine_glue.c"  // x86-only engine globals (trace/diag) the shared cache.c omits
@@ -263,6 +266,9 @@ static int engine_global_init(void) {
     // Untrusted-guest isolation (the sentry process-split). OFF by default -> trusted path unchanged.
     g_untrusted = getenv("DDJIT_UNTRUSTED") != NULL;
     g_sentry_sandbox = getenv("DDJIT_SANDBOX") != NULL;
+    // #238: ptrace tracer/tracee coordination arena -- mmap the shared region ONCE here, BEFORE any guest
+    // fork, so every descendant guest process inherits the same physical pages. Inert until a guest ptraces.
+    ptrace_arena_init();
     g_engine_inited = 1;
     return 0;
 }
