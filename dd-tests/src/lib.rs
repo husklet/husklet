@@ -89,6 +89,11 @@ pub struct Case {
     /// Run under an overlay: inject the resolved rootfs as its own lower so g_nlower>0 activates the
     /// overlay open/getdents/lseek code path (needed to reproduce overlay-only bugs, e.g. #391 lseek).
     pub overlay: bool,
+    /// #231 scratch/distroless guard: run the compiled guest inside a synthesized EMPTY rootfs (only a
+    /// `/tmp` landing dir for the jailed guest copy) — the FROM-scratch condition (no shell, interpreter
+    /// or libc on disk). Proves the loader/exec path resolves + execs a static binary that is the sole
+    /// executable in its rootfs, exactly like nats-server / hello-world's `/hello`. Ignores `rootfs`.
+    pub scratch: bool,
     pub mem_max: u64,
     pub engines: Vec<Engine>,
     /// Engines where this case is a KNOWN failure (jit86 translator/service bugs under debugging) — a
@@ -128,7 +133,7 @@ fn base(name: &'static str, bin: Bin) -> Case {
         Bin::Fixture(fx) => fx.iter().map(|(e, _)| *e).collect(),
         Bin::InRootfs => vec![Engine::LinuxAarch64], // container rootfs fixtures are aarch64 today
     };
-    Case { name, bin, args: vec![], rootfs: None, lowers: vec![], overlay: false, mem_max: 0, engines, xfail: vec![], untrusted: false, cpus: 0, read_only: false, ulimits: vec![], env: vec![], checks: vec![] }
+    Case { name, bin, args: vec![], rootfs: None, lowers: vec![], overlay: false, scratch: false, mem_max: 0, engines, xfail: vec![], untrusted: false, cpus: 0, read_only: false, ulimits: vec![], env: vec![], checks: vec![] }
 }
 /// A case whose guest is compiled from a Linux/aarch64 C source under `guests/`.
 pub fn src(name: &'static str, source: &'static str) -> Case { base(name, Bin::Source(source)) }
@@ -160,6 +165,10 @@ impl Case {
     pub fn rootfs(mut self, r: &'static str) -> Self { self.rootfs = Some(r); self }
     pub fn lower(mut self, l: &str) -> Self { self.lowers.push(l.into()); self }
     pub fn overlay(mut self) -> Self { self.overlay = true; self }
+    /// #231: run this compiled guest inside a synthesized EMPTY (FROM-scratch) rootfs — the guest is the
+    /// sole executable, no shell/interpreter/libc on disk. Guards the loader/exec path for scratch/
+    /// distroless images (nats-server, hello-world's `/hello`). Linux engines only (compiled static-PIE).
+    pub fn scratch(mut self) -> Self { self.scratch = true; self }
     pub fn mem(mut self, m: u64) -> Self { self.mem_max = m; self }
     /// docker `--cpus` online-CPU cap for this case (container isolation / resource fidelity).
     pub fn cpus(mut self, n: u32) -> Self { self.cpus = n; self }
@@ -419,7 +428,17 @@ pub fn run(ctx: &Ctx, c: &Case, e: Engine) -> Status {
         Ok(None) => return Status::Skip(format!("no {} guest", e.label())),
         Err(err) => return Status::Fail(err),
     };
-    let rootfs = c.rootfs.and_then(|r| ctx.rootfs_path(r, e));
+    // #231 scratch/distroless guard: synthesize an otherwise-EMPTY rootfs (just a `/tmp` landing dir for
+    // the jailed guest copy below) — the FROM-scratch condition, with no shell/interpreter/libc on disk.
+    // Self-contained (built under the cache tree, no poc image needed), so the loader/exec path is proven
+    // to resolve + exec a static binary that is the sole executable in its rootfs.
+    let rootfs = if c.scratch {
+        let d = ctx.cache.join("scratchfs");
+        if std::fs::create_dir_all(d.join("tmp")).is_err() { return Status::Skip("scratchfs create failed".into()); }
+        Some(d.to_string_lossy().into_owned())
+    } else {
+        c.rootfs.and_then(|r| ctx.rootfs_path(r, e))
+    };
     if c.rootfs.is_some() && rootfs.is_none() { return Status::Skip(format!("no {} rootfs", e.label())); }
 
     // A COMPILED guest + a rootfs on a Linux engine: the engine resolves argv[0] INSIDE the jail
