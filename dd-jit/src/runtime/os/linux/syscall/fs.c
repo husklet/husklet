@@ -86,6 +86,29 @@ static const char *shm_hostpath(const char *guest, char *buf, size_t n) {
     return buf;
 }
 
+// #411: a pty MASTER's termios + winsize are shared line-discipline state that Linux keeps on the master
+// itself, so a program (apt/dpkg StartPtyMagic, ncurses, tmux) can get/set them on the master fd without
+// ever opening the slave. macOS instead keeps that state in the tty struct, which is DESTROYED the instant
+// the LAST slave fd closes -- so servicing a master's TIOCSWINSZ via a transient (open+use+close) slave
+// loses the winsize immediately (a later TIOCGWINSZ on the master reads 0x0; verified on the host). We
+// therefore CACHE the master's termios/winsize here keyed by the master fd, answer GETs from the cache,
+// and on every SET both (a) push it to a transient slave so any *already-open* real slave sees it live and
+// (b) stash it so ptm_apply_to_slave() can re-apply it when the guest later opens the real slave
+// (/dev/pts/N, N == the master fd via TIOCGPTN). This reproduces exact Linux master semantics WITHOUT
+// holding a slave open -- which would defeat the master read()/poll HUP-on-last-slave-close that script /
+// tmux depend on to notice the child exited.
+static uint8_t g_ptm_tset[1024], g_ptm_wset[1024];
+static struct termios g_ptm_term[1024]; // host-form termios last set on the master
+static struct winsize g_ptm_win[1024];  // winsize last set on the master
+static void ptm_clear(int fd) { if (fd >= 0 && fd < 1024) { g_ptm_tset[fd] = 0; g_ptm_wset[fd] = 0; } }
+// Re-apply a master's cached termios/winsize onto a freshly-opened slave fd (Linux: the slave shares the
+// master's line discipline). `ptn` is the pts number, which dd defines to equal the master fd.
+static void ptm_apply_to_slave(int ptn, int slavefd) {
+    if (ptn < 0 || ptn >= 1024 || slavefd < 0) return;
+    if (g_ptm_tset[ptn]) tcsetattr(slavefd, TCSANOW, &g_ptm_term[ptn]);
+    if (g_ptm_wset[ptn]) ioctl(slavefd, TIOCSWINSZ, &g_ptm_win[ptn]);
+}
+
 // Tear down EVERY dd-side emulation-table entry keyed by this fd NUMBER (eventfd peer/counter/sema, timerfd,
 // overlay-dir, the socket/loopback/bridge maps, epoll armed-state, flock, pidfd, RAM-scratch memf, and the
 // getdents/overlay-dents caches + the path map). Shared by close(2) (case 57) AND the emulated
@@ -134,6 +157,7 @@ static void fd_reset_emul(int fd) {
         ep_fd_reset(fd);
         flock_on_close(fd);
         poslk_on_close(fd); // #340: POSIX drops all this process's fcntl record locks when any fd closes
+        ptm_clear(fd);      // #411: drop this fd's cached pty-master termios/winsize (see ptm cache below)
     }
     pidfd_forget(fd);
     memf_close(fd);
@@ -300,19 +324,30 @@ static int svc_fs(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t
         unsigned long rq = (uint32_t)a1;
         void *arg = (void *)a2;
         // macOS pty MASTERS reject every termios/winsize ioctl with ENOTTY -- unlike Linux, where the master
-        // accepts them and they act on the shared line discipline (dpkg's openpty master does TIOCSWINSZ +
-        // tcsetattr(TCSANOW) on it; that ENOTTY is apt's "Setting TIOCSWINSZ for master fd N failed" and the
-        // debconf frontend-fallback that follows). termios + winsize are properties of the pty PAIR, so when
-        // the request targets a master (not itself a tty, but ptsname() resolves its slave) we retarget the
-        // op to a transient slave fd -- giving the guest exact Linux master semantics on x86 and arm alike.
-        int tfd = fd, pts_slave = -1;
+        // accepts them and they act on the shared line discipline (apt/dpkg's StartPtyMagic does TIOCSWINSZ +
+        // tcsetattr(TCSANOW) on the master; that ENOTTY is apt's "Setting TIOCSWINSZ for master fd N failed"
+        // / "Setting in Start via TCSANOW ... failed" and the debconf frontend cascade that follows). termios
+        // + winsize are properties of the pty PAIR, so when the request targets a master we retarget the op to
+        // a transient slave fd -- giving the guest exact Linux master semantics on x86 and arm alike.
+        //
+        // A master is detected by ptsname(fd) resolving its slave device -- NOT by isatty(). On macOS
+        // isatty() returns 1 for a pty master (it is a tty-class char device) even though every termios ioctl
+        // on it fails ENOTTY, so the old `if (!isatty(fd))` gate skipped the retarget for exactly the masters
+        // that need it (#411 -- apt never opens the slave, so nothing masked it; ext_posix/pty passed only
+        // because it opened the slave first, which happens to flip isatty). ptsname()!=NULL is the precise
+        // "fd is a pty master" test: a slave or ordinary tty returns NULL (ENOTTY) and we operate on fd
+        // directly, which is correct -- those accept termios/winsize as-is.
+        // The GET/SET on a master answers from / writes to dd's per-master termios+winsize cache (g_ptm_*);
+        // a SET is also pushed to a transient slave so any real slave the guest ALREADY holds open sees it
+        // live, and re-applied via ptm_apply_to_slave() when the guest later opens the slave.
+        int tfd = fd, pts_slave = -1, is_master = 0;
         switch (rq) {
         case 0x5401: case 0x5402: case 0x5403: case 0x5404:               // TCGETS / TCSETS{,W,F}
         case 0x5413: case 0x5414:                                         // TIOCGWINSZ / TIOCSWINSZ
         case 0x802c542a: case 0x402c542b: case 0x402c542c: case 0x402c542d: // TCGETS2 / TCSETS2{,W,F}
-            if (!isatty(fd)) {
-                char *sn = ptsname(fd);
-                if (sn) { pts_slave = open(sn, O_RDWR | O_NOCTTY); if (pts_slave >= 0) tfd = pts_slave; }
+            {
+                char *sn = ptsname(fd); // non-NULL only for a pty master (host master already grantpt/unlockpt'd at open)
+                if (sn) { is_master = 1; pts_slave = open(sn, O_RDWR | O_NOCTTY); if (pts_slave >= 0) tfd = pts_slave; }
             }
             break;
         default: break;
@@ -320,11 +355,9 @@ static int svc_fs(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t
         switch (rq) {
         case 0x5401: {
             struct termios t;
-            if (tcgetattr(tfd, &t) < 0) {
-                G_RET(c) = (uint64_t)(-errno);
-                break;
-                // TCGETS
-            }
+            // TCGETS
+            if (is_master && g_ptm_tset[fd]) t = g_ptm_term[fd];   // master keeps its own termios (Linux)
+            else if (tcgetattr(tfd, &t) < 0) { G_RET(c) = (uint64_t)(-errno); break; }
             termios_m2l(&t, (uint8_t *)arg);
             G_RET(c) = 0;
             break;
@@ -338,17 +371,17 @@ static int svc_fs(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t
             int act = rq == 0x5402 ? TCSANOW : rq == 0x5403 ? TCSADRAIN : TCSAFLUSH;
             sigset_t sv;
             tty_ctl_block(&sv); // a bg-group tcsetattr would otherwise SIGTTOU-stop the caller
-            G_RET(c) = tcsetattr(tfd, act, &t) < 0 ? (uint64_t)(-errno) : 0;
+            int r = tcsetattr(tfd, act, &t); // push live to any open real slave (best effort on a master)
             tty_ctl_restore(&sv);
+            if (is_master) { g_ptm_term[fd] = t; g_ptm_tset[fd] = 1; G_RET(c) = 0; } // master always accepts
+            else G_RET(c) = r < 0 ? (uint64_t)(-errno) : 0;
             break;
         }
         case 0x802c542a: {
             struct termios t;
-            if (tcgetattr(tfd, &t) < 0) {
-                G_RET(c) = (uint64_t)(-errno);
-                break;
-                // TCGETS2 (glibc aarch64 uses this)
-            }
+            // TCGETS2 (glibc aarch64 uses this)
+            if (is_master && g_ptm_tset[fd]) t = g_ptm_term[fd];
+            else if (tcgetattr(tfd, &t) < 0) { G_RET(c) = (uint64_t)(-errno); break; }
             termios_m2l(&t, (uint8_t *)arg);
             *(uint32_t *)((uint8_t *)arg + 36) = (uint32_t)cfgetispeed(&t);
             *(uint32_t *)((uint8_t *)arg + 40) = (uint32_t)cfgetospeed(&t);
@@ -366,16 +399,22 @@ static int svc_fs(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t
             int act = rq == 0x402c542b ? TCSANOW : rq == 0x402c542c ? TCSADRAIN : TCSAFLUSH;
             sigset_t sv;
             tty_ctl_block(&sv); // a bg-group tcsetattr would otherwise SIGTTOU-stop the caller
-            G_RET(c) = tcsetattr(tfd, act, &t) < 0 ? (uint64_t)(-errno) : 0;
+            int r = tcsetattr(tfd, act, &t);
             tty_ctl_restore(&sv);
+            if (is_master) { g_ptm_term[fd] = t; g_ptm_tset[fd] = 1; G_RET(c) = 0; }
+            else G_RET(c) = r < 0 ? (uint64_t)(-errno) : 0;
             break;
         }
-        case 0x5413:
-            G_RET(c) = ioctl(tfd, TIOCGWINSZ, arg) < 0 ? (uint64_t)(-errno) : 0;
-            // TIOCGWINSZ (struct same)
+        case 0x5413: // TIOCGWINSZ (struct same on all)
+            if (is_master && g_ptm_wset[fd]) { if (arg) *(struct winsize *)arg = g_ptm_win[fd]; G_RET(c) = 0; }
+            else G_RET(c) = ioctl(tfd, TIOCGWINSZ, arg) < 0 ? (uint64_t)(-errno) : 0;
             break;
-        // TIOCSWINSZ
-        case 0x5414: G_RET(c) = ioctl(tfd, TIOCSWINSZ, arg) < 0 ? (uint64_t)(-errno) : 0; break;
+        case 0x5414: { // TIOCSWINSZ
+            int r = ioctl(tfd, TIOCSWINSZ, arg); // live-push to any open real slave
+            if (is_master) { if (arg) g_ptm_win[fd] = *(struct winsize *)arg; g_ptm_wset[fd] = 1; G_RET(c) = 0; }
+            else G_RET(c) = r < 0 ? (uint64_t)(-errno) : 0;
+            break;
+        }
         case 0x80045430:
             if (arg && fd >= 0 && fd < 1024) *(uint32_t *)arg = (uint32_t)fd;
             G_RET(c) = 0;
@@ -395,6 +434,7 @@ static int svc_fs(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t
             int mf = ((int)a2 & 0x3) | O_NOCTTY;      // access mode (shared values) + no controlling tty
             if (a2 & 0x80000) mf |= O_CLOEXEC;        // honor Linux O_CLOEXEC on the returned fd
             int s = open(sn, mf);
+            if (s >= 0) ptm_apply_to_slave(fd, s);    // #411: slave inherits the master's cached termios/winsize
             G_RET(c) = s < 0 ? (uint64_t)(-errno) : (uint64_t)s;
             break;
         }
@@ -1360,6 +1400,7 @@ static int svc_fs(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t
                     // ENOENT
                 }
                 int s = open(sn, mf);
+                if (s >= 0) ptm_apply_to_slave(atoi(rp + 9), s); // #411: slave inherits master's cached termios/winsize
                 G_RET(c) = s < 0 ? (uint64_t)(-errno) : (uint64_t)s;
                 break;
             }

@@ -54,6 +54,16 @@ fn portable() -> Group {
         // SLAVE (htop winsize / node readline). All must succeed on the pty master, not ENOTTY.
         port("pty", "ext_posix/pty.c")
             .out("pty mget=1 mset=1 mdrain=1 mflush=1 mswin=1 mgwin=1 sgwin=1 sraw=1 rawrt=1\n"),
+        // apt-pty (#411): the SAME master termios/winsize ops as `pty`, but the slave is NEVER opened
+        // (exactly what apt/dpkg StartPtyMagic does). macOS isatty(master)==1, so dd's old isatty-gated
+        // master retarget was skipped -> ENOTTY -> apt's "Setting TIOCSWINSZ/TCSANOW for master fd N
+        // failed". The `pty` case masked this by opening the slave first. Must be all-1s == native Linux.
+        // Linux engines only: on the darwin container the guest is a NATIVE Mach-O and a macOS pty master
+        // ENOTTYs termios/winsize unless a slave is open (the `pty` case above covers the slave path on
+        // darwin). #411 is a Linux-guest bug -- real apt/dpkg is a Linux ELF, only ever on the Linux engines.
+        port("apt-pty", "ext_posix/apt_pty.c")
+            .only(&[Engine::LinuxAarch64, Engine::LinuxX86_64])
+            .out("aptpty ptsname=1 mget=1 mset=1 mswin=1 mgwin=1 mdrain=1 mflush=1 sgwin=1\n"),
         // --- readiness ---
         port("pollpipe", "ext_posix/pollpipe.c").out("pollpipe timeout=1 writable=1 readable=1\n"),
         port("selectpipe", "ext_posix/selectpipe.c").out("selectpipe timeout=1 ready=1 pselect=1\n"),
