@@ -4,7 +4,7 @@
 //! Covers dup/dup2/dup3/fcntl flag semantics, link/lstat, socket error paths (incl. the connect EFAULT
 //! crash), and prctl/nanosleep/sched_getaffinity/read error paths.
 
-use crate::{group, src, Engine, Group};
+use crate::{group, src, Group};
 
 pub fn groups() -> Vec<Group> {
     vec![group("ltpgaps", vec![
@@ -17,10 +17,13 @@ pub fn groups() -> Vec<Group> {
         // cross-process futex. FUTEX_WAKE must return the ACTUAL waiters woken (not the requested max),
         // else tst_checkpoint_wake() spins to ETIMEDOUT and BROKs setup (#402/#400 shared root cause).
         src("checkpoint", "ltp_checkpoint.c").oracle(),
-        // connect01/bind01/sendto02: EBADF/ENOTSOCK/EFAULT/EINVAL error paths (connect EFAULT = the crash).
-        // #405: on x86 the connect bad-addr case returns EBADF where native returns EFAULT (narrow — the
-        // real fix is that connect no longer CRASHES). arm64 is byte-exact; x86 residual tracked in #405.
-        src("neterr", "ltp_neterr.c").oracle().xfail(&[Engine::LinuxX86_64]),
+        // connect01/bind01/sendto02: EBADF/ENOTSOCK/EFAULT/EINVAL error paths. dd re-derives the Linux
+        // errno + ORDER in net_precheck() (net.c): the fd is validated BEFORE the sockaddr is read, exactly
+        // as the real kernel does (fdget -> EBADF before move_addr_to_kernel). The guard's EBADF case pairs
+        // the bad fd with a VALID address (like LTP connect01) so it is portable; a bad-fd+bad-addr combo is
+        // order-ambiguous (qemu-user copies the addr first -> EFAULT) and is deliberately not asserted. #405
+        // resolved: dd byte-exact vs native on BOTH arches; connect01/bind01 LTP binaries pass 7/7 each.
+        src("neterr", "ltp_neterr.c").oracle(),
         // prctl02/prctl03/nanosleep02/sched_getaffinity01/read02: option/flag + error-path fidelity.
         src("procmisc", "ltp_procmisc.c").oracle(),
     ])]

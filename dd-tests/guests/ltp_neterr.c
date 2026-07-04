@@ -79,7 +79,13 @@ int main(void) {
     int s = socket(AF_INET, SOCK_STREAM, 0);  // a fresh, unconnected INET stream socket
 
     // ---- connect(2) matrix (order + value must match Linux) ----
-    int c_ebadf = err_of(connect(-1, (struct sockaddr *)bad, sizeof(struct sockaddr_in)));
+    // EBADF is exercised with a bad fd and a VALID address (exactly like LTP connect01's tcases[0],
+    // .fd=&fd_invalid .addr=&sock1). A bad fd + a bad ADDRESS is deliberately NOT combined: that case is
+    // order-ambiguous across implementations — the real Linux kernel checks the fd first (fdget -> EBADF,
+    // before move_addr_to_kernel ever reads the sockaddr), while qemu-user copies the sockaddr in userspace
+    // BEFORE issuing the host syscall, so it reports EFAULT. dd matches the real kernel (fd first). Passing a
+    // valid address here keeps the assertion portable and meaningful (EBADF on every implementation).
+    int c_ebadf = err_of(connect(-1, (struct sockaddr *)&ok, sizeof ok));
     int c_efault = err_of(connect(s, (struct sockaddr *)bad, sizeof(struct sockaddr_in)));
     int c_einval = err_of(connect(s, (struct sockaddr *)&ok, 3));
     int c_enotsock = err_of(connect(fdnull, (struct sockaddr *)&ok, sizeof ok));
