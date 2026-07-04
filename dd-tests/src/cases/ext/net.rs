@@ -76,6 +76,10 @@ fn ext_net() -> Group {
              netlink RTM_NEWADDR count=3\n\
              procnetdev lo=1 eth0=1\n\
              sysclassnet lo=1 eth0=1 eth0_addr=02:42:ac:11:00:02\n"),
+        // #289: a socket the guest bind()+listen()s MUST show up in /proc/net/tcp with state 0A so `ss -l`/
+        // `netstat -ln` inside the container list it. dd synthesized only the header -> every listener was
+        // invisible. Verdict checks ONLY our own fixed port (host-independent) -> golden on both Linux engines.
+        src("listen-tcp", "ext_net/net_listen_tcp.c").out("listen_tcp bind=1 listen=1 seen=1 st_listen=1\n"),
         // ---- error semantics ----
         port("connect-refused", "ext_net/net_connect_refused.c").out("connect_refused refused=1\n"),
         // ---- Linux-only extensions — diffed vs native oracle ----

@@ -305,6 +305,13 @@ static uint16_t g_sock_fam[1024];
 // peer close, so close() injects a zero-length EOF datagram and recv/read coerce ECONNRESET -> 0 for these.
 static uint8_t g_sock_seqpacket[1024];
 static int seq_is(int fd) { return fd >= 0 && fd < 1024 && g_sock_seqpacket[fd]; }
+// fd -> guest-requested TCP bind port (host order), 0 = none. Set at bind(200) for AF_INET/INET6 stream
+// sockets; consumed by the /proc/net/tcp[6] synth to surface a LISTEN row (see netns_tcp_* below).
+static uint16_t g_tcp_lport[1024];
+static uint32_t g_tcp_laddr[1024];   // fd -> raw __be32 v4 bind addr (0.0.0.0 -> 0), printed %08X kernel-style
+static uint8_t g_tcp_l6[1024];       // fd -> 1 if the bind was AF_INET6 (row goes in /proc/net/tcp6)
+static uint8_t g_tcp_laddr6[1024][16]; // fd -> 16-byte v6 bind addr
+static uint8_t g_tcp_listen[1024];   // fd -> 1 once listen(2) succeeded (row is emitted only then)
 // Wake any peer blocked on this DGRAM endpoint with a zero-length EOF datagram (queued after pending data,
 // so order is preserved). Best-effort: a no-op for non-SEQPACKET fds and harmless if the peer is gone.
 static void seq_send_eof(int fd) {
@@ -439,7 +446,59 @@ static void fd_carry_sock(int dst, int src) {
     g_lo_v6[dst] = g_lo_v6[src];
     g_br_port[dst] = g_br_port[src];
     g_br_ip[dst] = g_br_ip[src];
+    g_tcp_lport[dst] = g_tcp_lport[src];
+    g_tcp_laddr[dst] = g_tcp_laddr[src];
+    g_tcp_l6[dst] = g_tcp_l6[src];
+    g_tcp_listen[dst] = g_tcp_listen[src];
+    memcpy(g_tcp_laddr6[dst], g_tcp_laddr6[src], 16);
 }
+
+// ---- listening-TCP introspection (ss/netstat -l): a socket the guest bind()+listen()s MUST appear in
+// /proc/net/tcp[6] with state 0A (TCP_LISTEN). dd translates the guest's AF_INET(6) bind onto a host
+// AF_UNIX switch (or a real host bind in passthrough), so the synthesized /proc/net/tcp table -- which
+// runs no real IP stack -- has to remember the guest-requested (addr,port) itself. bind(200) records it;
+// listen(201) arms g_tcp_listen; the vfs synth walks these to emit the LISTEN rows. Cleared on
+// close/socket-reinit (fd_reset_emul) so a reused fd never reports a stale listener.
+// Note: g_tcp_lport/laddr/l6/listen/laddr6 are declared up top alongside the other per-fd socket arrays.
+static void netns_tcp_bind_note(int fd, uint16_t port_host, int v6, uint32_t addr4_be, const uint8_t *addr6) {
+    if (fd < 0 || fd >= 1024) return;
+    g_tcp_lport[fd] = port_host;
+    g_tcp_laddr[fd] = addr4_be; // raw __be32 as it sits in memory (printed %08X, kernel-style)
+    g_tcp_l6[fd] = (uint8_t)!!v6;
+    g_tcp_listen[fd] = 0; // a fresh bind is not yet listening
+    if (v6 && addr6) memcpy(g_tcp_laddr6[fd], addr6, 16);
+    else memset(g_tcp_laddr6[fd], 0, 16);
+}
+static void netns_tcp_listen_note(int fd) {
+    if (fd >= 0 && fd < 1024 && g_tcp_lport[fd]) g_tcp_listen[fd] = 1;
+}
+// Emit the LISTEN rows for the v4 (v6==0) or v6 (v6==1) table into `out` (<=cap). Returns bytes written.
+// Row layout mirrors the kernel's tcp4_seq/tcp6_seq: sl, local_address:port, rem 0, st 0A, queues 0,
+// uid 0, a synthetic-but-stable inode, refcount 1. Values a real ss/netstat parses positionally.
+static int netns_tcp_emit(char *out, size_t cap, int v6) {
+    int off = 0, sl = 0;
+    for (int fd = 0; fd < 1024 && off < (int)cap - 256; fd++) {
+        if (!g_tcp_listen[fd] || !g_tcp_lport[fd]) continue;
+        if ((int)g_tcp_l6[fd] != !!v6) continue;
+        unsigned long ino = 100000UL + (unsigned)fd; // stable within a run; distinct per listener
+        if (v6) {
+            const uint8_t *a = g_tcp_laddr6[fd];
+            char h[33];
+            for (int i = 0; i < 16; i++) snprintf(h + i * 2, 3, "%02x", a[i]);
+            off += snprintf(out + off, cap - off,
+                "%4d: %s:%04X 00000000000000000000000000000000:0000 0A "
+                "00000000:00000000 00:00000000 00000000     0        0 %lu 1 0000000000000000 100 0 0 10 0\n",
+                sl++, h, g_tcp_lport[fd], ino);
+        } else {
+            off += snprintf(out + off, cap - off,
+                "%4d: %08X:%04X 00000000:0000 0A "
+                "00000000:00000000 00:00000000 00000000     0        0 %lu 1 0000000000000000 100 0 0 10 0\n",
+                sl++, g_tcp_laddr[fd], g_tcp_lport[fd], ino);
+        }
+    }
+    return off;
+}
+
 // dotted-quad -> network-order u32 (bytes a.b.c.d), 0 on parse failure
 static uint32_t br_parse_ip(const char *s) {
     unsigned a = 0, b = 0, cc = 0, d = 0;

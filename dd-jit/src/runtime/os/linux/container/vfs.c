@@ -1888,13 +1888,25 @@ static int sysnet_dir_open(const char *gp) {
     static const char *const ifaces_lo[] = {"lo", 0};
     static const char *const attrs[] = {"address",   "addr_len",  "broadcast", "flags",   "mtu",
                                         "operstate", "type",      "carrier",   "ifindex", "iflink",
-                                        "tx_queue_len", "speed",   "duplex",    0};
+                                        "tx_queue_len", "speed",   "duplex",  "carrier_changes",
+                                        "statistics", 0};
+    // per-net_device statistics counters (fixed kernel set) node_exporter/ifstat read directly from sysfs.
+    static const char *const stats[] = {
+        "collisions", "multicast", "rx_bytes", "rx_compressed", "rx_crc_errors", "rx_dropped", "rx_errors",
+        "rx_fifo_errors", "rx_frame_errors", "rx_length_errors", "rx_missed_errors", "rx_nohandler",
+        "rx_over_errors", "rx_packets", "tx_aborted_errors", "tx_bytes", "tx_carrier_errors", "tx_compressed",
+        "tx_dropped", "tx_errors", "tx_fifo_errors", "tx_heartbeat_errors", "tx_packets", "tx_window_errors",
+        0};
     int as_dirs; // class dir -> iface subdirs; iface dir -> attribute files
     if (r[0] == 0 || (r[0] == '/' && r[1] == 0)) {
         entries = net_isolate() ? ifaces_lo : ifaces;
         as_dirs = 1;
     } else if (r[0] == '/' && (!strcmp(r + 1, "lo") || (!net_isolate() && !strcmp(r + 1, "eth0")))) {
         entries = attrs;
+        as_dirs = 0;
+    } else if (r[0] == '/' && (!strcmp(r + 1, "lo/statistics") ||
+                               (!net_isolate() && !strcmp(r + 1, "eth0/statistics")))) {
+        entries = stats; // the statistics/ subdir: one counter file per entry
         as_dirs = 0;
     } else
         return -2;
@@ -1909,7 +1921,7 @@ static int sysnet_dir_open(const char *gp) {
     for (int i = 0; entries[i]; i++) {
         char p[96];
         snprintf(p, sizeof p, "%s/%s", tmpl, entries[i]);
-        if (as_dirs)
+        if (as_dirs || !strcmp(entries[i], "statistics")) // statistics/ is a subdir even within an iface dir
             mkdir(p, 0555);
         else {
             int f = open(p, O_WRONLY | O_CREAT | O_TRUNC, 0444);
@@ -2229,6 +2241,9 @@ static int cpuinfo_x86_block(char *b, size_t n, int idx, int ncpu) {
         "address sizes\t: 39 bits physical, 48 bits virtual\npower management:\n\n",
         idx, ncpu, idx, ncpu, idx, idx);
 }
+// Defined later in netns.c (same TU, included after vfs.c): emit the LISTEN rows for /proc/net/tcp[6].
+static int netns_tcp_emit(char *out, size_t cap, int v6);
+
 static int proc_open(const char *rp) {
     char buf[8192];
     int n = -1;
@@ -2246,6 +2261,24 @@ static int proc_open(const char *rp) {
                 snprintf(taskbuf, sizeof taskbuf, "%.*s%s", head, rp, s);
                 rp = taskbuf;
             }
+        }
+    }
+    // #289: the per-process network files are namespaced but a container is one net-namespace, so
+    // /proc/[self|<pid>]/net/<leaf> mirrors the shared /proc/net/<leaf>. Fold it (ss/some Go/netlink
+    // fallbacks read /proc/self/net/*). Without this those reads ENOENT'd under dd.
+    char netbuf[4200];
+    if (!strncmp(rp, "/proc/", 6)) {
+        const char *q = rp + 6;
+        const char *leaf2 = NULL;
+        if (!strncmp(q, "self/net/", 9)) leaf2 = q + 9;
+        else {
+            const char *d = q;
+            while (*d >= '0' && *d <= '9') d++;
+            if (d > q && !strncmp(d, "/net/", 5)) leaf2 = d + 5;
+        }
+        if (leaf2) {
+            snprintf(netbuf, sizeof netbuf, "/proc/net/%s", leaf2);
+            rp = netbuf;
         }
     }
     // Per-process files for the guest's own pid: /proc/[self|pid]/{fd,maps,smaps,status,stat,environ}.
@@ -2448,14 +2481,27 @@ static int proc_open(const char *rp) {
     } else if (!strcmp(rp, "/proc/net/if_inet6")) {
         // addr(32 hex) ifindex(hex) prefix(hex) scope(hex) flags(hex) devname -- lo ::1 only.
         n = snprintf(buf, sizeof buf, "00000000000000000000000000000001 01 80 10 80        lo\n");
-    } else if (!strcmp(rp, "/proc/net/tcp") || !strcmp(rp, "/proc/net/tcp6")) {
+    } else if (!strcmp(rp, "/proc/net/tcp")) {
+        // v4 table: header + a LISTEN row per socket the guest bind()+listen()ed (ss/netstat -l depend on it).
         n = snprintf(buf, sizeof buf,
                      "  sl  local_address rem_address   st tx_queue rx_queue tr tm->when retrnsmt   uid  "
                      "timeout inode\n");
-    } else if (!strcmp(rp, "/proc/net/udp") || !strcmp(rp, "/proc/net/udp6")) {
+        n += netns_tcp_emit(buf + n, sizeof buf - n, 0);
+    } else if (!strcmp(rp, "/proc/net/tcp6")) {
+        // tcp6 has a DISTINCT header from tcp4: the v6 address columns are 32 hex wide and the second column
+        // is "remote_address" (not "rem_address"). Reusing the v4 header here was a dd-only divergence.
         n = snprintf(buf, sizeof buf,
-                     "  sl  local_address rem_address   st tx_queue rx_queue tr tm->when retrnsmt   uid  "
+                     "  sl  local_address                         remote_address                        st "
+                     "tx_queue rx_queue tr tm->when retrnsmt   uid  timeout inode\n");
+        n += netns_tcp_emit(buf + n, sizeof buf - n, 1);
+    } else if (!strcmp(rp, "/proc/net/udp")) {
+        n = snprintf(buf, sizeof buf,
+                     "   sl  local_address rem_address   st tx_queue rx_queue tr tm->when retrnsmt   uid  "
                      "timeout inode ref pointer drops\n");
+    } else if (!strcmp(rp, "/proc/net/udp6")) {
+        n = snprintf(buf, sizeof buf,
+                     "  sl  local_address                         remote_address                        st "
+                     "tx_queue rx_queue tr tm->when retrnsmt   uid  timeout inode ref pointer drops\n");
     } else if (!strncmp(rp, "/sys/class/net/", 15)) {
         // per-interface attribute files tools stat/read (address, flags, mtu, operstate, type, ...).
         const char *rest = rp + 15;
@@ -2485,6 +2531,10 @@ static int proc_open(const char *rp) {
             else if (!strcmp(file, "mtu")) n = snprintf(buf, sizeof buf, islo ? "65536\n" : "1500\n");
             else if (!strcmp(file, "speed")) n = snprintf(buf, sizeof buf, "-1\n");
             else if (!strcmp(file, "duplex")) n = snprintf(buf, sizeof buf, "unknown\n");
+            else if (!strcmp(file, "carrier_changes")) n = snprintf(buf, sizeof buf, "0\n");
+            // statistics/<counter>: dd runs no real IP stack -> zero counters (consistent with /proc/net/dev).
+            // node_exporter/ifstat read these per-interface files directly. Any known counter name -> "0\n".
+            else if (!strncmp(file, "statistics/", 11) && file[11]) n = snprintf(buf, sizeof buf, "0\n");
         }
     // cgroup v2: memory limit
     } else if (!strcmp(rp, "/sys/fs/cgroup/memory.max")) {
@@ -2548,6 +2598,86 @@ static int proc_open(const char *rp) {
             "UdpLite: InDatagrams NoPorts InErrors OutDatagrams RcvbufErrors SndbufErrors InCsumErrors "
             "IgnoredMulti MemErrors\n"
             "UdpLite: 0 0 0 0 0 0 0 0 0\n");
+    } else if (!strcmp(rp, "/proc/net/netstat")) {
+        // `netstat -s` / `ss -s` parse the TcpExt + IpExt extended-counter tables. dd runs no IP stack, so
+        // every counter is zero -- but the SECTIONS with the exact kernel column names must exist (a missing
+        // file makes those stats silently vanish). The zero value-line is generated with exactly as many
+        // fields as its header (one " 0" per space) so a positional parser stays aligned.
+        static const char *const th =
+            "TcpExt: SyncookiesSent SyncookiesRecv SyncookiesFailed EmbryonicRsts PruneCalled RcvPruned "
+            "OfoPruned OutOfWindowIcmps LockDroppedIcmps ArpFilter TW TWRecycled TWKilled PAWSActive "
+            "PAWSEstab BeyondWindow TSEcrRejected PAWSOldAck PAWSTimewait DelayedACKs DelayedACKLocked "
+            "DelayedACKLost ListenOverflows ListenDrops TCPHPHits TCPPureAcks TCPHPAcks TCPRenoRecovery "
+            "TCPSackRecovery TCPSACKReneging TCPSACKReorder TCPRenoReorder TCPTSReorder TCPFullUndo "
+            "TCPPartialUndo TCPDSACKUndo TCPLossUndo TCPLostRetransmit TCPRenoFailures TCPSackFailures "
+            "TCPLossFailures TCPFastRetrans TCPSlowStartRetrans TCPTimeouts TCPLossProbes "
+            "TCPLossProbeRecovery TCPRenoRecoveryFail TCPSackRecoveryFail TCPRcvCollapsed TCPBacklogCoalesce "
+            "TCPDSACKOldSent TCPDSACKOfoSent TCPDSACKRecv TCPDSACKOfoRecv TCPAbortOnData TCPAbortOnClose "
+            "TCPAbortOnMemory TCPAbortOnTimeout TCPAbortOnLinger TCPAbortFailed TCPMemoryPressures "
+            "TCPMemoryPressuresChrono TCPSACKDiscard TCPDSACKIgnoredOld TCPDSACKIgnoredNoUndo TCPSpuriousRTOs "
+            "TCPMD5NotFound TCPMD5Unexpected TCPMD5Failure TCPSackShifted TCPSackMerged TCPSackShiftFallback "
+            "TCPBacklogDrop PFMemallocDrop TCPMinTTLDrop TCPDeferAcceptDrop IPReversePathFilter "
+            "TCPTimeWaitOverflow TCPReqQFullDoCookies TCPReqQFullDrop TCPRetransFail TCPRcvCoalesce "
+            "TCPOFOQueue TCPOFODrop TCPOFOMerge TCPChallengeACK TCPSYNChallenge TCPFastOpenActive "
+            "TCPFastOpenActiveFail TCPFastOpenPassive TCPFastOpenPassiveFail TCPFastOpenListenOverflow "
+            "TCPFastOpenCookieReqd TCPFastOpenBlackhole TCPSpuriousRtxHostQueues BusyPollRxPackets "
+            "TCPAutoCorking TCPFromZeroWindowAdv TCPToZeroWindowAdv TCPWantZeroWindowAdv TCPSynRetrans "
+            "TCPOrigDataSent TCPHystartTrainDetect TCPHystartTrainCwnd TCPHystartDelayDetect "
+            "TCPHystartDelayCwnd TCPACKSkippedSynRecv TCPACKSkippedPAWS TCPACKSkippedSeq TCPACKSkippedFinWait2 "
+            "TCPACKSkippedTimeWait TCPACKSkippedChallenge TCPWinProbe TCPKeepAlive TCPMTUPFail TCPMTUPSuccess "
+            "TCPDelivered TCPDeliveredCE TCPAckCompressed TCPZeroWindowDrop TCPRcvQDrop TCPWqueueTooBig "
+            "TCPFastOpenPassiveAltKey TcpTimeoutRehash TcpDuplicateDataRehash TCPDSACKRecvSegs "
+            "TCPDSACKIgnoredDubious TCPMigrateReqSuccess TCPMigrateReqFailure TCPPLBRehash TCPAORequired "
+            "TCPAOBad TCPAOKeyNotFound TCPAOGood TCPAODroppedIcmps";
+        static const char *const ih =
+            "IpExt: InNoRoutes InTruncatedPkts InMcastPkts OutMcastPkts InBcastPkts OutBcastPkts InOctets "
+            "OutOctets InMcastOctets OutMcastOctets InBcastOctets OutBcastOctets InCsumErrors InNoECTPkts "
+            "InECT1Pkts InECT0Pkts InCEPkts ReasmOverlaps";
+        n = 0;
+        const char *hdrs[2] = {th, ih};
+        const char *labs[2] = {"TcpExt:", "IpExt:"};
+        for (int pass = 0; pass < 2; pass++) {
+            int fields = 0;
+            for (const char *p = hdrs[pass]; *p; p++)
+                if (*p == ' ') fields++;
+            n += snprintf(buf + n, sizeof buf - n, "%s\n%s", hdrs[pass], labs[pass]);
+            for (int i = 0; i < fields && n < (int)sizeof buf - 4; i++)
+                n += snprintf(buf + n, sizeof buf - n, " 0");
+            n += snprintf(buf + n, sizeof buf - n, "\n");
+        }
+    } else if (!strcmp(rp, "/proc/net/ipv6_route")) {
+        // `ip -6 route` / `netstat -6 -r` parse this. Loopback-only container v6 routing table (matches a
+        // real --network bridge container that has no global v6): the ::/0-ish + ::1 host route on lo.
+        n = snprintf(buf, sizeof buf,
+            "00000000000000000000000000000000 00 00000000000000000000000000000000 00 "
+            "00000000000000000000000000000000 ffffffff 00000001 00000000 00200200       lo\n"
+            "00000000000000000000000000000001 80 00000000000000000000000000000000 00 "
+            "00000000000000000000000000000000 00000000 00000002 00000000 80200001       lo\n"
+            "00000000000000000000000000000000 00 00000000000000000000000000000000 00 "
+            "00000000000000000000000000000000 ffffffff 00000001 00000000 00200200       lo\n");
+    } else if (!strcmp(rp, "/proc/net/snmp6")) {
+        // IPv6 counter table `netstat -s` reads for its "Ip6/Icmp6/Udp6" sections. Zero counters (no real
+        // stack); the KEY NAMES must match the kernel or the section is dropped.
+        n = snprintf(buf, sizeof buf,
+            "Ip6InReceives                   \t0\nIp6InHdrErrors                  \t0\n"
+            "Ip6InTooBigErrors               \t0\nIp6InNoRoutes                   \t0\n"
+            "Ip6InAddrErrors                 \t0\nIp6InUnknownProtos              \t0\n"
+            "Ip6InTruncatedPkts              \t0\nIp6InDiscards                   \t0\n"
+            "Ip6InDelivers                   \t0\nIp6OutForwDatagrams             \t0\n"
+            "Ip6OutRequests                  \t0\nIp6OutDiscards                  \t0\n"
+            "Ip6OutNoRoutes                  \t0\nIp6ReasmTimeout                 \t0\n"
+            "Ip6ReasmReqds                   \t0\nIp6ReasmOKs                     \t0\n"
+            "Ip6ReasmFails                   \t0\nIp6FragOKs                      \t0\n"
+            "Ip6FragFails                    \t0\nIp6FragCreates                  \t0\n"
+            "Ip6InMcastPkts                  \t0\nIp6OutMcastPkts                 \t0\n"
+            "Ip6InOctets                     \t0\nIp6OutOctets                    \t0\n"
+            "Icmp6InMsgs                     \t0\nIcmp6InErrors                   \t0\n"
+            "Icmp6OutMsgs                    \t0\nIcmp6OutErrors                  \t0\n"
+            "Udp6InDatagrams                 \t0\nUdp6NoPorts                     \t0\n"
+            "Udp6InErrors                    \t0\nUdp6OutDatagrams                \t0\n"
+            "Udp6RcvbufErrors                \t0\nUdp6SndbufErrors                \t0\n"
+            "Udp6InCsumErrors                \t0\nUdp6IgnoredMulti                \t0\n"
+            "Udp6MemErrors                   \t0\n");
     } else if (!strcmp(rp, "/proc/pressure/cpu")) {
         n = snprintf(buf, sizeof buf, "some avg10=0.00 avg60=0.00 avg300=0.00 total=0\n");
     } else if (!strcmp(rp, "/proc/pressure/memory") || !strcmp(rp, "/proc/pressure/io")) {
@@ -2911,7 +3041,9 @@ static int synth_stat_raw(const char *gp, struct stat *s) {
     if (gp && !strncmp(gp, "/sys/class/net", 14)) {
         const char *r = gp + 14;
         int isdir = (r[0] == 0 || (r[0] == '/' && r[1] == 0) || // /sys/class/net
-                     (r[0] == '/' && (!strcmp(r + 1, "lo") || !strcmp(r + 1, "eth0")))); // iface dir
+                     (r[0] == '/' && (!strcmp(r + 1, "lo") || !strcmp(r + 1, "eth0") ||         // iface dir
+                                      !strcmp(r + 1, "lo/statistics") ||                        // statistics/
+                                      !strcmp(r + 1, "eth0/statistics"))));
         if (isdir) {
             memset(s, 0, sizeof *s);
             s->st_mode = S_IFDIR | 0555;
