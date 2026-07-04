@@ -104,6 +104,24 @@ fn regress() -> Group {
         // unmapped low vaddr. Fixed in translate/x86_64/x86_ops.c. Byte-exact vs the qemu-x86_64 oracle.
         src_nopie("repcmps-nonpie", "repcmps_nopie.c").oracle()
             .only(&[Engine::LinuxX86_64]), // rep cmps/scas are x86 opcodes; no aarch64 analogue
+        // #251: aarch64 PC-relative literal-load family. A literal load reads its constant at an address
+        // relative to the GUEST PC; dd places the block at a DIFFERENT host address, so each such load must
+        // be rewritten to materialize the guest-absolute literal address. LDRSW (literal) (opc=10, V=0, top
+        // byte 0x98 — the sign-extending word load compilers emit for switch/jump tables) was MISSING from
+        // that rewrite (it only "worked" when the host arena happened to place the literal in reach), and
+        // PRFM (literal) (0xD8) fell through to a verbatim host-PC-relative emit. This guest drives the WHOLE
+        // family (0x18/0x58 LDR-lit W/X, 0x98 LDRSW-lit, 0x1C/0x5C/0x9C LDR-lit SIMD S/D/Q, 0xD8 PRFM-lit);
+        // byte-exact vs the native aarch64 oracle. Literal loads are aarch64-only (no x86 analogue).
+        src("ldrsw-literal", "ldrsw_literal.c").oracle()
+            .only(&[Engine::LinuxAarch64]),
+        // Same guest under the persistent translation cache (DDJIT_PCACHE): the matrix alternates cold(save)
+        // and warm(load) on a fixed dir, so successive runs exercise the WARM path — exactly where the old
+        // accidental-host-placement bug bit (a restored arena at a different base would resolve the literal
+        // to the wrong host-relative bytes). The literal must resolve to the identical guest value cold or
+        // warm; diffed byte-exact vs native either way.
+        src("ldrsw-literal-pcache", "ldrsw_literal.c")
+            .env("DDJIT_PCACHE", "1").env("DDJIT_PCACHE_DIR", "/tmp/ddjit-pcache-ldrsw")
+            .oracle().only(&[Engine::LinuxAarch64]),
     ])
 }
 
