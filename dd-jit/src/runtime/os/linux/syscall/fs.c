@@ -115,6 +115,8 @@ static void fd_reset_emul(int fd) {
         g_devfull[fd] = 0;
         g_lo_port[fd] = 0;
         g_sock_stream[fd] = 0;
+        g_sock_conn[fd] = 0;
+        g_sock_fam[fd] = 0;
         g_sock_dgram[fd] = 0;
         seq_send_eof(fd);
         g_sock_seqpacket[fd] = 0;

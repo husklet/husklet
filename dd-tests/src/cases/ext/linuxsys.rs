@@ -21,6 +21,12 @@ fn epoll() -> Group {
         // #252: a cross-thread epoll_ctl must not make a blocked epoll_wait(-1) spuriously return 0.
         src("epoll-reblock-inf", "ext_linuxsys/epoll_reblock_inf.c").has("DELIVERED_OK"),
         src("epoll-reblock-fin", "ext_linuxsys/epoll_reblock_fin.c").has("FINITE_OK"),
+        // LTP poll02/pselect01/select01/select02/epoll_create1_01 surface, in one byte-exact transcript:
+        // select readfds/writefds bitsets (regular file / pipe / FIFO), timeout==0 immediate return,
+        // nfds 0/negative -> EINVAL, EBADF for a closed fd, EFAULT on a bad fd_set / timeout / pollfd
+        // pointer (guest PROT_NONE), poll POLLNVAL/POLLOUT, epoll_create1 CLOEXEC round-trip + bad-flag
+        // EINVAL. Oracle-diffed on both arches (qemu-user == native for every case here).
+        src("poll-select-epoll", "ext_linuxsys/poll_select_epoll.c").oracle(),
     ])
 }
 
@@ -71,6 +77,12 @@ fn procx() -> Group {
         src("prctl-dumpable", "ext_linuxsys/prctl_dumpable.c").oracle(),
         // PR_SET/GET_PDEATHSIG round-trip.
         src("prctl-pdeathsig", "ext_linuxsys/prctl_pdeathsig.c").oracle(),
+        // The full LTP prctl02 + prctl03 validation matrix (option/arg EINVAL, EFAULT on a bad name ptr,
+        // EPERM on PR_SET_SECUREBITS/PR_CAPBSET_DROP after dropping CAP_SETPCAP, THP_DISABLE / CAP_AMBIENT /
+        // SPECULATION_CTRL arg checks, PR_SET/GET_CHILD_SUBREAPER round-trip). Self-checking (NOT oracle:
+        // qemu-user lacks THP_DISABLE and the initial THP/dumpable flags are host-specific) -- the native
+        // run confirms the expected values by also printing PRCTL_GUARD_OK.
+        src("prctl-ltp", "ext_linuxsys/prctl_guard.c").has("PRCTL_GUARD_OK").exit(0),
         src("gettid", "ext_linuxsys/gettid.c").oracle(),
         // pidfd_open(2) unsupported on the JIT (returns failure). GAPS `lsys-pidfd`.
         src("pidfd-open", "ext_linuxsys/pidfd_open.c").oracle(),

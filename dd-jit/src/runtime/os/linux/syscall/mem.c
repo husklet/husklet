@@ -5,6 +5,16 @@
 // and the transfer is a scatter/gather memcpy -- exactly the kernel's stream semantics: bytes flow from
 // the src vectors into the dst vectors in order, stopping when either side is exhausted. Returns the
 // number of bytes copied.
+// Is guest range [a,a+len) inaccessible to a userspace read/write, the way the Linux kernel would EFAULT?
+// TWO cases dd must catch: (1) not mapped at all (host_range_mapped), and (2) mapped but PROT_NONE — dd
+// force-maps guest anon memory host-RW so mprotect can stay a near-noop, which discards the guest's
+// PROT_NONE intent, so a guest guard page (LTP tst_get_bad_addr = mmap(PROT_NONE)) stays host-readable;
+// the single PROT_NONE registry (pn_add/pn_del/pn_hit in helpers.c, fed by mmap/mprotect/munmap) records
+// it. ONE helper so connect/bind/pselect/ppoll/... all agree (consolidates three agents' duplicates).
+static int guest_bad_ptr(uintptr_t a, size_t len) {
+    return !host_range_mapped(a, len) || pn_hit((uint64_t)a, len);
+}
+
 static ssize_t svc_vm_iov_copy(const struct iovec *dst, unsigned long dcnt, const struct iovec *src,
                                unsigned long scnt) {
     ssize_t total = 0;
