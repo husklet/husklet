@@ -16,6 +16,12 @@
 static void res_bump(void);
 static int updirneg_lookup(const char *dir);
 static void updirneg_store(const char *dir);
+//   updirverdict_*    -- the "#239/#269 merged-view directory VERDICT" memo (0 present / 1 hidden /
+//                        2 opaque-cut), epoch-gated, fork/chroot-reset via rc_reset. overlay_dir_verdict
+//                        fills it so a lower-only child under a whiteout-removed or opaque-recreated
+//                        parent is not surfaced as a stale positive by the per-layer resolve.
+static int updirverdict_lookup(const char *dir, int *verdict);
+static void updirverdict_store(const char *dir, int verdict);
 static const char *xresolve_exec(const char *p, char *buf,
                                  // fwd (defined below; overlay uses it for the upper)
                                  size_t n);
@@ -114,6 +120,60 @@ static int dir_is_opaque(const char *jc, size_t jcl, const char *guestdir) {
     struct stat st;
     return lstat(opq, &st) == 0;
 }
+// Merged-view visibility VERDICT for the GUEST directory `dir` (memoized per dir; see updirverdict_* in
+// fscache.c). Returns 0 = present & lowers contribute; 1 = HIDDEN (dir or an ancestor removed/absent in
+// the union -- every entry under it is ENOENT); 2 = OPAQUE-CUT (present, but an opaque marker on it or an
+// ancestor hides ALL lower content, so entries come only from the writable upper). overlay_lookup gates
+// the lower-layer search on this: the per-layer resolve (layer_follow) resolves a whole path inside ONE
+// layer, so without this a lower-only child would still be found through a parent that `rm -r`/rmdir
+// whited out (stale-positive stat after remove, #239) or through an opaque recreated parent (stale merged
+// readdir/rmdir, #269). Walks root->`dir`: at each ancestor the topmost layer that PROVIDES it (visible)
+// or WHITES it out (hidden) decides that level; an opaque upper dir sets a sticky cut that hides lower
+// layers for everything beneath it. Recursion is memo-bounded (each ancestor cached, epoch-gated), so a
+// metadata storm over a static image pays one climb per directory then O(1). Volume-routed paths never
+// reach here (overlay_lookup excludes them -- a bind mount is its own jail, not part of the union).
+static int overlay_dir_verdict(const char *dir) {
+    if (!g_nlower || !dir || dir[0] != '/' || !dir[1]) return 0; // "/" and non-overlay: always present
+    int v;
+    if (updirverdict_lookup(dir, &v)) return v;
+    // Resolve the parent's verdict first (memoized recursion). A hidden parent hides this dir outright; an
+    // opaque-cut parent means this dir may come only from the upper (lowers already hidden above it).
+    char par[4200];
+    snprintf(par, sizeof par, "%s", dir);
+    char *sl = strrchr(par, '/');
+    int pver = 0;
+    if (sl && sl != par) {
+        *sl = 0;
+        pver = overlay_dir_verdict(par);
+    }
+    int verdict;
+    if (pver == 1) {
+        verdict = 1; // parent hidden -> this dir is hidden too
+    } else {
+        int opaque_cut = (pver == 2); // an opaque ancestor already cut lower layers
+        int provided = 0;             // 1 = a layer provides `dir`; -1 = a layer whites it out
+        struct stat st;
+        for (int L = -1; L < g_nlower; L++) {
+            if (opaque_cut && L >= 0) break; // opaque ancestor/self: lower layers hidden
+            const char *jc = L < 0 ? g_rootfs_canon : g_lower[L].canon;
+            size_t jcl = L < 0 ? g_rootfs_canon_len : g_lower[L].clen;
+            char host[4300];
+            layer_follow(jc, jcl, dir, host, sizeof host, 0);
+            if (lstat(host, &st) == 0) {
+                provided = 1;
+                if (L < 0 && dir_is_opaque(jc, jcl, dir)) opaque_cut = 1; // opaque upper dir hides lowers
+                break;
+            }
+            if (wh_exists(jc, jcl, dir)) { // whiteout here, no higher layer provided it -> removed
+                provided = -1;
+                break;
+            }
+        }
+        verdict = provided <= 0 ? 1 : (opaque_cut ? 2 : 0);
+    }
+    updirverdict_store(dir, verdict);
+    return verdict;
+}
 // ONE overlay lookup, final component NOT followed: the topmost layer (upper, then lowers top->down)
 // that has `guest`. 1 + its host path in `host`; 0 if absent or whiteout-hidden (host = the upper path,
 // for ENOENT/O_CREAT). A volume path routes to its bind backing via secure_resolve. This is the single-hop
@@ -129,6 +189,19 @@ static int overlay_lookup(const char *guest, char *host, size_t hn) {
     char *psl = strrchr(par, '/');
     int have_par = psl && psl != par;
     if (have_par) *psl = 0;
+    // #239/#269: merged-view VERDICT of the parent dir. The per-layer probes below resolve a whole path
+    // inside ONE layer, so a lower-only child would still surface through a parent that `rm -r`/rmdir
+    // whited out (stale-positive stat after remove) or an opaque recreated parent (stale merged readdir).
+    // The verdict climbs the ancestor chain once (memoized): 1 => the parent subtree is removed/absent in
+    // the union -> the entry is provably ENOENT; 2 => an ancestor is opaque -> lower layers cannot
+    // contribute (skip the lower search below). Rootfs-routed paths only -- a bind-mount volume is its own
+    // jail (jail_match), never part of the union, and its mountpoint need not exist in any layer.
+    int ovl_verdict = (have_par && jail_match(guest) < 0) ? overlay_dir_verdict(par) : 0;
+    if (ovl_verdict == 1) {
+        secure_resolve(guest, up, sizeof up, 1);
+        snprintf(host, hn, "%s", up);
+        return 0; // parent gone -> ENOENT (host = the upper path for O_CREAT/ENOENT)
+    }
     // FAST PATH: the negative memo proves `par` does not exist in the UPPER (epoch-valid entry). Then the
     // entry itself, its `.wh.` whiteout, and its parent's `.wh..wh..opq` opaque marker -- all of which
     // would live under that missing upper dir -- cannot exist either, so the three upper probes below are
@@ -161,16 +234,17 @@ static int overlay_lookup(const char *guest, char *host, size_t hn) {
             updirneg_store(par);
         }
     }
-    // search lowers top->down
-    for (int i = 0; i < g_nlower; i++) {
-        char lp[4300];
-        layer_follow(g_lower[i].canon, g_lower[i].clen, guest, lp, sizeof lp, 1);
-        if (lstat(lp, &st) == 0) {
-            snprintf(host, hn, "%s", lp);
-            return 1;
+    // search lowers top->down (skipped when an opaque ancestor cut the lower layers: verdict 2)
+    if (ovl_verdict != 2)
+        for (int i = 0; i < g_nlower; i++) {
+            char lp[4300];
+            layer_follow(g_lower[i].canon, g_lower[i].clen, guest, lp, sizeof lp, 1);
+            if (lstat(lp, &st) == 0) {
+                snprintf(host, hn, "%s", lp);
+                return 1;
+            }
+            if (wh_exists(g_lower[i].canon, g_lower[i].clen, guest)) break; // deleted below this layer
         }
-        if (wh_exists(g_lower[i].canon, g_lower[i].clen, guest)) break; // deleted below this layer
-    }
     // absent -> upper path (for ENOENT/O_CREAT); compute it now if the memo fast path skipped it
     if (!up[0]) secure_resolve(guest, up, sizeof up, 1);
     snprintf(host, hn, "%s", up);
@@ -392,6 +466,8 @@ static void overlay_set_opaque(const char *guest) {
     snprintf(opq, sizeof opq, "%s/%s", up, ".wh..wh..opq");
     int fd = open(opq, O_CREAT | O_WRONLY, 0644);
     if (fd >= 0) close(fd);
+    res_bump(); // an opaque marker appeared: invalidate the dir-verdict memo (and negative caches) so no
+                // pre-marker "lowers contribute" verdict survives within this syscall (#239/#269)
 }
 // Copy-up: bring a lower file into the UPPER so it can be modified, then return the upper host path.
 // If the file is only in a lower, copy its bytes up; if absent everywhere, return the upper path (create).
@@ -763,4 +839,6 @@ static void overlay_whiteout(const char *guest) {
     }
     int fd = open(wh, O_CREAT | O_WRONLY, 0644);
     if (fd >= 0) close(fd);
+    res_bump(); // a whiteout appeared (and the upper subtree was dropped): invalidate the dir-verdict memo
+                // and negative caches so no pre-removal "present" verdict/stat survives this syscall (#239/#269)
 }

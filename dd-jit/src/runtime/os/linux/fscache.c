@@ -396,6 +396,55 @@ static void updirneg_store(const char *d) {
     strcpy(e->dir, d);
     CUL;
 }
+// ---- overlay merged-view directory VERDICT memo (#239/#269) ----------------------------------------
+// overlay_dir_verdict (vfs/overlay.c) answers, per GUEST directory, whether that dir is visible in the
+// unioned view and whether lower layers may contribute to its contents:
+//   0 = present, lowers contribute (an ordinary union dir);
+//   1 = HIDDEN -- the dir (or an ancestor) was removed: a `.wh.` whiteout hides it with no higher layer
+//       re-providing it, or an ancestor is simply absent. EVERY entry under it is ENOENT;
+//   2 = OPAQUE-CUT -- present, but an opaque marker on it or an ancestor hides all lower content, so its
+//       entries come ONLY from the writable upper.
+// overlay_lookup consults this BEFORE descending to the lowers. Without it, the per-layer resolve
+// (layer_follow walks a whole path inside ONE layer) surfaces a lower-only child through a parent that
+// `rm -r`/rmdir whited out -> `stat`/`access` of the child returns a STALE POSITIVE after its directory
+// was removed (#239), and a merged readdir/rmdir under an opaque-recreated parent leaks stale lower
+// entries (#269). Correctness model is identical to the updirneg memo above: epoch-gated on the
+// container-shared g_res_epoch (every unlink/rmdir/rename/mkdir/whiteout/opaque bumps it, so a removal
+// instantly invalidates the memo), fork/chroot hard reset via rc_reset(), and DD_NOPATHCACHE=1 disables
+// it (overlay_dir_verdict then recomputes every call -- correct, just uncached).
+#define UDVCACHE_N 4096
+static struct udvent {
+    uint64_t hash;
+    uint32_t epoch;
+    uint32_t fgen;   // #371 fork/chroot generation stamp
+    uint8_t verdict; // 0 = present (lowers contribute), 1 = hidden, 2 = opaque-cut (upper-only)
+    char dir[200];
+} g_udv[UDVCACHE_N];
+static int updirverdict_lookup(const char *d, int *verdict) {
+    if (!res_enabled() || !d || d[0] != '/' || strlen(d) >= sizeof(((struct udvent *)0)->dir)) return 0;
+    CLK;
+    int hit = 0;
+    uint64_t h = mc_hash(d);
+    struct udvent *e = &g_udv[h & (UDVCACHE_N - 1)];
+    if (e->hash == h && e->fgen == g_fs_fgen && e->epoch == g_res_epoch && !strcmp(e->dir, d)) {
+        *verdict = e->verdict;
+        hit = 1;
+    }
+    CUL;
+    return hit;
+}
+static void updirverdict_store(const char *d, int verdict) {
+    if (!res_enabled() || !d || d[0] != '/' || strlen(d) >= sizeof(((struct udvent *)0)->dir)) return;
+    CLK;
+    uint64_t h = mc_hash(d);
+    struct udvent *e = &g_udv[h & (UDVCACHE_N - 1)];
+    e->hash = h;
+    e->epoch = g_res_epoch;
+    e->fgen = g_fs_fgen;
+    e->verdict = (uint8_t)verdict;
+    strcpy(e->dir, d);
+    CUL;
+}
 // ---- positive dentry/climb cache (dc_*; #372) -----------------------------------------------------
 // The rc_/oc_ caches memoize FULL guest-path -> host-path resolutions, so a metadata storm that touches
 // each file ONCE (tar/find/du: readdir + one lstat + one open per file) never hits them -- every file
@@ -502,6 +551,7 @@ static void rc_reset(void) {
         memset(g_rl, 0, sizeof g_rl);
         memset(g_ac, 0, sizeof g_ac);
         memset(g_ud, 0, sizeof g_ud); // overlay upper-parent negative memo: same COW/re-root hazard
+        memset(g_udv, 0, sizeof g_udv); // #239/#269 overlay dir-verdict memo: same COW/re-root hazard
         memset(g_dc, 0, sizeof g_dc); // #372 positive dentry/climb cache: same COW/re-root hazard
         oc_reset(); // W4D: the open-resolution cache too (same COW hazard, under the same lock)
     }
