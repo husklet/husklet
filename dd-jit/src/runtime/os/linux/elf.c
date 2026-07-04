@@ -207,6 +207,25 @@ static int nonpie_fixup(siginfo_t *si, void *ucv) {
         return 1;
     }
 
+    // ---- LDAPR/LDAPRB/LDAPRH (Load-Acquire RCpc register): size[31:30] 111 0 00 1 0 1 11111 1 100 00 Rn Rt.
+    //      C++20 std::atomic<T>::load(memory_order_acquire) on FEAT_LSE2/RCPC hardware (clickhouse and other
+    //      modern binaries) lowers to LDAPR, not LDAR. Its encoding aliases the LSE atomic-RMW box below
+    //      (opc==4/o3==1 there -> a bogus "min/max" abort), so decode it FIRST as the plain acquire load it
+    //      is: [Xn] with no operand, Rt receives the value. Served as a SEQ_CST atomic load at +bias. ----
+    if ((insn & 0x3FA0FC00u) == 0x38A0C000u) {
+        int size = insn >> 30;
+        uint64_t val = 0;
+        switch (size) {
+        case 0: val = __atomic_load_n((uint8_t *)real, __ATOMIC_ACQUIRE); break;
+        case 1: val = __atomic_load_n((uint16_t *)real, __ATOMIC_ACQUIRE); break;
+        case 2: val = __atomic_load_n((uint32_t *)real, __ATOMIC_ACQUIRE); break;
+        default: val = __atomic_load_n((uint64_t *)real, __ATOMIC_ACQUIRE); break;
+        }
+        if (rt != 31) X[rt] = nonpie_zext(val, size);
+        uc->uc_mcontext->__ss.__pc += 4;
+        return 1;
+    }
+
     // ---- LSE atomic RMW: size[31:30] 111 0 00 A R 1 Rs[20:16] o3[15] opc[14:12] 00 Rn[9:5] Rt[4:0] ----
     if ((insn & 0x3F200C00u) == 0x38200000u) {
         int size = insn >> 30, o3 = (insn >> 15) & 1, opc = (insn >> 12) & 7;
