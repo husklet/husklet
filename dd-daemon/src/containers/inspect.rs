@@ -476,7 +476,9 @@ fn ps_match(c: &Container, name: &str, f: &HashMap<String, Vec<String>>, before_
     if let Some(vals) = f.get("id") { if !vals.iter().any(|v| c.id.starts_with(v.as_str())) { return false; } }
     // `ancestor=`: the image the container was created from (repo[:tag] or a raw image ref).
     if let Some(vals) = f.get("ancestor") {
-        if !vals.iter().any(|v| c.image == *v || ref_name(&c.image) == ref_name(v)) { return false; }
+        // Repository-aware (issue #304): `ancestor=nginx` must not also match a `linuxserver/nginx`
+        // container just because the basenames coincide. Compare the fully qualified repository.
+        if !vals.iter().any(|v| c.image == *v || ref_repo(&c.image) == ref_repo(v)) { return false; }
     }
     // `exited=N`: containers that exited with code N (only meaningful for the exited state).
     if let Some(vals) = f.get("exited") {

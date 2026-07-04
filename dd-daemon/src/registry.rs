@@ -159,6 +159,15 @@ impl Client {
         Ok(Pulled { image: self.image.clone(), config })
     }
 
+    /// Fetch ONLY the image's run config blob (Cmd/Entrypoint/Env/WorkingDir/User + architecture/os),
+    /// resolving the platform variant but WITHOUT downloading or unpacking any layers. Used to refresh a
+    /// locally-cached image's config on a re-pull of an already-present tag (issue #295), so a subsequent
+    /// `docker run` picks up the correct Entrypoint/Cmd even when the layers are already on disk.
+    pub fn fetch_config(&mut self, want_archs: &[&str]) -> Result<Value, String> {
+        let manifest = self.resolve_manifest(want_archs)?;
+        self.config_blob(&manifest)
+    }
+
     /// Push `rootfs` to the registry as a single-layer image under `self.image`. Returns the manifest
     /// digest. Requires credentials for a registry that demands auth.
     pub fn push(&mut self, rootfs: &Path, cmd: &[String], arch: &str, os: &str, work: &Path) -> Result<String, String> {
@@ -513,7 +522,12 @@ mod http {
     fn run_curl(args: &[String]) -> Result<Resp, String> {
         let hdr = tmp_headers();
         let mut c = Command::new("curl");
-        c.arg("-sS").arg("--max-time").arg("600").arg("-D").arg(&hdr);
+        // `--connect-timeout` bounds only the TCP/TLS connect phase (not the transfer, which keeps the
+        // 10-min `--max-time`), so an unreachable/firewalled registry fails fast instead of hanging. This
+        // matters for the best-effort config refresh on a re-pull of an already-present tag (issue #295):
+        // when the dev host's egress is blocked, the refresh must give up quickly and keep the cached
+        // config rather than stalling `docker pull` for minutes.
+        c.arg("-sS").arg("--connect-timeout").arg("10").arg("--max-time").arg("600").arg("-D").arg(&hdr);
         for a in args { c.arg(a); }
         let out = c.output().map_err(|e| format!("curl: {e}"))?;
         let headers = std::fs::read_to_string(&hdr).unwrap_or_default();

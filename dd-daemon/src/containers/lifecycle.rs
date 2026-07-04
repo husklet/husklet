@@ -178,7 +178,10 @@ pub(crate) async fn containers_create(State(a): State<App>, Query(cq): Query<Cre
     // pulled/built) yet absent from the in-memory store, which would otherwise force a spurious re-pull.
     {
         let g = a.inner.lock().await;
-        let present = g.images.iter().filter(|i| ref_name(&i.name) == ref_name(&image))
+        // Repository-aware presence (issue #304): a bare `nginx` must NOT count a local `linuxserver/nginx`
+        // as present (which would skip the rescan/pull and then run the wrong image). Compare the fully
+        // qualified repository, not the bare basename.
+        let present = g.images.iter().filter(|i| ref_repo(&i.name) == ref_repo(&image))
             .any(|i| want_arch.map_or(true, |a| docker_arch(i.arch) == a));
         if !present { drop(g); rescan_images(&a).await; }
     }
@@ -316,7 +319,12 @@ pub(crate) async fn containers_create(State(a): State<App>, Query(cq): Query<Cre
     let c = Container {
         id: id.clone(), image, rootfs: img.rootfs, upper, cmd, arch: Some(img.arch),
         binds: std::mem::take(&mut binds),
-        hostname: body.hostname.unwrap_or_default(),
+        // Effective hostname (issue #276): Docker defaults an unset `--hostname` to the container's
+        // 12-char short id. Resolve it HERE at create time so it is stored once and reported identically
+        // everywhere (inspect Config.Hostname, the in-container `hostname`/uname, /etc/hostname) rather
+        // than being defaulted differently — or left blank — on each path.
+        hostname: body.hostname.filter(|h| !h.is_empty())
+            .unwrap_or_else(|| id[..id.len().min(12)].to_string()),
         memory: hc.as_ref().and_then(|h| h.memory).unwrap_or(0),
         pids_limit: hc.as_ref().and_then(|h| h.pids_limit).unwrap_or(0),
         nano_cpus: hc.as_ref().and_then(|h| h.nano_cpus).unwrap_or(0),
