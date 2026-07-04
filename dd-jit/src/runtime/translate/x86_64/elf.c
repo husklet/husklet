@@ -730,6 +730,13 @@ void jit86_lazyguard(int sig, siginfo_t *si, void *uc) {
     if (si && si->si_addr && smc_on_write((uint64_t)si->si_addr)) {
         memset(g_map, 0, sizeof g_map);
         memset(g_ibtc, 0, sizeof g_ibtc);
+        // #135 (PyPy JIT bridge coherence): the x86 opt2 2-way IBTC (g_xibtc) is read by the hot
+        // indirect-branch fast path and keyed by guest PC -> host body. It MUST be dropped here too, or a
+        // surviving entry re-dispatches the just-patched code (e.g. a PyPy guard whose rel32 was rewritten
+        // to point at a freshly-assembled bridge) to its STALE pre-patch host body -> the old jump target
+        // still fires -> PyPy re-bridges the same guard -> `assert adr_jump_offset != 0` (assemble_bridge/
+        // patch_jump_for_descr) fatals. The wholesale flush drops it via G_SHADOW_CLEAR; mirror that here.
+        memset(g_xibtc, 0, sizeof g_xibtc);
         g_npend = 0;
         return;
     }
