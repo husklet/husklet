@@ -35,7 +35,7 @@ Success = "download it, `docker run` your image, it just works, and it's fast."
 
 ---
 
-## 3. GOLDEN RULES — the three footguns that waste agent-hours
+## 3. GOLDEN RULES — the footguns that waste agent-hours
 
 1. PIN `DDJIT_DIR` OR YOU WILL TEST THE STALE INSTALLED ENGINE. The engine resolves in this order
    (`dd-jit/src/lib.rs`): `$DDJIT_DIR` -> the path `build.rs` baked in -> `/Applications/dd.app/Contents/Resources`.
@@ -50,7 +50,19 @@ Success = "download it, `docker run` your image, it just works, and it's fast."
 3. PARALLEL BUILDS MUST USE ISOLATED BUILD DIRS. Two builds sharing one `target/` poison each other's
    cache. Each concurrent worker: `--target-dir target-<yourname>` and pin `DDJIT_DIR` into that dir.
 
-4. CODEGEN THAT BAKES A HOST POINTER MUST USE THE RECORDED EMITTERS. Any emitter that embeds a host
+4. GUEST BINARIES & FIXTURES GO IN THE REPO TREE, NEVER `/tmp`. On a Linux dev host the engine runs
+   **mac-side** through the `mac` bridge (`build.rs` / `SpawnConfig`), and the mac side shares the user's
+   home — `/Users/...`, where this repo lives — but **NOT** `/tmp` (nor the Linux box's `/tmp`, `/dev/shm`,
+   `/run`). So any path the engine must open — the guest ELF you cross-compiled, a test fixture, a keyring,
+   an input file — must live under an absolute path the mac also sees: **inside the repo tree** (e.g.
+   `dd-tests/guests/…`, or a scratch dir you create under the repo root like `./.scratch/`). A guest binary
+   in `/tmp` is invisible to the engine. Symptom of this footgun: **silent empty stdout**, `ENOENT`, or
+   `open: No such file` from a program that clearly exists — because it exists on the Linux side but not
+   where the mac-side engine looked. Rule of thumb: if the engine will touch it, put it under the repo and
+   pass an absolute path. (On a real macOS host there is no bridge and `/tmp` works — but write for the
+   shared-tree case so the same command works in CI and for Linux-dev contributors.)
+
+5. CODEGEN THAT BAKES A HOST POINTER MUST USE THE RECORDED EMITTERS. Any emitter that embeds a host
    address in emitted code (`e_movconst(.., (uint64_t)<host symbol>)`, `e_adrp_add` to an engine global)
    breaks the persistent translation cache: a restored arena lives at a different base in a different
    process, so an unrecorded raw bake becomes a garbage branch on a warm load (silent death, warm-only —
@@ -124,8 +136,8 @@ docker --context dd run redis             # the daemon speaks the Docker Engine 
 ddcli doctor                              # diagnose socket / agent / context
 ```
 Run a guest binary directly (no daemon; how benches/tests drive the engine): `ddjit::SpawnConfig::command`
-(see `dd-tests/src/bin/bench.rs`). Guest binaries must live where the build host can see them (the shared
-repo tree), not `/tmp`.
+(see `dd-tests/src/bin/bench.rs`). Guest binaries must live under the **shared repo tree**, never `/tmp` —
+the mac-side engine sees `/Users/...` but not `/tmp` (Golden Rule 4). `/tmp` → silent empty output / ENOENT.
 
 ---
 
