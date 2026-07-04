@@ -1306,6 +1306,8 @@ static int proc_mountinfo_text(char *b, size_t n) {
 #include <mach/host_info.h>
 #include <mach/vm_statistics.h>
 #include <mach/machine.h>
+#include <mach/processor_info.h>  // host_processor_info(PROCESSOR_CPU_LOAD_INFO) — real PER-CORE ticks (#412p3)
+#include <mach/vm_map.h>          // vm_deallocate for the processor_info array
 
 // The registry directory is keyed per-container (DD_NETNS / DD_HOSTNAME are set once by the daemon and
 // inherited across fork + survive guest execve), so two containers on the same host never collide; a
@@ -2265,15 +2267,40 @@ static int proc_open(const char *rp) {
                      "Shmem:                 0 kB\nSReclaimable:          0 kB\n",
                      tot, fre, avail, cached);
     } else if (!strcmp(rp, "/proc/stat")) {
-        // Real host CPU jiffies -> the cpu line increments between reads, so htop/top meters move. Emit an
-        // aggregate `cpu` line plus one per online CPU (aggregate split evenly) so per-core meters populate.
+        // Real host CPU jiffies -> the cpu line increments between reads, so htop/top meters move. The
+        // aggregate `cpu` line comes from HOST_CPU_LOAD_INFO; each per-core `cpuN` line comes from that
+        // core's OWN ticks via host_processor_info(PROCESSOR_CPU_LOAD_INFO). #412 part 3: the old code
+        // split the aggregate EVENLY across cores (aggregate/ncpu), so every cpuN line was byte-identical
+        // and htop/top showed every core meter moving in lockstep at the same %. Per-core real ticks make
+        // the deltas differ, so a busy core reads hot while idle cores read cold -- exactly like Linux.
         unsigned long long t[4];
         host_cpu_ticks(t);
         int nc = container_online_cpus(); // docker --cpus cap (state.c), else all host cores
         n = snprintf(buf, sizeof buf, "cpu  %llu %llu %llu %llu 0 0 0 0 0 0\n", t[0], t[3], t[1], t[2]);
-        for (int i = 0; i < nc; i++)
-            n += snprintf(buf + n, sizeof buf - (size_t)n, "cpu%d %llu %llu %llu %llu 0 0 0 0 0 0\n", i,
-                          t[0] / (unsigned)nc, t[3] / (unsigned)nc, t[1] / (unsigned)nc, t[2] / (unsigned)nc);
+        processor_info_array_t pinfo = NULL;
+        mach_msg_type_number_t picnt = 0;
+        natural_t pncpu = 0;
+        processor_cpu_load_info_t pl = NULL;
+        if (host_processor_info(mach_host_self(), PROCESSOR_CPU_LOAD_INFO, &pncpu, &pinfo, &picnt) ==
+            KERN_SUCCESS)
+            pl = (processor_cpu_load_info_t)pinfo;
+        for (int i = 0; i < nc; i++) {
+            unsigned long long u, ni, sy, id;
+            if (pl && i < (int)pncpu) { // this core's real ticks (order: user nice system idle)
+                u = pl[i].cpu_ticks[CPU_STATE_USER];
+                ni = pl[i].cpu_ticks[CPU_STATE_NICE];
+                sy = pl[i].cpu_ticks[CPU_STATE_SYSTEM];
+                id = pl[i].cpu_ticks[CPU_STATE_IDLE];
+            } else { // API failed, or --cpus capped ABOVE the host core count: fall back to the even split
+                u = t[0] / (unsigned)nc;
+                ni = t[3] / (unsigned)nc;
+                sy = t[1] / (unsigned)nc;
+                id = t[2] / (unsigned)nc;
+            }
+            n += snprintf(buf + n, sizeof buf - (size_t)n, "cpu%d %llu %llu %llu %llu 0 0 0 0 0 0\n", i, u,
+                          ni, sy, id);
+        }
+        if (pl) vm_deallocate(mach_task_self(), (vm_address_t)pinfo, picnt * sizeof(integer_t));
         n += snprintf(buf + n, sizeof buf - (size_t)n,
                       "intr 0\nctxt 0\nbtime %ld\nprocesses %d\nprocs_running 1\nprocs_blocked 0\n",
                       host_btime(), proc_reg_count());

@@ -34,6 +34,14 @@ fn resources() -> Group {
         // so htop's meter sizing honors --cpus exactly like nproc does.
         src("cpu-sysfs-dirs-cap2", "ext_iso/cpusysfs.c").cpus(2)
             .out("htop_cpus=2 get_nprocs=2 get_nprocs_conf=2\n"),
+        // #412 part 3 (htop cores all show IDENTICAL usage): htop/top compute per-core busy% from the
+        // DELTA of each /proc/stat cpuN line between two samples. dd emitted every cpuN line as the
+        // aggregate host ticks split EVENLY (aggregate/ncpu), so every core's delta was identical -> all
+        // meters move in lockstep. This probe pegs one core for ~250ms between two reads and checks the
+        // per-core deltas are not all identical. Oracle -> real Linux shows the busy core diverging
+        // (deltas_differ=1); before the fix dd showed deltas_differ=0 (every core the same split share).
+        src("procstat-percpu", "ext_iso/procstat_percpu.c").oracle()
+            .only(&[Engine::LinuxAarch64, Engine::LinuxX86_64]),
         // --cpus: nproc / sched_getaffinity / sysconf all report the CAP, not the host core count.
         port("cpucap-1", "ext_iso/cpucount.c").cpus(1).out("cpucount=1\n"),
         port("cpucap-2", "ext_iso/cpucount.c").cpus(2).out("cpucount=2\n"),
