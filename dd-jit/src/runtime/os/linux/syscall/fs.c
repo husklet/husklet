@@ -160,6 +160,7 @@ static void fd_reset_emul(int fd) {
         flock_on_close(fd);
         poslk_on_close(fd); // #340: POSIX drops all this process's fcntl record locks when any fd closes
         ptm_clear(fd);      // #411: drop this fd's cached pty-master termios/winsize (see ptm cache below)
+        pts_on_close(fd);   // #280: free a master's devpts index (+ /dev/pts/N node) / clear a slave's stamp
     }
     pidfd_forget(fd);
     memf_close(fd);
@@ -439,11 +440,15 @@ static int svc_fs(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t
             else G_RET(c) = r < 0 ? (uint64_t)(-errno) : 0;
             break;
         }
-        case 0x80045430:
-            if (arg && fd >= 0 && fd < 1024) *(uint32_t *)arg = (uint32_t)fd;
+        case 0x80045430: {
+            // TIOCGPTN -> the Linux devpts index N dd assigned this master at /dev/ptmx-open time (ptsname(3)
+            // and musl/glibc openpty build "/dev/pts/N" from it). Fall back to the fd for an untracked master.
+            int n = pts_index_of_master(fd);
+            if (n < 0) n = fd;
+            if (arg) *(uint32_t *)arg = (uint32_t)n;
             G_RET(c) = 0;
-            // TIOCGPTN -> pts# = master fd
             break;
+        }
         // TIOCSPTLCK (unlockpt done at open)
         case 0x40045431: G_RET(c) = 0; break;
         // TIOCGPTPEER (_IO('T',0x41) == 0x5441; no direction bit, so it arrives unchanged under both musl
@@ -458,7 +463,11 @@ static int svc_fs(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t
             int mf = ((int)a2 & 0x3) | O_NOCTTY;      // access mode (shared values) + no controlling tty
             if (a2 & 0x80000) mf |= O_CLOEXEC;        // honor Linux O_CLOEXEC on the returned fd
             int s = open(sn, mf);
-            if (s >= 0) ptm_apply_to_slave(fd, s);    // #411: slave inherits the master's cached termios/winsize
+            if (s >= 0) {
+                ptm_apply_to_slave(fd, s);            // #411: slave inherits the master's cached termios/winsize
+                int n = pts_index_of_master(fd);
+                if (n >= 0) pts_note_slave(s, n);     // #280: stamp the slave's /dev/pts/N identity + publish node
+            }
             G_RET(c) = s < 0 ? (uint64_t)(-errno) : (uint64_t)s;
             break;
         }
@@ -1452,11 +1461,13 @@ static int svc_fs(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t
         {
             // pty: /dev/ptmx -> posix_openpt; /dev/pts/N -> slave
             const char *rp = (const char *)a1;
-            if (rp && !strcmp(rp, "/dev/ptmx")) {
+            if (rp && (!strcmp(rp, "/dev/ptmx") || !strcmp(rp, "/dev/pts/ptmx"))) {
                 int m = posix_openpt(O_RDWR | O_NOCTTY);
                 if (m >= 0) {
                     grantpt(m);
                     unlockpt(m);
+                    pts_alloc(m); // assign this master a Linux devpts index N (TIOCGPTN / /dev/pts/N use it)
+                    if (lf & 0x80000) fcntl(m, F_SETFD, FD_CLOEXEC); // honor O_CLOEXEC on the master
                 }
                 G_RET(c) = m < 0 ? (uint64_t)(-errno) : (uint64_t)m;
                 break;
@@ -1474,15 +1485,26 @@ static int svc_fs(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t
                     break;
                 }
             }
+            // #227: a guest-created pty slave /dev/pts/N. Intercepted HERE, ahead of the overlay resolver, so
+            // the freshly-allocated slave (which has no rootfs backing file) is never an ENOENT miss. N is the
+            // devpts index dd assigned the master (pts_alloc); ptsname(master) yields the host slave device.
             if (rp && !strncmp(rp, "/dev/pts/", 9) && rp[9] >= '0' && rp[9] <= '9') {
-                char *sn = ptsname(atoi(rp + 9));
+                int n = atoi(rp + 9);
+                int mfd = pts_master_fd(n);
+                if (mfd < 0) {
+                    G_RET(c) = (uint64_t)(int64_t)(-2); // ENOENT: no such pts index (matches Linux)
+                    break;
+                }
+                char *sn = ptsname(mfd);
                 if (!sn) {
                     G_RET(c) = (uint64_t)(int64_t)(-2);
                     break;
-                    // ENOENT
                 }
                 int s = open(sn, mf);
-                if (s >= 0) ptm_apply_to_slave(atoi(rp + 9), s); // #411: slave inherits master's cached termios/winsize
+                if (s >= 0) {
+                    ptm_apply_to_slave(mfd, s);   // #411: slave inherits the master's cached termios/winsize
+                    pts_note_slave(s, n);         // #280: stamp /dev/pts/N onto the slave fd + publish the node
+                }
                 G_RET(c) = s < 0 ? (uint64_t)(-errno) : (uint64_t)s;
                 break;
             }
@@ -1780,6 +1802,21 @@ static int svc_fs(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t
         // /proc/self/fd/N -> the path host fd N currently points at (recovered via F_GETPATH on macOS).
         int pfn = procfd_num(gp);
         if (pfn >= 0) {
+            // #280: a guest-created pty. Its slave must readlink to /dev/pts/N (never the host /dev/ttysNNN)
+            // so ttyname(3)/`ls -l /proc/self/fd` resolve the Linux path; its master to the /dev/ptmx
+            // multiplexer. Checked ahead of F_GETPATH, which would otherwise leak the host device name.
+            {
+                int pn = pts_index_of_fd(pfn);
+                if (pn >= 0) {
+                    char nm[32];
+                    int l = pts_fd_is_master(pfn) ? snprintf(nm, sizeof nm, "/dev/ptmx")
+                                                  : snprintf(nm, sizeof nm, "/dev/pts/%d", pn);
+                    if ((size_t)l > bs) l = (int)bs;
+                    memcpy(buf, nm, (size_t)l);
+                    G_RET(c) = (uint64_t)l;
+                    break;
+                }
+            }
             // The controlling terminal (stdio pty from `docker run -t`) is named /dev/pts/0 in the
             // container -- return that instead of leaking the host pty device (mac /dev/ttysNNN), so
             // ttyname(3)/`tty`/`ps` resolve a device that actually exists in the guest.

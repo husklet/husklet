@@ -64,6 +64,24 @@ fn portable() -> Group {
         port("apt-pty", "ext_posix/apt_pty.c")
             .only(&[Engine::LinuxAarch64, Engine::LinuxX86_64])
             .out("aptpty ptsname=1 mget=1 mset=1 mswin=1 mgwin=1 mdrain=1 mflush=1 sgwin=1\n"),
+        // pty-devpts (#227/#280): a guest-created pty must present a Linux devpts identity. Both the
+        // musl-style (ptmx + TIOCGPTN + open /dev/pts/N) and glibc openpty() paths must open the slave
+        // (#227) and expose /dev/pts/N -- not the host device -- via ptsname/ttyname/readlink(/proc/self/
+        // fd)/stat, all agreeing, the slave stat'ing as a char device whose dev/ino/rdev match fstat(slave)
+        // (#280). Golden booleans (the index value is nondeterministic). Linux/devpts shape -> Linux engines.
+        port("pty-devpts", "ext_posix/pty_devpts.c")
+            .only(&[Engine::LinuxAarch64, Engine::LinuxX86_64])
+            .out("A open=1 ptsname=1 ttyname=1 link=1 chr=1 idmatch=1 agree=1 noleak=1\n\
+                  B open=1 ptsname=1 ttyname=1 link=1 chr=1 idmatch=1 agree=1 noleak=1\n"),
+        // pty-devpts-ls (#280): the same guest-created pty, but inside a container rootfs -- `ls /dev/pts`
+        // must list the freshly-allocated slave node plus the ptmx multiplexer (real devpts materializes
+        // /dev/pts/N on slave allocation). No ctty in the harness (piped stdio) -> the first pty is index 0,
+        // so the listing is exactly {0, ptmx}. Needs a populated devpts mount -> a rootfs; only the aarch64
+        // poc image ships one, so this pins the aarch64 engine (the fs.c/vfs.c code is arch-independent).
+        port("pty-devpts-ls", "ext_posix/pty_devpts_ls.c")
+            .only(&[Engine::LinuxAarch64])
+            .rootfs("alpine")
+            .out("ls index=0 entries=0,ptmx\n"),
         // --- readiness ---
         port("pollpipe", "ext_posix/pollpipe.c").out("pollpipe timeout=1 writable=1 readable=1\n"),
         port("selectpipe", "ext_posix/selectpipe.c").out("selectpipe timeout=1 ready=1 pselect=1\n"),
