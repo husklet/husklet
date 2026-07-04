@@ -62,6 +62,11 @@ fn ext_ipc() -> Group {
         // IPC_EXCL EEXIST on re-create, ENOENT for a missing key w/o IPC_CREAT, shm data+IPC_STAT size,
         // sem SETVAL/GETVAL/semop, msg IPC_NOWAIT ENOMSG + selective/any receive. Byte-exact vs native.
         src("sysv-edge", "ext_ipc/ipc_sysv_edge.c").oracle(),
+        // ---- SysV IPC control-command surface (#418): shmctl/semctl/msgctl full IPC_STAT/IPC_SET/*_INFO/
+        // *_STAT + EINVAL/EFAULT/EACCES/EPERM. STAT round-trips (perms/nsems/qbytes/segsz), SET-then-STAT,
+        // the INFO/index forms, and the errno paths — verdict-only (booleans/errno names vs our own
+        // getuid), so root-dd and the unprivileged native oracle print byte-identically. Both Linux arches.
+        src("sysv-ctl", "ext_ipc/sysv_ctl.c").oracle(),
         // ---- POSIX mqueue errno/edge fidelity (mq_open/timedsend/timedreceive/getattr) — diffed ----
         // O_CREAT|O_EXCL EEXIST, ENOENT w/o O_CREAT, priority ordering, EMSGSIZE, O_NONBLOCK EAGAIN,
         // getattr maxmsg/msgsize/curmsgs. dd emulates POSIX mq in-process (macOS has no mqueue kernel).
