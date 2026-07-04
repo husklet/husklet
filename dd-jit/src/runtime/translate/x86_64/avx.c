@@ -77,18 +77,33 @@ static void avx_put(struct cpu *c, int r, const uint8_t in[64], int wbytes) {
 }
 // Effective address of a memory operand. Guest pointers are host pointers in the in-process model (PIE
 // images load 1:1). EVEX disp8 is compressed (disp8*N); for the common full-vector tuple N = vector bytes.
+//
+// #123/#223 non-PIE bias-fold: a non-PIE ET_EXEC image maps HIGH (+g_nonpie_bias) but its baked absolute
+// pointers stay LOW (link vaddr). The JIT-emitted access path folds this at emit time (ea_bias17, decode.c);
+// this C-emulator path (do_avx / do_sse3b: every VEX + legacy 0F38/0F3A SSSE3/SSE4/MOVBE guest-memory access
+// funnels through here) is its exact analogue and MUST apply the same fold, or a base-register operand
+// holding a baked low pointer (e.g. `pshufb xmm,[rsi]` / `vmovdqu ymm,[rax]` with rsi/rax = a low image
+// address) dereferences the unmapped low vaddr -> SIGSEGV. Applied to the FINAL address so both the
+// rip-relative and base+index forms are covered regardless of whether the guest rip is kept low or high:
+// a resolved HIGH address (>= g_nonpie_hi) is never in the low link range, so it is left untouched.
+// Inert for PIE / static-PIE / non-ET_EXEC (g_nonpie_lo == 0 -> the range test is always false).
 static uint64_t avx_ea(struct cpu *c, struct insn *I, uint64_t rip_after, int wbytes) {
-    if (I->rip_rel) return rip_after + (uint64_t)I->disp;
-    uint64_t a = 0;
-    if (I->m_hasbase) a += c->r[I->m_base];
-    if (I->m_hasindex) a += c->r[I->m_index] << I->m_scale;
-    int64_t disp = I->disp;
-    if (I->evex && I->mod == 1) disp *= wbytes ? wbytes : 1; // disp8*N, full-vector tuple
-    a += (uint64_t)disp;
-    if (I->seg == 1)
-        a += c->fs_base;
-    else if (I->seg == 2)
-        a += c->gs_base;
+    uint64_t a;
+    if (I->rip_rel) {
+        a = rip_after + (uint64_t)I->disp;
+    } else {
+        a = 0;
+        if (I->m_hasbase) a += c->r[I->m_base];
+        if (I->m_hasindex) a += c->r[I->m_index] << I->m_scale;
+        int64_t disp = I->disp;
+        if (I->evex && I->mod == 1) disp *= wbytes ? wbytes : 1; // disp8*N, full-vector tuple
+        a += (uint64_t)disp;
+        if (I->seg == 1)
+            a += c->fs_base;
+        else if (I->seg == 2)
+            a += c->gs_base;
+    }
+    if (a >= g_nonpie_lo && a < g_nonpie_hi) a += g_nonpie_bias; // non-PIE: low image ptr -> high mapping
     return a;
 }
 // Read the r/m operand (register or memory) into buf as `wbytes` bytes.

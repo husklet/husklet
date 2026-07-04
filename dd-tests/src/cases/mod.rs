@@ -85,6 +85,19 @@ fn regress() -> Group {
         // Byte-exact "caught SIGSEGV addr=1" + exit 42 vs native arm64 / qemu-x86_64.
         src("stackoverflow-catch", "stackoverflow_catch.c").oracle()
             .only(&[Engine::LinuxAarch64, Engine::LinuxX86_64]),
+        // #123/#223: a NON-PIE x86_64 glibc ET_EXEC that dereferences a baked LOW absolute pointer through
+        // the two C-emulated vector paths -- do_avx (VEX `vmovdqu ymm,[reg]`) and do_sse3b (legacy SSSE3
+        // `pabsb [reg],xmm`). Both funnel every guest-memory operand through avx_ea(), which formerly
+        // returned the low link address 1:1 instead of folding +g_nonpie_bias like the JIT-emitted path
+        // (ea_bias17). The base-register operand then hit the UNMAPPED low vaddr -> SIGSEGV (exactly node
+        // --version's V8 init crash). Fixed in translate/x86_64/avx.c. Byte-exact vs the qemu-x86_64 oracle.
+        src_nopie("nonpie-vec", "nonpie_vec.c").oracle()
+            .only(&[Engine::LinuxX86_64]), // AVX/SSSE3 are x86 opcodes; no aarch64 analogue
+        // Same guest with the EMIT-time bias-fold disabled (NOGUESTFOLD): the JIT-emitted loads now fault
+        // into nonpie_fixup while the C vector path (avx_ea) still folds directly -- proving the C-side fold
+        // is independent of the emit-time kill-switch and both routes serve the low image byte-exact.
+        src_nopie("nonpie-vec-fixup", "nonpie_vec.c").env("NOGUESTFOLD", "1").oracle()
+            .only(&[Engine::LinuxX86_64]),
     ])
 }
 
