@@ -1401,6 +1401,19 @@ static int svc_fs(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t
                     break;
                 }
             }
+            // #412: the CPU-topology sysfs DIRECTORY itself (and each cpuN subdir). htop opendir()s
+            // /sys/devices/system/cpu and counts cpuN subdirs to size its CPU meters; finding none it keeps
+            // its default of 1. macOS has no /sys, so materialize the directory tree for getdents. Matches the
+            // base dir "/sys/devices/system/cpu" (no trailing slash) and any "/sys/devices/system/cpu/cpuN".
+            if (rp && !strncmp(rp, "/sys/devices/system/cpu", 23)) {
+                int d = syscpu_dir_open(rp);
+                if (d != -2) {
+                    if (d >= 0 && (lf & 0x80000)) fcntl(d, F_SETFD, FD_CLOEXEC); // honor O_CLOEXEC
+                    if (d >= 0 && d < 1024) g_opath[d] = is_opath;              // O_PATH fd -> I/O EBADF
+                    G_RET(c) = d < 0 ? (uint64_t)(-errno) : (uint64_t)d;
+                    break;
+                }
+            }
             // device nodes -> host devices (rootfs has no real /dev)
             if (rp && !strncmp(rp, "/dev/", 5)) {
                 const char *hd = dev_node_hostpath(rp);

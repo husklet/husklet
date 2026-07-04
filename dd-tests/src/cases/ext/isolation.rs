@@ -24,6 +24,16 @@ fn resources() -> Group {
         // the true HOST core count (via macOS hw.activecpu), not 1. Oracle -> the JIT must byte-match native
         // (the real host count) on both Linux engines; before the fix the mac-side engine's sysconf gave 1.
         src("cpu-default", "ext_iso/cpudefault.c").oracle(),
+        // #412 part 2 (htop still showed 1 CPU): htop sizes its CPU meters by opendir()ing
+        // /sys/devices/system/cpu and counting the cpuN SUBDIRECTORIES (not the online/possible/present
+        // files) -- finding none it keeps its built-in default of 1. This probe runs htop's exact algorithm
+        // plus glibc get_nprocs_conf() (also a cpuN-dir count). Oracle -> must byte-match the native host
+        // count. Before the fix the engine served the cpu FILES but never the DIRECTORY, so htop_cpus=1.
+        src("cpu-sysfs-dirs", "ext_iso/cpusysfs.c").oracle(),
+        // --cpus=2: the materialized cpuN directory count is clamped to the allotment too (2 cpuN dirs),
+        // so htop's meter sizing honors --cpus exactly like nproc does.
+        src("cpu-sysfs-dirs-cap2", "ext_iso/cpusysfs.c").cpus(2)
+            .out("htop_cpus=2 get_nprocs=2 get_nprocs_conf=2\n"),
         // --cpus: nproc / sched_getaffinity / sysconf all report the CAP, not the host core count.
         port("cpucap-1", "ext_iso/cpucount.c").cpus(1).out("cpucount=1\n"),
         port("cpucap-2", "ext_iso/cpucount.c").cpus(2).out("cpucount=2\n"),
@@ -32,8 +42,21 @@ fn resources() -> Group {
         // --ulimit nofile: getrlimit(RLIMIT_NOFILE) returns exactly the requested soft/hard pair.
         port("ulimit-nofile", "ext_iso/ulimit.c").ulimit("nofile", 1024, 2048)
             .out("nofile soft=1024 hard=2048\n"),
+        // #412 part 2, the REAL overlay-rootfs path `docker run htop` takes: a busybox shell in an alpine
+        // image counts the /sys/devices/system/cpu/cpuN dirs (htop's source) and asserts it equals nproc.
+        // Host-count-independent MATCH verdict (stable across engines/arches/hosts). Exercises the overlay
+        // relative-open re-entry that a bare guest doesn't: without the cpuN-dir synth this printed MISMATCH.
+        in_rootfs("cpu-sysfs-rootfs", "alpine", &["/bin/sh", "-c", CPUDIR_PROBE])
+            .only(&[Engine::LinuxAarch64, Engine::LinuxX86_64])
+            .out("cpudirs=MATCH\n"),
     ])
 }
+
+// Count the cpuN directories htop enumerates in /sys/devices/system/cpu and compare to nproc. A
+// host-independent verdict: MATCH iff the engine materialized one cpuN dir per online CPU.
+const CPUDIR_PROBE: &str = "\
+n=$(ls -d /sys/devices/system/cpu/cpu[0-9]* 2>/dev/null | wc -l); \
+if [ \"$n\" -eq \"$(nproc)\" ]; then echo cpudirs=MATCH; else echo cpudirs=MISMATCH n=$n nproc=$(nproc); fi";
 
 // A busybox shell probe: a write to the rootfs root must fail "Read-only file system", while /tmp stays
 // writable. Under --read-only -> root=RO tmp=OK; without it (the old behaviour) -> root=RW.

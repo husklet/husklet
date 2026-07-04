@@ -1912,6 +1912,69 @@ static int sysnet_dir_open(const char *gp) {
     proc_dir_register(fd, tmpl, gpath); // tag guest path so a relative reopen re-enters this synth
     return fd;
 }
+// #412: materialize the CPU-topology sysfs DIRECTORY so getdents enumerates one cpuN subdir per online
+// CPU. htop's LinuxMachine_updateCPUcount opendir()s /sys/devices/system/cpu, counts the cpuN subdirs
+// (reading each cpuN/online to mark it active), and -- crucially -- when it finds NO cpuN dir it early-
+// returns keeping its built-in default of ONE CPU. macOS has no /sys, and dd previously served only the
+// online/possible/present FILES (absolute-path reads), never the directory, so htop's opendir hit the
+// (missing) host /sys and htop showed 1 CPU on a many-core host. glibc __get_nprocs_conf and tcmalloc
+// NumPossibleCPUs likewise count these cpuN dirs. Two shapes:
+//   - base "/sys/devices/system/cpu": a temp dir holding cpu0..cpu(N-1) as real SUBDIRS (htop only
+//     accepts DT_DIR/DT_UNKNOWN entries) plus the online/possible/present placeholder files (so a plain
+//     readdir sees them too -- their CONTENT is still served by the absolute-path synth in fs.c).
+//   - a "/sys/devices/system/cpu/cpuN" leaf: an EMPTY temp dir. htop opens it O_DIRECTORY|O_PATH and then
+//     openat(cpuN,"online") -> ENOENT (res<1) which htop counts as active -- exactly the real-Linux shape
+//     (cpuN has no per-cpu `online` file). The dir must OPEN successfully or htop `continue`s past the CPU.
+// Returns the fd, -1 on error, or -2 if `gp` is not the cpu-topology dir / a cpuN subdir we synthesize.
+static int syscpu_dir_open(const char *gp) {
+    if (!gp || strncmp(gp, "/sys/devices/system/cpu", 23)) return -2;
+    const char *r = gp + 23;
+    int is_base = (r[0] == 0 || (r[0] == '/' && r[1] == 0));
+    int cpuN = -1;
+    if (!is_base) {
+        if (r[0] != '/' || strncmp(r + 1, "cpu", 3)) return -2; // not a /sys/devices/system/cpu/cpuN leaf
+        const char *d = r + 4;
+        if (*d < '0' || *d > '9') return -2;
+        cpuN = 0;
+        for (; *d >= '0' && *d <= '9'; d++) cpuN = cpuN * 10 + (*d - '0');
+        if (*d != 0) return -2; // trailing junk (cpufreq/cpuidle/... are files/dirs, not our cpuN synth)
+    }
+    int nc = container_online_cpus(); // host online count, docker --cpus capped (state.c)
+    if (!is_base && (cpuN < 0 || cpuN >= nc)) return -2; // an out-of-range cpuN: not one we advertise
+    static int registered = 0;
+    if (!registered) {
+        atexit(procfd_dirs_atexit);
+        registered = 1;
+    }
+    procfd_dirs_reap(0);
+    char tmpl[] = "/tmp/.ddcpudXXXXXX";
+    if (!mkdtemp(tmpl)) return -1;
+    char gpath[48];
+    if (is_base) {
+        for (int i = 0; i < nc; i++) {
+            char p[96];
+            snprintf(p, sizeof p, "%s/cpu%d", tmpl, i);
+            mkdir(p, 0555); // real SUBDIR: getdents reports DT_DIR so htop counts it
+        }
+        static const char *const files[] = {"online", "possible", "present", "offline", 0};
+        for (int i = 0; files[i]; i++) {
+            char p[96];
+            snprintf(p, sizeof p, "%s/%s", tmpl, files[i]);
+            int f = open(p, O_WRONLY | O_CREAT | O_TRUNC, 0444);
+            if (f >= 0) close(f); // content served on the absolute-path open (fs.c), not from this placeholder
+        }
+        snprintf(gpath, sizeof gpath, "/sys/devices/system/cpu");
+    } else {
+        snprintf(gpath, sizeof gpath, "/sys/devices/system/cpu/cpu%d", cpuN); // empty dir (no `online` leaf)
+    }
+    int fd = open(tmpl, O_RDONLY | O_DIRECTORY);
+    if (fd < 0) {
+        procfd_dir_rm(tmpl);
+        return -1;
+    }
+    proc_dir_register(fd, tmpl, gpath); // tag guest path so a relative openat(cpuN)/readfileat re-enters synth
+    return fd;
+}
 // Format 16 raw bytes as a Linux UUID string ("xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx\n"), stamping the
 // RFC-4122 version-4 (b[6]) and variant (b[8]) bits so the result parses as a valid random UUID. Writes
 // 37 bytes (36 + '\n') plus a NUL into out (needs >= 38). Returns the byte count (37).
@@ -2755,6 +2818,39 @@ static int synth_stat_raw(const char *gp, struct stat *s) {
         s->st_mode = S_IFREG | 0444;
         s->st_nlink = 1;
         return 1;
+    }
+    // #412: the CPU-topology sysfs tree must stat as PRESENT so tools that stat a path BEFORE opening it
+    // (busybox `ls`/glob, `find`, `test -d`, coreutils stat) don't bail ENOENT under the rootfs overlay --
+    // those synthetic paths live in no image layer. htop's opendir bypasses stat, but everyone else needs
+    // this. Directories: the base /sys/devices/system/cpu and each cpuN in [0, online-count). Regular files:
+    // the online/possible/present/offline range files (content served on open via the fs.c cpu synth).
+    if (gp && !strncmp(gp, "/sys/devices/system/cpu", 23)) {
+        const char *r = gp + 23;
+        int hit = 0, isdir = 0;
+        if (r[0] == 0 || (r[0] == '/' && r[1] == 0)) {
+            hit = 1;
+            isdir = 1; // the base directory
+        } else if (r[0] == '/') {
+            const char *leaf = r + 1;
+            if (!strcmp(leaf, "online") || !strcmp(leaf, "possible") || !strcmp(leaf, "present") ||
+                !strcmp(leaf, "offline")) {
+                hit = 1; // a range file
+            } else if (!strncmp(leaf, "cpu", 3) && leaf[3] >= '0' && leaf[3] <= '9') {
+                const char *d = leaf + 3;
+                int n = 0;
+                for (; *d >= '0' && *d <= '9'; d++) n = n * 10 + (*d - '0');
+                if (*d == 0 && n < container_online_cpus()) {
+                    hit = 1;
+                    isdir = 1; // a cpuN directory we advertise
+                }
+            }
+        }
+        if (hit) {
+            memset(s, 0, sizeof *s);
+            s->st_mode = isdir ? (S_IFDIR | 0555) : (S_IFREG | 0444);
+            s->st_nlink = isdir ? 2 : 1;
+            return 1;
+        }
     }
     if (!gp || (strncmp(gp, "/proc/", 6) && strncmp(gp, "/sys/fs/cgroup/", 15))) return 0;
     // A bare /proc/self (the magic symlink) or /proc/<pid> directory for an introspectable pid (this
