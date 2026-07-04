@@ -72,10 +72,29 @@ static int svc_signal(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint
     // ===================== Signals — Linux signal numbers -> macOS; kill/sigaction/sigreturn =====================
     // kill(pid,sig)
     case 129:
-        if ((int)a0 == container_pid() || (int)a0 <= 0) {
+        if ((int)a0 == container_pid() || (int)a0 == 0 || (int)a0 == -1) {
+            // SELF (kill(self,sig)) or the caller's OWN group / broadcast (kill(0)/kill(-1)): deliver via
+            // our own machinery. dd does not put the engine in its own host session/process-group at
+            // startup, so forwarding kill(0)/kill(-1) to the host would escape the "container" and hit the
+            // launcher (bash / the `mac` bridge / sibling engines). Keeping these on the in-process self
+            // path is safe and matches the raise/abort self-signal + own-group-teardown intent.
             raise_guest_signal(c, (int)a1);
             G_RET(c) = 0;
-        // self / pgrp (PID-ns aware)
+        }
+        else if ((int)a0 < -1) {
+            // kill(-pgid, sig): signal a SPECIFIC process group. dd runs each guest process as a real host
+            // process whose process group MIRRORS the guest's (case 154 forwards setpgid to the host; non-
+            // init children carry their real host pids), so the named group is a real, isolated host group
+            // -- route the signal there. The old code folded EVERY a0<=0 into raise_guest_signal (signal
+            // MYSELF), so a parent tearing down a child's private group -- LTP SAFE_FORK cleanup does
+            // kill(-child_pgid, SIGKILL); likewise node/erlang/posix_spawn teardown -- SIGKILLed its OWN
+            // process instead: the parent died 255 with the child's results unreported (all TPASS printed,
+            // then rc=255 vs native 0). A member of the target group that is the caller receives the signal
+            // back through host_sigh, same as any other cross-process delivery. pgid 1 is the container
+            // init <-> its real host group leader.
+            pid_t gpgid = (pid_t)(-(int)a0);
+            if (gpgid == 1 && g_init_hostpid) gpgid = g_init_hostpid;
+            G_RET(c) = kill(-gpgid, sig_l2m((int)a1)) < 0 ? (uint64_t)(-errno) : 0;
         }
         else
             // Cross-process: the target is another dd engine whose host_sigh is installed on the MACOS signal
@@ -277,6 +296,11 @@ static int svc_signal(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint
             G_RET(c) = (uint64_t)(-22);
             break;
         }
+        // The act/oldact structs are read/written DIRECTLY by the engine (24 bytes: handler,flags,mask), so
+        // a bad/unmapped pointer must return -EFAULT rather than fault the engine (#395). Validate in Linux
+        // order -- copyin `act` (a1) before copyout `oldact` (a2) -- so no oldact is written when act faults.
+        if (a1 && !host_range_mapped((uintptr_t)a1, 24)) { G_RET(c) = (uint64_t)(int64_t)(-EFAULT); break; }
+        if (a2 && !host_range_mapped((uintptr_t)a2, 24)) { G_RET(c) = (uint64_t)(int64_t)(-EFAULT); break; }
         if (a2) {
             *(uint64_t *)(a2 + 0) = g_sigact[sig].handler;
             *(uint64_t *)(a2 + 8) = g_sigact[sig].flags;
@@ -311,6 +335,28 @@ static int svc_signal(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint
                     struct sigaction sa;
                     memset(&sa, 0, sizeof sa);
                     sa.sa_sigaction = host_sigh_si;
+                    sa.sa_flags = SA_SIGINFO;
+                    sigfillset(&sa.sa_mask);
+                    sigaction(ms, &sa, NULL);
+                }
+            } else if (sig == 4 || sig == 5 || sig == 8) {
+                // SIGILL/SIGTRAP/SIGFPE are synchronous-fault signals but, unlike SIGSEGV/SIGBUS, have NO
+                // POSIX guard installed (a real illegal instruction reaches the arm64 Mach exception port
+                // and x86 #DE is synthesized at the dispatcher). So the ONLY thing a POSIX handler for them
+                // ever sees is an EXTERNAL kill(2)/tgkill of the signal -- which Linux delivers as an async
+                // signal that must wake pause()/sigsuspend() and run the handler (LTP pause01). Honor the
+                // guest disposition on the host: a real handler -> host_sigh_sync (queue pending + wake);
+                // SIG_DFL/SIG_IGN -> the host default so an external kill takes the correct default action.
+                // (Installing a POSIX handler here does NOT disturb the hardware-fault path above.)
+                int ms = sig_l2m(sig);
+                if (h == 0)
+                    signal(ms, SIG_DFL);
+                else if (h == 1)
+                    signal(ms, SIG_IGN);
+                else {
+                    struct sigaction sa;
+                    memset(&sa, 0, sizeof sa);
+                    sa.sa_sigaction = host_sigh_sync;
                     sa.sa_flags = SA_SIGINFO;
                     sigfillset(&sa.sa_mask);
                     sigaction(ms, &sa, NULL);

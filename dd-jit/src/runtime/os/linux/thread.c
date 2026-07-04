@@ -30,11 +30,47 @@ static void run_guest(struct cpu *c);
 //     is now only a PROF diagnostic; correctness no longer depends on it.
 //   * FUTEX_WAIT may return 0 spuriously (per spec); the guest re-checks the word and re-waits.
 #define FUTEX_NBUCKET 256
+// Per-bucket, per-address parked-waiter tally (under b->m): a real FUTEX_WAKE returns the NUMBER of
+// waiters it actually woke, not the requested count. LTP's tst_checkpoint_wake() (and any code that
+// sums the return value) loops `waked += futex(WAKE, INT_MAX)` until it equals nr_wake; if WAKE returns
+// the requested INT_MAX instead of the true 1, it never matches and times out -> the fork04 TBROK
+// (`tst_checkpoint_wake() ... ETIMEDOUT`). We record how many waiters are parked on EACH distinct uaddr
+// in a bucket so WAKE can report min(val, parked-on-uaddr). Addresses that hash-collide into one bucket
+// occupy separate slots; if a bucket ever has more distinct waited-on addresses than slots, it goes
+// `imprecise` (WAKE falls back to the bucket-aggregate `waiters`) until it fully drains -- a bounded,
+// wake-count-only degradation that never drops a wakeup (the broadcast still wakes everyone).
+#define FUTEX_ASLOTS 16
 struct futex_bucket {
     pthread_mutex_t m;
     pthread_cond_t c;
-    _Atomic int waiters;
+    _Atomic int waiters;              // aggregate parked count in this bucket (PROF + imprecise fallback)
+    uintptr_t saddr[FUTEX_ASLOTS];    // distinct uaddrs with >=1 parked waiter (0 == free slot)
+    uint32_t scnt[FUTEX_ASLOTS];      // parked-waiter count for saddr[i]
+    int imprecise;                    // slots overflowed while waiters were parked -> WAKE count approximate
 };
+// Called under b->m. Register/unregister one parked waiter on `a`, and report the parked count for `a`.
+static void fbk_park(struct futex_bucket *b, uintptr_t a) {
+    int freeslot = -1;
+    for (int i = 0; i < FUTEX_ASLOTS; i++) {
+        if (b->scnt[i] && b->saddr[i] == a) { b->scnt[i]++; return; }
+        if (freeslot < 0 && !b->scnt[i]) freeslot = i;
+    }
+    if (freeslot >= 0) { b->saddr[freeslot] = a; b->scnt[freeslot] = 1; return; }
+    b->imprecise = 1; // no free slot: this bucket's WAKE counts are approximate until it drains
+}
+static void fbk_unpark(struct futex_bucket *b, uintptr_t a) {
+    for (int i = 0; i < FUTEX_ASLOTS; i++)
+        if (b->scnt[i] && b->saddr[i] == a) {
+            if (--b->scnt[i] == 0) b->saddr[i] = 0;
+            return;
+        }
+}
+static int fbk_parked(struct futex_bucket *b, uintptr_t a) {
+    if (b->imprecise) return atomic_load_explicit(&b->waiters, memory_order_relaxed);
+    for (int i = 0; i < FUTEX_ASLOTS; i++)
+        if (b->scnt[i] && b->saddr[i] == a) return (int)b->scnt[i];
+    return 0;
+}
 // _xproc-futex-fork_: the bucket table lives in a MAP_SHARED anonymous region whose mutex/condvar are
 // PTHREAD_PROCESS_SHARED, so a FUTEX_WAKE in one process matches a FUTEX_WAIT in another across dd's
 // fork() -- e.g. a glibc process-shared (named/unnamed-on-shm) semaphore where the child sem_post()s
@@ -77,6 +113,10 @@ static inline struct futex_bucket *fbk_of(const void *uaddr) {
 // legacy global queue (NOFUTEXQ=1)
 static pthread_mutex_t g_futex_m = PTHREAD_MUTEX_INITIALIZER;
 static pthread_cond_t g_futex_c = PTHREAD_COND_INITIALIZER;
+// Aggregate parked count for the legacy single-queue path, so its FUTEX_WAKE can report a woken count
+// (min(val, parked)) instead of the requested `val`. Approximate (one global queue, no per-address split)
+// but correct for the common single-futex case; the default W5C path counts per-address exactly.
+static int g_futex_parked;
 // PROF: fast (no-lock) wakes, slow (locked) wakes, eagain pre-checks
 static uint64_t g_futex_wake_fast, g_futex_wake_slow, g_futex_wait_n;
 
@@ -249,6 +289,7 @@ static long futex_op(struct cpu *c, int *uaddr, int op, int val, const struct ti
                 pthread_mutex_unlock(&g_futex_m);
                 return -EINTR;
             }
+            g_futex_parked++;
             int rc = 0;
             if (ts) {
                 struct timespec abs, rel;
@@ -259,6 +300,7 @@ static long futex_op(struct cpu *c, int *uaddr, int op, int val, const struct ti
             } else
                 pthread_cond_wait(&g_futex_c, &g_futex_m);
             thread_wait_clear();
+            g_futex_parked--;
             int intr = cpu_wait_interrupted(c);
             pthread_mutex_unlock(&g_futex_m);
             if (intr) return -EINTR; // woken by a cross-thread signal -> guest retries; dispatcher delivers it
@@ -266,9 +308,10 @@ static long futex_op(struct cpu *c, int *uaddr, int op, int val, const struct ti
         }
         if (op == 1 || op == 10 || op == 3 || op == 4) { // WAKE / WAKE_BITSET / REQUEUE / CMP_REQUEUE
             pthread_mutex_lock(&g_futex_m);
+            int woke = g_futex_parked < val ? g_futex_parked : val; // report woken count, not the request
             pthread_cond_broadcast(&g_futex_c);
             pthread_mutex_unlock(&g_futex_m);
-            return val;
+            return woke;
         }
         return 0;
     }
@@ -296,6 +339,10 @@ static long futex_op(struct cpu *c, int *uaddr, int op, int val, const struct ti
             pthread_mutex_unlock(&b->m);
             return -EINTR;
         }
+        // We are now about to actually park: record this waiter against its uaddr so a FUTEX_WAKE (this
+        // process or, across a shared page, another) can report the true woken count. Kept in the SHARED
+        // bucket, so a cross-fork waker sees it.
+        fbk_park(b, (uintptr_t)uaddr);
         int rc = 0;
         if (ts) {
             struct timespec abs, rel;
@@ -306,8 +353,11 @@ static long futex_op(struct cpu *c, int *uaddr, int op, int val, const struct ti
         } else
             pthread_cond_wait(&b->c, &b->m);
         thread_wait_clear();
+        fbk_unpark(b, (uintptr_t)uaddr);
         int intr = cpu_wait_interrupted(c);
-        atomic_fetch_sub_explicit(&b->waiters, 1, memory_order_relaxed);
+        // fetch_sub returns the PREVIOUS value; == 1 means the bucket just fully drained -> a stale
+        // `imprecise` flag (set by a past slot overflow) can be cleared so exact counting resumes.
+        if (atomic_fetch_sub_explicit(&b->waiters, 1, memory_order_relaxed) == 1) b->imprecise = 0;
         pthread_mutex_unlock(&b->m);
         if (intr) return -EINTR; // woken by a cross-thread signal -> guest retries; dispatcher delivers it
         // A pure-timeout wait must report -ETIMEDOUT so the guest stops re-waiting.
@@ -335,9 +385,15 @@ static long futex_op(struct cpu *c, int *uaddr, int op, int val, const struct ti
                 g_futex_wake_fast++;
         }
         pthread_mutex_lock(&b->m);
+        // A real FUTEX_WAKE returns the NUMBER of waiters actually woken (capped at the requested `val`),
+        // NOT `val` itself. Count the waiters parked on THIS uaddr before broadcasting: every one of them
+        // re-checks its word and, seeing the waker's store, leaves -- so this is exactly the woken count.
+        // (Returning `val` broke LTP tst_checkpoint_wake's `waked += WAKE(INT_MAX)` loop -> fork04 ETIMEDOUT.)
+        int woke = fbk_parked(b, (uintptr_t)uaddr);
+        if (woke > val) woke = val;
         pthread_cond_broadcast(&b->c); // waiters re-check their own word; spurious wakes are legal
         pthread_mutex_unlock(&b->m);
-        return val;
+        return woke;
     }
     // other ops (WAKE_OP/LOCK_PI/...): unchanged -- pretend success (baseline behavior)
     return 0;

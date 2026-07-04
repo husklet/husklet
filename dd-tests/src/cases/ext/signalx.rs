@@ -19,6 +19,11 @@ fn signalx() -> Group {
         // preemption hangs the guest -> harness timeout.
         port("sigspin", "ext_sig/sigspin.c").out("sigspin loop1=1 loop2=1\n"),
         port("pausesig", "ext_sig/pausesig.c").out("pausesig got=1 eintr=1\n"),
+        // #397 (LTP pause01/pause02): EVERY caught signal delivered by kill(2) -- incl. the fault-class
+        // SIGILL/SIGTRAP/SIGFPE/SIGSEGV/SIGBUS, which dd previously routed to its hardware-fault guard and
+        // never woke pause() -- must wake pause() with -1/EINTR after the handler runs; SIGKILL is
+        // un-catchable so pause() never returns and the process dies by SIGKILL. Diffed vs native.
+        src("pausewake", "ext_sig/pausewake.c").oracle(),
         // sigwait(): case 137 installs a host handler for each awaited signal lacking a guest handler so a
         // cross-process kill becomes pending, then dequeues it synchronously and returns the signo.
         port("sigwait", "ext_sig/sigwait.c").out("sigwait ok=1 clear=1\n"),

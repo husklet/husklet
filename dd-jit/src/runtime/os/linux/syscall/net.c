@@ -199,6 +199,13 @@ static int svc_net(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_
     case 200: {
         // GUEST Linux sockaddr_in: family@0(u16 LE), port@2(BE)
         uint8_t *sa = (uint8_t *)a1;
+        // Bad address POINTER -> EFAULT, not an engine fault: the loopback/bridge/AF_UNIX classifiers
+        // below deref `sa` directly. Validate the declared addrlen (clamped) first. (LTP bind01 EFAULT)
+        {
+            size_t alc = (size_t)(socklen_t)a2;
+            if (alc > sizeof(struct sockaddr_storage)) alc = sizeof(struct sockaddr_storage);
+            if (!host_range_mapped((uintptr_t)a1, alc)) { G_RET(c) = (uint64_t)(-EFAULT); break; }
+        }
         // private loopback: v4 127/8 (and 0.0.0.0 in direct mode -- a 0.0.0.0 server must answer 127.0.0.1),
         // or v6 ::1/:: (dual-stack servers bind v6 too; route it to the SAME per-container loopback so it is
         // isolated from the real host stack instead of escaping it). port@2 is identical in v4/v6 layout.
@@ -403,6 +410,14 @@ static int svc_net(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_
         static int net_isolate = -1;
         if (net_isolate < 0) net_isolate = getenv("DD_NET_ISOLATE") != NULL;
         uint8_t *sa = (uint8_t *)a1;
+        // A bad address POINTER must return EFAULT, not fault the engine: the DNS/loopback/AF_UNIX
+        // classifiers below deref `sa` directly (Linux copies the sockaddr in before any routing).
+        // Validate the declared addrlen (clamped to a real sockaddr) up front. (LTP connect01 EFAULT)
+        {
+            size_t alc = (size_t)(socklen_t)a2;
+            if (alc > sizeof(struct sockaddr_storage)) alc = sizeof(struct sockaddr_storage);
+            if (!host_range_mapped((uintptr_t)a1, alc)) { G_RET(c) = (uint64_t)(-EFAULT); break; }
+        }
         // Container DNS: connect(127.0.0.11:53) -> swap the socket to a socketpair we answer on (host
         // resolver). Subsequent send/recv on the connected fd are handled by the DNS paths below.
         if (dns_enabled() && dns_dest_is(sa, (socklen_t)a2)) {
@@ -634,6 +649,14 @@ static int svc_net(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_
         break;
     }
     case 206: {
+        // A bad DEST-address pointer -> EFAULT, not an engine fault: the DNS/AF_UNIX/INET classifiers
+        // below deref a4 directly. (The data buffer a1 is validated by the host sendto itself.) The dest
+        // is optional (NULL on a connected socket), so only validate when present. (LTP sendto02 EFAULT)
+        if (a4) {
+            size_t dlc = (size_t)(socklen_t)a5;
+            if (dlc > sizeof(struct sockaddr_storage)) dlc = sizeof(struct sockaddr_storage);
+            if (!host_range_mapped((uintptr_t)a4, dlc)) { G_RET(c) = (uint64_t)(-EFAULT); break; }
+        }
         // Container DNS: a query sent to 127.0.0.11:53 (connected send, or first unconnected sendto) is
         // parsed + answered via the host resolver; nothing hits the wire. a4/a5 are the optional dest addr.
         {

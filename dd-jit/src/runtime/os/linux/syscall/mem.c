@@ -178,7 +178,19 @@ static int svc_mem(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_
         break;
     }
     case 215: {
-        // munmap. A non-fixed anon mapping carries a 64 KB guard tail that mmap (case 222) reserved
+        // munmap error checks (Linux returns before touching anything): a zero length, an addr that is
+        // not a multiple of the (guest) page size, or a range that wraps / lies outside the address space
+        // is EINVAL. Aligning against guest_pagesz() (4 KB x86 / 16 KB arm) -- not the 16 KB host page --
+        // is what lets a legitimate 4 KB-granular x86 unmap through while still rejecting a truly
+        // mis-aligned start (LTP munmap03: len 0, addr+1, and an out-of-range rlim_max address).
+        {
+            size_t gpg = guest_pagesz();
+            if (a1 == 0 || (a0 & (gpg - 1)) || a0 + a1 < a0) {
+                G_RET(c) = (uint64_t)(-EINVAL);
+                break;
+            }
+        }
+        // A non-fixed anon mapping carries a 64 KB guard tail that mmap (case 222) reserved
         // past the guest's logical length (so glibc's vectorized over-reads land in mapped memory).
         // The guest only knows its logical length a1, so a plain munmap(a0, a1) leaves that tail mapped
         // -> ~64 KB of address space (plus its gmap/anon_track bookkeeping) leaks per map/unmap cycle.
@@ -227,6 +239,7 @@ static int svc_mem(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_
             // reclaimed at execve() teardown and still findable by gmap_find_len (the mremap grow path).
             gmap_split_unmap(u_lo, u_hi);
             anon_split_unmap(u_lo, u_hi);
+            wipefork_del(u_lo, u_hi - u_lo); // a wipe-on-fork range that was unmapped no longer applies
         }
         if (r == 0 && g_mem_max) {
             // uncharge (clamp >=0)
@@ -299,6 +312,12 @@ static int svc_mem(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_
     }
     // mmap
     case 222: {
+        // Linux mmap with length 0 is EINVAL (must return before the anon guard tail would otherwise map
+        // a nonzero region and wrongly succeed). LTP mmap08 companion / general POSIX contract.
+        if (a1 == 0) {
+            G_RET(c) = (uint64_t)(-EINVAL);
+            break;
+        }
         // File-backed mmap of a RAM-backed scratch fd: flush the cache so the mapping sees the real bytes.
         if (!(a3 & 0x20)) memf_materialize((int)a4);
         // charge anon, but NOT MAP_NORESERVE
@@ -481,6 +500,10 @@ static int svc_mem(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_
                 anon_track((uint64_t)r, (uint64_t)a1 + guard, prot);
             else
                 anon_untrack((uint64_t)r, (uint64_t)a1 + guard);
+            // A fresh mapping resets any prior MADV_WIPEONFORK marking on this address range (advice does
+            // not survive the region being remapped) -- drop stale wipe coverage so a reused address is
+            // never wrongly zeroed in a child.
+            wipefork_del((uint64_t)r, (uint64_t)a1 + guard);
 #ifdef PCACHE_MMAP_HINT
             // #178 (pcache): a hinted library map that landed ON its deterministic hint. Cold epoch:
             // record {base, len, file identity} in the save manifest. Warm epoch: the activation gate for
@@ -531,6 +554,12 @@ static int svc_mem(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_
         size_t hps = (size_t)getpagesize();  // host mmap granularity (16 KB on Apple Silicon)
         size_t gps = guest_pagesz();          // page size the GUEST believes in (4 KB x86 / 16 KB arm)
         size_t len = (size_t)a1;
+        // Linux mincore requires a page-aligned start address -> EINVAL otherwise (align to the GUEST page
+        // so a valid 4 KB-granular x86 start is not rejected on the 16 KB host).
+        if (a0 & (gps - 1)) {
+            G_RET(c) = (uint64_t)(-EINVAL);
+            break;
+        }
         // Fast path: guest page == host page (aarch64) -- the host vec is already one byte per guest page.
         if (gps == hps || gps == 0 || len == 0) {
             int r = mincore((void *)a0, len, (char *)a2);
@@ -555,6 +584,15 @@ static int svc_mem(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_
         if (hpages > sizeof stackbuf) { hv = (unsigned char *)malloc(hpages); if (!hv) { G_RET(c) = (uint64_t)(-ENOMEM); break; } }
         int r = mincore((void *)a0, len, (char *)hv);
         if (r == 0 && a2) {
+            // The host mincore filled our scratch `hv`; the guest vector at a2 is written DIRECTLY by the
+            // engine (one byte per guest page). Validate it before the projection loop so a bad/unmapped
+            // pointer returns -EFAULT instead of faulting the engine (#395) -- the fast path above lets the
+            // host mincore fault a2 itself, but this slow path never hands a2 to a host syscall.
+            if (!host_range_mapped((uintptr_t)a2, gpages)) {
+                if (hv != stackbuf) free(hv);
+                G_RET(c) = (uint64_t)(int64_t)(-EFAULT);
+                break;
+            }
             unsigned char *vec = (unsigned char *)a2;
             for (size_t i = 0; i < gpages; i++) {
                 size_t h = per ? i / per : i;
@@ -572,6 +610,21 @@ static int svc_mem(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_
         // with an unrelated macOS one (e.g. Linux DONTFORK=10 vs macOS PAGEOUT=10), so no-op those.
         // (Note: macOS MADV_DONTNEED does not zero anonymous pages the way Linux's does.)
         int adv = (int)a2, hadv = -1;
+        // MADV_WIPEONFORK(18) / MADV_KEEPONFORK(19): valid ONLY on private-anon ranges (Linux EINVALs
+        // otherwise). WIPEONFORK records the range so the fork child sees it zero-filled
+        // (fork_child_hooks -> wipefork_apply_child); KEEPONFORK undoes that by dropping the range.
+        // A zero length is a no-op success (nothing to mark). Not forwarded to the host: macOS has no
+        // such advice, and the effect is realized in our own fork path.
+        if (adv == 18 || adv == 19) {
+            if (a1 == 0) { G_RET(c) = 0; break; }
+            if (anon_prot_if_contained(a0, (size_t)a1) < 0) { G_RET(c) = (uint64_t)(-EINVAL); break; }
+            if (adv == 18)
+                wipefork_add(a0, (size_t)a1);
+            else
+                wipefork_del(a0, (size_t)a1);
+            G_RET(c) = 0;
+            break;
+        }
         // MADV_DONTNEED(4): Linux drops the pages so the NEXT access faults in fresh ZERO pages. macOS
         // MADV_DONTNEED does not zero anon pages, so a reread would return stale data (breaks
         // redis/jemalloc, which lean on the zeroing). For a range fully inside a tracked PRIVATE-ANON
@@ -625,15 +678,27 @@ static int svc_mem(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_
     }
     // process_vm_readv: copy FROM the remote iovecs (a3/a4) INTO the local iovecs (a1/a2). Same address
     // space here, so it's a direct scatter/gather memcpy (the remote pid in a0 is the guest itself).
-    case 270:
+    // #238: when the remote pid is a DIFFERENT (traced, stopped) guest process -- strace reads a tracee's
+    // syscall-string args this way -- route to the ptrace cross-process path (the remote lives in another
+    // host address space, so a direct memcpy would read OUR own COW copy). ptrace_pvm returns >=0 bytes /
+    // -errno when it owns the call, or INT_MIN to say "not a traced remote -> use the same-space memcpy".
+    case 270: {
+        long pr = ptrace_pvm(c, 0, (pid_t)(int)a0, (const struct iovec *)a1, (unsigned long)a2,
+                             (const struct iovec *)a3, (unsigned long)a4);
+        if (pr != PT_PVM_LOCAL) { G_RET(c) = (uint64_t)pr; break; }
         G_RET(c) = (uint64_t)svc_vm_iov_copy((const struct iovec *)a1, (unsigned long)a2, (const struct iovec *)a3,
                                              (unsigned long)a4);
         break;
+    }
     // process_vm_writev: the mirror -- copy FROM the local iovecs (a1/a2) INTO the remote iovecs (a3/a4).
-    case 271:
+    case 271: {
+        long pr = ptrace_pvm(c, 1, (pid_t)(int)a0, (const struct iovec *)a1, (unsigned long)a2,
+                             (const struct iovec *)a3, (unsigned long)a4);
+        if (pr != PT_PVM_LOCAL) { G_RET(c) = (uint64_t)pr; break; }
         G_RET(c) = (uint64_t)svc_vm_iov_copy((const struct iovec *)a3, (unsigned long)a4, (const struct iovec *)a1,
                                              (unsigned long)a2);
         break;
+    }
     // membarrier: CMD_QUERY(0) returns the bitmask of supported commands; the barrier commands issue a
     // process-wide full memory barrier. The host is cache-coherent and a seq-cst fence orders all threads,
     // so every (expedited or not, global or private) barrier is satisfied by a single host fence. The

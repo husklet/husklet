@@ -36,11 +36,11 @@ static int svc_rare(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64
         G_RET(c) = (op == 0 /*STRICT*/ || op == 1 /*FILTER*/) ? 0 : (uint64_t)(-EINVAL);
         break;
     }
-    // ptrace(2): no real tracing under the JIT, but a guest calling PTRACE_TRACEME on itself (the
-    // common anti-debug / "am I traced?" primitive) just expects success. Accept TRACEME; deny the
-    // rest with -EPERM (the same result an unprivileged process gets when it cannot attach).
+    // ptrace(2): real in-dd tracer/tracee coordination (bug #238). dd emulates the ptrace relationship
+    // BETWEEN two guest processes (both run translated under dd) over a shared arena keyed on guest pids;
+    // see os/linux/syscall/ptrace.c. svc_ptrace sets G_RET (0 / -errno) itself.
     case 117: // ptrace(request, pid, addr, data)
-        G_RET(c) = (a0 == 0 /*PTRACE_TRACEME*/) ? 0 : (uint64_t)(-EPERM);
+        G_RET(c) = (uint64_t)(int64_t)svc_ptrace(c, a0, a1, a2, a3);
         break;
 
     case 279: { // memfd_create(name, flags) -> an anonymous file: a tmpfile, unlinked immediately
@@ -395,6 +395,12 @@ static int svc_rare(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64
                 // si_status carries a signal number for kill/dump/stop/cont -> translate macOS->Linux
                 if (code == CLD_KILLED || code == CLD_DUMPED || code == CLD_STOPPED || code == CLD_CONTINUED)
                     status = sig_m2l(status);
+                // Linux reports CLD_DUMPED (not CLD_KILLED) when a core-dumping signal killed the child with
+                // cores enabled. macOS rarely dumps the host child, so synthesize it the way wait4 encodes
+                // WCOREDUMP: core-dumping signal AND the guest's RLIMIT_CORE soft limit > 0. (status is now the
+                // translated Linux signo.)
+                if (code == CLD_KILLED && sig_coredumps(status) && svc_core_rlimit_cur() > 0)
+                    code = CLD_DUMPED;
                 *(int *)(gi + 0) = 17;   // si_signo = Linux SIGCHLD
                 *(int *)(gi + 4) = 0;    // si_errno
                 *(int *)(gi + 8) = code; // si_code (CLD_* values match Linux<->macOS)
@@ -427,9 +433,20 @@ static int svc_rare(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64
         if (a1) svc_fill_rlimit((int)a0, (uint64_t *)a1);
         G_RET(c) = 0;
         break;
-    case 164:
+    case 164: {
+        // setrlimit(resource, rlim): apply into the same store getrlimit/prlimit64 read, so a direct
+        // setrlimit(2) (not funneled through prlimit64/case 261 by glibc) also takes effect -- e.g. a guest
+        // raising RLIMIT_CORE to enable cores must have wait4/waitid report WCOREDUMP afterwards.
+        int res = (int)a0;
+        const uint64_t *nl = (const uint64_t *)a1;
+        if (nl && res >= 0 && res < DD_RLIM_MAX) {
+            g_ulimit[res].set = 1;
+            g_ulimit[res].cur = nl[0];
+            g_ulimit[res].max = nl[1];
+        }
         G_RET(c) = 0;
         break; // setrlimit -> accepted
+    }
 
     // adjtimex(2)/clock_adjtime(2): read-only query fills struct timex + TIME_OK; setting -> EPERM.
     case 266: { // clock_adjtime(clk_id, timex)

@@ -82,6 +82,9 @@ pub struct Case {
     pub args: Vec<String>,
     pub rootfs: Option<&'static str>, // image name (resolved per-arch) or None = bare
     pub lowers: Vec<String>,
+    /// Run under an overlay: inject the resolved rootfs as its own lower so g_nlower>0 activates the
+    /// overlay open/getdents/lseek code path (needed to reproduce overlay-only bugs, e.g. #391 lseek).
+    pub overlay: bool,
     pub mem_max: u64,
     pub engines: Vec<Engine>,
     /// Engines where this case is a KNOWN failure (jit86 translator/service bugs under debugging) — a
@@ -120,7 +123,7 @@ fn base(name: &'static str, bin: Bin) -> Case {
         Bin::Fixture(fx) => fx.iter().map(|(e, _)| *e).collect(),
         Bin::InRootfs => vec![Engine::LinuxAarch64], // container rootfs fixtures are aarch64 today
     };
-    Case { name, bin, args: vec![], rootfs: None, lowers: vec![], mem_max: 0, engines, xfail: vec![], untrusted: false, cpus: 0, read_only: false, ulimits: vec![], env: vec![], checks: vec![] }
+    Case { name, bin, args: vec![], rootfs: None, lowers: vec![], overlay: false, mem_max: 0, engines, xfail: vec![], untrusted: false, cpus: 0, read_only: false, ulimits: vec![], env: vec![], checks: vec![] }
 }
 /// A case whose guest is compiled from a Linux/aarch64 C source under `guests/`.
 pub fn src(name: &'static str, source: &'static str) -> Case { base(name, Bin::Source(source)) }
@@ -147,6 +150,7 @@ impl Case {
     pub fn args(mut self, a: &[&str]) -> Self { self.args.extend(a.iter().map(|s| s.to_string())); self }
     pub fn rootfs(mut self, r: &'static str) -> Self { self.rootfs = Some(r); self }
     pub fn lower(mut self, l: &str) -> Self { self.lowers.push(l.into()); self }
+    pub fn overlay(mut self) -> Self { self.overlay = true; self }
     pub fn mem(mut self, m: u64) -> Self { self.mem_max = m; self }
     /// docker `--cpus` online-CPU cap for this case (container isolation / resource fidelity).
     pub fn cpus(mut self, n: u32) -> Self { self.cpus = n; self }
@@ -404,8 +408,12 @@ pub fn run(ctx: &Ctx, c: &Case, e: Engine) -> Status {
         }
     }
 
-    let mut cfg = ddjit::SpawnConfig::new(String::new(), rootfs.unwrap_or_default());
+    let rootfs_str = rootfs.unwrap_or_default();
+    let mut cfg = ddjit::SpawnConfig::new(String::new(), rootfs_str.clone());
     cfg.lowers = c.lowers.clone();
+    // .overlay(): inject the rootfs as its own lower so g_nlower>0 turns on the overlay open/lseek path
+    // (linux engines only; darwin has no overlayfs). Reproduces overlay-only bugs like #391 in the matrix.
+    if c.overlay && !rootfs_str.is_empty() && e != Engine::DarwinAarch64 { cfg.lowers.push(rootfs_str); }
     cfg.mem_max = c.mem_max;
     cfg.cpus = c.cpus;
     cfg.read_only = c.read_only;
@@ -510,8 +518,12 @@ fn perf_cmd(ctx: &Ctx, c: &Case, e: Engine) -> Option<(String, (String, Vec<Stri
     let guest = match provision(ctx, c, e) { Ok(Some(g)) => g, _ => return None };
     let rootfs = c.rootfs.and_then(|r| ctx.rootfs_path(r, e));
     if c.rootfs.is_some() && rootfs.is_none() { return None; }
-    let mut cfg = ddjit::SpawnConfig::new(String::new(), rootfs.unwrap_or_default());
+    let rootfs_str = rootfs.unwrap_or_default();
+    let mut cfg = ddjit::SpawnConfig::new(String::new(), rootfs_str.clone());
     cfg.lowers = c.lowers.clone();
+    // .overlay(): inject the rootfs as its own lower so g_nlower>0 turns on the overlay open/lseek path
+    // (linux engines only; darwin has no overlayfs). Reproduces overlay-only bugs like #391 in the matrix.
+    if c.overlay && !rootfs_str.is_empty() && e != Engine::DarwinAarch64 { cfg.lowers.push(rootfs_str); }
     cfg.mem_max = c.mem_max;
     cfg.cpus = c.cpus;
     cfg.read_only = c.read_only;

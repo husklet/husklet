@@ -1,5 +1,14 @@
 // dd/runtime/os/linux -- signal delivery (Linux<->macOS signal-number translation; sigframe build).
 
+// #238 ptrace signal-delivery/group stops. Defined later in the TU (os/linux/syscall/ptrace.c, pulled in
+// via dispatch.c). ptrace_intercept_signal: this process is traced and a signal is about to be delivered
+// -> enter a signal/group ptrace-stop, report it to the tracer, block until CONT/SYSCALL, and (when the
+// tracer re-injects it) resume with the effective signal in *out_sig; returns 1 iff it consumed `sig`
+// (the caller must NOT deliver it) or 0 to deliver normally. Both are inert (fast 0) for an untraced
+// process, which is the entire test matrix.
+struct cpu;
+static int ptrace_intercept_signal(struct cpu *c, int sig, int *out_sig);
+
 // ---------------- signals ----------------
 // Handlers are process-wide; the blocked mask is per-thread (cpu->sigmask).
 // Async signals set a pending bit from a tiny host handler; the dispatcher then
@@ -9,6 +18,15 @@ static struct {
 } g_sigact[65];
 // bitmask of pending signals (1<<signo)
 static volatile uint64_t g_pending;
+// Per-thread "this guest thread is currently inside a host syscall on the guest's behalf" flag, set
+// around service() (os/linux/syscall/dispatch.c). It is the reliable discriminator, when a fault-class
+// signal (SIGSEGV/BUS/ILL/TRAP/FPE) arrives via a POSIX handler with the host PC NOT in translated code,
+// between (a) an EXTERNAL kill(2)/tgkill of that signal at a thread blocked in a syscall -- which Linux
+// delivers as an ordinary async signal that must wake pause()/sigsuspend()/read()/... (LTP pause01) --
+// and (b) a genuine engine-code fault. macOS gives no usable siginfo discriminator for these (a
+// kill-delivered SIGSEGV/ILL/FPE carries si_pid==0 and an si_addr just like a hardware fault), so we key
+// off this instead: in a syscall => async guest delivery; otherwise => the real fault path / re-raise.
+static __thread int g_in_service;
 // rt_sigqueueinfo extras carried to the handler's siginfo: si_code + si_value (consumed on delivery)
 static int g_sigcode[65];
 static uint64_t g_sigval[65];
@@ -90,6 +108,29 @@ static void host_sigh_si(int sig, siginfo_t *si, void *uc) {
     }
     host_sig_pend(ls);
 }
+// Host handler for the NON-guarded synchronous-fault signals (SIGILL/SIGTRAP/SIGFPE) when the guest
+// installs a handler for them. A REAL hardware fault for these never reaches a POSIX handler on this
+// platform -- arm64 delivers an illegal instruction via the Mach exception port (-> deliver_guest_fault)
+// and x86 integer #DE is synthesized at the dispatcher -- so anything arriving HERE is an EXTERNAL
+// kill(2)/tgkill/sigqueue (LTP pause01 kills a paused process with SIGILL/SIGTRAP/SIGFPE). Linux
+// delivers those as ordinary async signals that wake pause()/sigsuspend() and run the handler: while the
+// thread is in a syscall (g_in_service) mark it pending (the async path host_sigh_si uses) and capture
+// the sender. Otherwise (a genuine fault that somehow surfaced as POSIX) restore the default and re-raise.
+static void host_sigh_sync(int sig, siginfo_t *si, void *uc) {
+    (void)uc;
+    int ls = sig_m2l(sig);
+    // Only ever an EXTERNAL kill(2) when it lands while the thread is blocked in a syscall (g_in_service):
+    // a real illegal-instruction/#DE never reaches a POSIX handler here (arm64 uses the Mach exception
+    // port, x86 synthesizes #DE at the dispatcher). In-syscall => deliver async (wakes pause()/sigsuspend
+    // + runs the handler); otherwise a genuine fault surfaced as POSIX -> restore default and re-raise.
+    if (!g_in_service) {
+        signal(sig, SIG_DFL);
+        raise(sig);
+        return;
+    }
+    if (si && si->si_pid > 0) { g_sigpid[ls] = (int)si->si_pid; g_siguid[ls] = (int)si->si_uid; }
+    host_sig_pend(ls);
+}
 
 // build_signal_frame + do_sigreturn are per-arch (the sigframe register layout) -> frontend/<arch>/sigframe.c
 static void build_signal_frame(struct cpu *c, int sig);
@@ -142,6 +183,17 @@ static void maybe_deliver_signal(struct cpu *c) {
 // fragile): a guest handler -> pending bit; otherwise apply the default action here.
 static void raise_guest_signal(struct cpu *c, int sig) {
     if (sig < 1 || sig > 64) return;
+    // #238: if this process is traced, a signal it raises on itself (raise/abort/kill-self, incl. the
+    // raise(SIGSTOP) tracers' children use) becomes a ptrace signal/group-stop reported to the tracer.
+    // The tracer then decides the effective signal to deliver (0 = suppress). Inert for an untraced
+    // process (fast 0), which is the entire test matrix.
+    {
+        int eff = sig;
+        if (ptrace_intercept_signal(c, sig, &eff)) {
+            if (eff <= 0) return; // suppressed by the tracer
+            sig = eff;            // deliver the tracer's (possibly changed) signal below, no re-trap
+        }
+    }
     uint64_t h = g_sigact[sig].handler;
     if (h > 1) {
         __atomic_or_fetch(&g_pending, 1ull << sig, __ATOMIC_SEQ_CST);
@@ -200,8 +252,25 @@ static int deliver_guest_fault(int hostsig, siginfo_t *si, void *ucv) {
     if (g_sigact[sig].handler <= 1) return 0;
     struct cpu *c = (struct cpu *)pthread_getspecific(g_cpu_key);
     if (!c) return 0;
-    // Not a fault inside translated code -> a genuine engine fault; never mask it as a guest signal.
-    if (!sigframe_capture_fault(c, ucv)) return 0;
+    if (!sigframe_capture_fault(c, ucv)) {
+        // The faulting host PC is NOT inside translated code, so this is not the guest's own CPU fault.
+        // Two cases: (a) an EXTERNAL process kill(2)/tgkill'd this fault-class signal at us while the
+        // thread was blocked in a syscall -- e.g. LTP pause01 sends SIGSEGV to a process in pause() --
+        // which Linux delivers as an ordinary ASYNC signal that wakes the blocked call (EINTR) and runs
+        // the handler; or (b) a genuine engine fault in our own C code. macOS gives no usable siginfo
+        // discriminator (a kill'd SIGSEGV carries si_pid==0 + an si_addr like a hardware fault), so key
+        // off g_in_service: inside a syscall => (a). Queue it pending + kick any in-cache loop out (irq)
+        // and report handled -- the host guard returns, the blocking call wakes, and maybe_deliver_signal
+        // builds the frame at the next dispatch (leave si_code/si_addr 0 == SI_USER, the kill siginfo).
+        // Not in a syscall => (b), not ours: re-raise.
+        if (g_in_service) {
+            if (si && si->si_pid > 0) { g_sigpid[sig] = (int)si->si_pid; g_siguid[sig] = (int)si->si_uid; }
+            __atomic_or_fetch(&g_pending, 1ull << sig, __ATOMIC_SEQ_CST);
+            __atomic_store_n(&c->irq, 1, __ATOMIC_SEQ_CST);
+            return 1;
+        }
+        return 0;
+    }
     g_sigaddr[sig] = si ? (uint64_t)si->si_addr : 0;
     // Linux si_code for a hardware fault: SIGBUS -> BUS_ADRERR(2), else SEGV_MAPERR(1).
     g_sigcode[sig] = (sig == 7) ? 2 : 1;

@@ -30,6 +30,72 @@ int g_rwx_guest;
 #ifndef RENAME_EXCL
 #define RENAME_EXCL 0x00000004 // fail if dst exists <- Linux RENAME_NOREPLACE(1)
 #endif
+// ================= ptrace(2) — in-dd tracer/tracee coordination (bug #238) ========================
+// dd runs each guest PROCESS as its own host process (fork(2) is a real host fork; see proc.c case 220),
+// so a guest tracer ptracing a guest tracee is TWO host processes. We CANNOT proxy to the host macOS
+// ptrace: macOS ptrace has no Linux semantics and cannot see the tracee's GUEST register file (which
+// lives in the tracee's own `struct cpu`). Instead we emulate the ptrace relationship *between* the two
+// guest processes over a shared-memory arena (MAP_SHARED|ANON, mmap'd ONCE at engine_global_init BEFORE
+// any guest fork, so every descendant guest process inherits the same physical pages). Keyed on guest
+// pids (dd already maps guest<->host pids via g_init_hostpid/container_pid). The tracee publishes its
+// marshalled GUEST registers into its slot whenever it enters a ptrace-stop; the tracer's ptrace()
+// calls read/steer that slot; PEEK/POKE of tracee memory are serviced by the (stopped) tracee itself
+// over a request/response channel in the slot (the tracer's own address space holds a COW copy, not the
+// tracee's, so it cannot read tracee memory directly). See os/linux/syscall/ptrace.c for the whole
+// design + the staged-work enumeration. Inert (one relaxed load) whenever no process is being traced.
+// Declared here (before the family includes) so mem.c/proc.c/rare.c can call the hooks; the arena struct
+// is defined here because service() reads g_pt->nactive on the hot path.
+#define PT_MAXLINK 128
+#define PT_MEMBUF  1024
+#define PT_PVM_LOCAL ((long)0x7fffffffffffffffLL) // ptrace_pvm: "remote is self -> same-space memcpy"
+struct pt_link {
+    volatile int used, attached, seized;
+    volatile int tracer_pid, tracee_pid;     // guest pids (init == 1)
+    volatile uint64_t options;               // PTRACE_SETOPTIONS bits
+    volatile int stopstate;                  // 0 running, 1 stopped
+    volatile int stopkind;                   // PTS_* (see ptrace.c)
+    volatile int stopsig;                    // reported signal (signal/group stops)
+    volatile int event;                      // PTRACE_EVENT_* (0 = none)
+    volatile unsigned long eventmsg;         // PTRACE_GETEVENTMSG
+    volatile int waitstatus;                 // Linux-encoded status the tracer's wait sees
+    volatile int reported;                   // tracer has consumed this stop via wait
+    volatile int syscall_mode;               // stop at every syscall (armed by PTRACE_SYSCALL)
+    volatile int pending_attach_stop;        // ATTACH/SEIZE/INTERRUPT -> stop at next syscall boundary
+    volatile int cmd, cmd_sig;               // pending resume command + signal to inject
+    volatile int inject_pass;                // a tracer-injected signal to deliver ONCE without re-trapping
+    volatile unsigned cmd_seq, ack_seq;      // tracer bumps cmd_seq; tracee acks with ack_seq
+    volatile int arch;                       // 0 x86_64, 1 aarch64
+    volatile int reglen;                     // marshalled user_regs_struct byte length
+    volatile uint64_t regs[40];              // marshalled register image (published by tracee at each stop)
+    volatile int regs_dirty;                 // tracer SETREGS -> tracee reloads on resume
+    volatile uint64_t entry_nr;              // syscall nr captured at entry (orig_rax at exit-stop, x86)
+    volatile uint8_t siginfo[128];           // last stop's siginfo (PTRACE_GETSIGINFO)
+    // memory request/response (serviced by the stopped tracee against its OWN guest address space)
+    volatile int mem_dir;                    // 0 none, 1 read, 2 write
+    volatile uint64_t mem_addr, mem_len;
+    volatile unsigned mem_seq, mem_ack;
+    volatile int mem_err;
+    volatile uint8_t mem_buf[PT_MEMBUF];
+};
+struct pt_arena {
+    volatile int nactive;                    // # of live tracee links (hot-path gate)
+    volatile uint64_t gen;                   // bumped on any link table change (per-proc lookup cache key)
+    volatile int lock;                       // spinlock for slot alloc/free
+    struct pt_link link[PT_MAXLINK];
+};
+static struct pt_arena *g_pt;                // shared arena (NULL until ptrace_arena_init)
+static void ptrace_arena_init(void);
+static int svc_ptrace(struct cpu *c, uint64_t req, uint64_t pid, uint64_t addr, uint64_t data);
+static void ptrace_service_traced(struct cpu *c); // service() hot-path hook when g_pt->nactive > 0
+static int ptrace_wait(struct cpu *c, pid_t wpid, int opts, struct rusage *ru, int *status, pid_t *out);
+static long ptrace_pvm(struct cpu *c, int is_write, pid_t rpid, const struct iovec *liov, unsigned long ln,
+                       const struct iovec *riov, unsigned long rn);
+static int ptrace_any_tracee_of_self(void); // does the caller trace anyone? (wait4 routing)
+static int ptrace_wait_active(void);        // is ptrace in use in this session? (wait4 routing gate)
+struct sigaction;                           // fwd (signal.h is included by the target before this TU)
+static int pt_wait_arm(struct sigaction *saved);            // scoped SIGCHLD wake around a blocking wait4
+static void pt_wait_disarm(int armed, const struct sigaction *saved);
+
 #include "helpers.c"
 #include "sysv.c"
 #include "mem.c"
@@ -365,12 +431,23 @@ static void guest_abspath_at(int dirfd, const char *raw, char *out, size_t n) {
 #include "fs.c"
 #include "proc.c"
 #include "rare.c"
+#include "ptrace.c" // bug #238: real ptrace tracer/tracee coordination (uses helpers above + G_* macros)
 static void service(struct cpu *c) {
+    // Mark this thread as "in a host syscall" for the whole service window (incl. any blocking wait such
+    // as pause()/ppoll()/read()): the fault-class-signal handlers use it to tell an external kill of
+    // SIGSEGV/ILL/FPE/... from a genuine engine fault (see g_in_service in os/linux/signal.c). Cleared on
+    // EVERY exit path below, so the ptrace/untrusted routes must not early-return past the clear.
+    g_in_service = 1;
     if (__builtin_expect(g_untrusted, 0)) {
-        syscall_route(c);
-        return;
-    } // untrusted: route via sentry
-    service_local(c); // trusted: byte-identical path
+        syscall_route(c); // untrusted: route via sentry
+    } else if (__builtin_expect(g_pt != NULL && __atomic_load_n(&g_pt->nactive, __ATOMIC_RELAXED) != 0, 0)) {
+        // #238: any guest process under ptrace -> route through the traced dispatcher so this syscall can
+        // syscall-stop (entry/exit) for its tracer. One relaxed shared load; not taken for the whole matrix.
+        ptrace_service_traced(c);
+    } else {
+        service_local(c); // trusted: byte-identical path
+    }
+    g_in_service = 0;
 }
 static void service_local(struct cpu *c) {
     // Frontends whose guest has legacy syscalls without a canonical (aarch64) equivalent rewrite them

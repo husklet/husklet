@@ -38,6 +38,9 @@
 #include "../include/cpu_aarch64.h"
 #include "../translate/aarch64/abi.h"       // the cpu interface os/linux/ is written against
 #include "../translate/aarch64/fill_stat.c" // the per-arch struct-stat layout os/linux/ fills
+// Byte size of the guest `struct stat` fill_stat.c writes -- the shared stat syscalls (os/linux/syscall/
+// fs.c cases 79/80) validate exactly this many guest bytes before filling the buffer (#395 EFAULT guard).
+#define GUEST_LINUX_STAT_BYTES 128
 
 // container/ns config state + parsers (early globals)
 #include "../os/linux/container/state.c"
@@ -460,6 +463,8 @@ static int engine_global_init(void) {
 
     g_trace = getenv("JT") != NULL;
     g_systrace = getenv("JTS") != NULL;
+    g_dbg_nochain = getenv("DDDBG_NOCHAIN") != NULL; // debug-only: force every block through the dispatcher
+    g_dbg_gprdump = getenv("DDDBG_GPRDUMP") != NULL; // debug-only: dump all GPRs per block (register differential)
     g_prof = getenv("PROF") != NULL;
     g_ibprof = getenv("IBPROF") != NULL;          // ARM-B1 feasibility: indirect-branch traffic + stability log
     g_vdbetrace = getenv("VDBETRACE") != NULL;    // ARM-B1 prototype: VDBE dispatch threading PoC
@@ -490,6 +495,9 @@ static int engine_global_init(void) {
     // into. (g_pcache itself is read at the top of dd_run -- per-invocation, mirroring linux_x86_64.c,
     // so a fork-server runner honors the CLIENT's DDJIT_PCACHE; the check is mode-only and independent.)
     pcache_poison_check();
+    // #238: ptrace tracer/tracee coordination arena -- mmap the shared region ONCE here, BEFORE any guest
+    // fork, so every descendant guest process inherits the same physical pages. Inert until a guest ptraces.
+    ptrace_arena_init();
     g_engine_inited = 1;
     return 0;
 }
@@ -512,6 +520,7 @@ static const char *load_program(const char *prog, struct loaded *lm, struct load
     // #339: when the persistent cache is on, map the image + interp at FIXED VAs so the translated arena
     // (block-map keys + baked guest addresses) is byte-identical across runs -> reusable from the cache.
     if (g_pcache) g_force_base = PC_IMG_BASE;
+    { const char *e = getenv("DDDBG_IMGBASE"); if (e) g_force_base = strtoull(e, 0, 16); } // debug: pin img base (trace alignment)
     load_elf(prog_host, lm);
 
     // Dynamic: load the PT_INTERP (ld.so) and enter THERE; it loads libs + relocates.
@@ -525,6 +534,7 @@ static const char *load_program(const char *prog, struct loaded *lm, struct load
         // follow+confine ld.so symlink (through the overlay)
         interp_host = xresolve_overlay(interp, ib, sizeof ib);
         if (g_pcache) g_force_base = PC_INTERP_BASE;
+        { const char *e = getenv("DDDBG_INTERPBASE"); if (e) g_force_base = strtoull(e, 0, 16); } // debug: pin interp base
         load_elf(interp_host, li);
         *jump = li->entry;
         *at_base = li->base;

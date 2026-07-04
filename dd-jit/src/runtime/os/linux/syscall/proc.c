@@ -66,11 +66,46 @@ static void svc_fill_rlimit(int resource, uint64_t *o) {
         o[0] = 1024;
         o[1] = 1048576;
         break;
+    case 4: // RLIMIT_CORE -- match the Linux/docker default: cores OFF via soft=0, hard unlimited. A guest that
+            // wants cores (LTP, crash handlers) raises rlim_cur with setrlimit; that soft limit governs whether
+            // wait4/waitid report WCOREDUMP. Reporting the old RLIM_INFINITY here made every crash look
+            // core-enabled, diverging from a native run (which inherits the container/host soft=0).
+        o[0] = 0;
+        o[1] = ~0ull;
+        break;
     default:
         o[0] = ~0ull; // RLIM_INFINITY
         o[1] = ~0ull;
         break;
     }
+}
+
+// Signals whose default disposition is "Core" (terminate + dump), per signal(7). Used to synthesize the
+// WCOREDUMP (0x80) bit in a wait status the way the Linux kernel decides it.
+static int sig_coredumps(int lsig) {
+    switch (lsig) {
+    case 3:  // SIGQUIT
+    case 4:  // SIGILL
+    case 5:  // SIGTRAP
+    case 6:  // SIGABRT
+    case 7:  // SIGBUS
+    case 8:  // SIGFPE
+    case 11: // SIGSEGV
+    case 24: // SIGXCPU
+    case 25: // SIGXFSZ
+    case 31: // SIGSYS
+        return 1;
+    default:
+        return 0;
+    }
+}
+
+// The guest's effective RLIMIT_CORE soft limit (rlim_cur), from the same store getrlimit reads (docker
+// --ulimit seed, or a guest setrlimit). >0 means a core-dumping signal produces a core -> WCOREDUMP set.
+static uint64_t svc_core_rlimit_cur(void) {
+    uint64_t rl[2] = {0, 0};
+    svc_fill_rlimit(4 /* RLIMIT_CORE */, rl);
+    return rl[0];
 }
 
 // Emulate the kernel's close-on-exec sweep. The JIT's execve re-loads the new image IN-PROCESS (no real
@@ -194,6 +229,7 @@ static void fork_child_hooks(struct cpu *c) {
     thread_after_fork(); // reset process-private thread/futex locks a dead peer may have held at fork
     sysv_after_fork();   // reset the SysV-shm lock (same fork-unsafe-mutex class)
     poslk_after_fork();  // #340: re-cache pid; child inherits NONE of the parent's fcntl record locks
+    wipefork_apply_child(); // MADV_WIPEONFORK: zero-fill the ranges the guest marked wipe-on-fork
     if (fp) t[4] = now_ns();
 #ifdef DD_HAS_MACH_EXC
     // The CRASHDBG Mach exception port + its receiver thread do NOT survive fork, so a crash in the
@@ -414,6 +450,18 @@ static int svc_proc(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64
         size_t n = (size_t)a1;
         // sched_getaffinity(pid,size,MASK=a2!) -- return the current mask (all online CPUs by default),
         // not just CPU 0, so CPU_COUNT() and tcmalloc's enumeration see the real width (mongod aborts).
+        // Linux validates the cpusetsize FIRST: it must be a multiple of sizeof(long) AND wide enough to
+        // hold every online CPU, else -EINVAL (LTP sched_getaffinity01). The old handler skipped this and
+        // always "succeeded", so a deliberately-tiny cpusetsize wrongly returned 0.
+        if ((n & (sizeof(unsigned long) - 1)) || n * 8 < (size_t)dd_online_cpus()) {
+            G_RET(c) = (uint64_t)(-EINVAL);
+            break;
+        }
+        // The mask itself must be writable -> EFAULT on a bad pointer (matches Linux copy_to_user).
+        if (a2 && n && !host_range_mapped((uintptr_t)a2, n < 128 ? n : 128)) {
+            G_RET(c) = (uint64_t)(-EFAULT);
+            break;
+        }
         if (n > 128) n = 128;
         if (a2 && n) memcpy((void *)a2, affinity_mask(), n);
         // Return the number of bytes the mask spans (glibc zeroes the remainder); 8 covers <=64 CPUs.
@@ -630,6 +678,9 @@ static int svc_proc(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64
         // Linux RUSAGE_THREAD(1) -> SELF
         int who = ((int)a0 == -1) ? RUSAGE_CHILDREN : RUSAGE_SELF;
         if (a1) {
+            // The 144-byte struct rusage is written directly by the engine (not via a host syscall), so a
+            // bad/unmapped pointer must return -EFAULT here rather than fault the engine (#395, access_ok).
+            if (!host_range_mapped((uintptr_t)a1, 144)) { G_RET(c) = (uint64_t)(int64_t)(-EFAULT); break; }
             uint8_t *d = (uint8_t *)a1;
             // Linux struct rusage layout (18 longs)
             memset(d, 0, 144);
@@ -1062,20 +1113,71 @@ static int svc_proc(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64
     case 260: {
         int st = 0;
         pid_t r;
+        // #238: when ptrace is already in use in this session (a tracee link exists -> nactive>0) route the
+        // wait through the ptrace pump, which surfaces tracee ptrace-stops (Linux-encoded) AND real child
+        // exits and tears a link down when its tracee dies. For the ENTIRE non-ptrace matrix nactive is 0,
+        // so this predicate is false. Returns 1 when it produced a result (r/st Linux-encoded).
+        if (ptrace_wait_active()) {
+            pid_t pr;
+            int handled = ptrace_wait(c, (pid_t)(int)a0, (int)a2, (struct rusage *)a3, &st, &pr);
+            if (handled) {
+                if (pr < 0) { G_RET(c) = (uint64_t)(int64_t)pr; break; } // -errno / -EINTR
+                if (a1) *(int *)a1 = st;
+                G_RET(c) = (uint64_t)pr;
+                break;
+            }
+        }
+        // #238 tracer-wait race guard (see ptrace.c pt_wait_arm): a child may PTRACE_TRACEME + stop AFTER
+        // this parent already blocked here (the classic strace ordering: parent waitpid()s before the child
+        // traces itself, so nactive was 0 at entry and we take this plain path). To let the tracee's stop
+        // SIGCHLD interrupt us so we can reroute, arm a benign SIGCHLD handler ONLY around the BLOCKING
+        // wait4 (a2 without WNOHANG), and ONLY if the guest has no SIGCHLD handler of its own; it is
+        // restored the instant the wait returns. This touches NOTHING outside this one blocking wait4 --
+        // no other syscall is affected, the guest's waitpid never returns a spurious EINTR (the do/while
+        // retries), and a guest that never calls wait4 is never armed. pt_wait_arm returns 0 (no-op) for a
+        // WNOHANG wait, a guest with its own SIGCHLD handler, or if the ptrace arena is absent.
+        struct sigaction pt_saved;
+        int pt_armed = ((int)a2 & 1 /*WNOHANG*/) ? 0 : pt_wait_arm(&pt_saved);
         // SA_RESTART: a wait interrupted by a handler that asked to restart (e.g. a SIGCHLD reaper, or
         // gcc's driver) must transparently retry instead of failing the guest with EINTR.
-        do { r = wait4((pid_t)(int)a0, &st, (int)a2, (struct rusage *)a3); } while (r < 0 && SVC_EINTR_RESTART(c));
+        do {
+            r = wait4((pid_t)(int)a0, &st, (int)a2, (struct rusage *)a3);
+            // Reroute to the ptrace pump if the interrupt was a tracee of ours stopping (we became a tracer
+            // while blocked). Gated on nactive>0 -> the non-ptrace matrix never enters this branch.
+            if (r < 0 && errno == EINTR && ptrace_wait_active() && ptrace_any_tracee_of_self()) {
+                pid_t pr;
+                if (ptrace_wait(c, (pid_t)(int)a0, (int)a2, (struct rusage *)a3, &st, &pr)) {
+                    pt_wait_disarm(pt_armed, &pt_saved);
+                    if (pr < 0) { G_RET(c) = (uint64_t)(int64_t)pr; goto wait_done; }
+                    if (a1) *(int *)a1 = st;
+                    G_RET(c) = (uint64_t)pr;
+                    goto wait_done;
+                }
+            }
+        } while (r < 0 && SVC_EINTR_RESTART(c));
+        pt_wait_disarm(pt_armed, &pt_saved);
         if (r < 0) {
             G_RET(c) = (uint64_t)(-errno);
             break;
         }
-        // WIFSIGNALED: macOS termsig -> Linux
-        if ((st & 0x7f) != 0 && (st & 0x7f) != 0x7f) st = (st & ~0x7f) | (sig_m2l(st & 0x7f) & 0x7f);
+        // WIFSIGNALED: macOS termsig -> Linux, and encode WCOREDUMP (0x80) exactly as Linux does. The host
+        // child dies from a real host signal (signal.c default action), but macOS almost never writes a core
+        // for it (cores off by default) and the guest's setrlimit(RLIMIT_CORE) is not applied to the host, so
+        // the host status usually lacks 0x80. Synthesize the bit from (core-dumping signal AND the guest's
+        // RLIMIT_CORE soft limit > 0) -- the Linux rule -- while still honoring the host's own core flag if it
+        // did dump. Non-core signals (SIGKILL/SIGTERM/...) or rlim_cur==0 => no bit (WCOREDUMP false).
+        int rawsig = st & 0x7f;
+        if (rawsig != 0 && rawsig != 0x7f) {
+            int lsig = sig_m2l(rawsig) & 0x7f;
+            int core = sig_coredumps(lsig) && (((st & 0x80) != 0) || svc_core_rlimit_cur() > 0);
+            st = (st & ~0xff) | lsig | (core ? 0x80 : 0);
+        }
         // WIFSTOPPED: macOS stopsig -> Linux
         else if ((st & 0xff) == 0x7f)
             st = (st & ~0xff00) | ((sig_m2l((st >> 8) & 0xff) & 0xff) << 8);
         if (a1) *(int *)a1 = st;
         G_RET(c) = (uint64_t)r;
+        wait_done:; // #238: the EINTR reroute jumps here (G_RET + *status already set)
         break;
     }
     case 261: {

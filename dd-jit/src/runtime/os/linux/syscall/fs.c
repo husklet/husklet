@@ -1366,10 +1366,18 @@ static int svc_fs(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t
                 // root, so overlay_readdir enumerates every layer. NOT for a bind-mount volume dir (its own
                 // jail, in no layer): it must list via plain readdir of the host fd; tagging it overlay ->
                 // overlay_readdir misses it -> an empty `ls` on the mount.
+                // ONLY for a DIRECTORY fd: g_ovldir tags a fd for merged-overlay getdents, and the lseek
+                // handler (io.c case 62) treats any g_ovldir-tagged fd as a directory stream -- redirecting
+                // SEEK_SET to ovldents_rewind and NOT seeking the real host fd. Tagging a regular file here
+                // therefore made lseek(fd, off, SEEK_SET) a silent no-op on it (read then served from offset
+                // 0): gpg's keyring_get_keyblock seeks to the matched keyblock's found.offset, so the wrong
+                // keyblock (the first key) was re-read -> BADSIG on apt-get update over a layered image (#391).
                 char gdir[4200];
                 if (have_canon) guest_from_host(gpa, gdir, sizeof gdir);
                 else snprintf(gdir, sizeof gdir, "%s", gp);
-                if (r < 1024 && !jail_is_vol(gdir)) snprintf(g_ovldir[r], sizeof g_ovldir[r], "%s", gdir);
+                struct stat dst;
+                if (r < 1024 && !jail_is_vol(gdir) && fstat(r, &dst) == 0 && S_ISDIR(dst.st_mode))
+                    snprintf(g_ovldir[r], sizeof g_ovldir[r], "%s", gdir);
             }
             G_RET(c) = r < 0 ? (uint64_t)(-errno) : (uint64_t)r;
             break;
@@ -1739,6 +1747,9 @@ static int svc_fs(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t
             char ep[1024];
             if (proc_self_exe(gp, ep, sizeof ep)) {
                 struct stat es;
+                // The magic /proc/self/exe always "exists", so validate the guest stat buffer now (before
+                // the engine fills it directly) -> a bad pointer is -EFAULT, matching Linux's copyout (#395).
+                if (!host_range_mapped((uintptr_t)a2, GUEST_LINUX_STAT_BYTES)) { G_RET(c) = (uint64_t)(int64_t)(-EFAULT); break; }
                 if (a3 & 0x100) { // lstat: report the magic symlink itself (Linux: st_size == 0)
                     memset(&es, 0, sizeof es);
                     es.st_mode = S_IFLNK | 0777;
@@ -1762,6 +1773,9 @@ static int svc_fs(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t
             {
                 const char *sleaf = proc_self_leaf(gp);
                 if (sleaf && (!strcmp(sleaf, "root") || !strcmp(sleaf, "cwd"))) {
+                    // Magic /proc/self/{root,cwd} always resolves; validate the guest stat buffer before the
+                    // engine fills it -> a bad pointer is -EFAULT, matching Linux's copyout ordering (#395).
+                    if (!host_range_mapped((uintptr_t)a2, GUEST_LINUX_STAT_BYTES)) { G_RET(c) = (uint64_t)(int64_t)(-EFAULT); break; }
                     char cwb[4200];
                     const char *tgt = "/";
                     // bare mode: the engine chdir()s for real, so the live host cwd IS the guest cwd
@@ -1786,11 +1800,18 @@ static int svc_fs(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t
                     }
                 }
             }
-            if (synth_stat(gp, (uint8_t *)a2)) {
-                G_RET(c) = 0;
-                break;
+            // synthesized /proc or /sys file: split synth_stat so we only validate the guest buffer once we
+            // KNOW it is a synth path (which "exists") -> a bad pointer is -EFAULT on copyout, and a
+            // non-synth path falls through to the generic handler below with Linux's normal ordering (#395).
+            {
+                struct stat synth_s;
+                if (synth_stat_raw(gp, &synth_s)) {
+                    if (!host_range_mapped((uintptr_t)a2, GUEST_LINUX_STAT_BYTES)) { G_RET(c) = (uint64_t)(int64_t)(-EFAULT); break; }
+                    fill_linux_stat((uint8_t *)a2, &synth_s, NULL, -1);
+                    G_RET(c) = 0;
+                    break;
+                }
             }
-            // synthesized /proc or /sys file
         }
         // cacheable: named path, follow
         if (raw && raw[0] && !(a3 & 0x100)) {
@@ -1800,7 +1821,12 @@ static int svc_fs(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t
                 rc = r < 0 ? -errno : 0;
                 mc_store(p, rc, &s);
             }
-            if (rc == 0) fill_linux_stat((uint8_t *)a2, &s, p, -1);
+            // Validate the guest buffer only after a successful stat (copyout-last: a bad path still
+            // reports its own errno first, matching Linux) -> a bad pointer is -EFAULT, not an engine fault.
+            if (rc == 0) {
+                if (!host_range_mapped((uintptr_t)a2, GUEST_LINUX_STAT_BYTES)) { G_RET(c) = (uint64_t)(int64_t)(-EFAULT); break; }
+                fill_linux_stat((uint8_t *)a2, &s, p, -1);
+            }
             G_RET(c) = (uint64_t)(int64_t)rc;
             break;
         }
@@ -1813,7 +1839,9 @@ static int svc_fs(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t
             G_RET(c) = (uint64_t)(-errno);
             break;
         }
-        // guest-chown xattr lives on the host backing file: read via fd for AT_EMPTY_PATH, else by path
+        // guest-chown xattr lives on the host backing file: read via fd for AT_EMPTY_PATH, else by path.
+        // The stat succeeded above, so validate the guest buffer here (copyout-last) -> bad ptr = -EFAULT.
+        if (!host_range_mapped((uintptr_t)a2, GUEST_LINUX_STAT_BYTES)) { G_RET(c) = (uint64_t)(int64_t)(-EFAULT); break; }
         fill_linux_stat((uint8_t *)a2, &s, empty_self ? NULL : p, empty_self ? (int)a0 : -1);
         G_RET(c) = 0;
         break;
@@ -1826,6 +1854,10 @@ static int svc_fs(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t
             G_RET(c) = (uint64_t)(-errno);
             break;
         }
+        // The guest stat buffer is filled DIRECTLY by the engine; validate it (after the fd/stat succeeds,
+        // so a bad fd still reports EBADF first, matching Linux's copyout-last ordering) so a bad pointer
+        // returns -EFAULT instead of faulting the engine (#395, access_ok).
+        if (!host_range_mapped((uintptr_t)a1, GUEST_LINUX_STAT_BYTES)) { G_RET(c) = (uint64_t)(int64_t)(-EFAULT); break; }
         fill_linux_stat((uint8_t *)a1, &s, NULL, (int)a0);
         G_RET(c) = 0;
         break;

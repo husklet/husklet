@@ -68,6 +68,28 @@ static void ep_prime_if_ready(int ep, int fd, int16_t filt, void *udata) {
 static uint8_t g_ep_wake_armed[1024];          // per epoll fd: EVFILT_USER wake knote installed on its kqueue
 static pthread_mutex_t g_ep_mtx = PTHREAD_MUTEX_INITIALIZER;
 
+// #396: per-epoll-instance registered-fd membership (lazily allocated 1024-bit bitmap indexed by the
+// watched fd). kqueue silently accepts an EV_ADD of an already-armed filter and an EV_DELETE of an
+// absent one, but Linux epoll_ctl returns EEXIST / ENOENT respectively, so track membership to serve
+// those (plus EINVAL for adding the epoll fd to itself and EPERM for a regular file / directory). Only
+// dd-tracked epoll fds (< 1024, g_epoll set) get this surface -- a dup'd/large epfd keeps the existing
+// best-effort immediate path, so correct software's readiness path is byte-unchanged.
+static uint8_t *g_ep_member[1024];
+static int ep_mem_test(int ep, int fd) {
+    if (ep < 0 || ep >= 1024 || fd < 0 || fd >= 1024 || !g_ep_member[ep]) return 0;
+    return (g_ep_member[ep][fd >> 3] >> (fd & 7)) & 1;
+}
+static void ep_mem_set(int ep, int fd, int on) {
+    if (ep < 0 || ep >= 1024 || fd < 0 || fd >= 1024) return;
+    if (!g_ep_member[ep]) { if (!on) return; g_ep_member[ep] = calloc(1024 / 8, 1); if (!g_ep_member[ep]) return; }
+    if (on) g_ep_member[ep][fd >> 3] |= (uint8_t)(1u << (fd & 7));
+    else g_ep_member[ep][fd >> 3] &= (uint8_t) ~(1u << (fd & 7));
+}
+static void ep_mem_clear(int ep) {
+    if (ep < 0 || ep >= 1024) return;
+    if (g_ep_member[ep]) { free(g_ep_member[ep]); g_ep_member[ep] = NULL; }
+}
+
 // Capture g_threaded into the returned token so lock/unlock stay balanced even if a peer thread flips
 // g_threaded (0->1 on its first clone) between the two calls. Single-threaded (token 0) takes no lock.
 static inline int ep_lock(void) { int lk = g_threaded; if (lk) pthread_mutex_lock(&g_ep_mtx); return lk; }
@@ -123,6 +145,7 @@ static void kqueue_rebuild_after_fork(void) {
         g_ep_chgn[fd] = g_ep_chgcap[fd] = 0;
         if (g_ep_prime[fd]) { free(g_ep_prime[fd]); g_ep_prime[fd] = NULL; }
         g_ep_primen[fd] = g_ep_primecap[fd] = 0;
+        ep_mem_clear(fd); // the rebuilt kqueue carries no registrations -> drop stale membership too
     }
     // every kqueue was rebuilt empty -> no watched fd is armed on any instance anymore (the armed map is
     // per-watched-fd and shared across epoll instances, so clear it wholesale to match the fresh kqueues).
@@ -173,12 +196,15 @@ static int svc_event(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint6
         break;
     }
     case 20: {
-        // epoll_create1(flags) -> kqueue
+        // epoll_create1(flags) -> kqueue. Only EPOLL_CLOEXEC (0x80000) is defined; any other bit is
+        // rejected with EINVAL by the Linux kernel (LTP epoll_create1_01).
+        if (a0 & ~0x80000u) { G_RET(c) = (uint64_t)(-EINVAL); break; }
         int r = kqueue();
         // EPOLL_CLOEXEC
         if (r >= 0 && (a0 & 0x80000)) fcntl(r, F_SETFD, FD_CLOEXEC);
-        // a reused fd number must start with an empty prime buffer + no stale wake knote (close() doesn't clear ours)
-        if (r >= 0 && r < 1024) { g_ep_primen[r] = 0; g_ep_wake_armed[r] = 0; g_epoll[r] = 1; }
+        // a reused fd number must start with an empty prime buffer + no stale wake knote + no stale membership
+        // (close() doesn't clear ours -- this is how an epoll fd's per-instance state is reset on reuse)
+        if (r >= 0 && r < 1024) { g_ep_primen[r] = 0; g_ep_wake_armed[r] = 0; g_epoll[r] = 1; ep_mem_clear(r); }
         G_RET(c) = r < 0 ? (uint64_t)(-errno) : (uint64_t)r;
         break;
     }
@@ -191,6 +217,21 @@ static int svc_event(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint6
             ev = *(uint32_t *)a3;
             memcpy(&data, (void *)(a3 + G_EPEV_DOFF), 8);
             // struct epoll_event {u32 events; [pad;] u64 data} -- layout per guest arch (see G_EPEV_*)
+        }
+        // #396: epoll_ctl error surface (Linux return-value semantics kqueue does not enforce). Confined to a
+        // dd-tracked epoll instance (< 1024, g_epoll set) watching an fd < 1024 -- these fire ONLY on inputs
+        // that already error on Linux, so correct software's ADD/MOD/DEL readiness path is byte-unchanged.
+        if ((int)a0 >= 0 && (int)a0 < 1024 && g_epoll[(int)a0] && fd >= 0 && fd < 1024) {
+            int ep = (int)a0;
+            if (fd == ep) { G_RET(c) = (uint64_t)(-EINVAL); break; }                    // can't watch the epoll fd itself
+            int member = ep_mem_test(ep, fd);
+            if (op == 1 && member) { G_RET(c) = (uint64_t)(-EEXIST); break; }            // ADD an already-registered fd
+            if ((op == 2 || op == 3) && !member) { G_RET(c) = (uint64_t)(-ENOENT); break; } // MOD/DEL an absent fd
+            if (op == 1) {
+                struct stat st;
+                if (fstat(fd, &st) == 0 && (S_ISREG(st.st_mode) || S_ISDIR(st.st_mode))) { G_RET(c) = (uint64_t)(-EPERM); break; }
+            }
+            if (op == 1 || op == 3 || op == 2) ep_mem_set(ep, fd, op != 2);             // commit membership
         }
         // op: 1=ADD 2=DEL 3=MOD ; EPOLLET=0x80000000 -> EV_CLEAR ; EPOLLONESHOT=0x40000000 -> EV_ONESHOT
         uint16_t xf = (uint16_t)((ev & 0x80000000u ? EV_CLEAR : 0) | (ev & 0x40000000u ? EV_ONESHOT : 0));
@@ -443,14 +484,52 @@ static int svc_event(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint6
     }
     case 72: { // pselect6(nfds, readfds, writefds, exceptfds, timeout(timespec), sigmask) -> pselect.
         // The Linux/macOS fd_set byte-layout is identical (bit N at byte N/8), so pass the sets through.
-        struct timespec ts, *tsp = NULL;
-        if (a4) {
-            ts = *(struct timespec *)a4;
-            tsp = &ts;
+        int have_to = a4 != 0;
+        if (have_to && !host_range_mapped((uintptr_t)a4, sizeof(struct timespec))) {
+            G_RET(c) = (uint64_t)(-EFAULT); // faulty timeout pointer -> EFAULT, like the Linux kernel
+            break;
+        }
+        // #396: a spurious EINTR (a signal dd hooks with host_sigh but the guest has BLOCKED or defaults to
+        // ignore -- e.g. an LTP heartbeat, or SIGCHLD from a reaped child) interrupts the host pselect but
+        // must NOT restart the FULL original timeout: that overshoots the deadline and, under a *repeating*
+        // spurious wakeup, never reaches it -> select02 hangs (and every timing sample overshoots -> the
+        // select01/poll02/pselect01 tst_timer FAILs). Capture a monotonic deadline once and re-block only
+        // for the time that remains, exactly like epoll_pwait (case 22). Linux ALSO writes the leftover time
+        // back into the timeout struct (both select(2) and the raw pselect6(2) syscall do), so mirror that.
+        struct timespec deadline = {0, 0};
+        if (have_to) {
+            struct timespec ts = *(struct timespec *)a4;
+            clock_gettime(CLOCK_MONOTONIC, &deadline);
+            deadline.tv_sec += ts.tv_sec;
+            deadline.tv_nsec += ts.tv_nsec;
+            if (deadline.tv_nsec >= 1000000000L) { deadline.tv_sec++; deadline.tv_nsec -= 1000000000L; }
         }
         int r;
-        // #146: pselect is never restarted by a handler; retry only on a spurious EINTR (see svc_poll_retry).
-        do { r = pselect((int)a0, (fd_set *)a1, (fd_set *)a2, (fd_set *)a3, tsp, NULL); } while (r < 0 && svc_poll_retry(c));
+        for (;;) {
+            struct timespec rem, *tsp = NULL;
+            if (have_to) {
+                struct timespec now;
+                clock_gettime(CLOCK_MONOTONIC, &now);
+                int64_t ns = (int64_t)(deadline.tv_sec - now.tv_sec) * 1000000000LL + (deadline.tv_nsec - now.tv_nsec);
+                if (ns < 0) ns = 0;
+                rem.tv_sec = (time_t)(ns / 1000000000LL);
+                rem.tv_nsec = (long)(ns % 1000000000LL);
+                tsp = &rem;
+            }
+            r = pselect((int)a0, (fd_set *)a1, (fd_set *)a2, (fd_set *)a3, tsp, NULL);
+            // #146: pselect is never restarted by a handler; loop only on a spurious EINTR (svc_poll_retry),
+            // and then only for the time that remains (recomputed above), never the full budget again.
+            if (r < 0 && svc_poll_retry(c)) continue;
+            break;
+        }
+        if (r >= 0 && have_to) {
+            struct timespec now;
+            clock_gettime(CLOCK_MONOTONIC, &now);
+            int64_t ns = (int64_t)(deadline.tv_sec - now.tv_sec) * 1000000000LL + (deadline.tv_nsec - now.tv_nsec);
+            if (ns < 0) ns = 0;
+            ((struct timespec *)a4)->tv_sec = (time_t)(ns / 1000000000LL);
+            ((struct timespec *)a4)->tv_nsec = (long)(ns % 1000000000LL);
+        }
         G_RET(c) = r < 0 ? (uint64_t)(-errno) : (uint64_t)r;
         break;
     }
@@ -464,17 +543,56 @@ static int svc_event(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint6
         // poll returned immediately -> s6 saw a spurious timeout in the UP state and busy-looped printing
         // "can't happen: timeout while the service is up!". Clamp the conversion to [0, 0x7fffffff] ms.
         struct timespec *ts = (void *)a2;
-        int tmo;
-        if (!ts) tmo = -1;                                     // NULL timespec -> block forever
-        else if (ts->tv_sec < 0) tmo = 0;                      // past/negative deadline -> don't block
-        else if (ts->tv_sec >= 0x7fffffff / 1000) tmo = 0x7fffffff; // would overflow ms range -> cap (~24.8d)
+        if (ts && !host_range_mapped((uintptr_t)a2, sizeof(struct timespec))) {
+            G_RET(c) = (uint64_t)(-EFAULT); // faulty timeout pointer -> EFAULT, like the Linux kernel
+            break;
+        }
+        int have_to = ts != NULL;
+        // Full requested budget in ms, clamped (see #290 above).
+        int tmo_full;
+        if (!ts) tmo_full = -1;                                     // NULL timespec -> block forever
+        else if (ts->tv_sec < 0) tmo_full = 0;                      // past/negative deadline -> don't block
+        else if (ts->tv_sec >= 0x7fffffff / 1000) tmo_full = 0x7fffffff; // would overflow ms range -> cap (~24.8d)
         else {
             long long ms = (long long)ts->tv_sec * 1000 + ts->tv_nsec / 1000000;
-            tmo = ms > 0x7fffffff ? 0x7fffffff : (int)ms;
+            tmo_full = ms > 0x7fffffff ? 0x7fffffff : (int)ms;
+        }
+        // #396: like pselect (case 72), a spurious EINTR must re-block only for the REMAINING time, not the
+        // full budget again -- otherwise a repeating hooked-but-blocked signal restarts the timeout forever
+        // (the select02-class hang) and every finite wait overshoots. Capture the deadline once.
+        struct timespec deadline = {0, 0};
+        if (have_to && tmo_full > 0) {
+            clock_gettime(CLOCK_MONOTONIC, &deadline);
+            deadline.tv_sec += tmo_full / 1000;
+            deadline.tv_nsec += (long)(tmo_full % 1000) * 1000000L;
+            if (deadline.tv_nsec >= 1000000000L) { deadline.tv_sec++; deadline.tv_nsec -= 1000000000L; }
         }
         int r;
-        // #146: poll/ppoll is never restarted by a handler; retry only on a spurious EINTR (see svc_poll_retry).
-        do { r = poll(fds, (nfds_t)a1, tmo); } while (r < 0 && svc_poll_retry(c));
+        for (;;) {
+            int tmo = tmo_full;
+            if (have_to && tmo_full > 0) {
+                struct timespec now;
+                clock_gettime(CLOCK_MONOTONIC, &now);
+                int64_t ms = (int64_t)(deadline.tv_sec - now.tv_sec) * 1000LL + (deadline.tv_nsec - now.tv_nsec) / 1000000LL;
+                tmo = ms < 0 ? 0 : (ms > 0x7fffffff ? 0x7fffffff : (int)ms);
+            }
+            r = poll(fds, (nfds_t)a1, tmo);
+            // #146: poll/ppoll is never restarted by a handler; loop only on a spurious EINTR (svc_poll_retry).
+            if (r < 0 && svc_poll_retry(c)) continue;
+            break;
+        }
+        // Linux ppoll(2) writes the leftover time back into the timespec (glibc's ppoll wrapper hides it via
+        // a local copy, so this is invisible to POSIX callers but correct for the raw syscall).
+        if (r >= 0 && have_to) {
+            struct timespec left = {0, 0};
+            if (tmo_full > 0) {
+                struct timespec now;
+                clock_gettime(CLOCK_MONOTONIC, &now);
+                int64_t ns = (int64_t)(deadline.tv_sec - now.tv_sec) * 1000000000LL + (deadline.tv_nsec - now.tv_nsec);
+                if (ns > 0) { left.tv_sec = (time_t)(ns / 1000000000LL); left.tv_nsec = (long)(ns % 1000000000LL); }
+            }
+            *ts = left;
+        }
         G_RET(c) = r < 0 ? (uint64_t)(-errno) : (uint64_t)r;
         break;
     }
