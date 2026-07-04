@@ -6,7 +6,7 @@
 //! siginfo (CLD_EXITED/CLD_KILLED), and getrusage accounting — portable golden verdicts. Plus the
 //! Linux-only prlimit, clone3, and direct futex, diffed against a native oracle.
 #![allow(unused_imports)]
-use crate::{group, src, port, fixture, in_rootfs, Case, Engine, Group};
+use crate::{group, src, src_nopie, port, fixture, in_rootfs, Case, Engine, Group};
 
 const LIN: &[Engine] = &[Engine::LinuxAarch64, Engine::LinuxX86_64];
 
@@ -31,6 +31,16 @@ fn processx_linux() -> Group {
         // made=0) — an oracle artifact, not an engine gap (cf. pidfd/process_vm). xfail x86_64.
         src("clone3", "ext_proc/clone3.c").oracle().xfail(&[Engine::LinuxX86_64]),
         src("futex", "ext_proc/futex.c").oracle(),       // direct FUTEX_WAIT/FUTEX_WAKE
+        // #419 (extends #409): non-PIE ET_EXEC pointer-arg rebase. Built static -no-pie (src_nopie) so the
+        // loader biases the image high and dispatch.c's non-PIE g2h rebase switch (g_nonpie_lo) is armed —
+        // the ONLY build that exercises it. Every syscall pointer here is a LOW static .bss/.data address;
+        // the guard prints "name=ok" iff the valid pointer was NOT rejected with EFAULT, so a regressed
+        // rebase flips a token (or crashes the run) and the .oracle() byte-compare vs native diverges. Covers
+        // getgroups/semop/msgsnd (the report) plus the whole audited class: creds (capget/getres*), SysV IPC
+        // (msgsnd/msgrcv/semop/semtimedop/semctl/shmctl), rt_signal (procmask/pending/action/altstack/
+        // timedwait/sigqueue/tgsigqueueinfo), sched/rlimit (get/setrlimit/getaffinity/getattr/futex), wait4,
+        // and poll/select (pselect/ppoll). Environment-independent verdicts keep native==JIT byte-exact.
+        src_nopie("nonpie-ptrargs", "ext_proc/nonpie_ptrargs.c").oracle(),
         // #400: cross-process futex on a MAP_SHARED page across fork() (LTP fork04 / tst_checkpoint).
         // A FUTEX_WAKE in one process must wake a FUTEX_WAIT in another on the same shared physical
         // page (both directions), plus WAIT-timeout=ETIMEDOUT and WAKE(N) of N cross-process waiters.

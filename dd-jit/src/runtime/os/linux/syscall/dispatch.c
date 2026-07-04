@@ -558,6 +558,8 @@ static void service_local(struct cpu *c) {
         case 65:  // readv(fd, IOVEC, n)
         case 66:  // writev(fd, IOVEC, n)
         case 69:  // preadv(fd, IOVEC, n, off)
+        case 286: // preadv2(fd, IOVEC, n, off, off_hi, flags)  -- same (iov=a1, iovcnt=a2) shape (#419)
+        case 287: // pwritev2(fd, IOVEC, n, off, off_hi, flags) -- same shape; inner iov_base rebased too
         case 70: { // pwritev(fd, IOVEC, n, off)
             a1 = nonpie_p(a1);
             int niov = (int)a2;
@@ -572,9 +574,12 @@ static void service_local(struct cpu *c) {
             }
             break;
         }
-        case 17:                           // getcwd(BUF, size)
-        case 160:                          // uname(UTSBUF)
-        case 73: a0 = nonpie_p(a0); break; // ppoll(FDS, n, tmo, sigmask, sz)
+        case 17:                            // getcwd(BUF, size)
+        case 160: a0 = nonpie_p(a0); break; // uname(UTSBUF)
+        case 73:                            // ppoll(FDS, n, TMO, sigmask, sz): the handler dereferences BOTH
+            a0 = nonpie_p(a0);              //   the pollfd array (a0) AND the timespec deadline (a2, read for
+            a2 = nonpie_p(a2);              //   the budget and written back with the remaining time). sigmask
+            break;                          //   (a3) is ignored by the handler, so only a0+a2 need rebasing.
         case 207:                          // recvfrom(fd, BUF, len, fl, SRCADDR, alen)
         case 206:
             a1 = nonpie_p(a1);
@@ -713,6 +718,120 @@ static void service_local(struct cpu *c) {
             a3 = nonpie_p(a3);
             break;
         case 107: // timer_create(clockid, SIGEVENT, TIMERID) -- sigevent read / timer id written
+            a1 = nonpie_p(a1);
+            a2 = nonpie_p(a2);
+            break;
+        // #419: the remaining pointer-arg syscalls whose handler dereferences the guest pointer DIRECTLY (a
+        // host-syscall deref, or the engine reading/writing the guest struct itself) that were still missing
+        // from this switch -- so a non-PIE guest handing a low .bss/.rodata/.data pointer EFAULTed (or, for the
+        // unguarded handlers, SIGSEGV'd the engine) on a VALID pointer. This is the getgroups/semop/msgsnd
+        // report plus the WHOLE class audited alongside it: the credential, SysV-IPC, rt_signal, sched/rlimit,
+        // poll/select and POSIX-mqueue families. Numbers are the aarch64-canonical ones the x86 guest is
+        // normalized onto BEFORE this switch; on x86 the arg was already biased HIGH by the loader/translator
+        // (elf.c/mov.c), so nonpie_p is inert there -> ONE case covers both arches with no double-rebase,
+        // exactly like the shared cases above. (Inert for PIE/static-PIE: the whole switch is gated on
+        // g_nonpie_lo, which the entire test matrix leaves 0.)
+        // -- credentials (proc.c: the buffers are written directly / guarded by guest_bad_ptr) --
+        case 90:  // capget(HDRP, DATAP)
+        case 91:  // capset(HDRP, DATAP)
+            a0 = nonpie_p(a0);
+            a1 = nonpie_p(a1);
+            break;
+        case 148: // getresuid(RUID, EUID, SUID) -- all three written directly
+        case 150: // getresgid(RGID, EGID, SGID)
+            a0 = nonpie_p(a0);
+            a1 = nonpie_p(a1);
+            a2 = nonpie_p(a2);
+            break;
+        case 158: // getgroups(size, LIST) -- list written directly (or via host getgroups)
+            a1 = nonpie_p(a1);
+            break;
+        // -- SysV IPC (sysv.c) --
+        case 188: // msgrcv(msqid, MSGP, sz, typ, flg) -- msgp written by host msgrcv
+        case 189: // msgsnd(msqid, MSGP, sz, flg)      -- msgp read by host msgsnd
+        case 193: // semop(semid, SOPS, nsops)         -- sops read by host semop
+            a1 = nonpie_p(a1);
+            break;
+        case 192: // semtimedop(semid, SOPS, nsops, TIMEOUT) -- sops (+timeout; harmless if the handler,
+            a1 = nonpie_p(a1);                                //   which routes to semop, ignores it)
+            a3 = nonpie_p(a3);
+            break;
+        case 191: // semctl(semid, semnum, CMD, arg): arg(a3) is a pointer ONLY for GETALL(13)/SETALL(17);
+            if (a2 == 13 || a2 == 17) a3 = nonpie_p(a3); //   SETVAL(16)'s a3 is an int val -> never rebased
+            break;
+        case 195: // shmctl(shmid, cmd, BUF): IPC_STAT marshals the host struct into buf(a2) directly
+            a2 = nonpie_p(a2);
+            break;
+        // -- rt_signal family (signal.c, + rt_tgsigqueueinfo in rare.c): the sigset/siginfo/sigaction/altstack/
+        //    timespec structs are read or written through the guest pointer directly (rt_sigaction EFAULTs via
+        //    host_range_mapped on a low ptr; the others would fault the engine) --
+        case 132: // sigaltstack(NEW, OLD)         -- new read, old written
+        case 134: // rt_sigaction(sig, ACT, OLD)   -- act read, old written
+        case 135: // rt_sigprocmask(how, SET, OLD) -- set read, old written
+            a1 = nonpie_p(a1);
+            a2 = nonpie_p(a2);
+            break;
+        case 133: // rt_sigsuspend(UNEWSET, sz) -- mask read directly
+        case 136: // rt_sigpending(SET, sz)     -- pending set written directly
+            a0 = nonpie_p(a0);
+            break;
+        case 137: // rt_sigtimedwait(SET, INFO, TIMEOUT, sz) -- set read, info written, timeout read
+            a0 = nonpie_p(a0);
+            a1 = nonpie_p(a1);
+            a2 = nonpie_p(a2);
+            break;
+        case 138: // rt_sigqueueinfo(tgid, sig, INFO)        -- siginfo read directly
+            a2 = nonpie_p(a2);
+            break;
+        case 240: // rt_tgsigqueueinfo(tgid, tid, sig, INFO)  -- siginfo read directly (rare.c handler)
+            a3 = nonpie_p(a3);
+            break;
+        // -- sched / rlimit / wait (rare.c + proc.c) --
+        case 95:  // waitid(idtype, id, INFOP, options) -- siginfo written (host_range_mapped guard EFAULTs low)
+            a2 = nonpie_p(a2);
+            break;
+        case 98:  // futex(UADDR, op, val, TIMEOUT, ...) -- uaddr + timeout are dereferenced by futex_op; a
+            a0 = nonpie_p(a0);                            //   non-PIE static libc's lock word / timespec live
+            a3 = nonpie_p(a3);                            //   in .bss at a low link vaddr (uaddr2 a4 is unused)
+            break;
+        case 163: // getrlimit(res, RLIM) -- rlim written
+        case 164: // setrlimit(res, RLIM) -- rlim read
+        case 275: // sched_getattr(pid, ATTR, size, flags) -- attr zeroed+written directly
+            a1 = nonpie_p(a1);
+            break;
+        case 260: // wait4(pid, STATUS, opts, RUSAGE) -- status + rusage written directly
+            a1 = nonpie_p(a1);
+            a3 = nonpie_p(a3);
+            break;
+        // -- poll / select (event.c): the pollfd/fd_set/timespec buffers are read+written directly --
+        case 22:  // epoll_pwait(epfd, EVENTS, max, tmo, SIGMASK) -- events written (sigmask a4 handler-ignored)
+            a1 = nonpie_p(a1);
+            a4 = nonpie_p(a4);
+            break;
+        case 72:  // pselect6(n, READFDS, WRITEFDS, EXCEPTFDS, TIMEOUT, sigmask) -- all four deref'd directly
+            a1 = nonpie_p(a1);
+            a2 = nonpie_p(a2);
+            a3 = nonpie_p(a3);
+            a4 = nonpie_p(a4);
+            break;
+        // -- POSIX message queues (rare.c: name/msg/attr/timeout read or written directly) --
+        case 180: // mq_open(NAME, oflag, mode, ATTR) -- name string + attr read
+            a0 = nonpie_p(a0);
+            a3 = nonpie_p(a3);
+            break;
+        case 181: // mq_unlink(NAME)
+            a0 = nonpie_p(a0);
+            break;
+        case 182: // mq_timedsend(mqdes, MSG, len, prio, TIMEOUT) -- msg read (+timeout)
+            a1 = nonpie_p(a1);
+            a4 = nonpie_p(a4);
+            break;
+        case 183: // mq_timedreceive(mqdes, MSG, len, PRIO, TIMEOUT) -- msg + prio written (+timeout)
+            a1 = nonpie_p(a1);
+            a3 = nonpie_p(a3);
+            a4 = nonpie_p(a4);
+            break;
+        case 185: // mq_getsetattr(mqdes, NEWATTR, OLDATTR) -- oldattr written (newattr ignored by handler)
             a1 = nonpie_p(a1);
             a2 = nonpie_p(a2);
             break;
