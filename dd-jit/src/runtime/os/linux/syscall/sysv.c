@@ -199,5 +199,9 @@ static int svc_sysv(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64
     }
     default: return 0;
     }
-    return 1;
+    // Map the host(macOS) errno left in G_RET to the Linux errno the guest expects (e.g. SysV msgrcv
+    // IPC_NOWAIT on an empty queue -> macOS ENOMSG=91, Linux ENOMSG=42). Like every other svc_<family>()
+    // tail, sysv early-returns from service_local before its trailing m2l boundary, so it must translate
+    // here — otherwise the raw macOS errno (identical only for the low 1..34 codes) leaks to the guest.
+    return svc_done(c);
 }

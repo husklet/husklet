@@ -11,7 +11,7 @@ use crate::{group, src, port, fixture, in_rootfs, Case, Engine, Group};
 
 const LIN: &[Engine] = &[Engine::LinuxAarch64, Engine::LinuxX86_64];
 
-pub fn groups() -> Vec<Group> { vec![fsx_portable(), fsx_linux()] }
+pub fn groups() -> Vec<Group> { vec![fsx_portable(), fsx_xattr_edge(), fsx_linux()] }
 
 /// Portable fs surface — golden verdict identical emulated-on-Linux and native-on-macOS.
 fn fsx_portable() -> Group {
@@ -27,6 +27,15 @@ fn fsx_portable() -> Group {
         // host backing inode (set/get/list/remove all persist), and copy-up carries them (overlay G5).
         // (darwin uses the 6-arg setxattr, branched in-source.)
         port("xattr", "ext_fsx/xattr.c").out("xattr set=1 roundtrip=1 listed=1 removed=1 gone=1\n"),
+    ])
+}
+
+/// xattr errno/edge fidelity (LTP setxattr/getxattr/removexattr family): ENODATA on a missing attr,
+/// EEXIST for XATTR_CREATE on an existing one, ERANGE for a too-small buffer, the size==0 length-probe.
+/// Linux-only errno shapes with no portable form — diffed vs the native oracle on both Linux engines.
+fn fsx_xattr_edge() -> Group {
+    group("ext-fsx-xattr", vec![
+        src("xattr-edge", "ext_fsx/xattr_edge.c").oracle(),
     ])
 }
 

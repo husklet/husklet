@@ -193,15 +193,20 @@ static int xattr_hostpath(const char *path, int nofollow, int forwrite, char *ho
     secure_resolve(gp, host, hn, nofollow);
     return 0;
 }
-static int ddx_opt(uint64_t flags, int nofollow) {
-    int o = nofollow ? XATTR_NOFOLLOW : 0;
-    if (flags & 1) o |= XATTR_CREATE;  // Linux XATTR_CREATE
-    if (flags & 2) o |= XATTR_REPLACE; // Linux XATTR_REPLACE
-    return o;
-}
-static long ddx_set(const char *host, const char *name, const void *val, size_t sz, int opt) {
+// setxattr with Linux XATTR_CREATE/XATTR_REPLACE semantics. macOS honours each flag alone, but rejects
+// the *combination* with EINVAL — where Linux's simple_xattr_set never does: it tests XATTR_CREATE first
+// (an if/else-if), so CREATE+REPLACE on an existing attr yields EEXIST, on a missing one yields ENODATA.
+// So we resolve the create/replace precondition ourselves against a host existence probe and hand macOS
+// a plain set (flags=0), which reproduces the kernel byte-for-byte and never leaks macOS's EINVAL.
+static long ddx_set(const char *host, const char *name, const void *val, size_t sz, uint64_t lflags, int nofollow) {
     char hn[512];
     snprintf(hn, sizeof hn, "%s%s", DDX_PFX, name ? name : "");
+    int opt = nofollow ? XATTR_NOFOLLOW : 0;
+    if (lflags & 3) { // XATTR_CREATE(1) | XATTR_REPLACE(2)
+        int exists = getxattr(host, hn, NULL, 0, 0, opt) >= 0;
+        if ((lflags & 1) && exists) return -EEXIST;      // XATTR_CREATE on an existing attr
+        if ((lflags & 2) && !exists) return -ENOATTR;    // XATTR_REPLACE on a missing attr -> ENODATA (m2l)
+    }
     return setxattr(host, hn, val, sz, 0, opt) < 0 ? -errno : 0;
 }
 static long ddx_get(const char *host, const char *name, void *val, size_t sz, int opt) {
@@ -252,7 +257,7 @@ static int svc_fs(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t
         if (nr == 7) e = fcntl((int)a0, F_GETPATH, host) == 0 ? 0 : -EBADF;
         else e = xattr_hostpath((const char *)a0, nr == 6, 1, host, sizeof host);
         if (e < 0) { G_RET(c) = (uint64_t)(int64_t)e; break; }
-        G_RET(c) = (uint64_t)(int64_t)ddx_set(host, (const char *)a1, (const void *)a2, (size_t)a3, ddx_opt(a4, nr == 6));
+        G_RET(c) = (uint64_t)(int64_t)ddx_set(host, (const char *)a1, (const void *)a2, (size_t)a3, a4, nr == 6);
         break;
     }
     // getxattr(8)/lgetxattr(9)/fgetxattr(10): a0=path|fd, a1=name, a2=val, a3=size
