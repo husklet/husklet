@@ -414,7 +414,15 @@ static void raise_guest_signal(struct cpu *c, int sig) {
 // back to run_guest -- its maybe_deliver_signal builds the frame in the engine's own stack context (the
 // exact, already-tested async-delivery path). A synchronous fault cannot be ignored or masked, so force it
 // deliverable first.
-static int deliver_guest_fault(int hostsig, siginfo_t *si, void *ucv) {
+// `cpu_hint` names the FAULTING thread's cpu, for a caller that does NOT run on that thread. The POSIX
+// guard (nonpie_guard) runs ON the faulting thread, so it passes NULL and we read the cpu from this
+// thread's TLS. The CRASHDBG aarch64 Mach handler (mach_resolve_fault) runs on a DEDICATED exc_thread whose
+// g_cpu_key TLS is NULL -- so it MUST pass the faulting thread's cpu explicitly (recovered from that
+// thread's x28==CPUREG register), or every guest-handled fault (a gcc/cc1/JVM/Go SIGSEGV handler, glibc
+// stack-overflow detection, ...) is wrongly declined here and reported as a spurious [MACH] crash instead
+// of being delivered. The hint is only ever dereferenced after sigframe_capture_fault confirms the faulting
+// host PC is inside the code cache, where x28==cpu holds by construction, so a stale hint is never used.
+static int deliver_guest_fault_hint(struct cpu *cpu_hint, int hostsig, siginfo_t *si, void *ucv) {
     int sig = sig_m2l(hostsig);
     if (sig < 1 || sig > 64 || !ucv) return 0;
     // #392: Linux reports a BAD-ADDRESS fault (unmapped page / PROT_NONE guard / a stack overflow into the
@@ -428,7 +436,7 @@ static int deliver_guest_fault(int hostsig, siginfo_t *si, void *ucv) {
         sig = 11;
     // SIG_DFL/SIG_IGN: not the guest's to handle -> let the guard re-raise (a real crash).
     if (g_sigact[sig].handler <= 1) return 0;
-    struct cpu *c = (struct cpu *)pthread_getspecific(g_cpu_key);
+    struct cpu *c = cpu_hint ? cpu_hint : (struct cpu *)pthread_getspecific(g_cpu_key);
     if (!c) return 0;
     if (!sigframe_capture_fault(c, ucv)) {
         // The faulting host PC is NOT inside translated code, so this is not the guest's own CPU fault.
@@ -457,6 +465,10 @@ static int deliver_guest_fault(int hostsig, siginfo_t *si, void *ucv) {
     __atomic_or_fetch(&g_pending, 1ull << sig, __ATOMIC_SEQ_CST);
     sigframe_resume_dispatch(c, ucv);
     return 1;
+}
+// POSIX-guard entry: the faulting thread IS this thread, so its cpu is in TLS (cpu_hint == NULL).
+static int deliver_guest_fault(int hostsig, siginfo_t *si, void *ucv) {
+    return deliver_guest_fault_hint(NULL, hostsig, si, ucv);
 }
 
 // #392: a GENUINE synchronous CPU fault (SIGSEGV/SIGBUS/...) taken in translated code for which the guest

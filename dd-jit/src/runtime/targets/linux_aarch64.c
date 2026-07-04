@@ -164,7 +164,13 @@ static int mach_resolve_fault(mach_port_t thread, int hostsig, uint64_t fault, a
     // nonpie_fixup self-declines when the fault is not a non-PIE low-range access; deliver_guest_fault
     // self-declines (returns 0) when the guest has no handler or the host PC is outside the code cache
     // (a genuine engine fault) -- both then fall through to the [MACH] crash report below.
-    if (!nonpie_fixup(&si, &uc) && !deliver_guest_fault(hostsig, &si, &uc)) return 0;
+    // This runs on the dedicated exc_thread, NOT the faulting thread, so g_cpu_key TLS is NULL here --
+    // pass the FAULTING thread's cpu explicitly. x28 is the engine's reserved CPUREG in translated code
+    // (cpu_aarch64.h), so ss->__x[28] is the faulting thread's struct cpu whenever the fault is in the
+    // code cache -- the only case deliver_guest_fault_hint dereferences it (it validates the host PC first).
+    // Without this the exc_thread found no cpu and declined EVERY guest-handled fault -> a spurious [MACH].
+    struct cpu *fcpu = (struct cpu *)ss->__x[28];
+    if (!nonpie_fixup(&si, &uc) && !deliver_guest_fault_hint(fcpu, hostsig, &si, &uc)) return 0;
     thread_set_state(thread, ARM_THREAD_STATE64, (thread_state_t)&mc.__ss, ARM_THREAD_STATE64_COUNT);
     thread_set_state(thread, ARM_NEON_STATE64, (thread_state_t)&mc.__ns, ARM_NEON_STATE64_COUNT);
     return 1;
