@@ -88,9 +88,11 @@ int main(void) {
         char line[64];
         read_line(cs, line, sizeof line);
         if (strncmp(line, "PUT ", 4) == 0) {
-            char sql[96];
-            snprintf(sql, sizeof sql, "INSERT INTO t(v) VALUES(%d);", atoi(line + 4));
-            sqlite3_exec(db, sql, 0, 0, 0);
+            sqlite3_stmt *ins;
+            sqlite3_prepare_v2(db, "INSERT INTO t(v) VALUES(?);", -1, &ins, 0);
+            sqlite3_bind_int(ins, 1, atoi(line + 4));
+            sqlite3_step(ins);
+            sqlite3_finalize(ins);
             write(cs, "ok\n", 3);
             close(cs);
         } else if (strncmp(line, "STAT", 4) == 0) {
