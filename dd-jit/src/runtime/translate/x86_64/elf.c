@@ -819,6 +819,12 @@ void jit86_faulth(int sig, siginfo_t *si, void *uc) {
     // host_range_mapped probe fault (thread.c) -- resolve it silently even on this diagnostic path, so a
     // FAULT_ON trace run doesn't dump a bogus [FAULT] for every EFAULT-probing syscall and die.
     if (hrm_fault_hook(si)) return; // never actually returns on a claim (siglongjmp); shape-only
+    // #223: a non-PIE absolute DATA ref into the low link range is a LEGITIMATE access served at +bias, not a
+    // crash -- consult nonpie_fixup FIRST (as the run-path jit86_lazyguard / jit86_syncguard do) so a FAULT_ON
+    // diagnostic run of a non-PIE glibc binary (e.g. node --version) resolves and continues instead of dumping
+    // a bogus [FAULT] and _exit(133)ing. Self-declines (returns 0) for any address outside [lo,hi) or a host
+    // form it can't decode, falling through to the real diagnostics below. Inert for PIE (g_nonpie_lo == 0).
+    if (nonpie_fixup(si, uc)) return;
     struct cpu *c = (struct cpu *)pthread_getspecific(g_cpu_key);
     static const char *nm[16] = {"rax", "rcx", "rdx", "rbx", "rsp", "rbp", "rsi", "rdi",
                                  "r8",  "r9",  "r10", "r11", "r12", "r13", "r14", "r15"};
