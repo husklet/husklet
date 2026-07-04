@@ -379,6 +379,8 @@ static int pcache_load(uint64_t entry_jump) {
     // SMC precise gate: re-mark every guest page the restored blocks were translated from, so a warm-run
     // `ic ivau` against restored code still takes the conservative wholesale drop.
     txpg_clear();
+    txln_clear(); // restored blocks carry page info only; the line set stays empty ->
+                  // smc_icflush's coarse page fallback (g_pcache_loaded) covers restored code
     for (uint64_t i = 0; i < h.n_txpg; i++)
         if (tx[i]) txpg_put(tx[i]);
     g_cp = g_cache + h.arena_used;
@@ -542,6 +544,7 @@ static void pcache_exec_reload(const char *prog_host, const char *interp_host, c
     g_nreloc = 0;
     g_t2n = 0;           // fresh tier-2 slot set for the new image (no cross-image alias)
     txpg_clear();        // nothing is translated now; the set re-fills (or is restored by the load below)
+    txln_clear();
     g_pcache_loaded = 0; // allow a cold-miss save of the NEW binary
     g_pcache_forked = 0;
     g_pc_binid = pcache_make_id(prog_host, interp_host, argv0);

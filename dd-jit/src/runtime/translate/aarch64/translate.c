@@ -1172,17 +1172,56 @@ static void smc_icflush(uint64_t va) {
     // (its literal lives in an unmodified caller block this flush can't reach). Latch this unconditionally,
     // even when the precise gate below skips, so a code-modifying guest never trusts the per-site IC.
     g_smc_seen = 1;
-    // PRECISE GATE: if this guest page was never translated, there is nothing stale to drop. V8 flushes
-    // each freshly-written line as it grows its code space, almost always on brand-new pages -> this turns
-    // the catastrophic per-flush wholesale invalidation (which re-translated the entire working set on
-    // every `ic ivau`) into a no-op. A page that WAS translated still takes the full conservative drop, so
-    // genuine in-place self-modification remains correct.
-    if (!txpg_has(va)) return;
-    memset(g_map, 0, sizeof g_map);
-    memset(g_ibtc, 0, sizeof g_ibtc);
-    g_npend = 0;
-    txpg_clear(); // g_map is now empty -> the page set re-fills as blocks re-translate
-    g_smc_flushes++;
+    // PRECISE GATE: if the invalidated bytes were never translated, there is nothing stale to drop. A
+    // code-generating guest flushes each freshly-written line as it grows its code space -> almost always
+    // brand-new bytes -> this turns the catastrophic per-flush wholesale invalidation (which re-translated
+    // the entire working set on every `ic ivau`) into a no-op. Gate at CACHE-LINE (64B) granularity -- the
+    // exact unit `ic ivau, Xt` invalidates -- NOT at 4KB page granularity. #267: BeamAsm (Erlang/OTP's
+    // arm64 JIT) packs many compiled functions per page, so appending a NEW function onto a page that
+    // already holds a translated one makes a page-granular gate fire a wholesale drop even though no
+    // translated byte changed. Re-translating the whole working set on that spurious drop -- and, before the
+    // thread-safety fix below, doing it unlocked -- crashed the heavily-threaded emulator. The line gate
+    // makes those same-page appends a no-op (measured: 100% of BeamAsm's page-hit drops are line-misses),
+    // while a genuine in-place overwrite (V8 patching a jump) still overlaps a translated line -> real drop.
+    // pcache warm-load restores blocks with page info but no line info (see pcache.c), so for a restored
+    // arena fall back to the coarse page gate -- conservative (may over-drop) but never misses stale code.
+    if (!txln_has(va) && !(g_pcache_loaded && txpg_has(va))) return;
+    // ---- a GENUINE in-place modification of already-translated guest code (the line WAS a source line) ----
+    // #267 (BeamAsm SIGSEGV) coherence. smc_icflush runs from the dispatcher's post-run reason handler, which
+    // has ALREADY released g_jit_lock (engine/dispatch.c: the unlock precedes G_DISPATCH_REASON), so a peer
+    // guest thread may be executing translated code concurrently. A wholesale drop memsets g_map/g_ibtc that a
+    // peer reads lock-free AND forces a re-translation of the modified bytes -- and there is no way to make
+    // that coherent while other threads run. Two approaches were measured and BOTH fault BeamAsm:
+    //   * stop-the-world + fresh cache (jit_flush_to_fresh): parked peers resume in the RETIRED cache running
+    //     the STALE translation while freshly-dispatched threads run the RE-translated code -> two live
+    //     versions of the modified function at once.
+    //   * stop-the-world + in-place drop (keep g_cp): the old arena stays mapped, so a resuming peer follows
+    //     baked-in direct chains straight into stale old blocks -> same two-version split.
+    // The split is what an async/dirty scheduler thread trips over the instant it re-enters a modified region.
+    // The coherent choice under live peers is to keep the SINGLE existing translation for EVERY thread and NOT
+    // re-translate: g_smc_seen (latched above) already disables the per-site monomorphic IC so a code-
+    // modifying guest never trusts a baked body, and the guest re-synchronizes through the shared indirect
+    // dispatch. This matches dd's long-standing NOSMC fallback and is exactly what lets Erlang/OTP + Elixir
+    // (BeamAsm) run to completion, including external-program ports (os:cmd / open_port {spawn,...}) whose
+    // forker relies on the emulator staying alive (#270). Fully coherent re-translation of a multithreaded
+    // in-place patch would need precise per-block recompile+redirect with all peers rendezvoused at a
+    // safepoint (the tier2_promote bounce, generalized) -- out of scope here; a guest that depends on such a
+    // patch keeps running the prior version instead of crashing. The LINE-granular gate above keeps genuine
+    // in-place hits rare (a code-generator that merely APPENDS onto a shared page never reaches here), so this
+    // fallback is taken only on a true overwrite of executed code.
+    // Single-threaded (incl. all peers exited): the wholesale in-place drop IS coherent -- one thread, no
+    // split -- so re-translate for correct self-modification (a single-isolate V8, the soak_smc test).
+    if (!g_threaded) {
+        smc_inplace_drop();
+        g_smc_flushes++;
+        return;
+    }
+    pthread_mutex_lock(&g_jit_lock);
+    if (!stw_peers_live()) { // threaded but no OTHER thread live right now -> a drop is still coherent
+        smc_inplace_drop();
+        g_smc_flushes++;
+    }
+    pthread_mutex_unlock(&g_jit_lock);
 }
 
 // #292 async-interrupt poll: emit a CHEAP flag-free check of cpu->irq at the block body entry (the target
