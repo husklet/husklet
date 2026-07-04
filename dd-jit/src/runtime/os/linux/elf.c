@@ -548,6 +548,55 @@ static void elf_mprotect_besteffort(void *addr, size_t len, int prot, const char
     }
 }
 
+// #423 INTERIM: does this image's bytes contain `needle`? Small bounded byte search over [f, f+n).
+static int elf_mem_has(const uint8_t *f, size_t n, const char *needle, size_t nl) {
+    if (nl == 0 || nl > n) return 0;
+    for (size_t i = 0; i + nl <= n; i++)
+        if (f[i] == (uint8_t)needle[0] && !memcmp(f + i, needle, nl)) return 1;
+    return 0;
+}
+// #423 INTERIM: is `f` (an aarch64 ELF, size `sz`) a cgo-enabled (iscgo) Go image? Every Go binary carries a
+// linker-embedded build-info blob (magic "\xff Go buildinf:"); its recorded build settings include
+// CGO_ENABLED=<0|1>, and CGO_ENABLED=1 is exactly the runtime.iscgo==1 class whose SIGURG async-preempt
+// delivery dd must suppress (see os/linux/signal.c, g_go_iscgo). We GATE on the Go magic first so a non-Go
+// guest is NEVER matched, then decode the two inline strings (Go >=1.18 stores version + modinfo inline when
+// the flags byte has bit 0x2 set, starting at blob offset 32) and scan ONLY the modinfo for the setting. A
+// blob without the inline flag (older linkers) falls back to a bounded scan just past the magic.
+static uint64_t elf_uvarint(const uint8_t **pp, const uint8_t *end) {
+    uint64_t x = 0; int s = 0;
+    while (*pp < end) {
+        uint8_t b = *(*pp)++;
+        if (b < 0x80) return x | ((uint64_t)b << s);
+        x |= (uint64_t)(b & 0x7f) << s;
+        s += 7;
+        if (s > 63) break;
+    }
+    return x;
+}
+static int elf_is_go_iscgo(const uint8_t *f, size_t sz) {
+    static const char magic[14] = { (char)0xff, ' ', 'G', 'o', ' ', 'b', 'u', 'i', 'l', 'd', 'i', 'n', 'f', ':' };
+    size_t bi = (size_t)-1;
+    for (size_t i = 0; i + sizeof(magic) <= sz; i++)
+        if (f[i] == (uint8_t)magic[0] && !memcmp(f + i, magic, sizeof(magic))) { bi = i; break; }
+    if (bi == (size_t)-1) return 0; // not a Go binary -> never suppress SIGURG for it
+    static const char needle[] = "CGO_ENABLED=1";
+    const size_t NL = sizeof(needle) - 1;
+    // Inline strings (version then modinfo) at blob offset 32 when flags bit 0x2 is set.
+    if (bi + 32 <= sz && (f[bi + 15] & 0x02)) {
+        const uint8_t *p = f + bi + 32, *end = f + sz;
+        uint64_t vlen = elf_uvarint(&p, end);
+        if ((uint64_t)(end - p) >= vlen) {
+            p += vlen; // skip the version string
+            uint64_t mlen = elf_uvarint(&p, end);
+            if ((uint64_t)(end - p) < mlen) mlen = (uint64_t)(end - p);
+            return elf_mem_has(p, (size_t)mlen, needle, NL); // scan ONLY the modinfo (build settings live here)
+        }
+    }
+    // Fallback (non-inline blob): scan a bounded window past the magic; the build settings sit within it.
+    size_t win = sz - bi; if (win > (1u << 20)) win = 1u << 20;
+    return elf_mem_has(f + bi, win, needle, NL);
+}
+
 static void load_elf(const char *path, struct loaded *out) {
     int fd = open(path, O_RDONLY);
     if (fd < 0) {
@@ -643,6 +692,12 @@ static void load_elf(const char *path, struct loaded *out) {
     out->phdr = (uint64_t)base + phoff;
     out->phent = phentsize;
     out->phnum = phnum;
+    // #423 INTERIM: latch whether this is a cgo (iscgo) Go image so signal delivery can auto-suppress Go's
+    // async-preempt SIGURG for it (os/linux/signal.c, g_go_iscgo). OR (never clear): load_elf runs for the
+    // main image THEN the ld.so interpreter -- the interp is never Go, so '|=' keeps a main-image match from
+    // being clobbered by the interp load. execve resets g_go_iscgo to 0 before re-loading (proc.c) so a later
+    // non-Go image starts clean. See the detailed rationale in signal.c.
+    g_go_iscgo |= elf_is_go_iscgo(f, (size_t)st.st_size);
     munmap(f, st.st_size);
     close(fd);
 }

@@ -1316,6 +1316,7 @@ static int svc_proc(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64
         gna_reset();           // the old image's PROT_NONE ranges are gone with its address space
         mlk_reset();           // ... and so are its mlock'd ranges (VmLck resets across execve)
         g_nonpie_lo = g_nonpie_hi = 0; // reset; load_elf re-sets it iff the new main image is non-PIE
+        g_go_iscgo = 0;                // #423: reset; load_elf re-sets it iff the new main image is a cgo Go image
         p = xpath;
         for (int i = 0; i < ac && i < 255; i++)
             argv[i] = xargv[i];

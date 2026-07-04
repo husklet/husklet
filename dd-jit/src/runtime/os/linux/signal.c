@@ -16,6 +16,39 @@ static int ptrace_intercept_signal(struct cpu *c, int sig, int *out_sig);
 static struct {
     uint64_t handler, flags, mask;
 } g_sigact[65];
+
+// ---------------- #423 INTERIM: Go async-preempt SIGURG suppression for iscgo aarch64 images ----------------
+// Go's scheduler asynchronously preempts a running goroutine by sending itself SIGURG (23) and running the
+// preemption in the signal handler. For an EXTERNALLY-LINKED / cgo (runtime.iscgo==1) aarch64 Go binary, dd's
+// path that delivers SIGURG into the guest (Go's cgoSigtramp) currently corrupts a stack return address: when
+// SIGURG preempts a thread mid-cgo / mid-stack-transition, the guest SP captured for the signal frame is wrong
+// and a callee frame overlaps a still-live frame (a FRAME/SP OVERLAP -- see #423). The complete fix is to
+// capture the preempted guest SP correctly in build_signal_frame; until that lands, we suppress SIGURG
+// delivery for exactly this class. That is functionally identical to Go's own supported `GODEBUG=
+// asyncpreemptoff=1`: async (tight-loop) preemption is disabled, but COOPERATIVE preemption at safepoints
+// still works, so the program runs correctly (proven: influxd boots, victoria-metrics serves).
+//
+// Scoped TIGHTLY on purpose: g_go_iscgo (set once by the aarch64 load_elf in os/linux/elf.c) is 1 ONLY for a
+// cgo-enabled aarch64 Go main image. It stays 0 for non-Go guests (some legitimately use SIGURG for OOB TCP
+// data), for internal-linked / CGO_ENABLED=0 Go, and for the entire x86 engine (that TU never includes the
+// aarch64 elf.c, and no x86 path sets it). Env override DD_SIGURG forces it: `drop`/`off` = always suppress,
+// `deliver`/`async`/`on` = always deliver (disable the mitigation); legacy DDDBG_DROPURG=1 = force suppress.
+int g_go_iscgo; // 1 iff the loaded aarch64 main image is a cgo (iscgo) Go binary; owned here, set by load_elf
+// Should SIGURG (Go async-preempt) delivery be dropped for this process? Env override wins; else auto on the
+// detected iscgo class. Env is parsed once (it never changes); g_go_iscgo is fixed before any signal fires.
+static int sigurg_drop_enabled(void) {
+    static int cached = -2; // -2 uncomputed; -1 auto; 0 force-deliver; 1 force-drop
+    if (cached == -2) {
+        const char *e = getenv("DD_SIGURG");
+        if (e && (!strcmp(e, "deliver") || !strcmp(e, "async") || !strcmp(e, "on"))) cached = 0;
+        else if (e && (!strcmp(e, "drop") || !strcmp(e, "off"))) cached = 1;
+        else if (getenv("DDDBG_DROPURG")) cached = 1; // legacy repro/debug knob
+        else cached = -1; // auto
+    }
+    if (cached >= 0) return cached;
+    return g_go_iscgo ? 1 : 0;
+}
+
 // bitmask of pending signals (1<<signo)
 static volatile uint64_t g_pending;
 // Per-thread "this guest thread is currently inside a host syscall on the guest's behalf" flag, set
@@ -250,6 +283,14 @@ static void maybe_deliver_signal(struct cpu *c) {
         // was force-marked by rt_sigsuspend/pause (POSIX: the awaited handler runs during the suspend even
         // though the restored mask blocks it). g_force_deliver overrides the mask for exactly that one bit.
         if (!(p & bit)) continue;
+        // #423 INTERIM: suppress Go's async-preempt SIGURG (23) for a cgo aarch64 Go image (see the note at the
+        // top of this file). Drop the pending instance from both queues so it is never delivered to the guest
+        // handler; cooperative preemption keeps the program correct. Scoped to exactly the iscgo class + env.
+        if (sig == 23 && sigurg_drop_enabled()) {
+            __atomic_and_fetch(&g_pending, ~bit, __ATOMIC_SEQ_CST);
+            __atomic_and_fetch(&c->tpending, ~bit, __ATOMIC_SEQ_CST);
+            continue;
+        }
         if ((c->sigmask & (1ull << (sig - 1))) && !(g_force_deliver & bit)) continue;
         uint64_t h = g_sigact[sig].handler;
         if (h <= 1) {
