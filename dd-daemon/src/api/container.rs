@@ -23,6 +23,9 @@ pub(crate) struct ContainerTop {
 #[derive(Serialize)]
 pub(crate) struct ContainerStats {
     pub read: String,
+    /// Timestamp of the `precpu_stats` sample. Docker's Go zero-time (`0001-01-01T00:00:00Z`) on a
+    /// one-shot / first sample; present so strict clients (bollard's non-Option `preread`) deserialize.
+    pub preread: String,
     pub name: String,
     pub id: String,
     pub pids_stats: PidsStats,
@@ -32,6 +35,10 @@ pub(crate) struct ContainerStats {
     pub blkio_stats: BlkioStats,
     /// Always the empty object `{}` (dd reports no per-interface net counters).
     pub networks: BTreeMap<String, Value>,
+    /// Process count (Docker's Windows-oriented field; 0 on Linux). Present for strict-client parsing.
+    pub num_procs: u32,
+    /// Always the empty object `{}` (dd has no blkio/storage backend accounting).
+    pub storage_stats: BTreeMap<String, Value>,
 }
 
 #[derive(Serialize)]

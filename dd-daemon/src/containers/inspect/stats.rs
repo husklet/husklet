@@ -98,6 +98,9 @@ fn stats_sample(
     };
     let v = crate::api::ContainerStats {
         read: fmt_rfc3339(now_secs()),
+        // Go zero-time: dd doesn't thread the prior sample's read timestamp, and CPU% is derived from
+        // the usage deltas (not these timestamps), so this is docker-accurate for the no-precpu case.
+        preread: "0001-01-01T00:00:00Z".to_string(),
         name: format!("/{name}"),
         id: id.to_string(),
         pids_stats: crate::api::PidsStats { current: cur },
@@ -110,6 +113,8 @@ fn stats_sample(
         },
         blkio_stats: crate::api::BlkioStats::empty(),
         networks: std::collections::BTreeMap::new(),
+        num_procs: 0,
+        storage_stats: std::collections::BTreeMap::new(),
     };
     (v, total, system)
 }
