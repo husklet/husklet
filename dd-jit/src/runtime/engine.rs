@@ -262,20 +262,11 @@ async fn reap(pid: u32) -> i64 {
         if r < 0 {
             -1
         } else {
-            decode_status(status)
+            super::handle::decode_wait_status(status) as i64
         }
     })
     .await
     .unwrap_or(-1)
-}
-
-/// Decode a `waitpid` status: the normal exit code, or -1 when the child was terminated by a signal.
-fn decode_status(status: i32) -> i64 {
-    if status & 0x7f == 0 {
-        ((status >> 8) & 0xff) as i64
-    } else {
-        -1
-    }
 }
 
 /// Append one chunk to the rotated replay buffer, enforcing [`LOG_CHUNKS_CAP_BYTES`] by draining the
@@ -492,5 +483,55 @@ fn write_fd(fd: RawFd, buf: &[u8]) -> std::io::Result<usize> {
         Err(std::io::Error::last_os_error())
     } else {
         Ok(n as usize)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{push_log, LogChunk, LOG_CHUNKS_CAP_BYTES};
+    use std::sync::Arc;
+
+    fn total_bytes(log: &[LogChunk]) -> usize {
+        log.iter().map(|(_, _, b)| b.len()).sum()
+    }
+
+    #[tokio::test]
+    async fn rotation_drops_oldest_over_cap() {
+        let log_chunks: Arc<tokio::sync::Mutex<Vec<LogChunk>>> = Arc::new(tokio::sync::Mutex::new(Vec::new()));
+        // Push chunks whose sum exceeds the cap; each is a comfortable fraction of it so several fit.
+        let chunk = LOG_CHUNKS_CAP_BYTES / 4;
+        for i in 0..10i64 {
+            push_log(&log_chunks, i, 1, vec![i as u8; chunk]).await;
+        }
+        let log = log_chunks.lock().await;
+        // The oldest chunks were drained so the retained total stays within the cap...
+        assert!(total_bytes(&log) <= LOG_CHUNKS_CAP_BYTES, "total {} exceeds cap", total_bytes(&log));
+        // ...but the most-recent chunk is always kept, and rotation trims from the front (FIFO).
+        assert_eq!(log.last().unwrap().0, 9);
+        assert!(log.len() < 10, "expected oldest chunks to be dropped");
+        // The retained window is contiguous and ends at the newest chunk (oldest-first order preserved).
+        for w in log.windows(2) {
+            assert_eq!(w[0].0 + 1, w[1].0);
+        }
+    }
+
+    #[tokio::test]
+    async fn single_oversized_chunk_is_retained() {
+        let log_chunks: Arc<tokio::sync::Mutex<Vec<LogChunk>>> = Arc::new(tokio::sync::Mutex::new(Vec::new()));
+        // A lone chunk larger than the whole cap: the `drop_to < len-1` guard always keeps the
+        // just-pushed chunk, so it survives even though it alone blows the cap.
+        let big = vec![0u8; LOG_CHUNKS_CAP_BYTES + 4096];
+        push_log(&log_chunks, 0, 1, big).await;
+        let log = log_chunks.lock().await;
+        assert_eq!(log.len(), 1);
+        assert_eq!(log[0].2.len(), LOG_CHUNKS_CAP_BYTES + 4096);
+
+        // And a subsequent normal chunk drops the oversized one (it's now the oldest, and no longer the
+        // just-pushed chunk), leaving only the newest.
+        drop(log);
+        push_log(&log_chunks, 1, 1, vec![7u8; 1024]).await;
+        let log = log_chunks.lock().await;
+        assert_eq!(log.len(), 1);
+        assert_eq!(log[0].0, 1);
     }
 }

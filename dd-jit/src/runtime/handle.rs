@@ -38,12 +38,36 @@ impl RunHandle {
 }
 
 /// Decode a `waitpid` status into an exit code: the normal exit code, or -1 when killed by a signal.
-fn decode_wait_status(status: i32) -> i32 {
+/// Shared by the sync [`RunHandle::wait`] here and the async `reap` in [`super::engine`] (which casts
+/// the result to `i64`) — the single source of truth for the exit-code convention.
+pub(crate) fn decode_wait_status(status: i32) -> i32 {
     // WIFEXITED: low 7 bits are 0 → WEXITSTATUS is bits 8..16. Otherwise the child was signalled (-1).
     if status & 0x7f == 0 {
         (status >> 8) & 0xff
     } else {
         -1
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::decode_wait_status;
+
+    #[test]
+    fn normal_exit_extracts_wexitstatus() {
+        // WIFEXITED: low 7 bits are 0, exit code lives in bits 8..16 (`code << 8`).
+        assert_eq!(decode_wait_status(5 << 8), 5);
+        assert_eq!(decode_wait_status(0), 0);
+        assert_eq!(decode_wait_status(255 << 8), 255);
+    }
+
+    #[test]
+    fn signalled_returns_minus_one() {
+        // WIFSIGNALED: low 7 bits carry the signal number (1..=126) → -1.
+        assert_eq!(decode_wait_status(9), -1);
+        assert_eq!(decode_wait_status(libc::SIGKILL), -1);
+        // A signalled status normally also carries an unrelated high byte — still -1.
+        assert_eq!(decode_wait_status((7 << 8) | 15), -1);
     }
 }
 
