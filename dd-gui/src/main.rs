@@ -9,12 +9,17 @@
 
 #[cfg(target_os = "macos")]
 mod mac;
+mod daemon;
+mod docker;
+mod install;
+mod snapshot;
 mod ui;
 mod update;
 
-use dd_daemon::client::{Client, Container, DiskUsage, Image, Network, SystemInfo, Volume};
+use dd_daemon::client::Client;
 use gtk::prelude::GtkWindowExt; // for root.set_default_size on connect/disconnect
 use relm4::prelude::*;
+use snapshot::Snapshot;
 use std::path::PathBuf;
 use std::time::Duration;
 
@@ -40,25 +45,6 @@ pub enum Selection {
     Image(String),
     Network(String),
     Volume(String),
-}
-
-/// A full snapshot of daemon state, fetched off the UI thread.
-#[derive(Debug, Default)]
-struct Snapshot {
-    connected: bool,
-    containers: Vec<Container>,
-    images: Vec<Image>,
-    networks: Vec<Network>,
-    volumes: Vec<Volume>,
-    /// Engine info + disk usage for the System view (None until first fetched).
-    sys: Option<SystemInfo>,
-    df: Option<DiskUsage>,
-    /// Tail of the daemon's own log file (what the daemon is logging).
-    daemon_log: String,
-    /// Active `docker` context name, or `None` if the docker CLI isn't installed.
-    docker_context: Option<String>,
-    /// All selectable `docker` contexts (always includes `dd`).
-    docker_contexts: Vec<String>,
 }
 
 /// Messages from the UI (selection, button clicks, the refresh tick).
@@ -194,7 +180,7 @@ impl Component for AppModel {
                 .register(async move {
                     let client = Client::new(&socket);
                     loop {
-                        let snap = fetch(&client).await;
+                        let snap = snapshot::fetch(&client).await;
                         if out.send(Cmd::Snapshot(Box::new(snap))).is_err() {
                             break;
                         }
@@ -235,16 +221,16 @@ impl Component for AppModel {
                         Some(mut child) => {
                             let _ = child.kill();
                         }
-                        None => stop_external_daemon(),
+                        None => daemon::stop_external_daemon(),
                     }
                     600
                 } else {
-                    self.daemon_child = spawn_daemon();
+                    self.daemon_child = daemon::spawn_daemon();
                     1300
                 };
                 sender.oneshot_command(async move {
                     tokio::time::sleep(Duration::from_millis(delay)).await;
-                    Cmd::Snapshot(Box::new(fetch(&Client::new(&socket)).await))
+                    Cmd::Snapshot(Box::new(snapshot::fetch(&Client::new(&socket)).await))
                 });
             }
             Msg::InstallCli => ui::show_cli_install(root),
@@ -271,7 +257,7 @@ impl Component for AppModel {
                             }
                         }
                     }
-                    Cmd::Snapshot(Box::new(fetch(&c).await))
+                    Cmd::Snapshot(Box::new(snapshot::fetch(&c).await))
                 });
             }
             Msg::UpdateFound(rel) => self.update = Some(rel),
@@ -285,9 +271,9 @@ impl Component for AppModel {
             }
             Msg::SetContext(name) => {
                 sender.oneshot_command(async move {
-                    set_context(&name, &socket).await;
+                    docker::set_context(&name, &socket).await;
                     tokio::time::sleep(Duration::from_millis(250)).await;
-                    Cmd::Snapshot(Box::new(fetch(&Client::new(&socket)).await))
+                    Cmd::Snapshot(Box::new(snapshot::fetch(&Client::new(&socket)).await))
                 });
             }
             Msg::SetCategory(cat) => {
@@ -301,9 +287,9 @@ impl Component for AppModel {
                 self.selection = sel.clone();
                 self.current_logs = None;
                 if let Selection::Container(id) = sel {
-                    fetch_logs(&sender, self.socket.clone(), id.clone());
+                    snapshot::fetch_logs(&sender, self.socket.clone(), id.clone());
                     self.shells = None; // clear stale list until the probe returns
-                    fetch_shells(&sender, self.socket.clone(), id);
+                    snapshot::fetch_shells(&sender, self.socket.clone(), id);
                 }
             }
             Msg::RunImage(image) => {
@@ -449,7 +435,7 @@ impl Component for AppModel {
                         Category::Containers => {
                             if let Some(c) = self.snap.containers.first() {
                                 self.selection = Selection::Container(c.id.clone());
-                                fetch_logs(&sender, self.socket.clone(), c.id.clone());
+                                snapshot::fetch_logs(&sender, self.socket.clone(), c.id.clone());
                             }
                         }
                         Category::Images => {
@@ -471,13 +457,13 @@ impl Component for AppModel {
                     }
                 } else if let Selection::Container(id) = &self.selection {
                     // Keep the selected container's logs fresh.
-                    fetch_logs(&sender, self.socket.clone(), id.clone());
+                    snapshot::fetch_logs(&sender, self.socket.clone(), id.clone());
                 }
             }
             Cmd::Logs(id, text) => {
                 if let Selection::Container(sel) = &self.selection {
                     if sel == &id {
-                        self.current_logs = Some((id, last_lines(&text, 1000)));
+                        self.current_logs = Some((id, snapshot::last_lines(&text, 1000)));
                     }
                 }
             }
@@ -502,312 +488,9 @@ impl AppModel {
         sender.oneshot_command(async move {
             let client = Client::new(&socket);
             f(client.clone()).await;
-            Cmd::Snapshot(Box::new(fetch(&client).await))
+            Cmd::Snapshot(Box::new(snapshot::fetch(&client).await))
         });
     }
-}
-
-/// Symlink the bundled `dd` CLI into `~/.local/bin` (no root). Returns `(link path, already on
-/// PATH)`. The onboarding window turns this into per-shell instructions.
-pub(crate) fn install_cli() -> Result<(PathBuf, bool), String> {
-    let cli = resolve_cli().ok_or("dd CLI binary not found in the app bundle")?;
-    let name = cli.file_name().ok_or("bad CLI path")?;
-    let home = std::env::var("HOME").map_err(|_| "no HOME".to_string())?;
-    let bindir = PathBuf::from(&home).join(".local/bin");
-    std::fs::create_dir_all(&bindir).map_err(|e| e.to_string())?;
-    let link = bindir.join(name);
-    let _ = std::fs::remove_file(&link);
-    std::os::unix::fs::symlink(&cli, &link).map_err(|e| e.to_string())?;
-
-    let on_path = std::env::var("PATH")
-        .unwrap_or_default()
-        .split(':')
-        .any(|p| p == bindir.to_string_lossy());
-    Ok((link, on_path))
-}
-
-/// Locate the bundled `dd` CLI: `$DD_CLI_BIN`, the app bundle, or a sibling of this binary (dev).
-fn resolve_cli() -> Option<PathBuf> {
-    if let Some(p) = std::env::var_os("DD_CLI_BIN") {
-        return Some(PathBuf::from(p));
-    }
-    let names = ["ddcli", "dd"]; // whichever the CLI is built as
-                                 // Prefer the *installed* bundle so the symlink stays valid across relaunches and updates
-                                 // (which replace /Applications/dd.app in place), not the dev copy we run from.
-    for n in names {
-        let p = PathBuf::from("/Applications/dd.app/Contents/Resources").join(n);
-        if p.exists() {
-            return Some(p);
-        }
-    }
-    let exe = std::env::current_exe().ok()?;
-    if let Some(contents) = exe.parent().and_then(|p| p.parent()) {
-        for n in names {
-            let c = contents.join("Resources").join(n);
-            if c.exists() {
-                return Some(c);
-            }
-        }
-    }
-    let dir = exe.parent()?;
-    names.iter().map(|n| dir.join(n)).find(|p| p.exists())
-}
-
-/// Fetch a container's logs off-thread and deliver them as `Cmd::Logs`.
-fn fetch_logs(sender: &ComponentSender<AppModel>, socket: PathBuf, id: String) {
-    sender.oneshot_command(async move {
-        let text = match Client::new(&socket).container_logs(&id).await {
-            Ok(b) => String::from_utf8_lossy(&b).into_owned(),
-            Err(e) => format!("could not fetch logs: {e}"),
-        };
-        Cmd::Logs(id, text)
-    });
-}
-
-/// Probe which shells exist in a container (off-thread) → `Cmd::Shells`. Uses the container's own
-/// `/bin/sh` + `command -v`; returns the basenames it finds, preference-ordered.
-fn fetch_shells(sender: &ComponentSender<AppModel>, socket: PathBuf, id: String) {
-    sender.oneshot_command(async move {
-        let host = format!("unix://{}", socket.display());
-        let docker = ui::components::docker_bin();
-        let out = std::process::Command::new(docker)
-            .args([
-                "--host",
-                &host,
-                "exec",
-                &id,
-                "/bin/sh",
-                "-c",
-                "command -v zsh bash ash dash sh busybox",
-            ])
-            .output();
-        let mut shells: Vec<String> = Vec::new();
-        if let Ok(o) = out {
-            for line in String::from_utf8_lossy(&o.stdout).lines() {
-                if let Some(name) = line.trim().rsplit('/').next() {
-                    let name = name.trim();
-                    if !name.is_empty() && !shells.iter().any(|s| s == name) {
-                        shells.push(name.to_string());
-                    }
-                }
-            }
-        }
-        let pref = ["zsh", "bash", "ash", "dash", "sh", "busybox"];
-        shells.sort_by_key(|s| pref.iter().position(|p| p == s).unwrap_or(99));
-        Cmd::Shells(id, shells)
-    });
-}
-
-/// Keep only the last `n` lines of `text`.
-fn last_lines(text: &str, n: usize) -> String {
-    let lines: Vec<&str> = text.lines().collect();
-    let start = lines.len().saturating_sub(n);
-    lines[start..].join("\n")
-}
-
-/// Fetch a full snapshot. A failed `ping` short-circuits to a disconnected snapshot, but we still
-/// report the active docker context (independent of whether our daemon is up).
-async fn fetch(c: &Client) -> Snapshot {
-    let docker_context = docker_context().await;
-    let docker_contexts = if docker_context.is_some() {
-        docker_contexts().await
-    } else {
-        vec![]
-    };
-    if c.ping().await.is_err() {
-        return Snapshot {
-            docker_context,
-            docker_contexts,
-            ..Snapshot::default()
-        };
-    }
-    // Sort every list newest-first (descending). Containers/images carry a unix `created`; networks
-    // and volumes carry an ISO-8601 `created_at` (lexicographic order == chronological).
-    let mut containers = c.list_containers().await.unwrap_or_default();
-    containers.sort_by(|a, b| b.created.cmp(&a.created));
-    let mut images = c.list_images().await.unwrap_or_default();
-    images.sort_by(|a, b| b.created.cmp(&a.created));
-    let mut networks = c.list_networks().await.unwrap_or_default();
-    networks.sort_by(|a, b| b.created_at.cmp(&a.created_at));
-    let mut volumes = c.list_volumes().await.unwrap_or_default();
-    volumes.sort_by(|a, b| b.created_at.cmp(&a.created_at));
-    Snapshot {
-        connected: true,
-        containers,
-        images,
-        networks,
-        volumes,
-        sys: c.system().await.ok(),
-        df: c.disk_usage().await.ok(),
-        daemon_log: read_daemon_log(),
-        docker_context,
-        docker_contexts,
-    }
-}
-
-/// The daemon's own log: `$DD_DAEMON_LOG`, else `~/Library/Logs/dd/daemon.err.log`. Returns the last
-/// ~400 lines so the System view shows what the daemon is logging without unbounded growth.
-fn read_daemon_log() -> String {
-    let path = std::env::var("DD_DAEMON_LOG")
-        .map(PathBuf::from)
-        .unwrap_or_else(|_| {
-            let home = std::env::var("HOME").unwrap_or_else(|_| ".".into());
-            PathBuf::from(home).join("Library/Logs/dd/daemon.err.log")
-        });
-    match std::fs::read_to_string(&path) {
-        Ok(s) => last_lines(&s, 400),
-        Err(_) => String::new(),
-    }
-}
-
-/// Absolute path to the `docker` CLI. A macOS app launched from Finder/Dock/launchd inherits a
-/// minimal PATH (`/usr/bin:/bin:/usr/sbin:/sbin`) that excludes Homebrew (`/opt/homebrew/bin`),
-/// `/usr/local/bin`, and Docker Desktop (`~/.docker/bin`) — so a bare `Command::new("docker")` fails
-/// even when docker is installed and on the user's *shell* PATH (which is why it works in a terminal
-/// but the app "can't see it"). Search the well-known install locations; fall back to the bare name
-/// (PATH) for terminal/dev launches.
-fn docker_bin() -> std::ffi::OsString {
-    let home = std::env::var("HOME").unwrap_or_default();
-    for c in [
-        "/opt/homebrew/bin/docker".to_string(),
-        "/usr/local/bin/docker".to_string(),
-        format!("{home}/.docker/bin/docker"),
-        "/Applications/Docker.app/Contents/Resources/bin/docker".to_string(),
-        "/usr/bin/docker".to_string(),
-    ] {
-        if std::path::Path::new(&c).exists() {
-            return c.into();
-        }
-    }
-    "docker".into()
-}
-
-/// The active `docker` context name, or `None` if the docker CLI isn't installed / errored.
-async fn docker_context() -> Option<String> {
-    let out = tokio::process::Command::new(docker_bin())
-        .args(["context", "show"])
-        .output()
-        .await
-        .ok()?;
-    if !out.status.success() {
-        return None;
-    }
-    let s = String::from_utf8_lossy(&out.stdout).trim().to_string();
-    (!s.is_empty()).then_some(s)
-}
-
-/// All selectable docker contexts (`docker context ls`), always including `dd` so the user can
-/// pick our daemon even before the context exists.
-async fn docker_contexts() -> Vec<String> {
-    let out = tokio::process::Command::new(docker_bin())
-        .args(["context", "ls", "--format", "{{.Name}}"])
-        .output()
-        .await;
-    let mut list: Vec<String> = match out {
-        Ok(o) if o.status.success() => String::from_utf8_lossy(&o.stdout)
-            .lines()
-            .map(|s| s.trim().to_string())
-            .filter(|s| !s.is_empty())
-            .collect(),
-        _ => vec![],
-    };
-    if !list.iter().any(|c| c == "dd") {
-        list.push("dd".to_string());
-    }
-    list
-}
-
-/// Switch the `docker` CLI to context `name` (creating the `dd` context first if needed).
-async fn set_context(name: &str, socket: &std::path::Path) {
-    use tokio::process::Command;
-    if name == "dd" {
-        let host = format!("host=unix://{}", socket.display());
-        let _ = Command::new(docker_bin())
-            .args(["context", "create", "dd", "--docker", &host])
-            .output()
-            .await;
-    }
-    let _ = Command::new(docker_bin())
-        .args(["context", "use", name])
-        .output()
-        .await;
-}
-
-/// Spawn the dd-daemon binary detached, with the canonical socket/images/JIT env, and return the
-/// child so we can stop it later. Resolves the binary from `$DD_DAEMON_BIN`, the app bundle
-/// (`Contents/Resources/dd-daemon`), or a sibling of this executable (the dev/`cargo` layout).
-fn spawn_daemon() -> Option<std::process::Child> {
-    use std::process::{Command, Stdio};
-    let home = std::env::var("HOME").unwrap_or_else(|_| ".".into());
-    let dd = PathBuf::from(&home).join(".dd");
-    let run = dd.join("run");
-    let images = dd.join("images");
-    let _ = std::fs::create_dir_all(&run);
-    let _ = std::fs::create_dir_all(&images);
-
-    // Send the daemon's output to the same log file the LaunchAgent uses, so the System view can tail
-    // what the daemon is logging regardless of how it was started.
-    let logs = PathBuf::from(&home).join("Library/Logs/dd");
-    let _ = std::fs::create_dir_all(&logs);
-    let log = |name: &str| {
-        std::fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(logs.join(name))
-            .ok()
-    };
-    let (out, err): (Stdio, Stdio) = match (log("daemon.out.log"), log("daemon.err.log")) {
-        (Some(o), Some(e)) => (o.into(), e.into()),
-        _ => (Stdio::null(), Stdio::null()),
-    };
-
-    let (bin, jit_dir) = resolve_daemon()?;
-    Command::new(&bin)
-        .env("DDOCKERD_SOCK", run.join("docker.sock"))
-        .env("DD_IMAGES", &images)
-        .env("DDJIT_DIR", &jit_dir)
-        .stdin(Stdio::null())
-        .stdout(out)
-        .stderr(err)
-        .spawn()
-        .ok()
-}
-
-/// Stop a daemon we didn't start: if it's an installed LaunchAgent, bootout the per-user service.
-fn stop_external_daemon() {
-    extern "C" {
-        fn getuid() -> u32;
-    }
-    let uid = unsafe { getuid() };
-    let _ = std::process::Command::new("launchctl")
-        .args(["bootout", &format!("gui/{uid}/com.dd.daemon")])
-        .output();
-}
-
-/// Locate the daemon binary and the dir holding the `ddjit-*` engines.
-fn resolve_daemon() -> Option<(PathBuf, PathBuf)> {
-    if let Some(p) = std::env::var_os("DD_DAEMON_BIN") {
-        let p = PathBuf::from(p);
-        let dir = p.parent().map(|d| d.to_path_buf()).unwrap_or_default();
-        return Some((p, dir));
-    }
-    let exe = std::env::current_exe().ok()?;
-    // Bundle: .../Contents/MacOS/dd-app -> .../Contents/Resources/dd-daemon
-    if let Some(contents) = exe.parent().and_then(|p| p.parent()) {
-        let res = contents.join("Resources");
-        let cand = res.join("dd-daemon");
-        if cand.exists() {
-            return Some((cand, res));
-        }
-    }
-    // Dev: a dd-daemon next to this binary (ddjit-* paths are baked in at compile time there).
-    if let Some(dir) = exe.parent() {
-        let cand = dir.join("dd-daemon");
-        if cand.exists() {
-            return Some((cand, dir.to_path_buf()));
-        }
-    }
-    None
 }
 
 fn main() {

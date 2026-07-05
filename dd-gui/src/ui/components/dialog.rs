@@ -10,7 +10,7 @@ use std::ffi::OsStr;
 
 /// Install the `dd` CLI and show a small window with a shell picker + matching PATH instructions.
 pub fn show_cli_install(parent: &gtk::ApplicationWindow) {
-    let result = crate::install_cli();
+    let result = crate::install::install_cli();
     let ok = result.is_ok();
     let on_path = result.as_ref().map(|(_, p)| *p).unwrap_or(false);
     let cmd = result
