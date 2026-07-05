@@ -13,6 +13,12 @@ pub(super) struct Resp {
     pub(super) body: Vec<u8>,
 }
 
+// curl args are strings. Shared by every curl path (`run_curl` and the blob `download_to_file`) so the
+// two can't drift: `--connect-timeout` bounds only the TCP/TLS connect phase (fail fast on an
+// unreachable/firewalled registry), while `--max-time` caps the whole transfer.
+const CONNECT_TIMEOUT_SECS: &str = "10";
+const MAX_TIME_SECS: &str = "600";
+
 static SEQ: AtomicU64 = AtomicU64::new(0);
 fn tmp_headers() -> std::path::PathBuf {
     let n = SEQ.fetch_add(1, Ordering::Relaxed);
@@ -29,9 +35,9 @@ fn run_curl(args: &[String]) -> Result<Resp, String> {
     // config rather than stalling `docker pull` for minutes.
     c.arg("-sS")
         .arg("--connect-timeout")
-        .arg("10")
+        .arg(CONNECT_TIMEOUT_SECS)
         .arg("--max-time")
-        .arg("600")
+        .arg(MAX_TIME_SECS)
         .arg("-D")
         .arg(&hdr);
     for a in args {
@@ -150,7 +156,11 @@ pub(super) fn download_to_file(
     progress: &mut dyn FnMut(u64),
 ) -> Result<(), String> {
     let mut cmd = Command::new("curl");
-    cmd.arg("-sSL").arg("--max-time").arg("600");
+    cmd.arg("-sSL")
+        .arg("--connect-timeout")
+        .arg(CONNECT_TIMEOUT_SECS)
+        .arg("--max-time")
+        .arg(MAX_TIME_SECS);
     if let Some(t) = token {
         cmd.arg("-H").arg(format!("Authorization: Bearer {t}"));
     }
