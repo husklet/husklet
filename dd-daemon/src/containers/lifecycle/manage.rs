@@ -1,4 +1,3 @@
-#![allow(unused_imports, dead_code)]
 //! Container management: `rename`, `wait`, and `delete` (`docker rm`). Split out
 //! of the former `lifecycle.rs`; behavior unchanged. The force-delete path reuses
 //! `kill_group` from the sibling `run` module.
@@ -77,6 +76,7 @@ pub(crate) async fn containers_wait(State(a): State<App>, Path(id): Path<String>
 pub(crate) struct DeleteQ {
     force: Option<String>,
     v: Option<String>,
+    #[allow(dead_code)] // wire-contract query param (`?link=`): accepted so the query deserializes, not applied
     link: Option<String>,
 }
 

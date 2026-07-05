@@ -1,4 +1,3 @@
-#![allow(unused_imports, dead_code)]
 //! Build-cache reclamation and container snapshotting: `build_prune` (`docker builder prune` / the
 //! build-cache portion of `docker system prune`) and `commit_container` (`docker commit`). Moved verbatim
 //! from the former `build.rs`; shared types/helpers come from `mod.rs` via `use super::*`.

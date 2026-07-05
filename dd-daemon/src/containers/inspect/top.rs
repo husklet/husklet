@@ -1,4 +1,3 @@
-#![allow(unused_imports, dead_code)]
 //! `docker top` — a single synthetic process (dd doesn't expose a guest process tree).
 use super::super::*;
 

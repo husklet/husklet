@@ -1,20 +1,11 @@
-#![allow(unused_imports, dead_code)]
 //! `POST /images/create` (pull/import dispatch) + registry pull / config-refresh helpers and the
 //! docker `--platform` ↔ arch mapping. The streamed pull-progress plumbing lives here too.
 use super::*;
-use crate::api::*;
-use crate::archive::*;
-use crate::build::*;
-use crate::containers::*;
 use crate::model::*;
-use crate::networks::*;
-use crate::registry::{layer_short, Client, Credentials, ImageRef, PullEvent};
-use crate::runtime::*;
-use crate::system::*;
+use crate::registry::{Client, Credentials, ImageRef, PullEvent};
 use crate::util::*;
-use crate::volumes::*;
 use crate::prelude::*;
-use ddjit::{Guest, PortMap, SpawnConfig, Volume};
+use ddjit::Guest;
 
 #[derive(Deserialize)]
 pub(crate) struct ImageCreateQ {

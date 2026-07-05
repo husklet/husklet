@@ -1,4 +1,3 @@
-#![allow(unused_imports, dead_code)]
 //! `docker logs` — replay of the ordered log buffer with `--tail`/`--since`/`--until`/`--timestamps`,
 //! plus `--follow` streaming from the container's `Live.out` broadcast.
 use super::super::*;

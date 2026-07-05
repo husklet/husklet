@@ -1,4 +1,3 @@
-#![allow(unused_imports, dead_code)]
 //! Container lifecycle HTTP handlers, split into cohesive submodules:
 //!   - `lifecycle` — create/start/stop/kill/restart/pause/unpause/rename/wait/delete
 //!   - `exec`      — attach + the `/exec` create/start/inspect flow + PTY resize
@@ -8,18 +7,12 @@
 //! do_stop, q_truthy, ports_json/ports_map_json) and re-exports every handler with
 //! `pub(crate) use`, so the public path `crate::containers::<handler>` (used by the
 //! router in main.rs and every `use crate::containers::*` site) is unchanged.
-use crate::archive::*;
-use crate::build::*;
 use crate::images::*;
 use crate::model::*;
 use crate::networks::*;
-use crate::registry::{Client, Credentials, ImageRef};
 use crate::runtime::*;
-use crate::system::*;
 use crate::util::*;
-use crate::volumes::*;
 use crate::prelude::*;
-use ddjit::{Guest, PortMap, SpawnConfig, Volume};
 
 mod exec;
 mod inspect;

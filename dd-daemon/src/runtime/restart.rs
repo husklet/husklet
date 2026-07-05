@@ -1,4 +1,3 @@
-#![allow(unused_imports, dead_code)]
 use super::*;
 use super::spawn::spawn_live;
 
@@ -54,7 +53,7 @@ pub(super) fn maybe_restart<'a>(
         let backoff = (100u64 << (count.clamp(0, 6) as u32)).min(10_000);
         tokio::time::sleep(std::time::Duration::from_millis(backoff)).await;
         // Install a fresh Live (the prior one is "started"/spent), mark running, bump the restart count.
-        let live = Live::new(c.tty);
+        let live = Live::new();
         {
             let mut g = app.inner.lock().await;
             match g.containers.get(cid) {

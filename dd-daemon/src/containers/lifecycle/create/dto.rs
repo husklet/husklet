@@ -1,4 +1,3 @@
-#![allow(unused_imports, dead_code)]
 //! Create-body / host-config DTOs for `POST /containers/create`: the deserialize
 //! structs (`CreateBody`, `NetworkingConfig`, `HostConfig`, `PortBinding`, `CreateQ`)
 //! decoded from the request body/query. Pure data shapes — no state threading.

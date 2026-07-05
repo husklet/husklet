@@ -1,4 +1,3 @@
-#![allow(unused_imports, dead_code)]
 //! `docker diff` — the container's copy-on-write upper layer diffed against the image rootfs, plus the
 //! layer-reclaim used by `docker rm`/prune.
 use super::super::*;

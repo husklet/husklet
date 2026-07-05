@@ -1,4 +1,3 @@
-#![allow(unused_imports, dead_code)]
 //! Hijacked-stream IO + exec handlers: attach, the docker `/exec` create/start/inspect
 //! flow, and the shared PTY resize endpoint. Moved verbatim from the former
 //! `containers.rs`; shared types/helpers come from `mod.rs` via `use super::*`.
@@ -97,7 +96,7 @@ pub(crate) async fn containers_attach(
     };
     let live = {
         let mut g = a.inner.lock().await;
-        g.live.entry(full).or_insert_with(|| Live::new(tty)).clone()
+        g.live.entry(full).or_insert_with(Live::new).clone()
     };
     spawn_hijack_io(hyper::upgrade::on(req), live, tty);
     hijack_response()
@@ -182,6 +181,7 @@ pub(crate) struct ExecStartBody {
     #[serde(rename = "Detach", default)]
     detach: bool,
     #[serde(rename = "Tty", default)]
+    #[allow(dead_code)] // wire-contract field: parsed from the exec-start body but not acted on here
     tty: bool,
 }
 
@@ -233,7 +233,7 @@ pub(crate) async fn exec_start(
         if !exec.user.is_empty() {
             temp.user = exec.user.clone();
         }
-        let live = Live::new(exec.tty);
+        let live = Live::new();
         g.live.insert(id.clone(), live.clone());
         if let Some(e) = g.execs.get_mut(&id) {
             e.started = true;

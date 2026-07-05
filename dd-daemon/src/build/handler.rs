@@ -1,4 +1,3 @@
-#![allow(unused_imports, dead_code)]
 //! The `POST /build` axum handler: request/`--build-arg`/`--target`/`--no-cache`/`--label` parsing, the
 //! multi-stage step-loop driver with the content-addressed build layer cache, and final image
 //! registration + progress/response streaming. Per-instruction execution (RUN/COPY/ADD) and the

@@ -1,4 +1,3 @@
-#![allow(unused_imports, dead_code)]
 //! Container lifecycle / control handlers, decomposed by concern. Every handler
 //! was moved verbatim from the former single-file `lifecycle.rs`; behavior is
 //! unchanged (pure file reshaping). Submodules:

@@ -1,4 +1,3 @@
-#![allow(unused_imports, dead_code)]
 //! `docker ps` — the container list, with `--all`/`--filter`/`--size` and docker's newest-first order.
 use super::super::*;
 use super::detail::container_mounts_json;

@@ -1,4 +1,3 @@
-#![allow(dead_code)]
 //! The `docker events` lifecycle bus.
 //!
 //! A single process-wide [`tokio::sync::broadcast`] channel of Docker event JSON values. Lifecycle
@@ -82,7 +81,9 @@ pub(crate) struct EventsQ {
     /// `docker events --filter`, sent as a URL-encoded JSON map (`{"type":["container"],...}`).
     pub(crate) filters: Option<String>,
     /// `since`/`until` are accepted (so the query deserializes) but not applied — dd's stream is live.
+    #[allow(dead_code)] // wire-contract field: deserialized but intentionally unused (see above)
     pub(crate) since: Option<String>,
+    #[allow(dead_code)] // wire-contract field: deserialized but intentionally unused (see above)
     pub(crate) until: Option<String>,
 }
 

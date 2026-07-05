@@ -1,4 +1,3 @@
-#![allow(unused_imports, dead_code)]
 //! `POST /containers/create` — the container CREATE handler. The stateless pieces
 //! it uses were split into siblings (behavior unchanged, pure file reshaping):
 //!   - `dto`     — the create-body/host-config deserialize DTOs.
@@ -12,7 +11,8 @@ mod dto;
 mod ports;
 mod volumes;
 
-pub(crate) use {dto::*, ports::*, volumes::*};
+pub(crate) use {dto::*, ports::*};
+use volumes::*;
 
 pub(crate) async fn containers_create(
     State(a): State<App>,

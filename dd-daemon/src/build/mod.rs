@@ -1,4 +1,3 @@
-#![allow(unused_imports, dead_code)]
 //! `docker build` orchestration — a minimal Dockerfile builder, decomposed by concern:
 //!   - `handler` — the `POST /build` axum handler (`images_build`): request/`--build-arg`/`--target`
 //!                 parsing, the multi-stage step-loop driver, the build layer-cache chain, and final
@@ -14,17 +13,12 @@
 //! Every previously-public name stays reachable as `crate::build::…` via the glob re-exports below, so
 //! the router in main.rs and every `use crate::build::*` site keep resolving unchanged.
 use crate::archive::*;
-use crate::containers::*;
 use crate::images::*;
 use crate::model::*;
-use crate::networks::*;
-use crate::registry::{Client, Credentials, ImageRef};
-use crate::runtime::*;
-use crate::system::*;
+use crate::registry::Credentials;
 use crate::util::*;
-use crate::volumes::*;
 use crate::prelude::*;
-use ddjit::{Guest, PortMap, SpawnConfig, Volume};
+use ddjit::Guest;
 
 mod handler;
 mod prune;
@@ -32,7 +26,7 @@ mod steps;
 
 pub(crate) use handler::*;
 pub(crate) use prune::*;
-pub(crate) use steps::*;
+pub(in crate::build) use steps::*;
 
 // Dockerfile parsing (`parse_dockerfile`/`substitute_args`/`parse_exec_form`/`parse_labels`) and the
 // content-addressed build **layer cache** (`BuildCache`, `cache_id`, `is_fs_inst`, the rootfs/path

@@ -1,4 +1,3 @@
-#![allow(unused_imports, dead_code)]
 //! Read / report + teardown handlers, split into cohesive submodules:
 //!   - `detail`  — `containers_inspect` + `container_mounts_json` (+ inspect helpers)
 //!   - `list`    — `containers_json` (`docker ps`) + filter/size/status helpers
@@ -11,7 +10,6 @@
 //! Every previously-public name is re-exported with `pub(crate) use` so the path
 //! `crate::containers::<handler>` (used by the router in main.rs and every
 //! `use crate::containers::*` site) resolves exactly as it did before the split.
-use super::*;
 
 mod admin;
 mod detail;

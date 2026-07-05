@@ -1,4 +1,3 @@
-#![allow(unused_imports, dead_code)]
 //! `docker inspect` — the full container detail document, plus the resolved `Mounts[]` builder it
 //! (and `docker ps`) share.
 use super::super::*;
