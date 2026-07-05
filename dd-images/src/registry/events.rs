@@ -5,8 +5,10 @@ use serde_json::Value;
 
 /// What `pull` resolved and unpacked.
 pub struct Pulled {
+    /// The reference that was resolved and pulled.
     pub image: ImageRef,
-    pub config: Value, // the image config blob (Cmd/Entrypoint/Env/Architecture)
+    /// The image's OCI run-config blob (`Cmd`/`Entrypoint`/`Env`/`Architecture`/…) for the resolved platform.
+    pub config: Value,
 }
 
 /// A live progress event for a single image pull, surfaced per-layer as the download/unpack proceeds.
@@ -17,23 +19,38 @@ pub struct Pulled {
 #[derive(Clone, Debug)]
 pub enum PullEvent {
     /// A layer was discovered in the manifest (docker's "Pulling fs layer").
-    Layer { id: String },
+    Layer {
+        /// Short layer id (first 12 hex of the blob digest).
+        id: String,
+    },
     /// Live download progress for a layer (`current`/`total` compressed bytes).
     Downloading {
+        /// Short layer id (first 12 hex of the blob digest).
         id: String,
+        /// Compressed bytes downloaded so far.
         current: u64,
+        /// Total compressed size of the layer blob, from the manifest.
         total: u64,
     },
     /// A layer finished downloading.
-    DownloadComplete { id: String },
+    DownloadComplete {
+        /// Short layer id (first 12 hex of the blob digest).
+        id: String,
+    },
     /// A layer's contents are being unpacked into the rootfs.
     Extracting {
+        /// Short layer id (first 12 hex of the blob digest).
         id: String,
+        /// Compressed bytes unpacked so far.
         current: u64,
+        /// Total compressed size of the layer blob, from the manifest.
         total: u64,
     },
     /// A layer is fully pulled + unpacked.
-    PullComplete { id: String },
+    PullComplete {
+        /// Short layer id (first 12 hex of the blob digest).
+        id: String,
+    },
 }
 
 /// docker's short layer id: the first 12 hex chars after the `sha256:` prefix.

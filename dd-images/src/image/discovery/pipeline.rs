@@ -3,7 +3,7 @@
 use super::*;
 
 /// A coarse "richness" score for a [`DiscoveredImage`], used to pick the best entry when several
-/// directories resolve to the same tag (see [`dedup_images`]). A non-empty environment is the decisive
+/// directories resolve to the same tag (see `dedup_images`). A non-empty environment is the decisive
 /// signal: `poc/images` ships some images twice — a single-underscore dd-format dir whose sidecar
 /// recorded an empty `env`, AND a umoci bundle dir carrying the full OCI config — and the bundle one
 /// (real env) must win. The remaining run metadata break finer ties.
