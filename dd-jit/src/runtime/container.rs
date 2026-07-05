@@ -366,6 +366,110 @@ mod tests {
     }
 
     #[test]
+    fn guest_env_empty_gets_default_path_and_no_term() {
+        // Empty env with no tty: only the default PATH is injected.
+        let out = guest_env(&[], false);
+        assert_eq!(out, vec![DEFAULT_GUEST_PATH]);
+        // With a tty, an empty env gets both PATH and TERM (PATH first, in injection order).
+        let out = guest_env(&[], true);
+        assert_eq!(out, vec![DEFAULT_GUEST_PATH, "TERM=xterm"]);
+    }
+
+    #[test]
+    fn guest_env_existing_term_not_overwritten() {
+        // A caller-supplied TERM survives; no second TERM is appended.
+        let merged = vec!["TERM=screen-256color".to_string()];
+        let out = guest_env(&merged, true);
+        assert_eq!(out, vec!["TERM=screen-256color", DEFAULT_GUEST_PATH]);
+    }
+
+    /// Build a throwaway rootfs with the given `etc/passwd`/`etc/group` contents; returns its path.
+    fn make_rootfs(tag: &str, passwd: Option<&str>, group: Option<&str>) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "ddjit-resolve-user-{}-{}-{}",
+            std::process::id(),
+            tag,
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(dir.join("etc")).unwrap();
+        if let Some(p) = passwd {
+            std::fs::write(dir.join("etc/passwd"), p).unwrap();
+        }
+        if let Some(g) = group {
+            std::fs::write(dir.join("etc/group"), g).unwrap();
+        }
+        dir
+    }
+
+    const PASSWD: &str = "root:x:0:0:root:/root:/bin/sh\npostgres:x:70:70:postgres:/var/lib/postgresql:/bin/sh\n";
+    const GROUP: &str = "root:x:0:\npostgres:x:70:\nstaff:x:50:\n";
+
+    #[test]
+    fn resolve_user_numeric_uid_defaults_gid_zero() {
+        // A bare numeric uid needs no rootfs and gets gid 0 (docker semantics).
+        let dir = make_rootfs("num", None, None);
+        assert_eq!(resolve_user(dir.to_str().unwrap(), "1000"), Some((1000, 0)));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn resolve_user_numeric_uid_and_gid() {
+        let dir = make_rootfs("numnum", None, None);
+        assert_eq!(resolve_user(dir.to_str().unwrap(), "1000:2000"), Some((1000, 2000)));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn resolve_user_name_uses_passwd_primary_gid() {
+        let dir = make_rootfs("name", Some(PASSWD), Some(GROUP));
+        assert_eq!(resolve_user(dir.to_str().unwrap(), "postgres"), Some((70, 70)));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn resolve_user_name_group_via_group_lookup() {
+        // `name:group` resolves the group through /etc/group.
+        let dir = make_rootfs("namegrp", Some(PASSWD), Some(GROUP));
+        assert_eq!(resolve_user(dir.to_str().unwrap(), "postgres:postgres"), Some((70, 70)));
+        // A cross group: user postgres with the numeric-named `staff` group by name.
+        assert_eq!(resolve_user(dir.to_str().unwrap(), "postgres:staff"), Some((70, 50)));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn resolve_user_trailing_colon_empty_group_is_gid_zero() {
+        // A numeric uid with a trailing empty group: not a parse failure, gid falls back to 0.
+        let dir = make_rootfs("trail", None, None);
+        assert_eq!(resolve_user(dir.to_str().unwrap(), "1000:"), Some((1000, 0)));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn resolve_user_name_trailing_colon_keeps_primary_gid() {
+        // A NAME with a trailing empty group keeps its passwd primary gid (not 0).
+        let dir = make_rootfs("nametrail", Some(PASSWD), Some(GROUP));
+        assert_eq!(resolve_user(dir.to_str().unwrap(), "postgres:"), Some((70, 70)));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn resolve_user_unresolvable_name_returns_none() {
+        // No passwd file at all: a name can't be resolved.
+        let dir = make_rootfs("missing", None, None);
+        assert_eq!(resolve_user(dir.to_str().unwrap(), "postgres"), None);
+        // Present passwd but the name isn't in it.
+        let dir2 = make_rootfs("absent", Some(PASSWD), Some(GROUP));
+        assert_eq!(resolve_user(dir2.to_str().unwrap(), "nobody"), None);
+        // Known user, but the named group is absent from /etc/group.
+        assert_eq!(resolve_user(dir2.to_str().unwrap(), "postgres:ghosts"), None);
+        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::remove_dir_all(&dir2);
+    }
+
+    #[test]
     fn builder_dialect_matches_daemon_keys() {
         // Every promoted DD_*/DDJIT_* key encodes exactly as the daemon's spawn_cfg did.
         let c = Container::builder(Image::from_rootfs("/img"))
