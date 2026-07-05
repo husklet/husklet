@@ -6,8 +6,11 @@ use serde_json::Value;
 /// map it to your runtime's own target when you launch the rootfs.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Arch {
+    /// Linux on 64-bit ARM (OCI `linux`/`arm64`).
     LinuxAarch64,
+    /// Linux on 64-bit x86 (OCI `linux`/`amd64`).
     LinuxX86_64,
+    /// macOS on 64-bit ARM (OCI `darwin`/`arm64`).
     DarwinAarch64,
 }
 

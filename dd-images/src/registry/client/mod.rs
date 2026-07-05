@@ -25,6 +25,8 @@ pub struct Client {
     token: Option<String>,
 }
 impl Client {
+    /// Open a registry session for `image`, authenticating with `creds` (use [`Credentials::none`]
+    /// for anonymous/public pulls); the bearer token is fetched lazily on the first request.
     pub fn new(image: ImageRef, creds: Credentials) -> Client {
         Client {
             image,

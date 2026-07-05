@@ -5,8 +5,11 @@ use super::*;
 /// A parsed image reference: `[registry/]repository[:tag]`.
 #[derive(Clone, Debug, PartialEq)]
 pub struct ImageRef {
-    pub registry: String, // host[:port], e.g. "registry-1.docker.io", "ghcr.io", "localhost:5000"
-    pub repository: String, // path, e.g. "library/ubuntu", "owner/app"
+    /// Registry `host[:port]`, e.g. `"registry-1.docker.io"`, `"ghcr.io"`, `"localhost:5000"`.
+    pub registry: String,
+    /// Repository path within the registry, e.g. `"library/ubuntu"`, `"owner/app"`.
+    pub repository: String,
+    /// Image tag, defaulting to `"latest"` when the reference omits one.
     pub tag: String,
 }
 impl ImageRef {

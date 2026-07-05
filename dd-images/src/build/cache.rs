@@ -35,7 +35,7 @@ fn now_secs() -> i64 {
 }
 
 /// sha256 (lowercase hex, no `sha256:` prefix) of arbitrary bytes. Thin re-export of the crate's single
-/// digest helper ([`crate::image::digest::sha256_hex`]); kept here as the public `dd_images::build`
+/// digest helper (`crate::image::digest::sha256_hex`); kept here as the public `dd_images::build`
 /// surface external callers (the daemon's build handler/prune) already import.
 pub fn sha256_hex(data: &[u8]) -> String {
     crate::image::digest::sha256_hex(data)

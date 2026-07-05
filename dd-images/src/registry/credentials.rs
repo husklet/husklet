@@ -6,7 +6,9 @@ use serde_json::Value;
 /// Credentials for a registry, as sent by the CLI in the `X-Registry-Auth` header.
 #[derive(Clone, Default)]
 pub struct Credentials {
+    /// Registry account username (empty for anonymous access).
     pub username: String,
+    /// Registry account password or access token (empty for anonymous access).
     pub password: String,
 }
 impl Credentials {

@@ -2,6 +2,8 @@
 //! Docker polyfill (`dd-daemon`). Today it owns the OCI **registry client** ([`registry`]): pulling and
 //! pushing manifests + layers, registry auth, and image references. Image/rootfs *building* (Dockerfile
 //! execution, layer extraction) will consolidate here too as it is decoupled from the daemon runtime.
+#![warn(missing_docs)]
+
 pub mod registry;
 pub use registry::{layer_short, Client, Credentials, ImageRef, PullEvent, Pulled};
 
