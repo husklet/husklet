@@ -85,6 +85,19 @@ pub(crate) async fn network_delete(State(a): State<App>, Path(id): Path<String>)
     {
         return forbidden("predefined network cannot be removed");
     }
+    // A user network with connected containers can't be removed — docker refuses with 403 until every
+    // endpoint is disconnected. `containers` is populated by join_network / cleared by leave_network.
+    if let Some(n) = g
+        .networks
+        .iter()
+        .find(|n| net_matches(n, &id) && !n.containers.is_empty())
+    {
+        return forbidden(format!(
+            "network {name} id {nid} has active endpoints",
+            name = n.name,
+            nid = n.id
+        ));
+    }
     let removed = g
         .networks
         .iter()

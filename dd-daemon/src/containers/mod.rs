@@ -49,6 +49,18 @@ async fn do_stop(a: &App, id: &str, sig: i32, t: i64) -> Response {
         let Some(full) = resolve_cid(&g, id) else {
             return no_such(id);
         };
+        // `docker stop` on an already-stopped container is a 304 Not Modified — a no-op that must NOT
+        // rewrite finished_at or emit a `stop` event. Only a running/paused/restarting container is
+        // signalled. (containers_restart ignores this return value and spawns a fresh Live regardless,
+        // so a stopped container still restarts — the 304 only short-circuits the stop half.)
+        let active = g
+            .containers
+            .get(&full)
+            .map(|c| c.status == "running" || c.status == "paused" || c.status == "restarting")
+            .unwrap_or(false);
+        if !active {
+            return StatusCode::NOT_MODIFIED.into_response();
+        }
         // Mark a deliberate stop so the RestartPolicy supervisor won't auto-restart this container.
         let pid = g
             .live
