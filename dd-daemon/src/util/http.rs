@@ -101,6 +101,20 @@ mod tests {
     }
 
     #[test]
+    fn base64_std_rfc4648_vectors() {
+        // The RFC 4648 test vectors exercise all three padding cases (0/1/2 `=`).
+        assert_eq!(base64_std(b""), "");
+        assert_eq!(base64_std(b"f"), "Zg==");
+        assert_eq!(base64_std(b"fo"), "Zm8=");
+        assert_eq!(base64_std(b"foo"), "Zm9v");
+        assert_eq!(base64_std(b"foob"), "Zm9vYg==");
+        assert_eq!(base64_std(b"fooba"), "Zm9vYmE=");
+        assert_eq!(base64_std(b"foobar"), "Zm9vYmFy");
+        // a byte needing the `+`/`/` alphabet (0xFB,0xFF => "+/8=")
+        assert_eq!(base64_std(&[0xfb, 0xff]), "+/8=");
+    }
+
+    #[test]
     fn log_frame_stderr_stream_id_and_len() {
         // Stream id 2 = stderr; the 4-byte big-endian length is the payload byte count.
         let payload = vec![0u8; 300];
