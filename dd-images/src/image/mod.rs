@@ -20,7 +20,10 @@ mod local_image;
 mod store;
 
 pub use arch::{arch_from_config, Arch};
-pub use config::{config_strs, image_ref, safe_name};
+pub use config::{
+    config_exposed_ports, config_labels, config_stop_signal, config_strs, config_volumes,
+    default_shell, image_ref, repo_tag, ref_tag, safe_name,
+};
 pub use local_image::LocalImage;
 pub use store::Store;
 
