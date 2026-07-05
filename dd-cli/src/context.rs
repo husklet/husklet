@@ -2,7 +2,10 @@
 //! write the `~/.docker/contexts` metadata directly (the dir name is the lowercase SHA-256 of the
 //! context name). Either way we point at `unix://~/.dd/run/docker.sock`.
 
+use crate::cli::ContextCmd;
+use crate::context;
 use crate::paths;
+use crate::report::{note, report};
 use sha2::{Digest, Sha256};
 use std::io::Write;
 use std::process::Command;
@@ -101,4 +104,17 @@ fn write_meta(host: &str) -> std::io::Result<()> {
 
 fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
+}
+
+pub(crate) fn cmd_context(action: ContextCmd) -> i32 {
+    match action {
+        ContextCmd::Create => note("context create", context::create()),
+        ContextCmd::Rm => report("context rm", context::remove()),
+        ContextCmd::Use => note("context use", context::use_context()),
+        ContextCmd::Show => {
+            println!("name:     {}", context::NAME);
+            println!("endpoint: {}", paths::docker_host());
+            0
+        }
+    }
 }
