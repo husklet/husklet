@@ -1,22 +1,47 @@
-//! The image → rootfs → runnable-image flow: pull an OCI image into a local store as an unpacked
-//! **rootfs**, detect its guest arch, and hand it to `dd-jit` to run. This is what makes `dd-images`
-//! usable on its own — pull here, run with `dd-jit`, no daemon required:
+//! The image → rootfs flow: pull an OCI image into a local store as an unpacked **rootfs**, detect its
+//! target arch, and expose its config. `dd-images` is runtime-agnostic — it produces a rootfs + [`Arch`]
+//! + config that the CALLER hands to a runtime (e.g. `dd-jit`); it does not depend on any runtime crate.
 //!
 //! ```no_run
 //! let img = dd_images::Store::new("/var/lib/dd/images")
 //!     .pull("alpine", "latest", dd_images::Credentials::none(), &mut |_| {})?;
-//! let c = dd_jit::Container::builder(img.to_jit_image())
-//!     .cmd(img.entrypoint_cmd(["/bin/sh", "-c", "echo hi"]))
-//!     .build()?;
-//! let mut h = dd_jit::Runtime::new()?.run(&c)?;
-//! h.wait()?;
-//! # Ok::<(), Box<dyn std::error::Error>>(())
+//! // img.rootfs is an unpacked filesystem; img.arch is its target; hand both to your runtime:
+//! println!("rootfs {:?} arch {:?} cmd {:?}", img.rootfs, img.arch, img.entrypoint_cmd(["/bin/sh"]));
+//! # Ok::<(), String>(())
 //! ```
 
 use crate::registry::{Client, Credentials, ImageRef, PullEvent};
-use dd_jit::Guest;
 use serde_json::Value;
 use std::path::PathBuf;
+
+/// The target an image runs as: OS + ISA. Runtime-agnostic (no dependency on a runtime's guest type);
+/// map it to your runtime's own target when you launch the rootfs.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Arch {
+    LinuxAarch64,
+    LinuxX86_64,
+    DarwinAarch64,
+}
+
+impl Arch {
+    /// The `(os, architecture)` OCI pair, e.g. `("linux", "arm64")`.
+    pub fn oci(self) -> (&'static str, &'static str) {
+        match self {
+            Arch::LinuxAarch64 => ("linux", "arm64"),
+            Arch::LinuxX86_64 => ("linux", "amd64"),
+            Arch::DarwinAarch64 => ("darwin", "arm64"),
+        }
+    }
+
+    /// The `<os>_<isa>` slug (matches dd-jit's `Guest::target()`), e.g. `"linux_aarch64"`.
+    pub fn target(self) -> &'static str {
+        match self {
+            Arch::LinuxAarch64 => "linux_aarch64",
+            Arch::LinuxX86_64 => "linux_x86_64",
+            Arch::DarwinAarch64 => "darwin_aarch64",
+        }
+    }
+}
 
 /// A local image store: a directory holding one `<safe-name>/rootfs` tree per pulled image.
 #[derive(Clone, Debug)]
@@ -24,15 +49,14 @@ pub struct Store {
     dir: String,
 }
 
-/// An image pulled into the local store: its unpacked rootfs, detected guest arch, and OCI config blob.
-/// Convert it to a [`dd_jit::Image`] with [`LocalImage::to_jit_image`] and read the image's default
-/// command/env with the accessors.
+/// An image pulled into the local store: its unpacked `rootfs`, detected [`Arch`], and OCI config blob.
+/// Hand `rootfs` + `arch` to your runtime; read the image's default command/env with the accessors.
 #[derive(Clone, Debug)]
 pub struct LocalImage {
-    /// The unpacked root filesystem — pass this to `dd-jit`.
+    /// The unpacked root filesystem — hand this to your runtime.
     pub rootfs: PathBuf,
-    /// The guest personality (OS + ISA) detected from the image config.
-    pub arch: Guest,
+    /// The target (OS + ISA) detected from the image config.
+    pub arch: Arch,
     /// The raw OCI image config blob (`{ architecture, os, config: { Cmd, Entrypoint, Env, … } }`).
     pub config: Value,
     /// The reference this was pulled from.
@@ -74,17 +98,12 @@ impl Store {
         let iref = image_ref(from, tag);
         let rootfs = self.rootfs_path(&iref);
         let pulled = Client::new(iref.clone(), creds).pull(&rootfs, archs, progress)?;
-        let arch = arch_from_config(&pulled.config).unwrap_or(Guest::LinuxAarch64);
+        let arch = arch_from_config(&pulled.config).unwrap_or(Arch::LinuxAarch64);
         Ok(LocalImage { rootfs, arch, config: pulled.config, iref })
     }
 }
 
 impl LocalImage {
-    /// Build the runnable [`dd_jit::Image`] for this rootfs (with its detected guest personality).
-    pub fn to_jit_image(&self) -> dd_jit::Image {
-        dd_jit::Image::from_rootfs(self.rootfs.to_string_lossy().into_owned()).guest(self.arch)
-    }
-
     /// The image's `Entrypoint` (OCI `config.config.Entrypoint`).
     pub fn entrypoint(&self) -> Vec<String> {
         config_strs(&self.config, "Entrypoint")
@@ -138,13 +157,13 @@ pub fn image_ref(from_image: &str, tag: &str) -> ImageRef {
     r
 }
 
-/// Map an OCI config blob's `architecture` + `os` to a [`Guest`]. `None` if unrecognized.
-pub fn arch_from_config(config: &Value) -> Option<Guest> {
+/// Map an OCI config blob's `architecture` + `os` to an [`Arch`]. `None` if unrecognized.
+pub fn arch_from_config(config: &Value) -> Option<Arch> {
     let os = config["os"].as_str().unwrap_or("linux");
     match (os, config["architecture"].as_str()?) {
-        ("darwin", "arm64" | "aarch64") => Some(Guest::DarwinAarch64),
-        (_, "amd64" | "x86_64") => Some(Guest::LinuxX86_64),
-        (_, "arm64" | "aarch64") => Some(Guest::LinuxAarch64),
+        ("darwin", "arm64" | "aarch64") => Some(Arch::DarwinAarch64),
+        (_, "amd64" | "x86_64") => Some(Arch::LinuxX86_64),
+        (_, "arm64" | "aarch64") => Some(Arch::LinuxAarch64),
         _ => None,
     }
 }

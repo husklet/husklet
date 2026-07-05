@@ -393,7 +393,21 @@ pub(crate) fn pull_progress(
 /// Build an [`ImageRef`] from docker's separate `fromImage` + `tag` params (tag overrides any in the ref).
 // Image ref / store-name / config helpers live in dd-images (usable standalone); re-export so existing
 // `crate::images::*` call sites keep resolving.
-pub(crate) use dd_images::{arch_from_config as manifest_arch, config_strs, image_ref, safe_name};
+pub(crate) use dd_images::{config_strs, image_ref, safe_name};
+
+/// Map a dd-images (runtime-agnostic) target arch onto the runtime's guest personality.
+pub(crate) fn guest_of(a: dd_images::Arch) -> Guest {
+    match a {
+        dd_images::Arch::LinuxAarch64 => Guest::LinuxAarch64,
+        dd_images::Arch::LinuxX86_64 => Guest::LinuxX86_64,
+        dd_images::Arch::DarwinAarch64 => Guest::DarwinAarch64,
+    }
+}
+
+/// The image config's declared guest arch, if recognizable (dd-images detection mapped to a `Guest`).
+pub(crate) fn manifest_arch(config: &Value) -> Option<Guest> {
+    dd_images::arch_from_config(config).map(guest_of)
+}
 
 /// Pull an image from its registry (any registry) and unpack it under `<images_dir>/<safe>/rootfs`,
 /// preferring the linux/arm64 variant (native; falls back to amd64). Returns the registered [`Image`].
