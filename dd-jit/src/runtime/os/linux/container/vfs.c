@@ -1018,7 +1018,13 @@ static int proc_map_region_p(char *b, size_t n, unsigned long lo, unsigned long 
     // "Locked:" reports the mlock/mlockall'd bytes of THIS region (LTP mlock05 mlock()s a whole mapping
     // and reads its Locked back == the mapping size).
     unsigned long lockkb = (unsigned long)(mlk_region_locked(lo, hi) / 1024);
-    int m = snprintf(b, n, "%012lx-%012lx %s 00000000 00:00 0 %*s%s\n", lo, hi, perms, name[0] ? 20 : 0, "", name);
+    // A PROT_NONE region (perms "---p", e.g. the stack guard gap) is NOT resident: its resident/dirty
+    // smaps fields must read 0 like the kernel, even though its virtual Size is the full span.
+    int resident = (perms[0] != '-' || perms[1] != '-' || perms[2] != '-');
+    unsigned long rkb = resident ? kb : 0;
+    // Addresses use the kernel's own %08lx field width (min 8, NOT zero-padded to 12) so pmap/gdb and a
+    // strict structural diff see the exact byte layout real Linux emits for the same address.
+    int m = snprintf(b, n, "%08lx-%08lx %s 00000000 00:00 0 %*s%s\n", lo, hi, perms, name[0] ? 20 : 0, "", name);
     if (smaps)
         m += snprintf(b + m, (size_t)n - (size_t)m,
                       "Size:%15lu kB\nKernelPageSize:%6d kB\nMMUPageSize:%9d kB\n"
@@ -1026,12 +1032,8 @@ static int proc_map_region_p(char *b, size_t n, unsigned long lo, unsigned long 
                       "Private_Clean:%6d kB\nPrivate_Dirty:%6lu kB\nReferenced:%9lu kB\n"
                       "Anonymous:%10lu kB\nAnonHugePages:%6d kB\nSwap:%15d kB\nLocked:%13lu kB\n"
                       "VmFlags: rd wr mr mw me ac\n",
-                      kb, 4, 4, kb, kb, 0, kb, 0, 0UL, kb, kb, 0, 0, lockkb);
+                      kb, 4, 4, rkb, rkb, 0, rkb, 0, 0UL, rkb, rkb, 0, 0, lockkb);
     return m;
-}
-// back-compat wrapper: the old rw-p default for anon/heap/stack regions with no per-segment prot.
-static int proc_map_region(char *b, size_t n, unsigned long lo, unsigned long hi, const char *name, int smaps) {
-    return proc_map_region_p(b, n, lo, hi, "rw-p", name, smaps);
 }
 // PT_LOAD segments of the main executable, read from the auxv the loader planted (AT_PHDR/AT_PHENT/
 // AT_PHNUM) so /proc/self/maps shows the text as r-xp, rodata r--p, data rw-p -- the real per-segment
@@ -1074,48 +1076,82 @@ static void maps_perms_str(int prot, char *out) { // prot bits: 4=R 2=W 1=X
     out[3] = 'p';
     out[4] = 0;
 }
+// The guest brk arena bounds, defined (as file-scope statics) in syscall/dispatch.c which is #included
+// AFTER this TU; a matching tentative declaration here lets the maps synth name the [heap] region. Both
+// are static definitions of the same object in one translation unit, so this reads the live break.
+static uint64_t brk_lo, brk_cur, brk_hi;
+// One /proc/maps row, collected before emit so the whole file can be address-sorted (the kernel ALWAYS
+// emits VMAs in ascending start order; pmap/gdb and jemalloc/glibc's sequential parse rely on it).
+struct maprow { uint64_t lo, hi; char perms[5]; const char *name; };
+static int maprow_cmp(const void *a, const void *b) {
+    uint64_t x = ((const struct maprow *)a)->lo, y = ((const struct maprow *)b)->lo;
+    return x < y ? -1 : x > y ? 1 : 0;
+}
 // Synthesize /proc/[pid]/maps (smaps=0) or /proc/[pid]/smaps (smaps=1) from the tracked guest mappings
-// (g_gmap) plus the published main-stack bounds. The [stack] line (with a guard line below it, as the
-// kernel shows) is what glibc's pthread_getattr_np scans for; the region list makes the file non-empty
-// and parseable. Returns an anonymous fd holding the content, or -1 on error.
+// (g_gmap), the published main-stack bounds, and the brk arena ([heap]). Rows are collected, sorted by
+// ascending start address (the kernel invariant), then emitted. The [stack] line (with a guard line
+// below it, as the kernel shows) is what glibc's pthread_getattr_np scans for; [heap] is what jemalloc/
+// glibc-malloc/redis/pmap look for. Returns an anonymous fd holding the content, or -1 on error.
 static int proc_maps_fd(int smaps) {
     char tn[] = "/tmp/.ddprocXXXXXX";
     int fd = mkstemp(tn);
     if (fd < 0) return -1;
     unlink(tn);
     char b[768];
-    // The main executable's PT_LOAD segments FIRST, with their real per-segment protection (text r-xp,
-    // rodata r--p, data rw-p) and the exe path as the mapping name -- read from the auxv program headers.
+    // Collect every row on the heap (g_ngmap can be thousands) so the file can be address-sorted before
+    // emit. Capacity: main-exe PT_LOAD segs + stack + guard + heap split + one row per gmap entry.
+    int cap = g_ngmap + 32;
+    struct maprow *rows = (struct maprow *)calloc((size_t)cap, sizeof *rows);
+    if (!rows) { close(fd); return -1; }
+    int nrow = 0;
+#define MAPROW_ADD(LO, HI, PERMS, NAME)                                                        \
+    do { if (nrow < cap && (HI) > (LO)) { rows[nrow].lo = (LO); rows[nrow].hi = (HI);           \
+        snprintf(rows[nrow].perms, sizeof rows[nrow].perms, "%s", (PERMS));                     \
+        rows[nrow].name = (NAME); nrow++; } } while (0)
+    // The main executable's PT_LOAD segments, with their real per-segment protection (text r-xp, rodata
+    // r--p, data rw-p) and the exe path as the mapping name -- read from the auxv program headers.
     struct mseg seg[16];
     int nseg = maps_phdr_segs(seg, 16);
     const char *exe = (g_exe_path && g_exe_path[0]) ? g_exe_path : "";
     for (int i = 0; i < nseg; i++) {
         char perms[5];
         maps_perms_str(seg[i].prot, perms);
-        int m = proc_map_region_p(b, sizeof b, (unsigned long)seg[i].lo, (unsigned long)seg[i].hi, perms, exe, smaps);
-        if (write(fd, b, (size_t)m) < 0) {}
+        MAPROW_ADD(seg[i].lo, seg[i].hi, perms, exe);
     }
     if (g_stack_hi) {
         unsigned long lo = (unsigned long)g_stack_lo, hi = (unsigned long)g_stack_hi;
-        int m = snprintf(b, sizeof b, "%012lx-%012lx ---p 00000000 00:00 0 \n", lo > 0x1000 ? lo - 0x1000 : 0, lo);
-        if (write(fd, b, (size_t)m) < 0) {}
-        m = proc_map_region(b, sizeof b, lo, hi, "[stack]", smaps);
-        if (write(fd, b, (size_t)m) < 0) {}
+        MAPROW_ADD(lo > 0x1000 ? lo - 0x1000 : 0, lo, "---p", ""); // guard gap below the stack
+        MAPROW_ADD(lo, hi, "rw-p", "[stack]");
     }
+    // The heap: emit exactly [brk_lo, brk_cur) as [heap], like the kernel (whose heap VMA ends at the
+    // break). dd reserves a large brk arena up front (one gmap entry [brk_lo,brk_hi)); the reserved tail
+    // above brk_cur is NOT part of the guest-visible heap, so it is dropped -- otherwise maps would show a
+    // 256 MB anon region no real container has. jemalloc/glibc-malloc/redis/pmap look for this [heap] line.
+    int have_heap = brk_hi && brk_cur > brk_lo;
+    if (have_heap)
+        MAPROW_ADD((unsigned long)brk_lo, (unsigned long)((brk_cur + 0xfff) & ~0xfffULL), "rw-p", "[heap]");
     for (int i = 0; i < g_ngmap; i++) {
         // report the guest-VISIBLE length (glen) so a mapping's Size/Rss matches the guest's mmap length,
         // not dd's full extent including the 64 KB guard tail it reserves past anon maps (LTP mlock05 Rss).
         unsigned long lo = (unsigned long)g_gmap[i].addr, hi = lo + (unsigned long)g_gmap[i].glen;
         if (g_stack_hi && lo >= (unsigned long)g_stack_lo && hi <= (unsigned long)g_stack_hi)
             continue; // already emitted as [stack]
+        if (brk_hi && lo == (unsigned long)brk_lo)
+            continue; // the brk arena -- rendered as [heap] above (tail beyond brk is not guest-visible)
         // skip a region already rendered as PT_LOAD segments (the image span the loader tracks as one entry)
         int covered = 0;
         for (int s = 0; s < nseg; s++)
             if (lo >= seg[s].lo && lo < seg[s].hi) { covered = 1; break; }
         if (covered) continue;
-        int m = proc_map_region(b, sizeof b, lo, hi, "", smaps);
+        MAPROW_ADD(lo, hi, "rw-p", "");
+    }
+#undef MAPROW_ADD
+    qsort(rows, (size_t)nrow, sizeof *rows, maprow_cmp);
+    for (int i = 0; i < nrow; i++) {
+        int m = proc_map_region_p(b, sizeof b, rows[i].lo, rows[i].hi, rows[i].perms, rows[i].name, smaps);
         if (write(fd, b, (size_t)m) < 0) {}
     }
+    free(rows);
     lseek(fd, 0, SEEK_SET);
     return fd;
 }
