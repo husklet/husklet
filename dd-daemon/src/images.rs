@@ -391,9 +391,12 @@ pub(crate) fn pull_progress(
 }
 
 /// Build an [`ImageRef`] from docker's separate `fromImage` + `tag` params (tag overrides any in the ref).
-// Image ref / store-name / config helpers live in dd-images (usable standalone); re-export so existing
-// `crate::images::*` call sites keep resolving.
-pub(crate) use dd_images::{config_strs, image_ref, safe_name};
+// Image ref / store-name / OCI-config / repo-tag / default-command helpers live in dd-images (usable
+// standalone, runtime-agnostic); re-export so existing `crate::images::*` call sites keep resolving.
+pub(crate) use dd_images::{
+    config_exposed_ports, config_labels, config_stop_signal, config_strs, config_volumes,
+    default_shell, image_ref, repo_tag, ref_tag, safe_name,
+};
 
 /// Map a dd-images (runtime-agnostic) target arch onto the runtime's guest personality.
 pub(crate) fn guest_of(a: dd_images::Arch) -> Guest {
@@ -530,82 +533,6 @@ pub(crate) fn image_from_config(
     }
 }
 
-/// Derive a [`Guest`] from an OCI/Docker image config's top-level `architecture`+`os`
-/// (e.g. `{"architecture":"amd64","os":"linux"}`). Used as a fallback when the rootfs has no
-/// ELF/Mach-O to sniff (distroless/scratch). Returns `None` when the fields are absent/unrecognized.
-
-/// A `repository:tag` string with exactly one tag — discovered images carry a bare name (`busybox`),
-/// pulled ones already include the tag (`busybox:latest`); append `:latest` only when absent.
-pub(crate) fn repo_tag(name: &str) -> String {
-    let last = name.rsplit('/').next().unwrap_or(name);
-    if last.contains(':') {
-        name.to_string()
-    } else {
-        format!("{name}:latest")
-    }
-}
-
-/// The tag portion of an image reference, defaulting to `latest` when none is given. A `:port` inside a
-/// registry host (`localhost:5000/foo`) is NOT a tag — only a final `:tag` with no slash after the colon
-/// counts: `ubuntu:24.04` -> `24.04`, `ubuntu` -> `latest`, `localhost:5000/foo` -> `latest`. Lets `rmi`
-/// (and `push`) tell `ubuntu:24.04` apart from `ubuntu` (`:latest`) so an untag is tag-precise.
-pub(crate) fn ref_tag(name: &str) -> String {
-    match name.rsplit_once(':') {
-        Some((_, t)) if !t.contains('/') => t.to_string(),
-        _ => "latest".to_string(),
-    }
-}
-
-/// A filesystem-safe directory name for an image reference.
-
-/// A string array at `config.config.<key>` of an OCI image config blob (e.g. `Entrypoint`, `Cmd`, `Env`),
-/// flattened to `Vec<String>` (non-string/absent -> empty). Kept granular so pull can persist Entrypoint
-/// and Cmd separately (docker's override semantics depend on the split).
-
-/// The keys of the `config.config.ExposedPorts` object of an OCI image config blob (e.g. `"5432/tcp"`),
-/// as a sorted `Vec<String>`. OCI stores exposed ports as a set (object with empty values); we keep just
-/// the keys and re-materialize the `{port: {}}` object at inspect time. Absent -> empty.
-pub(crate) fn config_exposed_ports(config: &Value) -> Vec<String> {
-    let mut v: Vec<String> = config["config"]["ExposedPorts"]
-        .as_object()
-        .map(|m| m.keys().cloned().collect())
-        .unwrap_or_default();
-    v.sort();
-    v
-}
-
-/// The `config.config.Labels` object of an OCI image config blob as a `HashMap` (absent/non-string -> empty).
-pub(crate) fn config_labels(config: &Value) -> std::collections::HashMap<String, String> {
-    config["config"]["Labels"]
-        .as_object()
-        .map(|m| {
-            m.iter()
-                .filter_map(|(k, v)| v.as_str().map(|s| (k.clone(), s.to_string())))
-                .collect()
-        })
-        .unwrap_or_default()
-}
-
-/// The `config.config.StopSignal` of an OCI image config (e.g. `"SIGQUIT"`) — the signal `docker stop`
-/// sends this image's container. Empty when the image sets none (the container then defaults to SIGTERM).
-pub(crate) fn config_stop_signal(config: &Value) -> String {
-    config["config"]["StopSignal"]
-        .as_str()
-        .unwrap_or("")
-        .to_string()
-}
-
-/// The keys of `config.config.Volumes` (an OCI set: object with empty values) — the dirs the image
-/// declared via `VOLUME`, each of which gets an ANONYMOUS volume at `docker run`. Sorted; absent -> empty.
-pub(crate) fn config_volumes(config: &Value) -> Vec<String> {
-    let mut v: Vec<String> = config["config"]["Volumes"]
-        .as_object()
-        .map(|m| m.keys().cloned().collect())
-        .unwrap_or_default();
-    v.sort();
-    v
-}
-
 /// The `config.config.Healthcheck` of an OCI image config → [`HealthConfig`]. `Test=["NONE"]` (or absent)
 /// yields None — no probe. Durations are the config's nanoseconds, carried through verbatim.
 pub(crate) fn config_healthcheck(config: &Value) -> Option<crate::model::HealthConfig> {
@@ -630,16 +557,6 @@ pub(crate) fn config_healthcheck(config: &Value) -> Option<crate::model::HealthC
         retries: num("Retries"),
         start_period: num("StartPeriod"),
     })
-}
-
-/// Fallback default command for an image whose config has no Cmd: prefer /bin/sh, else /bin/bash.
-pub(crate) fn default_shell(rootfs: &std::path::Path) -> Vec<String> {
-    for sh in ["/bin/sh", "/bin/bash"] {
-        if rootfs.join(sh.trim_start_matches('/')).exists() {
-            return vec![sh.to_string()];
-        }
-    }
-    vec!["/bin/sh".to_string()]
 }
 
 // ---- image management: tag / rmi / push -------------------------------------
