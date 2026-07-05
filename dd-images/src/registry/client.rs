@@ -5,6 +5,11 @@ use super::*;
 use serde_json::{json, Value};
 use std::path::Path;
 
+/// The conformant `docker push` denial, surfaced whether the registry rejects the push at the token
+/// endpoint or later at the blob-upload POST — both sites use this one literal so callers get a stable
+/// error either way.
+const DENIED: &str = "denied: requested access to the resource is denied (run `docker login`)";
+
 /// A registry session for one image: caches the bearer token across the manifest + blob requests.
 pub struct Client {
     image: ImageRef,
@@ -189,9 +194,7 @@ impl Client {
         // start an upload session -> Location, then monolithic PUT with ?digest=
         let start = http::post(&format!("{base}/blobs/uploads/"), self.token.as_deref())?;
         if start.status == 401 || start.status == 403 {
-            return Err(
-                "denied: requested access to the resource is denied (run `docker login`)".into(),
-            );
+            return Err(DENIED.into());
         }
         if start.status != 202 {
             return Err(format!("blob upload not accepted ({})", start.status));
@@ -294,10 +297,7 @@ impl Client {
             // the blob-upload POST (see upload_blob), so callers get one stable error either way.
             let action = scope.rsplit(':').next().unwrap_or("");
             if action.contains("push") && (resp.status == 401 || resp.status == 403) {
-                return Err(
-                    "denied: requested access to the resource is denied (run `docker login`)"
-                        .into(),
-                );
+                return Err(DENIED.into());
             }
             return Err(format!("token endpoint -> {}", resp.status));
         }

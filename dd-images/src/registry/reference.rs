@@ -81,7 +81,10 @@ fn is_registry_host(seg: &str) -> bool {
 pub(super) fn is_local_registry(host: &str) -> bool {
     host.starts_with("localhost") || host.starts_with("127.")
 }
-fn split_tag(s: &str) -> (&str, String) {
+/// Split a reference into `(repository, tag)`, defaulting to `latest`. A `:port` inside a registry host
+/// (`localhost:5000/foo`) is NOT a tag — only a final `:tag` with no slash after the colon counts. This
+/// is the one implementation of that rule; [`crate::image::ref_tag`] delegates here for the tag alone.
+pub(crate) fn split_tag(s: &str) -> (&str, String) {
     match s.rsplit_once(':') {
         Some((p, t)) if !t.contains('/') => (p, t.to_string()),
         _ => (s, "latest".to_string()),
