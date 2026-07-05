@@ -4,31 +4,47 @@ use bollard::models::ContainerSummary;
 /// One entry of `GET /containers/json`.
 #[derive(Debug, Clone, Default)]
 pub struct Container {
+    /// Full container id.
     pub id: String,
+    /// Image name or id the container was created from.
     pub image: String,
+    /// The container's entrypoint command line.
     pub command: String,
+    /// The container's names, each with a leading `/`.
     pub names: Vec<String>,
+    /// Lifecycle state (e.g. `running`, `exited`, `paused`).
     pub state: String,
+    /// Human-readable status string (e.g. `Up 3 minutes`).
     pub status: String,
+    /// Creation time as a Unix timestamp in seconds.
     pub created: i64,
+    /// Ports the container exposes or publishes.
     pub ports: Vec<Port>,
+    /// Bind and volume mounts attached to the container.
     pub mounts: Vec<Mount>,
+    /// Exit code of the last run (0 unless populated via inspect).
     pub exit_code: i64,
 }
 
 /// A published port from `GET /containers/json`.
 #[derive(Debug, Clone, Default)]
 pub struct Port {
+    /// Port number inside the container.
     pub private_port: u16,
+    /// Host port the container port is published on (0 if unpublished).
     pub public_port: u16,
+    /// Transport protocol (e.g. `tcp`, `udp`).
     pub typ: String,
 }
 
 /// A bind/volume mount of a container (from `Mounts`).
 #[derive(Debug, Clone, Default)]
 pub struct Mount {
+    /// Host path or named volume the mount originates from.
     pub source: String,
+    /// Mount path inside the container.
     pub destination: String,
+    /// Mount type (e.g. `bind`, `volume`).
     pub typ: String,
 }
 
@@ -117,6 +133,7 @@ impl Container {
 /// Body for `create_container`, built by the CLI/GUI "run" flow. Only `image` is set today.
 #[derive(Debug, Clone, Default)]
 pub struct CreateContainer {
+    /// Image to create the container from.
     pub image: String,
 }
 

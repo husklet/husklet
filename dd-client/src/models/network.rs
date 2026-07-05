@@ -3,16 +3,27 @@ use super::*;
 /// One network from `GET /networks`.
 #[derive(Debug, Clone, Default)]
 pub struct Network {
+    /// Full network id.
     pub id: String,
+    /// Network name.
     pub name: String,
+    /// Network driver backing it (e.g. `bridge`, `host`, `null`).
     pub driver: String,
+    /// Scope the network is valid in (e.g. `local`, `swarm`).
     pub scope: String,
+    /// IPAM subnet in CIDR form (first config entry), or empty.
     pub subnet: String,
+    /// IPAM gateway address (first config entry), or empty.
     pub gateway: String,
+    /// True if the network is internal (no external connectivity).
     pub internal: bool,
+    /// True if containers can be attached to it manually.
     pub attachable: bool,
+    /// True if IPv6 is enabled on the network.
     pub ipv6: bool,
+    /// User-defined labels, sorted by key.
     pub labels: Vec<(String, String)>,
+    /// Driver-specific options, sorted by key.
     pub options: Vec<(String, String)>,
     /// IDs of the containers attached to this network (from the inspect `Containers` map).
     pub containers: Vec<String>,
