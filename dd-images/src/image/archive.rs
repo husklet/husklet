@@ -9,6 +9,15 @@
 use super::*;
 use serde_json::{json, Value};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
+
+// Per-process monotonic suffix so concurrent save/load/import requests in ONE daemon don't collide on
+// the same `<pid>` temp path (two in-flight loads sharing `dd-load-<pid>.tar` / `.load-<pid>` would
+// overwrite each other or `remove_dir_all` the dir mid-extract). Mirrors registry/http.rs's SEQ.
+static SEQ: AtomicU64 = AtomicU64::new(0);
+fn uniq() -> String {
+    format!("{}-{}", std::process::id(), SEQ.fetch_add(1, Ordering::Relaxed))
+}
 
 /// An image materialized into the store by [`Store::load_archive`] / [`Store::import_rootfs`]: its unpacked
 /// `rootfs`, detected [`Arch`], and run config recovered from the archive's manifest. Plain data — the
@@ -55,7 +64,7 @@ impl Store {
     /// second `-C`).
     pub fn save_archive(&self, rootfs: &Path, manifest: &Manifest) -> Result<Vec<u8>, String> {
         let parent = rootfs.parent().ok_or("image has no rootfs directory")?;
-        let staging = std::env::temp_dir().join(format!("dd-save-{}", std::process::id()));
+        let staging = std::env::temp_dir().join(format!("dd-save-{}", uniq()));
         let _ = std::fs::remove_dir_all(&staging);
         std::fs::create_dir_all(&staging).map_err(|e| e.to_string())?;
         let manifest_json = serde_json::to_string(manifest).map_err(|e| e.to_string())?;
@@ -83,9 +92,9 @@ impl Store {
     /// archive (no manifest) by falling back to a generic name + probed arch. Writes a `dd-image.json`
     /// sidecar so the image round-trips through discovery after a daemon restart.
     pub fn load_archive(&self, tar_bytes: &[u8]) -> Result<LoadedImage, String> {
-        let tmp = std::env::temp_dir().join(format!("dd-load-{}.tar", std::process::id()));
+        let tmp = std::env::temp_dir().join(format!("dd-load-{}.tar", uniq()));
         std::fs::write(&tmp, tar_bytes).map_err(|e| e.to_string())?;
-        let staging = PathBuf::from(format!("{}/.load-{}", self.dir, std::process::id()));
+        let staging = PathBuf::from(format!("{}/.load-{}", self.dir, uniq()));
         let _ = std::fs::remove_dir_all(&staging);
         if let Err(e) = std::fs::create_dir_all(&staging) {
             let _ = std::fs::remove_file(&tmp);
@@ -169,7 +178,7 @@ impl Store {
         let rootfs = target.join("rootfs");
         let _ = std::fs::remove_dir_all(&target);
         std::fs::create_dir_all(&rootfs).map_err(|e| e.to_string())?;
-        let tmp = std::env::temp_dir().join(format!("dd-import-{}.tar", std::process::id()));
+        let tmp = std::env::temp_dir().join(format!("dd-import-{}.tar", uniq()));
         std::fs::write(&tmp, tar_bytes).map_err(|e| e.to_string())?;
         let out = std::process::Command::new("tar")
             .arg("xf")
