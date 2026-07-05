@@ -4,3 +4,6 @@
 //! execution, layer extraction) will consolidate here too as it is decoupled from the daemon runtime.
 pub mod registry;
 pub use registry::{layer_short, Client, Credentials, ImageRef, PullEvent, Pulled};
+
+pub mod image;
+pub use image::{arch_from_config, config_strs, image_ref, safe_name, LocalImage, Store};

@@ -26,6 +26,11 @@ pub struct Credentials {
     pub password: String,
 }
 impl Credentials {
+    /// Anonymous credentials (public registries).
+    pub fn none() -> Credentials {
+        Credentials::default()
+    }
+
     /// Decode docker's base64-encoded `X-Registry-Auth` JSON (`{username,password,...}`).
     pub fn from_x_registry_auth(b64: &str) -> Option<Credentials> {
         let json = base64_decode(b64.trim())?;
