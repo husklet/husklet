@@ -2445,7 +2445,10 @@ static int proc_open(const char *rp) {
         n = snprintf(buf, sizeof buf, "%.2f %.2f %.2f 1/%d %d\n", la[0], la[1], la[2], proc_reg_count(),
                      container_pid());
     } else if (!strcmp(rp, "/proc/sys/vm/overcommit_memory")) {
-        n = snprintf(buf, sizeof buf, "0\n");
+        // OrbStack/docker default is 1 (heuristic-off, "always overcommit"). redis-server prints
+        // "WARNING overcommit_memory is set to 0! Background save may fail..." when it reads anything but 1,
+        // so serving 0 made dd emit a startup warning a real-docker user never sees. Match the oracle: 1.
+        n = snprintf(buf, sizeof buf, "1\n");
     } else if (!strcmp(rp, "/proc/sys/kernel/hostname")) {
         // UTS ns (hostname cmd reads this)
         n = snprintf(buf, sizeof buf, "%s\n", g_hostname[0] ? g_hostname : "jit");
@@ -2835,13 +2838,15 @@ static int proc_open(const char *rp) {
             {"/proc/sys/kernel/yama/ptrace_scope", "1\n"},
             {"/proc/sys/kernel/random/poolsize", "256\n"},
             {"/proc/sys/kernel/printk", "4\t4\t1\t7\n"},
-            {"/proc/sys/kernel/panic", "0\n"},
+            {"/proc/sys/kernel/panic", "10\n"}, // oracle: 10s reboot-on-panic (was 0)
             // vm
             {"/proc/sys/vm/overcommit_ratio", "50\n"},
             {"/proc/sys/vm/overcommit_kbytes", "0\n"},
-            {"/proc/sys/vm/max_map_count", "65530\n"},
-            {"/proc/sys/vm/mmap_min_addr", "65536\n"},
-            {"/proc/sys/vm/swappiness", "60\n"},
+            // elasticsearch REFUSES to start if max_map_count < 262144. dd served 65530 -> ES bootstrap
+            // check fails, a warning/refusal a real-docker user never sees. Oracle: 1048576.
+            {"/proc/sys/vm/max_map_count", "1048576\n"},
+            {"/proc/sys/vm/mmap_min_addr", "32768\n"}, // oracle (was 65536)
+            {"/proc/sys/vm/swappiness", "20\n"},       // oracle (was 60)
             {"/proc/sys/vm/dirty_ratio", "20\n"},
             {"/proc/sys/vm/dirty_background_ratio", "10\n"},
             {"/proc/sys/vm/nr_hugepages", "0\n"},
@@ -2850,42 +2855,53 @@ static int proc_open(const char *rp) {
             // net.core
             {"/proc/sys/net/core/somaxconn", "4096\n"},
             {"/proc/sys/net/core/netdev_max_backlog", "1000\n"},
-            {"/proc/sys/net/core/rmem_max", "212992\n"},
-            {"/proc/sys/net/core/wmem_max", "212992\n"},
-            {"/proc/sys/net/core/rmem_default", "212992\n"},
-            {"/proc/sys/net/core/wmem_default", "212992\n"},
-            {"/proc/sys/net/core/optmem_max", "20480\n"},
+            {"/proc/sys/net/core/rmem_max", "7500000\n"},     // oracle (was 212992)
+            {"/proc/sys/net/core/wmem_max", "7500000\n"},     // oracle (was 212992)
+            {"/proc/sys/net/core/rmem_default", "229376\n"},  // oracle (was 212992)
+            {"/proc/sys/net/core/wmem_default", "229376\n"},  // oracle (was 212992)
+            {"/proc/sys/net/core/optmem_max", "131072\n"},    // oracle (was 20480)
             // net.ipv4
             {"/proc/sys/net/ipv4/ip_local_port_range", "32768\t60999\n"},
-            {"/proc/sys/net/ipv4/ip_unprivileged_port_start", "1024\n"},
-            {"/proc/sys/net/ipv4/ip_forward", "0\n"},
+            {"/proc/sys/net/ipv4/ip_unprivileged_port_start", "0\n"}, // oracle (was 1024)
+            {"/proc/sys/net/ipv4/ip_forward", "1\n"},                 // oracle (was 0)
             {"/proc/sys/net/ipv4/ip_nonlocal_bind", "0\n"},
             {"/proc/sys/net/ipv4/tcp_fin_timeout", "60\n"},
             {"/proc/sys/net/ipv4/tcp_keepalive_time", "7200\n"},
             {"/proc/sys/net/ipv4/tcp_keepalive_intvl", "75\n"},
             {"/proc/sys/net/ipv4/tcp_keepalive_probes", "9\n"},
-            {"/proc/sys/net/ipv4/tcp_max_syn_backlog", "128\n"},
+            {"/proc/sys/net/ipv4/tcp_max_syn_backlog", "1024\n"}, // oracle (was 128)
             {"/proc/sys/net/ipv4/tcp_syncookies", "1\n"},
             {"/proc/sys/net/ipv4/tcp_tw_reuse", "2\n"},
-            {"/proc/sys/net/ipv4/tcp_rmem", "4096\t131072\t6291456\n"},
+            {"/proc/sys/net/ipv4/tcp_rmem", "4096\t131072\t33554432\n"}, // oracle max (was 6291456)
             {"/proc/sys/net/ipv4/tcp_wmem", "4096\t16384\t4194304\n"},
             {"/proc/sys/net/ipv4/tcp_congestion_control", "cubic\n"},
             {"/proc/sys/net/ipv4/tcp_available_congestion_control", "reno cubic\n"},
-            // fs
-            {"/proc/sys/fs/file-max", "1048576\n"},
-            {"/proc/sys/fs/nr_open", "1048576\n"},
-            {"/proc/sys/fs/file-nr", "1024\t0\t1048576\n"},
+            // fs. On modern (cgroup-era) kernels the global file-max cap is effectively removed: the oracle
+            // reports LONG_MAX for file-max and the file-nr high-water field. Serving 1048576 made programs
+            // that size their fd budget off file-max under-provision vs a real-docker run.
+            {"/proc/sys/fs/file-max", "9223372036854775807\n"},        // oracle LONG_MAX (was 1048576)
+            {"/proc/sys/fs/nr_open", "2147483584\n"},                  // oracle (was 1048576)
+            {"/proc/sys/fs/file-nr", "1024\t0\t9223372036854775807\n"}, // 3rd field == file-max (was 1048576)
             {"/proc/sys/fs/pipe-max-size", "1048576\n"},
             {"/proc/sys/fs/pipe-user-pages-hard", "0\n"},
             {"/proc/sys/fs/pipe-user-pages-soft", "16384\n"},
-            {"/proc/sys/fs/aio-max-nr", "65536\n"},
+            {"/proc/sys/fs/aio-max-nr", "1048576\n"}, // oracle (was 65536)
             {"/proc/sys/fs/aio-nr", "0\n"},
             {"/proc/sys/fs/protected_hardlinks", "1\n"},
             {"/proc/sys/fs/protected_symlinks", "1\n"},
-            {"/proc/sys/fs/suid_dumpable", "0\n"},
+            {"/proc/sys/fs/suid_dumpable", "2\n"}, // oracle (was 0)
             {"/proc/sys/fs/inotify/max_user_watches", "524288\n"},
-            {"/proc/sys/fs/inotify/max_user_instances", "128\n"},
-            {"/proc/sys/fs/inotify/max_queued_events", "16384\n"},
+            // VS Code / node chokidar / systemd watchers exhaust these and print "ENOSPC: inotify watch
+            // limit reached" when they are low. Oracle bumps both far above the old 128 / 16384.
+            {"/proc/sys/fs/inotify/max_user_instances", "524288\n"},  // oracle (was 128)
+            {"/proc/sys/fs/inotify/max_queued_events", "1048576\n"},  // oracle (was 16384)
+            // POSIX message-queue limits (fs/mqueue/*) -- dd omitted these entirely, so a reader (glibc
+            // mq_* tuning, systemd) got ENOENT where real docker serves a value. Oracle kernel defaults.
+            {"/proc/sys/fs/mqueue/msg_max", "10\n"},
+            {"/proc/sys/fs/mqueue/msgsize_max", "8192\n"},
+            {"/proc/sys/fs/mqueue/queues_max", "256\n"},
+            {"/proc/sys/fs/mqueue/msg_default", "10\n"},
+            {"/proc/sys/fs/mqueue/msgsize_default", "8192\n"},
         };
         for (size_t i = 0; i < sizeof K / sizeof *K; i++)
             if (!strcmp(rp, K[i].p)) { n = snprintf(buf, sizeof buf, "%s", K[i].v); break; }
