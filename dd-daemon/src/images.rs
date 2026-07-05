@@ -391,13 +391,9 @@ pub(crate) fn pull_progress(
 }
 
 /// Build an [`ImageRef`] from docker's separate `fromImage` + `tag` params (tag overrides any in the ref).
-pub(crate) fn image_ref(from_image: &str, tag: &str) -> ImageRef {
-    let mut r = ImageRef::parse(from_image);
-    if !tag.is_empty() {
-        r.tag = tag.to_string();
-    }
-    r
-}
+// Image ref / store-name / config helpers live in dd-images (usable standalone); re-export so existing
+// `crate::images::*` call sites keep resolving.
+pub(crate) use dd_images::{arch_from_config as manifest_arch, config_strs, image_ref, safe_name};
 
 /// Pull an image from its registry (any registry) and unpack it under `<images_dir>/<safe>/rootfs`,
 /// preferring the linux/arm64 variant (native; falls back to amd64). Returns the registered [`Image`].
@@ -409,15 +405,9 @@ pub(crate) fn pull_image(
     archs: &[&str],
     progress: &mut dyn FnMut(PullEvent),
 ) -> Result<Image, String> {
-    let iref = image_ref(from_image, tag);
-    let rootfs = std::path::PathBuf::from(format!("{images_dir}/{}/rootfs", safe_name(&iref)));
-    let pulled = Client::new(iref.clone(), creds).pull(&rootfs, archs, progress)?;
-    Ok(image_from_config(
-        images_dir,
-        &iref,
-        &pulled.config,
-        &rootfs,
-    ))
+    // dd-images owns the pull + rootfs unpack; the daemon just maps the result onto its Docker model.
+    let li = dd_images::Store::new(images_dir).pull_archs(from_image, tag, creds, archs, progress)?;
+    Ok(image_from_config(images_dir, &li.iref, &li.config, &li.rootfs))
 }
 
 /// Re-fetch an already-cached image's run config from its registry and rebuild its [`Image`] WITHOUT
@@ -529,15 +519,6 @@ pub(crate) fn image_from_config(
 /// Derive a [`Guest`] from an OCI/Docker image config's top-level `architecture`+`os`
 /// (e.g. `{"architecture":"amd64","os":"linux"}`). Used as a fallback when the rootfs has no
 /// ELF/Mach-O to sniff (distroless/scratch). Returns `None` when the fields are absent/unrecognized.
-fn manifest_arch(config: &Value) -> Option<Guest> {
-    let os = config["os"].as_str().unwrap_or("linux");
-    match (os, config["architecture"].as_str()?) {
-        ("darwin", "arm64" | "aarch64") => Some(Guest::DarwinAarch64),
-        (_, "amd64" | "x86_64") => Some(Guest::LinuxX86_64),
-        (_, "arm64" | "aarch64") => Some(Guest::LinuxAarch64),
-        _ => None,
-    }
-}
 
 /// A `repository:tag` string with exactly one tag — discovered images carry a bare name (`busybox`),
 /// pulled ones already include the tag (`busybox:latest`); append `:latest` only when absent.
@@ -562,23 +543,10 @@ pub(crate) fn ref_tag(name: &str) -> String {
 }
 
 /// A filesystem-safe directory name for an image reference.
-pub(crate) fn safe_name(r: &ImageRef) -> String {
-    r.canonical().replace(['/', ':'], "_")
-}
 
 /// A string array at `config.config.<key>` of an OCI image config blob (e.g. `Entrypoint`, `Cmd`, `Env`),
 /// flattened to `Vec<String>` (non-string/absent -> empty). Kept granular so pull can persist Entrypoint
 /// and Cmd separately (docker's override semantics depend on the split).
-pub(crate) fn config_strs(config: &Value, key: &str) -> Vec<String> {
-    config["config"][key]
-        .as_array()
-        .map(|a| {
-            a.iter()
-                .filter_map(|x| x.as_str().map(String::from))
-                .collect()
-        })
-        .unwrap_or_default()
-}
 
 /// The keys of the `config.config.ExposedPorts` object of an OCI image config blob (e.g. `"5432/tcp"`),
 /// as a sorted `Vec<String>`. OCI stores exposed ports as a set (object with empty values); we keep just

@@ -10,5 +10,7 @@ name = "dd_images"
 path = "src/lib.rs"
 
 [dependencies]
+# the container runtime — dd-images builds a rootfs and hands it to dd-jit to run.
+dd-jit = { path = "../dd-jit" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
