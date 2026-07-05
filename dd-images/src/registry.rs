@@ -727,7 +727,7 @@ fn base64_decode(s: &str) -> Option<Vec<u8>> {
 
 /// Thin `curl` wrappers. Headers are captured to a temp file (`-D`); the body goes to stdout (or a tar).
 mod http {
-    use super::{run, Credentials};
+    use super::Credentials;
     use std::path::Path;
     use std::process::Command;
     use std::sync::atomic::{AtomicU64, Ordering};

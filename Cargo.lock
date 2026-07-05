@@ -337,6 +337,7 @@ dependencies = [
  "axum",
  "bollard",
  "bytes",
+ "dd-images",
  "dd-jit",
  "futures-util",
  "hyper",
@@ -362,6 +363,14 @@ dependencies = [
  "serde_json",
  "tokio",
  "vte4",
+]
+
+[[package]]
+name = "dd-images"
+version = "0.4.0"
+dependencies = [
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
