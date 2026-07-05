@@ -50,9 +50,9 @@ coverage: jit  ## report unimplemented syscalls/opcodes (static switch-diff + dy
 	bash dd-tests/tools/coverage.sh $(or $(MODE),all)
 bench: jit      ## TRUE DBT overhead: self-timed compute kernels (startup EXCLUDED) — native-arm64 vs dd-arm64/dd-x86/qemu-x86; BENCH_N=median (3), BENCH_K=alu,fp to narrow; writes target/dd-tests/bench.{csv,json}
 	cargo run -q -p dd-tests --release --bin bench
-# The decomposed C engine lives under dd-jit/src/runtime/{engine,translate,host,include,os,targets}
-# (os/ covers both os/linux and os/darwin). Uses dd-jit/.clang-format.
-RUNTIME_C = $(shell find dd-jit/src/runtime/engine dd-jit/src/runtime/translate dd-jit/src/runtime/host dd-jit/src/runtime/include dd-jit/src/runtime/os dd-jit/src/runtime/targets \( -name '*.c' -o -name '*.h' \))
+# The decomposed C engine lives under dd-jit-darwin/src/runtime/{engine,translate,host,include,os,targets}
+# (os/ covers both os/linux and os/darwin). Uses dd-jit-darwin/.clang-format.
+RUNTIME_C = $(shell find dd-jit-darwin/src/runtime/engine dd-jit-darwin/src/runtime/translate dd-jit-darwin/src/runtime/host dd-jit-darwin/src/runtime/include dd-jit-darwin/src/runtime/os dd-jit-darwin/src/runtime/targets \( -name '*.c' -o -name '*.h' \))
 fmt:            ## format the whole tree: clang-format the C engine + cargo fmt the Rust crates
 	clang-format -i $(RUNTIME_C)
 	cargo fmt --all
@@ -61,7 +61,7 @@ fmt-check:      ## CI: verify clang-format + cargo fmt are clean (no writes)
 	cargo fmt --all -- --check
 app:            ## build + assemble & ad-hoc-sign build/dd.app (the GTK GUI bundle; macOS)
 	@chmod +x dd-gui/package/bundle.sh dd-gui/package/make-dmg.sh
-	cargo clean -p ddjit --release                 # FORCE a fresh C engine: build.rs's .c rerun-if-changed is unreliable under CI rust-cache, so a stale engine could otherwise ship (Rust/daemon fixes shipped while engine/C fixes silently didn't)
+	cargo clean -p dd-jit-darwin --release                 # FORCE a fresh C engine: build.rs's .c rerun-if-changed is unreliable under CI rust-cache, so a stale engine could otherwise ship (Rust/daemon fixes shipped while engine/C fixes silently didn't)
 	cargo build --release -p dd-daemon -p dd-cli   # native toolchain: builds + allow-jit-signs the ddjit-* engines
 	DD_VERSION=$(VERSION) $(NIX_DEV) dd-gui/package/bundle.sh $(VERSION)   # DD_VERSION -> baked into the dd-app binary
 dmg: app        ## build dist/dd-<ver>-<arch>.dmg from the app bundle (macOS)

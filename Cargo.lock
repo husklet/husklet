@@ -345,7 +345,7 @@ name = "dd-daemon"
 version = "0.4.0"
 dependencies = [
  "axum",
- "ddjit",
+ "dd-jit",
  "futures-util",
  "hyper",
  "hyper-util",
@@ -373,15 +373,22 @@ dependencies = [
 ]
 
 [[package]]
-name = "dd-tests"
+name = "dd-jit"
 version = "0.4.0"
 dependencies = [
- "ddjit",
+ "dd-jit-darwin",
 ]
 
 [[package]]
-name = "ddjit"
+name = "dd-jit-darwin"
 version = "0.4.0"
+
+[[package]]
+name = "dd-tests"
+version = "0.4.0"
+dependencies = [
+ "dd-jit",
+]
 
 [[package]]
 name = "digest"
