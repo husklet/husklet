@@ -17,14 +17,8 @@ use crate::runtime::*;
 use crate::system::*;
 use crate::util::*;
 use crate::volumes::*;
-use axum::body::Body;
-use axum::extract::{Path, Query, State};
-use axum::http::StatusCode;
-use axum::response::{IntoResponse, Response};
-use axum::Json;
+use crate::prelude::*;
 use ddjit::Guest;
-use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
 
 /// POST /images/:name/push -- re-tar the local rootfs into a single-layer image and upload it to its
 /// registry (`docker.io/...`, `ghcr.io/...`, `localhost:5000/...`) using the CLI's credentials.
