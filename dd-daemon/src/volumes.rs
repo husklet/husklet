@@ -49,19 +49,29 @@ pub(crate) fn volume_in_use(g: &Inner, name: &str, mp: Option<&str>) -> bool {
     })
 }
 
-pub(crate) fn vol_json(v: &Vol) -> Value {
+pub(crate) fn vol_json(v: &Vol) -> crate::api::VolumeJson {
     let driver = if v.driver.is_empty() {
         "local".to_string()
     } else {
         v.driver.clone()
     };
-    json!({"Name": v.name, "Driver": driver, "Mountpoint": v.mountpoint,
-        "CreatedAt": fmt_rfc3339(v.created_at), "Scope": "local", "Labels": v.labels, "Options": v.options})
+    crate::api::VolumeJson {
+        name: v.name.clone(),
+        driver,
+        mountpoint: v.mountpoint.clone(),
+        created_at: fmt_rfc3339(v.created_at),
+        scope: "local",
+        labels: v.labels.clone(),
+        options: v.options.clone(),
+    }
 }
 
-pub(crate) async fn volumes_list(State(a): State<App>) -> Json<Value> {
+pub(crate) async fn volumes_list(State(a): State<App>) -> Json<crate::api::VolumeList> {
     let g = a.inner.lock().await;
-    Json(json!({"Volumes": g.volumes.iter().map(vol_json).collect::<Vec<_>>(), "Warnings": []}))
+    Json(crate::api::VolumeList {
+        volumes: g.volumes.iter().map(vol_json).collect::<Vec<_>>(),
+        warnings: vec![],
+    })
 }
 
 #[derive(Deserialize)]
