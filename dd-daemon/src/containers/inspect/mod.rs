@@ -18,6 +18,7 @@ mod filter;
 mod frame;
 mod list;
 mod logs;
+mod mounts;
 mod stats;
 mod top;
 
