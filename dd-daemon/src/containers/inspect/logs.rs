@@ -45,10 +45,7 @@ pub(crate) async fn containers_logs(
     // buffers / subscribe to its broadcast after releasing the lock.
     let (tty, running, live, persisted_out, persisted_err, start_t, end_t) = {
         let g = a.inner.lock().await;
-        let Some(full) = resolve_cid(&g, &id) else {
-            return no_such(&id);
-        };
-        let Some(c) = g.containers.get(&full) else {
+        let Some((full, c)) = resolve_get(&g, &id) else {
             return no_such(&id);
         };
         let running = c.status == "running" || c.status == "paused";

@@ -4,14 +4,10 @@ use super::super::*;
 /// GET /containers/:id/top -- `docker top` (one synthetic process; dd doesn't expose a guest process tree).
 pub(crate) async fn containers_top(State(a): State<App>, Path(id): Path<String>) -> Response {
     let g = a.inner.lock().await;
-    let Some(full) = resolve_cid(&g, &id) else {
+    let Some((_, c)) = resolve_get(&g, &id) else {
         return no_such(&id);
     };
-    let cmd = g
-        .containers
-        .get(&full)
-        .map(|c| c.cmd.join(" "))
-        .unwrap_or_default();
+    let cmd = c.cmd.join(" ");
     Json(crate::api::ContainerTop {
         titles: vec![
             "UID", "PID", "PPID", "C", "STIME", "TTY", "TIME", "CMD",
