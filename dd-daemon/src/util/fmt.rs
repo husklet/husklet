@@ -48,3 +48,53 @@ pub(crate) fn fmt_rfc3339_nanos(nanos: i64) -> String {
     // splice the fraction before the trailing 'Z'
     format!("{}.{:09}Z", &base[..base.len() - 1], frac)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn fmt_rfc3339_epoch_zero() {
+        assert_eq!(fmt_rfc3339(0), "1970-01-01T00:00:00Z");
+    }
+
+    #[test]
+    fn fmt_rfc3339_known_epoch() {
+        // A well-known unix timestamp round-trips to the documented RFC3339 string.
+        assert_eq!(fmt_rfc3339(1_700_000_000), "2023-11-14T22:13:20Z");
+    }
+
+    #[test]
+    fn fmt_rfc3339_leap_day() {
+        // 1_709_164_800 == 2024-02-29T00:00:00Z (2024 is a leap year, Feb has 29 days).
+        assert_eq!(fmt_rfc3339(1_709_164_800), "2024-02-29T00:00:00Z");
+        // Same leap day with a non-zero time-of-day exercises the hh/mm/ss split too.
+        assert_eq!(fmt_rfc3339(1_709_210_096), "2024-02-29T12:34:56Z");
+    }
+
+    #[test]
+    fn fmt_rfc3339_negative_pre_epoch() {
+        // Negative seconds must floor via div_euclid (not truncate toward zero): one second
+        // before the epoch is the last second of 1969.
+        assert_eq!(fmt_rfc3339(-1), "1969-12-31T23:59:59Z");
+    }
+
+    #[test]
+    fn fmt_rfc3339_nanos_zero_pads_fraction_to_nine() {
+        // 1_700_000_000 s + 123 ns -> fraction is left-zero-padded to 9 digits before the 'Z'.
+        let nanos = 1_700_000_000i64 * 1_000_000_000 + 123;
+        assert_eq!(fmt_rfc3339_nanos(nanos), "2023-11-14T22:13:20.000000123Z");
+    }
+
+    #[test]
+    fn fmt_rfc3339_nanos_distinguishes_sub_second_events() {
+        // Two events in the SAME whole second must produce different strings (the reason docker
+        // reports StartedAt/FinishedAt to the nanosecond).
+        let base = 1_700_000_000i64 * 1_000_000_000;
+        let a = fmt_rfc3339_nanos(base + 5);
+        let b = fmt_rfc3339_nanos(base + 500);
+        assert_eq!(a, "2023-11-14T22:13:20.000000005Z");
+        assert_eq!(b, "2023-11-14T22:13:20.000000500Z");
+        assert_ne!(a, b);
+    }
+}
