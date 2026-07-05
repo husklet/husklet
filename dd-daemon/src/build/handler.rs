@@ -40,17 +40,7 @@ pub(crate) async fn images_build(
     let mut log: Vec<String> = Vec::new();
 
     // --build-arg: decode the JSON object (values may be null) into a name->value map.
-    let buildargs: HashMap<String, String> = q
-        .buildargs
-        .as_deref()
-        .filter(|s| !s.is_empty())
-        .and_then(|s| serde_json::from_str::<HashMap<String, Option<String>>>(s).ok())
-        .map(|m| {
-            m.into_iter()
-                .filter_map(|(k, v)| v.map(|v| (k, v)))
-                .collect()
-        })
-        .unwrap_or_default();
+    let buildargs: HashMap<String, String> = parse_build_args(q.buildargs.as_deref());
     // --target: name of the stage to stop at (empty = build every stage, as before).
     let target = q.target.clone().unwrap_or_default();
     // --no-cache: bypass the build layer cache entirely (never read, never write) — a from-scratch build
@@ -93,16 +83,7 @@ pub(crate) async fn images_build(
 
     // the new image's rootfs dir under DD_IMAGES — derived from the user's raw `-t` so a bare tag keeps a
     // predictable dir name (`scen-built`), while a namespaced/tagged build still gets a distinct dir.
-    let safe: String = raw_tag
-        .chars()
-        .map(|c| {
-            if c.is_alphanumeric() || "._-".contains(c) {
-                c
-            } else {
-                '_'
-            }
-        })
-        .collect();
+    let safe: String = safe_dir_name(&raw_tag);
     let img_dir = std::path::PathBuf::from(format!("{}/{}", a.images_dir, safe));
     let _ = std::fs::remove_dir_all(&img_dir);
     let mut rootfs = img_dir.join("rootfs"); // the CURRENT stage's rootfs (reassigned at each FROM)

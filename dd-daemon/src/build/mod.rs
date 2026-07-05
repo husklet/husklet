@@ -39,6 +39,11 @@ pub(crate) use dd_images::build::{
     rootfs_digest, sha256_hex, substitute_args, BuildCache,
 };
 
+// Pure `docker build` argument helpers (build-arg decode, store-dir sanitization), unit-tested apart
+// from the stateful `images_build` step loop.
+mod parse;
+pub(crate) use parse::*;
+
 pub(crate) fn build_stream(lines: Vec<String>) -> Response {
     (
         StatusCode::OK,
