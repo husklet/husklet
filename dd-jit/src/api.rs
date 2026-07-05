@@ -149,9 +149,23 @@ pub struct Container {
 impl Container {
     /// Start building a container from an image.
     pub fn builder(image: Image) -> ContainerBuilder {
-        let mut cfg = SpawnConfig::new(".", image.rootfs);
+        // work_dir is the HOST cwd for resolving relative rootfs paths; empty = no `cd` (the common case,
+        // callers pass absolute rootfs paths). Set it explicitly with [`ContainerBuilder::host_workdir`].
+        let mut cfg = SpawnConfig::new("", image.rootfs);
         cfg.lowers = image.lowers;
         ContainerBuilder { cfg, guest: image.guest }
+    }
+
+    /// The (program, args) that launch this container in its guest's engine — the same contract
+    /// [`Runtime::run`] uses, exposed for callers that drive their own process spawn (custom stdio, a
+    /// pseudo-terminal, async supervision). `None` if no engine was built for the guest.
+    pub fn command(&self) -> Option<(String, Vec<String>)> {
+        self.cfg.command(self.guest)
+    }
+
+    /// The guest personality this container runs as.
+    pub fn guest(&self) -> Guest {
+        self.guest
     }
 }
 
@@ -198,6 +212,24 @@ impl ContainerBuilder {
     /// Memory limit in MiB. 0 = unlimited.
     pub fn memory_mb(mut self, mb: u64) -> Self {
         self.cfg.mem_max = mb.saturating_mul(1024 * 1024);
+        self
+    }
+
+    /// Memory limit in bytes (cgroup `memory.max`). 0 = unlimited.
+    pub fn memory_bytes(mut self, bytes: u64) -> Self {
+        self.cfg.mem_max = bytes;
+        self
+    }
+
+    /// The host working directory for resolving relative rootfs paths (empty = none).
+    pub fn host_workdir(mut self, dir: impl Into<String>) -> Self {
+        self.cfg.work_dir = dir.into();
+        self
+    }
+
+    /// Replace the guest argv entirely (entrypoint + args) — used for launch wrappers.
+    pub fn argv(mut self, argv: Vec<String>) -> Self {
+        self.cfg.argv = argv;
         self
     }
 

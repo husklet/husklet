@@ -14,7 +14,7 @@ use axum::extract::{Path, Query, Request, State};
 use axum::http::{HeaderMap, StatusCode, Uri};
 use axum::response::{IntoResponse, Response};
 use axum::Json;
-use ddjit::{Guest, PortMap, SpawnConfig, Volume};
+use ddjit::{Container as JitContainer, Guest, Image, PortMap, SpawnConfig, Volume};
 use hyper_util::rt::TokioIo;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -72,50 +72,6 @@ fn write_net_names(netid: &str, endpoints: &HashMap<String, Endpoint>) {
     let _ = std::fs::write(format!("{dir}/.names"), body);
 }
 
-/// Resolve a docker `--user`/`Config.User` spec to a numeric `(uid, gid)` against the container's
-/// rootfs. Accepts every docker form: `uid`, `name`, `uid:gid`, `name:group`, `uid:group`, `name:gid`.
-/// A numeric component is taken verbatim (no file access needed — keeps the numeric path independent of
-/// the rootfs contents); a NAME is looked up in `<rootfs>/etc/passwd` (user) or `<rootfs>/etc/group`
-/// (group). When no group is given a NAME uses its primary gid from /etc/passwd, while a numeric uid
-/// defaults to gid 0 (docker semantics). Returns `None` if a name component can't be resolved, so the
-/// caller leaves the guest's default identity (matching the prior "skip unknown user" behavior).
-fn resolve_user(rootfs: &str, spec: &str) -> Option<(u32, u32)> {
-    let (us, gs) = spec
-        .split_once(':')
-        .map_or((spec, None), |(u, g)| (u, Some(g)));
-    // passwd line: name:passwd:uid:gid:gecos:home:shell  — return (uid, primary gid) for a name match.
-    let lookup_passwd = |name: &str| -> Option<(u32, u32)> {
-        let passwd = std::fs::read_to_string(format!("{rootfs}/etc/passwd")).ok()?;
-        passwd.lines().find_map(|l| {
-            let f: Vec<&str> = l.split(':').collect();
-            (f.len() >= 4 && f[0] == name)
-                .then(|| Some((f[2].parse().ok()?, f[3].parse().ok()?)))?
-        })
-    };
-    // group line: name:passwd:gid:members — return the gid for a name match.
-    let lookup_group = |name: &str| -> Option<u32> {
-        let group = std::fs::read_to_string(format!("{rootfs}/etc/group")).ok()?;
-        group.lines().find_map(|l| {
-            let f: Vec<&str> = l.split(':').collect();
-            (f.len() >= 3 && f[0] == name).then(|| f[2].parse().ok())?
-        })
-    };
-    let (uid, primary_gid) = match us.parse::<u32>() {
-        Ok(n) => (n, None),
-        Err(_) => {
-            let (u, g) = lookup_passwd(us)?;
-            (u, Some(g))
-        }
-    };
-    // A trailing-colon empty group (`"name:"` / `"1000:"`) means "no group" — not a parse failure.
-    let gid = match gs.filter(|g| !g.is_empty()) {
-        // No `:group`: a NAME uses its passwd primary gid; a numeric uid defaults to gid 0 (docker
-        // semantics — `--user 1000` => 1000:0), since `primary_gid` is None on the numeric path.
-        None => primary_gid.unwrap_or(0),
-        Some(g) => g.parse().ok().or_else(|| lookup_group(g))?,
-    };
-    Some((uid, gid))
-}
 
 /// Per-container host scratch dir backing a `--tmpfs`/`--mount type=tmpfs` mount at `target`. A plain
 /// host dir (path-spliced over the guest target like a bind); it is cleared fresh on every container
@@ -149,39 +105,6 @@ pub(crate) fn clear_tmpfs(c: &Container) {
 /// Docker's default container PATH (moby's `system.DefaultPathEnv` for unix). Used when neither the
 /// image config nor a `-e PATH=` override supplies one, so bare commands in the standard sbin/bin dirs
 /// (e.g. alpine's `apk` in /sbin) resolve without an absolute path.
-const DEFAULT_GUEST_PATH: &str =
-    "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin";
-
-/// Resolve the guest environment from a container's merged `env` ("K=V" lines: image `Config.Env`
-/// followed by `docker run -e` overrides). Duplicate keys collapse to their LAST value (so an explicit
-/// `-e KEY=` overrides the image's), forward order is preserved, and a default PATH is injected when the
-/// image set none -- mirroring docker's env semantics. Returns the lines ready to join into DD_GUEST_ENV.
-///
-/// `tty`: when a pseudo-terminal is allocated (`docker run -t`) and the container hasn't set TERM itself,
-/// inject `TERM=xterm` -- EXACTLY what the docker daemon does. Without it the guest saw the engine's
-/// `TERM=dumb` fallback, which made node/python readline drop to a no-cursor "dumb" line editor (backspace
-/// didn't erase), debconf's Dialog frontend fail ("unable to initialize frontend: Dialog" -> Term::ReadLine
-/// -> Teletype fallback), and every ncurses TUI degrade. A non-tty container gets NO TERM (docker parity).
-fn guest_env(env: &[String], tty: bool) -> Vec<String> {
-    let key = |kv: &str| kv.split('=').next().unwrap_or(kv).to_string();
-    let mut seen = std::collections::HashSet::new();
-    let mut out: Vec<String> = Vec::with_capacity(env.len());
-    // Walk back-to-front so the LAST assignment of each key wins, then restore forward order.
-    for kv in env.iter().rev() {
-        if seen.insert(key(kv)) {
-            out.push(kv.clone());
-        }
-    }
-    out.reverse();
-    if !seen.contains("PATH") {
-        out.push(DEFAULT_GUEST_PATH.to_string());
-    }
-    if tty && !seen.contains("TERM") {
-        out.push("TERM=xterm".to_string());
-    }
-    out
-}
-
 /// Translate the container into a typed [`SpawnConfig`] and run it in the matching guest's JIT.
 /// Named-volume binds (`name:/path`, no leading `/`) are resolved against `volumes_dir`.
 /// Build the (program, args) that launches this container in the matching guest's JIT. `None` if no JIT
@@ -193,253 +116,153 @@ pub(crate) fn spawn_cfg(
     bridge: Option<(String, String)>,
 ) -> Option<(String, Vec<String>)> {
     let guest = c.arch.unwrap_or(Guest::LinuxAarch64);
-    // Per-container copy-on-write: the private writable UPPER (`c.upper`) is overlaid on the read-only
-    // image rootfs (the lower), so the guest's writes/creates go to the upper and deletions become
-    // whiteouts -- the shared image is never mutated. Linux guests only (darwin runs natively jailed, and
-    // overrides cfg.lowers below); a flat rootfs is used when no upper was allocated (empty `c.upper`).
+    // Per-container copy-on-write: the private writable UPPER (`c.upper`) overlays the read-only image
+    // rootfs (the lower) so guest writes/whiteouts never mutate the shared image. Linux guests only —
+    // darwin runs natively jailed (its lower is the host `/`); a flat rootfs is used when no upper exists.
     let overlay = guest.os() != "darwin" && !c.upper.is_empty();
-    let mut cfg = SpawnConfig::new(
-        String::new(),
-        if overlay {
-            c.upper.clone()
+    let rootfs = if overlay { c.upper.clone() } else { c.rootfs.clone() };
+    let image = if overlay {
+        Image::overlay(rootfs, [c.rootfs.clone()])
+    } else if guest.os() == "darwin" {
+        // darwinjail: the host filesystem is the read-only lower so native binaries find their /nix deps.
+        Image::overlay(rootfs, ["/".to_string()])
+    } else {
+        Image::from_rootfs(rootfs)
+    }
+    .guest(guest);
+
+    // Every knob below is a typed dd-jit API call — the daemon states WHAT the container is; dd-jit owns
+    // HOW it launches (the wire dialect, overlay/netns/pcache/fsgen encoding, the engine invocation).
+    let mut b = JitContainer::builder(image)
+        .cmd(c.cmd.clone())
+        // `-w DIR` (WorkingDir): the guest's initial cwd.
+        .cwd(c.working_dir.clone())
+        // container env (image ENV + `-e`) forwarded EXACTLY to the guest (docker env semantics), never
+        // the daemon/host environment.
+        .guest_env(&c.env, c.tty)
+        // Effective UTS hostname: the user's `--hostname`, else Docker's default 12-char short id.
+        .hostname(if c.hostname.is_empty() {
+            c.id[..c.id.len().min(12)].to_string()
         } else {
-            c.rootfs.clone()
-        },
-    ); // work_dir is the HOST cwd; leave empty
-    if overlay {
-        cfg.lowers = vec![c.rootfs.clone()];
+            c.hostname.clone()
+        })
+        .memory_bytes(c.memory.max(0) as u64)
+        .pids(c.pids_limit.max(0) as u32)
+        // `--cpus`: NanoCpus -> ceil to whole online CPUs (0 = unlimited).
+        .cpus(if c.nano_cpus > 0 {
+            ((c.nano_cpus + 999_999_999) / 1_000_000_000) as u32
+        } else {
+            0
+        })
+        .read_only(c.readonly_rootfs);
+    for u in &c.ulimits {
+        b = b.ulimit(u.name.clone(), u.soft.max(0) as u64, u.hard.max(0) as u64);
     }
-    cfg.argv = c.cmd.clone();
-    // `-w DIR` (WorkingDir): the guest's initial cwd, read as DD_CWD by the runtime at startup.
-    if !c.working_dir.is_empty() {
-        cfg.env.push(("DD_CWD".into(), c.working_dir.clone()));
-    }
-    // container env (image ENV + `docker run -e`) -> one DD_GUEST_ENV var so the JIT forwards EXACTLY
-    // these to the guest, never the daemon/host environment. Deduped (last assignment of a key wins, so
-    // an explicit `-e KEY=` overrides the image) with a docker-default PATH when the image set none.
-    let genv = guest_env(&c.env, c.tty);
-    if !genv.is_empty() {
-        cfg.env.push(("DD_GUEST_ENV".into(), genv.join("\n")));
-    }
-    // Effective UTS hostname: the user's `--hostname`, else Docker's default of the 12-char short id.
-    // Passed to the engine (DD_HOSTNAME -> gethostname/uname) AND written to /etc/hostname in spawn_live,
-    // so both agree and match Docker (previously an unset hostname left gethostname reporting the "jit"
-    // fallback and /etc/hostname was never generated at all).
-    cfg.hostname = Some(if c.hostname.is_empty() {
-        c.id[..c.id.len().min(12)].to_string()
-    } else {
-        c.hostname.clone()
-    });
-    cfg.mem_max = c.memory.max(0) as u64;
-    cfg.pids_max = c.pids_limit.max(0) as u32;
-    // Resource fidelity: --cpus (NanoCpus -> ceil to whole online CPUs), --read-only, --ulimit. Threaded to
-    // the engine (DD_CPUS/DD_ROOTFS_RO/DD_ULIMITS via SpawnConfig.resource_env) so the container reports its
-    // CPU allotment, fails rootfs writes with EROFS, and getrlimit reflects the requested ulimits.
-    cfg.cpus = if c.nano_cpus > 0 {
-        ((c.nano_cpus + 999_999_999) / 1_000_000_000) as u32
-    } else {
-        0
-    };
-    cfg.read_only = c.readonly_rootfs;
-    cfg.ulimits = c
-        .ulimits
-        .iter()
-        .map(|u| (u.name.clone(), u.soft.max(0) as u64, u.hard.max(0) as u64))
-        .collect();
-    // ---- JIT performance: developer-optimal defaults (see dd-daemon/PERFORMANCE.md) ----
-    // The transparent codegen/syscall speedups (addressing, lazy flags, traces, tier-up, inline
-    // clock_gettime/sigprocmask, epoll batching, path/openat caches, SSE->NEON, rep-string) are ON by
-    // default inside the JIT itself -- every container gets them, zero config, byte-identical output.
-    // Here the daemon enables the one CONTAINER-managed win: the persistent translated-code cache, so the
-    // 2nd+ run of an image skips translation (~-40% cold start). It is self-invalidating (keyed by image
-    // hash + engine version) and graceful-miss safe -> it can NEVER serve stale/wrong code, so the
-    // everyday developer needs no knowledge of it. Operators can disable it daemon-wide with DD_PCACHE=0;
-    // the cache lives under the dd home and is reported by `docker system df` / cleared by `system prune`.
+    // Persistent translated-code cache (2nd+ run of an image skips translation, ~-40% cold start).
+    // Self-invalidating + graceful-miss safe. Operators disable it daemon-wide with DD_PCACHE=0; the
+    // cache lives under the dd home and is reported by `docker system df` / cleared by `system prune`.
     if std::env::var("DD_PCACHE").as_deref() != Ok("0") {
         let pdir = crate::util::dd_home().join("pcache");
         let _ = std::fs::create_dir_all(&pdir);
-        cfg.env.push(("DDJIT_PCACHE".into(), "1".into()));
-        cfg.env.push((
-            "DDJIT_PCACHE_DIR".into(),
-            pdir.to_string_lossy().into_owned(),
-        ));
+        b = b.persistent_cache(pdir.to_string_lossy().into_owned());
     }
-    // `--network host` shares the host network (no per-container netns); otherwise isolate in one. The
-    // DD_NETNS key names the container's private loopback (127.0.0.1) domain in the engine; it defaults to
-    // the container's own id, but a `docker exec` sets `netns_key` to the TARGET container's id so the
-    // exec'd process shares the container's 127.0.0.1 (docker semantics — exec joins the container's
-    // network) instead of being isolated in its own loopback. Truncated to 40 chars to match the engine.
-    let ns_key = c.netns_key.as_deref().unwrap_or(&c.id);
-    cfg.netns = (c.network_mode != "host").then(|| ns_key[..ns_key.len().min(40)].to_string());
-    // daemon-write coherence: hand every Linux engine of this container the shared external-writer
-    // generation file (run/exec/health probes all key to the TARGET container, like tmpfs/netns). The
-    // daemon bumps it after any daemon-side write into the live fs (docker cp's archive PUT, the exec
-    // /etc rewrites below in spawn_live) and the engine then drops its path/metadata caches, so the write
-    // is guest-visible by its next syscall (see fscache.c fsgen_* / util.rs fsgen_bump).
+    // `--network host` shares the host network; otherwise isolate in a private loopback named by the
+    // TARGET container's id (a `docker exec` sets `netns_key` so it joins the container's 127.0.0.1
+    // instead of its own). Truncated to 40 chars to match the engine.
+    if c.network_mode != "host" {
+        let ns_key = c.netns_key.as_deref().unwrap_or(&c.id);
+        b = b.private_network(ns_key[..ns_key.len().min(40)].to_string());
+    }
+    // daemon-write coherence: hand every Linux engine the shared external-writer generation file so a
+    // daemon-side write into the live fs (docker cp's PUT, the exec /etc rewrites) drops the engine's
+    // path/metadata caches and is guest-visible by its next syscall.
     if guest.os() != "darwin" {
         let key = c.netns_key.as_deref().unwrap_or(&c.id);
-        cfg.env.push((
-            "DD_FSGEN_FILE".into(),
-            crate::util::fsgen_ensure(key)
-                .to_string_lossy()
-                .into_owned(),
-        ));
+        b = b.write_coherence_file(crate::util::fsgen_ensure(key).to_string_lossy().into_owned());
     }
-    // `--network none`: no external egress -- the JIT refuses non-loopback connects (DD_NET_ISOLATE).
-    if c.network_mode == "none" {
-        cfg.env.push(("DD_NET_ISOLATE".into(), "1".into()));
-    }
-    // netstack PR2 — per-network AF_UNIX virtual switch: container<->container TCP for in-subnet peers.
+    // `--network none`: no external egress.
+    b = b.net_isolate(c.network_mode == "none");
+    // per-network AF_UNIX virtual switch: in-subnet container<->container TCP.
     if let Some((netid, ip)) = bridge {
-        cfg.env.push(("DD_NETBR".into(), netid));
-        cfg.env.push(("DD_IP".into(), ip));
+        b = b.bridge(netid, ip);
     }
-    // `docker run --user U[:G]` / `docker exec -u U[:G]` (and an image's `Config.User`): surface the
-    // requested uid/gid to the JIT, which makes the guest observe them via getuid/getgid/setuid. A NAME
-    // (e.g. `postgres`) is resolved against the rootfs's /etc/passwd|/etc/group; an unresolvable name is
-    // skipped (the guest keeps its default identity). This is what lets the postgres entrypoint see
-    // `id -u != 0` and skip its `gosu` re-exec (B4 — avoids the non-PIE gosu binary entirely).
-    if !c.user.is_empty() {
-        if let Some((uid, gid)) = resolve_user(&c.rootfs, &c.user) {
-            cfg.env.push(("DD_UID".into(), uid.to_string()));
-            cfg.env.push(("DD_GID".into(), gid.to_string()));
-        }
-    }
-    // `--security-opt sandbox`/`untrusted` (or daemon-wide DD_SANDBOX=1) -> run this guest under the JIT's
-    // untrusted-guest sentry: the worker drops to a deny-default OS sandbox (macOS Seatbelt) and the guest's
-    // syscalls are vetted/forwarded over the sentry ring instead of hitting the host directly. We request it
-    // by exporting the JIT's own gates (DDJIT_UNTRUSTED + DDJIT_SANDBOX); default OFF inside the JIT.
-    //
-    // CAVEAT: the JIT sentry is currently a FIRST PR that only forwards read/write/open(at)/close/lseek over
-    // its ring. A real image will hit un-forwarded syscalls under the worker's deny-default sandbox until the
-    // sentry's full fs/net/proc syscall set lands (a parallel JIT-side change is extending it). So this
-    // wiring makes the daemon ABLE to request the sandbox; full untrusted-image support depends on that JIT
-    // completion. Simple images + the end-to-end opt-in path work now.
+    // `--user U[:G]` / `Config.User`: resolve a NAME against the image rootfs and surface the uid/gid to
+    // the guest (getuid/getgid/setuid) — lets e.g. the postgres entrypoint see `id -u != 0` and skip its
+    // gosu re-exec. An unresolvable name leaves the guest's default identity.
+    b = b.user_spec(&c.rootfs, &c.user);
+    // `--security-opt sandbox`/`untrusted` (or daemon-wide DD_SANDBOX=1): run under the untrusted-guest
+    // sentry (deny-default OS sandbox + syscall forwarding).
     let sandbox = c.security_opt.iter().any(|o| {
         let o = o.to_ascii_lowercase();
         o.contains("sandbox") || o.contains("untrusted")
     }) || std::env::var("DD_SANDBOX").as_deref() == Ok("1");
-    if sandbox {
-        cfg.env.push(("DDJIT_UNTRUSTED".into(), "1".into()));
-        cfg.env.push(("DDJIT_SANDBOX".into(), "1".into()));
-    }
-    // Resolve a mount source to a host path: an absolute path is a bind; anything else is a named
-    // volume, resolved to its registered mountpoint or a dir under `volumes_dir`. Shared by `-v`/Binds
-    // and `--mount` so both go through the SAME (single) volume mechanism.
+    b = b.sandbox(sandbox);
+    // Resolve a mount source to a host path: an absolute path is a bind; anything else is a named volume
+    // (its registered mountpoint or a dir under `volumes_dir`). Shared by `-v`/Binds and `--mount`.
     let resolve_src = |src: &str| -> String {
         if src.starts_with('/') {
             src.to_string()
         } else if let Some(v) = vols.iter().find(|v| v.name == src) {
             v.mountpoint.clone()
         } else {
-            PathBuf::from(volumes_dir)
-                .join(src)
-                .to_string_lossy()
-                .into_owned()
+            PathBuf::from(volumes_dir).join(src).to_string_lossy().into_owned()
         }
     };
-    // `-v src:dst[:opts]` / Binds: parse off the mount options so the container path is the bare `dst`
-    // (the old `split_once(':')` left `dst:ro` as the literal mount target — a bug). `ro` marks the
-    // mount read-only; we now thread that through to `Volume.ro` so the JIT fails write-intent syscalls
-    // under the mount with EROFS (matching what `docker inspect` already reports as RW:false).
-    cfg.volumes = c
-        .binds
-        .iter()
-        .filter_map(|b| {
-            parse_bind(b).map(|(host, dst, ro)| Volume {
-                container: dst.into(),
-                host: resolve_src(host),
-                ro,
-            })
-        })
-        .collect();
-    // `--mount` / HostConfig.Mounts: wire bind/volume mounts into the rootfs via the same Volume list.
-    // type=bind -> Source is a host path; type=volume -> Source is a named volume (resolved like `-v`).
-    // `ReadOnly` is honored the same as `-v …:ro` (JIT enforces write-intent EROFS under the mount).
+    // `-v src:dst[:opts]` / Binds. `ro` marks the mount read-only (write-intent EROFS under the mount).
+    for bd in &c.binds {
+        if let Some((host, dst, ro)) = parse_bind(bd) {
+            b = b.bind(resolve_src(host), dst, ro);
+        }
+    }
+    // `--mount` / HostConfig.Mounts: type=bind Source is a host path; type=volume Source is a named volume.
     for m in &c.mounts {
         if m.target.is_empty() {
             continue;
         }
-        let host = if m.typ == "bind" {
-            m.source.clone()
-        } else {
-            resolve_src(&m.source)
-        };
+        let host = if m.typ == "bind" { m.source.clone() } else { resolve_src(&m.source) };
         if host.is_empty() {
             continue;
         }
-        cfg.volumes.push(Volume {
-            container: m.target.clone(),
-            host,
-            ro: m.read_only,
-        });
+        b = b.bind(host, m.target.clone(), m.read_only);
     }
-    // `--tmpfs DST` / `--mount type=tmpfs`: a fresh empty scratch dir path-spliced over the guest target
-    // (same Volume mechanism as a bind). Keyed by the CONTAINER id (`netns_key` for an exec) so an exec
-    // shares the container's tmpfs. The dir is cleared to empty on each container start (clear_tmpfs).
+    // `--tmpfs DST` / `--mount type=tmpfs`: a fresh empty scratch dir path-spliced over the target, keyed
+    // by the container id (an exec shares it), cleared to empty on each start (clear_tmpfs).
     let tmpfs_key = c.netns_key.as_deref().unwrap_or(&c.id);
     for target in c.tmpfs.keys() {
         if target.is_empty() {
             continue;
         }
-        cfg.volumes.push(Volume {
-            container: target.clone(),
-            host: tmpfs_hostdir(tmpfs_key, target),
-            ro: false,
-        });
+        b = b.bind(tmpfs_hostdir(tmpfs_key, target), target.clone(), false);
     }
-    // Published ports. The daemon now OWNS the process-independent host forwarder (see containers/ports.rs
-    // +), so we tell the engine NOT to spin up its own in-process host TCP listener — that listener
-    // lived in whichever guest process called listen(), which broke prefork/re-listening servers and raced
-    // EADDRINUSE. We still pass the port map (the engine reports container ports via getsockname and keeps
-    // the guest-side switch redirect + the UDP host path). DD_PUBLISH_DAEMON=1 gates the engine's TCP
-    // fwd_maybe_start off. Parsed from the full `[hostIP]:hostPort:cport/proto` publish string.
-    cfg.publish = crate::containers::parse_publish(&c.publish)
+    // Published ports. The daemon owns the process-independent host forwarder (containers/ports.rs), so
+    // the engine must NOT start its own in-process listener (which raced/broke prefork servers) — but it
+    // still gets the port map to report container ports + keep the guest-side switch redirect.
+    for p in crate::containers::parse_publish(&c.publish)
         .into_iter()
         .filter(|p| p.proto == "tcp")
-        .map(|p| PortMap {
-            host: p.host_port,
-            container: p.container_port,
-        })
-        .collect();
-    if !c.publish.is_empty() {
-        cfg.env.push(("DD_PUBLISH_DAEMON".into(), "1".into()));
+    {
+        b = b.publish(p.host_port, p.container_port);
     }
-    // macOS containers (darwinjail): the userland (nix arm64 tools) is on PATH at /profile/bin, and the
-    // host filesystem is the read-only lower so native binaries find their /nix deps; writes land in the
-    // rootfs + volumes. The entry argv[0] is run by the mac shell, so it must be a real host path -- we
-    // exec it through the profile's bash, which resolves the command via the in-jail PATH (so a bare
-    // `bash`/`uname`/… is found at /profile/bin and execve()'d into the jail).
+    b = b.external_port_forwarder(!c.publish.is_empty());
+    // macOS containers (darwinjail): forward the image ENV as real process env (the native jailed binaries
+    // see it; DD_GUEST_ENV is Linux-only) with a nix-first PATH default, and wrap the entry in the in-jail
+    // bash so a bare command resolves via the in-jail PATH and the entry shell stays inside the jail (a
+    // login shell or `/bin/sh` would source the host profile / run arm64e tools and escape the arm64 jail).
     if guest.os() == "darwin" {
-        cfg.lowers = vec!["/".into()];
-        // Forward the image ENV (PATH, TLS cert bundle, LANG, HOME, …) as real process env so the
-        // native jailed binaries see it (the darwin jail inherits the spawn env; DD_GUEST_ENV is
-        // Linux-only). PATH in particular MUST be forwarded — without it bare-name commands (ls, env,
-        // which) don't resolve in the jail. When the image set none, default to the nix toolset first
-        // then the host system dirs (mirrors the image's own `/profile/bin:/usr/bin:/bin`).
         let mut have_path = false;
         for kv in &c.env {
             if let Some((k, v)) = kv.split_once('=') {
                 if k == "PATH" {
                     have_path = true;
                 }
-                cfg.env.push((k.to_string(), v.to_string()));
+                b = b.env(k.to_string(), v.to_string());
             }
         }
         if !have_path {
-            cfg.env
-                .push(("PATH".into(), "/profile/bin:/usr/bin:/bin".into()));
+            b = b.env("PATH", "/profile/bin:/usr/bin:/bin");
         }
-        // `-c` (not `-lc`): a login shell would source the host's /etc/profile via the lower and exec
-        // arm64e system tools (which the arm64 jail can't inject into); the container has its own env.
         let wrapper = format!("{}/profile/bin/bash", c.rootfs);
-        // Normalize a leading POSIX-shell argv[0] to the in-jail nix `bash`: the host `/bin/sh` is
-        // arm64e, so the arm64 jail can't inject into it and it would ESCAPE the jail — running with
-        // the container PATH against the HOST filesystem (where /profile/bin doesn't exist), which is
-        // why a bare `ddcli mac` died on `exec: sh: not found`. Rewriting `/bin/sh`/`sh` to a bare
-        // `bash` keeps the entry shell inside the jail (resolved via the in-jail PATH), preserving any
-        // `-c <script>` args. An empty default likewise becomes the interactive jail bash.
-        let mut argv = std::mem::take(&mut cfg.argv);
+        let mut argv = c.cmd.clone();
         if argv.is_empty() {
             argv = vec!["bash".into()];
         } else if matches!(argv[0].as_str(), "/bin/sh" | "sh" | "/bin/bash" | "bash") {
@@ -447,9 +270,9 @@ pub(crate) fn spawn_cfg(
         }
         let mut wrapped = vec![wrapper, "-c".into(), "exec \"$@\"".into(), "dd-mac".into()];
         wrapped.extend(argv);
-        cfg.argv = wrapped;
+        b = b.argv(wrapped);
     }
-    cfg.command(guest)
+    b.build().ok()?.command()
 }
 
 /// Spawn the container's guest process live (piped stdio) and wire its IO into `live`: stdout/stderr fan
