@@ -29,6 +29,32 @@ impl Arch {
             Arch::DarwinAarch64 => "darwin_aarch64",
         }
     }
+
+    /// The OS personality alone: `"linux"` or `"darwin"` (the first half of [`oci`](Self::oci)).
+    pub fn os(self) -> &'static str {
+        self.oci().0
+    }
+
+    /// The instruction set slug — `"aarch64"` or `"x86_64"` (NOT the OCI `arm64`/`amd64` label; this is
+    /// the kernel `uname -m` form recorded in the on-disk `dd-image.json` sidecar so discovery can
+    /// round-trip an image's arch even when its binaries can't be sniffed).
+    pub fn isa(self) -> &'static str {
+        match self {
+            Arch::LinuxX86_64 => "x86_64",
+            _ => "aarch64",
+        }
+    }
+
+    /// Map an `(os, arch)` pair of loose strings (a binary's magic, an image's metadata, a sidecar's
+    /// recorded fields) to an [`Arch`], accepting the common OCI/kernel spellings. `None` if unrecognized.
+    pub fn detect(os: &str, arch: &str) -> Option<Arch> {
+        match (os, arch.to_ascii_lowercase().as_str()) {
+            ("linux", "aarch64" | "arm64" | "arm64/v8") => Some(Arch::LinuxAarch64),
+            ("linux", "x86_64" | "amd64" | "x86-64") => Some(Arch::LinuxX86_64),
+            ("darwin", "aarch64" | "arm64") => Some(Arch::DarwinAarch64),
+            _ => None,
+        }
+    }
 }
 
 /// Map an OCI config blob's `architecture` + `os` to an [`Arch`]. `None` if unrecognized.

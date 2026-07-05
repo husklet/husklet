@@ -7,7 +7,8 @@ use std::path::PathBuf;
 /// A local image store: a directory holding one `<safe-name>/rootfs` tree per pulled image.
 #[derive(Clone, Debug)]
 pub struct Store {
-    dir: String,
+    /// The store root; readable by sibling services in this module (e.g. the archive/load path).
+    pub(super) dir: String,
 }
 
 impl Store {

@@ -1,0 +1,235 @@
+//! The archive side of the store: `docker save` / `docker load` / `docker import`.
+//!
+//! dd's archive format is intentionally simple (not full OCI): a tar whose top level is the image's
+//! `rootfs/` directory plus a [`Manifest`] sidecar (`dd-manifest.json`). [`Store::save_archive`] produces
+//! it, [`Store::load_archive`] consumes it; [`Store::import_rootfs`] instead takes a bare rootfs tar (no
+//! manifest) whose files land directly in a new image's rootfs. All tar work shells out to the system
+//! `tar` (no crate dependency, no runtime) so the on-disk layout matches Docker/dd exactly.
+
+use super::*;
+use serde_json::{json, Value};
+use std::path::{Path, PathBuf};
+
+/// An image materialized into the store by [`Store::load_archive`] / [`Store::import_rootfs`]: its unpacked
+/// `rootfs`, detected [`Arch`], and run config recovered from the archive's manifest. Plain data — the
+/// caller maps it onto its own image model. `healthcheck` is the raw OCI/docker JSON (or `None`).
+#[derive(Clone, Debug)]
+pub struct LoadedImage {
+    /// The image reference (`repository:tag`).
+    pub name: String,
+    /// The unpacked root filesystem placed under the store.
+    pub rootfs: PathBuf,
+    /// The target detected from the manifest / rootfs.
+    pub arch: Arch,
+    /// The default command (never empty — falls back to `bash`/`/bin/sh`).
+    pub cmd: Vec<String>,
+    /// The environment (`K=V` lines).
+    pub env: Vec<String>,
+    /// The entrypoint (prepended to the command).
+    pub entrypoint: Vec<String>,
+    /// The working directory (empty if unset).
+    pub workdir: String,
+    /// The default run user (empty if unset).
+    pub user: String,
+    /// The exposed-port keys (e.g. `"5432/tcp"`).
+    pub exposed_ports: Vec<String>,
+    /// The `docker stop` signal (`Config.StopSignal`); empty ⇒ SIGTERM.
+    pub stop_signal: String,
+    /// The dirs that get an anonymous volume at run (`Config.Volumes` keys).
+    pub img_volumes: Vec<String>,
+    /// The container healthcheck probe as raw JSON (`None` ⇒ no probe recorded).
+    pub healthcheck: Option<Value>,
+}
+
+impl Store {
+    /// The store directory for an image `name`, flattening `/` and `:` to `_`. This is the RAW-name layout
+    /// the load/import paths use (distinct from [`safe_name`]'s canonicalized-reference layout used by pull).
+    fn dir_for(&self, name: &str) -> PathBuf {
+        PathBuf::from(format!("{}/{}", self.dir, name.replace(['/', ':'], "_")))
+    }
+
+    /// `docker save`: tar the image's `rootfs/` directory plus a `dd-manifest.json` sidecar and return the
+    /// archive bytes. `rootfs` is the image's on-disk `.../rootfs` path; the manifest records its identity +
+    /// run config so a later [`load_archive`](Self::load_archive) restores name/cmd/env exactly. The
+    /// on-disk image directory is left untouched (the manifest is staged in a temp dir and tarred via a
+    /// second `-C`).
+    pub fn save_archive(&self, rootfs: &Path, manifest: &Manifest) -> Result<Vec<u8>, String> {
+        let parent = rootfs.parent().ok_or("image has no rootfs directory")?;
+        let staging = std::env::temp_dir().join(format!("dd-save-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&staging);
+        std::fs::create_dir_all(&staging).map_err(|e| e.to_string())?;
+        let manifest_json = serde_json::to_string(manifest).map_err(|e| e.to_string())?;
+        let _ = std::fs::write(staging.join("dd-manifest.json"), manifest_json);
+        let out = std::process::Command::new("tar")
+            .arg("cf")
+            .arg("-")
+            .arg("-C")
+            .arg(parent)
+            .arg("rootfs")
+            .arg("-C")
+            .arg(&staging)
+            .arg("dd-manifest.json")
+            .output();
+        let _ = std::fs::remove_dir_all(&staging);
+        match out {
+            Ok(o) if o.status.success() => Ok(o.stdout),
+            Ok(o) => Err(String::from_utf8_lossy(&o.stderr).into_owned()),
+            Err(e) => Err(e.to_string()),
+        }
+    }
+
+    /// `docker load`: extract a dd save archive (`rootfs/` + optional `dd-manifest.json`) into a new image
+    /// directory under the store and return the materialized [`LoadedImage`]. Tolerates a rootfs-only
+    /// archive (no manifest) by falling back to a generic name + probed arch. Writes a `dd-image.json`
+    /// sidecar so the image round-trips through discovery after a daemon restart.
+    pub fn load_archive(&self, tar_bytes: &[u8]) -> Result<LoadedImage, String> {
+        let tmp = std::env::temp_dir().join(format!("dd-load-{}.tar", std::process::id()));
+        std::fs::write(&tmp, tar_bytes).map_err(|e| e.to_string())?;
+        let staging = PathBuf::from(format!("{}/.load-{}", self.dir, std::process::id()));
+        let _ = std::fs::remove_dir_all(&staging);
+        if let Err(e) = std::fs::create_dir_all(&staging) {
+            let _ = std::fs::remove_file(&tmp);
+            return Err(e.to_string());
+        }
+        let out = std::process::Command::new("tar")
+            .arg("xf")
+            .arg(&tmp)
+            .arg("-C")
+            .arg(&staging)
+            .output();
+        let _ = std::fs::remove_file(&tmp);
+        match out {
+            Ok(o) if o.status.success() => {}
+            Ok(o) => {
+                let _ = std::fs::remove_dir_all(&staging);
+                return Err(String::from_utf8_lossy(&o.stderr).into_owned());
+            }
+            Err(e) => {
+                let _ = std::fs::remove_dir_all(&staging);
+                return Err(e.to_string());
+            }
+        }
+        if !staging.join("rootfs").is_dir() {
+            let _ = std::fs::remove_dir_all(&staging);
+            return Err("archive is not a dd image (no rootfs/ at top level)".into());
+        }
+        // dd-manifest.json (written by `save`) carries the image identity; tolerate a rootfs-only archive
+        // by falling back to a generic name via the default manifest.
+        let manifest: Manifest = std::fs::read_to_string(staging.join("dd-manifest.json"))
+            .ok()
+            .and_then(|s| serde_json::from_str::<Manifest>(&s).ok())
+            .unwrap_or_default();
+        let name = if manifest.name.is_empty() {
+            "loaded".to_string()
+        } else {
+            manifest.name.clone()
+        };
+        let darwin = manifest.is_darwin();
+        let target = self.dir_for(&name);
+        let _ = std::fs::remove_dir_all(&target);
+        if let Err(e) = std::fs::rename(&staging, &target) {
+            let _ = std::fs::remove_dir_all(&staging);
+            return Err(e.to_string());
+        }
+        let rootfs = target.join("rootfs");
+        let arch = if darwin {
+            Arch::DarwinAarch64
+        } else {
+            detect_arch(&rootfs).unwrap_or(Arch::LinuxAarch64)
+        };
+        let mut cmd = manifest.cmd.clone();
+        if cmd.is_empty() {
+            cmd = if darwin { vec!["bash".into()] } else { default_shell(&rootfs) };
+        }
+        let stop_signal = manifest.stop_signal.clone().unwrap_or_default();
+        let loaded = LoadedImage {
+            name,
+            rootfs,
+            arch,
+            cmd,
+            env: manifest.env.clone(),
+            entrypoint: manifest.entrypoint.clone(),
+            workdir: manifest.workdir.clone(),
+            user: manifest.user.clone(),
+            exposed_ports: manifest.exposed_ports.clone(),
+            stop_signal,
+            img_volumes: manifest.img_volumes.clone(),
+            healthcheck: manifest.healthcheck.clone(),
+        };
+        self.write_sidecar(&target, &loaded, darwin);
+        Ok(loaded)
+    }
+
+    /// `docker import`: extract a bare rootfs tar (no manifest) into a new image named `name` (already a
+    /// `repository` or `repository:tag`) and return the materialized [`LoadedImage`]. The arch is probed
+    /// from the rootfs and the command defaults to the image's shell; a minimal `dd-image.json` sidecar is
+    /// written so the image survives a daemon restart.
+    pub fn import_rootfs(&self, name: &str, tar_bytes: &[u8]) -> Result<LoadedImage, String> {
+        let target = self.dir_for(name);
+        let rootfs = target.join("rootfs");
+        let _ = std::fs::remove_dir_all(&target);
+        std::fs::create_dir_all(&rootfs).map_err(|e| e.to_string())?;
+        let tmp = std::env::temp_dir().join(format!("dd-import-{}.tar", std::process::id()));
+        std::fs::write(&tmp, tar_bytes).map_err(|e| e.to_string())?;
+        let out = std::process::Command::new("tar")
+            .arg("xf")
+            .arg(&tmp)
+            .arg("-C")
+            .arg(&rootfs)
+            .output();
+        let _ = std::fs::remove_file(&tmp);
+        match out {
+            Ok(o) if o.status.success() => {}
+            Ok(o) => return Err(String::from_utf8_lossy(&o.stderr).into_owned()),
+            Err(e) => return Err(e.to_string()),
+        }
+        let arch = detect_arch(&rootfs).unwrap_or(Arch::LinuxAarch64);
+        let cmd = default_shell(&rootfs);
+        let _ = std::fs::write(
+            target.join("dd-image.json"),
+            json!({ "name": name, "cmd": cmd }).to_string(),
+        );
+        Ok(LoadedImage {
+            name: name.to_string(),
+            rootfs,
+            arch,
+            cmd,
+            env: Vec::new(),
+            entrypoint: Vec::new(),
+            workdir: String::new(),
+            user: String::new(),
+            exposed_ports: Vec::new(),
+            stop_signal: String::new(),
+            img_volumes: Vec::new(),
+            healthcheck: None,
+        })
+    }
+
+    /// Remove an image's on-disk directory (`<store>/<safe>/`, the parent of its `rootfs/`). Guarded to the
+    /// writable store: a rootfs under a read-only bundled starter dir (or anywhere outside the store root)
+    /// is left untouched so removing a discovered alias can't wipe shipped images.
+    pub fn remove_image_dir(&self, rootfs: &str) {
+        let Some(dir) = Path::new(rootfs).parent() else {
+            return;
+        };
+        let base = Path::new(&self.dir);
+        if dir != base && dir.starts_with(base) {
+            let _ = std::fs::remove_dir_all(dir);
+        }
+    }
+
+    /// Write the `dd-image.json` sidecar for a freshly loaded image so discovery restores its run config
+    /// after a daemon restart (mirrors the fields the pull path records).
+    fn write_sidecar(&self, target: &Path, img: &LoadedImage, darwin: bool) {
+        let mut dd = json!({
+            "name": img.name, "cmd": img.cmd, "env": img.env, "entrypoint": img.entrypoint,
+            "workdir": img.workdir, "user": img.user, "exposed_ports": img.exposed_ports,
+            "stop_signal": img.stop_signal, "img_volumes": img.img_volumes,
+            "healthcheck": img.healthcheck,
+        });
+        if darwin {
+            dd["os"] = json!("darwin");
+        }
+        let _ = std::fs::write(target.join("dd-image.json"), dd.to_string());
+    }
+}

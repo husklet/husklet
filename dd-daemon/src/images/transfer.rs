@@ -199,56 +199,29 @@ pub(crate) async fn image_save(State(a): State<App>, Query(q): Query<SaveQ>) -> 
         )
             .into_response();
     }
-    let rootfs = std::path::PathBuf::from(&img.rootfs);
-    let Some(parent) = rootfs.parent() else {
-        return (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(json!({"message": "image has no rootfs directory"})),
-        )
-            .into_response();
+    // dd-images owns the archive format (tar of `rootfs/` + a `dd-manifest.json` sidecar); the handler just
+    // maps the store `Image` onto the manifest and streams the bytes back.
+    let manifest = dd_images::Manifest {
+        name: img.name.clone(),
+        cmd: img.cmd.clone(),
+        env: img.env.clone(),
+        entrypoint: img.entrypoint.clone(),
+        workdir: img.workdir.clone(),
+        user: img.user.clone(),
+        exposed_ports: img.exposed_ports.clone(),
+        os: (img.arch.os() == "darwin").then(|| "darwin".to_string()),
+        ..Default::default()
     };
-    // Stage the manifest in a temp dir and tar it via a second `-C` so the on-disk image directory is
-    // left untouched (and a later `docker load` can restore name/cmd/env exactly).
-    let staging = std::env::temp_dir().join(format!("dd-save-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&staging);
-    if let Err(e) = std::fs::create_dir_all(&staging) {
-        return (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(json!({"message": e.to_string()})),
-        )
-            .into_response();
-    }
-    let mut meta = json!({ "name": img.name, "cmd": img.cmd, "env": img.env, "entrypoint": img.entrypoint,
-                           "workdir": img.workdir, "user": img.user, "exposed_ports": img.exposed_ports });
-    if img.arch.os() == "darwin" {
-        meta["os"] = json!("darwin");
-    }
-    let _ = std::fs::write(staging.join("dd-manifest.json"), meta.to_string());
-    let out = std::process::Command::new("tar")
-        .arg("cf")
-        .arg("-")
-        .arg("-C")
-        .arg(parent)
-        .arg("rootfs")
-        .arg("-C")
-        .arg(&staging)
-        .arg("dd-manifest.json")
-        .output();
-    let _ = std::fs::remove_dir_all(&staging);
-    match out {
-        Ok(o) if o.status.success() => Response::builder()
+    let rootfs = std::path::PathBuf::from(&img.rootfs);
+    match dd_images::Store::new(&a.images_dir).save_archive(&rootfs, &manifest) {
+        Ok(bytes) => Response::builder()
             .status(StatusCode::OK)
             .header("Content-Type", "application/x-tar")
-            .body(Body::from(o.stdout))
+            .body(Body::from(bytes))
             .unwrap(),
-        Ok(o) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(json!({"message": String::from_utf8_lossy(&o.stderr).into_owned()})),
-        )
-            .into_response(),
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,
-            Json(json!({"message": e.to_string()})),
+            Json(json!({ "message": e })),
         )
             .into_response(),
     }
@@ -257,133 +230,34 @@ pub(crate) async fn image_save(State(a): State<App>, Query(q): Query<SaveQ>) -> 
 /// POST /images/load -- `docker load`. Extracts a dd save archive (rootfs/ + dd-manifest.json) from
 /// the request body into a new image directory and registers the image.
 pub(crate) async fn image_load(State(a): State<App>, body: axum::body::Bytes) -> Response {
-    let tmp = std::env::temp_dir().join(format!("dd-load-{}.tar", std::process::id()));
-    if let Err(e) = std::fs::write(&tmp, &body) {
-        return load_err(e.to_string());
-    }
-    // Extract into a staging dir under DD_IMAGES (same filesystem) so we can rename it into place once
-    // we've read the image name out of the manifest.
-    let staging =
-        std::path::PathBuf::from(format!("{}/.load-{}", a.images_dir, std::process::id()));
-    let _ = std::fs::remove_dir_all(&staging);
-    if let Err(e) = std::fs::create_dir_all(&staging) {
-        let _ = std::fs::remove_file(&tmp);
-        return load_err(e.to_string());
-    }
-    let out = std::process::Command::new("tar")
-        .arg("xf")
-        .arg(&tmp)
-        .arg("-C")
-        .arg(&staging)
-        .output();
-    let _ = std::fs::remove_file(&tmp);
-    match out {
-        Ok(o) if o.status.success() => {}
-        Ok(o) => {
-            let _ = std::fs::remove_dir_all(&staging);
-            return load_err(String::from_utf8_lossy(&o.stderr).into_owned());
-        }
-        Err(e) => {
-            let _ = std::fs::remove_dir_all(&staging);
-            return load_err(e.to_string());
-        }
-    }
-    if !staging.join("rootfs").is_dir() {
-        let _ = std::fs::remove_dir_all(&staging);
-        return load_err("archive is not a dd image (no rootfs/ at top level)".into());
-    }
-    // dd-manifest.json (written by `docker save`) carries the image identity; tolerate a rootfs-only
-    // archive by falling back to a generic name.
-    let meta = std::fs::read_to_string(staging.join("dd-manifest.json"))
-        .ok()
-        .and_then(|s| serde_json::from_str::<Value>(&s).ok());
-    let strs = |k: &str| {
-        meta.as_ref()
-            .and_then(|m| m[k].as_array())
-            .map(|a| {
-                a.iter()
-                    .filter_map(|x| x.as_str().map(String::from))
-                    .collect::<Vec<_>>()
-            })
-            .unwrap_or_default()
+    // dd-images owns the archive extraction + manifest + on-disk placement (`rootfs/` under the store, a
+    // `dd-image.json` sidecar so it round-trips through discovery). The handler maps the materialized
+    // `LoadedImage` onto the daemon's `Image`, registers it, and emits the load event.
+    let loaded = match dd_images::Store::new(&a.images_dir).load_archive(&body) {
+        Ok(l) => l,
+        Err(e) => return load_err(e),
     };
-    let name = meta
-        .as_ref()
-        .and_then(|m| m["name"].as_str())
-        .filter(|s| !s.is_empty())
-        .unwrap_or("loaded")
-        .to_string();
-    let darwin = meta.as_ref().and_then(|m| m["os"].as_str()) == Some("darwin");
-    let target = std::path::PathBuf::from(format!(
-        "{}/{}",
-        a.images_dir,
-        name.replace(['/', ':'], "_")
-    ));
-    let _ = std::fs::remove_dir_all(&target);
-    if let Err(e) = std::fs::rename(&staging, &target) {
-        let _ = std::fs::remove_dir_all(&staging);
-        return load_err(e.to_string());
-    }
-    let rootfs = target.join("rootfs");
-    let arch = if darwin {
-        Guest::DarwinAarch64
-    } else {
-        detect_arch(&rootfs).unwrap_or(Guest::LinuxAarch64)
-    };
-    let mut cmd = strs("cmd");
-    if cmd.is_empty() {
-        cmd = if darwin {
-            vec!["bash".into()]
-        } else {
-            default_shell(&rootfs)
-        };
-    }
-    let (env, entrypoint) = (strs("env"), strs("entrypoint"));
-    let workdir = meta
-        .as_ref()
-        .and_then(|m| m["workdir"].as_str())
-        .unwrap_or("")
-        .to_string();
-    let user = meta
-        .as_ref()
-        .and_then(|m| m["user"].as_str())
-        .unwrap_or("")
-        .to_string();
-    let exposed_ports = strs("exposed_ports");
-    // Lifecycle/volume image config (round-trips through the sidecar written by pull/load).
-    let stop_signal = meta
-        .as_ref()
-        .and_then(|m| m["stop_signal"].as_str())
-        .unwrap_or("")
-        .to_string();
-    let img_volumes = strs("img_volumes");
-    let healthcheck = meta.as_ref().and_then(|m| {
-        serde_json::from_value::<crate::model::HealthConfig>(m["healthcheck"].clone()).ok()
-    });
+    let name = loaded.name.clone();
+    let healthcheck = loaded
+        .healthcheck
+        .clone()
+        .and_then(|v| serde_json::from_value::<crate::model::HealthConfig>(v).ok());
     let img = Image {
         name: name.clone(),
-        rootfs: rootfs.to_string_lossy().into_owned(),
-        arch,
-        cmd: cmd.clone(),
-        env: env.clone(),
-        entrypoint: entrypoint.clone(),
-        workdir: workdir.clone(),
-        user: user.clone(),
-        exposed_ports: exposed_ports.clone(),
-        stop_signal: stop_signal.clone(),
-        img_volumes: img_volumes.clone(),
-        healthcheck: healthcheck.clone(),
+        rootfs: loaded.rootfs.to_string_lossy().into_owned(),
+        arch: guest_of(loaded.arch),
+        cmd: loaded.cmd,
+        env: loaded.env,
+        entrypoint: loaded.entrypoint,
+        workdir: loaded.workdir,
+        user: loaded.user,
+        exposed_ports: loaded.exposed_ports,
+        stop_signal: loaded.stop_signal,
+        img_volumes: loaded.img_volumes,
+        healthcheck,
         created: now_secs(),
         ..Default::default()
     };
-    // Persist a dd-image.json so the image round-trips through `discover_images` after a daemon restart.
-    let mut dd = json!({ "name": name, "cmd": cmd, "env": env, "entrypoint": entrypoint, "workdir": workdir,
-                         "user": user, "exposed_ports": exposed_ports,
-                         "stop_signal": stop_signal, "img_volumes": img_volumes, "healthcheck": healthcheck });
-    if darwin {
-        dd["os"] = json!("darwin");
-    }
-    let _ = std::fs::write(target.join("dd-image.json"), dd.to_string());
     register_image(&a, img).await;
     crate::events::emit_event(&a.events, "image", "load", &name, json!({"name": name}));
     Json(LoadResponse {
@@ -416,46 +290,20 @@ pub(crate) async fn image_import(
     } else {
         format!("{repo}:{tag}")
     };
-    let target = std::path::PathBuf::from(format!(
-        "{}/{}",
-        a.images_dir,
-        name.replace(['/', ':'], "_")
-    ));
-    let rootfs = target.join("rootfs");
-    let _ = std::fs::remove_dir_all(&target);
-    if let Err(e) = std::fs::create_dir_all(&rootfs) {
-        return import_progress(Err(e.to_string()));
-    }
-    let tmp = std::env::temp_dir().join(format!("dd-import-{}.tar", std::process::id()));
-    if let Err(e) = std::fs::write(&tmp, &body) {
-        return import_progress(Err(e.to_string()));
-    }
-    let out = std::process::Command::new("tar")
-        .arg("xf")
-        .arg(&tmp)
-        .arg("-C")
-        .arg(&rootfs)
-        .output();
-    let _ = std::fs::remove_file(&tmp);
-    match out {
-        Ok(o) if o.status.success() => {}
-        Ok(o) => return import_progress(Err(String::from_utf8_lossy(&o.stderr).into_owned())),
-        Err(e) => return import_progress(Err(e.to_string())),
-    }
-    let arch = detect_arch(&rootfs).unwrap_or(Guest::LinuxAarch64);
-    let cmd = default_shell(&rootfs);
+    // dd-images owns the rootfs-tar extraction into a new image dir (+ minimal `dd-image.json` sidecar);
+    // the handler maps the result onto the daemon's `Image` and registers it.
+    let loaded = match dd_images::Store::new(&a.images_dir).import_rootfs(&name, &body) {
+        Ok(l) => l,
+        Err(e) => return import_progress(Err(e)),
+    };
     let img = Image {
-        name: name.clone(),
-        rootfs: rootfs.to_string_lossy().into_owned(),
-        arch,
-        cmd: cmd.clone(),
+        name: loaded.name,
+        rootfs: loaded.rootfs.to_string_lossy().into_owned(),
+        arch: guest_of(loaded.arch),
+        cmd: loaded.cmd,
         created: now_secs(),
         ..Default::default()
     };
-    let _ = std::fs::write(
-        target.join("dd-image.json"),
-        json!({ "name": name, "cmd": cmd }).to_string(),
-    );
     register_image(&a, img).await;
     import_progress(Ok(format!("sha256:{}", fake_id(&name))))
 }
