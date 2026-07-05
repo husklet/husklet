@@ -1,4 +1,3 @@
-#![allow(unused_imports, dead_code)]
 use super::*;
 
 /// The serializable slice of [`Inner`] written to `DD_STATE`.

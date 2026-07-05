@@ -1,4 +1,3 @@
-#![allow(unused_imports, dead_code)]
 //! Docker-conformance teardown/maintenance endpoints: `prune`, `update`, `export`.
 use super::super::*;
 use super::diff::discard_container_layer;

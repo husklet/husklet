@@ -1,19 +1,9 @@
-#![allow(unused_imports, dead_code)]
 //! In-memory store mutations: `docker tag` / `docker rmi` / on-disk dir removal + rescan/register.
 use super::*;
 use crate::api::*;
-use crate::archive::*;
-use crate::build::*;
-use crate::containers::*;
 use crate::model::*;
-use crate::networks::*;
-use crate::registry::{layer_short, Client, Credentials, ImageRef, PullEvent};
-use crate::runtime::*;
-use crate::system::*;
 use crate::util::*;
-use crate::volumes::*;
 use crate::prelude::*;
-use ddjit::Guest;
 
 // ---- image management: tag / rmi -------------------------------------------
 #[derive(Deserialize)]

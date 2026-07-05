@@ -1,4 +1,3 @@
-#![allow(unused_imports, dead_code)]
 //! Published-port string assembly for `POST /containers/create`: turn the
 //! HostConfig.PortBindings map into the daemon's `ip:hport:cport/proto` publish
 //! string (`publish_str`), with an auto-allocating variant (`publish_str_alloc`)
@@ -12,6 +11,9 @@ fn split_key(k: &str) -> (&str, &str) {
     k.split_once('/').unwrap_or((k, "tcp"))
 }
 
+// Only the auto-allocating `publish_str_alloc` is called in production; the plain non-allocating
+// variant exists as the tested foundation of that logic, so it is compiled for tests only.
+#[cfg(test)]
 pub(crate) fn publish_str(pb: &HashMap<String, Vec<PortBinding>>) -> String {
     let mut v = Vec::new();
     for (k, binds) in pb {

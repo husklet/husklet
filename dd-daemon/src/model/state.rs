@@ -1,4 +1,3 @@
-#![allow(unused_imports, dead_code)]
 use super::*;
 
 /// A running container's live IO plumbing. Created on first attach-or-start, dropped when the guest
@@ -25,13 +24,12 @@ pub(crate) struct Live {
     pub(crate) out_done_rx: watch::Receiver<bool>,
     pub(crate) started: std::sync::atomic::AtomicBool, // start() spawns the process exactly once
     pub(crate) stop_requested: std::sync::atomic::AtomicBool, // set by stop/kill/rm so the RestartPolicy supervisor won't auto-restart a deliberately-stopped container
-    pub(crate) tty: bool,
     pub(crate) pty_master: std::sync::Mutex<Option<RawFd>>, // the PTY master fd (tty containers) for /resize
     pub(crate) pid: std::sync::Mutex<Option<u32>>, // the live JIT process pid (for pause = SIGSTOP/SIGCONT)
 }
 
 impl Live {
-    pub(crate) fn new(tty: bool) -> Arc<Self> {
+    pub(crate) fn new() -> Arc<Self> {
         let (out, _) = broadcast::channel(1024);
         let (exit, exit_rx) = watch::channel(None);
         let (out_done, out_done_rx) = watch::channel(false);
@@ -47,7 +45,6 @@ impl Live {
             out_done_rx,
             started: std::sync::atomic::AtomicBool::new(false),
             stop_requested: std::sync::atomic::AtomicBool::new(false),
-            tty,
             pty_master: std::sync::Mutex::new(None),
             pid: std::sync::Mutex::new(None),
         })

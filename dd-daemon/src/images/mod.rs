@@ -1,4 +1,3 @@
-#![allow(unused_imports, dead_code)]
 //! Docker image HTTP handlers + helpers, decomposed by concern:
 //! - `query`    — read/report handlers (list / history / search / prune / inspect / distribution).
 //! - `pull`     — `POST /images/create` (pull/import dispatch) + registry pull/refresh/config helpers.

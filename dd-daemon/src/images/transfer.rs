@@ -1,4 +1,3 @@
-#![allow(unused_imports, dead_code)]
 //! Archive + registry transfer: `docker push` / `docker save` / `docker load` / `docker import`.
 //!
 //! dd's archive format is intentionally simple (not full OCI): a tar whose top level is the image's
@@ -7,18 +6,10 @@
 //! bare rootfs tar (no manifest) whose files land directly in a new image's rootfs.
 use super::*;
 use crate::api::*;
-use crate::archive::*;
-use crate::build::*;
-use crate::containers::*;
 use crate::model::*;
-use crate::networks::*;
-use crate::registry::{layer_short, Client, Credentials, ImageRef, PullEvent};
-use crate::runtime::*;
-use crate::system::*;
+use crate::registry::Client;
 use crate::util::*;
-use crate::volumes::*;
 use crate::prelude::*;
-use ddjit::Guest;
 
 /// POST /images/:name/push -- re-tar the local rootfs into a single-layer image and upload it to its
 /// registry (`docker.io/...`, `ghcr.io/...`, `localhost:5000/...`) using the CLI's credentials.

@@ -1,4 +1,3 @@
-#![allow(unused_imports, dead_code)]
 //! `docker stats` — best-effort CPU/memory sampling of the live JIT pid via `ps`, streamed or one-shot.
 use super::super::*;
 

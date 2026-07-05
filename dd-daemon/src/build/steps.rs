@@ -1,4 +1,3 @@
-#![allow(unused_imports, dead_code)]
 //! Per-instruction executors extracted verbatim from the `images_build` step loop, plus the build
 //! layer-cache descriptor helper. Shared types/helpers come from `mod.rs` via `use super::*`; each helper
 //! is a self-contained unit of the former inline loop-body, so behavior is unchanged.

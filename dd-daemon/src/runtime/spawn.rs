@@ -1,4 +1,3 @@
-#![allow(unused_imports, dead_code)]
 use super::*;
 use super::health::health_monitor;
 use super::restart::maybe_restart;

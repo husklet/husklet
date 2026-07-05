@@ -1,4 +1,3 @@
-#![allow(unused_imports, dead_code)]
 //! Container run-state control: `start`, `stop`, `kill`, `restart`, and
 //! `pause`/`unpause` (via `freeze`). Split out of the former `lifecycle.rs`;
 //! behavior unchanged. `kill_group` lives here (the process-group signaller) and
@@ -19,7 +18,7 @@ pub(crate) async fn containers_start(State(a): State<App>, Path(id): Path<String
         let live = g
             .live
             .entry(full.clone())
-            .or_insert_with(|| Live::new(c.tty))
+            .or_insert_with(Live::new)
             .clone();
         // An explicit start clears the durable manual-stop flag (the container is deliberately up again).
         if let Some(cc) = g.containers.get_mut(&full) {
@@ -186,7 +185,7 @@ pub(crate) async fn containers_restart(
             None => return no_such(&id),
         };
         // Replace the spent Live with a fresh one (mirrors maybe_restart / start's spawn).
-        let live = Live::new(c.tty);
+        let live = Live::new();
         g.live.insert(full.clone(), live.clone());
         if let Some(cc) = g.containers.get_mut(&full) {
             cc.status = "running".into();

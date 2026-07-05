@@ -1,19 +1,9 @@
-#![allow(unused_imports, dead_code)]
 //! Read/report image handlers: list, history, search, prune, distribution probe, inspect.
 use super::*;
 use crate::api::*;
-use crate::archive::*;
-use crate::build::*;
-use crate::containers::*;
 use crate::model::*;
-use crate::networks::*;
-use crate::registry::{layer_short, Client, Credentials, ImageRef, PullEvent};
-use crate::runtime::*;
-use crate::system::*;
 use crate::util::*;
-use crate::volumes::*;
 use crate::prelude::*;
-use ddjit::{Guest, PortMap, SpawnConfig, Volume};
 
 pub(crate) async fn images_json(State(a): State<App>) -> Json<Vec<ImageSummary>> {
     let imgs: Vec<ImageSummary> = a

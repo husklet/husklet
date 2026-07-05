@@ -1,4 +1,3 @@
-#![allow(unused_imports, dead_code)]
 //! Anonymous-volume seeding for `POST /containers/create` (Moby's populateVolumes):
 //! normalize a mount target (`norm_dir`), recursively copy image content into a fresh
 //! volume (`copy_dir_into`), and materialize an anonymous local volume seeded from the
