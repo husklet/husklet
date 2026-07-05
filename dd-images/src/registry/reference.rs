@@ -90,3 +90,39 @@ pub(crate) fn split_tag(s: &str) -> (&str, String) {
         _ => (s, "latest".to_string()),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn hub_single_name_short_and_canonical() {
+        let r = ImageRef::parse("ubuntu");
+        // Hub's implicit docker.io/library/ is elided in the short display name.
+        assert_eq!(r.short(), "ubuntu:latest");
+        // canonical() abbreviates the Hub host back to docker.io but keeps library/.
+        assert_eq!(r.canonical(), "docker.io/library/ubuntu:latest");
+    }
+
+    #[test]
+    fn hub_user_repo_keeps_namespace() {
+        let r = ImageRef::parse("user/app:1");
+        assert_eq!(r.short(), "user/app:1"); // multi-segment repo: nothing stripped
+        assert_eq!(r.canonical(), "docker.io/user/app:1");
+    }
+
+    #[test]
+    fn other_registry_shown_in_short() {
+        let r = ImageRef::parse("ghcr.io/o/a:v2");
+        assert_eq!(r.short(), "ghcr.io/o/a:v2");
+        assert_eq!(r.canonical(), "ghcr.io/o/a:v2");
+    }
+
+    #[test]
+    fn localhost_registry_with_port() {
+        let r = ImageRef::parse("localhost:5000/img");
+        // registry host has a port; short()/canonical() show it verbatim, default tag latest.
+        assert_eq!(r.short(), "localhost:5000/img:latest");
+        assert_eq!(r.canonical(), "localhost:5000/img:latest");
+    }
+}

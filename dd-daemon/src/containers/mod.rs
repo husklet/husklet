@@ -240,3 +240,137 @@ pub(crate) fn ports_map_json(publish: &str) -> Value {
     }
     Value::Object(m)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ---- parse_bind ---------------------------------------------------------
+    #[test]
+    fn bind_src_dst() {
+        assert_eq!(parse_bind("/h:/c"), Some(("/h", "/c", false)));
+    }
+    #[test]
+    fn bind_ro_flag() {
+        assert_eq!(parse_bind("/h:/c:ro"), Some(("/h", "/c", true)));
+        // `ro` may appear among a comma-list of options.
+        assert_eq!(parse_bind("vol:/c:ro,z"), Some(("vol", "/c", true)));
+    }
+    #[test]
+    fn bind_rw_flag() {
+        assert_eq!(parse_bind("/h:/c:rw"), Some(("/h", "/c", false)));
+        assert_eq!(parse_bind("/h:/c:rw,z"), Some(("/h", "/c", false)));
+    }
+    #[test]
+    fn bind_empty_dst_is_none() {
+        assert_eq!(parse_bind("/h:"), None);
+    }
+    #[test]
+    fn bind_splitn3_keeps_extra_colons_in_opts() {
+        // splitn(3, ':') means only the FIRST two colons split; the remainder is the opts field.
+        // "a:b:c:d" -> src="a", dst="b", opts="c:d" (no "ro" -> false).
+        assert_eq!(parse_bind("a:b:c:d"), Some(("a", "b", false)));
+    }
+    #[test]
+    fn bind_no_colon_is_none() {
+        assert_eq!(parse_bind("justsrc"), None);
+    }
+
+    // ---- parse_signal -------------------------------------------------------
+    #[test]
+    fn signal_named_with_prefix() {
+        assert_eq!(parse_signal("SIGTERM", 0), libc::SIGTERM);
+    }
+    #[test]
+    fn signal_named_without_prefix() {
+        assert_eq!(parse_signal("TERM", 0), libc::SIGTERM);
+        assert_eq!(parse_signal("kill", 0), libc::SIGKILL); // case-insensitive
+    }
+    #[test]
+    fn signal_numeric_verbatim() {
+        assert_eq!(parse_signal("15", 0), 15);
+        assert_eq!(parse_signal("9", 0), 9);
+    }
+    #[test]
+    fn signal_junk_falls_back_to_default() {
+        assert_eq!(parse_signal("NOPE", 7), 7);
+        assert_eq!(parse_signal("", 7), 7);
+    }
+
+    // ---- parse_publish ------------------------------------------------------
+    fn one(publish: &str) -> PubPort {
+        let mut v = parse_publish(publish);
+        assert_eq!(v.len(), 1, "expected exactly one PubPort for {publish:?}");
+        v.pop().unwrap()
+    }
+    #[test]
+    fn publish_full_ip_port_proto() {
+        let p = one("1.2.3.4:8080:80/tcp");
+        assert_eq!(p.host_ip, "1.2.3.4");
+        assert_eq!(p.host_port, 8080);
+        assert_eq!(p.container_port, 80);
+        assert_eq!(p.proto, "tcp");
+    }
+    #[test]
+    fn publish_legacy_two_field_defaults_ip() {
+        let p = one("8080:80");
+        assert_eq!(p.host_ip, "0.0.0.0"); // empty host IP -> 0.0.0.0
+        assert_eq!(p.host_port, 8080);
+        assert_eq!(p.container_port, 80);
+        assert_eq!(p.proto, "tcp"); // absent proto -> tcp
+    }
+    #[test]
+    fn publish_ipv6_host_right_split() {
+        // rsplit off the two rightmost `:`-fields (cport, then hport); the remainder is the host IP,
+        // so an IPv6 host that itself contains colons is preserved.
+        let p = one("::1:8080:80");
+        assert_eq!(p.host_ip, "::1");
+        assert_eq!(p.host_port, 8080);
+        assert_eq!(p.container_port, 80);
+    }
+    #[test]
+    fn publish_unparseable_port_dropped() {
+        // container port "xx" fails u16::parse -> the whole entry is filtered out.
+        assert!(parse_publish("8080:xx").is_empty());
+        // host port "yy" fails too.
+        assert!(parse_publish("1.2.3.4:yy:80").is_empty());
+    }
+    #[test]
+    fn publish_skips_empty_comma_entries() {
+        let v = parse_publish("8080:80,,9090:90");
+        assert_eq!(v.len(), 2);
+        assert_eq!(v[0].host_port, 8080);
+        assert_eq!(v[1].host_port, 9090);
+    }
+
+    // ---- ports_json ---------------------------------------------------------
+    #[test]
+    fn ports_json_shape() {
+        let arr = ports_json("1.2.3.4:8080:80/tcp");
+        assert_eq!(arr.len(), 1);
+        let e = &arr[0];
+        assert_eq!(e["PublicPort"], 8080);
+        assert_eq!(e["PrivatePort"], 80);
+        assert_eq!(e["Type"], "tcp");
+        assert_eq!(e["IP"], "1.2.3.4");
+    }
+
+    // ---- ports_map_json -----------------------------------------------------
+    #[test]
+    fn ports_map_json_shape() {
+        let m = ports_map_json("1.2.3.4:8080:80/tcp");
+        let bindings = m["80/tcp"].as_array().expect("array under 80/tcp");
+        assert_eq!(bindings.len(), 1);
+        assert_eq!(bindings[0]["HostIp"], "1.2.3.4");
+        assert_eq!(bindings[0]["HostPort"], "8080"); // HostPort is a string
+    }
+    #[test]
+    fn ports_map_json_groups_by_key() {
+        // Two bindings for the same container port/proto collect under one key.
+        let m = ports_map_json("1.1.1.1:8080:80/tcp,2.2.2.2:9090:80/tcp");
+        let bindings = m["80/tcp"].as_array().unwrap();
+        assert_eq!(bindings.len(), 2);
+        assert_eq!(bindings[0]["HostPort"], "8080");
+        assert_eq!(bindings[1]["HostPort"], "9090");
+    }
+}

@@ -109,6 +109,50 @@ pub fn is_fs_inst(inst: &str) -> bool {
     matches!(inst, "RUN" | "COPY" | "ADD" | "WORKDIR")
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn fs_instructions_true() {
+        for i in ["RUN", "COPY", "ADD", "WORKDIR"] {
+            assert!(is_fs_inst(i), "{i} should be an fs instruction");
+        }
+    }
+    #[test]
+    fn config_instructions_false() {
+        for i in ["ENV", "CMD", "LABEL", "EXPOSE", "USER", "FROM", "ENTRYPOINT"] {
+            assert!(!is_fs_inst(i), "{i} should NOT be an fs instruction");
+        }
+        // match is exact/case-sensitive.
+        assert!(!is_fs_inst("run"));
+        assert!(!is_fs_inst(""));
+    }
+
+    #[test]
+    fn cache_id_is_deterministic() {
+        let a = cache_id("parent-a", "RUN echo hi");
+        let b = cache_id("parent-a", "RUN echo hi");
+        assert_eq!(a, b);
+        assert_eq!(a.len(), 64);
+        assert!(a.chars().all(|c| c.is_ascii_hexdigit()));
+    }
+    #[test]
+    fn cache_id_diverges_on_parent() {
+        assert_ne!(
+            cache_id("parent-a", "RUN echo hi"),
+            cache_id("parent-b", "RUN echo hi")
+        );
+    }
+    #[test]
+    fn cache_id_diverges_on_descriptor() {
+        assert_ne!(
+            cache_id("parent-a", "RUN echo hi"),
+            cache_id("parent-a", "RUN echo bye")
+        );
+    }
+}
+
 /// The build layer cache rooted at `<buildcache>/layers`: it snapshots the rootfs a step produced and
 /// restores it on a later hit, and records/serves each step's cumulative image config. Construct it with
 /// the caller's buildcache directory ([`BuildCache::new`]); the daemon passes `~/.dd/buildcache`.

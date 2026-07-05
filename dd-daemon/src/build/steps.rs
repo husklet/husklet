@@ -68,6 +68,60 @@ pub(super) fn cache_desc(
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::HashMap;
+    use std::path::{Path, PathBuf};
+
+    // Helper: exercise cache_desc for the PURE branches only (ARG + default). The COPY/ADD-only
+    // params (stage_names/stages/ctx/nonce) are unused by these branches, so they are passed empty.
+    fn desc(inst: &str, args: &str, buildargs: &HashMap<String, String>) -> String {
+        let stage_names: HashMap<String, usize> = HashMap::new();
+        let stages: Vec<PathBuf> = Vec::new();
+        let ctx = Path::new("/nonexistent");
+        cache_desc(inst, args, &stage_names, &stages, ctx, "NONCE", buildargs)
+    }
+
+    #[test]
+    fn arg_with_default_no_override() {
+        // `ARG FOO=bar` with no matching --build-arg resolves to the declared default.
+        assert_eq!(desc("ARG", "FOO=bar", &HashMap::new()), "ARG FOO=bar");
+    }
+    #[test]
+    fn arg_default_overridden_by_buildarg() {
+        // A --build-arg override replaces the declared default in the resolved descriptor.
+        let mut ba = HashMap::new();
+        ba.insert("FOO".to_string(), "baz".to_string());
+        assert_eq!(desc("ARG", "FOO=bar", &ba), "ARG FOO=baz");
+    }
+    #[test]
+    fn arg_bare_no_default_not_in_buildargs() {
+        // `ARG FOO` with no default and no override: descriptor is just the bare name.
+        assert_eq!(desc("ARG", "FOO", &HashMap::new()), "ARG FOO");
+    }
+    #[test]
+    fn arg_bare_resolved_from_buildargs() {
+        // `ARG FOO` (no default) but a --build-arg supplies the value.
+        let mut ba = HashMap::new();
+        ba.insert("FOO".to_string(), "xyz".to_string());
+        assert_eq!(desc("ARG", "FOO", &ba), "ARG FOO=xyz");
+    }
+    #[test]
+    fn arg_only_first_token_considered() {
+        // Only the first whitespace token is the arg spec.
+        assert_eq!(desc("ARG", "FOO=bar EXTRA", &HashMap::new()), "ARG FOO=bar");
+    }
+
+    #[test]
+    fn default_branch_passthrough() {
+        // ENV/CMD/LABEL/... fall through to the verbatim `"{inst} {args}"` descriptor.
+        assert_eq!(desc("ENV", "FOO=bar", &HashMap::new()), "ENV FOO=bar");
+        assert_eq!(desc("CMD", "[\"sh\"]", &HashMap::new()), "CMD [\"sh\"]");
+        assert_eq!(desc("USER", "root", &HashMap::new()), "USER root");
+    }
+}
+
 /// Execute a `RUN` instruction in the JIT against the current stage's rootfs. stdout/stderr are appended
 /// to `log` (as they occur, before any failure) so a failing build still reports the command's output;
 /// returns `Err(message)` on a non-zero exit / spawn failure for the caller to surface via `build_err`.
