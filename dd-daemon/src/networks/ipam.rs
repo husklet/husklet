@@ -167,145 +167,6 @@ pub(crate) fn net_json(n: &Net) -> crate::api::NetworkJson {
     }
 }
 
-pub(crate) async fn networks_list(State(a): State<App>) -> Json<Vec<crate::api::NetworkJson>> {
-    let g = a.inner.lock().await;
-    Json(g.networks.iter().map(net_json).collect::<Vec<_>>())
-}
-
-#[derive(Deserialize)]
-pub(crate) struct NetCreateBody {
-    #[serde(rename = "Name")]
-    name: Option<String>,
-    #[serde(rename = "Driver")]
-    driver: Option<String>,
-}
-
-pub(crate) async fn networks_create(
-    State(a): State<App>,
-    Json(body): Json<NetCreateBody>,
-) -> Response {
-    let name = body
-        .name
-        .filter(|n| !n.is_empty())
-        .unwrap_or_else(|| format!("net_{}", &fake_id("n")[..8]));
-    let mut g = a.inner.lock().await;
-    if g.networks.iter().any(|n| n.name == name) {
-        return conflict(format!("network {name} already exists"));
-    }
-    let (subnet, gateway) = alloc_subnet(&g.networks);
-    let n = Net {
-        id: fake_id(&format!("net-{name}")),
-        name,
-        driver: body.driver.unwrap_or_else(|| "bridge".into()),
-        scope: "local".into(),
-        containers: vec![],
-        created: now_secs(),
-        subnet,
-        gateway,
-        endpoints: HashMap::new(),
-    };
-    let id = n.id.clone();
-    let ev_name = n.name.clone();
-    let ev_driver = n.driver.clone();
-    g.networks.push(n);
-    save_state(&g, &a.state_path);
-    crate::events::emit_event(
-        &a.events,
-        "network",
-        "create",
-        &id,
-        json!({"name": ev_name, "type": ev_driver}),
-    );
-    (
-        StatusCode::CREATED,
-        Json(crate::api::NetworkCreateResponse {
-            id,
-            warning: String::new(),
-        }),
-    )
-        .into_response()
-}
-
-pub(crate) async fn network_inspect(State(a): State<App>, Path(id): Path<String>) -> Response {
-    match a
-        .inner
-        .lock()
-        .await
-        .networks
-        .iter()
-        .find(|n| net_matches(n, &id))
-    {
-        Some(n) => Json(net_json(n)).into_response(),
-        None => no_such_network(&id),
-    }
-}
-
-pub(crate) async fn network_delete(State(a): State<App>, Path(id): Path<String>) -> Response {
-    let mut g = a.inner.lock().await;
-    if g.networks
-        .iter()
-        .any(|n| net_matches(n, &id) && is_predefined(&n.name))
-    {
-        return (
-            StatusCode::FORBIDDEN,
-            Json(json!({"message": "predefined network cannot be removed"})),
-        )
-            .into_response();
-    }
-    let removed = g
-        .networks
-        .iter()
-        .find(|n| net_matches(n, &id))
-        .map(|n| (n.id.clone(), n.name.clone(), n.driver.clone()));
-    let before = g.networks.len();
-    g.networks.retain(|n| !net_matches(n, &id));
-    if g.networks.len() != before {
-        save_state(&g, &a.state_path);
-        if let Some((rid, rname, rdriver)) = removed {
-            crate::events::emit_event(
-                &a.events,
-                "network",
-                "destroy",
-                &rid,
-                json!({"name": rname, "type": rdriver}),
-            );
-        }
-        StatusCode::NO_CONTENT.into_response()
-    } else {
-        no_such_network(&id)
-    }
-}
-
-#[derive(Deserialize)]
-pub(crate) struct NetAttachBody {
-    #[serde(rename = "Container")]
-    container: Option<String>,
-}
-
-pub(crate) async fn network_connect(
-    State(a): State<App>,
-    Path(id): Path<String>,
-    Json(b): Json<NetAttachBody>,
-) -> Response {
-    let req = b.container.unwrap_or_default();
-    let mut g = a.inner.lock().await;
-    // Resolve to a full container id + its reported name before mutating networks (avoids borrowing
-    // `g.networks` mutably while `g.containers` is borrowed immutably).
-    let (cid, cname) = match resolve_cid(&g, &req)
-        .and_then(|f| g.containers.get(&f).map(|c| (f.clone(), endpoint_name(c))))
-    {
-        Some(t) => t,
-        None => (req.clone(), req.clone()),
-    };
-    let net_name = match g.networks.iter().find(|n| net_matches(n, &id)) {
-        Some(n) => n.name.clone(),
-        None => return no_such_network(&id),
-    };
-    join_network(&mut g.networks, &net_name, &cid, &cname);
-    save_state(&g, &a.state_path);
-    StatusCode::OK.into_response()
-}
-
 /// The name a container is reported by on a network: its `--name`, or the 12-char short id.
 pub(crate) fn endpoint_name(c: &Container) -> String {
     if c.name.is_empty() {
@@ -313,25 +174,6 @@ pub(crate) fn endpoint_name(c: &Container) -> String {
     } else {
         c.name.clone()
     }
-}
-
-pub(crate) async fn network_disconnect(
-    State(a): State<App>,
-    Path(id): Path<String>,
-    Json(b): Json<NetAttachBody>,
-) -> Response {
-    let req = b.container.unwrap_or_default();
-    let mut g = a.inner.lock().await;
-    let cid = resolve_cid(&g, &req).unwrap_or(req);
-    let r = match g.networks.iter_mut().find(|n| net_matches(n, &id)) {
-        Some(n) => {
-            leave_network(n, &cid);
-            StatusCode::OK.into_response()
-        }
-        None => return no_such_network(&id),
-    };
-    save_state(&g, &a.state_path);
-    r
 }
 
 pub(crate) fn net_matches(n: &Net, id: &str) -> bool {
@@ -373,19 +215,100 @@ pub(crate) fn default_networks() -> Vec<Net> {
         .collect()
 }
 
-/// `POST /networks/prune` — `docker network prune`. Removes user-defined networks with no attached
-/// containers (never the predefined bridge/host/none).
-pub(crate) async fn networks_prune(State(a): State<App>) -> Json<crate::api::NetworksPruneReport> {
-    let mut g = a.inner.lock().await;
-    let pruned: Vec<String> = g
-        .networks
-        .iter()
-        .filter(|n| !is_predefined(&n.name) && n.containers.is_empty())
-        .map(|n| n.name.clone())
-        .collect();
-    g.networks.retain(|n| !pruned.contains(&n.name));
-    save_state(&g, &a.state_path);
-    Json(crate::api::NetworksPruneReport {
-        networks_deleted: pruned,
-    })
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn mk_net(subnet: &str) -> Net {
+        Net {
+            id: "id".into(),
+            name: "n".into(),
+            driver: "bridge".into(),
+            scope: "local".into(),
+            containers: vec![],
+            created: 0,
+            subnet: subnet.into(),
+            gateway: String::new(),
+            endpoints: HashMap::new(),
+        }
+    }
+
+    fn net_with_subnet(subnet: &str) -> Net {
+        let mut n = mk_net("");
+        n.subnet = subnet.into();
+        n
+    }
+
+    #[test]
+    fn alloc_subnet_empty_pool() {
+        // No existing networks — first free /16 is 172.18.0.0/16, gateway .1.
+        let (sub, gw) = alloc_subnet(&[]);
+        assert_eq!(sub, "172.18.0.0/16");
+        assert_eq!(gw, "172.18.0.1");
+    }
+
+    #[test]
+    fn alloc_subnet_skips_occupied() {
+        // 172.18 and 172.19 taken -> next free is 172.20.0.0/16.
+        let nets = vec![net_with_subnet("172.18.0.0/16"), net_with_subnet("172.19.0.0/16")];
+        let (sub, gw) = alloc_subnet(&nets);
+        assert_eq!(sub, "172.20.0.0/16");
+        assert_eq!(gw, "172.20.0.1");
+    }
+
+    #[test]
+    fn alloc_subnet_exhausted_pool_falls_back() {
+        // All of 172.18..=172.31 occupied -> degrade to 172.18.0.0/16 rather than fail.
+        let nets: Vec<Net> = (18u32..=31)
+            .map(|o| net_with_subnet(&format!("172.{o}.0.0/16")))
+            .collect();
+        let (sub, gw) = alloc_subnet(&nets);
+        assert_eq!(sub, "172.18.0.0/16");
+        assert_eq!(gw, "172.18.0.1");
+    }
+
+    #[test]
+    fn alloc_ip_first_is_dot2() {
+        // .1 is the reserved gateway, so hosts start at .2.
+        let n = net_with_subnet("172.18.0.0/16");
+        assert_eq!(alloc_ip(&n), "172.18.0.2");
+    }
+
+    #[test]
+    fn alloc_ip_skips_used() {
+        let mut n = net_with_subnet("172.18.0.0/16");
+        n.endpoints.insert(
+            "c1".into(),
+            Endpoint { name: "c1".into(), ip: "172.18.0.2".into() },
+        );
+        n.endpoints.insert(
+            "c2".into(),
+            Endpoint { name: "c2".into(), ip: "172.18.0.3".into() },
+        );
+        assert_eq!(alloc_ip(&n), "172.18.0.4");
+    }
+
+    #[test]
+    fn alloc_ip_exhausted_falls_back_to_dot2() {
+        let mut n = net_with_subnet("172.18.0.0/16");
+        for k in 2u32..=254 {
+            n.endpoints.insert(
+                format!("c{k}"),
+                Endpoint { name: format!("c{k}"), ip: format!("172.18.0.{k}") },
+            );
+        }
+        // Every .2..=.254 taken -> degrade to .2.
+        assert_eq!(alloc_ip(&n), "172.18.0.2");
+    }
+
+    #[test]
+    fn ip_mac_deterministic() {
+        assert_eq!(ip_mac("172.18.0.2"), "02:42:ac:12:00:02");
+    }
+
+    #[test]
+    fn ip_mac_malformed_input() {
+        // Not four dotted octets -> the fixed placeholder.
+        assert_eq!(ip_mac("not-an-ip"), "02:42:00:00:00:00");
+    }
 }
