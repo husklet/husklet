@@ -131,3 +131,108 @@ pub fn default_shell(rootfs: &Path) -> Vec<String> {
     }
     vec!["/bin/sh".to_string()]
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn ref_tag_cases() {
+        // explicit tag
+        assert_eq!(ref_tag("ubuntu:24.04"), "24.04");
+        // default tag when none
+        assert_eq!(ref_tag("ubuntu"), "latest");
+        // a `:port` inside a registry host is NOT a tag (slash after the colon)
+        assert_eq!(ref_tag("localhost:5000/foo"), "latest");
+        assert_eq!(ref_tag("localhost:5000/foo:1.2"), "1.2");
+    }
+
+    #[test]
+    fn ref_name_cases() {
+        assert_eq!(ref_name("docker.io/library/ubuntu:latest"), "ubuntu");
+        assert_eq!(ref_name("library/ubuntu"), "ubuntu");
+        assert_eq!(ref_name("ubuntu:22.04"), "ubuntu");
+        assert_eq!(ref_name("ubuntu"), "ubuntu");
+        assert_eq!(ref_name("repo/app@sha256:deadbeef"), "app");
+    }
+
+    #[test]
+    fn ref_repo_normalizes_registry_and_namespace() {
+        // Docker Hub's implicit `library/` namespace made explicit; short/prefixed forms all collapse.
+        assert_eq!(ref_repo("nginx"), "registry-1.docker.io/library/nginx");
+        assert_eq!(ref_repo("library/nginx"), "registry-1.docker.io/library/nginx");
+        assert_eq!(
+            ref_repo("docker.io/library/nginx:1.25"),
+            "registry-1.docker.io/library/nginx"
+        );
+        // a distinct namespace stays distinct (no cross-repo collision)
+        assert_eq!(
+            ref_repo("linuxserver/nginx"),
+            "registry-1.docker.io/linuxserver/nginx"
+        );
+        // an explicit non-Hub registry is preserved
+        assert_eq!(ref_repo("ghcr.io/owner/app:v2"), "ghcr.io/owner/app");
+    }
+
+    #[test]
+    fn repo_tag_appends_latest_only_when_absent() {
+        assert_eq!(repo_tag("busybox"), "busybox:latest");
+        assert_eq!(repo_tag("busybox:latest"), "busybox:latest");
+        assert_eq!(repo_tag("busybox:1.36"), "busybox:1.36");
+        // a `:port` in the host is not a tag -> still needs `:latest` appended
+        assert_eq!(repo_tag("localhost:5000/foo"), "localhost:5000/foo:latest");
+        // a tag on the final path component is detected
+        assert_eq!(repo_tag("foo/bar:1"), "foo/bar:1");
+    }
+
+    #[test]
+    fn safe_name_flattens_canonical() {
+        let r = ImageRef::parse("nginx");
+        // canonical() == "docker.io/library/nginx:latest"
+        assert_eq!(safe_name(&r), "docker.io_library_nginx_latest");
+    }
+
+    #[test]
+    fn config_exposed_ports_sorted_keys() {
+        let c = json!({"config": {"ExposedPorts": {"80/tcp": {}, "5432/tcp": {}}}});
+        assert_eq!(config_exposed_ports(&c), vec!["5432/tcp", "80/tcp"]);
+        // absent -> empty
+        assert!(config_exposed_ports(&json!({"config": {}})).is_empty());
+    }
+
+    #[test]
+    fn config_labels_map() {
+        let c = json!({"config": {"Labels": {"a": "b", "maintainer": "acme"}}});
+        let m = config_labels(&c);
+        assert_eq!(m.get("a").map(String::as_str), Some("b"));
+        assert_eq!(m.get("maintainer").map(String::as_str), Some("acme"));
+        assert_eq!(m.len(), 2);
+        // absent -> empty
+        assert!(config_labels(&json!({"config": {}})).is_empty());
+    }
+
+    #[test]
+    fn config_volumes_sorted_keys() {
+        let c = json!({"config": {"Volumes": {"/var": {}, "/data": {}}}});
+        assert_eq!(config_volumes(&c), vec!["/data", "/var"]);
+        // absent -> empty
+        assert!(config_volumes(&json!({"config": {}})).is_empty());
+    }
+
+    #[test]
+    fn config_stop_signal_str() {
+        let c = json!({"config": {"StopSignal": "SIGQUIT"}});
+        assert_eq!(config_stop_signal(&c), "SIGQUIT");
+        // absent -> empty
+        assert_eq!(config_stop_signal(&json!({"config": {}})), "");
+    }
+
+    #[test]
+    fn config_strs_array() {
+        let c = json!({"config": {"Env": ["A=1", "B=2"]}});
+        assert_eq!(config_strs(&c, "Env"), vec!["A=1", "B=2"]);
+        // missing key -> empty
+        assert!(config_strs(&c, "Cmd").is_empty());
+    }
+}

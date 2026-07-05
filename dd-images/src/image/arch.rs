@@ -67,3 +67,82 @@ pub fn arch_from_config(config: &Value) -> Option<Arch> {
         _ => None,
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn detect_linux_aliases() {
+        for a in ["aarch64", "arm64", "arm64/v8"] {
+            assert_eq!(Arch::detect("linux", a), Some(Arch::LinuxAarch64), "{a}");
+        }
+        for a in ["x86_64", "amd64", "x86-64"] {
+            assert_eq!(Arch::detect("linux", a), Some(Arch::LinuxX86_64), "{a}");
+        }
+        // case-insensitive on the arch label
+        assert_eq!(Arch::detect("linux", "ARM64"), Some(Arch::LinuxAarch64));
+        assert_eq!(Arch::detect("linux", "AMD64"), Some(Arch::LinuxX86_64));
+    }
+
+    #[test]
+    fn detect_darwin_and_unknown() {
+        assert_eq!(Arch::detect("darwin", "arm64"), Some(Arch::DarwinAarch64));
+        assert_eq!(Arch::detect("darwin", "aarch64"), Some(Arch::DarwinAarch64));
+        // unrecognized os/arch -> None
+        assert_eq!(Arch::detect("windows", "amd64"), None);
+        assert_eq!(Arch::detect("linux", "mips"), None);
+        assert_eq!(Arch::detect("darwin", "amd64"), None);
+    }
+
+    #[test]
+    fn arch_from_config_maps_os_and_arch() {
+        // os defaults to linux when absent
+        assert_eq!(
+            arch_from_config(&json!({"architecture": "amd64"})),
+            Some(Arch::LinuxX86_64)
+        );
+        assert_eq!(
+            arch_from_config(&json!({"architecture": "arm64"})),
+            Some(Arch::LinuxAarch64)
+        );
+        // darwin + arm64 is the only darwin mapping
+        assert_eq!(
+            arch_from_config(&json!({"os": "darwin", "architecture": "arm64"})),
+            Some(Arch::DarwinAarch64)
+        );
+        // documented: amd64/arm64 map to Linux under ANY non-darwin os
+        assert_eq!(
+            arch_from_config(&json!({"os": "windows", "architecture": "amd64"})),
+            Some(Arch::LinuxX86_64)
+        );
+        assert_eq!(
+            arch_from_config(&json!({"os": "freebsd", "architecture": "aarch64"})),
+            Some(Arch::LinuxAarch64)
+        );
+        // missing/unknown architecture -> None
+        assert_eq!(arch_from_config(&json!({"os": "linux"})), None);
+        assert_eq!(
+            arch_from_config(&json!({"architecture": "riscv64"})),
+            None
+        );
+    }
+
+    #[test]
+    fn oci_target_isa_os_roundtrip() {
+        let cases = [
+            (Arch::LinuxAarch64, ("linux", "arm64"), "linux_aarch64", "aarch64", "linux"),
+            (Arch::LinuxX86_64, ("linux", "amd64"), "linux_x86_64", "x86_64", "linux"),
+            (Arch::DarwinAarch64, ("darwin", "arm64"), "darwin_aarch64", "aarch64", "darwin"),
+        ];
+        for (a, oci, target, isa, os) in cases {
+            assert_eq!(a.oci(), oci);
+            assert_eq!(a.target(), target);
+            assert_eq!(a.isa(), isa);
+            assert_eq!(a.os(), os);
+            // detect(os, isa) recovers the same Arch (the on-disk sidecar round-trip)
+            assert_eq!(Arch::detect(a.os(), a.isa()), Some(a));
+        }
+    }
+}
