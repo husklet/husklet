@@ -141,7 +141,7 @@ resident RAM, direct host-filesystem I/O). All numbers measured, median of 7. Re
 ## How it works
 
 dd runs a Linux container by **being its kernel in userspace**. A JIT translates the guest's machine
-code and traps every syscall instruction; the trap handler — `service()` in `dd-jit/src/runtime/os/linux/`
+code and traps every syscall instruction; the trap handler — `service()` in `dd-jit-darwin/src/runtime/os/linux/`
 — *is* the Linux syscall ABI, implemented against the macOS host.
 
 1. **Load** the guest ELF (static-PIE, or dynamic via its `ld.so`) and build the initial stack.
@@ -209,13 +209,21 @@ provides GTK4 + `dylibbundler` / `create-dmg`. The bundle relocates the GTK dyli
 
 A Cargo workspace.
 
-- **[`dd-jit/`](dd-jit/)** — the JIT runtime (C, under `src/runtime/`) **plus its Rust bindings**.
-  `build.rs` compiles and codesigns **one JIT binary per guest architecture** (`aarch64`, `x86_64`);
-  `src/lib.rs` exposes `Guest` + the typed `SpawnConfig` launch contract. The aarch64 guest is fully
-  decomposed (`jit/` engine + `os/linux/` personality + `frontend/aarch64/`); the x86-64 guest (jit86)
-  shares the `os/linux/` layer.
-- **`dd-daemon/`** — the Docker Engine API daemon. Detects each image's guest architecture from its ELF,
-  picks the matching JIT, and launches it via `SpawnConfig`.
+- **[`dd-jit/`](dd-jit/)** — the **typed container-runtime API**: `Runtime`, `Container` (+ fluent
+  builder), `Image`, and the `RunHandle`/`RunningContainer` handles. It selects a per-OS backend at
+  compile time and launches a container through a typed FFI — no shell, no env-var dialect. This is the
+  crate a developer embeds to run containers directly from Rust.
+- **`dd-jit-darwin/`** — the **macOS engine backend** dd-jit compiles against. The C JIT lives here
+  (under `src/runtime/`); `build.rs` compiles and codesigns **one binary per guest architecture**
+  (`aarch64`, `x86_64`, `darwin_aarch64`), and it exposes the `ddjit_spawn` FFI the runtime forks
+  through (the C side does the fork/exec; config travels as a typed struct). A future `dd-jit-linux`
+  would be a same-API sibling.
+- **`dd-images/`** — **image management**: OCI registry pull, on-disk store, `docker build`
+  (Dockerfile), rootfs unpack, and image discovery. Runtime-agnostic (**no dd-jit dependency**) — it
+  hands a ready rootfs to dd-jit and is usable standalone.
+- **`dd-daemon/`** — the **thin Docker Engine API server**: HTTP handlers + Docker model state that
+  wire `dd-images` and `dd-jit` together. It detects each image's guest architecture, then launches it
+  via `dd_jit::Runtime` (typed DTOs for the wire format; no business logic of its own).
 - **`dd-tests/`** — a declarative test harness; cases run across **every engine** with a grouped report.
 - **`dd-client/`** — a small typed Docker-Engine-API client over the daemon's Unix socket (the single
   source of truth for the wire format, shared by the GUI and CLI).

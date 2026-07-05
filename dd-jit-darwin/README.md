@@ -1,9 +1,14 @@
-# dd-jit
+# dd-jit-darwin
 
-The VM-less JIT container runtime (C) plus its Rust bindings. `cargo build` runs `build.rs`, which
-compiles and codesigns **one JIT binary per guest target** through the macOS toolchain (`MAP_JIT` + the
-`allow-jit` entitlement); the library exposes `Guest`, the typed [`SpawnConfig`] launch contract, and
-the built binaries' paths.
+The **macOS engine backend** for [`dd-jit`](../dd-jit/) — the VM-less JIT container engine (C) plus the
+FFI the runtime forks through. Developers use `dd-jit`'s typed API; this is its compile-time backend
+(`cargo build -p dd-jit` builds it as a dependency), never built standalone by a user. A future
+`dd-jit-linux` would be a same-API sibling. `cargo build` runs `build.rs`, which compiles and codesigns
+**one JIT binary per guest target** through the macOS toolchain (`MAP_JIT` + the `allow-jit`
+entitlement); the library exposes `Guest`, the `ddjit_spawn`/`LaunchConfig` FFI entry the runtime forks
+through (the C side does the fork/exec, config travels as a typed struct — no shell, no env dialect),
+the built binaries' paths, and the `SpawnConfig` direct-subprocess launch contract the test harness and
+CLI use.
 
 ```
 cargo build                 # build.rs -> one binary per target (linux/aarch64, linux/x86_64, darwin/aarch64), codesigned
