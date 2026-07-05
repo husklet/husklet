@@ -122,7 +122,7 @@ impl ContainerBuilder {
     }
 
     /// Set the guest-visible environment from merged `K=V` lines (image env + `-e` overrides). Applies
-    /// docker env semantics (last-wins dedup, default PATH, `TERM=xterm` under `tty`) via [`guest_env`]
+    /// docker env semantics (last-wins dedup, default PATH, `TERM=xterm` under `tty`) via `guest_env`
     /// and forwards EXACTLY these to the guest — never the host/daemon environment.
     pub fn guest_env(mut self, env: &[String], tty: bool) -> Self {
         let genv = guest_env(env, tty);

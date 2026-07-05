@@ -66,7 +66,7 @@ impl Runtime {
     /// Spawn + supervise the guest's IO INTO caller-provided channels — the container manager's path:
     /// the pump writes each output chunk into `out` (live fan-out) and appends it to `log_chunks` (the
     /// rotated replay buffer), and guest stdin is fed from `stdin_rx`. The caller owns exit/out-done
-    /// signalling and reaping via the returned [`Launched`]. Behavior matches [`start`]; only the channel
+    /// signalling and reaping via the returned [`Launched`]. Behavior matches `start`; only the channel
     /// ownership differs (so e.g. a Docker daemon can bind attach/logs to these channels before start).
     pub fn start_into(
         &self,

@@ -1,11 +1,11 @@
-// dd-jit build script: compile + codesign the JIT binaries for every supported guest arch.
-//
-// The JIT needs the macOS toolchain (arm64 codegen + MAP_JIT + a codesigned `allow-jit` entitlement),
-// so on a non-macOS dev host we drive clang/codesign through the `mac` bridge. On a real macOS host we
-// invoke them directly. Each guest target is one unity TU (src/runtime/targets/<target>.c) -> one
-// executable in OUT_DIR, whose path is exported to the crate via `cargo:rustc-env=DDJIT_<TARGET>`.
-// Targets span the guest-OS × guest-ISA matrix: linux_aarch64 (jit), linux_x86_64 (jit86),
-// darwin_aarch64 (jitdarwin — native macOS Mach-O containers).
+//! dd-jit build script: compile + codesign the JIT binaries for every supported guest arch.
+//!
+//! The JIT needs the macOS toolchain (arm64 codegen + MAP_JIT + a codesigned `allow-jit` entitlement),
+//! so on a non-macOS dev host we drive clang/codesign through the `mac` bridge. On a real macOS host we
+//! invoke them directly. Each guest target is one unity TU (src/runtime/targets/<target>.c) -> one
+//! executable in OUT_DIR, whose path is exported to the crate via `cargo:rustc-env=DDJIT_<TARGET>`.
+//! Targets span the guest-OS × guest-ISA matrix: linux_aarch64 (jit), linux_x86_64 (jit86),
+//! darwin_aarch64 (jitdarwin — native macOS Mach-O containers).
 use std::env;
 use std::path::PathBuf;
 use std::process::Command;

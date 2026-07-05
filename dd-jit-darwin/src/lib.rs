@@ -6,6 +6,8 @@
 //! [`SpawnConfig`] launch contract and the [`spawn_io`]/[`LaunchConfig`] FFI entry the runtime forks
 //! through. `dd-daemon` (and any other front-end) depends on this crate via the `dd-jit` API layer.
 
+#![warn(missing_docs)]
+
 mod launch;
 mod guest;
 mod types;
