@@ -1,7 +1,7 @@
 use super::*;
 use std::os::fd::RawFd;
 
-/// A launched, supervised container process. Drop does not kill the guest; call [`Launched::signal`] to stop it.
+/// A launched, supervised container process. Drop does not kill the guest; call its `signal` method to stop it.
 pub struct RunningContainer {
     /// The guest's host pid (also its process-group id); reaped with `waitpid(2)`.
     pub(super) pid: u32,
