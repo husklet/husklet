@@ -277,7 +277,7 @@ pub(crate) struct Live {
     /// `(emit unix-secs, stream 1=stdout/2=stderr, bytes)`. A single ordered log (replacing the old
     /// per-stream `stdout_buf`/`stderr_buf`) so the buffered replay interleaves stdout/stderr exactly as
     /// the live `out` broadcast does. The reaper derives the per-stream `cc.stdout`/`cc.stderr` from it.
-    pub(crate) log_chunks: Mutex<Vec<(i64, u8, Vec<u8>)>>,
+    pub(crate) log_chunks: Arc<Mutex<Vec<(i64, u8, Vec<u8>)>>>,
     pub(crate) exit: watch::Sender<Option<i64>>, // Some(code) once exited
     pub(crate) exit_rx: watch::Receiver<Option<i64>>,
     /// Fired `true` once NO more output will ever reach `out`: the reaper sets it only AFTER the
@@ -305,7 +305,7 @@ impl Live {
             out,
             stdin_tx,
             stdin_rx: Mutex::new(Some(stdin_rx)),
-            log_chunks: Mutex::new(Vec::new()),
+            log_chunks: Arc::new(Mutex::new(Vec::new())),
             exit,
             exit_rx,
             out_done,

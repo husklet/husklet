@@ -43,43 +43,70 @@ pub struct RunningContainer {
     /// The exit code once the guest exits (`None` until then).
     exit: watch::Sender<Option<i64>>,
     /// Sink for stdin bytes (an empty Vec closes the guest's stdin).
-    stdin_tx: Option<mpsc::UnboundedSender<Vec<u8>>>,
+    stdin_tx: Option<mpsc::Sender<Vec<u8>>>,
     /// PTY master fd when `tty` — for window-size ioctls; `None` on the piped path.
     pty_master: Option<RawFd>,
     io_handles: Vec<tokio::task::JoinHandle<()>>,
+}
+
+/// The launched guest process + its IO reader tasks, when a caller supervises the process itself (feeds
+/// its own log broadcast / reaper) — see [`Runtime::start_into`]. The caller drives `child` (wait) and
+/// drains `io_handles` on exit.
+pub struct Launched {
+    pub child: tokio::process::Child,
+    pub pid: u32,
+    /// PTY master fd (window-size ioctls) when `tty`, else `None`.
+    pub pty_master: Option<RawFd>,
+    pub io_handles: Vec<tokio::task::JoinHandle<()>>,
 }
 
 impl Runtime {
     /// Spawn the container's guest process and supervise its IO. Returns a [`RunningContainer`] handle.
     /// The engine is launched via the backend's command; the guest runs in its own process group.
     pub fn start(&self, c: &Container, io: Stdio3) -> Result<RunningContainer, Error> {
-        let (prog, args) = c.command().ok_or(Error::NoBackend(c.guest()))?;
-        let mut cmd = tokio::process::Command::new(prog);
-        cmd.args(args);
-
         let (out, _) = broadcast::channel::<(u8, Vec<u8>)>(1024);
         let log_chunks: Arc<tokio::sync::Mutex<Vec<LogChunk>>> = Arc::new(tokio::sync::Mutex::new(Vec::new()));
         let (out_done, _) = watch::channel(false);
         let (exit, _) = watch::channel(None);
-        let (stdin_tx, stdin_rx) = mpsc::unbounded_channel::<Vec<u8>>();
+        let (stdin_tx, stdin_rx) = mpsc::channel::<Vec<u8>>(256);
 
-        let (child, pty_master, io_handles) = if io.tty {
-            spawn_tty(&mut cmd, out.clone(), log_chunks.clone(), stdin_rx)?
-        } else {
-            spawn_piped(&mut cmd, out.clone(), log_chunks.clone(), stdin_rx)?
-        };
-        let pid = child.id().unwrap_or(0);
+        let launched = self.start_into(c, io, out.clone(), log_chunks.clone(), stdin_rx)?;
         Ok(RunningContainer {
-            child,
-            pid,
+            child: launched.child,
+            pid: launched.pid,
             out,
             log_chunks,
             out_done,
             exit,
             stdin_tx: Some(stdin_tx),
-            pty_master,
-            io_handles,
+            pty_master: launched.pty_master,
+            io_handles: launched.io_handles,
         })
+    }
+
+    /// Spawn + supervise the guest's IO INTO caller-provided channels — the container manager's path:
+    /// the pump writes each output chunk into `out` (live fan-out) and appends it to `log_chunks` (the
+    /// rotated replay buffer), and guest stdin is fed from `stdin_rx`. The caller owns exit/out-done
+    /// signalling and reaping via the returned [`Launched`]. Behavior matches [`start`]; only the channel
+    /// ownership differs (so e.g. a Docker daemon can bind attach/logs to these channels before start).
+    pub fn start_into(
+        &self,
+        c: &Container,
+        io: Stdio3,
+        out: broadcast::Sender<(u8, Vec<u8>)>,
+        log_chunks: Arc<tokio::sync::Mutex<Vec<LogChunk>>>,
+        stdin_rx: mpsc::Receiver<Vec<u8>>,
+    ) -> Result<Launched, Error> {
+        let (prog, args) = c.command().ok_or(Error::NoBackend(c.guest()))?;
+        let mut cmd = tokio::process::Command::new(prog);
+        cmd.args(args);
+        let (child, pty_master, io_handles) = if io.tty {
+            spawn_tty(&mut cmd, out, log_chunks, stdin_rx)?
+        } else {
+            spawn_piped(&mut cmd, out, log_chunks, stdin_rx)?
+        };
+        let pid = child.id().unwrap_or(0);
+        Ok(Launched { child, pid, pty_master, io_handles })
     }
 }
 
@@ -118,7 +145,7 @@ impl RunningContainer {
     /// Feed bytes to the guest's stdin. An empty slice closes stdin (EOF).
     pub fn write_stdin(&self, bytes: Vec<u8>) {
         if let Some(tx) = &self.stdin_tx {
-            let _ = tx.send(bytes);
+            let _ = tx.try_send(bytes);
         }
     }
 
@@ -209,7 +236,7 @@ fn spawn_piped(
     cmd: &mut tokio::process::Command,
     out: broadcast::Sender<(u8, Vec<u8>)>,
     log_chunks: Arc<tokio::sync::Mutex<Vec<LogChunk>>>,
-    mut stdin_rx: mpsc::UnboundedReceiver<Vec<u8>>,
+    mut stdin_rx: mpsc::Receiver<Vec<u8>>,
 ) -> Result<Spawned, Error> {
     cmd.stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped());
     // SAFETY: setpgid(0,0) in the forked child is async-signal-safe.
@@ -249,7 +276,7 @@ fn spawn_tty(
     cmd: &mut tokio::process::Command,
     out: broadcast::Sender<(u8, Vec<u8>)>,
     log_chunks: Arc<tokio::sync::Mutex<Vec<LogChunk>>>,
-    mut stdin_rx: mpsc::UnboundedReceiver<Vec<u8>>,
+    mut stdin_rx: mpsc::Receiver<Vec<u8>>,
 ) -> Result<Spawned, Error> {
     let (master, slave) = open_pty()?;
     let slave_fd = slave.as_raw_fd();
