@@ -1,0 +1,83 @@
+//! Core ABI / codegen, libc breadth & C-runtime behaviour, and a heavy timing microbench.
+
+use crate::{group, port, src, Engine, Group};
+
+/// Core ABI / codegen — compiled guests, diffed against a native oracle.
+pub(super) fn compat() -> Group {
+    group(
+        "compat",
+        vec![
+            src("hello", "hello.c").exit(42).out("hi\n"),
+            src("math", "math.c").oracle(),
+            src("strings", "strings.c").oracle(),
+            src("bitops", "bitops.c").oracle(), // popcount/clz/ctz/bswap
+            src("mov-moffs", "moffs.c")
+                .only(&[Engine::LinuxX86_64])
+                .oracle(), // MOV A0-A3 (acc<->abs64 addr; node/V8/mongosh)
+            src("varargs", "varargs.c").oracle(), // stdarg + snprintf formats
+            src("longjmp", "longjmp.c").out("longjmp r=42\n"),
+            src("recursion", "recursion.c").oracle(), // fib(30) + ackermann (§B depth gate)
+            src("fnptr", "fnptr.c").oracle(),         // function pointers -> IBTC / inline cache
+            src("jumptable", "jumptable.c").oracle(), // dense switch -> jump table
+            // IBTC stress: a 128-target MEGAMORPHIC computed-goto bytecode VM (CPython/VDBE
+            // shape -> hammers the inline indirect-branch target cache) + a MONOMORPHIC deep recursion
+            // (real call/ret). A wrong IBTC prediction that jumped to the wrong handler/return would corrupt
+            // the deterministic checksum, so this golden runs byte-identically on both Linux engines.
+            src("ibtc-dispatch", "ibtc_dispatch.c")
+                .out("ibtc vm=10240120795314104034 rec=2178309 chk=12619423276023875997\n"),
+            src("floatmath", "floatmath.c").oracle(),
+            // Stolen-register codegen surface (aarch64: x16/x17/x18/x28/x30 live in cpu->x[]): inline-asm
+            // coverage of every mangle shape -- data-processing (1..3 distinct stolen regs), loads/stores
+            // (stolen Rt/base/writeback/pairs), adr + ldr-literal INTO a stolen reg, TLS via tpidr_el0
+            // (stolen + non-stolen), and cbz/tbz TESTING a stolen reg. Pins both the legacy mscratch dance
+            // and the steal-mode fast paths (stealfast) byte-exactly against a native run.
+            src("stolen-regs", "stolen_regs.c")
+                .only(&[Engine::LinuxAarch64])
+                .oracle(),
+        ],
+    )
+}
+
+/// libc-heavy paths.
+pub(super) fn libc() -> Group {
+    group(
+        "libc",
+        vec![
+            src("heap", "heap.c").oracle(),
+            src("qsort", "qsort.c").oracle(),
+            src("files", "files.c").out("files n=7 data=payload\n"),
+            src("statfile", "statfile.c").oracle(), // open/write/stat/access/unlink
+            src("pipe", "pipe.c").out("pipe n=10 piped-data\n"),
+            src("mmapanon", "mmapanon.c").oracle(), // mmap/munmap anon
+        ],
+    )
+}
+
+/// libc breadth & C-runtime behaviour — regex, glob, float parsing, calendar math, environment, exit
+/// handlers, and signal control flow. Portable across engines, golden-checked.
+pub(super) fn clib() -> Group {
+    group(
+        "clib",
+        vec![
+            port("regex", "regex.c").out("regex hit=1 group=2026 miss=1\n"),
+            port("glob", "globmatch.c").out("glob txt=3 all=5\n"),
+            port("strtod", "strtod.c").out("strtod pi=1 sci=1 hex=1 inf=1 acc=10000\n"),
+            port("timefmt", "timefmt.c").out("timefmt fmt=1 roundtrip=1 wday=2\n"),
+            port("environ", "environ.c")
+                .out("environ set=1 nooverwrite=1 overwrite=1 unset=1 haspath=1\n"),
+            port("atexit", "atexit.c").out("atexit order=cba"),
+            port("sigaction", "sigaction2.c").out("sigaction usr1=1 signo_ok=1 chld=1\n"), // SA_SIGINFO + SIGCHLD
+            port("sigjmp", "sigjmp.c").out("sigjmp hops=3 from=3\n"), // sigsetjmp/siglongjmp
+        ],
+    )
+}
+
+/// Heavier workloads (also exercise the timing column).
+pub(super) fn perf() -> Group {
+    group(
+        "perf",
+        vec![
+            src("sortbig", "sortbig.c").oracle(), // qsort 300k longs
+        ],
+    )
+}
