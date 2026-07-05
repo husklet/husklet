@@ -15,10 +15,21 @@ pub(crate) async fn containers_top(State(a): State<App>, Path(id): Path<String>)
         .get(&full)
         .map(|c| c.cmd.join(" "))
         .unwrap_or_default();
-    Json(
-        json!({ "Titles": ["UID", "PID", "PPID", "C", "STIME", "TTY", "TIME", "CMD"],
-        "Processes": [["root", "1", "0", "0", "00:00", "?", "00:00:00", cmd]] }),
-    )
+    Json(crate::api::ContainerTop {
+        titles: vec![
+            "UID", "PID", "PPID", "C", "STIME", "TTY", "TIME", "CMD",
+        ],
+        processes: vec![vec![
+            "root".into(),
+            "1".into(),
+            "0".into(),
+            "0".into(),
+            "00:00".into(),
+            "?".into(),
+            "00:00:00".into(),
+            cmd,
+        ]],
+    })
     .into_response()
 }
 
@@ -76,13 +87,21 @@ fn parse_ps_time(s: &str) -> u64 {
 }
 
 /// One `cpu_stats`/`precpu_stats` block in Docker's shape.
-fn stats_cpu_block(total: u64, system: u64) -> Value {
-    json!({
-        "cpu_usage": { "total_usage": total, "usage_in_kernelmode": 0, "usage_in_usermode": total },
-        "system_cpu_usage": system,
-        "online_cpus": 1,
-        "throttling_data": { "periods": 0, "throttled_periods": 0, "throttled_time": 0 }
-    })
+fn stats_cpu_block(total: u64, system: u64) -> crate::api::CpuStats {
+    crate::api::CpuStats {
+        cpu_usage: crate::api::CpuUsage {
+            total_usage: total,
+            usage_in_kernelmode: 0,
+            usage_in_usermode: total,
+        },
+        system_cpu_usage: system,
+        online_cpus: 1,
+        throttling_data: crate::api::ThrottlingData {
+            periods: 0,
+            throttled_periods: 0,
+            throttled_time: 0,
+        },
+    }
 }
 
 /// Build one full stats document. `base` anchors a monotonic `system_cpu_usage`; `idx` is the sample
@@ -98,33 +117,32 @@ fn stats_sample(
     base: std::time::Instant,
     pre_total: u64,
     pre_sys: u64,
-) -> (Value, u64, u64) {
+) -> (crate::api::ContainerStats, u64, u64) {
     let (total, system, mem, cur) = match pid {
         Some(p) => {
             let (rss, cpu) = pid_metrics(p);
             let mem = if rss == 0 { STATS_MEM_FALLBACK } else { rss };
             // system: monotonic host-clock proxy so the per-sample delta is real wall time.
             let system = 100_000_000_000u64 + base.elapsed().as_nanos() as u64;
-            (cpu + idx * STATS_CPU_FLOOR_NS, system, mem, 1)
+            (cpu + idx * STATS_CPU_FLOOR_NS, system, mem, 1u64)
         }
         None => (0, 0, 0, 0),
     };
-    let v = json!({
-        "read": fmt_rfc3339(now_secs()),
-        "name": format!("/{name}"),
-        "id": id,
-        "pids_stats": { "current": cur },
-        "cpu_stats": stats_cpu_block(total, system),
-        "precpu_stats": stats_cpu_block(pre_total, pre_sys),
-        "memory_stats": { "usage": mem, "limit": mem_limit, "stats": {} },
-        "blkio_stats": {
-            "io_service_bytes_recursive": [], "io_serviced_recursive": [],
-            "io_queue_recursive": [], "io_service_time_recursive": [],
-            "io_wait_time_recursive": [], "io_merged_recursive": [],
-            "io_time_recursive": [], "sectors_recursive": []
+    let v = crate::api::ContainerStats {
+        read: fmt_rfc3339(now_secs()),
+        name: format!("/{name}"),
+        id: id.to_string(),
+        pids_stats: crate::api::PidsStats { current: cur },
+        cpu_stats: stats_cpu_block(total, system),
+        precpu_stats: stats_cpu_block(pre_total, pre_sys),
+        memory_stats: crate::api::MemoryStats {
+            usage: mem,
+            limit: mem_limit,
+            stats: std::collections::BTreeMap::new(),
         },
-        "networks": {}
-    });
+        blkio_stats: crate::api::BlkioStats::empty(),
+        networks: std::collections::BTreeMap::new(),
+    };
     (v, total, system)
 }
 
@@ -495,35 +513,72 @@ pub(crate) fn container_mounts_json(vols: &[Vol], c: &Container) -> Vec<Value> {
             .unwrap_or_default()
     };
     let mut out: Vec<Value> = Vec::new();
+    let to_val = |m: crate::api::MountPoint| serde_json::to_value(m).unwrap_or(Value::Null);
     for b in &c.binds {
         if let Some((src, dst, ro)) = parse_bind(b) {
             if src.starts_with('/') {
-                out.push(json!({"Type": "bind", "Source": src, "Destination": dst, "Mode": if ro {"ro"} else {""}, "RW": !ro, "Propagation": "rprivate"}));
+                out.push(to_val(crate::api::MountPoint {
+                    type_: "bind".into(),
+                    name: None,
+                    source: src.to_string(),
+                    destination: dst.to_string(),
+                    driver: None,
+                    mode: Some(if ro { "ro" } else { "" }.to_string()),
+                    rw: !ro,
+                    propagation: "rprivate",
+                }));
             } else {
-                out.push(json!({"Type": "volume", "Name": src, "Source": vol_mp(src), "Destination": dst, "Driver": "local", "Mode": if ro {"ro"} else {"z"}, "RW": !ro, "Propagation": ""}));
+                out.push(to_val(crate::api::MountPoint {
+                    type_: "volume".into(),
+                    name: Some(src.to_string()),
+                    source: vol_mp(src),
+                    destination: dst.to_string(),
+                    driver: Some("local"),
+                    mode: Some(if ro { "ro" } else { "z" }.to_string()),
+                    rw: !ro,
+                    propagation: "",
+                }));
             }
         }
     }
     for m in &c.mounts {
         if m.typ == "volume" {
-            out.push(json!({"Type": "volume", "Name": m.source, "Source": vol_mp(&m.source), "Destination": m.target, "Driver": "local", "RW": !m.read_only, "Propagation": ""}));
+            out.push(to_val(crate::api::MountPoint {
+                type_: "volume".into(),
+                name: Some(m.source.clone()),
+                source: vol_mp(&m.source),
+                destination: m.target.clone(),
+                driver: Some("local"),
+                mode: None,
+                rw: !m.read_only,
+                propagation: "",
+            }));
         } else {
-            out.push(json!({"Type": m.typ, "Source": m.source, "Destination": m.target, "RW": !m.read_only, "Propagation": "rprivate"}));
+            out.push(to_val(crate::api::MountPoint {
+                type_: m.typ.clone(),
+                name: None,
+                source: m.source.clone(),
+                destination: m.target.clone(),
+                driver: None,
+                mode: None,
+                rw: !m.read_only,
+                propagation: "rprivate",
+            }));
         }
     }
     for target in c.tmpfs.keys() {
         out.push(
-            json!({"Type": "tmpfs", "Source": "", "Destination": target, "RW": true, "Mode": ""}),
+            serde_json::to_value(crate::api::TmpfsMountPoint {
+                type_: "tmpfs",
+                source: "",
+                destination: target.clone(),
+                rw: true,
+                mode: "",
+            })
+            .unwrap_or(Value::Null),
         );
     }
     out
-}
-
-/// `State.Health` (inspect) when a HEALTHCHECK is configured — else None (docker omits the key). Mirrors
-/// Moby's `container.Health` shape: Status (starting/healthy/unhealthy), FailingStreak, Log[].
-pub(crate) fn health_json(c: &Container) -> Option<Value> {
-    c.health.as_ref().map(|h| json!({"Status": h.status, "FailingStreak": h.failing_streak,
-        "Log": h.log.iter().map(|l| json!({"Start": l.start, "End": l.end, "ExitCode": l.exit_code, "Output": l.output})).collect::<Vec<_>>()}))
 }
 
 pub(crate) async fn containers_inspect(State(a): State<App>, Path(id): Path<String>) -> Response {
@@ -561,12 +616,30 @@ pub(crate) async fn containers_inspect(State(a): State<App>, Path(id): Path<Stri
                 fmt_rfc3339(c.finished_at)
             };
             // Networks the container has joined -> NetworkSettings.Networks, with the IPAM-assigned
-            // identity (IP/gateway/mac) per network.
-            let networks: serde_json::Map<String, Value> = g.networks.iter()
-                .filter_map(|n| n.endpoints.get(&c.id).map(|e| (n.name.clone(), json!({
-                    "NetworkID": n.id, "IPAddress": e.ip, "Gateway": n.gateway,
-                    "IPPrefixLen": n.subnet.split('/').nth(1).and_then(|p| p.parse::<i64>().ok()).unwrap_or(16),
-                    "MacAddress": ip_mac(&e.ip)}))))
+            // identity (IP/gateway/mac) per network. A BTreeMap keeps them name-sorted, matching the
+            // prior `serde_json::Map` (BTreeMap-backed) collection order.
+            let networks: std::collections::BTreeMap<String, crate::api::EndpointJson> = g
+                .networks
+                .iter()
+                .filter_map(|n| {
+                    n.endpoints.get(&c.id).map(|e| {
+                        (
+                            n.name.clone(),
+                            crate::api::EndpointJson {
+                                network_id: n.id.clone(),
+                                ip_address: e.ip.clone(),
+                                gateway: n.gateway.clone(),
+                                ip_prefix_len: n
+                                    .subnet
+                                    .split('/')
+                                    .nth(1)
+                                    .and_then(|p| p.parse::<i64>().ok())
+                                    .unwrap_or(16),
+                                mac_address: ip_mac(&e.ip),
+                            },
+                        )
+                    })
+                })
                 .collect();
             // Top-level NetworkSettings.IPAddress = the primary endpoint IP (first joined network).
             let primary = g
@@ -583,45 +656,81 @@ pub(crate) async fn containers_inspect(State(a): State<App>, Path(id): Path<Stri
             // OOMKilled/Dead not modelled by dd's reaper, reported false; Error empty). Running stays true
             // through the restart backoff (Moby keeps Running=true while restarting).
             let restarting = c.status == "restarting";
-            let mut state = json!({"Status": c.status, "ExitCode": c.exit_code, "Running": running || restarting,
-                "Paused": c.status == "paused", "Restarting": restarting, "OOMKilled": false, "Dead": false, "Error": "",
-                "Pid": pid, "StartedAt": started_at, "FinishedAt": finished_at});
-            if let Some(h) = health_json(c) {
-                state["Health"] = h;
-            }
-            // Config.Healthcheck / StopSignal round-trip so a client diffs the resolved lifecycle config.
-            let cfg_health = c
-                .healthcheck
-                .as_ref()
-                .map(|h| {
-                    json!({"Test": h.test, "Interval": h.interval,
-                "Timeout": h.timeout, "Retries": h.retries, "StartPeriod": h.start_period})
-                })
-                .unwrap_or(Value::Null);
-            let stop_signal = if c.stop_signal.is_empty() {
-                Value::Null
-            } else {
-                json!(c.stop_signal)
+            let state = crate::api::ContainerState {
+                status: c.status.clone(),
+                exit_code: c.exit_code,
+                running: running || restarting,
+                paused: c.status == "paused",
+                restarting,
+                oom_killed: false,
+                dead: false,
+                error: String::new(),
+                pid: pid as i64,
+                started_at,
+                finished_at,
+                // `State.Health` reuses the model's `HealthState` (its Serialize carries the exact keys).
+                health: c.health.clone(),
             };
-            Json(json!({"Id": c.id, "Image": c.image, "Created": fmt_rfc3339(c.created),
-            "Name": format!("/{}", if c.name.is_empty() { c.id[..12.min(c.id.len())].to_string() } else { c.name.clone() }),
-            "State": state,
-            "Config": {"Cmd": c.cmd, "Hostname": c.hostname, "Image": c.image, "Env": c.env, "Labels": c.labels,
-                "Healthcheck": cfg_health, "StopSignal": stop_signal},
-            "RestartCount": c.restart_count,
-            // Top-level resolved Mounts (bind/volume/tmpfs, with volume Name/Driver) — see container_mounts_json.
-            "Mounts": container_mounts_json(&g.volumes, c),
+            // Config.Healthcheck / StopSignal round-trip so a client diffs the resolved lifecycle config
+            // (Healthcheck reuses the model's `HealthConfig`; both are `null` when unset).
+            let config = crate::api::ContainerConfig {
+                cmd: c.cmd.clone(),
+                hostname: c.hostname.clone(),
+                image: c.image.clone(),
+                env: c.env.clone(),
+                labels: c.labels.clone(),
+                healthcheck: c.healthcheck.clone(),
+                stop_signal: if c.stop_signal.is_empty() {
+                    None
+                } else {
+                    Some(c.stop_signal.clone())
+                },
+            };
             // HostConfig round-trips the fidelity extras verbatim so docker clients diff them cleanly.
-            "HostConfig": {"Binds": c.binds, "Memory": c.memory, "PidsLimit": c.pids_limit,
-                "NanoCpus": c.nano_cpus, "ReadonlyRootfs": c.readonly_rootfs,
-                "Ulimits": c.ulimits.iter().map(|u| json!({"Name": u.name, "Soft": u.soft, "Hard": u.hard})).collect::<Vec<_>>(),
-                "RestartPolicy": {"Name": c.restart_policy.name, "MaximumRetryCount": c.restart_policy.max_retry},
-                "CapAdd": c.cap_add, "CapDrop": c.cap_drop, "Devices": c.devices, "Mounts": c.mounts,
-                "Tmpfs": c.tmpfs, "StopTimeout": c.stop_timeout,
-                "Privileged": c.privileged, "SecurityOpt": c.security_opt},
-            // NetworkSettings present so `docker port` (reads .NetworkSettings.Ports) doesn't panic.
-            "NetworkSettings": {"Ports": ports_map_json(&c.publish), "IPAddress": primary.0, "Gateway": primary.1,
-                "Networks": Value::Object(networks)}})).into_response()
+            let host_config = crate::api::HostConfigJson {
+                binds: c.binds.clone(),
+                memory: c.memory,
+                pids_limit: c.pids_limit,
+                nano_cpus: c.nano_cpus,
+                readonly_rootfs: c.readonly_rootfs,
+                ulimits: c.ulimits.clone(),
+                restart_policy: c.restart_policy.clone(),
+                cap_add: c.cap_add.clone(),
+                cap_drop: c.cap_drop.clone(),
+                devices: c.devices.clone(),
+                mounts: c.mounts.clone(),
+                tmpfs: c.tmpfs.clone(),
+                stop_timeout: c.stop_timeout,
+                privileged: c.privileged,
+                security_opt: c.security_opt.clone(),
+            };
+            Json(crate::api::ContainerInspect {
+                id: c.id.clone(),
+                image: c.image.clone(),
+                created: fmt_rfc3339(c.created),
+                name: format!(
+                    "/{}",
+                    if c.name.is_empty() {
+                        c.id[..12.min(c.id.len())].to_string()
+                    } else {
+                        c.name.clone()
+                    }
+                ),
+                state,
+                config,
+                restart_count: c.restart_count,
+                // Top-level resolved Mounts (bind/volume/tmpfs, with volume Name/Driver).
+                mounts: container_mounts_json(&g.volumes, c),
+                host_config,
+                // NetworkSettings present so `docker port` (reads .NetworkSettings.Ports) doesn't panic.
+                network_settings: crate::api::NetworkSettingsJson {
+                    ports: ports_map_json(&c.publish),
+                    ip_address: primary.0,
+                    gateway: primary.1,
+                    networks,
+                },
+            })
+            .into_response()
         }
         None => no_such(&id),
     }
@@ -758,7 +867,10 @@ fn human_status(c: &Container) -> String {
     }
 }
 
-pub(crate) async fn containers_json(State(a): State<App>, Query(q): Query<PsQ>) -> Json<Value> {
+pub(crate) async fn containers_json(
+    State(a): State<App>,
+    Query(q): Query<PsQ>,
+) -> Json<Vec<crate::api::ContainerSummary>> {
     let all = matches!(q.all.as_deref(), Some("1") | Some("true") | Some("True"));
     // `filters` arrives URL-encoded JSON; axum has already percent-decoded it. Bad JSON => no filters.
     // Docker encodes it as map[key]->{value:true} (e.g. {"name":{"web":true}}), older clients as
@@ -840,22 +952,41 @@ pub(crate) async fn containers_json(State(a): State<App>, Query(q): Query<PsQ>) 
             .cmp(&a.created)
             .then(b.started_at.cmp(&a.started_at))
     });
-    let v: Vec<Value> = matched.iter().map(|c| {
-        let mut entry = json!({
-        "Id": c.id, "Image": c.image, "Command": c.cmd.join(" "), "Created": c.created,
-        "State": c.status, "Status": human_status(c), "ExitCode": c.exit_code, "Ports": ports_json(&c.publish),
-        "Labels": c.labels,
-        "Mounts": container_mounts_json(&vols_snapshot, c),
-        "Names": [format!("/{}", if c.name.is_empty() { c.id[..12.min(c.id.len())].to_string() } else { c.name.clone() })]});
-        // Only emit the size keys when requested -- docker omits them otherwise.
-        if want_size {
-            let (rw, rootfs) = container_sizes(c);
-            entry["SizeRw"] = json!(rw);
-            entry["SizeRootFs"] = json!(rootfs);
-        }
-        entry
-    }).collect();
-    Json(json!(v))
+    let v: Vec<crate::api::ContainerSummary> = matched
+        .iter()
+        .map(|c| {
+            // Only emit the size keys when requested -- docker omits them otherwise.
+            let (size_rw, size_root_fs) = if want_size {
+                let (rw, rootfs) = container_sizes(c);
+                (Some(rw), Some(rootfs))
+            } else {
+                (None, None)
+            };
+            crate::api::ContainerSummary {
+                id: c.id.clone(),
+                image: c.image.clone(),
+                command: c.cmd.join(" "),
+                created: c.created,
+                state: c.status.clone(),
+                status: human_status(c),
+                exit_code: c.exit_code,
+                ports: ports_json(&c.publish),
+                labels: c.labels.clone(),
+                mounts: container_mounts_json(&vols_snapshot, c),
+                names: vec![format!(
+                    "/{}",
+                    if c.name.is_empty() {
+                        c.id[..12.min(c.id.len())].to_string()
+                    } else {
+                        c.name.clone()
+                    }
+                )],
+                size_rw,
+                size_root_fs,
+            }
+        })
+        .collect();
+    Json(v)
 }
 
 // ---- prune / changes / export / update (Docker conformance additions) -------
