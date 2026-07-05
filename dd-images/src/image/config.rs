@@ -96,6 +96,32 @@ pub fn ref_tag(name: &str) -> String {
     }
 }
 
+/// The bare repository name of a docker image reference, ignoring registry, namespace and tag/digest:
+/// `docker.io/library/ubuntu:latest` -> `ubuntu`, `library/ubuntu` -> `ubuntu`, `ubuntu:22.04` -> `ubuntu`.
+/// Lets `docker run ubuntu` match an image discovered/tagged as `ubuntu` regardless of how docker
+/// canonicalizes the reference. A loose display/match key — prefer [`ref_repo`] for identity decisions.
+pub fn ref_name(s: &str) -> &str {
+    let last = s.rsplit('/').next().unwrap_or(s);
+    last.split('@')
+        .next()
+        .unwrap_or(last)
+        .split(':')
+        .next()
+        .unwrap_or(last)
+}
+
+/// The FULLY-QUALIFIED canonical repository of an image reference — registry + namespace + name, tag
+/// stripped, with Docker Hub's implicit `library/` namespace made explicit. This is the correct key for
+/// "is this the same image?" because it distinguishes repositories that merely share a final path
+/// component: `nginx`, `library/nginx`, `docker.io/library/nginx:1.25` all map to
+/// `registry-1.docker.io/library/nginx`, but `linuxserver/nginx` maps to
+/// `registry-1.docker.io/linuxserver/nginx`. Using the bare basename ([`ref_name`]) instead makes
+/// `docker run nginx` resolve to a locally-present `linuxserver/nginx` — a cross-repo collision.
+pub fn ref_repo(s: &str) -> String {
+    let r = ImageRef::parse(s);
+    format!("{}/{}", r.registry, r.repository)
+}
+
 /// Fallback default command for an image whose config has no Cmd: prefer /bin/sh, else /bin/bash.
 pub fn default_shell(rootfs: &Path) -> Vec<String> {
     for sh in ["/bin/sh", "/bin/bash"] {

@@ -92,8 +92,9 @@ pub(crate) async fn image_delete(State(a): State<App>, Path(name): Path<String>)
     let last_ref = !g.images.iter().any(|i| i.rootfs == target.rootfs);
     let mut report = vec![DeleteRecord::Untagged(untagged)];
     if last_ref && target.name != "macos" {
-        // the host `macos` image's rootfs is the live `/` — never delete
-        remove_image_dir(&a.images_dir, &target.rootfs);
+        // the host `macos` image's rootfs is the live `/` — never delete. dd-images owns the store-guarded
+        // dir removal (a rootfs outside the writable store — a bundled starter — is left untouched).
+        dd_images::Store::new(&a.images_dir).remove_image_dir(&target.rootfs);
         report.push(DeleteRecord::Deleted(format!(
             "sha256:{}",
             fake_id(&target.name)
@@ -107,19 +108,6 @@ pub(crate) async fn image_delete(State(a): State<App>, Path(name): Path<String>)
         json!({"name": repo_tag(&target.name)}),
     );
     Json(report).into_response()
-}
-
-/// Remove an image's on-disk directory (`<images_dir>/<safe>/`, the parent of its `rootfs/`). Guarded
-/// to the writable image store: a rootfs under a read-only bundled starter dir (or anywhere outside
-/// `images_dir`) is left untouched so `rmi` of a discovered alias can't wipe shipped images.
-fn remove_image_dir(images_dir: &str, rootfs: &str) {
-    let Some(dir) = std::path::Path::new(rootfs).parent() else {
-        return;
-    };
-    let base = std::path::Path::new(images_dir);
-    if dir != base && dir.starts_with(base) {
-        let _ = std::fs::remove_dir_all(dir);
-    }
 }
 
 /// Re-scan the writable images dir from disk and merge any images not already in the in-memory store

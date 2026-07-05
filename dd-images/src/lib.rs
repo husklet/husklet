@@ -8,7 +8,9 @@ pub use registry::{layer_short, Client, Credentials, ImageRef, PullEvent, Pulled
 pub mod image;
 pub use image::{
     arch_from_config, config_exposed_ports, config_labels, config_stop_signal, config_strs,
-    config_volumes, default_shell, image_ref, repo_tag, ref_tag, safe_name, Arch, LocalImage, Store,
+    config_volumes, default_shell, detect_arch, discover_images, image_ref, image_score, ref_name,
+    ref_repo, ref_tag, repo_tag, safe_name, Arch, DiscoveredImage, LoadedImage, LocalImage, Manifest,
+    Store,
 };
 
 pub mod build;

@@ -15,24 +15,36 @@
 //! the re-globs below.
 
 mod arch;
+mod archive;
 mod config;
+mod discovery;
 mod local_image;
+mod manifest;
 mod store;
 
 pub use arch::{arch_from_config, Arch};
+pub use archive::LoadedImage;
 pub use config::{
     config_exposed_ports, config_labels, config_stop_signal, config_strs, config_volumes,
-    default_shell, image_ref, repo_tag, ref_tag, safe_name,
+    default_shell, image_ref, ref_name, ref_repo, ref_tag, repo_tag, safe_name,
 };
+pub use discovery::{detect_arch, discover_images, image_score, DiscoveredImage};
 pub use local_image::LocalImage;
+pub use manifest::Manifest;
 pub use store::Store;
 
 // Internal flat namespace: re-glob every submodule so a submodule's `use super::*` resolves its siblings.
 #[allow(unused_imports)]
 use arch::*;
 #[allow(unused_imports)]
+use archive::*;
+#[allow(unused_imports)]
 use config::*;
 #[allow(unused_imports)]
+use discovery::*;
+#[allow(unused_imports)]
 use local_image::*;
+#[allow(unused_imports)]
+use manifest::*;
 #[allow(unused_imports)]
 use store::*;
