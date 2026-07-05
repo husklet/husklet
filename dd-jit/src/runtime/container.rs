@@ -428,4 +428,148 @@ mod tests {
             .unwrap();
         assert_eq!((c3.cfg.uid, c3.cfg.gid), (None, None));
     }
+
+    // ---- launch_config(): DD_*/DDJIT_* + typed SpawnConfig -> typed LaunchConfig mapping ----
+
+    #[test]
+    fn launch_config_maps_all_fields() {
+        // A container with every knob set must surface each into its typed LaunchConfig field.
+        let c = Container::builder(Image::from_rootfs("/img").guest(Guest::LinuxAarch64))
+            .cmd(["/bin/sh", "-c", "echo hi"])
+            .cwd("/work")
+            .guest_env(&["FOO=bar".to_string()], true)
+            .sandbox(true)
+            .net_isolate(true)
+            .bridge("net123", "10.0.0.5")
+            .write_coherence_file("/run/fsgen")
+            .persistent_cache("/home/dd/pcache")
+            .external_port_forwarder(true)
+            .hostname("host1")
+            .memory_bytes(4096)
+            .pids(200)
+            .cpus(4)
+            .read_only(true)
+            .user(1000, 2000)
+            .publish(8080, 80)
+            .bind("/hostpath", "/ctr/mnt", true)
+            .ulimit("nofile", 1024, 2048)
+            .private_network("ns-abc")
+            .build()
+            .unwrap();
+        let lc = c.launch_config();
+
+        // Typed passthrough from SpawnConfig.
+        assert_eq!(lc.rootfs, "/img");
+        assert!(lc.lowers.is_empty());
+        assert_eq!(lc.hostname, "host1");
+        assert_eq!(lc.mem_max, 4096);
+        assert_eq!(lc.pids_max, 200);
+        assert_eq!(lc.cpus, 4);
+        assert!(lc.rootfs_ro);
+        assert_eq!(lc.uid, Some(1000));
+        assert_eq!(lc.gid, Some(2000));
+        assert_eq!(lc.netns, "ns-abc");
+        assert_eq!(lc.publish, vec![(8080u16, 80u16)]);
+        assert_eq!(lc.volumes, vec![("/ctr/mnt".to_string(), "/hostpath".to_string(), true)]);
+        assert_eq!(lc.ulimits, vec![("nofile".to_string(), 1024u64, 2048u64)]);
+        assert_eq!(lc.argv, vec!["/bin/sh", "-c", "echo hi"]);
+
+        // DD_*/DDJIT_* env-pair translation.
+        assert_eq!(lc.cwd, "/work");
+        // DD_GUEST_ENV is newline-joined at the builder and split back into a Vec here.
+        assert_eq!(lc.guest_env, vec!["FOO=bar".to_string(), DEFAULT_GUEST_PATH.to_string(), "TERM=xterm".to_string()]);
+        assert!(lc.sandbox); // DDJIT_SANDBOX / DDJIT_UNTRUSTED -> sandbox
+        assert!(lc.net_isolate); // DD_NET_ISOLATE
+        assert!(lc.publish_daemon); // DD_PUBLISH_DAEMON
+        assert_eq!(lc.netbr, "net123"); // DD_NETBR
+        assert_eq!(lc.ip, "10.0.0.5"); // DD_IP
+        assert_eq!(lc.fsgen_file, "/run/fsgen"); // DD_FSGEN_FILE
+        assert_eq!(lc.pcache_dir, "/home/dd/pcache"); // DDJIT_PCACHE_DIR
+    }
+
+    #[test]
+    fn launch_config_overlay_lowers_copy_across() {
+        // Overlay lowers are a typed passthrough (highest-priority first).
+        let c = Container::builder(Image::overlay("/upper", ["/lo0", "/lo1"]).guest(Guest::LinuxAarch64))
+            .build()
+            .unwrap();
+        let lc = c.launch_config();
+        assert_eq!(lc.rootfs, "/upper");
+        assert_eq!(lc.lowers, vec!["/lo0".to_string(), "/lo1".to_string()]);
+    }
+
+    #[test]
+    fn launch_config_defaults_surface_nothing() {
+        // A bare container: no env pairs, so every optional/env-backed field stays at its default.
+        let c = Container::builder(Image::from_rootfs("/img").guest(Guest::LinuxAarch64))
+            .build()
+            .unwrap();
+        assert!(c.cfg.env.is_empty()); // precondition: nothing to translate
+        let lc = c.launch_config();
+        assert_eq!(lc.rootfs, "/img");
+        assert!(lc.lowers.is_empty());
+        assert_eq!(lc.hostname, "");
+        assert_eq!(lc.mem_max, 0);
+        assert_eq!(lc.pids_max, 0);
+        assert_eq!(lc.cpus, 0);
+        assert!(!lc.rootfs_ro);
+        assert_eq!(lc.uid, None);
+        assert_eq!(lc.gid, None);
+        assert_eq!(lc.netns, "");
+        assert!(lc.publish.is_empty());
+        assert!(lc.volumes.is_empty());
+        assert!(lc.ulimits.is_empty());
+        assert!(lc.argv.is_empty());
+        // env-backed fields: all default (empty / false) because no DD_*/DDJIT_* pairs were stored.
+        assert_eq!(lc.cwd, "");
+        assert!(lc.guest_env.is_empty());
+        assert!(!lc.sandbox);
+        assert!(!lc.net_isolate);
+        assert!(!lc.publish_daemon);
+        assert_eq!(lc.netbr, "");
+        assert_eq!(lc.ip, "");
+        assert_eq!(lc.fsgen_file, "");
+        assert_eq!(lc.pcache_dir, "");
+    }
+
+    #[test]
+    fn launch_config_guest_env_only_injected_path_when_empty() {
+        // guest_env(&[], false) yields just the default PATH; it round-trips as a one-element Vec.
+        let c = Container::builder(Image::from_rootfs("/img").guest(Guest::LinuxAarch64))
+            .guest_env(&[], false)
+            .build()
+            .unwrap();
+        let lc = c.launch_config();
+        assert_eq!(lc.guest_env, vec![DEFAULT_GUEST_PATH.to_string()]);
+    }
+
+    #[test]
+    fn launch_config_drops_tuning_keys() {
+        // Pure engine tuning knobs are NOT part of the container contract: they must be dropped, never
+        // surfaced into any typed LaunchConfig field. (This is why run_step still needs .guest_env.)
+        let c = Container::builder(Image::from_rootfs("/img").guest(Guest::LinuxAarch64))
+            .env("CRASHDBG", "1")
+            .env("COLDPROF", "1")
+            .env("DDJIT_NOPCACHE", "1")
+            .persistent_cache("/pc") // also emits the bare DDJIT_PCACHE gate, which is likewise dropped
+            .build()
+            .unwrap();
+        // Precondition: those keys really are stored on the spawn config.
+        assert!(has(&c, "CRASHDBG", "1"));
+        assert!(has(&c, "COLDPROF", "1"));
+        assert!(has(&c, "DDJIT_NOPCACHE", "1"));
+        assert!(has(&c, "DDJIT_PCACHE", "1"));
+
+        let lc = c.launch_config();
+        // The only DDJIT_* key that maps is DDJIT_PCACHE_DIR; the bare gate + tuning keys leave no trace.
+        assert_eq!(lc.pcache_dir, "/pc");
+        assert!(!lc.sandbox);
+        assert!(!lc.net_isolate);
+        assert!(!lc.publish_daemon);
+        assert_eq!(lc.cwd, "");
+        assert!(lc.guest_env.is_empty());
+        assert_eq!(lc.netbr, "");
+        assert_eq!(lc.ip, "");
+        assert_eq!(lc.fsgen_file, "");
+    }
 }
