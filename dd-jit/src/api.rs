@@ -6,6 +6,73 @@
 use dd_jit_darwin::{Guest, PortMap, SpawnConfig, Volume};
 use std::fmt;
 
+/// The PATH a guest gets when its image sets none — matches the docker daemon's default.
+pub const DEFAULT_GUEST_PATH: &str =
+    "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin";
+
+/// Resolve a merged container environment (image `Config.Env` then `-e` overrides, as `K=V` lines) into
+/// the exact lines a guest should see: duplicate keys collapse to their LAST value (an explicit `-e KEY=`
+/// overrides the image), forward order is preserved, a default PATH is injected when the image set none,
+/// and — when a pseudo-terminal is allocated (`tty`) and the image set no TERM — `TERM=xterm` is added
+/// (docker parity, so readline/ncurses/debconf get a real terminal). A non-tty container gets no TERM.
+pub fn guest_env(env: &[String], tty: bool) -> Vec<String> {
+    let key = |kv: &str| kv.split('=').next().unwrap_or(kv).to_string();
+    let mut seen = std::collections::HashSet::new();
+    let mut out: Vec<String> = Vec::with_capacity(env.len());
+    // Walk back-to-front so the LAST assignment of each key wins, then restore forward order.
+    for kv in env.iter().rev() {
+        if seen.insert(key(kv)) {
+            out.push(kv.clone());
+        }
+    }
+    out.reverse();
+    if !seen.contains("PATH") {
+        out.push(DEFAULT_GUEST_PATH.to_string());
+    }
+    if tty && !seen.contains("TERM") {
+        out.push("TERM=xterm".to_string());
+    }
+    out
+}
+
+/// Resolve a docker `--user`/`Config.User` spec to a numeric `(uid, gid)` against a container `rootfs`.
+/// Accepts every docker form: `uid`, `name`, `uid:gid`, `name:group`, `uid:group`, `name:gid`. A numeric
+/// component is taken verbatim (no file access); a NAME is looked up in `<rootfs>/etc/passwd` (user) or
+/// `<rootfs>/etc/group` (group). With no group, a NAME uses its passwd primary gid while a numeric uid
+/// defaults to gid 0 (docker semantics). Returns `None` if a name component can't be resolved.
+pub fn resolve_user(rootfs: &str, spec: &str) -> Option<(u32, u32)> {
+    let (us, gs) = spec.split_once(':').map_or((spec, None), |(u, g)| (u, Some(g)));
+    // passwd line: name:passwd:uid:gid:gecos:home:shell — return (uid, primary gid) for a name match.
+    let lookup_passwd = |name: &str| -> Option<(u32, u32)> {
+        let passwd = std::fs::read_to_string(format!("{rootfs}/etc/passwd")).ok()?;
+        passwd.lines().find_map(|l| {
+            let f: Vec<&str> = l.split(':').collect();
+            (f.len() >= 4 && f[0] == name).then(|| Some((f[2].parse().ok()?, f[3].parse().ok()?)))?
+        })
+    };
+    // group line: name:passwd:gid:members — return the gid for a name match.
+    let lookup_group = |name: &str| -> Option<u32> {
+        let group = std::fs::read_to_string(format!("{rootfs}/etc/group")).ok()?;
+        group.lines().find_map(|l| {
+            let f: Vec<&str> = l.split(':').collect();
+            (f.len() >= 3 && f[0] == name).then(|| f[2].parse().ok())?
+        })
+    };
+    let (uid, primary_gid) = match us.parse::<u32>() {
+        Ok(n) => (n, None),
+        Err(_) => {
+            let (u, g) = lookup_passwd(us)?;
+            (u, Some(g))
+        }
+    };
+    // A trailing-colon empty group (`"name:"` / `"1000:"`) means "no group" — not a parse failure.
+    let gid = match gs.filter(|g| !g.is_empty()) {
+        None => primary_gid.unwrap_or(0),
+        Some(g) => g.parse().ok().or_else(|| lookup_group(g))?,
+    };
+    Some((uid, gid))
+}
+
 /// An error configuring or running a container.
 #[derive(Debug)]
 pub enum Error {
@@ -176,6 +243,87 @@ impl ContainerBuilder {
         self
     }
 
+    /// The guest's initial working directory (docker `-w`/`WorkingDir`).
+    pub fn cwd(mut self, dir: impl Into<String>) -> Self {
+        let dir = dir.into();
+        if !dir.is_empty() {
+            self.cfg.env.push(("DD_CWD".into(), dir));
+        }
+        self
+    }
+
+    /// Set the guest-visible environment from merged `K=V` lines (image env + `-e` overrides). Applies
+    /// docker env semantics (last-wins dedup, default PATH, `TERM=xterm` under `tty`) via [`guest_env`]
+    /// and forwards EXACTLY these to the guest — never the host/daemon environment.
+    pub fn guest_env(mut self, env: &[String], tty: bool) -> Self {
+        let genv = guest_env(env, tty);
+        if !genv.is_empty() {
+            self.cfg.env.push(("DD_GUEST_ENV".into(), genv.join("\n")));
+        }
+        self
+    }
+
+    /// Resolve a docker `--user U[:G]` spec against the image `rootfs` and surface the uid/gid to the
+    /// guest (getuid/getgid/setuid). An unresolvable name is ignored (guest keeps its default identity).
+    pub fn user_spec(mut self, rootfs: &str, spec: &str) -> Self {
+        if !spec.is_empty() {
+            if let Some((uid, gid)) = resolve_user(rootfs, spec) {
+                self.cfg.uid = Some(uid);
+                self.cfg.gid = Some(gid);
+            }
+        }
+        self
+    }
+
+    /// Run the guest under the untrusted-guest sentry / OS sandbox (docker `--security-opt sandbox`).
+    pub fn sandbox(mut self, on: bool) -> Self {
+        if on {
+            self.cfg.env.push(("DDJIT_UNTRUSTED".into(), "1".into()));
+            self.cfg.env.push(("DDJIT_SANDBOX".into(), "1".into()));
+        }
+        self
+    }
+
+    /// `--network none`: refuse all non-loopback egress.
+    pub fn net_isolate(mut self, on: bool) -> Self {
+        if on {
+            self.cfg.env.push(("DD_NET_ISOLATE".into(), "1".into()));
+        }
+        self
+    }
+
+    /// Join a user-defined network's virtual switch: the network id (switch key) and this container's IP,
+    /// so in-subnet peers reach each other by container<->container TCP.
+    pub fn bridge(mut self, netid: impl Into<String>, ip: impl Into<String>) -> Self {
+        self.cfg.env.push(("DD_NETBR".into(), netid.into()));
+        self.cfg.env.push(("DD_IP".into(), ip.into()));
+        self
+    }
+
+    /// Hand the guest the shared external-writer generation file so daemon-side writes into the live fs
+    /// (docker cp, /etc rewrites) invalidate the engine's path/metadata caches and become guest-visible.
+    pub fn write_coherence_file(mut self, path: impl Into<String>) -> Self {
+        self.cfg.env.push(("DD_FSGEN_FILE".into(), path.into()));
+        self
+    }
+
+    /// Enable the persistent translated-code cache in `dir` (2nd+ run of an image skips translation).
+    /// Self-invalidating (keyed by image hash + engine version) and graceful-miss safe.
+    pub fn persistent_cache(mut self, dir: impl Into<String>) -> Self {
+        self.cfg.env.push(("DDJIT_PCACHE".into(), "1".into()));
+        self.cfg.env.push(("DDJIT_PCACHE_DIR".into(), dir.into()));
+        self
+    }
+
+    /// Tell the engine NOT to start its own in-process host TCP forwarder — the caller owns a
+    /// process-independent host forwarder for published ports (still passes the port map for getsockname).
+    pub fn external_port_forwarder(mut self, on: bool) -> Self {
+        if on {
+            self.cfg.env.push(("DD_PUBLISH_DAEMON".into(), "1".into()));
+        }
+        self
+    }
+
     /// Finalize the container spec.
     pub fn build(self) -> Result<Container, Error> {
         if self.cfg.rootfs.is_empty() {
@@ -261,5 +409,99 @@ impl ExitStatus {
     /// Whether the container exited successfully (code 0).
     pub fn success(&self) -> bool {
         self.code == 0
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn env_of(c: &Container) -> Vec<(String, String)> {
+        c.cfg.env.clone()
+    }
+
+    fn has(c: &Container, k: &str, v: &str) -> bool {
+        c.cfg.env.iter().any(|(ek, ev)| ek == k && ev == v)
+    }
+
+    #[test]
+    fn guest_env_dedup_last_wins_and_default_path() {
+        // Last assignment of a key wins; forward order preserved; PATH injected when absent.
+        let merged = vec!["A=1".to_string(), "B=x".to_string(), "A=2".to_string()];
+        let out = guest_env(&merged, false);
+        assert_eq!(out, vec!["B=x", "A=2", DEFAULT_GUEST_PATH]);
+        // No TERM without a tty.
+        assert!(!out.iter().any(|l| l.starts_with("TERM=")));
+    }
+
+    #[test]
+    fn guest_env_tty_injects_term_and_respects_image_path() {
+        let merged = vec!["PATH=/opt/bin".to_string()];
+        let out = guest_env(&merged, true);
+        assert_eq!(out, vec!["PATH=/opt/bin", "TERM=xterm"]);
+    }
+
+    #[test]
+    fn builder_dialect_matches_daemon_keys() {
+        // Every promoted DD_*/DDJIT_* key encodes exactly as the daemon's spawn_cfg did.
+        let c = Container::builder(Image::from_rootfs("/img"))
+            .cmd(["/bin/true"])
+            .cwd("/work")
+            .guest_env(&["FOO=bar".to_string()], true)
+            .sandbox(true)
+            .net_isolate(true)
+            .bridge("net123", "10.0.0.5")
+            .write_coherence_file("/run/fsgen")
+            .persistent_cache("/home/dd/pcache")
+            .external_port_forwarder(true)
+            .build()
+            .unwrap();
+        assert!(has(&c, "DD_CWD", "/work"));
+        // guest_env injects the default PATH (FOO=bar set none) then TERM=xterm under the tty.
+        assert!(has(&c, "DD_GUEST_ENV", &format!("FOO=bar\n{DEFAULT_GUEST_PATH}\nTERM=xterm")));
+        assert!(has(&c, "DDJIT_UNTRUSTED", "1"));
+        assert!(has(&c, "DDJIT_SANDBOX", "1"));
+        assert!(has(&c, "DD_NET_ISOLATE", "1"));
+        assert!(has(&c, "DD_NETBR", "net123"));
+        assert!(has(&c, "DD_IP", "10.0.0.5"));
+        assert!(has(&c, "DD_FSGEN_FILE", "/run/fsgen"));
+        assert!(has(&c, "DDJIT_PCACHE", "1"));
+        assert!(has(&c, "DDJIT_PCACHE_DIR", "/home/dd/pcache"));
+        assert!(has(&c, "DD_PUBLISH_DAEMON", "1"));
+    }
+
+    #[test]
+    fn builder_off_switches_emit_nothing() {
+        // Disabled flags and empty cwd must NOT emit their keys (docker parity — absence is meaningful).
+        let c = Container::builder(Image::from_rootfs("/img"))
+            .cwd("")
+            .sandbox(false)
+            .net_isolate(false)
+            .external_port_forwarder(false)
+            .build()
+            .unwrap();
+        assert!(env_of(&c).is_empty());
+    }
+
+    #[test]
+    fn user_spec_numeric_and_missing_rootfs() {
+        // A numeric uid needs no rootfs and defaults gid to 0 (docker semantics).
+        let c = Container::builder(Image::from_rootfs("/nonexistent"))
+            .user_spec("/nonexistent", "1000")
+            .build()
+            .unwrap();
+        assert_eq!((c.cfg.uid, c.cfg.gid), (Some(1000), Some(0)));
+        // `uid:gid` both numeric, verbatim.
+        let c2 = Container::builder(Image::from_rootfs("/x"))
+            .user_spec("/x", "1000:2000")
+            .build()
+            .unwrap();
+        assert_eq!((c2.cfg.uid, c2.cfg.gid), (Some(1000), Some(2000)));
+        // An unresolvable NAME against a missing rootfs leaves the default identity.
+        let c3 = Container::builder(Image::from_rootfs("/x"))
+            .user_spec("/x", "postgres")
+            .build()
+            .unwrap();
+        assert_eq!((c3.cfg.uid, c3.cfg.gid), (None, None));
     }
 }
