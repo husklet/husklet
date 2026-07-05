@@ -81,11 +81,7 @@ pub(crate) fn push_progress(
 ) -> Response {
     let body = match result {
         Ok(digest) => {
-            let layer_id = digest
-                .trim_start_matches("sha256:")
-                .chars()
-                .take(12)
-                .collect::<String>();
+            let layer_id = layer_short(&digest);
             let half = (size / 2).max(0);
             let status = |s: String| StreamStatus {
                 status: s,

@@ -168,11 +168,7 @@ pub(crate) fn pull_progress(
         ),
         Ok(false) => {
             let repo = image_ref(name, tag).repository;
-            let layer_id = digest
-                .trim_start_matches("sha256:")
-                .chars()
-                .take(12)
-                .collect::<String>();
+            let layer_id = layer_short(&digest);
             let layer = layer_id.as_str();
             let half = (size / 2).max(0);
             let id = || Some(layer.to_string());

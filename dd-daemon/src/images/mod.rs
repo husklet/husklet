@@ -21,5 +21,5 @@ pub(crate) use transfer::*;
 // standalone, runtime-agnostic); re-export so existing `crate::images::*` call sites keep resolving.
 pub(crate) use dd_images::{
     config_exposed_ports, config_labels, config_stop_signal, config_strs, config_volumes,
-    default_shell, image_ref, ref_tag, repo_tag, safe_name,
+    default_shell, image_ref, layer_short, ref_tag, repo_tag, safe_name,
 };
