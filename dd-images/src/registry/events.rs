@@ -1,0 +1,46 @@
+//! Pull results and per-layer progress events.
+
+use super::*;
+use serde_json::Value;
+
+/// What `pull` resolved and unpacked.
+pub struct Pulled {
+    pub image: ImageRef,
+    pub config: Value, // the image config blob (Cmd/Entrypoint/Env/Architecture)
+}
+
+/// A live progress event for a single image pull, surfaced per-layer as the download/unpack proceeds.
+/// `images_create` formats these into docker's newline-delimited JSON status lines and streams them to
+/// the client, so the user sees moving download/extract bars instead of one post-hoc dump. `id` is the
+/// docker-style short layer id (first 12 hex of the blob digest). Byte counts are the compressed blob
+/// size from the manifest (the same units docker's registry pull reports).
+#[derive(Clone, Debug)]
+pub enum PullEvent {
+    /// A layer was discovered in the manifest (docker's "Pulling fs layer").
+    Layer { id: String },
+    /// Live download progress for a layer (`current`/`total` compressed bytes).
+    Downloading {
+        id: String,
+        current: u64,
+        total: u64,
+    },
+    /// A layer finished downloading.
+    DownloadComplete { id: String },
+    /// A layer's contents are being unpacked into the rootfs.
+    Extracting {
+        id: String,
+        current: u64,
+        total: u64,
+    },
+    /// A layer is fully pulled + unpacked.
+    PullComplete { id: String },
+}
+
+/// docker's short layer id: the first 12 hex chars after the `sha256:` prefix.
+pub fn layer_short(digest: &str) -> String {
+    digest
+        .trim_start_matches("sha256:")
+        .chars()
+        .take(12)
+        .collect()
+}
