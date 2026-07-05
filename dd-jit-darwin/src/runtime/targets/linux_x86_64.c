@@ -85,6 +85,7 @@
 #include "../engine/dispatch.c"              // SHARED engine: run_guest loop (x86 drives it via dispatch_hooks.h;
                                              // keeps its own run_block/block_return in translate.c, G_OWN_TRAMPOLINES)
 #include "../translate/x86_64/elf.c"         // x86 ELF loader + stack + fault handlers (per-arch: machine/platform)
+#include "../os/ddjit_configfd.c"            // `--configfd` launch bridge -> re-hydrate DD_*/DDJIT_* env -> dd_run()
 
 // ---- entry + main ----
 // ---------------- entry ----------------
@@ -439,6 +440,9 @@ int ddjit_entry(int argc, char **argv) {
         g_self_path = self;
     else
         g_self_path = argv[0];
+    // typed-config launch (the daemon's default path): `--configfd <fd>` streams a serialized ddjit_config
+    // over the inherited fd instead of the DD_* env/flag dialect. Dispatched before all other flags.
+    if (argc > 2 && strcmp(argv[1], "--configfd") == 0) return ddjit_run_configfd(atoi(argv[2]));
     // W3D fork-server dispatch (gated; standalone path untouched when neither flag is present):
     //   --server SOCK [--rootfs DIR] [--prewarm PROG] : run resident ddjitd, listen on SOCK
     //   --client SOCK [--rootfs DIR] PROG [args...]   : forward a launch request to a ddjitd
