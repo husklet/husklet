@@ -320,4 +320,80 @@ mod tests {
         // the rootfs string is present in the pool
         assert!(wire.windows(4).any(|w| w == b"/img"));
     }
+
+    #[test]
+    fn wire_pool_offsets_point_at_expected_strings() {
+        // Lock the exact byte layout `ddjit_configfd.c` decodes: every `*_off` is a pool-relative
+        // offset to a NUL-terminated string (0 == empty), and argv is NUL-separated + double-NUL
+        // terminated at `argv_off`.
+        let cfg = LaunchConfig {
+            rootfs: "/mnt/root".into(),
+            lowers: vec!["/lo/a".into(), "/lo/b".into()],
+            hostname: "dbhost".into(),
+            netns: "nskey".into(),
+            cwd: "/work".into(),
+            pcache_dir: "/pc".into(),
+            netbr: "br7".into(),
+            ip: "10.1.2.3".into(),
+            fsgen_file: "/run/fsgen".into(),
+            publish: vec![(8080, 80), (5432, 5432)],
+            volumes: vec![("/data".into(), "/hostdata".into(), true), ("/cfg".into(), "/hcfg".into(), false)],
+            ulimits: vec![("nofile".into(), 1024, 4096)],
+            guest_env: vec!["A=1".into(), "B=2".into()],
+            argv: vec!["/bin/sh".into(), "-c".into(), "echo hi".into()],
+            ..Default::default()
+        };
+        let wire = cfg.to_wire();
+
+        let hsize = std::mem::size_of::<WireHeader>();
+        // The header prefix is exactly the WireHeader bytes; read it back unaligned (Vec<u8> data is
+        // not guaranteed 8-aligned).
+        let hdr: WireHeader = unsafe { std::ptr::read_unaligned(wire.as_ptr() as *const WireHeader) };
+        assert_eq!(hdr.magic, DDJIT_CONFIG_MAGIC);
+        assert_eq!(hdr.pool_len as usize, wire.len() - hsize);
+
+        let pool = &wire[hsize..];
+        // Read the NUL-terminated C string living at pool offset `off`.
+        let read_str = |off: u32| -> String {
+            let start = off as usize;
+            let end = start + pool[start..].iter().position(|&b| b == 0).unwrap();
+            String::from_utf8(pool[start..end].to_vec()).unwrap()
+        };
+
+        // offset 0 is the shared lone NUL == empty string
+        assert_eq!(pool[0], 0);
+        assert_eq!(read_str(0), "");
+
+        assert_eq!(read_str(hdr.rootfs_off), "/mnt/root");
+        assert_eq!(read_str(hdr.lowers_off), "/lo/a:/lo/b");
+        assert_eq!(read_str(hdr.hostname_off), "dbhost");
+        assert_eq!(read_str(hdr.netns_off), "nskey");
+        assert_eq!(read_str(hdr.publish_off), "8080:80,5432:5432");
+        assert_eq!(read_str(hdr.volumes_off), "ro:/data:/hostdata,/cfg:/hcfg");
+        assert_eq!(read_str(hdr.ulimits_off), "nofile=1024:4096");
+        assert_eq!(read_str(hdr.cwd_off), "/work");
+        assert_eq!(read_str(hdr.guest_env_off), "A=1\nB=2");
+        assert_eq!(read_str(hdr.pcache_off), "/pc");
+        assert_eq!(read_str(hdr.netbr_off), "br7");
+        assert_eq!(read_str(hdr.ip_off), "10.1.2.3");
+        assert_eq!(read_str(hdr.fsgen_off), "/run/fsgen");
+
+        // Unset string fields (never assigned above) must read as offset 0 == "".
+        // (`reserved`/`reserved2` are pad, not offsets.)
+        assert_eq!(hdr.reserved, 0);
+        assert_eq!(hdr.reserved2, 0);
+
+        // argv: NUL-separated args, terminated by an extra NUL (double-NUL after the last arg).
+        let astart = hdr.argv_off as usize;
+        let expected: Vec<u8> = b"/bin/sh\0-c\0echo hi\0\0".to_vec();
+        assert_eq!(&pool[astart..astart + expected.len()], &expected[..]);
+        // Splitting on NUL up to the double-NUL recovers the argv exactly.
+        let argv_bytes = &pool[astart..astart + expected.len() - 1]; // drop the final terminator NUL
+        let argv: Vec<String> = argv_bytes
+            .split(|&b| b == 0)
+            .filter(|s| !s.is_empty())
+            .map(|s| String::from_utf8(s.to_vec()).unwrap())
+            .collect();
+        assert_eq!(argv, vec!["/bin/sh", "-c", "echo hi"]);
+    }
 }
