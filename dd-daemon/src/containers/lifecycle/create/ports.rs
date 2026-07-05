@@ -74,3 +74,66 @@ pub(crate) fn publish_str_alloc(pb: &HashMap<String, Vec<PortBinding>>, g: &Inne
     }
     v.join(",")
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn bind(host_port: Option<&str>, host_ip: Option<&str>) -> PortBinding {
+        PortBinding {
+            host_port: host_port.map(|s| s.to_string()),
+            host_ip: host_ip.map(|s| s.to_string()),
+        }
+    }
+
+    fn pb(entries: &[(&str, Vec<PortBinding>)]) -> HashMap<String, Vec<PortBinding>> {
+        entries
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.clone()))
+            .collect()
+    }
+
+    #[test]
+    fn publish_str_basic_no_hostip() {
+        // Absent HostIp -> empty ip segment, so the string leads with ':'.
+        let m = pb(&[("9000/tcp", vec![bind(Some("8080"), None)])]);
+        assert_eq!(publish_str(&m), ":8080:9000/tcp");
+    }
+
+    #[test]
+    fn publish_str_preserves_explicit_host_ip() {
+        let m = pb(&[("9000/tcp", vec![bind(Some("8080"), Some("127.0.0.1"))])]);
+        assert_eq!(publish_str(&m), "127.0.0.1:8080:9000/tcp");
+    }
+
+    #[test]
+    fn publish_str_skips_empty_and_absent_host_port() {
+        // HostPort == Some("") is skipped.
+        let empty = pb(&[("9000/tcp", vec![bind(Some(""), None)])]);
+        assert_eq!(publish_str(&empty), "");
+        // HostPort == None is skipped.
+        let absent = pb(&[("9000/tcp", vec![bind(None, None)])]);
+        assert_eq!(publish_str(&absent), "");
+    }
+
+    #[test]
+    fn publish_str_defaults_proto_to_tcp_when_key_has_no_slash() {
+        let m = pb(&[("53", vec![bind(Some("1234"), None)])]);
+        assert_eq!(publish_str(&m), ":1234:53/tcp");
+    }
+
+    #[test]
+    fn publish_str_skips_empty_container_port() {
+        // "/tcp" splits to an empty container port -> the whole binding is dropped.
+        let m = pb(&[("/tcp", vec![bind(Some("8080"), None)])]);
+        assert_eq!(publish_str(&m), "");
+    }
+
+    #[test]
+    fn publish_str_alloc_fills_empty_host_port_from_ephemeral_range() {
+        // With no existing containers, an empty HostPort auto-allocates the first ephemeral port.
+        let m = pb(&[("9000/tcp", vec![bind(None, None)])]);
+        let g = Inner::default();
+        assert_eq!(publish_str_alloc(&m, &g), ":49152:9000/tcp");
+    }
+}

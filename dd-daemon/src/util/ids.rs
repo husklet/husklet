@@ -103,3 +103,68 @@ pub(crate) fn new_id(image: &str) -> String {
     }
     out
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn container(id: &str, name: &str) -> Container {
+        Container {
+            id: id.to_string(),
+            name: name.to_string(),
+            ..Default::default()
+        }
+    }
+
+    fn inner(cs: &[(&str, &str)]) -> Inner {
+        let mut g = Inner::default();
+        for (id, name) in cs {
+            g.containers
+                .insert(id.to_string(), container(id, name));
+        }
+        g
+    }
+
+    // A distinct 64-char full id (leading bytes vary so 12-char short ids differ).
+    const FULL_A: &str = "aaaa1111000000000000000000000000000000000000000000000000000000aa";
+    const FULL_B: &str = "bbbb2222000000000000000000000000000000000000000000000000000000bb";
+
+    #[test]
+    fn resolve_cid_exact_full_id() {
+        let g = inner(&[(FULL_A, "web"), (FULL_B, "db")]);
+        assert_eq!(resolve_cid(&g, FULL_A), Some(FULL_A.to_string()));
+    }
+
+    #[test]
+    fn resolve_cid_unique_prefix() {
+        let g = inner(&[(FULL_A, "web"), (FULL_B, "db")]);
+        // The 12-char short id docker clients round-trip resolves via prefix match.
+        assert_eq!(resolve_cid(&g, &FULL_A[..12]), Some(FULL_A.to_string()));
+        // A shorter unique prefix works too.
+        assert_eq!(resolve_cid(&g, "aaaa"), Some(FULL_A.to_string()));
+    }
+
+    #[test]
+    fn resolve_cid_ambiguous_prefix_is_none() {
+        // Two containers share the "dead" prefix -> ambiguous -> unresolvable.
+        let d1 = "dead0001000000000000000000000000000000000000000000000000000000d1";
+        let d2 = "dead0002000000000000000000000000000000000000000000000000000000d2";
+        let g = inner(&[(d1, "one"), (d2, "two")]);
+        assert_eq!(resolve_cid(&g, "dead"), None);
+    }
+
+    #[test]
+    fn resolve_cid_name_fallback_trims_leading_slash() {
+        let g = inner(&[(FULL_A, "web"), (FULL_B, "db")]);
+        // Plain name resolves.
+        assert_eq!(resolve_cid(&g, "web"), Some(FULL_A.to_string()));
+        // Docker-style "/web" trims the leading slash before matching the name.
+        assert_eq!(resolve_cid(&g, "/web"), Some(FULL_A.to_string()));
+    }
+
+    #[test]
+    fn resolve_cid_no_match_is_none() {
+        let g = inner(&[(FULL_A, "web"), (FULL_B, "db")]);
+        assert_eq!(resolve_cid(&g, "nonexistent"), None);
+    }
+}
