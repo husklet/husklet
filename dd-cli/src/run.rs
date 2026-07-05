@@ -6,7 +6,9 @@
 use std::io::IsTerminal;
 use std::process::Command;
 
+use crate::doctor::{ensure_agent, ping_socket};
 use crate::paths;
+use crate::run;
 
 /// A parsed `run` invocation. `ddcli run …` and the bare-image shorthand `ddcli <image> …` both parse
 /// into this via [`parse`].
@@ -78,7 +80,7 @@ pub fn run(args: RunArgs) -> i32 {
         );
         return 1;
     }
-    if let Err(e) = crate::ensure_daemon() {
+    if let Err(e) = ensure_daemon() {
         eprintln!("dd daemon isn't reachable: {e}\nTry:  ddcli install");
         return 1;
     }
@@ -137,4 +139,31 @@ fn docker_present() -> bool {
         .output()
         .map(|o| o.status.success())
         .unwrap_or(false)
+}
+
+/// `ddcli run …` and the bare-image shorthand both land here.
+pub(crate) fn cmd_run(raw: Vec<String>) -> i32 {
+    match run::parse(raw) {
+        Ok(args) => run::run(args),
+        Err(e) => {
+            eprintln!("{e}");
+            2
+        }
+    }
+}
+
+/// Ensure the daemon socket answers; if not, try to (re)start the agent and wait briefly for it.
+fn ensure_daemon() -> Result<(), String> {
+    let sock = paths::socket();
+    if ping_socket(&sock) {
+        return Ok(());
+    }
+    let _ = ensure_agent(); // best-effort: load the LaunchAgent (macOS)
+    for _ in 0..40 {
+        if ping_socket(&sock) {
+            return Ok(());
+        }
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
+    Err(format!("no daemon listening at {}", sock.display()))
 }
