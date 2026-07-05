@@ -17,6 +17,7 @@
 mod arch;
 mod archive;
 mod config;
+pub(crate) mod digest;
 mod discovery;
 mod local_image;
 mod manifest;

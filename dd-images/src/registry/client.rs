@@ -88,7 +88,7 @@ impl Client {
         reset_dir(work)?;
         let layer = work.join("layer.tar.gz");
         let (layer_digest, layer_size) = tar_gzip(rootfs, &layer)?; // compressed digest = blob id
-        let diff_id = gunzip_sha256(&layer)?; // uncompressed digest = rootfs diff_id
+        let diff_id = crate::image::digest::sha256_gz_file(&layer)?; // uncompressed digest = rootfs diff_id
 
         let config = json!({
             "architecture": arch, "os": os, // os=darwin for mac containers; the manifest is os/arch-tagged
@@ -98,7 +98,7 @@ impl Client {
         let config_path = work.join("config.json");
         let config_bytes = serde_json::to_vec(&config).map_err(|e| e.to_string())?;
         std::fs::write(&config_path, &config_bytes).map_err(|e| e.to_string())?;
-        let config_digest = sha256_of(&config_path)?;
+        let config_digest = crate::image::digest::sha256_file(&config_path)?;
 
         self.authenticate("push,pull")?;
         self.upload_blob(&config_digest, &config_path)?;

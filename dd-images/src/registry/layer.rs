@@ -136,23 +136,5 @@ pub(super) fn tar_gzip(rootfs: &Path, out: &Path) -> Result<(String, u64), Strin
     );
     run("sh", &["-c", &cmd])?;
     let size = std::fs::metadata(out).map_err(|e| e.to_string())?.len();
-    Ok((sha256_of(out)?, size))
-}
-/// sha256 of the *decompressed* contents of a gzip file (an OCI `diff_id`).
-pub(super) fn gunzip_sha256(gz: &Path) -> Result<String, String> {
-    let out = run(
-        "sh",
-        &["-c", &format!("gzip -dc '{}' | sha256sum", gz.display())],
-    )?;
-    parse_sha256(&out)
-}
-pub(super) fn sha256_of(file: &Path) -> Result<String, String> {
-    parse_sha256(&run("sha256sum", &[&file.to_string_lossy()])?)
-}
-fn parse_sha256(sha256sum_out: &str) -> Result<String, String> {
-    sha256sum_out
-        .split_whitespace()
-        .next()
-        .map(|h| format!("sha256:{h}"))
-        .ok_or_else(|| "sha256sum gave no output".to_string())
+    Ok((crate::image::digest::sha256_file(out)?, size))
 }

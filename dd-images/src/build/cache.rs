@@ -34,31 +34,11 @@ fn now_secs() -> i64 {
         .unwrap_or(0)
 }
 
-/// sha256 (lowercase hex, no `sha256:` prefix) of arbitrary bytes via the `sha256sum` CLI. Returns "" on
-/// failure (callers fall back to [`fake_id`] or force a cache miss).
+/// sha256 (lowercase hex, no `sha256:` prefix) of arbitrary bytes. Thin re-export of the crate's single
+/// digest helper ([`crate::image::digest::sha256_hex`]); kept here as the public `dd_images::build`
+/// surface external callers (the daemon's build handler/prune) already import.
 pub fn sha256_hex(data: &[u8]) -> String {
-    use std::io::Write;
-    use std::process::Stdio;
-    let mut child = match std::process::Command::new("sha256sum")
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .spawn()
-    {
-        Ok(c) => c,
-        Err(_) => return String::new(),
-    };
-    if let Some(mut si) = child.stdin.take() {
-        let _ = si.write_all(data);
-    }
-    match child.wait_with_output() {
-        Ok(o) => String::from_utf8_lossy(&o.stdout)
-            .split_whitespace()
-            .next()
-            .unwrap_or("")
-            .to_string(),
-        Err(_) => String::new(),
-    }
+    crate::image::digest::sha256_hex(data)
 }
 
 /// A deterministic content digest of an assembled rootfs: hash of a sorted (type,size,path) listing
