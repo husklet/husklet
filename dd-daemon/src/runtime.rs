@@ -14,7 +14,7 @@ use axum::extract::{Path, Query, Request, State};
 use axum::http::{HeaderMap, StatusCode, Uri};
 use axum::response::{IntoResponse, Response};
 use axum::Json;
-use ddjit::{Container as JitContainer, Guest, Image, PortMap, SpawnConfig, Volume};
+use ddjit::{Container as JitContainer, Error as JitError, Guest, Image, PortMap, Runtime as JitRuntime, SpawnConfig, Stdio3, Volume};
 use hyper_util::rt::TokioIo;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -115,6 +115,17 @@ pub(crate) fn spawn_cfg(
     vols: &[Vol],
     bridge: Option<(String, String)>,
 ) -> Option<(String, Vec<String>)> {
+    spawn_container(c, volumes_dir, vols, bridge).and_then(|c| c.command())
+}
+
+/// Translate the daemon's Docker container model into a typed `dd_jit::Container`. The daemon states
+/// WHAT the container is; dd-jit owns HOW it launches. `None` only if the spec can't be built.
+pub(crate) fn spawn_container(
+    c: &Container,
+    volumes_dir: &str,
+    vols: &[Vol],
+    bridge: Option<(String, String)>,
+) -> Option<JitContainer> {
     let guest = c.arch.unwrap_or(Guest::LinuxAarch64);
     // Per-container copy-on-write: the private writable UPPER (`c.upper`) overlays the read-only image
     // rootfs (the lower) so guest writes/whiteouts never mutate the shared image. Linux guests only —
@@ -272,7 +283,7 @@ pub(crate) fn spawn_cfg(
         wrapped.extend(argv);
         b = b.argv(wrapped);
     }
-    b.build().ok()?.command()
+    b.build().ok()
 }
 
 /// Spawn the container's guest process live (piped stdio) and wire its IO into `live`: stdout/stderr fan
@@ -415,158 +426,40 @@ pub(crate) async fn spawn_live(app: &App, c: &Container, vols: &[Vol], live: Arc
     // shipped without ddjit-linux_*). Surface a CLEAN error (exit 127, like every other spawn failure) so an
     // interactive `docker run -it` exits with a message instead of hanging forever on a stream that never
     // opens -- the missing-engine hang that looked like a frozen, Ctrl-C-deaf shell.
-    let Some((prog, args)) = spawn_cfg(c, &app.volumes_dir, vols, bridge) else {
-        let guest = c.arch.unwrap_or(Guest::LinuxAarch64);
-        return live_fail(app, &c.id, &live,
-            format!("dd: no JIT engine for {} guests in this build (ddjit-{} missing) -- cannot start container",
-                guest.target(), guest.target())).await;
+    let Some(container) = spawn_container(c, &app.volumes_dir, vols, bridge) else {
+        return live_fail(app, &c.id, &live, "dd: failed to build container spec".into()).await;
     };
-    let mut cmd = tokio::process::Command::new(prog);
-    cmd.args(args);
-
-    // pump one piped stream: broadcast each chunk to attached clients + accumulate for `docker logs`.
-    async fn pump(mut r: impl AsyncReadExt + Unpin, kind: u8, live: Arc<Live>) {
-        let mut buf = [0u8; 8192];
-        loop {
-            match r.read(&mut buf).await {
-                Ok(0) | Err(_) => break,
-                Ok(n) => {
-                    let chunk = buf[..n].to_vec();
-                    let _ = live.out.send((kind, chunk.clone()));
-                    // Append to the single ordered log (arrival order) so the buffered replay interleaves;
-                    // push_log enforces the LOG_CHUNKS_CAP_BYTES rotation so this can't grow unbounded.
-                    push_log(&live, now_secs(), kind, chunk).await;
-                }
-            }
+    // Launch + supervise the guest via the dd-jit runtime API: it spawns the engine (piped or PTY stdio),
+    // feeds stdin from this container's channel, and pumps stdout/stderr INTO this container's live `out`
+    // broadcast + rotated `log_chunks`. The daemon owns only the Docker bookkeeping (status/events/health/
+    // restart/--rm) in the reaper below -- the process mechanics live in dd_jit::Runtime::start_into.
+    let stdin_rx = live
+        .stdin_rx
+        .lock()
+        .await
+        .take()
+        .expect("stdin_rx is consumed exactly once per container start");
+    let rt = JitRuntime::new().expect("dd-jit runtime");
+    let launched = match rt.start_into(
+        &container,
+        Stdio3 { tty: c.tty },
+        live.out.clone(),
+        live.log_chunks.clone(),
+        stdin_rx,
+    ) {
+        Ok(l) => l,
+        Err(JitError::NoBackend(guest)) => {
+            // No engine for this guest arch is bundled -- surface a CLEAN error (like every other spawn
+            // failure) so an interactive `docker run -it` exits with a message instead of hanging on a
+            // stream that never opens (the missing-engine hang that looked like a frozen, Ctrl-C-deaf shell).
+            return live_fail(app, &c.id, &live,
+                format!("dd: no JIT engine for {} guests in this build (ddjit-{} missing) -- cannot start container",
+                    guest.target(), guest.target())).await;
         }
-    }
-
-    // tty=true gives the guest a real PTY -- an interactive shell sees a terminal (prompt, line editing),
-    // and stdout/stderr merge into one raw stream. Otherwise stdio is piped (the multiplexed-frame path).
-    let (mut child, io_handles): (tokio::process::Child, Vec<tokio::task::JoinHandle<()>>) = if c
-        .tty
-    {
-        let (master, slave) = match open_pty() {
-            Ok(p) => p,
-            Err(e) => return live_fail(app, &c.id, &live, format!("openpty: {e}")).await,
-        };
-        let slave_fd = slave.as_raw_fd();
-        cmd.stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null());
-        // SAFETY: in the forked child, login_tty makes the slave the controlling terminal + stdin/out/err.
-        unsafe {
-            cmd.pre_exec(move || {
-                if libc::login_tty(slave_fd) != 0 {
-                    return Err(std::io::Error::last_os_error());
-                }
-                Ok(())
-            });
-        }
-        let child = match cmd.spawn() {
-            Ok(ch) => ch,
-            Err(e) => return live_fail(app, &c.id, &live, format!("jit exec failed: {e}")).await,
-        };
-        drop(slave); // the child dup'd it via login_tty; close the parent's copy
-        set_nonblocking(master.as_raw_fd());
-        *live.pty_master.lock().unwrap() = Some(master.as_raw_fd());
-        let afd = match AsyncFd::new(master) {
-            Ok(a) => Arc::new(a),
-            Err(e) => return live_fail(app, &c.id, &live, format!("asyncfd: {e}")).await,
-        };
-        // client stdin -> PTY master
-        if let Some(mut rx) = live.stdin_rx.lock().await.take() {
-            let w = afd.clone();
-            tokio::spawn(async move {
-                while let Some(chunk) = rx.recv().await {
-                    if chunk.is_empty() {
-                        break;
-                    }
-                    let mut off = 0;
-                    while off < chunk.len() {
-                        let Ok(mut g) = w.writable().await else {
-                            return;
-                        };
-                        match g.try_io(|i| pty_write(i.as_raw_fd(), &chunk[off..])) {
-                            Ok(Ok(n)) => off += n,
-                            Ok(Err(_)) => return,
-                            Err(_would_block) => continue,
-                        }
-                    }
-                }
-            });
-        }
-        // PTY master -> broadcast (kind 1) + log buffer
-        let r = afd.clone();
-        let lr = live.clone();
-        let reader = tokio::spawn(async move {
-            loop {
-                let Ok(mut g) = r.readable().await else { break };
-                let mut buf = [0u8; 8192];
-                match g.try_io(|i| pty_read(i.as_raw_fd(), &mut buf)) {
-                    Ok(Ok(0)) | Ok(Err(_)) => break, // EOF / EIO when the guest exits
-                    Ok(Ok(n)) => {
-                        let chunk = buf[..n].to_vec();
-                        let _ = lr.out.send((1, chunk.clone()));
-                        // TTY: one merged raw stream, all stdout (kind 1), recorded in arrival order;
-                        // push_log enforces the LOG_CHUNKS_CAP_BYTES rotation (most-recent ≤ 8 MiB).
-                        push_log(&lr, now_secs(), 1, chunk).await;
-                    }
-                    Err(_would_block) => continue,
-                }
-            }
-        });
-        (child, vec![reader])
-    } else {
-        cmd.stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped());
-        // Put the guest in its own process group (leader pgid == child pid) so pause/unpause can
-        // SIGSTOP/SIGCONT the WHOLE container -- the JIT plus any host processes the guest forked, which
-        // inherit this pgid -- with a single killpg. (The TTY path above gets the same via login_tty's
-        // setsid.) SAFETY: setpgid(0,0) in the forked child is async-signal-safe.
-        unsafe {
-            cmd.pre_exec(|| {
-                if libc::setpgid(0, 0) != 0 {
-                    return Err(std::io::Error::last_os_error());
-                }
-                Ok(())
-            });
-        }
-        let mut child = match cmd.spawn() {
-            Ok(ch) => ch,
-            Err(e) => return live_fail(app, &c.id, &live, format!("jit exec failed: {e}")).await,
-        };
-        let stdout = child.stdout.take().unwrap();
-        let stderr = child.stderr.take().unwrap();
-        // Feed the guest's stdin from the channel attach writes to (buffered until now). An empty Vec is
-        // the stdin-EOF sentinel: close the guest's stdin so a shell reading to EOF can finish.
-        if let Some(mut child_in) = child.stdin.take() {
-            if let Some(mut rx) = live.stdin_rx.lock().await.take() {
-                tokio::spawn(async move {
-                    while let Some(chunk) = rx.recv().await {
-                        if chunk.is_empty() {
-                            break;
-                        }
-                        if child_in.write_all(&chunk).await.is_err() {
-                            break;
-                        }
-                        let _ = child_in.flush().await;
-                    }
-                    drop(child_in); // EOF to the guest
-                });
-            }
-        }
-        let lo = live.clone();
-        let h_out = tokio::spawn(async move {
-            pump(stdout, 1, lo).await;
-        });
-        let le = live.clone();
-        let h_err = tokio::spawn(async move {
-            pump(stderr, 2, le).await;
-        });
-        (child, vec![h_out, h_err])
+        Err(e) => return live_fail(app, &c.id, &live, format!("jit exec failed: {e}")).await,
     };
+    *live.pty_master.lock().unwrap() = launched.pty_master;
+    let (mut child, io_handles) = (launched.child, launched.io_handles);
 
     *live.pid.lock().unwrap() = child.id(); // remember the pid so pause can SIGSTOP/SIGCONT it
                                             // HEALTHCHECK (§8.3-1): a real container (not an exec) with a resolved probe gets a background monitor
