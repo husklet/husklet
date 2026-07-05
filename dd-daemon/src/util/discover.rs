@@ -163,3 +163,86 @@ mod id_resolution_tests {
         );
     }
 }
+
+#[cfg(test)]
+mod image_score_tests {
+    use super::*;
+
+    // A default (empty-config) image: env/entrypoint/workdir/labels all empty, and cmd empty (len != 1),
+    // so ONLY the "cmd isn't the plain /bin/sh default" branch fires -> score 1.
+    #[test]
+    fn image_score_default_is_one() {
+        assert_eq!(image_score(&Image::default()), 1);
+    }
+
+    // An image whose cmd is EXACTLY ["/bin/sh"] (the discovery fallback default) scores the cmd branch as
+    // 0, so a bare such image is the unique score-0 case.
+    #[test]
+    fn image_score_bin_sh_cmd_scores_zero() {
+        let img = Image {
+            cmd: vec!["/bin/sh".to_string()],
+            ..Default::default()
+        };
+        assert_eq!(image_score(&img), 0);
+    }
+
+    // A cmd of length 1 that is NOT "/bin/sh", or any multi-element cmd, still earns the +1 cmd bonus.
+    #[test]
+    fn image_score_non_default_cmd_scores_one() {
+        let bash = Image {
+            cmd: vec!["/bin/bash".to_string()],
+            ..Default::default()
+        };
+        assert_eq!(image_score(&bash), 1);
+        let multi = Image {
+            cmd: vec!["/bin/sh".to_string(), "-c".to_string()],
+            ..Default::default()
+        };
+        assert_eq!(image_score(&multi), 1);
+    }
+
+    // A non-empty environment is the decisive +1000 signal; combined with the empty-cmd +1 it is 1001.
+    #[test]
+    fn image_score_env_dominates() {
+        let img = Image {
+            env: vec!["A=1".to_string()],
+            ..Default::default()
+        };
+        assert_eq!(image_score(&img), 1001);
+    }
+
+    // Each contributing field adds its documented weight; they sum. env 1000 + entrypoint 10 + workdir 5
+    // + 2 labels + cmd bonus 1 = 1018.
+    #[test]
+    fn image_score_weights_sum() {
+        let mut labels = std::collections::HashMap::new();
+        labels.insert("a".to_string(), "b".to_string());
+        labels.insert("c".to_string(), "d".to_string());
+        let img = Image {
+            env: vec!["A=1".to_string()],
+            entrypoint: vec!["/e".to_string()],
+            workdir: "/w".to_string(),
+            labels,
+            cmd: vec!["run".to_string()],
+            ..Default::default()
+        };
+        assert_eq!(image_score(&img), 1000 + 10 + 5 + 2 + 1);
+    }
+
+    // Entrypoint (+10) and workdir (+5) each contribute independently of env/labels.
+    #[test]
+    fn image_score_entrypoint_and_workdir_only() {
+        let ep = Image {
+            entrypoint: vec!["/entry".to_string()],
+            cmd: vec!["/bin/sh".to_string()], // suppress the cmd bonus to isolate the +10
+            ..Default::default()
+        };
+        assert_eq!(image_score(&ep), 10);
+        let wd = Image {
+            workdir: "/srv".to_string(),
+            cmd: vec!["/bin/sh".to_string()],
+            ..Default::default()
+        };
+        assert_eq!(image_score(&wd), 5);
+    }
+}

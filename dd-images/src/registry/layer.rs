@@ -141,3 +141,114 @@ pub(super) fn tar_gzip(rootfs: &Path, out: &Path) -> Result<(String, u64), Error
         .len();
     Ok((crate::image::digest::sha256_file(out)?, size))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // A unique scratch dir removed on drop (temp_dir + RAII idiom; no tempfile dep).
+    struct Tmp(PathBuf);
+    impl Tmp {
+        fn new(tag: &str) -> Self {
+            use std::sync::atomic::{AtomicU64, Ordering};
+            static SEQ: AtomicU64 = AtomicU64::new(0);
+            let n = SEQ.fetch_add(1, Ordering::Relaxed);
+            let p = std::env::temp_dir().join(format!(
+                "dd_layer_wh_test_{}_{}_{}",
+                tag,
+                std::process::id(),
+                n
+            ));
+            std::fs::create_dir_all(&p).unwrap();
+            Tmp(p)
+        }
+    }
+    impl Drop for Tmp {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    #[test]
+    fn whiteout_deletes_sibling_and_marker_keeps_others() {
+        let t = Tmp::new("basic");
+        let root = &t.0;
+        std::fs::write(root.join("keep"), b"k").unwrap();
+        std::fs::write(root.join("remove"), b"r").unwrap();
+        std::fs::write(root.join(".wh.remove"), b"").unwrap();
+
+        apply_whiteouts(root).unwrap();
+
+        // the marked sibling AND the marker itself are gone; the unrelated file survives.
+        assert!(root.join("keep").exists());
+        assert!(!root.join("remove").exists());
+        assert!(!root.join(".wh.remove").exists());
+    }
+
+    #[test]
+    fn whiteout_of_directory_removes_whole_subtree() {
+        let t = Tmp::new("dir");
+        let root = &t.0;
+        std::fs::create_dir_all(root.join("d").join("sub")).unwrap();
+        std::fs::write(root.join("d").join("sub").join("f"), b"x").unwrap();
+        std::fs::write(root.join(".wh.d"), b"").unwrap();
+
+        apply_whiteouts(root).unwrap();
+
+        assert!(!root.join("d").exists(), "directory subtree should be removed");
+        assert!(!root.join(".wh.d").exists());
+    }
+
+    #[test]
+    fn bare_wh_prefix_marker_does_not_delete_parent() {
+        // Regression guard: a malformed marker that is ONLY the `.wh.` prefix (empty target) must be
+        // dropped WITHOUT deleting its parent directory or any sibling (the old shell pipeline ran
+        // `rm -rf "$dir/"` here, wiping the parent).
+        let t = Tmp::new("baremarker");
+        let root = &t.0;
+        let dir = root.join("layerdir");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("safe"), b"s").unwrap();
+        std::fs::write(dir.join(".wh."), b"").unwrap();
+
+        apply_whiteouts(root).unwrap();
+
+        // the parent dir and its real content survive; only the malformed marker is removed.
+        assert!(dir.exists(), "parent dir must NOT be wiped by a bare .wh. marker");
+        assert!(dir.join("safe").exists(), "sibling must survive");
+        assert!(!dir.join(".wh.").exists(), "the malformed marker is still cleaned up");
+    }
+
+    #[test]
+    fn opaque_marker_is_dropped_without_deleting_siblings() {
+        // `.wh..wh..opq` has no sibling to delete (layers are already flattened): the marker is removed
+        // but adjacent files are left intact.
+        let t = Tmp::new("opaque");
+        let root = &t.0;
+        std::fs::write(root.join("data"), b"d").unwrap();
+        std::fs::write(root.join(".wh..wh..opq"), b"").unwrap();
+
+        apply_whiteouts(root).unwrap();
+
+        assert!(root.join("data").exists(), "opaque marker must not delete siblings");
+        assert!(!root.join(".wh..wh..opq").exists(), "opaque marker itself is removed");
+    }
+
+    #[test]
+    fn whiteouts_apply_recursively_in_subdirectories() {
+        // A marker nested in a subdirectory deletes the sibling in THAT directory (the walk recurses).
+        let t = Tmp::new("recurse");
+        let root = &t.0;
+        let sub = root.join("a").join("b");
+        std::fs::create_dir_all(&sub).unwrap();
+        std::fs::write(sub.join("gone"), b"g").unwrap();
+        std::fs::write(sub.join("stay"), b"s").unwrap();
+        std::fs::write(sub.join(".wh.gone"), b"").unwrap();
+
+        apply_whiteouts(root).unwrap();
+
+        assert!(!sub.join("gone").exists());
+        assert!(sub.join("stay").exists());
+        assert!(!sub.join(".wh.gone").exists());
+    }
+}

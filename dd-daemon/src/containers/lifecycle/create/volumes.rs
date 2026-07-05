@@ -63,3 +63,99 @@ pub(super) fn anon_volume(volumes_dir: &str, image_rootfs: &str, target: &str, c
         labels: HashMap::new(),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ---- norm_dir: strip a trailing slash for mount-target dedup (root stays "/") ----
+    #[test]
+    fn norm_dir_plain_path_unchanged() {
+        assert_eq!(norm_dir("/data"), "/data");
+        assert_eq!(norm_dir("/var/lib/postgresql/data"), "/var/lib/postgresql/data");
+    }
+    #[test]
+    fn norm_dir_strips_single_trailing_slash() {
+        assert_eq!(norm_dir("/data/"), "/data");
+    }
+    #[test]
+    fn norm_dir_strips_multiple_trailing_slashes() {
+        // trim_end_matches removes ALL trailing slashes.
+        assert_eq!(norm_dir("/data///"), "/data");
+    }
+    #[test]
+    fn norm_dir_root_stays_root() {
+        assert_eq!(norm_dir("/"), "/");
+        assert_eq!(norm_dir("///"), "/");
+    }
+    #[test]
+    fn norm_dir_empty_becomes_root() {
+        // An all-slash-or-empty target collapses to "/" (never the empty string).
+        assert_eq!(norm_dir(""), "/");
+    }
+    #[test]
+    fn norm_dir_relative_and_no_leading_slash() {
+        // Only the TRAILING slash is touched; a relative target keeps its shape.
+        assert_eq!(norm_dir("data/"), "data");
+        assert_eq!(norm_dir("data"), "data");
+    }
+
+    // ---- copy_dir_into: recursive seed of a fresh volume from image content ----
+    // A unique scratch dir removed on drop (the established temp_dir + RAII idiom; no tempfile dep).
+    struct Tmp(std::path::PathBuf);
+    impl Tmp {
+        fn new(tag: &str) -> Self {
+            use std::sync::atomic::{AtomicU64, Ordering};
+            static SEQ: AtomicU64 = AtomicU64::new(0);
+            let n = SEQ.fetch_add(1, Ordering::Relaxed);
+            let p = std::env::temp_dir().join(format!(
+                "dd_createvol_test_{}_{}_{}",
+                tag,
+                std::process::id(),
+                n
+            ));
+            std::fs::create_dir_all(&p).unwrap();
+            Tmp(p)
+        }
+    }
+    impl Drop for Tmp {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    #[test]
+    fn copy_dir_into_copies_files_dirs_and_symlinks() {
+        let root = Tmp::new("copy");
+        let src = root.0.join("src");
+        let dst = root.0.join("dst");
+        std::fs::create_dir_all(&src).unwrap();
+        std::fs::create_dir_all(&dst).unwrap();
+        // a top-level file, a nested subdir + file, and a relative symlink to the top-level file.
+        std::fs::write(src.join("a"), b"hello").unwrap();
+        std::fs::create_dir_all(src.join("d")).unwrap();
+        std::fs::write(src.join("d").join("b"), b"world").unwrap();
+        std::os::unix::fs::symlink("a", src.join("l")).unwrap();
+
+        copy_dir_into(&src, &dst);
+
+        // regular file copied with its content
+        assert_eq!(std::fs::read(dst.join("a")).unwrap(), b"hello");
+        // nested dir recursed into
+        assert_eq!(std::fs::read(dst.join("d").join("b")).unwrap(), b"world");
+        // symlink recreated AS a symlink (not dereferenced) pointing at the same relative target
+        let meta = std::fs::symlink_metadata(dst.join("l")).unwrap();
+        assert!(meta.file_type().is_symlink());
+        assert_eq!(std::fs::read_link(dst.join("l")).unwrap(), std::path::Path::new("a"));
+    }
+
+    #[test]
+    fn copy_dir_into_missing_src_is_noop() {
+        let root = Tmp::new("nosrc");
+        let dst = root.0.join("dst");
+        std::fs::create_dir_all(&dst).unwrap();
+        // A non-existent source directory must not error and must leave dst empty.
+        copy_dir_into(&root.0.join("does-not-exist"), &dst);
+        assert_eq!(std::fs::read_dir(&dst).unwrap().count(), 0);
+    }
+}

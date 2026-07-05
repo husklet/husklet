@@ -128,4 +128,78 @@ mod tests {
         assert_eq!(r.short(), "localhost:5000/img:latest");
         assert_eq!(r.canonical(), "localhost:5000/img:latest");
     }
+
+    // ---- split_tag: the single source of the "final :tag with no slash after it" rule ----
+    #[test]
+    fn split_tag_explicit_tag() {
+        assert_eq!(split_tag("ubuntu:24.04"), ("ubuntu", "24.04".to_string()));
+    }
+    #[test]
+    fn split_tag_defaults_latest_when_absent() {
+        assert_eq!(split_tag("ubuntu"), ("ubuntu", "latest".to_string()));
+    }
+    #[test]
+    fn split_tag_registry_port_is_not_a_tag() {
+        // The final colon's right side contains a '/', so it is a host:port, not a tag -> default latest,
+        // repository left whole.
+        assert_eq!(
+            split_tag("localhost:5000/foo"),
+            ("localhost:5000/foo", "latest".to_string())
+        );
+        // ...but a real tag AFTER the port path is detected.
+        assert_eq!(
+            split_tag("localhost:5000/foo:1.2"),
+            ("localhost:5000/foo", "1.2".to_string())
+        );
+    }
+    #[test]
+    fn split_tag_rightmost_colon_wins() {
+        // rsplit_once splits at the LAST colon; earlier colons stay in the repository part.
+        assert_eq!(split_tag("a:b:c"), ("a:b", "c".to_string()));
+    }
+    #[test]
+    fn split_tag_leading_colon_empty_repo() {
+        // A leading ':tag' leaves an empty repository and the literal tag (no slash after the colon).
+        assert_eq!(split_tag(":tag"), ("", "tag".to_string()));
+    }
+    #[test]
+    fn split_tag_empty_and_trailing_colon() {
+        assert_eq!(split_tag(""), ("", "latest".to_string()));
+        // A trailing colon -> empty tag string (there is no '/' after it), NOT the "latest" default.
+        assert_eq!(split_tag("ubuntu:"), ("ubuntu", "".to_string()));
+    }
+
+    // ---- is_local_registry: plain-HTTP hosts (localhost / 127.x) ----
+    #[test]
+    fn is_local_registry_true_cases() {
+        assert!(is_local_registry("localhost"));
+        assert!(is_local_registry("localhost:5000"));
+        assert!(is_local_registry("127.0.0.1"));
+        assert!(is_local_registry("127.0.0.1:5000"));
+    }
+    #[test]
+    fn is_local_registry_false_cases() {
+        assert!(!is_local_registry("registry-1.docker.io"));
+        assert!(!is_local_registry("ghcr.io"));
+        // "127" without the trailing dot does NOT match the "127." prefix (characterization of the exact rule).
+        assert!(!is_local_registry("127examples.io"));
+    }
+
+    // ---- base_url: http for local dev registries, https otherwise; /v2/<repository> path ----
+    #[test]
+    fn base_url_local_registry_is_http() {
+        let r = ImageRef::parse("localhost:5000/img");
+        assert_eq!(r.base_url(), "http://localhost:5000/v2/img");
+    }
+    #[test]
+    fn base_url_remote_registry_is_https() {
+        let r = ImageRef::parse("ghcr.io/o/a:v2");
+        assert_eq!(r.base_url(), "https://ghcr.io/v2/o/a");
+    }
+    #[test]
+    fn base_url_hub_uses_full_host_and_library_namespace() {
+        // A bare Hub name expands to the registry-1.docker.io host + library/ namespace in the v2 URL.
+        let r = ImageRef::parse("ubuntu");
+        assert_eq!(r.base_url(), "https://registry-1.docker.io/v2/library/ubuntu");
+    }
 }
