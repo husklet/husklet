@@ -88,6 +88,10 @@ static int translate_shift(struct insn *I, uint64_t gpc, uint64_t next) {
                     return TX_NEXT;
                 }
                 int ssf = (w >= 4) ? sf : 1; // operate 64-bit on extended byte/word
+                // #424 register residency: an IMMEDIATE/by-1 SHL/SHR/SAR whose r/m is a REGISTER at width>=4
+                // shifts straight into the guest home (src==dst==raw==I->rm_reg), skipping the raw->x16 copy
+                // and the store-back. `direct` is false for mem/byte-word/CL-variable/rotate -> those keep x16.
+                int direct = xshiftdirect_on() && !bycl && !mem && w >= 4 && (k == 4 || k == 5 || k == 7);
                 // bring the operand into x16, zero/sign-extended for w<4
                 if (w < 4) {
                     if (k == 5)
@@ -96,13 +100,21 @@ static int translate_shift(struct insn *I, uint64_t gpc, uint64_t next) {
                         e_sxt(16, raw, w);
                     else
                         e_mov_rr(16, raw, 0);
-                } else if (raw != 16)
+                } else if (!direct && raw != 16)
                     e_mov_rr(16, raw, sf);
-                int src = 16;
+                int R = direct ? raw : 16; // result/work register: guest home when direct, else scratch x16
+                int src = direct ? raw : 16;
                 int cnt = by1 ? 1 : (bycl ? -1 : (int)(I->imm & (w == 8 ? 63 : 31)));
                 // exact x86 CF (last bit shifted out) for SHL/SHR/SAR immediate at ALL widths (8/16/32/64)
                 int want_cf = (!bycl && (k == 4 || k == 5 || k == 7) && cnt >= 1);
-                if (want_cf) e_mov_rr(19, src, ssf); // save original operand for CF
+                // #424 dead want_cf save: when the WHOLE architectural flag output {CF,SF,ZF,OF,PF} is dead
+                // at every successor (the SAME guest-byte scan that elides the materialization below), the
+                // `mov x19,src` preserving the operand for the exact-CF path is itself dead -- skip it. Uses
+                // the shift flag-elision gate+predicate, so it changes bytes ONLY when the materialization is
+                // elided too; NOSHIFTFLAGELIDE=1 forces flags_dead=0 -> the save (and elision) match baseline.
+                int flags_dead = !bycl && !noshiftflagelide() && xblkflags_on() &&
+                                 !(x86_flags_livein(next, gpc) & (XF_ALL & ~XF_AF));
+                if (want_cf && !flags_dead) e_mov_rr(19, src, ssf); // save original operand for CF
                 if (bycl) {
                     if (k == 0) { // ROL r/m32|64 by CL == ROR by (width - n); leaves SF/ZF unchanged (no flag save)
                         int width = ssf ? 64 : 32;
@@ -150,11 +162,11 @@ static int translate_shift(struct insn *I, uint64_t gpc, uint64_t next) {
                         return TX_NEXT;
                     } // no flags change
                     if (k == 4)
-                        e_lsl_i(16, src, cnt, ssf);
+                        e_lsl_i(R, src, cnt, ssf);
                     else if (k == 5)
-                        e_lsr_i(16, src, cnt, ssf);
+                        e_lsr_i(R, src, cnt, ssf);
                     else if (k == 7)
-                        e_asr_i(16, src, cnt, ssf);
+                        e_asr_i(R, src, cnt, ssf);
                     else if (k == 1)
                         e_ror_i(16, src, cnt, ssf);
                     else /*k==0 ROL*/
@@ -175,9 +187,8 @@ static int translate_shift(struct insn *I, uint64_t gpc, uint64_t next) {
                 // successor entry (guest-byte scan). AF is never written by this path either way, so it is
                 // excluded from the mask (eliding leaves it byte-identical to the materialized path). The
                 // value in x16 is final; skip the tst + nzcv/PF synthesis entirely and just store.
-                if (!bycl && !noshiftflagelide() && xblkflags_on() &&
-                    !(x86_flags_livein(next, gpc) & (XF_ALL & ~XF_AF))) {
-                    rm_store(I, w, 16);
+                if (flags_dead) { // predicate hoisted above (identical to the old inline condition)
+                    rm_store(I, w, R); // no-op when direct (R==I->rm_reg); stores x16 otherwise
                     g_prof_shflag++;
                     return TX_NEXT;
                 }
@@ -186,7 +197,7 @@ static int translate_shift(struct insn *I, uint64_t gpc, uint64_t next) {
                     e_lsl_i(21, 16, 8 * (4 - w), 0);
                     e_tst(21, 0);
                 } else
-                    e_tst(16, sf);
+                    e_tst(R, sf); // R==x16 unless direct (then the guest home holds the result)
                 if (bycl) {
                     // x86 leaves ALL flags unchanged when the runtime count (CL masked to the operand width) is
                     // 0 -- exactly when the emitted variable shift was a no-op. Capture the would-be flags, then
@@ -287,8 +298,8 @@ static int translate_shift(struct insn *I, uint64_t gpc, uint64_t next) {
                             e_rrr(A_AND, 19, 19, 23, ssf, 0); // x19 = x86 CF bit
                         }
                         e_nzcv_save_setcf(19);
-                        if (set_of && k == 4) { // SHL: OF = MSB(result x16) XOR CF (x19)
-                            e_lsr_i(22, 16, width - 1, ssf);
+                        if (set_of && k == 4) { // SHL: OF = MSB(result R) XOR CF (x19)
+                            e_lsr_i(22, R, width - 1, ssf);
                             e_movconst(23, 1);
                             e_rrr(A_AND, 22, 22, 23, ssf, 0);
                             e_rrr(A_EOR, 22, 22, 19, 0, 0);
@@ -300,9 +311,9 @@ static int translate_shift(struct insn *I, uint64_t gpc, uint64_t next) {
                         e_nzcv_save();
                     // x86 PF: SHL/SHR/SAR set SF/ZF/PF from the result; rotates (ROL/ROR) leave PF unchanged.
                     if (!g_pfaf_dead && (k == 4 || k == 5 || k == 7))
-                        e_pf_save(16); // result low byte -> PF lane (x16 holds result; #346 skip when dead)
+                        e_pf_save(R); // result low byte -> PF lane (R holds result; #346 skip when dead)
                 }
-                rm_store(I, w, 16);
+                rm_store(I, w, R); // no-op when direct (R==I->rm_reg); stores x16 otherwise
                 return TX_NEXT;
             }
     return TX_FALL;
