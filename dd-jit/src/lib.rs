@@ -32,3 +32,6 @@ pub use dd_jit_darwin::{available, Guest, PortMap, SpawnConfig, Volume};
 
 mod api;
 pub use api::{Container, ContainerBuilder, Error, ExitStatus, Image, RunHandle, Runtime};
+
+pub mod container;
+pub use container::{RunningContainer, Stdio3};

@@ -369,6 +369,8 @@ name = "dd-jit"
 version = "0.4.0"
 dependencies = [
  "dd-jit-darwin",
+ "libc",
+ "tokio",
 ]
 
 [[package]]

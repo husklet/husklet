@@ -11,3 +11,7 @@ path = "src/lib.rs"
 
 [dependencies]
 dd-jit-darwin = { path = "../dd-jit-darwin" }
+# async launch + supervision (the `container` module): spawn the engine, pump stdio into a log
+# broadcast, wait/signal/pause. The daemon builds its Docker semantics on top of these primitives.
+tokio = { version = "1", features = ["rt", "process", "io-util", "net", "sync", "time", "macros"] }
+libc = "0.2"
