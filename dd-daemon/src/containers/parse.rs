@@ -265,4 +265,46 @@ mod tests {
         assert_eq!(bindings[0]["HostPort"], "8080");
         assert_eq!(bindings[1]["HostPort"], "9090");
     }
+    #[test]
+    fn ports_map_json_empty_input_is_empty_object() {
+        // No publish string -> an empty JSON object (not null/array), the shape `docker port` reads.
+        let m = ports_map_json("");
+        assert_eq!(m, serde_json::json!({}));
+        assert!(m.as_object().unwrap().is_empty());
+    }
+    #[test]
+    fn ports_map_json_legacy_two_field_defaults_host_ip() {
+        // A 2-field `hostPort:containerPort` entry keys on the container port and defaults HostIp.
+        let m = ports_map_json("8080:80");
+        let bindings = m["80/tcp"].as_array().expect("array under 80/tcp");
+        assert_eq!(bindings.len(), 1);
+        assert_eq!(bindings[0]["HostIp"], "0.0.0.0");
+        assert_eq!(bindings[0]["HostPort"], "8080");
+    }
+    #[test]
+    fn ports_map_json_udp_proto_in_key() {
+        // The /udp suffix flows into the map key (distinct from the /tcp bucket).
+        let m = ports_map_json("0.0.0.0:53:53/udp");
+        assert!(m.get("53/tcp").is_none());
+        let bindings = m["53/udp"].as_array().expect("array under 53/udp");
+        assert_eq!(bindings.len(), 1);
+        assert_eq!(bindings[0]["HostPort"], "53");
+    }
+    #[test]
+    fn ports_map_json_distinct_ports_are_distinct_keys() {
+        // Two different container ports produce two separate keys, each with one binding.
+        let m = ports_map_json("1.2.3.4:8080:80/tcp,1.2.3.4:8443:443/tcp");
+        let obj = m.as_object().unwrap();
+        assert_eq!(obj.len(), 2);
+        assert_eq!(m["80/tcp"].as_array().unwrap().len(), 1);
+        assert_eq!(m["443/tcp"].as_array().unwrap().len(), 1);
+        assert_eq!(m["443/tcp"][0]["HostPort"], "8443");
+    }
+    #[test]
+    fn ports_map_json_unparseable_entries_dropped() {
+        // Port ranges (`8080-8090`) are NOT expanded — they fail u16 parse and the entry is dropped,
+        // as is a bare container port with no host field. Both yield an empty map.
+        assert_eq!(ports_map_json("8080-8090:80-90"), serde_json::json!({}));
+        assert_eq!(ports_map_json("80"), serde_json::json!({}));
+    }
 }

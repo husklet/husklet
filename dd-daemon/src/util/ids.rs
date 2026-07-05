@@ -204,4 +204,42 @@ mod tests {
         // Real entropy: two calls with the same seed still differ.
         assert_ne!(a, b);
     }
+
+    #[test]
+    fn new_id_bulk_are_all_64_lowercase_hex_and_collision_free() {
+        // Structural invariant at scale: every id is exactly 64 lowercase hex chars, and across many
+        // samples none collide (32 bytes of CSPRNG entropy). We assert the structure, not the
+        // distribution of the random bytes.
+        let ids: Vec<String> = (0..200).map(|_| new_id("img")).collect();
+        for id in &ids {
+            assert_eq!(id.len(), 64, "bad length for {id}");
+            assert!(
+                id.chars().all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase()),
+                "non-lowercase-hex char in {id}"
+            );
+        }
+        let unique: std::collections::HashSet<&String> = ids.iter().collect();
+        assert_eq!(unique.len(), ids.len(), "ids collided");
+    }
+
+    #[test]
+    fn new_id_short_id_prefix_is_hex() {
+        // Docker derives the 12-char short id clients display from the leading bytes, so that prefix
+        // must itself be valid lowercase hex.
+        let id = new_id("nginx");
+        let short = &id[..12];
+        assert_eq!(short.len(), 12);
+        assert!(short.chars().all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase()));
+    }
+
+    #[test]
+    fn new_id_ignores_image_arg_for_shape() {
+        // The `image` arg only seeds the (unused-here) fallback path; the produced id shape is
+        // identical regardless of the argument, and distinct-argument ids never collide.
+        let a = new_id("");
+        let b = new_id("some/very:long-image@sha256:deadbeef");
+        assert_eq!(a.len(), 64);
+        assert_eq!(b.len(), 64);
+        assert_ne!(a, b);
+    }
 }

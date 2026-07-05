@@ -19,6 +19,18 @@ pub(crate) fn now_nanos() -> i64 {
         .unwrap_or(0)
 }
 
+/// Whole seconds AND nanoseconds since the unix epoch, read from a SINGLE clock sample so the two
+/// components are coherent (unlike calling `now_secs()` + `now_nanos()`, which sample twice and can
+/// straddle a second boundary). A pre-epoch clock (`duration_since` errors) yields `(0, 0)`, matching
+/// the event bus's historical inline behavior. Used by `events::emit_event` for an event's
+/// `time`/`timeNano` pair.
+pub(crate) fn now_epoch_parts() -> (i64, i64) {
+    match SystemTime::now().duration_since(UNIX_EPOCH) {
+        Ok(d) => (d.as_secs() as i64, d.as_nanos() as i64),
+        Err(_) => (0, 0),
+    }
+}
+
 /// Format a unix timestamp as an RFC3339 UTC string (Docker's inspect `Created` is a string).
 /// Pure integer civil-date math (Howard Hinnant's algorithm) — no chrono dependency.
 pub(crate) fn fmt_rfc3339(secs: i64) -> String {
@@ -52,6 +64,17 @@ pub(crate) fn fmt_rfc3339_nanos(nanos: i64) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn now_epoch_parts_is_coherent_and_positive() {
+        // Live clock is well past the epoch, so both components are positive and the nanos value is
+        // consistent with the seconds value read from the SAME sample: nanos/1e9 == secs (the two
+        // fields never straddle a second boundary, which is the whole point of the single-sample read).
+        let (secs, nanos) = now_epoch_parts();
+        assert!(secs > 1_700_000_000, "secs {secs} should be a recent epoch time");
+        assert!(nanos > 0);
+        assert_eq!(nanos / 1_000_000_000, secs, "nanos and secs come from one sample");
+    }
 
     #[test]
     fn fmt_rfc3339_epoch_zero() {

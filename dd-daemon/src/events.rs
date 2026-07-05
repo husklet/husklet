@@ -17,7 +17,6 @@ use axum::response::Response;
 use futures_util::stream;
 use serde::Deserialize;
 use serde_json::Value;
-use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::sync::broadcast;
 
 /// The shared event bus. A clone of this `Sender` lives in [`App`]; every `/events` client holds a
@@ -40,10 +39,7 @@ pub(crate) fn emit_event(bus: &EventBus, type_: &str, action: &str, id: &str, at
     if bus.receiver_count() == 0 {
         return; // no listeners — skip building the value entirely
     }
-    let (secs, nanos) = match SystemTime::now().duration_since(UNIX_EPOCH) {
-        Ok(d) => (d.as_secs() as i64, d.as_nanos() as i64),
-        Err(_) => (0, 0),
-    };
+    let (secs, nanos) = crate::util::now_epoch_parts();
     let attributes = match attrs {
         Value::Object(m) => Value::Object(m),
         _ => Value::Object(serde_json::Map::new()),
