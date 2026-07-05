@@ -55,17 +55,22 @@ impl Arch {
             _ => None,
         }
     }
+
+    /// Map an OCI config blob's `architecture` + `os` to an [`Arch`]. `None` if unrecognized.
+    pub fn from_config(config: &Value) -> Option<Arch> {
+        let os = config["os"].as_str().unwrap_or("linux");
+        match (os, config["architecture"].as_str()?) {
+            ("darwin", "arm64" | "aarch64") => Some(Arch::DarwinAarch64),
+            (_, "amd64" | "x86_64") => Some(Arch::LinuxX86_64),
+            (_, "arm64" | "aarch64") => Some(Arch::LinuxAarch64),
+            _ => None,
+        }
+    }
 }
 
-/// Map an OCI config blob's `architecture` + `os` to an [`Arch`]. `None` if unrecognized.
+/// Alias for [`Arch::from_config`].
 pub fn arch_from_config(config: &Value) -> Option<Arch> {
-    let os = config["os"].as_str().unwrap_or("linux");
-    match (os, config["architecture"].as_str()?) {
-        ("darwin", "arm64" | "aarch64") => Some(Arch::DarwinAarch64),
-        (_, "amd64" | "x86_64") => Some(Arch::LinuxX86_64),
-        (_, "arm64" | "aarch64") => Some(Arch::LinuxAarch64),
-        _ => None,
-    }
+    Arch::from_config(config)
 }
 
 #[cfg(test)]
