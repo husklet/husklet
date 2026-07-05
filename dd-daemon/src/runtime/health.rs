@@ -1,0 +1,175 @@
+#![allow(unused_imports, dead_code)]
+use super::*;
+use super::spawn::spawn_cfg;
+
+/// Run ONE health probe: spawn the container's HEALTHCHECK test command as a fresh JIT process that JOINS
+/// the container's loopback (so `curl localhost`/`pg_isready -h localhost` reach the container's server),
+/// bounded by the probe timeout. Returns (exit_code, captured stdout+stderr). Docker's `Test` forms:
+/// `["CMD", argv…]` execs directly, `["CMD-SHELL", script]` runs via `/bin/sh -c`, a bare list is a
+/// legacy shell command. A timeout is recorded as exit -1 (matching docker).
+async fn run_health_probe(
+    app: &App,
+    cont: &Container,
+    vols: &[Vol],
+    hcfg: &HealthConfig,
+) -> (i64, String) {
+    let mut test = hcfg.test.clone();
+    let argv = match test.first().map(|s| s.as_str()) {
+        Some("CMD-SHELL") => vec![
+            "/bin/sh".to_string(),
+            "-c".to_string(),
+            test.get(1).cloned().unwrap_or_default(),
+        ],
+        Some("CMD") => test.split_off(1),
+        Some("NONE") | None => return (0, String::new()),
+        _ => test,
+    };
+    if argv.is_empty() {
+        return (0, String::new());
+    }
+    let mut temp = cont.clone();
+    temp.id = format!("health-{}", cont.id);
+    temp.netns_key = Some(cont.id.clone()); // share the container's 127.0.0.1 so localhost probes work
+    temp.cmd = argv;
+    temp.tty = false;
+    temp.healthcheck = None; // the probe process is not itself health-checked
+    let Some((prog, args)) = spawn_cfg(&temp, &app.volumes_dir, vols, None) else {
+        return (-1, String::new());
+    };
+    let mut cmd = tokio::process::Command::new(prog);
+    cmd.args(args)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let timeout_ns = if hcfg.timeout > 0 {
+        hcfg.timeout
+    } else {
+        30_000_000_000
+    };
+    let child = match cmd.spawn() {
+        Ok(c) => c,
+        Err(e) => return (-1, format!("probe spawn: {e}")),
+    };
+    match tokio::time::timeout(
+        std::time::Duration::from_nanos(timeout_ns as u64),
+        child.wait_with_output(),
+    )
+    .await
+    {
+        Ok(Ok(out)) => {
+            let mut s = String::from_utf8_lossy(&out.stdout).into_owned();
+            s.push_str(&String::from_utf8_lossy(&out.stderr));
+            (
+                out.status.code().unwrap_or(-1) as i64,
+                s.chars().take(4096).collect(),
+            )
+        }
+        Ok(Err(e)) => (-1, format!("probe: {e}")),
+        Err(_) => (-1, "Health check exceeded timeout".into()),
+    }
+}
+
+/// The HEALTHCHECK monitor loop for one running container (§8.3-1). Probes every `interval` (default 30s),
+/// maintaining inspect `State.Health`: exit 0 ⇒ healthy + streak reset; a non-zero probe increments the
+/// failing streak and, once it reaches `retries` (default 3) AND the `start_period` grace has elapsed,
+/// flips to unhealthy. Keeps the last 5 probe results in `Log[]`. Emits `health_status: …` events on a
+/// transition. Exits when the container's process dies (this Live's `exit` fires) or it stops running.
+pub(super) async fn health_monitor(
+    app: App,
+    cid: String,
+    cont: Container,
+    vols: Vec<Vol>,
+    hcfg: HealthConfig,
+    mut exit_rx: watch::Receiver<Option<i64>>,
+) {
+    let interval = std::time::Duration::from_nanos(if hcfg.interval > 0 {
+        hcfg.interval
+    } else {
+        30_000_000_000
+    } as u64);
+    let retries = if hcfg.retries > 0 { hcfg.retries } else { 3 };
+    let start_ns = hcfg.start_period.max(0);
+    let started = std::time::Instant::now();
+    {
+        let mut g = app.inner.lock().await;
+        let Some(c) = g.containers.get_mut(&cid) else {
+            return;
+        };
+        c.health = Some(HealthState {
+            status: "starting".into(),
+            failing_streak: 0,
+            log: Vec::new(),
+        });
+        save_state(&g, &app.state_path);
+    }
+    crate::events::emit_event(
+        &app.events,
+        "container",
+        "health_status: starting",
+        &cid,
+        serde_json::json!({}),
+    );
+    loop {
+        tokio::select! {
+            _ = tokio::time::sleep(interval) => {}
+            _ = exit_rx.changed() => { if exit_rx.borrow().is_some() { break; } }
+        }
+        if {
+            let g = app.inner.lock().await;
+            g.containers
+                .get(&cid)
+                .map(|c| c.status != "running")
+                .unwrap_or(true)
+        } {
+            break;
+        }
+        let start_ts = now_secs();
+        let (code, output) = run_health_probe(&app, &cont, &vols, &hcfg).await;
+        let end_ts = now_secs();
+        let in_start_period = (started.elapsed().as_nanos() as i64) < start_ns;
+        let mut g = app.inner.lock().await;
+        let Some(c) = g.containers.get_mut(&cid) else {
+            break;
+        };
+        if c.status != "running" {
+            break;
+        }
+        let h = c.health.get_or_insert_with(|| HealthState {
+            status: "starting".into(),
+            failing_streak: 0,
+            log: Vec::new(),
+        });
+        let prev = h.status.clone();
+        h.log.push(HealthLog {
+            start: fmt_rfc3339(start_ts),
+            end: fmt_rfc3339(end_ts),
+            exit_code: code,
+            output,
+        });
+        let n = h.log.len();
+        if n > 5 {
+            h.log.drain(..n - 5);
+        }
+        if code == 0 {
+            h.failing_streak = 0;
+            h.status = "healthy".into();
+        } else {
+            h.failing_streak += 1;
+            if !in_start_period && h.failing_streak >= retries {
+                h.status = "unhealthy".into();
+            }
+        }
+        let cur = h.status.clone();
+        save_state(&g, &app.state_path);
+        drop(g);
+        if cur != prev {
+            crate::events::emit_event(
+                &app.events,
+                "container",
+                &format!("health_status: {cur}"),
+                &cid,
+                serde_json::json!({}),
+            );
+        }
+    }
+}
