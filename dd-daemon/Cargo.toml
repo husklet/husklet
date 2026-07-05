@@ -5,8 +5,8 @@ edition = "2021"
 description = "Docker-Engine-API daemon backed by the dd VM-less JIT runtime."
 license = "MIT"
 
-# The daemon is the server binary; it also exposes the Docker-Engine-API *client* library (absorbed from
-# the former dd-client crate) as `dd_daemon::client`, so the CLI + GUI depend only on dd-daemon.
+# The daemon is the server binary. Its Docker-Engine-API *client* library now lives in the separate
+# `dd-client` crate (which the CLI + GUI depend on), so the daemon no longer pulls in bollard.
 [lib]
 name = "dd_daemon"
 path = "src/lib.rs"
@@ -27,6 +27,3 @@ hyper-util = { version = "0.1", features = ["tokio", "server", "server-auto"] }
 tower = { version = "0.5", features = ["util"] }
 futures-util = { version = "0.3", default-features = false, features = ["std"] }
 libc = "0.2"
-# client library deps (Docker-Engine-API client over a unix socket)
-bollard = "0.21"
-bytes = "1"

@@ -3,7 +3,7 @@
 //! Container-centric master/detail: a left sidebar lists containers + images (with the daemon
 //! connection shown as a sidebar footer), and the content pane shows the selected item's detail —
 //! a container's image/status/volumes/networks/ports/logs, or an image's run action. It is a thin
-//! Docker-Engine-API client (`dd_daemon::client`) over the daemon's Unix socket, polled every couple seconds.
+//! Docker-Engine-API client (`dd_client`) over the daemon's Unix socket, polled every couple seconds.
 //!
 //! Built only on macOS where the GTK stack is available (see the workspace `default-members` note).
 
@@ -16,7 +16,7 @@ mod snapshot;
 mod ui;
 mod update;
 
-use dd_daemon::client::Client;
+use dd_client::Client;
 use gtk::prelude::GtkWindowExt; // for root.set_default_size on connect/disconnect
 use relm4::prelude::*;
 use snapshot::Snapshot;
@@ -297,7 +297,7 @@ impl Component for AppModel {
                 self.category = Category::Containers;
                 self.selection = Selection::None;
                 self.act(sender, socket, move |c| async move {
-                    let spec = dd_daemon::client::CreateContainer {
+                    let spec = dd_client::CreateContainer {
                         image,
                         ..Default::default()
                     };

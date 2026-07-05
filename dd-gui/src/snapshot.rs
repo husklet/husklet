@@ -3,7 +3,7 @@
 
 use crate::docker;
 use crate::{AppModel, Cmd};
-use dd_daemon::client::{Client, Container, DiskUsage, Image, Network, SystemInfo, Volume};
+use dd_client::{Client, Container, DiskUsage, Image, Network, SystemInfo, Volume};
 use relm4::prelude::ComponentSender;
 use std::path::PathBuf;
 

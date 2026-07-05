@@ -11,7 +11,7 @@ path = "src/main.rs"
 
 [dependencies]
 # Shared dd daemon client (a thin façade over bollard); GUI + CLI both use it.
-dd-daemon = { path = "../dd-daemon" }
+dd-client = { path = "../dd-client" }
 # GUI stack (GTK4 via Relm4). Needs pkg-config + the GTK4 dev libs at build time, which only
 # exist on the macOS host (via the Nix devShell in ./nix) — that's why dd-gui is excluded from
 # the workspace default-members. Build with `make app` there.
