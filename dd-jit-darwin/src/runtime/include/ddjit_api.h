@@ -43,6 +43,7 @@ struct ddjit_config {
     uint32_t guest_env_off; // '\n'-joined KEY=VAL guest environment (never the host env)
     uint32_t pcache_off;    // persistent translated-code cache dir ("" = disabled)
     uint32_t argv_off;      // the guest argv: NUL-separated, double-NUL terminated
+    uint32_t reserved;      // explicit tail pad → header is a clean 88 bytes, no implicit padding
 };
 
 // Spawn a container: `posix_spawn` the engine executable at `engine_path` with `--configfd`, hand it

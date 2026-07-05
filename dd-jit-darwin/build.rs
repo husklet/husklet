@@ -22,6 +22,40 @@ fn main() {
     println!("cargo:rerun-if-changed={}", ent.display());
     rerun_dir(&runtime);
 
+    // Compile the FFI spawn shim into a static lib the crate links (HOST-native — it runs in the Rust
+    // process, references no engine symbols). We shell out to the native `cc`/`ar` (no `cc`-crate dep,
+    // which the offline build can't fetch), mirroring how the engine binaries are built below.
+    {
+        let ffi_c = runtime.join("os/darwin/ffi.c");
+        let ffi_o = out.join("ddjit_ffi.o");
+        let ffi_a = out.join("libddjit_ffi.a");
+        let cc = env::var("CC").unwrap_or_else(|_| "cc".into());
+        let ar = env::var("AR").unwrap_or_else(|_| "ar".into());
+        let ok = Command::new(&cc)
+            .args(["-O2", "-Wall", "-c"])
+            .arg(&ffi_c)
+            .arg("-I")
+            .arg(runtime.join("include"))
+            .arg("-o")
+            .arg(&ffi_o)
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false)
+            && Command::new(&ar)
+                .arg("rcs")
+                .arg(&ffi_a)
+                .arg(&ffi_o)
+                .status()
+                .map(|s| s.success())
+                .unwrap_or(false);
+        if ok {
+            println!("cargo:rustc-link-search=native={}", out.display());
+            println!("cargo:rustc-link-lib=static=ddjit_ffi");
+        } else {
+            panic!("failed to compile the FFI spawn shim {}", ffi_c.display());
+        }
+    }
+
     let on_mac = env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("macos");
     let mut built = Vec::new();
     for t in TARGETS {
