@@ -188,3 +188,44 @@ pub(crate) async fn containers_stats(
         .body(Body::from_stream(body))
         .unwrap()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const NS: u64 = 1_000_000_000;
+
+    #[test]
+    fn ps_time_mm_ss() {
+        // `mm:ss` — the common two-group form.
+        assert_eq!(parse_ps_time("00:00"), 0);
+        assert_eq!(parse_ps_time("01:23"), 83 * NS); // 1m23s
+    }
+
+    #[test]
+    fn ps_time_hh_mm_ss() {
+        // `hh:mm:ss` folds left: 0*60+... so 00:01:23 is also 83s, and 01:00:00 is one hour.
+        assert_eq!(parse_ps_time("00:01:23"), 83 * NS);
+        assert_eq!(parse_ps_time("01:00:00"), 3600 * NS);
+    }
+
+    #[test]
+    fn ps_time_with_days_prefix() {
+        // `dd-hh:mm:ss` — the leading `N-` is whole days.
+        assert_eq!(parse_ps_time("2-00:00:00"), 2 * 86400 * NS);
+        assert_eq!(parse_ps_time("1-02:03:04"), (86400 + 7384) * NS);
+    }
+
+    #[test]
+    fn ps_time_drops_fractional_seconds() {
+        // Any `.frac` on the seconds group is truncated (not rounded).
+        assert_eq!(parse_ps_time("00:01.50"), 1 * NS);
+        assert_eq!(parse_ps_time("00:00:09.999"), 9 * NS);
+    }
+
+    #[test]
+    fn ps_time_garbage_groups_parse_as_zero() {
+        // Unparsable groups contribute 0 rather than erroring.
+        assert_eq!(parse_ps_time("xx:yy"), 0);
+    }
+}

@@ -170,3 +170,110 @@ pub(crate) async fn volumes_prune(State(a): State<App>) -> Json<crate::api::Volu
         space_reclaimed: 0,
     })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn inner_with(c: Container) -> Inner {
+        let mut g = Inner::default();
+        g.containers.insert(c.id.clone(), c);
+        g
+    }
+
+    fn ctr() -> Container {
+        Container {
+            id: "c1".into(),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn volume_in_use_via_bind_name() {
+        // `-v myvol:/data` references by volume NAME.
+        let mut c = ctr();
+        c.binds = vec!["myvol:/data".into()];
+        let g = inner_with(c);
+        assert!(volume_in_use(&g, "myvol", Some("/mp/myvol")));
+        assert!(!volume_in_use(&g, "othervol", Some("/mp/other")));
+    }
+
+    #[test]
+    fn volume_in_use_via_bind_mountpoint() {
+        // A bind whose source is the volume's MOUNTPOINT path also counts as in-use.
+        let mut c = ctr();
+        c.binds = vec!["/mp/myvol:/data".into()];
+        let g = inner_with(c);
+        assert!(volume_in_use(&g, "myvol", Some("/mp/myvol")));
+        // Without the mountpoint hint the name doesn't match the path -> not in use.
+        assert!(!volume_in_use(&g, "myvol", None));
+    }
+
+    #[test]
+    fn volume_in_use_via_mount_type_volume() {
+        // `--mount type=volume,source=myvol` (the §6.3-6 repair: previously missed).
+        let mut c = ctr();
+        c.mounts = vec![Mount {
+            typ: "volume".into(),
+            source: "myvol".into(),
+            target: "/data".into(),
+            read_only: false,
+        }];
+        let g = inner_with(c);
+        assert!(volume_in_use(&g, "myvol", None));
+        // A type=bind mount with the same source name must NOT count as a volume reference.
+        let mut c2 = ctr();
+        c2.mounts = vec![Mount {
+            typ: "bind".into(),
+            source: "myvol".into(),
+            target: "/data".into(),
+            read_only: false,
+        }];
+        assert!(!volume_in_use(&inner_with(c2), "myvol", None));
+    }
+
+    #[test]
+    fn volume_in_use_via_anon_volume() {
+        let mut c = ctr();
+        c.anon_volumes = vec!["anon123".into()];
+        let g = inner_with(c);
+        assert!(volume_in_use(&g, "anon123", None));
+    }
+
+    #[test]
+    fn volume_in_use_false_when_no_container_references_it() {
+        assert!(!volume_in_use(&Inner::default(), "myvol", Some("/mp/myvol")));
+    }
+
+    #[test]
+    fn vol_json_defaults_empty_driver_to_local() {
+        let v = Vol {
+            name: "n".into(),
+            mountpoint: "/mp/n".into(),
+            created_at: 0,
+            driver: "".into(),
+            options: Default::default(),
+            labels: Default::default(),
+        };
+        let j = vol_json(&v);
+        assert_eq!(j.driver, "local");
+        assert_eq!(j.name, "n");
+        assert_eq!(j.mountpoint, "/mp/n");
+        assert_eq!(j.scope, "local");
+        // created_at 0 renders as the epoch RFC3339 string.
+        assert_eq!(j.created_at, "1970-01-01T00:00:00Z");
+    }
+
+    #[test]
+    fn vol_json_preserves_explicit_driver() {
+        let v = Vol {
+            name: "n".into(),
+            mountpoint: "/mp/n".into(),
+            created_at: 0,
+            driver: "nfs".into(),
+            options: Default::default(),
+            labels: Default::default(),
+        };
+        assert_eq!(vol_json(&v).driver, "nfs");
+    }
+}

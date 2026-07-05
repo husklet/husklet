@@ -53,3 +53,62 @@ pub(crate) fn dir_size(p: &std::path::Path) -> i64 {
     }
     total
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // A unique scratch dir so parallel test runs don't collide; removed on drop.
+    struct Tmp(PathBuf);
+    impl Tmp {
+        fn new(tag: &str) -> Self {
+            use std::sync::atomic::{AtomicU64, Ordering};
+            static SEQ: AtomicU64 = AtomicU64::new(0);
+            let n = SEQ.fetch_add(1, Ordering::Relaxed);
+            let p = std::env::temp_dir().join(format!(
+                "dd_paths_test_{}_{}_{}",
+                tag,
+                std::process::id(),
+                n
+            ));
+            std::fs::create_dir_all(&p).unwrap();
+            Tmp(p)
+        }
+    }
+    impl Drop for Tmp {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    #[test]
+    fn dir_size_empty_is_zero() {
+        let t = Tmp::new("empty");
+        assert_eq!(dir_size(&t.0), 0);
+    }
+
+    #[test]
+    fn dir_size_missing_path_is_zero() {
+        // An unreadable/absent path is 0, not an error.
+        assert_eq!(dir_size(std::path::Path::new("/dd/no/such/path/xyzzy")), 0);
+    }
+
+    #[test]
+    fn dir_size_sums_regular_files_recursively() {
+        let t = Tmp::new("recurse");
+        std::fs::write(t.0.join("a"), b"hello").unwrap(); // 5 bytes
+        let sub = t.0.join("sub");
+        std::fs::create_dir_all(&sub).unwrap();
+        std::fs::write(sub.join("b"), b"abc").unwrap(); // 3 bytes
+        assert_eq!(dir_size(&t.0), 8);
+    }
+
+    #[test]
+    fn dir_size_skips_symlinks() {
+        let t = Tmp::new("symlink");
+        std::fs::write(t.0.join("real"), b"1234").unwrap(); // 4 bytes
+        // A symlink is neither followed nor counted (its own len is excluded).
+        std::os::unix::fs::symlink(t.0.join("real"), t.0.join("link")).unwrap();
+        assert_eq!(dir_size(&t.0), 4);
+    }
+}

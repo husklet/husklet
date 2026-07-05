@@ -97,6 +97,92 @@ fn persisted_ordered(
     v
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_unix_ts_variants() {
+        // Plain seconds.
+        assert_eq!(parse_unix_ts(&Some("1700000000".into())), Some(1_700_000_000));
+        // `.nanos` suffix is dropped, integer seconds kept.
+        assert_eq!(parse_unix_ts(&Some("1700000000.5".into())), Some(1_700_000_000));
+        // Absent / empty / zero / unparsable -> None.
+        assert_eq!(parse_unix_ts(&None), None);
+        assert_eq!(parse_unix_ts(&Some("".into())), None);
+        assert_eq!(parse_unix_ts(&Some("0".into())), None);
+        assert_eq!(parse_unix_ts(&Some("notanumber".into())), None);
+    }
+
+    #[test]
+    fn split_log_lines_keeps_trailing_newline_and_fragment() {
+        // Each complete line keeps its `\n`; a final unterminated fragment is its own line.
+        assert_eq!(
+            split_log_lines(b"a\nbb\nc"),
+            vec![b"a\n".to_vec(), b"bb\n".to_vec(), b"c".to_vec()]
+        );
+    }
+
+    #[test]
+    fn split_log_lines_all_terminated_has_no_trailing_fragment() {
+        assert_eq!(
+            split_log_lines(b"x\ny\n"),
+            vec![b"x\n".to_vec(), b"y\n".to_vec()]
+        );
+    }
+
+    #[test]
+    fn split_log_lines_empty_is_empty() {
+        assert!(split_log_lines(b"").is_empty());
+    }
+
+    #[test]
+    fn frame_chunk_tty_no_timestamps_is_raw() {
+        // TTY streams raw bytes with no demux header when timestamps are off.
+        assert_eq!(frame_chunk(1, b"hi", true, false, 0), b"hi".to_vec());
+    }
+
+    #[test]
+    fn frame_chunk_nontty_no_timestamps_uses_log_frame() {
+        // Non-TTY without timestamps is exactly one multiplexed frame.
+        assert_eq!(frame_chunk(1, b"hi", false, false, 0), log_frame(1, b"hi"));
+    }
+
+    #[test]
+    fn frame_chunk_tty_timestamps_prefixes_each_line() {
+        // With timestamps + TTY, each split line gets an RFC3339 prefix and a space, no demux header.
+        let ts = fmt_rfc3339(1_700_000_000); // "2023-11-14T22:13:20Z"
+        let out = frame_chunk(1, b"a\nb", true, true, 1_700_000_000);
+        let expected = format!("{ts} a\n{ts} b");
+        assert_eq!(out, expected.into_bytes());
+    }
+
+    #[test]
+    fn frame_chunk_nontty_timestamps_frames_each_stamped_line() {
+        // With timestamps + non-TTY, each stamped line is wrapped in its own log frame.
+        let ts = fmt_rfc3339(1_700_000_000);
+        let out = frame_chunk(2, b"a\n", false, true, 1_700_000_000);
+        let expected = log_frame(2, format!("{ts} a\n").as_bytes());
+        assert_eq!(out, expected);
+    }
+
+    #[test]
+    fn persisted_ordered_stdout_then_stderr() {
+        // stdout is stamped with start_t, stderr with end_t; empties are omitted.
+        let v = persisted_ordered(b"out".to_vec(), b"err".to_vec(), 100, 200);
+        assert_eq!(v, vec![(100, 1u8, b"out".to_vec()), (200, 2u8, b"err".to_vec())]);
+    }
+
+    #[test]
+    fn persisted_ordered_omits_empty_streams() {
+        assert_eq!(
+            persisted_ordered(b"out".to_vec(), Vec::new(), 100, 200),
+            vec![(100, 1u8, b"out".to_vec())]
+        );
+        assert!(persisted_ordered(Vec::new(), Vec::new(), 1, 2).is_empty());
+    }
+}
+
 pub(crate) async fn containers_logs(
     State(a): State<App>,
     Path(id): Path<String>,

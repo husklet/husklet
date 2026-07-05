@@ -167,4 +167,41 @@ mod tests {
         let g = inner(&[(FULL_A, "web"), (FULL_B, "db")]);
         assert_eq!(resolve_cid(&g, "nonexistent"), None);
     }
+
+    #[test]
+    fn md5_like_is_fnv1a_deterministic() {
+        // FNV-1a over zero bytes returns the offset basis unchanged.
+        assert_eq!(md5_like(""), 0xcbf2_9ce4_8422_2325);
+        // Deterministic and input-sensitive.
+        assert_eq!(md5_like("nginx"), md5_like("nginx"));
+        assert_ne!(md5_like("nginx"), md5_like("redis"));
+    }
+
+    #[test]
+    fn fake_id_shape_and_determinism() {
+        let id = fake_id("nginx");
+        // `{h:016x}{h:016x}{h:016x}{h:08x}` — the same 64-bit hash tiled: three zero-padded
+        // 16-hex groups (48 fixed chars) then `{h:08x}` (8..=16 chars), so total is 56..=64.
+        assert!((56..=64).contains(&id.len()), "len {}", id.len());
+        assert!(id.chars().all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase()));
+        // The first three groups are identical (the tiling).
+        assert_eq!(&id[0..16], &id[16..32]);
+        assert_eq!(&id[16..32], &id[32..48]);
+        // The trailing `{h:08x}` group is the low-order tail of the same zero-padded hash.
+        assert!(id[0..16].ends_with(&id[48..]), "tail {:?} of {:?}", &id[48..], &id[0..16]);
+        // Stable across calls; distinct seeds differ.
+        assert_eq!(fake_id("nginx"), id);
+        assert_ne!(fake_id("nginx"), fake_id("redis"));
+    }
+
+    #[test]
+    fn new_id_is_64_hex_and_unique() {
+        let a = new_id("img");
+        let b = new_id("img");
+        // Docker-shaped: 64 lowercase hex chars (32 random bytes).
+        assert_eq!(a.len(), 64);
+        assert!(a.chars().all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase()));
+        // Real entropy: two calls with the same seed still differ.
+        assert_ne!(a, b);
+    }
 }

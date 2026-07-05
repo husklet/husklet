@@ -83,6 +83,103 @@ pub(crate) fn container_mounts_json(vols: &[Vol], c: &Container) -> Vec<Value> {
     out
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn vol(name: &str, mp: &str) -> Vol {
+        Vol {
+            name: name.into(),
+            mountpoint: mp.into(),
+            created_at: 0,
+            driver: "local".into(),
+            options: Default::default(),
+            labels: Default::default(),
+        }
+    }
+
+    #[test]
+    fn bind_with_absolute_source_is_type_bind() {
+        let mut c = Container::default();
+        c.binds = vec!["/host/data:/data".into()];
+        let out = container_mounts_json(&[], &c);
+        assert_eq!(out.len(), 1);
+        let m = &out[0];
+        assert_eq!(m["Type"], "bind");
+        assert_eq!(m["Source"], "/host/data");
+        assert_eq!(m["Destination"], "/data");
+        assert_eq!(m["RW"], true);
+        // A bind carries no Name/Driver (skip_serializing_if omits them).
+        assert!(m.get("Name").is_none());
+        assert!(m.get("Driver").is_none());
+    }
+
+    #[test]
+    fn bind_with_named_volume_source_is_type_volume_with_resolved_mountpoint() {
+        let mut c = Container::default();
+        c.binds = vec!["myvol:/data:ro".into()];
+        let vols = [vol("myvol", "/var/lib/dd/volumes/myvol")];
+        let out = container_mounts_json(&vols, &c);
+        let m = &out[0];
+        assert_eq!(m["Type"], "volume");
+        assert_eq!(m["Name"], "myvol");
+        // Source is resolved to the volume's on-disk mountpoint.
+        assert_eq!(m["Source"], "/var/lib/dd/volumes/myvol");
+        assert_eq!(m["Driver"], "local");
+        // `:ro` -> read-only.
+        assert_eq!(m["RW"], false);
+        assert_eq!(m["Mode"], "ro");
+    }
+
+    #[test]
+    fn mount_type_volume_carries_name_and_driver() {
+        let mut c = Container::default();
+        c.mounts = vec![Mount {
+            typ: "volume".into(),
+            source: "data".into(),
+            target: "/srv".into(),
+            read_only: true,
+        }];
+        let out = container_mounts_json(&[vol("data", "/mp/data")], &c);
+        let m = &out[0];
+        assert_eq!(m["Type"], "volume");
+        assert_eq!(m["Name"], "data");
+        assert_eq!(m["Source"], "/mp/data");
+        assert_eq!(m["Driver"], "local");
+        assert_eq!(m["RW"], false);
+    }
+
+    #[test]
+    fn mount_type_bind_passthrough() {
+        let mut c = Container::default();
+        c.mounts = vec![Mount {
+            typ: "bind".into(),
+            source: "/h".into(),
+            target: "/c".into(),
+            read_only: false,
+        }];
+        let out = container_mounts_json(&[], &c);
+        let m = &out[0];
+        assert_eq!(m["Type"], "bind");
+        assert_eq!(m["Source"], "/h");
+        assert_eq!(m["Destination"], "/c");
+        assert_eq!(m["RW"], true);
+        assert!(m.get("Name").is_none());
+    }
+
+    #[test]
+    fn tmpfs_target_becomes_tmpfs_mountpoint() {
+        let mut c = Container::default();
+        c.tmpfs.insert("/run".into(), "size=64m".into());
+        let out = container_mounts_json(&[], &c);
+        assert_eq!(out.len(), 1);
+        let m = &out[0];
+        assert_eq!(m["Type"], "tmpfs");
+        assert_eq!(m["Destination"], "/run");
+        assert_eq!(m["RW"], true);
+    }
+}
+
 pub(crate) async fn containers_inspect(State(a): State<App>, Path(id): Path<String>) -> Response {
     let g = a.inner.lock().await;
     let Some(full) = resolve_cid(&g, &id) else {
