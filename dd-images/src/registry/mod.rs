@@ -23,19 +23,15 @@ pub use events::{layer_short, PullEvent, Pulled};
 pub use reference::ImageRef;
 pub(crate) use reference::split_tag;
 
-// Internal flat namespace: re-glob every submodule so a submodule's `use super::*` resolves the whole
-// registry module's private surface (free fns, structs and consts defined across the sibling files).
-#[allow(unused_imports)]
-use client::*;
-#[allow(unused_imports)]
-use credentials::*;
-#[allow(unused_imports)]
-use events::*;
-#[allow(unused_imports)]
+// Internal flat namespace: siblings reach layer/http free fns (whiteouts, tar, curl helpers) via
+// `use super::*`, so re-glob the two modules whose private surface is shared across the module.
 use http::*;
-#[allow(unused_imports)]
 use layer::*;
-#[allow(unused_imports)]
+// The tests below reach `BearerChallenge` (client) and `is_local_registry` (reference) through the
+// same flat namespace; those private items have no non-test consumer, so gate their re-glob on test.
+#[cfg(test)]
+use client::*;
+#[cfg(test)]
 use reference::*;
 
 const DOCKER_HUB: &str = "registry-1.docker.io";
