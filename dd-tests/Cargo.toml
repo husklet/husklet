@@ -21,4 +21,4 @@ name = "dd_tests"
 path = "src/lib.rs"
 
 [dependencies]
-ddjit = { path = "../dd-jit" }
+ddjit = { path = "../dd-jit", package = "dd-jit" }
