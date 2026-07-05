@@ -1,69 +1,5 @@
 use super::*;
 
-#[derive(Clone, Default)]
-pub(crate) struct Image {
-    pub(crate) name: String,
-    pub(crate) rootfs: String,
-    pub(crate) arch: Guest,
-    pub(crate) cmd: Vec<String>,
-    // the rest of the OCI/Dockerfile config metadata a container inherits at run
-    pub(crate) env: Vec<String>,           // "K=V" entries (ENV)
-    pub(crate) entrypoint: Vec<String>,    // ENTRYPOINT (prepended to the command)
-    pub(crate) workdir: String,            // WORKDIR / Config.WorkingDir
-    pub(crate) user: String, // USER / Config.User — the image's default run user (uid[:gid]/name)
-    pub(crate) exposed_ports: Vec<String>, // Config.ExposedPorts keys, e.g. "5432/tcp" (reported by inspect)
-    pub(crate) created: i64,               // unix secs; image creation/discovery time
-    pub(crate) labels: std::collections::HashMap<String, String>, // LABEL + build --label
-    // Lifecycle/volume image config a container inherits at run (Moby §6/§8):
-    pub(crate) stop_signal: String, // Config.StopSignal — the signal `docker stop` sends (nginx SIGQUIT, postgres SIGINT); "" ⇒ SIGTERM
-    pub(crate) img_volumes: Vec<String>, // Config.Volumes keys — dirs that get an anonymous volume at run (postgres /var/lib/postgresql/data)
-    pub(crate) healthcheck: Option<HealthConfig>, // Config.Healthcheck — the container HEALTHCHECK probe (None / Test=["NONE"] ⇒ no probe)
-}
-
-/// Image `HEALTHCHECK` / `docker run --health-*` (Config.Healthcheck). Durations are nanoseconds (Go
-/// `time.Duration`, exactly how the OCI config + docker API encode them). `test` is docker's form:
-/// `["NONE"]` disables, `["CMD", argv…]` execs directly, `["CMD-SHELL", script]` runs via `/bin/sh -c`.
-/// Serde-renamed so it deserializes from the create body AND round-trips through inspect Config.Healthcheck.
-#[derive(Clone, Default, Serialize, Deserialize)]
-pub(crate) struct HealthConfig {
-    #[serde(rename = "Test", default)]
-    pub(crate) test: Vec<String>,
-    #[serde(rename = "Interval", default)]
-    pub(crate) interval: i64, // ns between probes (0 ⇒ 30s)
-    #[serde(rename = "Timeout", default)]
-    pub(crate) timeout: i64, // ns a probe may run (0 ⇒ 30s)
-    #[serde(rename = "Retries", default)]
-    pub(crate) retries: i64, // consecutive failures ⇒ unhealthy (0 ⇒ 3)
-    #[serde(rename = "StartPeriod", default)]
-    pub(crate) start_period: i64, // ns grace where a failure doesn't count
-}
-
-/// A container's live health, surfaced as inspect `State.Health`. `status` is starting/healthy/unhealthy;
-/// `failing_streak` is the current run of consecutive failing probes; `log` keeps the most recent probe
-/// results (docker caps this at 5). Mirrors Moby `container.Health`.
-#[derive(Clone, Default, Serialize, Deserialize)]
-pub(crate) struct HealthState {
-    #[serde(rename = "Status", default)]
-    pub(crate) status: String,
-    #[serde(rename = "FailingStreak", default)]
-    pub(crate) failing_streak: i64,
-    #[serde(rename = "Log", default)]
-    pub(crate) log: Vec<HealthLog>,
-}
-
-/// One probe result in `State.Health.Log[]` (RFC3339 start/end, the probe's exit code + captured output).
-#[derive(Clone, Default, Serialize, Deserialize)]
-pub(crate) struct HealthLog {
-    #[serde(rename = "Start", default)]
-    pub(crate) start: String,
-    #[serde(rename = "End", default)]
-    pub(crate) end: String,
-    #[serde(rename = "ExitCode", default)]
-    pub(crate) exit_code: i64,
-    #[serde(rename = "Output", default)]
-    pub(crate) output: String,
-}
-
 /// `--restart` policy (HostConfig.RestartPolicy). `name` is one of "" / "no" / "always" /
 /// "unless-stopped" / "on-failure"; `max_retry` caps `on-failure` restarts. Serde-renamed so it both
 /// deserializes from the create body and round-trips verbatim back through inspect HostConfig.
@@ -85,21 +21,6 @@ pub(crate) struct DeviceMapping {
     pub(crate) path_in_container: String,
     #[serde(rename = "CgroupPermissions", default)]
     pub(crate) cgroup_permissions: String,
-}
-
-/// `--mount` spec (HostConfig.Mounts[]). `typ` is "bind" or "volume"; `source` is a host path (bind) or
-/// volume name (volume); `target` is the in-container path. `read_only` is metadata (the JIT's Volume
-/// mechanism can't mark a mount read-only). Wired into the rootfs via the same path as `-v`/Binds.
-#[derive(Clone, Default, Serialize, Deserialize)]
-pub(crate) struct Mount {
-    #[serde(rename = "Type", default)]
-    pub(crate) typ: String,
-    #[serde(rename = "Source", default)]
-    pub(crate) source: String,
-    #[serde(rename = "Target", default)]
-    pub(crate) target: String,
-    #[serde(rename = "ReadOnly", default)]
-    pub(crate) read_only: bool,
 }
 
 /// `--ulimit` entry (HostConfig.Ulimits[]). `name` is docker's resource name (nofile/nproc/stack/...),
@@ -236,50 +157,6 @@ pub(crate) struct Container {
     pub(crate) stdout: Vec<u8>,
     #[serde(skip)]
     pub(crate) stderr: Vec<u8>,
-}
-
-/// A named volume — a directory under the volumes root that containers can bind by name.
-#[derive(Clone, Serialize, Deserialize)]
-pub(crate) struct Vol {
-    pub(crate) name: String,
-    pub(crate) mountpoint: String,
-    pub(crate) created_at: i64,
-    #[serde(default)]
-    pub(crate) driver: String, // `docker volume create --driver` (default "local")
-    #[serde(default)]
-    pub(crate) options: std::collections::HashMap<String, String>, // --opt
-    #[serde(default)]
-    pub(crate) labels: std::collections::HashMap<String, String>, // --label
-}
-
-/// A per-container attachment to a network: the L3 identity (assigned IP) plus the name other
-/// containers resolve it by. Keyed by container id in [`Net::endpoints`]. See `docs/design/netstack.md`.
-#[derive(Clone, Default, Serialize, Deserialize)]
-pub(crate) struct Endpoint {
-    pub(crate) name: String, // container name (or short id) — what `network inspect`/embedded DNS reports
-    pub(crate) ip: String, // IPAM-assigned host address within the network subnet, e.g. "172.18.0.2"
-}
-
-/// A user-defined network. dd's isolation is a per-container loopback netns (see `run_in_jit`);
-/// a network here is metadata plus the set of attached containers and their IPAM identities.
-#[derive(Clone, Serialize, Deserialize)]
-pub(crate) struct Net {
-    pub(crate) id: String,
-    pub(crate) name: String,
-    pub(crate) driver: String,
-    pub(crate) scope: String,
-    #[serde(default)]
-    pub(crate) containers: Vec<String>,
-    #[serde(default)]
-    pub(crate) created: i64,
-    // IPAM (allocated at create from the 172.18.0.0/12 pool; bridge gets 172.17.0.0/16). Old state
-    // files predate these — `#[serde(default)]` keeps them loadable (empty subnet => no IP reported).
-    #[serde(default)]
-    pub(crate) subnet: String, // e.g. "172.18.0.0/16"
-    #[serde(default)]
-    pub(crate) gateway: String, // e.g. "172.18.0.1" (.1 of the subnet)
-    #[serde(default)]
-    pub(crate) endpoints: HashMap<String, Endpoint>, // container-id -> assigned endpoint
 }
 
 /// A `docker exec` invocation: a command to run in a container's rootfs. dd runs it as a fresh JIT
