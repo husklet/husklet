@@ -7,7 +7,7 @@
 //!     .pull("alpine", "latest", dd_images::Credentials::none(), &mut |_| {})?;
 //! // img.rootfs is an unpacked filesystem; img.arch is its target; hand both to your runtime:
 //! println!("rootfs {:?} arch {:?} cmd {:?}", img.rootfs, img.arch, img.entrypoint_cmd(["/bin/sh"]));
-//! # Ok::<(), String>(())
+//! # Ok::<(), dd_images::Error>(())
 //! ```
 //!
 //! The flow is split into cohesive files: the [`Arch`] target enum, the [`LocalImage`] entity, the

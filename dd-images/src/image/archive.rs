@@ -7,6 +7,7 @@
 //! `tar` (no crate dependency, no runtime) so the on-disk layout matches Docker/dd exactly.
 
 use super::*;
+use crate::Error;
 use serde_json::{json, Value};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -62,12 +63,14 @@ impl Store {
     /// run config so a later [`load_archive`](Self::load_archive) restores name/cmd/env exactly. The
     /// on-disk image directory is left untouched (the manifest is staged in a temp dir and tarred via a
     /// second `-C`).
-    pub fn save_archive(&self, rootfs: &Path, manifest: &Manifest) -> Result<Vec<u8>, String> {
-        let parent = rootfs.parent().ok_or("image has no rootfs directory")?;
+    pub fn save_archive(&self, rootfs: &Path, manifest: &Manifest) -> Result<Vec<u8>, Error> {
+        let parent = rootfs
+            .parent()
+            .ok_or_else(|| Error::Archive("image has no rootfs directory".to_string()))?;
         let staging = std::env::temp_dir().join(format!("dd-save-{}", uniq()));
         let _ = std::fs::remove_dir_all(&staging);
-        std::fs::create_dir_all(&staging).map_err(|e| e.to_string())?;
-        let manifest_json = serde_json::to_string(manifest).map_err(|e| e.to_string())?;
+        std::fs::create_dir_all(&staging).map_err(|e| Error::Archive(e.to_string()))?;
+        let manifest_json = serde_json::to_string(manifest).map_err(|e| Error::Archive(e.to_string()))?;
         let _ = std::fs::write(staging.join("dd-manifest.json"), manifest_json);
         let out = std::process::Command::new("tar")
             .arg("cf")
@@ -82,8 +85,8 @@ impl Store {
         let _ = std::fs::remove_dir_all(&staging);
         match out {
             Ok(o) if o.status.success() => Ok(o.stdout),
-            Ok(o) => Err(String::from_utf8_lossy(&o.stderr).into_owned()),
-            Err(e) => Err(e.to_string()),
+            Ok(o) => Err(Error::Archive(String::from_utf8_lossy(&o.stderr).into_owned())),
+            Err(e) => Err(Error::Archive(e.to_string())),
         }
     }
 
@@ -91,14 +94,14 @@ impl Store {
     /// directory under the store and return the materialized [`LoadedImage`]. Tolerates a rootfs-only
     /// archive (no manifest) by falling back to a generic name + probed arch. Writes a `dd-image.json`
     /// sidecar so the image round-trips through discovery after a daemon restart.
-    pub fn load_archive(&self, tar_bytes: &[u8]) -> Result<LoadedImage, String> {
+    pub fn load_archive(&self, tar_bytes: &[u8]) -> Result<LoadedImage, Error> {
         let tmp = std::env::temp_dir().join(format!("dd-load-{}.tar", uniq()));
-        std::fs::write(&tmp, tar_bytes).map_err(|e| e.to_string())?;
+        std::fs::write(&tmp, tar_bytes).map_err(|e| Error::Archive(e.to_string()))?;
         let staging = PathBuf::from(format!("{}/.load-{}", self.dir, uniq()));
         let _ = std::fs::remove_dir_all(&staging);
         if let Err(e) = std::fs::create_dir_all(&staging) {
             let _ = std::fs::remove_file(&tmp);
-            return Err(e.to_string());
+            return Err(Error::Archive(e.to_string()));
         }
         let out = std::process::Command::new("tar")
             .arg("xf")
@@ -111,16 +114,18 @@ impl Store {
             Ok(o) if o.status.success() => {}
             Ok(o) => {
                 let _ = std::fs::remove_dir_all(&staging);
-                return Err(String::from_utf8_lossy(&o.stderr).into_owned());
+                return Err(Error::Archive(String::from_utf8_lossy(&o.stderr).into_owned()));
             }
             Err(e) => {
                 let _ = std::fs::remove_dir_all(&staging);
-                return Err(e.to_string());
+                return Err(Error::Archive(e.to_string()));
             }
         }
         if !staging.join("rootfs").is_dir() {
             let _ = std::fs::remove_dir_all(&staging);
-            return Err("archive is not a dd image (no rootfs/ at top level)".into());
+            return Err(Error::Archive(
+                "archive is not a dd image (no rootfs/ at top level)".to_string(),
+            ));
         }
         // dd-manifest.json (written by `save`) carries the image identity; tolerate a rootfs-only archive
         // by falling back to a generic name via the default manifest.
@@ -138,7 +143,7 @@ impl Store {
         let _ = std::fs::remove_dir_all(&target);
         if let Err(e) = std::fs::rename(&staging, &target) {
             let _ = std::fs::remove_dir_all(&staging);
-            return Err(e.to_string());
+            return Err(Error::Archive(e.to_string()));
         }
         let rootfs = target.join("rootfs");
         let arch = if darwin {
@@ -173,13 +178,13 @@ impl Store {
     /// `repository` or `repository:tag`) and return the materialized [`LoadedImage`]. The arch is probed
     /// from the rootfs and the command defaults to the image's shell; a minimal `dd-image.json` sidecar is
     /// written so the image survives a daemon restart.
-    pub fn import_rootfs(&self, name: &str, tar_bytes: &[u8]) -> Result<LoadedImage, String> {
+    pub fn import_rootfs(&self, name: &str, tar_bytes: &[u8]) -> Result<LoadedImage, Error> {
         let target = self.dir_for(name);
         let rootfs = target.join("rootfs");
         let _ = std::fs::remove_dir_all(&target);
-        std::fs::create_dir_all(&rootfs).map_err(|e| e.to_string())?;
+        std::fs::create_dir_all(&rootfs).map_err(|e| Error::Archive(e.to_string()))?;
         let tmp = std::env::temp_dir().join(format!("dd-import-{}.tar", uniq()));
-        std::fs::write(&tmp, tar_bytes).map_err(|e| e.to_string())?;
+        std::fs::write(&tmp, tar_bytes).map_err(|e| Error::Archive(e.to_string()))?;
         let out = std::process::Command::new("tar")
             .arg("xf")
             .arg(&tmp)
@@ -189,8 +194,8 @@ impl Store {
         let _ = std::fs::remove_file(&tmp);
         match out {
             Ok(o) if o.status.success() => {}
-            Ok(o) => return Err(String::from_utf8_lossy(&o.stderr).into_owned()),
-            Err(e) => return Err(e.to_string()),
+            Ok(o) => return Err(Error::Archive(String::from_utf8_lossy(&o.stderr).into_owned())),
+            Err(e) => return Err(Error::Archive(e.to_string())),
         }
         let arch = detect_arch(&rootfs).unwrap_or(Arch::LinuxAarch64);
         let cmd = default_shell(&rootfs);
@@ -306,5 +311,17 @@ mod tests {
 
         let _ = std::fs::remove_dir_all(&root);
         let _ = std::fs::remove_dir_all(&outside);
+    }
+
+    // A real error site round-trips its EXACT former String through the typed Error: `save_archive` on a
+    // rootfs with no parent directory hits the `ok_or` guard, and its Display must equal the old text
+    // byte-for-byte (this is the string the daemon surfaces as the HTTP `{"message": …}` body).
+    #[test]
+    fn save_archive_no_parent_preserves_exact_message() {
+        let store = Store::new("/unused/for/this/test");
+        let err = store
+            .save_archive(Path::new("/"), &Manifest::default())
+            .unwrap_err();
+        assert_eq!(err.to_string(), "image has no rootfs directory");
     }
 }

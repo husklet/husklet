@@ -1,10 +1,11 @@
 //! Rootfs / whiteout / tar / gzip / sha256 tools used while unpacking and building layers.
 
 use super::*;
+use crate::Error;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-pub(super) fn reset_dir(p: &Path) -> Result<(), String> {
+pub(super) fn reset_dir(p: &Path) -> Result<(), Error> {
     // A previous (possibly failed) extraction can leave read-only dirs (e.g. a base layer's
     // `dr-xr-xr-x` cert dir); `remove_dir_all` can't unlink entries inside a write-less dir, so re-add
     // owner-write to every dir first — otherwise stale content would survive the reset.
@@ -15,7 +16,7 @@ pub(super) fn reset_dir(p: &Path) -> Result<(), String> {
             .output();
     }
     let _ = std::fs::remove_dir_all(p);
-    std::fs::create_dir_all(p).map_err(|e| format!("mkdir {}: {e}", p.display()))
+    std::fs::create_dir_all(p).map_err(|e| Error::Archive(format!("mkdir {}: {e}", p.display())))
 }
 
 const WH_PREFIX: &str = ".wh.";
@@ -27,7 +28,7 @@ const WH_OPAQUE: &str = ".wh..wh..opq";
 /// dirname/basename/rm` pipeline: a degenerate marker name can't make a shell utility error out
 /// ("sh failed: …") nor, worse, delete the wrong path (a bare `.wh.` made the old script run
 /// `rm -rf "$dir/"`, wiping the parent directory).
-pub(super) fn apply_whiteouts(rootfs: &Path) -> Result<(), String> {
+pub(super) fn apply_whiteouts(rootfs: &Path) -> Result<(), Error> {
     // Enumerate every marker first, then apply: a deletion can remove a whole subtree that itself
     // holds further markers, so we must not mutate the tree while still walking it.
     let mut markers = Vec::new();
@@ -128,13 +129,15 @@ fn remove_path(p: &Path) {
 }
 
 /// `tar | gzip` a rootfs into `out`; returns (compressed digest, compressed size).
-pub(super) fn tar_gzip(rootfs: &Path, out: &Path) -> Result<(String, u64), String> {
+pub(super) fn tar_gzip(rootfs: &Path, out: &Path) -> Result<(String, u64), Error> {
     let cmd = format!(
         "tar cf - -C '{}' . | gzip -n > '{}'",
         rootfs.display(),
         out.display()
     );
     run("sh", &["-c", &cmd])?;
-    let size = std::fs::metadata(out).map_err(|e| e.to_string())?.len();
+    let size = std::fs::metadata(out)
+        .map_err(|e| Error::Archive(e.to_string()))?
+        .len();
     Ok((crate::image::digest::sha256_file(out)?, size))
 }

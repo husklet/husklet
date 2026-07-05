@@ -47,7 +47,10 @@ pub(crate) async fn image_save(State(a): State<App>, Query(q): Query<SaveQ>) -> 
         ..Default::default()
     };
     let rootfs = std::path::PathBuf::from(&img.rootfs);
-    match dd_images::Store::new(&a.images_dir).save_archive(&rootfs, &manifest) {
+    match dd_images::Store::new(&a.images_dir)
+        .save_archive(&rootfs, &manifest)
+        .map_err(|e| e.to_string())
+    {
         Ok(bytes) => Response::builder()
             .status(StatusCode::OK)
             .header("Content-Type", "application/x-tar")

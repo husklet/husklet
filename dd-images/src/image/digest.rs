@@ -5,6 +5,7 @@
 //! The only subprocess left is `gzip -dc` in [`sha256_gz_file`], and only for *decompression* (there is
 //! no in-tree gzip decoder); its stdout is streamed straight into the hasher.
 
+use crate::Error;
 use sha2::{Digest, Sha256};
 use std::io::Read;
 use std::path::Path;
@@ -17,17 +18,18 @@ pub(crate) fn sha256_hex(bytes: &[u8]) -> String {
 }
 
 /// `sha256:<hex>` of a file's raw contents, streamed (never read whole into memory).
-pub(crate) fn sha256_file(path: &Path) -> Result<String, String> {
-    let mut f =
-        std::fs::File::open(path).map_err(|e| format!("open {}: {e}", path.display()))?;
+pub(crate) fn sha256_file(path: &Path) -> Result<String, Error> {
+    let mut f = std::fs::File::open(path)
+        .map_err(|e| Error::Digest(format!("open {}: {e}", path.display())))?;
     let mut h = Sha256::new();
-    std::io::copy(&mut f, &mut h).map_err(|e| format!("read {}: {e}", path.display()))?;
+    std::io::copy(&mut f, &mut h)
+        .map_err(|e| Error::Digest(format!("read {}: {e}", path.display())))?;
     Ok(prefixed(&h.finalize()))
 }
 
 /// `sha256:<hex>` of the DECOMPRESSED contents of a gzip file (an OCI `diff_id`). Decompression runs in a
 /// `gzip -dc` subprocess (no in-tree gzip decoder) whose stdout is streamed into the hasher.
-pub(crate) fn sha256_gz_file(path: &Path) -> Result<String, String> {
+pub(crate) fn sha256_gz_file(path: &Path) -> Result<String, Error> {
     use std::process::{Command, Stdio};
     let mut child = Command::new("gzip")
         .arg("-dc")
@@ -35,17 +37,17 @@ pub(crate) fn sha256_gz_file(path: &Path) -> Result<String, String> {
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
         .spawn()
-        .map_err(|e| format!("spawn gzip -dc {}: {e}", path.display()))?;
+        .map_err(|e| Error::Digest(format!("spawn gzip -dc {}: {e}", path.display())))?;
     let mut out = child
         .stdout
         .take()
-        .ok_or_else(|| "gzip -dc: no stdout".to_string())?;
+        .ok_or_else(|| Error::Digest("gzip -dc: no stdout".to_string()))?;
     let mut h = Sha256::new();
     let mut buf = [0u8; 64 * 1024];
     loop {
         let n = out
             .read(&mut buf)
-            .map_err(|e| format!("read gzip -dc {}: {e}", path.display()))?;
+            .map_err(|e| Error::Digest(format!("read gzip -dc {}: {e}", path.display())))?;
         if n == 0 {
             break;
         }
@@ -53,9 +55,9 @@ pub(crate) fn sha256_gz_file(path: &Path) -> Result<String, String> {
     }
     let status = child
         .wait()
-        .map_err(|e| format!("wait gzip -dc {}: {e}", path.display()))?;
+        .map_err(|e| Error::Digest(format!("wait gzip -dc {}: {e}", path.display())))?;
     if !status.success() {
-        return Err(format!("gzip -dc {} failed", path.display()));
+        return Err(Error::Digest(format!("gzip -dc {} failed", path.display())));
     }
     Ok(prefixed(&h.finalize()))
 }

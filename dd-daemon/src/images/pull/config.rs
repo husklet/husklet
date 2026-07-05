@@ -46,7 +46,9 @@ pub(crate) fn pull_image(
     progress: &mut dyn FnMut(PullEvent),
 ) -> Result<Image, String> {
     // dd-images owns the pull + rootfs unpack; the daemon just maps the result onto its Docker model.
-    let li = dd_images::Store::new(images_dir).pull_archs(from_image, tag, creds, archs, progress)?;
+    let li = dd_images::Store::new(images_dir)
+        .pull_archs(from_image, tag, creds, archs, progress)
+        .map_err(|e| e.to_string())?;
     Ok(image_from_config(images_dir, &li.iref, &li.config, &li.rootfs))
 }
 

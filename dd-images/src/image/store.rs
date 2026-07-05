@@ -2,6 +2,7 @@
 
 use super::*;
 use crate::registry::{Client, Credentials, ImageRef, PullEvent};
+use crate::Error;
 use std::path::PathBuf;
 
 /// A local image store: a directory holding one `<safe-name>/rootfs` tree per pulled image.
@@ -30,7 +31,7 @@ impl Store {
         tag: &str,
         creds: Credentials,
         progress: &mut dyn FnMut(PullEvent),
-    ) -> Result<LocalImage, String> {
+    ) -> Result<LocalImage, Error> {
         self.pull_archs(from, tag, creds, &["arm64", "amd64"], progress)
     }
 
@@ -42,7 +43,7 @@ impl Store {
         creds: Credentials,
         archs: &[&str],
         progress: &mut dyn FnMut(PullEvent),
-    ) -> Result<LocalImage, String> {
+    ) -> Result<LocalImage, Error> {
         let iref = image_ref(from, tag);
         let rootfs = self.rootfs_path(&iref);
         let pulled = Client::new(iref.clone(), creds).pull(&rootfs, archs, progress)?;

@@ -3,6 +3,7 @@
 //! is ordinary typed code.
 
 use super::*;
+use crate::Error;
 use std::path::Path;
 use std::process::Command;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -25,7 +26,7 @@ fn tmp_headers() -> std::path::PathBuf {
     std::env::temp_dir().join(format!("dd-reg-{}-{n}.hdr", std::process::id()))
 }
 
-fn run_curl(args: &[String]) -> Result<Resp, String> {
+fn run_curl(args: &[String]) -> Result<Resp, Error> {
     let hdr = tmp_headers();
     let mut c = Command::new("curl");
     // `--connect-timeout` bounds only the TCP/TLS connect phase (not the transfer, which keeps the
@@ -43,14 +44,16 @@ fn run_curl(args: &[String]) -> Result<Resp, String> {
     for a in args {
         c.arg(a);
     }
-    let out = c.output().map_err(|e| format!("curl: {e}"))?;
+    let out = c
+        .output()
+        .map_err(|e| Error::Registry(format!("curl: {e}")))?;
     let headers = std::fs::read_to_string(&hdr).unwrap_or_default();
     let _ = std::fs::remove_file(&hdr);
     if !out.status.success() && headers.is_empty() {
-        return Err(format!(
+        return Err(Error::Registry(format!(
             "curl failed: {}",
             String::from_utf8_lossy(&out.stderr)
-        ));
+        )));
     }
     Ok(Resp {
         status: status_of(&headers),
@@ -83,7 +86,7 @@ fn with_auth(mut args: Vec<String>, accept: Option<&str>, token: Option<&str>) -
     args
 }
 
-pub(super) fn get(url: &str, accept: Option<&str>, token: Option<&str>) -> Result<Resp, String> {
+pub(super) fn get(url: &str, accept: Option<&str>, token: Option<&str>) -> Result<Resp, Error> {
     // `-L` FOLLOW REDIRECTS: registries (Docker Hub, ECR, GCR, …) serve blob GETs — including the
     // image CONFIG blob — as a 307 to pre-signed CDN storage. Without following it we'd get the 307
     // (not 200) and `config_blob` would fail, silently dropping the image's Entrypoint/Cmd/Env/User/
@@ -92,7 +95,7 @@ pub(super) fn get(url: &str, accept: Option<&str>, token: Option<&str>) -> Resul
     // Authorization header on a cross-host redirect (the CDN URL is pre-signed, so no auth is needed).
     run_curl(&with_auth(vec!["-L".into(), url.into()], accept, token))
 }
-pub(super) fn get_with_basic(url: &str, creds: Option<&Credentials>) -> Result<Resp, String> {
+pub(super) fn get_with_basic(url: &str, creds: Option<&Credentials>) -> Result<Resp, Error> {
     let mut args = vec![url.to_string()];
     if let Some(c) = creds {
         args.push("-u".into());
@@ -100,10 +103,10 @@ pub(super) fn get_with_basic(url: &str, creds: Option<&Credentials>) -> Result<R
     }
     run_curl(&args)
 }
-pub(super) fn head(url: &str, token: Option<&str>) -> Result<u16, String> {
+pub(super) fn head(url: &str, token: Option<&str>) -> Result<u16, Error> {
     run_curl(&with_auth(vec!["-I".into(), url.into()], None, token)).map(|r| r.status)
 }
-pub(super) fn post(url: &str, token: Option<&str>) -> Result<Resp, String> {
+pub(super) fn post(url: &str, token: Option<&str>) -> Result<Resp, Error> {
     run_curl(&with_auth(
         vec!["-X".into(), "POST".into(), url.into()],
         None,
@@ -115,7 +118,7 @@ pub(super) fn put_file(
     file: &Path,
     content_type: &str,
     token: Option<&str>,
-) -> Result<Resp, String> {
+) -> Result<Resp, Error> {
     // `-T` (upload-file) STREAMS the body from disk and sets Content-Length from the file size —
     // unlike `--data-binary @file`, which buffers the entire file in memory (OOMs on multi-GB layers).
     let args = with_auth(
@@ -138,9 +141,9 @@ pub(super) fn put_bytes(
     body: &[u8],
     content_type: &str,
     token: Option<&str>,
-) -> Result<Resp, String> {
+) -> Result<Resp, Error> {
     let tmp = std::env::temp_dir().join(format!("dd-reg-body-{}.bin", std::process::id()));
-    std::fs::write(&tmp, body).map_err(|e| e.to_string())?;
+    std::fs::write(&tmp, body).map_err(|e| Error::Registry(e.to_string()))?;
     let r = put_file(url, &tmp, content_type, token);
     let _ = std::fs::remove_file(&tmp);
     r
@@ -154,7 +157,7 @@ pub(super) fn download_to_file(
     token: Option<&str>,
     dest: &Path,
     progress: &mut dyn FnMut(u64),
-) -> Result<(), String> {
+) -> Result<(), Error> {
     let mut cmd = Command::new("curl");
     cmd.arg("-sSL")
         .arg("--connect-timeout")
@@ -165,13 +168,15 @@ pub(super) fn download_to_file(
         cmd.arg("-H").arg(format!("Authorization: Bearer {t}"));
     }
     cmd.arg("-o").arg(dest).arg(url);
-    let mut child = cmd.spawn().map_err(|e| format!("curl: {e}"))?;
+    let mut child = cmd
+        .spawn()
+        .map_err(|e| Error::Registry(format!("curl: {e}")))?;
     let file_len = |p: &Path| std::fs::metadata(p).map(|m| m.len()).unwrap_or(0);
     loop {
-        match child.try_wait().map_err(|e| e.to_string())? {
+        match child.try_wait().map_err(|e| Error::Registry(e.to_string()))? {
             Some(st) => {
                 if !st.success() {
-                    return Err(format!("curl blob download failed ({st})"));
+                    return Err(Error::Registry(format!("curl blob download failed ({st})")));
                 }
                 progress(file_len(dest)); // final, exact size
                 return Ok(());
@@ -204,7 +209,7 @@ pub(super) fn download_to_file(
 ///
 /// Real corruption (truncated/damaged gzip, "Unexpected EOF", "not in gzip format", "No space left")
 /// is never swallowed — those still fail the pull.
-pub(super) fn extract_targz(src: &Path, rootfs: &Path) -> Result<(), String> {
+pub(super) fn extract_targz(src: &Path, rootfs: &Path) -> Result<(), Error> {
     let attempt = || {
         Command::new("tar")
             .args(["--exclude", "dev/*", "--exclude", "./dev/*", "-xzf"])
@@ -212,7 +217,7 @@ pub(super) fn extract_targz(src: &Path, rootfs: &Path) -> Result<(), String> {
             .arg("-C")
             .arg(rootfs)
             .output()
-            .map_err(|e| format!("tar: {e}"))
+            .map_err(|e| Error::Archive(format!("tar: {e}")))
     };
     // Split tar's stderr into (needs a writable-dir retry?, fatal lines). Benign = unprivileged
     // mknod/ownership refusal or tar's trailing summary; retryable = a "Permission denied" overwrite
@@ -242,7 +247,10 @@ pub(super) fn extract_targz(src: &Path, rootfs: &Path) -> Result<(), String> {
     }
     let (retry, fatal) = classify(&String::from_utf8_lossy(&out.stderr));
     if !fatal.is_empty() {
-        return Err(format!("tar extract failed: {}", fatal.join("; ")));
+        return Err(Error::Archive(format!(
+            "tar extract failed: {}",
+            fatal.join("; ")
+        )));
     }
     if !retry {
         return Ok(());
@@ -261,20 +269,20 @@ pub(super) fn extract_targz(src: &Path, rootfs: &Path) -> Result<(), String> {
     if fatal2.is_empty() {
         Ok(())
     } else {
-        Err(format!(
+        Err(Error::Archive(format!(
             "tar extract failed after making dirs writable: {}",
             fatal2.join("; ")
-        ))
+        )))
     }
 }
 
 // ---- small subprocess / header / base64 tools shared across the module ----
 
-pub(super) fn run(prog: &str, args: &[&str]) -> Result<String, String> {
+pub(super) fn run(prog: &str, args: &[&str]) -> Result<String, Error> {
     let out = Command::new(prog)
         .args(args)
         .output()
-        .map_err(|e| format!("{prog}: {e}"))?;
+        .map_err(|e| Error::Other(format!("{prog}: {e}")))?;
     if !out.status.success() {
         let stderr = String::from_utf8_lossy(&out.stderr);
         let detail = if stderr.trim().is_empty() {
@@ -282,7 +290,7 @@ pub(super) fn run(prog: &str, args: &[&str]) -> Result<String, String> {
         } else {
             stderr.trim().to_string()
         };
-        return Err(format!("{prog} {args:?} failed: {detail}"));
+        return Err(Error::Other(format!("{prog} {args:?} failed: {detail}")));
     }
     Ok(String::from_utf8_lossy(&out.stdout).into_owned())
 }

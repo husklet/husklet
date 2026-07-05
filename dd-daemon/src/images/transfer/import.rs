@@ -27,7 +27,10 @@ pub(crate) async fn image_import(
     };
     // dd-images owns the rootfs-tar extraction into a new image dir (+ minimal `dd-image.json` sidecar);
     // the handler maps the result onto the daemon's `Image` and registers it.
-    let loaded = match dd_images::Store::new(&a.images_dir).import_rootfs(&name, &body) {
+    let loaded = match dd_images::Store::new(&a.images_dir)
+        .import_rootfs(&name, &body)
+        .map_err(|e| e.to_string())
+    {
         Ok(l) => l,
         Err(e) => return import_progress(Err(e)),
     };

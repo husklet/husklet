@@ -4,6 +4,9 @@
 //! execution, layer extraction) will consolidate here too as it is decoupled from the daemon runtime.
 #![warn(missing_docs)]
 
+mod error;
+pub use error::Error;
+
 pub mod registry;
 pub use registry::{layer_short, Client, Credentials, ImageRef, PullEvent, Pulled};
 

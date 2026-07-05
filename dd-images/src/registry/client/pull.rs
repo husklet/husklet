@@ -3,6 +3,7 @@
 //! `pub(super)`); `unpack_layer` and `select_platform` are exclusive to this flow.
 
 use super::*;
+use crate::Error;
 use serde_json::{json, Value};
 use std::path::Path;
 
@@ -16,14 +17,14 @@ impl Client {
         rootfs: &Path,
         want_archs: &[&str],
         progress: &mut dyn FnMut(PullEvent),
-    ) -> Result<Pulled, String> {
+    ) -> Result<Pulled, Error> {
         let manifest = self.resolve_manifest(want_archs)?;
         let config = self.config_blob(&manifest).unwrap_or_else(|_| json!({}));
         let layers = manifest["layers"]
             .as_array()
-            .ok_or("manifest has no layers")?;
+            .ok_or_else(|| Error::Manifest("manifest has no layers".to_string()))?;
         if layers.is_empty() {
-            return Err("manifest has no layers".into());
+            return Err(Error::Manifest("manifest has no layers".to_string()));
         }
         // Announce every layer up front (docker shows one "Pulling fs layer" line per blob), then pull
         // them in order so each layer's download/extract progress streams live and in id order.
@@ -42,7 +43,7 @@ impl Client {
         reset_dir(rootfs)?;
         for (digest, size, id) in &metas {
             if digest.is_empty() {
-                return Err("layer missing digest".into());
+                return Err(Error::Manifest("layer missing digest".to_string()));
             }
             self.unpack_layer(digest, *size, id, rootfs, progress)?;
             progress(PullEvent::PullComplete { id: id.clone() });
@@ -55,7 +56,7 @@ impl Client {
 
     // ---- manifest / config / layer ----
 
-    pub(super) fn resolve_manifest(&mut self, want_archs: &[&str]) -> Result<Value, String> {
+    pub(super) fn resolve_manifest(&mut self, want_archs: &[&str]) -> Result<Value, Error> {
         let man = self.get_json(
             &format!("/manifests/{}", self.image.tag),
             Some(MANIFEST_ACCEPT),
@@ -66,15 +67,20 @@ impl Client {
         let digest = want_archs
             .iter()
             .find_map(|arch| select_platform(list, arch))
-            .ok_or_else(|| format!("no {} variant in the manifest list", want_archs.join("/")))?;
+            .ok_or_else(|| {
+                Error::NotFound(format!(
+                    "no {} variant in the manifest list",
+                    want_archs.join("/")
+                ))
+            })?;
         self.get_json(&format!("/manifests/{digest}"), Some(MANIFEST_ACCEPT))
     }
-    pub(super) fn config_blob(&mut self, manifest: &Value) -> Result<Value, String> {
+    pub(super) fn config_blob(&mut self, manifest: &Value) -> Result<Value, Error> {
         let digest = manifest["config"]["digest"]
             .as_str()
-            .ok_or("manifest has no config")?;
+            .ok_or_else(|| Error::Manifest("manifest has no config".to_string()))?;
         let bytes = self.get_blob_bytes(digest)?;
-        serde_json::from_slice(&bytes).map_err(|e| e.to_string())
+        serde_json::from_slice(&bytes).map_err(|e| Error::Manifest(e.to_string()))
     }
     /// Download one layer blob to a temp file (emitting live `Downloading` byte progress), then unpack it
     /// into `rootfs` (emitting `Extracting`). Landing the compressed blob on disk first — rather than the
@@ -87,7 +93,7 @@ impl Client {
         id: &str,
         rootfs: &Path,
         progress: &mut dyn FnMut(PullEvent),
-    ) -> Result<(), String> {
+    ) -> Result<(), Error> {
         let token = self.authenticate("pull")?;
         let url = format!("{}/blobs/{digest}", self.image.base_url());
         let tmp = std::env::temp_dir().join(format!("dd-layer-{}-{id}.tar.gz", std::process::id()));

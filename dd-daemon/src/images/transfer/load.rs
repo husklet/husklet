@@ -7,7 +7,10 @@ pub(crate) async fn image_load(State(a): State<App>, body: axum::body::Bytes) ->
     // dd-images owns the archive extraction + manifest + on-disk placement (`rootfs/` under the store, a
     // `dd-image.json` sidecar so it round-trips through discovery). The handler maps the materialized
     // `LoadedImage` onto the daemon's `Image`, registers it, and emits the load event.
-    let loaded = match dd_images::Store::new(&a.images_dir).load_archive(&body) {
+    let loaded = match dd_images::Store::new(&a.images_dir)
+        .load_archive(&body)
+        .map_err(|e| e.to_string())
+    {
         Ok(l) => l,
         Err(e) => return load_err(e),
     };
