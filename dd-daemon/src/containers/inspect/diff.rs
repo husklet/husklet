@@ -89,15 +89,15 @@ pub(crate) async fn containers_changes(State(a): State<App>, Path(id): Path<Stri
         (c.upper.clone(), c.rootfs.clone())
     };
     if upper.is_empty() {
-        return Json(json!([])).into_response();
+        return Json(Vec::<crate::api::ContainerChange>::new()).into_response();
     }
     let kinds = tokio::task::spawn_blocking(move || overlay_changes(&upper, &rootfs))
         .await
         .unwrap_or_default();
-    let mut out: Vec<Value> = kinds
+    let mut out: Vec<crate::api::ContainerChange> = kinds
         .into_iter()
-        .map(|(p, k)| json!({"Path": p, "Kind": k}))
+        .map(|(p, k)| crate::api::ContainerChange { path: p, kind: k })
         .collect();
-    out.sort_by(|a, b| a["Path"].as_str().cmp(&b["Path"].as_str()));
-    Json(Value::Array(out)).into_response()
+    out.sort_by(|a, b| a.path.cmp(&b.path));
+    Json(out).into_response()
 }

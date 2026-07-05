@@ -27,7 +27,9 @@ pub(crate) async fn image_save(State(a): State<App>, Query(q): Query<SaveQ>) -> 
     if img.name == "macos" {
         return (
             StatusCode::BAD_REQUEST,
-            Json(json!({"message": "cannot save the host `macos` image"})),
+            Json(ErrorMessage {
+                message: "cannot save the host `macos` image".into(),
+            }),
         )
             .into_response();
     }
@@ -53,7 +55,7 @@ pub(crate) async fn image_save(State(a): State<App>, Query(q): Query<SaveQ>) -> 
             .unwrap(),
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,
-            Json(json!({ "message": e })),
+            Json(ErrorMessage { message: e }),
         )
             .into_response(),
     }

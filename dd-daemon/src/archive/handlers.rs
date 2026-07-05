@@ -31,9 +31,9 @@ pub(crate) async fn archive_head(
         Some(stat) => (StatusCode::OK, [("X-Docker-Container-Path-Stat", stat)]).into_response(),
         None => (
             StatusCode::NOT_FOUND,
-            Json(
-                json!({"message": format!("Could not find the file {} in container {id}", q.path)}),
-            ),
+            Json(crate::api::ErrorMessage {
+                message: format!("Could not find the file {} in container {id}", q.path),
+            }),
         )
             .into_response(),
     }
@@ -63,9 +63,9 @@ pub(crate) async fn archive_get(
     let Some(stat) = path_stat_b64(&host) else {
         return (
             StatusCode::NOT_FOUND,
-            Json(
-                json!({"message": format!("Could not find the file {} in container {id}", q.path)}),
-            ),
+            Json(crate::api::ErrorMessage {
+                message: format!("Could not find the file {} in container {id}", q.path),
+            }),
         )
             .into_response();
     };
@@ -101,13 +101,17 @@ pub(crate) async fn archive_get(
             );
             (
                 StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({"message": "failed to read archive from container"})),
+                Json(crate::api::ErrorMessage {
+                    message: "failed to read archive from container".into(),
+                }),
             )
                 .into_response()
         }
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,
-            Json(json!({"message": e.to_string()})),
+            Json(crate::api::ErrorMessage {
+                message: e.to_string(),
+            }),
         )
             .into_response(),
     }
@@ -153,7 +157,9 @@ pub(crate) async fn archive_put(
         crate::util::fsgen_bump(&cid);
         return (
             StatusCode::BAD_REQUEST,
-            Json(json!({"message": format!("extraction point {} is not a directory", q.path)})),
+            Json(crate::api::ErrorMessage {
+                message: format!("extraction point {} is not a directory", q.path),
+            }),
         )
             .into_response();
     }
@@ -196,7 +202,9 @@ pub(crate) async fn archive_put(
     // failed tar: a partial extraction is a mutation too. Stopped container: harmless no-op.
     crate::util::fsgen_bump(&cid);
     match out {
-        Ok(o) if o.status.success() => (StatusCode::OK, Json(json!({}))).into_response(),
+        Ok(o) if o.status.success() => {
+            (StatusCode::OK, Json(crate::api::Empty {})).into_response()
+        }
         Ok(o) => {
             eprintln!(
                 "archive_put: tar failed: {}",
@@ -204,13 +212,17 @@ pub(crate) async fn archive_put(
             );
             (
                 StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({"message": "failed to extract archive"})),
+                Json(crate::api::ErrorMessage {
+                message: "failed to extract archive".into(),
+            }),
             )
                 .into_response()
         }
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,
-            Json(json!({"message": e.to_string()})),
+            Json(crate::api::ErrorMessage {
+                message: e.to_string(),
+            }),
         )
             .into_response(),
     }

@@ -6,6 +6,7 @@
 // `Descriptor` fields). `Empty` serializes to `{}` so an image's `ExposedPorts`/`Volumes` re-materialize
 // as the docker set shape `{ "5432/tcp": {} }`.
 
+use super::ErrorMessage;
 use serde::Serialize;
 use serde_json::Value;
 use std::collections::{BTreeMap, HashMap};
@@ -177,4 +178,97 @@ pub(crate) struct Aux {
     pub tag: String,
     pub digest: String,
     pub size: i64,
+}
+
+// ---- pull progress stream --------------------------------------------------
+// The NDJSON status lines `docker pull` renders (`stream.rs`). Structurally identical to the push
+// `StreamStatus` — docker's lowercase `status`/`id` plus the camelCase `progressDetail` — but kept a
+// distinct type so pull/push wire shapes evolve independently. `Option` + skip reproduces the exact
+// per-line key set: the plain `Pulling from …`/`Digest: …`/`Status: …` lines carry only `status`
+// (no `id`, no `progressDetail`), so those keys must be OMITTED, not serialized as `null`. Reuses the
+// push-stream `ProgressDetail { current, total }` for the moving download/extract bars.
+#[derive(Serialize)]
+pub(crate) struct PullProgress {
+    pub status: String,
+    #[serde(rename = "progressDetail", skip_serializing_if = "Option::is_none")]
+    pub progress_detail: Option<ProgressDetail>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub id: Option<String>,
+}
+
+/// The pull stream's error line (`{"errorDetail": {"message": …}, "error": …}`). `errorDetail` is
+/// camelCase; both it and top-level `error` carry the same message. Reuses [`ErrorMessage`] for the
+/// nested `{"message": …}` object.
+#[derive(Serialize)]
+pub(crate) struct PullError {
+    #[serde(rename = "errorDetail")]
+    pub error_detail: ErrorMessage,
+    pub error: String,
+}
+
+#[cfg(test)]
+mod pull_tests {
+    use super::*;
+    use serde_json::json;
+
+    // A moving-bar line carries all three keys (status + progressDetail + id) in the docker shape.
+    #[test]
+    fn pull_progress_full_matches_inline_json() {
+        let dto = PullProgress {
+            status: "Downloading".into(),
+            progress_detail: Some(ProgressDetail {
+                current: 5,
+                total: 10,
+            }),
+            id: Some("abc123".into()),
+        };
+        assert_eq!(
+            serde_json::to_value(&dto).unwrap(),
+            json!({ "status": "Downloading", "progressDetail": { "current": 5, "total": 10 }, "id": "abc123" })
+        );
+    }
+
+    // A plain status line (`Digest:`/`Status:`) has NEITHER `progressDetail` NOR `id`: both must be
+    // OMITTED (skip_serializing_if), never emitted as `null`.
+    #[test]
+    fn pull_progress_status_only_omits_optional_keys() {
+        let dto = PullProgress {
+            status: "Digest: sha256:deadbeef".into(),
+            progress_detail: None,
+            id: None,
+        };
+        let v = serde_json::to_value(&dto).unwrap();
+        assert_eq!(v, json!({ "status": "Digest: sha256:deadbeef" }));
+        // Prove the keys are absent (skipped), not present-with-null.
+        assert!(v.get("progressDetail").is_none());
+        assert!(v.get("id").is_none());
+    }
+
+    // The bare `progressDetail` object.
+    #[test]
+    fn progress_detail_matches_inline_json() {
+        let dto = ProgressDetail {
+            current: 512,
+            total: 1024,
+        };
+        assert_eq!(
+            serde_json::to_value(&dto).unwrap(),
+            json!({ "current": 512, "total": 1024 })
+        );
+    }
+
+    // The error line: camelCase `errorDetail` wrapping `{message}`, plus top-level `error`.
+    #[test]
+    fn pull_error_matches_inline_json() {
+        let dto = PullError {
+            error_detail: ErrorMessage {
+                message: "pull failed".into(),
+            },
+            error: "pull failed".into(),
+        };
+        assert_eq!(
+            serde_json::to_value(&dto).unwrap(),
+            json!({ "errorDetail": { "message": "pull failed" }, "error": "pull failed" })
+        );
+    }
 }

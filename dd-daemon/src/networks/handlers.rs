@@ -83,11 +83,7 @@ pub(crate) async fn network_delete(State(a): State<App>, Path(id): Path<String>)
         .iter()
         .any(|n| net_matches(n, &id) && is_predefined(&n.name))
     {
-        return (
-            StatusCode::FORBIDDEN,
-            Json(json!({"message": "predefined network cannot be removed"})),
-        )
-            .into_response();
+        return forbidden("predefined network cannot be removed");
     }
     let removed = g
         .networks

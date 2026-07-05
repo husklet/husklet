@@ -35,19 +35,11 @@ pub(crate) async fn exec_create(
         .map(|c| c.status == "running" || c.status == "paused")
         .unwrap_or(false);
     if !running {
-        return (
-            StatusCode::CONFLICT,
-            Json(json!({"message": format!("Container {full} is not running")})),
-        )
-            .into_response();
+        return conflict(format!("Container {full} is not running"));
     }
     let cmd = body.cmd.unwrap_or_default();
     if cmd.is_empty() {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(json!({"message": "No exec command specified"})),
-        )
-            .into_response();
+        return bad_request("No exec command specified");
     }
     let exec_id = new_id(&format!("exec-{full}"));
     g.execs.insert(

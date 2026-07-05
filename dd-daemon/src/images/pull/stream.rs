@@ -2,8 +2,31 @@
 //! [`PullEvent`] → docker-shaped bar formatter, the synthetic-layer progress sequence, and the
 //! `X-Registry-Auth` decoder.
 use super::*;
+use crate::api::{ErrorMessage, ProgressDetail, PullError, PullProgress};
 use crate::registry::{Credentials, PullEvent};
 use serde_json::json;
+
+/// One `docker pull` status line as a docker-shaped JSON value, routed through the typed
+/// [`PullProgress`] DTO. Going through `to_value` (rather than serializing the struct directly) keeps
+/// the emitted bytes byte-identical to the old inline `json!` — both produce a `serde_json::Value`
+/// whose `to_string` renders keys in the same canonical order.
+fn pull_line(status: String, id: Option<String>, detail: Option<ProgressDetail>) -> Value {
+    serde_json::to_value(PullProgress {
+        status,
+        progress_detail: detail,
+        id,
+    })
+    .unwrap()
+}
+
+/// The pull stream's error line as a JSON value, via the typed [`PullError`] DTO.
+fn pull_error_line(e: String) -> Value {
+    serde_json::to_value(PullError {
+        error_detail: ErrorMessage { message: e.clone() },
+        error: e,
+    })
+    .unwrap()
+}
 
 /// Stream a fresh `docker pull` as newline-delimited JSON, flushing each status line as the download
 /// proceeds (mirrors the `events.rs` streamed-body pattern). A background task drives the blocking
@@ -35,7 +58,7 @@ pub(super) fn pull_stream(
             };
         }
         let repo = image_ref(&name, &tag).repository;
-        emit!(json!({ "status": format!("Pulling from {repo}"), "id": tag }));
+        emit!(pull_line(format!("Pulling from {repo}"), Some(tag.clone()), None));
         // The blocking pull reports progress over `pev`; forward+format each event into a status line.
         let (pev_tx, mut pev_rx) = mpsc::channel::<PullEvent>(256);
         let (dir, nm, tg) = (a.images_dir.clone(), name.clone(), tag.clone());
@@ -60,12 +83,14 @@ pub(super) fn pull_stream(
                     g.images.push(img);
                 }
                 crate::events::emit_event(&a.events, "image", "pull", &want, json!({"name": want}));
-                emit!(json!({ "status": format!("Digest: {digest}") }));
-                emit!(
-                    json!({ "status": format!("Status: Downloaded newer image for {name}:{tag}") })
-                );
+                emit!(pull_line(format!("Digest: {digest}"), None, None));
+                emit!(pull_line(
+                    format!("Status: Downloaded newer image for {name}:{tag}"),
+                    None,
+                    None
+                ));
             }
-            Err(e) => emit!(json!({ "errorDetail": { "message": e.clone() }, "error": e })),
+            Err(e) => emit!(pull_error_line(e)),
         }
     });
     let body = futures_util::stream::unfold(line_rx, |mut rx| async move {
@@ -83,15 +108,29 @@ pub(super) fn pull_stream(
 /// Format one live [`PullEvent`] into the docker-shaped JSON status object the CLI renders as a bar.
 fn pull_event_json(e: &PullEvent) -> Value {
     match e {
-        PullEvent::Layer { id } => json!({ "status": "Pulling fs layer", "id": id }),
-        PullEvent::Downloading { id, current, total } => {
-            json!({ "status": "Downloading", "progressDetail": { "current": current, "total": total }, "id": id })
+        PullEvent::Layer { id } => pull_line("Pulling fs layer".into(), Some(id.clone()), None),
+        PullEvent::Downloading { id, current, total } => pull_line(
+            "Downloading".into(),
+            Some(id.clone()),
+            Some(ProgressDetail {
+                current: *current as i64,
+                total: *total as i64,
+            }),
+        ),
+        PullEvent::DownloadComplete { id } => {
+            pull_line("Download complete".into(), Some(id.clone()), None)
         }
-        PullEvent::DownloadComplete { id } => json!({ "status": "Download complete", "id": id }),
-        PullEvent::Extracting { id, current, total } => {
-            json!({ "status": "Extracting", "progressDetail": { "current": current, "total": total }, "id": id })
+        PullEvent::Extracting { id, current, total } => pull_line(
+            "Extracting".into(),
+            Some(id.clone()),
+            Some(ProgressDetail {
+                current: *current as i64,
+                total: *total as i64,
+            }),
+        ),
+        PullEvent::PullComplete { id } => {
+            pull_line("Pull complete".into(), Some(id.clone()), None)
         }
-        PullEvent::PullComplete { id } => json!({ "status": "Pull complete", "id": id }),
     }
 }
 
@@ -121,7 +160,11 @@ pub(crate) fn pull_progress(
     let body = match result {
         Ok(true) => format!(
             "{}\r\n",
-            json!({ "status": format!("Status: Image is up to date for {name}:{tag}") })
+            pull_line(
+                format!("Status: Image is up to date for {name}:{tag}"),
+                None,
+                None
+            )
         ),
         Ok(false) => {
             let repo = image_ref(name, tag).repository;
@@ -132,22 +175,21 @@ pub(crate) fn pull_progress(
                 .collect::<String>();
             let layer = layer_id.as_str();
             let half = (size / 2).max(0);
+            let id = || Some(layer.to_string());
             [
-                json!({ "status": format!("Pulling from {repo}"), "id": tag }).to_string(),
-                json!({ "status": "Pulling fs layer", "id": layer }).to_string(),
-                json!({ "status": "Downloading", "progressDetail": { "current": half, "total": size }, "id": layer }).to_string(),
-                json!({ "status": "Downloading", "progressDetail": { "current": size, "total": size }, "id": layer }).to_string(),
-                json!({ "status": "Verifying Checksum", "id": layer }).to_string(),
-                json!({ "status": "Download complete", "id": layer }).to_string(),
-                json!({ "status": "Extracting", "progressDetail": { "current": size, "total": size }, "id": layer }).to_string(),
-                json!({ "status": "Pull complete", "id": layer }).to_string(),
-                json!({ "status": format!("Digest: {digest}") }).to_string(),
-                json!({ "status": format!("Status: Downloaded newer image for {name}:{tag}") }).to_string(),
+                pull_line(format!("Pulling from {repo}"), Some(tag.to_string()), None).to_string(),
+                pull_line("Pulling fs layer".into(), id(), None).to_string(),
+                pull_line("Downloading".into(), id(), Some(ProgressDetail { current: half, total: size })).to_string(),
+                pull_line("Downloading".into(), id(), Some(ProgressDetail { current: size, total: size })).to_string(),
+                pull_line("Verifying Checksum".into(), id(), None).to_string(),
+                pull_line("Download complete".into(), id(), None).to_string(),
+                pull_line("Extracting".into(), id(), Some(ProgressDetail { current: size, total: size })).to_string(),
+                pull_line("Pull complete".into(), id(), None).to_string(),
+                pull_line(format!("Digest: {digest}"), None, None).to_string(),
+                pull_line(format!("Status: Downloaded newer image for {name}:{tag}"), None, None).to_string(),
             ].join("\r\n") + "\r\n"
         }
-        Err(e) => {
-            json!({ "errorDetail": { "message": e.clone() }, "error": e }).to_string() + "\r\n"
-        }
+        Err(e) => pull_error_line(e).to_string() + "\r\n",
     };
     (StatusCode::OK, [("Content-Type", "application/json")], body).into_response()
 }

@@ -8,7 +8,7 @@ use super::*;
 /// `docker build`) and the persistent JIT translated-code cache (~/.dd/pcache, surfaced as `system df`
 /// BuilderSize). Both are fully reclaimable — layers re-snapshot on the next build, pcache re-translates
 /// on demand — so a wholesale drop only forces a one-time recompute.
-pub(crate) async fn build_prune() -> axum::Json<serde_json::Value> {
+pub(crate) async fn build_prune() -> axum::Json<crate::api::BuildPruneReport> {
     let (mut deleted, mut reclaimed) = (Vec::new(), 0i64);
     // 1) the build layer cache: one dir per cached step under ~/.dd/buildcache/layers.
     let layers = crate::util::buildcache_dir().join("layers");
@@ -38,7 +38,10 @@ pub(crate) async fn build_prune() -> axum::Json<serde_json::Value> {
             }
         }
     }
-    axum::Json(serde_json::json!({"CachesDeleted": deleted, "SpaceReclaimed": reclaimed}))
+    axum::Json(crate::api::BuildPruneReport {
+        caches_deleted: deleted,
+        space_reclaimed: reclaimed,
+    })
 }
 
 #[derive(Deserialize)]
@@ -110,7 +113,9 @@ pub(crate) async fn commit_container(State(a): State<App>, Query(q): Query<Commi
     if rootfs.is_empty() || rootfs == "/" {
         return (
             StatusCode::BAD_REQUEST,
-            Json(json!({"message": "cannot commit a container with a host-filesystem rootfs"})),
+            Json(crate::api::ErrorMessage {
+                message: "cannot commit a container with a host-filesystem rootfs".into(),
+            }),
         )
             .into_response();
     }
@@ -137,7 +142,9 @@ pub(crate) async fn commit_container(State(a): State<App>, Query(q): Query<Commi
     if let Err(e) = std::fs::create_dir_all(&target) {
         return (
             StatusCode::INTERNAL_SERVER_ERROR,
-            Json(json!({"message": format!("commit: {e}")})),
+            Json(crate::api::ErrorMessage {
+                message: format!("commit: {e}"),
+            }),
         )
             .into_response();
     }
@@ -164,7 +171,9 @@ pub(crate) async fn commit_container(State(a): State<App>, Query(q): Query<Commi
         let _ = std::fs::remove_dir_all(&target);
         return (
             StatusCode::INTERNAL_SERVER_ERROR,
-            Json(json!({"message": "commit: failed to snapshot rootfs"})),
+            Json(crate::api::ErrorMessage {
+                message: "commit: failed to snapshot rootfs".into(),
+            }),
         )
             .into_response();
     }
@@ -214,7 +223,9 @@ pub(crate) async fn commit_container(State(a): State<App>, Query(q): Query<Commi
     crate::events::emit_event(&a.events, "image", "commit", &id, json!({"name": key}));
     (
         StatusCode::CREATED,
-        Json(json!({"Id": format!("sha256:{id}")})),
+        Json(crate::api::CommitResponse {
+            id: format!("sha256:{id}"),
+        }),
     )
         .into_response()
 }
