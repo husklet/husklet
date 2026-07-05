@@ -326,7 +326,7 @@ fn ping_socket(sock: &std::path::Path) -> bool {
         Err(_) => return false,
     };
     rt.block_on(async {
-        let c = dd_daemon::client::Client::new(sock);
+        let c = dd_client::Client::new(sock);
         c.ping().await.is_ok()
     })
 }

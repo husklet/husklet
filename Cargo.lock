@@ -324,10 +324,19 @@ name = "dd-cli"
 version = "0.4.0"
 dependencies = [
  "clap",
- "dd-daemon",
+ "dd-client",
  "serde_json",
  "sha2",
  "tokio",
+]
+
+[[package]]
+name = "dd-client"
+version = "0.4.0"
+dependencies = [
+ "bollard",
+ "bytes",
+ "futures-util",
 ]
 
 [[package]]
@@ -335,8 +344,6 @@ name = "dd-daemon"
 version = "0.4.0"
 dependencies = [
  "axum",
- "bollard",
- "bytes",
  "dd-images",
  "dd-jit",
  "futures-util",
@@ -353,7 +360,7 @@ dependencies = [
 name = "dd-gui"
 version = "0.4.0"
 dependencies = [
- "dd-daemon",
+ "dd-client",
  "gtk4",
  "objc2",
  "objc2-app-kit",

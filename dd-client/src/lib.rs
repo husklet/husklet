@@ -1,11 +1,11 @@
-//! `ddclient` — the shared client both the dd GUI and CLI use to talk to **dd-daemon** over its
+//! `dd-client` — the shared client both the dd GUI and CLI use to talk to **dd-daemon** over its
 //! Unix socket. The wire transport is [`bollard`] (the mature Docker-Engine-API crate); this crate
 //! wraps it behind a small façade with dd-specific view models, so the consumers depend on one
 //! place and never touch bollard's types directly.
 //!
 //! ```no_run
-//! # async fn ex() -> Result<(), ddclient::Error> {
-//! let c = ddclient::Client::new("/Users/me/.dd/run/docker.sock");
+//! # async fn ex() -> Result<(), dd_client::Error> {
+//! let c = dd_client::Client::new("/Users/me/.dd/run/docker.sock");
 //! if c.ping().await.is_ok() {
 //!     for ct in c.list_containers().await? { println!("{} {}", ct.id, ct.image); }
 //! }
