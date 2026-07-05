@@ -43,10 +43,7 @@ pub(crate) async fn containers_update(
 pub(crate) async fn containers_export(State(a): State<App>, Path(id): Path<String>) -> Response {
     let rootfs = {
         let g = a.inner.lock().await;
-        match resolve_cid(&g, &id)
-            .and_then(|f| g.containers.get(&f))
-            .map(|c| c.rootfs.clone())
-        {
+        match resolve_get(&g, &id).map(|(_, c)| c.rootfs.clone()) {
             Some(r) => r,
             None => return no_such(&id),
         }

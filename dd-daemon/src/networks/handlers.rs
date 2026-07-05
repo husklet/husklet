@@ -154,9 +154,7 @@ pub(crate) async fn network_connect(
     let mut g = a.inner.lock().await;
     // Resolve to a full container id + its reported name before mutating networks (avoids borrowing
     // `g.networks` mutably while `g.containers` is borrowed immutably).
-    let (cid, cname) = match resolve_cid(&g, &req)
-        .and_then(|f| g.containers.get(&f).map(|c| (f.clone(), endpoint_name(c))))
-    {
+    let (cid, cname) = match resolve_get(&g, &req).map(|(f, c)| (f, endpoint_name(c))) {
         Some(t) => t,
         None => (req.clone(), req.clone()),
     };
