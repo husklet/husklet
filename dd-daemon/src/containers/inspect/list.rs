@@ -68,9 +68,12 @@ pub(crate) async fn containers_json(
         g.containers
             .values()
             .filter(|c| {
+                // Default `docker ps` (no -a) lists containers with State.Running == true, which in
+                // Moby INCLUDES paused ones (rendered "Up … (Paused)"), plus restarting.
                 all || status_filter
                     || order_filter
                     || c.status == "running"
+                    || c.status == "paused"
                     || c.status == "restarting"
             })
             .filter(|c| {
