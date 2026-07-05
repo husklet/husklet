@@ -1,18 +1,24 @@
 //! The docker `--user`/`Config.User` spec resolver ([`resolve_user`]).
 
 /// Resolve a docker `--user`/`Config.User` spec to a numeric `(uid, gid)` against a container `rootfs`.
-/// Accepts every docker form: `uid`, `name`, `uid:gid`, `name:group`, `uid:group`, `name:gid`. A numeric
-/// component is taken verbatim (no file access); a NAME is looked up in `<rootfs>/etc/passwd` (user) or
-/// `<rootfs>/etc/group` (group). With no group, a NAME uses its passwd primary gid while a numeric uid
-/// defaults to gid 0 (docker semantics). Returns `None` if a name component can't be resolved.
+/// Accepts every docker form: `uid`, `name`, `uid:gid`, `name:group`, `uid:group`, `name:gid`. A NAME is
+/// looked up in `<rootfs>/etc/passwd` (user) or `<rootfs>/etc/group` (group). With no explicit group, the
+/// primary gid is inherited from the matching passwd entry — which runc matches by NAME **or numeric
+/// uid** (`u.Name == arg || itoa(u.Uid) == arg`), so `--user 70` on an image with `postgres:x:70:70`
+/// runs gid 70, not gid 0. A numeric uid with no passwd entry falls back to gid 0. Returns `None` if a
+/// name component can't be resolved.
 pub fn resolve_user(rootfs: &str, spec: &str) -> Option<(u32, u32)> {
     let (us, gs) = spec.split_once(':').map_or((spec, None), |(u, g)| (u, Some(g)));
-    // passwd line: name:passwd:uid:gid:gecos:home:shell — return (uid, primary gid) for a name match.
-    let lookup_passwd = |name: &str| -> Option<(u32, u32)> {
+    // passwd line: name:passwd:uid:gid:gecos:home:shell. Match by NAME or by the numeric-uid string
+    // (runc GetExecUser semantics); return (uid, primary gid).
+    let lookup_passwd = |arg: &str| -> Option<(u32, u32)> {
         let passwd = std::fs::read_to_string(format!("{rootfs}/etc/passwd")).ok()?;
         passwd.lines().find_map(|l| {
             let f: Vec<&str> = l.split(':').collect();
-            (f.len() >= 4 && f[0] == name).then(|| Some((f[2].parse().ok()?, f[3].parse().ok()?)))?
+            if f.len() < 4 || (f[0] != arg && f[2] != arg) {
+                return None;
+            }
+            Some((f[2].parse().ok()?, f[3].parse().ok()?))
         })
     };
     // group line: name:passwd:gid:members — return the gid for a name match.
@@ -24,7 +30,10 @@ pub fn resolve_user(rootfs: &str, spec: &str) -> Option<(u32, u32)> {
         })
     };
     let (uid, primary_gid) = match us.parse::<u32>() {
-        Ok(n) => (n, None),
+        // Numeric uid: still consult passwd (matched by uid) to inherit its primary gid like runc; a uid
+        // with no passwd entry falls back to gid 0 below.
+        Ok(n) => (n, lookup_passwd(us).map(|(_, g)| g)),
+        // Name: must resolve in passwd.
         Err(_) => {
             let (u, g) = lookup_passwd(us)?;
             (u, Some(g))
@@ -85,6 +94,19 @@ mod tests {
     fn resolve_user_name_uses_passwd_primary_gid() {
         let dir = make_rootfs("name", Some(PASSWD), Some(GROUP));
         assert_eq!(resolve_user(dir.to_str().unwrap(), "postgres"), Some((70, 70)));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn resolve_user_numeric_uid_inherits_passwd_primary_gid() {
+        // Regression: a NUMERIC uid that matches a passwd entry inherits that entry's primary gid (runc
+        // matches passwd by name OR numeric uid) — `--user 70` on postgres:x:70:70 => gid 70, not 0.
+        let dir = make_rootfs("numgid", Some(PASSWD), Some(GROUP));
+        assert_eq!(resolve_user(dir.to_str().unwrap(), "70"), Some((70, 70)));
+        // A numeric uid with NO matching passwd entry still falls back to gid 0.
+        assert_eq!(resolve_user(dir.to_str().unwrap(), "1234"), Some((1234, 0)));
+        // An explicit group still overrides the passwd primary gid.
+        assert_eq!(resolve_user(dir.to_str().unwrap(), "70:50"), Some((70, 50)));
         let _ = std::fs::remove_dir_all(&dir);
     }
 

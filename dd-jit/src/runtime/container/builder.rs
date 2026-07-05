@@ -27,10 +27,11 @@ impl ContainerBuilder {
         self
     }
 
-    /// Working directory inside the container.
-    pub fn workdir(mut self, dir: impl Into<String>) -> Self {
-        self.cfg.work_dir = dir.into();
-        self
+    /// The guest's initial working directory (docker `-w`/`WorkingDir`) — an alias for [`Self::cwd`].
+    /// (For the HOST cwd used to resolve relative rootfs paths, use [`Self::host_workdir`] instead; this
+    /// used to set that by mistake, contradicting its name.)
+    pub fn workdir(self, dir: impl Into<String>) -> Self {
+        self.cwd(dir)
     }
 
     /// Run as this uid (defaults to root/0).
