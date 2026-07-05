@@ -1,11 +1,14 @@
 use super::*;
 
+mod etchosts;
 mod live;
 mod net;
+mod spec;
 mod tmpfs;
 
 pub(crate) use live::*;
 pub(crate) use tmpfs::*;
+use spec::*;
 
 /// Docker's default container PATH (moby's `system.DefaultPathEnv` for unix). Used when neither the
 /// image config nor a `-e PATH=` override supplies one, so bare commands in the standard sbin/bin dirs
@@ -44,19 +47,11 @@ pub(crate) fn spawn_container(
         // the daemon/host environment.
         .guest_env(&c.env, c.tty)
         // Effective UTS hostname: the user's `--hostname`, else Docker's default 12-char short id.
-        .hostname(if c.hostname.is_empty() {
-            c.id[..c.id.len().min(12)].to_string()
-        } else {
-            c.hostname.clone()
-        })
+        .hostname(etchosts::eff_hostname(&c.id, &c.hostname))
         .memory_bytes(c.memory.max(0) as u64)
         .pids(c.pids_limit.max(0) as u32)
         // `--cpus`: NanoCpus -> ceil to whole online CPUs (0 = unlimited).
-        .cpus(if c.nano_cpus > 0 {
-            ((c.nano_cpus + 999_999_999) / 1_000_000_000) as u32
-        } else {
-            0
-        })
+        .cpus(nano_cpus_to_cpus(c.nano_cpus))
         .read_only(c.readonly_rootfs);
     for u in &c.ulimits {
         b = b.ulimit(u.name.clone(), u.soft.max(0) as u64, u.hard.max(0) as u64);
@@ -89,26 +84,11 @@ pub(crate) fn spawn_container(
     b = b.user_spec(&c.rootfs, &c.user);
     // `--security-opt sandbox`/`untrusted`: run under the untrusted-guest sentry (deny-default OS sandbox
     // + syscall forwarding). The daemon-wide default sandbox (operator env) is owned by dd_jit::Runtime.
-    let sandbox = c.security_opt.iter().any(|o| {
-        let o = o.to_ascii_lowercase();
-        o.contains("sandbox") || o.contains("untrusted")
-    });
-    b = b.sandbox(sandbox);
-    // Resolve a mount source to a host path: an absolute path is a bind; anything else is a named volume
-    // (its registered mountpoint or a dir under `volumes_dir`). Shared by `-v`/Binds and `--mount`.
-    let resolve_src = |src: &str| -> String {
-        if src.starts_with('/') {
-            src.to_string()
-        } else if let Some(v) = vols.iter().find(|v| v.name == src) {
-            v.mountpoint.clone()
-        } else {
-            PathBuf::from(volumes_dir).join(src).to_string_lossy().into_owned()
-        }
-    };
+    b = b.sandbox(wants_sandbox(&c.security_opt));
     // `-v src:dst[:opts]` / Binds. `ro` marks the mount read-only (write-intent EROFS under the mount).
     for bd in &c.binds {
         if let Some((host, dst, ro)) = parse_bind(bd) {
-            b = b.bind(resolve_src(host), dst, ro);
+            b = b.bind(resolve_mount_src(host, volumes_dir, vols), dst, ro);
         }
     }
     // `--mount` / HostConfig.Mounts: type=bind Source is a host path; type=volume Source is a named volume.
@@ -116,7 +96,11 @@ pub(crate) fn spawn_container(
         if m.target.is_empty() {
             continue;
         }
-        let host = if m.typ == "bind" { m.source.clone() } else { resolve_src(&m.source) };
+        let host = if m.typ == "bind" {
+            m.source.clone()
+        } else {
+            resolve_mount_src(&m.source, volumes_dir, vols)
+        };
         if host.is_empty() {
             continue;
         }
@@ -158,16 +142,7 @@ pub(crate) fn spawn_container(
         if !have_path {
             b = b.env("PATH", "/profile/bin:/usr/bin:/bin");
         }
-        let wrapper = format!("{}/profile/bin/bash", c.rootfs);
-        let mut argv = c.cmd.clone();
-        if argv.is_empty() {
-            argv = vec!["bash".into()];
-        } else if matches!(argv[0].as_str(), "/bin/sh" | "sh" | "/bin/bash" | "bash") {
-            argv[0] = "bash".into();
-        }
-        let mut wrapped = vec![wrapper, "-c".into(), "exec \"$@\"".into(), "dd-mac".into()];
-        wrapped.extend(argv);
-        b = b.argv(wrapped);
+        b = b.argv(darwin_wrapped_argv(&c.rootfs, &c.cmd));
     }
     b.build().ok()
 }
