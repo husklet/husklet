@@ -124,32 +124,52 @@ pub(crate) fn leave_network(n: &mut Net, cid: &str) {
     n.endpoints.remove(cid);
 }
 
-pub(crate) fn net_json(n: &Net) -> Value {
+pub(crate) fn net_json(n: &Net) -> crate::api::NetworkJson {
+    use crate::api::{Ipam, IpamConfig, NetContainer, NetworkJson};
     let prefix = subnet_prefix(&n.subnet);
-    let containers: HashMap<String, Value> = n
+    let containers: HashMap<String, NetContainer> = n
         .endpoints
         .iter()
         .map(|(cid, e)| {
             (
                 cid.clone(),
-                json!({"Name": e.name, "EndpointID": cid, "MacAddress": ip_mac(&e.ip),
-            "IPv4Address": format!("{}/{}", e.ip, prefix), "IPv6Address": ""}),
+                NetContainer {
+                    name: e.name.clone(),
+                    endpoint_id: cid.clone(),
+                    mac_address: ip_mac(&e.ip),
+                    ipv4_address: format!("{}/{}", e.ip, prefix),
+                    ipv6_address: String::new(),
+                },
             )
         })
         .collect();
     let config = if n.subnet.is_empty() {
-        json!([])
+        vec![]
     } else {
-        json!([{"Subnet": n.subnet, "Gateway": n.gateway}])
+        vec![IpamConfig {
+            subnet: n.subnet.clone(),
+            gateway: n.gateway.clone(),
+        }]
     };
-    json!({"Id": n.id, "Name": n.name, "Driver": n.driver, "Scope": n.scope,
-        "Containers": containers, "Created": fmt_rfc3339(n.created), "EnableIPv6": false, "Internal": false,
-        "IPAM": {"Driver": "default", "Config": config}})
+    NetworkJson {
+        id: n.id.clone(),
+        name: n.name.clone(),
+        driver: n.driver.clone(),
+        scope: n.scope.clone(),
+        containers,
+        created: fmt_rfc3339(n.created),
+        enable_ipv6: false,
+        internal: false,
+        ipam: Ipam {
+            driver: "default",
+            config,
+        },
+    }
 }
 
-pub(crate) async fn networks_list(State(a): State<App>) -> Json<Value> {
+pub(crate) async fn networks_list(State(a): State<App>) -> Json<Vec<crate::api::NetworkJson>> {
     let g = a.inner.lock().await;
-    Json(json!(g.networks.iter().map(net_json).collect::<Vec<_>>()))
+    Json(g.networks.iter().map(net_json).collect::<Vec<_>>())
 }
 
 #[derive(Deserialize)]

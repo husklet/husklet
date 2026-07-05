@@ -17,7 +17,7 @@ use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use futures_util::stream;
 use serde::Deserialize;
-use serde_json::{json, Value};
+use serde_json::Value;
 use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::sync::broadcast;
 
@@ -47,26 +47,34 @@ pub(crate) fn emit_event(bus: &EventBus, type_: &str, action: &str, id: &str, at
     };
     let attributes = match attrs {
         Value::Object(m) => Value::Object(m),
-        _ => json!({}),
+        _ => Value::Object(serde_json::Map::new()),
     };
     // Docker's event document. `Type`/`Action`/`Actor` are the modern fields; `status`/`id`/`from`
     // are the legacy top-level aliases older clients still read for container events.
-    let mut ev = json!({
-        "Type": type_,
-        "Action": action,
-        "Actor": { "ID": id, "Attributes": attributes },
-        "scope": "local",
-        "time": secs,
-        "timeNano": nanos,
-    });
+    let mut ev = crate::api::Event {
+        type_: type_.to_string(),
+        action: action.to_string(),
+        actor: crate::api::Actor {
+            id: id.to_string(),
+            attributes,
+        },
+        scope: "local",
+        time: secs,
+        time_nano: nanos,
+        status: None,
+        id: None,
+        from: None,
+    };
     if type_ == "container" {
-        ev["status"] = json!(action);
-        ev["id"] = json!(id);
-        if let Some(image) = ev["Actor"]["Attributes"]["image"].as_str() {
-            ev["from"] = json!(image);
+        ev.status = Some(action.to_string());
+        ev.id = Some(id.to_string());
+        if let Some(image) = ev.actor.attributes["image"].as_str() {
+            ev.from = Some(image.to_string());
         }
     }
-    let _ = bus.send(ev); // Err == no receivers; fine.
+    // The bus carries `Value` (the `/events` stream re-serializes it and `Filters::matches` reads it
+    // by key), so convert the typed DTO once here.
+    let _ = bus.send(serde_json::to_value(&ev).unwrap_or_default()); // Err == no receivers; fine.
 }
 
 #[derive(Deserialize, Default)]

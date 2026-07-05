@@ -27,6 +27,7 @@ use tokio::sync::Mutex;
 
 use dd_images::registry;
 
+mod api;
 mod archive;
 mod build;
 mod containers;
