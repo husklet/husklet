@@ -605,7 +605,14 @@ pub(crate) async fn containers_create(
     );
     g.containers.insert(id.clone(), c);
     save_state(&g, &a.state_path);
-    (StatusCode::CREATED, Json(json!({"Id": id, "Warnings": []}))).into_response()
+    (
+        StatusCode::CREATED,
+        Json(crate::api::CreateResponse {
+            id,
+            warnings: vec![],
+        }),
+    )
+        .into_response()
 }
 
 pub(crate) async fn containers_start(State(a): State<App>, Path(id): Path<String>) -> Response {
