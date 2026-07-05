@@ -22,6 +22,29 @@ static void rc_reset(void);
 static int oc_lookup(const char *g, char *out, size_t n);
 static void oc_store(const char *g, const char *host);
 static void oc_reset(void);
+// POSIX shm / named-sem backing path. glibc's shm_open/sem_open create files under /dev/shm; the guest's
+// synthesized /dev tmpfs has no real host tmpfs behind it, so /dev/shm/<name> is redirected to a REAL host
+// file that MAP_SHARED + fork can share coherently. In CONTAINER mode the backing lives inside the overlay
+// upper's own /dev/shm dir (<rootfs_canon>/dev/shm/<name>): the segment is then PER-CONTAINER (no
+// cross-container /tmp collision -- two `postgres` containers no longer alias the same DSM segment), it is
+// VISIBLE to `ls /dev/shm`/stat/df through the normal overlay machinery (the file physically sits in the
+// upper), and it is cleared when the container rootfs is torn down -- matching docker's per-container tmpfs.
+// In direct (no-rootfs) mode there is no container to scope to, so fall back to a flat /tmp file. Embedded
+// slashes in <name> are flattened so a segment can never escape the shm dir (glibc forbids them anyway).
+// Returns buf, or NULL when `guest` is not a "/dev/shm/<name>" path. g_rootfs_canon is defined in vfs.c,
+// which is #included ahead of this file in the unity TU.
+static const char *shm_backing_path(const char *guest, char *buf, size_t n) {
+    if (!guest || guest[0] != '/' || strncmp(guest, "/dev/shm/", 9)) return NULL;
+    const char *name = guest + 9;
+    int pfx = g_rootfs_canon[0] ? snprintf(buf, n, "%s/dev/shm/", g_rootfs_canon)
+                                : snprintf(buf, n, "/tmp/.ddshm-");
+    if (pfx < 0 || pfx >= (int)n - 1) return NULL;
+    int m = pfx + snprintf(buf + pfx, n - (size_t)pfx, "%s", name);
+    if (m > (int)n - 1) m = (int)n - 1;
+    for (int i = pfx; i < m; i++)
+        if (buf[i] == '/') buf[i] = '_';
+    return buf;
+}
 // Rewrite ABSOLUTE guest paths into the rootfs; relative paths pass through (resolved
 // against the dir-fd by the *at syscall, e.g. ls stat-ing entries relative to a dir).
 // nofollow=1 leaves the FINAL component unresolved (lstat/AT_SYMLINK_NOFOLLOW unlink), so a
@@ -29,15 +52,12 @@ static void oc_reset(void);
 static const char *atpath(int dirfd, const char *raw, char *buf, size_t n, int nofollow) {
     if (!raw) return raw;
     // POSIX shm + named semaphores: glibc backs both with files under /dev/shm (shm_open -> /dev/shm/<name>,
-    // sem_open -> /dev/shm/sem.<name>). The rootfs has no tmpfs, so route EVERY op (open/link/unlink/stat/
-    // rename) at a stable host file -- the SAME mapping the open(2) handler uses (case 56) -- so glibc's
+    // sem_open -> /dev/shm/sem.<name>). Route EVERY op (open/link/unlink/stat/rename) at the SAME host
+    // backing the open(2) handler uses (case 56, via shm_hostpath -> shm_backing_path), so glibc's
     // multi-step named-sem create (temp file + link to the final name) and sem_unlink all resolve together.
-    if (raw[0] == '/' && !strncmp(raw, "/dev/shm/", 9)) {
-        int m = snprintf(buf, n, "/tmp/.ddshm-%s", raw + 9);
-        if (m > (int)n - 1) m = (int)n - 1;
-        for (int i = 12; i < m; i++)
-            if (buf[i] == '/') buf[i] = '_';
-        return buf;
+    {
+        const char *shp = shm_backing_path(raw, buf, n);
+        if (shp) return shp;
     }
     // absolute -> rootfs-relative + confine (final component followed unless nofollow)
     if (raw[0] == '/') {
