@@ -32,6 +32,15 @@ pub(crate) fn resolve_cid(g: &Inner, id: &str) -> Option<String> {
         })
 }
 
+/// Resolve a container ref to its (full id, &Container) in one immutable borrow of `g`.
+/// `None` if the ref doesn't resolve or the container is gone. The returned reference
+/// borrows `g` for `'g`, so callers clone out any fields they need inside the borrow.
+pub(crate) fn resolve_get<'g>(g: &'g Inner, id: &str) -> Option<(String, &'g Container)> {
+    let full = resolve_cid(g, id)?;
+    let c = g.containers.get(&full)?;
+    Some((full, c))
+}
+
 /// A cheap, stable hex id for a built image (not a real digest — just a handle for the CLI).
 pub(crate) fn md5_like(s: &str) -> u64 {
     let mut h: u64 = 0xcbf29ce484222325;

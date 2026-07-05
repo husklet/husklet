@@ -186,7 +186,7 @@ pub(crate) async fn archive_head(
     Query(q): Query<ArchiveQ>,
 ) -> Response {
     let g = a.inner.lock().await;
-    let Some(c) = resolve_cid(&g, &id).and_then(|f| g.containers.get(&f)) else {
+    let Some((_, c)) = resolve_get(&g, &id) else {
         return no_such(&id);
     };
     let binds: Vec<String> = c
@@ -221,7 +221,7 @@ pub(crate) async fn archive_get(
 ) -> Response {
     let (upper, rootfs, binds) = {
         let g = a.inner.lock().await;
-        let Some(c) = resolve_cid(&g, &id).and_then(|f| g.containers.get(&f)) else {
+        let Some((_, c)) = resolve_get(&g, &id) else {
             return no_such(&id);
         };
         (
