@@ -1,37 +1,10 @@
 #![allow(unused_imports, dead_code)]
-use crate::archive::*;
-use crate::containers::*;
-use crate::images::*;
-use crate::model::*;
-use crate::networks::*;
-use crate::registry::{Client, Credentials, ImageRef};
-use crate::runtime::*;
-use crate::system::*;
-use crate::util::*;
-use crate::volumes::*;
-use axum::body::Body;
-use axum::extract::{Path, Query, Request, State};
-use axum::http::{HeaderMap, StatusCode, Uri};
-use axum::response::{IntoResponse, Response};
-use axum::Json;
-use ddjit::{Guest, PortMap, SpawnConfig, Volume};
-use hyper_util::rt::TokioIo;
-use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
-use std::collections::HashMap;
-use std::os::fd::{AsRawFd, FromRawFd, OwnedFd, RawFd};
-use std::path::PathBuf;
-use std::process::Stdio;
-use std::sync::Arc;
-use std::time::{SystemTime, UNIX_EPOCH};
-use tokio::io::unix::AsyncFd;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::sync::{broadcast, mpsc, watch, Mutex};
+//! The `POST /build` axum handler: request/`--build-arg`/`--target`/`--no-cache`/`--label` parsing, the
+//! multi-stage step-loop driver with the content-addressed build layer cache, and final image
+//! registration + progress/response streaming. Per-instruction execution (RUN/COPY/ADD) and the
+//! cache-descriptor live in `steps`; shared helpers/types come from `mod.rs` via `use super::*`.
+use super::*;
 
-// ===================== docker build — a minimal Dockerfile builder =====================
-// Not BuildKit: we copy the base image's rootfs, run each RUN in the JIT (writes persist in the new
-// rootfs), COPY from the build context, track ENV/WORKDIR/CMD/ENTRYPOINT, and register the result as an
-// image. Reuses pull (base must be local), the JIT spawn, the archive path-mapper, and image registration.
 #[derive(Deserialize)]
 pub(crate) struct BuildQ {
     t: Option<String>,
@@ -45,31 +18,6 @@ pub(crate) struct BuildQ {
     // `docker build --label K=V` -> a URL-encoded JSON object, e.g. {"team":"infra"}; applied over
     // any `LABEL` instructions in the Dockerfile.
     labels: Option<String>,
-}
-
-// Dockerfile parsing (`parse_dockerfile`/`substitute_args`/`parse_exec_form`/`parse_labels`) and the
-// content-addressed build **layer cache** (`BuildCache`, `cache_id`, `is_fs_inst`, the rootfs/path
-// digests + `sha256_hex`) now live in `dd_images::build` — runtime-agnostic building primitives. This
-// module keeps only the daemon-side orchestration: driving the step loop, running each `RUN` in the JIT,
-// and registering the result as a daemon `Image`. Re-export the parsing helpers so `crate::build::*`
-// call sites keep resolving.
-pub(crate) use dd_images::build::{
-    cache_id, is_fs_inst, parse_dockerfile, parse_exec_form, parse_labels, path_digest,
-    rootfs_digest, sha256_hex, substitute_args, BuildCache,
-};
-
-pub(crate) fn build_stream(lines: Vec<String>) -> Response {
-    (
-        StatusCode::OK,
-        [("Content-Type", "application/json")],
-        lines.join("\n") + "\n",
-    )
-        .into_response()
-}
-
-pub(crate) fn build_err(mut lines: Vec<String>, msg: String) -> Response {
-    lines.push(json!({"errorDetail": {"message": msg.clone()}, "error": msg}).to_string());
-    build_stream(lines)
 }
 
 pub(crate) async fn images_build(
@@ -212,55 +160,7 @@ pub(crate) async fn images_build(
             // descriptor = normalized instruction; COPY/ADD fold in a content digest of each source so a
             // changed build context invalidates; ARG folds in its *resolved* value so --build-arg changes
             // invalidate the rest of the build even when the arg is unreferenced.
-            let desc = match inst.as_str() {
-                "COPY" | "ADD" => {
-                    let from_stage = args
-                        .split_whitespace()
-                        .find_map(|p| p.strip_prefix("--from="));
-                    let parts: Vec<&str> = args
-                        .split_whitespace()
-                        .filter(|p| !p.starts_with("--"))
-                        .collect();
-                    let mut d = format!("{inst} {args}");
-                    if parts.len() >= 2 {
-                        let src_root = match from_stage {
-                            Some(s) => stage_names.get(s).map(|&idx| stages[idx].clone()),
-                            None => Some(ctx.clone()),
-                        };
-                        match src_root {
-                            Some(root) => {
-                                for src in &parts[..parts.len() - 1] {
-                                    let sp = if from_stage.is_some() {
-                                        archive_host_path(&root.to_string_lossy(), &[], "", src)
-                                    } else {
-                                        root.join(src)
-                                    };
-                                    let dg = path_digest(&sp);
-                                    d.push('\n');
-                                    d.push_str(if dg.is_empty() { &nonce } else { &dg });
-                                }
-                            }
-                            None => d.push_str("\n?unknown-stage"),
-                        }
-                    }
-                    d
-                }
-                "ARG" => {
-                    let spec = args.split_whitespace().next().unwrap_or("");
-                    let kv = match spec.split_once('=') {
-                        Some((k, v)) => format!(
-                            "{k}={}",
-                            buildargs.get(k).cloned().unwrap_or_else(|| v.to_string())
-                        ),
-                        None => match buildargs.get(spec) {
-                            Some(v) => format!("{spec}={v}"),
-                            None => spec.to_string(),
-                        },
-                    };
-                    format!("ARG {kv}")
-                }
-                _ => format!("{inst} {args}"),
-            };
+            let desc = cache_desc(inst, &args, &stage_names, &stages, &ctx, &nonce, &buildargs);
             let cid = cache_id(&parent_id, &desc);
             if inst == "ARG" {
                 // ARG is transparent to the fs/config cache: it advances the chain but always runs (so
@@ -452,101 +352,16 @@ pub(crate) async fn images_build(
                 return build_err(log, "no FROM before the first instruction".into());
             }
             "RUN" => {
-                let mut cfg =
-                    SpawnConfig::new(workdir.clone(), rootfs.to_string_lossy().into_owned());
-                cfg.env = env
-                    .iter()
-                    .filter_map(|e| {
-                        e.split_once('=')
-                            .map(|(k, v)| (k.to_string(), v.to_string()))
-                    })
-                    .collect();
-                cfg.argv = vec!["/bin/sh".into(), "-c".into(), args.clone()];
-                let Some((prog, cargs)) = cfg.command(arch) else {
+                if let Err(e) = run_step(arch, &workdir, &rootfs, &env, &args, &mut log).await {
                     cleanup(&ctx);
-                    return build_err(log, "JIT not available for this arch".into());
-                };
-                match tokio::process::Command::new(prog)
-                    .args(cargs)
-                    .output()
-                    .await
-                {
-                    Ok(o) => {
-                        if !o.stdout.is_empty() {
-                            log.push(
-                                json!({"stream": String::from_utf8_lossy(&o.stdout)}).to_string(),
-                            );
-                        }
-                        if !o.stderr.is_empty() {
-                            log.push(
-                                json!({"stream": String::from_utf8_lossy(&o.stderr)}).to_string(),
-                            );
-                        }
-                        if !o.status.success() {
-                            cleanup(&ctx);
-                            return build_err(
-                                log,
-                                format!(
-                                    "The command '/bin/sh -c {}' returned a non-zero code: {}",
-                                    args,
-                                    o.status.code().unwrap_or(-1)
-                                ),
-                            );
-                        }
-                    }
-                    Err(e) => {
-                        cleanup(&ctx);
-                        return build_err(log, format!("RUN failed to start: {e}"));
-                    }
+                    return build_err(log, e);
                 }
             }
             "COPY" | "ADD" => {
-                let from_stage = args
-                    .split_whitespace()
-                    .find_map(|p| p.strip_prefix("--from="));
-                let parts: Vec<&str> = args
-                    .split_whitespace()
-                    .filter(|p| !p.starts_with("--"))
-                    .collect();
-                if parts.len() < 2 {
+                if let Err(e) = copy_step(inst, &args, &rootfs, &workdir, &stage_names, &stages, &ctx)
+                {
                     cleanup(&ctx);
-                    return build_err(log, format!("{inst} needs a source and destination"));
-                }
-                let dst = parts[parts.len() - 1];
-                let dst_guest = if dst.starts_with('/') {
-                    dst.to_string()
-                } else {
-                    format!("{}/{}", workdir.trim_end_matches('/'), dst)
-                };
-                let dst_host = archive_host_path(&rootfs.to_string_lossy(), &[], "", &dst_guest);
-                let into_dir = dst.ends_with('/') || parts.len() > 2;
-                if into_dir {
-                    std::fs::create_dir_all(&dst_host).ok();
-                } else if let Some(p) = dst_host.parent() {
-                    std::fs::create_dir_all(p).ok();
-                }
-                // COPY --from=<stage>: source is a path inside that stage's rootfs; else the build context.
-                let src_root = match from_stage {
-                    Some(s) => match stage_names.get(s) {
-                        Some(&idx) => stages[idx].clone(),
-                        None => {
-                            cleanup(&ctx);
-                            return build_err(log, format!("COPY --from: unknown stage '{s}'"));
-                        }
-                    },
-                    None => ctx.clone(),
-                };
-                for src in &parts[..parts.len() - 1] {
-                    let src_host = if from_stage.is_some() {
-                        archive_host_path(&src_root.to_string_lossy(), &[], "", src)
-                    } else {
-                        src_root.join(src)
-                    };
-                    if !matches!(std::process::Command::new("cp").arg("-a").arg(&src_host).arg(&dst_host).status(), Ok(s) if s.success())
-                    {
-                        cleanup(&ctx);
-                        return build_err(log, format!("{inst} {src}: not found"));
-                    }
+                    return build_err(log, e);
                 }
             }
             "ENV" => {
@@ -711,224 +526,4 @@ pub(crate) async fn images_build(
     log.push(json!({"stream": format!("Successfully tagged {raw_tag}\n")}).to_string());
     log.push(json!({"aux": {"ID": format!("sha256:{id}")}}).to_string());
     build_stream(log)
-}
-
-/// `POST /build/prune` — `docker builder prune` / the build-cache portion of `docker system prune`.
-/// Reclaims BOTH dd build-cache slots: the new per-step layer cache (~/.dd/buildcache, populated by
-/// `docker build`) and the persistent JIT translated-code cache (~/.dd/pcache, surfaced as `system df`
-/// BuilderSize). Both are fully reclaimable — layers re-snapshot on the next build, pcache re-translates
-/// on demand — so a wholesale drop only forces a one-time recompute.
-pub(crate) async fn build_prune() -> axum::Json<serde_json::Value> {
-    let (mut deleted, mut reclaimed) = (Vec::new(), 0i64);
-    // 1) the build layer cache: one dir per cached step under ~/.dd/buildcache/layers.
-    let layers = crate::util::buildcache_dir().join("layers");
-    if let Ok(rd) = std::fs::read_dir(&layers) {
-        for e in rd.filter_map(|e| e.ok()) {
-            let sz = crate::util::dir_size(&e.path());
-            if std::fs::remove_dir_all(e.path()).is_ok() {
-                reclaimed += sz;
-                deleted.push(format!("buildcache:{}", e.file_name().to_string_lossy()));
-            }
-        }
-    }
-    // 2) the persistent JIT translated-code cache: one <binid>.pcache file per guest binary.
-    let dir = crate::util::dd_home().join("pcache");
-    if let Ok(rd) = std::fs::read_dir(&dir) {
-        for e in rd.filter_map(|e| e.ok()) {
-            let sz = e
-                .metadata()
-                .ok()
-                .filter(|m| m.is_file())
-                .map(|m| m.len() as i64);
-            if let Some(sz) = sz {
-                if std::fs::remove_file(e.path()).is_ok() {
-                    reclaimed += sz;
-                    deleted.push(e.file_name().to_string_lossy().into_owned());
-                }
-            }
-        }
-    }
-    axum::Json(serde_json::json!({"CachesDeleted": deleted, "SpaceReclaimed": reclaimed}))
-}
-
-#[derive(Deserialize)]
-pub(crate) struct CommitQ {
-    container: Option<String>,
-    repo: Option<String>,
-    tag: Option<String>,
-    comment: Option<String>,
-    author: Option<String>,
-    pause: Option<String>,
-}
-
-/// `POST /commit?container=<id>&repo=<r>&tag=<t>` — `docker commit`. Snapshots the container's CURRENT
-/// rootfs into a new image directory under `images_dir` and registers it as `repo:tag` carrying the
-/// container's run config (cmd/env/workdir/labels, plus the source image's entrypoint). dd runs a
-/// container directly in the (shared) image rootfs with no copy-on-write upper, so the snapshot is a
-/// `cp -a` of the live rootfs — it captures every write the container made, matching `docker commit`'s
-/// "freeze the current filesystem" semantics. Reuses the same registration path as build/load/import.
-pub(crate) async fn commit_container(State(a): State<App>, Query(q): Query<CommitQ>) -> Response {
-    let cid = q.container.unwrap_or_default();
-    if cid.is_empty() {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(json!({"message": "container is required for commit"})),
-        )
-            .into_response();
-    }
-    // Resolve the source container; carry its run config into the new image. The container only stores
-    // the resolved cmd/env it ran with, so inherit the source image's ENTRYPOINT (and arch as a fallback).
-    // `docker commit` pauses the container by default while snapshotting (so the image isn't captured
-    // mid-write); `--pause=false` opts out. `pause_pid` is the live pid to SIGSTOP/SIGCONT around the
-    // `cp -a` — Some only when we will pause AND the guest is actually running.
-    let pause = !matches!(
-        q.pause.as_deref(),
-        Some("0") | Some("false") | Some("False")
-    );
-    let (rootfs, cmd, entrypoint, env, workdir, labels, arch, pause_pid) = {
-        let g = a.inner.lock().await;
-        let Some(full) = resolve_cid(&g, &cid) else {
-            return no_such(&cid);
-        };
-        let Some(c) = g.containers.get(&full) else {
-            return no_such(&cid);
-        };
-        let img = g
-            .images
-            .iter()
-            .find(|i| ref_name(&i.name) == ref_name(&c.image))
-            .cloned();
-        let entrypoint = img
-            .as_ref()
-            .map(|i| i.entrypoint.clone())
-            .unwrap_or_default();
-        let arch = c
-            .arch
-            .or(img.as_ref().map(|i| i.arch))
-            .unwrap_or(Guest::LinuxAarch64);
-        let pause_pid = (pause && c.status == "running")
-            .then(|| g.live.get(&full).and_then(|l| *l.pid.lock().unwrap()))
-            .flatten();
-        (
-            c.rootfs.clone(),
-            c.cmd.clone(),
-            entrypoint,
-            c.env.clone(),
-            c.working_dir.clone(),
-            c.labels.clone(),
-            arch,
-            pause_pid,
-        )
-    };
-    // The host-fs `macos` image (rootfs "/") can't be snapshotted — copying it would be catastrophic.
-    if rootfs.is_empty() || rootfs == "/" {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(json!({"message": "cannot commit a container with a host-filesystem rootfs"})),
-        )
-            .into_response();
-    }
-    // repo[:tag]. Docker defaults the tag to "latest"; an empty repo commits a dangling <none> image.
-    let repo = q.repo.unwrap_or_default();
-    let tag = q
-        .tag
-        .filter(|t| !t.is_empty())
-        .unwrap_or_else(|| "latest".into());
-    let name = if repo.is_empty() {
-        String::new()
-    } else {
-        format!("{}:{}", repo.trim_end_matches(':'), tag)
-    };
-    let key = if name.is_empty() {
-        format!("commit-{}", &fake_id(&cid)[..12])
-    } else {
-        name.clone()
-    };
-    // Snapshot the rootfs into a fresh image dir (mirrors image_load/import's <images_dir>/<sanitized>).
-    let target = PathBuf::from(format!("{}/{}", a.images_dir, key.replace(['/', ':'], "_")));
-    let new_rootfs = target.join("rootfs");
-    let _ = std::fs::remove_dir_all(&target);
-    if let Err(e) = std::fs::create_dir_all(&target) {
-        return (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(json!({"message": format!("commit: {e}")})),
-        )
-            .into_response();
-    }
-    // `cp -a SRC DST` (DST absent) copies the SRC tree to DST, preserving perms/links/timestamps.
-    // Default-pause: freeze the guest (SIGSTOP) around the snapshot so the rootfs isn't copied while the
-    // container is mid-write, then SIGCONT — unconditionally, even if the copy failed, so we never leave
-    // it stopped.
-    if let Some(pid) = pause_pid {
-        unsafe {
-            libc::kill(pid as i32, libc::SIGSTOP);
-        }
-    }
-    let cp = std::process::Command::new("cp")
-        .arg("-a")
-        .arg(&rootfs)
-        .arg(&new_rootfs)
-        .status();
-    if let Some(pid) = pause_pid {
-        unsafe {
-            libc::kill(pid as i32, libc::SIGCONT);
-        }
-    }
-    if !matches!(cp, Ok(s) if s.success()) {
-        let _ = std::fs::remove_dir_all(&target);
-        return (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(json!({"message": "commit: failed to snapshot rootfs"})),
-        )
-            .into_response();
-    }
-    // A content-ish id (deterministic per source + time so repeated commits get distinct ids).
-    let id = {
-        let manifest = format!(
-            "commit:{cid}\nname:{key}\ncmd:{}\nenv:{}\nworkdir:{workdir}\nat:{}",
-            cmd.join("\u{1}"),
-            env.join("\u{1}"),
-            now_secs()
-        );
-        let h = sha256_hex(manifest.as_bytes());
-        if h.len() == 64 {
-            h
-        } else {
-            fake_id(&manifest)
-        }
-    };
-    // Persist a dd-image.json so the image survives a daemon restart (discover_images reads it).
-    let mut dd = json!({"name": key, "cmd": cmd, "entrypoint": entrypoint, "env": env, "workdir": workdir, "labels": labels});
-    if let Some(c) = &q.comment {
-        dd["comment"] = json!(c);
-    }
-    if let Some(a) = &q.author {
-        dd["author"] = json!(a);
-    }
-    let _ = std::fs::write(target.join("dd-image.json"), dd.to_string());
-    {
-        let mut g = a.inner.lock().await;
-        // Replace any existing image sharing this repo:tag (mirrors the build/load re-tag dedupe).
-        if !key.is_empty() {
-            g.images.retain(|im| im.name != key);
-        }
-        g.images.push(Image {
-            name: key.clone(),
-            rootfs: new_rootfs.to_string_lossy().into_owned(),
-            arch,
-            cmd,
-            entrypoint,
-            env,
-            workdir,
-            labels,
-            created: now_secs(),
-            ..Default::default()
-        });
-    }
-    crate::events::emit_event(&a.events, "image", "commit", &id, json!({"name": key}));
-    (
-        StatusCode::CREATED,
-        Json(json!({"Id": format!("sha256:{id}")})),
-    )
-        .into_response()
 }
