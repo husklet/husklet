@@ -3,27 +3,33 @@
 
 use super::error::Error;
 
-/// A running container. Wait on it or send it a signal.
+/// A running container. Wait on it or send it a signal. The container is forked by the engine FFI
+/// (`ddjit_spawn`), so the handle owns just the raw pid and reaps it with `waitpid(2)`.
 pub struct RunHandle {
-    pub(crate) child: std::process::Child,
+    pub(crate) pid: u32,
 }
 
 impl RunHandle {
     /// Block until the container exits.
     pub fn wait(&mut self) -> Result<ExitStatus, Error> {
-        let st = self.child.wait()?;
-        Ok(ExitStatus { code: st.code().unwrap_or(-1) })
+        let mut status: i32 = 0;
+        // Safety: waitpid(2) on our own forked child's pid; a valid `*mut status` is provided.
+        let r = unsafe { libc_waitpid(self.pid as i32, &mut status, 0) };
+        if r < 0 {
+            return Err(Error::Io(std::io::Error::last_os_error()));
+        }
+        Ok(ExitStatus { code: decode_wait_status(status) })
     }
 
     /// The container's host process id.
     pub fn pid(&self) -> u32 {
-        self.child.id()
+        self.pid
     }
 
     /// Signal the container (e.g. `libc::SIGTERM`).
     pub fn signal(&self, sig: i32) -> Result<(), Error> {
         // Safety: kill(2) on our own child's pid; a stale pid just returns ESRCH.
-        let r = unsafe { libc_kill(self.child.id() as i32, sig) };
+        let r = unsafe { libc_kill(self.pid as i32, sig) };
         if r != 0 {
             return Err(Error::Io(std::io::Error::last_os_error()));
         }
@@ -31,9 +37,21 @@ impl RunHandle {
     }
 }
 
+/// Decode a `waitpid` status into an exit code: the normal exit code, or -1 when killed by a signal.
+fn decode_wait_status(status: i32) -> i32 {
+    // WIFEXITED: low 7 bits are 0 → WEXITSTATUS is bits 8..16. Otherwise the child was signalled (-1).
+    if status & 0x7f == 0 {
+        (status >> 8) & 0xff
+    } else {
+        -1
+    }
+}
+
 extern "C" {
     #[link_name = "kill"]
     fn libc_kill(pid: i32, sig: i32) -> i32;
+    #[link_name = "waitpid"]
+    fn libc_waitpid(pid: i32, status: *mut i32, options: i32) -> i32;
 }
 
 /// The exit status of a finished container.

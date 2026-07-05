@@ -64,15 +64,16 @@ impl Runtime {
         c
     }
 
-    /// Run a container. Returns a handle to wait on / signal. Launches the linked engine directly —
-    /// no `bash`, no separate `ddjit-*` binary is spawned by the caller.
+    /// Run a container. Returns a handle to wait on / signal. Forks the linked engine directly via the
+    /// typed FFI (`ddjit_spawn`) — no `bash`, no separate `ddjit-*` binary, no `DD_*` environment. The
+    /// child inherits the host stdio.
     pub fn run(&self, c: &Container) -> Result<RunHandle, Error> {
         if !dd_jit_darwin::available(c.guest) {
             return Err(Error::NoBackend(c.guest));
         }
         let c = self.with_defaults(c);
-        let (prog, args) = c.cfg.command(c.guest).ok_or(Error::NoBackend(c.guest))?;
-        let child = std::process::Command::new(prog).args(args).spawn()?;
-        Ok(RunHandle { child })
+        let lc = c.launch_config();
+        let pid = dd_jit_darwin::spawn(c.guest(), &lc).map_err(Error::Io)?;
+        Ok(RunHandle { pid })
     }
 }

@@ -84,6 +84,8 @@ int ddjit_run_configfd(int fd) {
         setenv("DD_CPUS", num, 1);
     }
     if (cfg.rootfs_ro) setenv("DD_ROOTFS_RO", "1", 1);
+    if (cfg.net_isolate) setenv("DD_NET_ISOLATE", "1", 1);
+    if (cfg.publish_daemon) setenv("DD_PUBLISH_DAEMON", "1", 1);
     if (cfg.uid >= 0) {
         snprintf(num, sizeof num, "%d", cfg.uid);
         setenv("DD_UID", num, 1);
@@ -110,6 +112,12 @@ int ddjit_run_configfd(int fd) {
     if (s[0]) setenv("DD_CWD", s, 1);
     s = cfd_str(pool, cfg.pool_len, cfg.guest_env_off);
     if (s[0]) setenv("DD_GUEST_ENV", s, 1);
+    s = cfd_str(pool, cfg.pool_len, cfg.netbr_off);
+    if (s[0]) setenv("DD_NETBR", s, 1);
+    s = cfd_str(pool, cfg.pool_len, cfg.ip_off);
+    if (s[0]) setenv("DD_IP", s, 1);
+    s = cfd_str(pool, cfg.pool_len, cfg.fsgen_off);
+    if (s[0]) setenv("DD_FSGEN_FILE", s, 1);
 
     // persistent translated-code cache: presence of a dir enables it (DDJIT_PCACHE gate + dir).
     s = cfd_str(pool, cfg.pool_len, cfg.pcache_off);
