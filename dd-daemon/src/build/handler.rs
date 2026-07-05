@@ -148,8 +148,10 @@ pub(crate) async fn images_build(
         // expand ${ARG}/$ARG using the merged map before logging or executing the step.
         let args = substitute_args(args, &args_map);
         log.push(
-            json!({"stream": format!("Step {}/{} : {} {}\n", i + 1, total, inst, args)})
-                .to_string(),
+            serde_json::to_string(&crate::api::BuildStream {
+                stream: format!("Step {}/{} : {} {}\n", i + 1, total, inst, args),
+            })
+            .unwrap(),
         );
 
         // ----- build layer cache: try to reuse this step's recorded layer -----
@@ -171,7 +173,12 @@ pub(crate) async fn images_build(
                     // HIT — replay the recorded config now; defer the rootfs restore (a run of consecutive
                     // hits costs zero copies). The rootfs is materialized on the first miss / stage finalize
                     // from `pending_fs` (the latest hit fs layer, whose snapshot is cumulative).
-                    log.push(json!({"stream": " ---> Using cache\n"}).to_string());
+                    log.push(
+                        serde_json::to_string(&crate::api::BuildStream {
+                            stream: " ---> Using cache\n".into(),
+                        })
+                        .unwrap(),
+                    );
                     let arr = |k: &str| {
                         meta.get(k)
                             .and_then(|v| v.as_array())
@@ -260,7 +267,12 @@ pub(crate) async fn images_build(
                 };
                 if found.is_none() {
                     // not local -> auto-pull the base like real docker build (reuses the registry pull)
-                    log.push(json!({"stream": format!("Unable to find image '{base}' locally; pulling\n")}).to_string());
+                    log.push(
+                        serde_json::to_string(&crate::api::BuildStream {
+                            stream: format!("Unable to find image '{base}' locally; pulling\n"),
+                        })
+                        .unwrap(),
+                    );
                     let (n, t) = match base.rsplit_once(':') {
                         Some((n, t)) if !t.contains('/') => (n.to_string(), t.to_string()),
                         _ => (base.clone(), "latest".to_string()),
@@ -520,9 +532,24 @@ pub(crate) async fn images_build(
         });
     }
     log.push(
-        json!({"stream": format!("Successfully built {}\n", &id[..12.min(id.len())])}).to_string(),
+        serde_json::to_string(&crate::api::BuildStream {
+            stream: format!("Successfully built {}\n", &id[..12.min(id.len())]),
+        })
+        .unwrap(),
     );
-    log.push(json!({"stream": format!("Successfully tagged {raw_tag}\n")}).to_string());
-    log.push(json!({"aux": {"ID": format!("sha256:{id}")}}).to_string());
+    log.push(
+        serde_json::to_string(&crate::api::BuildStream {
+            stream: format!("Successfully tagged {raw_tag}\n"),
+        })
+        .unwrap(),
+    );
+    log.push(
+        serde_json::to_string(&crate::api::BuildAux {
+            aux: crate::api::BuildAuxId {
+                id: format!("sha256:{id}"),
+            },
+        })
+        .unwrap(),
+    );
     build_stream(log)
 }

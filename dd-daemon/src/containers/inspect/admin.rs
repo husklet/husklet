@@ -4,7 +4,7 @@ use super::diff::discard_container_layer;
 
 /// `POST /containers/prune` — `docker container prune`. Removes exited (non-running) containers and
 /// reports what was deleted.
-pub(crate) async fn containers_prune(State(a): State<App>) -> Json<Value> {
+pub(crate) async fn containers_prune(State(a): State<App>) -> Json<crate::api::ContainersPruneReport> {
     let mut g = a.inner.lock().await;
     let dead: Vec<String> = g
         .containers
@@ -21,7 +21,10 @@ pub(crate) async fn containers_prune(State(a): State<App>) -> Json<Value> {
         g.live.remove(id);
     }
     save_state(&g, &a.state_path);
-    Json(json!({"ContainersDeleted": dead, "SpaceReclaimed": 0}))
+    Json(crate::api::ContainersPruneReport {
+        containers_deleted: dead,
+        space_reclaimed: 0,
+    })
 }
 
 /// `POST /containers/{id}/update` — `docker update`. dd does not apply live resource limits; accept
@@ -33,7 +36,7 @@ pub(crate) async fn containers_update(
 ) -> Response {
     let g = a.inner.lock().await;
     match resolve_cid(&g, &id) {
-        Some(_) => Json(json!({"Warnings": []})).into_response(),
+        Some(_) => Json(crate::api::ContainerUpdateResponse { warnings: vec![] }).into_response(),
         None => no_such(&id),
     }
 }
@@ -60,10 +63,6 @@ pub(crate) async fn containers_export(State(a): State<App>, Path(id): Path<Strin
             .header("Content-Type", "application/x-tar")
             .body(Body::from(o.stdout))
             .unwrap(),
-        _ => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(json!({"message": "export failed"})),
-        )
-            .into_response(),
+        _ => server_error("export failed"),
     }
 }

@@ -1,6 +1,7 @@
 //! Small HTTP / docker-wire helpers: log framing, the standard "no such container"
 //! response, and a dependency-free base64 encoder.
 use super::*;
+use crate::api::ErrorMessage;
 
 /// One Docker log frame: `[stream(1B), 0,0,0, len(4B big-endian)] + payload`.
 pub(crate) fn log_frame(stream: u8, data: &[u8]) -> Vec<u8> {
@@ -15,7 +16,9 @@ pub(crate) fn log_frame(stream: u8, data: &[u8]) -> Vec<u8> {
 pub(crate) fn no_such(id: &str) -> Response {
     (
         StatusCode::NOT_FOUND,
-        Json(json!({"message": format!("No such container: {id}")})),
+        Json(ErrorMessage {
+            message: format!("No such container: {id}"),
+        }),
     )
         .into_response()
 }
@@ -24,7 +27,9 @@ pub(crate) fn no_such(id: &str) -> Response {
 pub(crate) fn no_such_image(name: &str) -> Response {
     (
         StatusCode::NOT_FOUND,
-        Json(json!({"message": format!("No such image: {name}")})),
+        Json(ErrorMessage {
+            message: format!("No such image: {name}"),
+        }),
     )
         .into_response()
 }
@@ -33,7 +38,9 @@ pub(crate) fn no_such_image(name: &str) -> Response {
 pub(crate) fn no_such_volume(name: &str) -> Response {
     (
         StatusCode::NOT_FOUND,
-        Json(json!({"message": format!("no such volume: {name}")})),
+        Json(ErrorMessage {
+            message: format!("no such volume: {name}"),
+        }),
     )
         .into_response()
 }
@@ -42,7 +49,9 @@ pub(crate) fn no_such_volume(name: &str) -> Response {
 pub(crate) fn no_such_network(name: &str) -> Response {
     (
         StatusCode::NOT_FOUND,
-        Json(json!({"message": format!("no such network: {name}")})),
+        Json(ErrorMessage {
+            message: format!("no such network: {name}"),
+        }),
     )
         .into_response()
 }
@@ -51,7 +60,7 @@ pub(crate) fn no_such_network(name: &str) -> Response {
 pub(crate) fn conflict(msg: impl Into<String>) -> Response {
     (
         StatusCode::CONFLICT,
-        Json(json!({"message": msg.into()})),
+        Json(ErrorMessage { message: msg.into() }),
     )
         .into_response()
 }
@@ -60,7 +69,25 @@ pub(crate) fn conflict(msg: impl Into<String>) -> Response {
 pub(crate) fn bad_request(msg: impl Into<String>) -> Response {
     (
         StatusCode::BAD_REQUEST,
-        Json(json!({"message": msg.into()})),
+        Json(ErrorMessage { message: msg.into() }),
+    )
+        .into_response()
+}
+
+/// 403 Forbidden with a Docker-shaped `{"message": …}` body.
+pub(crate) fn forbidden(msg: impl Into<String>) -> Response {
+    (
+        StatusCode::FORBIDDEN,
+        Json(ErrorMessage { message: msg.into() }),
+    )
+        .into_response()
+}
+
+/// 500 Internal Server Error with a Docker-shaped `{"message": …}` body.
+pub(crate) fn server_error(msg: impl Into<String>) -> Response {
+    (
+        StatusCode::INTERNAL_SERVER_ERROR,
+        Json(ErrorMessage { message: msg.into() }),
     )
         .into_response()
 }

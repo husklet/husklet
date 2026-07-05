@@ -124,11 +124,7 @@ pub(crate) async fn volume_delete(State(a): State<App>, Path(name): Path<String>
         .map(|v| v.mountpoint.clone());
     let in_use = volume_in_use(&g, &name, mountpoint.as_deref());
     if in_use {
-        return (
-            StatusCode::CONFLICT,
-            Json(json!({"message": format!("remove {name}: volume is in use")})),
-        )
-            .into_response();
+        return conflict(format!("remove {name}: volume is in use"));
     }
     let before = g.volumes.len();
     g.volumes.retain(|v| v.name != name);

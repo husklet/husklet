@@ -44,7 +44,7 @@ pub(crate) async fn image_load(State(a): State<App>, body: axum::body::Bytes) ->
 fn load_err(msg: String) -> Response {
     (
         StatusCode::INTERNAL_SERVER_ERROR,
-        Json(json!({"message": msg})),
+        Json(ErrorMessage { message: msg }),
     )
         .into_response()
 }

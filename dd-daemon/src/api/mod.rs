@@ -11,7 +11,9 @@
 //! The DTOs are split into per-domain sibling files by their Docker endpoint area; every type is
 //! glob-re-exported below so `crate::api::X` resolves unchanged for every handler.
 
+mod build;
 mod container;
+mod error;
 mod event;
 mod exec;
 mod image;
@@ -20,7 +22,9 @@ mod system;
 mod version;
 mod volume;
 
+pub(crate) use build::*;
 pub(crate) use container::*;
+pub(crate) use error::*;
 pub(crate) use event::*;
 pub(crate) use exec::*;
 pub(crate) use image::*;
