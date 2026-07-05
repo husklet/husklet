@@ -15,6 +15,11 @@ pub(crate) async fn containers_start(State(a): State<App>, Path(id): Path<String
             Some(c) => c,
             None => return no_such(&id),
         };
+        // `docker start` on an already-running (or paused) container is a 304 Not Modified — a no-op
+        // that must NOT re-spawn or reset started_at. Only a stopped container follows the start path.
+        if c.status == "running" || c.status == "paused" {
+            return StatusCode::NOT_MODIFIED.into_response();
+        }
         let live = g
             .live
             .entry(full.clone())
@@ -116,6 +121,18 @@ pub(crate) async fn containers_kill(
     let Some(full) = resolve_cid(&g, &id) else {
         return no_such(&id);
     };
+    // `docker kill` on a non-running container is a 409 and mutates nothing (matches Moby: kill only
+    // signals a live container; a stopped/exited one is rejected verbatim, no state change, no event).
+    let running = g
+        .containers
+        .get(&full)
+        .map(|c| c.status == "running" || c.status == "paused")
+        .unwrap_or(false);
+    if !running {
+        return conflict(format!(
+            "Cannot kill container: {id}: Container {id} is not running"
+        ));
+    }
     let sig = q
         .signal
         .as_deref()
