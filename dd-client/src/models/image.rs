@@ -39,3 +39,27 @@ impl Image {
             .unwrap_or_else(|| short(&self.id))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn name_prefers_first_repo_tag() {
+        let img = Image {
+            repo_tags: vec!["alpine:latest".into(), "alpine:3.20".into()],
+            ..Default::default()
+        };
+        assert_eq!(img.name(), "alpine:latest");
+    }
+
+    #[test]
+    fn name_falls_back_to_short_id_when_untagged() {
+        // An untagged image (`<none>:<none>`) carries no repo_tags -> short id.
+        let img = Image {
+            id: "sha256:0123456789abcdeffedcba9876543210".into(),
+            ..Default::default()
+        };
+        assert_eq!(img.name(), "0123456789ab");
+    }
+}

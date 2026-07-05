@@ -50,4 +50,26 @@ mod tests {
         assert_eq!(short("abc"), "abc");
         assert_eq!(short(""), "");
     }
+
+    // ── sorted_pairs() ───────────────────────────────────────────────────────
+    #[test]
+    fn sorted_pairs_orders_by_key() {
+        let mut m = std::collections::HashMap::new();
+        m.insert("zeta".to_string(), "1".to_string());
+        m.insert("alpha".to_string(), "2".to_string());
+        m.insert("mid".to_string(), "3".to_string());
+        assert_eq!(
+            sorted_pairs(m),
+            vec![
+                ("alpha".to_string(), "2".to_string()),
+                ("mid".to_string(), "3".to_string()),
+                ("zeta".to_string(), "1".to_string()),
+            ]
+        );
+    }
+
+    #[test]
+    fn sorted_pairs_empty_is_empty() {
+        assert_eq!(sorted_pairs(std::collections::HashMap::new()), vec![]);
+    }
 }
