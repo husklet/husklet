@@ -304,6 +304,22 @@ pub(crate) async fn spawn_live(app: &App, c: &Container, vols: &[Vol], live: Arc
                 }
                 // Reclaim the private writable upper layer (mirrors `docker rm`; the shared image is untouched).
                 discard_container_layer(&dc.upper);
+                // `--rm` acts as `rm -v` for ANONYMOUS volumes (bare `-v /path` + image `VOLUME` dirs) —
+                // Moby removes them with the container on exit; named volumes are kept. Mirrors the
+                // explicit `rm -v` path in containers/lifecycle/manage.rs.
+                for name in &dc.anon_volumes {
+                    if let Some(v) = g.volumes.iter().find(|v| &v.name == name) {
+                        let _ = std::fs::remove_dir_all(&v.mountpoint);
+                    }
+                    g.volumes.retain(|v| &v.name != name);
+                    crate::events::emit_event(
+                        &app.events,
+                        "volume",
+                        "destroy",
+                        name,
+                        serde_json::json!({"driver": "local"}),
+                    );
+                }
             }
             g.live.remove(&cid);
             save_state(&g, &app.state_path);
