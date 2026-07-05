@@ -34,25 +34,6 @@ use tokio::sync::{broadcast, mpsc, watch, Mutex};
 /// `docker logs` shows the most-recent ≤ 8 MiB of output.
 const LOG_CHUNKS_CAP_BYTES: usize = 8 * 1024 * 1024;
 
-/// Append one output chunk to a Live's ordered `docker logs` buffer, enforcing [`LOG_CHUNKS_CAP_BYTES`]
-/// by draining the oldest chunks from the front. The single place the cap lives, shared by the pipe
-/// `pump` and the PTY reader. Locks ONLY `live.log_chunks` (never `inner`), so it preserves the reaper's
-/// `inner` → `log_chunks` lock ordering and introduces no deadlock.
-async fn push_log(live: &Live, ts: i64, stream: u8, bytes: Vec<u8>) {
-    let mut log = live.log_chunks.lock().await;
-    log.push((ts, stream, bytes));
-    let mut total: usize = log.iter().map(|(_, _, b)| b.len()).sum();
-    // Drop oldest chunks until under the cap, but always keep at least the just-pushed chunk.
-    let mut drop_to = 0;
-    while total > LOG_CHUNKS_CAP_BYTES && drop_to < log.len() - 1 {
-        total -= log[drop_to].2.len();
-        drop_to += 1;
-    }
-    if drop_to > 0 {
-        log.drain(..drop_to);
-    }
-}
-
 /// Write the LIVE reach-by-name table for one user-defined network into the engine's per-network switch
 /// dir (`/tmp/.ddbr-<netid[..40]>/.names`), one `ip\tname` line per endpoint. The in-engine 127.0.0.11
 /// resolver reads this file per DNS query (net.c `dns_local_lookup`) BEFORE falling through to the macOS
@@ -169,14 +150,8 @@ pub(crate) fn spawn_container(
     for u in &c.ulimits {
         b = b.ulimit(u.name.clone(), u.soft.max(0) as u64, u.hard.max(0) as u64);
     }
-    // Persistent translated-code cache (2nd+ run of an image skips translation, ~-40% cold start).
-    // Self-invalidating + graceful-miss safe. Operators disable it daemon-wide with DD_PCACHE=0; the
-    // cache lives under the dd home and is reported by `docker system df` / cleared by `system prune`.
-    if std::env::var("DD_PCACHE").as_deref() != Ok("0") {
-        let pdir = crate::util::dd_home().join("pcache");
-        let _ = std::fs::create_dir_all(&pdir);
-        b = b.persistent_cache(pdir.to_string_lossy().into_owned());
-    }
+    // (The operator-level persistent translated-code cache is owned by dd_jit::Runtime, applied to every
+    // container it launches — the daemon states no cache policy of its own.)
     // `--network host` shares the host network; otherwise isolate in a private loopback named by the
     // TARGET container's id (a `docker exec` sets `netns_key` so it joins the container's 127.0.0.1
     // instead of its own). Truncated to 40 chars to match the engine.
@@ -201,12 +176,12 @@ pub(crate) fn spawn_container(
     // the guest (getuid/getgid/setuid) — lets e.g. the postgres entrypoint see `id -u != 0` and skip its
     // gosu re-exec. An unresolvable name leaves the guest's default identity.
     b = b.user_spec(&c.rootfs, &c.user);
-    // `--security-opt sandbox`/`untrusted` (or daemon-wide DD_SANDBOX=1): run under the untrusted-guest
-    // sentry (deny-default OS sandbox + syscall forwarding).
+    // `--security-opt sandbox`/`untrusted`: run under the untrusted-guest sentry (deny-default OS sandbox
+    // + syscall forwarding). The daemon-wide default sandbox (operator env) is owned by dd_jit::Runtime.
     let sandbox = c.security_opt.iter().any(|o| {
         let o = o.to_ascii_lowercase();
         o.contains("sandbox") || o.contains("untrusted")
-    }) || std::env::var("DD_SANDBOX").as_deref() == Ok("1");
+    });
     b = b.sandbox(sandbox);
     // Resolve a mount source to a host path: an absolute path is a bind; anything else is a named volume
     // (its registered mountpoint or a dir under `volumes_dir`). Shared by `-v`/Binds and `--mount`.
@@ -439,7 +414,11 @@ pub(crate) async fn spawn_live(app: &App, c: &Container, vols: &[Vol], live: Arc
         .await
         .take()
         .expect("stdin_rx is consumed exactly once per container start");
-    let rt = JitRuntime::new().expect("dd-jit runtime");
+    // dd-jit owns the operator cache/sandbox policy; the daemon only supplies its storage location so the
+    // persistent cache lands under the dd home (reported by `system df`, cleared by `system prune`).
+    let rt = JitRuntime::new()
+        .expect("dd-jit runtime")
+        .cache_dir(crate::util::dd_home().join("pcache").to_string_lossy().into_owned());
     let launched = match rt.start_into(
         &container,
         Stdio3 { tty: c.tty },
@@ -878,59 +857,4 @@ pub(crate) async fn live_fail(app: &App, cid: &str, live: &Arc<Live>, msg: Strin
         cc.exit_code = 127;
     }
     false
-}
-
-/// Allocate a pseudo-terminal; returns (master, slave) owned fds.
-pub(crate) fn open_pty() -> std::io::Result<(OwnedFd, OwnedFd)> {
-    let (mut m, mut s): (RawFd, RawFd) = (-1, -1);
-    // Seed a sane 80x24 winsize at creation (matches docker/containerd's default ConsoleSize) instead of
-    // the kernel's 0x0. A TUI (htop, vim, less) reads TIOCGWINSZ at startup -- possibly BEFORE the client's
-    // first /resize lands, or when the client is `-t` without a real terminal (no resize at all) -- and a
-    // 0x0 size makes ncurses compute an empty screen -> a BLANK render. The real size still arrives via the
-    // /resize endpoint (TIOCSWINSZ + kernel SIGWINCH), which reflows to the client's actual dimensions.
-    let ws = libc::winsize {
-        ws_row: 24,
-        ws_col: 80,
-        ws_xpixel: 0,
-        ws_ypixel: 0,
-    };
-    // termios is *mut on macOS, *const on linux; null_mut() coerces to both.
-    let r = unsafe {
-        libc::openpty(
-            &mut m,
-            &mut s,
-            std::ptr::null_mut(),
-            std::ptr::null_mut(),
-            &ws as *const _ as *mut _,
-        )
-    };
-    if r != 0 {
-        return Err(std::io::Error::last_os_error());
-    }
-    Ok(unsafe { (OwnedFd::from_raw_fd(m), OwnedFd::from_raw_fd(s)) })
-}
-
-pub(crate) fn set_nonblocking(fd: RawFd) {
-    unsafe {
-        let fl = libc::fcntl(fd, libc::F_GETFL);
-        libc::fcntl(fd, libc::F_SETFL, fl | libc::O_NONBLOCK);
-    }
-}
-
-pub(crate) fn pty_read(fd: RawFd, buf: &mut [u8]) -> std::io::Result<usize> {
-    let n = unsafe { libc::read(fd, buf.as_mut_ptr().cast(), buf.len()) };
-    if n < 0 {
-        Err(std::io::Error::last_os_error())
-    } else {
-        Ok(n as usize)
-    }
-}
-
-pub(crate) fn pty_write(fd: RawFd, buf: &[u8]) -> std::io::Result<usize> {
-    let n = unsafe { libc::write(fd, buf.as_ptr().cast(), buf.len()) };
-    if n < 0 {
-        Err(std::io::Error::last_os_error())
-    } else {
-        Ok(n as usize)
-    }
 }
