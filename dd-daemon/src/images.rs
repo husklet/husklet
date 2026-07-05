@@ -1,4 +1,5 @@
 #![allow(unused_imports, dead_code)]
+use crate::api::*;
 use crate::archive::*;
 use crate::build::*;
 use crate::containers::*;
@@ -28,19 +29,34 @@ use tokio::io::unix::AsyncFd;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::sync::{broadcast, mpsc, watch, Mutex};
 
-pub(crate) async fn images_json(State(a): State<App>) -> Json<Value> {
-    let imgs: Vec<Value> = a.inner.lock().await.images.iter().map(|i| {
-        let size = image_size(&i.rootfs, &i.name);
-        json!({
-        "Id": format!("sha256:{}", fake_id(&i.name)), "RepoTags": [repo_tag(&i.name)],
-        "Created": i.created, "Size": size,
-        // Fields required by the Docker `ImageSummary` schema (strict clients like bollard reject the
-        // object if any are absent). `VirtualSize` is a required i64 in API <=1.43 models (no serde
-        // default), so it must be present; dd has no parent/registry-digest/shared-size accounting yet,
-        // so the rest take the Docker "not calculated" sentinels (-1) or empties.
-        "VirtualSize": size, "ParentId": "", "RepoDigests": [], "SharedSize": -1, "Labels": i.labels, "Containers": -1})
-    }).collect();
-    Json(json!(imgs))
+pub(crate) async fn images_json(State(a): State<App>) -> Json<Vec<ImageSummary>> {
+    let imgs: Vec<ImageSummary> = a
+        .inner
+        .lock()
+        .await
+        .images
+        .iter()
+        .map(|i| {
+            let size = image_size(&i.rootfs, &i.name);
+            // Fields required by the Docker `ImageSummary` schema (strict clients like bollard reject the
+            // object if any are absent). `VirtualSize` is a required i64 in API <=1.43 models (no serde
+            // default), so it must be present; dd has no parent/registry-digest/shared-size accounting yet,
+            // so the rest take the Docker "not calculated" sentinels (-1) or empties.
+            ImageSummary {
+                id: format!("sha256:{}", fake_id(&i.name)),
+                repo_tags: vec![repo_tag(&i.name)],
+                created: i.created,
+                size,
+                virtual_size: size,
+                parent_id: "",
+                repo_digests: vec![],
+                shared_size: -1,
+                labels: i.labels.clone(),
+                containers: -1,
+            }
+        })
+        .collect();
+    Json(imgs)
 }
 
 /// `GET /images/{name}/history` — `docker history`. dd squashes images to a single rootfs, so we
@@ -48,10 +64,14 @@ pub(crate) async fn images_json(State(a): State<App>) -> Json<Value> {
 pub(crate) async fn image_history(State(a): State<App>, Path(name): Path<String>) -> Response {
     let g = a.inner.lock().await;
     match find_image(&g.images, &name) {
-        Some(i) => Json(json!([{
-            "Id": format!("sha256:{}", fake_id(&i.name)), "Created": i.created,
-            "CreatedBy": "dd import", "Tags": [repo_tag(&i.name)],
-            "Size": image_size(&i.rootfs, &i.name), "Comment": ""}]))
+        Some(i) => Json(vec![HistoryLayer {
+            id: format!("sha256:{}", fake_id(&i.name)),
+            created: i.created,
+            created_by: "dd import",
+            tags: vec![repo_tag(&i.name)],
+            size: image_size(&i.rootfs, &i.name),
+            comment: "",
+        }])
         .into_response(),
         None => (
             StatusCode::NOT_FOUND,
@@ -63,22 +83,32 @@ pub(crate) async fn image_history(State(a): State<App>, Path(name): Path<String>
 
 /// `GET /images/search` — `docker search`. dd has no search index; return an empty result set with
 /// the correct shape rather than 404.
-pub(crate) async fn image_search() -> Json<Value> {
-    Json(json!([]))
+pub(crate) async fn image_search() -> Json<Vec<Value>> {
+    Json(vec![])
 }
 
 /// `POST /images/prune` — `docker image prune`. dd does not track dangling images; report nothing
 /// reclaimed (correct shape so `docker system prune` succeeds).
-pub(crate) async fn images_prune() -> Json<Value> {
-    Json(json!({"ImagesDeleted": [], "SpaceReclaimed": 0}))
+pub(crate) async fn images_prune() -> Json<PruneReport> {
+    Json(PruneReport {
+        images_deleted: vec![],
+        space_reclaimed: 0,
+    })
 }
 
 /// `GET /distribution/{name}/json` — registry manifest probe. Minimal conformant descriptor.
 pub(crate) async fn distribution_inspect(Path(name): Path<String>) -> Response {
-    Json(json!({
-        "Descriptor": {"mediaType": "application/vnd.docker.distribution.manifest.v2+json",
-            "digest": format!("sha256:{}", fake_id(&name)), "size": 0},
-        "Platforms": [{"architecture": "arm64", "os": "linux"}]}))
+    Json(DistributionInspect {
+        descriptor: Descriptor {
+            media_type: "application/vnd.docker.distribution.manifest.v2+json",
+            digest: format!("sha256:{}", fake_id(&name)),
+            size: 0,
+        },
+        platforms: vec![PlatformDesc {
+            architecture: "arm64",
+            os: "linux",
+        }],
+    })
     .into_response()
 }
 
@@ -98,9 +128,9 @@ pub(crate) async fn image_inspect(State(a): State<App>, Path(name): Path<String>
             // The image stores ENTRYPOINT separately; Docker reports a missing entrypoint as null
             // (not []), and `docker inspect` clients distinguish the two.
             let entrypoint = if i.entrypoint.is_empty() {
-                Value::Null
+                None
             } else {
-                json!(i.entrypoint)
+                Some(i.entrypoint.clone())
             };
             // Use the image's recorded ENV; fall back to a sane PATH so containers run by a client
             // that copies Config.Env verbatim still resolve binaries.
@@ -109,32 +139,42 @@ pub(crate) async fn image_inspect(State(a): State<App>, Path(name): Path<String>
             } else {
                 i.env.clone()
             };
-            Json(json!({
-                "Id": format!("sha256:{}", fake_id(&i.name)),
-                "RepoTags": [tag.clone()], "RepoDigests": [],
-                "Architecture": docker_arch(i.arch),
-                "Os": i.arch.os(),
+            Json(ImageInspect {
+                id: format!("sha256:{}", fake_id(&i.name)),
+                repo_tags: vec![tag.clone()],
+                repo_digests: vec![],
+                architecture: docker_arch(i.arch).to_string(),
+                os: i.arch.os().to_string(),
+                size,
+                virtual_size: size,
                 // RFC3339 string shape strict clients (bollard) expect; `created` is unix secs.
-                "Size": size, "VirtualSize": size, "Created": fmt_rfc3339(i.created),
-                "Config": {
-                    "Image": tag,
-                    "Cmd": i.cmd,
-                    "Entrypoint": entrypoint,
-                    "Env": env,
-                    "WorkingDir": i.workdir,
-                    "User": i.user,
+                created: fmt_rfc3339(i.created),
+                config: ImageConfig {
+                    image: tag,
+                    cmd: i.cmd.clone(),
+                    entrypoint,
+                    env,
+                    working_dir: i.workdir.clone(),
+                    user: i.user.clone(),
                     // OCI stores ExposedPorts as a set; re-materialize `{ "5432/tcp": {} }` for inspect.
-                    "ExposedPorts": i.exposed_ports.iter().map(|p| (p.clone(), json!({})))
-                        .collect::<serde_json::Map<String, Value>>(),
-                    "Labels": i.labels,
+                    exposed_ports: i.exposed_ports.iter().map(|p| (p.clone(), Empty {})).collect(),
+                    labels: i.labels.clone(),
                     // Lifecycle/volume config docker clients diff (StopSignal null when unset; Volumes a
                     // set of dirs; Healthcheck the probe or null).
-                    "StopSignal": if i.stop_signal.is_empty() { Value::Null } else { json!(i.stop_signal) },
-                    "Volumes": i.img_volumes.iter().map(|p| (p.clone(), json!({}))).collect::<serde_json::Map<String, Value>>(),
-                    "Healthcheck": i.healthcheck.as_ref().map(|h| json!({"Test": h.test, "Interval": h.interval,
-                        "Timeout": h.timeout, "Retries": h.retries, "StartPeriod": h.start_period})).unwrap_or(Value::Null),
+                    stop_signal: if i.stop_signal.is_empty() {
+                        None
+                    } else {
+                        Some(i.stop_signal.clone())
+                    },
+                    volumes: i.img_volumes.iter().map(|p| (p.clone(), Empty {})).collect(),
+                    healthcheck: i.healthcheck.clone(),
                 },
-                "RootFS": {"Type": "layers", "Layers": []}})).into_response()
+                root_fs: RootFs {
+                    type_: "layers",
+                    layers: vec![],
+                },
+            })
+            .into_response()
         }
         None => (
             StatusCode::NOT_FOUND,
@@ -629,11 +669,14 @@ pub(crate) async fn image_delete(State(a): State<App>, Path(name): Path<String>)
                                       // Delete the on-disk rootfs only when this was its last reference: another tag sharing the same
                                       // rootfs (a `docker tag` alias) keeps it alive, so we report an untag and leave the layers in place.
     let last_ref = !g.images.iter().any(|i| i.rootfs == target.rootfs);
-    let mut report = vec![json!({ "Untagged": untagged })];
+    let mut report = vec![DeleteRecord::Untagged(untagged)];
     if last_ref && target.name != "macos" {
         // the host `macos` image's rootfs is the live `/` — never delete
         remove_image_dir(&a.images_dir, &target.rootfs);
-        report.push(json!({ "Deleted": format!("sha256:{}", fake_id(&target.name)) }));
+        report.push(DeleteRecord::Deleted(format!(
+            "sha256:{}",
+            fake_id(&target.name)
+        )));
     }
     crate::events::emit_event(
         &a.events,
@@ -642,7 +685,7 @@ pub(crate) async fn image_delete(State(a): State<App>, Path(name): Path<String>)
         &want_repo,
         json!({"name": repo_tag(&target.name)}),
     );
-    Json(json!(report)).into_response()
+    Json(report).into_response()
 }
 
 /// Remove an image's on-disk directory (`<images_dir>/<safe>/`, the parent of its `rootfs/`). Guarded
@@ -770,17 +813,48 @@ pub(crate) fn push_progress(
                 .chars()
                 .take(12)
                 .collect::<String>();
-            let layer = layer_id.as_str();
             let half = (size / 2).max(0);
+            let status = |s: String| StreamStatus {
+                status: s,
+                progress_detail: None,
+                id: None,
+            };
+            let pushing = |current: i64| StreamStatus {
+                status: "Pushing".into(),
+                progress_detail: Some(ProgressDetail { current, total: size }),
+                id: Some(layer_id.clone()),
+            };
             [
-                json!({ "status": format!("The push refers to repository [{name}]") }).to_string(),
-                json!({ "status": "Preparing", "id": layer }).to_string(),
-                json!({ "status": "Pushing", "progressDetail": { "current": half, "total": size }, "id": layer }).to_string(),
-                json!({ "status": "Pushing", "progressDetail": { "current": size, "total": size }, "id": layer }).to_string(),
-                json!({ "status": "Pushed", "id": layer }).to_string(),
-                json!({ "progressDetail": {}, "aux": { "Tag": tag, "Digest": digest.as_str(), "Size": size } }).to_string(),
-                json!({ "status": format!("{tag}: digest: {digest} size: {size}") }).to_string(),
-            ].join("\r\n") + "\r\n"
+                serde_json::to_string(&status(format!("The push refers to repository [{name}]")))
+                    .unwrap(),
+                serde_json::to_string(&StreamStatus {
+                    status: "Preparing".into(),
+                    progress_detail: None,
+                    id: Some(layer_id.clone()),
+                })
+                .unwrap(),
+                serde_json::to_string(&pushing(half)).unwrap(),
+                serde_json::to_string(&pushing(size)).unwrap(),
+                serde_json::to_string(&StreamStatus {
+                    status: "Pushed".into(),
+                    progress_detail: None,
+                    id: Some(layer_id.clone()),
+                })
+                .unwrap(),
+                serde_json::to_string(&AuxLine {
+                    progress_detail: Empty {},
+                    aux: Aux {
+                        tag: tag.to_string(),
+                        digest: digest.clone(),
+                        size,
+                    },
+                })
+                .unwrap(),
+                serde_json::to_string(&status(format!("{tag}: digest: {digest} size: {size}")))
+                    .unwrap(),
+            ]
+            .join("\r\n")
+                + "\r\n"
         }
         Err(e) => {
             json!({ "errorDetail": { "message": e.clone() }, "error": e }).to_string() + "\r\n"
@@ -1021,7 +1095,10 @@ pub(crate) async fn image_load(State(a): State<App>, body: axum::body::Bytes) ->
     let _ = std::fs::write(target.join("dd-image.json"), dd.to_string());
     register_image(&a, img).await;
     crate::events::emit_event(&a.events, "image", "load", &name, json!({"name": name}));
-    Json(json!({ "stream": format!("Loaded image: {}", repo_tag(&name)) })).into_response()
+    Json(LoadResponse {
+        stream: format!("Loaded image: {}", repo_tag(&name)),
+    })
+    .into_response()
 }
 
 /// `docker import` -- extract a bare rootfs tar (request body) into a new image named by `repo`
@@ -1125,7 +1202,7 @@ async fn register_image(a: &App, img: Image) {
 /// `docker import` progress: a single JSON status line carrying the new image id, or an error line.
 fn import_progress(result: Result<String, String>) -> Response {
     let body = match result {
-        Ok(id) => json!({ "status": id }).to_string() + "\r\n",
+        Ok(id) => serde_json::to_string(&ImportStatus { status: id }).unwrap() + "\r\n",
         Err(e) => {
             json!({ "errorDetail": { "message": e.clone() }, "error": e }).to_string() + "\r\n"
         }
