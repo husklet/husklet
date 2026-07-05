@@ -36,6 +36,74 @@ fn median_ms(n: usize, mut f: impl FnMut()) -> u128 {
     v[v.len() / 2]
 }
 
+#[cfg(test)]
+mod tests {
+    use super::median_ms;
+    use std::time::Duration;
+
+    // NOTE on the impl: median_ms returns `v[v.len()/2]` after sorting. For an even count that is
+    // the UPPER of the two middle samples, NOT their average. `n` is clamped via `n.max(1)`, so
+    // n=0 still runs the closure exactly once and never indexes an empty Vec (no panic).
+
+    #[test]
+    fn median_ms_runs_closure_n_times() {
+        let mut calls = 0usize;
+        let _ = median_ms(5, || calls += 1);
+        assert_eq!(calls, 5);
+    }
+
+    #[test]
+    fn median_ms_single_runs_once() {
+        let mut calls = 0usize;
+        let _ = median_ms(1, || calls += 1);
+        assert_eq!(calls, 1);
+    }
+
+    #[test]
+    fn median_ms_zero_clamps_to_one_no_panic() {
+        // the `n.max(1)` guard: n=0 must run the closure once and return a value (not panic on v[0]).
+        let mut calls = 0usize;
+        let m = median_ms(0, || calls += 1);
+        assert_eq!(calls, 1);
+        let _ = m; // any u128 is acceptable; the point is it returned without panicking.
+    }
+
+    #[test]
+    fn median_ms_single_element_reports_that_elements_time() {
+        // one sample of ~25ms → median is that sample. sleep is a floor, so this lower bound is
+        // load-safe (a noisy host only makes it larger).
+        let m = median_ms(1, || std::thread::sleep(Duration::from_millis(25)));
+        assert!(m >= 20, "expected ~25ms, got {m}");
+    }
+
+    #[test]
+    fn median_ms_odd_returns_middle_sample() {
+        // durations by call index: [0, 30, 60] → sorted ≈ [0, 30, 60], median = v[1] ≈ 30ms.
+        // lower bound proves it is NOT the minimum (~0) sample.
+        let mut i = 0usize;
+        let m = median_ms(3, || {
+            let d = [0u64, 30, 60][i.min(2)];
+            i += 1;
+            std::thread::sleep(Duration::from_millis(d));
+        });
+        assert!(m >= 20, "expected the middle (~30ms) sample, got {m}");
+    }
+
+    #[test]
+    fn median_ms_even_returns_upper_of_two_middles_not_average() {
+        // two samples by call index: [40, 0] → sorted ≈ [0, 40], v[len/2] = v[1] ≈ 40ms (the UPPER
+        // middle). An average would be ~20ms; the ~40ms floor (sleep is a lower bound) proves the
+        // impl takes v[len/2], not the mean.
+        let mut i = 0usize;
+        let m = median_ms(2, || {
+            let d = if i == 0 { 40u64 } else { 0 };
+            i += 1;
+            std::thread::sleep(Duration::from_millis(d));
+        });
+        assert!(m >= 35, "expected upper-middle (~40ms), not the ~20ms average, got {m}");
+    }
+}
+
 /// Rebuild the exact JIT launch command for a case+engine (guest already provisioned/compiled), so the
 /// perf loop can time `execution` without paying compilation again. Mirrors the setup in [`run`].
 /// Returns `(guest_path, (program, args))`, or `None` if the cell has no runnable command (skip).
