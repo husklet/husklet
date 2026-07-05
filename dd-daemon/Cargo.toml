@@ -5,6 +5,12 @@ edition = "2021"
 description = "Docker-Engine-API daemon backed by the dd VM-less JIT runtime."
 license = "MIT"
 
+# The daemon is the server binary; it also exposes the Docker-Engine-API *client* library (absorbed from
+# the former dd-client crate) as `dd_daemon::client`, so the CLI + GUI depend only on dd-daemon.
+[lib]
+name = "dd_daemon"
+path = "src/lib.rs"
+
 [[bin]]
 name = "dd-daemon"
 path = "src/main.rs"
@@ -13,10 +19,13 @@ path = "src/main.rs"
 ddjit = { path = "../dd-jit", package = "dd-jit" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "io-util", "process", "sync", "fs"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "io-util", "process", "sync", "fs", "time"] }
 axum = "0.7"
 hyper = { version = "1", features = ["server", "http1"] }
 hyper-util = { version = "0.1", features = ["tokio", "server", "server-auto"] }
 tower = { version = "0.5", features = ["util"] }
 futures-util = { version = "0.3", default-features = false, features = ["std"] }
 libc = "0.2"
+# client library deps (Docker-Engine-API client over a unix socket)
+bollard = "0.21"
+bytes = "1"

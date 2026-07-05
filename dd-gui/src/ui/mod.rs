@@ -6,7 +6,7 @@ pub(crate) mod theme;
 pub(crate) mod views;
 use crate::{AppModel, Category, Msg, Selection};
 pub(crate) use components::*;
-use ddclient::{Container, Image, Network, Volume};
+use dd_daemon::client::{Container, Image, Network, Volume};
 use gtk::prelude::*;
 use relm4::ComponentSender;
 use std::ffi::OsStr;
