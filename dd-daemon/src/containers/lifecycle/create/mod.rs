@@ -7,11 +7,13 @@
 //! Each is re-exported so `crate::containers::<name>` resolves exactly as before.
 use super::super::*;
 
+mod argv;
 mod dto;
 mod ports;
 mod volumes;
 
 pub(crate) use {dto::*, ports::*};
+use argv::*;
 use volumes::*;
 
 pub(crate) async fn containers_create(
@@ -56,20 +58,7 @@ pub(crate) async fn containers_create(
     // Final argv = entrypoint ++ cmd (docker semantics). The entrypoint is the user's --entrypoint or the
     // IMAGE's ENTRYPOINT; a user --entrypoint resets CMD, but the image's own ENTRYPOINT still keeps the
     // image CMD. An empty Cmd falls back to the image default.
-    let user_ep = body.entrypoint.is_some();
-    let mut argv = body.entrypoint.unwrap_or_else(|| img.entrypoint.clone());
-    let cmd = body.cmd.filter(|c| !c.is_empty()).unwrap_or_else(|| {
-        if user_ep {
-            vec![]
-        } else {
-            img.cmd.clone()
-        }
-    });
-    argv.extend(cmd);
-    if argv.is_empty() {
-        argv = img.cmd.clone();
-    }
-    let cmd = argv;
+    let cmd = resolve_argv(body.entrypoint, body.cmd, &img.entrypoint, &img.cmd);
     // env = image ENV then `docker run -e` (later wins); working dir = -w or the image WORKDIR.
     let mut env = img.env.clone();
     env.extend(body.env.unwrap_or_default());

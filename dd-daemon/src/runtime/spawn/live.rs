@@ -1,6 +1,7 @@
 use super::*;
 use super::super::health::health_monitor;
 use super::super::restart::maybe_restart;
+use super::etchosts::{eff_hostname, own_hosts_names, render_etc_hosts};
 use super::net::write_net_names;
 
 /// Spawn the container's guest process live (piped stdio) and wire its IO into `live`: stdout/stderr fan
@@ -38,27 +39,26 @@ pub(crate) async fn spawn_live(app: &App, c: &Container, vols: &[Vol], live: Arc
         // the per-network br_* switch (PR2) can carry the connect. Docker drives this via embedded DNS;
         // the equivalent here is to seed /etc/hosts with every endpoint on the network(s) this container
         // is attached to. musl/glibc read /etc/hosts before any nameserver, so the resolve is local.
-        let mut hosts = String::from("127.0.0.1\tlocalhost\n");
         // own entry (once): own-ip  own-name [hostname]. Absent for --network host/none (no endpoint).
-        if let Some(own) = g.networks.iter().find_map(|n| n.endpoints.get(&lookup_id)) {
-            let mut names = own.name.clone();
-            if !c.hostname.is_empty() && c.hostname != own.name {
-                names.push(' ');
-                names.push_str(&c.hostname);
-            }
-            hosts.push_str(&format!("{}\t{}\n", own.ip, names));
-        }
+        let own = g
+            .networks
+            .iter()
+            .find_map(|n| n.endpoints.get(&lookup_id))
+            .map(|own| (own.ip.clone(), own_hosts_names(&own.name, &c.hostname)));
         // peers: every OTHER endpoint on any network this container is a member of.
+        let mut peers: Vec<(String, String)> = Vec::new();
         for n in &g.networks {
             if !n.endpoints.contains_key(&lookup_id) {
                 continue;
             }
             for (cid, e) in &n.endpoints {
                 if cid != &lookup_id {
-                    hosts.push_str(&format!("{}\t{}\n", e.ip, e.name));
+                    peers.push((e.ip.clone(), e.name.clone()));
                 }
             }
         }
+        // Render the reach-by-name /etc/hosts body from the gathered own+peer entries (pure builder).
+        let hosts = render_etc_hosts(own.as_ref().map(|(ip, n)| (ip.as_str(), n.as_str())), &peers);
         // Refresh the live resolver name file for every USER-defined network this container is on. Docker
         // withholds reach-by-name on the default `bridge` (only user networks get embedded-DNS names), so
         // predefined networks are skipped. The file is rewritten on EVERY start, so it always reflects the
@@ -114,11 +114,7 @@ pub(crate) async fn spawn_live(app: &App, c: &Container, vols: &[Vol], live: Arc
         // /etc/hostname: Docker generates this beside /etc/hosts and /etc/resolv.conf (the container's UTS
         // name + newline), shadowing any image copy via the overlay upper. Same value spawn_cfg passes as
         // DD_HOSTNAME -> gethostname(), so the two agree (user --hostname, else the 12-char short id).
-        let eff_hostname = if c.hostname.is_empty() {
-            c.id[..c.id.len().min(12)].to_string()
-        } else {
-            c.hostname.clone()
-        };
+        let eff_hostname = eff_hostname(&c.id, &c.hostname);
         if let Err(e) = std::fs::write(format!("{etc}/hostname"), format!("{eff_hostname}\n")) {
             if std::env::var("DD_DEBUG").is_ok() {
                 eprintln!(
