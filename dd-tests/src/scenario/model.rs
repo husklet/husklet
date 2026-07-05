@@ -1,5 +1,3 @@
-use super::*;
-
 /// Which container engine the scenario runs against.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Backend {

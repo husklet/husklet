@@ -9,8 +9,6 @@
 #![allow(unused_imports)]
 use crate::{fixture, group, in_rootfs, port, src, Case, Engine, Group};
 
-const LIN: &[Engine] = &[Engine::LinuxAarch64, Engine::LinuxX86_64];
-
 pub fn groups() -> Vec<Group> {
     vec![fsx_portable(), fsx_xattr_edge(), fsx_linux()]
 }

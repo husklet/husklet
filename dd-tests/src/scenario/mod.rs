@@ -26,7 +26,6 @@ mod daemon;
 mod drive;
 mod model;
 
-pub use arch::*;
 pub use daemon::*;
 pub use drive::*;
 pub use model::*;
