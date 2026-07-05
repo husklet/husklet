@@ -131,6 +131,15 @@ impl Daemon {
             bridged,
         })
     }
+    /// The directory to drop generated op/ensure scripts into: this daemon's private dir, or the
+    /// shared run dir when it has none (Real backend without a per-run dir).
+    pub(super) fn run_dir(&self) -> PathBuf {
+        if self.dir.as_os_str().is_empty() {
+            shared_run_dir()
+        } else {
+            self.dir.clone()
+        }
+    }
     pub(super) fn docker_host(&self) -> Option<&str> {
         if self.host.is_empty() {
             None

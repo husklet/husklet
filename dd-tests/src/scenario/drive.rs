@@ -1,5 +1,5 @@
 use super::arch::{store_arch, target_arch};
-use super::daemon::{run_script, sh_quote, shared_run_dir};
+use super::daemon::{run_script, sh_quote};
 use super::*;
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -82,11 +82,7 @@ fn ensure(d: &Daemon, cfg: &Cfg, image: &str) -> bool {
     if let Some(&ok) = ensure_cache().lock().unwrap().get(image) {
         return ok;
     }
-    let dir = if d.dir.as_os_str().is_empty() {
-        shared_run_dir()
-    } else {
-        d.dir.clone()
-    };
+    let dir = d.run_dir();
     // Per-image filename so concurrent first-touches of DIFFERENT images don't clobber one script.
     let f = dir.join(format!("ensure-{}.sh", slug(image)));
     let body = format!("{}docker image inspect {img} >/dev/null 2>&1 && exit 0\n{}\ndocker pull {img} >/dev/null 2>&1\n",
@@ -111,11 +107,7 @@ fn drive(d: &Daemon, s: &Scenario, t: Target, cfg: &Cfg) -> (String, i32) {
             return v.clone();
         }
     }
-    let dir = if d.dir.as_os_str().is_empty() {
-        shared_run_dir()
-    } else {
-        d.dir.clone()
-    };
+    let dir = d.run_dir();
     // Per-(scenario,target) filename so the two arches of one scenario can run concurrently without
     // racing on a shared op script.
     let f = dir.join(format!("op-{}-{}.sh", s.id.replace('/', "_"), t.label()));
