@@ -5,13 +5,17 @@ use std::path::Path;
 /// macOS Mach-O containers); the ISA axis is `aarch64` or `x86_64`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum Guest {
+    /// Linux on ARM64 — same-arch, run by the native `jit` engine. The default.
     #[default]
     LinuxAarch64,
+    /// Linux on x86-64 — translated to ARM64 by the `jit86` engine.
     LinuxX86_64,
+    /// Native macOS ARM64 (Mach-O) containers, run jailed by `jitdarwin`/darwinjail.
     DarwinAarch64,
 }
 
 impl Guest {
+    /// Every guest target, for iterating over or probing which engines were built.
     pub const ALL: [Guest; 3] = [
         Guest::LinuxAarch64,
         Guest::LinuxX86_64,

@@ -68,16 +68,25 @@ extern "C" {
 /// `Container`; there is no environment dialect. Empty/`None` fields are simply omitted from the wire.
 #[derive(Clone, Debug, Default)]
 pub struct LaunchConfig {
+    /// The writable rootfs (the overlay UPPER, or a plain single rootfs). Empty = run un-jailed.
     pub rootfs: String,
     /// read-only overlay lowers, highest-priority first
     pub lowers: Vec<String>,
+    /// UTS hostname (empty = inherit the host's).
     pub hostname: String,
+    /// cgroup `memory.max` in bytes (0 = unlimited).
     pub mem_max: u64,
+    /// cgroup `pids.max` (0 = unlimited).
     pub pids_max: u32,
+    /// docker `--cpus`: online-CPU count the container advertises (0 = unlimited).
     pub cpus: u32,
+    /// docker `--read-only`: writes to the rootfs/overlay-upper fail EROFS.
     pub rootfs_ro: bool,
+    /// USER-ns uid the guest process runs as (`None` = root = 0).
     pub uid: Option<u32>,
+    /// USER-ns gid the guest process runs as (`None` = root = 0).
     pub gid: Option<u32>,
+    /// Run the guest under the JIT's syscall sandbox (`DDJIT_SANDBOX`).
     pub sandbox: bool,
     /// `--network none`: refuse all non-loopback egress.
     pub net_isolate: bool,
@@ -97,6 +106,7 @@ pub struct LaunchConfig {
     pub ulimits: Vec<(String, u64, u64)>,
     /// private-loopback key (not the /tmp path); empty = shared
     pub netns: String,
+    /// Guest working directory (empty = the rootfs root, `/`).
     pub cwd: String,
     /// guest environment as `K=V` lines (forwarded verbatim to the guest, never the host env)
     pub guest_env: Vec<String>,

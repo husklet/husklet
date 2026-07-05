@@ -26,6 +26,8 @@
 //! # Ok::<(), dd_jit::Error>(())
 //! ```
 
+#![warn(missing_docs)]
+
 // The backend surface (guest selector + the low-level launch contract) is re-exported so existing
 // callers keep working unchanged while they migrate to the ergonomic API above.
 pub use dd_jit_darwin::{available, Guest, PortMap, SpawnConfig, Volume};

@@ -30,6 +30,7 @@ pub struct SpawnConfig {
     pub ulimits: Vec<(String, u64, u64)>,
     /// USER-ns uid / gid (default: root = 0).
     pub uid: Option<u32>,
+    /// USER-ns gid (default: root = 0).
     pub gid: Option<u32>,
     /// Extra environment for the guest process.
     pub env: Vec<(String, String)>,
@@ -38,6 +39,7 @@ pub struct SpawnConfig {
 }
 
 impl SpawnConfig {
+    /// A config with only the required `work_dir` and `rootfs` set; all other knobs take their defaults.
     pub fn new(work_dir: impl Into<String>, rootfs: impl Into<String>) -> Self {
         SpawnConfig {
             work_dir: work_dir.into(),

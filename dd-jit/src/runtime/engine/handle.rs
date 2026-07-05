@@ -1,7 +1,7 @@
 use super::*;
 use std::os::fd::RawFd;
 
-/// A launched, supervised container process. Drop does not kill the guest; call [`signal`] to stop it.
+/// A launched, supervised container process. Drop does not kill the guest; call [`RunHandle::signal`] to stop it.
 pub struct RunningContainer {
     /// The guest's host pid (also its process-group id); reaped with `waitpid(2)`.
     pub(super) pid: u32,
@@ -21,13 +21,14 @@ pub struct RunningContainer {
 }
 
 /// The launched guest process + its IO reader tasks, when a caller supervises the process itself (feeds
-/// its own log broadcast / reaper) — see [`Runtime::start_into`]. The caller reaps the pid (via [`wait`])
+/// its own log broadcast / reaper) — see [`Runtime::start_into`]. The caller reaps the pid (via `wait`)
 /// and drains `io_handles` on exit.
 pub struct Launched {
     /// The guest's host pid (also its process-group id).
     pub pid: u32,
     /// PTY master fd (window-size ioctls) when `tty`, else `None`.
     pub pty_master: Option<RawFd>,
+    /// The stdout/stderr reader tasks; the caller drains these on exit (after [`Launched::wait`] reaps the pid).
     pub io_handles: Vec<tokio::task::JoinHandle<()>>,
 }
 
