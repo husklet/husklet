@@ -438,9 +438,10 @@ pub(crate) async fn spawn_live(app: &App, c: &Container, vols: &[Vol], live: Arc
         Err(e) => return live_fail(app, &c.id, &live, format!("jit exec failed: {e}")).await,
     };
     *live.pty_master.lock().unwrap() = launched.pty_master;
-    let (mut child, io_handles) = (launched.child, launched.io_handles);
+    let mut launched = launched;
+    let io_handles = std::mem::take(&mut launched.io_handles);
 
-    *live.pid.lock().unwrap() = child.id(); // remember the pid so pause can SIGSTOP/SIGCONT it
+    *live.pid.lock().unwrap() = Some(launched.pid); // remember the pid so pause can SIGSTOP/SIGCONT it
                                             // HEALTHCHECK (§8.3-1): a real container (not an exec) with a resolved probe gets a background monitor
                                             // tied to THIS Live — it probes on `interval`, flips `State.Health` starting→healthy/unhealthy per
                                             // `retries`/`start_period`, and exits when this Live's process dies (so a restart spawns a fresh one).
@@ -461,7 +462,7 @@ pub(crate) async fn spawn_live(app: &App, c: &Container, vols: &[Vol], live: Arc
     let auto_remove = c.auto_remove; // `--rm`: drop the container from state once it exits (see below)
     let dbg = std::env::var("DD_DEBUG").is_ok();
     tokio::spawn(async move {
-        let code = child.wait().await.ok().and_then(|s| s.code()).unwrap_or(-1) as i64;
+        let code = launched.wait().await;
         if dbg {
             eprintln!("[live] {} exited code={code}", &cid[..12]);
         }

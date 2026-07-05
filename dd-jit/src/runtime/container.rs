@@ -100,6 +100,51 @@ impl Container {
     pub fn guest(&self) -> Guest {
         self.guest
     }
+
+    /// Map this container into the typed, env-free [`dd_jit_darwin::LaunchConfig`] the FFI spawn path
+    /// consumes. The builder stores some knobs as `DD_*`/`DDJIT_*` env pairs (docker-parity encoding);
+    /// this translates each known key into its typed wire field, so nothing crosses the FFI as loose
+    /// environment. Pure engine *tuning* knobs (CRASHDBG/COLDPROF/DDJIT_NOPCACHE) are not part of the
+    /// container contract and are intentionally dropped here — a follow-up can carry them if needed.
+    pub(crate) fn launch_config(&self) -> dd_jit_darwin::LaunchConfig {
+        let c = &self.cfg;
+        let mut lc = dd_jit_darwin::LaunchConfig {
+            rootfs: c.rootfs.clone(),
+            lowers: c.lowers.clone(),
+            hostname: c.hostname.clone().unwrap_or_default(),
+            mem_max: c.mem_max,
+            pids_max: c.pids_max,
+            cpus: c.cpus,
+            rootfs_ro: c.read_only,
+            uid: c.uid,
+            gid: c.gid,
+            netns: c.netns.clone().unwrap_or_default(),
+            publish: c.publish.iter().map(|p| (p.host, p.container)).collect(),
+            volumes: c.volumes.iter().map(|v| (v.container.clone(), v.host.clone(), v.ro)).collect(),
+            ulimits: c.ulimits.clone(),
+            argv: c.argv.clone(),
+            ..Default::default()
+        };
+        // Translate the builder's DD_*/DDJIT_* env pairs into typed wire fields (the engine setenv's them
+        // back internally from the wire, so the API carries zero environment).
+        for (k, v) in &c.env {
+            match k.as_str() {
+                "DD_CWD" => lc.cwd = v.clone(),
+                "DD_GUEST_ENV" => lc.guest_env = v.split('\n').map(str::to_string).collect(),
+                "DDJIT_PCACHE_DIR" => lc.pcache_dir = v.clone(),
+                "DDJIT_SANDBOX" | "DDJIT_UNTRUSTED" => lc.sandbox = true,
+                "DD_NET_ISOLATE" => lc.net_isolate = true,
+                "DD_NETBR" => lc.netbr = v.clone(),
+                "DD_IP" => lc.ip = v.clone(),
+                "DD_FSGEN_FILE" => lc.fsgen_file = v.clone(),
+                "DD_PUBLISH_DAEMON" => lc.publish_daemon = true,
+                // "DDJIT_PCACHE" is a bare enable gate; the pcache dir's presence enables it engine-side.
+                // CRASHDBG/COLDPROF/DDJIT_NOPCACHE are tuning knobs, not container config — dropped here.
+                _ => {}
+            }
+        }
+        lc
+    }
 }
 
 /// Fluent builder for a [`Container`]. All fields have sensible defaults (unlimited resources, no

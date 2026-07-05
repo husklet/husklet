@@ -19,7 +19,7 @@
 use std::path::Path;
 
 mod launch;
-pub use launch::{spawn, LaunchConfig};
+pub use launch::{spawn, spawn_io, LaunchConfig, SpawnIo};
 
 /// A guest target = (OS personality, ISA) the JIT can run. Each maps to one binary built by `build.rs`
 /// from `targets/<target>.c`. The OS axis is `linux` (jit / jit86) or `darwin` (jitdarwin — native
@@ -447,8 +447,9 @@ mod tests {
         }];
         c.argv = vec!["/bin/app".into()];
         if let Some(s) = c.script(Guest::DarwinAarch64) {
-            assert!(s.contains("--rootfs '/jail'") && s.contains("--volume '/h':'/data'"));
-            assert!(!s.contains("--mem-max") && !s.contains("DDVOL")); // darwin contract is leaner
+            // darwinjail takes the container model as env (DD_ROOTFS/DD_VOLUMES), not flags.
+            assert!(s.contains("DD_ROOTFS='/jail'") && s.contains("DD_VOLUMES='/h:/data'"));
+            assert!(!s.contains("--mem-max") && !s.contains("DDVOL")); // darwin uses DD_VOLUMES, not linux DDVOL
         }
     }
     #[test]
