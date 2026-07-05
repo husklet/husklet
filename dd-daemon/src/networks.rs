@@ -189,12 +189,8 @@ pub(crate) async fn networks_create(
         .filter(|n| !n.is_empty())
         .unwrap_or_else(|| format!("net_{}", &fake_id("n")[..8]));
     let mut g = a.inner.lock().await;
-    if let Some(n) = g.networks.iter().find(|n| n.name == name) {
-        return (
-            StatusCode::CONFLICT,
-            Json(json!({"message": format!("network {name} already exists"), "Id": n.id})),
-        )
-            .into_response();
+    if g.networks.iter().any(|n| n.name == name) {
+        return conflict(format!("network {name} already exists"));
     }
     let (subnet, gateway) = alloc_subnet(&g.networks);
     let n = Net {
@@ -240,7 +236,7 @@ pub(crate) async fn network_inspect(State(a): State<App>, Path(id): Path<String>
         .find(|n| net_matches(n, &id))
     {
         Some(n) => Json(net_json(n)).into_response(),
-        None => network_404(&id),
+        None => no_such_network(&id),
     }
 }
 
@@ -276,7 +272,7 @@ pub(crate) async fn network_delete(State(a): State<App>, Path(id): Path<String>)
         }
         StatusCode::NO_CONTENT.into_response()
     } else {
-        network_404(&id)
+        no_such_network(&id)
     }
 }
 
@@ -303,7 +299,7 @@ pub(crate) async fn network_connect(
     };
     let net_name = match g.networks.iter().find(|n| net_matches(n, &id)) {
         Some(n) => n.name.clone(),
-        None => return network_404(&id),
+        None => return no_such_network(&id),
     };
     join_network(&mut g.networks, &net_name, &cid, &cname);
     save_state(&g, &a.state_path);
@@ -332,7 +328,7 @@ pub(crate) async fn network_disconnect(
             leave_network(n, &cid);
             StatusCode::OK.into_response()
         }
-        None => return network_404(&id),
+        None => return no_such_network(&id),
     };
     save_state(&g, &a.state_path);
     r
@@ -344,14 +340,6 @@ pub(crate) fn net_matches(n: &Net, id: &str) -> bool {
 
 pub(crate) fn is_predefined(name: &str) -> bool {
     matches!(name, "bridge" | "host" | "none")
-}
-
-pub(crate) fn network_404(id: &str) -> Response {
-    (
-        StatusCode::NOT_FOUND,
-        Json(json!({"message": format!("no such network: {id}")})),
-    )
-        .into_response()
 }
 
 pub(crate) fn default_networks() -> Vec<Net> {

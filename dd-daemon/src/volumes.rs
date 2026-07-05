@@ -98,11 +98,7 @@ pub(crate) async fn volumes_create(
         .chars()
         .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-' || c == '.')
     {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(json!({"message": "invalid volume name"})),
-        )
-            .into_response();
+        return bad_request("invalid volume name");
     }
     let driver = body
         .driver
@@ -141,11 +137,7 @@ pub(crate) async fn volumes_create(
 pub(crate) async fn volume_inspect(State(a): State<App>, Path(name): Path<String>) -> Response {
     match a.inner.lock().await.volumes.iter().find(|v| v.name == name) {
         Some(v) => Json(vol_json(v)).into_response(),
-        None => (
-            StatusCode::NOT_FOUND,
-            Json(json!({"message": format!("no such volume: {name}")})),
-        )
-            .into_response(),
+        None => no_such_volume(&name),
     }
 }
 
@@ -178,11 +170,7 @@ pub(crate) async fn volume_delete(State(a): State<App>, Path(name): Path<String>
         );
         StatusCode::NO_CONTENT.into_response()
     } else {
-        (
-            StatusCode::NOT_FOUND,
-            Json(json!({"message": format!("no such volume: {name}")})),
-        )
-            .into_response()
+        no_such_volume(&name)
     }
 }
 

@@ -36,22 +36,14 @@ pub(crate) async fn image_tag(
 ) -> Response {
     let mut g = a.inner.lock().await;
     let Some(src) = find_image(&g.images, &name).cloned() else {
-        return (
-            StatusCode::NOT_FOUND,
-            Json(json!({"message": format!("No such image: {name}")})),
-        )
-            .into_response();
+        return no_such_image(&name);
     };
     // Keep the FULL target repository (registry + namespace), e.g. `huttarichard/ddmac` — NOT the bare
     // name. Stripping it (ref_name) would later push to `library/<name>` and be denied. docker sends the
     // repo without a tag and the tag separately.
     let repo = q.repo.unwrap_or_default();
     if repo.is_empty() {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(json!({"message": "repo required"})),
-        )
-            .into_response();
+        return bad_request("repo required");
     }
     let full = match q.tag.filter(|t| !t.is_empty()) {
         Some(t) => format!("{repo}:{t}"),
@@ -79,11 +71,7 @@ pub(crate) async fn image_delete(State(a): State<App>, Path(name): Path<String>)
     // mirror the lenient matching used elsewhere (registry/namespace ignored).
     let matches = |i: &Image| ref_name(&i.name) == want_repo && ref_tag(&i.name) == want_tag;
     let Some(target) = g.images.iter().find(|i| matches(i)).cloned() else {
-        return (
-            StatusCode::NOT_FOUND,
-            Json(json!({"message": format!("No such image: {name}")})),
-        )
-            .into_response();
+        return no_such_image(&name);
     };
     let untagged = repo_tag(&target.name);
     g.images.retain(|i| !matches(i)); // remove only this tag, never sibling tags of the same repo

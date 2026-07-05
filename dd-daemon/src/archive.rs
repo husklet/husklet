@@ -269,11 +269,17 @@ pub(crate) async fn archive_get(
             o.stdout,
         )
             .into_response(),
-        Ok(o) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(json!({"message": String::from_utf8_lossy(&o.stderr)})),
-        )
-            .into_response(),
+        Ok(o) => {
+            eprintln!(
+                "archive_get: tar failed: {}",
+                String::from_utf8_lossy(&o.stderr)
+            );
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"message": "failed to read archive from container"})),
+            )
+                .into_response()
+        }
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(json!({"message": e.to_string()})),
@@ -366,11 +372,17 @@ pub(crate) async fn archive_put(
     crate::util::fsgen_bump(&cid);
     match out {
         Ok(o) if o.status.success() => (StatusCode::OK, Json(json!({}))).into_response(),
-        Ok(o) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(json!({"message": String::from_utf8_lossy(&o.stderr)})),
-        )
-            .into_response(),
+        Ok(o) => {
+            eprintln!(
+                "archive_put: tar failed: {}",
+                String::from_utf8_lossy(&o.stderr)
+            );
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"message": "failed to extract archive"})),
+            )
+                .into_response()
+        }
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(json!({"message": e.to_string()})),

@@ -100,8 +100,9 @@ pub(crate) async fn containers_delete(
         .unwrap_or(false);
     if running && !force {
         let short = &full[..12.min(full.len())];
-        return (StatusCode::CONFLICT, Json(json!({"message": format!(
-            "cannot remove a running container {short}: Stop the container before removing or force remove")}))).into_response();
+        return conflict(format!(
+            "cannot remove a running container {short}: Stop the container before removing or force remove"
+        ));
     }
     // Removing a container cancels any pending RestartPolicy restart; with `--force` on a running
     // container we also SIGKILL the live process so the reaper doesn't resurrect/dangle it.

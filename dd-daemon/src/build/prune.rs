@@ -61,11 +61,7 @@ pub(crate) struct CommitQ {
 pub(crate) async fn commit_container(State(a): State<App>, Query(q): Query<CommitQ>) -> Response {
     let cid = q.container.unwrap_or_default();
     if cid.is_empty() {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(json!({"message": "container is required for commit"})),
-        )
-            .into_response();
+        return bad_request("container is required for commit");
     }
     // Resolve the source container; carry its run config into the new image. The container only stores
     // the resolved cmd/env it ran with, so inherit the source image's ENTRYPOINT (and arch as a fallback).
