@@ -23,7 +23,7 @@ fn main() -> Result<(), dd_jit::Error> {
         .hostname("web")
         .build()?;
 
-    if !rt.supports(container_guest(&container)) {
+    if !rt.supports(container.guest()) {
         eprintln!("no dd-jit backend built for this guest on this host");
         return Ok(());
     }
@@ -33,10 +33,4 @@ fn main() -> Result<(), dd_jit::Error> {
     let status = handle.wait()?;
     println!("exited {}", status.code());
     Ok(())
-}
-
-// The image's guest personality (OS + ISA) is carried on the container; a real app usually just calls
-// `rt.run` and handles the `Error::NoBackend` result instead of pre-checking.
-fn container_guest(_c: &Container) -> dd_jit::Guest {
-    dd_jit::Guest::default()
 }
