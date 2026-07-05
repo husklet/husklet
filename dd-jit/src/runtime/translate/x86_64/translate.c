@@ -21,7 +21,21 @@ static void e_mul_set_oc(int cfreg) {
 // imul reg<-a*b (two-/three-operand forms 0F AF, 69, 6B): truncated product into dst, and x86
 // CF=OF = (the full signed product differs from the sign-extension of the truncated result).
 // Scratch x21..x25 (x21 carries the 0/1 CF into e_mul_set_oc); callers must not pass a/b in those.
-static void e_imul2(int dst, int a, int b, int w) {
+// x86-xflags: when `co_live`==0 the caller proved the WHOLE NZCV word imul defines (dd sets N=Z=0,
+// C=NOT CF, V=OF) is dead before any read -> skip the entire overflow/flag synthesis (incl. the extra
+// smulh, a real multiply that contends with the product mul on a dependent chain) and emit product-only.
+static void e_imul2(int dst, int a, int b, int w, int co_live) {
+    if (!co_live) {                        // product only; imul's CF/OF/SF/ZF are all dead
+        if (w == 8) {
+            e_mul(dst, a, b, 1);           // low 64 bits
+        } else if (w == 4) {
+            e_mul(dst, a, b, 0);           // 32-bit mul zero-extends bits 63:32
+        } else {                           // 16-bit: insert low 16, preserve upper
+            e_mul(22, a, b, 0);
+            e_bfi(dst, 22, 0, 16, 1);
+        }
+        return;
+    }
     if (w == 8) {
         e_smulh(24, a, b);               // x24 = signed high 64 bits of the product
         e_mul(dst, a, b, 1);             // dst = low 64 (a,b already consumed by smulh)
@@ -1033,6 +1047,15 @@ static void *translate_block(uint64_t gpc) {
                 // carry-in straight from them (FL_SUB/FL_ADD/FL_LOGIC) -- no eager materialize.
             } else if (lazy && insn_is_flagkill(&I))
                 g_fl_pending = FL_NONE; // dead: next op fully overwrites the flags before any read
+            // x86-xflags: the 1-insn insn_is_flagkill peephole only catches an *immediately* following
+            // full-NZCV writer. In real integer chains the producer is separated from the next flag op by
+            // value-only movs/immediate-shifts (e.g. an LCG mix: add; mov; shr; xor; ...). Generalize with
+            // the same guest-byte liveness scan the shift/edge paths already trust: if this producer's NZCV
+            // is provably overwritten before any read across the block (following unconditional jmps), it is
+            // dead -- drop it, emitting NOTHING (same as the flagkill path; the live ARM NZCV need not be
+            // canonicalized because no consumer observes it). PF/AF are handled independently below.
+            else if (lazy && xblkalu_elide_on() && !(x86_flags_livein(gpc, gpc) & XF_NZCV))
+                g_fl_pending = FL_NONE;
             else
                 flags_materialize();
         }
@@ -1055,6 +1078,12 @@ static void *translate_block(uint64_t gpc) {
             // overwrites both before any read (guest-byte liveness scan, translate/trace.c).
             if (!g_pfaf_dead && xblkflags_on() && NI.len > 0)
                 g_pfaf_dead = pfaf_dead_thru(&NI, next, gpc);
+            // x86-xflags: generalize past the 1-insn / direct-branch cases -- in real integer chains the
+            // next PF/AF writer sits a few value-only movs/immediate-shifts downstream. The same block
+            // liveness scan proves both PF and AF overwritten-before-read from `next`; if so, drop the
+            // whole PF/AF substrate for I (e_pf_save/e_af_save no-op on g_pfaf_dead).
+            if (!g_pfaf_dead && xblkalu_elide_on())
+                g_pfaf_dead = !(x86_flags_livein(next, gpc) & (XF_PF | XF_AF));
         }
 
         // x87 static-top tracking ends at any non-x87 instruction: spill the shadow top to
@@ -1440,7 +1469,8 @@ static void *translate_block(uint64_t gpc) {
                 int mem;
                 int rmv = rm_load(&I, next, I.opsize, &mem);
                 e_movconst(19, (uint64_t)I.imm);
-                e_imul2(I.reg, rmv, 19, I.opsize); // dst = r/m * imm, sets x86 CF/OF on overflow
+                int imm_co_live = !xblkalu_elide_on() || (x86_flags_livein(next, gpc) & XF_NZCV);
+                e_imul2(I.reg, rmv, 19, I.opsize, imm_co_live); // dst = r/m * imm, sets x86 CF/OF on overflow
                 gpc = next;
                 continue;
             }
@@ -3060,7 +3090,8 @@ static void *translate_block(uint64_t gpc) {
             if (op == 0xAF) {
                 int mem;
                 int rmv = rm_load(&I, next, I.opsize, &mem);
-                e_imul2(I.reg, I.reg, rmv, I.opsize); // reg *= r/m, sets x86 CF/OF on overflow
+                int af_co_live = !xblkalu_elide_on() || (x86_flags_livein(next, gpc) & XF_NZCV);
+                e_imul2(I.reg, I.reg, rmv, I.opsize, af_co_live); // reg *= r/m, sets x86 CF/OF on overflow
                 gpc = next;
                 continue;
             }

@@ -211,6 +211,18 @@ static int xblkflags_on(void) {
     return v;
 }
 
+// x86-xflags kill-switch (A/B): NOXALUFLAGELIDE=1 disables the block-scan mid-block NZCV / PF-AF dead-flag
+// elision on ALU producers (falls back to the 1-insn insn_is_flagkill / insn_kills_pfaf peepholes).
+// Piggybacks on the same xblkflags_on() master switch (NOXBLOCKFLAGS/NOFLAGELIDE turn it off too).
+static int xblkalu_elide_on(void) {
+    static int v = -1;
+    if (v < 0) {
+        const char *s = getenv("NOXALUFLAGELIDE");
+        v = (xblkflags_on() && !(s && *s && *s != '0')) ? 1 : 0;
+    }
+    return v;
+}
+
 // x86 condition code (opcode low nibble) -> the RFLAGS bits the condition READS.
 static const uint8_t xf_cond_rd[16] = {
     XF_OF,         XF_OF,                     // o / no
