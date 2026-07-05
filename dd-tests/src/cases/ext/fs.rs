@@ -22,5 +22,15 @@ fn storage() -> Group {
         // Verified-clean guard: the synth was already structurally correct; locks it against regression.
         src("fs-mounttab", "ext_fs/mounttab.c").rootfs("alpine").overlay().only(LIN)
             .out("mounttab ok=1\n"),
+        // Pseudo-mount COMPLETENESS (audit): dd omitted the /dev/shm, /dev/pts, /dev/mqueue mounts, listed
+        // no cgroup2 line in /proc/mounts, and marked sysfs rw where runc marks it ro. Asserts each line the
+        // docker oracle shows in BOTH /proc/mounts (fstab form) and /proc/self/mountinfo ("-"-separated).
+        src("fs-mountpseudo", "ext_fs/mountpseudo.c").rootfs("alpine").overlay().only(LIN)
+            .out("mountpseudo ok=1\n"),
+        // /dev/shm is a REAL per-container tmpfs: a shm_open segment appears as a regular file in the
+        // /dev/shm listing, stats as a regular file, and statfs("/dev/shm")==tmpfs (was invisible pre-fix,
+        // backed by a flat /tmp file in a global host namespace). Verified vs the docker (runc) oracle.
+        src("fs-shm-visible", "ext_fs/shm_visible.c").rootfs("alpine").overlay().only(LIN)
+            .out("shm_visible ok=1\n"),
     ])
 }

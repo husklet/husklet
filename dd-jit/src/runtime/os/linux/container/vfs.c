@@ -1284,16 +1284,24 @@ static int proc_comm_text(char *b, size_t n) {
 // cgroup2 hierarchy, devtmpfs) round it out so a reader looking up any of these mount points finds a
 // plausible, well-formed line. Field layout: id parent maj:min root mountpoint opts - fstype src superopts.
 static int proc_mountinfo_text(char *b, size_t n) {
+    // Field layout: id parent maj:min root mountpoint opts - fstype src superopts. The pseudo-mounts and
+    // their PARENT ids mirror a real runc/OrbStack container exactly (verified vs the docker oracle): the
+    // /dev tmpfs (25) parents /dev/pts, /dev/mqueue and /dev/shm; /sys (28) parents the cgroup2 leaf.
+    //  - /sys is READ-ONLY (ro on both the line flags and the sysfs superblock) -- runc binds it ro.
+    //  - /dev tmpfs carries size=65536k,mode=755 (docker's default 64M /dev).
+    //  - /dev/pts devpts carries gid=5,mode=620,ptmxmode=666 (the devpts mount opts every container shows).
+    //  - /dev/shm is its OWN tmpfs mount with src name "shm" (glibc shm_open/DSM back onto it); size=65536k
+    //    is docker's default 64M (the host may enlarge it -- size is a host-variant field).
+    //  - cgroup2 leaf is ro with src "cgroup" + nsdelegate (JVM/systemd v2 detection keys on this line).
     return snprintf(b, n,
-                    "23 0 0:21 / / rw,relatime - overlay overlay rw\n"
-                    "24 23 0:22 / /proc rw,nosuid,nodev,noexec,relatime - proc proc rw\n"
-                    "25 23 0:23 / /sys rw,nosuid,nodev,noexec,relatime - sysfs sysfs rw\n"
-                    "26 23 0:24 / /dev rw,nosuid - tmpfs tmpfs rw,mode=755\n"
-                    // runc bind-mounts the container's cgroup2 leaf READ-ONLY (ro) with source name
-                    // "cgroup" and the nsdelegate super-option -- matching the OrbStack/runc oracle exactly.
-                    // The JVM/systemd cgroup-v2 detection keys on the "cgroup2" fstype + "/sys/fs/cgroup"
-                    // mount point (both present); the ro flag mirrors what a real container exposes.
-                    "27 23 0:25 / /sys/fs/cgroup ro,nosuid,nodev,noexec,relatime - cgroup2 cgroup rw,nsdelegate\n");
+                    "23 0 0:24 / / rw,relatime - overlay overlay rw\n"
+                    "24 23 0:25 / /proc rw,nosuid,nodev,noexec,relatime - proc proc rw\n"
+                    "25 23 0:26 / /dev rw,nosuid - tmpfs tmpfs rw,size=65536k,mode=755\n"
+                    "26 25 0:27 / /dev/pts rw,nosuid,noexec,relatime - devpts devpts rw,gid=5,mode=620,ptmxmode=666\n"
+                    "27 23 0:28 / /sys ro,nosuid,nodev,noexec,relatime - sysfs sysfs ro\n"
+                    "28 27 0:29 / /sys/fs/cgroup ro,nosuid,nodev,noexec,relatime - cgroup2 cgroup rw,nsdelegate\n"
+                    "29 25 0:30 / /dev/mqueue rw,nosuid,nodev,noexec,relatime - mqueue mqueue rw\n"
+                    "30 25 0:31 / /dev/shm rw,nosuid,nodev,noexec,relatime - tmpfs shm rw,size=65536k\n");
 }
 // ================= REAL /proc process table (top/htop/ps) =====================================
 // dd's process model: every guest process is its OWN host (macOS) process running this DBT; the
@@ -2411,11 +2419,19 @@ static int proc_open(const char *rp) {
         // The fstab-style mount table (mirror of mountinfo). Name the root mount "overlay", not the legacy
         // "rootfs": busybox/util-linux df filters out a pseudo "rootfs" entry, leaving df unable to find the
         // mount for "/". The pseudo-filesystems are listed too so a reader enumerating mounts sees them.
+        // Mirror of proc_mountinfo_text in fstab form (6 fields). Same set of pseudo-mounts docker lists so a
+        // reader enumerating mounts (df/mount/findmnt) sees /dev/shm, /dev/pts, /dev/mqueue and the cgroup2
+        // hierarchy. sysfs is ro (runc binds it ro); the /dev tmpfs carries its size/mode; /dev/shm is a
+        // separate tmpfs with src "shm". Verified field-for-field vs the docker (runc) oracle.
         n = snprintf(buf, sizeof buf,
                      "overlay / overlay rw,relatime 0 0\n"
                      "proc /proc proc rw,nosuid,nodev,noexec,relatime 0 0\n"
-                     "sysfs /sys sysfs rw,nosuid,nodev,noexec,relatime 0 0\n"
-                     "tmpfs /dev tmpfs rw,nosuid 0 0\n");
+                     "tmpfs /dev tmpfs rw,nosuid,size=65536k,mode=755 0 0\n"
+                     "devpts /dev/pts devpts rw,nosuid,noexec,relatime,gid=5,mode=620,ptmxmode=666 0 0\n"
+                     "sysfs /sys sysfs ro,nosuid,nodev,noexec,relatime 0 0\n"
+                     "cgroup /sys/fs/cgroup cgroup2 ro,nosuid,nodev,noexec,relatime,nsdelegate 0 0\n"
+                     "mqueue /dev/mqueue mqueue rw,nosuid,nodev,noexec,relatime 0 0\n"
+                     "shm /dev/shm tmpfs rw,nosuid,nodev,noexec,relatime,size=65536k 0 0\n");
     } else if (!strcmp(rp, "/proc/uptime")) {
         unsigned long long t[4];
         host_cpu_ticks(t);

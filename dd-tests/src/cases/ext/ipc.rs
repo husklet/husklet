@@ -48,6 +48,10 @@ fn ext_ipc() -> Group {
             .only(&[Engine::LinuxAarch64, Engine::LinuxX86_64]),
         // ---- POSIX shm / sem ----
         port("posix-shm", "ext_ipc/ipc_posix_shm.c").out("posix_shm total=40000\n"),
+        // /dev/shm functional contract real software (postgres DSM / parallel workers) needs: shm_open
+        // round-trip persisting across close/reopen, MAP_SHARED coherence across fork (the DSM pattern), and
+        // a named POSIX semaphore across fork. Portable POSIX -> golden on all engines.
+        port("shm-dsm", "ext_ipc/shm_dsm.c").out("shm_dsm roundtrip=1 forkshared=1 sem=1\n"),
         // sem_open ENOENT under the JIT (same gap as threads/sem-named) — passes native-on-macOS.
         // xfail Linux; see GAPS "ext-sem-open".
         port("posix-sem-named", "ext_ipc/ipc_posix_sem_named.c").out("posix_sem_named c=5\n"),
