@@ -33,19 +33,3 @@ pub use discovery::{detect_arch, discover_images, image_score, DiscoveredImage};
 pub use local_image::LocalImage;
 pub use manifest::Manifest;
 pub use store::Store;
-
-// Internal flat namespace: re-glob every submodule so a submodule's `use super::*` resolves its siblings.
-#[allow(unused_imports)]
-use arch::*;
-#[allow(unused_imports)]
-use archive::*;
-#[allow(unused_imports)]
-use config::*;
-#[allow(unused_imports)]
-use discovery::*;
-#[allow(unused_imports)]
-use local_image::*;
-#[allow(unused_imports)]
-use manifest::*;
-#[allow(unused_imports)]
-use store::*;
