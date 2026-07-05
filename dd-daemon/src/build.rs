@@ -47,333 +47,16 @@ pub(crate) struct BuildQ {
     labels: Option<String>,
 }
 
-/// Substitute `${NAME}` / `$NAME` references in a Dockerfile line using the merged ARG map.
-/// Unknown `${NAME}` expands to empty (like docker); unknown `$NAME` is left literal.
-pub(crate) fn substitute_args(s: &str, map: &HashMap<String, String>) -> String {
-    if map.is_empty() || !s.contains('$') {
-        return s.to_string();
-    }
-    let mut out = String::with_capacity(s.len());
-    let mut chars = s.chars().peekable();
-    while let Some(c) = chars.next() {
-        if c != '$' {
-            out.push(c);
-            continue;
-        }
-        match chars.peek().copied() {
-            Some('{') => {
-                chars.next(); // consume '{'
-                let mut name = String::new();
-                while let Some(&nc) = chars.peek() {
-                    chars.next();
-                    if nc == '}' {
-                        break;
-                    }
-                    name.push(nc);
-                }
-                if let Some(v) = map.get(&name) {
-                    out.push_str(v);
-                }
-            }
-            Some(nc) if nc.is_ascii_alphanumeric() || nc == '_' => {
-                let mut name = String::new();
-                while let Some(&nc) = chars.peek() {
-                    if nc.is_ascii_alphanumeric() || nc == '_' {
-                        name.push(nc);
-                        chars.next();
-                    } else {
-                        break;
-                    }
-                }
-                match map.get(&name) {
-                    Some(v) => out.push_str(v),
-                    None => {
-                        out.push('$');
-                        out.push_str(&name);
-                    }
-                }
-            }
-            _ => out.push('$'),
-        }
-    }
-    out
-}
-
-/// Parse a Dockerfile into (INSTRUCTION, args) pairs, honoring `\` line-continuations and `#` comments.
-pub(crate) fn parse_dockerfile(text: &str) -> Vec<(String, String)> {
-    let (mut out, mut acc) = (Vec::new(), String::new());
-    for line in text.lines() {
-        let l = line.trim_end();
-        let t = l.trim_start();
-        if acc.is_empty() && (t.is_empty() || t.starts_with('#')) {
-            continue;
-        }
-        if let Some(s) = l.strip_suffix('\\') {
-            acc.push_str(s.trim_start());
-            acc.push(' ');
-            continue;
-        }
-        acc.push_str(t);
-        if let Some((inst, args)) = acc.trim().split_once(char::is_whitespace) {
-            out.push((inst.to_uppercase(), args.trim().to_string()));
-        }
-        acc.clear();
-    }
-    out
-}
-
-/// A `CMD`/`ENTRYPOINT` value: JSON-array exec form `["a","b"]` or a shell string (wrapped in sh -c).
-pub(crate) fn parse_exec_form(args: &str) -> Vec<String> {
-    let a = args.trim();
-    if a.starts_with('[') {
-        if let Ok(Value::Array(v)) = serde_json::from_str::<Value>(a) {
-            return v
-                .into_iter()
-                .filter_map(|x| x.as_str().map(String::from))
-                .collect();
-        }
-    }
-    vec!["/bin/sh".into(), "-c".into(), a.to_string()]
-}
-
-/// Parse a `LABEL` instruction's args into key/value pairs.
-/// Modern form: `LABEL k=v k2="v 2" "com.x"="ACME Inc"` (one or more `key=value` pairs, values may be
-/// quoted and contain spaces). Legacy form: `LABEL key the rest is the value` (no `=`, a single pair).
-pub(crate) fn parse_labels(args: &str) -> Vec<(String, String)> {
-    // tokenize on whitespace, honoring single/double quotes and backslash escapes.
-    let (mut toks, mut cur, mut quote, mut had) =
-        (Vec::<String>::new(), String::new(), '\0', false);
-    let mut chars = args.chars().peekable();
-    while let Some(c) = chars.next() {
-        match c {
-            '\\' => {
-                if let Some(&n) = chars.peek() {
-                    cur.push(n);
-                    chars.next();
-                    had = true;
-                }
-            }
-            '"' | '\'' => {
-                if quote == c {
-                    quote = '\0';
-                } else if quote == '\0' {
-                    quote = c;
-                } else {
-                    cur.push(c);
-                }
-                had = true;
-            }
-            c if c.is_whitespace() && quote == '\0' => {
-                if had {
-                    toks.push(std::mem::take(&mut cur));
-                    had = false;
-                }
-            }
-            c => {
-                cur.push(c);
-                had = true;
-            }
-        }
-    }
-    if had {
-        toks.push(cur);
-    }
-
-    // legacy single-pair form: no token carries an '='.
-    if !toks.is_empty() && toks.iter().all(|t| !t.contains('=')) {
-        let key = toks[0].clone();
-        return if key.is_empty() {
-            vec![]
-        } else {
-            vec![(key, toks[1..].join(" "))]
-        };
-    }
-    // modern form: each token is `key=value`.
-    toks.into_iter()
-        .filter_map(|t| {
-            t.split_once('=')
-                .and_then(|(k, v)| (!k.is_empty()).then(|| (k.to_string(), v.to_string())))
-        })
-        .collect()
-}
-
-/// sha256 (lowercase hex, no `sha256:` prefix) of arbitrary bytes via the `sha256sum` CLI — already a
-/// runtime dependency of the daemon (see registry.rs). Returns "" on failure (caller falls back).
-fn sha256_hex(data: &[u8]) -> String {
-    use std::io::Write;
-    let mut child = match std::process::Command::new("sha256sum")
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .spawn()
-    {
-        Ok(c) => c,
-        Err(_) => return String::new(),
-    };
-    if let Some(mut si) = child.stdin.take() {
-        let _ = si.write_all(data);
-    }
-    match child.wait_with_output() {
-        Ok(o) => String::from_utf8_lossy(&o.stdout)
-            .split_whitespace()
-            .next()
-            .unwrap_or("")
-            .to_string(),
-        Err(_) => String::new(),
-    }
-}
-
-/// A deterministic content digest of an assembled rootfs: hash of a sorted (type,size,path) listing
-/// combined with the sha256 of every regular file's contents. Same tree -> same hash, independent of
-/// filesystem iteration order. Returns "" on failure.
-fn rootfs_digest(rootfs: &std::path::Path) -> String {
-    let script = format!(
-        "cd '{}' 2>/dev/null || exit 0; \
-         {{ find . -printf '%y %s %p\\n' 2>/dev/null | LC_ALL=C sort; \
-            find . -type f -print0 2>/dev/null | LC_ALL=C sort -z | xargs -0 sha256sum 2>/dev/null; \
-         }} | sha256sum",
-        rootfs.display());
-    match std::process::Command::new("sh")
-        .arg("-c")
-        .arg(&script)
-        .output()
-    {
-        Ok(o) => String::from_utf8_lossy(&o.stdout)
-            .split_whitespace()
-            .next()
-            .unwrap_or("")
-            .to_string(),
-        Err(_) => String::new(),
-    }
-}
-
-// ===================== build layer cache =====================
-// A conservative, content-addressed reimplementation of Docker's classic build cache. Each step gets a
-// `cache id` = sha256(parent step's cache id + a normalized descriptor of the instruction). For COPY/ADD
-// the descriptor folds in a content+metadata digest of the source files, so changed context invalidates;
-// for everything else it is the (ARG-substituted) instruction text. The rootfs produced AFTER a step is
-// snapshotted under ~/.dd/buildcache/layers/<cache-id>/rootfs (filesystem-mutating steps only) alongside a
-// meta.json capturing the cumulative image config, so a future rebuild can REUSE the snapshot+config
-// instead of re-running. CORRECTNESS RULE: a hit replays the exact rootfs a prior run of the identical
-// (parent+instruction[+context]) step recorded — bit-identical to that run; anything we cannot prove
-// identical misses and re-runs. The first miss invalidates the cache for the rest of the stage (Docker
-// semantics — and the content-chained ids enforce it automatically).
-
-/// Instructions that mutate the rootfs (so their cache layer needs a full snapshot). Everything else is
-/// config-only (ENV/CMD/ENTRYPOINT/LABEL/EXPOSE/USER/...) and stores just metadata.
-fn is_fs_inst(inst: &str) -> bool {
-    matches!(inst, "RUN" | "COPY" | "ADD" | "WORKDIR")
-}
-
-fn bc_layer_dir(cache_id: &str) -> PathBuf {
-    crate::util::buildcache_dir().join("layers").join(cache_id)
-}
-
-/// Deterministic content+metadata digest of a file or directory subtree at `p` (absolute host path):
-/// type, mode and size of every entry plus the sha256 of each regular file's contents, sorted so it is
-/// independent of fs iteration order. Used to make COPY/ADD cache keys content-addressed. Returns "" on
-/// failure (the caller then forces a miss rather than risk serving a stale layer).
-fn path_digest(p: &std::path::Path) -> String {
-    let script = format!(
-        "p='{}'; if [ -d \"$p\" ]; then cd \"$p\" 2>/dev/null || exit 0; \
-            {{ find . -printf '%y %m %s %p\\n' 2>/dev/null | LC_ALL=C sort; \
-               find . -type f -print0 2>/dev/null | LC_ALL=C sort -z | xargs -0 sha256sum 2>/dev/null; }} | sha256sum; \
-         elif [ -e \"$p\" ]; then {{ stat -c '%F %a %s' \"$p\" 2>/dev/null; sha256sum \"$p\" 2>/dev/null; }} | sha256sum; \
-         else echo missing; fi",
-        p.display());
-    match std::process::Command::new("sh")
-        .arg("-c")
-        .arg(&script)
-        .output()
-    {
-        Ok(o) => String::from_utf8_lossy(&o.stdout)
-            .split_whitespace()
-            .next()
-            .unwrap_or("")
-            .to_string(),
-        Err(_) => String::new(),
-    }
-}
-
-/// Chain hash for a step's cache id: sha256(parent + descriptor), falling back to a stable non-crypto id
-/// if `sha256sum` is unavailable so the cache still keys deterministically (never an empty/colliding id).
-fn cache_id(parent: &str, descriptor: &str) -> String {
-    let seed = format!("{parent}\n{descriptor}");
-    let h = sha256_hex(seed.as_bytes());
-    if h.len() == 64 {
-        h
-    } else {
-        fake_id(&seed)
-    }
-}
-
-/// Load a cache layer's metadata iff it is present AND complete (an fs layer's rootfs snapshot must
-/// exist). Returns None on any miss so a partial/corrupt layer is never served as a hit.
-fn load_layer(id: &str) -> Option<Value> {
-    let dir = bc_layer_dir(id);
-    let meta: Value = serde_json::from_slice(&std::fs::read(dir.join("meta.json")).ok()?).ok()?;
-    if meta.get("fs").and_then(|v| v.as_bool()).unwrap_or(false) && !dir.join("rootfs").is_dir() {
-        return None;
-    }
-    Some(meta)
-}
-
-/// Materialize a cached fs layer's rootfs snapshot into `dst` (the live stage rootfs), replacing it.
-/// Returns false on failure — the caller aborts the build rather than continue on a wrong rootfs.
-fn materialize(id: &str, dst: &std::path::Path) -> bool {
-    let src = bc_layer_dir(id).join("rootfs");
-    if !src.is_dir() {
-        return false;
-    }
-    let _ = std::fs::remove_dir_all(dst);
-    if let Some(parent) = dst.parent() {
-        let _ = std::fs::create_dir_all(parent);
-    }
-    matches!(std::process::Command::new("cp").arg("-a").arg(&src).arg(dst).status(), Ok(s) if s.success())
-}
-
-/// Persist a freshly executed step as a cache layer: a full rootfs snapshot for filesystem-mutating
-/// instructions, plus a meta.json sidecar capturing the cumulative image config so a future hit can
-/// restore it without re-running. Atomic & best-effort: the snapshot is written first and meta.json LAST,
-/// so a layer only becomes loadable once complete; a failed snapshot leaves no (false-hit) layer behind.
-#[allow(clippy::too_many_arguments)]
-fn store_layer(
-    id: &str,
-    parent: &str,
-    inst: &str,
-    args: &str,
-    rootfs: &std::path::Path,
-    cmd: &[String],
-    entrypoint: &[String],
-    workdir: &str,
-    env: &[String],
-    labels: &HashMap<String, String>,
-) {
-    let dir = bc_layer_dir(id);
-    let _ = std::fs::remove_dir_all(&dir);
-    if std::fs::create_dir_all(&dir).is_err() {
-        return;
-    }
-    let fs = is_fs_inst(inst);
-    if fs {
-        let lr = dir.join("rootfs");
-        if !matches!(std::process::Command::new("cp").arg("-a").arg(rootfs).arg(&lr).status(), Ok(s) if s.success())
-        {
-            let _ = std::fs::remove_dir_all(&dir);
-            return;
-        }
-    }
-    let meta = json!({"v": 1, "parent": parent, "inst": inst, "args": args, "fs": fs,
-        "created": now_secs(), "cmd": cmd, "entrypoint": entrypoint, "workdir": workdir,
-        "env": env, "labels": labels});
-    let tmp = dir.join(".meta.json.tmp");
-    if std::fs::write(&tmp, meta.to_string()).is_ok()
-        && std::fs::rename(&tmp, dir.join("meta.json")).is_ok()
-    {
-        return;
-    }
-    let _ = std::fs::remove_dir_all(&dir);
-}
+// Dockerfile parsing (`parse_dockerfile`/`substitute_args`/`parse_exec_form`/`parse_labels`) and the
+// content-addressed build **layer cache** (`BuildCache`, `cache_id`, `is_fs_inst`, the rootfs/path
+// digests + `sha256_hex`) now live in `dd_images::build` — runtime-agnostic building primitives. This
+// module keeps only the daemon-side orchestration: driving the step loop, running each `RUN` in the JIT,
+// and registering the result as a daemon `Image`. Re-export the parsing helpers so `crate::build::*`
+// call sites keep resolving.
+pub(crate) use dd_images::build::{
+    cache_id, is_fs_inst, parse_dockerfile, parse_exec_form, parse_labels, path_digest,
+    rootfs_digest, sha256_hex, substitute_args, BuildCache,
+};
 
 pub(crate) fn build_stream(lines: Vec<String>) -> Response {
     (
@@ -498,6 +181,9 @@ pub(crate) async fn images_build(
     let mut target_built = false;
 
     // --- build layer cache chain state (reset at each FROM) ---
+    // The snapshot/restore + step-metadata store lives in dd-images (runtime-agnostic); root it at the
+    // daemon's buildcache dir. The chain-state bookkeeping below stays here (it drives the step loop).
+    let bc = BuildCache::new(crate::util::buildcache_dir());
     let mut parent_id = String::new(); // cache id of the previous step (seeded from the base at FROM)
     let mut cache_ok = false; // false after the first miss: no more hits this stage (Docker rule)
     let mut pending_fs: Option<String> = None; // a cache-hit fs layer whose rootfs restore is deferred (lazy)
@@ -581,7 +267,7 @@ pub(crate) async fn images_build(
                 // args_map stays live for downstream substitution) and stores no layer of its own.
                 parent_id = cid;
             } else {
-                let hit = if cache_ok { load_layer(&cid) } else { None };
+                let hit = if cache_ok { bc.load_layer(&cid) } else { None };
                 if let Some(meta) = hit {
                     // HIT — replay the recorded config now; defer the rootfs restore (a run of consecutive
                     // hits costs zero copies). The rootfs is materialized on the first miss / stage finalize
@@ -624,7 +310,7 @@ pub(crate) async fn images_build(
                 // prior hit deferred it) before executing this step.
                 cache_ok = false;
                 if let Some(fsid) = pending_fs.take() {
-                    if !materialize(&fsid, &rootfs) {
+                    if !bc.materialize(&fsid, &rootfs) {
                         cleanup(&ctx);
                         return build_err(
                             log,
@@ -646,7 +332,7 @@ pub(crate) async fn images_build(
                 // one, so a later COPY --from=<that stage> sees its complete contents.
                 if use_cache {
                     if let Some(fsid) = pending_fs.take() {
-                        if !materialize(&fsid, &rootfs) {
+                        if !bc.materialize(&fsid, &rootfs) {
                             cleanup(&ctx);
                             return build_err(
                                 log,
@@ -905,7 +591,7 @@ pub(crate) async fn images_build(
         // Step executed (a cache miss): record its result as a layer for future rebuilds and advance the
         // chain. fs-mutating steps snapshot the live rootfs; config-only steps store just their metadata.
         if let Some(cid) = current_cid.take() {
-            store_layer(
+            bc.store_layer(
                 &cid,
                 &parent_id,
                 inst,
@@ -929,7 +615,7 @@ pub(crate) async fn images_build(
     // cache hits never materialized it).
     if use_cache {
         if let Some(fsid) = pending_fs.take() {
-            if !materialize(&fsid, &rootfs) {
+            if !bc.materialize(&fsid, &rootfs) {
                 return build_err(log, "build cache: failed to restore the final layer".into());
             }
         }
