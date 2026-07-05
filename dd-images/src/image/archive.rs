@@ -233,3 +233,69 @@ impl Store {
         let _ = std::fs::write(target.join("dd-image.json"), dd.to_string());
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // A unique scratch dir under the system temp dir.
+    fn unique_dir(label: &str) -> PathBuf {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        std::env::temp_dir().join(format!("dd-images-test-{}-{}-{}", label, std::process::id(), nanos))
+    }
+
+    #[test]
+    fn remove_image_dir_deletes_dir_under_store_root() {
+        let root = unique_dir("under");
+        let img_dir = root.join("img");
+        let rootfs = img_dir.join("rootfs");
+        std::fs::create_dir_all(&rootfs).unwrap();
+
+        let store = Store::new(root.to_str().unwrap());
+        store.remove_image_dir(rootfs.to_str().unwrap());
+
+        // The image dir (parent of rootfs) is strictly under the store root -> removed.
+        assert!(!img_dir.exists(), "image dir under store root should be removed");
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn remove_image_dir_leaves_dir_whose_parent_is_store_root() {
+        let root = unique_dir("isroot");
+        // rootfs sits directly under the store root, so its parent IS the store root.
+        let rootfs = root.join("rootfs");
+        std::fs::create_dir_all(&rootfs).unwrap();
+
+        let store = Store::new(root.to_str().unwrap());
+        store.remove_image_dir(rootfs.to_str().unwrap());
+
+        // Guard: parent == store root -> left untouched (won't wipe the store itself).
+        assert!(rootfs.exists(), "rootfs whose parent is the store root must be left untouched");
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn remove_image_dir_leaves_dir_outside_store_root() {
+        let root = unique_dir("store");
+        std::fs::create_dir_all(&root).unwrap();
+        // A rootfs living entirely outside the store root (e.g. a read-only bundled starter dir).
+        let outside = unique_dir("outside");
+        let img_dir = outside.join("img");
+        let rootfs = img_dir.join("rootfs");
+        std::fs::create_dir_all(&rootfs).unwrap();
+
+        let store = Store::new(root.to_str().unwrap());
+        store.remove_image_dir(rootfs.to_str().unwrap());
+
+        // Guard: parent does not start with the store root -> left untouched.
+        assert!(img_dir.exists(), "rootfs outside the store root must be left untouched");
+
+        let _ = std::fs::remove_dir_all(&root);
+        let _ = std::fs::remove_dir_all(&outside);
+    }
+}
