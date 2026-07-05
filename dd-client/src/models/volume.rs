@@ -3,11 +3,17 @@ use super::*;
 /// One volume.
 #[derive(Debug, Clone, Default)]
 pub struct Volume {
+    /// Volume name.
     pub name: String,
+    /// Volume driver backing it (e.g. `local`).
     pub driver: String,
+    /// Host path where the volume's data lives.
     pub mountpoint: String,
+    /// Scope the volume is valid in (e.g. `local`, `global`).
     pub scope: String,
+    /// User-defined labels, sorted by key.
     pub labels: Vec<(String, String)>,
+    /// Driver-specific options, sorted by key.
     pub options: Vec<(String, String)>,
     /// ISO-8601 creation time (sorts chronologically as a string) — for newest-first sorting.
     pub created_at: String,

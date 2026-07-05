@@ -11,6 +11,7 @@
 //! }
 //! # Ok(()) }
 //! ```
+#![warn(missing_docs)]
 
 use std::path::{Path, PathBuf};
 
