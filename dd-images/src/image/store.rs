@@ -1,0 +1,51 @@
+//! The local image store service: resolve rootfs paths and pull images into unpacked rootfs trees.
+
+use super::*;
+use crate::registry::{Client, Credentials, ImageRef, PullEvent};
+use std::path::PathBuf;
+
+/// A local image store: a directory holding one `<safe-name>/rootfs` tree per pulled image.
+#[derive(Clone, Debug)]
+pub struct Store {
+    dir: String,
+}
+
+impl Store {
+    /// A store rooted at `dir` (created on demand).
+    pub fn new(dir: impl Into<String>) -> Self {
+        Store { dir: dir.into() }
+    }
+
+    /// The on-disk rootfs path for a reference (whether or not it is present yet).
+    pub fn rootfs_path(&self, iref: &ImageRef) -> PathBuf {
+        PathBuf::from(format!("{}/{}/rootfs", self.dir, safe_name(iref)))
+    }
+
+    /// Pull `from:tag` from its registry and unpack it into the store, preferring the native arm64
+    /// variant (falls back to amd64). `progress` receives layer/pull events. Returns the [`LocalImage`].
+    pub fn pull(
+        &self,
+        from: &str,
+        tag: &str,
+        creds: Credentials,
+        progress: &mut dyn FnMut(PullEvent),
+    ) -> Result<LocalImage, String> {
+        self.pull_archs(from, tag, creds, &["arm64", "amd64"], progress)
+    }
+
+    /// Like [`pull`](Self::pull) but with an explicit registry arch preference order.
+    pub fn pull_archs(
+        &self,
+        from: &str,
+        tag: &str,
+        creds: Credentials,
+        archs: &[&str],
+        progress: &mut dyn FnMut(PullEvent),
+    ) -> Result<LocalImage, String> {
+        let iref = image_ref(from, tag);
+        let rootfs = self.rootfs_path(&iref);
+        let pulled = Client::new(iref.clone(), creds).pull(&rootfs, archs, progress)?;
+        let arch = arch_from_config(&pulled.config).unwrap_or(Arch::LinuxAarch64);
+        Ok(LocalImage { rootfs, arch, config: pulled.config, iref })
+    }
+}
