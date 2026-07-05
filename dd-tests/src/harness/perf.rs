@@ -49,29 +49,10 @@ fn perf_cmd(ctx: &Ctx, c: &Case, e: Engine) -> Option<(String, (String, Vec<Stri
         return None;
     }
     let rootfs_str = rootfs.unwrap_or_default();
-    let mut cfg = ddjit::SpawnConfig::new(String::new(), rootfs_str.clone());
-    cfg.lowers = c.lowers.clone();
-    // .overlay(): inject the rootfs as its own lower so g_nlower>0 turns on the overlay open/lseek path
-    // (linux engines only; darwin has no overlayfs). Reproduces overlay-only bugs like in the matrix.
-    if c.overlay && !rootfs_str.is_empty() && e != Engine::DarwinAarch64 {
-        cfg.lowers.push(rootfs_str);
-    }
-    cfg.mem_max = c.mem_max;
-    cfg.cpus = c.cpus;
-    cfg.read_only = c.read_only;
-    cfg.ulimits = c.ulimits.clone();
-    if c.untrusted {
-        cfg.env.push(("DDJIT_UNTRUSTED".into(), "1".into()));
-    }
-    for (k, v) in &c.env {
-        cfg.env.push((k.clone(), v.clone()));
-    }
-    cfg.argv = match &c.bin {
-        Bin::InRootfs => c.args.clone(),
-        _ => std::iter::once(guest.clone())
-            .chain(c.args.iter().cloned())
-            .collect(),
-    };
+    // Shared with run() so perf times byte-identically to the matrix; only argv diverges (perf uses the
+    // plain guest path, run() may use a jailed in-rootfs copy).
+    let mut cfg = build_cfg(c, e, &rootfs_str);
+    cfg.argv = guest_argv(c, guest.clone());
     let cmd = cfg.command(e.jit())?;
     Some((guest, cmd))
 }
