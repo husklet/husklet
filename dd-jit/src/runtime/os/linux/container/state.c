@@ -260,6 +260,20 @@ static int uid_permitted(int id) {
 static int gid_permitted(int id) {
     return id == -1 || g_cap_setid_eff || id == g_rgid || id == g_egid || id == g_sgid;
 }
+// ---- Container capability + security-context sets (caps audit; extends #408/#430) ------------------
+// A default `docker run` ROOT container is NOT all-powerful: runc keeps only 14 of the ~40 Linux caps and
+// drops the rest. The masks below are what /proc/self/status (CapPrm/CapEff/CapBnd), capget(2) and
+// prctl(PR_CAPBSET_READ) must ALL report identically — nginx/postgres/systemd/capsh gate privileged
+// operations on their effective/bounding set. Defined here (state.c is the first container TU include) so
+// both vfs.c (the /proc/self/status builder) and proc.c (capget/prctl handlers) consume ONE source of
+// truth. Effective narrows when a guest capset()s a smaller set; the bounding set narrows on
+// PR_CAPBSET_DROP; inheritable/ambient stay empty (the docker default). Previously dd reported all-ones
+// (0xffffffffffffffff) — grossly over-reporting caps vs real docker.
+#define DD_CAP_DEFAULT 0x00000000a80425fbull // chown,dac_override,fowner,fsetid,kill,setgid,setuid,setpcap,
+                                             // net_bind_service,net_raw,sys_chroot,mknod,audit_write,setfcap
+static uint64_t g_cap_eff = DD_CAP_DEFAULT;  // process EFFECTIVE cap set (capset(2) may narrow it)
+static uint64_t g_cap_bnd = DD_CAP_DEFAULT;  // process BOUNDING cap set (PR_CAPBSET_DROP clears bits)
+static int g_nnp;                            // PR_SET/GET_NO_NEW_PRIVS: sticky; /proc/self/status NoNewPrivs
 // ---- BUG #255: new-file ownership stamp (runtime setuid/setgid drop) ----------------------------
 // A guest that drops privilege at runtime (setuid/setresuid/setfsuid -> gosu's postgres) and then
 // CREATES a file/dir must have the new inode owned by its CURRENT effective fsuid/fsgid, NOT the
