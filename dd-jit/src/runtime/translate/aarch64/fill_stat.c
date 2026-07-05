@@ -7,11 +7,11 @@
 // "data directory has wrong ownership" when running as a non-root DD_UID).
 static int cuid(void);
 static int cgid(void);
-// BUG #181: a guest chown is persisted as a host xattr on the overlay-upper file; prefer it over the
-// #156 cuid/cgid default (defined in os/linux/container/state.c, later in this unity TU). hostpath/fd
+// a guest chown is persisted as a host xattr on the overlay-upper file; prefer it over the
+// cuid/cgid default (defined in os/linux/container/state.c, later in this unity TU). hostpath/fd
 // identify the just-stat'd backing file (NULL/-1 when synthetic or unavailable -> default applies).
 static int chown_xattr_get(const char *hostpath, int fd, uint64_t dev, uint64_t ino, int *uid, int *gid);
-// #383: shared owner virtualization (cuid/cgid default + #181 guest-chown xattr override via the #382
+// shared owner virtualization (cuid/cgid default + guest-chown xattr override via the
 // cache), defined in os/linux/container/state.c later in the unity TU. statx uses it too, so every
 // stat-family syscall reports identical ownership for the same file.
 static void stat_virt_ids(const struct stat *s, const char *hostpath, int fd, uint32_t *uid, uint32_t *gid);

@@ -40,11 +40,12 @@ psql -U postgres -tAc \"{sql}\"")
 /// authenticated `mysql -uroot -ppw` query until it succeeds (auth + grants live), then run `sql`.
 fn my(sql: &str) -> String {
     format!(
-"export MYSQL_ROOT_PASSWORD=pw
+        "export MYSQL_ROOT_PASSWORD=pw
 docker-entrypoint.sh mysqld >/tmp/my.log 2>&1 &
 for i in $(seq 1 150); do grep -q 'port: 3306' /tmp/my.log 2>/dev/null && break; sleep 1; done
 for i in $(seq 1 30); do mysql -uroot -ppw -N -e 'SELECT 1' >/dev/null 2>&1 && break; sleep 1; done
-mysql -uroot -ppw -N -e \"{sql}\"")
+mysql -uroot -ppw -N -e \"{sql}\""
+    )
 }
 
 /// MariaDB: same hardened shape with the MariaDB entrypoint/env and the `mariadb` client — wait for the
@@ -61,17 +62,19 @@ mariadb -uroot -ppw -N -e \"{sql}\"")
 /// Redis: daemonize the server (no persistence so it stays deterministic), poll PING, run `cmds`.
 fn redis(cmds: &str) -> String {
     format!(
-"redis-server --save '' --appendonly no --daemonize yes >/dev/null 2>&1
+        "redis-server --save '' --appendonly no --daemonize yes >/dev/null 2>&1
 for i in $(seq 1 50); do redis-cli ping 2>/dev/null | grep -q PONG && break; sleep 0.2; done
-{cmds}")
+{cmds}"
+    )
 }
 
 /// Valkey (OSS redis fork): same lifecycle with the valkey binaries.
 fn valkey(cmds: &str) -> String {
     format!(
-"valkey-server --save '' --appendonly no --daemonize yes >/dev/null 2>&1
+        "valkey-server --save '' --appendonly no --daemonize yes >/dev/null 2>&1
 for i in $(seq 1 50); do valkey-cli ping 2>/dev/null | grep -q PONG && break; sleep 0.2; done
-{cmds}")
+{cmds}"
+    )
 }
 
 /// MongoDB: fork mongod bound to loopback, poll a ping command, then run a mongosh `--eval`.

@@ -1,33 +1,32 @@
 #![allow(unused_imports, dead_code)]
-use crate::model::*;
-use crate::util::*;
-use crate::system::*;
-use crate::images::*;
-use crate::containers::*;
-use crate::build::*;
 use crate::archive::*;
-use crate::volumes::*;
+use crate::build::*;
+use crate::containers::*;
+use crate::images::*;
+use crate::model::*;
 use crate::networks::*;
 use crate::registry::{Client, Credentials, ImageRef};
+use crate::system::*;
+use crate::util::*;
+use crate::volumes::*;
 use axum::body::Body;
 use axum::extract::{Path, Query, Request, State};
-use axum::http::{StatusCode, Uri, HeaderMap};
+use axum::http::{HeaderMap, StatusCode, Uri};
 use axum::response::{IntoResponse, Response};
 use axum::Json;
+use ddjit::{Guest, PortMap, SpawnConfig, Volume};
+use hyper_util::rt::TokioIo;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::HashMap;
+use std::os::fd::{AsRawFd, FromRawFd, OwnedFd, RawFd};
 use std::path::PathBuf;
+use std::process::Stdio;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
-use std::process::Stdio;
-use std::os::fd::{AsRawFd, FromRawFd, OwnedFd, RawFd};
 use tokio::io::unix::AsyncFd;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::sync::{broadcast, mpsc, watch, Mutex};
-use hyper_util::rt::TokioIo;
-use ddjit::{Guest, PortMap, SpawnConfig, Volume};
-
 
 /// Cap on the retained `docker logs` replay buffer (per container/exec). A chatty or long-lived guest
 /// would otherwise grow `live.log_chunks` without bound and OOM the daemon. When a new chunk pushes the
@@ -49,9 +48,10 @@ async fn push_log(live: &Live, ts: i64, stream: u8, bytes: Vec<u8>) {
         total -= log[drop_to].2.len();
         drop_to += 1;
     }
-    if drop_to > 0 { log.drain(..drop_to); }
+    if drop_to > 0 {
+        log.drain(..drop_to);
+    }
 }
-
 
 /// Write the LIVE reach-by-name table for one user-defined network into the engine's per-network switch
 /// dir (`/tmp/.ddbr-<netid[..40]>/.names`), one `ip\tname` line per endpoint. The in-engine 127.0.0.11
@@ -65,7 +65,9 @@ fn write_net_names(netid: &str, endpoints: &HashMap<String, Endpoint>) {
     let _ = std::fs::create_dir_all(&dir); // the engine also mkdir 0700's this; either creating it is fine
     let mut body = String::new();
     for e in endpoints.values() {
-        if !e.ip.is_empty() && !e.name.is_empty() { body.push_str(&format!("{}\t{}\n", e.ip, e.name)); }
+        if !e.ip.is_empty() && !e.name.is_empty() {
+            body.push_str(&format!("{}\t{}\n", e.ip, e.name));
+        }
     }
     let _ = std::fs::write(format!("{dir}/.names"), body);
 }
@@ -78,13 +80,16 @@ fn write_net_names(netid: &str, endpoints: &HashMap<String, Endpoint>) {
 /// defaults to gid 0 (docker semantics). Returns `None` if a name component can't be resolved, so the
 /// caller leaves the guest's default identity (matching the prior "skip unknown user" behavior).
 fn resolve_user(rootfs: &str, spec: &str) -> Option<(u32, u32)> {
-    let (us, gs) = spec.split_once(':').map_or((spec, None), |(u, g)| (u, Some(g)));
+    let (us, gs) = spec
+        .split_once(':')
+        .map_or((spec, None), |(u, g)| (u, Some(g)));
     // passwd line: name:passwd:uid:gid:gecos:home:shell  — return (uid, primary gid) for a name match.
     let lookup_passwd = |name: &str| -> Option<(u32, u32)> {
         let passwd = std::fs::read_to_string(format!("{rootfs}/etc/passwd")).ok()?;
         passwd.lines().find_map(|l| {
             let f: Vec<&str> = l.split(':').collect();
-            (f.len() >= 4 && f[0] == name).then(|| Some((f[2].parse().ok()?, f[3].parse().ok()?)))?
+            (f.len() >= 4 && f[0] == name)
+                .then(|| Some((f[2].parse().ok()?, f[3].parse().ok()?)))?
         })
     };
     // group line: name:passwd:gid:members — return the gid for a name match.
@@ -97,7 +102,10 @@ fn resolve_user(rootfs: &str, spec: &str) -> Option<(u32, u32)> {
     };
     let (uid, primary_gid) = match us.parse::<u32>() {
         Ok(n) => (n, None),
-        Err(_) => { let (u, g) = lookup_passwd(us)?; (u, Some(g)) }
+        Err(_) => {
+            let (u, g) = lookup_passwd(us)?;
+            (u, Some(g))
+        }
     };
     // A trailing-colon empty group (`"name:"` / `"1000:"`) means "no group" — not a parse failure.
     let gid = match gs.filter(|g| !g.is_empty()) {
@@ -109,15 +117,23 @@ fn resolve_user(rootfs: &str, spec: &str) -> Option<(u32, u32)> {
     Some((uid, gid))
 }
 
-
 /// Per-container host scratch dir backing a `--tmpfs`/`--mount type=tmpfs` mount at `target`. A plain
 /// host dir (path-spliced over the guest target like a bind); it is cleared fresh on every container
 /// start (see [`clear_tmpfs`]), so the guest sees an empty mount each run — the "in-memory tmpfs" contract
 /// that matters to callers. Keyed by CONTAINER id (an exec passes the container's id via `netns_key`) so
 /// an exec into the container sees the same tmpfs. Size/mode options are metadata only (not a real tmpfs).
 pub(crate) fn tmpfs_hostdir(cid: &str, target: &str) -> String {
-    let slug: String = target.chars().map(|c| if c.is_ascii_alphanumeric() { c } else { '_' }).collect();
-    crate::util::dd_home().join("containers").join(cid).join("tmpfs").join(slug).to_string_lossy().into_owned()
+    let slug: String = target
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() { c } else { '_' })
+        .collect();
+    crate::util::dd_home()
+        .join("containers")
+        .join(cid)
+        .join("tmpfs")
+        .join(slug)
+        .to_string_lossy()
+        .into_owned()
 }
 
 /// Reset every `--tmpfs` target of a container to a FRESH empty dir. Called on each real container start
@@ -133,7 +149,8 @@ pub(crate) fn clear_tmpfs(c: &Container) {
 /// Docker's default container PATH (moby's `system.DefaultPathEnv` for unix). Used when neither the
 /// image config nor a `-e PATH=` override supplies one, so bare commands in the standard sbin/bin dirs
 /// (e.g. alpine's `apk` in /sbin) resolve without an absolute path.
-const DEFAULT_GUEST_PATH: &str = "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin";
+const DEFAULT_GUEST_PATH: &str =
+    "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin";
 
 /// Resolve the guest environment from a container's merged `env` ("K=V" lines: image `Config.Env`
 /// followed by `docker run -e` overrides). Duplicate keys collapse to their LAST value (so an explicit
@@ -151,11 +168,17 @@ fn guest_env(env: &[String], tty: bool) -> Vec<String> {
     let mut out: Vec<String> = Vec::with_capacity(env.len());
     // Walk back-to-front so the LAST assignment of each key wins, then restore forward order.
     for kv in env.iter().rev() {
-        if seen.insert(key(kv)) { out.push(kv.clone()); }
+        if seen.insert(key(kv)) {
+            out.push(kv.clone());
+        }
     }
     out.reverse();
-    if !seen.contains("PATH") { out.push(DEFAULT_GUEST_PATH.to_string()); }
-    if tty && !seen.contains("TERM") { out.push("TERM=xterm".to_string()); }
+    if !seen.contains("PATH") {
+        out.push(DEFAULT_GUEST_PATH.to_string());
+    }
+    if tty && !seen.contains("TERM") {
+        out.push("TERM=xterm".to_string());
+    }
     out
 }
 
@@ -163,36 +186,64 @@ fn guest_env(env: &[String], tty: bool) -> Vec<String> {
 /// Named-volume binds (`name:/path`, no leading `/`) are resolved against `volumes_dir`.
 /// Build the (program, args) that launches this container in the matching guest's JIT. `None` if no JIT
 /// was built for the image's arch.
-pub(crate) fn spawn_cfg(c: &Container, volumes_dir: &str, vols: &[Vol], bridge: Option<(String, String)>) -> Option<(String, Vec<String>)> {
+pub(crate) fn spawn_cfg(
+    c: &Container,
+    volumes_dir: &str,
+    vols: &[Vol],
+    bridge: Option<(String, String)>,
+) -> Option<(String, Vec<String>)> {
     let guest = c.arch.unwrap_or(Guest::LinuxAarch64);
     // Per-container copy-on-write: the private writable UPPER (`c.upper`) is overlaid on the read-only
     // image rootfs (the lower), so the guest's writes/creates go to the upper and deletions become
     // whiteouts -- the shared image is never mutated. Linux guests only (darwin runs natively jailed, and
     // overrides cfg.lowers below); a flat rootfs is used when no upper was allocated (empty `c.upper`).
     let overlay = guest.os() != "darwin" && !c.upper.is_empty();
-    let mut cfg = SpawnConfig::new(String::new(), if overlay { c.upper.clone() } else { c.rootfs.clone() }); // work_dir is the HOST cwd; leave empty
-    if overlay { cfg.lowers = vec![c.rootfs.clone()]; }
+    let mut cfg = SpawnConfig::new(
+        String::new(),
+        if overlay {
+            c.upper.clone()
+        } else {
+            c.rootfs.clone()
+        },
+    ); // work_dir is the HOST cwd; leave empty
+    if overlay {
+        cfg.lowers = vec![c.rootfs.clone()];
+    }
     cfg.argv = c.cmd.clone();
     // `-w DIR` (WorkingDir): the guest's initial cwd, read as DD_CWD by the runtime at startup.
-    if !c.working_dir.is_empty() { cfg.env.push(("DD_CWD".into(), c.working_dir.clone())); }
+    if !c.working_dir.is_empty() {
+        cfg.env.push(("DD_CWD".into(), c.working_dir.clone()));
+    }
     // container env (image ENV + `docker run -e`) -> one DD_GUEST_ENV var so the JIT forwards EXACTLY
     // these to the guest, never the daemon/host environment. Deduped (last assignment of a key wins, so
     // an explicit `-e KEY=` overrides the image) with a docker-default PATH when the image set none.
     let genv = guest_env(&c.env, c.tty);
-    if !genv.is_empty() { cfg.env.push(("DD_GUEST_ENV".into(), genv.join("\n"))); }
+    if !genv.is_empty() {
+        cfg.env.push(("DD_GUEST_ENV".into(), genv.join("\n")));
+    }
     // Effective UTS hostname: the user's `--hostname`, else Docker's default of the 12-char short id.
     // Passed to the engine (DD_HOSTNAME -> gethostname/uname) AND written to /etc/hostname in spawn_live,
     // so both agree and match Docker (previously an unset hostname left gethostname reporting the "jit"
     // fallback and /etc/hostname was never generated at all).
-    cfg.hostname = Some(if c.hostname.is_empty() { c.id[..c.id.len().min(12)].to_string() } else { c.hostname.clone() });
+    cfg.hostname = Some(if c.hostname.is_empty() {
+        c.id[..c.id.len().min(12)].to_string()
+    } else {
+        c.hostname.clone()
+    });
     cfg.mem_max = c.memory.max(0) as u64;
     cfg.pids_max = c.pids_limit.max(0) as u32;
     // Resource fidelity: --cpus (NanoCpus -> ceil to whole online CPUs), --read-only, --ulimit. Threaded to
     // the engine (DD_CPUS/DD_ROOTFS_RO/DD_ULIMITS via SpawnConfig.resource_env) so the container reports its
     // CPU allotment, fails rootfs writes with EROFS, and getrlimit reflects the requested ulimits.
-    cfg.cpus = if c.nano_cpus > 0 { ((c.nano_cpus + 999_999_999) / 1_000_000_000) as u32 } else { 0 };
+    cfg.cpus = if c.nano_cpus > 0 {
+        ((c.nano_cpus + 999_999_999) / 1_000_000_000) as u32
+    } else {
+        0
+    };
     cfg.read_only = c.readonly_rootfs;
-    cfg.ulimits = c.ulimits.iter()
+    cfg.ulimits = c
+        .ulimits
+        .iter()
         .map(|u| (u.name.clone(), u.soft.max(0) as u64, u.hard.max(0) as u64))
         .collect();
     // ---- JIT performance: developer-optimal defaults (see dd-daemon/PERFORMANCE.md) ----
@@ -208,7 +259,10 @@ pub(crate) fn spawn_cfg(c: &Container, volumes_dir: &str, vols: &[Vol], bridge: 
         let pdir = crate::util::dd_home().join("pcache");
         let _ = std::fs::create_dir_all(&pdir);
         cfg.env.push(("DDJIT_PCACHE".into(), "1".into()));
-        cfg.env.push(("DDJIT_PCACHE_DIR".into(), pdir.to_string_lossy().into_owned()));
+        cfg.env.push((
+            "DDJIT_PCACHE_DIR".into(),
+            pdir.to_string_lossy().into_owned(),
+        ));
     }
     // `--network host` shares the host network (no per-container netns); otherwise isolate in one. The
     // DD_NETNS key names the container's private loopback (127.0.0.1) domain in the engine; it defaults to
@@ -217,19 +271,29 @@ pub(crate) fn spawn_cfg(c: &Container, volumes_dir: &str, vols: &[Vol], bridge: 
     // network) instead of being isolated in its own loopback. Truncated to 40 chars to match the engine.
     let ns_key = c.netns_key.as_deref().unwrap_or(&c.id);
     cfg.netns = (c.network_mode != "host").then(|| ns_key[..ns_key.len().min(40)].to_string());
-    // #374 daemon-write coherence: hand every Linux engine of this container the shared external-writer
+    // daemon-write coherence: hand every Linux engine of this container the shared external-writer
     // generation file (run/exec/health probes all key to the TARGET container, like tmpfs/netns). The
     // daemon bumps it after any daemon-side write into the live fs (docker cp's archive PUT, the exec
     // /etc rewrites below in spawn_live) and the engine then drops its path/metadata caches, so the write
     // is guest-visible by its next syscall (see fscache.c fsgen_* / util.rs fsgen_bump).
     if guest.os() != "darwin" {
         let key = c.netns_key.as_deref().unwrap_or(&c.id);
-        cfg.env.push(("DD_FSGEN_FILE".into(), crate::util::fsgen_ensure(key).to_string_lossy().into_owned()));
+        cfg.env.push((
+            "DD_FSGEN_FILE".into(),
+            crate::util::fsgen_ensure(key)
+                .to_string_lossy()
+                .into_owned(),
+        ));
     }
     // `--network none`: no external egress -- the JIT refuses non-loopback connects (DD_NET_ISOLATE).
-    if c.network_mode == "none" { cfg.env.push(("DD_NET_ISOLATE".into(), "1".into())); }
+    if c.network_mode == "none" {
+        cfg.env.push(("DD_NET_ISOLATE".into(), "1".into()));
+    }
     // netstack PR2 — per-network AF_UNIX virtual switch: container<->container TCP for in-subnet peers.
-    if let Some((netid, ip)) = bridge { cfg.env.push(("DD_NETBR".into(), netid)); cfg.env.push(("DD_IP".into(), ip)); }
+    if let Some((netid, ip)) = bridge {
+        cfg.env.push(("DD_NETBR".into(), netid));
+        cfg.env.push(("DD_IP".into(), ip));
+    }
     // `docker run --user U[:G]` / `docker exec -u U[:G]` (and an image's `Config.User`): surface the
     // requested uid/gid to the JIT, which makes the guest observe them via getuid/getgid/setuid. A NAME
     // (e.g. `postgres`) is resolved against the rootfs's /etc/passwd|/etc/group; an unresolvable name is
@@ -268,43 +332,79 @@ pub(crate) fn spawn_cfg(c: &Container, volumes_dir: &str, vols: &[Vol], bridge: 
         } else if let Some(v) = vols.iter().find(|v| v.name == src) {
             v.mountpoint.clone()
         } else {
-            PathBuf::from(volumes_dir).join(src).to_string_lossy().into_owned()
+            PathBuf::from(volumes_dir)
+                .join(src)
+                .to_string_lossy()
+                .into_owned()
         }
     };
     // `-v src:dst[:opts]` / Binds: parse off the mount options so the container path is the bare `dst`
     // (the old `split_once(':')` left `dst:ro` as the literal mount target — a bug). `ro` marks the
     // mount read-only; we now thread that through to `Volume.ro` so the JIT fails write-intent syscalls
     // under the mount with EROFS (matching what `docker inspect` already reports as RW:false).
-    cfg.volumes = c.binds.iter().filter_map(|b| parse_bind(b).map(|(host, dst, ro)| {
-        Volume { container: dst.into(), host: resolve_src(host), ro }
-    })).collect();
+    cfg.volumes = c
+        .binds
+        .iter()
+        .filter_map(|b| {
+            parse_bind(b).map(|(host, dst, ro)| Volume {
+                container: dst.into(),
+                host: resolve_src(host),
+                ro,
+            })
+        })
+        .collect();
     // `--mount` / HostConfig.Mounts: wire bind/volume mounts into the rootfs via the same Volume list.
     // type=bind -> Source is a host path; type=volume -> Source is a named volume (resolved like `-v`).
     // `ReadOnly` is honored the same as `-v …:ro` (JIT enforces write-intent EROFS under the mount).
     for m in &c.mounts {
-        if m.target.is_empty() { continue; }
-        let host = if m.typ == "bind" { m.source.clone() } else { resolve_src(&m.source) };
-        if host.is_empty() { continue; }
-        cfg.volumes.push(Volume { container: m.target.clone(), host, ro: m.read_only });
+        if m.target.is_empty() {
+            continue;
+        }
+        let host = if m.typ == "bind" {
+            m.source.clone()
+        } else {
+            resolve_src(&m.source)
+        };
+        if host.is_empty() {
+            continue;
+        }
+        cfg.volumes.push(Volume {
+            container: m.target.clone(),
+            host,
+            ro: m.read_only,
+        });
     }
     // `--tmpfs DST` / `--mount type=tmpfs`: a fresh empty scratch dir path-spliced over the guest target
     // (same Volume mechanism as a bind). Keyed by the CONTAINER id (`netns_key` for an exec) so an exec
     // shares the container's tmpfs. The dir is cleared to empty on each container start (clear_tmpfs).
     let tmpfs_key = c.netns_key.as_deref().unwrap_or(&c.id);
     for target in c.tmpfs.keys() {
-        if target.is_empty() { continue; }
-        cfg.volumes.push(Volume { container: target.clone(), host: tmpfs_hostdir(tmpfs_key, target), ro: false });
+        if target.is_empty() {
+            continue;
+        }
+        cfg.volumes.push(Volume {
+            container: target.clone(),
+            host: tmpfs_hostdir(tmpfs_key, target),
+            ro: false,
+        });
     }
     // Published ports. The daemon now OWNS the process-independent host forwarder (see containers/ports.rs
-    // + #320), so we tell the engine NOT to spin up its own in-process host TCP listener — that listener
+    // +), so we tell the engine NOT to spin up its own in-process host TCP listener — that listener
     // lived in whichever guest process called listen(), which broke prefork/re-listening servers and raced
     // EADDRINUSE. We still pass the port map (the engine reports container ports via getsockname and keeps
     // the guest-side switch redirect + the UDP host path). DD_PUBLISH_DAEMON=1 gates the engine's TCP
     // fwd_maybe_start off. Parsed from the full `[hostIP]:hostPort:cport/proto` publish string.
-    cfg.publish = crate::containers::parse_publish(&c.publish).into_iter()
+    cfg.publish = crate::containers::parse_publish(&c.publish)
+        .into_iter()
         .filter(|p| p.proto == "tcp")
-        .map(|p| PortMap { host: p.host_port, container: p.container_port }).collect();
-    if !c.publish.is_empty() { cfg.env.push(("DD_PUBLISH_DAEMON".into(), "1".into())); }
+        .map(|p| PortMap {
+            host: p.host_port,
+            container: p.container_port,
+        })
+        .collect();
+    if !c.publish.is_empty() {
+        cfg.env.push(("DD_PUBLISH_DAEMON".into(), "1".into()));
+    }
     // macOS containers (darwinjail): the userland (nix arm64 tools) is on PATH at /profile/bin, and the
     // host filesystem is the read-only lower so native binaries find their /nix deps; writes land in the
     // rootfs + volumes. The entry argv[0] is run by the mac shell, so it must be a real host path -- we
@@ -320,11 +420,16 @@ pub(crate) fn spawn_cfg(c: &Container, volumes_dir: &str, vols: &[Vol], bridge: 
         let mut have_path = false;
         for kv in &c.env {
             if let Some((k, v)) = kv.split_once('=') {
-                if k == "PATH" { have_path = true; }
+                if k == "PATH" {
+                    have_path = true;
+                }
                 cfg.env.push((k.to_string(), v.to_string()));
             }
         }
-        if !have_path { cfg.env.push(("PATH".into(), "/profile/bin:/usr/bin:/bin".into())); }
+        if !have_path {
+            cfg.env
+                .push(("PATH".into(), "/profile/bin:/usr/bin:/bin".into()));
+        }
         // `-c` (not `-lc`): a login shell would source the host's /etc/profile via the lower and exec
         // arm64e system tools (which the arm64 jail can't inject into); the container has its own env.
         let wrapper = format!("{}/profile/bin/bash", c.rootfs);
@@ -347,7 +452,6 @@ pub(crate) fn spawn_cfg(c: &Container, volumes_dir: &str, vols: &[Vol], bridge: 
     cfg.command(guest)
 }
 
-
 /// Spawn the container's guest process live (piped stdio) and wire its IO into `live`: stdout/stderr fan
 /// out to attached clients + the log buffers; on exit, the container's status/exit-code are finalized.
 /// Idempotent per container (start is a no-op if already running). Returns false if no JIT for the arch.
@@ -358,7 +462,9 @@ pub(crate) async fn spawn_live(app: &App, c: &Container, vols: &[Vol], live: Arc
     }
     // `--tmpfs`: reset this container's tmpfs targets to a fresh empty dir for the new run. Skipped for an
     // exec (netns_key is Some) — an exec must see the container's LIVE tmpfs, not wipe it.
-    if c.netns_key.is_none() { clear_tmpfs(c); }
+    if c.netns_key.is_none() {
+        clear_tmpfs(c);
+    }
     // Reach-by-name identity key. A `docker exec` runs with `c.id` set to the EXEC id (not a network
     // endpoint), but it JOINS the target container's network (`netns_key`), so it must inherit that
     // container's bridge (netid, ip) + /etc/hosts view — otherwise the exec'd process gets no DD_NETBR/
@@ -369,10 +475,14 @@ pub(crate) async fn spawn_live(app: &App, c: &Container, vols: &[Vol], live: Arc
     // plus the /etc/hosts reach-by-name table (this container + same-network peers, name -> ip). We also
     // refresh a LIVE per-user-network names file the in-engine 127.0.0.11 resolver consults, so a peer
     // that appears AFTER this container launched (its /etc/hosts snapshot is frozen at launch) is still
-    // resolvable — the #322 reach-by-name fix (see net.c dns_build_response local-name lookup).
+    // resolvable — the reach-by-name fix (see net.c dns_build_response local-name lookup).
     let (bridge, hosts) = {
         let g = app.inner.lock().await;
-        let bridge = g.networks.iter().find_map(|n| n.endpoints.get(&lookup_id).map(|e| (n.id.clone(), e.ip.clone())));
+        let bridge = g.networks.iter().find_map(|n| {
+            n.endpoints
+                .get(&lookup_id)
+                .map(|e| (n.id.clone(), e.ip.clone()))
+        });
         // netstack reach-by-name: a guest's getaddrinfo("peer") must resolve to the peer's network IP so
         // the per-network br_* switch (PR2) can carry the connect. Docker drives this via embedded DNS;
         // the equivalent here is to seed /etc/hosts with every endpoint on the network(s) this container
@@ -381,14 +491,21 @@ pub(crate) async fn spawn_live(app: &App, c: &Container, vols: &[Vol], live: Arc
         // own entry (once): own-ip  own-name [hostname]. Absent for --network host/none (no endpoint).
         if let Some(own) = g.networks.iter().find_map(|n| n.endpoints.get(&lookup_id)) {
             let mut names = own.name.clone();
-            if !c.hostname.is_empty() && c.hostname != own.name { names.push(' '); names.push_str(&c.hostname); }
+            if !c.hostname.is_empty() && c.hostname != own.name {
+                names.push(' ');
+                names.push_str(&c.hostname);
+            }
             hosts.push_str(&format!("{}\t{}\n", own.ip, names));
         }
         // peers: every OTHER endpoint on any network this container is a member of.
         for n in &g.networks {
-            if !n.endpoints.contains_key(&lookup_id) { continue; }
+            if !n.endpoints.contains_key(&lookup_id) {
+                continue;
+            }
             for (cid, e) in &n.endpoints {
-                if cid != &lookup_id { hosts.push_str(&format!("{}\t{}\n", e.ip, e.name)); }
+                if cid != &lookup_id {
+                    hosts.push_str(&format!("{}\t{}\n", e.ip, e.name));
+                }
             }
         }
         // Refresh the live resolver name file for every USER-defined network this container is on. Docker
@@ -396,7 +513,9 @@ pub(crate) async fn spawn_live(app: &App, c: &Container, vols: &[Vol], live: Arc
         // predefined networks are skipped. The file is rewritten on EVERY start, so it always reflects the
         // current endpoint set (late-joining peers included). The engine reads it per DNS query.
         for n in &g.networks {
-            if !n.endpoints.contains_key(&lookup_id) || is_predefined(&n.name) { continue; }
+            if !n.endpoints.contains_key(&lookup_id) || is_predefined(&n.name) {
+                continue;
+            }
             write_net_names(&n.id, &n.endpoints);
         }
         (bridge, hosts)
@@ -407,11 +526,20 @@ pub(crate) async fn spawn_live(app: &App, c: &Container, vols: &[Vol], live: Arc
         // Write /etc/hosts into the writable layer the guest actually sees: the per-container overlay UPPER
         // (so it shadows the image's /etc/hosts via the overlay and never drifts the shared image), or the
         // flat rootfs when there's no upper (darwin / legacy containers).
-        let base = if c.upper.is_empty() { &c.rootfs } else { &c.upper };
+        let base = if c.upper.is_empty() {
+            &c.rootfs
+        } else {
+            &c.upper
+        };
         let etc = format!("{base}/etc");
         let _ = std::fs::create_dir_all(&etc);
         if let Err(e) = std::fs::write(format!("{etc}/hosts"), &hosts) {
-            if std::env::var("DD_DEBUG").is_ok() { eprintln!("[live] {} write /etc/hosts failed: {e}", &c.id[..c.id.len().min(12)]); }
+            if std::env::var("DD_DEBUG").is_ok() {
+                eprintln!(
+                    "[live] {} write /etc/hosts failed: {e}",
+                    &c.id[..c.id.len().min(12)]
+                );
+            }
         }
         // Provision /etc/resolv.conf with dd's embedded nameserver (mirrors Docker's 127.0.0.11). Many base
         // images ship an EMPTY /etc/resolv.conf (Docker fills it at runtime); without this the guest has no
@@ -425,22 +553,36 @@ pub(crate) async fn spawn_live(app: &App, c: &Container, vols: &[Vol], live: Arc
         // null network does. Best-effort: never fail the spawn on an I/O error.
         let resolv = "nameserver 127.0.0.11\noptions ndots:0\n";
         if let Err(e) = std::fs::write(format!("{etc}/resolv.conf"), resolv) {
-            if std::env::var("DD_DEBUG").is_ok() { eprintln!("[live] {} write /etc/resolv.conf failed: {e}", &c.id[..c.id.len().min(12)]); }
+            if std::env::var("DD_DEBUG").is_ok() {
+                eprintln!(
+                    "[live] {} write /etc/resolv.conf failed: {e}",
+                    &c.id[..c.id.len().min(12)]
+                );
+            }
         }
         // /etc/hostname: Docker generates this beside /etc/hosts and /etc/resolv.conf (the container's UTS
         // name + newline), shadowing any image copy via the overlay upper. Same value spawn_cfg passes as
         // DD_HOSTNAME -> gethostname(), so the two agree (user --hostname, else the 12-char short id).
-        let eff_hostname = if c.hostname.is_empty() { c.id[..c.id.len().min(12)].to_string() } else { c.hostname.clone() };
+        let eff_hostname = if c.hostname.is_empty() {
+            c.id[..c.id.len().min(12)].to_string()
+        } else {
+            c.hostname.clone()
+        };
         if let Err(e) = std::fs::write(format!("{etc}/hostname"), format!("{eff_hostname}\n")) {
-            if std::env::var("DD_DEBUG").is_ok() { eprintln!("[live] {} write /etc/hostname failed: {e}", &c.id[..c.id.len().min(12)]); }
+            if std::env::var("DD_DEBUG").is_ok() {
+                eprintln!(
+                    "[live] {} write /etc/hostname failed: {e}",
+                    &c.id[..c.id.len().min(12)]
+                );
+            }
         }
-        // #374: for an exec/health-probe spawn those /etc writes just landed in a LIVE container's upper
+        // for an exec/health-probe spawn those /etc writes just landed in a LIVE container's upper
         // (the container's engine is already running with warm caches) — bump its external-writer
         // generation so every running engine drops its caches. For a fresh container start this is a
         // harmless no-op signal: no engine is up yet, and the engine snapshots the current value at boot.
         crate::util::fsgen_bump(&lookup_id);
     }
-    // #320: start the daemon-owned, process-independent host→container port forwarders. Idempotent (the
+    // start the daemon-owned, process-independent host→container port forwarders. Idempotent (the
     // restart path re-enters here but the listeners persist), a no-op for a container that publishes
     // nothing, and a no-op for an exec (empty publish). Bound now so `docker port`/`ps`/inspect report a
     // live, deterministic host port and a re-listening server stays reachable. `bridge` is still owned here
@@ -478,17 +620,23 @@ pub(crate) async fn spawn_live(app: &App, c: &Container, vols: &[Vol], live: Arc
 
     // tty=true gives the guest a real PTY -- an interactive shell sees a terminal (prompt, line editing),
     // and stdout/stderr merge into one raw stream. Otherwise stdio is piped (the multiplexed-frame path).
-    let (mut child, io_handles): (tokio::process::Child, Vec<tokio::task::JoinHandle<()>>) = if c.tty {
+    let (mut child, io_handles): (tokio::process::Child, Vec<tokio::task::JoinHandle<()>>) = if c
+        .tty
+    {
         let (master, slave) = match open_pty() {
             Ok(p) => p,
             Err(e) => return live_fail(app, &c.id, &live, format!("openpty: {e}")).await,
         };
         let slave_fd = slave.as_raw_fd();
-        cmd.stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null());
+        cmd.stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null());
         // SAFETY: in the forked child, login_tty makes the slave the controlling terminal + stdin/out/err.
         unsafe {
             cmd.pre_exec(move || {
-                if libc::login_tty(slave_fd) != 0 { return Err(std::io::Error::last_os_error()); }
+                if libc::login_tty(slave_fd) != 0 {
+                    return Err(std::io::Error::last_os_error());
+                }
                 Ok(())
             });
         }
@@ -508,10 +656,14 @@ pub(crate) async fn spawn_live(app: &App, c: &Container, vols: &[Vol], live: Arc
             let w = afd.clone();
             tokio::spawn(async move {
                 while let Some(chunk) = rx.recv().await {
-                    if chunk.is_empty() { break; }
+                    if chunk.is_empty() {
+                        break;
+                    }
                     let mut off = 0;
                     while off < chunk.len() {
-                        let Ok(mut g) = w.writable().await else { return };
+                        let Ok(mut g) = w.writable().await else {
+                            return;
+                        };
                         match g.try_io(|i| pty_write(i.as_raw_fd(), &chunk[off..])) {
                             Ok(Ok(n)) => off += n,
                             Ok(Err(_)) => return,
@@ -543,14 +695,18 @@ pub(crate) async fn spawn_live(app: &App, c: &Container, vols: &[Vol], live: Arc
         });
         (child, vec![reader])
     } else {
-        cmd.stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped());
+        cmd.stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
         // Put the guest in its own process group (leader pgid == child pid) so pause/unpause can
         // SIGSTOP/SIGCONT the WHOLE container -- the JIT plus any host processes the guest forked, which
         // inherit this pgid -- with a single killpg. (The TTY path above gets the same via login_tty's
         // setsid.) SAFETY: setpgid(0,0) in the forked child is async-signal-safe.
         unsafe {
             cmd.pre_exec(|| {
-                if libc::setpgid(0, 0) != 0 { return Err(std::io::Error::last_os_error()); }
+                if libc::setpgid(0, 0) != 0 {
+                    return Err(std::io::Error::last_os_error());
+                }
                 Ok(())
             });
         }
@@ -566,8 +722,12 @@ pub(crate) async fn spawn_live(app: &App, c: &Container, vols: &[Vol], live: Arc
             if let Some(mut rx) = live.stdin_rx.lock().await.take() {
                 tokio::spawn(async move {
                     while let Some(chunk) = rx.recv().await {
-                        if chunk.is_empty() { break; }
-                        if child_in.write_all(&chunk).await.is_err() { break; }
+                        if chunk.is_empty() {
+                            break;
+                        }
+                        if child_in.write_all(&chunk).await.is_err() {
+                            break;
+                        }
                         let _ = child_in.flush().await;
                     }
                     drop(child_in); // EOF to the guest
@@ -575,16 +735,20 @@ pub(crate) async fn spawn_live(app: &App, c: &Container, vols: &[Vol], live: Arc
             }
         }
         let lo = live.clone();
-        let h_out = tokio::spawn(async move { pump(stdout, 1, lo).await; });
+        let h_out = tokio::spawn(async move {
+            pump(stdout, 1, lo).await;
+        });
         let le = live.clone();
-        let h_err = tokio::spawn(async move { pump(stderr, 2, le).await; });
+        let h_err = tokio::spawn(async move {
+            pump(stderr, 2, le).await;
+        });
         (child, vec![h_out, h_err])
     };
 
     *live.pid.lock().unwrap() = child.id(); // remember the pid so pause can SIGSTOP/SIGCONT it
-    // HEALTHCHECK (§8.3-1): a real container (not an exec) with a resolved probe gets a background monitor
-    // tied to THIS Live — it probes on `interval`, flips `State.Health` starting→healthy/unhealthy per
-    // `retries`/`start_period`, and exits when this Live's process dies (so a restart spawns a fresh one).
+                                            // HEALTHCHECK (§8.3-1): a real container (not an exec) with a resolved probe gets a background monitor
+                                            // tied to THIS Live — it probes on `interval`, flips `State.Health` starting→healthy/unhealthy per
+                                            // `retries`/`start_period`, and exits when this Live's process dies (so a restart spawns a fresh one).
     if c.netns_key.is_none() {
         if let Some(hcfg) = c.healthcheck.clone() {
             let app2 = app.clone();
@@ -592,7 +756,9 @@ pub(crate) async fn spawn_live(app: &App, c: &Container, vols: &[Vol], live: Arc
             let cont = c.clone();
             let vols2 = vols.to_vec();
             let exit_rx = live.exit_rx.clone();
-            tokio::spawn(async move { health_monitor(app2, cid2, cont, vols2, hcfg, exit_rx).await; });
+            tokio::spawn(async move {
+                health_monitor(app2, cid2, cont, vols2, hcfg, exit_rx).await;
+            });
         }
     }
     let app = app.clone();
@@ -601,7 +767,9 @@ pub(crate) async fn spawn_live(app: &App, c: &Container, vols: &[Vol], live: Arc
     let dbg = std::env::var("DD_DEBUG").is_ok();
     tokio::spawn(async move {
         let code = child.wait().await.ok().and_then(|s| s.code()).unwrap_or(-1) as i64;
-        if dbg { eprintln!("[live] {} exited code={code}", &cid[..12]); }
+        if dbg {
+            eprintln!("[live] {} exited code={code}", &cid[..12]);
+        }
         *live.pty_master.lock().unwrap() = None;
         // Signal the natural exit IMMEDIATELY — flip status + fire the exit watch the instant the guest's
         // own process dies, so an interactive `docker run`/`ddcli mac` returns at once when the user types
@@ -618,8 +786,18 @@ pub(crate) async fn spawn_live(app: &App, c: &Container, vols: &[Vol], live: Arc
                 cc.finished_at = now_secs();
                 cc.finished_at_ns = now_nanos();
             }
-            let (cname, cimage) = g.containers.get(&cid).map(|c| (c.name.clone(), c.image.clone())).unwrap_or_default();
-            crate::events::emit_event(&app.events, "container", "die", &cid, serde_json::json!({"exitCode": code.to_string(), "name": cname, "image": cimage}));
+            let (cname, cimage) = g
+                .containers
+                .get(&cid)
+                .map(|c| (c.name.clone(), c.image.clone()))
+                .unwrap_or_default();
+            crate::events::emit_event(
+                &app.events,
+                "container",
+                "die",
+                &cid,
+                serde_json::json!({"exitCode": code.to_string(), "name": cname, "image": cimage}),
+            );
             save_state(&g, &app.state_path);
         }
         let _ = live.exit.send(Some(code));
@@ -643,7 +821,11 @@ pub(crate) async fn spawn_live(app: &App, c: &Container, vols: &[Vol], live: Arc
                 // (the Live stays in the map for non-`--rm` containers).
                 let (mut so, mut se) = (Vec::new(), Vec::new());
                 for (_, kind, data) in live.log_chunks.lock().await.iter() {
-                    if *kind == 1 { so.extend_from_slice(data); } else { se.extend_from_slice(data); }
+                    if *kind == 1 {
+                        so.extend_from_slice(data);
+                    } else {
+                        se.extend_from_slice(data);
+                    }
                 }
                 cc.stdout = so;
                 cc.stderr = se;
@@ -672,8 +854,16 @@ pub(crate) async fn spawn_live(app: &App, c: &Container, vols: &[Vol], live: Arc
             crate::containers::ports::stop(&cid); // free published host ports on `--rm` teardown
             let mut g = app.inner.lock().await;
             if let Some(dc) = g.containers.remove(&cid) {
-                crate::events::emit_event(&app.events, "container", "destroy", &cid, serde_json::json!({"name": dc.name, "image": dc.image}));
-                for n in g.networks.iter_mut() { leave_network(n, &cid); }
+                crate::events::emit_event(
+                    &app.events,
+                    "container",
+                    "destroy",
+                    &cid,
+                    serde_json::json!({"name": dc.name, "image": dc.image}),
+                );
+                for n in g.networks.iter_mut() {
+                    leave_network(n, &cid);
+                }
                 // Reclaim the private writable upper layer (mirrors `docker rm`; the shared image is untouched).
                 discard_container_layer(&dc.upper);
             }
@@ -684,106 +874,167 @@ pub(crate) async fn spawn_live(app: &App, c: &Container, vols: &[Vol], live: Arc
         // RestartPolicy supervisor: re-run the container per `--restart` unless it was deliberately
         // stopped (stop/kill/rm set stop_requested). A no-op for the default `no`/empty policy, so the
         // common `docker run` path is untouched.
-        if !live.stop_requested.load(std::sync::atomic::Ordering::SeqCst) {
+        if !live
+            .stop_requested
+            .load(std::sync::atomic::Ordering::SeqCst)
+        {
             maybe_restart(&app, &cid, code).await;
         }
     });
     true
 }
 
-
 /// Apply the container's `--restart` policy after an exit. Restarts on `always`/`unless-stopped`
 /// (any exit) or `on-failure` (non-zero exit, up to MaximumRetryCount). `no`/empty never restarts.
 /// A short backoff avoids a tight crash-loop. Spawns a fresh [`Live`] (the old one is spent) and
 /// re-enters [`spawn_live`], whose reaper re-applies this policy on the next exit.
-fn maybe_restart<'a>(app: &'a App, cid: &'a str, code: i64)
-    -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send + 'a>> { Box::pin(async move {
-    let (name, max_retry, count, c, vols) = {
-        let g = app.inner.lock().await;
-        let Some(c) = g.containers.get(cid) else { return };
-        // Don't restart a container that's already been removed or re-started elsewhere, nor one the user
-        // deliberately stopped (durable `manually_stopped` — the persisted HasBeenManuallyStopped; keeps
-        // `unless-stopped`/`always` from resurrecting a `docker stop`ped container even across a restart).
-        if c.status != "exited" || c.manually_stopped { return; }
-        (c.restart_policy.name.clone(), c.restart_policy.max_retry, c.restart_count, c.clone(), g.volumes.clone())
-    };
-    let should = match name.as_str() {
-        "always" | "unless-stopped" => true,
-        "on-failure" => code != 0 && (max_retry <= 0 || count < max_retry),
-        _ => false, // "no" / "" / unknown
-    };
-    if !should { return; }
-    // §8.3-4 state machine: the container is `restarting` for the duration of the backoff window (Moby's
-    // `SetRestarting` keeps Running=true through it) — inspect reports State.Restarting=true meanwhile.
-    {
-        let mut g = app.inner.lock().await;
-        if let Some(cc) = g.containers.get_mut(cid) { if cc.status == "exited" { cc.status = "restarting".into(); } }
-        save_state(&g, &app.state_path);
-    }
-    // Backoff (capped) so a container that exits immediately doesn't spin the daemon.
-    let backoff = (100u64 << (count.clamp(0, 6) as u32)).min(10_000);
-    tokio::time::sleep(std::time::Duration::from_millis(backoff)).await;
-    // Install a fresh Live (the prior one is "started"/spent), mark running, bump the restart count.
-    let live = Live::new(c.tty);
-    {
-        let mut g = app.inner.lock().await;
-        match g.containers.get(cid) {
-            // Re-check: a stop/rm may have raced in during the backoff. Accept the `restarting` status we
-            // set before the backoff (as well as `exited` for the legacy path).
-            Some(cc) if cc.status == "exited" || cc.status == "restarting" => {}
-            _ => return,
-        }
-        // A deliberate `docker stop`/`kill`/`rm` during the backoff sets `stop_requested` on the OLD,
-        // spent Live (still the `g.live[cid]` entry until we replace it below) but leaves status
-        // "exited" — so the status check above can't see it. Re-read that flag and abort the restart,
-        // otherwise the container the user just stopped would respawn.
-        if g.live.get(cid).map_or(false, |l| l.stop_requested.load(std::sync::atomic::Ordering::SeqCst)) {
+fn maybe_restart<'a>(
+    app: &'a App,
+    cid: &'a str,
+    code: i64,
+) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send + 'a>> {
+    Box::pin(async move {
+        let (name, max_retry, count, c, vols) = {
+            let g = app.inner.lock().await;
+            let Some(c) = g.containers.get(cid) else {
+                return;
+            };
+            // Don't restart a container that's already been removed or re-started elsewhere, nor one the user
+            // deliberately stopped (durable `manually_stopped` — the persisted HasBeenManuallyStopped; keeps
+            // `unless-stopped`/`always` from resurrecting a `docker stop`ped container even across a restart).
+            if c.status != "exited" || c.manually_stopped {
+                return;
+            }
+            (
+                c.restart_policy.name.clone(),
+                c.restart_policy.max_retry,
+                c.restart_count,
+                c.clone(),
+                g.volumes.clone(),
+            )
+        };
+        let should = match name.as_str() {
+            "always" | "unless-stopped" => true,
+            "on-failure" => code != 0 && (max_retry <= 0 || count < max_retry),
+            _ => false, // "no" / "" / unknown
+        };
+        if !should {
             return;
         }
-        g.live.insert(cid.to_string(), live.clone());
-        if let Some(cc) = g.containers.get_mut(cid) {
-            cc.status = "running".into();
-            cc.started_at = now_secs();
-            cc.started_at_ns = now_nanos();
-            cc.restart_count += 1;
+        // §8.3-4 state machine: the container is `restarting` for the duration of the backoff window (Moby's
+        // `SetRestarting` keeps Running=true through it) — inspect reports State.Restarting=true meanwhile.
+        {
+            let mut g = app.inner.lock().await;
+            if let Some(cc) = g.containers.get_mut(cid) {
+                if cc.status == "exited" {
+                    cc.status = "restarting".into();
+                }
+            }
+            save_state(&g, &app.state_path);
         }
-        save_state(&g, &app.state_path);
-    }
-    crate::events::emit_event(&app.events, "container", "restart", cid, serde_json::json!({"name": c.name}));
-    spawn_live(app, &c, &vols, live).await;
-    }) }
-
+        // Backoff (capped) so a container that exits immediately doesn't spin the daemon.
+        let backoff = (100u64 << (count.clamp(0, 6) as u32)).min(10_000);
+        tokio::time::sleep(std::time::Duration::from_millis(backoff)).await;
+        // Install a fresh Live (the prior one is "started"/spent), mark running, bump the restart count.
+        let live = Live::new(c.tty);
+        {
+            let mut g = app.inner.lock().await;
+            match g.containers.get(cid) {
+                // Re-check: a stop/rm may have raced in during the backoff. Accept the `restarting` status we
+                // set before the backoff (as well as `exited` for the legacy path).
+                Some(cc) if cc.status == "exited" || cc.status == "restarting" => {}
+                _ => return,
+            }
+            // A deliberate `docker stop`/`kill`/`rm` during the backoff sets `stop_requested` on the OLD,
+            // spent Live (still the `g.live[cid]` entry until we replace it below) but leaves status
+            // "exited" — so the status check above can't see it. Re-read that flag and abort the restart,
+            // otherwise the container the user just stopped would respawn.
+            if g.live.get(cid).map_or(false, |l| {
+                l.stop_requested.load(std::sync::atomic::Ordering::SeqCst)
+            }) {
+                return;
+            }
+            g.live.insert(cid.to_string(), live.clone());
+            if let Some(cc) = g.containers.get_mut(cid) {
+                cc.status = "running".into();
+                cc.started_at = now_secs();
+                cc.started_at_ns = now_nanos();
+                cc.restart_count += 1;
+            }
+            save_state(&g, &app.state_path);
+        }
+        crate::events::emit_event(
+            &app.events,
+            "container",
+            "restart",
+            cid,
+            serde_json::json!({"name": c.name}),
+        );
+        spawn_live(app, &c, &vols, live).await;
+    })
+}
 
 /// Run ONE health probe: spawn the container's HEALTHCHECK test command as a fresh JIT process that JOINS
 /// the container's loopback (so `curl localhost`/`pg_isready -h localhost` reach the container's server),
 /// bounded by the probe timeout. Returns (exit_code, captured stdout+stderr). Docker's `Test` forms:
 /// `["CMD", argv…]` execs directly, `["CMD-SHELL", script]` runs via `/bin/sh -c`, a bare list is a
 /// legacy shell command. A timeout is recorded as exit -1 (matching docker).
-async fn run_health_probe(app: &App, cont: &Container, vols: &[Vol], hcfg: &HealthConfig) -> (i64, String) {
+async fn run_health_probe(
+    app: &App,
+    cont: &Container,
+    vols: &[Vol],
+    hcfg: &HealthConfig,
+) -> (i64, String) {
     let mut test = hcfg.test.clone();
     let argv = match test.first().map(|s| s.as_str()) {
-        Some("CMD-SHELL") => vec!["/bin/sh".to_string(), "-c".to_string(), test.get(1).cloned().unwrap_or_default()],
+        Some("CMD-SHELL") => vec![
+            "/bin/sh".to_string(),
+            "-c".to_string(),
+            test.get(1).cloned().unwrap_or_default(),
+        ],
         Some("CMD") => test.split_off(1),
         Some("NONE") | None => return (0, String::new()),
         _ => test,
     };
-    if argv.is_empty() { return (0, String::new()); }
+    if argv.is_empty() {
+        return (0, String::new());
+    }
     let mut temp = cont.clone();
     temp.id = format!("health-{}", cont.id);
     temp.netns_key = Some(cont.id.clone()); // share the container's 127.0.0.1 so localhost probes work
     temp.cmd = argv;
     temp.tty = false;
     temp.healthcheck = None; // the probe process is not itself health-checked
-    let Some((prog, args)) = spawn_cfg(&temp, &app.volumes_dir, vols, None) else { return (-1, String::new()); };
+    let Some((prog, args)) = spawn_cfg(&temp, &app.volumes_dir, vols, None) else {
+        return (-1, String::new());
+    };
     let mut cmd = tokio::process::Command::new(prog);
-    cmd.args(args).stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped());
-    let timeout_ns = if hcfg.timeout > 0 { hcfg.timeout } else { 30_000_000_000 };
-    let child = match cmd.spawn() { Ok(c) => c, Err(e) => return (-1, format!("probe spawn: {e}")) };
-    match tokio::time::timeout(std::time::Duration::from_nanos(timeout_ns as u64), child.wait_with_output()).await {
+    cmd.args(args)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let timeout_ns = if hcfg.timeout > 0 {
+        hcfg.timeout
+    } else {
+        30_000_000_000
+    };
+    let child = match cmd.spawn() {
+        Ok(c) => c,
+        Err(e) => return (-1, format!("probe spawn: {e}")),
+    };
+    match tokio::time::timeout(
+        std::time::Duration::from_nanos(timeout_ns as u64),
+        child.wait_with_output(),
+    )
+    .await
+    {
         Ok(Ok(out)) => {
             let mut s = String::from_utf8_lossy(&out.stdout).into_owned();
             s.push_str(&String::from_utf8_lossy(&out.stderr));
-            (out.status.code().unwrap_or(-1) as i64, s.chars().take(4096).collect())
+            (
+                out.status.code().unwrap_or(-1) as i64,
+                s.chars().take(4096).collect(),
+            )
         }
         Ok(Err(e)) => (-1, format!("probe: {e}")),
         Err(_) => (-1, "Health check exceeded timeout".into()),
@@ -795,61 +1046,123 @@ async fn run_health_probe(app: &App, cont: &Container, vols: &[Vol], hcfg: &Heal
 /// failing streak and, once it reaches `retries` (default 3) AND the `start_period` grace has elapsed,
 /// flips to unhealthy. Keeps the last 5 probe results in `Log[]`. Emits `health_status: …` events on a
 /// transition. Exits when the container's process dies (this Live's `exit` fires) or it stops running.
-async fn health_monitor(app: App, cid: String, cont: Container, vols: Vec<Vol>, hcfg: HealthConfig, mut exit_rx: watch::Receiver<Option<i64>>) {
-    let interval = std::time::Duration::from_nanos(if hcfg.interval > 0 { hcfg.interval } else { 30_000_000_000 } as u64);
+async fn health_monitor(
+    app: App,
+    cid: String,
+    cont: Container,
+    vols: Vec<Vol>,
+    hcfg: HealthConfig,
+    mut exit_rx: watch::Receiver<Option<i64>>,
+) {
+    let interval = std::time::Duration::from_nanos(if hcfg.interval > 0 {
+        hcfg.interval
+    } else {
+        30_000_000_000
+    } as u64);
     let retries = if hcfg.retries > 0 { hcfg.retries } else { 3 };
     let start_ns = hcfg.start_period.max(0);
     let started = std::time::Instant::now();
     {
         let mut g = app.inner.lock().await;
-        let Some(c) = g.containers.get_mut(&cid) else { return };
-        c.health = Some(HealthState { status: "starting".into(), failing_streak: 0, log: Vec::new() });
+        let Some(c) = g.containers.get_mut(&cid) else {
+            return;
+        };
+        c.health = Some(HealthState {
+            status: "starting".into(),
+            failing_streak: 0,
+            log: Vec::new(),
+        });
         save_state(&g, &app.state_path);
     }
-    crate::events::emit_event(&app.events, "container", "health_status: starting", &cid, serde_json::json!({}));
+    crate::events::emit_event(
+        &app.events,
+        "container",
+        "health_status: starting",
+        &cid,
+        serde_json::json!({}),
+    );
     loop {
         tokio::select! {
             _ = tokio::time::sleep(interval) => {}
             _ = exit_rx.changed() => { if exit_rx.borrow().is_some() { break; } }
         }
-        if { let g = app.inner.lock().await; g.containers.get(&cid).map(|c| c.status != "running").unwrap_or(true) } { break; }
+        if {
+            let g = app.inner.lock().await;
+            g.containers
+                .get(&cid)
+                .map(|c| c.status != "running")
+                .unwrap_or(true)
+        } {
+            break;
+        }
         let start_ts = now_secs();
         let (code, output) = run_health_probe(&app, &cont, &vols, &hcfg).await;
         let end_ts = now_secs();
         let in_start_period = (started.elapsed().as_nanos() as i64) < start_ns;
         let mut g = app.inner.lock().await;
-        let Some(c) = g.containers.get_mut(&cid) else { break };
-        if c.status != "running" { break; }
-        let h = c.health.get_or_insert_with(|| HealthState { status: "starting".into(), failing_streak: 0, log: Vec::new() });
+        let Some(c) = g.containers.get_mut(&cid) else {
+            break;
+        };
+        if c.status != "running" {
+            break;
+        }
+        let h = c.health.get_or_insert_with(|| HealthState {
+            status: "starting".into(),
+            failing_streak: 0,
+            log: Vec::new(),
+        });
         let prev = h.status.clone();
-        h.log.push(HealthLog { start: fmt_rfc3339(start_ts), end: fmt_rfc3339(end_ts), exit_code: code, output });
-        let n = h.log.len(); if n > 5 { h.log.drain(..n - 5); }
+        h.log.push(HealthLog {
+            start: fmt_rfc3339(start_ts),
+            end: fmt_rfc3339(end_ts),
+            exit_code: code,
+            output,
+        });
+        let n = h.log.len();
+        if n > 5 {
+            h.log.drain(..n - 5);
+        }
         if code == 0 {
             h.failing_streak = 0;
             h.status = "healthy".into();
         } else {
             h.failing_streak += 1;
-            if !in_start_period && h.failing_streak >= retries { h.status = "unhealthy".into(); }
+            if !in_start_period && h.failing_streak >= retries {
+                h.status = "unhealthy".into();
+            }
         }
         let cur = h.status.clone();
         save_state(&g, &app.state_path);
         drop(g);
-        if cur != prev { crate::events::emit_event(&app.events, "container", &format!("health_status: {cur}"), &cid, serde_json::json!({})); }
+        if cur != prev {
+            crate::events::emit_event(
+                &app.events,
+                "container",
+                &format!("health_status: {cur}"),
+                &cid,
+                serde_json::json!({}),
+            );
+        }
     }
 }
 
 /// Record the failure on a Live and finalize the container as exit 127. Returns false (spawn failed).
 pub(crate) async fn live_fail(app: &App, cid: &str, live: &Arc<Live>, msg: String) -> bool {
     let _ = live.out.send((2, format!("{msg}\n").into_bytes()));
-    live.log_chunks.lock().await.push((now_secs(), 2, format!("{msg}\n").into_bytes()));
+    live.log_chunks
+        .lock()
+        .await
+        .push((now_secs(), 2, format!("{msg}\n").into_bytes()));
     // No pumps run on the failure path, so the error line above is the last output -- signal both the
     // exit and output-complete so a hijack/`logs -f` consumer drains the message and ends cleanly.
     let _ = live.exit.send(Some(127));
     let _ = live.out_done.send(true);
-    if let Some(cc) = app.inner.lock().await.containers.get_mut(cid) { cc.status = "exited".into(); cc.exit_code = 127; }
+    if let Some(cc) = app.inner.lock().await.containers.get_mut(cid) {
+        cc.status = "exited".into();
+        cc.exit_code = 127;
+    }
     false
 }
-
 
 /// Allocate a pseudo-terminal; returns (master, slave) owned fds.
 pub(crate) fn open_pty() -> std::io::Result<(OwnedFd, OwnedFd)> {
@@ -859,10 +1172,25 @@ pub(crate) fn open_pty() -> std::io::Result<(OwnedFd, OwnedFd)> {
     // first /resize lands, or when the client is `-t` without a real terminal (no resize at all) -- and a
     // 0x0 size makes ncurses compute an empty screen -> a BLANK render. The real size still arrives via the
     // /resize endpoint (TIOCSWINSZ + kernel SIGWINCH), which reflows to the client's actual dimensions.
-    let ws = libc::winsize { ws_row: 24, ws_col: 80, ws_xpixel: 0, ws_ypixel: 0 };
+    let ws = libc::winsize {
+        ws_row: 24,
+        ws_col: 80,
+        ws_xpixel: 0,
+        ws_ypixel: 0,
+    };
     // termios is *mut on macOS, *const on linux; null_mut() coerces to both.
-    let r = unsafe { libc::openpty(&mut m, &mut s, std::ptr::null_mut(), std::ptr::null_mut(), &ws as *const _ as *mut _) };
-    if r != 0 { return Err(std::io::Error::last_os_error()); }
+    let r = unsafe {
+        libc::openpty(
+            &mut m,
+            &mut s,
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            &ws as *const _ as *mut _,
+        )
+    };
+    if r != 0 {
+        return Err(std::io::Error::last_os_error());
+    }
     Ok(unsafe { (OwnedFd::from_raw_fd(m), OwnedFd::from_raw_fd(s)) })
 }
 
@@ -875,10 +1203,18 @@ pub(crate) fn set_nonblocking(fd: RawFd) {
 
 pub(crate) fn pty_read(fd: RawFd, buf: &mut [u8]) -> std::io::Result<usize> {
     let n = unsafe { libc::read(fd, buf.as_mut_ptr().cast(), buf.len()) };
-    if n < 0 { Err(std::io::Error::last_os_error()) } else { Ok(n as usize) }
+    if n < 0 {
+        Err(std::io::Error::last_os_error())
+    } else {
+        Ok(n as usize)
+    }
 }
 
 pub(crate) fn pty_write(fd: RawFd, buf: &[u8]) -> std::io::Result<usize> {
     let n = unsafe { libc::write(fd, buf.as_ptr().cast(), buf.len()) };
-    if n < 0 { Err(std::io::Error::last_os_error()) } else { Ok(n as usize) }
+    if n < 0 {
+        Err(std::io::Error::last_os_error())
+    } else {
+        Ok(n as usize)
+    }
 }

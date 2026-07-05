@@ -18,6 +18,7 @@ static int dgram_addr_peek(int fd, int wantaddr, size_t totlen) {
     if (getsockopt(fd, SOL_SOCKET, SO_TYPE, &ty, &tl) < 0) return 0;
     return ty == SOCK_DGRAM || ty == SOCK_RAW;
 }
+
 // IPPROTO_IPV6 optname: Linux -> macOS. CRITICAL: like IPPROTO_TCP, these numbers diverge, so a raw
 // pass-through silently sets the WRONG option. The load-bearing case is IPV6_V6ONLY (Linux 26 -> macOS 27):
 // leaving it untranslated hits macOS's optname 26 (unrelated) instead, so a wildcard `::` bind stays
@@ -26,19 +27,20 @@ static int dgram_addr_peek(int fd, int wantaddr, size_t totlen) {
 // Map the known ones; ignore (-1) unknown rather than pass a Linux number straight to macOS IPPROTO_IPV6.
 static int ip6_opt_l2m(int o) {
     switch (o) {
-    case 16: return 4;   // IPV6_UNICAST_HOPS
-    case 17: return 9;   // IPV6_MULTICAST_IF
-    case 18: return 10;  // IPV6_MULTICAST_HOPS
-    case 19: return 11;  // IPV6_MULTICAST_LOOP
-    case 20: return 12;  // IPV6_ADD_MEMBERSHIP / IPV6_JOIN_GROUP  (struct ipv6_mreq: same layout)
-    case 21: return 13;  // IPV6_DROP_MEMBERSHIP / IPV6_LEAVE_GROUP
-    case 26: return 27;  // IPV6_V6ONLY  (the fix)
-    case 66: return 35;  // IPV6_RECVTCLASS
-    case 67: return 36;  // IPV6_TCLASS
-    default: return -1;  // unknown -> ignore (never pass a Linux number straight to macOS IPPROTO_IPV6)
+    case 16: return 4;  // IPV6_UNICAST_HOPS
+    case 17: return 9;  // IPV6_MULTICAST_IF
+    case 18: return 10; // IPV6_MULTICAST_HOPS
+    case 19: return 11; // IPV6_MULTICAST_LOOP
+    case 20: return 12; // IPV6_ADD_MEMBERSHIP / IPV6_JOIN_GROUP  (struct ipv6_mreq: same layout)
+    case 21: return 13; // IPV6_DROP_MEMBERSHIP / IPV6_LEAVE_GROUP
+    case 26: return 27; // IPV6_V6ONLY  (the fix)
+    case 66: return 35; // IPV6_RECVTCLASS
+    case 67: return 36; // IPV6_TCLASS
+    default: return -1; // unknown -> ignore (never pass a Linux number straight to macOS IPPROTO_IPV6)
     }
 }
-// #229: an AF_UNIX DATAGRAM send to a PATHNAME/abstract dest (sendto/sendmsg with an explicit dest addr --
+
+// an AF_UNIX DATAGRAM send to a PATHNAME/abstract dest (sendto/sendmsg with an explicit dest addr --
 // e.g. syslog's `logger` writing to /dev/log) must resolve the dest through the SAME overlay/abstract-ns
 // mapping bind/connect use, or macOS looks for the socket inode at the literal host path (outside the jail)
 // / the wrong abstract-ns dir and the datagram is silently dropped. Mirrors the connect (case 203) and bind
@@ -59,6 +61,7 @@ static int unix_dgram_dest(const uint8_t *sa, socklen_t l, char *host, size_t hn
     }
     return 0;
 }
+
 // Linux-faithful errno pre-screen for bind(200)/connect(203). macOS hands dd's translated (or raw)
 // sockaddr to its own bind()/connect(), which then reports the WRONG errno for several inputs the LTP
 // net-errno suite (bind01/connect01) checks — a bad sockaddr pointer, a wrong sa_family, an
@@ -82,7 +85,7 @@ static int net_precheck(int fd, uintptr_t addr, socklen_t alen, int is_connect) 
     // host-readable. Both are caught by guest_bad_ptr -> host_range_mapped (its internal gna_hit check
     // handles the PROT_NONE case; see thread.c).
     if (addr && guest_bad_ptr(addr, alen)) return -EFAULT;
-    int lfam = (addr && alen >= 2) ? *(const uint16_t *)addr : 0;            // guest (Linux) sa_family
+    int lfam = (addr && alen >= 2) ? *(const uint16_t *)addr : 0; // guest (Linux) sa_family
     // connect() on an already-connected stream socket -> EISCONN (kernel checks the socket state before
     // the protocol connect). AF_UNSPEC is the "dissolve association" idiom and is never EISCONN.
     if (is_connect && sotype == SOCK_STREAM && lfam != 0) {
@@ -99,8 +102,10 @@ static int net_precheck(int fd, uintptr_t addr, socklen_t alen, int is_connect) 
         struct sockaddr_storage ln;
         socklen_t lnl = sizeof ln;
         if (getsockname(fd, (struct sockaddr *)&ln, &lnl) == 0) {
-            if (ln.ss_family == AF_INET) sfam = LX_AF_INET;
-            else if (ln.ss_family == AF_INET6) sfam = LX_AF_INET6;
+            if (ln.ss_family == AF_INET)
+                sfam = LX_AF_INET;
+            else if (ln.ss_family == AF_INET6)
+                sfam = LX_AF_INET6;
         }
     }
     if (sfam == LX_AF_INET || sfam == LX_AF_INET6) {
@@ -112,9 +117,10 @@ static int net_precheck(int fd, uintptr_t addr, socklen_t alen, int is_connect) 
     }
     return 0;
 }
+
 static int svc_net(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4,
                    uint64_t a5) {
-    // AF_NETLINK/NETLINK_ROUTE (#289): a guest netlink socket is a socketpair we RTNETLINK-respond on
+    // AF_NETLINK/NETLINK_ROUTE: a guest netlink socket is a socketpair we RTNETLINK-respond on
     // (see netns.c). bind/getsockname/send/recv are handled here; everything else (setsockopt/getsockopt/
     // close) falls through to the generic paths, which work on the underlying AF_UNIX socket.
     if (nl_is((int)a0)) {
@@ -171,8 +177,8 @@ static int svc_net(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_
                     *(uint32_t *)(g + 8) = 12;
                 } else
                     *(uint32_t *)(g + 8) = 0;
-                *(uint64_t *)(g + 40) = 0;             // msg_controllen
-                *(uint32_t *)(g + 48) = (uint32_t)mf;  // msg_flags (Linux MSG_TRUNC iff the copy truncated)
+                *(uint64_t *)(g + 40) = 0;            // msg_controllen
+                *(uint32_t *)(g + 48) = (uint32_t)mf; // msg_flags (Linux MSG_TRUNC iff the copy truncated)
             }
             G_RET(c) = (uint64_t)r; // nl_recv already returns -errno on failure
             return svc_done(c);
@@ -182,7 +188,7 @@ static int svc_net(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_
     }
     switch (nr) {
     case 198: {
-        if ((int)a0 == LX_AF_NETLINK) { // socket(AF_NETLINK, ...) -> socketpair-backed netlink (#289)
+        if ((int)a0 == LX_AF_NETLINK) {                     // socket(AF_NETLINK,...) -> socketpair-backed netlink
             G_RET(c) = (uint64_t)nl_open((int)a1, (int)a2); // -host_errno on fail -> svc_done translates
             break;
         }
@@ -206,12 +212,11 @@ static int svc_net(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_
             if (r < 1024) {
                 // AF_INET6 STREAM also gets loopback isolation (::/::1 -> private lo). a0 is the guest's
                 // Linux domain value, so test the Linux AF_INET6 (10), not the macOS one (30).
-                g_sock_stream[r] =
-                    ((ty & 0xf) == SOCK_STREAM && ((int)a0 == AF_INET || (int)a0 == LX_AF_INET6_FAM));
+                g_sock_stream[r] = ((ty & 0xf) == SOCK_STREAM && ((int)a0 == AF_INET || (int)a0 == LX_AF_INET6_FAM));
                 g_sock_dgram[r] = ((ty & 0xf) == SOCK_DGRAM && (int)a0 == AF_INET);
                 g_sock_seqpacket[r] = 0;
-                g_sock_conn[r] = 0;             // fresh socket: not yet connected (see g_sock_conn decl)
-                g_sock_fam[r] = (uint16_t)a0;   // guest address family, for connect/bind EAFNOSUPPORT check
+                g_sock_conn[r] = 0;           // fresh socket: not yet connected (see g_sock_conn decl)
+                g_sock_fam[r] = (uint16_t)a0; // guest address family, for connect/bind EAFNOSUPPORT check
                 g_lo_port[r] = 0;
                 g_lo_v6[r] = 0;
                 g_br_port[r] = 0;
@@ -235,7 +240,12 @@ static int svc_net(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_
         // Either new fd past the guest's soft RLIMIT_NOFILE -> EMFILE; close both so nothing leaks.
         if (r == 0) {
             int cap = guest_nofile_cur();
-            if (sv[0] >= cap || sv[1] >= cap) { close(sv[0]); close(sv[1]); G_RET(c) = (uint64_t)(-EMFILE); break; }
+            if (sv[0] >= cap || sv[1] >= cap) {
+                close(sv[0]);
+                close(sv[1]);
+                G_RET(c) = (uint64_t)(-EMFILE);
+                break;
+            }
         }
         if (r == 0) {
             // SO_NOSIGPIPE on both ends so a write/send to a peer-closed pair returns EPIPE, never a
@@ -275,9 +285,12 @@ static int svc_net(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_
         {
             size_t alc = (size_t)(socklen_t)a2;
             if (alc > sizeof(struct sockaddr_storage)) alc = sizeof(struct sockaddr_storage);
-            if (!host_range_mapped((uintptr_t)a1, alc)) { G_RET(c) = (uint64_t)(-EFAULT); break; }
+            if (!host_range_mapped((uintptr_t)a1, alc)) {
+                G_RET(c) = (uint64_t)(-EFAULT);
+                break;
+            }
         }
-        // #289: remember the guest-requested (addr,port) of a stream socket so a later listen() can surface a
+        // remember the guest-requested (addr,port) of a stream socket so a later listen can surface a
         // LISTEN row in /proc/net/tcp[6] (ss/netstat -l). Independent of which network mode the bind resolves
         // to below -- the synthesized table has no real IP stack to read back from. AF is the guest sockaddr
         // family at offset 0 (LE u16); port is BE at offset 2 (identical v4/v6 layout).
@@ -417,7 +430,7 @@ static int svc_net(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_
         // Published-port (`-p H:C`) host bridge: if this is a switch-backed listen on a published
         // container port, spin up a real host AF_INET listener on :H that relays into the guest.
         if (lr == 0) fwd_maybe_start((int)a0);
-        if (lr == 0) netns_tcp_listen_note((int)a0); // #289: arm the /proc/net/tcp[6] LISTEN row
+        if (lr == 0) netns_tcp_listen_note((int)a0); // arm the /proc/net/tcp[6] LISTEN row
 
         G_RET(c) = lr < 0 ? (uint64_t)(-errno) : 0;
         break;
@@ -450,7 +463,7 @@ static int svc_net(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_
                 setsockopt(r, SOL_SOCKET, SO_NOSIGPIPE, &on, sizeof on);
             }
             if (r >= 0 && r < 1024) {
-                g_sock_conn[r] = 1; // an accepted socket is already connected
+                g_sock_conn[r] = 1;                                          // an accepted socket is already connected
                 if (lfd >= 0 && lfd < 1024) g_sock_fam[r] = g_sock_fam[lfd]; // inherit listener's family
             }
             if (nr == 242) {
@@ -461,7 +474,7 @@ static int svc_net(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_
                 socklen_t gcap = a2 ? *(socklen_t *)a2 : 0;
                 int ll = sa_m2l((struct sockaddr *)&hss, (uint8_t *)a1, gcap);
                 if (ll < 0) ll = sa_un_m2l((struct sockaddr *)&hss, hsl, (uint8_t *)a1, gcap); // AF_UNIX -> Linux
-                if (ll < 0) {                                                                  // other non-inet peer: copy raw host bytes
+                if (ll < 0) { // other non-inet peer: copy raw host bytes
                     socklen_t n = hsl < gcap ? hsl : gcap;
                     if (gcap) memcpy((void *)a1, &hss, n);
                     if (a2) *(socklen_t *)a2 = hsl;
@@ -513,7 +526,10 @@ static int svc_net(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_
         {
             size_t alc = (size_t)(socklen_t)a2;
             if (alc > sizeof(struct sockaddr_storage)) alc = sizeof(struct sockaddr_storage);
-            if (!host_range_mapped((uintptr_t)a1, alc)) { G_RET(c) = (uint64_t)(-EFAULT); break; }
+            if (!host_range_mapped((uintptr_t)a1, alc)) {
+                G_RET(c) = (uint64_t)(-EFAULT);
+                break;
+            }
         }
         // Container DNS: connect(127.0.0.11:53) -> swap the socket to a socketpair we answer on (host
         // resolver). Subsequent send/recv on the connected fd are handled by the DNS paths below.
@@ -553,7 +569,7 @@ static int svc_net(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_
                 // keyed by OUR own IP -- not lo_path): retry there so 127.0.0.1 still reaches a 0.0.0.0
                 // listener in bridge mode. The first connect() already POISONED this AF_UNIX socket (a
                 // failed BSD connect leaves the fd unusable -- a second connect() on it hangs/EINVALs, which
-                // is why a 0.0.0.0 server was unreachable via 127.0.0.1 with a user network attached, #228),
+                // is why a 0.0.0.0 server was unreachable via 127.0.0.1 with a user network attached),
                 // so swap in a FRESH AF_UNIX fd before the retry -- exactly as the br_connect loop does.
                 char bp[200];
                 br_path(g_myip, p, bp, sizeof bp);
@@ -571,7 +587,7 @@ static int svc_net(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_
                     }
                 }
             }
-            // #274: a redirected TCP dial to a port with no listener fails ENOENT (the per-port unix
+            // a redirected TCP dial to a port with no listener fails ENOENT (the per-port unix
             // inode doesn't exist); Linux returns ECONNREFUSED for a closed TCP port. Map it (host
             // errno, m2l_errno -> Linux 111); other errnos incl. EINPROGRESS pass through.
             G_RET(c) = r < 0 ? (uint64_t)(-(errno == ENOENT ? ECONNREFUSED : errno)) : 0;
@@ -595,7 +611,10 @@ static int svc_net(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_
             // a single-shot client (`nc -w 3 <peer> <port>`) reliably reach a `-w 1`-looping listener.
             int r = -1;
             for (int attempt = 0; attempt < 60; attempt++) {
-                if (lo_swap((int)a0) < 0) { r = -1; break; }
+                if (lo_swap((int)a0) < 0) {
+                    r = -1;
+                    break;
+                }
                 r = connect((int)a0, (struct sockaddr *)&un, sizeof un);
                 if (r == 0) {
                     // A blocking connect succeeded: verify it isn't a peer mid-exit (a `-w N` listener whose
@@ -607,8 +626,8 @@ static int svc_net(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_
                 } else if (errno != ENOENT && errno != ECONNREFUSED) {
                     break; // a genuine error -> report it
                 }
-                r = -1;               // not connected yet
-                errno = ECONNREFUSED; // if this was the last attempt, report a closed-port error
+                r = -1;                             // not connected yet
+                errno = ECONNREFUSED;               // if this was the last attempt, report a closed-port error
                 struct timespec ts = {0, 20000000}; // 20ms
                 nanosleep(&ts, NULL);
             }
@@ -643,7 +662,9 @@ static int svc_net(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_
             // dial via unix_sock_at (matches the bind side): fchdir-shortens paths past sun_path[104] so a
             // long upper socket path is reached exactly, not truncated to some other (nonexistent) inode.
             int r;
-            do { r = unix_sock_at((int)a0, hp, 1); } while (r < 0 && SVC_EINTR_RESTART(c));
+            do {
+                r = unix_sock_at((int)a0, hp, 1);
+            } while (r < 0 && SVC_EINTR_RESTART(c));
             G_RET(c) = (r < 0 && errno != EINPROGRESS) ? (uint64_t)(-errno) : 0;
             if (r == 0 && (int)a0 >= 0 && (int)a0 < 1024) g_sock_conn[(int)a0] = 1; // sticky-connected
             break;
@@ -696,7 +717,8 @@ static int svc_net(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_
         if (r == 0 && a1) {
             socklen_t gcap = a2 ? *(socklen_t *)a2 : 0;
             int ll = sa_m2l((struct sockaddr *)&hss, (uint8_t *)a1, gcap);
-            if (ll < 0) ll = sa_un_m2l((struct sockaddr *)&hss, hsl, (uint8_t *)a1, gcap); // AF_UNIX -> Linux + guest path
+            if (ll < 0)
+                ll = sa_un_m2l((struct sockaddr *)&hss, hsl, (uint8_t *)a1, gcap); // AF_UNIX -> Linux + guest path
             if (ll < 0) {
                 socklen_t n = hsl < gcap ? hsl : gcap;
                 if (gcap) memcpy((void *)a1, &hss, n);
@@ -739,7 +761,8 @@ static int svc_net(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_
         if (r == 0 && a1) {
             socklen_t gcap = a2 ? *(socklen_t *)a2 : 0;
             int ll = sa_m2l((struct sockaddr *)&hss, (uint8_t *)a1, gcap);
-            if (ll < 0) ll = sa_un_m2l((struct sockaddr *)&hss, hsl, (uint8_t *)a1, gcap); // AF_UNIX -> Linux + guest path
+            if (ll < 0)
+                ll = sa_un_m2l((struct sockaddr *)&hss, hsl, (uint8_t *)a1, gcap); // AF_UNIX -> Linux + guest path
             if (ll < 0) {
                 socklen_t n = hsl < gcap ? hsl : gcap;
                 if (gcap) memcpy((void *)a1, &hss, n);
@@ -757,7 +780,10 @@ static int svc_net(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_
         if (a4) {
             size_t dlc = (size_t)(socklen_t)a5;
             if (dlc > sizeof(struct sockaddr_storage)) dlc = sizeof(struct sockaddr_storage);
-            if (!host_range_mapped((uintptr_t)a4, dlc)) { G_RET(c) = (uint64_t)(-EFAULT); break; }
+            if (!host_range_mapped((uintptr_t)a4, dlc)) {
+                G_RET(c) = (uint64_t)(-EFAULT);
+                break;
+            }
         }
         // Container DNS: a query sent to 127.0.0.11:53 (connected send, or first unconnected sendto) is
         // parsed + answered via the host resolver; nothing hits the wire. a4/a5 are the optional dest addr.
@@ -774,7 +800,7 @@ static int svc_net(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_
             int on = 1;
             setsockopt((int)a0, SOL_SOCKET, SO_NOSIGPIPE, &on, sizeof on);
         }
-        // #229: AF_UNIX pathname/abstract dest -> overlay/abstract-route it (syslog `logger` -> /dev/log).
+        // AF_UNIX pathname/abstract dest -> overlay/abstract-route it (syslog `logger` -> /dev/log).
         if (a4 && (socklen_t)a5 >= 2 && *(const uint16_t *)a4 == AF_UNIX) {
             char uhost[1200];
             if (unix_dgram_dest((const uint8_t *)a4, (socklen_t)a5, uhost, sizeof uhost)) {
@@ -784,7 +810,9 @@ static int svc_net(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_
                 mh.msg_iov = &iov;
                 mh.msg_iovlen = 1;
                 int64_t ur;
-                do { ur = unix_dgram_sendmsg_at((int)a0, uhost, &mh, msgflags_l2m((int)a3)); } while (ur < 0 && SVC_EINTR_RESTART(c));
+                do {
+                    ur = unix_dgram_sendmsg_at((int)a0, uhost, &mh, msgflags_l2m((int)a3));
+                } while (ur < 0 && SVC_EINTR_RESTART(c));
                 G_RET(c) = ur < 0 ? (uint64_t)(-errno) : (uint64_t)ur;
                 break;
             }
@@ -795,7 +823,9 @@ static int svc_net(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_
         const void *dst = (dhl != (socklen_t)-1) ? (void *)&dss : (void *)a4;
         socklen_t dl = (dhl != (socklen_t)-1) ? dhl : (socklen_t)a5;
         ssize_t r;
-        do { r = sendto((int)a0, (void *)a1, (size_t)a2, msgflags_l2m((int)a3), dst, dl); } while (r < 0 && SVC_EINTR_RESTART(c));
+        do {
+            r = sendto((int)a0, (void *)a1, (size_t)a2, msgflags_l2m((int)a3), dst, dl);
+        } while (r < 0 && SVC_EINTR_RESTART(c));
         G_RET(c) = r < 0 ? (uint64_t)(-errno) : (uint64_t)r;
         break;
     }
@@ -810,11 +840,11 @@ static int svc_net(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_
         void *rbuf = peekaddr ? &one : (void *)a1;
         size_t rlen = peekaddr ? 1 : (size_t)a2;
         ssize_t r;
-        ts_wait_enter(); // #404: 'S' while blocked in recvfrom/recv
+        ts_wait_enter(); // 'S' while blocked in recvfrom/recv
         do {
             hsl = sizeof hss;
-            r = recvfrom((int)a0, rbuf, rlen, msgflags_l2m((int)a3),
-                         want ? (struct sockaddr *)&hss : NULL, want ? &hsl : NULL);
+            r = recvfrom((int)a0, rbuf, rlen, msgflags_l2m((int)a3), want ? (struct sockaddr *)&hss : NULL,
+                         want ? &hsl : NULL);
         } while (r < 0 && SVC_EINTR_RESTART(c));
         ts_wait_leave();
         if (r > 0 && peekaddr) r = 0; // guest asked for 0 bytes; the address is what it wanted
@@ -880,8 +910,7 @@ static int svc_net(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_
             if (a3 && a4 && *(socklen_t *)a4 >= 12) {
                 pid_t ppid = 0;
                 socklen_t pl = sizeof ppid;
-                if (getsockopt((int)a0, SOL_LOCAL, LOCAL_PEERPID, &ppid, &pl) < 0 || ppid <= 0 ||
-                    ppid == getpid())
+                if (getsockopt((int)a0, SOL_LOCAL, LOCAL_PEERPID, &ppid, &pl) < 0 || ppid <= 0 || ppid == getpid())
                     ppid = container_pid(); // self/own-process peer (e.g. socketpair) -> this guest's pid
                 uint32_t *u = (uint32_t *)a3;
                 u[0] = (uint32_t)ppid;   // pid
@@ -958,7 +987,7 @@ static int svc_net(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_
         uint8_t *gname = (uint8_t *)mh.msg_name;
         socklen_t gnamelen = mh.msg_namelen;
         char ud_host[1200];
-        int ud_route = 0; // #229: AF_UNIX pathname/abstract dgram dest -> overlay/abstract route on send
+        int ud_route = 0;                     // AF_UNIX pathname/abstract dgram dest -> overlay/abstract route on send
         if (nr == 211 && gname && gnamelen) { // sendmsg: guest -> host
             if (gnamelen >= 2 && *(const uint16_t *)gname == AF_UNIX &&
                 unix_dgram_dest(gname, gnamelen, ud_host, sizeof ud_host)) {
@@ -1005,7 +1034,8 @@ static int svc_net(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_
         if (nr == 212) {
             size_t totlen = 0;
             struct iovec *iv = (struct iovec *)mh.msg_iov;
-            for (int i = 0; iv && i < (int)mh.msg_iovlen; i++) totlen += iv[i].iov_len;
+            for (int i = 0; iv && i < (int)mh.msg_iovlen; i++)
+                totlen += iv[i].iov_len;
             if ((peekaddr = dgram_addr_peek((int)a0, gname && gnamelen, totlen))) {
                 mh.msg_iov = &sciov;
                 mh.msg_iovlen = 1;
@@ -1054,7 +1084,8 @@ static int svc_net(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_
             uint8_t *nm0 = (uint8_t *)*(uint64_t *)(g0 + 0);
             socklen_t nml0 = *(uint32_t *)(g0 + 8);
             int is_dns = (dfd >= 0 && dfd < 1024 && g_dns_sock[dfd]);
-            if (!is_dns && dns_dest_is(nm0, nml0) && dns_swap(dfd, (dfd >= 0 && dfd < 1024) ? g_sock_stream[dfd] : 0) == 0)
+            if (!is_dns && dns_dest_is(nm0, nml0) &&
+                dns_swap(dfd, (dfd >= 0 && dfd < 1024) ? g_sock_stream[dfd] : 0) == 0)
                 is_dns = 1;
             if (is_dns) {
                 int stream = (dfd >= 0 && dfd < 1024) ? g_sock_stream[dfd] : 0;
@@ -1092,7 +1123,7 @@ static int svc_net(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_
             uint8_t *gname = (uint8_t *)mh.msg_name;
             socklen_t gnamelen = mh.msg_namelen;
             char ud_host[1200];
-            int ud_route = 0; // #229: AF_UNIX pathname/abstract dgram dest -> overlay/abstract route on send
+            int ud_route = 0; // AF_UNIX pathname/abstract dgram dest -> overlay/abstract route on send
             if (nr == 269 && gname && gnamelen) { // sendmmsg: guest -> host
                 if (gnamelen >= 2 && *(const uint16_t *)gname == AF_UNIX &&
                     unix_dgram_dest(gname, gnamelen, ud_host, sizeof ud_host)) {
@@ -1123,9 +1154,10 @@ static int svc_net(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_
             int rf = (int)a3;
             // after the first, don't block (MSG_WAITFORONE-ish)
             if (nr == 243 && i > 0) rf |= 0x40;
-            ssize_t r = (nr == 269) ? (ud_route ? (ssize_t)unix_dgram_sendmsg_at((int)a0, ud_host, &mh, msgflags_l2m(rf))
-                                                : sendmsg((int)a0, &mh, msgflags_l2m(rf)))
-                                    : recvmsg((int)a0, &mh, msgflags_l2m(rf));
+            ssize_t r = (nr == 269)
+                            ? (ud_route ? (ssize_t)unix_dgram_sendmsg_at((int)a0, ud_host, &mh, msgflags_l2m(rf))
+                                        : sendmsg((int)a0, &mh, msgflags_l2m(rf)))
+                            : recvmsg((int)a0, &mh, msgflags_l2m(rf));
             if (r < 0) {
                 err = errno;
                 break;
@@ -1152,8 +1184,7 @@ static int svc_net(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_
         G_RET(c) = (done == 0 && err) ? (uint64_t)(-(int64_t)err) : (uint64_t)done;
         break;
     }
-    default:
-        return 0;
+    default: return 0;
     }
     return svc_done(c); // boundary errno xlate (host macOS -> Linux); see helpers.c svc_done
 }

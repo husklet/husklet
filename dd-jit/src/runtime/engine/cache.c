@@ -16,11 +16,12 @@ static uint8_t *g_emit_start;
 // only the few ABSOLUTE handoffs (run_block target, IBTC/IC body literals, icache flush)
 // convert RW<->RX. g_rw2rx == 0 selects the single-MAP_JIT fallback that toggles the whole
 // region's W^X per translation/IC-fill (NODUALMAP=1).
-static ptrdiff_t g_rw2rx;     // RX_addr - RW_addr (0 in fallback)
-static int g_dualmap;         // 1 when the RW/RX dual mapping is active
-static uint64_t g_wx_toggles; // # of pthread_jit_write_protect_np() calls actually made (PROF)
+static ptrdiff_t g_rw2rx;                            // RX_addr - RW_addr (0 in fallback)
+static int g_dualmap;                                // 1 when the RW/RX dual mapping is active
+static uint64_t g_wx_toggles;                        // # of pthread_jit_write_protect_np() calls actually made (PROF)
 #define J_RX(p) ((void *)((uint8_t *)(p) + g_rw2rx)) // RW alias addr -> RX alias addr
 #define J_RW(p) ((void *)((uint8_t *)(p) - g_rw2rx)) // RX alias addr -> RW alias addr
+
 // The single W^X gate. Under dual mapping it is a no-op: writes land on the RW alias and
 // execution reads the RX alias, so no per-region permission flip (and no peer-thread race).
 static inline void jit_wprot(int enable_exec) {
@@ -28,16 +29,18 @@ static inline void jit_wprot(int enable_exec) {
     g_wx_toggles++;
     pthread_jit_write_protect_np(enable_exec);
 }
+
 // Allocate one dual-mapped code cache: a plain anon RW region + an RX alias of the SAME physical
 // pages at a second VA (vm_remap). Returns 0 and fills *rw / *delta(=RX-RW) on success.
 #include <mach/mach.h>
 #include <mach/mach_vm.h>
+
 static int dualmap_alloc(uint8_t **rw_out, ptrdiff_t *delta_out) {
     uint8_t *rw = mmap(NULL, CACHE_SZ, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON, -1, 0);
     if (rw == MAP_FAILED) return -1;
     mach_vm_address_t rx = 0;
     vm_prot_t cur = 0, max = 0;
-    // #371: the RX alias is created VM_INHERIT_NONE, so a fork child gets a HOLE at the RX VA instead of
+    // the RX alias is created VM_INHERIT_NONE, so a fork child gets a HOLE at the RX VA instead of
     // an independently-COW'd (silently diverged) second copy. jit_after_fork() then re-remaps a fresh RX
     // alias of the child's OWN (COW-inherited) RW pages at that same VA -- ~1us -- which re-couples the
     // two views, so the child keeps every inherited translation AND its later writes propagate to RX
@@ -54,8 +57,10 @@ static int dualmap_alloc(uint8_t **rw_out, ptrdiff_t *delta_out) {
     *delta_out = (uint8_t *)rx - rw;
     return 0;
 }
+
 // PROF-only: accumulated wall time spent in the translate region (the part the W^X toggles bracket).
 static uint64_t g_xlate_ns;
+
 static inline uint64_t now_ns(void) {
     struct timespec t;
     clock_gettime(CLOCK_MONOTONIC, &t);
@@ -87,11 +92,13 @@ static int g_threaded;
 // patch_links_to() back-patched a `b (NULL - slot)` wild branch (mongod, ~65K blocks of C++ static init,
 // crashed with SIGILL/SIGSEGV here). NOT the leaked container-state MAP_N (that one is unrelated, 64K).
 #define JIT_MAP_N (1u << 19)
+
 static struct {
     uint64_t gpc;
     void *host;
     void *body;
 } g_map[JIT_MAP_N];
+
 // ---- SMC precise gate: the set of guest 4KB pages we have translated ANY block from ----
 // A code-generating guest (V8, a JIT) issues `ic ivau` (icache invalidate by VA) after writing each
 // freshly-generated cache line. The old smc_icflush() responded to EVERY such flush by nuking the whole
@@ -102,16 +109,21 @@ static struct {
 // `ic ivau` to a page NOT in the set is a no-op (skip the wholesale drop). A page that WAS translated
 // still triggers the full conservative invalidation -> correctness for genuine in-place self-modification
 // is unchanged. Reset whenever g_map is wholesale-cleared (the set then re-fills as blocks re-translate).
-#define TXPG_N (1u << 18) // 256K slots * 8B = 2MB; guest code spans at most a few thousand pages
+#define TXPG_N (1u << 18)       // 256K slots * 8B = 2MB; guest code spans at most a few thousand pages
 static uint64_t g_txpg[TXPG_N]; // value = guest page (addr>>12); 0 = empty (page 0 never holds guest code)
+
 static void txpg_put(uint64_t p) { // insert one guest page (addr>>12) into the set
     uint32_t h = (uint32_t)(p * 2654435761u) & (TXPG_N - 1);
     for (uint32_t i = 0; i < TXPG_N; i++) {
         uint32_t j = (h + i) & (TXPG_N - 1);
-        if (g_txpg[j] == p) break;                    // already present
-        if (g_txpg[j] == 0) { g_txpg[j] = p; break; } // insert into the first empty slot
+        if (g_txpg[j] == p) break; // already present
+        if (g_txpg[j] == 0) {
+            g_txpg[j] = p;
+            break;
+        } // insert into the first empty slot
     }
 }
+
 // ---- SMC precise gate, CACHE-LINE granularity (64B = the unit `ic ivau, Xt` actually invalidates) ----
 // The page-granular set below over-approximates badly for a guest whose code arena packs many functions per
 // 4KB page (BeamAsm): appending function F2 onto a page that already holds a translated F1 makes txpg_has()
@@ -122,14 +134,19 @@ static void txpg_put(uint64_t p) { // insert one guest page (addr>>12) into the 
 // the open-addressed load factor low; saturation degrades conservatively (assume present -> wholesale drop).
 #define TXLN_N (1u << 21)
 static uint64_t g_txln[TXLN_N]; // value = guest line (addr>>6); 0 = empty
+
 static void txln_put(uint64_t l) {
     uint32_t h = (uint32_t)(l * 2654435761u) & (TXLN_N - 1);
     for (uint32_t i = 0; i < TXLN_N; i++) {
         uint32_t j = (h + i) & (TXLN_N - 1);
         if (g_txln[j] == l) break;
-        if (g_txln[j] == 0) { g_txln[j] = l; break; }
+        if (g_txln[j] == 0) {
+            g_txln[j] = l;
+            break;
+        }
     }
 }
+
 static int txln_has(uint64_t addr) { // is the 64B line at addr the source of any live translation?
     uint64_t l = addr >> 6;
     uint32_t h = (uint32_t)(l * 2654435761u) & (TXLN_N - 1);
@@ -140,7 +157,11 @@ static int txln_has(uint64_t addr) { // is the 64B line at addr the source of an
     }
     return 1; // saturated -> conservative
 }
-static void txln_clear(void) { memset(g_txln, 0, sizeof g_txln); }
+
+static void txln_clear(void) {
+    memset(g_txln, 0, sizeof g_txln);
+}
+
 static void txpg_mark(uint64_t lo, uint64_t hi) {
     if (hi <= lo) hi = lo + 1;
     for (uint64_t p = lo >> 12; p <= ((hi - 1) >> 12); p++)
@@ -148,6 +169,7 @@ static void txpg_mark(uint64_t lo, uint64_t hi) {
     for (uint64_t l = lo >> 6; l <= ((hi - 1) >> 6); l++) // finer line-granular set (see txln_has)
         txln_put(l);
 }
+
 static int txpg_has(uint64_t addr) {
     uint64_t p = addr >> 12;
     uint32_t h = (uint32_t)(p * 2654435761u) & (TXPG_N - 1);
@@ -158,7 +180,11 @@ static int txpg_has(uint64_t addr) {
     }
     return 1; // table saturated -> conservatively assume present (forces a full invalidation)
 }
-static void txpg_clear(void) { memset(g_txpg, 0, sizeof g_txpg); }
+
+static void txpg_clear(void) {
+    memset(g_txpg, 0, sizeof g_txpg);
+}
+
 static int map_idx(uint64_t gpc) {
     // hash shift is per-arch (frontend/<arch>/abi.h G_GPC_HASH_SHIFT): aarch64 PCs are 4-byte aligned
     // (>>2 spreads), x86 PCs are byte-granular (>>0). Pure tuning constant; aarch64 value is 2 (unchanged).
@@ -170,14 +196,17 @@ static int map_idx(uint64_t gpc) {
     }
     return -1;
 }
+
 static void *map_host(uint64_t gpc) {
     int i = map_idx(gpc);
     return i < 0 ? NULL : g_map[i].host;
 }
+
 static void *map_body(uint64_t gpc) {
     int i = map_idx(gpc);
     return i < 0 ? NULL : g_map[i].body;
 }
+
 static void map_put(uint64_t gpc, void *host, void *body) {
     uint32_t h = (uint32_t)((gpc >> G_GPC_HASH_SHIFT) * 2654435761u) & (JIT_MAP_N - 1);
     for (int i = 0; i < JIT_MAP_N; i++) {
@@ -204,6 +233,7 @@ static void map_put(uint64_t gpc, void *host, void *body) {
 // dispatcher. The reader's hash width (engine/stubs.c) and both fills (the per-arch
 // G_IBTC_FILL, which key on `(target>>2) & (IBTC_N-1)`) follow this constant.
 #define IBTC_N 65536
+
 // 16-byte aligned so each {target,body} entry sits in a single 16-byte granule -> a
 // naturally-aligned 128-bit ldp/stp is single-copy atomic under FEAT_LSE2 (all Apple
 // Silicon). That atomicity is what lets a lock-free reader observe {target,body} as an
@@ -213,6 +243,7 @@ typedef struct {
     uint64_t target;
     void *body;
 } ibtc_ent;
+
 _Alignas(16) static ibtc_ent g_ibtc[IBTC_N];
 
 // ---- W5C: race-free threaded IBTC fill ----
@@ -223,6 +254,7 @@ _Alignas(16) static ibtc_ent g_ibtc[IBTC_N];
 static int g_mtibtc = 1;
 static int g_futexq = 1;
 static uint64_t g_mtfill;
+
 // Atomic 128-bit RELEASE publish of a {target, body} pair into a 16-byte-aligned IBTC slot.
 // Single writer (the dispatcher holds g_jit_lock across every fill); many lock-free readers.
 // `dmb ish` orders all prior stores (incl. the body block's translation + its IC IVAU, both
@@ -238,6 +270,7 @@ static inline void ibtc_publish(ibtc_ent *e, uint64_t target, void *body) {
                      : "r"(e), "r"(target), "r"(body)
                      : "memory");
 }
+
 static uint64_t g_prof_cross, g_prof_miss, g_prof_xlate, g_prof_sys, g_lse_n;
 // PROF=1: dispatcher crossings / IBTC misses / translations
 static int g_prof;
@@ -263,26 +296,31 @@ static uint64_t g_prof_bl_shadow, g_prof_bl_leaf;
 #endif
 static int g_ibprof;    // IBPROF=1
 static int g_vdbetrace; // VDBETRACE=1 (ARM-B1 prototype gate; defined here, used in translate.c)
-// IBSLIM (perf lever #4): indirect-dispatch/call-path slimming (aarch64; defined here -- shared TU --
+// IBSLIM: indirect-dispatch/call-path slimming (aarch64; defined here -- shared TU --
 // used in translate/aarch64). NOIBSLIM=1 reverts every piece (steal-aware emit_set_x30 + the dead
 // per-site-IC skip at recognized interpreter-dispatch `br`s) for A/B. CTXDISP=1 additionally enables
 // the experimental history-keyed context dispatch at recognized dispatch sites (measurement gate).
 static int g_noibslim; // NOIBSLIM=1
 static int g_ctxdisp;  // CTXDISP=1
 #define IBSITE_N 8192
+
 static struct ibsite {
     uint64_t site, count, last_tgt, mono; // mono = #times target==previous target at this site
     uint64_t h1, h2, h3;                  // most-recent 3 targets (h1=newest) for the order-k predictors
 } g_ibsite[IBSITE_N];
+
 // One open-addressed predictor table per Markov order. Each entry is a (key)->last-observed-next
 // "last value" predictor; hit = #times the actual next equalled the prediction. The order-k key
 // folds the site with the last k targets, so order-k models "given the last k opcode handlers, is
 // the next handler fixed?" -- exactly the guard a depth-k thread of the VDBE loop would carry.
 #define IBTRANS_N (1u << 19)
+
 static struct ibtrans {
     uint64_t site, pred, count, hit;
 } g_ibtrans1[IBTRANS_N], g_ibtrans2[IBTRANS_N], g_ibtrans3[IBTRANS_N];
+
 static uint64_t g_ib_total;
+
 static inline uint64_t ibmix(uint64_t a, uint64_t b) {
     uint64_t h = a * 0x9E3779B97F4A7C15ull ^ (b + 0x7F4A7C15ull);
     h ^= h >> 29;
@@ -290,6 +328,7 @@ static inline uint64_t ibmix(uint64_t a, uint64_t b) {
     h ^= h >> 32;
     return h;
 }
+
 static struct ibsite *ib_find_site(uint64_t site) {
     uint32_t h = (uint32_t)(ibmix(site, 0) & (IBSITE_N - 1));
     for (int i = 0; i < IBSITE_N; i++) {
@@ -302,9 +341,11 @@ static struct ibsite *ib_find_site(uint64_t site) {
     }
     return &g_ibsite[0]; // table full: degrade, don't crash
 }
+
 // Keyed predictor slot: the fold key lives in a side array `keys`; `tab[j].site` carries the real
 // site (for per-site aggregation in the dump). NULL on probe overflow (rare).
 static uint64_t g_k1[IBTRANS_N], g_k2[IBTRANS_N], g_k3[IBTRANS_N];
+
 static struct ibtrans *ib_slot(struct ibtrans *tab, uint64_t *keys, uint64_t key, uint64_t site) {
     if (key == 0) key = 1;
     uint32_t h = (uint32_t)(key & (IBTRANS_N - 1));
@@ -319,6 +360,7 @@ static struct ibtrans *ib_slot(struct ibtrans *tab, uint64_t *keys, uint64_t key
     }
     return NULL;
 }
+
 static inline void ib_pred(struct ibtrans *t, uint64_t target) {
     if (!t) return;
     if (t->count == 0)
@@ -329,6 +371,7 @@ static inline void ib_pred(struct ibtrans *t, uint64_t target) {
         t->pred = target; // last-value, adapt
     t->count++;
 }
+
 static void ib_log(uint64_t site, uint64_t target) {
     g_ib_total++;
     struct ibsite *s = ib_find_site(site);
@@ -348,29 +391,32 @@ static void ib_log(uint64_t site, uint64_t target) {
     s->last_tgt = target;
     s->count++;
 }
+
 // ARM-B1 VDBETRACE prototype counters/state.
 static uint64_t g_vt_inline;    // # of speculative-direct-chain (SDC) JT-dispatch sites emitted
 static uint64_t g_vt_fills;     // # of SDC (re)specializations performed by the dispatcher
 static uint64_t g_vt_force_inl; // # of dispatch blocks force-inlined into a predecessor (path-specialize)
 static int g_vt_hitcount;       // VTHITCOUNT=1: emit an inline SDC guard-hit counter (perturbs timing)
 static uint64_t g_vt_hit;       // # of SDC guard hits (threaded direct chains taken)
+
 // ARM-B1 SDC fill: the speculative direct-chain at a JT dispatch missed to the dispatcher (genuinely-new
 // target). (Re)specialize the site to this target: write the guard literal and back-patch the in-cache
 // `b` slot to a DIRECT branch into the target's body (regs-live entry). `rec_rx` is the RX address of the
 // 2-quad record { [0]=guard target literal, [1]=RW addr of the `b` slot } (low tag bit already stripped).
 static void sdc_fill(uint64_t rec_rx, uint64_t target) {
     uint64_t *rec = (uint64_t *)J_RW((void *)rec_rx);
-    void *body = map_body(target); // RW body (post-prologue, regs-live entry)
-    if (!body) return;             // not translated (shouldn't happen: dispatcher just translated pc)
+    void *body = map_body(target);        // RW body (post-prologue, regs-live entry)
+    if (!body) return;                    // not translated (shouldn't happen: dispatcher just translated pc)
     uint32_t *bslot = (uint32_t *)rec[1]; // RW addr of the direct-branch slot
     jit_wprot(0);
     int64_t d = ((uint8_t *)body - (uint8_t *)bslot) / 4; // RW-RW delta == RX-RX delta (alias-invariant)
-    *bslot = 0x14000000u | ((uint32_t)d & 0x3FFFFFFu);     // b body
-    rec[0] = target;                                       // arm the guard
+    *bslot = 0x14000000u | ((uint32_t)d & 0x3FFFFFFu);    // b body
+    rec[0] = target;                                      // arm the guard
     jit_wprot(1);
     sys_icache_invalidate(J_RX(bslot), 4); // the patched `b` executes from the RX alias
     g_vt_fills++;
 }
+
 static void vt_dump(void) {
     if (!g_vdbetrace) return;
     fprintf(stderr, "[vdbetrace] sdc_sites=%llu sdc_fills=%llu force_inlined_dispatch=%llu\n",
@@ -380,7 +426,7 @@ static void vt_dump(void) {
                 (unsigned long long)g_vt_hit);
 }
 
-// ---- CTXDISP (lever #4 experiment): history-keyed context dispatch at recognized interpreter-
+// ---- CTXDISP (experiment): history-keyed context dispatch at recognized interpreter-
 // dispatch sites (computed-goto / jump-table `br xN`). Each site gets an in-cache array of CTX_N
 // 64-byte stubs, one per rolling-history hash bucket: {16B atomic {target,body} pair | guard code}.
 // The main site indexes the array by a hash of the last ~3 guest targets ONLY (never the current
@@ -390,16 +436,19 @@ static void vt_dump(void) {
 // stale/colliding stub can never land wrong -- it falls into the ordinary shared-hash IBTC probe.
 // Stubs are (re)filled by the dispatcher (ctx_fill), throttled by a per-site countdown so steady-
 // state refills cost ~1/CTX_REFILL of ctx misses. Gated CTXDISP=1 (measurement; default OFF).
-#define CTX_N 256      // history buckets (stubs) per site; 64B each -> 16KB in-cache per site
-#define CTX_REFILL 64  // ctx misses between dispatcher refills (throttle)
+#define CTX_N 256     // history buckets (stubs) per site; 64B each -> 16KB in-cache per site
+#define CTX_REFILL 64 // ctx misses between dispatcher refills (throttle)
 #define CTXSITE_MAX 256
+
 static struct {
     uint64_t gpc;  // dispatch-site guest pc (dedup on re-translate)
     uint64_t hist; // rolling target history (h = (h<<16) ^ (target>>2)); emitted code reads+writes
     uint64_t ctr;  // refill throttle countdown (emitted code decrements; dispatcher resets)
 } g_ctxsite[CTXSITE_MAX];
+
 static int g_nctxsite;
 static uint64_t g_ctx_fills; // dispatcher stub (re)specializations
+
 static int ctxsite_slot(uint64_t gpc) {
     for (int i = 0; i < g_nctxsite; i++)
         if (g_ctxsite[i].gpc == gpc) return i;
@@ -410,6 +459,7 @@ static int ctxsite_slot(uint64_t gpc) {
     g_ctxsite[i].ctr = CTX_REFILL;
     return i;
 }
+
 // A ctx stub missed to the dispatcher (throttled): (re)specialize the stub whose 16B pair sits at
 // pair_rx (RX alias; tag bits already stripped) to the just-resolved target. Same publish contract
 // as the shared hash: single 128-bit release store (atomic under LSE2), so a lock-free reader can
@@ -420,10 +470,12 @@ static void ctx_fill(uint64_t pair_rx, uint64_t target) {
     ibtc_publish((ibtc_ent *)J_RW((void *)pair_rx), target, J_RX(bd));
     g_ctx_fills++;
 }
+
 static void ctx_dump(void) {
     if (!g_ctxdisp) return;
     fprintf(stderr, "[ctxdisp] sites=%d fills=%llu\n", g_nctxsite, (unsigned long long)g_ctx_fills);
 }
+
 // MAPDUMP=<prefix> (profiling-only, this worktree): at exit_group, dump the translation map + the raw
 // code cache so an offline tool can attribute sampled host PCs to guest blocks/instructions.
 // <prefix>.map is text: "CACHE <rw> <rx> <cp>" then one "MAP <gpc> <host> <body>" per live block.
@@ -446,18 +498,19 @@ static void md_dump(void) {
     fwrite(g_cache, 1, (size_t)(g_cp - g_cache), f);
     fclose(f);
 }
+
 // ARM-B1: recognize a clang jump-table switch dispatch at a guest `br xN`. The compiler emits
 //   ldrh wM,[xB,wI,uxtw #1] ; adr xA,. ; add xN,xA,wM,sxth #2 ; br xN
 // (an indexed 16-bit offset table). Bit-exact opcode match on the 3 predecessors + Rd==br.Rn.
 static int is_jt_dispatch_br(uint64_t gpc) {
-    uint32_t a = *(uint32_t *)(gpc - 12), b = *(uint32_t *)(gpc - 8), c = *(uint32_t *)(gpc - 4),
-             br = *(uint32_t *)gpc;
+    uint32_t a = *(uint32_t *)(gpc - 12), b = *(uint32_t *)(gpc - 8), c = *(uint32_t *)(gpc - 4), br = *(uint32_t *)gpc;
     int brn = (int)((br >> 5) & 31);
-    return (a & 0xFFE0FC00u) == 0x78605800u   // ldrh wM,[xB,wI,uxtw #1]
+    return (a & 0xFFE0FC00u) == 0x78605800u    // ldrh wM,[xB,wI,uxtw #1]
            && (b & 0x9F000000u) == 0x10000000u // adr xA, .
            && (c & 0xFFE0FC00u) == 0x8B20A800u // add xd,xa,wm,sxth #2
            && (int)(c & 31) == brn;            // add Rd feeds the br
 }
+
 // True if the block at `tgt` is a JT-dispatch block (reaches a JT-dispatch `br` with no intervening
 // call/return/svc/unconditional-b that would end the block first). Used to force-inline the shared
 // dispatch into each predecessor so the resulting `br` is PATH-SPECIFIC (the B1 specialization).
@@ -470,10 +523,11 @@ static int is_jt_dispatch_block(uint64_t tgt) {
         if ((in & 0xFFFFFC1Fu) == 0xD63F0000u) return 0;                    // blr
         if ((in & 0xFFFFFC1Fu) == 0xD65F0000u) return 0;                    // ret
         if (in == 0xD4000001u) return 0;                                    // svc
-        if ((in & 0xFC000000u) == 0x14000000u) return 0; // unconditional b: block ends before any br
+        if ((in & 0xFC000000u) == 0x14000000u) return 0;                    // unconditional b: block ends before any br
     }
     return 0;
 }
+
 // IBSLIM: recognize an interpreter-dispatch indirect `br xN` -- a jump through a table of CODE
 // POINTERS: `ldr xN, [xB, {w|x}M, {uxtw|lsl|sxtw} #3]` feeding `br xN` (gcc/clang computed goto --
 // CPython's eval loop, sqlite's VDBE -- and any switch over a pointer table), or clang's
@@ -486,8 +540,9 @@ static int is_ptrtable_ldr(uint32_t in, int rt) {
     if ((int)(in & 31) != rt) return 0;              // must define the branch register
     unsigned opt = (in >> 13) & 7;                   // uxtw(2) / lsl(3) / sxtw(6)
     if (opt != 2 && opt != 3 && opt != 6) return 0;
-    return (int)((in >> 12) & 1);                    // S=1: scaled #3 (an 8-byte pointer table)
+    return (int)((in >> 12) & 1); // S=1: scaled #3 (an 8-byte pointer table)
 }
+
 static int is_interp_dispatch_br(uint64_t gpc, int brn) {
     if ((gpc & 0xFFFu) < 12) return 0; // never scan backwards across a page boundary
     uint32_t p1 = *(uint32_t *)(gpc - 4);
@@ -497,10 +552,12 @@ static int is_interp_dispatch_br(uint64_t gpc, int brn) {
     if (is_ptrtable_ldr(*(uint32_t *)(gpc - 8), brn) && (int)(p1 & 31) != brn) return 1;
     return is_jt_dispatch_br(gpc);
 }
+
 static int ibsite_cmp(const void *a, const void *b) {
     uint64_t ca = ((const struct ibsite *)a)->count, cb = ((const struct ibsite *)b)->count;
     return ca < cb ? 1 : ca > cb ? -1 : 0;
 }
+
 static void ib_dump(void) {
     if (!g_ibprof) return;
     // copy + sort sites by traffic
@@ -567,16 +624,17 @@ static void ib_dump(void) {
 // per self-loop iteration counter (plain RW data -- NOT in the W^X cache, which is RX while executing;
 // emitted code stores to it via an adrp+add absolute address)
 static uint64_t g_t2cnt[T2_MAX];
-static uint64_t g_t2gpc[T2_MAX]; // the loop-start gpc owning each slot (dedup on re-translate)
-static int g_t2n;                // slots allocated
-static int g_notier2;            // NOTIER2=1 kill switch (pure tier-1 baseline)
+static uint64_t g_t2gpc[T2_MAX];   // the loop-start gpc owning each slot (dedup on re-translate)
+static int g_t2n;                  // slots allocated
+static int g_notier2;              // NOTIER2=1 kill switch (pure tier-1 baseline)
 static uint64_t g_t2thresh = 1000; // back-edge iterations before promotion (TIER2_THRESHOLD env)
-static uint64_t g_prof_t2;       // PROF: blocks promoted to tier-2
-static int g_tier2_build;        // set while recompiling a block as tier-2 (fold, no counter, no map_put)
-static void *g_last_body;        // body pointer of the most recent translate_block (for the promoter)
+static uint64_t g_prof_t2;         // PROF: blocks promoted to tier-2
+static int g_tier2_build;          // set while recompiling a block as tier-2 (fold, no counter, no map_put)
+static void *g_last_body;          // body pointer of the most recent translate_block (for the promoter)
 // Kill-switch + threshold env, read ONCE (idempotent static guard; the W4E diff read these in the target
 // main(), relocated here to keep the integration inside the allowed jit/ + frontend/aarch64/ units).
 static int g_t2_envdone;
+
 static void tier2_env_init(void) {
     if (g_t2_envdone) return;
     g_t2_envdone = 1;
@@ -584,6 +642,7 @@ static void tier2_env_init(void) {
     const char *t = getenv("TIER2_THRESHOLD");
     if (t && atoll(t) > 0) g_t2thresh = (uint64_t)atoll(t);
 }
+
 // Find (or allocate) the counter slot for a self-loop whose body starts at gpc. Re-translation of the
 // same loop reuses its slot so the count is not reset (and a re-translated promoted loop won't re-arm a
 // fresh counter). Returns -1 if the table is full (-> emit plain tier-1, no counter).
@@ -600,7 +659,7 @@ static int t2_slot(uint64_t gpc) {
 // Direct-branch edges whose target wasn't translated yet: remembered so the branch
 // can be back-patched into a direct `b target.body` once the target is translated.
 //
-// IRQSLIM (aarch64, lever #4): when the #292 async-signal poll is emitted as a fixed 2-insn block
+// IRQSLIM (aarch64): when the async-signal poll is emitted as a fixed 2-insn block
 // header (ldr+cbnz, see emit_irq_check), a FORWARD direct chain may land at body+8 and skip the
 // poll: a cycle of direct branches must contain a backward edge (code addresses strictly increase
 // along forward-only paths), and every indirect entry (IBTC/IC/ctx/SDC) still lands on body+0 --
@@ -608,6 +667,7 @@ static int t2_slot(uint64_t gpc) {
 // branchy interpreter code) stop paying a load+branch per block. g_fwdskip is 8 when that layout
 // is active (aarch64 default), 0 otherwise (x86 engine, NOIRQSLIM/NOIRQCHECK/NOSTEAL1617).
 static int g_fwdskip;
+
 static struct {
     uint32_t *slot;
     uint64_t target;
@@ -615,7 +675,9 @@ static struct {
     // is_bl: §B host bl, patch as bl
     int fwd; // IRQSLIM: forward direct edge -> patch to body+g_fwdskip (skip the entry poll)
 } g_pend[1 << 16];
+
 static int g_npend;
+
 static void add_pend3(uint32_t *slot, uint64_t target, int is_bl, int fwd) {
     if (g_npend < (1 << 16)) {
         g_pend[g_npend].slot = slot;
@@ -625,8 +687,15 @@ static void add_pend3(uint32_t *slot, uint64_t target, int is_bl, int fwd) {
         g_npend++;
     }
 }
-static void add_pend2(uint32_t *slot, uint64_t target, int is_bl) { add_pend3(slot, target, is_bl, 0); }
-static void add_pend(uint32_t *slot, uint64_t target) { add_pend3(slot, target, 0, 0); }
+
+static void add_pend2(uint32_t *slot, uint64_t target, int is_bl) {
+    add_pend3(slot, target, is_bl, 0);
+}
+
+static void add_pend(uint32_t *slot, uint64_t target) {
+    add_pend3(slot, target, 0, 0);
+}
+
 static void patch_links_to(uint64_t gpc, void *body) {
     // body == NULL means gpc has no live translation (e.g. map_put silently failed on a full map).
     // Patching `b (body - slot)` would then bake a wild branch; leave the pends unresolved so they keep
@@ -666,6 +735,7 @@ static void patch_links_to(uint64_t gpc, void *body) {
 // 29/INFO), so installing a process-wide handler for it cannot collide with an emulated guest signal.
 #define STW_SIG SIGEMT
 #define STW_MAXTHREAD 4096
+
 // Registry of live guest threads: every thread that runs run_guest registers on entry and unregisters on
 // exit, so a flusher can enumerate the peers to quiesce. `used` is atomic so peers_live()/the flusher see
 // a consistent snapshot; the reg lock serializes slot allocation. `exec_gen` is the generation of the code
@@ -676,6 +746,7 @@ static struct {
     pthread_t th;
     _Atomic uint64_t exec_gen;
 } g_stw_threads[STW_MAXTHREAD];
+
 static pthread_mutex_t g_stw_reg_lock = PTHREAD_MUTEX_INITIALIZER;
 static _Atomic int g_stw_active; // 1 while a flush is in progress -> parked peers spin until cleared
 static _Atomic int g_stw_parked; // # of peers currently parked at the safepoint
@@ -691,14 +762,16 @@ static uint64_t g_stw_flushes;   // PROF: stop-the-world flushes performed
 // cache is reclaimed (unmapped) once no live thread's exec_gen still names its generation. This bounds
 // retained VA (no per-flush 64MB leak) AND removes the old unsafe reuse-in-place-on-alloc-failure path
 // that corrupted parked peers.
-static uint64_t g_cache_gen;                          // generation of the CURRENT cache (g_cache)
-static __thread _Atomic uint64_t *g_my_exec_gen;      // this thread's exec_gen slot (NULL until registered)
+static uint64_t g_cache_gen;                     // generation of the CURRENT cache (g_cache)
+static __thread _Atomic uint64_t *g_my_exec_gen; // this thread's exec_gen slot (NULL until registered)
 #define STW_RETIRED_MAX (STW_MAXTHREAD + 8)
+
 static struct {
     uint8_t *rw;     // RW base of the retired mapping
     ptrdiff_t rw2rx; // RX-RW delta (0 for the single-mapping MAP_JIT fallback)
     uint64_t gen;    // generation this cache served
 } g_retired[STW_RETIRED_MAX];
+
 static int g_nretired;
 
 // Park safepoint handler -- async-signal-safe (atomics + nanosleep only). A peer caught here is, by
@@ -713,7 +786,9 @@ static void stw_park_handler(int sig) {
     }
     atomic_fetch_sub_explicit(&g_stw_parked, 1, memory_order_seq_cst);
 }
+
 static pthread_once_t g_stw_once = PTHREAD_ONCE_INIT;
+
 static void stw_install(void) {
     struct sigaction sa;
     memset(&sa, 0, sizeof sa);
@@ -722,6 +797,7 @@ static void stw_install(void) {
     sigemptyset(&sa.sa_mask);
     sigaction(STW_SIG, &sa, NULL);
 }
+
 static void stw_register(void) {
     pthread_once(&g_stw_once, stw_install);
     // Guarantee the park signal is deliverable on this thread (a blocked STW_SIG would stall a flush).
@@ -742,6 +818,7 @@ static void stw_register(void) {
         }
     pthread_mutex_unlock(&g_stw_reg_lock);
 }
+
 static void stw_unregister(void) {
     pthread_t me = pthread_self();
     pthread_mutex_lock(&g_stw_reg_lock);
@@ -753,6 +830,7 @@ static void stw_unregister(void) {
         }
     pthread_mutex_unlock(&g_stw_reg_lock);
 }
+
 // # of OTHER live guest threads (excludes the caller). 0 -> the cheap in-place flush is safe.
 static int stw_peers_live(void) {
     pthread_t me = pthread_self();
@@ -771,6 +849,7 @@ static void cache_unmap(uint8_t *rw, ptrdiff_t rw2rx) {
     munmap(rw, CACHE_SZ);
     if (rw2rx) munmap(rw + rw2rx, CACHE_SZ);
 }
+
 // True if some live guest thread is still executing in generation `gen`. Caller holds g_stw_reg_lock;
 // during a flush all peers are quiesced at the safepoint, so the exec_gen snapshot is stable.
 static int gen_in_use(uint64_t gen) {
@@ -780,6 +859,7 @@ static int gen_in_use(uint64_t gen) {
             return 1;
     return 0;
 }
+
 // Reclaim (unmap) every retired cache no live thread is still executing in. Caller holds BOTH g_jit_lock
 // (so no peer can transition into a new block) and g_stw_reg_lock (so the registry is stable). Called from
 // jit_flush_to_fresh before the fresh allocation, so freed VA is available to it.
@@ -792,6 +872,7 @@ static void reclaim_retired(void) {
             i++;
     }
 }
+
 // Record the CURRENT cache as retired (its blocks may still be reached by parked peers / baked-in chains)
 // so a later reclaim_retired() frees it once every thread has drifted off its generation.
 static void retire_current(void) {
@@ -802,6 +883,7 @@ static void retire_current(void) {
         g_nretired++;
     }
 }
+
 // A fresh cache could not be allocated and the peers are quiesced IN / parked ON the current cache, so
 // reusing it in place would corrupt them on resume. Reclamation has already freed everything safe to free,
 // so we cannot proceed -- abort cleanly rather than corrupt guest state.
@@ -874,7 +956,8 @@ static void stw_flush(void) {
     }
     pthread_mutex_unlock(&g_stw_reg_lock);
 }
-// #267 SMC coherence: the guest overwrote already-translated code -> drop the cross-block link tables so the
+
+// SMC coherence: the guest overwrote already-translated code -> drop the cross-block link tables so the
 // modified bytes re-translate on next dispatch. Only ever called with NO other guest thread live (single-
 // threaded, or the caller holds g_jit_lock and stw_peers_live()==0); a wholesale drop cannot be made
 // coherent while peers execute (see smc_icflush).
@@ -891,6 +974,7 @@ static void smc_inplace_drop(void) {
     g_npend = 0;
     txpg_clear();
 }
+
 // fork(): drop the inherited (parent-only) thread registry -- host fork() duplicates only the calling
 // thread -- so a later flush in the child never signals a dead handle. Re-register the child's own thread.
 static void stw_after_fork(void) {
@@ -912,7 +996,7 @@ static void stw_after_fork(void) {
 // a fresh RX alias of the child's OWN COW-inherited RW pages at that SAME VA. That re-couples the aliases
 // (child RW writes are visible through child RX again; verified empirically incl. nested forks) at the
 // SAME addresses, so EVERY inherited translation, g_map/g_ibtc entry, cross-block chain and IC stays
-// valid: a fork child resumes on the parent's warm code with ~zero rebuild cost (#371; was a full 64MB
+// valid: a fork child resumes on the parent's warm code with ~zero rebuild cost (was a full 64MB
 // dual-map rebuild + ~13MB of map memsets = ~0.7ms per fork, plus a full re-translate of everything).
 //
 // Preserving translations across fork is exactly what the single-mapping MAP_JIT fallback has always done
@@ -925,14 +1009,15 @@ static void stw_after_fork(void) {
 // (the child re-translates on demand). g_fork_preserved tells proc.c whether the per-arch caches keyed on
 // cache VAs (x86 g_xibtc) survived (1) or must be dropped (0).
 static int g_fork_preserved;
+
 static void jit_after_fork(void) {
     g_fork_preserved = 1; // MAP_JIT fallback + successful re-remap keep the arena; rebuild paths clear it
-    stw_after_fork(); // single-threaded child: shed the inherited thread registry (also for the MAP_JIT path)
+    stw_after_fork();     // single-threaded child: shed the inherited thread registry (also for the MAP_JIT path)
     // fork() only clones the CALLING thread. If a peer M was translating (holding g_jit_lock, and g_cache_lock
     // under it in map_put) at the instant the guest forked, the child inherits those mutexes LOCKED with no
     // owner thread left to release them -- so the child's very first dispatcher iteration deadlocks forever in
     // run_guest's `pthread_mutex_lock(&g_jit_lock)` (0% CPU) while its parent blocks reaping it. This is THE
-    // go/npm/cargo build hang (#285/#175): a heavily-threaded driver (Go compiler, node) forks a child while
+    // go/npm/cargo build hang: a heavily-threaded driver (Go compiler, node) forks a child while
     // sibling Ms are mid-translate. The child is single-threaded now, so reinitialising both locks to a clean
     // unlocked state is always correct (no surviving peer can hold or want them; the calling thread never holds
     // an engine lock across a guest syscall). Must run before the !g_dualmap early return so the MAP_JIT path
@@ -955,8 +1040,7 @@ static void jit_after_fork(void) {
         kern_return_t kr = mach_vm_remap(mach_task_self(), &rx, CACHE_SZ, 0, VM_FLAGS_FIXED, mach_task_self(),
                                          (mach_vm_address_t)g_cache, FALSE, &cur, &max, VM_INHERIT_NONE);
         if (kr == KERN_SUCCESS) {
-            if (mach_vm_protect(mach_task_self(), rx, CACHE_SZ, FALSE, VM_PROT_READ | VM_PROT_EXECUTE) ==
-                KERN_SUCCESS)
+            if (mach_vm_protect(mach_task_self(), rx, CACHE_SZ, FALSE, VM_PROT_READ | VM_PROT_EXECUTE) == KERN_SUCCESS)
                 return; // arena + g_map/g_ibtc/chains all still valid -- nothing to drop
             // we own the new mapping but could not make it executable: scrub OUR mapping, then rebuild.
             mach_vm_deallocate(mach_task_self(), rx, CACHE_SZ);

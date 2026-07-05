@@ -29,26 +29,44 @@ use std::time::{Duration, Instant};
 
 /// Which container engine the scenario runs against.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum Backend { Real, Dd }
+pub enum Backend {
+    Real,
+    Dd,
+}
 
 /// A real-software target. Linux targets map to a docker `--platform`; mac is the lighter native path.
 /// Linux parity = a scenario runs on BOTH ArmLinux and AmdLinux unless narrowed.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum Target { ArmLinux, AmdLinux, ArmMac }
+pub enum Target {
+    ArmLinux,
+    AmdLinux,
+    ArmMac,
+}
 
 impl Target {
     pub const LINUX: [Target; 2] = [Target::ArmLinux, Target::AmdLinux];
     pub fn platform(self) -> Option<&'static str> {
-        match self { Target::ArmLinux => Some("linux/arm64"), Target::AmdLinux => Some("linux/amd64"), Target::ArmMac => None }
+        match self {
+            Target::ArmLinux => Some("linux/arm64"),
+            Target::AmdLinux => Some("linux/amd64"),
+            Target::ArmMac => None,
+        }
     }
     pub fn label(self) -> &'static str {
-        match self { Target::ArmLinux => "arm-linux", Target::AmdLinux => "amd-linux", Target::ArmMac => "arm-mac" }
+        match self {
+            Target::ArmLinux => "arm-linux",
+            Target::AmdLinux => "amd-linux",
+            Target::ArmMac => "arm-mac",
+        }
     }
 }
 
 /// Resource class. `Quick` = cache-only/offline-skip, for dev. `Long` = pulls + heavy workloads.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum Class { Quick, Long }
+pub enum Class {
+    Quick,
+    Long,
+}
 
 /// How the workload is launched in the container.
 pub enum Step {
@@ -68,51 +86,113 @@ pub enum Step {
 }
 
 /// One expectation against captured stdout+stderr / exit code.
-pub enum Check { Has(String), Eq(String), Rc(i32) }
+pub enum Check {
+    Has(String),
+    Eq(String),
+    Rc(i32),
+}
 
 /// One real-software test.
 pub struct Scenario {
-    pub id: &'static str,        // "category/name" — stable; xfail + count key on it
+    pub id: &'static str, // "category/name" — stable; xfail + count key on it
     pub image: &'static str,
     pub step: Step,
     pub targets: Vec<Target>,
     pub class: Class,
     pub checks: Vec<Check>,
-    pub xfail: Vec<Target>,      // targets where dd is known-broken (still must pass on Real)
+    pub xfail: Vec<Target>, // targets where dd is known-broken (still must pass on Real)
     pub timeout: u64,
-    pub tty: bool,              // allocate a container PTY (docker -t) → isatty/termios/job-control path
+    pub tty: bool, // allocate a container PTY (docker -t) → isatty/termios/job-control path
 }
 
-pub struct ScenGroup { pub name: &'static str, pub scenarios: Vec<Scenario> }
-pub fn sgroup(name: &'static str, scenarios: Vec<Scenario>) -> ScenGroup { ScenGroup { name, scenarios } }
+pub struct ScenGroup {
+    pub name: &'static str,
+    pub scenarios: Vec<Scenario>,
+}
+pub fn sgroup(name: &'static str, scenarios: Vec<Scenario>) -> ScenGroup {
+    ScenGroup { name, scenarios }
+}
 
 /// Start a scenario: BOTH Linux arches, Quick class by default.
 pub fn scen(id: &'static str, image: &'static str) -> Scenario {
-    Scenario { id, image, step: Step::Run(vec![]), targets: Target::LINUX.to_vec(),
-               class: Class::Quick, checks: vec![], xfail: vec![], timeout: 120, tty: false }
+    Scenario {
+        id,
+        image,
+        step: Step::Run(vec![]),
+        targets: Target::LINUX.to_vec(),
+        class: Class::Quick,
+        checks: vec![],
+        xfail: vec![],
+        timeout: 120,
+        tty: false,
+    }
 }
 
 impl Scenario {
-    pub fn run(mut self, argv: &[&str]) -> Self { self.step = Step::Run(argv.iter().map(|s| s.to_string()).collect()); self }
-    pub fn exec(mut self, script: &str) -> Self { self.step = Step::ExecIt(script.to_string()); self }
+    pub fn run(mut self, argv: &[&str]) -> Self {
+        self.step = Step::Run(argv.iter().map(|s| s.to_string()).collect());
+        self
+    }
+    pub fn exec(mut self, script: &str) -> Self {
+        self.step = Step::ExecIt(script.to_string());
+        self
+    }
     /// Host-orchestrated recipe (see [`Step::Host`]) — for volumes / networks / multi-container / signals.
-    pub fn host(mut self, body: &str) -> Self { self.step = Step::Host(body.to_string()); self }
-    pub fn has(mut self, s: &str) -> Self { self.checks.push(Check::Has(s.into())); self }
-    pub fn eq_(mut self, s: &str) -> Self { self.checks.push(Check::Eq(s.into())); self }
-    pub fn rc(mut self, c: i32) -> Self { self.checks.push(Check::Rc(c)); self }
-    pub fn long(mut self) -> Self { self.class = Class::Long; self }
-    pub fn only(mut self, t: &[Target]) -> Self { self.targets = t.to_vec(); self }
-    pub fn plus_mac(mut self) -> Self { if !self.targets.contains(&Target::ArmMac) { self.targets.push(Target::ArmMac); } self }
-    pub fn xfail(mut self, t: &[Target]) -> Self { self.xfail = t.to_vec(); self }
-    pub fn timeout(mut self, s: u64) -> Self { self.timeout = s; self }
+    pub fn host(mut self, body: &str) -> Self {
+        self.step = Step::Host(body.to_string());
+        self
+    }
+    pub fn has(mut self, s: &str) -> Self {
+        self.checks.push(Check::Has(s.into()));
+        self
+    }
+    pub fn eq_(mut self, s: &str) -> Self {
+        self.checks.push(Check::Eq(s.into()));
+        self
+    }
+    pub fn rc(mut self, c: i32) -> Self {
+        self.checks.push(Check::Rc(c));
+        self
+    }
+    pub fn long(mut self) -> Self {
+        self.class = Class::Long;
+        self
+    }
+    pub fn only(mut self, t: &[Target]) -> Self {
+        self.targets = t.to_vec();
+        self
+    }
+    pub fn plus_mac(mut self) -> Self {
+        if !self.targets.contains(&Target::ArmMac) {
+            self.targets.push(Target::ArmMac);
+        }
+        self
+    }
+    pub fn xfail(mut self, t: &[Target]) -> Self {
+        self.xfail = t.to_vec();
+        self
+    }
+    pub fn timeout(mut self, s: u64) -> Self {
+        self.timeout = s;
+        self
+    }
     /// Allocate a container PTY (`docker run/exec -t`) so the guest sees an interactive TERMINAL —
     /// isatty()==1, termios tcgetattr/tcsetattr, ioctl(TIOCGWINSZ), and job-control signals. The
     /// developer `docker exec -it /bin/bash` path; exercises the JIT's pty/termios/ioctl syscalls.
-    pub fn tty(mut self) -> Self { self.tty = true; self }
+    pub fn tty(mut self) -> Self {
+        self.tty = true;
+        self
+    }
 }
 
 /// Verdict for one (scenario, target).
-pub enum Status { Pass, Fail(String), Skip(String), Xfail(String), Xpass }
+pub enum Status {
+    Pass,
+    Fail(String),
+    Skip(String),
+    Xfail(String),
+    Xpass,
+}
 
 /// Runner config.
 pub struct Cfg {
@@ -126,17 +206,24 @@ pub struct Cfg {
     pub daemon_bin: PathBuf,
 }
 impl Cfg {
-    pub fn includes(&self, s: &Scenario) -> bool { self.class == Class::Long || s.class == Class::Quick }
+    pub fn includes(&self, s: &Scenario) -> bool {
+        self.class == Class::Long || s.class == Class::Quick
+    }
 }
 
 // ---- the mac bridge ------------------------------------------------------------------------------
 // On a linux dev host, dd-daemon + its docker live mac-side: we run script FILES through `mac bash
 // <file>` (env inline in the file, paths under a /Users shared dir). On macOS we run them directly.
 // Script files (not `-lc` strings) sidestep all quote-escaping of embedded workloads/heredocs.
-fn on_mac_host() -> bool { cfg!(target_os = "macos") }
+fn on_mac_host() -> bool {
+    cfg!(target_os = "macos")
+}
 fn shared_run_dir() -> PathBuf {
     // Must be visible to the mac side → under the repo (/Users/... shared mount), not /tmp.
-    let d = PathBuf::from(env!("CARGO_MANIFEST_DIR")).parent().unwrap().join("target/dd-scen");
+    let d = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
+        .join("target/dd-scen");
     std::fs::create_dir_all(&d).ok();
     d
 }
@@ -144,15 +231,25 @@ fn shared_run_dir() -> PathBuf {
 fn run_script(file: &std::path::Path, bridged: bool, timeout_s: u64) -> std::process::Output {
     let mut c = Command::new("timeout");
     c.arg(timeout_s.to_string());
-    if bridged && !on_mac_host() { c.arg("mac").arg("bash").arg(file); } else { c.arg("bash").arg(file); }
-    c.output().unwrap_or_else(|e| panic!("run_script {}: {e}", file.display()))
+    if bridged && !on_mac_host() {
+        c.arg("mac").arg("bash").arg(file);
+    } else {
+        c.arg("bash").arg(file);
+    }
+    c.output()
+        .unwrap_or_else(|e| panic!("run_script {}: {e}", file.display()))
 }
 /// Spawn a long-lived script (the daemon), bridged on linux. Returns the child to kill on teardown.
 fn spawn_script(file: &std::path::Path, bridged: bool) -> std::io::Result<std::process::Child> {
-    if bridged && !on_mac_host() { Command::new("mac").arg("bash").arg(file).spawn() }
-    else { Command::new("bash").arg(file).spawn() }
+    if bridged && !on_mac_host() {
+        Command::new("mac").arg("bash").arg(file).spawn()
+    } else {
+        Command::new("bash").arg(file).spawn()
+    }
 }
-fn sh_quote(s: &str) -> String { format!("'{}'", s.replace('\'', "'\\''")) }
+fn sh_quote(s: &str) -> String {
+    format!("'{}'", s.replace('\'', "'\\''"))
+}
 
 // ---- speed: caches + per-cell isolation ----------------------------------------------------------
 // The runner used to pay a `mac`-bridge round-trip for EVERY scenario×target just to re-confirm the
@@ -181,22 +278,38 @@ fn cell_key(s: &Scenario, t: Target) -> String {
     format!("{}\u{1}{}\u{1}{}\u{1}{}", s.image, step, t.label(), s.tty)
 }
 /// Make a string safe to embed in a filename (image refs carry `/`, `:`, `@`).
-fn slug(s: &str) -> String { s.chars().map(|c| if c.is_ascii_alphanumeric() { c } else { '_' }).collect() }
+fn slug(s: &str) -> String {
+    s.chars()
+        .map(|c| if c.is_ascii_alphanumeric() { c } else { '_' })
+        .collect()
+}
 /// Phase timing is opt-in (`DD_SCEN_PROFILE=1`) so it never pollutes normal output.
-fn profiling() -> bool { std::env::var_os("DD_SCEN_PROFILE").is_some() }
+fn profiling() -> bool {
+    std::env::var_os("DD_SCEN_PROFILE").is_some()
+}
 
 // ---- the daemon (Dd backend only) ----------------------------------------------------------------
-pub struct Daemon { child: Option<std::process::Child>, dir: PathBuf, log: PathBuf, host: String, bridged: bool }
+pub struct Daemon {
+    child: Option<std::process::Child>,
+    dir: PathBuf,
+    log: PathBuf,
+    host: String,
+    bridged: bool,
+}
 
 impl Daemon {
     /// Last `n` lines of the daemon log — where engine diagnostics (`unhandled syscall`, `[jit86]
     /// UNIMPL`, CRASHDBG rip dumps) actually print. Empty for the Real backend.
     pub fn log_tail(&self, n: usize) -> String {
-        if self.log.as_os_str().is_empty() { return String::new(); }
-        std::fs::read_to_string(&self.log).map(|s| {
-            let lines: Vec<&str> = s.lines().collect();
-            lines[lines.len().saturating_sub(n)..].join("\n")
-        }).unwrap_or_default()
+        if self.log.as_os_str().is_empty() {
+            return String::new();
+        }
+        std::fs::read_to_string(&self.log)
+            .map(|s| {
+                let lines: Vec<&str> = s.lines().collect();
+                lines[lines.len().saturating_sub(n)..].join("\n")
+            })
+            .unwrap_or_default()
     }
 }
 
@@ -210,7 +323,13 @@ impl Daemon {
             // DEFAULT docker context (no DOCKER_HOST). No daemon to manage; we just need a script dir.
             let dir = shared_run_dir().join(format!("real-{}", std::process::id()));
             std::fs::create_dir_all(&dir).ok();
-            return Ok(Daemon { child: None, dir, log: PathBuf::new(), host: String::new(), bridged });
+            return Ok(Daemon {
+                child: None,
+                dir,
+                log: PathBuf::new(),
+                host: String::new(),
+                bridged,
+            });
         }
         let dir = shared_run_dir().join(format!("dd-{}", std::process::id()));
         std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
@@ -220,56 +339,102 @@ impl Daemon {
         // Start a fresh daemon on a PRIVATE socket/state. NO global pkill — many daemons run in
         // parallel (one engine per worker), so we record THIS daemon's pid and kill only it on teardown.
         let boot_sh = dir.join("boot.sh");
-        std::fs::write(&boot_sh, format!(
-            "echo $$ > {dir}/daemon.pid\nexport DD_IMAGES={img}\nexport DDOCKERD_SOCK={sock}\n\
+        std::fs::write(
+            &boot_sh,
+            format!(
+                "echo $$ > {dir}/daemon.pid\nexport DD_IMAGES={img}\nexport DDOCKERD_SOCK={sock}\n\
              export DD_STATE={state}\nexport DD_VOLUMES={vol}\nexec {bin} > {log} 2>&1\n",
-            dir = sh_quote(&dir.to_string_lossy()),
-            img = sh_quote(&cfg.images.to_string_lossy()), sock = sh_quote(&sock.to_string_lossy()),
-            state = sh_quote(&dir.join("state.json").to_string_lossy()), vol = sh_quote(&dir.join("vol").to_string_lossy()),
-            bin = sh_quote(&cfg.daemon_bin.to_string_lossy()), log = sh_quote(&log.to_string_lossy()),
-        )).map_err(|e| e.to_string())?;
+                dir = sh_quote(&dir.to_string_lossy()),
+                img = sh_quote(&cfg.images.to_string_lossy()),
+                sock = sh_quote(&sock.to_string_lossy()),
+                state = sh_quote(&dir.join("state.json").to_string_lossy()),
+                vol = sh_quote(&dir.join("vol").to_string_lossy()),
+                bin = sh_quote(&cfg.daemon_bin.to_string_lossy()),
+                log = sh_quote(&log.to_string_lossy()),
+            ),
+        )
+        .map_err(|e| e.to_string())?;
         let child = spawn_script(&boot_sh, bridged).map_err(|e| format!("spawn daemon: {e}"))?;
-        for _ in 0..160 { if sock.exists() { break; } std::thread::sleep(Duration::from_millis(250)); }
+        for _ in 0..160 {
+            if sock.exists() {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(250));
+        }
         if !sock.exists() {
             let tail = std::fs::read_to_string(&log).unwrap_or_default();
-            return Err(format!("dd-daemon failed to start; log tail:\n{}", tail.lines().rev().take(15).collect::<Vec<_>>().join("\n")));
+            return Err(format!(
+                "dd-daemon failed to start; log tail:\n{}",
+                tail.lines().rev().take(15).collect::<Vec<_>>().join("\n")
+            ));
         }
-        Ok(Daemon { child: Some(child), dir, log: log.clone(), host: format!("unix://{}", sock.display()), bridged })
+        Ok(Daemon {
+            child: Some(child),
+            dir,
+            log: log.clone(),
+            host: format!("unix://{}", sock.display()),
+            bridged,
+        })
     }
-    fn docker_host(&self) -> Option<&str> { if self.host.is_empty() { None } else { Some(&self.host) } }
+    fn docker_host(&self) -> Option<&str> {
+        if self.host.is_empty() {
+            None
+        } else {
+            Some(&self.host)
+        }
+    }
 }
 
 impl Drop for Daemon {
     fn drop(&mut self) {
-        if let Some(c) = self.child.as_mut() { let _ = c.kill(); }
+        if let Some(c) = self.child.as_mut() {
+            let _ = c.kill();
+        }
         if self.bridged && !self.dir.as_os_str().is_empty() {
             // reap ONLY this worker's mac-side daemon (by recorded pid) — never a sibling's.
             let k = self.dir.join("kill.sh");
             let body = format!("p=$(cat {}/daemon.pid 2>/dev/null); [ -n \"$p\" ] && kill \"$p\" 2>/dev/null; true\n",
                 sh_quote(&self.dir.to_string_lossy()));
-            if std::fs::write(&k, body).is_ok() { let _ = run_script(&k, true, 15); }
+            if std::fs::write(&k, body).is_ok() {
+                let _ = run_script(&k, true, 15);
+            }
         }
-        if !self.dir.as_os_str().is_empty() { let _ = std::fs::remove_dir_all(&self.dir); }
+        if !self.dir.as_os_str().is_empty() {
+            let _ = std::fs::remove_dir_all(&self.dir);
+        }
     }
 }
 
 // ---- generated per-operation scripts -------------------------------------------------------------
 fn header(host: Option<&str>) -> String {
-    match host { Some(h) => format!("#!/bin/bash\nexport DOCKER_HOST={}\n", sh_quote(h)), None => "#!/bin/bash\n".into() }
+    match host {
+        Some(h) => format!("#!/bin/bash\nexport DOCKER_HOST={}\n", sh_quote(h)),
+        None => "#!/bin/bash\n".into(),
+    }
 }
 fn ensure(d: &Daemon, cfg: &Cfg, image: &str) -> bool {
     // Image availability is invariant for the whole run → memoize per image. This is the single biggest
     // bridge-call saver: a category that reuses one image across N scenarios used to inspect it N times.
-    if let Some(&ok) = ensure_cache().lock().unwrap().get(image) { return ok; }
-    let dir = if d.dir.as_os_str().is_empty() { shared_run_dir() } else { d.dir.clone() };
+    if let Some(&ok) = ensure_cache().lock().unwrap().get(image) {
+        return ok;
+    }
+    let dir = if d.dir.as_os_str().is_empty() {
+        shared_run_dir()
+    } else {
+        d.dir.clone()
+    };
     // Per-image filename so concurrent first-touches of DIFFERENT images don't clobber one script.
     let f = dir.join(format!("ensure-{}.sh", slug(image)));
     let body = format!("{}docker image inspect {img} >/dev/null 2>&1 && exit 0\n{}\ndocker pull {img} >/dev/null 2>&1\n",
         header(d.docker_host()), if cfg.offline { "exit 1" } else { "" }, img = sh_quote(image));
-    if std::fs::write(&f, body).is_err() { return false; }
+    if std::fs::write(&f, body).is_err() {
+        return false;
+    }
     // Run unlocked (a pull can take minutes); two threads racing the SAME image just inspect twice — the
     // op is idempotent. Record the verdict so every later cell using this image is a pure cache hit.
-    let ok = run_script(&f, d.bridged, if cfg.offline { 20 } else { 180 }).status.success();
+    let ok = run_script(&f, d.bridged, if cfg.offline { 20 } else { 180 })
+        .status
+        .success();
     ensure_cache().lock().unwrap().insert(image.to_string(), ok);
     ok
 }
@@ -278,26 +443,52 @@ fn drive(d: &Daemon, s: &Scenario, t: Target, cfg: &Cfg) -> (String, i32) {
     // Oracle output is deterministic ground truth → serve repeats of an identical cell from cache.
     let key = (cfg.backend == Backend::Real).then(|| cell_key(s, t));
     if let Some(k) = &key {
-        if let Some(v) = oracle_cache().lock().unwrap().get(k) { return v.clone(); }
+        if let Some(v) = oracle_cache().lock().unwrap().get(k) {
+            return v.clone();
+        }
     }
-    let dir = if d.dir.as_os_str().is_empty() { shared_run_dir() } else { d.dir.clone() };
+    let dir = if d.dir.as_os_str().is_empty() {
+        shared_run_dir()
+    } else {
+        d.dir.clone()
+    };
     // Per-(scenario,target) filename so the two arches of one scenario can run concurrently without
     // racing on a shared op script.
     let f = dir.join(format!("op-{}-{}.sh", s.id.replace('/', "_"), t.label()));
-    let plat = t.platform().map(|p| format!("--platform {p} ")).unwrap_or_default();
-    let tt = if s.tty { "-t " } else { "" };          // run: allocate a container PTY
-    let xt = if s.tty { "-t" } else { "-i" };          // exec: PTY vs plain stdin (no client TTY needed)
-    let sh = if s.image.contains("alpine") || s.image.starts_with("busybox") { "/bin/sh" } else { "/bin/bash" };
+    let plat = t
+        .platform()
+        .map(|p| format!("--platform {p} "))
+        .unwrap_or_default();
+    let tt = if s.tty { "-t " } else { "" }; // run: allocate a container PTY
+    let xt = if s.tty { "-t" } else { "-i" }; // exec: PTY vs plain stdin (no client TTY needed)
+    let sh = if s.image.contains("alpine") || s.image.starts_with("busybox") {
+        "/bin/sh"
+    } else {
+        "/bin/bash"
+    };
     let body = match &s.step {
         Step::Run(argv) => {
-            let a = argv.iter().map(|x| sh_quote(x)).collect::<Vec<_>>().join(" ");
-            format!("{}docker run --rm {tt}{plat}{img} {a}\n", header(d.docker_host()), img = sh_quote(s.image))
+            let a = argv
+                .iter()
+                .map(|x| sh_quote(x))
+                .collect::<Vec<_>>()
+                .join(" ");
+            format!(
+                "{}docker run --rm {tt}{plat}{img} {a}\n",
+                header(d.docker_host()),
+                img = sh_quote(s.image)
+            )
         }
         Step::ExecIt(script) => {
             // idle container we exec into (mirrors `docker exec -it`); fall back to one-shot run for
             // images with no keep-alive shell (distroless). Embed the user script verbatim via a
             // quoted heredoc so arbitrary quotes/heredocs inside it survive.
-            let name = format!("ddx-{}-{}-{}", std::process::id(), s.id.replace('/', "-"), t.label());
+            let name = format!(
+                "ddx-{}-{}-{}",
+                std::process::id(),
+                s.id.replace('/', "-"),
+                t.label()
+            );
             // Speed: the container name is unique (pid·id·target), so the old pre-run `docker rm -f` was
             // a guaranteed no-op bridge round-trip — dropped (a stale same-name container, only possible
             // after a hard-killed run with pid reuse, just falls through to the one-shot `run --rm`). And
@@ -330,8 +521,18 @@ exit $rc
             // author's recipe verbatim. $C is a name PREFIX (a `^$C` filter reaps every `$C…` container),
             // $NET a unique network, $WORK a private host scratch dir under the shared run dir (so a
             // `-v $WORK:/x` bind mount is visible to the docker host). $PLAT is unquoted → word-splits.
-            let base = format!("ddh-{}-{}-{}", std::process::id(), s.id.replace('/', "-"), t.label());
-            let net = format!("ddnet-{}-{}-{}", std::process::id(), s.id.replace('/', "-"), t.label());
+            let base = format!(
+                "ddh-{}-{}-{}",
+                std::process::id(),
+                s.id.replace('/', "-"),
+                t.label()
+            );
+            let net = format!(
+                "ddnet-{}-{}-{}",
+                std::process::id(),
+                s.id.replace('/', "-"),
+                t.label()
+            );
             let work = dir.join(format!("work-{}-{}", s.id.replace('/', "_"), t.label()));
             let _ = std::fs::create_dir_all(&work);
             format!(
@@ -348,18 +549,25 @@ trap cleanup EXIT INT TERM
    c = sh_quote(&base), net = sh_quote(&net), work = sh_quote(&work.to_string_lossy()), body = body)
         }
     };
-    if std::fs::write(&f, body).is_err() { return ("(failed to write op script)".into(), -1); }
+    if std::fs::write(&f, body).is_err() {
+        return ("(failed to write op script)".into(), -1);
+    }
     let o = run_script(&f, d.bridged, s.timeout + 10);
     let mut out = String::from_utf8_lossy(&o.stdout).into_owned();
     out.push_str(&String::from_utf8_lossy(&o.stderr));
     let res = (out, o.status.code().unwrap_or(-1));
-    if let Some(k) = key { oracle_cache().lock().unwrap().insert(k, res.clone()); }
+    if let Some(k) = key {
+        oracle_cache().lock().unwrap().insert(k, res.clone());
+    }
     res
 }
 
 /// The guest ISA a target runs. Linux/arm and mac are aarch64; amd is x86_64.
 fn target_arch(t: Target) -> &'static str {
-    match t { Target::ArmLinux | Target::ArmMac => "aarch64", Target::AmdLinux => "x86_64" }
+    match t {
+        Target::ArmLinux | Target::ArmMac => "aarch64",
+        Target::AmdLinux => "x86_64",
+    }
 }
 
 /// SINGLE-ARCH STORE: the local `poc/images` store holds each image ref at only ONE architecture (it is
@@ -373,25 +581,38 @@ fn target_arch(t: Target) -> &'static str {
 fn store_arch(cfg: &Cfg, image: &str) -> Option<String> {
     static C: OnceLock<Mutex<HashMap<String, Option<String>>>> = OnceLock::new();
     let cache = C.get_or_init(|| Mutex::new(HashMap::new()));
-    if let Some(v) = cache.lock().unwrap().get(image) { return v.clone(); }
+    if let Some(v) = cache.lock().unwrap().get(image) {
+        return v.clone();
+    }
     let mut found = None;
     let want = format!("\"name\":\"{image}\"");
     if let Ok(rd) = std::fs::read_dir(&cfg.images) {
         for e in rd.flatten() {
             let dir = e.path();
-            let Ok(txt) = std::fs::read_to_string(dir.join("dd-image.json")) else { continue };
-            if !txt.contains(&want) { continue; }
+            let Ok(txt) = std::fs::read_to_string(dir.join("dd-image.json")) else {
+                continue;
+            };
+            if !txt.contains(&want) {
+                continue;
+            }
             // Prefer the recorded arch; fall back to sniffing a rootfs ELF's e_machine when the sidecar
             // has none (many older pre-seeded fixtures dropped it) so the single-arch skip still fires.
             if let Some(i) = txt.find("\"arch\":\"") {
                 let rest = &txt[i + 8..];
-                if let Some(j) = rest.find('"') { found = Some(rest[..j].to_string()); }
+                if let Some(j) = rest.find('"') {
+                    found = Some(rest[..j].to_string());
+                }
             }
-            if found.is_none() { found = sniff_rootfs_arch(&dir.join("rootfs")).map(String::from); }
+            if found.is_none() {
+                found = sniff_rootfs_arch(&dir.join("rootfs")).map(String::from);
+            }
             break;
         }
     }
-    cache.lock().unwrap().insert(image.to_string(), found.clone());
+    cache
+        .lock()
+        .unwrap()
+        .insert(image.to_string(), found.clone());
     found
 }
 
@@ -400,24 +621,42 @@ fn elf_arch(path: &std::path::Path) -> Option<&'static str> {
     use std::io::Read;
     let mut buf = [0u8; 20];
     std::fs::File::open(path).ok()?.read_exact(&mut buf).ok()?;
-    if &buf[0..4] != b"\x7fELF" { return None; }
-    match u16::from_le_bytes([buf[18], buf[19]]) { 0x3e => Some("x86_64"), 0xb7 => Some("aarch64"), _ => None }
+    if &buf[0..4] != b"\x7fELF" {
+        return None;
+    }
+    match u16::from_le_bytes([buf[18], buf[19]]) {
+        0x3e => Some("x86_64"),
+        0xb7 => Some("aarch64"),
+        _ => None,
+    }
 }
 
 /// Probe a rootfs for the arch of its binaries — a single-arch store's rootfs is uniformly one ISA.
 /// Try well-known shell/coreutil paths first (covers every alpine/glibc image), then the first regular
 /// file under `bin`/`usr/bin`. Scratch/distroless images with no reachable ELF return `None` (no skip).
 fn sniff_rootfs_arch(rootfs: &std::path::Path) -> Option<&'static str> {
-    const CAND: &[&str] = &["bin/busybox", "bin/sh", "bin/dash", "bin/bash", "usr/bin/env",
-        "bin/cat", "bin/ls", "usr/bin/coreutils"];
+    const CAND: &[&str] = &[
+        "bin/busybox",
+        "bin/sh",
+        "bin/dash",
+        "bin/bash",
+        "usr/bin/env",
+        "bin/cat",
+        "bin/ls",
+        "usr/bin/coreutils",
+    ];
     for c in CAND {
-        if let Some(a) = elf_arch(&rootfs.join(c)) { return Some(a); }
+        if let Some(a) = elf_arch(&rootfs.join(c)) {
+            return Some(a);
+        }
     }
     for d in ["bin", "usr/bin"] {
         if let Ok(rd) = std::fs::read_dir(rootfs.join(d)) {
             for e in rd.flatten().take(40) {
                 if e.file_type().map(|t| t.is_file()).unwrap_or(false) {
-                    if let Some(a) = elf_arch(&e.path()) { return Some(a); }
+                    if let Some(a) = elf_arch(&e.path()) {
+                        return Some(a);
+                    }
                 }
             }
         }
@@ -428,17 +667,25 @@ fn sniff_rootfs_arch(rootfs: &std::path::Path) -> Option<&'static str> {
 /// Run one scenario on one target and classify (xfail-aware). xfail only applies to the Dd backend —
 /// on Real, a fail is always a real (test) failure.
 pub fn run_one(d: &Daemon, s: &Scenario, t: Target, cfg: &Cfg) -> Status {
-    if !s.targets.contains(&t) { return Status::Skip("n/a for target".into()); }
+    if !s.targets.contains(&t) {
+        return Status::Skip("n/a for target".into());
+    }
     let prof = profiling();
     let t0 = Instant::now();
     let cached = ensure_cache().lock().unwrap().contains_key(s.image);
-    if !ensure(d, cfg, s.image) { return Status::Skip(format!("image {} unavailable", s.image)); }
+    if !ensure(d, cfg, s.image) {
+        return Status::Skip(format!("image {} unavailable", s.image));
+    }
     // Single-arch store: don't manufacture a false gap by serving a wrong-arch rootfs under the Dd
     // daemon — skip the cell whose arch the store provably can't serve (Real pulls the right arch).
     if cfg.backend == Backend::Dd {
         if let Some(a) = store_arch(cfg, s.image) {
             if a != target_arch(t) {
-                return Status::Skip(format!("store holds {a} only (no {} rootfs for {})", target_arch(t), s.image));
+                return Status::Skip(format!(
+                    "store holds {a} only (no {} rootfs for {})",
+                    target_arch(t),
+                    s.image
+                ));
             }
         }
     }
@@ -447,13 +694,25 @@ pub fn run_one(d: &Daemon, s: &Scenario, t: Target, cfg: &Cfg) -> Status {
     let t1 = Instant::now();
     let (out, code) = drive(d, s, t, cfg);
     if prof {
-        eprintln!("[prof] id={} tgt={} ensure_ms={} ensure_cached={} drive_ms={} total_ms={}",
-            s.id, t.label(), ensure_ms, cached as u8, t1.elapsed().as_millis(), t0.elapsed().as_millis());
+        eprintln!(
+            "[prof] id={} tgt={} ensure_ms={} ensure_cached={} drive_ms={} total_ms={}",
+            s.id,
+            t.label(),
+            ensure_ms,
+            cached as u8,
+            t1.elapsed().as_millis(),
+            t0.elapsed().as_millis()
+        );
     }
-    let bad: Option<String> = if code == 124 { Some(format!("timeout >{}s", s.timeout)) } else {
+    let bad: Option<String> = if code == 124 {
+        Some(format!("timeout >{}s", s.timeout))
+    } else {
         s.checks.iter().find_map(|chk| match chk {
-            Check::Has(sub) => (!out.contains(sub.as_str())).then(|| format!("lacks [{sub}] in [{}]", clip(&out))),
-            Check::Eq(want) => (out.trim() != want.as_str()).then(|| format!("got [{}] want [{want}]", clip(out.trim()))),
+            Check::Has(sub) => {
+                (!out.contains(sub.as_str())).then(|| format!("lacks [{sub}] in [{}]", clip(&out)))
+            }
+            Check::Eq(want) => (out.trim() != want.as_str())
+                .then(|| format!("got [{}] want [{want}]", clip(out.trim()))),
             Check::Rc(want) => (code != *want).then(|| format!("rc {code} != {want}")),
         })
     };
@@ -464,9 +723,15 @@ pub fn run_one(d: &Daemon, s: &Scenario, t: Target, cfg: &Cfg) -> Status {
             // Self-explaining failure: scrape the container output + daemon-log tail for engine signals
             // (missing syscall / UNIMPL opcode / crash / loader) and attach a one-line diagnosis.
             let diag = crate::diag::diagnose(m, code, &out, &d.log_tail(25));
-            if xf { Status::Xfail(diag.summary()) } else { Status::Fail(diag.summary()) }
+            if xf {
+                Status::Xfail(diag.summary())
+            } else {
+                Status::Fail(diag.summary())
+            }
         }
     }
 }
 
-fn clip(s: &str) -> String { s.replace('\n', "|").chars().take(180).collect() }
+fn clip(s: &str) -> String {
+    s.replace('\n', "|").chars().take(180).collect()
+}

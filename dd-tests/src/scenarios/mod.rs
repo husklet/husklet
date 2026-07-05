@@ -9,35 +9,35 @@
 
 use crate::scenario::ScenGroup;
 
-pub mod distros;
 pub mod databases;
+pub mod distros;
 pub mod languages;
-pub mod web;
+pub mod terminal;
 pub mod toolchains;
 pub mod utilities;
+pub mod web;
 pub mod weird;
-pub mod terminal;
 // Core container-behaviour regression net (fast, no heavy installs):
-pub mod filesystem;   // rootfs + overlay VFS (no volume)
-pub mod permissions;  // file mode/owner semantics + `ls -l` render fidelity (perm strings, maj/min, DAC)
-pub mod volumes;      // -v bind mounts (incl. #118 nested `..`)
-pub mod networking;   // single-container loopback / DNS / gated outbound
-pub mod netinstall;   // apt-get update + install + run (htop) over the network — the field regression net
+pub mod filesystem; // rootfs + overlay VFS (no volume)
 pub mod netcontainer; // between containers on a user-defined network
-pub mod process;      // env / workdir / exit / streams / signals / exec
-// Docker-command CONFORMANCE lane (task #310) — one docker CLI flag/verb per scenario so a GA-readiness
-// failure is attributable to a specific command. Host-orchestrated, alpine, ArmLinux-scoped (the daemon
-// Docker-API path is arch-independent); every case verified GREEN on the Real docker oracle.
-pub mod runflags;     // docker run flags: -d/-e/-p/-v/-w/--rm/--name/--entrypoint/--user/--network/--restart/-i/-t/--memory/--cpus
-pub mod execcmd;      // docker exec: -e/-w/-u/-d/-i, exit-code, output capture
-pub mod lifecycle;    // create/start/stop/kill -s/restart/pause/unpause/wait/rm/rm -f/rename
-pub mod observe;      // inspect/ps/ps -a/logs/logs --tail/logs -f/top/stats/port
-pub mod cpcmd;        // docker cp host<->container, file + dir
-pub mod cpcoherence;  // #374: docker cp into a RUNNING container is visible to the live guest's warm caches
-pub mod imagescmd;    // images/tag/rmi/history/image inspect
-pub mod buildcmd;     // docker build a small Dockerfile -> image -> run
-pub mod dockernet;    // network create/ls/rm/connect/inspect + reach-by-name
-pub mod dockervol;    // volume create/ls/rm/inspect + named-volume persistence
+pub mod netinstall; // apt-get update + install + run (htop) over the network — the field regression net
+pub mod networking; // single-container loopback / DNS / gated outbound
+pub mod permissions; // file mode/owner semantics + `ls -l` render fidelity (perm strings, maj/min, DAC)
+pub mod process;
+pub mod volumes; // -v bind mounts (incl. nested `..`) // env / workdir / exit / streams / signals / exec
+                 // Docker-command CONFORMANCE lane — one docker CLI flag/verb per scenario so a GA-readiness
+                 // failure is attributable to a specific command. Host-orchestrated, alpine, ArmLinux-scoped (the daemon
+                 // Docker-API path is arch-independent); every case verified GREEN on the Real docker oracle.
+pub mod buildcmd; // docker build a small Dockerfile -> image -> run
+pub mod cpcmd; // docker cp host<->container, file + dir
+pub mod cpcoherence; // docker cp into a RUNNING container is visible to the live guest's warm caches
+pub mod dockernet; // network create/ls/rm/connect/inspect + reach-by-name
+pub mod dockervol;
+pub mod execcmd; // docker exec: -e/-w/-u/-d/-i, exit-code, output capture
+pub mod imagescmd; // images/tag/rmi/history/image inspect
+pub mod lifecycle; // create/start/stop/kill -s/restart/pause/unpause/wait/rm/rm -f/rename
+pub mod observe; // inspect/ps/ps -a/logs/logs --tail/logs -f/top/stats/port
+pub mod runflags; // docker run flags: -d/-e/-p/-v/-w/--rm/--name/--entrypoint/--user/--network/--restart/-i/-t/--memory/--cpus // volume create/ls/rm/inspect + named-volume persistence
 
 pub fn all() -> Vec<ScenGroup> {
     vec![

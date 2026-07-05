@@ -25,7 +25,9 @@ pub fn create() -> std::io::Result<String> {
     let host = paths::docker_host();
     if have_docker() {
         // Remove a stale context first so create is idempotent.
-        let _ = Command::new("docker").args(["context", "rm", "-f", NAME]).output();
+        let _ = Command::new("docker")
+            .args(["context", "rm", "-f", NAME])
+            .output();
         let out = Command::new("docker")
             .args([
                 "context",
@@ -43,17 +45,23 @@ pub fn create() -> std::io::Result<String> {
         // Fall through to manual metadata on CLI failure.
     }
     write_meta(&host)?;
-    Ok(format!("wrote ~/.docker/contexts metadata for '{NAME}' -> {host} (docker CLI not used)"))
+    Ok(format!(
+        "wrote ~/.docker/contexts metadata for '{NAME}' -> {host} (docker CLI not used)"
+    ))
 }
 
 /// `docker context use dd` (no-op note if docker CLI is absent).
 pub fn use_context() -> std::io::Result<String> {
     if have_docker() {
-        let out = Command::new("docker").args(["context", "use", NAME]).output()?;
+        let out = Command::new("docker")
+            .args(["context", "use", NAME])
+            .output()?;
         if out.status.success() {
             return Ok(format!("docker context use {NAME}"));
         }
-        return Err(std::io::Error::other(String::from_utf8_lossy(&out.stderr).into_owned()));
+        return Err(std::io::Error::other(
+            String::from_utf8_lossy(&out.stderr).into_owned(),
+        ));
     }
     Ok("docker CLI not found; set DOCKER_HOST instead".into())
 }
@@ -61,7 +69,9 @@ pub fn use_context() -> std::io::Result<String> {
 /// Remove the `dd` context (CLI if present, else delete the metadata dir).
 pub fn remove() -> std::io::Result<()> {
     if have_docker() {
-        let _ = Command::new("docker").args(["context", "rm", "-f", NAME]).output();
+        let _ = Command::new("docker")
+            .args(["context", "rm", "-f", NAME])
+            .output();
     }
     let dir = meta_dir();
     if dir.exists() {

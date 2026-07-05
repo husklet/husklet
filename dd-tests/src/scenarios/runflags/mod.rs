@@ -1,5 +1,5 @@
 //! `docker run` FLAGS — the daemon's container-launch contract, one flag per scenario so a failure is
-//! attributable to a specific `docker run` option (GA-readiness readout, task #310). Covers: `-d`,
+//! attributable to a specific `docker run` option (GA-readiness readout). Covers: `-d`,
 //! `-e`, `-p` (publish + inbound-reachable), `-v` bind mount, `-w`, `--rm`, `--name`, `--entrypoint`,
 //! `--user` (uid:gid and name), `--network` (none/bridge), `--restart`, exit-code propagation, `-i`
 //! stdin, `-t` PTY, and `--memory`/`--cpus` (accepted + cgroup-honored). Host-orchestrated (a real
@@ -9,7 +9,9 @@
 
 use crate::scenario::{scen, sgroup, ScenGroup, Target};
 
-fn s(id: &'static str) -> crate::scenario::Scenario { scen(id, "alpine:latest").only(&[Target::ArmLinux]) }
+fn s(id: &'static str) -> crate::scenario::Scenario {
+    scen(id, "alpine:latest").only(&[Target::ArmLinux])
+}
 
 pub fn group() -> ScenGroup {
     sgroup("runflags", vec![
@@ -24,7 +26,7 @@ docker inspect -f "{{.State.Running}}" ${C}c"#).has("true").timeout(30),
 docker run --rm $PLAT -e FOO=barbaz $IMG printenv FOO"#).has("barbaz"),
 
         // -p : publish a container port to a host port; the published port is reachable from the host.
-        // #320: the host listener is now owned by the DAEMON (containers/ports.rs), not the guest engine
+        // the host listener is now owned by the DAEMON (containers/ports.rs), not the guest engine
         // process, so a RE-LISTENING server stays continuously reachable. This recipe re-binds every second
         // (`nc -l -w 1` loop, a fresh process each iteration); with the old in-engine forwarder the host
         // listener died with each nc and the connect raced the rebind gap (xfail). The daemon listener

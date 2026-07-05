@@ -7,7 +7,11 @@
 
 use crate::scenario::{scen, sgroup, ScenGroup, Target};
 
-fn s(id: &'static str) -> crate::scenario::Scenario { scen(id, "alpine:latest").only(&[Target::ArmLinux]).timeout(40) }
+fn s(id: &'static str) -> crate::scenario::Scenario {
+    scen(id, "alpine:latest")
+        .only(&[Target::ArmLinux])
+        .timeout(40)
+}
 
 pub fn group() -> ScenGroup {
     sgroup("dockernet", vec![
@@ -43,7 +47,7 @@ docker run -d --name ${C}srv --network "$NET" $PLAT $IMG sh -c "while true; do e
 sleep 1
 docker run --rm --network "$NET" $PLAT $IMG nc -w 3 ${C}srv 9000"#).has("BYNAMEOK"),
 
-        // #322 the REAL reach-by-name gap: a peer that appears AFTER the resolving container launched. The
+        // the REAL reach-by-name gap: a peer that appears AFTER the resolving container launched. The
         // client idles first (its /etc/hosts is frozen at launch, WITHOUT the server); the server joins the
         // network only afterwards; then the client resolves it BY NAME via `docker exec`. A static
         // /etc/hosts snapshot can't see the late peer — only the live in-engine 127.0.0.11 resolver

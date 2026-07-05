@@ -1,4 +1,4 @@
-//! Process-independent published-port forwarder (`docker run -p`), dd #320.
+//! Process-independent published-port forwarder (`docker run -p`).
 //!
 //! THE BUG (before this): the host `AF_INET` listener for a published port lived INSIDE the guest engine
 //! process that happened to call `listen()` (dd-jit `netns.c fwd_maybe_start`). Because every guest
@@ -54,20 +54,39 @@ fn registry() -> &'static Mutex<HashMap<String, Vec<JoinHandle<()>>>> {
 
 /// Truncate a key the way the engine's `snprintf("%.40s")` does, so daemon-computed switch paths
 /// byte-match the engine's binds.
-fn t40(s: &str) -> &str { &s[..s.len().min(40)] }
+fn t40(s: &str) -> &str {
+    &s[..s.len().min(40)]
+}
 
 /// Compute the per-binding forwarding plan from live daemon state. `bridge` is this container's
 /// (netid, ip) endpoint on its first network (as `spawn_cfg` resolves it); `netns_key` is the container's
 /// loopback-namespace key (its own id, or for an exec the target container's id).
 fn plan(c: &Container, bridge: &Option<(String, String)>, netns_key: &str) -> Vec<Binding> {
-    parse_publish(&c.publish).into_iter().filter(|p| p.proto == "tcp").map(|p| {
-        let mut switch_paths = Vec::new();
-        if let Some((netid, ip)) = bridge {
-            switch_paths.push(format!("/tmp/.ddbr-{}/{}:{}", t40(netid), ip, p.container_port));
-        }
-        switch_paths.push(format!("/tmp/.ddnet-{}/p{}", t40(netns_key), p.container_port));
-        Binding { host_ip: p.host_ip, host_port: p.host_port, switch_paths }
-    }).collect()
+    parse_publish(&c.publish)
+        .into_iter()
+        .filter(|p| p.proto == "tcp")
+        .map(|p| {
+            let mut switch_paths = Vec::new();
+            if let Some((netid, ip)) = bridge {
+                switch_paths.push(format!(
+                    "/tmp/.ddbr-{}/{}:{}",
+                    t40(netid),
+                    ip,
+                    p.container_port
+                ));
+            }
+            switch_paths.push(format!(
+                "/tmp/.ddnet-{}/p{}",
+                t40(netns_key),
+                p.container_port
+            ));
+            Binding {
+                host_ip: p.host_ip,
+                host_port: p.host_port,
+                switch_paths,
+            }
+        })
+        .collect()
 }
 
 /// Start (idempotently) the host→container forwarders for a container. Called from `spawn_live` after the
@@ -75,11 +94,15 @@ fn plan(c: &Container, bridge: &Option<(String, String)>, netns_key: &str) -> Ve
 /// restart path re-enters `spawn_live` but the daemon-owned listeners persist).
 pub(crate) fn start(c: &Container, bridge: &Option<(String, String)>, netns_key: &str) {
     let bindings = plan(c, bridge, netns_key);
-    if bindings.is_empty() { return; }
+    if bindings.is_empty() {
+        return;
+    }
     let cid = c.id.clone();
     {
         let reg = registry().lock().unwrap();
-        if reg.get(&cid).map_or(false, |v| !v.is_empty()) { return; } // already forwarding (restart)
+        if reg.get(&cid).map_or(false, |v| !v.is_empty()) {
+            return;
+        } // already forwarding (restart)
     }
     let mut handles = Vec::new();
     for b in bindings {
@@ -93,7 +116,9 @@ pub(crate) fn start(c: &Container, bridge: &Option<(String, String)>, netns_key:
 /// autoremove reaper. Safe to call when none are active.
 pub(crate) fn stop(cid: &str) {
     let handles = registry().lock().unwrap().remove(cid).unwrap_or_default();
-    for h in handles { h.abort(); }
+    for h in handles {
+        h.abort();
+    }
 }
 
 /// Bind the host listener and accept forever, spawning a relay per connection. If the bind fails (port
@@ -106,13 +131,19 @@ async fn acceptor(b: Binding, cid: String) {
         Ok(l) => l,
         Err(e) => {
             if std::env::var("DD_DEBUG").is_ok() {
-                eprintln!("[ports] {} bind {addr} failed: {e}", &cid[..cid.len().min(12)]);
+                eprintln!(
+                    "[ports] {} bind {addr} failed: {e}",
+                    &cid[..cid.len().min(12)]
+                );
             }
             return;
         }
     };
     loop {
-        let (host_conn, _) = match listener.accept().await { Ok(x) => x, Err(_) => continue };
+        let (host_conn, _) = match listener.accept().await {
+            Ok(x) => x,
+            Err(_) => continue,
+        };
         let paths = b.switch_paths.clone();
         tokio::spawn(async move {
             if let Some(guest_conn) = dial_switch(&paths).await {
@@ -130,7 +161,9 @@ async fn dial_switch(paths: &[String]) -> Option<UnixStream> {
     for _ in 0..60 {
         for p in paths {
             if let Ok(s) = UnixStream::connect(p).await {
-                if !dead_on_arrival(&s).await { return Some(s); }
+                if !dead_on_arrival(&s).await {
+                    return Some(s);
+                }
             }
         }
         tokio::time::sleep(Duration::from_millis(20)).await;
@@ -149,14 +182,25 @@ async fn dead_on_arrival(s: &UnixStream) -> bool {
             let fd = s.as_raw_fd();
             let mut byte = [0u8; 1];
             // MSG_PEEK|MSG_DONTWAIT: consumes nothing (the guest's later read still sees any data).
-            let n = unsafe { libc::recv(fd, byte.as_mut_ptr().cast(), 1, libc::MSG_PEEK | libc::MSG_DONTWAIT) };
-            if n == 0 { return true; }                                   // clean EOF, no data -> dead
+            let n = unsafe {
+                libc::recv(
+                    fd,
+                    byte.as_mut_ptr().cast(),
+                    1,
+                    libc::MSG_PEEK | libc::MSG_DONTWAIT,
+                )
+            };
+            if n == 0 {
+                return true;
+            } // clean EOF, no data -> dead
             if n < 0 {
                 let e = std::io::Error::last_os_error().raw_os_error().unwrap_or(0);
-                if e == libc::EAGAIN || e == libc::EWOULDBLOCK { return false; } // spurious wake, live
-                return true;                                             // ECONNRESET/REFUSED -> dead
+                if e == libc::EAGAIN || e == libc::EWOULDBLOCK {
+                    return false;
+                } // spurious wake, live
+                return true; // ECONNRESET/REFUSED -> dead
             }
-            false                                                       // real data pending -> live
+            false // real data pending -> live
         }
         _ => false, // not readable within the window (idle but live) or timer error -> keep it
     }
@@ -178,7 +222,9 @@ pub(crate) fn start_for(c: &Container, bridge: &Option<(String, String)>) {
     // binds already listens on the actual host port, so `-p` needs no forwarder. Starting one here would
     // just collide (EADDRINUSE) with the container's own bind. Only Linux guests use the AF_UNIX switch
     // that this forwarder bridges into.
-    if c.arch.map_or(false, |g| g.os() == "darwin") { return; }
+    if c.arch.map_or(false, |g| g.os() == "darwin") {
+        return;
+    }
     // Matches `spawn_cfg`: an exec shares the target container's netns via `netns_key`; a normal container
     // uses its own id. The engine truncates to 40, so pass the untruncated key (t40 clips inside `plan`).
     let ns_key = c.netns_key.as_deref().unwrap_or(&c.id).to_string();

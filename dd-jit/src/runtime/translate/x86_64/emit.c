@@ -1,7 +1,7 @@
 // dd/runtime/frontend/x86_64 -- arm64 host emitters + NEON/SSE encoders (xmm->v0..15) + x87 FPU stack
 // (ST(i) at double precision) + prologue/spill/exits.
 #ifdef __APPLE__
-#include <mach/mach_time.h> // #406: mach_timebase_info -- authoritative CNTVCT tick->ns on Apple Silicon
+#include <mach/mach_time.h> // mach_timebase_info -- authoritative CNTVCT tick->ns on Apple Silicon
 #endif
 
 // ---------------- ARM64 instruction emitters ----------------
@@ -11,13 +11,19 @@ static void emit32(uint32_t in) {
     *(uint32_t *)g_cp = in;
     g_cp += 4;
 }
+
 static void e_str(int rt, int rn, int off) {
     emit32(0xF9000000u | (((unsigned)off / 8) << 10) | (rn << 5) | rt);
 } // str x
+
 static void e_ldr(int rt, int rn, int off) {
     emit32(0xF9400000u | (((unsigned)off / 8) << 10) | (rn << 5) | rt);
 } // ldr x
-static void e_movz(int rd, uint32_t imm16, int sh) { emit32(0xD2800000u | (sh << 21) | (imm16 << 5) | rd); }
+
+static void e_movz(int rd, uint32_t imm16, int sh) {
+    emit32(0xD2800000u | (sh << 21) | (imm16 << 5) | rd);
+}
+
 // ADR rd, <target>: PC-relative address of an already-emitted (backward) label into rd. PC-relative =>
 // pcache-safe (survives a warm reload at a different arena base). Emitted code is 4-aligned so imm[1:0]=0.
 static void e_adr(int rd, const void *target) {
@@ -25,14 +31,22 @@ static void e_adr(int rd, const void *target) {
     uint32_t immlo = (uint32_t)(d & 3), immhi = (uint32_t)((d >> 2) & 0x7FFFF);
     emit32(0x10000000u | (immlo << 29) | (immhi << 5) | rd);
 }
-static void e_movk(int rd, uint32_t imm16, int sh) { emit32(0xF2800000u | (sh << 21) | (imm16 << 5) | rd); }
-static void e_br(int rn) { emit32(0xD61F0000u | (rn << 5)); }
+
+static void e_movk(int rd, uint32_t imm16, int sh) {
+    emit32(0xF2800000u | (sh << 21) | (imm16 << 5) | rd);
+}
+
+static void e_br(int rn) {
+    emit32(0xD61F0000u | (rn << 5));
+}
+
 static void e_movconst(int rd, uint64_t v) {
     e_movz(rd, v & 0xffff, 0);
     if ((v >> 16) & 0xffff) e_movk(rd, (v >> 16) & 0xffff, 1);
     if ((v >> 32) & 0xffff) e_movk(rd, (v >> 32) & 0xffff, 2);
     if ((v >> 48) & 0xffff) e_movk(rd, (v >> 48) & 0xffff, 3);
 }
+
 // opt8: always-4-instruction movconst -- a fixed-width slot the persistent-cache loader can rewrite to
 // ANY new host address, and whose arena offset we record for relocation.
 static void e_movconst_fixed(int rd, uint64_t v) {
@@ -41,6 +55,7 @@ static void e_movconst_fixed(int rd, uint64_t v) {
     e_movk(rd, (v >> 32) & 0xffff, 2);
     e_movk(rd, (v >> 48) & 0xffff, 3);
 }
+
 // opt8: emit a host pointer baked into a block. With the persistent cache OFF this is the normal compact
 // movconst (no relocation needed -- byte-identical to baseline). With the cache ON we lay a fixed 4-insn
 // slot and record its arena offset so pcache_load() can rewrite it for the live process's block_return/g_ibtc.
@@ -54,7 +69,7 @@ static void emit_host_ptr(int rd, uint64_t v, int kind) {
         g_reloc[g_nreloc].kind = (uint8_t)kind;
         g_nreloc++;
     } else {
-        // #297: table full -> this baked pointer can't be recorded, so the arena is not fully
+        // table full -> this baked pointer can't be recorded, so the arena is not fully
         // relocatable. Poison it: pcache_save() will refuse to persist, and we NEVER serve a file we
         // could not re-slide (the fixed-slot bytes we emit here still run correctly IN this process --
         // they hold the live address -- they just must not be written to disk for a future process).
@@ -62,65 +77,81 @@ static void emit_host_ptr(int rd, uint64_t v, int kind) {
     }
     e_movconst_fixed(rd, v);
 }
+
 // width-typed load/store at [rn, #0]. w = 1/2/4/8 bytes. (zero-extends on load)
 static void e_load(int w, int rt, int rn) {
     uint32_t b = w == 1 ? 0x39400000u : w == 2 ? 0x79400000u : w == 4 ? 0xB9400000u : 0xF9400000u;
     emit32(b | (rn << 5) | rt);
 }
+
 static void e_store(int w, int rt, int rn) {
     uint32_t b = w == 1 ? 0x39000000u : w == 2 ? 0x79000000u : w == 4 ? 0xB9000000u : 0xF9000000u;
     emit32(b | (rn << 5) | rt);
 }
+
 static void e_ldrs(int w, int rt, int rn) {                                 // sign-extending load into X
     uint32_t b = w == 1 ? 0x39800000u : w == 2 ? 0x79800000u : 0xB9800000u; // ldrsb/ldrsh/ldrsw
     emit32(b | (rn << 5) | rt);
 }
+
 // Address-mode-folded load/store: fold a [base+disp] memory operand into ONE ldr/str.
 // Scaled unsigned-offset form (disp a multiple of w, disp/w in [0,4095]):
 static void e_load_uoff(int w, int rt, int rn, unsigned disp) { // ldr{b,h,,} rt,[rn,#disp]
     uint32_t b = w == 1 ? 0x39400000u : w == 2 ? 0x79400000u : w == 4 ? 0xB9400000u : 0xF9400000u;
     emit32(b | (((disp / (unsigned)w) & 0xFFF) << 10) | (rn << 5) | rt);
 }
+
 static void e_store_uoff(int w, int rt, int rn, unsigned disp) { // str{b,h,,} rt,[rn,#disp]
     uint32_t b = w == 1 ? 0x39000000u : w == 2 ? 0x79000000u : w == 4 ? 0xB9000000u : 0xF9000000u;
     emit32(b | (((disp / (unsigned)w) & 0xFFF) << 10) | (rn << 5) | rt);
 }
+
 // Unscaled signed-offset form (simm9 in [-256,255]) -- covers small negative disps:
 static void e_ldur(int w, int rt, int rn, int simm9) { // ldur{b,h,,} rt,[rn,#simm9]
     uint32_t b = w == 1 ? 0x38400000u : w == 2 ? 0x78400000u : w == 4 ? 0xB8400000u : 0xF8400000u;
     emit32(b | (((uint32_t)simm9 & 0x1FF) << 12) | (rn << 5) | rt);
 }
+
 static void e_stur(int w, int rt, int rn, int simm9) { // stur{b,h,,} rt,[rn,#simm9]
     uint32_t b = w == 1 ? 0x38000000u : w == 2 ? 0x78000000u : w == 4 ? 0xB8000000u : 0xF8000000u;
     emit32(b | (((uint32_t)simm9 & 0x1FF) << 12) | (rn << 5) | rt);
 }
+
 static void e_mov_rr(int rd, int rm, int sf) { // mov rd, rm  (orr rd, xzr, rm)
     emit32((sf ? 0xAA0003E0u : 0x2A0003E0u) | (rm << 16) | rd);
 }
+
 static void e_addi(int rd, int rn, unsigned imm12, int sf) { // add rd, rn, #imm
     emit32((sf ? 0x91000000u : 0x11000000u) | ((imm12 & 0xFFF) << 10) | (rn << 5) | rd);
 }
+
 static void e_subi(int rd, int rn, unsigned imm12, int sf) { // sub rd, rn, #imm
     emit32((sf ? 0xD1000000u : 0x51000000u) | ((imm12 & 0xFFF) << 10) | (rn << 5) | rd);
 }
+
 // add/sub immediate with optional LSL #12 (sh=1 shifts imm12 left by 12) -- lets a 24-bit
 // displacement fold into one or two ALU ops instead of materializing a 64-bit constant.
 static void e_addi_sh(int rd, int rn, unsigned imm12, int sf, int sh) {
     emit32((sf ? 0x91000000u : 0x11000000u) | ((unsigned)(sh & 1) << 22) | ((imm12 & 0xFFF) << 10) | (rn << 5) | rd);
 }
+
 static void e_subi_sh(int rd, int rn, unsigned imm12, int sf, int sh) {
     emit32((sf ? 0xD1000000u : 0x51000000u) | ((unsigned)(sh & 1) << 22) | ((imm12 & 0xFFF) << 10) | (rn << 5) | rd);
 }
+
 static void e_addi_s(int rd, int rn, unsigned imm12, int sf) { // adds rd, rn, #imm (sets flags)
     emit32((sf ? 0xB1000000u : 0x31000000u) | ((imm12 & 0xFFF) << 10) | (rn << 5) | rd);
 }
+
 static void e_subi_s(int rd, int rn, unsigned imm12, int sf) { // subs rd, rn, #imm (sets flags)
     emit32((sf ? 0xF1000000u : 0x71000000u) | ((imm12 & 0xFFF) << 10) | (rn << 5) | rd);
 }
+
 // shifted-register 3-operand (LSL #amt) for add/sub/and/orr/eor and their S-forms.
 static void e_rrr(uint32_t base, int rd, int rn, int rm, int sf, int lsl) {
     emit32(base | (sf ? 0x80000000u : 0) | (rm << 16) | ((lsl & 0x3F) << 10) | (rn << 5) | rd);
 }
+
 #define A_ADD 0x0B000000u
 #define A_ADDS 0x2B000000u
 #define A_SUB 0x4B000000u
@@ -131,16 +162,19 @@ static void e_rrr(uint32_t base, int rd, int rn, int rm, int sf, int lsl) {
 #define A_EOR 0x4A000000u
 #define A_ORN 0x2A200000u // orn (for mvn)
 #define A_BIC 0x0A200000u // bic (and-not)
+
 // nzcv scratch is x20 (a free callee-saved host reg, saved/restored by the trampoline),
 // NOT x16/x17 -- so x16(value)/x17(EA) stay usable across flag-setting mem-dest ops.
 static void e_nzcv_save(void) {
     emit32(0xD53B4200u | 20);
     e_str(20, 28, OFF_NZCV);
 } // mrs x20,nzcv; str
+
 static void e_nzcv_load(void) {
     e_ldr(20, 28, OFF_NZCV);
     emit32(0xD51B4200u | 20);
 } // ldr x20; msr nzcv,x20
+
 // Carry convention: cpu->nzcv stores the ARM *borrow* C (= NOT x86 CF), which ARM SUBS/
 // SBCS produce naturally and the jcc table assumes. ARM ADDS/ADCS produce C = x86 CF
 // (the opposite), so flags coming from an x86 add/adc must have C flipped to match.
@@ -151,12 +185,14 @@ static void e_nzcv_save_ci(void) {  // save flags, inverting C (scratch x22: x21
     e_str(20, 28, OFF_NZCV);
     emit32(0xD51B4200u | 20); // also sync live ARM nzcv (msr) so spill persists the corrected value
 }
+
 static void e_nzcv_load_ci(void) { // load flags into live nzcv, inverting C
     e_ldr(20, 28, OFF_NZCV);
     e_movconst(22, 1u << 29);
     e_rrr(A_EOR, 20, 20, 22, 1, 0);
     emit32(0xD51B4200u | 20); // msr nzcv, x20
 }
+
 static void e_nzcv_save_c1(void) { // logical ops: x86 CF=0,OF=0; ARM ANDS/TST leave C,V stale
     emit32(0xD53B4200u | 20);      // mrs x20, nzcv
     e_movconst(22, 1u << 28);
@@ -166,17 +202,19 @@ static void e_nzcv_save_c1(void) { // logical ops: x86 CF=0,OF=0; ARM ANDS/TST l
     e_str(20, 28, OFF_NZCV);
     emit32(0xD51B4200u | 20); // sync live ARM nzcv
 }
+
 // x86-xflags (cross-block dead-flag elimination): canonicalize ONLY the live ARM NZCV -- the exact
 // e_nzcv_save_ci / e_nzcv_save_c1 correction with the (provably dead) cpu->nzcv str elided. The live
 // NZCV must stay canonical at every block boundary regardless of elision: an immediately-following
 // Jcc's x86cc_to_arm condition and any successor exit's emit_spill (which persists the LIVE flags,
-// e.g. the #292 irq-poll exit that feeds async-signal delivery) both assume the borrow convention.
+// e.g. the irq-poll exit that feeds async-signal delivery) both assume the borrow convention.
 static void e_nzcv_fix_ci(void) { // deferred x86 add: invert the live ARM add-carry (C = NOT x86 CF)
     emit32(0xD53B4200u | 20);     // mrs x20, nzcv
     e_movconst(22, 1u << 29);
     e_rrr(A_EOR, 20, 20, 22, 1, 0);
     emit32(0xD51B4200u | 20); // msr nzcv, x20 (no membank store: successor overwrites before reading)
 }
+
 static void e_nzcv_fix_c1(void) { // deferred logical op: x86 CF=0,OF=0 in the borrow convention
     emit32(0xD53B4200u | 20);     // mrs x20, nzcv
     e_movconst(22, 1u << 28);
@@ -185,6 +223,7 @@ static void e_nzcv_fix_c1(void) { // deferred logical op: x86 CF=0,OF=0 in the b
     e_rrr(A_ORR, 20, 20, 22, 1, 0); // C=1 (stored borrow for CF=0)
     emit32(0xD51B4200u | 20);       // msr nzcv, x20 (no membank store)
 }
+
 static void e_nzcv_save_setcf(int cfreg) { // save N/Z (from ARM nzcv), set stored C = NOT x86CF (cfreg holds 0/1)
     // Capture NOT cf into x23 FIRST -- the mrs/movconst below clobber x20 and x22, so reading cfreg up
     // front lets the carry-VALUE live in x20 (the narrow_adcsbb caller passes cfreg==20).
@@ -192,22 +231,24 @@ static void e_nzcv_save_setcf(int cfreg) { // save N/Z (from ARM nzcv), set stor
     e_rrr(A_EOR, 23, cfreg, 23, 0, 0); // x23 = NOT cf (0/1)
     emit32(0xD53B4200u | 20);          // mrs x20, nzcv  (N,Z valid)
     e_movconst(22, 1u << 29);
-    e_rrr(A_BIC, 20, 20, 22, 1, 0); // clear C
+    e_rrr(A_BIC, 20, 20, 22, 1, 0);  // clear C
     e_rrr(A_ORR, 20, 20, 23, 1, 29); // stored C = (NOT cf) << 29
     e_str(20, 28, OFF_NZCV);
     emit32(0xD51B4200u | 20); // sync live ARM nzcv
 }
+
 // clc/stc/cmc: touch ONLY x86 CF, leaving SF/ZF/OF/PF/AF intact. cpu->nzcv holds the ARM borrow C
 // (= NOT x86 CF), so set x86 CF=1 -> clear bit29, CF=0 -> set bit29, CF^=1 -> toggle bit29. `op` is
 // A_BIC (stc), A_ORR (clc) or A_EOR (cmc). The pending lazy producer (if any) was already materialized
 // by the top-of-loop classifier, so cpu->nzcv is current here.
 static void e_nzcv_setcf_op(uint32_t op) {
     e_ldr(20, 28, OFF_NZCV);
-    e_movconst(22, 1u << 29);     // C is bit 29 of nzcv
-    e_rrr(op, 20, 20, 22, 1, 0);  // clear / set / toggle bit29
+    e_movconst(22, 1u << 29);    // C is bit 29 of nzcv
+    e_rrr(op, 20, 20, 22, 1, 0); // clear / set / toggle bit29
     e_str(20, 28, OFF_NZCV);
     emit32(0xD51B4200u | 20); // sync live ARM nzcv
 }
+
 static void e_nzcv_save_keepC(void) { // inc/dec: take new N/Z/V, KEEP stored C (x86 inc/dec don't touch CF)
     emit32(0xD53B4200u | 20);         // mrs x20, nzcv (new N,Z,V; C junk) -- scratch x24/x25 (x21 may hold a result)
     e_ldr(24, 28, OFF_NZCV);          // x24 = old stored flags (has the C to keep)
@@ -218,7 +259,9 @@ static void e_nzcv_save_keepC(void) { // inc/dec: take new N/Z/V, KEEP stored C 
     e_str(20, 28, OFF_NZCV);
     emit32(0xD51B4200u | 20); // sync live ARM nzcv
 }
+
 static void e_lsr_i(int rd, int rn, int sh, int sf); // defined below; used by the PF helpers here
+
 // COMISD/UCOMISD: x86 sets ZF=PF=CF=1 on unordered and SF=OF=0 always, but ARM FCMP encodes unordered
 // as N=0,Z=0,C=1,V=1. Our substrate maps x86 ZF->Z, x86 CF->NOT stored-C (borrow), x86 PF->V. So on
 // unordered we need stored Z=1 (Z|V), stored borrow-C=0 (C&~V, so x86 CF=1), V kept (=PF=1), and N=0
@@ -234,12 +277,13 @@ static void e_nzcv_save_fcmp(void) {
     e_str(20, 28, OFF_NZCV);
     emit32(0xD51B4200u | 20); // sync live ARM nzcv
     // x86 PF = 1 on unordered. PF source byte: 0 (even popcount -> PF=1) if unordered (V=1), else 1.
-    e_lsr_i(22, 20, 28, 0);         // x22 = V (bit 28)
+    e_lsr_i(22, 20, 28, 0); // x22 = V (bit 28)
     e_movconst(20, 1);
     e_rrr(A_AND, 22, 22, 20, 0, 0); // x22 = V (0/1)
     e_rrr(A_EOR, 22, 22, 20, 0, 0); // x22 = NOT V  -> PF source byte
     e_str(22, 28, OFF_PF);
 }
+
 // x86 PF consumer: rd = x86 PF (even parity of the low byte of cpu->pf) in {0,1}. Scratch x16.
 static void e_pf_compute(int rd) {
     e_ldr(rd, 28, OFF_PF);
@@ -255,25 +299,31 @@ static void e_pf_compute(int rd) {
     e_rrr(A_AND, rd, rd, 16, 0, 0);
     e_rrr(A_EOR, rd, rd, 16, 0, 0); // rd = PF (1 iff even popcount)
 }
+
 static void e_bcond(int cond, int32_t off19) {
     emit32(0x54000000u | (((uint32_t)off19 & 0x7FFFF) << 5) | (cond & 0xF));
 }
+
 static void e_cset(int rd, int cond, int sf) { // cset rd, cond
     emit32((sf ? 0x9A9F07E0u : 0x1A9F07E0u) | (((cond ^ 1) & 0xF) << 12) | rd);
 }
+
 static void e_csel(int rd, int rn_t, int rm_f, int cond, int sf) {
     emit32((sf ? 0x9A800000u : 0x1A800000u) | (rm_f << 16) | ((cond & 0xF) << 12) | (rn_t << 5) | rd);
 }
+
 static void e_uxt(int rd, int rn, int w) { // uxtb/uxth/uxtw (zero-extend reg)
     // w==1 -> uxtb, w==2 -> uxth, w>=4 -> uxtw (ubfm xd,xn,#0,#31). The uxtw case is needed by the
     // 32-bit unsigned DIV path (e_uxt(.., rmv, 4)): a bare uxth truncated the divisor to 16 bits.
     uint32_t b = w == 1 ? 0x12001C00u : w == 2 ? 0x12003C00u : 0xD3407C00u;
     emit32(b | (rn << 5) | rd);
 }
+
 static void e_sxt(int rd, int rn, int w) { // sxtb/sxth/sxtw into X
     uint32_t b = w == 1 ? 0x93401C00u : w == 2 ? 0x93403C00u : 0x93407C00u;
     emit32(b | (rn << 5) | rd);
 }
+
 // Sign-extend a byte/word into either a 64-bit X (to_x=1) or a 32-bit W (to_x=0). The W form is
 // SBFM with sf=0, which zero-clears the upper 32 bits -- exactly an x86 movsx with a 32-bit dest
 // (sign-extend to 32, then zero bits 63:32). Used by movsx (0F BE/BF) per the dest operand size.
@@ -285,91 +335,155 @@ static void e_sxt_to(int rd, int rn, int w, int to_x) {
     uint32_t b = (w == 1) ? 0x13001C00u : 0x13003C00u; // sxtb/sxth Wd,Wn
     emit32(b | (rn << 5) | rd);
 }
+
 // Sign-extending load of a byte/word from [rn] into a 64-bit X (to_x=1) or a 32-bit W (to_x=0).
 // The W form (opc=11) zero-clears bits 63:32 -- an x86 movsx mem,r32 zero-extends the high half.
 static void e_ldrs_w(int w, int rt, int rn, int to_x) {
     uint32_t b = (w == 1) ? 0x39800000u : 0x79800000u; // ldrsb/ldrsh (to X)
-    if (!to_x) b |= 0x00400000u;                        // opc 10 -> 11: sign-extend into W
+    if (!to_x) b |= 0x00400000u;                       // opc 10 -> 11: sign-extend into W
     emit32(b | (rn << 5) | rt);
 }
+
 // shift by immediate (UBFM/SBFM). sh in [0,31] (32-bit) or [0,63] (64-bit).
 static void e_lsl_i(int rd, int rn, int sh, int sf) {
     int w = sf ? 64 : 32, immr = (w - sh) & (w - 1), imms = w - 1 - sh;
     emit32((sf ? 0xD3400000u : 0x53000000u) | (immr << 16) | (imms << 10) | (rn << 5) | rd);
 }
+
 static void e_lsr_i(int rd, int rn, int sh, int sf) {
     int imms = sf ? 63 : 31;
     emit32((sf ? 0xD3400000u : 0x53000000u) | (sh << 16) | (imms << 10) | (rn << 5) | rd);
 }
+
 static void e_asr_i(int rd, int rn, int sh, int sf) { // asr = SBFM rd,rn,#sh,#(w-1)
     int imms = sf ? 63 : 31;
     emit32((sf ? 0x93400000u : 0x13000000u) | (sh << 16) | (imms << 10) | (rn << 5) | rd);
 }
+
 static void e_bfi(int rd, int rn, int lsb, int width, int sf) { // bfi rd,rn,#lsb,#width
     int w = sf ? 64 : 32, immr = (w - lsb) & (w - 1), imms = width - 1;
     emit32((sf ? 0xB3400000u : 0x33000000u) | (immr << 16) | (imms << 10) | (rn << 5) | rd);
 }
+
 // variable shift (LSLV/LSRV/ASRV/RORV), count in rm (low bits used)
 static void e_shv(uint32_t base32, int rd, int rn, int rm, int sf) {
     emit32(base32 | (sf ? 0x80000000u : 0) | (rm << 16) | (rn << 5) | rd);
 }
+
 #define S_LSLV 0x1AC02000u
 #define S_LSRV 0x1AC02400u
 #define S_ASRV 0x1AC02800u
 #define S_RORV 0x1AC02C00u
+
 static void e_mul(int rd, int rn, int rm, int sf) {
     emit32((sf ? 0x9B007C00u : 0x1B007C00u) | (rm << 16) | (rn << 5) | rd);
 }
-static void e_umulh(int rd, int rn, int rm) { emit32(0x9BC07C00u | (rm << 16) | (rn << 5) | rd); }
-static void e_smulh(int rd, int rn, int rm) { emit32(0x9B407C00u | (rm << 16) | (rn << 5) | rd); }
+
+static void e_umulh(int rd, int rn, int rm) {
+    emit32(0x9BC07C00u | (rm << 16) | (rn << 5) | rd);
+}
+
+static void e_smulh(int rd, int rn, int rm) {
+    emit32(0x9B407C00u | (rm << 16) | (rn << 5) | rd);
+}
+
 static void e_udiv(int rd, int rn, int rm, int sf) {
     emit32((sf ? 0x9AC00800u : 0x1AC00800u) | (rm << 16) | (rn << 5) | rd);
 }
+
 static void e_sdiv(int rd, int rn, int rm, int sf) {
     emit32((sf ? 0x9AC00C00u : 0x1AC00C00u) | (rm << 16) | (rn << 5) | rd);
 }
+
 static void e_msub(int rd, int rn, int rm, int ra, int sf) {
     emit32((sf ? 0x9B008000u : 0x1B008000u) | (rm << 16) | (ra << 10) | (rn << 5) | rd);
 }
+
 static void e_ror_i(int rd, int rn, int sh, int sf) { // ror rd,rn,#sh  (EXTR rd,rn,rn,#sh)
     emit32((sf ? 0x93C00000u : 0x13800000u) | (rn << 16) | ((sh & (sf ? 63 : 31)) << 10) | (rn << 5) | rd);
 }
+
 static void e_extr(int rd, int rn, int rm, int lsb, int sf) { // EXTR rd, rn, rm, #lsb  = (rn:rm) >> lsb
     emit32((sf ? 0x93C00000u : 0x13800000u) | (rm << 16) | ((lsb & (sf ? 63 : 31)) << 10) | (rn << 5) | rd);
 }
+
 static void e_tst(int rn, int sf) {
     emit32((sf ? 0xEA00001Fu : 0x6A00001Fu) | (rn << 16) | (rn << 5));
 } // ands xzr,rn,rn
-static void e_rbit(int rd, int rn, int sf) { emit32((sf ? 0xDAC00000u : 0x5AC00000u) | (rn << 5) | rd); }
-static void e_clz(int rd, int rn, int sf) { emit32((sf ? 0xDAC01000u : 0x5AC01000u) | (rn << 5) | rd); }
+
+static void e_rbit(int rd, int rn, int sf) {
+    emit32((sf ? 0xDAC00000u : 0x5AC00000u) | (rn << 5) | rd);
+}
+
+static void e_clz(int rd, int rn, int sf) {
+    emit32((sf ? 0xDAC01000u : 0x5AC01000u) | (rn << 5) | rd);
+}
 
 // ---- NEON / SSE encoders (guest xmm0..15 live in host v0..v15) ----
-static void e_str_q(int t, int rn, int off) { emit32(0x3D800000u | (((unsigned)off / 16) << 10) | (rn << 5) | t); }
-static void e_ldr_q(int t, int rn, int off) { emit32(0x3DC00000u | (((unsigned)off / 16) << 10) | (rn << 5) | t); }
+static void e_str_q(int t, int rn, int off) {
+    emit32(0x3D800000u | (((unsigned)off / 16) << 10) | (rn << 5) | t);
+}
+
+static void e_ldr_q(int t, int rn, int off) {
+    emit32(0x3DC00000u | (((unsigned)off / 16) << 10) | (rn << 5) | t);
+}
+
 static void e_stp_q(int t1, int t2, int rn, int off) {
     emit32(0xAD000000u | (((unsigned)(off / 16) & 0x7F) << 15) | (t2 << 10) | (rn << 5) | t1);
 }
+
 static void e_ldp_q(int t1, int t2, int rn, int off) {
     emit32(0xAD400000u | (((unsigned)(off / 16) & 0x7F) << 15) | (t2 << 10) | (rn << 5) | t1);
 }
-static void e_ldr_d(int t, int rn) { emit32(0xFD400000u | (rn << 5) | t); }         // ldr d,[xn]
-static void e_str_d(int t, int rn) { emit32(0xFD000000u | (rn << 5) | t); }         // str d,[xn]
-static void e_ldr_s(int t, int rn) { emit32(0xBD400000u | (rn << 5) | t); }         // ldr s,[xn]
-static void e_str_s(int t, int rn) { emit32(0xBD000000u | (rn << 5) | t); }         // str s,[xn]
-static void e_fmov_to_d(int vd, int xn) { emit32(0x9E670000u | (xn << 5) | vd); }   // fmov d[vd], x[xn] (zeroes hi)
-static void e_fmov_to_s(int vd, int wn) { emit32(0x1E270000u | (wn << 5) | vd); }   // fmov s[vd], w[wn]
-static void e_fmov_from_d(int xd, int vn) { emit32(0x9E660000u | (vn << 5) | xd); } // fmov x[xd], d[vn]
-static void e_fmov_from_s(int wd, int vn) { emit32(0x1E260000u | (vn << 5) | wd); } // fmov w[wd], s[vn]
-static void e_vmov(int vd, int vn) { emit32(0x4EA01C00u | (vn << 16) | (vn << 5) | vd); } // mov vd.16b, vn.16b (orr)
+
+static void e_ldr_d(int t, int rn) {
+    emit32(0xFD400000u | (rn << 5) | t);
+} // ldr d,[xn]
+
+static void e_str_d(int t, int rn) {
+    emit32(0xFD000000u | (rn << 5) | t);
+} // str d,[xn]
+
+static void e_ldr_s(int t, int rn) {
+    emit32(0xBD400000u | (rn << 5) | t);
+} // ldr s,[xn]
+
+static void e_str_s(int t, int rn) {
+    emit32(0xBD000000u | (rn << 5) | t);
+} // str s,[xn]
+
+static void e_fmov_to_d(int vd, int xn) {
+    emit32(0x9E670000u | (xn << 5) | vd);
+} // fmov d[vd], x[xn] (zeroes hi)
+
+static void e_fmov_to_s(int vd, int wn) {
+    emit32(0x1E270000u | (wn << 5) | vd);
+} // fmov s[vd], w[wn]
+
+static void e_fmov_from_d(int xd, int vn) {
+    emit32(0x9E660000u | (vn << 5) | xd);
+} // fmov x[xd], d[vn]
+
+static void e_fmov_from_s(int wd, int vn) {
+    emit32(0x1E260000u | (vn << 5) | wd);
+} // fmov w[wd], s[vn]
+
+static void e_vmov(int vd, int vn) {
+    emit32(0x4EA01C00u | (vn << 16) | (vn << 5) | vd);
+} // mov vd.16b, vn.16b (orr)
+
 static void e_vmov8(int vd, int vn) {
     emit32(0x0EA01C00u | (vn << 16) | (vn << 5) | vd);
 } // mov vd.8b, vn.8b (low 64, zero upper)
+
 static void e_ins_d(int vd, int ld, int vn, int ls) { // ins vd.d[ld], vn.d[ls]
     emit32(0x6E000400u | ((unsigned)((ld << 4) | 8) << 16) | ((unsigned)(ls << 3) << 11) | (vn << 5) | vd);
 }
+
 static void e_ins_s(int vd, int ls_lane, int vn, int sl) { // ins vd.s[ls_lane], vn.s[sl]
     emit32(0x6E000400u | ((unsigned)((ls_lane << 3) | 4) << 16) | ((unsigned)(sl << 2) << 11) | (vn << 5) | vd);
 }
+
 // ---- x87 FPU stack helpers (ST(i) emulated at double precision in cpu->st[]) ----
 // ST(0) = cpu->st[fptop & 7]; the stack grows downward (push: --top). Scratch: x16/x17, v16+.
 static void e_st_addr(int xa, int i) { // xa = &cpu->st[(fptop+i)&7]   (clobbers x16)
@@ -379,6 +493,7 @@ static void e_st_addr(int xa, int i) { // xa = &cpu->st[(fptop+i)&7]   (clobbers
     emit32(0x91000000u | ((unsigned)OFF_ST << 10) | (28 << 5) | xa);         // add xa,x28,#OFF_ST
     emit32(0x8B000000u | (16 << 16) | (3 << 10) | (xa << 5) | xa);           // add xa,xa,x16,lsl#3
 }
+
 static void e_fp_settop(int delta) { // fptop = (fptop+delta) & 7   (clobbers x16)
     e_ldr(16, 28, OFF_FPTOP);
     if (delta < 0)
@@ -388,19 +503,23 @@ static void e_fp_settop(int delta) { // fptop = (fptop+delta) & 7   (clobbers x1
     emit32(0x12000800u | (16 << 5) | 16);                               // and w16,w16,#7
     e_str(16, 28, OFF_FPTOP);
 }
+
 static void e_fp_ld(int vd, int i) {
     e_st_addr(17, i);
     e_ldr_d(vd, 17);
 } // vd = ST(i)
+
 static void e_fp_st(int vs, int i) {
     e_st_addr(17, i);
     e_str_d(vs, 17);
 } // ST(i) = vs
+
 static void e_fp_push(int vs) {
     e_fp_settop(-1);
     e_st_addr(17, 0);
     e_str_d(vs, 17);
 } // push vs -> ST(0)
+
 // fcom-family compare: FCMP dn,dm then set cpu->fpsw bits C0(8)/C2(10)/C3(14) so a
 // following fnstsw ax + sahf reproduces x86 ZF/PF/CF. (clobbers x16/x17/x20)
 static void e_fcom_setfpsw(int n, int m) {
@@ -417,6 +536,7 @@ static void e_fcom_setfpsw(int n, int m) {
     e_rrr(A_ORR, 16, 16, 17, 0, 0); // | C3<<14
     e_str(16, 28, OFF_FPSW);
 }
+
 // SSE shift-by-immediate -> NEON USHR/SSHR/SHL (esize in bits: 16/32/64)
 static void e_vshr_imm(int vd, int vn, int esize, int sh, int sgn) {
     if (sh <= 0) {
@@ -427,6 +547,7 @@ static void e_vshr_imm(int vd, int vn, int esize, int sh, int sgn) {
     unsigned immhb = 2 * esize - sh;
     emit32((sgn ? 0x4F000400u : 0x6F000400u) | (immhb << 16) | (vn << 5) | vd);
 }
+
 static void e_vshl_imm(int vd, int vn, int esize, int sh) {
     if (sh <= 0) {
         e_vmov(vd, vn);
@@ -439,21 +560,26 @@ static void e_vshl_imm(int vd, int vn, int esize, int sh) {
     unsigned immhb = esize + sh;
     emit32(0x4F005400u | (immhb << 16) | (vn << 5) | vd);
 }
+
 static void e_ext(int vd, int vn, int vm, int idx) {
     emit32(0x6E000000u | (vm << 16) | ((idx & 0xF) << 11) | (vn << 5) | vd);
 }
+
 static void e_v3(uint32_t base, int vd, int vn, int vm) {
     emit32(base | (vm << 16) | (vn << 5) | vd);
 } // NEON 3-same .16b/.Ns
+
 // LSE atomics (AL ordering). sz: 1/2/4/8 bytes.
 static void e_lse(uint32_t base, int sz, int rs, int rt, int rn) {
     uint32_t szb = sz == 8 ? 0xC0000000u : sz == 4 ? 0x80000000u : sz == 2 ? 0x40000000u : 0;
     emit32((base & 0x3FFFFFFFu) | szb | (rs << 16) | (rn << 5) | rt);
 }
+
 static void e_cas(int sz, int rs, int rt, int rn) { // casal Rs(old/cmp), Rt(new), [Rn]
     uint32_t b = sz == 8 ? 0xC8E0FC00u : sz == 4 ? 0x88E0FC00u : sz == 2 ? 0x48E0FC00u : 0x08E0FC00u;
     emit32(b | (rs << 16) | (rn << 5) | rt);
 }
+
 #define LSE_LDADD 0xB8E00000u // ldaddal  ([m] += rs)
 #define LSE_LDCLR 0xB8E01000u // ldclral  ([m] &= ~rs)
 #define LSE_LDEOR 0xB8E02000u // ldeoral  ([m] ^= rs)
@@ -464,6 +590,7 @@ static int64_t sext(uint64_t v, int bits) {
     uint64_t m = 1ull << (bits - 1);
     return (int64_t)((v ^ m) - m);
 }
+
 static void block_return(void);
 
 // ---------------- prologue / spill / exits ----------------
@@ -477,10 +604,11 @@ static void emit_prologue(void) {
         e_ldr(r, 28, R_OFF(r));
     e_ldr(0, 28, 0); // rax last
 }
+
 // Spill: x28 is live (== cpu), so store the 16 GPRs + flags + xmm. The flag save reads the
 // LIVE ARM nzcv -- which is kept == cpu->nzcv by every flag producer (the borrow-convention
 // helpers below `msr` their corrected value back into ARM nzcv so this stays consistent).
-// Lever #3 (SIMD-clean syscall exit): when guest xmm (host v0..v15) is already current in cpu->V, a plain
+// (SIMD-clean syscall exit): when guest xmm (host v0..v15) is already current in cpu->V, a plain
 // R_SYSCALL exit can skip the 8 stp_q xmm save (emit_spill_gpr); the always-full prologue reload republishes
 // cpu->V on re-entry, and every non-slim exit keeps the FULL spill. Currency is tracked at RUNTIME in
 // cpu->vdirty: the first xmm-writing region instruction (SSE/x87 lowering, the inline 0F38/0F3A crypto
@@ -490,10 +618,12 @@ static void emit_prologue(void) {
 // vector-dirty region can reach a statically-"clean" syscall block with host xmm != cpu->V. A syscall that
 // writes cpu->V (sigreturn) is republished by the prologue reload, so xmm state is never lost.
 static int g_slimsys = -1; // DDJIT_NOSLIMSYS=1 -> 0 = byte-identical full-spill baseline (A/B kill switch)
+
 static int slimsys_on(void) {
     if (g_slimsys < 0) g_slimsys = getenv("DDJIT_NOSLIMSYS") ? 0 : 1;
     return g_slimsys;
 }
+
 // Mark cpu->V as possibly-stale for a later syscall exit (x28 is the nonzero cpu pointer, so storing it
 // flags dirty). ONCE-PER-TRACE latch (g_vmark_done), not per-write: the v0.9.19-as-shipped per-instruction
 // store regressed every SSE-dense guest ~15-35% (redis SET/GET, CPython float; the tax ran inside glibc's
@@ -504,17 +634,20 @@ static int slimsys_on(void) {
 // on slimsys_on(): with DDJIT_NOSLIMSYS=1 every exit full-spills and never reads cpu->vdirty, so the
 // kill-switch now truly restores the pre-lever baseline (as shipped it left the marking stores in place).
 static int g_vmark_done; // translate-time latch; reset at translate_block entry + after emit_rep_string
+
 static void mark_vdirty(void) {
     if (g_vmark_done || !slimsys_on()) return;
     e_str(28, 28, OFF_VDIRTY);
     g_vmark_done = 1;
 }
+
 // GPR + flags spill, WITHOUT the xmm save. Leaves x28 = cpu (unchanged).
 static void emit_spill_gpr(void) {
     for (int r = 0; r <= 15; r++)
         e_str(r, 28, R_OFF(r));
     e_nzcv_save();
 }
+
 static void emit_spill(void) {
     for (int r = 0; r <= 15; r++)
         e_str(r, 28, R_OFF(r));
@@ -523,8 +656,9 @@ static void emit_spill(void) {
     e_nzcv_save();
     e_str(31, 28, OFF_VDIRTY); // full spill republishes cpu->V -> clear the dirty flag (str xzr)
 }
+
 static void emit_exit_const(uint64_t rip, uint64_t reason) {
-    // Lever #3: a plain R_SYSCALL exit skips the xmm spill WHEN cpu->V is current (cpu->vdirty==0); else
+    // a plain R_SYSCALL exit skips the xmm spill WHEN cpu->V is current (cpu->vdirty==0); else
     // full. Runtime check (blocks chain without spilling). x16 is engine scratch here (guest is x0..x15).
     if (reason == R_SYSCALL && slimsys_on()) {
         e_ldr(16, 28, OFF_VDIRTY);
@@ -548,6 +682,7 @@ static void emit_exit_const(uint64_t rip, uint64_t reason) {
     emit_host_ptr(16, (uint64_t)block_return, PRELOC_BLOCKRET);
     e_br(16); // block_return uses x28 (still cpu)
 }
+
 // ---------------- S1: inline vDSO-style time fast path (cntvct-based) ----------------
 // Apple Silicon exposes the EL0-readable generic-timer count (CNTVCT_EL0) + its frequency
 // (CNTFRQ_EL0). We calibrate once at startup against the host's REALTIME/MONOTONIC clocks,
@@ -555,7 +690,7 @@ static void emit_exit_const(uint64_t rip, uint64_t reason) {
 // timespec/timeval WITHOUT entering service() -- the guest's clock_gettime/gettimeofday never
 // trap. ns = base_ns + ((ticks-base_ticks)*mult)>>FAST_SHIFT (Q30, overflow-safe 128-bit).
 static int g_fastsys = 1;         // master switch (DDJIT_NOFASTSYS=1 -> 0 = byte-identical old path)
-static int g_fastclk = 1;         // #406: gates ONLY the clock_gettime/gettimeofday time arms. Auto-0 on
+static int g_fastclk = 1;         // gates ONLY the clock_gettime/gettimeofday time arms. Auto-0 on
                                   // a host whose effective CNTVCT rate is decoupled from cntfrq_el0 (the
                                   // vDSO time math is then unsound); the W4F rt_sigprocmask/sched_yield
                                   // inline arms (no cntvct) stay on, so only the time arms fall to slow.
@@ -578,6 +713,7 @@ static int g_siginline = 1;           // W4F switch (DDJIT_NOSIGINLINE=1 disable
 static uint64_t g_sig_inline_count;   // # rt_sigprocmask served inline (written by emitted code)
 static uint64_t g_sig_slow_count;     // # rt_sigprocmask that reached service() (pending-signal fallback)
 static uint64_t g_yield_inline_count; // # sched_yield served inline
+
 static void s1_calibrate(void) {
     const char *off = getenv("DDJIT_NOFASTSYS");
     if (off && off[0] && off[0] != '0') {
@@ -595,12 +731,12 @@ static void s1_calibrate(void) {
     // Tick->ns scale (Q30) from cntfrq_el0. On a well-behaved host cntfrq_el0 IS the rate the guest's
     // inline fast path reads via `mrs cntvct_el0`, so this is exact and the fast path stays enabled.
     g_cal_mult = (uint64_t)(((unsigned __int128)1000000000ull << FAST_SHIFT) / freq);
-    // #406 test hook: force the fast path ON with the cntfrq-only scale even on a host the mach cross-
+    // test hook: force the fast path ON with the cntfrq-only scale even on a host the mach cross-
     // check below would reject. Lets the guarded-store / EFAULT / tz paths be exercised on a virtualized
     // dev/CI host where the fast path is otherwise auto-disabled. NOT for production use.
     if (getenv("DDJIT_FASTSYS_FORCE")) goto anchor;
 #ifdef __APPLE__
-    // #406: guard against a host that virtualizes CNTVCT inconsistently. mach_timebase_info gives the
+    // guard against a host that virtualizes CNTVCT inconsistently. mach_timebase_info gives the
     // AUTHORITATIVE tick->ns for the generic-timer counter mach_absolute_time reads (ns = ticks*numer/
     // denom). If that disagrees with cntfrq_el0's implied scale beyond a small tolerance, the effective
     // CNTVCT rate is decoupled from the advertised CNTFRQ_EL0 (observed here: cntfrq_el0 reports 1 GHz
@@ -641,6 +777,7 @@ anchor:;
     g_cal_mono_ns = (uint64_t)tm.tv_sec * 1000000000ull + (uint64_t)tm.tv_nsec;
     g_cal_real_ns = (uint64_t)tr.tv_sec * 1000000000ull + (uint64_t)tr.tv_nsec;
 }
+
 // Emitted at the guest `syscall` site. Guest GPRs are live in x0..x15 (rax=x0, rsi=x6, rdi=x7),
 // guest flags live in ARM nzcv, cpu pinned in x28. x16/x17 and the host callee-saved x19..x27
 // (saved by run_block, restored by block_return) are free scratch in-block, NOT guest state.
@@ -653,11 +790,11 @@ anchor:;
 static void emit_fast_syscall(uint64_t next) {
     emit32(0xD53B4211u); // mrs x17, nzcv   (preserve guest flags across our compares)
     uint32_t *after[12];
-    int na = 0; // slots: b L_after            [W4F: grew 2->8; #406: +tz + 2 time-gate arms -> 12]
+    int na = 0; // slots: b L_after [W4F: grew 2->8; +tz + 2 time-gate arms -> 12]
     uint32_t *to_slow[12];
-    int nsl = 0; // slots: b.ne slow_restore   [W4F: grew 2->8; #406: +tz + 2 time-gate arms -> 12]
+    int nsl = 0; // slots: b.ne slow_restore [W4F: grew 2->8; +tz + 2 time-gate arms -> 12]
 
-    // #218/#215: shared EFAULT resume tail for the fast-clock GUARDED stores below. A bad guest result
+    // shared EFAULT resume tail for the fast-clock GUARDED stores below. A bad guest result
     // pointer makes the store fault; fastclk_fault_fixup() (sigframe.c, run first by jit86_lazyguard) sets
     // guest rax=-EFAULT and redirects the host PC HERE. x17 still holds the guest flags saved at entry (no
     // path rewrites it), so we restore them and fall into the shared L_after continuation -- semantically a
@@ -668,16 +805,16 @@ static void emit_fast_syscall(uint64_t next) {
     uint32_t *L_efault = (uint32_t *)g_cp;
     emit32(0xD51B4211u); // msr nzcv, x17   (rax already = -EFAULT, set by the fixup)
     after[na++] = (uint32_t *)g_cp;
-    emit32(0x14000000u);                                                             // b L_after
-    *skip_ef = 0x14000000u | (uint32_t)(((uint32_t *)g_cp - skip_ef) & 0x3FFFFFF);   // Lskip_ef:
+    emit32(0x14000000u);                                                           // b L_after
+    *skip_ef = 0x14000000u | (uint32_t)(((uint32_t *)g_cp - skip_ef) & 0x3FFFFFF); // Lskip_ef:
 
     // ---- clock_gettime: rax == 228 ----
-    e_subi_s(16, 0, 228, 1); // subs x16, x0, #228
+    e_subi_s(16, 0, 228, 1); // subs x16, x0,
     uint32_t *m1 = (uint32_t *)g_cp;
-    e_bcond(1, 0);         // b.ne -> gettimeofday
-    if (!g_fastclk) {      // #406: time arm disabled (untrustworthy CNTVCT) -> real clock_gettime syscall
+    e_bcond(1, 0);    // b.ne -> gettimeofday
+    if (!g_fastclk) { // time arm disabled (untrustworthy CNTVCT) -> real clock_gettime syscall
         to_slow[nsl++] = (uint32_t *)g_cp;
-        e_bcond(14, 0);    // b.al -> slow
+        e_bcond(14, 0); // b.al -> slow
     }
     e_subi_s(16, 7, 1, 1); // cmp clockid(rdi=x7), #1 (MONOTONIC)
     uint32_t *cs = (uint32_t *)g_cp;
@@ -704,19 +841,19 @@ static void emit_fast_syscall(uint64_t next) {
     e_movconst(25, 1000000000ull);
     e_udiv(26, 24, 25, 1);     // sec
     e_msub(27, 26, 25, 24, 1); // nsec = total - sec*1e9
-    // #218/#215: NULL buffer -> slow path (clock_gettime(NULL) is -EFAULT per the kernel; svc_time enforces
+    // NULL buffer -> slow path (clock_gettime(NULL) is -EFAULT per the kernel; svc_time enforces
     // it). Routing NULL to slow keeps the per-syscall NULL policy in ONE place -- gettimeofday(NULL) is a
     // legal no-op there, so a uniform inline "NULL==EFAULT" would be wrong for it.
     to_slow[nsl++] = (uint32_t *)g_cp;
-    emit32(0xB4000000u | 6);   // cbz x6, slow
+    emit32(0xB4000000u | 6); // cbz x6, slow
     // Arm the fast-clock guard, do the two guarded stores, then disarm. A bad (non-NULL) rsi faults the
     // store -> fastclk_fault_fixup -> L_efault (rax=-EFAULT), never crashes the engine.
-    e_str(6, 28, OFF_FCPTR);   // cpu->fastclk_ptr = &guest ts
+    e_str(6, 28, OFF_FCPTR); // cpu->fastclk_ptr = &guest ts
     e_adr(20, L_efault);
-    e_str(20, 28, OFF_FCRES);  // cpu->fastclk_resume = &L_efault  (window armed)
-    e_str(26, 6, 0);           // ts->tv_sec   (rsi=x6)   [guarded]
-    e_str(27, 6, 8);           // ts->tv_nsec             [guarded]
-    e_str(31, 28, OFF_FCRES);  // cpu->fastclk_resume = 0  (window disarmed; xzr)
+    e_str(20, 28, OFF_FCRES); // cpu->fastclk_resume = &L_efault  (window armed)
+    e_str(26, 6, 0);          // ts->tv_sec   (rsi=x6)   [guarded]
+    e_str(27, 6, 8);          // ts->tv_nsec             [guarded]
+    e_str(31, 28, OFF_FCRES); // cpu->fastclk_resume = 0  (window disarmed; xzr)
     emit_host_ptr(20, (uint64_t)&g_fast_count, PRELOC_HOSTGLOBAL);
     e_ldr(21, 20, 0);
     e_addi(21, 21, 1, 1);
@@ -731,17 +868,17 @@ static void emit_fast_syscall(uint64_t next) {
     e_subi_s(16, 0, 96, 1);                 // subs x16, x0, #96
     uint32_t *gtod_miss = (uint32_t *)g_cp; // W4F: rax!=96 -> fall into the W4F arms (was straight to slow)
     e_bcond(1, 0);                          // b.ne -> W4F arms (or slow when g_siginline off)
-    if (!g_fastclk) {                       // #406: time arm disabled -> real gettimeofday syscall
+    if (!g_fastclk) {                       // time arm disabled -> real gettimeofday syscall
         to_slow[nsl++] = (uint32_t *)g_cp;
-        e_bcond(14, 0);                     // b.al -> slow
+        e_bcond(14, 0); // b.al -> slow
     }
-    // #406: gettimeofday(tv, tz) -- a non-NULL tz (rsi=x6) must have the timezone struct written (and a
+    // gettimeofday(tv, tz) -- a non-NULL tz (rsi=x6) must have the timezone struct written (and a
     // bad tz must fault EFAULT), which the fast path does not produce. Route any non-NULL tz to the slow
     // path so the real gettimeofday handles it exactly (incl. tz=(void*)-1 -> EFAULT, LTP gettimeofday01).
     to_slow[nsl++] = (uint32_t *)g_cp;
-    emit32(0xB5000000u | 6);                 // cbnz x6, slow  (tz != NULL -> real syscall)
-    e_movconst(19, g_cal_real_ns);          // gettimeofday is REALTIME
-    emit32(0xD53BE050u);                    // mrs x16, cntvct_el0
+    emit32(0xB5000000u | 6);       // cbnz x6, slow  (tz != NULL -> real syscall)
+    e_movconst(19, g_cal_real_ns); // gettimeofday is REALTIME
+    emit32(0xD53BE050u);           // mrs x16, cntvct_el0
     e_movconst(20, g_cal_base_ticks);
     e_rrr(A_SUB, 21, 16, 20, 1, 0);
     e_movconst(20, g_cal_mult);
@@ -754,11 +891,11 @@ static void emit_fast_syscall(uint64_t next) {
     e_msub(27, 26, 25, 24, 1); // nsec
     e_movconst(20, 1000);
     e_udiv(27, 27, 20, 1); // usec = nsec/1000
-    // #218/#215: gettimeofday(NULL) is a legal no-op that returns 0 -> route NULL to the slow path. A
+    // gettimeofday(NULL) is a legal no-op that returns 0 -> route NULL to the slow path. A
     // bad (non-NULL) tv faults the guarded store -> fastclk_fault_fixup -> -EFAULT (never a crash).
     to_slow[nsl++] = (uint32_t *)g_cp;
-    emit32(0xB4000000u | 7);  // cbz x7, slow
-    e_str(7, 28, OFF_FCPTR);  // cpu->fastclk_ptr = &guest tv
+    emit32(0xB4000000u | 7); // cbz x7, slow
+    e_str(7, 28, OFF_FCPTR); // cpu->fastclk_ptr = &guest tv
     e_adr(20, L_efault);
     e_str(20, 28, OFF_FCRES); // cpu->fastclk_resume = &L_efault  (armed)
     e_str(26, 7, 0);          // tv->tv_sec   (rdi=x7)   [guarded]
@@ -870,10 +1007,11 @@ static void emit_fast_syscall(uint64_t next) {
         *s = 0x14000000u | (uint32_t)(((uint32_t *)g_cp - s) & 0x3FFFFFF);
     }
 }
+
 // Direct-branch chaining: if target already translated, single `b body`; else a full
 // exit whose first insn is remembered and back-patched to `b body` later. (from jit.c)
 // IRQSLIM: a FORWARD direct edge (target past the branch's own rip, g_emit_gpc) enters at body+8,
-// past the fixed 2-insn #292 poll header -- every in-cache cycle still polls via its backward or
+// past the fixed 2-insn poll header -- every in-cache cycle still polls via its backward or
 // indirect edge (see the g_fwdskip invariant note in engine/cache.c).
 static void emit_chain_exit(uint64_t target) {
     if (g_trace || g_nochain || g_threaded) {
@@ -891,6 +1029,7 @@ static void emit_chain_exit(uint64_t target) {
     add_pend3(slot, target, 0, fwd);
     emit_exit_const(target, R_BRANCH);
 }
+
 // Indirect branch (ret / jmp reg / call reg) with the guest target already in x16.
 // Probe the IBTC inline: HIT -> jump straight into the cached body (guest regs stay
 // live, no spill/dispatch); MISS -> spill and flag the dispatcher to fill the cache.

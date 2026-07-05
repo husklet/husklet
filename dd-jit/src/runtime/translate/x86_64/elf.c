@@ -9,18 +9,25 @@
 #include <sys/ucontext.h>
 
 // ---------------- minimal ELF loader (load high; copied from jit.c) ----------------
-static uint16_t rd16(const uint8_t *p) { return p[0] | (p[1] << 8); }
+static uint16_t rd16(const uint8_t *p) {
+    return p[0] | (p[1] << 8);
+}
+
 static uint32_t rd32(const uint8_t *p) {
     uint32_t v;
     memcpy(&v, p, 4);
     return v;
 }
+
 static uint64_t rd64(const uint8_t *p) {
     uint64_t v;
     memcpy(&v, p, 8);
     return v;
 }
-static void wr64(uint8_t *p, uint64_t v) { memcpy(p, &v, 8); }
+
+static void wr64(uint8_t *p, uint64_t v) {
+    memcpy(p, &v, 8);
+}
 
 // struct loaded is defined by the shared os/linux (container/netns.c).
 
@@ -49,6 +56,7 @@ static int elf_interp(const char *path, char *out, size_t n) {
     munmap(f, st.st_size);
     return r;
 }
+
 // W6A item 1 (Go non-PIE): a Go ET_EXEC's runtime keeps its OWN code/data addresses in the
 // firstmoduledata struct (and the pclntab it points at) as LINK-TIME absolute values: text/etext,
 // minpc/maxpc, the pclntab slice pointers, findfunctab, the type/gc/gofunc bases, the init-task
@@ -181,15 +189,15 @@ static void go_rebase_nonpie(const uint8_t *f, size_t fsz, uint64_t bias, uint64
     // (rebasing them high made Go's type identity -- e.g. runtime.SetFinalizer's `fint == etyp` -- diverge).
     // Any low type/data access is served by nonpie_fixup at +bias.
     static const int ptr_words[] = {
-        0,                                  // pcHeader
-        1, 4, 7, 10, 13, 16,                // funcnametab/cutab/filetab/pctab/pclntable/ftab slice ptrs
-        19, 20, 21,                         // findfunctab, minpc, maxpc
-        22, 23, 24, 25, 26, 27, 28, 29,     // text,etext,noptrdata,enoptrdata,data,edata,bss,ebss
-        30, 31, 32, 33, 34, 35, 36,         // noptrbss,enoptrbss,covctrs,ecovctrs,end,gcdata,gcbss
-        41,                                 // epclntab (types,etypes,rodata,gofunc = 37..40 stay low)
-        42, 45, 48, 51,                     // textsectmap,typelinks,itablinks,ptab slice ptrs
-        54, 56, 59, 62, 64,                 // pluginpath,pkghashes,inittasks,modulename,modulehashes ptrs
-        69, 71, 72, 73,                     // gcdatamask.bytedata, gcbssmask.bytedata, typemap, next
+        0,                              // pcHeader
+        1,  4,  7,  10, 13, 16,         // funcnametab/cutab/filetab/pctab/pclntable/ftab slice ptrs
+        19, 20, 21,                     // findfunctab, minpc, maxpc
+        22, 23, 24, 25, 26, 27, 28, 29, // text,etext,noptrdata,enoptrdata,data,edata,bss,ebss
+        30, 31, 32, 33, 34, 35, 36,     // noptrbss,enoptrbss,covctrs,ecovctrs,end,gcdata,gcbss
+        41,                             // epclntab (types,etypes,rodata,gofunc = 37..40 stay low)
+        42, 45, 48, 51,                 // textsectmap,typelinks,itablinks,ptab slice ptrs
+        54, 56, 59, 62, 64,             // pluginpath,pkghashes,inittasks,modulename,modulehashes ptrs
+        69, 71, 72, 73,                 // gcdatamask.bytedata, gcbssmask.bytedata, typemap, next
     };
     for (size_t k = 0; k < sizeof ptr_words / sizeof *ptr_words; k++) {
         uint8_t *slot = md + (size_t)ptr_words[k] * 8;
@@ -269,10 +277,10 @@ static void load_elf(const char *path, struct loaded *out) {
     // base becomes out->base, deriving all guest PCs/addresses identically each run. One-shot per image.
     uint8_t *base;
     if (g_force_base) {
-        base = mmap((void *)(g_force_base + basepage), span, PROT_READ | PROT_WRITE,
-                    MAP_PRIVATE | MAP_ANON | MAP_FIXED, -1, 0);
+        base = mmap((void *)(g_force_base + basepage), span, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON | MAP_FIXED,
+                    -1, 0);
         g_force_base = 0;
-        // #373a/#178: record the fixed image's live guest span -- the pcache's save/restore policy keys
+        // record the fixed image's live guest span -- the pcache's save/restore policy keys
         // "revivable by identity" off these ranges (translate/x86_64/pcache.c pcache_note_fixed_img).
         if (base != MAP_FAILED) pcache_note_fixed_img((uint64_t)base, span);
     } else {
@@ -309,7 +317,7 @@ static void load_elf(const char *path, struct loaded *out) {
     // resolves the biased code PCs (otherwise runtime.pcdatavalue nil-derefs). Gated on g_nonpie_lo
     // (ET_EXEC only); NOGOREBASE=1 disables for A/B testing.
     if (g_nonpie_lo && !getenv("NOGOREBASE")) go_rebase_nonpie(f, st.st_size, bias, g_nonpie_lo, g_nonpie_hi);
-    // #425: record V8's embedded-builtins CODE base symbol (LOW link value) so the frontend can bias its one
+    // record V8's embedded-builtins CODE base symbol (LOW link value) so the frontend can bias its one
     // baked `mov r32,imm` materialization to the high mapping -- see translate.c g_nonpie_blob_code. Only for a
     // biased non-PIE image that actually carries the symbol (node/mongosh/any embedded-V8 ET_EXEC); 0 otherwise
     // (PIE, Go, stripped, non-V8) -> inert. NOV8BLOB=1 disables for A/B.
@@ -318,7 +326,7 @@ static void load_elf(const char *path, struct loaded *out) {
     // otherwise reset the value the main image just recorded. Only the main non-PIE exe carries the blob.
     if (etype == 2 && !getenv("NOV8BLOB"))
         g_nonpie_blob_code = go_symval(f, st.st_size, "v8_Default_embedded_blob_code_");
-    // BUG#132: a biased non-PIE ET_EXEC (e.g. static glibc jq) carries baked ABSOLUTE pointers in
+    // a biased non-PIE ET_EXEC (e.g. static glibc jq) carries baked ABSOLUTE pointers in
     // .data.rel.ro AND .data (pointer tables) that the static linker resolved to LINK addresses with NO
     // runtime relocation entry. After we bias the image high (macOS __PAGEZERO blocks the low link range)
     // those pointers still point at the unmapped link addresses while rip-relative leas to the SAME
@@ -340,7 +348,10 @@ static void load_elf(const char *path, struct loaded *out) {
     // the two: jq/busybox stay rebased, gcc/cc1 stay low-consistent. DDRELRODYN=1 forces the old behavior.
     int has_interp = 0;
     for (int i = 0; i < phnum; i++)
-        if (rd32(f + phoff + (uint64_t)i * phentsize) == 3) { has_interp = 1; break; } // PT_INTERP
+        if (rd32(f + phoff + (uint64_t)i * phentsize) == 3) {
+            has_interp = 1;
+            break;
+        } // PT_INTERP
     if (g_nonpie_lo && !getenv("NORELRO") && (!has_interp || getenv("DDRELRODYN")) &&
         !go_section_by_name(f, st.st_size, ".gopclntab", NULL, NULL, NULL)) {
         uint64_t shoff = rd64(f + 40);
@@ -375,9 +386,10 @@ static void load_elf(const char *path, struct loaded *out) {
 
 // Build the SysV x86-64 process stack (identical layout to aarch64). Returns rsp.
 static char *g_guest_env[] = {"PATH=/usr/bin:/bin", "HOME=/root", "TERM=dumb", "LANG=C", NULL};
+
 static uint64_t build_stack(int argc, char **argv, struct loaded *lm, uint64_t at_base) {
     size_t SZ = 8u << 20, GUARD = 0x10000;
-    // #392 stack-overflow safety: a PROT_NONE guard gap immediately BELOW the usable stack (Linux's
+    // stack-overflow safety: a PROT_NONE guard gap immediately BELOW the usable stack (Linux's
     // stack_guard_gap, 1MB). Without it the stack sits adjacent-above the 64MB RX code cache and a deep
     // recursion / huge frame overruns straight into the executable cache -> silent corruption (clickhouse)
     // instead of a fault. A store past the bottom now hits PROT_NONE; jit86_lazyguard sees the gna_add'd HARD
@@ -457,12 +469,12 @@ static uint64_t build_stack(int argc, char **argv, struct loaded *lm, uint64_t a
         {16, 0},
         {15, plat},
         {25, rnd},
-        {23, 0},     // AT_SECURE 0
-        {17, 100},   // AT_CLKTCK
-        {26, 0},     // AT_HWCAP2
+        {23, 0},       // AT_SECURE 0
+        {17, 100},     // AT_CLKTCK
+        {26, 0},       // AT_HWCAP2
         {31, argp[0]}, // AT_EXECFN -> argv[0] path string. Rust std / uutils' multicall read this to pick the
                        // applet name; missing it made getauxval(AT_EXECFN)==0 -> strlen(0) -> SIGSEGV.
-        {0, 0},      // AT_NULL terminator
+        {0, 0},        // AT_NULL terminator
     };
     int naux = (int)(sizeof aux / sizeof aux[0]);
     size_t nslots = 1 + (argc + 1) + (envc + 1) + (size_t)naux * 2;
@@ -504,6 +516,7 @@ static uint64_t build_stack(int argc, char **argv, struct loaded *lm, uint64_t a
 // accesses (a real bug) still abort once the budget is spent.
 static _Atomic int g_lazymaps; // isolated/wild faults (small bounded budget)
 static _Atomic int g_growmaps; // adjacent (stack-grow / over-read) faults: large bounded budget
+
 // W6A item 4: the original cap was a single global, monotonic, never-reset budget of 4096 pages shared
 // by BOTH legitimate growth (stack-down, SSE over-reads adjacent to a real allocation) AND genuine wild
 // pointers. A long-running / large-working-set guest that legitimately faults >4096 DISTINCT guard pages
@@ -529,6 +542,7 @@ static int lazy_addr_mapped(uintptr_t a) {
     if (kr != KERN_SUCCESS) return 0; // nothing at/above -> unmapped
     return a >= (uintptr_t)addr && a < (uintptr_t)addr + (uintptr_t)size;
 }
+
 static int lazy_neighbor_mapped(uintptr_t pg) {
     // A fault adjacent to a live mapping is legitimate growth/over-read: the byte just below the fault
     // page is the end of a real region (over-read), or the page just above is the committed stack
@@ -538,6 +552,7 @@ static int lazy_neighbor_mapped(uintptr_t pg) {
     if (lazy_addr_mapped(pg + 0x4000)) return 1;
     return 0;
 }
+
 static int lazy_budget(void) {
     static int b = -1;
     if (b < 0) {
@@ -546,16 +561,19 @@ static int lazy_budget(void) {
     }
     return b;
 }
+
 static int lazy_nofix(void) {
     static int v = -1;
     if (v < 0) v = getenv("NOLAZYFIX") ? 1 : 0;
     return v;
 }
+
 static void lazy_diag(void) {
     if (getenv("LAZYDIAG"))
         fprintf(stderr, "[lazy] grow=%d wild=%d (budget=%d nofix=%d)\n", (int)g_growmaps, (int)g_lazymaps,
                 lazy_budget(), lazy_nofix());
 }
+
 // W6A item 1: emulate a faulting host load/store against the biased non-PIE image. A non-PIE guest's
 // absolute ref resolves to the original low link vaddr (in [g_nonpie_lo,g_nonpie_hi)); the real data
 // lives at that vaddr + g_nonpie_bias. We decode the faulting emitted arm64 access, perform it at +bias,
@@ -577,18 +595,18 @@ static void lazy_diag(void) {
 static int nonpie_lse_rmw(void *p, int size, int opc, uint64_t v, uint64_t *old) {
     // opc: 0=ADD 1=CLR(&~) 2=EOR 3=SET(|). Returns 1 if handled, 0 for an unsupported subform.
     switch (size) {
-#define NP_RMW(TY)                                                                                             \
-    {                                                                                                          \
-        TY *a = (TY *)p, ov = (TY)v, o;                                                                        \
-        switch (opc) {                                                                                         \
-        case 0: o = __atomic_fetch_add(a, ov, __ATOMIC_SEQ_CST); break;                                       \
-        case 1: o = __atomic_fetch_and(a, (TY)~ov, __ATOMIC_SEQ_CST); break;                                  \
-        case 2: o = __atomic_fetch_xor(a, ov, __ATOMIC_SEQ_CST); break;                                       \
-        case 3: o = __atomic_fetch_or(a, ov, __ATOMIC_SEQ_CST); break;                                        \
-        default: return 0;                                                                                    \
-        }                                                                                                     \
-        *old = (uint64_t)o;                                                                                   \
-        return 1;                                                                                             \
+#define NP_RMW(TY)                                                                                                     \
+    {                                                                                                                  \
+        TY *a = (TY *)p, ov = (TY)v, o;                                                                                \
+        switch (opc) {                                                                                                 \
+        case 0: o = __atomic_fetch_add(a, ov, __ATOMIC_SEQ_CST); break;                                                \
+        case 1: o = __atomic_fetch_and(a, (TY)~ov, __ATOMIC_SEQ_CST); break;                                           \
+        case 2: o = __atomic_fetch_xor(a, ov, __ATOMIC_SEQ_CST); break;                                                \
+        case 3: o = __atomic_fetch_or(a, ov, __ATOMIC_SEQ_CST); break;                                                 \
+        default: return 0;                                                                                             \
+        }                                                                                                              \
+        *old = (uint64_t)o;                                                                                            \
+        return 1;                                                                                                      \
     }
     case 0: NP_RMW(uint8_t)
     case 1: NP_RMW(uint16_t)
@@ -597,6 +615,7 @@ static int nonpie_lse_rmw(void *p, int size, int opc, uint64_t v, uint64_t *old)
 #undef NP_RMW
     }
 }
+
 static uint64_t nonpie_lse_swp(void *p, int size, uint64_t v) {
     switch (size) {
     case 0: return __atomic_exchange_n((uint8_t *)p, (uint8_t)v, __ATOMIC_SEQ_CST);
@@ -605,19 +624,39 @@ static uint64_t nonpie_lse_swp(void *p, int size, uint64_t v) {
     default: return __atomic_exchange_n((uint64_t *)p, v, __ATOMIC_SEQ_CST);
     }
 }
+
 static uint64_t nonpie_cas(void *p, int size, uint64_t expected, uint64_t newv) {
     // Compare-and-swap; returns the pre-CAS memory value. __atomic_compare_exchange_n leaves the loaded
     // value in `e` on failure, and `e` unchanged (== old, since it matched) on success -> `e` is the old
     // value in both cases, which is what cas writes back into Rs.
     switch (size) {
-    case 0: { uint8_t e = (uint8_t)expected; __atomic_compare_exchange_n((uint8_t *)p, &e, (uint8_t)newv, 0, __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST); return e; }
-    case 1: { uint16_t e = (uint16_t)expected; __atomic_compare_exchange_n((uint16_t *)p, &e, (uint16_t)newv, 0, __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST); return e; }
-    case 2: { uint32_t e = (uint32_t)expected; __atomic_compare_exchange_n((uint32_t *)p, &e, (uint32_t)newv, 0, __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST); return e; }
-    default: { uint64_t e = expected; __atomic_compare_exchange_n((uint64_t *)p, &e, newv, 0, __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST); return e; }
+    case 0: {
+        uint8_t e = (uint8_t)expected;
+        __atomic_compare_exchange_n((uint8_t *)p, &e, (uint8_t)newv, 0, __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST);
+        return e;
+    }
+    case 1: {
+        uint16_t e = (uint16_t)expected;
+        __atomic_compare_exchange_n((uint16_t *)p, &e, (uint16_t)newv, 0, __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST);
+        return e;
+    }
+    case 2: {
+        uint32_t e = (uint32_t)expected;
+        __atomic_compare_exchange_n((uint32_t *)p, &e, (uint32_t)newv, 0, __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST);
+        return e;
+    }
+    default: {
+        uint64_t e = expected;
+        __atomic_compare_exchange_n((uint64_t *)p, &e, newv, 0, __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST);
+        return e;
+    }
     }
 }
+
 // zero-extend a `size`-byte value to register width (matches W-register upper-32 clearing for size<8).
-static uint64_t nonpie_zext(uint64_t v, int size) { return size >= 3 ? v : (v & ((1ull << (8 << size)) - 1)); }
+static uint64_t nonpie_zext(uint64_t v, int size) {
+    return size >= 3 ? v : (v & ((1ull << (8 << size)) - 1));
+}
 
 static int nonpie_fixup(siginfo_t *si, void *ucv) {
     if (!g_nonpie_lo || !ucv || !si) return 0;
@@ -695,9 +734,18 @@ static int nonpie_fixup(siginfo_t *si, void *ucv) {
         }
     } else { // load
         switch (size) {
-        case 0: val = *(uint8_t *)real; if (opc == 2) val = (uint64_t)(int64_t)(int8_t)val; break;
-        case 1: val = *(uint16_t *)real; if (opc == 2) val = (uint64_t)(int64_t)(int16_t)val; break;
-        case 2: val = *(uint32_t *)real; if (opc == 2 || opc == 3) val = (uint64_t)(int64_t)(int32_t)val; break;
+        case 0:
+            val = *(uint8_t *)real;
+            if (opc == 2) val = (uint64_t)(int64_t)(int8_t)val;
+            break;
+        case 1:
+            val = *(uint16_t *)real;
+            if (opc == 2) val = (uint64_t)(int64_t)(int16_t)val;
+            break;
+        case 2:
+            val = *(uint32_t *)real;
+            if (opc == 2 || opc == 3) val = (uint64_t)(int64_t)(int32_t)val;
+            break;
         default: val = *(uint64_t *)real; break;
         }
         if (rt != 31) X[rt] = val;
@@ -705,19 +753,20 @@ static int nonpie_fixup(siginfo_t *si, void *ucv) {
     uc->uc_mcontext->__ss.__pc += 4; // skip the faulting load/store
     return 1;
 }
+
 void jit86_lazyguard(int sig, siginfo_t *si, void *uc) {
     // host_range_mapped's fault-guarded probe (thread.c): a probe load on an unmapped guest page long-jumps
     // back to report "unmapped" -> -EFAULT. MUST run first: the lazy zero-page mapper below would otherwise
     // serve the probe fault with a fresh mapping, flipping a correct EFAULT into a bogus success (and
     // burning lazy-map budget); nonpie_fixup would likewise emulate the probe load at +bias and resume.
     if (hrm_fault_hook(si)) return; // never actually returns on a claim (siglongjmp); shape-only
-    // #218/#215: a bad guest RESULT pointer in the vDSO fast-clock inline path (emit_fast_syscall). Recover
+    // a bad guest RESULT pointer in the vDSO fast-clock inline path (emit_fast_syscall). Recover
     // it as -EFAULT BEFORE the lazy-map/guest-fault paths below, matching the slow svc_time() path exactly.
     if (fastclk_fault_fixup(si, uc)) return;
     // W6A item 1: a non-PIE absolute DATA ref into the low link range -> serve the access at +bias and
     // advance the host PC. Inert unless g_nonpie_lo is set (ET_EXEC only).
     if (nonpie_fixup(si, uc)) return;
-    // #392: a fault inside a tracked guest PROT_NONE region -- dd's main-stack guard gap OR a page the guest
+    // a fault inside a tracked guest PROT_NONE region -- dd's main-stack guard gap OR a page the guest
     // itself made PROT_NONE (glibc thread-stack guard, malloc-arena guard, an mmap(PROT_NONE) reservation) --
     // is a HARD fault. Deliver SIGSEGV to the guest (or, with no handler, die of it) and NEVER fall into the
     // lazy zero-page grower below: it would see the mapped stack/heap neighbor, mprotect the guard R+W, and
@@ -739,7 +788,7 @@ void jit86_lazyguard(int sig, siginfo_t *si, void *uc) {
     if (si && si->si_addr && smc_on_write((uint64_t)si->si_addr)) {
         memset(g_map, 0, sizeof g_map);
         memset(g_ibtc, 0, sizeof g_ibtc);
-        // #135 (PyPy JIT bridge coherence): the x86 opt2 2-way IBTC (g_xibtc) is read by the hot
+        // (PyPy JIT bridge coherence): the x86 opt2 2-way IBTC (g_xibtc) is read by the hot
         // indirect-branch fast path and keyed by guest PC -> host body. It MUST be dropped here too, or a
         // surviving entry re-dispatches the just-patched code (e.g. a PyPy guard whose rel32 was rewritten
         // to point at a freshly-assembled bridge) to its STALE pre-patch host body -> the old jump target
@@ -752,8 +801,11 @@ void jit86_lazyguard(int sig, siginfo_t *si, void *uc) {
     // A genuine guest fault (isolated wild pointer / null deref) with a registered handler is the guest's
     // to handle; legitimate glibc vector over-reads are ADJACENT to a live mapping and still fall through
     // to the lazy zero-page map below.
-    { void *fa = si ? si->si_addr : NULL; uintptr_t fpg = (uintptr_t)fa & ~(uintptr_t)0xFFF;
-      if (!(fa && !lazy_nofix() && lazy_neighbor_mapped(fpg)) && deliver_guest_fault(sig, si, uc)) return; }
+    {
+        void *fa = si ? si->si_addr : NULL;
+        uintptr_t fpg = (uintptr_t)fa & ~(uintptr_t)0xFFF;
+        if (!(fa && !lazy_nofix() && lazy_neighbor_mapped(fpg)) && deliver_guest_fault(sig, si, uc)) return;
+    }
     void *a = si ? si->si_addr : NULL;
     if (a) {
         uintptr_t pg = (uintptr_t)a & ~(uintptr_t)0xFFF;
@@ -764,18 +816,25 @@ void jit86_lazyguard(int sig, siginfo_t *si, void *uc) {
         int ok = adjacent ? (g_growmaps < (256 << 10)) /* 1GB of grow pages */ : (g_lazymaps < lazy_budget());
         if (ok) {
             static int hooked;
-            if (!hooked) { hooked = 1; atexit(lazy_diag); }
+            if (!hooked) {
+                hooked = 1;
+                atexit(lazy_diag);
+            }
             // macOS won't MAP_FIXED over a sub-range of an existing VM entry (EINVAL); try mprotect
             // first (the page often exists as a PROT_NONE guard), then a fresh map.
             if (mprotect((void *)pg, 0x1000, PROT_READ | PROT_WRITE) == 0) {
-                if (adjacent) g_growmaps++;
-                else g_lazymaps++;
+                if (adjacent)
+                    g_growmaps++;
+                else
+                    g_lazymaps++;
                 return;
             }
             void *r = mmap((void *)pg, 0x1000, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON | MAP_FIXED, -1, 0);
             if (r != MAP_FAILED) {
-                if (adjacent) g_growmaps++;
-                else g_lazymaps++;
+                if (adjacent)
+                    g_growmaps++;
+                else
+                    g_lazymaps++;
                 return;
             } // retry the faulting instruction
         }
@@ -787,19 +846,21 @@ void jit86_lazyguard(int sig, siginfo_t *si, void *uc) {
         if (c && c->rip) {
             fprintf(stderr, "  bytes@rip:");
             uint8_t *p = (uint8_t *)c->rip;
-            for (int i = 0; i < 16; i++) fprintf(stderr, " %02x", p[i]);
-            fprintf(stderr, "\n  rax=%llx rsi=%llx rdi=%llx rsp=%llx rbp=%llx\n",
-                    (unsigned long long)c->r[0], (unsigned long long)c->r[6], (unsigned long long)c->r[7],
-                    (unsigned long long)c->r[4], (unsigned long long)c->r[5]);
+            for (int i = 0; i < 16; i++)
+                fprintf(stderr, " %02x", p[i]);
+            fprintf(stderr, "\n  rax=%llx rsi=%llx rdi=%llx rsp=%llx rbp=%llx\n", (unsigned long long)c->r[0],
+                    (unsigned long long)c->r[6], (unsigned long long)c->r[7], (unsigned long long)c->r[4],
+                    (unsigned long long)c->r[5]);
         }
     }
-    // #392: a genuine in-translated-code guest fault with no handler and no legitimate lazy mapping ->
+    // a genuine in-translated-code guest fault with no handler and no legitimate lazy mapping ->
     // terminate the guest process faithfully (WIFSIGNALED/WTERMSIG=sig for its parent) instead of a raw host
     // raise() that degrades to exit(255) across dd's fork. Declines for an engine fault -> real crash below.
     if (deliver_guest_fatal_fault(sig, si, uc)) return;
     signal(sig, SIG_DFL);
     raise(sig); // out of budget / mmap failed -> real crash
 }
+
 // Synchronous CPU faults other than SIGSEGV/SIGBUS (which the run path wires to jit86_lazyguard above): a
 // guest may install a handler for SIGILL/SIGFPE/SIGTRAP and DELIBERATELY trigger it -- e.g. a CPU-feature
 // probe that executes an optional instruction guarded by a SIGILL handler (ud2 / 0F 0B once the feature is
@@ -821,6 +882,7 @@ static void jit86_syncguard(int sig, siginfo_t *si, void *uc) {
     signal(sig, SIG_DFL);
     raise(sig);
 }
+
 __attribute__((constructor)) static void jit86_install_sync_fault_guards(void) {
     if (getenv("CRASHDBG")) return;
     struct sigaction sa;
@@ -831,11 +893,12 @@ __attribute__((constructor)) static void jit86_install_sync_fault_guards(void) {
     sigaction(SIGFPE, &sa, NULL);
     sigaction(SIGTRAP, &sa, NULL);
 }
+
 void jit86_faulth(int sig, siginfo_t *si, void *uc) {
     // host_range_mapped probe fault (thread.c) -- resolve it silently even on this diagnostic path, so a
     // FAULT_ON trace run doesn't dump a bogus [FAULT] for every EFAULT-probing syscall and die.
     if (hrm_fault_hook(si)) return; // never actually returns on a claim (siglongjmp); shape-only
-    // #223: a non-PIE absolute DATA ref into the low link range is a LEGITIMATE access served at +bias, not a
+    // a non-PIE absolute DATA ref into the low link range is a LEGITIMATE access served at +bias, not a
     // crash -- consult nonpie_fixup FIRST (as the run-path jit86_lazyguard / jit86_syncguard do) so a FAULT_ON
     // diagnostic run of a non-PIE glibc binary (e.g. node --version) resolves and continues instead of dumping
     // a bogus [FAULT] and _exit(133)ing. Self-declines (returns 0) for any address outside [lo,hi) or a host

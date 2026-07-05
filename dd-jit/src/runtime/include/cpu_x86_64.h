@@ -16,7 +16,7 @@ struct cpu {
     uint64_t host_v[16];    // 0x110 (272) host v8..v15 (callee-saved)
     uint64_t v[32];         // 0x190 (400) guest xmm0..15 (128-bit each)
     uint64_t mmscratch[2];  // 0x290 (656) 16-byte scratch for pmovmskb etc.
-    // 0x2A0 (672) #292 async-interrupt poll flag. Set (via g_cpu_key) by the host async-signal handler and
+    // 0x2A0 (672) async-interrupt poll flag. Set (via g_cpu_key) by the host async-signal handler and
     // the thread-directed tkill/tgkill path when a CAUGHT guest signal becomes pending; polled by a 2-insn
     // (ldr+cbz) check emitted at every block body so a CPU-bound guest loop that makes no syscalls still
     // exits to the dispatcher (maybe_deliver_signal) at a safe block boundary. The last BAKED field is
@@ -68,12 +68,12 @@ struct cpu {
     // bit 21 here and pushfq(9C) reads it back -- a software toggle of ID round-trips, which is exactly the
     // CPUID-availability probe 32-bit code uses (flip ID via pushf/popf and check it changed). 0/1 valued.
     uint64_t idflag;
-    // Lever #3 (SIMD-clean syscall exit): RUNTIME "guest xmm may be stale in cpu->V" flag. Set (to the
+    // (SIMD-clean syscall exit): RUNTIME "guest xmm may be stale in cpu->V" flag. Set (to the
     // nonzero cpu pointer) by the first xmm-writing region instruction; cleared by every FULL spill. A
     // plain R_SYSCALL exit reads it: 0 -> slim GPR-only spill, else FULL. Runtime (not a static per-block
     // flag) because blocks chain without spilling, so a vectorized region can reach a clean syscall block.
     uint64_t vdirty;
-    // #218/#215 fast-clock guard: while the S1 vDSO fast path (emit.c emit_fast_syscall) is about to write
+    // fast-clock guard: while the S1 vDSO fast path (emit.c emit_fast_syscall) is about to write
     // the guest clock_gettime/gettimeofday result buffer, it arms this window so a BAD guest result pointer
     // returns -EFAULT to the guest instead of faulting the engine (the kernel's access_ok() contract) --
     // WITHOUT the per-call cost of a host_range_mapped() probe on the always-valid common case. The emitted
@@ -84,6 +84,7 @@ struct cpu {
     uint64_t fastclk_ptr;
     uint64_t fastclk_resume;
 };
+
 #define OFF_FCPTR ((int)__builtin_offsetof(struct cpu, fastclk_ptr))
 #define OFF_FCRES ((int)__builtin_offsetof(struct cpu, fastclk_resume))
 _Static_assert(__builtin_offsetof(struct cpu, fastclk_resume) % 8 == 0 &&
@@ -116,7 +117,7 @@ _Static_assert(__builtin_offsetof(struct cpu, vdirty) % 8 == 0 && __builtin_offs
 #define OFF_HOSTV 272
 #define OFF_V 400
 #define OFF_MM 656
-// #292 async-poll flag offset (non-baked -> real offset, computed after the struct).
+// async-poll flag offset (non-baked -> real offset, computed after the struct).
 #define OFF_IRQ __builtin_offsetof(struct cpu, irq)
 // Offset safety (C3): the baked numeric OFF_* above are duplicated into emitted machine code AND the
 // run_block/block_return asm. A struct edit that shifts any of them must fail the BUILD, not corrupt a
@@ -164,6 +165,8 @@ _Static_assert(__builtin_offsetof(struct cpu, mmscratch) == OFF_MM, "OFF_MM drif
 // byte/word) which is awkward in emitted code, so the translator exits here and do_rcl() performs the whole
 // rotate + CF/OF update in C. Descriptor in cpu->divop; a memory operand's host EA in cpu->x87_ea.
 #define R_RCL 12
+
 enum { X87_F2XM1, X87_FYL2X, X87_FPTAN, X87_FPATAN, X87_FYL2XP1, X87_FSINCOS, X87_FSIN, X87_FCOS };
+
 // x86 register encodings (== host reg numbers)
 enum { RAX, RCX, RDX, RBX, RSP, RBP, RSI, RDI };

@@ -25,18 +25,19 @@ static int syscall_should_restart(struct cpu *c) {
     }
     return 1;
 }
+
 // An interruptible host syscall failed: should the caller retry it? True iff it was interrupted (EINTR)
 // by a signal whose guest handler asked for SA_RESTART (syscall_should_restart). Use as the tail of a
 // do/while around the blocking host call so the result variable stays local to each call site.
 #define SVC_EINTR_RESTART(c) (errno == EINTR && syscall_should_restart(c))
 
-// ---- #146: EINTR for a BLOCKING "never-restarted" syscall (poll/ppoll/pselect/epoll_pwait) ----
+// ---- EINTR for a BLOCKING "never-restarted" syscall (poll/ppoll/pselect/epoll_pwait) ----
 // Per signal(7) these calls are in the set that is NEVER restarted: when a signal HANDLER interrupts them
 // they ALWAYS return EINTR, regardless of SA_RESTART -- the handler runs and the syscall does not restart.
 // The old SVC_EINTR_RESTART do/while got this wrong: whenever a pending handler had SA_RESTART it restarted
 // the host call IN PLACE, which (a) is the wrong semantics (they must return EINTR) and, worse, (b) never
 // delivered the handler because it never returned to the dispatcher -- so a forever-blocking call
-// (pause()->ppoll(NULL,0,NULL), poll(NULL,0,-1)) plus an SA_RESTART SIGCHLD reaper hung forever (#146).
+// (pause->ppoll(NULL,0,NULL), poll(NULL,0,-1)) plus an SA_RESTART SIGCHLD reaper hung forever.
 //
 // Correct rule: keep retrying in place ONLY for a SPURIOUS EINTR with nothing to deliver -- an internal/host
 // wakeup, or a SIG_DFL/IGN the host already actioned, which a real kernel would not surface to the guest at
@@ -67,7 +68,8 @@ static void thread_kill(struct cpu *c, int tid, int sig) {
     raise_guest_signal(c, sig);
 }
 
-static int svc_signal(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4, uint64_t a5) {
+static int svc_signal(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4,
+                      uint64_t a5) {
     switch (nr) {
     // ===================== Signals — Linux signal numbers -> macOS; kill/sigaction/sigreturn =====================
     // kill(pid,sig)
@@ -87,8 +89,7 @@ static int svc_signal(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint
             // path is safe and matches the raise/abort self-signal + own-group-teardown intent.
             raise_guest_signal(c, (int)a1);
             G_RET(c) = 0;
-        }
-        else if ((int)a0 < -1) {
+        } else if ((int)a0 < -1) {
             // kill(-pgid, sig): signal a SPECIFIC process group. dd runs each guest process as a real host
             // process whose process group MIRRORS the guest's (case 154 forwards setpgid to the host; non-
             // init children carry their real host pids), so the named group is a real, isolated host group
@@ -102,21 +103,20 @@ static int svc_signal(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint
             pid_t gpgid = (pid_t)(-(int)a0);
             if (gpgid == 1 && g_init_hostpid) gpgid = g_init_hostpid;
             G_RET(c) = kill(-gpgid, sig_l2m((int)a1)) < 0 ? (uint64_t)(-errno) : 0;
+        } else
+        // Cross-process: the target is another dd engine whose host_sigh is installed on the MACOS signal
+        // number (rt_sigaction, case 134, installs on sig_l2m(sig)); its host_sigh translates back via
+        // sig_m2l. So the sender MUST translate Linux->macOS here too -- else a divergent signal (SIGUSR1=10,
+        // SIGUSR2=12, SIGURG=23, ... differ between Linux and macOS) lands on the wrong disposition and is
+        // lost. This is exactly the postgres fast-shutdown deadlock: the postmaster's kill(checkpointer,
+        // SIGUSR2=12) was delivered as macOS 12 (SIGSYS), the checkpointer never ran ShutdownXLOG, and
+        // `pg_ctl -w stop` hung ("server does not shut down"). sig 0 (existence check) maps to 0 unchanged.
+        // The container init is guest pid 1 <-> its real host pid (g_init_hostpid): a sibling process that
+        // kill()s pid 1 must reach the init's host process, not host pid 1 (launchd).
+        {
+            pid_t tgt = ((int)a0 == 1 && g_init_hostpid) ? g_init_hostpid : (pid_t)a0;
+            G_RET(c) = kill(tgt, sig_l2m((int)a1)) < 0 ? (uint64_t)(-errno) : 0;
         }
-        else
-            // Cross-process: the target is another dd engine whose host_sigh is installed on the MACOS signal
-            // number (rt_sigaction, case 134, installs on sig_l2m(sig)); its host_sigh translates back via
-            // sig_m2l. So the sender MUST translate Linux->macOS here too -- else a divergent signal (SIGUSR1=10,
-            // SIGUSR2=12, SIGURG=23, ... differ between Linux and macOS) lands on the wrong disposition and is
-            // lost. This is exactly the postgres fast-shutdown deadlock: the postmaster's kill(checkpointer,
-            // SIGUSR2=12) was delivered as macOS 12 (SIGSYS), the checkpointer never ran ShutdownXLOG, and
-            // `pg_ctl -w stop` hung ("server does not shut down"). sig 0 (existence check) maps to 0 unchanged.
-            // The container init is guest pid 1 <-> its real host pid (g_init_hostpid): a sibling process that
-            // kill()s pid 1 must reach the init's host process, not host pid 1 (launchd).
-            {
-                pid_t tgt = ((int)a0 == 1 && g_init_hostpid) ? g_init_hostpid : (pid_t)a0;
-                G_RET(c) = kill(tgt, sig_l2m((int)a1)) < 0 ? (uint64_t)(-errno) : 0;
-            }
         break;
     }
     case 130: {
@@ -157,7 +157,7 @@ static int svc_signal(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint
     case 138: { // rt_sigqueueinfo(tgid, sig, siginfo): carry si_code + si_value to the handler's siginfo
         int sig = (int)a1;
         if (sig >= 1 && sig <= 64 && a2) {
-            g_sigcode[sig] = *(int *)(a2 + 8);     // siginfo.si_code
+            g_sigcode[sig] = *(int *)(a2 + 8);      // siginfo.si_code
             g_sigval[sig] = *(uint64_t *)(a2 + 24); // siginfo.si_value (sival_int/ptr)
         }
         raise_guest_signal(c, sig);
@@ -192,7 +192,7 @@ static int svc_signal(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint
         sigfillset(&allblk);
         sigemptyset(&empty);
         sigprocmask(SIG_BLOCK, &allblk, &prev); // close the check/sleep race (see case 133)
-        ts_wait_enter(); // #404: pause() -> interruptible sleep ('S') until a deliverable signal arrives
+        ts_wait_enter();                        // pause -> interruptible sleep ('S') until a deliverable signal arrives
         while (!c->exited) {
             uint64_t p = __atomic_load_n(&g_pending, __ATOMIC_SEQ_CST);
             int deliv = 0;
@@ -232,7 +232,10 @@ static int svc_signal(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint
         // faulting per Linux), tracked in the g_gna registry -- gna_hit catches it WITHOUT a probe-read, so a
         // valid but non-host-mapped non-PIE .bss sigset (this handler reads a0 directly, unrebased) is not
         // mistaken for a fault. NULL is not a valid rt_sigsuspend mask -> EFAULT too.
-        if (a0 == 0 || gna_hit((uint64_t)a0, 8)) { G_RET(c) = (uint64_t)(int64_t)(-EFAULT); break; }
+        if (a0 == 0 || gna_hit((uint64_t)a0, 8)) {
+            G_RET(c) = (uint64_t)(int64_t)(-EFAULT);
+            break;
+        }
         uint64_t oldmask = c->sigmask;
         uint64_t newmask = *(uint64_t *)a0;
         c->sigmask = newmask;
@@ -242,7 +245,7 @@ static int svc_signal(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint
         sigfillset(&allblk);
         sigemptyset(&empty);
         sigprocmask(SIG_BLOCK, &allblk, &prev);
-        ts_wait_enter(); // #404: rt_sigsuspend -> interruptible sleep ('S')
+        ts_wait_enter(); // rt_sigsuspend -> interruptible sleep ('S')
         int deliv = 0;
         while (!c->exited) {
             uint64_t p = __atomic_load_n(&g_pending, __ATOMIC_SEQ_CST);
@@ -302,12 +305,16 @@ static int svc_signal(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint
             if (sigaction(sig_l2m(s), &sa, &saved[s]) == 0) installed |= (1ull << s);
         }
         int got = 0;
-        ts_wait_enter(); // #404: rt_sigtimedwait blocks in interruptible sleep ('S') until a signal/timeout
+        ts_wait_enter(); // rt_sigtimedwait blocks in interruptible sleep ('S') until a signal/timeout
         for (;;) {
             // Both queues: process-directed (g_pending) and thread-directed (tpending via tkill/tgkill).
-            uint64_t p = __atomic_load_n(&g_pending, __ATOMIC_SEQ_CST) | __atomic_load_n(&c->tpending, __ATOMIC_SEQ_CST);
+            uint64_t p =
+                __atomic_load_n(&g_pending, __ATOMIC_SEQ_CST) | __atomic_load_n(&c->tpending, __ATOMIC_SEQ_CST);
             for (int s = 1; s <= 64; s++)
-                if ((p & (1ull << s)) && (set & (1ull << (s - 1)))) { got = s; break; }
+                if ((p & (1ull << s)) && (set & (1ull << (s - 1)))) {
+                    got = s;
+                    break;
+                }
             if (got) {
                 __atomic_and_fetch(&g_pending, ~(1ull << got), __ATOMIC_SEQ_CST); // dequeue from both
                 __atomic_and_fetch(&c->tpending, ~(1ull << got), __ATOMIC_SEQ_CST);
@@ -315,7 +322,10 @@ static int svc_signal(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint
                     memset((void *)a1, 0, 128);
                     *(int *)(a1 + 0) = got;            // si_signo
                     *(int *)(a1 + 8) = g_sigcode[got]; // si_code
-                    if (g_sigpid[got]) { *(int *)(a1 + 16) = g_sigpid[got]; *(int *)(a1 + 20) = g_siguid[got]; }
+                    if (g_sigpid[got]) {
+                        *(int *)(a1 + 16) = g_sigpid[got];
+                        *(int *)(a1 + 20) = g_siguid[got];
+                    }
                     *(uint64_t *)(a1 + 24) = g_sigval[got];
                     g_sigcode[got] = 0;
                     g_sigval[got] = 0;
@@ -357,15 +367,21 @@ static int svc_signal(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint
             break;
         }
         // The act/oldact structs are read/written DIRECTLY by the engine (24 bytes: handler,flags,mask), so
-        // a bad/unmapped pointer must return -EFAULT rather than fault the engine (#395). Validate in Linux
+        // a bad/unmapped pointer must return -EFAULT rather than fault the engine. Validate in Linux
         // order -- copyin `act` (a1) before copyout `oldact` (a2) -- so no oldact is written when act faults.
-        if (a1 && !host_range_mapped((uintptr_t)a1, 24)) { G_RET(c) = (uint64_t)(int64_t)(-EFAULT); break; }
-        if (a2 && !host_range_mapped((uintptr_t)a2, 24)) { G_RET(c) = (uint64_t)(int64_t)(-EFAULT); break; }
+        if (a1 && !host_range_mapped((uintptr_t)a1, 24)) {
+            G_RET(c) = (uint64_t)(int64_t)(-EFAULT);
+            break;
+        }
+        if (a2 && !host_range_mapped((uintptr_t)a2, 24)) {
+            G_RET(c) = (uint64_t)(int64_t)(-EFAULT);
+            break;
+        }
         if (a2) {
             *(uint64_t *)(a2 + 0) = g_sigact[sig].handler;
             *(uint64_t *)(a2 + 8) = g_sigact[sig].flags;
             *(uint64_t *)(a2 + 16) = g_sigact[sig].mask;
-        // aarch64: handler,flags,mask
+            // aarch64: handler,flags,mask
         }
         if (a1) {
             uint64_t h = *(uint64_t *)(a1 + 0);
@@ -391,7 +407,7 @@ static int svc_signal(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint
                     signal(ms, SIG_IGN);
                 else {
                     // async: flag pending, deliver in dispatcher. SA_SIGINFO so host_sigh_si can capture the
-                    // sender's si_pid/si_uid for an SA_SIGINFO guest handler (#316).
+                    // sender's si_pid/si_uid for an SA_SIGINFO guest handler.
                     struct sigaction sa;
                     memset(&sa, 0, sizeof sa);
                     sa.sa_sigaction = host_sigh_si;
@@ -440,7 +456,7 @@ static int svc_signal(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint
                 c->sigmask &= ~set;
             else
                 c->sigmask = set;
-        // SIG_SETMASK
+            // SIG_SETMASK
         }
         // Mirror the terminal-stop signals (SIGTSTP/SIGTTIN/SIGTTOU) onto the REAL host mask. Job control
         // depends on this: bash blocks these three around tcsetpgrp/tcsetattr so a process in a BACKGROUND
@@ -461,8 +477,10 @@ static int svc_signal(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint
             sigemptyset(&unblk);
             for (int i = 0; i < 3; i++) {
                 int ms = sig_l2m(STOPS[i]);
-                if (c->sigmask & (1ull << (STOPS[i] - 1))) sigaddset(&blk, ms);
-                else sigaddset(&unblk, ms);
+                if (c->sigmask & (1ull << (STOPS[i] - 1)))
+                    sigaddset(&blk, ms);
+                else
+                    sigaddset(&unblk, ms);
             }
             sigprocmask(SIG_BLOCK, &blk, NULL);
             sigprocmask(SIG_UNBLOCK, &unblk, NULL);
@@ -475,7 +493,10 @@ static int svc_signal(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint
         // The kernel copy_to_user()s the pending set, so a bad/unmapped `set` pointer is -EFAULT (LTP
         // sigpending02's tst_get_bad_addr case: a PROT_NONE guard page must fault, not be silently written).
         // guest_bad_ptr (not host_range_mapped) so the PROT_NONE probe page is caught. NULL set faults too.
-        if (guest_bad_ptr((uintptr_t)a0, 8)) { G_RET(c) = (uint64_t)(int64_t)(-EFAULT); break; }
+        if (guest_bad_ptr((uintptr_t)a0, 8)) {
+            G_RET(c) = (uint64_t)(int64_t)(-EFAULT);
+            break;
+        }
         // Report BOTH queues (process-directed g_pending + this thread's tpending), matching Linux which
         // unions the shared and per-thread pending sets. Also mask to signals that are currently BLOCKED:
         // an unblocked pending signal has a runnable handler and is about to be delivered, but sigpending's

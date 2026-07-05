@@ -1,13 +1,12 @@
 #![allow(unused_imports, dead_code)]
-use crate::{AppModel, Category, Msg, Selection};
 use crate::ui::components::*;
-use crate::ui::views::*;
 use crate::ui::theme::*;
+use crate::ui::views::*;
+use crate::{AppModel, Category, Msg, Selection};
 use ddclient::{Container, Image, Network, Volume};
 use gtk::prelude::*;
 use relm4::ComponentSender;
 use std::ffi::OsStr;
-
 
 /// Install the `dd` CLI and show a small window with a shell picker + matching PATH instructions.
 pub fn show_cli_install(parent: &gtk::ApplicationWindow) {
@@ -53,7 +52,9 @@ pub fn show_cli_install(parent: &gtk::ApplicationWindow) {
         instr.set_label(&shell_instr(dropdown.selected(), on_path, &cmd));
         let instr2 = instr.clone();
         let cmd2 = cmd.clone();
-        dropdown.connect_selected_notify(move |d| instr2.set_label(&shell_instr(d.selected(), on_path, &cmd2)));
+        dropdown.connect_selected_notify(move |d| {
+            instr2.set_label(&shell_instr(d.selected(), on_path, &cmd2))
+        });
     }
 
     let done = gtk::Button::with_label("Done");
@@ -75,13 +76,18 @@ pub fn show_cli_install(parent: &gtk::ApplicationWindow) {
     v.append(&instr);
     v.append(&btnrow);
 
-    let win = gtk::Window::builder().title("Install dd CLI").modal(true).resizable(false).default_width(460).child(&v).build();
+    let win = gtk::Window::builder()
+        .title("Install dd CLI")
+        .modal(true)
+        .resizable(false)
+        .default_width(460)
+        .child(&v)
+        .build();
     win.set_transient_for(Some(parent));
     let w = win.clone();
     done.connect_clicked(move |_| w.close());
     win.present();
 }
-
 
 pub(crate) fn detect_shell_index() -> u32 {
     let sh = std::env::var("SHELL").unwrap_or_default();
@@ -93,7 +99,6 @@ pub(crate) fn detect_shell_index() -> u32 {
         0 // zsh (macOS default) or unknown
     }
 }
-
 
 pub(crate) fn shell_instr(idx: u32, on_path: bool, cmd: &str) -> String {
     if on_path {
@@ -107,13 +112,14 @@ pub(crate) fn shell_instr(idx: u32, on_path: bool, cmd: &str) -> String {
     .to_string()
 }
 
-
 /// Confirm a full reset (remove all containers/volumes/networks). Frameless dialog, pill buttons.
 pub fn confirm_reset(parent: &gtk::ApplicationWindow, sender: &ComponentSender<AppModel>) {
     let title = gtk::Label::new(Some("Reset dd?"));
     title.set_xalign(0.0);
     title.add_css_class("dd-onboard-head");
-    let detail = gtk::Label::new(Some("This removes all containers, volumes and networks. Your images are kept."));
+    let detail = gtk::Label::new(Some(
+        "This removes all containers, volumes and networks. Your images are kept.",
+    ));
     detail.set_xalign(0.0);
     detail.set_wrap(true);
     detail.set_max_width_chars(36);
@@ -140,7 +146,12 @@ pub fn confirm_reset(parent: &gtk::ApplicationWindow, sender: &ComponentSender<A
     v.append(&detail);
     v.append(&btns);
 
-    let win = gtk::Window::builder().modal(true).resizable(false).decorated(false).child(&v).build();
+    let win = gtk::Window::builder()
+        .modal(true)
+        .resizable(false)
+        .decorated(false)
+        .child(&v)
+        .build();
     win.set_transient_for(Some(parent));
     win.add_css_class("dd-modal");
     let w1 = win.clone();
@@ -154,10 +165,13 @@ pub fn confirm_reset(parent: &gtk::ApplicationWindow, sender: &ComponentSender<A
     win.present();
 }
 
-
 /// On first launch, offer to point the `docker` CLI at our daemon (the `dd` context). A small,
 /// frameless dialog using the app's own pill buttons.
-pub fn prompt_switch_context(parent: &gtk::ApplicationWindow, sender: &ComponentSender<AppModel>, current: &str) {
+pub fn prompt_switch_context(
+    parent: &gtk::ApplicationWindow,
+    sender: &ComponentSender<AppModel>,
+    current: &str,
+) {
     let title = gtk::Label::new(Some("Use dd as your Docker context?"));
     title.set_xalign(0.0);
     title.add_css_class("title-3");
@@ -188,7 +202,12 @@ pub fn prompt_switch_context(parent: &gtk::ApplicationWindow, sender: &Component
     v.append(&detail);
     v.append(&btns);
 
-    let win = gtk::Window::builder().modal(true).resizable(false).decorated(false).child(&v).build();
+    let win = gtk::Window::builder()
+        .modal(true)
+        .resizable(false)
+        .decorated(false)
+        .child(&v)
+        .build();
     win.set_transient_for(Some(parent));
     win.add_css_class("dd-modal");
 
@@ -202,7 +221,6 @@ pub fn prompt_switch_context(parent: &gtk::ApplicationWindow, sender: &Component
     });
     win.present();
 }
-
 
 /// A small modal name-entry dialog (used to create networks/volumes). On Create it sends `make(name)`.
 pub fn prompt_name(
@@ -242,7 +260,12 @@ pub fn prompt_name(
     v.append(&entry);
     v.append(&btns);
 
-    let win = gtk::Window::builder().modal(true).resizable(false).decorated(false).child(&v).build();
+    let win = gtk::Window::builder()
+        .modal(true)
+        .resizable(false)
+        .decorated(false)
+        .child(&v)
+        .build();
     win.set_transient_for(Some(parent));
     win.add_css_class("dd-modal");
 

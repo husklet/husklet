@@ -1,13 +1,17 @@
 //! IMAGE commands — `images` (list), `tag`, `rmi`, `history`, and `image inspect`. One verb per
 //! scenario; images created by a test are `${C}img`-prefixed and removed in-recipe. NOTE: `docker pull`
 //! of a fresh image is NOT covered here — this host's Little Snitch blocks the engine's outbound
-//! registry TCP (task #310 caveat), so a live pull would hang; "image already present" is asserted via
+//! registry TCP (caveat), so a live pull would hang; "image already present" is asserted via
 //! `image inspect`/`images` instead. alpine base; ArmLinux. Verified GREEN on the Real docker oracle.
 //! Owner: docker-cli agent. Edit ONLY this folder.
 
 use crate::scenario::{scen, sgroup, ScenGroup, Target};
 
-fn s(id: &'static str) -> crate::scenario::Scenario { scen(id, "alpine:latest").only(&[Target::ArmLinux]).timeout(30) }
+fn s(id: &'static str) -> crate::scenario::Scenario {
+    scen(id, "alpine:latest")
+        .only(&[Target::ArmLinux])
+        .timeout(30)
+}
 
 pub fn group() -> ScenGroup {
     sgroup("imagescmd", vec![

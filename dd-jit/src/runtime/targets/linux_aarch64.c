@@ -39,7 +39,7 @@
 #include "../translate/aarch64/abi.h"       // the cpu interface os/linux/ is written against
 #include "../translate/aarch64/fill_stat.c" // the per-arch struct-stat layout os/linux/ fills
 // Byte size of the guest `struct stat` fill_stat.c writes -- the shared stat syscalls (os/linux/syscall/
-// fs.c cases 79/80) validate exactly this many guest bytes before filling the buffer (#395 EFAULT guard).
+// fs.c cases 79/80) validate exactly this many guest bytes before filling the buffer (EFAULT guard).
 #define GUEST_LINUX_STAT_BYTES 128
 
 // container/ns config state + parsers (early globals)
@@ -48,7 +48,7 @@
 #include "../engine/cache.c"
 // host ARM64 assembler (emit32 + e_* encoders) -- the lowest layer
 #include "../host/arm64/asm.c"
-// #339 persistent cross-process translated-code cache (recorded emitters used by stubs.c/translate.c;
+// persistent cross-process translated-code cache (recorded emitters used by stubs.c/translate.c;
 // load/save/relocate). MUST precede stubs.c + translate.c (they call the recorded emitters).
 #include "../translate/aarch64/pcache.c"
 // engine block-ABI stubs: prologue/spill + IBTC/IC + exit/chain trampolines (built on the assembler above)
@@ -87,9 +87,10 @@ static void diag_hx(char *b, uint64_t v) {
         b[i] = d < 10 ? '0' + d : 'a' + d - 10;
     }
 }
+
 // async-signal-safe (write only)
 static void diag_crash(int s, siginfo_t *si, void *uc) {
-    // BUG#221: mirror the normal-path nonpie_guard so CRASHDBG does not false-report faults that path
+    // mirror the normal-path nonpie_guard so CRASHDBG does not false-report faults that path
     // resolves. A non-PIE ET_EXEC's absolute DATA ref into its low link range is served at +bias
     // (nonpie_fixup); a fault a guest handler owns (e.g. gcc's SIGSEGV handler) is delivered to the guest
     // (deliver_guest_fault). Only a genuinely unresolved fault falls through to the [CRASH] report below --
@@ -112,19 +113,22 @@ static void diag_crash(int s, siginfo_t *si, void *uc) {
     if (write(2, b, 84) < 0) {}
     _exit(139);
 }
+
 static void diag_hx8(char *b, uint32_t v) {
     for (int i = 0; i < 8; i++) {
         int d = (v >> ((7 - i) * 4)) & 0xf;
         b[i] = d < 10 ? '0' + d : 'a' + d - 10;
     }
 }
+
 static mach_port_t g_exc_port;
-// BUG#221: MiG lays exception messages out with 4-byte packing (see <mach/exc.h> `#pragma pack(push, 4)`),
+// MiG lays exception messages out with 4-byte packing (see <mach/exc.h> `#pragma pack(push, 4)`),
 // so the 64-bit `code[]` array immediately follows `codeCnt` at a 4-byte-aligned offset with NO padding.
 // Without the pack, the compiler 8-byte-aligns `int64_t code[]` and inserts 4 bytes of padding, so `code[0]`
 // / `code[1]` read 4 bytes past the kernel's data -- the fault address (code[1]) then comes back as 0 while
 // the real address bleeds into code[0]. Match MiG's packing so the fault address is read correctly.
 #pragma pack(push, 4)
+
 typedef struct {
     mach_msg_header_t Head;
     mach_msg_body_t body;
@@ -135,7 +139,9 @@ typedef struct {
     int64_t code[2];
     char pad[64];
 } exc_msg_t;
+
 #pragma pack(pop)
+
 // Reply for a Mach exception (EXCEPTION_DEFAULT + MACH_EXCEPTION_CODES). RetCode=KERN_SUCCESS resumes the
 // (possibly state-modified) thread; the reply msgh_id is the request id + 100 (MiG convention).
 typedef struct {
@@ -143,7 +149,8 @@ typedef struct {
     NDR_record_t NDR;
     kern_return_t RetCode;
 } exc_reply_t;
-// BUG#221: the CRASHDBG Mach port must resolve the SAME faults nonpie_guard resolves on the normal run
+
+// the CRASHDBG Mach port must resolve the SAME faults nonpie_guard resolves on the normal run
 // path, instead of false-reporting them as crashes. nonpie_guard does nonpie_fixup() then, if that
 // declines, deliver_guest_fault() (a fault a guest handler owns -- e.g. gcc registers a SIGSEGV handler);
 // only an unresolved fault is a real crash. Mirror that here: rebuild the faulting thread's ARM/NEON state
@@ -175,6 +182,7 @@ static int mach_resolve_fault(mach_port_t thread, int hostsig, uint64_t fault, a
     thread_set_state(thread, ARM_NEON_STATE64, (thread_state_t)&mc.__ns, ARM_NEON_STATE64_COUNT);
     return 1;
 }
+
 // catches faults on ALL threads (incl MAP_JIT workers)
 static void *exc_thread(void *arg) {
     (void)arg;
@@ -186,7 +194,7 @@ static void *exc_thread(void *arg) {
         arm_thread_state64_t st;
         mach_msg_type_number_t cnt = ARM_THREAD_STATE64_COUNT;
         kern_return_t gs = thread_get_state(msg.thread.name, ARM_THREAD_STATE64, (thread_state_t)&st, &cnt);
-        // BUG#221: resolve a fault the normal path would serve (non-PIE absolute data, or a guest-handled
+        // resolve a fault the normal path would serve (non-PIE absolute data, or a guest-handled
         // fault) and resume the thread via a KERN_SUCCESS reply, matching nonpie_guard. EXC_BAD_ACCESS maps
         // to a guest SIGSEGV, EXC_BAD_INSTRUCTION to SIGILL; only an unresolved fault is a genuine crash.
         int hostsig = (msg.exception == EXC_BAD_INSTRUCTION) ? SIGILL : SIGSEGV;
@@ -238,6 +246,7 @@ static void *exc_thread(void *arg) {
     }
     return NULL;
 }
+
 static void install_mach_exc(void) {
     if (mach_port_allocate(mach_task_self(), MACH_PORT_RIGHT_RECEIVE, &g_exc_port) != KERN_SUCCESS) return;
     mach_port_insert_right(mach_task_self(), g_exc_port, g_exc_port, MACH_MSG_TYPE_MAKE_SEND);
@@ -246,29 +255,32 @@ static void install_mach_exc(void) {
     pthread_t t;
     pthread_create(&t, NULL, exc_thread, NULL);
 }
+
 // DD_FAULTCOUNT=1: measurement-only wrapper around nonpie_guard that tallies served low-address faults
 // (the guest_base bias-fold's whole point is to drive this to ~0). Per-process; printed at dd_run exit.
 static volatile uint64_t g_nonpie_faults;
 static volatile uint64_t g_fhist[16];
-static const char *g_fhname[16] = {"uoff", "unscaled", "wb",    "regoff", "ldp",   "ldp_wb", "excl", "lse",
+static const char *g_fhname[16] = {"uoff", "unscaled", "wb",    "regoff", "ldp",   "ldp_wb", "excl",  "lse",
                                    "cas",  "advmult",  "advsi", "dczva",  "ldlit", "ldar",   "other", "x"};
+
 static int fault_class(uint32_t in) {
-    if ((in & 0xFFFFFFE0u) == 0xD50B7420u) return 11;                            // dc zva
-    if ((in & 0x3B000000u) == 0x18000000u) return 12;                           // ldr literal
-    if ((in & 0x3A000000u) == 0x28000000u) return ((in >> 23) & 1) ? 5 : 4;     // ldp (wb if op2 odd)
-    if ((in & 0x3F200C00u) == 0x38200000u) return 7;                            // lse atomic
-    if ((in & 0x3FA07C00u) == 0x08A07C00u) return 8;                            // cas
-    if ((in & 0x3F200000u) == 0x08000000u) return (in & 0x00800000u) ? 13 : 6;  // ordered(ldar)/exclusive
+    if ((in & 0xFFFFFFE0u) == 0xD50B7420u) return 11;                                     // dc zva
+    if ((in & 0x3B000000u) == 0x18000000u) return 12;                                     // ldr literal
+    if ((in & 0x3A000000u) == 0x28000000u) return ((in >> 23) & 1) ? 5 : 4;               // ldp (wb if op2 odd)
+    if ((in & 0x3F200C00u) == 0x38200000u) return 7;                                      // lse atomic
+    if ((in & 0x3FA07C00u) == 0x08A07C00u) return 8;                                      // cas
+    if ((in & 0x3F200000u) == 0x08000000u) return (in & 0x00800000u) ? 13 : 6;            // ordered(ldar)/exclusive
     if ((in & 0xBFBF0000u) == 0x0C000000u || (in & 0xBFA00000u) == 0x0C800000u) return 9; // advsimd mult
-    if ((in & 0xBF000000u) == 0x0D000000u) return 10;                           // advsimd single
-    if ((in & 0x3B000000u) == 0x39000000u) return 0;                            // uoff
-    if ((in & 0x3B200C00u) == 0x38200800u) return 3;                            // regoff
+    if ((in & 0xBF000000u) == 0x0D000000u) return 10;                                     // advsimd single
+    if ((in & 0x3B000000u) == 0x39000000u) return 0;                                      // uoff
+    if ((in & 0x3B200C00u) == 0x38200800u) return 3;                                      // regoff
     if (((in >> 27) & 7) == 7) {
         int m = (in >> 10) & 3;
         return (!((in >> 24) & 1) && (m == 1 || m == 3)) ? 2 : 1; // wb (pre/post) else unscaled/unpriv
     }
     return 14;
 }
+
 static void nonpie_guard_count(int sig, siginfo_t *si, void *uc) {
     uint64_t va = (uint64_t)si->si_addr;
     if (g_nonpie_lo && va >= g_nonpie_lo && va < g_nonpie_hi) {
@@ -287,7 +299,8 @@ static void nonpie_guard_count(int sig, siginfo_t *si, void *uc) {
     }
     nonpie_guard(sig, si, uc);
 }
-// W3D/#369 fork-server seam (mirrors targets/linux_x86_64.c): the original dd_run inlined (1)
+
+// fork-server seam (mirrors targets/linux_x86_64.c): the original dd_run inlined (1)
 // container init, (2) engine init (signal handlers + pthread key + code-cache arena + env flags), and
 // (3) per-launch load+run. The resident ddjitd parent must pay (1)+(2) ONCE and share them COW with
 // every forked worker, so those phases are factored into container_init()/engine_global_init().
@@ -319,7 +332,7 @@ static void container_init(const char *rootfs) {
             for (char *t = strtok_r(tb, ":", &sv); t; t = strtok_r(NULL, ":", &sv))
                 add_lower(t);
         }
-        // Private-loopback netns (#273): derive g_netns from the DD_NETNS KEY (set per-container by the
+        // Private-loopback netns: derive g_netns from the DD_NETNS KEY (set per-container by the
         // daemon; a `docker exec` reuses the target container's key so the exec shares its 127.0.0.1).
         // When DD_NETNS is UNSET (a bare engine launch / the basics matrix), MINT a per-process key and
         // export it — so loopback isolation is ALWAYS on. Otherwise g_netns stayed empty, lo_on() was
@@ -329,13 +342,14 @@ static void container_init(const char *rootfs) {
         if (!getenv("DD_NONETNS") && !g_netns[0]) {
             const char *nn = getenv("DD_NETNS");
             char key[40];
-            if (nn && nn[0]) snprintf(key, sizeof key, "%.39s", nn);
-            else snprintf(key, sizeof key, "%d", (int)getpid());
+            if (nn && nn[0])
+                snprintf(key, sizeof key, "%.39s", nn);
+            else
+                snprintf(key, sizeof key, "%d", (int)getpid());
             snprintf(g_netns, sizeof g_netns, "/tmp/.ddnet-%.40s", key);
             // Export the minted key so children/exec + abstract-AF_UNIX/IPC/bridge share this
             // container's namespace (getenv("DD_NETNS")); a daemon-supplied key is already in the env.
-            if ((mkdir(g_netns, 0700) == 0 || errno == EEXIST) && !(nn && nn[0]))
-                setenv("DD_NETNS", key, 1);
+            if ((mkdir(g_netns, 0700) == 0 || errno == EEXIST) && !(nn && nn[0])) setenv("DD_NETNS", key, 1);
         }
         const char *eu = getenv("DD_UID");
         if (eu && g_uid < 0) g_uid = dd_parse_id("DD_UID", eu);
@@ -350,9 +364,9 @@ static void container_init(const char *rootfs) {
         g_rootfs_canon_len = strlen(g_rootfs_canon);
         // pinned root for the per-component resolver
         g_root_fd = open(g_rootfs_canon, O_RDONLY | O_DIRECTORY);
-        g_root_fd = engine_fd_hoist(g_root_fd); // #299: keep it off the guest's low fds (else it squats fd 3)
-        container_populate_dev(); // /dev/{fd,stdin,stdout,stderr,ptmx,pts,shm,console,...} the unpacker stripped
-        container_populate_machine_id(); // #348: /etc/machine-id agreeing with boot_id (if image ships none)
+        g_root_fd = engine_fd_hoist(g_root_fd); // keep it off the guest's low fds (else it squats fd 3)
+        container_populate_dev();        // /dev/{fd,stdin,stdout,stderr,ptmx,pts,shm,console,...} the unpacker stripped
+        container_populate_machine_id(); // /etc/machine-id agreeing with boot_id (if image ships none)
         if (g_uid < 0) g_uid = 0;
         // container default: run as root (0); unless DD_UID/--uid set
         if (g_gid < 0) g_gid = 0;
@@ -371,12 +385,12 @@ static void container_init(const char *rootfs) {
         const char *icwd = getenv("DD_CWD");
         if (icwd && icwd[0]) confine(icwd, g_cwd, sizeof g_cwd);
     }
-    // #422: derive the run user's supplementary group set from the image rootfs (runc additionalGids), after
+    // derive the run user's supplementary group set from the image rootfs (runc additionalGids), after
     // g_uid/g_gid + the overlay lowers are resolved, so getgroups(2) and /proc/self/status Groups: report it.
     if (g_rootfs) container_parse_groups();
 }
 
-// W3D/#369: idempotent engine init (fault handlers + pthread key + code-cache arena + env-flag reads).
+// idempotent engine init (fault handlers + pthread key + code-cache arena + env-flag reads).
 // Returns 0 on success, nonzero exit code on failure. First call wins; later calls are no-ops
 // (g_engine_inited), so the resident fork-server parent pays this once and the standalone path runs it
 // exactly as before.
@@ -402,7 +416,7 @@ static int engine_global_init(void) {
         struct sigaction sa;
         memset(&sa, 0, sizeof sa);
         sa.sa_sigaction = getenv("DD_FAULTCOUNT") ? nonpie_guard_count : nonpie_guard;
-        sa.sa_flags = SA_SIGINFO | SA_ONSTACK; // #392: run on the per-thread altstack so a guest stack
+        sa.sa_flags = SA_SIGINFO | SA_ONSTACK; // run on the per-thread altstack so a guest stack
                                                // overflow's guard fault is deliverable (host SP == guest SP)
         sigaction(SIGSEGV, &sa, NULL);
         sigaction(SIGBUS, &sa, NULL);
@@ -482,12 +496,12 @@ static int engine_global_init(void) {
     // A1: steal host x16/x17 for the engine (default on). NOSTEAL1617=1 -> legacy 3-reg stolen set
     // (guest x16/x17 in host regs, per-branch red-zone stash/restore). Read once before any translation.
     if (getenv("NOSTEAL1617")) g_steal1617 = 0;
-    // IBSLIM (lever #4): NOIBSLIM=1 reverts the dispatch/call-path slimming (legacy emit_set_x30 +
+    // IBSLIM: NOIBSLIM=1 reverts the dispatch/call-path slimming (legacy emit_set_x30 +
     // the per-site IC at recognized interpreter-dispatch `br`s) for A/B. CTXDISP=1 opts in to the
     // experimental history-keyed context dispatch at recognized dispatch sites (measurement gate).
     if (getenv("NOIBSLIM")) g_noibslim = 1;
     if (getenv("CTXDISP")) g_ctxdisp = 1;
-    // IRQSLIM (lever #4): fixed 2-insn #292 poll header + poll-free forward-chain entry at body+8
+    // IRQSLIM: fixed 2-insn poll header + poll-free forward-chain entry at body+8
     // (every cycle still polls via its backward/indirect edge -- see cache.c). Requires the steal
     // layout and an emitted poll. NOIRQSLIM=1 -> legacy poll-on-every-entry for A/B.
     if (g_steal1617 && !getenv("NOIRQSLIM") && !getenv("NOIRQCHECK")) g_fwdskip = 8;
@@ -505,20 +519,20 @@ static int engine_global_init(void) {
     // into. (g_pcache itself is read at the top of dd_run -- per-invocation, mirroring linux_x86_64.c,
     // so a fork-server runner honors the CLIENT's DDJIT_PCACHE; the check is mode-only and independent.)
     pcache_poison_check();
-    // #238: ptrace tracer/tracee coordination arena -- mmap the shared region ONCE here, BEFORE any guest
+    // ptrace tracer/tracee coordination arena -- mmap the shared region ONCE here, BEFORE any guest
     // fork, so every descendant guest process inherits the same physical pages. Inert until a guest ptraces.
     ptrace_arena_init();
     g_engine_inited = 1;
     return 0;
 }
 
-// W3D/#369: load main program + (optional) interp, recording the load base/entry/at_base into *lm/*li.
+// load main program + (optional) interp, recording the load base/entry/at_base into *lm/*li.
 // Used both by the standalone path and by the fork-server's parent preload (so the COW-inherited image
 // is byte-identical and the warm worker re-runs from the same entry at the same base). The gb/pb/ib
 // buffers are static because g_exe_path = prog points into gb and must outlive this call.
 static const char *load_program(const char *prog, struct loaded *lm, struct loaded *li, uint64_t *jump,
                                 uint64_t *at_base, int *have_interp) {
-    // #339 cache id keys the INVOKED name (argv[0] pre-resolution), exactly as before this refactor.
+    // cache id keys the INVOKED name (argv[0] pre-resolution), exactly as before this refactor.
     const char *argv0 = prog;
     static char gb[1024];
     prog = find_in_path(prog, gb, sizeof gb); // bare "sh" (docker) -> "/bin/sh" via the container PATH
@@ -527,10 +541,13 @@ static const char *load_program(const char *prog, struct loaded *lm, struct load
     const char *prog_host =
         // resolve through the overlay (upper, then lowers) + follow the entry symlink (/bin/sh->busybox)
         xresolve_overlay(prog, pb, sizeof pb);
-    // #339: when the persistent cache is on, map the image + interp at FIXED VAs so the translated arena
+    // when the persistent cache is on, map the image + interp at FIXED VAs so the translated arena
     // (block-map keys + baked guest addresses) is byte-identical across runs -> reusable from the cache.
     if (g_pcache) g_force_base = PC_IMG_BASE;
-    { const char *e = getenv("DDDBG_IMGBASE"); if (e) g_force_base = strtoull(e, 0, 16); } // debug: pin img base (trace alignment)
+    {
+        const char *e = getenv("DDDBG_IMGBASE");
+        if (e) g_force_base = strtoull(e, 0, 16);
+    } // debug: pin img base (trace alignment)
     load_elf(prog_host, lm);
 
     // Dynamic: load the PT_INTERP (ld.so) and enter THERE; it loads libs + relocates.
@@ -544,18 +561,21 @@ static const char *load_program(const char *prog, struct loaded *lm, struct load
         // follow+confine ld.so symlink (through the overlay)
         interp_host = xresolve_overlay(interp, ib, sizeof ib);
         if (g_pcache) g_force_base = PC_INTERP_BASE;
-        { const char *e = getenv("DDDBG_INTERPBASE"); if (e) g_force_base = strtoull(e, 0, 16); } // debug: pin interp base
+        {
+            const char *e = getenv("DDDBG_INTERPBASE");
+            if (e) g_force_base = strtoull(e, 0, 16);
+        } // debug: pin interp base
         load_elf(interp_host, li);
         *jump = li->entry;
         *at_base = li->base;
         *have_interp = 1;
     }
-    // #339: key the cache by the identity of the guest binary + interp (+ the invoked name).
+    // key the cache by the identity of the guest binary + interp (+ the invoked name).
     if (g_pcache) g_pc_binid = pcache_make_id(prog_host, interp_host, argv0);
     return prog;
 }
 
-// W3D/#369: fresh per-launch guest run from a loaded image. Allocates a private heap + a guest stack +
+// fresh per-launch guest run from a loaded image. Allocates a private heap + a guest stack +
 // cpu and runs from `jump`. Shared by dd_run (standalone/cold) and the fork-server's warm worker (which
 // restores a pristine COW image first, then calls this against the parent-preloaded base). Body is the
 // original dd_run tail verbatim, so standalone behavior is byte-identical.
@@ -572,7 +592,7 @@ static int run_loaded(int argc, char *const argv[], struct loaded *lm, uint64_t 
     c.pc = jump;
 
     proc_reg_publish(g_exe_path, argc, argv); // publish this process into the /proc table
-    if (g_untrusted) sentry_init(); // fork the host-authority sentry + (optionally) confine the worker
+    if (g_untrusted) sentry_init();           // fork the host-authority sentry + (optionally) confine the worker
     run_guest(&c);
     if (g_untrusted) sentry_shutdown(); // signal quit + waitpid (reap, no orphan)
     return c.exit_code;
@@ -580,10 +600,10 @@ static int run_loaded(int argc, char *const argv[], struct loaded *lm, uint64_t 
 
 int dd_run(const char *rootfs, int argc, char *const argv[]) {
     if (argc < 1 || !argv || !argv[0]) return 2;
-    // #339 persistent cross-process translated-code cache. Landed OPT-IN (DDJIT_PCACHE=1, same gating as
+    // persistent cross-process translated-code cache. Landed OPT-IN (DDJIT_PCACHE=1, same gating as
     // the x86 opt8 pcache) so the default correctness matrix stays byte-identical to the baseline; the
     // one-line flip to default-on (`getenv("DDJIT_NOPCACHE") == NULL`) is gated on a green full pcache-on
-    // matrix soak (see #339 plan). DDJIT_NOPCACHE=1 is the kill-switch and always wins. Read here (per
+    // matrix soak (see plan). DDJIT_NOPCACHE=1 is the kill-switch and always wins. Read here (per
     // dd_run, like linux_x86_64.c) so a fork-server cold runner honors the CLIENT's env.
     g_pcache = getenv("DDJIT_PCACHE") != NULL && getenv("DDJIT_NOPCACHE") == NULL;
     g_coldprof = getenv("COLDPROF") != NULL;
@@ -616,8 +636,8 @@ int dd_run(const char *rootfs, int argc, char *const argv[]) {
     sb_argv[sb_argc] = NULL;
     const char *sb_finalhost;
     char sb_fhb[4200];
-    int sb_new = resolve_shebang_chain(sb_argv, sb_argc, 256, prog_host, sb_store, sb_fhb, sizeof sb_fhb,
-                                       &sb_finalhost);
+    int sb_new =
+        resolve_shebang_chain(sb_argv, sb_argc, 256, prog_host, sb_store, sb_fhb, sizeof sb_fhb, &sb_finalhost);
     if (sb_new < 0) {
         fprintf(stderr, "dd: too many nested #! interpreters (ELOOP): %s\n", prog);
         return 40; // ELOOP
@@ -630,7 +650,7 @@ int dd_run(const char *rootfs, int argc, char *const argv[]) {
     }
     // /proc/self/exe must be the ABSOLUTE, CANONICAL guest path of the loaded image: a RELATIVE guest
     // invocation ("./x" from a harness) or an entry symlink otherwise leaks straight into the link value,
-    // and glibc static-pie ASSERTS on it at startup ("dl-origin.c: linkval[0]=='/'", #370). `bootexe` is
+    // and glibc static-pie ASSERTS on it at startup ("dl-origin.c: linkval[0]=='/'"). `bootexe` is
     // static because g_exe_path must outlive this frame across run_guest.
     static char bootexe[4200];
     exe_canon(g_exe_path, bootexe, sizeof bootexe);
@@ -639,21 +659,20 @@ int dd_run(const char *rootfs, int argc, char *const argv[]) {
     uint64_t jump, at_base;
     int have_interp;
     load_program(argv[0], &lm, &li, &jump, &at_base, &have_interp); // (sets g_pc_binid + fixed bases when g_pcache)
-    // #339: try to restore the arena from the persistent cache.
+    // try to restore the arena from the persistent cache.
     if (g_pcache) {
         g_pc_entry = jump;
         int hit = pcache_load(jump); // graceful MISS on any stale/corrupt/truncated cache -> translate fresh
         if (g_coldprof) fprintf(stderr, "[pcache] %s reloc=%d\n", hit ? "HIT" : "MISS", g_nreloc);
     }
     int ec = run_loaded(argc, argv, &lm, jump, at_base);
-    pcache_save(); // #339: persist on a cold miss (guest exit via case 93 returns here; case 94 saves + _exit)
+    pcache_save(); // persist on a cold miss (guest exit via case 93 returns here; case 94 saves + _exit)
     if (getenv("DD_FAULTCOUNT"))
-        fprintf(stderr, "[faultcount] pid=%d nonpie_served=%llu\n", getpid(),
-                (unsigned long long)g_nonpie_faults);
+        fprintf(stderr, "[faultcount] pid=%d nonpie_served=%llu\n", getpid(), (unsigned long long)g_nonpie_faults);
     return ec;
 }
 
-// W3D/#369: resident ddjitd fork-server (server/client/worker), SHARED with linux_x86_64.c through the
+// resident ddjitd fork-server (server/client/worker), SHARED with linux_x86_64.c through the
 // container_init/engine_global_init/load_program/run_loaded/dd_run seam above. aarch64 has no
 // g_loadbase and its container model never chdir()s the engine into the rootfs (those knobs stay
 // default no-ops), but its load_elf applies per-segment W^X to the guest image (.text R+X, .rodata R;
@@ -663,6 +682,7 @@ int dd_run(const char *rootfs, int argc, char *const argv[]) {
 static void fsrv_restore_prep_a64(const struct loaded *L, uint64_t span) {
     mprotect((void *)L->base, span, PROT_READ | PROT_WRITE);
 }
+
 static void fsrv_restore_done_a64(const struct loaded *L, uint64_t span) {
     (void)span;
     const uint8_t *ph = (const uint8_t *)L->phdr;
@@ -684,6 +704,7 @@ static void fsrv_restore_done_a64(const struct loaded *L, uint64_t span) {
         if (e > s) mprotect((void *)s, e - s, prot);
     }
 }
+
 #define FSRV_RESTORE_PREP(L, span) fsrv_restore_prep_a64((L), (span))
 #define FSRV_RESTORE_DONE(L, span) fsrv_restore_done_a64((L), (span))
 #include "../os/linux/forkserver.c"
@@ -692,7 +713,7 @@ static void fsrv_restore_done_a64(const struct loaded *L, uint64_t span) {
 int main(int argc, char **argv) {
     int ai = 1;
     const char *rootfs = NULL;
-    // W3D/#369 fork-server dispatch (gated; standalone path untouched when neither flag is present):
+    // fork-server dispatch (gated; standalone path untouched when neither flag is present):
     //   --server SOCK [--rootfs DIR] [--prewarm PROG] : run resident ddjitd, listen on SOCK
     //   --client SOCK [--rootfs DIR] PROG [args...]   : forward a launch request to a ddjitd
     for (int i = 1; i < argc; i++) {

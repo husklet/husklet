@@ -1,4 +1,4 @@
-//! scratchx — #231 scratch / distroless image loader-exec guard. Owner: scratch-exec agent. Edit ONLY
+//! scratchx — scratch / distroless image loader-exec guard. Owner: scratch-exec agent. Edit ONLY
 //! this file. Keep it compiling (`cargo build -p dd-tests`).
 //!
 //! A FROM-scratch / distroless / Go-microservice image is just a single static binary in an otherwise
@@ -16,10 +16,11 @@
 use crate::{group, src, Engine, Group};
 
 pub fn groups() -> Vec<Group> {
-    vec![group("scratchx", vec![
-        src("scratch-static-exec", "scratch_exec.c")
+    vec![group(
+        "scratchx",
+        vec![src("scratch-static-exec", "scratch_exec.c")
             .scratch()
             .only(&[Engine::LinuxAarch64, Engine::LinuxX86_64])
-            .out("scratch-exec OK\n"),
-    ])]
+            .out("scratch-exec OK\n")],
+    )]
 }

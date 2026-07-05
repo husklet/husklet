@@ -170,11 +170,11 @@ pub fn group() -> ScenGroup {
 
         // ---- apt-get update: the metadata refresh EVERY apt workflow begins with. Exercises outbound
         // network (deb.debian.org / archive.ubuntu.com), the privilege-drop the apt http/https method
-        // does (GAPS #164 "cannot switch group"), and the overlay mkdir for /var/lib/apt/lists (GAPS
-        // #170 mkdir-EPERM). Marker: the fetched Release/InRelease lists actually land on disk. `.long()`
+        // does (GAPS "cannot switch group"), and the overlay mkdir for /var/lib/apt/lists (GAPS
+        // mkdir-EPERM). Marker: the fetched Release/InRelease lists actually land on disk. `.long`
         // (network + not cache-only). Regression-catch for "apt-get update doesn't work".
         // arm: FIXED (dev-node stat/access + xattr errno). amd: FIXED — the gpgv `divq %r14` R14=0 SIGFPE
-        // during RSA verify (#232/#331) is resolved; apt update + gpgv verify complete byte-clean on dd amd.
+        // during RSA verify  is resolved; apt update + gpgv verify complete byte-clean on dd amd.
         scen("distros/debian-apt-update", "debian:bookworm-slim")
             .exec("apt-get update >/dev/null 2>&1; ls /var/lib/apt/lists/ 2>/dev/null | grep -q Release && echo APT_UPDATE_OK")
             .has("APT_UPDATE_OK").long(),

@@ -15,6 +15,7 @@ static uint64_t repstr_rd(uint64_t p, int w) {
     default: return *(uint64_t *)p;
     }
 }
+
 // width-w (a-b) flags -> ARM NZCV, in the engine's borrow convention (stored C = NOT x86 CF),
 // byte-identical to what do_alu()/SUBS produces for a normal cmp of the same width.
 static uint64_t repstr_nzcv(uint64_t a, uint64_t b, int w) {
@@ -29,6 +30,7 @@ static uint64_t repstr_nzcv(uint64_t a, uint64_t b, int w) {
     uint64_t V = (((ua ^ ub) & (ua ^ r)) >> (bits - 1)) & 1;
     return (N << 31) | (Z << 30) | (C << 29) | (V << 28);
 }
+
 static void do_repstr(struct cpu *c) {
     uint64_t d = c->divop;
     int w = (int)(d & 0xff);
@@ -40,28 +42,37 @@ static void do_repstr(struct cpu *c) {
     // `mov edi,<flagstr>; rep cmpsb`). This helper dereferences rsi/rdi DIRECTLY from C (memcmp/memchr/typed
     // loads), so a low link address must be rebased to the real high mapping first -- the single-access fault
     // path nonpie_fixup cannot serve a bulk memcmp. rep movs/stos already do this (repstr_g2h); cmps/scas did
-    // not -> the low deref SIGSEGV'd (node:20 x86 `node --version`, #424). Bias ONLY the dereferenced pointers;
+    // not -> the low deref SIGSEGV'd (node:20 x86 `node --version`). Bias ONLY the dereferenced pointers;
     // the RSI/RDI write-back below advances the GUEST (unbiased) values. Inert for PIE/static-PIE (g_nonpie_lo
     // == 0 makes repstr_g2h the identity), so no behavior change for the common case.
-    uint64_t gsi = c->r[RSI], gdi = c->r[RDI];       // guest (unbiased) pointers for the write-back
+    uint64_t gsi = c->r[RSI], gdi = c->r[RDI];             // guest (unbiased) pointers for the write-back
     uint64_t rsi = repstr_g2h(gsi), rdi = repstr_g2h(gdi); // host pointers for the dereferences
-    int64_t step = df ? -(int64_t)w : (int64_t)w; // DF=1 (std) scans high->low, DF=0 low->high
+    int64_t step = df ? -(int64_t)w : (int64_t)w;          // DF=1 (std) scans high->low, DF=0 low->high
     uint64_t wmask = (w == 8) ? ~0ull : ((1ull << (8 * w)) - 1);
-    uint64_t acc = c->r[RAX] & wmask;     // scas accumulator (AL/AX/EAX/RAX)
-    int stop_on_equal = isrepne;          // REPNE stops at first equal; REPE stops at first not-equal
+    uint64_t acc = c->r[RAX] & wmask; // scas accumulator (AL/AX/EAX/RAX)
+    int stop_on_equal = isrepne;      // REPNE stops at first equal; REPE stops at first not-equal
     uint64_t k = 0, av = 0, bv = 0;
-    if (!df && !norepcmp() && isrep && w == 1) {  // ---- fast host scan (the lever; forward only) ----
-        if (!isscas) {                     // rep cmps byte  -> memcmp-style first-difference scan
+    if (!df && !norepcmp() && isrep && w == 1) { // ---- fast host scan (the lever; forward only) ----
+        if (!isscas) {                           // rep cmps byte  -> memcmp-style first-difference scan
             const uint8_t *pa = (const uint8_t *)rsi, *pb = (const uint8_t *)rdi;
-            if (!stop_on_equal) {          // REPE: stop at first diff -> memcmp tests equality fast,
-                if (memcmp(pa, pb, n) == 0) k = n; // then a bounded scan locates the mismatch byte.
-                else { size_t i = 0; while (pa[i] == pb[i]) i++; k = i + 1; }
-            } else {                       // REPNE: stop at first equal (rare)
-                size_t i = 0; while (i < n && pa[i] != pb[i]) i++;
+            if (!stop_on_equal) { // REPE: stop at first diff -> memcmp tests equality fast,
+                if (memcmp(pa, pb, n) == 0)
+                    k = n; // then a bounded scan locates the mismatch byte.
+                else {
+                    size_t i = 0;
+                    while (pa[i] == pb[i])
+                        i++;
+                    k = i + 1;
+                }
+            } else { // REPNE: stop at first equal (rare)
+                size_t i = 0;
+                while (i < n && pa[i] != pb[i])
+                    i++;
                 k = (i < n) ? i + 1 : n;
             }
-            av = pa[k - 1]; bv = pb[k - 1];
-        } else {                           // scas byte: REPNE -> memchr (strlen/memchr), REPE -> run-scan
+            av = pa[k - 1];
+            bv = pb[k - 1];
+        } else { // scas byte: REPNE -> memchr (strlen/memchr), REPE -> run-scan
             const uint8_t *pb = (const uint8_t *)rdi;
             uint8_t cc = (uint8_t)acc;
             if (stop_on_equal) {
@@ -69,31 +80,52 @@ static void do_repstr(struct cpu *c) {
                 k = hit ? (uint64_t)(hit - pb) + 1 : n;
             } else {
                 size_t i = 0;
-                while (i < n && pb[i] == cc) i++;
+                while (i < n && pb[i] == cc)
+                    i++;
                 k = (i < n) ? i + 1 : n;
             }
-            av = acc; bv = pb[k - 1];
+            av = acc;
+            bv = pb[k - 1];
         }
     } else if (!df && !norepcmp() && isrep && !isscas) { // rep cmps word/dword/qword (forward)
-        if (!stop_on_equal) {              // REPE: memcmp tests equality fast, then locate the element
-            if (memcmp((void *)rsi, (void *)rdi, n * (size_t)w) == 0) k = n;
-            else { size_t i = 0; while (repstr_rd(rsi + i * w, w) == repstr_rd(rdi + i * w, w)) i++; k = i + 1; }
+        if (!stop_on_equal) {                            // REPE: memcmp tests equality fast, then locate the element
+            if (memcmp((void *)rsi, (void *)rdi, n * (size_t)w) == 0)
+                k = n;
+            else {
+                size_t i = 0;
+                while (repstr_rd(rsi + i * w, w) == repstr_rd(rdi + i * w, w))
+                    i++;
+                k = i + 1;
+            }
         } else {
-            size_t i = 0; while (i < n && repstr_rd(rsi + i * w, w) != repstr_rd(rdi + i * w, w)) i++;
+            size_t i = 0;
+            while (i < n && repstr_rd(rsi + i * w, w) != repstr_rd(rdi + i * w, w))
+                i++;
             k = (i < n) ? i + 1 : n;
         }
-        av = repstr_rd(rsi + (k - 1) * w, w); bv = repstr_rd(rdi + (k - 1) * w, w);
-    } else if (!df && !norepcmp() && isrep) {     // rep scas word/dword/qword: typed loop (forward)
+        av = repstr_rd(rsi + (k - 1) * w, w);
+        bv = repstr_rd(rdi + (k - 1) * w, w);
+    } else if (!df && !norepcmp() && isrep) { // rep scas word/dword/qword: typed loop (forward)
         size_t i = 0;
-        if (stop_on_equal) while (i < n && (repstr_rd(rdi + i * w, w) & wmask) != acc) i++;
-        else               while (i < n && (repstr_rd(rdi + i * w, w) & wmask) == acc) i++;
+        if (stop_on_equal)
+            while (i < n && (repstr_rd(rdi + i * w, w) & wmask) != acc)
+                i++;
+        else
+            while (i < n && (repstr_rd(rdi + i * w, w) & wmask) == acc)
+                i++;
         k = (i < n) ? i + 1 : n;
-        av = acc; bv = repstr_rd(rdi + (k - 1) * w, w);
-    } else {                                       // generic per-element loop: NOREPCMP oracle, bare
-        for (;;) {                                 // cmps/scas, OR any DF=1 (backward) scan
-            uint64_t off = k * (uint64_t)step;     // signed stride (forward +w, backward -w), modular
-            if (isscas) { av = acc; bv = repstr_rd(rdi + off, w); }
-            else        { av = repstr_rd(rsi + off, w); bv = repstr_rd(rdi + off, w); }
+        av = acc;
+        bv = repstr_rd(rdi + (k - 1) * w, w);
+    } else {                                   // generic per-element loop: NOREPCMP oracle, bare
+        for (;;) {                             // cmps/scas, OR any DF=1 (backward) scan
+            uint64_t off = k * (uint64_t)step; // signed stride (forward +w, backward -w), modular
+            if (isscas) {
+                av = acc;
+                bv = repstr_rd(rdi + off, w);
+            } else {
+                av = repstr_rd(rsi + off, w);
+                bv = repstr_rd(rdi + off, w);
+            }
             k++;
             int eq = ((av & wmask) == (bv & wmask));
             if (k >= n) break;
@@ -199,7 +231,8 @@ static void do_cpuid(struct cpu *c) {
         // single host memcpy. All features dd advertises (SSE4.2/AES-NI/PCLMUL/POPCNT below, BMI2/SHA/ERMS/
         // FSRM in leaf 7) are consumed by guests via their CPUID FEATURE bits, which stay set regardless of
         // this model id -- the model only steers glibc's SSE-vs-rep tuning toward the dd-fast rep path.
-        a = 0x000206c2; // Intel Westmere (fam 6, model 0x2c) -- trips glibc Fast_Unaligned_Copy (SSE memcpy -> rep movsb)
+        a = 0x000206c2; // Intel Westmere (fam 6, model 0x2c) -- trips glibc Fast_Unaligned_Copy (SSE memcpy -> rep
+                        // movsb)
         d = (1u << 0) | (1u << 4) | (1u << 8) | (1u << 11) | (1u << 13) | (1u << 15) | (1u << 19) | (1u << 23) |
             (1u << 24) | (1u << 25) | (1u << 26); // FPU,TSC,CX8,SEP,PGE,CMOV,CLFSH,MMX,FXSR,SSE,SSE2
         // SSE3, PCLMULQDQ, SSSE3, CMPXCHG16B, SSE4.1, SSE4.2, POPCNT, AES-NI -- all backed by the
@@ -208,11 +241,10 @@ static void do_cpuid(struct cpu *c) {
         // has no MOVBE, and "MOVBE && !XSAVE" is the Intel-Atom fingerprint openssl's ia32cap checks key
         // their SLOW Atom-tuned paths on (2-block ghash instead of the 4-block Karatsuba ghash, 6-block
         // movbe ctr32 instead of the 8-block loop) -- advertising it cost ~40% of real AES-GCM throughput.
-        cc = (1u << 0) | (1u << 1) | (1u << 9) | (1u << 13) | (1u << 19) | (1u << 20) | (1u << 23) |
-             (1u << 25);
+        cc = (1u << 0) | (1u << 1) | (1u << 9) | (1u << 13) | (1u << 19) | (1u << 20) | (1u << 23) | (1u << 25);
         break;
     case 7:
-        if ((uint32_t)c->r[RCX] == 0) {                     // subleaf 0
+        if ((uint32_t)c->r[RCX] == 0) {                         // subleaf 0
             b = (1u << 3) | (1u << 8) | (1u << 9) | (1u << 29); // BMI1, BMI2, ERMS, SHA
             // ERMS (EBX[9]) + FSRM (EDX[4]): "REP MOVSB/STOSB is fast" + "fast for short lengths". We
             // advertise these because dd lowers `rep movs`/`rep stos` to ONE bit-exact host memcpy/memset
@@ -289,6 +321,7 @@ static void x87_fld_m80(struct cpu *c) {
     c->fptop = (c->fptop - 1) & 7;
     c->st[c->fptop & 7] = d;
 }
+
 static void x87_fstp_m80(struct cpu *c) {
     uint8_t *ea = (uint8_t *)c->x87_ea;
     double d = c->st[c->fptop & 7];
@@ -319,6 +352,7 @@ static void x87_push_d(struct cpu *c, double v) {
     c->fptop = (c->fptop - 1) & 7;
     c->st[c->fptop & 7] = v;
 }
+
 static void x87_func(struct cpu *c) {
     double st0 = c->st[c->fptop & 7];
     double st1 = c->st[(c->fptop + 1) & 7];

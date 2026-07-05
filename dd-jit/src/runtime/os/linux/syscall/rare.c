@@ -6,6 +6,7 @@
 
 // ---- POSIX message-queue helpers (mq_timed{send,receive} timeout + blocking; backing state in dispatch.c)
 #define DD_SI_MESGQ (-3) // Linux si_code SI_MESGQ: an mq_notify(SIGEV_SIGNAL) delivery (what the guest expects)
+
 // Validate an mq_timed{send,receive} abs_timeout argument (a4/a5 depending on the op). Mirrors the kernel
 // wrapper's prepare_timeout, which runs BEFORE the fd lookup: EFAULT for an unreadable pointer, EINVAL for
 // tv_nsec outside [0,1e9) or tv_sec < 0. A NULL pointer means "block indefinitely" (*have_dl = 0). The
@@ -25,6 +26,7 @@ static int mq_check_timeout(uint64_t p, struct timespec *dl, int *have_dl) {
     *have_dl = 1;
     return 0;
 }
+
 // One blocking step for a full/empty queue with O_NONBLOCK clear. Returns 0 to retry the queue op (after a
 // short sleep, so a concurrent thread's drain/fill is observed), -ETIMEDOUT once the absolute CLOCK_REALTIME
 // deadline has passed, or -EINTR if a signal interrupted the sleep (matches the kernel's EINTR on a blocked
@@ -48,8 +50,8 @@ static int mq_block_wait(int have_dl, const struct timespec *dl) {
     return 0;
 }
 
-static int svc_rare(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3,
-                    uint64_t a4, uint64_t a5) {
+static int svc_rare(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4,
+                    uint64_t a5) {
     switch (nr) {
     // ===================== seccomp / sandboxing parity =====================
     // Docker's default seccomp profile BLOCKS these with EPERM (they need elevated caps the container
@@ -66,7 +68,7 @@ static int svc_rare(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64
         G_RET(c) = (uint64_t)(-EPERM);
         break;
     // io_uring: we don't implement it. Return ENOSYS ("absent") not EPERM ("present but blocked"),
-    // else runtime probers read EPERM as retryable and retry/hang (#271). All three entry points agree.
+    // else runtime probers read EPERM as retryable and retry/hang. All three entry points agree.
     case 425: // io_uring_setup(2)
     case 426: // io_uring_enter(2)
     case 427: // io_uring_register(2)
@@ -80,7 +82,7 @@ static int svc_rare(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64
         G_RET(c) = (op == 0 /*STRICT*/ || op == 1 /*FILTER*/) ? 0 : (uint64_t)(-EINVAL);
         break;
     }
-    // ptrace(2): real in-dd tracer/tracee coordination (bug #238). dd emulates the ptrace relationship
+    // ptrace(2): real in-dd tracer/tracee coordination. dd emulates the ptrace relationship
     // BETWEEN two guest processes (both run translated under dd) over a shared arena keyed on guest pids;
     // see os/linux/syscall/ptrace.c. svc_ptrace sets G_RET (0 / -errno) itself.
     case 117: // ptrace(request, pid, addr, data)
@@ -127,7 +129,7 @@ static int svc_rare(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64
                 if (fl >= 0) fcntl((int)fd, F_SETFD, fl | FD_CLOEXEC);
             } else {
                 if (exec_fd_is_engine((int)fd)) continue; // never close a (relocated) live engine fd
-                fd_reset_emul((int)fd); // #282: drop dd's emulation tables so a reused fd number isn't misrouted
+                fd_reset_emul((int)fd); // drop dd's emulation tables so a reused fd number isn't misrouted
                 close((int)fd);
             }
         }
@@ -481,7 +483,10 @@ static int svc_rare(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64
         break;
     // mlockall/munlockall: no host pinning, but the lock state is reported back via /proc VmLck:
     // (LTP munlockall01). MCL_CURRENT|MCL_FUTURE -> whole-process lock flag; munlockall clears all.
-    case 230: g_mlock_all = 1; G_RET(c) = 0; break;
+    case 230:
+        g_mlock_all = 1;
+        G_RET(c) = 0;
+        break;
     case 231:
         mlk_reset();
         G_RET(c) = 0;
@@ -494,7 +499,9 @@ static int svc_rare(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64
     case 237: G_RET(c) = 0; break; // set_mempolicy  -> success, no-op
     case 238:                      // migrate_pages
     case 239: G_RET(c) = 0; break; // move_pages     -> success, no-op (nothing moved)
-    case 450: G_RET(c) = 0; break; // set_mempolicy_home_node -> success, no-op (same NUMA-hint family)
+    case 450:
+        G_RET(c) = 0;
+        break; // set_mempolicy_home_node -> success, no-op (same NUMA-hint family)
     // get_mempolicy(mode*, nodemask, maxnode, addr, flags): report the default policy. If the guest
     // passed a mode pointer, write MPOL_DEFAULT(0) -- but validate it first (host_addr_mapped, thread.c)
     // so a bad pointer returns -EFAULT to the guest rather than faulting the engine.
@@ -519,7 +526,9 @@ static int svc_rare(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64
     case 112: G_RET(c) = (uint64_t)(-1); break; // clock_settime: container has no CAP_SYS_TIME -> EPERM
     case 143: G_RET(c) = setregid((gid_t)a0, (gid_t)a1) < 0 ? (uint64_t)(-errno) : 0; break; // setregid
     case 151: G_RET(c) = (uint64_t)cuid(); break; // setfsuid -> previous fsuid (container uid)
-    case 152: G_RET(c) = (uint64_t)cgid(); break; // setfsgid -> previous fsgid
+    case 152:
+        G_RET(c) = (uint64_t)cgid();
+        break; // setfsgid -> previous fsgid
     // getcpu(cpu, node, tcache): report a CPU from the guest's affinity set (LTP getcpu01 pins to one
     // CPU and expects it back), node 0 (single NUMA node). A cpu/node pointer outside the address space
     // -> EFAULT (LTP getcpu02; guest_bad_ptr also catches a PROT_NONE tst_get_bad_addr page).
@@ -576,11 +585,23 @@ static int svc_rare(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64
         //   4. a non-NULL infop that isn't writable -> EFAULT (the kernel copies the siginfo out).
         {
             int lo = (int)a3;
-            if (lo & ~(1 | 2 | 4 | 8 | 0x01000000)) { G_RET(c) = (uint64_t)(int64_t)(-EINVAL); break; }
-            if (!(lo & (2 | 4 | 8))) { G_RET(c) = (uint64_t)(int64_t)(-EINVAL); break; }
+            if (lo & ~(1 | 2 | 4 | 8 | 0x01000000)) {
+                G_RET(c) = (uint64_t)(int64_t)(-EINVAL);
+                break;
+            }
+            if (!(lo & (2 | 4 | 8))) {
+                G_RET(c) = (uint64_t)(int64_t)(-EINVAL);
+                break;
+            }
             int id0 = (int)a0;
-            if (id0 != 0 && id0 != 1 && id0 != 2 && id0 != 3) { G_RET(c) = (uint64_t)(int64_t)(-EINVAL); break; }
-            if (a2 && !host_range_mapped((uintptr_t)a2, 128)) { G_RET(c) = (uint64_t)(int64_t)(-EFAULT); break; }
+            if (id0 != 0 && id0 != 1 && id0 != 2 && id0 != 3) {
+                G_RET(c) = (uint64_t)(int64_t)(-EINVAL);
+                break;
+            }
+            if (a2 && !host_range_mapped((uintptr_t)a2, 128)) {
+                G_RET(c) = (uint64_t)(int64_t)(-EFAULT);
+                break;
+            }
         }
         // P_PIDFD (Linux idtype 3): macOS has no pidfd, so resolve the emulated pidfd back to its pid and
         // wait on P_PID. Go's os.(*Process).pidfdWait reaps a CLONE_PIDFD child exactly this way.
@@ -614,7 +635,7 @@ static int svc_rare(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64
             if (si.si_pid != 0) {
                 int code = si.si_code, status = si.si_status;
                 int gsig, gcore;
-                // #403: the child relayed a guest signal death (it _exit()d after recording its Linux signo in
+                // the child relayed a guest signal death (it _exitd after recording its Linux signo in
                 // the shared table because no faithful fatal host mapping exists). The host reports CLD_EXITED;
                 // rebuild the CLD_KILLED/CLD_DUMPED siginfo. WNOWAIT (does not reap) must NOT consume the slot.
                 if (code == CLD_EXITED && sigexit_lookup((int)si.si_pid, &gsig, &gcore, !(lopt & 0x01000000))) {
@@ -628,8 +649,7 @@ static int svc_rare(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64
                 // cores enabled. macOS rarely dumps the host child, so synthesize it the way wait4 encodes
                 // WCOREDUMP: core-dumping signal AND the guest's RLIMIT_CORE soft limit > 0. (status is now the
                 // translated Linux signo.)
-                if (code == CLD_KILLED && sig_coredumps(status) && svc_core_rlimit_cur() > 0)
-                    code = CLD_DUMPED;
+                if (code == CLD_KILLED && sig_coredumps(status) && svc_core_rlimit_cur() > 0) code = CLD_DUMPED;
                 *(int *)(gi + 0) = 17;   // si_signo = Linux SIGCHLD
                 *(int *)(gi + 4) = 0;    // si_errno
                 *(int *)(gi + 8) = code; // si_code (CLD_* values match Linux<->macOS)
@@ -731,8 +751,7 @@ static int svc_rare(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64
         break;
     }
 #endif
-    default:
-        return 0;
+    default: return 0;
     }
     return svc_done(c); // boundary errno xlate (host macOS -> Linux); see helpers.c svc_done
 }

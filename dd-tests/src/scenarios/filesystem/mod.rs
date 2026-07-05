@@ -17,7 +17,7 @@ pub fn group() -> ScenGroup {
             .exec("cd /usr && cd bin && pwd").has("/usr/bin").plus_mac(),
         scen("filesystem/dotdot-ascends", "alpine:latest")
             .exec("mkdir -p /t/a/b && cd /t/a/b && cd ../.. && pwd").has("/t"),
-        // REGRESSION #162 (darwinjail cwd): `cd ..` must actually ASCEND, not stay in the same folder.
+        // REGRESSION (darwinjail cwd): `cd..` must actually ASCEND, not stay in the same folder.
         // Uses only paths present in BOTH a Linux image and the macOS container, so it exercises the mac
         // container `cd` too — `.plus_mac()` (runs on `-t mac`; the default suite stays Linux-only).
         scen("filesystem/cd-dotdot-existing", "alpine:latest")
@@ -56,7 +56,7 @@ pub fn group() -> ScenGroup {
             .exec("printf '#!/bin/sh\\necho SCRIPT_RAN\\n' > /s && chmod +x /s && /s").has("SCRIPT_RAN"),
         scen("filesystem/chown-uid-gid", "alpine:latest")
             .exec("touch /f && chown 1:1 /f && stat -c '%u:%g' /f").has("1:1"),
-        // #255: a process that DROPS privilege at runtime (gosu setuid/setgid to postgres=70:70) and then
+        // a process that DROPS privilege at runtime (gosu setuid/setgid to postgres=70:70) and then
         // creates a file/dir must own the new inode with its CURRENT euid/egid, not the container id (0).
         // Regressed initdb ("data directory has wrong ownership"). Covers file AND dir, uid AND gid.
         scen("filesystem/setuid-drop-owns-newfile", "postgres:16-alpine")

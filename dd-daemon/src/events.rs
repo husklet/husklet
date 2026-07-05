@@ -91,7 +91,9 @@ impl Filters {
     fn parse(raw: &Option<String>) -> Filters {
         let mut f = Filters::default();
         let Some(s) = raw else { return f };
-        let Ok(v) = serde_json::from_str::<Value>(s) else { return f };
+        let Ok(v) = serde_json::from_str::<Value>(s) else {
+            return f;
+        };
         f.types = filter_values(&v, "type");
         f.actions = filter_values(&v, "event");
         f.actions.extend(filter_values(&v, "action"));
@@ -118,9 +120,7 @@ impl Filters {
         // catches name-less events (die/stop/kill) via that full id. We deliberately do NOT also match
         // `id.starts_with(filter)` — that broad prefix made `--filter container=a` match every container
         // whose id merely begins with "a".
-        if !self.containers.is_empty()
-            && !self.containers.iter().any(|c| c == id || c == name)
-        {
+        if !self.containers.is_empty() && !self.containers.iter().any(|c| c == id || c == name) {
             return false;
         }
         if !self.images.is_empty() && !self.images.iter().any(|i| i == image) {
@@ -135,7 +135,10 @@ impl Filters {
 /// Both are handled; anything else yields an empty list.
 fn filter_values(v: &Value, key: &str) -> Vec<String> {
     match &v[key] {
-        Value::Array(a) => a.iter().filter_map(|x| x.as_str().map(String::from)).collect(),
+        Value::Array(a) => a
+            .iter()
+            .filter_map(|x| x.as_str().map(String::from))
+            .collect(),
         Value::Object(m) => m.keys().cloned().collect(),
         Value::String(s) => vec![s.clone()],
         _ => Vec::new(),
@@ -154,9 +157,16 @@ pub(crate) async fn events(State(a): State<App>, Query(q): Query<EventsQ>) -> Re
     // set, so the id-based match catches all of that container's events regardless of the attributes.
     if !filters.containers.is_empty() {
         let g = a.inner.lock().await;
-        let resolved: Vec<String> = filters.containers.iter()
-            .filter_map(|c| crate::util::resolve_cid(&g, c)).collect();
-        for id in resolved { if !filters.containers.contains(&id) { filters.containers.push(id); } }
+        let resolved: Vec<String> = filters
+            .containers
+            .iter()
+            .filter_map(|c| crate::util::resolve_cid(&g, c))
+            .collect();
+        for id in resolved {
+            if !filters.containers.contains(&id) {
+                filters.containers.push(id);
+            }
+        }
     }
 
     // `unfold` drives the broadcast receiver into a byte stream. Returning `Some` yields a line;

@@ -95,19 +95,24 @@ static int gpr_field_mask(uint32_t in) {
     // corruption). Group: bit31==0, bits[28:24]==01110, bit21==0, bit15==0, bit10==1; op==bit29, imm4==[14:11].
     if ((in & 0x9F208400u) == 0x0E000400u) {
         int op = (in >> 29) & 1, imm4 = (in >> 11) & 0xF;
-        if (!op && (imm4 == 5 || imm4 == 7)) return 1;     // SMOV/UMOV: GPR is Rd[4:0]
-        if (!op && (imm4 == 1 || imm4 == 3)) return 2;     // DUP(general)/INS(general): GPR is Rn[9:5]
-        return 0;                                          // DUP/INS(element): vector only
+        if (!op && (imm4 == 5 || imm4 == 7)) return 1; // SMOV/UMOV: GPR is Rd[4:0]
+        if (!op && (imm4 == 1 || imm4 == 3)) return 2; // DUP(general)/INS(general): GPR is Rn[9:5]
+        return 0;                                      // DUP/INS(element): vector only
     }
     // SIMD/FP data: V registers only
     return 0;
 }
-static int field_is(uint32_t in, int bit, int shift) { return is_stolen((in >> shift) & 0x1F) && bit; }
+
+static int field_is(uint32_t in, int bit, int shift) {
+    return is_stolen((in >> shift) & 0x1F) && bit;
+}
+
 // "uses a STOLEN reg" (x18 / x28 [/ x30 in Stage B])
 static int uses_x18(uint32_t in, int mask) {
     return field_is(in, mask & 1, 0) || field_is(in, mask & 2, 5) || field_is(in, mask & 4, 16) ||
            field_is(in, mask & 8, 10);
 }
+
 // ---- steal-mode stolen-reg FAST PATHS (perf: the mangle machinery measured ~20% of CPython wall) ----
 // Under the default x16/x17 steal (g_steal1617), host x16/x17 are ENGINE-PRIVATE at every point inside a
 // block body: the prologue never loads them, chained entries keep them dead, and every IBTC probe/irq
@@ -120,10 +125,12 @@ static int uses_x18(uint32_t in, int mask) {
 // alone were 19% of samples), so this is the single biggest engine tax on call-heavy aarch64 guests.
 // NOSTEALFAST=1 restores the exact legacy sequences (A/B kill switch); NOSTEAL1617 implies legacy.
 static int g_stealfast = -1;
+
 static int stealfast_on(void) {
     if (g_stealfast < 0) g_stealfast = (g_steal1617 && !getenv("NOSTEALFAST")) ? 1 : 0;
     return g_stealfast;
 }
+
 // Emit a guest insn that references stolen reg(s): for each, a scratch S = cpu->x[stolen]; run the
 // insn with the stolen field(s) replaced by scratch(es); store back. Real x28 = cpu is the base;
 // scratch originals are spilled to cpu->mscratch (NOT the stack -- that would collide with the
@@ -202,6 +209,7 @@ static void emit_mangled_x18(uint32_t in, int mask) {
         // restore scratch
         e_ldr(sc[i], CPUREG, (int)OFF_MSCRATCH + 8 * i);
 }
+
 // ---- guest_base bias-fold (non-PIE ET_EXEC; see docs/design/nonpie-pagezero.md) ----
 // A non-PIE image maps HIGH (+g_nonpie_bias) but its baked absolute pointers stay LOW (link vaddr); a
 // guest load/store through such a pointer would hit the unmapped low address and trap (one SIGSEGV per
@@ -227,15 +235,16 @@ static int is_foldable_mem(uint32_t in) {
     if ((in & 0x0A000000u) != 0x08000000u) return 0; // not in the loads/stores major group
     if ((in & 0x3B000000u) == 0x18000000u) return 0; // ldr (literal): handled separately, maps HIGH
     if ((in & 0x3B000000u) == 0x39000000u) return 1; // LDR/STR unsigned-offset (int + SIMD): no WB
-    if ((in & 0x3B200000u) == 0x38000000u) return 1; // unscaled / unpriv / post / pre (single base Xn; WB
+    if ((in & 0x3B200000u) == 0x38000000u)
+        return 1;                                    // unscaled / unpriv / post / pre (single base Xn; WB
                                                      // handled by emit_fold_mem -- post/pre are the hot form)
     if ((in & 0x3B200C00u) == 0x38200800u) return 1; // register-offset [Xn,Xm{,ext}]: full-EA fold below
     if ((in & 0x3A000000u) == 0x28000000u) {         // LDP/STP family
         int o = (in >> 23) & 3;
         return o == 0 || o == 2; // 00 no-alloc, 10 offset; reject 01/11 (writeback)
     }
-    if ((in & 0x3F000000u) == 0x08000000u)            // exclusive / ordered / CAS group ([Xn] base)
-        return (in & 0x00800000u) != 0;               // bit23: 1=LDAR/STLR/CAS (single) -> fold; 0=monitor pair
+    if ((in & 0x3F000000u) == 0x08000000u)           // exclusive / ordered / CAS group ([Xn] base)
+        return (in & 0x00800000u) != 0;              // bit23: 1=LDAR/STLR/CAS (single) -> fold; 0=monitor pair
     if ((in & 0x3B200C00u) == 0x38200000u) return 1; // LSE atomic memory ops (LDADD/SWP/...): [Xn]
     return 0;
 }
@@ -300,20 +309,20 @@ static void emit_fold_mem(uint32_t in) {
     // mapping) would corrupt it. The compares set NZCV, so save/restore the guest flags around them.
     emit32(0xD360FC00u | (Sb << 5) | T); // lsr T, Sb, #32
     uint32_t *p_hi = (uint32_t *)g_cp;
-    emit32(0);                              // cbnz T, Lhi   (>= 4GiB -> skip, flags untouched)
-    emit32(0xD53B4200u | T2);               // mrs T2, nzcv  (save guest flags)
+    emit32(0);                // cbnz T, Lhi   (>= 4GiB -> skip, flags untouched)
+    emit32(0xD53B4200u | T2); // mrs T2, nzcv  (save guest flags)
     e_movconst(T, g_nonpie_lo);
     emit32(0xEB000000u | (T << 16) | (Sb << 5) | 31); // cmp Sb, lo
     uint32_t *p_lo1 = (uint32_t *)g_cp;
-    emit32(0);                              // b.lo Llo   (Sb < lo -> not image)
+    emit32(0); // b.lo Llo   (Sb < lo -> not image)
     e_movconst(T, g_nonpie_hi);
     emit32(0xEB000000u | (T << 16) | (Sb << 5) | 31); // cmp Sb, hi
     uint32_t *p_lo2 = (uint32_t *)g_cp;
-    emit32(0);                              // b.hs Llo   (Sb >= hi -> not image)
+    emit32(0); // b.hs Llo   (Sb >= hi -> not image)
     e_movconst(T, g_nonpie_bias);
     emit32(0x8B000000u | (T << 16) | (Sb << 5) | Sb); // add Sb, Sb, bias
     uint8_t *Llo = g_cp;
-    emit32(0xD51B4200u | T2);               // msr nzcv, T2  (restore guest flags)
+    emit32(0xD51B4200u | T2); // msr nzcv, T2  (restore guest flags)
     uint8_t *Lhi = g_cp;
     *p_hi = 0xB5000000u | (((uint32_t)(((uint8_t *)Lhi - (uint8_t *)p_hi) / 4) & 0x7FFFF) << 5) | T;
     *p_lo1 = 0x54000000u | (((uint32_t)(((uint8_t *)Llo - (uint8_t *)p_lo1) / 4) & 0x7FFFF) << 5) | 3; // b.lo
@@ -366,7 +375,9 @@ static void emit_fold_mem(uint32_t in) {
 // The EA of a structure op IS the base (no immediate, no index), so the < image-span test on Xn is exact.
 // Identifier: bit31=0, bits[29:25]=00110; bit24 = single(1)/multiple(0), bit23 = post-index writeback. Rt is
 // a V register (no GP mangle needed) -- only the base Xn[9:5] and a register post-index Rm[20:16] are GP.
-static int is_advsimd_struct(uint32_t in) { return (in & 0xBE000000u) == 0x0C000000u; }
+static int is_advsimd_struct(uint32_t in) {
+    return (in & 0xBE000000u) == 0x0C000000u;
+}
 
 // Bytes transferred by an AdvSIMD structure op -- the implicit increment of an immediate post-index (Rm==31).
 static int advsimd_struct_bytes(uint32_t in) {
@@ -374,11 +385,14 @@ static int advsimd_struct_bytes(uint32_t in) {
     if (!((in >> 24) & 1)) { // load/store MULTIPLE structures: register count from opcode[15:12]
         int regs;
         switch ((in >> 12) & 0xF) {
-        case 0x0: case 0x2: regs = 4; break; // LD4/ST4, LD1 x4
-        case 0x4: case 0x6: regs = 3; break; // LD3/ST3, LD1 x3
-        case 0x8: case 0xA: regs = 2; break; // LD2/ST2, LD1 x2
-        case 0x7: regs = 1; break;           // LD1 x1
-        default: regs = 0; break;            // unallocated (never reached: the access would have faulted)
+        case 0x0:
+        case 0x2: regs = 4; break; // LD4/ST4, LD1 x4
+        case 0x4:
+        case 0x6: regs = 3; break; // LD3/ST3, LD1 x3
+        case 0x8:
+        case 0xA: regs = 2; break; // LD2/ST2, LD1 x2
+        case 0x7: regs = 1; break; // LD1 x1
+        default: regs = 0; break;  // unallocated (never reached: the access would have faulted)
         }
         return regs * (q ? 16 : 8);
     }
@@ -418,20 +432,20 @@ static void emit_fold_advsimd_struct(uint32_t in) {
     // traffic. The compares clobber NZCV, so save/restore the guest flags. (Same discriminator as emit_fold_mem.)
     emit32(0xD360FC00u | (Sb << 5) | T); // lsr T, Sb, #32
     uint32_t *p_hi = (uint32_t *)g_cp;
-    emit32(0);                              // cbnz T, Lhi   (>= 4GiB -> skip, flags untouched)
-    emit32(0xD53B4200u | T2);               // mrs T2, nzcv  (save guest flags)
+    emit32(0);                // cbnz T, Lhi   (>= 4GiB -> skip, flags untouched)
+    emit32(0xD53B4200u | T2); // mrs T2, nzcv  (save guest flags)
     e_movconst(T, g_nonpie_lo);
     emit32(0xEB000000u | (T << 16) | (Sb << 5) | 31); // cmp Sb, lo
     uint32_t *p_lo1 = (uint32_t *)g_cp;
-    emit32(0);                              // b.lo Llo   (Sb < lo -> not image)
+    emit32(0); // b.lo Llo   (Sb < lo -> not image)
     e_movconst(T, g_nonpie_hi);
     emit32(0xEB000000u | (T << 16) | (Sb << 5) | 31); // cmp Sb, hi
     uint32_t *p_lo2 = (uint32_t *)g_cp;
-    emit32(0);                              // b.hs Llo   (Sb >= hi -> not image)
+    emit32(0); // b.hs Llo   (Sb >= hi -> not image)
     e_movconst(T, g_nonpie_bias);
     emit32(0x8B000000u | (T << 16) | (Sb << 5) | Sb); // add Sb, Sb, bias
     uint8_t *Llo = g_cp;
-    emit32(0xD51B4200u | T2);               // msr nzcv, T2  (restore guest flags)
+    emit32(0xD51B4200u | T2); // msr nzcv, T2  (restore guest flags)
     uint8_t *Lhi = g_cp;
     *p_hi = 0xB5000000u | (((uint32_t)(((uint8_t *)Lhi - (uint8_t *)p_hi) / 4) & 0x7FFFF) << 5) | T;
     *p_lo1 = 0x54000000u | (((uint32_t)(((uint8_t *)Llo - (uint8_t *)p_lo1) / 4) & 0x7FFFF) << 5) | 3; // b.lo
@@ -476,10 +490,12 @@ static void x18_prolog(void) {
     e_stur(1, 31, -24);
     e_load_cpu(1);
 }
+
 static void x18_epilog(void) {
     e_ldur(1, 31, -24);
     e_ldur(0, 31, -16);
 }
+
 // A3 §B instrumentation (PROF=1 only): bump a 64-bit global counter from emitted code. Self-contained:
 // spills x9/x10 to the [sp,#-16/-24] red zone (same convention as emit_t2_counter / the IBTC), so it is
 // independent of whatever scratch the surrounding shadow push/ret is juggling. Gated on g_prof, so the
@@ -494,6 +510,7 @@ static void emit_prof_bump(void *ctr) {
     e_ldur(9, 31, -16);
     e_ldur(10, 31, -24);
 }
+
 // §B: store a constant to cpu->x[30] (the stolen guest link reg). x28=cpu.
 // IBSLIM: with x16/x17 stolen (A1 default) x16 is engine-private scratch here, so the legacy
 // x0 spill/restore dance through cpu->mscratch (5 insns, 3 memory ops PER GUEST CALL: bl and blr
@@ -511,6 +528,7 @@ static void emit_set_x30(uint64_t val) {
     e_str(0, CPUREG, 30 * 8);
     e_ldr(0, CPUREG, (int)OFF_MSCRATCH);
 }
+
 // §B shadow push: cpu->x[30] = gpc+4; sstk[ssp&1023] = (gpc+4, &Lcont); ssp++. x0..x2 spilled to
 // cpu->mscratch (all guest regs are live across the call). Returns the `adr x1,Lcont` to backpatch.
 static uint32_t *emit_shadow_push(uint64_t gpc) {
@@ -553,6 +571,7 @@ static uint32_t *emit_shadow_push(uint64_t gpc) {
     e_ldp(2, 3, CPUREG, M + 16);
     return p_adr;
 }
+
 // §B profile gate: scan the target's entry block. A LEAF function (reaches `ret` with no bl/blr
 // first) gains nothing from the shadow-RAS -- its monomorphic return is predicted by the per-site IC
 // -- so paying the per-bl shadow push is pure overhead (floatk: sqrt/sin/pow). Only non-leaf targets
@@ -578,13 +597,19 @@ static uint32_t *emit_shadow_push(uint64_t gpc) {
 //    1 SHADOWGATE=1   -> widen-fix: window-exhaustion = large/complex fn -> DEEP not leaf (measured: worse).
 //    2 SHADOWGATE=2   -> widen more: ANY direct call -> §B (measured: worse / no better).
 static int g_shadowgate = -2;
+
 static int shadowgate(void) {
     if (g_shadowgate == -2) {
-        if (getenv("NOSHADOWTUNE")) g_shadowgate = 0;
-        else { const char *e = getenv("SHADOWGATE"); g_shadowgate = e ? atoi(e) : -1; }
+        if (getenv("NOSHADOWTUNE"))
+            g_shadowgate = 0;
+        else {
+            const char *e = getenv("SHADOWGATE");
+            g_shadowgate = e ? atoi(e) : -1;
+        }
     }
     return g_shadowgate;
 }
+
 // Scan target's straight-line extent (bounded by forward-branch reach). Returns -1 if a blr (unknown
 // callee) -- or, when tuned, if the scan window is exhausted with no clean terminal (large/complex fn,
 // treat as deep) -- else the count of direct-call (bl) targets, writing up to `max` of them to calls[].
@@ -598,29 +623,26 @@ static int scan_calls(uint64_t target, uint64_t calls[], int max) {
         if ((in & 0xFC000000u) == 0x94000000u) {
             if (n < max) calls[n] = target + (uint64_t)i * 4 + ((uint64_t)sext(in & 0x3FFFFFF, 26) << 2);
             n++;
-        // bl
+            // bl
         }
         int64_t off = 0;
         int isb = 0;
         if ((in & 0xFF000010u) == 0x54000000u) {
             off = sext((in >> 5) & 0x7FFFF, 19);
             isb = 1;
-        // b.cond
-        }
-        else if ((in & 0x7E000000u) == 0x34000000u) {
+            // b.cond
+        } else if ((in & 0x7E000000u) == 0x34000000u) {
             off = sext((in >> 5) & 0x7FFFF, 19);
             isb = 1;
-        // cbz/cbnz
-        }
-        else if ((in & 0x7E000000u) == 0x36000000u) {
+            // cbz/cbnz
+        } else if ((in & 0x7E000000u) == 0x36000000u) {
             off = sext((in >> 5) & 0x3FFF, 14);
             isb = 1;
-        // tbz/tbnz
-        }
-        else if ((in & 0xFC000000u) == 0x14000000u) {
+            // tbz/tbnz
+        } else if ((in & 0xFC000000u) == 0x14000000u) {
             off = sext(in & 0x3FFFFFF, 26);
             isb = 1;
-        // b
+            // b
         }
         if (isb && off > 0 && i + off < 64 && i + off > reach) reach = i + off;
         if ((in & 0xFFFFFC1Fu) == 0xD65F0000u || (in & 0xFC000000u) == 0x14000000u || (in & 0xFFFFFC1Fu) == 0xD61F0000u)
@@ -631,11 +653,13 @@ static int scan_calls(uint64_t target, uint64_t calls[], int max) {
     // whatever bl count it happened to see (usually 0 -> "leaf"); tuned treats it as deep/unknown.
     return shadowgate() ? -1 : n;
 }
+
 static int is_leaf0(uint64_t t) {
     uint64_t c[1];
     return scan_calls(t, c, 0) == 0;
-// no calls at all
+    // no calls at all
 }
+
 // §B helps only on DEPTH (the RAS predicts nested returns). A leaf or a depth-2 "shallow" function
 // (all its calls go to leaves: sqrt/sin/pow's helpers) gains nothing -> keep cheap Stage-B. Only a
 // function that calls a NON-leaf (or recurses, or calls indirectly) is deep enough to pay the push.
@@ -656,6 +680,7 @@ static int target_is_leaf(uint64_t target) {
     // all-leaf-calls (shallow) -> Stage-B
     return 1;
 }
+
 // §B guest bl: push shadow, host `bl body(target)` (RAS pushes &Lcont), Lcont continues at gpc+4.
 static void emit_bl_ras(uint64_t gpc, uint64_t target) {
     if (target_is_leaf(target)) {
@@ -666,7 +691,7 @@ static void emit_bl_ras(uint64_t gpc, uint64_t target) {
         emit_set_x30(pcrel_base(gpc) + 4);
         emit_chain_exit(target);
         return;
-    // leaf -> cheap Stage-B (IC return)
+        // leaf -> cheap Stage-B (IC return)
     }
     if (g_prof) g_prof_bl_shadow++; // A3: depth-gate steered this bl to §B (shadow push + RAS ret)
     uint32_t *p_adr = emit_shadow_push(gpc);
@@ -675,12 +700,11 @@ static void emit_bl_ras(uint64_t gpc, uint64_t target) {
     if (body) {
         int64_t d = ((uint8_t *)body - (uint8_t *)slot) / 4;
         emit32(0x94000000u | ((uint32_t)d & 0x3FFFFFFu));
-    // host bl body (RAS pushes &Lcont)
-    }
-    else {
+        // host bl body (RAS pushes &Lcont)
+    } else {
         add_pend2(slot, target, 1);
         emit_exit_const(target, R_BRANCH);
-    // not translated yet: spill-exit (slot patched to `bl body`)
+        // not translated yet: spill-exit (slot patched to `bl body`)
     }
     // host ret lands here
     uint8_t *Lcont = g_cp;
@@ -690,6 +714,7 @@ static void emit_bl_ras(uint64_t gpc, uint64_t target) {
     // after the call returns -> gpc+4
     emit_chain_exit(gpc + 4);
 }
+
 // §B guest ret: if cpu->x[30] == shadow-top guest_ret, pop + real x30=host_ret + host `ret`
 // (hardware-RAS predicted). Else fall back to the dispatcher reading cpu->x[30]. Never lands wrong.
 static void emit_shadow_ret(void) {
@@ -753,6 +778,7 @@ static void emit_shadow_ret(void) {
     // UNWIND/FOREIGN -> IBTC (per-site IC + hash), NOT the dispatcher
     emit_ibranch(30);
 }
+
 // Fast correct ret on the stolen x30: per-site monomorphic cache on cpu->x[30] (a `br`, not a host
 // ret -> no RAS, but no stale-host_ret corruption either). Mirrors the IBTC per-site IC; the
 // dispatcher fills Lsite_tgt/Lsite_body via ic_site. Reads cpu->x[30] (x30 is stolen).
@@ -788,7 +814,7 @@ static void emit_ret_ic(void) {
     // adr x9, Lsite_tgt -> dispatcher fills the site
     emit32(0);
     e_str(9, 0, OFF_ICSITE);
-    emit_blockret(9); // #339: recorded block_return bake (fixed 4-insn + reloc when g_pcache)
+    emit_blockret(9); // recorded block_return bake (fixed 4-insn + reloc when g_pcache)
     e_br(9);
     if ((uint64_t)g_cp & 7) emit32(0);
     uint8_t *Lt = g_cp;
@@ -802,7 +828,7 @@ static void emit_ret_ic(void) {
     *p_ldrb = 0x58000000u | (((uint32_t)((Lb - (uint8_t *)p_ldrb) / 4) & 0x7FFFF) << 5) | 16;
     int64_t ao = Lt - (uint8_t *)p_adr;
     *p_adr = 0x10000000u | ((uint32_t)(ao & 3) << 29) | (((uint32_t)((ao >> 2) & 0x7FFFF)) << 5) | 9;
-    pc_record_icsite(Lt); // #339: {target,body} cache holds an arena body ptr -> neutralize on reload
+    pc_record_icsite(Lt); // {target,body} cache holds an arena body ptr -> neutralize on reload
 }
 
 // ---------------- the translator ----------------
@@ -827,7 +853,7 @@ static void emit_t2_counter(int slot, uint64_t start, void *body) {
     e_stur(9, 31, -16);
     e_stur(10, 31, -24);
     // x9 = &g_t2cnt[slot] (plain RW data; adrp+add reaches it)
-    emit_t2cntptr(9, slot); // #339: recorded &g_t2cnt[slot] bake (fixed 4-insn + reloc when g_pcache)
+    emit_t2cntptr(9, slot); // recorded &g_t2cnt[slot] bake (fixed 4-insn + reloc when g_pcache)
     e_ldr(10, 9, 0);
     // --count (sub immediate: flag-free)
     e_subi(10, 10, 1);
@@ -847,6 +873,7 @@ static void emit_t2_counter(int slot, uint64_t start, void *body) {
     int64_t d = ((uint8_t *)body - (uint8_t *)g_cp) / 4;
     emit32(0x14000000u | ((uint32_t)d & 0x3FFFFFFu));
 }
+
 // W4E tier-2: store-to-load-forwarding hazard guard. Folding the back-edge tightens the loop enough that
 // a store immediately followed by a load of the SAME address (e.g. a volatile / aliased RMW of one stack
 // slot every iteration) starts hitting an Apple-Silicon store-forwarding replay -- measured as a ~3.7x
@@ -923,6 +950,7 @@ static void emit_atomic_part(uint32_t in, int mask, int is_mem) {
     else
         emit32(in);
 }
+
 // Returns bytes consumed (12 or 16) if a known atomic loop at gpc was rewritten, else 0.
 static int try_lse_atomic(uint64_t gpc) {
     uint32_t i0 = *(uint32_t *)gpc;
@@ -953,8 +981,7 @@ static int try_lse_atomic(uint64_t gpc) {
             // The common clean-PIE case (no stolen operand, no fold) keeps the proven exclusive pair.
             if (guestbase_on() || is_stolen(Wt) || is_stolen(Xn) || is_stolen(Ws) || is_stolen(Wv)) {
                 // swpal Wv, Wt, [Xn] (a single LSE op; emit_atomic_part folds/mangles the corner cases).
-                emit_atomic_part(0xB8E08000u | (sz == 3 ? 0x40000000u : 0) | (Wv << 16) | (Xn << 5) | Wt, 1 | 2 | 4,
-                                 1);
+                emit_atomic_part(0xB8E08000u | (sz == 3 ? 0x40000000u : 0) | (Wv << 16) | (Xn << 5) | Wt, 1 | 2 | 4, 1);
                 g_lse_n++;
                 return 12;
             }
@@ -977,9 +1004,8 @@ static int try_lse_atomic(uint64_t gpc) {
         int Ws2 = i1 & 31, n = (i1 >> 5) & 31, m = (i1 >> 16) & 31, Wm = -1;
         if (op == 4) {
             if (n == Wt) Wm = m;
-        // sub: not commutative, Rn must be Wt
-        }
-        else {
+            // sub: not commutative, Rn must be Wt
+        } else {
             if (n == Wt)
                 Wm = m;
             else if (m == Wt)
@@ -1045,9 +1071,9 @@ static int try_lse_atomic(uint64_t gpc) {
         int Wexp = (i1 >> 16) & 31;
         uint32_t i2 = *(uint32_t *)(gpc + 8), i3 = *(uint32_t *)(gpc + 12), i4 = *(uint32_t *)(gpc + 16);
         // b.ne
-        if ((i2 & 0xFF00001Fu) == 0x54000001u
-            && (i3 & 0x3F400000u) == 0x08000000u && ((i3 >> 30) & 3) == sz && ((i3 >> 10) & 0x1F) == 0x1F &&
-            ((i3 >> 5) & 31) == Xn && (i4 & 0xFF000000u) == 0x35000000u && (i4 & 31) == ((i3 >> 16) & 31) &&
+        if ((i2 & 0xFF00001Fu) == 0x54000001u && (i3 & 0x3F400000u) == 0x08000000u && ((i3 >> 30) & 3) == sz &&
+            ((i3 >> 10) & 0x1F) == 0x1F && ((i3 >> 5) & 31) == Xn && (i4 & 0xFF000000u) == 0x35000000u &&
+            (i4 & 31) == ((i3 >> 16) & 31) &&
             // cbnz -> loop
             (gpc + 16 + (uint64_t)(sext((i4 >> 5) & 0x7FFFF, 19) << 2)) == gpc
             // b.ne -> out
@@ -1103,6 +1129,7 @@ static int region_pure(const uint32_t *code, int n) {
 // this (the one subtlety past the PoC is x30's dual role: host return address vs guest-visible
 // link value -- handled by keeping guest x30 in cpu->x[30] and validating here).
 enum { SS_FAST, SS_UNWIND, SS_FOREIGN };
+
 static inline void shadow_push(struct cpu *c, uint64_t guest_ret, uint64_t host_ret) {
     if (c->ssp < 1024) {
         c->sstk[2 * c->ssp] = guest_ret;
@@ -1110,6 +1137,7 @@ static inline void shadow_push(struct cpu *c, uint64_t guest_ret, uint64_t host_
         c->ssp++;
     }
 }
+
 // matches on guest_ret (even index)
 static int shadow_classify(struct cpu *c, uint64_t guest_x30) {
     if (c->ssp > 0 && c->sstk[2 * (c->ssp - 1)] == guest_x30) {
@@ -1135,11 +1163,13 @@ static int shadow_classify(struct cpu *c, uint64_t guest_x30) {
 #define TRACE_MAX_BLK 16
 #define TRACE_MAX_BYTES (16 * 1024)
 static int g_stitch = -1;
+
 static int seen_has(const uint64_t *seen, int n, uint64_t v) {
     for (int i = 0; i < n; i++)
         if (seen[i] == v) return 1;
     return 0;
 }
+
 // Lay a conditional's fall-through inline: `inv` is the branch insn with its condition/op
 // already inverted, so when the guest would NOT take it we keep falling through. Emit the
 // inverted branch (skips the taken-side exit), the taken chain-exit, then patch the branch to
@@ -1156,10 +1186,12 @@ static void stitch_cond(uint32_t inv, uint64_t taken) {
 // NOSMC=1 reverts to the legacy behavior (guest `ic ivau` emitted verbatim, no translation-cache drop) so
 // a stale-translation A/B is still possible. Read once (idempotent static guard).
 static int g_smc_off = -1;
+
 static int smc_disabled(void) {
     if (g_smc_off < 0) g_smc_off = (getenv("NOSMC") != NULL);
     return g_smc_off;
 }
+
 // A guest `ic ivau` reached the dispatcher (R_ICFLUSH): the guest is about to execute code it just rewrote,
 // so every gpc->host translation may be stale. Drop the whole block map + IBTC + pending chains (mirrors the
 // x86 smc_on_write flush). We deliberately do NOT reset g_cp: the just-exited block's host code stays intact
@@ -1176,7 +1208,7 @@ static void smc_icflush(uint64_t va) {
     // code-generating guest flushes each freshly-written line as it grows its code space -> almost always
     // brand-new bytes -> this turns the catastrophic per-flush wholesale invalidation (which re-translated
     // the entire working set on every `ic ivau`) into a no-op. Gate at CACHE-LINE (64B) granularity -- the
-    // exact unit `ic ivau, Xt` invalidates -- NOT at 4KB page granularity. #267: BeamAsm (Erlang/OTP's
+    // exact unit `ic ivau, Xt` invalidates -- NOT at 4KB page granularity. BeamAsm (Erlang/OTP's
     // arm64 JIT) packs many compiled functions per page, so appending a NEW function onto a page that
     // already holds a translated one makes a page-granular gate fire a wholesale drop even though no
     // translated byte changed. Re-translating the whole working set on that spurious drop -- and, before the
@@ -1187,7 +1219,7 @@ static void smc_icflush(uint64_t va) {
     // arena fall back to the coarse page gate -- conservative (may over-drop) but never misses stale code.
     if (!txln_has(va) && !(g_pcache_loaded && txpg_has(va))) return;
     // ---- a GENUINE in-place modification of already-translated guest code (the line WAS a source line) ----
-    // #267 (BeamAsm SIGSEGV) coherence. smc_icflush runs from the dispatcher's post-run reason handler, which
+    // (BeamAsm SIGSEGV) coherence. smc_icflush runs from the dispatcher's post-run reason handler, which
     // has ALREADY released g_jit_lock (engine/dispatch.c: the unlock precedes G_DISPATCH_REASON), so a peer
     // guest thread may be executing translated code concurrently. A wholesale drop memsets g_map/g_ibtc that a
     // peer reads lock-free AND forces a re-translation of the modified bytes -- and there is no way to make
@@ -1203,7 +1235,7 @@ static void smc_icflush(uint64_t va) {
     // modifying guest never trusts a baked body, and the guest re-synchronizes through the shared indirect
     // dispatch. This matches dd's long-standing NOSMC fallback and is exactly what lets Erlang/OTP + Elixir
     // (BeamAsm) run to completion, including external-program ports (os:cmd / open_port {spawn,...}) whose
-    // forker relies on the emulator staying alive (#270). Fully coherent re-translation of a multithreaded
+    // forker relies on the emulator staying alive. Fully coherent re-translation of a multithreaded
     // in-place patch would need precise per-block recompile+redirect with all peers rendezvoused at a
     // safepoint (the tier2_promote bounce, generalized) -- out of scope here; a guest that depends on such a
     // patch keeps running the prior version instead of crashing. The LINE-granular gate above keeps genuine
@@ -1224,7 +1256,7 @@ static void smc_icflush(uint64_t va) {
     pthread_mutex_unlock(&g_jit_lock);
 }
 
-// #292 async-interrupt poll: emit a CHEAP flag-free check of cpu->irq at the block body entry (the target
+// async-interrupt poll: emit a CHEAP flag-free check of cpu->irq at the block body entry (the target
 // of every fall-through, direct chain `b body`, self-loop fold, tier-1 back-edge, and IBTC hit). When irq
 // is set (a caught async guest signal became pending while spinning in-cache with no syscalls), exit the
 // block to the dispatcher at a safe boundary -- all guest regs are live in host regs here, so the standard
@@ -1239,8 +1271,9 @@ static void smc_icflush(uint64_t va) {
 // edge (see the g_fwdskip invariant note in cache.c). g_irq_patch carries the cbnz to the end-of-block
 // stub emitter (emit_irq_stub). NOIRQSLIM=1 -> the legacy inline poll on every entry, chains to body+0.
 static uint32_t *g_irq_patch;
+
 static void emit_irq_check(uint64_t gpc) {
-    // NOIRQCHECK=1: MEASUREMENT-ONLY kill switch (quantifies the per-block-entry cost of the #292
+    // NOIRQCHECK=1: MEASUREMENT-ONLY kill switch (quantifies the per-block-entry cost of the
     // async-signal poll). Unsafe for async signal delivery into syscall-free loops -- never default.
     static int noirq = -1;
     if (noirq < 0) noirq = getenv("NOIRQCHECK") != NULL;
@@ -1272,40 +1305,43 @@ static void emit_irq_check(uint64_t gpc) {
     }
 }
 
-// Lever #3 (SIMD-clean syscall exit): SOUND over-approximation of "this guest instruction WRITES a vector
+// (SIMD-clean syscall exit): SOUND over-approximation of "this guest instruction WRITES a vector
 // (V) register." Over-marks read-only vector ops (vector stores, FCMP), the GPR-destination FP conversions
 // (FCVTZS/FMOV-to-GPR), and UMOV/SMOV -> that only ever costs the optimization (a full spill), never
 // correctness. It covers every V-writing form: the SIMD&FP data-processing box (scalar FP + AdvSIMD, bits
 // [27:25]=111), SIMD&FP loads/stores (the V bit, [26]=1, in the load/store box), and AdvSIMD load/store
 // STRUCTURES (LD1..LD4). A block containing any of these must take the full V spill on its syscall exit.
 static int insn_touches_vreg(uint32_t in) {
-    if ((in & 0x0E000000u) == 0x0E000000u) return 1;                    // SIMD&FP data-processing
+    if ((in & 0x0E000000u) == 0x0E000000u) return 1;                     // SIMD&FP data-processing
     if ((in & 0x0A000000u) == 0x08000000u && ((in >> 26) & 1)) return 1; // SIMD&FP load/store (V=1)
-    if ((in & 0xBE000000u) == 0x0C000000u) return 1;                    // AdvSIMD load/store structures
+    if ((in & 0xBE000000u) == 0x0C000000u) return 1;                     // AdvSIMD load/store structures
     return 0;
 }
+
 static void *translate_block(uint64_t gpc) {
     // W4E tier-2: read NOTIER2 / TIER2_THRESHOLD once (idempotent) before any self-loop detection.
     tier2_env_init();
     // gpc is mutated by the decode loop; key the cache by START
     uint64_t start = gpc;
-    g_blk_vdirty = 0; // Lever #3: reset per block; set below when a V-writing insn is emitted
+    g_blk_vdirty = 0; // reset per block; set below when a V-writing insn is emitted
     void *host = g_cp;
     emit_prologue();
     // chained jumps land here (regs already live)
     void *body = g_cp;
-    // #292: poll cpu->irq at the body entry so a caught async signal reaches a no-syscall guest loop.
+    // poll cpu->irq at the body entry so a caught async signal reaches a no-syscall guest loop.
     emit_irq_check(start);
     // ldxr/ldaxr..stxr/stlxr exclusive regions must stay in ONE block with no injected
     // memory ops between them, else the monitor clears and stxr retries forever. While
     // inside such a region, conditional branches are emitted inline and their exits are
     // deferred to stubs after the store-exclusive.
     int in_excl = 0;
+
     struct {
         uint32_t *patch;
         uint64_t target;
         uint32_t in;
     } defer[64];
+
     int ndefer = 0;
     // opt4 region state: guest block-starts inlined into this region + a block budget. The
     // region STOPS (falls to the baseline single-block exit) at any dispatcher-mediated edge
@@ -1314,12 +1350,11 @@ static void *translate_block(uint64_t gpc) {
     if (g_stitch < 0) g_stitch = getenv("NOSTITCH") ? 0 : 1;
     uint64_t seen[TRACE_MAX_BLK];
     int nseen = 0, trace_blk = 0;
-#define STITCH_OK \
-    (g_stitch && !in_excl && trace_blk < TRACE_MAX_BLK - 1 && (g_cp - (uint8_t *)host) < TRACE_MAX_BYTES)
+#define STITCH_OK (g_stitch && !in_excl && trace_blk < TRACE_MAX_BLK - 1 && (g_cp - (uint8_t *)host) < TRACE_MAX_BYTES)
     for (;;) {
         uint32_t in = *(uint32_t *)gpc;
         g_emit_gpc = gpc; // ARM-B1 IBPROF: tag indirect-branch sites with their guest PC
-        // Lever #3: at the FIRST vector-touching instruction of the region, store the (nonzero) cpu pointer
+        // at the FIRST vector-touching instruction of the region, store the (nonzero) cpu pointer
         // into cpu->vdirty so a later (possibly chained-to) syscall exit takes the full V spill. Emitted
         // once per region (g_blk_vdirty latch); flag-neutral `str` runs before the vector write. Regions are
         // linear (taken branches exit, only fall-through continues), so the first write dominates all later
@@ -1335,7 +1370,7 @@ static void *translate_block(uint64_t gpc) {
                 gpc += n;
                 continue;
             }
-        // ldxr/stxr loop -> LSE
+            // ldxr/stxr loop -> LSE
         }
         // Load/store-exclusive family is bits[29:24]=001000. The o2 bit (bit23) distinguishes the
         // EXCLUSIVE monitor variants (o2=0: LDXR/LDAXR/STXR/STLXR/LDXP/STXP) from the merely ORDERED
@@ -1351,8 +1386,7 @@ static void *translate_block(uint64_t gpc) {
         // Defensive: the deferred-branch table is fixed-size. If a region ever fills it (pathological
         // or mis-decoded -- a real LDXR..STXR pair never holds this many conditional branches), end the
         // region here so the branches below take the normal exit path instead of overflowing defer[].
-        if (in_excl && ndefer >= (int)(sizeof defer / sizeof defer[0]))
-            in_excl = 0;
+        if (in_excl && ndefer >= (int)(sizeof defer / sizeof defer[0])) in_excl = 0;
 
         // svc #0
         if (in == 0xD4000001u) {
@@ -1377,9 +1411,8 @@ static void *translate_block(uint64_t gpc) {
             // dispatch (-> polymorphic `br`, SDC hit rate = order-0 ~6%). Force-inline a PRIVATE copy of
             // the dispatch into THIS predecessor so its `br` sees only this handler's successor
             // (order-1+, ~75-98% stable). Re-translation of a mid-region entry self-heals as usual.
-            if (g_vdbetrace && g_stitch && !in_excl && (g_cp - (uint8_t *)host) < TRACE_MAX_BYTES &&
-                tgt != start && !seen_has(seen, nseen, tgt) && nseen < TRACE_MAX_BLK - 1 &&
-                is_jt_dispatch_block(tgt)) {
+            if (g_vdbetrace && g_stitch && !in_excl && (g_cp - (uint8_t *)host) < TRACE_MAX_BYTES && tgt != start &&
+                !seen_has(seen, nseen, tgt) && nseen < TRACE_MAX_BLK - 1 && is_jt_dispatch_block(tgt)) {
                 g_vt_force_inl++;
                 seen[nseen++] = tgt;
                 trace_blk++;
@@ -1416,8 +1449,7 @@ static void *translate_block(uint64_t gpc) {
             // for a compiler switch dispatch.) Bit-exact: SDC guard falls back to the shared-hash IBTC.
             if (g_vdbetrace && brn < 16 && is_jt_dispatch_br(gpc))
                 emit_vdbe_sdc(brn);
-            else if (g_steal1617 && !g_noibslim && !g_ibprof && !is_stolen(brn) &&
-                     is_interp_dispatch_br(gpc, brn)) {
+            else if (g_steal1617 && !g_noibslim && !g_ibprof && !is_stolen(brn) && is_interp_dispatch_br(gpc, brn)) {
                 // IBSLIM: a recognized interpreter-dispatch site (megamorphic by construction) --
                 // skip the dead per-site IC, go straight to the shared hash. CTXDISP=1 additionally
                 // fronts it with the history-keyed stub array (see emit_ctx_dispatch).
@@ -1521,8 +1553,8 @@ static void *translate_block(uint64_t gpc) {
                     emit32(0);
                     emit_chain_exit(fall);
                     int64_t d = ((uint8_t *)g_cp - (uint8_t *)patch) / 4;
-                    *patch = 0x34000000u | ((unsigned)sf << 31) | ((unsigned)op << 24) |
-                             ((uint32_t)(d & 0x7FFFF) << 5) | 16;
+                    *patch =
+                        0x34000000u | ((unsigned)sf << 31) | ((unsigned)op << 24) | ((uint32_t)(d & 0x7FFFF) << 5) | 16;
                     emit_chain_exit(taken);
                     break;
                 }
@@ -1818,13 +1850,13 @@ static void *translate_block(uint64_t gpc) {
                 } else {
                     x18_prolog();
                     e_movconst(0, gpc + off);
-                    emit32(0xB9800000u | (0 << 5) | 0);    // ldrsw x0, [x0]
+                    emit32(0xB9800000u | (0 << 5) | 0); // ldrsw x0, [x0]
                     e_str(0, 1, rt * 8);
                     x18_epilog();
                 }
             } else {
                 e_movconst(rt, gpc + off);
-                emit32(0xB9800000u | (rt << 5) | rt);      // ldrsw xt, [xt]
+                emit32(0xB9800000u | (rt << 5) | rt); // ldrsw xt, [xt]
             }
             gpc += 4;
             continue;
@@ -1843,11 +1875,11 @@ static void *translate_block(uint64_t gpc) {
             uint32_t ld = sz == 0 ? 0xBD400000u : (sz == 1 ? 0xFD400000u : 0x3DC00000u);
             if (stealfast_on()) {
                 // stealfast: x16 is engine-dead -> no stash/restore around the address materialization
-                e_movconst(16, gpc + off);             // x16 = guest literal address
+                e_movconst(16, gpc + off);              // x16 = guest literal address
                 emit32(ld | (16u << 5) | (uint32_t)vt); // ldr St/Dt/Qt, [x16]
             } else {
-                x18_prolog();               // stash x0/x1 in the red zone; x0 becomes the address scratch
-                e_movconst(0, gpc + off);   // x0 = guest literal address (PIE: pcrel_base is identity)
+                x18_prolog();                          // stash x0/x1 in the red zone; x0 becomes the address scratch
+                e_movconst(0, gpc + off);              // x0 = guest literal address (PIE: pcrel_base is identity)
                 emit32(ld | (0u << 5) | (uint32_t)vt); // ldr St/Dt/Qt, [x0]
                 x18_epilog();
             }
@@ -1871,9 +1903,16 @@ static void *translate_block(uint64_t gpc) {
         // UNSIGNED guest x30) -> wild branch to a signed address. Neutralize PAC (hardening, not
         // semantics): paci*/auti* hints -> nop (x30 stays unsigned); retaa/retab -> a plain x30 ret.
         // paciasp/autiasp/paci?z/... -> nop
-        if ((in & 0xFFFFFF1Fu) == 0xD503231Fu) { emit32(0xD503201Fu); gpc += 4; continue; }
+        if ((in & 0xFFFFFF1Fu) == 0xD503231Fu) {
+            emit32(0xD503201Fu);
+            gpc += 4;
+            continue;
+        }
         // retaa/retab -> shadow ret (x30)
-        if ((in & 0xFFFFFBFFu) == 0xD65F0BFFu) { emit_shadow_ret(); break; }
+        if ((in & 0xFFFFFBFFu) == 0xD65F0BFFu) {
+            emit_shadow_ret();
+            break;
+        }
 
         // guest_base bias-fold: a non-PIE image's LOW absolute load/store -> +bias (the high mapping), no
         // fault. Only outside an exclusive monitor region (the fold spills scratch to memory, which would
@@ -1907,7 +1946,7 @@ static void *translate_block(uint64_t gpc) {
         *defer[i].patch = recode_cond(defer[i].in, d);
         emit_chain_exit(defer[i].target);
     }
-    // IRQSLIM: the out-of-line #292 poll exit stub the body-entry cbnz targets (irq set -> exit to
+    // IRQSLIM: the out-of-line poll exit stub the body-entry cbnz targets (irq set -> exit to
     // the dispatcher at the block start, exactly like the legacy inline poll).
     if (g_irq_patch) {
         uint32_t *p = g_irq_patch;
@@ -1932,6 +1971,7 @@ static void *translate_block(uint64_t gpc) {
     // core lets that core fetch stale instructions. Only chain to it once it's visible everywhere.
     return host;
 }
+
 #undef STITCH_OK
 
 // W4E tier-2: promote a hot self-loop (its in-cache counter hit the threshold and exited R_TIER2 with
@@ -1948,7 +1988,7 @@ static void tier2_promote(uint64_t gpc) {
     // hot loops that all reach threshold between two misses promotes back-to-back with NO intervening
     // headroom test, so near a nearly-full cache the emit runs past g_cache+CACHE_SZ and scribbles over
     // whatever the kernel mapped after the arena (guest heap/image) -> a corrupted guest pointer surfaces
-    // much later as a wild store (#207/#158: window-gated, common only when the cache churns/flushes often).
+    // much later as a wild store (window-gated, common only when the cache churns/flushes often).
     // Demand the same headroom a normal translate does; if it's not there, skip promotion. That is always
     // safe: the loop keeps running its correct tier-1 body (the spent down-counter simply wraps past 0 and
     // stops re-raising R_TIER2), and it can promote later once a flush has reset the arena.

@@ -18,15 +18,16 @@ static int g_trace, g_noibtc, g_itrace; // g_itrace: 1 instruction per block (pe
 // IRQSLIM: guest rip of the instruction currently being translated (set per decode step in
 // translate_block); emit_chain_exit compares chain targets against it to classify forward edges.
 static uint64_t g_emit_gpc;
-static int g_systrace;                  // JTS=1: syscall-entry trace only (no per-block dump) -- debug aid
-static uint64_t g_disp_n, g_ibtc_fill;  // PROF: dispatcher round-trips, IBTC fills
+static int g_systrace;                 // JTS=1: syscall-entry trace only (no per-block dump) -- debug aid
+static uint64_t g_disp_n, g_ibtc_fill; // PROF: dispatcher round-trips, IBTC fills
 // ---- W4-C: rep cmps/scas idiom (R_REPSTR) globals + the NOREPCMP A/B kill-switch ----
 static uint64_t g_repstr_n;     // PROF: rep cmps/scas idiom firings
 static uint64_t g_repstr_elems; // PROF: elements consumed by the rep cmps/scas idiom
 static uint64_t g_repmovs_n;    // PROF: rep movs -> host memcpy fast-path firings (ERMS funnel meter)
 static uint64_t g_repstos_n;    // PROF: rep stos -> host memset fast-path firings
 static int g_norepcmp = -1;     // gate: NOREPCMP=1 -> rep cmps/scas use the naive per-element loop
-static int norepcmp(void) {     // (the A/B kill-switch; also the bit-exact per-element oracle path)
+
+static int norepcmp(void) { // (the A/B kill-switch; also the bit-exact per-element oracle path)
     if (g_norepcmp < 0) g_norepcmp = getenv("NOREPCMP") ? 1 : 0;
     return g_norepcmp;
 }
@@ -41,11 +42,14 @@ static int norepcmp(void) {     // (the A/B kill-switch; also the bit-exact per-
 // IBTC1WAY=1 falls back to the OLD shared-g_ibtc 1-way probe/fill (exact prior behavior) for A/B + safety.
 #define XIBTC_SETS 8192
 #define XIBTC_WAYS 2
+
 static struct {
     uint64_t target;
     void *body;
 } g_xibtc[XIBTC_SETS * XIBTC_WAYS];
+
 static int g_ibtc1way = -1; // -1 = uninitialized; cached getenv("IBTC1WAY")
+
 static int ibtc1way(void) {
     if (g_ibtc1way < 0) g_ibtc1way = (getenv("IBTC1WAY") != NULL);
     return g_ibtc1way;
@@ -53,6 +57,7 @@ static int ibtc1way(void) {
 
 // ---- opt8 cold-start timing helper (COLDPROF=1; diagnostic-only, zero-cost when off) ----
 static int g_coldprof;
+
 static inline uint64_t coldprof_now_ns(void) {
     struct timespec ts;
     clock_gettime(CLOCK_MONOTONIC, &ts);
@@ -72,13 +77,15 @@ static int g_pcache_loaded;   // cache hit this run (translation skipped)
 static uint64_t g_pc_binid;   // identity of (guest binary + interp)
 static uint64_t g_pc_entry;   // initial guest rip (cache-validity sanity)
 static uint64_t g_force_base; // if nonzero, load_elf() maps the next image MAP_FIXED here (one-shot)
+
 // Documentary kinds (relocation is slide-based + kind-agnostic; these only label save dumps / call sites).
 enum {
     PRELOC_BLOCKRET = 1,
     PRELOC_IBTC = 2,
     PRELOC_HOSTGLOBAL = 3 // any other &host-global / &host-func baked into a block (slid by the image slide)
 };
-// #297: the reloc table records EVERY baked host pointer in the arena so pcache_load() can re-slide it.
+
+// the reloc table records EVERY baked host pointer in the arena so pcache_load can re-slide it.
 // A 64 MB arena (CACHE_SZ) can in principle hold up to CACHE_SZ/16 baked-pointer slots (each is a fixed
 // 4-insn / 16-byte movz/movk), so a large guest (e.g. the go toolchain) can emit far more than the old
 // 1<<16 cap. When the table overflowed the OLD code silently kept emitting the baked pointer WITHOUT
@@ -90,30 +97,33 @@ enum {
 // fully relocate. That makes the invariant "a persisted arena has EVERY baked pointer recorded" hold by
 // construction regardless of table size, so a reload can NEVER jump/read a stale absolute host address.
 #define PC_RELOC_CAP (1u << 20)
+
 static struct {
     uint32_t off; // byte offset into the arena of a fixed 4-insn movz/movk host-pointer load
     uint8_t kind; // PRELOC_* (documentary)
 } g_reloc[PC_RELOC_CAP];
+
 static int g_nreloc;
 static int g_pcache_poison; // set if a baked host pointer could not be recorded -> do NOT persist this arena
 
-static uint64_t g_tracecap;             // if >0 under trace: stop after this many blocks (runaway guard)
-int g_diag;                             // diagnostics (FAULT_ON): print LOADED bases etc. (extern'd by elf.c)
-static int g_nochain;                   // WATCH file: disable chaining (exact per-block rip attribution)
-static int g_dbg_nochain;               // aarch64 DDDBG_NOCHAIN gate in the SHARED dispatch.c; inert on x86 (chain hook is a no-op)
-static int g_dbg_gprdump;               // aarch64 DDDBG_GPRDUMP gate in the SHARED dispatch.c; inert on x86 (aarch64 dump only)
-static uint64_t g_loadbase;             // main program load base (for file-offset mapping)
+static uint64_t g_tracecap; // if >0 under trace: stop after this many blocks (runaway guard)
+int g_diag;                 // diagnostics (FAULT_ON): print LOADED bases etc. (extern'd by elf.c)
+static int g_nochain;       // WATCH file: disable chaining (exact per-block rip attribution)
+static int g_dbg_nochain;   // aarch64 DDDBG_NOCHAIN gate in the SHARED dispatch.c; inert on x86 (chain hook is a no-op)
+static int g_dbg_gprdump;   // aarch64 DDDBG_GPRDUMP gate in the SHARED dispatch.c; inert on x86 (aarch64 dump only)
+static uint64_t g_loadbase; // main program load base (for file-offset mapping)
 static uint8_t *g_w8;
-static uint8_t g_w8v;                   // debug byte-watchpoint (armed via magic syscall 500)
-static uint64_t g_malloc_n;             // debug: count of __libc_malloc_impl entries
+static uint8_t g_w8v;       // debug byte-watchpoint (armed via magic syscall 500)
+static uint64_t g_malloc_n; // debug: count of __libc_malloc_impl entries
 static const char *g_exe_path = "";
-static const char *g_self_path = "";    // host path to this jit86 binary (for execve re-exec)
+static const char *g_self_path = ""; // host path to this jit86 binary (for execve re-exec)
 
 // ---- W3b SSE/string-SIMD idiom upgrade (gate NOSSEOPT=1) ----
 // g_pmovmskb_n: # of `pmovmskb` sites lowered to the cascading-shift NEON sequence
 // (vs the old per-byte scalar spill loop). Printed under PROF.
 static uint64_t g_pmovmskb_n;
 static int g_nosseopt = -1; // -1 = uninitialized; cached getenv("NOSSEOPT")
+
 static int nosseopt(void) {
     if (g_nosseopt < 0) g_nosseopt = (getenv("NOSSEOPT") != NULL);
     return g_nosseopt;
@@ -123,6 +133,7 @@ static int nosseopt(void) {
 // Disabling it reverts emit_ea + the mov [base+disp] load/store fold to the exact baseline
 // codegen (movconst-built disp + base+0 load/store). Env read once, then cached.
 static int g_noeaopt = -1; // -1 = uninitialized; cached getenv("NOEAOPT")
+
 static int noeaopt(void) {
     if (g_noeaopt < 0) g_noeaopt = (getenv("NOEAOPT") != NULL);
     return g_noeaopt;
@@ -137,6 +148,7 @@ static int noeaopt(void) {
 // for PIE/static-PIE -> guestfold_on() is 0 -> codegen byte-identical to baseline.
 static uint64_t g_nonpie_lo, g_nonpie_bias;
 static int g_x86fold = -1; // cached: NOGUESTFOLD=1 disables (A/B kill-switch); default on for non-PIE
+
 static int guestfold_on(void) {
     if (g_x86fold < 0) g_x86fold = (getenv("NOGUESTFOLD") == NULL);
     return g_x86fold && g_nonpie_lo != 0;
@@ -165,6 +177,7 @@ static uint64_t g_prof_t2fold; // PROF: of the promoted loops, how many also eli
 // x86-xflags (cross-block dead-flag elimination; gate NOXBLOCKFLAGS=1 -- see translate/trace.c):
 static uint64_t g_prof_xflag;      // PROF: block-edge flag materializations elided (per edge)
 static uint64_t g_prof_xflag_scan; // PROF: successor liveness scans performed
+
 static int notier2x(void) {
     if (g_notier2x < 0) g_notier2x = (getenv("NOTIER2X") != NULL);
     return g_notier2x;

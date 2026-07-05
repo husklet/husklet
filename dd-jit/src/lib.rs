@@ -22,18 +22,41 @@ use std::path::Path;
 /// from `targets/<target>.c`. The OS axis is `linux` (jit / jit86) or `darwin` (jitdarwin — native
 /// macOS Mach-O containers); the ISA axis is `aarch64` or `x86_64`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
-pub enum Guest { #[default] LinuxAarch64, LinuxX86_64, DarwinAarch64 }
+pub enum Guest {
+    #[default]
+    LinuxAarch64,
+    LinuxX86_64,
+    DarwinAarch64,
+}
 
 impl Guest {
-    pub const ALL: [Guest; 3] = [Guest::LinuxAarch64, Guest::LinuxX86_64, Guest::DarwinAarch64];
+    pub const ALL: [Guest; 3] = [
+        Guest::LinuxAarch64,
+        Guest::LinuxX86_64,
+        Guest::DarwinAarch64,
+    ];
 
     /// Guest OS personality: `"linux"` or `"darwin"`.
-    pub fn os(self) -> &'static str { match self { Guest::DarwinAarch64 => "darwin", _ => "linux" } }
+    pub fn os(self) -> &'static str {
+        match self {
+            Guest::DarwinAarch64 => "darwin",
+            _ => "linux",
+        }
+    }
     /// Guest instruction set: `"aarch64"` or `"x86_64"`.
-    pub fn arch(self) -> &'static str { match self { Guest::LinuxX86_64 => "x86_64", _ => "aarch64" } }
+    pub fn arch(self) -> &'static str {
+        match self {
+            Guest::LinuxX86_64 => "x86_64",
+            _ => "aarch64",
+        }
+    }
     /// The build-target name, matching `build.rs` and `targets/<target>.c`.
     pub fn target(self) -> &'static str {
-        match self { Guest::LinuxAarch64 => "linux_aarch64", Guest::LinuxX86_64 => "linux_x86_64", Guest::DarwinAarch64 => "darwin_aarch64" }
+        match self {
+            Guest::LinuxAarch64 => "linux_aarch64",
+            Guest::LinuxX86_64 => "linux_x86_64",
+            Guest::DarwinAarch64 => "darwin_aarch64",
+        }
     }
 
     /// Pick a target from an OS + arch (e.g. detected from a binary's magic / an image's metadata).
@@ -87,7 +110,9 @@ fn resolve_bundled(name: &str, baked: &str) -> Option<String> {
             dirs.push(d.to_path_buf());
         }
     }
-    dirs.push(std::path::PathBuf::from("/Applications/dd.app/Contents/Resources"));
+    dirs.push(std::path::PathBuf::from(
+        "/Applications/dd.app/Contents/Resources",
+    ));
     for d in dirs {
         let cand = d.join(name);
         if cand.exists() {
@@ -103,13 +128,20 @@ fn resolve_bundled(name: &str, baked: &str) -> Option<String> {
 
 /// A published port: the host port forwards to the container port (`docker -p HOST:CONTAINER`).
 #[derive(Clone, Debug)]
-pub struct PortMap { pub host: u16, pub container: u16 }
+pub struct PortMap {
+    pub host: u16,
+    pub container: u16,
+}
 
 /// A bind mount: a host directory mounted at a path inside the container (`docker -v HOST:CONTAINER`).
 /// `ro` marks the mount read-only (`-v HOST:CONTAINER:ro`): the JIT then fails write-intent syscalls
 /// under `container` with EROFS. Default `false` = read-write (the normal `-v src:dst`).
 #[derive(Clone, Debug)]
-pub struct Volume { pub container: String, pub host: String, pub ro: bool }
+pub struct Volume {
+    pub container: String,
+    pub host: String,
+    pub ro: bool,
+}
 
 /// Everything needed to launch one container in the JIT. Mirrors the JIT's flag/env contract:
 /// `--rootfs/--lower/--hostname/--mem-max/--pids-max/--uid/--gid/--publish` + `DDVOL`/`DD_NETNS` env.
@@ -151,14 +183,24 @@ pub struct SpawnConfig {
 fn shq(s: &str) -> String {
     let mut o = String::with_capacity(s.len() + 2);
     o.push('\'');
-    for c in s.chars() { if c == '\'' { o.push_str("'\\''"); } else { o.push(c); } }
+    for c in s.chars() {
+        if c == '\'' {
+            o.push_str("'\\''");
+        } else {
+            o.push(c);
+        }
+    }
     o.push('\'');
     o
 }
 
 impl SpawnConfig {
     pub fn new(work_dir: impl Into<String>, rootfs: impl Into<String>) -> Self {
-        SpawnConfig { work_dir: work_dir.into(), rootfs: rootfs.into(), ..Default::default() }
+        SpawnConfig {
+            work_dir: work_dir.into(),
+            rootfs: rootfs.into(),
+            ..Default::default()
+        }
     }
 
     /// Serialize the docker resource knobs (`--cpus`/`--read-only`/`--ulimit`) into the engine's env
@@ -168,12 +210,19 @@ impl SpawnConfig {
     /// byte-identical launch for containers that use none of these.
     fn resource_env(&self) -> String {
         let mut s = String::new();
-        if self.cpus > 0 { s += &format!("DD_CPUS={} ", self.cpus); }
-        if self.read_only { s += "DD_ROOTFS_RO=1 "; }
+        if self.cpus > 0 {
+            s += &format!("DD_CPUS={} ", self.cpus);
+        }
+        if self.read_only {
+            s += "DD_ROOTFS_RO=1 ";
+        }
         if !self.ulimits.is_empty() {
-            let u = self.ulimits.iter()
+            let u = self
+                .ulimits
+                .iter()
                 .map(|(n, soft, hard)| format!("{}={}:{}", n, soft, hard))
-                .collect::<Vec<_>>().join(",");
+                .collect::<Vec<_>>()
+                .join(",");
             s += &format!("DD_ULIMITS={} ", shq(&u));
         }
         s
@@ -183,32 +232,65 @@ impl SpawnConfig {
     /// differs per guest OS — linux (jit/jit86) takes the full container flag set + `DDVOL`/`DD_NETNS`
     /// env; darwin (jitdarwin) takes `--rootfs` + `--volume HOST:CONT`. Returns `None` if not built.
     pub fn script(&self, guest: Guest) -> Option<String> {
-        let cd = if self.work_dir.is_empty() { String::new() } else { format!("cd {} && ", shq(&self.work_dir)) };
-        let argv = self.argv.iter().map(|a| shq(a)).collect::<Vec<_>>().join(" ");
+        let cd = if self.work_dir.is_empty() {
+            String::new()
+        } else {
+            format!("cd {} && ", shq(&self.work_dir))
+        };
+        let argv = self
+            .argv
+            .iter()
+            .map(|a| shq(a))
+            .collect::<Vec<_>>()
+            .join(" ");
         let body = if guest.os() == "darwin" {
             // darwinjail: run the native arm64 binary jailed via an interposing dylib (DYLD_INSERT) -- no
             // DBT. The container model (rootfs/lowers/volumes/hostname/limits/publish) is passed as env.
             let jail = guest.jail_dylib()?;
             let mut env = format!("DYLD_INSERT_LIBRARIES={} DD_SANDBOX=1 ", shq(&jail));
-            if !self.rootfs.is_empty() { env += &format!("DD_ROOTFS={} ", shq(&self.rootfs)); }
-            if !self.lowers.is_empty() { env += &format!("DD_LOWERS={} ", shq(&self.lowers.join(","))); }
+            if !self.rootfs.is_empty() {
+                env += &format!("DD_ROOTFS={} ", shq(&self.rootfs));
+            }
+            if !self.lowers.is_empty() {
+                env += &format!("DD_LOWERS={} ", shq(&self.lowers.join(",")));
+            }
             // ALWAYS set DD_VOLUMES (empty when there are no binds), never conditionally: the daemon's OWN
             // process env carries a DD_VOLUMES (its named-volume ROOT dir, a plain path) that the container
             // would otherwise inherit -- and the jail parses DD_VOLUMES as `HOST:CONT,…` bind specs, so a
             // colon-less dir path made it abort every no-bind mac container with "invalid DD_VOLUMES"
-            // (#234). Emitting an explicit (possibly empty) value here shadows the inherited one; empty =>
+            // Emitting an explicit (possibly empty) value here shadows the inherited one; empty =>
             // zero binds. (Linux uses DDVOL, a different name, so only darwin hit this collision.)
-            let v = self.volumes.iter().map(|v| format!("{}:{}", v.host, v.container)).collect::<Vec<_>>().join(",");
+            let v = self
+                .volumes
+                .iter()
+                .map(|v| format!("{}:{}", v.host, v.container))
+                .collect::<Vec<_>>()
+                .join(",");
             env += &format!("DD_VOLUMES={} ", shq(&v));
-            if let Some(h) = &self.hostname { if !h.is_empty() { env += &format!("DD_HOSTNAME={} ", shq(h)); } }
-            if self.mem_max > 0 { env += &format!("DD_MEM_MAX={} ", self.mem_max); }
-            if self.pids_max > 0 { env += &format!("DD_PIDS_MAX={} ", self.pids_max); }
+            if let Some(h) = &self.hostname {
+                if !h.is_empty() {
+                    env += &format!("DD_HOSTNAME={} ", shq(h));
+                }
+            }
+            if self.mem_max > 0 {
+                env += &format!("DD_MEM_MAX={} ", self.mem_max);
+            }
+            if self.pids_max > 0 {
+                env += &format!("DD_PIDS_MAX={} ", self.pids_max);
+            }
             env += &self.resource_env(); // DD_CPUS / DD_ROOTFS_RO / DD_ULIMITS (docker --cpus/--read-only/--ulimit)
             if !self.publish.is_empty() {
-                let p = self.publish.iter().map(|p| format!("{}:{}", p.host, p.container)).collect::<Vec<_>>().join(",");
+                let p = self
+                    .publish
+                    .iter()
+                    .map(|p| format!("{}:{}", p.host, p.container))
+                    .collect::<Vec<_>>()
+                    .join(",");
                 env += &format!("DD_PUBLISH={} ", shq(&p));
             }
-            for (k, val) in &self.env { env += &format!("{}={} ", k, shq(val)); }
+            for (k, val) in &self.env {
+                env += &format!("{}={} ", k, shq(val));
+            }
             // `exec env …` so the container process REPLACES this shell -- it becomes the session leader /
             // foreground of the PTY, so an interactive shell can read the terminal (no job-control stall).
             format!("exec env {env}{argv}")
@@ -217,39 +299,80 @@ impl SpawnConfig {
             let mut env = String::new();
             // The `mac` bridge drops the ambient env, so forward CRASHDBG explicitly when the host sets it
             // (the JIT installs its crash diagnostics on getenv("CRASHDBG")).
-            if std::env::var("CRASHDBG").is_ok() { env += "CRASHDBG=1 "; }
-            // #339: forward the persistent-translated-code-cache controls the same way (opt-in; each is a
+            if std::env::var("CRASHDBG").is_ok() {
+                env += "CRASHDBG=1 ";
+            }
+            // forward the persistent-translated-code-cache controls the same way (opt-in; each is a
             // plain getenv() in the engine). Lets `docker run`/tests enable the cross-process cache.
-            for k in ["DDJIT_PCACHE", "DDJIT_PCACHE_DIR", "DDJIT_NOPCACHE", "COLDPROF"] {
-                if let Ok(v) = std::env::var(k) { env += &format!("{}={} ", k, shq(&v)); }
+            for k in [
+                "DDJIT_PCACHE",
+                "DDJIT_PCACHE_DIR",
+                "DDJIT_NOPCACHE",
+                "COLDPROF",
+            ] {
+                if let Ok(v) = std::env::var(k) {
+                    env += &format!("{}={} ", k, shq(&v));
+                }
             }
             if !self.volumes.is_empty() {
                 // Per-volume token is `guest:host`; a read-only bind gets a leading `ro:` marker. A guest
                 // path always starts with '/', so the `ro:` prefix is unambiguous even if `host` contains
                 // colons, and rw volumes serialize EXACTLY as before (byte-identical -> zero matrix change).
-                let v = self.volumes.iter().map(|v| if v.ro {
-                    format!("ro:{}:{}", v.container, v.host)
-                } else {
-                    format!("{}:{}", v.container, v.host)
-                }).collect::<Vec<_>>().join(",");
+                let v = self
+                    .volumes
+                    .iter()
+                    .map(|v| {
+                        if v.ro {
+                            format!("ro:{}:{}", v.container, v.host)
+                        } else {
+                            format!("{}:{}", v.container, v.host)
+                        }
+                    })
+                    .collect::<Vec<_>>()
+                    .join(",");
                 env += &format!("DDVOL={} ", shq(&v));
             }
-            if let Some(ns) = &self.netns { env += &format!("DD_NETNS={} ", shq(ns)); }
+            if let Some(ns) = &self.netns {
+                env += &format!("DD_NETNS={} ", shq(ns));
+            }
             env += &self.resource_env(); // DD_CPUS / DD_ROOTFS_RO / DD_ULIMITS (docker --cpus/--read-only/--ulimit)
-            for (k, val) in &self.env { env += &format!("{}={} ", k, shq(val)); }
+            for (k, val) in &self.env {
+                env += &format!("{}={} ", k, shq(val));
+            }
             let mut f = String::new();
-            if let Some(h) = &self.hostname { if !h.is_empty() { f += &format!("--hostname {} ", shq(h)); } }
-            if self.mem_max > 0 { f += &format!("--mem-max {} ", self.mem_max); }
-            if self.pids_max > 0 { f += &format!("--pids-max {} ", self.pids_max); }
-            if let Some(u) = self.uid { f += &format!("--uid {} ", u); }
-            if let Some(g) = self.gid { f += &format!("--gid {} ", g); }
-            for l in &self.lowers { f += &format!("--lower {} ", shq(l)); }
+            if let Some(h) = &self.hostname {
+                if !h.is_empty() {
+                    f += &format!("--hostname {} ", shq(h));
+                }
+            }
+            if self.mem_max > 0 {
+                f += &format!("--mem-max {} ", self.mem_max);
+            }
+            if self.pids_max > 0 {
+                f += &format!("--pids-max {} ", self.pids_max);
+            }
+            if let Some(u) = self.uid {
+                f += &format!("--uid {} ", u);
+            }
+            if let Some(g) = self.gid {
+                f += &format!("--gid {} ", g);
+            }
+            for l in &self.lowers {
+                f += &format!("--lower {} ", shq(l));
+            }
             if !self.publish.is_empty() {
-                let p = self.publish.iter().map(|p| format!("{}:{}", p.host, p.container)).collect::<Vec<_>>().join(",");
+                let p = self
+                    .publish
+                    .iter()
+                    .map(|p| format!("{}:{}", p.host, p.container))
+                    .collect::<Vec<_>>()
+                    .join(",");
                 f += &format!("--publish {} ", shq(&p));
             }
             // A bare static-PIE guest needs no rootfs; omit the flag so it runs un-jailed.
-            if !self.rootfs.is_empty() { f += &format!("--rootfs {} ", shq(&self.rootfs)); }
+            if !self.rootfs.is_empty() {
+                f += &format!("--rootfs {} ", shq(&self.rootfs));
+            }
             // `exec env …` so the JIT REPLACES the wrapper shell -- it becomes the process the daemon
             // tracks (live.pid), so `docker pause` (SIGSTOP/SIGCONT) hits the JIT, not a dead bash parent.
             format!("exec env {env}{jit} {f}{argv}")
@@ -271,7 +394,10 @@ impl SpawnConfig {
 
 /// True if the JIT binary for `guest` was built and exists.
 pub fn available(guest: Guest) -> bool {
-    guest.jit_path().map(|p| Path::new(&p).exists()).unwrap_or(false)
+    guest
+        .jit_path()
+        .map(|p| Path::new(&p).exists())
+        .unwrap_or(false)
 }
 
 #[cfg(test)]
@@ -281,7 +407,10 @@ mod tests {
     fn guest_detect() {
         assert_eq!(Guest::detect("linux", "amd64"), Some(Guest::LinuxX86_64));
         assert_eq!(Guest::detect("linux", "arm64"), Some(Guest::LinuxAarch64));
-        assert_eq!(Guest::detect("darwin", "aarch64"), Some(Guest::DarwinAarch64));
+        assert_eq!(
+            Guest::detect("darwin", "aarch64"),
+            Some(Guest::DarwinAarch64)
+        );
         assert_eq!(Guest::detect("plan9", "aarch64"), None);
         assert_eq!(Guest::DarwinAarch64.os(), "darwin");
         assert_eq!(Guest::LinuxX86_64.arch(), "x86_64");
@@ -293,8 +422,15 @@ mod tests {
         c.lowers = vec!["img/l0".into()];
         c.hostname = Some("box".into());
         c.mem_max = 256 << 20;
-        c.publish = vec![PortMap { host: 18080, container: 80 }];
-        c.volumes = vec![Volume { container: "/data".into(), host: "/h".into(), ro: false }];
+        c.publish = vec![PortMap {
+            host: 18080,
+            container: 80,
+        }];
+        c.volumes = vec![Volume {
+            container: "/data".into(),
+            host: "/h".into(),
+            ro: false,
+        }];
         c.argv = vec!["/bin/sh".into()];
         if let Some(s) = c.script(Guest::LinuxAarch64) {
             assert!(s.contains("--rootfs 'img/upper'") && s.contains("--lower 'img/l0'"));
@@ -305,7 +441,11 @@ mod tests {
     #[test]
     fn darwin_script_uses_rootfs_volume() {
         let mut c = SpawnConfig::new("", "/jail");
-        c.volumes = vec![Volume { container: "/data".into(), host: "/h".into(), ro: false }];
+        c.volumes = vec![Volume {
+            container: "/data".into(),
+            host: "/h".into(),
+            ro: false,
+        }];
         c.argv = vec!["/bin/app".into()];
         if let Some(s) = c.script(Guest::DarwinAarch64) {
             assert!(s.contains("--rootfs '/jail'") && s.contains("--volume '/h':'/data'"));
@@ -317,8 +457,16 @@ mod tests {
         let mut c = SpawnConfig::new("/work", "img/upper");
         // one rw, one ro: rw stays `guest:host` (byte-identical), ro gets the leading `ro:` marker.
         c.volumes = vec![
-            Volume { container: "/rw".into(), host: "/h1".into(), ro: false },
-            Volume { container: "/ro".into(), host: "/h2".into(), ro: true },
+            Volume {
+                container: "/rw".into(),
+                host: "/h1".into(),
+                ro: false,
+            },
+            Volume {
+                container: "/ro".into(),
+                host: "/h2".into(),
+                ro: true,
+            },
         ];
         c.argv = vec!["/bin/sh".into()];
         if let Some(s) = c.script(Guest::LinuxAarch64) {
@@ -339,7 +487,11 @@ mod tests {
         assert!(re.contains("DD_ULIMITS='nofile=1024:2048,nproc=512:1024'"));
         for g in [Guest::LinuxAarch64, Guest::DarwinAarch64] {
             if let Some(s) = c.script(g) {
-                assert!(s.contains("DD_CPUS=2") && s.contains("DD_ROOTFS_RO=1") && s.contains("DD_ULIMITS="));
+                assert!(
+                    s.contains("DD_CPUS=2")
+                        && s.contains("DD_ROOTFS_RO=1")
+                        && s.contains("DD_ULIMITS=")
+                );
             }
         }
         // unset -> empty (byte-identical launch for containers that use none of these)

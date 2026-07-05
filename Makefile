@@ -1,5 +1,5 @@
 # dd workspace.
-.PHONY: all jit fmt test test-ci perf test-docker test-docker-full test-compose test-docker-net test-macos test-realsw test-smoke scenarios scenarios-real scenarios-long scenarios-count scenarios-clean coverage bench clean app dmg install uninstall mac-image mac-push
+.PHONY: all jit fmt fmt-check test test-ci perf test-docker test-docker-full test-compose test-docker-net test-macos test-realsw test-smoke scenarios scenarios-real scenarios-long scenarios-count scenarios-clean coverage bench clean app dmg install uninstall mac-image mac-push
 # Version is the git tag (v0.2.0 -> 0.2.0); falls back to 0.0.0-dev with no tags. CI passes it too.
 TAG := $(shell git describe --tags --abbrev=0 2>/dev/null | sed 's/^v//')
 VERSION ?= $(or $(TAG),0.0.0-dev)
@@ -50,8 +50,15 @@ coverage: jit  ## report unimplemented syscalls/opcodes (static switch-diff + dy
 	bash dd-tests/tools/coverage.sh $(or $(MODE),all)
 bench: jit      ## TRUE DBT overhead: self-timed compute kernels (startup EXCLUDED) — native-arm64 vs dd-arm64/dd-x86/qemu-x86; BENCH_N=median (3), BENCH_K=alu,fp to narrow; writes target/dd-tests/bench.{csv,json}
 	cargo run -q -p dd-tests --release --bin bench
-fmt:            ## clang-format the decomposed C (jit/ os/linux/ frontend/ include/ targets/)
-	cd dd-jit/src/runtime && find jit os/linux frontend include targets -name '*.c' -o -name '*.h' | xargs clang-format -i
+# The decomposed C engine lives under dd-jit/src/runtime/{engine,translate,host,include,os,targets}
+# (os/ covers both os/linux and os/darwin). Uses dd-jit/.clang-format.
+RUNTIME_C = $(shell find dd-jit/src/runtime/engine dd-jit/src/runtime/translate dd-jit/src/runtime/host dd-jit/src/runtime/include dd-jit/src/runtime/os dd-jit/src/runtime/targets \( -name '*.c' -o -name '*.h' \))
+fmt:            ## format the whole tree: clang-format the C engine + cargo fmt the Rust crates
+	clang-format -i $(RUNTIME_C)
+	cargo fmt --all
+fmt-check:      ## CI: verify clang-format + cargo fmt are clean (no writes)
+	clang-format --dry-run --Werror $(RUNTIME_C)
+	cargo fmt --all -- --check
 app:            ## build + assemble & ad-hoc-sign build/dd.app (the GTK GUI bundle; macOS)
 	@chmod +x dd-gui/package/bundle.sh dd-gui/package/make-dmg.sh
 	cargo clean -p ddjit --release                 # FORCE a fresh C engine: build.rs's .c rerun-if-changed is unreliable under CI rust-cache, so a stale engine could otherwise ship (Rust/daemon fixes shipped while engine/C fixes silently didn't)

@@ -54,8 +54,7 @@ static int op_has_modrm(int two, uint8_t op) {
     if (op == 0xC3 || op == 0xC2 || op == 0xC9 || op == 0x90 || op == 0xF4 || op == 0x99 || op == 0x98) return 0;
     if (op >= 0x91 && op <= 0x97) return 0;                                           // xchg eax, rN
     if (op == 0x9B || op == 0x9C || op == 0x9D || op == 0x9E || op == 0x9F) return 0; // fwait/pushf/popf/sahf/lahf
-    if (op == 0x9C || op == 0x9D || op == 0xFC || op == 0xFD || op == 0xCC || op == 0xF5 || op == 0xF8 ||
-        op == 0xF9)
+    if (op == 0x9C || op == 0x9D || op == 0xFC || op == 0xFD || op == 0xCC || op == 0xF5 || op == 0xF8 || op == 0xF9)
         return 0;                                                // pushf/popf/cld/std/int3/cmc/clc/stc
     if (op >= 0xA0 && op <= 0xA3) return 0;                      // mov AL/eAX/rAX <-> moffs (direct addr imm, no modrm)
     if (op >= 0xA4 && op <= 0xAF) return 0;                      // movs/cmps/stos/lods/scas + test al,imm(A8/A9)
@@ -67,6 +66,7 @@ static int op_has_modrm(int two, uint8_t op) {
     // ALU group, mov, lea, test, group1/2/3, etc. all have modrm
     return 1;
 }
+
 // immediate size (bytes) for the opcodes we handle; 0 if none.
 static int op_imm_bytes(struct insn *I) {
     int two = I->two;
@@ -91,13 +91,14 @@ static int op_imm_bytes(struct insn *I) {
             return 1; // SSE imm
         return 0;
     }
-    if (op == 0xC2) return 2;                                             // ret imm16
-    if (op >= 0x70 && op <= 0x7F) return 1;                               // jcc rel8
-    if (op == 0xEB || op == 0xE3) return 1;                               // jmp rel8 / jrcxz rel8
-    if (op == 0xE0 || op == 0xE1 || op == 0xE2) return 1;                 // loopne/loope/loop rel8
-    if (op == 0xE9 || op == 0xE8) return 4;                               // jmp/call rel32
-    if (op >= 0xA0 && op <= 0xA3) return I->addr32 ? 4 : 8;               // mov moffs: address-size direct offset (64-bit default; 4 under 0x67)
-    if (op >= 0xB0 && op <= 0xB7) return 1;                               // mov r8, imm8
+    if (op == 0xC2) return 2;                             // ret imm16
+    if (op >= 0x70 && op <= 0x7F) return 1;               // jcc rel8
+    if (op == 0xEB || op == 0xE3) return 1;               // jmp rel8 / jrcxz rel8
+    if (op == 0xE0 || op == 0xE1 || op == 0xE2) return 1; // loopne/loope/loop rel8
+    if (op == 0xE9 || op == 0xE8) return 4;               // jmp/call rel32
+    if (op >= 0xA0 && op <= 0xA3)
+        return I->addr32 ? 4 : 8;           // mov moffs: address-size direct offset (64-bit default; 4 under 0x67)
+    if (op >= 0xB0 && op <= 0xB7) return 1; // mov r8, imm8
     if (op >= 0xB8 && op <= 0xBF) return os == 8 ? 8 : (os == 2 ? 2 : 4); // mov r,imm (movabs if W)
     if (op < 0x40 && (op & 7) == 4) return 1;                             // ALU al, imm8
     if (op < 0x40 && (op & 7) == 5) return os == 2 ? 2 : 4;               // ALU eAX, imm16/32
@@ -337,6 +338,7 @@ static void ea_add_disp(int64_t d) {
         e_rrr(A_ADD, 17, 17, 16, 1, 0);
     }
 }
+
 // Compute the effective address of a memory operand into host scratch x17.
 // (base + index*scale + disp, + fs/gs base; RIP-relative -> a constant.)
 // Address-gen fast path: fold base, index<<scale and disp into the fewest host insns --
@@ -352,11 +354,16 @@ static void ea_bias17(void) {
     uint32_t *cb = (uint32_t *)g_cp;
     emit32(0); // cbnz x16, Lskip   (high address -> no bias)
     e_movconst(16, g_nonpie_bias);
-    e_rrr(A_ADD, 17, 17, 16, 1, 0); // x17 += bias
+    e_rrr(A_ADD, 17, 17, 16, 1, 0);                                                                // x17 += bias
     *cb = 0xB5000000u | (((uint32_t)(((uint8_t *)g_cp - (uint8_t *)cb) / 4) & 0x7FFFF) << 5) | 16; // cbnz x16
 }
+
 static void emit_ea_core(struct insn *I, uint64_t next_rip, int do_bias);
-static void emit_ea(struct insn *I, uint64_t next_rip) { emit_ea_core(I, next_rip, 1); }
+
+static void emit_ea(struct insn *I, uint64_t next_rip) {
+    emit_ea_core(I, next_rip, 1);
+}
+
 static void emit_ea_core(struct insn *I, uint64_t next_rip, int do_bias) {
     if (noeaopt()) { // exact baseline lowering
         if (I->rip_rel) {
@@ -420,6 +427,7 @@ static int ea_imm_fold(struct insn *I, int w, int *rn, int *off) {
     if (d >= -256 && d <= 255) return 2;                                 // unscaled: ldur[rn,#d]
     return 0;
 }
+
 // Single-instruction folded zero-extending load of a memory operand into rt.
 // Falls back to emit_ea + e_load for index/seg/rip/large-disp forms (identical to before).
 static void emit_load_mem(struct insn *I, uint64_t next, int w, int rt) {

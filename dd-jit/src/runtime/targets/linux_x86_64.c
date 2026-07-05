@@ -57,34 +57,34 @@
 #include <libkern/OSCacheControl.h>
 
 #include "../include/cpu_x86_64.h"
-#include "../translate/x86_64/abi.h"          // cpu-interface seam (G_* contract + sysmap + normalize)
+#include "../translate/x86_64/abi.h"            // cpu-interface seam (G_* contract + sysmap + normalize)
 #include "../translate/x86_64/dispatch_hooks.h" // x86 dispatch seam for the SHARED engine/dispatch.c (engine-dedup)
-#include "../translate/x86_64/fill_stat.c"    // per-arch struct-stat layout os/linux fills
+#include "../translate/x86_64/fill_stat.c"      // per-arch struct-stat layout os/linux fills
 // Byte size of the guest `struct stat` fill_stat.c writes -- the shared stat syscalls (os/linux/syscall/
-// fs.c cases 79/80) validate exactly this many guest bytes before filling the buffer (#395 EFAULT guard).
+// fs.c cases 79/80) validate exactly this many guest bytes before filling the buffer (EFAULT guard).
 #define GUEST_LINUX_STAT_BYTES 144
 
 #include "../os/linux/container/state.c"     // SHARED: container globals (rootfs/cwd/netns/ids/fd tables)
-#include "../translate/x86_64/engine_glue.c"  // x86-only engine globals (trace/diag) the shared cache.c omits
-#include "../engine/cache.c"                     // SHARED engine: code cache + block map (hash via G_GPC_HASH_SHIFT)
-#include "../translate/x86_64/emit.c"         // x86 engine: arm64 emitters + SSE + x87
-#include "../translate/x86_64/decode.c"       // x86-64 decoder
-#include "../translate/x86_64/translate.c"    // x86-64 translate_block + trampolines
-#include "../translate/x86_64/pcache.c"       // opt8: persistent translated-code cache (DDJIT_PCACHE=1)
+#include "../translate/x86_64/engine_glue.c" // x86-only engine globals (trace/diag) the shared cache.c omits
+#include "../engine/cache.c"                 // SHARED engine: code cache + block map (hash via G_GPC_HASH_SHIFT)
+#include "../translate/x86_64/emit.c"        // x86 engine: arm64 emitters + SSE + x87
+#include "../translate/x86_64/decode.c"      // x86-64 decoder
+#include "../translate/x86_64/translate.c"   // x86-64 translate_block + trampolines
+#include "../translate/x86_64/pcache.c"      // opt8: persistent translated-code cache (DDJIT_PCACHE=1)
 #include "../os/linux/thread.c"              // SHARED: clone->pthread, per-thread cpu, futex
 #include "../os/linux/signal.c"              // SHARED: signal delivery driver + translation
-#include "../translate/x86_64/sigframe.c"     // x86-64 rt_sigframe build/restore (uses signal.c state)
-#include "../translate/x86_64/legacy.c"       // x86 legacy-syscall -> *at normalization (G_NORMALIZE)
+#include "../translate/x86_64/sigframe.c"    // x86-64 rt_sigframe build/restore (uses signal.c state)
+#include "../translate/x86_64/legacy.c"      // x86 legacy-syscall -> *at normalization (G_NORMALIZE)
 #include "../os/linux/container/vfs.c"       // SHARED: rootfs jail, overlay, /proc synth, stat
 #include "../os/linux/container/netns.c"     // SHARED: sockets, loopback netns, termios
 #include "../os/linux/fscache.c"             // SHARED: fd/path cache
-#include "../os/linux/syscall/dispatch.c"             // SHARED: the canonical syscall layer
+#include "../os/linux/syscall/dispatch.c"    // SHARED: the canonical syscall layer
 #include "../os/linux/sentry.c"              // untrusted-guest isolation: SPSC ring + sentry split (g_untrusted)
-#include "../translate/x86_64/x86_ops.c"        // x86 cpuid + x87 m80 block-exit helpers
-#include "../translate/x86_64/avx.c"            // AVX/AVX2/AVX-512 (VEX/EVEX) emulation (R_AVX block-exit)
-#include "../engine/dispatch.c"                  // SHARED engine: run_guest loop (x86 drives it via dispatch_hooks.h;
-                                              // keeps its own run_block/block_return in translate.c, G_OWN_TRAMPOLINES)
-#include "../translate/x86_64/elf.c"      // x86 ELF loader + stack + fault handlers (per-arch: machine/platform)
+#include "../translate/x86_64/x86_ops.c"     // x86 cpuid + x87 m80 block-exit helpers
+#include "../translate/x86_64/avx.c"         // AVX/AVX2/AVX-512 (VEX/EVEX) emulation (R_AVX block-exit)
+#include "../engine/dispatch.c"              // SHARED engine: run_guest loop (x86 drives it via dispatch_hooks.h;
+                                             // keeps its own run_block/block_return in translate.c, G_OWN_TRAMPOLINES)
+#include "../translate/x86_64/elf.c"         // x86 ELF loader + stack + fault handlers (per-arch: machine/platform)
 
 // ---- entry + main ----
 // ---------------- entry ----------------
@@ -106,14 +106,14 @@ static void container_init(const char *rootfs) {
     // foreground command got SIGTTOU/SIGTTIN-stopped ("[N]+ Stopped  ls") instead of running.
     if (rootfs) g_init_hostpid = getpid();
     container_read_resource_env(); // docker --cpus / --read-only / --ulimit (DD_CPUS/DD_ROOTFS_RO/DD_ULIMITS)
-    if (rootfs && rootfs[0]) { // the shared container jails against the canonical rootfs + its dir fd
+    if (rootfs && rootfs[0]) {     // the shared container jails against the canonical rootfs + its dir fd
         g_rootfs = (char *)rootfs;
         if (!realpath(g_rootfs, g_rootfs_canon)) snprintf(g_rootfs_canon, sizeof g_rootfs_canon, "%s", g_rootfs);
         g_rootfs_canon_len = strlen(g_rootfs_canon);
         g_root_fd = open(g_rootfs_canon, O_RDONLY | O_DIRECTORY);
-        g_root_fd = engine_fd_hoist(g_root_fd); // #299: keep it off the guest's low fds (else it squats fd 3)
-        container_populate_dev(); // /dev/{fd,stdin,stdout,stderr,ptmx,pts,shm,console,...} the unpacker stripped
-        container_populate_machine_id(); // #348: /etc/machine-id agreeing with boot_id (if image ships none)
+        g_root_fd = engine_fd_hoist(g_root_fd); // keep it off the guest's low fds (else it squats fd 3)
+        container_populate_dev();        // /dev/{fd,stdin,stdout,stderr,ptmx,pts,shm,console,...} the unpacker stripped
+        container_populate_machine_id(); // /etc/machine-id agreeing with boot_id (if image ships none)
         // Container identity = root (0) by default, matching linux_aarch64.c; DD_UID/DD_GID (or --uid/--gid)
         // override. Without this g_uid stayed -1 and cuid() fell back to the HOST uid -> the guest saw
         // getuid()/geteuid() == the host's 501 ("I have no name!", non-root shell) on x86-64 only.
@@ -137,12 +137,10 @@ static void container_init(const char *rootfs) {
         else
             snprintf(key, sizeof key, "%d", (int)getpid());
         snprintf(g_netns, sizeof g_netns, "/tmp/dd-lo-%s", key);
-        if ((mkdir(g_netns, 0700) == 0 || errno == EEXIST) && !(ns && ns[0]))
-            setenv("DD_NETNS", key, 1);
+        if ((mkdir(g_netns, 0700) == 0 || errno == EEXIST) && !(ns && ns[0])) setenv("DD_NETNS", key, 1);
     }
     {
-        const char *vs =
-            getenv("DDVOL"); // bind-mount volumes (env path; bridge usually can't pass env, so --vol too)
+        const char *vs = getenv("DDVOL"); // bind-mount volumes (env path; bridge usually can't pass env, so --vol too)
         if (vs && vs[0]) {
             char tmp[2048];
             snprintf(tmp, sizeof tmp, "%s", vs);
@@ -170,7 +168,7 @@ static void container_init(const char *rootfs) {
     // container -- typically a bind-mounted volume). confine() normalizes + clamps it to the rootfs.
     const char *icwd = getenv("DD_CWD");
     if (icwd && icwd[0]) confine(icwd, g_cwd, sizeof g_cwd);
-    // #422: derive the run user's supplementary group set from the image rootfs (runc additionalGids), after
+    // derive the run user's supplementary group set from the image rootfs (runc additionalGids), after
     // g_uid/g_gid + the overlay lowers are resolved, so getgroups(2) and /proc/self/status Groups: report it.
     if (g_rootfs) container_parse_groups();
 }
@@ -212,13 +210,16 @@ static int engine_global_init(void) {
     g_trace = getenv("JT") != NULL;
     g_systrace = getenv("JTS") != NULL;
     g_prof = getenv("PROF") != NULL;
-    // IRQSLIM (lever #4): fixed 2-insn #292 poll header + poll-free forward-chain entry at body+8
+    // IRQSLIM: fixed 2-insn poll header + poll-free forward-chain entry at body+8
     // (every cycle still polls via its backward/indirect edge -- see engine/cache.c).
     // NOIRQSLIM=1 -> legacy poll-on-every-entry for A/B.
     if (!getenv("NOIRQSLIM") && !getenv("NOIRQCHECK")) g_fwdskip = 8;
     // W5B adaptive tier-2 controls (x86 engine)
     g_notier2x = getenv("NOTIER2X") != NULL;
-    { const char *t = getenv("TIER2X_THRESHOLD"); if (t && atoll(t) > 0) g_t2thresh = (uint64_t)atoll(t); }
+    {
+        const char *t = getenv("TIER2X_THRESHOLD");
+        if (t && atoll(t) > 0) g_t2thresh = (uint64_t)atoll(t);
+    }
     // The OrbStack `mac` bridge does NOT propagate env vars; trace via a trigger file
     // and redirect stderr to a shared log (visible from the Linux side).
     int want_trace =
@@ -269,7 +270,7 @@ static int engine_global_init(void) {
     // Untrusted-guest isolation (the sentry process-split). OFF by default -> trusted path unchanged.
     g_untrusted = getenv("DDJIT_UNTRUSTED") != NULL;
     g_sentry_sandbox = getenv("DDJIT_SANDBOX") != NULL;
-    // #238: ptrace tracer/tracee coordination arena -- mmap the shared region ONCE here, BEFORE any guest
+    // ptrace tracer/tracee coordination arena -- mmap the shared region ONCE here, BEFORE any guest
     // fork, so every descendant guest process inherits the same physical pages. Inert until a guest ptraces.
     ptrace_arena_init();
     g_engine_inited = 1;
@@ -283,12 +284,12 @@ static int engine_global_init(void) {
 static const char *load_program(const char *prog, struct loaded *lm, struct loaded *li, uint64_t *jump,
                                 uint64_t *at_base, int *have_interp) {
     static char gb[1024];
-    prog = find_in_path(prog, gb, sizeof gb); // bare "sh" (docker) -> "/bin/sh" via the container PATH
+    prog = find_in_path(prog, gb, sizeof gb);   // bare "sh" (docker) -> "/bin/sh" via the container PATH
     if (!g_comm_store[0]) set_guest_comm(prog); // dd_run recorded the pre-shebang name; preload lands here
     g_exe_path = prog;
     // /proc/self/exe must be the ABSOLUTE, CANONICAL guest path of the loaded image: a RELATIVE guest
     // invocation ("./x" from a harness) or an entry symlink otherwise leaks into the link value, and
-    // glibc static-pie ASSERTS on it at startup ("dl-origin.c: linkval[0]=='/'", #370). Static: the
+    // glibc static-pie ASSERTS on it at startup ("dl-origin.c: linkval[0]=='/'"). Static: the
     // value must outlive this call, like gb above.
     static char bootexe[4200];
     exe_canon(prog, bootexe, sizeof bootexe);
@@ -316,7 +317,7 @@ static const char *load_program(const char *prog, struct loaded *lm, struct load
         *have_interp = 1;
     }
     // opt8: key the cache by the identity (dev/ino/size/mtime) of the guest binary AND its interpreter,
-    // plus (#373b) the argv[0] basename -- a multicall binary (busybox) runs a different applet per
+    // plus the argv[0] basename -- a multicall binary (busybox) runs a different applet per
     // argv[0], and with the exec re-key each image epoch persists its own arena under its own key.
     if (g_pcache) g_pc_binid = pcache_make_id(prog_host, interp_host, prog);
     return prog;
@@ -329,7 +330,8 @@ static const char *load_program(const char *prog, struct loaded *lm, struct load
 // behavior is byte-identical.
 static int run_loaded(int argc, char *const argv[], struct loaded *lm, uint64_t jump, uint64_t at_base) {
     uint8_t *heap = mmap(NULL, 256u << 20, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON, -1, 0);
-    gmap_add((uint64_t)heap, 256u << 20); // track so execve() reclaims the heap + /proc/self/maps sees it (parity w/ aarch64)
+    gmap_add((uint64_t)heap,
+             256u << 20); // track so execve() reclaims the heap + /proc/self/maps sees it (parity w/ aarch64)
     brk_lo = brk_cur = (uint64_t)heap;
     brk_hi = brk_lo + (256u << 20);
 
@@ -342,7 +344,7 @@ static int run_loaded(int argc, char *const argv[], struct loaded *lm, uint64_t 
     s1_calibrate(); // S1: anchor CNTVCT vs host REALTIME/MONOTONIC for the inline time fast path
                     // (also honors DDJIT_NOFASTSYS=1 kill-switch -> byte-identical old syscall path)
     proc_reg_publish(g_exe_path, argc, argv); // publish this process into the /proc table
-    if (g_untrusted) sentry_init(); // fork the host-authority sentry + (optionally) confine the worker
+    if (g_untrusted) sentry_init();           // fork the host-authority sentry + (optionally) confine the worker
     run_guest(&c);
     if (g_untrusted) sentry_shutdown(); // signal quit + waitpid (reap, no orphan)
     if (getenv("DDJIT_FASTSTAT") || g_fast_count)
@@ -357,7 +359,7 @@ int dd_run(const char *rootfs, int argc, char *const argv[]) {
     if (argc < 1 || !argv || !argv[0]) return 2;
     // opt8 persistent translated-code cache: OPT-IN via DDJIT_PCACHE (default OFF -> byte-identical to the
     // baseline; the cross-engine matrix never sets it, so it is unaffected). DDJIT_NOPCACHE=1 is the
-    // kill-switch and always wins (same contract as the aarch64 #339 pcache). Read once.
+    // kill-switch and always wins (same contract as the aarch64 pcache). Read once.
     g_coldprof = getenv("COLDPROF") != NULL;
     g_pcache = getenv("DDJIT_PCACHE") != NULL && getenv("DDJIT_NOPCACHE") == NULL;
     container_init(rootfs);
@@ -382,8 +384,8 @@ int dd_run(const char *rootfs, int argc, char *const argv[]) {
         sb_argv[sb_argc++] = (char *)argv[i];
     sb_argv[sb_argc] = NULL;
     const char *sb_finalhost;
-    int sb_new = resolve_shebang_chain(sb_argv, sb_argc, 256, sb_prog_host, sb_store, sb_fhb, sizeof sb_fhb,
-                                       &sb_finalhost);
+    int sb_new =
+        resolve_shebang_chain(sb_argv, sb_argc, 256, sb_prog_host, sb_store, sb_fhb, sizeof sb_fhb, &sb_finalhost);
     if (sb_new < 0) {
         fprintf(stderr, "dd: too many nested #! interpreters (ELOOP): %s\n", argv[0]);
         return 40; // ELOOP
@@ -399,24 +401,23 @@ int dd_run(const char *rootfs, int argc, char *const argv[]) {
     if (g_pcache) {
         g_pc_entry = jump;
         int hit = pcache_load(jump); // graceful MISS on any stale/corrupt/truncated cache -> translate fresh
-        if (g_coldprof)
-            fprintf(stderr, "[pcache] %s reloc=%d\n", hit ? "HIT (translation skipped)" : "MISS", g_nreloc);
+        if (g_coldprof) fprintf(stderr, "[pcache] %s reloc=%d\n", hit ? "HIT (translation skipped)" : "MISS", g_nreloc);
     }
     int ec = run_loaded(argc, argv, &lm, jump, at_base);
     pcache_save(); // exit via syscall 93 returns here; syscall 94 saves before _exit (idempotent atomic rename)
     return ec;
 }
 
-// W3D/#369: resident ddjitd fork-server (server/client/worker) -- SHARED with linux_aarch64.c, driven
+// resident ddjitd fork-server (server/client/worker) -- SHARED with linux_aarch64.c, driven
 // through the container_init/engine_global_init/load_program/run_loaded/dd_run seam defined above.
 // x86-only knobs: the warm re-run must re-point g_loadbase, and the x86 container model chdir()s the
 // engine process into the rootfs (container_init does; the warm path must match it per request).
 #define FSRV_SET_LOADBASE(b) (g_loadbase = (b))
-#define FSRV_WARM_CHDIR_ROOTFS() \
-    do { \
-        if (g_rootfs) { \
-            if (chdir(g_rootfs)) {} \
-        } \
+#define FSRV_WARM_CHDIR_ROOTFS()                                                                                       \
+    do {                                                                                                               \
+        if (g_rootfs) {                                                                                                \
+            if (chdir(g_rootfs)) {}                                                                                    \
+        }                                                                                                              \
     } while (0)
 #include "../os/linux/forkserver.c"
 

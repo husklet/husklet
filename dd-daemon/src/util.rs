@@ -1,36 +1,34 @@
 #![allow(unused_imports, dead_code)]
-use crate::model::*;
-use crate::system::*;
-use crate::images::*;
-use crate::containers::*;
-use crate::build::*;
 use crate::archive::*;
-use crate::volumes::*;
+use crate::build::*;
+use crate::containers::*;
+use crate::images::*;
+use crate::model::*;
 use crate::networks::*;
-use crate::runtime::*;
 use crate::registry::{Client, Credentials, ImageRef};
+use crate::runtime::*;
+use crate::system::*;
+use crate::volumes::*;
 use axum::body::Body;
 use axum::extract::{Path, Query, Request, State};
-use axum::http::{StatusCode, Uri, HeaderMap};
+use axum::http::{HeaderMap, StatusCode, Uri};
 use axum::response::{IntoResponse, Response};
 use axum::Json;
+use ddjit::{Guest, PortMap, SpawnConfig, Volume};
+use hyper_util::rt::TokioIo;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::HashMap;
+use std::os::fd::{AsRawFd, FromRawFd, OwnedFd, RawFd};
 use std::path::PathBuf;
+use std::process::Stdio;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
-use std::process::Stdio;
-use std::os::fd::{AsRawFd, FromRawFd, OwnedFd, RawFd};
 use tokio::io::unix::AsyncFd;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::sync::{broadcast, mpsc, watch, Mutex};
-use hyper_util::rt::TokioIo;
-use ddjit::{Guest, PortMap, SpawnConfig, Volume};
-
 
 pub(crate) const API_VERSION: &str = "1.43";
-
 
 /// Resolve a container ref (full id, **id prefix** like the docker CLI sends, or short name) to its
 /// full map key. Docker clients show/round-trip the 12-char short id, so prefix resolution is
@@ -39,16 +37,28 @@ pub(crate) fn resolve_cid(g: &Inner, id: &str) -> Option<String> {
     if g.containers.contains_key(id) {
         return Some(id.to_string());
     }
-    let hits: Vec<String> = g.containers.keys().filter(|k| k.starts_with(id)).cloned().collect();
+    let hits: Vec<String> = g
+        .containers
+        .keys()
+        .filter(|k| k.starts_with(id))
+        .cloned()
+        .collect();
     if hits.len() == 1 {
         return hits.into_iter().next();
     }
     // Fall back to the short-id "name" we expose in containers_json, then the user-assigned --name.
     let want = id.trim_start_matches('/');
-    g.containers.keys().find(|k| k.get(..12).map(|p| p == want).unwrap_or(false)).cloned()
-        .or_else(|| g.containers.iter().find(|(_, c)| c.name == want).map(|(k, _)| k.clone()))
+    g.containers
+        .keys()
+        .find(|k| k.get(..12).map(|p| p == want).unwrap_or(false))
+        .cloned()
+        .or_else(|| {
+            g.containers
+                .iter()
+                .find(|(_, c)| c.name == want)
+                .map(|(k, _)| k.clone())
+        })
 }
-
 
 /// One Docker log frame: `[stream(1B), 0,0,0, len(4B big-endian)] + payload`.
 pub(crate) fn log_frame(stream: u8, data: &[u8]) -> Vec<u8> {
@@ -61,40 +71,56 @@ pub(crate) fn log_frame(stream: u8, data: &[u8]) -> Vec<u8> {
 }
 
 pub(crate) fn no_such(id: &str) -> Response {
-    (StatusCode::NOT_FOUND, Json(json!({"message": format!("No such container: {id}")}))).into_response()
+    (
+        StatusCode::NOT_FOUND,
+        Json(json!({"message": format!("No such container: {id}")})),
+    )
+        .into_response()
 }
-
 
 /// A cheap, stable hex id for a built image (not a real digest — just a handle for the CLI).
 pub(crate) fn md5_like(s: &str) -> u64 {
     let mut h: u64 = 0xcbf29ce484222325;
-    for b in s.bytes() { h ^= b as u64; h = h.wrapping_mul(0x100000001b3); }
+    for b in s.bytes() {
+        h ^= b as u64;
+        h = h.wrapping_mul(0x100000001b3);
+    }
     h
 }
-
 
 /// Standard base64 (no line breaks).
 pub(crate) fn base64_std(data: &[u8]) -> String {
     const A: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
     let mut out = String::new();
     for chunk in data.chunks(3) {
-        let n = (chunk[0] as u32) << 16 | (*chunk.get(1).unwrap_or(&0) as u32) << 8 | *chunk.get(2).unwrap_or(&0) as u32;
+        let n = (chunk[0] as u32) << 16
+            | (*chunk.get(1).unwrap_or(&0) as u32) << 8
+            | *chunk.get(2).unwrap_or(&0) as u32;
         out.push(A[(n >> 18 & 63) as usize] as char);
         out.push(A[(n >> 12 & 63) as usize] as char);
-        out.push(if chunk.len() > 1 { A[(n >> 6 & 63) as usize] as char } else { '=' });
-        out.push(if chunk.len() > 2 { A[(n & 63) as usize] as char } else { '=' });
+        out.push(if chunk.len() > 1 {
+            A[(n >> 6 & 63) as usize] as char
+        } else {
+            '='
+        });
+        out.push(if chunk.len() > 2 {
+            A[(n & 63) as usize] as char
+        } else {
+            '='
+        });
     }
     out
 }
-
 
 // ---- persistence -----------------------------------------------------------
 
 /// `~/.dd` (or `./.dd` if `$HOME` is unset) — the default state/volumes root.
 pub(crate) fn dd_home() -> PathBuf {
-    std::env::var_os("HOME").map(PathBuf::from).unwrap_or_else(|| PathBuf::from(".")).join(".dd")
+    std::env::var_os("HOME")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join(".dd")
 }
-
 
 /// `~/.dd/buildcache` — the `docker build` layer cache root (one dir per cached step under `layers/`).
 /// Distinct from `~/.dd/pcache` (the JIT translated-code cache surfaced as `system df` BuilderSize).
@@ -102,8 +128,7 @@ pub(crate) fn buildcache_dir() -> PathBuf {
     dd_home().join("buildcache")
 }
 
-
-// ---- #374 daemon-write coherence (docker cp epoch blind spot) --------------
+// ---- daemon-write coherence (docker cp epoch blind spot) --------------
 // The engine's path/metadata caches (dd-jit fscache.c) are invalidated by GUEST syscalls, but the daemon
 // also writes into a LIVE container's filesystem from outside any engine — `docker cp`
 // (PUT /containers/{id}/archive) and the exec-spawn /etc/{hosts,resolv.conf,hostname} rewrites — which no
@@ -125,7 +150,9 @@ pub(crate) fn fsgen_path(cid: &str) -> PathBuf {
 pub(crate) fn fsgen_ensure(cid: &str) -> PathBuf {
     let p = fsgen_path(cid);
     if !p.exists() {
-        if let Some(d) = p.parent() { let _ = std::fs::create_dir_all(d); }
+        if let Some(d) = p.parent() {
+            let _ = std::fs::create_dir_all(d);
+        }
         let _ = std::fs::write(&p, 1u32.to_ne_bytes());
     }
     p
@@ -139,19 +166,34 @@ pub(crate) fn fsgen_bump(cid: &str) {
     use std::os::fd::AsRawFd;
     use std::sync::atomic::{AtomicU32, Ordering};
     let p = fsgen_ensure(cid);
-    let Ok(f) = std::fs::OpenOptions::new().read(true).write(true).open(&p) else { return };
-    if f.metadata().map(|m| m.len()).unwrap_or(0) < 4 && f.set_len(4).is_err() { return; }
+    let Ok(f) = std::fs::OpenOptions::new().read(true).write(true).open(&p) else {
+        return;
+    };
+    if f.metadata().map(|m| m.len()).unwrap_or(0) < 4 && f.set_len(4).is_err() {
+        return;
+    }
     unsafe {
-        let m = libc::mmap(std::ptr::null_mut(), 4, libc::PROT_READ | libc::PROT_WRITE, libc::MAP_SHARED, f.as_raw_fd(), 0);
-        if m == libc::MAP_FAILED { return; }
+        let m = libc::mmap(
+            std::ptr::null_mut(),
+            4,
+            libc::PROT_READ | libc::PROT_WRITE,
+            libc::MAP_SHARED,
+            f.as_raw_fd(),
+            0,
+        );
+        if m == libc::MAP_FAILED {
+            return;
+        }
         (*(m as *const AtomicU32)).fetch_add(1, Ordering::Release);
         libc::munmap(m, 4);
     }
 }
 
-
 pub(crate) fn now_secs() -> i64 {
-    SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or(0)
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0)
 }
 
 /// Nanoseconds since the unix epoch. Backs the sub-second precision of `State.StartedAt`/`FinishedAt`
@@ -159,9 +201,11 @@ pub(crate) fn now_secs() -> i64 {
 /// same wall-clock SECOND — still advances `StartedAt`, matching docker (a second-precision stamp would
 /// collide and report the restart as a no-op).
 pub(crate) fn now_nanos() -> i64 {
-    SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_nanos() as i64).unwrap_or(0)
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_nanos() as i64)
+        .unwrap_or(0)
 }
-
 
 /// Format a unix timestamp as an RFC3339 UTC string (Docker's inspect `Created` is a string).
 /// Pure integer civil-date math (Howard Hinnant's algorithm) — no chrono dependency.
@@ -193,7 +237,6 @@ pub(crate) fn fmt_rfc3339_nanos(nanos: i64) -> String {
     format!("{}.{:09}Z", &base[..base.len() - 1], frac)
 }
 
-
 /// Write containers/volumes/networks to `path` atomically (temp file + rename). Best-effort:
 /// persistence failures are logged but never abort a request.
 pub(crate) fn save_state(inner: &Inner, path: &str) {
@@ -202,7 +245,9 @@ pub(crate) fn save_state(inner: &Inner, path: &str) {
         volumes: inner.volumes.clone(),
         networks: inner.networks.clone(),
     };
-    let Ok(bytes) = serde_json::to_vec_pretty(&p) else { return };
+    let Ok(bytes) = serde_json::to_vec_pretty(&p) else {
+        return;
+    };
     if let Some(parent) = std::path::Path::new(path).parent() {
         let _ = std::fs::create_dir_all(parent);
     }
@@ -214,17 +259,22 @@ pub(crate) fn save_state(inner: &Inner, path: &str) {
     }
 }
 
-
 /// Load persisted state into `inner`, re-resolving each container's arch/rootfs from the
 /// freshly discovered images.
 pub(crate) fn load_state(inner: &mut Inner, path: &str) {
-    let Ok(bytes) = std::fs::read(path) else { return };
+    let Ok(bytes) = std::fs::read(path) else {
+        return;
+    };
     let Ok(p) = serde_json::from_slice::<Persisted>(&bytes) else {
         eprintln!("[dd-daemon] ignoring unreadable state file {path}");
         return;
     };
     for mut c in p.containers {
-        if let Some(img) = inner.images.iter().find(|i| i.name == c.image || format!("{}:latest", i.name) == c.image) {
+        if let Some(img) = inner
+            .images
+            .iter()
+            .find(|i| i.name == c.image || format!("{}:latest", i.name) == c.image)
+        {
             c.arch = Some(img.arch);
             c.rootfs = img.rootfs.clone();
         } else {
@@ -236,45 +286,105 @@ pub(crate) fn load_state(inner: &mut Inner, path: &str) {
     inner.networks = p.networks;
 }
 
-
 /// Discover <images>/<name>/rootfs dirs, detecting each image's guest arch from a probe ELF.
 pub(crate) fn discover_images(images_dir: &str) -> Vec<Image> {
     let mut out = Vec::new();
-    let Ok(rd) = std::fs::read_dir(images_dir) else { return out };
+    let Ok(rd) = std::fs::read_dir(images_dir) else {
+        return out;
+    };
     for e in rd.flatten() {
         let rootfs = e.path().join("rootfs");
-        if !rootfs.is_dir() { continue; }
+        if !rootfs.is_dir() {
+            continue;
+        }
         // Prefer dd-image.json so name/cmd/os round-trip exactly (macOS images have no probe-able ELF);
         // else parse the dir name + detect the arch from a probe binary.
-        let meta = std::fs::read_to_string(e.path().join("dd-image.json")).ok()
+        let meta = std::fs::read_to_string(e.path().join("dd-image.json"))
+            .ok()
             .and_then(|s| serde_json::from_str::<Value>(&s).ok());
         let (name, cmd, arch) = match &meta {
             Some(m) => {
                 let name = m["name"].as_str().unwrap_or("img").to_string();
-                let cmd: Vec<String> = m["cmd"].as_array().map(|a| a.iter().filter_map(|x| x.as_str().map(String::from)).collect()).unwrap_or_default();
+                let cmd: Vec<String> = m["cmd"]
+                    .as_array()
+                    .map(|a| {
+                        a.iter()
+                            .filter_map(|x| x.as_str().map(String::from))
+                            .collect()
+                    })
+                    .unwrap_or_default();
                 // Prefer the arch the sidecar recorded at pull/build time (round-trips exactly, even for
                 // images whose binaries can't be sniffed — distroless/scratch). `os:darwin` marks a
                 // native-macOS (darwinjail) image. Fall back to probing the rootfs, then native arm64.
-                let arch = m["arch"].as_str().and_then(|a| Guest::detect(m["os"].as_str().unwrap_or("linux"), a))
-                    .or_else(|| (m["os"].as_str() == Some("darwin")).then_some(Guest::DarwinAarch64))
+                let arch = m["arch"]
+                    .as_str()
+                    .and_then(|a| Guest::detect(m["os"].as_str().unwrap_or("linux"), a))
+                    .or_else(|| {
+                        (m["os"].as_str() == Some("darwin")).then_some(Guest::DarwinAarch64)
+                    })
                     .or_else(|| detect_arch(&rootfs))
                     .unwrap_or(Guest::LinuxAarch64);
-                (name, if cmd.is_empty() { vec!["/bin/sh".into()] } else { cmd }, arch)
+                (
+                    name,
+                    if cmd.is_empty() {
+                        vec!["/bin/sh".into()]
+                    } else {
+                        cmd
+                    },
+                    arch,
+                )
             }
             None => {
-                let raw = e.path().file_name().and_then(|s| s.to_str()).unwrap_or("img").to_string();
-                let name = raw.trim_end_matches("-bundle").split("__").next().unwrap_or("img").rsplit('_').next().unwrap_or("img").to_string();
-                (name, vec!["/bin/sh".into()], detect_arch(&rootfs).unwrap_or(Guest::LinuxAarch64))
+                let raw = e
+                    .path()
+                    .file_name()
+                    .and_then(|s| s.to_str())
+                    .unwrap_or("img")
+                    .to_string();
+                let name = raw
+                    .trim_end_matches("-bundle")
+                    .split("__")
+                    .next()
+                    .unwrap_or("img")
+                    .rsplit('_')
+                    .next()
+                    .unwrap_or("img")
+                    .to_string();
+                (
+                    name,
+                    vec!["/bin/sh".into()],
+                    detect_arch(&rootfs).unwrap_or(Guest::LinuxAarch64),
+                )
             }
         };
-        let arr = |k: &str| meta.as_ref().and_then(|m| m[k].as_array())
-            .map(|a| a.iter().filter_map(|x| x.as_str().map(String::from)).collect::<Vec<_>>()).unwrap_or_default();
+        let arr = |k: &str| {
+            meta.as_ref()
+                .and_then(|m| m[k].as_array())
+                .map(|a| {
+                    a.iter()
+                        .filter_map(|x| x.as_str().map(String::from))
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default()
+        };
         let entrypoint = arr("entrypoint");
-        let workdir = meta.as_ref().and_then(|m| m["workdir"].as_str()).unwrap_or("").to_string();
-        let user = meta.as_ref().and_then(|m| m["user"].as_str()).unwrap_or("").to_string();
+        let workdir = meta
+            .as_ref()
+            .and_then(|m| m["workdir"].as_str())
+            .unwrap_or("")
+            .to_string();
+        let user = meta
+            .as_ref()
+            .and_then(|m| m["user"].as_str())
+            .unwrap_or("")
+            .to_string();
         let exposed_ports = arr("exposed_ports");
-        let created = std::fs::metadata(&rootfs).and_then(|m| m.modified()).ok()
-            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok()).map(|d| d.as_secs() as i64).unwrap_or(0);
+        let created = std::fs::metadata(&rootfs)
+            .and_then(|m| m.modified())
+            .ok()
+            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+            .map(|d| d.as_secs() as i64)
+            .unwrap_or(0);
         // The sidecar is the source of truth, but pre-seeded/umoci-built images (and any image cached
         // before the pull path recorded env) carry an empty `env` — their environment lives only in the
         // on-disk OCI config. Recover it from there so a daemon restart doesn't drop TERM/HOME/LANG/PATH,
@@ -283,20 +393,49 @@ pub(crate) fn discover_images(images_dir: &str) -> Vec<Image> {
         if env.is_empty() {
             let recovered = oci_disk_env(&e.path());
             if !recovered.is_empty() {
-                persist_discovered_env(&e.path(), meta.as_ref(), &name, &cmd, &recovered, &entrypoint, &workdir, arch);
+                persist_discovered_env(
+                    &e.path(),
+                    meta.as_ref(),
+                    &name,
+                    &cmd,
+                    &recovered,
+                    &entrypoint,
+                    &workdir,
+                    arch,
+                );
                 env = recovered;
             }
         }
         // Lifecycle/volume image config (Moby §6/§8) — restored from the sidecar so `docker stop` picks
         // the right signal and anon volumes / healthcheck survive a daemon restart.
-        let stop_signal = meta.as_ref().and_then(|m| m["stop_signal"].as_str()).unwrap_or("").to_string();
+        let stop_signal = meta
+            .as_ref()
+            .and_then(|m| m["stop_signal"].as_str())
+            .unwrap_or("")
+            .to_string();
         let img_volumes = arr("img_volumes");
-        let healthcheck = meta.as_ref().and_then(|m| serde_json::from_value::<crate::model::HealthConfig>(m["healthcheck"].clone()).ok());
-        out.push(Image { name, rootfs: rootfs.to_string_lossy().into_owned(), arch, cmd, env, entrypoint, workdir, user, exposed_ports, created, stop_signal, img_volumes, healthcheck, ..Default::default() });
+        let healthcheck = meta.as_ref().and_then(|m| {
+            serde_json::from_value::<crate::model::HealthConfig>(m["healthcheck"].clone()).ok()
+        });
+        out.push(Image {
+            name,
+            rootfs: rootfs.to_string_lossy().into_owned(),
+            arch,
+            cmd,
+            env,
+            entrypoint,
+            workdir,
+            user,
+            exposed_ports,
+            created,
+            stop_signal,
+            img_volumes,
+            healthcheck,
+            ..Default::default()
+        });
     }
     dedup_images(out)
 }
-
 
 /// A coarse "richness" score for a discovered [`Image`], used to pick the best entry when several
 /// directories resolve to the same image (see [`dedup_images`] / [`find_image`]). A non-empty
@@ -305,12 +444,20 @@ pub(crate) fn discover_images(images_dir: &str) -> Vec<Image> {
 /// config — and the bundle one (real env) must win. The remaining run metadata break finer ties.
 pub(crate) fn image_score(img: &Image) -> i32 {
     let mut s = 0;
-    if !img.env.is_empty() { s += 1000; }
-    if !img.entrypoint.is_empty() { s += 10; }
-    if !img.workdir.is_empty() { s += 5; }
+    if !img.env.is_empty() {
+        s += 1000;
+    }
+    if !img.entrypoint.is_empty() {
+        s += 10;
+    }
+    if !img.workdir.is_empty() {
+        s += 5;
+    }
     s += img.labels.len() as i32;
     // A recorded CMD beats the `/bin/sh` default the discovery fallback substitutes.
-    if img.cmd.len() != 1 || img.cmd[0] != "/bin/sh" { s += 1; }
+    if img.cmd.len() != 1 || img.cmd[0] != "/bin/sh" {
+        s += 1;
+    }
     s
 }
 
@@ -322,7 +469,11 @@ pub(crate) fn image_score(img: &Image) -> i32 {
 /// the survivor is stable across runs and machines.
 fn dedup_images(mut imgs: Vec<Image>) -> Vec<Image> {
     // Best-first ordering (then name, for a deterministic tie-break); keep the first seen per tag.
-    imgs.sort_by(|a, b| image_score(b).cmp(&image_score(a)).then_with(|| a.name.cmp(&b.name)));
+    imgs.sort_by(|a, b| {
+        image_score(b)
+            .cmp(&image_score(a))
+            .then_with(|| a.name.cmp(&b.name))
+    });
     let mut seen = std::collections::HashSet::new();
     imgs.retain(|i| seen.insert(repo_tag(&i.name)));
     imgs
@@ -341,16 +492,20 @@ pub(crate) fn find_image<'a>(images: &'a [Image], reference: &str) -> Option<&'a
     let want = ref_name(reference);
     let want_rt = repo_tag(reference);
     let want_latest = format!("{want}:latest");
-    images.iter()
+    images
+        .iter()
         // Match on the fully-qualified repository (registry+namespace+name), NOT the bare basename, so a
-        // bare official `nginx` never resolves to a third-party `linuxserver/nginx` (issue #304).
+        // bare official `nginx` never resolves to a third-party `linuxserver/nginx`.
         .filter(|i| ref_repo(&i.name) == want_repo)
         .max_by_key(|i| {
-            (repo_tag(&i.name) == want_rt, repo_tag(&i.name) == want_latest,
-             image_score(i), std::cmp::Reverse(i.name.clone()))
+            (
+                repo_tag(&i.name) == want_rt,
+                repo_tag(&i.name) == want_latest,
+                image_score(i),
+                std::cmp::Reverse(i.name.clone()),
+            )
         })
 }
-
 
 /// Best-effort recovery of an image's environment from an on-disk OCI config, used by
 /// [`discover_images`] when the `dd-image.json` sidecar recorded no `env` (pre-seeded / umoci-built
@@ -360,26 +515,39 @@ pub(crate) fn find_image<'a>(images: &'a [Image], reference: &str) -> Option<&'a
 ///      blob -> `config.Env`.
 /// Returns an empty vec if neither is present/parseable — never panics, never fails discovery.
 fn oci_disk_env(dir: &std::path::Path) -> Vec<String> {
-    let strs = |v: &Value| v.as_array()
-        .map(|a| a.iter().filter_map(|x| x.as_str().map(String::from)).collect::<Vec<_>>())
-        .unwrap_or_default();
+    let strs = |v: &Value| {
+        v.as_array()
+            .map(|a| {
+                a.iter()
+                    .filter_map(|x| x.as_str().map(String::from))
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default()
+    };
     // 1. umoci runtime config: process.env.
-    if let Some(cfg) = std::fs::read_to_string(dir.join("config.json")).ok()
+    if let Some(cfg) = std::fs::read_to_string(dir.join("config.json"))
+        .ok()
         .and_then(|s| serde_json::from_str::<Value>(&s).ok())
     {
         let env = strs(&cfg["process"]["env"]);
-        if !env.is_empty() { return env; }
+        if !env.is_empty() {
+            return env;
+        }
     }
     // 2. OCI image layout: index.json -> first manifest blob -> image config blob -> config.Env.
     let read_blob = |digest: &str| -> Option<Value> {
         let hex = digest.strip_prefix("sha256:")?;
-        std::fs::read_to_string(dir.join("blobs/sha256").join(hex)).ok()
+        std::fs::read_to_string(dir.join("blobs/sha256").join(hex))
+            .ok()
             .and_then(|s| serde_json::from_str::<Value>(&s).ok())
     };
-    let index = std::fs::read_to_string(dir.join("index.json")).ok()
+    let index = std::fs::read_to_string(dir.join("index.json"))
+        .ok()
         .and_then(|s| serde_json::from_str::<Value>(&s).ok());
-    if let Some(mdigest) = index.as_ref()
-        .and_then(|i| i["manifests"].as_array()).and_then(|a| a.first())
+    if let Some(mdigest) = index
+        .as_ref()
+        .and_then(|i| i["manifests"].as_array())
+        .and_then(|a| a.first())
         .and_then(|m| m["digest"].as_str())
     {
         if let Some(cfg) = read_blob(mdigest)
@@ -398,31 +566,43 @@ fn oci_disk_env(dir: &std::path::Path) -> Vec<String> {
 /// from the values [`discover_images`] already resolved. Best-effort: a write failure (e.g. a
 /// read-only image store) is ignored — the in-memory env is still surfaced for this run.
 #[allow(clippy::too_many_arguments)]
-fn persist_discovered_env(dir: &std::path::Path, meta: Option<&Value>, name: &str, cmd: &[String],
-                          env: &[String], entrypoint: &[String], workdir: &str, arch: Guest) {
-    let mut m = meta.cloned().unwrap_or_else(|| json!({
-        "name": name, "cmd": cmd, "entrypoint": entrypoint, "workdir": workdir,
-        "arch": arch.arch(), "os": arch.os(),
-    }));
+fn persist_discovered_env(
+    dir: &std::path::Path,
+    meta: Option<&Value>,
+    name: &str,
+    cmd: &[String],
+    env: &[String],
+    entrypoint: &[String],
+    workdir: &str,
+    arch: Guest,
+) {
+    let mut m = meta.cloned().unwrap_or_else(|| {
+        json!({
+            "name": name, "cmd": cmd, "entrypoint": entrypoint, "workdir": workdir,
+            "arch": arch.arch(), "os": arch.os(),
+        })
+    });
     m["env"] = json!(env);
     let _ = std::fs::write(dir.join("dd-image.json"), m.to_string());
 }
-
 
 /// Classify a binary by its leading magic bytes: ELF -> linux (e_machine = aarch64/x86_64),
 /// Mach-O 64 -> darwin (cputype = arm64). Returns `None` for anything else (scripts, data, an
 /// unrecognized machine).
 fn sniff_magic(b: &[u8]) -> Option<Guest> {
     if b.len() > 19 && &b[0..4] == b"\x7fELF" {
-        return match u16::from_le_bytes([b[18], b[19]]) {  // ELF e_machine
+        return match u16::from_le_bytes([b[18], b[19]]) {
+            // ELF e_machine
             0xB7 => Some(Guest::LinuxAarch64),
             0x3E => Some(Guest::LinuxX86_64),
             _ => None,
         };
     }
-    if b.len() > 7 && b[0..4] == [0xCF, 0xFA, 0xED, 0xFE] {   // MH_MAGIC_64 (little-endian)
-        return match u32::from_le_bytes([b[4], b[5], b[6], b[7]]) {  // cputype
-            0x0100000C => Some(Guest::DarwinAarch64),   // CPU_TYPE_ARM64
+    if b.len() > 7 && b[0..4] == [0xCF, 0xFA, 0xED, 0xFE] {
+        // MH_MAGIC_64 (little-endian)
+        return match u32::from_le_bytes([b[4], b[5], b[6], b[7]]) {
+            // cputype
+            0x0100000C => Some(Guest::DarwinAarch64), // CPU_TYPE_ARM64
             _ => None,
         };
     }
@@ -450,14 +630,20 @@ fn scan_for_binary(rootfs: &std::path::Path) -> Option<Guest> {
     let mut queue = VecDeque::from([rootfs.to_path_buf()]);
     let mut budget = 4096; // cap on entries examined across the whole walk
     while let Some(dir) = queue.pop_front() {
-        let Ok(rd) = std::fs::read_dir(&dir) else { continue };
+        let Ok(rd) = std::fs::read_dir(&dir) else {
+            continue;
+        };
         for e in rd.flatten() {
-            if budget == 0 { return None; }
+            if budget == 0 {
+                return None;
+            }
             budget -= 1;
             match e.file_type() {
                 Ok(ft) if ft.is_dir() => queue.push_back(e.path()),
                 Ok(ft) if ft.is_file() || ft.is_symlink() => {
-                    if let Some(g) = sniff_path(&e.path()) { return Some(g); }
+                    if let Some(g) = sniff_path(&e.path()) {
+                        return Some(g);
+                    }
                 }
                 _ => {}
             }
@@ -474,20 +660,31 @@ pub(crate) fn detect_arch(rootfs: &std::path::Path) -> Option<Guest> {
     // — whose `dd-image.json` sidecar didn't survive the registry round-trip — is still detected as
     // darwin from its packed Mach-O binaries. `sniff_path` follows the profile symlinks to the real
     // Mach-O in the packed `/nix` (or Homebrew) closure.
-    for probe in ["bin/busybox", "bin/sh", "bin/true", "usr/bin/coreutils", "usr/lib/dyld",
-                  "profile/bin/bash", "profile/bin/sh", "opt/homebrew/bin/brew"] {
-        if let Some(g) = sniff_path(&rootfs.join(probe)) { return Some(g); }
+    for probe in [
+        "bin/busybox",
+        "bin/sh",
+        "bin/true",
+        "usr/bin/coreutils",
+        "usr/lib/dyld",
+        "profile/bin/bash",
+        "profile/bin/sh",
+        "opt/homebrew/bin/brew",
+    ] {
+        if let Some(g) = sniff_path(&rootfs.join(probe)) {
+            return Some(g);
+        }
     }
     scan_for_binary(rootfs)
 }
 
-
 pub(crate) fn fake_id(seed: &str) -> String {
     let mut h: u64 = 1469598103934665603;
-    for b in seed.bytes() { h ^= b as u64; h = h.wrapping_mul(1099511628211); }
+    for b in seed.bytes() {
+        h ^= b as u64;
+        h = h.wrapping_mul(1099511628211);
+    }
     format!("{h:016x}{h:016x}{h:016x}{h:08x}")
 }
-
 
 /// On-disk size of an image's rootfs, cached per rootfs path (computed once; rootfs rarely changes).
 /// The host-fs `macos` image is skipped (walking `/` would be catastrophic).
@@ -506,13 +703,16 @@ pub(crate) fn image_size(rootfs: &str, name: &str) -> i64 {
     s
 }
 
-
 /// Recursively sum the size of regular files under `p` (symlinks are not followed).
 pub(crate) fn dir_size(p: &std::path::Path) -> i64 {
     let mut total = 0i64;
-    let Ok(rd) = std::fs::read_dir(p) else { return 0 };
+    let Ok(rd) = std::fs::read_dir(p) else {
+        return 0;
+    };
     for e in rd.flatten() {
-        let Ok(md) = e.path().symlink_metadata() else { continue };
+        let Ok(md) = e.path().symlink_metadata() else {
+            continue;
+        };
         let ft = md.file_type();
         if ft.is_symlink() {
             continue;
@@ -525,16 +725,19 @@ pub(crate) fn dir_size(p: &std::path::Path) -> i64 {
     total
 }
 
-
 /// The bare repository name of a docker image reference, ignoring registry, namespace and tag/digest:
 /// `docker.io/library/ubuntu:latest` -> `ubuntu`, `library/ubuntu` -> `ubuntu`, `ubuntu:22.04` -> `ubuntu`.
 /// Lets `docker run ubuntu` match an image discovered/tagged as `ubuntu` regardless of how docker
 /// canonicalizes the reference.
 pub(crate) fn ref_name(s: &str) -> &str {
     let last = s.rsplit('/').next().unwrap_or(s);
-    last.split('@').next().unwrap_or(last).split(':').next().unwrap_or(last)
+    last.split('@')
+        .next()
+        .unwrap_or(last)
+        .split(':')
+        .next()
+        .unwrap_or(last)
 }
-
 
 /// The FULLY-QUALIFIED canonical repository of an image reference — registry + namespace + name, tag
 /// stripped, with Docker Hub's implicit `library/` namespace made explicit. This is the correct key
@@ -542,13 +745,12 @@ pub(crate) fn ref_name(s: &str) -> &str {
 /// component: `nginx`, `library/nginx`, `docker.io/library/nginx:1.25` all map to
 /// `registry-1.docker.io/library/nginx`, but `linuxserver/nginx` maps to
 /// `registry-1.docker.io/linuxserver/nginx`. Using the bare basename ([`ref_name`]) instead made
-/// `docker run nginx` resolve to a locally-present `linuxserver/nginx` (issue #304) — a cross-repo
+/// `docker run nginx` resolve to a locally-present `linuxserver/nginx` — a cross-repo
 /// collision. Prefer this for run/inspect resolution; `ref_name` remains only for loose display uses.
 pub(crate) fn ref_repo(s: &str) -> String {
     let r = ImageRef::parse(s);
     format!("{}/{}", r.registry, r.repository)
 }
-
 
 /// A fresh container/exec id with real entropy, shaped exactly like Docker's: 32 random bytes
 /// (256 bits) hex-encoded to 64 lowercase chars. Docker derives the 12-char short id that clients
@@ -561,12 +763,16 @@ pub(crate) fn ref_repo(s: &str) -> String {
 pub(crate) fn new_id(image: &str) -> String {
     let mut buf = [0u8; 32];
     if std::fs::File::open("/dev/urandom")
-        .and_then(|mut f| std::io::Read::read_exact(&mut f, &mut buf)).is_err()
+        .and_then(|mut f| std::io::Read::read_exact(&mut f, &mut buf))
+        .is_err()
     {
         use std::sync::atomic::{AtomicU64, Ordering};
         static SEQ: AtomicU64 = AtomicU64::new(0);
         let seq = SEQ.fetch_add(1, Ordering::Relaxed);
-        let nanos = SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_nanos() as u64).unwrap_or(0);
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_nanos() as u64)
+            .unwrap_or(0);
         let mut s = nanos
             ^ (std::process::id() as u64).rotate_left(32)
             ^ seq.wrapping_mul(0x9E37_79B9_7F4A_7C15)
@@ -578,28 +784,39 @@ pub(crate) fn new_id(image: &str) -> String {
             z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
             z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
             z ^= z >> 31;
-            for (i, b) in chunk.iter_mut().enumerate() { *b = (z >> (i * 8)) as u8; }
+            for (i, b) in chunk.iter_mut().enumerate() {
+                *b = (z >> (i * 8)) as u8;
+            }
         }
     }
     let mut out = String::with_capacity(64);
-    for b in &buf { out.push_str(&format!("{b:02x}")); }
+    for b in &buf {
+        out.push_str(&format!("{b:02x}"));
+    }
     out
 }
-
 
 #[cfg(test)]
 mod id_resolution_tests {
     use super::*;
 
-    fn img(name: &str) -> Image { Image { name: name.into(), ..Default::default() } }
+    fn img(name: &str) -> Image {
+        Image {
+            name: name.into(),
+            ..Default::default()
+        }
+    }
 
-    // #276: a container id must be 64 hex of REAL entropy, not a 16-hex value tiled 4x.
+    // a container id must be 64 hex of REAL entropy, not a 16-hex value tiled 4x.
     #[test]
     fn new_id_is_full_entropy_64_hex() {
         let a = new_id("alpine");
         assert_eq!(a.len(), 64, "docker container ids are 64 hex chars");
-        assert!(a.chars().all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase()),
-                "id must be lowercase hex: {a}");
+        assert!(
+            a.chars()
+                .all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase()),
+            "id must be lowercase hex: {a}"
+        );
         // The old bug tiled one 16-hex value 4x: the first three quarters were identical. Reject that.
         let (q0, q1, q2) = (&a[0..16], &a[16..32], &a[32..48]);
         assert!(!(q0 == q1 && q1 == q2), "id looks tiled (low entropy): {a}");
@@ -607,10 +824,12 @@ mod id_resolution_tests {
         assert_ne!(a, new_id("alpine"));
         // The 12-char short id is also unique across many draws (entropy reaches the leading bytes).
         let mut shorts = std::collections::HashSet::new();
-        for _ in 0..1000 { assert!(shorts.insert(new_id("x")[..12].to_string())); }
+        for _ in 0..1000 {
+            assert!(shorts.insert(new_id("x")[..12].to_string()));
+        }
     }
 
-    // #304: the fully qualified repository distinguishes cross-repo basename collisions.
+    // the fully qualified repository distinguishes cross-repo basename collisions.
     #[test]
     fn ref_repo_distinguishes_cross_repo_basenames() {
         assert_eq!(ref_repo("nginx"), ref_repo("library/nginx"));
@@ -620,17 +839,25 @@ mod id_resolution_tests {
         assert_ne!(ref_repo("nginx"), ref_repo("ghcr.io/o/nginx"));
     }
 
-    // #304: `docker run nginx` must NOT resolve to a locally-present `linuxserver/nginx`.
+    // `docker run nginx` must NOT resolve to a locally-present `linuxserver/nginx`.
     #[test]
     fn find_image_does_not_cross_repo_collide() {
         let only_third_party = vec![img("linuxserver/nginx:latest")];
-        assert!(find_image(&only_third_party, "nginx").is_none(),
-                "bare official nginx must not resolve to linuxserver/nginx");
+        assert!(
+            find_image(&only_third_party, "nginx").is_none(),
+            "bare official nginx must not resolve to linuxserver/nginx"
+        );
         let both = vec![img("linuxserver/nginx:latest"), img("nginx:latest")];
         assert_eq!(find_image(&both, "nginx").unwrap().name, "nginx:latest");
         // The third-party image still resolves to itself when its full repo is named.
-        assert_eq!(find_image(&both, "linuxserver/nginx").unwrap().name, "linuxserver/nginx:latest");
+        assert_eq!(
+            find_image(&both, "linuxserver/nginx").unwrap().name,
+            "linuxserver/nginx:latest"
+        );
         // library/ prefix and docker.io/ registry are equivalent to the bare name.
-        assert_eq!(find_image(&both, "library/nginx").unwrap().name, "nginx:latest");
+        assert_eq!(
+            find_image(&both, "library/nginx").unwrap().name,
+            "nginx:latest"
+        );
     }
 }

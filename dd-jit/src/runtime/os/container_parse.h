@@ -18,8 +18,7 @@
 
 // Parse a base-10 unsigned integer in [lo, hi]. Rejects empty / non-numeric / trailing garbage /
 // negative / overflow. On ANY violation: print "dd: invalid <name>..." to stderr and exit nonzero.
-static unsigned long long dd_parse_u64(const char *name, const char *s, unsigned long long lo,
-                                       unsigned long long hi) {
+static unsigned long long dd_parse_u64(const char *name, const char *s, unsigned long long lo, unsigned long long hi) {
     if (!s || !*s || *s == '-') {
         fprintf(stderr, "dd: invalid %s=%s: not a number\n", name, s ? s : "");
         exit(2);

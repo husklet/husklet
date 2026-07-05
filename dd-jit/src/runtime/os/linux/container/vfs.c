@@ -13,6 +13,7 @@ static int g_auxv_len;
 // maps for the line containing %rsp). Without it that call returns ENOENT, which derails Rust std's
 // startup (stack-overflow guard init) and cascades into wrong behavior later. 0 => not published yet.
 uint64_t g_stack_lo, g_stack_hi;
+
 // Sandbox: normalize a guest absolute path -- drop '.', collapse '//', and clamp '..' at the
 // ROOT so a translated path can never escape the rootfs ("/../../etc" -> "/etc"). Without this,
 // the guest reads host files by traversing above $rootfs. Result always starts with '/'.
@@ -32,7 +33,7 @@ static void confine(const char *p, char *out, size_t n) {
         if (L == 2 && st[0] == '.' && st[1] == '.') {
             if (nc > 0) nc--;
             continue;
-        // ".." -> pop, never past root
+            // ".." -> pop, never past root
         }
         if (nc < 512) {
             comp[nc] = st;
@@ -50,12 +51,14 @@ static void confine(const char *p, char *out, size_t n) {
     if (o == 0 && n > 1) out[o++] = '/';
     out[o < n ? o : n - 1] = 0;
 }
+
 // Guest chroot(2) prefix: a rootfs-relative guest path ("" = none). chroot(2) re-roots the guest WITHIN
 // the existing rootfs jail -- its target is resolved through the jail first (so it can never name a host
 // path) and recorded here; every absolute guest path is then walked under this prefix yet STILL confined
 // to g_root_fd, so a guest can never reach the host fs (a `..` still clamps at the rootfs root). Inherited
 // across fork and preserved across execve, exactly as on Linux.
 static char g_chroot[4200];
+
 // Re-root an absolute guest path under the active chroot: clamp its `..` (after chroot the guest's own
 // root IS the chroot dir) and prepend the prefix. The result is still a rootfs-absolute guest path, which
 // the resolvers below confine to g_root_fd as usual. Callers invoke this only while a chroot is active.
@@ -69,6 +72,7 @@ static void chroot_apply(const char *guest, char *out, size_t n) {
     else
         snprintf(out, n, "%s%s", g_chroot, norm);
 }
+
 // Strip the active chroot prefix from a rootfs-relative guest path, yielding the chroot-relative view the
 // guest sees (used to keep g_cwd in the guest's own frame after chdir under a chroot). No-op with no
 // chroot, or for a path that lies outside the chroot subtree (clamped to "/" -- the guest cannot be there).
@@ -83,6 +87,7 @@ static void chroot_strip(char *guest, size_t n) {
         snprintf(guest, n, "/");
     }
 }
+
 // realpath(g_rootfs) -- the true rootfs boundary
 static char g_rootfs_canon[4200];
 static size_t g_rootfs_canon_len;
@@ -110,6 +115,7 @@ static int g_eventfd_peer[1024];
 // any guest fork) so every forked worker inherits the same physical array. All g_eventfd_count[fd]
 // indexing (io.c, the eventfd2 creation in service.c) is unchanged.
 static uint64_t *g_eventfd_count;
+
 static void eventfd_count_init(void) {
     if (g_eventfd_count) return;
     size_t sz = sizeof(uint64_t) * 1024;
@@ -119,7 +125,11 @@ static void eventfd_count_init(void) {
     if (mem == MAP_FAILED) abort();
     g_eventfd_count = (uint64_t *)mem;
 }
-__attribute__((constructor)) static void eventfd_count_ctor(void) { eventfd_count_init(); }
+
+__attribute__((constructor)) static void eventfd_count_ctor(void) {
+    eventfd_count_init();
+}
+
 static uint8_t g_eventfd_sema[1024]; // EFD_SEMAPHORE: read() returns 1 and decrements by 1, not the whole counter
 // /proc/<pid>/pagemap emulation: the file is VA-indexed (8 bytes per page, addressed by lseek to
 // vaddr/pagesize*8), so it can't be materialized as static text. We back it with a real empty seekable fd
@@ -127,7 +137,7 @@ static uint8_t g_eventfd_sema[1024]; // EFD_SEMAPHORE: read() returns 1 and decr
 // marks which fds are pagemap backings; cleared on close (fd_reset_emul).
 static uint8_t g_pagemap_fd[1024];
 
-// ===================== cross-process guest task-state table (#404) =====================
+// ===================== cross-process guest task-state table =====================
 // Linux's /proc/<pid>/stat field 3 is the task run state (R/S/D/T/Z). dd used to synthesize it from the
 // macOS process status (proc_bsdinfo.pbi_status): but that BSD p_stat only ever reports SRUN/SSTOP/SZOMB
 // for the whole PROCESS -- it has NO way to express "every thread is asleep in a blocking syscall". A
@@ -141,11 +151,13 @@ static uint8_t g_pagemap_fd[1024];
 // overrides the (coarse) pbi_status with this authoritative value. Inert & O(1): a thread-cached slot
 // pointer + one relaxed atomic store per blocking wait; zombie/stopped stay pbi-authoritative (see below).
 struct ts_slot {
-    _Atomic int pid;         // host pid owning this slot (0 = free)
+    _Atomic int pid;          // host pid owning this slot (0 = free)
     _Atomic unsigned char st; // Linux state char: 'R' 'S' 'D' 'T' 'Z'
 };
+
 #define TS_N 4096 // power of two; open-addressed by host pid
 static struct ts_slot *g_ts_tab;
+
 static void ts_init(void) {
     if (g_ts_tab) return;
     size_t sz = sizeof(struct ts_slot) * TS_N;
@@ -154,7 +166,11 @@ static void ts_init(void) {
         m = mmap(NULL, sz, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON, -1, 0);
     g_ts_tab = (m == MAP_FAILED) ? NULL : (struct ts_slot *)m;
 }
-__attribute__((constructor)) static void ts_ctor(void) { ts_init(); }
+
+__attribute__((constructor)) static void ts_ctor(void) {
+    ts_init();
+}
+
 // Find (or, when claim, atomically allocate) the slot for host pid `pid`. Open addressing with linear
 // probe; a freshly claimed slot defaults to 'R' (running), overwriting any stale value a recycled pid left.
 static struct ts_slot *ts_slot_for(int pid, int claim) {
@@ -179,6 +195,7 @@ static struct ts_slot *ts_slot_for(int pid, int claim) {
 // child that inherited the parent's ts_self value transparently re-claims a fresh slot on its first use.
 static _Thread_local struct ts_slot *ts_self;
 static _Thread_local int ts_self_pid;
+
 static struct ts_slot *ts_mine(void) {
     int pid = (int)getpid();
     if (ts_self && ts_self_pid == pid) return ts_self;
@@ -186,23 +203,38 @@ static struct ts_slot *ts_mine(void) {
     ts_self_pid = pid;
     return ts_self;
 }
+
 static inline void ts_set_self(unsigned char st) {
     struct ts_slot *s = ts_mine();
     if (s) atomic_store_explicit(&s->st, st, memory_order_release);
 }
+
 // Bracket a host blocking wait: 'S' (interruptible sleep) on entry, 'R' (running) on wake. Errno-safe --
 // getpid() + an atomic store never clobber the caller's errno on the wait's return path.
-static inline void ts_wait_enter(void) { ts_set_self('S'); }
-static inline void ts_wait_leave(void) { ts_set_self('R'); }
-static inline void ts_running(void) { ts_set_self('R'); } // every non-blocking syscall = we were running
+static inline void ts_wait_enter(void) {
+    ts_set_self('S');
+}
+
+static inline void ts_wait_leave(void) {
+    ts_set_self('R');
+}
+
+static inline void ts_running(void) {
+    ts_set_self('R');
+} // every non-blocking syscall = we were running
+
 // Reader side: the published state char for host pid `host`, or 0 if this task has no published slot.
 static int ts_lookup(int host) {
     struct ts_slot *s = ts_slot_for(host, 0);
     return s ? (int)atomic_load_explicit(&s->st, memory_order_acquire) : 0;
 }
+
 // A guest fork child re-claims its own slot lazily (getpid mismatch), but drop the inherited cache eagerly
 // so its very first published state is its OWN, not a stale pointer into the parent's slot.
-static void ts_after_fork(void) { ts_self = NULL; ts_self_pid = 0; }
+static void ts_after_fork(void) {
+    ts_self = NULL;
+    ts_self_pid = 0;
+}
 
 // ===================== in-memory temp-file backing (sqlite sorter/index spill) =====================
 // A genuinely-PRIVATE scratch file is served from a host RAM buffer instead of issuing pread/pwrite to
@@ -228,6 +260,7 @@ static void ts_after_fork(void) { ts_self = NULL; ts_self_pid = 0; }
 // the real host file (host I/O resumes) -- RAM use is bounded, never unbounded.
 #define MEMF_CAP (256ull * 1024 * 1024)        // per-file RAM cap; beyond this, spill to the host file
 #define MEMF_TOTAL_CAP (1024ull * 1024 * 1024) // process-wide RAM cap for all backed files
+
 struct memf {
     uint8_t *buf;
     size_t size; // logical file size (bytes)
@@ -242,13 +275,17 @@ static int memf_disabled(void) {
     if (v < 0) v = getenv("NOTMPFS") ? 1 : 0;
     return v;
 }
-static inline struct memf *memf_get(int fd) { return (fd >= 0 && fd < 1024) ? g_memf[fd] : NULL; }
+
+static inline struct memf *memf_get(int fd) {
+    return (fd >= 0 && fd < 1024) ? g_memf[fd] : NULL;
+}
 
 // grow buf to >= need bytes, zero-filling the new tail (so a sparse write reads back as zeros).
 static int memf_reserve(struct memf *m, size_t need) {
     if (need <= m->cap) return 0;
     size_t nc = m->cap ? m->cap : 65536;
-    while (nc < need) nc = nc < (16u << 20) ? nc << 1 : nc + (16u << 20); // double, then +16MiB chunks
+    while (nc < need)
+        nc = nc < (16u << 20) ? nc << 1 : nc + (16u << 20); // double, then +16MiB chunks
     uint8_t *nb = realloc(m->buf, nc);
     if (!nb) return -1;
     memset(nb + m->cap, 0, nc - m->cap);
@@ -256,6 +293,7 @@ static int memf_reserve(struct memf *m, size_t need) {
     m->cap = nc;
     return 0;
 }
+
 // Attach a RAM cache to real host fd `fd`, slurping `init` bytes already present in the fd. Returns 1 if
 // backed, 0 if left as a plain host fd (kill switch / over cap / OOM). The fd becomes anonymous.
 static int memf_attach(int fd, off_t init, off_t pos) {
@@ -265,7 +303,10 @@ static int memf_attach(int fd, off_t init, off_t pos) {
     struct memf *m = calloc(1, sizeof *m);
     if (!m) return 0;
     if (init > 0) {
-        if (memf_reserve(m, (size_t)init)) { free(m); return 0; }
+        if (memf_reserve(m, (size_t)init)) {
+            free(m);
+            return 0;
+        }
         off_t got = 0;
         for (off_t o = 0; o < init;) { // slurp existing bytes from the real fd into RAM
             ssize_t r = pread(fd, m->buf + o, (size_t)(init - o), o);
@@ -287,6 +328,7 @@ static int memf_attach(int fd, off_t init, off_t pos) {
     g_fdpath[fd][0] = 0; // anonymous: no tracked host path
     return 1;
 }
+
 // Flush the RAM buffer back into the real fd (size + offset restored) and drop the cache: the fd reverts
 // to a plain host file behaving exactly as if it had never been backed.
 static void memf_materialize(int fd) {
@@ -304,10 +346,12 @@ static void memf_materialize(int fd) {
     free(m->buf);
     free(m);
 }
+
 static void memf_materialize_all(void) {
     for (int fd = 0; fd < 1024; fd++)
         if (g_memf[fd]) memf_materialize(fd);
 }
+
 static void memf_close(int fd) { // fd is being closed: just discard the RAM buffer
     struct memf *m = memf_get(fd);
     if (!m) return;
@@ -316,6 +360,7 @@ static void memf_close(int fd) { // fd is being closed: just discard the RAM buf
     free(m->buf);
     free(m);
 }
+
 // I/O served from RAM. pread/pwrite are positional; read/write advance m->pos.
 static ssize_t memf_pread(struct memf *m, void *buf, size_t n, off_t off) {
     if (off < 0) return -EINVAL;
@@ -324,6 +369,7 @@ static ssize_t memf_pread(struct memf *m, void *buf, size_t n, off_t off) {
     if (k) memcpy(buf, m->buf + off, k);
     return (ssize_t)k;
 }
+
 static ssize_t memf_pwrite(struct memf *m, const void *buf, size_t n, off_t off) {
     if (off < 0) return -EINVAL;
     size_t end = (size_t)off + n;
@@ -335,16 +381,19 @@ static ssize_t memf_pwrite(struct memf *m, const void *buf, size_t n, off_t off)
     }
     return (ssize_t)n;
 }
+
 static ssize_t memf_read_pos(struct memf *m, void *buf, size_t n) {
     ssize_t k = memf_pread(m, buf, n, m->pos);
     if (k > 0) m->pos += k;
     return k;
 }
+
 static ssize_t memf_write_pos(struct memf *m, const void *buf, size_t n) {
     ssize_t k = memf_pwrite(m, buf, n, m->pos);
     if (k > 0) m->pos += k;
     return k;
 }
+
 static ssize_t memf_preadv(struct memf *m, const struct iovec *iov, int cnt, off_t off, int advance) {
     off_t p = advance ? m->pos : off;
     ssize_t tot = 0;
@@ -358,6 +407,7 @@ static ssize_t memf_preadv(struct memf *m, const struct iovec *iov, int cnt, off
     if (advance) m->pos = p;
     return tot;
 }
+
 static ssize_t memf_pwritev(struct memf *m, const struct iovec *iov, int cnt, off_t off, int advance) {
     off_t p = advance ? m->pos : off;
     ssize_t tot = 0;
@@ -370,17 +420,23 @@ static ssize_t memf_pwritev(struct memf *m, const struct iovec *iov, int cnt, of
     if (advance) m->pos = p;
     return tot;
 }
+
 // lseek on RAM. Returns the new offset, -1 for EINVAL, or -2 to mean "unsupported whence -> materialize".
 static off_t memf_lseek(struct memf *m, off_t off, int whence) {
     off_t np;
-    if (whence == 0) np = off;                  // SEEK_SET
-    else if (whence == 1) np = m->pos + off;    // SEEK_CUR
-    else if (whence == 2) np = (off_t)m->size + off; // SEEK_END
-    else return -2;                             // SEEK_DATA/SEEK_HOLE: let the host fd handle it
+    if (whence == 0)
+        np = off; // SEEK_SET
+    else if (whence == 1)
+        np = m->pos + off; // SEEK_CUR
+    else if (whence == 2)
+        np = (off_t)m->size + off; // SEEK_END
+    else
+        return -2; // SEEK_DATA/SEEK_HOLE: let the host fd handle it
     if (np < 0) return -1;
     m->pos = np;
     return np;
 }
+
 static int memf_fstat(int fd, struct stat *s) { // real-file metadata, RAM size/blocks
     if (fstat(fd, s) != 0) return -1;
     struct memf *m = g_memf[fd];
@@ -388,6 +444,7 @@ static int memf_fstat(int fd, struct stat *s) { // real-file metadata, RAM size/
     s->st_blocks = (blkcnt_t)((m->size + 511) / 512);
     return 0;
 }
+
 // Returns 1 if writing up to byte `end` stays within the caps; otherwise materializes fd (spills to the
 // host file) and returns 0 so the caller falls through to the real host write.
 static int memf_room_or_spill(int fd, off_t end) {
@@ -400,6 +457,7 @@ static int memf_room_or_spill(int fd, off_t end) {
     }
     return 1;
 }
+
 // After the guest unlinked a temp file (dev/ino captured before the unlink), adopt it as RAM-backed iff
 // EXACTLY ONE open fd now holds the last (zero) link to that regular file -- i.e. it is now anonymous and
 // privately owned by this one description. More than one matching fd (a dup) shares an offset we don't
@@ -420,7 +478,7 @@ static void memf_try_adopt(uint64_t dev, uint64_t ino) {
     struct stat s;
     if (fstat(found, &s) != 0 || !S_ISREG(s.st_mode) || s.st_nlink != 0) return;
     int fl = fcntl(found, F_GETFL); // only adopt an O_RDWR fd: a RAM cache serves both reads and writes, so
-    if (fl < 0 || (fl & O_ACCMODE) != O_RDWR) return; // adopting an O_RDONLY/O_WRONLY scratch fd would accept
+    if (fl < 0 || (fl & O_ACCMODE) != O_RDWR) return;         // adopting an O_RDONLY/O_WRONLY scratch fd would accept
     memf_attach(found, s.st_size, lseek(found, 0, SEEK_CUR)); // I/O the kernel would reject with EBADF (F2).
 }
 
@@ -455,10 +513,11 @@ static uint8_t *g_fd_pushback[1024];
 static size_t g_fd_pb_len[1024];
 // pinned O_DIRECTORY fd to the rootfs (set at startup)
 static int g_root_fd = -1;
+
 // Engine-private host fds (the rootfs dir-fd + each bind-mount volume dir-fd) share the guest's descriptor
 // table in dd's in-process model. Opened at startup, right after stdio, they otherwise squat the LOW numbers
 // Linux would leave free for the guest: g_root_fd lands on fd 3, shifting every guest fd allocation up by one
-// AND becoming visible to the guest at a number a native run has free. s6-linux-init (#299) reads its
+// AND becoming visible to the guest at a number a native run has free. s6-linux-init reads its
 // notification pipe on the by-convention-lowest fd 3, which under dd was g_root_fd -- a DIRECTORY -> the
 // read returns EISDIR ("unable to read from fd 3: Is a directory") and stage 1 aborts. Hoist each startup
 // engine fd above a high floor so the guest's low fd space is exactly as on Linux (only 0/1/2 taken). Mirrors
@@ -466,13 +525,14 @@ static int g_root_fd = -1;
 // created engine fds (the timer kqueue, the signalfd self-pipe) are made after the guest is running and take
 // whatever is free then, so they never squat a fd the just-started guest relies on.
 static int engine_fd_hoist(int fd) {
-    if (fd < 3) return fd; // stdio (or a failed open) -> nothing to move
-    int hi = fcntl(fd, F_DUPFD, 1 << 20); // high floor; F_DUPFD returns the lowest free fd >= floor
+    if (fd < 3) return fd;                   // stdio (or a failed open) -> nothing to move
+    int hi = fcntl(fd, F_DUPFD, 1 << 20);    // high floor; F_DUPFD returns the lowest free fd >= floor
     if (hi < 0) hi = fcntl(fd, F_DUPFD, 64); // floor beyond the guest's active low fds under a small RLIMIT
-    if (hi < 0) return fd;                    // relocation failed -> keep the original (still functional)
+    if (hi < 0) return fd;                   // relocation failed -> keep the original (still functional)
     close(fd);
     return hi;
 }
+
 // Bind-mount volumes: a guest path prefix -> a host directory, each its own confined jail root.
 struct vol {
     char guest[256];
@@ -486,6 +546,7 @@ struct vol {
 };
 static struct vol g_vols[32];
 static int g_nvols;
+
 // Materialize a volume's mount point (and every ancestor) as empty dirs in the writable rootfs/upper, the
 // way Docker mkdir -p's each mount target inside the container rootfs. Without it a NESTED mount leaves its
 // parent absent: `-v H:/x/y` makes `/x/y` resolve to the host dir, but `ls /x` ENOENTs because `/x` exists
@@ -511,13 +572,18 @@ static void vol_mkmountpoint(const char *guest, int isfile) {
     } else
         mkdir(mp, 0755);
 }
+
 static void add_vol(const char *spec) { // "[ro:]guestpath:hostdir" -> a confined bind-mount volume
     if (g_nvols >= 32) return;
     // Optional read-only marker. A guest path always begins with '/', so a leading "ro:"/"rw:" token is
     // unambiguous; absent (the legacy `guest:host` form) it defaults to read-write -> byte-identical.
     int ro = 0;
-    if (!strncmp(spec, "ro:", 3)) { ro = 1; spec += 3; }
-    else if (!strncmp(spec, "rw:", 3)) { spec += 3; }
+    if (!strncmp(spec, "ro:", 3)) {
+        ro = 1;
+        spec += 3;
+    } else if (!strncmp(spec, "rw:", 3)) {
+        spec += 3;
+    }
     char tmp[4096];
     snprintf(tmp, sizeof tmp, "%s", spec);
     char *col = strchr(tmp, ':');
@@ -527,7 +593,8 @@ static void add_vol(const char *spec) { // "[ro:]guestpath:hostdir" -> a confine
     v->ro = ro;
     snprintf(v->guest, sizeof v->guest, "%s", tmp);
     v->glen = strlen(v->guest);
-    while (v->glen > 1 && v->guest[v->glen - 1] == '/') v->guest[--v->glen] = 0;
+    while (v->glen > 1 && v->guest[v->glen - 1] == '/')
+        v->guest[--v->glen] = 0;
     if (!realpath(col + 1, v->hcanon)) return;
     v->hlen = strlen(v->hcanon);
     struct stat hst;
@@ -540,15 +607,18 @@ static void add_vol(const char *spec) { // "[ro:]guestpath:hostdir" -> a confine
         snprintf(par, sizeof par, "%s", v->hcanon);
         char *sl = strrchr(par, '/');
         if (!sl) return;
-        if (sl == par) par[1] = 0; // file directly under "/" -> parent is "/"
-        else *sl = 0;
+        if (sl == par)
+            par[1] = 0; // file directly under "/" -> parent is "/"
+        else
+            *sl = 0;
         if ((v->fd = open(par, O_RDONLY | O_DIRECTORY)) < 0) return;
     } else if ((v->fd = open(v->hcanon, O_RDONLY | O_DIRECTORY)) < 0)
         return;
-    v->fd = engine_fd_hoist(v->fd); // keep this engine dir-fd out of the guest's low fd range (#299)
+    v->fd = engine_fd_hoist(v->fd); // keep this engine dir-fd out of the guest's low fd range
     g_nvols++;
     vol_mkmountpoint(v->guest, v->isfile);
 }
+
 // Longest matching bind-mount volume for an absolute guest path (the DEEPEST mount wins, exactly as the
 // kernel routes a path to the innermost mount), or -1 for the rootfs/overlay jail. Longest-prefix so a
 // nested volume (`-v H1:/x/y -v H2:/x/y/z`) routes /x/y/z to the inner mount regardless of registration
@@ -567,11 +637,13 @@ static int jail_match(const char *abs) {
     }
     return best;
 }
+
 // Basename of a file bind-mount's host source: the leaf to openat under the pinned parent-dir `fd`.
 static const char *vol_fbase(int vi) {
     const char *sl = strrchr(g_vols[vi].hcanon, '/');
     return sl ? sl + 1 : g_vols[vi].hcanon;
 }
+
 // Pick the jail (rootfs or a volume) for an absolute guest path; *rel = the path within that jail.
 static int jail_pick(const char *abs, const char **canon, size_t *clen, const char **rel) {
     int i = jail_match(abs);
@@ -590,6 +662,7 @@ static int jail_pick(const char *abs, const char **canon, size_t *clen, const ch
     *rel = abs;
     return g_root_fd;
 }
+
 // SECURE path resolution. confine() handles '..' lexically, but symlinks resolve in the kernel
 // BELOW that layer (a mid-path symlink to '/' walks straight out), so lexical clamping is NOT a
 // boundary. This realpath()s the deepest existing prefix (following ALL symlinks) and verifies
@@ -606,6 +679,7 @@ static int jail_pick(const char *abs, const char **canon, size_t *clen, const ch
 static int dc_lookup(const char *key, char *canon, size_t n, int *nmiss);
 static void dc_store(const char *key, const char *canon, int nmiss);
 static int dc_jail_cacheable(const char *jcanon);
+
 // Core: confine `rel` within an explicit jail root (jcanon). Generalized from secure_resolve so the
 // overlay can resolve the SAME guest path inside each layer's root, reusing the realpath boundary.
 // `missing` (optional): the number of trailing DIRECTORY components that did NOT exist under the jail
@@ -687,9 +761,11 @@ static int confine_in_m(const char *jcanon, size_t jclen, const char *rel, char 
         if (missing) (*missing)++;
     }
 }
+
 static int confine_in(const char *jcanon, size_t jclen, const char *rel, char *out, size_t n, int nofollow) {
     return confine_in_m(jcanon, jclen, rel, out, n, nofollow, NULL);
 }
+
 // secure_resolve + two probe outputs the overlay's fast path uses (both optional):
 //   `missing` -- trailing dir components of the path that do NOT exist under the chosen jail root
 //                (see confine_in_m); lets overlay_lookup prove an upper entry/whiteout/opaque marker
@@ -730,10 +806,13 @@ static int secure_resolve_probe(const char *guest, char *out, size_t n, int nofo
     if (isvol && jcanon != g_rootfs_canon) *isvol = 1; // jail_pick hands back the global array for rootfs
     return confine_in_m(jcanon, jclen, rel, out, n, nofollow, missing);
 }
+
 static int secure_resolve(const char *guest, char *out, size_t n, int nofollow) {
     return secure_resolve_probe(guest, out, n, nofollow, NULL, NULL);
 }
+
 #include "vfs/overlay.c"
+
 // final NOT followed (readlink/lstat)
 static const char *xlate(const char *p, char *buf, size_t n) {
     if (g_rootfs && p && p[0] == '/') {
@@ -742,6 +821,7 @@ static const char *xlate(const char *p, char *buf, size_t n) {
     }
     return p;
 }
+
 // follow symlinks (open/stat/exec)
 static const char *xresolve(const char *p, char *buf, size_t n) {
     if (g_rootfs && p && p[0] == '/') {
@@ -750,6 +830,7 @@ static const char *xresolve(const char *p, char *buf, size_t n) {
     }
     return p;
 }
+
 // Resolve an EXEC entrypoint (or PT_INTERP) to a host path, following symlinks the way the kernel
 // would INSIDE the rootfs: an absolute symlink target (`/bin/sh -> /bin/busybox`) is rootfs-relative,
 // not host-relative -- realpath() can't do this (it follows the target against the host root). Each
@@ -769,7 +850,7 @@ static const char *xresolve_exec(const char *p, char *buf, size_t n) {
         if (!S_ISLNK(st.st_mode)) {
             snprintf(buf, n, "%s", hb);
             return buf;
-        // real file -> done
+            // real file -> done
         }
         char tgt[4200];
         ssize_t k = readlink(hb, tgt, sizeof tgt - 1);
@@ -786,7 +867,7 @@ static const char *xresolve_exec(const char *p, char *buf, size_t n) {
             char j[8400];
             snprintf(j, sizeof j, "%s/%s", d, tgt);
             snprintf(cur, sizeof cur, "%s", j);
-        // relative to its dir
+            // relative to its dir
         }
     }
     secure_resolve(cur, buf, n, 0);
@@ -815,6 +896,7 @@ static void container_path_env(char *out, size_t n) {
         s = *e ? e + 1 : e;
     }
 }
+
 // Resolve a bare program name (no '/') against the container PATH, like execvp -- docker passes `sh`,
 // not `/bin/sh`. Returns a guest path ("/bin/sh") that exists in the rootfs, or `prog` unchanged.
 // Searches the guest's ACTUAL PATH (image-config ENV + `-e PATH=`), split on ':' in order, so programs
@@ -856,8 +938,8 @@ static const char *find_in_path(const char *prog, char *gbuf, size_t n) {
         return gbuf; // not found on PATH: let the loader report ENOENT against the last attempted path
     }
     // No container PATH forwarded: historical FHS defaults.
-    static const char *const dirs[] = {"/usr/local/sbin", "/usr/local/bin", "/usr/sbin",
-                                       "/usr/bin",        "/sbin",          "/bin", NULL};
+    static const char *const dirs[] = {"/usr/local/sbin", "/usr/local/bin", "/usr/sbin", "/usr/bin",
+                                       "/sbin",           "/bin",           NULL};
     for (int i = 0; dirs[i]; i++) {
         snprintf(gbuf, n, "%s/%s", dirs[i], prog);
         if (access(xresolve_overlay(gbuf, hb, sizeof hb), X_OK) == 0) return gbuf;
@@ -865,7 +947,9 @@ static const char *find_in_path(const char *prog, char *gbuf, size_t n) {
     snprintf(gbuf, n, "/bin/%s", prog); // not found anywhere: let the loader report the error against /bin
     return gbuf;
 }
+
 #include "vfs/resolve.c"
+
 // ===================== /proc/[self|pid] process introspection =====================
 // macOS has no /proc, so the per-process files Linux servers read are synthesized here. All of these
 // answer for the GUEST's own process only -- "self", the host pid, the container pid, or init's "1".
@@ -882,19 +966,22 @@ static int proc_text_fd(const char *buf, int n) {
     }
     return fd;
 }
-// ---- guest comm + canonical-exe tracking (#370/#317: the /proc/self/exe surface) ----
+
+// ---- guest comm + canonical-exe tracking (the /proc/self/exe surface) ----
 // Linux sets a task's comm from the LAST component of the path PASSED to execve, BEFORE binfmt_script
 // rewrites it -- so "./run.sh" keeps comm "run.sh" (not "sh"), and execve("/proc/self/exe") gets comm
 // "exe" -- while /proc/<pid>/exe names the canonical FILE that was actually loaded. Track the two
 // separately: set_guest_comm() records the exec-name at boot and on every execve; g_exe_path holds the
 // canonical exe path (see exe_canon below).
 static char g_comm_store[16];
+
 static void set_guest_comm(const char *execpath) {
     const char *b = (execpath && execpath[0]) ? execpath : "init";
     const char *s = strrchr(b, '/');
     if (s) b = s + 1;
     snprintf(g_comm_store, sizeof g_comm_store, "%.15s", b[0] ? b : "init");
 }
+
 // Normalize a guest path LEXICALLY: collapse "//" and "." components and fold ".." (clamped at "/").
 // No fs access and no symlink resolution (exe_canon below adds that); always emits an absolute path.
 static void path_norm_lex(const char *in, char *out, size_t n) {
@@ -909,7 +996,10 @@ static void path_norm_lex(const char *in, char *out, size_t n) {
         while (*e && *e != '/')
             e++;
         size_t cl = (size_t)(e - p);
-        if (cl == 1 && p[0] == '.') { p = e; continue; }
+        if (cl == 1 && p[0] == '.') {
+            p = e;
+            continue;
+        }
         if (cl == 2 && p[0] == '.' && p[1] == '.') { // pop the previous component (stays at root)
             while (o > 0 && out[o - 1] != '/')
                 o--;
@@ -927,12 +1017,13 @@ static void path_norm_lex(const char *in, char *out, size_t n) {
     if (o == 0) out[o++] = '/';
     out[o < n ? o : n - 1] = 0;
 }
+
 // Canonical ABSOLUTE guest path of an executable -- what readlink("/proc/self/exe") must return. Joins
 // a relative exec path to the guest cwd, folds "."/".."/"//", then resolves symlinks the way the
 // kernel's d_path would: through the overlay to the backing host file, mapped back into the guest view
 // (an exec of the /bin/sh -> busybox symlink reports /bin/busybox, exactly like Linux). glibc's
 // static-pie startup ASSERTS on a non-absolute link value ("dl-origin.c: linkval[0]=='/'") and ld.so
-// resolves $ORIGIN RUNPATHs through this path, so it must be absolute and canonical (#370).
+// resolves $ORIGIN RUNPATHs through this path, so it must be absolute and canonical.
 static void exe_canon(const char *guest, char *out, size_t n) {
     if (!guest || !guest[0]) {
         snprintf(out, n, "/");
@@ -970,6 +1061,7 @@ static void exe_canon(const char *guest, char *out, size_t n) {
     // guest path then rather than claiming the exe is "/".
     snprintf(out, n, "%s", (gb[0] == '/' && gb[1] == 0 && !(lex[0] == '/' && lex[1] == 0)) ? lex : gb);
 }
+
 // The guest task name (Linux comm, max 15 chars): the recorded exec-name (set_guest_comm), falling back
 // to the basename of the running image (g_exe_path) for paths that never went through an exec hook.
 static void proc_comm(char *out, size_t n) {
@@ -983,6 +1075,7 @@ static void proc_comm(char *out, size_t n) {
     if (!base[0]) base = "init";
     snprintf(out, n, "%.15s", base);
 }
+
 // If `rp` addresses THIS process -- "/proc/self/<leaf>" or "/proc/<our-pid>/<leaf>" (host pid, container
 // pid, or init's "1") -- return the <leaf> tail; else NULL. Foreign pids are not introspectable.
 static const char *proc_self_leaf(const char *rp) {
@@ -1001,6 +1094,7 @@ static const char *proc_self_leaf(const char *rp) {
     if (pid != (int)getpid() && pid != container_pid()) return NULL;
     return q + i + 1;
 }
+
 // One /proc/.../maps line for [lo,hi), plus the per-region smaps fields when `smaps` is set. The smaps
 // fields are what redis's COW self-test parses; rss/dirty are reported equal to the region size (a
 // resident mapping) so any field a parser looks up is present and consistent. Returns the length.
@@ -1012,8 +1106,8 @@ static const char *proc_self_leaf(const char *rp) {
 // Shared_Dirty on real Linux (parent+child map it until COW breaks), so reporting the dirty bytes there
 // both matches Linux for that query and clears the false positive. Rss stays == Shared_Clean +
 // Shared_Dirty + Private_Clean + Private_Dirty (the kernel's invariant), so a summing parser is consistent.
-static int proc_map_region_p(char *b, size_t n, unsigned long lo, unsigned long hi, const char *perms,
-                             const char *name, int smaps) {
+static int proc_map_region_p(char *b, size_t n, unsigned long lo, unsigned long hi, const char *perms, const char *name,
+                             int smaps) {
     unsigned long kb = (hi - lo) / 1024;
     // "Locked:" reports the mlock/mlockall'd bytes of THIS region (LTP mlock05 mlock()s a whole mapping
     // and reads its Locked back == the mapping size).
@@ -1035,17 +1129,27 @@ static int proc_map_region_p(char *b, size_t n, unsigned long lo, unsigned long 
                       kb, 4, 4, rkb, rkb, 0, rkb, 0, 0UL, rkb, rkb, 0, 0, lockkb);
     return m;
 }
+
 // PT_LOAD segments of the main executable, read from the auxv the loader planted (AT_PHDR/AT_PHENT/
 // AT_PHNUM) so /proc/self/maps shows the text as r-xp, rodata r--p, data rw-p -- the real per-segment
 // protection, not a single flat rw-p span. Cross-arch (the Elf64_Phdr layout is arch-independent).
-struct mseg { uint64_t lo, hi; int prot; };
+struct mseg {
+    uint64_t lo, hi;
+    int prot;
+};
+
 static int maps_phdr_segs(struct mseg *seg, int maxn) {
     uint64_t phdr = 0, phent = 0, phnum = 0;
     for (int i = 0; i + 16 <= g_auxv_len; i += 16) {
         uint64_t t, v;
         memcpy(&t, g_auxv_data + i, 8);
         memcpy(&v, g_auxv_data + i + 8, 8);
-        if (t == 3) phdr = v; else if (t == 4) phent = v; else if (t == 5) phnum = v;
+        if (t == 3)
+            phdr = v;
+        else if (t == 4)
+            phent = v;
+        else if (t == 5)
+            phnum = v;
     }
     if (!phdr || phent < 56 || phnum == 0 || phnum > 256) return 0;
     const uint8_t *ph = (const uint8_t *)(uintptr_t)phdr;
@@ -1053,22 +1157,36 @@ static int maps_phdr_segs(struct mseg *seg, int maxn) {
     uint64_t bias = 0;
     for (uint64_t i = 0; i < phnum; i++) {
         const uint8_t *e = ph + i * phent;
-        uint32_t type; memcpy(&type, e, 4);
-        if (type == 6) { uint64_t pv; memcpy(&pv, e + 16, 8); bias = phdr - pv; break; } // PT_PHDR
+        uint32_t type;
+        memcpy(&type, e, 4);
+        if (type == 6) {
+            uint64_t pv;
+            memcpy(&pv, e + 16, 8);
+            bias = phdr - pv;
+            break;
+        } // PT_PHDR
     }
     int nseg = 0;
     for (uint64_t i = 0; i < phnum && nseg < maxn; i++) {
         const uint8_t *e = ph + i * phent;
-        uint32_t type, flags; uint64_t vaddr, memsz;
-        memcpy(&type, e, 4); memcpy(&flags, e + 4, 4); memcpy(&vaddr, e + 16, 8); memcpy(&memsz, e + 40, 8);
+        uint32_t type, flags;
+        uint64_t vaddr, memsz;
+        memcpy(&type, e, 4);
+        memcpy(&flags, e + 4, 4);
+        memcpy(&vaddr, e + 16, 8);
+        memcpy(&memsz, e + 40, 8);
         if (type != 1 || memsz == 0) continue; // PT_LOAD only
         uint64_t lo = (bias + vaddr) & ~0xfffULL;
         uint64_t hi = (bias + vaddr + memsz + 0xfff) & ~0xfffULL;
         int prot = ((flags & 4) ? 4 : 0) | ((flags & 2) ? 2 : 0) | ((flags & 1) ? 1 : 0); // R|W|X
-        seg[nseg].lo = lo; seg[nseg].hi = hi; seg[nseg].prot = prot; nseg++;
+        seg[nseg].lo = lo;
+        seg[nseg].hi = hi;
+        seg[nseg].prot = prot;
+        nseg++;
     }
     return nseg;
 }
+
 static void maps_perms_str(int prot, char *out) { // prot bits: 4=R 2=W 1=X
     out[0] = (prot & 4) ? 'r' : '-';
     out[1] = (prot & 2) ? 'w' : '-';
@@ -1076,17 +1194,25 @@ static void maps_perms_str(int prot, char *out) { // prot bits: 4=R 2=W 1=X
     out[3] = 'p';
     out[4] = 0;
 }
+
 // The guest brk arena bounds, defined (as file-scope statics) in syscall/dispatch.c which is #included
 // AFTER this TU; a matching tentative declaration here lets the maps synth name the [heap] region. Both
 // are static definitions of the same object in one translation unit, so this reads the live break.
 static uint64_t brk_lo, brk_cur, brk_hi;
+
 // One /proc/maps row, collected before emit so the whole file can be address-sorted (the kernel ALWAYS
 // emits VMAs in ascending start order; pmap/gdb and jemalloc/glibc's sequential parse rely on it).
-struct maprow { uint64_t lo, hi; char perms[5]; const char *name; };
+struct maprow {
+    uint64_t lo, hi;
+    char perms[5];
+    const char *name;
+};
+
 static int maprow_cmp(const void *a, const void *b) {
     uint64_t x = ((const struct maprow *)a)->lo, y = ((const struct maprow *)b)->lo;
     return x < y ? -1 : x > y ? 1 : 0;
 }
+
 // Synthesize /proc/[pid]/maps (smaps=0) or /proc/[pid]/smaps (smaps=1) from the tracked guest mappings
 // (g_gmap), the published main-stack bounds, and the brk arena ([heap]). Rows are collected, sorted by
 // ascending start address (the kernel invariant), then emitted. The [stack] line (with a guard line
@@ -1102,12 +1228,21 @@ static int proc_maps_fd(int smaps) {
     // emit. Capacity: main-exe PT_LOAD segs + stack + guard + heap split + one row per gmap entry.
     int cap = g_ngmap + 32;
     struct maprow *rows = (struct maprow *)calloc((size_t)cap, sizeof *rows);
-    if (!rows) { close(fd); return -1; }
+    if (!rows) {
+        close(fd);
+        return -1;
+    }
     int nrow = 0;
-#define MAPROW_ADD(LO, HI, PERMS, NAME)                                                        \
-    do { if (nrow < cap && (HI) > (LO)) { rows[nrow].lo = (LO); rows[nrow].hi = (HI);           \
-        snprintf(rows[nrow].perms, sizeof rows[nrow].perms, "%s", (PERMS));                     \
-        rows[nrow].name = (NAME); nrow++; } } while (0)
+#define MAPROW_ADD(LO, HI, PERMS, NAME)                                                                                \
+    do {                                                                                                               \
+        if (nrow < cap && (HI) > (LO)) {                                                                               \
+            rows[nrow].lo = (LO);                                                                                      \
+            rows[nrow].hi = (HI);                                                                                      \
+            snprintf(rows[nrow].perms, sizeof rows[nrow].perms, "%s", (PERMS));                                        \
+            rows[nrow].name = (NAME);                                                                                  \
+            nrow++;                                                                                                    \
+        }                                                                                                              \
+    } while (0)
     // The main executable's PT_LOAD segments, with their real per-segment protection (text r-xp, rodata
     // r--p, data rw-p) and the exe path as the mapping name -- read from the auxv program headers.
     struct mseg seg[16];
@@ -1128,8 +1263,7 @@ static int proc_maps_fd(int smaps) {
     // above brk_cur is NOT part of the guest-visible heap, so it is dropped -- otherwise maps would show a
     // 256 MB anon region no real container has. jemalloc/glibc-malloc/redis/pmap look for this [heap] line.
     int have_heap = brk_hi && brk_cur > brk_lo;
-    if (have_heap)
-        MAPROW_ADD((unsigned long)brk_lo, (unsigned long)((brk_cur + 0xfff) & ~0xfffULL), "rw-p", "[heap]");
+    if (have_heap) MAPROW_ADD((unsigned long)brk_lo, (unsigned long)((brk_cur + 0xfff) & ~0xfffULL), "rw-p", "[heap]");
     for (int i = 0; i < g_ngmap; i++) {
         // report the guest-VISIBLE length (glen) so a mapping's Size/Rss matches the guest's mmap length,
         // not dd's full extent including the 64 KB guard tail it reserves past anon maps (LTP mlock05 Rss).
@@ -1141,7 +1275,10 @@ static int proc_maps_fd(int smaps) {
         // skip a region already rendered as PT_LOAD segments (the image span the loader tracks as one entry)
         int covered = 0;
         for (int s = 0; s < nseg; s++)
-            if (lo >= seg[s].lo && lo < seg[s].hi) { covered = 1; break; }
+            if (lo >= seg[s].lo && lo < seg[s].hi) {
+                covered = 1;
+                break;
+            }
         if (covered) continue;
         MAPROW_ADD(lo, hi, "rw-p", "");
     }
@@ -1155,9 +1292,11 @@ static int proc_maps_fd(int smaps) {
     lseek(fd, 0, SEEK_SET);
     return fd;
 }
+
 // /proc/[pid]/status -- the Name:/State:/VmRSS: key:value format (NOT the stat one-liner). VmRSS/VmSize
 // reflect the cgroup memory charge so a reader sees a plausible footprint.
 static unsigned long long self_rss_bytes(void); // defined after dd_get_procinfo (real engine resident floor)
+
 static int proc_status_text(char *b, size_t n) {
     char comm[16];
     proc_comm(comm, sizeof comm);
@@ -1167,29 +1306,30 @@ static int proc_status_text(char *b, size_t n) {
     unsigned long vsz = g_mem_max ? (unsigned long)(g_mem_max / 1024) : rss + 4096;
     if (vsz < rss) vsz = rss;
     unsigned long vmlck = (unsigned long)(mlk_total_locked() / 1024); // mlock/mlockall'd bytes (LTP munlockall01)
-    char groups[512]; // #422: image-derived supplementary set (runc additionalGids), == getgroups(2)
+    char groups[512]; // image-derived supplementary set (runc additionalGids), == getgroups(2)
     groups_status_str(groups, sizeof groups);
-    return snprintf(b, n,
-                    "Name:\t%s\nUmask:\t0022\nState:\tR (running)\nTgid:\t%d\nNgid:\t0\nPid:\t%d\nPPid:\t%d\n"
-                    "TracerPid:\t0\nUid:\t0\t0\t0\t0\nGid:\t0\t0\t0\t0\nFDSize:\t256\nGroups:\t%s\n"
-                    "VmPeak:\t%8lu kB\nVmSize:\t%8lu kB\nVmLck:\t%8lu kB\nVmHWM:\t%8lu kB\nVmRSS:\t%8lu kB\n"
-                    "VmData:\t%8lu kB\nVmStk:\t     132 kB\nVmExe:\t     512 kB\nVmLib:\t    2048 kB\nVmPTE:\t      32 kB\n"
-                    "VmSwap:\t       0 kB\nThreads:\t1\nSigQ:\t0/31000\nSigPnd:\t0000000000000000\n"
-                    "SigBlk:\t0000000000000000\nSigIgn:\t0000000000000000\nSigCgt:\t0000000000000000\n"
-                    // Capability + security context. A default `docker run` root container drops all but 14
-                    // caps: CapPrm/CapEff/CapBnd=00000000a80425fb, CapInh/CapAmb=0. NoNewPrivs follows the
-                    // sticky prctl flag; the docker default seccomp profile shows Seccomp:2/Seccomp_filters:1.
-                    // These MUST agree with capget(2) and PR_CAPBSET_READ (see syscall/proc.c). Speculation
-                    // lines match what the host kernel reports to a container.
-                    "CapInh:\t0000000000000000\nCapPrm:\t%016llx\nCapEff:\t%016llx\nCapBnd:\t%016llx\n"
-                    "CapAmb:\t0000000000000000\nNoNewPrivs:\t%d\nSeccomp:\t2\nSeccomp_filters:\t1\n"
-                    "Speculation_Store_Bypass:\tvulnerable\nSpeculationIndirectBranch:\tunknown\n"
-                    "Cpus_allowed:\t1\nCpus_allowed_list:\t0\nvoluntary_ctxt_switches:\t1\n"
-                    "nonvoluntary_ctxt_switches:\t0\n",
-                    comm, pid, pid, ppid, groups, vsz, vsz, vmlck, rss, rss, rss,
-                    (unsigned long long)DD_CAP_DEFAULT, (unsigned long long)g_cap_eff,
-                    (unsigned long long)g_cap_bnd, g_nnp);
+    return snprintf(
+        b, n,
+        "Name:\t%s\nUmask:\t0022\nState:\tR (running)\nTgid:\t%d\nNgid:\t0\nPid:\t%d\nPPid:\t%d\n"
+        "TracerPid:\t0\nUid:\t0\t0\t0\t0\nGid:\t0\t0\t0\t0\nFDSize:\t256\nGroups:\t%s\n"
+        "VmPeak:\t%8lu kB\nVmSize:\t%8lu kB\nVmLck:\t%8lu kB\nVmHWM:\t%8lu kB\nVmRSS:\t%8lu kB\n"
+        "VmData:\t%8lu kB\nVmStk:\t     132 kB\nVmExe:\t     512 kB\nVmLib:\t    2048 kB\nVmPTE:\t      32 kB\n"
+        "VmSwap:\t       0 kB\nThreads:\t1\nSigQ:\t0/31000\nSigPnd:\t0000000000000000\n"
+        "SigBlk:\t0000000000000000\nSigIgn:\t0000000000000000\nSigCgt:\t0000000000000000\n"
+        // Capability + security context. A default `docker run` root container drops all but 14
+        // caps: CapPrm/CapEff/CapBnd=00000000a80425fb, CapInh/CapAmb=0. NoNewPrivs follows the
+        // sticky prctl flag; the docker default seccomp profile shows Seccomp:2/Seccomp_filters:1.
+        // These MUST agree with capget(2) and PR_CAPBSET_READ (see syscall/proc.c). Speculation
+        // lines match what the host kernel reports to a container.
+        "CapInh:\t0000000000000000\nCapPrm:\t%016llx\nCapEff:\t%016llx\nCapBnd:\t%016llx\n"
+        "CapAmb:\t0000000000000000\nNoNewPrivs:\t%d\nSeccomp:\t2\nSeccomp_filters:\t1\n"
+        "Speculation_Store_Bypass:\tvulnerable\nSpeculationIndirectBranch:\tunknown\n"
+        "Cpus_allowed:\t1\nCpus_allowed_list:\t0\nvoluntary_ctxt_switches:\t1\n"
+        "nonvoluntary_ctxt_switches:\t0\n",
+        comm, pid, pid, ppid, groups, vsz, vsz, vmlck, rss, rss, rss, (unsigned long long)DD_CAP_DEFAULT,
+        (unsigned long long)g_cap_eff, (unsigned long long)g_cap_bnd, g_nnp);
 }
+
 // /proc/[pid]/stat -- the 52-field single line (pid (comm) state ppid ...). Field 23 = vsize (bytes),
 // field 24 = rss (pages); the rest are plausible zeros. mongod's FTDC collector parses this.
 static int proc_stat_text(char *b, size_t n) {
@@ -1206,6 +1346,7 @@ static int proc_stat_text(char *b, size_t n) {
                     "0 0 0 0 0 0 0 0 0 0 0 0 0 17 0 0 0 0 0 0 0 0 0 0 0 0 0\n",
                     pid, comm, ppid, pid, pid, vsize, rss_pg);
 }
+
 // /proc/[pid]/environ -- the guest environment as NUL-separated KEY=VALUE. The authoritative source is
 // DD_GUEST_ENV (the container env the daemon forwards, "K=V\nK=V"); absent it (manual/direct mode), fall
 // back to the same defaults build_stack hands the guest. Returns the byte count written.
@@ -1225,7 +1366,8 @@ static int proc_environ_text(char *b, size_t n) {
             s = *e ? e + 1 : e;
         }
     } else {
-        static const char *const def[] = {"PATH=/usr/bin:/bin", "HOME=/root", "LANG=C", NULL}; // no TERM (docker parity: unset unless -t)
+        static const char *const def[] = {"PATH=/usr/bin:/bin", "HOME=/root", "LANG=C",
+                                          NULL}; // no TERM (docker parity: unset unless -t)
         for (int i = 0; def[i]; i++) {
             int L = (int)strlen(def[i]);
             if (o + L + 1 > (int)n) break;
@@ -1236,6 +1378,7 @@ static int proc_environ_text(char *b, size_t n) {
     }
     return o;
 }
+
 // A synthesized /proc/<pid>/fd directory is backed by a REAL temp dir of "N -> target" symlinks, so the
 // guest's opendir/getdents enumerate it through the ordinary fdopendir path and readlink/lstat of an
 // entry resolves the symlink. The dir persists until the guest closes its fd; we reap it lazily on the
@@ -1244,6 +1387,7 @@ static struct {
     int fd;
     char path[32];
 } g_procfd_dirs[64];
+
 static void procfd_dir_rm(const char *path) {
     DIR *d = opendir(path);
     if (d) {
@@ -1252,13 +1396,16 @@ static void procfd_dir_rm(const char *path) {
             if (e->d_name[0] == '.' && (!e->d_name[1] || (e->d_name[1] == '.' && !e->d_name[2]))) continue;
             char p[160];
             snprintf(p, sizeof p, "%s/%s", path, e->d_name);
-            if (e->d_type == DT_DIR) procfd_dir_rm(p); // per-pid dirs nest a task/<tid>/ subtree
-            else unlink(p);
+            if (e->d_type == DT_DIR)
+                procfd_dir_rm(p); // per-pid dirs nest a task/<tid>/ subtree
+            else
+                unlink(p);
         }
         closedir(d);
     }
     rmdir(path);
 }
+
 static void procfd_dirs_reap(int force) {
     for (int i = 0; i < 64; i++) {
         if (!g_procfd_dirs[i].path[0]) continue;
@@ -1268,7 +1415,11 @@ static void procfd_dirs_reap(int force) {
         }
     }
 }
-static void procfd_dirs_atexit(void) { procfd_dirs_reap(1); }
+
+static void procfd_dirs_atexit(void) {
+    procfd_dirs_reap(1);
+}
+
 // Build the temp dir of fd symlinks and return its fd. The guest fd numbers ARE the host fd numbers here,
 // so this process's open fds are exactly the guest's; each link's target is the fd's path (or an
 // anon_inode placeholder for a pipe/socket/eventfd with no path). -1 on error.
@@ -1310,6 +1461,7 @@ static int proc_fd_dir_open(void) {
         }
     return d;
 }
+
 // /proc/[pid]/cmdline -- the guest argv as NUL-separated, NUL-terminated arguments. The full argv vector
 // isn't retained past process start, so report argv[0] (the running image path) as the single argument;
 // that is what the usual readers (ps, error messages, language runtimes) consult. Returns the byte count.
@@ -1321,12 +1473,14 @@ static int proc_cmdline_text(char *b, size_t n) {
     b[L] = 0; // cmdline is NUL-terminated (a single empty-tail arg, exactly as the kernel emits)
     return L + 1;
 }
+
 // /proc/[pid]/comm -- the task name (Linux comm: basename of the image, max 15 chars) plus a newline.
 static int proc_comm_text(char *b, size_t n) {
     char comm[16];
     proc_comm(comm, sizeof comm);
     return snprintf(b, n, "%s\n", comm);
 }
+
 // /proc/[pid]/mountinfo -- the mounted-filesystem table df/findmnt parse, and which the JVM scans to locate
 // the cgroup mount. The rootfs is a single overlay mount at "/"; the pseudo-filesystems (proc, sysfs, the
 // cgroup2 hierarchy, devtmpfs) round it out so a reader looking up any of these mount points finds a
@@ -1351,6 +1505,7 @@ static int proc_mountinfo_text(char *b, size_t n) {
                     "29 25 0:30 / /dev/mqueue rw,nosuid,nodev,noexec,relatime - mqueue mqueue rw\n"
                     "30 25 0:31 / /dev/shm rw,nosuid,nodev,noexec,relatime - tmpfs shm rw,size=65536k\n");
 }
+
 // ================= REAL /proc process table (top/htop/ps) =====================================
 // dd's process model: every guest process is its OWN host (macOS) process running this DBT; the
 // container init is guest pid 1 (g_init_hostpid<->1), children keep their host pid as the guest pid
@@ -1367,8 +1522,8 @@ static int proc_mountinfo_text(char *b, size_t n) {
 #include <mach/host_info.h>
 #include <mach/vm_statistics.h>
 #include <mach/machine.h>
-#include <mach/processor_info.h>  // host_processor_info(PROCESSOR_CPU_LOAD_INFO) — real PER-CORE ticks (#412p3)
-#include <mach/vm_map.h>          // vm_deallocate for the processor_info array
+#include <mach/processor_info.h> // host_processor_info(PROCESSOR_CPU_LOAD_INFO) — real PER-CORE ticks
+#include <mach/vm_map.h>         // vm_deallocate for the processor_info array
 
 // The registry directory is keyed per-container (DD_NETNS / DD_HOSTNAME are set once by the daemon and
 // inherited across fork + survive guest execve), so two containers on the same host never collide; a
@@ -1389,10 +1544,12 @@ static void proc_reg_key(char *out, size_t n) {
     }
     snprintf(out, n, "/tmp/.ddpids.s%d", (int)getsid(0));
 }
+
 // This process's own registry file (unlinked on exit; the exit_group path calls proc_reg_unlink since
 // _exit bypasses atexit). Stale files from a crash are pruned lazily by the enumerator (dead-pid check).
 static char g_reg_file[128];
 static char g_reg_exe_file[128]; // sibling "x<pid>" record: the canonical exe path (for /proc/<pid>/exe)
+
 static void proc_reg_unlink(void) {
     if (g_reg_file[0]) {
         unlink(g_reg_file);
@@ -1403,6 +1560,7 @@ static void proc_reg_unlink(void) {
         g_reg_exe_file[0] = 0;
     }
 }
+
 // Publish THIS process's guest identity: "<comm>\n" then the full argv NUL-separated. Written to a temp
 // name + renamed for an atomic publish. Called at startup and after each guest execve (comm changes).
 static void proc_reg_publish(const char *exe, int argc, char *const argv[]) {
@@ -1446,8 +1604,10 @@ static void proc_reg_publish(const char *exe, int argc, char *const argv[]) {
     close(fd);
     char final[128];
     snprintf(final, sizeof final, "%s/%d", dir, (int)getpid());
-    if (rename(tmp, final) == 0) snprintf(g_reg_file, sizeof g_reg_file, "%s", final);
-    else unlink(tmp);
+    if (rename(tmp, final) == 0)
+        snprintf(g_reg_file, sizeof g_reg_file, "%s", final);
+    else
+        unlink(tmp);
     // Publish the CANONICAL exe path as a sibling "x<pid>" record so a PEER process can serve
     // readlink("/proc/<pid>/exe") for this one (`ls -l /proc/<pid>`, ps tooling). The non-digit-leading
     // name keeps it invisible to the pid enumerators (proc_reg_count / the /proc listing digit scan).
@@ -1459,11 +1619,14 @@ static void proc_reg_publish(const char *exe, int argc, char *const argv[]) {
         if (xfd >= 0) {
             if (write(xfd, exe, strlen(exe)) < 0) {}
             close(xfd);
-            if (rename(xtmp, xfin) == 0) snprintf(g_reg_exe_file, sizeof g_reg_exe_file, "%s", xfin);
-            else unlink(xtmp);
+            if (rename(xtmp, xfin) == 0)
+                snprintf(g_reg_exe_file, sizeof g_reg_exe_file, "%s", xfin);
+            else
+                unlink(xtmp);
         }
     }
 }
+
 // Read a peer's published canonical exe path (the "x<hostpid>" registry record). Returns 1 + fills out.
 static int proc_reg_exe_read(int hostpid, char *out, size_t n) {
     char dir[80], path[144];
@@ -1480,6 +1643,7 @@ static int proc_reg_exe_read(int hostpid, char *out, size_t n) {
     snprintf(out, n, "%s", buf);
     return 1;
 }
+
 // Read back a peer's published identity by host pid. Returns 1 + fills comm and the NUL-separated
 // cmdline (cmdlen bytes); 0 if no record. The comm line is stripped from the returned cmdline.
 static int proc_reg_read(int hostpid, char *comm, size_t csz, char *cmd, size_t cmdsz, int *cmdlen) {
@@ -1505,6 +1669,7 @@ static int proc_reg_read(int hostpid, char *comm, size_t csz, char *cmd, size_t 
     *cmdlen = rem;
     return 1;
 }
+
 // Live per-process stats from the host kernel (libproc). rss/cpu-times/state are REAL (coarse beats
 // zero); comm here is the HOST comm (the DBT binary) -- the guest comm comes from the registry instead.
 struct dd_procinfo {
@@ -1514,6 +1679,7 @@ struct dd_procinfo {
     long start_sec;
     char hostcomm[32];
 };
+
 static int dd_get_procinfo(int pid, struct dd_procinfo *pi) {
     struct proc_bsdinfo bsd;
     if (proc_pidinfo(pid, PROC_PIDTBSDINFO, 0, &bsd, sizeof bsd) != (int)sizeof bsd) return 0;
@@ -1540,6 +1706,7 @@ static int dd_get_procinfo(int pid, struct dd_procinfo *pi) {
     }
     return 1;
 }
+
 // Resident footprint (bytes) for OUR OWN pid's VmRSS / statm-resident / stat-rss. The guest's tracked anon
 // charge (g_mem_charged) is 0 for a process that has only faulted its static image, but a real Linux process
 // ALWAYS has a non-zero VmRSS -- top/htop/ps would otherwise show this process at RES=0, a dd-only divergence
@@ -1551,6 +1718,7 @@ static unsigned long long self_rss_bytes(void) {
     unsigned long long real = dd_get_procinfo((int)getpid(), &pi) ? pi.rss : 0;
     return real > charged ? real : charged;
 }
+
 // Host boot epoch (seconds) -- the base for /proc/<pid> starttime and /proc/uptime. Cached.
 static long host_btime(void) {
     static long bt = 0;
@@ -1561,6 +1729,7 @@ static long host_btime(void) {
     bt = (sysctl(mib, 2, &tv, &len, NULL, 0) == 0 && tv.tv_sec) ? tv.tv_sec : time(NULL);
     return bt;
 }
+
 // Aggregate host CPU jiffies (user, system, idle, nice) -- monotonically increasing, so htop/top meters
 // move. HOST_CPU_LOAD_INFO ticks are already in USER_HZ and summed across cores.
 static void host_cpu_ticks(unsigned long long t[4]) {
@@ -1575,6 +1744,7 @@ static void host_cpu_ticks(unsigned long long t[4]) {
         t[0] = t[1] = t[2] = t[3] = 0;
     }
 }
+
 // Real host memory picture (kB): total from hw.memsize, free/available/cached from the Mach VM stats.
 static void host_mem(unsigned long long *total, unsigned long long *fre, unsigned long long *avail,
                      unsigned long long *cached) {
@@ -1598,6 +1768,7 @@ static void host_mem(unsigned long long *total, unsigned long long *fre, unsigne
         *cached = 0;
     }
 }
+
 // Count the live container processes (registry entries whose pid is still alive).
 static int proc_reg_count(void) {
     char dir[80];
@@ -1613,6 +1784,7 @@ static int proc_reg_count(void) {
     closedir(d);
     return n ? n : 1;
 }
+
 // Parse "/proc/<digits>/<leaf>" for ANY pid (unlike proc_self_leaf, which matches only our own). Returns
 // the <leaf> and fills *pid, or NULL.
 static const char *proc_any_leaf(const char *rp, int *pid) {
@@ -1628,6 +1800,7 @@ static const char *proc_any_leaf(const char *rp, int *pid) {
     *pid = atoi(num);
     return q + i + 1;
 }
+
 // Is guest pid `gp` a live member of this container? Fills *hostout with its host pid (gp==1 -> init).
 static int proc_pid_member(int gp, int *hostout) {
     int host = (gp == 1 && g_init_hostpid) ? g_init_hostpid : gp;
@@ -1640,6 +1813,7 @@ static int proc_pid_member(int gp, int *hostout) {
     if (access(path, F_OK) == 0 && !(kill(host, 0) != 0 && errno == ESRCH)) return 1;
     return kill(host, 0) == 0 && getsid(host) == getsid(0); // registry may lag; accept a live session peer
 }
+
 // /proc/<pid>/stat for a peer -- the 52-field line with GUEST pid/ppid and REAL rss/cpu/state/starttime.
 static int proc_stat_pid_text(char *b, size_t n, int gp, int host) {
     struct dd_procinfo pi;
@@ -1657,8 +1831,10 @@ static int proc_stat_pid_text(char *b, size_t n, int gp, int host) {
     int ppid = 0;
     if (gp != 1 && ok) {
         int hp;
-        if (pi.ppid_host == g_init_hostpid) ppid = 1;
-        else if (proc_pid_member(pi.ppid_host, &hp)) ppid = pi.ppid_host;
+        if (pi.ppid_host == g_init_hostpid)
+            ppid = 1;
+        else if (proc_pid_member(pi.ppid_host, &hp))
+            ppid = pi.ppid_host;
     }
     int pgrp = ok ? (pi.pgid_host == g_init_hostpid ? 1 : pi.pgid_host) : gp;
     long hz = sysconf(_SC_CLK_TCK);
@@ -1680,6 +1856,7 @@ static int proc_stat_pid_text(char *b, size_t n, int gp, int host) {
                     "18446744073709551615 0 0 0 0 0 0 0 0 0 0 0 0 0 17 0 0 0 0 0 0 0 0 0 0 0 0 0\n",
                     gp, comm, state, ppid, pgrp, gp, utime, stime, nthreads, start_ticks, vsize, rss_pg);
 }
+
 // /proc/<pid>/status for a peer -- the key:value form with GUEST Pid/PPid and REAL VmRSS.
 static int proc_status_pid_text(char *b, size_t n, int gp, int host) {
     struct dd_procinfo pi;
@@ -1691,34 +1868,37 @@ static int proc_status_pid_text(char *b, size_t n, int gp, int host) {
     int ppid = 0;
     if (gp != 1 && ok) {
         int hp;
-        if (pi.ppid_host == g_init_hostpid) ppid = 1;
-        else if (proc_pid_member(pi.ppid_host, &hp)) ppid = pi.ppid_host;
+        if (pi.ppid_host == g_init_hostpid)
+            ppid = 1;
+        else if (proc_pid_member(pi.ppid_host, &hp))
+            ppid = pi.ppid_host;
     }
     unsigned long rss = ok ? (unsigned long)(pi.rss / 1024) : 0;
     unsigned long vsz = rss + (128UL << 10); // bounded footprint, not the huge host DBT vsize (see stat text)
-    char state = ok ? pi.state : 'S'; // same run-state override as proc_stat_pid_text (see there)
+    char state = ok ? pi.state : 'S';        // same run-state override as proc_stat_pid_text (see there)
     int ov = ts_lookup(host);
     if (ov && state != 'Z' && state != 'T') state = (char)ov;
-    char groups[512]; // #422: peers carry the same container supplementary set (image-derived, see self)
+    char groups[512]; // peers carry the same container supplementary set (image-derived, see self)
     groups_status_str(groups, sizeof groups);
-    return snprintf(b, n,
-                    "Name:\t%s\nUmask:\t0022\nState:\t%c\nTgid:\t%d\nNgid:\t0\nPid:\t%d\nPPid:\t%d\n"
-                    "TracerPid:\t0\nUid:\t0\t0\t0\t0\nGid:\t0\t0\t0\t0\nFDSize:\t256\nGroups:\t%s\n"
-                    "VmPeak:\t%8lu kB\nVmSize:\t%8lu kB\nVmLck:\t       0 kB\nVmHWM:\t%8lu kB\nVmRSS:\t%8lu kB\n"
-                    "VmData:\t%8lu kB\nVmStk:\t     132 kB\nVmExe:\t     512 kB\nVmLib:\t    2048 kB\nVmPTE:\t      32 kB\n"
-                    "VmSwap:\t       0 kB\nThreads:\t%d\nSigQ:\t0/31000\nSigPnd:\t0000000000000000\n"
-                    "SigBlk:\t0000000000000000\nSigIgn:\t0000000000000000\nSigCgt:\t0000000000000000\n"
-                    // Peer processes carry the same docker default cap set (see proc_status_text). We don't
-                    // track a peer's live effective/nnp, so report the container default.
-                    "CapInh:\t0000000000000000\nCapPrm:\t%016llx\nCapEff:\t%016llx\nCapBnd:\t%016llx\n"
-                    "CapAmb:\t0000000000000000\nNoNewPrivs:\t0\nSeccomp:\t2\nSeccomp_filters:\t1\n"
-                    "Speculation_Store_Bypass:\tvulnerable\nSpeculationIndirectBranch:\tunknown\n"
-                    "Cpus_allowed:\t1\nCpus_allowed_list:\t0\nvoluntary_ctxt_switches:\t1\n"
-                    "nonvoluntary_ctxt_switches:\t0\n",
-                    comm, state, gp, gp, ppid, groups, vsz, vsz, rss, rss, rss, ok ? pi.nthreads : 1,
-                    (unsigned long long)DD_CAP_DEFAULT, (unsigned long long)DD_CAP_DEFAULT,
-                    (unsigned long long)DD_CAP_DEFAULT);
+    return snprintf(
+        b, n,
+        "Name:\t%s\nUmask:\t0022\nState:\t%c\nTgid:\t%d\nNgid:\t0\nPid:\t%d\nPPid:\t%d\n"
+        "TracerPid:\t0\nUid:\t0\t0\t0\t0\nGid:\t0\t0\t0\t0\nFDSize:\t256\nGroups:\t%s\n"
+        "VmPeak:\t%8lu kB\nVmSize:\t%8lu kB\nVmLck:\t       0 kB\nVmHWM:\t%8lu kB\nVmRSS:\t%8lu kB\n"
+        "VmData:\t%8lu kB\nVmStk:\t     132 kB\nVmExe:\t     512 kB\nVmLib:\t    2048 kB\nVmPTE:\t      32 kB\n"
+        "VmSwap:\t       0 kB\nThreads:\t%d\nSigQ:\t0/31000\nSigPnd:\t0000000000000000\n"
+        "SigBlk:\t0000000000000000\nSigIgn:\t0000000000000000\nSigCgt:\t0000000000000000\n"
+        // Peer processes carry the same docker default cap set (see proc_status_text). We don't
+        // track a peer's live effective/nnp, so report the container default.
+        "CapInh:\t0000000000000000\nCapPrm:\t%016llx\nCapEff:\t%016llx\nCapBnd:\t%016llx\n"
+        "CapAmb:\t0000000000000000\nNoNewPrivs:\t0\nSeccomp:\t2\nSeccomp_filters:\t1\n"
+        "Speculation_Store_Bypass:\tvulnerable\nSpeculationIndirectBranch:\tunknown\n"
+        "Cpus_allowed:\t1\nCpus_allowed_list:\t0\nvoluntary_ctxt_switches:\t1\n"
+        "nonvoluntary_ctxt_switches:\t0\n",
+        comm, state, gp, gp, ppid, groups, vsz, vsz, rss, rss, rss, ok ? pi.nthreads : 1,
+        (unsigned long long)DD_CAP_DEFAULT, (unsigned long long)DD_CAP_DEFAULT, (unsigned long long)DD_CAP_DEFAULT);
 }
+
 // /proc/<pid>/cmdline for a peer -- the published NUL-separated argv (fallback: the comm).
 static int proc_cmdline_pid_text(char *b, size_t n, int host) {
     char comm[32], cmd[4096];
@@ -1727,8 +1907,10 @@ static int proc_cmdline_pid_text(char *b, size_t n, int host) {
         int L = cl > (int)n ? (int)n : cl;
         memcpy(b, cmd, (size_t)L);
         if (L == 0 || b[L - 1] != 0) {
-            if (L < (int)n) b[L++] = 0;
-            else b[L - 1] = 0;
+            if (L < (int)n)
+                b[L++] = 0;
+            else
+                b[L - 1] = 0;
         }
         return L;
     }
@@ -1740,6 +1922,7 @@ static int proc_cmdline_pid_text(char *b, size_t n, int host) {
     b[L] = 0;
     return L + 1;
 }
+
 // /proc/<pid>/comm for a peer.
 static int proc_comm_pid_text(char *b, size_t n, int host) {
     char comm[32], cmd[4096];
@@ -1750,11 +1933,13 @@ static int proc_comm_pid_text(char *b, size_t n, int host) {
     }
     return snprintf(b, n, "%s\n", comm);
 }
+
 // /proc/[pid]/statm -- the 7-field page-count line (size resident shared text lib data dt). htop's
 // MEM% column reads `resident` from HERE (not status VmRSS), so it must be present and non-zero.
 static int proc_statm_common(char *b, size_t n, unsigned long size_pg, unsigned long rss_pg) {
     return snprintf(b, n, "%lu %lu %lu 1 0 %lu 0\n", size_pg, rss_pg, rss_pg / 2, size_pg);
 }
+
 static int proc_statm_text(char *b, size_t n) { // our own pid
     long pg = sysconf(_SC_PAGESIZE);
     unsigned long pgsz = pg > 0 ? (unsigned long)pg : 4096;
@@ -1763,6 +1948,7 @@ static int proc_statm_text(char *b, size_t n) { // our own pid
     if (size_pg < rss_pg) size_pg = rss_pg;
     return proc_statm_common(b, n, size_pg, rss_pg);
 }
+
 static int proc_statm_pid_text(char *b, size_t n, int host) { // a peer -- REAL rss from libproc
     struct dd_procinfo pi;
     long pg = sysconf(_SC_PAGESIZE);
@@ -1770,6 +1956,7 @@ static int proc_statm_pid_text(char *b, size_t n, int host) { // a peer -- REAL 
     unsigned long rss_pg = dd_get_procinfo(host, &pi) ? (unsigned long)(pi.rss / pgsz) : 0;
     return proc_statm_common(b, n, rss_pg + 256, rss_pg);
 }
+
 // Register a materialized proc temp dir (fd + host temp path for reaping) AND tag the fd's GUEST /proc
 // path in g_fdpath. The tag is the key trick: a RELATIVE openat/readlink against this dir fd (htop uses
 // openat(pid_dirfd,"stat"/"task"/...) exclusively) then resolves via abs_guest back to the /proc path,
@@ -1784,6 +1971,7 @@ static void proc_dir_register(int fd, const char *tmpl, const char *guestpath) {
         }
     if (fd >= 0 && fd < 1024) snprintf(g_fdpath[fd], sizeof g_fdpath[fd], "%s%s", g_rootfs_canon, guestpath);
 }
+
 // Materialize a /proc/<gp> (or task/<tid>) directory as a temp dir of placeholder entries so
 // opendir/getdents works and htop can descend; the CONTENT of each entry is served live on the
 // (re-intercepted) relative open by proc_open. `guestpath` is the /proc path this dir represents;
@@ -1813,7 +2001,7 @@ static int proc_leaf_dir_open(const char *guestpath, int with_task) {
     }
     // Magic-link placeholders (exe/cwd/root) so getdents lists them with d_type DT_LNK, like Linux. Every
     // ACCESS to them goes by path or by (tagged dirfd, relative) and is intercepted -- readlink/stat/open
-    // of /proc/<pid>/{exe,cwd,root} are served by proc_self_exe / the root|cwd synthesis in fs.c (#370);
+    // of /proc/<pid>/{exe,cwd,root} are served by proc_self_exe / the root|cwd synthesis in fs.c;
     // the inert "." target exists only so a host-side follow can never dangle out of the temp dir.
     static const char *const links[] = {"exe", "cwd", "root", 0};
     for (int i = 0; links[i]; i++) {
@@ -1829,6 +2017,7 @@ static int proc_leaf_dir_open(const char *guestpath, int with_task) {
     proc_dir_register(fd, tmpl, guestpath);
     return fd;
 }
+
 // Materialize /proc/<gp>/task -- a dir whose sole entry is the main thread tid (== gp for the common
 // single-threaded case; enough for htop to count the process). Returns the fd or -1.
 static int proc_task_dir_open(int gp) {
@@ -1848,6 +2037,7 @@ static int proc_task_dir_open(int gp) {
     proc_dir_register(fd, tmpl, gpath);
     return fd;
 }
+
 // If `rp` is a /proc/<pid> DIRECTORY path (the pid dir, its task/ dir, or a task/<tid>/ dir) for a live
 // container pid, materialize it and return the fd. Returns -1 on error, or -2 if `rp` is not such a
 // directory (a per-pid FILE like stat/status -> the caller falls through to proc_open). fs.c calls this.
@@ -1885,6 +2075,7 @@ static int proc_dir_try_open(const char *rp) {
     }
     return -2; // a per-pid FILE -> proc_open serves it
 }
+
 // Materialize /proc as a real temp directory of entries (static files + one numeric name per live
 // container process) so the guest's ordinary opendir/getdents enumerates it. Entries are empty regular
 // files -- ps/top/htop identify pids by digit-name and then open /proc/<pid>/stat BY PATH (served by
@@ -1901,9 +2092,9 @@ static int proc_root_dir_open(void) {
     if (!mkdtemp(tmpl)) return -1;
     // ONLY names proc_open()/synth_stat actually serve -- listing an unserved name makes `ls /proc` stat it
     // and print "No such file or directory". "self" is the magic symlink (handled in synth_stat).
-    static const char *const st[] = {"meminfo",  "stat",        "cpuinfo", "uptime",  "loadavg",
-                                     "version",  "mounts",      "self",    "cmdline", "filesystems",
-                                     "swaps",    "vmstat",      "modules", "devices", 0};
+    static const char *const st[] = {"meminfo", "stat",   "cpuinfo", "uptime",  "loadavg",
+                                     "version", "mounts", "self",    "cmdline", "filesystems",
+                                     "swaps",   "vmstat", "modules", "devices", 0};
     for (int i = 0; st[i]; i++) {
         char p[96];
         snprintf(p, sizeof p, "%s/%s", tmpl, st[i]);
@@ -1944,7 +2135,8 @@ static int proc_root_dir_open(void) {
     proc_dir_register(fd, tmpl, "/proc"); // tag the fd's guest path so relative opens re-enter /proc synth
     return fd;
 }
-// #289: materialize a /sys/class/net directory as a real temp dir the guest's opendir/getdents can
+
+// materialize a /sys/class/net directory as a real temp dir the guest's opendir/getdents can
 // walk. The class dir lists the two interfaces (lo, eth0) as subdirs; an interface dir lists its
 // attribute files. FILE content is served live via proc_open on the (re-intercepted) relative/absolute
 // open. Returns the fd, -1 on error, or -2 if `gp` is not a sysfs-net directory we synthesize.
@@ -1955,17 +2147,16 @@ static int sysnet_dir_open(const char *gp) {
     // --network none: loopback-only, so /sys/class/net lists just `lo` (no eth0).
     static const char *const ifaces[] = {"lo", "eth0", 0};
     static const char *const ifaces_lo[] = {"lo", 0};
-    static const char *const attrs[] = {"address",   "addr_len",  "broadcast", "flags",   "mtu",
-                                        "operstate", "type",      "carrier",   "ifindex", "iflink",
-                                        "tx_queue_len", "speed",   "duplex",  "carrier_changes",
-                                        "statistics", 0};
+    static const char *const attrs[] = {
+        "address", "addr_len", "broadcast",    "flags", "mtu",    "operstate",       "type",       "carrier",
+        "ifindex", "iflink",   "tx_queue_len", "speed", "duplex", "carrier_changes", "statistics", 0};
     // per-net_device statistics counters (fixed kernel set) node_exporter/ifstat read directly from sysfs.
     static const char *const stats[] = {
-        "collisions", "multicast", "rx_bytes", "rx_compressed", "rx_crc_errors", "rx_dropped", "rx_errors",
-        "rx_fifo_errors", "rx_frame_errors", "rx_length_errors", "rx_missed_errors", "rx_nohandler",
-        "rx_over_errors", "rx_packets", "tx_aborted_errors", "tx_bytes", "tx_carrier_errors", "tx_compressed",
-        "tx_dropped", "tx_errors", "tx_fifo_errors", "tx_heartbeat_errors", "tx_packets", "tx_window_errors",
-        0};
+        "collisions",       "multicast",           "rx_bytes",       "rx_compressed",    "rx_crc_errors",
+        "rx_dropped",       "rx_errors",           "rx_fifo_errors", "rx_frame_errors",  "rx_length_errors",
+        "rx_missed_errors", "rx_nohandler",        "rx_over_errors", "rx_packets",       "tx_aborted_errors",
+        "tx_bytes",         "tx_carrier_errors",   "tx_compressed",  "tx_dropped",       "tx_errors",
+        "tx_fifo_errors",   "tx_heartbeat_errors", "tx_packets",     "tx_window_errors", 0};
     int as_dirs; // class dir -> iface subdirs; iface dir -> attribute files
     if (r[0] == 0 || (r[0] == '/' && r[1] == 0)) {
         entries = net_isolate() ? ifaces_lo : ifaces;
@@ -1973,8 +2164,8 @@ static int sysnet_dir_open(const char *gp) {
     } else if (r[0] == '/' && (!strcmp(r + 1, "lo") || (!net_isolate() && !strcmp(r + 1, "eth0")))) {
         entries = attrs;
         as_dirs = 0;
-    } else if (r[0] == '/' && (!strcmp(r + 1, "lo/statistics") ||
-                               (!net_isolate() && !strcmp(r + 1, "eth0/statistics")))) {
+    } else if (r[0] == '/' &&
+               (!strcmp(r + 1, "lo/statistics") || (!net_isolate() && !strcmp(r + 1, "eth0/statistics")))) {
         entries = stats; // the statistics/ subdir: one counter file per entry
         as_dirs = 0;
     } else
@@ -2007,7 +2198,8 @@ static int sysnet_dir_open(const char *gp) {
     proc_dir_register(fd, tmpl, gpath); // tag guest path so a relative reopen re-enters this synth
     return fd;
 }
-// #412: materialize the CPU-topology sysfs DIRECTORY so getdents enumerates one cpuN subdir per online
+
+// materialize the CPU-topology sysfs DIRECTORY so getdents enumerates one cpuN subdir per online
 // CPU. htop's LinuxMachine_updateCPUcount opendir()s /sys/devices/system/cpu, counts the cpuN subdirs
 // (reading each cpuN/online to mark it active), and -- crucially -- when it finds NO cpuN dir it early-
 // returns keeping its built-in default of ONE CPU. macOS has no /sys, and dd previously served only the
@@ -2031,10 +2223,11 @@ static int syscpu_dir_open(const char *gp) {
         const char *d = r + 4;
         if (*d < '0' || *d > '9') return -2;
         cpuN = 0;
-        for (; *d >= '0' && *d <= '9'; d++) cpuN = cpuN * 10 + (*d - '0');
+        for (; *d >= '0' && *d <= '9'; d++)
+            cpuN = cpuN * 10 + (*d - '0');
         if (*d != 0) return -2; // trailing junk (cpufreq/cpuidle/... are files/dirs, not our cpuN synth)
     }
-    int nc = container_online_cpus(); // host online count, docker --cpus capped (state.c)
+    int nc = container_online_cpus();                    // host online count, docker --cpus capped (state.c)
     if (!is_base && (cpuN < 0 || cpuN >= nc)) return -2; // an out-of-range cpuN: not one we advertise
     static int registered = 0;
     if (!registered) {
@@ -2070,6 +2263,7 @@ static int syscpu_dir_open(const char *gp) {
     proc_dir_register(fd, tmpl, gpath); // tag guest path so a relative openat(cpuN)/readfileat re-enters synth
     return fd;
 }
+
 // Format a Linux cpumask hex string (as /sys topology mask files print it): zero-padded groups of up to 32
 // bits, most-significant group first, comma-separated. `all` -> every online CPU set; else just bit `bit`.
 // `ndig` is the low-group width the kernel pads to for this machine (DIV_ROUND_UP(nc,4)); e.g. nc=18 -> 5.
@@ -2083,6 +2277,7 @@ static void cpumask_hex(char *out, size_t n, int nc, int all, int bit, int ndig)
     if (hidig < 1) hidig = 1;
     snprintf(out, n, "%0*x,%08x", hidig, (unsigned)(v >> 32), (unsigned)(v & 0xffffffffULL));
 }
+
 // The CONTENT of one /sys/devices/system/cpu/cpuN/topology/<leaf> attribute. dd advertises a FLAT topology:
 // single socket (physical_package_id 0), no SMT (each logical CPU is its own core -> core_id = cpuN, thread
 // siblings = {cpuN}), all online CPUs in one package. lscpu/util-linux reconstruct sockets/cores/threads
@@ -2093,10 +2288,8 @@ static int syscpu_topology_str(const char *leaf, int cpuN, int nc, char *out, si
     if (ndig < 1) ndig = 1;
     if (!strcmp(leaf, "core_id")) return snprintf(out, n, "%d\n", cpuN);
     if (!strcmp(leaf, "physical_package_id") || !strcmp(leaf, "cluster_id")) return snprintf(out, n, "0\n");
-    if (!strcmp(leaf, "thread_siblings_list") || !strcmp(leaf, "core_cpus_list"))
-        return snprintf(out, n, "%d\n", cpuN);
-    if (!strcmp(leaf, "core_siblings_list") || !strcmp(leaf, "package_cpus_list") ||
-        !strcmp(leaf, "cluster_cpus_list"))
+    if (!strcmp(leaf, "thread_siblings_list") || !strcmp(leaf, "core_cpus_list")) return snprintf(out, n, "%d\n", cpuN);
+    if (!strcmp(leaf, "core_siblings_list") || !strcmp(leaf, "package_cpus_list") || !strcmp(leaf, "cluster_cpus_list"))
         return nc > 1 ? snprintf(out, n, "0-%d\n", nc - 1) : snprintf(out, n, "0\n");
     char m[96];
     if (!strcmp(leaf, "thread_siblings") || !strcmp(leaf, "core_cpus")) {
@@ -2109,6 +2302,7 @@ static int syscpu_topology_str(const char *leaf, int cpuN, int nc, char *out, si
     }
     return -1;
 }
+
 // Parse+serve a full /sys/devices/system/cpu/cpuN/topology/<leaf> path. Returns content length (out is
 // NUL-terminated) or -1 if `rp` is not a topology file we synthesize (bad cpuN, unknown leaf, wrong shape).
 static int syscpu_topology_content(const char *rp, char *out, size_t n) {
@@ -2116,7 +2310,8 @@ static int syscpu_topology_content(const char *rp, char *out, size_t n) {
     const char *d = rp + 27;
     if (*d < '0' || *d > '9') return -1;
     int cpuN = 0;
-    for (; *d >= '0' && *d <= '9'; d++) cpuN = cpuN * 10 + (*d - '0');
+    for (; *d >= '0' && *d <= '9'; d++)
+        cpuN = cpuN * 10 + (*d - '0');
     if (strncmp(d, "/topology/", 10)) return -1;
     const char *leaf = d + 10;
     if (!*leaf || strchr(leaf, '/')) return -1;
@@ -2124,16 +2319,17 @@ static int syscpu_topology_content(const char *rp, char *out, size_t n) {
     if (cpuN < 0 || cpuN >= nc) return -1;
     return syscpu_topology_str(leaf, cpuN, nc, out, n);
 }
+
 // Format 16 raw bytes as a Linux UUID string ("xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx\n"), stamping the
 // RFC-4122 version-4 (b[6]) and variant (b[8]) bits so the result parses as a valid random UUID. Writes
 // 37 bytes (36 + '\n') plus a NUL into out (needs >= 38). Returns the byte count (37).
 static int uuid_fmt(char *out, size_t cap, uint8_t b[16]) {
     b[6] = (uint8_t)((b[6] & 0x0f) | 0x40);
     b[8] = (uint8_t)((b[8] & 0x3f) | 0x80);
-    return snprintf(out, cap,
-                    "%02x%02x%02x%02x-%02x%02x-%02x%02x-%02x%02x-%02x%02x%02x%02x%02x%02x\n", b[0], b[1],
+    return snprintf(out, cap, "%02x%02x%02x%02x-%02x%02x-%02x%02x-%02x%02x-%02x%02x%02x%02x%02x%02x\n", b[0], b[1],
                     b[2], b[3], b[4], b[5], b[6], b[7], b[8], b[9], b[10], b[11], b[12], b[13], b[14], b[15]);
 }
+
 // The 16 raw bytes of the container's boot identity. Must be STABLE for the container's whole life AND
 // IDENTICAL across every process in it (each guest process is a separate host engine, so a per-process
 // arc4random value would disagree between peers). Derived DETERMINISTICALLY from the per-container
@@ -2142,7 +2338,7 @@ static int uuid_fmt(char *out, size_t cap, uint8_t b[16]) {
 // different containers -> different bytes. Backs both boot_id (UUID) and machine-id (32 hex).
 static void boot_id_bytes(uint8_t b[16]) {
     char key[80];
-    proc_reg_key(key, sizeof key); // DD_NETNS -> DD_HOSTNAME -> session id fallback
+    proc_reg_key(key, sizeof key);       // DD_NETNS -> DD_HOSTNAME -> session id fallback
     uint64_t h = 1469598103934665603ULL; // FNV-1a offset basis
     for (const char *p = key; *p; p++) {
         h ^= (uint8_t)*p;
@@ -2153,18 +2349,22 @@ static void boot_id_bytes(uint8_t b[16]) {
         if ((i & 7) == 7) h = h * 6364136223846793005ULL + 1442695040888963407ULL; // advance for hi 8 bytes
     }
 }
+
 // /proc/sys/kernel/random/boot_id (systemd/dbus/libuuid/journald key machine state off it).
 static int proc_boot_id(char *out, size_t cap) {
     uint8_t b[16];
     boot_id_bytes(b);
     return uuid_fmt(out, cap, b);
 }
+
 // /proc/[self|<pid>]/limits -- the rlimit table (Go runtime, nginx, java, systemd read RLIMIT_NOFILE from
 // it). Values mirror the engine's own getrlimit/prlimit answers (svc_fill_rlimit: stack 8MB, nofile
 // 1024/1048576, everything else unlimited) so the file and the syscall agree.
 static int proc_limits_text(char *buf, size_t cap) {
     // name, soft, hard, units ("" -> no unit column value). "unlimited" for RLIM_INFINITY rows.
-    static const struct { const char *nm, *soft, *hard, *unit; } L[] = {
+    static const struct {
+        const char *nm, *soft, *hard, *unit;
+    } L[] = {
         {"Max cpu time", "unlimited", "unlimited", "seconds"},
         {"Max file size", "unlimited", "unlimited", "bytes"},
         {"Max data size", "unlimited", "unlimited", "bytes"},
@@ -2182,6 +2382,7 @@ static int proc_limits_text(char *buf, size_t cap) {
         {"Max realtime priority", "0", "0", ""},
         {"Max realtime timeout", "unlimited", "unlimited", "us"},
     };
+
     int n = snprintf(buf, cap, "%-25s %-20s %-20s %-10s\n", "Limit", "Soft Limit", "Hard Limit", "Units");
     for (size_t i = 0; i < sizeof L / sizeof *L; i++) {
         const char *soft = L[i].soft, *hard = L[i].hard;
@@ -2189,15 +2390,24 @@ static int proc_limits_text(char *buf, size_t cap) {
         // so /proc/self/limits agrees with getrlimit (svc_fill_rlimit). RLIM_INFINITY -> "unlimited".
         char sb[24], hb[24];
         if (i < DD_RLIM_MAX && g_ulimit[i].set) {
-            if (g_ulimit[i].cur == ~0ull) soft = "unlimited";
-            else { snprintf(sb, sizeof sb, "%llu", (unsigned long long)g_ulimit[i].cur); soft = sb; }
-            if (g_ulimit[i].max == ~0ull) hard = "unlimited";
-            else { snprintf(hb, sizeof hb, "%llu", (unsigned long long)g_ulimit[i].max); hard = hb; }
+            if (g_ulimit[i].cur == ~0ull)
+                soft = "unlimited";
+            else {
+                snprintf(sb, sizeof sb, "%llu", (unsigned long long)g_ulimit[i].cur);
+                soft = sb;
+            }
+            if (g_ulimit[i].max == ~0ull)
+                hard = "unlimited";
+            else {
+                snprintf(hb, sizeof hb, "%llu", (unsigned long long)g_ulimit[i].max);
+                hard = hb;
+            }
         }
         n += snprintf(buf + n, cap - (size_t)n, "%-25s %-20s %-20s %-10s\n", L[i].nm, soft, hard, L[i].unit);
     }
     return n;
 }
+
 // ---- runc/containerd MaskedPaths + ReadonlyPaths (container isolation, spec.go DefaultSpec) ----
 // Masked paths must EXIST but be empty/inaccessible (NOT ENOENT), so monitoring agents and systemd unit
 // `ConditionPathExists` checks that stat them behave as under runc. Kind: 1 = masked FILE (opens as an empty
@@ -2205,10 +2415,15 @@ static int proc_limits_text(char *buf, size_t cap) {
 // an empty tmpfs). `rp` is the container-absolute path. Exact list = containerd pkg/oci spec.go MaskedPaths.
 static int proc_masked_kind(const char *rp) {
     if (!rp) return 0;
-    static const char *const files[] = {"/proc/kcore",     "/proc/keys",        "/proc/latency_stats",
-                                        "/proc/timer_list", "/proc/timer_stats", "/proc/sched_debug", 0};
-    static const char *const dirs[] = {"/proc/asound", "/proc/acpi", "/proc/scsi",
-                                       "/sys/firmware", "/sys/devices/virtual/powercap", 0};
+    static const char *const files[] = {"/proc/kcore",
+                                        "/proc/keys",
+                                        "/proc/latency_stats",
+                                        "/proc/timer_list",
+                                        "/proc/timer_stats",
+                                        "/proc/sched_debug",
+                                        0};
+    static const char *const dirs[] = {
+        "/proc/asound", "/proc/acpi", "/proc/scsi", "/sys/firmware", "/sys/devices/virtual/powercap", 0};
     for (int i = 0; files[i]; i++)
         if (!strcmp(rp, files[i])) return 1;
     for (int i = 0; dirs[i]; i++) {
@@ -2217,6 +2432,7 @@ static int proc_masked_kind(const char *rp) {
     }
     return 0;
 }
+
 // 1 if `rp` is a runc ReadonlyPath (/proc/bus /proc/fs /proc/irq /proc/sys /proc/sysrq-trigger): reads are
 // allowed (served by the /proc synth or an empty dir), writes fail EROFS -- runc bind-mounts these read-only.
 static int proc_ro_path(const char *rp) {
@@ -2229,6 +2445,7 @@ static int proc_ro_path(const char *rp) {
     }
     return 0;
 }
+
 // 1 if `rp` is one of the ReadonlyPath DIRECTORIES that has no other synth (so stat/opendir see an empty,
 // read-only directory). /proc/sys is served by proc_open; /proc/sysrq-trigger is a file (handled separately).
 static int proc_ro_dir(const char *rp) {
@@ -2240,6 +2457,7 @@ static int proc_ro_dir(const char *rp) {
     }
     return 0;
 }
+
 // Materialize a fresh EMPTY temp directory and return an O_DIRECTORY fd to it (reaped when the guest closes
 // the fd, via the shared g_procfd_dirs machinery). Backs masked dirs + read-only proc dirs: getdents yields
 // nothing, exactly like runc's empty-tmpfs mask. -1 on error.
@@ -2260,14 +2478,15 @@ static int empty_dir_fd(const char *guestpath) {
     proc_dir_register(fd, tmpl, guestpath);
     return fd;
 }
+
 // Serve a masked / read-only-dir proc path as an open fd (empty file or empty dir). Returns the fd, or -2 if
 // `rp` is not one dd masks (so the caller falls through to the normal path). Reserved for READ opens; the
 // write-intent EROFS for ReadonlyPaths is enforced in openat before this is reached.
 static int proc_masked_open(const char *rp) {
     int mk = proc_masked_kind(rp);
-    if (mk == 1) return proc_text_fd("", 0);        // empty regular file
-    if (mk == 2) return empty_dir_fd(rp);           // empty directory
-    if (proc_ro_dir(rp)) return empty_dir_fd(rp);   // /proc/bus,/fs,/irq: exist, empty, read-only
+    if (mk == 1) return proc_text_fd("", 0);                            // empty regular file
+    if (mk == 2) return empty_dir_fd(rp);                               // empty directory
+    if (proc_ro_dir(rp)) return empty_dir_fd(rp);                       // /proc/bus,/fs,/irq: exist, empty, read-only
     if (!strcmp(rp, "/proc/sysrq-trigger")) return proc_text_fd("", 0); // exists, empty on read
     return -2;
 }
@@ -2287,6 +2506,7 @@ static int guest_is_x86(void) {
     }
     return 0;
 }
+
 // x86-64 /proc/cpuinfo block for one logical CPU. The `flags` list mirrors EXACTLY the feature set the JIT's
 // CPUID leaf reports (x86_ops.c do_cpuid) -- every token here is backed by a CPUID bit dd actually sets, and
 // every CPUID bit dd sets appears here, so a guest gets the SAME answer from `cpuid` and from /proc:
@@ -2298,7 +2518,8 @@ static int guest_is_x86(void) {
 //   synthetic (Linux always adds): cpuid nopl. NO AVX/xsave (xgetbv reports only x87+SSE). family 6 model 44
 //   stepping 2 decode leaf-1 EAX 0x000206c2; model name matches the CPUID brand string (0x80000002..4).
 static int cpuinfo_x86_block(char *b, size_t n, int idx, int ncpu) {
-    return snprintf(b, n,
+    return snprintf(
+        b, n,
         "processor\t: %d\nvendor_id\t: GenuineIntel\ncpu family\t: 6\nmodel\t\t: 44\n"
         "model name\t: dd JIT x86-64 processor\nstepping\t: 2\nmicrocode\t: 0x1\ncpu MHz\t\t: 2500.000\n"
         "cache size\t: 8192 KB\nphysical id\t: 0\nsiblings\t: %d\ncore id\t\t: %d\ncpu cores\t: %d\n"
@@ -2310,6 +2531,7 @@ static int cpuinfo_x86_block(char *b, size_t n, int idx, int ncpu) {
         "address sizes\t: 39 bits physical, 48 bits virtual\npower management:\n\n",
         idx, ncpu, idx, ncpu, idx, idx);
 }
+
 // Defined later in netns.c (same TU, included after vfs.c): emit the LISTEN rows for /proc/net/tcp[6].
 static int netns_tcp_emit(char *out, size_t cap, int v6);
 
@@ -2332,17 +2554,19 @@ static int proc_open(const char *rp) {
             }
         }
     }
-    // #289: the per-process network files are namespaced but a container is one net-namespace, so
+    // the per-process network files are namespaced but a container is one net-namespace, so
     // /proc/[self|<pid>]/net/<leaf> mirrors the shared /proc/net/<leaf>. Fold it (ss/some Go/netlink
     // fallbacks read /proc/self/net/*). Without this those reads ENOENT'd under dd.
     char netbuf[4200];
     if (!strncmp(rp, "/proc/", 6)) {
         const char *q = rp + 6;
         const char *leaf2 = NULL;
-        if (!strncmp(q, "self/net/", 9)) leaf2 = q + 9;
+        if (!strncmp(q, "self/net/", 9))
+            leaf2 = q + 9;
         else {
             const char *d = q;
-            while (*d >= '0' && *d <= '9') d++;
+            while (*d >= '0' && *d <= '9')
+                d++;
             if (d > q && !strncmp(d, "/net/", 5)) leaf2 = d + 5;
         }
         if (leaf2) {
@@ -2363,17 +2587,26 @@ static int proc_open(const char *rp) {
         }
         if (!strcmp(leaf, "maps") || !strcmp(leaf, "task/1/maps")) return proc_maps_fd(0);
         if (!strcmp(leaf, "smaps")) return proc_maps_fd(1);
-        if (!strcmp(leaf, "status")) n = proc_status_text(buf, sizeof buf);
-        else if (!strcmp(leaf, "stat")) n = proc_stat_text(buf, sizeof buf);
-        else if (!strcmp(leaf, "statm")) n = proc_statm_text(buf, sizeof buf);
-        else if (!strcmp(leaf, "environ")) n = proc_environ_text(buf, sizeof buf);
-        else if (!strcmp(leaf, "cmdline")) n = proc_cmdline_text(buf, sizeof buf);
-        else if (!strcmp(leaf, "comm")) n = proc_comm_text(buf, sizeof buf);
-        else if (!strcmp(leaf, "mountinfo")) n = proc_mountinfo_text(buf, sizeof buf);
-        else if (!strcmp(leaf, "limits")) n = proc_limits_text(buf, sizeof buf); // #348: rlimit table
+        if (!strcmp(leaf, "status"))
+            n = proc_status_text(buf, sizeof buf);
+        else if (!strcmp(leaf, "stat"))
+            n = proc_stat_text(buf, sizeof buf);
+        else if (!strcmp(leaf, "statm"))
+            n = proc_statm_text(buf, sizeof buf);
+        else if (!strcmp(leaf, "environ"))
+            n = proc_environ_text(buf, sizeof buf);
+        else if (!strcmp(leaf, "cmdline"))
+            n = proc_cmdline_text(buf, sizeof buf);
+        else if (!strcmp(leaf, "comm"))
+            n = proc_comm_text(buf, sizeof buf);
+        else if (!strcmp(leaf, "mountinfo"))
+            n = proc_mountinfo_text(buf, sizeof buf);
+        else if (!strcmp(leaf, "limits"))
+            n = proc_limits_text(buf, sizeof buf); // rlimit table
         else if (!strcmp(leaf, "oom_score_adj") || !strcmp(leaf, "oom_adj") || !strcmp(leaf, "oom_score"))
-            n = snprintf(buf, sizeof buf, "0\n"); // #348: not OOM-adjusted (systemd/containerd read/probe)
-        else if (!strcmp(leaf, "loginuid")) n = snprintf(buf, sizeof buf, "4294967295\n"); // #348: unset (pam)
+            n = snprintf(buf, sizeof buf, "0\n"); // not OOM-adjusted (systemd/containerd read/probe)
+        else if (!strcmp(leaf, "loginuid"))
+            n = snprintf(buf, sizeof buf, "4294967295\n"); // unset (pam)
         if (n >= 0) return proc_text_fd(buf, n);
     }
     // A PEER container process: /proc/<otherpid>/{stat,status,cmdline,comm}. proc_self_leaf matched only
@@ -2385,11 +2618,16 @@ static int proc_open(const char *rp) {
         if (fl && gp2 > 0) {
             int host;
             if (proc_pid_member(gp2, &host)) {
-                if (!strcmp(fl, "stat")) n = proc_stat_pid_text(buf, sizeof buf, gp2, host);
-                else if (!strcmp(fl, "status")) n = proc_status_pid_text(buf, sizeof buf, gp2, host);
-                else if (!strcmp(fl, "statm")) n = proc_statm_pid_text(buf, sizeof buf, host);
-                else if (!strcmp(fl, "cmdline")) n = proc_cmdline_pid_text(buf, sizeof buf, host);
-                else if (!strcmp(fl, "comm")) n = proc_comm_pid_text(buf, sizeof buf, host);
+                if (!strcmp(fl, "stat"))
+                    n = proc_stat_pid_text(buf, sizeof buf, gp2, host);
+                else if (!strcmp(fl, "status"))
+                    n = proc_status_pid_text(buf, sizeof buf, gp2, host);
+                else if (!strcmp(fl, "statm"))
+                    n = proc_statm_pid_text(buf, sizeof buf, host);
+                else if (!strcmp(fl, "cmdline"))
+                    n = proc_cmdline_pid_text(buf, sizeof buf, host);
+                else if (!strcmp(fl, "comm"))
+                    n = proc_comm_pid_text(buf, sizeof buf, host);
                 if (n >= 0) return proc_text_fd(buf, n);
             }
         }
@@ -2397,19 +2635,20 @@ static int proc_open(const char *rp) {
     if (!strcmp(rp, "/proc/cpuinfo")) {
         int nc = container_online_cpus(); // docker --cpus cap (state.c), else all host cores
         // One block per online CPU. The x86 block is ~570 bytes, so up to 64 CPUs need ~37KB -- far past the
-        // shared 8KB `buf` (which silently truncated cpuinfo to ~14 processors on a many-core host, #412).
+        // shared 8KB `buf` (which silently truncated cpuinfo to ~14 processors on a many-core host).
         // Use a dedicated buffer sized for the 64-CPU ceiling and clamp each snprintf so a would-be overflow
         // can never inflate `cn` past the buffer (proc_text_fd writes exactly `cn` bytes).
         char cib[64 * 640]; // per-call (proc_open is reentrant across guest threads); ~40KB stack
         int cn = 0;
         for (int i = 0; i < nc; i++) {
             size_t rem = sizeof cib - (size_t)cn;
-            int w = guest_is_x86()
-                ? cpuinfo_x86_block(cib + cn, rem, i, nc)
-                : snprintf(cib + cn, rem,
-                           "processor\t: %d\nBogoMIPS\t: 100.00\nFeatures\t: fp asimd\nCPU implementer\t: 0x61\n"
-                           "CPU architecture: 8\nCPU variant\t: 0x0\nCPU part\t: 0x000\nCPU revision\t: 0\n\n",
-                           i);
+            int w =
+                guest_is_x86()
+                    ? cpuinfo_x86_block(cib + cn, rem, i, nc)
+                    : snprintf(cib + cn, rem,
+                               "processor\t: %d\nBogoMIPS\t: 100.00\nFeatures\t: fp asimd\nCPU implementer\t: 0x61\n"
+                               "CPU architecture: 8\nCPU variant\t: 0x0\nCPU part\t: 0x000\nCPU revision\t: 0\n\n",
+                               i);
             if (w < 0 || (size_t)w >= rem) break; // truncated -> stop rather than over-report length
             cn += w;
         }
@@ -2437,7 +2676,7 @@ static int proc_open(const char *rp) {
     } else if (!strcmp(rp, "/proc/stat")) {
         // Real host CPU jiffies -> the cpu line increments between reads, so htop/top meters move. The
         // aggregate `cpu` line comes from HOST_CPU_LOAD_INFO; each per-core `cpuN` line comes from that
-        // core's OWN ticks via host_processor_info(PROCESSOR_CPU_LOAD_INFO). #412 part 3: the old code
+        // core's OWN ticks via host_processor_info(PROCESSOR_CPU_LOAD_INFO). part 3: the old code
         // split the aggregate EVENLY across cores (aggregate/ncpu), so every cpuN line was byte-identical
         // and htop/top showed every core meter moving in lockstep at the same %. Per-core real ticks make
         // the deltas differ, so a busy core reads hot while idle cores read cold -- exactly like Linux.
@@ -2449,8 +2688,7 @@ static int proc_open(const char *rp) {
         mach_msg_type_number_t picnt = 0;
         natural_t pncpu = 0;
         processor_cpu_load_info_t pl = NULL;
-        if (host_processor_info(mach_host_self(), PROCESSOR_CPU_LOAD_INFO, &pncpu, &pinfo, &picnt) ==
-            KERN_SUCCESS)
+        if (host_processor_info(mach_host_self(), PROCESSOR_CPU_LOAD_INFO, &pncpu, &pinfo, &picnt) == KERN_SUCCESS)
             pl = (processor_cpu_load_info_t)pinfo;
         for (int i = 0; i < nc; i++) {
             unsigned long long u, ni, sy, id;
@@ -2465,13 +2703,12 @@ static int proc_open(const char *rp) {
                 sy = t[1] / (unsigned)nc;
                 id = t[2] / (unsigned)nc;
             }
-            n += snprintf(buf + n, sizeof buf - (size_t)n, "cpu%d %llu %llu %llu %llu 0 0 0 0 0 0\n", i, u,
-                          ni, sy, id);
+            n += snprintf(buf + n, sizeof buf - (size_t)n, "cpu%d %llu %llu %llu %llu 0 0 0 0 0 0\n", i, u, ni, sy, id);
         }
         if (pl) vm_deallocate(mach_task_self(), (vm_address_t)pinfo, picnt * sizeof(integer_t));
         n += snprintf(buf + n, sizeof buf - (size_t)n,
-                      "intr 0\nctxt 0\nbtime %ld\nprocesses %d\nprocs_running 1\nprocs_blocked 0\n",
-                      host_btime(), proc_reg_count());
+                      "intr 0\nctxt 0\nbtime %ld\nprocesses %d\nprocs_running 1\nprocs_blocked 0\n", host_btime(),
+                      proc_reg_count());
     } else if (!strcmp(rp, "/proc/mounts") || !strcmp(rp, "/proc/self/mounts")) {
         // The fstab-style mount table (mirror of mountinfo). Name the root mount "overlay", not the legacy
         // "rootfs": busybox/util-linux df filters out a pseudo "rootfs" entry, leaving df unable to find the
@@ -2510,11 +2747,11 @@ static int proc_open(const char *rp) {
         // UTS ns (hostname cmd reads this)
         n = snprintf(buf, sizeof buf, "%s\n", g_hostname[0] ? g_hostname : "jit");
     } else if (!strcmp(rp, "/proc/sys/kernel/random/boot_id")) {
-        // #348: stable per-boot UUID (systemd/dbus/libuuid/curl/journald read it; without it tools print
+        // stable per-boot UUID (systemd/dbus/libuuid/curl/journald read it; without it tools print
         // "cannot find current boot id"). Deterministic from the container key -> same for every peer.
         n = proc_boot_id(buf, sizeof buf);
     } else if (!strcmp(rp, "/proc/sys/kernel/random/uuid")) {
-        // #348: Linux yields a FRESH type-4 UUID on every read of this file -- glibc/libuuid use it as a
+        // Linux yields a FRESH type-4 UUID on every read of this file -- glibc/libuuid use it as a
         // uuid_generate_random source, so it must differ each open.
         uint8_t b[16];
         arc4random_buf(b, sizeof b);
@@ -2532,7 +2769,7 @@ static int proc_open(const char *rp) {
         n = snprintf(buf, sizeof buf, "0::/\n");
     } else if (!strcmp(rp, "/proc/version")) {
         n = snprintf(buf, sizeof buf, "Linux version 6.1.0 (ddockerd) aarch64\n");
-    // ---- container network introspection (#289): lo + eth0 (see netif_* in state.c) --------------
+        // ---- container network introspection: lo + eth0 (see netif_* in state.c) --------------
     } else if (!strcmp(rp, "/proc/net/dev")) {
         // per-interface counters; zeros are fine (dd runs no real stack -- this is introspection only).
         // --network none: loopback-only, so eth0 is omitted (only the lo counters line).
@@ -2549,14 +2786,14 @@ static int proc_open(const char *rp) {
             n = snprintf(buf, sizeof buf,
                          "Iface\tDestination\tGateway \tFlags\tRefCnt\tUse\tMetric\tMask\t\tMTU\tWindow\tIRTT\n");
         } else {
-        uint32_t net = netif_eth0_net(), gw = netif_eth0_gw();
-        int pfx = netif_eth0_prefix();
-        uint32_t mask = pfx >= 32 ? 0xffffffffu : ((1u << pfx) - 1u);
-        n = snprintf(buf, sizeof buf,
-                     "Iface\tDestination\tGateway \tFlags\tRefCnt\tUse\tMetric\tMask\t\tMTU\tWindow\tIRTT\n"
-                     "eth0\t00000000\t%08X\t0003\t0\t0\t0\t00000000\t0\t0\t0\n"
-                     "eth0\t%08X\t00000000\t0001\t0\t0\t0\t%08X\t0\t0\t0\n",
-                     gw, net, mask);
+            uint32_t net = netif_eth0_net(), gw = netif_eth0_gw();
+            int pfx = netif_eth0_prefix();
+            uint32_t mask = pfx >= 32 ? 0xffffffffu : ((1u << pfx) - 1u);
+            n = snprintf(buf, sizeof buf,
+                         "Iface\tDestination\tGateway \tFlags\tRefCnt\tUse\tMetric\tMask\t\tMTU\tWindow\tIRTT\n"
+                         "eth0\t00000000\t%08X\t0003\t0\t0\t0\t00000000\t0\t0\t0\n"
+                         "eth0\t%08X\t00000000\t0001\t0\t0\t0\t%08X\t0\t0\t0\n",
+                         gw, net, mask);
         }
     } else if (!strcmp(rp, "/proc/net/if_inet6")) {
         // addr(32 hex) ifindex(hex) prefix(hex) scope(hex) flags(hex) devname -- lo ::1 only.
@@ -2594,29 +2831,43 @@ static int proc_open(const char *rp) {
                 else {
                     uint8_t m[6];
                     netif_eth0_mac(m);
-                    n = snprintf(buf, sizeof buf, "%02x:%02x:%02x:%02x:%02x:%02x\n", m[0], m[1], m[2], m[3],
-                                 m[4], m[5]);
+                    n = snprintf(buf, sizeof buf, "%02x:%02x:%02x:%02x:%02x:%02x\n", m[0], m[1], m[2], m[3], m[4],
+                                 m[5]);
                 }
-            } else if (!strcmp(file, "addr_len")) n = snprintf(buf, sizeof buf, "6\n");
+            } else if (!strcmp(file, "addr_len"))
+                n = snprintf(buf, sizeof buf, "6\n");
             else if (!strcmp(file, "broadcast"))
                 n = snprintf(buf, sizeof buf, islo ? "00:00:00:00:00:00\n" : "ff:ff:ff:ff:ff:ff\n");
-            else if (!strcmp(file, "flags")) n = snprintf(buf, sizeof buf, islo ? "0x9\n" : "0x1003\n");
-            else if (!strcmp(file, "mtu")) n = snprintf(buf, sizeof buf, islo ? "65536\n" : "1500\n");
-            else if (!strcmp(file, "operstate")) n = snprintf(buf, sizeof buf, islo ? "unknown\n" : "up\n");
-            else if (!strcmp(file, "type")) n = snprintf(buf, sizeof buf, islo ? "772\n" : "1\n");
-            else if (!strcmp(file, "carrier")) n = snprintf(buf, sizeof buf, "1\n");
-            else if (!strcmp(file, "ifindex")) n = snprintf(buf, sizeof buf, islo ? "1\n" : "2\n");
-            else if (!strcmp(file, "iflink")) n = snprintf(buf, sizeof buf, islo ? "1\n" : "2\n");
-            else if (!strcmp(file, "tx_queue_len")) n = snprintf(buf, sizeof buf, islo ? "0\n" : "1000\n");
-            else if (!strcmp(file, "mtu")) n = snprintf(buf, sizeof buf, islo ? "65536\n" : "1500\n");
-            else if (!strcmp(file, "speed")) n = snprintf(buf, sizeof buf, "-1\n");
-            else if (!strcmp(file, "duplex")) n = snprintf(buf, sizeof buf, "unknown\n");
-            else if (!strcmp(file, "carrier_changes")) n = snprintf(buf, sizeof buf, "0\n");
+            else if (!strcmp(file, "flags"))
+                n = snprintf(buf, sizeof buf, islo ? "0x9\n" : "0x1003\n");
+            else if (!strcmp(file, "mtu"))
+                n = snprintf(buf, sizeof buf, islo ? "65536\n" : "1500\n");
+            else if (!strcmp(file, "operstate"))
+                n = snprintf(buf, sizeof buf, islo ? "unknown\n" : "up\n");
+            else if (!strcmp(file, "type"))
+                n = snprintf(buf, sizeof buf, islo ? "772\n" : "1\n");
+            else if (!strcmp(file, "carrier"))
+                n = snprintf(buf, sizeof buf, "1\n");
+            else if (!strcmp(file, "ifindex"))
+                n = snprintf(buf, sizeof buf, islo ? "1\n" : "2\n");
+            else if (!strcmp(file, "iflink"))
+                n = snprintf(buf, sizeof buf, islo ? "1\n" : "2\n");
+            else if (!strcmp(file, "tx_queue_len"))
+                n = snprintf(buf, sizeof buf, islo ? "0\n" : "1000\n");
+            else if (!strcmp(file, "mtu"))
+                n = snprintf(buf, sizeof buf, islo ? "65536\n" : "1500\n");
+            else if (!strcmp(file, "speed"))
+                n = snprintf(buf, sizeof buf, "-1\n");
+            else if (!strcmp(file, "duplex"))
+                n = snprintf(buf, sizeof buf, "unknown\n");
+            else if (!strcmp(file, "carrier_changes"))
+                n = snprintf(buf, sizeof buf, "0\n");
             // statistics/<counter>: dd runs no real IP stack -> zero counters (consistent with /proc/net/dev).
             // node_exporter/ifstat read these per-interface files directly. Any known counter name -> "0\n".
-            else if (!strncmp(file, "statistics/", 11) && file[11]) n = snprintf(buf, sizeof buf, "0\n");
+            else if (!strncmp(file, "statistics/", 11) && file[11])
+                n = snprintf(buf, sizeof buf, "0\n");
         }
-    // cgroup v2: memory limit
+        // cgroup v2: memory limit
     } else if (!strcmp(rp, "/sys/fs/cgroup/memory.max")) {
         if (g_mem_max)
             n = snprintf(buf, sizeof buf, "%llu\n", (unsigned long long)g_mem_max);
@@ -2631,38 +2882,36 @@ static int proc_open(const char *rp) {
             n = snprintf(buf, sizeof buf, "max\n");
     } else if (!strcmp(rp, "/sys/fs/cgroup/pids.current")) {
         n = snprintf(buf, sizeof buf, "%d\n", atomic_load(&g_pids_cur));
-    // ---- cgroup v2 unified-hierarchy surface real runtimes SIZE THEMSELVES from ----------------------
-    // The JVM (-XX:+UseContainerSupport), the Go runtime (GOMAXPROCS/GOMEMLIMIT tooling), Node/libuv, and
-    // systemd read these to pick heap size, GC/CommonPool/worker thread counts, and to detect that they are
-    // in a v2 container at all. Values MUST reflect the docker --cpus/--memory caps (state.c g_cpu_max /
-    // g_mem_max); unconstrained -> the kernel "max" sentinels. Verified byte-identical to runc (OrbStack
-    // Docker 29.4) both unconstrained and under --memory=512m --cpus=2. Host-variant accounting figures
-    // (memory.stat/cpu.stat live counters) are structural-only: the KEYS a runtime parses must be present,
-    // the values are informational so we report zeros (a bare-guest deterministic baseline).
-    // ---- cgroup core interface files (v2 markers a runtime detects the unified hierarchy by) ----------
+        // ---- cgroup v2 unified-hierarchy surface real runtimes SIZE THEMSELVES from ----------------------
+        // The JVM (-XX:+UseContainerSupport), the Go runtime (GOMAXPROCS/GOMEMLIMIT tooling), Node/libuv, and
+        // systemd read these to pick heap size, GC/CommonPool/worker thread counts, and to detect that they are
+        // in a v2 container at all. Values MUST reflect the docker --cpus/--memory caps (state.c g_cpu_max /
+        // g_mem_max); unconstrained -> the kernel "max" sentinels. Verified byte-identical to runc (OrbStack
+        // Docker 29.4) both unconstrained and under --memory=512m --cpus=2. Host-variant accounting figures
+        // (memory.stat/cpu.stat live counters) are structural-only: the KEYS a runtime parses must be present,
+        // the values are informational so we report zeros (a bare-guest deterministic baseline).
+        // ---- cgroup core interface files (v2 markers a runtime detects the unified hierarchy by) ----------
     } else if (!strcmp(rp, "/sys/fs/cgroup/cgroup.controllers")) {
         // The controllers available in this cgroup. runc enables exactly these for a container leaf.
         n = snprintf(buf, sizeof buf, "cpuset cpu io memory pids\n");
     } else if (!strcmp(rp, "/sys/fs/cgroup/cgroup.subtree_control")) {
-        n = 0; buf[0] = 0; // a leaf cgroup delegates nothing downward -> empty (matches runc)
+        n = 0;
+        buf[0] = 0; // a leaf cgroup delegates nothing downward -> empty (matches runc)
     } else if (!strcmp(rp, "/sys/fs/cgroup/cgroup.type")) {
         n = snprintf(buf, sizeof buf, "domain\n");
-    } else if (!strcmp(rp, "/sys/fs/cgroup/cgroup.procs") ||
-               !strcmp(rp, "/sys/fs/cgroup/cgroup.threads")) {
+    } else if (!strcmp(rp, "/sys/fs/cgroup/cgroup.procs") || !strcmp(rp, "/sys/fs/cgroup/cgroup.threads")) {
         // The pids/tids in this cgroup. The container is one cgroup, so this is the guest task set; report
         // the introspectable init pid (guest sees itself as 1). A reader (systemd, cgexec) just needs a
         // valid, present pid list -- the exact membership is host-variant.
         n = snprintf(buf, sizeof buf, "%d\n", container_pid());
     } else if (!strcmp(rp, "/sys/fs/cgroup/cgroup.events")) {
         n = snprintf(buf, sizeof buf, "populated 1\nfrozen 0\n");
-    } else if (!strcmp(rp, "/sys/fs/cgroup/cgroup.max.depth") ||
-               !strcmp(rp, "/sys/fs/cgroup/cgroup.max.descendants")) {
+    } else if (!strcmp(rp, "/sys/fs/cgroup/cgroup.max.depth") || !strcmp(rp, "/sys/fs/cgroup/cgroup.max.descendants")) {
         n = snprintf(buf, sizeof buf, "max\n");
     } else if (!strcmp(rp, "/sys/fs/cgroup/cgroup.stat")) {
         n = snprintf(buf, sizeof buf, "nr_descendants 0\nnr_dying_descendants 0\n");
-    // ---- memory controller: JVM UseContainerSupport + GOMEMLIMIT tooling read memory.max/.high/.swap ---
-    } else if (!strcmp(rp, "/sys/fs/cgroup/memory.min") ||
-               !strcmp(rp, "/sys/fs/cgroup/memory.low")) {
+        // ---- memory controller: JVM UseContainerSupport + GOMEMLIMIT tooling read memory.max/.high/.swap ---
+    } else if (!strcmp(rp, "/sys/fs/cgroup/memory.min") || !strcmp(rp, "/sys/fs/cgroup/memory.low")) {
         n = snprintf(buf, sizeof buf, "0\n"); // no reclaim protection reserved (runc default)
     } else if (!strcmp(rp, "/sys/fs/cgroup/memory.high")) {
         n = snprintf(buf, sizeof buf, "max\n"); // docker sets only the hard limit (memory.max), never .high
@@ -2692,10 +2941,9 @@ static int proc_open(const char *rp) {
                      "inactive_file 0\nactive_file 0\nunevictable 0\nslab_reclaimable 0\nslab_unreclaimable 0\n"
                      "slab 0\nworkingset_refault_anon 0\nworkingset_refault_file 0\npgfault 0\npgmajfault 0\n",
                      anon, anon, anon);
-    } else if (!strcmp(rp, "/sys/fs/cgroup/memory.events") ||
-               !strcmp(rp, "/sys/fs/cgroup/memory.events.local")) {
+    } else if (!strcmp(rp, "/sys/fs/cgroup/memory.events") || !strcmp(rp, "/sys/fs/cgroup/memory.events.local")) {
         n = snprintf(buf, sizeof buf, "low 0\nhigh 0\nmax 0\noom 0\noom_kill 0\noom_group_kill 0\n");
-    // ---- cpu controller: JVM ActiveProcessorCount + Go GOMAXPROCS derive from cpu.max quota/period ------
+        // ---- cpu controller: JVM ActiveProcessorCount + Go GOMAXPROCS derive from cpu.max quota/period ------
     } else if (!strcmp(rp, "/sys/fs/cgroup/cpu.max")) {
         // "<quota> <period>" under --cpus, "max <period>" unconstrained. Docker's period is 100000us; the
         // quota is --cpus * period. g_cpu_max is the container's integer core allotment (state.c). A runtime
@@ -2720,14 +2968,16 @@ static int proc_open(const char *rp) {
         n = snprintf(buf, sizeof buf,
                      "usage_usec 0\nuser_usec 0\nsystem_usec 0\nnr_periods 0\nnr_throttled 0\n"
                      "throttled_usec 0\nnr_bursts 0\nburst_usec 0\n");
-    // ---- io controller (lower value; present so a full-cgroup walk finds it) --------------------------
+        // ---- io controller (lower value; present so a full-cgroup walk finds it) --------------------------
     } else if (!strcmp(rp, "/sys/fs/cgroup/io.max")) {
-        n = 0; buf[0] = 0; // no per-device io limits set (docker without --device-*-bps) -> empty
+        n = 0;
+        buf[0] = 0; // no per-device io limits set (docker without --device-*-bps) -> empty
     } else if (!strcmp(rp, "/sys/fs/cgroup/io.stat")) {
-        n = 0; buf[0] = 0; // no real block device backs the overlay -> empty (host-variant otherwise)
+        n = 0;
+        buf[0] = 0; // no real block device backs the overlay -> empty (host-variant otherwise)
     } else if (!strcmp(rp, "/sys/fs/cgroup/io.weight")) {
         n = snprintf(buf, sizeof buf, "default 100\n");
-    // ---- #348: the broad /proc + /proc/sys surface real software reads --------------------------------
+        // ---- the broad /proc + /proc/sys surface real software reads --------------------------------
     } else if (!strcmp(rp, "/proc/cmdline")) {
         n = snprintf(buf, sizeof buf, "root=/dev/sda1 ro quiet\n"); // kernel cmdline (distinct from self/cmdline)
     } else if (!strcmp(rp, "/proc/filesystems")) {
@@ -2746,7 +2996,8 @@ static int proc_open(const char *rp) {
     } else if (!strcmp(rp, "/proc/swaps")) {
         n = snprintf(buf, sizeof buf, "Filename\t\t\t\tType\t\tSize\t\tUsed\t\tPriority\n"); // no swap
     } else if (!strcmp(rp, "/proc/modules")) {
-        n = 0; buf[0] = 0; // no loadable modules
+        n = 0;
+        buf[0] = 0; // no loadable modules
     } else if (!strcmp(rp, "/proc/devices")) {
         n = snprintf(buf, sizeof buf,
                      "Character devices:\n  1 mem\n  5 /dev/tty\n  5 /dev/console\n  5 /dev/ptmx\n"
@@ -2763,7 +3014,8 @@ static int proc_open(const char *rp) {
         // Ip/Icmp/IcmpMsg/Tcp/Udp/UdpLite. dd runs no real IP stack, so the counters are zero -- but the
         // SECTIONS must exist with the exact kernel column names or the parser aborts. Tcp's RtoAlgorithm/
         // RtoMin/RtoMax/MaxConn carry the conventional 1/200/120000/-1 the kernel reports.
-        n = snprintf(buf, sizeof buf,
+        n = snprintf(
+            buf, sizeof buf,
             "Ip: Forwarding DefaultTTL InReceives InHdrErrors InAddrErrors ForwDatagrams InUnknownProtos "
             "InDiscards InDelivers OutRequests OutDiscards OutNoRoutes ReasmTimeout ReasmReqds ReasmOKs "
             "ReasmFails FragOKs FragFails FragCreates\n"
@@ -2834,35 +3086,35 @@ static int proc_open(const char *rp) {
         // `ip -6 route` / `netstat -6 -r` parse this. Loopback-only container v6 routing table (matches a
         // real --network bridge container that has no global v6): the ::/0-ish + ::1 host route on lo.
         n = snprintf(buf, sizeof buf,
-            "00000000000000000000000000000000 00 00000000000000000000000000000000 00 "
-            "00000000000000000000000000000000 ffffffff 00000001 00000000 00200200       lo\n"
-            "00000000000000000000000000000001 80 00000000000000000000000000000000 00 "
-            "00000000000000000000000000000000 00000000 00000002 00000000 80200001       lo\n"
-            "00000000000000000000000000000000 00 00000000000000000000000000000000 00 "
-            "00000000000000000000000000000000 ffffffff 00000001 00000000 00200200       lo\n");
+                     "00000000000000000000000000000000 00 00000000000000000000000000000000 00 "
+                     "00000000000000000000000000000000 ffffffff 00000001 00000000 00200200       lo\n"
+                     "00000000000000000000000000000001 80 00000000000000000000000000000000 00 "
+                     "00000000000000000000000000000000 00000000 00000002 00000000 80200001       lo\n"
+                     "00000000000000000000000000000000 00 00000000000000000000000000000000 00 "
+                     "00000000000000000000000000000000 ffffffff 00000001 00000000 00200200       lo\n");
     } else if (!strcmp(rp, "/proc/net/snmp6")) {
         // IPv6 counter table `netstat -s` reads for its "Ip6/Icmp6/Udp6" sections. Zero counters (no real
         // stack); the KEY NAMES must match the kernel or the section is dropped.
         n = snprintf(buf, sizeof buf,
-            "Ip6InReceives                   \t0\nIp6InHdrErrors                  \t0\n"
-            "Ip6InTooBigErrors               \t0\nIp6InNoRoutes                   \t0\n"
-            "Ip6InAddrErrors                 \t0\nIp6InUnknownProtos              \t0\n"
-            "Ip6InTruncatedPkts              \t0\nIp6InDiscards                   \t0\n"
-            "Ip6InDelivers                   \t0\nIp6OutForwDatagrams             \t0\n"
-            "Ip6OutRequests                  \t0\nIp6OutDiscards                  \t0\n"
-            "Ip6OutNoRoutes                  \t0\nIp6ReasmTimeout                 \t0\n"
-            "Ip6ReasmReqds                   \t0\nIp6ReasmOKs                     \t0\n"
-            "Ip6ReasmFails                   \t0\nIp6FragOKs                      \t0\n"
-            "Ip6FragFails                    \t0\nIp6FragCreates                  \t0\n"
-            "Ip6InMcastPkts                  \t0\nIp6OutMcastPkts                 \t0\n"
-            "Ip6InOctets                     \t0\nIp6OutOctets                    \t0\n"
-            "Icmp6InMsgs                     \t0\nIcmp6InErrors                   \t0\n"
-            "Icmp6OutMsgs                    \t0\nIcmp6OutErrors                  \t0\n"
-            "Udp6InDatagrams                 \t0\nUdp6NoPorts                     \t0\n"
-            "Udp6InErrors                    \t0\nUdp6OutDatagrams                \t0\n"
-            "Udp6RcvbufErrors                \t0\nUdp6SndbufErrors                \t0\n"
-            "Udp6InCsumErrors                \t0\nUdp6IgnoredMulti                \t0\n"
-            "Udp6MemErrors                   \t0\n");
+                     "Ip6InReceives                   \t0\nIp6InHdrErrors                  \t0\n"
+                     "Ip6InTooBigErrors               \t0\nIp6InNoRoutes                   \t0\n"
+                     "Ip6InAddrErrors                 \t0\nIp6InUnknownProtos              \t0\n"
+                     "Ip6InTruncatedPkts              \t0\nIp6InDiscards                   \t0\n"
+                     "Ip6InDelivers                   \t0\nIp6OutForwDatagrams             \t0\n"
+                     "Ip6OutRequests                  \t0\nIp6OutDiscards                  \t0\n"
+                     "Ip6OutNoRoutes                  \t0\nIp6ReasmTimeout                 \t0\n"
+                     "Ip6ReasmReqds                   \t0\nIp6ReasmOKs                     \t0\n"
+                     "Ip6ReasmFails                   \t0\nIp6FragOKs                      \t0\n"
+                     "Ip6FragFails                    \t0\nIp6FragCreates                  \t0\n"
+                     "Ip6InMcastPkts                  \t0\nIp6OutMcastPkts                 \t0\n"
+                     "Ip6InOctets                     \t0\nIp6OutOctets                    \t0\n"
+                     "Icmp6InMsgs                     \t0\nIcmp6InErrors                   \t0\n"
+                     "Icmp6OutMsgs                    \t0\nIcmp6OutErrors                  \t0\n"
+                     "Udp6InDatagrams                 \t0\nUdp6NoPorts                     \t0\n"
+                     "Udp6InErrors                    \t0\nUdp6OutDatagrams                \t0\n"
+                     "Udp6RcvbufErrors                \t0\nUdp6SndbufErrors                \t0\n"
+                     "Udp6InCsumErrors                \t0\nUdp6IgnoredMulti                \t0\n"
+                     "Udp6MemErrors                   \t0\n");
     } else if (!strcmp(rp, "/proc/pressure/cpu")) {
         n = snprintf(buf, sizeof buf, "some avg10=0.00 avg60=0.00 avg300=0.00 total=0\n");
     } else if (!strcmp(rp, "/proc/pressure/memory") || !strcmp(rp, "/proc/pressure/io")) {
@@ -2873,7 +3125,9 @@ static int proc_open(const char *rp) {
         // Constant sysctl-style files (values mirror a modern Linux default). A single table keeps the
         // /proc/sys/{kernel,vm,net,fs} surface complete for the sysctl/config probes Go/JVM/nginx/redis/
         // postgres/systemd issue. Multi-value files use TAB separators exactly like the kernel.
-        static const struct { const char *p, *v; } K[] = {
+        static const struct {
+            const char *p, *v;
+        } K[] = {
             // kernel
             {"/proc/sys/kernel/pid_max", "4194304\n"},
             {"/proc/sys/kernel/threads-max", "63488\n"},
@@ -2912,11 +3166,11 @@ static int proc_open(const char *rp) {
             // net.core
             {"/proc/sys/net/core/somaxconn", "4096\n"},
             {"/proc/sys/net/core/netdev_max_backlog", "1000\n"},
-            {"/proc/sys/net/core/rmem_max", "7500000\n"},     // oracle (was 212992)
-            {"/proc/sys/net/core/wmem_max", "7500000\n"},     // oracle (was 212992)
-            {"/proc/sys/net/core/rmem_default", "229376\n"},  // oracle (was 212992)
-            {"/proc/sys/net/core/wmem_default", "229376\n"},  // oracle (was 212992)
-            {"/proc/sys/net/core/optmem_max", "131072\n"},    // oracle (was 20480)
+            {"/proc/sys/net/core/rmem_max", "7500000\n"},    // oracle (was 212992)
+            {"/proc/sys/net/core/wmem_max", "7500000\n"},    // oracle (was 212992)
+            {"/proc/sys/net/core/rmem_default", "229376\n"}, // oracle (was 212992)
+            {"/proc/sys/net/core/wmem_default", "229376\n"}, // oracle (was 212992)
+            {"/proc/sys/net/core/optmem_max", "131072\n"},   // oracle (was 20480)
             // net.ipv4
             {"/proc/sys/net/ipv4/ip_local_port_range", "32768\t60999\n"},
             {"/proc/sys/net/ipv4/ip_unprivileged_port_start", "0\n"}, // oracle (was 1024)
@@ -2936,8 +3190,8 @@ static int proc_open(const char *rp) {
             // fs. On modern (cgroup-era) kernels the global file-max cap is effectively removed: the oracle
             // reports LONG_MAX for file-max and the file-nr high-water field. Serving 1048576 made programs
             // that size their fd budget off file-max under-provision vs a real-docker run.
-            {"/proc/sys/fs/file-max", "9223372036854775807\n"},        // oracle LONG_MAX (was 1048576)
-            {"/proc/sys/fs/nr_open", "2147483584\n"},                  // oracle (was 1048576)
+            {"/proc/sys/fs/file-max", "9223372036854775807\n"},         // oracle LONG_MAX (was 1048576)
+            {"/proc/sys/fs/nr_open", "2147483584\n"},                   // oracle (was 1048576)
             {"/proc/sys/fs/file-nr", "1024\t0\t9223372036854775807\n"}, // 3rd field == file-max (was 1048576)
             {"/proc/sys/fs/pipe-max-size", "1048576\n"},
             {"/proc/sys/fs/pipe-user-pages-hard", "0\n"},
@@ -2950,8 +3204,8 @@ static int proc_open(const char *rp) {
             {"/proc/sys/fs/inotify/max_user_watches", "524288\n"},
             // VS Code / node chokidar / systemd watchers exhaust these and print "ENOSPC: inotify watch
             // limit reached" when they are low. Oracle bumps both far above the old 128 / 16384.
-            {"/proc/sys/fs/inotify/max_user_instances", "524288\n"},  // oracle (was 128)
-            {"/proc/sys/fs/inotify/max_queued_events", "1048576\n"},  // oracle (was 16384)
+            {"/proc/sys/fs/inotify/max_user_instances", "524288\n"}, // oracle (was 128)
+            {"/proc/sys/fs/inotify/max_queued_events", "1048576\n"}, // oracle (was 16384)
             // POSIX message-queue limits (fs/mqueue/*) -- dd omitted these entirely, so a reader (glibc
             // mq_* tuning, systemd) got ENOENT where real docker serves a value. Oracle kernel defaults.
             {"/proc/sys/fs/mqueue/msg_max", "10\n"},
@@ -2960,15 +3214,21 @@ static int proc_open(const char *rp) {
             {"/proc/sys/fs/mqueue/msg_default", "10\n"},
             {"/proc/sys/fs/mqueue/msgsize_default", "8192\n"},
         };
+
         for (size_t i = 0; i < sizeof K / sizeof *K; i++)
-            if (!strcmp(rp, K[i].p)) { n = snprintf(buf, sizeof buf, "%s", K[i].v); break; }
+            if (!strcmp(rp, K[i].p)) {
+                n = snprintf(buf, sizeof buf, "%s", K[i].v);
+                break;
+            }
     }
     if (n < 0) return -2;
     return proc_text_fd(buf, n);
 }
+
 // Linux-layout stat for a synthesized /proc or /sys file (so stat()/access() see it -- find, du,
 // container runtimes that stat /etc/mtab -> /proc/mounts, JVM that stats cgroup files, etc.).
 static void fill_linux_stat(uint8_t *d, const struct stat *s, const char *hostpath, int fd);
+
 // The pseudo /dev nodes the rootfs lacks but open() (fs.c) backs with a real host device. Returns the
 // host path open() would use, else NULL. stat()/access() consult this so the nodes report as EXISTING
 // character devices -- e.g. libgcrypt detects its RNG via access("/dev/urandom",R_OK); an ENOENT there
@@ -2985,6 +3245,7 @@ static int ctty_anchor(void) {
         if (isatty(fd)) return fd;
     return -1;
 }
+
 // Is host fd `pfn` the controlling terminal (the same char device as the stdio pty)? True for fd 0/1/2 and
 // for any dup of them; used to rename its /proc/self/fd/N link to /dev/pts/0. A guest-opened pty (its own
 // /dev/pts/M master/slave) has a DIFFERENT rdev, so it is left alone.
@@ -2994,31 +3255,36 @@ static int fd_is_ctty(int pfn) {
     struct stat sa, sp;
     return fstat(a, &sa) == 0 && fstat(pfn, &sp) == 0 && S_ISCHR(sp.st_mode) && sa.st_rdev == sp.st_rdev;
 }
-// ---- devpts: a guest-created pty must look like /dev/pts/<N> everywhere (#227/#280) --------------
+
+// ---- devpts: a guest-created pty must look like /dev/pts/<N> everywhere  --------------
 // Real Linux/devpts numbers pty slaves sequentially from the lowest free index. `docker run -t` takes
 // index 0 for the container's controlling terminal, so a guest that then openpty()s gets 1, 2, ...; with
 // no controlling terminal the guest may take 0. dd's host pty is a macOS /dev/ttysNNN (or a host
 // /dev/pts/M) whose raw name must NEVER leak into the guest -- the slave has to appear as /dev/pts/<N>
-// everywhere: open() (ahead of the overlay resolver, #227), ptsname(3)/ttyname(3), readlink(/proc/self/
+// everywhere: open (ahead of the overlay resolver), ptsname(3)/ttyname(3), readlink(/proc/self/
 // fd/K), `ls /dev/pts`, and stat as a char device whose dev/ino/rdev match the real slave (glibc/musl
-// ttyname compare these; #280). We map each index N to the host pty MASTER fd -- ptsname(master) resolves
+// ttyname compare these;). We map each index N to the host pty MASTER fd -- ptsname(master) resolves
 // the host slave device the slave opens -- and stamp the index onto every open master/slave fd so the
-// fd->path surface can rewrite it. Keeps the existing #411/#219 master-termios cache (keyed by master fd).
+// fd->path surface can rewrite it. Keeps the existing master-termios cache (keyed by master fd).
 #define DEVPTS_MAX 1024
-static int g_pts_master[DEVPTS_MAX];      // pts index N -> (host master fd + 1); 0 = free
+static int g_pts_master[DEVPTS_MAX];         // pts index N -> (host master fd + 1); 0 = free
 static char g_pts_slavename[DEVPTS_MAX][64]; // pts index N -> host slave device path (ptsname of the master),
-                                          // cached at pts_alloc. #420: after a (forked) process closes its
-                                          // master fd, pts_master_fd(N) can no longer resolve the slave via
-                                          // ptsname(master), yet the pty is still alive if ANY other process
-                                          // (e.g. the parent) holds the master -- so /dev/pts/N must resolve
-                                          // by this cached host path. A host open() of it naturally succeeds
-                                          // iff the pty is still alive and fails once it is truly gone.
-static int g_fd_ptsn[1024];               // host fd -> (pts index + 1); 0 = not a pty fd
-static uint8_t g_fd_ptsmaster[1024];      // 1 = this fd is the MASTER end, 0 = a slave
+                                             // cached at pts_alloc. after a (forked) process closes its
+                                             // master fd, pts_master_fd(N) can no longer resolve the slave via
+                                             // ptsname(master), yet the pty is still alive if ANY other process
+                                             // (e.g. the parent) holds the master -- so /dev/pts/N must resolve
+                                             // by this cached host path. A host open() of it naturally succeeds
+                                             // iff the pty is still alive and fails once it is truly gone.
+static int g_fd_ptsn[1024];                  // host fd -> (pts index + 1); 0 = not a pty fd
+static uint8_t g_fd_ptsmaster[1024];         // 1 = this fd is the MASTER end, 0 = a slave
+
 // Materialize/remove the on-disk /dev/pts/<N> node so `ls /dev/pts` reflects the live slaves (devpts
 // creates the node when a slave is allocated and drops it when the pty is gone). Backed by an empty upper
 // file; its stat()/open()/readlink are intercepted. No-op when the container has no rootfs (bare guest).
-static void pts_node_path(int n, char *buf, size_t bn) { snprintf(buf, bn, "%s/dev/pts/%d", g_rootfs_canon, n); }
+static void pts_node_path(int n, char *buf, size_t bn) {
+    snprintf(buf, bn, "%s/dev/pts/%d", g_rootfs_canon, n);
+}
+
 static void pts_publish(int n) {
     if (!g_rootfs_canon[0] || n < 0 || n >= DEVPTS_MAX) return;
     char p[4200];
@@ -3026,12 +3292,14 @@ static void pts_publish(int n) {
     int fd = open(p, O_CREAT | O_WRONLY, 0620);
     if (fd >= 0) close(fd);
 }
+
 static void pts_unpublish(int n) {
     if (!g_rootfs_canon[0] || n < 0 || n >= DEVPTS_MAX) return;
     char p[4200];
     pts_node_path(n, p, sizeof p);
     unlink(p);
 }
+
 // Allocate the lowest free pts index for a new host master fd. Index 0 is reserved for the controlling
 // terminal whenever the container has one (matching devpts, where the ctty grabbed 0 first).
 static int pts_alloc(int masterfd) {
@@ -3039,31 +3307,55 @@ static int pts_alloc(int masterfd) {
     for (int n = start; n < DEVPTS_MAX; n++) {
         if (!g_pts_master[n]) {
             g_pts_master[n] = masterfd + 1;
-            if (masterfd >= 0 && masterfd < 1024) { g_fd_ptsn[masterfd] = n + 1; g_fd_ptsmaster[masterfd] = 1; }
-            // #420: cache the host slave device path now, while the master is open, so /dev/pts/N still
+            if (masterfd >= 0 && masterfd < 1024) {
+                g_fd_ptsn[masterfd] = n + 1;
+                g_fd_ptsmaster[masterfd] = 1;
+            }
+            // cache the host slave device path now, while the master is open, so /dev/pts/N still
             // resolves after a forked child closes its master (the parent keeps the pty alive).
             g_pts_slavename[n][0] = 0;
             char *sn = ptsname(masterfd);
-            if (sn) { strncpy(g_pts_slavename[n], sn, sizeof g_pts_slavename[n] - 1); g_pts_slavename[n][sizeof g_pts_slavename[n] - 1] = 0; }
+            if (sn) {
+                strncpy(g_pts_slavename[n], sn, sizeof g_pts_slavename[n] - 1);
+                g_pts_slavename[n][sizeof g_pts_slavename[n] - 1] = 0;
+            }
             return n;
         }
     }
     return -1;
 }
-static int pts_master_fd(int n) { return (n >= 0 && n < DEVPTS_MAX && g_pts_master[n]) ? g_pts_master[n] - 1 : -1; }
-static int pts_index_of_master(int fd) { return (fd >= 0 && fd < 1024 && g_fd_ptsmaster[fd]) ? g_fd_ptsn[fd] - 1 : -1; }
-static int pts_index_of_fd(int fd) { return (fd >= 0 && fd < 1024 && g_fd_ptsn[fd]) ? g_fd_ptsn[fd] - 1 : -1; }
-static int pts_fd_is_master(int fd) { return fd >= 0 && fd < 1024 && g_fd_ptsmaster[fd]; }
-// #420: the cached host slave device path for index N (empty string -> NULL). Used to resolve /dev/pts/N
+
+static int pts_master_fd(int n) {
+    return (n >= 0 && n < DEVPTS_MAX && g_pts_master[n]) ? g_pts_master[n] - 1 : -1;
+}
+
+static int pts_index_of_master(int fd) {
+    return (fd >= 0 && fd < 1024 && g_fd_ptsmaster[fd]) ? g_fd_ptsn[fd] - 1 : -1;
+}
+
+static int pts_index_of_fd(int fd) {
+    return (fd >= 0 && fd < 1024 && g_fd_ptsn[fd]) ? g_fd_ptsn[fd] - 1 : -1;
+}
+
+static int pts_fd_is_master(int fd) {
+    return fd >= 0 && fd < 1024 && g_fd_ptsmaster[fd];
+}
+
+// the cached host slave device path for index N (empty string -> NULL). Used to resolve /dev/pts/N
 // when this process no longer holds the master fd (a forked child closed it) but the pty is still alive.
 static const char *pts_slave_name(int n) {
     return (n >= 0 && n < DEVPTS_MAX && g_pts_slavename[n][0]) ? g_pts_slavename[n] : NULL;
 }
+
 // Record a freshly-opened slave fd's pts index and publish its /dev/pts/N node.
 static void pts_note_slave(int slavefd, int n) {
-    if (slavefd >= 0 && slavefd < 1024) { g_fd_ptsn[slavefd] = n + 1; g_fd_ptsmaster[slavefd] = 0; }
+    if (slavefd >= 0 && slavefd < 1024) {
+        g_fd_ptsn[slavefd] = n + 1;
+        g_fd_ptsmaster[slavefd] = 0;
+    }
     pts_publish(n);
 }
+
 // close(2) / CLOEXEC-sweep teardown: a master frees its index (and its /dev/pts/N node); a slave clears
 // only its own entry (other slaves / the master keep the pty alive).
 static void pts_on_close(int fd) {
@@ -3076,13 +3368,14 @@ static void pts_on_close(int fd) {
     g_fd_ptsn[fd] = 0;
     g_fd_ptsmaster[fd] = 0;
 }
+
 // Fill *s from the REAL host slave for /dev/pts/N (a guest-created pty), by opening a transient slave via
 // the master's host device -- so st_dev/st_ino/st_rdev EXACTLY equal fstat(slavefd), which ttyname(3)
 // compares. Returns 1 (char device) on success. N==0 with a ctty is handled by the caller (synth_stat_raw).
 static int devpts_slave_stat(int n, struct stat *s) {
     int mfd = pts_master_fd(n);
     const char *sn = (mfd >= 0) ? ptsname(mfd) : NULL;
-    if (!sn) sn = pts_slave_name(n); // #420: master closed in this (forked) process; use the cached path
+    if (!sn) sn = pts_slave_name(n); // master closed in this (forked) process; use the cached path
     if (!sn) return 0;
     int t = open(sn, O_RDWR | O_NOCTTY);
     if (t < 0) t = open(sn, O_RDONLY | O_NOCTTY);
@@ -3091,9 +3384,10 @@ static int devpts_slave_stat(int n, struct stat *s) {
     close(t);
     return ok && S_ISCHR(s->st_mode);
 }
+
 static const char *dev_node_hostpath(const char *gp) {
     if (!gp) return NULL;
-    return !strcmp(gp, "/dev/null")     ? "/dev/null"
+    return !strcmp(gp, "/dev/null")      ? "/dev/null"
            : !strcmp(gp, "/dev/zero")    ? "/dev/zero"
            : !strcmp(gp, "/dev/full")    ? "/dev/zero" // /dev/full reads return zeros (writes ENOSPC, gated by fd flag)
            : !strcmp(gp, "/dev/random")  ? "/dev/random"
@@ -3102,6 +3396,7 @@ static const char *dev_node_hostpath(const char *gp) {
            : !strcmp(gp, "/dev/console") ? "/dev/null" // no host console in the jail -> back it with /dev/null
                                          : NULL;
 }
+
 // Populate the container's /dev at start-up. dd flattens the image into one rootfs (no per-container
 // devtmpfs) and the OCI unpacker strips every `dev/*` node (unprivileged mknod fails on macOS), so the
 // rootfs /dev is empty. Docker mounts a fresh /dev with these standard entries; we materialize the ones
@@ -3130,10 +3425,13 @@ static void container_populate_dev(void) {
         int fd = open(DEVP(chr[i]), O_CREAT | O_WRONLY, 0666);
         if (fd >= 0) close(fd);
     }
-    mkdir(DEVP("pts"), 0755);  // devpts mount point; /dev/pts/N slaves resolve via ptsname in fs.c
+    mkdir(DEVP("pts"), 0755); // devpts mount point; /dev/pts/N slaves resolve via ptsname in fs.c
     // devpts publishes a /dev/pts/ptmx multiplexer node (docker mounts it with ptmxmode=0666); `ls /dev/pts`
     // lists it, and open("/dev/pts/ptmx") is intercepted like /dev/ptmx in fs.c.
-    { int fd = open(DEVP("pts/ptmx"), O_CREAT | O_WRONLY, 0666); if (fd >= 0) close(fd); }
+    {
+        int fd = open(DEVP("pts/ptmx"), O_CREAT | O_WRONLY, 0666);
+        if (fd >= 0) close(fd);
+    }
     // When the container was handed a controlling terminal (docker run -t: the daemon's login_tty made fd
     // 0/1/2 the pty slave), Linux/devpts names it /dev/pts/0. Materialize that entry so `ls /dev/pts` lists
     // it; stat()/open()/readlink of /dev/pts/0 are intercepted (synth_stat_raw + fs.c) and routed to the
@@ -3146,13 +3444,14 @@ static void container_populate_dev(void) {
     mkdir(DEVP("mqueue"), 01777);
 #undef DEVP
 }
-// #348: materialize /etc/machine-id (32 lowercase hex + newline) so libdbus/systemd/journald/gnome find a
+
+// materialize /etc/machine-id (32 lowercase hex + newline) so libdbus/systemd/journald/gnome find a
 // stable machine identity that AGREES with /proc/sys/kernel/random/boot_id (both derive from the same
 // per-container boot bytes). Only written when the image ships no machine-id (missing or empty) -- an
 // image/user-provisioned id is left untouched. Written straight into the writable upper (a real file), so
 // reads need no interception. /var/lib/dbus/machine-id (the legacy dbus path) is filled the same way when
 // its directory exists. Idempotent.
-// #422: read a small guest text file (/etc/passwd, /etc/group) through the overlay-aware resolver so an
+// read a small guest text file (/etc/passwd, /etc/group) through the overlay-aware resolver so an
 // image whose /etc lives only in a read-only lower is handled, not just the flat-rootfs upper. Returns the
 // byte count read (NUL-terminated in `b`), or 0 if absent/unreadable. Best-effort at container init.
 static int read_guest_text(const char *guest, char *b, size_t n) {
@@ -3172,7 +3471,8 @@ static int read_guest_text(const char *guest, char *b, size_t n) {
     b[got] = 0;
     return (int)got;
 }
-// #422: build the run user's supplementary group set exactly like runc's additionalGids (see state.c). Find
+
+// build the run user's supplementary group set exactly like runc's additionalGids (see state.c). Find
 // the run user (g_uid, default 0=root) in /etc/passwd -> its NAME + primary gid; seed the set with the
 // primary gid; then scan /etc/group in file order and append every group whose 4th (member) field lists that
 // NAME -- NO dedup, so the set matches runc byte-for-byte (incl. alpine root's duplicate leading 0). Bare
@@ -3203,7 +3503,10 @@ static void container_parse_groups(void) {
     if (!uname[0] && run_uid == 0) snprintf(uname, sizeof uname, "root"); // minimal image lacking /etc/passwd
     groups_reset();
     groups_append((gid_t)primary_gid); // additionalGids always begins with the primary gid
-    if (!uname[0]) { g_groups_parsed = 1; return; } // no name to match -> primary gid only
+    if (!uname[0]) {
+        g_groups_parsed = 1;
+        return;
+    } // no name to match -> primary gid only
     static char gr[1 << 16];
     if (read_guest_text("/etc/group", gr, sizeof gr) > 0) {
         // group line: name:passwd:gid:member,member,... -- append gid iff the member list contains uname.
@@ -3214,7 +3517,7 @@ static void container_parse_groups(void) {
             if (!c2) continue;
             char *c3 = strchr(c2 + 1, ':');
             if (!c3) continue;
-            int gid = atoi(c2 + 1);    // field 3 (gid)
+            int gid = atoi(c2 + 1);       // field 3 (gid)
             const char *members = c3 + 1; // field 4 (comma-separated names), may be empty
             int hit = 0;
             for (const char *m = members; *m && !hit;) {
@@ -3228,13 +3531,15 @@ static void container_parse_groups(void) {
     }
     g_groups_parsed = 1;
 }
+
 static void container_populate_machine_id(void) {
     if (!g_rootfs_canon[0]) return;
     uint8_t b[16];
     boot_id_bytes(b);
     char id[40];
     int idn = 0;
-    for (int i = 0; i < 16; i++) idn += snprintf(id + idn, sizeof id - (size_t)idn, "%02x", b[i]);
+    for (int i = 0; i < 16; i++)
+        idn += snprintf(id + idn, sizeof id - (size_t)idn, "%02x", b[i]);
     id[idn++] = '\n';
     static const char *const paths[] = {"/etc/machine-id", "/var/lib/dbus/machine-id", 0};
     for (int i = 0; paths[i]; i++) {
@@ -3248,11 +3553,13 @@ static void container_populate_machine_id(void) {
         }
         int fd = open(p, O_WRONLY | O_CREAT | O_TRUNC, 0444);
         if (fd >= 0) {
-            if (write(fd, id, (size_t)idn) < 0) { /* best-effort */ }
+            if (write(fd, id, (size_t)idn) < 0) { /* best-effort */
+            }
             close(fd);
         }
     }
 }
+
 // -> macOS struct stat for a synth file
 static int synth_stat_raw(const char *gp, struct stat *s) {
     if (!gp) return 0; // NULL (bad) guest path: not a synthetic node; let the caller's host stat EFAULT
@@ -3276,10 +3583,16 @@ static int synth_stat_raw(const char *gp, struct stat *s) {
     const char *dev = dev_node_hostpath(gp);
     if (dev) {
         if (stat(dev, s) != 0) return 0;
-        static const struct { const char *p; int maj, min; unsigned mode; } D[] = {
-            {"/dev/null", 1, 3, 0666},   {"/dev/zero", 1, 5, 0666},    {"/dev/full", 1, 7, 0666},
-            {"/dev/random", 1, 8, 0666}, {"/dev/urandom", 1, 9, 0666}, {"/dev/tty", 5, 0, 0666},
-            {"/dev/console", 5, 1, 0600}, {0, 0, 0, 0}};
+
+        static const struct {
+            const char *p;
+            int maj, min;
+            unsigned mode;
+        } D[] = {{"/dev/null", 1, 3, 0666},    {"/dev/zero", 1, 5, 0666},
+                 {"/dev/full", 1, 7, 0666},    {"/dev/random", 1, 8, 0666},
+                 {"/dev/urandom", 1, 9, 0666}, {"/dev/tty", 5, 0, 0666},
+                 {"/dev/console", 5, 1, 0600}, {0, 0, 0, 0}};
+
         for (int i = 0; D[i].p; i++)
             if (!strcmp(gp, D[i].p)) {
                 s->st_rdev = (dev_t)(((uint64_t)D[i].maj << 8) | (unsigned)D[i].min); // Linux dev_t encoding
@@ -3311,12 +3624,12 @@ static int synth_stat_raw(const char *gp, struct stat *s) {
             return 1;
         }
     }
-    // /sys/class/net (#289): the class dir + per-iface dirs are directories; attribute files are regular.
+    // /sys/class/net: the class dir + per-iface dirs are directories; attribute files are regular.
     if (gp && !strncmp(gp, "/sys/class/net", 14)) {
         const char *r = gp + 14;
-        int isdir = (r[0] == 0 || (r[0] == '/' && r[1] == 0) || // /sys/class/net
-                     (r[0] == '/' && (!strcmp(r + 1, "lo") || !strcmp(r + 1, "eth0") ||         // iface dir
-                                      !strcmp(r + 1, "lo/statistics") ||                        // statistics/
+        int isdir = (r[0] == 0 || (r[0] == '/' && r[1] == 0) ||                         // /sys/class/net
+                     (r[0] == '/' && (!strcmp(r + 1, "lo") || !strcmp(r + 1, "eth0") || // iface dir
+                                      !strcmp(r + 1, "lo/statistics") ||                // statistics/
                                       !strcmp(r + 1, "eth0/statistics"))));
         if (isdir) {
             memset(s, 0, sizeof *s);
@@ -3335,7 +3648,7 @@ static int synth_stat_raw(const char *gp, struct stat *s) {
         s->st_nlink = 1;
         return 1;
     }
-    // #412: the CPU-topology sysfs tree must stat as PRESENT so tools that stat a path BEFORE opening it
+    // the CPU-topology sysfs tree must stat as PRESENT so tools that stat a path BEFORE opening it
     // (busybox `ls`/glob, `find`, `test -d`, coreutils stat) don't bail ENOENT under the rootfs overlay --
     // those synthetic paths live in no image layer. htop's opendir bypasses stat, but everyone else needs
     // this. Directories: the base /sys/devices/system/cpu and each cpuN in [0, online-count). Regular files:
@@ -3354,7 +3667,8 @@ static int synth_stat_raw(const char *gp, struct stat *s) {
             } else if (!strncmp(leaf, "cpu", 3) && leaf[3] >= '0' && leaf[3] <= '9') {
                 const char *d = leaf + 3;
                 int n = 0;
-                for (; *d >= '0' && *d <= '9'; d++) n = n * 10 + (*d - '0');
+                for (; *d >= '0' && *d <= '9'; d++)
+                    n = n * 10 + (*d - '0');
                 if (n < container_online_cpus()) {
                     if (*d == 0 || !strcmp(d, "/topology")) {
                         hit = 1;
@@ -3460,6 +3774,7 @@ static int synth_stat_raw(const char *gp, struct stat *s) {
     s->st_nlink = 1;
     return 1;
 }
+
 // -> Linux struct stat buffer
 static int synth_stat(const char *gp, uint8_t *out) {
     struct stat s;

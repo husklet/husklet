@@ -2,7 +2,7 @@
 // Included by service.c after service/helpers.c, before service(); sees the same TU scope (globals + helpers).
 //
 // ============================================================================================
-// Task #421 -- dd-INTERNAL SysV IPC emulation (was: host-macOS shmget/semget/msgget passthrough).
+// -- dd-INTERNAL SysV IPC emulation (was: host-macOS shmget/semget/msgget passthrough).
 // --------------------------------------------------------------------------------------------
 // The macOS host SysV table is tiny (kern.sysv.shmmni=32) and GLOBAL: it is not per-container, so real
 // software (postgres allocates many segments) hit ENOSPC where Linux succeeds, every container + the whole
@@ -31,7 +31,7 @@
 // still leaks -- exactly as real Linux SysV persists until IPC_RMID or reboot -- but leaks are per-run
 // (the id namespace hashes in the root pid), so they never break another run the way the host-32 table did.
 //
-// COMPLETENESS: every #418 control-command behavior is preserved -- all shm/sem/msg ctl ops, IPC_STAT
+// COMPLETENESS: every control-command behavior is preserved -- all shm/sem/msg ctl ops, IPC_STAT
 // marshaling into the arch-specific *id64_ds, uid/gid virtualization (we now store the container identity
 // natively so no host<->guest mapping is needed), ipcperms EACCES + owner EPERM, EFAULT, key semantics,
 // *_INFO/*_STAT -- all byte-exact vs the oracle. errno values below are the *macOS* <errno.h> constants;
@@ -84,6 +84,7 @@ struct ipc64_perm_guest {
     uint16_t seq, pad2;
     uint64_t unused1, unused2;
 };
+
 // struct shmid64_ds (aarch64 asm-generic, 112 bytes).
 struct shmid64_ds_guest {
     struct ipc64_perm_guest shm_perm;
@@ -92,6 +93,7 @@ struct shmid64_ds_guest {
     int32_t shm_cpid, shm_lpid;
     uint64_t shm_nattch, unused4, unused5;
 };
+
 // struct semid64_ds -- the ONE SysV struct whose 64-bit layout is arch-specific (shmid64_ds/msqid64_ds are
 // identical across x86-64 and aarch64). x86-64's `struct semid64_ds` carries a reserved slot after each
 // time field (otime_high/ctime_high, an old x86 quirk), pushing sem_nsems to offset 80 in a 104-byte
@@ -99,16 +101,16 @@ struct shmid64_ds_guest {
 // raw-syscall probe on both arches. CANON_X86ONLY is defined only in the x86_64 engine (translate/x86_64).
 #ifdef CANON_X86ONLY
 struct semid64_ds_guest {
-    struct ipc64_perm_guest sem_perm;         // 0   (48)
-    int64_t sem_otime, sem_otime_high;        // 48, 56
-    int64_t sem_ctime, sem_ctime_high;        // 64, 72
-    uint64_t sem_nsems, unused3, unused4;      // 80, 88, 96 -> 104
+    struct ipc64_perm_guest sem_perm;     // 0   (48)
+    int64_t sem_otime, sem_otime_high;    // 48, 56
+    int64_t sem_ctime, sem_ctime_high;    // 64, 72
+    uint64_t sem_nsems, unused3, unused4; // 80, 88, 96 -> 104
 };
 #else
 struct semid64_ds_guest {
-    struct ipc64_perm_guest sem_perm;         // 0   (48)
-    int64_t sem_otime, sem_ctime;             // 48, 56
-    uint64_t sem_nsems, unused3, unused4;      // 64, 72, 80 -> 88
+    struct ipc64_perm_guest sem_perm;     // 0   (48)
+    int64_t sem_otime, sem_ctime;         // 48, 56
+    uint64_t sem_nsems, unused3, unused4; // 64, 72, 80 -> 88
 };
 #endif
 // struct msqid64_ds (aarch64 asm-generic, 64-bit form, 120 bytes).
@@ -119,21 +121,26 @@ struct msqid64_ds_guest {
     int32_t msg_lspid, msg_lrpid;
     uint64_t unused4, unused5;
 };
+
 // Linux IPC_INFO/*_INFO limit + resource structs (as the guest expects them, 64-bit ABI).
 struct shminfo_guest {
     uint64_t shmmax, shmmin, shmmni, shmseg, shmall, unused[4];
 };
+
 struct shm_info_guest {
     int32_t used_ids;
     uint64_t shm_tot, shm_rss, shm_swp, swap_attempts, swap_successes;
 };
+
 struct seminfo_guest {
     int32_t semmap, semmni, semmns, semmnu, semmsl, semopm, semume, semusz, semvmx, semaem;
 };
+
 struct msginfo_guest {
     int32_t msgpool, msgmap, msgmax, msgmnb, msgmni, msgssz, msgtql;
     uint16_t msgseg;
 };
+
 // The guest's `struct sembuf` (Linux, 6 bytes) -- what semop() receives.
 struct sembuf_guest {
     uint16_t sem_num;
@@ -158,14 +165,14 @@ struct sembuf_guest {
 // Table capacities we actually allocate + enforce (all >> the host's 32; well beyond what real software
 // needs). shm matches the advertised limit; sem/msg are capped lower than the advertised (Linux sizes them
 // dynamically -- impractical in a fixed shared block) but far above any realistic use.
-#define DDIPC_SHMMNI 4096  // shm segment descriptors (metadata only; data in a per-segment object)
-#define DDIPC_SEMMNI 512   // semaphore SETS
-#define DDIPC_SEMMSL 256   // semaphores per set (inline values)
-#define DDIPC_MSGMNI 512   // message queues (metadata; data in a per-queue object)
-#define DDMSG_SLOTS 512    // messages a single queue can hold
-#define DDMSG_MAXSZ 8192   // == MSGMAX: largest single message body
-#define DDIPC_CTRL_MAGIC 0x44494943u  // "DIIC"
-#define DDMSG_MAGIC 0x44494d51u       // "DIMQ"
+#define DDIPC_SHMMNI 4096            // shm segment descriptors (metadata only; data in a per-segment object)
+#define DDIPC_SEMMNI 512             // semaphore SETS
+#define DDIPC_SEMMSL 256             // semaphores per set (inline values)
+#define DDIPC_MSGMNI 512             // message queues (metadata; data in a per-queue object)
+#define DDMSG_SLOTS 512              // messages a single queue can hold
+#define DDMSG_MAXSZ 8192             // == MSGMAX: largest single message body
+#define DDIPC_CTRL_MAGIC 0x44494943u // "DIIC"
+#define DDMSG_MAGIC 0x44494d51u      // "DIMQ"
 
 // A cross-process robust spinlock: 0 == free, else == holder host pid. A holder that dies with the lock
 // held is detected (kill(pid,0)==ESRCH) and its lock stolen -- macOS has no PTHREAD_MUTEX_ROBUST, and the
@@ -173,29 +180,33 @@ struct sembuf_guest {
 struct ddlock {
     atomic_uint owner;
 };
+
 // The container-visible permission block (we store the GUEST identity natively -- no host<->guest map).
 struct ddperm {
     int32_t key;
     uint32_t uid, gid, cuid, cgid, mode, seq;
 };
+
 struct ddshm {
     uint32_t inuse, removed;
     struct ddperm perm;
-    uint64_t segsz;      // caller-requested size (reported by IPC_STAT, Linux-faithful)
+    uint64_t segsz; // caller-requested size (reported by IPC_STAT, Linux-faithful)
     int32_t cpid, lpid;
     int64_t atime, dtime, ctime;
-    uint32_t nattch;     // authoritative attach count across all processes
+    uint32_t nattch; // authoritative attach count across all processes
 };
+
 struct ddsem {
     uint32_t inuse;
     struct ddperm perm;
     uint32_t nsems;
     int64_t otime, ctime;
     uint16_t val[DDIPC_SEMMSL];
-    int32_t pid[DDIPC_SEMMSL];   // last process to op each sem (GETPID)
-    int32_t ncnt[DDIPC_SEMMSL];  // processes waiting for the sem to rise (GETNCNT)
-    int32_t zcnt[DDIPC_SEMMSL];  // processes waiting for the sem to reach 0 (GETZCNT)
+    int32_t pid[DDIPC_SEMMSL];  // last process to op each sem (GETPID)
+    int32_t ncnt[DDIPC_SEMMSL]; // processes waiting for the sem to rise (GETNCNT)
+    int32_t zcnt[DDIPC_SEMMSL]; // processes waiting for the sem to reach 0 (GETZCNT)
 };
+
 struct ddmsgq {
     uint32_t inuse, removed;
     struct ddperm perm;
@@ -203,6 +214,7 @@ struct ddmsgq {
     int32_t lspid, lrpid;
     uint64_t qnum, cbytes, qbytes;
 };
+
 struct ddipc_ctrl {
     atomic_uint magic;
     struct ddlock lock;
@@ -210,6 +222,7 @@ struct ddipc_ctrl {
     struct ddsem sem[DDIPC_SEMMNI];
     struct ddmsgq msg[DDIPC_MSGMNI];
 };
+
 // A message queue's backing object: a slot ring + free list. head/tail are the FIFO order; msgrcv may
 // unlink any matching slot from the middle.
 struct ddmsg_slot {
@@ -218,6 +231,7 @@ struct ddmsg_slot {
     int32_t next;
     uint8_t data[DDMSG_MAXSZ];
 };
+
 struct ddmsg_store {
     atomic_uint magic;
     int32_t head, tail, freehead;
@@ -225,14 +239,15 @@ struct ddmsg_store {
 };
 
 // ---- in-process (COW-inherited across fork) state ------------------------------------------------
-static struct ddipc_ctrl *g_ctrl;           // this process's mapping of the control block
-static uint32_t g_ns_hash;                   // namespace id (0 == not yet computed)
-static int g_ipc_creator;                    // did THIS process create the control block?
+static struct ddipc_ctrl *g_ctrl; // this process's mapping of the control block
+static uint32_t g_ns_hash;        // namespace id (0 == not yet computed)
+static int g_ipc_creator;         // did THIS process create the control block?
 static int g_ipc_atexit_armed;
-static int g_ipc_ctor_pid;                   // engine-root pid (constructor; COW-inherited)
+static int g_ipc_ctor_pid;                                        // engine-root pid (constructor; COW-inherited)
 static pthread_mutex_t g_ipc_local_m = PTHREAD_MUTEX_INITIALIZER; // guards the in-process caches below
 
 #define DD_SHMAT_MAX 256
+
 static struct {
     int used;
     void *addr;
@@ -241,6 +256,7 @@ static struct {
 } g_shmat[DD_SHMAT_MAX];
 
 #define DD_MSGCACHE_MAX 256
+
 static struct {
     int used;
     uint32_t idx;
@@ -249,17 +265,23 @@ static struct {
 } g_msgcache[DD_MSGCACHE_MAX];
 
 #define DD_UNDO_MAX 256
+
 static struct {
     int used;
-    uint32_t idx;      // sem set slot
-    uint32_t seq;      // set's seq (guard against slot reuse)
+    uint32_t idx; // sem set slot
+    uint32_t seq; // set's seq (guard against slot reuse)
     uint16_t semnum;
-    int adj;           // accumulated undo adjustment (subtract on process exit)
+    int adj; // accumulated undo adjustment (subtract on process exit)
 } g_undo[DD_UNDO_MAX];
 
-__attribute__((constructor)) static void ipc_ctor(void) { g_ipc_ctor_pid = (int)getpid(); }
+__attribute__((constructor)) static void ipc_ctor(void) {
+    g_ipc_ctor_pid = (int)getpid();
+}
 
-static int64_t dd_now(void) { return (int64_t)time(NULL); }
+static int64_t dd_now(void) {
+    return (int64_t)time(NULL);
+}
+
 static size_t dd_pground(size_t n) {
     size_t pg = (size_t)sysconf(_SC_PAGESIZE);
     if (pg == 0) pg = 16384;
@@ -288,9 +310,18 @@ static uint32_t ipc_ns(void) {
     g_ns_hash = h;
     return h;
 }
-static void dd_ctrl_name(char *out, size_t n) { snprintf(out, n, "/di%08xC", ipc_ns()); }
-static void dd_shm_name(char *out, size_t n, uint32_t idx) { snprintf(out, n, "/di%08xs%x", ipc_ns(), idx); }
-static void dd_msg_name(char *out, size_t n, uint32_t idx) { snprintf(out, n, "/di%08xm%x", ipc_ns(), idx); }
+
+static void dd_ctrl_name(char *out, size_t n) {
+    snprintf(out, n, "/di%08xC", ipc_ns());
+}
+
+static void dd_shm_name(char *out, size_t n, uint32_t idx) {
+    snprintf(out, n, "/di%08xs%x", ipc_ns(), idx);
+}
+
+static void dd_msg_name(char *out, size_t n, uint32_t idx) {
+    snprintf(out, n, "/di%08xm%x", ipc_ns(), idx);
+}
 
 // ---- robust spinlock -----------------------------------------------------------------------------
 static void dd_lock(struct ddlock *L) {
@@ -312,10 +343,14 @@ static void dd_lock(struct ddlock *L) {
         }
     }
 }
-static void dd_unlock(struct ddlock *L) { atomic_store(&L->owner, 0); }
+
+static void dd_unlock(struct ddlock *L) {
+    atomic_store(&L->owner, 0);
+}
 
 // ---- control block attach ------------------------------------------------------------------------
 static void sysv_on_exit(void);
+
 static struct ddipc_ctrl *dd_ctrl(void) {
     if (g_ctrl) return g_ctrl;
     char nm[40];
@@ -372,7 +407,8 @@ static struct ddmsg_store *dd_msg_store(uint32_t idx, uint32_t seq, int create) 
     if (create) {
         shm_unlink(nm); // clear any stale object at this (ns,idx) before (re)creating
         fd = shm_open(nm, O_CREAT | O_EXCL | O_RDWR, 0600);
-        if (fd < 0) fd = shm_open(nm, O_RDWR, 0600); // lost a create race -> open the winner's
+        if (fd < 0)
+            fd = shm_open(nm, O_RDWR, 0600); // lost a create race -> open the winner's
         else if (ftruncate(fd, (off_t)sizeof(struct ddmsg_store)) < 0) {
             close(fd);
             shm_unlink(nm);
@@ -388,7 +424,8 @@ static struct ddmsg_store *dd_msg_store(uint32_t idx, uint32_t seq, int create) 
     struct ddmsg_store *s = (struct ddmsg_store *)p;
     if (create && atomic_load(&s->magic) != DDMSG_MAGIC) {
         s->head = s->tail = -1;
-        for (int i = 0; i < DDMSG_SLOTS; i++) s->slots[i].next = (i + 1 < DDMSG_SLOTS) ? i + 1 : -1;
+        for (int i = 0; i < DDMSG_SLOTS; i++)
+            s->slots[i].next = (i + 1 < DDMSG_SLOTS) ? i + 1 : -1;
         s->freehead = 0;
         atomic_store(&s->magic, DDMSG_MAGIC);
     } else {
@@ -409,6 +446,7 @@ static struct ddmsg_store *dd_msg_store(uint32_t idx, uint32_t seq, int create) 
     pthread_mutex_unlock(&g_ipc_local_m);
     return s;
 }
+
 static void dd_msg_uncache(uint32_t idx) {
     pthread_mutex_lock(&g_ipc_local_m);
     for (int i = 0; i < DD_MSGCACHE_MAX; i++)
@@ -424,16 +462,21 @@ static int dd_access(const struct ddperm *p, int want) {
     cred_init();
     if (cred_euid() == 0) return 0;
     int eu = cred_euid(), eg = cred_egid(), granted;
-    if ((uint32_t)eu == p->uid || (uint32_t)eu == p->cuid) granted = (p->mode >> 6) & 7;
-    else if ((uint32_t)eg == p->gid || (uint32_t)eg == p->cgid) granted = (p->mode >> 3) & 7;
-    else granted = p->mode & 7;
+    if ((uint32_t)eu == p->uid || (uint32_t)eu == p->cuid)
+        granted = (p->mode >> 6) & 7;
+    else if ((uint32_t)eg == p->gid || (uint32_t)eg == p->cgid)
+        granted = (p->mode >> 3) & 7;
+    else
+        granted = p->mode & 7;
     return (granted & want) == want ? 0 : -EACCES;
 }
+
 static int dd_owner(const struct ddperm *p) {
     cred_init();
     if (cred_euid() == 0) return 0;
     return ((uint32_t)cred_euid() == p->uid || (uint32_t)cred_euid() == p->cuid) ? 0 : -EPERM;
 }
+
 static void ddperm_to_guest(struct ipc64_perm_guest *g, const struct ddperm *p) {
     g->key = p->key;
     g->uid = p->uid;
@@ -445,6 +488,7 @@ static void ddperm_to_guest(struct ipc64_perm_guest *g, const struct ddperm *p) 
     g->pad2 = 0;
     g->unused1 = g->unused2 = 0;
 }
+
 static void ddperm_init(struct ddperm *p, int32_t key, int flag) {
     p->key = key;
     p->uid = p->cuid = (uint32_t)cuid();
@@ -454,7 +498,9 @@ static void ddperm_init(struct ddperm *p, int32_t key, int flag) {
 }
 
 // ---- id build / decode ---------------------------------------------------------------------------
-static uint64_t dd_id(int mni, uint32_t idx, uint32_t seq) { return (uint64_t)seq * (uint32_t)mni + idx; }
+static uint64_t dd_id(int mni, uint32_t idx, uint32_t seq) {
+    return (uint64_t)seq * (uint32_t)mni + idx;
+}
 
 // ============================================================================================
 //  SHARED MEMORY
@@ -466,7 +512,11 @@ static struct ddshm *shm_by_id(struct ddipc_ctrl *C, int id) {
     if (!s->inuse || s->removed || s->perm.seq != seq) return NULL;
     return s;
 }
-static uint32_t shm_idx_of(struct ddipc_ctrl *C, const struct ddshm *s) { return (uint32_t)(s - C->shm); }
+
+static uint32_t shm_idx_of(struct ddipc_ctrl *C, const struct ddshm *s) {
+    return (uint32_t)(s - C->shm);
+}
+
 static void shm_free(struct ddipc_ctrl *C, uint32_t idx) {
     char nm[40];
     dd_shm_name(nm, sizeof nm, idx);
@@ -475,6 +525,7 @@ static void shm_free(struct ddipc_ctrl *C, uint32_t idx) {
     memset(&C->shm[idx], 0, sizeof C->shm[idx]);
     C->shm[idx].perm.seq = seq;
 }
+
 // Marshal descriptor idx -> the guest shmid64_ds at gbuf (already access-checked). Returns 0 or -errno.
 static uint64_t shm_stat_to_guest(struct ddipc_ctrl *C, uint32_t idx, uint64_t gbuf) {
     if (!host_range_mapped((uintptr_t)gbuf, sizeof(struct shmid64_ds_guest))) return (uint64_t)(-EFAULT);
@@ -502,12 +553,17 @@ static struct ddsem *sem_by_id(struct ddipc_ctrl *C, int id) {
     if (!s->inuse || s->perm.seq != seq) return NULL;
     return s;
 }
-static uint32_t sem_idx_of(struct ddipc_ctrl *C, const struct ddsem *s) { return (uint32_t)(s - C->sem); }
+
+static uint32_t sem_idx_of(struct ddipc_ctrl *C, const struct ddsem *s) {
+    return (uint32_t)(s - C->sem);
+}
+
 static void sem_free(struct ddipc_ctrl *C, uint32_t idx) {
     uint32_t seq = C->sem[idx].perm.seq + 1;
     memset(&C->sem[idx], 0, sizeof C->sem[idx]);
     C->sem[idx].perm.seq = seq;
 }
+
 static uint64_t sem_stat_to_guest(struct ddipc_ctrl *C, uint32_t idx, uint64_t gbuf) {
     if (!host_range_mapped((uintptr_t)gbuf, sizeof(struct semid64_ds_guest))) return (uint64_t)(-EFAULT);
     struct ddsem *s = &C->sem[idx];
@@ -519,6 +575,7 @@ static uint64_t sem_stat_to_guest(struct ddipc_ctrl *C, uint32_t idx, uint64_t g
     g->sem_nsems = s->nsems;
     return 0;
 }
+
 // Drop this process's undo record for (idx,semnum) -- SETVAL/SETALL clear the semadj (Linux semantics).
 static void sem_undo_clear(uint32_t idx, uint32_t seq, int semnum /* -1 == whole set */) {
     for (int i = 0; i < DD_UNDO_MAX; i++)
@@ -526,6 +583,7 @@ static void sem_undo_clear(uint32_t idx, uint32_t seq, int semnum /* -1 == whole
             (semnum < 0 || g_undo[i].semnum == (uint16_t)semnum))
             g_undo[i].used = 0;
 }
+
 static void sem_undo_add(uint32_t idx, uint32_t seq, uint16_t semnum, int adj) {
     if (adj == 0) return;
     for (int i = 0; i < DD_UNDO_MAX; i++)
@@ -554,7 +612,11 @@ static struct ddmsgq *msg_by_id(struct ddipc_ctrl *C, int id) {
     if (!q->inuse || q->removed || q->perm.seq != seq) return NULL;
     return q;
 }
-static uint32_t msg_idx_of(struct ddipc_ctrl *C, const struct ddmsgq *q) { return (uint32_t)(q - C->msg); }
+
+static uint32_t msg_idx_of(struct ddipc_ctrl *C, const struct ddmsgq *q) {
+    return (uint32_t)(q - C->msg);
+}
+
 static void msg_free(struct ddipc_ctrl *C, uint32_t idx) {
     dd_msg_uncache(idx);
     char nm[40];
@@ -564,6 +626,7 @@ static void msg_free(struct ddipc_ctrl *C, uint32_t idx) {
     memset(&C->msg[idx], 0, sizeof C->msg[idx]);
     C->msg[idx].perm.seq = seq;
 }
+
 static uint64_t msg_stat_to_guest(struct ddipc_ctrl *C, uint32_t idx, uint64_t gbuf) {
     if (!host_range_mapped((uintptr_t)gbuf, sizeof(struct msqid64_ds_guest))) return (uint64_t)(-EFAULT);
     struct ddmsgq *q = &C->msg[idx];
@@ -592,6 +655,7 @@ static int shm_count(struct ddipc_ctrl *C, int *maxid) {
     if (maxid) *maxid = m;
     return n;
 }
+
 static int sem_count(struct ddipc_ctrl *C, int *maxid) {
     int n = 0, m = -1;
     for (int i = 0; i < DDIPC_SEMMNI; i++)
@@ -602,6 +666,7 @@ static int sem_count(struct ddipc_ctrl *C, int *maxid) {
     if (maxid) *maxid = m;
     return n;
 }
+
 static int msg_count(struct ddipc_ctrl *C, int *maxid) {
     int n = 0, m = -1;
     for (int i = 0; i < DDIPC_MSGMNI; i++)
@@ -625,12 +690,13 @@ static int g_ipc_did_exit; // one-shot guard: exit_group calls sysv_on_exit() ex
 // the child's semadj to 0). The SHARED control-block spinlock is untouched (it belongs to every process; a
 // dead holder is recovered by dd_lock's steal). Called from proc.c after fork.
 static void sysv_on_exit(void);
+
 static void sysv_after_fork(void) {
     pthread_mutex_init(&g_ipc_local_m, NULL);
-    g_ipc_creator = 0;                          // only the parent owns the atexit GC
-    memset(g_undo, 0, sizeof g_undo);           // semadj is not inherited across fork
-    g_ipc_did_exit = 0;                          // the child gets its own exit pass
-    if (g_ctrl) {                                // inherited attachments bump nattch (Linux VM_SHM fork)
+    g_ipc_creator = 0;                // only the parent owns the atexit GC
+    memset(g_undo, 0, sizeof g_undo); // semadj is not inherited across fork
+    g_ipc_did_exit = 0;               // the child gets its own exit pass
+    if (g_ctrl) {                     // inherited attachments bump nattch (Linux VM_SHM fork)
         dd_lock(&g_ctrl->lock);
         for (int i = 0; i < DD_SHMAT_MAX; i++)
             if (g_shmat[i].used) {
@@ -638,14 +704,15 @@ static void sysv_after_fork(void) {
                 if (s->inuse) s->nattch++;
             }
         dd_unlock(&g_ctrl->lock);
-        if (!g_ipc_atexit_armed) {              // the child short-circuits dd_ctrl() (g_ctrl inherited), so
-            g_ipc_atexit_armed = 1;             // arm its own exit pass here (undo apply on the child's exit)
+        if (!g_ipc_atexit_armed) {  // the child short-circuits dd_ctrl() (g_ctrl inherited), so
+            g_ipc_atexit_armed = 1; // arm its own exit pass here (undo apply on the child's exit)
             atexit(sysv_on_exit);
         }
     } else {
         g_ipc_atexit_armed = 0;
     }
 }
+
 // execve detaches every attached shm segment and clears this process's SEM_UNDO adjustments (Linux
 // semantics), while the shared registry (control block + queues) survives into the new image. Called from
 // proc.c after the CLOEXEC sweep, before the guest address space is torn down.
@@ -667,6 +734,7 @@ static void sysv_after_exec(void) {
     }
     memset(g_undo, 0, sizeof g_undo); // semadj is cleared across execve
 }
+
 // Apply this process's outstanding SEM_UNDO adjustments (process exit undoes them, Linux semantics) and, if
 // we created the namespace (or we are the container init), unlink every live object + the control block.
 static void sysv_on_exit(void) {
@@ -859,7 +927,8 @@ static int svc_sysv(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64
         if (shmaddr) {
             uintptr_t a = (uintptr_t)shmaddr;
             size_t pg = (size_t)sysconf(_SC_PAGESIZE);
-            if (flag & L_SHM_RND) a &= ~(uintptr_t)(pg - 1);
+            if (flag & L_SHM_RND)
+                a &= ~(uintptr_t)(pg - 1);
             else if (a & (pg - 1)) {
                 close(fd);
                 G_RET(c) = (uint64_t)(-EINVAL);
@@ -941,7 +1010,8 @@ static int svc_sysv(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64
             int maxid = -1, n = shm_count(C, &maxid);
             uint64_t rc = 0;
             if (cmd == L_IPC_INFO) {
-                if (!host_range_mapped((uintptr_t)a2, sizeof(struct shminfo_guest))) rc = (uint64_t)(-EFAULT);
+                if (!host_range_mapped((uintptr_t)a2, sizeof(struct shminfo_guest)))
+                    rc = (uint64_t)(-EFAULT);
                 else {
                     struct shminfo_guest *g = (struct shminfo_guest *)a2;
                     memset(g, 0, sizeof *g);
@@ -952,7 +1022,8 @@ static int svc_sysv(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64
                     g->shmall = DDIPC_SHMMAX / 4096;
                 }
             } else {
-                if (!host_range_mapped((uintptr_t)a2, sizeof(struct shm_info_guest))) rc = (uint64_t)(-EFAULT);
+                if (!host_range_mapped((uintptr_t)a2, sizeof(struct shm_info_guest)))
+                    rc = (uint64_t)(-EFAULT);
                 else {
                     struct shm_info_guest *g = (struct shm_info_guest *)a2;
                     memset(g, 0, sizeof *g);
@@ -1033,9 +1104,7 @@ static int svc_sysv(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64
         case L_SHM_UNLOCK: // no wired pages to (un)lock; just gate on ownership (Linux CAP_IPC_LOCK/owner)
             rc = (uint64_t)dd_owner(&s->perm);
             break;
-        default:
-            rc = (uint64_t)(-EINVAL);
-            break;
+        default: rc = (uint64_t)(-EINVAL); break;
         }
         dd_unlock(&C->lock);
         G_RET(c) = rc;
@@ -1202,7 +1271,8 @@ static int svc_sysv(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64
             if (!would_block) {
                 if (waited_marked) { // leaving the wait: drop our ncnt/zcnt bookkeeping
                     for (size_t i = 0; i < nsops; i++) {
-                        if (sops[i].sem_op < 0 && s->ncnt[sops[i].sem_num] > 0) s->ncnt[sops[i].sem_num]--;
+                        if (sops[i].sem_op < 0 && s->ncnt[sops[i].sem_num] > 0)
+                            s->ncnt[sops[i].sem_num]--;
                         else if (sops[i].sem_op == 0 && s->zcnt[sops[i].sem_num] > 0)
                             s->zcnt[sops[i].sem_num]--;
                     }
@@ -1229,8 +1299,10 @@ static int svc_sysv(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64
             }
             if (!waited_marked) {
                 for (size_t i = 0; i < nsops; i++) {
-                    if (sops[i].sem_op < 0) s->ncnt[sops[i].sem_num]++;
-                    else if (sops[i].sem_op == 0) s->zcnt[sops[i].sem_num]++;
+                    if (sops[i].sem_op < 0)
+                        s->ncnt[sops[i].sem_num]++;
+                    else if (sops[i].sem_op == 0)
+                        s->zcnt[sops[i].sem_num]++;
                 }
                 waited_marked = 1;
             }
@@ -1245,7 +1317,8 @@ static int svc_sysv(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64
                     struct ddsem *s2 = sem_by_id(C, id);
                     if (s2)
                         for (size_t i = 0; i < nsops; i++) {
-                            if (sops[i].sem_op < 0 && s2->ncnt[sops[i].sem_num] > 0) s2->ncnt[sops[i].sem_num]--;
+                            if (sops[i].sem_op < 0 && s2->ncnt[sops[i].sem_num] > 0)
+                                s2->ncnt[sops[i].sem_num]--;
                             else if (sops[i].sem_op == 0 && s2->zcnt[sops[i].sem_num] > 0)
                                 s2->zcnt[sops[i].sem_num]--;
                         }
@@ -1260,7 +1333,8 @@ static int svc_sysv(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64
                 struct ddsem *s2 = sem_by_id(C, id);
                 if (s2)
                     for (size_t i = 0; i < nsops; i++) {
-                        if (sops[i].sem_op < 0 && s2->ncnt[sops[i].sem_num] > 0) s2->ncnt[sops[i].sem_num]--;
+                        if (sops[i].sem_op < 0 && s2->ncnt[sops[i].sem_num] > 0)
+                            s2->ncnt[sops[i].sem_num]--;
                         else if (sops[i].sem_op == 0 && s2->zcnt[sops[i].sem_num] > 0)
                             s2->zcnt[sops[i].sem_num]--;
                     }
@@ -1283,7 +1357,8 @@ static int svc_sysv(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64
             dd_lock(&C->lock);
             int maxid = -1, n = sem_count(C, &maxid);
             uint64_t rc = 0;
-            if (!host_range_mapped((uintptr_t)a3, sizeof(struct seminfo_guest))) rc = (uint64_t)(-EFAULT);
+            if (!host_range_mapped((uintptr_t)a3, sizeof(struct seminfo_guest)))
+                rc = (uint64_t)(-EFAULT);
             else {
                 struct seminfo_guest *g = (struct seminfo_guest *)a3;
                 memset(g, 0, sizeof *g);
@@ -1371,30 +1446,42 @@ static int svc_sysv(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64
         }
         case L_GETVAL: {
             int perr = dd_access(&s->perm, 4);
-            if (perr) rc = (uint64_t)perr;
-            else if (semnum < 0 || (uint32_t)semnum >= s->nsems) rc = (uint64_t)(-EINVAL);
-            else rc = (uint64_t)s->val[semnum];
+            if (perr)
+                rc = (uint64_t)perr;
+            else if (semnum < 0 || (uint32_t)semnum >= s->nsems)
+                rc = (uint64_t)(-EINVAL);
+            else
+                rc = (uint64_t)s->val[semnum];
             break;
         }
         case L_GETPID: {
             int perr = dd_access(&s->perm, 4);
-            if (perr) rc = (uint64_t)perr;
-            else if (semnum < 0 || (uint32_t)semnum >= s->nsems) rc = (uint64_t)(-EINVAL);
-            else rc = (uint64_t)(uint32_t)s->pid[semnum];
+            if (perr)
+                rc = (uint64_t)perr;
+            else if (semnum < 0 || (uint32_t)semnum >= s->nsems)
+                rc = (uint64_t)(-EINVAL);
+            else
+                rc = (uint64_t)(uint32_t)s->pid[semnum];
             break;
         }
         case L_GETNCNT: {
             int perr = dd_access(&s->perm, 4);
-            if (perr) rc = (uint64_t)perr;
-            else if (semnum < 0 || (uint32_t)semnum >= s->nsems) rc = (uint64_t)(-EINVAL);
-            else rc = (uint64_t)(uint32_t)s->ncnt[semnum];
+            if (perr)
+                rc = (uint64_t)perr;
+            else if (semnum < 0 || (uint32_t)semnum >= s->nsems)
+                rc = (uint64_t)(-EINVAL);
+            else
+                rc = (uint64_t)(uint32_t)s->ncnt[semnum];
             break;
         }
         case L_GETZCNT: {
             int perr = dd_access(&s->perm, 4);
-            if (perr) rc = (uint64_t)perr;
-            else if (semnum < 0 || (uint32_t)semnum >= s->nsems) rc = (uint64_t)(-EINVAL);
-            else rc = (uint64_t)(uint32_t)s->zcnt[semnum];
+            if (perr)
+                rc = (uint64_t)perr;
+            else if (semnum < 0 || (uint32_t)semnum >= s->nsems)
+                rc = (uint64_t)(-EINVAL);
+            else
+                rc = (uint64_t)(uint32_t)s->zcnt[semnum];
             break;
         }
         case L_SETVAL: {
@@ -1430,7 +1517,8 @@ static int svc_sysv(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64
                 break;
             }
             uint16_t *arr = (uint16_t *)a3;
-            for (uint32_t i = 0; i < s->nsems; i++) arr[i] = s->val[i];
+            for (uint32_t i = 0; i < s->nsems; i++)
+                arr[i] = s->val[i];
             rc = 0;
             break;
         }
@@ -1451,16 +1539,15 @@ static int svc_sysv(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64
                     goto sem_setall_out;
                 }
             }
-            for (uint32_t i = 0; i < s->nsems; i++) s->val[i] = arr[i];
+            for (uint32_t i = 0; i < s->nsems; i++)
+                s->val[i] = arr[i];
             s->ctime = dd_now();
             sem_undo_clear(idx, s->perm.seq, -1);
             rc = 0;
         sem_setall_out:
             break;
         }
-        default:
-            rc = (uint64_t)(-EINVAL);
-            break;
+        default: rc = (uint64_t)(-EINVAL); break;
         }
         dd_unlock(&C->lock);
         G_RET(c) = rc;
@@ -1614,7 +1701,8 @@ static int svc_sysv(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64
             st->slots[slot].size = (uint32_t)msgsz;
             st->slots[slot].next = -1;
             if (msgsz) memcpy(st->slots[slot].data, body, msgsz);
-            if (st->tail < 0) st->head = st->tail = slot;
+            if (st->tail < 0)
+                st->head = st->tail = slot;
             else {
                 st->slots[st->tail].next = slot;
                 st->tail = slot;
@@ -1702,8 +1790,10 @@ static int svc_sysv(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64
                 *(long *)a1 = sl->mtype;
                 if (copy) memcpy((void *)(a1 + sizeof(long)), sl->data, copy);
                 // unlink best from the list
-                if (bestprev < 0) st->head = sl->next;
-                else st->slots[bestprev].next = sl->next;
+                if (bestprev < 0)
+                    st->head = sl->next;
+                else
+                    st->slots[bestprev].next = sl->next;
                 if (st->tail == best) st->tail = bestprev;
                 sl->next = st->freehead;
                 st->freehead = best;
@@ -1741,7 +1831,8 @@ static int svc_sysv(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64
             dd_lock(&C->lock);
             int maxid = -1, n = msg_count(C, &maxid);
             uint64_t rc = 0;
-            if (!host_range_mapped((uintptr_t)a2, sizeof(struct msginfo_guest))) rc = (uint64_t)(-EFAULT);
+            if (!host_range_mapped((uintptr_t)a2, sizeof(struct msginfo_guest)))
+                rc = (uint64_t)(-EFAULT);
             else {
                 struct msginfo_guest *g = (struct msginfo_guest *)a2;
                 memset(g, 0, sizeof *g);
@@ -1830,16 +1921,13 @@ static int svc_sysv(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64
             rc = 0;
             break;
         }
-        default:
-            rc = (uint64_t)(-EINVAL);
-            break;
+        default: rc = (uint64_t)(-EINVAL); break;
         }
         dd_unlock(&C->lock);
         G_RET(c) = rc;
         break;
     }
-    default:
-        return 0;
+    default: return 0;
     }
     // Map the host(macOS) errno left in G_RET to the Linux errno the guest expects (e.g. ENOMSG 91->42,
     // EIDRM 90->43, EAGAIN 35->11). Like every other svc_<family>() tail, sysv early-returns from

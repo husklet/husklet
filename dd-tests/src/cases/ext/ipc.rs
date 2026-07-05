@@ -11,7 +11,7 @@
 //! `port(...)` cases prove the IPC behaviour is byte-identical emulated-on-Linux and native-on-macOS.
 //! A few Linux-only mechanisms (POSIX mq, eventfd, SOCK_SEQPACKET) are `src(...)` diffed vs the oracle.
 #![allow(unused_imports)]
-use crate::{group, src, port, fixture, in_rootfs, Case, Engine, Group};
+use crate::{fixture, group, in_rootfs, port, src, Case, Engine, Group};
 
 pub fn groups() -> Vec<Group> {
     vec![ext_ipc()]
@@ -34,14 +34,14 @@ fn ext_ipc() -> Group {
         port("sysv-sem", "ext_ipc/ipc_sysv_sem.c").out("sysv_sem v0=3 v1=13 v2=10 all=3,13,10\n"),
         port("sysv-msg", "ext_ipc/ipc_sysv_msg.c").out("sysv_msg t2=type2 any=type1 t3=type3\n"),
         port("msgget-ftok", "ext_ipc/ipc_msgget_ftok.c").out("ftok key_ok=1 msg=ftok-msg\n"),
-        // #421: the dd-internal per-container SysV registry (was: the macOS host 32-slot table). Allocates
+        // the dd-internal per-container SysV registry (was: the macOS host 32-slot table). Allocates
         // >32 shm segments concurrently, a cross-fork shmat shared-memory write, and cross-process BLOCKING
         // semop + msgsnd/msgrcv round-trips — every one of which the old host-backed path could not do
         // (shmmni=32, no cross-process shm). Confirmed byte-exact vs the native Linux oracle during bring-up;
         // pinned as a Linux-engine GOLDEN (not `.oracle()`) because the oracle would create 64 *native*
         // IPC_PRIVATE segments in the shared HOST SysV table, whose churn destabilises the concurrent
         // `sysv-ctl` badidx oracle (a `*_STAT(0x40000000)` maps via `idx % IPCMNI == 0` onto whatever host
-        // object sits at index 0) — the very host-table contention #421 removes on the dd side. Golden keeps
+        // object sits at index 0) — the very host-table contention removes on the dd side. Golden keeps
         // this to dd's own per-container registry (macOS host can't do >32, so darwin is excluded).
         port("sysv-stress", "ext_ipc/ipc_sysv_stress.c")
             .out("many_segs over32=1 allmapped=1 dataok=1\nxfork shm_shared=1 sem_blockwait=1 msg_roundtrip=1\n")
@@ -62,9 +62,9 @@ fn ext_ipc() -> Group {
         port("dup-offset", "ext_ipc/ipc_dup_offset.c").out("dup_offset a=012 b=345\n"),
         // ---- advisory locks across fork ----
         port("flock-fork", "ext_ipc/ipc_flock_fork.c").out("flock child_blocked=1 child_acquired=1\n"),
-        // #340: the in-engine cross-process fcntl POSIX-lock manager. Two child processes serialize N
+        // the in-engine cross-process fcntl POSIX-lock manager. Two child processes serialize N
         // read-inc-write cycles under a whole-file F_SETLKW write lock (final==2*N, no lost updates),
-        // F_GETLK sees a conflicting holder across processes, and flock<->fcntl stay independent (#237).
+        // F_GETLK sees a conflicting holder across processes, and flock<->fcntl stay independent.
         // Linux engines only: the flock<->fcntl independence (indep=1) is a Linux semantic the engine
         // emulates; native macOS (darwin) routes both through one vnode lock list, so it reports indep=0.
         port("poslk-xproc", "ext_ipc/ipc_poslk_xproc.c")
@@ -78,7 +78,7 @@ fn ext_ipc() -> Group {
         // IPC_EXCL EEXIST on re-create, ENOENT for a missing key w/o IPC_CREAT, shm data+IPC_STAT size,
         // sem SETVAL/GETVAL/semop, msg IPC_NOWAIT ENOMSG + selective/any receive. Byte-exact vs native.
         src("sysv-edge", "ext_ipc/ipc_sysv_edge.c").oracle(),
-        // ---- SysV IPC control-command surface (#418): shmctl/semctl/msgctl full IPC_STAT/IPC_SET/*_INFO/
+        // ---- SysV IPC control-command surface: shmctl/semctl/msgctl full IPC_STAT/IPC_SET/*_INFO/
         // *_STAT + EINVAL/EFAULT/EACCES/EPERM. STAT round-trips (perms/nsems/qbytes/segsz), SET-then-STAT,
         // the INFO/index forms, and the errno paths — verdict-only (booleans/errno names vs our own
         // getuid), so root-dd and the unprivileged native oracle print byte-identically. Both Linux arches.

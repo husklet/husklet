@@ -3,6 +3,7 @@
 
 // x86-64 sigcontext gregs index -> guest cpu->r[] index (r8..r15,rdi,rsi,rbp,rbx,rdx,rax,rcx,rsp; then rip,eflags)
 static const int GREG2R[16] = {8, 9, 10, 11, 12, 13, 14, 15, 7, 6, 5, 3, 2, 0, 1, 4}; // gregs[0..15]
+
 static uint64_t nzcv_to_eflags(uint64_t nz) {
     uint64_t f = 0x2; // bit1 reserved (always 1)
     if (!((nz >> 29) & 1)) f |= 1u << 0;
@@ -11,6 +12,7 @@ static uint64_t nzcv_to_eflags(uint64_t nz) {
     if ((nz >> 28) & 1) f |= 1u << 11; // SF, OF
     return f;
 }
+
 static uint64_t eflags_to_nzcv(uint64_t f) {
     uint64_t nz = 0;
     if (!(f & 1)) nz |= 1u << 29;
@@ -19,8 +21,10 @@ static uint64_t eflags_to_nzcv(uint64_t f) {
     if (f & (1u << 11)) nz |= 1u << 28; // SF, OF
     return nz;
 }
+
 #define SA_ONSTACK_L 0x08000000u
 #define SS_DISABLE_L 2u
+
 static void build_signal_frame(struct cpu *c, int sig) {
     // SA_ONSTACK: build the frame on the alternate signal stack, not the interrupted (guest) stack. Runtimes
     // that manage their own threads install handlers with SA_ONSTACK + a per-thread signal stack and then
@@ -32,8 +36,8 @@ static void build_signal_frame(struct cpu *c, int sig) {
     uint64_t base = c->r[4];
     if ((g_sigact[sig].flags & SA_ONSTACK_L) && c->alt_sp && !(c->alt_flags & SS_DISABLE_L) &&
         !(c->r[4] >= c->alt_sp && c->r[4] < c->alt_sp + c->alt_size))
-        base = c->alt_sp + c->alt_size; // alt stack top; the frame grows down from here
-    uint64_t sp = (base - 2048) & ~15ull;                          // 16-aligned frame base; uc lives here
+        base = c->alt_sp + c->alt_size;                             // alt stack top; the frame grows down from here
+    uint64_t sp = (base - 2048) & ~15ull;                           // 16-aligned frame base; uc lives here
     uint64_t uc = sp, mc = uc + 40, info = uc + 512, xs = uc + 768; // ucontext / mcontext(gregs) / siginfo / xmm save
     memset((void *)sp, 0, 2048);
     for (int i = 0; i < 16; i++)
@@ -48,8 +52,15 @@ static void build_signal_frame(struct cpu *c, int sig) {
     *(uint64_t *)(info + 24) = g_sigval[sig];             // si_value
     // SA_SIGINFO sender identity for a kill/tgkill signal: _kill/_rt union overlays si_addr@16 -> si_pid@16,
     // si_uid@20 (async kill has si_addr==0, so this fills those 8 bytes).
-    if (g_sigpid[sig]) { *(int *)(info + 16) = g_sigpid[sig]; *(int *)(info + 20) = g_siguid[sig]; }
-    g_sigcode[sig] = 0; g_sigval[sig] = 0; g_sigaddr[sig] = 0; g_sigpid[sig] = 0; g_siguid[sig] = 0; // consumed
+    if (g_sigpid[sig]) {
+        *(int *)(info + 16) = g_sigpid[sig];
+        *(int *)(info + 20) = g_siguid[sig];
+    }
+    g_sigcode[sig] = 0;
+    g_sigval[sig] = 0;
+    g_sigaddr[sig] = 0;
+    g_sigpid[sig] = 0;
+    g_siguid[sig] = 0; // consumed
     uint64_t rsp = sp - 8;
     *(uint64_t *)rsp = SIGRETURN_PC; // pushed return address
     c->r[7] = (uint64_t)sig;
@@ -63,6 +74,7 @@ static void build_signal_frame(struct cpu *c, int sig) {
         fprintf(stderr, "[sig] deliver %d handler=%llx rsp=%llx\n", sig, (unsigned long long)c->rip,
                 (unsigned long long)rsp);
 }
+
 static void do_sigreturn(struct cpu *c) {
     uint64_t uc = c->r[4], mc = uc + 40, xs = uc + 768; // after the handler's ret, rsp == uc
     for (int i = 0; i < 16; i++)
@@ -89,13 +101,14 @@ static int sigframe_capture_fault(struct cpu *c, void *ucv) {
     memcpy(c->v, uc->uc_mcontext->__ns.__v, sizeof c->v); // xmm0..15 == host v0..v15
     return 1;
 }
+
 static void sigframe_resume_dispatch(struct cpu *c, void *ucv) {
     ucontext_t *uc = (ucontext_t *)ucv;
     uc->uc_mcontext->__ss.__x[28] = (uint64_t)c; // block_return reads &cpu from x28 (pinned through the block)
     uc->uc_mcontext->__ss.__pc = (uint64_t)block_return;
 }
 
-// #218/#215: recover a fast-clock GUARDED store fault (emit_fast_syscall's clock_gettime/gettimeofday inline
+// recover a fast-clock GUARDED store fault (emit_fast_syscall's clock_gettime/gettimeofday inline
 // path) as -EFAULT. Called FIRST by the run-path SIGSEGV/SIGBUS guard (jit86_lazyguard) -- before non-PIE
 // fixup / SMC / lazy-map / guest-signal delivery -- so a bad guest RESULT pointer returns -EFAULT to the
 // guest exactly like the slow (svc_time host_range_mapped) path: it must NOT lazy-map the store target
@@ -108,14 +121,14 @@ static int fastclk_fault_fixup(siginfo_t *si, void *ucv) {
     struct cpu *c = (struct cpu *)pthread_getspecific(g_cpu_key);
     if (!c || !c->fastclk_resume) return 0;
     uintptr_t va = (uintptr_t)(si ? si->si_addr : NULL);
-    // #406: overflow-safe window test. LTP passes tv=(void*)-1 (fastclk_ptr near UINT64_MAX), where
+    // overflow-safe window test. LTP passes tv=(void*)-1 (fastclk_ptr near UINT64_MAX), where
     // `va >= fastclk_ptr + 16` wraps and wrongly rejects the fault -> SIGSEGV. Compare the unsigned
     // offset instead: an in-window fault has (va - fastclk_ptr) in [0,16); every other value (including
     // va < fastclk_ptr, which underflows to a huge number) is >= 16. Correct for both bounds and wrap.
     if ((uint64_t)(va - c->fastclk_ptr) >= 16) return 0; // fault outside the guarded 16B window
     ucontext_t *uc = (ucontext_t *)ucv;
     uc->uc_mcontext->__ss.__x[0] = (uint64_t)(int64_t)(-EFAULT); // guest rax = -EFAULT
-    uc->uc_mcontext->__ss.__pc = c->fastclk_resume;             // resume at the in-block EFAULT tail
+    uc->uc_mcontext->__ss.__pc = c->fastclk_resume;              // resume at the in-block EFAULT tail
     c->fastclk_resume = 0;                                       // window closed
     return 1;
 }

@@ -41,12 +41,11 @@
 // Child thread resume PC: aarch64 services a syscall with pc still at the SVC, so advance +4.
 #define G_THREAD_RESUME(child, parent) ((child)->pc = (parent)->pc + 4)
 
-
 // aarch64 guests already use canonical (*at) syscalls -> nothing to normalize.
 #define G_NORMALIZE(c) 0
 
 // Zero the integer register file (execve). aarch64 = x[31].
-#define G_RESET_REGS(c) memset((c)->x, 0, sizeof (c)->x)
+#define G_RESET_REGS(c) memset((c)->x, 0, sizeof(c)->x)
 
 // uname(2) `machine` field — per guest ISA, so an aarch64 guest reports "aarch64".
 #define G_UNAME_MACHINE "aarch64"
@@ -59,4 +58,4 @@
 // ORs into every open) is the SAME bit as x86's O_NOFOLLOW, so a hardcoded 0x20000 check turned every
 // symlink open into ELOOP. (Low flags O_CREAT/EXCL/TRUNC/APPEND/NONBLOCK + O_CLOEXEC match across arches.)
 #define G_O_DIRECTORY 0x4000 // asm-generic O_DIRECTORY = 0040000
-#define G_O_NOFOLLOW  0x8000 // asm-generic O_NOFOLLOW  = 0100000
+#define G_O_NOFOLLOW 0x8000  // asm-generic O_NOFOLLOW  = 0100000

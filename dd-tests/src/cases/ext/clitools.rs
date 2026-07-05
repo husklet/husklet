@@ -1,10 +1,12 @@
-//! clitools — real CLI-tool coverage via busybox applets in the alpine rootfs (task #311).
+//! clitools — real CLI-tool coverage via busybox applets in the alpine rootfs.
 //! Owner: clitools-coverage agent. Edit ONLY this file. These exercise the container path (rootfs jail,
 //! fork/exec of real binaries) end-to-end and are golden-checked. aarch64 (the container rootfs arch).
 #![allow(unused_imports)]
-use crate::{group, src, port, fixture, in_rootfs, Case, Engine, Group};
+use crate::{fixture, group, in_rootfs, port, src, Case, Engine, Group};
 
-pub fn groups() -> Vec<Group> { vec![clitools()] }
+pub fn groups() -> Vec<Group> {
+    vec![clitools()]
+}
 
 /// Run `sh -c <cmd>` inside the alpine rootfs.
 fn sh(name: &'static str, cmd: &'static str) -> Case {

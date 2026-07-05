@@ -1,33 +1,32 @@
 #![allow(unused_imports, dead_code)]
-use crate::util::*;
-use crate::system::*;
-use crate::images::*;
-use crate::containers::*;
-use crate::build::*;
 use crate::archive::*;
-use crate::volumes::*;
+use crate::build::*;
+use crate::containers::*;
+use crate::images::*;
 use crate::networks::*;
-use crate::runtime::*;
 use crate::registry::{Client, Credentials, ImageRef};
+use crate::runtime::*;
+use crate::system::*;
+use crate::util::*;
+use crate::volumes::*;
 use axum::body::Body;
 use axum::extract::{Path, Query, Request, State};
-use axum::http::{StatusCode, Uri, HeaderMap};
+use axum::http::{HeaderMap, StatusCode, Uri};
 use axum::response::{IntoResponse, Response};
 use axum::Json;
+use ddjit::{Guest, PortMap, SpawnConfig, Volume};
+use hyper_util::rt::TokioIo;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::HashMap;
+use std::os::fd::{AsRawFd, FromRawFd, OwnedFd, RawFd};
 use std::path::PathBuf;
+use std::process::Stdio;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
-use std::process::Stdio;
-use std::os::fd::{AsRawFd, FromRawFd, OwnedFd, RawFd};
 use tokio::io::unix::AsyncFd;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::sync::{broadcast, mpsc, watch, Mutex};
-use hyper_util::rt::TokioIo;
-use ddjit::{Guest, PortMap, SpawnConfig, Volume};
-
 
 #[derive(Clone, Default)]
 pub(crate) struct Image {
@@ -36,15 +35,15 @@ pub(crate) struct Image {
     pub(crate) arch: Guest,
     pub(crate) cmd: Vec<String>,
     // the rest of the OCI/Dockerfile config metadata a container inherits at run
-    pub(crate) env: Vec<String>,        // "K=V" entries (ENV)
-    pub(crate) entrypoint: Vec<String>, // ENTRYPOINT (prepended to the command)
-    pub(crate) workdir: String,         // WORKDIR / Config.WorkingDir
-    pub(crate) user: String,            // USER / Config.User — the image's default run user (uid[:gid]/name)
+    pub(crate) env: Vec<String>,           // "K=V" entries (ENV)
+    pub(crate) entrypoint: Vec<String>,    // ENTRYPOINT (prepended to the command)
+    pub(crate) workdir: String,            // WORKDIR / Config.WorkingDir
+    pub(crate) user: String, // USER / Config.User — the image's default run user (uid[:gid]/name)
     pub(crate) exposed_ports: Vec<String>, // Config.ExposedPorts keys, e.g. "5432/tcp" (reported by inspect)
-    pub(crate) created: i64,            // unix secs; image creation/discovery time
+    pub(crate) created: i64,               // unix secs; image creation/discovery time
     pub(crate) labels: std::collections::HashMap<String, String>, // LABEL + build --label
     // Lifecycle/volume image config a container inherits at run (Moby §6/§8):
-    pub(crate) stop_signal: String,     // Config.StopSignal — the signal `docker stop` sends (nginx SIGQUIT, postgres SIGINT); "" ⇒ SIGTERM
+    pub(crate) stop_signal: String, // Config.StopSignal — the signal `docker stop` sends (nginx SIGQUIT, postgres SIGINT); "" ⇒ SIGTERM
     pub(crate) img_volumes: Vec<String>, // Config.Volumes keys — dirs that get an anonymous volume at run (postgres /var/lib/postgresql/data)
     pub(crate) healthcheck: Option<HealthConfig>, // Config.Healthcheck — the container HEALTHCHECK probe (None / Test=["NONE"] ⇒ no probe)
 }
@@ -55,11 +54,16 @@ pub(crate) struct Image {
 /// Serde-renamed so it deserializes from the create body AND round-trips through inspect Config.Healthcheck.
 #[derive(Clone, Default, Serialize, Deserialize)]
 pub(crate) struct HealthConfig {
-    #[serde(rename = "Test", default)] pub(crate) test: Vec<String>,
-    #[serde(rename = "Interval", default)] pub(crate) interval: i64,       // ns between probes (0 ⇒ 30s)
-    #[serde(rename = "Timeout", default)] pub(crate) timeout: i64,         // ns a probe may run (0 ⇒ 30s)
-    #[serde(rename = "Retries", default)] pub(crate) retries: i64,         // consecutive failures ⇒ unhealthy (0 ⇒ 3)
-    #[serde(rename = "StartPeriod", default)] pub(crate) start_period: i64, // ns grace where a failure doesn't count
+    #[serde(rename = "Test", default)]
+    pub(crate) test: Vec<String>,
+    #[serde(rename = "Interval", default)]
+    pub(crate) interval: i64, // ns between probes (0 ⇒ 30s)
+    #[serde(rename = "Timeout", default)]
+    pub(crate) timeout: i64, // ns a probe may run (0 ⇒ 30s)
+    #[serde(rename = "Retries", default)]
+    pub(crate) retries: i64, // consecutive failures ⇒ unhealthy (0 ⇒ 3)
+    #[serde(rename = "StartPeriod", default)]
+    pub(crate) start_period: i64, // ns grace where a failure doesn't count
 }
 
 /// A container's live health, surfaced as inspect `State.Health`. `status` is starting/healthy/unhealthy;
@@ -67,37 +71,48 @@ pub(crate) struct HealthConfig {
 /// results (docker caps this at 5). Mirrors Moby `container.Health`.
 #[derive(Clone, Default, Serialize, Deserialize)]
 pub(crate) struct HealthState {
-    #[serde(rename = "Status", default)] pub(crate) status: String,
-    #[serde(rename = "FailingStreak", default)] pub(crate) failing_streak: i64,
-    #[serde(rename = "Log", default)] pub(crate) log: Vec<HealthLog>,
+    #[serde(rename = "Status", default)]
+    pub(crate) status: String,
+    #[serde(rename = "FailingStreak", default)]
+    pub(crate) failing_streak: i64,
+    #[serde(rename = "Log", default)]
+    pub(crate) log: Vec<HealthLog>,
 }
 
 /// One probe result in `State.Health.Log[]` (RFC3339 start/end, the probe's exit code + captured output).
 #[derive(Clone, Default, Serialize, Deserialize)]
 pub(crate) struct HealthLog {
-    #[serde(rename = "Start", default)] pub(crate) start: String,
-    #[serde(rename = "End", default)] pub(crate) end: String,
-    #[serde(rename = "ExitCode", default)] pub(crate) exit_code: i64,
-    #[serde(rename = "Output", default)] pub(crate) output: String,
+    #[serde(rename = "Start", default)]
+    pub(crate) start: String,
+    #[serde(rename = "End", default)]
+    pub(crate) end: String,
+    #[serde(rename = "ExitCode", default)]
+    pub(crate) exit_code: i64,
+    #[serde(rename = "Output", default)]
+    pub(crate) output: String,
 }
-
 
 /// `--restart` policy (HostConfig.RestartPolicy). `name` is one of "" / "no" / "always" /
 /// "unless-stopped" / "on-failure"; `max_retry` caps `on-failure` restarts. Serde-renamed so it both
 /// deserializes from the create body and round-trips verbatim back through inspect HostConfig.
 #[derive(Clone, Default, Serialize, Deserialize)]
 pub(crate) struct RestartPolicy {
-    #[serde(rename = "Name", default)] pub(crate) name: String,
-    #[serde(rename = "MaximumRetryCount", default)] pub(crate) max_retry: i64,
+    #[serde(rename = "Name", default)]
+    pub(crate) name: String,
+    #[serde(rename = "MaximumRetryCount", default)]
+    pub(crate) max_retry: i64,
 }
 
 /// `--device` mapping (HostConfig.Devices[]). Metadata only — the JIT does not enforce device cgroups —
 /// stored and reported verbatim in inspect.
 #[derive(Clone, Default, Serialize, Deserialize)]
 pub(crate) struct DeviceMapping {
-    #[serde(rename = "PathOnHost", default)] pub(crate) path_on_host: String,
-    #[serde(rename = "PathInContainer", default)] pub(crate) path_in_container: String,
-    #[serde(rename = "CgroupPermissions", default)] pub(crate) cgroup_permissions: String,
+    #[serde(rename = "PathOnHost", default)]
+    pub(crate) path_on_host: String,
+    #[serde(rename = "PathInContainer", default)]
+    pub(crate) path_in_container: String,
+    #[serde(rename = "CgroupPermissions", default)]
+    pub(crate) cgroup_permissions: String,
 }
 
 /// `--mount` spec (HostConfig.Mounts[]). `typ` is "bind" or "volume"; `source` is a host path (bind) or
@@ -105,19 +120,26 @@ pub(crate) struct DeviceMapping {
 /// mechanism can't mark a mount read-only). Wired into the rootfs via the same path as `-v`/Binds.
 #[derive(Clone, Default, Serialize, Deserialize)]
 pub(crate) struct Mount {
-    #[serde(rename = "Type", default)] pub(crate) typ: String,
-    #[serde(rename = "Source", default)] pub(crate) source: String,
-    #[serde(rename = "Target", default)] pub(crate) target: String,
-    #[serde(rename = "ReadOnly", default)] pub(crate) read_only: bool,
+    #[serde(rename = "Type", default)]
+    pub(crate) typ: String,
+    #[serde(rename = "Source", default)]
+    pub(crate) source: String,
+    #[serde(rename = "Target", default)]
+    pub(crate) target: String,
+    #[serde(rename = "ReadOnly", default)]
+    pub(crate) read_only: bool,
 }
 
 /// `--ulimit` entry (HostConfig.Ulimits[]). `name` is docker's resource name (nofile/nproc/stack/...),
 /// `soft`/`hard` the limits. Reflected in the container's getrlimit via the engine's DD_ULIMITS contract.
 #[derive(Clone, Default, Serialize, Deserialize)]
 pub(crate) struct Ulimit {
-    #[serde(rename = "Name", default)] pub(crate) name: String,
-    #[serde(rename = "Soft", default)] pub(crate) soft: i64,
-    #[serde(rename = "Hard", default)] pub(crate) hard: i64,
+    #[serde(rename = "Name", default)]
+    pub(crate) name: String,
+    #[serde(rename = "Soft", default)]
+    pub(crate) soft: i64,
+    #[serde(rename = "Hard", default)]
+    pub(crate) hard: i64,
 }
 
 #[derive(Clone, Default, Serialize, Deserialize)]
@@ -244,13 +266,12 @@ pub(crate) struct Container {
     pub(crate) stderr: Vec<u8>,
 }
 
-
 /// A running container's live IO plumbing. Created on first attach-or-start, dropped when the guest
 /// process exits. The process stdout/stderr fan out to (a) any attached clients via `out`, (b) the log
 /// buffers for `docker logs`. `stdin` feeds the guest for `-i`/attach.
 pub(crate) struct Live {
     pub(crate) out: broadcast::Sender<(u8, Vec<u8>)>, // (1=stdout, 2=stderr, chunk)
-    pub(crate) stdin_tx: mpsc::Sender<Vec<u8>>,        // attach writes here; an empty Vec = stdin EOF
+    pub(crate) stdin_tx: mpsc::Sender<Vec<u8>>, // attach writes here; an empty Vec = stdin EOF
     pub(crate) stdin_rx: Mutex<Option<mpsc::Receiver<Vec<u8>>>>, // start() takes it and feeds the guest
     /// Chronological `docker logs` replay record: one entry per output chunk, in arrival order, as
     /// `(emit unix-secs, stream 1=stdout/2=stderr, bytes)`. A single ordered log (replacing the old
@@ -271,7 +292,7 @@ pub(crate) struct Live {
     pub(crate) stop_requested: std::sync::atomic::AtomicBool, // set by stop/kill/rm so the RestartPolicy supervisor won't auto-restart a deliberately-stopped container
     pub(crate) tty: bool,
     pub(crate) pty_master: std::sync::Mutex<Option<RawFd>>, // the PTY master fd (tty containers) for /resize
-    pub(crate) pid: std::sync::Mutex<Option<u32>>,          // the live JIT process pid (for pause = SIGSTOP/SIGCONT)
+    pub(crate) pid: std::sync::Mutex<Option<u32>>, // the live JIT process pid (for pause = SIGSTOP/SIGCONT)
 }
 
 impl Live {
@@ -280,14 +301,23 @@ impl Live {
         let (exit, exit_rx) = watch::channel(None);
         let (out_done, out_done_rx) = watch::channel(false);
         let (stdin_tx, stdin_rx) = mpsc::channel(256);
-        Arc::new(Live { out, stdin_tx, stdin_rx: Mutex::new(Some(stdin_rx)), log_chunks: Mutex::new(Vec::new()),
-            exit, exit_rx, out_done, out_done_rx,
+        Arc::new(Live {
+            out,
+            stdin_tx,
+            stdin_rx: Mutex::new(Some(stdin_rx)),
+            log_chunks: Mutex::new(Vec::new()),
+            exit,
+            exit_rx,
+            out_done,
+            out_done_rx,
             started: std::sync::atomic::AtomicBool::new(false),
-            stop_requested: std::sync::atomic::AtomicBool::new(false), tty,
-            pty_master: std::sync::Mutex::new(None), pid: std::sync::Mutex::new(None) })
+            stop_requested: std::sync::atomic::AtomicBool::new(false),
+            tty,
+            pty_master: std::sync::Mutex::new(None),
+            pid: std::sync::Mutex::new(None),
+        })
     }
 }
-
 
 /// A named volume — a directory under the volumes root that containers can bind by name.
 #[derive(Clone, Serialize, Deserialize)]
@@ -303,13 +333,12 @@ pub(crate) struct Vol {
     pub(crate) labels: std::collections::HashMap<String, String>, // --label
 }
 
-
 /// A per-container attachment to a network: the L3 identity (assigned IP) plus the name other
 /// containers resolve it by. Keyed by container id in [`Net::endpoints`]. See `docs/design/netstack.md`.
 #[derive(Clone, Default, Serialize, Deserialize)]
 pub(crate) struct Endpoint {
     pub(crate) name: String, // container name (or short id) — what `network inspect`/embedded DNS reports
-    pub(crate) ip: String,   // IPAM-assigned host address within the network subnet, e.g. "172.18.0.2"
+    pub(crate) ip: String, // IPAM-assigned host address within the network subnet, e.g. "172.18.0.2"
 }
 
 /// A user-defined network. dd's isolation is a per-container loopback netns (see `run_in_jit`);
@@ -327,13 +356,12 @@ pub(crate) struct Net {
     // IPAM (allocated at create from the 172.18.0.0/12 pool; bridge gets 172.17.0.0/16). Old state
     // files predate these — `#[serde(default)]` keeps them loadable (empty subnet => no IP reported).
     #[serde(default)]
-    pub(crate) subnet: String,   // e.g. "172.18.0.0/16"
+    pub(crate) subnet: String, // e.g. "172.18.0.0/16"
     #[serde(default)]
-    pub(crate) gateway: String,  // e.g. "172.18.0.1" (.1 of the subnet)
+    pub(crate) gateway: String, // e.g. "172.18.0.1" (.1 of the subnet)
     #[serde(default)]
     pub(crate) endpoints: HashMap<String, Endpoint>, // container-id -> assigned endpoint
 }
-
 
 /// A `docker exec` invocation: a command to run in a container's rootfs. dd runs it as a fresh JIT
 /// process sharing the container's rootfs + volumes (the same files; a distinct process namespace).
@@ -356,7 +384,6 @@ pub(crate) struct Exec {
     pub(crate) exit_code: i64,
 }
 
-
 #[derive(Default)]
 pub(crate) struct Inner {
     pub(crate) containers: HashMap<String, Container>,
@@ -367,7 +394,6 @@ pub(crate) struct Inner {
     pub(crate) execs: HashMap<String, Exec>,     // exec id -> its spec
 }
 
-
 /// The serializable slice of [`Inner`] written to `DD_STATE`.
 #[derive(Default, Serialize, Deserialize)]
 pub(crate) struct Persisted {
@@ -375,7 +401,6 @@ pub(crate) struct Persisted {
     pub(crate) volumes: Vec<Vol>,
     pub(crate) networks: Vec<Net>,
 }
-
 
 #[derive(Clone)]
 pub(crate) struct App {

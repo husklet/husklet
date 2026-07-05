@@ -12,7 +12,9 @@ pub const APP_BUNDLE: &str = "/Applications/dd.app";
 
 /// `$HOME`, or `.` as a last resort.
 pub fn home() -> PathBuf {
-    std::env::var_os("HOME").map(PathBuf::from).unwrap_or_else(|| PathBuf::from("."))
+    std::env::var_os("HOME")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("."))
 }
 
 /// `~/.dd` — state root (images, volumes, state.json, run/).
@@ -42,7 +44,9 @@ pub fn logs_dir() -> PathBuf {
 
 /// `~/Library/LaunchAgents/com.dd.daemon.plist`.
 pub fn agent_plist() -> PathBuf {
-    home().join("Library/LaunchAgents").join(format!("{AGENT_LABEL}.plist"))
+    home()
+        .join("Library/LaunchAgents")
+        .join(format!("{AGENT_LABEL}.plist"))
 }
 
 /// The `dd-daemon` binary the agent should launch. Order: `$DD_DAEMON_BIN`, the installed app

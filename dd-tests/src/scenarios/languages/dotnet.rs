@@ -12,17 +12,33 @@ const DN_FIB: &str = "mkdir -p /app && cd /app && dotnet new console -o . >/dev/
 
 pub fn scenarios() -> Vec<Scenario> {
     vec![
-        scen("languages/dotnet-version-sdk8", "mcr.microsoft.com/dotnet/sdk:8.0")
-            .exec("echo \"SDK $(dotnet --version | cut -d. -f1)\"")
-            .has("SDK 8")
-            .long(),
-        scen("languages/dotnet-sum-sdk8", "mcr.microsoft.com/dotnet/sdk:8.0")
-            .exec(DN_SUM).has("NET 500500").long(),
-        scen("languages/dotnet-fib-sdk9", "mcr.microsoft.com/dotnet/sdk:9.0")
-            .exec(DN_FIB).has("NETFIB 12586269025").long(),
-        scen("languages/dotnet-runtime-info-8", "mcr.microsoft.com/dotnet/runtime:8.0")
-            .exec("dotnet --info | grep -o 'Microsoft.NETCore.App 8'")
-            .has("Microsoft.NETCore.App 8")
-            .long(),
+        scen(
+            "languages/dotnet-version-sdk8",
+            "mcr.microsoft.com/dotnet/sdk:8.0",
+        )
+        .exec("echo \"SDK $(dotnet --version | cut -d. -f1)\"")
+        .has("SDK 8")
+        .long(),
+        scen(
+            "languages/dotnet-sum-sdk8",
+            "mcr.microsoft.com/dotnet/sdk:8.0",
+        )
+        .exec(DN_SUM)
+        .has("NET 500500")
+        .long(),
+        scen(
+            "languages/dotnet-fib-sdk9",
+            "mcr.microsoft.com/dotnet/sdk:9.0",
+        )
+        .exec(DN_FIB)
+        .has("NETFIB 12586269025")
+        .long(),
+        scen(
+            "languages/dotnet-runtime-info-8",
+            "mcr.microsoft.com/dotnet/runtime:8.0",
+        )
+        .exec("dotnet --info | grep -o 'Microsoft.NETCore.App 8'")
+        .has("Microsoft.NETCore.App 8")
+        .long(),
     ]
 }

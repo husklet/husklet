@@ -35,12 +35,18 @@ impl Signal {
     }
     fn describe(&self) -> String {
         match self {
-            Signal::MissingSyscall(n) => format!("guest hit syscall {n} which the engine does not implement"),
+            Signal::MissingSyscall(n) => {
+                format!("guest hit syscall {n} which the engine does not implement")
+            }
             Signal::UnimplOpcode(op) => format!("translator hit an unimplemented opcode: {op}"),
             Signal::Signal(c, name) => format!("process killed by {name} (exit {c})"),
             Signal::ExecLoader(l) => format!("ELF loader/exec failed: {l}"),
-            Signal::CpuTopology => "CPU enumeration returned empty (possible-CPU set) — tcmalloc/jemalloc abort".into(),
-            Signal::ImageRegister => "image pulled but daemon then reports 'No such image' (not registered)".into(),
+            Signal::CpuTopology => {
+                "CPU enumeration returned empty (possible-CPU set) — tcmalloc/jemalloc abort".into()
+            }
+            Signal::ImageRegister => {
+                "image pulled but daemon then reports 'No such image' (not registered)".into()
+            }
             Signal::DaemonUnreachable => "could not connect to the daemon socket".into(),
             Signal::Fault(l) => format!("fatal fault: {l}"),
         }
@@ -50,25 +56,36 @@ impl Signal {
 /// Map a process exit code to a signal name (128 + signo), for crash interpretation.
 fn signal_for_code(code: i32) -> Option<(i32, &'static str)> {
     match code {
-        132 => Some((code, "SIGILL")), 133 => Some((code, "SIGTRAP")), 134 => Some((code, "SIGABRT")),
-        135 => Some((code, "SIGBUS")), 136 => Some((code, "SIGFPE")), 137 => Some((code, "SIGKILL/OOM")),
-        139 => Some((code, "SIGSEGV")), 124 => None /* timeout, handled separately */, _ => None,
+        132 => Some((code, "SIGILL")),
+        133 => Some((code, "SIGTRAP")),
+        134 => Some((code, "SIGABRT")),
+        135 => Some((code, "SIGBUS")),
+        136 => Some((code, "SIGFPE")),
+        137 => Some((code, "SIGKILL/OOM")),
+        139 => Some((code, "SIGSEGV")),
+        124 => None, // timeout, handled separately
+        _ => None,
     }
 }
 
 /// A full diagnosis of one failed (scenario, target) run.
 pub struct Diagnosis {
-    pub what: String,            // the check that failed / timeout / spawn error
-    pub signals: Vec<Signal>,    // engine signals scraped from output + daemon log
-    pub out_clip: String,        // container output (clipped)
-    pub log_clip: String,        // daemon-log tail (clipped) — dd backend only
+    pub what: String,         // the check that failed / timeout / spawn error
+    pub signals: Vec<Signal>, // engine signals scraped from output + daemon log
+    pub out_clip: String,     // container output (clipped)
+    pub log_clip: String,     // daemon-log tail (clipped) — dd backend only
     pub timed_out: bool,
 }
 
 impl Diagnosis {
     /// One-line summary appended to the failure line in the report.
     pub fn summary(&self) -> String {
-        if self.timed_out { return format!("{} · TIMED OUT (likely hang/infinite-loop in translation)", self.what); }
+        if self.timed_out {
+            return format!(
+                "{} · TIMED OUT (likely hang/infinite-loop in translation)",
+                self.what
+            );
+        }
         match self.signals.first() {
             Some(s) => format!("{} · {} [{}]", self.what, s.describe(), s.bucket()),
             None => self.what.clone(),
@@ -78,22 +95,36 @@ impl Diagnosis {
     pub fn report(&self) -> String {
         let mut r = String::new();
         r.push_str(&format!("  what : {}\n", self.what));
-        if self.timed_out { r.push_str("  why  : timed out — the guest hung (commonly a mistranslated loop or a blocked syscall)\n"); }
+        if self.timed_out {
+            r.push_str("  why  : timed out — the guest hung (commonly a mistranslated loop or a blocked syscall)\n");
+        }
         for s in &self.signals {
-            r.push_str(&format!("  why  : {}\n         bucket → {}\n", s.describe(), s.bucket()));
+            r.push_str(&format!(
+                "  why  : {}\n         bucket → {}\n",
+                s.describe(),
+                s.bucket()
+            ));
         }
         if self.signals.is_empty() && !self.timed_out {
             r.push_str("  why  : no engine signal found — likely a wrong-output divergence (compare vs the Real oracle)\n");
         }
-        if !self.out_clip.is_empty() { r.push_str(&format!("  out  : {}\n", self.out_clip)); }
-        if !self.log_clip.is_empty() { r.push_str(&format!("  log  : {}\n", self.log_clip)); }
+        if !self.out_clip.is_empty() {
+            r.push_str(&format!("  out  : {}\n", self.out_clip));
+        }
+        if !self.log_clip.is_empty() {
+            r.push_str(&format!("  log  : {}\n", self.log_clip));
+        }
         r
     }
 }
 
 fn clip(s: &str, n: usize) -> String {
     let one = s.replace('\n', " ⏎ ");
-    if one.chars().count() > n { one.chars().take(n).collect::<String>() + " …" } else { one }
+    if one.chars().count() > n {
+        one.chars().take(n).collect::<String>() + " …"
+    } else {
+        one
+    }
 }
 
 /// Scrape engine/container output + daemon-log tail for known failure signals and build a diagnosis.
@@ -106,36 +137,69 @@ pub fn diagnose(what: String, code: i32, out: &str, log: &str) -> Diagnosis {
 
     for line in hay.lines() {
         if let Some(i) = line.find("unhandled syscall ") {
-            if let Some(n) = line[i + 18..].split_whitespace().next().and_then(|t| t.trim().parse::<u64>().ok()) {
+            if let Some(n) = line[i + 18..]
+                .split_whitespace()
+                .next()
+                .and_then(|t| t.trim().parse::<u64>().ok())
+            {
                 let s = Signal::MissingSyscall(n);
-                if !signals.contains(&s) { signals.push(s); }
+                if !signals.contains(&s) {
+                    signals.push(s);
+                }
             }
         }
         if line.contains("UNIMPL") && (line.contains("opcode") || line.contains("0x")) {
             let op = line.trim().to_string();
-            if !signals.iter().any(|s| matches!(s, Signal::UnimplOpcode(_))) { signals.push(Signal::UnimplOpcode(clip(&op, 80))); }
+            if !signals.iter().any(|s| matches!(s, Signal::UnimplOpcode(_))) {
+                signals.push(Signal::UnimplOpcode(clip(&op, 80)));
+            }
         }
-        if line.contains("No such file or directory") && (line.contains("open") || line.contains("exec") || line.contains("map segment"))
-            || line.contains("failed to map segment") || line.contains("libc.so.6") {
-            if !signals.iter().any(|s| matches!(s, Signal::ExecLoader(_))) { signals.push(Signal::ExecLoader(clip(line.trim(), 100))); }
+        if line.contains("No such file or directory")
+            && (line.contains("open") || line.contains("exec") || line.contains("map segment"))
+            || line.contains("failed to map segment")
+            || line.contains("libc.so.6")
+        {
+            if !signals.iter().any(|s| matches!(s, Signal::ExecLoader(_))) {
+                signals.push(Signal::ExecLoader(clip(line.trim(), 100)));
+            }
         }
         if line.contains("NumPossibleCPUs") || line.contains("cpus.has_value") {
-            if !signals.contains(&Signal::CpuTopology) { signals.push(Signal::CpuTopology); }
+            if !signals.contains(&Signal::CpuTopology) {
+                signals.push(Signal::CpuTopology);
+            }
         }
         if line.contains("No such image") {
-            if !signals.contains(&Signal::ImageRegister) { signals.push(Signal::ImageRegister); }
+            if !signals.contains(&Signal::ImageRegister) {
+                signals.push(Signal::ImageRegister);
+            }
         }
         if line.contains("Cannot connect to the Docker daemon") {
-            if !signals.contains(&Signal::DaemonUnreachable) { signals.push(Signal::DaemonUnreachable); }
+            if !signals.contains(&Signal::DaemonUnreachable) {
+                signals.push(Signal::DaemonUnreachable);
+            }
         }
-        if (line.contains("rip=") || line.to_lowercase().contains("fatal")) && line.contains("rip=") {
-            if !signals.iter().any(|s| matches!(s, Signal::Fault(_))) { signals.push(Signal::Fault(clip(line.trim(), 100))); }
+        if (line.contains("rip=") || line.to_lowercase().contains("fatal")) && line.contains("rip=")
+        {
+            if !signals.iter().any(|s| matches!(s, Signal::Fault(_))) {
+                signals.push(Signal::Fault(clip(line.trim(), 100)));
+            }
         }
     }
     // a crash signal from the exit code, if not already explained by a richer signal
     if let Some((c, name)) = signal_for_code(code) {
-        if !signals.iter().any(|s| matches!(s, Signal::Signal(_, _) | Signal::Fault(_))) { signals.push(Signal::Signal(c, name)); }
+        if !signals
+            .iter()
+            .any(|s| matches!(s, Signal::Signal(_, _) | Signal::Fault(_)))
+        {
+            signals.push(Signal::Signal(c, name));
+        }
     }
 
-    Diagnosis { what, signals, out_clip: clip(out, 220), log_clip: clip(log, 220), timed_out }
+    Diagnosis {
+        what,
+        signals,
+        out_clip: clip(out, 220),
+        log_clip: clip(log, 220),
+        timed_out,
+    }
 }

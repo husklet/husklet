@@ -28,7 +28,7 @@ struct cpu {
     uint64_t nzcv;
     // 0x408 (1032) IBTC: cache-literal addr to fill after an inline-cache miss
     uint64_t ic_site;
-    // 0x410 (1040) #292 async-interrupt poll flag. Set (via g_cpu_key) by the host async-signal handler
+    // 0x410 (1040) async-interrupt poll flag. Set (via g_cpu_key) by the host async-signal handler
     // and the thread-directed tkill/tgkill path when a CAUGHT guest signal becomes pending; polled by a
     // 2-insn (ldr+cbz) check emitted at every block body so a CPU-bound guest loop that makes no syscalls
     // still exits to the dispatcher (maybe_deliver_signal) at a safe block boundary. Placed here -- the LAST
@@ -69,7 +69,7 @@ struct cpu {
     // when that guest page was actually translated, instead of nuking everything on every guest icache
     // flush (V8 issues one per freshly-written line). Appended after the baked-offset fields.
     uint64_t smc_va;
-    // Lever #3 (SIMD-clean syscall exit): RUNTIME "guest vector state may be stale in cpu->V" flag. Set
+    // (SIMD-clean syscall exit): RUNTIME "guest vector state may be stale in cpu->V" flag. Set
     // (to the nonzero cpu pointer) by the first vector-writing instruction of a region; the static per-
     // region flag is UNSOUND because blocks CHAIN without spilling (a vectorized region can chain into a
     // statically-clean syscall block), so the decision must be at runtime. Cleared by every FULL spill
@@ -77,6 +77,7 @@ struct cpu {
     // Appended after the baked-offset fields so the emitted-code offsets above are unaffected.
     uint64_t vdirty;
 };
+
 #define OFF_VDIRTY ((int)offsetof(struct cpu, vdirty))
 // OFF_VDIRTY is used in a scaled unsigned ldr/str (F9, imm12*8), so it must be 8-aligned and <= 32760.
 _Static_assert(offsetof(struct cpu, vdirty) % 8 == 0 && offsetof(struct cpu, vdirty) <= 32760,
@@ -86,7 +87,7 @@ _Static_assert(offsetof(struct cpu, vdirty) % 8 == 0 && offsetof(struct cpu, vdi
 #define OFF_HOSTV 896
 #define OFF_NZCV 1024
 #define OFF_ICSITE 1032
-// #292 async-poll flag offset (non-baked -> use the real offset, computed after the struct shifts).
+// async-poll flag offset (non-baked -> use the real offset, computed after the struct shifts).
 #define OFF_IRQ ((int)offsetof(struct cpu, irq))
 #define OFF_SP 248
 #define OFF_PC 256
@@ -127,13 +128,19 @@ _Static_assert(offsetof(struct cpu, ic_site) == OFF_ICSITE, "OFF_ICSITE drifted"
 static uint64_t g_nonpie_lo, g_nonpie_bias;
 // master enable (default on); cleared at startup by NOGUESTFOLD=1 for an A/B kill-switch.
 static int g_guestfold = 1;
-static int guestbase_on(void) { return g_guestfold && g_nonpie_lo != 0; }
+
+static int guestbase_on(void) {
+    return g_guestfold && g_nonpie_lo != 0;
+}
+
 // A1: x16/x17 engine-private (IBTC scratch); guest x16/x17 mangled like x18 so they never live in
 // the host reg -> the per-indirect-branch red-zone stash/restore of x16/x17 disappears.
 // x18 volatile, x28=cpu, x30=host link (§B). NOSTEAL1617=1 reverts to the 3-reg stolen set at startup.
 static int g_steal1617 = 1;
+
 static int is_stolen(int r) {
     return r == 18 || r == 28 || r == 30 || (g_steal1617 && (r == 16 || r == 17));
 }
+
 #define R_BRANCH 0
 #define R_SYSCALL 1

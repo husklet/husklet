@@ -11,10 +11,18 @@ pub fn scenarios() -> Vec<Scenario> {
             .run(&["ruby", "-e", "a,b=0,1;50.times{a,b=b,a+b};puts a"])
             .has("12586269025"),
         scen("languages/ruby-json-33-alpine", "ruby:3.3-alpine")
-            .run(&["ruby", "-e", "require 'json';puts({s:(1..1000).sum}.to_json)"])
+            .run(&[
+                "ruby",
+                "-e",
+                "require 'json';puts({s:(1..1000).sum}.to_json)",
+            ])
             .has("{\"s\":500500}"),
         scen("languages/ruby-primes-33-alpine", "ruby:3.3-alpine")
-            .run(&["ruby", "-e", "puts (2...10000).count{|n| (2..Integer.sqrt(n)).all?{|d| n%d!=0}}"])
+            .run(&[
+                "ruby",
+                "-e",
+                "puts (2...10000).count{|n| (2..Integer.sqrt(n)).all?{|d| n%d!=0}}",
+            ])
             .has("1229"),
         scen("languages/ruby-sort-repl-33-slim", "ruby:3.3-slim")
             .exec("echo 'puts [3,1,2].sort.join(\",\")' | ruby")

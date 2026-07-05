@@ -1,13 +1,12 @@
 #![allow(unused_imports, dead_code)]
-use crate::{AppModel, Category, Msg, Selection};
 use crate::ui::components::*;
-use crate::ui::views::*;
 use crate::ui::theme::*;
+use crate::ui::views::*;
+use crate::{AppModel, Category, Msg, Selection};
 use ddclient::{Container, Image, Network, Volume};
 use gtk::prelude::*;
 use relm4::ComponentSender;
 use std::ffi::OsStr;
-
 
 pub(crate) fn network_list_row(n: &Network) -> gtk::ListBoxRow {
     // Richer subtitle: driver · scope (· subnet when present).
@@ -19,8 +18,11 @@ pub(crate) fn network_list_row(n: &Network) -> gtk::ListBoxRow {
     nav_item(&n.name, &sub, false)
 }
 
-
-pub(crate) fn network_detail(n: &Network, containers: &[Container], sender: &ComponentSender<AppModel>) -> gtk::Widget {
+pub(crate) fn network_detail(
+    n: &Network,
+    containers: &[Container],
+    sender: &ComponentSender<AppModel>,
+) -> gtk::Widget {
     let root = detail_root();
     let mut actions = Vec::new();
     // The predefined bridge/host/none networks can't be removed.
@@ -30,14 +32,24 @@ pub(crate) fn network_detail(n: &Network, containers: &[Container], sender: &Com
             move || Msg::RemoveNetwork(id.clone())
         }));
     }
-    root.append(&detail_header(&n.name, &format!("{} · {}", n.driver, n.scope), actions));
+    root.append(&detail_header(
+        &n.name,
+        &format!("{} · {}", n.driver, n.scope),
+        actions,
+    ));
     root.append(&section("ID", &[n.short_id()]));
     root.append(&section("Driver", &[n.driver.clone()]));
 
     let mut flags = Vec::new();
-    if n.internal { flags.push("internal"); }
-    if n.attachable { flags.push("attachable"); }
-    if n.ipv6 { flags.push("ipv6"); }
+    if n.internal {
+        flags.push("internal");
+    }
+    if n.attachable {
+        flags.push("attachable");
+    }
+    if n.ipv6 {
+        flags.push("ipv6");
+    }
     root.append(&two_col(&[
         ("Scope", n.scope.clone()),
         ("Subnet", n.subnet.clone()),
@@ -47,7 +59,11 @@ pub(crate) fn network_detail(n: &Network, containers: &[Container], sender: &Com
 
     let labels: Vec<String> = n.labels.iter().map(|(k, v)| format!("{k} = {v}")).collect();
     root.append(&section("Labels", &labels));
-    let opts: Vec<String> = n.options.iter().map(|(k, v)| format!("{k} = {v}")).collect();
+    let opts: Vec<String> = n
+        .options
+        .iter()
+        .map(|(k, v)| format!("{k} = {v}"))
+        .collect();
     root.append(&section("Options", &opts));
 
     let conn: Vec<String> = containers

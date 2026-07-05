@@ -17,9 +17,9 @@ use std::path::{Path, PathBuf};
 use bollard::container::LogOutput;
 use bollard::models::{ContainerCreateBody, NetworkCreateRequest, VolumeCreateRequest};
 use bollard::query_parameters::{
-    ListContainersOptionsBuilder, ListImagesOptionsBuilder, ListNetworksOptions, ListVolumesOptions,
-    LogsOptionsBuilder, RemoveContainerOptionsBuilder, RemoveImageOptions, RemoveVolumeOptions,
-    StartContainerOptions,
+    ListContainersOptionsBuilder, ListImagesOptionsBuilder, ListNetworksOptions,
+    ListVolumesOptions, LogsOptionsBuilder, RemoveContainerOptionsBuilder, RemoveImageOptions,
+    RemoveVolumeOptions, StartContainerOptions,
 };
 use bollard::{ClientVersion, Docker};
 use futures_util::StreamExt;
@@ -33,7 +33,10 @@ pub type Error = bollard::errors::Error;
 type Result<T> = std::result::Result<T, Error>;
 
 /// dd-daemon speaks Docker API v1.43.
-const VERSION: ClientVersion = ClientVersion { major_version: 1, minor_version: 43 };
+const VERSION: ClientVersion = ClientVersion {
+    major_version: 1,
+    minor_version: 43,
+};
 
 /// A handle to a dd-daemon reachable at `socket`. Cheap to clone; connects lazily per request
 /// (bollard's connector does no I/O until a call is made), matching the old per-request model.
@@ -45,7 +48,9 @@ pub struct Client {
 impl Client {
     /// Build a client for the daemon listening on `socket`. Does not connect yet.
     pub fn new(socket: impl AsRef<Path>) -> Self {
-        Client { socket: socket.as_ref().to_path_buf() }
+        Client {
+            socket: socket.as_ref().to_path_buf(),
+        }
     }
 
     /// Resolve the default socket: `$DDOCKERD_SOCK`, else `~/.dd/run/docker.sock`.
@@ -89,35 +94,57 @@ impl Client {
 
     /// `DELETE /images/{name}`.
     pub async fn remove_image(&self, name: &str) -> Result<()> {
-        self.docker()?.remove_image(name, None::<RemoveImageOptions>, None).await.map(|_| ())
+        self.docker()?
+            .remove_image(name, None::<RemoveImageOptions>, None)
+            .await
+            .map(|_| ())
     }
 
     /// `GET /volumes`.
     pub async fn list_volumes(&self) -> Result<Vec<Volume>> {
-        let resp = self.docker()?.list_volumes(None::<ListVolumesOptions>).await?;
-        Ok(resp.volumes.unwrap_or_default().into_iter().map(Volume::from).collect())
+        let resp = self
+            .docker()?
+            .list_volumes(None::<ListVolumesOptions>)
+            .await?;
+        Ok(resp
+            .volumes
+            .unwrap_or_default()
+            .into_iter()
+            .map(Volume::from)
+            .collect())
     }
 
     /// `DELETE /volumes/{name}`.
     pub async fn remove_volume(&self, name: &str) -> Result<()> {
-        self.docker()?.remove_volume(name, None::<RemoveVolumeOptions>).await
+        self.docker()?
+            .remove_volume(name, None::<RemoveVolumeOptions>)
+            .await
     }
 
     /// `POST /volumes/create`.
     pub async fn create_volume(&self, name: &str) -> Result<()> {
-        let body = VolumeCreateRequest { name: Some(name.to_string()), ..Default::default() };
+        let body = VolumeCreateRequest {
+            name: Some(name.to_string()),
+            ..Default::default()
+        };
         self.docker()?.create_volume(body).await.map(|_| ())
     }
 
     /// `GET /networks`.
     pub async fn list_networks(&self) -> Result<Vec<Network>> {
-        let ns = self.docker()?.list_networks(None::<ListNetworksOptions>).await?;
+        let ns = self
+            .docker()?
+            .list_networks(None::<ListNetworksOptions>)
+            .await?;
         Ok(ns.into_iter().map(Network::from).collect())
     }
 
     /// `POST /networks/create` — returns the new network id.
     pub async fn create_network(&self, name: &str) -> Result<String> {
-        let body = NetworkCreateRequest { name: name.to_string(), ..Default::default() };
+        let body = NetworkCreateRequest {
+            name: name.to_string(),
+            ..Default::default()
+        };
         Ok(self.docker()?.create_network(body).await?.id)
     }
 
@@ -128,23 +155,35 @@ impl Client {
 
     /// `POST /containers/create` — returns the new container id.
     pub async fn create_container(&self, spec: &CreateContainer) -> Result<String> {
-        let body = ContainerCreateBody { image: Some(spec.image.clone()), ..Default::default() };
+        let body = ContainerCreateBody {
+            image: Some(spec.image.clone()),
+            ..Default::default()
+        };
         Ok(self.docker()?.create_container(None, body).await?.id)
     }
 
     /// `POST /containers/{id}/start`.
     pub async fn start_container(&self, id: &str) -> Result<()> {
-        self.docker()?.start_container(id, None::<StartContainerOptions>).await
+        self.docker()?
+            .start_container(id, None::<StartContainerOptions>)
+            .await
     }
 
     /// `POST /containers/{id}/stop`.
     pub async fn stop_container(&self, id: &str) -> Result<()> {
-        self.docker()?.stop_container(id, None::<bollard::query_parameters::StopContainerOptions>).await
+        self.docker()?
+            .stop_container(id, None::<bollard::query_parameters::StopContainerOptions>)
+            .await
     }
 
     /// `POST /containers/{id}/restart`.
     pub async fn restart_container(&self, id: &str) -> Result<()> {
-        self.docker()?.restart_container(id, None::<bollard::query_parameters::RestartContainerOptions>).await
+        self.docker()?
+            .restart_container(
+                id,
+                None::<bollard::query_parameters::RestartContainerOptions>,
+            )
+            .await
     }
 
     /// `POST /containers/{id}/pause`.
@@ -189,12 +228,31 @@ impl Client {
 
     /// `GET /system/df` summarized into a [`DiskUsage`].
     pub async fn disk_usage(&self) -> Result<DiskUsage> {
-        let r = self.docker()?.df(None::<bollard::query_parameters::DataUsageOptions>).await?;
+        let r = self
+            .docker()?
+            .df(None::<bollard::query_parameters::DataUsageOptions>)
+            .await?;
         Ok(DiskUsage {
-            layers_size: r.image_usage.as_ref().and_then(|u| u.total_size).unwrap_or_default(),
-            images: r.image_usage.as_ref().and_then(|u| u.total_count).unwrap_or_default(),
-            containers: r.container_usage.as_ref().and_then(|u| u.total_count).unwrap_or_default(),
-            volumes: r.volume_usage.as_ref().and_then(|u| u.total_count).unwrap_or_default(),
+            layers_size: r
+                .image_usage
+                .as_ref()
+                .and_then(|u| u.total_size)
+                .unwrap_or_default(),
+            images: r
+                .image_usage
+                .as_ref()
+                .and_then(|u| u.total_count)
+                .unwrap_or_default(),
+            containers: r
+                .container_usage
+                .as_ref()
+                .and_then(|u| u.total_count)
+                .unwrap_or_default(),
+            volumes: r
+                .volume_usage
+                .as_ref()
+                .and_then(|u| u.total_count)
+                .unwrap_or_default(),
         })
     }
 

@@ -1,12 +1,16 @@
 // dd/runtime/os/linux -- the ELF loader (map PT_LOAD high; static-PIE + dynamic via ld.so; build stack).
 
 // ---------------- minimal ELF loader (load segments HIGH; PC-relative stays valid) ----------------
-static uint16_t rd16(const uint8_t *p) { return p[0] | (p[1] << 8); }
+static uint16_t rd16(const uint8_t *p) {
+    return p[0] | (p[1] << 8);
+}
+
 static uint32_t rd32(const uint8_t *p) {
     uint32_t v;
     memcpy(&v, p, 4);
     return v;
 }
+
 static uint64_t rd64(const uint8_t *p) {
     uint64_t v;
     memcpy(&v, p, 8);
@@ -56,6 +60,7 @@ static int64_t nonpie_sext(uint64_t v, int bits) {
     uint64_t m = 1ull << (bits - 1);
     return (int64_t)((v ^ m) - m);
 }
+
 // Atomic RMW helpers (truly atomic, width-typed) used by the LSE/CAS fixup paths below.
 static int nonpie_lse_rmw(void *p, int size, int opc, uint64_t v, uint64_t *old) {
     // opc: 0=ADD 1=CLR(&~) 2=EOR 3=SET(|). Returns 1 if handled, 0 for an unsupported subform.
@@ -64,11 +69,11 @@ static int nonpie_lse_rmw(void *p, int size, int opc, uint64_t v, uint64_t *old)
     {                                                                                                                  \
         TY *a = (TY *)p, ov = (TY)v, o;                                                                                \
         switch (opc) {                                                                                                 \
-        case 0: o = __atomic_fetch_add(a, ov, __ATOMIC_SEQ_CST); break;                                               \
-        case 1: o = __atomic_fetch_and(a, (TY)~ov, __ATOMIC_SEQ_CST); break;                                          \
-        case 2: o = __atomic_fetch_xor(a, ov, __ATOMIC_SEQ_CST); break;                                               \
-        case 3: o = __atomic_fetch_or(a, ov, __ATOMIC_SEQ_CST); break;                                                \
-        default: return 0;                                                                                            \
+        case 0: o = __atomic_fetch_add(a, ov, __ATOMIC_SEQ_CST); break;                                                \
+        case 1: o = __atomic_fetch_and(a, (TY)~ov, __ATOMIC_SEQ_CST); break;                                           \
+        case 2: o = __atomic_fetch_xor(a, ov, __ATOMIC_SEQ_CST); break;                                                \
+        case 3: o = __atomic_fetch_or(a, ov, __ATOMIC_SEQ_CST); break;                                                 \
+        default: return 0;                                                                                             \
         }                                                                                                              \
         *old = (uint64_t)o;                                                                                            \
         return 1;                                                                                                      \
@@ -80,6 +85,7 @@ static int nonpie_lse_rmw(void *p, int size, int opc, uint64_t v, uint64_t *old)
 #undef NP_RMW
     }
 }
+
 static uint64_t nonpie_lse_swp(void *p, int size, uint64_t v) {
     switch (size) {
     case 0: return __atomic_exchange_n((uint8_t *)p, (uint8_t)v, __ATOMIC_SEQ_CST);
@@ -88,6 +94,7 @@ static uint64_t nonpie_lse_swp(void *p, int size, uint64_t v) {
     default: return __atomic_exchange_n((uint64_t *)p, v, __ATOMIC_SEQ_CST);
     }
 }
+
 static uint64_t nonpie_cas(void *p, int size, uint64_t expected, uint64_t newv) {
     // Compare-and-swap; returns the pre-CAS memory value. __atomic_compare_exchange_n leaves the loaded
     // value in `e` on failure, and `e` unchanged (== old, since it matched) on success -> `e` is the old
@@ -115,6 +122,7 @@ static uint64_t nonpie_cas(void *p, int size, uint64_t expected, uint64_t newv) 
     }
     }
 }
+
 // Software LL/SC monitor for the exclusive-MONITOR pair (LDXR/LDAXR .. STXR/STLXR) served at +bias. The
 // guest's verbatim ldxr/stxr execute the real exclusive monitor for HIGH (stack/heap/lib) addresses, but a
 // LOW non-PIE image address faults here -- and the two halves arrive as SEPARATE fault handler invocations,
@@ -128,14 +136,18 @@ static __thread struct {
     uint64_t val;  // value observed by the LL (size-masked)
     int size;      // access width log2 (0=B 1=H 2=W 3=X)
 } g_llsc;
+
 static int nonpie_sc(uint64_t real, int size, uint64_t newv, uint64_t *llval) {
     // returns 1 if the store-exclusive succeeds (status 0), 0 if it fails (status 1).
     if (g_llsc.addr != real || g_llsc.size != size) return 0;
     g_llsc.addr = 0; // a store-exclusive always closes the reservation, success or fail
     return nonpie_cas((void *)real, size, *llval, newv) == *llval;
 }
+
 // zero-extend a `size`-byte value to register width (matches W-register upper-32 clearing for size<8).
-static uint64_t nonpie_zext(uint64_t v, int size) { return size >= 3 ? v : (v & ((1ull << (8 << size)) - 1)); }
+static uint64_t nonpie_zext(uint64_t v, int size) {
+    return size >= 3 ? v : (v & ((1ull << (8 << size)) - 1));
+}
 
 static int nonpie_fixup(siginfo_t *si, void *ucv) {
     if (!g_nonpie_lo || !ucv || !si) return 0;
@@ -163,7 +175,7 @@ static int nonpie_fixup(siginfo_t *si, void *ucv) {
 
     // ---- Load/store PAIR (LDP/STP, GPR + SIMD; no-alloc / offset / pre / post). (insn&0x3a000000)==0x28000000.
     if ((insn & 0x3a000000u) == 0x28000000u) {
-        int v = (insn >> 26) & 1;   // SIMD&FP pair
+        int v = (insn >> 26) & 1; // SIMD&FP pair
         int load = (insn >> 22) & 1;
         int op2 = (insn >> 23) & 3; // 00=no-alloc 01=post 10=offset 11=pre
         int opc = insn >> 30;       // GPR: 00=32b 01=LDPSW 10=64b ; SIMD: 00=S 01=D 10=Q
@@ -300,14 +312,35 @@ static int nonpie_fixup(siginfo_t *si, void *ucv) {
         int post = (insn >> 23) & 1, q = (insn >> 30) & 1, load = (insn >> 22) & 1, opc = (insn >> 12) & 0xF;
         int regs, interleave;
         switch (opc) {
-        case 0x7: regs = 1; interleave = 0; break; // LD1/ST1 x1
-        case 0xA: regs = 2; interleave = 0; break; // LD1/ST1 x2
-        case 0x6: regs = 3; interleave = 0; break; // LD1/ST1 x3
-        case 0x2: regs = 4; interleave = 0; break; // LD1/ST1 x4
-        case 0x8: regs = 2; interleave = 1; break; // LD2/ST2
-        case 0x4: regs = 3; interleave = 1; break; // LD3/ST3
-        case 0x0: regs = 4; interleave = 1; break; // LD4/ST4
-        default: return 0;                         // unallocated -> clean abort
+        case 0x7:
+            regs = 1;
+            interleave = 0;
+            break; // LD1/ST1 x1
+        case 0xA:
+            regs = 2;
+            interleave = 0;
+            break; // LD1/ST1 x2
+        case 0x6:
+            regs = 3;
+            interleave = 0;
+            break; // LD1/ST1 x3
+        case 0x2:
+            regs = 4;
+            interleave = 0;
+            break; // LD1/ST1 x4
+        case 0x8:
+            regs = 2;
+            interleave = 1;
+            break; // LD2/ST2
+        case 0x4:
+            regs = 3;
+            interleave = 1;
+            break; // LD3/ST3
+        case 0x0:
+            regs = 4;
+            interleave = 1;
+            break;         // LD4/ST4
+        default: return 0; // unallocated -> clean abort
         }
         int regbytes = q ? 16 : 8;
         if (!interleave) { // contiguous: whole registers back-to-back
@@ -329,16 +362,16 @@ static int nonpie_fixup(siginfo_t *si, void *ucv) {
                 __uint128_t acc[4] = {0, 0, 0, 0};
                 for (int e = 0; e < nelem; e++)
                     for (int r = 0; r < regs; r++)
-                        memcpy((uint8_t *)&acc[r] + (size_t)e * esize,
-                               (void *)(real + (size_t)(e * regs + r) * esize), (size_t)esize);
+                        memcpy((uint8_t *)&acc[r] + (size_t)e * esize, (void *)(real + (size_t)(e * regs + r) * esize),
+                               (size_t)esize);
                 for (int r = 0; r < regs; r++)
                     V[(rt + r) & 31] = acc[r];
             } else {
                 for (int e = 0; e < nelem; e++)
                     for (int r = 0; r < regs; r++) {
                         __uint128_t s = V[(rt + r) & 31];
-                        memcpy((void *)(real + (size_t)(e * regs + r) * esize),
-                               (uint8_t *)&s + (size_t)e * esize, (size_t)esize);
+                        memcpy((void *)(real + (size_t)(e * regs + r) * esize), (uint8_t *)&s + (size_t)e * esize,
+                               (size_t)esize);
                     }
             }
         }
@@ -375,10 +408,22 @@ static int nonpie_fixup(siginfo_t *si, void *ucv) {
             }
         } else { // single lane: opcode[2:1] selects width, the index is packed into Q:S:size
             switch (opcode >> 1) {
-            case 0: esize = 1; index = (q << 3) | (s << 2) | size; break;       // B
-            case 1: esize = 2; index = (q << 2) | (s << 1) | (size >> 1); break; // H
-            default:                                                            // S (size==x0) or D (size==01)
-                if ((size & 1) == 0) { esize = 4; index = (q << 1) | s; } else { esize = 8; index = q; }
+            case 0:
+                esize = 1;
+                index = (q << 3) | (s << 2) | size;
+                break; // B
+            case 1:
+                esize = 2;
+                index = (q << 2) | (s << 1) | (size >> 1);
+                break; // H
+            default:   // S (size==x0) or D (size==01)
+                if ((size & 1) == 0) {
+                    esize = 4;
+                    index = (q << 1) | s;
+                } else {
+                    esize = 8;
+                    index = q;
+                }
                 break;
             }
             for (int i = 0; i < selem; i++) {
@@ -441,6 +486,7 @@ static int nonpie_fixup(siginfo_t *si, void *ucv) {
     uc->uc_mcontext->__ss.__pc += 4;
     return 1;
 }
+
 // SIGSEGV/SIGBUS guard installed on the normal aarch64 run path. Serves a non-PIE absolute data access at
 // +bias (nonpie_fixup); anything else re-raises with the default action (a real crash). Inert for PIE.
 static void nonpie_guard(int sig, siginfo_t *si, void *uc) {
@@ -453,13 +499,14 @@ static void nonpie_guard(int sig, siginfo_t *si, void *uc) {
     // registered guest handler is the guest's to handle: synthesize+deliver the guest signal. nonpie_fixup
     // (absolute-data) already won above.
     if (deliver_guest_fault(sig, si, uc)) return;
-    // #392: no guest handler -> a fatal, unmaskable synchronous fault. Terminate the guest process through
+    // no guest handler -> a fatal, unmaskable synchronous fault. Terminate the guest process through
     // dd's fatal-signal machinery so its parent's wait4 sees WIFSIGNALED/WTERMSIG=sig (a raw host raise()
     // degrades to exit(255) across dd's fork). Declines (returns 0) for a genuine ENGINE fault -> re-raise.
     if (deliver_guest_fatal_fault(sig, si, uc)) return;
     signal(sig, SIG_DFL);
     raise(sig);
 }
+
 // Synchronous CPU faults other than SIGSEGV/SIGBUS (which dd_run wires to nonpie_guard above): a guest
 // may install a handler for SIGILL/SIGFPE/SIGTRAP and DELIBERATELY trigger it -- the canonical case is a
 // CPU-feature probe (ring/OpenSSL/musl) that executes an optional instruction guarded by a SIGILL handler
@@ -475,23 +522,23 @@ __attribute__((constructor)) static void install_sync_fault_guards(void) {
     struct sigaction sa;
     memset(&sa, 0, sizeof sa);
     sa.sa_sigaction = nonpie_guard;
-    sa.sa_flags = SA_SIGINFO | SA_ONSTACK; // #392: share the guards' per-thread altstack (host SP==guest SP)
+    sa.sa_flags = SA_SIGINFO | SA_ONSTACK; // share the guards' per-thread altstack (host SP==guest SP)
     sigaction(SIGILL, &sa, NULL);
     sigaction(SIGFPE, &sa, NULL);
     sigaction(SIGTRAP, &sa, NULL);
 }
 
-// ---------------- LOAD-path mapping hardening (BUG#207: never leave an unmapped hole in the image) -----
+// ---------------- LOAD-path mapping hardening (never leave an unmapped hole in the image) -----
 // A large non-PIE ET_EXEC (e.g. gcc's ~29MB cc1, first PT_LOAD at a fixed low vaddr) maps its whole image
 // span in one anon reservation and then mprotects it per segment. An mmap here can fail nondeterministically
 // (host-VM address-space fragmentation leaving no contiguous span, engine mmap-pool degradation, or memory
 // pressure -> XNU returns ENOMEM). The loader must NEVER continue past such a failure: an unmapped hole in
-// the image surfaces much later as a hard-to-diagnose SIGSEGV on the guest's own text/data (BUG#207 -- the
+// the image surfaces much later as a hard-to-diagnose SIGSEGV on the guest's own text/data(the
 // fault landed INSIDE the first LOAD segment). Retry a bounded number of times (a transient shortage can
 // clear within a few ms), then fail the exec LOUDLY with a clean diagnostic rather than leaving a hole.
 #define ELF_MAP_RETRIES 6
 
-// BUG#207 mmap fault-injection gate (inert unless the env var is set; nothing sets it in production, and
+// mmap fault-injection gate (inert unless the env var is set; nothing sets it in production, and
 // the mac bridge drops ambient env -- same idiom as the sibling x86 loader's NONPIE_NOFIXUP/NORELRO gates).
 // Forces the Nth LOAD-path mmap/mprotect ATTEMPT to report failure, so the retry/abort hardening below can
 // be regression-tested without inducing real host-VM fragmentation or memory pressure. DDFAILMMAP /
@@ -553,14 +600,15 @@ static void elf_mprotect_besteffort(void *addr, size_t len, int prot, const char
     }
 }
 
-// #423 INTERIM: does this image's bytes contain `needle`? Small bounded byte search over [f, f+n).
+// INTERIM: does this image's bytes contain `needle`? Small bounded byte search over [f, f+n).
 static int elf_mem_has(const uint8_t *f, size_t n, const char *needle, size_t nl) {
     if (nl == 0 || nl > n) return 0;
     for (size_t i = 0; i + nl <= n; i++)
         if (f[i] == (uint8_t)needle[0] && !memcmp(f + i, needle, nl)) return 1;
     return 0;
 }
-// #423 INTERIM: is `f` (an aarch64 ELF, size `sz`) a cgo-enabled (iscgo) Go image? Every Go binary carries a
+
+// INTERIM: is `f` (an aarch64 ELF, size `sz`) a cgo-enabled (iscgo) Go image? Every Go binary carries a
 // linker-embedded build-info blob (magic "\xff Go buildinf:"); its recorded build settings include
 // CGO_ENABLED=<0|1>, and CGO_ENABLED=1 is exactly the runtime.iscgo==1 class whose SIGURG async-preempt
 // delivery dd must suppress (see os/linux/signal.c, g_go_iscgo). We GATE on the Go magic first so a non-Go
@@ -568,7 +616,8 @@ static int elf_mem_has(const uint8_t *f, size_t n, const char *needle, size_t nl
 // the flags byte has bit 0x2 set, starting at blob offset 32) and scan ONLY the modinfo for the setting. A
 // blob without the inline flag (older linkers) falls back to a bounded scan just past the magic.
 static uint64_t elf_uvarint(const uint8_t **pp, const uint8_t *end) {
-    uint64_t x = 0; int s = 0;
+    uint64_t x = 0;
+    int s = 0;
     while (*pp < end) {
         uint8_t b = *(*pp)++;
         if (b < 0x80) return x | ((uint64_t)b << s);
@@ -578,11 +627,15 @@ static uint64_t elf_uvarint(const uint8_t **pp, const uint8_t *end) {
     }
     return x;
 }
+
 static int elf_is_go_iscgo(const uint8_t *f, size_t sz) {
-    static const char magic[14] = { (char)0xff, ' ', 'G', 'o', ' ', 'b', 'u', 'i', 'l', 'd', 'i', 'n', 'f', ':' };
+    static const char magic[14] = {(char)0xff, ' ', 'G', 'o', ' ', 'b', 'u', 'i', 'l', 'd', 'i', 'n', 'f', ':'};
     size_t bi = (size_t)-1;
     for (size_t i = 0; i + sizeof(magic) <= sz; i++)
-        if (f[i] == (uint8_t)magic[0] && !memcmp(f + i, magic, sizeof(magic))) { bi = i; break; }
+        if (f[i] == (uint8_t)magic[0] && !memcmp(f + i, magic, sizeof(magic))) {
+            bi = i;
+            break;
+        }
     if (bi == (size_t)-1) return 0; // not a Go binary -> never suppress SIGURG for it
     static const char needle[] = "CGO_ENABLED=1";
     const size_t NL = sizeof(needle) - 1;
@@ -598,7 +651,8 @@ static int elf_is_go_iscgo(const uint8_t *f, size_t sz) {
         }
     }
     // Fallback (non-inline blob): scan a bounded window past the magic; the build settings sit within it.
-    size_t win = sz - bi; if (win > (1u << 20)) win = 1u << 20;
+    size_t win = sz - bi;
+    if (win > (1u << 20)) win = 1u << 20;
     return elf_mem_has(f + bi, win, needle, NL);
 }
 
@@ -645,10 +699,10 @@ static void load_elf(const char *path, struct loaded *out) {
     // Map the whole image span [basepage, basepage+span) in one anon reservation, then copy each PT_LOAD
     // and narrow protections per segment below. elf_map_checked retries under transient host memory
     // pressure and aborts loudly on persistent failure, so the full range is guaranteed backed here (a
-    // partial/failed map never slips through to become a SIGSEGV on the guest's own text/data -- BUG#207).
+    // partial/failed map never slips through to become a SIGSEGV on the guest's own text/data).
     uint8_t *base;
     if (g_force_base) {
-        // #339: map this image at a FIXED VA (one-shot) so the translated arena -- block-map keys AND any
+        // map this image at a FIXED VA (one-shot) so the translated arena -- block-map keys AND any
         // guest address baked into host code (pcrel_base literals, non-PIE ranges) -- is byte-identical
         // across runs, hence reusable from the persistent cache. On failure fall back to a kernel-chosen
         // base AND latch g_force_base_failed: this run's arena mixes bases, so the pcache must neither
@@ -688,7 +742,7 @@ static void load_elf(const char *path, struct loaded *out) {
         int prot = PROT_READ | ((fl & 2) ? PROT_WRITE : 0) | ((fl & 1) ? PROT_EXEC : 0);
         if (e > s) elf_mprotect_besteffort((void *)s, e - s, prot, "image segment");
     }
-    // #281: for a non-PIE ET_EXEC the engine maps the image HIGH (+bias) but keeps every GUEST-VISIBLE
+    // for a non-PIE ET_EXEC the engine maps the image HIGH (+bias) but keeps every GUEST-VISIBLE
     // address at its LOW link value (baked absolute pointers, un-biased `bl` return vaddrs, the dispatcher
     // re-biases only at execution). The auxv AT_ENTRY/AT_PHDR must therefore ALSO be LOW: glibc derives the
     // main map's l_addr from `AT_PHDR - PT_PHDR.p_vaddr`, so a HIGH AT_PHDR yields l_addr=bias and a HIGH
@@ -711,7 +765,7 @@ static void load_elf(const char *path, struct loaded *out) {
     out->phdr = nonpie ? ((uint64_t)base + phoff - bias) : ((uint64_t)base + phoff);
     out->phent = phentsize;
     out->phnum = phnum;
-    // #423 INTERIM: latch whether this is a cgo (iscgo) Go image so signal delivery can auto-suppress Go's
+    // INTERIM: latch whether this is a cgo (iscgo) Go image so signal delivery can auto-suppress Go's
     // async-preempt SIGURG for it (os/linux/signal.c, g_go_iscgo). OR (never clear): load_elf runs for the
     // main image THEN the ld.so interpreter -- the interp is never Go, so '|=' keeps a main-image match from
     // being clobbered by the interp load. execve resets g_go_iscgo to 0 before re-loading (proc.c) so a later
@@ -729,9 +783,10 @@ static char *g_guest_env[] = {
     // degraded. Keep PATH/HOME/LANG as harmless fallbacks the image usually overrides.
     "PATH=/usr/bin:/bin", "HOME=/root", "LANG=C", "GLIBC_TUNABLES=glibc.cpu.aarch64_gcs=0", NULL,
 };
+
 static uint64_t build_stack(int argc, char **argv, struct loaded *lm, uint64_t at_base) {
     size_t SZ = 8u << 20;
-    // #392 stack-overflow safety: a PROT_NONE guard gap immediately BELOW the usable stack (Linux's
+    // stack-overflow safety: a PROT_NONE guard gap immediately BELOW the usable stack (Linux's
     // stack_guard_gap, 1MB). Without it the main stack sits adjacent-above the 64MB RX code cache, so a deep
     // recursion / huge frame runs off the stack bottom straight into the executable cache -> silent
     // corruption (the clickhouse crash) instead of a clean fault. A store past the bottom now hits PROT_NONE

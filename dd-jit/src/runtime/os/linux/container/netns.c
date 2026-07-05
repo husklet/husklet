@@ -12,10 +12,9 @@ static const uint32_t TIO_C[][2] = {{0x40, CSTOPB},  {0x80, CREAD},  {0x100, PAR
                                     {0x200, PARODD}, {0x400, HUPCL}, {0x800, CLOCAL}};
 static const uint32_t TIO_L[][2] = {{0x1, ISIG},    {0x2, ICANON},  {0x8, ECHO},     {0x10, ECHOE},   {0x20, ECHOK},
                                     {0x40, ECHONL}, {0x80, NOFLSH}, {0x100, TOSTOP}, {0x8000, IEXTEN}};
-static const int CC_L2M[17] = {
-    VINTR, VQUIT, VERASE, VKILL,    VEOF,     VTIME,   VMIN,   -1,   VSTART,
-    // Linux c_cc index -> macOS index
-    VSTOP, VSUSP, VEOL,   VREPRINT, VDISCARD, VWERASE, VLNEXT, VEOL2};
+static const int CC_L2M[17] = {VINTR, VQUIT, VERASE, VKILL, VEOF, VTIME, VMIN, -1, VSTART,
+                               // Linux c_cc index -> macOS index
+                               VSTOP, VSUSP, VEOL, VREPRINT, VDISCARD, VWERASE, VLNEXT, VEOL2};
 
 // bind()/connect() an AF_UNIX socket at host path `host`. macOS sun_path is only 104 bytes, but a container
 // overlay upper socket path ($HOME/.dd/containers/<64-hex>/upper/.../.s.PGSQL.5432) can exceed that -- a
@@ -51,8 +50,7 @@ static int unix_sock_at(int fd, const char *host, int connecting) {
     }
     int rc = -1, e = 0;
     if (fchdir(pfd) == 0) {
-        rc = connecting ? connect(fd, (struct sockaddr *)&un, sizeof un)
-                        : bind(fd, (struct sockaddr *)&un, sizeof un);
+        rc = connecting ? connect(fd, (struct sockaddr *)&un, sizeof un) : bind(fd, (struct sockaddr *)&un, sizeof un);
         e = errno;
         fchdir(cwd);
     } else {
@@ -63,11 +61,12 @@ static int unix_sock_at(int fd, const char *host, int connecting) {
     errno = e;
     return rc;
 }
+
 // AF_UNIX DATAGRAM send to a host pathname `host`, path-length safe (fchdir-shortens past macOS's 104-byte
 // sun_path, exactly like unix_sock_at above). Used by sendto/sendmsg when a container's datagram dest is an
 // AF_UNIX PATHNAME (e.g. syslog to /dev/log): the socket inode lives at the overlay-resolved host path, which
 // a plain sockaddr_un would truncate. `mh` carries the payload iov/control; we only own msg_name. Returns
-// bytes sent (>=0) or -1 with errno. (#229)
+// bytes sent (>=0) or -1 with errno.
 static int64_t unix_dgram_sendmsg_at(int fd, const char *host, struct msghdr *mh, int flags) {
     struct sockaddr_un un;
     memset(&un, 0, sizeof un);
@@ -110,6 +109,7 @@ static int64_t unix_dgram_sendmsg_at(int fd, const char *host, struct msghdr *mh
     errno = e;
     return rc;
 }
+
 static uint32_t map_bits(uint32_t v, const uint32_t t[][2], int n, int fwd) {
     uint32_t o = 0;
     for (int i = 0; i < n; i++) {
@@ -121,6 +121,7 @@ static uint32_t map_bits(uint32_t v, const uint32_t t[][2], int n, int fwd) {
     }
     return o;
 }
+
 static void termios_l2m(const uint8_t *L, struct termios *M) {
     memset(M, 0, sizeof *M);
     uint32_t li = *(uint32_t *)(L + 0), lo = *(uint32_t *)(L + 4), lc = *(uint32_t *)(L + 8),
@@ -135,6 +136,7 @@ static void termios_l2m(const uint8_t *L, struct termios *M) {
     for (int i = 0; i < 17; i++)
         if (CC_L2M[i] >= 0) M->c_cc[CC_L2M[i]] = lcc[i];
 }
+
 static void termios_m2l(const struct termios *M, uint8_t *L) {
     memset(L, 0, 36);
     uint32_t li = map_bits((uint32_t)M->c_iflag, TIO_I, 13, 0), lo = map_bits((uint32_t)M->c_oflag, TIO_O, 5, 0);
@@ -149,6 +151,7 @@ static void termios_m2l(const struct termios *M, uint8_t *L) {
     for (int i = 0; i < 17; i++)
         if (CC_L2M[i] >= 0) lcc[i] = M->c_cc[CC_L2M[i]];
 }
+
 // Linux MSG_* -> macOS MSG_* (they differ for TRUNC/DONTWAIT/EOR/WAITALL).
 static int msgflags_l2m(int lf) {
     // OOB/PEEK/DONTROUTE identical
@@ -163,6 +166,7 @@ static int msgflags_l2m(int lf) {
     if (lf & 0x100) mf |= 0x40;
     return mf;
 }
+
 // macOS MSG_* -> Linux MSG_* (inverse of msgflags_l2m; used for recvmsg msg_flags writeback). The
 // returned-flags set differs: notably MSG_CTRUNC is macOS 0x20 / Linux 0x8, MSG_TRUNC macOS 0x10 /
 // Linux 0x20, MSG_EOR macOS 0x8 / Linux 0x80. OOB/DONTROUTE map straight through.
@@ -177,15 +181,23 @@ static int msgflags_m2l(int mf) {
     if (mf & 0x8) lf |= 0x80;
     return lf;
 }
+
 // ---- SCM ancillary data: Linux<->macOS cmsg framing translation (SOL_SOCKET/SCM_RIGHTS fd passing).
 // dd uses host fds directly as guest fds, so the fd integers in an SCM_RIGHTS payload need no remap --
 // only the cmsg framing differs: Linux hdr=16B (8B len @0, int level @8, int type @12), 8-byte align,
 // SOL_SOCKET=1; macOS hdr=12B (4B len @0, int level @4, int type @8), 4-byte align, SOL_SOCKET=0xffff.
 #define LX_CMSG_ALIGN(n) (((n) + 7u) & ~(size_t)7u) // Linux: 8-byte align
-#define LX_CMSGHDR 16u                               // Linux cmsg header: 8(len)+4(level)+4(type)
+#define LX_CMSGHDR 16u                              // Linux cmsg header: 8(len)+4(level)+4(type)
 #define LX_SOL_SOCKET 1
-static int cmsg_level_l2m(int lv) { return lv == LX_SOL_SOCKET ? SOL_SOCKET : lv; }
-static int cmsg_level_m2l(int lv) { return lv == SOL_SOCKET ? LX_SOL_SOCKET : lv; }
+
+static int cmsg_level_l2m(int lv) {
+    return lv == LX_SOL_SOCKET ? SOL_SOCKET : lv;
+}
+
+static int cmsg_level_m2l(int lv) {
+    return lv == SOL_SOCKET ? LX_SOL_SOCKET : lv;
+}
+
 // guest(Linux) control buf -> host(macOS) control buf. Returns host bytes written (<=cap), or 0/none.
 static ssize_t cmsg_l2m(const uint8_t *g, size_t glen, uint8_t *h, size_t cap) {
     size_t go = 0, ho = 0;
@@ -209,15 +221,15 @@ static ssize_t cmsg_l2m(const uint8_t *g, size_t glen, uint8_t *h, size_t cap) {
     }
     return (ssize_t)ho;
 }
+
 // host(macOS) control buf -> guest(Linux) control buf. Returns Linux bytes written (<=cap; stops at
 // the guest-buffer boundary, leaving the kernel's MSG_CTRUNC in mh->msg_flags to be translated).
 static ssize_t cmsg_m2l(const struct msghdr *mh, uint8_t *g, size_t cap) {
     size_t go = 0;
-    for (struct cmsghdr *c = CMSG_FIRSTHDR((struct msghdr *)mh); c;
-         c = CMSG_NXTHDR((struct msghdr *)mh, c)) {
+    for (struct cmsghdr *c = CMSG_FIRSTHDR((struct msghdr *)mh); c; c = CMSG_NXTHDR((struct msghdr *)mh, c)) {
         size_t dlen = (size_t)c->cmsg_len - CMSG_LEN(0); // payload bytes (macOS hdr=12)
         size_t need = LX_CMSG_ALIGN(LX_CMSGHDR + dlen);
-        if (go + LX_CMSGHDR + dlen > cap) break; // guest buf full -> truncate (kernel set MSG_CTRUNC)
+        if (go + LX_CMSGHDR + dlen > cap) break;               // guest buf full -> truncate (kernel set MSG_CTRUNC)
         *(uint64_t *)(g + go) = (uint64_t)(LX_CMSGHDR + dlen); // Linux cmsg_len
         *(int *)(g + go + 8) = cmsg_level_m2l(c->cmsg_level);
         *(int *)(g + go + 12) = c->cmsg_type;
@@ -226,6 +238,7 @@ static ssize_t cmsg_m2l(const struct msghdr *mh, uint8_t *g, size_t cap) {
     }
     return (ssize_t)go;
 }
+
 // SOL_SOCKET option name: Linux -> macOS (they differ). -1 = ignore (unsupported here).
 static int so_opt_l2m(int o) {
     switch (o) {
@@ -259,6 +272,7 @@ static int so_opt_l2m(int o) {
     default: return -1;
     }
 }
+
 // IPPROTO_TCP optname Linux -> macOS. CRITICAL: these numbers diverge, and a raw pass-through maps
 // Linux TCP_KEEPIDLE(4)/TCP_CORK(3) onto macOS TCP_NOPUSH(4)/TCP_NOOPT(3) — TCP_NOPUSH *corks* the
 // socket so a server's reply is never delivered until close (breaks redis & every keepalive-setting
@@ -274,6 +288,7 @@ static int tcp_opt_l2m(int o) {
     default: return -1;   // unknown -> ignore (never pass a Linux number straight to macOS IPPROTO_TCP)
     }
 }
+
 // ---- NET namespace: per-container private loopback. A container's explicit 127.0.0.0/8 TCP sockets
 // are routed to AF_UNIX sockets under a per-namespace host dir the guest can't name (it's path-jailed),
 // so each container's localhost is isolated from the host + other containers. 0.0.0.0/external stay
@@ -304,42 +319,62 @@ static uint16_t g_sock_fam[1024];
 // close (a SEQPACKET socketpair or an O_DIRECT "packet" pipe). macOS DGRAM sockets never deliver EOF on
 // peer close, so close() injects a zero-length EOF datagram and recv/read coerce ECONNRESET -> 0 for these.
 static uint8_t g_sock_seqpacket[1024];
-static int seq_is(int fd) { return fd >= 0 && fd < 1024 && g_sock_seqpacket[fd]; }
+
+static int seq_is(int fd) {
+    return fd >= 0 && fd < 1024 && g_sock_seqpacket[fd];
+}
+
 // fd -> guest-requested TCP bind port (host order), 0 = none. Set at bind(200) for AF_INET/INET6 stream
 // sockets; consumed by the /proc/net/tcp[6] synth to surface a LISTEN row (see netns_tcp_* below).
 static uint16_t g_tcp_lport[1024];
-static uint32_t g_tcp_laddr[1024];   // fd -> raw __be32 v4 bind addr (0.0.0.0 -> 0), printed %08X kernel-style
-static uint8_t g_tcp_l6[1024];       // fd -> 1 if the bind was AF_INET6 (row goes in /proc/net/tcp6)
+static uint32_t g_tcp_laddr[1024];     // fd -> raw __be32 v4 bind addr (0.0.0.0 -> 0), printed %08X kernel-style
+static uint8_t g_tcp_l6[1024];         // fd -> 1 if the bind was AF_INET6 (row goes in /proc/net/tcp6)
 static uint8_t g_tcp_laddr6[1024][16]; // fd -> 16-byte v6 bind addr
-static uint8_t g_tcp_listen[1024];   // fd -> 1 once listen(2) succeeded (row is emitted only then)
+static uint8_t g_tcp_listen[1024];     // fd -> 1 once listen(2) succeeded (row is emitted only then)
+
 // Wake any peer blocked on this DGRAM endpoint with a zero-length EOF datagram (queued after pending data,
 // so order is preserved). Best-effort: a no-op for non-SEQPACKET fds and harmless if the peer is gone.
 static void seq_send_eof(int fd) {
     if (seq_is(fd)) send(fd, "", 0, 0);
 }
-static int lo_on(void) { return g_netns[0] != 0; }
+
+static int lo_on(void) {
+    return g_netns[0] != 0;
+}
+
 static int lo_is(const uint8_t *sa, socklen_t l) {
     return sa && l >= 8 && *(uint16_t *)sa == AF_INET && sa[4] == 127;
-// 127.x.x.x
+    // 127.x.x.x
 }
+
 // ---- IPv6 loopback: same private-namespace redirect as 127/8, for AF_INET6 (::/::1). The guest passes a
 // Linux sockaddr_in6 { u16 family(==10); u16 port@2; u32 flow@4; u8 addr[16]@8; u32 scope@24 }; the family
 // VALUE is the Linux one (10), not macOS AF_INET6 (30). The 16-byte addr @8 is in6addr_loopback (::1, 15
 // zero bytes + 0x01) or in6addr_any (::, all zero). Routing both to the per-container loopback dir keeps a
 // dual-stack server's v6 bind isolated instead of escaping to the real host stack (and v6 has no bridge).
 #define LX_AF_INET6_FAM 10
+
 static int in6_all_zero(const uint8_t *a, int n) {
     for (int i = 0; i < n; i++)
         if (a[i]) return 0;
     return 1;
 }
-static int in6_is_loopback(const uint8_t *a) { return in6_all_zero(a, 15) && a[15] == 1; }
-static int in6_is_any(const uint8_t *a) { return in6_all_zero(a, 16); }
+
+static int in6_is_loopback(const uint8_t *a) {
+    return in6_all_zero(a, 15) && a[15] == 1;
+}
+
+static int in6_is_any(const uint8_t *a) {
+    return in6_all_zero(a, 16);
+}
+
 // connect(dest): v6 loopback if AF_INET6 and dest is ::1 (mirrors lo_is: only the explicit loopback addr)
 static int lo6_is(const uint8_t *sa, socklen_t l) {
     return sa && l >= 24 && *(const uint16_t *)sa == LX_AF_INET6_FAM && in6_is_loopback(sa + 8);
 }
+
 static int br_on(void); // defined below (per-network bridge on); used by the v6 bind classifiers here
+
 // bind(addr): v6 loopback if AF_INET6 and addr is ::1, OR :: (unspecified) ONLY when the bridge is off.
 // `::1` always stays on the private per-container loopback. `::` (dual-stack "any", as busybox nc / many
 // servers bind when listening) is the v6 analogue of IPv4 0.0.0.0: with a user network attached it must
@@ -350,6 +385,7 @@ static int lo6_any_is(const uint8_t *sa, socklen_t l) {
     if (in6_is_loopback(sa + 8)) return 1;
     return in6_is_any(sa + 8) && !br_on();
 }
+
 // bind(::): the IPv6 unspecified address, routed to the per-network bridge (== IPv4 0.0.0.0's br path) so
 // a dual-stack listener that binds `::` is reachable by peer containers over the AF_UNIX switch. Only when
 // a user network is attached (br_on()); with no bridge, `::` is handled by lo6_any_is (isolated loopback).
@@ -357,7 +393,11 @@ static int br6_any_is(const uint8_t *sa, socklen_t l) {
     if (!sa || l < 24 || *(const uint16_t *)sa != LX_AF_INET6_FAM) return 0;
     return in6_is_any(sa + 8) && br_on();
 }
-static void lo_path(uint16_t port, char *out, size_t n) { snprintf(out, n, "%s/p%u", g_netns, (unsigned)port); }
+
+static void lo_path(uint16_t port, char *out, size_t n) {
+    snprintf(out, n, "%s/p%u", g_netns, (unsigned)port);
+}
+
 // Allocate an ephemeral loopback port for a bind(127.0.0.1:0). The kernel would assign a real port;
 // under the unix-socket emulation we instead pick a port whose `p<port>` path is still free so that a
 // later getsockname()/connect() round-trips to the same socket. (Without this, port 0 collapsed to a
@@ -375,6 +415,7 @@ static uint16_t lo_alloc_ephemeral(void) {
     }
     return 0;
 }
+
 // Swap the AF_INET socket at `fd` for a fresh AF_UNIX SOCK_STREAM one (keeping the fd number + flags).
 static int lo_swap(int fd) {
     int fl = fcntl(fd, F_GETFL), df = fcntl(fd, F_GETFD);
@@ -392,6 +433,7 @@ static int lo_swap(int fd) {
     if (df >= 0 && (df & FD_CLOEXEC)) fcntl(fd, F_SETFD, FD_CLOEXEC);
     return 0;
 }
+
 // report AF_INET 127.0.0.1:port back to the guest
 static void fill_inet_lo(uint8_t *sa, socklen_t *l, uint16_t port) {
     if (!sa) return;
@@ -402,6 +444,7 @@ static void fill_inet_lo(uint8_t *sa, socklen_t *l, uint16_t port) {
     memset(sa + 8, 0, 8);
     if (l) *l = 16;
 }
+
 // report AF_INET6 ::1:port back to the guest (Linux sockaddr_in6 layout; family value 10). Mirrors
 // fill_inet_lo: reports the loopback addr regardless of whether the socket bound :: or ::1 (apps key off
 // the port; cf. the v4 path reporting 127.0.0.1 for a 0.0.0.0 bind).
@@ -430,6 +473,7 @@ static uint32_t g_myip;          // this endpoint's IP, network byte order (0 = 
 static uint16_t g_br_port[1024]; // fd -> virtual port of a bridge socket (0 = not a bridge socket)
 static uint32_t g_br_ip[1024];   // fd -> virtual IP (network order) reported via getsockname/getpeername
 static int g_br_init;
+
 // Carry the per-fd socket-emulation metadata (SOCK_STREAM-ness, loopback/bridge port + ip) from `src`
 // to `dst` when an fd is duplicated/moved (dup/dup3/fcntl F_DUPFD). Without this, a guest that creates a
 // TCP socket then relocates it to another fd number (e.g. busybox's xmove_fd -> a fixed low fd) loses the
@@ -466,12 +510,16 @@ static void netns_tcp_bind_note(int fd, uint16_t port_host, int v6, uint32_t add
     g_tcp_laddr[fd] = addr4_be; // raw __be32 as it sits in memory (printed %08X, kernel-style)
     g_tcp_l6[fd] = (uint8_t)!!v6;
     g_tcp_listen[fd] = 0; // a fresh bind is not yet listening
-    if (v6 && addr6) memcpy(g_tcp_laddr6[fd], addr6, 16);
-    else memset(g_tcp_laddr6[fd], 0, 16);
+    if (v6 && addr6)
+        memcpy(g_tcp_laddr6[fd], addr6, 16);
+    else
+        memset(g_tcp_laddr6[fd], 0, 16);
 }
+
 static void netns_tcp_listen_note(int fd) {
     if (fd >= 0 && fd < 1024 && g_tcp_lport[fd]) g_tcp_listen[fd] = 1;
 }
+
 // Emit the LISTEN rows for the v4 (v6==0) or v6 (v6==1) table into `out` (<=cap). Returns bytes written.
 // Row layout mirrors the kernel's tcp4_seq/tcp6_seq: sl, local_address:port, rem 0, st 0A, queues 0,
 // uid 0, a synthetic-but-stable inode, refcount 1. Values a real ss/netstat parses positionally.
@@ -484,16 +532,19 @@ static int netns_tcp_emit(char *out, size_t cap, int v6) {
         if (v6) {
             const uint8_t *a = g_tcp_laddr6[fd];
             char h[33];
-            for (int i = 0; i < 16; i++) snprintf(h + i * 2, 3, "%02x", a[i]);
-            off += snprintf(out + off, cap - off,
-                "%4d: %s:%04X 00000000000000000000000000000000:0000 0A "
-                "00000000:00000000 00:00000000 00000000     0        0 %lu 1 0000000000000000 100 0 0 10 0\n",
-                sl++, h, g_tcp_lport[fd], ino);
+            for (int i = 0; i < 16; i++)
+                snprintf(h + i * 2, 3, "%02x", a[i]);
+            off +=
+                snprintf(out + off, cap - off,
+                         "%4d: %s:%04X 00000000000000000000000000000000:0000 0A "
+                         "00000000:00000000 00:00000000 00000000     0        0 %lu 1 0000000000000000 100 0 0 10 0\n",
+                         sl++, h, g_tcp_lport[fd], ino);
         } else {
-            off += snprintf(out + off, cap - off,
-                "%4d: %08X:%04X 00000000:0000 0A "
-                "00000000:00000000 00:00000000 00000000     0        0 %lu 1 0000000000000000 100 0 0 10 0\n",
-                sl++, g_tcp_laddr[fd], g_tcp_lport[fd], ino);
+            off +=
+                snprintf(out + off, cap - off,
+                         "%4d: %08X:%04X 00000000:0000 0A "
+                         "00000000:00000000 00:00000000 00000000     0        0 %lu 1 0000000000000000 100 0 0 10 0\n",
+                         sl++, g_tcp_laddr[fd], g_tcp_lport[fd], ino);
         }
     }
     return off;
@@ -506,6 +557,7 @@ static uint32_t br_parse_ip(const char *s) {
     if (a > 255 || b > 255 || cc > 255 || d > 255) return 0;
     return (uint32_t)(a | (b << 8) | (cc << 16) | (d << 24));
 }
+
 // Lazy, self-contained env ingestion (mirrors the net_isolate getenv pattern in service.c case 203), so
 // the bridge needs no edit to the per-target startup code: DD_NETBR=<netid>, DD_IP=<dotted-quad>.
 static void br_init(void) {
@@ -519,23 +571,30 @@ static void br_init(void) {
     const char *dip = getenv("DD_IP");
     if (dip && dip[0]) g_myip = br_parse_ip(dip);
 }
+
 static int br_on(void) {
     if (!g_br_init) br_init();
     return g_netbr[0] != 0 && g_myip != 0;
 }
+
 // dest IP is on our user network (same /16 as g_myip == first two octets a.b)
-static int br_in_subnet(uint32_t ip_be) { return (ip_be & 0x0000ffffu) == (g_myip & 0x0000ffffu); }
+static int br_in_subnet(uint32_t ip_be) {
+    return (ip_be & 0x0000ffffu) == (g_myip & 0x0000ffffu);
+}
+
 // connect(dest): bridge if AF_INET, non-127, in our subnet
 static int br_connect_is(const uint8_t *sa, socklen_t l) {
     if (!sa || l < 8 || *(uint16_t *)sa != AF_INET || sa[4] == 127) return 0;
     return br_in_subnet(*(uint32_t *)(sa + 4));
 }
+
 // bind(addr): bridge if AF_INET, non-127, and 0.0.0.0 (ANY) / our own IP / in-subnet
 static int br_bind_is(const uint8_t *sa, socklen_t l) {
     if (!sa || l < 8 || *(uint16_t *)sa != AF_INET || sa[4] == 127) return 0;
     uint32_t ip = *(uint32_t *)(sa + 4);
     return ip == 0 || ip == g_myip || br_in_subnet(ip);
 }
+
 // A STREAM bind the private loopback should own. Explicit 127/8 always; INADDR_ANY (0.0.0.0) too when the
 // bridge is OFF -- "any" includes loopback, and with no virtual switch the only reachable address under
 // isolation IS loopback, so a server that binds 0.0.0.0 (redis/memcached/nats default) must land on lo_path
@@ -546,11 +605,13 @@ static int lo_any_is(const uint8_t *sa, socklen_t l) {
     if (sa[4] == 127) return 1;
     return *(const uint32_t *)(sa + 4) == 0 && !br_on();
 }
+
 // rendezvous path for <ip_be>:<port> under the shared per-network dir
 static void br_path(uint32_t ip_be, uint16_t port, char *out, size_t n) {
     const uint8_t *b = (const uint8_t *)&ip_be;
     snprintf(out, n, "%s/%u.%u.%u.%u:%u", g_netbr, b[0], b[1], b[2], b[3], (unsigned)port);
 }
+
 // bind(:0) on the bridge -> a free, round-trippable ephemeral port keyed by OUR ip (cf. lo_alloc_ephemeral)
 static uint16_t br_alloc_ephemeral(void) {
     static uint16_t next;
@@ -565,6 +626,7 @@ static uint16_t br_alloc_ephemeral(void) {
     }
     return 0;
 }
+
 // report the VIRTUAL AF_INET <ip_be>:<port> (not the AF_UNIX path) back to the guest
 static void fill_inet_br(uint8_t *sa, socklen_t *l, uint32_t ip_be, uint16_t port) {
     if (!sa) return;
@@ -594,6 +656,7 @@ static int pm_published(uint16_t cport) {
         if (g_portmap[i].cport == cport) return 1;
     return 0;
 }
+
 // Host ports we've already spun up a TCP / UDP forwarder for (idempotent across re-listen()/re-bind under
 // SO_REUSEADDR). A port is marked BEFORE its forwarder thread is created and the thread UNMARKS it if its
 // own bind() fails, so a transient EADDRINUSE doesn't permanently disable forwarding for that port (F7).
@@ -601,28 +664,45 @@ static uint16_t g_fwd_started[32];
 static int g_nfwd;
 static uint16_t g_udp_fwd_started[32];
 static int g_nudpfwd;
+
 static void fwd_unmark(uint16_t *arr, int *n, uint16_t hport) {
     for (int i = 0; i < *n; i++)
-        if (arr[i] == hport) { arr[i] = arr[--(*n)]; return; }
+        if (arr[i] == hport) {
+            arr[i] = arr[--(*n)];
+            return;
+        }
 }
+
 // One relay connection: pump bytes between host TCP fd `a` and switch AF_UNIX fd `b` until either EOF.
 struct fwd_relay {
     int a, b;
 };
+
 // Copy one ready direction src->dst. Returns 0 to keep going, -1 to tear the whole connection down.
 // On src EOF we half-close dst (shutdown SHUT_WR) so the peer sees the FIN and can finish its reply,
 // and mark that direction done; the connection ends only once BOTH directions have closed.
 static int fwd_pump(int src, int dst, int *src_done, char *buf, size_t cap) {
     ssize_t n = read(src, buf, cap);
-    if (n == 0) { shutdown(dst, SHUT_WR); *src_done = 1; return 0; }
-    if (n < 0) { if (errno == EINTR || errno == EAGAIN) return 0; return -1; }
+    if (n == 0) {
+        shutdown(dst, SHUT_WR);
+        *src_done = 1;
+        return 0;
+    }
+    if (n < 0) {
+        if (errno == EINTR || errno == EAGAIN) return 0;
+        return -1;
+    }
     for (ssize_t off = 0; off < n;) {
         ssize_t w = write(dst, buf + off, (size_t)(n - off));
-        if (w <= 0) { if (w < 0 && (errno == EINTR || errno == EAGAIN)) continue; return -1; }
+        if (w <= 0) {
+            if (w < 0 && (errno == EINTR || errno == EAGAIN)) continue;
+            return -1;
+        }
         off += w;
     }
     return 0;
 }
+
 static void *fwd_relay_thread(void *p) {
     struct fwd_relay r = *(struct fwd_relay *)p;
     free(p);
@@ -630,7 +710,10 @@ static void *fwd_relay_thread(void *p) {
     int a_done = 0, b_done = 0; // host->guest / guest->host directions closed
     while (!a_done || !b_done) {
         struct pollfd pf[2] = {{r.a, a_done ? 0 : POLLIN, 0}, {r.b, b_done ? 0 : POLLIN, 0}};
-        if (poll(pf, 2, -1) < 0) { if (errno == EINTR) continue; break; }
+        if (poll(pf, 2, -1) < 0) {
+            if (errno == EINTR) continue;
+            break;
+        }
         if (!a_done && (pf[0].revents & (POLLIN | POLLHUP | POLLERR)))
             if (fwd_pump(r.a, r.b, &a_done, buf, sizeof buf) < 0) break;
         if (!b_done && (pf[1].revents & (POLLIN | POLLHUP | POLLERR)))
@@ -640,11 +723,14 @@ static void *fwd_relay_thread(void *p) {
     close(r.b);
     return NULL;
 }
+
 static int switch_dial(const char *path); // defined below; gap-tolerant AF_UNIX switch dial
+
 struct fwd_listen {
     uint16_t hport;
     char upath[200]; // full switch path; truncated into sun_path exactly as the guest's bind did
 };
+
 static void *fwd_listen_thread(void *p) {
     struct fwd_listen fl = *(struct fwd_listen *)p;
     free(p);
@@ -674,18 +760,31 @@ static void *fwd_listen_thread(void *p) {
         // gone) or ECONNREFUSED (stale inode, nothing accepting). Recreate + retry for ~600ms (mirrors TCP
         // SYN retransmit), then drop the host connection. A genuinely-dead guest still fails after the cap.
         int gc = switch_dial(fl.upath);
-        if (gc < 0) { close(hc); continue; }
+        if (gc < 0) {
+            close(hc);
+            continue;
+        }
         struct fwd_relay *fr = malloc(sizeof *fr);
-        if (!fr) { close(gc); close(hc); continue; }
+        if (!fr) {
+            close(gc);
+            close(hc);
+            continue;
+        }
         fr->a = hc;
         fr->b = gc;
         pthread_t t;
-        if (pthread_create(&t, NULL, fwd_relay_thread, fr) != 0) { free(fr); close(gc); close(hc); continue; }
+        if (pthread_create(&t, NULL, fwd_relay_thread, fr) != 0) {
+            free(fr);
+            close(gc);
+            close(hc);
+            continue;
+        }
         pthread_detach(t);
     }
     close(ls);
     return NULL;
 }
+
 // Dial an AF_UNIX switch socket at `path`, retrying briefly across a peer's re-listen gap: a server
 // looping `nc -l -w N` (or any accept-one-then-rebind pattern) unbinds+rebinds the switch inode between
 // connections, so a dial that lands in that window sees ENOENT (inode gone) or ECONNREFUSED (stale inode,
@@ -705,11 +804,12 @@ static int switch_dead_on_arrival(int fd) {
     // still sees any data): 0 bytes == the peer closed with nothing to serve == dead on arrival.
     char b[1];
     ssize_t n = recv(fd, b, 1, MSG_PEEK | MSG_DONTWAIT);
-    if (n == 0) return 1;                                           // clean EOF, no data -> dead
+    if (n == 0) return 1;                                             // clean EOF, no data -> dead
     if (n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) return 0; // spurious wake, live
-    if (n < 0) return 1;                                            // ECONNRESET/ECONNREFUSED -> dead
-    return 0;                                                        // real data pending -> live
+    if (n < 0) return 1;                                              // ECONNRESET/ECONNREFUSED -> dead
+    return 0;                                                         // real data pending -> live
 }
+
 static int switch_dial(const char *path) {
     struct sockaddr_un un;
     memset(&un, 0, sizeof un);
@@ -734,7 +834,8 @@ static int switch_dial(const char *path) {
     }
     return -1;
 }
-// Is the daemon owning the process-independent host->container TCP forwarder (dd #320)? When set
+
+// Is the daemon owning the process-independent host->container TCP forwarder? When set
 // (DD_PUBLISH_DAEMON=1), the engine must NOT open its own in-process host AF_INET listener — that listener
 // lived in whichever guest process called listen(), so a prefork / re-listening server tore it down on
 // every rebind and two guest processes raced EADDRINUSE. The daemon's listener (dd-daemon/containers/
@@ -742,19 +843,26 @@ static int switch_dial(const char *path) {
 // The guest-side bind/listen->switch redirect + getsockname->cport reporting below are UNCHANGED (the
 // daemon relies on them). Cached (env is fixed for the process).
 static int g_hostfwd_daemon = -1;
+
 static int hostfwd_by_daemon(void) {
     if (g_hostfwd_daemon < 0) g_hostfwd_daemon = (getenv("DD_PUBLISH_DAEMON") != NULL);
     return g_hostfwd_daemon;
 }
+
 // Called from listen(): if `fd` is a published switch-backed listening socket, start its host forwarder.
 static void fwd_maybe_start(int fd) {
-    if (hostfwd_by_daemon()) return; // daemon owns the TCP host listener (#320) -> don't race it
+    if (hostfwd_by_daemon()) return; // daemon owns the TCP host listener -> don't race it
     if (fd < 0 || fd >= 1024) return;
     uint16_t cport = 0;
     char upath[200];
-    if (g_br_port[fd]) { cport = g_br_port[fd]; br_path(g_br_ip[fd], cport, upath, sizeof upath); }
-    else if (g_lo_port[fd]) { cport = g_lo_port[fd]; lo_path(cport, upath, sizeof upath); }
-    else return; // real host bind (no switch redirect) -> already natively reachable, nothing to do
+    if (g_br_port[fd]) {
+        cport = g_br_port[fd];
+        br_path(g_br_ip[fd], cport, upath, sizeof upath);
+    } else if (g_lo_port[fd]) {
+        cport = g_lo_port[fd];
+        lo_path(cport, upath, sizeof upath);
+    } else
+        return; // real host bind (no switch redirect) -> already natively reachable, nothing to do
     if (!pm_published(cport)) return; // not a published port
     uint16_t hport = pm_host(cport);
     for (int i = 0; i < g_nfwd; i++)
@@ -766,7 +874,11 @@ static void fwd_maybe_start(int fd) {
     snprintf(fl->upath, sizeof fl->upath, "%s", upath);
     g_fwd_started[g_nfwd++] = hport; // mark BEFORE create (closes the dedup window); thread unmarks on bind fail
     pthread_t t;
-    if (pthread_create(&t, NULL, fwd_listen_thread, fl) != 0) { free(fl); g_nfwd--; return; }
+    if (pthread_create(&t, NULL, fwd_listen_thread, fl) != 0) {
+        free(fl);
+        g_nfwd--;
+        return;
+    }
     pthread_detach(t);
 }
 
@@ -794,7 +906,10 @@ static int udp_swap(int fd) {
     int u = socket(AF_UNIX, SOCK_DGRAM, 0);
     if (u < 0) return -1;
     if (u != fd) {
-        if (dup2(u, fd) < 0) { close(u); return -1; }
+        if (dup2(u, fd) < 0) {
+            close(u);
+            return -1;
+        }
         close(u);
     }
     if (fl >= 0 && (fl & O_NONBLOCK)) fcntl(fd, F_SETFL, O_NONBLOCK);
@@ -803,22 +918,25 @@ static int udp_swap(int fd) {
 }
 
 #define UDP_FWD_MAXPEERS 64
+
 struct udp_peer {
     struct sockaddr_storage caddr; // host client addr (macOS layout, as recvfrom delivered it)
     socklen_t calen;
-    int gs;                        // guest-facing AF_UNIX/SOCK_DGRAM socket (bound to its own path,
-                                   // connected to the guest switch socket) -- this client's identity
+    int gs; // guest-facing AF_UNIX/SOCK_DGRAM socket (bound to its own path,
+            // connected to the guest switch socket) -- this client's identity
     int used;
 };
+
 struct udp_fwd {
     uint16_t hport;
-    char upath[200];               // guest switch datagram socket path (br_/lo_path, as the guest bound)
-    char pdir[80];                 // dir holding this forwarder's synthetic per-client socket paths
-    int hs;                        // host AF_INET/SOCK_DGRAM socket on 0.0.0.0:hport
+    char upath[200]; // guest switch datagram socket path (br_/lo_path, as the guest bound)
+    char pdir[80];   // dir holding this forwarder's synthetic per-client socket paths
+    int hs;          // host AF_INET/SOCK_DGRAM socket on 0.0.0.0:hport
     struct udp_peer peers[UDP_FWD_MAXPEERS];
     int npeers;
-    unsigned pseq;                 // monotonic id for unique synthetic peer paths (+ ring eviction)
+    unsigned pseq; // monotonic id for unique synthetic peer paths (+ ring eviction)
 };
+
 // Find the peer slot for host client (sa,sl), or create one (its own AF_UNIX dgram socket bound to a
 // fresh synthetic path and connected to the guest switch socket). Returns the guest-facing fd or -1.
 static int udp_peer_get(struct udp_fwd *f, const struct sockaddr *sa, socklen_t sl) {
@@ -838,13 +956,20 @@ static int udp_peer_get(struct udp_fwd *f, const struct sockaddr *sa, socklen_t 
     // slot from npeers so we don't leave a permanently-dead slot in the table (F5). (Append never bumped
     // npeers yet -- it is incremented only on success below -- so its failures need no adjustment.)
     int gs = socket(AF_UNIX, SOCK_DGRAM, 0);
-    if (gs < 0) { if (!appended) f->npeers--; return -1; }
+    if (gs < 0) {
+        if (!appended) f->npeers--;
+        return -1;
+    }
     struct sockaddr_un un;
     memset(&un, 0, sizeof un);
     un.sun_family = AF_UNIX;
     snprintf(un.sun_path, sizeof un.sun_path, "%s/%u", f->pdir, f->pseq++);
     unlink(un.sun_path);
-    if (bind(gs, (struct sockaddr *)&un, sizeof un) < 0) { close(gs); if (!appended) f->npeers--; return -1; }
+    if (bind(gs, (struct sockaddr *)&un, sizeof un) < 0) {
+        close(gs);
+        if (!appended) f->npeers--;
+        return -1;
+    }
     struct sockaddr_un gu;
     memset(&gu, 0, sizeof gu);
     gu.sun_family = AF_UNIX;
@@ -862,17 +987,22 @@ static int udp_peer_get(struct udp_fwd *f, const struct sockaddr *sa, socklen_t 
     memcpy(&f->peers[slot].caddr, sa, sl < sizeof f->peers[slot].caddr ? sl : sizeof f->peers[slot].caddr);
     return gs;
 }
+
 static void *udp_fwd_thread(void *p) {
     struct udp_fwd *f = (struct udp_fwd *)p; // heap-owned by this thread for its lifetime
     int hs = socket(AF_INET, SOCK_DGRAM, 0);
-    if (hs < 0) { fwd_unmark(g_udp_fwd_started, &g_nudpfwd, f->hport); free(f); return NULL; }
+    if (hs < 0) {
+        fwd_unmark(g_udp_fwd_started, &g_nudpfwd, f->hport);
+        free(f);
+        return NULL;
+    }
     int on = 1;
     setsockopt(hs, SOL_SOCKET, SO_REUSEADDR, &on, sizeof on);
     struct sockaddr_in sin;
     memset(&sin, 0, sizeof sin);
     sin.sin_family = AF_INET;
     sin.sin_port = htons(f->hport);
-    sin.sin_addr.s_addr = htonl(INADDR_ANY); // 0.0.0.0:HOST_PORT (docker's default publish address)
+    sin.sin_addr.s_addr = htonl(INADDR_ANY);                 // 0.0.0.0:HOST_PORT (docker's default publish address)
     if (bind(hs, (struct sockaddr *)&sin, sizeof sin) < 0) { // host port busy -> no forwarding
         close(hs);
         fwd_unmark(g_udp_fwd_started, &g_nudpfwd, f->hport); // transient busy: allow a later bind() to retry (F7)
@@ -896,7 +1026,10 @@ static void *udp_fwd_thread(void *p) {
             pf[n].revents = 0;
             n++;
         }
-        if (poll(pf, n, -1) < 0) { if (errno == EINTR) continue; break; }
+        if (poll(pf, n, -1) < 0) {
+            if (errno == EINTR) continue;
+            break;
+        }
         // host client -> guest: per-client guest-facing socket preserves the reply path
         if (pf[0].revents & (POLLIN | POLLERR)) {
             struct sockaddr_storage ca;
@@ -912,13 +1045,15 @@ static void *udp_fwd_thread(void *p) {
             if (!f->peers[i].used) continue;
             int hit = 0;
             for (int j = 1; j < n; j++)
-                if (pf[j].fd == f->peers[i].gs && (pf[j].revents & (POLLIN | POLLERR))) { hit = 1; break; }
+                if (pf[j].fd == f->peers[i].gs && (pf[j].revents & (POLLIN | POLLERR))) {
+                    hit = 1;
+                    break;
+                }
             if (!hit) continue;
             // Non-blocking: the pre-poll pf[] readiness can match a REUSED fd-number of an evicted+recreated
             // peer socket; a blocking recv() would then hang forever. EAGAIN -> spurious wakeup, just skip (F4).
             ssize_t r = recv(f->peers[i].gs, buf, sizeof buf, MSG_DONTWAIT);
-            if (r >= 0)
-                sendto(hs, buf, (size_t)r, 0, (struct sockaddr *)&f->peers[i].caddr, f->peers[i].calen);
+            if (r >= 0) sendto(hs, buf, (size_t)r, 0, (struct sockaddr *)&f->peers[i].caddr, f->peers[i].calen);
         }
     }
     for (int i = 0; i < f->npeers; i++)
@@ -927,6 +1062,7 @@ static void *udp_fwd_thread(void *p) {
     free(f);
     return NULL;
 }
+
 // Called from the UDP bind hook once a published switch-backed datagram socket is bound: start its host
 // forwarder. Mirrors fwd_maybe_start() but triggers at bind (UDP has no listen) and keys off g_*_port,
 // which the bind hook just set on this fd.
@@ -934,9 +1070,14 @@ static void udp_fwd_maybe_start(int fd) {
     if (fd < 0 || fd >= 1024) return;
     uint16_t cport = 0;
     char upath[200];
-    if (g_br_port[fd]) { cport = g_br_port[fd]; br_path(g_br_ip[fd], cport, upath, sizeof upath); }
-    else if (g_lo_port[fd]) { cport = g_lo_port[fd]; lo_path(cport, upath, sizeof upath); }
-    else return;
+    if (g_br_port[fd]) {
+        cport = g_br_port[fd];
+        br_path(g_br_ip[fd], cport, upath, sizeof upath);
+    } else if (g_lo_port[fd]) {
+        cport = g_lo_port[fd];
+        lo_path(cport, upath, sizeof upath);
+    } else
+        return;
     if (!pm_published(cport)) return;
     uint16_t hport = pm_host(cport);
     for (int i = 0; i < g_nudpfwd; i++)
@@ -948,9 +1089,14 @@ static void udp_fwd_maybe_start(int fd) {
     snprintf(f->upath, sizeof f->upath, "%s", upath);
     g_udp_fwd_started[g_nudpfwd++] = hport; // mark BEFORE create; thread unmarks on bind fail (F7)
     pthread_t t;
-    if (pthread_create(&t, NULL, udp_fwd_thread, f) != 0) { free(f); g_nudpfwd--; return; }
+    if (pthread_create(&t, NULL, udp_fwd_thread, f) != 0) {
+        free(f);
+        g_nudpfwd--;
+        return;
+    }
     pthread_detach(t);
 }
+
 // UDP bind hook: if `fd` is an AF_INET datagram socket binding a PUBLISHED container port on the bridge
 // (0.0.0.0/own-ip/in-subnet) or private loopback, swap it onto an AF_UNIX/SOCK_DGRAM switch socket and
 // start the host->guest forwarder. Returns 1 if handled (result in *out), 0 to let the caller bind
@@ -972,7 +1118,10 @@ static int udp_bind_maybe(int fd, const uint8_t *sa, socklen_t l, int64_t *out) 
     } else {
         return 0;
     }
-    if (udp_swap(fd) < 0) { *out = -errno; return 1; }
+    if (udp_swap(fd) < 0) {
+        *out = -errno;
+        return 1;
+    }
     unlink(up);
     struct sockaddr_un un;
     memset(&un, 0, sizeof un);
@@ -980,8 +1129,12 @@ static int udp_bind_maybe(int fd, const uint8_t *sa, socklen_t l, int64_t *out) 
     snprintf(un.sun_path, sizeof un.sun_path, "%s", up);
     int r = bind(fd, (struct sockaddr *)&un, sizeof un);
     if (r == 0) {
-        if (myip) { g_br_port[fd] = cport; g_br_ip[fd] = myip; }
-        else { g_lo_port[fd] = cport; }
+        if (myip) {
+            g_br_port[fd] = cport;
+            g_br_ip[fd] = myip;
+        } else {
+            g_lo_port[fd] = cport;
+        }
         udp_fwd_maybe_start(fd);
     }
     *out = r < 0 ? -errno : 0;
@@ -1003,12 +1156,17 @@ static int udp_bind_maybe(int fd, const uint8_t *sa, socklen_t l, int64_t *out) 
 #define LX_AF_INET 2
 #define LX_AF_INET6 10
 static int g_saxl = -1;
+
 static int saxl_on(void) {
     if (g_saxl < 0) g_saxl = getenv("NOSOCKADDR") ? 0 : 1;
     return g_saxl;
 }
+
 // guest domain (Linux) -> host (macOS), for socket()/socketpair(). AF_INET(2)/AF_UNIX(1) match.
-static int af_l2m(int d) { return (saxl_on() && d == LX_AF_INET6) ? AF_INET6 : d; }
+static int af_l2m(int d) {
+    return (saxl_on() && d == LX_AF_INET6) ? AF_INET6 : d;
+}
+
 // guest(Linux) sockaddr -> host(macOS) into `out`; returns host socklen, or -1 if not AF_INET/INET6
 // (or gated off) — caller then uses the original guest pointer/len unchanged.
 static socklen_t sa_l2m(const uint8_t *g, socklen_t glen, struct sockaddr_storage *out) {
@@ -1036,6 +1194,7 @@ static socklen_t sa_l2m(const uint8_t *g, socklen_t glen, struct sockaddr_storag
     }
     return (socklen_t)-1;
 }
+
 // host(macOS) sockaddr -> guest(Linux) layout written to `g` (capacity gcap, may be 0/NULL). Returns
 // the FULL Linux length of the address (16/28) even if it exceeds gcap (Linux truncates the copy but
 // reports the full length via *addrlen), or -1 if not AF_INET/INET6 (caller copies raw host bytes).
@@ -1065,6 +1224,7 @@ static int sa_m2l(const struct sockaddr *m, uint8_t *g, socklen_t gcap) {
     }
     return -1;
 }
+
 // host(macOS) AF_UNIX sockaddr -> guest(Linux) layout. The two structs disagree in the leading bytes:
 //   Linux  sockaddr_un = { u16 sun_family;             char sun_path[108] }  (AF_UNIX = 1)
 //   macOS  sockaddr_un = { u8 sun_len; u8 sun_family;  char sun_path[104] }  (AF_UNIX = 1)
@@ -1081,7 +1241,8 @@ static int sa_un_m2l(const struct sockaddr *m, socklen_t mlen, uint8_t *g, sockl
     size_t hplen = (size_t)mlen > off ? (size_t)mlen - off : 0; // path bytes the host reported (no NUL guarantee)
     char hpath[256];
     size_t i = 0;
-    for (; i < hplen && i + 1 < sizeof hpath && u->sun_path[i]; i++) hpath[i] = u->sun_path[i];
+    for (; i < hplen && i + 1 < sizeof hpath && u->sun_path[i]; i++)
+        hpath[i] = u->sun_path[i];
     hpath[i] = 0;
     char gpath[256];
     if (hpath[0] == '/' && g_rootfs)
@@ -1104,6 +1265,7 @@ static int sa_un_m2l(const struct sockaddr *m, socklen_t mlen, uint8_t *g, sockl
 // guest socket is already a real host AF_UNIX socket (case 198), so only the ADDRESS is rewritten.
 static char g_absdir[200];
 static int g_abs_init;
+
 static void abs_init(void) {
     if (g_abs_init) return;
     g_abs_init = 1;
@@ -1111,14 +1273,17 @@ static void abs_init(void) {
     snprintf(g_absdir, sizeof g_absdir, "/tmp/.ddabs-%.40s", (ns && ns[0]) ? ns : "default");
     mkdir(g_absdir, 0700); // EEXIST fine; peers share it (0700, guest is path-jailed)
 }
+
 // Is this guest sockaddr an abstract AF_UNIX addr? family u16==AF_UNIX, sun_path[0]==NUL, name>=1B.
 static int abs_is(const uint8_t *sa, socklen_t l) {
     return sa && l > 3 && *(const uint16_t *)sa == AF_UNIX && sa[2] == 0; // sun_path[0] @ offset 2
 }
+
 // Is this guest sockaddr an AF_UNIX *pathname* addr (a filesystem socket, not abstract/autobind)?
 static int unix_path_is(const uint8_t *sa, socklen_t l) {
     return sa && l > 3 && *(const uint16_t *)sa == AF_UNIX && sa[2] != 0; // sun_path[0] @ offset 2
 }
+
 // Copy a guest sockaddr_un's sun_path (NUL- or addrlen-bounded) into `out` as a C string.
 static void unix_path_copy(const uint8_t *sa, socklen_t l, char *out, size_t n) {
     size_t pl = (size_t)l > 2 ? (size_t)l - 2 : 0; // bytes after the 2-byte family
@@ -1127,6 +1292,7 @@ static void unix_path_copy(const uint8_t *sa, socklen_t l, char *out, size_t n) 
         out[i] = (char)sa[2 + i];
     out[i] = 0;
 }
+
 // Map abstract name (bytes sa+3 .. for namelen=l-3) to a filesystem path. Hex when it fits macOS
 // sun_path[104], else FNV-1a hash (long D-Bus/X11/systemd names overflow); the name may hold NULs,
 // '/', non-printables, so hex/hash makes a safe single path component (no traversal).
@@ -1154,9 +1320,9 @@ static void abs_path(const uint8_t *sa, socklen_t l, char *out, size_t n) {
     }
 }
 
-// ===== AF_NETLINK / NETLINK_ROUTE (#289): a minimal RTNETLINK responder ==========================
+// ===== AF_NETLINK / NETLINK_ROUTE: a minimal RTNETLINK responder ==========================
 // macOS has no AF_NETLINK, so socket(AF_NETLINK,...) returned EAFNOSUPPORT and every interface-
-// enumeration path (getifaddrs via glibc/musl, go-sockaddr, `ip`, ifconfig, minio #277, consul)
+// enumeration path (getifaddrs via glibc/musl, go-sockaddr, `ip`, ifconfig, minio, consul)
 // failed with "Address family not supported". dd models exactly two interfaces (lo + eth0; see
 // netif_* in state.c). A guest netlink socket is backed by an AF_UNIX SOCK_DGRAM socketpair: the
 // guest holds one end; when it sends an RTM_GET* dump request we parse the nlmsghdr and WRITE the
@@ -1176,7 +1342,11 @@ static void abs_path(const uint8_t *sa, socklen_t l, char *out, size_t n) {
 // guest netlink fd -> our peer socketpair fd, stored +1 (0 = not a netlink socket). Mirrors the
 // g_eventfd_peer +1 convention so close()/fd_reset_emul can tear the peer down.
 static int g_nl_peer[1024];
-static int nl_is(int fd) { return fd >= 0 && fd < 1024 && g_nl_peer[fd]; }
+
+static int nl_is(int fd) {
+    return fd >= 0 && fd < 1024 && g_nl_peer[fd];
+}
+
 // close a netlink fd's peer (called from fd_reset_emul on the guest close). Idempotent.
 static void nl_close(int fd) {
     if (fd >= 0 && fd < 1024 && g_nl_peer[fd]) {
@@ -1184,6 +1354,7 @@ static void nl_close(int fd) {
         g_nl_peer[fd] = 0;
     }
 }
+
 // socket(AF_NETLINK,...): back it with an AF_UNIX SOCK_DGRAM socketpair. Any requested type
 // (SOCK_RAW/SOCK_DGRAM) collapses to SOCK_DGRAM (AF_UNIX has no SOCK_RAW). Returns the guest fd or
 // -errno. Honors SOCK_CLOEXEC(0x80000)/SOCK_NONBLOCK(0x800) on the guest end.
@@ -1203,6 +1374,7 @@ static int nl_open(int type, int proto) {
     g_nl_peer[g] = peer + 1;
     return g;
 }
+
 // getsockname on a netlink fd: report a sockaddr_nl { u16 family; u16 pad; u32 pid; u32 groups } with
 // pid = getpid() (the port id our dump replies also stamp in nlmsg_pid, so go's pid check matches).
 static void nl_getsockname(uint8_t *sa, socklen_t *sl) {
@@ -1214,12 +1386,14 @@ static void nl_getsockname(uint8_t *sa, socklen_t *sl) {
     } else if (sl)
         *sl = 12;
 }
+
 // Fill a Linux sockaddr_nl "from the kernel" (pid 0) as a recv source address; 12 bytes.
 static void nl_fill_src(uint8_t *sa, socklen_t cap) {
     if (!sa || cap < 12) return;
     memset(sa, 0, 12);
     *(uint16_t *)(sa + 0) = LX_AF_NETLINK; // nl_pid=0 => from kernel (glibc/go accept only pid 0 source)
 }
+
 // rtattr append: { u16 rta_len; u16 rta_type; data } padded to RTA_ALIGN(4).
 static void nl_put_attr(uint8_t *b, size_t *o, uint16_t type, const void *data, uint16_t dlen) {
     *(uint16_t *)(b + *o) = (uint16_t)(4 + dlen);
@@ -1227,6 +1401,7 @@ static void nl_put_attr(uint8_t *b, size_t *o, uint16_t type, const void *data, 
     if (data && dlen) memcpy(b + *o + 4, data, dlen);
     *o += (size_t)((4 + dlen + 3) & ~3);
 }
+
 // begin an nlmsg (16-byte header); returns its offset for nl_end() to backpatch nlmsg_len.
 static size_t nl_begin(uint8_t *b, size_t *o, uint16_t type, uint32_t seq) {
     size_t h = *o;
@@ -1238,13 +1413,15 @@ static size_t nl_begin(uint8_t *b, size_t *o, uint16_t type, uint32_t seq) {
     *o = h + 16;
     return h;
 }
+
 static void nl_end(uint8_t *b, size_t *o, size_t h) {
     *(uint32_t *)(b + h) = (uint32_t)(*o - h); // nlmsg_len (unpadded); attrs already 4-aligned
     *o = (*o + 3) & ~(size_t)3;
 }
+
 // one RTM_NEWLINK message
-static void nl_link(uint8_t *b, size_t *o, uint32_t seq, const char *name, int idx, uint16_t iftype,
-                    uint32_t flags, const uint8_t *mac, uint32_t mtu, const uint8_t *bcast) {
+static void nl_link(uint8_t *b, size_t *o, uint32_t seq, const char *name, int idx, uint16_t iftype, uint32_t flags,
+                    const uint8_t *mac, uint32_t mtu, const uint8_t *bcast) {
     size_t h = nl_begin(b, o, NL_RTM_NEWLINK, seq);
     uint8_t *ii = b + *o; // ifinfomsg (16B): family,pad,type(2),index(4),flags(4),change(4)
     memset(ii, 0, 16);
@@ -1257,17 +1434,18 @@ static void nl_link(uint8_t *b, size_t *o, uint32_t seq, const char *name, int i
     nl_put_attr(b, o, 1, mac, 6);                             // IFLA_ADDRESS
     nl_put_attr(b, o, 2, bcast, 6);                           // IFLA_BROADCAST
     uint32_t v = mtu;
-    nl_put_attr(b, o, 4, &v, 4);          // IFLA_MTU
-    v = (iftype == 772) ? 0u : 1000u;     // IFLA_TXQLEN
+    nl_put_attr(b, o, 4, &v, 4);      // IFLA_MTU
+    v = (iftype == 772) ? 0u : 1000u; // IFLA_TXQLEN
     nl_put_attr(b, o, 13, &v, 4);
-    uint8_t op = 6, lm = 0;               // IF_OPER_UP / IFLA_LINKMODE
-    nl_put_attr(b, o, 16, &op, 1);        // IFLA_OPERSTATE
-    nl_put_attr(b, o, 17, &lm, 1);        // IFLA_LINKMODE
+    uint8_t op = 6, lm = 0;        // IF_OPER_UP / IFLA_LINKMODE
+    nl_put_attr(b, o, 16, &op, 1); // IFLA_OPERSTATE
+    nl_put_attr(b, o, 17, &lm, 1); // IFLA_LINKMODE
     nl_end(b, o, h);
 }
+
 // one RTM_NEWADDR message (v4: alen=4; v6: alen=16). bcast!=NULL adds IFA_BROADCAST (v4 eth0 only).
-static void nl_addr(uint8_t *b, size_t *o, uint32_t seq, uint8_t family, uint8_t prefix, uint8_t scope,
-                    int idx, const char *label, const void *addr, int alen, const void *bcast) {
+static void nl_addr(uint8_t *b, size_t *o, uint32_t seq, uint8_t family, uint8_t prefix, uint8_t scope, int idx,
+                    const char *label, const void *addr, int alen, const void *bcast) {
     size_t h = nl_begin(b, o, NL_RTM_NEWADDR, seq);
     uint8_t *ia = b + *o; // ifaddrmsg (8B): family,prefixlen,flags,scope,index(4)
     memset(ia, 0, 8);
@@ -1276,31 +1454,36 @@ static void nl_addr(uint8_t *b, size_t *o, uint32_t seq, uint8_t family, uint8_t
     ia[3] = scope;
     *(uint32_t *)(ia + 4) = (uint32_t)idx;
     *o += 8;
-    nl_put_attr(b, o, 1, addr, (uint16_t)alen); // IFA_ADDRESS
-    nl_put_attr(b, o, 2, addr, (uint16_t)alen); // IFA_LOCAL
-    if (bcast) nl_put_attr(b, o, 4, bcast, (uint16_t)alen); // IFA_BROADCAST
+    nl_put_attr(b, o, 1, addr, (uint16_t)alen);                            // IFA_ADDRESS
+    nl_put_attr(b, o, 2, addr, (uint16_t)alen);                            // IFA_LOCAL
+    if (bcast) nl_put_attr(b, o, 4, bcast, (uint16_t)alen);                // IFA_BROADCAST
     if (label) nl_put_attr(b, o, 3, label, (uint16_t)(strlen(label) + 1)); // IFA_LABEL
     nl_end(b, o, h);
 }
+
 // one RTM_NEWROUTE message
 static void nl_route(uint8_t *b, size_t *o, uint32_t seq, uint8_t dst_len, uint8_t scope, uint8_t type,
                      const uint32_t *dst, const uint32_t *gw, const uint32_t *prefsrc, int oif) {
     size_t h = nl_begin(b, o, NL_RTM_NEWROUTE, seq);
     uint8_t *rm = b + *o; // rtmsg (12B): family,dst_len,src_len,tos,table,protocol,scope,type,flags(4)
     memset(rm, 0, 12);
-    rm[0] = 2;         // AF_INET
+    rm[0] = 2; // AF_INET
     rm[1] = dst_len;
-    rm[4] = 254;       // RT_TABLE_MAIN
-    rm[5] = 3;         // RTPROT_BOOT
+    rm[4] = 254; // RT_TABLE_MAIN
+    rm[5] = 3;   // RTPROT_BOOT
     rm[6] = scope;
-    rm[7] = type;      // RTN_UNICAST=1
+    rm[7] = type; // RTN_UNICAST=1
     *o += 12;
-    if (dst) nl_put_attr(b, o, 1, dst, 4);         // RTA_DST
-    if (oif) { uint32_t v = (uint32_t)oif; nl_put_attr(b, o, 4, &v, 4); } // RTA_OIF
+    if (dst) nl_put_attr(b, o, 1, dst, 4); // RTA_DST
+    if (oif) {
+        uint32_t v = (uint32_t)oif;
+        nl_put_attr(b, o, 4, &v, 4);
+    } // RTA_OIF
     if (gw) nl_put_attr(b, o, 5, gw, 4);           // RTA_GATEWAY
     if (prefsrc) nl_put_attr(b, o, 7, prefsrc, 4); // RTA_PREFSRC
     nl_end(b, o, h);
 }
+
 static void nl_done(uint8_t *b, size_t *o, uint32_t seq) {
     uint8_t *h = b + *o;
     memset(h, 0, 16);
@@ -1311,6 +1494,7 @@ static void nl_done(uint8_t *b, size_t *o, uint32_t seq) {
     *(uint32_t *)(h + 12) = (uint32_t)getpid();
     *o += 16;
 }
+
 // Build + queue (one datagram to `peer`) the dump for request `type` with echoed `seq`.
 static void nl_emit_dump(int peer, uint16_t type, uint32_t seq) {
     uint8_t out[4096];
@@ -1318,12 +1502,11 @@ static void nl_emit_dump(int peer, uint16_t type, uint32_t seq) {
     if (type == NL_RTM_GETLINK) {
         uint8_t zero6[6] = {0}, ff6[6] = {0xff, 0xff, 0xff, 0xff, 0xff, 0xff}, mac[6];
         netif_eth0_mac(mac);
-        nl_link(out, &o, seq, "lo", 1, 772 /*ARPHRD_LOOPBACK*/, 0x10049u /*UP|LOOP|RUN|LOWER_UP*/, zero6,
-                65536, zero6);
+        nl_link(out, &o, seq, "lo", 1, 772 /*ARPHRD_LOOPBACK*/, 0x10049u /*UP|LOOP|RUN|LOWER_UP*/, zero6, 65536, zero6);
         // --network none: loopback-only, so eth0 is absent from the link dump (`ip link` sees just lo).
         if (!net_isolate())
-            nl_link(out, &o, seq, "eth0", 2, 1 /*ARPHRD_ETHER*/, 0x11043u /*UP|BCAST|RUN|MCAST|LOWER_UP*/, mac,
-                    1500, ff6);
+            nl_link(out, &o, seq, "eth0", 2, 1 /*ARPHRD_ETHER*/, 0x11043u /*UP|BCAST|RUN|MCAST|LOWER_UP*/, mac, 1500,
+                    ff6);
     } else if (type == NL_RTM_GETADDR) {
         uint32_t lo4 = 0x0100007fu; // 127.0.0.1
         uint8_t lo6[16] = {0};
@@ -1336,7 +1519,7 @@ static void nl_emit_dump(int peer, uint16_t type, uint32_t seq) {
     } else if (type == NL_RTM_GETROUTE) {
         if (!net_isolate()) { // --network none: no eth0 routes (loopback carries no L3 routing table)
             uint32_t net = netif_eth0_net(), gw = netif_eth0_gw(), src = netif_eth0_ip();
-            nl_route(out, &o, seq, 0, 0 /*UNIVERSE*/, 1, NULL, &gw, NULL, 2);          // default via gw dev eth0
+            nl_route(out, &o, seq, 0, 0 /*UNIVERSE*/, 1, NULL, &gw, NULL, 2); // default via gw dev eth0
             nl_route(out, &o, seq, (uint8_t)netif_eth0_prefix(), 253 /*LINK*/, 1, &net, NULL, &src, 2); // subnet
         }
     }
@@ -1345,6 +1528,7 @@ static void nl_emit_dump(int peer, uint16_t type, uint32_t seq) {
     ssize_t w = send(peer, out, o, 0); // one datagram; guest reads it via its own recv/recvmsg
     (void)w;
 }
+
 // Copy `n` bytes from `src` into the guest scatter buffer (iov array). Returns bytes actually copied.
 static size_t nl_scatter(const uint8_t *src, size_t n, struct iovec *iov, int iovn) {
     size_t off = 0;
@@ -1356,8 +1540,9 @@ static size_t nl_scatter(const uint8_t *src, size_t n, struct iovec *iov, int io
     }
     return off;
 }
+
 // Receive one queued netlink datagram into the guest iov, emulating the Linux MSG_PEEK / MSG_TRUNC
-// semantics that macOS lacks (#293). Two macOS gaps break busybox `ip`/libnetlink here:
+// semantics that macOS lacks. Two macOS gaps break busybox `ip`/libnetlink here:
 //   (1) recv(...,MSG_TRUNC) on Linux returns the datagram's TRUE length (not the copied length) so a
 //       caller can size a buffer; macOS ignores MSG_TRUNC on input and returns only what it copied.
 //   (2) macOS short-circuits ANY zero-length receive to 0 without touching the queue, so busybox's
@@ -1371,20 +1556,32 @@ static size_t nl_scatter(const uint8_t *src, size_t n, struct iovec *iov, int io
 static int64_t nl_recv(int fd, struct iovec *iov, int iovn, int gflags, int *msgflags) {
     uint8_t hb[8192]; // dumps are <=4096 (see nl_emit_dump's out[]); big enough to peek the full length
     ssize_t truelen;
-    do { truelen = recv(fd, hb, sizeof hb, MSG_PEEK); } while (truelen < 0 && errno == EINTR);
-    if (truelen < 0) { if (msgflags) *msgflags = 0; return -errno; }
+    do {
+        truelen = recv(fd, hb, sizeof hb, MSG_PEEK);
+    } while (truelen < 0 && errno == EINTR);
+    if (truelen < 0) {
+        if (msgflags) *msgflags = 0;
+        return -errno;
+    }
     size_t cap = 0;
-    for (int i = 0; i < iovn; i++) cap += iov[i].iov_len;
+    for (int i = 0; i < iovn; i++)
+        cap += iov[i].iov_len;
     size_t copylen = (size_t)truelen < cap ? (size_t)truelen : cap;
     if (!(gflags & 0x2 /*MSG_PEEK*/)) { // real read: consume the whole datagram (rest discarded, DGRAM)
         ssize_t consumed;
-        do { consumed = recv(fd, hb, sizeof hb, 0); } while (consumed < 0 && errno == EINTR);
-        if (consumed < 0) { if (msgflags) *msgflags = 0; return -errno; }
+        do {
+            consumed = recv(fd, hb, sizeof hb, 0);
+        } while (consumed < 0 && errno == EINTR);
+        if (consumed < 0) {
+            if (msgflags) *msgflags = 0;
+            return -errno;
+        }
     }
     size_t got = nl_scatter(hb, copylen, iov, iovn);
     if (msgflags) *msgflags = ((size_t)truelen > got) ? 0x20 /*Linux MSG_TRUNC*/ : 0;
     return (gflags & 0x20 /*MSG_TRUNC*/) ? (int64_t)truelen : (int64_t)got;
 }
+
 // A send on a netlink fd: walk the request's nlmsghdr(s) and queue each one's dump. Returns bytes
 // consumed (== len; requests are tiny) so the guest's send returns success.
 static int64_t nl_send(int fd, const uint8_t *buf, size_t len) {
@@ -1401,7 +1598,7 @@ static int64_t nl_send(int fd, const uint8_t *buf, size_t len) {
     return (int64_t)len;
 }
 
-// ===== Socket ioctls (SIOCGIF*, #294): the ioctl half of the shared lo+eth0 model ================
+// ===== Socket ioctls (SIOCGIF*): the ioctl half of the shared lo+eth0 model ================
 // busybox `ifconfig` (and any getifaddrs-free tool) enumerates via socket ioctls, not netlink: an
 // AF_INET SOCK_DGRAM socket + SIOCGIFCONF/SIOCGIFADDR/SIOCGIFFLAGS/... . macOS has these too, but its
 // kernel knows nothing of our synthesized container interfaces, so it returned ENOTTY -> "ioctl 0x8912
@@ -1411,6 +1608,7 @@ static int64_t nl_send(int fd, const uint8_t *buf, size_t len) {
 // range-checked (-EFAULT) since we memcpy into them directly rather than via a bounds-checking syscall.
 #define LX_IFNAMSIZ 16
 #define LX_IFREQ_SZ 40 // sizeof(struct ifreq) on 64-bit Linux: name[16] + 24-byte union
+
 // The two modelled interfaces, filled per slot (0=lo, 1=eth0). All IPv4 fields are network-order held
 // as a host u32 (a | b<<8 | c<<16 | d<<24), matching netif_eth0_ip()'s encoding.
 struct nif {
@@ -1420,6 +1618,7 @@ struct nif {
     uint16_t flags, arphrd;
     uint8_t mac[6];
 };
+
 // prefixlen -> IPv4 netmask (network-order-as-host-u32). /16 -> 255.255.0.0 (0x0000ffff).
 static uint32_t netif_mask_be(int prefix) {
     uint8_t m[4] = {0, 0, 0, 0};
@@ -1429,17 +1628,18 @@ static uint32_t netif_mask_be(int prefix) {
     }
     return (uint32_t)(m[0] | (m[1] << 8) | (m[2] << 16) | (m[3] << 24));
 }
+
 static void nif_get(int slot, struct nif *o) {
     memset(o, 0, sizeof *o);
     if (slot == 0) { // lo: 127.0.0.1/8, UP|LOOPBACK|RUNNING
         o->name = "lo";
         o->index = 1;
-        o->ip = 0x0100007fu; // 127.0.0.1
+        o->ip = 0x0100007fu;   // 127.0.0.1
         o->mask = 0x000000ffu; // 255.0.0.0 (/8)
         o->mtu = 65536;
-        o->flags = 0x49;   // IFF_UP|IFF_LOOPBACK|IFF_RUNNING
-        o->arphrd = 772;   // ARPHRD_LOOPBACK
-    } else { // eth0: the bridge IP, UP|BROADCAST|RUNNING|MULTICAST
+        o->flags = 0x49; // IFF_UP|IFF_LOOPBACK|IFF_RUNNING
+        o->arphrd = 772; // ARPHRD_LOOPBACK
+    } else {             // eth0: the bridge IP, UP|BROADCAST|RUNNING|MULTICAST
         o->name = "eth0";
         o->index = 2;
         o->ip = netif_eth0_ip();
@@ -1451,6 +1651,7 @@ static void nif_get(int slot, struct nif *o) {
         netif_eth0_mac(o->mac);
     }
 }
+
 static int nif_by_name(const char *name, struct nif *o) {
     for (int i = 0; i < 2; i++) {
         nif_get(i, o);
@@ -1458,6 +1659,7 @@ static int nif_by_name(const char *name, struct nif *o) {
     }
     return 0;
 }
+
 static int nif_by_index(int idx, struct nif *o) {
     for (int i = 0; i < 2; i++) {
         nif_get(i, o);
@@ -1465,6 +1667,7 @@ static int nif_by_index(int idx, struct nif *o) {
     }
     return 0;
 }
+
 // Write a Linux sockaddr_in { u16 family=AF_INET(2); u16 port=0; u32 addr; u8 pad[8] } into the 24-byte
 // ifreq union at `u` (whole union cleared so stale caller bytes don't leak).
 static void ifr_set_in(uint8_t *u, uint32_t addr_be) {
@@ -1472,6 +1675,7 @@ static void ifr_set_in(uint8_t *u, uint32_t addr_be) {
     *(uint16_t *)(u + 0) = 2; // AF_INET (Linux value)
     *(uint32_t *)(u + 4) = addr_be;
 }
+
 // Handle a socket ioctl against the lo+eth0 model. Returns 1 if `rq` is one we own (result in *out,
 // 0 or -errno), 0 to let the caller fall through (non-socket-ioctl request).
 static int net_ioctl(int fd, unsigned long rq, uint8_t *arg, int64_t *out) {
@@ -1480,7 +1684,10 @@ static int net_ioctl(int fd, unsigned long rq, uint8_t *arg, int64_t *out) {
     {
         int ty;
         socklen_t tl = sizeof ty;
-        if (getsockopt(fd, SOL_SOCKET, SO_TYPE, &ty, &tl) < 0) { *out = -ENOTTY; return 1; }
+        if (getsockopt(fd, SOL_SOCKET, SO_TYPE, &ty, &tl) < 0) {
+            *out = -ENOTTY;
+            return 1;
+        }
     }
     if (rq == 0x8942) { // SIOCETHTOOL: busybox `ip link` probes it per interface. A real kernel answers
         // it (driver/link info); we don't model ethtool, but must not FAIL -- busybox prints
@@ -1511,14 +1718,24 @@ static int net_ioctl(int fd, unsigned long rq, uint8_t *arg, int64_t *out) {
         return 1;
     }
     if (rq == 0x8912) { // SIOCGIFCONF: fill an ifreq array (one per interface with an AF_INET addr)
-        if (!host_range_mapped((uintptr_t)arg, 16)) { *out = -EFAULT; return 1; }
+        if (!host_range_mapped((uintptr_t)arg, 16)) {
+            *out = -EFAULT;
+            return 1;
+        }
         int32_t ifc_len = *(int32_t *)(arg + 0);
         uint8_t *buf = (uint8_t *)*(uint64_t *)(arg + 8);
         int total = net_isolate() ? 1 : 2; // lo (+ eth0 unless --network none)
-        if (!buf) { *(int32_t *)(arg + 0) = total * LX_IFREQ_SZ; *out = 0; return 1; } // size probe
+        if (!buf) {
+            *(int32_t *)(arg + 0) = total * LX_IFREQ_SZ;
+            *out = 0;
+            return 1;
+        } // size probe
         int maxn = ifc_len / LX_IFREQ_SZ;
         int n = maxn < total ? maxn : total;
-        if (n > 0 && !host_range_mapped((uintptr_t)buf, (size_t)n * LX_IFREQ_SZ)) { *out = -EFAULT; return 1; }
+        if (n > 0 && !host_range_mapped((uintptr_t)buf, (size_t)n * LX_IFREQ_SZ)) {
+            *out = -EFAULT;
+            return 1;
+        }
         for (int i = 0; i < n; i++) {
             struct nif nif;
             nif_get(i, &nif);
@@ -1532,11 +1749,17 @@ static int net_ioctl(int fd, unsigned long rq, uint8_t *arg, int64_t *out) {
         return 1;
     }
     // The remaining requests all operate on a single struct ifreq.
-    if (!host_range_mapped((uintptr_t)arg, LX_IFREQ_SZ)) { *out = -EFAULT; return 1; }
+    if (!host_range_mapped((uintptr_t)arg, LX_IFREQ_SZ)) {
+        *out = -EFAULT;
+        return 1;
+    }
     struct nif nif;
     uint8_t *u = arg + LX_IFNAMSIZ; // the ifreq union
-    if (rq == 0x8910) { // SIOCGIFNAME: index -> name
-        if (!nif_by_index(*(int32_t *)u, &nif)) { *out = -ENODEV; return 1; }
+    if (rq == 0x8910) {             // SIOCGIFNAME: index -> name
+        if (!nif_by_index(*(int32_t *)u, &nif)) {
+            *out = -ENODEV;
+            return 1;
+        }
         memset(arg, 0, LX_IFNAMSIZ);
         snprintf((char *)arg, LX_IFNAMSIZ, "%s", nif.name);
         *out = 0;
@@ -1545,14 +1768,26 @@ static int net_ioctl(int fd, unsigned long rq, uint8_t *arg, int64_t *out) {
     char name[LX_IFNAMSIZ + 1];
     memcpy(name, arg, LX_IFNAMSIZ);
     name[LX_IFNAMSIZ] = 0;
-    if (!nif_by_name(name, &nif)) { *out = -ENODEV; return 1; }
+    if (!nif_by_name(name, &nif)) {
+        *out = -ENODEV;
+        return 1;
+    }
     switch (rq) {
     case 0x8915: ifr_set_in(u, nif.ip); break;    // SIOCGIFADDR
     case 0x8919: ifr_set_in(u, nif.bcast); break; // SIOCGIFBRDADDR
     case 0x891b: ifr_set_in(u, nif.mask); break;  // SIOCGIFNETMASK
-    case 0x8913: memset(u, 0, 24); *(int16_t *)u = (int16_t)nif.flags; break; // SIOCGIFFLAGS
-    case 0x8921: memset(u, 0, 24); *(int32_t *)u = nif.mtu; break;            // SIOCGIFMTU
-    case 0x8933: memset(u, 0, 24); *(int32_t *)u = nif.index; break;          // SIOCGIFINDEX
+    case 0x8913:
+        memset(u, 0, 24);
+        *(int16_t *)u = (int16_t)nif.flags;
+        break; // SIOCGIFFLAGS
+    case 0x8921:
+        memset(u, 0, 24);
+        *(int32_t *)u = nif.mtu;
+        break; // SIOCGIFMTU
+    case 0x8933:
+        memset(u, 0, 24);
+        *(int32_t *)u = nif.index;
+        break;   // SIOCGIFINDEX
     case 0x8927: // SIOCGIFHWADDR: sockaddr { u16 sa_family=ARPHRD_*; u8 mac[6] ... }
         memset(u, 0, 24);
         *(uint16_t *)u = nif.arphrd;
@@ -1579,22 +1814,25 @@ static int net_ioctl(int fd, unsigned long rq, uint8_t *arg, int64_t *out) {
 // NXDOMAIN (name has no address of any family), NODATA (name exists but not this type), SERVFAIL (transient
 // resolver error), multiple answers, TTL. Other qtypes (MX/TXT/SRV/SOA/NS/CAA/HTTPS/SVCB...) return NOERROR
 // with no answer (NODATA), so a client falls back to A/AAAA -- see the tracked-remaining note in the report.
-#define DD_DNS_NS 0x0b00007fu // 127.0.0.11, network byte order (bytes 7f 00 00 0b == LE u32 0x0b00007f)
+#define DD_DNS_NS 0x0b00007fu    // 127.0.0.11, network byte order (bytes 7f 00 00 0b == LE u32 0x0b00007f)
 static uint8_t g_dns_sock[1024]; // fd -> 1 if this fd is an intercepted, socketpair-backed DNS socket
 static int g_dns_peer[1024];     // fd -> engine-held socketpair end we write synthesized responses into
 
 // DNS interception is off under --network none (DD_NET_ISOLATE): Docker's null network has no resolver, so
 // :53 to 127.0.0.11 is left to fall through to the (dead) host loopback and name resolution fails, matching.
 static int g_dns_off = -1;
+
 static int dns_enabled(void) {
     if (g_dns_off < 0) g_dns_off = (getenv("DD_NET_ISOLATE") != NULL);
     return !g_dns_off;
 }
+
 // A Linux sockaddr_in destined for the embedded nameserver 127.0.0.11:53 (family value 2 == macOS AF_INET).
 static int dns_dest_is(const uint8_t *sa, socklen_t l) {
     return sa && l >= 8 && *(const uint16_t *)sa == AF_INET && *(const uint16_t *)(sa + 2) == htons(53) &&
            *(const uint32_t *)(sa + 4) == DD_DNS_NS;
 }
+
 // Report the nameserver's address (127.0.0.11:53) back to the guest as the packet source / peer.
 static void dns_fill_ns(uint8_t *sa, socklen_t *l) {
     if (!sa) return;
@@ -1604,6 +1842,7 @@ static void dns_fill_ns(uint8_t *sa, socklen_t *l) {
     memset(sa + 8, 0, 8);
     if (l) *l = 16;
 }
+
 // Swap the guest's AF_INET DNS socket for one end of an AF_UNIX socketpair (keeping the fd number + flags);
 // stash the other end so send handlers can push synthesized responses into it. Idempotent per fd.
 static int dns_swap(int fd, int stream) {
@@ -1627,6 +1866,7 @@ static int dns_swap(int fd, int stream) {
     g_dns_sock[fd] = 1;
     return 0;
 }
+
 // Encode a dotted host name into DNS wire label format (len-prefixed labels + a 0 terminator). -1 if it
 // wouldn't fit. A trailing dot / empty labels are skipped.
 static int dns_enc_name(uint8_t *out, int cap, const char *name) {
@@ -1654,6 +1894,7 @@ static int dns_enc_name(uint8_t *out, int cap, const char *name) {
     out[o++] = 0;
     return o;
 }
+
 // Decode a DNS name in a QUESTION (no compression) at msg[off] into a dotted string; return the number of
 // wire bytes consumed (incl the 0 terminator), or -1 on malformation.
 static int dns_dec_qname(const uint8_t *msg, int len, int off, char *name, int ncap) {
@@ -1669,21 +1910,25 @@ static int dns_dec_qname(const uint8_t *msg, int len, int off, char *name, int n
         o++;
         if (o + c > len) return -1;
         if (no && no < ncap - 1) name[no++] = '.';
-        for (int i = 0; i < c && no < ncap - 1; i++) name[no++] = (char)msg[o + i];
+        for (int i = 0; i < c && no < ncap - 1; i++)
+            name[no++] = (char)msg[o + i];
         o += c;
     }
     return -1;
 }
+
 static int dns_hexval(char ch) {
     if (ch >= '0' && ch <= '9') return ch - '0';
     if (ch >= 'a' && ch <= 'f') return ch - 'a' + 10;
     if (ch >= 'A' && ch <= 'F') return ch - 'A' + 10;
     return -1;
 }
+
 static int dns_ci_suffix(const char *s, const char *suf) {
     size_t ls = strlen(s), lf = strlen(suf);
     return ls >= lf && strcasecmp(s + ls - lf, suf) == 0;
 }
+
 // Append one resource record header (name = compression pointer to the question at offset 12) + rdata.
 static int dns_put_rr(uint8_t *a, int ao, int cap, uint16_t type, const uint8_t *rdata, int rdlen) {
     if (ao + 12 + rdlen > cap) return -1;
@@ -1702,6 +1947,7 @@ static int dns_put_rr(uint8_t *a, int ao, int cap, uint16_t type, const uint8_t 
     memcpy(a + ao, rdata, rdlen);
     return ao + rdlen;
 }
+
 // Reverse (PTR) lookup: parse the in-addr.arpa / ip6.arpa qname, ask the host, emit a PTR RR. Sets *rcode
 // (0 = NODATA when unparseable / no name). Returns the new answer offset.
 static int dns_answer_ptr(const char *qname, uint8_t *a, int ao, int cap, int *pan) {
@@ -1734,7 +1980,8 @@ static int dns_answer_ptr(const char *qname, uint8_t *a, int ao, int cap, int *p
             struct sockaddr_in6 *s = (struct sockaddr_in6 *)&ss;
             s->sin6_family = AF_INET6;
             uint8_t *ip = (uint8_t *)&s->sin6_addr;
-            for (int i = 0; i < 16; i++) ip[i] = (uint8_t)((nib[31 - 2 * i] << 4) | nib[31 - 2 * i - 1]);
+            for (int i = 0; i < 16; i++)
+                ip[i] = (uint8_t)((nib[31 - 2 * i] << 4) | nib[31 - 2 * i - 1]);
             sl = sizeof *s;
         }
     }
@@ -1749,7 +1996,8 @@ static int dns_answer_ptr(const char *qname, uint8_t *a, int ao, int cap, int *p
     (*pan)++;
     return nao;
 }
-// #322 reach-by-name: resolve a bare container/alias name to a same-network peer's IP from the daemon's
+
+// reach-by-name: resolve a bare container/alias name to a same-network peer's IP from the daemon's
 // LIVE per-network table at `<g_netbr>/.names` (one "ip\tname" line per endpoint, rewritten by the daemon
 // on every container start -- so a peer that joined AFTER this container launched, and is therefore absent
 // from this container's frozen /etc/hosts snapshot, is still resolvable). Consulted BEFORE the macOS host
@@ -1786,6 +2034,7 @@ static int dns_local_lookup(const char *qname, uint32_t *ip_be) {
     fclose(f);
     return found;
 }
+
 // Build a wire-format response for a wire-format query. Returns the response length, or -1 if the query is
 // too malformed to answer at all.
 static int dns_build_response(const uint8_t *q, int qlen, uint8_t *out, int cap) {
@@ -1808,7 +2057,7 @@ static int dns_build_response(const uint8_t *q, int qlen, uint8_t *out, int cap)
     int ao = 0;
 
     if (opcode != 0 || qclass != 1) {
-        rcode = 4; // not a standard IN query -> NOTIMP
+        rcode = 4;                          // not a standard IN query -> NOTIMP
     } else if (qtype == 1 || qtype == 28) { // A / AAAA
         // Reach-by-name: a same-network peer resolved from the daemon's live table wins over the host
         // resolver (instant, offline, and container names must never escape to external DNS). Local
@@ -1880,12 +2129,13 @@ emit:; // local-name A/AAAA answer assembled above jumps here, skipping the host
     out[4] = 0;
     out[5] = 1; // QDCOUNT
     out[6] = (uint8_t)(ancount >> 8);
-    out[7] = (uint8_t)ancount; // ANCOUNT
+    out[7] = (uint8_t)ancount;               // ANCOUNT
     out[8] = out[9] = out[10] = out[11] = 0; // NS/AR counts
-    memcpy(out + 12, q + 12, qsectlen); // echo the question
+    memcpy(out + 12, q + 12, qsectlen);      // echo the question
     memcpy(out + 12 + qsectlen, ans, ao);
     return 12 + qsectlen + ao;
 }
+
 // Process one query buffer sent on a DNS socket: build the response and push it into the socketpair peer so
 // the guest fd becomes readable. `stream` selects the 2-byte-length-prefixed TCP framing. Returns the byte
 // count to report as "sent" (always the whole query -- the guest sees a normal send).
@@ -1914,6 +2164,7 @@ static int64_t dns_send(int fd, const uint8_t *buf, size_t len, int stream) {
     }
     return (int64_t)len;
 }
+
 // Send-path entry used by sendto/send/sendmsg/sendmmsg (net.c) + write/writev (io.c). If `fd` is already a
 // DNS socket, or `dst` targets 127.0.0.11:53 (lazy first-datagram swap for the unconnected sendto path),
 // handle it and set *ret; otherwise return 0 so the caller runs the normal socket path.
@@ -1929,6 +2180,7 @@ static int dns_try_send(int fd, const uint8_t *buf, size_t len, const uint8_t *d
     *ret = dns_send(fd, buf, len, stream);
     return 1;
 }
+
 // Gather an iovec array into a scratch buffer (shared by the sendmsg/sendmmsg DNS paths).
 static size_t dns_gather(const struct iovec *iv, int ivn, uint8_t *tmp, size_t cap) {
     size_t tl = 0;

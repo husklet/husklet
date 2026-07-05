@@ -5,7 +5,11 @@
 
 use crate::scenario::{scen, sgroup, ScenGroup, Target};
 
-fn s(id: &'static str) -> crate::scenario::Scenario { scen(id, "alpine:latest").only(&[Target::ArmLinux]).timeout(30) }
+fn s(id: &'static str) -> crate::scenario::Scenario {
+    scen(id, "alpine:latest")
+        .only(&[Target::ArmLinux])
+        .timeout(30)
+}
 
 pub fn group() -> ScenGroup {
     sgroup("lifecycle", vec![

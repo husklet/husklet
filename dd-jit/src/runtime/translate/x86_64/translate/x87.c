@@ -20,15 +20,18 @@ static int g_x87opt = -1;  // -1 uninit; 0 = NOX87OPT set (off); 1 = on
 static int g_fp_known = 0; // 1 if the absolute top is statically known right now
 static int g_fp_top = 0;   // the known top (0..7), valid iff g_fp_known
 static int g_fp_dirty = 0; // 1 if the shadow top has not been written to cpu->fptop
+
 static int x87opt_on(void) {
     if (g_x87opt < 0) g_x87opt = (getenv("NOX87OPT") == NULL);
     return g_x87opt;
 }
+
 // &cpu->st[(g_fp_top+i)&7] -> xdst, single add (OFF_ST + slot*8 fits the add imm12).
 static void fp_slot_addr(int xdst, int i) {
     unsigned off = (unsigned)OFF_ST + (unsigned)(((g_fp_top + i) & 7) * 8);
     emit32(0x91000000u | (off << 10) | (28 << 5) | xdst); // add xdst, x28, #off
 }
+
 // Make cpu->fptop reflect the shadow (idempotent). Keeps g_fp_known.
 static void fp_materialize(void) {
     if (g_fp_known && g_fp_dirty) {
@@ -37,12 +40,15 @@ static void fp_materialize(void) {
         g_fp_dirty = 0;
     }
 }
+
 // Leave the static-top model (run boundary / untrackable op): spill the shadow, go runtime-top.
 static void fp_drop(void) {
     fp_materialize();
     g_fp_known = 0;
 }
+
 #define FP_STATIC (x87opt_on() && g_fp_known)
+
 static void fp_ld(int vd, int i) { // vd = ST(i)
     if (FP_STATIC) {
         fp_slot_addr(17, i);
@@ -50,6 +56,7 @@ static void fp_ld(int vd, int i) { // vd = ST(i)
     } else
         e_fp_ld(vd, i);
 }
+
 static void fp_st(int vs, int i) { // ST(i) = vs
     if (FP_STATIC) {
         fp_slot_addr(17, i);
@@ -57,6 +64,7 @@ static void fp_st(int vs, int i) { // ST(i) = vs
     } else
         e_fp_st(vs, i);
 }
+
 static void fp_push(int vs) { // push vs -> ST(0)  (top -= 1)
     if (FP_STATIC) {
         g_fp_top = (g_fp_top - 1) & 7;
@@ -66,6 +74,7 @@ static void fp_push(int vs) { // push vs -> ST(0)  (top -= 1)
     } else
         e_fp_push(vs);
 }
+
 static void fp_settop(int delta) { // top += delta  (pop = +1)
     if (FP_STATIC) {
         g_fp_top = (g_fp_top + delta) & 7;
@@ -73,6 +82,7 @@ static void fp_settop(int delta) { // top += delta  (pop = +1)
     } else
         e_fp_settop(delta);
 }
+
 #undef FP_STATIC
 
 // ===== x87 D9 Fx remainder / scale / extract group (computed on host doubles) ===========
@@ -86,16 +96,16 @@ static void fp_settop(int delta) { // top += delta  (pop = +1)
 // the low three bits of |Q| (C0<-Q2, C3<-Q1, C1<-Q0); FPREM1 leaves the quotient bits cleared -- both
 // matching qemu's helper_fprem and the `do { fprem } while (C2)` loop libc wraps around fmod/remainder.
 static void emit_fprem(int ieee) {
-    fp_ld(18, 0);                                                  // d18 = ST0
-    fp_ld(16, 1);                                                  // d16 = ST1
-    emit32(0x1E601800u | (16 << 16) | (18 << 5) | 17);            // fdiv  d17, d18, d16
-    emit32((ieee ? 0x1E644000u : 0x1E65C000u) | (17 << 5) | 17);  // frintn/frintz d17, d17  (= Q)
+    fp_ld(18, 0);                                                   // d18 = ST0
+    fp_ld(16, 1);                                                   // d16 = ST1
+    emit32(0x1E601800u | (16 << 16) | (18 << 5) | 17);              // fdiv  d17, d18, d16
+    emit32((ieee ? 0x1E644000u : 0x1E65C000u) | (17 << 5) | 17);    // frintn/frintz d17, d17  (= Q)
     emit32(0x1F408000u | (16 << 16) | (18 << 10) | (17 << 5) | 18); // fmsub d18, d17, d16, d18 (ST0-Q*ST1)
     fp_st(18, 0);
     e_ldr(16, 28, OFF_FPSW);
     e_movconst(19, ~(uint64_t)0x4700);
-    e_rrr(A_AND, 16, 16, 19, 1, 0); // clear C0/C1/C2/C3 (C2 stays 0 -> reduction complete)
-    if (!ieee) {                    // FPREM: quotient bits from the magnitude of Q
+    e_rrr(A_AND, 16, 16, 19, 1, 0);           // clear C0/C1/C2/C3 (C2 stays 0 -> reduction complete)
+    if (!ieee) {                              // FPREM: quotient bits from the magnitude of Q
         emit32(0x1E60C000u | (17 << 5) | 17); // fabs   d17, d17  (|Q|)
         emit32(0x9E780000u | (17 << 5) | 17); // fcvtzs x17, d17  (|Q| as integer)
         e_bfi(16, 17, 9, 1, 1);               // C1 (bit 9)  <- Q bit0
@@ -119,10 +129,10 @@ static void emit_fscale(void) {
     e_subi_s(31, 16, 2047, 1);        // cmp e, #2047
     e_csel(16, 19, 16, 12 /*GT*/, 1); // e = (e > 2047) ? 2047 : e
     e_movconst(19, 0);
-    e_subi_s(31, 16, 0, 1);           // cmp e, #0
-    e_csel(16, 19, 16, 11 /*LT*/, 1); // e = (e < 0)    ? 0    : e
-    e_lsl_i(16, 16, 52, 1);           // place e into the exponent field
-    e_fmov_to_d(17, 16);              // d17 = 2^n
+    e_subi_s(31, 16, 0, 1);                            // cmp e, #0
+    e_csel(16, 19, 16, 11 /*LT*/, 1);                  // e = (e < 0)    ? 0    : e
+    e_lsl_i(16, 16, 52, 1);                            // place e into the exponent field
+    e_fmov_to_d(17, 16);                               // d17 = 2^n
     emit32(0x1E600800u | (17 << 16) | (18 << 5) | 18); // fmul d18, d18, d17
     fp_st(18, 0);
 }
@@ -179,17 +189,17 @@ static void emit_fpsw_with_top(void) {
 // C0=(exp==max), C3=(exp==0), C2=!(zero|NaN). Scratch: x16/x17/x19/x21/x22, v18.
 static void emit_fxam(void) {
     fp_ld(18, 0);
-    e_fmov_from_d(16, 18);          // x16 = bit pattern of ST0
-    e_lsr_i(21, 16, 63, 1);         // x21 = sign            -> C1
+    e_fmov_from_d(16, 18);  // x16 = bit pattern of ST0
+    e_lsr_i(21, 16, 63, 1); // x21 = sign            -> C1
     e_lsr_i(17, 16, 52, 1);
     e_movconst(19, 0x7FF);
     e_rrr(A_AND, 17, 17, 19, 1, 0); // x17 = exponent field
     e_movconst(19, (1ull << 52) - 1);
     e_rrr(A_AND, 16, 16, 19, 1, 0); // x16 = mantissa field
     e_subi_s(31, 17, 0, 1);
-    e_cset(19, 0, 1);               // x19 = (exp == 0)      -> C3
+    e_cset(19, 0, 1); // x19 = (exp == 0)      -> C3
     e_subi_s(31, 17, 0x7FF, 1);
-    e_cset(17, 0, 1);               // x17 = (exp == max)    -> C0
+    e_cset(17, 0, 1); // x17 = (exp == max)    -> C0
     e_subi_s(31, 16, 0, 1);
     e_cset(16, 0, 1);               // x16 = (mantissa == 0)
     e_rrr(A_AND, 22, 19, 16, 1, 0); // x22 = zero = exp0 & mant0

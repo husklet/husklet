@@ -102,12 +102,12 @@ static void anon_split_unmap(uint64_t ustart, uint64_t uend) {
     }
 }
 
-// BUG #286: emulate a MAP_FIXED mapping of [a0, a0+a1) -- anon-zero when `anon`, else the file bytes at
+// emulate a MAP_FIXED mapping of [a0, a0+a1) -- anon-zero when `anon`, else the file bytes at
 // fd@off -- that lands inside one of the guest's OWN existing (writable private-anon) reservations,
 // WITHOUT clobbering a live 4 KB neighbour that shares a partial 16 KB host page. The guest uses 4 KB
 // pages; Apple Silicon uses 16 KB, and macOS MAP_FIXED replaces WHOLE host pages -- so a fixed map of a
 // sub-host-page range zeros/relays the neighbour occupying the rest of the edge host page (same class as
-// #201's MADV_DONTNEED). Fix (mirrors that split): MAP_FIXED-remap only the fully-covered INTERIOR host
+// MADV_DONTNEED). Fix (mirrors that split): MAP_FIXED-remap only the fully-covered INTERIOR host
 // pages (fresh pages; load the file bytes there for a file map); write the partial head/tail edges IN
 // PLACE over EXACTLY the requested bytes (memset 0 for anon, pread for file) so the neighbour survives.
 // The caller gates this on the range being contained in a writable private-anon region, so the edge host
@@ -118,8 +118,8 @@ static int host_fixed_map286(uint64_t a0, uint64_t a1, int prot, int anon, int f
     uint64_t ilo = (lo + hp - 1) & ~((uint64_t)hp - 1); // first fully-covered host page
     uint64_t ihi = hi & ~((uint64_t)hp - 1);            // end of last fully-covered host page
     if (ilo < ihi) {
-        if (mmap((void *)ilo, (size_t)(ihi - ilo), prot | PROT_READ | PROT_WRITE,
-                 MAP_FIXED | MAP_ANON | MAP_PRIVATE, -1, 0) == MAP_FAILED)
+        if (mmap((void *)ilo, (size_t)(ihi - ilo), prot | PROT_READ | PROT_WRITE, MAP_FIXED | MAP_ANON | MAP_PRIVATE,
+                 -1, 0) == MAP_FAILED)
             return -1;
         if (!anon && fd >= 0) pread(fd, (void *)ilo, (size_t)(ihi - ilo), off + (off_t)(ilo - lo));
     }
@@ -203,7 +203,7 @@ static int svc_mem(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_
         }
         // Drop any guest PROT_NONE coverage for the unmapped range (the EFAULT registry, thread.c): the
         // addresses no longer name an inaccessible mapping. Uses the guest logical [a0,a1) even when the
-        // physical release below is partial (BUG #286) -- the guest's mapping is logically gone either way.
+        // physical release below is partial -- the guest's mapping is logically gone either way.
         gna_clear(a0 & ~(uint64_t)0xfff, (a0 + a1 + 0xfff) & ~(uint64_t)0xfff);
         // A non-fixed anon mapping carries a 64 KB guard tail that mmap (case 222) reserved
         // past the guest's logical length (so glibc's vectorized over-reads land in mapped memory).
@@ -227,8 +227,8 @@ static int svc_mem(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_
         //     tail (else ~64 KB leaks per map/unmap cycle) -- is safe.
         //   * Any OTHER unmap may be a 4 KB-granular SUB-RANGE of a larger mapping (V8's page allocator
         //     freeing an interior chunk, ZendMM trimming an aligned over-allocation), whose partial edge
-        //     host pages still back a LIVE 4 KB neighbour the guest keeps. BUG #286 (same 16 KB-vs-4 KB
-        //     class as #201): a plain munmap there rounds a partial edge page OUT to the full 16 KB and
+        //     host pages still back a LIVE 4 KB neighbour the guest keeps. (same 16 KB-vs-4 KB
+        //     class as): a plain munmap there rounds a partial edge page OUT to the full 16 KB and
         //     unmaps the neighbour -- and an unaligned start is outright EINVAL'd by host munmap (V8 then
         //     aborts on CHECK(0 == munmap)). So release only the whole HOST pages lying ENTIRELY inside
         //     [a0, a0+len); the partial edge pages stay mapped. The guest's logical unmap still succeeds
@@ -273,7 +273,7 @@ static int svc_mem(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_
         //   MREMAP_MAYMOVE  : may relocate (allocate a new region, copy, free the old).
         // Getting this wrong corrupts the guest: a flags==0 caller keeps using the OLD address (Linux
         // guarantees it is unchanged), so relocating -- and freeing the old region out from under those
-        // still-live pointers -- is a use-after-free (BUG #211: glibc/ZendMM grows a ~2 MB json_encode
+        // still-live pointers -- is a use-after-free (glibc/ZendMM grows a ~2 MB json_encode
         // buffer by one page with a no-move mremap; the old code always moved it -> SIGSEGV).
         // The original anon mmap (case 222) reserved a 64 KB guard tail past the guest's logical length,
         // so the tracked extent is a1+guard; a grow whose new length still fits inside that already-mapped
@@ -289,7 +289,7 @@ static int svc_mem(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_
             break;
         }
         const uint64_t guard = 0x10000;
-        uint64_t tracked = gmap_find_len(a0);          // full mapped extent at a0 (incl. guard), 0 if untracked
+        uint64_t tracked = gmap_find_len(a0);             // full mapped extent at a0 (incl. guard), 0 if untracked
         uint64_t phys = tracked ? tracked : (uint64_t)a1; // bytes we can assume are mapped at a0
         // MREMAP_FIXED(2): relocate the mapping to EXACTLY new_addr (a4), the way mremap(MREMAP_FIXED) does.
         // Linux (mm/mremap.c) requires MREMAP_MAYMOVE to also be set, a page-aligned new_addr, and that the
@@ -307,17 +307,17 @@ static int svc_mem(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_
             // Relocate ONLY a PRIVATE-ANON source: emulate by placing a fresh private-anon region
             // (+guard tail for glibc over-reads) at a4, copying min(old,new) bytes, then freeing the old
             // extent. A host MAP_FIXED needs a host-page-aligned base; when a4 is only guest-page- (4 KB-)
-            // aligned it may fall inside a tracked writable anon reservation, so use the #286 edge-safe
+            // aligned it may fall inside a tracked writable anon reservation, so use the edge-safe
             // fixed map there. A FILE-backed / MAP_SHARED source is intentionally NOT relocated here (we do
             // not track the fd/offset needed to re-map the file at a4); it falls through to the pre-existing
             // shrink/grow/relocate logic below, where a same-size/shrink FIXED stays coherent via the shared
-            // file exactly as before #417 (LTP mremap06 moves a MAP_SHARED sub-mapping this way).
+            // file exactly as before (LTP mremap06 moves a MAP_SHARED sub-mapping this way).
             if (anon_prot_if_contained(a0, (size_t)a1) >= 0) {
                 size_t hp = (size_t)getpagesize();
                 void *r;
                 if ((a4 & (hp - 1)) == 0) {
-                    r = mmap((void *)a4, (size_t)a2 + guard, PROT_READ | PROT_WRITE,
-                             MAP_FIXED | MAP_ANON | MAP_PRIVATE, -1, 0);
+                    r = mmap((void *)a4, (size_t)a2 + guard, PROT_READ | PROT_WRITE, MAP_FIXED | MAP_ANON | MAP_PRIVATE,
+                             -1, 0);
                 } else {
                     int aprot = anon_prot_if_contained(a4, (size_t)a2);
                     r = (aprot >= 0 && (aprot & PROT_WRITE) &&
@@ -361,7 +361,7 @@ static int svc_mem(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_
                 mmap((void *)end, (size_t)(a0 + want - end), PROT_READ | PROT_WRITE, MAP_ANON | MAP_PRIVATE, -1, 0);
             if (ext == (void *)end) {
                 gmap_del(a0);
-                gmap_add(a0, want); // track the grown extent (incl. fresh guard) for execve() teardown
+                gmap_add(a0, want);              // track the grown extent (incl. fresh guard) for execve() teardown
                 gmap_set_glen(a0, (uint64_t)a2); // /proc maps report the guest length (sans guard)
                 anon_track(a0, want, PROT_READ | PROT_WRITE);
                 G_RET(c) = a0;
@@ -389,8 +389,8 @@ static int svc_mem(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_
             gmap_del(a0);
             anon_untrack(a0, (size_t)phys);
         }
-        gmap_add((uint64_t)r, (uint64_t)a2 + guard);                         // track for execve() teardown
-        gmap_set_glen((uint64_t)r, (uint64_t)a2);                            // /proc maps: guest length (sans guard)
+        gmap_add((uint64_t)r, (uint64_t)a2 + guard);                           // track for execve() teardown
+        gmap_set_glen((uint64_t)r, (uint64_t)a2);                              // /proc maps: guest length (sans guard)
         anon_track((uint64_t)r, (uint64_t)a2 + guard, PROT_READ | PROT_WRITE); // fresh private-anon copy
         G_RET(c) = (uint64_t)r;
         break;
@@ -462,7 +462,7 @@ static int svc_mem(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_
         uint64_t pc_hint = 0;
         (void)pc_hint;
 #ifdef PCACHE_MMAP_HINT
-        // #178 (pcache): give the dynamic linker's file-backed, non-fixed, kernel-placed maps (library
+        // (pcache): give the dynamic linker's file-backed, non-fixed, kernel-placed maps (library
         // loads) a DETERMINISTIC base hint so their translated blocks are reusable across runs of the same
         // binary. A plain hint, never MAP_FIXED: if the range is busy the kernel places it elsewhere and
         // the map simply isn't cacheable this run (pcache_note_libmap below only records hint-honored
@@ -473,11 +473,11 @@ static int svc_mem(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_
             a0 = pc_hint;
         }
 #endif
-        // BUG #286: a MAP_FIXED map that REPLACES a 4 KB-granular sub-range of one of the guest's own
+        // a MAP_FIXED map that REPLACES a 4 KB-granular sub-range of one of the guest's own
         // reservations (V8/Go committing fresh pages, or ld.so laying a segment inside its reserved span)
         // has a partial 16 KB host-page edge shared with a LIVE 4 KB neighbour. A direct host MAP_FIXED
-        // there replaces WHOLE host pages -> the neighbour is zeroed/relaid (the #201 heap-corruption
-        // class; the likely victoria-metrics #291 SIGBUS). When the range is fully contained in a tracked
+        // there replaces WHOLE host pages -> the neighbour is zeroed/relaid (the heap-corruption
+        // class; the likely victoria-metrics SIGBUS). When the range is fully contained in a tracked
         // WRITABLE private-anon region (so its edge host pages are mapped+writable), emulate the fixed map
         // edge-safely instead: remap only the interior host pages, fill the partial edges in place. Gated
         // on containment, so every fresh/whole-page/free-space fixed map keeps the direct path below and is
@@ -486,16 +486,14 @@ static int svc_mem(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_
         if ((a3 & 0x10) && a1 && ((a0 & (hp - 1)) || ((a0 + a1) & (hp - 1)))) {
             int aprot = anon_prot_if_contained(a0, (size_t)a1);
             if (aprot >= 0 && (aprot & PROT_WRITE)) {
-                r = host_fixed_map286(a0, a1, prot, (a3 & 0x20) ? 1 : 0, (a3 & 0x20) ? -1 : (int)a4,
-                                      (off_t)a5) == 0
+                r = host_fixed_map286(a0, a1, prot, (a3 & 0x20) ? 1 : 0, (a3 & 0x20) ? -1 : (int)a4, (off_t)a5) == 0
                         ? (void *)a0
                         : MAP_FAILED;
                 fixed286 = 1;
             }
         }
         if (!fixed286)
-            r = mmap((void *)a0, (size_t)a1 + guard, prot, mmap_flags((int)a3), (a3 & 0x20) ? -1 : (int)a4,
-                     (off_t)a5);
+            r = mmap((void *)a0, (size_t)a1 + guard, prot, mmap_flags((int)a3), (a3 & 0x20) ? -1 : (int)a4, (off_t)a5);
         // Host-page-unaligned file offset. macOS uses 16 KB pages and its mmap requires the FILE OFFSET to
         // be a multiple of the host page size, but a Linux guest (4 KB pages) may legitimately map a file at
         // any 4 KB-granular offset. A non-MAP_FIXED file map whose offset is 4 KB- but not 16 KB-aligned is
@@ -613,14 +611,17 @@ static int svc_mem(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_
             // syscall buffer landing in it still EFAULTs (LTP read02); an accessible map clears stale coverage.
             {
                 uint64_t glo = (uint64_t)r, ghi = ((uint64_t)r + (uint64_t)a1 + 0xfff) & ~(uint64_t)0xfff;
-                if ((int)a2 == PROT_NONE) gna_add(glo, ghi);
-                else gna_clear(glo, ghi);
+                if ((int)a2 == PROT_NONE)
+                    gna_add(glo, ghi);
+                else
+                    gna_clear(glo, ghi);
             }
 #ifdef PCACHE_MMAP_HINT
-            // #178 (pcache): a hinted library map that landed ON its deterministic hint. Cold epoch:
+            // (pcache): a hinted library map that landed ON its deterministic hint. Cold epoch:
             // record {base, len, file identity} in the save manifest. Warm epoch: the activation gate for
             // the restored blocks deferred over this range (identity must match, or they stay dead).
-            if (pc_hint && (uint64_t)(uintptr_t)r == pc_hint) pcache_note_libmap((uint64_t)(uintptr_t)r, (uint64_t)a1, (int)a4);
+            if (pc_hint && (uint64_t)(uintptr_t)r == pc_hint)
+                pcache_note_libmap((uint64_t)(uintptr_t)r, (uint64_t)a1, (int)a4);
 #endif
         }
         G_RET(c) = (r == MAP_FAILED) ? (uint64_t)(-errno) : (uint64_t)r;
@@ -632,8 +633,10 @@ static int svc_mem(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_
         // registry tracks the guest's INTENT (reserve PROT_NONE -> commit RW) so buffer checks EFAULT.
         if (a1) {
             uint64_t glo = a0 & ~(uint64_t)0xfff, ghi = (a0 + a1 + 0xfff) & ~(uint64_t)0xfff;
-            if ((int)a2 == PROT_NONE) gna_add(glo, ghi);
-            else gna_clear(glo, ghi);
+            if ((int)a2 == PROT_NONE)
+                gna_add(glo, ghi);
+            else
+                gna_clear(glo, ghi);
         }
         G_RET(c) = 0;
         break;
@@ -684,8 +687,8 @@ static int svc_mem(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_
     // so sub-host-page granularity is coarser than a real 4 KB kernel, but residency of the covering
     // page is faithful.) Untouched trailing bytes (the guest zero-filled its vector) stay 0 = absent.
     case 232: {
-        size_t hps = (size_t)getpagesize();  // host mmap granularity (16 KB on Apple Silicon)
-        size_t gps = guest_pagesz();          // page size the GUEST believes in (4 KB x86 / 16 KB arm)
+        size_t hps = (size_t)getpagesize(); // host mmap granularity (16 KB on Apple Silicon)
+        size_t gps = guest_pagesz();        // page size the GUEST believes in (4 KB x86 / 16 KB arm)
         size_t len = (size_t)a1;
         // Linux mincore requires a page-aligned start address -> EINVAL otherwise (align to the GUEST page
         // so a valid 4 KB-granular x86 start is not rejected on the 16 KB host).
@@ -708,18 +711,24 @@ static int svc_mem(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_
         // Guest pages SMALLER than host pages (x86_64: 4 KB guest vs 16 KB host). The host mincore fills
         // one status byte per 16 KB page, but the guest allocated ceil(len/4KB) bytes and indexes them at
         // 4 KB granularity -- so writing the host-granular vector directly leaves 3 of every 4 guest-page
-        // slots at 0 (the #319 x86 under-report). Run mincore into a host-granular scratch buffer, then
+        // slots at 0 (the x86 under-report). Run mincore into a host-granular scratch buffer, then
         // project each guest page's residency from the host page that physically covers it.
         size_t hpages = (len + hps - 1) / hps;
         size_t gpages = (len + gps - 1) / gps;
         size_t per = hps / gps; // guest pages per host page (== 4)
         unsigned char stackbuf[1024], *hv = stackbuf;
-        if (hpages > sizeof stackbuf) { hv = (unsigned char *)malloc(hpages); if (!hv) { G_RET(c) = (uint64_t)(-ENOMEM); break; } }
+        if (hpages > sizeof stackbuf) {
+            hv = (unsigned char *)malloc(hpages);
+            if (!hv) {
+                G_RET(c) = (uint64_t)(-ENOMEM);
+                break;
+            }
+        }
         int r = mincore((void *)a0, len, (char *)hv);
         if (r == 0 && a2) {
             // The host mincore filled our scratch `hv`; the guest vector at a2 is written DIRECTLY by the
             // engine (one byte per guest page). Validate it before the projection loop so a bad/unmapped
-            // pointer returns -EFAULT instead of faulting the engine (#395) -- the fast path above lets the
+            // pointer returns -EFAULT instead of faulting the engine -- the fast path above lets the
             // host mincore fault a2 itself, but this slow path never hands a2 to a host syscall.
             if (!host_range_mapped((uintptr_t)a2, gpages)) {
                 if (hv != stackbuf) free(hv);
@@ -749,8 +758,14 @@ static int svc_mem(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_
         // A zero length is a no-op success (nothing to mark). Not forwarded to the host: macOS has no
         // such advice, and the effect is realized in our own fork path.
         if (adv == 18 || adv == 19) {
-            if (a1 == 0) { G_RET(c) = 0; break; }
-            if (anon_prot_if_contained(a0, (size_t)a1) < 0) { G_RET(c) = (uint64_t)(-EINVAL); break; }
+            if (a1 == 0) {
+                G_RET(c) = 0;
+                break;
+            }
+            if (anon_prot_if_contained(a0, (size_t)a1) < 0) {
+                G_RET(c) = (uint64_t)(-EINVAL);
+                break;
+            }
             if (adv == 18)
                 wipefork_add(a0, (size_t)a1);
             else
@@ -767,7 +782,7 @@ static int svc_mem(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_
         if (adv == 4 && a1) {
             int aprot = anon_prot_if_contained(a0, (size_t)a1);
             if (aprot >= 0) {
-                // BUG #201: emulate Linux MADV_DONTNEED (range reads back ZERO) WITHOUT corrupting a live
+                // emulate Linux MADV_DONTNEED (range reads back ZERO) WITHOUT corrupting a live
                 // neighbour that shares a host page. The guest uses 4 KB pages; Apple Silicon uses 16 KB.
                 // A plain `mmap(a0, a1, MAP_FIXED|ANON)` rounds a partial head/tail host page OUT to the full
                 // 16 KB, so a guest DONTNEED of a free 4/8 KB span silently unmaps+zeros a LIVE object in the
@@ -811,14 +826,17 @@ static int svc_mem(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_
     }
     // process_vm_readv: copy FROM the remote iovecs (a3/a4) INTO the local iovecs (a1/a2). Same address
     // space here, so it's a direct scatter/gather memcpy (the remote pid in a0 is the guest itself).
-    // #238: when the remote pid is a DIFFERENT (traced, stopped) guest process -- strace reads a tracee's
+    // when the remote pid is a DIFFERENT (traced, stopped) guest process -- strace reads a tracee's
     // syscall-string args this way -- route to the ptrace cross-process path (the remote lives in another
     // host address space, so a direct memcpy would read OUR own COW copy). ptrace_pvm returns >=0 bytes /
     // -errno when it owns the call, or INT_MIN to say "not a traced remote -> use the same-space memcpy".
     case 270: {
         long pr = ptrace_pvm(c, 0, (pid_t)(int)a0, (const struct iovec *)a1, (unsigned long)a2,
                              (const struct iovec *)a3, (unsigned long)a4);
-        if (pr != PT_PVM_LOCAL) { G_RET(c) = (uint64_t)pr; break; }
+        if (pr != PT_PVM_LOCAL) {
+            G_RET(c) = (uint64_t)pr;
+            break;
+        }
         G_RET(c) = (uint64_t)svc_vm_iov_copy((const struct iovec *)a1, (unsigned long)a2, (const struct iovec *)a3,
                                              (unsigned long)a4);
         break;
@@ -827,7 +845,10 @@ static int svc_mem(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_
     case 271: {
         long pr = ptrace_pvm(c, 1, (pid_t)(int)a0, (const struct iovec *)a1, (unsigned long)a2,
                              (const struct iovec *)a3, (unsigned long)a4);
-        if (pr != PT_PVM_LOCAL) { G_RET(c) = (uint64_t)pr; break; }
+        if (pr != PT_PVM_LOCAL) {
+            G_RET(c) = (uint64_t)pr;
+            break;
+        }
         G_RET(c) = (uint64_t)svc_vm_iov_copy((const struct iovec *)a3, (unsigned long)a4, (const struct iovec *)a1,
                                              (unsigned long)a2);
         break;
@@ -844,16 +865,16 @@ static int svc_mem(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_
         case 0: // CMD_QUERY -> bitmask of supported commands (every command we accept below)
             G_RET(c) = (1u << 0) | (1u << 1) | (1u << 2) | (1u << 3) | (1u << 4) | (1u << 5) | (1u << 6);
             break;
-        case 1:        // CMD_GLOBAL
-        case 2:        // CMD_GLOBAL_EXPEDITED
-        case 8:        // CMD_PRIVATE_EXPEDITED
-        case 32:       // CMD_PRIVATE_EXPEDITED_SYNC_CORE
+        case 1:  // CMD_GLOBAL
+        case 2:  // CMD_GLOBAL_EXPEDITED
+        case 8:  // CMD_PRIVATE_EXPEDITED
+        case 32: // CMD_PRIVATE_EXPEDITED_SYNC_CORE
             atomic_thread_fence(memory_order_seq_cst);
             G_RET(c) = 0;
             break;
-        case 4:        // CMD_REGISTER_GLOBAL_EXPEDITED
-        case 16:       // CMD_REGISTER_PRIVATE_EXPEDITED
-        case 64:       // CMD_REGISTER_PRIVATE_EXPEDITED_SYNC_CORE
+        case 4:           // CMD_REGISTER_GLOBAL_EXPEDITED
+        case 16:          // CMD_REGISTER_PRIVATE_EXPEDITED
+        case 64:          // CMD_REGISTER_PRIVATE_EXPEDITED_SYNC_CORE
             G_RET(c) = 0; // arm the expedited fast path -> nothing to do in this coherent DBT
             break;
         default: G_RET(c) = (uint64_t)(-EINVAL); break;

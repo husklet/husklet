@@ -15,17 +15,18 @@ static int jail_ro(const char *abs) {
     // pseudo-mounts (/proc /dev /sys /tmp /run) -- exactly as runc leaves those mounted rw over a ro root.
     return rootfs_ro_denies(abs);
 }
+
 // 1 if the absolute guest path falls under ANY bind-mount volume (rw or ro). A volume is its OWN jail
 // root, not the overlay rootfs/lowers, so a volume directory must be listed via plain readdir of its
 // host fd -- the overlay merged-readdir only knows the image lowers + the upper and would return empty.
 // openat uses this to NOT tag a volume dir fd as an overlay dir (else getdents shows an empty mount).
 static int jail_is_vol(const char *abs) {
     for (int i = 0; i < g_nvols; i++)
-        if (!strncmp(abs, g_vols[i].guest, g_vols[i].glen) &&
-            (abs[g_vols[i].glen] == '/' || abs[g_vols[i].glen] == 0))
+        if (!strncmp(abs, g_vols[i].guest, g_vols[i].glen) && (abs[g_vols[i].glen] == '/' || abs[g_vols[i].glen] == 0))
             return 1;
     return 0;
 }
+
 // Convenience: resolve a (dirfd, raw) target to its guest abs path (same as abs_guest) and test RO.
 static int jail_ro_at(int dirfd, const char *raw) {
     if (g_nvols == 0 && !g_rootfs_ro) return 0; // no RO surface at all -> skip work; behavior identical to before
@@ -33,6 +34,7 @@ static int jail_ro_at(int dirfd, const char *raw) {
     abs_guest(dirfd, raw, abs, sizeof abs);
     return jail_ro(abs);
 }
+
 // The guest directory that CONTAINS volume `vi`'s mount point: "/x/y" -> "/x", "/data" -> "/". A `..`
 // that pops above a volume's own root resolves, per Linux bind-mount semantics, to the parent mount's
 // directory at the mount point -- i.e. the dir that holds the volume, which lives in the rootfs/overlay
@@ -48,6 +50,7 @@ static void vol_parent_guest(int vi, char *out, size_t n) {
     memcpy(out, g, plen);
     out[plen] = 0;
 }
+
 // Like jail_pick() but also reports the matched volume index (-1 for the rootfs/overlay jail), so the
 // walk can recognize a volume's own root and cross its bind-mount boundary on a `..`. Same first-prefix
 // match as jail_pick(); *rel is the path within the chosen jail.
@@ -62,6 +65,7 @@ static int jail_pick_idx(const char *abs, const char **rel, int *vi) {
     *vi = -1;
     return g_root_fd;
 }
+
 // Does the path contain a `..` component? The dentry-cache fast path in resolve_at must skip such
 // paths: this walk resolves `..` AFTER any preceding symlink (POSIX), while confine()/the dc_ keys
 // collapse it lexically -- the two only provably agree on '..'-free paths.
@@ -70,6 +74,7 @@ static int path_has_dotdot(const char *p) {
         if (s[0] == '.' && s[1] == '.' && (s == p || s[-1] == '/') && (s[2] == '/' || s[2] == 0)) return 1;
     return 0;
 }
+
 // TOCTOU-FREE confinement. Resolve `guest` (absolute) one component at a time on PINNED dir-fds,
 // never following a symlink out of the jail. Returns a fresh dir-fd to the confined parent (caller
 // closes) + the final component in `final`. -1 on escape/error. No check/use gap: each step
@@ -219,9 +224,8 @@ restart:;
                 while (nf > 1)
                     close(fds[--nf]);
                 snprintf(rest, sizeof rest, "%s%s", lk, tail);
-            // abs -> back to root
-            }
-            else
+                // abs -> back to root
+            } else
                 // tail already carries its leading '/' (or is empty)
                 snprintf(rest, sizeof rest, "%s%s", lk, tail);
             continue;
@@ -234,7 +238,7 @@ restart:;
         if (d < 0) {
             ret = -errno;
             goto out;
-        // ENOENT/ENOTDIR/ELOOP -> natural
+            // ENOENT/ENOTDIR/ELOOP -> natural
         }
         if (nf >= 260) {
             close(d);
@@ -252,6 +256,7 @@ out:
         close(fds[i]);
     return ret;
 }
+
 // Confined (parent-fd, final) for a guest *at path: absolute or tracked-dir-fd-relative; else deny.
 static int jail_at(int dirfd, const char *raw, char *final, size_t fn, int nofollow) {
     char abs[8192];

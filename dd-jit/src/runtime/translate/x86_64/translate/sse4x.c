@@ -21,19 +21,29 @@
 
 // ---- tiny GPR encoders local to this class ----
 static void e4_rev(int rd, int rn, int nb) { // byte-reverse: REV16 (nb=2) / REV Wd (4) / REV Xd (8)
-    emit32(nb == 2 ? (0x5AC00400u | (rn << 5) | rd)
-                   : nb == 4 ? (0x5AC00800u | (rn << 5) | rd) : (0xDAC00C00u | (rn << 5) | rd));
+    emit32(nb == 2   ? (0x5AC00400u | (rn << 5) | rd)
+           : nb == 4 ? (0x5AC00800u | (rn << 5) | rd)
+                     : (0xDAC00C00u | (rn << 5) | rd));
 }
+
 // INS Vd.<T>[i], Rn (general): imm5 selects lane size+index. nb = element bytes (1/2/4/8).
 static void e4_ins_g(int vd, int i, int rn, int nb) {
-    unsigned imm5 = (nb == 1) ? ((i << 1) | 1) : (nb == 2) ? ((i << 2) | 2) : (nb == 4) ? ((i << 3) | 4) : ((i << 4) | 8);
+    unsigned imm5 = (nb == 1)   ? ((i << 1) | 1)
+                    : (nb == 2) ? ((i << 2) | 2)
+                    : (nb == 4) ? ((i << 3) | 4)
+                                : ((i << 4) | 8);
     emit32(0x4E001C00u | (imm5 << 16) | (rn << 5) | vd);
 }
+
 // UMOV Rd, Vn.<T>[i]: zero-extending lane read into a GPR (W for nb<=4, X for nb=8).
 static void e4_umov(int rd, int vn, int i, int nb) {
-    unsigned imm5 = (nb == 1) ? ((i << 1) | 1) : (nb == 2) ? ((i << 2) | 2) : (nb == 4) ? ((i << 3) | 4) : ((i << 4) | 8);
+    unsigned imm5 = (nb == 1)   ? ((i << 1) | 1)
+                    : (nb == 2) ? ((i << 2) | 2)
+                    : (nb == 4) ? ((i << 3) | 4)
+                                : ((i << 4) | 8);
     emit32(((nb == 8) ? 0x4E003C00u : 0x0E003C00u) | (imm5 << 16) | (vn << 5) | rd);
 }
+
 // materialize an arbitrary 16-byte constant into v<vd> (via x16: movconst + fmov d / ins d[1])
 static void e4_vconst16(int vd, uint64_t lo, uint64_t hi) {
     e_movconst(16, lo);
@@ -147,7 +157,7 @@ static int translate_sse4x(struct insn *I, uint64_t next) {
             //   needed bytes:  S(in[4,5,6,7]) at out[4,1,14,11];  S(in[12..15]) at out[12,9,6,3]
             //   index vector:  {4,1,14,11, 1,14,11,4, 12,9,6,3, 9,6,3,12}
             if (g_fp_known) fp_drop();
-            int s = crypto_rm_vec(I, next); // v19 when memory-backed
+            int s = crypto_rm_vec(I, next);                       // v19 when memory-backed
             if (!g_v26z || nosseopt()) e_v3(A_EOR16, 26, 26, 26); // v26 = 0 (hoisted zero round key)
             g_v26z = 1;
             e_vmov(17, s);

@@ -7,10 +7,10 @@
 //!
 //! Built only on macOS where the GTK stack is available (see the workspace `default-members` note).
 
-mod ui;
-mod update;
 #[cfg(target_os = "macos")]
 mod mac;
+mod ui;
+mod update;
 
 use ddclient::{Client, Container, DiskUsage, Image, Network, SystemInfo, Volume};
 use gtk::prelude::GtkWindowExt; // for root.set_default_size on connect/disconnect
@@ -143,7 +143,11 @@ impl Component for AppModel {
         gtk::ApplicationWindow::new(&relm4::main_application())
     }
 
-    fn init(socket: Self::Init, root: Self::Root, sender: ComponentSender<Self>) -> ComponentParts<Self> {
+    fn init(
+        socket: Self::Init,
+        root: Self::Root,
+        sender: ComponentSender<Self>,
+    ) -> ComponentParts<Self> {
         let model = AppModel {
             socket: socket.clone(),
             snap: Snapshot::default(),
@@ -205,7 +209,10 @@ impl Component for AppModel {
         if let Ok(shot) = std::env::var("DD_SHOT") {
             root.set_default_size(1040, 680); // skip the compact onboarding size for the capture
             let win = root.clone();
-            let delay = std::env::var("DD_SHOT_DELAY_MS").ok().and_then(|s| s.parse().ok()).unwrap_or(1800);
+            let delay = std::env::var("DD_SHOT_DELAY_MS")
+                .ok()
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(1800);
             gtk::glib::timeout_add_local_once(Duration::from_millis(delay), move || {
                 match ui::screenshot(&win, &shot) {
                     Ok(()) => eprintln!("[dd-shot] wrote {shot}"),
@@ -304,7 +311,10 @@ impl Component for AppModel {
                 self.category = Category::Containers;
                 self.selection = Selection::None;
                 self.act(sender, socket, move |c| async move {
-                    let spec = ddclient::CreateContainer { image, ..Default::default() };
+                    let spec = ddclient::CreateContainer {
+                        image,
+                        ..Default::default()
+                    };
                     if let Ok(id) = c.create_container(&spec).await {
                         let _ = c.start_container(&id).await;
                     }
@@ -350,8 +360,20 @@ impl Component for AppModel {
                     let _ = c.remove_network(&id).await;
                 });
             }
-            Msg::NewNetwork => ui::prompt_name(root, "New network", "network name", &sender, Msg::CreateNetwork),
-            Msg::NewVolume => ui::prompt_name(root, "New volume", "volume name", &sender, Msg::CreateVolume),
+            Msg::NewNetwork => ui::prompt_name(
+                root,
+                "New network",
+                "network name",
+                &sender,
+                Msg::CreateNetwork,
+            ),
+            Msg::NewVolume => ui::prompt_name(
+                root,
+                "New volume",
+                "volume name",
+                &sender,
+                Msg::CreateVolume,
+            ),
             Msg::CreateNetwork(name) => {
                 self.selection = Selection::None;
                 self.act(sender, socket, move |c| async move {
@@ -380,11 +402,18 @@ impl Component for AppModel {
             Cmd::Snapshot(s) => {
                 self.snap = *s;
                 // Drop "removing" markers for containers that are gone (removal finished).
-                self.removing.retain(|id| self.snap.containers.iter().any(|c| &c.id == id));
+                self.removing
+                    .retain(|id| self.snap.containers.iter().any(|c| &c.id == id));
                 // Append a sparkline sample (keep ~80 = a few minutes at the 2s poll).
                 if self.snap.connected {
-                    let running = self.snap.containers.iter().filter(|c| c.running()).count() as f64;
-                    let disk_gb = self.snap.df.as_ref().map(|d| d.layers_size as f64 / 1.0e9).unwrap_or(0.0);
+                    let running =
+                        self.snap.containers.iter().filter(|c| c.running()).count() as f64;
+                    let disk_gb = self
+                        .snap
+                        .df
+                        .as_ref()
+                        .map(|d| d.layers_size as f64 / 1.0e9)
+                        .unwrap_or(0.0);
                     self.history.push_back(Sample {
                         running,
                         containers: self.snap.containers.len() as f64,
@@ -503,8 +532,8 @@ fn resolve_cli() -> Option<PathBuf> {
         return Some(PathBuf::from(p));
     }
     let names = ["ddcli", "dd"]; // whichever the CLI is built as
-    // Prefer the *installed* bundle so the symlink stays valid across relaunches and updates
-    // (which replace /Applications/dd.app in place), not the dev copy we run from.
+                                 // Prefer the *installed* bundle so the symlink stays valid across relaunches and updates
+                                 // (which replace /Applications/dd.app in place), not the dev copy we run from.
     for n in names {
         let p = PathBuf::from("/Applications/dd.app/Contents/Resources").join(n);
         if p.exists() {
@@ -542,7 +571,15 @@ fn fetch_shells(sender: &ComponentSender<AppModel>, socket: PathBuf, id: String)
         let host = format!("unix://{}", socket.display());
         let docker = ui::components::docker_bin();
         let out = std::process::Command::new(docker)
-            .args(["--host", &host, "exec", &id, "/bin/sh", "-c", "command -v zsh bash ash dash sh busybox"])
+            .args([
+                "--host",
+                &host,
+                "exec",
+                &id,
+                "/bin/sh",
+                "-c",
+                "command -v zsh bash ash dash sh busybox",
+            ])
             .output();
         let mut shells: Vec<String> = Vec::new();
         if let Ok(o) = out {
@@ -572,9 +609,17 @@ fn last_lines(text: &str, n: usize) -> String {
 /// report the active docker context (independent of whether our daemon is up).
 async fn fetch(c: &Client) -> Snapshot {
     let docker_context = docker_context().await;
-    let docker_contexts = if docker_context.is_some() { docker_contexts().await } else { vec![] };
+    let docker_contexts = if docker_context.is_some() {
+        docker_contexts().await
+    } else {
+        vec![]
+    };
     if c.ping().await.is_err() {
-        return Snapshot { docker_context, docker_contexts, ..Snapshot::default() };
+        return Snapshot {
+            docker_context,
+            docker_contexts,
+            ..Snapshot::default()
+        };
     }
     // Sort every list newest-first (descending). Containers/images carry a unix `created`; networks
     // and volumes carry an ISO-8601 `created_at` (lexicographic order == chronological).
@@ -603,10 +648,12 @@ async fn fetch(c: &Client) -> Snapshot {
 /// The daemon's own log: `$DD_DAEMON_LOG`, else `~/Library/Logs/dd/daemon.err.log`. Returns the last
 /// ~400 lines so the System view shows what the daemon is logging without unbounded growth.
 fn read_daemon_log() -> String {
-    let path = std::env::var("DD_DAEMON_LOG").map(PathBuf::from).unwrap_or_else(|_| {
-        let home = std::env::var("HOME").unwrap_or_else(|_| ".".into());
-        PathBuf::from(home).join("Library/Logs/dd/daemon.err.log")
-    });
+    let path = std::env::var("DD_DAEMON_LOG")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| {
+            let home = std::env::var("HOME").unwrap_or_else(|_| ".".into());
+            PathBuf::from(home).join("Library/Logs/dd/daemon.err.log")
+        });
     match std::fs::read_to_string(&path) {
         Ok(s) => last_lines(&s, 400),
         Err(_) => String::new(),
@@ -637,7 +684,11 @@ fn docker_bin() -> std::ffi::OsString {
 
 /// The active `docker` context name, or `None` if the docker CLI isn't installed / errored.
 async fn docker_context() -> Option<String> {
-    let out = tokio::process::Command::new(docker_bin()).args(["context", "show"]).output().await.ok()?;
+    let out = tokio::process::Command::new(docker_bin())
+        .args(["context", "show"])
+        .output()
+        .await
+        .ok()?;
     if !out.status.success() {
         return None;
     }
@@ -671,9 +722,15 @@ async fn set_context(name: &str, socket: &std::path::Path) {
     use tokio::process::Command;
     if name == "dd" {
         let host = format!("host=unix://{}", socket.display());
-        let _ = Command::new(docker_bin()).args(["context", "create", "dd", "--docker", &host]).output().await;
+        let _ = Command::new(docker_bin())
+            .args(["context", "create", "dd", "--docker", &host])
+            .output()
+            .await;
     }
-    let _ = Command::new(docker_bin()).args(["context", "use", name]).output().await;
+    let _ = Command::new(docker_bin())
+        .args(["context", "use", name])
+        .output()
+        .await;
 }
 
 /// Spawn the dd-daemon binary detached, with the canonical socket/images/JIT env, and return the
@@ -693,7 +750,11 @@ fn spawn_daemon() -> Option<std::process::Child> {
     let logs = PathBuf::from(&home).join("Library/Logs/dd");
     let _ = std::fs::create_dir_all(&logs);
     let log = |name: &str| {
-        std::fs::OpenOptions::new().create(true).append(true).open(logs.join(name)).ok()
+        std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(logs.join(name))
+            .ok()
     };
     let (out, err): (Stdio, Stdio) = match (log("daemon.out.log"), log("daemon.err.log")) {
         (Some(o), Some(e)) => (o.into(), e.into()),

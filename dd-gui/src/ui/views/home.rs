@@ -1,13 +1,12 @@
 #![allow(unused_imports, dead_code)]
-use crate::{AppModel, Category, Msg, Selection};
 use crate::ui::components::*;
-use crate::ui::views::*;
 use crate::ui::theme::*;
+use crate::ui::views::*;
+use crate::{AppModel, Category, Msg, Selection};
 use ddclient::{Container, Image, Network, Volume};
 use gtk::prelude::*;
 use relm4::ComponentSender;
 use std::ffi::OsStr;
-
 
 // ---- home dashboard --------------------------------------------------------
 
@@ -22,14 +21,38 @@ pub(crate) fn render_home(home: &gtk::Box, m: &AppModel, sender: &ComponentSende
 
     // Stats + sparkline charts of recent history (running/containers/images/disk over the last poll window).
     let running = snap.containers.iter().filter(|c| c.running()).count();
-    let disk_gb = snap.df.as_ref().map(|d| d.layers_size as f64 / 1.0e9).unwrap_or(0.0);
+    let disk_gb = snap
+        .df
+        .as_ref()
+        .map(|d| d.layers_size as f64 / 1.0e9)
+        .unwrap_or(0.0);
     let ser = |f: fn(&crate::Sample) -> f64| m.history.iter().map(f).collect::<Vec<f64>>();
     let stats = gtk::Box::new(gtk::Orientation::Horizontal, 12);
     stats.set_homogeneous(true);
-    stats.append(&sparkline_card("Running", &running.to_string(), ser(|s| s.running), true));
-    stats.append(&sparkline_card("Containers", &snap.containers.len().to_string(), ser(|s| s.containers), false));
-    stats.append(&sparkline_card("Images", &snap.images.len().to_string(), ser(|s| s.images), false));
-    stats.append(&sparkline_card("Disk", &format!("{disk_gb:.1} GB"), ser(|s| s.disk_gb), false));
+    stats.append(&sparkline_card(
+        "Running",
+        &running.to_string(),
+        ser(|s| s.running),
+        true,
+    ));
+    stats.append(&sparkline_card(
+        "Containers",
+        &snap.containers.len().to_string(),
+        ser(|s| s.containers),
+        false,
+    ));
+    stats.append(&sparkline_card(
+        "Images",
+        &snap.images.len().to_string(),
+        ser(|s| s.images),
+        false,
+    ));
+    stats.append(&sparkline_card(
+        "Disk",
+        &format!("{disk_gb:.1} GB"),
+        ser(|s| s.disk_gb),
+        false,
+    ));
     home.append(&stats);
 
     // Docker context — view/switch which daemon `docker` talks to. Crash-safe: when the docker CLI
@@ -119,7 +142,9 @@ fn context_section(m: &AppModel, sender: &ComponentSender<AppModel>) -> gtk::Box
             let refs: Vec<&str> = ctxs.iter().map(|s| s.as_str()).collect();
             let dropdown = gtk::DropDown::from_strings(&refs);
             dropdown.add_css_class("dd-seg");
-            dropdown.set_tooltip_text(Some("Switch which Docker context (daemon) the `docker` CLI uses"));
+            dropdown.set_tooltip_text(Some(
+                "Switch which Docker context (daemon) the `docker` CLI uses",
+            ));
             // Select the active context BEFORE connecting the signal so this programmatic set
             // doesn't fire the handler (which would loop: set_context -> refetch -> re-render).
             if let Some(i) = ctxs.iter().position(|c| c == active) {

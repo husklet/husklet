@@ -7,10 +7,19 @@ use super::*;
 /// GET /containers/:id/top -- `docker top` (one synthetic process; dd doesn't expose a guest process tree).
 pub(crate) async fn containers_top(State(a): State<App>, Path(id): Path<String>) -> Response {
     let g = a.inner.lock().await;
-    let Some(full) = resolve_cid(&g, &id) else { return no_such(&id) };
-    let cmd = g.containers.get(&full).map(|c| c.cmd.join(" ")).unwrap_or_default();
-    Json(json!({ "Titles": ["UID", "PID", "PPID", "C", "STIME", "TTY", "TIME", "CMD"],
-        "Processes": [["root", "1", "0", "0", "00:00", "?", "00:00:00", cmd]] })).into_response()
+    let Some(full) = resolve_cid(&g, &id) else {
+        return no_such(&id);
+    };
+    let cmd = g
+        .containers
+        .get(&full)
+        .map(|c| c.cmd.join(" "))
+        .unwrap_or_default();
+    Json(
+        json!({ "Titles": ["UID", "PID", "PPID", "C", "STIME", "TTY", "TIME", "CMD"],
+        "Processes": [["root", "1", "0", "0", "00:00", "?", "00:00:00", cmd]] }),
+    )
+    .into_response()
 }
 
 #[derive(Deserialize)]
@@ -55,7 +64,12 @@ fn parse_ps_time(s: &str) -> u64 {
     // Fold the colon-separated h:m:s (or m:s) groups; drop any fractional seconds.
     let mut acc = 0u64;
     for p in rest.split(':') {
-        let v = p.split('.').next().unwrap_or("0").parse::<u64>().unwrap_or(0);
+        let v = p
+            .split('.')
+            .next()
+            .unwrap_or("0")
+            .parse::<u64>()
+            .unwrap_or(0);
         acc = acc * 60 + v;
     }
     (days * 86400 + acc) * 1_000_000_000
@@ -75,8 +89,16 @@ fn stats_cpu_block(total: u64, system: u64) -> Value {
 /// number; `(pre_total, pre_sys)` is the previous sample's cpu totals (0/0 for the first sample, so the
 /// CLI's first delta is the cumulative). Returns the JSON plus this sample's `(total, system)` so the
 /// caller can thread them in as the next sample's precpu. A dead/absent pid yields an all-zero sample.
-fn stats_sample(name: &str, id: &str, pid: Option<u32>, mem_limit: u64, idx: u64,
-                base: std::time::Instant, pre_total: u64, pre_sys: u64) -> (Value, u64, u64) {
+fn stats_sample(
+    name: &str,
+    id: &str,
+    pid: Option<u32>,
+    mem_limit: u64,
+    idx: u64,
+    base: std::time::Instant,
+    pre_total: u64,
+    pre_sys: u64,
+) -> (Value, u64, u64) {
     let (total, system, mem, cur) = match pid {
         Some(p) => {
             let (rss, cpu) = pid_metrics(p);
@@ -110,19 +132,38 @@ fn stats_sample(name: &str, id: &str, pid: Option<u32>, mem_limit: u64, idx: u64
 /// best-effort: memory + CPU come from the live JIT pid via `ps`, with a synthetic CPU floor so the CLI
 /// shows a sane non-zero %. `stream=0`/`false` returns a single object; otherwise it's newline-delimited
 /// JSON, one sample/sec, on a long-lived body that ends when the client disconnects (or a 1h cap).
-pub(crate) async fn containers_stats(State(a): State<App>, Path(id): Path<String>, Query(q): Query<StatsQ>) -> Response {
+pub(crate) async fn containers_stats(
+    State(a): State<App>,
+    Path(id): Path<String>,
+    Query(q): Query<StatsQ>,
+) -> Response {
     let (full, name, mem_limit, pid) = {
         let g = a.inner.lock().await;
-        let Some(full) = resolve_cid(&g, &id) else { return no_such(&id) };
+        let Some(full) = resolve_cid(&g, &id) else {
+            return no_such(&id);
+        };
         let c = g.containers.get(&full);
-        let name = c.map(|c| if c.name.is_empty() { c.id[..12.min(c.id.len())].to_string() } else { c.name.clone() })
+        let name = c
+            .map(|c| {
+                if c.name.is_empty() {
+                    c.id[..12.min(c.id.len())].to_string()
+                } else {
+                    c.name.clone()
+                }
+            })
             .unwrap_or_else(|| id.clone());
-        let mem_limit = c.map(|c| c.memory).filter(|m| *m > 0).map(|m| m as u64).unwrap_or(STATS_DEFAULT_LIMIT);
+        let mem_limit = c
+            .map(|c| c.memory)
+            .filter(|m| *m > 0)
+            .map(|m| m as u64)
+            .unwrap_or(STATS_DEFAULT_LIMIT);
         let pid = g.live.get(&full).and_then(|l| *l.pid.lock().unwrap());
         (full, name, mem_limit, pid)
     };
-    let stream = !matches!(q.stream.as_deref(),
-        Some("0") | Some("false") | Some("False") | Some("no") | Some("off"));
+    let stream = !matches!(
+        q.stream.as_deref(),
+        Some("0") | Some("false") | Some("False") | Some("no") | Some("off")
+    );
 
     // One-shot, or a container with no live process: emit a single sample (precpu = 0) and end.
     if !stream || pid.is_none() {
@@ -134,20 +175,32 @@ pub(crate) async fn containers_stats(State(a): State<App>, Path(id): Path<String
     // Live stream: re-sample once a second, threading each sample's cpu totals into the next precpu.
     // 3600 samples (~1h) is a safety cap; in practice the client disconnects and the stream is dropped.
     let base = std::time::Instant::now();
-    let body = futures_util::stream::unfold((0u64, 0u64, 0u64), move |(idx, pre_total, pre_sys)| {
-        let name = name.clone();
-        let full = full.clone();
-        async move {
-            if idx >= 3600 { return None; }
-            if idx > 0 { tokio::time::sleep(std::time::Duration::from_secs(1)).await; }
-            let (v, total, system) = stats_sample(&name, &full, pid, mem_limit, idx, base, pre_total, pre_sys);
-            let mut line = serde_json::to_vec(&v).unwrap_or_default();
-            line.push(b'\n');
-            Some((Ok::<Vec<u8>, std::io::Error>(line), (idx + 1, total, system)))
-        }
-    });
-    Response::builder().status(StatusCode::OK).header("Content-Type", "application/json")
-        .body(Body::from_stream(body)).unwrap()
+    let body =
+        futures_util::stream::unfold((0u64, 0u64, 0u64), move |(idx, pre_total, pre_sys)| {
+            let name = name.clone();
+            let full = full.clone();
+            async move {
+                if idx >= 3600 {
+                    return None;
+                }
+                if idx > 0 {
+                    tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+                }
+                let (v, total, system) =
+                    stats_sample(&name, &full, pid, mem_limit, idx, base, pre_total, pre_sys);
+                let mut line = serde_json::to_vec(&v).unwrap_or_default();
+                line.push(b'\n');
+                Some((
+                    Ok::<Vec<u8>, std::io::Error>(line),
+                    (idx + 1, total, system),
+                ))
+            }
+        });
+    Response::builder()
+        .status(StatusCode::OK)
+        .header("Content-Type", "application/json")
+        .body(Body::from_stream(body))
+        .unwrap()
 }
 
 #[derive(Deserialize)]
@@ -171,7 +224,12 @@ pub(crate) struct LogsQ {
 /// `"<secs>.<nanos>"`; we keep the integer seconds. Returns None for absent/0/unparsable.
 fn parse_unix_ts(s: &Option<String>) -> Option<i64> {
     let v = s.as_deref().filter(|x| !x.is_empty())?;
-    v.split('.').next().unwrap_or(v).parse::<i64>().ok().filter(|n| *n > 0)
+    v.split('.')
+        .next()
+        .unwrap_or(v)
+        .parse::<i64>()
+        .ok()
+        .filter(|n| *n > 0)
 }
 
 /// Split a log buffer into newline-terminated lines, keeping the trailing `\n` on each line and any
@@ -180,9 +238,14 @@ fn split_log_lines(buf: &[u8]) -> Vec<Vec<u8>> {
     let mut lines = Vec::new();
     let mut start = 0;
     for (i, b) in buf.iter().enumerate() {
-        if *b == b'\n' { lines.push(buf[start..=i].to_vec()); start = i + 1; }
+        if *b == b'\n' {
+            lines.push(buf[start..=i].to_vec());
+            start = i + 1;
+        }
     }
-    if start < buf.len() { lines.push(buf[start..].to_vec()); }
+    if start < buf.len() {
+        lines.push(buf[start..].to_vec());
+    }
     lines
 }
 
@@ -193,7 +256,11 @@ fn split_log_lines(buf: &[u8]) -> Vec<Vec<u8>> {
 /// stamp survives demuxing exactly as dockerd writes it.
 fn frame_chunk(stream: u8, data: &[u8], tty: bool, timestamps: bool, ts_secs: i64) -> Vec<u8> {
     if !timestamps {
-        return if tty { data.to_vec() } else { log_frame(stream, data) };
+        return if tty {
+            data.to_vec()
+        } else {
+            log_frame(stream, data)
+        };
     }
     let ts = fmt_rfc3339(ts_secs);
     let mut out = Vec::new();
@@ -202,7 +269,11 @@ fn frame_chunk(stream: u8, data: &[u8], tty: bool, timestamps: bool, ts_secs: i6
         p.extend_from_slice(ts.as_bytes());
         p.push(b' ');
         p.extend_from_slice(&line);
-        if tty { out.extend_from_slice(&p); } else { out.extend(log_frame(stream, &p)); }
+        if tty {
+            out.extend_from_slice(&p);
+        } else {
+            out.extend(log_frame(stream, &p));
+        }
     }
     out
 }
@@ -211,19 +282,35 @@ fn frame_chunk(stream: u8, data: &[u8], tty: bool, timestamps: bool, ts_secs: i6
 /// the Live's chronological `log_chunks` is gone (daemon restart). Without per-chunk times the true
 /// interleave is unrecoverable, so we emit stdout then stderr, stamped with the run's start/finish time
 /// so `--since`/`--until`/`--timestamps` still behave as they did before the ordered log existed.
-fn persisted_ordered(out: Vec<u8>, err: Vec<u8>, start_t: i64, end_t: i64) -> Vec<(i64, u8, Vec<u8>)> {
+fn persisted_ordered(
+    out: Vec<u8>,
+    err: Vec<u8>,
+    start_t: i64,
+    end_t: i64,
+) -> Vec<(i64, u8, Vec<u8>)> {
     let mut v = Vec::new();
-    if !out.is_empty() { v.push((start_t, 1u8, out)); }
-    if !err.is_empty() { v.push((end_t, 2u8, err)); }
+    if !out.is_empty() {
+        v.push((start_t, 1u8, out));
+    }
+    if !err.is_empty() {
+        v.push((end_t, 2u8, err));
+    }
     v
 }
 
-pub(crate) async fn containers_logs(State(a): State<App>, Path(id): Path<String>, Query(q): Query<LogsQ>) -> Response {
+pub(crate) async fn containers_logs(
+    State(a): State<App>,
+    Path(id): Path<String>,
+    Query(q): Query<LogsQ>,
+) -> Response {
     let follow = q_truthy(&q.follow);
     let timestamps = q_truthy(&q.timestamps);
     // Stream selection: honor explicit stdout/stderr flags, defaulting to both when neither is given.
     let (mut want_out, mut want_err) = (q_truthy(&q.stdout), q_truthy(&q.stderr));
-    if !want_out && !want_err { want_out = true; want_err = true; }
+    if !want_out && !want_err {
+        want_out = true;
+        want_err = true;
+    }
     // `--tail`: "all"/absent/unparsable -> everything; a number -> that many trailing lines.
     let tail = match q.tail.as_deref() {
         None | Some("") | Some("all") => None,
@@ -236,12 +323,32 @@ pub(crate) async fn containers_logs(State(a): State<App>, Path(id): Path<String>
     // buffers / subscribe to its broadcast after releasing the lock.
     let (tty, running, live, persisted_out, persisted_err, start_t, end_t) = {
         let g = a.inner.lock().await;
-        let Some(full) = resolve_cid(&g, &id) else { return no_such(&id) };
-        let Some(c) = g.containers.get(&full) else { return no_such(&id) };
+        let Some(full) = resolve_cid(&g, &id) else {
+            return no_such(&id);
+        };
+        let Some(c) = g.containers.get(&full) else {
+            return no_such(&id);
+        };
         let running = c.status == "running" || c.status == "paused";
-        let start_t = if c.started_at > 0 { c.started_at } else { c.created };
-        let end_t = if c.finished_at > 0 { c.finished_at } else { now_secs() };
-        (c.tty, running, g.live.get(&full).cloned(), c.stdout.clone(), c.stderr.clone(), start_t, end_t)
+        let start_t = if c.started_at > 0 {
+            c.started_at
+        } else {
+            c.created
+        };
+        let end_t = if c.finished_at > 0 {
+            c.finished_at
+        } else {
+            now_secs()
+        };
+        (
+            c.tty,
+            running,
+            g.live.get(&full).cloned(),
+            c.stdout.clone(),
+            c.stderr.clone(),
+            start_t,
+            end_t,
+        )
     };
 
     // For follow we stream new output from the container's `Live.out` broadcast (the same channel
@@ -249,7 +356,11 @@ pub(crate) async fn containers_logs(State(a): State<App>, Path(id): Path<String>
     // snapshot and the stream start isn't lost -- a chunk straddling that boundary may appear once in
     // the replay and once live, i.e. dd favors never dropping output over a rare duplicate.
     let follow_live = follow && running && live.is_some();
-    let out_sub = if follow_live { live.as_ref().map(|l| l.out.subscribe()) } else { None };
+    let out_sub = if follow_live {
+        live.as_ref().map(|l| l.out.subscribe())
+    } else {
+        None
+    };
     // Follow ends on `out_done` (pumps fully drained), NOT the immediate `exit`, so a fast-exiting
     // guest's final lines aren't lost to the pump race (mirrors the attach/exec hijack writer).
     let exit_sub = live.as_ref().map(|l| l.out_done_rx.clone());
@@ -262,8 +373,12 @@ pub(crate) async fn containers_logs(State(a): State<App>, Path(id): Path<String>
     let chunks: Vec<(i64, u8, Vec<u8>)> = match &live {
         Some(l) => {
             let lc = l.log_chunks.lock().await;
-            if !lc.is_empty() { lc.clone() }
-            else { drop(lc); persisted_ordered(persisted_out, persisted_err, start_t, end_t) }
+            if !lc.is_empty() {
+                lc.clone()
+            } else {
+                drop(lc);
+                persisted_ordered(persisted_out, persisted_err, start_t, end_t)
+            }
         }
         None => persisted_ordered(persisted_out, persisted_err, start_t, end_t),
     };
@@ -282,13 +397,25 @@ pub(crate) async fn containers_logs(State(a): State<App>, Path(id): Path<String>
     }
     let mut entries: Vec<(i64, u8, Vec<u8>)> = Vec::new();
     for (ts, stream, data) in &runs {
-        if (*stream == 1 && !want_out) || (*stream == 2 && !want_err) { continue; }
-        if since.map_or(false, |s| *ts < s) || until.map_or(false, |u| *ts > u) { continue; }
-        for line in split_log_lines(data) { entries.push((*ts, *stream, line)); }
+        if (*stream == 1 && !want_out) || (*stream == 2 && !want_err) {
+            continue;
+        }
+        if since.map_or(false, |s| *ts < s) || until.map_or(false, |u| *ts > u) {
+            continue;
+        }
+        for line in split_log_lines(data) {
+            entries.push((*ts, *stream, line));
+        }
     }
-    if let Some(n) = tail { if entries.len() > n { entries.drain(0..entries.len() - n); } }
+    if let Some(n) = tail {
+        if entries.len() > n {
+            entries.drain(0..entries.len() - n);
+        }
+    }
     let mut replay = Vec::new();
-    for (ts, stream, line) in &entries { replay.extend(frame_chunk(*stream, line, tty, timestamps, *ts)); }
+    for (ts, stream, line) in &entries {
+        replay.extend(frame_chunk(*stream, line, tty, timestamps, *ts));
+    }
 
     // Non-follow (or nothing live to follow): serve the buffer and end, as before.
     if !follow_live {
@@ -302,7 +429,9 @@ pub(crate) async fn containers_logs(State(a): State<App>, Path(id): Path<String>
     let mut done_rx = exit_sub.unwrap();
     let (tx, rx) = mpsc::channel::<Vec<u8>>(64);
     tokio::spawn(async move {
-        if !replay.is_empty() && tx.send(replay).await.is_err() { return; }
+        if !replay.is_empty() && tx.send(replay).await.is_err() {
+            return;
+        }
         let want = |kind: u8| (kind == 1 && want_out) || (kind == 2 && want_err);
         // If the guest finished AND drained between the snapshot and here, out_done already holds true.
         let mut exited = *done_rx.borrow();
@@ -313,12 +442,18 @@ pub(crate) async fn containers_logs(State(a): State<App>, Path(id): Path<String>
                 while let Ok((kind, chunk)) = out_rx.try_recv() {
                     if want(kind) {
                         let f = frame_chunk(kind, &chunk, tty, timestamps, now_secs());
-                        if tx.send(f).await.is_err() { return; }
+                        if tx.send(f).await.is_err() {
+                            return;
+                        }
                     }
                 }
                 break;
             }
-            if let Some(u) = until { if now_secs() > u { break; } }
+            if let Some(u) = until {
+                if now_secs() > u {
+                    break;
+                }
+            }
             tokio::select! {
                 biased;
                 msg = out_rx.recv() => match msg {
@@ -336,11 +471,15 @@ pub(crate) async fn containers_logs(State(a): State<App>, Path(id): Path<String>
         }
     });
     let body = futures_util::stream::unfold(rx, |mut rx| async move {
-        rx.recv().await.map(|b| (Ok::<Vec<u8>, std::io::Error>(b), rx))
+        rx.recv()
+            .await
+            .map(|b| (Ok::<Vec<u8>, std::io::Error>(b), rx))
     });
-    Response::builder().status(StatusCode::OK)
+    Response::builder()
+        .status(StatusCode::OK)
         .header("Content-Type", "application/octet-stream")
-        .body(Body::from_stream(body)).unwrap()
+        .body(Body::from_stream(body))
+        .unwrap()
 }
 
 /// The resolved `Mounts[]` array a docker client reads — the §6.3-9 repair. Covers ALL mount surfaces
@@ -349,7 +488,12 @@ pub(crate) async fn containers_logs(State(a): State<App>, Path(id): Path<String>
 /// (volume ones likewise carry Name/Driver), and `--tmpfs`/`type=tmpfs` as Type=tmpfs. Previously only
 /// `c.binds` were enumerated and everything was hardcoded Type=bind (Name/Driver/tmpfs all dropped).
 pub(crate) fn container_mounts_json(vols: &[Vol], c: &Container) -> Vec<Value> {
-    let vol_mp = |name: &str| vols.iter().find(|v| v.name == name).map(|v| v.mountpoint.clone()).unwrap_or_default();
+    let vol_mp = |name: &str| {
+        vols.iter()
+            .find(|v| v.name == name)
+            .map(|v| v.mountpoint.clone())
+            .unwrap_or_default()
+    };
     let mut out: Vec<Value> = Vec::new();
     for b in &c.binds {
         if let Some((src, dst, ro)) = parse_bind(b) {
@@ -368,7 +512,9 @@ pub(crate) fn container_mounts_json(vols: &[Vol], c: &Container) -> Vec<Value> {
         }
     }
     for target in c.tmpfs.keys() {
-        out.push(json!({"Type": "tmpfs", "Source": "", "Destination": target, "RW": true, "Mode": ""}));
+        out.push(
+            json!({"Type": "tmpfs", "Source": "", "Destination": target, "RW": true, "Mode": ""}),
+        );
     }
     out
 }
@@ -382,19 +528,38 @@ pub(crate) fn health_json(c: &Container) -> Option<Value> {
 
 pub(crate) async fn containers_inspect(State(a): State<App>, Path(id): Path<String>) -> Response {
     let g = a.inner.lock().await;
-    let Some(full) = resolve_cid(&g, &id) else { return no_such(&id) };
+    let Some(full) = resolve_cid(&g, &id) else {
+        return no_such(&id);
+    };
     match g.containers.get(&full) {
         Some(c) => {
             let running = c.status == "running" || c.status == "paused";
             // Pid = the live JIT process pid while running, else 0 (docker reports 0 for stopped).
-            let pid = if running { g.live.get(&full).and_then(|l| *l.pid.lock().unwrap()).unwrap_or(0) } else { 0 };
+            let pid = if running {
+                g.live
+                    .get(&full)
+                    .and_then(|l| *l.pid.lock().unwrap())
+                    .unwrap_or(0)
+            } else {
+                0
+            };
             // StartedAt/FinishedAt as RFC3339; docker's zero value is "0001-01-01T00:00:00Z".
             // Nanosecond precision (docker's shape) so a quick `docker restart` advances StartedAt even
             // within one wall-clock second; fall back to the second-precise field for pre-upgrade state.
-            let started_at = if c.started_at == 0 { "0001-01-01T00:00:00Z".to_string() }
-                else if c.started_at_ns > 0 { fmt_rfc3339_nanos(c.started_at_ns) } else { fmt_rfc3339(c.started_at) };
-            let finished_at = if c.finished_at == 0 { "0001-01-01T00:00:00Z".to_string() }
-                else if c.finished_at_ns > 0 { fmt_rfc3339_nanos(c.finished_at_ns) } else { fmt_rfc3339(c.finished_at) };
+            let started_at = if c.started_at == 0 {
+                "0001-01-01T00:00:00Z".to_string()
+            } else if c.started_at_ns > 0 {
+                fmt_rfc3339_nanos(c.started_at_ns)
+            } else {
+                fmt_rfc3339(c.started_at)
+            };
+            let finished_at = if c.finished_at == 0 {
+                "0001-01-01T00:00:00Z".to_string()
+            } else if c.finished_at_ns > 0 {
+                fmt_rfc3339_nanos(c.finished_at_ns)
+            } else {
+                fmt_rfc3339(c.finished_at)
+            };
             // Networks the container has joined -> NetworkSettings.Networks, with the IPAM-assigned
             // identity (IP/gateway/mac) per network.
             let networks: serde_json::Map<String, Value> = g.networks.iter()
@@ -404,7 +569,15 @@ pub(crate) async fn containers_inspect(State(a): State<App>, Path(id): Path<Stri
                     "MacAddress": ip_mac(&e.ip)}))))
                 .collect();
             // Top-level NetworkSettings.IPAddress = the primary endpoint IP (first joined network).
-            let primary = g.networks.iter().find_map(|n| n.endpoints.get(&c.id).map(|e| (e.ip.clone(), n.gateway.clone()))).unwrap_or_default();
+            let primary = g
+                .networks
+                .iter()
+                .find_map(|n| {
+                    n.endpoints
+                        .get(&c.id)
+                        .map(|e| (e.ip.clone(), n.gateway.clone()))
+                })
+                .unwrap_or_default();
             // State, adding `Health` only when a HEALTHCHECK is configured (docker omits it otherwise).
             // §8.3-4: the always-present state booleans docker emits (Restarting from the backoff window;
             // OOMKilled/Dead not modelled by dd's reaper, reported false; Error empty). Running stays true
@@ -413,11 +586,23 @@ pub(crate) async fn containers_inspect(State(a): State<App>, Path(id): Path<Stri
             let mut state = json!({"Status": c.status, "ExitCode": c.exit_code, "Running": running || restarting,
                 "Paused": c.status == "paused", "Restarting": restarting, "OOMKilled": false, "Dead": false, "Error": "",
                 "Pid": pid, "StartedAt": started_at, "FinishedAt": finished_at});
-            if let Some(h) = health_json(c) { state["Health"] = h; }
+            if let Some(h) = health_json(c) {
+                state["Health"] = h;
+            }
             // Config.Healthcheck / StopSignal round-trip so a client diffs the resolved lifecycle config.
-            let cfg_health = c.healthcheck.as_ref().map(|h| json!({"Test": h.test, "Interval": h.interval,
-                "Timeout": h.timeout, "Retries": h.retries, "StartPeriod": h.start_period})).unwrap_or(Value::Null);
-            let stop_signal = if c.stop_signal.is_empty() { Value::Null } else { json!(c.stop_signal) };
+            let cfg_health = c
+                .healthcheck
+                .as_ref()
+                .map(|h| {
+                    json!({"Test": h.test, "Interval": h.interval,
+                "Timeout": h.timeout, "Retries": h.retries, "StartPeriod": h.start_period})
+                })
+                .unwrap_or(Value::Null);
+            let stop_signal = if c.stop_signal.is_empty() {
+                Value::Null
+            } else {
+                json!(c.stop_signal)
+            };
             Json(json!({"Id": c.id, "Image": c.image, "Created": fmt_rfc3339(c.created),
             "Name": format!("/{}", if c.name.is_empty() { c.id[..12.min(c.id.len())].to_string() } else { c.name.clone() }),
             "State": state,
@@ -438,11 +623,16 @@ pub(crate) async fn containers_inspect(State(a): State<App>, Path(id): Path<Stri
             "NetworkSettings": {"Ports": ports_map_json(&c.publish), "IPAddress": primary.0, "Gateway": primary.1,
                 "Networks": Value::Object(networks)}})).into_response()
         }
-        None => no_such(&id) }
+        None => no_such(&id),
+    }
 }
 
 #[derive(Deserialize)]
-pub(crate) struct PsQ { all: Option<String>, filters: Option<String>, size: Option<String> }
+pub(crate) struct PsQ {
+    all: Option<String>,
+    filters: Option<String>,
+    size: Option<String>,
+}
 
 /// `docker ps --size` -> (SizeRw, SizeRootFs). dd gives each container a private copy-on-write UPPER over
 /// the read-only image rootfs, so SizeRw is the `du`-style size of that writable upper layer (matching
@@ -450,8 +640,14 @@ pub(crate) struct PsQ { all: Option<String>, filters: Option<String>, size: Opti
 /// The host-fs `macos` image (rootfs "/") is skipped -- walking it would be catastrophic, exactly as
 /// `image_size` guards against.
 fn container_sizes(c: &Container) -> (i64, i64) {
-    if c.image == "macos" || c.rootfs.is_empty() || c.rootfs == "/" { return (0, 0); }
-    let rw = if c.upper.is_empty() { 0 } else { dir_size(std::path::Path::new(&c.upper)) };
+    if c.image == "macos" || c.rootfs.is_empty() || c.rootfs == "/" {
+        return (0, 0);
+    }
+    let rw = if c.upper.is_empty() {
+        0
+    } else {
+        dir_size(std::path::Path::new(&c.upper))
+    };
     (rw, dir_size(std::path::Path::new(&c.rootfs)))
 }
 
@@ -460,36 +656,78 @@ fn container_sizes(c: &Container) -> (i64, i64) {
 /// substring match against the container's effective name; `label` matches `key` or `key=value`.
 /// `before_ts`/`since_ts` are the `created` timestamps of the containers named by `before=`/`since=`
 /// (resolved by the caller, which holds the full container map); `None` => that key is absent/unresolved.
-fn ps_match(c: &Container, name: &str, f: &HashMap<String, Vec<String>>, before_ts: Option<i64>, since_ts: Option<i64>) -> bool {
-    if let Some(vals) = f.get("status") { if !vals.iter().any(|v| v == &c.status) { return false; } }
-    if let Some(vals) = f.get("name") { if !vals.iter().any(|v| name.contains(v.as_str())) { return false; } }
+fn ps_match(
+    c: &Container,
+    name: &str,
+    f: &HashMap<String, Vec<String>>,
+    before_ts: Option<i64>,
+    since_ts: Option<i64>,
+) -> bool {
+    if let Some(vals) = f.get("status") {
+        if !vals.iter().any(|v| v == &c.status) {
+            return false;
+        }
+    }
+    if let Some(vals) = f.get("name") {
+        if !vals.iter().any(|v| name.contains(v.as_str())) {
+            return false;
+        }
+    }
     if let Some(vals) = f.get("label") {
         for v in vals {
             let ok = match v.split_once('=') {
                 Some((k, val)) => c.labels.get(k).map(|cv| cv == val).unwrap_or(false),
                 None => c.labels.contains_key(v),
             };
-            if !ok { return false; }
+            if !ok {
+                return false;
+            }
         }
     }
     // `id=`: full-or-prefix match on the container id (docker accepts a leading prefix).
-    if let Some(vals) = f.get("id") { if !vals.iter().any(|v| c.id.starts_with(v.as_str())) { return false; } }
+    if let Some(vals) = f.get("id") {
+        if !vals.iter().any(|v| c.id.starts_with(v.as_str())) {
+            return false;
+        }
+    }
     // `ancestor=`: the image the container was created from (repo[:tag] or a raw image ref).
     if let Some(vals) = f.get("ancestor") {
-        // Repository-aware (issue #304): `ancestor=nginx` must not also match a `linuxserver/nginx`
+        // Repository-aware: `ancestor=nginx` must not also match a `linuxserver/nginx`
         // container just because the basenames coincide. Compare the fully qualified repository.
-        if !vals.iter().any(|v| c.image == *v || ref_repo(&c.image) == ref_repo(v)) { return false; }
+        if !vals
+            .iter()
+            .any(|v| c.image == *v || ref_repo(&c.image) == ref_repo(v))
+        {
+            return false;
+        }
     }
     // `exited=N`: containers that exited with code N (only meaningful for the exited state).
     if let Some(vals) = f.get("exited") {
-        if !vals.iter().any(|v| v.parse::<i64>().map_or(false, |n| c.status == "exited" && c.exit_code == n)) { return false; }
+        if !vals.iter().any(|v| {
+            v.parse::<i64>()
+                .map_or(false, |n| c.status == "exited" && c.exit_code == n)
+        }) {
+            return false;
+        }
     }
     // `health=`: dd models no healthcheck, so every container is effectively `none`; any other value
     // (starting/healthy/unhealthy) matches nothing.
-    if let Some(vals) = f.get("health") { if !vals.iter().any(|v| v == "none") { return false; } }
+    if let Some(vals) = f.get("health") {
+        if !vals.iter().any(|v| v == "none") {
+            return false;
+        }
+    }
     // `before=`/`since=`: created strictly before / after the referenced container (by create time).
-    if let Some(ts) = before_ts { if c.created >= ts { return false; } }
-    if let Some(ts) = since_ts { if c.created <= ts { return false; } }
+    if let Some(ts) = before_ts {
+        if c.created >= ts {
+            return false;
+        }
+    }
+    if let Some(ts) = since_ts {
+        if c.created <= ts {
+            return false;
+        }
+    }
     true
 }
 
@@ -498,10 +736,15 @@ fn ps_match(c: &Container, name: &str, f: &HashMap<String, Vec<String>>, before_
 /// container's `created` unix timestamp and humanized coarsely (seconds/minutes/hours/days).
 fn human_status(c: &Container) -> String {
     let secs = (now_secs() - c.created).max(0);
-    let dur = if secs < 60 { format!("{secs} seconds") }
-        else if secs < 3600 { format!("{} minutes", secs / 60) }
-        else if secs < 86400 { format!("{} hours", secs / 3600) }
-        else { format!("{} days", secs / 86400) };
+    let dur = if secs < 60 {
+        format!("{secs} seconds")
+    } else if secs < 3600 {
+        format!("{} minutes", secs / 60)
+    } else if secs < 86400 {
+        format!("{} hours", secs / 3600)
+    } else {
+        format!("{} days", secs / 86400)
+    };
     if c.status == "restarting" {
         // Docker shows a container in its restart-backoff window as "Restarting (code) …".
         format!("Restarting ({}) {dur} ago", c.exit_code)
@@ -520,16 +763,27 @@ pub(crate) async fn containers_json(State(a): State<App>, Query(q): Query<PsQ>) 
     // `filters` arrives URL-encoded JSON; axum has already percent-decoded it. Bad JSON => no filters.
     // Docker encodes it as map[key]->{value:true} (e.g. {"name":{"web":true}}), older clients as
     // map[key]->[value]. Accept BOTH: decode to a generic Value, normalize to key -> [values].
-    let filters: HashMap<String, Vec<String>> = q.filters.as_deref()
+    let filters: HashMap<String, Vec<String>> = q
+        .filters
+        .as_deref()
         .and_then(|s| serde_json::from_str::<Value>(s).ok())
-        .and_then(|v| v.as_object().map(|m| m.iter().map(|(k, val)| {
-            let vals = match val {
-                Value::Object(set) => set.keys().cloned().collect(),                 // {"web":true}
-                Value::Array(a) => a.iter().filter_map(|x| x.as_str().map(String::from)).collect(), // ["web"]
-                _ => vec![],
-            };
-            (k.clone(), vals)
-        }).collect()))
+        .and_then(|v| {
+            v.as_object().map(|m| {
+                m.iter()
+                    .map(|(k, val)| {
+                        let vals = match val {
+                            Value::Object(set) => set.keys().cloned().collect(), // {"web":true}
+                            Value::Array(a) => a
+                                .iter()
+                                .filter_map(|x| x.as_str().map(String::from))
+                                .collect(), // ["web"]
+                            _ => vec![],
+                        };
+                        (k.clone(), vals)
+                    })
+                    .collect()
+            })
+        })
         .unwrap_or_default();
     // A `status` filter implies "show all matching" (like `docker ps --filter status=exited`).
     let status_filter = filters.contains_key("status");
@@ -542,23 +796,38 @@ pub(crate) async fn containers_json(State(a): State<App>, Query(q): Query<PsQ>) 
         // `before=`/`since=` name a reference container (by id-prefix or name); resolve each to that
         // container's `created` time so ps_match can compare create-order against it.
         let resolve = |key: &str| -> Option<i64> {
-            filters.get(key).and_then(|vals| vals.first()).and_then(|r| {
-                g.containers.values()
-                    .find(|c| c.id.starts_with(r.as_str()) || &c.name == r)
-                    .map(|c| c.created)
-            })
+            filters
+                .get(key)
+                .and_then(|vals| vals.first())
+                .and_then(|r| {
+                    g.containers
+                        .values()
+                        .find(|c| c.id.starts_with(r.as_str()) || &c.name == r)
+                        .map(|c| c.created)
+                })
         };
         let before_ts = resolve("before");
         let since_ts = resolve("since");
         // A before/since (like status) filter implies "show all matching", not just running.
         let order_filter = filters.contains_key("before") || filters.contains_key("since");
-        g.containers.values()
-            .filter(|c| all || status_filter || order_filter || c.status == "running" || c.status == "restarting")
+        g.containers
+            .values()
             .filter(|c| {
-                let name = if c.name.is_empty() { c.id[..12.min(c.id.len())].to_string() } else { c.name.clone() };
+                all || status_filter
+                    || order_filter
+                    || c.status == "running"
+                    || c.status == "restarting"
+            })
+            .filter(|c| {
+                let name = if c.name.is_empty() {
+                    c.id[..12.min(c.id.len())].to_string()
+                } else {
+                    c.name.clone()
+                };
                 ps_match(c, &name, &filters, before_ts, since_ts)
             })
-            .cloned().collect()
+            .cloned()
+            .collect()
     };
     // Resolve named-volume mountpoints for the Mounts array below (the g lock is released after the block
     // above, so snapshot the volume set here).
@@ -566,7 +835,11 @@ pub(crate) async fn containers_json(State(a): State<App>, Query(q): Query<PsQ>) 
     // Docker lists containers newest-first (by creation time); our container map is unordered, so a raw
     // walk yields an arbitrary order and `docker ps`/`ps -q` would return IDs in an unpredictable order.
     // Sort descending by `created` (tie-break on `started_at`) to match docker's ordering.
-    matched.sort_by(|a, b| b.created.cmp(&a.created).then(b.started_at.cmp(&a.started_at)));
+    matched.sort_by(|a, b| {
+        b.created
+            .cmp(&a.created)
+            .then(b.started_at.cmp(&a.started_at))
+    });
     let v: Vec<Value> = matched.iter().map(|c| {
         let mut entry = json!({
         "Id": c.id, "Image": c.image, "Command": c.cmd.join(" "), "Created": c.created,
@@ -591,13 +864,19 @@ pub(crate) async fn containers_json(State(a): State<App>, Query(q): Query<PsQ>) 
 /// reports what was deleted.
 pub(crate) async fn containers_prune(State(a): State<App>) -> Json<Value> {
     let mut g = a.inner.lock().await;
-    let dead: Vec<String> = g.containers.iter()
+    let dead: Vec<String> = g
+        .containers
+        .iter()
         .filter(|(_, c)| c.status != "running" && c.status != "paused")
-        .map(|(id, _)| id.clone()).collect();
+        .map(|(id, _)| id.clone())
+        .collect();
     for id in &dead {
         // Reclaim each pruned container's private writable upper layer (mirrors `docker rm`).
-        if let Some(c) = g.containers.get(id) { discard_container_layer(&c.upper.clone()); }
-        g.containers.remove(id); g.live.remove(id);
+        if let Some(c) = g.containers.get(id) {
+            discard_container_layer(&c.upper.clone());
+        }
+        g.containers.remove(id);
+        g.live.remove(id);
     }
     save_state(&g, &a.state_path);
     Json(json!({"ContainersDeleted": dead, "SpaceReclaimed": 0}))
@@ -609,8 +888,12 @@ pub(crate) async fn containers_prune(State(a): State<App>) -> Json<Value> {
 /// `<dd_home>/containers/<id>` tree (the `upper` dir's parent). A no-op for darwin/flat-rootfs containers
 /// (empty `upper`).
 pub(crate) fn discard_container_layer(upper: &str) {
-    if upper.is_empty() { return; }
-    let dir = std::path::Path::new(upper).parent().unwrap_or_else(|| std::path::Path::new(upper));
+    if upper.is_empty() {
+        return;
+    }
+    let dir = std::path::Path::new(upper)
+        .parent()
+        .unwrap_or_else(|| std::path::Path::new(upper));
     let _ = std::fs::remove_dir_all(dir);
 }
 
@@ -625,7 +908,9 @@ pub(crate) fn overlay_changes(upper: &str, rootfs: &str) -> HashMap<String, u8> 
         std::fs::symlink_metadata(format!("{rootfs}{path}")).is_ok()
     }
     fn walk(dir: &std::path::Path, prefix: &str, rootfs: &str, out: &mut HashMap<String, u8>) {
-        let Ok(rd) = std::fs::read_dir(dir) else { return };
+        let Ok(rd) = std::fs::read_dir(dir) else {
+            return;
+        };
         for e in rd.flatten() {
             let name = e.file_name();
             let name = name.to_string_lossy();
@@ -633,10 +918,14 @@ pub(crate) fn overlay_changes(upper: &str, rootfs: &str) -> HashMap<String, u8> 
                 out.insert(format!("{prefix}/{stripped}"), 2); // whiteout -> deleted
                 continue;
             }
-            let Ok(md) = e.path().symlink_metadata() else { continue };
+            let Ok(md) = e.path().symlink_metadata() else {
+                continue;
+            };
             let path = format!("{prefix}/{name}");
             if md.file_type().is_dir() {
-                if !in_lower(rootfs, &path) { out.insert(path.clone(), 1); }
+                if !in_lower(rootfs, &path) {
+                    out.insert(path.clone(), 1);
+                }
                 walk(&e.path(), &path, rootfs, out);
             } else {
                 let kind = if in_lower(rootfs, &path) { 0 } else { 1 };
@@ -654,7 +943,9 @@ pub(crate) fn overlay_changes(upper: &str, rootfs: &str) -> HashMap<String, u8> 
         while let Some(idx) = p.rfind('/') {
             let parent = if idx == 0 { "/" } else { &p[..idx] };
             out.entry(parent.to_string()).or_insert(0);
-            if idx == 0 { break; }
+            if idx == 0 {
+                break;
+            }
             p = &p[..idx];
         }
     }
@@ -669,20 +960,35 @@ pub(crate) fn overlay_changes(upper: &str, rootfs: &str) -> HashMap<String, u8> 
 pub(crate) async fn containers_changes(State(a): State<App>, Path(id): Path<String>) -> Response {
     let (upper, rootfs) = {
         let g = a.inner.lock().await;
-        let Some(full) = resolve_cid(&g, &id) else { return no_such(&id) };
-        let Some(c) = g.containers.get(&full) else { return no_such(&id) };
+        let Some(full) = resolve_cid(&g, &id) else {
+            return no_such(&id);
+        };
+        let Some(c) = g.containers.get(&full) else {
+            return no_such(&id);
+        };
         (c.upper.clone(), c.rootfs.clone())
     };
-    if upper.is_empty() { return Json(json!([])).into_response(); }
-    let kinds = tokio::task::spawn_blocking(move || overlay_changes(&upper, &rootfs)).await.unwrap_or_default();
-    let mut out: Vec<Value> = kinds.into_iter().map(|(p, k)| json!({"Path": p, "Kind": k})).collect();
+    if upper.is_empty() {
+        return Json(json!([])).into_response();
+    }
+    let kinds = tokio::task::spawn_blocking(move || overlay_changes(&upper, &rootfs))
+        .await
+        .unwrap_or_default();
+    let mut out: Vec<Value> = kinds
+        .into_iter()
+        .map(|(p, k)| json!({"Path": p, "Kind": k}))
+        .collect();
     out.sort_by(|a, b| a["Path"].as_str().cmp(&b["Path"].as_str()));
     Json(Value::Array(out)).into_response()
 }
 
 /// `POST /containers/{id}/update` — `docker update`. dd does not apply live resource limits; accept
 /// the request and return the conformant `{Warnings}` envelope.
-pub(crate) async fn containers_update(State(a): State<App>, Path(id): Path<String>, _body: axum::body::Bytes) -> Response {
+pub(crate) async fn containers_update(
+    State(a): State<App>,
+    Path(id): Path<String>,
+    _body: axum::body::Bytes,
+) -> Response {
     let g = a.inner.lock().await;
     match resolve_cid(&g, &id) {
         Some(_) => Json(json!({"Warnings": []})).into_response(),
@@ -694,16 +1000,31 @@ pub(crate) async fn containers_update(State(a): State<App>, Path(id): Path<Strin
 pub(crate) async fn containers_export(State(a): State<App>, Path(id): Path<String>) -> Response {
     let rootfs = {
         let g = a.inner.lock().await;
-        match resolve_cid(&g, &id).and_then(|f| g.containers.get(&f)).map(|c| c.rootfs.clone()) {
+        match resolve_cid(&g, &id)
+            .and_then(|f| g.containers.get(&f))
+            .map(|c| c.rootfs.clone())
+        {
             Some(r) => r,
             None => return no_such(&id),
         }
     };
-    match std::process::Command::new("tar").arg("cf").arg("-").arg("-C").arg(&rootfs).arg(".").output() {
-        Ok(o) if o.status.success() => {
-            Response::builder().status(StatusCode::OK).header("Content-Type", "application/x-tar")
-                .body(Body::from(o.stdout)).unwrap()
-        }
-        _ => (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"message": "export failed"}))).into_response(),
+    match std::process::Command::new("tar")
+        .arg("cf")
+        .arg("-")
+        .arg("-C")
+        .arg(&rootfs)
+        .arg(".")
+        .output()
+    {
+        Ok(o) if o.status.success() => Response::builder()
+            .status(StatusCode::OK)
+            .header("Content-Type", "application/x-tar")
+            .body(Body::from(o.stdout))
+            .unwrap(),
+        _ => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({"message": "export failed"})),
+        )
+            .into_response(),
     }
 }

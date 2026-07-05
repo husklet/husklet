@@ -8,6 +8,7 @@
 // ss_flags SS_DISABLE(2) means no alt stack is configured.
 #define SA_ONSTACK_L 0x08000000u
 #define SS_DISABLE_L 2u
+
 static void build_signal_frame(struct cpu *c, int sig) {
     if (g_trace)
         fprintf(stderr, "[sig] deliver %d sp=%llx handler=%llx\n", sig, (unsigned long long)c->sp,
@@ -33,8 +34,15 @@ static void build_signal_frame(struct cpu *c, int sig) {
     *(uint64_t *)(f + 24) = g_sigval[sig];  // si_value (sigqueue's sival_int/ptr)
     // SA_SIGINFO sender identity for a kill/tgkill-delivered signal: the _kill/_rt union overlays si_addr at
     // offset 16 -> si_pid@16, si_uid@20 (async kill has si_addr==0, so this simply fills those 8 bytes).
-    if (g_sigpid[sig]) { *(int *)(f + 16) = g_sigpid[sig]; *(int *)(f + 20) = g_siguid[sig]; }
-    g_sigcode[sig] = 0; g_sigval[sig] = 0; g_sigaddr[sig] = 0; g_sigpid[sig] = 0; g_siguid[sig] = 0; // consumed
+    if (g_sigpid[sig]) {
+        *(int *)(f + 16) = g_sigpid[sig];
+        *(int *)(f + 20) = g_siguid[sig];
+    }
+    g_sigcode[sig] = 0;
+    g_sigval[sig] = 0;
+    g_sigaddr[sig] = 0;
+    g_sigpid[sig] = 0;
+    g_siguid[sig] = 0; // consumed
     uint64_t uc = frame + 128, mc = uc + 168;
     // uc_sigmask (signal mask to restore)
     *(uint64_t *)(uc + 40) = c->sigmask;
@@ -61,6 +69,7 @@ static void build_signal_frame(struct cpu *c, int sig) {
     // SA_NODEFER (sigset_t bit N-1)
     if (!(g_sigact[sig].flags & 0x40000000)) c->sigmask |= (1ull << (sig - 1));
 }
+
 static void do_sigreturn(struct cpu *c) {
     uint64_t frame = c->sp, uc = frame + 128, mc = uc + 168;
     for (int i = 0; i < 31; i++)
@@ -80,6 +89,7 @@ static void do_sigreturn(struct cpu *c) {
 // to the dispatcher: it restores the host callee-saved state run_block saved at block entry and returns to
 // the run_guest loop, which then sees cpu->pc == handler and runs it.
 static void block_return(void);
+
 static int sigframe_capture_fault(struct cpu *c, void *ucv) {
     ucontext_t *uc = (ucontext_t *)ucv;
     uint64_t hpc = (uint64_t)uc->uc_mcontext->__ss.__pc;
@@ -93,6 +103,7 @@ static int sigframe_capture_fault(struct cpu *c, void *ucv) {
     memcpy(c->v, uc->uc_mcontext->__ns.__v, sizeof c->v);
     return 1;
 }
+
 static void sigframe_resume_dispatch(struct cpu *c, void *ucv) {
     ucontext_t *uc = (ucontext_t *)ucv;
     uc->uc_mcontext->__ss.__x[0] = (uint64_t)c; // block_return reads &cpu from x0

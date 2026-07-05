@@ -1,4 +1,4 @@
-// dd/runtime/frontend/x86_64 -- crypto instruction class (task #342): map the x86 AES-NI / PCLMULQDQ /
+// dd/runtime/frontend/x86_64 -- crypto instruction class: map the x86 AES-NI / PCLMULQDQ /
 // SHA-NI opcodes to the ARMv8 crypto extension INLINE, instead of exiting the block to the C softmulator
 // (do_sse3b). The per-instruction block-exit + re-decode + scalar C emulation runs the openssl AES-GCM /
 // SHA-256 inner loops ~100x slower than native; emitting the native ARM crypto instructions in-line runs
@@ -31,9 +31,9 @@
 //   lane 0 of v16/v17, then PMULL d, v16, v17.
 
 // ---- ARM crypto instruction encodings (Rd in [4:0], Rn in [9:5], Rm in [20:16]) ----
-#define A_AESE 0x4E284800u  // AESE  Vd.16B, Vn.16B  = SubBytes(ShiftRows(Vd ^ Vn))
-#define A_AESD 0x4E285800u  // AESD  Vd.16B, Vn.16B  = InvSubBytes(InvShiftRows(Vd ^ Vn))
-#define A_AESMC 0x4E286800u // AESMC Vd.16B, Vn.16B  = MixColumns(Vn)
+#define A_AESE 0x4E284800u   // AESE  Vd.16B, Vn.16B  = SubBytes(ShiftRows(Vd ^ Vn))
+#define A_AESD 0x4E285800u   // AESD  Vd.16B, Vn.16B  = InvSubBytes(InvShiftRows(Vd ^ Vn))
+#define A_AESMC 0x4E286800u  // AESMC Vd.16B, Vn.16B  = MixColumns(Vn)
 #define A_AESIMC 0x4E287800u // AESIMC Vd.16B, Vn.16B = InvMixColumns(Vn)
 #define A_EOR16 0x6E201C00u  // EOR   Vd.16B, Vn.16B, Vm.16B  (via e_v3)
 #define A_PMULL 0x0EE0E000u  // PMULL Vd.1Q, Vn.1D, Vm.1D     (poly multiply, low lanes)
@@ -56,19 +56,27 @@ static int crypto_rm_vec(struct insn *I, uint64_t next) {
 // GHASH input, palignr in the SHA message schedule, pblend/pmov widenings) with the crypto ops. Left to
 // the C softmulator (do_sse3b) each one is a full block-exit (spill 16 GPR+16 vec+nzcv, C call, re-decode,
 // scalar emulate, reload) EVERY 16-byte block -- shattering the chainable crypto loop. Lowering them inline
-// (same recipe as #342) keeps the loop in translated code. Gated by NOSSEOPT for A/B (falls to do_sse3b).
+// (same recipe as) keeps the loop in translated code. Gated by NOSSEOPT for A/B (falls to do_sse3b).
 
 // MOVI Vd.16B, #imm8   (materialize a per-byte constant)
 static void e_movi16b(int vd, unsigned imm8) {
     emit32(0x4F00E400u | ((imm8 & 0xe0u) << 11) | ((imm8 & 0x1fu) << 5) | vd);
 }
+
 // INS Vd.H[di], Vn.H[si]  (copy one 16-bit lane)
 static void e_ins_h(int vd, int di, int vn, int si) {
     emit32(0x6E000400u | ((unsigned)(((di << 2) | 2)) << 16) | ((unsigned)(si << 1) << 11) | (vn << 5) | vd);
 }
+
 // sized FP/SIMD loads from [x17] (byte / halfword) -- for pmov narrow memory operands (avoid 16B over-read)
-static void e_ldr_b(int t, int rn) { emit32(0x3D400000u | (rn << 5) | t); } // ldr b<t>,[xn]
-static void e_ldr_h(int t, int rn) { emit32(0x7D400000u | (rn << 5) | t); } // ldr h<t>,[xn]
+static void e_ldr_b(int t, int rn) {
+    emit32(0x3D400000u | (rn << 5) | t);
+} // ldr b<t>,[xn]
+
+static void e_ldr_h(int t, int rn) {
+    emit32(0x7D400000u | (rn << 5) | t);
+} // ldr h<t>,[xn]
+
 // SXTL/UXTL Vd.<2*e> , Vn.<e>  (widen the low half one size step; immh selects source element size).
 //   immh_w: 0x080000=8B->8H, 0x100000=4H->4S, 0x200000=2S->2D.  sgn: 1=SXTL (sign), 0=UXTL (zero).
 static void e_xtl(int vd, int vn, unsigned immh_w, int sgn) {
@@ -146,11 +154,21 @@ static void e_xtl(int vd, int vn, unsigned immh_w, int sgn) {
 #define A_REV64_4S 0x4EA00800u  // REV64 Vd.4S, Vn.4S (swap lanes within each 64-bit half)
 #define A_ZIP1_2D 0x4EC03800u   // ZIP1 Vd.2D, Vn.2D, Vm.2D = (Vn.d0, Vm.d0)
 #define A_ZIP2_2D 0x4EC07800u   // ZIP2 Vd.2D, Vn.2D, Vm.2D = (Vn.d1, Vm.d1)
+
 // DUP Vd.4S, Vn.S[i]  (broadcast a 32-bit lane)
-static void e_dup_s(int vd, int vn, int i) { emit32(0x4E000400u | ((unsigned)(((i << 3) | 4)) << 16) | (vn << 5) | vd); }
+static void e_dup_s(int vd, int vn, int i) {
+    emit32(0x4E000400u | ((unsigned)(((i << 3) | 4)) << 16) | (vn << 5) | vd);
+}
+
 // DUP Vd.4S, Wn  (broadcast a GPR)
-static void e_dup_w4s(int vd, int rn) { emit32(0x4E040C00u | (rn << 5) | vd); }
-static void e_rev64_4s(int vd, int vn) { emit32(A_REV64_4S | (vn << 5) | vd); }
+static void e_dup_w4s(int vd, int rn) {
+    emit32(0x4E040C00u | (rn << 5) | vd);
+}
+
+static void e_rev64_4s(int vd, int vn) {
+    emit32(A_REV64_4S | (vn << 5) | vd);
+}
+
 // full .4s lane reversal (a,b,c,d) -> (d,c,b,a): rev64 swaps within halves, ext #8 swaps the halves.
 static void e_rev4s(int vd, int vn) {
     e_rev64_4s(vd, vn);
@@ -216,42 +234,42 @@ static int translate_crypto(struct insn *I, uint64_t next) {
             if (g_fp_known) fp_drop();
             g_v26z = g_v27m = 0; // the SHA round lowering clobbers v20..v31
             int s = crypto_rm_vec(I, next);
-            e_dup_s(16, D, 3);               // v16.s[0] = d.lane3 (the A from 4 rounds ago)
+            e_dup_s(16, D, 3);                // v16.s[0] = d.lane3 (the A from 4 rounds ago)
             emit32(A_SHA1H | (16 << 5) | 16); // s16 = rol30(d3)
             e_movi16b(17, 0);
-            e_ins_s(17, 3, 16, 0);           // v17 = (0,0,0,rol30(d3))
-            e_v3(A_ADD4S, D, s, 17);         // lanes 0..2 = s passthrough, lane 3 = s3 + rol30(d3)
+            e_ins_s(17, 3, 16, 0);   // v17 = (0,0,0,rol30(d3))
+            e_v3(A_ADD4S, D, s, 17); // lanes 0..2 = s passthrough, lane 3 = s3 + rol30(d3)
             return TX_NEXT;
         }
         case 0xC9: { // SHA1MSG1 d, s: d ^= (s2,s3,d0,d1)  [W xor of the schedule, no rotate]
             if (g_fp_known) fp_drop();
             int s = crypto_rm_vec(I, next);
-            e_ext(16, s, D, 8);              // v16 = (s2,s3,d0,d1)
-            e_v3(0x6E201C00u, D, D, 16);     // eor
+            e_ext(16, s, D, 8);          // v16 = (s2,s3,d0,d1)
+            e_v3(0x6E201C00u, D, D, 16); // eor
             return TX_NEXT;
         }
         case 0xCA: { // SHA1MSG2 d, s: rol1 schedule finish with the lane-3 -> lane-0 chain (see header)
             if (g_fp_known) fp_drop();
             int s = crypto_rm_vec(I, next);
-            e_rev4s(16, D);                  // v16 = (d3,d2,d1,d0)
-            e_rev4s(17, s);                  // v17 = (s3,s2,s1,s0)
+            e_rev4s(16, D);                     // v16 = (d3,d2,d1,d0)
+            e_rev4s(17, s);                     // v17 = (s3,s2,s1,s0)
             emit32(A_SHA1SU1 | (17 << 5) | 16); // v16 = (r3,r2,r1,r0): T=(d3^s2,d2^s1,d1^s0,d0), chain in lane 3
-            e_rev4s(D, 16);                  // d = (r0,r1,r2,r3) back in x86 lane order
+            e_rev4s(D, 16);                     // d = (r0,r1,r2,r3) back in x86 lane order
             return TX_NEXT;
         }
         case 0xCB: { // SHA256RNDS2 d, s, <xmm0>: 2 rounds via ARM SHA256H/H2 (see header derivation).
             if (g_fp_known) fp_drop();
             int s = crypto_rm_vec(I, next);
-            e_rev64_4s(16, s);                             // v16 = (E,F,A,B)
-            e_rev64_4s(17, D);                             // v17 = (G,H,C,D)
-            e_v3(A_ZIP2_2D, 20, 16, 17);                   // v20 = X0 = (A,B,C,D)
-            e_v3(A_ZIP1_2D, 21, 16, 17);                   // v21 = Y0 = (E,F,G,H)
-            e_vmov(16, 20);                                // save X0 for SHA256H2
-            emit32(A_SHA256H | (0 << 16) | (21 << 5) | 20); // v20 = X4 = (A4,A3,A2,A1); WK = xmm0(v0),
+            e_rev64_4s(16, s);                               // v16 = (E,F,A,B)
+            e_rev64_4s(17, D);                               // v17 = (G,H,C,D)
+            e_v3(A_ZIP2_2D, 20, 16, 17);                     // v20 = X0 = (A,B,C,D)
+            e_v3(A_ZIP1_2D, 21, 16, 17);                     // v21 = Y0 = (E,F,G,H)
+            e_vmov(16, 20);                                  // save X0 for SHA256H2
+            emit32(A_SHA256H | (0 << 16) | (21 << 5) | 20);  // v20 = X4 = (A4,A3,A2,A1); WK = xmm0(v0),
             emit32(A_SHA256H2 | (0 << 16) | (16 << 5) | 21); // v21 = Y4 = (E4,E3,E2,E1); lanes2,3 garbage-OK
-            e_rev64_4s(16, 21);                            // v16 = (E3,E4,E1,E2)
-            e_rev64_4s(17, 20);                            // v17 = (A3,A4,A1,A2)
-            e_v3(A_ZIP2_2D, D, 16, 17);                    // d = (E1,E2,A1,A2) = (F2,E2,B2,A2)
+            e_rev64_4s(16, 21);                              // v16 = (E3,E4,E1,E2)
+            e_rev64_4s(17, 20);                              // v17 = (A3,A4,A1,A2)
+            e_v3(A_ZIP2_2D, D, 16, 17);                      // d = (E1,E2,A1,A2) = (F2,E2,B2,A2)
             return TX_NEXT;
         }
         case 0xCC: { // SHA256MSG1 d, s: exactly ARM SHA256SU0 (see header)
@@ -267,10 +285,10 @@ static int translate_crypto(struct insn *I, uint64_t next) {
                 e_vmov(20, s);
                 s = 20;
             }
-            e_movi16b(16, 0);                          // v16 = 0 (the SU1 Vn operand)
+            e_movi16b(16, 0); // v16 = 0 (the SU1 Vn operand)
             e_movi16b(17, 0);
-            e_ins_s(17, 3, s, 0);                      // v17 = (0,0,0,s0)
-            e_v3(A_SUB4S, D, D, 17);                   // cancel SU1's T0 lane-3 (+s0) contribution
+            e_ins_s(17, 3, s, 0);    // v17 = (0,0,0,s0)
+            e_v3(A_SUB4S, D, D, 17); // cancel SU1's T0 lane-3 (+s0) contribution
             emit32(A_SHA256SU1 | (s << 16) | (16 << 5) | D);
             return TX_NEXT;
         }
@@ -282,12 +300,12 @@ static int translate_crypto(struct insn *I, uint64_t next) {
             // 0x8f: bit7-clear -> 0..15 (valid lookup), bit7-set -> 128..143 (>=16 -> TBL yields 0). Exact.
             if (!g_v27m || nosseopt()) e_movi16b(27, 0x8f); // loop-invariant mask, hoisted across the run
             g_v27m = 1;
-            e_v3(A_AND16, 16, s, 27);        // v16 = control & 0x8f
+            e_v3(A_AND16, 16, s, 27);                  // v16 = control & 0x8f
             emit32(A_TBL | (16 << 16) | (D << 5) | D); // D = table[D] indexed by v16 (out-of-range -> 0)
             return TX_NEXT;
         }
-        case 0x10: // PBLENDVB d, s (mask = xmm0, per-byte top bit)
-        case 0x14: // BLENDVPS d, s (mask = xmm0, per-dword top bit)
+        case 0x10:   // PBLENDVB d, s (mask = xmm0, per-byte top bit)
+        case 0x14:   // BLENDVPS d, s (mask = xmm0, per-dword top bit)
         case 0x15: { // BLENDVPD d, s (mask = xmm0, per-qword top bit)  -- select s where mask bit set
             if (nosseopt()) return TX_FALL;
             if (g_fp_known) fp_drop();
@@ -297,28 +315,55 @@ static int translate_crypto(struct insn *I, uint64_t next) {
             e_v3(A_BIT, D, s, 16);              // D = (mask ? s : D)
             return TX_NEXT;
         }
-        case 0x20: case 0x21: case 0x22: case 0x23: case 0x24: case 0x25:   // PMOVSX (sign-extend)
-        case 0x30: case 0x31: case 0x32: case 0x33: case 0x34: case 0x35: { // PMOVZX (zero-extend)
+        case 0x20:
+        case 0x21:
+        case 0x22:
+        case 0x23:
+        case 0x24:
+        case 0x25: // PMOVSX (sign-extend)
+        case 0x30:
+        case 0x31:
+        case 0x32:
+        case 0x33:
+        case 0x34:
+        case 0x35: { // PMOVZX (zero-extend)
             if (nosseopt()) return TX_FALL;
             if (g_fp_known) fp_drop();
-            int sgn = op < 0x30;      // 0x2x = signed, 0x3x = unsigned
-            int form = op & 0x0f;     // 0=bw 1=bd 2=bq 3=wd 4=wq 5=dq
+            int sgn = op < 0x30;  // 0x2x = signed, 0x3x = unsigned
+            int form = op & 0x0f; // 0=bw 1=bd 2=bq 3=wd 4=wq 5=dq
             int src_bytes = (form == 0 || form == 3 || form == 5) ? 8 : (form == 1 || form == 4) ? 4 : 2;
             int s;
             if (I->is_mem) { // narrow source: load exactly src_bytes to avoid a 16B over-read past the page
                 emit_ea(I, next);
                 s = 19;
-                if (src_bytes == 8) e_ldr_d(19, 17);
-                else if (src_bytes == 4) e_ldr_s(19, 17);
-                else e_ldr_h(19, 17);
-            } else s = I->rm_reg;
+                if (src_bytes == 8)
+                    e_ldr_d(19, 17);
+                else if (src_bytes == 4)
+                    e_ldr_s(19, 17);
+                else
+                    e_ldr_h(19, 17);
+            } else
+                s = I->rm_reg;
             // widen the low half one size step at a time (UXTL/SXTL). Each step consumes the low 64 bits.
-            if (form == 0) e_xtl(D, s, 0x080000u, sgn);                                   // bw: 8B->8H
-            else if (form == 1) { e_xtl(D, s, 0x080000u, sgn); e_xtl(D, D, 0x100000u, sgn); }        // bd
-            else if (form == 2) { e_xtl(D, s, 0x080000u, sgn); e_xtl(D, D, 0x100000u, sgn); e_xtl(D, D, 0x200000u, sgn); } // bq
-            else if (form == 3) e_xtl(D, s, 0x100000u, sgn);                                   // wd: 4H->4S
-            else if (form == 4) { e_xtl(D, s, 0x100000u, sgn); e_xtl(D, D, 0x200000u, sgn); }        // wq
-            else e_xtl(D, s, 0x200000u, sgn);                                                  // dq: 2S->2D
+            if (form == 0)
+                e_xtl(D, s, 0x080000u, sgn); // bw: 8B->8H
+            else if (form == 1) {
+                e_xtl(D, s, 0x080000u, sgn);
+                e_xtl(D, D, 0x100000u, sgn);
+            } // bd
+            else if (form == 2) {
+                e_xtl(D, s, 0x080000u, sgn);
+                e_xtl(D, D, 0x100000u, sgn);
+                e_xtl(D, D, 0x200000u, sgn);
+            } // bq
+            else if (form == 3)
+                e_xtl(D, s, 0x100000u, sgn); // wd: 4H->4S
+            else if (form == 4) {
+                e_xtl(D, s, 0x100000u, sgn);
+                e_xtl(D, D, 0x200000u, sgn);
+            } // wq
+            else
+                e_xtl(D, s, 0x200000u, sgn); // dq: 2S->2D
             return TX_NEXT;
         }
         default: return TX_FALL;
@@ -333,22 +378,22 @@ static int translate_crypto(struct insn *I, uint64_t next) {
             int f = (int)I->imm & 3;
             static const uint32_t K1[4] = {0x5A827999u, 0x6ED9EBA1u, 0x8F1BBCDCu, 0xCA62C1D6u};
             static const uint32_t OPC[4] = {A_SHA1C, A_SHA1P, A_SHA1M, A_SHA1P}; // Ch/Parity/Maj/Parity
-            e_rev4s(16, D);                    // v16 = X0 = (A,B,C,D)
-            e_rev4s(17, s);                    // v17 = (W0,W1,W2,W3)  (W0 already has E folded by NEXTE)
+            e_rev4s(16, D);                                                      // v16 = X0 = (A,B,C,D)
+            e_rev4s(17, s);                        // v17 = (W0,W1,W2,W3)  (W0 already has E folded by NEXTE)
             e_movz(16 /*x16*/, K1[f] & 0xffff, 0); // w16 = K (x16/x17 are engine GPR scratch in-block)
             e_movk(16, K1[f] >> 16, 1);
-            e_dup_w4s(18, 16);                 // v18.4s = K broadcast
-            e_v3(A_ADD4S, 17, 17, 18);         // v17 = W + K (ARM adds Vm lane e per round, no internal K)
-            e_movi16b(18, 0);                  // E0 = 0 (x86 RNDS4 defines E0=0; E arrives via W0)
+            e_dup_w4s(18, 16);                            // v18.4s = K broadcast
+            e_v3(A_ADD4S, 17, 17, 18);                    // v17 = W + K (ARM adds Vm lane e per round, no internal K)
+            e_movi16b(18, 0);                             // E0 = 0 (x86 RNDS4 defines E0=0; E arrives via W0)
             emit32(OPC[f] | (17 << 16) | (18 << 5) | 16); // v16 = X4 = (A4,B4,C4,D4)
-            e_rev4s(D, 16);                    // d = (D4,C4,B4,A4)
+            e_rev4s(D, 16);                               // d = (D4,C4,B4,A4)
             return TX_NEXT;
         }
         case 0x44: { // PCLMULQDQ d, s, imm8
             if (g_fp_known) fp_drop();
             int imm = (int)I->imm;
-            int selA = imm & 1;         // which 64-bit half of d
-            int selB = (imm >> 4) & 1;  // which 64-bit half of s
+            int selA = imm & 1;        // which 64-bit half of d
+            int selB = (imm >> 4) & 1; // which 64-bit half of s
             int s = crypto_rm_vec(I, next);
             if (selA && selB) { // imm 0x11 (both high halves): single PMULL2 reads lane 1 of each source
                 emit32(A_PMULL2 | (s << 16) | (D << 5) | D);
@@ -357,8 +402,14 @@ static int translate_crypto(struct insn *I, uint64_t next) {
             // PMULL reads lane 0 (low 64) of each source. If the low half is selected, feed the operand
             // register directly; only stage the HIGH half into lane 0 of a scratch when selected.
             int vn = D, vm = s;
-            if (selA) { e_ins_d(16, 0, D, 1); vn = 16; }
-            if (selB) { e_ins_d(17, 0, s, 1); vm = 17; }
+            if (selA) {
+                e_ins_d(16, 0, D, 1);
+                vn = 16;
+            }
+            if (selB) {
+                e_ins_d(17, 0, s, 1);
+                vm = 17;
+            }
             emit32(A_PMULL | (vm << 16) | (vn << 5) | D); // d.1q = clmul(halfd, halfs)
             return TX_NEXT;
         }

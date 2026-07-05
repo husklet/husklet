@@ -16,7 +16,7 @@
 static void res_bump(void);
 static int updirneg_lookup(const char *dir);
 static void updirneg_store(const char *dir);
-//   updirverdict_*    -- the "#239/#269 merged-view directory VERDICT" memo (0 present / 1 hidden /
+//   updirverdict_* -- the " merged-view directory VERDICT" memo (0 present / 1 hidden /
 //                        2 opaque-cut), epoch-gated, fork/chroot-reset via rc_reset. overlay_dir_verdict
 //                        fills it so a lower-only child under a whiteout-removed or opaque-recreated
 //                        parent is not surfaced as a stale positive by the per-layer resolve.
@@ -25,6 +25,7 @@ static void updirverdict_store(const char *dir, int verdict);
 static const char *xresolve_exec(const char *p, char *buf,
                                  // fwd (defined below; overlay uses it for the upper)
                                  size_t n);
+
 struct olayer {
     char canon[1024];
     size_t clen;
@@ -32,6 +33,7 @@ struct olayer {
 static struct olayer g_lower[8];
 // [0] = highest-priority lower (searched first)
 static int g_nlower = 0;
+
 // register a read-only lower layer (image layer)
 static void add_lower(const char *dir) {
     if (g_nlower >= 8 || !dir || !dir[0]) return;
@@ -40,6 +42,7 @@ static void add_lower(const char *dir) {
     g_lower[g_nlower].clen = strlen(g_lower[g_nlower].canon);
     g_nlower++;
 }
+
 static void wh_hostpath(const char *jcanon, size_t jclen, const char *guest, char *out,
                         // host path of the .wh.NAME marker
                         size_t n) {
@@ -53,6 +56,7 @@ static void wh_hostpath(const char *jcanon, size_t jclen, const char *guest, cha
     snprintf(gw, sizeof gw, "%s/.wh.%s", par[0] ? par : "", base);
     confine_in(jcanon, jclen, gw, out, n, 1);
 }
+
 static int wh_exists(const char *jcanon, size_t jclen,
                      // is there a whiteout for `guest` in this layer?
                      const char *guest) {
@@ -61,6 +65,7 @@ static int wh_exists(const char *jcanon, size_t jclen,
     struct stat st;
     return lstat(host, &st) == 0;
 }
+
 // One layer's host path for `guest`, following symlinks LAYER-relative (absolute target = layer root,
 // like xresolve_exec does for the rootfs). nofollow keeps the final component unresolved. Returns the
 // confined host path; the caller lstats it to test existence in this layer.
@@ -75,17 +80,17 @@ static void layer_follow(const char *jc, size_t jcl, const char *guest, char *ou
         if (lstat(hb, &st) != 0) {
             confine_in(jc, jcl, cur, out, n, nofollow);
             return;
-        // missing -> report (confined)
+            // missing -> report (confined)
         }
         if (!S_ISLNK(st.st_mode)) {
             snprintf(out, n, "%s", hb);
             return;
-        // real file/dir -> done
+            // real file/dir -> done
         }
         if (nofollow && !strcmp(cur, guest)) {
             snprintf(out, n, "%s", hb);
             return;
-        // lstat/readlink: keep the final link
+            // lstat/readlink: keep the final link
         }
         char tgt[4200];
         ssize_t k = readlink(hb, tgt, sizeof tgt - 1);
@@ -109,6 +114,7 @@ static void layer_follow(const char *jc, size_t jcl, const char *guest, char *ou
     }
     confine_in(jc, jcl, cur, out, n, nofollow);
 }
+
 // Is `guestdir` marked OPAQUE in layer (jc,jcl)? An opaque dir hides ALL entries from lower layers (a
 // directory that was removed-and-recreated at runtime). Represented on disk as a `.wh..wh..opq` marker
 // file inside the dir -- the same wire name real overlayfs uses.
@@ -120,14 +126,15 @@ static int dir_is_opaque(const char *jc, size_t jcl, const char *guestdir) {
     struct stat st;
     return lstat(opq, &st) == 0;
 }
+
 // Merged-view visibility VERDICT for the GUEST directory `dir` (memoized per dir; see updirverdict_* in
 // fscache.c). Returns 0 = present & lowers contribute; 1 = HIDDEN (dir or an ancestor removed/absent in
 // the union -- every entry under it is ENOENT); 2 = OPAQUE-CUT (present, but an opaque marker on it or an
 // ancestor hides ALL lower content, so entries come only from the writable upper). overlay_lookup gates
 // the lower-layer search on this: the per-layer resolve (layer_follow) resolves a whole path inside ONE
 // layer, so without this a lower-only child would still be found through a parent that `rm -r`/rmdir
-// whited out (stale-positive stat after remove, #239) or through an opaque recreated parent (stale merged
-// readdir/rmdir, #269). Walks root->`dir`: at each ancestor the topmost layer that PROVIDES it (visible)
+// whited out (stale-positive stat after remove) or through an opaque recreated parent (stale merged
+// readdir/rmdir). Walks root->`dir`: at each ancestor the topmost layer that PROVIDES it (visible)
 // or WHITES it out (hidden) decides that level; an opaque upper dir sets a sticky cut that hides lower
 // layers for everything beneath it. Recursion is memo-bounded (each ancestor cached, epoch-gated), so a
 // metadata storm over a static image pays one climb per directory then O(1). Volume-routed paths never
@@ -174,6 +181,7 @@ static int overlay_dir_verdict(const char *dir) {
     updirverdict_store(dir, verdict);
     return verdict;
 }
+
 // ONE overlay lookup, final component NOT followed: the topmost layer (upper, then lowers top->down)
 // that has `guest`. 1 + its host path in `host`; 0 if absent or whiteout-hidden (host = the upper path,
 // for ENOENT/O_CREAT). A volume path routes to its bind backing via secure_resolve. This is the single-hop
@@ -189,7 +197,7 @@ static int overlay_lookup(const char *guest, char *host, size_t hn) {
     char *psl = strrchr(par, '/');
     int have_par = psl && psl != par;
     if (have_par) *psl = 0;
-    // #239/#269: merged-view VERDICT of the parent dir. The per-layer probes below resolve a whole path
+    // merged-view VERDICT of the parent dir. The per-layer probes below resolve a whole path
     // inside ONE layer, so a lower-only child would still surface through a parent that `rm -r`/rmdir
     // whited out (stale-positive stat after remove) or an opaque recreated parent (stale merged readdir).
     // The verdict climbs the ancestor chain once (memoized): 1 => the parent subtree is removed/absent in
@@ -214,12 +222,12 @@ static int overlay_lookup(const char *guest, char *host, size_t hn) {
             if (lstat(up, &st) == 0) {
                 snprintf(host, hn, "%s", up);
                 return 1;
-            // upper shadows lowers
+                // upper shadows lowers
             }
             if (wh_exists(g_rootfs_canon, g_rootfs_canon_len, guest)) {
                 snprintf(host, hn, "%s", up);
                 return 0;
-            // deleted
+                // deleted
             }
             // OPAQUE parent: if the guest's parent dir is opaque in the upper (a recreated dir), every lower
             // copy of a child is hidden -- don't descend to the lowers (absent, host = the upper path).
@@ -250,8 +258,9 @@ static int overlay_lookup(const char *guest, char *host, size_t hn) {
     snprintf(host, hn, "%s", up);
     return 0;
 }
+
 // Overlay READ resolve: topmost layer that has `guest`, FOLLOWING a final symlink across the WHOLE overlay
-// stack. 1 + host on hit; 0 if absent/whiteout-hidden. #302: a symlink CREATED AT RUNTIME in the upper whose
+// stack. 1 + host on hit; 0 if absent/whiteout-hidden. a symlink CREATED AT RUNTIME in the upper whose
 // target lands in a read-only lower (venv's /tmp/ve/bin/python -> /usr/local/bin/python, /etc/hostname,
 // /bin/busybox) must resolve to that lower file. The old code followed the link only inside the upper
 // (xresolve_exec) and then searched the lowers under the ORIGINAL (link) path, so an upper->lower link
@@ -285,6 +294,7 @@ static int overlay_resolve(const char *guest, char *host, size_t hn, int nofollo
     }
     return 0; // chain too deep -> ENOENT (host holds the last upper path)
 }
+
 // Resolve an executable/interpreter path through the FULL overlay (upper THEN lowers), returning the host
 // path in `buf`. Drop-in for xresolve_exec at the ELF-loader sites so a program that lives only in a
 // read-only --lower (empty upper) is found -- a bare xresolve_exec checks the upper alone and ENOENTs.
@@ -294,6 +304,7 @@ static const char *xresolve_overlay(const char *p, char *buf, size_t n) {
     overlay_resolve(p, buf, n, 0);
     return buf;
 }
+
 // Overlay CREATE-op pre-flight (mkdirat / mknodat / symlinkat). The host create these syscalls issue is
 // confined to the writable UPPER (jail_at), so it cannot see a name a read-only lower still provides, nor a
 // non-directory ancestor that lives only in a lower. Without this the create would wrongly SUCCEED (silently
@@ -334,6 +345,7 @@ static int overlay_create_precheck(const char *guest) {
     if (overlay_lookup(g, host, sizeof host)) return -EEXIST;
     return 0;
 }
+
 // Overlay: ensure every PARENT directory of `guest` exists in the writable upper, copying up (mkdir, with
 // the lower's mode) each ancestor that currently lives only in a read-only lower layer. A create syscall
 // (openat O_CREAT via overlay_copyup, or mkdirat/symlinkat/mknodat/renameat via jail_at) confines to the
@@ -388,6 +400,7 @@ static void overlay_mkparents(const char *guest) {
     // actually created -- the common already-materialized case stays bump-free.
     if (made) res_bump();
 }
+
 // ---- copy-up metadata + opaque + whiteout helpers ------------------------------------------------
 // Real overlayfs copy-up preserves the lower inode's mode (INCLUDING setuid/setgid/sticky), its
 // atime/mtime, and its xattrs (file caps, security labels). dd used to keep only `st_mode & 0777`, reset
@@ -407,6 +420,7 @@ static void ovl_copy_xattrs(const char *src, const char *dst) {
         if (vn >= 0) setxattr(dst, nm, val, (size_t)vn, 0, XATTR_NOFOLLOW);
     }
 }
+
 // Apply the lower's mode (incl S_ISUID/S_ISGID/S_ISVTX), atime/mtime and xattrs to a copied-up inode.
 static void ovl_copy_meta(const char *src, const char *dst, const struct stat *st) {
     chmod(dst, st->st_mode & 07777);
@@ -414,6 +428,7 @@ static void ovl_copy_meta(const char *src, const char *dst, const struct stat *s
     utimensat(AT_FDCWD, dst, ts, AT_SYMLINK_NOFOLLOW);
     ovl_copy_xattrs(src, dst);
 }
+
 // Recursively remove a host path (file, symlink, or a whole directory subtree). Used to whiteout a
 // lower-backed directory: a plain remove() cannot drop an upper dir that still holds child `.wh.` markers
 // (ENOTEMPTY), which left the directory wrongly still resolving as present after `rm -rf`.
@@ -437,6 +452,7 @@ static void ovl_rm_rf(const char *path) {
     closedir(d);
     rmdir(path);
 }
+
 // Drop any `.wh.NAME` whiteout shadowing `guest` in the upper (a name is being re-created there).
 static void overlay_clear_whiteout(const char *guest) {
     if (!g_nlower) return;
@@ -444,6 +460,7 @@ static void overlay_clear_whiteout(const char *guest) {
     wh_hostpath(g_rootfs_canon, g_rootfs_canon_len, guest, wh, sizeof wh);
     unlink(wh);
 }
+
 // Does a read-only lower provide `guest` as a DIRECTORY (so recreating it in the upper must be opaque to
 // keep the lower's stale children hidden)?
 static int overlay_lower_has_dir(const char *guest) {
@@ -457,6 +474,7 @@ static int overlay_lower_has_dir(const char *guest) {
     }
     return 0;
 }
+
 // Mark the upper copy of `guest` opaque (drop a `.wh..wh..opq` marker inside it).
 static void overlay_set_opaque(const char *guest) {
     if (!g_nlower) return;
@@ -467,8 +485,9 @@ static void overlay_set_opaque(const char *guest) {
     int fd = open(opq, O_CREAT | O_WRONLY, 0644);
     if (fd >= 0) close(fd);
     res_bump(); // an opaque marker appeared: invalidate the dir-verdict memo (and negative caches) so no
-                // pre-marker "lowers contribute" verdict survives within this syscall (#239/#269)
+                // pre-marker "lowers contribute" verdict survives within this syscall
 }
+
 // Copy-up: bring a lower file into the UPPER so it can be modified, then return the upper host path.
 // If the file is only in a lower, copy its bytes up; if absent everywhere, return the upper path (create).
 static void overlay_copyup(const char *guest, char *host, size_t hn) {
@@ -554,6 +573,7 @@ static void overlay_copyup(const char *guest, char *host, size_t hn) {
     // bump is harmless).
     res_bump();
 }
+
 // Recursively copy a lower-only subtree rooted at `guest` into the writable upper, preserving metadata at
 // every level. Used by rename(2) of a lower-only directory: real overlayfs (without redirect_dir) returns
 // EXDEV and userspace `mv` copies recursively; we do the equivalent copy-up so a plain rename never loses
@@ -595,6 +615,7 @@ static void overlay_copyup_tree(const char *guest) {
     }
     closedir(d);
 }
+
 // Absolute GUEST path for (dirfd, raw) -- combines a dir-fd's guest path (upper or lower) with raw.
 static void abs_guest(int dirfd, const char *raw, char *out, size_t n) {
     if (raw && raw[0] == '/') {
@@ -616,6 +637,7 @@ static void abs_guest(int dirfd, const char *raw, char *out, size_t n) {
         // AT_FDCWD-relative -> guest cwd
         snprintf(out, n, "%s/%s", g_cwd, raw ? raw : "");
 }
+
 // Map a canonical HOST directory path back to its GUEST path. The guest cwd is a guest-visible path, but
 // chdir/fchdir only have the host path the dir actually resolved to -- which, under the overlay, may sit in
 // the writable upper (g_rootfs_canon), in any read-only lower (the image), or in a bind-mount volume. Strip
@@ -644,6 +666,7 @@ static void guest_from_host_raw(const char *host, char *out, size_t n) {
         }
     snprintf(out, n, "/");
 }
+
 // Map a canonical HOST dir to the GUEST path, then fold it into the active chroot frame: under a chroot,
 // chdir/fchdir resolve to a host dir whose rootfs-relative guest path includes the chroot prefix, but the
 // guest must see g_cwd in its OWN root, so strip the prefix. No-op (byte-identical) with no chroot.
@@ -651,6 +674,7 @@ static void guest_from_host(const char *host, char *out, size_t n) {
     guest_from_host_raw(host, out, n);
     if (g_chroot[0]) chroot_strip(out, n);
 }
+
 // Append name/type to a growable (realloc-doubling) parallel array pair. Returns -1 on OOM (leaving the
 // arrays valid, just not grown) so the caller emits what it already has rather than overrunning.
 static int ovl_push(char (**names)[256], uint8_t **types, int *cap, int n, const char *nm, uint8_t ty) {
@@ -667,6 +691,7 @@ static int ovl_push(char (**names)[256], uint8_t **types, int *cap, int n, const
     (*types)[n] = ty;
     return 0;
 }
+
 // Append to the growable dedup list. Returns -1 on OOM.
 static int ovl_seen(char (**seen)[256], int *scap, int ns, const char *nm) {
     if (ns == *scap) {
@@ -679,20 +704,21 @@ static int ovl_seen(char (**seen)[256], int *scap, int ns, const char *nm) {
     snprintf((*seen)[ns], 256, "%s", nm);
     return 0;
 }
+
 // Overlay whiteout for a delete: remove the upper copy (if any) and drop a .wh.NAME marker in the upper.
 // Merged readdir across layers (upper first, then lowers). Higher layer wins; a .wh.NAME hides NAME
 // in all lower layers; .wh.* markers are not emitted. Allocates the merged name/type arrays sized to the
-// actual directory (no fixed cap -- a dir with >1024 merged entries enumerates fully; #179) and hands
+// actual directory (no fixed cap -- a dir with >1024 merged entries enumerates fully;) and hands
 // them back via *names_out/*types_out for the caller to free(); returns the entry count (0 leaves the
 // out-pointers NULL). The internal `seen` dedup list grows with the directory too.
 static int overlay_readdir(const char *gdir, char (**names_out)[256], uint8_t **types_out) {
-    char(*names)[256] = NULL, (*seen)[256] = NULL;
+    char (*names)[256] = NULL, (*seen)[256] = NULL;
     uint8_t *types = NULL;
     int cap = 0, nout = 0, scap = 0, ns = 0;
     // POSIX: readdir must return "." (self) and ".." (parent) as real entries. The per-layer scan below
     // skips "."/".." from every layer (a higher layer's "." must not shadow a lower's contents), so
     // synthesize them first as DT_DIR (recorded in seen[] so no stray layer/volume entry doubles them).
-    // Without these, GNU find infinite-loops on deep trees -- it relies on "."/".." to walk (#184).
+    // Without these, GNU find infinite-loops on deep trees -- it relies on "."/".." to walk.
     if (ovl_seen(&seen, &scap, ns, ".") >= 0) {
         ns++;
         if (ovl_push(&names, &types, &cap, nout, ".", DT_DIR) >= 0) nout++;
@@ -728,7 +754,7 @@ static int overlay_readdir(const char *gdir, char (**names_out)[256], uint8_t **
             if (!wh) {
                 if (ovl_push(&names, &types, &cap, nout, name, e->d_type) < 0) break;
                 nout++;
-            // whiteout -> hide, don't emit
+                // whiteout -> hide, don't emit
             }
         }
         closedir(d);
@@ -815,6 +841,7 @@ static int overlay_readdir(const char *gdir, char (**names_out)[256], uint8_t **
     *types_out = types;
     return nout;
 }
+
 static void overlay_whiteout(const char *guest) {
     char up[4300];
     xresolve_exec(guest, up, sizeof up);
@@ -840,5 +867,5 @@ static void overlay_whiteout(const char *guest) {
     int fd = open(wh, O_CREAT | O_WRONLY, 0644);
     if (fd >= 0) close(fd);
     res_bump(); // a whiteout appeared (and the upper subtree was dropped): invalidate the dir-verdict memo
-                // and negative caches so no pre-removal "present" verdict/stat survives this syscall (#239/#269)
+                // and negative caches so no pre-removal "present" verdict/stat survives this syscall
 }
