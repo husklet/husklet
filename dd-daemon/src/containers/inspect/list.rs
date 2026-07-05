@@ -254,3 +254,127 @@ pub(crate) async fn containers_json(
         .collect();
     Json(v)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn ctr() -> Container {
+        Container {
+            id: "abc123def456".into(),
+            image: "nginx".into(),
+            status: "running".into(),
+            ..Default::default()
+        }
+    }
+
+    fn filt(pairs: &[(&str, &[&str])]) -> HashMap<String, Vec<String>> {
+        pairs
+            .iter()
+            .map(|(k, vs)| (k.to_string(), vs.iter().map(|s| s.to_string()).collect()))
+            .collect()
+    }
+
+    #[test]
+    fn ps_match_no_filters_matches() {
+        assert!(ps_match(&ctr(), "web", &HashMap::new(), None, None));
+    }
+
+    #[test]
+    fn ps_match_status_ors_within_type() {
+        let c = ctr(); // status "running"
+        assert!(ps_match(&c, "web", &filt(&[("status", &["running", "exited"])]), None, None));
+        assert!(!ps_match(&c, "web", &filt(&[("status", &["exited"])]), None, None));
+    }
+
+    #[test]
+    fn ps_match_name_is_substring() {
+        let c = ctr();
+        assert!(ps_match(&c, "myweb1", &filt(&[("name", &["web"])]), None, None));
+        assert!(!ps_match(&c, "myweb1", &filt(&[("name", &["db"])]), None, None));
+    }
+
+    #[test]
+    fn ps_match_label_key_and_kv_are_anded() {
+        let mut c = ctr();
+        c.labels.insert("env".into(), "prod".into());
+        c.labels.insert("team".into(), "core".into());
+        // key-only presence and key=value both match.
+        assert!(ps_match(&c, "web", &filt(&[("label", &["env"])]), None, None));
+        assert!(ps_match(&c, "web", &filt(&[("label", &["env=prod"])]), None, None));
+        // Wrong value fails; multiple label entries are AND'd (a missing one fails the whole match).
+        assert!(!ps_match(&c, "web", &filt(&[("label", &["env=dev"])]), None, None));
+        assert!(!ps_match(&c, "web", &filt(&[("label", &["env", "missing"])]), None, None));
+    }
+
+    #[test]
+    fn ps_match_id_prefix() {
+        let c = ctr(); // id "abc123def456"
+        assert!(ps_match(&c, "web", &filt(&[("id", &["abc123"])]), None, None));
+        assert!(!ps_match(&c, "web", &filt(&[("id", &["zzz"])]), None, None));
+    }
+
+    #[test]
+    fn ps_match_exited_code() {
+        let mut c = ctr();
+        c.status = "exited".into();
+        c.exit_code = 137;
+        assert!(ps_match(&c, "web", &filt(&[("exited", &["137"])]), None, None));
+        assert!(!ps_match(&c, "web", &filt(&[("exited", &["0"])]), None, None));
+    }
+
+    #[test]
+    fn ps_match_health_only_none_matches() {
+        let c = ctr();
+        assert!(ps_match(&c, "web", &filt(&[("health", &["none"])]), None, None));
+        assert!(!ps_match(&c, "web", &filt(&[("health", &["healthy"])]), None, None));
+    }
+
+    #[test]
+    fn ps_match_before_and_since_are_strict() {
+        let mut c = ctr();
+        c.created = 100;
+        // before=ts: created must be strictly < ts.
+        assert!(ps_match(&c, "web", &HashMap::new(), Some(101), None));
+        assert!(!ps_match(&c, "web", &HashMap::new(), Some(100), None));
+        // since=ts: created must be strictly > ts.
+        assert!(ps_match(&c, "web", &HashMap::new(), None, Some(99)));
+        assert!(!ps_match(&c, "web", &HashMap::new(), None, Some(100)));
+    }
+
+    #[test]
+    fn human_status_created_is_bare() {
+        let mut c = ctr();
+        c.status = "created".into();
+        // A never-started container is a bare "Created" with no elapsed time (time-independent).
+        assert_eq!(human_status(&c), "Created");
+    }
+
+    #[test]
+    fn human_status_prefix_by_state() {
+        let mut c = ctr();
+        c.created = now_secs(); // ~0 elapsed; assert only the state-dependent prefix.
+        c.status = "running".into();
+        assert!(human_status(&c).starts_with("Up "), "{}", human_status(&c));
+        c.status = "exited".into();
+        c.exit_code = 2;
+        assert!(human_status(&c).starts_with("Exited (2) "), "{}", human_status(&c));
+        c.status = "restarting".into();
+        c.exit_code = 1;
+        assert!(human_status(&c).starts_with("Restarting (1) "), "{}", human_status(&c));
+    }
+
+    #[test]
+    fn container_sizes_guards_return_zero_without_touching_fs() {
+        // The catastrophic-walk guards: host-fs `macos`, empty rootfs, and rootfs "/" all short-circuit.
+        let mut c = ctr();
+        c.image = "macos".into();
+        c.rootfs = "/".into();
+        assert_eq!(container_sizes(&c), (0, 0));
+        c.image = "nginx".into();
+        c.rootfs = "".into();
+        assert_eq!(container_sizes(&c), (0, 0));
+        c.rootfs = "/".into();
+        assert_eq!(container_sizes(&c), (0, 0));
+    }
+}

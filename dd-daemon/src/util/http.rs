@@ -88,3 +88,30 @@ pub(crate) fn base64_std(data: &[u8]) -> String {
     }
     out
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn log_frame_header_shape() {
+        // `[stream, 0,0,0, len_be(4)] + payload` — the docker multiplexed-stream frame.
+        let f = log_frame(1, b"hi");
+        assert_eq!(f, vec![1, 0, 0, 0, 0, 0, 0, 2, b'h', b'i']);
+    }
+
+    #[test]
+    fn log_frame_stderr_stream_id_and_len() {
+        // Stream id 2 = stderr; the 4-byte big-endian length is the payload byte count.
+        let payload = vec![0u8; 300];
+        let f = log_frame(2, &payload);
+        assert_eq!(&f[..8], &[2, 0, 0, 0, 0, 0, 1, 44]); // 300 = 0x012C
+        assert_eq!(f.len(), 8 + 300);
+        assert_eq!(&f[8..], &payload[..]);
+    }
+
+    #[test]
+    fn log_frame_empty_payload_is_header_only() {
+        assert_eq!(log_frame(1, b""), vec![1, 0, 0, 0, 0, 0, 0, 0]);
+    }
+}
