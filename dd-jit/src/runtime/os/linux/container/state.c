@@ -274,6 +274,37 @@ static int gid_permitted(int id) {
 static uint64_t g_cap_eff = DD_CAP_DEFAULT;  // process EFFECTIVE cap set (capset(2) may narrow it)
 static uint64_t g_cap_bnd = DD_CAP_DEFAULT;  // process BOUNDING cap set (PR_CAPBSET_DROP clears bits)
 static int g_nnp;                            // PR_SET/GET_NO_NEW_PRIVS: sticky; /proc/self/status NoNewPrivs
+// ---- #422: image-derived supplementary groups (runc additionalGids) --------------------------------
+// A default `docker run` gives the container's run user (default root, uid 0) the supplementary GID set
+// runc DERIVES FROM THE IMAGE ROOTFS -- not a fixed constant. runc reads /etc/passwd for the run user's
+// NAME + primary gid, then scans /etc/group in file order and collects every group whose comma-separated
+// member list contains that name; the additionalGids = [primary gid] followed by those member-derived gids,
+// WITHOUT dedup (so a user that is ALSO a listed member of its own primary group appears twice -- alpine
+// root's group set is literally "0 0 1 2 3 4 6 10 11 20 26 27" because group root(0) lists member "root").
+// getgroups(2) AND /proc/self/status `Groups:` must report this exact multiset in this order (image-derived:
+// alpine root -> the above; ubuntu/debian root -> "0"; busybox root -> "0 10"). Parsed once at
+// container_init by container_parse_groups() (in vfs.c, which has the overlay-aware path resolver) into the
+// array below; bare (no-rootfs) mode leaves g_groups_parsed=0 so getgroups keeps its prior host-backed
+// behavior and the status Groups line stays empty -- nothing regresses. setgroups(2) replaces the set
+// (apt/gosu drop their supplementary groups before switching user), keeping getgroups + status coherent.
+#define DD_NGROUPS_MAX 64
+static gid_t g_groups[DD_NGROUPS_MAX];
+static int g_ngroups = 0;      // count in g_groups (may be 0 after a guest setgroups(0))
+static int g_groups_parsed = 0; // 1 once container_parse_groups ran (rootfs mode); gates getgroups/setgroups
+static void groups_reset(void) { g_ngroups = 0; }
+static void groups_append(gid_t g) {
+    if (g_ngroups < DD_NGROUPS_MAX) g_groups[g_ngroups++] = g;
+}
+// Render the set for /proc/[pid]/status: space-separated with a TRAILING space, exactly as the kernel prints
+// the Groups: line (e.g. "0 0 1 2 3 4 6 10 11 20 26 27 "). Empty when unparsed -> "Groups:\t\n" as before.
+static int groups_status_str(char *b, size_t n) {
+    int o = 0;
+    for (int i = 0; i < g_ngroups && o >= 0 && (size_t)o < n; i++)
+        o += snprintf(b + o, n - (size_t)o, "%u ", (unsigned)g_groups[i]);
+    if (o < 0) o = 0;
+    b[(size_t)o < n ? (size_t)o : n - 1] = 0;
+    return o;
+}
 // ---- BUG #255: new-file ownership stamp (runtime setuid/setgid drop) ----------------------------
 // A guest that drops privilege at runtime (setuid/setresuid/setfsuid -> gosu's postgres) and then
 // CREATES a file/dir must have the new inode owned by its CURRENT effective fsuid/fsgid, NOT the

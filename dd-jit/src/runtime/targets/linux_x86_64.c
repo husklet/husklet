@@ -170,6 +170,9 @@ static void container_init(const char *rootfs) {
     // container -- typically a bind-mounted volume). confine() normalizes + clamps it to the rootfs.
     const char *icwd = getenv("DD_CWD");
     if (icwd && icwd[0]) confine(icwd, g_cwd, sizeof g_cwd);
+    // #422: derive the run user's supplementary group set from the image rootfs (runc additionalGids), after
+    // g_uid/g_gid + the overlay lowers are resolved, so getgroups(2) and /proc/self/status Groups: report it.
+    if (g_rootfs) container_parse_groups();
 }
 
 // W3D: idempotent engine init (pthread key + MAP_JIT arena + trace env + fault handlers). Returns 0
