@@ -1,10 +1,9 @@
-//! The ergonomic runtime API: `Runtime` (host backend), `Image`, `Container` + its builder, and a
-//! `RunHandle` you can wait/signal on. It is a typed layer over the backend's `SpawnConfig` launch
-//! contract; today it launches the engine via the backend's command (subprocess), which Phase 3
-//! replaces in-place with a linked fork+FFI entry without changing this surface.
+//! [`Container`] + [`ContainerBuilder`] — the typed, fluent container spec, plus the docker-parity
+//! environment and `--user` resolution helpers ([`guest_env`], [`resolve_user`]) the builder applies.
 
+use super::error::Error;
+use super::image::Image;
 use dd_jit_darwin::{Guest, PortMap, SpawnConfig, Volume};
-use std::fmt;
 
 /// The PATH a guest gets when its image sets none — matches the docker daemon's default.
 pub const DEFAULT_GUEST_PATH: &str =
@@ -73,77 +72,11 @@ pub fn resolve_user(rootfs: &str, spec: &str) -> Option<(u32, u32)> {
     Some((uid, gid))
 }
 
-/// An error configuring or running a container.
-#[derive(Debug)]
-pub enum Error {
-    /// No engine backend is available for the requested guest (the JIT binary was not built).
-    NoBackend(Guest),
-    /// The container spec is incomplete (e.g. no image).
-    Invalid(&'static str),
-    /// The underlying OS failed to launch the container.
-    Io(std::io::Error),
-}
-
-impl fmt::Display for Error {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Error::NoBackend(g) => write!(f, "no dd-jit backend available for {}", g.target()),
-            Error::Invalid(m) => write!(f, "invalid container config: {m}"),
-            Error::Io(e) => write!(f, "container launch failed: {e}"),
-        }
-    }
-}
-
-impl std::error::Error for Error {}
-
-impl From<std::io::Error> for Error {
-    fn from(e: std::io::Error) -> Self {
-        Error::Io(e)
-    }
-}
-
-/// A container image: a rootfs (optionally an overlay of read-only lower layers) plus the guest
-/// personality (OS + ISA) the engine runs it as.
-#[derive(Clone, Debug)]
-pub struct Image {
-    rootfs: String,
-    lowers: Vec<String>,
-    guest: Guest,
-}
-
-impl Image {
-    /// An image backed by a single rootfs directory. The guest personality defaults to the native
-    /// Linux/aarch64 guest; use [`Image::guest`] to override (e.g. an x86-64 or macOS image).
-    pub fn from_rootfs(rootfs: impl Into<String>) -> Self {
-        Image { rootfs: rootfs.into(), lowers: Vec::new(), guest: Guest::default() }
-    }
-
-    /// An overlay image: a writable upper `rootfs` over read-only `lowers` (OCI image layers).
-    pub fn overlay(rootfs: impl Into<String>, lowers: impl IntoIterator<Item = impl Into<String>>) -> Self {
-        Image {
-            rootfs: rootfs.into(),
-            lowers: lowers.into_iter().map(Into::into).collect(),
-            guest: Guest::default(),
-        }
-    }
-
-    /// Set the guest personality (OS + ISA) this image runs as.
-    pub fn guest(mut self, g: Guest) -> Self {
-        self.guest = g;
-        self
-    }
-
-    /// The guest personality this image runs as.
-    pub fn guest_of(&self) -> Guest {
-        self.guest
-    }
-}
-
 /// A fully-specified container ready to run. Build one with [`Container::builder`].
 #[derive(Clone, Debug)]
 pub struct Container {
-    cfg: SpawnConfig,
-    guest: Guest,
+    pub(crate) cfg: SpawnConfig,
+    pub(crate) guest: Guest,
 }
 
 impl Container {
@@ -157,8 +90,8 @@ impl Container {
     }
 
     /// The (program, args) that launch this container in its guest's engine — the same contract
-    /// [`Runtime::run`] uses, exposed for callers that drive their own process spawn (custom stdio, a
-    /// pseudo-terminal, async supervision). `None` if no engine was built for the guest.
+    /// [`Runtime::run`](super::Runtime::run) uses, exposed for callers that drive their own process spawn
+    /// (custom stdio, a pseudo-terminal, async supervision). `None` if no engine was built for the guest.
     pub fn command(&self) -> Option<(String, Vec<String>)> {
         self.cfg.command(self.guest)
     }
@@ -362,127 +295,6 @@ impl ContainerBuilder {
             return Err(Error::Invalid("image rootfs is empty"));
         }
         Ok(Container { cfg: self.cfg, guest: self.guest })
-    }
-}
-
-/// The runtime — the host backend that runs containers. Construct with [`Runtime::new`].
-///
-/// The runtime owns the host/operator-level defaults that apply to EVERY container it launches, so a
-/// container manager (e.g. `dd-daemon`) never handles them itself: the persistent translated-code cache
-/// (on unless `DD_PCACHE=0`) and the default guest sandbox (`DD_SANDBOX=1`). Set the cache location with
-/// [`Runtime::cache_dir`].
-pub struct Runtime {
-    /// Enable the persistent translated-code cache by default (operator env `DD_PCACHE`, on unless "0").
-    pcache: bool,
-    /// Where the persistent cache lives (created on demand). `None` ⇒ the cache stays off even if `pcache`.
-    pcache_dir: Option<String>,
-    /// Run every guest under the sandbox by default (operator env `DD_SANDBOX == "1"`).
-    sandbox_default: bool,
-}
-
-impl Runtime {
-    /// Create a runtime bound to this host's backend (`dd-jit-darwin` on macOS), reading the operator
-    /// env defaults (`DD_PCACHE`, `DD_SANDBOX`, `DDJIT_PCACHE_DIR`).
-    pub fn new() -> Result<Self, Error> {
-        Ok(Runtime {
-            pcache: std::env::var("DD_PCACHE").as_deref() != Ok("0"),
-            pcache_dir: std::env::var("DDJIT_PCACHE_DIR").ok(),
-            sandbox_default: std::env::var("DD_SANDBOX").as_deref() == Ok("1"),
-        })
-    }
-
-    /// Set the directory backing the persistent translated-code cache (the host storage location). The
-    /// cache is only enabled when both this is set and `DD_PCACHE` is not "0".
-    pub fn cache_dir(mut self, dir: impl Into<String>) -> Self {
-        self.pcache_dir = Some(dir.into());
-        self
-    }
-
-    /// Whether this runtime can run the given guest personality (its engine is built).
-    pub fn supports(&self, g: Guest) -> bool {
-        dd_jit_darwin::available(g)
-    }
-
-    /// Apply the operator defaults (persistent cache, default sandbox) to a container, unless it already
-    /// sets them. Returns the effective container to launch.
-    pub(crate) fn with_defaults(&self, c: &Container) -> Container {
-        let mut c = c.clone();
-        let has = |cfg: &SpawnConfig, k: &str| cfg.env.iter().any(|(ek, _)| ek == k);
-        if self.pcache && !has(&c.cfg, "DDJIT_PCACHE") {
-            if let Some(dir) = &self.pcache_dir {
-                let _ = std::fs::create_dir_all(dir);
-                c.cfg.env.push(("DDJIT_PCACHE".into(), "1".into()));
-                c.cfg.env.push(("DDJIT_PCACHE_DIR".into(), dir.clone()));
-            }
-        }
-        if self.sandbox_default && !has(&c.cfg, "DDJIT_SANDBOX") {
-            c.cfg.env.push(("DDJIT_UNTRUSTED".into(), "1".into()));
-            c.cfg.env.push(("DDJIT_SANDBOX".into(), "1".into()));
-        }
-        c
-    }
-
-    /// Run a container. Returns a handle to wait on / signal. Launches the linked engine directly —
-    /// no `bash`, no separate `ddjit-*` binary is spawned by the caller.
-    pub fn run(&self, c: &Container) -> Result<RunHandle, Error> {
-        if !dd_jit_darwin::available(c.guest) {
-            return Err(Error::NoBackend(c.guest));
-        }
-        let c = self.with_defaults(c);
-        let (prog, args) = c.cfg.command(c.guest).ok_or(Error::NoBackend(c.guest))?;
-        let child = std::process::Command::new(prog).args(args).spawn()?;
-        Ok(RunHandle { child })
-    }
-}
-
-/// A running container. Wait on it or send it a signal.
-pub struct RunHandle {
-    child: std::process::Child,
-}
-
-impl RunHandle {
-    /// Block until the container exits.
-    pub fn wait(&mut self) -> Result<ExitStatus, Error> {
-        let st = self.child.wait()?;
-        Ok(ExitStatus { code: st.code().unwrap_or(-1) })
-    }
-
-    /// The container's host process id.
-    pub fn pid(&self) -> u32 {
-        self.child.id()
-    }
-
-    /// Signal the container (e.g. `libc::SIGTERM`).
-    pub fn signal(&self, sig: i32) -> Result<(), Error> {
-        // Safety: kill(2) on our own child's pid; a stale pid just returns ESRCH.
-        let r = unsafe { libc_kill(self.child.id() as i32, sig) };
-        if r != 0 {
-            return Err(Error::Io(std::io::Error::last_os_error()));
-        }
-        Ok(())
-    }
-}
-
-extern "C" {
-    #[link_name = "kill"]
-    fn libc_kill(pid: i32, sig: i32) -> i32;
-}
-
-/// The exit status of a finished container.
-#[derive(Clone, Copy, Debug)]
-pub struct ExitStatus {
-    code: i32,
-}
-
-impl ExitStatus {
-    /// The process exit code (-1 if terminated by signal / unavailable).
-    pub fn code(&self) -> i32 {
-        self.code
-    }
-
-    /// Whether the container exited successfully (code 0).
-    pub fn success(&self) -> bool {
-        self.code == 0
     }
 }
 
