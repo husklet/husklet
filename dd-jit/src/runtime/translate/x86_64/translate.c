@@ -389,6 +389,21 @@ static int lazyflags_on(void) {
     return v;
 }
 
+// Direct-write ALU dst: when an ALU (or group1) instruction's r/m operand is a REGISTER (not memory)
+// at width>=4, compute the result straight into the guest reg's host home instead of into scratch x16
+// followed by a store-back `mov guest,x16`. do_alu already writes any dst (including a guest x0..x15,
+// as the dst==reg forms do) and computes PF/AF from the pristine a,b BEFORE overwriting `out`, so
+// out==a is byte-identical to out==x16 + rm_store — one fewer instruction on the dependent chain.
+// Gate NOXALUDIRECT=1 for A/B (elide-on default). Independent of the flag levers.
+static int xaludirect_on(void) {
+    static int v = -1;
+    if (v < 0) {
+        const char *s = getenv("NOXALUDIRECT");
+        v = (s && *s && *s != '0') ? 0 : 1;
+    }
+    return v;
+}
+
 // Spill the deferred flags to cpu->nzcv with the producer-correct finalizer (byte-identical to the
 // old inline finalizer) and clear the pending state. Every finalizer also msr's the corrected value
 // back, so the live ARM NZCV is left canonical for an immediately-following Jcc to branch off.

@@ -41,8 +41,11 @@ static int translate_alu(struct insn *I, uint64_t next) {
                         do_alu(k, I->reg, I->reg, rmv, w);
                 } else { // dst = r/m
                     if (!(I->lock && mem && k != 7 && lock_rmw(k, w, regv))) {
-                        do_alu(k, (k == 7) ? -1 : 16, rmv, regv, w);
-                        if (k != 7) rm_store(I, w, 16);
+                        // r/m register (non-mem, w>=4): rmv IS the guest home (rm_load returns I->rm_reg),
+                        // so compute straight into it -- no x16 detour + store-back mov. mem/byte/word keep x16.
+                        int out = (k == 7) ? -1 : (xaludirect_on() && !mem && w >= 4 ? rmv : 16);
+                        do_alu(k, out, rmv, regv, w);
+                        if (k != 7 && out == 16) rm_store(I, w, 16);
                     }
                 }
                 return TX_NEXT;
@@ -72,9 +75,11 @@ static int translate_alu(struct insn *I, uint64_t next) {
                         }
                     }
                     e_movconst(19, (uint64_t)I->imm); // imm in x19 (x16 holds the loaded value)
-                    // compute into scratch x16, then rm_store -> correct dest (handles mem + hi/lo byte regs)
-                    do_alu(k, (k == 7) ? -1 : 16, rmv, 19, w);
-                    if (k != 7) rm_store(I, w, 16);
+                    // r/m register (non-mem, w>=4): compute straight into the guest home (rmv==I->rm_reg);
+                    // else scratch x16, then rm_store -> correct dest (handles mem + hi/lo byte regs).
+                    int out = (k == 7) ? -1 : (xaludirect_on() && !mem && w >= 4 ? rmv : 16);
+                    do_alu(k, out, rmv, 19, w);
+                    if (k != 7 && out == 16) rm_store(I, w, 16);
                     return TX_NEXT;
                 } else { // byte/word ADC/SBB r/m, imm
                     int adc = (k == 2);
