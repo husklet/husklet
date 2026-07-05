@@ -395,36 +395,17 @@ static void run_guest(void) {
     }
 }
 
-// The darwinjail entry point. Named `ddjit_entry` so the runtime can be linked as a library and launched
-// by an in-process fork()+call; the thin `main` shim below keeps the standalone binary (used by the test
-// harness) launching identically. The static-lib build defines DDJIT_NO_MAIN to drop the shim.
-int ddjit_entry(int argc, char **argv);
-#ifndef DDJIT_NO_MAIN
-int main(int argc, char **argv) {
-    return ddjit_entry(argc, argv);
-}
-#endif
-int ddjit_entry(int argc, char **argv) {
-    int ai = 1;
-    for (; ai < argc && argv[ai][0] == '-'; ai++) { // flags (mirrors jit.c's CLI)
-        if (!strcmp(argv[ai], "--rootfs") && ai + 1 < argc)
-            g_rootfs = argv[++ai];
-        else if (!strcmp(argv[ai], "--volume") && ai + 1 < argc) { // --volume HOST:CONTAINER (docker order)
-            char *s = strdup(argv[++ai]), *c = strchr(s, ':');
-            if (c && g_nvol < 16) {
-                *c = 0;
-                g_vols[g_nvol].host = s;
-                g_vols[g_nvol].cont = c + 1;
-                g_nvol++;
-            }
-        } else if (!strcmp(argv[ai], "-q"))
-            g_log = 0;
-    }
-    if (ai >= argc) {
-        fprintf(stderr, "usage: %s [--rootfs DIR] [-q] <mach-o>\n", argv[0]);
+// The container run entry -- also the dd_run() the shared `--configfd` bridge dispatches to. Loads the
+// Mach-O guest at argv[0] and runs it under the JIT (native macOS code, no VM). `rootfs`, when set, becomes
+// the jail root the BSD syscall layer resolves guest paths against; a bare launch passes NULL. Single-shot
+// per process. Non-static so os/ddjit_configfd.c's forward-declared dd_run() resolves to this definition.
+int dd_run(const char *rootfs, int argc, char *const argv[]) {
+    if (rootfs && rootfs[0]) g_rootfs = rootfs;
+    if (argc < 1) {
+        fprintf(stderr, "dd: no guest binary to run\n");
         return 2;
     }
-    char *path = argv[ai];
+    const char *path = argv[0];
     int fd = open(path, O_RDONLY);
     off_t sz = lseek(fd, 0, SEEK_END);
     lseek(fd, 0, SEEK_SET);
@@ -470,4 +451,43 @@ int ddjit_entry(int argc, char **argv) {
             (unsigned long long)CPU.pc, (unsigned long long)g_slide);
     run_guest();
     return 0;
+}
+
+// `--configfd` launch bridge (read the serialized ddjit_config, re-hydrate DD_*/DDJIT_* env, dispatch to
+// the dd_run() above). Included once here so this TU gets its own copy referencing this engine's dd_run.
+#include "../ddjit_configfd.c"
+
+// The darwinjail entry point. Named `ddjit_entry` so the runtime can be linked as a library and launched
+// by an in-process fork()+call; the thin `main` shim keeps the standalone binary (used by the test
+// harness) launching identically. The static-lib build defines DDJIT_NO_MAIN to drop the shim.
+int ddjit_entry(int argc, char **argv);
+#ifndef DDJIT_NO_MAIN
+int main(int argc, char **argv) {
+    return ddjit_entry(argc, argv);
+}
+#endif
+int ddjit_entry(int argc, char **argv) {
+    // typed-config launch: `--configfd <fd>` streams a serialized ddjit_config over the inherited fd
+    // instead of the flag dialect below. Dispatched before all other flags.
+    if (argc > 2 && strcmp(argv[1], "--configfd") == 0) return ddjit_run_configfd(atoi(argv[2]));
+    int ai = 1;
+    for (; ai < argc && argv[ai][0] == '-'; ai++) { // flags (mirrors jit.c's CLI)
+        if (!strcmp(argv[ai], "--rootfs") && ai + 1 < argc)
+            g_rootfs = argv[++ai];
+        else if (!strcmp(argv[ai], "--volume") && ai + 1 < argc) { // --volume HOST:CONTAINER (docker order)
+            char *s = strdup(argv[++ai]), *c = strchr(s, ':');
+            if (c && g_nvol < 16) {
+                *c = 0;
+                g_vols[g_nvol].host = s;
+                g_vols[g_nvol].cont = c + 1;
+                g_nvol++;
+            }
+        } else if (!strcmp(argv[ai], "-q"))
+            g_log = 0;
+    }
+    if (ai >= argc) {
+        fprintf(stderr, "usage: %s [--rootfs DIR] [-q] <mach-o>\n", argv[0]);
+        return 2;
+    }
+    return dd_run(g_rootfs, argc - ai, argv + ai);
 }
