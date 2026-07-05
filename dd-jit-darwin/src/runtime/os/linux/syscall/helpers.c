@@ -506,21 +506,6 @@ static uint64_t s3db_sync_fd(int fd) {
     }
 }
 
-// Map a Linux `semctl` cmd to the macOS one: the GET*/SET* values differ (Linux GETVAL=12/SETVAL=16,
-// macOS GETVAL=5/SETVAL=8); IPC_RMID/SET/STAT (0/1/2) are the same.
-static int sem_cmd_l2m(int c) {
-    switch (c) {
-    case 11: return 4;
-    case 12: return 5;
-    case 13: return 6;
-    case 14: return 3;
-    case 15: return 7;
-    case 16: return 8;
-    case 17: return 9;
-    default: return c;
-    }
-}
-
 // SysV IPC: namespace a key by the container (DD_NETNS) so two containers don't collide on the same key
 // -- the per-IPC-ns isolation. IPC_PRIVATE stays private; --network host shares the host IPC.
 static key_t ipc_ns_key(key_t k) {

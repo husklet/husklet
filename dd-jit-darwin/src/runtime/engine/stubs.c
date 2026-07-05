@@ -156,21 +156,6 @@ static void emit_exit_reg(int rn, uint64_t reason) {
 // no spill, no V-register save, no dispatcher round-trip. On a miss, take the full exit
 // and hand the cache-site address to the dispatcher, which fills it once the target is
 // resolved. x16/x17 are the scratch pair; the indirect-entry stub restores them.
-// shared IBTC miss tail (x16/x17 restored)
-static void emit_ibtc_miss(int rn) {
-    // slow path: x0 = cpu
-    emit_spill();
-    e_ldr(9, 0, rn * 8);
-    // cpu->pc = guest target
-    e_str(9, 0, OFF_PC);
-    e_movconst(9, R_BRANCH);
-    e_str(9, 0, OFF_RSN);
-    e_movconst(9, 1);
-    // flag: indirect miss -> insert into IBTC
-    e_str(9, 0, OFF_ICSITE);
-    emit_blockret(9);
-    e_br(9);
-}
 
 // A1 steal path: x16/x17 are engine-private, so the probe needs NO red-zone stash/restore and the
 // monomorphic hit collapses to 5 instrs / 0 mem-ops:

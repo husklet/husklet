@@ -36,13 +36,6 @@ static void gmap_set_glen(uint64_t addr, uint64_t glen) {
         }
 }
 
-// Guest-visible length of the mapping that starts at addr (0 if untracked) -- for /proc maps synthesis.
-static uint64_t gmap_glen(uint64_t addr) {
-    for (int i = 0; i < g_ngmap; i++)
-        if (g_gmap[i].addr == addr) return g_gmap[i].glen;
-    return 0;
-}
-
 static void gmap_del(uint64_t addr) {
     for (int i = 0; i < g_ngmap; i++)
         if (g_gmap[i].addr == addr) {
