@@ -238,7 +238,7 @@ static void fork_child_hooks(struct cpu *c) {
 
 // prctl per-process flags the kernel tracks and reports back on the matching GET (lsys-prctl-*):
 // no-new-privs is sticky (once set it can never clear), dumpable defaults to 1, pdeathsig defaults to 0.
-static int g_nnp;               // PR_SET/GET_NO_NEW_PRIVS
+// (g_nnp lives in container/state.c so the /proc/self/status builder can report NoNewPrivs consistently.)
 static int g_dumpable = 1;      // PR_SET/GET_DUMPABLE
 static int g_pdeathsig;         // PR_SET/GET_PDEATHSIG
 static int g_thp_disable;       // PR_SET/GET_THP_DISABLE (per-process transparent-hugepage opt-out)
@@ -247,9 +247,9 @@ static int g_subreaper;         // PR_SET/GET_CHILD_SUBREAPER (this process is a
 // per-capability ENFORCEMENT in general, but we DO track what capset(2) leaves in the effective set so the
 // few prctl options the kernel gates on a specific capability (PR_SET_SECUREBITS / PR_CAPBSET_DROP need
 // CAP_SETPCAP) return -EPERM after that cap has been dropped -- exactly as LTP prctl02 (which drops
-// CAP_SETPCAP via libcap before those subtests) expects. Defaults to all-set so nothing changes until a
-// guest actually narrows its effective set.
-static uint64_t g_cap_eff = ~0ull;
+// CAP_SETPCAP via libcap before those subtests) expects. g_cap_eff/g_cap_bnd are DEFINED in
+// container/state.c (default = the 14-cap docker set DD_CAP_DEFAULT, which INCLUDES CAP_SETPCAP) so the
+// /proc/self/status builder and these handlers share one source of truth. capset() narrows the effective set.
 #define CAP_SETPCAP 8
 // personality(2) persona (lsys-personality): query with 0xffffffff, set returns the previous value.
 static unsigned g_persona;
@@ -349,8 +349,12 @@ static int svc_proc(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64
             uint32_t *d = (uint32_t *)a1;
             for (int i = 0; i < u32s; i++) {
                 uint32_t eff = (i == 0) ? (uint32_t)g_cap_eff : (uint32_t)(g_cap_eff >> 32);
+                // permitted = the docker default 14-cap set (DD_CAP_DEFAULT), NOT a blanket all-ones: a
+                // default `docker run` root container has CapPrm=00000000a80425fb, matching /proc/self/status
+                // exactly. The old 0xffffffff over-reported caps (e.g. CAP_SYS_ADMIN) the container lacks.
+                uint32_t prm = (i == 0) ? (uint32_t)DD_CAP_DEFAULT : (uint32_t)(DD_CAP_DEFAULT >> 32);
                 d[i * 3 + 0] = eff;        // effective: the guest's live effective set (respects drops)
-                d[i * 3 + 1] = 0xffffffff; // permitted: container root holds the full set
+                d[i * 3 + 1] = prm;        // permitted: the docker default bounding/permitted set
                 d[i * 3 + 2] = 0;          // inheritable: empty (Docker default)
             }
         }
@@ -1028,6 +1032,19 @@ static int svc_proc(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64
             G_RET(c) = 2; // PR_SPEC_PRCTL is off, mitigation not forced: PR_SPEC_ENABLE
             break;
         }
+        // PR_CAPBSET_READ(23): "is capability arg2 in this task's BOUNDING set?" capsh --print / getpcaps
+        // probe every cap this way to render the mask; it MUST agree with /proc/self/status CapBnd. Returns 1
+        // if present, 0 if absent, -EINVAL for a cap index past CAP_LAST_CAP (40). The docker default holds
+        // exactly the 14 bits of DD_CAP_DEFAULT (g_cap_bnd), so e.g. CAP_SYS_ADMIN(21) reads 0.
+        if ((int)a0 == 23) {
+            if (a1 > 40 /* CAP_LAST_CAP */) { G_RET(c) = (uint64_t)(-EINVAL); break; }
+            G_RET(c) = (uint64_t)((g_cap_bnd >> a1) & 1ull);
+            break;
+        }
+        // PR_GET_SECCOMP(21): the docker default seccomp profile is always applied, so real docker reports
+        // filter mode (2) here AND as Seccomp:2 in /proc/self/status. Match it (unfiltered Linux returns 0);
+        // software that gates behaviour on being sandboxed reads this. arg2..5 are ignored by the kernel.
+        if ((int)a0 == 21) { G_RET(c) = 2; break; }
         // PR_SET_SECUREBITS(28) and PR_CAPBSET_DROP(24) require CAP_SETPCAP in the effective set; without it
         // the kernel returns -EPERM before any further validation (LTP prctl02 drops CAP_SETPCAP first). With
         // the cap held (the container default) they succeed for a well-formed argument.
@@ -1039,7 +1056,8 @@ static int svc_proc(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64
         if ((int)a0 == 24) {
             if (!(g_cap_eff & (1ull << CAP_SETPCAP))) { G_RET(c) = (uint64_t)(-EPERM); break; }
             if (a1 > 40 /* CAP_LAST_CAP */) { G_RET(c) = (uint64_t)(-EINVAL); break; }
-            G_RET(c) = 0; // drop from the bounding set (unenforced) -> success
+            g_cap_bnd &= ~(1ull << a1); // actually drop the bit so PR_CAPBSET_READ/CapBnd stay consistent
+            G_RET(c) = 0;
             break;
         }
         // 0 for known no-ops; EINVAL for unknown (kernel does)

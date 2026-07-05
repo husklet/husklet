@@ -1174,9 +1174,19 @@ static int proc_status_text(char *b, size_t n) {
                     "VmData:\t%8lu kB\nVmStk:\t     132 kB\nVmExe:\t     512 kB\nVmLib:\t    2048 kB\nVmPTE:\t      32 kB\n"
                     "VmSwap:\t       0 kB\nThreads:\t1\nSigQ:\t0/31000\nSigPnd:\t0000000000000000\n"
                     "SigBlk:\t0000000000000000\nSigIgn:\t0000000000000000\nSigCgt:\t0000000000000000\n"
+                    // Capability + security context. A default `docker run` root container drops all but 14
+                    // caps: CapPrm/CapEff/CapBnd=00000000a80425fb, CapInh/CapAmb=0. NoNewPrivs follows the
+                    // sticky prctl flag; the docker default seccomp profile shows Seccomp:2/Seccomp_filters:1.
+                    // These MUST agree with capget(2) and PR_CAPBSET_READ (see syscall/proc.c). Speculation
+                    // lines match what the host kernel reports to a container.
+                    "CapInh:\t0000000000000000\nCapPrm:\t%016llx\nCapEff:\t%016llx\nCapBnd:\t%016llx\n"
+                    "CapAmb:\t0000000000000000\nNoNewPrivs:\t%d\nSeccomp:\t2\nSeccomp_filters:\t1\n"
+                    "Speculation_Store_Bypass:\tvulnerable\nSpeculationIndirectBranch:\tunknown\n"
                     "Cpus_allowed:\t1\nCpus_allowed_list:\t0\nvoluntary_ctxt_switches:\t1\n"
                     "nonvoluntary_ctxt_switches:\t0\n",
-                    comm, pid, pid, ppid, vsz, vsz, vmlck, rss, rss, rss);
+                    comm, pid, pid, ppid, vsz, vsz, vmlck, rss, rss, rss,
+                    (unsigned long long)DD_CAP_DEFAULT, (unsigned long long)g_cap_eff,
+                    (unsigned long long)g_cap_bnd, g_nnp);
 }
 // /proc/[pid]/stat -- the 52-field single line (pid (comm) state ppid ...). Field 23 = vsize (bytes),
 // field 24 = rss (pages); the rest are plausible zeros. mongod's FTDC collector parses this.
@@ -1694,9 +1704,16 @@ static int proc_status_pid_text(char *b, size_t n, int gp, int host) {
                     "VmData:\t%8lu kB\nVmStk:\t     132 kB\nVmExe:\t     512 kB\nVmLib:\t    2048 kB\nVmPTE:\t      32 kB\n"
                     "VmSwap:\t       0 kB\nThreads:\t%d\nSigQ:\t0/31000\nSigPnd:\t0000000000000000\n"
                     "SigBlk:\t0000000000000000\nSigIgn:\t0000000000000000\nSigCgt:\t0000000000000000\n"
+                    // Peer processes carry the same docker default cap set (see proc_status_text). We don't
+                    // track a peer's live effective/nnp, so report the container default.
+                    "CapInh:\t0000000000000000\nCapPrm:\t%016llx\nCapEff:\t%016llx\nCapBnd:\t%016llx\n"
+                    "CapAmb:\t0000000000000000\nNoNewPrivs:\t0\nSeccomp:\t2\nSeccomp_filters:\t1\n"
+                    "Speculation_Store_Bypass:\tvulnerable\nSpeculationIndirectBranch:\tunknown\n"
                     "Cpus_allowed:\t1\nCpus_allowed_list:\t0\nvoluntary_ctxt_switches:\t1\n"
                     "nonvoluntary_ctxt_switches:\t0\n",
-                    comm, state, gp, gp, ppid, vsz, vsz, rss, rss, rss, ok ? pi.nthreads : 1);
+                    comm, state, gp, gp, ppid, vsz, vsz, rss, rss, rss, ok ? pi.nthreads : 1,
+                    (unsigned long long)DD_CAP_DEFAULT, (unsigned long long)DD_CAP_DEFAULT,
+                    (unsigned long long)DD_CAP_DEFAULT);
 }
 // /proc/<pid>/cmdline for a peer -- the published NUL-separated argv (fallback: the comm).
 static int proc_cmdline_pid_text(char *b, size_t n, int host) {

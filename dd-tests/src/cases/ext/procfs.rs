@@ -17,6 +17,9 @@ fn proc_content() -> Group {
         src("pf-stat", "ext_procfs/pstat.c").out("pstat ok=1\n"),
         src("pf-selfstat", "ext_procfs/selfstat.c").out("selfstat ok=1\n"),
         src("pf-selfstatus", "ext_procfs/selfstatus.c").out("selfstatus ok=1\n"),
+        // Capabilities + security context: default docker drops all but the 14 CapBnd=a80425fb caps, and
+        // /proc/self/status, capget(2) and PR_CAPBSET_READ must all agree (nginx/postgres/capsh gate on it).
+        src("pf-selfcaps", "ext_procfs/selfcaps.c").out("selfcaps ok=1\n"),
         // top/htop/ps read a process's RES from /proc/self/status VmRSS, /proc/self/statm resident, and
         // /proc/self/stat field 24. dd derived the SELF pid's rss from the guest's tracked anon charge,
         // which is 0 for a process resident only in its static image -> RES=0 (a PEER pid already showed a
