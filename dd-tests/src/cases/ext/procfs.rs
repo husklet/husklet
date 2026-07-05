@@ -7,7 +7,37 @@
 #![allow(unused_imports)]
 use crate::{group, src, port, fixture, in_rootfs, Case, Engine, Group};
 
-pub fn groups() -> Vec<Group> { vec![proc_content(), dev_sys(), perms()] }
+pub fn groups() -> Vec<Group> { vec![proc_content(), dev_sys(), perms(), supp_groups()] }
+
+// #422: a busybox/coreutils shell in a real image rootfs. The container run user (root) must hold the
+// IMAGE-DERIVED supplementary GID set runc computes from /etc/passwd + /etc/group (additionalGids) --
+// getgroups(2) (via `id -G`) and /proc/self/status `Groups:` must AGREE and equal that set. dd previously
+// left both EMPTY (only the primary gid / nothing), so any group-membership check inside a container failed.
+// The verdict normalizes both to a sorted-unique multiset so it is host-independent (the set is image-
+// derived, so a fixed golden per image is valid). Exercises the overlay relative-open path a bare guest
+// does not. Verified byte-exact vs OrbStack real docker (runc) for each image.
+const GROUPS_PROBE: &str = "\
+gg=$(id -G | tr ' ' '\\n' | grep -v '^$' | sort -nu | tr '\\n' ' '); \
+st=$(grep '^Groups:' /proc/self/status | cut -f2- | tr ' ' '\\n' | grep -v '^$' | sort -nu | tr '\\n' ' '); \
+echo \"gg=[$gg] st=[$st]\"";
+
+/// Supplementary groups (runc additionalGids) — image-derived, must match `docker run <img> id` exactly.
+fn supp_groups() -> Group {
+    let both = &[Engine::LinuxAarch64, Engine::LinuxX86_64];
+    group("procfs-groups", vec![
+        // alpine: root is a listed member of many groups (bin,daemon,sys,adm,disk,wheel,floppy,dialout,
+        // tape,video) AND of its own primary group root -> getgroups & status both carry the full set.
+        in_rootfs("pf-groups-alpine", "alpine", &["/bin/sh", "-c", GROUPS_PROBE]).only(both)
+            .out("gg=[0 1 2 3 4 6 10 11 20 26 27 ] st=[0 1 2 3 4 6 10 11 20 26 27 ]\n"),
+        // ubuntu/debian: group root(0) has NO members and no other group lists root -> the set is the
+        // primary gid alone (0). Guards that the parse is genuinely image-derived, not a fixed alpine list.
+        in_rootfs("pf-groups-ubuntu", "ubuntu", &["/bin/sh", "-c", GROUPS_PROBE]).only(both)
+            .out("gg=[0 ] st=[0 ]\n"),
+        // busybox: only group wheel(10) lists root -> primary 0 plus 10.
+        in_rootfs("pf-groups-busybox", "busybox", &["/bin/sh", "-c", GROUPS_PROBE]).only(both)
+            .out("gg=[0 10 ] st=[0 10 ]\n"),
+    ])
+}
 
 /// /proc top-level + /proc/self content, verdict-style (ok=1 iff every field/shape assertion held).
 fn proc_content() -> Group {

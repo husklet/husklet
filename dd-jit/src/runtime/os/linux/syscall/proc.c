@@ -865,6 +865,27 @@ static int svc_proc(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64
         break;
     }
     case 158: {
+        // getgroups(size, list): in rootfs mode report the IMAGE-DERIVED supplementary set runc computes
+        // (parsed at container_init -- alpine root -> 0 0 1 2 3 4 6 10 11 20 26 27; ubuntu -> 0), which a
+        // guest setgroups(2) may later replace (apt/gosu drop). size==0 queries the count; size<count is
+        // -EINVAL; a bad list pointer is -EFAULT. This matches getgroups(2) exactly and stays byte-consistent
+        // with the /proc/self/status Groups: line (both read g_groups). Bare mode (unparsed) keeps the prior
+        // behavior below: the container egid when a USER-ns gid is set, else the real host set.
+        if (g_groups_parsed) {
+            int cnt = g_ngroups;
+            if ((int)a0 == 0) { G_RET(c) = (uint64_t)cnt; break; } // size 0 -> just the count
+            if ((int)a0 < cnt) { G_RET(c) = (uint64_t)(int64_t)(-EINVAL); break; }
+            if (a1) {
+                if (!host_range_mapped((uintptr_t)a1, (size_t)cnt * sizeof(gid_t))) {
+                    G_RET(c) = (uint64_t)(int64_t)(-EFAULT);
+                    break;
+                }
+                gid_t *out = (gid_t *)a1;
+                for (int i = 0; i < cnt; i++) out[i] = g_groups[i];
+            }
+            G_RET(c) = (uint64_t)cnt;
+            break;
+        }
         if (g_gid >= 0) {
             // getgroups -> [effective gid]. Tracking the overlay's egid means apt's drop to _apt's group
             // is reflected here too (it setgroups(1,&_apt_gid) right before switching).
@@ -876,8 +897,26 @@ static int svc_proc(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64
         G_RET(c) = r < 0 ? (uint64_t)(-errno) : (uint64_t)r;
         break;
     }
-    // setgroups (privileged; ignore)
-    case 159: G_RET(c) = 0; break;
+    // setgroups(size, list): a privileged guest replaces its supplementary set (apt setgroups(1,&_apt_gid)
+    // before dropping to _apt; gosu clears groups before switching user). In rootfs mode record it so
+    // getgroups(2) + /proc/self/status Groups: reflect the guest's current view; size 0 clears the set. Bare
+    // mode (unparsed) keeps the historical no-op-succeed. size out of range -> -EINVAL; bad list -> -EFAULT.
+    case 159: {
+        if (!g_groups_parsed) { G_RET(c) = 0; break; }
+        long ng = (long)a0;
+        if (ng < 0 || ng > DD_NGROUPS_MAX) { G_RET(c) = (uint64_t)(int64_t)(-EINVAL); break; }
+        if (ng > 0 && a1) {
+            if (!host_range_mapped((uintptr_t)a1, (size_t)ng * sizeof(gid_t))) {
+                G_RET(c) = (uint64_t)(int64_t)(-EFAULT);
+                break;
+            }
+            const gid_t *in = (const gid_t *)a1;
+            for (long i = 0; i < ng; i++) g_groups[i] = in[i];
+        }
+        g_ngroups = (int)ng;
+        G_RET(c) = 0;
+        break;
+    }
     // getrusage(who, *usage) -- a1 is the buffer, not a0!
     case 165: {
         struct rusage ru;

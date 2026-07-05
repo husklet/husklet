@@ -1167,9 +1167,11 @@ static int proc_status_text(char *b, size_t n) {
     unsigned long vsz = g_mem_max ? (unsigned long)(g_mem_max / 1024) : rss + 4096;
     if (vsz < rss) vsz = rss;
     unsigned long vmlck = (unsigned long)(mlk_total_locked() / 1024); // mlock/mlockall'd bytes (LTP munlockall01)
+    char groups[512]; // #422: image-derived supplementary set (runc additionalGids), == getgroups(2)
+    groups_status_str(groups, sizeof groups);
     return snprintf(b, n,
                     "Name:\t%s\nUmask:\t0022\nState:\tR (running)\nTgid:\t%d\nNgid:\t0\nPid:\t%d\nPPid:\t%d\n"
-                    "TracerPid:\t0\nUid:\t0\t0\t0\t0\nGid:\t0\t0\t0\t0\nFDSize:\t256\nGroups:\t\n"
+                    "TracerPid:\t0\nUid:\t0\t0\t0\t0\nGid:\t0\t0\t0\t0\nFDSize:\t256\nGroups:\t%s\n"
                     "VmPeak:\t%8lu kB\nVmSize:\t%8lu kB\nVmLck:\t%8lu kB\nVmHWM:\t%8lu kB\nVmRSS:\t%8lu kB\n"
                     "VmData:\t%8lu kB\nVmStk:\t     132 kB\nVmExe:\t     512 kB\nVmLib:\t    2048 kB\nVmPTE:\t      32 kB\n"
                     "VmSwap:\t       0 kB\nThreads:\t1\nSigQ:\t0/31000\nSigPnd:\t0000000000000000\n"
@@ -1184,7 +1186,7 @@ static int proc_status_text(char *b, size_t n) {
                     "Speculation_Store_Bypass:\tvulnerable\nSpeculationIndirectBranch:\tunknown\n"
                     "Cpus_allowed:\t1\nCpus_allowed_list:\t0\nvoluntary_ctxt_switches:\t1\n"
                     "nonvoluntary_ctxt_switches:\t0\n",
-                    comm, pid, pid, ppid, vsz, vsz, vmlck, rss, rss, rss,
+                    comm, pid, pid, ppid, groups, vsz, vsz, vmlck, rss, rss, rss,
                     (unsigned long long)DD_CAP_DEFAULT, (unsigned long long)g_cap_eff,
                     (unsigned long long)g_cap_bnd, g_nnp);
 }
@@ -1697,9 +1699,11 @@ static int proc_status_pid_text(char *b, size_t n, int gp, int host) {
     char state = ok ? pi.state : 'S'; // same run-state override as proc_stat_pid_text (see there)
     int ov = ts_lookup(host);
     if (ov && state != 'Z' && state != 'T') state = (char)ov;
+    char groups[512]; // #422: peers carry the same container supplementary set (image-derived, see self)
+    groups_status_str(groups, sizeof groups);
     return snprintf(b, n,
                     "Name:\t%s\nUmask:\t0022\nState:\t%c\nTgid:\t%d\nNgid:\t0\nPid:\t%d\nPPid:\t%d\n"
-                    "TracerPid:\t0\nUid:\t0\t0\t0\t0\nGid:\t0\t0\t0\t0\nFDSize:\t256\nGroups:\t\n"
+                    "TracerPid:\t0\nUid:\t0\t0\t0\t0\nGid:\t0\t0\t0\t0\nFDSize:\t256\nGroups:\t%s\n"
                     "VmPeak:\t%8lu kB\nVmSize:\t%8lu kB\nVmLck:\t       0 kB\nVmHWM:\t%8lu kB\nVmRSS:\t%8lu kB\n"
                     "VmData:\t%8lu kB\nVmStk:\t     132 kB\nVmExe:\t     512 kB\nVmLib:\t    2048 kB\nVmPTE:\t      32 kB\n"
                     "VmSwap:\t       0 kB\nThreads:\t%d\nSigQ:\t0/31000\nSigPnd:\t0000000000000000\n"
@@ -1711,7 +1715,7 @@ static int proc_status_pid_text(char *b, size_t n, int gp, int host) {
                     "Speculation_Store_Bypass:\tvulnerable\nSpeculationIndirectBranch:\tunknown\n"
                     "Cpus_allowed:\t1\nCpus_allowed_list:\t0\nvoluntary_ctxt_switches:\t1\n"
                     "nonvoluntary_ctxt_switches:\t0\n",
-                    comm, state, gp, gp, ppid, vsz, vsz, rss, rss, rss, ok ? pi.nthreads : 1,
+                    comm, state, gp, gp, ppid, groups, vsz, vsz, rss, rss, rss, ok ? pi.nthreads : 1,
                     (unsigned long long)DD_CAP_DEFAULT, (unsigned long long)DD_CAP_DEFAULT,
                     (unsigned long long)DD_CAP_DEFAULT);
 }
@@ -3148,6 +3152,82 @@ static void container_populate_dev(void) {
 // image/user-provisioned id is left untouched. Written straight into the writable upper (a real file), so
 // reads need no interception. /var/lib/dbus/machine-id (the legacy dbus path) is filled the same way when
 // its directory exists. Idempotent.
+// #422: read a small guest text file (/etc/passwd, /etc/group) through the overlay-aware resolver so an
+// image whose /etc lives only in a read-only lower is handled, not just the flat-rootfs upper. Returns the
+// byte count read (NUL-terminated in `b`), or 0 if absent/unreadable. Best-effort at container init.
+static int read_guest_text(const char *guest, char *b, size_t n) {
+    char host[4300];
+    const char *hp = xresolve_overlay(guest, host, sizeof host);
+    if (!hp) return 0;
+    int fd = open(hp, O_RDONLY);
+    if (fd < 0) return 0;
+    size_t got = 0;
+    for (;;) {
+        if (got + 1 >= n) break;
+        ssize_t r = read(fd, b + got, n - 1 - got);
+        if (r <= 0) break;
+        got += (size_t)r;
+    }
+    close(fd);
+    b[got] = 0;
+    return (int)got;
+}
+// #422: build the run user's supplementary group set exactly like runc's additionalGids (see state.c). Find
+// the run user (g_uid, default 0=root) in /etc/passwd -> its NAME + primary gid; seed the set with the
+// primary gid; then scan /etc/group in file order and append every group whose 4th (member) field lists that
+// NAME -- NO dedup, so the set matches runc byte-for-byte (incl. alpine root's duplicate leading 0). Bare
+// mode (no rootfs) leaves the set unparsed. Populates the state.c g_groups[]/g_ngroups + g_groups_parsed.
+static void container_parse_groups(void) {
+    if (!g_rootfs_canon[0]) return; // bare mode: host getgroups fallback, empty status Groups line (as before)
+    int run_uid = cuid();
+    char uname[64] = "";
+    int primary_gid = cgid(); // container's configured primary gid (default 0); == the passwd gid for root
+    static char pw[1 << 16];
+    if (read_guest_text("/etc/passwd", pw, sizeof pw) > 0) {
+        // passwd line: name:passwd:uid:gid:gecos:home:shell -- find the entry whose uid == run_uid.
+        for (char *line = strtok(pw, "\n"); line; line = strtok(NULL, "\n")) {
+            char *c1 = strchr(line, ':');
+            if (!c1) continue;
+            char *c2 = strchr(c1 + 1, ':');
+            if (!c2) continue;
+            char *c3 = strchr(c2 + 1, ':');
+            if (!c3) continue;
+            *c3 = 0;
+            int uid = atoi(c2 + 1); // field 3 (uid)
+            if (uid != run_uid) continue;
+            *c1 = 0;
+            snprintf(uname, sizeof uname, "%s", line); // field 1 (name)
+            break;
+        }
+    }
+    if (!uname[0] && run_uid == 0) snprintf(uname, sizeof uname, "root"); // minimal image lacking /etc/passwd
+    groups_reset();
+    groups_append((gid_t)primary_gid); // additionalGids always begins with the primary gid
+    if (!uname[0]) { g_groups_parsed = 1; return; } // no name to match -> primary gid only
+    static char gr[1 << 16];
+    if (read_guest_text("/etc/group", gr, sizeof gr) > 0) {
+        // group line: name:passwd:gid:member,member,... -- append gid iff the member list contains uname.
+        for (char *line = strtok(gr, "\n"); line; line = strtok(NULL, "\n")) {
+            char *c1 = strchr(line, ':');
+            if (!c1) continue;
+            char *c2 = strchr(c1 + 1, ':');
+            if (!c2) continue;
+            char *c3 = strchr(c2 + 1, ':');
+            if (!c3) continue;
+            int gid = atoi(c2 + 1);    // field 3 (gid)
+            const char *members = c3 + 1; // field 4 (comma-separated names), may be empty
+            int hit = 0;
+            for (const char *m = members; *m && !hit;) {
+                const char *e = strchr(m, ',');
+                size_t len = e ? (size_t)(e - m) : strlen(m);
+                if (len == strlen(uname) && !strncmp(m, uname, len)) hit = 1;
+                m = e ? e + 1 : m + len;
+            }
+            if (hit) groups_append((gid_t)gid);
+        }
+    }
+    g_groups_parsed = 1;
+}
 static void container_populate_machine_id(void) {
     if (!g_rootfs_canon[0]) return;
     uint8_t b[16];
