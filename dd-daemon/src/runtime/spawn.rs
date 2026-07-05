@@ -55,19 +55,6 @@ pub(crate) fn clear_tmpfs(c: &Container) {
 /// Docker's default container PATH (moby's `system.DefaultPathEnv` for unix). Used when neither the
 /// image config nor a `-e PATH=` override supplies one, so bare commands in the standard sbin/bin dirs
 /// (e.g. alpine's `apk` in /sbin) resolve without an absolute path.
-/// Translate the container into a typed [`SpawnConfig`] and run it in the matching guest's JIT.
-/// Named-volume binds (`name:/path`, no leading `/`) are resolved against `volumes_dir`.
-/// Build the (program, args) that launches this container in the matching guest's JIT. `None` if no JIT
-/// was built for the image's arch.
-pub(crate) fn spawn_cfg(
-    c: &Container,
-    volumes_dir: &str,
-    vols: &[Vol],
-    bridge: Option<(String, String)>,
-) -> Option<(String, Vec<String>)> {
-    spawn_container(c, volumes_dir, vols, bridge).and_then(|c| c.command())
-}
-
 /// Translate the daemon's Docker container model into a typed `dd_jit::Container`. The daemon states
 /// WHAT the container is; dd-jit owns HOW it launches. `None` only if the spec can't be built.
 pub(crate) fn spawn_container(

@@ -80,35 +80,34 @@ pub(super) async fn run_step(
     args: &str,
     log: &mut Vec<String>,
 ) -> Result<(), String> {
-    let mut cfg = SpawnConfig::new(workdir.to_string(), rootfs.to_string_lossy().into_owned());
-    cfg.env = env
-        .iter()
-        .filter_map(|e| {
-            e.split_once('=')
-                .map(|(k, v)| (k.to_string(), v.to_string()))
-        })
-        .collect();
-    cfg.argv = vec!["/bin/sh".into(), "-c".into(), args.to_string()];
-    let Some((prog, cargs)) = cfg.command(arch) else {
-        return Err("JIT not available for this arch".into());
+    // Build the RUN step's container spec through the typed dd-jit API. CRITICAL: route the step's env
+    // (loose `K=V` lines: image ENV + Dockerfile ENV/ARG) through `.guest_env`, which encodes it into
+    // `DD_GUEST_ENV` — the launch_config mapper only translates known `DD_*`/`DDJIT_*` keys and would drop
+    // arbitrary RUN env otherwise, so a plain `.env()` per pair would silently lose the step's environment.
+    let container = ddjit::Container::builder(
+        ddjit::Image::from_rootfs(rootfs.to_string_lossy().into_owned()).guest(arch),
+    )
+    .host_workdir(workdir.to_string())
+    .cmd(vec!["/bin/sh".to_string(), "-c".to_string(), args.to_string()])
+    .guest_env(env, false);
+    let container = match container.build() {
+        Ok(c) => c,
+        Err(e) => return Err(format!("RUN: {e}")),
     };
-    match tokio::process::Command::new(prog)
-        .args(cargs)
-        .output()
-        .await
-    {
-        Ok(o) => {
-            if !o.stdout.is_empty() {
-                log.push(json!({"stream": String::from_utf8_lossy(&o.stdout)}).to_string());
+    let rt = match ddjit::Runtime::new() {
+        Ok(r) => r,
+        Err(e) => return Err(format!("RUN: {e}")),
+    };
+    // One-shot: run to completion, combined stdout+stderr, no timeout (a build RUN runs to the end).
+    match rt.output(&container, None).await {
+        Ok((code, bytes)) => {
+            if !bytes.is_empty() {
+                log.push(json!({"stream": String::from_utf8_lossy(&bytes)}).to_string());
             }
-            if !o.stderr.is_empty() {
-                log.push(json!({"stream": String::from_utf8_lossy(&o.stderr)}).to_string());
-            }
-            if !o.status.success() {
+            if code != 0 {
                 return Err(format!(
                     "The command '/bin/sh -c {}' returned a non-zero code: {}",
-                    args,
-                    o.status.code().unwrap_or(-1)
+                    args, code
                 ));
             }
         }
