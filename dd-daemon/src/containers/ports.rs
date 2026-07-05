@@ -230,3 +230,106 @@ pub(crate) fn start_for(c: &Container, bridge: &Option<(String, String)>) {
     let ns_key = c.netns_key.as_deref().unwrap_or(&c.id).to_string();
     start(c, bridge, &ns_key);
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn ctr(publish: &str) -> Container {
+        Container {
+            publish: publish.to_string(),
+            ..Default::default()
+        }
+    }
+
+    // ---- t40: byte-truncate to 40, mirroring the engine's snprintf("%.40s") ----
+    #[test]
+    fn t40_short_unchanged() {
+        assert_eq!(t40("abc"), "abc");
+        assert_eq!(t40(""), "");
+    }
+    #[test]
+    fn t40_exactly_40_unchanged() {
+        let s = "a".repeat(40);
+        assert_eq!(t40(&s), s);
+    }
+    #[test]
+    fn t40_over_40_truncated() {
+        let s = "b".repeat(50);
+        let got = t40(&s);
+        assert_eq!(got.len(), 40);
+        assert_eq!(got, "b".repeat(40));
+    }
+
+    // ---- plan: derive the per-binding host addr + switch-inode candidates ----
+    #[test]
+    fn plan_with_bridge_has_bridge_then_loopback_paths() {
+        let c = ctr("0.0.0.0:8080:80/tcp");
+        let bridge = Some(("net123".to_string(), "172.18.0.5".to_string()));
+        let plan = plan(&c, &bridge, "nskey");
+        assert_eq!(plan.len(), 1);
+        let b = &plan[0];
+        assert_eq!(b.host_ip, "0.0.0.0");
+        assert_eq!(b.host_port, 8080);
+        // bridge candidate first (a published server usually binds 0.0.0.0 -> the bridge path), then loopback.
+        assert_eq!(
+            b.switch_paths,
+            vec![
+                "/tmp/.ddbr-net123/172.18.0.5:80".to_string(),
+                "/tmp/.ddnet-nskey/p80".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn plan_without_bridge_is_loopback_only() {
+        let c = ctr("127.0.0.1:9000:90/tcp");
+        let plan = plan(&c, &None, "nskey");
+        assert_eq!(plan.len(), 1);
+        assert_eq!(plan[0].host_ip, "127.0.0.1");
+        assert_eq!(plan[0].host_port, 9000);
+        assert_eq!(plan[0].switch_paths, vec!["/tmp/.ddnet-nskey/p90".to_string()]);
+    }
+
+    #[test]
+    fn plan_drops_non_tcp() {
+        // Only tcp bindings get a host forwarder; a udp publish yields no plan entry.
+        let c = ctr("0.0.0.0:53:53/udp");
+        assert!(plan(&c, &None, "nskey").is_empty());
+    }
+
+    #[test]
+    fn plan_empty_publish_is_empty() {
+        assert!(plan(&ctr(""), &None, "nskey").is_empty());
+    }
+
+    #[test]
+    fn plan_truncates_long_netid_and_netns_key_to_40() {
+        // The switch paths must byte-match the engine's %.40s binds, so a >40-char netid / netns key is
+        // clipped to its first 40 chars inside the formatted path.
+        let long_id = "z".repeat(50);
+        let c = ctr("0.0.0.0:8080:80/tcp");
+        let bridge = Some((long_id.clone(), "10.0.0.2".to_string()));
+        let plan = plan(&c, &bridge, &long_id);
+        let clipped = "z".repeat(40);
+        assert_eq!(
+            plan[0].switch_paths,
+            vec![
+                format!("/tmp/.ddbr-{clipped}/10.0.0.2:80"),
+                format!("/tmp/.ddnet-{clipped}/p80"),
+            ]
+        );
+    }
+
+    #[test]
+    fn plan_multiple_bindings_preserve_ports() {
+        // Two tcp publishes -> two bindings, each with its own host/container ports.
+        let c = ctr("0.0.0.0:8080:80/tcp,0.0.0.0:8443:443/tcp");
+        let plan = plan(&c, &None, "k");
+        assert_eq!(plan.len(), 2);
+        assert_eq!(plan[0].host_port, 8080);
+        assert_eq!(plan[0].switch_paths, vec!["/tmp/.ddnet-k/p80".to_string()]);
+        assert_eq!(plan[1].host_port, 8443);
+        assert_eq!(plan[1].switch_paths, vec!["/tmp/.ddnet-k/p443".to_string()]);
+    }
+}
