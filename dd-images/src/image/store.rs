@@ -50,3 +50,19 @@ impl Store {
         Ok(LocalImage { rootfs, arch, config: pulled.config, iref })
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn rootfs_path_uses_canonical_safe_name_layout() {
+        let store = Store::new("/var/lib/dd/images");
+        let iref = ImageRef::parse("nginx");
+        // safe_name(nginx) == canonical "docker.io/library/nginx:latest" flattened -> underscores.
+        assert_eq!(
+            store.rootfs_path(&iref),
+            PathBuf::from("/var/lib/dd/images/docker.io_library_nginx_latest/rootfs")
+        );
+    }
+}
