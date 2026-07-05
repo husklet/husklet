@@ -125,24 +125,19 @@ pub(crate) async fn containers_stats(
 ) -> Response {
     let (full, name, mem_limit, pid) = {
         let g = a.inner.lock().await;
-        let Some(full) = resolve_cid(&g, &id) else {
+        let Some((full, c)) = resolve_get(&g, &id) else {
             return no_such(&id);
         };
-        let c = g.containers.get(&full);
-        let name = c
-            .map(|c| {
-                if c.name.is_empty() {
-                    c.id[..12.min(c.id.len())].to_string()
-                } else {
-                    c.name.clone()
-                }
-            })
-            .unwrap_or_else(|| id.clone());
-        let mem_limit = c
-            .map(|c| c.memory)
-            .filter(|m| *m > 0)
-            .map(|m| m as u64)
-            .unwrap_or(STATS_DEFAULT_LIMIT);
+        let name = if c.name.is_empty() {
+            c.id[..12.min(c.id.len())].to_string()
+        } else {
+            c.name.clone()
+        };
+        let mem_limit = if c.memory > 0 {
+            c.memory as u64
+        } else {
+            STATS_DEFAULT_LIMIT
+        };
         let pid = g.live.get(&full).and_then(|l| *l.pid.lock().unwrap());
         (full, name, mem_limit, pid)
     };

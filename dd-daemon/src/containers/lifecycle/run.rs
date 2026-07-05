@@ -76,9 +76,8 @@ pub(crate) async fn containers_stop(
 /// is the §8.3-3 repair: the stop path was hardcoded SIGTERM/10s and ignored both.
 async fn resolve_stop_defaults(a: &App, id: &str) -> (i32, i64) {
     let g = a.inner.lock().await;
-    resolve_cid(&g, id)
-        .and_then(|f| g.containers.get(&f))
-        .map(|c| {
+    resolve_get(&g, id)
+        .map(|(_, c)| {
             let s = if c.stop_signal.is_empty() {
                 libc::SIGTERM
             } else {

@@ -7,11 +7,10 @@ pub(super) use super::mounts::container_mounts_json;
 
 pub(crate) async fn containers_inspect(State(a): State<App>, Path(id): Path<String>) -> Response {
     let g = a.inner.lock().await;
-    let Some(full) = resolve_cid(&g, &id) else {
+    let Some((full, c)) = resolve_get(&g, &id) else {
         return no_such(&id);
     };
-    match g.containers.get(&full) {
-        Some(c) => {
+    {
             let running = c.status == "running" || c.status == "paused";
             // Pid = the live JIT process pid while running, else 0 (docker reports 0 for stopped).
             let pid = if running {
@@ -155,7 +154,5 @@ pub(crate) async fn containers_inspect(State(a): State<App>, Path(id): Path<Stri
                 },
             })
             .into_response()
-        }
-        None => no_such(&id),
     }
 }

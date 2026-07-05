@@ -125,10 +125,7 @@ pub(crate) async fn archive_put(
 ) -> Response {
     let (cid, upper, rootfs, binds) = {
         let g = a.inner.lock().await;
-        let Some(full) = resolve_cid(&g, &id) else {
-            return no_such(&id);
-        };
-        let Some(c) = g.containers.get(&full) else {
+        let Some((full, c)) = resolve_get(&g, &id) else {
             return no_such(&id);
         };
         (

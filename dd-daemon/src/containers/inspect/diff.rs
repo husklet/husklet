@@ -80,10 +80,7 @@ pub(crate) fn overlay_changes(upper: &str, rootfs: &str) -> HashMap<String, u8> 
 pub(crate) async fn containers_changes(State(a): State<App>, Path(id): Path<String>) -> Response {
     let (upper, rootfs) = {
         let g = a.inner.lock().await;
-        let Some(full) = resolve_cid(&g, &id) else {
-            return no_such(&id);
-        };
-        let Some(c) = g.containers.get(&full) else {
+        let Some((_, c)) = resolve_get(&g, &id) else {
             return no_such(&id);
         };
         (c.upper.clone(), c.rootfs.clone())
