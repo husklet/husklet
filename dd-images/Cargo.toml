@@ -14,3 +14,6 @@ path = "src/lib.rs"
 # runtime (e.g. dd-jit). No dependency on any runtime crate.
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+# In-process sha256 (already in the workspace lock via dd-cli, so no new download offline). Replaces the
+# former `sha256sum` subprocess for blob/config/cache digests — see src/image/digest.rs.
+sha2 = "0.10"
