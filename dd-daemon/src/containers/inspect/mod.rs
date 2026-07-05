@@ -14,6 +14,7 @@
 mod admin;
 mod detail;
 mod diff;
+mod filter;
 mod list;
 mod logs;
 mod stats;
