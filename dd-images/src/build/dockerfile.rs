@@ -154,3 +154,89 @@ pub fn parse_labels(args: &str) -> Vec<(String, String)> {
         })
         .collect()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn args(pairs: &[(&str, &str)]) -> HashMap<String, String> {
+        pairs.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect()
+    }
+
+    #[test]
+    fn parse_dockerfile_continuations_and_comments() {
+        let df = "\
+# a comment
+FROM ubuntu:22.04
+
+RUN echo hi \\
+    && echo bye
+CMD [\"a\",\"b\"]
+";
+        assert_eq!(
+            parse_dockerfile(df),
+            vec![
+                ("FROM".to_string(), "ubuntu:22.04".to_string()),
+                // continuation joins with the retained trailing space + the added separator space
+                ("RUN".to_string(), "echo hi  && echo bye".to_string()),
+                ("CMD".to_string(), "[\"a\",\"b\"]".to_string()),
+            ]
+        );
+    }
+
+    #[test]
+    fn parse_exec_form_json_vs_shell() {
+        // JSON exec form -> the argv verbatim
+        assert_eq!(
+            parse_exec_form("[\"echo\", \"hi\"]"),
+            vec!["echo".to_string(), "hi".to_string()]
+        );
+        // shell form -> wrapped in /bin/sh -c
+        assert_eq!(
+            parse_exec_form("echo hi"),
+            vec!["/bin/sh".to_string(), "-c".to_string(), "echo hi".to_string()]
+        );
+        // malformed JSON array falls back to shell form
+        assert_eq!(
+            parse_exec_form("[not json]"),
+            vec!["/bin/sh".to_string(), "-c".to_string(), "[not json]".to_string()]
+        );
+    }
+
+    #[test]
+    fn parse_labels_modern_and_legacy() {
+        // modern: key=value pairs, quoted values may contain spaces
+        assert_eq!(
+            parse_labels("k=v k2=\"v 2\" \"com.x\"=\"ACME Inc\""),
+            vec![
+                ("k".to_string(), "v".to_string()),
+                ("k2".to_string(), "v 2".to_string()),
+                ("com.x".to_string(), "ACME Inc".to_string()),
+            ]
+        );
+        // legacy: no `=` anywhere -> a single pair, rest-is-value
+        assert_eq!(
+            parse_labels("maintainer John Doe"),
+            vec![("maintainer".to_string(), "John Doe".to_string())]
+        );
+    }
+
+    #[test]
+    fn substitute_args_forms() {
+        let m = args(&[("FOO", "bar")]);
+        // both $NAME and ${NAME}
+        assert_eq!(substitute_args("$FOO/x", &m), "bar/x");
+        assert_eq!(substitute_args("${FOO}x", &m), "barx");
+        // undefined ${NAME} expands to empty; undefined $NAME is left literal
+        assert_eq!(substitute_args("a${UNDEF}b", &m), "ab");
+        assert_eq!(substitute_args("a $UNDEF b", &m), "a $UNDEF b");
+        // combined
+        assert_eq!(
+            substitute_args("$FOO ${FOO} $UNDEF ${UNDEF}!", &m),
+            "bar bar $UNDEF !"
+        );
+        // empty map / no `$` -> unchanged
+        assert_eq!(substitute_args("$FOO", &HashMap::new()), "$FOO");
+        assert_eq!(substitute_args("plain", &m), "plain");
+    }
+}

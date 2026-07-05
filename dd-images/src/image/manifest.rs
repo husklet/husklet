@@ -7,10 +7,11 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-/// The image identity + run config recorded alongside a saved `rootfs/`. Deserialization is lenient
-/// (every field defaults) so a rootfs-only archive — or an older manifest missing the lifecycle fields —
-/// still loads. Serialization writes the identity + core run config unconditionally (matching the
-/// historical `docker save` sidecar) and omits the optional lifecycle fields when unset.
+/// The image identity + run config recorded alongside a saved `rootfs/`. `name` (the image identity) is
+/// required; every OTHER field defaults, so an older manifest missing the lifecycle fields still loads
+/// (a truly rootfs-only archive carries no manifest at all and is handled by the load path's fallback).
+/// Serialization writes the identity + core run config unconditionally (matching the historical
+/// `docker save` sidecar) and omits the optional lifecycle fields when unset.
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct Manifest {
     /// The image reference (`repository:tag`), restored as the loaded image's name.
@@ -52,5 +53,92 @@ impl Manifest {
     /// True when this manifest describes a native-macOS (darwinjail) image.
     pub fn is_darwin(&self) -> bool {
         self.os.as_deref() == Some("darwin")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn full_roundtrip() {
+        let m = Manifest {
+            name: "busybox:latest".to_string(),
+            cmd: vec!["/bin/sh".to_string()],
+            env: vec!["PATH=/usr/bin".to_string(), "HOME=/root".to_string()],
+            entrypoint: vec!["/entry".to_string()],
+            workdir: "/app".to_string(),
+            user: "1000".to_string(),
+            exposed_ports: vec!["5432/tcp".to_string()],
+            os: Some("darwin".to_string()),
+            stop_signal: Some("SIGQUIT".to_string()),
+            img_volumes: vec!["/data".to_string()],
+            healthcheck: Some(json!({"Test": ["CMD", "true"]})),
+        };
+        let s = serde_json::to_string(&m).unwrap();
+        let back: Manifest = serde_json::from_str(&s).unwrap();
+        // Manifest has no PartialEq; compare via the JSON projection instead.
+        assert_eq!(
+            serde_json::to_value(&m).unwrap(),
+            serde_json::to_value(&back).unwrap()
+        );
+        assert!(back.is_darwin());
+    }
+
+    #[test]
+    fn defaults_fill_missing_lifecycle_fields() {
+        // A manifest carrying only its identity (older sidecar / rootfs-only save) still loads:
+        // every non-identity field defaults.
+        let m: Manifest = serde_json::from_str(r#"{"name":"alpine:3.19"}"#).unwrap();
+        assert_eq!(m.name, "alpine:3.19");
+        assert!(m.cmd.is_empty());
+        assert!(m.env.is_empty());
+        assert!(m.entrypoint.is_empty());
+        assert_eq!(m.workdir, "");
+        assert_eq!(m.user, "");
+        assert!(m.exposed_ports.is_empty());
+        assert_eq!(m.os, None);
+        assert_eq!(m.stop_signal, None);
+        assert!(m.img_volumes.is_empty());
+        assert_eq!(m.healthcheck, None);
+        assert!(!m.is_darwin());
+    }
+
+    #[test]
+    fn bare_empty_object() {
+        // NOTE: `name` is the one field WITHOUT `#[serde(default)]`, so a bare `{}` does NOT
+        // deserialize (contradicting the doc comment's "every field defaults"). Locking actual
+        // behavior; see report.
+        let r = serde_json::from_str::<Manifest>("{}");
+        assert!(r.is_err());
+    }
+
+    #[test]
+    fn optional_fields_omitted_when_unset() {
+        // empty img_volumes / None healthcheck (and None os/stop_signal) are omitted from the JSON.
+        let m = Manifest {
+            name: "img:latest".to_string(),
+            ..Default::default()
+        };
+        let s = serde_json::to_string(&m).unwrap();
+        assert!(!s.contains("img_volumes"), "empty img_volumes omitted: {s}");
+        assert!(!s.contains("healthcheck"), "None healthcheck omitted: {s}");
+        assert!(!s.contains("stop_signal"), "None stop_signal omitted: {s}");
+        assert!(!s.contains("\"os\""), "None os omitted: {s}");
+        // core run-config fields are written unconditionally
+        assert!(s.contains("\"name\""));
+        assert!(s.contains("\"cmd\""));
+
+        // when set, they ARE present
+        let m2 = Manifest {
+            name: "img:latest".to_string(),
+            img_volumes: vec!["/data".to_string()],
+            healthcheck: Some(json!({"Test": ["NONE"]})),
+            ..Default::default()
+        };
+        let s2 = serde_json::to_string(&m2).unwrap();
+        assert!(s2.contains("img_volumes"));
+        assert!(s2.contains("healthcheck"));
     }
 }
