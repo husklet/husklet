@@ -155,6 +155,15 @@ pub fn parse_labels(args: &str) -> Vec<(String, String)> {
         .collect()
 }
 
+/// Parse an `ENV` instruction's arguments into `(key, value)` pairs. `ENV` shares `LABEL`'s exact
+/// Dockerfile grammar — the `ENV key=value [key2=value2 …]` form (quotes preserve spaces, multiple
+/// pairs per line) and the legacy `ENV key value…` form (one variable, value = rest of line) — so it
+/// delegates to [`parse_labels`]. This fixes the old inline handler that split on the first `=`, kept
+/// only the first whitespace-token of the value (dropping quoted spaces) and discarded extra pairs.
+pub fn parse_env(args: &str) -> Vec<(String, String)> {
+    parse_labels(args)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -218,6 +227,30 @@ CMD [\"a\",\"b\"]
         assert_eq!(
             parse_labels("maintainer John Doe"),
             vec![("maintainer".to_string(), "John Doe".to_string())]
+        );
+    }
+
+    #[test]
+    fn parse_env_multi_pair_quotes_and_legacy() {
+        // Regression: the old inline ENV handler split on the first '=', kept only the first
+        // whitespace-token of the value, and dropped extra pairs. Correct Dockerfile ENV behavior:
+        // multiple key=value pairs on one line.
+        assert_eq!(
+            parse_env("A=1 B=2"),
+            vec![
+                ("A".to_string(), "1".to_string()),
+                ("B".to_string(), "2".to_string()),
+            ]
+        );
+        // a quoted value preserves its spaces (was truncated to "hello" before).
+        assert_eq!(
+            parse_env("FOO=\"hello world\""),
+            vec![("FOO".to_string(), "hello world".to_string())]
+        );
+        // legacy `ENV key value…` form: one variable, value = rest of the line (spaces kept).
+        assert_eq!(
+            parse_env("FOO bar baz"),
+            vec![("FOO".to_string(), "bar baz".to_string())]
         );
     }
 

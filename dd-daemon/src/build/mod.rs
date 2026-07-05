@@ -35,7 +35,7 @@ pub(in crate::build) use steps::*;
 // and registering the result as a daemon `Image`. Re-export the parsing helpers so `crate::build::*`
 // call sites keep resolving.
 pub(crate) use dd_images::build::{
-    cache_id, is_fs_inst, parse_dockerfile, parse_exec_form, parse_labels, path_digest,
+    cache_id, is_fs_inst, parse_dockerfile, parse_env, parse_exec_form, parse_labels, path_digest,
     rootfs_digest, sha256_hex, substitute_args, BuildCache,
 };
 
