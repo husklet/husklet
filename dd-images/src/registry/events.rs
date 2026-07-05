@@ -61,3 +61,26 @@ pub fn layer_short(digest: &str) -> String {
         .take(12)
         .collect()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::layer_short;
+
+    #[test]
+    fn layer_short_strips_prefix_and_takes_12() {
+        // Docker's short id: first 12 hex chars after the `sha256:` prefix.
+        assert_eq!(layer_short("sha256:deadbeefcafe0000"), "deadbeefcafe");
+    }
+
+    #[test]
+    fn layer_short_without_prefix() {
+        // No `sha256:` prefix: still just the first 12 chars.
+        assert_eq!(layer_short("deadbeefcafe0000"), "deadbeefcafe");
+    }
+
+    #[test]
+    fn layer_short_shorter_than_12() {
+        // Fewer than 12 chars available: return the whole (prefix-stripped) string.
+        assert_eq!(layer_short("sha256:abc123"), "abc123");
+    }
+}
