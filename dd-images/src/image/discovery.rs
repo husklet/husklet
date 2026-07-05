@@ -429,4 +429,79 @@ mod tests {
         let out = dedup_images(vec![base("busybox"), base("alpine")]);
         assert_eq!(out.len(), 2);
     }
+
+    // ---- sniff_magic: classify a binary by its leading magic bytes ----
+
+    /// A 20-byte ELF header with `e_machine` (offset 18, little-endian u16) set to `machine`.
+    fn elf_header(machine: u16) -> Vec<u8> {
+        let mut b = vec![0u8; 20];
+        b[0..4].copy_from_slice(b"\x7fELF");
+        let m = machine.to_le_bytes();
+        b[18] = m[0];
+        b[19] = m[1];
+        b
+    }
+
+    /// An 8-byte Mach-O 64 header (MH_MAGIC_64) with `cputype` (offset 4, little-endian u32).
+    fn macho_header(cputype: u32) -> Vec<u8> {
+        let mut b = vec![0xCFu8, 0xFA, 0xED, 0xFE];
+        b.extend_from_slice(&cputype.to_le_bytes());
+        b
+    }
+
+    #[test]
+    fn sniff_magic_elf_machines() {
+        assert_eq!(sniff_magic(&elf_header(0xB7)), Some(Arch::LinuxAarch64)); // EM_AARCH64
+        assert_eq!(sniff_magic(&elf_header(0x3E)), Some(Arch::LinuxX86_64)); // EM_X86_64
+        // an ELF with an unrecognized machine (e.g. EM_MIPS 0x08) -> None
+        assert_eq!(sniff_magic(&elf_header(0x08)), None);
+    }
+
+    #[test]
+    fn sniff_magic_macho_arm64_only() {
+        // CPU_TYPE_ARM64 (0x0100000C) -> darwin arm64
+        assert_eq!(sniff_magic(&macho_header(0x0100000C)), Some(Arch::DarwinAarch64));
+        // a Mach-O with any other cputype (e.g. x86_64 0x01000007) -> None
+        assert_eq!(sniff_magic(&macho_header(0x01000007)), None);
+    }
+
+    #[test]
+    fn sniff_magic_non_binaries_and_too_short() {
+        assert_eq!(sniff_magic(b""), None);
+        assert_eq!(sniff_magic(b"#!/bin/sh\n"), None); // a script, not ELF/Mach-O
+        // ELF magic but truncated below the e_machine offset (needs len > 19) -> None
+        assert_eq!(sniff_magic(b"\x7fELF\x02\x01\x01"), None);
+        // Mach-O magic but truncated below the cputype offset (needs len > 7) -> None
+        assert_eq!(sniff_magic(&[0xCFu8, 0xFA, 0xED, 0xFE, 0x0C]), None);
+    }
+
+    // ---- json_strs / meta_str: sidecar JSON field extraction ----
+
+    #[test]
+    fn json_strs_keeps_only_string_array_entries() {
+        assert_eq!(
+            json_strs(&json!(["a", "b"])),
+            vec!["a".to_string(), "b".to_string()]
+        );
+        // non-string entries (numbers, null, nested) are dropped
+        assert_eq!(
+            json_strs(&json!(["a", 1, null, ["x"], "b"])),
+            vec!["a".to_string(), "b".to_string()]
+        );
+        // a non-array value -> empty
+        assert_eq!(json_strs(&json!("scalar")), Vec::<String>::new());
+        assert_eq!(json_strs(&json!(null)), Vec::<String>::new());
+    }
+
+    #[test]
+    fn meta_str_reads_string_field_else_empty() {
+        let meta = Some(json!({"workdir": "/app", "port": 5432}));
+        assert_eq!(meta_str(&meta, "workdir"), "/app");
+        // present but non-string -> empty
+        assert_eq!(meta_str(&meta, "port"), "");
+        // absent key -> empty
+        assert_eq!(meta_str(&meta, "user"), "");
+        // no sidecar at all -> empty
+        assert_eq!(meta_str(&None, "workdir"), "");
+    }
 }

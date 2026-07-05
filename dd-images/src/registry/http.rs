@@ -333,3 +333,170 @@ pub(super) fn base64_decode(s: &str) -> Option<Vec<u8>> {
     }
     Some(out)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ---- status_of: parse the HTTP status out of a raw -D header blob ----
+
+    #[test]
+    fn status_of_normal_response() {
+        assert_eq!(status_of("HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\n\r\n"), 200);
+        assert_eq!(status_of("HTTP/1.1 301 Moved Permanently\r\nLocation: /x\r\n\r\n"), 301);
+        assert_eq!(status_of("HTTP/1.1 404 Not Found\r\n\r\n"), 404);
+        assert_eq!(status_of("HTTP/1.1 401 Unauthorized\r\n\r\n"), 401);
+        // HTTP/2 has no "OK" reason phrase after the code; nth(1) still lands on the code.
+        assert_eq!(status_of("HTTP/2 200\r\n\r\n"), 200);
+    }
+
+    #[test]
+    fn status_of_redirect_chain_returns_last() {
+        // curl -D appends each response's headers; status_of scans in REVERSE (.rev()) and returns
+        // the LAST HTTP status line — the final response after redirects, not the 301/307.
+        let chain = "HTTP/1.1 301 Moved Permanently\r\nLocation: https://cdn/x\r\n\r\n\
+                     HTTP/1.1 200 OK\r\nContent-Type: application/octet-stream\r\n\r\n";
+        assert_eq!(status_of(chain), 200);
+
+        // A chain whose final hop is an error resolves to that error, not the intermediate 307.
+        let to_404 = "HTTP/1.1 307 Temporary Redirect\r\nLocation: /gone\r\n\r\n\
+                      HTTP/1.1 404 Not Found\r\n\r\n";
+        assert_eq!(status_of(to_404), 404);
+    }
+
+    #[test]
+    fn status_of_empty_or_garbage_is_zero() {
+        // No "HTTP/" line -> find_map None -> unwrap_or(0). This is the sentinel the callers treat as
+        // "no usable response".
+        assert_eq!(status_of(""), 0);
+        assert_eq!(status_of("not headers at all\r\ngarbage\r\n"), 0);
+        // A truncated status line with no code also falls through to 0.
+        assert_eq!(status_of("HTTP/1.1\r\n"), 0);
+    }
+
+    // ---- with_auth: append -H Accept / -H Authorization curl args ----
+
+    #[test]
+    fn with_auth_none_leaves_args_unchanged() {
+        let base = vec!["-L".to_string(), "https://reg/v2/x".to_string()];
+        assert_eq!(with_auth(base.clone(), None, None), base);
+    }
+
+    #[test]
+    fn with_auth_accept_only() {
+        let out = with_auth(vec!["url".to_string()], Some("application/vnd.oci.image.manifest.v1+json"), None);
+        assert_eq!(
+            out,
+            vec![
+                "url".to_string(),
+                "-H".to_string(),
+                "Accept: application/vnd.oci.image.manifest.v1+json".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn with_auth_token_only() {
+        let out = with_auth(vec!["url".to_string()], None, Some("tok"));
+        assert_eq!(
+            out,
+            vec![
+                "url".to_string(),
+                "-H".to_string(),
+                "Authorization: Bearer tok".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn with_auth_both_accept_then_authorization() {
+        // Accept is appended before Authorization (impl order); each as a separate -H / value pair.
+        let out = with_auth(vec!["url".to_string()], Some("application/json"), Some("tok"));
+        assert_eq!(
+            out,
+            vec![
+                "url".to_string(),
+                "-H".to_string(),
+                "Accept: application/json".to_string(),
+                "-H".to_string(),
+                "Authorization: Bearer tok".to_string(),
+            ]
+        );
+    }
+
+    // ---- tmp_headers: unique temp path under the system temp dir ----
+
+    #[test]
+    fn tmp_headers_is_unique_and_in_temp_dir() {
+        let a = tmp_headers();
+        let b = tmp_headers();
+        assert!(a.starts_with(std::env::temp_dir()), "path under temp_dir");
+        assert_ne!(a, b, "atomic SEQ suffix makes each call distinct");
+        assert!(a.extension().and_then(|e| e.to_str()) == Some("hdr"));
+    }
+
+    // ---- header: case-insensitive header lookup, trimmed value ----
+
+    #[test]
+    fn header_lookup_is_case_insensitive_and_trimmed() {
+        let h = "Content-Type: text/plain\r\nDocker-Content-Digest: sha256:abc123\r\n";
+        // name match ignores case; value is trimmed of the leading space.
+        assert_eq!(header(h, "content-type"), Some("text/plain".to_string()));
+        assert_eq!(header(h, "Content-Type"), Some("text/plain".to_string()));
+        // a value containing a colon is preserved (split_once splits on the FIRST colon only).
+        assert_eq!(
+            header(h, "docker-content-digest"),
+            Some("sha256:abc123".to_string())
+        );
+        // absent header -> None
+        assert_eq!(header(h, "location"), None);
+    }
+
+    // ---- absolute: resolve a Location against the registry origin ----
+
+    #[test]
+    fn absolute_passes_through_absolute_urls() {
+        assert_eq!(
+            absolute("https://cdn.example.com/blob", "https://reg.example.com/v2/lib/ubuntu"),
+            "https://cdn.example.com/blob"
+        );
+    }
+
+    #[test]
+    fn absolute_prepends_origin_for_relative() {
+        // origin = everything before "/v2/"
+        assert_eq!(
+            absolute("/v2/lib/ubuntu/blobs/x", "https://reg.example.com/v2/lib/ubuntu"),
+            "https://reg.example.com/v2/lib/ubuntu/blobs/x"
+        );
+        // base without "/v2/" -> the whole base is treated as the origin.
+        assert_eq!(
+            absolute("/path", "https://reg.example.com"),
+            "https://reg.example.com/path"
+        );
+    }
+
+    // ---- base64_decode: standard + URL-safe alphabets, no crate ----
+
+    #[test]
+    fn base64_decode_standard_with_padding() {
+        // standard base64 of "foo:bar" (a docker registry basic-auth token shape)
+        assert_eq!(base64_decode("Zm9vOmJhcg=="), Some(b"foo:bar".to_vec()));
+    }
+
+    #[test]
+    fn base64_decode_no_padding_and_url_safe_alphabet() {
+        // no '=' padding still decodes
+        assert_eq!(base64_decode("aGVsbG8"), Some(b"hello".to_vec()));
+        // URL-safe '-'/'_' map to 62/63: "-_8" -> [0xFB, 0xFF]
+        assert_eq!(base64_decode("-_8"), Some(vec![0xFBu8, 0xFF]));
+    }
+
+    #[test]
+    fn base64_decode_rejects_invalid_chars() {
+        // a char outside both alphabets -> None
+        assert_eq!(base64_decode("@@@"), None);
+        // whitespace (\r/\n) inside the blob is skipped, not rejected
+        assert_eq!(base64_decode("Zm9v\r\nOmJhcg=="), Some(b"foo:bar".to_vec()));
+    }
+}
