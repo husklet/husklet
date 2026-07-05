@@ -376,23 +376,11 @@ pub(crate) async fn images_build(
                 }
             }
             "ENV" => {
-                // `ENV K V` or `ENV K=V`; stored as "K=V"
-                let kv = if let Some((k, v)) = args.split_once('=') {
-                    format!(
-                        "{}={}",
-                        k.trim(),
-                        v.split_whitespace().next().unwrap_or("").trim_matches('"')
-                    )
-                } else if let Some((k, v)) = args.split_once(char::is_whitespace) {
-                    format!("{}={}", k.trim(), v.trim().trim_matches('"'))
-                } else {
-                    String::new()
-                };
-                if !kv.is_empty() {
-                    env.retain(|e| {
-                        e.split_once('=').map(|(k, _)| k) != kv.split_once('=').map(|(k, _)| k)
-                    });
-                    env.push(kv);
+                // `ENV K V` (legacy, value = rest of line) or one/more `K=V` pairs (quotes preserve
+                // spaces) — same grammar as LABEL. Each pair is stored "K=V", last assignment wins.
+                for (k, v) in parse_env(&args) {
+                    env.retain(|e| e.split_once('=').map(|(ek, _)| ek) != Some(k.as_str()));
+                    env.push(format!("{k}={v}"));
                 }
             }
             "WORKDIR" => {
