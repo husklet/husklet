@@ -30,8 +30,8 @@
 // callers keep working unchanged while they migrate to the ergonomic API above.
 pub use dd_jit_darwin::{available, Guest, PortMap, SpawnConfig, Volume};
 
-mod api;
-pub use api::{Container, ContainerBuilder, Error, ExitStatus, Image, RunHandle, Runtime};
-
-pub mod container;
-pub use container::{RunningContainer, Stdio3};
+mod runtime;
+pub use runtime::{
+    guest_env, resolve_user, Container, ContainerBuilder, Error, ExitStatus, Image, Launched,
+    LogChunk, RunHandle, RunningContainer, Runtime, Stdio3, DEFAULT_GUEST_PATH,
+};

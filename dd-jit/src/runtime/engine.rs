@@ -7,7 +7,9 @@
 //! merge into one raw stream — or piped stdio (the multiplexed-frame path). The guest is placed in its
 //! own process group so `pause`/`resume` (SIGSTOP/SIGCONT) reach the whole container via `killpg`.
 
-use crate::api::{Container, Error, Runtime};
+use super::container::Container;
+use super::error::Error;
+use super::runtime::Runtime;
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd, RawFd};
 use std::process::Stdio;
 use std::sync::Arc;
