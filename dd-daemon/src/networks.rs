@@ -220,7 +220,14 @@ pub(crate) async fn networks_create(
         &id,
         json!({"name": ev_name, "type": ev_driver}),
     );
-    (StatusCode::CREATED, Json(json!({"Id": id, "Warning": ""}))).into_response()
+    (
+        StatusCode::CREATED,
+        Json(crate::api::NetworkCreateResponse {
+            id,
+            warning: String::new(),
+        }),
+    )
+        .into_response()
 }
 
 pub(crate) async fn network_inspect(State(a): State<App>, Path(id): Path<String>) -> Response {
@@ -380,7 +387,7 @@ pub(crate) fn default_networks() -> Vec<Net> {
 
 /// `POST /networks/prune` — `docker network prune`. Removes user-defined networks with no attached
 /// containers (never the predefined bridge/host/none).
-pub(crate) async fn networks_prune(State(a): State<App>) -> Json<Value> {
+pub(crate) async fn networks_prune(State(a): State<App>) -> Json<crate::api::NetworksPruneReport> {
     let mut g = a.inner.lock().await;
     let pruned: Vec<String> = g
         .networks
@@ -390,5 +397,7 @@ pub(crate) async fn networks_prune(State(a): State<App>) -> Json<Value> {
         .collect();
     g.networks.retain(|n| !pruned.contains(&n.name));
     save_state(&g, &a.state_path);
-    Json(json!({"NetworksDeleted": pruned}))
+    Json(crate::api::NetworksPruneReport {
+        networks_deleted: pruned,
+    })
 }

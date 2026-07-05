@@ -229,6 +229,21 @@ pub(crate) struct IpamConfig {
     pub gateway: String,
 }
 
+/// `POST /networks/create` ack — `{"Id": <id>, "Warning": ""}`.
+#[derive(Serialize)]
+#[serde(rename_all = "PascalCase")]
+pub(crate) struct NetworkCreateResponse {
+    pub id: String,
+    pub warning: String,
+}
+
+/// `POST /networks/prune` report — the names of the removed user-defined networks.
+#[derive(Serialize)]
+#[serde(rename_all = "PascalCase")]
+pub(crate) struct NetworksPruneReport {
+    pub networks_deleted: Vec<String>,
+}
+
 // ---- volumes ---------------------------------------------------------------
 
 #[derive(Serialize)]
@@ -248,6 +263,15 @@ pub(crate) struct VolumeJson {
 pub(crate) struct VolumeList {
     pub volumes: Vec<VolumeJson>,
     pub warnings: Vec<Value>,
+}
+
+/// `POST /volumes/prune` report — the names of removed volumes plus reclaimed bytes (always 0; dd
+/// does not size volume contents).
+#[derive(Serialize)]
+#[serde(rename_all = "PascalCase")]
+pub(crate) struct VolumesPruneReport {
+    pub volumes_deleted: Vec<String>,
+    pub space_reclaimed: i64,
 }
 
 // ---- events ----------------------------------------------------------------
@@ -543,6 +567,66 @@ pub(crate) struct ContainerSummary {
 pub(crate) struct CreateResponse {
     pub id: String,
     pub warnings: Vec<Value>,
+}
+
+// ---- containers: published-port shapes -------------------------------------
+// The two distinct port renderings docker clients read: the top-level `Ports[]` array (list/`ps`) and
+// the nested `NetworkSettings.Ports` bindings (`docker port`). Keys aren't plain PascalCase (`IP`,
+// `HostIp`), so each field carries an explicit rename.
+
+/// One entry of the top-level `Ports` array (`docker ps` / list JSON).
+#[derive(Serialize)]
+pub(crate) struct PortSummary {
+    #[serde(rename = "PublicPort")]
+    pub public_port: u16,
+    #[serde(rename = "PrivatePort")]
+    pub private_port: u16,
+    #[serde(rename = "Type")]
+    pub type_: String,
+    #[serde(rename = "IP")]
+    pub ip: String,
+}
+
+/// One binding of the `NetworkSettings.Ports` map value array (`{"HostIp","HostPort"}`); `HostPort` is
+/// a string (docker renders it as text).
+#[derive(Serialize)]
+pub(crate) struct PortBinding {
+    #[serde(rename = "HostIp")]
+    pub host_ip: String,
+    #[serde(rename = "HostPort")]
+    pub host_port: String,
+}
+
+// ---- exec ------------------------------------------------------------------
+
+/// `POST /containers/{id}/exec` ack — `{"Id": <exec id>}`.
+#[derive(Serialize)]
+#[serde(rename_all = "PascalCase")]
+pub(crate) struct ExecCreateResponse {
+    pub id: String,
+}
+
+/// `GET /exec/{id}/json` (`docker exec` inspect). `ID`/`ContainerID` need explicit renames (PascalCase
+/// would drop the capitalization).
+#[derive(Serialize)]
+#[serde(rename_all = "PascalCase")]
+pub(crate) struct ExecInspect {
+    #[serde(rename = "ID")]
+    pub id: String,
+    pub running: bool,
+    pub exit_code: i64,
+    #[serde(rename = "ContainerID")]
+    pub container_id: String,
+    pub process_config: ExecProcessConfig,
+}
+
+/// The nested `ProcessConfig` — docker's lowercase keys verbatim (no PascalCase).
+#[derive(Serialize)]
+pub(crate) struct ExecProcessConfig {
+    pub tty: bool,
+    pub privileged: bool,
+    pub entrypoint: String,
+    pub arguments: Vec<String>,
 }
 
 // ---- images -----------------------------------------------------------------
