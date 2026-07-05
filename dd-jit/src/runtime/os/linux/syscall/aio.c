@@ -39,6 +39,7 @@ struct aio_evt {
     uint64_t data, obj;
     int64_t res, res2;
 };
+
 // Engine-side AIO context. The "context id" handed back to the guest (io_setup's *ctx_idp) is the ADDRESS
 // of one of these table entries. In dd's in-process model the guest shares this address space, so it can
 // pass the value back to us; we always VALIDATE it against the table before use (a bogus ctx -> -EINVAL),
@@ -53,6 +54,7 @@ struct aio_ctx {
     int cap;           // off 12
     int head, tail, n; // off 16/20/24: ring head/tail and queued count
 };
+
 #define AIO_MAX_CTX 64
 static struct aio_ctx g_aioctx[AIO_MAX_CTX];
 
@@ -62,6 +64,7 @@ static struct aio_ctx *aio_ctx_of(uint64_t id) {
         if (g_aioctx[i].used && (uint64_t)(uintptr_t)&g_aioctx[i] == id) return &g_aioctx[i];
     return NULL;
 }
+
 // Queue one completion into ctx's ring (drops the oldest if full -- can't happen for well-behaved callers
 // that io_getevents before re-submitting past nr_events, but stays bounded regardless).
 static void aio_push(struct aio_ctx *x, uint64_t data, uint64_t obj, int64_t res) {
@@ -76,6 +79,7 @@ static void aio_push(struct aio_ctx *x, uint64_t data, uint64_t obj, int64_t res
     x->tail = (x->tail + 1) % x->cap;
     x->n++;
 }
+
 // Signal an AIO completion eventfd (aio_resfd): mirror io.c's eventfd write path exactly -- bump the
 // accumulating counter and regenerate a single fresh readable edge on the backing pipe so a blocked/
 // edge-triggered epoll_wait on the eventfd wakes. No-op for a non-eventfd / out-of-range fd.
@@ -90,6 +94,7 @@ static void aio_eventfd_kick(int fd) {
     char b = 1;
     if (write(g_eventfd_peer[fd] - 1, &b, 1) < 0) {}
 }
+
 // Perform ONE iocb synchronously; returns the io_event.res value (bytes transferred, 0 for fsync, or a
 // negative Linux errno). `iocb` is an already-validated 64-byte guest struct.
 static int64_t aio_do_one(const uint8_t *iocb) {
@@ -120,10 +125,8 @@ static int64_t aio_do_one(const uint8_t *iocb) {
         return r < 0 ? -errno : r;
     }
     case IOCB_CMD_FSYNC:
-    case IOCB_CMD_FDSYNC:
-        return fsync(fd) < 0 ? -errno : 0;
-    default:
-        return -EINVAL; // unsupported opcode (POLL/NOOP)
+    case IOCB_CMD_FDSYNC: return fsync(fd) < 0 ? -errno : 0;
+    default: return -EINVAL; // unsupported opcode (POLL/NOOP)
     }
 }
 
@@ -133,19 +136,37 @@ static int svc_aio(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_
     switch (nr) {
     case 0: { // io_setup(unsigned nr_events, aio_context_t *ctx_idp)
         unsigned nr_events = (unsigned)a0;
-        if (!a1 || !host_range_mapped((uintptr_t)a1, sizeof(uint64_t))) { G_RET(c) = (uint64_t)(-EFAULT); break; }
-        if (*(uint64_t *)a1 != 0) { G_RET(c) = (uint64_t)(-EINVAL); break; } // Linux: *ctx_idp must be 0
-        if (nr_events == 0) { G_RET(c) = (uint64_t)(-EINVAL); break; }
+        if (!a1 || !host_range_mapped((uintptr_t)a1, sizeof(uint64_t))) {
+            G_RET(c) = (uint64_t)(-EFAULT);
+            break;
+        }
+        if (*(uint64_t *)a1 != 0) {
+            G_RET(c) = (uint64_t)(-EINVAL);
+            break;
+        } // Linux: *ctx_idp must be 0
+        if (nr_events == 0) {
+            G_RET(c) = (uint64_t)(-EINVAL);
+            break;
+        }
         int slot = -1;
         for (int i = 0; i < AIO_MAX_CTX; i++)
-            if (!g_aioctx[i].used) { slot = i; break; }
-        if (slot < 0) { G_RET(c) = (uint64_t)(-EAGAIN); break; } // out of contexts (matches kernel ENOMEM/EAGAIN)
+            if (!g_aioctx[i].used) {
+                slot = i;
+                break;
+            }
+        if (slot < 0) {
+            G_RET(c) = (uint64_t)(-EAGAIN);
+            break;
+        } // out of contexts (matches kernel ENOMEM/EAGAIN)
         // Linux over-allocates the completion ring vs nr_events; a small headroom keeps a burst of
         // submissions from dropping completions before io_getevents drains them.
         int cap = (int)nr_events + 1;
         if (cap < 8) cap = 8;
         struct aio_evt *q = calloc((size_t)cap, sizeof *q);
-        if (!q) { G_RET(c) = (uint64_t)(-ENOMEM); break; }
+        if (!q) {
+            G_RET(c) = (uint64_t)(-ENOMEM);
+            break;
+        }
         g_aioctx[slot].q = q;
         g_aioctx[slot].cap = cap;
         g_aioctx[slot].head = g_aioctx[slot].tail = g_aioctx[slot].n = 0;
@@ -156,7 +177,10 @@ static int svc_aio(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_
     }
     case 1: { // io_destroy(aio_context_t ctx)
         struct aio_ctx *x = aio_ctx_of(a0);
-        if (!x) { G_RET(c) = (uint64_t)(-EINVAL); break; }
+        if (!x) {
+            G_RET(c) = (uint64_t)(-EINVAL);
+            break;
+        }
         free(x->q);
         x->q = NULL;
         x->used = 0;
@@ -165,17 +189,30 @@ static int svc_aio(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_
     }
     case 2: { // io_submit(aio_context_t ctx, long nr, struct iocb **iocbpp)
         struct aio_ctx *x = aio_ctx_of(a0);
-        if (!x) { G_RET(c) = (uint64_t)(-EINVAL); break; }
+        if (!x) {
+            G_RET(c) = (uint64_t)(-EINVAL);
+            break;
+        }
         long count = (long)a1;
-        if (count < 0) { G_RET(c) = (uint64_t)(-EINVAL); break; }
-        if (count == 0) { G_RET(c) = 0; break; }
+        if (count < 0) {
+            G_RET(c) = (uint64_t)(-EINVAL);
+            break;
+        }
+        if (count == 0) {
+            G_RET(c) = 0;
+            break;
+        }
         // iocbpp is an array of `count` guest pointers (u64 each).
-        if (!host_range_mapped((uintptr_t)a2, (size_t)count * sizeof(uint64_t))) { G_RET(c) = (uint64_t)(-EFAULT); break; }
+        if (!host_range_mapped((uintptr_t)a2, (size_t)count * sizeof(uint64_t))) {
+            G_RET(c) = (uint64_t)(-EFAULT);
+            break;
+        }
         const uint64_t *pp = (const uint64_t *)a2;
         long done = 0;
         for (long i = 0; i < count; i++) {
             uint64_t iocb = pp[i];
-            if (!iocb || !host_range_mapped((uintptr_t)iocb, 64)) break; // stop; report count so far (or EFAULT if first)
+            if (!iocb || !host_range_mapped((uintptr_t)iocb, 64))
+                break; // stop; report count so far (or EFAULT if first)
             const uint8_t *cb = (const uint8_t *)iocb;
             uint64_t aio_data = *(const uint64_t *)(cb + 0);
             uint32_t aio_flags = *(const uint32_t *)(cb + 56);
@@ -196,12 +233,21 @@ static int svc_aio(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_
         break;
     case 4: { // io_getevents(aio_context_t ctx, long min_nr, long nr, struct io_event *events, struct timespec *tmo)
         struct aio_ctx *x = aio_ctx_of(a0);
-        if (!x) { G_RET(c) = (uint64_t)(-EINVAL); break; }
+        if (!x) {
+            G_RET(c) = (uint64_t)(-EINVAL);
+            break;
+        }
         long nr_max = (long)a2;
-        if (nr_max < 0) { G_RET(c) = (uint64_t)(-EINVAL); break; }
+        if (nr_max < 0) {
+            G_RET(c) = (uint64_t)(-EINVAL);
+            break;
+        }
         uint8_t *ev = (uint8_t *)a3;
         long want = nr_max < x->n ? nr_max : x->n;
-        if (want > 0 && (!ev || !host_range_mapped((uintptr_t)a3, (size_t)want * 32))) { G_RET(c) = (uint64_t)(-EFAULT); break; }
+        if (want > 0 && (!ev || !host_range_mapped((uintptr_t)a3, (size_t)want * 32))) {
+            G_RET(c) = (uint64_t)(-EFAULT);
+            break;
+        }
         long got = 0;
         while (got < want) {
             struct aio_evt *e = &x->q[x->head];
@@ -219,8 +265,7 @@ static int svc_aio(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_
         G_RET(c) = (uint64_t)got;
         break;
     }
-    default:
-        return 0;
+    default: return 0;
     }
     return svc_done(c);
 }

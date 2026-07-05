@@ -27,6 +27,7 @@ static int norep_disabled(void) {
 static inline uint64_t repstr_g2h(uint64_t a) {
     return (g_nonpie_lo && a >= g_nonpie_lo && a < g_nonpie_hi) ? a + g_nonpie_bias : a;
 }
+
 static void dd_rep_movs(uint8_t *dst, const uint8_t *src, uint64_t nbytes, int w) {
     g_repmovs_n++;
     dst = (uint8_t *)repstr_g2h((uint64_t)dst);
@@ -40,23 +41,27 @@ static void dd_rep_movs(uint8_t *dst, const uint8_t *src, uint64_t nbytes, int w
     case 2: {
         uint16_t *d = (uint16_t *)dst;
         const uint16_t *s = (const uint16_t *)src;
-        for (uint64_t i = 0, n = nbytes >> 1; i < n; i++) d[i] = s[i];
+        for (uint64_t i = 0, n = nbytes >> 1; i < n; i++)
+            d[i] = s[i];
         return;
     }
     case 4: {
         uint32_t *d = (uint32_t *)dst;
         const uint32_t *s = (const uint32_t *)src;
-        for (uint64_t i = 0, n = nbytes >> 2; i < n; i++) d[i] = s[i];
+        for (uint64_t i = 0, n = nbytes >> 2; i < n; i++)
+            d[i] = s[i];
         return;
     }
     case 8: {
         uint64_t *d = (uint64_t *)dst;
         const uint64_t *s = (const uint64_t *)src;
-        for (uint64_t i = 0, n = nbytes >> 3; i < n; i++) d[i] = s[i];
+        for (uint64_t i = 0, n = nbytes >> 3; i < n; i++)
+            d[i] = s[i];
         return;
     }
     default:
-        for (uint64_t i = 0; i < nbytes; i++) dst[i] = src[i];
+        for (uint64_t i = 0; i < nbytes; i++)
+            dst[i] = src[i];
         return;
     }
 }
@@ -68,22 +73,23 @@ static void dd_rep_stos(uint8_t *dst, uint64_t val, uint64_t n, int w) {
     switch (w) {
     case 2: {
         uint16_t *p = (uint16_t *)dst, v = (uint16_t)val;
-        for (uint64_t i = 0; i < n; i++) p[i] = v;
+        for (uint64_t i = 0; i < n; i++)
+            p[i] = v;
         return;
     }
     case 4: {
         uint32_t *p = (uint32_t *)dst, v = (uint32_t)val;
-        for (uint64_t i = 0; i < n; i++) p[i] = v;
+        for (uint64_t i = 0; i < n; i++)
+            p[i] = v;
         return;
     }
     case 8: {
         uint64_t *p = (uint64_t *)dst, v = val;
-        for (uint64_t i = 0; i < n; i++) p[i] = v;
+        for (uint64_t i = 0; i < n; i++)
+            p[i] = v;
         return;
     }
-    default:
-        memset(dst, (int)(val & 0xff), n);
-        return;
+    default: memset(dst, (int)(val & 0xff), n); return;
     }
 }
 
@@ -104,7 +110,7 @@ static void emit_reload(void) {
 // host x0..x15 (caller-saved) so the spill/reload around the call is mandatory; x28 (cpu) is
 // callee-saved and survives; the host SP is untouched (guest RSP is x4), so ABI alignment holds.
 static void emit_rep_string(int movs, int w, int shift) {
-    // Lever #3: emit_spill (below) clears cpu->vdirty and republishes cpu->V, and emit_reload restores host
+    // emit_spill (below) clears cpu->vdirty and republishes cpu->V, and emit_reload restores host
     // v0..v15 FROM cpu->V, so this leaves cpu->V current -> no vdirty mark needed (a later syscall may slim).
     emit_spill();                          // x0..x15 + xmm0..15 + flags -> cpu (membank)
     e_ldr(0, 28, R_OFF(RDI));              // x0 = dst (rdi)
@@ -134,7 +140,7 @@ static void emit_rep_string(int movs, int w, int shift) {
     }
     e_str(31, 28, R_OFF(RCX)); // rcx = 0 (str xzr); EFLAGS unchanged by movs/stos
     emit_reload();
-    // Lever #3: the emit_spill above cleared cpu->vdirty at RUNTIME, so the once-per-trace mark latch must
+    // the emit_spill above cleared cpu->vdirty at RUNTIME, so the once-per-trace mark latch must
     // reset -- a later xmm write in this same region has to re-mark or a following slim syscall exit would
     // skip the xmm save with host v0..v15 newer than cpu->V.
     g_vmark_done = 0;

@@ -1,4 +1,4 @@
-// os/linux/forkserver.c -- W3D: resident "ddjitd" fork-server, SHARED by both Linux engines (#369).
+// os/linux/forkserver.c -- W3D: resident "ddjitd" fork-server, SHARED by both Linux engines.
 //
 // WHY: per-launch wall is dominated by the irreducible per-process posix_spawn + dyld +
 // codesign-validation floor of the engine ITSELF (opt8 measured ~2 ms of a ~3-5 ms launch), paid on
@@ -8,7 +8,7 @@
 // warm launch skips spawn + dyld + engine init + ELF load + translation entirely -- only the guest
 // itself (and its container fd setup) is paid.
 //
-// HISTORY: this began as the x86-only translate/x86_64/forkserver.c (the W3D research diff). #369
+// HISTORY: this began as the x86-only translate/x86_64/forkserver.c (the W3D research diff).
 // ported it to aarch64 by hoisting it here, parameterized by the SAME per-target seam the x86 W3D
 // refactor already carved: container_init() / engine_global_init() / load_program() / run_loaded() /
 // dd_run(), all defined by the including target TU before this file. ONE implementation, two engines.
@@ -34,17 +34,17 @@
 // exit prints/hooks/codes are byte-identical. COW gives isolation: a runner's translations / data
 // writes never touch the parent or sibling workers.
 //
-// CODE-CACHE MODE (#371 preserved-arena fork): every runner calls jit_after_fork() (engine/cache.c)
+// CODE-CACHE MODE (preserved-arena fork): every runner calls jit_after_fork (engine/cache.c)
 // right after fork, exactly like a guest fork does (proc.c fork_child_hooks). The dual-mapped RW/RX
 // arena does NOT survive fork on its own -- the RX alias is VM_INHERIT_NONE (a hole in the child), and
 // even the MAP_JIT fallback's two aliases COW-split independently -- so an inherited/fresh translation
 // would execute stale/empty RX. jit_after_fork() re-remaps a fresh RX of the child's OWN COW RW pages
 // at the SAME VA, keeping the ENTIRE prewarmed arena + block maps valid (single-threaded parent: ~1us
 // preserve; threaded parent: conservative rebuild, child re-translates on demand). The fork-server thus
-// reuses the exact machinery #371 built for guest fork, instead of the old NODUALMAP single-mapping
+// reuses the exact machinery built for guest fork, instead of the old NODUALMAP single-mapping
 // hack the x86 research forkserver relied on -- warm workers keep the full dual map with no W^X toggle.
 //
-// PCACHE DISCIPLINE (#339 wave-2: fork children never save): every runner sets the never-save-from-
+// PCACHE DISCIPLINE (wave-2: fork children never save): every runner sets the never-save-from-
 // fork-child latch (g_pcache_forked) before running -- its COW arena is the parent's prewarm mix, and
 // persisting it under the request binary's identity would poison the cache. A guest execve inside the
 // runner re-keys + lifts the bar via pcache_exec_reload (aarch64), exactly like any other fork child.
@@ -95,10 +95,10 @@ static uint64_t loaded_span(const struct loaded *L) {
 #endif
 
 // ---- warm preload state (parent-side; inherited COW by every worker) ----
-static int g_warm_ready;                 // set once the parent has pre-loaded + pre-translated g_wprog
-static struct loaded g_wmain, g_winterp; // parent-loaded guest image (same base in every COW worker)
+static int g_warm_ready;                      // set once the parent has pre-loaded + pre-translated g_wprog
+static struct loaded g_wmain, g_winterp;      // parent-loaded guest image (same base in every COW worker)
 static uint64_t g_wmain_span, g_winterp_span; // mapped span of each (for the pristine snapshot/restore)
-static uint64_t g_wjump, g_wat_base;     // entry + AT_BASE for the warm re-run
+static uint64_t g_wjump, g_wat_base;          // entry + AT_BASE for the warm re-run
 static int g_whave_interp;
 static void *g_wsnap_main, *g_wsnap_interp; // pristine copies of the writable image (data+bss)
 static char g_wprog[1024];                  // the prewarmed program (warm path only fires on a match)
@@ -179,6 +179,7 @@ static int send_full(int sock, const void *buf, size_t n) {
     }
     return 0;
 }
+
 static int recv_full(int sock, void *buf, size_t n) {
     char *p = buf;
     while (n) {
@@ -238,9 +239,14 @@ static int unpack_strvec(const char *in, size_t len, size_t *o, char **v, int ma
 // ---- runner: the guest process (ONE fork off the resident server); never returns ----
 // The SERVER keeps the control conn: it reports the runner pid right after fork and the raw wait
 // status when kqueue (EVFILT_PROC NOTE_EXIT|NOTE_EXITSTATUS) reports the exit -- one fork per launch,
-// not a supervisor pair (fork of the engine's large address space is THE marginal cost; see #369).
+// not a supervisor pair (fork of the engine's large address space is THE marginal cost; see).
 #define FSRV_MAXLIVE 256
-static struct { pid_t pid; int conn; } g_fsrv_live[FSRV_MAXLIVE]; // in-flight launches (server-side)
+
+static struct {
+    pid_t pid;
+    int conn;
+} g_fsrv_live[FSRV_MAXLIVE]; // in-flight launches (server-side)
+
 static int g_fsrv_ls = -1, g_fsrv_kq = -1;
 
 static void ddjitd_runner(int conn, int *fds, int nfd, int argc, char **argv, char **envv, const char *cwd) {
@@ -273,19 +279,20 @@ static void ddjitd_runner(int conn, int *fds, int nfd, int argc, char **argv, ch
         envvec[ne] = envv[ne];
     envvec[ne] = NULL;
     environ = envvec;
-    if (cwd && cwd[0] && chdir(cwd) != 0) { /* client dir unreachable server-side: keep server cwd */ }
+    if (cwd && cwd[0] && chdir(cwd) != 0) { /* client dir unreachable server-side: keep server cwd */
+    }
     // W^X / APRR per-thread execute state is NOT reliably inherited across fork() on Apple Silicon
     // (see the proc.c fork path) -- re-assert RX so the first run_block can fetch executable code
     // (no-op under the dual map, which never toggles W^X).
     pthread_jit_write_protect_np(1);
-    // #371 preserved-arena fork: re-couple the dual map's RX alias to THIS child's COW RW pages at the
+    // preserved-arena fork: re-couple the dual map's RX alias to THIS child's COW RW pages at the
     // same VA (single-threaded parent: ~1us preserve; threaded parent: rebuild fresh), so the
     // COW-inherited warm arena + block maps stay valid and this runner executes real code instead of
     // stale/empty RX. Same hook a guest fork runs (proc.c fork_child_hooks); inheriting these warm
     // translations intact is the whole point of a warm worker. Also sheds the parent's thread registry
     // + reinits the engine locks a dead peer could have held (jit_after_fork).
     jit_after_fork();
-    // #339 wave-2 discipline: this process is a fork child on a COW copy of the PARENT's arena +
+    // wave-2 discipline: this process is a fork child on a COW copy of the PARENT's arena +
     // recording state -- it must NEVER pcache_save under the request binary's identity. A guest
     // execve re-keys + lifts the bar (pcache_exec_reload), same as any other fork child.
     g_pcache_forked = 1;
@@ -305,7 +312,10 @@ static void ddjitd_runner(int conn, int *fds, int nfd, int argc, char **argv, ch
         if (icwd && icwd[0]) confine(icwd, g_cwd, sizeof g_cwd);
         if (getenv("DDJITD_DIAG")) {
             FILE *df = fopen("/tmp/ddjitd-worker.log", "a");
-            if (df) { fprintf(df, "runner pid=%d WARM %s\n", (int)getpid(), argv[0]); fclose(df); }
+            if (df) {
+                fprintf(df, "runner pid=%d WARM %s\n", (int)getpid(), argv[0]);
+                fclose(df);
+            }
         }
         _exit(run_loaded(argc, argv, &g_wmain, g_wjump, g_wat_base));
     }
@@ -320,13 +330,17 @@ static void ddjitd_runner(int conn, int *fds, int nfd, int argc, char **argv, ch
     if (g_warm_ready) setenv("DDJIT_NOPCACHE", "1", 1);
     if (getenv("DDJITD_DIAG")) {
         FILE *df = fopen("/tmp/ddjitd-worker.log", "a");
-        if (df) { fprintf(df, "runner pid=%d COLD %s\n", (int)getpid(), argv[0]); fclose(df); }
+        if (df) {
+            fprintf(df, "runner pid=%d COLD %s\n", (int)getpid(), argv[0]);
+            fclose(df);
+        }
     }
     _exit(dd_run(g_srv_rootfs[0] ? g_srv_rootfs : NULL, argc, argv));
 }
 
 // ---- server ----
 static volatile sig_atomic_t g_srv_stop;
+
 static void srv_sigint(int s) {
     (void)s;
     g_srv_stop = 1;
@@ -335,9 +349,12 @@ static void srv_sigint(int s) {
 static int ddjitd_server_main(int argc, char **argv) {
     const char *sock = NULL, *rootfs = NULL, *prewarm = NULL;
     for (int i = 1; i < argc; i++) {
-        if (strcmp(argv[i], "--server") == 0 && i + 1 < argc) sock = argv[++i];
-        else if (strcmp(argv[i], "--rootfs") == 0 && i + 1 < argc) rootfs = argv[++i];
-        else if (strcmp(argv[i], "--prewarm") == 0 && i + 1 < argc) prewarm = argv[++i];
+        if (strcmp(argv[i], "--server") == 0 && i + 1 < argc)
+            sock = argv[++i];
+        else if (strcmp(argv[i], "--rootfs") == 0 && i + 1 < argc)
+            rootfs = argv[++i];
+        else if (strcmp(argv[i], "--prewarm") == 0 && i + 1 < argc)
+            prewarm = argv[++i];
     }
     if (!sock) {
         fprintf(stderr, "usage: ddjit --server SOCK [--rootfs DIR] [--prewarm PROG]\n");
@@ -345,7 +362,7 @@ static int ddjitd_server_main(int argc, char **argv) {
     }
     if (rootfs) snprintf(g_srv_rootfs, sizeof g_srv_rootfs, "%s", rootfs);
 
-    // #371: keep the default dual-mapped RW/RX arena. It doesn't survive fork on its own, but every
+    // keep the default dual-mapped RW/RX arena. It doesn't survive fork on its own, but every
     // runner re-couples it via jit_after_fork() (see ddjitd_runner) -- the same preserved-arena hook a
     // guest fork uses -- so we get the fast no-W^X-toggle dual map AND correct COW inheritance, without
     // the old NODUALMAP single-mapping hack the x86 research forkserver needed.
@@ -563,7 +580,8 @@ static int ddjitd_server_main(int argc, char **argv) {
                 }
         if (wac < 1 || slot < 0) { // malformed request, or at capacity
             close(conn);
-            for (int i = 0; i < nfd; i++) close(fds[i]);
+            for (int i = 0; i < nfd; i++)
+                close(fds[i]);
             continue;
         }
         pid_t pid = fork();
@@ -604,6 +622,7 @@ static int ddjitd_server_main(int argc, char **argv) {
 
 // ---- client ----
 static volatile pid_t g_fwd_pid; // the remote runner; forward received signals to it
+
 static void fwd_sig(int s) {
     pid_t p = g_fwd_pid;
     if (p > 0) kill(p, s);

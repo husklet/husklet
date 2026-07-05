@@ -46,6 +46,7 @@ static uint64_t g_smc_pg[SMC_MAX];
 static int g_smc_n;
 static uint64_t g_smc_flushes; // PROF: number of SMC re-translate events
 static int g_nosmc = -1;
+
 static void smc_protect(uint64_t pc) {
     if (!g_rwx_guest) return; // no JIT guest -> inert (matrix bit-exact)
     if (g_nosmc < 0) g_nosmc = (getenv("NOSMC") != NULL);
@@ -56,6 +57,7 @@ static void smc_protect(uint64_t pc) {
     if (mprotect((void *)pg, 0x4000, PROT_READ) != 0) return; // code page -> read-only; writes trap
     if (g_smc_n < SMC_MAX) g_smc_pg[g_smc_n++] = pg;
 }
+
 // If `a` falls in a protected SMC page, unprotect+forget it and return 1 (caller drops translations).
 // Re-protected the next time the page is translated. Called from jit86_lazyguard (elf.c).
 static int smc_on_write(uint64_t a) {
@@ -70,6 +72,7 @@ static int smc_on_write(uint64_t a) {
         }
     return 0;
 }
+
 // ------------------------------------------------------------------------------------------------------
 
 // x86 keeps its own naked trampolines (frontend/x86_64/translate.c: cpu pinned in x28, 16-GPR model,
@@ -95,7 +98,7 @@ static int smc_on_write(uint64_t a) {
         g_curpc = (c)->rip;                                                                                            \
         g_disp_n++;                                                                                                    \
         if (g_trace && g_tracecap && g_disp_n > g_tracecap) { /* bound trace output for runaway guests */              \
-            fprintf(stderr, "[dd] trace cap %llu blocks reached -> stop\n", (unsigned long long)g_tracecap);        \
+            fprintf(stderr, "[dd] trace cap %llu blocks reached -> stop\n", (unsigned long long)g_tracecap);           \
             (c)->exited = 1;                                                                                           \
             (c)->exit_code = 99;                                                                                       \
             break;                                                                                                     \
@@ -208,7 +211,7 @@ static int smc_on_write(uint64_t a) {
 // tail line never re-fires for x86). Verbatim from frontend/x86_64/dispatch.c. `break` exits the loop.
 #define G_DISPATCH_REASON(c)                                                                                           \
     if ((c)->reason == 99) {                                                                                           \
-        fprintf(stderr, "[dd] aborting at rip marker %llx (unimplemented opcode)\n", (unsigned long long)(c)->rip); \
+        fprintf(stderr, "[dd] aborting at rip marker %llx (unimplemented opcode)\n", (unsigned long long)(c)->rip);    \
         if (g_trace) {                                                                                                 \
             for (int rr = 0; rr < 16; rr++) { /* dump heap-pointer regs (meta etc.) */                                 \
                 uint64_t v = (c)->r[rr];                                                                               \
@@ -253,25 +256,25 @@ static int smc_on_write(uint64_t a) {
         continue;                                                                                                      \
     } /* fstp m80 */                                                                                                   \
     if ((c)->reason == R_X87FUNC) {                                                                                    \
-        x87_func(c);                                                                                                  \
+        x87_func(c);                                                                                                   \
         continue;                                                                                                      \
     } /* x87 transcendental (rip already = next) */                                                                    \
     if ((c)->reason == R_RCL) { /* RCL/RCR by CL: rotate-through-carry in C (rip already = next) */                    \
         do_rcl(c);                                                                                                     \
         continue;                                                                                                      \
-    }                                                                    \
+    }                                                                                                                  \
     if ((c)->reason == R_DIV) { /* 128/64 unsigned div (rip already = next) */                                         \
         uint64_t d = (c)->divop;                                                                                       \
         if (d == 0) {                                                                                                  \
             if (raise_guest_de(c)) continue; /* #DE -> guest SIGFPE handler (queued; delivered at loop top) */         \
-            fprintf(stderr, "[dd] #DE divide-by-zero\n");                                                           \
+            fprintf(stderr, "[dd] #DE divide-by-zero\n");                                                              \
             (c)->exited = 1;                                                                                           \
             (c)->exit_code = 136;                                                                                      \
             break;                                                                                                     \
         }                                                                                                              \
-        if ((c)->r[RDX] >= d) { /* quotient overflow (high half >= divisor): x86 #DE, same as /0 */          \
-            if (raise_guest_de(c)) continue;                                                                            \
-            fprintf(stderr, "[dd] #DE divide overflow\n");                                                           \
+        if ((c)->r[RDX] >= d) { /* quotient overflow (high half >= divisor): x86 #DE, same as /0 */                    \
+            if (raise_guest_de(c)) continue;                                                                           \
+            fprintf(stderr, "[dd] #DE divide overflow\n");                                                             \
             (c)->exited = 1;                                                                                           \
             (c)->exit_code = 136;                                                                                      \
             break;                                                                                                     \
@@ -285,16 +288,16 @@ static int smc_on_write(uint64_t a) {
         int64_t d = (int64_t)(c)->divop;                                                                               \
         if (d == 0) {                                                                                                  \
             if (raise_guest_de(c)) continue; /* #DE -> guest SIGFPE handler (queued; delivered at loop top) */         \
-            fprintf(stderr, "[dd] #DE divide-by-zero\n");                                                           \
+            fprintf(stderr, "[dd] #DE divide-by-zero\n");                                                              \
             (c)->exited = 1;                                                                                           \
             (c)->exit_code = 136;                                                                                      \
             break;                                                                                                     \
         }                                                                                                              \
         __int128 num = ((__int128)(int64_t)(c)->r[RDX] << 64) | (c)->r[RAX];                                           \
         __int128 q = num / d;                                                                                          \
-        if ((__int128)(int64_t)q != q) { /* quotient doesn't fit int64 (incl. INT_MIN/-1): x86 #DE */ \
-            if (raise_guest_de(c)) continue;                                                                            \
-            fprintf(stderr, "[dd] #DE divide overflow\n");                                                           \
+        if ((__int128)(int64_t)q != q) { /* quotient doesn't fit int64 (incl. INT_MIN/-1): x86 #DE */                  \
+            if (raise_guest_de(c)) continue;                                                                           \
+            fprintf(stderr, "[dd] #DE divide overflow\n");                                                             \
             (c)->exited = 1;                                                                                           \
             (c)->exit_code = 136;                                                                                      \
             break;                                                                                                     \

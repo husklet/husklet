@@ -1,4 +1,4 @@
-// os/linux/syscall/ptrace.c -- real ptrace(2) support for dd (bug #238). Included by dispatch.c AFTER the
+// os/linux/syscall/ptrace.c -- real ptrace(2) support for dd. Included by dispatch.c AFTER the
 // svc_* family + local helpers; the shared arena struct (struct pt_arena/pt_link) + the hook forward
 // declarations live at the top of dispatch.c (before the family includes so mem.c/proc.c/rare.c can call
 // them). See that header block for the architecture rationale. Summary:
@@ -39,39 +39,85 @@
 
 // ---- ptrace request numbers (identical on x86-64 and aarch64 Linux) ----
 enum {
-    PTRACE_TRACEME = 0, PTRACE_PEEKTEXT = 1, PTRACE_PEEKDATA = 2, PTRACE_PEEKUSER = 3,
-    PTRACE_POKETEXT = 4, PTRACE_POKEDATA = 5, PTRACE_POKEUSER = 6, PTRACE_CONT = 7,
-    PTRACE_KILL = 8, PTRACE_SINGLESTEP = 9, PTRACE_GETREGS = 12, PTRACE_SETREGS = 13,
-    PTRACE_GETFPREGS = 14, PTRACE_SETFPREGS = 15, PTRACE_ATTACH = 16, PTRACE_DETACH = 17,
-    PTRACE_SYSCALL = 24, PTRACE_SETOPTIONS = 0x4200, PTRACE_GETEVENTMSG = 0x4201,
-    PTRACE_GETSIGINFO = 0x4202, PTRACE_SETSIGINFO = 0x4203, PTRACE_GETREGSET = 0x4204,
-    PTRACE_SETREGSET = 0x4205, PTRACE_SEIZE = 0x4206, PTRACE_INTERRUPT = 0x4207, PTRACE_LISTEN = 0x4208,
+    PTRACE_TRACEME = 0,
+    PTRACE_PEEKTEXT = 1,
+    PTRACE_PEEKDATA = 2,
+    PTRACE_PEEKUSER = 3,
+    PTRACE_POKETEXT = 4,
+    PTRACE_POKEDATA = 5,
+    PTRACE_POKEUSER = 6,
+    PTRACE_CONT = 7,
+    PTRACE_KILL = 8,
+    PTRACE_SINGLESTEP = 9,
+    PTRACE_GETREGS = 12,
+    PTRACE_SETREGS = 13,
+    PTRACE_GETFPREGS = 14,
+    PTRACE_SETFPREGS = 15,
+    PTRACE_ATTACH = 16,
+    PTRACE_DETACH = 17,
+    PTRACE_SYSCALL = 24,
+    PTRACE_SETOPTIONS = 0x4200,
+    PTRACE_GETEVENTMSG = 0x4201,
+    PTRACE_GETSIGINFO = 0x4202,
+    PTRACE_SETSIGINFO = 0x4203,
+    PTRACE_GETREGSET = 0x4204,
+    PTRACE_SETREGSET = 0x4205,
+    PTRACE_SEIZE = 0x4206,
+    PTRACE_INTERRUPT = 0x4207,
+    PTRACE_LISTEN = 0x4208,
 };
+
 // ---- SETOPTIONS bits ----
 enum {
-    PT_O_TRACESYSGOOD = 0x01, PT_O_TRACEFORK = 0x02, PT_O_TRACEVFORK = 0x04, PT_O_TRACECLONE = 0x08,
-    PT_O_TRACEEXEC = 0x10, PT_O_TRACEVFORKDONE = 0x20, PT_O_TRACEEXIT = 0x40, PT_O_TRACESECCOMP = 0x80,
+    PT_O_TRACESYSGOOD = 0x01,
+    PT_O_TRACEFORK = 0x02,
+    PT_O_TRACEVFORK = 0x04,
+    PT_O_TRACECLONE = 0x08,
+    PT_O_TRACEEXEC = 0x10,
+    PT_O_TRACEVFORKDONE = 0x20,
+    PT_O_TRACEEXIT = 0x40,
+    PT_O_TRACESECCOMP = 0x80,
     PT_O_EXITKILL = 0x100,
 };
+
 // ---- PTRACE_EVENT_* ----
-enum { PTEV_FORK = 1, PTEV_VFORK = 2, PTEV_CLONE = 3, PTEV_EXEC = 4, PTEV_VFORK_DONE = 5, PTEV_EXIT = 6, PTEV_STOP = 128 };
+enum {
+    PTEV_FORK = 1,
+    PTEV_VFORK = 2,
+    PTEV_CLONE = 3,
+    PTEV_EXEC = 4,
+    PTEV_VFORK_DONE = 5,
+    PTEV_EXIT = 6,
+    PTEV_STOP = 128
+};
+
 // ---- resume commands ----
 enum { PTC_NONE = 0, PTC_CONT = 1, PTC_SYSCALL = 2, PTC_SINGLESTEP = 3, PTC_DETACH = 4, PTC_KILL = 5, PTC_LISTEN = 6 };
+
 // ---- stop kinds ----
 enum { PTS_NONE = 0, PTS_SYSCALL_ENTRY = 1, PTS_SYSCALL_EXIT = 2, PTS_SIGNAL = 3, PTS_GROUP = 4, PTS_EXEC = 5 };
+
 #define NT_PRSTATUS_ 1
 
 // x86 vs aarch64 discriminant (matches the idiom os/linux/signal.c uses): x86-64 O_DIRECTORY == 0x10000.
 #if G_O_DIRECTORY == 0x10000
 #define PT_X86 1
 #define PT_RAWNR(c) ((uint64_t)(c)->r[0]) // x86-64 syscall nr = rax (pre-normalization)
-static int pt_is_execve(uint64_t nr) { return nr == 59 || nr == 322; }
+
+static int pt_is_execve(uint64_t nr) {
+    return nr == 59 || nr == 322;
+}
+
 #define PT_REGWORDS 27
 #define PT_REGBYTES (PT_REGWORDS * 8)
 #else
 #define PT_X86 0
 #define PT_RAWNR(c) ((uint64_t)(c)->x[8]) // aarch64 syscall nr = x8
-static int pt_is_execve(uint64_t nr) { return nr == 221 || nr == 281; }
+
+static int pt_is_execve(uint64_t nr) {
+    return nr == 221 || nr == 281;
+}
+
 #define PT_REGWORDS 34
 #define PT_REGBYTES (PT_REGWORDS * 8)
 #endif
@@ -80,21 +126,34 @@ static void pt_usleep(long us) {
     struct timespec t = {us / 1000000, (us % 1000000) * 1000};
     nanosleep(&t, NULL);
 }
+
 // guest pid for a host pid (container init's host pid shows through as guest pid 1)
-static int pt_gpid(int hostpid) { return (g_init_hostpid && hostpid == g_init_hostpid) ? 1 : hostpid; }
+static int pt_gpid(int hostpid) {
+    return (g_init_hostpid && hostpid == g_init_hostpid) ? 1 : hostpid;
+}
+
 // host pid for a guest pid (inverse; used to kill(2)/existence-check the target host process)
-static int pt_hostpid(int gpid) { return (gpid == 1 && g_init_hostpid) ? g_init_hostpid : gpid; }
+static int pt_hostpid(int gpid) {
+    return (gpid == 1 && g_init_hostpid) ? g_init_hostpid : gpid;
+}
 
 static void pt_lock(void) {
-    while (__atomic_exchange_n(&g_pt->lock, 1, __ATOMIC_ACQUIRE)) pt_usleep(20);
+    while (__atomic_exchange_n(&g_pt->lock, 1, __ATOMIC_ACQUIRE))
+        pt_usleep(20);
 }
-static void pt_unlock(void) { __atomic_store_n(&g_pt->lock, 0, __ATOMIC_RELEASE); }
+
+static void pt_unlock(void) {
+    __atomic_store_n(&g_pt->lock, 0, __ATOMIC_RELEASE);
+}
 
 // mmap the shared arena ONCE, before any guest fork (called from engine_global_init in each target).
 static void ptrace_arena_init(void) {
     if (g_pt) return;
     void *p = mmap(NULL, sizeof(struct pt_arena), PROT_READ | PROT_WRITE, MAP_SHARED | MAP_ANON, -1, 0);
-    if (p == MAP_FAILED) { g_pt = NULL; return; } // ptrace unavailable -> requests EPERM/ESRCH, never crash
+    if (p == MAP_FAILED) {
+        g_pt = NULL;
+        return;
+    } // ptrace unavailable -> requests EPERM/ESRCH, never crash
     memset(p, 0, sizeof(struct pt_arena));
     g_pt = (struct pt_arena *)p;
 }
@@ -103,6 +162,7 @@ static void ptrace_arena_init(void) {
 static uint64_t g_pt_seen_gen = ~0ull;
 static int g_pt_self_pid = -1;
 static struct pt_link *g_pt_self;
+
 static struct pt_link *ptrace_lookup_self(void) {
     if (!g_pt || __atomic_load_n(&g_pt->nactive, __ATOMIC_RELAXED) == 0) return NULL;
     int me = container_pid();
@@ -113,10 +173,14 @@ static struct pt_link *ptrace_lookup_self(void) {
     g_pt_self = NULL;
     for (int i = 0; i < PT_MAXLINK; i++) {
         struct pt_link *L = &g_pt->link[i];
-        if (L->used && L->attached && L->tracee_pid == me) { g_pt_self = L; break; }
+        if (L->used && L->attached && L->tracee_pid == me) {
+            g_pt_self = L;
+            break;
+        }
     }
     return g_pt_self;
 }
+
 // find the link tracer `me` holds for tracee `tpid` (NULL if none)
 static struct pt_link *pt_find_tracee(int me, int tpid) {
     if (!g_pt) return NULL;
@@ -126,11 +190,15 @@ static struct pt_link *pt_find_tracee(int me, int tpid) {
     }
     return NULL;
 }
+
 static struct pt_link *pt_alloc(int tracer, int tracee) {
     pt_lock();
     struct pt_link *L = NULL;
     for (int i = 0; i < PT_MAXLINK; i++)
-        if (!g_pt->link[i].used) { L = &g_pt->link[i]; break; }
+        if (!g_pt->link[i].used) {
+            L = &g_pt->link[i];
+            break;
+        }
     if (L) {
         memset(L, 0, sizeof *L);
         L->used = 1;
@@ -142,10 +210,13 @@ static struct pt_link *pt_alloc(int tracer, int tracee) {
     pt_unlock();
     return L;
 }
+
 // Is ptrace in use anywhere in this session? Gates ALL wait4 ptrace routing. 0 for the whole non-ptrace
 // matrix -> wait4 runs its original host-wait4 path byte-identically (no handler armed, no restructure, no
 // spurious EINTR). Only when a tracee link exists (nactive > 0) does the tracer's wait4 use the ptrace pump.
-static int ptrace_wait_active(void) { return g_pt && __atomic_load_n(&g_pt->nactive, __ATOMIC_RELAXED) > 0; }
+static int ptrace_wait_active(void) {
+    return g_pt && __atomic_load_n(&g_pt->nactive, __ATOMIC_RELAXED) > 0;
+}
 
 // Notify a tracer that its tracee changed ptrace-stop state (mirrors Linux SIGCHLD-to-tracer). Wakes a
 // tracer blocked in a plain host wait4 / nanosleep so it observes the stop. It is a real cross-process
@@ -156,7 +227,7 @@ static void pt_notify_tracer(struct pt_link *L) {
     if (hp > 0 && hp != getpid()) kill(hp, SIGCHLD);
 }
 
-// #238 tracer-wait race, scoped-and-transparent SIGCHLD wake. The classic strace ordering is: parent
+// tracer-wait race, scoped-and-transparent SIGCHLD wake. The classic strace ordering is: parent
 // forks, then waitpid()s and BLOCKS in a plain host wait4 -- BEFORE the child runs PTRACE_TRACEME (so at
 // wait entry the parent is not yet a tracer and nactive is 0). When the child then traces itself and
 // stops, its stop must interrupt the parent's already-blocked wait4. We arm a benign SIGCHLD handler
@@ -167,7 +238,10 @@ static void pt_notify_tracer(struct pt_link *L) {
 // guest's waitpid never returns a spurious EINTR (the do/while retries internally). A guest that never
 // calls wait4 (e.g. the pipe-eof case) is never armed at all. The handler does nothing but exist (so
 // wait4 EINTRs); it sets no pending bit -> no phantom signal reaches the guest.
-static void pt_wait_wake_h(int s) { (void)s; }
+static void pt_wait_wake_h(int s) {
+    (void)s;
+}
+
 static int pt_wait_arm(struct sigaction *saved) {
     if (!g_pt) return 0;
     // Arm ONLY when the guest's SIGCHLD disposition is SIG_DFL (0). A guest custom handler (>1) already
@@ -181,9 +255,11 @@ static int pt_wait_arm(struct sigaction *saved) {
     if (sigaction(SIGCHLD, &sa, saved) != 0) return 0;
     return 1;
 }
+
 static void pt_wait_disarm(int armed, const struct sigaction *saved) {
     if (armed) sigaction(SIGCHLD, saved, NULL); // restore the prior disposition (default, or none)
 }
+
 static void pt_free(struct pt_link *L) {
     pt_lock();
     if (L->used) {
@@ -200,33 +276,80 @@ static void ptrace_publish_regs(struct cpu *c, struct pt_link *L, uint64_t orig_
     uint64_t g[PT_REGWORDS];
 #if PT_X86
     const uint64_t *R = c->r; // rax,rcx,rdx,rbx,rsp,rbp,rsi,rdi,r8..r15
-    g[0] = R[15]; g[1] = R[14]; g[2] = R[13]; g[3] = R[12]; g[4] = R[5]; g[5] = R[3];
-    g[6] = R[11]; g[7] = R[10]; g[8] = R[9]; g[9] = R[8]; g[10] = R[0]; g[11] = R[1];
-    g[12] = R[2]; g[13] = R[6]; g[14] = R[7]; g[15] = orig_nr;            // orig_rax
-    g[16] = c->rip; g[17] = 0x33; g[18] = nzcv_to_eflags(c->nzcv); g[19] = R[4];
-    g[20] = 0x2b; g[21] = c->fs_base; g[22] = c->gs_base; g[23] = 0; g[24] = 0; g[25] = 0; g[26] = 0;
+    g[0] = R[15];
+    g[1] = R[14];
+    g[2] = R[13];
+    g[3] = R[12];
+    g[4] = R[5];
+    g[5] = R[3];
+    g[6] = R[11];
+    g[7] = R[10];
+    g[8] = R[9];
+    g[9] = R[8];
+    g[10] = R[0];
+    g[11] = R[1];
+    g[12] = R[2];
+    g[13] = R[6];
+    g[14] = R[7];
+    g[15] = orig_nr; // orig_rax
+    g[16] = c->rip;
+    g[17] = 0x33;
+    g[18] = nzcv_to_eflags(c->nzcv);
+    g[19] = R[4];
+    g[20] = 0x2b;
+    g[21] = c->fs_base;
+    g[22] = c->gs_base;
+    g[23] = 0;
+    g[24] = 0;
+    g[25] = 0;
+    g[26] = 0;
     L->arch = 0;
 #else
     (void)orig_nr;
-    for (int i = 0; i < 31; i++) g[i] = c->x[i];
-    g[31] = c->sp; g[32] = c->pc; g[33] = c->nzcv; // regs[31]=sp, regs[32]=pc, regs[33]=pstate
+    for (int i = 0; i < 31; i++)
+        g[i] = c->x[i];
+    g[31] = c->sp;
+    g[32] = c->pc;
+    g[33] = c->nzcv; // regs[31]=sp, regs[32]=pc, regs[33]=pstate
     L->arch = 1;
 #endif
-    for (int i = 0; i < PT_REGWORDS; i++) L->regs[i] = g[i];
+    for (int i = 0; i < PT_REGWORDS; i++)
+        L->regs[i] = g[i];
     L->reglen = PT_REGBYTES;
 }
+
 static void ptrace_apply_regs(struct cpu *c, struct pt_link *L) {
     uint64_t g[PT_REGWORDS];
-    for (int i = 0; i < PT_REGWORDS; i++) g[i] = L->regs[i];
+    for (int i = 0; i < PT_REGWORDS; i++)
+        g[i] = L->regs[i];
 #if PT_X86
     uint64_t *R = c->r;
-    R[15] = g[0]; R[14] = g[1]; R[13] = g[2]; R[12] = g[3]; R[5] = g[4]; R[3] = g[5];
-    R[11] = g[6]; R[10] = g[7]; R[9] = g[8]; R[8] = g[9]; R[0] = g[10]; R[1] = g[11];
-    R[2] = g[12]; R[6] = g[13]; R[7] = g[14]; c->rip = g[16]; c->nzcv = eflags_to_nzcv(g[18]);
-    R[4] = g[19]; c->fs_base = g[21]; c->gs_base = g[22];
+    R[15] = g[0];
+    R[14] = g[1];
+    R[13] = g[2];
+    R[12] = g[3];
+    R[5] = g[4];
+    R[3] = g[5];
+    R[11] = g[6];
+    R[10] = g[7];
+    R[9] = g[8];
+    R[8] = g[9];
+    R[0] = g[10];
+    R[1] = g[11];
+    R[2] = g[12];
+    R[6] = g[13];
+    R[7] = g[14];
+    c->rip = g[16];
+    c->nzcv = eflags_to_nzcv(g[18]);
+    R[4] = g[19];
+    c->fs_base = g[21];
+    c->gs_base = g[22];
 #else
-    for (int i = 0; i < 31; i++) c->x[i] = g[i];
-    c->sp = g[31]; c->pc = g[32]; c->nzcv = g[33];
+    for (int i = 0; i < 31; i++)
+        c->x[i] = g[i];
+    c->sp = g[31];
+    c->pc = g[32];
+    c->nzcv = g[33];
 #endif
 }
 
@@ -238,15 +361,20 @@ static void ptrace_service_mem(struct pt_link *L) {
     if (len > PT_MEMBUF) len = PT_MEMBUF;
     int err = 0;
     if (L->mem_dir == 1) { // read: tracee copies its own guest memory into the shared buffer
-        if (host_range_mapped((uintptr_t)addr, (size_t)len)) memcpy((void *)L->mem_buf, (void *)(uintptr_t)addr, len);
-        else err = EIO;
+        if (host_range_mapped((uintptr_t)addr, (size_t)len))
+            memcpy((void *)L->mem_buf, (void *)(uintptr_t)addr, len);
+        else
+            err = EIO;
     } else if (L->mem_dir == 2) { // write
-        if (host_range_mapped((uintptr_t)addr, (size_t)len)) memcpy((void *)(uintptr_t)addr, (void *)L->mem_buf, len);
-        else err = EIO;
+        if (host_range_mapped((uintptr_t)addr, (size_t)len))
+            memcpy((void *)(uintptr_t)addr, (void *)L->mem_buf, len);
+        else
+            err = EIO;
     }
     L->mem_err = err;
     __atomic_store_n(&L->mem_ack, s, __ATOMIC_RELEASE);
 }
+
 // tracer-side one-chunk memory transfer against a stopped tracee (<= PT_MEMBUF bytes)
 static int pt_mem_chunk(struct pt_link *L, uint64_t addr, uint8_t *buf, uint64_t len, int is_write) {
     if (len > PT_MEMBUF) len = PT_MEMBUF;
@@ -267,6 +395,7 @@ static int pt_mem_chunk(struct pt_link *L, uint64_t addr, uint8_t *buf, uint64_t
     }
     return -EIO;
 }
+
 static long pt_mem_xfer(struct pt_link *L, uint64_t addr, uint8_t *buf, uint64_t len, int is_write) {
     uint64_t done = 0;
     while (done < len) {
@@ -289,7 +418,7 @@ static int ptrace_stop(struct cpu *c, struct pt_link *L, int kind, int status, i
     L->eventmsg = emsg;
     L->waitstatus = status;
     memset((void *)L->siginfo, 0, 128);
-    *(int *)(L->siginfo + 0) = sig > 0 ? sig : 5;                          // si_signo
+    *(int *)(L->siginfo + 0) = sig > 0 ? sig : 5;                                                  // si_signo
     *(int *)(L->siginfo + 8) = (kind == PTS_SYSCALL_ENTRY || kind == PTS_SYSCALL_EXIT) ? 0x85 : 0; // si_code hint
     __atomic_store_n(&L->reported, 0, __ATOMIC_SEQ_CST);
     __atomic_store_n(&L->stopstate, 1, __ATOMIC_SEQ_CST); // publish STOPPED after regs/status are set
@@ -303,16 +432,30 @@ static int ptrace_stop(struct cpu *c, struct pt_link *L, int kind, int status, i
             L->ack_seq = cs;
             if (cmd) break;
         }
-        if (!L->used || !L->attached) { cmd = PTC_DETACH; break; }
-        if (__atomic_load_n(&c->exited, __ATOMIC_SEQ_CST)) { cmd = PTC_KILL; break; }
+        if (!L->used || !L->attached) {
+            cmd = PTC_DETACH;
+            break;
+        }
+        if (__atomic_load_n(&c->exited, __ATOMIC_SEQ_CST)) {
+            cmd = PTC_KILL;
+            break;
+        }
         pt_usleep(120);
     }
-    if (L->regs_dirty) { ptrace_apply_regs(c, L); L->regs_dirty = 0; }
+    if (L->regs_dirty) {
+        ptrace_apply_regs(c, L);
+        L->regs_dirty = 0;
+    }
     __atomic_store_n(&L->stopstate, 0, __ATOMIC_SEQ_CST);
-    if (cmd == PTC_SYSCALL) L->syscall_mode = 1;
-    else if (cmd == PTC_CONT || cmd == PTC_SINGLESTEP || cmd == PTC_LISTEN) L->syscall_mode = 0;
+    if (cmd == PTC_SYSCALL)
+        L->syscall_mode = 1;
+    else if (cmd == PTC_CONT || cmd == PTC_SINGLESTEP || cmd == PTC_LISTEN)
+        L->syscall_mode = 0;
     if (cmd == PTC_DETACH) L->attached = 0;
-    if (cmd == PTC_KILL) { c->exited = 1; if (c->exit_code == 0) c->exit_code = 128 + 9; }
+    if (cmd == PTC_KILL) {
+        c->exited = 1;
+        if (c->exit_code == 0) c->exit_code = 128 + 9;
+    }
     return cmd;
 }
 
@@ -323,13 +466,20 @@ static int ptrace_intercept_signal(struct cpu *c, int sig, int *out_sig) {
     struct pt_link *L = ptrace_lookup_self();
     if (!L) return 0;
     if (sig == 9) return 0; // SIGKILL is not stoppable
-    if (L->inject_pass == sig) { L->inject_pass = 0; return 0; } // a just-injected signal: deliver once
+    if (L->inject_pass == sig) {
+        L->inject_pass = 0;
+        return 0;
+    } // a just-injected signal: deliver once
     int grp = (sig == 19 || sig == 20 || sig == 21 || sig == 22); // SIGSTOP/TSTP/TTIN/TTOU -> group-stop
     ptrace_publish_regs(c, L, PT_RAWNR(c));
     ptrace_stop(c, L, grp ? PTS_GROUP : PTS_SIGNAL, (sig << 8) | 0x7f, sig, 0, 0);
     int inj = L->cmd_sig;
     L->cmd_sig = 0;
-    if (inj > 0) { L->inject_pass = inj; *out_sig = inj; return 1; } // deliver the tracer's signal, no re-trap
+    if (inj > 0) {
+        L->inject_pass = inj;
+        *out_sig = inj;
+        return 1;
+    } // deliver the tracer's signal, no re-trap
     *out_sig = 0;
     return 1; // suppressed
 }
@@ -337,14 +487,20 @@ static int ptrace_intercept_signal(struct cpu *c, int sig, int *out_sig) {
 // ---- the traced-process syscall dispatcher (replaces service_local when g_pt->nactive > 0) ----
 static void ptrace_service_traced(struct cpu *c) {
     struct pt_link *L = ptrace_lookup_self();
-    if (!L) { service_local(c); return; } // someone else is traced, not us
+    if (!L) {
+        service_local(c);
+        return;
+    } // someone else is traced, not us
     uint64_t rawnr = PT_RAWNR(c);
     // ATTACH/SEIZE/INTERRUPT initial stop: report a group-stop (SIGSTOP) at the next syscall boundary.
     if (L->pending_attach_stop) {
         L->pending_attach_stop = 0;
         ptrace_publish_regs(c, L, rawnr);
         ptrace_stop(c, L, PTS_GROUP, (19 << 8) | 0x7f, 19, 0, 0);
-        if (!L->attached) { service_local(c); return; }
+        if (!L->attached) {
+            service_local(c);
+            return;
+        }
     }
     // syscall-ENTRY stop (only when the tracer armed PTRACE_SYSCALL)
     if (L->syscall_mode) {
@@ -358,7 +514,8 @@ static void ptrace_service_traced(struct cpu *c) {
     if (pt_is_execve(rawnr) && c->redirect) {
         ptrace_publish_regs(c, L, rawnr);
         if (L->options & PT_O_TRACEEXEC)
-            ptrace_stop(c, L, PTS_EXEC, ((((PTEV_EXEC) << 8) | 5) << 8) | 0x7f, 5, PTEV_EXEC, (unsigned long)L->tracee_pid);
+            ptrace_stop(c, L, PTS_EXEC, ((((PTEV_EXEC) << 8) | 5) << 8) | 0x7f, 5, PTEV_EXEC,
+                        (unsigned long)L->tracee_pid);
         else
             ptrace_stop(c, L, PTS_EXEC, (5 << 8) | 0x7f, 5, 0, 0);
         return;
@@ -379,8 +536,11 @@ static int ptrace_any_tracee_of_self(void) {
         if (g_pt->link[i].used && g_pt->link[i].tracer_pid == me) return 1;
     return 0;
 }
+
 // wait filter: Linux wait4 pid arg -- <-1 pgid, -1 any, 0 own pgrp, >0 exact.
-static int pt_wait_match(int wpid, int tracee) { return wpid == -1 || wpid == 0 || wpid == tracee; }
+static int pt_wait_match(int wpid, int tracee) {
+    return wpid == -1 || wpid == 0 || wpid == tracee;
+}
 
 // The tracer's wait4 pump. Returns 1 iff it produced a result (*out = pid or -errno, *status Linux-encoded).
 static int ptrace_wait(struct cpu *c, pid_t wpid, int opts, struct rusage *ru, int *status, pid_t *out) {
@@ -404,8 +564,10 @@ static int ptrace_wait(struct cpu *c, pid_t wpid, int opts, struct rusage *ru, i
         pid_t r = wait4((pid_t)wpid, &st, opts | WNOHANG, ru);
         if (r > 0) {
             // translate macOS status -> Linux (same as the plain wait4 path in proc.c)
-            if ((st & 0x7f) != 0 && (st & 0x7f) != 0x7f) st = (st & ~0x7f) | (sig_m2l(st & 0x7f) & 0x7f);
-            else if ((st & 0xff) == 0x7f) st = (st & ~0xff00) | ((sig_m2l((st >> 8) & 0xff) & 0xff) << 8);
+            if ((st & 0x7f) != 0 && (st & 0x7f) != 0x7f)
+                st = (st & ~0x7f) | (sig_m2l(st & 0x7f) & 0x7f);
+            else if ((st & 0xff) == 0x7f)
+                st = (st & ~0xff00) | ((sig_m2l((st >> 8) & 0xff) & 0xff) << 8);
             struct pt_link *L = pt_find_tracee(me, pt_gpid((int)r));
             if (L) pt_free(L);
             *status = st;
@@ -417,18 +579,32 @@ static int ptrace_wait(struct cpu *c, pid_t wpid, int opts, struct rusage *ru, i
             // else genuinely no one to wait for.
             int have = 0;
             for (int i = 0; i < PT_MAXLINK; i++)
-                if (g_pt->link[i].used && g_pt->link[i].tracer_pid == me && pt_wait_match((int)wpid, g_pt->link[i].tracee_pid))
+                if (g_pt->link[i].used && g_pt->link[i].tracer_pid == me &&
+                    pt_wait_match((int)wpid, g_pt->link[i].tracee_pid))
                     have = 1;
-            if (!have) { *out = (pid_t)-ECHILD; return 1; }
+            if (!have) {
+                *out = (pid_t)-ECHILD;
+                return 1;
+            }
         } else if (r < 0 && errno != 0 && errno != EINTR && errno != EAGAIN) {
             *out = (pid_t)-errno;
             return 1;
         }
-        if (opts & WNOHANG) { *status = 0; *out = 0; return 1; } // nothing ready
+        if (opts & WNOHANG) {
+            *status = 0;
+            *out = 0;
+            return 1;
+        } // nothing ready
         // block: poll ptrace stops + host children, honoring signal-driven restart/interrupt.
-        if (__atomic_load_n(&c->exited, __ATOMIC_SEQ_CST)) { *out = (pid_t)-EINTR; return 1; }
+        if (__atomic_load_n(&c->exited, __ATOMIC_SEQ_CST)) {
+            *out = (pid_t)-EINTR;
+            return 1;
+        }
         // A deliverable guest handler interrupts the wait with EINTR (unless SA_RESTART).
-        if (errno == EINTR && !syscall_should_restart(c)) { *out = (pid_t)-EINTR; return 1; }
+        if (errno == EINTR && !syscall_should_restart(c)) {
+            *out = (pid_t)-EINTR;
+            return 1;
+        }
         pt_usleep(200);
     }
 }
@@ -460,8 +636,14 @@ static long ptrace_pvm(struct cpu *c, int is_write, pid_t rpid, const struct iov
         }
         loff += n;
         roff += n;
-        if (loff >= liov[li].iov_len) { li++; loff = 0; }
-        if (roff >= riov[riX].iov_len) { riX++; roff = 0; }
+        if (loff >= liov[li].iov_len) {
+            li++;
+            loff = 0;
+        }
+        if (roff >= riov[riX].iov_len) {
+            riX++;
+            roff = 0;
+        }
     }
     return total;
 }
@@ -493,8 +675,10 @@ static int svc_ptrace(struct cpu *c, uint64_t req, uint64_t pid, uint64_t addr, 
         if (!L) return -ENOMEM;
         L->attached = 1;
         L->seized = (req == PTRACE_SEIZE);
-        if (req == PTRACE_SEIZE) L->options = data; // SEIZE takes options in `data`
-        else L->pending_attach_stop = 1;            // ATTACH stops the tracee (SIGSTOP group-stop)
+        if (req == PTRACE_SEIZE)
+            L->options = data; // SEIZE takes options in `data`
+        else
+            L->pending_attach_stop = 1; // ATTACH stops the tracee (SIGSTOP group-stop)
         return 0;
     }
 
@@ -555,7 +739,10 @@ static int svc_ptrace(struct cpu *c, uint64_t req, uint64_t pid, uint64_t addr, 
     }
     case PTRACE_POKEUSER: {
         uint64_t off = addr;
-        if (off + 8 <= (uint64_t)L->reglen && (off & 7) == 0) { L->regs[off / 8] = data; L->regs_dirty = 1; }
+        if (off + 8 <= (uint64_t)L->reglen && (off & 7) == 0) {
+            L->regs[off / 8] = data;
+            L->regs_dirty = 1;
+        }
         return 0;
     }
     case PTRACE_PEEKTEXT:
@@ -590,17 +777,22 @@ static int svc_ptrace(struct cpu *c, uint64_t req, uint64_t pid, uint64_t addr, 
     }
     case PTRACE_INTERRUPT:
         L->pending_attach_stop = 1; // stops at the next syscall boundary
-        if (stopped) { L->cmd = PTC_LISTEN; __atomic_add_fetch(&L->cmd_seq, 1, __ATOMIC_RELEASE); }
+        if (stopped) {
+            L->cmd = PTC_LISTEN;
+            __atomic_add_fetch(&L->cmd_seq, 1, __ATOMIC_RELEASE);
+        }
         return 0;
     case PTRACE_DETACH: {
         L->cmd = PTC_DETACH;
         L->cmd_sig = (int)data;
         L->attached = 0;
         __atomic_add_fetch(&L->cmd_seq, 1, __ATOMIC_RELEASE);
-        if (!stopped) pt_free(L); // not stopped -> just drop the link (tracee already running free)
+        if (!stopped)
+            pt_free(L); // not stopped -> just drop the link (tracee already running free)
         else {
             // give the tracee a moment to observe the resume, then reclaim the slot
-            for (int i = 0; i < 2000 && L->stopstate == 1; i++) pt_usleep(50);
+            for (int i = 0; i < 2000 && L->stopstate == 1; i++)
+                pt_usleep(50);
             pt_free(L);
         }
         return 0;
@@ -612,9 +804,7 @@ static int svc_ptrace(struct cpu *c, uint64_t req, uint64_t pid, uint64_t addr, 
         return 0;
     }
     case PTRACE_GETFPREGS:
-    case PTRACE_SETFPREGS:
-        return -EIO; // staged: FP/vector user_fpregs_struct marshalling (next batch)
-    default:
-        return -EIO; // unknown/unsupported request (honest error, not a fake success)
+    case PTRACE_SETFPREGS: return -EIO; // staged: FP/vector user_fpregs_struct marshalling (next batch)
+    default: return -EIO;               // unknown/unsupported request (honest error, not a fake success)
     }
 }

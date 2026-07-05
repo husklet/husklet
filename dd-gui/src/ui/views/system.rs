@@ -1,8 +1,8 @@
 #![allow(unused_imports, dead_code)]
-use crate::{AppModel, Category, Msg, Selection};
 use crate::ui::components::*;
-use crate::ui::views::*;
 use crate::ui::theme::*;
+use crate::ui::views::*;
+use crate::{AppModel, Category, Msg, Selection};
 use ddclient::{Container, Image, Network, Volume};
 use gtk::prelude::*;
 use relm4::ComponentSender;
@@ -15,7 +15,9 @@ pub(crate) fn render_system(s: &gtk::Box, m: &AppModel, _sender: &ComponentSende
     let snap = &m.snap;
 
     if !snap.connected {
-        let l = gtk::Label::new(Some("Daemon not running — start it to see engine details and logs."));
+        let l = gtk::Label::new(Some(
+            "Daemon not running — start it to see engine details and logs.",
+        ));
         l.set_xalign(0.0);
         l.add_css_class("dd-empty");
         s.append(&l);
@@ -26,7 +28,11 @@ pub(crate) fn render_system(s: &gtk::Box, m: &AppModel, _sender: &ComponentSende
     if let Some(sys) = &snap.sys {
         let osarch = format!("{} · {}", sys.os, sys.arch);
         let cpus = sys.ncpu.to_string();
-        let mem = if sys.mem_total > 0 { human_size(sys.mem_total) } else { "—".to_string() };
+        let mem = if sys.mem_total > 0 {
+            human_size(sys.mem_total)
+        } else {
+            "—".to_string()
+        };
         let engine = h2("Engine");
         s.append(&engine);
         s.append(&setting_card(&[
@@ -74,7 +80,12 @@ pub(crate) fn render_system(s: &gtk::Box, m: &AppModel, _sender: &ComponentSende
     tv.buffer().set_text(&text);
     let mut end = tv.buffer().end_iter();
     tv.scroll_to_iter(&mut end, 0.0, false, 0.0, 0.0);
-    let sw = gtk::ScrolledWindow::builder().child(&tv).vexpand(true).hexpand(true).min_content_height(260).build();
+    let sw = gtk::ScrolledWindow::builder()
+        .child(&tv)
+        .vexpand(true)
+        .hexpand(true)
+        .min_content_height(260)
+        .build();
     sw.add_css_class("dd-content");
     s.append(&sw);
 }

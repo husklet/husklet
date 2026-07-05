@@ -12,10 +12,17 @@ fn matrix() {
                 match run(&ctx, c, e) {
                     Status::Pass => ran += 1,
                     Status::Skip(_) | Status::Xfail(_) | Status::Xpass => {} // xfail/xpass don't fail CI
-                    Status::Fail(m) => failures.push(format!("{}/{} [{}]: {}", g.name, c.name, e.arch(), m)),
+                    Status::Fail(m) => {
+                        failures.push(format!("{}/{} [{}]: {}", g.name, c.name, e.arch(), m))
+                    }
                 }
             }
         }
     }
-    assert!(failures.is_empty(), "{} case(s) ran; failures:\n{}", ran, failures.join("\n"));
+    assert!(
+        failures.is_empty(),
+        "{} case(s) ran; failures:\n{}",
+        ran,
+        failures.join("\n")
+    );
 }

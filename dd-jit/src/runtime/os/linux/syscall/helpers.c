@@ -16,6 +16,7 @@ static int guest_nofile_cur(void) {
     if (g_ulimit[7].set) cur = g_ulimit[7].cur; // docker --ulimit / guest setrlimit(RLIMIT_NOFILE)
     return cur > 0x7fffffff ? 0x7fffffff : (int)cur;
 }
+
 // Gate a freshly-allocated host fd (from a lowest-free allocator: dup, open, pipe, socket, ...) against the
 // guest cap. A number at/above the cap is one Linux would never have handed out -> close it and report
 // EMFILE. Returns r unchanged when in range (or already an error). Pass-through when no cap applies.
@@ -38,7 +39,7 @@ static int nofile_gate(int r) {
 // PROT_NONE ranges; the check lives INSIDE host_range_mapped (thread.c), so every guest-buffer validator
 // (guest_bad_ptr in mem.c -> io/net/poll) gets the EFAULT for free, and the read/write family (io.c) queries
 // gna_hit directly. Fed by mmap(222)/mprotect(226)/munmap(215) in mem.c; reset on execve (gna_reset).
-// (#407 removed the duplicate pn_add/pn_del/pn_hit registry that used to live here.)
+// (removed the duplicate pn_add/pn_del/pn_hit registry that used to live here.)
 
 // ---- flock(2) emulation on a private companion file (BSD whole-file advisory locks) ----------------
 // On Linux, flock() (BSD, whole-file, per-open-file-description) and fcntl() POSIX record locks are
@@ -54,13 +55,16 @@ static int nofile_gate(int r) {
 // held flock is dropped when its last fd closes, matching flock's "released on last close" semantics.
 #define FLOCK_DIR "/tmp/.ddflock"
 static uint8_t g_flock_type[1024]; // per guest fd: 0 none, else LOCK_SH / LOCK_EX currently held via companion
+
 static struct {
     dev_t dev;
     ino_t ino;
     int fd;   // host fd of the companion lock file (kept open for the process lifetime)
     int refs; // guest fds in THIS process currently holding a flock on this file (for release-on-close)
 } g_flkcomp[256];
+
 static int g_nflkcomp;
+
 // Companion index for the file underlying guest `fd` (opening/caching it on first use). -1 (errno set) on
 // failure. The companion is pushed to a high descriptor so it never collides with the guest's low fds
 // (mirrors engine_fd_reloc); CLOEXEC keeps it out of any real host exec while still inheriting across fork.
@@ -69,7 +73,10 @@ static int flock_companion(int fd) {
     if (fstat(fd, &st) < 0) return -1;
     for (int i = 0; i < g_nflkcomp; i++)
         if (g_flkcomp[i].dev == st.st_dev && g_flkcomp[i].ino == st.st_ino) return i;
-    if (g_nflkcomp >= (int)(sizeof g_flkcomp / sizeof g_flkcomp[0])) { errno = ENOLCK; return -1; }
+    if (g_nflkcomp >= (int)(sizeof g_flkcomp / sizeof g_flkcomp[0])) {
+        errno = ENOLCK;
+        return -1;
+    }
     mkdir(FLOCK_DIR, 0777);
     char p[80];
     snprintf(p, sizeof p, FLOCK_DIR "/%llx.%llx", (unsigned long long)st.st_dev, (unsigned long long)st.st_ino);
@@ -77,13 +84,17 @@ static int flock_companion(int fd) {
     if (c < 0) return -1;
     int hi = fcntl(c, F_DUPFD_CLOEXEC, 1 << 20);
     if (hi < 0) hi = fcntl(c, F_DUPFD_CLOEXEC, 64);
-    if (hi >= 0) { close(c); c = hi; }
+    if (hi >= 0) {
+        close(c);
+        c = hi;
+    }
     g_flkcomp[g_nflkcomp].dev = st.st_dev;
     g_flkcomp[g_nflkcomp].ino = st.st_ino;
     g_flkcomp[g_nflkcomp].fd = c;
     g_flkcomp[g_nflkcomp].refs = 0;
     return g_nflkcomp++;
 }
+
 // flock(2): whole-file advisory lock delegated to the companion. Returns 0 or -1 (host errno set); the
 // caller applies the normal macOS->Linux errno translation.
 static int dd_flock(int fd, int op) {
@@ -108,6 +119,7 @@ static int dd_flock(int fd, int op) {
     }
     return r;
 }
+
 // close() hook: drop the flock this fd contributed; release the companion lock once its last holder in
 // this process is gone (flock is released on the last close of the file).
 static void flock_on_close(int fd) {
@@ -122,7 +134,7 @@ static void flock_on_close(int fd) {
     }
 }
 
-// ---- fcntl(2) POSIX advisory byte-range locks -- IN-ENGINE cross-process manager (#340) --------------
+// ---- fcntl(2) POSIX advisory byte-range locks -- IN-ENGINE cross-process manager --------------
 // SQLite/postgres take ~2 fcntl(F_SETLK/F_GETLK) byte-range locks PER query on the DB file; routing each to
 // a real macOS fcntl() was ~57% of a file-backed point-select's runtime (~20% the host round-trip itself +
 // ~30% dispatch and the Linux<->macOS `struct flock` translation). We service these ops from a SHARED-MEMORY
@@ -137,7 +149,7 @@ static void flock_on_close(int fd) {
 // survive exec, exactly as POSIX requires. Records are keyed by host-file identity (dev,ino) + absolute byte
 // range + type, owned PER-PROCESS by host pid (threads of a process share the pid, hence share their locks;
 // a fork child gets a NEW pid so it does NOT inherit the parent's locks -- POSIX). This is fully INDEPENDENT
-// of flock(2) (serviced on a companion file, above), so the #237 flock<->fcntl independence is preserved.
+// of flock(2) (serviced on a companion file, above), so the flock<->fcntl independence is preserved.
 // A crashed owner's stale records are reclaimed lazily on conflict (kill(pid,0)==ESRCH) and swept when the
 // table fills; they are released eagerly on close (poslk_on_close, POSIX "any close drops all this file's
 // locks") and on process exit (poslk_on_exit). The table lock is an atomic spinlock (macOS has no robust
@@ -146,6 +158,7 @@ static void flock_on_close(int fd) {
 #include <sched.h>
 #include <stdint.h>
 #define POSLK_MAX 8192
+
 struct poslk_rec {
     dev_t dev;
     ino_t ino;
@@ -153,13 +166,14 @@ struct poslk_rec {
     int32_t type;   // F_RDLCK / F_WRLCK (F_UNLCK is never stored)
     int32_t owner;  // owning process = host pid (0 == free slot)
 };
+
 struct poslk_shm {
     _Atomic int32_t lockword; // 0 = free, else host pid of the holder (spinlock; stolen from a dead holder)
     int32_t hi;               // high-water slot count (bounds the linear scan)
     struct poslk_rec rec[POSLK_MAX];
 };
 static struct poslk_shm *g_poslk;
-// PERF: the hot path must issue ZERO host syscalls (the point of #340). Two process-local caches make that
+// PERF: the hot path must issue ZERO host syscalls (the point of). Two process-local caches make that
 // so: (a) g_lk{dev,ino,val}[fd] memoises a guest fd's host (dev,ino) so a repeated F_SETLK on the same DB fd
 // never re-fstat()s (cleared on close in fd_reset_emul); (b) g_mypid caches getpid(). Both are per-process
 // (NOT in the shared region); fork inherits a valid COW copy (same fds/files) and the clone child resets
@@ -169,32 +183,40 @@ static ino_t g_lkino[1024];
 static uint8_t g_lkval[1024]; // 1 == g_lk{dev,ino}[fd] valid
 static int32_t g_mypid;       // cached getpid() (0 = not cached yet)
 static int g_i_locked;        // this process has held >=1 fcntl record lock (gates the close-time fstat)
+
 static inline int32_t poslk_mypid(void) {
     if (!g_mypid) g_mypid = getpid();
     return g_mypid;
 }
+
 static void poslk_after_fork(void) {
     g_mypid = 0;    // child has a new host pid -> re-cache lazily
     g_i_locked = 0; // POSIX: a fork child inherits NONE of the parent's record locks
 }
+
 static void poslk_init(void) {
     if (g_poslk) return;
     void *m = mmap(NULL, sizeof(struct poslk_shm), PROT_READ | PROT_WRITE, MAP_SHARED | MAP_ANON, -1, 0);
-    if (m == MAP_FAILED) return; // no shared table -> every op falls back to the host fcntl path
+    if (m == MAP_FAILED) return;     // no shared table -> every op falls back to the host fcntl path
     g_poslk = (struct poslk_shm *)m; // MAP_ANON is zero-filled: lockword=0, hi=0, all owner=0
 }
-__attribute__((constructor)) static void poslk_ctor(void) { poslk_init(); }
+
+__attribute__((constructor)) static void poslk_ctor(void) {
+    poslk_init();
+}
+
 // Is host pid `p` still a live process? A dead owner's records/locks are reclaimable.
 static inline int poslk_alive(int32_t p) {
     if (p <= 0) return 0;
     return !(kill(p, 0) < 0 && errno == ESRCH);
 }
+
 static void poslk_lock(void) {
     int32_t me = poslk_mypid();
     for (int spin = 0;; spin++) {
         int32_t expect = 0;
         if (atomic_compare_exchange_weak_explicit(&g_poslk->lockword, &expect, me, memory_order_acquire,
-                                                   memory_order_relaxed))
+                                                  memory_order_relaxed))
             return;
         if ((spin & 1023) == 1023) {
             int32_t owner = atomic_load_explicit(&g_poslk->lockword, memory_order_relaxed);
@@ -205,7 +227,11 @@ static void poslk_lock(void) {
         }
     }
 }
-static void poslk_unlock(void) { atomic_store_explicit(&g_poslk->lockword, 0, memory_order_release); }
+
+static void poslk_unlock(void) {
+    atomic_store_explicit(&g_poslk->lockword, 0, memory_order_release);
+}
+
 // A free slot (reuse a vacated one, else grow the high-water). NULL when the table is full.
 static struct poslk_rec *poslk_slot(void) {
     for (int i = 0; i < g_poslk->hi; i++)
@@ -213,15 +239,18 @@ static struct poslk_rec *poslk_slot(void) {
     if (g_poslk->hi < POSLK_MAX) return &g_poslk->rec[g_poslk->hi++];
     return NULL;
 }
+
 static void poslk_sweep_dead(void) {
     for (int i = 0; i < g_poslk->hi; i++)
         if (g_poslk->rec[i].owner && !poslk_alive(g_poslk->rec[i].owner)) g_poslk->rec[i].owner = 0;
 }
+
 // Ranges overlap AND at least one is a write lock (two read locks never conflict).
 static inline int poslk_conflict(const struct poslk_rec *r, int64_t lo, int64_t hi, int type) {
     if (r->hi <= lo || hi <= r->lo) return 0;     // disjoint
     return r->type == F_WRLCK || type == F_WRLCK; // a writer on either side conflicts
 }
+
 // Remove owner `own`'s locks over [lo,hi) on (dev,ino), SPLITTING any record that straddles a boundary so the
 // non-overlapping fragments survive with their original type (POSIX unlock / replace-on-set). Held under the
 // spinlock. New fragments land in reused slots and, being disjoint from [lo,hi), are skipped by this scan.
@@ -236,14 +265,29 @@ static void poslk_clear_own(dev_t dev, ino_t ino, int32_t own, int64_t lo, int64
         r->owner = 0; // drop the straddling original; re-add surviving fragments below
         if (olo < lo) {
             struct poslk_rec *f = poslk_slot();
-            if (f) { f->dev = dev; f->ino = ino; f->lo = olo; f->hi = lo; f->type = ot; f->owner = own; }
+            if (f) {
+                f->dev = dev;
+                f->ino = ino;
+                f->lo = olo;
+                f->hi = lo;
+                f->type = ot;
+                f->owner = own;
+            }
         }
         if (ohi > hi) {
             struct poslk_rec *f = poslk_slot();
-            if (f) { f->dev = dev; f->ino = ino; f->lo = hi; f->hi = ohi; f->type = ot; f->owner = own; }
+            if (f) {
+                f->dev = dev;
+                f->ino = ino;
+                f->lo = hi;
+                f->hi = ohi;
+                f->type = ot;
+                f->owner = own;
+            }
         }
     }
 }
+
 // Resolve a Linux `struct flock` at `lf` on guest `fd` to (dev,ino,[lo,hi),type). Returns 0 on success,
 // -2 if the fd is not a regular file (caller must use the host fcntl path), or -1 with errno set on error.
 static int poslk_resolve(int fd, const uint8_t *lf, dev_t *dev, ino_t *ino, int64_t *lo, int64_t *hi, int *type) {
@@ -265,7 +309,11 @@ static int poslk_resolve(int fd, const uint8_t *lf, dev_t *dev, ino_t *ino, int6
         if (!S_ISREG(st.st_mode)) return -2; // POSIX record locks are only meaningful on regular files
         *dev = st.st_dev;
         *ino = st.st_ino;
-        if (fd >= 0 && fd < 1024) { g_lkdev[fd] = st.st_dev; g_lkino[fd] = st.st_ino; g_lkval[fd] = 1; }
+        if (fd >= 0 && fd < 1024) {
+            g_lkdev[fd] = st.st_dev;
+            g_lkino[fd] = st.st_ino;
+            g_lkval[fd] = 1;
+        }
         if (whence == SEEK_SET)
             base = 0;
         else if (whence == SEEK_CUR) {
@@ -296,6 +344,7 @@ static int poslk_resolve(int fd, const uint8_t *lf, dev_t *dev, ino_t *ino, int6
     *hi = e;
     return 0;
 }
+
 // Service one fcntl POSIX-lock op in-engine: lcmd 5=F_GETLK, 6=F_SETLK, 7=F_SETLKW. Returns 1 when serviced
 // (*out = the value to return to the guest: 0 / -EAGAIN / -EBADF / -EINVAL / -ENOLCK) or 0 when the fd is not
 // a regular file (the caller must fall back to a real host fcntl). F_SETLKW is a single non-blocking attempt
@@ -320,7 +369,10 @@ static int poslk_op(int fd, int lcmd, uint8_t *lf, int *out) {
             struct poslk_rec *r = &g_poslk->rec[i];
             if (!r->owner || r->owner == me || r->dev != dev || r->ino != ino) continue;
             if (!poslk_conflict(r, lo, hi, type)) continue;
-            if (!poslk_alive(r->owner)) { r->owner = 0; continue; } // reclaim a dead holder
+            if (!poslk_alive(r->owner)) {
+                r->owner = 0;
+                continue;
+            } // reclaim a dead holder
             hit = r;
             break;
         }
@@ -348,7 +400,10 @@ static int poslk_op(int fd, int lcmd, uint8_t *lf, int *out) {
         struct poslk_rec *r = &g_poslk->rec[i];
         if (!r->owner || r->owner == me || r->dev != dev || r->ino != ino) continue;
         if (!poslk_conflict(r, lo, hi, type)) continue;
-        if (!poslk_alive(r->owner)) { r->owner = 0; continue; }
+        if (!poslk_alive(r->owner)) {
+            r->owner = 0;
+            continue;
+        }
         *out = -EAGAIN; // blocked (F_SETLK: EAGAIN; F_SETLKW: caller retries)
         poslk_unlock();
         return 1;
@@ -375,6 +430,7 @@ static int poslk_op(int fd, int lcmd, uint8_t *lf, int *out) {
     poslk_unlock();
     return 1;
 }
+
 // close() hook: POSIX releases ALL a process's locks on a file when ANY fd for it is closed. Called from
 // fd_reset_emul BEFORE the real close(). Fast path: the fd's (dev,ino) is cached (it took a lock op) -> no
 // fstat. A process that never held any fcntl lock does nothing. Only the residual case (a never-locked fd
@@ -396,6 +452,7 @@ static void poslk_on_close(int fd) {
     poslk_clear_own(st.st_dev, st.st_ino, me, 0, INT64_MAX);
     poslk_unlock();
 }
+
 // process-exit hook (exit_group): drop every lock this process holds. Belt-and-suspenders over the lazy
 // dead-owner reclaim, keeping the shared table tidy for long-lived containers.
 static void poslk_on_exit(void) {
@@ -422,36 +479,48 @@ static int s3db_durability(void) {
         const char *e = getenv("S3DB_DURABILITY");
         int m = 0; // default == fast == legacy
         if (e) {
-            if (!strcmp(e, "none")) m = 1;
-            else if (!strcmp(e, "strict")) m = 2;
-            else m = 0; // "fast" or anything unrecognized -> fast (safe default)
+            if (!strcmp(e, "none"))
+                m = 1;
+            else if (!strcmp(e, "strict"))
+                m = 2;
+            else
+                m = 0; // "fast" or anything unrecognized -> fast (safe default)
         }
         mode = m;
     }
     return mode;
 }
+
 // Route fsync/fdatasync/sync_file_range (82/83/84) through the durability policy. Returns 0 on success
 // or -errno (Linux ABI convention used by the caller's G_RET). `fast`/default is byte-identical to the
 // legacy `fsync((int)fd) < 0 ? -errno : 0` path.
 static uint64_t s3db_sync_fd(int fd) {
     switch (s3db_durability()) {
-        case 1: return 0; // none: no-op barrier
-        case 2: // strict: real host-crash durability; fall back to fsync if F_FULLFSYNC unsupported
-            if (fcntl(fd, F_FULLFSYNC, 0) == 0) return 0;
-            // EINVAL/ENOTSUP on non-regular fds (pipes, sockets, etc.) -> plain fsync
-            return fsync(fd) < 0 ? (uint64_t)(-errno) : 0;
-        default: // 0 fast (== legacy default)
-            return fsync(fd) < 0 ? (uint64_t)(-errno) : 0;
+    case 1: return 0; // none: no-op barrier
+    case 2:           // strict: real host-crash durability; fall back to fsync if F_FULLFSYNC unsupported
+        if (fcntl(fd, F_FULLFSYNC, 0) == 0) return 0;
+        // EINVAL/ENOTSUP on non-regular fds (pipes, sockets, etc.) -> plain fsync
+        return fsync(fd) < 0 ? (uint64_t)(-errno) : 0;
+    default: // 0 fast (== legacy default)
+        return fsync(fd) < 0 ? (uint64_t)(-errno) : 0;
     }
 }
+
 // Map a Linux `semctl` cmd to the macOS one: the GET*/SET* values differ (Linux GETVAL=12/SETVAL=16,
 // macOS GETVAL=5/SETVAL=8); IPC_RMID/SET/STAT (0/1/2) are the same.
 static int sem_cmd_l2m(int c) {
     switch (c) {
-        case 11: return 4;  case 12: return 5;  case 13: return 6;  case 14: return 3;
-        case 15: return 7;  case 16: return 8;  case 17: return 9;  default: return c;
+    case 11: return 4;
+    case 12: return 5;
+    case 13: return 6;
+    case 14: return 3;
+    case 15: return 7;
+    case 16: return 8;
+    case 17: return 9;
+    default: return c;
     }
 }
+
 // SysV IPC: namespace a key by the container (DD_NETNS) so two containers don't collide on the same key
 // -- the per-IPC-ns isolation. IPC_PRIVATE stays private; --network host shares the host IPC.
 static key_t ipc_ns_key(key_t k) {
@@ -459,10 +528,14 @@ static key_t ipc_ns_key(key_t k) {
     const char *ns = getenv("DD_NETNS");
     if (!ns || !ns[0]) return k;
     uint32_t salt = 2166136261u;
-    for (const char *p = ns; *p; p++) { salt ^= (uint8_t)*p; salt = salt * 16777619u; }
+    for (const char *p = ns; *p; p++) {
+        salt ^= (uint8_t)*p;
+        salt = salt * 16777619u;
+    }
     key_t hk = (key_t)((uint32_t)k ^ (salt & 0x7fffffffu));
     return hk == IPC_PRIVATE ? hk + 1 : hk;
 }
+
 // list a directory's entries (minus . / ..) as a newline-joined, NUL-terminated malloc'd string (for the
 // inotify-on-a-directory diff). NULL on error.
 static char *dir_snapshot(const char *path) {
@@ -470,18 +543,30 @@ static char *dir_snapshot(const char *path) {
     if (!d) return NULL;
     size_t cap = 256, len = 0;
     char *s = malloc(cap);
-    if (!s) { closedir(d); return NULL; }
+    if (!s) {
+        closedir(d);
+        return NULL;
+    }
     s[0] = 0;
     struct dirent *e;
     while ((e = readdir(d))) {
         if (!strcmp(e->d_name, ".") || !strcmp(e->d_name, "..")) continue;
         size_t nl = strlen(e->d_name);
-        if (len + nl + 2 > cap) { cap = (len + nl + 2) * 2; char *n = realloc(s, cap); if (!n) break; s = n; }
-        memcpy(s + len, e->d_name, nl); len += nl; s[len++] = '\n'; s[len] = 0;
+        if (len + nl + 2 > cap) {
+            cap = (len + nl + 2) * 2;
+            char *n = realloc(s, cap);
+            if (!n) break;
+            s = n;
+        }
+        memcpy(s + len, e->d_name, nl);
+        len += nl;
+        s[len++] = '\n';
+        s[len] = 0;
     }
     closedir(d);
     return s;
 }
+
 // is `name` present as a line in the newline-joined snapshot?
 static int snap_has(const char *snap, const char *name, size_t nl) {
     if (!snap) return 0;
@@ -493,13 +578,20 @@ static int snap_has(const char *snap, const char *name, size_t nl) {
     }
     return 0;
 }
+
 // inotify rename events (lsys-inotify-moves): the snapshot diff only sees entry NAMES, so it cannot pair a
 // rename into IN_MOVED_FROM/IN_MOVED_TO with a shared cookie. rename(2) calls inotify_notify_move(), which
 // queues the paired events against every watch on the source / destination directory; inotify read() then
 // drains the queue (inomv_drain) alongside the usual create/delete diff.
-static struct { int wd; uint32_t mask, cookie; char name[256]; } g_inomv[64];
+static struct {
+    int wd;
+    uint32_t mask, cookie;
+    char name[256];
+} g_inomv[64];
+
 static int g_inomv_n;
 static uint32_t g_inomv_cookie;
+
 static void inomv_push(int wd, uint32_t mask, uint32_t cookie, const char *name) {
     if (g_inomv_n >= (int)(sizeof g_inomv / sizeof g_inomv[0])) return;
     g_inomv[g_inomv_n].wd = wd;
@@ -508,6 +600,7 @@ static void inomv_push(int wd, uint32_t mask, uint32_t cookie, const char *name)
     snprintf(g_inomv[g_inomv_n].name, sizeof g_inomv[0].name, "%s", name);
     g_inomv_n++;
 }
+
 // Queue IN_MOVED_FROM(src basename) + IN_MOVED_TO(dst basename), sharing one cookie, against any inotify
 // watch whose directory is the source / destination parent. host paths are resolved exactly as add_watch
 // resolved g_inotify_wpath (atpath), so their parent-dir prefixes compare equal. No-op when nothing watches.
@@ -533,13 +626,17 @@ static void inotify_notify_move(int sdirfd, const char *spath, int ddirfd, const
         }
     }
 }
+
 // Emit any queued rename events belonging to inotify instance `instfd` into the read() buffer; returns the
 // bytes written and removes the drained entries.
 static size_t inomv_drain(int instfd, uint8_t *out, size_t cap) {
     size_t off = 0;
     for (int i = 0; i < g_inomv_n;) {
         int wd = g_inomv[i].wd;
-        if (wd < 0 || wd >= 1024 || g_inotify_owner[wd] != instfd) { i++; continue; }
+        if (wd < 0 || wd >= 1024 || g_inotify_owner[wd] != instfd) {
+            i++;
+            continue;
+        }
         size_t l = strlen(g_inomv[i].name);
         size_t nlen = (l + 1 + 15) & ~(size_t)15; // padded name field
         if (off + 16 + nlen > cap) break;
@@ -554,6 +651,7 @@ static size_t inomv_drain(int instfd, uint8_t *out, size_t cap) {
     }
     return off;
 }
+
 // pipe read-pushback (tee(2)): consume up to `cap` bytes from fd's pushback into buf (removing them).
 static size_t pipe_pushback_take(int fd, void *buf, size_t cap) {
     if (fd < 0 || fd >= 1024 || g_fd_pb_len[fd] == 0 || cap == 0) return 0;
@@ -569,6 +667,7 @@ static size_t pipe_pushback_take(int fd, void *buf, size_t cap) {
     }
     return k;
 }
+
 // Replace fd's pushback with `len` bytes of `data` (tee restores the source it peeked out of the pipe).
 static void pipe_pushback_set(int fd, const void *data, size_t len) {
     if (fd < 0 || fd >= 1024) return;
@@ -581,15 +680,27 @@ static void pipe_pushback_set(int fd, const void *data, size_t len) {
     memcpy(g_fd_pushback[fd], data, len);
     g_fd_pb_len[fd] = len;
 }
+
 static char g_procname[16]; // prctl PR_SET_NAME / PR_GET_NAME (the 15-char process/thread name)
+
 // getdents directory-stream cache (guest fd -> host DIR*). MUST be invalidated on close(), else a reused
 // fd gets a stale DIR* already at EOF (a second opendir of the same path then reads nothing -- broke glob).
-static struct { int fd; DIR *d; } g_dirs[64];
+static struct {
+    int fd;
+    DIR *d;
+} g_dirs[64];
+
 static int g_ndirs;
+
 static void dirs_drop(int fd) {
     for (int i = 0; i < g_ndirs; i++)
-        if (g_dirs[i].fd == fd) { closedir(g_dirs[i].d); g_dirs[i] = g_dirs[--g_ndirs]; return; }
+        if (g_dirs[i].fd == fd) {
+            closedir(g_dirs[i].d);
+            g_dirs[i] = g_dirs[--g_ndirs];
+            return;
+        }
 }
+
 // Parse a "#!" shebang line. `host_path` is the RESOLVED HOST path of a candidate program. If the file
 // begins with "#!", fills `interp` (size ni) with the interpreter path and `arg` (size na) with the
 // optional single argument (arg[0]==0 when there is none) and returns 1. Returns 0 when it is not a
@@ -629,8 +740,10 @@ static int parse_shebang(const char *host_path, char *interp, size_t ni, char *a
         arg[0] = 0;
     return 1;
 }
+
 // Max "#!" nesting Linux binfmt_script resolves before ELOOP (BINPRM_MAX_RECURSION == 4).
 #define SHEBANG_MAX 4
+
 // Resolve a possibly-NESTED "#!" shebang chain the way Linux binfmt_script does, recursing up to
 // SHEBANG_MAX levels. On entry argv[0] is the guest program path and `host0` its already-resolved host
 // path; `argv` is a NULL-terminated array of capacity `cap` (>= argc + SHEBANG_MAX*2 + 1). While argv[0]
@@ -644,8 +757,8 @@ static int parse_shebang(const char *host_path, char *interp, size_t ni, char *a
 // host path (in `hostbuf`, size nh) which the caller loads as an ELF, and the NEW argc is returned. A
 // non-shebang / unreadable argv[0] is the base case (argc unchanged, *phost = its host path). Returns -1 on
 // ELOOP (chain deeper than SHEBANG_MAX) or when argv has no room -- the caller must then error out.
-static int resolve_shebang_chain(char **argv, int argc, int cap, const char *host0, char store[][256],
-                                 char *hostbuf, size_t nh, const char **phost) {
+static int resolve_shebang_chain(char **argv, int argc, int cap, const char *host0, char store[][256], char *hostbuf,
+                                 size_t nh, const char **phost) {
     char curhost[4200];
     snprintf(curhost, sizeof curhost, "%s", host0);
     int nstore = 0;
@@ -678,6 +791,7 @@ static int resolve_shebang_chain(char **argv, int argc, int cap, const char *hos
         snprintf(curhost, sizeof curhost, "%s", xresolve_overlay(si, nb, sizeof nb));
     }
 }
+
 // Anonymous PRIVATE mmap ranges (MAP_ANON|MAP_PRIVATE) tracked so that madvise(MADV_DONTNEED) can
 // give real Linux semantics -- re-mmap fresh zero pages over the range -- WITHOUT ever disturbing a
 // file-backed or shared mapping (re-mmapping those with MAP_ANON would discard file data / break
@@ -688,7 +802,9 @@ static struct {
     uint64_t addr, len;
     int prot;
 } g_anonmap[2048];
+
 static int g_nanonmap;
+
 static void anon_track(uint64_t addr, uint64_t len, int prot) {
     if (!addr || g_nanonmap >= (int)(sizeof g_anonmap / sizeof g_anonmap[0])) return;
     g_anonmap[g_nanonmap].addr = addr;
@@ -696,6 +812,7 @@ static void anon_track(uint64_t addr, uint64_t len, int prot) {
     g_anonmap[g_nanonmap].prot = prot;
     g_nanonmap++;
 }
+
 // Forget any tracked anon coverage overlapping [addr,addr+len) -- on munmap, or when a non-anon
 // mapping is laid over the range. Err toward forgetting (whole-entry drop) so a stale entry can never
 // cause a wrong anon-remap of what is now a file mapping.
@@ -709,6 +826,7 @@ static void anon_untrack(uint64_t addr, uint64_t len) {
             i++;
     }
 }
+
 // prot of the tracked private-anon region fully containing [addr,addr+len), else -1 (unknown -> do
 // not remap). Full containment guarantees the range is anon, so the remap cannot corrupt a file map.
 static int anon_prot_if_contained(uint64_t addr, uint64_t len) {
@@ -717,6 +835,7 @@ static int anon_prot_if_contained(uint64_t addr, uint64_t len) {
         if (g_anonmap[i].addr <= addr && end <= g_anonmap[i].addr + g_anonmap[i].len) return g_anonmap[i].prot;
     return -1;
 }
+
 // MADV_WIPEONFORK(18) ranges: PRIVATE-ANON regions the guest asked to be presented ZERO-FILLED to a
 // child after fork(2) (Linux 4.14+). Tracked here; fork_child_hooks() memsets each range to 0 in the
 // child, so the child (and, since it inherits this registry across fork, any grandchild) sees zeros
@@ -725,7 +844,9 @@ static int anon_prot_if_contained(uint64_t addr, uint64_t len) {
 static struct {
     uint64_t addr, len;
 } g_wipefork[256];
+
 static int g_nwipefork;
+
 static void wipefork_add(uint64_t addr, uint64_t len) {
     if (!addr || !len) return;
     for (int i = 0; i < g_nwipefork; i++)
@@ -735,6 +856,7 @@ static void wipefork_add(uint64_t addr, uint64_t len) {
     g_wipefork[g_nwipefork].len = len;
     g_nwipefork++;
 }
+
 static void wipefork_del(uint64_t addr, uint64_t len) {
     uint64_t end = addr + len;
     for (int i = 0; i < g_nwipefork;) {
@@ -745,11 +867,13 @@ static void wipefork_del(uint64_t addr, uint64_t len) {
             i++;
     }
 }
+
 // Called in the fork CHILD (from fork_child_hooks): present each MADV_WIPEONFORK range as zero-filled.
 static void wipefork_apply_child(void) {
     for (int i = 0; i < g_nwipefork; i++)
         memset((void *)g_wipefork[i].addr, 0, (size_t)g_wipefork[i].len);
 }
+
 // /proc/self/fd/N (and /proc/<pid>/fd/N for our own pid -- host pid, container pid, or init's "1")
 // names an already-open fd. macOS has no /proc, so detect this form and recover the fd number; the
 // caller then resolves it via F_GETPATH (readlinkat) or dup()/reopen (openat). Returns N>=0 on an
@@ -789,6 +913,7 @@ static int procfd_num(const char *p) {
         if (*s < '0' || *s > '9') return -1; // trailing path component -> not a bare fd link
     return atoi(rest);
 }
+
 // The /dev/std{in,out,err} aliases -> fd 0/1/2 for the OPEN path only (readlink keeps its on-disk
 // symlink text, so `ls -l /dev` doesn't F_GETPATH a pipe fd and get EBADF). Returns the fd, else -1.
 static int dev_std_fd(const char *p) {
@@ -798,6 +923,7 @@ static int dev_std_fd(const char *p) {
     if (!strcmp(p, "/dev/stderr")) return 2;
     return -1;
 }
+
 // ===== w3e EPOLL FAST PATH (gate: NOEPOLLOPT=1 reverts to the original per-ctl kevent path) =====
 // The baseline emulates epoll over a per-epoll-fd kqueue, but issues a *separate* kevent() syscall
 // for every epoll_ctl (and one per filter), then another for epoll_wait. For server event loops that
@@ -809,68 +935,93 @@ static int dev_std_fd(const char *p) {
 // baseline leaves a stale EVFILT_WRITE armed on a MOD from IN|OUT->IN), without emitting spurious
 // EV_DELETEs that would error.  Tables are indexed by fd<1024 (matches every other fd table here);
 // epfd/fd >= 1024 fall back to the immediate path.
-static int g_epopt = -1;                       // -1 unknown, 0 off, 1 on
-static struct kevent *g_ep_chg[1024];          // deferred changelist per epoll fd
+static int g_epopt = -1;              // -1 unknown, 0 off, 1 on
+static struct kevent *g_ep_chg[1024]; // deferred changelist per epoll fd
 static int g_ep_chgn[1024], g_ep_chgcap[1024];
-static uint8_t g_ep_rd[1024], g_ep_wr[1024];   // per guest fd: read/write filter currently armed
-static uint8_t g_ep_os[1024];                  // per guest fd: EPOLLONESHOT requested (kernel auto-removes on fire)
-static uint8_t g_epoll[1024];                  // per fd: an epoll instance (backed by kqueue) -- rebuilt across fork (macOS kqueue() is not inherited)
-static unsigned long long g_ep_kevent_calls;   // PROF: kevent() syscalls issued by the epoll path
+static uint8_t g_ep_rd[1024], g_ep_wr[1024]; // per guest fd: read/write filter currently armed
+static uint8_t g_ep_os[1024];                // per guest fd: EPOLLONESHOT requested (kernel auto-removes on fire)
+static uint8_t g_epoll[1024]; // per fd: an epoll instance (backed by kqueue) -- rebuilt across fork (macOS kqueue() is
+                              // not inherited)
+static unsigned long long g_ep_kevent_calls; // PROF: kevent() syscalls issued by the epoll path
 static int g_epprof = -1;
+
 static int epopt_on(void) {
-    if (g_epopt < 0) { const char *e = getenv("NOEPOLLOPT"); g_epopt = (e && e[0] == '1') ? 0 : 1; }
+    if (g_epopt < 0) {
+        const char *e = getenv("NOEPOLLOPT");
+        g_epopt = (e && e[0] == '1') ? 0 : 1;
+    }
     return g_epopt;
 }
+
 static void ep_prof_dump(void) {
     if (g_epprof == 1) fprintf(stderr, "[ddepollprof] epoll_kevent_syscalls=%llu\n", g_ep_kevent_calls);
 }
+
 static void ep_count(void) {
-    if (g_epprof < 0) { const char *e = getenv("DDEPOLLPROF"); g_epprof = (e && e[0] == '1') ? 1 : 0;
-                        if (g_epprof) atexit(ep_prof_dump); }
+    if (g_epprof < 0) {
+        const char *e = getenv("DDEPOLLPROF");
+        g_epprof = (e && e[0] == '1') ? 1 : 0;
+        if (g_epprof) atexit(ep_prof_dump);
+    }
     if (g_epprof == 1) g_ep_kevent_calls++;
 }
+
 // append a change to epfd's buffer, coalescing on (ident,filter) so repeated ctls collapse.
 static void ep_push(int ep, uintptr_t ident, int16_t filt, uint16_t flags, void *udata) {
     if (ep < 0 || ep >= 1024) return;
     struct kevent *a = g_ep_chg[ep];
     for (int i = 0; i < g_ep_chgn[ep]; i++)
-        if (a[i].ident == ident && a[i].filter == filt) { EV_SET(&a[i], ident, filt, flags, 0, 0, udata); return; }
+        if (a[i].ident == ident && a[i].filter == filt) {
+            EV_SET(&a[i], ident, filt, flags, 0, 0, udata);
+            return;
+        }
     if (g_ep_chgn[ep] >= g_ep_chgcap[ep]) {
         int nc = g_ep_chgcap[ep] ? g_ep_chgcap[ep] * 2 : 16;
         struct kevent *na = realloc(a, (size_t)nc * sizeof *na);
         if (!na) return;
-        g_ep_chg[ep] = na; g_ep_chgcap[ep] = nc; a = na;
+        g_ep_chg[ep] = na;
+        g_ep_chgcap[ep] = nc;
+        a = na;
     }
     EV_SET(&a[g_ep_chgn[ep]++], ident, filt, flags, 0, 0, udata);
 }
+
 // reset epoll armed-state for a guest fd (called from close(): kqueue auto-removes a closed fd, so the
 // armed map must follow to avoid a later stale EV_DELETE on a reused fd number).
 static void ep_fd_reset(int fd) {
     if (fd < 0 || fd >= 1024) return;
     g_ep_rd[fd] = g_ep_wr[fd] = g_ep_os[fd] = 0;
-    if (g_ep_chg[fd]) { free(g_ep_chg[fd]); g_ep_chg[fd] = NULL; } // if fd was an epoll fd, drop its pending changelist
+    if (g_ep_chg[fd]) {
+        free(g_ep_chg[fd]);
+        g_ep_chg[fd] = NULL;
+    } // if fd was an epoll fd, drop its pending changelist
     g_ep_chgn[fd] = g_ep_chgcap[fd] = 0;
     g_epoll[fd] = 0; // a reused fd number is no longer an epoll instance
 }
+
 // close() hook for the inotify family (event.c cases 26/27/28). dd emulates inotify with a kqueue: the
 // INSTANCE fd carries g_inotify[fd]=1, while each WATCH descriptor (wd) is itself a host O_EVTONLY fd with
 // g_inotify_wpath/_snap/_owner keyed by that wd NUMBER. Both roles live in the shared fd table, so on close
 // a reused fd number must shed whichever role it held or a later read()/epoll_wait/inotify read misroutes to
-// a dead watch. #224: fd_reset_emul used to clear only g_inotify_owner[fd], leaving g_inotify[fd] stamped --
+// a dead watch. fd_reset_emul used to clear only g_inotify_owner[fd], leaving g_inotify[fd] stamped --
 // a recycled inotify-instance number then still routed read() into the inotify drain (io.c) against a stale
 // kqueue. Called from fd_reset_emul BEFORE the real close(); idempotent and a no-op on a plain fd.
 static void inotify_fd_reset(int fd) {
     if (fd < 0 || fd >= 1024) return;
-    if (g_inotify[fd]) { // this fd is an inotify INSTANCE -> Linux drops every watch it owned
+    if (g_inotify[fd]) {                  // this fd is an inotify INSTANCE -> Linux drops every watch it owned
         for (int i = 0; i < g_inomv_n;) { // discard the instance's pending move-queue entries (keyed by owner)
             int w = g_inomv[i].wd;
-            if (w >= 0 && w < 1024 && g_inotify_owner[w] == fd) g_inomv[i] = g_inomv[--g_inomv_n];
-            else i++;
+            if (w >= 0 && w < 1024 && g_inotify_owner[w] == fd)
+                g_inomv[i] = g_inomv[--g_inomv_n];
+            else
+                i++;
         }
         for (int w = 0; w < 1024; w++) { // tear down every directory-watch this instance owned
             if (g_inotify_owner[w] == fd && (g_inotify_wpath[w][0] || g_inotify_snap[w])) {
-                free(g_inotify_snap[w]); g_inotify_snap[w] = NULL;
-                g_inotify_wpath[w][0] = 0; g_inotify_owner[w] = 0;
+                free(g_inotify_snap[w]);
+                g_inotify_snap[w] = NULL;
+                g_inotify_wpath[w][0] = 0;
+                g_inotify_owner[w] = 0;
                 close(w); // the watch's own host O_EVTONLY fd; kqueue auto-removes its EVFILT_VNODE registration
             }
         }
@@ -879,10 +1030,13 @@ static void inotify_fd_reset(int fd) {
     // this fd may itself be a WATCH descriptor (freed via inotify_rm_watch or a stray close) -> drop its
     // cached snapshot/path/owner so a reused number can't inherit a stale directory diff.
     if (g_inotify_wpath[fd][0] || g_inotify_snap[fd]) {
-        free(g_inotify_snap[fd]); g_inotify_snap[fd] = NULL; g_inotify_wpath[fd][0] = 0;
+        free(g_inotify_snap[fd]);
+        g_inotify_snap[fd] = NULL;
+        g_inotify_wpath[fd][0] = 0;
     }
     g_inotify_owner[fd] = 0;
 }
+
 // Shared boundary errno translation for every svc_<family>() module tail. Each family early-returns from
 // service_local (before its trailing m2l_errno), so each must map G_RET's host(macOS) errno to the Linux
 // errno the guest expects (e.g. macOS EAGAIN=35 = Linux EDEADLK). Skip when c->redirect is set: a redirect

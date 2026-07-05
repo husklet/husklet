@@ -12,19 +12,21 @@
 //!    /proc/kcore has no darwin analogue; the darwin container's confinement is the darwinjail sandbox,
 //!    covered by the read-only case above).
 #![allow(unused_imports)]
-use crate::{group, src, port, in_rootfs, Case, Engine, Group};
+use crate::{group, in_rootfs, port, src, Case, Engine, Group};
 
-pub fn groups() -> Vec<Group> { vec![resources(), rootfs_ro(), proc_masking()] }
+pub fn groups() -> Vec<Group> {
+    vec![resources(), rootfs_ro(), proc_masking()]
+}
 
 /// docker --cpus / --ulimit: the guest self-sizes to its allotment, and getrlimit reflects the override.
 /// Portable -> runs on linux/x86_64, linux/aarch64, and darwin/aarch64.
 fn resources() -> Group {
     group("iso-resources", vec![
-        // NO --cpus (#412): nproc / sched_getaffinity / /proc/cpuinfo / /sys .../cpu/online must ALL report
+        // NO --cpus: nproc / sched_getaffinity / /proc/cpuinfo / /sys.../cpu/online must ALL report
         // the true HOST core count (via macOS hw.activecpu), not 1. Oracle -> the JIT must byte-match native
         // (the real host count) on both Linux engines; before the fix the mac-side engine's sysconf gave 1.
         src("cpu-default", "ext_iso/cpudefault.c").oracle(),
-        // #412 part 2 (htop still showed 1 CPU): htop sizes its CPU meters by opendir()ing
+        // part 2 (htop still showed 1 CPU): htop sizes its CPU meters by opendiring
         // /sys/devices/system/cpu and counting the cpuN SUBDIRECTORIES (not the online/possible/present
         // files) -- finding none it keeps its built-in default of 1. This probe runs htop's exact algorithm
         // plus glibc get_nprocs_conf() (also a cpuN-dir count). Oracle -> must byte-match the native host
@@ -34,7 +36,7 @@ fn resources() -> Group {
         // so htop's meter sizing honors --cpus exactly like nproc does.
         src("cpu-sysfs-dirs-cap2", "ext_iso/cpusysfs.c").cpus(2)
             .out("htop_cpus=2 get_nprocs=2 get_nprocs_conf=2\n"),
-        // #412 part 3 (htop cores all show IDENTICAL usage): htop/top compute per-core busy% from the
+        // part 3 (htop cores all show IDENTICAL usage): htop/top compute per-core busy% from the
         // DELTA of each /proc/stat cpuN line between two samples. dd emitted every cpuN line as the
         // aggregate host ticks split EVENLY (aggregate/ncpu), so every core's delta was identical -> all
         // meters move in lockstep. This probe pegs one core for ~250ms between two reads and checks the
@@ -44,7 +46,7 @@ fn resources() -> Group {
             .only(&[Engine::LinuxAarch64, Engine::LinuxX86_64]),
         // lscpu / util-linux reconstruct sockets/cores/threads from /sys/devices/system/cpu/cpuN/topology/*
         // (core_id, physical_package_id, thread_siblings_list, core_cpus_list, core_siblings_list, ...). dd
-        // materialized the cpuN dirs (#412) but served NONE of the topology attribute files -> every open
+        // materialized the cpuN dirs but served NONE of the topology attribute files -> every open
         // ENOENT'd and lscpu mis-counted. This probe drives lscpu's exact per-CPU reads and asserts a
         // host-independent structural verdict (values are host-variant; STRUCTURE is not). Linux-only (/sys).
         src("cpu-topology", "ext_iso/cputopo.c").out("cputopo ok=1\n")
@@ -89,7 +91,7 @@ mem.swap.max=[536870912] mem.high=[max] cpu.weight=[100] pids.max=[max]\n"),
             .cpus(2).mem(536870912)
             .only(&[Engine::LinuxAarch64, Engine::LinuxX86_64])
             .out("cpu.max=[200000 100000] mem.max=[536870912] controllers=[cpuset cpu io memory pids]\n"),
-        // #412 part 2, the REAL overlay-rootfs path `docker run htop` takes: a busybox shell in an alpine
+        // part 2, the REAL overlay-rootfs path `docker run htop` takes: a busybox shell in an alpine
         // image counts the /sys/devices/system/cpu/cpuN dirs (htop's source) and asserts it equals nproc.
         // Host-count-independent MATCH verdict (stable across engines/arches/hosts). Exercises the overlay
         // relative-open re-entry that a bare guest doesn't: without the cpuN-dir synth this printed MISMATCH.
@@ -121,19 +123,24 @@ if ( echo x > /tmp/dd_w_probe ) 2>/dev/null; then echo tmp=OK; rm -f /tmp/dd_w_p
 /// docker --read-only: the rootfs is EROFS, the /tmp pseudo-mount stays writable. Linux via a real image
 /// rootfs (both arches); darwin via a portable guest with the darwinjail rootfs armed.
 fn rootfs_ro() -> Group {
-    group("iso-readonly", vec![
-        in_rootfs("readonly-rootfs", "alpine", &["/bin/sh", "-c", RO_PROBE])
-            .only(&[Engine::LinuxAarch64, Engine::LinuxX86_64])
-            .read_only()
-            .has("root=RO").has("tmp=OK"),
-        // darwin: the same contract via darwinjail's EROFS interposers (the guest runs native, the rootfs
-        // jail is armed by DD_ROOTFS + DD_ROOTFS_RO). rootfs("alpine") just supplies a jail prefix -- the
-        // guest is our own Mach-O, not run FROM the rootfs.
-        port("readonly-rootfs-darwin", "ext_iso/rofs.c")
-            .rootfs("alpine").read_only()
-            .only(&[Engine::DarwinAarch64])
-            .out("root=EROFS tmp=OK\n"),
-    ])
+    group(
+        "iso-readonly",
+        vec![
+            in_rootfs("readonly-rootfs", "alpine", &["/bin/sh", "-c", RO_PROBE])
+                .only(&[Engine::LinuxAarch64, Engine::LinuxX86_64])
+                .read_only()
+                .has("root=RO")
+                .has("tmp=OK"),
+            // darwin: the same contract via darwinjail's EROFS interposers (the guest runs native, the rootfs
+            // jail is armed by DD_ROOTFS + DD_ROOTFS_RO). rootfs("alpine") just supplies a jail prefix -- the
+            // guest is our own Mach-O, not run FROM the rootfs.
+            port("readonly-rootfs-darwin", "ext_iso/rofs.c")
+                .rootfs("alpine")
+                .read_only()
+                .only(&[Engine::DarwinAarch64])
+                .out("root=EROFS tmp=OK\n"),
+        ],
+    )
 }
 
 // runc MaskedPaths: exist but empty (not ENOENT). ReadonlyPaths: a write fails "Read-only file system".
@@ -147,10 +154,16 @@ if ( echo x > /proc/sys/kernel/hostname ) 2>&1 | grep -qi 'read-only'; then echo
 /// runc MaskedPaths + ReadonlyPaths (a Linux procfs concept -> Linux engines only; see the module note on
 /// why darwin is excluded by construction rather than skipped).
 fn proc_masking() -> Group {
-    group("iso-proc-mask", vec![
-        in_rootfs("masked-paths", "alpine", &["/bin/sh", "-c", MASK_PROBE])
-            .only(&[Engine::LinuxAarch64, Engine::LinuxX86_64])
-            .has("kcore=exists").has("kcorelen=0").has("scsi=dir")
-            .has("firmware=exists").has("sysctl=RO"),
-    ])
+    group(
+        "iso-proc-mask",
+        vec![
+            in_rootfs("masked-paths", "alpine", &["/bin/sh", "-c", MASK_PROBE])
+                .only(&[Engine::LinuxAarch64, Engine::LinuxX86_64])
+                .has("kcore=exists")
+                .has("kcorelen=0")
+                .has("scsi=dir")
+                .has("firmware=exists")
+                .has("sysctl=RO"),
+        ],
+    )
 }

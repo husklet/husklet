@@ -1,4 +1,4 @@
-//! signalx — signal-delivery/control coverage (task #311). Owner: signalx-coverage agent. Edit ONLY this file.
+//! signalx — signal-delivery/control coverage. Owner: signalx-coverage agent. Edit ONLY this file.
 //! Builders: src(name,file).oracle()/.exit()/.out()/.has(); port(name,file) for cross-engine golden.
 //! Keep this module compiling at all times (`cargo build -p dd-tests`).
 //!
@@ -6,20 +6,22 @@
 //! SA_RESTART auto-restart vs EINTR, interval timers (setitimer/alarm), pause(), synchronous sigwait,
 //! and SA_SIGINFO sender identification — all portable golden verdicts. Plus Linux-only tgkill (oracle).
 #![allow(unused_imports)]
-use crate::{group, src, port, fixture, in_rootfs, Case, Engine, Group};
+use crate::{fixture, group, in_rootfs, port, src, Case, Engine, Group};
 
-pub fn groups() -> Vec<Group> { vec![signalx()] }
+pub fn groups() -> Vec<Group> {
+    vec![signalx()]
+}
 
 fn signalx() -> Group {
     group("ext-signal", vec![
         port("sigaltstack", "ext_sig/sigaltstack.c").out("sigaltstack set=1 ran=1 on_alt=1 query=1\n"),
         port("itimer", "ext_sig/itimer.c").out("itimer pending=1 fired=1 alarm=1\n"),
-        // #292 + IRQSLIM: an interval timer must preempt a syscall-free spin -- one direct-branch loop
+        // + IRQSLIM: an interval timer must preempt a syscall-free spin -- one direct-branch loop
         // (poll on the backward edge) and one computed-goto cycle (poll on the indirect entry). A lost
         // preemption hangs the guest -> harness timeout.
         port("sigspin", "ext_sig/sigspin.c").out("sigspin loop1=1 loop2=1\n"),
         port("pausesig", "ext_sig/pausesig.c").out("pausesig got=1 eintr=1\n"),
-        // #397 (LTP pause01/pause02): EVERY caught signal delivered by kill(2) -- incl. the fault-class
+        // (LTP pause01/pause02): EVERY caught signal delivered by kill(2) -- incl. the fault-class
         // SIGILL/SIGTRAP/SIGFPE/SIGSEGV/SIGBUS, which dd previously routed to its hardware-fault guard and
         // never woke pause() -- must wake pause() with -1/EINTR after the handler runs; SIGKILL is
         // un-catchable so pause() never returns and the process dies by SIGKILL. Diffed vs native.
@@ -35,16 +37,16 @@ fn signalx() -> Group {
         src("siginfo", "ext_sig/siginfo.c").oracle(),
         // Linux-only thread-directed signal -> native oracle
         src("tgkill", "ext_sig/tgkill.c").oracle(),
-        // #415 rt_sigaction edge semantics: SIGKILL/SIGSTOP + out-of-range signo -> EINVAL (and a "handler"
+        // rt_sigaction edge semantics: SIGKILL/SIGSTOP + out-of-range signo -> EINVAL (and a "handler"
         // for SIGKILL never prevents the kill), SA_RESETHAND one-shot reset, SA_NODEFER re-entry, oldact
         // query (LTP signal01/signal02). Portable POSIX -> golden on every engine.
         port("sigactedge", "ext_sig/sigactedge.c")
             .out("sigact kill_einval=1 stop_einval=1 range_einval=1 kill_kills=1 old_reports=1 reset_ran=1 reset_dfl=1 nodefer_nested=1\n"),
-        // #415 sigsuspend restores the EXACT pre-suspend mask after a caught signal (LTP sigsuspend01) --
+        // sigsuspend restores the EXACT pre-suspend mask after a caught signal (LTP sigsuspend01) --
         // regression guard for the g_force_deliver fix (the awaited signal is delivered without clearing its
         // bit from the restored mask). Portable POSIX -> golden.
         port("sigsuspendmask", "ext_sig/sigsuspendmask.c").out("sigsuspend eintr=1 ran=1 restored=1\n"),
-        // #415 sigpending/rt_sigpending: pending set union, no handler until unblocked, raw-syscall parity,
+        // sigpending/rt_sigpending: pending set union, no handler until unblocked, raw-syscall parity,
         // and EFAULT on a bad set pointer (LTP sigpending02). Linux syscalls -> native oracle.
         src("sigpendingx", "ext_sig/sigpendingx.c").only(&[Engine::LinuxAarch64, Engine::LinuxX86_64]).oracle(),
     ])

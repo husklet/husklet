@@ -81,7 +81,7 @@ static void svc_fill_rlimit(int resource, uint64_t *o) {
 }
 
 // sig_coredumps() and svc_core_rlimit_cur() are defined in os/linux/signal.c (included before this TU);
-// wait4/waitid below use them to synthesize WCOREDUMP. (#401/#403 reconciled to a single definition.)
+// wait4/waitid below use them to synthesize WCOREDUMP. (reconciled to a single definition.)
 
 // Emulate the kernel's close-on-exec sweep. The JIT's execve re-loads the new image IN-PROCESS (no real
 // host exec happens -- see case 221), so the kernel never closes FD_CLOEXEC descriptors for us. We must do
@@ -100,6 +100,7 @@ static int exec_fd_is_engine(int fd) {
         if (fd == g_vols[i].fd) return 1;
     return 0;
 }
+
 // Close the CLOEXEC guest fds among a bounded [0,maxfd) range (proc_pidinfo fallback path only).
 // The caller passes the REAL descriptor-table size (getdtablesize() = the current soft RLIMIT_NOFILE),
 // so do NOT clamp it DOWN -- that would leave CLOEXEC fds above the cap open across exec. The ceiling
@@ -110,12 +111,14 @@ static void exec_close_cloexec_scan(int maxfd) {
         if (exec_fd_is_engine(fd)) continue;
         int fl = fcntl(fd, F_GETFD);
         if (fl >= 0 && (fl & FD_CLOEXEC)) {
-            fd_reset_emul(fd); // #282: drop dd's emulation tables for this fd so a reused number isn't misrouted
+            fd_reset_emul(fd); // drop dd's emulation tables for this fd so a reused number isn't misrouted
             close(fd);
         }
     }
 }
+
 #include <libproc.h> // proc_pidinfo(PROC_PIDLISTFDS): enumerate only the OPEN fds (see below)
+
 static void exec_close_cloexec(void) {
     // Sweep only the fds that are actually OPEN, not the whole descriptor table. The daemon raises the
     // soft fd limit very high (getdtablesize() ~= 180K), so the old `for (fd=0; fd<getdtablesize())` scan
@@ -149,7 +152,7 @@ static void exec_close_cloexec(void) {
         if (exec_fd_is_engine(fd)) continue;
         int fl = fcntl(fd, F_GETFD);
         if (fl >= 0 && (fl & FD_CLOEXEC)) {
-            fd_reset_emul(fd); // #282: drop dd's emulation tables for this fd so a reused number isn't misrouted
+            fd_reset_emul(fd); // drop dd's emulation tables for this fd so a reused number isn't misrouted
             close(fd);
         }
     }
@@ -158,7 +161,7 @@ static void exec_close_cloexec(void) {
 
 // ---- fork child-side engine hooks (shared by clone/case-220 and clone3/case-435) -----------------
 // Everything the CHILD must reset before it re-enters guest code. Factored so the two fork sites can
-// never drift (clone3 was missing the W^X re-assert and the DIR*-cache drop), and instrumented: #371's
+// never drift (clone3 was missing the W^X re-assert and the DIR*-cache drop), and instrumented:
 // fork-cost histogram (DD_FORKPROF=1, read once) prints one stderr line per fork with per-hook wall-ns
 // deltas so a regression in the fork path is measurable, at zero cost when unset.
 static int forkprof_on(void) {
@@ -169,6 +172,7 @@ static int forkprof_on(void) {
     }
     return on;
 }
+
 static void fork_child_hooks(struct cpu *c) {
     uint64_t t[6] = {0};
     int fp = forkprof_on();
@@ -178,36 +182,36 @@ static void fork_child_hooks(struct cpu *c) {
     // cache -> the intermittent fork+exec SIGBUS. pthread_jit_write_protect_np(1) = RX (executable).
     // (No-op under the dual map, which never toggles W^X.)
     pthread_jit_write_protect_np(1);
-    install_host_sigaltstack(); // #392: the altstack registration doesn't survive fork() on Apple Silicon --
+    install_host_sigaltstack(); // the altstack registration doesn't survive fork on Apple Silicon --
                                 // re-arm it (COW-inherited region) so the child can still take a stack-overflow
                                 // guard fault (host SP == guest SP) instead of double-faulting into SIGILL.
-    jit_after_fork(); // dual map: re-alias RX from the child's COW RW pages at the same VA (~1us; keeps
-                      // every inherited translation valid) -- or, threaded parent, rebuild a fresh cache
+    jit_after_fork();           // dual map: re-alias RX from the child's COW RW pages at the same VA (~1us; keeps
+                                // every inherited translation valid) -- or, threaded parent, rebuild a fresh cache
 #ifdef PCACHE_FORK_HOOK
-    PCACHE_FORK_HOOK; // #339: drop inherited reloc records + bar child saves (an execve re-keys + unbars)
+    PCACHE_FORK_HOOK; // drop inherited reloc records + bar child saves (an execve re-keys + unbars)
 #endif
     G_SHADOW_RESET(c); // §B: child's pre-fork host_rets crossed run_block -> drop, use IBTC
     // Only when jit_after_fork REBUILT the cache at a fresh VA (threaded parent) is every cached body
     // pointer stale: it zeroed the shared g_map + g_ibtc, but the x86-only 2-way g_xibtc it cannot see
     // must ALSO be dropped -- else the child's first indirect branch resolves a stale body into the freed
     // parent RX alias -> SIGSEGV (the same class the execve path documents below). On the preserved-arena
-    // path (#371: single-threaded parent, or the MAP_JIT fallback) the cache VA and content are unchanged,
+    // path (single-threaded parent, or the MAP_JIT fallback) the cache VA and content are unchanged,
     // so the inherited g_xibtc stays valid and is kept warm.
     if (g_dualmap && !g_fork_preserved) G_SHADOW_CLEAR(c);
     if (fp) t[1] = now_ns();
     rc_reset(); // S2: invalidate the inherited (COW) path/metadata caches so the child can never serve
                 // an entry the parent populated before the FS diverged (generation bump; see fscache.c)
     if (fp) t[2] = now_ns();
-    g_ndirs = 0; // the getdents DIR* cache is the PARENT's -- closedir'ing inherited handles
-                 // (on the child's close) crashes; drop it so the child re-fdopendir's fresh
+    g_ndirs = 0;                 // the getdents DIR* cache is the PARENT's -- closedir'ing inherited handles
+                                 // (on the child's close) crashes; drop it so the child re-fdopendir's fresh
     kqueue_rebuild_after_fork(); // macOS kqueue() fds (epoll/timerfd/inotify) don't survive fork ->
                                  // rebuild them so the child doesn't EBADF on its inherited event fds
                                  // (also reinits g_ep_mtx, inherited-locked if a peer forked mid-epoll)
     if (fp) t[3] = now_ns();
-    thread_after_fork(); // reset process-private thread/futex locks a dead peer may have held at fork
-    sysv_after_fork();   // reset the SysV-shm lock (same fork-unsafe-mutex class)
-    ts_after_fork();     // #404: drop the inherited task-state slot cache so the child re-claims its own
-    poslk_after_fork();  // #340: re-cache pid; child inherits NONE of the parent's fcntl record locks
+    thread_after_fork();    // reset process-private thread/futex locks a dead peer may have held at fork
+    sysv_after_fork();      // reset the SysV-shm lock (same fork-unsafe-mutex class)
+    ts_after_fork();        // drop the inherited task-state slot cache so the child re-claims its own
+    poslk_after_fork();     // re-cache pid; child inherits NONE of the parent's fcntl record locks
     wipefork_apply_child(); // MADV_WIPEONFORK: zero-fill the ranges the guest marked wipe-on-fork
     mlk_reset();            // mlock(2): memory locks are NOT inherited across fork -> child starts unlocked
     if (fp) t[4] = now_ns();
@@ -216,22 +220,21 @@ static void fork_child_hooks(struct cpu *c) {
     // child silently dies. Clear the inherited task exception port so a fault falls through to the
     // POSIX diag_crash handler (which IS inherited) and reports fault=/pc=.
     if (getenv("CRASHDBG"))
-        task_set_exception_ports(mach_task_self(), EXC_MASK_BAD_ACCESS | EXC_MASK_BAD_INSTRUCTION,
-                                 MACH_PORT_NULL, EXCEPTION_DEFAULT, 0);
+        task_set_exception_ports(mach_task_self(), EXC_MASK_BAD_ACCESS | EXC_MASK_BAD_INSTRUCTION, MACH_PORT_NULL,
+                                 EXCEPTION_DEFAULT, 0);
 #endif
     if (fp) {
         t[5] = now_ns();
-        fprintf(stderr,
-                "[forkprof] child jit=%llu rc=%llu kq=%llu locks=%llu total=%llu ns preserved=%d rw=%p rx=%p\n",
-                (unsigned long long)(t[1] - t[0]), (unsigned long long)(t[2] - t[1]),
-                (unsigned long long)(t[3] - t[2]), (unsigned long long)(t[4] - t[3]),
-                (unsigned long long)(t[5] - t[0]), g_fork_preserved, (void *)g_cache, J_RX(g_cache));
+        fprintf(stderr, "[forkprof] child jit=%llu rc=%llu kq=%llu locks=%llu total=%llu ns preserved=%d rw=%p rx=%p\n",
+                (unsigned long long)(t[1] - t[0]), (unsigned long long)(t[2] - t[1]), (unsigned long long)(t[3] - t[2]),
+                (unsigned long long)(t[4] - t[3]), (unsigned long long)(t[5] - t[0]), g_fork_preserved, (void *)g_cache,
+                J_RX(g_cache));
     }
 }
 
 // ---- runtime credential overlay (USER ns) -------------------------------------------------------
 // The credential overlay state + accessors (g_ruid/euid/suid, g_rgid/egid/sgid, cred_init/cred_euid/
-// cred_egid/uid_permitted/gid_permitted) and the #255 new-file ownership stamp (g_fs*_ovr, newfile_*)
+// cred_egid/uid_permitted/gid_permitted) and the new-file ownership stamp (g_fs*_ovr, newfile_*)
 // are defined in os/linux/container/state.c -- BEFORE both fs.c (create sites) and this file in the
 // unity TU -- so the fs.c create paths and these set*id handlers share one view. See there for the
 // apt `_apt` / gosu postgres drop rationale.
@@ -239,10 +242,10 @@ static void fork_child_hooks(struct cpu *c) {
 // prctl per-process flags the kernel tracks and reports back on the matching GET (lsys-prctl-*):
 // no-new-privs is sticky (once set it can never clear), dumpable defaults to 1, pdeathsig defaults to 0.
 // (g_nnp lives in container/state.c so the /proc/self/status builder can report NoNewPrivs consistently.)
-static int g_dumpable = 1;      // PR_SET/GET_DUMPABLE
-static int g_pdeathsig;         // PR_SET/GET_PDEATHSIG
-static int g_thp_disable;       // PR_SET/GET_THP_DISABLE (per-process transparent-hugepage opt-out)
-static int g_subreaper;         // PR_SET/GET_CHILD_SUBREAPER (this process is a reaper for orphans)
+static int g_dumpable = 1; // PR_SET/GET_DUMPABLE
+static int g_pdeathsig;    // PR_SET/GET_PDEATHSIG
+static int g_thp_disable;  // PR_SET/GET_THP_DISABLE (per-process transparent-hugepage opt-out)
+static int g_subreaper;    // PR_SET/GET_CHILD_SUBREAPER (this process is a reaper for orphans)
 // The process EFFECTIVE capability set. The container starts as full root (all caps); we don't model
 // per-capability ENFORCEMENT in general, but we DO track what capset(2) leaves in the effective set so the
 // few prctl options the kernel gates on a specific capability (PR_SET_SECUREBITS / PR_CAPBSET_DROP need
@@ -254,22 +257,33 @@ static int g_subreaper;         // PR_SET/GET_CHILD_SUBREAPER (this process is a
 // personality(2) persona (lsys-personality): query with 0xffffffff, set returns the previous value.
 static unsigned g_persona;
 
-// ===================== sched_setscheduler / sched_*param family (#408) =====================
+// ===================== sched_setscheduler / sched_*param family =====================
 // macOS has no Linux scheduling policies, so dd does not actually change host scheduling; it validates the
 // arguments exactly as the Linux kernel does (policy/priority/pid/pointer -> EINVAL/ESRCH/EFAULT) and keeps
 // a per-process record of the requested policy+priority so sched_getscheduler/sched_getparam round-trip.
-static int g_sched_policy = 0;    // SCHED_OTHER
-static int g_sched_prio;          // sched_priority last set
+static int g_sched_policy = 0; // SCHED_OTHER
+static int g_sched_prio;       // sched_priority last set
 #define DD_SCHED_RESET_ON_FORK 0x40000000
+
 // Priority band for a policy (Linux sched_get_priority_min/max): FIFO(1)/RR(2) use 1..99, every other
 // valid policy uses 0..0. Returns 0 for a known policy (filling *lo/*hi), -1 for an unknown one (EINVAL).
 static int sched_prio_band(int policy, int *lo, int *hi) {
     switch (policy) {
-    case 1: case 2: *lo = 1; *hi = 99; return 0;               // SCHED_FIFO / SCHED_RR
-    case 0: case 3: case 5: *lo = 0; *hi = 0; return 0;        // SCHED_OTHER / SCHED_BATCH / SCHED_IDLE
+    case 1:
+    case 2:
+        *lo = 1;
+        *hi = 99;
+        return 0; // SCHED_FIFO / SCHED_RR
+    case 0:
+    case 3:
+    case 5:
+        *lo = 0;
+        *hi = 0;
+        return 0; // SCHED_OTHER / SCHED_BATCH / SCHED_IDLE
     default: return -1;
     }
 }
+
 // Does guest pid `gpid` name a live task? pid 0 (and the container init pid) is the caller itself; init pid 1
 // maps to its real host pid. A guest THREAD tid (glibc's pthread_getaffinity_np passes pd->tid, which the
 // JVM/Go/etc. do heavily) is a dd-internal id (g_next_tid, base 1000) that is NOT a host pid -- probing it
@@ -280,14 +294,14 @@ static int sched_prio_band(int policy, int *lo, int *hi) {
 // rejects gpid<0 (EINVAL) before calling.
 static int sched_pid_live(int gpid) {
     if (gpid == 0 || gpid == container_pid()) return 0;
-    if (gpid == 1 && g_init_hostpid) return 0;   // guest init
-    if (thread_tid_alive(gpid)) return 0;          // a live guest thread of THIS process (pd->tid)
+    if (gpid == 1 && g_init_hostpid) return 0; // guest init
+    if (thread_tid_alive(gpid)) return 0;      // a live guest thread of THIS process (pd->tid)
     if (kill((pid_t)gpid, 0) == 0) return 0;
     return (errno == ESRCH) ? -ESRCH : 0; // EPERM etc. -> the task exists, just not signalable
 }
 
-static int svc_proc(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3,
-                    uint64_t a4, uint64_t a5) {
+static int svc_proc(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4,
+                    uint64_t a5) {
     switch (nr) {
     // personality(persona): 0xffffffff queries (returns the current persona); any other value sets it and
     // returns the PREVIOUS persona. We track the persona word (incl. ADDR_NO_RANDOMIZE) so it round-trips.
@@ -299,7 +313,7 @@ static int svc_proc(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64
     }
     // ===================== Process & scheduling — clone/exec/wait/ids/prctl/futex/caps/sched =====================
     // capget(hdrp, datap): the container runs as root, so report every capability present -- but ALSO
-    // honour the kernel's ABI-version negotiation, which libcap-ng/libcap (and thus setpriv, #257) probe
+    // honour the kernel's ABI-version negotiation, which libcap-ng/libcap (and thus setpriv) probe
     // for. hdrp->version selects the layout; an UNSUPPORTED value makes the real kernel rewrite it to its
     // preferred version (v3) and fail EINVAL. The old stub ignored the header entirely and always returned
     // 0, so libcap-ng negotiated a bogus (0) version and capng_apply() then failed WITHOUT setting errno
@@ -332,8 +346,8 @@ static int svc_proc(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64
             G_RET(c) = (uint64_t)(-EINVAL);
             break;
         }
-        if (tpid != 0 && tpid != container_pid() && tpid != (int)getpid() &&
-            !thread_tid_alive(tpid) && kill((pid_t)tpid, 0) < 0 && errno == ESRCH) {
+        if (tpid != 0 && tpid != container_pid() && tpid != (int)getpid() && !thread_tid_alive(tpid) &&
+            kill((pid_t)tpid, 0) < 0 && errno == ESRCH) {
             G_RET(c) = (uint64_t)(-ESRCH);
             break;
         }
@@ -353,9 +367,9 @@ static int svc_proc(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64
                 // default `docker run` root container has CapPrm=00000000a80425fb, matching /proc/self/status
                 // exactly. The old 0xffffffff over-reported caps (e.g. CAP_SYS_ADMIN) the container lacks.
                 uint32_t prm = (i == 0) ? (uint32_t)DD_CAP_DEFAULT : (uint32_t)(DD_CAP_DEFAULT >> 32);
-                d[i * 3 + 0] = eff;        // effective: the guest's live effective set (respects drops)
-                d[i * 3 + 1] = prm;        // permitted: the docker default bounding/permitted set
-                d[i * 3 + 2] = 0;          // inheritable: empty (Docker default)
+                d[i * 3 + 0] = eff; // effective: the guest's live effective set (respects drops)
+                d[i * 3 + 1] = prm; // permitted: the docker default bounding/permitted set
+                d[i * 3 + 2] = 0;   // inheritable: empty (Docker default)
             }
         }
         G_RET(c) = 0;
@@ -374,7 +388,7 @@ static int svc_proc(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64
                 break;
             }
         }
-        // #257: a capset re-raises EFFECTIVE caps from the PERMITTED set (the only bits it may set). After a
+        // a capset re-raises EFFECTIVE caps from the PERMITTED set (the only bits it may set). After a
         // KEEPCAPS uid drop this is how setpriv restores effective CAP_SETGID so its following setresgid works.
         cred_init();
         g_cap_setid_eff = g_cap_setid_perm;
@@ -450,8 +464,8 @@ static int svc_proc(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64
 #ifdef R_REPSTR // W4-C: x86-only rep cmps/scas idiom firing counts
         if (getenv("PROF"))
             fprintf(stderr, "[prof] repstr=%llu repstr_elems=%llu repmovs=%llu repstos=%llu\n",
-                    (unsigned long long)g_repstr_n, (unsigned long long)g_repstr_elems,
-                    (unsigned long long)g_repmovs_n, (unsigned long long)g_repstos_n);
+                    (unsigned long long)g_repstr_n, (unsigned long long)g_repstr_elems, (unsigned long long)g_repmovs_n,
+                    (unsigned long long)g_repstos_n);
 #endif
 #ifdef G_PROF_EXTRA
         G_PROF_EXTRA; // W5B: x86 tier-2 promotion counters
@@ -470,8 +484,8 @@ static int svc_proc(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64
         PCACHE_SAVE_HOOK; // opt8: persist the translated arena before the one-shot _exit (DDJIT_PCACHE only)
 #endif
         proc_reg_unlink(); // drop our /proc process-table entry (_exit bypasses the atexit handler)
-        poslk_on_exit();   // #340: release this process's in-engine fcntl advisory locks
-        sysv_on_exit();    // #421: apply SEM_UNDO + GC this container's SysV objects (_exit skips atexit)
+        poslk_on_exit();   // release this process's in-engine fcntl advisory locks
+        sysv_on_exit();    // apply SEM_UNDO + GC this container's SysV objects (_exit skips atexit)
         _exit((int)a0);
     case 96:
         G_RET(c) = (uint64_t)getpid();
@@ -543,18 +557,32 @@ static int svc_proc(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64
     }
     // sched_yield
     case 124: G_RET(c) = 0; break;
-    // ---- #408: sched_setscheduler / sched_*param arg-validation family (LTP sched_*01..03). dd has no real
+    // ---- sched_setscheduler / sched_*param arg-validation family (LTP sched_*01..03). dd has no real
     // Linux scheduling classes, so these validate exactly like the kernel and record the requested
     // policy/priority for round-trip reads; the errno ORDER matches the kernel line-for-line.
     // sched_setparam(pid, param)
     case 118: {
         int pid = (int)a0;
-        if (!a1 || pid < 0) { G_RET(c) = (uint64_t)(-EINVAL); break; }        // do_sched_setscheduler: !param||pid<0
-        if (guest_bad_ptr(a1, sizeof(int))) { G_RET(c) = (uint64_t)(-EFAULT); break; }
-        int prio; memcpy(&prio, (void *)a1, sizeof(int));
-        if (sched_pid_live(pid) < 0) { G_RET(c) = (uint64_t)(-ESRCH); break; }
-        int lo, hi; sched_prio_band(g_sched_policy, &lo, &hi);                // current policy is always valid
-        if (prio < lo || prio > hi) { G_RET(c) = (uint64_t)(-EINVAL); break; }
+        if (!a1 || pid < 0) {
+            G_RET(c) = (uint64_t)(-EINVAL);
+            break;
+        } // do_sched_setscheduler: !param||pid<0
+        if (guest_bad_ptr(a1, sizeof(int))) {
+            G_RET(c) = (uint64_t)(-EFAULT);
+            break;
+        }
+        int prio;
+        memcpy(&prio, (void *)a1, sizeof(int));
+        if (sched_pid_live(pid) < 0) {
+            G_RET(c) = (uint64_t)(-ESRCH);
+            break;
+        }
+        int lo, hi;
+        sched_prio_band(g_sched_policy, &lo, &hi); // current policy is always valid
+        if (prio < lo || prio > hi) {
+            G_RET(c) = (uint64_t)(-EINVAL);
+            break;
+        }
         g_sched_prio = prio;
         G_RET(c) = 0;
         break;
@@ -562,46 +590,84 @@ static int svc_proc(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64
     // sched_setscheduler(pid, policy, param)
     case 119: {
         int pid = (int)a0, policy = (int)a1;
-        if (!a2 || pid < 0) { G_RET(c) = (uint64_t)(-EINVAL); break; }        // !param || pid<0
-        if (guest_bad_ptr(a2, sizeof(int))) { G_RET(c) = (uint64_t)(-EFAULT); break; } // copy_from_user(param)
-        int prio; memcpy(&prio, (void *)a2, sizeof(int));
-        if (sched_pid_live(pid) < 0) { G_RET(c) = (uint64_t)(-ESRCH); break; } // find_process_by_pid
+        if (!a2 || pid < 0) {
+            G_RET(c) = (uint64_t)(-EINVAL);
+            break;
+        } // !param || pid<0
+        if (guest_bad_ptr(a2, sizeof(int))) {
+            G_RET(c) = (uint64_t)(-EFAULT);
+            break;
+        } // copy_from_user(param)
+        int prio;
+        memcpy(&prio, (void *)a2, sizeof(int));
+        if (sched_pid_live(pid) < 0) {
+            G_RET(c) = (uint64_t)(-ESRCH);
+            break;
+        } // find_process_by_pid
         int base = policy & ~DD_SCHED_RESET_ON_FORK, lo, hi;
-        if (sched_prio_band(base, &lo, &hi) < 0) { G_RET(c) = (uint64_t)(-EINVAL); break; } // unknown policy
-        if (prio < lo || prio > hi) { G_RET(c) = (uint64_t)(-EINVAL); break; }             // priority out of band
-        g_sched_policy = base; g_sched_prio = prio;
+        if (sched_prio_band(base, &lo, &hi) < 0) {
+            G_RET(c) = (uint64_t)(-EINVAL);
+            break;
+        } // unknown policy
+        if (prio < lo || prio > hi) {
+            G_RET(c) = (uint64_t)(-EINVAL);
+            break;
+        } // priority out of band
+        g_sched_policy = base;
+        g_sched_prio = prio;
         G_RET(c) = 0;
         break;
     }
     // sched_getscheduler(pid)
     case 120: {
         int pid = (int)a0;
-        if (pid < 0) { G_RET(c) = (uint64_t)(-EINVAL); break; }
-        if (sched_pid_live(pid) < 0) { G_RET(c) = (uint64_t)(-ESRCH); break; }
+        if (pid < 0) {
+            G_RET(c) = (uint64_t)(-EINVAL);
+            break;
+        }
+        if (sched_pid_live(pid) < 0) {
+            G_RET(c) = (uint64_t)(-ESRCH);
+            break;
+        }
         G_RET(c) = (uint64_t)g_sched_policy;
         break;
     }
     // sched_getparam(pid, param)
     case 121: {
         int pid = (int)a0;
-        if (!a1 || pid < 0) { G_RET(c) = (uint64_t)(-EINVAL); break; }        // kernel: !param || pid<0
-        if (sched_pid_live(pid) < 0) { G_RET(c) = (uint64_t)(-ESRCH); break; }
-        if (guest_bad_ptr(a1, sizeof(int))) { G_RET(c) = (uint64_t)(-EFAULT); break; }
-        memcpy((void *)a1, &g_sched_prio, sizeof(int));                       // struct sched_param{int sched_priority}
+        if (!a1 || pid < 0) {
+            G_RET(c) = (uint64_t)(-EINVAL);
+            break;
+        } // kernel: !param || pid<0
+        if (sched_pid_live(pid) < 0) {
+            G_RET(c) = (uint64_t)(-ESRCH);
+            break;
+        }
+        if (guest_bad_ptr(a1, sizeof(int))) {
+            G_RET(c) = (uint64_t)(-EFAULT);
+            break;
+        }
+        memcpy((void *)a1, &g_sched_prio, sizeof(int)); // struct sched_param{int sched_priority}
         G_RET(c) = 0;
         break;
     }
     // sched_get_priority_max(policy)
     case 125: {
         int lo, hi;
-        if (sched_prio_band((int)a0, &lo, &hi) < 0) { G_RET(c) = (uint64_t)(-EINVAL); break; }
+        if (sched_prio_band((int)a0, &lo, &hi) < 0) {
+            G_RET(c) = (uint64_t)(-EINVAL);
+            break;
+        }
         G_RET(c) = (uint64_t)hi;
         break;
     }
     // sched_get_priority_min(policy)
     case 126: {
         int lo, hi;
-        if (sched_prio_band((int)a0, &lo, &hi) < 0) { G_RET(c) = (uint64_t)(-EINVAL); break; }
+        if (sched_prio_band((int)a0, &lo, &hi) < 0) {
+            G_RET(c) = (uint64_t)(-EINVAL);
+            break;
+        }
         G_RET(c) = (uint64_t)lo;
         break;
     }
@@ -609,11 +675,20 @@ static int svc_proc(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64
     // kernel: pid<0 -> EINVAL, missing task -> ESRCH, bad tp -> EFAULT.
     case 127: {
         int pid = (int)a0;
-        if (pid < 0) { G_RET(c) = (uint64_t)(-EINVAL); break; }
-        if (sched_pid_live(pid) < 0) { G_RET(c) = (uint64_t)(-ESRCH); break; }
-        if (guest_bad_ptr(a1, sizeof(struct timespec))) { G_RET(c) = (uint64_t)(-EFAULT); break; }
-        ((uint64_t *)a1)[0] = 0;          // tv_sec
-        ((uint64_t *)a1)[1] = 100000000;  // tv_nsec = 100ms
+        if (pid < 0) {
+            G_RET(c) = (uint64_t)(-EINVAL);
+            break;
+        }
+        if (sched_pid_live(pid) < 0) {
+            G_RET(c) = (uint64_t)(-ESRCH);
+            break;
+        }
+        if (guest_bad_ptr(a1, sizeof(struct timespec))) {
+            G_RET(c) = (uint64_t)(-EFAULT);
+            break;
+        }
+        ((uint64_t *)a1)[0] = 0;         // tv_sec
+        ((uint64_t *)a1)[1] = 100000000; // tv_nsec = 100ms
         G_RET(c) = 0;
         break;
     }
@@ -629,8 +704,10 @@ static int svc_proc(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64
             break;
         }
         int prio = (int)a2;
-        if (prio > 19) prio = 19;
-        else if (prio < -20) prio = -20;
+        if (prio > 19)
+            prio = 19;
+        else if (prio < -20)
+            prio = -20;
         setpriority(which, (int)a1, prio);
         G_RET(c) = 0;
         break;
@@ -664,11 +741,10 @@ static int svc_proc(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64
             G_RET(c) = (uint64_t)(-(int64_t)EPERM);
             break;
         }
-        if (g_cap_setid_eff)
-            g_ruid = g_suid = u;
+        if (g_cap_setid_eff) g_ruid = g_suid = u;
         g_euid = u;
-        g_fsuid_ovr = -1; // #255: fsuid follows the new euid (POSIX) -> new files stamped with it
-        cred_uid_changed(); // #257: recompute CAP_SETID after the uid transition (drop vs keepcaps)
+        g_fsuid_ovr = -1;   // fsuid follows the new euid (POSIX) -> new files stamped with it
+        cred_uid_changed(); // recompute CAP_SETID after the uid transition (drop vs keepcaps)
         G_RET(c) = 0;
         break;
     }
@@ -680,10 +756,9 @@ static int svc_proc(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64
             G_RET(c) = (uint64_t)(-(int64_t)EPERM);
             break;
         }
-        if (g_cap_setid_eff)
-            g_rgid = g_sgid = gg;
+        if (g_cap_setid_eff) g_rgid = g_sgid = gg;
         g_egid = gg;
-        g_fsgid_ovr = -1; // #255: fsgid follows the new egid
+        g_fsgid_ovr = -1; // fsgid follows the new egid
         G_RET(c) = 0;
         break;
     }
@@ -696,14 +771,11 @@ static int svc_proc(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64
             G_RET(c) = (uint64_t)(-(int64_t)EPERM);
             break;
         }
-        if (r != -1)
-            g_ruid = r;
-        if (e != -1)
-            g_euid = e;
-        if (s != -1)
-            g_suid = s;
-        g_fsuid_ovr = -1; // #255: fsuid follows euid
-        cred_uid_changed(); // #257: recompute CAP_SETID after the uid transition (drop vs keepcaps)
+        if (r != -1) g_ruid = r;
+        if (e != -1) g_euid = e;
+        if (s != -1) g_suid = s;
+        g_fsuid_ovr = -1;   // fsuid follows euid
+        cred_uid_changed(); // recompute CAP_SETID after the uid transition (drop vs keepcaps)
         G_RET(c) = 0;
         break;
     }
@@ -715,13 +787,10 @@ static int svc_proc(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64
             G_RET(c) = (uint64_t)(-(int64_t)EPERM);
             break;
         }
-        if (r != -1)
-            g_rgid = r;
-        if (e != -1)
-            g_egid = e;
-        if (s != -1)
-            g_sgid = s;
-        g_fsgid_ovr = -1; // #255: fsgid follows egid
+        if (r != -1) g_rgid = r;
+        if (e != -1) g_egid = e;
+        if (s != -1) g_sgid = s;
+        g_fsgid_ovr = -1; // fsgid follows egid
         G_RET(c) = 0;
         break;
     }
@@ -734,14 +803,11 @@ static int svc_proc(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64
             G_RET(c) = (uint64_t)(-(int64_t)EPERM);
             break;
         }
-        if (r != -1)
-            g_ruid = r;
-        if (e != -1)
-            g_euid = e;
-        if (r != -1 || (e != -1 && e != old_ruid))
-            g_suid = g_euid;
-        g_fsuid_ovr = -1; // #255: fsuid follows euid
-        cred_uid_changed(); // #257: recompute CAP_SETID after the uid transition (drop vs keepcaps)
+        if (r != -1) g_ruid = r;
+        if (e != -1) g_euid = e;
+        if (r != -1 || (e != -1 && e != old_ruid)) g_suid = g_euid;
+        g_fsuid_ovr = -1;   // fsuid follows euid
+        cred_uid_changed(); // recompute CAP_SETID after the uid transition (drop vs keepcaps)
         G_RET(c) = 0;
         break;
     }
@@ -754,13 +820,10 @@ static int svc_proc(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64
             G_RET(c) = (uint64_t)(-(int64_t)EPERM);
             break;
         }
-        if (r != -1)
-            g_rgid = r;
-        if (e != -1)
-            g_egid = e;
-        if (r != -1 || (e != -1 && e != old_rgid))
-            g_sgid = g_egid;
-        g_fsgid_ovr = -1; // #255: fsgid follows egid
+        if (r != -1) g_rgid = r;
+        if (e != -1) g_egid = e;
+        if (r != -1 || (e != -1 && e != old_rgid)) g_sgid = g_egid;
+        g_fsgid_ovr = -1; // fsgid follows egid
         G_RET(c) = 0;
         break;
     }
@@ -873,15 +936,22 @@ static int svc_proc(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64
         // behavior below: the container egid when a USER-ns gid is set, else the real host set.
         if (g_groups_parsed) {
             int cnt = g_ngroups;
-            if ((int)a0 == 0) { G_RET(c) = (uint64_t)cnt; break; } // size 0 -> just the count
-            if ((int)a0 < cnt) { G_RET(c) = (uint64_t)(int64_t)(-EINVAL); break; }
+            if ((int)a0 == 0) {
+                G_RET(c) = (uint64_t)cnt;
+                break;
+            } // size 0 -> just the count
+            if ((int)a0 < cnt) {
+                G_RET(c) = (uint64_t)(int64_t)(-EINVAL);
+                break;
+            }
             if (a1) {
                 if (!host_range_mapped((uintptr_t)a1, (size_t)cnt * sizeof(gid_t))) {
                     G_RET(c) = (uint64_t)(int64_t)(-EFAULT);
                     break;
                 }
                 gid_t *out = (gid_t *)a1;
-                for (int i = 0; i < cnt; i++) out[i] = g_groups[i];
+                for (int i = 0; i < cnt; i++)
+                    out[i] = g_groups[i];
             }
             G_RET(c) = (uint64_t)cnt;
             break;
@@ -902,16 +972,23 @@ static int svc_proc(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64
     // getgroups(2) + /proc/self/status Groups: reflect the guest's current view; size 0 clears the set. Bare
     // mode (unparsed) keeps the historical no-op-succeed. size out of range -> -EINVAL; bad list -> -EFAULT.
     case 159: {
-        if (!g_groups_parsed) { G_RET(c) = 0; break; }
+        if (!g_groups_parsed) {
+            G_RET(c) = 0;
+            break;
+        }
         long ng = (long)a0;
-        if (ng < 0 || ng > DD_NGROUPS_MAX) { G_RET(c) = (uint64_t)(int64_t)(-EINVAL); break; }
+        if (ng < 0 || ng > DD_NGROUPS_MAX) {
+            G_RET(c) = (uint64_t)(int64_t)(-EINVAL);
+            break;
+        }
         if (ng > 0 && a1) {
             if (!host_range_mapped((uintptr_t)a1, (size_t)ng * sizeof(gid_t))) {
                 G_RET(c) = (uint64_t)(int64_t)(-EFAULT);
                 break;
             }
             const gid_t *in = (const gid_t *)a1;
-            for (long i = 0; i < ng; i++) g_groups[i] = in[i];
+            for (long i = 0; i < ng; i++)
+                g_groups[i] = in[i];
         }
         g_ngroups = (int)ng;
         G_RET(c) = 0;
@@ -924,13 +1001,19 @@ static int svc_proc(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64
         // legal; anything else is -EINVAL BEFORE the buffer is touched (LTP getrusage02 passes who=-2). The
         // old handler mapped every non-(-1) value to SELF and always "succeeded".
         int who_g = (int)a0;
-        if (who_g != 0 && who_g != -1 && who_g != 1) { G_RET(c) = (uint64_t)(int64_t)(-EINVAL); break; }
+        if (who_g != 0 && who_g != -1 && who_g != 1) {
+            G_RET(c) = (uint64_t)(int64_t)(-EINVAL);
+            break;
+        }
         // RUSAGE_THREAD(1) -> SELF (macOS has no per-thread rusage; SELF is the closest faithful account).
         int who = (who_g == -1) ? RUSAGE_CHILDREN : RUSAGE_SELF;
         if (a1) {
             // The 144-byte struct rusage is written directly by the engine (not via a host syscall), so a
-            // bad/unmapped pointer must return -EFAULT here rather than fault the engine (#395, access_ok).
-            if (!host_range_mapped((uintptr_t)a1, 144)) { G_RET(c) = (uint64_t)(int64_t)(-EFAULT); break; }
+            // bad/unmapped pointer must return -EFAULT here rather than fault the engine (access_ok).
+            if (!host_range_mapped((uintptr_t)a1, 144)) {
+                G_RET(c) = (uint64_t)(int64_t)(-EFAULT);
+                break;
+            }
             uint8_t *d = (uint8_t *)a1;
             // Linux struct rusage layout (18 longs)
             memset(d, 0, 144);
@@ -958,18 +1041,24 @@ static int svc_proc(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64
         if ((int)a0 == 15) {
             // PR_SET_NAME: kernel copies up to 16 bytes from arg2 -> -EFAULT on an unreadable pointer
             // (LTP prctl02 PR_SET_NAME/bad_addr). Validate before the deref.
-            if (guest_bad_ptr((uintptr_t)a1, 1)) { G_RET(c) = (uint64_t)(-EFAULT); break; }
+            if (guest_bad_ptr((uintptr_t)a1, 1)) {
+                G_RET(c) = (uint64_t)(-EFAULT);
+                break;
+            }
             snprintf(g_procname, sizeof g_procname, "%.15s", (const char *)a1);
             G_RET(c) = 0;
             break;
         } // PR_SET_NAME
         if ((int)a0 == 16) {
-            if (guest_bad_ptr((uintptr_t)a1, 16)) { G_RET(c) = (uint64_t)(-EFAULT); break; }
+            if (guest_bad_ptr((uintptr_t)a1, 16)) {
+                G_RET(c) = (uint64_t)(-EFAULT);
+                break;
+            }
             snprintf((char *)a1, 16, "%s", g_procname);
             G_RET(c) = 0;
             break;
         } // PR_GET_NAME
-        // #257: PR_SET_KEEPCAPS(8)/PR_GET_KEEPCAPS(7) drive the CAP_SETID retention model -- setpriv arms
+        // PR_SET_KEEPCAPS(8)/PR_GET_KEEPCAPS(7) drive the CAP_SETID retention model -- setpriv arms
         // KEEPCAPS so its post-uid-drop capset can re-raise CAP_SETGID (see cred_uid_changed/capset).
         if ((int)a0 == 8) {
             g_keepcaps = (a1 != 0);
@@ -984,11 +1073,19 @@ static int svc_proc(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64
         // under the JIT, but the value the guest set is reported back). arg2 must be 0 (clear) or a valid
         // signal number 1..64; anything else is -EINVAL (LTP prctl02 PR_SET_PDEATHSIG/ULONG_MAX).
         if ((int)a0 == 1) {
-            if (a1 > 64) { G_RET(c) = (uint64_t)(-EINVAL); break; }
-            g_pdeathsig = (int)a1; G_RET(c) = 0; break;
+            if (a1 > 64) {
+                G_RET(c) = (uint64_t)(-EINVAL);
+                break;
+            }
+            g_pdeathsig = (int)a1;
+            G_RET(c) = 0;
+            break;
         }
         if ((int)a0 == 2) {
-            if (guest_bad_ptr((uintptr_t)a1, sizeof(int))) { G_RET(c) = (uint64_t)(-EFAULT); break; }
+            if (guest_bad_ptr((uintptr_t)a1, sizeof(int))) {
+                G_RET(c) = (uint64_t)(-EFAULT);
+                break;
+            }
             *(int *)a1 = g_pdeathsig;
             G_RET(c) = 0;
             break;
@@ -996,22 +1093,34 @@ static int svc_proc(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64
         // PR_GET_DUMPABLE(3)/PR_SET_DUMPABLE(4): the dumpable flag round-trips. SET accepts ONLY
         // SUID_DUMP_DISABLE(0) and SUID_DUMP_USER(1); any other value (incl. 2 = the internal
         // SUID_DUMP_ROOT, which is not settable from userspace) is -EINVAL (LTP prctl02 PR_SET_DUMPABLE/2).
-        if ((int)a0 == 3) { G_RET(c) = (uint64_t)(unsigned)g_dumpable; break; }
+        if ((int)a0 == 3) {
+            G_RET(c) = (uint64_t)(unsigned)g_dumpable;
+            break;
+        }
         if ((int)a0 == 4) {
-            if (a1 > 1) { G_RET(c) = (uint64_t)(-EINVAL); break; }
+            if (a1 > 1) {
+                G_RET(c) = (uint64_t)(-EINVAL);
+                break;
+            }
             g_dumpable = (int)a1;
             G_RET(c) = 0;
             break;
         }
         // PR_SET_NO_NEW_PRIVS(38)/PR_GET_NO_NEW_PRIVS(39): sticky once set; SET requires arg2==1.
         if ((int)a0 == 38) {
-            if (a1 != 1 || a2 || a3 || a4) { G_RET(c) = (uint64_t)(-EINVAL); break; }
+            if (a1 != 1 || a2 || a3 || a4) {
+                G_RET(c) = (uint64_t)(-EINVAL);
+                break;
+            }
             g_nnp = 1;
             G_RET(c) = 0;
             break;
         }
         if ((int)a0 == 39) {
-            if (a1 || a2 || a3 || a4) { G_RET(c) = (uint64_t)(-EINVAL); break; }
+            if (a1 || a2 || a3 || a4) {
+                G_RET(c) = (uint64_t)(-EINVAL);
+                break;
+            }
             G_RET(c) = (uint64_t)(unsigned)g_nnp;
             break;
         }
@@ -1021,9 +1130,16 @@ static int svc_proc(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64
         // process-tree feature dd's 1:1 host-fork model does not implement (an orphaned guest grandchild is
         // reparented by the host kernel, not routed back to the guest subreaper), so prctl03's reparent/
         // SIGCHLD/wait subtests are a known process-model gap, out of this syscall layer's scope.
-        if ((int)a0 == 36) { g_subreaper = (a1 != 0); G_RET(c) = 0; break; }
+        if ((int)a0 == 36) {
+            g_subreaper = (a1 != 0);
+            G_RET(c) = 0;
+            break;
+        }
         if ((int)a0 == 37) {
-            if (guest_bad_ptr((uintptr_t)a1, sizeof(int))) { G_RET(c) = (uint64_t)(-EFAULT); break; }
+            if (guest_bad_ptr((uintptr_t)a1, sizeof(int))) {
+                G_RET(c) = (uint64_t)(-EFAULT);
+                break;
+            }
             *(int *)a1 = g_subreaper;
             G_RET(c) = 0;
             break;
@@ -1033,12 +1149,18 @@ static int svc_proc(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64
         // arg3/arg4/arg5 (LTP prctl02 PR_{GET,SET}_THP_DISABLE). Modeling it (rather than the old blanket
         // EINVAL) makes the feature probe succeed so its dependent LTP subtests run, matching real Linux.
         if ((int)a0 == 42) {
-            if (a1 || a2 || a3 || a4) { G_RET(c) = (uint64_t)(-EINVAL); break; }
+            if (a1 || a2 || a3 || a4) {
+                G_RET(c) = (uint64_t)(-EINVAL);
+                break;
+            }
             G_RET(c) = (uint64_t)(unsigned)g_thp_disable;
             break;
         }
         if ((int)a0 == 41) {
-            if (a2 || a3 || a4) { G_RET(c) = (uint64_t)(-EINVAL); break; }
+            if (a2 || a3 || a4) {
+                G_RET(c) = (uint64_t)(-EINVAL);
+                break;
+            }
             g_thp_disable = (a1 != 0);
             G_RET(c) = 0;
             break;
@@ -1050,13 +1172,22 @@ static int svc_proc(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64
         //   arg4/5 must be 0). Any other sub-command is -EINVAL.
         if ((int)a0 == 47) {
             if (a1 == 4) { // PR_CAP_AMBIENT_CLEAR_ALL
-                if (a2 || a3 || a4) { G_RET(c) = (uint64_t)(-EINVAL); break; }
+                if (a2 || a3 || a4) {
+                    G_RET(c) = (uint64_t)(-EINVAL);
+                    break;
+                }
                 G_RET(c) = 0;
                 break;
             }
-            if (a3 || a4) { G_RET(c) = (uint64_t)(-EINVAL); break; } // arg4/arg5 unused for the rest
-            if (a1 == 1 || a1 == 2 || a1 == 3) {                    // IS_SET / RAISE / LOWER
-                if (a2 > 40 /* CAP_LAST_CAP (CAP_CHECKPOINT_RESTORE) */) { G_RET(c) = (uint64_t)(-EINVAL); break; }
+            if (a3 || a4) {
+                G_RET(c) = (uint64_t)(-EINVAL);
+                break;
+            } // arg4/arg5 unused for the rest
+            if (a1 == 1 || a1 == 2 || a1 == 3) { // IS_SET / RAISE / LOWER
+                if (a2 > 40 /* CAP_LAST_CAP (CAP_CHECKPOINT_RESTORE) */) {
+                    G_RET(c) = (uint64_t)(-EINVAL);
+                    break;
+                }
                 G_RET(c) = (a1 == 1) ? 0 /* IS_SET: not in the (empty) ambient set */ : 0;
                 break;
             }
@@ -1067,7 +1198,10 @@ static int svc_proc(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64
         // 0 (LTP prctl02 PR_GET_SPECULATION_CTRL/arg-nonzero -> EINVAL); the feature must NOT report EINVAL
         // for the all-zero probe, or its dependent subtests would be skipped where real Linux runs them.
         if ((int)a0 == 52) {
-            if (a2 || a3 || a4) { G_RET(c) = (uint64_t)(-EINVAL); break; }
+            if (a2 || a3 || a4) {
+                G_RET(c) = (uint64_t)(-EINVAL);
+                break;
+            }
             G_RET(c) = 2; // PR_SPEC_PRCTL is off, mitigation not forced: PR_SPEC_ENABLE
             break;
         }
@@ -1076,25 +1210,40 @@ static int svc_proc(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64
         // if present, 0 if absent, -EINVAL for a cap index past CAP_LAST_CAP (40). The docker default holds
         // exactly the 14 bits of DD_CAP_DEFAULT (g_cap_bnd), so e.g. CAP_SYS_ADMIN(21) reads 0.
         if ((int)a0 == 23) {
-            if (a1 > 40 /* CAP_LAST_CAP */) { G_RET(c) = (uint64_t)(-EINVAL); break; }
+            if (a1 > 40 /* CAP_LAST_CAP */) {
+                G_RET(c) = (uint64_t)(-EINVAL);
+                break;
+            }
             G_RET(c) = (uint64_t)((g_cap_bnd >> a1) & 1ull);
             break;
         }
         // PR_GET_SECCOMP(21): the docker default seccomp profile is always applied, so real docker reports
         // filter mode (2) here AND as Seccomp:2 in /proc/self/status. Match it (unfiltered Linux returns 0);
         // software that gates behaviour on being sandboxed reads this. arg2..5 are ignored by the kernel.
-        if ((int)a0 == 21) { G_RET(c) = 2; break; }
+        if ((int)a0 == 21) {
+            G_RET(c) = 2;
+            break;
+        }
         // PR_SET_SECUREBITS(28) and PR_CAPBSET_DROP(24) require CAP_SETPCAP in the effective set; without it
         // the kernel returns -EPERM before any further validation (LTP prctl02 drops CAP_SETPCAP first). With
         // the cap held (the container default) they succeed for a well-formed argument.
         if ((int)a0 == 28) {
-            if (!(g_cap_eff & (1ull << CAP_SETPCAP))) { G_RET(c) = (uint64_t)(-EPERM); break; }
+            if (!(g_cap_eff & (1ull << CAP_SETPCAP))) {
+                G_RET(c) = (uint64_t)(-EPERM);
+                break;
+            }
             G_RET(c) = 0; // securebits accepted (we don't enforce them, but the value round-trips as 0)
             break;
         }
         if ((int)a0 == 24) {
-            if (!(g_cap_eff & (1ull << CAP_SETPCAP))) { G_RET(c) = (uint64_t)(-EPERM); break; }
-            if (a1 > 40 /* CAP_LAST_CAP */) { G_RET(c) = (uint64_t)(-EINVAL); break; }
+            if (!(g_cap_eff & (1ull << CAP_SETPCAP))) {
+                G_RET(c) = (uint64_t)(-EPERM);
+                break;
+            }
+            if (a1 > 40 /* CAP_LAST_CAP */) {
+                G_RET(c) = (uint64_t)(-EINVAL);
+                break;
+            }
             g_cap_bnd &= ~(1ull << a1); // actually drop the bit so PR_CAPBSET_READ/CapBnd stay consistent
             G_RET(c) = 0;
             break;
@@ -1147,9 +1296,9 @@ static int svc_proc(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64
         // parent and child see one coherent file via the inherited description, exactly as POSIX requires
         // (the heap-resident buffers would otherwise COW-diverge while the fd stays shared).
         memf_materialize_all();
-        sigexit_init(); // #403: create the shared guest-signal-death relay in the PARENT before forking, so
+        sigexit_init(); // create the shared guest-signal-death relay in the PARENT before forking, so
                         // this child (and its descendants) inherit the same MAP_SHARED page it may die into.
-        uint64_t fk0 = forkprof_on() ? now_ns() : 0; // #371: parent-side fork() latency (DD_FORKPROF=1)
+        uint64_t fk0 = forkprof_on() ? now_ns() : 0; // parent-side fork latency (DD_FORKPROF=1)
         pid_t pid = fork();
         if (pid == 0) {
             // clone(CLONE_VM, child_stack): glibc posix_spawn/popen/vfork pass a separate child stack in a1
@@ -1242,7 +1391,7 @@ static int svc_proc(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64
         }
         // exec THROUGH the /proc magic links: execve("/proc/self/exe") (busybox re-exec, daemons,
         // test harnesses) and execve("/proc/self/fd/N") (glibc fexecve fallback) must exec the link's
-        // TARGET -- the rootfs /proc is empty, so resolving them as ordinary paths ENOENTed (#370).
+        // TARGET -- the rootfs /proc is empty, so resolving them as ordinary paths ENOENTed.
         static char pse_pb[4200];
         {
             char lnk[4200];
@@ -1268,7 +1417,7 @@ static int svc_proc(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64
         }
         char pb[4200];
         const char *p =
-            // #301: resolve the exec path through the SAME resolver openat uses (atpath): overlay-aware
+            // resolve the exec path through the SAME resolver openat uses (atpath): overlay-aware
             // (upper then lowers), bind-mount/volume aware, AND relative-path aware -- a RELATIVE exec
             // (`./x`, `./binary` from `go build`/`make`, `./script`) is joined to the guest cwd (g_cwd),
             // not the host cwd. The old xresolve_overlay bailed on any non-'/' path and returned it raw,
@@ -1338,7 +1487,7 @@ static int svc_proc(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64
         // /proc/self/exe must name the new image as an ABSOLUTE, CANONICAL guest path -- fold "."/".."
         // and resolve symlinks to the backing file (an exec of /bin/sh -> busybox reports /bin/busybox,
         // and a relative "./x" exec reports "<cwd>/x", exactly like Linux d_path). glibc static-pie
-        // asserts on a non-canonical value at startup (dl-origin.c, #370).
+        // asserts on a non-canonical value at startup (dl-origin.c).
         {
             char gcanon[4200];
             exe_canon(gexe, gcanon, sizeof gcanon);
@@ -1351,21 +1500,21 @@ static int svc_proc(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64
         // freed state). Blocks until all peers have left run_guest, so the teardown below is race-free.
         thread_exit_others(c);
         set_guest_comm(comm_src); // comm := basename of the exec'd NAME (captured pre-rewrite above)
-        cred_after_exec(); // #257: exec recomputes caps (non-root loses them) + clears KEEPCAPS; ids persist
+        cred_after_exec();        // exec recomputes caps (non-root loses them) + clears KEEPCAPS; ids persist
 #ifdef PCACHE_SAVE_HOOK
-        // #373b: the exec below flushes this image's translated arena and RE-KEYS the cache identity for
+        // the exec below flushes this image's translated arena and RE-KEYS the cache identity for
         // the new image (pcache_exec_reload), so the exit-time save can never again cover this epoch.
         // Persist the outgoing image under its OWN (current) key now -- e.g. the `sh` of a `sh -c tar`
         // chain, which otherwise never gets cached because the shell always ends in an exec. Every save
         // refusal gate applies unchanged (fork child, restored-from-cache, poisoned, SMC, mixed-base); a
-        // restored epoch records its revival stats instead (pcache_warm_note, the #373a policy input).
+        // restored epoch records its revival stats instead (pcache_warm_note, the policy input).
         // Single-threaded here by construction (thread_exit_others above), so the snapshot cannot tear.
         PCACHE_SAVE_HOOK;
 #endif
         // emulate the kernel's close-on-exec sweep. No real host exec runs below -- we re-load the new image
         // in this same process -- so FD_CLOEXEC fds must be closed by hand or they leak into the new program.
         exec_close_cloexec();
-        sysv_after_exec(); // #421: detach SysV shm + clear semadj across execve (registry itself survives)
+        sysv_after_exec(); // detach SysV shm + clear semadj across execve (registry itself survives)
         // Tear down the inherited guest address space before loading the new image: a post-fork exec
         // otherwise keeps the parent's DENSE layout, and load_elf must bias a non-PIE ET_EXEC off its
         // fixed vaddr (__PAGEZERO blocks the low 4 GB) -> its baked absolute refs collide -> SIGSEGV.
@@ -1376,13 +1525,14 @@ static int svc_proc(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64
             xargv[i] = strdup(argv[i]);
         xargv[ac < 255 ? ac : 255] = NULL;
         gmap_reset_all();
-        gna_reset();           // the old image's PROT_NONE ranges are gone with its address space
-        mlk_reset();           // ... and so are its mlock'd ranges (VmLck resets across execve)
+        gna_reset();                   // the old image's PROT_NONE ranges are gone with its address space
+        mlk_reset();                   // ... and so are its mlock'd ranges (VmLck resets across execve)
         g_nonpie_lo = g_nonpie_hi = 0; // reset; load_elf re-sets it iff the new main image is non-PIE
-#ifdef R_REPSTR // g_nonpie_blob_code lives in the x86-only frontend (translate/x86_64/translate.c); guard so this shared execve path still compiles into the aarch64 unity (R_REPSTR is defined only by cpu_x86_64.h)
-        g_nonpie_blob_code = 0;        // #425: reset; load_elf re-sets it iff the new main image carries the V8 blob
+#ifdef R_REPSTR // g_nonpie_blob_code lives in the x86-only frontend (translate/x86_64/translate.c); guard so this
+                // shared execve path still compiles into the aarch64 unity (R_REPSTR is defined only by cpu_x86_64.h)
+        g_nonpie_blob_code = 0; // reset; load_elf re-sets it iff the new main image carries the V8 blob
 #endif
-        g_go_iscgo = 0;                // #423: reset; load_elf re-sets it iff the new main image is a cgo Go image
+        g_go_iscgo = 0; // reset; load_elf re-sets it iff the new main image is a cgo Go image
         p = xpath;
         for (int i = 0; i < ac && i < 255; i++)
             argv[i] = xargv[i];
@@ -1393,7 +1543,7 @@ static int svc_proc(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64
         (void)pc_ihost;
         (void)pc_interp_host;
 #ifdef PCACHE_EXEC_HOOKS
-        pcache_exec_force_main(); // #339: map the new image at the fixed VA so its cached arena is reusable
+        pcache_exec_force_main(); // map the new image at the fixed VA so its cached arena is reusable
 #endif
         load_elf(p, &lm);
         uint64_t jump = lm.entry, at_base = 0;
@@ -1418,7 +1568,7 @@ static int svc_proc(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64
         g_npend = 0;
         memset(g_ibtc, 0, sizeof g_ibtc);
 #ifdef PCACHE_EXEC_HOOKS
-        // #339: the new image is loaded + the arena is flushed -> try to restore its warm translated arena
+        // the new image is loaded + the arena is flushed -> try to restore its warm translated arena
         // from the persistent cache (this is what makes the go-build fork+execve storm fast). Graceful MISS
         // translates fresh + saves on exit.
         pcache_exec_reload(p, pc_interp_host, argv[0], jump);
@@ -1429,7 +1579,7 @@ static int svc_proc(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64
         // so g_xibtc was surviving execve); on aarch64 it resets the §B shadow stack. Without it a forked
         // child that execve's a new image (apt http method / gzip / cc1 / git child) keeps the OLD image's
         // g_xibtc entries -- keyed by guest PC the new image REUSES, bodies pointing into the freed cache --
-        // and an indirect branch resolves into garbage host code -> SIGSEGV/SIGBUS (#176 / #117 / #155).
+        // and an indirect branch resolves into garbage host code -> SIGSEGV/SIGBUS (/ /).
         G_SHADOW_CLEAR(c);
         // POSIX execve resets CAUGHT signal handlers to SIG_DFL (SIG_IGN stays ignored). Without this, a
         // handler the calling shell installed (e.g. busybox sh's SIGCHLD job-control handler) survives into
@@ -1480,7 +1630,7 @@ static int svc_proc(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64
             G_RET(c) = (uint64_t)(int64_t)(-ESRCH);
             break;
         }
-        // #238: when ptrace is already in use in this session (a tracee link exists -> nactive>0) route the
+        // when ptrace is already in use in this session (a tracee link exists -> nactive>0) route the
         // wait through the ptrace pump, which surfaces tracee ptrace-stops (Linux-encoded) AND real child
         // exits and tears a link down when its tracee dies. For the ENTIRE non-ptrace matrix nactive is 0,
         // so this predicate is false. Returns 1 when it produced a result (r/st Linux-encoded).
@@ -1488,13 +1638,16 @@ static int svc_proc(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64
             pid_t pr;
             int handled = ptrace_wait(c, (pid_t)(int)a0, (int)a2, (struct rusage *)a3, &st, &pr);
             if (handled) {
-                if (pr < 0) { G_RET(c) = (uint64_t)(int64_t)pr; break; } // -errno / -EINTR
+                if (pr < 0) {
+                    G_RET(c) = (uint64_t)(int64_t)pr;
+                    break;
+                } // -errno / -EINTR
                 if (a1) *(int *)a1 = st;
                 G_RET(c) = (uint64_t)pr;
                 break;
             }
         }
-        // #238 tracer-wait race guard (see ptrace.c pt_wait_arm): a child may PTRACE_TRACEME + stop AFTER
+        // tracer-wait race guard (see ptrace.c pt_wait_arm): a child may PTRACE_TRACEME + stop AFTER
         // this parent already blocked here (the classic strace ordering: parent waitpid()s before the child
         // traces itself, so nactive was 0 at entry and we take this plain path). To let the tracee's stop
         // SIGCHLD interrupt us so we can reroute, arm a benign SIGCHLD handler ONLY around the BLOCKING
@@ -1507,7 +1660,7 @@ static int svc_proc(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64
         int pt_armed = ((int)a2 & 1 /*WNOHANG*/) ? 0 : pt_wait_arm(&pt_saved);
         // SA_RESTART: a wait interrupted by a handler that asked to restart (e.g. a SIGCHLD reaper, or
         // gcc's driver) must transparently retry instead of failing the guest with EINTR.
-        ts_wait_enter(); // #404: 'S' while blocked waiting on a child (WNOHANG returns immediately, harmless)
+        ts_wait_enter(); // 'S' while blocked waiting on a child (WNOHANG returns immediately, harmless)
         do {
             r = wait4((pid_t)(int)a0, &st, (int)a2, (struct rusage *)a3);
             // Reroute to the ptrace pump if the interrupt was a tracee of ours stopping (we became a tracer
@@ -1517,7 +1670,10 @@ static int svc_proc(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64
                 if (ptrace_wait(c, (pid_t)(int)a0, (int)a2, (struct rusage *)a3, &st, &pr)) {
                     pt_wait_disarm(pt_armed, &pt_saved);
                     ts_wait_leave();
-                    if (pr < 0) { G_RET(c) = (uint64_t)(int64_t)pr; goto wait_done; }
+                    if (pr < 0) {
+                        G_RET(c) = (uint64_t)(int64_t)pr;
+                        goto wait_done;
+                    }
                     if (a1) *(int *)a1 = st;
                     G_RET(c) = (uint64_t)pr;
                     goto wait_done;
@@ -1545,7 +1701,7 @@ static int svc_proc(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64
         // WIFSTOPPED: macOS stopsig -> Linux
         else if ((st & 0xff) == 0x7f)
             st = (st & ~0xff00) | ((sig_m2l((st >> 8) & 0xff) & 0xff) << 8);
-        // WIFEXITED from the host, but the child may have relayed a guest signal death (#403): a fatal-default
+        // WIFEXITED from the host, but the child may have relayed a guest signal death: a fatal-default
         // signal with no faithful fatal host mapping is delivered by the child _exit()ing after recording its
         // Linux signo in the shared table. Reconstruct the SIGNALED status here. A genuine guest _exit(n)
         // recorded nothing, so it is left as WIFEXITED(n).
@@ -1555,14 +1711,14 @@ static int svc_proc(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64
         }
         if (a1) *(int *)a1 = st;
         G_RET(c) = (uint64_t)r;
-        wait_done:; // #238: the EINTR reroute jumps here (G_RET + *status already set)
+    wait_done:; // the EINTR reroute jumps here (G_RET + *status already set)
         break;
     }
     case 261: {
         // prlimit64(pid, resource, NEW, OLD): report the CURRENT limit into OLD first (so a combined
         // get+set returns the pre-change value), THEN apply NEW into the per-resource store so a later
         // get reflects it. glibc's getrlimit/setrlimit/prlimit all funnel through this syscall, so the
-        // store (g_ulimit, also seeded by docker --ulimit) is the single source of truth. #315: without
+        // store (g_ulimit, also seeded by docker --ulimit) is the single source of truth. without
         // applying NEW, setrlimit "succeeded" but the value never took -- the next getrlimit saw the old.
         int res = (int)a1;
         if (a3) svc_fill_rlimit(res, (uint64_t *)a3);
@@ -1589,8 +1745,14 @@ static int svc_proc(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64
         // validate BEFORE any deref so it returns an errno instead of faulting the engine. -EINVAL if size
         // is below the VER0 clone_args (we read only its first 64 bytes) or implausibly large; -EFAULT if
         // the args struct isn't mapped.
-        if (a1 < 64 || a1 > 4096) { G_RET(c) = (uint64_t)(int64_t)(-EINVAL); break; }
-        if (!host_range_mapped(a0, a1)) { G_RET(c) = (uint64_t)(int64_t)(-EFAULT); break; }
+        if (a1 < 64 || a1 > 4096) {
+            G_RET(c) = (uint64_t)(int64_t)(-EINVAL);
+            break;
+        }
+        if (!host_range_mapped(a0, a1)) {
+            G_RET(c) = (uint64_t)(int64_t)(-EFAULT);
+            break;
+        }
         uint64_t *ca = (uint64_t *)a0;
         uint64_t flags = ca[0];
         // CLONE_THREAD: sp = stack + stack_size
@@ -1598,7 +1760,7 @@ static int svc_proc(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64
             G_RET(c) = (uint64_t)spawn_thread(c, flags, ca[5] + ca[6], ca[7], ca[3], ca[2]);
             break;
         }
-        sigexit_init(); // #403: shared signal-death relay must exist in the parent before fork (see case 220)
+        sigexit_init(); // shared signal-death relay must exist in the parent before fork (see case 220)
         pid_t pid = fork();
         // child: the same shared engine reset as the clone/fork site above (cache re-alias / §B shadow /
         // path caches / kqueues / fork-unsafe locks). clone3 historically lacked the W^X re-assert and the
@@ -1613,8 +1775,7 @@ static int svc_proc(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64
         G_RET(c) = pid < 0 ? (uint64_t)(-errno) : (uint64_t)pid;
         break;
     }
-    default:
-        return 0;
+    default: return 0;
     }
     return svc_done(c); // boundary errno xlate (host macOS -> Linux); see helpers.c svc_done
 }

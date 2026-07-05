@@ -94,7 +94,11 @@ impl Container {
     }
     /// A short status word for display (falls back to "created").
     pub fn display_status(&self) -> String {
-        if self.status.is_empty() { "created".into() } else { self.status.clone() }
+        if self.status.is_empty() {
+            "created".into()
+        } else {
+            self.status.clone()
+        }
     }
     /// Human "80->18080/tcp, …" string.
     pub fn ports_str(&self) -> String {
@@ -128,14 +132,23 @@ impl From<ImageSummary> for Image {
     fn from(i: ImageSummary) -> Self {
         // bollard's ImageSummary has no Architecture field (the dd daemon emits it as an extra,
         // which bollard drops). The UI only displays it, so leave it blank.
-        Image { id: i.id, repo_tags: i.repo_tags, architecture: String::new(), size: i.size, created: i.created }
+        Image {
+            id: i.id,
+            repo_tags: i.repo_tags,
+            architecture: String::new(),
+            size: i.size,
+            created: i.created,
+        }
     }
 }
 
 impl Image {
     /// First repo tag (e.g. `alpine:latest`), or the short id.
     pub fn name(&self) -> String {
-        self.repo_tags.first().cloned().unwrap_or_else(|| short(&self.id))
+        self.repo_tags
+            .first()
+            .cloned()
+            .unwrap_or_else(|| short(&self.id))
     }
 }
 

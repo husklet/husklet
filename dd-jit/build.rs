@@ -33,13 +33,19 @@ fn main() {
         }
         let script = format!(
             "clang -O2 -o {bin} {tu} && codesign -s - --entitlements {ent} -f {bin}",
-            bin = sh(&bin), tu = sh(&tu), ent = sh(&ent),
+            bin = sh(&bin),
+            tu = sh(&tu),
+            ent = sh(&ent),
         );
         let status = if on_mac {
             Command::new("bash").arg("-lc").arg(&script).status()
         } else {
             // dev host (Linux/OrbStack): reach the macOS toolchain through the `mac` bridge.
-            Command::new("mac").arg("bash").arg("-lc").arg(&script).status()
+            Command::new("mac")
+                .arg("bash")
+                .arg("-lc")
+                .arg(&script)
+                .status()
         };
         match status {
             Ok(s) if s.success() => {
@@ -58,7 +64,9 @@ fn main() {
     }
     // Always define the env vars (empty if a build failed) so lib.rs `env!` compiles.
     for t in TARGETS {
-        if !built.contains(t) { println!("cargo:rustc-env=DDJIT_{}=", t.to_uppercase()); }
+        if !built.contains(t) {
+            println!("cargo:rustc-env=DDJIT_{}=", t.to_uppercase());
+        }
     }
 
     // darwinjail: the DYLD-interposing jail dylib for native macOS containers (`ddcli mac`). Runs the
@@ -69,35 +77,48 @@ fn main() {
     if djc.exists() {
         let script = format!(
             "clang -arch arm64 -O2 -dynamiclib -o {o} {c} && codesign -s - -f {o}",
-            o = sh(&djdylib), c = sh(&djc),
+            o = sh(&djdylib),
+            c = sh(&djc),
         );
         let status = if on_mac {
             Command::new("bash").arg("-lc").arg(&script).status()
         } else {
-            Command::new("mac").arg("bash").arg("-lc").arg(&script).status()
+            Command::new("mac")
+                .arg("bash")
+                .arg("-lc")
+                .arg(&script)
+                .status()
         };
         match status {
             Ok(s) if s.success() => {
-                println!("cargo:rustc-env=DDJAIL_DARWIN_AARCH64={}", djdylib.display());
+                println!(
+                    "cargo:rustc-env=DDJAIL_DARWIN_AARCH64={}",
+                    djdylib.display()
+                );
                 jail_built = true;
             }
             Ok(s) => println!("cargo:warning=building darwinjail failed ({s})"),
             Err(e) => println!("cargo:warning=cannot build darwinjail ({e})"),
         }
     }
-    if !jail_built { println!("cargo:rustc-env=DDJAIL_DARWIN_AARCH64="); }
+    if !jail_built {
+        println!("cargo:rustc-env=DDJAIL_DARWIN_AARCH64=");
+    }
 }
 
 fn rerun_dir(dir: &std::path::Path) {
     if let Ok(rd) = std::fs::read_dir(dir) {
         for e in rd.flatten() {
             let p = e.path();
-            if p.is_dir() { rerun_dir(&p); }
-            else if matches!(p.extension().and_then(|s| s.to_str()), Some("c" | "h")) {
+            if p.is_dir() {
+                rerun_dir(&p);
+            } else if matches!(p.extension().and_then(|s| s.to_str()), Some("c" | "h")) {
                 println!("cargo:rerun-if-changed={}", p.display());
             }
         }
     }
 }
 
-fn sh(p: &std::path::Path) -> String { format!("'{}'", p.display()) }
+fn sh(p: &std::path::Path) -> String {
+    format!("'{}'", p.display())
+}

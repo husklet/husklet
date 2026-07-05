@@ -27,28 +27,27 @@ use tokio::sync::Mutex;
 
 mod registry;
 
-mod model;
-mod util;
-mod system;
-mod images;
-mod containers;
-mod build;
 mod archive;
-mod volumes;
+mod build;
+mod containers;
+mod events;
+mod images;
+mod model;
 mod networks;
 mod runtime;
-mod events;
+mod system;
+mod util;
+mod volumes;
 
-use crate::model::*;
-use crate::util::*;
-use crate::system::*;
-use crate::images::*;
-use crate::containers::*;
-use crate::build::*;
 use crate::archive::*;
-use crate::volumes::*;
+use crate::build::*;
+use crate::containers::*;
+use crate::images::*;
+use crate::model::*;
 use crate::networks::*;
-
+use crate::system::*;
+use crate::util::*;
+use crate::volumes::*;
 
 /// Read-only bundled starter-image dirs to discover ALONGSIDE the writable `images_dir`: the app
 /// bundle's `Resources/images`, a sibling of this daemon binary. We discover (not copy) them so an app
@@ -71,8 +70,10 @@ fn bundled_image_dirs(images_dir: &str) -> Vec<String> {
 async fn main() {
     let images_dir = std::env::var("DD_IMAGES").unwrap_or_else(|_| "./images".into());
     let sock = std::env::var("DDOCKERD_SOCK").unwrap_or_else(|_| "./dd.sock".into());
-    let state_path = std::env::var("DD_STATE").unwrap_or_else(|_| dd_home().join("state.json").to_string_lossy().into_owned());
-    let volumes_dir = std::env::var("DD_VOLUMES").unwrap_or_else(|_| dd_home().join("volumes").to_string_lossy().into_owned());
+    let state_path = std::env::var("DD_STATE")
+        .unwrap_or_else(|_| dd_home().join("state.json").to_string_lossy().into_owned());
+    let volumes_dir = std::env::var("DD_VOLUMES")
+        .unwrap_or_else(|_| dd_home().join("volumes").to_string_lossy().into_owned());
     let _ = std::fs::remove_file(&sock);
     let _ = std::fs::create_dir_all(&volumes_dir);
 
@@ -85,7 +86,9 @@ async fn main() {
     let mut imgs = discover_images(&images_dir);
     for d in bundled_image_dirs(&images_dir) {
         for img in discover_images(&d) {
-            if !imgs.iter().any(|i| i.name == img.name) { imgs.push(img); }
+            if !imgs.iter().any(|i| i.name == img.name) {
+                imgs.push(img);
+            }
         }
     }
     inner.images = imgs;
@@ -97,26 +100,50 @@ async fn main() {
         "[dd-daemon] images={} -> {} image(s): {}",
         images_dir,
         inner.images.len(),
-        inner.images.iter().map(|i| format!("{}({})", i.name, i.arch.target())).collect::<Vec<_>>().join(", ")
+        inner
+            .images
+            .iter()
+            .map(|i| format!("{}({})", i.name, i.arch.target()))
+            .collect::<Vec<_>>()
+            .join(", ")
     );
     eprintln!(
         "[dd-daemon] state={state_path} -> {} container(s), {} volume(s), {} network(s)",
-        inner.containers.len(), inner.volumes.len(), inner.networks.len()
+        inner.containers.len(),
+        inner.volumes.len(),
+        inner.networks.len()
     );
     for g in Guest::ALL {
-        eprintln!("[dd-daemon] JIT {}: {}", g.target(), if ddjit::available(g) { "ready" } else { "NOT BUILT" });
+        eprintln!(
+            "[dd-daemon] JIT {}: {}",
+            g.target(),
+            if ddjit::available(g) {
+                "ready"
+            } else {
+                "NOT BUILT"
+            }
+        );
     }
-    let app = App { inner: Arc::new(Mutex::new(inner)), state_path, volumes_dir, images_dir, events: events::new_bus() };
+    let app = App {
+        inner: Arc::new(Mutex::new(inner)),
+        state_path,
+        volumes_dir,
+        images_dir,
+        events: events::new_bus(),
+    };
 
     let router = Router::new()
         .route("/_ping", get(|| async { "OK" }))
-        .route("/version", get(version)).route("/info", get(info))
+        .route("/version", get(version))
+        .route("/info", get(info))
         .route("/events", get(events::events))
         .route("/system/df", get(system_df))
         .route("/auth", post(auth))
         .route("/distribution/:name/json", get(distribution_inspect))
-        .route("/images/json", get(images_json)).route("/images/create", post(images_create))
-        .route("/images/get", get(image_save)).route("/images/load", post(image_load))
+        .route("/images/json", get(images_json))
+        .route("/images/create", post(images_create))
+        .route("/images/get", get(image_save))
+        .route("/images/load", post(image_load))
         .route("/images/search", get(image_search))
         .route("/images/prune", post(images_prune))
         .route("/images/:name/json", get(image_inspect))
@@ -146,7 +173,10 @@ async fn main() {
         .route("/containers/:id/resize", post(resize))
         .route("/containers/:id/logs", get(containers_logs))
         .route("/containers/:id/json", get(containers_inspect))
-        .route("/containers/:id/archive", get(archive_get).put(archive_put).head(archive_head))
+        .route(
+            "/containers/:id/archive",
+            get(archive_get).put(archive_put).head(archive_head),
+        )
         .route("/containers/:id/exec", post(exec_create))
         .route("/exec/:id/start", post(exec_start))
         .route("/exec/:id/resize", post(resize))
@@ -176,34 +206,50 @@ async fn main() {
     eprintln!("[dd-daemon] listening on unix://{sock}");
     let mut make = router.into_make_service();
     loop {
-        let (socket, _) = match listener.accept().await { Ok(x) => x, Err(_) => continue };
+        let (socket, _) = match listener.accept().await {
+            Ok(x) => x,
+            Err(_) => continue,
+        };
         let svc = tower::Service::call(&mut make, &socket).await.unwrap();
         tokio::spawn(async move {
             let io = hyper_util::rt::TokioIo::new(socket);
-            let hsvc = hyper::service::service_fn(move |mut req: hyper::Request<hyper::body::Incoming>| {
-                strip_api_version(&mut req);
-                if std::env::var("DD_DEBUG").is_ok() { eprintln!("[req] {} {}", req.method(), req.uri().path()); }
-                tower::ServiceExt::oneshot(svc.clone(), req)
-            });
+            let hsvc = hyper::service::service_fn(
+                move |mut req: hyper::Request<hyper::body::Incoming>| {
+                    strip_api_version(&mut req);
+                    if std::env::var("DD_DEBUG").is_ok() {
+                        eprintln!("[req] {} {}", req.method(), req.uri().path());
+                    }
+                    tower::ServiceExt::oneshot(svc.clone(), req)
+                },
+            );
             // serve_connection_with_upgrades: required for the attach/exec hijack (HTTP Upgrade: tcp).
-            let _ = hyper_util::server::conn::auto::Builder::new(hyper_util::rt::TokioExecutor::new())
-                .serve_connection_with_upgrades(io, hsvc).await;
+            let _ =
+                hyper_util::server::conn::auto::Builder::new(hyper_util::rt::TokioExecutor::new())
+                    .serve_connection_with_upgrades(io, hsvc)
+                    .await;
         });
     }
 }
 
-
 fn strip_api_version<B>(req: &mut hyper::Request<B>) {
-    let mut pq = req.uri().path_and_query().map(|p| p.as_str().to_string()).unwrap_or_default();
+    let mut pq = req
+        .uri()
+        .path_and_query()
+        .map(|p| p.as_str().to_string())
+        .unwrap_or_default();
     // strip the /v1.NN API-version prefix
     if let Some(rest) = pq.strip_prefix("/v1.") {
-        if let Some(slash) = rest.find('/') { pq = rest[slash..].to_string(); }
+        if let Some(slash) = rest.find('/') {
+            pq = rest[slash..].to_string();
+        }
     }
     // collapse a NAMESPACED image reference into a single path segment so the `:name` routes match.
     // docker addresses image endpoints as /images/<ref>[/<verb>] where <ref> may embed slashes
     // (registry/ns/name:tag), e.g. POST /images/docker.io/library/ubuntu/push.
     pq = normalize_image_path(&pq);
-    if let Ok(uri) = pq.parse::<Uri>() { *req.uri_mut() = uri; }
+    if let Ok(uri) = pq.parse::<Uri>() {
+        *req.uri_mut() = uri;
+    }
 }
 
 /// Rewrite an image-reference path so axum's single-segment `:name` capture can match a NAMESPACED
@@ -214,16 +260,29 @@ fn strip_api_version<B>(req: &mut hyper::Request<B>) {
 /// (`json`/`history`/`tag`/`push`) and the bare `DELETE /images/<ref>` are all handled; the fixed
 /// `/images/{json,create,get,load,search,prune}` endpoints carry no embedded ref and pass through.
 fn normalize_image_path(pq: &str) -> String {
-    let (path, query) = pq.split_once('?').map(|(p, q)| (p, Some(q))).unwrap_or((pq, None));
-    let rebuild = |p: String| match query { Some(q) => format!("{p}?{q}"), None => p };
-    let Some(rest) = path.strip_prefix("/images/") else { return pq.to_string() };
+    let (path, query) = pq
+        .split_once('?')
+        .map(|(p, q)| (p, Some(q)))
+        .unwrap_or((pq, None));
+    let rebuild = |p: String| match query {
+        Some(q) => format!("{p}?{q}"),
+        None => p,
+    };
+    let Some(rest) = path.strip_prefix("/images/") else {
+        return pq.to_string();
+    };
     let mut segs: Vec<&str> = rest.split('/').collect();
     // Peel off a trailing verb sub-resource; whatever remains is the (possibly multi-segment) reference.
-    let verb = matches!(segs.last().copied(), Some("json" | "history" | "tag" | "push"))
-        .then(|| segs.pop().unwrap());
+    let verb = matches!(
+        segs.last().copied(),
+        Some("json" | "history" | "tag" | "push")
+    )
+    .then(|| segs.pop().unwrap());
     let reference = segs.join("/");
     // No reference means a fixed endpoint (`/images/json` list, `/images/create`, …) — leave it alone.
-    if reference.is_empty() { return pq.to_string(); }
+    if reference.is_empty() {
+        return pq.to_string();
+    }
     let encoded = reference.replace('/', "%2F");
     rebuild(match verb {
         Some(v) => format!("/images/{encoded}/{v}"),
@@ -231,9 +290,12 @@ fn normalize_image_path(pq: &str) -> String {
     })
 }
 
-
 async fn not_found(uri: Uri) -> Response {
-    (StatusCode::NOT_FOUND, Json(json!({"message": format!("no route for {uri}")}))).into_response()
+    (
+        StatusCode::NOT_FOUND,
+        Json(json!({"message": format!("no route for {uri}")})),
+    )
+        .into_response()
 }
 
 /// Stamp Docker's negotiation + identity headers onto every response. The `docker` CLI reads
@@ -245,7 +307,10 @@ async fn docker_headers(mut resp: Response) -> Response {
     h.insert("Docker-Experimental", HeaderValue::from_static("false"));
     h.insert("Builder-Version", HeaderValue::from_static("1"));
     h.insert("Server", HeaderValue::from_static("dd-daemon/0.1.0"));
-    h.insert("Cache-Control", HeaderValue::from_static("no-cache, no-store, must-revalidate"));
+    h.insert(
+        "Cache-Control",
+        HeaderValue::from_static("no-cache, no-store, must-revalidate"),
+    );
     h.insert("Pragma", HeaderValue::from_static("no-cache"));
     resp
 }

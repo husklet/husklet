@@ -164,7 +164,7 @@ pub fn group() -> ScenGroup {
                    echo overlay-metadata-ok")
             .has("overlay-metadata-ok"),
 
-        // ---- positive dentry-cache coherence under the OVERLAY (#372; guards fscache.c dc_*) ------
+        // ---- positive dentry-cache coherence under the OVERLAY (guards fscache.c dc_*) ------
         // The engine memoizes successful per-directory path resolutions (the realpath climb), keyed on
         // the shared namespace epoch. This storm interleaves the overlay-specific ways a POSITIVE
         // resolution can go stale -- rename/unlink/symlink-flip in the upper, chmod copy-up (relocates

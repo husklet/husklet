@@ -27,7 +27,10 @@ pub fn service_target() -> String {
 pub fn render_plist() -> String {
     let daemon = paths::daemon_bin();
     // The JIT binaries (ddjit-*) live next to the daemon inside the bundle's Resources dir.
-    let jit_dir = daemon.parent().map(|p| p.to_path_buf()).unwrap_or_else(|| paths::dd_root());
+    let jit_dir = daemon
+        .parent()
+        .map(|p| p.to_path_buf())
+        .unwrap_or_else(|| paths::dd_root());
     let sock = paths::socket();
     let images = paths::images_dir();
     let out = paths::logs_dir().join("daemon.out.log");
@@ -68,7 +71,12 @@ pub fn render_plist() -> String {
 
 /// Create the `~/.dd` tree and write the plist (does not load it).
 pub fn write_plist() -> std::io::Result<()> {
-    for d in [paths::run_dir(), paths::images_dir(), paths::dd_root().join("volumes"), paths::logs_dir()] {
+    for d in [
+        paths::run_dir(),
+        paths::images_dir(),
+        paths::dd_root().join("volumes"),
+        paths::logs_dir(),
+    ] {
         std::fs::create_dir_all(&d)?;
     }
     let plist = paths::agent_plist();
@@ -86,7 +94,10 @@ pub fn bootstrap() -> std::io::Result<()> {
     // Best-effort bootout first so re-installs pick up a changed plist.
     let _ = bootout();
     let plist = paths::agent_plist();
-    run("launchctl", &["bootstrap", &domain_target(), &plist.to_string_lossy()])
+    run(
+        "launchctl",
+        &["bootstrap", &domain_target(), &plist.to_string_lossy()],
+    )
 }
 
 /// `launchctl bootout gui/<uid>/com.dd.daemon` (stop + unload).
@@ -101,7 +112,9 @@ pub fn kickstart() -> std::io::Result<()> {
 
 /// `launchctl print gui/<uid>/com.dd.daemon` (status, streamed to our stdout).
 pub fn print_status() -> std::io::Result<bool> {
-    let st = Command::new("launchctl").args(["print", &service_target()]).status()?;
+    let st = Command::new("launchctl")
+        .args(["print", &service_target()])
+        .status()?;
     Ok(st.success())
 }
 

@@ -8,42 +8,42 @@
 //! do_stop, q_truthy, ports_json/ports_map_json) and re-exports every handler with
 //! `pub(crate) use`, so the public path `crate::containers::<handler>` (used by the
 //! router in main.rs and every `use crate::containers::*` site) is unchanged.
-use crate::model::*;
-use crate::util::*;
-use crate::system::*;
-use crate::images::*;
-use crate::build::*;
 use crate::archive::*;
-use crate::volumes::*;
+use crate::build::*;
+use crate::images::*;
+use crate::model::*;
 use crate::networks::*;
-use crate::runtime::*;
 use crate::registry::{Client, Credentials, ImageRef};
+use crate::runtime::*;
+use crate::system::*;
+use crate::util::*;
+use crate::volumes::*;
 use axum::body::Body;
 use axum::extract::{Path, Query, Request, State};
-use axum::http::{StatusCode, Uri, HeaderMap};
+use axum::http::{HeaderMap, StatusCode, Uri};
 use axum::response::{IntoResponse, Response};
 use axum::Json;
+use ddjit::{Guest, PortMap, SpawnConfig, Volume};
+use hyper_util::rt::TokioIo;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::HashMap;
+use std::os::fd::{AsRawFd, FromRawFd, OwnedFd, RawFd};
 use std::path::PathBuf;
+use std::process::Stdio;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
-use std::process::Stdio;
-use std::os::fd::{AsRawFd, FromRawFd, OwnedFd, RawFd};
 use tokio::io::unix::AsyncFd;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::sync::{broadcast, mpsc, watch, Mutex};
-use hyper_util::rt::TokioIo;
-use ddjit::{Guest, PortMap, SpawnConfig, Volume};
 
-mod lifecycle;
 mod exec;
 mod inspect;
+mod lifecycle;
 pub(crate) mod ports;
-pub(crate) use lifecycle::*;
 pub(crate) use exec::*;
 pub(crate) use inspect::*;
+pub(crate) use lifecycle::*;
 
 /// Parse a `-v`/Binds spec `src:dst[:opts]` into `(host_source, container_dest, read_only)`. Docker
 /// appends comma-separated options after the destination (e.g. `/h:/c:ro`, `vol:/c:rw,z`); `ro` marks
@@ -54,8 +54,13 @@ pub(crate) fn parse_bind(b: &str) -> Option<(&str, &str, bool)> {
     let mut it = b.splitn(3, ':');
     let src = it.next()?;
     let dst = it.next()?;
-    let ro = it.next().map(|o| o.split(',').any(|p| p == "ro")).unwrap_or(false);
-    if dst.is_empty() { return None; }
+    let ro = it
+        .next()
+        .map(|o| o.split(',').any(|p| p == "ro"))
+        .unwrap_or(false);
+    if dst.is_empty() {
+        return None;
+    }
     Some((src, dst, ro))
 }
 
@@ -64,14 +69,18 @@ pub(crate) fn parse_bind(b: &str) -> Option<(&str, &str, bool)> {
 /// "SIG" prefix. Anything unrecognised falls back to `default`.
 fn parse_signal(s: &str, default: i32) -> i32 {
     let t = s.trim();
-    if t.is_empty() { return default; }
-    if let Ok(n) = t.parse::<i32>() { return n; }
+    if t.is_empty() {
+        return default;
+    }
+    if let Ok(n) = t.parse::<i32>() {
+        return n;
+    }
     match t.to_ascii_uppercase().trim_start_matches("SIG") {
         "TERM" => libc::SIGTERM,
         "KILL" => libc::SIGKILL,
-        "INT"  => libc::SIGINT,
+        "INT" => libc::SIGINT,
         "QUIT" => libc::SIGQUIT,
-        "HUP"  => libc::SIGHUP,
+        "HUP" => libc::SIGHUP,
         "USR1" => libc::SIGUSR1,
         "USR2" => libc::SIGUSR2,
         "STOP" => libc::SIGSTOP,
@@ -86,7 +95,11 @@ fn parse_signal(s: &str, default: i32) -> i32 {
 /// completely instead of leaving orphans. Only if the group signal fails (e.g. the leader is mid-
 /// teardown) do we fall back to the leader pid alone. Mirrors lifecycle.rs's `kill_group`.
 fn kill_group(pid: i32, sig: i32) {
-    unsafe { if libc::kill(-pid, sig) != 0 { libc::kill(pid, sig); } }
+    unsafe {
+        if libc::kill(-pid, sig) != 0 {
+            libc::kill(pid, sig);
+        }
+    }
 }
 
 /// stop: deliver a REAL signal to the live JIT process (same mechanism as pause's
@@ -98,26 +111,41 @@ async fn do_stop(a: &App, id: &str, sig: i32, t: i64) -> Response {
     // resolve + grab the live pid, then release the lock before any waiting.
     let (full, pid) = {
         let g = a.inner.lock().await;
-        let Some(full) = resolve_cid(&g, id) else { return no_such(id) };
+        let Some(full) = resolve_cid(&g, id) else {
+            return no_such(id);
+        };
         // Mark a deliberate stop so the RestartPolicy supervisor won't auto-restart this container.
-        let pid = g.live.get(&full).map(|l| {
-            l.stop_requested.store(true, std::sync::atomic::Ordering::SeqCst);
-            *l.pid.lock().unwrap()
-        }).flatten();
+        let pid = g
+            .live
+            .get(&full)
+            .map(|l| {
+                l.stop_requested
+                    .store(true, std::sync::atomic::Ordering::SeqCst);
+                *l.pid.lock().unwrap()
+            })
+            .flatten();
         (full, pid)
     };
     if let Some(pid) = pid {
-        kill_group(pid as i32, sig);                             // whole process group, not just the leader
-        // give the guest up to `t` seconds to exit on its own; the spawn reaper (runtime.rs) flips
-        // status to "exited" when the process dies, so poll that rather than racing on pid reuse.
+        kill_group(pid as i32, sig); // whole process group, not just the leader
+                                     // give the guest up to `t` seconds to exit on its own; the spawn reaper (runtime.rs) flips
+                                     // status to "exited" when the process dies, so poll that rather than racing on pid reuse.
         let mut waited = 0i64;
         loop {
             let exited = {
                 let g = a.inner.lock().await;
-                g.containers.get(&full).map(|c| c.status == "exited").unwrap_or(true)
+                g.containers
+                    .get(&full)
+                    .map(|c| c.status == "exited")
+                    .unwrap_or(true)
             };
-            if exited { break; }
-            if waited >= t * 1000 { kill_group(pid as i32, libc::SIGKILL); break; } // group SIGKILL, not just the leader
+            if exited {
+                break;
+            }
+            if waited >= t * 1000 {
+                kill_group(pid as i32, libc::SIGKILL);
+                break;
+            } // group SIGKILL, not just the leader
             tokio::time::sleep(std::time::Duration::from_millis(100)).await;
             waited += 100;
         }
@@ -130,9 +158,24 @@ async fn do_stop(a: &App, id: &str, sig: i32, t: i64) -> Response {
     // survives a daemon restart so `unless-stopped` won't resurrect a container the user stopped (the
     // in-memory `Live.stop_requested` set above is lost across a restart; this is not). §8.3-5.
     let mut g = a.inner.lock().await;
-    if let Some(c) = g.containers.get_mut(&full) { c.status = "exited".into(); c.finished_at = now_secs(); c.finished_at_ns = now_nanos(); c.manually_stopped = true; }
-    let (cname, cimage) = g.containers.get(&full).map(|c| (c.name.clone(), c.image.clone())).unwrap_or_default();
-    crate::events::emit_event(&a.events, "container", "stop", &full, json!({"name": cname, "image": cimage}));
+    if let Some(c) = g.containers.get_mut(&full) {
+        c.status = "exited".into();
+        c.finished_at = now_secs();
+        c.finished_at_ns = now_nanos();
+        c.manually_stopped = true;
+    }
+    let (cname, cimage) = g
+        .containers
+        .get(&full)
+        .map(|c| (c.name.clone(), c.image.clone()))
+        .unwrap_or_default();
+    crate::events::emit_event(
+        &a.events,
+        "container",
+        "stop",
+        &full,
+        json!({"name": cname, "image": cimage}),
+    );
     save_state(&g, &a.state_path);
     StatusCode::NO_CONTENT.into_response()
 }
@@ -156,21 +199,33 @@ pub(crate) struct PubPort {
 /// still loads. IPv6 host addresses (which themselves contain `:`) are handled: we split the port fields
 /// off the RIGHT, leaving the remainder as the host IP.
 pub(crate) fn parse_publish(publish: &str) -> Vec<PubPort> {
-    publish.split(',').filter(|s| !s.is_empty()).filter_map(|entry| {
-        // proto is an optional `/tcp` | `/udp` suffix on the whole entry.
-        let (rest, proto) = entry.rsplit_once('/').map(|(r, p)| (r, p.to_string())).unwrap_or((entry, "tcp".into()));
-        let (rest, cport) = rest.rsplit_once(':')?;               // rightmost field = container port
-        let (host_ip, hport) = match rest.rsplit_once(':') {      // next field = host port; rest = host IP
-            Some((ip, hp)) => (ip, hp),
-            None => ("", rest),                                   // legacy 2-field: only hostPort:cport
-        };
-        Some(PubPort {
-            host_ip: if host_ip.is_empty() { "0.0.0.0".into() } else { host_ip.into() },
-            host_port: hport.parse().ok()?,
-            container_port: cport.parse().ok()?,
-            proto,
+    publish
+        .split(',')
+        .filter(|s| !s.is_empty())
+        .filter_map(|entry| {
+            // proto is an optional `/tcp` | `/udp` suffix on the whole entry.
+            let (rest, proto) = entry
+                .rsplit_once('/')
+                .map(|(r, p)| (r, p.to_string()))
+                .unwrap_or((entry, "tcp".into()));
+            let (rest, cport) = rest.rsplit_once(':')?; // rightmost field = container port
+            let (host_ip, hport) = match rest.rsplit_once(':') {
+                // next field = host port; rest = host IP
+                Some((ip, hp)) => (ip, hp),
+                None => ("", rest), // legacy 2-field: only hostPort:cport
+            };
+            Some(PubPort {
+                host_ip: if host_ip.is_empty() {
+                    "0.0.0.0".into()
+                } else {
+                    host_ip.into()
+                },
+                host_port: hport.parse().ok()?,
+                container_port: cport.parse().ok()?,
+                proto,
+            })
         })
-    }).collect()
+        .collect()
 }
 
 /// Build the `Ports` array Docker clients expect (top-level `docker ps` / list JSON).
@@ -187,7 +242,8 @@ pub(crate) fn ports_map_json(publish: &str) -> Value {
     for p in parse_publish(publish) {
         m.entry(format!("{}/{}", p.container_port, p.proto))
             .or_insert_with(|| Value::Array(vec![]))
-            .as_array_mut().unwrap()
+            .as_array_mut()
+            .unwrap()
             .push(json!({"HostIp": p.host_ip, "HostPort": p.host_port.to_string()}));
     }
     Value::Object(m)

@@ -1,7 +1,7 @@
 //! Filesystem WITH a volume (`-v host:ctr`) — the bind-mount path through the daemon. Verifies two-way
 //! visibility (container writes seen on the host and vice-versa), read-only enforcement, delete
 //! propagation, multiple/nested mounts, and the regression where `..` out of a nested mountpoint must
-//! cross back to the CONTAINER rootfs (not the host parent) — GAPS #118. Host-orchestrated (the harness
+//! cross back to the CONTAINER rootfs (not the host parent) — GAPS. Host-orchestrated (the harness
 //! gives each case a private `$WORK` host dir, `$IMG`, `$PLAT`, and auto-cleanup). alpine, each fast.
 //! Owner: volumes agent. Verified on the Real docker oracle. Edit ONLY this folder.
 
@@ -37,7 +37,7 @@ pub fn group() -> ScenGroup {
         scen("volumes/two-mounts", "alpine:latest")
             .host("mkdir -p \"$WORK/m1\" \"$WORK/m2\"\necho one > \"$WORK/m1/a\"\necho two > \"$WORK/m2/b\"\ndocker run --rm $PLAT -v \"$WORK/m1\":/x -v \"$WORK/m2\":/y $IMG sh -c 'cat /x/a; cat /y/b'")
             .has("one").has("two"),
-        // REGRESSION #118: `..` out of a nested mountpoint crosses to the container rootfs, NOT the host
+        // REGRESSION `..` out of a nested mountpoint crosses to the container rootfs, NOT the host
         // parent dir. /mnt is a bind mount; `ls /mnt/..` must list the container root (has etc/bin), and
         // must NOT show the host sibling file we plant in $WORK next to sub/.
         scen("volumes/nested-dotdot-crosses-boundary", "alpine:latest")

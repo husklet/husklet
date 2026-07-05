@@ -21,7 +21,10 @@ use crate::scenario::{scen, sgroup, ScenGroup, Scenario, Target};
 /// at each call site names the deeper corner the program additionally exercises.
 fn cc(id: &'static str, flags: &str, src: &str) -> Scenario {
     let script = format!("cat > /m.c <<'CEOF'\n{src}\nCEOF\ncc /m.c {flags} -o /m && /m");
-    scen(id, "gcc:latest").exec(&script).long().xfail(&Target::LINUX)
+    scen(id, "gcc:latest")
+        .exec(&script)
+        .long()
+        .xfail(&Target::LINUX)
 }
 
 pub fn group() -> ScenGroup {

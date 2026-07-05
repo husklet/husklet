@@ -17,10 +17,16 @@ fn main() {
 
 /// Latest tag, e.g. `v0.2.0` -> `0.2.0`. `None` if not in a git checkout / no tags.
 fn git_tag() -> Option<String> {
-    let out = Command::new("git").args(["describe", "--tags", "--abbrev=0"]).output().ok()?;
+    let out = Command::new("git")
+        .args(["describe", "--tags", "--abbrev=0"])
+        .output()
+        .ok()?;
     if !out.status.success() {
         return None;
     }
-    let s = String::from_utf8_lossy(&out.stdout).trim().trim_start_matches('v').to_string();
+    let s = String::from_utf8_lossy(&out.stdout)
+        .trim()
+        .trim_start_matches('v')
+        .to_string();
     (!s.is_empty()).then_some(s)
 }

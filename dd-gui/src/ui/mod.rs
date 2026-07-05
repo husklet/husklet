@@ -1,18 +1,17 @@
 //! dd-app UI: the window shell + render dispatch. Resource pages live in `views/`, reusable
 //! widgets and dialogs in `components/`, the design tokens in `theme`.
 #![allow(unused_imports, dead_code)]
-pub(crate) mod theme;
 pub(crate) mod components;
+pub(crate) mod theme;
 pub(crate) mod views;
-pub(crate) use components::*;
-pub(crate) use views::*;
-pub(crate) use theme::*;
 use crate::{AppModel, Category, Msg, Selection};
+pub(crate) use components::*;
 use ddclient::{Container, Image, Network, Volume};
 use gtk::prelude::*;
 use relm4::ComponentSender;
 use std::ffi::OsStr;
-
+pub(crate) use theme::*;
+pub(crate) use views::*;
 
 /// Widget handles the component needs across renders. Three panes: category nav, item list, and
 /// the detail pane (info on top, a fixed logs area pinned at the bottom).
@@ -43,7 +42,6 @@ pub struct Widgets {
     context_pop_box: gtk::Box,
     context_seg: gtk::Box,
 }
-
 
 /// Build the window shell: a frameless-ish flat header, and one floating pane holding the
 /// [sidebar | detail] split.
@@ -187,8 +185,12 @@ pub fn build(root: &gtk::ApplicationWindow, sender: &ComponentSender<AppModel>) 
         let list_ref = list.clone();
         let batch_c = batch.clone();
         click.connect_pressed(move |g, _n, _x, y| {
-            let cmd = g.current_event()
-                .map(|e| e.modifier_state().contains(gtk::gdk::ModifierType::META_MASK))
+            let cmd = g
+                .current_event()
+                .map(|e| {
+                    e.modifier_state()
+                        .contains(gtk::gdk::ModifierType::META_MASK)
+                })
                 .unwrap_or(false);
             if cmd {
                 if let Some(row) = list_ref.row_at_y(y as i32) {
@@ -229,13 +231,21 @@ pub fn build(root: &gtk::ApplicationWindow, sender: &ComponentSender<AppModel>) 
         .hexpand(true)
         .build();
 
-    let logs_view = gtk::TextView::builder().editable(false).monospace(true).cursor_visible(false).build();
+    let logs_view = gtk::TextView::builder()
+        .editable(false)
+        .monospace(true)
+        .cursor_visible(false)
+        .build();
     logs_view.set_left_margin(10);
     logs_view.set_right_margin(10);
     logs_view.set_top_margin(6);
     logs_view.set_bottom_margin(6);
     logs_view.add_css_class("dd-logs");
-    let logs_scroll = gtk::ScrolledWindow::builder().child(&logs_view).vexpand(true).hexpand(true).build();
+    let logs_scroll = gtk::ScrolledWindow::builder()
+        .child(&logs_view)
+        .vexpand(true)
+        .hexpand(true)
+        .build();
 
     let term_notebook = gtk::Notebook::new();
     term_notebook.add_css_class("dd-termbook");
@@ -244,9 +254,15 @@ pub fn build(root: &gtk::ApplicationWindow, sender: &ComponentSender<AppModel>) 
     term_notebook.set_scrollable(true);
     term_notebook.append_page(&info_scroll, Some(&gtk::Label::new(Some("Info"))));
     term_notebook.append_page(&logs_scroll, Some(&gtk::Label::new(Some("Logs"))));
-    let term_current: crate::ui::components::TermTarget = std::rc::Rc::new(std::cell::RefCell::new(None));
-    let term_shells: crate::ui::components::TermShells = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
-    let add_term = crate::ui::components::new_terminal_button(&term_notebook, term_current.clone(), term_shells.clone());
+    let term_current: crate::ui::components::TermTarget =
+        std::rc::Rc::new(std::cell::RefCell::new(None));
+    let term_shells: crate::ui::components::TermShells =
+        std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+    let add_term = crate::ui::components::new_terminal_button(
+        &term_notebook,
+        term_current.clone(),
+        term_shells.clone(),
+    );
     term_notebook.set_action_widget(&add_term, gtk::PackType::End);
 
     let detail_col = gtk::Box::new(gtk::Orientation::Vertical, 0);
@@ -364,12 +380,33 @@ pub fn build(root: &gtk::ApplicationWindow, sender: &ComponentSender<AppModel>) 
     root.connect_realize(|_| crate::mac::unify_titlebar());
 
     Widgets {
-        stack, update_btn, onboard_status,
-        nav, nav_bottom, content_stack, home, settings, system_logs, list, list_sig, batch, detail_info, term_notebook, term_current, term_shells, logs_view, logs_scroll, add_term,
-        daemon_dot, daemon_label, daemon_toggle, context_menu, context_pop_box, context_seg,
+        stack,
+        update_btn,
+        onboard_status,
+        nav,
+        nav_bottom,
+        content_stack,
+        home,
+        settings,
+        system_logs,
+        list,
+        list_sig,
+        batch,
+        detail_info,
+        term_notebook,
+        term_current,
+        term_shells,
+        logs_view,
+        logs_scroll,
+        add_term,
+        daemon_dot,
+        daemon_label,
+        daemon_toggle,
+        context_menu,
+        context_pop_box,
+        context_seg,
     }
 }
-
 
 /// Locate the dd logo: the app bundle's `Contents/Resources/logo.png`, or `assets/logo.png` in dev.
 pub(crate) fn logo_path() -> Option<std::path::PathBuf> {
@@ -385,7 +422,6 @@ pub(crate) fn logo_path() -> Option<std::path::PathBuf> {
     dev.exists().then_some(dev)
 }
 
-
 /// A sidebar-style floating card (translucent, rounded, clipped).
 pub(crate) fn sidebar_card() -> gtk::Box {
     let b = gtk::Box::new(gtk::Orientation::Vertical, 0);
@@ -393,7 +429,6 @@ pub(crate) fn sidebar_card() -> gtk::Box {
     b.set_overflow(gtk::Overflow::Hidden);
     b
 }
-
 
 /// Repopulate the three panes (nav, item list, detail + logs) from the model.
 pub fn render(w: &Widgets, m: &AppModel, sender: &ComponentSender<AppModel>) {
@@ -404,13 +439,15 @@ pub fn render(w: &Widgets, m: &AppModel, sender: &ComponentSender<AppModel>) {
         Some(rel) => {
             w.update_btn.set_visible(true);
             w.update_btn.set_label(&format!("Update v{}", rel.version));
-            w.update_btn.set_tooltip_text(Some("Download and install the new version"));
+            w.update_btn
+                .set_tooltip_text(Some("Download and install the new version"));
         }
         None => w.update_btn.set_visible(false),
     }
 
     // Onboarding (compact) vs. the full app.
-    w.stack.set_visible_child_name(if snap.connected { "main" } else { "onboarding" });
+    w.stack
+        .set_visible_child_name(if snap.connected { "main" } else { "onboarding" });
     w.onboard_status.set_label(if snap.connected {
         "The dd daemon is running."
     } else {
@@ -442,10 +479,30 @@ pub fn render(w: &Widgets, m: &AppModel, sender: &ComponentSender<AppModel>) {
         // Pane 2: only REBUILD the master list when the item set actually changes — otherwise the 2s
         // poll would wipe the user's (multi-)selection. The signature keys on category + ids + state.
         let sig = match m.category {
-            Category::Containers => snap.containers.iter().map(|c| format!("c{}:{}:{}", c.id, c.running(), m.removing.contains(&c.id))).collect::<Vec<_>>().join(","),
-            Category::Images => snap.images.iter().map(|i| format!("i{}:{}", i.name(), i.size)).collect::<Vec<_>>().join(","),
-            Category::Networks => snap.networks.iter().map(|n| format!("n{}", n.id)).collect::<Vec<_>>().join(","),
-            Category::Volumes => snap.volumes.iter().map(|v| format!("v{}", v.name)).collect::<Vec<_>>().join(","),
+            Category::Containers => snap
+                .containers
+                .iter()
+                .map(|c| format!("c{}:{}:{}", c.id, c.running(), m.removing.contains(&c.id)))
+                .collect::<Vec<_>>()
+                .join(","),
+            Category::Images => snap
+                .images
+                .iter()
+                .map(|i| format!("i{}:{}", i.name(), i.size))
+                .collect::<Vec<_>>()
+                .join(","),
+            Category::Networks => snap
+                .networks
+                .iter()
+                .map(|n| format!("n{}", n.id))
+                .collect::<Vec<_>>()
+                .join(","),
+            Category::Volumes => snap
+                .volumes
+                .iter()
+                .map(|v| format!("v{}", v.name))
+                .collect::<Vec<_>>()
+                .join(","),
             _ => String::new(),
         };
         let sig = format!("{:?}|{}|{sig}", m.category, snap.connected);
@@ -455,7 +512,11 @@ pub fn render(w: &Widgets, m: &AppModel, sender: &ComponentSender<AppModel>) {
             match m.category {
                 Category::Containers => {
                     if snap.containers.is_empty() {
-                        w.list.append(&dim_row(if snap.connected { "No containers" } else { "—" }));
+                        w.list.append(&dim_row(if snap.connected {
+                            "No containers"
+                        } else {
+                            "—"
+                        }));
                     }
                     for c in &snap.containers {
                         let row = container_list_row(c, m.removing.contains(&c.id));
@@ -474,9 +535,11 @@ pub fn render(w: &Widgets, m: &AppModel, sender: &ComponentSender<AppModel>) {
                     }
                 }
                 Category::Networks => {
-                    w.list.append(&new_row("＋  New network", sender, || Msg::NewNetwork));
+                    w.list
+                        .append(&new_row("＋  New network", sender, || Msg::NewNetwork));
                     if snap.networks.is_empty() {
-                        w.list.append(&dim_row(if snap.connected { "No networks" } else { "—" }));
+                        w.list
+                            .append(&dim_row(if snap.connected { "No networks" } else { "—" }));
                     }
                     for n in &snap.networks {
                         let row = network_list_row(n);
@@ -485,9 +548,11 @@ pub fn render(w: &Widgets, m: &AppModel, sender: &ComponentSender<AppModel>) {
                     }
                 }
                 Category::Volumes => {
-                    w.list.append(&new_row("＋  New volume", sender, || Msg::NewVolume));
+                    w.list
+                        .append(&new_row("＋  New volume", sender, || Msg::NewVolume));
                     if snap.volumes.is_empty() {
-                        w.list.append(&dim_row(if snap.connected { "No volumes" } else { "—" }));
+                        w.list
+                            .append(&dim_row(if snap.connected { "No volumes" } else { "—" }));
                     }
                     for v in &snap.volumes {
                         let row = volume_list_row(v);
@@ -538,7 +603,11 @@ pub fn render(w: &Widgets, m: &AppModel, sender: &ComponentSender<AppModel>) {
                 Some(v) => volume_detail(v, &snap.containers, sender),
                 None => placeholder("This volume no longer exists."),
             },
-            Selection::None => placeholder(if snap.connected { "Select an item." } else { "Daemon not running." }),
+            Selection::None => placeholder(if snap.connected {
+                "Select an item."
+            } else {
+                "Daemon not running."
+            }),
         };
         w.detail_info.append(&info);
 
@@ -550,8 +619,16 @@ pub fn render(w: &Widgets, m: &AppModel, sender: &ComponentSender<AppModel>) {
             w.add_term.set_visible(true);
             // Terminal pages (index ≥ 2) belong to a container — show them again.
             let mut i = 2;
-            while let Some(p) = w.term_notebook.nth_page(Some(i)) { p.set_visible(true); i += 1; }
-            let name = snap.containers.iter().find(|c| &c.id == id).map(|c| c.name()).unwrap_or_default();
+            while let Some(p) = w.term_notebook.nth_page(Some(i)) {
+                p.set_visible(true);
+                i += 1;
+            }
+            let name = snap
+                .containers
+                .iter()
+                .find(|c| &c.id == id)
+                .map(|c| c.name())
+                .unwrap_or_default();
             *w.term_current.borrow_mut() = Some((id.clone(), name));
             // Feed the ＋ menu the shells detected for THIS container (empty until the probe returns).
             *w.term_shells.borrow_mut() = match &m.shells {
@@ -560,7 +637,11 @@ pub fn render(w: &Widgets, m: &AppModel, sender: &ComponentSender<AppModel>) {
             };
             let text = match &m.current_logs {
                 Some((lid, t)) if lid == id => {
-                    if t.is_empty() { "(no output)".to_string() } else { t.clone() }
+                    if t.is_empty() {
+                        "(no output)".to_string()
+                    } else {
+                        t.clone()
+                    }
                 }
                 _ => "loading…".to_string(),
             };
@@ -574,7 +655,10 @@ pub fn render(w: &Widgets, m: &AppModel, sender: &ComponentSender<AppModel>) {
             w.logs_scroll.set_visible(false);
             w.add_term.set_visible(false);
             let mut i = 2;
-            while let Some(p) = w.term_notebook.nth_page(Some(i)) { p.set_visible(false); i += 1; }
+            while let Some(p) = w.term_notebook.nth_page(Some(i)) {
+                p.set_visible(false);
+                i += 1;
+            }
             w.term_notebook.set_current_page(Some(0));
             *w.term_current.borrow_mut() = None;
         }
@@ -586,7 +670,8 @@ pub fn render(w: &Widgets, m: &AppModel, sender: &ComponentSender<AppModel>) {
         w.daemon_dot.remove_css_class(c);
     }
     w.daemon_dot.add_css_class(css);
-    w.daemon_label.set_label(if snap.connected { "Running" } else { "Stopped" });
+    w.daemon_label
+        .set_label(if snap.connected { "Running" } else { "Stopped" });
     w.daemon_toggle.set_tooltip_text(Some(if snap.connected {
         "Daemon running — click to stop"
     } else {
@@ -603,7 +688,9 @@ pub fn render(w: &Widgets, m: &AppModel, sender: &ComponentSender<AppModel>) {
             } else {
                 w.context_menu.remove_css_class("dd-active");
             }
-            w.context_menu.set_tooltip_text(Some("Choose which Docker context (daemon) the docker CLI uses"));
+            w.context_menu.set_tooltip_text(Some(
+                "Choose which Docker context (daemon) the docker CLI uses",
+            ));
             // Rebuild the popover list of available contexts.
             clear_box(&w.context_pop_box);
             for ctx in &snap.docker_contexts {
@@ -630,7 +717,6 @@ pub fn render(w: &Widgets, m: &AppModel, sender: &ComponentSender<AppModel>) {
     }
 }
 
-
 /// A category nav row: symbolic icon + label.
 pub(crate) fn cat_row(icon: &str, label: &str) -> gtk::ListBoxRow {
     let img = gtk::Image::from_icon_name(icon);
@@ -646,39 +732,48 @@ pub(crate) fn cat_row(icon: &str, label: &str) -> gtk::ListBoxRow {
     row
 }
 
-
 // ---- bundle environment ----------------------------------------------------
 
 /// When running from inside `dd.app`, point GTK at the bundled runtime data. No-op for a dev
 /// build (the Resources/Frameworks dirs won't exist), and never overrides an env var already set.
 pub fn setup_bundle_env() {
-    let Ok(exe) = std::env::current_exe() else { return };
-    let Some(contents) = exe.parent().and_then(|p| p.parent()) else { return };
+    let Ok(exe) = std::env::current_exe() else {
+        return;
+    };
+    let Some(contents) = exe.parent().and_then(|p| p.parent()) else {
+        return;
+    };
     let res = contents.join("Resources");
     let fw = contents.join("Frameworks");
     if !res.exists() || !fw.exists() {
         return; // not a bundle — dev run
     }
     let loaders = res.join("lib/gdk-pixbuf-2.0/2.10.0/loaders");
-    set_if_absent("GSETTINGS_SCHEMA_DIR", res.join("glib-2.0/schemas").as_os_str());
+    set_if_absent(
+        "GSETTINGS_SCHEMA_DIR",
+        res.join("glib-2.0/schemas").as_os_str(),
+    );
     set_if_absent("GSETTINGS_BACKEND", OsStr::new("memory"));
-    set_if_absent("GDK_PIXBUF_MODULE_FILE", loaders.join("loaders.cache").as_os_str());
+    set_if_absent(
+        "GDK_PIXBUF_MODULE_FILE",
+        loaders.join("loaders.cache").as_os_str(),
+    );
     set_if_absent("GDK_PIXBUF_MODULEDIR", loaders.as_os_str());
     set_if_absent("XDG_DATA_DIRS", res.as_os_str());
     set_if_absent("XDG_DATA_HOME", res.as_os_str());
     set_if_absent("GTK_PATH", fw.as_os_str());
-    set_if_absent("FONTCONFIG_FILE", res.join("fontconfig/fonts.conf").as_os_str());
+    set_if_absent(
+        "FONTCONFIG_FILE",
+        res.join("fontconfig/fonts.conf").as_os_str(),
+    );
     set_if_absent("GSK_RENDERER", OsStr::new("gl"));
 }
-
 
 pub(crate) fn set_if_absent(key: &str, val: &OsStr) {
     if std::env::var_os(key).is_none() {
         std::env::set_var(key, val);
     }
 }
-
-
 
 // ---- headless verification ------------------------------------------------------------------------
 // Render the live window to a PNG offscreen so the UI can be verified without an interactive session
@@ -691,8 +786,12 @@ pub fn screenshot(win: &gtk::ApplicationWindow, path: &str) -> Result<(), String
     let paintable = gtk::WidgetPaintable::new(Some(win));
     let snapshot = gtk::Snapshot::new();
     PaintableExt::snapshot(&paintable, &snapshot, w as f64, h as f64);
-    let node = snapshot.to_node().ok_or("empty render tree (window not drawn yet)")?;
-    let renderer = win.renderer().ok_or("window has no GSK renderer (not realized)")?;
+    let node = snapshot
+        .to_node()
+        .ok_or("empty render tree (window not drawn yet)")?;
+    let renderer = win
+        .renderer()
+        .ok_or("window has no GSK renderer (not realized)")?;
     let texture = renderer.render_texture(&node, None);
     texture.save_to_png(path).map_err(|e| e.to_string())
 }

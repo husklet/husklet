@@ -15,28 +15,37 @@ static int g_cpu_max = 0;
 static int g_rootfs_ro = 0;
 // docker --ulimit overrides, indexed by Linux RLIMIT_* resource number; .set gates the override.
 #define DD_RLIM_MAX 16
-static struct { int set; uint64_t cur, max; } g_ulimit[DD_RLIM_MAX];
+
+static struct {
+    int set;
+    uint64_t cur, max;
+} g_ulimit[DD_RLIM_MAX];
+
 // current anon charge (bytes)
 static _Atomic uint64_t g_mem_charged = 0;
 // live task count (init = 1)
 static _Atomic int g_pids_cur = 1;
 // PID ns: host pid of the container init -> guest sees it as PID 1
 static int g_init_hostpid = 0;
+
 static int container_pid(void) {
     int h = getpid();
     return (g_init_hostpid && h == g_init_hostpid) ? 1 : h;
 }
+
 // `docker run --network none`: the daemon sets DD_NET_ISOLATE=1. The container is then LOOPBACK-ONLY — no
 // eth0 is presented in the interface model (netlink RTM_GETLINK/GETADDR/GETROUTE dumps + SIOCGIFCONF in
 // netns.c, and /proc/net/dev·route + /sys/class/net in vfs.c), matching docker's `none` network (only lo).
 // Defined here (state.c is the FIRST container TU include) so both vfs.c and netns.c can consume it. Lazily
 // cached. Off (eth0 present) for the default bridge / user networks, so it never affects a normal container.
 static int g_net_isolate = -1;
+
 static int net_isolate(void) {
     if (g_net_isolate < 0) g_net_isolate = getenv("DD_NET_ISOLATE") != NULL;
     return g_net_isolate;
 }
-// ---- container network-interface model (#289) --------------------------------------------------
+
+// ---- container network-interface model --------------------------------------------------
 // dd runs no real network stack, so a container had NO interface introspection at all: /sys/class/net
 // and /proc/net/* were absent and AF_NETLINK sockets failed EAFNOSUPPORT, breaking getifaddrs /
 // go-sockaddr / netlink (consul, minio, `ip`, ifconfig). To fix that coherently we model exactly two
@@ -55,20 +64,29 @@ static uint32_t netif_eth0_ip(void) {
     }
     return (uint32_t)(172 | (17 << 8) | (0 << 16) | (2 << 24)); // 172.17.0.2 (docker default bridge)
 }
-static int netif_eth0_prefix(void) { return 16; } // docker default bridge is /16 (cf. br_in_subnet)
+
+static int netif_eth0_prefix(void) {
+    return 16;
+} // docker default bridge is /16 (cf. br_in_subnet)
+
 // eth0 broadcast = (ip | ~mask); mask = the top prefixlen bits (in network-order-as-host-u32 form).
 static uint32_t netif_eth0_bcast(void) {
     int pfx = netif_eth0_prefix();
     uint32_t host_mask = pfx >= 32 ? 0xffffffffu : ((1u << pfx) - 1u); // low `pfx` bits set (= net bytes)
     return netif_eth0_ip() | ~host_mask;
 }
+
 // eth0 network base (ip & mask) and gateway (base | .1, i.e. host-octet 1 -> byte3 in this encoding).
 static uint32_t netif_eth0_net(void) {
     int pfx = netif_eth0_prefix();
     uint32_t host_mask = pfx >= 32 ? 0xffffffffu : ((1u << pfx) - 1u);
     return netif_eth0_ip() & host_mask;
 }
-static uint32_t netif_eth0_gw(void) { return netif_eth0_net() | 0x01000000u; } // .1 = octet4 = high byte
+
+static uint32_t netif_eth0_gw(void) {
+    return netif_eth0_net() | 0x01000000u;
+} // .1 = octet4 = high byte
+
 // eth0 MAC = 02:42:<4 ip bytes> (docker's bridge-container MAC convention). out[6].
 static void netif_eth0_mac(uint8_t *out) {
     uint32_t ip = netif_eth0_ip();
@@ -82,13 +100,20 @@ static void netif_eth0_mac(uint8_t *out) {
 
 static int g_uid = -1,
            // USER ns: container uid/gid (-1 = passthrough host id; container defaults to 0=root)
-           g_gid = -1;
-static int cuid(void) { return g_uid >= 0 ? g_uid : (int)getuid(); }
-static int cgid(void) { return g_gid >= 0 ? g_gid : (int)getgid(); }
-// ---- BUG #181: guest-set ownership persistence (chown(2)/fchownat on overlay-upper files) ----
-// Rootless: a guest chown can't change the host file's REAL owner, and #156 reports host-owned files
+    g_gid = -1;
+
+static int cuid(void) {
+    return g_uid >= 0 ? g_uid : (int)getuid();
+}
+
+static int cgid(void) {
+    return g_gid >= 0 ? g_gid : (int)getgid();
+}
+
+// --: guest-set ownership persistence (chown(2)/fchownat on overlay-upper files) ----
+// Rootless: a guest chown can't change the host file's REAL owner, and reports host-owned files
 // as the container uid/gid -- so a guest-set owner was silently lost (chown returned 0 but a re-stat
-// still showed the #156 default). Persist the guest-set (uid,gid) as host xattrs on the overlay
+// still showed the default). Persist the guest-set (uid,gid) as host xattrs on the overlay
 // backing file; fill_linux_stat prefers them over the cuid/cgid default. A guest id of -1 means
 // "don't change" (POSIX chown) -> leave that xattr untouched so the other id / the default survives.
 // xattrs live on the real APFS upper file, so they persist across a re-stat AND across processes.
@@ -109,20 +134,24 @@ static int cgid(void) { return g_gid >= 0 ? g_gid : (int)getgid(); }
 static uint32_t g_chown_gen = 1; // 0 reserved for "empty slot"
 static int g_noxattrcache = -1;  // -1 = uninit; 1 = cache disabled (kill switch)
 #define DD_NOXC_N 4096           // direct-mapped; power of two
+
 static struct {
     uint64_t dev, ino;
     uint32_t gen;
 } g_noxc[DD_NOXC_N];
+
 static inline uint32_t noxc_slot(uint64_t dev, uint64_t ino) {
     uint64_t h = (ino * 0x9E3779B97F4A7C15ull) ^ (dev * 0xC2B2AE3D27D4EB4Full);
     return (uint32_t)(h >> 33) & (DD_NOXC_N - 1);
 }
+
 static void chown_gen_bump(void) { // any new xattr invalidates every cached "no xattr" verdict
-    if (++g_chown_gen == 0) {       // wrap: reset to a fresh generation and clear stale slots
+    if (++g_chown_gen == 0) {      // wrap: reset to a fresh generation and clear stale slots
         g_chown_gen = 1;
         memset(g_noxc, 0, sizeof g_noxc);
     }
 }
+
 static void chown_xattr_set_path(const char *hostpath, int uid, int gid, int nofollow) {
     int opt = nofollow ? XATTR_NOFOLLOW : 0;
     if (uid >= 0) {
@@ -135,6 +164,7 @@ static void chown_xattr_set_path(const char *hostpath, int uid, int gid, int nof
     }
     if (uid >= 0 || gid >= 0) chown_gen_bump();
 }
+
 static void chown_xattr_set_fd(int fd, int uid, int gid) {
     if (uid >= 0) {
         uint32_t v = (uint32_t)uid;
@@ -146,8 +176,9 @@ static void chown_xattr_set_fd(int fd, int uid, int gid) {
     }
     if (uid >= 0 || gid >= 0) chown_gen_bump();
 }
+
 // Read back the guest-set ids (fd preferred when fd>=0, else hostpath). Each out is the set id or -1
-// (no xattr -> keep the #156 cuid/cgid default). Returns 1 if either id was guest-set. dev/ino identify
+// (no xattr -> keep the cuid/cgid default). Returns 1 if either id was guest-set. dev/ino identify
 // the just-stat'd inode for the negative cache above (0/0 = skip caching, e.g. synthetic entries).
 static int chown_xattr_get(const char *hostpath, int fd, uint64_t dev, uint64_t ino, int *uid, int *gid) {
     *uid = -1;
@@ -164,11 +195,23 @@ static int chown_xattr_get(const char *hostpath, int fd, uint64_t dev, uint64_t 
     uint32_t v;
     int present = 0;
     if (fd >= 0) {
-        if (fgetxattr(fd, DD_XATTR_UID, &v, sizeof v, 0, 0) == (ssize_t)sizeof v) { *uid = (int)v; present = 1; }
-        if (fgetxattr(fd, DD_XATTR_GID, &v, sizeof v, 0, 0) == (ssize_t)sizeof v) { *gid = (int)v; present = 1; }
+        if (fgetxattr(fd, DD_XATTR_UID, &v, sizeof v, 0, 0) == (ssize_t)sizeof v) {
+            *uid = (int)v;
+            present = 1;
+        }
+        if (fgetxattr(fd, DD_XATTR_GID, &v, sizeof v, 0, 0) == (ssize_t)sizeof v) {
+            *gid = (int)v;
+            present = 1;
+        }
     } else {
-        if (getxattr(hostpath, DD_XATTR_UID, &v, sizeof v, 0, 0) == (ssize_t)sizeof v) { *uid = (int)v; present = 1; }
-        if (getxattr(hostpath, DD_XATTR_GID, &v, sizeof v, 0, 0) == (ssize_t)sizeof v) { *gid = (int)v; present = 1; }
+        if (getxattr(hostpath, DD_XATTR_UID, &v, sizeof v, 0, 0) == (ssize_t)sizeof v) {
+            *uid = (int)v;
+            present = 1;
+        }
+        if (getxattr(hostpath, DD_XATTR_GID, &v, sizeof v, 0, 0) == (ssize_t)sizeof v) {
+            *gid = (int)v;
+            present = 1;
+        }
     }
     if (use_cache && !present) { // record the confirmed miss so a repeat stat of this inode skips the reads
         g_noxc[slot].dev = dev;
@@ -177,15 +220,15 @@ static int chown_xattr_get(const char *hostpath, int fd, uint64_t dev, uint64_t 
     }
     return present;
 }
-// #383: the SINGLE source of truth for guest-visible file ownership. Map a host stat's raw uid/gid to
-// the ids the guest must see: the #156 cuid/cgid container default for engine-owned files, overridden by
-// the #181 guest-chown xattr (read through the #382 negative cache). EVERY stat-family syscall routes its
+
+// the SINGLE source of truth for guest-visible file ownership. Map a host stat's raw uid/gid to
+// the ids the guest must see: the cuid/cgid container default for engine-owned files, overridden by
+// the guest-chown xattr (read through the negative cache). EVERY stat-family syscall routes its
 // owner fields through here -- fill_linux_stat (fstat/stat/newfstatat) AND the statx handler -- so all of
 // them report identical ownership for the same file (statx previously copied the RAW host uid/gid,
 // diverging from fstat wherever cuid/cgid or a guest chown applied). hostpath/fd identify the backing file
 // for the xattr read (NULL/-1 when synthetic -> the cuid/cgid default applies).
-static void stat_virt_ids(const struct stat *s, const char *hostpath, int fd, uint32_t *out_uid,
-                          uint32_t *out_gid) {
+static void stat_virt_ids(const struct stat *s, const char *hostpath, int fd, uint32_t *out_uid, uint32_t *out_gid) {
     uint32_t uid = (s->st_uid == (uid_t)getuid()) ? (uint32_t)cuid() : (uint32_t)s->st_uid;
     uint32_t gid = (s->st_gid == (gid_t)getgid()) ? (uint32_t)cgid() : (uint32_t)s->st_gid;
     int xu, xg;
@@ -196,6 +239,7 @@ static void stat_virt_ids(const struct stat *s, const char *hostpath, int fd, ui
     *out_uid = uid;
     *out_gid = gid;
 }
+
 // ---- runtime credential overlay (USER ns) -- defined here (BEFORE fs.c AND proc.c in the unity TU) --
 // cuid()/cgid() give the container's CONFIGURED identity (default 0=root); a privileged guest may drop
 // to an unprivileged id at runtime (apt forks /usr/lib/apt/methods/http, switching to `_apt`; gosu
@@ -207,14 +251,15 @@ static void stat_virt_ids(const struct stat *s, const char *hostpath, int fd, ui
 static int g_cred_init = 0;
 static int g_ruid, g_euid, g_suid; // real / effective / saved-set uid
 static int g_rgid, g_egid, g_sgid; // real / effective / saved-set gid
-// #257: model the CAP_SETUID/CAP_SETGID capability that actually governs set*id -- not just euid==0. Real
+// model the CAP_SETUID/CAP_SETGID capability that actually governs set*id -- not just euid==0. Real
 // Linux clears a task's EFFECTIVE caps when euid transitions 0->nonzero, and clears the PERMITTED set too
 // once every uid (r/e/s) is nonzero UNLESS PR_SET_KEEPCAPS is armed; a later capset() can then re-raise
 // effective from permitted. setpriv relies on exactly this: it sets KEEPCAPS, does setresuid(1000,...),
 // capset()s to re-raise, then setresgid(1000,...) -- which our euid==0-only gate wrongly rejected (EPERM).
-// apt/gosu drop WITHOUT keepcaps, so permitted->0 and they correctly can never regain root (#242/#255).
-static int g_keepcaps = 0;                  // PR_SET_KEEPCAPS armed (caps survive the all-nonzero uid drop)
+// apt/gosu drop WITHOUT keepcaps, so permitted->0 and they correctly can never regain root.
+static int g_keepcaps = 0;                    // PR_SET_KEEPCAPS armed (caps survive the all-nonzero uid drop)
 static int g_cap_setid_perm, g_cap_setid_eff; // permitted / effective CAP_SETUID+CAP_SETGID (move together)
+
 static void cred_init(void) {
     if (g_cred_init) return;
     g_ruid = g_euid = g_suid = cuid();
@@ -223,6 +268,7 @@ static void cred_init(void) {
     g_cap_setid_perm = g_cap_setid_eff = (g_euid == 0);
     g_cred_init = 1;
 }
+
 // Recompute the CAP_SETID state after a uid change, per the kernel's credential rules (call from every
 // set*uid handler AFTER it mutates g_ruid/euid/suid). effective is cleared the moment euid != 0; permitted
 // is cleared once all three uids are nonzero unless KEEPCAPS is armed; root (euid 0) holds both.
@@ -234,7 +280,8 @@ static void cred_uid_changed(void) {
     g_cap_setid_eff = 0; // euid left 0 -> effective caps dropped (a capset can re-raise from permitted)
     if (g_ruid != 0 && g_suid != 0 && !g_keepcaps) g_cap_setid_perm = 0; // all-nonzero, no keepcaps -> gone
 }
-// #257: execve of an ordinary (non-setuid, no-file-cap) binary recomputes the capability state: a non-root
+
+// execve of an ordinary (non-setuid, no-file-cap) binary recomputes the capability state: a non-root
 // task loses all caps, root keeps them, and PR_SET_KEEPCAPS is cleared -- so a program that dropped uid and
 // then exec'd cannot silently retain CAP_SETUID/SETGID. The uid/gid values THEMSELVES persist across exec
 // (the engine reloads the image in-process), exactly as the kernel carries credentials over an execve.
@@ -243,24 +290,29 @@ static void cred_after_exec(void) {
     g_keepcaps = 0;
     g_cap_setid_perm = g_cap_setid_eff = (g_euid == 0);
 }
+
 static int cred_euid(void) {
     cred_init();
     return g_euid;
 }
+
 static int cred_egid(void) {
     cred_init();
     return g_egid;
 }
+
 // A task may set an id it already holds (real/effective/saved) or ANY id while it holds effective
 // CAP_SETUID/CAP_SETGID (which root does, and which KEEPCAPS+capset preserves across a uid drop). -1 means
 // "leave unchanged".
 static int uid_permitted(int id) {
     return id == -1 || g_cap_setid_eff || id == g_ruid || id == g_euid || id == g_suid;
 }
+
 static int gid_permitted(int id) {
     return id == -1 || g_cap_setid_eff || id == g_rgid || id == g_egid || id == g_sgid;
 }
-// ---- Container capability + security-context sets (caps audit; extends #408/#430) ------------------
+
+// ---- Container capability + security-context sets (caps audit; extends) ------------------
 // A default `docker run` ROOT container is NOT all-powerful: runc keeps only 14 of the ~40 Linux caps and
 // drops the rest. The masks below are what /proc/self/status (CapPrm/CapEff/CapBnd), capget(2) and
 // prctl(PR_CAPBSET_READ) must ALL report identically — nginx/postgres/systemd/capsh gate privileged
@@ -269,12 +321,13 @@ static int gid_permitted(int id) {
 // truth. Effective narrows when a guest capset()s a smaller set; the bounding set narrows on
 // PR_CAPBSET_DROP; inheritable/ambient stay empty (the docker default). Previously dd reported all-ones
 // (0xffffffffffffffff) — grossly over-reporting caps vs real docker.
-#define DD_CAP_DEFAULT 0x00000000a80425fbull // chown,dac_override,fowner,fsetid,kill,setgid,setuid,setpcap,
-                                             // net_bind_service,net_raw,sys_chroot,mknod,audit_write,setfcap
-static uint64_t g_cap_eff = DD_CAP_DEFAULT;  // process EFFECTIVE cap set (capset(2) may narrow it)
-static uint64_t g_cap_bnd = DD_CAP_DEFAULT;  // process BOUNDING cap set (PR_CAPBSET_DROP clears bits)
-static int g_nnp;                            // PR_SET/GET_NO_NEW_PRIVS: sticky; /proc/self/status NoNewPrivs
-// ---- #422: image-derived supplementary groups (runc additionalGids) --------------------------------
+#define DD_CAP_DEFAULT                                                                                                 \
+    0x00000000a80425fbull                   // chown,dac_override,fowner,fsetid,kill,setgid,setuid,setpcap,
+                                            // net_bind_service,net_raw,sys_chroot,mknod,audit_write,setfcap
+static uint64_t g_cap_eff = DD_CAP_DEFAULT; // process EFFECTIVE cap set (capset(2) may narrow it)
+static uint64_t g_cap_bnd = DD_CAP_DEFAULT; // process BOUNDING cap set (PR_CAPBSET_DROP clears bits)
+static int g_nnp;                           // PR_SET/GET_NO_NEW_PRIVS: sticky; /proc/self/status NoNewPrivs
+// ---- image-derived supplementary groups (runc additionalGids) --------------------------------
 // A default `docker run` gives the container's run user (default root, uid 0) the supplementary GID set
 // runc DERIVES FROM THE IMAGE ROOTFS -- not a fixed constant. runc reads /etc/passwd for the run user's
 // NAME + primary gid, then scans /etc/group in file order and collects every group whose comma-separated
@@ -289,12 +342,17 @@ static int g_nnp;                            // PR_SET/GET_NO_NEW_PRIVS: sticky;
 // (apt/gosu drop their supplementary groups before switching user), keeping getgroups + status coherent.
 #define DD_NGROUPS_MAX 64
 static gid_t g_groups[DD_NGROUPS_MAX];
-static int g_ngroups = 0;      // count in g_groups (may be 0 after a guest setgroups(0))
+static int g_ngroups = 0;       // count in g_groups (may be 0 after a guest setgroups(0))
 static int g_groups_parsed = 0; // 1 once container_parse_groups ran (rootfs mode); gates getgroups/setgroups
-static void groups_reset(void) { g_ngroups = 0; }
+
+static void groups_reset(void) {
+    g_ngroups = 0;
+}
+
 static void groups_append(gid_t g) {
     if (g_ngroups < DD_NGROUPS_MAX) g_groups[g_ngroups++] = g;
 }
+
 // Render the set for /proc/[pid]/status: space-separated with a TRAILING space, exactly as the kernel prints
 // the Groups: line (e.g. "0 0 1 2 3 4 6 10 11 20 26 27 "). Empty when unparsed -> "Groups:\t\n" as before.
 static int groups_status_str(char *b, size_t n) {
@@ -305,44 +363,60 @@ static int groups_status_str(char *b, size_t n) {
     b[(size_t)o < n ? (size_t)o : n - 1] = 0;
     return o;
 }
-// ---- BUG #255: new-file ownership stamp (runtime setuid/setgid drop) ----------------------------
+
+// --: new-file ownership stamp (runtime setuid/setgid drop) ----------------------------
 // A guest that drops privilege at runtime (setuid/setresuid/setfsuid -> gosu's postgres) and then
 // CREATES a file/dir must have the new inode owned by its CURRENT effective fsuid/fsgid, NOT the
-// cuid/cgid container default that fill_linux_stat applies to host-owned files. #181 tracked only
+// cuid/cgid container default that fill_linux_stat applies to host-owned files. tracked only
 // EXPLICIT chown(2); a plain create left no xattr, so a new file re-appeared as the container id (0),
 // which broke initdb ("data directory has wrong ownership"). fsuid/fsgid follow the overlay's
 // euid/egid unless setfsuid/setfsgid override them (g_fs*_ovr >= 0); any subsequent set*id resets the
 // override (POSIX: fsuid tracks euid). We persist the intended owner as the SAME dd.uid/gid xattr the
 // chown path uses, so a later stat reports it. The create sites in fs.c call the helpers below.
 static int g_fsuid_ovr = -1, g_fsgid_ovr = -1; // -1 = follow euid/egid
-static int newfile_uid(void) { return g_fsuid_ovr >= 0 ? g_fsuid_ovr : cred_euid(); }
-static int newfile_gid(void) { return g_fsgid_ovr >= 0 ? g_fsgid_ovr : cred_egid(); }
+
+static int newfile_uid(void) {
+    return g_fsuid_ovr >= 0 ? g_fsuid_ovr : cred_euid();
+}
+
+static int newfile_gid(void) {
+    return g_fsgid_ovr >= 0 ? g_fsgid_ovr : cred_egid();
+}
+
 // True only when a runtime cred drop makes the new-file owner differ from the cuid/cgid default -- the
 // create paths gate their pre-existence probe + stamp on this so the common (no-drop) case is free.
-static int newfile_stamp_wanted(void) { return newfile_uid() != cuid() || newfile_gid() != cgid(); }
+static int newfile_stamp_wanted(void) {
+    return newfile_uid() != cuid() || newfile_gid() != cgid();
+}
+
 // Stamp a freshly-created inode's owner, but only the id(s) that differ from the default (so a
 // root-created file stays xattr-free). fd form for openat(O_CREAT); path form for mkdir/mknod.
 static void newfile_stamp_fd(int fd) {
     int u = newfile_uid(), g = newfile_gid();
     chown_xattr_set_fd(fd, u != cuid() ? u : -1, g != cgid() ? g : -1);
 }
+
 static void newfile_stamp_path(const char *hostpath, int nofollow) {
     int u = newfile_uid(), g = newfile_gid();
     chown_xattr_set_path(hostpath, u != cuid() ? u : -1, g != cgid() ? g : -1, nofollow);
 }
+
 // ---- NET ns Phase 1: port-map (docker run -p H:C). bind(:C) actually binds the host port :H;
 // getsockname reports :C back so the guest sees the port it asked for. {cport->hport} table.
 static struct {
     uint16_t cport, hport;
 } g_portmap[32];
+
 static int g_nportmap = 0;
 // fd -> the container port it bound (for getsockname)
 static uint16_t g_fd_cport[1024];
+
 static uint16_t pm_host(uint16_t c) {
     for (int i = 0; i < g_nportmap; i++)
         if (g_portmap[i].cport == c) return g_portmap[i].hport;
     return c;
 }
+
 // "H:C,H:C,..." (docker -p order: host:container). Ports are strictly validated (1..65535);
 // a bad field or more than the cap of entries is an error, not a silent drop.
 static void parse_publish(const char *s) {
@@ -366,6 +440,7 @@ static void parse_publish(const char *s) {
         s = comma + 1;
     }
 }
+
 // "128M"/"2G"/"512K"/"1048576" -> bytes (docker-style suffixes). Strict: empty/non-numeric/an
 // unknown suffix is an error (atoi/strtoull would have silently yielded 0 = unlimited).
 static uint64_t parse_size(const char *s) {
@@ -385,9 +460,7 @@ static uint64_t parse_size(const char *s) {
     case 'M': return v << 20;
     case 'g':
     case 'G': return v << 30;
-    default:
-        fprintf(stderr, "dd: invalid size '%s': bad suffix\n", s);
-        exit(2);
+    default: fprintf(stderr, "dd: invalid size '%s': bad suffix\n", s); exit(2);
     }
 }
 
@@ -406,27 +479,34 @@ static int container_online_cpus(void) {
     long n = 0;
     int v = 0;
     size_t sz = sizeof v;
-    if (sysctlbyname("hw.activecpu", &v, &sz, NULL, 0) == 0 && v > 0) n = v;
-    else if (sz = sizeof v, sysctlbyname("hw.logicalcpu", &v, &sz, NULL, 0) == 0 && v > 0) n = v;
-    else if (sz = sizeof v, sysctlbyname("hw.ncpu", &v, &sz, NULL, 0) == 0 && v > 0) n = v;
+    if (sysctlbyname("hw.activecpu", &v, &sz, NULL, 0) == 0 && v > 0)
+        n = v;
+    else if (sz = sizeof v, sysctlbyname("hw.logicalcpu", &v, &sz, NULL, 0) == 0 && v > 0)
+        n = v;
+    else if (sz = sizeof v, sysctlbyname("hw.ncpu", &v, &sz, NULL, 0) == 0 && v > 0)
+        n = v;
     if (n < 1) n = sysconf(_SC_NPROCESSORS_ONLN); // last-resort (non-darwin build / sysctl failure)
     if (n < 1) n = 1;
     if (g_cpu_max > 0 && (long)g_cpu_max < n) n = g_cpu_max; // docker --cpus allotment clamp
     if (n > 64) n = 64; // one CPU bit per byte fits the 8-byte affinity mask /proc/cpuinfo caps at
     return (int)n;
 }
+
 // Map a docker --ulimit NAME to its Linux RLIMIT_* resource number (-1 = unknown). Names per setrlimit(2)
 // and docker's ulimit set (docker/opts/opts.go ParseUlimit).
 static int ulimit_resource(const char *name) {
-    static const struct { const char *n; int r; } t[] = {
-        {"cpu", 0},       {"fsize", 1},   {"data", 2},       {"stack", 3},   {"core", 4},
-        {"rss", 5},       {"nproc", 6},   {"nofile", 7},     {"memlock", 8}, {"as", 9},
-        {"locks", 10},    {"sigpending", 11}, {"msgqueue", 12}, {"nice", 13}, {"rtprio", 14},
-        {"rttime", 15},   {0, 0}};
+    static const struct {
+        const char *n;
+        int r;
+    } t[] = {{"cpu", 0},       {"fsize", 1},  {"data", 2},    {"stack", 3},   {"core", 4},   {"rss", 5},
+             {"nproc", 6},     {"nofile", 7}, {"memlock", 8}, {"as", 9},      {"locks", 10}, {"sigpending", 11},
+             {"msgqueue", 12}, {"nice", 13},  {"rtprio", 14}, {"rttime", 15}, {0, 0}};
+
     for (int i = 0; t[i].n; i++)
         if (!strcmp(name, t[i].n)) return t[i].r;
     return -1;
 }
+
 // Parse one ulimit numeric value; "unlimited"/"-1" -> RLIM_INFINITY. Fails loud on garbage (trust boundary).
 static uint64_t ulimit_val(const char *s) {
     if (!strcmp(s, "unlimited") || !strcmp(s, "-1")) return ~0ull;
@@ -439,6 +519,7 @@ static uint64_t ulimit_val(const char *s) {
     }
     return (uint64_t)v;
 }
+
 // Parse DD_ULIMITS="name=soft:hard,name=soft:hard,name=both,..." into g_ulimit[] (docker --ulimit set).
 static void parse_ulimits(const char *spec) {
     char tb[2048];
@@ -467,6 +548,7 @@ static void parse_ulimits(const char *spec) {
         g_ulimit[r].max = hard;
     }
 }
+
 // Shared resource-config reader (docker --cpus/--read-only/--ulimit). BOTH the aarch64 and x86_64 frontends
 // call this from container init, so the contract is engine-identical. Env-only: DD_* survive the mac bridge
 // and the x86 fork-server (both inherit env), and the daemon serializes the HostConfig into these vars.
@@ -480,6 +562,7 @@ static void container_read_resource_env(void) {
     const char *u = getenv("DD_ULIMITS");
     if (u && u[0]) parse_ulimits(u);
 }
+
 // 1 if the rootfs is read-only AND `abs` is not under a still-writable pseudo-mount. /proc /dev /sys are
 // synthetic (their writes never touch the rootfs); /tmp /run are the container's scratch, kept writable to
 // mirror docker's --read-only defaults (runc leaves /proc,/dev,/sys mounted rw + the tmpfses writable).

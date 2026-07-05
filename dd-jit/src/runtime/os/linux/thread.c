@@ -1,7 +1,7 @@
 // dd/runtime/os/linux -- threads & futex (clone -> pthread; per-thread cpu; futex via condvars).
 
 #include <mach/mach.h>
-#include <mach/mach_vm.h> // mach_vm_region: probe whether a guest address is still mapped (see cleartid)
+#include <mach/mach_vm.h>       // mach_vm_region: probe whether a guest address is still mapped (see cleartid)
 #include <mach/mach_time.h>     // mach_timebase_info: ns<->mach-abs for the precise-sleep RT window
 #include <mach/thread_policy.h> // THREAD_TIME_CONSTRAINT_POLICY: precise (uncoalesced) timer wakeups
 
@@ -22,10 +22,10 @@ static void sleep_precise_begin(void) {
     thread_policy_set(mach_thread_self(), THREAD_TIME_CONSTRAINT_POLICY, (thread_policy_t)&p,
                       THREAD_TIME_CONSTRAINT_POLICY_COUNT);
 }
+
 static void sleep_precise_end(void) {
     thread_standard_policy_data_t sp = {0}; // back to the default timeshare scheduling
-    thread_policy_set(mach_thread_self(), THREAD_STANDARD_POLICY, (thread_policy_t)&sp,
-                      THREAD_STANDARD_POLICY_COUNT);
+    thread_policy_set(mach_thread_self(), THREAD_STANDARD_POLICY, (thread_policy_t)&sp, THREAD_STANDARD_POLICY_COUNT);
 }
 
 // ---------------- syscalls ----------------
@@ -65,24 +65,34 @@ static void run_guest(struct cpu *c);
 // `imprecise` (WAKE falls back to the bucket-aggregate `waiters`) until it fully drains -- a bounded,
 // wake-count-only degradation that never drops a wakeup (the broadcast still wakes everyone).
 #define FUTEX_ASLOTS 16
+
 struct futex_bucket {
     pthread_mutex_t m;
     pthread_cond_t c;
-    _Atomic int waiters;              // aggregate parked count in this bucket (PROF + imprecise fallback)
-    uintptr_t saddr[FUTEX_ASLOTS];    // distinct uaddrs with >=1 parked waiter (0 == free slot)
-    uint32_t scnt[FUTEX_ASLOTS];      // parked-waiter count for saddr[i]
-    int imprecise;                    // slots overflowed while waiters were parked -> WAKE count approximate
+    _Atomic int waiters;           // aggregate parked count in this bucket (PROF + imprecise fallback)
+    uintptr_t saddr[FUTEX_ASLOTS]; // distinct uaddrs with >=1 parked waiter (0 == free slot)
+    uint32_t scnt[FUTEX_ASLOTS];   // parked-waiter count for saddr[i]
+    int imprecise;                 // slots overflowed while waiters were parked -> WAKE count approximate
 };
+
 // Called under b->m. Register/unregister one parked waiter on `a`, and report the parked count for `a`.
 static void fbk_park(struct futex_bucket *b, uintptr_t a) {
     int freeslot = -1;
     for (int i = 0; i < FUTEX_ASLOTS; i++) {
-        if (b->scnt[i] && b->saddr[i] == a) { b->scnt[i]++; return; }
+        if (b->scnt[i] && b->saddr[i] == a) {
+            b->scnt[i]++;
+            return;
+        }
         if (freeslot < 0 && !b->scnt[i]) freeslot = i;
     }
-    if (freeslot >= 0) { b->saddr[freeslot] = a; b->scnt[freeslot] = 1; return; }
+    if (freeslot >= 0) {
+        b->saddr[freeslot] = a;
+        b->scnt[freeslot] = 1;
+        return;
+    }
     b->imprecise = 1; // no free slot: this bucket's WAKE counts are approximate until it drains
 }
+
 static void fbk_unpark(struct futex_bucket *b, uintptr_t a) {
     for (int i = 0; i < FUTEX_ASLOTS; i++)
         if (b->scnt[i] && b->saddr[i] == a) {
@@ -90,6 +100,7 @@ static void fbk_unpark(struct futex_bucket *b, uintptr_t a) {
             return;
         }
 }
+
 static int fbk_parked(struct futex_bucket *b, uintptr_t a) {
     if (b->imprecise) return atomic_load_explicit(&b->waiters, memory_order_relaxed);
     for (int i = 0; i < FUTEX_ASLOTS; i++)
@@ -107,6 +118,7 @@ static int fbk_parked(struct futex_bucket *b, uintptr_t a) {
 // only the slow path (a real sleeper exists) touches the now-cross-process mutex/condvar. In-process
 // (multi-threaded) futexes still hit the same table, keyed by their shared virtual address, as before.
 static struct futex_bucket *g_fbk;
+
 static void futex_table_init(void) {
     if (g_fbk) return;
     size_t sz = sizeof(struct futex_bucket) * FUTEX_NBUCKET;
@@ -130,11 +142,16 @@ static void futex_table_init(void) {
     pthread_condattr_destroy(&ca);
     g_fbk = t;
 }
-__attribute__((constructor)) static void futex_table_ctor(void) { futex_table_init(); }
+
+__attribute__((constructor)) static void futex_table_ctor(void) {
+    futex_table_init();
+}
+
 static inline struct futex_bucket *fbk_of(const void *uaddr) {
     uint32_t h = (uint32_t)(((uintptr_t)uaddr >> 2) * 2654435761u) & (FUTEX_NBUCKET - 1);
     return &g_fbk[h];
 }
+
 // legacy global queue (NOFUTEXQ=1)
 static pthread_mutex_t g_futex_m = PTHREAD_MUTEX_INITIALIZER;
 static pthread_cond_t g_futex_c = PTHREAD_COND_INITIALIZER;
@@ -156,9 +173,14 @@ static uint64_t g_futex_wake_fast, g_futex_wake_slow, g_futex_wait_n;
 // kernel's copy_to_user would. Lock-free like g_gmap/g_anonmap (mem.c): a race can at worst mis-window a
 // concurrently-changing mapping, never corrupt memory. Updated by mmap/mprotect/munmap in mem.c.
 #define GNA_MAX 512
-static struct { uint64_t lo, hi; } g_gna[GNA_MAX];
+
+static struct {
+    uint64_t lo, hi;
+} g_gna[GNA_MAX];
+
 static int g_ngna;
 static void gna_clear(uint64_t lo, uint64_t hi);
+
 static void gna_add(uint64_t lo, uint64_t hi) {
     if (hi <= lo) return;
     gna_clear(lo, hi); // coalesce: drop any prior coverage so re-marking never double-counts
@@ -168,6 +190,7 @@ static void gna_add(uint64_t lo, uint64_t hi) {
         __atomic_store_n(&g_ngna, g_ngna + 1, __ATOMIC_RELEASE);
     }
 }
+
 // Remove [lo,hi) from the set (access granted, or the range unmapped/re-mapped), splitting any interval
 // that straddles the boundary so a partial grant (mprotect of a sub-range of a big PROT_NONE reservation)
 // keeps the still-inaccessible remainder tracked.
@@ -175,11 +198,19 @@ static void gna_clear(uint64_t lo, uint64_t hi) {
     if (hi <= lo) return;
     for (int i = 0; i < g_ngna;) {
         uint64_t b = g_gna[i].lo, e = g_gna[i].hi;
-        if (lo >= e || hi <= b) { i++; continue; }
+        if (lo >= e || hi <= b) {
+            i++;
+            continue;
+        }
         int keep_head = b < lo, keep_tail = hi < e;
-        if (!keep_head && !keep_tail) { g_gna[i] = g_gna[--g_ngna]; continue; }
-        if (keep_head) g_gna[i].hi = lo; // trim to the surviving head [b,lo)
-        else g_gna[i].lo = hi;           // keep_tail only: [hi,e)
+        if (!keep_head && !keep_tail) {
+            g_gna[i] = g_gna[--g_ngna];
+            continue;
+        }
+        if (keep_head)
+            g_gna[i].hi = lo; // trim to the surviving head [b,lo)
+        else
+            g_gna[i].lo = hi;                             // keep_tail only: [hi,e)
         if (keep_head && keep_tail && g_ngna < GNA_MAX) { // middle grant -> tail becomes a 2nd entry
             g_gna[g_ngna].lo = hi;
             g_gna[g_ngna].hi = e;
@@ -188,6 +219,7 @@ static void gna_clear(uint64_t lo, uint64_t hi) {
         i++;
     }
 }
+
 // True iff any byte of [a,a+len) lies in a tracked guest PROT_NONE region.
 static int gna_hit(uint64_t a, uint64_t len) {
     if (!len || __atomic_load_n(&g_ngna, __ATOMIC_ACQUIRE) == 0) return 0; // lock-free fast path (common)
@@ -196,9 +228,12 @@ static int gna_hit(uint64_t a, uint64_t len) {
         if (a < g_gna[i].hi && end > g_gna[i].lo) return 1;
     return 0;
 }
+
 // execve replaces the whole address space -> drop all tracked PROT_NONE ranges (they're gone with the old
 // image; a stale entry could otherwise wrongly EFAULT a fresh mapping the new image lays at the same address).
-static void gna_reset(void) { __atomic_store_n(&g_ngna, 0, __ATOMIC_RELEASE); }
+static void gna_reset(void) {
+    __atomic_store_n(&g_ngna, 0, __ATOMIC_RELEASE);
+}
 
 // True iff host virtual address `a` is currently mapped. mincore() is useless on macOS (returns 0 for ANY
 // address), so query the VM map directly: mach_vm_region returns the first region at-or-above `a`, and `a`
@@ -216,7 +251,7 @@ static int host_addr_mapped(uintptr_t a) {
     return a >= (uintptr_t)addr && a < (uintptr_t)addr + (uintptr_t)size;
 }
 
-// #392: per-thread ALTERNATE signal stack for the synchronous-fault guards. On the aarch64 frontend the
+// per-thread ALTERNATE signal stack for the synchronous-fault guards. On the aarch64 frontend the
 // host SP == the guest SP while a translated block runs, so a guest STACK OVERFLOW leaves no room for the
 // kernel to push the SIGSEGV/SIGBUS guard's signal frame -- without an altstack the handler double-faults
 // and the guest dies of a spurious SIGILL/SIGBUS instead of a clean, guard-delivered SIGSEGV. Installed
@@ -225,6 +260,7 @@ static int host_addr_mapped(uintptr_t a) {
 // the reservation is uncommitted there.)
 #define HOST_ALTSTK_SZ (512u << 10)
 static _Thread_local void *g_altstk_mem;
+
 // Idempotent: (re)registers the alternate signal stack for THIS thread, allocating one on first use and
 // reusing the existing region otherwise. The sigaltstack() registration is not reliably inherited across
 // fork() on Apple Silicon (like the W^X/APRR state -- see fork_child_hooks), so the fork child re-arms via
@@ -242,6 +278,7 @@ static void install_host_sigaltstack(void) {
     }
     g_altstk_mem = mem;
 }
+
 static void uninstall_host_sigaltstack(void) {
     if (!g_altstk_mem) return;
     stack_t ss = {.ss_flags = SS_DISABLE};
@@ -255,7 +292,7 @@ static void uninstall_host_sigaltstack(void) {
 // it, so a bad/garbage user pointer returns -EFAULT to the guest instead of faulting the engine (the
 // kernel's access_ok() role). A zero length is vacuously OK; an address-space-wrapping range is rejected.
 //
-// PERF (lever #5, sqlite/fcntl): the original implementation issued one mach_vm_region() -- a full Mach
+// PERF (sqlite/fcntl): the original implementation issued one mach_vm_region -- a full Mach
 // message round-trip (~200ns+) -- PER PAGE PER CALL. `sample` showed ~97% of the dd-side overhead of the
 // sqlite syscall mix (2 fcntl(F_SETLK) per query, each validating the guest flock*) inside
 // host_range_mapped->mach_vm_region->mach_msg2_trap. Replace it with the kernel's own access_ok() idiom:
@@ -273,6 +310,7 @@ static void uninstall_host_sigaltstack(void) {
 static _Thread_local sigjmp_buf g_hrm_jb;                   // probe return point (valid while g_hrm_hi != 0)
 static _Thread_local volatile uintptr_t g_hrm_lo, g_hrm_hi; // page range being probed; probing iff hi != 0
 static int g_hrm_slow = -1; // DDJIT_NOFASTHRM=1 / CRASHDBG -> per-page mach_vm_region (A/B kill switch)
+
 // Called FIRST by every SIGSEGV/SIGBUS handler on the run path: when the fault is this thread's own probe
 // load, long-jump back to host_range_mapped ("unmapped"). The faulting signal was auto-blocked at handler
 // entry and siglongjmp(.,0) does not restore masks, so unblock it here or the NEXT probe fault would be
@@ -288,6 +326,7 @@ static int hrm_fault_hook(siginfo_t *si) {
     pthread_sigmask(SIG_UNBLOCK, &s, NULL);
     siglongjmp(g_hrm_jb, 1); // never returns
 }
+
 static int host_range_mapped(uintptr_t a, size_t len) {
     if (!len) return 1;
     uintptr_t end = a + len;
@@ -325,6 +364,7 @@ static void abs_from_rel(struct timespec *abs, const struct timespec *ts) {
         abs->tv_nsec -= 1000000000;
     }
 }
+
 // FUTEX_WAIT_BITSET (op 9) passes an ABSOLUTE deadline, not a relative duration: against
 // CLOCK_REALTIME when FUTEX_CLOCK_REALTIME is set (e.g. glibc's pthread_cond_timedwait on a
 // CLOCK_REALTIME condvar) and CLOCK_MONOTONIC otherwise. That clock flag is masked off before
@@ -374,12 +414,14 @@ static int cpu_has_actionable_tsig(const struct cpu *c) {
         if ((t & (1ull << s)) && !(c->sigmask & (1ull << (s - 1)))) return 1;
     return 0;
 }
+
 // A futex/interruptible wait must abort (return -EINTR so the guest round-trips through the dispatcher) when
 // either an actionable thread-directed signal arrives OR this thread has been flagged exited by a peer's
 // execve teardown (thread_exit_others) -- in both cases the dispatcher must regain control.
 static int cpu_wait_interrupted(const struct cpu *c) {
     return __atomic_load_n(&c->exited, __ATOMIC_SEQ_CST) || cpu_has_actionable_tsig(c);
 }
+
 // This thread's slot in g_threg (set on register), so it can publish the primitive it is about to wait on
 // without re-scanning the registry on the hot futex path.
 static __thread int g_my_threg = -1;
@@ -516,6 +558,7 @@ static long futex_op(struct cpu *c, int *uaddr, int op, int val, const struct ti
     // other ops (WAKE_OP/LOCK_PI/...): unchanged -- pretend success (baseline behavior)
     return 0;
 }
+
 static void futex_wake_addr(uint64_t uaddr) {
     if (!uaddr) return;
     // CLONE_CHILD_CLEARTID: zero the word then wake joiners (pthread_join FUTEX_WAITs on this word). A
@@ -549,6 +592,7 @@ static volatile int g_next_tid = 1000;
 // to run_guest and unregisters when it leaves. Small fixed table guarded by a mutex; a lookup miss (target
 // already gone, or table full) just drops the signal, exactly as Linux drops a tgkill to a dead tid.
 #define THREAD_REG_MAX 4096
+
 static struct {
     struct cpu *c;
     pthread_t th;
@@ -558,28 +602,29 @@ static struct {
     pthread_cond_t *volatile waitc;
     pthread_mutex_t *waitm;
 } g_threg[THREAD_REG_MAX];
+
 static pthread_mutex_t g_threg_m = PTHREAD_MUTEX_INITIALIZER;
 
 // fork() only clones the calling thread. Any process-PRIVATE engine mutex a dead peer held at the instant
 // the guest forked is inherited LOCKED with no owner to release it, so the single-threaded child deadlocks
-// the first time it takes that lock (the go/npm/cargo build hang, #285/#175). Reinitialise this module's
+// the first time it takes that lock (the go/npm/cargo build hang). Reinitialise this module's
 // private locks to a clean unlocked state in the child (the calling thread never holds one across a guest
 // syscall, and no peer survives, so this is always safe). The g_fbk futex buckets are deliberately NOT reset
 // here: they live in a PROCESS_SHARED MAP_SHARED page so a cross-fork FUTEX_WAKE/WAIT still matches (glibc
 // process-shared semaphores), which is the opposite requirement. Called from the fork child path in proc.c.
 static void thread_after_fork(void) {
-    pthread_mutex_init(&g_threg_m, NULL);  // thread registry (tkill/tgkill lookup, thread_register)
-    pthread_mutex_init(&g_futex_m, NULL);  // legacy global futex lock (NOFUTEXQ path)
+    pthread_mutex_init(&g_threg_m, NULL); // thread registry (tkill/tgkill lookup, thread_register)
+    pthread_mutex_init(&g_futex_m, NULL); // legacy global futex lock (NOFUTEXQ path)
     pthread_cond_init(&g_futex_c, NULL);
     // fork() clones ONLY the calling thread, but the tid->thread registry still lists every PARENT thread.
     // Those phantom entries never unregister (no thread backs them in the child), so they (1) poison
     // tgkill/tkill routing -- thread_target_signal matches a phantom by tid (or pid 1 for the main thread)
     // and "delivers" the signal onto a dead cpu, dropping a real thread's SIGURG/preempt (Go's async
-    // preemption then spins one goroutine at 100% while its peers park -- the #305 livelock) -- and (2) make
+    // preemption then spins one goroutine at 100% while its peers park -- the livelock) -- and (2) make
     // the child's next execve teardown (thread_exit_others) busy-wait its full ~10s ceiling for phantom peers
     // that can never leave (the go build fork+exec stall: ~14s PER compile child, measured). Rebuild the
     // registry to hold ONLY the surviving (calling) thread, exactly as stw_after_fork() does for the STW
-    // registry -- #285 reinitialised this module's LOCKS but left the registry CONTENTS inherited.
+    // registry -- reinitialised this module's LOCKS but left the registry CONTENTS inherited.
     struct cpu *self = (g_my_threg >= 0) ? g_threg[g_my_threg].c : NULL;
     memset(g_threg, 0, sizeof g_threg);
     if (self) {
@@ -597,8 +642,13 @@ static void thread_after_fork(void) {
 // signal map (sig_l2m omits 7/EMT and 29/INFO), so a process-wide handler for it cannot collide with an
 // emulated guest signal -- the same free-signal reasoning the STW code uses for SIGEMT.
 #define THREAD_INT_SIG SIGINFO
-static void thread_int_handler(int sig) { (void)sig; } // empty: its only job is to make a blocked syscall EINTR
+
+static void thread_int_handler(int sig) {
+    (void)sig;
+} // empty: its only job is to make a blocked syscall EINTR
+
 static pthread_once_t g_thread_int_once = PTHREAD_ONCE_INIT;
+
 static void thread_int_install(void) {
     struct sigaction sa;
     memset(&sa, 0, sizeof sa);
@@ -609,17 +659,22 @@ static void thread_int_install(void) {
 }
 
 // The guest tid this cpu answers gettid() with (see proc.c case 178): its own id, or the init's pid 1.
-static int cpu_tid(const struct cpu *c) { return c->tid ? c->tid : container_pid(); }
+static int cpu_tid(const struct cpu *c) {
+    return c->tid ? c->tid : container_pid();
+}
+
 // Publish/clear the wait primitive this thread is blocked on (see the futex_op waits + thread_target_signal).
 static void thread_wait_publish(pthread_mutex_t *m, pthread_cond_t *cnd) {
     if (g_my_threg < 0) return;
     g_threg[g_my_threg].waitm = m; // ordered ahead of the waitc store below (a reader only reads it when set)
     __atomic_store_n(&g_threg[g_my_threg].waitc, cnd, __ATOMIC_SEQ_CST);
 }
+
 static void thread_wait_clear(void) {
     if (g_my_threg < 0) return;
     __atomic_store_n(&g_threg[g_my_threg].waitc, NULL, __ATOMIC_SEQ_CST);
 }
+
 static void thread_register(struct cpu *c) {
     pthread_once(&g_thread_int_once, thread_int_install);
     // Keep THREAD_INT_SIG deliverable on this thread so a peer's execve teardown can interrupt its syscalls.
@@ -638,6 +693,7 @@ static void thread_register(struct cpu *c) {
         }
     pthread_mutex_unlock(&g_threg_m);
 }
+
 static void thread_unregister(struct cpu *c) {
     pthread_mutex_lock(&g_threg_m);
     for (int i = 0; i < THREAD_REG_MAX; i++)
@@ -649,6 +705,7 @@ static void thread_unregister(struct cpu *c) {
     pthread_mutex_unlock(&g_threg_m);
     g_my_threg = -1;
 }
+
 // Deliver signal `sig` to the guest thread `tid`: set that thread's per-thread pending bit so it (and not
 // some other thread) runs the handler at its next dispatcher safepoint. A thread that is preempted while
 // running translated code (e.g. Go's sysmon tgkill'ing a worker with SIGURG to stop-the-world) crosses a
@@ -665,7 +722,7 @@ static int thread_target_signal(int tid, int sig) {
     for (int i = 0; i < THREAD_REG_MAX; i++)
         if (g_threg[i].c && cpu_tid(g_threg[i].c) == tid) {
             __atomic_or_fetch(&g_threg[i].c->tpending, 1ull << sig, __ATOMIC_SEQ_CST);
-            // #292: also kick the target out of any no-syscall in-cache loop so its emitted body check
+            // also kick the target out of any no-syscall in-cache loop so its emitted body check
             // (cpu->irq) exits to the dispatcher and maybe_deliver_signal runs the handler at a boundary.
             __atomic_store_n(&g_threg[i].c->irq, 1, __ATOMIC_SEQ_CST);
             // Load waitc AFTER storing tpending: the seq_cst StoreLoad here pairs with the target's
@@ -712,7 +769,7 @@ static int thread_tid_alive(int tid) {
 // any other blocking host syscall (or nudge one running translated code), and BLOCK until all peers have left
 // run_guest and unregistered -- only then is it safe for the caller to munmap/flush the shared address space.
 static void thread_exit_others(struct cpu *self) {
-    struct timespec slice = {0, 500000}; // 0.5ms between rounds; re-signal each round to catch a peer that was
+    struct timespec slice = {0, 500000};          // 0.5ms between rounds; re-signal each round to catch a peer that was
     for (int round = 0; round < 20000; round++) { // between syscalls when we first flagged it (~10s ceiling)
         int others = 0;
         pthread_mutex_lock(&g_threg_m);
@@ -747,6 +804,7 @@ static void *thread_trampoline(void *p) {
     free(child);
     return NULL;
 }
+
 // Spawn a guest thread sharing this address space. stack_top is the initial sp.
 static int spawn_thread(struct cpu *parent, uint64_t flags, uint64_t stack_top, uint64_t tls, uint64_t ptid,
                         uint64_t ctid) {

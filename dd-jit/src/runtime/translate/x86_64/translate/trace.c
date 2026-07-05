@@ -24,11 +24,13 @@
 static int g_stitch = -1; // -1 uninit; resolved lazily from env (NOSTITCH=1 disables)
 #define TRACE_MAX_BLK 16
 #define TRACE_MAX_BYTES (16u * 1024u)
+
 static int seen_has(const uint64_t *s, int n, uint64_t v) {
     for (int i = 0; i < n; i++)
         if (s[i] == v) return 1;
     return 0;
 }
+
 // A successor whose first byte is a trap (hlt / int3 / ud2) is a dynamically-dead guard arm --
 // e.g. musl's alloca size check `cmp size,0xfff; jbe ok; hlt`, where the hlt fall-through is the
 // never-taken oversize trap. Do NOT eagerly inline it: leave it as a normal out-of-line exit so
@@ -47,8 +49,8 @@ static int trap_head(uint64_t a) {
 // promotes the block, after which this stub is dead.
 static void emit_t2_counter_x86(int slot, uint64_t start, void *body) {
     emit_host_ptr(16, (uint64_t)&g_t2cnt[slot], PRELOC_HOSTGLOBAL); // x16 = &g_t2cnt[slot]  (plain RW data)
-    e_ldr(17, 16, 0);                         // x17 = count
-    e_subi(17, 17, 1, 1);                      // --count (sub-imm: flag-free)
+    e_ldr(17, 16, 0);                                               // x17 = count
+    e_subi(17, 17, 1, 1);                                           // --count (sub-imm: flag-free)
     e_str(17, 16, 0);
     uint32_t *p_cbnz = (uint32_t *)g_cp;
     emit32(0); // cbnz x17, Lcont (still counting -> keep looping; flag-free)
@@ -97,35 +99,41 @@ static int loop_has_rmw_hazard(uint64_t body, uint64_t end) {
 static int x86_flag_class(struct insn *I) {
     uint8_t op = I->op;
     if (I->two) {
-        if ((op & 0xF0) == 0x80) return 1;                          // jcc rel32
-        if ((op & 0xF0) == 0x90) return 1;                          // setcc
-        if ((op & 0xF0) == 0x40) return 1;                          // cmovcc
+        if ((op & 0xF0) == 0x80) return 1;                                  // jcc rel32
+        if ((op & 0xF0) == 0x90) return 1;                                  // setcc
+        if ((op & 0xF0) == 0x40) return 1;                                  // cmovcc
         if (op == 0xB6 || op == 0xB7 || op == 0xBE || op == 0xBF) return 0; // movzx/movsx
-        return -1;                                                  // unknown 2-byte
+        return -1;                                                          // unknown 2-byte
     }
-    if (op <= 0x3D && (op & 7) <= 5) {                              // primary ALU 00..3D
+    if (op <= 0x3D && (op & 7) <= 5) { // primary ALU 00..3D
         int k = (op >> 3) & 7;
-        return (k == 2 || k == 3) ? 1 : 2;                         // adc/sbb read CF; rest full producers
+        return (k == 2 || k == 3) ? 1 : 2; // adc/sbb read CF; rest full producers
     }
-    if (op == 0x80 || op == 0x81 || op == 0x83) {                  // group1 ALU r/m,imm
+    if (op == 0x80 || op == 0x81 || op == 0x83) { // group1 ALU r/m,imm
         int k = I->reg & 7;
         return (k == 2 || k == 3) ? 1 : 2;
     }
     if (op == 0x84 || op == 0x85 || op == 0xA8 || op == 0xA9) return 2; // test
-    if (op == 0xF6 || op == 0xF7) {                                // group3
+    if (op == 0xF6 || op == 0xF7) {                                     // group3
         int k = I->reg & 7;
-        if (k == 0 || k == 1 || k == 3) return 2;                  // test imm / neg
-        if (k == 2) return 0;                                      // not (no flags)
-        return -1;                                                 // mul/imul/div/idiv
+        if (k == 0 || k == 1 || k == 3) return 2; // test imm / neg
+        if (k == 2) return 0;                     // not (no flags)
+        return -1;                                // mul/imul/div/idiv
     }
-    if (op == 0xFE) { int k = I->reg & 7; return (k == 0 || k == 1) ? 0 : -1; } // inc/dec byte
-    if (op == 0xFF) { int k = I->reg & 7; return (k == 0 || k == 1) ? 0 : -1; } // inc/dec (call/jmp/push -> -1)
-    if ((op >= 0x88 && op <= 0x8B) || op == 0x8D) return 0;        // mov r/m,r ; r,r/m ; lea
-    if (op >= 0xA0 && op <= 0xA3) return 0;                        // mov acc <-> moffs (touches no flags)
+    if (op == 0xFE) {
+        int k = I->reg & 7;
+        return (k == 0 || k == 1) ? 0 : -1;
+    } // inc/dec byte
+    if (op == 0xFF) {
+        int k = I->reg & 7;
+        return (k == 0 || k == 1) ? 0 : -1;
+    } // inc/dec (call/jmp/push -> -1)
+    if ((op >= 0x88 && op <= 0x8B) || op == 0x8D) return 0;               // mov r/m,r ; r,r/m ; lea
+    if (op >= 0xA0 && op <= 0xA3) return 0;                               // mov acc <-> moffs (touches no flags)
     if ((op >= 0xB0 && op <= 0xBF) || op == 0xC6 || op == 0xC7) return 0; // mov imm
     if ((op >= 0x50 && op <= 0x5F) || op == 0x68 || op == 0x6A) return 0; // push/pop
-    if (op == 0x90) return 0;                                      // nop
-    return -1;                                                     // conservative
+    if (op == 0x90) return 0;                                             // nop
+    return -1;                                                            // conservative
 }
 
 // Decode the self-loop body from `start` and decide whether the guest's NZCV is DEAD at loop top, i.e.
@@ -160,7 +168,7 @@ static int loop_flags_dead(uint64_t start) {
 }
 
 // ==================== x86-xflags: cross-block dead-flag elimination ====================
-// Extends the intra-block dead-flag elision (opt3 NZCV, #346 PF/AF) ACROSS direct block edges. The
+// Extends the intra-block dead-flag elision (opt3 NZCV, PF/AF) ACROSS direct block edges. The
 // per-instruction elisions stop at block boundaries today: every block exit materializes the full
 // flag state because the successor's needs are unknown. This pass computes, at translate time, a
 // conservative FLAG LIVE-IN set for a direct successor by scanning ITS OWN GUEST BYTES (depth-1:
@@ -177,7 +185,7 @@ static int loop_flags_dead(uint64_t start) {
 //  * The live ARM NZCV stays CANONICAL (borrow convention) at every block boundary even when the
 //    membank store is elided: FL_SUB's live flags already are canonical, FL_ADD/FL_LOGIC get the
 //    msr-only fixup (e_nzcv_fix_ci/_c1). Every exit to the dispatcher spills the LIVE flags
-//    (emit_spill -> e_nzcv_save), so the successor's #292 irq-poll exit -- the only place an ASYNC
+//    (emit_spill -> e_nzcv_save), so the successor's irq-poll exit -- the only place an ASYNC
 //    signal can observe RFLAGS -- persists the true flag bytes before maybe_deliver_signal reads
 //    cpu->nzcv. The membank may go stale only ACROSS a chained edge whose successor provably
 //    overwrites CF/ZF/SF/OF before any read (same observable class as the existing intra-block
@@ -225,33 +233,54 @@ static int xblkalu_elide_on(void) {
 
 // x86 condition code (opcode low nibble) -> the RFLAGS bits the condition READS.
 static const uint8_t xf_cond_rd[16] = {
-    XF_OF,         XF_OF,                     // o / no
-    XF_CF,         XF_CF,                     // b / ae
-    XF_ZF,         XF_ZF,                     // e / ne
-    XF_CF | XF_ZF, XF_CF | XF_ZF,             // be / a
-    XF_SF,         XF_SF,                     // s / ns
-    XF_PF,         XF_PF,                     // p / np
-    XF_SF | XF_OF, XF_SF | XF_OF,             // l / ge
-    XF_ZF | XF_SF | XF_OF, XF_ZF | XF_SF | XF_OF, // le / g
+    XF_OF,
+    XF_OF, // o / no
+    XF_CF,
+    XF_CF, // b / ae
+    XF_ZF,
+    XF_ZF, // e / ne
+    XF_CF | XF_ZF,
+    XF_CF | XF_ZF, // be / a
+    XF_SF,
+    XF_SF, // s / ns
+    XF_PF,
+    XF_PF, // p / np
+    XF_SF | XF_OF,
+    XF_SF | XF_OF, // l / ge
+    XF_ZF | XF_SF | XF_OF,
+    XF_ZF | XF_SF | XF_OF, // le / g
 };
 
 // Per-insn flag read/write classification for the liveness scan. *rd = flags possibly read,
 // *wr = flags DEFINITELY overwritten (with a fresh, input-independent storage write by dd's
 // emitter). Returns the scan step kind.
 enum { XRW_OK, XRW_JMP, XRW_END, XRW_UNK };
+
 static int x86_flag_rw(const struct insn *I, int *rd, int *wr) {
     uint8_t op = I->op;
     *rd = 0;
     *wr = 0;
     if (I->vex || I->map3) return XRW_UNK; // AVX / 0F38-3A: C-emulated, may touch flags -> unknown
     if (I->two) {
-        if ((op & 0xF0) == 0x80) { *rd = xf_cond_rd[op & 0xF]; return XRW_END; } // jcc rel32
-        if ((op & 0xF0) == 0x90) { *rd = xf_cond_rd[op & 0xF]; return XRW_OK; }  // setcc
-        if ((op & 0xF0) == 0x40) { *rd = xf_cond_rd[op & 0xF]; return XRW_OK; }  // cmovcc
+        if ((op & 0xF0) == 0x80) {
+            *rd = xf_cond_rd[op & 0xF];
+            return XRW_END;
+        } // jcc rel32
+        if ((op & 0xF0) == 0x90) {
+            *rd = xf_cond_rd[op & 0xF];
+            return XRW_OK;
+        } // setcc
+        if ((op & 0xF0) == 0x40) {
+            *rd = xf_cond_rd[op & 0xF];
+            return XRW_OK;
+        } // cmovcc
         if (op == 0xB6 || op == 0xB7 || op == 0xBE || op == 0xBF) return XRW_OK; // movzx/movsx
         if (op == 0x1E || op == 0x1F) return XRW_OK; // endbr64 / long-nop (reserved hint-nop space)
-        if (op == 0xAF) { *wr = XF_NZCV; return XRW_OK; } // imul r,r/m: e_mul_set_oc builds a fresh
-                                                          // full NZCV word; PF/AF untouched
+        if (op == 0xAF) {
+            *wr = XF_NZCV;
+            return XRW_OK;
+        } // imul r,r/m: e_mul_set_oc builds a fresh
+          // full NZCV word; PF/AF untouched
         return XRW_UNK;
     }
     if (op < 0x40 && alu_kind_primary(op) >= 0) { // primary ALU add/or/adc/sbb/and/sub/xor/cmp
@@ -266,18 +295,27 @@ static int x86_flag_rw(const struct insn *I, int *rd, int *wr) {
         *wr = XF_ALL;
         return XRW_OK;
     }
-    if (op == 0x84 || op == 0x85 || op == 0xA8 || op == 0xA9) { *wr = XF_ALL; return XRW_OK; } // test
+    if (op == 0x84 || op == 0x85 || op == 0xA8 || op == 0xA9) {
+        *wr = XF_ALL;
+        return XRW_OK;
+    } // test
     if (op == 0xF6 || op == 0xF7) { // group3
         int k = I->reg & 7;
-        if (k == 0 || k == 3) { *wr = XF_ALL; return XRW_OK; } // test imm / neg
-        if (k == 2) return XRW_OK;                             // not: no flags
-        return XRW_UNK;                                        // mul/imul/div/idiv (div block-exits)
+        if (k == 0 || k == 3) {
+            *wr = XF_ALL;
+            return XRW_OK;
+        } // test imm / neg
+        if (k == 2) return XRW_OK; // not: no flags
+        return XRW_UNK;            // mul/imul/div/idiv (div block-exits)
     }
     if (op == 0xFE || op == 0xFF) { // group4/5
         int k = I->reg & 7;
-        if (k == 0 || k == 1) { *wr = XF_PF | XF_AF | XF_ZF | XF_SF | XF_OF; return XRW_OK; } // inc/dec keep CF
-        if (op == 0xFF && k == 6) return XRW_OK;               // push r/m
-        if (op == 0xFF && (k == 2 || k == 4)) return XRW_END;  // call/jmp indirect
+        if (k == 0 || k == 1) {
+            *wr = XF_PF | XF_AF | XF_ZF | XF_SF | XF_OF;
+            return XRW_OK;
+        } // inc/dec keep CF
+        if (op == 0xFF && k == 6) return XRW_OK;              // push r/m
+        if (op == 0xFF && (k == 2 || k == 4)) return XRW_END; // call/jmp indirect
         return XRW_UNK;
     }
     if ((op >= 0x88 && op <= 0x8B) || op == 0x8D || op == 0x63) return XRW_OK; // mov / lea / movsxd
@@ -289,13 +327,32 @@ static int x86_flag_rw(const struct insn *I, int *rd, int *wr) {
     if (op >= 0x90 && op <= 0x97) return XRW_OK;                               // nop / xchg acc
     if (op == 0x86 || op == 0x87) return XRW_OK;                               // xchg r/m
     if (op == 0x98 || op == 0x99) return XRW_OK;                               // cwde/cdq
-    if (op == 0x9E) { *wr = XF_CF | XF_PF | XF_AF | XF_ZF | XF_SF; return XRW_OK; } // sahf (not OF)
-    if (op == 0x9F) { *rd = XF_CF | XF_PF | XF_AF | XF_ZF | XF_SF; return XRW_OK; } // lahf
-    if (op == 0x9C) { *rd = XF_ALL; return XRW_OK; }                           // pushfq
-    if (op == 0x9D) { *wr = XF_ALL; return XRW_OK; }                           // popfq rewrites all lanes
-    if (op == 0xF5) { *rd = XF_CF; *wr = XF_CF; return XRW_OK; }               // cmc
-    if (op == 0xF8 || op == 0xF9) { *wr = XF_CF; return XRW_OK; }              // clc/stc
-    if (op == 0xFC || op == 0xFD) return XRW_OK;                               // cld/std (DF only)
+    if (op == 0x9E) {
+        *wr = XF_CF | XF_PF | XF_AF | XF_ZF | XF_SF;
+        return XRW_OK;
+    } // sahf (not OF)
+    if (op == 0x9F) {
+        *rd = XF_CF | XF_PF | XF_AF | XF_ZF | XF_SF;
+        return XRW_OK;
+    } // lahf
+    if (op == 0x9C) {
+        *rd = XF_ALL;
+        return XRW_OK;
+    } // pushfq
+    if (op == 0x9D) {
+        *wr = XF_ALL;
+        return XRW_OK;
+    } // popfq rewrites all lanes
+    if (op == 0xF5) {
+        *rd = XF_CF;
+        *wr = XF_CF;
+        return XRW_OK;
+    } // cmc
+    if (op == 0xF8 || op == 0xF9) {
+        *wr = XF_CF;
+        return XRW_OK;
+    } // clc/stc
+    if (op == 0xFC || op == 0xFD) return XRW_OK;                // cld/std (DF only)
     if (op == 0xC0 || op == 0xC1 || op == 0xD0 || op == 0xD1) { // group2, constant count
         int k = I->reg & 7;
         if (k == 6) k = 4;
@@ -308,11 +365,17 @@ static int x86_flag_rw(const struct insn *I, int *rd, int *wr) {
         }
         return XRW_UNK; // rol/ror/rcl/rcr: load-modify-store cpu->nzcv (membank readers)
     }
-    if (op >= 0x70 && op <= 0x7F) { *rd = xf_cond_rd[op & 0xF]; return XRW_END; } // jcc rel8
-    if (op == 0xE9 || op == 0xEB) return XRW_JMP;                                 // jmp rel: follow
-    if (op == 0xE8 || op == 0xC3 || op == 0xC2) return XRW_END;                   // call / ret
-    if (op == 0xE0 || op == 0xE1) { *rd = XF_ZF; return XRW_END; }                // loope/loopne
-    if (op == 0xE2 || op == 0xE3) return XRW_END;                                 // loop / jrcxz
+    if (op >= 0x70 && op <= 0x7F) {
+        *rd = xf_cond_rd[op & 0xF];
+        return XRW_END;
+    } // jcc rel8
+    if (op == 0xE9 || op == 0xEB) return XRW_JMP;               // jmp rel: follow
+    if (op == 0xE8 || op == 0xC3 || op == 0xC2) return XRW_END; // call / ret
+    if (op == 0xE0 || op == 0xE1) {
+        *rd = XF_ZF;
+        return XRW_END;
+    } // loope/loopne
+    if (op == 0xE2 || op == 0xE3) return XRW_END; // loop / jrcxz
     return XRW_UNK;
 }
 
@@ -332,6 +395,7 @@ static int xf_scan_ok(uint64_t a, uint64_t anchor) {
 // Anything unproven is live: unknown insn, control transfer (depth-1), undecodable byte, unsafe page,
 // budget exhaustion.
 #define XSCAN_INSNS 32
+
 static int x86_flags_livein(uint64_t pc, uint64_t anchor) {
     int killed = 0, live = 0;
     g_prof_xflag_scan++;
@@ -386,8 +450,8 @@ static void flags_edge(uint64_t target, uint64_t anchor) {
 //  - FL_ADD/FL_LOGIC: the msr fixup must precede the b.cond either way; only the membank str can be
 //    elided, and only when BOTH edges are provably dead. Otherwise materialize (pre-change bytes).
 //  - FL_NONE: reload the canonical membank flags (unchanged consumer path).
-static void jcc_edge_flags(uint64_t taken, uint64_t fall, uint64_t anchor, int stitch_fall,
-                           int *save_taken, int *save_fall) {
+static void jcc_edge_flags(uint64_t taken, uint64_t fall, uint64_t anchor, int stitch_fall, int *save_taken,
+                           int *save_fall) {
     *save_taken = 0;
     *save_fall = 0;
     if (!g_fl_pending) {
@@ -419,7 +483,7 @@ static void jcc_edge_flags(uint64_t taken, uint64_t fall, uint64_t anchor, int s
     flags_materialize();
 }
 
-// #346 cross-block PF/AF: NI (the insn after a PF/AF producer) is a direct control transfer -> the
+// cross-block PF/AF: NI (the insn after a PF/AF producer) is a direct control transfer -> the
 // producer's PF/AF are dead iff provably overwritten-before-read at EVERY successor entry. jp/jnp
 // read PF themselves -> never dead. Indirect branches / ret / syscall -> unknown -> live.
 static int pfaf_dead_thru(const struct insn *NI, uint64_t ni_pc, uint64_t anchor) {
@@ -458,8 +522,8 @@ static void emit_selfloop_x86(int cc, uint64_t start, uint64_t fall, void *body,
                 // loop-exit (fall) path. e_nzcv_save here == the FL_SUB finalizer flags_materialize would
                 // emit, so the exit successor reads byte-identical cpu->nzcv.
                 uint32_t *patch = (uint32_t *)g_cp;
-                emit32(0);          // b.cond -> body (filled below)
-                e_nzcv_save();      // loop-exit: materialize for the successor block's prologue
+                emit32(0);     // b.cond -> body (filled below)
+                e_nzcv_save(); // loop-exit: materialize for the successor block's prologue
                 g_fl_pending = FL_NONE;
                 emit_chain_exit(fall);
                 int64_t d = ((uint8_t *)body - (uint8_t *)patch) / 4;

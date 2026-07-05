@@ -18,20 +18,37 @@ static int g_avx_warned;
 static int g_xs_on = -1;
 static uint64_t g_xs_sse3b[4][256]; // [map3][op]  (map3 = 2:0F38, 3:0F3A)
 static uint64_t g_xs_avx[4][256];   // [vex_map][op]
-static struct { uint64_t rip, n; uint16_t map, op; uint8_t vex; } g_xs_rip[4096];
+
+static struct {
+    uint64_t rip, n;
+    uint16_t map, op;
+    uint8_t vex;
+} g_xs_rip[4096];
+
 static int g_xs_nrip;
+
 static void xs_note(int vex, int map, int op, uint64_t rip) {
     if (g_xs_on < 0) g_xs_on = (getenv("EXITSTAT") != NULL);
     if (!g_xs_on) return;
-    if (vex) g_xs_avx[map & 3][op & 255]++; else g_xs_sse3b[map & 3][op & 255]++;
+    if (vex)
+        g_xs_avx[map & 3][op & 255]++;
+    else
+        g_xs_sse3b[map & 3][op & 255]++;
     for (int i = 0; i < g_xs_nrip; i++)
-        if (g_xs_rip[i].rip == rip) { g_xs_rip[i].n++; return; }
+        if (g_xs_rip[i].rip == rip) {
+            g_xs_rip[i].n++;
+            return;
+        }
     if (g_xs_nrip < 4096) {
-        g_xs_rip[g_xs_nrip].rip = rip; g_xs_rip[g_xs_nrip].n = 1;
-        g_xs_rip[g_xs_nrip].map = (uint16_t)map; g_xs_rip[g_xs_nrip].op = (uint16_t)op;
-        g_xs_rip[g_xs_nrip].vex = (uint8_t)vex; g_xs_nrip++;
+        g_xs_rip[g_xs_nrip].rip = rip;
+        g_xs_rip[g_xs_nrip].n = 1;
+        g_xs_rip[g_xs_nrip].map = (uint16_t)map;
+        g_xs_rip[g_xs_nrip].op = (uint16_t)op;
+        g_xs_rip[g_xs_nrip].vex = (uint8_t)vex;
+        g_xs_nrip++;
     }
 }
+
 static void xs_dump(void) { // called from G_PROF_EXTRA at exit_group (destructors are bypassed by _exit)
     if (g_xs_on != 1) return;
     fprintf(stderr, "[exitstat] per-insn C-emulation exits:\n");
@@ -63,6 +80,7 @@ static void avx_get(struct cpu *c, int r, uint8_t out[64]) {
         memcpy(out, &c->vx[8 * (r - 16)], 64);
     }
 }
+
 static void avx_put(struct cpu *c, int r, const uint8_t in[64], int wbytes) {
     uint8_t b[64];
     memset(b, 0, 64);
@@ -75,10 +93,11 @@ static void avx_put(struct cpu *c, int r, const uint8_t in[64], int wbytes) {
         memcpy(&c->vx[8 * (r - 16)], b, 64);
     }
 }
+
 // Effective address of a memory operand. Guest pointers are host pointers in the in-process model (PIE
 // images load 1:1). EVEX disp8 is compressed (disp8*N); for the common full-vector tuple N = vector bytes.
 //
-// #123/#223 non-PIE bias-fold: a non-PIE ET_EXEC image maps HIGH (+g_nonpie_bias) but its baked absolute
+// non-PIE bias-fold: a non-PIE ET_EXEC image maps HIGH (+g_nonpie_bias) but its baked absolute
 // pointers stay LOW (link vaddr). The JIT-emitted access path folds this at emit time (ea_bias17, decode.c);
 // this C-emulator path (do_avx / do_sse3b: every VEX + legacy 0F38/0F3A SSSE3/SSE4/MOVBE guest-memory access
 // funnels through here) is its exact analogue and MUST apply the same fold, or a base-register operand
@@ -106,6 +125,7 @@ static uint64_t avx_ea(struct cpu *c, struct insn *I, uint64_t rip_after, int wb
     if (a >= g_nonpie_lo && a < g_nonpie_hi) a += g_nonpie_bias; // non-PIE: low image ptr -> high mapping
     return a;
 }
+
 // Read the r/m operand (register or memory) into buf as `wbytes` bytes.
 static void avx_get_rm(struct cpu *c, struct insn *I, uint64_t rip_after, int wbytes, uint8_t buf[64]) {
     memset(buf, 0, 64);
@@ -118,6 +138,7 @@ static void avx_get_rm(struct cpu *c, struct insn *I, uint64_t rip_after, int wb
         memcpy(buf, t, wbytes);
     }
 }
+
 static void avx_put_rm(struct cpu *c, struct insn *I, uint64_t rip_after, int wbytes, const uint8_t buf[64]) {
     if (I->is_mem) {
         uint64_t a = avx_ea(c, I, rip_after, wbytes);
@@ -139,6 +160,7 @@ static float avx_fp_arith_f32(int op, float x, float y) {
     default: return x > y ? x : y;   // 0x5F max
     }
 }
+
 static double avx_fp_arith_f64(int op, double x, double y) {
     switch (op) {
     case 0x58: return x + y;
@@ -157,6 +179,7 @@ static uint16_t avx_f32_to_f16(float f) {
     memcpy(&o, &h, 2);
     return o;
 }
+
 static float avx_f16_to_f32(uint16_t bits) {
     _Float16 h;
     memcpy(&h, &bits, 2);
@@ -323,8 +346,8 @@ static void do_avx(struct cpu *c) {
             avx_put_rm(c, &I, next, 8, d);
             goto done;
         }
-        case 0x12: { // F2: vmovddup (dup low 64 per 128-lane); F3: vmovsldup (dup even dwords)
-            if (pp == 3) {     // vmovddup
+        case 0x12: {             // F2: vmovddup (dup low 64 per 128-lane); F3: vmovsldup (dup even dwords)
+            if (pp == 3) {       // vmovddup
                 uint8_t src[64]; // 128-bit reads m64; 256-bit reads m256
                 if (I.is_mem) {
                     uint64_t ea = avx_ea(c, &I, next, L == 0 ? 8 : W);
@@ -401,7 +424,7 @@ static void do_avx(struct cpu *c) {
             c->r[rd] = I.vex_w ? (uint64_t)res : (uint32_t)res; // 32-bit dst zero-extends
             goto done;
         }
-        case 0x5A: { // vcvtss2sd/sd2ss (scalar) or vcvtps2pd/pd2ps (packed) per pp
+        case 0x5A: {       // vcvtss2sd/sd2ss (scalar) or vcvtps2pd/pd2ps (packed) per pp
             if (pp == 2) { // F3: ss->sd scalar, rest of low-128 from src1
                 avx_get(c, vv, a);
                 avx_get_rm(c, &I, next, 4, b);
@@ -455,7 +478,7 @@ static void do_avx(struct cpu *c) {
             int es = dbl ? 8 : 4;
             avx_get(c, vv, a);
             avx_get_rm(c, &I, next, scalar ? es : W, b);
-            if (scalar) {       // low element computed, rest of low-128 from src1
+            if (scalar) { // low element computed, rest of low-128 from src1
                 memcpy(d, a, 16);
                 if (dbl) {
                     double x, y;
@@ -722,7 +745,7 @@ static void do_avx(struct cpu *c) {
             avx_put(c, rd, d, W);
             goto done;
         }
-        case 0x36: { // vpermd: dst.dword[i] = rm.dword[ vvvv.dword[i] & 7 ] (across full 256)
+        case 0x36: {           // vpermd: dst.dword[i] = rm.dword[ vvvv.dword[i] & 7 ] (across full 256)
             avx_get(c, vv, a); // control indices
             avx_get_rm(c, &I, next, W, b);
             for (int i = 0; i < W; i += 4) {
@@ -798,8 +821,8 @@ static void do_avx(struct cpu *c) {
         case 0xBD:
         case 0xBE:
         case 0xBF: {
-            int form = (op >> 4) - 9;     // 0=132, 1=213, 2=231
-            int base = op & 0x0E;         // 8=madd,A=msub,C=nmadd,E=nmsub
+            int form = (op >> 4) - 9; // 0=132, 1=213, 2=231
+            int base = op & 0x0E;     // 8=madd,A=msub,C=nmadd,E=nmsub
             int scalar = op & 1;
             int dbl = I.vex_w;
             int es = dbl ? 8 : 4;
@@ -840,7 +863,7 @@ static void do_avx(struct cpu *c) {
     // ---- map 3 (0F3A) ----
     if (map == 3) {
         switch (op) {
-        case 0x18: // vinsertf128 (same as vinserti128)
+        case 0x18:   // vinsertf128 (same as vinserti128)
         case 0x38: { // vinserti128: dst = src1; dst[imm&1 *16] = rm(128)
             avx_get(c, vv, d);
             avx_get_rm(c, &I, next, 16, b);
@@ -848,7 +871,7 @@ static void do_avx(struct cpu *c) {
             avx_put(c, rd, d, 32);
             goto done;
         }
-        case 0x19: // vextractf128 (same as vextracti128)
+        case 0x19:   // vextractf128 (same as vextracti128)
         case 0x39: { // vextracti128: rm(128) = src.reg[imm&1]
             avx_get(c, rd, a);
             memcpy(d, a + ((I.imm & 1) ? 16 : 0), 16);
@@ -964,9 +987,12 @@ static uint8_t aes_gfmul(uint8_t a, uint8_t b) {
     }
     return p;
 }
+
 static void aes_subbytes(uint8_t s[16], const uint8_t box[256]) {
-    for (int i = 0; i < 16; i++) s[i] = box[s[i]];
+    for (int i = 0; i < 16; i++)
+        s[i] = box[s[i]];
 }
+
 // ShiftRows (inv=0) / InvShiftRows (inv=1). State is column-major: s[4*col+row].
 static void aes_shiftrows(const uint8_t in[16], uint8_t out[16], int inv) {
     for (int col = 0; col < 4; col++)
@@ -975,6 +1001,7 @@ static void aes_shiftrows(const uint8_t in[16], uint8_t out[16], int inv) {
             out[4 * col + row] = in[4 * sc + row];
         }
 }
+
 static void aes_mixcolumns(uint8_t s[16], int inv) {
     for (int col = 0; col < 4; col++) {
         uint8_t a0 = s[4 * col], a1 = s[4 * col + 1], a2 = s[4 * col + 2], a3 = s[4 * col + 3];
@@ -992,8 +1019,13 @@ static void aes_mixcolumns(uint8_t s[16], int inv) {
     }
 }
 
-static inline uint32_t rotr32(uint32_t x, int n) { return (x >> n) | (x << (32 - n)); }
-static inline uint32_t rotl32(uint32_t x, int n) { return (x << n) | (x >> (32 - n)); }
+static inline uint32_t rotr32(uint32_t x, int n) {
+    return (x >> n) | (x << (32 - n));
+}
+
+static inline uint32_t rotl32(uint32_t x, int n) {
+    return (x << n) | (x >> (32 - n));
+}
 
 // CRC-32C (Castagnoli, reflected poly 0x82F63B78) -- the polynomial used by the x86 CRC32 instruction.
 static uint32_t crc32c_step(uint32_t crc, uint64_t v, int nbytes) {
@@ -1013,6 +1045,7 @@ static double sse_round_d(double x, int mode) {
     default: return __builtin_rint(x); // round-to-nearest-even
     }
 }
+
 static float sse_round_f(float x, int mode) {
     switch (mode & 3) {
     case 1: return __builtin_floorf(x);
@@ -1022,9 +1055,17 @@ static float sse_round_f(float x, int mode) {
     }
 }
 
-static inline int sat_s16(int v) { return v < -32768 ? -32768 : v > 32767 ? 32767 : v; }
-static inline int sat_u16(int v) { return v < 0 ? 0 : v > 65535 ? 65535 : v; }
-static inline int sat_s8(int v) { return v < -128 ? -128 : v > 127 ? 127 : v; }
+static inline int sat_s16(int v) {
+    return v < -32768 ? -32768 : v > 32767 ? 32767 : v;
+}
+
+static inline int sat_u16(int v) {
+    return v < 0 ? 0 : v > 65535 ? 65535 : v;
+}
+
+static inline int sat_s8(int v) {
+    return v < -128 ? -128 : v > 127 ? 127 : v;
+}
 
 // Read the 16-byte r/m operand (xmm register or m128) of a legacy SSE insn.
 static void sse_get_rm(struct cpu *c, struct insn *I, uint64_t next, uint8_t buf[16]) {
@@ -1040,8 +1081,7 @@ static void sse_get_rm(struct cpu *c, struct insn *I, uint64_t next, uint8_t buf
 // [6]=index lsb(0)/msb(1) OR mask bit(0)/element-wide(1). a=operand1 (reg/xmm1), b=operand2 (r/m);
 // la/lb are the element lengths of a/b (implicit: first-null scan; explicit: EAX/EDX, saturated).
 static int64_t sse42_elem(const uint8_t *p, int i, int wordsz, int sgn) {
-    if (wordsz == 1)
-        return sgn ? (int64_t)(int8_t)p[i] : (int64_t)p[i];
+    if (wordsz == 1) return sgn ? (int64_t)(int8_t)p[i] : (int64_t)p[i];
     uint16_t w;
     memcpy(&w, p + 2 * i, 2);
     return sgn ? (int64_t)(int16_t)w : (int64_t)w;
@@ -1109,7 +1149,7 @@ static int sse42_intres(const uint8_t *a, const uint8_t *b, int la, int lb, int 
         }
         if (bit) res |= (1 << i);
     }
-    if ((imm >> 4) & 1) {           // negate polarity
+    if ((imm >> 4) & 1) { // negate polarity
         if ((imm >> 5) & 1)
             res ^= ((1 << lb) - 1); // masked: negate only valid operand2 positions
         else
@@ -1159,7 +1199,7 @@ static void do_sse3b(struct cpu *c) {
     decode(c->rip, &I);
     uint64_t next = c->rip + I.len;
     int map = I.map3, op = I.op;
-    xs_note(0, map, op, c->rip); // EXITSTAT diagnostic (no-op unless env set)
+    xs_note(0, map, op, c->rip);              // EXITSTAT diagnostic (no-op unless env set)
     uint8_t *D = (uint8_t *)&c->v[2 * I.reg]; // dst xmm == src1 (destructive)
     uint8_t s[16], r[16];
 
@@ -1191,7 +1231,7 @@ static void do_sse3b(struct cpu *c) {
                     c->r[I.reg] = (c->r[I.reg] & ~0xffffull) | (sw & 0xffff);
                 else
                     c->r[I.reg] = sw; // 32-bit zero-extends, 64-bit full
-            } else {              // MOVBE m, r  -> [m] = bswap(reg)
+            } else {                  // MOVBE m, r  -> [m] = bswap(reg)
                 uint64_t v = c->r[I.reg], sw = 0;
                 for (int i = 0; i < nb; i++)
                     sw |= ((v >> (8 * i)) & 0xff) << (8 * (nb - 1 - i));
@@ -1303,8 +1343,8 @@ static void do_sse3b(struct cpu *c) {
         int zf = ((d0 & s0) == 0 && (d1 & s1) == 0);
         int cf = ((s0 & ~d0) == 0 && (s1 & ~d1) == 0);
         c->nzcv = ((uint64_t)zf << 30) | ((uint64_t)(!cf) << 29); // SF=0 (bit31), OF=0 (bit28)
-        c->pf = 1; // odd-popcount source byte -> x86 PF=0
-        c->af = 0; // AF=0
+        c->pf = 1;                                                // odd-popcount source byte -> x86 PF=0
+        c->af = 0;                                                // AF=0
         c->rip = next;
         return;
     }
@@ -1360,19 +1400,22 @@ static void do_sse3b(struct cpu *c) {
                 int8_t a[16], b[16], o[16];
                 memcpy(a, D, 16);
                 memcpy(b, s, 16);
-                for (int i = 0; i < 16; i++) o[i] = b[i] < 0 ? -a[i] : b[i] == 0 ? 0 : a[i];
+                for (int i = 0; i < 16; i++)
+                    o[i] = b[i] < 0 ? -a[i] : b[i] == 0 ? 0 : a[i];
                 memcpy(r, o, 16);
             } else if (op == 0x09) {
                 int16_t a[8], b[8], o[8];
                 memcpy(a, D, 16);
                 memcpy(b, s, 16);
-                for (int i = 0; i < 8; i++) o[i] = b[i] < 0 ? -a[i] : b[i] == 0 ? 0 : a[i];
+                for (int i = 0; i < 8; i++)
+                    o[i] = b[i] < 0 ? -a[i] : b[i] == 0 ? 0 : a[i];
                 memcpy(r, o, 16);
             } else {
                 int32_t a[4], b[4], o[4];
                 memcpy(a, D, 16);
                 memcpy(b, s, 16);
-                for (int i = 0; i < 4; i++) o[i] = b[i] < 0 ? -a[i] : b[i] == 0 ? 0 : a[i];
+                for (int i = 0; i < 4; i++)
+                    o[i] = b[i] < 0 ? -a[i] : b[i] == 0 ? 0 : a[i];
                 memcpy(r, o, 16);
             }
             break;
@@ -1381,7 +1424,8 @@ static void do_sse3b(struct cpu *c) {
             int16_t a[8], b[8], o[8];
             memcpy(a, D, 16);
             memcpy(b, s, 16);
-            for (int i = 0; i < 8; i++) o[i] = (int16_t)((((a[i] * b[i]) >> 14) + 1) >> 1);
+            for (int i = 0; i < 8; i++)
+                o[i] = (int16_t)((((a[i] * b[i]) >> 14) + 1) >> 1);
             memcpy(r, o, 16);
             break;
         }
@@ -1391,16 +1435,19 @@ static void do_sse3b(struct cpu *c) {
             if (op == 0x1C) {
                 int8_t a[16];
                 memcpy(a, s, 16);
-                for (int i = 0; i < 16; i++) r[i] = (uint8_t)(a[i] < 0 ? -a[i] : a[i]);
+                for (int i = 0; i < 16; i++)
+                    r[i] = (uint8_t)(a[i] < 0 ? -a[i] : a[i]);
             } else if (op == 0x1D) {
                 int16_t a[8], o[8];
                 memcpy(a, s, 16);
-                for (int i = 0; i < 8; i++) o[i] = a[i] < 0 ? -a[i] : a[i];
+                for (int i = 0; i < 8; i++)
+                    o[i] = a[i] < 0 ? -a[i] : a[i];
                 memcpy(r, o, 16);
             } else {
                 int32_t a[4], o[4];
                 memcpy(a, s, 16);
-                for (int i = 0; i < 4; i++) o[i] = a[i] < 0 ? -a[i] : a[i];
+                for (int i = 0; i < 4; i++)
+                    o[i] = a[i] < 0 ? -a[i] : a[i];
                 memcpy(r, o, 16);
             }
             break;
@@ -1419,27 +1466,33 @@ static void do_sse3b(struct cpu *c) {
             memcpy(d32, s, 16);
             if (op == 0x20) {
                 int16_t o[8];
-                for (int i = 0; i < 8; i++) o[i] = b8[i];
+                for (int i = 0; i < 8; i++)
+                    o[i] = b8[i];
                 memcpy(r, o, 16);
             } else if (op == 0x21) {
                 int32_t o[4];
-                for (int i = 0; i < 4; i++) o[i] = b8[i];
+                for (int i = 0; i < 4; i++)
+                    o[i] = b8[i];
                 memcpy(r, o, 16);
             } else if (op == 0x22) {
                 int64_t o[2];
-                for (int i = 0; i < 2; i++) o[i] = b8[i];
+                for (int i = 0; i < 2; i++)
+                    o[i] = b8[i];
                 memcpy(r, o, 16);
             } else if (op == 0x23) {
                 int32_t o[4];
-                for (int i = 0; i < 4; i++) o[i] = w16[i];
+                for (int i = 0; i < 4; i++)
+                    o[i] = w16[i];
                 memcpy(r, o, 16);
             } else if (op == 0x24) {
                 int64_t o[2];
-                for (int i = 0; i < 2; i++) o[i] = w16[i];
+                for (int i = 0; i < 2; i++)
+                    o[i] = w16[i];
                 memcpy(r, o, 16);
             } else {
                 int64_t o[2];
-                for (int i = 0; i < 2; i++) o[i] = d32[i];
+                for (int i = 0; i < 2; i++)
+                    o[i] = d32[i];
                 memcpy(r, o, 16);
             }
             break;
@@ -1458,27 +1511,33 @@ static void do_sse3b(struct cpu *c) {
             memcpy(d32, s, 16);
             if (op == 0x30) {
                 uint16_t o[8];
-                for (int i = 0; i < 8; i++) o[i] = b8[i];
+                for (int i = 0; i < 8; i++)
+                    o[i] = b8[i];
                 memcpy(r, o, 16);
             } else if (op == 0x31) {
                 uint32_t o[4];
-                for (int i = 0; i < 4; i++) o[i] = b8[i];
+                for (int i = 0; i < 4; i++)
+                    o[i] = b8[i];
                 memcpy(r, o, 16);
             } else if (op == 0x32) {
                 uint64_t o[2];
-                for (int i = 0; i < 2; i++) o[i] = b8[i];
+                for (int i = 0; i < 2; i++)
+                    o[i] = b8[i];
                 memcpy(r, o, 16);
             } else if (op == 0x33) {
                 uint32_t o[4];
-                for (int i = 0; i < 4; i++) o[i] = w16[i];
+                for (int i = 0; i < 4; i++)
+                    o[i] = w16[i];
                 memcpy(r, o, 16);
             } else if (op == 0x34) {
                 uint64_t o[2];
-                for (int i = 0; i < 2; i++) o[i] = w16[i];
+                for (int i = 0; i < 2; i++)
+                    o[i] = w16[i];
                 memcpy(r, o, 16);
             } else {
                 uint64_t o[2];
-                for (int i = 0; i < 2; i++) o[i] = d32[i];
+                for (int i = 0; i < 2; i++)
+                    o[i] = d32[i];
                 memcpy(r, o, 16);
             }
             break;
@@ -1511,8 +1570,10 @@ static void do_sse3b(struct cpu *c) {
             uint16_t o[8];
             memcpy(a, D, 16);
             memcpy(b, s, 16);
-            for (int i = 0; i < 4; i++) o[i] = (uint16_t)sat_u16(a[i]);
-            for (int i = 0; i < 4; i++) o[i + 4] = (uint16_t)sat_u16(b[i]);
+            for (int i = 0; i < 4; i++)
+                o[i] = (uint16_t)sat_u16(a[i]);
+            for (int i = 0; i < 4; i++)
+                o[i + 4] = (uint16_t)sat_u16(b[i]);
             memcpy(r, o, 16);
             break;
         }
@@ -1533,30 +1594,34 @@ static void do_sse3b(struct cpu *c) {
         case 0x3C:
         case 0x3D:
         case 0x3E:
-        case 0x3F: { // pmin/pmax sb/sd/uw/ud/sb.../
+        case 0x3F: {                        // pmin/pmax sb/sd/uw/ud/sb.../
             if (op == 0x38 || op == 0x3C) { // signed byte min/max
                 int8_t a[16], b[16], o[16];
                 memcpy(a, D, 16);
                 memcpy(b, s, 16);
-                for (int i = 0; i < 16; i++) o[i] = (op == 0x38) ? (a[i] < b[i] ? a[i] : b[i]) : (a[i] > b[i] ? a[i] : b[i]);
+                for (int i = 0; i < 16; i++)
+                    o[i] = (op == 0x38) ? (a[i] < b[i] ? a[i] : b[i]) : (a[i] > b[i] ? a[i] : b[i]);
                 memcpy(r, o, 16);
             } else if (op == 0x3A || op == 0x3E) { // unsigned word min/max
                 uint16_t a[8], b[8], o[8];
                 memcpy(a, D, 16);
                 memcpy(b, s, 16);
-                for (int i = 0; i < 8; i++) o[i] = (op == 0x3A) ? (a[i] < b[i] ? a[i] : b[i]) : (a[i] > b[i] ? a[i] : b[i]);
+                for (int i = 0; i < 8; i++)
+                    o[i] = (op == 0x3A) ? (a[i] < b[i] ? a[i] : b[i]) : (a[i] > b[i] ? a[i] : b[i]);
                 memcpy(r, o, 16);
             } else if (op == 0x39 || op == 0x3D) { // signed dword min/max
                 int32_t a[4], b[4], o[4];
                 memcpy(a, D, 16);
                 memcpy(b, s, 16);
-                for (int i = 0; i < 4; i++) o[i] = (op == 0x39) ? (a[i] < b[i] ? a[i] : b[i]) : (a[i] > b[i] ? a[i] : b[i]);
+                for (int i = 0; i < 4; i++)
+                    o[i] = (op == 0x39) ? (a[i] < b[i] ? a[i] : b[i]) : (a[i] > b[i] ? a[i] : b[i]);
                 memcpy(r, o, 16);
             } else { // 0x3B/0x3F unsigned dword min/max
                 uint32_t a[4], b[4], o[4];
                 memcpy(a, D, 16);
                 memcpy(b, s, 16);
-                for (int i = 0; i < 4; i++) o[i] = (op == 0x3B) ? (a[i] < b[i] ? a[i] : b[i]) : (a[i] > b[i] ? a[i] : b[i]);
+                for (int i = 0; i < 4; i++)
+                    o[i] = (op == 0x3B) ? (a[i] < b[i] ? a[i] : b[i]) : (a[i] > b[i] ? a[i] : b[i]);
                 memcpy(r, o, 16);
             }
             break;
@@ -1565,7 +1630,8 @@ static void do_sse3b(struct cpu *c) {
             int32_t a[4], b[4], o[4];
             memcpy(a, D, 16);
             memcpy(b, s, 16);
-            for (int i = 0; i < 4; i++) o[i] = a[i] * b[i];
+            for (int i = 0; i < 4; i++)
+                o[i] = a[i] * b[i];
             memcpy(r, o, 16);
             break;
         }
@@ -1574,7 +1640,8 @@ static void do_sse3b(struct cpu *c) {
         case 0x15: { // pblendvb / blendvps / blendvpd -- mask is implicit xmm0
             uint8_t *mask = (uint8_t *)&c->v[0];
             if (op == 0x10) { // pblendvb: per-byte, mask = top bit of each byte
-                for (int i = 0; i < 16; i++) r[i] = (mask[i] & 0x80) ? s[i] : D[i];
+                for (int i = 0; i < 16; i++)
+                    r[i] = (mask[i] & 0x80) ? s[i] : D[i];
             } else if (op == 0x14) { // blendvps: per dword, top bit
                 for (int i = 0; i < 4; i++)
                     memcpy(r + 4 * i, (mask[4 * i + 3] & 0x80) ? s + 4 * i : D + 4 * i, 4);
@@ -1595,7 +1662,8 @@ static void do_sse3b(struct cpu *c) {
             aes_shiftrows(D, t, 0);
             aes_subbytes(t, k_aes_sbox);
             if (op == 0xDC) aes_mixcolumns(t, 0);
-            for (int i = 0; i < 16; i++) r[i] = t[i] ^ s[i];
+            for (int i = 0; i < 16; i++)
+                r[i] = t[i] ^ s[i];
             break;
         }
         case 0xDE: // aesdec
@@ -1605,7 +1673,8 @@ static void do_sse3b(struct cpu *c) {
             aes_shiftrows(D, t, 1);
             aes_subbytes(t, k_aes_isbox);
             if (op == 0xDE) aes_mixcolumns(t, 1);
-            for (int i = 0; i < 16; i++) r[i] = t[i] ^ s[i];
+            for (int i = 0; i < 16; i++)
+                r[i] = t[i] ^ s[i];
             break;
         }
         case 0xC8: { // sha1nexte: dst.dw3 = src.dw3 + ROL(dst.dw3,30); dst.dw0..2 = src.dw0..2 (passthrough)
@@ -1620,10 +1689,10 @@ static void do_sse3b(struct cpu *c) {
             memcpy(r, o, 16);
             break;
         }
-        case 0xC9: { // sha1msg1: W0..W3=SRC1 (hi->lo dwords), W4/W5=SRC2 hi dwords
+        case 0xC9: {                     // sha1msg1: W0..W3=SRC1 (hi->lo dwords), W4/W5=SRC2 hi dwords
             uint32_t Dw[4], sw[4], o[4]; // Dw[k]=dword k ([31:0]=Dw[0]); W0=Dw[3],W1=Dw[2],W2=Dw[1],W3=Dw[0]
             memcpy(Dw, D, 16);
-            memcpy(sw, s, 16); // W4=sw[3], W5=sw[2]
+            memcpy(sw, s, 16);    // W4=sw[3], W5=sw[2]
             o[3] = Dw[1] ^ Dw[3]; // DEST[127:96] = W2 ^ W0
             o[2] = Dw[0] ^ Dw[2]; // DEST[95:64]  = W3 ^ W1
             o[1] = sw[3] ^ Dw[1]; // DEST[63:32]  = W4 ^ W2
@@ -1644,8 +1713,8 @@ static void do_sse3b(struct cpu *c) {
         }
         case 0xCB: { // sha256rnds2: dst,src, implicit xmm0 = WK0/WK1
             uint32_t st1[4], st2[4], wk[4];
-            memcpy(st1, D, 16);  // C0=st1[3],D0=st1[2],G0=st1[1],H0=st1[0]
-            memcpy(st2, s, 16);  // A0=st2[3],B0=st2[2],E0=st2[1],F0=st2[0]
+            memcpy(st1, D, 16); // C0=st1[3],D0=st1[2],G0=st1[1],H0=st1[0]
+            memcpy(st2, s, 16); // A0=st2[3],B0=st2[2],E0=st2[1],F0=st2[0]
             memcpy(wk, &c->v[0], 16);
             uint32_t A = st2[3], B = st2[2], Cc = st1[3], Dd = st1[2];
             uint32_t E = st2[1], F = st2[0], G = st1[1], H = st1[0];
@@ -1658,8 +1727,14 @@ static void do_sse3b(struct cpu *c) {
                 uint32_t t1 = H + s1 + ch + WK;
                 uint32_t An = t1 + s0 + maj;
                 uint32_t En = t1 + Dd;
-                H = G; G = F; F = E; E = En;
-                Dd = Cc; Cc = B; B = A; A = An;
+                H = G;
+                G = F;
+                F = E;
+                E = En;
+                Dd = Cc;
+                Cc = B;
+                B = A;
+                A = An;
             }
             uint32_t o[4] = {F, E, B, A}; // DEST: [31:0]=F2,[63:32]=E2,[95:64]=B2,[127:96]=A2
             memcpy(r, o, 16);
@@ -1667,8 +1742,8 @@ static void do_sse3b(struct cpu *c) {
         }
         case 0xCC: { // sha256msg1
             uint32_t w[4], w4;
-            memcpy(w, D, 16);    // W0=w[0]..W3=w[3]
-            memcpy(&w4, s, 4);   // W4 = src[31:0]
+            memcpy(w, D, 16);  // W0=w[0]..W3=w[3]
+            memcpy(&w4, s, 4); // W4 = src[31:0]
             uint32_t in[5] = {w[0], w[1], w[2], w[3], w4};
             uint32_t o[4];
             for (int i = 0; i < 4; i++) {
@@ -1696,8 +1771,7 @@ static void do_sse3b(struct cpu *c) {
             memcpy(r, o, 16);
             break;
         }
-        default:
-            goto unimpl;
+        default: goto unimpl;
         }
         memcpy(D, r, 16);
         c->rip = next;
@@ -1716,12 +1790,14 @@ static void do_sse3b(struct cpu *c) {
             if (op == 0x08) { // roundps
                 float a[4], o[4];
                 memcpy(a, s, 16);
-                for (int i = 0; i < 4; i++) o[i] = sse_round_f(a[i], mode);
+                for (int i = 0; i < 4; i++)
+                    o[i] = sse_round_f(a[i], mode);
                 memcpy(r, o, 16);
             } else if (op == 0x09) { // roundpd
                 double a[2], o[2];
                 memcpy(a, s, 16);
-                for (int i = 0; i < 2; i++) o[i] = sse_round_d(a[i], mode);
+                for (int i = 0; i < 2; i++)
+                    o[i] = sse_round_d(a[i], mode);
                 memcpy(r, o, 16);
             } else if (op == 0x0A) { // roundss: low lane from src, rest from dst
                 float a;
@@ -1755,7 +1831,8 @@ static void do_sse3b(struct cpu *c) {
             uint8_t comb[32];
             memcpy(comb, s, 16);
             memcpy(comb + 16, D, 16);
-            for (int i = 0; i < 16; i++) r[i] = (imm + i < 32) ? comb[imm + i] : 0;
+            for (int i = 0; i < 16; i++)
+                r[i] = (imm + i < 32) ? comb[imm + i] : 0;
             break;
         }
         case 0x40: { // dpps: packed-single dot product
@@ -1766,7 +1843,8 @@ static void do_sse3b(struct cpu *c) {
             for (int i = 0; i < 4; i++)
                 if (imm & (0x10 << i)) sum += a[i] * b[i];
             float o[4];
-            for (int i = 0; i < 4; i++) o[i] = (imm & (1 << i)) ? sum : 0.0f;
+            for (int i = 0; i < 4; i++)
+                o[i] = (imm & (1 << i)) ? sum : 0.0f;
             memcpy(r, o, 16);
             break;
         }
@@ -1778,7 +1856,8 @@ static void do_sse3b(struct cpu *c) {
             for (int i = 0; i < 2; i++)
                 if (imm & (0x10 << i)) sum += a[i] * b[i];
             double o[2];
-            for (int i = 0; i < 2; i++) o[i] = (imm & (1 << i)) ? sum : 0.0;
+            for (int i = 0; i < 2; i++)
+                o[i] = (imm & (1 << i)) ? sum : 0.0;
             memcpy(r, o, 16);
             break;
         }
@@ -1825,9 +1904,11 @@ static void do_sse3b(struct cpu *c) {
             uint32_t rcon = (uint32_t)(imm & 0xff);
             uint32_t X1 = x[1], X3 = x[3];
             uint32_t sub1 = (uint32_t)k_aes_sbox[X1 & 0xff] | ((uint32_t)k_aes_sbox[(X1 >> 8) & 0xff] << 8) |
-                            ((uint32_t)k_aes_sbox[(X1 >> 16) & 0xff] << 16) | ((uint32_t)k_aes_sbox[(X1 >> 24) & 0xff] << 24);
+                            ((uint32_t)k_aes_sbox[(X1 >> 16) & 0xff] << 16) |
+                            ((uint32_t)k_aes_sbox[(X1 >> 24) & 0xff] << 24);
             uint32_t sub3 = (uint32_t)k_aes_sbox[X3 & 0xff] | ((uint32_t)k_aes_sbox[(X3 >> 8) & 0xff] << 8) |
-                            ((uint32_t)k_aes_sbox[(X3 >> 16) & 0xff] << 16) | ((uint32_t)k_aes_sbox[(X3 >> 24) & 0xff] << 24);
+                            ((uint32_t)k_aes_sbox[(X3 >> 16) & 0xff] << 16) |
+                            ((uint32_t)k_aes_sbox[(X3 >> 24) & 0xff] << 24);
             uint32_t o[4];
             o[0] = sub1;
             o[1] = rotr32(sub1, 8) ^ rcon;
@@ -1836,8 +1917,7 @@ static void do_sse3b(struct cpu *c) {
             memcpy(r, o, 16);
             break;
         }
-        default:
-            goto unimpl;
+        default: goto unimpl;
         }
         memcpy(D, r, 16);
         c->rip = next;

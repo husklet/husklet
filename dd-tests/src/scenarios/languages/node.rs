@@ -17,13 +17,13 @@ pub fn scenarios() -> Vec<Scenario> {
         scen("languages/node-add-18-alpine", "node:18-alpine")
             .run(&["node", "-e", "console.log(1+2+3)"])
             .has("6"),
-        // #252: libuv's event loop must exit cleanly. setTimeout drives one epoll_wait(-1) cycle then the
+        // libuv's event loop must exit cleanly. setTimeout drives one epoll_wait(-1) cycle then the
         // loop drains -- a spurious 0-return from epoll_wait(-1) trips `assert(timeout != -1)` in uv__io_poll
         // and node aborts. Must print TICK and exit 0.
         scen("languages/node-settimeout-22-alpine", "node:22-alpine")
             .run(&["node", "-e", "setTimeout(()=>console.log('TICK'),50)"])
             .has("TICK"),
-        // #252: even a purely-synchronous script tripped the same assert at loop teardown. Must exit 0.
+        // even a purely-synchronous script tripped the same assert at loop teardown. Must exit 0.
         scen("languages/node-sync-22-alpine", "node:22-alpine")
             .run(&["node", "-e", "console.log(1+1)"])
             .has("2"),
@@ -47,7 +47,7 @@ pub fn scenarios() -> Vec<Scenario> {
             .exec("printf 'console.log(\"R\"+(6*7))\\n.exit\\n' | node -i 2>&1 | grep -q 'R42' && echo REPL_OK")
             .has("REPL_OK"),
         // PERF GATE — the REPL must START + evaluate promptly. A pathological indirect-dispatch/JIT
-        // slowdown (regression of #166 node-V8-IBTC) blows the tight timeout -> exit 124 -> FAILS on
+        // slowdown (regression of node-V8-IBTC) blows the tight timeout -> exit 124 -> FAILS on
         // the Dd backend while the Real oracle finishes in ~1s. Workload is trivial (1+1) so ONLY
         // startup+dispatch speed is measured. If this reddens, node interactive is "too slow" again.
         scen("languages/node-repl-perf-20-alpine", "node:20-alpine")

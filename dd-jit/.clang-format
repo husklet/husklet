@@ -5,7 +5,8 @@ TabWidth: 4
 UseTab: Never
 ColumnLimit: 120
 BreakBeforeBraces: Attach
-AllowShortFunctionsOnASingleLine: All
+SeparateDefinitionBlocks: Always
+AllowShortFunctionsOnASingleLine: None
 AllowShortIfStatementsOnASingleLine: WithoutElse
 AllowShortBlocksOnASingleLine: Always
 AllowShortCaseLabelsOnASingleLine: true

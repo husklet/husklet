@@ -14,34 +14,33 @@
 #ifndef G_OWN_TRAMPOLINES
 __attribute__((naked)) static void run_block(struct cpu *cpu, void *code) {
     // x0=cpu, x1=code
-    __asm__ volatile(
-        "str x19, [x0, #288]\n str x20, [x0, #296]\n"
-        "str x21, [x0, #304]\n str x22, [x0, #312]\n"
-        "str x23, [x0, #320]\n str x24, [x0, #328]\n"
-        "str x25, [x0, #336]\n str x26, [x0, #344]\n"
-        "str x27, [x0, #352]\n str x28, [x0, #360]\n"
-        "str x29, [x0, #368]\n str x30, [x0, #376]\n"
-        "str q8, [x0, #896]\n str q9, [x0, #912]\n str q10, [x0, #928]\n str q11, [x0, #944]\n"
-        "str q12, [x0, #960]\n str q13, [x0, #976]\n str q14, [x0, #992]\n str q15, [x0, #1008]\n"
-        // host_sp
-        "mov x9, sp\n str x9, [x0, #280]\n"
-        // x0=cpu -> emitted prologue
-        "br x1\n");
+    __asm__ volatile("str x19, [x0, #288]\n str x20, [x0, #296]\n"
+                     "str x21, [x0, #304]\n str x22, [x0, #312]\n"
+                     "str x23, [x0, #320]\n str x24, [x0, #328]\n"
+                     "str x25, [x0, #336]\n str x26, [x0, #344]\n"
+                     "str x27, [x0, #352]\n str x28, [x0, #360]\n"
+                     "str x29, [x0, #368]\n str x30, [x0, #376]\n"
+                     "str q8, [x0, #896]\n str q9, [x0, #912]\n str q10, [x0, #928]\n str q11, [x0, #944]\n"
+                     "str q12, [x0, #960]\n str q13, [x0, #976]\n str q14, [x0, #992]\n str q15, [x0, #1008]\n"
+                     // host_sp
+                     "mov x9, sp\n str x9, [x0, #280]\n"
+                     // x0=cpu -> emitted prologue
+                     "br x1\n");
 }
+
 __attribute__((naked)) static void block_return(void) {
     // x0 == &cpu
-    __asm__ volatile(
-        "ldr x19, [x0, #288]\n ldr x20, [x0, #296]\n"
-        "ldr x21, [x0, #304]\n ldr x22, [x0, #312]\n"
-        "ldr x23, [x0, #320]\n ldr x24, [x0, #328]\n"
-        "ldr x25, [x0, #336]\n ldr x26, [x0, #344]\n"
-        "ldr x27, [x0, #352]\n ldr x28, [x0, #360]\n"
-        "ldr x29, [x0, #368]\n ldr x30, [x0, #376]\n"
-        "ldr q8, [x0, #896]\n ldr q9, [x0, #912]\n ldr q10, [x0, #928]\n ldr q11, [x0, #944]\n"
-        "ldr q12, [x0, #960]\n ldr q13, [x0, #976]\n ldr q14, [x0, #992]\n ldr q15, [x0, #1008]\n"
-        // host sp
-        "ldr x9, [x0, #280]\n mov sp, x9\n"
-        "ret\n");
+    __asm__ volatile("ldr x19, [x0, #288]\n ldr x20, [x0, #296]\n"
+                     "ldr x21, [x0, #304]\n ldr x22, [x0, #312]\n"
+                     "ldr x23, [x0, #320]\n ldr x24, [x0, #328]\n"
+                     "ldr x25, [x0, #336]\n ldr x26, [x0, #344]\n"
+                     "ldr x27, [x0, #352]\n ldr x28, [x0, #360]\n"
+                     "ldr x29, [x0, #368]\n ldr x30, [x0, #376]\n"
+                     "ldr q8, [x0, #896]\n ldr q9, [x0, #912]\n ldr q10, [x0, #928]\n ldr q11, [x0, #944]\n"
+                     "ldr q12, [x0, #960]\n ldr q13, [x0, #976]\n ldr q14, [x0, #992]\n ldr q15, [x0, #1008]\n"
+                     // host sp
+                     "ldr x9, [x0, #280]\n mov sp, x9\n"
+                     "ret\n");
 }
 #endif // G_OWN_TRAMPOLINES
 
@@ -66,17 +65,18 @@ __attribute__((naked)) static void block_return(void) {
 #endif
 // Per-block JT trace dump (the 5th divergence). aarch64 dumps pc + x19/x20/sp + the first 6 block words.
 #ifndef G_TRACE_DUMP
-#define G_TRACE_DUMP(c)                                                                                                  \
-    if (g_trace) {                                                                                                       \
-        uint32_t *ci = (uint32_t *)G_PC(c);                                                                              \
-        fprintf(stderr, "[blk] pc=%llx x19=%llx x20=%llx sp=%llx | %08x %08x %08x %08x %08x %08x\n",                     \
-                (unsigned long long)G_PC(c), (unsigned long long)(c)->x[19], (unsigned long long)(c)->x[20],            \
-                (unsigned long long)(c)->sp, ci[0], ci[1], ci[2], ci[3], ci[4], ci[5]);                                 \
-        if (g_dbg_gprdump) {                                                                                             \
-            fprintf(stderr, "[gpr] pc=%llx", (unsigned long long)G_PC(c));                                               \
-            for (int _i = 0; _i < 31; _i++) fprintf(stderr, " x%d=%llx", _i, (unsigned long long)(c)->x[_i]);            \
-            fprintf(stderr, " sp=%llx\n", (unsigned long long)(c)->sp);                                                  \
-        }                                                                                                                \
+#define G_TRACE_DUMP(c)                                                                                                \
+    if (g_trace) {                                                                                                     \
+        uint32_t *ci = (uint32_t *)G_PC(c);                                                                            \
+        fprintf(stderr, "[blk] pc=%llx x19=%llx x20=%llx sp=%llx | %08x %08x %08x %08x %08x %08x\n",                   \
+                (unsigned long long)G_PC(c), (unsigned long long)(c)->x[19], (unsigned long long)(c)->x[20],           \
+                (unsigned long long)(c)->sp, ci[0], ci[1], ci[2], ci[3], ci[4], ci[5]);                                \
+        if (g_dbg_gprdump) {                                                                                           \
+            fprintf(stderr, "[gpr] pc=%llx", (unsigned long long)G_PC(c));                                             \
+            for (int _i = 0; _i < 31; _i++)                                                                            \
+                fprintf(stderr, " x%d=%llx", _i, (unsigned long long)(c)->x[_i]);                                      \
+            fprintf(stderr, " sp=%llx\n", (unsigned long long)(c)->sp);                                                \
+        }                                                                                                              \
     }
 #endif
 
@@ -93,11 +93,11 @@ static void run_guest(struct cpu *c) {
     thread_register(c);
     // Frontend hook: one-time per-thread entry setup (x86 publishes the 2-way IBTC base; empty on aarch64).
     G_DISPATCH_ENTER(c);
-    // #392: a per-thread alternate signal stack so a guest stack overflow's guard fault can be delivered
+    // a per-thread alternate signal stack so a guest stack overflow's guard fault can be delivered
     // even when the (aarch64) host SP == the exhausted guest SP. No-op reservation on x86 (host SP differs).
     install_host_sigaltstack();
     while (!c->exited) {
-        // #292: reset the async-interrupt poll each dispatcher iteration. The emitted body check sets us
+        // reset the async-interrupt poll each dispatcher iteration. The emitted body check sets us
         // here when cpu->irq is seen; delivery happens at the bottom of the loop (maybe_deliver_signal).
         // Clearing here is what stops a masked-but-pending signal (which stays in g_pending, undelivered)
         // from bouncing a hot loop out of the code cache every iteration -- a fresh signal simply re-sets
@@ -106,7 +106,7 @@ static void run_guest(struct cpu *c) {
         if (G_PC(c) == SIGRETURN_PC) {
             do_sigreturn(c);
             continue;
-        // handler returned -> restore context
+            // handler returned -> restore context
         }
         // A non-PIE image's un-relocated absolute jump lands on its (unmapped) low link vaddr; redirect it
         // into the biased image so we translate real code instead of faulting on the unmapped low address.
@@ -141,7 +141,7 @@ static void run_guest(struct cpu *c) {
                     jit_wprot(1);
                 }
 #ifdef PCACHE_FLUSH_HOOK
-                // #339: the reloc records described the arena we just dropped/renewed; reset so the
+                // the reloc records described the arena we just dropped/renewed; reset so the
                 // records stay in lockstep with what is actually emitted (a later save must never
                 // relocate offsets into content that no longer matches).
                 PCACHE_FLUSH_HOOK;
@@ -153,7 +153,9 @@ static void run_guest(struct cpu *c) {
             // (e.g. sha256, which has no hot returns yet wobbled ~7%). Padding lives BEFORE the entry
             // (branch/IBTC targets the aligned body), so the nops never execute -> zero runtime cost,
             // just stable layout. Gated on §B-off so NOSHADOWTUNE=1 stays byte-identical to baseline.
-            if (G_BLOCK_ALIGN) while ((uintptr_t)g_cp & 15) emit32(0xD503201Fu); // nop
+            if (G_BLOCK_ALIGN)
+                while ((uintptr_t)g_cp & 15)
+                    emit32(0xD503201Fu); // nop
             g_emit_start = g_cp;
             code = translate_block(G_PC(c));
             g_prof_xlate++;
@@ -215,5 +217,5 @@ static void run_guest(struct cpu *c) {
     // Leave the registries: this thread will never execute in the cache again, nor be a signal target.
     thread_unregister(c);
     stw_unregister();
-    uninstall_host_sigaltstack(); // #392: release this thread's alternate signal stack
+    uninstall_host_sigaltstack(); // release this thread's alternate signal stack
 }

@@ -1,4 +1,4 @@
-//! dentry — positive dentry/path-resolution cache coherence (#372). Owner: dentry-cache agent. Edit ONLY this file.
+//! dentry — positive dentry/path-resolution cache coherence. Owner: dentry-cache agent. Edit ONLY this file.
 //! The engine memoizes successful path resolutions per directory (fscache.c `dc_*`, epoch-gated on the
 //! container-shared namespace epoch, exactly like the rc_/oc_/updirneg caches). These cases interleave
 //! every name->object mutation (create/unlink/rename/symlink-flip/hardlink/dir-chain-rename/rmdir+
@@ -15,13 +15,16 @@ use crate::{group, src, Case, Engine, Group};
 const LIN: &[Engine] = &[Engine::LinuxAarch64, Engine::LinuxX86_64];
 
 pub fn groups() -> Vec<Group> {
-    vec![group("ext-dentry", vec![
-        // 200-iteration mutation<->lookup interleave storm (doubles as the soak for this cache):
-        // any positive dentry/path entry that outlives its invalidating mutation fails a check.
-        src("dentry-storm", "dentry/storm.c")
-            .rootfs("alpine")
-            .only(LIN)
-            .out("dentry-storm iters=200 readdir=7 ghost=0 fails=0\n")
-            .exit(0),
-    ])]
+    vec![group(
+        "ext-dentry",
+        vec![
+            // 200-iteration mutation<->lookup interleave storm (doubles as the soak for this cache):
+            // any positive dentry/path entry that outlives its invalidating mutation fails a check.
+            src("dentry-storm", "dentry/storm.c")
+                .rootfs("alpine")
+                .only(LIN)
+                .out("dentry-storm iters=200 readdir=7 ghost=0 fails=0\n")
+                .exit(0),
+        ],
+    )]
 }

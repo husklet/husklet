@@ -1,7 +1,6 @@
 #![allow(dead_code)]
 use gtk::prelude::*;
 
-
 // ---- styling ---------------------------------------------------------------
 
 /// Flat, simple, macOS-leaning CSS: gray window, a single floating base-color pane inset with a
@@ -212,7 +211,6 @@ notebook.dd-termbook > stack { background: transparent; border: none; }
 .dd-tabclose { font-size: 11px; opacity: 0.45; padding: 0 1px; }
 .dd-tabclose:hover { opacity: 1; background-color: @dd_fill; }
 ";
-
 
 pub(crate) fn load_css() {
     let provider = gtk::CssProvider::new();

@@ -30,7 +30,7 @@ int g_rwx_guest;
 #ifndef RENAME_EXCL
 #define RENAME_EXCL 0x00000004 // fail if dst exists <- Linux RENAME_NOREPLACE(1)
 #endif
-// ================= ptrace(2) — in-dd tracer/tracee coordination (bug #238) ========================
+// ================= ptrace(2) — in-dd tracer/tracee coordination ========================
 // dd runs each guest PROCESS as its own host process (fork(2) is a real host fork; see proc.c case 220),
 // so a guest tracer ptracing a guest tracee is TWO host processes. We CANNOT proxy to the host macOS
 // ptrace: macOS ptrace has no Linux semantics and cannot see the tracee's GUEST register file (which
@@ -46,56 +46,58 @@ int g_rwx_guest;
 // Declared here (before the family includes) so mem.c/proc.c/rare.c can call the hooks; the arena struct
 // is defined here because service() reads g_pt->nactive on the hot path.
 #define PT_MAXLINK 128
-#define PT_MEMBUF  1024
+#define PT_MEMBUF 1024
 #define PT_PVM_LOCAL ((long)0x7fffffffffffffffLL) // ptrace_pvm: "remote is self -> same-space memcpy"
+
 struct pt_link {
     volatile int used, attached, seized;
-    volatile int tracer_pid, tracee_pid;     // guest pids (init == 1)
-    volatile uint64_t options;               // PTRACE_SETOPTIONS bits
-    volatile int stopstate;                  // 0 running, 1 stopped
-    volatile int stopkind;                   // PTS_* (see ptrace.c)
-    volatile int stopsig;                    // reported signal (signal/group stops)
-    volatile int event;                      // PTRACE_EVENT_* (0 = none)
-    volatile unsigned long eventmsg;         // PTRACE_GETEVENTMSG
-    volatile int waitstatus;                 // Linux-encoded status the tracer's wait sees
-    volatile int reported;                   // tracer has consumed this stop via wait
-    volatile int syscall_mode;               // stop at every syscall (armed by PTRACE_SYSCALL)
-    volatile int pending_attach_stop;        // ATTACH/SEIZE/INTERRUPT -> stop at next syscall boundary
-    volatile int cmd, cmd_sig;               // pending resume command + signal to inject
-    volatile int inject_pass;                // a tracer-injected signal to deliver ONCE without re-trapping
-    volatile unsigned cmd_seq, ack_seq;      // tracer bumps cmd_seq; tracee acks with ack_seq
-    volatile int arch;                       // 0 x86_64, 1 aarch64
-    volatile int reglen;                     // marshalled user_regs_struct byte length
-    volatile uint64_t regs[40];              // marshalled register image (published by tracee at each stop)
-    volatile int regs_dirty;                 // tracer SETREGS -> tracee reloads on resume
-    volatile uint64_t entry_nr;              // syscall nr captured at entry (orig_rax at exit-stop, x86)
-    volatile uint8_t siginfo[128];           // last stop's siginfo (PTRACE_GETSIGINFO)
+    volatile int tracer_pid, tracee_pid; // guest pids (init == 1)
+    volatile uint64_t options;           // PTRACE_SETOPTIONS bits
+    volatile int stopstate;              // 0 running, 1 stopped
+    volatile int stopkind;               // PTS_* (see ptrace.c)
+    volatile int stopsig;                // reported signal (signal/group stops)
+    volatile int event;                  // PTRACE_EVENT_* (0 = none)
+    volatile unsigned long eventmsg;     // PTRACE_GETEVENTMSG
+    volatile int waitstatus;             // Linux-encoded status the tracer's wait sees
+    volatile int reported;               // tracer has consumed this stop via wait
+    volatile int syscall_mode;           // stop at every syscall (armed by PTRACE_SYSCALL)
+    volatile int pending_attach_stop;    // ATTACH/SEIZE/INTERRUPT -> stop at next syscall boundary
+    volatile int cmd, cmd_sig;           // pending resume command + signal to inject
+    volatile int inject_pass;            // a tracer-injected signal to deliver ONCE without re-trapping
+    volatile unsigned cmd_seq, ack_seq;  // tracer bumps cmd_seq; tracee acks with ack_seq
+    volatile int arch;                   // 0 x86_64, 1 aarch64
+    volatile int reglen;                 // marshalled user_regs_struct byte length
+    volatile uint64_t regs[40];          // marshalled register image (published by tracee at each stop)
+    volatile int regs_dirty;             // tracer SETREGS -> tracee reloads on resume
+    volatile uint64_t entry_nr;          // syscall nr captured at entry (orig_rax at exit-stop, x86)
+    volatile uint8_t siginfo[128];       // last stop's siginfo (PTRACE_GETSIGINFO)
     // memory request/response (serviced by the stopped tracee against its OWN guest address space)
-    volatile int mem_dir;                    // 0 none, 1 read, 2 write
+    volatile int mem_dir; // 0 none, 1 read, 2 write
     volatile uint64_t mem_addr, mem_len;
     volatile unsigned mem_seq, mem_ack;
     volatile int mem_err;
     volatile uint8_t mem_buf[PT_MEMBUF];
 };
+
 struct pt_arena {
-    volatile int nactive;                    // # of live tracee links (hot-path gate)
-    volatile uint64_t gen;                   // bumped on any link table change (per-proc lookup cache key)
-    volatile int lock;                       // spinlock for slot alloc/free
+    volatile int nactive;  // # of live tracee links (hot-path gate)
+    volatile uint64_t gen; // bumped on any link table change (per-proc lookup cache key)
+    volatile int lock;     // spinlock for slot alloc/free
     struct pt_link link[PT_MAXLINK];
 };
-static struct pt_arena *g_pt;                // shared arena (NULL until ptrace_arena_init)
+static struct pt_arena *g_pt; // shared arena (NULL until ptrace_arena_init)
 static void ptrace_arena_init(void);
 static int svc_ptrace(struct cpu *c, uint64_t req, uint64_t pid, uint64_t addr, uint64_t data);
 static void ptrace_service_traced(struct cpu *c); // service() hot-path hook when g_pt->nactive > 0
 static int ptrace_wait(struct cpu *c, pid_t wpid, int opts, struct rusage *ru, int *status, pid_t *out);
 static long ptrace_pvm(struct cpu *c, int is_write, pid_t rpid, const struct iovec *liov, unsigned long ln,
                        const struct iovec *riov, unsigned long rn);
-static int ptrace_any_tracee_of_self(void); // does the caller trace anyone? (wait4 routing)
-static int ptrace_wait_active(void);        // is ptrace in use in this session? (wait4 routing gate)
-struct sigaction;                           // fwd (signal.h is included by the target before this TU)
-static int pt_wait_arm(struct sigaction *saved);            // scoped SIGCHLD wake around a blocking wait4
+static int ptrace_any_tracee_of_self(void);      // does the caller trace anyone? (wait4 routing)
+static int ptrace_wait_active(void);             // is ptrace in use in this session? (wait4 routing gate)
+struct sigaction;                                // fwd (signal.h is included by the target before this TU)
+static int pt_wait_arm(struct sigaction *saved); // scoped SIGCHLD wake around a blocking wait4
 static void pt_wait_disarm(int armed, const struct sigaction *saved);
-// #224: the shared per-fd emulation-table teardown (defined in fs.c, included after io.c) -- fwd-declared so
+// the shared per-fd emulation-table teardown (defined in fs.c, included after io.c) -- fwd-declared so
 // the dup2/dup3-overwrite path in io.c can shed the destination fd's tables before dup2 reuses the number.
 static void fd_reset_emul(int fd);
 
@@ -122,6 +124,7 @@ static void fd_reset_emul(int fd);
 static int g_untrusted;                   // gate (defined + env-parsed in os/linux/sentry.c)
 static void syscall_route(struct cpu *c); // sentry router (defined in os/linux/sentry.c)
 static void service_local(struct cpu *c); // fwd: the canonical syscall switch (this file)
+
 // g2h-style redirect for non-PIE ET_EXEC pointer args. A non-PIE links at a fixed low vaddr but is biased
 // HIGH by load_elf (__PAGEZERO forbids the low 4 GB); an un-relocated pointer baked at the low link vaddr
 // (e.g. a global .rodata string handed to open()/write()) still names the low range, where nothing is
@@ -132,6 +135,7 @@ static void service_local(struct cpu *c); // fwd: the canonical syscall switch (
 static inline uint64_t nonpie_p(uint64_t a) {
     return (g_nonpie_lo && a >= g_nonpie_lo && a < g_nonpie_hi) ? a + g_nonpie_bias : a;
 }
+
 // Overlay: a metadata/rename syscall (chmod/chown/utimensat/rename) confines to the writable upper via
 // jail_at, but a target that still lives only in a read-only lower (the image) is absent from the upper
 // -> the op ENOENTs. Copy the target up first (same write-path pattern openat uses) so jail_at finds it.
@@ -144,6 +148,7 @@ static void overlay_copyup_at(int dirfd, const char *raw) {
     abs_guest(dirfd, raw, gp, sizeof gp);
     overlay_copyup(gp, host, sizeof host);
 }
+
 // Overlay: like overlay_copyup_at but RECURSIVE for a lower-only directory -- used by rename(2), where the
 // whole subtree must exist in the upper before the move (a plain copyup would materialize an EMPTY dir and
 // rename LOSES the contents). A file target falls through to the byte copyup. No-op outside overlay mode.
@@ -153,6 +158,7 @@ static void overlay_copyup_at_tree(int dirfd, const char *raw) {
     abs_guest(dirfd, raw, gp, sizeof gp);
     overlay_copyup_tree(gp);
 }
+
 // Overlay: does a read-only lower still provide `guest` (so it would re-surface once the upper copy is moved
 // away)? Mirrors overlay_copyup's lower scan; rootfs-routed paths only (a volume has its own backing dir).
 // Used by rename to decide whether the source needs a whiteout. False outside overlay mode (g_nlower==0).
@@ -171,6 +177,7 @@ static int overlay_lower_has(const char *guest) {
     }
     return 0;
 }
+
 // adjtimex/clock_adjtime read-only query: macOS has no adjtimex, so report an OK-but-unsynchronised
 // kernel clock and fill the Linux struct timex the caller passed. Setting the clock (modes != 0) needs
 // CAP_SYS_TIME, which the container lacks -> EPERM (mirrors clock_settime). Returns the clock state
@@ -183,26 +190,29 @@ static int svc_adjtimex(uint8_t *tx) {
     if (modes != 0) return -EPERM; // any clock-adjusting call -> EPERM (no CAP_SYS_TIME)
     struct timeval now;
     gettimeofday(&now, NULL);
-    *(int64_t *)(tx + 8) = 0;          // offset (us)
-    *(int64_t *)(tx + 16) = 0;         // freq (scaled ppm)
-    *(int64_t *)(tx + 24) = 16384;     // maxerror (us)
-    *(int64_t *)(tx + 32) = 16384;     // esterror (us)
-    *(int32_t *)(tx + 40) = 0x0040;    // status = STA_UNSYNC
-    *(int64_t *)(tx + 48) = 2;         // constant
-    *(int64_t *)(tx + 56) = 1;         // precision (us)
-    *(int64_t *)(tx + 64) = 32768000;  // tolerance (default)
+    *(int64_t *)(tx + 8) = 0;         // offset (us)
+    *(int64_t *)(tx + 16) = 0;        // freq (scaled ppm)
+    *(int64_t *)(tx + 24) = 16384;    // maxerror (us)
+    *(int64_t *)(tx + 32) = 16384;    // esterror (us)
+    *(int32_t *)(tx + 40) = 0x0040;   // status = STA_UNSYNC
+    *(int64_t *)(tx + 48) = 2;        // constant
+    *(int64_t *)(tx + 56) = 1;        // precision (us)
+    *(int64_t *)(tx + 64) = 32768000; // tolerance (default)
     *(int64_t *)(tx + 72) = now.tv_sec;
     *(int64_t *)(tx + 80) = now.tv_usec;
-    *(int64_t *)(tx + 88) = 10000;     // tick (us)
-    return 0;                          // TIME_OK
+    *(int64_t *)(tx + 88) = 10000; // tick (us)
+    return 0;                      // TIME_OK
 }
+
 // pidfd support: macOS has no pidfd, so pidfd_open() hands back a real (/dev/null) fd and we remember
 // which guest pid it stands for, so pidfd_send_signal() can resolve the fd back to its target pid.
 #define PIDFD_MAX 64
+
 static struct {
     int fd;
     pid_t pid;
 } g_pidfd[PIDFD_MAX];
+
 static void pidfd_register(int fd, pid_t pid) {
     for (int i = 0; i < PIDFD_MAX; i++)
         if (g_pidfd[i].fd == 0 || g_pidfd[i].fd == fd) {
@@ -211,6 +221,7 @@ static void pidfd_register(int fd, pid_t pid) {
             return;
         }
 }
+
 static int pidfd_lookup(int fd, pid_t *pid) {
     for (int i = 0; i < PIDFD_MAX; i++)
         if (g_pidfd[i].fd == fd) {
@@ -219,12 +230,14 @@ static int pidfd_lookup(int fd, pid_t *pid) {
         }
     return -1;
 }
+
 // Drop a pidfd's table slot when the guest close()s it, so a spawn-heavy driver (go/npm/cargo forks
 // thousands of children, one pidfd each) can't exhaust the fixed table.
 static void pidfd_forget(int fd) {
     for (int i = 0; i < PIDFD_MAX; i++)
         if (g_pidfd[i].fd == fd) g_pidfd[i].fd = 0;
 }
+
 // Mint a pidfd for `pid`. macOS has no pidfd, so back it with a kqueue armed EVFILT_PROC/NOTE_EXIT on the
 // process: the fd is pollable and goes readable exactly when `pid` exits (poll(2) directly, and epoll --
 // itself a kqueue -- via EVFILT_READ on this nested kqueue). No EV_CLEAR, so the exit stays pending and the
@@ -250,6 +263,7 @@ static int pidfd_make(pid_t pid) {
     pidfd_register(fd, pid);
     return fd;
 }
+
 // POSIX message queues (mq_*): macOS has no POSIX mqueue, so emulate an in-process named priority queue.
 // Each queue keeps messages highest-priority-first (FIFO within a priority); descriptors are real
 // (/dev/null-backed) fds so close()/poll() stay valid, with an fd->queue table to map them back. This
@@ -261,11 +275,13 @@ static int pidfd_make(pid_t pid) {
 #define MQ_MAXQ 16
 #define MQ_MAXMSG 64
 #define MQ_O_NONBLOCK 0x800 // Linux O_NONBLOCK (04000) on both x86_64 and aarch64; mq's per-descriptor flag
+
 struct mq_qmsg {
     unsigned prio;
     size_t len;
     char *data;
 };
+
 struct mq_queue {
     int used, unlinked, refs, n;
     char name[260]; // POSIX mq name: leading '/' + component up to NAME_MAX(255) + NUL (ENAMETOOLONG beyond)
@@ -281,19 +297,23 @@ struct mq_queue {
     int notify_pid;      // registered owner (guest tgid)
 };
 static struct mq_queue g_mqq[MQ_MAXQ];
+
 static struct {
     int fd, qi, flags; // flags: per-descriptor O_NONBLOCK (mq_flags is a per-open-file-description flag on Linux)
 } g_mqfd[64];
+
 static int mq_find(const char *name) {
     for (int i = 0; i < MQ_MAXQ; i++)
         if (g_mqq[i].used && !g_mqq[i].unlinked && !strcmp(g_mqq[i].name, name)) return i;
     return -1;
 }
+
 static int mq_qof(int fd) {
     for (int i = 0; i < 64; i++)
         if (g_mqfd[i].fd == fd) return g_mqfd[i].qi;
     return -1;
 }
+
 static void mq_bind(int fd, int qi) {
     for (int i = 0; i < 64; i++)
         if (g_mqfd[i].fd == 0 || g_mqfd[i].fd == fd) {
@@ -302,6 +322,7 @@ static void mq_bind(int fd, int qi) {
             return;
         }
 }
+
 // Per-descriptor O_NONBLOCK: report/set the mq_flags of the open file description behind fd. Recorded at
 // mq_open time and toggled by mq_getsetattr (the mq equivalent of F_SETFL) so a blocking descriptor and a
 // non-blocking one to the same queue behave differently, as on Linux.
@@ -310,6 +331,7 @@ static int mq_fd_nonblock(int fd) {
         if (g_mqfd[i].fd == fd) return (g_mqfd[i].flags & MQ_O_NONBLOCK) != 0;
     return 0;
 }
+
 static void mq_fd_setnb(int fd, int on) {
     for (int i = 0; i < 64; i++)
         if (g_mqfd[i].fd == fd) {
@@ -317,6 +339,7 @@ static void mq_fd_setnb(int fd, int on) {
             return;
         }
 }
+
 static void mq_maybe_free(int qi) {
     struct mq_queue *q = &g_mqq[qi];
     if (q->refs <= 0 && q->unlinked) {
@@ -325,6 +348,7 @@ static void mq_maybe_free(int qi) {
         memset(q, 0, sizeof *q);
     }
 }
+
 // CPU topology: the number of CPUs to advertise to the guest (the host's online count, capped). glibc
 // and tcmalloc enumerate CPUs via sched_getaffinity and /sys/devices/system/cpu/{online,possible};
 // reporting only CPU 0 makes tcmalloc's NumPossibleCPUs() assert (`cpus.has_value()`) and mongod abort.
@@ -333,6 +357,7 @@ static int dd_online_cpus(void) {
     // host online count, so sched_getaffinity / the cpu-topology sysfs advertise the container's allotment.
     return container_online_cpus();
 }
+
 // Build the "all online CPUs" bitmask into the caller's buffer (CPU i -> bit i, little-endian bytes).
 static void cpu_online_mask(uint8_t *m, size_t n) {
     memset(m, 0, n);
@@ -340,11 +365,13 @@ static void cpu_online_mask(uint8_t *m, size_t n) {
     for (int cpu = 0; cpu < nc; cpu++)
         if ((size_t)(cpu / 8) < n) m[cpu / 8] |= (uint8_t)(1u << (cpu % 8));
 }
+
 // Current CPU-affinity mask (process-global; default = all online CPUs). sched_setaffinity records the
 // guest's chosen mask so sched_getaffinity round-trips it (pin-to-CPU0 then read back), while a fresh
 // process still advertises every online CPU so glibc/tcmalloc size their per-CPU tables correctly.
 static uint8_t g_affinity[128];
 static int g_affinity_set;
+
 static const uint8_t *affinity_mask(void) {
     if (!g_affinity_set) {
         cpu_online_mask(g_affinity, sizeof g_affinity);
@@ -352,6 +379,7 @@ static const uint8_t *affinity_mask(void) {
     }
     return g_affinity;
 }
+
 // Lowest CPU id in the current affinity mask. getcpu(2) must return a CPU the task is allowed to run
 // on; when the guest has pinned itself to a single CPU via sched_setaffinity, that is the exact value
 // LTP getcpu01 expects back. Falls back to CPU 0 for an (impossible) empty mask.
@@ -363,6 +391,7 @@ static unsigned affinity_first_cpu(void) {
                 if (m[i] & (1u << b)) return (unsigned)(i * 8 + b);
     return 0;
 }
+
 // Back a short synthesized sysfs string with an anonymous temp fd (the same trick proc_open uses for
 // the macOS-has-no-/proc case). Returns a readable fd positioned at offset 0, or -1 on error.
 static int synth_str_fd(const char *s) {
@@ -375,6 +404,7 @@ static int synth_str_fd(const char *s) {
     lseek(fd, 0, SEEK_SET);
     return fd;
 }
+
 // Render the kernel's CPU-range format ("0" for a single CPU, else "0-N\n") for the cpu/{online,
 // possible,present} sysfs files that glibc __get_nprocs / tcmalloc NumPossibleCPUs parse.
 static void cpu_range_str(char *buf, size_t n) {
@@ -384,6 +414,7 @@ static void cpu_range_str(char *buf, size_t n) {
     else
         snprintf(buf, n, "0-%d\n", nc - 1);
 }
+
 // /proc/self/exe and /proc/<pid>/exe (where <pid> is the guest's own pid) are magic kernel symlinks
 // to the running executable. macOS has no /proc, so synthesize them: the link target is the guest
 // path that was exec'd (g_exe_path). Many programs (Go, the JVM, boost::filesystem, mongod) readlink
@@ -393,6 +424,7 @@ static void cpu_range_str(char *buf, size_t n) {
 // the launcher's argv buffer, but a post-exec /proc/self/exe must name the NEWLY exec'd image. We copy the
 // guest-absolute exec path here and repoint g_exe_path at it (the prior image's address space is torn down).
 static char g_exe_path_store[4200];
+
 static int proc_self_exe(const char *p, char *tgt, size_t cap) {
     if (!p || strncmp(p, "/proc/", 6)) return 0;
     const char *rest = p + 6;
@@ -424,9 +456,10 @@ static int proc_self_exe(const char *p, char *tgt, size_t cap) {
     tgt[l] = 0;
     return 1;
 }
+
 // Guest-ABSOLUTE, lexically-normalized form of an *at() path -- so the /proc magic-link synthesis
 // matches however the caller names the link: absolute, relative to the guest cwd, or relative to a
-// dir-fd (readlinkat(pid_dirfd, "exe") -- #317/#370 readlink-vs-readlinkat consistency). Symlinks are
+// dir-fd (readlinkat(pid_dirfd, "exe") -- readlink-vs-readlinkat consistency). Symlinks are
 // NOT resolved; a joined path that matches no /proc form simply falls through to real resolution.
 static void guest_abspath_at(int dirfd, const char *raw, char *out, size_t n) {
     char j[8600];
@@ -465,6 +498,7 @@ static void guest_abspath_at(int dirfd, const char *raw, char *out, size_t n) {
     }
     path_norm_lex(j, out, n);
 }
+
 // svc_fs/svc_proc/svc_rare live here (not with the other family includes at the top): their cases call
 // this file's local helpers (overlay_*/proc_self_exe/synth_str_fd for fs; nonpie_p/cpu_online_mask/
 // affinity_mask for proc; svc_adjtimex/pidfd_*/mq_* for rare) defined just above, so they must be
@@ -472,7 +506,8 @@ static void guest_abspath_at(int dirfd, const char *raw, char *out, size_t n) {
 #include "fs.c"
 #include "proc.c"
 #include "rare.c"
-#include "ptrace.c" // bug #238: real ptrace tracer/tracee coordination (uses helpers above + G_* macros)
+#include "ptrace.c" // bug real ptrace tracer/tracee coordination (uses helpers above + G_* macros)
+
 static void service(struct cpu *c) {
     // Mark this thread as "in a host syscall" for the whole service window (incl. any blocking wait such
     // as pause()/ppoll()/read()): the fault-class-signal handlers use it to tell an external kill of
@@ -482,7 +517,7 @@ static void service(struct cpu *c) {
     if (__builtin_expect(g_untrusted, 0)) {
         syscall_route(c); // untrusted: route via sentry
     } else if (__builtin_expect(g_pt != NULL && __atomic_load_n(&g_pt->nactive, __ATOMIC_RELAXED) != 0, 0)) {
-        // #238: any guest process under ptrace -> route through the traced dispatcher so this syscall can
+        // any guest process under ptrace -> route through the traced dispatcher so this syscall can
         // syscall-stop (entry/exit) for its tracer. One relaxed shared load; not taken for the whole matrix.
         ptrace_service_traced(c);
     } else {
@@ -490,11 +525,12 @@ static void service(struct cpu *c) {
     }
     g_in_service = 0;
 }
+
 static void service_local(struct cpu *c) {
     // Frontends whose guest has legacy syscalls without a canonical (aarch64) equivalent rewrite them
     // into their *at form here (x86: open->openat, ...); a no-op where the guest is already canonical.
     if (G_NORMALIZE(c)) return;
-    // #404: we reached service() by executing a guest syscall instruction, so this task was RUNNING; publish
+    // we reached service by executing a guest syscall instruction, so this task was RUNNING; publish
     // 'R' (and claim/refresh our cross-process task-state slot -- also re-claims after fork on getpid change).
     // A handler that then parks in a blocking host wait stamps 'S' for its duration and 'R' again on wake.
     ts_running();
@@ -554,27 +590,27 @@ static void service_local(struct cpu *c) {
         case 276:
             a1 = nonpie_p(a1);
             a3 = nonpie_p(a3);
-            break;                         // renameat2(odfd, OLD, ndfd, NEW, flags)
-        case 80:                           // fstat(fd, STATBUF)
-        case 63:                           // read(fd, BUF, count)
-        case 64:                           // write(fd, BUF, count)
-        case 67:                           // pread64(fd, BUF, count, off)
-        case 68:                           // pwrite64(fd, BUF, count, off)
-        case 200:                          // bind(fd, SOCKADDR, alen)
-        case 203:                          // connect(fd, SOCKADDR, alen)
-        case 204:                          // getsockname(fd, ADDR, alen)
-        case 205:                          // getpeername(fd, ADDR, alen)
-        case 202:                          // accept(fd, ADDR, alen)
-        case 242:                          // accept4(fd, ADDR, alen, flags)
-        case 61:                           // getdents64(fd, DIRENT_BUF, count)
+            break;                          // renameat2(odfd, OLD, ndfd, NEW, flags)
+        case 80:                            // fstat(fd, STATBUF)
+        case 63:                            // read(fd, BUF, count)
+        case 64:                            // write(fd, BUF, count)
+        case 67:                            // pread64(fd, BUF, count, off)
+        case 68:                            // pwrite64(fd, BUF, count, off)
+        case 200:                           // bind(fd, SOCKADDR, alen)
+        case 203:                           // connect(fd, SOCKADDR, alen)
+        case 204:                           // getsockname(fd, ADDR, alen)
+        case 205:                           // getpeername(fd, ADDR, alen)
+        case 202:                           // accept(fd, ADDR, alen)
+        case 242:                           // accept4(fd, ADDR, alen, flags)
+        case 61:                            // getdents64(fd, DIRENT_BUF, count)
         case 113: a1 = nonpie_p(a1); break; // clock_gettime(clkid, TIMESPEC)
         case 25:                            // fcntl(fd, cmd, ARG): ARG is a struct flock* ONLY for the record-lock
             if (a1 == 5 || a1 == 6 || a1 == 7) a2 = nonpie_p(a2); // cmds F_GETLK/F_SETLK/F_SETLKW (else it is an
-            break;                          //   int flag/floor arg, never a pointer, so leave it untouched). The
-                                            //   handler dereferences the flock directly (host_range_mapped + reads),
-                                            //   so a low link-vaddr flock in a non-PIE (LTP fcntl05/fcntl13) must be
-                                            //   rebased or the guard EFAULTs on the unmapped low address.
-        // #298: iovec-carrying calls -- rebase the array base AND every entry's iov_base. A non-PIE's
+            break; //   int flag/floor arg, never a pointer, so leave it untouched). The
+                   //   handler dereferences the flock directly (host_range_mapped + reads),
+                   //   so a low link-vaddr flock in a non-PIE (LTP fcntl05/fcntl13) must be
+                   //   rebased or the guard EFAULTs on the unmapped low address.
+        // iovec-carrying calls -- rebase the array base AND every entry's iov_base. A non-PIE's
         // gather/scatter buffers can themselves be low link-vaddr pointers (skalibs' buffer_1 flush issues
         // writev(fd, iov, n) whose iov_base entries point at .rodata baked at 0x40xxxx). Rebasing only the
         // array base (the old behaviour) left the inner pointers LOW, where nothing is mapped -> the host
@@ -582,11 +618,11 @@ static void service_local(struct cpu *c) {
         // s6-overlay preinit's `eval $(s6-overlay-stat /run)` then left $uid unset, so `test "$UID" -ne ""`
         // hit busybox's empty-operand path -> "sh: out of range" and the s6-overlay-v3 boot aborted (111).
         // The rebased copy lives in a per-thread scratch array consumed synchronously by svc_io below.
-        case 65:  // readv(fd, IOVEC, n)
-        case 66:  // writev(fd, IOVEC, n)
-        case 69:  // preadv(fd, IOVEC, n, off)
-        case 286: // preadv2(fd, IOVEC, n, off, off_hi, flags)  -- same (iov=a1, iovcnt=a2) shape (#419)
-        case 287: // pwritev2(fd, IOVEC, n, off, off_hi, flags) -- same shape; inner iov_base rebased too
+        case 65:   // readv(fd, IOVEC, n)
+        case 66:   // writev(fd, IOVEC, n)
+        case 69:   // preadv(fd, IOVEC, n, off)
+        case 286:  // preadv2(fd, IOVEC, n, off, off_hi, flags) -- same (iov=a1, iovcnt=a2) shape
+        case 287:  // pwritev2(fd, IOVEC, n, off, off_hi, flags) -- same shape; inner iov_base rebased too
         case 70: { // pwritev(fd, IOVEC, n, off)
             a1 = nonpie_p(a1);
             int niov = (int)a2;
@@ -607,7 +643,7 @@ static void service_local(struct cpu *c) {
             a0 = nonpie_p(a0);              //   the pollfd array (a0) AND the timespec deadline (a2, read for
             a2 = nonpie_p(a2);              //   the budget and written back with the remaining time). sigmask
             break;                          //   (a3) is ignored by the handler, so only a0+a2 need rebasing.
-        case 207:                          // recvfrom(fd, BUF, len, fl, SRCADDR, alen)
+        case 207:                           // recvfrom(fd, BUF, len, fl, SRCADDR, alen)
         case 206:
             a1 = nonpie_p(a1);
             a4 = nonpie_p(a4);
@@ -619,14 +655,14 @@ static void service_local(struct cpu *c) {
             a1 = nonpie_p(a1);
             break; // execve(PATH, ARGV, envp); argv base here,
                    //   each argv[] element rebased at case 221
-        case 281: // execveat(dfd, PATH, ARGV, envp, flags) -- mirrors 221 (path + argv base; elements
+        case 281:  // execveat(dfd, PATH, ARGV, envp, flags) -- mirrors 221 (path + argv base; elements
             a1 = nonpie_p(a1);
             a2 = nonpie_p(a2);
             break; //   rebased at the shared case-221 body after the case-281 arg shift)
         // Syscalls whose result the ENGINE writes/reads into the guest buffer ITSELF (memset/memcpy/
         // struct fill / arc4random_buf), not via a host syscall -- so there is no host EFAULT fixup to
         // rescue a low, un-rebased non-PIE pointer; the handler's host_range_mapped() guard would simply
-        // fail on the unmapped low address. Rebase the buffer arg BEFORE the handler runs. (#224(a):
+        // fail on the unmapped low address. Rebase the buffer arg BEFORE the handler runs. ((a):
         // getrandom's a0 was the one that made python3.11-x86 EFAULT in _Py_HashRandomization_Init.)
         case 169: // gettimeofday(TIMEVAL, TZ) -- the engine writes BOTH tv (a0) and the deprecated tz (a1)
             a0 = nonpie_p(a0);
@@ -639,7 +675,7 @@ static void service_local(struct cpu *c) {
         case 161: // sethostname(NAME, len)          -- name buffer is a0
         case 59:  // pipe2(FDS, flags) -- the two result fds are written into a0 by the engine itself, so a
                   //   low non-PIE fds[] (skalibs/s6-linux-init pass a .bss array at 0x42xxxx) must be rebased
-                  //   or the handler's host_range_mapped() guard EFAULTs ("unable to pipe: Bad address", #299)
+                  //   or the handler's host_range_mapped guard EFAULTs ("unable to pipe: Bad address")
             a0 = nonpie_p(a0);
             break;
         case 165: // getrusage(who, RUSAGEBUF)       -- buffer is a1
@@ -678,37 +714,37 @@ static void service_local(struct cpu *c) {
             a0 = nonpie_p(a0);
             a1 = nonpie_p(a1);
             break;
-        // #409: the remaining PATH-taking fs syscalls a non-PIE hands a low .rodata/.bss pointer to. Without
+        // the remaining PATH-taking fs syscalls a non-PIE hands a low.rodata/.bss pointer to. Without
         // the rebase the host syscall (or the engine's own resolve/copy) dereferences the un-relocated low
         // link vaddr -> EFAULT/SIGSEGV on a VALID guest pointer (arm64 LTP truncate02/getcwd02 static-EXEC).
         // These mirror the *at family above but are the "bare path" (a0) or fd+name/value forms.
-        case 45:  // truncate(PATH, length)            -- path a0 (length is a scalar, never rebased)
-        case 49:  // chdir(PATH)                        -- path a0
-        case 51:  // chroot(PATH)                       -- path a0
+        case 45: // truncate(PATH, length)            -- path a0 (length is a scalar, never rebased)
+        case 49: // chdir(PATH)                        -- path a0
+        case 51: // chroot(PATH)                       -- path a0
             a0 = nonpie_p(a0);
             break;
-        case 5:   // setxattr(PATH, NAME, VALUE, size, flags)
-        case 6:   // lsetxattr(PATH, NAME, VALUE, size, flags)
-        case 8:   // getxattr(PATH, NAME, VALUE, size)
-        case 9:   // lgetxattr(PATH, NAME, VALUE, size)
+        case 5: // setxattr(PATH, NAME, VALUE, size, flags)
+        case 6: // lsetxattr(PATH, NAME, VALUE, size, flags)
+        case 8: // getxattr(PATH, NAME, VALUE, size)
+        case 9: // lgetxattr(PATH, NAME, VALUE, size)
             a0 = nonpie_p(a0);
             a1 = nonpie_p(a1);
             a2 = nonpie_p(a2);
             break;
-        case 7:   // fsetxattr(fd, NAME, VALUE, size, flags)   -- a0 is an fd
-        case 10:  // fgetxattr(fd, NAME, VALUE, size)          -- a0 is an fd
+        case 7:  // fsetxattr(fd, NAME, VALUE, size, flags)   -- a0 is an fd
+        case 10: // fgetxattr(fd, NAME, VALUE, size)          -- a0 is an fd
             a1 = nonpie_p(a1);
             a2 = nonpie_p(a2);
             break;
-        case 11:  // listxattr(PATH, LIST, size)
-        case 12:  // llistxattr(PATH, LIST, size)
-        case 14:  // removexattr(PATH, NAME)
-        case 15:  // lremovexattr(PATH, NAME)
+        case 11: // listxattr(PATH, LIST, size)
+        case 12: // llistxattr(PATH, LIST, size)
+        case 14: // removexattr(PATH, NAME)
+        case 15: // lremovexattr(PATH, NAME)
             a0 = nonpie_p(a0);
             a1 = nonpie_p(a1);
             break;
-        case 13:  // flistxattr(fd, LIST, size)                -- a0 is an fd
-        case 16:  // fremovexattr(fd, NAME)                    -- a0 is an fd
+        case 13: // flistxattr(fd, LIST, size)                -- a0 is an fd
+        case 16: // fremovexattr(fd, NAME)                    -- a0 is an fd
             a1 = nonpie_p(a1);
             break;
         case 264: // name_to_handle_at(dfd, PATH, HANDLE, MOUNT_ID, flags)
@@ -729,7 +765,7 @@ static void service_local(struct cpu *c) {
         case 171: // adjtimex(TIMEX)                     -- timex read+written at a0
             a0 = nonpie_p(a0);
             break;
-        // #408: timer / timerfd / sched / signalfd / epoll_ctl handlers dereference their struct pointers
+        // timer / timerfd / sched / signalfd / epoll_ctl handlers dereference their struct pointers
         // directly (itimerspec / sigevent / sched_param / sigset / epoll_event), so a low link-vaddr pointer
         // in a non-PIE (LTP's static test binaries put these in .bss/.data at ~0x52xxxx) must be rebased or
         // the handler's guest_bad_ptr guard EFAULTs on the unmapped low address.
@@ -743,7 +779,7 @@ static void service_local(struct cpu *c) {
         case 119: // sched_setscheduler(pid, policy, PARAM)   -- sched_param read directly
             a2 = nonpie_p(a2);
             break;
-        case 21:  // epoll_ctl(epfd, op, fd, EVENT)           -- epoll_event read directly
+        case 21: // epoll_ctl(epfd, op, fd, EVENT)           -- epoll_event read directly
             a3 = nonpie_p(a3);
             break;
         case 86:  // timerfd_settime(fd, flags, NEW, OLD)     -- new read / old written
@@ -755,7 +791,7 @@ static void service_local(struct cpu *c) {
             a1 = nonpie_p(a1);
             a2 = nonpie_p(a2);
             break;
-        // #419: the remaining pointer-arg syscalls whose handler dereferences the guest pointer DIRECTLY (a
+        // the remaining pointer-arg syscalls whose handler dereferences the guest pointer DIRECTLY (a
         // host-syscall deref, or the engine reading/writing the guest struct itself) that were still missing
         // from this switch -- so a non-PIE guest handing a low .bss/.rodata/.data pointer EFAULTed (or, for the
         // unguarded handlers, SIGSEGV'd the engine) on a VALID pointer. This is the getgroups/semop/msgsnd
@@ -766,8 +802,8 @@ static void service_local(struct cpu *c) {
         // exactly like the shared cases above. (Inert for PIE/static-PIE: the whole switch is gated on
         // g_nonpie_lo, which the entire test matrix leaves 0.)
         // -- credentials (proc.c: the buffers are written directly / guarded by guest_bad_ptr) --
-        case 90:  // capget(HDRP, DATAP)
-        case 91:  // capset(HDRP, DATAP)
+        case 90: // capget(HDRP, DATAP)
+        case 91: // capset(HDRP, DATAP)
             a0 = nonpie_p(a0);
             a1 = nonpie_p(a1);
             break;
@@ -786,8 +822,8 @@ static void service_local(struct cpu *c) {
         case 193: // semop(semid, SOPS, nsops)         -- sops read by host semop
             a1 = nonpie_p(a1);
             break;
-        case 192: // semtimedop(semid, SOPS, nsops, TIMEOUT) -- sops (+timeout; harmless if the handler,
-            a1 = nonpie_p(a1);                                //   which routes to semop, ignores it)
+        case 192:              // semtimedop(semid, SOPS, nsops, TIMEOUT) -- sops (+timeout; harmless if the handler,
+            a1 = nonpie_p(a1); //   which routes to semop, ignores it)
             a3 = nonpie_p(a3);
             break;
         case 191: // semctl(semid, semnum, CMD, arg): arg(a3) is a pointer ONLY for GETALL(13)/SETALL(17);
@@ -821,12 +857,12 @@ static void service_local(struct cpu *c) {
             a3 = nonpie_p(a3);
             break;
         // -- sched / rlimit / wait (rare.c + proc.c) --
-        case 95:  // waitid(idtype, id, INFOP, options) -- siginfo written (host_range_mapped guard EFAULTs low)
+        case 95: // waitid(idtype, id, INFOP, options) -- siginfo written (host_range_mapped guard EFAULTs low)
             a2 = nonpie_p(a2);
             break;
-        case 98:  // futex(UADDR, op, val, TIMEOUT, ...) -- uaddr + timeout are dereferenced by futex_op; a
-            a0 = nonpie_p(a0);                            //   non-PIE static libc's lock word / timespec live
-            a3 = nonpie_p(a3);                            //   in .bss at a low link vaddr (uaddr2 a4 is unused)
+        case 98:               // futex(UADDR, op, val, TIMEOUT, ...) -- uaddr + timeout are dereferenced by futex_op; a
+            a0 = nonpie_p(a0); //   non-PIE static libc's lock word / timespec live
+            a3 = nonpie_p(a3); //   in .bss at a low link vaddr (uaddr2 a4 is unused)
             break;
         case 163: // getrlimit(res, RLIM) -- rlim written
         case 164: // setrlimit(res, RLIM) -- rlim read
@@ -838,11 +874,11 @@ static void service_local(struct cpu *c) {
             a3 = nonpie_p(a3);
             break;
         // -- poll / select (event.c): the pollfd/fd_set/timespec buffers are read+written directly --
-        case 22:  // epoll_pwait(epfd, EVENTS, max, tmo, SIGMASK) -- events written (sigmask a4 handler-ignored)
+        case 22: // epoll_pwait(epfd, EVENTS, max, tmo, SIGMASK) -- events written (sigmask a4 handler-ignored)
             a1 = nonpie_p(a1);
             a4 = nonpie_p(a4);
             break;
-        case 72:  // pselect6(n, READFDS, WRITEFDS, EXCEPTFDS, TIMEOUT, sigmask) -- all four deref'd directly
+        case 72: // pselect6(n, READFDS, WRITEFDS, EXCEPTFDS, TIMEOUT, sigmask) -- all four deref'd directly
             a1 = nonpie_p(a1);
             a2 = nonpie_p(a2);
             a3 = nonpie_p(a3);
@@ -872,7 +908,7 @@ static void service_local(struct cpu *c) {
         default: break;
         }
     }
-    // #374 daemon-write coherence: notice a daemon-side write into this container's fs (docker cp /
+    // daemon-write coherence: notice a daemon-side write into this container's fs (docker cp /
     // exec-spawn /etc rewrites) and drop the path/metadata caches BEFORE any handler below can consult
     // them -- one shared-page atomic load per syscall (see fscache.c fsgen_poll).
     fsgen_poll();
@@ -902,7 +938,8 @@ static void service_local(struct cpu *c) {
         // a bad pointer doesn't fault the engine in this pre-dispatch cache-invalidation probe. If it is
         // unmapped we simply skip the res_bump -- the real openat2 handler (svc_fs) returns -EFAULT below.
         uint64_t *how = (uint64_t *)a2;
-        if (how && host_range_mapped((uintptr_t)a2, sizeof(uint64_t)) && ((how[0] & 0x40) || (g_nlower && (how[0] & 3))))
+        if (how && host_range_mapped((uintptr_t)a2, sizeof(uint64_t)) &&
+            ((how[0] & 0x40) || (g_nlower && (how[0] & 3))))
             res_bump();
         break;
     }
@@ -923,7 +960,7 @@ static void service_local(struct cpu *c) {
     // ===================== unhandled =====================
     // Every Linux syscall is now owned by one of the svc_*() family modules above; reaching here means no
     // family claimed this number -> ENOSYS (the guest sees ENOSYS and falls back, exactly as on a real kernel
-    // that lacks the syscall). BUG#256: this report used to be UNCONDITIONAL and went to fd 2 -- i.e. the
+    // that lacks the syscall). this report used to be UNCONDITIONAL and went to fd 2 -- i.e. the
     // GUEST's stderr, not the engine's. A guest that pokes an unimplemented number in a hot loop (the arm64 Go
     // toolchain does, per goroutine/child) then floods its OWN stderr with thousands of engine lines, both
     // corrupting the guest's stream and stalling the build on pipe backpressure. It is a debug aid, so gate it

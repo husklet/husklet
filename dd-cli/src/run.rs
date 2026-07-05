@@ -34,13 +34,21 @@ pub fn parse(raw: Vec<String>) -> Result<RunArgs, String> {
             "--isolated" => isolated = true,
             "--keep" => keep = true,
             "--platform" => platform = it.next(),
-            s if s.starts_with("--platform=") => platform = Some(s["--platform=".len()..].to_string()),
+            s if s.starts_with("--platform=") => {
+                platform = Some(s["--platform=".len()..].to_string())
+            }
             _ => rest.push(a),
         }
     }
     let mut rest = rest.into_iter();
     let image = rest.next().ok_or("usage: ddcli run <image> [command…]")?;
-    Ok(RunArgs { platform, isolated, keep, image, command: rest.collect() })
+    Ok(RunArgs {
+        platform,
+        isolated,
+        keep,
+        image,
+        command: rest.collect(),
+    })
 }
 
 /// `ddcli mac [command…]` — drop into a macOS (arm64) dev container: a native userland jailed via
@@ -50,7 +58,13 @@ pub fn parse(raw: Vec<String>) -> Result<RunArgs, String> {
 /// needs no local build. Override with `DD_MAC_IMAGE` (e.g. a locally-built `macos`, or a pinned tag).
 pub fn mac(raw: Vec<String>) -> i32 {
     let image = std::env::var("DD_MAC_IMAGE").unwrap_or_else(|_| DEFAULT_MAC_IMAGE.into());
-    run(RunArgs { platform: None, isolated: false, keep: false, image, command: raw })
+    run(RunArgs {
+        platform: None,
+        isolated: false,
+        keep: false,
+        image,
+        command: raw,
+    })
 }
 
 /// The published macOS dev image `ddcli mac` pulls by default.
@@ -59,14 +73,18 @@ pub const DEFAULT_MAC_IMAGE: &str = "huttarichard/ddmac:latest";
 /// Run a container with the easy-access defaults, by invoking `docker` against dd's socket.
 pub fn run(args: RunArgs) -> i32 {
     if !docker_present() {
-        eprintln!("ddcli needs the `docker` CLI on PATH — it drives the dd daemon. Install Docker's CLI.");
+        eprintln!(
+            "ddcli needs the `docker` CLI on PATH — it drives the dd daemon. Install Docker's CLI."
+        );
         return 1;
     }
     if let Err(e) = crate::ensure_daemon() {
         eprintln!("dd daemon isn't reachable: {e}\nTry:  ddcli install");
         return 1;
     }
-    let cwd = std::env::current_dir().map(|p| p.to_string_lossy().into_owned()).unwrap_or_else(|_| "/".into());
+    let cwd = std::env::current_dir()
+        .map(|p| p.to_string_lossy().into_owned())
+        .unwrap_or_else(|_| "/".into());
 
     let mut cmd = Command::new("docker");
     cmd.arg("--host").arg(paths::docker_host()).arg("run");
@@ -95,7 +113,11 @@ pub fn run(args: RunArgs) -> i32 {
         // container since we can't see its filesystem from here.
         // Fallback must be an ABSOLUTE path: in the macOS container (darwinjail) bare `sh` may not
         // resolve on PATH, so `exec sh` died "sh not found". `/bin/sh` is the one we're already in.
-        cmd.args(["/bin/sh", "-c", "command -v bash >/dev/null 2>&1 && exec bash || exec /bin/sh"]);
+        cmd.args([
+            "/bin/sh",
+            "-c",
+            "command -v bash >/dev/null 2>&1 && exec bash || exec /bin/sh",
+        ]);
     } else {
         cmd.args(&args.command);
     }
@@ -110,5 +132,9 @@ pub fn run(args: RunArgs) -> i32 {
 }
 
 fn docker_present() -> bool {
-    Command::new("docker").arg("--version").output().map(|o| o.status.success()).unwrap_or(false)
+    Command::new("docker")
+        .arg("--version")
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false)
 }

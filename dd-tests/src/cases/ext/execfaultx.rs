@@ -1,4 +1,4 @@
-//! execfaultx — #139/#222 fork->execve child fault delivery + CRASHDBG Mach exception-port delivery.
+//! execfaultx — fork->execve child fault delivery + CRASHDBG Mach exception-port delivery.
 //! Owner: fork/exec-fault agent. Edit ONLY this file. Keep it compiling (`cargo build -p dd-tests`).
 //!
 //! A compiler DRIVER (gcc/clang) forks and execve's sub-processes (cc1/as/ld/collect2); those exec'd
@@ -22,12 +22,17 @@
 use crate::{group, src, Engine, Group};
 
 pub fn groups() -> Vec<Group> {
-    vec![group("execfaultx", vec![
-        src("execfault", "execfault.c")
-            .only(&[Engine::LinuxAarch64, Engine::LinuxX86_64])
-            .out("handled: exited 42\nunhandled: signal 11\n"),
-        src("execfault-crashdbg", "execfault.c").args(&["mainhandled"]).env("CRASHDBG", "1")
-            .only(&[Engine::LinuxAarch64, Engine::LinuxX86_64])
-            .out("mainhandled ok\n"),
-    ])]
+    vec![group(
+        "execfaultx",
+        vec![
+            src("execfault", "execfault.c")
+                .only(&[Engine::LinuxAarch64, Engine::LinuxX86_64])
+                .out("handled: exited 42\nunhandled: signal 11\n"),
+            src("execfault-crashdbg", "execfault.c")
+                .args(&["mainhandled"])
+                .env("CRASHDBG", "1")
+                .only(&[Engine::LinuxAarch64, Engine::LinuxX86_64])
+                .out("mainhandled ok\n"),
+        ],
+    )]
 }

@@ -20,19 +20,18 @@
 #define G_GPC_HASH_SHIFT 0
 
 #define G_PC(c) ((c)->rip)
-#define G_SP(c) ((c)->r[4])                // rsp
-#define G_TLS(c) ((c)->fs_base)            // x86 TLS base (arch_prctl SET_FS)
-#define G_SHADOW_RESET(c) ((void)0)        // no §B shadow stack on the x86 frontend
+#define G_SP(c) ((c)->r[4])         // rsp
+#define G_TLS(c) ((c)->fs_base)     // x86 TLS base (arch_prctl SET_FS)
+#define G_SHADOW_RESET(c) ((void)0) // no §B shadow stack on the x86 frontend
 
 // Child thread resume PC: x86 pre-advances rip past `syscall` before servicing, so the copy is correct.
 #define G_THREAD_RESUME(child, parent) ((void)0)
-
 
 // Syscall normalization: x86 rewrites legacy syscalls to their *at form (frontend/x86_64/legacy.c).
 #define G_NORMALIZE(c) x86_normalize(c)
 
 // Zero the integer register file (execve). x86 = r[16].
-#define G_RESET_REGS(c) memset((c)->r, 0, sizeof (c)->r)
+#define G_RESET_REGS(c) memset((c)->r, 0, sizeof(c)->r)
 
 // uname(2) `machine` field — per guest ISA, so an x86-64 guest reports "x86_64" (not the host "aarch64").
 #define G_UNAME_MACHINE "x86_64"
@@ -44,18 +43,19 @@
 // Open-flag bits that DIFFER by guest arch (the high O_* group): x86-64 has its own values for the
 // O_DIRECTORY/O_NOFOLLOW group, distinct from aarch64's asm-generic ones (see frontend/aarch64/abi.h).
 #define G_O_DIRECTORY 0x10000 // x86-64 O_DIRECTORY = 0200000
-#define G_O_NOFOLLOW  0x20000 // x86-64 O_NOFOLLOW  = 0400000
+#define G_O_NOFOLLOW 0x20000  // x86-64 O_NOFOLLOW  = 0400000
 
 // W5B tier-2: extra PROF line at exit_group (x86 engine only; aarch64 leaves G_PROF_EXTRA undefined).
 // g_prof_t2 lives in the shared jit/cache.c, g_prof_t2fold in frontend/x86_64/engine_glue.c -- both
 // defined before the shared service.c is #included in the x86 unity TU.
 static void xs_dump(void); // EXITSTAT diagnostic histogram (defined in avx.c; no-op unless EXITSTAT set)
-#define G_PROF_EXTRA                                                                                                    \
-    do {                                                                                                                \
+#define G_PROF_EXTRA                                                                                                   \
+    do {                                                                                                               \
         if (getenv("PROF"))                                                                                            \
-            fprintf(stderr, "[prof] tier2=%llu tier2_fold_elide=%llu xflag_elide=%llu xflag_scan=%llu shflag_elide=%llu\n", \
-                    (unsigned long long)g_prof_t2, (unsigned long long)g_prof_t2fold,                                   \
-                    (unsigned long long)g_prof_xflag, (unsigned long long)g_prof_xflag_scan,                            \
-                    (unsigned long long)g_prof_shflag);                                                                  \
-        xs_dump();                                                                                                      \
+            fprintf(stderr,                                                                                            \
+                    "[prof] tier2=%llu tier2_fold_elide=%llu xflag_elide=%llu xflag_scan=%llu shflag_elide=%llu\n",    \
+                    (unsigned long long)g_prof_t2, (unsigned long long)g_prof_t2fold,                                  \
+                    (unsigned long long)g_prof_xflag, (unsigned long long)g_prof_xflag_scan,                           \
+                    (unsigned long long)g_prof_shflag);                                                                \
+        xs_dump();                                                                                                     \
     } while (0)

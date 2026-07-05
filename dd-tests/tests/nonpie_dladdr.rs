@@ -1,4 +1,4 @@
-//! #281 regression: a DYNAMIC non-PIE (ET_EXEC) executable's runtime symbol/address introspection
+//! regression: a DYNAMIC non-PIE (ET_EXEC) executable's runtime symbol/address introspection
 //! (`dladdr`, `dlsym(RTLD_NEXT/RTLD_DEFAULT, …)`) must match native.
 //!
 //! The engine maps a non-PIE image HIGH (+bias) but keeps guest-visible addresses at their LOW link
@@ -14,7 +14,10 @@ use std::path::PathBuf;
 use std::process::Command;
 
 fn repo() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).parent().unwrap().to_path_buf()
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
+        .to_path_buf()
 }
 
 /// Run a shell script mac-side (where the ENGINE runs): directly on macOS; through the `mac` bridge on a
@@ -84,7 +87,11 @@ fn build_guest_and_rootfs() -> Option<(String, String)> {
     let o = host_sh(&script, 120);
     let so = String::from_utf8_lossy(&o.stdout);
     if !so.contains("OK") {
-        eprintln!("[nonpie_dladdr] rootfs assembly skipped: {}{}", so.trim(), String::from_utf8_lossy(&o.stderr).trim());
+        eprintln!(
+            "[nonpie_dladdr] rootfs assembly skipped: {}{}",
+            so.trim(),
+            String::from_utf8_lossy(&o.stderr).trim()
+        );
         return None;
     }
     Some((rootfs.display().to_string(), "/nonpie_dladdr".to_string()))
@@ -114,7 +121,8 @@ fn nonpie_dladdr_rtld_next_aarch64() {
     let got = mac_sh(&format!("'{engine}' --rootfs '{rootfs}' {argv0}"), 40);
     let got_s = String::from_utf8_lossy(&got.stdout).trim().to_string();
     assert_eq!(
-        got_s, want,
+        got_s,
+        want,
         "non-PIE dladdr/RTLD_NEXT under the engine must match native (regression #281).\n\
          engine stderr: {}",
         String::from_utf8_lossy(&got.stderr)

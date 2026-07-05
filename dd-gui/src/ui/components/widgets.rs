@@ -1,13 +1,12 @@
 #![allow(unused_imports, dead_code)]
-use crate::{AppModel, Category, Msg, Selection};
 use crate::ui::components::*;
-use crate::ui::views::*;
 use crate::ui::theme::*;
+use crate::ui::views::*;
+use crate::{AppModel, Category, Msg, Selection};
 use ddclient::{Container, Image, Network, Volume};
 use gtk::prelude::*;
 use relm4::ComponentSender;
 use std::ffi::OsStr;
-
 
 /// A card of key/value rows (selectable monospace values) for the Settings page.
 pub(crate) fn setting_card(rows: &[(&str, &str)]) -> gtk::Box {
@@ -33,7 +32,6 @@ pub(crate) fn setting_card(rows: &[(&str, &str)]) -> gtk::Box {
     card
 }
 
-
 pub(crate) fn stat_card(value: &str, name: &str, accent: bool) -> gtk::Widget {
     let v = gtk::Label::new(Some(value));
     v.set_xalign(0.0);
@@ -51,7 +49,6 @@ pub(crate) fn stat_card(value: &str, name: &str, accent: bool) -> gtk::Widget {
     c.append(&n);
     c.upcast()
 }
-
 
 /// A "title + description on the left, action button on the right" row for the Get Started card.
 pub(crate) fn action_row(
@@ -91,7 +88,6 @@ pub(crate) fn action_row(
     row
 }
 
-
 /// Format a byte count compactly (B / KB / MB / GB).
 pub(crate) fn human_size(bytes: i64) -> String {
     let b = bytes.max(0) as f64;
@@ -106,7 +102,6 @@ pub(crate) fn human_size(bytes: i64) -> String {
     }
 }
 
-
 pub(crate) fn detail_root() -> gtk::Box {
     let b = gtk::Box::new(gtk::Orientation::Vertical, 18);
     b.set_margin_top(22);
@@ -115,7 +110,6 @@ pub(crate) fn detail_root() -> gtk::Box {
     b.set_margin_end(24);
     b
 }
-
 
 pub(crate) fn detail_header(title: &str, subtitle: &str, actions: Vec<gtk::Button>) -> gtk::Widget {
     let titles = gtk::Box::new(gtk::Orientation::Vertical, 2);
@@ -139,7 +133,6 @@ pub(crate) fn detail_header(title: &str, subtitle: &str, actions: Vec<gtk::Butto
     }
     row.upcast()
 }
-
 
 /// A titled section: a caption header and either its value rows or a dim em-dash.
 pub(crate) fn section(title: &str, lines: &[String]) -> gtk::Widget {
@@ -166,7 +159,6 @@ pub(crate) fn section(title: &str, lines: &[String]) -> gtk::Widget {
     b.upcast()
 }
 
-
 // ---- sidebar helpers -------------------------------------------------------
 
 pub(crate) fn nav_list() -> gtk::ListBox {
@@ -175,7 +167,6 @@ pub(crate) fn nav_list() -> gtk::ListBox {
     l.add_css_class("navigation-sidebar");
     l
 }
-
 
 pub(crate) fn nav_item(title: &str, subtitle: &str, running: bool) -> gtk::ListBoxRow {
     // No ad-hoc margins — the shared `.navigation-sidebar > row` padding governs both sidebars.
@@ -189,14 +180,15 @@ pub(crate) fn nav_item(title: &str, subtitle: &str, running: bool) -> gtk::ListB
         let s = gtk::Label::new(Some(subtitle));
         s.set_xalign(0.0);
         s.add_css_class("dd-listrow-sub");
-        if running { s.add_css_class("success"); }
+        if running {
+            s.add_css_class("success");
+        }
         v.append(&s);
     }
     let row = gtk::ListBoxRow::new();
     row.set_child(Some(&v));
     row
 }
-
 
 pub(crate) fn section_caption(text: &str) -> gtk::Label {
     let l = gtk::Label::new(Some(&text.to_uppercase()));
@@ -207,7 +199,6 @@ pub(crate) fn section_caption(text: &str) -> gtk::Label {
     l.set_margin_start(12);
     l
 }
-
 
 pub(crate) fn dim_row(text: &str) -> gtk::ListBoxRow {
     let l = gtk::Label::new(Some(text));
@@ -222,7 +213,6 @@ pub(crate) fn dim_row(text: &str) -> gtk::ListBoxRow {
     row.set_child(Some(&l));
     row
 }
-
 
 // ---- small helpers ---------------------------------------------------------
 
@@ -242,7 +232,6 @@ pub(crate) fn text_btn(
     b
 }
 
-
 pub(crate) fn placeholder(text: &str) -> gtk::Widget {
     let l = gtk::Label::new(Some(text));
     l.add_css_class("dim-label");
@@ -252,7 +241,6 @@ pub(crate) fn placeholder(text: &str) -> gtk::Widget {
     l.set_halign(gtk::Align::Center);
     l.upcast()
 }
-
 
 pub(crate) fn select_named(list: &gtk::ListBox, name: &str) {
     let mut i = 0;
@@ -265,13 +253,11 @@ pub(crate) fn select_named(list: &gtk::ListBox, name: &str) {
     }
 }
 
-
 pub(crate) fn clear(list: &gtk::ListBox) {
     while let Some(child) = list.first_child() {
         list.remove(&child);
     }
 }
-
 
 pub(crate) fn clear_box(b: &gtk::Box) {
     while let Some(child) = b.first_child() {
@@ -279,11 +265,14 @@ pub(crate) fn clear_box(b: &gtk::Box) {
     }
 }
 
-
 // ---- networks / volumes (list rows + detail) ------------------------------------------------------
 
 /// A frameless "＋ New …" action row at the top of a resource list (sends its Msg on click).
-pub(crate) fn new_row(label: &str, sender: &ComponentSender<AppModel>, make: impl Fn() -> Msg + 'static) -> gtk::ListBoxRow {
+pub(crate) fn new_row(
+    label: &str,
+    sender: &ComponentSender<AppModel>,
+    make: impl Fn() -> Msg + 'static,
+) -> gtk::ListBoxRow {
     let b = gtk::Button::with_label(label);
     b.set_has_frame(false);
     b.set_halign(gtk::Align::Start);
@@ -300,7 +289,12 @@ pub(crate) fn new_row(label: &str, sender: &ComponentSender<AppModel>, make: imp
 // ---- sparkline stat card --------------------------------------------------------------------------
 
 /// A dashboard card: a big current value, a caption, and a sparkline of its recent history.
-pub(crate) fn sparkline_card(title: &str, value: &str, series: Vec<f64>, accent: bool) -> gtk::Widget {
+pub(crate) fn sparkline_card(
+    title: &str,
+    value: &str,
+    series: Vec<f64>,
+    accent: bool,
+) -> gtk::Widget {
     let card = gtk::Box::new(gtk::Orientation::Vertical, 6);
     card.add_css_class("dd-stat-card");
     card.set_hexpand(true);
@@ -308,7 +302,9 @@ pub(crate) fn sparkline_card(title: &str, value: &str, series: Vec<f64>, accent:
     let val = gtk::Label::new(Some(value));
     val.set_xalign(0.0);
     val.add_css_class("dd-stat-value");
-    if accent { val.add_css_class("accent"); }
+    if accent {
+        val.add_css_class("accent");
+    }
     let name = gtk::Label::new(Some(&title.to_uppercase()));
     name.set_xalign(0.0);
     name.add_css_class("dd-stat-name");
@@ -330,16 +326,27 @@ fn draw_sparkline(cr: &gtk::cairo::Context, w: i32, h: i32, data: &[f64], accent
     }
     let (w, h) = (w as f64, h as f64);
     let (mut lo, mut hi) = (f64::MAX, f64::MIN);
-    for &v in data { lo = lo.min(v); hi = hi.max(v); }
-    if (hi - lo).abs() < 1e-9 { hi = lo + 1.0; }
+    for &v in data {
+        lo = lo.min(v);
+        hi = hi.max(v);
+    }
+    if (hi - lo).abs() < 1e-9 {
+        hi = lo + 1.0;
+    }
     let n = data.len();
     let x = |i: usize| (i as f64) / ((n - 1) as f64) * w;
     let y = |v: f64| h - 3.0 - ((v - lo) / (hi - lo)) * (h - 6.0);
-    let (r, g, b) = if accent { (0.17, 0.79, 0.35) } else { (0.04, 0.52, 1.0) };
+    let (r, g, b) = if accent {
+        (0.17, 0.79, 0.35)
+    } else {
+        (0.04, 0.52, 1.0)
+    };
 
     // soft area fill under the curve
     cr.move_to(0.0, h);
-    for (i, &v) in data.iter().enumerate() { cr.line_to(x(i), y(v)); }
+    for (i, &v) in data.iter().enumerate() {
+        cr.line_to(x(i), y(v));
+    }
     cr.line_to(w, h);
     cr.close_path();
     cr.set_source_rgba(r, g, b, 0.10);
@@ -347,7 +354,11 @@ fn draw_sparkline(cr: &gtk::cairo::Context, w: i32, h: i32, data: &[f64], accent
 
     // the line itself
     for (i, &v) in data.iter().enumerate() {
-        if i == 0 { cr.move_to(x(i), y(v)); } else { cr.line_to(x(i), y(v)); }
+        if i == 0 {
+            cr.move_to(x(i), y(v));
+        } else {
+            cr.line_to(x(i), y(v));
+        }
     }
     cr.set_source_rgba(r, g, b, 0.9);
     cr.set_line_width(1.6);

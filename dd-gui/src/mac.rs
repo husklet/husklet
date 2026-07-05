@@ -24,7 +24,8 @@ pub fn unify_titlebar() {
             }
             w.setTitlebarAppearsTransparent(true);
             w.setTitleVisibility(NSWindowTitleVisibility(TITLE_HIDDEN));
-            let mask = NSWindowStyleMask(w.styleMask().0 | NSWindowStyleMask::FullSizeContentView.0);
+            let mask =
+                NSWindowStyleMask(w.styleMask().0 | NSWindowStyleMask::FullSizeContentView.0);
             w.setStyleMask(mask);
         }
     }

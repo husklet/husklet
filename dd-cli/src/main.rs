@@ -152,7 +152,9 @@ fn cmd_app() -> i32 {
             }
         }
     }
-    eprintln!("dd-app not found. Install it (drag dd.app to /Applications) or build with `make app`.");
+    eprintln!(
+        "dd-app not found. Install it (drag dd.app to /Applications) or build with `make app`."
+    );
     1
 }
 
@@ -184,7 +186,8 @@ fn daemon_run() -> i32 {
         return 1;
     }
     let mut cmd = Command::new(&bin);
-    cmd.env("DDOCKERD_SOCK", paths::socket()).env("DD_IMAGES", paths::images_dir());
+    cmd.env("DDOCKERD_SOCK", paths::socket())
+        .env("DD_IMAGES", paths::images_dir());
     if let Some(dir) = bin.parent() {
         cmd.env("DDJIT_DIR", dir); // find ddjit-* next to the daemon (bundle Resources)
     }
@@ -214,7 +217,9 @@ fn cmd_install() -> i32 {
     println!("\nIf you don't use `docker context`, add this to your shell:");
     println!("    export DOCKER_HOST={}", paths::docker_host());
     warn_quarantine();
-    println!("\nDone. Try:  ddcli ubuntu   (a shell in an ubuntu container, here)  ·  ddcli doctor");
+    println!(
+        "\nDone. Try:  ddcli ubuntu   (a shell in an ubuntu container, here)  ·  ddcli doctor"
+    );
     0
 }
 
@@ -250,12 +255,18 @@ fn cmd_doctor() -> i32 {
     let mut ok = true;
 
     let agent_loaded = agent::is_loaded();
-    line(agent_loaded, &format!("daemon agent loaded ({})", agent::service_target()));
+    line(
+        agent_loaded,
+        &format!("daemon agent loaded ({})", agent::service_target()),
+    );
     ok &= agent_loaded;
 
     let sock = paths::socket();
     let reachable = ping_socket(&sock);
-    line(reachable, &format!("daemon socket reachable ({})", sock.display()));
+    line(
+        reachable,
+        &format!("daemon socket reachable ({})", sock.display()),
+    );
     ok &= reachable;
 
     let ctx_dir = paths::home().join(".docker/contexts/meta");
@@ -268,16 +279,25 @@ fn cmd_doctor() -> i32 {
         let quarantined = is_quarantined(bundle);
         line(!quarantined, "app not gatekeeper-quarantined");
         if quarantined {
-            println!("    fix: xattr -dr com.apple.quarantine {}", paths::APP_BUNDLE);
+            println!(
+                "    fix: xattr -dr com.apple.quarantine {}",
+                paths::APP_BUNDLE
+            );
         }
     } else {
-        line(false, &format!("app not installed at {}", paths::APP_BUNDLE));
+        line(
+            false,
+            &format!("app not installed at {}", paths::APP_BUNDLE),
+        );
         println!("    install: build with `make dmg`, then drag dd.app to /Applications");
     }
 
     if !ok {
         println!("\nSome checks failed. `ddcli install` sets up the agent + context.");
-        println!("If the GUI renders oddly, try:  GSK_RENDERER=cairo open {}", paths::APP_BUNDLE);
+        println!(
+            "If the GUI renders oddly, try:  GSK_RENDERER=cairo open {}",
+            paths::APP_BUNDLE
+        );
     }
     if ok {
         0
@@ -298,7 +318,10 @@ fn ensure_agent() -> Result<(), String> {
 
 /// Synchronously connect to the socket to confirm the daemon answers `_ping`.
 fn ping_socket(sock: &std::path::Path) -> bool {
-    let rt = match tokio::runtime::Builder::new_current_thread().enable_all().build() {
+    let rt = match tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+    {
         Ok(rt) => rt,
         Err(_) => return false,
     };

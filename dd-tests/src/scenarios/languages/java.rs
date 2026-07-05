@@ -12,15 +12,26 @@ pub fn scenarios() -> Vec<Scenario> {
     vec![
         // openjdk:*-slim tags were removed from Docker Hub (repo deprecated) → use eclipse-temurin JDKs.
         scen("languages/java-sum-17", "eclipse-temurin:17")
-            .exec(J_SUM).has("500500").long(),
+            .exec(J_SUM)
+            .has("500500")
+            .long(),
         scen("languages/java-fib-21", "eclipse-temurin:21")
-            .exec(J_FIB).has("12586269025").long(),
+            .exec(J_FIB)
+            .has("12586269025")
+            .long(),
         scen("languages/java-version-temurin17", "eclipse-temurin:17")
             .exec("java -version 2>&1 | grep -o 'openjdk version \"17'")
             .has("openjdk version \"17"),
         scen("languages/java-sum-temurin21", "eclipse-temurin:21")
-            .exec(J_SUM).has("500500").long(),
-        scen("languages/java-sum-temurin21-alpine", "eclipse-temurin:21-alpine")
-            .exec(J_SUM).has("500500").long(),
+            .exec(J_SUM)
+            .has("500500")
+            .long(),
+        scen(
+            "languages/java-sum-temurin21-alpine",
+            "eclipse-temurin:21-alpine",
+        )
+        .exec(J_SUM)
+        .has("500500")
+        .long(),
     ]
 }

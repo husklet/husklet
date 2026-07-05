@@ -1,4 +1,4 @@
-//! #374 `docker cp` coherence — a daemon-side write into a RUNNING container's filesystem must be
+//! `docker cp` coherence — a daemon-side write into a RUNNING container's filesystem must be
 //! visible to the already-running guest promptly (real-Docker/Linux kernel-dcache semantics), even
 //! though the engine's path/metadata caches (fscache.c) hold negative/positive entries for the paths.
 //! Unlike cpcmd (which reads back via a FRESH `docker exec`, whose new engine process has cold caches),
@@ -6,9 +6,9 @@
 //! the daemon's write must invalidate (DD_FSGEN_FILE / fsgen_bump). The fix lives in the SHARED syscall
 //! dispatch, so it must hold on BOTH engines: each recipe runs on the arch whose alpine the single-arch
 //! image store can serve (alpine:latest = arm64, alpine:3.18 = amd64). Verified GREEN on the Real docker
-//! oracle. Owner: dockercp-epoch agent (#374).
+//! oracle. Owner: dockercp-epoch agent.
 
-use crate::scenario::{scen, sgroup, Scenario, ScenGroup, Target};
+use crate::scenario::{scen, sgroup, ScenGroup, Scenario, Target};
 
 // cp a NEW file into a live container that is stat-polling for it in its ORIGINAL process: every
 // iteration re-caches the ENOENT, so without invalidation the file stays hidden forever. Content-exact
@@ -58,17 +58,67 @@ fn c(id: &'static str, img: &'static str, tgt: Target, body: &str) -> Scenario {
 
 pub fn group() -> ScenGroup {
     // Each recipe on BOTH engines: arm64 via alpine:latest, amd64 via alpine:3.18 (single-arch store).
-    sgroup("cpcoherence", vec![
-        c("cpcoherence/cp-new-file-live-poll", "alpine:latest", Target::ArmLinux, NEW_FILE).has("SEEN:hello-cp"),
-        c("cpcoherence/cp-new-file-live-poll.amd", "alpine:3.18", Target::AmdLinux, NEW_FILE).has("SEEN:hello-cp"),
-
-        c("cpcoherence/cp-overwrite-cached-positive", "alpine:latest", Target::ArmLinux, OVERWRITE).has("GREW:new-content"),
-        c("cpcoherence/cp-overwrite-cached-positive.amd", "alpine:3.18", Target::AmdLinux, OVERWRITE).has("GREW:new-content"),
-
-        c("cpcoherence/cp-dir-tree-live-poll", "alpine:latest", Target::ArmLinux, DIR_TREE).has("TREE:LEAF-CONTENT"),
-        c("cpcoherence/cp-dir-tree-live-poll.amd", "alpine:3.18", Target::AmdLinux, DIR_TREE).has("TREE:LEAF-CONTENT"),
-
-        c("cpcoherence/cp-into-held-open-dir", "alpine:latest", Target::ArmLinux, HELD_OPEN).has("HELD:held-content").has("LIST:probe"),
-        c("cpcoherence/cp-into-held-open-dir.amd", "alpine:3.18", Target::AmdLinux, HELD_OPEN).has("HELD:held-content").has("LIST:probe"),
-    ])
+    sgroup(
+        "cpcoherence",
+        vec![
+            c(
+                "cpcoherence/cp-new-file-live-poll",
+                "alpine:latest",
+                Target::ArmLinux,
+                NEW_FILE,
+            )
+            .has("SEEN:hello-cp"),
+            c(
+                "cpcoherence/cp-new-file-live-poll.amd",
+                "alpine:3.18",
+                Target::AmdLinux,
+                NEW_FILE,
+            )
+            .has("SEEN:hello-cp"),
+            c(
+                "cpcoherence/cp-overwrite-cached-positive",
+                "alpine:latest",
+                Target::ArmLinux,
+                OVERWRITE,
+            )
+            .has("GREW:new-content"),
+            c(
+                "cpcoherence/cp-overwrite-cached-positive.amd",
+                "alpine:3.18",
+                Target::AmdLinux,
+                OVERWRITE,
+            )
+            .has("GREW:new-content"),
+            c(
+                "cpcoherence/cp-dir-tree-live-poll",
+                "alpine:latest",
+                Target::ArmLinux,
+                DIR_TREE,
+            )
+            .has("TREE:LEAF-CONTENT"),
+            c(
+                "cpcoherence/cp-dir-tree-live-poll.amd",
+                "alpine:3.18",
+                Target::AmdLinux,
+                DIR_TREE,
+            )
+            .has("TREE:LEAF-CONTENT"),
+            c(
+                "cpcoherence/cp-into-held-open-dir",
+                "alpine:latest",
+                Target::ArmLinux,
+                HELD_OPEN,
+            )
+            .has("HELD:held-content")
+            .has("LIST:probe"),
+            c(
+                "cpcoherence/cp-into-held-open-dir.amd",
+                "alpine:3.18",
+                Target::AmdLinux,
+                HELD_OPEN,
+            )
+            .has("HELD:held-content")
+            .has("LIST:probe"),
+        ],
+    )
 }

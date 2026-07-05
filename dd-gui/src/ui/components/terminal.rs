@@ -13,7 +13,11 @@ pub(crate) type TermShells = Rc<RefCell<Vec<String>>>;
 
 /// The "＋" control: a menu of the shells actually DETECTED in the selected container (populated fresh
 /// each time it opens). Each opens an interactive `docker exec` tab.
-pub(crate) fn new_terminal_button(nb: &gtk::Notebook, target: TermTarget, shells: TermShells) -> gtk::Widget {
+pub(crate) fn new_terminal_button(
+    nb: &gtk::Notebook,
+    target: TermTarget,
+    shells: TermShells,
+) -> gtk::Widget {
     let menu = gtk::MenuButton::new();
     menu.set_icon_name("list-add-symbolic");
     menu.set_tooltip_text(Some("Open a shell in the selected container"));
@@ -27,7 +31,11 @@ pub(crate) fn new_terminal_button(nb: &gtk::Notebook, target: TermTarget, shells
         let pop_box = gtk::Box::new(gtk::Orientation::Vertical, 1);
         pop_box.set_size_request(160, -1);
         let detected = shells.borrow().clone();
-        let opts: Vec<String> = if detected.is_empty() { vec!["sh".to_string()] } else { detected };
+        let opts: Vec<String> = if detected.is_empty() {
+            vec!["sh".to_string()]
+        } else {
+            detected
+        };
         for shell in opts {
             let lbl = gtk::Label::new(Some(&shell));
             lbl.set_xalign(0.0);
@@ -68,7 +76,16 @@ pub(crate) fn open_terminal_tab(nb: &gtk::Notebook, id: &str, _name: &str, shell
     // terminfo (arrow keys, line editing, colors); without it `bash`/`zsh` arrows misbehave. (`sh`/dash
     // has no line-editing/history regardless — pick bash or zsh from the ＋ menu for history.)
     let shell_words: Vec<&str> = shell.split_whitespace().collect();
-    let mut argv: Vec<&str> = vec![&docker, "--host", &host, "exec", "-it", "-e", "TERM=xterm-256color", id];
+    let mut argv: Vec<&str> = vec![
+        &docker,
+        "--host",
+        &host,
+        "exec",
+        "-it",
+        "-e",
+        "TERM=xterm-256color",
+        id,
+    ];
     argv.extend(&shell_words);
 
     // Inherit the environment but guarantee a PATH that can find `docker` + the container tools.
@@ -94,7 +111,9 @@ pub(crate) fn open_terminal_tab(nb: &gtk::Notebook, id: &str, _name: &str, shell
         None::<&gtk::gio::Cancellable>,
         move |res| match res {
             Ok(pid) => pid_cb.set(pid.0 as i32),
-            Err(e) => term_cb.feed(format!("\r\n\x1b[31mfailed to start `{shell_owned}`: {e}\x1b[0m\r\n").as_bytes()),
+            Err(e) => term_cb.feed(
+                format!("\r\n\x1b[31mfailed to start `{shell_owned}`: {e}\x1b[0m\r\n").as_bytes(),
+            ),
         },
     );
 
@@ -126,7 +145,11 @@ pub(crate) fn open_terminal_tab(nb: &gtk::Notebook, id: &str, _name: &str, shell
     });
     term.add_controller(keys);
 
-    let scroll = gtk::ScrolledWindow::builder().child(&term).vexpand(true).hexpand(true).build();
+    let scroll = gtk::ScrolledWindow::builder()
+        .child(&term)
+        .vexpand(true)
+        .hexpand(true)
+        .build();
     let tab = closable_tab(nb, &scroll, &format!("{}: {}", short(id), shell), pid_cell);
     let page = nb.append_page(&scroll, Some(&tab));
     nb.set_tab_reorderable(&scroll, true);
@@ -135,7 +158,12 @@ pub(crate) fn open_terminal_tab(nb: &gtk::Notebook, id: &str, _name: &str, shell
 }
 
 /// A tab label with a title + a small close button that removes the page.
-fn closable_tab(nb: &gtk::Notebook, child: &impl IsA<gtk::Widget>, title: &str, pid: Rc<std::cell::Cell<i32>>) -> gtk::Widget {
+fn closable_tab(
+    nb: &gtk::Notebook,
+    child: &impl IsA<gtk::Widget>,
+    title: &str,
+    pid: Rc<std::cell::Cell<i32>>,
+) -> gtk::Widget {
     let row = gtk::Box::new(gtk::Orientation::Horizontal, 7);
     row.set_valign(gtk::Align::Center);
     let lbl = gtk::Label::new(Some(title));
@@ -153,8 +181,14 @@ fn closable_tab(nb: &gtk::Notebook, child: &impl IsA<gtk::Widget>, title: &str, 
         // then drop the tab — closing the tab must actually terminate the shell.
         let p = pid.get();
         if p > 0 {
-            let _ = std::process::Command::new("kill").arg("-KILL").arg(format!("-{p}")).status();
-            let _ = std::process::Command::new("kill").arg("-KILL").arg(p.to_string()).status();
+            let _ = std::process::Command::new("kill")
+                .arg("-KILL")
+                .arg(format!("-{p}"))
+                .status();
+            let _ = std::process::Command::new("kill")
+                .arg("-KILL")
+                .arg(p.to_string())
+                .status();
         }
         if let Some(pg) = nb.page_num(&child) {
             nb.remove_page(Some(pg));
@@ -196,7 +230,11 @@ fn daemon_host() -> String {
 
 /// Resolve the `docker` CLI (the bundle's PATH is minimal, so probe the usual spots).
 pub(crate) fn docker_bin() -> String {
-    for p in ["/usr/local/bin/docker", "/opt/homebrew/bin/docker", "/usr/bin/docker"] {
+    for p in [
+        "/usr/local/bin/docker",
+        "/opt/homebrew/bin/docker",
+        "/usr/bin/docker",
+    ] {
         if std::path::Path::new(p).exists() {
             return p.to_string();
         }

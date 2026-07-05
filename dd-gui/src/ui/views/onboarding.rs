@@ -1,13 +1,12 @@
 #![allow(unused_imports, dead_code)]
-use crate::{AppModel, Category, Msg, Selection};
 use crate::ui::components::*;
-use crate::ui::views::*;
 use crate::ui::theme::*;
+use crate::ui::views::*;
+use crate::{AppModel, Category, Msg, Selection};
 use ddclient::{Container, Image, Network, Volume};
 use gtk::prelude::*;
 use relm4::ComponentSender;
 use std::ffi::OsStr;
-
 
 /// The onboarding/splash view: a 2-column layout — branding + enable on the left, CLI install on
 /// the right.
@@ -44,7 +43,9 @@ pub(crate) fn build_onboarding(sender: &ComponentSender<AppModel>) -> (gtk::Widg
     let cli_head = gtk::Label::new(Some("Command-line tool"));
     cli_head.set_xalign(0.0);
     cli_head.add_css_class("dd-onboard-head");
-    let cli_desc = gtk::Label::new(Some("Install the dd command to manage containers from your terminal."));
+    let cli_desc = gtk::Label::new(Some(
+        "Install the dd command to manage containers from your terminal.",
+    ));
     cli_desc.set_xalign(0.0);
     cli_desc.set_wrap(true);
     cli_desc.add_css_class("dd-sub");

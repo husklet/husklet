@@ -1,6 +1,6 @@
 // dd/runtime/os/linux -- signal delivery (Linux<->macOS signal-number translation; sigframe build).
 
-// #238 ptrace signal-delivery/group stops. Defined later in the TU (os/linux/syscall/ptrace.c, pulled in
+// ptrace signal-delivery/group stops. Defined later in the TU (os/linux/syscall/ptrace.c, pulled in
 // via dispatch.c). ptrace_intercept_signal: this process is traced and a signal is about to be delivered
 // -> enter a signal/group ptrace-stop, report it to the tracer, block until CONT/SYSCALL, and (when the
 // tracer re-injects it) resume with the effective signal in *out_sig; returns 1 iff it consumed `sig`
@@ -17,12 +17,12 @@ static struct {
     uint64_t handler, flags, mask;
 } g_sigact[65];
 
-// ---------------- #423 INTERIM: Go async-preempt SIGURG suppression for iscgo aarch64 images ----------------
+// ---------------- INTERIM: Go async-preempt SIGURG suppression for iscgo aarch64 images ----------------
 // Go's scheduler asynchronously preempts a running goroutine by sending itself SIGURG (23) and running the
 // preemption in the signal handler. For an EXTERNALLY-LINKED / cgo (runtime.iscgo==1) aarch64 Go binary, dd's
 // path that delivers SIGURG into the guest (Go's cgoSigtramp) currently corrupts a stack return address: when
 // SIGURG preempts a thread mid-cgo / mid-stack-transition, the guest SP captured for the signal frame is wrong
-// and a callee frame overlaps a still-live frame (a FRAME/SP OVERLAP -- see #423). The complete fix is to
+// and a callee frame overlaps a still-live frame (a FRAME/SP OVERLAP -- see). The complete fix is to
 // capture the preempted guest SP correctly in build_signal_frame; until that lands, we suppress SIGURG
 // delivery for exactly this class. That is functionally identical to Go's own supported `GODEBUG=
 // asyncpreemptoff=1`: async (tight-loop) preemption is disabled, but COOPERATIVE preemption at safepoints
@@ -34,16 +34,21 @@ static struct {
 // aarch64 elf.c, and no x86 path sets it). Env override DD_SIGURG forces it: `drop`/`off` = always suppress,
 // `deliver`/`async`/`on` = always deliver (disable the mitigation); legacy DDDBG_DROPURG=1 = force suppress.
 int g_go_iscgo; // 1 iff the loaded aarch64 main image is a cgo (iscgo) Go binary; owned here, set by load_elf
+
 // Should SIGURG (Go async-preempt) delivery be dropped for this process? Env override wins; else auto on the
 // detected iscgo class. Env is parsed once (it never changes); g_go_iscgo is fixed before any signal fires.
 static int sigurg_drop_enabled(void) {
     static int cached = -2; // -2 uncomputed; -1 auto; 0 force-deliver; 1 force-drop
     if (cached == -2) {
         const char *e = getenv("DD_SIGURG");
-        if (e && (!strcmp(e, "deliver") || !strcmp(e, "async") || !strcmp(e, "on"))) cached = 0;
-        else if (e && (!strcmp(e, "drop") || !strcmp(e, "off"))) cached = 1;
-        else if (getenv("DDDBG_DROPURG")) cached = 1; // legacy repro/debug knob
-        else cached = -1; // auto
+        if (e && (!strcmp(e, "deliver") || !strcmp(e, "async") || !strcmp(e, "on")))
+            cached = 0;
+        else if (e && (!strcmp(e, "drop") || !strcmp(e, "off")))
+            cached = 1;
+        else if (getenv("DDDBG_DROPURG"))
+            cached = 1; // legacy repro/debug knob
+        else
+            cached = -1; // auto
     }
     if (cached >= 0) return cached;
     return g_go_iscgo ? 1 : 0;
@@ -75,8 +80,9 @@ static uint64_t g_sigaddr[65];
 
 static int sig_is_sync(int s) {
     return s == 4 || s == 5 || s == 7 || s == 8 || s == 11;
-// ILL TRAP BUS FPE SEGV (Linux nums)
+    // ILL TRAP BUS FPE SEGV (Linux nums)
 }
+
 // Does signal `sig`'s DEFAULT action terminate the process (Term or Core)? False for the signals whose
 // default action is ignore (CHLD/CONT/URG/WINCH) or stop (STOP/TSTP/TTIN/TTOU); true for every other
 // deliverable signal (HUP/INT/QUIT/TERM/USRn/PIPE/ALRM/SEGV/... and the realtime signals 32..64).
@@ -94,9 +100,10 @@ static int sig_default_terminates(int sig) {
     default: return sig >= 1 && sig <= 64;
     }
 }
+
 // Does signal `sig`'s DEFAULT action produce a core dump (Linux "Core" disposition)? Exactly the set LTP
 // waitpid01 expects: QUIT/ILL/TRAP/ABRT/BUS/FPE/SEGV/XCPU/XFSZ/SYS. Everything else that terminates does
-// so as plain "Term" (no core). Used to set WCOREDUMP faithfully on a guest signal death (#401/#403).
+// so as plain "Term" (no core). Used to set WCOREDUMP faithfully on a guest signal death.
 static int sig_coredumps(int sig) {
     switch (sig) {
     case 3:  // SIGQUIT
@@ -113,6 +120,7 @@ static int sig_coredumps(int sig) {
     default: return 0;
     }
 }
+
 // Current soft RLIMIT_CORE (resource 4), guest-visible: a docker --ulimit / the guest's own
 // setrlimit/prlimit64 store (g_ulimit, seeded in state.c) wins, else the dd default (unlimited). A core
 // dump only happens when a coredumping signal kills a process whose SOFT core limit is nonzero, so this is
@@ -122,7 +130,7 @@ static uint64_t svc_core_rlimit_cur(void) {
     return ~0ull; // RLIM_INFINITY
 }
 
-// ---------------- guest signal-death relay (#403) ----------------
+// ---------------- guest signal-death relay ----------------
 // Every guest process is a real host (macOS) process, so a guest parent reaps its children with the host
 // wait4/waitid and reads the host termination status. When a guest child must die from a fatal-default
 // signal, dd normally lets it die BY the mapped host signal, and the parent's wait4 translates the host
@@ -145,15 +153,17 @@ struct sigexit_ent {
     int signo;
     int core;
 };
+
 #define SIGEXIT_SLOTS 4096
 static struct sigexit_ent *g_sigexit;
 
 static void sigexit_init(void) {
     if (g_sigexit) return;
-    void *m = mmap(NULL, sizeof(struct sigexit_ent) * SIGEXIT_SLOTS, PROT_READ | PROT_WRITE,
-                   MAP_SHARED | MAP_ANON, -1, 0);
+    void *m =
+        mmap(NULL, sizeof(struct sigexit_ent) * SIGEXIT_SLOTS, PROT_READ | PROT_WRITE, MAP_SHARED | MAP_ANON, -1, 0);
     if (m != MAP_FAILED) g_sigexit = (struct sigexit_ent *)m;
 }
+
 // Dying child: publish (signo, core) for its own pid. Claim a free slot (0 -> -1), fill the payload, then
 // store the real pid LAST so a concurrent parent scan never sees a half-written entry. Best-effort: if the
 // table is full the child just _exit()s and the parent falls back to WIFEXITED(128+signo).
@@ -162,8 +172,7 @@ static void sigexit_record(int signo, int core) {
     int me = (int)getpid();
     for (int i = 0; i < SIGEXIT_SLOTS; i++) {
         int expect = 0;
-        if (__atomic_compare_exchange_n(&g_sigexit[i].pid, &expect, -1, 0, __ATOMIC_ACQ_REL,
-                                        __ATOMIC_RELAXED)) {
+        if (__atomic_compare_exchange_n(&g_sigexit[i].pid, &expect, -1, 0, __ATOMIC_ACQ_REL, __ATOMIC_RELAXED)) {
             g_sigexit[i].signo = signo;
             g_sigexit[i].core = core;
             __atomic_store_n(&g_sigexit[i].pid, me, __ATOMIC_RELEASE); // publish last
@@ -171,6 +180,7 @@ static void sigexit_record(int signo, int core) {
         }
     }
 }
+
 // Reaping parent: if `pid` recorded a guest signal death, set *signo/*core and return 1. `consume` clears
 // the slot (a real reap); pass 0 for a WNOWAIT peek so a later real reap can still find it.
 static int sigexit_lookup(int pid, int *signo, int *core, int consume) {
@@ -185,6 +195,7 @@ static int sigexit_lookup(int pid, int *signo, int *core, int consume) {
     }
     return 0;
 }
+
 // Signal numbers diverge: Linux SIGUSR1=10/CHLD=17/BUS=7/SYS=31/USR2=12/URG=23/IO=29/STOP=19/
 // CONT=18/TSTP=20 vs macOS 30/20/10/12/31/16/23/17/19/18. Translate at the host boundary.
 static int sig_l2m(int s) {
@@ -192,11 +203,13 @@ static int sig_l2m(int s) {
                                         16, 20, 19, 17, 18, 21, 22, 16, 24, 25, 26, 27, 28, 23, 30, 12};
     return (s >= 1 && s <= 31) ? T[s] : s;
 }
+
 static int sig_m2l(int s) {
     static const unsigned char T[32] = {0,  1,  2,  3,  4,  5,  6,  7,  8,  9,  7,  11, 31, 13, 14, 15,
                                         23, 19, 20, 18, 17, 21, 22, 29, 24, 25, 26, 27, 28, 29, 10, 12};
     return (s >= 1 && s <= 31) ? T[s] : s;
 }
+
 // sigsuspend/pause force-delivery mask (per-thread, bit = 1<<signo, same convention as g_pending). When
 // rt_sigsuspend is interrupted by a signal it awaited, POSIX runs that handler DURING the suspend and then
 // restores the pre-suspend mask on return -- so the handler must be delivered even when the restored mask
@@ -211,11 +224,12 @@ static int g_sigfd_pipe[2] = {-1, -1};
 static int g_sigfd_read = -1;
 // signals routed to the signalfd (1<<signo)
 static volatile uint64_t g_sigfd_mask;
-// Shared body: mark Linux signal `ls` pending, kick the running thread out of any in-cache loop (#292),
+
+// Shared body: mark Linux signal `ls` pending, kick the running thread out of any in-cache loop,
 // and wake a signalfd routed to it.
 static void host_sig_pend(int ls) {
     __atomic_or_fetch(&g_pending, 1ull << ls, __ATOMIC_SEQ_CST);
-    // #292: kick this thread out of any no-syscall in-cache loop so the caught signal is delivered at the
+    // kick this thread out of any no-syscall in-cache loop so the caught signal is delivered at the
     // next block boundary (the emitted body check polls cpu->irq). This runs on the thread the OS picked,
     // which for a process-directed signal to a busy single-threaded guest IS the spinner.
     // pthread_getspecific is a plain TLS read; the store is a single aligned word.
@@ -224,10 +238,14 @@ static void host_sig_pend(int ls) {
     if ((g_sigfd_mask & (1ull << ls)) && g_sigfd_pipe[1] >= 0) {
         char b = (char)ls;
         if (write(g_sigfd_pipe[1], &b, 1) < 0) {}
-    // wake signalfd/epoll
+        // wake signalfd/epoll
     }
 }
-static void host_sigh(int sig) { host_sig_pend(sig_m2l(sig)); } // host(macOS) signo -> Linux
+
+static void host_sigh(int sig) {
+    host_sig_pend(sig_m2l(sig));
+} // host(macOS) signo -> Linux
+
 // SA_SIGINFO host handler: same delivery as host_sigh, plus it captures the sender's pid/uid so an
 // SA_SIGINFO guest handler (or sigwaitinfo) sees si_pid/si_uid. macOS populates si_pid for a kill(2) but
 // does NOT set the Linux SI_USER si_code, so gate on si_pid>0 (a real sender) rather than the code.
@@ -240,6 +258,7 @@ static void host_sigh_si(int sig, siginfo_t *si, void *uc) {
     }
     host_sig_pend(ls);
 }
+
 // Host handler for the NON-guarded synchronous-fault signals (SIGILL/SIGTRAP/SIGFPE) when the guest
 // installs a handler for them. A REAL hardware fault for these never reaches a POSIX handler on this
 // platform -- arm64 delivers an illegal instruction via the Mach exception port (-> deliver_guest_fault)
@@ -260,7 +279,10 @@ static void host_sigh_sync(int sig, siginfo_t *si, void *uc) {
         raise(sig);
         return;
     }
-    if (si && si->si_pid > 0) { g_sigpid[ls] = (int)si->si_pid; g_siguid[ls] = (int)si->si_uid; }
+    if (si && si->si_pid > 0) {
+        g_sigpid[ls] = (int)si->si_pid;
+        g_siguid[ls] = (int)si->si_uid;
+    }
     host_sig_pend(ls);
 }
 
@@ -272,6 +294,7 @@ static void do_sigreturn(struct cpu *c);
 // in the code cache), and steer the host context back into the dispatcher so a guest handler can run.
 static int sigframe_capture_fault(struct cpu *c, void *ucv);
 static void sigframe_resume_dispatch(struct cpu *c, void *ucv);
+
 static void maybe_deliver_signal(struct cpu *c) {
     // Two sources: g_pending (process-directed -- any thread may take it) and c->tpending (thread-directed
     // via tkill/tgkill -- only THIS thread). Consider both; coalescing a process- and thread-directed
@@ -283,7 +306,7 @@ static void maybe_deliver_signal(struct cpu *c) {
         // was force-marked by rt_sigsuspend/pause (POSIX: the awaited handler runs during the suspend even
         // though the restored mask blocks it). g_force_deliver overrides the mask for exactly that one bit.
         if (!(p & bit)) continue;
-        // #423 INTERIM: suppress Go's async-preempt SIGURG (23) for a cgo aarch64 Go image (see the note at the
+        // INTERIM: suppress Go's async-preempt SIGURG (23) for a cgo aarch64 Go image (see the note at the
         // top of this file). Drop the pending instance from both queues so it is never delivered to the guest
         // handler; cooperative preemption keeps the program correct. Scoped to exactly the iscgo class + env.
         if (sig == 23 && sigurg_drop_enabled()) {
@@ -332,12 +355,13 @@ static void maybe_deliver_signal(struct cpu *c) {
         }
     }
 }
+
 // A signal aimed at our own process (raise/abort/pthread_kill). Deliver it through our
 // own machinery instead of a real host signal (host signals into a MAP_JIT thread are
 // fragile): a guest handler -> pending bit; otherwise apply the default action here.
 static void raise_guest_signal(struct cpu *c, int sig) {
     if (sig < 1 || sig > 64) return;
-    // #238: if this process is traced, a signal it raises on itself (raise/abort/kill-self, incl. the
+    // if this process is traced, a signal it raises on itself (raise/abort/kill-self, incl. the
     // raise(SIGSTOP) tracers' children use) becomes a ptrace signal/group-stop reported to the tracer.
     // The tracer then decides the effective signal to deliver (0 = suppress). Inert for an untraced
     // process (fast 0), which is the entire test matrix.
@@ -352,7 +376,7 @@ static void raise_guest_signal(struct cpu *c, int sig) {
     if (h > 1) {
         __atomic_or_fetch(&g_pending, 1ull << sig, __ATOMIC_SEQ_CST);
         return;
-    // custom handler
+        // custom handler
     }
     // SIG_IGN
     if (h == 1) return;
@@ -425,7 +449,7 @@ static void raise_guest_signal(struct cpu *c, int sig) {
 static int deliver_guest_fault_hint(struct cpu *cpu_hint, int hostsig, siginfo_t *si, void *ucv) {
     int sig = sig_m2l(hostsig);
     if (sig < 1 || sig > 64 || !ucv) return 0;
-    // #392: Linux reports a BAD-ADDRESS fault (unmapped page / PROT_NONE guard / a stack overflow into the
+    // Linux reports a BAD-ADDRESS fault (unmapped page / PROT_NONE guard / a stack overflow into the
     // guard gap) as SIGSEGV, but macOS raises a PROT_NONE access as host SIGBUS (-> Linux SIGBUS(7)). Rewrite
     // it to SIGSEGV(11) when the address is a tracked guard (gna_hit) or is unmapped, so a guest's own SIGSEGV
     // handler (glibc stack-overflow detection, a JIT/VM's guard-page trap) catches it. A genuine SIGBUS on
@@ -450,7 +474,10 @@ static int deliver_guest_fault_hint(struct cpu *cpu_hint, int hostsig, siginfo_t
         // builds the frame at the next dispatch (leave si_code/si_addr 0 == SI_USER, the kill siginfo).
         // Not in a syscall => (b), not ours: re-raise.
         if (g_in_service) {
-            if (si && si->si_pid > 0) { g_sigpid[sig] = (int)si->si_pid; g_siguid[sig] = (int)si->si_uid; }
+            if (si && si->si_pid > 0) {
+                g_sigpid[sig] = (int)si->si_pid;
+                g_siguid[sig] = (int)si->si_uid;
+            }
             __atomic_or_fetch(&g_pending, 1ull << sig, __ATOMIC_SEQ_CST);
             __atomic_store_n(&c->irq, 1, __ATOMIC_SEQ_CST);
             return 1;
@@ -466,12 +493,13 @@ static int deliver_guest_fault_hint(struct cpu *cpu_hint, int hostsig, siginfo_t
     sigframe_resume_dispatch(c, ucv);
     return 1;
 }
+
 // POSIX-guard entry: the faulting thread IS this thread, so its cpu is in TLS (cpu_hint == NULL).
 static int deliver_guest_fault(int hostsig, siginfo_t *si, void *ucv) {
     return deliver_guest_fault_hint(NULL, hostsig, si, ucv);
 }
 
-// #392: a GENUINE synchronous CPU fault (SIGSEGV/SIGBUS/...) taken in translated code for which the guest
+// a GENUINE synchronous CPU fault (SIGSEGV/SIGBUS/...) taken in translated code for which the guest
 // installed NO handler. Such a fault is fatal and cannot be masked or ignored (a stack overflow into the
 // guard gap, a wild pointer, a NULL deref). Terminate the guest process the SAME way dd terminates any
 // fatal-default signal, so the exit status crosses dd's fork faithfully: the container init ends with

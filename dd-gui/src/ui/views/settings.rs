@@ -1,13 +1,12 @@
 #![allow(unused_imports, dead_code)]
-use crate::{AppModel, Category, Msg, Selection};
 use crate::ui::components::*;
-use crate::ui::views::*;
 use crate::ui::theme::*;
+use crate::ui::views::*;
+use crate::{AppModel, Category, Msg, Selection};
 use ddclient::{Container, Image, Network, Volume};
 use gtk::prelude::*;
 use relm4::ComponentSender;
 use std::ffi::OsStr;
-
 
 /// The Settings page: version, locations, CLI install, and the reset (danger) action.
 pub(crate) fn render_settings(s: &gtk::Box, m: &AppModel, sender: &ComponentSender<AppModel>) {
@@ -53,7 +52,9 @@ pub(crate) fn render_settings(s: &gtk::Box, m: &AppModel, sender: &ComponentSend
     let rt = gtk::Label::new(Some("Reset dd"));
     rt.set_xalign(0.0);
     rt.add_css_class("heading");
-    let rd = gtk::Label::new(Some("Remove all containers, volumes and networks (images are kept)."));
+    let rd = gtk::Label::new(Some(
+        "Remove all containers, volumes and networks (images are kept).",
+    ));
     rd.set_xalign(0.0);
     rd.set_wrap(true);
     rd.add_css_class("dim-label");
@@ -77,7 +78,6 @@ pub(crate) fn render_settings(s: &gtk::Box, m: &AppModel, sender: &ComponentSend
     rcard.append(&rbtn);
     s.append(&rcard);
 }
-
 
 pub(crate) fn update_card(version: &str, sender: &ComponentSender<AppModel>) -> gtk::Widget {
     let t = gtk::Label::new(Some(&format!("Update available — v{version}")));

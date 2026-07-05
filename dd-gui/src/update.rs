@@ -35,7 +35,10 @@ struct Asset {
 /// The latest release if it's newer than `current` (e.g. `env!("CARGO_PKG_VERSION")`), else `None`.
 pub fn check(current: &str) -> Option<Release> {
     let url = format!("https://api.github.com/repos/{REPO}/releases/latest");
-    let out = Command::new("curl").args(["-fsSL", "-H", "User-Agent: dd-app", &url]).output().ok()?;
+    let out = Command::new("curl")
+        .args(["-fsSL", "-H", "User-Agent: dd-app", &url])
+        .output()
+        .ok()?;
     if !out.status.success() {
         return None;
     }
@@ -47,8 +50,16 @@ pub fn check(current: &str) -> Option<Release> {
     if !newer(&version, current) {
         return None;
     }
-    let dmg = gh.assets.into_iter().find(|a| a.name.ends_with(".dmg"))?.browser_download_url;
-    Some(Release { version, dmg, page: gh.html_url })
+    let dmg = gh
+        .assets
+        .into_iter()
+        .find(|a| a.name.ends_with(".dmg"))?
+        .browser_download_url;
+    Some(Release {
+        version,
+        dmg,
+        page: gh.html_url,
+    })
 }
 
 /// Download the release `.dmg`, replace `/Applications/dd.app`, clear quarantine and reopen.
@@ -59,10 +70,23 @@ pub fn install(rel: &Release) -> Result<(), String> {
     let mnt = tmp.join("mnt");
     std::fs::create_dir_all(&mnt).map_err(|e| e.to_string())?;
     sh("curl", &["-fsSL", "-o", &dmg.to_string_lossy(), &rel.dmg])?;
-    sh("hdiutil", &["attach", &dmg.to_string_lossy(), "-nobrowse", "-mountpoint", &mnt.to_string_lossy()])?;
+    sh(
+        "hdiutil",
+        &[
+            "attach",
+            &dmg.to_string_lossy(),
+            "-nobrowse",
+            "-mountpoint",
+            &mnt.to_string_lossy(),
+        ],
+    )?;
     let app = std::fs::read_dir(&mnt)
         .ok()
-        .and_then(|d| d.flatten().map(|e| e.path()).find(|p| p.extension().is_some_and(|x| x == "app")))
+        .and_then(|d| {
+            d.flatten()
+                .map(|e| e.path())
+                .find(|p| p.extension().is_some_and(|x| x == "app"))
+        })
         .ok_or("no .app inside the dmg")?;
     let dest = "/Applications/dd.app";
     let _ = std::fs::remove_dir_all(dest);
@@ -75,7 +99,11 @@ pub fn install(rel: &Release) -> Result<(), String> {
 }
 
 fn sh(cmd: &str, args: &[&str]) -> Result<(), String> {
-    let ok = Command::new(cmd).args(args).status().map_err(|e| e.to_string())?.success();
+    let ok = Command::new(cmd)
+        .args(args)
+        .status()
+        .map_err(|e| e.to_string())?
+        .success();
     ok.then_some(()).ok_or_else(|| format!("`{cmd}` failed"))
 }
 
@@ -84,6 +112,13 @@ fn newer(a: &str, b: &str) -> bool {
     ver(a) > ver(b)
 }
 fn ver(v: &str) -> (u64, u64, u64) {
-    let mut p = v.trim_start_matches('v').split(['.', '-', '+']).filter_map(|x| x.parse().ok());
-    (p.next().unwrap_or(0), p.next().unwrap_or(0), p.next().unwrap_or(0))
+    let mut p = v
+        .trim_start_matches('v')
+        .split(['.', '-', '+'])
+        .filter_map(|x| x.parse().ok());
+    (
+        p.next().unwrap_or(0),
+        p.next().unwrap_or(0),
+        p.next().unwrap_or(0),
+    )
 }
