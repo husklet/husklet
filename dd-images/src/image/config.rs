@@ -90,10 +90,7 @@ pub fn repo_tag(name: &str) -> String {
 /// counts: `ubuntu:24.04` -> `24.04`, `ubuntu` -> `latest`, `localhost:5000/foo` -> `latest`. Lets `rmi`
 /// (and `push`) tell `ubuntu:24.04` apart from `ubuntu` (`:latest`) so an untag is tag-precise.
 pub fn ref_tag(name: &str) -> String {
-    match name.rsplit_once(':') {
-        Some((_, t)) if !t.contains('/') => t.to_string(),
-        _ => "latest".to_string(),
-    }
+    crate::registry::split_tag(name).1
 }
 
 /// The bare repository name of a docker image reference, ignoring registry, namespace and tag/digest:

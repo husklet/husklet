@@ -21,6 +21,7 @@ pub use client::Client;
 pub use credentials::Credentials;
 pub use events::{layer_short, PullEvent, Pulled};
 pub use reference::ImageRef;
+pub(crate) use reference::split_tag;
 
 // Internal flat namespace: re-glob every submodule so a submodule's `use super::*` resolves the whole
 // registry module's private surface (free fns, structs and consts defined across the sibling files).
