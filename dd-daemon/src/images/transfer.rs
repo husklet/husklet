@@ -171,11 +171,7 @@ pub(crate) struct SaveQ {
 pub(crate) async fn image_save(State(a): State<App>, Query(q): Query<SaveQ>) -> Response {
     let names = q.names.unwrap_or_default();
     if names.is_empty() {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(json!({"message": "names is required"})),
-        )
-            .into_response();
+        return bad_request("names is required");
     }
     let img = {
         let g = a.inner.lock().await;
@@ -185,11 +181,7 @@ pub(crate) async fn image_save(State(a): State<App>, Query(q): Query<SaveQ>) -> 
             .cloned()
     };
     let Some(img) = img else {
-        return (
-            StatusCode::NOT_FOUND,
-            Json(json!({"message": format!("No such image: {names}")})),
-        )
-            .into_response();
+        return no_such_image(&names);
     };
     // The `macos` image is the live host filesystem (rootfs ~ `/`); taring it would be catastrophic.
     if img.name == "macos" {

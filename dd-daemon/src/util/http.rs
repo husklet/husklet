@@ -20,6 +20,51 @@ pub(crate) fn no_such(id: &str) -> Response {
         .into_response()
 }
 
+/// 404 for a missing image (`docker` clients expect this exact wording).
+pub(crate) fn no_such_image(name: &str) -> Response {
+    (
+        StatusCode::NOT_FOUND,
+        Json(json!({"message": format!("No such image: {name}")})),
+    )
+        .into_response()
+}
+
+/// 404 for a missing volume.
+pub(crate) fn no_such_volume(name: &str) -> Response {
+    (
+        StatusCode::NOT_FOUND,
+        Json(json!({"message": format!("no such volume: {name}")})),
+    )
+        .into_response()
+}
+
+/// 404 for a missing network.
+pub(crate) fn no_such_network(name: &str) -> Response {
+    (
+        StatusCode::NOT_FOUND,
+        Json(json!({"message": format!("no such network: {name}")})),
+    )
+        .into_response()
+}
+
+/// 409 Conflict with a Docker-shaped `{"message": …}` body.
+pub(crate) fn conflict(msg: impl Into<String>) -> Response {
+    (
+        StatusCode::CONFLICT,
+        Json(json!({"message": msg.into()})),
+    )
+        .into_response()
+}
+
+/// 400 Bad Request with a Docker-shaped `{"message": …}` body.
+pub(crate) fn bad_request(msg: impl Into<String>) -> Response {
+    (
+        StatusCode::BAD_REQUEST,
+        Json(json!({"message": msg.into()})),
+    )
+        .into_response()
+}
+
 /// Standard base64 (no line breaks).
 pub(crate) fn base64_std(data: &[u8]) -> String {
     const A: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";

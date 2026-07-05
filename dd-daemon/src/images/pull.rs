@@ -68,11 +68,7 @@ pub(crate) async fn images_create(
         .filter(|t| !t.is_empty())
         .unwrap_or_else(|| "latest".into());
     if name.is_empty() {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(json!({"message": "fromImage is required"})),
-        )
-            .into_response();
+        return bad_request("fromImage is required");
     }
     // "already local" must match the FULL reference (registry/repo:tag) AND the requested --platform arch:
     // distinct images can share a short name across registries, and arm64/amd64 of one image are distinct.

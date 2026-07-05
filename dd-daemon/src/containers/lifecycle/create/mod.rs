@@ -51,13 +51,7 @@ pub(crate) async fn containers_create(
         .collect();
     let img = match find_image(&candidates, &image).cloned() {
         Some(i) => i,
-        None => {
-            return (
-                StatusCode::NOT_FOUND,
-                Json(json!({"message": format!("No such image: {image}")})),
-            )
-                .into_response()
-        }
+        None => return no_such_image(&image),
     };
     // Final argv = entrypoint ++ cmd (docker semantics). The entrypoint is the user's --entrypoint or the
     // IMAGE's ENTRYPOINT; a user --entrypoint resets CMD, but the image's own ENTRYPOINT still keeps the
@@ -101,9 +95,11 @@ pub(crate) async fn containers_create(
         .to_string();
     if !want_name.is_empty() {
         if let Some(existing) = g.containers.values().find(|c| c.name == want_name) {
-            return (StatusCode::CONFLICT, Json(json!({"message": format!(
+            return conflict(format!(
                 "Conflict. The container name \"/{want_name}\" is already in use by container \"{}\". \
-                 You have to remove (or rename) that container to be able to reuse that name.", existing.id)}))).into_response();
+                 You have to remove (or rename) that container to be able to reuse that name.",
+                existing.id
+            ));
         }
     }
     let id = new_id(&image);

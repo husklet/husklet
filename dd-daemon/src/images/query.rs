@@ -65,11 +65,7 @@ pub(crate) async fn image_history(State(a): State<App>, Path(name): Path<String>
             comment: "",
         }])
         .into_response(),
-        None => (
-            StatusCode::NOT_FOUND,
-            Json(json!({"message": format!("No such image: {name}")})),
-        )
-            .into_response(),
+        None => no_such_image(&name),
     }
 }
 
@@ -168,10 +164,6 @@ pub(crate) async fn image_inspect(State(a): State<App>, Path(name): Path<String>
             })
             .into_response()
         }
-        None => (
-            StatusCode::NOT_FOUND,
-            Json(json!({"message": format!("No such image: {name}")})),
-        )
-            .into_response(),
+        None => no_such_image(&name),
     }
 }
