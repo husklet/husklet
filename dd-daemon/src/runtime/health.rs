@@ -1,6 +1,6 @@
 #![allow(unused_imports, dead_code)]
 use super::*;
-use super::spawn::spawn_cfg;
+use super::spawn::spawn_container;
 
 /// Run ONE health probe: spawn the container's HEALTHCHECK test command as a fresh JIT process that JOINS
 /// the container's loopback (so `curl localhost`/`pg_isready -h localhost` reach the container's server),
@@ -33,39 +33,27 @@ async fn run_health_probe(
     temp.cmd = argv;
     temp.tty = false;
     temp.healthcheck = None; // the probe process is not itself health-checked
-    let Some((prog, args)) = spawn_cfg(&temp, &app.volumes_dir, vols, None) else {
+    // Build the probe's container spec, then run it to completion via the typed one-shot capture. dd-jit
+    // owns the spawn (piped stdio, combined stdout+stderr, reap); a timeout SIGKILLs it and yields (-1, …).
+    let Some(container) = spawn_container(&temp, &app.volumes_dir, vols, None) else {
         return (-1, String::new());
     };
-    let mut cmd = tokio::process::Command::new(prog);
-    cmd.args(args)
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
+    let rt = match JitRuntime::new() {
+        Ok(r) => r.cache_dir(crate::util::dd_home().join("pcache").to_string_lossy().into_owned()),
+        Err(e) => return (-1, format!("probe runtime: {e}")),
+    };
     let timeout_ns = if hcfg.timeout > 0 {
         hcfg.timeout
     } else {
         30_000_000_000
     };
-    let child = match cmd.spawn() {
-        Ok(c) => c,
-        Err(e) => return (-1, format!("probe spawn: {e}")),
-    };
-    match tokio::time::timeout(
-        std::time::Duration::from_nanos(timeout_ns as u64),
-        child.wait_with_output(),
-    )
-    .await
-    {
-        Ok(Ok(out)) => {
-            let mut s = String::from_utf8_lossy(&out.stdout).into_owned();
-            s.push_str(&String::from_utf8_lossy(&out.stderr));
-            (
-                out.status.code().unwrap_or(-1) as i64,
-                s.chars().take(4096).collect(),
-            )
+    let timeout = std::time::Duration::from_nanos(timeout_ns as u64);
+    match rt.output(&container, Some(timeout)).await {
+        Ok((code, bytes)) => {
+            let s: String = String::from_utf8_lossy(&bytes).chars().take(4096).collect();
+            (code, s)
         }
-        Ok(Err(e)) => (-1, format!("probe: {e}")),
-        Err(_) => (-1, "Health check exceeded timeout".into()),
+        Err(e) => (-1, format!("probe: {e}")),
     }
 }
 

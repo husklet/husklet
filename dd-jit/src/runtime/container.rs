@@ -89,13 +89,6 @@ impl Container {
         ContainerBuilder { cfg, guest: image.guest }
     }
 
-    /// The (program, args) that launch this container in its guest's engine — the same contract
-    /// [`Runtime::run`](super::Runtime::run) uses, exposed for callers that drive their own process spawn
-    /// (custom stdio, a pseudo-terminal, async supervision). `None` if no engine was built for the guest.
-    pub fn command(&self) -> Option<(String, Vec<String>)> {
-        self.cfg.command(self.guest)
-    }
-
     /// The guest personality this container runs as.
     pub fn guest(&self) -> Guest {
         self.guest

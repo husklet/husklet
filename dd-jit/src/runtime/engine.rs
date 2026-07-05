@@ -123,6 +123,58 @@ impl Runtime {
         };
         Ok(Launched { pid, pty_master, io_handles })
     }
+
+    /// Run the container to completion and return `(exit_code, combined_output)` — the one-shot capture a
+    /// build `RUN` step or a HEALTHCHECK probe needs (no live fan-out, no daemon bookkeeping). Reuses the
+    /// piped-spawn machinery: stdout+stderr are pumped into a private ordered buffer (so the combined
+    /// bytes come back in chronological chunk order), the pid is reaped for its exit code, and stdin is
+    /// closed immediately (EOF). With `timeout = Some(dur)`, exceeding it SIGKILLs the guest's process
+    /// group and returns `(-1, partial_output)` — the timed-out-probe contract the caller treats as
+    /// unhealthy. A missing engine for the guest is `Err(Error::NoBackend)`.
+    pub async fn output(
+        &self,
+        c: &Container,
+        timeout: Option<std::time::Duration>,
+    ) -> Result<(i64, Vec<u8>), Error> {
+        let c = self.with_defaults(c);
+        if !dd_jit_darwin::available(c.guest()) {
+            return Err(Error::NoBackend(c.guest()));
+        }
+        let guest = c.guest();
+        let lc = c.launch_config();
+        // A private capture sink: the pumps append every stdout/stderr chunk here (in order). No live
+        // broadcast receiver and no stdin — drop the stdin sender so the guest sees EOF at once.
+        let (out, _) = broadcast::channel::<(u8, Vec<u8>)>(1024);
+        let log_chunks: Arc<tokio::sync::Mutex<Vec<LogChunk>>> = Arc::new(tokio::sync::Mutex::new(Vec::new()));
+        let (_, stdin_rx) = mpsc::channel::<Vec<u8>>(1);
+        let (pid, _pty, io_handles) = spawn_piped(guest, &lc, out, log_chunks.clone(), stdin_rx)?;
+
+        // Reap the guest for its exit code, bounding the wait when a timeout is set. On elapse: SIGKILL
+        // the process group, reap the corpse (no zombie), and report the timed-out sentinel (-1).
+        let reaped = reap(pid);
+        tokio::pin!(reaped);
+        let code = match timeout {
+            Some(dur) => match tokio::time::timeout(dur, &mut reaped).await {
+                Ok(code) => code,
+                Err(_) => {
+                    // Safety: killpg on our own child's pgid; a stale pgid returns ESRCH (already gone).
+                    unsafe { libc::killpg(pid as i32, libc::SIGKILL) };
+                    let _ = (&mut reaped).await; // reap the corpse; its signalled code is discarded for -1
+                    -1
+                }
+            },
+            None => reaped.await,
+        };
+        // Drain the pumps (bounded) so the last chunks land in the buffer, then concatenate in order.
+        for h in io_handles {
+            let _ = tokio::time::timeout(std::time::Duration::from_millis(500), h).await;
+        }
+        let mut bytes = Vec::new();
+        for (_, _, b) in log_chunks.lock().await.iter() {
+            bytes.extend_from_slice(b);
+        }
+        Ok((code, bytes))
+    }
 }
 
 impl RunningContainer {
