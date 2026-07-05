@@ -326,6 +326,7 @@ static const char *load_program(const char *prog, struct loaded *lm, struct load
 // behavior is byte-identical.
 static int run_loaded(int argc, char *const argv[], struct loaded *lm, uint64_t jump, uint64_t at_base) {
     uint8_t *heap = mmap(NULL, 256u << 20, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON, -1, 0);
+    gmap_add((uint64_t)heap, 256u << 20); // track so execve() reclaims the heap + /proc/self/maps sees it (parity w/ aarch64)
     brk_lo = brk_cur = (uint64_t)heap;
     brk_hi = brk_lo + (256u << 20);
 
