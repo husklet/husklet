@@ -27,14 +27,20 @@ pub(crate) async fn exec_create(
     let Some(full) = resolve_cid(&g, &id) else {
         return no_such(&id);
     };
-    // `docker exec` into a non-running container is a 409 (docker rejects exec unless the container is
-    // up). Match docker's message exactly so the CLI surfaces it verbatim.
-    let running = g
+    // `docker exec` requires a running container. Docker distinguishes two 409s: a PAUSED container gets
+    // "is paused, unpause the container before exec"; anything else not-running gets "is not running".
+    // Match docker's messages so the CLI surfaces them verbatim.
+    let status = g
         .containers
         .get(&full)
-        .map(|c| c.status == "running" || c.status == "paused")
-        .unwrap_or(false);
-    if !running {
+        .map(|c| c.status.clone())
+        .unwrap_or_default();
+    if status == "paused" {
+        return conflict(format!(
+            "Container {full} is paused, unpause the container before exec"
+        ));
+    }
+    if status != "running" {
         return conflict(format!("Container {full} is not running"));
     }
     let cmd = body.cmd.unwrap_or_default();
