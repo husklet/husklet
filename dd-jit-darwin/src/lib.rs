@@ -71,9 +71,8 @@ impl Guest {
 
     /// Absolute path to the JIT binary, or `None` if it can't be located.
     ///
-    /// Resolution order: a runtime `$DDJIT_DIR/ddjit-<target>` (used by the packaged `.app`, whose
-    /// LaunchAgent points `DDJIT_DIR` at `Contents/Resources`), then the path `build.rs` baked in at
-    /// compile time (the dev/`cargo` layout). Returns `None` if neither exists.
+    /// Resolution order (see [`resolve_bundled`]): `$DDJIT_DIR/ddjit-<target>`, then beside the running
+    /// executable, then the `build.rs`-baked compile-time path (dev/`cargo` layout). `None` if none exist.
     pub fn jit_path(self) -> Option<String> {
         resolve_bundled(
             &format!("ddjit-{}", self.target()),
@@ -92,14 +91,14 @@ impl Guest {
     }
 }
 
-/// Resolve a shipped artifact (a `ddjit-<target>` engine or `darwinjail.dylib`) from where the app
-/// actually puts it, falling back to the dev build path. Order:
-///   1. `$DDJIT_DIR` (set by the GUI + the daemon LaunchAgent),
-///   2. the directory of the running executable — the `.app` `Resources/`, where `ddcli`/`dd-daemon`
-///      sit beside the engines + dylib, so a terminal `ddcli` works with no env set,
-///   3. the installed bundle `/Applications/dd.app/Contents/Resources`,
-///   4. the `build.rs`-baked compile-time path (cargo/dev layout).
-/// Critically, every candidate is existence-checked — so a stale baked CI path is never returned.
+/// Resolve a shipped artifact (a `ddjit-<target>` engine or `darwinjail.dylib`) at runtime. The backend
+/// knows nothing about any particular deployment (GUI app, LaunchAgent, install location) — an embedder
+/// that relocates the engines just points `$DDJIT_DIR` at them. Resolution order:
+///   1. `$DDJIT_DIR/<name>` — an explicit override for a relocated/bundled layout,
+///   2. `<dir of the running executable>/<name>` — engines sitting beside the host binary (the common
+///      packaged layout), so a plain run works with no env set,
+///   3. the `build.rs`-baked compile-time path (cargo/dev layout).
+/// Every candidate is existence-checked, so a stale baked CI path is never returned.
 fn resolve_bundled(name: &str, baked: &str) -> Option<String> {
     let mut dirs: Vec<std::path::PathBuf> = Vec::new();
     if let Ok(d) = std::env::var("DDJIT_DIR") {
@@ -110,9 +109,6 @@ fn resolve_bundled(name: &str, baked: &str) -> Option<String> {
             dirs.push(d.to_path_buf());
         }
     }
-    dirs.push(std::path::PathBuf::from(
-        "/Applications/dd.app/Contents/Resources",
-    ));
     for d in dirs {
         let cand = d.join(name);
         if cand.exists() {
