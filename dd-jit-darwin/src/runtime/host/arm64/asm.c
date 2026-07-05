@@ -70,11 +70,6 @@ static void e_addlsl3(int d, int n, int m) {
     // add xd,xn,xm,lsl #3
 }
 
-// and xd,xn,#0x3FF
-static void e_and1023(int d, int n) {
-    emit32(0x92400000u | (9 << 10) | (n << 5) | d);
-}
-
 // mov xd,xm
 static void e_movr(int d, int m) {
     emit32(0xAA0003E0u | (m << 16) | d);
@@ -119,16 +114,6 @@ static void e_stur(int rt, int rn, int imm9) {
 
 static void e_ldur(int rt, int rn, int imm9) {
     emit32(0xF8400000u | (((unsigned)imm9 & 0x1FF) << 12) | (rn << 5) | rt);
-}
-
-static void e_str_q(int t, int rn, int off) {
-    emit32(0x3D800000u | (((unsigned)off / 16) << 10) | (rn << 5) | t);
-    // str q,[xn,#off]
-}
-
-static void e_ldr_q(int t, int rn, int off) {
-    emit32(0x3DC00000u | (((unsigned)off / 16) << 10) | (rn << 5) | t);
-    // ldr q,[xn,#off]
 }
 
 static void e_stp_q(int t1, int t2, int rn, int off) {
