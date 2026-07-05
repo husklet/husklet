@@ -29,6 +29,7 @@ mod http;
 mod images;
 mod model;
 mod networks;
+mod prelude;
 mod routes;
 mod runtime;
 mod system;
