@@ -7,6 +7,7 @@
 //! registry namespace, and Rust lets the `impl Client` blocks span the files transparently.
 
 use super::*;
+use crate::Error;
 use serde_json::Value;
 
 mod auth;
@@ -39,7 +40,7 @@ impl Client {
     /// resolving the platform variant but WITHOUT downloading or unpacking any layers. Used to refresh a
     /// locally-cached image's config on a re-pull of an already-present tag, so a subsequent
     /// `docker run` picks up the correct Entrypoint/Cmd even when the layers are already on disk.
-    pub fn fetch_config(&mut self, want_archs: &[&str]) -> Result<Value, String> {
+    pub fn fetch_config(&mut self, want_archs: &[&str]) -> Result<Value, Error> {
         let manifest = self.resolve_manifest(want_archs)?;
         self.config_blob(&manifest)
     }

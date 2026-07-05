@@ -3,19 +3,21 @@
 //! `pub(super)`); `authed_get` and the `token_from_challenge*` pair are internal to this file.
 
 use super::*;
+use crate::Error;
 use serde_json::Value;
 
 impl Client {
     // ---- authenticated GET with the bearer-challenge dance ----
 
-    pub(super) fn get_json(&mut self, path: &str, accept: Option<&str>) -> Result<Value, String> {
+    pub(super) fn get_json(&mut self, path: &str, accept: Option<&str>) -> Result<Value, Error> {
         let bytes = self.authed_get(path, accept)?;
-        serde_json::from_slice(&bytes).map_err(|e| format!("bad JSON from {path}: {e}"))
+        serde_json::from_slice(&bytes)
+            .map_err(|e| Error::Manifest(format!("bad JSON from {path}: {e}")))
     }
-    pub(super) fn get_blob_bytes(&mut self, digest: &str) -> Result<Vec<u8>, String> {
+    pub(super) fn get_blob_bytes(&mut self, digest: &str) -> Result<Vec<u8>, Error> {
         self.authed_get(&format!("/blobs/{digest}"), None)
     }
-    fn authed_get(&mut self, path: &str, accept: Option<&str>) -> Result<Vec<u8>, String> {
+    fn authed_get(&mut self, path: &str, accept: Option<&str>) -> Result<Vec<u8>, Error> {
         let url = format!("{}{path}", self.image.base_url());
         let first = http::get(&url, accept, self.token.as_deref())?;
         if first.status == 200 {
@@ -28,12 +30,15 @@ impl Client {
             if retry.status == 200 {
                 return Ok(retry.body);
             }
-            return Err(format!("GET {url} -> {} after auth", retry.status));
+            return Err(Error::Registry(format!(
+                "GET {url} -> {} after auth",
+                retry.status
+            )));
         }
-        Err(format!("GET {url} -> {}", first.status))
+        Err(Error::Registry(format!("GET {url} -> {}", first.status)))
     }
     /// Ensure we hold a token for `scope`; returns it (None for anonymous registries that 401-less).
-    pub(super) fn authenticate(&mut self, scope_action: &str) -> Result<Option<String>, String> {
+    pub(super) fn authenticate(&mut self, scope_action: &str) -> Result<Option<String>, Error> {
         if self.token.is_some() {
             return Ok(self.token.clone());
         }
@@ -51,15 +56,16 @@ impl Client {
         self.token = Some(token.clone());
         Ok(Some(token))
     }
-    fn token_from_challenge(&self, headers: &str) -> Result<String, String> {
+    fn token_from_challenge(&self, headers: &str) -> Result<String, Error> {
         self.token_from_challenge_scoped(headers, None)
     }
     fn token_from_challenge_scoped(
         &self,
         headers: &str,
         scope: Option<&str>,
-    ) -> Result<String, String> {
-        let ch = BearerChallenge::parse(headers).ok_or("registry gave no Bearer challenge")?;
+    ) -> Result<String, Error> {
+        let ch = BearerChallenge::parse(headers)
+            .ok_or_else(|| Error::Registry("registry gave no Bearer challenge".to_string()))?;
         let scope = scope.unwrap_or(&ch.scope);
         let url = format!("{}?service={}&scope={}", ch.realm, ch.service, scope);
         let creds = if self.creds.is_empty() {
@@ -75,15 +81,16 @@ impl Client {
             // the blob-upload POST (see upload_blob), so callers get one stable error either way.
             let action = scope.rsplit(':').next().unwrap_or("");
             if action.contains("push") && (resp.status == 401 || resp.status == 403) {
-                return Err(DENIED.into());
+                return Err(Error::Registry(DENIED.to_string()));
             }
-            return Err(format!("token endpoint -> {}", resp.status));
+            return Err(Error::Registry(format!("token endpoint -> {}", resp.status)));
         }
-        let v: Value = serde_json::from_slice(&resp.body).map_err(|e| e.to_string())?;
+        let v: Value =
+            serde_json::from_slice(&resp.body).map_err(|e| Error::Registry(e.to_string()))?;
         v["token"]
             .as_str()
             .or_else(|| v["access_token"].as_str())
             .map(str::to_string)
-            .ok_or_else(|| "token response had no token".to_string())
+            .ok_or_else(|| Error::Registry("token response had no token".to_string()))
     }
 }

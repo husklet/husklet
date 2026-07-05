@@ -44,13 +44,15 @@ pub(crate) async fn image_push(
     let size = image_size(&img.rootfs, &img.name);
     let work = std::path::PathBuf::from(format!("{}/.push-{}", a.images_dir, std::process::id()));
     let res = tokio::task::spawn_blocking(move || {
-        Client::new(iref, creds).push(
-            std::path::Path::new(&img.rootfs),
-            &img.cmd,
-            &arch,
-            &os,
-            &work,
-        )
+        Client::new(iref, creds)
+            .push(
+                std::path::Path::new(&img.rootfs),
+                &img.cmd,
+                &arch,
+                &os,
+                &work,
+            )
+            .map_err(|e| e.to_string())
     })
     .await
     .unwrap_or_else(|e| Err(format!("push task crashed: {e}")));

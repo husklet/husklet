@@ -3,6 +3,7 @@
 //! `auth`.
 
 use super::*;
+use crate::Error;
 use serde_json::json;
 use std::path::Path;
 
@@ -16,7 +17,7 @@ impl Client {
         arch: &str,
         os: &str,
         work: &Path,
-    ) -> Result<String, String> {
+    ) -> Result<String, Error> {
         reset_dir(work)?;
         let layer = work.join("layer.tar.gz");
         let (layer_digest, layer_size) = tar_gzip(rootfs, &layer)?; // compressed digest = blob id
@@ -28,8 +29,8 @@ impl Client {
             "rootfs": { "type": "layers", "diff_ids": [diff_id] },
         });
         let config_path = work.join("config.json");
-        let config_bytes = serde_json::to_vec(&config).map_err(|e| e.to_string())?;
-        std::fs::write(&config_path, &config_bytes).map_err(|e| e.to_string())?;
+        let config_bytes = serde_json::to_vec(&config).map_err(|e| Error::Manifest(e.to_string()))?;
+        std::fs::write(&config_path, &config_bytes).map_err(|e| Error::Archive(e.to_string()))?;
         let config_digest = crate::image::digest::sha256_file(&config_path)?;
 
         self.authenticate("push,pull")?;
@@ -46,7 +47,7 @@ impl Client {
 
     // ---- push primitives ----
 
-    fn upload_blob(&self, digest: &str, file: &Path) -> Result<(), String> {
+    fn upload_blob(&self, digest: &str, file: &Path) -> Result<(), Error> {
         let base = self.image.base_url();
         // already present?
         if http::head(&format!("{base}/blobs/{digest}"), self.token.as_deref())? == 200 {
@@ -55,12 +56,16 @@ impl Client {
         // start an upload session -> Location, then monolithic PUT with ?digest=
         let start = http::post(&format!("{base}/blobs/uploads/"), self.token.as_deref())?;
         if start.status == 401 || start.status == 403 {
-            return Err(DENIED.into());
+            return Err(Error::Registry(DENIED.to_string()));
         }
         if start.status != 202 {
-            return Err(format!("blob upload not accepted ({})", start.status));
+            return Err(Error::Registry(format!(
+                "blob upload not accepted ({})",
+                start.status
+            )));
         }
-        let location = header(&start.headers, "location").ok_or("upload returned no Location")?;
+        let location = header(&start.headers, "location")
+            .ok_or_else(|| Error::Registry("upload returned no Location".to_string()))?;
         let sep = if location.contains('?') { '&' } else { '?' };
         let put = format!("{}{sep}digest={digest}", absolute(&location, &base));
         let r = http::put_file(
@@ -72,20 +77,20 @@ impl Client {
         if r.status == 201 || r.status == 202 {
             Ok(())
         } else {
-            Err(format!("blob PUT -> {}", r.status))
+            Err(Error::Registry(format!("blob PUT -> {}", r.status)))
         }
     }
-    fn put_manifest(&self, body: &[u8]) -> Result<String, String> {
+    fn put_manifest(&self, body: &[u8]) -> Result<String, Error> {
         let url = format!("{}/manifests/{}", self.image.base_url(), self.image.tag);
         let r = http::put_bytes(&url, body, MEDIA_MANIFEST, self.token.as_deref())?;
         if r.status == 201 {
             Ok(header(&r.headers, "docker-content-digest").unwrap_or_default())
         } else {
-            Err(format!(
+            Err(Error::Registry(format!(
                 "manifest PUT -> {} {}",
                 r.status,
                 String::from_utf8_lossy(&r.body)
-            ))
+            )))
         }
     }
 }
