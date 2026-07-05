@@ -395,7 +395,16 @@ static void run_guest(void) {
     }
 }
 
+// The darwinjail entry point. Named `ddjit_entry` so the runtime can be linked as a library and launched
+// by an in-process fork()+call; the thin `main` shim below keeps the standalone binary (used by the test
+// harness) launching identically. The static-lib build defines DDJIT_NO_MAIN to drop the shim.
+int ddjit_entry(int argc, char **argv);
+#ifndef DDJIT_NO_MAIN
 int main(int argc, char **argv) {
+    return ddjit_entry(argc, argv);
+}
+#endif
+int ddjit_entry(int argc, char **argv) {
     int ai = 1;
     for (; ai < argc && argv[ai][0] == '-'; ai++) { // flags (mirrors jit.c's CLI)
         if (!strcmp(argv[ai], "--rootfs") && ai + 1 < argc)
