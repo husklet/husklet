@@ -14,7 +14,7 @@ use crate::model::App;
 use axum::body::Body;
 use axum::extract::{Query, State};
 use axum::http::StatusCode;
-use axum::response::{IntoResponse, Response};
+use axum::response::Response;
 use futures_util::stream;
 use serde::Deserialize;
 use serde_json::Value;

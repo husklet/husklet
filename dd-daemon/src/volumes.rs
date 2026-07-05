@@ -188,7 +188,7 @@ pub(crate) async fn volume_delete(State(a): State<App>, Path(name): Path<String>
 
 /// `POST /volumes/prune` — `docker volume prune`. Removes volumes not referenced by any container's
 /// binds and reports reclaimed names. (No space accounting yet.)
-pub(crate) async fn volumes_prune(State(a): State<App>) -> Json<Value> {
+pub(crate) async fn volumes_prune(State(a): State<App>) -> Json<crate::api::VolumesPruneReport> {
     let mut g = a.inner.lock().await;
     // Prune every volume no container references — scanning BOTH `-v`/Binds AND `--mount`/anon volumes
     // (via `volume_in_use`), so an in-use `--mount type=volume` volume is no longer wrongly reclaimed.
@@ -203,5 +203,8 @@ pub(crate) async fn volumes_prune(State(a): State<App>) -> Json<Value> {
         let _ = std::fs::remove_dir_all(std::path::Path::new(&a.volumes_dir).join(name));
     }
     save_state(&g, &a.state_path);
-    Json(json!({"VolumesDeleted": pruned, "SpaceReclaimed": 0}))
+    Json(crate::api::VolumesPruneReport {
+        volumes_deleted: pruned,
+        space_reclaimed: 0,
+    })
 }

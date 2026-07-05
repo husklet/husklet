@@ -230,9 +230,18 @@ pub(crate) fn parse_publish(publish: &str) -> Vec<PubPort> {
 
 /// Build the `Ports` array Docker clients expect (top-level `docker ps` / list JSON).
 pub(crate) fn ports_json(publish: &str) -> Vec<Value> {
-    parse_publish(publish).into_iter().map(|p| {
-        json!({"PublicPort": p.host_port, "PrivatePort": p.container_port, "Type": p.proto, "IP": p.host_ip})
-    }).collect()
+    parse_publish(publish)
+        .into_iter()
+        .map(|p| {
+            serde_json::to_value(crate::api::PortSummary {
+                public_port: p.host_port,
+                private_port: p.container_port,
+                type_: p.proto,
+                ip: p.host_ip,
+            })
+            .unwrap_or(Value::Null)
+        })
+        .collect()
 }
 
 /// `NetworkSettings.Ports` map (`{"80/tcp": [{"HostIp","HostPort"}]}`) — the shape `docker port` reads
@@ -244,7 +253,13 @@ pub(crate) fn ports_map_json(publish: &str) -> Value {
             .or_insert_with(|| Value::Array(vec![]))
             .as_array_mut()
             .unwrap()
-            .push(json!({"HostIp": p.host_ip, "HostPort": p.host_port.to_string()}));
+            .push(
+                serde_json::to_value(crate::api::PortBinding {
+                    host_ip: p.host_ip,
+                    host_port: p.host_port.to_string(),
+                })
+                .unwrap_or(Value::Null),
+            );
     }
     Value::Object(m)
 }

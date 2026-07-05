@@ -168,7 +168,11 @@ pub(crate) async fn exec_create(
             exit_code: 0,
         },
     );
-    (StatusCode::CREATED, Json(json!({"Id": exec_id}))).into_response()
+    (
+        StatusCode::CREATED,
+        Json(crate::api::ExecCreateResponse { id: exec_id }),
+    )
+        .into_response()
 }
 
 /// POST /exec/:id/start body: `{"Detach": bool, "Tty": bool}`. Detach => run the exec in the
@@ -267,12 +271,18 @@ pub(crate) async fn exec_inspect(State(a): State<App>, Path(id): Path<String>) -
         },
         None => (false, exec.exit_code),
     };
-    Json(
-        json!({"ID": id, "Running": running, "ExitCode": code, "ContainerID": exec.container_id,
-        "ProcessConfig": {"tty": exec.tty, "privileged": exec.privileged,
-            "entrypoint": exec.cmd.first().cloned().unwrap_or_default(),
-            "arguments": exec.cmd.get(1..).map(|s| s.to_vec()).unwrap_or_default()}}),
-    )
+    Json(crate::api::ExecInspect {
+        id,
+        running,
+        exit_code: code,
+        container_id: exec.container_id,
+        process_config: crate::api::ExecProcessConfig {
+            tty: exec.tty,
+            privileged: exec.privileged,
+            entrypoint: exec.cmd.first().cloned().unwrap_or_default(),
+            arguments: exec.cmd.get(1..).map(|s| s.to_vec()).unwrap_or_default(),
+        },
+    })
     .into_response()
 }
 
