@@ -97,6 +97,7 @@ impl Runtime {
         log_chunks: Arc<tokio::sync::Mutex<Vec<LogChunk>>>,
         stdin_rx: mpsc::Receiver<Vec<u8>>,
     ) -> Result<Launched, Error> {
+        let c = self.with_defaults(c);
         let (prog, args) = c.command().ok_or(Error::NoBackend(c.guest()))?;
         let mut cmd = tokio::process::Command::new(prog);
         cmd.args(args);
@@ -339,13 +340,19 @@ fn spawn_tty(
 
 fn open_pty() -> Result<(OwnedFd, OwnedFd), Error> {
     let (mut m, mut s): (RawFd, RawFd) = (-1, -1);
+    // Seed a sane 80x24 winsize at creation (matches docker/containerd's default ConsoleSize) instead of
+    // the kernel's 0x0. A TUI (htop, vim, less) reads TIOCGWINSZ at startup -- possibly BEFORE the client's
+    // first /resize lands, or when the client is `-t` without a real terminal -- and a 0x0 size makes
+    // ncurses compute an empty screen -> a BLANK render. The real size still arrives via a later resize.
+    let ws = libc::winsize { ws_row: 24, ws_col: 80, ws_xpixel: 0, ws_ypixel: 0 };
+    // termios is *mut on macOS, *const on linux; null_mut() coerces to both.
     let r = unsafe {
         libc::openpty(
             &mut m,
             &mut s,
             std::ptr::null_mut(),
             std::ptr::null_mut(),
-            std::ptr::null_mut(),
+            &ws as *const _ as *mut _,
         )
     };
     if r != 0 {
