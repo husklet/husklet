@@ -279,3 +279,151 @@ pub struct DiskUsage {
 pub fn short(id: &str) -> String {
     id.trim_start_matches("sha256:").chars().take(12).collect()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ── short() / short_id() ─────────────────────────────────────────────────
+    #[test]
+    fn short_truncates_64_hex_to_12() {
+        let id = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+        assert_eq!(short(id), "0123456789ab");
+        assert_eq!(short(id).len(), 12);
+    }
+
+    #[test]
+    fn short_strips_sha256_prefix_then_truncates() {
+        // the `sha256:` prefix is dropped BEFORE the 12-char take.
+        let id = "sha256:0123456789abcdef0123456789abcdef";
+        assert_eq!(short(id), "0123456789ab");
+    }
+
+    #[test]
+    fn short_passes_through_ids_shorter_than_12() {
+        assert_eq!(short("abc"), "abc");
+        assert_eq!(short(""), "");
+    }
+
+    #[test]
+    fn container_short_id_delegates_to_short() {
+        let c = Container {
+            id: "sha256:deadbeefcafe0123456789ab".into(),
+            ..Default::default()
+        };
+        assert_eq!(c.short_id(), "deadbeefcafe");
+    }
+
+    #[test]
+    fn network_short_id_delegates_to_short() {
+        let n = Network {
+            id: "abcdef0123456789ffff".into(),
+            ..Default::default()
+        };
+        assert_eq!(n.short_id(), "abcdef012345");
+    }
+
+    // ── display_status() ─────────────────────────────────────────────────────
+    #[test]
+    fn display_status_empty_falls_back_to_created() {
+        let c = Container {
+            status: String::new(),
+            ..Default::default()
+        };
+        assert_eq!(c.display_status(), "created");
+    }
+
+    #[test]
+    fn display_status_passes_through_non_empty() {
+        let c = Container {
+            status: "Up 3 minutes".into(),
+            ..Default::default()
+        };
+        assert_eq!(c.display_status(), "Up 3 minutes");
+    }
+
+    // ── ports_str() ──────────────────────────────────────────────────────────
+    #[test]
+    fn ports_str_published_port_renders_public_arrow_private() {
+        let c = Container {
+            ports: vec![Port {
+                private_port: 80,
+                public_port: 18080,
+                typ: "tcp".into(),
+            }],
+            ..Default::default()
+        };
+        assert_eq!(c.ports_str(), "18080->80/tcp");
+    }
+
+    #[test]
+    fn ports_str_unpublished_port_renders_private_only() {
+        let c = Container {
+            ports: vec![Port {
+                private_port: 53,
+                public_port: 0,
+                typ: "udp".into(),
+            }],
+            ..Default::default()
+        };
+        assert_eq!(c.ports_str(), "53/udp");
+    }
+
+    #[test]
+    fn ports_str_empty_type_defaults_to_tcp() {
+        let c = Container {
+            ports: vec![Port {
+                private_port: 9000,
+                public_port: 0,
+                typ: String::new(),
+            }],
+            ..Default::default()
+        };
+        assert_eq!(c.ports_str(), "9000/tcp");
+    }
+
+    #[test]
+    fn ports_str_joins_multiple_with_comma_space() {
+        let c = Container {
+            ports: vec![
+                Port {
+                    private_port: 80,
+                    public_port: 8080,
+                    typ: "tcp".into(),
+                },
+                Port {
+                    private_port: 443,
+                    public_port: 0,
+                    typ: String::new(),
+                },
+            ],
+            ..Default::default()
+        };
+        assert_eq!(c.ports_str(), "8080->80/tcp, 443/tcp");
+    }
+
+    #[test]
+    fn ports_str_empty_when_no_ports() {
+        let c = Container::default();
+        assert_eq!(c.ports_str(), "");
+    }
+
+    // ── From<bollard::models::ContainerSummary> (cheap Default-built input) ───
+    #[test]
+    fn from_container_summary_reshapes_and_defaults_exit_code() {
+        let cs = bollard::models::ContainerSummary {
+            id: Some("abcdef012345".into()),
+            image: Some("alpine:latest".into()),
+            ..Default::default()
+        };
+        let c = Container::from(cs);
+        assert_eq!(c.id, "abcdef012345");
+        assert_eq!(c.image, "alpine:latest");
+        // ContainerSummary carries no ExitCode → hard-coded 0.
+        assert_eq!(c.exit_code, 0);
+        // absent Option fields become their defaults (empty), not panics.
+        assert!(c.names.is_empty());
+        assert!(c.ports.is_empty());
+        assert_eq!(c.command, "");
+    }
+}
