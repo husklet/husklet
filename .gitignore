@@ -15,3 +15,9 @@ dd.sock
 .dev/
 target-*/
 /pclib_blob_*.bin
+
+# in-repo scratch / worktree mirrors / build output (never committed)
+.scratch*
+.shatmp/
+.wt-*/
+dd-tests/compliance/ltp/out/
