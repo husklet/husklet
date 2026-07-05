@@ -69,10 +69,6 @@ static void e_ins_h(int vd, int di, int vn, int si) {
 }
 
 // sized FP/SIMD loads from [x17] (byte / halfword) -- for pmov narrow memory operands (avoid 16B over-read)
-static void e_ldr_b(int t, int rn) {
-    emit32(0x3D400000u | (rn << 5) | t);
-} // ldr b<t>,[xn]
-
 static void e_ldr_h(int t, int rn) {
     emit32(0x7D400000u | (rn << 5) | t);
 } // ldr h<t>,[xn]

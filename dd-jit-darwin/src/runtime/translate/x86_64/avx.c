@@ -1063,10 +1063,6 @@ static inline int sat_u16(int v) {
     return v < 0 ? 0 : v > 65535 ? 65535 : v;
 }
 
-static inline int sat_s8(int v) {
-    return v < -128 ? -128 : v > 127 ? 127 : v;
-}
-
 // Read the 16-byte r/m operand (xmm register or m128) of a legacy SSE insn.
 static void sse_get_rm(struct cpu *c, struct insn *I, uint64_t next, uint8_t buf[16]) {
     if (I->is_mem)

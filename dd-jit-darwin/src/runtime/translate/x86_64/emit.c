@@ -711,7 +711,6 @@ static uint64_t g_cal_mult;       // tick->ns multiplier (Q30): round(1e9 * 2^FA
 static volatile uint64_t g_pending;   // FORWARD decl; real (identical) def lives in os/linux/signal.c
 static int g_siginline = 1;           // W4F switch (DDJIT_NOSIGINLINE=1 disables ONLY the W4F arms)
 static uint64_t g_sig_inline_count;   // # rt_sigprocmask served inline (written by emitted code)
-static uint64_t g_sig_slow_count;     // # rt_sigprocmask that reached service() (pending-signal fallback)
 static uint64_t g_yield_inline_count; // # sched_yield served inline
 
 static void s1_calibrate(void) {

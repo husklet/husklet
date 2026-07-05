@@ -823,15 +823,6 @@ static void fc_evict_path(const char *hp) {
     rl_evict(hp);
 }
 
-static void fc_evict_at(int pfd, const char *name) {
-    char dp[4200];
-    if (pfd >= 0 && fcntl(pfd, F_GETPATH, dp) == 0) {
-        char hp[4400];
-        snprintf(hp, sizeof hp, "%s/%s", dp, name);
-        fc_evict_path(hp);
-    }
-}
-
 // macOS errno -> Linux errno. They agree on 1..10 and 12..34 but diverge at 11 (EDEADLK<->EAGAIN)
 // and everything >=35 (macOS EAGAIN=35 vs Linux 11, ENOSYS=78 vs 38, ELOOP=62 vs 40, ...). Every
 // syscall that returns a host errno is translated at the boundary (QEMU-style). Identity outside.
