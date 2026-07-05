@@ -71,7 +71,7 @@ pub(crate) fn open_terminal_tab(nb: &gtk::Notebook, id: &str, _name: &str, shell
     style_terminal(&term);
 
     let host = daemon_host();
-    let docker = docker_bin();
+    let docker = crate::docker::bin().to_string_lossy().into_owned();
     // `shell` may be e.g. "busybox sh" → split into argv words. `-e TERM=…` so the shell gets a real
     // terminfo (arrow keys, line editing, colors); without it `bash`/`zsh` arrows misbehave. (`sh`/dash
     // has no line-editing/history regardless — pick bash or zsh from the ＋ menu for history.)
@@ -226,20 +226,6 @@ fn daemon_host() -> String {
         format!("{home}/.dd/run/docker.sock")
     });
     format!("unix://{sock}")
-}
-
-/// Resolve the `docker` CLI (the bundle's PATH is minimal, so probe the usual spots).
-pub(crate) fn docker_bin() -> String {
-    for p in [
-        "/usr/local/bin/docker",
-        "/opt/homebrew/bin/docker",
-        "/usr/bin/docker",
-    ] {
-        if std::path::Path::new(p).exists() {
-            return p.to_string();
-        }
-    }
-    "docker".to_string()
 }
 
 fn short(id: &str) -> String {
