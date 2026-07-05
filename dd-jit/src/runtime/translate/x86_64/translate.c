@@ -404,6 +404,23 @@ static int xaludirect_on(void) {
     return v;
 }
 
+// Direct-write SHIFT dst (#424, follow-on to the ALU residency above): when an IMMEDIATE/by-1
+// SHL/SHR/SAR's r/m operand is a REGISTER at width>=4, shift straight into the guest reg's host home
+// (raw == I->rm_reg from rm_load) instead of copying raw->x16, shifting x16, then storing x16 back.
+// The want_cf save (`mov x19,src`) still runs BEFORE the in-place shift when CF/OF are materialized,
+// so the exact-CF path sees the pristine operand; every flag read of the result switches x16->the
+// guest home. rm_store(...,rmreg) is already a no-op (val==I->rm_reg), so gate-OFF is byte-identical.
+// Memory / byte / word / CL-variable / rotate / RCL-RCR keep the x16+store-back path untouched.
+// Gate NOXSHIFTDIRECT=1 for A/B (elide-on default). Independent of the flag-elision lever.
+static int xshiftdirect_on(void) {
+    static int v = -1;
+    if (v < 0) {
+        const char *s = getenv("NOXSHIFTDIRECT");
+        v = (s && *s && *s != '0') ? 0 : 1;
+    }
+    return v;
+}
+
 // Spill the deferred flags to cpu->nzcv with the producer-correct finalizer (byte-identical to the
 // old inline finalizer) and clear the pending state. Every finalizer also msr's the corrected value
 // back, so the live ARM NZCV is left canonical for an immediately-following Jcc to branch off.
