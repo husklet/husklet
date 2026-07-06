@@ -324,4 +324,238 @@ mod tests {
             .unwrap_err();
         assert_eq!(err.to_string(), "image has no rootfs directory");
     }
+
+    // ---- archive round-trip integration tests (shell out to the system `tar`) ----
+
+    /// Write `bytes` to `path`, creating parent dirs. Used to build fake rootfs trees on disk.
+    fn write_file(path: &Path, bytes: &[u8]) {
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent).unwrap();
+        }
+        std::fs::write(path, bytes).unwrap();
+    }
+
+    /// A >=20-byte fake ELF header whose `e_machine` (offset 18, LE u16) is `machine`, so `detect_arch`
+    /// classifies a rootfs containing it as the corresponding Linux target without a real binary.
+    fn fake_elf(machine: u16) -> Vec<u8> {
+        let mut b = vec![0u8; 32];
+        b[0..4].copy_from_slice(b"\x7fELF");
+        let m = machine.to_le_bytes();
+        b[18] = m[0];
+        b[19] = m[1];
+        b
+    }
+
+    /// `tar cf - -C <dir> <members...>` -> archive bytes (mirrors what `save_archive` shells out to).
+    fn tar_members(dir: &Path, members: &[&str]) -> Vec<u8> {
+        let mut c = std::process::Command::new("tar");
+        c.arg("cf").arg("-").arg("-C").arg(dir);
+        for m in members {
+            c.arg(m);
+        }
+        let out = c.output().expect("spawn tar");
+        assert!(
+            out.status.success(),
+            "tar failed: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        out.stdout
+    }
+
+    // Flow 1 — save -> load round-trips identity, run config, arch, AND file contents byte-faithfully.
+    // Invariant: `save_archive(rootfs, manifest)` then `load_archive(bytes)` yields a LoadedImage whose
+    // every config field equals what went in, whose arch is re-detected from the packed binary, and whose
+    // unpacked rootfs contains the original files with intact contents.
+    #[test]
+    fn save_then_load_roundtrips_config_and_files() {
+        let src = unique_dir("rt-src");
+        let rootfs = src.join("rootfs");
+        write_file(&rootfs.join("hello.txt"), b"hello dd\n");
+        write_file(&rootfs.join("etc/motd"), b"welcome\n");
+        // A fake x86_64 ELF at a probe path so the re-detected arch is the meaningful LinuxX86_64
+        // (NOT the LinuxAarch64 fallback) — proves arch is genuinely probed on load.
+        write_file(&rootfs.join("bin/sh"), &fake_elf(0x3E));
+
+        let manifest = Manifest {
+            name: "myrepo/app:v1".to_string(),
+            cmd: vec!["/bin/sh".to_string(), "-c".to_string(), "echo hi".to_string()],
+            env: vec!["PATH=/usr/bin".to_string(), "FOO=bar".to_string()],
+            entrypoint: vec!["/entry".to_string()],
+            workdir: "/work".to_string(),
+            user: "1000".to_string(),
+            exposed_ports: vec!["8080/tcp".to_string()],
+            os: None,
+            stop_signal: Some("SIGINT".to_string()),
+            img_volumes: vec!["/data".to_string()],
+            healthcheck: Some(serde_json::json!({"Test": ["CMD", "true"]})),
+        };
+
+        // save_archive doesn't touch self.dir; any Store produces the bytes.
+        let bytes = Store::new("/unused")
+            .save_archive(&rootfs, &manifest)
+            .expect("save_archive");
+        assert!(!bytes.is_empty(), "archive bytes are non-empty");
+
+        let store_dir = unique_dir("rt-store");
+        let store = Store::new(store_dir.to_str().unwrap());
+        let loaded = store.load_archive(&bytes).expect("load_archive");
+
+        // Identity + run config round-trip exactly (name keeps its raw `/` and `:`).
+        assert_eq!(loaded.name, "myrepo/app:v1");
+        assert_eq!(loaded.cmd, vec!["/bin/sh", "-c", "echo hi"]);
+        assert_eq!(loaded.env, vec!["PATH=/usr/bin", "FOO=bar"]);
+        assert_eq!(loaded.entrypoint, vec!["/entry"]);
+        assert_eq!(loaded.workdir, "/work");
+        assert_eq!(loaded.user, "1000");
+        assert_eq!(loaded.exposed_ports, vec!["8080/tcp"]);
+        assert_eq!(loaded.stop_signal, "SIGINT");
+        assert_eq!(loaded.img_volumes, vec!["/data"]);
+        assert_eq!(loaded.healthcheck, Some(serde_json::json!({"Test": ["CMD", "true"]})));
+        // Arch re-detected from the packed ELF.
+        assert_eq!(loaded.arch, Arch::LinuxX86_64);
+
+        // Files land under the unpacked rootfs WITH their contents intact.
+        assert_eq!(
+            std::fs::read_to_string(loaded.rootfs.join("hello.txt")).unwrap(),
+            "hello dd\n"
+        );
+        assert_eq!(
+            std::fs::read_to_string(loaded.rootfs.join("etc/motd")).unwrap(),
+            "welcome\n"
+        );
+
+        let _ = std::fs::remove_dir_all(&src);
+        let _ = std::fs::remove_dir_all(&store_dir);
+    }
+
+    // Flow 2 — a rootfs-only archive (no dd-manifest.json) loads via the fallback path.
+    // Invariant: with no manifest, name falls back to "loaded", arch falls back to LinuxAarch64 (no
+    // binaries to sniff), and the rootfs still unpacks.
+    #[test]
+    fn load_rootfs_only_archive_falls_back() {
+        let src = unique_dir("ro-src");
+        let rootfs = src.join("rootfs");
+        write_file(&rootfs.join("greeting"), b"no manifest here\n");
+        // Archive containing ONLY `rootfs/...` (no dd-manifest.json sidecar).
+        let bytes = tar_members(&src, &["rootfs"]);
+
+        let store_dir = unique_dir("ro-store");
+        let store = Store::new(store_dir.to_str().unwrap());
+        let loaded = store.load_archive(&bytes).expect("load_archive tolerates no manifest");
+
+        assert_eq!(loaded.name, "loaded", "generic fallback name");
+        assert_eq!(loaded.arch, Arch::LinuxAarch64, "arch fallback with no sniffable binary");
+        assert_eq!(
+            std::fs::read_to_string(loaded.rootfs.join("greeting")).unwrap(),
+            "no manifest here\n"
+        );
+
+        let _ = std::fs::remove_dir_all(&src);
+        let _ = std::fs::remove_dir_all(&store_dir);
+    }
+
+    // Flow 3 — a NON-dd archive (no top-level rootfs/) is rejected and leaves nothing behind.
+    // Invariant: load_archive returns Err and its staging dir is cleaned up, so the store root holds no
+    // partial image or `.load-*` directory.
+    #[test]
+    fn load_non_dd_archive_errors_and_leaves_no_leftover() {
+        let src = unique_dir("nd-src");
+        // Files at the top level, NO `rootfs/` wrapper.
+        write_file(&src.join("loose.txt"), b"not a dd image\n");
+        write_file(&src.join("data/inner"), b"x\n");
+        let bytes = tar_members(&src, &["loose.txt", "data"]);
+
+        let store_dir = unique_dir("nd-store");
+        let store = Store::new(store_dir.to_str().unwrap());
+        let err = store.load_archive(&bytes).expect_err("non-dd archive must be rejected");
+        assert!(
+            err.to_string().contains("not a dd image"),
+            "err mentions the not-a-dd-image reason: {err}"
+        );
+
+        // Staging was cleaned: the store root has no leftover entries at all.
+        let leftovers: Vec<_> = std::fs::read_dir(&store_dir)
+            .map(|rd| rd.flatten().map(|e| e.file_name()).collect())
+            .unwrap_or_default();
+        assert!(
+            leftovers.is_empty(),
+            "no partial image / staging dir left behind, found: {leftovers:?}"
+        );
+
+        let _ = std::fs::remove_dir_all(&src);
+        let _ = std::fs::remove_dir_all(&store_dir);
+    }
+
+    // Flow 4 — import_rootfs unpacks a bare rootfs tar (files at top level, no wrapper/manifest).
+    // Invariant: the given name is kept verbatim, the arch is probed from the rootfs, and every file lands
+    // directly under the new image's rootfs with intact contents.
+    #[test]
+    fn import_rootfs_unpacks_bare_tar() {
+        let src = unique_dir("imp-src");
+        write_file(&src.join("app.conf"), b"key=value\n");
+        write_file(&src.join("usr/local/note"), b"imported\n");
+        // Fake x86_64 ELF at a probe path so the probed arch is the distinguishable LinuxX86_64.
+        write_file(&src.join("bin/busybox"), &fake_elf(0x3E));
+        // Bare rootfs: members are the top-level entries themselves (no `rootfs/` dir).
+        let bytes = tar_members(&src, &["app.conf", "usr", "bin"]);
+
+        let store_dir = unique_dir("imp-store");
+        let store = Store::new(store_dir.to_str().unwrap());
+        let loaded = store.import_rootfs("myimg", &bytes).expect("import_rootfs");
+
+        assert_eq!(loaded.name, "myimg");
+        assert_eq!(loaded.arch, Arch::LinuxX86_64, "arch probed from the imported rootfs");
+        assert_eq!(
+            std::fs::read_to_string(loaded.rootfs.join("app.conf")).unwrap(),
+            "key=value\n"
+        );
+        assert_eq!(
+            std::fs::read_to_string(loaded.rootfs.join("usr/local/note")).unwrap(),
+            "imported\n"
+        );
+
+        let _ = std::fs::remove_dir_all(&src);
+        let _ = std::fs::remove_dir_all(&store_dir);
+    }
+
+    // Flow 6 — concurrent loads into ONE store don't collide (the uniq() per-process SEQ fix).
+    // Invariant: two threads loading distinct images into the same store root both succeed and produce
+    // independent, correct rootfs trees (exercises the per-request `.load-<pid>-<seq>` staging uniqueness;
+    // two shared-`<pid>` staging paths would otherwise clobber each other mid-extract).
+    #[test]
+    fn concurrent_loads_into_one_store_do_not_collide() {
+        // Build two independent save archives with distinct names + marker files.
+        let mk = |label: &str, marker: &[u8]| -> Vec<u8> {
+            let src = unique_dir(label);
+            let rootfs = src.join("rootfs");
+            write_file(&rootfs.join("marker"), marker);
+            let manifest = Manifest {
+                name: format!("conc/{label}:1"),
+                ..Default::default()
+            };
+            let bytes = Store::new("/unused").save_archive(&rootfs, &manifest).unwrap();
+            let _ = std::fs::remove_dir_all(&src);
+            bytes
+        };
+        let bytes_a = mk("conc-a", b"AAAA\n");
+        let bytes_b = mk("conc-b", b"BBBB\n");
+
+        let store_dir = unique_dir("conc-store");
+        let store = Store::new(store_dir.to_str().unwrap());
+
+        let sa = store.clone();
+        let sb = store.clone();
+        let ta = std::thread::spawn(move || sa.load_archive(&bytes_a));
+        let tb = std::thread::spawn(move || sb.load_archive(&bytes_b));
+        let la = ta.join().unwrap().expect("thread a load");
+        let lb = tb.join().unwrap().expect("thread b load");
+
+        // Both loaded independently, each with its own name + marker contents.
+        assert_eq!(la.name, "conc/conc-a:1");
+        assert_eq!(lb.name, "conc/conc-b:1");
+        assert_eq!(std::fs::read_to_string(la.rootfs.join("marker")).unwrap(), "AAAA\n");
+        assert_eq!(std::fs::read_to_string(lb.rootfs.join("marker")).unwrap(), "BBBB\n");
+
+        let _ = std::fs::remove_dir_all(&store_dir);
+    }
 }
