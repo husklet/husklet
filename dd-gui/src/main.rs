@@ -32,6 +32,7 @@ pub enum Category {
     Images,
     Networks,
     Volumes,
+    Workspaces,
     System,
     Settings,
 }
@@ -73,6 +74,10 @@ enum Msg {
     RemoveVolume(String),
     NewVolume,
     CreateVolume(String),
+    /// Add or replace a workspace (name, image, arch token) in `~/.dd/workspaces.conf`.
+    CreateWorkspace(String, String, String),
+    /// Remove a workspace by name.
+    RemoveWorkspace(String),
 }
 
 /// Results delivered back to the UI thread from async work.
@@ -146,6 +151,7 @@ impl Component for AppModel {
                 Ok("images") => Category::Images,
                 Ok("networks") => Category::Networks,
                 Ok("volumes") => Category::Volumes,
+                Ok("workspaces") => Category::Workspaces,
                 Ok("system") => Category::System,
                 Ok("settings") => Category::Settings,
                 _ => Category::Home,
@@ -380,6 +386,22 @@ impl Component for AppModel {
                     let _ = c.create_volume(&name).await;
                 });
             }
+            // Workspaces are a local config file (`~/.dd/workspaces.conf`), not a daemon resource — mutate
+            // the store inline; the view reloads it on the next render (which Relm4 runs after update()).
+            Msg::CreateWorkspace(name, image, arch) => {
+                use dd_term_core::workspace::{Arch, Workspace, WorkspaceStore};
+                if let Some(arch) = Arch::parse(&arch) {
+                    let path = ui::views::workspaces::workspaces_conf();
+                    let mut store = WorkspaceStore::load(path);
+                    let _ = store.upsert(Workspace::new(name, image, arch));
+                }
+            }
+            Msg::RemoveWorkspace(name) => {
+                use dd_term_core::workspace::WorkspaceStore;
+                let path = ui::views::workspaces::workspaces_conf();
+                let mut store = WorkspaceStore::load(path);
+                let _ = store.remove(&name);
+            }
         }
     }
 
@@ -431,7 +453,7 @@ impl Component for AppModel {
                 // Auto-select the first item of the current category if nothing is selected.
                 if self.selection == Selection::None {
                     match self.category {
-                        Category::Home | Category::Settings => {}
+                        Category::Home | Category::Settings | Category::Workspaces => {}
                         Category::Containers => {
                             if let Some(c) = self.snap.containers.first() {
                                 self.selection = Selection::Container(c.id.clone());
