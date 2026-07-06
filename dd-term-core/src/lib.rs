@@ -6,12 +6,18 @@
 //! (`dd-term`) depends on this crate and adds only the window + wgpu draw, uploading this crate's same
 //! embedded font atlas so what ships equals what the CPU renderer here verifies.
 
+pub mod font;
 pub mod grid;
+pub mod input;
+pub mod png;
 pub mod pty;
+pub mod render;
 pub mod vt;
 
 pub use grid::{Attrs, Cell, Color, Grid};
+pub use input::{encode_key, encode_paste, CursorKeys, Key, Mods};
 pub use pty::PtyBackend;
+pub use render::{CpuRenderer, Image};
 pub use vt::Vt;
 
 #[cfg(test)]
