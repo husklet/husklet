@@ -49,8 +49,18 @@ pub(crate) async fn image_tag(
 /// on-disk rootfs is deleted only when this was its LAST reference; if another tag (a `docker tag` alias)
 /// still points at the same rootfs we just drop the tag (an untag) and keep the layers. So `rmi ubuntu`
 /// with `ubuntu:24.04` also present untags only `ubuntu:latest` and leaves `ubuntu:24.04` resolvable.
-pub(crate) async fn image_delete(State(a): State<App>, Path(name): Path<String>) -> Response {
+#[derive(Deserialize, Default)]
+pub(crate) struct RmiQ {
+    force: Option<String>,
+}
+
+pub(crate) async fn image_delete(
+    State(a): State<App>,
+    Path(name): Path<String>,
+    Query(q): Query<RmiQ>,
+) -> Response {
     let mut g = a.inner.lock().await;
+    let force = matches!(q.force.as_deref(), Some("1") | Some("true"));
     let (want_repo, want_tag) = (ref_name(&name).to_string(), ref_tag(&name));
     // The single tag entry the reference names (repository AND tag must match). `ref_name`/`ref_tag`
     // mirror the lenient matching used elsewhere (registry/namespace ignored).
@@ -58,6 +68,22 @@ pub(crate) async fn image_delete(State(a): State<App>, Path(name): Path<String>)
     let Some(target) = g.images.iter().find(|i| matches(i)).cloned() else {
         return no_such_image(&name);
     };
+    // If this is the LAST tag of the underlying rootfs (deleting it removes the image itself), a
+    // container still created from this exact tag makes `rmi` a 409 unless forced — docker refuses to
+    // delete an image in use. A non-last tag just untags (rootfs kept alive by a sibling) and is allowed.
+    let would_be_last = g.images.iter().filter(|i| i.rootfs == target.rootfs).count() == 1;
+    if would_be_last && !force && target.name != "macos" {
+        if let Some(c) = g
+            .containers
+            .values()
+            .find(|c| ref_name(&c.image) == want_repo && ref_tag(&c.image) == want_tag)
+        {
+            let cid = c.id[..c.id.len().min(12)].to_string();
+            return conflict(format!(
+                "conflict: unable to delete {name} (must be forced) - image is being used by container {cid}"
+            ));
+        }
+    }
     let untagged = repo_tag(&target.name);
     g.images.retain(|i| !matches(i)); // remove only this tag, never sibling tags of the same repo
                                       // Delete the on-disk rootfs only when this was its last reference: another tag sharing the same

@@ -642,7 +642,7 @@ mod tests {
         seed_image_rootfs(&app, "myalpine:latest", "/store/shared-rootfs").await;
 
         let resp =
-            crate::images::image_delete(State(app.clone()), Path("alpine:3.19".into())).await;
+            crate::images::image_delete(State(app.clone()), Path("alpine:3.19".into()), Query(empty_q())).await;
         assert_eq!(resp.status(), StatusCode::OK);
         let report = to_body_json(resp).await;
         let arr = report.as_array().expect("rmi report is an array");
@@ -672,7 +672,7 @@ mod tests {
         // Sole tag of this rootfs; rootfs lives OUTSIDE the temp images dir so remove_image_dir is a
         // store-guarded no-op (no real fs deletion), letting us assert the Deleted record cleanly.
         seed_image_rootfs(&app, "solo:1.0", "/store/solo-rootfs/rootfs").await;
-        let resp = crate::images::image_delete(State(app.clone()), Path("solo:1.0".into())).await;
+        let resp = crate::images::image_delete(State(app.clone()), Path("solo:1.0".into()), Query(empty_q())).await;
         assert_eq!(resp.status(), StatusCode::OK);
         let report = to_body_json(resp).await;
         let arr = report.as_array().unwrap();
@@ -697,7 +697,7 @@ mod tests {
     #[tokio::test]
     async fn image_rmi_missing_is_404() {
         let app = test_app();
-        let resp = crate::images::image_delete(State(app.clone()), Path("ghost".into())).await;
+        let resp = crate::images::image_delete(State(app.clone()), Path("ghost".into()), Query(empty_q())).await;
         assert_eq!(resp.status(), StatusCode::NOT_FOUND);
     }
 
@@ -1223,6 +1223,476 @@ mod tests {
             !app.inner.lock().await.volumes.iter().any(|v| v.name == anon_b),
             "rm -v must reclaim the container's anonymous volume (no leak)"
         );
+    }
+
+    // ==============================================================================================
+    // MULTI-STEP INTEGRATION FLOWS — WAVE 2. Fresh handler SEQUENCES not exercised above. Same rules:
+    // engine-free handlers only; state asserted after EVERY step; docker's contract stated inline, then
+    // dd's actual behavior asserted. A clean run is a real signal; a divergence is flagged in the report.
+    // ==============================================================================================
+
+    /// Build a `RenameQ` query (`?name=...`) for `containers_rename`.
+    fn rename_q(name: &str) -> crate::containers::RenameQ {
+        serde_json::from_value(serde_json::json!({ "name": name })).unwrap()
+    }
+    /// Build a `CreateQ` from an object (e.g. `{"name":"web"}` or `{}`).
+    fn create_q(v: serde_json::Value) -> crate::containers::CreateQ {
+        serde_json::from_value(v).unwrap()
+    }
+    /// Build a create-body `CreateBody` from a JSON object.
+    fn create_body(v: serde_json::Value) -> axum::Json<crate::containers::CreateBody> {
+        axum::Json(serde_json::from_value(v).unwrap())
+    }
+    /// Serialize `images_json`'s list and collect the flattened set of RepoTags strings.
+    async fn image_repotags(app: &App) -> std::collections::HashSet<String> {
+        let axum::Json(list) = crate::images::images_json(State(app.clone())).await;
+        let v = serde_json::to_value(&list).unwrap();
+        let mut set = std::collections::HashSet::new();
+        for img in v.as_array().unwrap() {
+            if let Some(tags) = img["RepoTags"].as_array() {
+                for t in tags {
+                    if let Some(s) = t.as_str() {
+                        set.insert(s.to_string());
+                    }
+                }
+            }
+        }
+        set
+    }
+
+    // ---- FLOW 8: image tag/untag/delete refcount lifecycle across a shared rootfs ------------------
+    // docker: `docker tag a:1 a:2` aliases the SAME layers under a second repo:tag; `rmi a:1` while a:2
+    // still points at those layers is an UNTAG only (layers survive); `rmi a:2` (now the last reference)
+    // truly DELETES the image; the store is then empty. Drives tag -> list -> rmi -> rmi -> list.
+    #[tokio::test]
+    async fn flow_image_tag_untag_delete_shared_rootfs_lifecycle() {
+        let app = test_app();
+        // Rootfs lives OUTSIDE the temp images dir so the store-guarded on-disk removal is a safe no-op.
+        seed_image_rootfs(&app, "a:1", "/store/shared-R/rootfs").await;
+
+        // Step 1: `docker tag a:1 a:2` — 201, a:2 present and sharing a:1's rootfs.
+        let q: crate::images::TagQ =
+            serde_json::from_value(serde_json::json!({"repo": "a", "tag": "2"})).unwrap();
+        let r = crate::images::image_tag(State(app.clone()), Path("a:1".into()), Query(q)).await;
+        assert_eq!(r.status(), StatusCode::CREATED);
+        {
+            let g = app.inner.lock().await;
+            let a2 = g.images.iter().find(|i| i.name == "a:2").expect("a:2 aliased");
+            assert_eq!(a2.rootfs, "/store/shared-R/rootfs", "alias shares the source rootfs");
+        }
+
+        // Step 2: images_json lists BOTH tags.
+        let tags = image_repotags(&app).await;
+        assert!(tags.contains("a:1") && tags.contains("a:2"), "both tags listed: {tags:?}");
+
+        // Step 3: `rmi a:1` — 200, an UNTAG only (a:2 still references the rootfs) — no Deleted record.
+        let r = crate::images::image_delete(State(app.clone()), Path("a:1".into()), Query(empty_q())).await;
+        assert_eq!(r.status(), StatusCode::OK);
+        let report = to_body_json(r).await;
+        let arr = report.as_array().unwrap();
+        assert!(arr.iter().any(|x| x.get("Untagged").is_some()), "a:1 untag: {report}");
+        assert!(
+            !arr.iter().any(|x| x.get("Deleted").is_some()),
+            "shared rootfs must NOT be Deleted while a:2 references it: {report}"
+        );
+        {
+            let g = app.inner.lock().await;
+            assert!(!g.images.iter().any(|i| i.name == "a:1"), "a:1 gone");
+            assert!(g.images.iter().any(|i| i.name == "a:2"), "sibling a:2 survives");
+        }
+
+        // Step 4: `rmi a:2` — now the LAST reference, so a true Deleted (sha256) record.
+        let r = crate::images::image_delete(State(app.clone()), Path("a:2".into()), Query(empty_q())).await;
+        assert_eq!(r.status(), StatusCode::OK);
+        let report = to_body_json(r).await;
+        let arr = report.as_array().unwrap();
+        assert!(arr.iter().any(|x| x.get("Untagged").is_some()), "a:2 untag: {report}");
+        assert!(
+            arr.iter().any(|x| {
+                x.get("Deleted")
+                    .and_then(|d| d.as_str())
+                    .is_some_and(|s| s.starts_with("sha256:"))
+            }),
+            "last-ref rmi reports a Deleted sha256: {report}"
+        );
+
+        // Step 5: images_json is empty.
+        assert!(image_repotags(&app).await.is_empty(), "store empty after both tags removed");
+    }
+
+    // ---- FLOW 9: rmi an image a container still references ----------------------------------------
+    // docker contract: `docker rmi <img>` while a container references that image is a 409 Conflict
+    // ("conflict: unable to delete <id> (must be forced) - image is being used by container <cid>");
+    // the image survives unless `--force` is used. This drives create-from-image THEN rmi and asserts
+    // dd's ACTUAL behavior. ***DIVERGENCE (bug):*** dd's `image_delete` never consults `Inner.containers`,
+    // so it happily UNTAGS+DELETES an in-use image and returns 200 — the referencing container is left
+    // dangling on a now-absent image. Flagged, not fixed.
+    #[tokio::test]
+    async fn flow_rmi_image_in_use_by_container_diverges_from_docker_409() {
+        let app = test_app();
+        seed_image_rootfs(&app, "busy:1", "/store/busy-R/rootfs").await;
+
+        // A container created FROM busy:1 (engine-free create; records state only).
+        let r = crate::containers::containers_create(
+            State(app.clone()),
+            Query(create_q(serde_json::json!({}))),
+            create_body(serde_json::json!({"Image":"busy:1"})),
+        )
+        .await;
+        assert_eq!(r.status(), StatusCode::CREATED);
+        let cid = to_body_json(r).await["Id"].as_str().unwrap().to_string();
+        assert_eq!(
+            app.inner.lock().await.containers[&cid].image, "busy:1",
+            "the container references busy:1"
+        );
+
+        // rmi of the last tag while a container references it is a 409 (docker image-in-use rule) — the
+        // image survives.
+        let r =
+            crate::images::image_delete(State(app.clone()), Path("busy:1".into()), Query(empty_q()))
+                .await;
+        assert_eq!(r.status(), StatusCode::CONFLICT, "rmi of an in-use image is 409");
+        assert!(
+            app.inner.lock().await.images.iter().any(|i| i.name == "busy:1"),
+            "the in-use image survives the refused rmi"
+        );
+
+        // `docker rmi -f` forces it: image removed, the container left dangling (docker's behavior).
+        let forced: crate::images::RmiQ =
+            serde_json::from_value(serde_json::json!({"force": "true"})).unwrap();
+        let r =
+            crate::images::image_delete(State(app.clone()), Path("busy:1".into()), Query(forced)).await;
+        assert_eq!(r.status(), StatusCode::OK, "forced rmi succeeds");
+        let g = app.inner.lock().await;
+        assert!(!g.images.iter().any(|i| i.name == "busy:1"), "forced rmi removed the image");
+        assert!(g.containers.contains_key(&cid), "the container remains (now dangling)");
+    }
+
+    // ---- FLOW 10: exec lifecycle — two execs recorded distinctly; pre-start Running=false; 404 -----
+    // docker: each `exec create` mints a DISTINCT exec id (both persisted); `exec inspect` before any
+    // start reports Running=false; inspecting a bogus id is a 404. Drives create -> inspect -> create ->
+    // inspect(both) -> inspect(bogus). (exec_start hijacks/streams to the engine and is NOT driven.)
+    #[tokio::test]
+    async fn flow_exec_lifecycle_two_distinct_execs_prestart_and_404() {
+        let app = test_app();
+        seed_container(&app, "c1", "running").await;
+
+        // Step 1: first exec_create -> 201 + id1.
+        let r = crate::containers::exec_create(
+            State(app.clone()),
+            Path("c1".into()),
+            axum::Json(serde_json::from_value(serde_json::json!({"Cmd":["ls"]})).unwrap()),
+        )
+        .await;
+        assert_eq!(r.status(), StatusCode::CREATED);
+        let id1 = to_body_json(r).await["Id"].as_str().unwrap().to_string();
+
+        // Step 2: inspect id1 BEFORE any start -> Running=false, ContainerID=c1.
+        let r = crate::containers::exec_inspect(State(app.clone()), Path(id1.clone())).await;
+        assert_eq!(r.status(), StatusCode::OK);
+        let v = to_body_json(r).await;
+        assert_eq!(v["Running"], false, "un-started exec is not Running");
+        assert_eq!(v["ContainerID"], "c1");
+
+        // Step 3: a SECOND exec_create -> a DIFFERENT id; both are recorded.
+        let r = crate::containers::exec_create(
+            State(app.clone()),
+            Path("c1".into()),
+            axum::Json(serde_json::from_value(serde_json::json!({"Cmd":["pwd"]})).unwrap()),
+        )
+        .await;
+        assert_eq!(r.status(), StatusCode::CREATED);
+        let id2 = to_body_json(r).await["Id"].as_str().unwrap().to_string();
+        assert_ne!(id1, id2, "each exec create mints a distinct id");
+        {
+            let g = app.inner.lock().await;
+            assert_eq!(g.execs.len(), 2, "both execs are recorded");
+            assert_eq!(g.execs[&id1].cmd, vec!["ls".to_string()]);
+            assert_eq!(g.execs[&id2].cmd, vec!["pwd".to_string()]);
+        }
+
+        // Step 4: both inspect cleanly and independently.
+        for id in [&id1, &id2] {
+            let r = crate::containers::exec_inspect(State(app.clone()), Path(id.clone())).await;
+            assert_eq!(r.status(), StatusCode::OK, "exec {id} inspects");
+        }
+
+        // Step 5: a bogus exec id is a 404.
+        let r = crate::containers::exec_inspect(State(app.clone()), Path("bogusexec".into())).await;
+        assert_eq!(r.status(), StatusCode::NOT_FOUND);
+    }
+
+    // ---- FLOW 11: create --name -> rename -> inspect/lookup by new name; update returns 200 --------
+    // docker: `rename web app` frees `web` and binds `app`; inspect shows `/app`; lookup by `app` works;
+    // lookup by the OLD `web` fails. `docker update` returns 200 (a `{Warnings}` envelope). *** dd NOTE:
+    // update is a documented no-op — it does NOT persist the new resource limit; docker DOES reflect the
+    // new Memory in a later inspect. Asserted below as a soft divergence (flagged, not a hard bug). ***
+    #[tokio::test]
+    async fn flow_container_rename_then_inspect_lookup_and_update_noop() {
+        let app = test_app();
+        seed_image_rootfs(&app, "alpine", "/store/alpine-R").await;
+
+        // Step 1: create --name web -> 201.
+        let r = crate::containers::containers_create(
+            State(app.clone()),
+            Query(create_q(serde_json::json!({"name":"web"}))),
+            create_body(serde_json::json!({"Image":"alpine"})),
+        )
+        .await;
+        assert_eq!(r.status(), StatusCode::CREATED);
+        let cid = to_body_json(r).await["Id"].as_str().unwrap().to_string();
+        assert_eq!(app.inner.lock().await.containers[&cid].name, "web");
+
+        // Step 2: rename web -> app (204); the name field updates.
+        let r = crate::containers::containers_rename(
+            State(app.clone()),
+            Path("web".into()),
+            Query(rename_q("app")),
+        )
+        .await;
+        assert_eq!(r.status(), StatusCode::NO_CONTENT);
+        assert_eq!(app.inner.lock().await.containers[&cid].name, "app", "name rebound to app");
+
+        // Step 3: inspect (by new name AND by id) shows the new Name with the leading '/'.
+        let r = crate::containers::containers_inspect(State(app.clone()), Path("app".into()))
+            .await
+            .into_response();
+        assert_eq!(r.status(), StatusCode::OK, "lookup by the NEW name resolves");
+        assert_eq!(to_body_json(r).await["Name"], "/app");
+        // The OLD name no longer resolves (docker frees it on rename) -> 404.
+        let r = crate::containers::containers_inspect(State(app.clone()), Path("web".into()))
+            .await
+            .into_response();
+        assert_eq!(r.status(), StatusCode::NOT_FOUND, "old name `web` is freed by rename");
+
+        // Step 4: containers_json (all) finds it by the new name.
+        let all_q: crate::containers::PsQ =
+            serde_json::from_value(serde_json::json!({"all":"true"})).unwrap();
+        let axum::Json(list) =
+            crate::containers::containers_json(State(app.clone()), Query(all_q)).await;
+        let v = serde_json::to_value(&list).unwrap();
+        let found = v.as_array().unwrap().iter().any(|row| {
+            row["Names"]
+                .as_array()
+                .map(|ns| ns.iter().any(|n| n == "/app"))
+                .unwrap_or(false)
+        });
+        assert!(found, "ps lists the container under its new name /app");
+
+        // Step 5: update with a Memory limit -> 200. dd does NOT persist it (documented no-op).
+        let r = crate::containers::containers_update(
+            State(app.clone()),
+            Path(cid.clone()),
+            axum::body::Bytes::from_static(b"{\"Memory\":16000000}"),
+        )
+        .await;
+        assert_eq!(r.status(), StatusCode::OK, "update returns 200 {{Warnings}}");
+        let r = crate::containers::containers_inspect(State(app.clone()), Path(cid.clone()))
+            .await
+            .into_response();
+        let v = to_body_json(r).await;
+        assert_eq!(
+            v["HostConfig"]["Memory"], 0,
+            "NOTE/divergence: dd's update is a no-op — Memory stays 0; docker would reflect 16000000"
+        );
+    }
+
+    // ---- FLOW 12: rename onto an EXISTING name — dd accepts a DUPLICATE (docker rejects with 409) ---
+    // docker contract: `docker rename web app` when `app` is already taken is a 409 Conflict; the rename
+    // is refused and both names stay distinct. *** DIVERGENCE (bug): dd's `containers_rename` never checks
+    // for a target-name collision — it silently overwrites, leaving TWO containers named `app`. A later
+    // `resolve_cid("app")` then resolves to an arbitrary one. Flagged, not fixed. ***
+    #[tokio::test]
+    async fn flow_rename_onto_existing_name_creates_duplicate_divergence() {
+        let app = test_app();
+        seed_image_rootfs(&app, "alpine", "/store/alpine-R").await;
+
+        // Two distinct containers: `web` and `app`.
+        let mk = |app: App, name: &'static str| async move {
+            let r = crate::containers::containers_create(
+                State(app.clone()),
+                Query(create_q(serde_json::json!({ "name": name }))),
+                create_body(serde_json::json!({"Image":"alpine"})),
+            )
+            .await;
+            assert_eq!(r.status(), StatusCode::CREATED);
+            to_body_json(r).await["Id"].as_str().unwrap().to_string()
+        };
+        let cid_web = mk(app.clone(), "web").await;
+        let _cid_app = mk(app.clone(), "app").await;
+
+        // Rename `web` -> `app` (already taken) is a 409 (docker keeps names unique); `web` is unchanged.
+        let r = crate::containers::containers_rename(
+            State(app.clone()),
+            Path("web".into()),
+            Query(rename_q("app")),
+        )
+        .await;
+        assert_eq!(
+            r.status(),
+            StatusCode::CONFLICT,
+            "rename onto a taken name is 409"
+        );
+        // No duplicate: still exactly one `app`, and `web` kept its name.
+        let g = app.inner.lock().await;
+        assert_eq!(g.containers.values().filter(|c| c.name == "app").count(), 1, "no duplicate name");
+        assert_eq!(g.containers[&cid_web].name, "web", "the refused rename left web unchanged");
+    }
+
+    // ---- FLOW 13: cross-resource teardown — named volume + network, then `rm` (no -v) --------------
+    // docker: `run -v myvol:/data --network mynet` binds a NAMED volume and joins the net; a plain `rm`
+    // (no -v) frees the network endpoint but KEEPS the named volume (docker removes only ANONYMOUS
+    // volumes, and only on `-v`). Drives create -> assert both refs -> rm -> assert endpoint freed +
+    // named volume kept + volume now deletable.
+    #[tokio::test]
+    async fn flow_teardown_named_volume_kept_network_endpoint_freed_on_rm() {
+        let app = test_app();
+        seed_image_rootfs(&app, "alpine", "/store/alpine-R").await;
+        // A pre-existing NAMED volume and a user network.
+        let r = crate::volumes::volumes_create(
+            State(app.clone()),
+            axum::Json(serde_json::from_value(serde_json::json!({"Name":"myvol"})).unwrap()),
+        )
+        .await;
+        assert_eq!(r.status(), StatusCode::CREATED);
+        crate::networks::networks_create(State(app.clone()), net_create_body("mynet")).await;
+
+        // Create a container bound to myvol AND attached to mynet.
+        let r = crate::containers::containers_create(
+            State(app.clone()),
+            Query(create_q(serde_json::json!({}))),
+            create_body(serde_json::json!({
+                "Image":"alpine",
+                "HostConfig": {"Binds":["myvol:/data"], "NetworkMode":"mynet"}
+            })),
+        )
+        .await;
+        assert_eq!(r.status(), StatusCode::CREATED);
+        let cid = to_body_json(r).await["Id"].as_str().unwrap().to_string();
+
+        // Both cross-resource refs are live: net membership + endpoint, and the named volume is in-use.
+        assert!(net_members(&app, "mynet").await.contains(&cid), "joined mynet");
+        assert_eq!(net_endpoint_count(&app, "mynet").await, 1, "endpoint allocated");
+        // In-use proof: delete of the bound named volume is refused (409).
+        let r = crate::volumes::volume_delete(State(app.clone()), Path("myvol".into())).await;
+        assert_eq!(r.status(), StatusCode::CONFLICT, "bound named volume delete is 409");
+        assert!(
+            app.inner.lock().await.volumes.iter().any(|v| v.name == "myvol"),
+            "the refused delete leaves the volume in place"
+        );
+
+        // Plain `rm` (no -v) on the created (non-running) container -> 204, engine-free.
+        let r = crate::containers::containers_delete(
+            State(app.clone()),
+            Path(cid.clone()),
+            Query::<crate::containers::DeleteQ>(serde_json::from_value(serde_json::json!({})).unwrap()),
+        )
+        .await;
+        assert_eq!(r.status(), StatusCode::NO_CONTENT);
+
+        // Network endpoint freed (no dangling membership); NAMED volume KEPT (docker keeps it on plain rm).
+        assert!(!net_members(&app, "mynet").await.contains(&cid), "left mynet on rm");
+        assert_eq!(net_endpoint_count(&app, "mynet").await, 0, "endpoint freed on rm");
+        assert!(
+            app.inner.lock().await.volumes.iter().any(|v| v.name == "myvol"),
+            "a NAMED volume must survive a plain rm (only anon volumes are GC'd, and only on -v)"
+        );
+
+        // The now-unreferenced named volume is freely deletable (204) — proving the ref was truly released.
+        let r = crate::volumes::volume_delete(State(app.clone()), Path("myvol".into())).await;
+        assert_eq!(r.status(), StatusCode::NO_CONTENT, "freed named volume deletes");
+    }
+
+    // ---- FLOW 14: volume prune selectivity — in-use kept, free reclaimed; free the user, prune again -
+    // docker: `volume prune` reclaims ONLY volumes no container references; an in-use volume is kept; once
+    // its last referencing container is gone, a second prune reclaims it. Drives create x2 -> bind v1 ->
+    // prune -> drop user -> prune.
+    #[tokio::test]
+    async fn flow_volume_prune_in_use_kept_then_reclaimed() {
+        let app = test_app();
+        for name in ["v1", "v2"] {
+            let r = crate::volumes::volumes_create(
+                State(app.clone()),
+                axum::Json(serde_json::from_value(serde_json::json!({ "Name": name })).unwrap()),
+            )
+            .await;
+            assert_eq!(r.status(), StatusCode::CREATED);
+        }
+        // A container binds v1 by name; v2 is free.
+        seed_container_binding_volume(&app, "user1", "v1").await;
+
+        // Prune #1: only v2 reclaimed; v1 kept (in use).
+        let axum::Json(rep) = crate::volumes::volumes_prune(State(app.clone())).await;
+        let pruned: std::collections::HashSet<&str> =
+            rep.volumes_deleted.iter().map(|s| s.as_str()).collect();
+        assert!(pruned.contains("v2"), "free v2 reclaimed: {pruned:?}");
+        assert!(!pruned.contains("v1"), "in-use v1 kept: {pruned:?}");
+        {
+            let g = app.inner.lock().await;
+            assert!(g.volumes.iter().any(|v| v.name == "v1"), "v1 survives prune #1");
+            assert!(!g.volumes.iter().any(|v| v.name == "v2"), "v2 gone after prune #1");
+        }
+
+        // Drop the referencing container, then prune #2: v1 now reclaimed.
+        app.inner.lock().await.containers.remove("user1");
+        let axum::Json(rep) = crate::volumes::volumes_prune(State(app.clone())).await;
+        assert!(
+            rep.volumes_deleted.iter().any(|s| s == "v1"),
+            "v1 reclaimed once its last reference is gone: {:?}",
+            rep.volumes_deleted
+        );
+        assert!(
+            !app.inner.lock().await.volumes.iter().any(|v| v.name == "v1"),
+            "v1 removed after prune #2"
+        );
+    }
+
+    // ---- FLOW 15: restart-policy container, `stop` sets the DURABLE manual-stop flag -----------------
+    // docker: stopping a container that has a `--restart` policy records a manual-stop so the supervisor
+    // won't auto-restart it (Moby's HasBeenManuallyStopped). Engine-free: a "running" container with NO
+    // live process — `do_stop` finds no pid, skips the signal/wait, and just flips the recorded state.
+    #[tokio::test]
+    async fn flow_restart_policy_stop_sets_manual_stop_flag() {
+        let app = test_app();
+        // Seed a RUNNING container with `--restart always` and NO live IO plumbing (so stop is engine-free).
+        {
+            let mut g = app.inner.lock().await;
+            g.containers.insert(
+                "rc".into(),
+                Container {
+                    id: "rc".into(),
+                    image: "alpine".into(),
+                    status: "running".into(),
+                    started_at: 500,
+                    restart_policy: crate::model::RestartPolicy {
+                        name: "always".into(),
+                        max_retry: 0,
+                    },
+                    ..Default::default()
+                },
+            );
+        }
+        // Pre-state: not manually stopped.
+        assert!(!app.inner.lock().await.containers["rc"].manually_stopped);
+
+        // stop -> 204, no live pid to signal, so it just records the stop.
+        let r = crate::containers::containers_stop(
+            State(app.clone()),
+            Path("rc".into()),
+            Query(empty_q()),
+        )
+        .await;
+        assert_eq!(r.status(), StatusCode::NO_CONTENT);
+        let g = app.inner.lock().await;
+        let c = &g.containers["rc"];
+        assert_eq!(c.status, "exited", "stop flips a running container to exited");
+        assert!(
+            c.manually_stopped,
+            "stop sets the DURABLE manual-stop flag so `--restart always` won't auto-resurrect it"
+        );
+        assert_ne!(c.finished_at, 0, "finished_at recorded on stop");
+        // The restart policy itself is preserved (a future explicit start still honors it).
+        assert_eq!(c.restart_policy.name, "always", "restart policy is not cleared by stop");
     }
 
     /// Collect a response body into a String (for error-message assertions).
