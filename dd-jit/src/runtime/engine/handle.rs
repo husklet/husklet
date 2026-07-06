@@ -33,7 +33,7 @@ pub struct Launched {
 }
 
 impl Launched {
-    /// Reap the guest process, returning its exit code (-1 if killed by signal / unavailable). Does NOT
+    /// Reap the guest process, returning its exit code (`128+signum` if killed by signal). Does NOT
     /// drain `io_handles` — the caller owns them, so it can fire its own exit signal the instant the
     /// process dies, BEFORE waiting on readers that a stray fd-holding grandchild could keep open.
     pub async fn wait(&mut self) -> i64 {
@@ -103,7 +103,7 @@ impl RunningContainer {
         self.signal(libc::SIGCONT)
     }
 
-    /// Block until the guest exits, returning its exit code (-1 if killed by signal / unavailable).
+    /// Block until the guest exits, returning its exit code (`128+signum` if killed by signal).
     /// Fires the exit watch, then drains the IO readers (bounded grace) and fires output-done.
     pub async fn wait(&mut self) -> i64 {
         let code = reap(self.pid).await;

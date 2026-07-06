@@ -37,15 +37,18 @@ impl RunHandle {
     }
 }
 
-/// Decode a `waitpid` status into an exit code: the normal exit code, or -1 when killed by a signal.
-/// Shared by the sync [`RunHandle::wait`] here and the async `reap` in [`super::engine`] (which casts
-/// the result to `i64`) — the single source of truth for the exit-code convention.
+/// Decode a `waitpid` status into an exit code: the normal exit code, or `128 + signum` when killed by
+/// a signal (the POSIX-shell / Docker convention — SIGKILL→137, SIGTERM→143 — so `docker wait`,
+/// `inspect .State.ExitCode`, the `die` event and `ps --filter exited=N` all report the same value the
+/// real engine would). Shared by the sync [`RunHandle::wait`] here and the async `reap` in
+/// [`super::engine`] (which casts the result to `i64`) — the single source of truth for the convention.
 pub(crate) fn decode_wait_status(status: i32) -> i32 {
-    // WIFEXITED: low 7 bits are 0 → WEXITSTATUS is bits 8..16. Otherwise the child was signalled (-1).
+    // WIFEXITED: low 7 bits are 0 → WEXITSTATUS is bits 8..16. Otherwise the child was signalled: the
+    // low 7 bits carry the signal number (the 0x80 core-dump flag is masked off), Docker reports 128+n.
     if status & 0x7f == 0 {
         (status >> 8) & 0xff
     } else {
-        -1
+        128 + (status & 0x7f)
     }
 }
 
@@ -62,12 +65,15 @@ mod tests {
     }
 
     #[test]
-    fn signalled_returns_minus_one() {
-        // WIFSIGNALED: low 7 bits carry the signal number (1..=126) → -1.
-        assert_eq!(decode_wait_status(9), -1);
-        assert_eq!(decode_wait_status(libc::SIGKILL), -1);
-        // A signalled status normally also carries an unrelated high byte — still -1.
-        assert_eq!(decode_wait_status((7 << 8) | 15), -1);
+    fn signalled_returns_128_plus_signum() {
+        // WIFSIGNALED: low 7 bits carry the signal number → Docker's 128+n (SIGKILL 9→137, SIGTERM 15→143).
+        assert_eq!(decode_wait_status(9), 137);
+        assert_eq!(decode_wait_status(libc::SIGKILL), 128 + libc::SIGKILL);
+        assert_eq!(decode_wait_status(15), 143);
+        // The 0x80 WCOREDUMP flag is masked off — a core-dumped SIGSEGV (11|0x80) is still 128+11=139.
+        assert_eq!(decode_wait_status(libc::SIGSEGV | 0x80), 139);
+        // A signalled status may also carry an unrelated high byte — only the low 7 bits count.
+        assert_eq!(decode_wait_status((7 << 8) | 15), 143);
     }
 }
 
@@ -85,7 +91,7 @@ pub struct ExitStatus {
 }
 
 impl ExitStatus {
-    /// The process exit code (-1 if terminated by signal / unavailable).
+    /// The process exit code (`128 + signum` if terminated by signal, per the Docker/shell convention).
     pub fn code(&self) -> i32 {
         self.code
     }
