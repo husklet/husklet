@@ -2,7 +2,8 @@ use super::*;
 use std::os::fd::{AsRawFd, OwnedFd};
 use tokio::io::unix::AsyncFd;
 
-/// Reap `pid` on a blocking thread, decoding `waitpid` status into an exit code (-1 when signalled).
+/// Reap `pid` on a blocking thread, decoding `waitpid` status into an exit code (`128+signum` when
+/// signalled, per the Docker/shell convention).
 pub(crate) async fn reap(pid: u32) -> i64 {
     tokio::task::spawn_blocking(move || {
         let mut status: i32 = 0;
