@@ -9,6 +9,7 @@
 pub mod font;
 pub mod grid;
 pub mod input;
+pub mod layout;
 pub mod png;
 pub mod pty;
 pub mod render;
@@ -17,6 +18,7 @@ pub mod workspace;
 
 pub use grid::{Attrs, Cell, Color, Grid};
 pub use input::{encode_key, encode_paste, CursorKeys, Key, Mods};
+pub use layout::{Dir, Layout, PaneId, Rect};
 pub use pty::PtyBackend;
 pub use render::{CpuRenderer, Image};
 pub use vt::Vt;
