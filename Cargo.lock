@@ -325,6 +325,8 @@ version = "0.4.0"
 dependencies = [
  "clap",
  "dd-client",
+ "dd-term-core",
+ "libc",
  "serde_json",
  "sha2",
  "tokio",
@@ -393,6 +395,14 @@ dependencies = [
 [[package]]
 name = "dd-jit-darwin"
 version = "0.4.0"
+
+[[package]]
+name = "dd-term-core"
+version = "0.1.0"
+dependencies = [
+ "bitflags",
+ "libc",
+]
 
 [[package]]
 name = "dd-tests"
