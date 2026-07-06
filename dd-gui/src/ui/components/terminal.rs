@@ -67,9 +67,6 @@ pub(crate) fn new_terminal_button(
 /// Open an interactive terminal tab: a styled VTE running `docker exec -it <id> <shell>` (VTE provides
 /// the PTY, docker bridges to the container — works the same on macOS and Linux).
 pub(crate) fn open_terminal_tab(nb: &gtk::Notebook, id: &str, _name: &str, shell: &str) {
-    let term = vte4::Terminal::new();
-    style_terminal(&term);
-
     let host = daemon_host();
     let docker = crate::docker::bin().to_string_lossy().into_owned();
     // `shell` may be e.g. "busybox sh" → split into argv words. `-e TERM=…` so the shell gets a real
@@ -87,23 +84,33 @@ pub(crate) fn open_terminal_tab(nb: &gtk::Notebook, id: &str, _name: &str, shell
         id,
     ];
     argv.extend(&shell_words);
+    open_command_tab(nb, &format!("{}: {}", short(id), shell), &argv);
+}
 
-    // Inherit the environment but guarantee a PATH that can find `docker` + the container tools.
+/// Open a VTE tab that runs an arbitrary `argv` (the generic seam behind [`open_terminal_tab`]; also
+/// used to launch a workspace via `ddcli workspace launch <name>`). VTE owns the PTY, so any program
+/// that wants a controlling terminal (a login shell, `docker exec -it`, `ddcli workspace launch …`)
+/// gets a real interactive one. The tab is closable and killing it terminates the whole process tree.
+pub(crate) fn open_command_tab(nb: &gtk::Notebook, title: &str, argv: &[&str]) {
+    let term = vte4::Terminal::new();
+    style_terminal(&term);
+
+    // Inherit the environment but guarantee a PATH that can find `docker`/`ddcli` + the container tools.
     let mut env: Vec<String> = std::env::vars().map(|(k, v)| format!("{k}={v}")).collect();
     if !env.iter().any(|e| e.starts_with("PATH=")) {
         env.push("PATH=/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin".into());
     }
     let envv: Vec<&str> = env.iter().map(|s| s.as_str()).collect();
 
-    // The spawned `docker exec` pid, captured so closing the tab can kill the whole process tree.
+    // The spawned child pid, captured so closing the tab can kill the whole process tree.
     let pid_cell: Rc<std::cell::Cell<i32>> = Rc::new(std::cell::Cell::new(0));
     let term_cb = term.clone();
-    let shell_owned = shell.to_string();
+    let what = argv.first().map(|s| s.to_string()).unwrap_or_default();
     let pid_cb = pid_cell.clone();
     term.spawn_async(
         vte4::PtyFlags::DEFAULT,
         None,
-        &argv,
+        argv,
         &envv,
         gtk::glib::SpawnFlags::DEFAULT,
         || {},
@@ -112,12 +119,12 @@ pub(crate) fn open_terminal_tab(nb: &gtk::Notebook, id: &str, _name: &str, shell
         move |res| match res {
             Ok(pid) => pid_cb.set(pid.0 as i32),
             Err(e) => term_cb.feed(
-                format!("\r\n\x1b[31mfailed to start `{shell_owned}`: {e}\x1b[0m\r\n").as_bytes(),
+                format!("\r\n\x1b[31mfailed to start `{what}`: {e}\x1b[0m\r\n").as_bytes(),
             ),
         },
     );
 
-    // When the shell exits, show it (don't silently blank the tab).
+    // When the child exits, show it (don't silently blank the tab).
     let nb_done = nb.clone();
     term.connect_child_exited(move |t, status| {
         t.feed(format!("\r\n\x1b[2m[process exited {status}]\x1b[0m\r\n").as_bytes());
@@ -150,7 +157,7 @@ pub(crate) fn open_terminal_tab(nb: &gtk::Notebook, id: &str, _name: &str, shell
         .vexpand(true)
         .hexpand(true)
         .build();
-    let tab = closable_tab(nb, &scroll, &format!("{}: {}", short(id), shell), pid_cell);
+    let tab = closable_tab(nb, &scroll, title, pid_cell);
     let page = nb.append_page(&scroll, Some(&tab));
     nb.set_tab_reorderable(&scroll, true);
     nb.set_current_page(Some(page));

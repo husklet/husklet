@@ -26,6 +26,12 @@ pub struct Widgets {
     home: gtk::Box,
     settings: gtk::Box,
     system_logs: gtk::Box,
+    /// Workspaces page 0 (the config list: form + rows), rebuilt by render when the set changes.
+    ws_list: gtk::Box,
+    /// The Workspaces notebook: page 0 is `ws_list`; Launch appends terminal tabs beside it.
+    ws_notebook: gtk::Notebook,
+    /// Signature of the configured workspace set, gating `ws_list` rebuilds (so a poll can't wipe the form).
+    ws_sig: std::rc::Rc<std::cell::RefCell<String>>,
     list: gtk::ListBox,
     list_sig: std::rc::Rc<std::cell::RefCell<String>>,
     batch: std::rc::Rc<std::cell::RefCell<std::collections::HashSet<String>>>,
@@ -101,6 +107,7 @@ pub fn build(root: &gtk::ApplicationWindow, sender: &ComponentSender<AppModel>) 
     nav.append(&cat_row("image-x-generic-symbolic", "Images"));
     nav.append(&cat_row("network-workgroup-symbolic", "Networks"));
     nav.append(&cat_row("drive-harddisk-symbolic", "Volumes"));
+    nav.append(&cat_row("utilities-terminal-symbolic", "Workspaces"));
     nav.append(&cat_row("emblem-system-symbolic", "System"));
     // Settings now lives inside the System page (its second tab), so the sidebar has no separate
     // Settings entry — `nav_bottom` is kept empty for layout symmetry.
@@ -113,7 +120,8 @@ pub fn build(root: &gtk::ApplicationWindow, sender: &ComponentSender<AppModel>) 
                 2 => Category::Images,
                 3 => Category::Networks,
                 4 => Category::Volumes,
-                5 => Category::System,
+                5 => Category::Workspaces,
+                6 => Category::System,
                 _ => Category::Home,
             };
             s.input(Msg::SetCategory(cat));
@@ -328,11 +336,34 @@ pub fn build(root: &gtk::ApplicationWindow, sender: &ComponentSender<AppModel>) 
     system_notebook.append_page(&system_logs_scroll, Some(&gtk::Label::new(Some("Logs"))));
     system_notebook.append_page(&settings_scroll, Some(&gtk::Label::new(Some("Settings"))));
 
-    // Content area: dashboard ("home") / system (tabs) / browse (list | detail).
+    // Workspaces page: a persistent notebook — page 0 is the config list (New-workspace form + one row
+    // per workspace), and each Launch appends a VTE terminal tab beside it (built once so launched
+    // shells survive the 2s state poll, exactly like the container terminal notebook).
+    let ws_list = gtk::Box::new(gtk::Orientation::Vertical, 12);
+    ws_list.set_margin_top(20);
+    ws_list.set_margin_bottom(20);
+    ws_list.set_margin_start(22);
+    ws_list.set_margin_end(22);
+    let ws_list_scroll = gtk::ScrolledWindow::builder()
+        .child(&ws_list)
+        .hscrollbar_policy(gtk::PolicyType::Never)
+        .vexpand(true)
+        .hexpand(true)
+        .build();
+    ws_list_scroll.add_css_class("dd-home");
+    let ws_notebook = gtk::Notebook::new();
+    ws_notebook.add_css_class("dd-termbook");
+    ws_notebook.add_css_class("dd-syspages");
+    ws_notebook.set_scrollable(true);
+    ws_notebook.append_page(&ws_list_scroll, Some(&gtk::Label::new(Some("Workspaces"))));
+    let ws_sig = std::rc::Rc::new(std::cell::RefCell::new(String::new()));
+
+    // Content area: dashboard ("home") / system (tabs) / workspaces (tabs) / browse (list | detail).
     let content_stack = gtk::Stack::new();
     content_stack.set_hexpand(true);
     content_stack.add_named(&home_scroll, Some("home"));
     content_stack.add_named(&system_notebook, Some("system"));
+    content_stack.add_named(&ws_notebook, Some("workspaces"));
     content_stack.add_named(&paned, Some("browse"));
 
     let body = gtk::Box::new(gtk::Orientation::Horizontal, 7);
@@ -390,6 +421,9 @@ pub fn build(root: &gtk::ApplicationWindow, sender: &ComponentSender<AppModel>) 
         home,
         settings,
         system_logs,
+        ws_list,
+        ws_notebook,
+        ws_sig,
         list,
         list_sig,
         batch,
@@ -461,7 +495,8 @@ pub fn render(w: &Widgets, m: &AppModel, sender: &ComponentSender<AppModel>) {
         Category::Images => 2,
         Category::Networks => 3,
         Category::Volumes => 4,
-        Category::System | Category::Settings => 5,
+        Category::Workspaces => 5,
+        Category::System | Category::Settings => 6,
         _ => 0,
     };
     w.nav.select_row(w.nav.row_at_index(idx).as_ref());
@@ -469,6 +504,15 @@ pub fn render(w: &Widgets, m: &AppModel, sender: &ComponentSender<AppModel>) {
     if m.category == Category::Home {
         w.content_stack.set_visible_child_name("home");
         render_home(&w.home, m, sender);
+    } else if m.category == Category::Workspaces {
+        // The workspaces config page (page 0) is only rebuilt when the workspace set changes, so the 2s
+        // poll can't wipe half-typed input in the New-workspace form. Launched terminal tabs persist.
+        w.content_stack.set_visible_child_name("workspaces");
+        let sig = crate::ui::views::workspaces::workspaces_sig();
+        if *w.ws_sig.borrow() != sig {
+            *w.ws_sig.borrow_mut() = sig;
+            render_workspaces(&w.ws_list, &w.ws_notebook, m, sender);
+        }
     } else if m.category == Category::System || m.category == Category::Settings {
         // System page = [Logs][Settings] tabs; fill both (the notebook keeps the selected tab).
         w.content_stack.set_visible_child_name("system");
@@ -561,7 +605,7 @@ pub fn render(w: &Widgets, m: &AppModel, sender: &ComponentSender<AppModel>) {
                         w.list.append(&row);
                     }
                 }
-                Category::Home | Category::Settings | Category::System => {}
+                Category::Home | Category::Settings | Category::System | Category::Workspaces => {}
             }
             w.list.unselect_all();
             match &m.selection {
