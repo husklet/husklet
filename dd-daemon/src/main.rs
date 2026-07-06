@@ -33,6 +33,8 @@ mod prelude;
 mod routes;
 mod runtime;
 mod system;
+#[cfg(test)]
+mod test_support;
 mod util;
 mod volumes;
 
