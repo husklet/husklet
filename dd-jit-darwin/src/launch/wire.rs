@@ -1,19 +1,10 @@
-//! The typed, env-free launch path: marshal a [`LaunchConfig`] into the `ddjit_config` wire buffer
-//! (see `src/runtime/include/ddjit_api.h`) and hand it to the C `ddjit_spawn`, which posix_spawns the
-//! arch-matching engine as `<engine> --configfd <fd>` and returns the container's pid. No `bash`, no
-//! `DD_*`/`DDJIT_*` environment — the container config travels as a struct.
+//! The byte-exact `ddjit_config` wire encoder: [`LaunchConfig::to_wire`] plus the `WireHeader` C-contract
+//! layout + string-pool packing the C engine (`ddjit_configfd.c`) reads. A byte change here mislaunches
+//! every container, so this is moved verbatim and locked by the offset/layout tests below.
 
-use crate::Guest;
-use std::ffi::CString;
-use std::os::fd::RawFd;
-use std::os::raw::{c_char, c_int};
+use super::LaunchConfig;
 
-const DDJIT_CONFIG_MAGIC: u32 = 0x4443_4647; // 'DCFG'
-
-/// `flags` bit: the child leads a new process group (see `DDJIT_SPAWN_SETPGID` in ddjit_api.h).
-const DDJIT_SPAWN_SETPGID: u32 = 0x1;
-/// `flags` bit: the child acquires a controlling terminal (see `DDJIT_SPAWN_TTY` in ddjit_api.h).
-const DDJIT_SPAWN_TTY: u32 = 0x2;
+pub(super) const DDJIT_CONFIG_MAGIC: u32 = 0x4443_4647; // 'DCFG'
 
 // Mirrors `struct ddjit_config` in ddjit_api.h EXACTLY (field order + types) so `#[repr(C)]` produces
 // the same 112-byte header the engine reads. Every `*_off` is a byte offset into the string pool that
@@ -49,73 +40,6 @@ struct WireHeader {
     reserved2: u32,
 }
 
-extern "C" {
-    /// C spawn shim (os/darwin/ffi.c). `in_fd`/`out_fd`/`err_fd` become the child's fd 0/1/2 (-1 =
-    /// inherit); `flags` is a bitwise-OR of `DDJIT_SPAWN_*`. Returns the child pid, or -1 (errno set).
-    /// The caller owns the passed fds and closes its own copies after this returns.
-    fn ddjit_spawn(
-        engine_path: *const c_char,
-        config: *const u8,
-        config_len: usize,
-        in_fd: c_int,
-        out_fd: c_int,
-        err_fd: c_int,
-        flags: u32,
-    ) -> i32;
-}
-
-/// Everything needed to launch one container, as typed Rust — the caller (dd-jit) builds this from its
-/// `Container`; there is no environment dialect. Empty/`None` fields are simply omitted from the wire.
-#[derive(Clone, Debug, Default)]
-pub struct LaunchConfig {
-    /// The writable rootfs (the overlay UPPER, or a plain single rootfs). Empty = run un-jailed.
-    pub rootfs: String,
-    /// read-only overlay lowers, highest-priority first
-    pub lowers: Vec<String>,
-    /// UTS hostname (empty = inherit the host's).
-    pub hostname: String,
-    /// cgroup `memory.max` in bytes (0 = unlimited).
-    pub mem_max: u64,
-    /// cgroup `pids.max` (0 = unlimited).
-    pub pids_max: u32,
-    /// docker `--cpus`: online-CPU count the container advertises (0 = unlimited).
-    pub cpus: u32,
-    /// docker `--read-only`: writes to the rootfs/overlay-upper fail EROFS.
-    pub rootfs_ro: bool,
-    /// USER-ns uid the guest process runs as (`None` = root = 0).
-    pub uid: Option<u32>,
-    /// USER-ns gid the guest process runs as (`None` = root = 0).
-    pub gid: Option<u32>,
-    /// Run the guest under the JIT's syscall sandbox (`DDJIT_SANDBOX`).
-    pub sandbox: bool,
-    /// `--network none`: refuse all non-loopback egress.
-    pub net_isolate: bool,
-    /// An external host forwarder owns published ports; the engine must not start its own listener.
-    pub publish_daemon: bool,
-    /// user-network virtual-switch id (empty = not on a user network)
-    pub netbr: String,
-    /// this container's IP on that switch (empty = none)
-    pub ip: String,
-    /// shared external-writer generation file for daemon-write coherence (empty = none)
-    pub fsgen_file: String,
-    /// (host_port, container_port) tcp publishes
-    pub publish: Vec<(u16, u16)>,
-    /// (guest_path, host_dir, read_only)
-    pub volumes: Vec<(String, String, bool)>,
-    /// (name, soft, hard)
-    pub ulimits: Vec<(String, u64, u64)>,
-    /// private-loopback key (not the /tmp path); empty = shared
-    pub netns: String,
-    /// Guest working directory (empty = the rootfs root, `/`).
-    pub cwd: String,
-    /// guest environment as `K=V` lines (forwarded verbatim to the guest, never the host env)
-    pub guest_env: Vec<String>,
-    /// persistent translated-code cache dir; empty = disabled
-    pub pcache_dir: String,
-    /// the guest argv (entrypoint + args)
-    pub argv: Vec<String>,
-}
-
 /// Builds the string pool (offset 0 is always a lone NUL so a 0 offset reads as the empty string).
 struct Pool(Vec<u8>);
 impl Pool {
@@ -142,7 +66,7 @@ impl Pool {
 
 impl LaunchConfig {
     /// Serialize into the `ddjit_config` wire buffer (`<header><string pool>`).
-    fn to_wire(&self) -> Vec<u8> {
+    pub(super) fn to_wire(&self) -> Vec<u8> {
         let mut pool = Pool::new();
         let rootfs_off = pool.add(&self.rootfs);
         let lowers_off = pool.add(&self.lowers.join(":"));
@@ -229,69 +153,6 @@ impl LaunchConfig {
         buf.extend_from_slice(&pool.0);
         buf
     }
-}
-
-/// How to wire the launched child's stdio + placement. Every fd is a raw descriptor the CALLER owns —
-/// the shim dup2's it onto the child's fd 0/1/2 and never closes the caller's copy. `-1` = inherit.
-#[derive(Clone, Copy, Debug)]
-pub struct SpawnIo {
-    /// child fd 0 (`-1` = inherit the host's stdin)
-    pub stdin: RawFd,
-    /// child fd 1 (`-1` = inherit the host's stdout)
-    pub stdout: RawFd,
-    /// child fd 2 (`-1` = inherit the host's stderr)
-    pub stderr: RawFd,
-    /// place the child in its own process group (killpg/pause reach the whole container)
-    pub setpgid: bool,
-    /// give the child a controlling terminal (setsid + TIOCSCTTY); pass the pty SLAVE as stdin/out/err
-    pub tty: bool,
-}
-
-impl Default for SpawnIo {
-    /// Inherit the host stdio, no new process group, no controlling terminal.
-    fn default() -> Self {
-        SpawnIo { stdin: -1, stdout: -1, stderr: -1, setpgid: false, tty: false }
-    }
-}
-
-/// Launch a container in the matching guest's engine, wiring the child's stdio + placement per `io`.
-/// Returns the container pid, or an error if the engine for `guest` isn't built or the spawn failed.
-pub fn spawn_io(guest: Guest, cfg: &LaunchConfig, io: SpawnIo) -> std::io::Result<u32> {
-    let engine = guest
-        .jit_path()
-        .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::NotFound, "no engine built for guest"))?;
-    let engine_c = CString::new(engine).map_err(|_| std::io::Error::from(std::io::ErrorKind::InvalidInput))?;
-    let wire = cfg.to_wire();
-    let mut flags = 0u32;
-    if io.setpgid {
-        flags |= DDJIT_SPAWN_SETPGID;
-    }
-    if io.tty {
-        flags |= DDJIT_SPAWN_TTY;
-    }
-    // SAFETY: `wire` is a live, correctly-sized buffer; `engine_c` is a valid NUL-terminated path; the
-    // fds are the caller's own and stay open across this call (the shim only dup2's them in the child).
-    let pid = unsafe {
-        ddjit_spawn(
-            engine_c.as_ptr(),
-            wire.as_ptr(),
-            wire.len(),
-            io.stdin as c_int,
-            io.stdout as c_int,
-            io.stderr as c_int,
-            flags,
-        )
-    };
-    if pid <= 0 {
-        return Err(std::io::Error::last_os_error());
-    }
-    Ok(pid as u32)
-}
-
-/// Launch a container inheriting the host stdio (no new process group / terminal) — the convenience
-/// path for the synchronous [`crate`] runner. Returns the container pid, or an error.
-pub fn spawn(guest: Guest, cfg: &LaunchConfig) -> std::io::Result<u32> {
-    spawn_io(guest, cfg, SpawnIo::default())
 }
 
 #[cfg(test)]
