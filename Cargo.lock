@@ -325,6 +325,8 @@ version = "0.4.0"
 dependencies = [
  "clap",
  "dd-client",
+ "dd-images",
+ "dd-jit",
  "dd-term-core",
  "libc",
  "serde_json",

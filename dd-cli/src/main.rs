@@ -18,6 +18,7 @@ mod daemon;
 mod doctor;
 mod install;
 mod paths;
+mod ddjit_launcher;
 mod report;
 mod run;
 mod workspace;
