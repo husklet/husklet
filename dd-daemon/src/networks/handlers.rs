@@ -135,15 +135,17 @@ pub(crate) async fn network_connect(
 ) -> Response {
     let req = b.container.unwrap_or_default();
     let mut g = a.inner.lock().await;
-    // Resolve to a full container id + its reported name before mutating networks (avoids borrowing
-    // `g.networks` mutably while `g.containers` is borrowed immutably).
-    let (cid, cname) = match resolve_get(&g, &req).map(|(f, c)| (f, endpoint_name(c))) {
-        Some(t) => t,
-        None => (req.clone(), req.clone()),
-    };
+    // Docker order: the network must exist (404 network), then the CONTAINER must exist (404 container).
+    // The old code fell back to `(req, req)` on a container miss and joined anyway, inserting a PHANTOM
+    // endpoint (200 instead of 404) that then made the network permanently undeletable (403). Resolve
+    // the net name first, then the full cid/name (both immutable borrows end before the mutable join).
     let net_name = match g.networks.iter().find(|n| net_matches(n, &id)) {
         Some(n) => n.name.clone(),
         None => return no_such_network(&id),
+    };
+    let (cid, cname) = match resolve_get(&g, &req).map(|(f, c)| (f, endpoint_name(c))) {
+        Some(t) => t,
+        None => return no_such(&req),
     };
     join_network(&mut g.networks, &net_name, &cid, &cname);
     save_state(&g, &a.state_path);

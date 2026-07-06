@@ -860,6 +860,39 @@ mod tests {
     // docker: a user network with a connected endpoint refuses removal (403 "has active endpoints")
     // until every container is disconnected; then delete is a 204. Locks the endpoint-refcount fix.
     #[tokio::test]
+    async fn network_connect_missing_container_is_404_no_phantom() {
+        // Regression: connecting a NONEXISTENT container must 404 (docker "No such container"), not
+        // silently insert a phantom endpoint — which used to return 200 and make the network permanently
+        // undeletable (403 forever). Also: a missing NETWORK still 404s first.
+        let app = test_app();
+        let r = crate::networks::networks_create(State(app.clone()), net_create_body("mynet")).await;
+        assert_eq!(r.status(), StatusCode::CREATED);
+
+        let r = crate::networks::network_connect(
+            State(app.clone()),
+            Path("mynet".into()),
+            net_attach_body("ghost"),
+        )
+        .await;
+        assert_eq!(r.status(), StatusCode::NOT_FOUND, "connect of a missing container is 404");
+        assert_eq!(net_members(&app, "mynet").await.len(), 0, "no phantom membership");
+        assert_eq!(net_endpoint_count(&app, "mynet").await, 0, "no phantom endpoint");
+
+        // The network stays deletable (the phantom endpoint had made this a permanent 403).
+        let r = crate::networks::network_delete(State(app.clone()), Path("mynet".into())).await;
+        assert_eq!(r.status(), StatusCode::NO_CONTENT, "net with no real endpoints deletes");
+
+        // A missing NETWORK is still resolved first -> 404 network.
+        let r = crate::networks::network_connect(
+            State(app.clone()),
+            Path("nope".into()),
+            net_attach_body("also-ghost"),
+        )
+        .await;
+        assert_eq!(r.status(), StatusCode::NOT_FOUND, "connect to a missing network is 404");
+    }
+
+    #[tokio::test]
     async fn flow_network_endpoint_refcount_lifecycle() {
         let app = test_app();
         seed_container(&app, "c1", "running").await;
