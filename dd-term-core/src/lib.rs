@@ -7,9 +7,11 @@
 //! embedded font atlas so what ships equals what the CPU renderer here verifies.
 
 pub mod grid;
+pub mod pty;
 pub mod vt;
 
 pub use grid::{Attrs, Cell, Color, Grid};
+pub use pty::PtyBackend;
 pub use vt::Vt;
 
 #[cfg(test)]
