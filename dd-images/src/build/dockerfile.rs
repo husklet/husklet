@@ -137,8 +137,12 @@ pub fn parse_labels(args: &str) -> Vec<(String, String)> {
         toks.push(cur);
     }
 
-    // legacy single-pair form: no token carries an '='.
-    if !toks.is_empty() && toks.iter().all(|t| !t.contains('=')) {
+    // Legacy single-pair form vs. modern `key=value…` form is decided on the FIRST word ALONE, exactly
+    // as BuildKit's parseNameVal does (`if !strings.Contains(words[0], "=")` → legacy, value = rest of
+    // line). A legacy value may itself contain `=` (`ENV GREETING hello=world` → GREETING="hello=world"),
+    // so we must NOT gate on whether *any* token carries `=` — that misclassifies such lines as modern
+    // and silently drops the real variable name (the same class as the earlier multi-pair ENV bug).
+    if !toks.is_empty() && !toks[0].contains('=') {
         let key = toks[0].clone();
         return if key.is_empty() {
             vec![]
@@ -251,6 +255,38 @@ CMD [\"a\",\"b\"]
         assert_eq!(
             parse_env("FOO bar baz"),
             vec![("FOO".to_string(), "bar baz".to_string())]
+        );
+    }
+
+    #[test]
+    fn parse_env_legacy_value_may_contain_equals() {
+        // Regression: the form is chosen on the FIRST word alone (BuildKit parseNameVal). A legacy
+        // value that itself contains '=' must NOT flip the line to the modern multi-pair form, which
+        // would silently drop the real variable name and inject a garbage `flag=1` var.
+        assert_eq!(
+            parse_env("GREETING hello=world"),
+            vec![("GREETING".to_string(), "hello=world".to_string())]
+        );
+        assert_eq!(
+            parse_env("DEBUG_OPTS --flag=1 --other"),
+            vec![("DEBUG_OPTS".to_string(), "--flag=1 --other".to_string())]
+        );
+        // same first-word rule for LABEL.
+        assert_eq!(
+            parse_labels("description This is version=2 of the app"),
+            vec![(
+                "description".to_string(),
+                "This is version=2 of the app".to_string()
+            )]
+        );
+        // first word DOES carry '=' -> modern form, every token is a pair (unchanged behavior).
+        assert_eq!(
+            parse_env("A=1 B=2 C=x=y"),
+            vec![
+                ("A".to_string(), "1".to_string()),
+                ("B".to_string(), "2".to_string()),
+                ("C".to_string(), "x=y".to_string()),
+            ]
         );
     }
 
