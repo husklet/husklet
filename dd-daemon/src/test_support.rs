@@ -122,6 +122,7 @@ mod tests {
     use super::*;
     use axum::extract::{Path, Query, State};
     use axum::http::StatusCode;
+    use axum::response::IntoResponse;
 
     // ---- 1. containers_kill on an exited container -> 409, state UNCHANGED ------------------------
     #[tokio::test]
@@ -324,12 +325,256 @@ mod tests {
         );
     }
 
+    // ==============================================================================================
+    // READ / LIST handlers — assert the exact JSON WIRE SHAPE docker clients (CLI/bollard) parse.
+    // These drive the handler, extract the response BODY, and characterize the emitted keys/casing
+    // against the seeded state. All handlers here are state-only (none reach `dd_jit::Runtime`).
+    // ==============================================================================================
+
+    /// Push a minimal image into `Inner.images` (there is no shared seed helper for images).
+    async fn seed_image(app: &App, name: &str, created: i64) {
+        let mut g = app.inner.lock().await;
+        g.images.push(Image {
+            name: name.to_string(),
+            created,
+            ..Default::default()
+        });
+    }
+
+    // ---- 9. containers_json wire shape: per-row docker keys + Names leading-slash ----------------
+    #[tokio::test]
+    async fn containers_json_wire_shape_and_all_filter() {
+        let app = test_app();
+        seed_container(&app, "crunning0000", "running").await;
+        seed_container(&app, "cpaused00000", "paused").await;
+        seed_container(&app, "cexited00000", "exited").await;
+
+        // Default (no `all`): running + paused only (exited hidden).
+        let axum::Json(def) =
+            crate::containers::containers_json(State(app.clone()), Query(empty_q())).await;
+        assert_eq!(def.len(), 2, "default ps lists running+paused, not exited");
+
+        // `all=true`: every container.
+        let all_q: crate::containers::PsQ =
+            serde_json::from_value(serde_json::json!({"all": "true"})).unwrap();
+        let axum::Json(all) =
+            crate::containers::containers_json(State(app.clone()), Query(all_q)).await;
+        assert_eq!(all.len(), 3, "all=true lists every container");
+
+        // Serialize to the wire and assert the exact docker keys/casing on each row.
+        let v = serde_json::to_value(&all).unwrap();
+        let row = &v.as_array().unwrap()[0];
+        let obj = row.as_object().unwrap();
+        for key in [
+            "Id", "Names", "Image", "State", "Status", "Ports", "Labels", "Command", "Created",
+            "Mounts", "ExitCode",
+        ] {
+            assert!(obj.contains_key(key), "row missing wire key {key}: {row}");
+        }
+        // `--size` was NOT requested → SizeRw/SizeRootFs omitted (docker omits the keys).
+        assert!(!obj.contains_key("SizeRw"), "SizeRw must be omitted without --size");
+        assert!(!obj.contains_key("SizeRootFs"));
+        // Names is an array whose sole entry carries a leading '/'.
+        let names = row["Names"].as_array().unwrap();
+        assert_eq!(names.len(), 1);
+        assert!(
+            names[0].as_str().unwrap().starts_with('/'),
+            "Names entry must start with '/': {}",
+            names[0]
+        );
+        assert!(row["Ports"].is_array(), "Ports is an array");
+        assert!(row["Image"].as_str().unwrap() == "alpine");
+    }
+
+    // ---- 10. containers_inspect wire shape: top-level + nested State keys, Name '/' -------------
+    #[tokio::test]
+    async fn containers_inspect_wire_shape() {
+        let app = test_app();
+        seed_container(&app, "inspectme000", "exited").await;
+        let resp = crate::containers::containers_inspect(State(app.clone()), Path("inspectme000".into()))
+            .await
+            .into_response();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let v = to_body_json(resp).await;
+        let obj = v.as_object().unwrap();
+        for key in [
+            "Id", "Name", "State", "Config", "HostConfig", "NetworkSettings", "Mounts", "Image",
+            "Created", "RestartCount",
+        ] {
+            assert!(obj.contains_key(key), "inspect missing top-level key {key}");
+        }
+        assert!(
+            v["Name"].as_str().unwrap().starts_with('/'),
+            "inspect Name must start with '/'"
+        );
+        // Nested State carries the docker booleans + Status/ExitCode for an exited container.
+        let state = v["State"].as_object().unwrap();
+        for key in [
+            "Status", "Running", "Paused", "Restarting", "OOMKilled", "Dead", "ExitCode", "Pid",
+            "StartedAt", "FinishedAt", "Error",
+        ] {
+            assert!(state.contains_key(key), "State missing key {key}");
+        }
+        assert_eq!(v["State"]["Status"], "exited");
+        assert_eq!(v["State"]["Running"], false, "exited container is not Running");
+        // Config/HostConfig/NetworkSettings are objects (not null).
+        assert!(v["Config"].is_object());
+        assert!(v["HostConfig"].is_object());
+        assert!(v["NetworkSettings"]["Ports"].is_object() || v["NetworkSettings"]["Ports"].is_null());
+    }
+
+    #[tokio::test]
+    async fn containers_inspect_missing_is_404() {
+        let app = test_app();
+        let resp = crate::containers::containers_inspect(State(app.clone()), Path("nope".into()))
+            .await
+            .into_response();
+        assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+    }
+
+    // ---- 11. images_json wire shape --------------------------------------------------------------
+    #[tokio::test]
+    async fn images_json_wire_shape() {
+        let app = test_app();
+        seed_image(&app, "alpine:3.19", 12345).await;
+        let axum::Json(list) = crate::images::images_json(State(app.clone())).await;
+        assert_eq!(list.len(), 1);
+        let v = serde_json::to_value(&list).unwrap();
+        let img = &v.as_array().unwrap()[0];
+        let obj = img.as_object().unwrap();
+        for key in [
+            "Id", "RepoTags", "Created", "Size", "VirtualSize", "ParentId", "RepoDigests",
+            "SharedSize", "Labels", "Containers",
+        ] {
+            assert!(obj.contains_key(key), "image summary missing wire key {key}");
+        }
+        assert!(
+            img["Id"].as_str().unwrap().starts_with("sha256:"),
+            "Id must be a sha256: digest"
+        );
+        assert_eq!(
+            img["RepoTags"].as_array().unwrap()[0], "alpine:3.19",
+            "RepoTags preserves the explicit tag"
+        );
+        assert_eq!(img["Created"], 12345);
+        assert!(img["Size"].is_i64(), "Size is a number");
+    }
+
+    // ---- 12. system_df: both flat lists + nested *Usage envelopes, counts match seed ------------
+    #[tokio::test]
+    async fn system_df_wire_shape_and_counts() {
+        let app = test_app();
+        seed_container(&app, "df-run000000", "running").await;
+        seed_container(&app, "df-exit00000", "exited").await;
+        seed_image(&app, "alpine:3.19", 1).await;
+        seed_volume(&app, "dfvol", /*in_use=*/ false).await;
+
+        let axum::Json(df) = crate::system::system_df(State(app.clone())).await;
+        let v = serde_json::to_value(&df).unwrap();
+        let obj = v.as_object().unwrap();
+        // Top-level flat arrays + scalars.
+        for key in [
+            "LayersSize", "Images", "Containers", "Volumes", "BuildCache", "BuilderSize",
+            "ImageUsage", "ContainerUsage", "VolumeUsage", "BuildCacheUsage",
+        ] {
+            assert!(obj.contains_key(key), "system df missing top-level key {key}");
+        }
+        assert_eq!(v["Images"].as_array().unwrap().len(), 1, "one image seeded");
+        assert_eq!(
+            v["Containers"].as_array().unwrap().len(),
+            2,
+            "df lists ALL containers (running + exited)"
+        );
+        assert_eq!(v["Volumes"].as_array().unwrap().len(), 1, "one volume seeded");
+        assert!(v["BuildCache"].is_array());
+        // Nested *Usage envelopes mirror the counts current clients read.
+        assert_eq!(v["ImageUsage"]["TotalCount"], 1);
+        assert_eq!(v["ContainerUsage"]["TotalCount"], 2);
+        assert_eq!(v["ContainerUsage"]["ActiveCount"], 1, "one running container");
+        assert_eq!(v["VolumeUsage"]["TotalCount"], 1);
+        for key in ["ActiveCount", "TotalCount", "Reclaimable", "TotalSize", "Items"] {
+            assert!(
+                v["ImageUsage"].as_object().unwrap().contains_key(key),
+                "Usage envelope missing {key}"
+            );
+        }
+    }
+
+    // ---- 13. network_inspect: object key fields; missing -> 404 ---------------------------------
+    #[tokio::test]
+    async fn network_inspect_wire_shape() {
+        let app = test_app();
+        seed_network(&app, "mynet", /*with_container=*/ false).await;
+        let resp = crate::networks::network_inspect(State(app.clone()), Path("mynet".into()))
+            .await
+            .into_response();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let v = to_body_json(resp).await;
+        for key in [
+            "Id", "Name", "Driver", "Scope", "Containers", "Created", "EnableIPv6", "Internal",
+            "IPAM",
+        ] {
+            assert!(v.as_object().unwrap().contains_key(key), "network missing key {key}");
+        }
+        assert_eq!(v["Name"], "mynet");
+        assert_eq!(v["Driver"], "bridge");
+        assert_eq!(v["Scope"], "local");
+        assert_eq!(v["IPAM"]["Config"][0]["Subnet"], "172.20.0.0/16");
+        assert_eq!(v["IPAM"]["Config"][0]["Gateway"], "172.20.0.1");
+    }
+
+    #[tokio::test]
+    async fn network_inspect_missing_is_404() {
+        let app = test_app();
+        let resp = crate::networks::network_inspect(State(app.clone()), Path("ghost".into()))
+            .await
+            .into_response();
+        assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+    }
+
+    // ---- 14. volume_inspect: object key fields; missing -> 404 ----------------------------------
+    #[tokio::test]
+    async fn volume_inspect_wire_shape() {
+        let app = test_app();
+        seed_volume(&app, "vol1", /*in_use=*/ false).await;
+        let resp = crate::volumes::volume_inspect(State(app.clone()), Path("vol1".into()))
+            .await
+            .into_response();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let v = to_body_json(resp).await;
+        for key in ["Name", "Driver", "Mountpoint", "CreatedAt", "Scope", "Labels", "Options"] {
+            assert!(v.as_object().unwrap().contains_key(key), "volume missing key {key}");
+        }
+        assert_eq!(v["Name"], "vol1");
+        assert_eq!(v["Driver"], "local");
+        assert_eq!(v["Mountpoint"], "/mp/vol1");
+        assert_eq!(v["Scope"], "local");
+    }
+
+    #[tokio::test]
+    async fn volume_inspect_missing_is_404() {
+        let app = test_app();
+        let resp = crate::volumes::volume_inspect(State(app.clone()), Path("ghost".into()))
+            .await
+            .into_response();
+        assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+    }
+
     /// Collect a response body into a String (for error-message assertions).
     async fn to_body_string(resp: axum::response::Response) -> String {
         let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
             .await
             .unwrap();
         String::from_utf8_lossy(&bytes).into_owned()
+    }
+
+    /// Collect a response body and parse it as JSON (for wire-shape assertions on `Response`-typed
+    /// handlers).
+    async fn to_body_json(resp: axum::response::Response) -> serde_json::Value {
+        let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        serde_json::from_slice(&bytes).unwrap()
     }
 
     /// Build a query extractor with every (all-Option) field defaulted to None. The handler query
