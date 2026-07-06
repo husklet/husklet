@@ -137,15 +137,9 @@ pub(super) async fn health_monitor(
         if n > 5 {
             h.log.drain(..n - 5);
         }
-        if code == 0 {
-            h.failing_streak = 0;
-            h.status = "healthy".into();
-        } else {
-            h.failing_streak += 1;
-            if !in_start_period && h.failing_streak >= retries {
-                h.status = "unhealthy".into();
-            }
-        }
+        let (next, streak) = apply_probe(&h.status, h.failing_streak, code, retries, in_start_period);
+        h.status = next;
+        h.failing_streak = streak;
         let cur = h.status.clone();
         save_state(&g, &app.state_path);
         drop(g);
@@ -158,5 +152,65 @@ pub(super) async fn health_monitor(
                 serde_json::json!({}),
             );
         }
+    }
+}
+
+/// Fold one probe result into `(status, failing_streak)` — the Docker HEALTHCHECK state machine.
+///
+/// A success (exit 0) makes the container `healthy` and clears the streak, even during the start
+/// period. A failure DURING the start period is a documented grace: it neither counts toward
+/// `--retries` nor changes the status (the container stays `starting`) — matching the `start_period`
+/// field's own contract ("grace where a failure doesn't count"). Only AFTER the start period does a
+/// failure increment the streak, and the container becomes `unhealthy` once the streak reaches
+/// `retries`. Split out as a pure fn so the transition thresholds are unit-testable without a probe.
+fn apply_probe(
+    status: &str,
+    streak: i64,
+    code: i64,
+    retries: i64,
+    in_start_period: bool,
+) -> (String, i64) {
+    if code == 0 {
+        ("healthy".to_string(), 0)
+    } else if in_start_period {
+        (status.to_string(), streak) // grace-window failure: uncounted, status unchanged
+    } else {
+        let streak = streak + 1;
+        let next = if streak >= retries { "unhealthy" } else { status };
+        (next.to_string(), streak)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::apply_probe;
+
+    #[test]
+    fn success_is_healthy_and_clears_streak() {
+        assert_eq!(apply_probe("starting", 2, 0, 3, false), ("healthy".into(), 0));
+        assert_eq!(apply_probe("unhealthy", 5, 0, 3, false), ("healthy".into(), 0));
+        // a success DURING the start period is immediately healthy too.
+        assert_eq!(apply_probe("starting", 0, 0, 3, true), ("healthy".into(), 0));
+    }
+
+    #[test]
+    fn failures_during_start_period_are_not_counted() {
+        // Regression: grace-window failures used to increment the streak, so accumulated start-period
+        // failures flipped the container to `unhealthy` after a single real post-grace failure. During
+        // the start period a failure must leave both status and streak untouched.
+        assert_eq!(apply_probe("starting", 0, 1, 3, true), ("starting".into(), 0));
+        assert_eq!(apply_probe("starting", 0, 1, 3, true), ("starting".into(), 0));
+        // ...so the FIRST post-grace failure starts the streak at 1, NOT at 3 (== retries).
+        assert_eq!(apply_probe("starting", 0, 1, 3, false), ("starting".into(), 1));
+    }
+
+    #[test]
+    fn unhealthy_only_after_retries_consecutive_post_grace_failures() {
+        let (s, n) = apply_probe("starting", 0, 1, 3, false);
+        assert_eq!((s.as_str(), n), ("starting", 1));
+        let (s, n) = apply_probe(&s, n, 1, 3, false);
+        assert_eq!((s.as_str(), n), ("starting", 2));
+        let (s, n) = apply_probe(&s, n, 1, 3, false);
+        assert_eq!((s.as_str(), n), ("unhealthy", 3)); // 3rd counted failure == retries
     }
 }
