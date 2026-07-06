@@ -20,6 +20,7 @@ mod install;
 mod paths;
 mod report;
 mod run;
+mod workspace;
 
 use crate::app::cmd_app;
 use crate::cli::{Cli, Cmd};
@@ -37,6 +38,10 @@ fn main() {
         Cmd::Mac { args } => run::mac(args),
         Cmd::Image(args) => cmd_run(args),
         Cmd::App => cmd_app(),
+        Cmd::Workspace { action } => {
+            workspace::run(action);
+            0
+        }
         Cmd::Daemon { action } => cmd_daemon(action),
         Cmd::Install => cmd_install(),
         Cmd::Uninstall { purge } => cmd_uninstall(purge),

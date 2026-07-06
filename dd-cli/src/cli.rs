@@ -25,6 +25,11 @@ pub(crate) enum Cmd {
     },
     /// Launch the dd-app GUI.
     App,
+    /// Manage + launch terminal workspaces (a named image+arch you develop in).
+    Workspace {
+        #[command(subcommand)]
+        action: WorkspaceCmd,
+    },
     /// Run or control the background daemon.
     Daemon {
         #[command(subcommand)]
@@ -48,6 +53,31 @@ pub(crate) enum Cmd {
     /// `ddcli <image> [command…]` — shorthand for `ddcli run <image> …`.
     #[command(external_subcommand)]
     Image(Vec<String>),
+}
+
+#[derive(Subcommand)]
+pub(crate) enum WorkspaceCmd {
+    /// List configured workspaces.
+    List,
+    /// Create (or update) a workspace: a name + the image it runs + its architecture.
+    Create {
+        /// Workspace name (a stable handle you launch by).
+        name: String,
+        /// The image/distro the workspace runs, e.g. `ubuntu:24.04` or `alpine`.
+        #[arg(long)]
+        image: String,
+        /// Target arch: `arm64` (default), `amd64` (x86-64 via jit86), or `darwin-arm64`.
+        #[arg(long, default_value = "arm64")]
+        arch: String,
+    },
+    /// Remove a workspace (its persistent files are left on disk).
+    Rm {
+        name: String,
+    },
+    /// Launch a workspace as an interactive terminal in this window.
+    Launch {
+        name: String,
+    },
 }
 
 #[derive(Subcommand)]
