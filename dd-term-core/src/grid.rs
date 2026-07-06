@@ -164,6 +164,65 @@ impl Grid {
         }
     }
 
+    /// Scroll rows `[top, bot]` (inclusive, 0-based) up by one: `top` is lost, a blank appears at `bot`.
+    /// Used for scroll regions (DECSTBM) so a pinned status line outside the region stays put.
+    pub fn scroll_region_up(&mut self, top: usize, bot: usize, blank: Cell) {
+        if top >= bot || bot >= self.rows {
+            return;
+        }
+        for r in top..bot {
+            let dst = self.idx(r, 0);
+            let src = self.idx(r + 1, 0);
+            self.cells.copy_within(src..src + self.cols, dst);
+        }
+        self.clear_row_range(bot, 0, self.cols, blank);
+    }
+
+    /// Scroll rows `[top, bot]` down by one: `bot` is lost, a blank appears at `top`.
+    pub fn scroll_region_down(&mut self, top: usize, bot: usize, blank: Cell) {
+        if top >= bot || bot >= self.rows {
+            return;
+        }
+        for r in (top + 1..=bot).rev() {
+            let dst = self.idx(r, 0);
+            let src = self.idx(r - 1, 0);
+            self.cells.copy_within(src..src + self.cols, dst);
+        }
+        self.clear_row_range(top, 0, self.cols, blank);
+    }
+
+    /// Insert `n` blank cells at `(row, col)`, shifting the rest of the row right (overflow off the
+    /// right edge is lost). ICH.
+    pub fn insert_cells(&mut self, row: usize, col: usize, n: usize, blank: Cell) {
+        if row >= self.rows || col >= self.cols {
+            return;
+        }
+        let n = n.min(self.cols - col);
+        let base = self.idx(row, 0);
+        for c in (col..self.cols - n).rev() {
+            self.cells[base + c + n] = self.cells[base + c];
+        }
+        for c in col..col + n {
+            self.cells[base + c] = blank;
+        }
+    }
+
+    /// Delete `n` cells at `(row, col)`, shifting the rest of the row left and filling the right with
+    /// blanks. DCH.
+    pub fn delete_cells(&mut self, row: usize, col: usize, n: usize, blank: Cell) {
+        if row >= self.rows || col >= self.cols {
+            return;
+        }
+        let n = n.min(self.cols - col);
+        let base = self.idx(row, 0);
+        for c in col..self.cols - n {
+            self.cells[base + c] = self.cells[base + c + n];
+        }
+        for c in self.cols - n..self.cols {
+            self.cells[base + c] = blank;
+        }
+    }
+
     /// Resize to `cols × rows`, preserving the top-left overlap. Cursor is clamped into range.
     pub fn resize(&mut self, cols: usize, rows: usize) {
         let cols = cols.max(1);

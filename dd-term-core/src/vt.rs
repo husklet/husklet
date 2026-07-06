@@ -16,7 +16,9 @@ enum State {
     Esc,
     Csi,
     Osc,
-    /// Absorb one byte then return to Ground (e.g. a charset-designation intermediate).
+    /// `ESC (` / `ESC )` … : the next byte designates a charset into G0/G1.
+    EscCharset,
+    /// Absorb one byte then return to Ground (an unhandled intermediate, e.g. `ESC #`).
     EscIgnoreOne,
 }
 
@@ -36,11 +38,17 @@ impl Default for Pen {
 /// A VT parser bound to a grid. Feed bytes via [`Vt::advance`] / [`Vt::advance_bytes`].
 pub struct Vt {
     grid: Grid,
+    /// The inactive screen buffer (primary while the alt screen is active, and vice-versa). Swapped in
+    /// on `CSI ?1049h/l` etc. so full-screen apps (vim/htop/less) restore the shell screen on exit.
+    stored: Option<Grid>,
+    alt_active: bool,
     pen: Pen,
     state: State,
-    /// CSI parameter accumulator (numeric params split by `;`).
+    /// CSI parameter accumulator (numeric params split by `;` or `:`).
     params: Vec<u32>,
     cur_param: Option<u32>,
+    /// True if any sub-parameter in the current CSI was `:`-separated (ISO-8613-6 SGR).
+    saw_colon: bool,
     /// A leading private marker byte for CSI (`?`, `>`, `!`), if any.
     private: u8,
     /// OSC payload accumulator.
@@ -49,8 +57,15 @@ pub struct Vt {
     utf8_buf: [u8; 4],
     utf8_len: usize,
     utf8_need: usize,
-    /// Saved cursor (DECSC/DECRC).
-    saved: Option<(usize, usize)>,
+    /// Saved cursor + pen (DECSC/DECRC `ESC 7`/`ESC 8` and SCO `CSI s`/`CSI u`).
+    saved: Option<(usize, usize, Pen)>,
+    /// Scroll region (DECSTBM), inclusive 0-based rows. Defaults to the whole screen.
+    scroll_top: usize,
+    scroll_bot: usize,
+    /// DECAWM autowrap enabled (`CSI ?7h/l`); default on.
+    autowrap: bool,
+    /// G0 is the DEC Special Graphics (line-drawing) charset (`ESC ( 0`) vs ASCII (`ESC ( B`).
+    charset_g0_dec: bool,
     /// Autowrap pending: the last column was written; the next printable wraps first.
     wrap_pending: bool,
     /// The most recent window title set via OSC 0/2.
@@ -62,18 +77,27 @@ pub struct Vt {
 impl Vt {
     /// A parser over a fresh `cols × rows` grid.
     pub fn new(cols: usize, rows: usize) -> Vt {
+        let g = Grid::new(cols, rows);
+        let bot = g.rows() - 1;
         Vt {
-            grid: Grid::new(cols, rows),
+            grid: g,
+            stored: None,
+            alt_active: false,
             pen: Pen::default(),
             state: State::Ground,
             params: Vec::new(),
             cur_param: None,
+            saw_colon: false,
             private: 0,
             osc: Vec::new(),
             utf8_buf: [0; 4],
             utf8_len: 0,
             utf8_need: 0,
             saved: None,
+            scroll_top: 0,
+            scroll_bot: bot,
+            autowrap: true,
+            charset_g0_dec: false,
             wrap_pending: false,
             title: String::new(),
             bell: false,
@@ -88,6 +112,12 @@ impl Vt {
     /// Resize the screen to `cols × rows` (e.g. on a window/pane resize).
     pub fn resize(&mut self, cols: usize, rows: usize) {
         self.grid.resize(cols, rows);
+        if let Some(s) = self.stored.as_mut() {
+            s.resize(cols, rows);
+        }
+        // A resize resets the scroll region to the full (new) screen, matching xterm.
+        self.scroll_top = 0;
+        self.scroll_bot = self.grid.rows() - 1;
         self.wrap_pending = false;
     }
 
@@ -105,6 +135,11 @@ impl Vt {
             State::Esc => self.esc(b),
             State::Csi => self.csi(b),
             State::Osc => self.osc(b),
+            State::EscCharset => {
+                // Byte designates a charset into G0: `0` = DEC special graphics, else ASCII.
+                self.charset_g0_dec = b == b'0';
+                self.state = State::Ground;
+            }
             State::EscIgnoreOne => self.state = State::Ground,
         }
     }
@@ -141,8 +176,9 @@ impl Vt {
                 self.grid.cursor_col = 0;
                 self.wrap_pending = false;
             }
-            0x00..=0x06 | 0x0e..=0x1a | 0x1c..=0x1f => {} // other C0: ignore
-            0x20..=0x7f => self.put_char(b as char),
+            0x00..=0x06 | 0x0e..=0x1a | 0x1c..=0x1f => {} // other C0 (incl. SO/SI): ignore
+            0x7f => {}                                    // DEL: ignored in ground (not a glyph)
+            0x20..=0x7e => self.put_char(b as char),
             _ => {
                 // Start of a UTF-8 multibyte sequence.
                 self.utf8_need = match b {
@@ -162,6 +198,7 @@ impl Vt {
     }
 
     fn put_char(&mut self, ch: char) {
+        let ch = if self.charset_g0_dec { dec_graphic(ch) } else { ch };
         let cols = self.grid.cols();
         if self.wrap_pending {
             self.wrap_pending = false;
@@ -171,8 +208,11 @@ impl Vt {
         let (r, c) = (self.grid.cursor_row, self.grid.cursor_col);
         self.grid.set(r, c, Cell { ch, fg: self.pen.fg, bg: self.pen.bg, attrs: self.pen.attrs });
         if c + 1 >= cols {
-            // At the last column: stay put but arm autowrap for the next printable.
-            self.wrap_pending = true;
+            // At the last column: with autowrap (DECAWM) arm a wrap for the next printable; with it off
+            // the cursor sticks at the last column and further chars overwrite it (no scroll).
+            if self.autowrap {
+                self.wrap_pending = true;
+            }
         } else {
             self.grid.cursor_col = c + 1;
         }
@@ -195,12 +235,66 @@ impl Vt {
 
     fn line_feed(&mut self) {
         self.wrap_pending = false;
-        if self.grid.cursor_row + 1 >= self.grid.rows() {
+        if self.grid.cursor_row == self.scroll_bot {
+            // At the bottom margin: scroll the region up (a pinned line outside the region stays put).
             let blank = self.blank();
-            self.grid.scroll_up(blank);
-        } else {
+            self.grid.scroll_region_up(self.scroll_top, self.scroll_bot, blank);
+        } else if self.grid.cursor_row + 1 < self.grid.rows() {
             self.grid.cursor_row += 1;
         }
+    }
+
+    /// Save cursor + pen (DECSC / SCO save).
+    fn save_cursor(&mut self) {
+        self.saved = Some((self.grid.cursor_row, self.grid.cursor_col, self.pen));
+    }
+
+    /// Restore cursor + pen (DECRC / SCO restore).
+    fn restore_cursor(&mut self) {
+        if let Some((r, c, p)) = self.saved {
+            self.grid.cursor_row = r.min(self.grid.rows() - 1);
+            self.grid.cursor_col = c.min(self.grid.cols() - 1);
+            self.pen = p;
+        }
+        self.wrap_pending = false;
+    }
+
+    /// Switch to the alternate screen buffer (`?1049h`/`?47h`/`?1047h`). `save` also stashes the cursor
+    /// (the `1049` variant). The alt buffer starts blank; the primary is stored for restore.
+    fn enter_alt(&mut self, save: bool) {
+        if self.alt_active {
+            return;
+        }
+        if save {
+            self.save_cursor();
+        }
+        let (cols, rows) = (self.grid.cols(), self.grid.rows());
+        let mut alt = Grid::new(cols, rows);
+        alt.cursor_visible = self.grid.cursor_visible;
+        let primary = std::mem::replace(&mut self.grid, alt);
+        self.stored = Some(primary);
+        self.alt_active = true;
+        self.wrap_pending = false;
+        self.scroll_top = 0;
+        self.scroll_bot = rows - 1;
+    }
+
+    /// Return to the primary screen (`?1049l`/`?47l`/`?1047l`), restoring its saved contents. `restore`
+    /// also restores the saved cursor (the `1049` variant), returning you to the pre-launch prompt.
+    fn leave_alt(&mut self, restore: bool) {
+        if !self.alt_active {
+            return;
+        }
+        if let Some(primary) = self.stored.take() {
+            self.grid = primary;
+        }
+        self.alt_active = false;
+        if restore {
+            self.restore_cursor();
+        }
+        self.wrap_pending = false;
+        self.scroll_top = 0;
+        self.scroll_bot = self.grid.rows() - 1;
     }
 
     fn blank(&self) -> Cell {
@@ -219,18 +313,21 @@ impl Vt {
                 self.params.clear();
                 self.cur_param = None;
                 self.private = 0;
+                self.saw_colon = false;
                 self.state = State::Csi;
             }
             b']' => {
                 self.osc.clear();
                 self.state = State::Osc;
             }
-            b'(' | b')' | b'*' | b'+' => self.state = State::EscIgnoreOne, // charset designation
+            b'(' => self.state = State::EscCharset, // designate G0 charset from the next byte
+            b')' | b'*' | b'+' | b'#' => self.state = State::EscIgnoreOne, // G1..G3 / DECALN: absorb one
             b'M' => {
-                // Reverse Index: move up, scrolling down at the top.
-                if self.grid.cursor_row == 0 {
-                    // (rare) scroll region down — approximate by leaving as-is at top
-                } else {
+                // Reverse Index: move up, scrolling the region DOWN when at the top margin.
+                if self.grid.cursor_row == self.scroll_top {
+                    let blank = self.blank();
+                    self.grid.scroll_region_down(self.scroll_top, self.scroll_bot, blank);
+                } else if self.grid.cursor_row > 0 {
                     self.grid.cursor_row -= 1;
                 }
                 self.state = State::Ground;
@@ -242,14 +339,11 @@ impl Vt {
                 self.state = State::Ground;
             }
             b'7' => {
-                self.saved = Some((self.grid.cursor_row, self.grid.cursor_col));
+                self.save_cursor();
                 self.state = State::Ground;
             }
             b'8' => {
-                if let Some((r, c)) = self.saved {
-                    self.grid.cursor_row = r.min(self.grid.rows() - 1);
-                    self.grid.cursor_col = c.min(self.grid.cols() - 1);
-                }
+                self.restore_cursor();
                 self.state = State::Ground;
             }
             b'c' => {
@@ -274,22 +368,35 @@ impl Vt {
                 let d = (b - b'0') as u32;
                 self.cur_param = Some(self.cur_param.unwrap_or(0).saturating_mul(10).saturating_add(d));
             }
-            b';' => {
-                self.params.push(self.cur_param.take().unwrap_or(0));
+            b';' => self.push_param(),
+            b':' => {
+                // ISO-8613-6 sub-parameter separator (e.g. `38:2::r:g:b`). Treat like `;` so the CSI is
+                // not aborted (which used to splatter the tail as literal text); remember colon form so
+                // the extended-color parser can skip the colorspace slot.
+                self.saw_colon = true;
+                self.push_param();
             }
             b'?' | b'>' | b'!' if self.params.is_empty() && self.cur_param.is_none() => {
                 self.private = b;
             }
             0x40..=0x7e => {
                 // Final byte: flush the last param and dispatch.
-                if let Some(p) = self.cur_param.take() {
-                    self.params.push(p);
+                if self.cur_param.is_some() {
+                    self.push_param();
                 }
                 self.dispatch_csi(b);
                 self.state = State::Ground;
             }
             0x20..=0x2f => {} // intermediate bytes: ignore
             _ => self.state = State::Ground,
+        }
+    }
+
+    /// Flush `cur_param` into `params`, capped so a pathological `CSI 1;1;1;…` can't grow unbounded.
+    fn push_param(&mut self) {
+        let v = self.cur_param.take().unwrap_or(0);
+        if self.params.len() < 64 {
+            self.params.push(v);
         }
     }
 
@@ -300,6 +407,8 @@ impl Vt {
     fn dispatch_csi(&mut self, final_byte: u8) {
         let rows = self.grid.rows();
         let cols = self.grid.cols();
+        let r = self.grid.cursor_row;
+        let c = self.grid.cursor_col;
         match final_byte {
             b'A' => {
                 let n = self.param(0, 1) as usize;
@@ -341,18 +450,105 @@ impl Vt {
             }
             b'J' => self.erase_display(self.params.first().copied().unwrap_or(0)),
             b'K' => self.erase_line(self.params.first().copied().unwrap_or(0)),
+            b'X' => {
+                // ECH: erase n cells at the cursor without moving it.
+                let n = self.param(0, 1) as usize;
+                let blank = self.blank();
+                self.grid.clear_row_range(r, c, c + n, blank);
+            }
+            b'@' => {
+                // ICH: insert n blank cells, shifting the rest of the line right.
+                let n = self.param(0, 1) as usize;
+                let blank = self.blank();
+                self.grid.insert_cells(r, c, n, blank);
+            }
+            b'P' => {
+                // DCH: delete n cells, shifting the rest of the line left.
+                let n = self.param(0, 1) as usize;
+                let blank = self.blank();
+                self.grid.delete_cells(r, c, n, blank);
+            }
+            b'L' => {
+                // IL: insert n blank lines at the cursor row within the scroll region.
+                if r >= self.scroll_top && r <= self.scroll_bot {
+                    let n = self.param(0, 1);
+                    let blank = self.blank();
+                    for _ in 0..n {
+                        self.grid.scroll_region_down(r, self.scroll_bot, blank);
+                    }
+                }
+            }
+            b'M' => {
+                // DL: delete n lines at the cursor row within the scroll region.
+                if r >= self.scroll_top && r <= self.scroll_bot {
+                    let n = self.param(0, 1);
+                    let blank = self.blank();
+                    for _ in 0..n {
+                        self.grid.scroll_region_up(r, self.scroll_bot, blank);
+                    }
+                }
+            }
             b'm' => self.sgr(),
+            b'r' if self.private == 0 => {
+                // DECSTBM: set the scroll region (top;bottom, 1-based). No params = full screen.
+                let top = self.param(0, 1) as usize - 1;
+                let bot = self.params.get(1).copied().filter(|&v| v != 0).map(|v| v as usize - 1).unwrap_or(rows - 1);
+                if top < bot && bot < rows {
+                    self.scroll_top = top;
+                    self.scroll_bot = bot;
+                } else {
+                    self.scroll_top = 0;
+                    self.scroll_bot = rows - 1;
+                }
+                self.grid.cursor_row = 0;
+                self.grid.cursor_col = 0;
+                self.wrap_pending = false;
+            }
+            b's' if self.private == 0 => self.save_cursor(), // SCO save cursor
+            b'u' if self.private == 0 => self.restore_cursor(), // SCO restore cursor
             b'S' => {
+                // SU: scroll the region up n lines.
                 let n = self.param(0, 1);
                 let blank = self.blank();
                 for _ in 0..n {
-                    self.grid.scroll_up(blank);
+                    self.grid.scroll_region_up(self.scroll_top, self.scroll_bot, blank);
+                }
+            }
+            b'T' => {
+                // SD: scroll the region down n lines.
+                let n = self.param(0, 1);
+                let blank = self.blank();
+                for _ in 0..n {
+                    self.grid.scroll_region_down(self.scroll_top, self.scroll_bot, blank);
                 }
             }
             b'h' | b'l' if self.private == b'?' => {
-                // DEC private mode set/reset — we honor cursor visibility (25).
-                if self.params.first() == Some(&25) {
-                    self.grid.cursor_visible = final_byte == b'h';
+                let set = final_byte == b'h';
+                match self.params.first().copied().unwrap_or(0) {
+                    25 => self.grid.cursor_visible = set,       // DECTCEM show/hide cursor
+                    7 => self.autowrap = set,                   // DECAWM autowrap
+                    1049 => {
+                        if set {
+                            self.enter_alt(true);
+                        } else {
+                            self.leave_alt(true);
+                        }
+                    }
+                    47 | 1047 => {
+                        if set {
+                            self.enter_alt(false);
+                        } else {
+                            self.leave_alt(false);
+                        }
+                    }
+                    1048 => {
+                        if set {
+                            self.save_cursor();
+                        } else {
+                            self.restore_cursor();
+                        }
+                    }
+                    _ => {} // mouse/bracketed-paste/cursor-key modes are input-side: ignore on output
                 }
             }
             _ => {} // unhandled CSI: ignore
@@ -432,12 +628,15 @@ impl Vt {
                             }
                             i += 2;
                         } else if kind == 2 {
-                            let r = self.params.get(i + 2).copied().unwrap_or(0) as u8;
-                            let g = self.params.get(i + 3).copied().unwrap_or(0) as u8;
-                            let b = self.params.get(i + 4).copied().unwrap_or(0) as u8;
+                            // Semicolon form is `38;2;r;g;b`; the ISO colon form is `38:2:<cs>:r:g:b`
+                            // with an extra colorspace-id slot to skip.
+                            let off = if self.saw_colon { 3 } else { 2 };
+                            let r = self.params.get(i + off).copied().unwrap_or(0) as u8;
+                            let g = self.params.get(i + off + 1).copied().unwrap_or(0) as u8;
+                            let b = self.params.get(i + off + 2).copied().unwrap_or(0) as u8;
                             let col = Color::Rgb(r, g, b);
                             if target_fg { self.pen.fg = col } else { self.pen.bg = col }
-                            i += 4;
+                            i += off + 2;
                         }
                     }
                 }
@@ -478,5 +677,35 @@ impl Vt {
             }
         }
         self.osc.clear();
+    }
+}
+
+/// Translate a byte through the DEC Special Graphics charset (`ESC ( 0`) — the box-drawing set that
+/// `tmux`/`mc`/ncurses table UIs use. Only the printable range `0x5f..=0x7e` is remapped; anything else
+/// passes through unchanged. The grid stores the real Unicode box char (what a full renderer draws).
+fn dec_graphic(ch: char) -> char {
+    match ch {
+        '`' => '\u{25c6}', // ◆ diamond
+        'a' => '\u{2592}', // ▒ checker
+        'f' => '\u{00b0}', // °
+        'g' => '\u{00b1}', // ±
+        'j' => '\u{2518}', // ┘
+        'k' => '\u{2510}', // ┐
+        'l' => '\u{250c}', // ┌
+        'm' => '\u{2514}', // └
+        'n' => '\u{253c}', // ┼
+        'q' => '\u{2500}', // ─
+        't' => '\u{251c}', // ├
+        'u' => '\u{2524}', // ┤
+        'v' => '\u{2534}', // ┴
+        'w' => '\u{252c}', // ┬
+        'x' => '\u{2502}', // │
+        'y' => '\u{2264}', // ≤
+        'z' => '\u{2265}', // ≥
+        '{' => '\u{03c0}', // π
+        '|' => '\u{2260}', // ≠
+        '}' => '\u{00a3}', // £
+        '~' => '\u{00b7}', // ·
+        other => other,
     }
 }
