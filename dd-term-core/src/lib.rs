@@ -121,4 +121,100 @@ mod tests {
         assert_eq!(vt.grid().row_text(0), "hel");
         assert_eq!(vt.grid().cols(), 3);
     }
+
+    // ---- hardening: the audit backlog (alt screen, scroll regions, insert/delete, …) ----
+
+    #[test]
+    fn alt_screen_restores_primary_on_exit() {
+        // The "vim leaves garbage" fix: enter alt (?1049h), draw, leave (?1049l) → the shell screen is
+        // back exactly as it was.
+        let mut vt = Vt::new(20, 4);
+        vt.advance_bytes(b"shell prompt$ ");
+        vt.advance_bytes(b"\x1b[?1049h"); // enter alt screen
+        vt.advance_bytes(b"\x1b[2J\x1b[HVIM FULLSCREEN");
+        assert_eq!(vt.grid().row_text(0), "VIM FULLSCREEN");
+        vt.advance_bytes(b"\x1b[?1049l"); // leave alt screen
+        assert_eq!(vt.grid().row_text(0), "shell prompt$");
+    }
+
+    #[test]
+    fn scroll_region_pins_status_line() {
+        // DECSTBM confines scrolling to [top,bottom]; a line below the region stays put.
+        let mut vt = Vt::new(10, 4);
+        vt.advance_bytes(b"\x1b[4;4Hstatus"); // row 4 (index 3) = a pinned status line
+        vt.advance_bytes(b"\x1b[1;3r"); // scroll region = rows 1..3
+        vt.advance_bytes(b"\x1b[1;1HA\r\nB\r\nC\r\nD"); // fill region; the last LF scrolls region only
+        // "status" was written at column 4 (index 3) so it reads with 3 leading spaces — and, crucially,
+        // it is still there: the scroll stayed inside rows 1..3 and left this pinned line untouched.
+        assert_eq!(vt.grid().row_text(3), "   status", "status line outside the region must not scroll");
+    }
+
+    #[test]
+    fn insert_and_delete_chars() {
+        let mut vt = Vt::new(10, 2);
+        vt.advance_bytes(b"abcdef");
+        vt.advance_bytes(b"\x1b[1G\x1b[2P"); // col 1, delete 2 chars -> "cdef"
+        assert_eq!(vt.grid().row_text(0), "cdef");
+        vt.advance_bytes(b"\x1b[1G\x1b[2@"); // col 1, insert 2 blanks -> "  cdef"
+        assert_eq!(vt.grid().row_text(0), "  cdef");
+        vt.advance_bytes(b"\x1b[1;3H\x1b[2X"); // col 3, erase 2 in place
+        assert_eq!(vt.grid().cell(0, 2).unwrap().ch, ' ');
+    }
+
+    #[test]
+    fn insert_and_delete_lines() {
+        let mut vt = Vt::new(6, 4);
+        vt.advance_bytes(b"one\r\ntwo\r\nthree");
+        vt.advance_bytes(b"\x1b[1;1H\x1b[1L"); // insert a blank line at top
+        assert_eq!(vt.grid().row_text(0), "");
+        assert_eq!(vt.grid().row_text(1), "one");
+        vt.advance_bytes(b"\x1b[1;1H\x1b[1M"); // delete it again
+        assert_eq!(vt.grid().row_text(0), "one");
+    }
+
+    #[test]
+    fn colon_sgr_truecolor_no_splatter() {
+        // ISO-8613-6 colon form must set the color, NOT abort and dump the tail as literal text.
+        let mut vt = Vt::new(20, 2);
+        vt.advance_bytes(b"\x1b[38:2::10:20:30mX");
+        assert_eq!(vt.grid().row_text(0), "X", "no literal '2::10:20:30m' splatter");
+        assert_eq!(vt.grid().cell(0, 0).unwrap().fg, Color::Rgb(10, 20, 30));
+    }
+
+    #[test]
+    fn autowrap_off_overwrites_last_column() {
+        let mut vt = Vt::new(4, 2);
+        vt.advance_bytes(b"\x1b[?7l"); // DECAWM off
+        vt.advance_bytes(b"abcdef"); // 4 cols; with autowrap off, cols 4.. overwrite the last cell
+        assert_eq!(vt.grid().row_text(1), "", "must not have wrapped to row 1");
+        assert_eq!(vt.grid().cell(0, 3).unwrap().ch, 'f'); // last written char sticks in the last column
+    }
+
+    #[test]
+    fn dec_line_drawing_charset() {
+        // ESC ( 0 selects DEC special graphics: q -> ─, x -> │. ESC ( B restores ASCII.
+        let mut vt = Vt::new(10, 2);
+        vt.advance_bytes(b"\x1b(0qx\x1b(Bq");
+        assert_eq!(vt.grid().cell(0, 0).unwrap().ch, '\u{2500}'); // ─
+        assert_eq!(vt.grid().cell(0, 1).unwrap().ch, '\u{2502}'); // │
+        assert_eq!(vt.grid().cell(0, 2).unwrap().ch, 'q'); // back to ASCII
+    }
+
+    #[test]
+    fn sco_cursor_save_restore() {
+        let mut vt = Vt::new(20, 4);
+        vt.advance_bytes(b"\x1b[2;5H\x1b[s"); // move + SCO save
+        vt.advance_bytes(b"\x1b[4;10Hxxx"); // move elsewhere + write
+        vt.advance_bytes(b"\x1b[uY"); // restore -> back at (2,5)
+        assert_eq!(vt.grid().cell(1, 4).unwrap().ch, 'Y');
+    }
+
+    #[test]
+    fn scroll_down_and_reverse_index() {
+        let mut vt = Vt::new(6, 3);
+        vt.advance_bytes(b"a\r\nb\r\nc"); // rows a/b/c
+        vt.advance_bytes(b"\x1b[T"); // SD: scroll region down 1 -> blank, a, b
+        assert_eq!(vt.grid().row_text(0), "");
+        assert_eq!(vt.grid().row_text(1), "a");
+    }
 }
