@@ -1695,6 +1695,394 @@ mod tests {
         assert_eq!(c.restart_policy.name, "always", "restart policy is not cleared by stop");
     }
 
+    // ==============================================================================================
+    // MULTI-STEP INTEGRATION FLOWS — WAVE 3. Fresh handler SEQUENCES on branches the prior two waves
+    // did not drive: `containers_prune`, network connect/disconnect IDEMPOTENCY, an exec whose
+    // container stops out from under it, `volumes_prune` vs a still-referenced ANON volume, name reuse
+    // after a REMOVED container, and a 3-tag rmi chain deleting the MIDDLE tag. Same rules: engine-free
+    // handlers only; state asserted after EVERY step; docker's contract stated inline, then dd's actual
+    // behavior asserted. A clean run is real signal; a divergence is flagged (concrete repro) not fixed.
+    // ==============================================================================================
+
+    /// Force a seeded container's lifecycle status (e.g. flip "running" -> "exited") in place, mirroring
+    /// the engine reaper writing back the exit without going through a spawn.
+    async fn set_status(app: &App, id: &str, status: &str) {
+        let mut g = app.inner.lock().await;
+        if let Some(c) = g.containers.get_mut(id) {
+            c.status = status.to_string();
+        }
+    }
+
+    // ---- FLOW 16: `container prune` removes ONLY the exited/created ones, keeps the running one -------
+    // docker: `POST /containers/prune` (== `docker container prune`) removes every non-running,
+    // non-paused container and returns their ids in `ContainersDeleted`; a running container is kept.
+    // Drives seed(3) -> prune -> assert the deleted SET -> ps(all=1) reflects the removal.
+    #[tokio::test]
+    async fn flow_containers_prune_removes_only_stopped_keeps_running() {
+        let app = test_app();
+        seed_container(&app, "runid0000000", "running").await;
+        seed_container(&app, "exitidA00000", "exited").await;
+        seed_container(&app, "exitidB00000", "exited").await;
+
+        // Prune: reclaims exactly the two exited ids; the running one is untouched.
+        let axum::Json(rep) = crate::containers::containers_prune(State(app.clone())).await;
+        let deleted: std::collections::HashSet<&str> =
+            rep.containers_deleted.iter().map(|s| s.as_str()).collect();
+        assert_eq!(deleted.len(), 2, "exactly two containers pruned: {deleted:?}");
+        assert!(deleted.contains("exitidA00000"), "exited A reported deleted: {deleted:?}");
+        assert!(deleted.contains("exitidB00000"), "exited B reported deleted: {deleted:?}");
+        assert!(
+            !deleted.contains("runid0000000"),
+            "a RUNNING container must never be in the pruned set: {deleted:?}"
+        );
+
+        // In-memory state: only the running container remains.
+        {
+            let g = app.inner.lock().await;
+            assert!(g.containers.contains_key("runid0000000"), "running container kept");
+            assert!(!g.containers.contains_key("exitidA00000"), "exited A gone");
+            assert!(!g.containers.contains_key("exitidB00000"), "exited B gone");
+        }
+
+        // ps (all=1) reflects the removal: a single row, the running container.
+        let all_q: crate::containers::PsQ =
+            serde_json::from_value(serde_json::json!({"all": "true"})).unwrap();
+        let axum::Json(list) =
+            crate::containers::containers_json(State(app.clone()), Query(all_q)).await;
+        assert_eq!(list.len(), 1, "ps all=1 lists only the surviving running container");
+        assert_eq!(list[0].id, "runid0000000");
+    }
+
+    // ---- FLOW 17: network connect IDEMPOTENCY + double disconnect --------------------------------
+    // docker contract: a SECOND `network connect` of the same container is a 403/500 ("endpoint ...
+    // already exists in network"); a `network disconnect` of a container that is NOT attached is a
+    // 500 ("is not connected to network"). dd is LENIENT on both (join/leave are idempotent). The
+    // SAFETY property under test is the refcount: a double-connect must NOT leak a second endpoint that
+    // a single disconnect then cannot clear. Drives connect x2 -> disconnect -> disconnect(again).
+    #[tokio::test]
+    async fn flow_network_connect_idempotent_no_refcount_leak() {
+        let app = test_app();
+        seed_container(&app, "c1", "running").await;
+        let r = crate::networks::networks_create(State(app.clone()), net_create_body("mynet")).await;
+        assert_eq!(r.status(), StatusCode::CREATED);
+
+        // Step 1: connect c1 — 200, one endpoint.
+        let r = crate::networks::network_connect(
+            State(app.clone()),
+            Path("mynet".into()),
+            net_attach_body("c1"),
+        )
+        .await;
+        assert_eq!(r.status(), StatusCode::OK);
+        assert_eq!(net_endpoint_count(&app, "mynet").await, 1, "first connect allocates one endpoint");
+        assert_eq!(net_members(&app, "mynet").await, vec!["c1".to_string()]);
+
+        // Step 2: connect c1 AGAIN. docker would 403/500; dd is idempotent (200). CRITICAL: the endpoint
+        // count must STAY 1 — a leak here (count 2) would need two disconnects to clear (a refcount bug).
+        let r = crate::networks::network_connect(
+            State(app.clone()),
+            Path("mynet".into()),
+            net_attach_body("c1"),
+        )
+        .await;
+        assert_eq!(r.status(), StatusCode::OK, "dd re-connect is idempotent 200 (docker would 403/500)");
+        assert_eq!(
+            net_endpoint_count(&app, "mynet").await,
+            1,
+            "re-connect must NOT leak a second endpoint (idempotent join keyed by cid)"
+        );
+        assert_eq!(
+            net_members(&app, "mynet").await,
+            vec!["c1".to_string()],
+            "re-connect must NOT duplicate the membership entry"
+        );
+
+        // Step 3: disconnect once — fully clears (endpoint AND membership reach zero in ONE call).
+        let r = crate::networks::network_disconnect(
+            State(app.clone()),
+            Path("mynet".into()),
+            net_attach_body("c1"),
+        )
+        .await;
+        assert_eq!(r.status(), StatusCode::OK);
+        assert_eq!(
+            net_endpoint_count(&app, "mynet").await,
+            0,
+            "a SINGLE disconnect fully clears the endpoint (no leaked refcount from the double-connect)"
+        );
+        assert_eq!(net_members(&app, "mynet").await.len(), 0, "membership cleared in one disconnect");
+
+        // Step 4: disconnect AGAIN, already gone. docker: 500 "is not connected"; dd: idempotent 200,
+        // state unchanged. Soft divergence (lenient) — flagged, not a state-corruption bug.
+        let r = crate::networks::network_disconnect(
+            State(app.clone()),
+            Path("mynet".into()),
+            net_attach_body("c1"),
+        )
+        .await;
+        assert_eq!(r.status(), StatusCode::OK, "dd double-disconnect is idempotent 200 (docker would 500)");
+        assert_eq!(net_endpoint_count(&app, "mynet").await, 0, "still zero endpoints");
+
+        // The now-empty net is deletable (proving the refcount truly reached zero).
+        let r = crate::networks::network_delete(State(app.clone()), Path("mynet".into())).await;
+        assert_eq!(r.status(), StatusCode::NO_CONTENT, "empty net deletes (refcount reached zero)");
+    }
+
+    // ---- FLOW 18: exec whose container STOPS between create and inspect --------------------------
+    // docker: an `exec create` on a running container returns an id; if the container then stops, an
+    // `exec inspect` of that id still succeeds (Running=false); a FRESH `exec create` on the now-stopped
+    // container is a 409 ("is not running"). Drives create -> stop-the-container -> inspect -> create(409).
+    #[tokio::test]
+    async fn flow_exec_survives_container_stop_then_fresh_exec_409() {
+        let app = test_app();
+        seed_container(&app, "c1", "running").await;
+
+        // Step 1: exec_create while running -> 201 + id.
+        let r = crate::containers::exec_create(
+            State(app.clone()),
+            Path("c1".into()),
+            axum::Json(serde_json::from_value(serde_json::json!({"Cmd":["sleep","1"]})).unwrap()),
+        )
+        .await;
+        assert_eq!(r.status(), StatusCode::CREATED);
+        let exec_id = to_body_json(r).await["Id"].as_str().unwrap().to_string();
+
+        // Step 2: the container stops (reaper writes back exited) out from under the recorded exec.
+        set_status(&app, "c1", "exited").await;
+
+        // Step 3: inspect the pre-existing exec id — still 200 with a sane shape (no panic/500). The exec
+        // record outlives the container's running state; Running=false, ContainerID still points at c1.
+        let r = crate::containers::exec_inspect(State(app.clone()), Path(exec_id.clone())).await;
+        assert_eq!(r.status(), StatusCode::OK, "inspecting a pre-created exec survives the container stop");
+        let v = to_body_json(r).await;
+        assert_eq!(v["ID"], exec_id);
+        assert_eq!(v["Running"], false, "the un-started exec is not Running");
+        assert_eq!(v["ExitCode"], 0);
+        assert_eq!(v["ContainerID"], "c1", "the exec still references its container");
+        assert_eq!(v["ProcessConfig"]["entrypoint"], "sleep");
+
+        // Step 4: a FRESH exec_create on the now-exited container is a 409 ("is not running"); no record.
+        let before = app.inner.lock().await.execs.len();
+        let r = crate::containers::exec_create(
+            State(app.clone()),
+            Path("c1".into()),
+            axum::Json(serde_json::from_value(serde_json::json!({"Cmd":["ls"]})).unwrap()),
+        )
+        .await;
+        assert_eq!(r.status(), StatusCode::CONFLICT, "exec on a stopped container is 409");
+        let msg = to_body_string(r).await;
+        assert!(msg.contains("is not running"), "409 body says not running: {msg}");
+        assert_eq!(
+            app.inner.lock().await.execs.len(),
+            before,
+            "a rejected exec must NOT record a second exec"
+        );
+    }
+
+    // ---- FLOW 19: `volume prune` keeps a still-referenced ANON volume, reclaims it after `rm` -------
+    // docker: `volume prune` (no filter) reclaims UNUSED volumes including dangling anonymous ones, but
+    // NEVER one still referenced by a container — even a STOPPED one. Drives create(-v /data) -> stop ->
+    // prune(kept) -> rm(no -v) -> prune(reclaimed). The anon vol survives while the container exists.
+    #[tokio::test]
+    async fn flow_volume_prune_keeps_referenced_anon_reclaims_after_rm() {
+        let app = test_app();
+        seed_image_rootfs(&app, "alpine", "/store/alpine-R").await;
+
+        // Create a container with a bare `-v /data` anonymous volume, then stop it (exited).
+        let r = crate::containers::containers_create(
+            State(app.clone()),
+            Query(create_q(serde_json::json!({}))),
+            create_body(serde_json::json!({
+                "Image":"alpine",
+                "HostConfig": {"Binds": ["/data"]}
+            })),
+        )
+        .await;
+        assert_eq!(r.status(), StatusCode::CREATED);
+        let cid = to_body_json(r).await["Id"].as_str().unwrap().to_string();
+        let anon = {
+            let g = app.inner.lock().await;
+            let c = &g.containers[&cid];
+            assert_eq!(c.anon_volumes.len(), 1, "a bare -v /data yields one anon volume");
+            c.anon_volumes[0].clone()
+        };
+        set_status(&app, &cid, "exited").await;
+        assert!(
+            app.inner.lock().await.volumes.iter().any(|v| v.name == anon),
+            "the anon volume is registered in the store"
+        );
+
+        // Prune #1 while a (stopped) container still references the anon volume — it is KEPT.
+        let axum::Json(rep) = crate::volumes::volumes_prune(State(app.clone())).await;
+        assert!(
+            !rep.volumes_deleted.iter().any(|s| s == &anon),
+            "a still-referenced anon volume must NOT be pruned (even for a stopped container): {:?}",
+            rep.volumes_deleted
+        );
+        assert!(
+            app.inner.lock().await.volumes.iter().any(|v| v.name == anon),
+            "the anon volume survives prune #1 while its container exists"
+        );
+
+        // Plain `rm` (no -v): the container goes, the anon volume is LEFT behind (now dangling/unused).
+        let r = crate::containers::containers_delete(
+            State(app.clone()),
+            Path(cid.clone()),
+            Query::<crate::containers::DeleteQ>(serde_json::from_value(serde_json::json!({})).unwrap()),
+        )
+        .await;
+        assert_eq!(r.status(), StatusCode::NO_CONTENT);
+        assert!(
+            app.inner.lock().await.volumes.iter().any(|v| v.name == anon),
+            "plain rm (no -v) leaves the anon volume dangling — still present pre-prune"
+        );
+
+        // Prune #2: now nothing references it, so the dangling anon volume is reclaimed.
+        let axum::Json(rep) = crate::volumes::volumes_prune(State(app.clone())).await;
+        assert!(
+            rep.volumes_deleted.iter().any(|s| s == &anon),
+            "the now-unreferenced dangling anon volume is reclaimed by prune #2: {:?}",
+            rep.volumes_deleted
+        );
+        assert!(
+            !app.inner.lock().await.volumes.iter().any(|v| v.name == anon),
+            "anon volume gone after prune #2"
+        );
+    }
+
+    // ---- FLOW 20: a `--name` freed by `rm` can be REUSED (no stale name reservation) --------------
+    // docker: `create --name web` then `rm web` FREES the name; a second `create --name web` is a 201
+    // (the name is only reserved while the container exists). Drives create -> delete -> create(same name).
+    #[tokio::test]
+    async fn flow_container_name_reusable_after_remove() {
+        let app = test_app();
+        seed_image_rootfs(&app, "alpine", "/store/alpine-R").await;
+
+        let create_web = |app: App| async move {
+            crate::containers::containers_create(
+                State(app),
+                Query(create_q(serde_json::json!({"name":"web"}))),
+                create_body(serde_json::json!({"Image":"alpine"})),
+            )
+            .await
+        };
+
+        // Step 1: first `--name web` -> 201.
+        let r = create_web(app.clone()).await;
+        assert_eq!(r.status(), StatusCode::CREATED, "first --name web creates");
+        let cid1 = to_body_json(r).await["Id"].as_str().unwrap().to_string();
+        assert_eq!(app.inner.lock().await.containers[&cid1].name, "web");
+
+        // Step 2: rm web (created state -> engine-free delete) -> 204; the name is freed.
+        let r = crate::containers::containers_delete(
+            State(app.clone()),
+            Path("web".into()),
+            Query::<crate::containers::DeleteQ>(serde_json::from_value(serde_json::json!({})).unwrap()),
+        )
+        .await;
+        assert_eq!(r.status(), StatusCode::NO_CONTENT, "rm web succeeds");
+        assert_eq!(
+            app.inner.lock().await.containers.values().filter(|c| c.name == "web").count(),
+            0,
+            "no container named web after the rm"
+        );
+
+        // Step 3: create `--name web` AGAIN -> 201 (the freed name is reusable), a NEW distinct id.
+        let r = create_web(app.clone()).await;
+        assert_eq!(
+            r.status(),
+            StatusCode::CREATED,
+            "a --name freed by rm must be reusable (no stale 409 reservation)"
+        );
+        let cid2 = to_body_json(r).await["Id"].as_str().unwrap().to_string();
+        assert_ne!(cid1, cid2, "the recreated container is a fresh distinct id");
+        let g = app.inner.lock().await;
+        assert_eq!(
+            g.containers.values().filter(|c| c.name == "web").count(),
+            1,
+            "exactly one container named web (the recreated one)"
+        );
+        assert!(g.containers.contains_key(&cid2), "the recreated web is present");
+    }
+
+    // ---- FLOW 21: 3-tag rmi chain deleting the MIDDLE tag — rootfs survives until the LAST tag -----
+    // docker: `tag a:1 a:2`, `tag a:1 a:3` (all three share rootfs R); `rmi a:2` and `rmi a:1` are each
+    // UNTAG-only (a sibling still references R); `rmi a:3` is the LAST reference and truly DELETES R.
+    // Extends FLOW 8 (2 tags, in order) with a THIRD tag and a MIDDLE-first deletion order.
+    #[tokio::test]
+    async fn flow_image_three_tag_chain_delete_middle_first() {
+        let app = test_app();
+        seed_image_rootfs(&app, "a:1", "/store/shared-R3/rootfs").await;
+
+        // Step 1: tag a:1 as a:2 and a:3 — 201 each; all three share R.
+        for t in ["2", "3"] {
+            let q: crate::images::TagQ =
+                serde_json::from_value(serde_json::json!({"repo": "a", "tag": t})).unwrap();
+            let r = crate::images::image_tag(State(app.clone()), Path("a:1".into()), Query(q)).await;
+            assert_eq!(r.status(), StatusCode::CREATED, "tag a:{t} created");
+        }
+        {
+            let g = app.inner.lock().await;
+            for name in ["a:1", "a:2", "a:3"] {
+                let i = g.images.iter().find(|i| i.name == name).expect("tag present");
+                assert_eq!(i.rootfs, "/store/shared-R3/rootfs", "{name} shares R");
+            }
+        }
+        let tags = image_repotags(&app).await;
+        assert!(
+            tags.contains("a:1") && tags.contains("a:2") && tags.contains("a:3"),
+            "all three tags listed: {tags:?}"
+        );
+
+        // Step 2: `rmi a:2` (the MIDDLE tag) — UNTAG only; a:1 + a:3 (and R) survive.
+        let r = crate::images::image_delete(State(app.clone()), Path("a:2".into()), Query(empty_q())).await;
+        assert_eq!(r.status(), StatusCode::OK);
+        let arr = to_body_json(r).await;
+        let arr = arr.as_array().unwrap();
+        assert!(arr.iter().any(|x| x.get("Untagged").is_some()), "a:2 untagged: {arr:?}");
+        assert!(
+            !arr.iter().any(|x| x.get("Deleted").is_some()),
+            "rmi of a MIDDLE tag must NOT delete the shared rootfs: {arr:?}"
+        );
+        {
+            let g = app.inner.lock().await;
+            assert!(!g.images.iter().any(|i| i.name == "a:2"), "a:2 gone");
+            assert!(g.images.iter().any(|i| i.name == "a:1"), "a:1 survives");
+            assert!(g.images.iter().any(|i| i.name == "a:3"), "a:3 survives");
+        }
+
+        // Step 3: `rmi a:1` — still UNTAG only (a:3 keeps R alive).
+        let r = crate::images::image_delete(State(app.clone()), Path("a:1".into()), Query(empty_q())).await;
+        assert_eq!(r.status(), StatusCode::OK);
+        let arr = to_body_json(r).await;
+        let arr = arr.as_array().unwrap();
+        assert!(arr.iter().any(|x| x.get("Untagged").is_some()), "a:1 untagged: {arr:?}");
+        assert!(
+            !arr.iter().any(|x| x.get("Deleted").is_some()),
+            "with a:3 still referencing R, a:1 rmi is untag-only: {arr:?}"
+        );
+        assert!(
+            app.inner.lock().await.images.iter().any(|i| i.name == "a:3"),
+            "a:3 (the last tag) survives"
+        );
+
+        // Step 4: `rmi a:3` — the LAST reference; now a true Deleted(sha256) record and an empty store.
+        let r = crate::images::image_delete(State(app.clone()), Path("a:3".into()), Query(empty_q())).await;
+        assert_eq!(r.status(), StatusCode::OK);
+        let arr = to_body_json(r).await;
+        let arr = arr.as_array().unwrap();
+        assert!(arr.iter().any(|x| x.get("Untagged").is_some()), "a:3 untagged: {arr:?}");
+        assert!(
+            arr.iter().any(|x| {
+                x.get("Deleted")
+                    .and_then(|d| d.as_str())
+                    .is_some_and(|s| s.starts_with("sha256:"))
+            }),
+            "the LAST tag's rmi reports a Deleted sha256 (rootfs R finally removed): {arr:?}"
+        );
+        assert!(image_repotags(&app).await.is_empty(), "store empty after the last tag is removed");
+    }
+
     /// Collect a response body into a String (for error-message assertions).
     async fn to_body_string(resp: axum::response::Response) -> String {
         let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
