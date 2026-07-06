@@ -1,7 +1,19 @@
+//! The per-case test RUNNER. `run()` is the driver: provision a guest, jail-copy it into the rootfs,
+//! assemble the spawn config (`config`), drive the engine under `timeout`, drain guest stdout durably,
+//! and evaluate the case's checks (`eval`). Shell/output helpers live in `util`.
+
 use std::path::PathBuf;
 use std::process::Command;
 
 use super::*;
+
+mod config;
+mod eval;
+mod util;
+
+pub(crate) use config::{build_cfg, guest_argv};
+use eval::eval;
+use util::{shq, strip_noise};
 
 /// Run one case on one engine and evaluate its checks.
 pub fn run(ctx: &Ctx, c: &Case, e: Engine) -> Status {
@@ -205,176 +217,5 @@ pub fn run(ctx: &Ctx, c: &Case, e: Engine) -> Status {
         Status::Xpass
     } else {
         Status::Pass
-    }
-}
-
-/// Assemble the `SpawnConfig` for a case+engine EXCEPT `argv` (callers set `argv`: `run()` may use a
-/// jailed in-rootfs copy path, perf uses the plain guest path). `rootfs_str` is "" when the case has no
-/// rootfs. Needs no `Ctx`. Preserves the exact overlay guard, the untrusted push, and the env loop.
-pub(crate) fn build_cfg(c: &Case, e: Engine, rootfs_str: &str) -> ddjit::SpawnConfig {
-    let mut cfg = ddjit::SpawnConfig::new(String::new(), rootfs_str.to_string());
-    cfg.lowers = c.lowers.clone();
-    // .overlay(): inject the rootfs as its own lower so g_nlower>0 turns on the overlay open/lseek path
-    // (linux engines only; darwin has no overlayfs). Reproduces overlay-only bugs like in the matrix.
-    if c.overlay && !rootfs_str.is_empty() && e != Engine::DarwinAarch64 {
-        cfg.lowers.push(rootfs_str.to_string());
-    }
-    cfg.mem_max = c.mem_max;
-    cfg.cpus = c.cpus;
-    cfg.read_only = c.read_only;
-    cfg.ulimits = c.ulimits.clone();
-    // Untrusted-guest SENTRY split: bake DDJIT_UNTRUSTED=1 into the engine's launch env (via SpawnConfig's
-    // `env`, which serializes into the `exec env …` prefix of the launch script — so it survives the `mac`
-    // bridge that drops ambient env). DDJIT_SANDBOX is left unset on purpose (ring/forwarding, not Seatbelt).
-    if c.untrusted {
-        cfg.env.push(("DDJIT_UNTRUSTED".into(), "1".into()));
-    }
-    for (k, v) in &c.env {
-        cfg.env.push((k.clone(), v.clone()));
-    }
-    cfg
-}
-
-/// Build the guest `argv` from `argv0` (an `InRootfs` case runs `c.args` verbatim; otherwise `argv0`
-/// is prepended). `run()` passes its jailed in-rootfs copy path, perf passes the plain guest path.
-pub(crate) fn guest_argv(c: &Case, argv0: String) -> Vec<String> {
-    match &c.bin {
-        Bin::InRootfs => c.args.clone(),
-        _ => std::iter::once(argv0)
-            .chain(c.args.iter().cloned())
-            .collect(),
-    }
-}
-
-fn eval(
-    chk: &Check,
-    stdout: &str,
-    code: i32,
-    guest: &str,
-    args: &[String],
-    e: Engine,
-) -> Result<(), String> {
-    match chk {
-        Check::Exit(want) => (code == *want)
-            .then_some(())
-            .ok_or_else(|| format!("exit {code} != {want}")),
-        Check::Out(want) => (stdout == *want)
-            .then_some(())
-            .ok_or_else(|| format!("stdout {:?} != {:?}", stdout, want)),
-        Check::OutHas(sub) => stdout
-            .contains(sub)
-            .then_some(())
-            .ok_or_else(|| format!("stdout {:?} lacks {:?}", stdout, sub)),
-        Check::Oracle => {
-            // native ground truth: aarch64 runs directly; x86_64 runs under qemu-user.
-            let o = match e {
-                Engine::LinuxX86_64 => Command::new("timeout")
-                    .arg("25")
-                    .arg("qemu-x86_64")
-                    .arg(guest)
-                    .args(args)
-                    .output(),
-                _ => Command::new("timeout")
-                    .arg("25")
-                    .arg(guest)
-                    .args(args)
-                    .output(),
-            }
-            .map_err(|err| format!("oracle spawn: {err}"))?;
-            let (eo, ec) = (strip_noise(&o.stdout), o.status.code().unwrap_or(-1));
-            if eo != stdout || ec != code {
-                Err(format!(
-                    "oracle mismatch (jit {code}/{stdout:?} vs native {ec}/{eo:?})"
-                ))
-            } else {
-                Ok(())
-            }
-        }
-    }
-}
-
-/// Single-quote a string for safe inclusion in the mac-side `bash -lc` launch script (used to append
-/// the stdout-drain redirect target). Mirrors `SpawnConfig::shq`.
-fn shq(s: &str) -> String {
-    let mut o = String::with_capacity(s.len() + 2);
-    o.push('\'');
-    for c in s.chars() {
-        if c == '\'' {
-            o.push_str("'\\''");
-        } else {
-            o.push(c);
-        }
-    }
-    o.push('\'');
-    o
-}
-
-/// Drop the JIT's diagnostic "unhandled syscall ..." lines so they don't pollute stdout checks.
-fn strip_noise(b: &[u8]) -> String {
-    String::from_utf8_lossy(b)
-        .lines()
-        .filter(|l| !l.contains("unhandled syscall"))
-        .collect::<Vec<_>>()
-        .join("\n")
-        + if b.ends_with(b"\n") && !b.is_empty() {
-            "\n"
-        } else {
-            ""
-        }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::{shq, strip_noise};
-
-    // ── shq(): single-quote shell escaping ───────────────────────────────────
-    #[test]
-    fn shq_wraps_plain_string_in_single_quotes() {
-        assert_eq!(shq("plain"), "'plain'");
-    }
-
-    #[test]
-    fn shq_escapes_embedded_single_quote() {
-        // each ' becomes the close-quote / escaped-quote / reopen-quote form: '\''
-        assert_eq!(shq("a'b"), "'a'\\''b'");
-    }
-
-    #[test]
-    fn shq_empty_string_is_empty_quotes() {
-        assert_eq!(shq(""), "''");
-    }
-
-    #[test]
-    fn shq_preserves_path_like_content() {
-        assert_eq!(shq("/tmp/x y.out"), "'/tmp/x y.out'");
-    }
-
-    // ── strip_noise(): drop "unhandled syscall" lines, keep trailing newline ──
-    #[test]
-    fn strip_noise_removes_unhandled_syscall_lines() {
-        let out = strip_noise(b"hello\nunhandled syscall 42\nworld\n");
-        assert_eq!(out, "hello\nworld\n");
-    }
-
-    #[test]
-    fn strip_noise_preserves_trailing_newline_on_nonempty() {
-        assert_eq!(strip_noise(b"a\n"), "a\n");
-    }
-
-    #[test]
-    fn strip_noise_keeps_no_trailing_newline_when_absent() {
-        assert_eq!(strip_noise(b"a"), "a");
-    }
-
-    #[test]
-    fn strip_noise_empty_input_stays_empty() {
-        // empty input: no lines, and the `!b.is_empty()` guard blocks a spurious "\n".
-        assert_eq!(strip_noise(b""), "");
-    }
-
-    #[test]
-    fn strip_noise_multiline_no_trailing_newline() {
-        // no trailing newline in → none out, even across multiple lines.
-        assert_eq!(strip_noise(b"one\ntwo"), "one\ntwo");
     }
 }
