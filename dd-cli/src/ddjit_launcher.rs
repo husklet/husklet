@@ -84,13 +84,17 @@ pub fn launch(ws: &Workspace, cols: u16, rows: u16) -> io::Result<Box<dyn PtyBac
     std::fs::create_dir_all(&upper_pb)?;
     let upper = upper_pb.to_string_lossy().into_owned();
 
-    // Build the container: the persistent upper overlays the image rootfs; a login shell (bash if the
-    // image has it, else sh) with a real controlling PTY; a private loopback keyed by the workspace.
+    // Build the container: the persistent upper overlays the image rootfs; a FORCED-interactive login
+    // shell (bash if present, else sh) with a real controlling PTY; a private loopback keyed by the
+    // workspace. `-i` forces the prompt even though our parent `sh -c` is non-interactive.
     let image = dd_jit::Image::overlay(upper, [rootfs]).guest(guest);
+    // Pick the shell WITHOUT redirecting the final exec's stderr: interactive bash decides it's
+    // interactive from isatty(stderr) AND writes its prompt (PS1) to stderr, so a `2>/dev/null` would
+    // silently make it non-interactive with a hidden prompt (looks hung).
     let shell = vec![
         "/bin/sh".to_string(),
         "-c".to_string(),
-        "exec bash -l 2>/dev/null || exec sh".to_string(),
+        "if command -v bash >/dev/null 2>&1; then exec bash -il; else exec sh -i; fi".to_string(),
     ];
     let env = [
         "TERM=xterm-256color".to_string(),
@@ -106,25 +110,31 @@ pub fn launch(ws: &Workspace, cols: u16, rows: u16) -> io::Result<Box<dyn PtyBac
         .build()
         .map_err(to_io)?;
 
-    // dd-jit's start() spawns tokio IO pumps, so it must run inside a runtime; keep that runtime alive
-    // in the handle so the pumps keep feeding the broadcast we drain synchronously.
+    // dd-jit's start_into() spawns tokio IO pumps, so it must run inside a runtime; keep that runtime
+    // alive in the handle so the pumps keep feeding the broadcast we drain synchronously.
     let trt = tokio::runtime::Builder::new_multi_thread()
         .worker_threads(2)
         .enable_all()
         .build()?;
-    let running = trt
-        .block_on(async { rt.start(&container, dd_jit::Stdio3 { tty: true }) })
+
+    // CRITICAL: subscribe to the output BEFORE launching so the shell's first prompt (emitted the instant
+    // the guest starts) is never lost — otherwise the terminal shows only the banner and looks hung.
+    let (out, rx) = {
+        let (tx, rx) = tokio::sync::broadcast::channel::<(u8, Vec<u8>)>(4096);
+        (tx, rx)
+    };
+    let log_chunks = std::sync::Arc::new(tokio::sync::Mutex::new(Vec::new()));
+    let (stdin_tx, stdin_rx) = tokio::sync::mpsc::channel::<Vec<u8>>(256);
+    let launched = trt
+        .block_on(async { rt.start_into(&container, dd_jit::Stdio3 { tty: true }, out, log_chunks, stdin_rx) })
         .map_err(to_io)?;
 
-    let rx = running.subscribe();
-    let master = running.pty_master();
-    let pid = running.pid() as libc::pid_t;
     let mut pty = DdJitPty {
         _rt: trt,
-        running,
+        stdin_tx,
         rx,
-        master,
-        pid,
+        master: launched.pty_master,
+        pid: launched.pid as libc::pid_t,
         pending: VecDeque::new(),
         exited: None,
     };
@@ -142,11 +152,12 @@ fn sanitize_host(name: &str) -> String {
     if t.is_empty() { "workspace".to_string() } else { t.to_string() }
 }
 
-/// A synchronous [`PtyBackend`] over a dd-jit [`RunningContainer`].
+/// A synchronous [`PtyBackend`] over a dd-jit-launched container: output drained from the pre-subscribed
+/// broadcast, input pushed to the guest stdin channel, resize/reap via the master fd + pid.
 struct DdJitPty {
     /// Kept alive so dd-jit's IO pump tasks keep running (they feed the broadcast we drain).
     _rt: tokio::runtime::Runtime,
-    running: dd_jit::RunningContainer,
+    stdin_tx: tokio::sync::mpsc::Sender<Vec<u8>>,
     rx: tokio::sync::broadcast::Receiver<(u8, Vec<u8>)>,
     master: Option<RawFd>,
     pid: libc::pid_t,
@@ -157,7 +168,7 @@ struct DdJitPty {
 
 impl PtyBackend for DdJitPty {
     fn write(&mut self, bytes: &[u8]) -> io::Result<()> {
-        self.running.write_stdin(bytes.to_vec());
+        let _ = self.stdin_tx.try_send(bytes.to_vec());
         Ok(())
     }
 
@@ -214,7 +225,12 @@ impl PtyBackend for DdJitPty {
 
 impl Drop for DdJitPty {
     fn drop(&mut self) {
-        // Stop the guest's process group; the pumps end when the PTY closes.
-        let _ = self.running.signal(libc::SIGHUP);
+        // Stop the guest's process group (pid == pgid); the pumps end when the PTY closes. ESRCH (already
+        // gone) is fine.
+        if self.exited.is_none() {
+            unsafe {
+                libc::killpg(self.pid, libc::SIGHUP);
+            }
+        }
     }
 }
