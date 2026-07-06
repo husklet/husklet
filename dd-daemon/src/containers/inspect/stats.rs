@@ -96,6 +96,17 @@ fn stats_sample(
         }
         None => (0, 0, 0, 0),
     };
+    // The FIRST sample has no prior reading. Seed precpu to THIS sample's own totals so the CLI's first
+    // `cpuDelta`/`systemDelta` are both 0 (⇒ 0%), matching Docker — whose host-wide `system_cpu_usage`
+    // denominator likewise makes the first sample ~0%. Without this, precpu=(0,0) made the first delta
+    // the pid's LIFETIME cpu over a synthetic 100s window, so `docker stats --no-stream` reported
+    // CPU% == the container's total consumed CPU-seconds (routinely >100·ncpus). Later stream samples
+    // (idx>0) use the real threaded precpu over a ~1s window.
+    let (pre_total, pre_sys) = if idx == 0 {
+        (total, system)
+    } else {
+        (pre_total, pre_sys)
+    };
     let v = crate::api::ContainerStats {
         read: fmt_rfc3339(now_secs()),
         // Go zero-time: dd doesn't thread the prior sample's read timestamp, and CPU% is derived from
@@ -227,5 +238,28 @@ mod tests {
     fn ps_time_garbage_groups_parse_as_zero() {
         // Unparsable groups contribute 0 rather than erroring.
         assert_eq!(parse_ps_time("xx:yy"), 0);
+    }
+
+    #[test]
+    fn first_sample_has_zero_cpu_delta() {
+        // Regression: `docker stats --no-stream` / the first stream sample computes CPU% from
+        // (cpu_stats - precpu). With precpu seeded 0/0 the first delta was the pid's LIFETIME cpu over a
+        // synthetic 100s window, so the reported % equalled the container's total CPU-seconds (>100%).
+        // The first sample must seed precpu = its own totals so both deltas are 0 (⇒ 0%).
+        let base = std::time::Instant::now();
+        let pid = Some(std::process::id());
+        let (v, total, system) = stats_sample("t", "id", pid, STATS_DEFAULT_LIMIT, 0, base, 0, 0);
+        assert_eq!(
+            v.precpu_stats.cpu_usage.total_usage, v.cpu_stats.cpu_usage.total_usage,
+            "first sample precpu.total must equal cpu.total (zero cpuDelta)"
+        );
+        assert_eq!(
+            v.precpu_stats.system_cpu_usage, v.cpu_stats.system_cpu_usage,
+            "first sample precpu.system must equal cpu.system (zero systemDelta)"
+        );
+        // A LATER sample (idx>0) uses the threaded prior totals, so its precpu is the real prior reading.
+        let (v2, ..) = stats_sample("t", "id", pid, STATS_DEFAULT_LIMIT, 1, base, total, system);
+        assert_eq!(v2.precpu_stats.cpu_usage.total_usage, total);
+        assert_eq!(v2.precpu_stats.system_cpu_usage, system);
     }
 }
