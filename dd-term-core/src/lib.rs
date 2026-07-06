@@ -13,12 +13,14 @@ pub mod png;
 pub mod pty;
 pub mod render;
 pub mod vt;
+pub mod workspace;
 
 pub use grid::{Attrs, Cell, Color, Grid};
 pub use input::{encode_key, encode_paste, CursorKeys, Key, Mods};
 pub use pty::PtyBackend;
 pub use render::{CpuRenderer, Image};
 pub use vt::Vt;
+pub use workspace::{Arch, Launcher, LocalShellLauncher, Workspace, WorkspaceStore};
 
 #[cfg(test)]
 mod tests {
