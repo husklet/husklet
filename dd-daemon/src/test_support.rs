@@ -560,6 +560,243 @@ mod tests {
         assert_eq!(resp.status(), StatusCode::NOT_FOUND);
     }
 
+    // ==============================================================================================
+    // STATE-ONLY MUTATION / INSPECT handlers not covered above. Each drives a handler and asserts the
+    // emitted status + wire shape + resulting in-memory state. None reach `dd_jit::Runtime`/spawn:
+    //  - image_tag/image_delete mutate `Inner.images` only (rmi's on-disk removal is store-guarded and a
+    //    safe no-op for a rootfs OUTSIDE the temp images dir — see remove_image_dir).
+    //  - exec_create/exec_inspect mutate/read `Inner.execs` only (exec_START, which hijacks/streams to the
+    //    engine, is deliberately NOT tested).
+    //  - archive_head/archive_get resolve the container first; the missing-container 404 branch is
+    //    engine/fs-free (the success path reads real rootfs/upper via tar — not exercised).
+    // ==============================================================================================
+
+    /// Push an image with an explicit `rootfs` (the shared field `image_delete`'s refcount rule keys on).
+    async fn seed_image_rootfs(app: &App, name: &str, rootfs: &str) {
+        let mut g = app.inner.lock().await;
+        g.images.push(Image {
+            name: name.to_string(),
+            rootfs: rootfs.to_string(),
+            ..Default::default()
+        });
+    }
+
+    // ---- 15. image_tag: alias an image under a new repo:tag -> 201 + new RepoTag present -----------
+    #[tokio::test]
+    async fn image_tag_creates_new_repotag_sharing_rootfs() {
+        let app = test_app();
+        seed_image_rootfs(&app, "alpine:3.19", "/store/alpine-rootfs").await;
+        let q: crate::images::TagQ =
+            serde_json::from_value(serde_json::json!({"repo": "myalpine", "tag": "v2"})).unwrap();
+        let resp = crate::images::image_tag(State(app.clone()), Path("alpine:3.19".into()), Query(q))
+            .await;
+        assert_eq!(resp.status(), StatusCode::CREATED);
+        let g = app.inner.lock().await;
+        let tagged = g
+            .images
+            .iter()
+            .find(|i| i.name == "myalpine:v2")
+            .expect("new repo:tag must be present");
+        assert_eq!(
+            tagged.rootfs, "/store/alpine-rootfs",
+            "the alias shares the source image's rootfs"
+        );
+        assert!(
+            g.images.iter().any(|i| i.name == "alpine:3.19"),
+            "source tag must remain"
+        );
+    }
+
+    #[tokio::test]
+    async fn image_tag_missing_source_is_404() {
+        let app = test_app();
+        let q: crate::images::TagQ =
+            serde_json::from_value(serde_json::json!({"repo": "dst"})).unwrap();
+        let resp =
+            crate::images::image_tag(State(app.clone()), Path("ghost".into()), Query(q)).await;
+        assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn image_tag_empty_repo_is_400() {
+        let app = test_app();
+        seed_image_rootfs(&app, "alpine:3.19", "/store/alpine-rootfs").await;
+        // repo param absent -> unwrap_or_default() == "" -> bad_request("repo required").
+        let q: crate::images::TagQ = serde_json::from_value(serde_json::json!({})).unwrap();
+        let resp = crate::images::image_tag(State(app.clone()), Path("alpine:3.19".into()), Query(q))
+            .await;
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+        assert_eq!(
+            app.inner.lock().await.images.len(),
+            1,
+            "no new tag on a rejected tag"
+        );
+    }
+
+    // ---- 16. image_delete (rmi): shared-rootfs refcount ------------------------------------------
+    #[tokio::test]
+    async fn image_rmi_shared_rootfs_untags_only_and_keeps_sibling() {
+        let app = test_app();
+        // Two tags of the SAME rootfs (a `docker tag` alias).
+        seed_image_rootfs(&app, "alpine:3.19", "/store/shared-rootfs").await;
+        seed_image_rootfs(&app, "myalpine:latest", "/store/shared-rootfs").await;
+
+        let resp =
+            crate::images::image_delete(State(app.clone()), Path("alpine:3.19".into())).await;
+        assert_eq!(resp.status(), StatusCode::OK);
+        let report = to_body_json(resp).await;
+        let arr = report.as_array().expect("rmi report is an array");
+        // Only an Untagged record — the shared rootfs is still referenced, so NO Deleted record.
+        assert!(
+            arr.iter().any(|r| r.get("Untagged").is_some()),
+            "expected an Untagged record: {report}"
+        );
+        assert!(
+            !arr.iter().any(|r| r.get("Deleted").is_some()),
+            "shared rootfs must NOT be deleted while a sibling tag references it: {report}"
+        );
+        let g = app.inner.lock().await;
+        assert!(
+            !g.images.iter().any(|i| i.name == "alpine:3.19"),
+            "the rmi'd tag is gone"
+        );
+        assert!(
+            g.images.iter().any(|i| i.name == "myalpine:latest"),
+            "the sibling tag sharing the rootfs must survive"
+        );
+    }
+
+    #[tokio::test]
+    async fn image_rmi_last_ref_removes_image_and_reports_deleted() {
+        let app = test_app();
+        // Sole tag of this rootfs; rootfs lives OUTSIDE the temp images dir so remove_image_dir is a
+        // store-guarded no-op (no real fs deletion), letting us assert the Deleted record cleanly.
+        seed_image_rootfs(&app, "solo:1.0", "/store/solo-rootfs/rootfs").await;
+        let resp = crate::images::image_delete(State(app.clone()), Path("solo:1.0".into())).await;
+        assert_eq!(resp.status(), StatusCode::OK);
+        let report = to_body_json(resp).await;
+        let arr = report.as_array().unwrap();
+        assert!(
+            arr.iter().any(|r| r.get("Untagged").is_some()),
+            "expected Untagged: {report}"
+        );
+        assert!(
+            arr.iter().any(|r| {
+                r.get("Deleted")
+                    .and_then(|d| d.as_str())
+                    .is_some_and(|s| s.starts_with("sha256:"))
+            }),
+            "last-ref rmi reports a Deleted sha256 record: {report}"
+        );
+        assert!(
+            app.inner.lock().await.images.is_empty(),
+            "the only image is removed"
+        );
+    }
+
+    #[tokio::test]
+    async fn image_rmi_missing_is_404() {
+        let app = test_app();
+        let resp = crate::images::image_delete(State(app.clone()), Path("ghost".into())).await;
+        assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+    }
+
+    // ---- 17. exec_create on a RUNNING container -> 201 + exec recorded; empty cmd -> 400 ----------
+    #[tokio::test]
+    async fn exec_create_on_running_records_exec() {
+        let app = test_app();
+        seed_container(&app, "c1", "running").await;
+        let body =
+            axum::Json(serde_json::from_value(serde_json::json!({"Cmd":["ls","-la"]})).unwrap());
+        let resp = crate::containers::exec_create(State(app.clone()), Path("c1".into()), body).await;
+        assert_eq!(resp.status(), StatusCode::CREATED);
+        let v = to_body_json(resp).await;
+        let exec_id = v["Id"].as_str().expect("exec create returns an Id").to_string();
+        assert!(!exec_id.is_empty());
+        let g = app.inner.lock().await;
+        let exec = g.execs.get(&exec_id).expect("exec must be recorded under the returned Id");
+        assert_eq!(exec.container_id, "c1");
+        assert_eq!(exec.cmd, vec!["ls".to_string(), "-la".to_string()]);
+        assert!(!exec.started, "a freshly created exec has not started");
+    }
+
+    #[tokio::test]
+    async fn exec_create_empty_cmd_is_400() {
+        let app = test_app();
+        seed_container(&app, "c1", "running").await;
+        let body = axum::Json(serde_json::from_value(serde_json::json!({"Cmd":[]})).unwrap());
+        let resp = crate::containers::exec_create(State(app.clone()), Path("c1".into()), body).await;
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+        let msg = to_body_string(resp).await;
+        assert!(msg.contains("No exec command specified"), "got: {msg}");
+        assert!(app.inner.lock().await.execs.is_empty(), "no exec on a rejected create");
+    }
+
+    // ---- 18. exec_inspect: docker exec-inspect JSON shape; missing -> 404 ------------------------
+    #[tokio::test]
+    async fn exec_inspect_wire_shape() {
+        let app = test_app();
+        seed_container(&app, "c1", "running").await;
+        let body = axum::Json(
+            serde_json::from_value(serde_json::json!({"Cmd":["ls","-la"],"Tty":true})).unwrap(),
+        );
+        let created =
+            crate::containers::exec_create(State(app.clone()), Path("c1".into()), body).await;
+        let exec_id = to_body_json(created).await["Id"].as_str().unwrap().to_string();
+
+        let resp = crate::containers::exec_inspect(State(app.clone()), Path(exec_id.clone())).await;
+        assert_eq!(resp.status(), StatusCode::OK);
+        let v = to_body_json(resp).await;
+        let obj = v.as_object().unwrap();
+        for key in ["ID", "Running", "ExitCode", "ContainerID", "ProcessConfig"] {
+            assert!(obj.contains_key(key), "exec inspect missing key {key}: {v}");
+        }
+        assert_eq!(v["ID"], exec_id);
+        // No Live for this exec (start never ran) -> Running=false, ExitCode falls back to the record's 0.
+        assert_eq!(v["Running"], false, "un-started exec is not Running");
+        assert_eq!(v["ExitCode"], 0);
+        assert_eq!(v["ContainerID"], "c1");
+        // Nested ProcessConfig: docker's lowercase keys; entrypoint = argv[0], arguments = argv[1..].
+        let pc = v["ProcessConfig"].as_object().unwrap();
+        for key in ["tty", "privileged", "entrypoint", "arguments"] {
+            assert!(pc.contains_key(key), "ProcessConfig missing key {key}");
+        }
+        assert_eq!(v["ProcessConfig"]["tty"], true, "Tty:true was recorded");
+        assert_eq!(v["ProcessConfig"]["entrypoint"], "ls");
+        assert_eq!(v["ProcessConfig"]["arguments"], serde_json::json!(["-la"]));
+    }
+
+    #[tokio::test]
+    async fn exec_inspect_missing_is_404() {
+        let app = test_app();
+        let resp =
+            crate::containers::exec_inspect(State(app.clone()), Path("noexec".into())).await;
+        assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+        let msg = to_body_string(resp).await;
+        assert!(msg.contains("no such exec"), "got: {msg}");
+    }
+
+    // ---- 19. archive HEAD/GET on a MISSING container -> 404 (engine/fs-free branch only) ----------
+    #[tokio::test]
+    async fn archive_head_missing_container_is_404() {
+        let app = test_app();
+        let q: crate::archive::ArchiveQ =
+            serde_json::from_value(serde_json::json!({"path": "/etc/hosts"})).unwrap();
+        let resp =
+            crate::archive::archive_head(State(app.clone()), Path("ghost".into()), Query(q)).await;
+        assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn archive_get_missing_container_is_404() {
+        let app = test_app();
+        let q: crate::archive::ArchiveQ =
+            serde_json::from_value(serde_json::json!({"path": "/etc/hosts"})).unwrap();
+        let resp =
+            crate::archive::archive_get(State(app.clone()), Path("ghost".into()), Query(q)).await;
+        assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+    }
+
     /// Collect a response body into a String (for error-message assertions).
     async fn to_body_string(resp: axum::response::Response) -> String {
         let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
