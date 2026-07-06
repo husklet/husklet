@@ -19,8 +19,17 @@ pub(crate) async fn containers_rename(
         return no_such(&id);
     };
     if let Some(name) = q.name {
+        let new_name = name.trim_start_matches('/').to_string();
+        // A rename onto a name already held by a DIFFERENT container is a 409 (docker keeps names
+        // unique). Without this the field was overwritten, yielding two containers with the same name
+        // and an ambiguous resolve_cid.
+        if g.containers.values().any(|c| c.id != full && c.name == new_name) {
+            return conflict(format!(
+                "Conflict. The container name \"/{new_name}\" is already in use"
+            ));
+        }
         if let Some(c) = g.containers.get_mut(&full) {
-            c.name = name.trim_start_matches('/').to_string();
+            c.name = new_name;
         }
     }
     save_state(&g, &a.state_path);
