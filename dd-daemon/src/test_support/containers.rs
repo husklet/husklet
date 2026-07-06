@@ -478,3 +478,53 @@ async fn flow_container_name_reusable_after_remove() {
     );
     assert!(g.containers.contains_key(&cid2), "the recreated web is present");
 }
+
+// ---- docker logs --since/--until filters PER CHUNK, not per coalesced run --------------------
+// Regression: the replay coalesced all adjacent same-stream chunks into one run keeping only the
+// FIRST chunk's timestamp, then applied --since/--until to that single ts — so a busy single-stream
+// container (all output in one coalesced run stamped at the first write) returned everything or
+// nothing. The window must be applied to each chunk's own emit time before coalescing.
+#[tokio::test]
+async fn logs_since_until_filter_per_chunk_not_per_coalesced_run() {
+    async fn body_bytes(resp: axum::response::Response) -> Vec<u8> {
+        axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap()
+            .to_vec()
+    }
+    let has = |b: &[u8], needle: &[u8]| b.windows(needle.len()).any(|w| w == needle);
+
+    let app = test_app();
+    seed_container(&app, "c1", "exited").await;
+    // two stdout writes at t=100 ("early") and t=200 ("late") — the same-stream, different-time case.
+    {
+        let live = Live::new();
+        live.log_chunks
+            .lock()
+            .await
+            .extend([(100i64, 1u8, b"early\n".to_vec()), (200i64, 1u8, b"late\n".to_vec())]);
+        app.inner.lock().await.live.insert("c1".into(), live);
+    }
+
+    // --since 150: keep only the t=200 line (before the fix, the whole run stamped t=100 was dropped).
+    let resp = crate::containers::containers_logs(
+        State(app.clone()),
+        Path("c1".into()),
+        Query(serde_json::from_value(serde_json::json!({ "since": "150" })).unwrap()),
+    )
+    .await;
+    let body = body_bytes(resp).await;
+    assert!(has(&body, b"late"), "since=150 must keep the t=200 line");
+    assert!(!has(&body, b"early"), "since=150 must drop the t=100 line");
+
+    // --until 150: keep only the t=100 line (before the fix, the whole run was kept, leaking "late").
+    let resp = crate::containers::containers_logs(
+        State(app.clone()),
+        Path("c1".into()),
+        Query(serde_json::from_value(serde_json::json!({ "until": "150" })).unwrap()),
+    )
+    .await;
+    let body = body_bytes(resp).await;
+    assert!(has(&body, b"early"), "until=150 must keep the t=100 line");
+    assert!(!has(&body, b"late"), "until=150 must drop the t=200 line");
+}

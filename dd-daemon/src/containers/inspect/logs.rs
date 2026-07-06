@@ -102,13 +102,22 @@ pub(crate) async fn containers_logs(
         None => persisted_ordered(persisted_out, persisted_err, start_t, end_t),
     };
 
-    // Replay: walk the ordered log, coalescing adjacent same-stream chunks into runs so line-splitting
-    // sees contiguous stream output (clean lines) while stream switches stay interleave points. Each run
-    // carries its first chunk's emit time, which drives `--since`/`--until` (per-line, by recorded time)
-    // and `--timestamps`. Then `--tail` keeps the last N lines of the combined ordered set, and each line
-    // is per-line timestamped + framed (multiplexed 8-byte header for non-TTY, raw bytes for TTY).
+    // Replay: walk the ordered log. Stream selection and the `--since`/`--until` window are applied
+    // PER CHUNK — each chunk carries its own emit time, so the window keeps exactly the writes inside it.
+    // (Filtering after coalescing would drop/keep a whole coalesced run by its FIRST chunk's time, so a
+    // busy single-stream container — where all output coalesces into one run stamped at the first write —
+    // would return everything or nothing for `--since`/`--until`.) Surviving chunks are THEN coalesced
+    // into adjacent same-stream runs so line-splitting sees contiguous output (a line spanning two writes
+    // stays one line); each run carries its first surviving chunk's time for `--timestamps`. Then `--tail`
+    // keeps the last N lines, and each line is framed (multiplexed 8-byte header for non-TTY, raw for TTY).
     let mut runs: Vec<(i64, u8, Vec<u8>)> = Vec::new();
     for (ts, stream, data) in &chunks {
+        if (*stream == 1 && !want_out) || (*stream == 2 && !want_err) {
+            continue;
+        }
+        if since.map_or(false, |s| *ts < s) || until.map_or(false, |u| *ts > u) {
+            continue;
+        }
         match runs.last_mut() {
             Some((_, s, buf)) if *s == *stream => buf.extend_from_slice(data),
             _ => runs.push((*ts, *stream, data.clone())),
@@ -116,12 +125,6 @@ pub(crate) async fn containers_logs(
     }
     let mut entries: Vec<(i64, u8, Vec<u8>)> = Vec::new();
     for (ts, stream, data) in &runs {
-        if (*stream == 1 && !want_out) || (*stream == 2 && !want_err) {
-            continue;
-        }
-        if since.map_or(false, |s| *ts < s) || until.map_or(false, |u| *ts > u) {
-            continue;
-        }
         for line in split_log_lines(data) {
             entries.push((*ts, *stream, line));
         }
