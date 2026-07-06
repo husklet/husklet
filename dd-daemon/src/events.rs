@@ -76,11 +76,18 @@ pub(crate) fn emit_event(bus: &EventBus, type_: &str, action: &str, id: &str, at
 pub(crate) struct EventsQ {
     /// `docker events --filter`, sent as a URL-encoded JSON map (`{"type":["container"],...}`).
     pub(crate) filters: Option<String>,
-    /// `since`/`until` are accepted (so the query deserializes) but not applied — dd's stream is live.
+    /// `since` is accepted (so the query deserializes) but not applied — dd keeps no historical event
+    /// store, so `--since <past>` simply streams live events from now.
     #[allow(dead_code)] // wire-contract field: deserialized but intentionally unused (see above)
     pub(crate) since: Option<String>,
-    #[allow(dead_code)] // wire-contract field: deserialized but intentionally unused (see above)
+    /// `--until <t>`: makes `docker events` a BOUNDED command that ends once wall-clock passes `t`.
     pub(crate) until: Option<String>,
+}
+
+/// Parse a `docker events --since/--until` timestamp into unix seconds. The CLI sends unix
+/// `seconds[.nanos]`; we keep the integer seconds (the RFC3339 forms aren't emitted on this path).
+fn parse_epoch_secs(s: &str) -> Option<i64> {
+    s.split('.').next()?.trim().parse::<i64>().ok()
 }
 
 /// The parsed, best-effort subset of `docker events` filters dd honors.
@@ -174,18 +181,44 @@ pub(crate) async fn events(State(a): State<App>, Query(q): Query<EventsQ>) -> Re
         }
     }
 
+    // `--until <t>` makes `docker events` a BOUNDED command: it replays matching events up to `t` then
+    // closes the stream and the CLI exits. dd keeps no historical event store, so an `--until` already in
+    // the past has nothing to replay and closes IMMEDIATELY (an unbounded live stream here would hang the
+    // client forever, e.g. `docker events --until $(date +%s)`); a future `--until` ends the live stream
+    // once wall-clock passes it. Without `--until` the stream stays unbounded (ends on client disconnect).
+    let until = q.until.as_deref().and_then(parse_epoch_secs);
+    if matches!(until, Some(u) if u <= crate::util::now_secs()) {
+        return Response::builder()
+            .status(StatusCode::OK)
+            .header("Content-Type", "application/json")
+            .body(Body::empty())
+            .unwrap();
+    }
+
     // `unfold` drives the broadcast receiver into a byte stream. Returning `Some` yields a line;
-    // `continue` skips a filtered-out / lagged event; `None` ends the stream (bus closed).
-    let body = stream::unfold((rx, filters), |(mut rx, filters)| async move {
+    // `continue` skips a filtered-out / lagged event; `None` ends the stream (bus closed, or `--until`).
+    let body = stream::unfold((rx, filters, until), |(mut rx, filters, until)| async move {
         loop {
-            match rx.recv().await {
+            // End the stream the moment a future `--until` bound passes (docker closes the bounded stream
+            // then). Recomputed each iteration so a filtered-out event doesn't reset the deadline.
+            let ev = match until {
+                Some(u) => {
+                    let remaining = (u - crate::util::now_secs()).max(0) as u64;
+                    tokio::select! {
+                        r = rx.recv() => r,
+                        _ = tokio::time::sleep(std::time::Duration::from_secs(remaining)) => return None,
+                    }
+                }
+                None => rx.recv().await,
+            };
+            match ev {
                 Ok(ev) => {
                     if !filters.matches(&ev) {
                         continue;
                     }
                     let mut line = serde_json::to_vec(&ev).unwrap_or_default();
                     line.push(b'\n');
-                    return Some((Ok::<Vec<u8>, std::io::Error>(line), (rx, filters)));
+                    return Some((Ok::<Vec<u8>, std::io::Error>(line), (rx, filters, until)));
                 }
                 Err(broadcast::error::RecvError::Lagged(_)) => continue,
                 Err(broadcast::error::RecvError::Closed) => return None,

@@ -22,6 +22,7 @@ use std::sync::Arc;
 use tokio::sync::Mutex;
 
 mod containers;
+mod events;
 mod exec;
 mod flows;
 mod images;
