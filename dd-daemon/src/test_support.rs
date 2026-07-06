@@ -797,6 +797,401 @@ mod tests {
         assert_eq!(resp.status(), StatusCode::NOT_FOUND);
     }
 
+    // ==============================================================================================
+    // MULTI-STEP INTEGRATION FLOWS — drive SEVERAL handlers IN SEQUENCE against ONE shared `test_app`
+    // and assert the state carried ACROSS calls. These target INTERACTION / state-machine bugs the
+    // single-handler tests above cannot see: an endpoint refcount that's set on connect but not cleared
+    // on disconnect, a volume freed while still bound, a name-conflict that half-commits, etc. For each
+    // flow the docker contract is stated inline, then dd's actual behavior is asserted; a clean run is
+    // itself the signal that the cross-handler state machine is sound.
+    //
+    // Only engine-free handlers are used (none reach `dd_jit::Runtime`/spawn): networks_create /
+    // network_connect / network_disconnect / network_delete / networks_prune, volumes_create /
+    // volume_delete, containers_create (records state + allocates the overlay upper dir, no spawn) and
+    // containers_delete (of a non-running container: state + fs reclaim only, no kill_group).
+    // ==============================================================================================
+
+    /// Build a `NetworkCreateBody` from `{"Name": name}`.
+    fn net_create_body(name: &str) -> axum::Json<crate::networks::NetCreateBody> {
+        axum::Json(serde_json::from_value(serde_json::json!({ "Name": name })).unwrap())
+    }
+    /// Build a `NetAttachBody` (connect/disconnect) from `{"Container": cref}`.
+    fn net_attach_body(cref: &str) -> axum::Json<crate::networks::NetAttachBody> {
+        axum::Json(serde_json::from_value(serde_json::json!({ "Container": cref })).unwrap())
+    }
+    /// Directly insert a container that binds a volume by name (`-v <vol>:/data`) — the shape
+    /// `volume_in_use` scans. Kept minimal so a flow can assert refcount without going through create.
+    async fn seed_container_binding_volume(app: &App, id: &str, vol: &str) {
+        let mut g = app.inner.lock().await;
+        g.containers.insert(
+            id.to_string(),
+            Container {
+                id: id.to_string(),
+                status: "exited".into(),
+                binds: vec![format!("{vol}:/data")],
+                ..Default::default()
+            },
+        );
+    }
+    /// Snapshot a network's membership list (`Net.containers`) by name.
+    async fn net_members(app: &App, name: &str) -> Vec<String> {
+        app.inner
+            .lock()
+            .await
+            .networks
+            .iter()
+            .find(|n| n.name == name)
+            .map(|n| n.containers.clone())
+            .unwrap_or_default()
+    }
+    /// How many endpoints the named network currently holds (the IPAM side of membership).
+    async fn net_endpoint_count(app: &App, name: &str) -> usize {
+        app.inner
+            .lock()
+            .await
+            .networks
+            .iter()
+            .find(|n| n.name == name)
+            .map(|n| n.endpoints.len())
+            .unwrap_or(0)
+    }
+
+    // ---- FLOW 1: network endpoint refcount, connect → 403-on-delete → disconnect → 204 -------------
+    // docker: a user network with a connected endpoint refuses removal (403 "has active endpoints")
+    // until every container is disconnected; then delete is a 204. Locks the endpoint-refcount fix.
+    #[tokio::test]
+    async fn flow_network_endpoint_refcount_lifecycle() {
+        let app = test_app();
+        seed_container(&app, "c1", "running").await;
+
+        // Step 1: create the network — 201, present, no members yet.
+        let r = crate::networks::networks_create(State(app.clone()), net_create_body("mynet")).await;
+        assert_eq!(r.status(), StatusCode::CREATED);
+        assert_eq!(net_members(&app, "mynet").await.len(), 0, "fresh net has no members");
+        assert_eq!(net_endpoint_count(&app, "mynet").await, 0);
+
+        // Step 2: connect c1 — 200, c1 now in membership AND endpoints.
+        let r = crate::networks::network_connect(
+            State(app.clone()),
+            Path("mynet".into()),
+            net_attach_body("c1"),
+        )
+        .await;
+        assert_eq!(r.status(), StatusCode::OK);
+        assert_eq!(net_members(&app, "mynet").await, vec!["c1".to_string()], "c1 joined");
+        assert_eq!(net_endpoint_count(&app, "mynet").await, 1, "endpoint allocated");
+
+        // Step 3: delete while an endpoint is attached — 403, network survives (the refcount gate).
+        let r = crate::networks::network_delete(State(app.clone()), Path("mynet".into())).await;
+        assert_eq!(r.status(), StatusCode::FORBIDDEN, "delete with an endpoint is 403");
+        assert!(
+            app.inner.lock().await.networks.iter().any(|n| n.name == "mynet"),
+            "refused delete must leave the network in place"
+        );
+
+        // Step 4: disconnect c1 — 200, membership AND endpoints both cleared.
+        let r = crate::networks::network_disconnect(
+            State(app.clone()),
+            Path("mynet".into()),
+            net_attach_body("c1"),
+        )
+        .await;
+        assert_eq!(r.status(), StatusCode::OK);
+        assert_eq!(net_members(&app, "mynet").await.len(), 0, "membership cleared on disconnect");
+        assert_eq!(
+            net_endpoint_count(&app, "mynet").await,
+            0,
+            "endpoint freed on disconnect (not just membership) — the refcount must reach zero"
+        );
+
+        // Step 5: delete now that the last endpoint is gone — 204, network removed.
+        let r = crate::networks::network_delete(State(app.clone()), Path("mynet".into())).await;
+        assert_eq!(r.status(), StatusCode::NO_CONTENT, "delete after disconnect is 204");
+        assert!(
+            !app.inner.lock().await.networks.iter().any(|n| n.name == "mynet"),
+            "network gone after its last endpoint left"
+        );
+    }
+
+    // ---- FLOW 2: volume in-use refcount, 409-while-bound → 204-once-free --------------------------
+    // docker: removing a volume a container still references is a 409 ("volume is in use"); once no
+    // container references it, remove is a 204.
+    #[tokio::test]
+    async fn flow_volume_in_use_then_free() {
+        let app = test_app();
+
+        // Step 1: create v1 — 201, present.
+        let body = axum::Json(serde_json::from_value(serde_json::json!({"Name":"v1"})).unwrap());
+        let r = crate::volumes::volumes_create(State(app.clone()), body).await;
+        assert_eq!(r.status(), StatusCode::CREATED);
+        assert!(app.inner.lock().await.volumes.iter().any(|v| v.name == "v1"));
+
+        // Step 2: a container binds v1 by name.
+        seed_container_binding_volume(&app, "user1", "v1").await;
+
+        // Step 3: delete while bound — 409, volume survives.
+        let r = crate::volumes::volume_delete(State(app.clone()), Path("v1".into())).await;
+        assert_eq!(r.status(), StatusCode::CONFLICT, "in-use volume delete is 409");
+        assert!(
+            app.inner.lock().await.volumes.iter().any(|v| v.name == "v1"),
+            "a refused (in-use) delete must not drop the volume"
+        );
+
+        // Step 4: drop the referencing container.
+        app.inner.lock().await.containers.remove("user1");
+
+        // Step 5: delete now that nothing binds it — 204, volume removed.
+        let r = crate::volumes::volume_delete(State(app.clone()), Path("v1".into())).await;
+        assert_eq!(r.status(), StatusCode::NO_CONTENT, "freed volume delete is 204");
+        assert!(
+            !app.inner.lock().await.volumes.iter().any(|v| v.name == "v1"),
+            "volume gone once its last reference is removed"
+        );
+    }
+
+    // ---- FLOW 3: container name conflict — second `--name web` is 409, state stays single ---------
+    // docker: `create --name web` twice is a 409 Conflict; the daemon does NOT record a second
+    // container. `containers_create` is engine-free (records state + allocates the overlay upper dir,
+    // never spawns), so it is driven directly here.
+    #[tokio::test]
+    async fn flow_container_name_conflict_keeps_single() {
+        let app = test_app();
+        seed_image_rootfs(&app, "alpine", "/store/alpine-rootfs").await;
+
+        let create_web = |app: App| async move {
+            let q: crate::containers::CreateQ =
+                serde_json::from_value(serde_json::json!({"name":"web"})).unwrap();
+            let body =
+                axum::Json(serde_json::from_value(serde_json::json!({"Image":"alpine"})).unwrap());
+            crate::containers::containers_create(State(app), Query(q), body).await
+        };
+
+        // Step 1: first create — 201, exactly one container named `web`.
+        let r = create_web(app.clone()).await;
+        assert_eq!(r.status(), StatusCode::CREATED, "first --name web creates");
+        assert_eq!(
+            app.inner.lock().await.containers.values().filter(|c| c.name == "web").count(),
+            1,
+            "one container named web after the first create"
+        );
+
+        // Step 2: second create with the same name — 409, still exactly one.
+        let r = create_web(app.clone()).await;
+        assert_eq!(r.status(), StatusCode::CONFLICT, "duplicate --name web is 409");
+        let msg = to_body_string(r).await;
+        assert!(msg.contains("already in use"), "409 body names the conflict: {msg}");
+        assert_eq!(
+            app.inner.lock().await.containers.values().filter(|c| c.name == "web").count(),
+            1,
+            "a rejected duplicate must NOT record a second container"
+        );
+    }
+
+    // ---- FLOW 4: duplicate net (409), predefined delete (403), prune selectivity -----------------
+    // docker: creating a network name twice is a 409; the predefined bridge/host/none can never be
+    // removed (403); `network prune` reclaims ONLY empty user networks — never a predefined one, never
+    // one with an attached endpoint.
+    #[tokio::test]
+    async fn flow_network_duplicate_predefined_and_prune_selectivity() {
+        let app = test_app();
+        // Start from the three predefined networks (bridge/host/none), as a live daemon would.
+        seed_predefined_bridge(&app).await;
+
+        // Duplicate create: first `mynet` 201, second 409, count stays 1.
+        let r = crate::networks::networks_create(State(app.clone()), net_create_body("mynet")).await;
+        assert_eq!(r.status(), StatusCode::CREATED);
+        let r = crate::networks::networks_create(State(app.clone()), net_create_body("mynet")).await;
+        assert_eq!(r.status(), StatusCode::CONFLICT, "duplicate network name is 409");
+        assert_eq!(
+            app.inner.lock().await.networks.iter().filter(|n| n.name == "mynet").count(),
+            1,
+            "the duplicate must not be inserted"
+        );
+
+        // Predefined delete: `bridge` is 403 and stays.
+        let r = crate::networks::network_delete(State(app.clone()), Path("bridge".into())).await;
+        assert_eq!(r.status(), StatusCode::FORBIDDEN, "predefined bridge delete is 403");
+        assert!(app.inner.lock().await.networks.iter().any(|n| n.name == "bridge"));
+
+        // Add an EMPTY user net (prunable) and a BUSY user net (an endpoint -> not prunable).
+        crate::networks::networks_create(State(app.clone()), net_create_body("emptyuser"))
+            .await;
+        seed_network(&app, "busyuser", /*with_container=*/ true).await;
+
+        // Prune: reclaims `emptyuser` + `mynet` only; keeps bridge/host/none AND the busy net.
+        let axum::Json(report) = crate::networks::networks_prune(State(app.clone())).await;
+        let pruned: std::collections::HashSet<&str> =
+            report.networks_deleted.iter().map(|s| s.as_str()).collect();
+        assert!(pruned.contains("emptyuser"), "empty user net is pruned: {pruned:?}");
+        assert!(pruned.contains("mynet"), "the other empty user net is pruned: {pruned:?}");
+        assert!(!pruned.contains("busyuser"), "a net with an endpoint is NOT pruned");
+        for p in ["bridge", "host", "none"] {
+            assert!(!pruned.contains(p), "predefined {p} is never pruned");
+        }
+        let names: std::collections::HashSet<String> = app
+            .inner
+            .lock()
+            .await
+            .networks
+            .iter()
+            .map(|n| n.name.clone())
+            .collect();
+        assert!(names.contains("bridge") && names.contains("host") && names.contains("none"));
+        assert!(names.contains("busyuser"), "busy net survives prune");
+        assert!(!names.contains("emptyuser") && !names.contains("mynet"), "empty user nets gone");
+    }
+
+    // ---- FLOW 5: lifecycle EVENTS fire across create/delete (bus read in-test via try_recv) -------
+    // docker: create/destroy publish `network create` / `network destroy` on the events bus.
+    // `emit_event` short-circuits when `receiver_count()==0`, so we subscribe FIRST; a broadcast
+    // Receiver + non-blocking `try_recv` drains without the /events streaming handler (no deadlock).
+    #[tokio::test]
+    async fn flow_events_emitted_across_network_lifecycle() {
+        let app = test_app();
+        let mut rx = app.events.subscribe(); // must precede any emit (bus skips with 0 receivers)
+
+        let r = crate::networks::networks_create(State(app.clone()), net_create_body("evnet")).await;
+        assert_eq!(r.status(), StatusCode::CREATED);
+        let r = crate::networks::network_delete(State(app.clone()), Path("evnet".into())).await;
+        assert_eq!(r.status(), StatusCode::NO_CONTENT);
+
+        // Drain everything the bus buffered for us.
+        let mut seen: Vec<(String, String)> = Vec::new();
+        while let Ok(ev) = rx.try_recv() {
+            seen.push((
+                ev["Type"].as_str().unwrap_or("").to_string(),
+                ev["Action"].as_str().unwrap_or("").to_string(),
+            ));
+        }
+        assert!(
+            seen.contains(&("network".into(), "create".into())),
+            "a network/create event must fire: {seen:?}"
+        );
+        assert!(
+            seen.contains(&("network".into(), "destroy".into())),
+            "a network/destroy event must fire: {seen:?}"
+        );
+    }
+
+    // ---- FLOW 6: container joins a net on create, and is DROPPED from it on rm (leave_network) ----
+    // docker: `run --network mynet` adds the container to the net's membership; `rm` removes that
+    // endpoint. Exercises create's join + delete's leave in one shared state — an interaction unit
+    // tests miss (a container could be left dangling in a net's membership after removal).
+    #[tokio::test]
+    async fn flow_container_network_membership_join_on_create_leave_on_rm() {
+        let app = test_app();
+        seed_image_rootfs(&app, "alpine", "/store/alpine-rootfs").await;
+        crate::networks::networks_create(State(app.clone()), net_create_body("mynet")).await;
+
+        // Create a container attached to `mynet` (NetworkMode).
+        let q: crate::containers::CreateQ = serde_json::from_value(serde_json::json!({})).unwrap();
+        let body = axum::Json(
+            serde_json::from_value(serde_json::json!({
+                "Image":"alpine",
+                "HostConfig": {"NetworkMode":"mynet"}
+            }))
+            .unwrap(),
+        );
+        let r = crate::containers::containers_create(State(app.clone()), Query(q), body).await;
+        assert_eq!(r.status(), StatusCode::CREATED);
+        let cid = to_body_json(r).await["Id"].as_str().unwrap().to_string();
+
+        // The container is now a member of `mynet`.
+        assert!(
+            net_members(&app, "mynet").await.contains(&cid),
+            "create --network mynet must add the container to the net membership"
+        );
+        assert_eq!(net_endpoint_count(&app, "mynet").await, 1, "endpoint allocated on create");
+
+        // Remove the container (created state -> engine-free delete).
+        let dq: crate::containers::DeleteQ =
+            serde_json::from_value(serde_json::json!({})).unwrap();
+        let r = crate::containers::containers_delete(
+            State(app.clone()),
+            Path(cid.clone()),
+            Query(dq),
+        )
+        .await;
+        assert_eq!(r.status(), StatusCode::NO_CONTENT);
+
+        // rm must drop the endpoint from the net (no dangling membership).
+        assert!(
+            !net_members(&app, "mynet").await.contains(&cid),
+            "rm must remove the container from the net membership"
+        );
+        assert_eq!(
+            net_endpoint_count(&app, "mynet").await,
+            0,
+            "rm must free the endpoint too — the net is now empty and deletable"
+        );
+        // And the now-empty net is deletable (204), proving the leave was a true refcount decrement.
+        let r = crate::networks::network_delete(State(app.clone()), Path("mynet".into())).await;
+        assert_eq!(r.status(), StatusCode::NO_CONTENT);
+    }
+
+    // ---- FLOW 7: anonymous volume is GC'd by `rm -v` but survives a plain `rm` (the leak fix) ------
+    // docker: an anonymous volume (bare `-v /data`) is reclaimed by `rm -v`, but a plain `rm` (no -v)
+    // leaves it behind (Moby removes only anonymous volumes, and only on -v). This is the exact class
+    // of the just-fixed anon-volume-leak-on-`--rm`; drive create -> rm both ways and assert the volume
+    // store transitions.
+    #[tokio::test]
+    async fn flow_anon_volume_reclaimed_by_rm_v_but_kept_by_plain_rm() {
+        let app = test_app();
+        seed_image_rootfs(&app, "alpine", "/store/alpine-rootfs").await;
+
+        // Helper: create a container with a bare `-v /data` anonymous volume, return (cid, anon_name).
+        async fn create_with_anon(app: &App) -> (String, String) {
+            let q: crate::containers::CreateQ =
+                serde_json::from_value(serde_json::json!({})).unwrap();
+            let body = axum::Json(
+                serde_json::from_value(serde_json::json!({
+                    "Image":"alpine",
+                    "HostConfig": {"Binds": ["/data"]}
+                }))
+                .unwrap(),
+            );
+            let r = crate::containers::containers_create(State(app.clone()), Query(q), body).await;
+            assert_eq!(r.status(), StatusCode::CREATED);
+            let cid = to_body_json(r).await["Id"].as_str().unwrap().to_string();
+            let anon = {
+                let g = app.inner.lock().await;
+                let c = &g.containers[&cid];
+                assert_eq!(c.anon_volumes.len(), 1, "a bare -v /data yields one anon volume");
+                c.anon_volumes[0].clone()
+            };
+            // The anon volume is registered in the volume store.
+            assert!(
+                app.inner.lock().await.volumes.iter().any(|v| v.name == anon),
+                "anon volume must be present in the store after create"
+            );
+            (cid, anon)
+        }
+
+        // Case A: plain `rm` (no -v) — the anonymous volume SURVIVES (docker keeps it).
+        let (cid_a, anon_a) = create_with_anon(&app).await;
+        let dq: crate::containers::DeleteQ =
+            serde_json::from_value(serde_json::json!({})).unwrap();
+        let r =
+            crate::containers::containers_delete(State(app.clone()), Path(cid_a), Query(dq)).await;
+        assert_eq!(r.status(), StatusCode::NO_CONTENT);
+        assert!(
+            app.inner.lock().await.volumes.iter().any(|v| v.name == anon_a),
+            "plain rm (no -v) must LEAVE the anonymous volume behind"
+        );
+
+        // Case B: `rm -v` — the anonymous volume is RECLAIMED (the leak fix).
+        let (cid_b, anon_b) = create_with_anon(&app).await;
+        let dq: crate::containers::DeleteQ =
+            serde_json::from_value(serde_json::json!({"v":"true"})).unwrap();
+        let r =
+            crate::containers::containers_delete(State(app.clone()), Path(cid_b), Query(dq)).await;
+        assert_eq!(r.status(), StatusCode::NO_CONTENT);
+        assert!(
+            !app.inner.lock().await.volumes.iter().any(|v| v.name == anon_b),
+            "rm -v must reclaim the container's anonymous volume (no leak)"
+        );
+    }
+
     /// Collect a response body into a String (for error-message assertions).
     async fn to_body_string(resp: axum::response::Response) -> String {
         let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
