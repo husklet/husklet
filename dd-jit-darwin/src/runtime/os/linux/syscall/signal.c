@@ -14,6 +14,8 @@
 // awaited handler stays pending and is delivered by the dispatcher's maybe_deliver_signal once the
 // restarted syscall finally returns.
 static int syscall_should_restart(struct cpu *c) {
+    if (ckpt_pending()) return 0; // a whole-tree checkpoint was requested: return EINTR so this process reaches
+                                  // its dispatcher safepoint (ckpt_poll) instead of transparently re-blocking
     if (__atomic_load_n(&c->exited, __ATOMIC_SEQ_CST)) return 0; // execve teardown: don't re-block, unwind out
     uint64_t p = __atomic_load_n(&g_pending, __ATOMIC_SEQ_CST);
     for (int s = 1; s <= 64; s++) {
@@ -46,6 +48,7 @@ static int syscall_should_restart(struct cpu *c) {
 // EINTR -- exactly like Linux. Returns 1 to RETRY the host call, 0 to let it return.
 static int svc_poll_retry(struct cpu *c) {
     if (errno != EINTR) return 0;                                // a genuine error -> let it propagate
+    if (ckpt_pending()) return 0;                                // checkpoint requested: return EINTR -> safepoint
     if (__atomic_load_n(&c->exited, __ATOMIC_SEQ_CST)) return 0; // execve teardown: stop re-blocking, unwind out
     uint64_t p = __atomic_load_n(&g_pending, __ATOMIC_SEQ_CST) | __atomic_load_n(&c->tpending, __ATOMIC_SEQ_CST);
     for (int s = 1; s <= 64; s++) {

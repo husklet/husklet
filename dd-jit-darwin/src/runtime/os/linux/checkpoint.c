@@ -102,8 +102,8 @@ struct ckpt_fd {
 // only to KICK a blocked/spinning process out to its safepoint (thread_int_handler sets cpu->irq when armed).
 #define CKPT_KICK_SIG SIGINFO
 static char g_ckpt_dir[1024];
-static volatile uint32_t *g_ckpt_trigger; // shared generation counter (NULL => not armed)
-static uint32_t g_ckpt_seen_gen;          // the generation this process has already acted on
+// g_ckpt_trigger / g_ckpt_seen_gen live in container/state.c (early include) so signal.c's blocking-syscall
+// restart decision (ckpt_pending) can consult them too.
 
 static int ckpt_dump_self(struct cpu *c, const char *procdir);
 static void ckpt_coordinate_and_exit(struct cpu *c);
