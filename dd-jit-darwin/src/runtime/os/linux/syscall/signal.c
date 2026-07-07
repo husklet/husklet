@@ -81,6 +81,11 @@ static int svc_signal(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint
             G_RET(c) = (uint64_t)(int64_t)(-EINVAL);
             break;
         }
+        // checkpoint restore: a kill naming a checkpoint-time guest pid/pgid must reach the live host process
+        // the tree was re-forked with (identity no-op on a normal launch, g_pidmap_n==0). Self / own-group /
+        // broadcast (a0 == self, 0, -1) are left untranslated so the self path below still matches.
+        if (g_pidmap_n && (int)a0 > 0 && (int)a0 != container_pid()) a0 = (uint64_t)(unsigned)pidmap_to_live((int)a0);
+        else if (g_pidmap_n && (int)a0 < -1) a0 = (uint64_t)(int64_t)(-pidmap_to_live(-(int)a0));
         if ((int)a0 == container_pid() || (int)a0 == 0 || (int)a0 == -1) {
             // SELF (kill(self,sig)) or the caller's OWN group / broadcast (kill(0)/kill(-1)): deliver via
             // our own machinery. dd does not put the engine in its own host session/process-group at

@@ -1264,8 +1264,12 @@ static int svc_proc(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64
     // getpid (PID ns: init -> 1)
     case 172: G_RET(c) = (uint64_t)container_pid(); break;
     case 173:
-        G_RET(c) = (container_pid() == 1) ? 0 : (uint64_t)getppid();
-        // getppid (init's parent is 0 in the ns)
+        // getppid (init's parent is 0 in the ns). A restored process reports its recorded guest parent
+        // (g_self_gppid), since its live host parent differs after the tree was re-forked.
+        if (g_self_gppid >= 0)
+            G_RET(c) = (uint64_t)g_self_gppid;
+        else
+            G_RET(c) = (container_pid() == 1) ? 0 : (uint64_t)getppid();
         break;
     // getuid/geteuid -> container uid (0=root by default), reflecting any runtime drop (apt -> _apt).
     case 174:
@@ -1630,6 +1634,10 @@ static int svc_proc(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64
             G_RET(c) = (uint64_t)(int64_t)(-ESRCH);
             break;
         }
+        // checkpoint restore: a wait targeting a specific checkpoint-time guest pid must name the live host
+        // pid the tree was re-forked with (identity no-op on a normal launch, g_pidmap_n==0).
+        if (g_pidmap_n && (int)a0 > 0) a0 = (uint64_t)(unsigned)pidmap_to_live((int)a0);
+        else if (g_pidmap_n && (int)a0 < -1) a0 = (uint64_t)(int64_t)(-pidmap_to_live(-(int)a0));
         // when ptrace is already in use in this session (a tracee link exists -> nactive>0) route the
         // wait through the ptrace pump, which surfaces tracee ptrace-stops (Linux-encoded) AND real child
         // exits and tears a link down when its tracee dies. For the ENTIRE non-ptrace matrix nactive is 0,
@@ -1710,6 +1718,15 @@ static int svc_proc(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64
             if (sigexit_lookup(r, &gsig, &gcore, 1)) st = (gsig & 0x7f) | (gcore ? 0x80 : 0);
         }
         if (a1) *(int *)a1 = st;
+        // checkpoint restore: report the reaped child under the guest pid the checkpoint recorded, and drop
+        // its translation once it is reaped so a future host pid can never alias it (no-op on normal launch).
+        if (g_pidmap_n && r > 0) {
+            int gp = pidmap_to_guest((int)r);
+            if (gp != (int)r) {
+                if (((st & 0x7f) == 0) || (((st & 0x7f) != 0x7f) && ((st & 0x7f) != 0))) pidmap_del_live((int)r);
+                r = (pid_t)gp;
+            }
+        }
         G_RET(c) = (uint64_t)r;
     wait_done:; // the EINTR reroute jumps here (G_RET + *status already set)
         break;

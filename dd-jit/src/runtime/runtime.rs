@@ -64,6 +64,48 @@ impl Runtime {
         c
     }
 
+    /// Checkpoint a RUNNING container's whole process tree (all shells, background jobs, and their children)
+    /// to `dir`, freeing its memory, and wait for the freeze to complete. `pid` is the container init the
+    /// launch returned; the container must have been launched with checkpointing armed for the SAME `dir`
+    /// (the launcher exports `DDJIT_CHECKPOINT_DIR`). This sends the engine's checkpoint control signal
+    /// (SIGUSR1) — the init coordinates a tree-wide freeze at the next safe guest-block boundary, each
+    /// process snapshots its RAM+CPU+fds to `dir/proc.<gpid>/`, then the `dir/MANIFEST` is published and
+    /// every process exits. Resume later with a launch that sets `DDJIT_RESTORE_DIR` to the same `dir`.
+    pub fn checkpoint(&self, pid: u32, dir: &str, timeout: std::time::Duration) -> Result<(), Error> {
+        use std::time::Instant;
+        // Prepare a fresh, empty checkpoint dir BEFORE advancing the trigger: every engine process sees the
+        // shared generation independently and drops its proc.<gpid> here, so the dir must already exist and be
+        // clear of the previous checkpoint. The MANIFEST (written last by the init) marks completion.
+        let _ = std::fs::remove_dir_all(dir);
+        std::fs::create_dir_all(dir).map_err(Error::Io)?;
+        let manifest = std::path::Path::new(dir).join("MANIFEST");
+                                                 // Advance the shared trigger generation the engine polls at its safepoint (a MAP_SHARED u32 at
+                                                 // "<dir>.trigger"), then kick the init with the engine's guest-proof THREAD_INT_SIG (SIGINFO) so it
+                                                 // reaches a safepoint promptly. A signal alone is unusable as the trigger — a guest's rt_sigaction
+                                                 // silently remaps every guest-reachable host signal — so intent travels through shared memory.
+        // macOS SIGINFO (BSD signal 29) — the engine's guest-clobber-proof kick signal. Hardcoded (not
+        // `libc::SIGINFO`) so this crate also COMPILES on Linux hosts, where the constant is absent; the
+        // checkpoint path only ever runs against the macOS engine.
+        const KICK: libc::c_int = 29;
+        bump_trigger(dir).map_err(Error::Io)?;
+        if unsafe { libc::kill(pid as libc::pid_t, KICK) } != 0 {
+            return Err(Error::Io(std::io::Error::last_os_error()));
+        }
+        let deadline = Instant::now() + timeout;
+        while Instant::now() < deadline {
+            if manifest.exists() {
+                return Ok(()); // a complete, restorable checkpoint (MANIFEST is written last)
+            }
+            // Re-kick: the init may not have reached a safepoint on the first signal (a long blocking wait).
+            let _ = unsafe { libc::kill(pid as libc::pid_t, KICK) };
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+        Err(Error::Io(std::io::Error::new(
+            std::io::ErrorKind::TimedOut,
+            format!("checkpoint of pid {pid} did not complete within the timeout"),
+        )))
+    }
+
     /// Run a container. Returns a handle to wait on / signal. Forks the linked engine directly via the
     /// typed FFI (`ddjit_spawn`) — no `bash`, no separate `ddjit-*` binary, no `DD_*` environment. The
     /// child inherits the host stdio.
@@ -76,4 +118,30 @@ impl Runtime {
         let pid = dd_jit_darwin::spawn(c.guest(), &lc).map_err(Error::Io)?;
         Ok(RunHandle { pid })
     }
+}
+
+/// Advance the checkpoint trigger generation at `<dir>.trigger` — a 4-byte MAP_SHARED counter the engine
+/// polls at its safepoint. Writing through a MAP_SHARED mapping (not a plain `write`) guarantees the running
+/// engine sees the new value on the same physical page. Created (zero-initialised) on first use.
+fn bump_trigger(dir: &str) -> std::io::Result<()> {
+    use std::os::unix::io::AsRawFd;
+    let path = format!("{dir}.trigger");
+    if let Some(p) = std::path::Path::new(&path).parent() {
+        let _ = std::fs::create_dir_all(p);
+    }
+    let f = std::fs::OpenOptions::new().read(true).write(true).create(true).open(&path)?;
+    f.set_len(4)?;
+    let m = unsafe {
+        libc::mmap(std::ptr::null_mut(), 4, libc::PROT_READ | libc::PROT_WRITE, libc::MAP_SHARED, f.as_raw_fd(), 0)
+    };
+    if m == libc::MAP_FAILED {
+        return Err(std::io::Error::last_os_error());
+    }
+    unsafe {
+        let cell = m as *mut u32;
+        std::ptr::write_volatile(cell, std::ptr::read_volatile(cell).wrapping_add(1));
+        libc::msync(m, 4, libc::MS_SYNC);
+        libc::munmap(m, 4);
+    }
+    Ok(())
 }

@@ -461,6 +461,13 @@ static int svc_mem(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_
         int off_emul = 0;
         uint64_t pc_hint = 0;
         (void)pc_hint;
+        // checkpoint/restore: hint a kernel-placed (a0==0), non-fixed guest map into the deterministic high
+        // arena so a later restore's MAP_FIXED lands on a free VA. Inert unless armed (returns 0). A plain
+        // hint: if the (reliably free) high slot were busy, the kernel just places it elsewhere.
+        if (a0 == 0 && !(a3 & 0x10)) {
+            uint64_t ch = ckpt_place_hint((uint64_t)a1 + guard);
+            if (ch) a0 = ch;
+        }
 #ifdef PCACHE_MMAP_HINT
         // (pcache): give the dynamic linker's file-backed, non-fixed, kernel-placed maps (library
         // loads) a DETERMINISTIC base hint so their translated blocks are reusable across runs of the same

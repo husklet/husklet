@@ -103,6 +103,12 @@ static void run_guest(struct cpu *c) {
         // from bouncing a hot loop out of the code cache every iteration -- a fresh signal simply re-sets
         // irq (host_sigh / thread-directed path) and the next body check catches it.
         c->irq = 0;
+#ifdef G_CKPT_POLL
+        // Checkpoint safepoint: all guest architectural state is spilled into `c` here, so a pending
+        // control-triggered checkpoint (SIGUSR1) writes a coherent snapshot and _exit()s. Defined only by
+        // the aarch64 target; the x86 TU never defines it, so its dispatcher compiles byte-identically.
+        G_CKPT_POLL(c);
+#endif
         if (G_PC(c) == SIGRETURN_PC) {
             do_sigreturn(c);
             continue;

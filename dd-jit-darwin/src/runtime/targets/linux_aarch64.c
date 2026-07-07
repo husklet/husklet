@@ -70,10 +70,20 @@
 #include "../os/linux/syscall/dispatch.c"
 // untrusted-guest isolation: SPSC ring + sentry split (g_untrusted; OFF by default)
 #include "../os/linux/sentry.c"
+// native checkpoint/restore control seam: the shared dispatcher (engine/dispatch.c) polls G_CKPT_POLL at
+// its per-block safepoint. Declared here (before the include) so only the aarch64 TU wires it; ckpt_poll is
+// DEFINED in os/linux/checkpoint.c below (a forward-declared static call is legal).
+static void ckpt_poll(struct cpu *c);
+#define G_CKPT_POLL(c) ckpt_poll(c)
+// checkpoint.c's restore driver (included below) rebuilds the container from these, defined later in this TU.
+static void container_init(const char *rootfs);
+static int engine_global_init(void);
 // host trampoline + run_guest
 #include "../engine/dispatch.c"
 // ELF loader + initial stack
 #include "../os/linux/elf.c"
+// native checkpoint/restore (multi-process tree): dump/restore guest RAM + cpu + path-backed fds + pty
+#include "../os/linux/checkpoint.c"
 // `--configfd` launch bridge: read the serialized ddjit_config from the fd, re-hydrate DD_*/DDJIT_* env,
 // and dispatch to this TU's dd_run() (forward-declared inside; defined below).
 #include "../os/ddjit_configfd.c"
@@ -525,6 +535,9 @@ static int engine_global_init(void) {
     // ptrace tracer/tracee coordination arena -- mmap the shared region ONCE here, BEFORE any guest
     // fork, so every descendant guest process inherits the same physical pages. Inert until a guest ptraces.
     ptrace_arena_init();
+    // Arm the SIGUSR1 checkpoint control handler when DDJIT_CHECKPOINT_DIR is set (harmless no-op otherwise).
+    // Runs in every process (init + forked children) so the whole tree is checkpointable.
+    ckpt_control_init();
     g_engine_inited = 1;
     return 0;
 }
@@ -583,7 +596,9 @@ static const char *load_program(const char *prog, struct loaded *lm, struct load
 // restores a pristine COW image first, then calls this against the parent-preloaded base). Body is the
 // original dd_run tail verbatim, so standalone behavior is byte-identical.
 static int run_loaded(int argc, char *const argv[], struct loaded *lm, uint64_t jump, uint64_t at_base) {
-    uint8_t *heap = mmap(NULL, 256u << 20, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON, -1, 0);
+    // checkpoint/restore: place the brk heap in the deterministic high arena (0 hint => normal NULL placement)
+    uint8_t *heap =
+        mmap((void *)ckpt_place_hint(256u << 20), 256u << 20, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON, -1, 0);
     gmap_add((uint64_t)heap, 256u << 20); // track so a later execve() can reclaim the inherited heap
     brk_lo = brk_cur = (uint64_t)heap;
     brk_hi = brk_lo + (256u << 20);
@@ -601,7 +616,19 @@ static int run_loaded(int argc, char *const argv[], struct loaded *lm, uint64_t 
     return c.exit_code;
 }
 
+// Restore driver (the dd_jit::Runtime::restore surface; also reachable via the `--restore <dir>` flag).
+// Rebuilds the checkpointed process tree from `dir` and resumes it. Guest memory for the init is rebuilt
+// FIRST -- before container_init/engine_global_init allocate anything -- inside ckpt_restore_tree.
+int dd_restore(const char *rootfs, const char *dir) {
+    g_pcache = getenv("DDJIT_PCACHE") != NULL && getenv("DDJIT_NOPCACHE") == NULL;
+    return ckpt_restore_tree(rootfs, dir);
+}
+
 int dd_run(const char *rootfs, int argc, char *const argv[]) {
+    // Resume a previously checkpointed workspace instead of launching a program (the GUI sets this on
+    // window reopen; the container config/env is otherwise identical to the original launch).
+    const char *rdir = getenv("DDJIT_RESTORE_DIR");
+    if (rdir && rdir[0]) return dd_restore(rootfs, rdir);
     if (argc < 1 || !argv || !argv[0]) return 2;
     // persistent cross-process translated-code cache. Landed OPT-IN (DDJIT_PCACHE=1, same gating as
     // the x86 opt8 pcache) so the default correctness matrix stays byte-identical to the baseline; the
@@ -740,6 +767,9 @@ int ddjit_entry(int argc, char **argv) {
         if (!strcmp(argv[ai], "--rootfs") && ai + 1 < argc) {
             rootfs = argv[ai + 1];
             ai += 2;
+        } else if (!strcmp(argv[ai], "--restore") && ai + 1 < argc) {
+            setenv("DDJIT_RESTORE_DIR", argv[ai + 1], 1); // dd_run() dispatches to dd_restore() (no <elf> arg)
+            ai += 2;
         } else if (!strcmp(argv[ai], "--hostname") && ai + 1 < argc) {
             strncpy(g_hostname, argv[ai + 1], 64);
             ai += 2;
@@ -771,11 +801,14 @@ int ddjit_entry(int argc, char **argv) {
         } else
             break;
     }
+    if (getenv("DDJIT_RESTORE_DIR")) return dd_run(rootfs, 0, NULL); // resume a checkpoint (no <elf> needed)
     if (ai >= argc) {
         fprintf(stderr,
                 "usage: %s [--rootfs DIR] [--hostname NAME] [--mem-max BYTES] [--pids-max N] [--publish H:C] "
-                "<aarch64-elf> [args...]\n",
-                argv[0]);
+                "<aarch64-elf> [args...]\n"
+                "       %s [--rootfs DIR] --restore <checkpoint-dir>\n"
+                "  checkpoint a running guest: launch with DDJIT_CHECKPOINT_DIR=<dir> and send it SIGUSR1\n",
+                argv[0], argv[0]);
         return 2;
     }
     return dd_run(rootfs, argc - ai, argv + ai);

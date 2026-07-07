@@ -77,6 +77,22 @@ pub(crate) enum WorkspaceCmd {
     /// Launch a workspace as an interactive terminal in this window.
     Launch {
         name: String,
+        /// Resume the workspace from its last checkpoint (whole process tree) instead of a fresh shell.
+        #[arg(long)]
+        restore: bool,
+    },
+    /// Checkpoint a RUNNING workspace's whole process tree to disk (shells + background jobs + children),
+    /// freeing its memory. Reopen it later with `workspace launch <name> --restore`.
+    Checkpoint {
+        name: String,
+    },
+    /// Restore a checkpointed workspace's whole process tree (alias for `launch --restore`).
+    Restore {
+        name: String,
+    },
+    /// Ensure the workspace's isolated docker daemon is running; print its socket path.
+    Daemon {
+        name: String,
     },
 }
 
