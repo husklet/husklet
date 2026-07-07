@@ -22,7 +22,16 @@ pub(crate) fn run(action: WorkspaceCmd) {
         WorkspaceCmd::List => list(),
         WorkspaceCmd::Create { name, image, arch } => create(name, image, arch),
         WorkspaceCmd::Rm { name } => rm(name),
-        WorkspaceCmd::Launch { name } => launch(name),
+        WorkspaceCmd::Launch { name, restore } => launch(name, restore),
+        WorkspaceCmd::Restore { name } => launch(name, true),
+        WorkspaceCmd::Checkpoint { name } => checkpoint(name),
+        WorkspaceCmd::Daemon { name } => match crate::wsdaemon::ensure(&name) {
+            Ok(sock) => println!("{}", sock.display()),
+            Err(e) => {
+                eprintln!("failed to start workspace daemon: {e}");
+                std::process::exit(1);
+            }
+        },
     }
 }
 
@@ -68,19 +77,55 @@ extern "C" fn on_winch(_sig: libc::c_int) {
     WINCH.store(true, Ordering::SeqCst);
 }
 
-fn launch(name: String) {
+/// Checkpoint a running workspace's whole process tree to disk. Reads the init pid recorded at launch,
+/// sends the engine's checkpoint control signal, and waits for the complete on-disk checkpoint.
+fn checkpoint(name: String) {
+    let store = WorkspaceStore::load(store_path());
+    let Some(ws) = store.get(&name).cloned() else {
+        eprintln!("no workspace named {name:?} — see:  ddcli workspace list");
+        std::process::exit(2);
+    };
+    let pid_file = ws.checkpoint_pid_file(&paths::dd_root());
+    let ckpt_dir = ws.checkpoint_dir(&paths::dd_root());
+    let pid: u32 = match std::fs::read_to_string(&pid_file).ok().and_then(|s| s.trim().parse().ok()) {
+        Some(p) => p,
+        None => {
+            eprintln!("workspace {name:?} is not running (no checkpoint pid recorded)");
+            std::process::exit(1);
+        }
+    };
+    let rt = match dd_jit::Runtime::new() {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!("checkpoint failed: {e}");
+            std::process::exit(1);
+        }
+    };
+    match rt.checkpoint(pid, &ckpt_dir.to_string_lossy(), std::time::Duration::from_secs(30)) {
+        Ok(()) => {
+            let _ = std::fs::remove_file(&pid_file);
+            println!("workspace {name:?} checkpointed → {}", ckpt_dir.display());
+            println!("resume it with:  ddcli workspace launch {name} --restore");
+        }
+        Err(e) => {
+            eprintln!("checkpoint of workspace {name:?} failed: {e}");
+            std::process::exit(1);
+        }
+    }
+}
+
+fn launch(name: String, restore: bool) {
     let store = WorkspaceStore::load(store_path());
     let Some(ws) = store.get(&name).cloned() else {
         eprintln!("no workspace named {name:?} — see:  ddcli workspace list");
         std::process::exit(2);
     };
     let (cols, rows) = term_size().unwrap_or((80, 24));
-    eprintln!("[dd] launching workspace {:?} ({} · {})", ws.name, ws.image, ws.arch.as_str());
 
     // Enter the workspace's IMAGE as a real container IN-PROCESS via dd-jit — no daemon, no docker, no
-    // socket. When this host's engine can't run the workspace's arch (e.g. a non-macOS dev box), fall
-    // back to a plain host shell so `launch` still works for iterating on the terminal itself.
-    let launched = match crate::ddjit_launcher::launch(&ws, cols, rows) {
+    // socket. When `restore`, resume the last whole-workspace checkpoint (process tree) instead of a fresh
+    // shell. When this host's engine can't run the workspace's arch, fall back to a plain host shell.
+    let launched = match crate::ddjit_launcher::launch_ex(&ws, cols, rows, restore) {
         Ok(pty) => Ok(pty),
         Err(e) => {
             eprintln!("[dd] (dd-jit unavailable here — {e}; running a local shell instead)");
@@ -109,10 +154,27 @@ fn run_inline(pty: &mut dyn dd_term_core::PtyBackend) -> i32 {
     let mut buf = [0u8; 8192];
     let mut out = std::io::stdout();
     let exit_code;
+    // Track the last size we pushed to the guest so we can POLL for changes, not just react to
+    // SIGWINCH. The GUI resizes our controlling PTY via VTE's `set_size`, which (unlike a plain
+    // ioctl) does not reliably deliver SIGWINCH to us — and the very first resize can land while
+    // we're still booting the engine (before the handler is armed). Polling every tick makes the
+    // guest's window size track the terminal regardless, so full-screen apps (htop) fill the window.
+    let mut last_size = term_size();
+    if let Some((c, r)) = last_size {
+        pty.resize(c, r);
+    }
+    let mut ticks: u32 = 0;
     loop {
-        if WINCH.swap(false, Ordering::SeqCst) {
-            if let Some((c, r)) = term_size() {
-                pty.resize(c, r);
+        let winched = WINCH.swap(false, Ordering::SeqCst);
+        ticks = ticks.wrapping_add(1);
+        // On SIGWINCH, or every ~300ms as a fallback, re-read the terminal size and push any change.
+        if winched || ticks % 30 == 0 {
+            let now = term_size();
+            if now != last_size {
+                if let Some((c, r)) = now {
+                    pty.resize(c, r);
+                }
+                last_size = now;
             }
         }
         // Wait briefly for terminal input; the short timeout also paces output draining.

@@ -645,7 +645,15 @@ static void thread_after_fork(void) {
 
 static void thread_int_handler(int sig) {
     (void)sig;
-} // empty: its only job is to make a blocked syscall EINTR
+    // Its base job is to make a blocked host syscall return EINTR (empty body suffices). When checkpoint/
+    // restore is armed, ALSO set cpu->irq so a chained in-cache guest loop (which never returns to the
+    // dispatcher on its own) is bounced out to the safepoint where ckpt_poll runs. Inert on a normal launch
+    // (g_ckpt_armed == 0), so the gate is unchanged; SIGINFO is guest-clobber-proof (sig_l2m omits 29).
+    if (g_ckpt_armed) {
+        struct cpu *c = (struct cpu *)pthread_getspecific(g_cpu_key);
+        if (c) c->irq = 1;
+    }
+}
 
 static pthread_once_t g_thread_int_once = PTHREAD_ONCE_INIT;
 

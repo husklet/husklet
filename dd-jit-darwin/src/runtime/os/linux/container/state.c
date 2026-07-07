@@ -28,9 +28,94 @@ static _Atomic int g_pids_cur = 1;
 // PID ns: host pid of the container init -> guest sees it as PID 1
 static int g_init_hostpid = 0;
 
+// ---- checkpoint/restore deterministic address placement (armed only when checkpoint/restore is in use) ----
+// A same-ISA JIT keeps guest VA == host VA, so a restore MAP_FIXEDs every guest region back to its exact
+// address. But macOS ASLR places kernel-chosen guest mmaps (heap, stack, anon/file maps) at LOW addresses
+// that differ every exec -- so a VA free in the checkpointed run can be occupied by the fresh restore
+// process's own libraries. When armed (DDJIT_CHECKPOINT_DIR or DDJIT_RESTORE_DIR set), guest allocations are
+// instead HINTED into a high arena well above the engine's own mappings and the pcache image/interp bases
+// (0x40../0x48..TB) -- a range reliably free in any process, so the restore's MAP_FIXED always lands. Inert
+// (returns 0 -> normal kernel placement) unless armed, so a normal launch and the whole gate are unchanged.
+static int g_ckpt_armed = 0;
+static uint64_t g_ckpt_place_next = 0x50000000000ull;
+
+static uint64_t ckpt_place_hint(uint64_t len) {
+    if (!g_ckpt_armed || !len) return 0;
+    uint64_t a = g_ckpt_place_next;
+    uint64_t step = (len + 0xffffull) & ~0xffffull; // 16 KB granularity (macOS page)
+    g_ckpt_place_next += step + 0x100000ull;        // 1 MB gap between regions
+    return a;
+}
+
+// After a restore, keep the placement cursor ABOVE every region we mapped back, so a mapping the resumed
+// guest makes (and a SECOND checkpoint) does not alias a restored region.
+static void ckpt_place_bump_past(uint64_t end) {
+    if (end > g_ckpt_place_next) g_ckpt_place_next = (end + 0xfffffull) & ~0xfffffull;
+}
+
+// This restored process's OWN guest pid (0 => normal launch, report the host pid). A checkpoint restore
+// re-forks the process tree, so the live host pids DIFFER from the ones the guest baked into its memory at
+// checkpoint time; a restored non-init process reports its checkpoint-time guest pid here so getpid() stays
+// stable. Init keeps 0 and uses the g_init_hostpid<->1 mapping below (which also yields 1).
+static int g_self_gpid = 0;
+static int g_self_gppid = -1; // this restored process's guest PARENT pid (-1 => unset, use the real getppid)
+
 static int container_pid(void) {
+    if (g_self_gpid) return g_self_gpid;
     int h = getpid();
     return (g_init_hostpid && h == g_init_hostpid) ? 1 : h;
+}
+
+// ---- checkpoint/restore PID virtualization (INACTIVE on a normal launch) --------------------------------
+// dd normally uses the REAL host pid as a guest child's pid (only the init is virtualized). A restore assigns
+// NEW host pids to the re-forked tree, so this table maps each restored process's checkpoint-time guest pid
+// <-> its new live host pid, keeping guest-visible pids stable across a restore (a blocked wait4's target, a
+// reaped-child pid, bash's job table, kill(pid)). It is EMPTY on every normal launch (g_pidmap_n==0 => every
+// translator below is an identity no-op), so it changes nothing outside the restore path.
+#define PIDMAP_MAX 4096
+static struct {
+    int gpid, live;
+} g_pidmap[PIDMAP_MAX];
+static int g_pidmap_n = 0;
+
+static void pidmap_add(int gpid, int live) __attribute__((unused));
+static void pidmap_add(int gpid, int live) {
+    if (g_pidmap_n >= PIDMAP_MAX || gpid <= 0 || live <= 0) return;
+    for (int i = 0; i < g_pidmap_n; i++)
+        if (g_pidmap[i].gpid == gpid) {
+            g_pidmap[i].live = live;
+            return;
+        }
+    g_pidmap[g_pidmap_n].gpid = gpid;
+    g_pidmap[g_pidmap_n].live = live;
+    g_pidmap_n++;
+}
+
+static void pidmap_del_live(int live) __attribute__((unused));
+static void pidmap_del_live(int live) {
+    for (int i = 0; i < g_pidmap_n; i++)
+        if (g_pidmap[i].live == live) {
+            g_pidmap[i] = g_pidmap[--g_pidmap_n];
+            return;
+        }
+}
+
+// guest pid -> live host pid (translate a syscall ARGUMENT: wait4/kill target). Identity on a miss.
+static int pidmap_to_live(int gpid) __attribute__((unused));
+static int pidmap_to_live(int gpid) {
+    if (g_pidmap_n == 0 || gpid <= 0) return gpid;
+    for (int i = 0; i < g_pidmap_n; i++)
+        if (g_pidmap[i].gpid == gpid) return g_pidmap[i].live;
+    return gpid;
+}
+
+// live host pid -> guest pid (translate a syscall RETURN: a reaped child's pid). Identity on a miss.
+static int pidmap_to_guest(int live) __attribute__((unused));
+static int pidmap_to_guest(int live) {
+    if (g_pidmap_n == 0 || live <= 0) return live;
+    for (int i = 0; i < g_pidmap_n; i++)
+        if (g_pidmap[i].live == live) return g_pidmap[i].gpid;
+    return live;
 }
 
 // `docker run --network none`: the daemon sets DD_NET_ISOLATE=1. The container is then LOOPBACK-ONLY — no

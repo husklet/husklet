@@ -26,12 +26,13 @@ fn guest_of(arch: Arch) -> dd_jit::Guest {
     }
 }
 
-/// The registry arch preference for a workspace's target arch.
-fn arch_pref(arch: Arch) -> &'static [&'static str] {
+/// The image target we require for a workspace's arch — used to pull the RIGHT variant and to verify
+/// the on-disk rootfs really is that ISA before we hand it to an engine.
+fn want_arch(arch: Arch) -> dd_images::Arch {
     match arch {
-        Arch::Arm64 => &["arm64", "amd64"],
-        Arch::Amd64 => &["amd64", "arm64"],
-        Arch::DarwinArm64 => &["arm64"],
+        Arch::Arm64 => dd_images::Arch::LinuxAarch64,
+        Arch::Amd64 => dd_images::Arch::LinuxX86_64,
+        Arch::DarwinArm64 => dd_images::Arch::DarwinAarch64,
     }
 }
 
@@ -50,9 +51,34 @@ fn split_ref(image: &str) -> (String, String) {
 
 /// Launch `ws` as an in-process dd-jit container and return a [`PtyBackend`] over its shell. Errors
 /// (including "this host's engine can't run that arch") let the caller fall back to a local shell.
-pub fn launch(ws: &Workspace, cols: u16, rows: u16) -> io::Result<Box<dyn PtyBackend>> {
+/// Launch (or, when `restore`, RESUME from the last whole-workspace checkpoint) `ws`. Checkpointing is always
+/// armed: the engine's `DDJIT_CHECKPOINT_DIR` is exported (inherited by the posix_spawn'd engine and every
+/// guest process it forks), so the running tree can be frozen later with `Runtime::checkpoint`. When
+/// `restore`, `DDJIT_RESTORE_DIR` is set too, so the engine rebuilds the saved process tree instead of
+/// starting a fresh shell. The container init's host pid is recorded so a separate `workspace checkpoint`
+/// invocation can signal the live tree.
+pub fn launch_ex(ws: &Workspace, cols: u16, rows: u16, restore: bool) -> io::Result<Box<dyn PtyBackend>> {
     let guest = guest_of(ws.arch);
-    let rt = dd_jit::Runtime::new().map_err(to_io)?;
+    // Deterministic high placement + fixed image bases (required for a restore's MAP_FIXED to land on free
+    // VAs) need the persistent translated-code cache ON, so give the runtime a per-workspace cache dir.
+    let ckpt_dir = ws.checkpoint_dir(&paths::dd_root());
+    let pcache_dir = ws.storage_dir(&paths::dd_root()).join("pcache");
+    let _ = std::fs::create_dir_all(&pcache_dir);
+    if let Some(p) = ckpt_dir.parent() {
+        let _ = std::fs::create_dir_all(p);
+    }
+    // Arm checkpoint/restore for the engine this process spawns (ffi.c execve()s with our environ). Each
+    // `ddcli workspace launch` is its own process, so these process-global vars never race across workspaces.
+    std::env::set_var("DDJIT_CHECKPOINT_DIR", &ckpt_dir);
+    if restore && ckpt_dir.join("MANIFEST").exists() {
+        std::env::set_var("DDJIT_RESTORE_DIR", &ckpt_dir);
+    } else {
+        std::env::remove_var("DDJIT_RESTORE_DIR");
+        if restore {
+            eprintln!("[dd] no checkpoint to restore for {:?}; starting a fresh workspace", ws.name);
+        }
+    }
+    let rt = dd_jit::Runtime::new().map_err(to_io)?.cache_dir(pcache_dir.to_string_lossy().into_owned());
     if !rt.supports(guest) {
         return Err(io::Error::new(
             io::ErrorKind::Unsupported,
@@ -60,21 +86,22 @@ pub fn launch(ws: &Workspace, cols: u16, rows: u16) -> io::Result<Box<dyn PtyBac
         ));
     }
 
-    // Resolve the image rootfs, pulling it on first use.
-    let images_dir = paths::images_dir().to_string_lossy().into_owned();
+    // Resolve the image rootfs, pulling on first use. The store keys a rootfs by image ref ONLY (no
+    // arch), so an `alpine` pulled as arm64 elsewhere would otherwise be reused for an amd64 workspace
+    // and fed to the x86 engine (→ `e_machine` mismatch). Guard against that two ways: give each arch
+    // its own store dir, and verify the unpacked rootfs's real ISA matches before use.
+    let want = want_arch(ws.arch);
+    let images_dir = paths::images_dir().join(ws.arch.as_str()).to_string_lossy().into_owned();
     let store = dd_images::Store::new(&images_dir);
     let (from, tag) = split_ref(&ws.image);
     let iref = dd_images::image_ref(&from, &tag);
     let rootfs_pb = store.rootfs_path(&iref);
-    if !rootfs_pb.join("bin").exists() && !rootfs_pb.is_dir() {
-        eprintln!("[dd] pulling {} …", ws.image);
+    let present_ok =
+        rootfs_pb.is_dir() && dd_images::detect_arch(&rootfs_pb).map(|a| a == want).unwrap_or(false);
+    if !present_ok {
+        eprintln!("[dd] pulling {} ({}) …", ws.image, ws.arch.as_str());
         store
-            .pull_archs(&from, &tag, dd_images::Credentials::none(), arch_pref(ws.arch), &mut |_| {})
-            .map_err(to_io)?;
-    } else if !rootfs_pb.is_dir() {
-        eprintln!("[dd] pulling {} …", ws.image);
-        store
-            .pull_archs(&from, &tag, dd_images::Credentials::none(), arch_pref(ws.arch), &mut |_| {})
+            .pull_archs(&from, &tag, dd_images::Credentials::none(), &[want.oci().1], &mut |_| {})
             .map_err(to_io)?;
     }
     let rootfs = rootfs_pb.to_string_lossy().into_owned();
@@ -91,24 +118,57 @@ pub fn launch(ws: &Workspace, cols: u16, rows: u16) -> io::Result<Box<dyn PtyBac
     // Pick the shell WITHOUT redirecting the final exec's stderr: interactive bash decides it's
     // interactive from isatty(stderr) AND writes its prompt (PS1) to stderr, so a `2>/dev/null` would
     // silently make it non-interactive with a hidden prompt (looks hung).
-    let shell = vec![
-        "/bin/sh".to_string(),
-        "-c".to_string(),
-        "if command -v bash >/dev/null 2>&1; then exec bash -il; else exec sh -i; fi".to_string(),
-    ];
-    let env = [
+    // Honor a configured shell; else auto-pick bash (interactive login) then sh.
+    let inner = match ws.shell.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+        Some(s) => format!("exec {s}"),
+        None => "if command -v bash >/dev/null 2>&1; then exec bash -il; else exec sh -i; fi".to_string(),
+    };
+    let shell = vec!["/bin/sh".to_string(), "-c".to_string(), inner];
+
+    let mut env = vec![
         "TERM=xterm-256color".to_string(),
         "HOME=/root".to_string(),
         "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin".to_string(),
     ];
-    let container = dd_jit::Container::builder(image)
+    // The workspace's configured environment variables.
+    for (k, v) in &ws.env {
+        env.push(format!("{k}={v}"));
+    }
+
+    let mut builder = dd_jit::Container::builder(image)
         .cmd(shell)
         .cwd("/root".to_string())
         .guest_env(&env, true)
         .hostname(sanitize_host(&ws.name))
-        .private_network(format!("ws-{}", sanitize_host(&ws.name)))
-        .build()
-        .map_err(to_io)?;
+        .private_network(format!("ws-{}", sanitize_host(&ws.name)));
+    // Configured bind mounts + resource caps from the workspace definition.
+    for m in &ws.mounts {
+        builder = builder.bind(m.host.clone(), m.container.clone(), m.ro);
+    }
+    // Mount the workspace's ISOLATED daemon socket so the normal `docker` CLI works inside. Bind at the
+    // canonical /run/docker.sock (in the image /var/run is a symlink to /run).
+    if ws.docker_sock {
+        if let Ok(sock) = crate::wsdaemon::ensure(&ws.name) {
+            builder = builder.bind(sock.to_string_lossy().into_owned(), "/run/docker.sock".to_string(), false);
+            env.push("DOCKER_HOST=unix:///run/docker.sock".to_string());
+            // Inject a static `docker` CLI (matching the workspace arch) so it works even in a bare image.
+            let docker_bin = paths::dd_root().join("bin").join(match ws.arch {
+                Arch::Amd64 => "docker-amd64",
+                _ => "docker-arm64",
+            });
+            if docker_bin.exists() {
+                builder = builder.bind(docker_bin.to_string_lossy().into_owned(), "/usr/local/bin/docker".to_string(), true);
+            }
+            builder = builder.guest_env(&env, true); // re-apply so DOCKER_HOST is included
+        }
+    }
+    if let Some(c) = ws.cpus {
+        builder = builder.cpus(c);
+    }
+    if let Some(mb) = ws.memory_mb {
+        builder = builder.memory_mb(mb as u64);
+    }
+    let container = builder.build().map_err(to_io)?;
 
     // dd-jit's start_into() spawns tokio IO pumps, so it must run inside a runtime; keep that runtime
     // alive in the handle so the pumps keep feeding the broadcast we drain synchronously.
@@ -128,6 +188,9 @@ pub fn launch(ws: &Workspace, cols: u16, rows: u16) -> io::Result<Box<dyn PtyBac
     let launched = trt
         .block_on(async { rt.start_into(&container, dd_jit::Stdio3 { tty: true }, out, log_chunks, stdin_rx) })
         .map_err(to_io)?;
+
+    // Record the container init's host pid so a separate `workspace checkpoint` can signal the live tree.
+    let _ = std::fs::write(ws.checkpoint_pid_file(&paths::dd_root()), launched.pid.to_string());
 
     let mut pty = DdJitPty {
         _rt: trt,

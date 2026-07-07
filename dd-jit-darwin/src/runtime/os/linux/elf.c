@@ -795,7 +795,9 @@ static uint64_t build_stack(int argc, char **argv, struct loaded *lm, uint64_t a
     // overrun as a HARD fault (never growable memory). The 1MB guard is a bounded PROT_NONE reservation (no
     // committed pages) below g_stack_lo; not gmap-tracked so /proc/self/maps stays a clean [stack] + guard.
     size_t GUARD = 1u << 20;
-    uint8_t *base = mmap(NULL, GUARD + SZ, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON, -1, 0);
+    // checkpoint/restore: place the main stack in the deterministic high arena (0 hint => normal placement)
+    uint8_t *base =
+        mmap((void *)ckpt_place_hint(GUARD + SZ), GUARD + SZ, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON, -1, 0);
     mprotect(base, GUARD, PROT_NONE);
     gna_add((uint64_t)base, (uint64_t)base + GUARD);
     uint8_t *stk = base + GUARD;

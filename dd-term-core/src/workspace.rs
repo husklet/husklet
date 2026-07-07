@@ -52,22 +52,72 @@ impl Arch {
     }
 }
 
-/// A configured workspace: a name, the image it runs, and the target arch.
+/// A host→guest bind mount for a workspace.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct Mount {
+    pub host: String,
+    pub container: String,
+    pub ro: bool,
+}
+
+/// A configured workspace: identity (name + image + arch) plus its isolated-environment config —
+/// where it lives on disk, the shell, resource caps, environment, bind mounts, and whether the docker
+/// socket is mounted so the normal `docker` CLI works inside it.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct Workspace {
     pub name: String,
     pub image: String,
     pub arch: Arch,
+    /// Where the workspace's persistent state lives; `None` = the default `<base>/workspaces/<name>`.
+    pub storage: Option<PathBuf>,
+    /// Login shell command line, e.g. `"/bin/bash -l"`; `None` = auto (bash if present, else sh).
+    pub shell: Option<String>,
+    /// CPU cap (cores) and memory cap (MB); `None` = unbounded.
+    pub cpus: Option<u32>,
+    pub memory_mb: Option<u32>,
+    /// Environment variables injected into every shell in the workspace.
+    pub env: Vec<(String, String)>,
+    /// Host→guest bind mounts.
+    pub mounts: Vec<Mount>,
+    /// Mount the docker socket + set `DOCKER_HOST` so `docker` works inside (default on).
+    pub docker_sock: bool,
 }
 
 impl Workspace {
     pub fn new(name: impl Into<String>, image: impl Into<String>, arch: Arch) -> Workspace {
-        Workspace { name: name.into(), image: image.into(), arch }
+        Workspace {
+            name: name.into(),
+            image: image.into(),
+            arch,
+            storage: None,
+            shell: None,
+            cpus: None,
+            memory_mb: None,
+            env: Vec::new(),
+            mounts: Vec::new(),
+            docker_sock: true,
+        }
     }
-    /// The persistent writable-upper directory for this workspace under `base` (e.g. `~/.dd`). The dd-jit
-    /// launcher passes this to `Image::overlay(upper, [rootfs])` so state survives app restarts.
+    /// The on-disk directory holding this workspace's persistent state (honors a configured `storage`).
+    pub fn storage_dir(&self, base: &Path) -> PathBuf {
+        self.storage
+            .clone()
+            .unwrap_or_else(|| base.join("workspaces").join(sanitize(&self.name)))
+    }
+    /// The persistent writable-upper directory. The dd-jit launcher passes this to
+    /// `Image::overlay(upper, [rootfs])` so state survives app restarts.
     pub fn upper_dir(&self, base: &Path) -> PathBuf {
-        base.join("workspaces").join(sanitize(&self.name)).join("upper")
+        self.storage_dir(base).join("upper")
+    }
+    /// Where a whole-workspace checkpoint (the frozen process tree: shells + jobs + children) is written on
+    /// close and read back on reopen. The dd-jit launcher arms the engine with this dir.
+    pub fn checkpoint_dir(&self, base: &Path) -> PathBuf {
+        self.storage_dir(base).join("checkpoint")
+    }
+    /// The file recording the running container init's host pid, so `workspace checkpoint` can signal the
+    /// live tree from a separate process.
+    pub fn checkpoint_pid_file(&self, base: &Path) -> PathBuf {
+        self.storage_dir(base).join("checkpoint.pid")
     }
     /// The default shell command to run in the workspace.
     pub fn default_shell() -> Vec<String> {
@@ -83,22 +133,44 @@ pub struct WorkspaceStore {
 }
 
 impl WorkspaceStore {
-    /// Load the store at `path` (an absent/empty file yields an empty store; malformed lines are skipped).
+    /// Load the store at `path` (absent/empty → empty store; malformed entries skipped). Parses the
+    /// block format (`[workspace]` + `key = value` lines, repeatable `env`/`mount`) and still reads the
+    /// legacy one-line `name<TAB>arch<TAB>image` rows so old config keeps working.
     pub fn load(path: impl Into<PathBuf>) -> WorkspaceStore {
         let path = path.into();
         let mut items = Vec::new();
         if let Ok(text) = std::fs::read_to_string(&path) {
-            for line in text.lines() {
-                let line = line.trim();
+            let mut cur: Option<WsBuilder> = None;
+            for raw in text.lines() {
+                let line = raw.trim();
                 if line.is_empty() || line.starts_with('#') {
                     continue;
                 }
-                let mut f = line.splitn(3, '\t');
-                if let (Some(name), Some(arch), Some(image)) = (f.next(), f.next(), f.next()) {
-                    if let Some(arch) = Arch::parse(arch) {
-                        items.push(Workspace::new(name, image, arch));
+                if line == "[workspace]" {
+                    if let Some(w) = cur.take().and_then(|b| b.build()) {
+                        items.push(w);
+                    }
+                    cur = Some(WsBuilder::default());
+                    continue;
+                }
+                if cur.is_none() && line.contains('\t') {
+                    // Legacy row.
+                    let mut f = line.splitn(3, '\t');
+                    if let (Some(name), Some(arch), Some(image)) = (f.next(), f.next(), f.next()) {
+                        if let Some(arch) = Arch::parse(arch) {
+                            items.push(Workspace::new(name, image, arch));
+                        }
+                    }
+                    continue;
+                }
+                if let Some((k, v)) = line.split_once('=') {
+                    if let Some(b) = cur.as_mut() {
+                        b.set(k.trim(), v.trim());
                     }
                 }
+            }
+            if let Some(w) = cur.take().and_then(|b| b.build()) {
+                items.push(w);
             }
         }
         WorkspaceStore { path, items }
@@ -131,19 +203,103 @@ impl WorkspaceStore {
         if let Some(dir) = self.path.parent() {
             std::fs::create_dir_all(dir)?;
         }
-        let mut out = String::from("# dd-term workspaces: name<TAB>arch<TAB>image\n");
+        let mut out = String::from("# dd workspaces\n");
         for w in &self.items {
-            // Names/images with tabs or newlines would corrupt the line format — reject at write time by
-            // stripping them (config is written by the app, not hand-edited, so this is belt-and-braces).
-            out.push_str(&clean(&w.name));
-            out.push('\t');
-            out.push_str(w.arch.as_str());
-            out.push('\t');
-            out.push_str(&clean(&w.image));
-            out.push('\n');
+            out.push_str("\n[workspace]\n");
+            kv(&mut out, "name", &clean(&w.name));
+            kv(&mut out, "image", &clean(&w.image));
+            kv(&mut out, "arch", w.arch.as_str());
+            if let Some(s) = &w.storage {
+                kv(&mut out, "storage", &clean(&s.to_string_lossy()));
+            }
+            if let Some(s) = &w.shell {
+                kv(&mut out, "shell", &clean(s));
+            }
+            if let Some(c) = w.cpus {
+                kv(&mut out, "cpus", &c.to_string());
+            }
+            if let Some(m) = w.memory_mb {
+                kv(&mut out, "memory", &m.to_string());
+            }
+            kv(&mut out, "docker_sock", if w.docker_sock { "true" } else { "false" });
+            for (k, v) in &w.env {
+                kv(&mut out, "env", &format!("{}={}", clean(k), clean(v)));
+            }
+            for m in &w.mounts {
+                kv(&mut out, "mount", &format!("{}:{}:{}", clean(&m.host), clean(&m.container), if m.ro { "ro" } else { "rw" }));
+            }
         }
         std::fs::write(&self.path, out)
     }
+}
+
+/// Accumulates a workspace's `key = value` lines within a `[workspace]` block, then builds it.
+#[derive(Default)]
+struct WsBuilder {
+    name: Option<String>,
+    image: Option<String>,
+    arch: Option<Arch>,
+    storage: Option<PathBuf>,
+    shell: Option<String>,
+    cpus: Option<u32>,
+    memory_mb: Option<u32>,
+    env: Vec<(String, String)>,
+    mounts: Vec<Mount>,
+    docker_sock: Option<bool>,
+}
+
+impl WsBuilder {
+    fn set(&mut self, k: &str, v: &str) {
+        match k {
+            "name" => self.name = Some(v.to_string()),
+            "image" => self.image = Some(v.to_string()),
+            "arch" => self.arch = Arch::parse(v),
+            "storage" if !v.is_empty() => self.storage = Some(PathBuf::from(v)),
+            "shell" if !v.is_empty() => self.shell = Some(v.to_string()),
+            "cpus" => self.cpus = v.parse().ok(),
+            "memory" => self.memory_mb = v.parse().ok(),
+            "docker_sock" => self.docker_sock = Some(matches!(v, "true" | "1" | "yes" | "on")),
+            "env" => {
+                if let Some((ek, ev)) = v.split_once('=') {
+                    self.env.push((ek.trim().to_string(), ev.trim().to_string()));
+                }
+            }
+            "mount" => {
+                let p: Vec<&str> = v.split(':').collect();
+                if p.len() >= 2 && !p[0].is_empty() && !p[1].is_empty() {
+                    self.mounts.push(Mount {
+                        host: p[0].to_string(),
+                        container: p[1].to_string(),
+                        ro: p.get(2).map(|s| *s == "ro").unwrap_or(false),
+                    });
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn build(self) -> Option<Workspace> {
+        let (name, image, arch) = (self.name?, self.image?, self.arch?);
+        Some(Workspace {
+            name,
+            image,
+            arch,
+            storage: self.storage,
+            shell: self.shell,
+            cpus: self.cpus,
+            memory_mb: self.memory_mb,
+            env: self.env,
+            mounts: self.mounts,
+            docker_sock: self.docker_sock.unwrap_or(true),
+        })
+    }
+}
+
+fn kv(out: &mut String, k: &str, v: &str) {
+    out.push_str(k);
+    out.push_str(" = ");
+    out.push_str(v);
+    out.push('\n');
 }
 
 /// The launch seam: turn a [`Workspace`] into a live terminal ([`PtyBackend`]).
@@ -229,6 +385,38 @@ mod tests {
         assert_eq!(reloaded.all().len(), 2);
         assert_eq!(reloaded.get("ubuntu-dev").unwrap().image, "ubuntu:22.04");
         assert_eq!(reloaded.get("legacy").unwrap().arch, Arch::Amd64);
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn rich_config_roundtrips() {
+        let path = tmp_path("rich");
+        let _ = std::fs::remove_file(&path);
+        let mut ws = Workspace::new("api", "node:20", Arch::Amd64);
+        ws.storage = Some(PathBuf::from("/data/api"));
+        ws.shell = Some("/bin/zsh".into());
+        ws.cpus = Some(4);
+        ws.memory_mb = Some(2048);
+        ws.docker_sock = false;
+        ws.env = vec![("FOO".into(), "bar=baz".into()), ("N".into(), "1".into())];
+        ws.mounts = vec![Mount { host: "/h".into(), container: "/c".into(), ro: true }];
+        let mut store = WorkspaceStore::load(&path);
+        store.upsert(ws.clone()).unwrap();
+
+        let got = WorkspaceStore::load(&path).get("api").cloned().unwrap();
+        assert_eq!(got, ws, "rich workspace should round-trip through the block format");
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn legacy_tab_format_still_loads() {
+        let path = tmp_path("legacy");
+        std::fs::write(&path, "# old\nubuntu-dev\tarm64\tubuntu:24.04\n").unwrap();
+        let store = WorkspaceStore::load(&path);
+        let w = store.get("ubuntu-dev").unwrap();
+        assert_eq!(w.image, "ubuntu:24.04");
+        assert_eq!(w.arch, Arch::Arm64);
+        assert!(w.docker_sock, "legacy rows default docker_sock on");
         let _ = std::fs::remove_file(&path);
     }
 
