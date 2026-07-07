@@ -39,6 +39,24 @@ static int g_init_hostpid = 0;
 static int g_ckpt_armed = 0;
 static uint64_t g_ckpt_place_next = 0x50000000000ull;
 
+// Shared checkpoint-request state (defined here, early, so the blocking-syscall restart decision in signal.c
+// can consult it as well as checkpoint.c). g_ckpt_trigger points at a MAP_SHARED generation counter every
+// engine process maps (set up in ckpt_control_init); a checkpoint is REQUESTED when it advances past the
+// generation this process last acted on. Both stay 0/NULL unless armed, so ckpt_pending() is inert on a
+// normal launch (and always for x86, which never arms checkpoint) -- the whole gate is unaffected.
+static volatile uint32_t *g_ckpt_trigger;
+static uint32_t g_ckpt_seen_gen;
+
+// A whole-tree checkpoint has been requested. Consulted by syscall_should_restart / svc_poll_retry so a
+// process parked in a blocking host syscall (bash in read()/poll on its pty -- every GUI shell at a prompt)
+// returns EINTR and reaches the dispatcher safepoint (where G_CKPT_POLL runs) instead of transparently
+// re-blocking. Inert (0) unless a checkpoint is actually in flight, so SA_RESTART semantics are untouched in
+// normal operation.
+static int ckpt_pending(void) __attribute__((unused));
+static int ckpt_pending(void) {
+    return g_ckpt_trigger && (*g_ckpt_trigger != g_ckpt_seen_gen);
+}
+
 static uint64_t ckpt_place_hint(uint64_t len) {
     if (!g_ckpt_armed || !len) return 0;
     uint64_t a = g_ckpt_place_next;
