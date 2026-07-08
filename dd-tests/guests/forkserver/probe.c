@@ -28,6 +28,14 @@ int main(int argc, char **argv) {
         char cwd[4096];
         printf("cwd=%s\n", getcwd(cwd, sizeof cwd) ? cwd : "(none)");
         printf("tty=%d%d%d\n", isatty(0), isatty(1), isatty(2));
+        // /proc/self/exe must be the SAME absolute, canonical path cold and through the fork-server
+        // (incl. the warm prewarm path) -- #378: the forkserver warm runner used to leak a non-canonical
+        // g_exe_path on aarch64. Go's os.Executable / the JVM / execv("/proc/self/exe") depend on this.
+        char exe[4096];
+        ssize_t el = readlink("/proc/self/exe", exe, sizeof exe - 1);
+        if (el < 0) el = 0;
+        exe[el] = 0;
+        printf("exe=%s\n", exe);
         return 42;
     }
     if (strcmp(cmd, "exit") == 0) return argc > 2 ? atoi(argv[2]) : 0;
