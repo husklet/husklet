@@ -28,8 +28,11 @@ static int g_netlog = -1;
 static int netlog_on(void) {
     // File-gate as well as env: chromium sanitizes child-process env across its re-exec, so an env-only
     // gate is lost per guest process. A /tmp/DDNETLOG file survives (checked once, cached per process).
-    if (g_netlog < 0)
-        g_netlog = (getenv("DDNETLOG") != NULL || access("/tmp/DDNETLOG", F_OK) == 0) ? 1 : 0;
+    if (g_netlog < 0) {
+        int saved = errno; // access() sets errno when the sentinel is absent -- preserve the caller's errno
+        g_netlog = (getenv("DDNETLOG") != NULL || access("/tmp/DDNETLOG", F_OK) == 0) ? 1 : 0; // (this runs
+        errno = saved; // AFTER a send/recv in the hot path; a leaked ENOENT would corrupt its reported errno).
+    }
     return g_netlog;
 }
 
