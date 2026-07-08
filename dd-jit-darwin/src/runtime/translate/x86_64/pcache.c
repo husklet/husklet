@@ -130,6 +130,12 @@ static uint64_t g_pc_restored_arena; // arena_used of the loaded file (sidecar g
 // outside these spans (and outside the manifest) is unrevivable by key construction and is neither
 // persisted nor restored into the block map.
 static uint64_t g_pc_img_lo, g_pc_img_hi, g_pc_interp_lo, g_pc_interp_hi;
+// #210: latched by load_elf (elf.c) when a fixed-VA (MAP_FIXED) image map collides and falls back to a
+// kernel-chosen base. This run's arena then mixes bases, so the pcache must neither RESTORE a fixed-base
+// file over it (block-map keys + baked guest addresses belong to PC_IMG_BASE, not the fallback base ->
+// wild fault) nor PERSIST one (a later fixed-base run could HIT a file whose baked bytes name a random
+// base). Parity with the aarch64 loader's g_force_base_failed (translate/aarch64/pcache.c).
+static int g_force_base_failed;
 // runtime state: the deterministic-hint bump pointer, the manifest this run RECORDS (cold path),
 // the manifest the load RESTORED (warm path), and the deferred (not-yet-activated) restored map entries.
 static uint64_t g_pc_lib_next = PC_LIB_BASE;
@@ -363,6 +369,7 @@ static void pcache_relocate(uint64_t saved_block_return) {
 // Returns 1 on a cache hit (arena + maps restored, translation can be skipped). On ANY mismatch,
 // truncation, short read, or allocation failure it returns 0 (graceful MISS -> caller translates fresh).
 static int pcache_load(uint64_t entry_jump) {
+    if (g_force_base_failed) return 0; // #210: fixed-base map fell back -> live layout != file's baked base
     char path[1024];
     pcache_file(path, sizeof path);
     int fd = open(path, O_RDONLY | O_NOFOLLOW | O_CLOEXEC);
@@ -499,6 +506,7 @@ static int pcache_load(uint64_t entry_jump) {
 // right before the exec flushes the arena -- each image epoch persists under its OWN key exactly once.
 static void pcache_save(void) {
     if (!g_pcache || !g_pc_binid || g_cp == g_cache) return;
+    if (g_force_base_failed) return; // #210: mixed-base arena (a fixed-VA image map fell back) -> not revivable
     if (g_pcache_poison) return; // arena has un-recorded baked host pointers -> not safely relocatable
     // NEVER save from a fork child. jit_after_fork rebuilt a FRESH EMPTY arena in the child, but
     // the g_reloc table (and binid/entry identity) survived the fork -- a child save would persist the

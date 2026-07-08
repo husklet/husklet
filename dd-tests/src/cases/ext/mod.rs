@@ -18,6 +18,7 @@ pub mod threads; // mutex/condvar/rwlock/barrier/atomics/TLS/futex contention //
                  // compatibility-coverage expansion (one file per category, each self-owned):
 pub mod clitools; // real CLI tools (busybox coreutils) in the alpine rootfs
 pub mod dentry; // positive dentry/path-resolution cache: mutation<->lookup coherence storms
+pub mod elf210; // #210: x86_64 ELF-loader fixed-base (PC_IMG_BASE) collision -> kernel-base fallback (no exit)
 pub mod execfaultx; // fork->execve child faults + CRASHDBG Mach exception-port guest-fault delivery
 pub mod forkx; // preserved-arena fork: 1000-fork mixed-pattern storm (exit/work/cold/exec/nested)
 pub mod fs;
@@ -59,6 +60,7 @@ pub fn all() -> Vec<Group> {
     g.extend(forkx::groups());
     g.extend(execfaultx::groups());
     g.extend(dentry::groups());
+    g.extend(elf210::groups());
     g.extend(ltpgaps::groups());
     g.extend(scratchx::groups());
     g.extend(fs::groups());

@@ -277,12 +277,31 @@ static void load_elf(const char *path, struct loaded *out) {
     // base becomes out->base, deriving all guest PCs/addresses identically each run. One-shot per image.
     uint8_t *base;
     if (g_force_base) {
-        base = mmap((void *)(g_force_base + basepage), span, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON | MAP_FIXED,
-                    -1, 0);
-        g_force_base = 0;
-        // record the fixed image's live guest span -- the pcache's save/restore policy keys
-        // "revivable by identity" off these ranges (translate/x86_64/pcache.c pcache_note_fixed_img).
-        if (base != MAP_FAILED) pcache_note_fixed_img((uint64_t)base, span);
+        void *want = (void *)(g_force_base + basepage);
+        g_force_base = 0; // one-shot: consumed for THIS load
+        base = mmap(want, span, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON | MAP_FIXED, -1, 0);
+        // #210 test hook: deterministically simulate a fixed-VA collision (unreachable naturally -- the two
+        // fixed bases sit 512GB apart) so the fallback path below is exercised byte-exact. Drops the map we
+        // just made and forces MAP_FAILED. Inert unless DDX_FORCE_BASE_COLLIDE is set.
+        if (base != MAP_FAILED && getenv("DDX_FORCE_BASE_COLLIDE")) {
+            munmap(base, span);
+            base = MAP_FAILED;
+        }
+        // #210: the requested fixed VA can already be occupied -- a prior mapping (the interp vs the main
+        // image both want deterministic bases), an ASLR collision, or 16KiB-host vs 4KiB-guest page
+        // rounding leaving PC_IMG_BASE/PC_INTERP_BASE straddling a live entry. MAP_FIXED then returns
+        // MAP_FAILED (macOS won't overwrite a live VM entry). Do NOT exit(1): retry at a kernel-chosen base
+        // (byte-exact execution, just not cache-revivable this run) and latch g_force_base_failed so the
+        // pcache neither restores a fixed-base file over this now-mixed-base arena nor persists one. This
+        // matches the aarch64 loader fallback (os/linux/elf.c) + its g_force_base_failed pcache gate.
+        if (base == MAP_FAILED) {
+            g_force_base_failed = 1;
+            base = mmap(NULL, span, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON, -1, 0);
+        } else {
+            // record the fixed image's live guest span -- the pcache's save/restore policy keys
+            // "revivable by identity" off these ranges (translate/x86_64/pcache.c pcache_note_fixed_img).
+            pcache_note_fixed_img((uint64_t)base, span);
+        }
     } else {
         base = mmap(NULL, span, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON, -1, 0);
     }
