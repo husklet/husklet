@@ -751,6 +751,9 @@ static int svc_net(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_
             char gp[200], host[1024];
             unix_path_copy(sa, (socklen_t)a2, gp, sizeof gp);
             const char *hp = atpath(-100, gp, host, sizeof host, 0); // guest path -> topmost layer's host path
+            // DDWAKELOG: pin the wayland socket's guest fd number so the epoll/poll readiness trace can be
+            // correlated to it (the cross-boundary unix socket dd-display writes the sync `done` to).
+            if (wakelog_on() && strstr(gp, "wayland")) wakelog("wl_connect", (int)a0, (long)0, (long)0);
             // dial via unix_sock_at (matches the bind side): fchdir-shortens paths past sun_path[104] so a
             // long upper socket path is reached exactly, not truncated to some other (nonexistent) inode.
             int r;

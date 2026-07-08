@@ -9,7 +9,13 @@
 // after io.c in the unity TU).
 static int g_wakelog = -1;
 static int wakelog_on(void) {
-    if (g_wakelog < 0) g_wakelog = getenv("DDWAKELOG") != NULL ? 1 : 0;
+    // Gated by EITHER the DDWAKELOG env var OR a host sentinel file /tmp/ddwakelog. The file gate is the
+    // reliable one: the engine is spawned with a curated config (via --configfd), NOT the full parent
+    // environ, so an ambient DDWAKELOG does not reach getenv() here (the "mac bridge drops env" seam).
+    // access() runs in engine context against the HOST fs (not the guest jail), so touch /tmp/ddwakelog
+    // mac-side to arm the trace. Cached once; inert (returns 0) when neither is present -> gate-neutral.
+    if (g_wakelog < 0)
+        g_wakelog = (getenv("DDWAKELOG") != NULL || access("/tmp/ddwakelog", F_OK) == 0) ? 1 : 0;
     return g_wakelog;
 }
 static unsigned long wake_tid(void) {

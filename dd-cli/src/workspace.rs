@@ -236,6 +236,14 @@ fn run_inline(pty: &mut dyn dd_term_core::PtyBackend) -> i32 {
         pty.resize(c, r);
     }
     let mut ticks: u32 = 0;
+    // Once stdin reaches EOF (or is a non-pollable source we've drained), drop it from the poll set.
+    // Rationale: when stdin is a *redirected regular file* (`ddcli … < cmds.sh`), `poll()` on a regular
+    // file returns POLLIN *immediately* every iteration and never blocks — after we've read the file to
+    // EOF, re-polling+re-reading it would free-run the loop at 100% CPU (read→EOF→write(&[])→drain→
+    // try_wait, forever). So after EOF we stop polling stdin and pace the loop with a plain 10ms sleep,
+    // which keeps output draining without pinning a core. Interactive-tty stdin never hits EOF here, so
+    // its blocking-poll behavior is unchanged.
+    let mut stdin_open = true;
     loop {
         let winched = WINCH.swap(false, Ordering::SeqCst);
         ticks = ticks.wrapping_add(1);
@@ -249,21 +257,34 @@ fn run_inline(pty: &mut dyn dd_term_core::PtyBackend) -> i32 {
                 last_size = now;
             }
         }
-        // Wait briefly for terminal input; the short timeout also paces output draining.
-        let mut pfd = libc::pollfd { fd: libc::STDIN_FILENO, events: libc::POLLIN, revents: 0 };
-        let pr = unsafe { libc::poll(&mut pfd, 1, 10) };
-        if pr < 0 && std::io::Error::last_os_error().raw_os_error() != Some(libc::EINTR) {
-            exit_code = 1;
-            break;
-        }
-        // Terminal → workspace stdin.
-        if pr > 0 && pfd.revents & libc::POLLIN != 0 {
-            let n = unsafe { libc::read(libc::STDIN_FILENO, buf.as_mut_ptr() as *mut _, buf.len()) };
-            if n > 0 {
-                let _ = pty.write(&buf[..n as usize]);
-            } else if n == 0 {
-                let _ = pty.write(&[]); // EOF → close stdin
+        // Wait briefly for terminal input; the short timeout also paces output draining. Once stdin is
+        // EOF/closed we no longer poll it (a redirected regular file would otherwise always report POLLIN
+        // and defeat the timeout) — just sleep the same 10ms to pace the output drain below.
+        if stdin_open {
+            let mut pfd = libc::pollfd { fd: libc::STDIN_FILENO, events: libc::POLLIN, revents: 0 };
+            let pr = unsafe { libc::poll(&mut pfd, 1, 10) };
+            if pr < 0 && std::io::Error::last_os_error().raw_os_error() != Some(libc::EINTR) {
+                exit_code = 1;
+                break;
             }
+            // Terminal → workspace stdin.
+            if pr > 0 && pfd.revents & libc::POLLIN != 0 {
+                let n =
+                    unsafe { libc::read(libc::STDIN_FILENO, buf.as_mut_ptr() as *mut _, buf.len()) };
+                if n > 0 {
+                    let _ = pty.write(&buf[..n as usize]);
+                } else if n == 0 {
+                    let _ = pty.write(&[]); // EOF → close stdin
+                    stdin_open = false; // stop polling a drained/EOF'd stdin (kills the busy-spin)
+                } else {
+                    // read error on a stdin poll'd readable: don't spin on it, treat as closed.
+                    stdin_open = false;
+                }
+            }
+        } else {
+            // stdin drained: pace the loop without busy-spinning.
+            let ts = libc::timespec { tv_sec: 0, tv_nsec: 10_000_000 };
+            unsafe { libc::nanosleep(&ts, std::ptr::null_mut()) };
         }
         // Drain workspace output → terminal.
         let mut wrote = false;

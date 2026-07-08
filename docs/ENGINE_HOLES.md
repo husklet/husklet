@@ -89,6 +89,44 @@
 > thread-state gap (fs.c / `/proc/self/task` synth), NOT the SEQPACKET/Mojo seam** — the next Chrome frontier
 > for a future task (owner: fs/procfs, not net).
 
+> **CHROME BLOCKER #5 (NEW WALL, not yet fixed) — profiled 2026-07-08, ONE bounded run.** With blockers
+> #1–#4 fixed (gate 1649/0), chromium's **GPU process survives `thread_helpers.cc:104`** and boots into
+> Viz. The GPU process (confirmed pid via `[PID:PID:...gpu-process...]` log tags) reaches **Viz service
+> main init** — last GPU line is `components/viz/service/main/viz_main_impl.cc:87 VizNullHypothesis is
+> disabled`, immediately after `wayland_buffer_manager_gpu.cc:456 Failed to initialize drm render node`
+> (expected, software path) and `sandbox_linux.cc:405 InitializeSandbox() called with multiple threads`.
+> On the wayland wire (dd-display.log) it binds **all** globals (wl_compositor/shm/output/seat/xdg_wm_base/
+> subcompositor/viewporter/data_device_manager), creates + resizes a `wl_shm_pool`, calls
+> `wl_compositor.create_surface`, and issues a `wl_display.sync` roundtrip — **then goes silent. No
+> `xdg_surface`/`xdg_toplevel`, no `wl_surface.attach`, no `commit`, dump dir empty (0 frames).**
+>
+> **CRITICAL RE-FRAMING — the "100% CPU stall" is NOT the GPU process.** Sampling (`sample`, `top -l2`)
+> shows every guest chromium process at **0.0% CPU, fully blocked**: the GPU process (viz-main thread in
+> `futex_op`→`_pthread_cond_wait`→`__psynch_cvwait` = guest `FUTEX_WAIT`; its IO/wayland thread in
+> `svc_event`→`kevent` = guest `epoll_wait`); the browser process (21 threads) likewise all in
+> futex/poll/kevent. The **only** process at 100% CPU is the **HOST `ddcli` (workspace launch) main thread
+> in `ddcli::workspace::run_inline`** (dd-cli/src/workspace.rs:239) — a PTY relay busy-spinning across
+> `poll`(51%)/`read`(30%)/`try_wait`→`__wait4`(18%)/`ioctl`. **Root cause of the host spin:** in this
+> harness stdin is a *redirected regular file* (`< cmds.sh`), and `poll()` on a regular file returns
+> `POLLIN` immediately every iteration, defeating the intended 10 ms pacing → the loop free-runs
+> (read→EOF→re-`pty.write(&[])`→drain→waitpid) as fast as the CPU allows. **This host busy-spin is a real
+> bug but a RED HERRING for the missing frame** — it never touches the wayland socket or rendering; the
+> prior "GPU process at 100% CPU" premise was a mis-attribution of ddcli's CPU to the guest.
+>
+> **The actual missing-frame blocker is class (b): the guest Viz pipeline is BLOCKED FOREVER on a wakeup
+> dd never delivers** (same family as #1 WAKE_OP / #3 SEQPACKET-EOF). All guest threads sleep at 0% CPU
+> (so NOT slow compute, NOT a guest spin) after the GPU process issued `wl_display.sync`. dd-display *does*
+> emit the reply (`server.rs:280–284` sends `wl_callback.done` + `wl_display.delete_id`), so the fault is on
+> the **delivery/wakeup path**, not the compositor: either (i) dd's engine never raises socket-read
+> readiness on the guest's wayland fd so its `epoll_wait`/`kevent` thread never wakes to consume the
+> `done`, or (ii) viz-main is waiting on a cross-process mojo/eventfd IPC from the (also-idle) browser
+> that dd never delivers. Both are the "lost cross-thread/-process wakeup" seam. **To pin the exact fd:**
+> the fixer should re-run with a file-gated readiness/epoll trace (the `DDWAKELOG` env hook is already
+> wired into `target-mac/chromedeb-live.sh`) and diff which wayland-socket / eventfd readiness the guest's
+> `epoll_wait` never sees. Owner: sync/net readiness (io.c/net.c/epoll), NOT the compositor. Two separable
+> fixes: **(A)** host `run_inline` must not busy-spin when stdin is a non-tty/regular file (block on the
+> guest-output fd, or drop STDIN from the poll set at EOF); **(B)** the guest Viz wakeup delivery.
+
 **What this is.** A whole-engine sweep for the bug class that cost us the entire Chrome
 saga: a syscall/op/instruction that **returns success (or a plausible value) without
 actually doing the work**, so the guest silently misbehaves — lost wakeup, wrong result,
