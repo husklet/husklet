@@ -22,6 +22,7 @@ mod ddjit_launcher;
 mod report;
 mod run;
 mod workspace;
+mod wsdaemon;
 
 use crate::app::cmd_app;
 use crate::cli::{Cli, Cmd};

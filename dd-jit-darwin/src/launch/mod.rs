@@ -60,6 +60,9 @@ pub struct LaunchConfig {
     pub guest_env: Vec<String>,
     /// persistent translated-code cache dir; empty = disabled
     pub pcache_dir: String,
+    /// opt-in the host-IOSurface GPU path (`--gui`): the engine synthesizes `/dev/dri/renderD128` + services
+    /// `DD_IOCTL_GPU_ALLOC`. Off = the whole GPU path is inert (existing workloads/the gate never see it).
+    pub gpu_iosurface: bool,
     /// the guest argv (entrypoint + args)
     pub argv: Vec<String>,
 }

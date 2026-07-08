@@ -5,8 +5,9 @@
 // ---- W4-C: rep cmps/scas idiom (R_REPSTR) -------------------------------------------------
 // One C round-trip does the entire (possibly REP/REPE/REPNE) compare/scan, then writes the exact
 // x86 end-state (RCX/RSI/RDI and ZF/SF/CF/OF) back to the cpu struct. The descriptor (cpu->divop)
-// carries the translate-time direction flag (DF, bit 11): DF=0 scans low->high (fast host
-// memcmp/memchr paths), DF=1 (after `std`) scans high->low via the generic per-element loop.
+// carries the direction flag (DF, bit 11), taken from the runtime cpu->df when not statically known:
+// DF=0 scans low->high (fast host memcmp/memchr paths), DF=1 (after `std`/popfq) scans high->low via
+// the generic per-element loop.
 static uint64_t repstr_rd(uint64_t p, int w) {
     switch (w) {
     case 1: return *(uint8_t *)p;
@@ -301,7 +302,11 @@ static void x87_fld_m80(struct cpu *c) {
     double d;
     if (sig == 0 && e == 0)
         d = 0.0;
-    else {
+    else if (e == 0x7fff) { // ext80 Inf/NaN -> double Inf/NaN (was: NaN silently became Inf)
+        uint64_t frac = sig & ((1ull << 63) - 1);        // significand below the explicit integer bit
+        uint64_t db = ((uint64_t)s << 63) | (0x7ffull << 52) | (frac ? (1ull << 51) : 0); // NaN keeps quiet bit
+        memcpy(&d, &db, 8);
+    } else {
         d = (double)sig;        // ~2^63 (ucvtf)
         int k = e - 16383 - 63; // scale exponent
         uint64_t db;
@@ -332,9 +337,14 @@ static void x87_fstp_m80(struct cpu *c) {
     uint64_t dm = db & ((1ull << 52) - 1);
     uint64_t sig;
     uint16_t se;
-    if (de == 0) {
+    if (de == 0) { // double zero (or subnormal, flushed): ext80 zero, sign preserved
         sig = 0;
         se = (uint16_t)(s ? 0x8000 : 0);
+    } else if (de == 0x7ff) { // double Inf/NaN -> ext80 Inf/NaN (exp all-ones), NOT a rebiased finite value.
+        // (Was: e80 = 0x7ff-1023+16383 = 0x43FF, silently writing ~2^1024 instead of Inf.) Integer bit set;
+        // frac carries the mantissa so a QNaN stays quiet and Inf (dm==0) writes 0x8000000000000000.
+        sig = (1ull << 63) | (dm << 11);
+        se = (uint16_t)((s << 15) | 0x7fff);
     } else {
         sig = (1ull << 63) | (dm << 11);
         int e80 = de - 1023 + 16383;

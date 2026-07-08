@@ -12,6 +12,25 @@
 // results are bit-identical to the baseline; only the addressing of ST(i) and the timing of the
 // cpu->fptop store change, and the escape-point materialize keeps cpu->fptop observably current.
 //
+// ===== H11 (KNOWN GAP, NOT fixed here): x87 stack is 64-bit double, not 80-bit extended ==========
+// The architectural x87 register file is 80-bit extended precision (64-bit explicit mantissa, 15-bit
+// exponent). This engine carries ST(0..7) as IEEE-754 binary64 in cpu->st[] (see fp_ld/fp_st here and
+// x87_fld_m80/x87_fstp_m80 in x86_ops.c). Precisely what that loses:
+//   * mantissa: 64 explicit bits -> 52 -> every D8-DF arithmetic op (fadd/fmul/fsub/fdiv/fsqrt/frndint/
+//     fprem/fscale/fxtract above) and every transcendental (x87_func) rounds each intermediate to 53
+//     significant bits instead of 64, so long chains of x87 math and C `long double` computations drift
+//     in the low ~11 bits vs a real FPU;
+//   * exponent: 15-bit (range ~1e+-4932) -> 11-bit (~1e+-308), so values with |exp| beyond binary64's
+//     range flush to 0/Inf where a real x87 would keep them (fscale clamps to the binary64 exponent);
+//   * round-trips: FLD m80 / FSTP m80 (x87_fld_m80/x87_fstp_m80) narrow to double on load and re-widen a
+//     53-bit value on store, so an 80-bit value written by the guest and read back loses its tail;
+//     `printf("%Lf", ...)`, C `long double`, and 80-bit `fldt/fstpt` object files see the drift.
+// A true fix needs an 80-bit (or software-emulated ext80) carrier for cpu->st[] plus reworking every op
+// and both m80 converters -- a large, cross-cutting change spanning x86_ops.c (outside this file's
+// cluster). It is NOT attempted here, and cannot be cheaply approximated on this host: the macOS/arm64
+// build ABI makes `long double` == `double` (64-bit), so widening the host carrier to `long double`
+// would buy nothing. Related: #248/#249. Everything below is deliberately double-precision-limited.
+//
 // The top is "known" only after a `finit` anchors it (top=0) within an unbroken run of x87
 // instructions; any non-x87 instruction ends the run (materialize + drop to the runtime model), and
 // any x87 op we cannot statically track falls back to the baseline helpers. NOX87OPT forces the

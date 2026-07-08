@@ -162,6 +162,53 @@ impl ContainerBuilder {
         self
     }
 
+    /// Per-workspace VPN egress: funnel the guest's genuine external TCP connects through the SOCKS5 proxy
+    /// at `addr` (`host:port`) instead of a direct host connect (see `docs/VPN.md`). Sets `DD_EGRESS_SOCKS`,
+    /// the engine's egress-redirect switch; an empty `addr` emits nothing (direct egress, unchanged).
+    pub fn egress_socks(mut self, addr: impl Into<String>) -> Self {
+        let addr = addr.into();
+        if !addr.is_empty() {
+            self.cfg.env.push(("DD_EGRESS_SOCKS".into(), addr));
+        }
+        self
+    }
+
+    /// Request the engine synthesize a host-backed **synthetic device / render node** (the accelerated
+    /// "render node" rung): it materializes `/dev/dri/renderD128` and services the host-backed alloc ioctl.
+    /// Runtime-neutral — the runtime does not know which backend wants it; a [`DeviceProvider`] sets it via
+    /// [`DeviceRequest::render_node`]. Carried through the typed launch config (the engine reads the wire's
+    /// device-node flag), NOT the ambient host env — the FFI spawn does not forward the launcher's
+    /// environment, so a `set_var` would never reach the engine. Off (default) leaves the whole path inert:
+    /// existing workloads are byte-for-byte unchanged.
+    ///
+    /// [`DeviceProvider`]: crate::DeviceProvider
+    /// [`DeviceRequest::render_node`]: crate::DeviceRequest::render_node
+    pub fn render_node(mut self, on: bool) -> Self {
+        if on {
+            self.cfg.env.push(("DD_GPU_IOSURFACE".into(), "1".into()));
+        }
+        self
+    }
+
+    /// Apply a runtime-neutral [`DeviceRequest`] produced by a [`DeviceProvider`]: bind each of its mounts
+    /// and, if asked, request the synthetic device node. The request's extra guest env
+    /// ([`DeviceRequest::env`]) is deliberately NOT folded here — the caller merges it into its guest-env
+    /// vector and re-applies [`Self::guest_env`], so it participates in the normal docker env dedup. The
+    /// runtime thus stays device-agnostic: it never learns what the mounts/env/node actually *mean*.
+    ///
+    /// [`DeviceProvider`]: crate::DeviceProvider
+    /// [`DeviceRequest`]: crate::DeviceRequest
+    /// [`DeviceRequest::env`]: crate::DeviceRequest::env
+    pub fn apply_device(mut self, req: &crate::DeviceRequest) -> Self {
+        for m in &req.mounts {
+            self = self.bind(m.host.clone(), m.container.clone(), m.read_only);
+        }
+        if req.render_node {
+            self = self.render_node(true);
+        }
+        self
+    }
+
     /// Join a user-defined network's virtual switch: the network id (switch key) and this container's IP,
     /// so in-subnet peers reach each other by container<->container TCP.
     pub fn bridge(mut self, netid: impl Into<String>, ip: impl Into<String>) -> Self {
@@ -225,6 +272,7 @@ mod tests {
             .sandbox(true)
             .net_isolate(true)
             .bridge("net123", "10.0.0.5")
+            .egress_socks("127.30.0.1:1080")
             .write_coherence_file("/run/fsgen")
             .persistent_cache("/home/dd/pcache")
             .external_port_forwarder(true)
@@ -238,10 +286,57 @@ mod tests {
         assert!(has(&c, "DD_NET_ISOLATE", "1"));
         assert!(has(&c, "DD_NETBR", "net123"));
         assert!(has(&c, "DD_IP", "10.0.0.5"));
+        assert!(has(&c, "DD_EGRESS_SOCKS", "127.30.0.1:1080"));
         assert!(has(&c, "DD_FSGEN_FILE", "/run/fsgen"));
         assert!(has(&c, "DDJIT_PCACHE", "1"));
         assert!(has(&c, "DDJIT_PCACHE_DIR", "/home/dd/pcache"));
         assert!(has(&c, "DD_PUBLISH_DAEMON", "1"));
+    }
+
+    #[test]
+    fn apply_device_binds_mounts_and_render_node() {
+        // A runtime-neutral DeviceRequest binds its mounts (in order) and, when render_node is set, arms
+        // the same DD_GPU_IOSURFACE flag as .render_node(true) — with NO device-specific vocabulary.
+        use crate::{DeviceMount, DeviceRequest};
+        let req = DeviceRequest {
+            mounts: vec![
+                DeviceMount::rw("/host/sock", "/run/user/0/wayland-0"),
+                DeviceMount::ro("/host/lib.so", "/usr/lib/x/lib.so"),
+            ],
+            env: vec!["IGNORED_BY_APPLY_DEVICE=1".to_string()], // env is folded by the caller, not here
+            render_node: true,
+        };
+        let c = Container::builder(Image::from_rootfs("/img"))
+            .apply_device(&req)
+            .build()
+            .unwrap();
+        // Mounts land as volumes, order + ro flag preserved.
+        let vols: Vec<(String, String, bool)> =
+            c.cfg.volumes.iter().map(|v| (v.container.clone(), v.host.clone(), v.ro)).collect();
+        assert_eq!(
+            vols,
+            vec![
+                ("/run/user/0/wayland-0".to_string(), "/host/sock".to_string(), false),
+                ("/usr/lib/x/lib.so".to_string(), "/host/lib.so".to_string(), true),
+            ]
+        );
+        // render_node → the DD_GPU_IOSURFACE transport flag (unchanged wire).
+        assert!(has(&c, "DD_GPU_IOSURFACE", "1"));
+        // apply_device does NOT touch the guest env — that is the caller's job via guest_env().
+        assert!(!c.cfg.env.iter().any(|(k, _)| k == "DD_GUEST_ENV"));
+        assert!(!c.cfg.env.iter().any(|(k, _)| k == "IGNORED_BY_APPLY_DEVICE"));
+    }
+
+    #[test]
+    fn apply_device_empty_request_is_inert() {
+        // A default (empty) request binds nothing and arms no flag — byte-for-byte the no-device path.
+        use crate::DeviceRequest;
+        let c = Container::builder(Image::from_rootfs("/img"))
+            .apply_device(&DeviceRequest::default())
+            .build()
+            .unwrap();
+        assert!(c.cfg.volumes.is_empty());
+        assert!(env_of(&c).is_empty());
     }
 
     #[test]

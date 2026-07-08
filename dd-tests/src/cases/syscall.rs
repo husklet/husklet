@@ -38,11 +38,18 @@ pub(super) fn linuxsys() -> Group {
             src("pollselect-eintr", "pollselect_eintr.c").oracle(),
             src("eventfd", "eventfd.c").oracle(), // eventfd2 counter semantics
             src("eventfd-sema", "eventfd_sema.c").oracle(), // EFD_SEMAPHORE decrement-by-1 contract
+            // Cross-thread eventfd->epoll message-pump wakeup under contention (Chrome's MessagePumpEpoll +
+            // ScheduleWork). 6 producers cross-wake a level-triggered epoll pump + a futex mutex; asserts
+            // every wake lands AND the eventfd counter accounts for every write EXACTLY. Regression guard for
+            // the unsynchronized eventfd counter+pipe race that stalled chromium's first paint (a stranded
+            // pipe-readable-with-count-0 -> pump busy-spin / lost wakeup). Fails deterministically pre-fix.
+            src("pump-wakeup", "pump_wakeup.c").has("pump OK"),
             src("signalfd", "signalfd.c").oracle(), // sigprocmask + signalfd4 read of a raised signal
             src("inotify", "inotify.c").oracle(),   // inotify watch -> IN_CREATE event read
             src("sendfile", "sendfile.c").oracle(), // sendfile + readv/writev scatter-gather
             src("timerfd", "timerfd.c").oracle(),   // timerfd one-shot expiration
             src("memfd", "memfd.c").oracle(),       // memfd_create + ftruncate + mmap
+            src("wlshm_pool", "wlshm_pool.c").oracle(), // wl_shm pool: memfd -> MAP_SHARED -> SCM_RIGHTS -> cross-proc mmap coherency (display M0)
             src("splice", "splice.c").oracle(),     // splice file->pipe->file (zero copy)
             src("prctl", "prctl.c").oracle(),       // prctl PR_SET_NAME/PR_GET_NAME
             src("sigqueue", "sigqueue.c").oracle(), // realtime signal payload via si_value
@@ -86,6 +93,9 @@ pub(super) fn edge() -> Group {
                 .has("abstime_ok=1"),
             src("sigpipe", "edge_sigpipe.c").has("survived=1 epipe=1"), // SO_NOSIGPIPE set on every guest socket at creation (socket/socketpair/accept) -> write/send to a broken socket returns EPIPE, never a fatal SIGPIPE
             src("procfd", "edge_procfd.c").has("resolves=1 enough_fds=1"), // /proc/self/fd
+            // /proc/self/task per-thread dir (crashpad/ThreadHelpers walks it): main tid listed, task/<tid>
+            // stats as a dir, and per-thread stat/comm are served. The chromium thread_helpers.cc wall.
+            src("proctask", "edge_proctask.c").has("proctask tids=1 isdir=1 stat=1 comm=1"),
             // times(): tms_utime works on x86_64 but is 0 on aarch64 (clock() works on both) — engine split.
             src("times", "edge_times.c").has("utime_ok=1 clock_ok=1 ret_ok=1"),
             // Legacy x86 time-setters with NO aarch64 canonical syscall number (utime=132/utimes=235/

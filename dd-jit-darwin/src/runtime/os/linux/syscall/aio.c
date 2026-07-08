@@ -85,6 +85,9 @@ static void aio_push(struct aio_ctx *x, uint64_t data, uint64_t obj, int64_t res
 // edge-triggered epoll_wait on the eventfd wakes. No-op for a non-eventfd / out-of-range fd.
 static void aio_eventfd_kick(int fd) {
     if (fd < 0 || fd >= 1024 || !g_eventfd_peer[fd]) return;
+    // Same counter+pipe atomicity as io.c's eventfd write (see _eventfd-atomicity_): hold g_eventfd_lock
+    // across the bump + drain + re-signal so an AIO completion never races the guest's read()/write().
+    pthread_mutex_lock(&g_eventfd_lock);
     g_eventfd_count[fd] += 1;
     int fl = fcntl(fd, F_GETFL);
     if (fl >= 0 && !(fl & O_NONBLOCK)) fcntl(fd, F_SETFL, fl | O_NONBLOCK);
@@ -93,6 +96,7 @@ static void aio_eventfd_kick(int fd) {
     if (fl >= 0 && !(fl & O_NONBLOCK)) fcntl(fd, F_SETFL, fl);
     char b = 1;
     if (write(g_eventfd_peer[fd] - 1, &b, 1) < 0) {}
+    pthread_mutex_unlock(&g_eventfd_lock);
 }
 
 // Perform ONE iocb synchronously; returns the io_event.res value (bytes transferred, 0 for fsync, or a

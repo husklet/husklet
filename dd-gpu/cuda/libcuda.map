@@ -1,0 +1,12 @@
+/* Linker version script for dd's libcuda.so.1.
+ *
+ * An ANONYMOUS version node (no node name) controls symbol *visibility* without appending an
+ * @@VERSION tag — so the exported names read exactly like real libcuda's (plain, unversioned
+ * `nm -D` names), while every internal helper (the PTX interpreter, the alloc registry, the proc
+ * table, etc.) is hidden. Only the CUDA Driver API `cu*` entry points are global. */
+{
+    global:
+        cu*;
+    local:
+        *;
+};

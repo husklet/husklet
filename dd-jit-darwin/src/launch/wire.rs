@@ -36,7 +36,7 @@ struct WireHeader {
     ip_off: u32,
     fsgen_off: u32,
     argv_off: u32,
-    reserved: u32,
+    gpu_iosurface: u32,
     reserved2: u32,
 }
 
@@ -139,7 +139,7 @@ impl LaunchConfig {
             ip_off,
             fsgen_off,
             argv_off,
-            reserved: 0,
+            gpu_iosurface: self.gpu_iosurface as u32,
             reserved2: 0,
         };
         let hbytes = unsafe {
@@ -190,6 +190,17 @@ mod tests {
         assert_eq!(&wire[0..4], &DDJIT_CONFIG_MAGIC.to_ne_bytes());
         // the rootfs string is present in the pool
         assert!(wire.windows(4).any(|w| w == b"/img"));
+    }
+
+    #[test]
+    fn wire_gpu_iosurface_flag_roundtrips() {
+        // The --gui GPU opt-in is a scalar bool in the tail-pad slot; off by default, 1 when armed.
+        let off = LaunchConfig { rootfs: "/img".into(), ..Default::default() }.to_wire();
+        let h0: WireHeader = unsafe { std::ptr::read_unaligned(off.as_ptr() as *const WireHeader) };
+        assert_eq!(h0.gpu_iosurface, 0);
+        let on = LaunchConfig { rootfs: "/img".into(), gpu_iosurface: true, ..Default::default() }.to_wire();
+        let h1: WireHeader = unsafe { std::ptr::read_unaligned(on.as_ptr() as *const WireHeader) };
+        assert_eq!(h1.gpu_iosurface, 1);
     }
 
     #[test]
@@ -250,8 +261,8 @@ mod tests {
         assert_eq!(read_str(hdr.fsgen_off), "/run/fsgen");
 
         // Unset string fields (never assigned above) must read as offset 0 == "".
-        // (`reserved`/`reserved2` are pad, not offsets.)
-        assert_eq!(hdr.reserved, 0);
+        // (`gpu_iosurface` defaults off; `reserved2` is pad — neither is a pool offset.)
+        assert_eq!(hdr.gpu_iosurface, 0);
         assert_eq!(hdr.reserved2, 0);
 
         // argv: NUL-separated args, terminated by an extra NUL (double-NUL after the last arg).

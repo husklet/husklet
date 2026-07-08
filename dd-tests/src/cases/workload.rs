@@ -51,6 +51,24 @@ pub(super) fn soak() -> Group {
             src("smcthreads", "smc_threads.c")
                 .only(&[Engine::LinuxAarch64])
                 .oracle(),
+            // SMC self-flush LIVELOCK guard (the chromium/V8 startup wall): a hot loop re-flushes an
+            // already-translated, UNCHANGED code line (its own executing block) while a large working set
+            // is live. The old wholesale-drop SMC hook re-translated the whole working set on EVERY such
+            // benign flush -> `translate_block` spins forever (25s timeout -> FAIL). The content-gated
+            // drop skips a flush whose bytes did not change -> the working set is translated once -> fast.
+            // Bytes never change, so the checksum is identical either way; diffed vs a native run.
+            src("smcselfflush", "smc_selfflush.c")
+                .only(&[Engine::LinuxAarch64])
+                .oracle(),
+            // H9 / #423: mprotect(PROT_EXEC) must ARM SMC re-translation. A mmap(RW)->write->mprotect(RX)
+            // JIT toggle (the .NET/Wasm x86 pattern -- NOT an mmap(RWX) arena) rewrites its code page across
+            // three rounds; a correct engine invalidates each stale translation and returns 111/222/333, a
+            // broken one caches the first and returns 111/111/111. x86 is the exposed arch (coherent i-cache,
+            // no `ic ivau` to hook -- the SMC write-fault is the only invalidation signal); aarch64 rides
+            // along as a second witness. Portable inline machine code -> both Linux engines, golden-checked.
+            port("smcmprotect", "smc_mprotect.c")
+                .only(&[Engine::LinuxAarch64, Engine::LinuxX86_64])
+                .out("smc mprotect r1=111 r2=222 r3=333\n"),
         ],
     )
 }

@@ -150,25 +150,52 @@ static void avx_put_rm(struct cpu *c, struct insn *I, uint64_t rip_after, int wb
 
 // ---- scalar FP helpers used by the VEX arithmetic/FMA lowerings ----
 // map-1 0x58..0x5F packed/scalar arithmetic, by opcode.
+// x = src1 (VEX.vvvv), y = src2 (r/m). H10: x86 MIN/MAX are defined as (src1<src2)?src1:src2 and
+// (src1>src2)?src1:src2 -- so on NaN, equal, or +-0 (where the strict comparison is false) the result is
+// src2. The C ternaries below reproduce that EXACTLY under strict IEEE: `x < y` is false whenever either
+// operand is NaN or they are equal, yielding y (=src2). Built at -O2 with no -ffast-math, so the compiler
+// may not fold these to a NaN-propagating fminnm/fmaxnm; do NOT rewrite them as fmin/fmax/fminf/fmaxf.
+// x86 default/indefinite-NaN sign: when an FP op GENERATES a NaN with no NaN input (0/0, inf/inf,
+// 0*inf, inf-inf), x86 yields the QNaN floating-point INDEFINITE whose sign bit is SET (single
+// 0xFFC00000, double 0xFFF8000000000000). The host (arm64) instead returns the DEFAULT NaN with sign
+// CLEAR (0x7FC00000 / 0x7FF8000000000000) -- identical payload, opposite sign. A NaN PROPAGATED from an
+// input keeps that input's sign on both ISAs, so only the generated case (result NaN AND neither input
+// NaN) is fixed up here. Matches the legacy-SSE inline fixup (translate.c emit_dnan_pre/post).
+static float avx_dnan_f32(float r, float x, float y) {
+    if (r != r && x == x && y == y) {
+        uint32_t u = 0xFFC00000u;
+        memcpy(&r, &u, 4);
+    }
+    return r;
+}
+
+static double avx_dnan_f64(double r, double x, double y) {
+    if (r != r && x == x && y == y) {
+        uint64_t u = 0xFFF8000000000000ull;
+        memcpy(&r, &u, 8);
+    }
+    return r;
+}
+
 static float avx_fp_arith_f32(int op, float x, float y) {
     switch (op) {
-    case 0x58: return x + y;
-    case 0x59: return x * y;
-    case 0x5C: return x - y;
-    case 0x5E: return x / y;
-    case 0x5D: return x < y ? x : y; // min (x86: NaN/equal -> second operand; tests don't probe that)
-    default: return x > y ? x : y;   // 0x5F max
+    case 0x58: return avx_dnan_f32(x + y, x, y);
+    case 0x59: return avx_dnan_f32(x * y, x, y);
+    case 0x5C: return avx_dnan_f32(x - y, x, y);
+    case 0x5E: return avx_dnan_f32(x / y, x, y);
+    case 0x5D: return x < y ? x : y; // min: NaN/equal/+-0 -> src2 (x86-exact)
+    default: return x > y ? x : y;   // 0x5F max: NaN/equal/+-0 -> src2 (x86-exact)
     }
 }
 
 static double avx_fp_arith_f64(int op, double x, double y) {
     switch (op) {
-    case 0x58: return x + y;
-    case 0x59: return x * y;
-    case 0x5C: return x - y;
-    case 0x5E: return x / y;
-    case 0x5D: return x < y ? x : y;
-    default: return x > y ? x : y;
+    case 0x58: return avx_dnan_f64(x + y, x, y);
+    case 0x59: return avx_dnan_f64(x * y, x, y);
+    case 0x5C: return avx_dnan_f64(x - y, x, y);
+    case 0x5E: return avx_dnan_f64(x / y, x, y);
+    case 0x5D: return x < y ? x : y; // min: NaN/equal/+-0 -> src2 (x86-exact)
+    default: return x > y ? x : y;   // 0x5F max: NaN/equal/+-0 -> src2 (x86-exact)
     }
 }
 
@@ -1037,21 +1064,28 @@ static uint32_t crc32c_step(uint32_t crc, uint64_t v, int nbytes) {
     return crc;
 }
 
-static double sse_round_d(double x, int mode) {
+// ROUND* rounding. When the imm's bit2 is set the op must use the CURRENT rounding mode (MXCSR.RC),
+// which ldmxcsr has already threaded into the host FPCR.RMode -- so __builtin_rint (current-mode) honors
+// it here (fixes the "treated as nearest" gap). The explicit modes 0..3 must instead force that specific
+// direction regardless of MXCSR: floor/ceil/trunc already do, and explicit nearest is round-to-nearest-
+// EVEN independent of the current mode (__builtin_roundeven), not __builtin_rint (which would follow RC).
+static double sse_round_d(double x, int mode, int use_mxcsr) {
+    if (use_mxcsr) return __builtin_rint(x); // honor MXCSR.RC (mirrored into host FPCR by ldmxcsr)
     switch (mode & 3) {
     case 1: return __builtin_floor(x);
     case 2: return __builtin_ceil(x);
     case 3: return __builtin_trunc(x);
-    default: return __builtin_rint(x); // round-to-nearest-even
+    default: return __builtin_roundeven(x); // explicit round-to-nearest-even
     }
 }
 
-static float sse_round_f(float x, int mode) {
+static float sse_round_f(float x, int mode, int use_mxcsr) {
+    if (use_mxcsr) return __builtin_rintf(x);
     switch (mode & 3) {
     case 1: return __builtin_floorf(x);
     case 2: return __builtin_ceilf(x);
     case 3: return __builtin_truncf(x);
-    default: return __builtin_rintf(x);
+    default: return __builtin_roundevenf(x);
     }
 }
 
@@ -1781,29 +1815,30 @@ static void do_sse3b(struct cpu *c) {
         case 0x08:
         case 0x09:
         case 0x0A:
-        case 0x0B: { // roundps/pd/ss/sd, mode in imm[3:0] (bit2 set = use MXCSR, we treat as nearest)
-            int mode = (imm & 4) ? 0 : (imm & 3);
+        case 0x0B: { // roundps/pd/ss/sd, mode in imm[3:0]; bit2 set = use MXCSR.RC (current host FPCR)
+            int use_mxcsr = (imm & 4) != 0;
+            int mode = imm & 3;
             if (op == 0x08) { // roundps
                 float a[4], o[4];
                 memcpy(a, s, 16);
                 for (int i = 0; i < 4; i++)
-                    o[i] = sse_round_f(a[i], mode);
+                    o[i] = sse_round_f(a[i], mode, use_mxcsr);
                 memcpy(r, o, 16);
             } else if (op == 0x09) { // roundpd
                 double a[2], o[2];
                 memcpy(a, s, 16);
                 for (int i = 0; i < 2; i++)
-                    o[i] = sse_round_d(a[i], mode);
+                    o[i] = sse_round_d(a[i], mode, use_mxcsr);
                 memcpy(r, o, 16);
             } else if (op == 0x0A) { // roundss: low lane from src, rest from dst
                 float a;
                 memcpy(&a, s, 4);
-                a = sse_round_f(a, mode);
+                a = sse_round_f(a, mode, use_mxcsr);
                 memcpy(r, &a, 4);
             } else { // roundsd
                 double a;
                 memcpy(&a, s, 8);
-                a = sse_round_d(a, mode);
+                a = sse_round_d(a, mode, use_mxcsr);
                 memcpy(r, &a, 8);
             }
             break;

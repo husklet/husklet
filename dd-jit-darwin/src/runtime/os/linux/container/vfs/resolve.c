@@ -13,7 +13,8 @@ static int jail_ro(const char *abs) {
     if (i >= 0) return g_vols[i].ro; // a bind volume governs its own subtree (rw or ro), even under --read-only
     // Routes to the rootfs/overlay jail: docker --read-only makes it EROFS, except the still-writable
     // pseudo-mounts (/proc /dev /sys /tmp /run) -- exactly as runc leaves those mounted rw over a ro root.
-    return rootfs_ro_denies(abs);
+    // A runtime `mount -o remount,ro <subpath>` additionally enforces RO on that subtree (path-based).
+    return rootfs_ro_denies(abs) || ro_subpath_denies(abs);
 }
 
 // 1 if the absolute guest path falls under ANY bind-mount volume (rw or ro). A volume is its OWN jail
@@ -21,15 +22,18 @@ static int jail_ro(const char *abs) {
 // host fd -- the overlay merged-readdir only knows the image lowers + the upper and would return empty.
 // openat uses this to NOT tag a volume dir fd as an overlay dir (else getdents shows an empty mount).
 static int jail_is_vol(const char *abs) {
-    for (int i = 0; i < g_nvols; i++)
-        if (!strncmp(abs, g_vols[i].guest, g_vols[i].glen) && (abs[g_vols[i].glen] == '/' || abs[g_vols[i].glen] == 0))
+    int nv = __atomic_load_n(&g_nvols, __ATOMIC_ACQUIRE);
+    for (int i = 0; i < nv; i++)
+        if (!g_vols[i].dead && !strncmp(abs, g_vols[i].guest, g_vols[i].glen) &&
+            (abs[g_vols[i].glen] == '/' || abs[g_vols[i].glen] == 0))
             return 1;
     return 0;
 }
 
 // Convenience: resolve a (dirfd, raw) target to its guest abs path (same as abs_guest) and test RO.
 static int jail_ro_at(int dirfd, const char *raw) {
-    if (g_nvols == 0 && !g_rootfs_ro) return 0; // no RO surface at all -> skip work; behavior identical to before
+    if (g_nvols == 0 && !g_rootfs_ro && g_nro_subpath == 0)
+        return 0; // no RO surface at all -> skip work; behavior identical to before
     char abs[8192];
     abs_guest(dirfd, raw, abs, sizeof abs);
     return jail_ro(abs);

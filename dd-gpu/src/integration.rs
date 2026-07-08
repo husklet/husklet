@@ -1,0 +1,316 @@
+//! The dd-gpu-side implementor of dd-jit's runtime-neutral device seam ([`dd_jit::DeviceProvider`]).
+//!
+//! ALL the GPU/CUDA/display specifics that used to be threaded through the container launcher live here
+//! and here only: which host libraries/binaries/sockets to inject, at which guest paths, behind which env
+//! vars, and whether an accelerated render node is needed. dd-jit / dd-jit-darwin stay device-agnostic —
+//! they receive a plain [`dd_jit::DeviceRequest`] (mounts + env + a render-node bool) and apply it
+//! generically, never referencing CUDA, IOSurface, or Wayland.
+//!
+//! The caller (dd-cli) owns *where host files live* (it resolves the `~/.dd/...` drop-in paths and the
+//! guest ISA); this module owns *how a GPU maps into a guest* (target lib dir, guest socket paths, env
+//! contract, LD_LIBRARY_PATH composition). Construct a [`GpuIntegration`] from a workspace's gui/cuda
+//! config + resolved host paths, then hand it to the dd-jit builder via
+//! `builder.apply_device(&provider.device_request(&env))`.
+//!
+//! Gated behind the `runtime` cargo feature (which pulls in `dd-jit`); the crate's pure-`std`,
+//! headless-testable IR/wire core builds and tests without it.
+
+use dd_jit::{DeviceMount, DeviceProvider, DeviceRequest};
+
+/// The guest ISA the injected shims/libraries must match (selects the multiarch lib dir the runtime
+/// mounts into).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum GuestArch {
+    /// `x86_64-linux-gnu`.
+    X86_64,
+    /// `aarch64-linux-gnu`.
+    Aarch64,
+}
+
+impl GuestArch {
+    /// The guest multiarch library directory injected shared objects are bound into.
+    fn libdir(self) -> &'static str {
+        match self {
+            GuestArch::X86_64 => "/usr/lib/x86_64-linux-gnu",
+            GuestArch::Aarch64 => "/usr/lib/aarch64-linux-gnu",
+        }
+    }
+}
+
+/// The accelerated-display (`--gui`) integration: bind the host compositor + GPU-command sockets and the
+/// client-lib / demo-binary drop-ins into the guest, advertise them via env, and request the render node.
+/// Empty `lib_dir`/`bin_dir` = no drop-ins for that slot (nothing bound).
+#[derive(Clone, Debug, Default)]
+pub struct DisplayIntegration {
+    /// Host path of the compositor (Wayland/DDP) socket; bound rw at `/run/user/0/wayland-0`.
+    pub wayland_sock: String,
+    /// Host path of the dd-gpu IR executor socket; bound rw at `/run/user/0/dd-gpu-0`.
+    pub gpu_exec_sock: String,
+    /// Host dir of client `*.so*` drop-ins (each bound into the guest multiarch lib dir). Empty = none.
+    pub lib_dir: String,
+    /// Host dir of demo/test binary drop-ins (each bound into `/usr/local/bin/`). Empty = none.
+    pub bin_dir: String,
+}
+
+/// The simulated-CUDA-device integration: inject dd's NVML shim (+ the real `nvidia-smi`) so unmodified
+/// probes see an NVIDIA-looking device. `nvml_so` / `nvidia_smi` empty = that artifact is absent and
+/// simply not injected (the caller is responsible for any user-facing warning).
+#[derive(Clone, Debug, Default)]
+pub struct CudaIntegration {
+    /// Reported device name (→ `DD_CUDA_NAME`).
+    pub name: String,
+    /// Reported compute capability `"major.minor"` (→ `DD_CUDA_CC`).
+    pub compute_capability: String,
+    /// Reported VRAM in MB (→ `DD_CUDA_VRAM`).
+    pub vram_mb: u32,
+    /// Host path of `libnvidia-ml.so.1` (bound at the guest lib dir under both the versioned and
+    /// unversioned names). Empty = not injected.
+    pub nvml_so: String,
+    /// Host path of the real `nvidia-smi` binary (bound at `/usr/local/bin/nvidia-smi`). Empty = not injected.
+    pub nvidia_smi: String,
+    /// The guest's existing `LD_LIBRARY_PATH` (from the workspace's own env) to prepend the shim lib dir
+    /// to, if any. `None`/empty = the lib dir alone.
+    pub prior_ld_library_path: Option<String>,
+}
+
+/// The full GPU integration for one container launch — display and/or CUDA. Construct it from the
+/// workspace's config plus the host paths the caller resolved, then use it as a [`DeviceProvider`].
+#[derive(Clone, Debug)]
+pub struct GpuIntegration {
+    /// The guest ISA (selects the target multiarch lib dir).
+    pub arch: GuestArch,
+    /// Accelerated-display integration, if the workspace is `--gui`.
+    pub display: Option<DisplayIntegration>,
+    /// Simulated-CUDA-device integration, if the workspace configures a `cuda` device.
+    pub cuda: Option<CudaIntegration>,
+}
+
+impl GpuIntegration {
+    /// A GPU integration for `arch` with neither display nor CUDA armed (inert — produces an empty
+    /// [`DeviceRequest`]). Set [`display`](Self::display) / [`cuda`](Self::cuda) as needed.
+    pub fn new(arch: GuestArch) -> Self {
+        GpuIntegration { arch, display: None, cuda: None }
+    }
+    /// Arm the accelerated-display integration.
+    pub fn with_display(mut self, d: DisplayIntegration) -> Self {
+        self.display = Some(d);
+        self
+    }
+    /// Arm the simulated-CUDA-device integration.
+    pub fn with_cuda(mut self, c: CudaIntegration) -> Self {
+        self.cuda = Some(c);
+        self
+    }
+    /// `true` when neither display nor CUDA is armed — the caller can skip applying it entirely.
+    pub fn is_inert(&self) -> bool {
+        self.display.is_none() && self.cuda.is_none()
+    }
+}
+
+impl DeviceProvider for GpuIntegration {
+    fn device_request(&self, guest_env: &[String]) -> DeviceRequest {
+        let mut req = DeviceRequest::default();
+        let libdir = self.arch.libdir();
+
+        // ---- Accelerated display (--gui): sockets + client drop-ins + the render node. ----
+        if let Some(d) = &self.display {
+            // The engine's host-IOSurface GPU path (render-node synth + host-backed alloc ioctl).
+            req.render_node = true;
+            // The compositor socket + its env contract.
+            req.mounts.push(DeviceMount::rw(d.wayland_sock.clone(), "/run/user/0/wayland-0"));
+            req.env.push("WAYLAND_DISPLAY=wayland-0".to_string());
+            req.env.push("XDG_RUNTIME_DIR=/run/user/0".to_string());
+            // The dd-gpu IR executor socket the guest streams GPU commands to.
+            req.mounts.push(DeviceMount::rw(d.gpu_exec_sock.clone(), "/run/user/0/dd-gpu-0"));
+            req.env.push("DD_GPU_EXEC=/run/user/0/dd-gpu-0".to_string());
+            // Mount-not-bake the client runtime libs (libwayland-client + friends): any *.so* in the drop-in
+            // dir is bound into the guest multiarch lib dir, and that dir is prepended to LD_LIBRARY_PATH so
+            // a bare image works. When the dir is present we always advertise the lib dir on the path (even
+            // if empty), matching the launcher's original behavior.
+            if !d.lib_dir.is_empty() {
+                if let Ok(rd) = std::fs::read_dir(&d.lib_dir) {
+                    for ent in rd.flatten() {
+                        let name = ent.file_name();
+                        let name = name.to_string_lossy();
+                        if name.contains(".so") {
+                            req.mounts.push(DeviceMount::ro(
+                                ent.path().to_string_lossy().into_owned(),
+                                format!("{libdir}/{name}"),
+                            ));
+                        }
+                    }
+                }
+                let prior = guest_env
+                    .iter()
+                    .rev()
+                    .find_map(|e| e.strip_prefix("LD_LIBRARY_PATH=").map(str::to_string));
+                let ldp = match prior {
+                    Some(v) if !v.is_empty() => format!("{libdir}:{v}"),
+                    _ => libdir.to_string(),
+                };
+                req.env.push(format!("LD_LIBRARY_PATH={ldp}"));
+            }
+            // Mount-not-bake any GUI demo/test binaries into /usr/local/bin so a bare image can run a real
+            // Wayland client.
+            if !d.bin_dir.is_empty() {
+                if let Ok(rd) = std::fs::read_dir(&d.bin_dir) {
+                    for ent in rd.flatten() {
+                        let name = ent.file_name();
+                        let name = name.to_string_lossy();
+                        req.mounts.push(DeviceMount::ro(
+                            ent.path().to_string_lossy().into_owned(),
+                            format!("/usr/local/bin/{name}"),
+                        ));
+                    }
+                }
+            }
+        }
+
+        // ---- Simulated CUDA device: NVML shim + real nvidia-smi + the reported-device env. ----
+        if let Some(c) = &self.cuda {
+            // The shim seeds its reported device from these (always advertised, even if the shim itself is
+            // missing — matching the launcher's original ordering).
+            req.env.push(format!("DD_CUDA_NAME={}", c.name));
+            req.env.push(format!("DD_CUDA_CC={}", c.compute_capability));
+            req.env.push(format!("DD_CUDA_VRAM={}", c.vram_mb));
+            if !c.nvml_so.is_empty() {
+                // Inject the NVML shim under both the versioned and unversioned names (some callers dlopen
+                // the bare name), and point the loader at OUR lib dir first.
+                req.mounts.push(DeviceMount::ro(c.nvml_so.clone(), format!("{libdir}/libnvidia-ml.so.1")));
+                req.mounts.push(DeviceMount::ro(c.nvml_so.clone(), format!("{libdir}/libnvidia-ml.so")));
+                let ldp = match c.prior_ld_library_path.as_deref() {
+                    Some(v) if !v.is_empty() => format!("{libdir}:{v}"),
+                    _ => libdir.to_string(),
+                };
+                req.env.push(format!("LD_LIBRARY_PATH={ldp}"));
+            }
+            if !c.nvidia_smi.is_empty() {
+                req.mounts.push(DeviceMount::ro(c.nvidia_smi.clone(), "/usr/local/bin/nvidia-smi"));
+            }
+        }
+
+        req
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn inert_integration_produces_empty_request() {
+        let req = GpuIntegration::new(GuestArch::Aarch64).device_request(&[]);
+        assert_eq!(req, DeviceRequest::default());
+        assert!(GpuIntegration::new(GuestArch::Aarch64).is_inert());
+    }
+
+    #[test]
+    fn display_only_sockets_env_and_render_node() {
+        // No lib/bin drop-in dirs → no fs access, no LD_LIBRARY_PATH; just the two sockets + their env.
+        let g = GpuIntegration::new(GuestArch::X86_64).with_display(DisplayIntegration {
+            wayland_sock: "/host/run/wayland-0".into(),
+            gpu_exec_sock: "/host/run/dd-gpu.sock".into(),
+            lib_dir: String::new(),
+            bin_dir: String::new(),
+        });
+        let req = g.device_request(&[]);
+        assert!(req.render_node);
+        assert_eq!(
+            req.mounts,
+            vec![
+                DeviceMount::rw("/host/run/wayland-0", "/run/user/0/wayland-0"),
+                DeviceMount::rw("/host/run/dd-gpu.sock", "/run/user/0/dd-gpu-0"),
+            ]
+        );
+        assert_eq!(
+            req.env,
+            vec![
+                "WAYLAND_DISPLAY=wayland-0".to_string(),
+                "XDG_RUNTIME_DIR=/run/user/0".to_string(),
+                "DD_GPU_EXEC=/run/user/0/dd-gpu-0".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn cuda_only_injects_shim_and_reports_device() {
+        let g = GpuIntegration::new(GuestArch::X86_64).with_cuda(CudaIntegration {
+            name: "dd Metal (CUDA-sim) Device".into(),
+            compute_capability: "8.6".into(),
+            vram_mb: 4096,
+            nvml_so: "/host/nvml/libnvidia-ml.so.1".into(),
+            nvidia_smi: "/host/bin/nvidia-smi".into(),
+            prior_ld_library_path: None,
+        });
+        let req = g.device_request(&[]);
+        assert!(!req.render_node); // CUDA presence does NOT arm the render node
+        assert_eq!(
+            req.mounts,
+            vec![
+                DeviceMount::ro("/host/nvml/libnvidia-ml.so.1", "/usr/lib/x86_64-linux-gnu/libnvidia-ml.so.1"),
+                DeviceMount::ro("/host/nvml/libnvidia-ml.so.1", "/usr/lib/x86_64-linux-gnu/libnvidia-ml.so"),
+                DeviceMount::ro("/host/bin/nvidia-smi", "/usr/local/bin/nvidia-smi"),
+            ]
+        );
+        assert_eq!(
+            req.env,
+            vec![
+                "DD_CUDA_NAME=dd Metal (CUDA-sim) Device".to_string(),
+                "DD_CUDA_CC=8.6".to_string(),
+                "DD_CUDA_VRAM=4096".to_string(),
+                "LD_LIBRARY_PATH=/usr/lib/x86_64-linux-gnu".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn cuda_missing_shim_still_reports_device_but_no_ld_or_bind() {
+        // Empty nvml_so/nvidia_smi → nothing bound, no LD_LIBRARY_PATH, but DD_CUDA_* still advertised.
+        let g = GpuIntegration::new(GuestArch::Aarch64).with_cuda(CudaIntegration {
+            name: "X".into(),
+            compute_capability: "7.5".into(),
+            vram_mb: 2048,
+            nvml_so: String::new(),
+            nvidia_smi: String::new(),
+            prior_ld_library_path: None,
+        });
+        let req = g.device_request(&[]);
+        assert!(req.mounts.is_empty());
+        assert_eq!(
+            req.env,
+            vec!["DD_CUDA_NAME=X".to_string(), "DD_CUDA_CC=7.5".to_string(), "DD_CUDA_VRAM=2048".to_string()]
+        );
+    }
+
+    #[test]
+    fn cuda_ld_prepends_existing_value() {
+        let g = GpuIntegration::new(GuestArch::Aarch64).with_cuda(CudaIntegration {
+            name: "X".into(),
+            compute_capability: "8.0".into(),
+            vram_mb: 1,
+            nvml_so: "/n/libnvidia-ml.so.1".into(),
+            nvidia_smi: String::new(),
+            prior_ld_library_path: Some("/opt/lib".into()),
+        });
+        let req = g.device_request(&[]);
+        assert!(req.env.contains(&"LD_LIBRARY_PATH=/usr/lib/aarch64-linux-gnu:/opt/lib".to_string()));
+    }
+
+    #[test]
+    fn display_ld_prepends_last_existing_env_value() {
+        // With a lib_dir present, the display path composes against the LAST LD_LIBRARY_PATH in guest_env.
+        // Use a temp dir so read_dir succeeds; leave it empty so only the LD env line is asserted.
+        let dir = std::env::temp_dir().join(format!("ddgpu-int-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let g = GpuIntegration::new(GuestArch::X86_64).with_display(DisplayIntegration {
+            wayland_sock: "/w".into(),
+            gpu_exec_sock: "/e".into(),
+            lib_dir: dir.to_string_lossy().into_owned(),
+            bin_dir: String::new(),
+        });
+        let env = vec!["LD_LIBRARY_PATH=/a".to_string(), "LD_LIBRARY_PATH=/b".to_string()];
+        let req = g.device_request(&env);
+        assert!(req.env.contains(&"LD_LIBRARY_PATH=/usr/lib/x86_64-linux-gnu:/b".to_string()));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+}

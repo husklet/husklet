@@ -60,10 +60,18 @@ pub(crate) fn ps_match(
             return false;
         }
     }
-    // `health=`: dd models no healthcheck, so every container is effectively `none`; any other value
-    // (starting/healthy/unhealthy) matches nothing.
+    // `health=`: match the container's LIVE health status (the runtime health prober sets
+    // `c.health.Status` to starting/healthy/unhealthy). A container with no healthcheck has no health
+    // object and is docker's `none`. (The old code hardcoded every container to `none`, so
+    // `docker ps --filter health=healthy` never matched a container that had actually become healthy.)
     if let Some(vals) = f.get("health") {
-        if !vals.iter().any(|v| v == "none") {
+        let hs = c
+            .health
+            .as_ref()
+            .map(|h| h.status.as_str())
+            .filter(|s| !s.is_empty())
+            .unwrap_or("none");
+        if !vals.iter().any(|v| v == hs) {
             return false;
         }
     }
@@ -142,8 +150,23 @@ mod tests {
 
     #[test]
     fn ps_match_health_only_none_matches() {
+        // A container with NO healthcheck (health == None) is docker's `none`.
         let c = ctr();
         assert!(ps_match(&c, "web", &filt(&[("health", &["none"])]), None, None));
+        assert!(!ps_match(&c, "web", &filt(&[("health", &["healthy"])]), None, None));
+    }
+
+    #[test]
+    fn ps_match_health_reads_live_status() {
+        // REGRESSION: a container the health prober marked "healthy" must match `--filter health=healthy`
+        // and must NOT match `health=none`. The old code hardcoded every container to `none`.
+        let mut c = ctr();
+        c.health = Some(crate::model::HealthState { status: "healthy".into(), ..Default::default() });
+        assert!(ps_match(&c, "web", &filt(&[("health", &["healthy"])]), None, None));
+        assert!(!ps_match(&c, "web", &filt(&[("health", &["none"])]), None, None));
+        // An unhealthy container matches health=unhealthy (and not healthy).
+        c.health = Some(crate::model::HealthState { status: "unhealthy".into(), ..Default::default() });
+        assert!(ps_match(&c, "web", &filt(&[("health", &["unhealthy"])]), None, None));
         assert!(!ps_match(&c, "web", &filt(&[("health", &["healthy"])]), None, None));
     }
 

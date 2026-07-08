@@ -26,6 +26,24 @@ pub(super) fn compat() -> Group {
             src("ibtc-dispatch", "ibtc_dispatch.c")
                 .out("ibtc vm=10240120795314104034 rec=2178309 chk=12619423276023875997\n"),
             src("floatmath", "floatmath.c").oracle(),
+            // FP-codegen edge differential: MIN/MAX NaN+-0 (H10), CMPNLT/NLE NaN (H12), float->int
+            // indefinite (H13), ROUND MXCSR mode. x86 SSE codegen only; byte-exact vs the qemu oracle.
+            src("fpedge", "fpedge.c").only(&[Engine::LinuxX86_64]).oracle(),
+            // Default/indefinite-NaN sign: x86 emits the NEGATIVE default NaN (0xFFC00000 / 0xFFF8..) on a
+            // GENERATED NaN (0/0, inf/inf, 0*inf, inf-inf, sqrt<0) where ARM emits the positive default NaN;
+            // propagated NaNs keep their input sign (no over-flip). div/mul/sub/add/sqrt scalar+packed sgl+dbl.
+            src("fpdnan", "fpdnan.c").only(&[Engine::LinuxX86_64]).oracle(),
+            // DF (direction flag) is now a runtime cpu bit: a `std`/popfq-set direction persists across block
+            // boundaries and is honored by `rep movs/stos` (backward). Was translate-time-only -> silent
+            // forward copy for a cross-block string op. Cross-block forced via a noinline call.
+            src("repmovsdf", "repmovsdf.c").only(&[Engine::LinuxX86_64]).oracle(),
+            // x87 m80 FLD/FSTP <-> double converters, byte-exact on the value classes independent of carrier
+            // width (+-0/+-Inf/NaN/exact-in-double). Pins the Inf/NaN converter fixes. long-double arithmetic
+            // precision (double-carrier drift, H11/#248/#249) is deliberately NOT tested.
+            src("x87m80", "x87m80.c").only(&[Engine::LinuxX86_64]).oracle(),
+            // SHLD/SHRD now materialize real CF (last bit out) + PF (M item); capture RFLAGS after each
+            // and diff CF|PF|ZF|SF vs qemu, incl by-CL and count==0 flag preservation. x86 codegen only.
+            src("shldflags", "shldflags.c").only(&[Engine::LinuxX86_64]).oracle(),
             // Stolen-register codegen surface (aarch64: x16/x17/x18/x28/x30 live in cpu->x[]): inline-asm
             // coverage of every mangle shape -- data-processing (1..3 distinct stolen regs), loads/stores
             // (stolen Rt/base/writeback/pairs), adr + ldr-literal INTO a stolen reg, TLS via tpidr_el0

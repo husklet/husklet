@@ -210,7 +210,9 @@ static void *exc_thread(void *arg) {
         // resolve a fault the normal path would serve (non-PIE absolute data, or a guest-handled
         // fault) and resume the thread via a KERN_SUCCESS reply, matching nonpie_guard. EXC_BAD_ACCESS maps
         // to a guest SIGSEGV, EXC_BAD_INSTRUCTION to SIGILL; only an unresolved fault is a genuine crash.
-        int hostsig = (msg.exception == EXC_BAD_INSTRUCTION) ? SIGILL : SIGSEGV;
+        int hostsig = (msg.exception == EXC_BAD_INSTRUCTION) ? SIGILL
+                      : (msg.exception == EXC_BREAKPOINT)    ? SIGTRAP // a guest `brk` (chromium IMMEDIATE_CRASH)
+                                                             : SIGSEGV;
         if (gs == KERN_SUCCESS && mach_resolve_fault(msg.thread.name, hostsig, (uint64_t)msg.code[1], &st)) {
             exc_reply_t reply;
             memset(&reply, 0, sizeof reply);
@@ -253,8 +255,16 @@ static void *exc_thread(void *arg) {
             b[130 + sl] = sn[sl];
             sl++;
         }
-        b[130 + sl] = '\n';
-        if (write(2, b, 131 + sl) < 0) {}
+        // Append the GUEST pc (x28 is the reserved CPUREG -> struct cpu*), so a guest `brk`/fault maps to a
+        // guest instruction, not just the host JIT pc. Guarded: x28 may not be a cpu ptr outside the cache.
+        int bp = 130 + sl;
+        memcpy(b + bp, " gpc=0x", 7);
+        bp += 7;
+        struct cpu *bcpu = (struct cpu *)st.__x[28];
+        diag_hx(b + bp, bcpu ? bcpu->pc : 0);
+        bp += 16;
+        b[bp] = '\n';
+        if (write(2, b, bp + 1) < 0) {}
         _exit(139);
     }
     return NULL;
@@ -263,7 +273,8 @@ static void *exc_thread(void *arg) {
 static void install_mach_exc(void) {
     if (mach_port_allocate(mach_task_self(), MACH_PORT_RIGHT_RECEIVE, &g_exc_port) != KERN_SUCCESS) return;
     mach_port_insert_right(mach_task_self(), g_exc_port, g_exc_port, MACH_MSG_TYPE_MAKE_SEND);
-    task_set_exception_ports(mach_task_self(), EXC_MASK_BAD_ACCESS | EXC_MASK_BAD_INSTRUCTION, g_exc_port,
+    task_set_exception_ports(mach_task_self(),
+                             EXC_MASK_BAD_ACCESS | EXC_MASK_BAD_INSTRUCTION | EXC_MASK_BREAKPOINT, g_exc_port,
                              EXCEPTION_DEFAULT | MACH_EXCEPTION_CODES, ARM_THREAD_STATE64);
     pthread_t t;
     pthread_create(&t, NULL, exc_thread, NULL);
@@ -421,6 +432,11 @@ static int engine_global_init(void) {
         sa.sa_flags = SA_SIGINFO | SA_ONSTACK;
         sigaction(SIGSEGV, &sa, NULL);
         sigaction(SIGBUS, &sa, NULL);
+        // Also catch SIGTRAP so a guest `brk #imm` (e.g. a chromium/crashpad Check-failed abort compiled to
+        // a trap, or a __builtin_trap) dumps the guest PC/context instead of silently signal-killing the
+        // engine host-side. Diagnostic-only (CRASHDBG); deliver_guest_fault still hands a trap the guest owns
+        // to its own handler first, so this only reports an otherwise-fatal, unhandled trap.
+        sigaction(SIGTRAP, &sa, NULL);
         install_mach_exc();
     } else {
         // Normal runs: serve a non-PIE ET_EXEC's absolute DATA refs (baked at the low link vaddr) at +bias

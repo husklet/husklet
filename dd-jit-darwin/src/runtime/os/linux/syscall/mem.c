@@ -397,6 +397,21 @@ static int svc_mem(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_
     }
     // mmap
     case 222: {
+#ifdef __APPLE__
+        // GPU rung 2 (opt-in): mmap of a synth DRM render-node fd at a MAP_DUMB offset. Mesa's kms_swrast
+        // maps the dumb buffer for CPU software rendering; the buffer is an IOSurface that already lives at
+        // a host VA (== guest VA in this in-process JIT), so decode the handle from the fake offset MAP_DUMB
+        // handed back, look up the surface, and return its base VA directly — no real mmap. Gated on the
+        // render-node tag, so no other mmap is affected (inert unless DD_GPU_IOSURFACE).
+        if (gpu_iosurface_on() && !(a3 & 0x20) && (int)a4 >= 0 && (int)a4 < 1024 && g_devdri[(int)a4]) {
+            uint32_t handle = (uint32_t)((uint64_t)a5 >> 12);
+            int gi = dd_gpu_reg_by_handle(handle);
+            if (gi >= 0) {
+                G_RET(c) = (uint64_t)(uintptr_t)g_gpu_reg[gi].base;
+                break;
+            }
+        }
+#endif
         // A file-backed mmap (not MAP_ANON) whose fd is not a valid open descriptor is -EBADF, and Linux's
         // fget() rejects it BEFORE the length check -- so this must precede the len==0 EINVAL below (LTP
         // mmap08 maps a CLOSED/-1 fd with len 0 and expects EBADF, not EINVAL). macOS mmap otherwise reports
@@ -644,6 +659,20 @@ static int svc_mem(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_
                 gna_add(glo, ghi);
             else
                 gna_clear(glo, ghi);
+            // #423 / H9: a guest that mprotect()s a page to add PROT_EXEC is a JIT toggling an
+            // already-written page executable -- the mmap(RW) -> write code -> mprotect(RX) pattern that
+            // .NET/Wasm/managed runtimes use (as opposed to the RWX mmap case 222 already covers). It MUST
+            // arm SMC the same way case 222 does: setting g_rwx_guest makes smc_protect() (G_AFTER_TRANSLATE,
+            // dispatch_hooks.h) write-protect each translated source page, so a later overwrite -- the
+            // mprotect(RW) + rewrite + mprotect(RX) re-toggle -- traps in jit86_lazyguard -> smc_on_write()
+            // drops the stale translation and the new bytes re-translate. Without this the FIRST RX
+            // translation is cached forever -> silent miscompile. This mprotect stays a physical no-op
+            // (the SMC machinery does its own host mprotect on the code page); only the gate is set.
+            // g_rwx_guest latches -- once a JIT guest is present it stays armed across every re-toggle, so
+            // SMC coverage is kept, not lost, on a subsequent mprotect(RW)->mprotect(RX). NORWXFIX=1
+            // disables, mirroring case 222.
+            if (((int)a2 & PROT_EXEC) && !getenv("NORWXFIX"))
+                g_rwx_guest = 1;
         }
         G_RET(c) = 0;
         break;
@@ -674,14 +703,24 @@ static int svc_mem(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_
         break;
     // mlock(addr,len): wire+fault via macOS mlock so the range is RESIDENT (LTP mincore03), AND track the
     // range so the guest observes the lock STATE back through /proc/self/{smaps Locked:, status VmLck:}
-    // (LTP mlock05). Best-effort: a host mlock failure (RLIMIT_MEMLOCK) is swallowed as success as before.
+    // (LTP mlock05). A host mlock failure (RLIMIT_MEMLOCK exhausted / EPERM / ENOMEM) is REAL -- the pages
+    // are NOT wired -- so return -errno instead of swallowing it: a crypto/RT guest that relies on mlock to
+    // keep key material out of swap/core dumps must SEE the failure (a fake success left its "locked" pages
+    // swappable, and we must never report the range locked when it isn't). len 0 is a Linux success no-op.
     case 228:
-        if (a1) mlock((void *)a0, (size_t)a1);
+        if (a1 && mlock((void *)a0, (size_t)a1) != 0) {
+            G_RET(c) = (uint64_t)(-errno);
+            break;
+        }
         mlk_add(a0, (uint64_t)a1);
         G_RET(c) = 0;
         break;
-    case 229: // munlock: unwire + drop the tracked range.
-        if (a1) munlock((void *)a0, (size_t)a1);
+    case 229: // munlock: unwire + drop the tracked range. A host munlock failure is returned as -errno
+        // (rather than a false success) so the guest sees Linux's error; len 0 is a success no-op.
+        if (a1 && munlock((void *)a0, (size_t)a1) != 0) {
+            G_RET(c) = (uint64_t)(-errno);
+            break;
+        }
         mlk_del(a0, (uint64_t)a1);
         G_RET(c) = 0;
         break;

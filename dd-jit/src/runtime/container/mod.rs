@@ -71,6 +71,7 @@ impl Container {
                 "DD_IP" => lc.ip = v.clone(),
                 "DD_FSGEN_FILE" => lc.fsgen_file = v.clone(),
                 "DD_PUBLISH_DAEMON" => lc.publish_daemon = true,
+                "DD_GPU_IOSURFACE" => lc.gpu_iosurface = true,
                 // "DDJIT_PCACHE" is a bare enable gate; the pcache dir's presence enables it engine-side.
                 // CRASHDBG/COLDPROF/DDJIT_NOPCACHE are tuning knobs, not container config — dropped here.
                 _ => {}
@@ -103,6 +104,7 @@ mod tests {
             .write_coherence_file("/run/fsgen")
             .persistent_cache("/home/dd/pcache")
             .external_port_forwarder(true)
+            .render_node(true)
             .hostname("host1")
             .memory_bytes(4096)
             .pids(200)
@@ -144,6 +146,7 @@ mod tests {
         assert_eq!(lc.ip, "10.0.0.5"); // DD_IP
         assert_eq!(lc.fsgen_file, "/run/fsgen"); // DD_FSGEN_FILE
         assert_eq!(lc.pcache_dir, "/home/dd/pcache"); // DDJIT_PCACHE_DIR
+        assert!(lc.gpu_iosurface); // DD_GPU_IOSURFACE
     }
 
     #[test]

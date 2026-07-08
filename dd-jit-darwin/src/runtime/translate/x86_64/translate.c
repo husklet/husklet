@@ -382,11 +382,14 @@ static int g_fl_pending;
 // nzcv_to_eflags, ptrace, core) reads cpu->pf/cpu->af, so block boundaries are not PF/AF consumers.
 static int g_pfaf_dead;
 
-// x86 direction flag (DF), tracked at translate time. Compilers/libc emit `std`/`cld` straight-line
-// around the string op they govern (e.g. runtime.memmove's backward `std; rep movsq; cld`), so the
-// flag is always block-local -- no runtime cpu state needed. Reset to 0 (forward) at each block entry;
-// `std` sets it, `cld` clears it, and the string-op lowering picks forward/backward stride accordingly.
-static int g_df;
+// x86 direction flag (DF). The AUTHORITATIVE copy is now the RUNTIME bit cpu->df (OFF_DF), maintained by
+// cld/std/popfq and read at runtime by pushfq and the string-op lowering -- so a `std` (or popfq-set DF)
+// whose `rep movs/stos/scas` lands in a LATER block honors the backward direction (previously it silently
+// ran forward). g_df additionally tracks the STATICALLY-known value within the current block for codegen:
+// DF_FWD/DF_BWD emit a constant +w/-w stride (fast, no cpu->df load); DF_DYN means "unknown at translate
+// time" (block entry, or after popfq) so the lowering loads cpu->df and picks the stride at runtime.
+enum { DF_FWD = 0, DF_BWD = 1, DF_DYN = 2 };
+static int g_df; // one of DF_FWD/DF_BWD/DF_DYN; the runtime truth is cpu->df
 
 // opt3 kill-switch: NOLAZY=1 (any non-"0") reverts to the PR1 partial scheme (only sub/cmp defers;
 // add/logical materialize inline; no dead-flag elimination). Read once, cached.
@@ -851,6 +854,49 @@ static void e_sse_var_shift(int vd, int vn, int vs, int esize, int left, int ari
     emit32(shl | (17 << 16) | (vn << 5) | vd);                       // [s|u]shl vd, vn, v17
 }
 
+// x86 default/indefinite-NaN sign fixup for the inline SSE FP arithmetic (add/sub/mul/div/sqrt).
+// When such an op GENERATES a NaN with NO NaN input (0/0, inf/inf, 0*inf, inf-inf, sqrt(-1)), x86
+// yields the QNaN floating-point INDEFINITE whose SIGN BIT IS SET: single 0xFFC00000, double
+// 0xFFF8000000000000. ARM's FDIV/FADD/FSUB/FMUL/FSQRT instead produce the DEFAULT NaN with sign CLEAR
+// (0x7FC00000 / 0x7FF8000000000000) -- identical payload, opposite sign. A NaN PROPAGATED from an input
+// keeps that input's sign on BOTH ISAs, so we must fix up ONLY generated default-NaNs, identified as
+// "result is NaN AND no input is NaN". Branchless: v20/v21 scratch, per-lane so scalar and packed share
+// one path (scalar upper lanes are 0.0 in the result -> never flagged). Set NOXFPDNAN to disable (A/B).
+static int g_fpdnan = -1;
+static int fpdnan_on(void) {
+    if (g_fpdnan < 0) g_fpdnan = (getenv("NOXFPDNAN") == NULL);
+    return g_fpdnan;
+}
+// PRE (emit BEFORE the arithmetic, while vd still holds src1): v20 <- "no input is NaN" lane mask.
+// two_in: 1 for add/sub/mul/div (src1=vd, src2=s); 0 for sqrt (single operand s, vd is not an input).
+static void emit_dnan_pre(int vd, int s, int two_in, int dbl) {
+    uint32_t EQ = dbl ? 0x4E60E400u : 0x4E20E400u; // FCMEQ Vd.2d/.4s (all-ones per lane where NOT NaN)
+    if (two_in) {
+        emit32(EQ | (vd << 16) | (vd << 5) | 20); // v20 = (src1 == src1)
+        emit32(EQ | (s << 16) | (s << 5) | 21);   // v21 = (src2 == src2)
+        e_v3(0x4E201C00u, 20, 20, 21);            // v20 = in_notnan = src1nn & src2nn  (AND.16b)
+    } else {
+        emit32(EQ | (s << 16) | (s << 5) | 20); // v20 = (src == src)
+    }
+}
+// POST (emit AFTER the arithmetic; vd = result): OR the x86 indefinite sign into lanes that are a
+// GENERATED default NaN (result is NaN AND no input was NaN). Payload already matches x86, so only the
+// sign bit must be set.
+static void emit_dnan_post(int vd, int dbl) {
+    uint32_t EQ = dbl ? 0x4E60E400u : 0x4E20E400u;
+    emit32(EQ | (vd << 16) | (vd << 5) | 21); // v21 = (res == res)  (all-ones where result NOT NaN)
+    e_v3(0x4E601C00u, 20, 20, 21);            // v20 = gen = in_notnan & ~res_notnan  (BIC.16b)
+    if (dbl) {
+        e_movconst(16, 0x8000000000000000ull);
+        emit32(0x4E080C00u | (16 << 5) | 21); // DUP v21.2d, x16   (per-lane sign const)
+    } else {
+        e_movconst(16, 0x80000000ull);
+        emit32(0x4E040C00u | (16 << 5) | 21); // DUP v21.4s, w16
+    }
+    e_v3(0x4E201C00u, 21, 21, 20); // v21 = signbits & gen  (AND.16b)
+    e_v3(0x4EA01C00u, vd, vd, 21); // vd |= signbits        (ORR.16b)
+}
+
 // Emit a REAL host trap (UDF -> SIGILL, BRK -> SIGTRAP) for an x86 fault/trap the guest may handle.
 // It is emitted INLINE with the 16 guest GPRs still live in host x0..x15 and xmm in v0..v15, so the
 // synchronous-fault guard (jit86_syncguard -> deliver_guest_fault -> sigframe_capture_fault, frontend/
@@ -1020,7 +1066,7 @@ static void *translate_block(uint64_t gpc) {
     emit_irq_check(start);
     g_fl_pending = FL_NONE; // lazy flags: nothing deferred at block entry
     g_v26z = g_v27m = 0;    // crypto constant hoist: no v26==0 / v27==0x8f claim survives a block entry
-    g_df = 0;               // direction flag: forward at block entry (std/cld are block-local around string ops)
+    g_df = DF_DYN; // DF unknown at block entry (a prior block's std/popfq may have left it set) -> string
     g_fp_known = 0;         // x87: top unknown at block entry until a finit anchors it
     g_fp_dirty = 0;
     g_vmark_done = 0; // fresh region -> first xmm write must re-mark cpu->vdirty
@@ -1802,12 +1848,14 @@ static void *translate_block(uint64_t gpc) {
                 continue;
             }
             // pushfq (9C): materialize x86 RFLAGS from the flag substrate and push it. Bits assembled in
-            // x17: reserved bit1=1, IF(bit9)=1 (userspace), DF(bit10)=g_df (block-local), then CF/PF/ZF/
+            // x17: reserved bit1=1, IF(bit9)=1 (userspace), DF(bit10)=cpu->df (runtime), then CF/PF/ZF/
             // SF/OF from cpu->nzcv + the PF lane, and AF(bit4) from the cpu->af lane.
             if (op == 0x9C) {
                 if (g_fl_pending) flags_materialize(); // make cpu->nzcv current
                 e_ldr(16, 28, OFF_NZCV);               // x16 = ARM NZCV substrate
-                e_movconst(17, 0x202u | (g_df ? 0x400u : 0u));
+                e_movconst(17, 0x202u);                // reserved bit1=1, IF(bit9)=1
+                e_ldr(18, 28, OFF_DF);                 // DF(bit10) from the runtime cpu->df (0/1)
+                e_rrr(A_ORR, 17, 17, 18, 0, 10);
                 emit32(0x53000000u | (29 << 16) | (29 << 10) | (16 << 5) | 18); // ubfx w18,w16,#29,#1 (borrow C)
                 e_movconst(19, 1);
                 e_rrr(A_EOR, 18, 18, 19, 0, 0); // x86 CF = NOT stored-C (borrow convention)
@@ -1827,10 +1875,11 @@ static void *translate_block(uint64_t gpc) {
                 gpc = next;
                 continue;
             }
-            // popfq (9D): pop RFLAGS and distribute back into the flag substrate (cpu->nzcv + PF lane).
-            // DF (bit10) is intentionally not restored: runtime DF lives only as translate-time g_df, so a
-            // dynamic DF cannot be threaded here (a pre-existing limitation -- libc brackets string ops with
-            // straight-line std/cld, never with popfq).
+            // popfq (9D): pop RFLAGS and distribute back into the flag substrate (cpu->nzcv + PF/AF/ID/DF).
+            // DF (bit10) IS now restored to the runtime cpu->df (formerly a documented M-gap): the direction
+            // flag persists across block boundaries and a `popfq` of a value with bit10=1 followed by a
+            // later-block `rep movs/stos/scas` copies BACKWARD correctly. g_df drops to DF_DYN because the
+            // restored value is runtime (the string-op lowering will load cpu->df).
             if (op == 0x9D) {
                 e_load(8, 16, RSP); // x16 = popped RFLAGS
                 e_addi(RSP, RSP, 8, 1);
@@ -1851,6 +1900,9 @@ static void *translate_block(uint64_t gpc) {
                 e_af_save(16); // AF from popped RFLAGS bit4 (cpu->af consumer extracts bit 4)
                 emit32(0x53000000u | (21 << 16) | (21 << 10) | (16 << 5) | 18); // ubfx w18,w16,#21,#1 (ID)
                 e_str(18, 28, OFF_ID);  // stash RFLAGS.ID so a later pushfq observes the toggle (CPUID probe)
+                emit32(0x53000000u | (10 << 16) | (10 << 10) | (16 << 5) | 18); // ubfx w18,w16,#10,#1 (DF)
+                e_str(18, 28, OFF_DF);  // restore the runtime direction flag (was a documented M-gap)
+                g_df = DF_DYN;          // DF value is now runtime (popped) -> not statically known
                 g_fl_pending = FL_NONE; // flags now materialized directly into cpu->nzcv
                 gpc = next;
                 continue;
@@ -2800,8 +2852,61 @@ static void *translate_block(uint64_t gpc) {
                     }
                     // FCVTZS (toward zero): exact truncation for 0x2C; for 0x2D the FRINTI value is already integral.
                     emit32(0x1E380000u | (I.rexW ? 0x80000000u : 0) | (I.repne ? 0x00400000u : 0) | (s << 5) | I.reg);
-                } else if (op == 0x58 || op == 0x59 || op == 0x5C || op == 0x5E || op == 0x5D || op == 0x5F ||
-                           op == 0x51) {
+                    // H13: x86 float->int yields the "integer indefinite" (INT_MIN bit pattern) on any
+                    // out-of-range or NaN input, whereas ARM FCVTZS saturates (positive overflow -> INT_MAX,
+                    // NaN -> 0). Negative overflow already agrees (both give INT_MIN). Detect the divergent
+                    // cases -- (s >= 2^(destbits-1)) OR unordered(NaN) -- with an FCMP against the threshold
+                    // and substitute INT_MIN. FCMP sets ARM C on "greater-than-or-equal-or-unordered", so the
+                    // CS condition (C==1) is exactly true iff s>=threshold or s is NaN. (Guest x86 flags are
+                    // safely in cpu->nzcv here -- g_fl_pending was flushed at top-of-loop -- so the live ARM
+                    // NZCV is free scratch, same as the ucomisd path.)
+                    {
+                        int sf = I.rexW ? 1 : 0; // dest is 64-bit signed int
+                        uint64_t thr = I.repne ? (sf ? 0x43E0000000000000ull : 0x41E0000000000000ull)  // dbl 2^63/2^31
+                                               : (sf ? 0x5F000000ull : 0x4F000000ull);                 // sgl 2^63/2^31
+                        e_movconst(20, thr);
+                        if (I.repne)
+                            e_fmov_to_d(19, 20);
+                        else
+                            e_fmov_to_s(19, 20);                                                  // v19 = threshold
+                        emit32((I.repne ? 0x1E602000u : 0x1E202000u) | (19 << 16) | (s << 5));    // FCMP s, v19
+                        e_movconst(20, sf ? 0x8000000000000000ull : 0x80000000ull);               // integer indefinite
+                        e_csel(I.reg, 20, I.reg, 2 /*CS: s>=thr or NaN*/, sf);
+                    }
+                } else if (op == 0x5D || op == 0x5F) { // H10: minps/maxps/minpd/maxpd + scalar minss/minsd/maxss/maxsd
+                    // x86 MIN(a,b) = (a<b)?a:b ; MAX(a,b) = (a>b)?a:b -- and if either operand is NaN, or they
+                    // compare equal (incl +0/-0), the result is the SECOND source (the r/m operand). ARM
+                    // FMIN/FMAX instead quiet-propagate NaN and select +-0 by sign, so lower to a compare+select:
+                    //   mask = (op==min) ? FCMGT(src2,dst) : FCMGT(dst,src2)   -> 0 on NaN/equal/+-0 -> pick src2
+                    //   result = mask ? dst : src2   via BSL. Byte-exact with x86 on NaN/+-0.
+                    int packed = !I.repne && !I.rep;
+                    int s = vm;
+                    if (I.is_mem) {
+                        emit_ea(&I, next);
+                        if (packed)
+                            e_ldr_q(16, 17, 0);
+                        else if (I.repne)
+                            e_ldr_d(16, 17);
+                        else
+                            e_ldr_s(16, 17);
+                        s = 16;
+                    }
+                    uint32_t szb = (packed ? I.p66 : I.repne) ? 0x00400000u : 0;
+                    uint32_t GT = (packed ? 0x6EA0E400u : 0x7EA0E400u) | szb; // FCMGT (Rd = Rn > Rm)
+                    if (op == 0x5D)
+                        emit32(GT | (vd << 16) | (s << 5) | 17); // v17 = (src2 > dst)  [min mask]
+                    else
+                        emit32(GT | (s << 16) | (vd << 5) | 17); // v17 = (dst > src2)  [max mask]
+                    if (packed) {
+                        e_v3(0x6E601C00u, 17, vd, s); // BSL v17.16b, dst.16b, src2.16b -> mask?dst:src2
+                        e_vmov(vd, 17);
+                    } else {
+                        e_v3(0x2E601C00u, 17, vd, s); // BSL v17.8b (low lane) -> mask?dst:src2
+                        // FMOV Dd/Sd, v17: keep only the low lane, zero the upper bits (matches the scalar
+                        // arithmetic path's upper-lane convention).
+                        emit32((I.repne ? 0x1E604000u : 0x1E204000u) | (17 << 5) | vd);
+                    }
+                } else if (op == 0x58 || op == 0x59 || op == 0x5C || op == 0x5E || op == 0x51) {
                     // add/mul/sub/div/min/max/sqrt. Prefix selects width: F2=scalar double, F3=scalar
                     // single, 66=PACKED double (.2d), none=PACKED single (.4s).
                     int packed = !I.repne && !I.rep;
@@ -2816,15 +2921,16 @@ static void *translate_block(uint64_t gpc) {
                             e_ldr_s(16, 17);
                         s = 16;
                     }
+                    int dbl = packed ? I.p66 : I.repne; // element type: double vs single
+                    int fixnan = fpdnan_on();
+                    if (fixnan) emit_dnan_pre(vd, s, op != 0x51, dbl); // capture "no input NaN" (uses v20/v21)
                     if (packed) { // vector FP: 66 -> .2d (sz bit), none -> .4s
                         uint32_t d = I.p66 ? 0x00400000u : 0;
                         uint32_t b = op == 0x58   ? 0x4E20D400u  // FADD
                                      : op == 0x59 ? 0x6E20DC00u  // FMUL
                                      : op == 0x5C ? 0x4EA0D400u  // FSUB
                                      : op == 0x5E ? 0x6E20FC00u  // FDIV
-                                     : op == 0x5D ? 0x4EA0F400u  // FMIN
-                                     : op == 0x5F ? 0x4E20F400u  // FMAX
-                                                  : 0x6EA1F800u; // FSQRT (2-reg)
+                                                  : 0x6EA1F800u; // FSQRT (2-reg)  [min/max: see 0x5D/0x5F above]
                         if (op == 0x51)
                             emit32(b | d | (s << 5) | vd); // FSQRT vd.T, s.T
                         else
@@ -2835,14 +2941,13 @@ static void *translate_block(uint64_t gpc) {
                                      : op == 0x59 ? 0x1E200800u
                                      : op == 0x5C ? 0x1E203800u
                                      : op == 0x5E ? 0x1E201800u
-                                     : op == 0x5D ? 0x1E205800u
-                                     : op == 0x5F ? 0x1E204800u
-                                                  : 0x1E21C000u;
+                                                  : 0x1E21C000u; // FSQRT [min/max: see 0x5D/0x5F above]
                         if (op == 0x51)
                             emit32(b | ty | (s << 5) | vd); // FSQRT sd/ss, s
                         else
                             emit32(b | ty | (s << 16) | (vd << 5) | vd); // FADD/.../FMAX sd/ss
                     }
+                    if (fixnan) emit_dnan_post(vd, dbl); // stamp x86's negative default-NaN sign on generated NaNs
                 } else if (op == 0x5A) { // cvtsd2ss(F2) / cvtss2sd(F3)
                     int s = vm;
                     if (I.is_mem) {
@@ -2900,11 +3005,18 @@ static void *translate_block(uint64_t gpc) {
                         emit32(ANDb | (17 << 16) | (vd << 5) | vd);           // vd  = ORD
                         if (pred == 3) emit32(NOTb | (vd << 5) | vd);         // UNORD = ~ORD
                     } else {
-                        int swap = (pred == 1 || pred == 2); // LT/LE: a<b == b>a -> swap
-                        int n = swap ? s : vd, m = swap ? vd : s;
-                        uint32_t fc = (pred == 0 || pred == 4) ? EQ : (pred == 1 || pred == 6) ? GT : GE;
-                        emit32(fc | (m << 16) | (n << 5) | vd);       // FCMxx vd, n, m
-                        if (pred == 4) emit32(NOTb | (vd << 5) | vd); // NEQ = ~EQ
+                        // predicates handled here: 0 EQ, 1 LT, 2 LE, 4 NEQ, 5 NLT, 6 NLE.
+                        // LT/LE/NLT/NLE build the ordered comparison a<b / a<=b via the swapped GT/GE (a<b ==
+                        // b>a); NEQ/NLT/NLE then invert. x86's N-forms are UNORDERED: they return all-ones when
+                        // an operand is NaN. ARM FCMGT/FCMGE give 0 on NaN, so inverting the ordered result (NOT)
+                        // yields the correct NaN->true mask for NLT/NLE (H12) exactly as it already did for NEQ.
+                        int lt_like = (pred == 1 || pred == 2 || pred == 5 || pred == 6);
+                        int use_ge = (pred == 2 || pred == 6);            // LE/NLE -> GE ; LT/NLT -> GT
+                        int neg = (pred == 4 || pred == 5 || pred == 6);  // NEQ/NLT/NLE invert (NaN -> true)
+                        int n = lt_like ? s : vd, m = lt_like ? vd : s;
+                        uint32_t fc = (pred == 0 || pred == 4) ? EQ : use_ge ? GE : GT;
+                        emit32(fc | (m << 16) | (n << 5) | vd);   // FCMxx vd, n, m
+                        if (neg) emit32(NOTb | (vd << 5) | vd);   // invert -> NaN lane becomes all-ones
                     }
                 } else if (op == 0x2E || op == 0x2F) { // ucomisd/comisd (66=double, none=single) -> FCMP + flags
                     int s = vm;
@@ -2957,6 +3069,23 @@ static void *translate_block(uint64_t gpc) {
                         emit32(0x4E21A800u | (s << 5) | vd); // 66: cvtps2dq  -> FCVTNS .4S (round to nearest)
                     else
                         emit32(0x4E21D800u | (s << 5) | vd); // NP: cvtdq2ps  -> SCVTF  .4S (s32->f32)
+                    if (I.rep || I.p66) {
+                        // H13 (packed): x86 float->int32 gives the integer indefinite (0x80000000) per lane on
+                        // out-of-range or NaN; ARM saturates positive overflow to INT_MAX and NaN to 0 (negative
+                        // overflow already agrees at INT_MIN). Per lane, build the "make-indefinite" mask =
+                        //   (s >= 2^31)  OR  (s != s)   -- FCMGE against a 2^31 broadcast, ORed with ~FCMEQ(s,s)
+                        // and BSL 0x80000000 over the saturating result.
+                        e_v3(0x4E20E400u, 17, s, s);       // FCMEQ v17.4s, s, s  -> ordered lanes (0 where NaN)
+                        emit32(0x6E205800u | (17 << 5) | 17); // NOT v17.16b       -> NaN mask
+                        e_movconst(19, 0x4F000000u);          // 2^31 as f32
+                        emit32(0x4E040C00u | (19 << 5) | 18); // DUP v18.4s, w19   -> threshold
+                        e_v3(0x6E20E400u, 18, s, 18);         // FCMGE v18.4s, s, thr -> s>=2^31 mask
+                        e_v3(0x4EA01C00u, 17, 17, 18);        // ORR v17.16b       -> combined make-indefinite mask
+                        e_movconst(19, 0x80000000u);
+                        emit32(0x4E040C00u | (19 << 5) | 18); // DUP v18.4s, w19   -> 0x80000000 per lane
+                        e_v3(0x6E601C00u, 17, 18, vd);        // BSL v17.16b, indef, result -> mask?indef:result
+                        e_vmov(vd, 17);
+                    }
                 } else if (op == 0xF6) {                     // psadbw (66): sum of abs byte diffs per 64-bit half
                     int s = I.is_mem ? 16 : vm;
                     if (I.is_mem) {
@@ -3121,25 +3250,63 @@ static void *translate_block(uint64_t gpc) {
                         e_extr(16, dst, src, width - n, ssf); // (dst<<n)|(src>>(W-n))
                     else
                         e_extr(16, src, dst, n, ssf); // (dst>>n)|(src<<(W-n))
-                } else {
-                    e_mov_rr(22, dst, ssf); // preserve orig dst for the n==0 select
-                    e_movconst(19, ssf ? 63 : 31);
-                    e_rrr(A_AND, 17, RCX, 19, ssf, 0); // n = cl & (W-1)
-                    e_movconst(20, width);
-                    e_rrr(A_SUB, 20, 20, 17, ssf, 0); // 20 = W - n
-                    if (isleft) {
-                        e_shv(S_LSLV, 19, dst, 17, ssf);
-                        e_shv(S_LSRV, 20, src, 20, ssf);
-                    } else {
-                        e_shv(S_LSRV, 19, dst, 17, ssf);
-                        e_shv(S_LSLV, 20, src, 20, ssf);
-                    }
-                    e_rrr(A_ORR, 16, 19, 20, ssf, 0); // combined = t1 | t2
-                    e_tst(17, ssf);
-                    e_csel(16, 22, 16, 0 /*EQ: n==0*/, ssf); // n==0 -> dst unchanged
+                    // M: x86 flags. SF/ZF/PF from the result; CF = the LAST bit shifted out of the ORIGINAL
+                    // dst -- SHLD: bit (W-n); SHRD: bit (n-1). n is a nonzero constant here. OF is defined
+                    // only for n==1 (sign change); left undefined for the general case as x86 permits.
+                    e_lsr_i(21, dst, isleft ? (width - n) : (n - 1), ssf);
+                    e_movconst(19, 1);
+                    e_rrr(A_AND, 21, 21, 19, 0, 0); // x21 = x86 CF (0/1)
+                    e_tst(16, ssf);                 // N/Z from result
+                    e_pf_save(16);                  // PF source = result low byte
+                    e_nzcv_save_setcf(21);          // stored C = NOT CF, keep N/Z
+                    rm_store(&I, w, 16);
+                    gpc = next;
+                    continue;
                 }
-                e_tst(16, ssf);
-                e_nzcv_save(); // SF/ZF from result (CF/OF approximate)
+                // ---- SHLD/SHRD by CL ----
+                e_mov_rr(22, dst, ssf); // preserve orig dst for the n==0 select + CF
+                e_movconst(19, ssf ? 63 : 31);
+                e_rrr(A_AND, 17, RCX, 19, ssf, 0); // n = cl & (W-1)
+                e_movconst(20, width);
+                e_rrr(A_SUB, 20, 20, 17, ssf, 0); // 20 = W - n
+                if (isleft) {
+                    e_shv(S_LSLV, 19, dst, 17, ssf);
+                    e_shv(S_LSRV, 20, src, 20, ssf);
+                } else {
+                    e_shv(S_LSRV, 19, dst, 17, ssf);
+                    e_shv(S_LSLV, 20, src, 20, ssf);
+                }
+                e_rrr(A_ORR, 16, 19, 20, ssf, 0); // combined = t1 | t2
+                e_tst(17, ssf);
+                e_csel(16, 22, 16, 0 /*EQ: n==0*/, ssf); // n==0 -> dst unchanged
+                // M: x86 flags. If the masked count n==0 ALL flags are unchanged; else SF/ZF/PF from the
+                // result and CF = the last bit shifted out of the ORIGINAL dst (x22): SHLD bit (W-n), SHRD
+                // bit (n-1). OF (n==1 only) left undefined. Mirrors the SHL/SHR/SAR count==0-preserve path.
+                e_ldr(24, 28, OFF_NZCV);  // old stored flags (kept when n==0)
+                e_tst(16, ssf);           // live N/Z from result
+                emit32(0xD53B4200u | 20); // mrs x20, nzcv (N/Z valid; C/V stale)
+                if (isleft) {
+                    e_movconst(19, width);
+                    e_rrr(A_SUB, 19, 19, 17, ssf, 0); // x19 = W - n
+                } else {
+                    e_subi(19, 17, 1, ssf); // x19 = n - 1
+                }
+                e_shv(S_LSRV, 21, 22, 19, ssf);
+                e_movconst(19, 1);
+                e_rrr(A_AND, 21, 21, 19, 0, 0);  // x21 = x86 CF (0/1)
+                e_rrr(A_EOR, 21, 21, 19, 0, 0);  // x21 = NOT CF (stored borrow convention)
+                e_movconst(19, 1u << 29);
+                e_rrr(A_BIC, 20, 20, 19, 1, 0);  // clear stored C (bit 29)
+                e_rrr(A_ORR, 20, 20, 21, 1, 29); // stored C = (NOT CF) << 29
+                e_tst(17, ssf);                  // Z = (n == 0)
+                e_csel(20, 24, 20, 0 /*EQ*/, 1); // n==0 -> keep old flags
+                e_str(20, 28, OFF_NZCV);
+                if (!g_pfaf_dead) { // PF: n==0 keeps old, else result low byte (live Z still = n==0 here)
+                    e_ldr(25, 28, OFF_PF);
+                    e_csel(23, 25, 16, 0 /*EQ*/, 1);
+                    e_pf_save(23);
+                }
+                emit32(0xD51B4200u | 20); // sync live ARM NZCV to the stored value
                 rm_store(&I, w, 16);
                 gpc = next;
                 continue;

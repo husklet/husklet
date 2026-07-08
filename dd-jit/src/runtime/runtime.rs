@@ -94,7 +94,14 @@ impl Runtime {
         let deadline = Instant::now() + timeout;
         while Instant::now() < deadline {
             if manifest.exists() {
-                return Ok(()); // a complete, restorable checkpoint (MANIFEST is written last)
+                // A complete, restorable checkpoint (MANIFEST is written last). Unlink the trigger + pid so
+                // the slot dir is self-contained and a later restore/launch never inherits a stale generation
+                // or pid; the engine re-creates a fresh trigger (generation 0) when it re-arms, and the
+                // launcher rewrites the pid. The init writes the MANIFEST just BEFORE it _exit()s, so wait
+                // for its pid to actually die first — while it still holds the trigger MAP_SHARED-mapped the
+                // unlink races the dying engine and the trigger survives with its bumped generation.
+                cleanup_trigger_pid(dir, pid);
+                return Ok(());
             }
             // Re-kick: the init may not have reached a safepoint on the first signal (a long blocking wait).
             let _ = unsafe { libc::kill(pid as libc::pid_t, KICK) };
@@ -118,6 +125,23 @@ impl Runtime {
         let pid = dd_jit_darwin::spawn(c.guest(), &lc).map_err(Error::Io)?;
         Ok(RunHandle { pid })
     }
+}
+
+/// Remove a slot's control-channel leftovers (`<dir>.trigger` + `<dir>.pid`) once no engine maps them.
+/// Called after a checkpoint completes so a slot never accumulates stale generation files across sessions;
+/// both are re-created cleanly on the next launch/restore. `init_pid` is the container init: it writes the
+/// MANIFEST immediately before `_exit`, so we briefly wait for it to actually die (it still holds the
+/// trigger MAP_SHARED-mapped until then) before unlinking, otherwise the trigger survives with its bumped
+/// generation. Bounded so a stuck pid never stalls close; the fresh-launch path wipes any residue anyway.
+fn cleanup_trigger_pid(dir: &str, init_pid: u32) {
+    for _ in 0..100 {
+        if unsafe { libc::kill(init_pid as libc::pid_t, 0) } != 0 {
+            break; // ESRCH: the init is gone, nothing maps the trigger any more
+        }
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    let _ = std::fs::remove_file(format!("{dir}.trigger"));
+    let _ = std::fs::remove_file(format!("{dir}.pid"));
 }
 
 /// Advance the checkpoint trigger generation at `<dir>.trigger` — a 4-byte MAP_SHARED counter the engine
