@@ -57,6 +57,13 @@ struct aio_ctx {
 
 #define AIO_MAX_CTX 64
 static struct aio_ctx g_aioctx[AIO_MAX_CTX];
+// Guards the g_aioctx table slot allocation/free AND every ctx completion-ring mutation. io_submit
+// (aio_push) and io_getevents (aio_drain) run on DIFFERENT guest threads against the same ctx (InnoDB
+// submits from worker threads, reaps from dedicated io-handler threads), so the ring head/tail/n must
+// not be mutated concurrently -- an unlocked race duplicates/loses a completion, handing InnoDB a bogus
+// io_event.obj it then dereferences (a load-gated SIGSEGV/corruption source). Never held across the
+// actual I/O (aio_do_one) so concurrent InnoDB I/O is not serialized.
+static pthread_mutex_t g_aio_lock = PTHREAD_MUTEX_INITIALIZER;
 
 // Resolve+validate a guest-supplied aio_context_t (a pointer into g_aioctx) to its table entry, or NULL.
 static struct aio_ctx *aio_ctx_of(uint64_t id) {
@@ -68,6 +75,7 @@ static struct aio_ctx *aio_ctx_of(uint64_t id) {
 // Queue one completion into ctx's ring (drops the oldest if full -- can't happen for well-behaved callers
 // that io_getevents before re-submitting past nr_events, but stays bounded regardless).
 static void aio_push(struct aio_ctx *x, uint64_t data, uint64_t obj, int64_t res) {
+    pthread_mutex_lock(&g_aio_lock);
     if (x->n >= x->cap) { // overflow: advance head to make room (drop oldest)
         x->head = (x->head + 1) % x->cap;
         x->n--;
@@ -78,6 +86,28 @@ static void aio_push(struct aio_ctx *x, uint64_t data, uint64_t obj, int64_t res
     x->q[x->tail].res2 = 0;
     x->tail = (x->tail + 1) % x->cap;
     x->n++;
+    pthread_mutex_unlock(&g_aio_lock);
+}
+
+// Drain up to `max` completions from ctx `x` into the guest io_event buffer `ev` (32 bytes each),
+// returning the count moved. Locked (pairs with aio_push).
+static long aio_drain(struct aio_ctx *x, uint8_t *ev, long max) {
+    long got = 0;
+    pthread_mutex_lock(&g_aio_lock);
+    long want = max < x->n ? max : x->n;
+    while (got < want) {
+        struct aio_evt *e = &x->q[x->head];
+        uint8_t *o = ev + (size_t)got * 32;
+        *(uint64_t *)(o + 0) = e->data;
+        *(uint64_t *)(o + 8) = e->obj;
+        *(int64_t *)(o + 16) = e->res;
+        *(int64_t *)(o + 24) = e->res2;
+        x->head = (x->head + 1) % x->cap;
+        x->n--;
+        got++;
+    }
+    pthread_mutex_unlock(&g_aio_lock);
+    return got;
 }
 
 // Signal an AIO completion eventfd (aio_resfd): mirror io.c's eventfd write path exactly -- bump the
@@ -152,16 +182,6 @@ static int svc_aio(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_
             G_RET(c) = (uint64_t)(-EINVAL);
             break;
         }
-        int slot = -1;
-        for (int i = 0; i < AIO_MAX_CTX; i++)
-            if (!g_aioctx[i].used) {
-                slot = i;
-                break;
-            }
-        if (slot < 0) {
-            G_RET(c) = (uint64_t)(-EAGAIN);
-            break;
-        } // out of contexts (matches kernel ENOMEM/EAGAIN)
         // Linux over-allocates the completion ring vs nr_events; a small headroom keeps a burst of
         // submissions from dropping completions before io_getevents drains them.
         int cap = (int)nr_events + 1;
@@ -171,10 +191,26 @@ static int svc_aio(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_
             G_RET(c) = (uint64_t)(-ENOMEM);
             break;
         }
-        g_aioctx[slot].q = q;
-        g_aioctx[slot].cap = cap;
-        g_aioctx[slot].head = g_aioctx[slot].tail = g_aioctx[slot].n = 0;
-        g_aioctx[slot].used = 1;
+        // Reserve a slot under the lock so two concurrent io_setup calls never grab the same entry.
+        pthread_mutex_lock(&g_aio_lock);
+        int slot = -1;
+        for (int i = 0; i < AIO_MAX_CTX; i++)
+            if (!g_aioctx[i].used) {
+                slot = i;
+                break;
+            }
+        if (slot >= 0) {
+            g_aioctx[slot].q = q;
+            g_aioctx[slot].cap = cap;
+            g_aioctx[slot].head = g_aioctx[slot].tail = g_aioctx[slot].n = 0;
+            g_aioctx[slot].used = 1;
+        }
+        pthread_mutex_unlock(&g_aio_lock);
+        if (slot < 0) {
+            free(q);
+            G_RET(c) = (uint64_t)(-EAGAIN);
+            break;
+        } // out of contexts (matches kernel ENOMEM/EAGAIN)
         *(uint64_t *)a1 = (uint64_t)(uintptr_t)&g_aioctx[slot];
         G_RET(c) = 0;
         break;
@@ -185,9 +221,13 @@ static int svc_aio(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_
             G_RET(c) = (uint64_t)(-EINVAL);
             break;
         }
+        // Under the lock so a concurrent io_getevents mid-drain never touches a freed ring.
+        pthread_mutex_lock(&g_aio_lock);
         free(x->q);
         x->q = NULL;
+        x->n = x->head = x->tail = 0; // so a racing aio_drain sees an empty ring, never derefs freed q
         x->used = 0;
+        pthread_mutex_unlock(&g_aio_lock);
         G_RET(c) = 0;
         break;
     }
@@ -241,31 +281,43 @@ static int svc_aio(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_
             G_RET(c) = (uint64_t)(-EINVAL);
             break;
         }
+        long min_nr = (long)a1;
         long nr_max = (long)a2;
         if (nr_max < 0) {
             G_RET(c) = (uint64_t)(-EINVAL);
             break;
         }
         uint8_t *ev = (uint8_t *)a3;
-        long want = nr_max < x->n ? nr_max : x->n;
-        if (want > 0 && (!ev || !host_range_mapped((uintptr_t)a3, (size_t)want * 32))) {
+        // Validate the FULL requested buffer up front (a blocking reap may fill up to nr_max events).
+        if (nr_max > 0 && (!ev || !host_range_mapped((uintptr_t)a3, (size_t)nr_max * 32))) {
             G_RET(c) = (uint64_t)(-EFAULT);
             break;
         }
-        long got = 0;
-        while (got < want) {
-            struct aio_evt *e = &x->q[x->head];
-            uint8_t *o = ev + (size_t)got * 32;
-            *(uint64_t *)(o + 0) = e->data;
-            *(uint64_t *)(o + 8) = e->obj;
-            *(int64_t *)(o + 16) = e->res;
-            *(int64_t *)(o + 24) = e->res2;
-            x->head = (x->head + 1) % x->cap;
-            x->n--;
-            got++;
+        long got = aio_drain(x, ev, nr_max);
+        // BLOCK (bounded) when the caller wanted min_nr>got. Our AIO completes synchronously, but a
+        // completion can still be pushed by a *concurrent* guest thread's io_submit into this same ctx.
+        // Returning 0 instantly made InnoDB's io-handler thread busy-spin at 100% CPU on io_getevents;
+        // under load that spinner starves the shutdown thread it waits on and the whole process hangs
+        // forever (mariadb initdb, #305 -- uncontended runs won the scheduler race and exited, which is
+        // why it was intermittent/load-gated). Poll-sleep up to the guest timeout like a real kernel so
+        // the reaper sleeps instead of spinning; the timeout is capped so shutdown stays responsive and
+        // a NULL ("block forever") timeout can never wedge the engine.
+        if (min_nr > 0 && got < min_nr) {
+            long long budget_ns = 50LL * 1000000LL; // NULL timeout -> block, but return periodically
+            if (a4 && host_range_mapped((uintptr_t)a4, 16)) {
+                long long ts_sec = *(const int64_t *)(uintptr_t)a4;
+                long long ts_nsec = *(const int64_t *)((uintptr_t)a4 + 8);
+                long long req = ts_sec * 1000000000LL + ts_nsec;
+                if (req < budget_ns) budget_ns = req < 0 ? 0 : req; // honor a shorter guest timeout
+            }
+            long long waited = 0;
+            while (got < min_nr && waited < budget_ns) {
+                struct timespec slice = {0, 1000000}; // 1 ms poll granularity
+                nanosleep(&slice, NULL);
+                waited += 1000000;
+                got += aio_drain(x, ev + (size_t)got * 32, nr_max - got);
+            }
         }
-        // min_nr is best-effort: submit already completed everything, so we return what's queued
-        // immediately rather than blocking (any waiter would just spin; nginx passes min_nr<=queued).
         G_RET(c) = (uint64_t)got;
         break;
     }
