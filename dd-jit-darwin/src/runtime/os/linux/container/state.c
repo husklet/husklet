@@ -2,6 +2,13 @@
 #include "../../container_parse.h" // strict numeric parsing (the config trust boundary; see LAUNCH.md)
 #include <sys/sysctl.h>            // sysctlbyname("hw.activecpu") -- true host core count (see container_online_cpus)
 
+// DD_NFD: capacity of every per-guest-fd state table (memfd seals, eventfd/epoll/timerfd, socket
+// tracking, pty/lock/pipe tables, ...). Was 1024, which HARD-failed for guests that use high fd numbers:
+// Chromium's Mojo shared-memory channel creates a memfd whose fd is >=1024, and F_ADD_SEALS then returned
+// EINVAL (fd out of the tracked range) and the browser aborted (channel_linux.cc). 65536 covers a realistic
+// RLIMIT_NOFILE; the tables are zero-init BSS so the cost is a few MB of never-resident address space.
+#define DD_NFD 65536
+
 // ---- container namespace + cgroup state (SentryConfig: ddockerd -> jit) ----
 // UTS ns: container hostname (uname/sethostname); "" = host default
 static char g_hostname[65] = "";
@@ -13,6 +20,35 @@ static int g_pids_max = 0;
 static int g_cpu_max = 0;
 // docker --read-only: writes to the rootfs/overlay-upper jail fail EROFS (/proc /dev /sys /tmp /run stay writable).
 static int g_rootfs_ro = 0;
+// Runtime `mount -o remount,ro <subpath>` targets: a guest ABSOLUTE path whose subtree is enforced
+// read-only (write-intent syscalls -> EROFS), independent of the bind-vol table and the whole-rootfs
+// g_rootfs_ro. This is a PATH-based deny (like rootfs_ro_denies) so it enforces RO without perturbing
+// read resolution / overlay merge at all. Append-only, count published LAST so a concurrent path
+// resolve sees either the old count or a fully-written entry; entries are never removed (a container
+// never downgrades a subtree remount,ro back to rw in practice).
+static char g_ro_subpath[16][256];
+static int g_nro_subpath = 0;
+// 1 if `abs` falls under a runtime remount,ro subtree.
+static int ro_subpath_denies(const char *abs) {
+    int n = __atomic_load_n(&g_nro_subpath, __ATOMIC_ACQUIRE);
+    if (n <= 0 || !abs || abs[0] != '/') return 0;
+    for (int i = 0; i < n; i++) {
+        size_t L = strlen(g_ro_subpath[i]);
+        if (!strncmp(abs, g_ro_subpath[i], L) && (abs[L] == 0 || abs[L] == '/')) return 1;
+    }
+    return 0;
+}
+// Register a subtree as read-only (runtime remount,ro). Dedupes; 0 on success, -1 if the table is full.
+static int ro_subpath_add(const char *abs) {
+    if (!abs || abs[0] != '/') return -1;
+    for (int i = 0; i < g_nro_subpath; i++)
+        if (!strcmp(g_ro_subpath[i], abs)) return 0;
+    if (g_nro_subpath >= 16) return -1;
+    int i = g_nro_subpath;
+    snprintf(g_ro_subpath[i], sizeof g_ro_subpath[i], "%s", abs);
+    __atomic_store_n(&g_nro_subpath, i + 1, __ATOMIC_RELEASE);
+    return 0;
+}
 // docker --ulimit overrides, indexed by Linux RLIMIT_* resource number; .set gates the override.
 #define DD_RLIM_MAX 16
 
@@ -512,7 +548,7 @@ static struct {
 
 static int g_nportmap = 0;
 // fd -> the container port it bound (for getsockname)
-static uint16_t g_fd_cport[1024];
+static uint16_t g_fd_cport[DD_NFD];
 
 static uint16_t pm_host(uint16_t c) {
     for (int i = 0; i < g_nportmap; i++)

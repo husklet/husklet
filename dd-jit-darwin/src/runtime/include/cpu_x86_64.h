@@ -26,8 +26,9 @@ struct cpu {
     volatile uint64_t irq;
     int exited;
     int exit_code;
-    int redirect;  // execve/sigreturn set rip directly -> don't advance
-    uint64_t ctid; // CLONE_CHILD_CLEARTID
+    int redirect;         // execve/sigreturn set rip directly -> don't advance
+    uint64_t ctid;        // CLONE_CHILD_CLEARTID
+    uint64_t robust_list; // set_robust_list head: walked on exit for OWNER_DIED + robust-mutex waiter wake
     uint64_t sigmask;
     uint64_t alt_sp, alt_size, alt_flags; // sigaltstack (C-only; used by os/linux service)
     uint64_t dbg_ibsrc;                   // debug: guest PC of the last indirect branch (ret/jmp/call reg)
@@ -83,6 +84,12 @@ struct cpu {
     // fastclk_resume==0 => disarmed (no interference with ordinary guest faults). Non-baked (struct tail).
     uint64_t fastclk_ptr;
     uint64_t fastclk_resume;
+    // x86 DF (direction flag, EFLAGS bit 10) RUNTIME substrate. std(FD)/cld(FC) store 1/0 here and popfq(9D)
+    // restores it from the popped bit10, so the direction persists across block boundaries and is readable at
+    // runtime by the string-op lowering (movs/stos/lods/cmps/scas pick +w vs -w by loading this) and by
+    // pushfq(9C). Formerly DF was translate-time-only (g_df), which ran a cross-block `std; rep movs` FORWARD.
+    // 0 = forward (SysV ABI entry invariant; zero-initialized cpu => forward by default), 1 = backward.
+    uint64_t df;
 };
 
 #define OFF_FCPTR ((int)__builtin_offsetof(struct cpu, fastclk_ptr))
@@ -94,6 +101,7 @@ _Static_assert(__builtin_offsetof(struct cpu, fastclk_resume) % 8 == 0 &&
 _Static_assert(__builtin_offsetof(struct cpu, vdirty) % 8 == 0 && __builtin_offsetof(struct cpu, vdirty) <= 32760,
                "OFF_VDIRTY out of ldr/str imm12 range");
 #define OFF_ID ((int)__builtin_offsetof(struct cpu, idflag))
+#define OFF_DF ((int)__builtin_offsetof(struct cpu, df))
 #define OFF_PF ((int)__builtin_offsetof(struct cpu, pf))
 #define OFF_AF ((int)__builtin_offsetof(struct cpu, af))
 #define OFF_EXITED ((int)__builtin_offsetof(struct cpu, exited)) // int exited; int exit_code (the next word)

@@ -8,6 +8,7 @@
 //! here so `lib.rs` has a single import site.
 
 mod container;
+mod device;
 mod engine;
 mod error;
 mod handle;
@@ -15,6 +16,7 @@ mod image;
 mod runtime;
 
 pub use container::{Container, ContainerBuilder, DEFAULT_GUEST_PATH};
+pub use device::{DeviceMount, DeviceProvider, DeviceRequest};
 pub use engine::{Launched, LogChunk, RunningContainer, Stdio3};
 pub use error::Error;
 pub use handle::{ExitStatus, RunHandle};

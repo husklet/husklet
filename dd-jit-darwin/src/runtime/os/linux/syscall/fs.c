@@ -131,12 +131,12 @@ static const char *shm_hostpath(const char *guest, char *buf, size_t n) {
 // (/dev/pts/N, N == the master fd via TIOCGPTN). This reproduces exact Linux master semantics WITHOUT
 // holding a slave open -- which would defeat the master read()/poll HUP-on-last-slave-close that script /
 // tmux depend on to notice the child exited.
-static uint8_t g_ptm_tset[1024], g_ptm_wset[1024];
-static struct termios g_ptm_term[1024]; // host-form termios last set on the master
-static struct winsize g_ptm_win[1024];  // winsize last set on the master
+static uint8_t g_ptm_tset[DD_NFD], g_ptm_wset[DD_NFD];
+static struct termios g_ptm_term[DD_NFD]; // host-form termios last set on the master
+static struct winsize g_ptm_win[DD_NFD];  // winsize last set on the master
 
 static void ptm_clear(int fd) {
-    if (fd >= 0 && fd < 1024) {
+    if (fd >= 0 && fd < DD_NFD) {
         g_ptm_tset[fd] = 0;
         g_ptm_wset[fd] = 0;
     }
@@ -145,7 +145,7 @@ static void ptm_clear(int fd) {
 // Re-apply a master's cached termios/winsize onto a freshly-opened slave fd (Linux: the slave shares the
 // master's line discipline). `ptn` is the pts number, which dd defines to equal the master fd.
 static void ptm_apply_to_slave(int ptn, int slavefd) {
-    if (ptn < 0 || ptn >= 1024 || slavefd < 0) return;
+    if (ptn < 0 || ptn >= DD_NFD || slavefd < 0) return;
     if (g_ptm_tset[ptn]) tcsetattr(slavefd, TCSANOW, &g_ptm_term[ptn]);
     if (g_ptm_wset[ptn]) ioctl(slavefd, TIOCSWINSZ, &g_ptm_win[ptn]);
 }
@@ -162,7 +162,7 @@ static void ptm_apply_to_slave(int ptn, int slavefd) {
 // close(fd) itself -- the caller owns the real fd's lifetime. Safe on a non-emulated fd (every branch is
 // guarded / idempotent). Mirrors case 57's teardown exactly so close(2) semantics are unchanged.
 static void fd_reset_emul(int fd) {
-    if (fd >= 0 && fd < 1024) {
+    if (fd >= 0 && fd < DD_NFD) {
         if (g_eventfd_peer[fd]) {
             close(g_eventfd_peer[fd] - 1);
             g_eventfd_peer[fd] = 0;
@@ -184,6 +184,10 @@ static void fd_reset_emul(int fd) {
         g_ovldir[fd][0] = 0;
         g_opath[fd] = 0;
         g_devfull[fd] = 0;
+#ifdef __APPLE__
+        if (g_devdri[fd]) dd_gpu_free_fd(fd); // release the render node's IOSurfaces on close
+#endif
+        g_devdri[fd] = 0;
         g_lo_port[fd] = 0;
         g_sock_stream[fd] = 0;
         g_sock_conn[fd] = 0;
@@ -191,6 +195,10 @@ static void fd_reset_emul(int fd) {
         g_sock_dgram[fd] = 0;
         seq_send_eof(fd);
         g_sock_seqpacket[fd] = 0;
+        g_sock_pair_peer[fd] = 0;
+        g_sock_seq_wrote[fd] = 0;
+        g_sock_peer_pid[fd] = 0;
+        g_sock_passcred[fd] = 0;
         g_br_port[fd] = 0;
         g_br_ip[fd] = 0;
         g_tcp_lport[fd] = 0; // drop a reused fd's stale listener so /proc/net/tcp doesn't show a ghost
@@ -315,6 +323,87 @@ static long ddx_list(const char *host, char *out, size_t sz, int opt) {
     return (long)need;
 }
 
+// mount(2). The historical stub returned 0 unconditionally, so a container entrypoint's `mount --bind`,
+// `mount -t tmpfs`, and `mount -o remount,ro` silently did NOTHING -- wrong dir content and, worse, an
+// UNENFORCED read-only mount (a silent correctness/security hole). Implement the cases an entrypoint
+// actually issues against dd's vfs: bind = a bind-vol alias to the source's host backing; tmpfs/ramfs = a
+// fresh empty host scratch dir; remount,ro = enforce RO (whole-rootfs g_rootfs_ro / a bind-vol's ro flag /
+// a per-subtree path-based RO list). Pseudo-filesystems dd already synthesizes (proc/sysfs/cgroup/devpts/
+// mqueue/...) are a genuine no-op success (they ARE present at their mount point). Anything dd cannot
+// materialize returns the honest Linux errno instead of a fake 0. MS_RDONLY=1 REMOUNT=0x20 BIND=0x1000.
+static int64_t svc_mount(struct cpu *c, uint64_t a_src, uint64_t a_tgt, uint64_t a_fstype, uint64_t a_flags) {
+    (void)c;
+    if (!g_rootfs) return 0; // bare (no-jail) mode: nothing to alias into -> keep the legacy success
+    const char *src = (const char *)a_src, *tgtraw = (const char *)a_tgt, *fstype = (const char *)a_fstype;
+    unsigned long fl = (unsigned long)a_flags;
+    if (!tgtraw || guest_bad_ptr((uintptr_t)tgtraw, 1)) return -EFAULT;
+    char tgt[4200];
+    guest_abspath_at(-100, tgtraw, tgt, sizeof tgt); // guest-absolute, lexically normalized
+    if (tgt[0] != '/') return -EINVAL;
+
+    // MS_REMOUNT: change an existing mount's flags. Enforce read-only; ignore other churn.
+    if (fl & 0x20) {
+        int vi = jail_match(tgt);
+        if (fl & 0x1) { // remount,ro
+            if (!strcmp(tgt, "/")) {
+                g_rootfs_ro = 1;
+                return 0;
+            }
+            if (vi >= 0) {
+                g_vols[vi].ro = 1;
+                return 0;
+            }
+            return ro_subpath_add(tgt) == 0 ? 0 : -ENOMEM;
+        }
+        // remount,rw (relax where cleanly possible; a path-based RO subtree can't be un-listed race-free).
+        if (!strcmp(tgt, "/"))
+            g_rootfs_ro = 0;
+        else if (vi >= 0)
+            g_vols[vi].ro = 0;
+        return 0;
+    }
+
+    // MS_BIND: alias the target subtree to the source path's host backing.
+    if (fl & 0x1000) {
+        if (!src || guest_bad_ptr((uintptr_t)src, 1)) return -EFAULT;
+        char sabs[4200], shost[4200];
+        guest_abspath_at(-100, src, sabs, sizeof sabs);
+        if (sabs[0] != '/') return -EINVAL;
+        if (!secure_resolve(sabs, shost, sizeof shost, 0)) return -EACCES; // escaped the jail
+        struct stat st;
+        if (stat(shost, &st) != 0) return -ENOENT; // Linux: bind of a missing source -> ENOENT
+        return rt_add_vol(tgt, shost, (fl & 0x1) ? 1 : 0);
+    }
+
+    // A named filesystem type.
+    if (fstype && guest_bad_ptr((uintptr_t)fstype, 1)) return -EFAULT;
+    char ft[64];
+    ft[0] = 0;
+    if (fstype)
+        for (size_t k = 0; k < sizeof ft - 1 && fstype[k]; k++) {
+            ft[k] = fstype[k];
+            ft[k + 1] = 0;
+        }
+    // Pseudo-filesystems dd already serves at their canonical mount points -> a real no-op success.
+    if (!strcmp(ft, "proc") || !strcmp(ft, "sysfs") || !strcmp(ft, "cgroup") || !strcmp(ft, "cgroup2") ||
+        !strcmp(ft, "devpts") || !strcmp(ft, "mqueue") || !strcmp(ft, "devtmpfs") || !strcmp(ft, "debugfs") ||
+        !strcmp(ft, "securityfs") || !strcmp(ft, "tracefs") || !strcmp(ft, "configfs") || !strcmp(ft, "bpf") ||
+        !strcmp(ft, "fusectl") || !strcmp(ft, "pstore") || !strcmp(ft, "sysctl"))
+        return 0;
+    // tmpfs / ramfs: back the mount point with a fresh, empty host scratch dir.
+    if (!strcmp(ft, "tmpfs") || !strcmp(ft, "ramfs")) {
+        char tmpl[] = "/tmp/.ddtmpfsXXXXXX";
+        if (!mkdtemp(tmpl)) return -errno;
+        int64_t r = rt_add_vol(tgt, tmpl, (fl & 0x1) ? 1 : 0);
+        if (r < 0) rmdir(tmpl);
+        return r;
+    }
+    if (ft[0] == 0) return -EINVAL; // mount without a type, bind, or remount is invalid
+    // A real block/overlay/nfs/... filesystem dd cannot materialize -> the honest errno, NOT a fake 0 that
+    // would leave the mount point showing the wrong (still-unmounted) content.
+    return -ENODEV;
+}
+
 static int svc_fs(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4,
                   uint64_t a5) {
     switch (nr) {
@@ -430,6 +519,24 @@ static int svc_fs(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t
         // it worked there). This makes both forms match, fixing musl tmux/script/openpty and any high-bit ioctl.
         unsigned long rq = (uint32_t)a1;
         void *arg = (void *)a2;
+        // GPU rung 2 (opt-in): the dd render node services DD_IOCTL_GPU_ALLOC (host-IOSurface buffer).
+        // Gated on the per-fd render-node tag, so no other fd/ioctl is affected.
+        if (gpu_iosurface_on() && fd >= 0 && fd < DD_NFD && g_devdri[fd] && rq == DD_IOCTL_GPU_ALLOC) {
+            G_RET(c) = (uint64_t)dd_gpu_alloc(fd, arg);
+            break;
+        }
+        // DRM ioctls chromium/Mesa(kms_swrast) issue on the render node once it opens the discovered node:
+        // drmGetVersion (VERSION), GET_CAP, SET_CLIENT_CAP, and the dumb-buffer + PRIME set that Mesa's
+        // software GBM winsys uses to allocate/map/export the window buffer (CREATE/MAP/DESTROY_DUMB,
+        // GEM_CLOSE, PRIME_HANDLE_TO_FD). Gated on the render-node tag.
+        if (gpu_iosurface_on() && fd >= 0 && fd < DD_NFD && g_devdri[fd] &&
+            (rq == 0xc0406400 || rq == 0xc0106c0c || rq == 0x400c6d0d || rq == 0xc02064b2 ||
+             rq == 0xc01064b3 || rq == 0xc00464b4 || rq == 0x40086409 || rq == 0xc00c642d)) {
+            int64_t rr = drm_synth_ioctl(fd, rq, arg);
+            if (drm_dbg()) fprintf(stderr, "[DRMSYNTH] ioctl fd=%d rq=%#lx -> %lld\n", fd, rq, (long long)rr);
+            G_RET(c) = (uint64_t)rr;
+            break;
+        }
         // macOS pty MASTERS reject every termios/winsize ioctl with ENOTTY -- unlike Linux, where the master
         // accepts them and they act on the shared line discipline (apt/dpkg's StartPtyMagic does TIOCSWINSZ +
         // tcsetattr(TCSANOW) on the master; that ENOTTY is apt's "Setting TIOCSWINSZ for master fd N failed"
@@ -1035,6 +1142,11 @@ static int svc_fs(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t
         }
         int fl = (a4 & 0x400) ? AT_SYMLINK_FOLLOW : 0;
         if (g_rootfs) {
+            // Copy a lower-only SOURCE up first. jail_at(create=1) resolves the source to its UPPER parent
+            // dir, but a file that still lives only in the read-only lower is absent there, so linkat would
+            // ENOENT (dpkg backs up e.g. /usr/bin/perl via link() on every package upgrade). Mirrors what
+            // rename(2) already does for its source. No-op outside overlay mode / when already up.
+            overlay_copyup_at((int)a0, (const char *)a1);
             // both ends confined via TOCTOU-free resolver
             char ofin[512], nfin[512];
             int opfd = jail_at((int)a0, (const char *)a1, ofin, sizeof ofin, 1);
@@ -1163,10 +1275,58 @@ static int svc_fs(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t
         G_RET(c) = renameatx_np(ATFD(a0), op, ATFD(a2), np, rxflags) < 0 ? (uint64_t)(-errno) : 0;
         break;
     }
-    case 40:
-    case 39:
-    // mount / umount2 / pivot_root -> ok
-    case 41: G_RET(c) = 0; break;
+    // mount(source,target,fstype,flags,data): implement bind/tmpfs/remount,ro against dd's vfs (svc_mount);
+    // a real no-op stub silently gave wrong content + unenforced RO.
+    case 40: G_RET(c) = (uint64_t)svc_mount(c, a0, a1, a2, a3); break;
+    // umount2(target,flags): detach a runtime bind/tmpfs volume mounted exactly there. A pseudo-mount dd
+    // keeps serving (not a registered volume) stays present -> success (unmounting it is a harmless no-op
+    // in dd's model; the content is synthetic, not backed by the removed mount).
+    case 39: {
+        if (!g_rootfs) {
+            G_RET(c) = 0;
+            break;
+        }
+        if (!a0 || guest_bad_ptr(a0, 1)) {
+            G_RET(c) = (uint64_t)(int64_t)(-EFAULT);
+            break;
+        }
+        char utgt[4200];
+        guest_abspath_at(-100, (const char *)a0, utgt, sizeof utgt);
+        rt_del_vol(utgt); // -EINVAL if not a registered volume; treated as a no-op success below
+        G_RET(c) = 0;
+        break;
+    }
+    // pivot_root(new_root,put_old): re-root the guest at new_root, confined within the rootfs jail (modeled
+    // as a chroot -- dd has one root fd; put_old is not separately materialized). Validate new_root exists
+    // as a directory so a bad target reports ENOENT/ENOTDIR instead of a fake success.
+    case 41: {
+        if (!g_rootfs) {
+            G_RET(c) = 0;
+            break;
+        }
+        if (!a0 || guest_bad_ptr(a0, 1)) {
+            G_RET(c) = (uint64_t)(int64_t)(-EFAULT);
+            break;
+        }
+        char nrabs[4200], nrhost[4200];
+        guest_abspath_at(-100, (const char *)a0, nrabs, sizeof nrabs);
+        secure_resolve(nrabs, nrhost, sizeof nrhost, 0);
+        struct stat nst;
+        if (stat(nrhost, &nst) < 0) {
+            G_RET(c) = (uint64_t)(int64_t)(-errno);
+            break;
+        }
+        if (!S_ISDIR(nst.st_mode)) {
+            G_RET(c) = (uint64_t)(int64_t)(-ENOTDIR);
+            break;
+        }
+        char nc[4200];
+        chroot_apply(nrabs, nc, sizeof nc);
+        snprintf(g_chroot, sizeof g_chroot, "%s", nc[1] ? nc : "");
+        rc_reset();
+        G_RET(c) = 0;
+        break;
+    }
     case 43:
     case 44: {
         // statfs(path,buf)/fstatfs(fd,buf): wrap the host call, then TRANSLATE the macOS struct statfs
@@ -1242,6 +1402,26 @@ static int svc_fs(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t
         break;
     }
     case 46: {
+        // memfd sealing: F_SEAL_SHRINK(0x2) blocks a size-reducing ftruncate, F_SEAL_GROW(0x4) blocks a
+        // size-increasing one -> EPERM (matching the write/pwrite F_SEAL_WRITE guards). A sealed shared
+        // buffer must not be resized under a receiver (SIGBUS/OOB). Compare against the CURRENT size.
+        if ((int)a0 >= 0 && (int)a0 < DD_NFD && (g_memfd_seal[(int)a0] & 0x6)) {
+            off_t nlen = (off_t)a1, cur;
+            struct memf *sm = memf_get((int)a0);
+            struct stat ss;
+            if (sm)
+                cur = (off_t)sm->size;
+            else if (fstat((int)a0, &ss) == 0)
+                cur = ss.st_size;
+            else {
+                G_RET(c) = (uint64_t)(-errno);
+                break;
+            }
+            if ((nlen < cur && (g_memfd_seal[(int)a0] & 0x2)) || (nlen > cur && (g_memfd_seal[(int)a0] & 0x4))) {
+                G_RET(c) = (uint64_t)(-EPERM);
+                break;
+            }
+        }
         // ftruncate on a RAM-backed scratch file (spill past the cap)
         if (memf_get((int)a0) && memf_room_or_spill((int)a0, (off_t)a1)) {
             struct memf *m = g_memf[(int)a0];
@@ -1271,31 +1451,201 @@ static int svc_fs(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t
         // ftruncate
     }
     case 47: {
-        // fallocate(fd,mode,offset,len). FALLOC_FL_PUNCH_HOLE(2)|KEEP_SIZE(1): deallocate+zero a range
-        // via macOS F_PUNCHHOLE (file stays the same size, the range reads as zeros).
-        memf_materialize((int)a0); // rare on scratch: flush RAM cache, then use the host fallocate path
-        int mode = (int)a1;
+        // fallocate(fd,mode,offset,len). Implements the range MODES Linux defines -- the historical stub
+        // ignored ZERO_RANGE/COLLAPSE_RANGE/INSERT_RANGE (fell through to a plain no-op extend) and
+        // swallowed the ftruncate ENOSPC, i.e. it reported reservation/modification SUCCESS while the data
+        // was untouched (silent corruption + a faked space reservation). macOS has no fallocate(2), so:
+        // PUNCH_HOLE via F_PUNCHHOLE; ZERO_RANGE via a zero-fill; COLLAPSE/INSERT via a correct read-shift-
+        // write (macOS truly can't collapse/insert a plain file, so do the shift by hand rather than no-op).
+        // FALLOC_FL: KEEP_SIZE=0x01 PUNCH_HOLE=0x02 COLLAPSE_RANGE=0x08 ZERO_RANGE=0x10 INSERT_RANGE=0x20
+        //            UNSHARE_RANGE=0x40. memfd seals: SHRINK(0x2) blocks a size-reducing op, GROW(0x4) a
+        //            size-increasing one, WRITE(0x8) any data modification -> EPERM.
+        int fd = (int)a0, mode = (int)a1;
         off_t off = (off_t)a2, len = (off_t)a3;
-        if (mode & 2) {
+        if (off < 0 || len <= 0 || (mode & ~0x7f)) { // negative/zero range or unknown mode bit -> EINVAL
+            G_RET(c) = (uint64_t)(-EINVAL);
+            break;
+        }
+        int seal = (fd >= 0 && fd < DD_NFD) ? g_memfd_seal[fd] : 0;
+        memf_materialize(fd); // flush any RAM cache; every branch below works on the real host fd
+        struct stat s;
+        if (fstat(fd, &s) < 0) {
+            G_RET(c) = (uint64_t)(-errno);
+            break;
+        }
+        off_t cur = s.st_size;
+        char zb[65536];
+        // ---- PUNCH_HOLE (keep size, range reads as zeros) ----
+        if (mode & 0x02) {
+            if (!(mode & 0x01)) { // PUNCH_HOLE requires KEEP_SIZE
+                G_RET(c) = (uint64_t)(-EINVAL);
+                break;
+            }
+            if (seal & 0x8) {
+                G_RET(c) = (uint64_t)(-EPERM);
+                break;
+            }
 #ifdef F_PUNCHHOLE
             struct fpunchhole fph;
             memset(&fph, 0, sizeof fph);
             fph.fp_offset = off;
             fph.fp_length = len;
-            int r = fcntl((int)a0, F_PUNCHHOLE, &fph);
-            fd_evict((int)a0);
+            int r = fcntl(fd, F_PUNCHHOLE, &fph);
+            // F_PUNCHHOLE needs block-aligned offset/length; on EINVAL fall back to a plain zero-fill of the
+            // overlap with the file (reads-as-zero is the observable contract) rather than reporting failure.
+            if (r < 0 && errno == EINVAL) {
+                memset(zb, 0, sizeof zb);
+                off_t e = off + len;
+                if (e > cur) e = cur; // KEEP_SIZE: never extend
+                int ok = 1;
+                for (off_t p = off; p < e;) {
+                    size_t w = (size_t)((e - p) < (off_t)sizeof zb ? (e - p) : (off_t)sizeof zb);
+                    ssize_t k = pwrite(fd, zb, w, p);
+                    if (k < 0) {
+                        ok = 0;
+                        break;
+                    }
+                    p += k;
+                }
+                r = ok ? 0 : -1;
+            }
+            fd_evict(fd);
             G_RET(c) = r < 0 ? (uint64_t)(-errno) : 0;
 #else
             G_RET(c) = (uint64_t)(-EOPNOTSUPP);
 #endif
             break;
         }
-        struct stat s;
-        // plain fallocate: extend (no shrink)
-        off_t end = off + len;
-        if (fstat((int)a0, &s) == 0 && s.st_size < end && ftruncate((int)a0, end) < 0) {}
-        fd_evict((int)a0);
-        G_RET(c) = 0;
+        // ---- ZERO_RANGE (zero the range; extend the file to cover it unless KEEP_SIZE) ----
+        if (mode & 0x10) {
+            off_t end = off + len;
+            if (seal & 0x8) {
+                G_RET(c) = (uint64_t)(-EPERM);
+                break;
+            }
+            if (!(mode & 0x01) && end > cur && (seal & 0x4)) { // would grow, GROW-sealed
+                G_RET(c) = (uint64_t)(-EPERM);
+                break;
+            }
+            if (!(mode & 0x01) && end > cur && ftruncate(fd, end) < 0) { // grow first (do NOT swallow ENOSPC)
+                G_RET(c) = (uint64_t)(-errno);
+                break;
+            }
+            off_t ze = (mode & 0x01) ? (end < cur ? end : cur) : end; // KEEP_SIZE: only zero within old EOF
+            memset(zb, 0, sizeof zb);
+            for (off_t p = off; p < ze;) {
+                size_t w = (size_t)((ze - p) < (off_t)sizeof zb ? (ze - p) : (off_t)sizeof zb);
+                ssize_t k = pwrite(fd, zb, w, p);
+                if (k < 0) {
+                    G_RET(c) = (uint64_t)(-errno);
+                    goto fallocate_done;
+                }
+                p += k;
+            }
+            fd_evict(fd);
+            G_RET(c) = 0;
+            break;
+        }
+        // ---- COLLAPSE_RANGE (remove [off,off+len) and shift the tail down; file shrinks by len) ----
+        if (mode & 0x08) {
+            off_t end = off + len;
+            if (end >= cur) { // Linux: offset+len must be strictly inside the file
+                G_RET(c) = (uint64_t)(-EINVAL);
+                break;
+            }
+            if (seal & (0x2 | 0x8)) { // shrinks + moves data
+                G_RET(c) = (uint64_t)(-EPERM);
+                break;
+            }
+            // Copy the tail forward (dst < src, forward scan is safe) then truncate.
+            for (off_t rp = end, wp = off; rp < cur;) {
+                size_t w = (size_t)((cur - rp) < (off_t)sizeof zb ? (cur - rp) : (off_t)sizeof zb);
+                ssize_t k = pread(fd, zb, w, rp);
+                if (k <= 0) {
+                    G_RET(c) = (uint64_t)(k < 0 ? -errno : -EIO);
+                    goto fallocate_done;
+                }
+                ssize_t wk = pwrite(fd, zb, (size_t)k, wp);
+                if (wk < 0) {
+                    G_RET(c) = (uint64_t)(-errno);
+                    goto fallocate_done;
+                }
+                rp += k;
+                wp += wk;
+            }
+            if (ftruncate(fd, cur - len) < 0) {
+                G_RET(c) = (uint64_t)(-errno);
+                break;
+            }
+            fd_evict(fd);
+            G_RET(c) = 0;
+            break;
+        }
+        // ---- INSERT_RANGE (insert `len` zero bytes at off; existing tail shifts up; file grows by len) ----
+        if (mode & 0x20) {
+            if (off >= cur) { // Linux: offset must be strictly inside the file (else use plain fallocate)
+                G_RET(c) = (uint64_t)(-EINVAL);
+                break;
+            }
+            if (seal & (0x4 | 0x8)) { // grows + moves data
+                G_RET(c) = (uint64_t)(-EPERM);
+                break;
+            }
+            if (ftruncate(fd, cur + len) < 0) { // grow to the new size (do NOT swallow ENOSPC)
+                G_RET(c) = (uint64_t)(-errno);
+                break;
+            }
+            // Move the tail UP: copy backward (from the end) so the grown region isn't overwritten early.
+            off_t remain = cur - off;
+            for (off_t done = 0; done < remain;) {
+                size_t w = (size_t)((remain - done) < (off_t)sizeof zb ? (remain - done) : (off_t)sizeof zb);
+                off_t rp = cur - done - (off_t)w, wp = rp + len;
+                ssize_t k = pread(fd, zb, w, rp);
+                if (k <= 0) {
+                    G_RET(c) = (uint64_t)(k < 0 ? -errno : -EIO);
+                    goto fallocate_done;
+                }
+                ssize_t wk = pwrite(fd, zb, (size_t)k, wp);
+                if (wk < 0) {
+                    G_RET(c) = (uint64_t)(-errno);
+                    goto fallocate_done;
+                }
+                done += k;
+            }
+            // Zero the freshly inserted gap.
+            memset(zb, 0, sizeof zb);
+            for (off_t p = off, e = off + len; p < e;) {
+                size_t w = (size_t)((e - p) < (off_t)sizeof zb ? (e - p) : (off_t)sizeof zb);
+                ssize_t k = pwrite(fd, zb, w, p);
+                if (k < 0) {
+                    G_RET(c) = (uint64_t)(-errno);
+                    goto fallocate_done;
+                }
+                p += k;
+            }
+            fd_evict(fd);
+            G_RET(c) = 0;
+            break;
+        }
+        // ---- plain fallocate (mode 0 / KEEP_SIZE / UNSHARE_RANGE): reserve space; extend unless KEEP_SIZE.
+        {
+            off_t end = off + len;
+            if (end > cur) {
+                if (seal & 0x4) { // GROW-sealed
+                    G_RET(c) = (uint64_t)(-EPERM);
+                    break;
+                }
+                if (!(mode & 0x01) && ftruncate(fd, end) < 0) { // extend; surface ENOSPC (was swallowed)
+                    G_RET(c) = (uint64_t)(-errno);
+                    break;
+                }
+            }
+            fd_evict(fd);
+            G_RET(c) = 0;
+        }
+        break;
+    fallocate_done:
+        fd_evict(fd);
         break;
     }
     case 49: {
@@ -1328,7 +1678,7 @@ static int svc_fs(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t
     // canonical host path in g_fdpath is the SAME key case 79 memoizes under).
     case 52: {
         int r = fchmod((int)a0, (mode_t)a1);
-        if (r == 0 && (int)a0 >= 0 && (int)a0 < 1024 && g_fdpath[(int)a0][0]) fc_evict_path(g_fdpath[(int)a0]);
+        if (r == 0 && (int)a0 >= 0 && (int)a0 < DD_NFD && g_fdpath[(int)a0][0]) fc_evict_path(g_fdpath[(int)a0]);
         G_RET(c) = r < 0 ? (uint64_t)(-errno) : 0;
         break;
     }
@@ -1494,7 +1844,7 @@ static int svc_fs(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t
                 if (e != EEXIST) break;
             }
             close(dfd);
-            if (fd >= 0 && fd < 1024) {
+            if (fd >= 0 && fd < DD_NFD) {
                 g_fdpath[fd][0] = 0;   // anonymous: no tracked path
                 memf_attach(fd, 0, 0); // O_TMPFILE is unambiguously private scratch -> back it with RAM
             }
@@ -1649,9 +1999,45 @@ static int svc_fs(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t
                 int d = syscpu_dir_open(rp);
                 if (d != -2) {
                     if (d >= 0 && (lf & 0x80000)) fcntl(d, F_SETFD, FD_CLOEXEC); // honor O_CLOEXEC
-                    if (d >= 0 && d < 1024) g_opath[d] = is_opath;               // O_PATH fd -> I/O EBADF
+                    if (d >= 0 && d < DD_NFD) g_opath[d] = is_opath;               // O_PATH fd -> I/O EBADF
                     G_RET(c) = d < 0 ? (uint64_t)(-errno) : (uint64_t)d;
                     break;
+                }
+            }
+            // GPU rung 2 (opt-in): the DRM render-node discovery + allocation path. Inert unless
+            // DD_GPU_IOSURFACE is set (existing workloads never touch /dev/dri or the DRM sysfs).
+            if (rp && gpu_iosurface_on()) {
+                int drm_minor = -1;
+                // synthesize /dev/dri/{renderD128,card0} as a placeholder fd tagged as a render node; its
+                // DD_IOCTL_GPU_ALLOC / DRM ioctls (fs.c case 29) service the IOSurface + version/cap probes.
+                if (!strncmp(rp, "/dev/dri/", 9) && drm_dev_minor(rp + 9, &drm_minor)) {
+                    drm_trace("open", rp, 1);
+                    int d = open("/dev/null", O_RDWR); // backing is irrelevant; the ioctl carries the payload
+                    if (d >= 0 && d < DD_NFD) g_devdri[d] = (uint8_t)(drm_minor + 1); // minor+1 (fstat fixup)
+                    if (d >= 0 && (lf & 0x80000)) fcntl(d, F_SETFD, FD_CLOEXEC); // honor O_CLOEXEC
+                    G_RET(c) = d < 0 ? (uint64_t)(-errno) : (uint64_t)d;
+                    break;
+                }
+                // the minimal DRM sysfs tree libdrm's drmGetDevices2 walks: opendir the class/drm dirs,
+                // and serve uevent/dev attribute files as content fds.
+                if (!strncmp(rp, "/sys/dev/char/226:", 18) || !strncmp(rp, "/sys/class/drm", 14)) {
+                    int dd = drm_dir_open(rp);
+                    if (dd != -2) {
+                        drm_trace("opendir", rp, dd >= 0);
+                        if (dd >= 0 && (lf & 0x80000)) fcntl(dd, F_SETFD, FD_CLOEXEC);
+                        if (dd >= 0 && dd < 1024) g_opath[dd] = is_opath;
+                        G_RET(c) = dd < 0 ? (uint64_t)(-errno) : (uint64_t)dd;
+                        break;
+                    }
+                    char cb[256];
+                    int cn = drm_synth_content(rp, cb, sizeof cb);
+                    if (cn >= 0) {
+                        drm_trace("open", rp, 1);
+                        int d = synth_str_fd(cb);
+                        G_RET(c) = d < 0 ? (uint64_t)(-errno) : (uint64_t)d;
+                        break;
+                    }
+                    drm_trace("open", rp, 0);
                 }
             }
             // device nodes -> host devices (rootfs has no real /dev)
@@ -1660,7 +2046,7 @@ static int svc_fs(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t
                 if (hd) {
                     int d = open(hd, mf);
                     // /dev/full is backed by /dev/zero for reads; flag the fd so its writes fail ENOSPC.
-                    if (d >= 0 && d < 1024) g_devfull[d] = !strcmp(rp, "/dev/full");
+                    if (d >= 0 && d < DD_NFD) g_devfull[d] = !strcmp(rp, "/dev/full");
                     G_RET(c) = d < 0 ? (uint64_t)(-errno) : (uint64_t)d;
                     break;
                 }
@@ -1784,7 +2170,7 @@ static int svc_fs(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t
             // Gate the new fd against the guest's soft RLIMIT_NOFILE -> EMFILE past the cap (host table larger).
             int r = nofile_gate(open(host, mf | ((lf & G_O_NOFOLLOW) ? O_NOFOLLOW : 0), (mode_t)a3));
             if (r >= 0 && nf_new) newfile_stamp_fd(r);
-            if (r >= 0 && r < 1024) g_opath[r] = is_opath;
+            if (r >= 0 && r < DD_NFD) g_opath[r] = is_opath;
             if (r >= 0) {
                 char gpa[4200];
                 int have_canon = fcntl(r, F_GETPATH, gpa) == 0;
@@ -1817,7 +2203,7 @@ static int svc_fs(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t
                 else
                     snprintf(gdir, sizeof gdir, "%s", gp);
                 struct stat dst;
-                if (r < 1024 && !jail_is_vol(gdir) && fstat(r, &dst) == 0 && S_ISDIR(dst.st_mode))
+                if (r < DD_NFD && !jail_is_vol(gdir) && fstat(r, &dst) == 0 && S_ISDIR(dst.st_mode))
                     snprintf(g_ovldir[r], sizeof g_ovldir[r], "%s", gdir);
             }
             G_RET(c) = r < 0 ? (uint64_t)(-errno) : (uint64_t)r;
@@ -1846,7 +2232,7 @@ static int svc_fs(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t
                 int e = errno;
                 r = nofile_gate(r); // fd past the guest's soft RLIMIT_NOFILE -> EMFILE
                 if (r < 0 && errno == EMFILE) e = EMFILE;
-                if (r >= 0 && r < 1024) g_opath[r] = is_opath;
+                if (r >= 0 && r < DD_NFD) g_opath[r] = is_opath;
                 if (r >= 0) {
                     fd_setpath(r, hostc);
                     if (lf & 3) { // write-open: keep the metadata caches coherent (same as the walk path)
@@ -1876,7 +2262,7 @@ static int svc_fs(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t
             r = nofile_gate(r); // fd past the guest's soft RLIMIT_NOFILE -> EMFILE (host table is far larger)
             if (r < 0 && errno == EMFILE) e = EMFILE;
             if (r >= 0 && nf_new) newfile_stamp_fd(r);
-            if (r >= 0 && r < 1024) g_opath[r] = is_opath;
+            if (r >= 0 && r < DD_NFD) g_opath[r] = is_opath;
             if (r >= 0) {
                 char gp[4200];
                 // canonical host path for tracking
@@ -1904,7 +2290,7 @@ static int svc_fs(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t
         // O_PATH|O_NOFOLLOW on a symlink -> O_SYMLINK opens the link itself.
         int r = nofile_gate(openat(ATFD(a0), p, mf | osymlink, (mode_t)a3));
         if (r >= 0 && nf_new) newfile_stamp_fd(r);
-        if (r >= 0 && r < 1024) g_opath[r] = is_opath;
+        if (r >= 0 && r < DD_NFD) g_opath[r] = is_opath;
         if (r >= 0) {
             fd_setpath(r, p);
             if ((lf & 3) || (lf & 0x40) || (lf & 0x200)) {
@@ -1933,7 +2319,7 @@ static int svc_fs(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t
     case 61: {
         int fd = (int)a0;
         // OVERLAY: merged listing across layers
-        if (g_nlower && fd >= 0 && fd < 1024 && g_ovldir[fd][0]) {
+        if (g_nlower && fd >= 0 && fd < DD_NFD && g_ovldir[fd][0]) {
             // snapshot cache is indexed directly by guest fd (no slot table -> no eviction thrash)
             if (!g_ovldents[fd].taken) {
                 g_ovldents[fd].taken = 1;
@@ -1947,7 +2333,21 @@ static int svc_fs(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t
                 size_t nl = strlen(nm), lr = (19 + nl + 1 + 7) & ~7ull;
                 if (o + lr > (size_t)a2) break;
                 uint8_t *ld = out + o;
-                *(uint64_t *)(ld + 0) = g_ovldents[fd].pos + 1;
+                // REAL inode: stat the merged entry (its host backing across upper/lowers), so `ls -i`,
+                // `find -inum`, and hardlink detection work on a layered image. The old `pos+1` fabricated a
+                // unique per-position number -> every entry looked like a distinct inode (hardlinks/du/rsync
+                // dedup broke). Fall back to pos+1 only if the entry can't be stat'd.
+                uint64_t d_ino = (uint64_t)g_ovldents[fd].pos + 1;
+                if (nl < 200) {
+                    char egp[4300], ehp[4300];
+                    int gl = snprintf(egp, sizeof egp, "%s/%s", g_ovldir[fd], nm);
+                    if (gl > 0 && (size_t)gl < sizeof egp) {
+                        const char *eh = xresolve_overlay(egp, ehp, sizeof ehp);
+                        struct stat est;
+                        if (eh && lstat(eh, &est) == 0) d_ino = (uint64_t)est.st_ino;
+                    }
+                }
+                *(uint64_t *)(ld + 0) = d_ino;
                 *(uint64_t *)(ld + 8) = o + lr;
                 *(uint16_t *)(ld + 16) = (uint16_t)lr;
                 *(ld + 18) = g_ovldents[fd].ty[g_ovldents[fd].pos];
@@ -2036,7 +2436,8 @@ static int svc_fs(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t
         if (p) {
             guest_abspath_at((int)a0, p, gpb, sizeof gpb);
             if (!strcmp(gpb, "/proc") || !strncmp(gpb, "/proc/", 6) || !strncmp(gpb, "/dev/fd/", 8) ||
-                !strncmp(gpb, "/dev/std", 8))
+                !strncmp(gpb, "/dev/std", 8) || !strncmp(gpb, "/sys/dev/char/226:", 18) ||
+                !strncmp(gpb, "/sys/class/drm", 14))
                 gp = gpb;
         }
         // /proc/self (and /proc/thread-self) are magic symlinks to the caller's own pid -- readlink returns
@@ -2107,9 +2508,9 @@ static int svc_fs(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t
                     sl = snprintf(syn, sizeof syn, "pipe:[%llu]", (unsigned long long)ss.st_ino);
                 else if (have && S_ISSOCK(ss.st_mode))
                     sl = snprintf(syn, sizeof syn, "socket:[%llu]", (unsigned long long)ss.st_ino);
-                else if (pfn >= 0 && pfn < 1024 && g_eventfd_peer[pfn])
+                else if (pfn >= 0 && pfn < DD_NFD && g_eventfd_peer[pfn])
                     sl = snprintf(syn, sizeof syn, "anon_inode:[eventfd]");
-                else if (pfn >= 0 && pfn < 1024 && g_timerfd[pfn])
+                else if (pfn >= 0 && pfn < DD_NFD && g_timerfd[pfn])
                     sl = snprintf(syn, sizeof syn, "anon_inode:[timerfd]");
                 else
                     sl = snprintf(syn, sizeof syn, "anon_inode:inode");
@@ -2173,6 +2574,16 @@ static int svc_fs(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t
                         break;
                     }
                 if (nsdone) break;
+            }
+        }
+        // DRM sysfs symlinks (subsystem/device classification) libdrm's drmGetDevices2 readlinks.
+        if (p && gpu_iosurface_on() &&
+            (!strncmp(gp, "/sys/dev/char/226:", 18) || !strncmp(gp, "/sys/class/drm", 14))) {
+            int dl = drm_synth_readlink(gp, buf, bs);
+            if (dl >= 0) {
+                drm_trace("readlink", gp, 1);
+                G_RET(c) = (uint64_t)dl;
+                break;
             }
         }
         char ep[1024];
@@ -2355,6 +2766,7 @@ static int svc_fs(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t
             G_RET(c) = (uint64_t)(-errno);
             break;
         }
+        if (empty_self) drm_fd_stat_fixup((int)a0, &s); // render-node fstatat("",AT_EMPTY_PATH) -> char dev
         // guest-chown xattr lives on the host backing file: read via fd for AT_EMPTY_PATH, else by path.
         // The stat succeeded above, so validate the guest buffer here (copyout-last) -> bad ptr = -EFAULT.
         if (!host_range_mapped((uintptr_t)a2, GUEST_LINUX_STAT_BYTES)) {
@@ -2373,6 +2785,7 @@ static int svc_fs(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t
             G_RET(c) = (uint64_t)(-errno);
             break;
         }
+        drm_fd_stat_fixup((int)a0, &s); // render-node fd -> char dev 226:<minor> (else /dev/null's rdev leaks)
         // The guest stat buffer is filled DIRECTLY by the engine; validate it (after the fd/stat succeeds,
         // so a bad fd still reports EBADF first, matching Linux's copyout-last ordering) so a bad pointer
         // returns -EFAULT instead of faulting the engine (access_ok).
@@ -2551,6 +2964,7 @@ static int svc_fs(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t
             G_RET(c) = (uint64_t)(int64_t)rc;
             break;
         }
+        if (empty) drm_fd_stat_fixup((int)a0, &s); // render-node statx("",AT_EMPTY_PATH) -> char dev 226:<minor>
         // Route ownership through the SHARED virtualization (cuid/cgid default + guest-chown xattr via
         // the cache) so statx's uid/gid are byte-identical to fstat/newfstatat for the same file.
         uint32_t vuid, vgid;
@@ -2648,6 +3062,17 @@ static int svc_fs(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t
     case 439:
     case 48: {
         char pb[4200];
+        // Linux: an empty pathname is ENOENT for faccessat(48), and for faccessat2(439) unless
+        // AT_EMPTY_PATH(0x1000) is set. dd used to resolve "" to the rootfs root (a searchable dir) and
+        // report it executable, so `[ -x "$(command -v missing)" ]` (dash's `command -v` yields "" for a
+        // missing command) wrongly passed and ran a nonexistent `update-menus` -> exit 127. That is the
+        // dh_installmenu postinst guard in fish/lynx/many packages, so it broke `dpkg --configure`.
+        if (!a1 || !((const char *)a1)[0]) {
+            if (!(nr == 439 && (a3 & 0x1000))) {
+                G_RET(c) = (uint64_t)(int64_t)(-ENOENT);
+                break;
+            }
+        }
         // /proc/[self|pid]/exe magic symlink -> access the actual executable (matched on the
         // guest-absolute path so dirfd-relative and cwd-relative spellings work too)
         char ep[1024], gsyn48[4200];

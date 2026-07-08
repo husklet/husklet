@@ -149,11 +149,29 @@ impl SpawnConfig {
             }
             // forward the persistent-translated-code-cache controls the same way (opt-in; each is a
             // plain getenv() in the engine). Lets `docker run`/tests enable the cross-process cache.
+            // Also forward the block/syscall/translator trace + debug knobs (JT/JTS/DDDBG_GPRDUMP/MAPDUMP
+            // and the translator A/B gates NOSTITCH/NOLSE) -- each a plain getenv() in the engine -- so a
+            // host `JT=1 docker run ...` reaches the JIT through the mac bridge (which drops ambient env).
             for k in [
                 "DDJIT_PCACHE",
                 "DDJIT_PCACHE_DIR",
                 "DDJIT_NOPCACHE",
                 "COLDPROF",
+                "JT",
+                "JTS",
+                "DDNETLOG",
+                "DDWAKELOG",
+                "DDDBG_GPRDUMP",
+                "DDDBG_NOCHAIN",
+                "MAPDUMP",
+                "NOSTITCH",
+                "NOLSE",
+                "NOSMC",
+                "NOSMCHASH",
+                "NOIBSLIM",
+                "PROF",
+                "T2DUMP",
+                "NOTIER2",
             ] {
                 if let Ok(v) = std::env::var(k) {
                     env += &format!("{}={} ", k, shq(&v));

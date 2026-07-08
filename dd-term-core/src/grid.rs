@@ -167,9 +167,11 @@ impl Grid {
     /// Scroll rows `[top, bot]` (inclusive, 0-based) up by one: `top` is lost, a blank appears at `bot`.
     /// Used for scroll regions (DECSTBM) so a pinned status line outside the region stays put.
     pub fn scroll_region_up(&mut self, top: usize, bot: usize, blank: Cell) {
-        if top >= bot || bot >= self.rows {
+        if top > bot || bot >= self.rows {
             return;
         }
+        // A single-row region (top == bot) has nothing to shift — scrolling it just blanks that row
+        // (this is the `DL`/`IL` at the region's last row case, which must clear rather than no-op).
         for r in top..bot {
             let dst = self.idx(r, 0);
             let src = self.idx(r + 1, 0);
@@ -180,9 +182,10 @@ impl Grid {
 
     /// Scroll rows `[top, bot]` down by one: `bot` is lost, a blank appears at `top`.
     pub fn scroll_region_down(&mut self, top: usize, bot: usize, blank: Cell) {
-        if top >= bot || bot >= self.rows {
+        if top > bot || bot >= self.rows {
             return;
         }
+        // A single-row region (top == bot) has nothing to shift — scrolling it just blanks that row.
         for r in (top + 1..=bot).rev() {
             let dst = self.idx(r, 0);
             let src = self.idx(r - 1, 0);

@@ -86,6 +86,10 @@ int ddjit_run_configfd(int fd) {
     if (cfg.rootfs_ro) setenv("DD_ROOTFS_RO", "1", 1);
     if (cfg.net_isolate) setenv("DD_NET_ISOLATE", "1", 1);
     if (cfg.publish_daemon) setenv("DD_PUBLISH_DAEMON", "1", 1);
+    // GPU rung 2/3 (--gui): opt-in the host-IOSurface path. The engine getenv()s this (vfs.c
+    // gpu_iosurface_on()); carrying it in the typed config — not the ambient host env — is what makes it
+    // reach the engine reliably (the FFI/bridge does not forward the launcher's ambient environment).
+    if (cfg.gpu_iosurface) setenv("DD_GPU_IOSURFACE", "1", 1);
     if (cfg.uid >= 0) {
         snprintf(num, sizeof num, "%d", cfg.uid);
         setenv("DD_UID", num, 1);

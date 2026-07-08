@@ -6,6 +6,7 @@
 //! (`dd-term`) depends on this crate and adds only the window + wgpu draw, uploading this crate's same
 //! embedded font atlas so what ships equals what the CPU renderer here verifies.
 
+pub mod config;
 pub mod font;
 pub mod grid;
 pub mod input;
@@ -13,16 +14,19 @@ pub mod layout;
 pub mod png;
 pub mod pty;
 pub mod render;
+pub mod session;
 pub mod vt;
 pub mod workspace;
 
+pub use config::{CursorShape, TermConfig};
 pub use grid::{Attrs, Cell, Color, Grid};
+pub use session::{Pane, PaneNode, Session, SessionTab, SplitDir};
 pub use input::{encode_key, encode_paste, CursorKeys, Key, Mods};
 pub use layout::{Dir, Layout, PaneId, Rect};
 pub use pty::PtyBackend;
 pub use render::{CpuRenderer, Image};
 pub use vt::Vt;
-pub use workspace::{Arch, Launcher, LocalShellLauncher, Workspace, WorkspaceStore};
+pub use workspace::{Arch, CudaDevice, Launcher, LocalShellLauncher, Workspace, WorkspaceStore};
 
 #[cfg(test)]
 mod tests {

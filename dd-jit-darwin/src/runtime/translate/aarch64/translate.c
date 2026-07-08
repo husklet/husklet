@@ -1165,7 +1165,22 @@ static void smc_icflush(uint64_t va) {
     // while a genuine in-place overwrite (V8 patching a jump) still overlaps a translated line -> real drop.
     // pcache warm-load restores blocks with page info but no line info (see pcache.c), so for a restored
     // arena fall back to the coarse page gate -- conservative (may over-drop) but never misses stale code.
-    if (!txln_has(va) && !(g_pcache_loaded && txpg_has(va))) return;
+    // CONTENT GATE (the chromium/V8 SMC-livelock fix): classify the flush by whether the invalidated
+    // translated line's bytes actually CHANGED. A benign re-flush of unchanged already-translated code
+    // (a builtin/trampoline flushed as part of a range each call, or a block flushing its OWN executing
+    // source line -- exactly what V8 does thousands of times at startup) must NOT trigger the wholesale
+    // drop, or the entire working set re-translates on every flush and translate_block spins forever.
+    //   class 0 -> line never translated: nothing stale (fall back to the coarse pcache page gate below).
+    //   class 2 -> translated but UNCHANGED: benign icache maintenance -> keep the valid translation, skip.
+    //   class 1 -> translated AND (first flush | genuinely rewritten): take the real drop (soak_smc/V8 patch).
+    int cls = txln_flush_class(va);
+    if (cls == 0) {
+        // pcache warm-load restores blocks with page info but no line info -> for a restored arena fall
+        // back to the coarse page gate (conservative: may over-drop, never misses stale restored code).
+        if (!(g_pcache_loaded && txpg_has(va))) return;
+    } else if (cls == 2) {
+        return; // unchanged translated line -> benign flush, no re-translation needed
+    }
     // ---- a GENUINE in-place modification of already-translated guest code (the line WAS a source line) ----
     // (BeamAsm SIGSEGV) coherence. smc_icflush runs from the dispatcher's post-run reason handler, which
     // has ALREADY released g_jit_lock (engine/dispatch.c: the unlock precedes G_DISPATCH_REASON), so a peer

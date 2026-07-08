@@ -34,6 +34,6 @@ pub use dd_jit_darwin::{available, Guest, PortMap, SpawnConfig, Volume};
 
 mod runtime;
 pub use runtime::{
-    Container, ContainerBuilder, Error, ExitStatus, Image, Launched, LogChunk, RunHandle,
-    RunningContainer, Runtime, Stdio3, DEFAULT_GUEST_PATH,
+    Container, ContainerBuilder, DeviceMount, DeviceProvider, DeviceRequest, Error, ExitStatus, Image,
+    Launched, LogChunk, RunHandle, RunningContainer, Runtime, Stdio3, DEFAULT_GUEST_PATH,
 };

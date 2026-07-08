@@ -514,6 +514,7 @@ static void service(struct cpu *c) {
     // SIGSEGV/ILL/FPE/... from a genuine engine fault (see g_in_service in os/linux/signal.c). Cleared on
     // EVERY exit path below, so the ptrace/untrusted routes must not early-return past the clear.
     g_in_service = 1;
+    uint64_t _rnr = g_systrace ? G_NR(c) : 0; // JTS: capture nr to pair the return log below
     if (__builtin_expect(g_untrusted, 0)) {
         syscall_route(c); // untrusted: route via sentry
     } else if (__builtin_expect(g_pt != NULL && __atomic_load_n(&g_pt->nactive, __ATOMIC_RELAXED) != 0, 0)) {
@@ -523,6 +524,9 @@ static void service(struct cpu *c) {
     } else {
         service_local(c); // trusted: byte-identical path
     }
+    if (g_systrace)
+        fprintf(stderr, "[ret pid=%d] %llu -> %lld\n", (int)getpid(), (unsigned long long)_rnr,
+                (long long)(int64_t)G_RET(c));
     g_in_service = 0;
 }
 
@@ -860,13 +864,14 @@ static void service_local(struct cpu *c) {
         case 95: // waitid(idtype, id, INFOP, options) -- siginfo written (host_range_mapped guard EFAULTs low)
             a2 = nonpie_p(a2);
             break;
-        case 98:               // futex(UADDR, op, val, TIMEOUT, ...) -- uaddr + timeout are dereferenced by futex_op; a
-            a0 = nonpie_p(a0); //   non-PIE static libc's lock word / timespec live
-            a3 = nonpie_p(a3); //   in .bss at a low link vaddr (uaddr2 a4 is unused)
-            break;
-        case 163: // getrlimit(res, RLIM) -- rlim written
-        case 164: // setrlimit(res, RLIM) -- rlim read
-        case 275: // sched_getattr(pid, ATTR, size, flags) -- attr zeroed+written directly
+        case 98:               // futex(UADDR, op, val, TIMEOUT/nr_wake2, UADDR2, val3) -- uaddr/timeout/uaddr2 are
+            a0 = nonpie_p(a0); //   dereferenced by futex_op; a non-PIE static libc's lock word / timespec live in
+            a3 = nonpie_p(a3); //   .bss at a low link vaddr. uaddr2 (a4) is the REQUEUE/WAKE_OP target -- a real
+            a4 = nonpie_p(a4); //   guest pointer, so rebase it too (inert for PIE; a3-as-nr_wake2 is a small int
+            break;             //   below g_nonpie_lo, so nonpie_p leaves it unchanged).
+        case 163:              // getrlimit(res, RLIM) -- rlim written
+        case 164:              // setrlimit(res, RLIM) -- rlim read
+        case 275:              // sched_getattr(pid, ATTR, size, flags) -- attr zeroed+written directly
             a1 = nonpie_p(a1);
             break;
         case 260: // wait4(pid, STATUS, opts, RUSAGE) -- status + rusage written directly

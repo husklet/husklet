@@ -74,9 +74,14 @@ static int svc_rare(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64
     case 427: // io_uring_register(2)
         G_RET(c) = (uint64_t)(-ENOSYS);
         break;
-    // seccomp(2): a guest installing its OWN allow-all filter (SECCOMP_SET_MODE_FILTER) self-sandboxes;
-    // accept the install as a no-op (we don't actually enforce a BPF filter) so the call SUCCEEDS like
-    // on Linux instead of failing with ENOSYS. SET_MODE_STRICT is likewise accepted but not enforced.
+    // seccomp(2). SECURITY MODEL GAP -- READ THIS: we accept the install as a no-op and return success so a
+    // guest that installs its OWN filter proceeds like on Linux (failing with ENOSYS would break glibc/Go/
+    // systemd/OpenSSH/browsers that treat a failed install as fatal). But we DO NOT actually enforce any BPF
+    // filter: every syscall the guest tried to block/trap/kill is STILL fully serviced by this dispatcher.
+    // This is deliberate (there is no macOS primitive to run the classic-BPF program against our emulated
+    // syscall stream) but it means seccomp provides ZERO sandboxing here -- do not rely on it as a security
+    // boundary; the path-jail / uid model is the real boundary. SET_MODE_STRICT is likewise accepted, not
+    // enforced. (A guest's own allow-all filter -- the common self-sandbox probe -- is thus a faithful pass.)
     case 277: { // seccomp(op, flags, args)
         unsigned op = (unsigned)a0;
         G_RET(c) = (op == 0 /*STRICT*/ || op == 1 /*FILTER*/) ? 0 : (uint64_t)(-EINVAL);
@@ -90,6 +95,21 @@ static int svc_rare(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64
         break;
 
     case 279: { // memfd_create(name, flags) -> an anonymous file: a tmpfile, unlinked immediately
+        // Validate `flags` exactly as Linux (mm/memfd.c): any unknown bit -> EINVAL. Chromium's Mojo
+        // ChannelLinux::KernelSupportsUpgradeRequirements() probes memfd_create("", ~0) and PCHECKs the
+        // call FAILS with EINVAL/ENOSYS/EPERM; without this the probe SUCCEEDED (fd>=0) and the browser
+        // process aborted at channel_linux.cc (Check failed). MFD_CLOEXEC=1 MFD_ALLOW_SEALING=2
+        // MFD_HUGETLB=4 MFD_NOEXEC_SEAL=8 MFD_EXEC=16; with MFD_HUGETLB the huge-size log2 bits (0x3f<<26)
+        // are also permitted. (mkstemp ignores `name`, so no name-length check is needed here.)
+        {
+            unsigned mfd_flags = (unsigned)a1;
+            unsigned mfd_known = 0x1fu; // CLOEXEC|ALLOW_SEALING|HUGETLB|NOEXEC_SEAL|EXEC
+            if (mfd_flags & 4u) mfd_known |= (0x3fu << 26); // MFD_HUGETLB -> size-log2 bits are valid
+            if (mfd_flags & ~mfd_known) {
+                G_RET(c) = (uint64_t)(int64_t)(-EINVAL);
+                break;
+            }
+        }
         char tn[] = "/tmp/.ddmemfdXXXXXX";
         int fd = mkstemp(tn);
         if (fd >= 0) {
@@ -98,7 +118,7 @@ static int svc_rare(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64
             // Track it as a memfd so F_ADD_SEALS/F_GET_SEALS (io.c fcntl) and the F_SEAL_WRITE write-guard
             // apply. Without MFD_ALLOW_SEALING (2) the file is born F_SEAL_SEAL'd -> later F_ADD_SEALS EPERMs,
             // exactly as on Linux.
-            if (fd < 1024) {
+            if (fd < DD_NFD) {
                 g_memfd_is[fd] = 1;
                 g_memfd_seal[fd] = (a1 & 2) ? 0 : 0x1 /*F_SEAL_SEAL*/;
             }
@@ -481,12 +501,22 @@ static int svc_rare(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64
         }
         G_RET(c) = 0;
         break;
-    // mlockall/munlockall: no host pinning, but the lock state is reported back via /proc VmLck:
-    // (LTP munlockall01). MCL_CURRENT|MCL_FUTURE -> whole-process lock flag; munlockall clears all.
-    case 230:
+    // mlockall/munlockall. MODEL GAP: macOS has no mlockall(2), so we CANNOT actually wire the process's
+    // pages -- the lock STATE is only tracked (g_mlock_all) and reported back via /proc VmLck:/smaps Locked:
+    // (LTP munlockall01). We do NOT fake per-page residency here (unlike mlock(2)/228, macOS mlock does wire
+    // and its failure is now surfaced). But we DO validate `flags` exactly as Linux (mm/mlock.c) so a
+    // malformed call fails as it should instead of a blanket success: flags==0, any unknown bit, or
+    // MCL_ONFAULT without MCL_CURRENT|MCL_FUTURE -> EINVAL. (MCL_CURRENT=1 MCL_FUTURE=2 MCL_ONFAULT=4.)
+    case 230: {
+        unsigned f = (unsigned)a0, known = 1u | 2u | 4u;
+        if (f == 0 || (f & ~known) || ((f & 4u) && !(f & (1u | 2u)))) {
+            G_RET(c) = (uint64_t)(-EINVAL);
+            break;
+        }
         g_mlock_all = 1;
         G_RET(c) = 0;
         break;
+    }
     case 231:
         mlk_reset();
         G_RET(c) = 0;
@@ -497,8 +527,35 @@ static int svc_rare(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64
     // x86-64 237/238/239/256/279 are mapped to these by sysmap.h.)
     case 235: G_RET(c) = 0; break; // mbind          -> success, no-op
     case 237: G_RET(c) = 0; break; // set_mempolicy  -> success, no-op
-    case 238:                      // migrate_pages
-    case 239: G_RET(c) = 0; break; // move_pages     -> success, no-op (nothing moved)
+    case 238: G_RET(c) = 0; break; // migrate_pages  -> success, no-op (single NUMA node, nothing to move)
+    // move_pages(pid, count, pages, nodes, status, flags). Single NUMA node here, so nothing ever migrates
+    // -- but returning 0 while leaving status[] UNTOUCHED makes a NUMA-introspection guest (numactl --show,
+    // libnuma) read an uninitialized buffer. QUERY mode (nodes==NULL) must fill status[] with each page's
+    // current node; a real migration request (nodes!=NULL) still writes the resulting node into status[] if
+    // one was given. Report node 0 for a mapped/present page, -ENOENT for one not present -- exactly Linux.
+    case 239: {
+        unsigned long count = (unsigned long)a1;
+        void **pages = (void **)a2;
+        int *status = (int *)a4;
+        if (count == 0) {
+            G_RET(c) = 0;
+            break;
+        }
+        if (count > SIZE_MAX / sizeof(void *)) { // guard the size math against a bogus count
+            G_RET(c) = (uint64_t)(int64_t)(-EINVAL);
+            break;
+        }
+        if (!pages || !host_range_mapped((uintptr_t)pages, count * sizeof(void *)) ||
+            (status && !host_range_mapped((uintptr_t)status, count * sizeof(int)))) {
+            G_RET(c) = (uint64_t)(int64_t)(-EFAULT);
+            break;
+        }
+        if (status)
+            for (unsigned long i = 0; i < count; i++)
+                status[i] = host_addr_mapped((uintptr_t)pages[i]) ? 0 : -ENOENT;
+        G_RET(c) = 0;
+        break;
+    }
     case 450:
         G_RET(c) = 0;
         break; // set_mempolicy_home_node -> success, no-op (same NUMA-hint family)

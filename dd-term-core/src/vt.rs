@@ -49,6 +49,10 @@ pub struct Vt {
     cur_param: Option<u32>,
     /// True if any sub-parameter in the current CSI was `:`-separated (ISO-8613-6 SGR).
     saw_colon: bool,
+    /// Parallel to `params`: whether each param was terminated by a `:` (vs `;`/final). Lets SGR tell a
+    /// colon-grouped code (`4:3` undercurl, `4:2` double, …) from a semicolon list (`4;3` = underline
+    /// then italic).
+    param_colon: Vec<bool>,
     /// A leading private marker byte for CSI (`?`, `>`, `!`), if any.
     private: u8,
     /// OSC payload accumulator.
@@ -70,6 +74,10 @@ pub struct Vt {
     wrap_pending: bool,
     /// The most recent window title set via OSC 0/2.
     pub title: String,
+    /// The most recent working directory reported via OSC 7 (`file://host/path`), decoded to a plain
+    /// path. Shells emit this on every prompt; the session layer persists it so a reopened pane restores
+    /// its cwd. Was previously dropped on the floor, so cwd never tracked in the GPU (non-VTE) path.
+    pub cwd: Option<String>,
     /// Rings once per BEL; the app can poll+reset this.
     pub bell: bool,
 }
@@ -88,6 +96,7 @@ impl Vt {
             params: Vec::new(),
             cur_param: None,
             saw_colon: false,
+            param_colon: Vec::new(),
             private: 0,
             osc: Vec::new(),
             utf8_buf: [0; 4],
@@ -100,6 +109,7 @@ impl Vt {
             charset_g0_dec: false,
             wrap_pending: false,
             title: String::new(),
+            cwd: None,
             bell: false,
         }
     }
@@ -311,6 +321,7 @@ impl Vt {
         match b {
             b'[' => {
                 self.params.clear();
+                self.param_colon.clear();
                 self.cur_param = None;
                 self.private = 0;
                 self.saw_colon = false;
@@ -368,13 +379,13 @@ impl Vt {
                 let d = (b - b'0') as u32;
                 self.cur_param = Some(self.cur_param.unwrap_or(0).saturating_mul(10).saturating_add(d));
             }
-            b';' => self.push_param(),
+            b';' => self.push_param(false),
             b':' => {
                 // ISO-8613-6 sub-parameter separator (e.g. `38:2::r:g:b`). Treat like `;` so the CSI is
                 // not aborted (which used to splatter the tail as literal text); remember colon form so
                 // the extended-color parser can skip the colorspace slot.
                 self.saw_colon = true;
-                self.push_param();
+                self.push_param(true);
             }
             b'?' | b'>' | b'!' if self.params.is_empty() && self.cur_param.is_none() => {
                 self.private = b;
@@ -382,7 +393,7 @@ impl Vt {
             0x40..=0x7e => {
                 // Final byte: flush the last param and dispatch.
                 if self.cur_param.is_some() {
-                    self.push_param();
+                    self.push_param(false);
                 }
                 self.dispatch_csi(b);
                 self.state = State::Ground;
@@ -393,10 +404,12 @@ impl Vt {
     }
 
     /// Flush `cur_param` into `params`, capped so a pathological `CSI 1;1;1;…` can't grow unbounded.
-    fn push_param(&mut self) {
+    /// `colon` records whether the separator that terminated this param was a `:` (ISO-8613-6 group).
+    fn push_param(&mut self, colon: bool) {
         let v = self.cur_param.take().unwrap_or(0);
         if self.params.len() < 64 {
             self.params.push(v);
+            self.param_colon.push(colon);
         }
     }
 
@@ -602,7 +615,23 @@ impl Vt {
                 1 => self.pen.attrs.insert(Attrs::BOLD),
                 2 => self.pen.attrs.insert(Attrs::DIM),
                 3 => self.pen.attrs.insert(Attrs::ITALIC),
-                4 => self.pen.attrs.insert(Attrs::UNDERLINE),
+                4 => {
+                    // `4:n` (colon-grouped) is an underline *style*: 0 = off, 1..=5 = single/double/curly/
+                    // dotted/dashed. Consume the style sub-param so it isn't re-read as a standalone SGR
+                    // code (a `4:3` undercurl must not also flip italic via a stray `3`). Plain `4`/`4;n`
+                    // is just single underline.
+                    if self.param_colon.get(i).copied().unwrap_or(false) {
+                        let style = self.params.get(i + 1).copied().unwrap_or(1);
+                        if style == 0 {
+                            self.pen.attrs.remove(Attrs::UNDERLINE);
+                        } else {
+                            self.pen.attrs.insert(Attrs::UNDERLINE);
+                        }
+                        i += 1;
+                    } else {
+                        self.pen.attrs.insert(Attrs::UNDERLINE);
+                    }
+                }
                 7 => self.pen.attrs.insert(Attrs::REVERSE),
                 8 => self.pen.attrs.insert(Attrs::HIDDEN),
                 9 => self.pen.attrs.insert(Attrs::STRIKE),
@@ -671,8 +700,16 @@ impl Vt {
         // OSC 0;title (icon+title) or 2;title (title) set the window title.
         if let Ok(s) = std::str::from_utf8(&self.osc) {
             if let Some((num, rest)) = s.split_once(';') {
-                if num == "0" || num == "2" {
-                    self.title = rest.to_string();
+                match num {
+                    // OSC 0 (icon+title) / 2 (title) set the window title.
+                    "0" | "2" => self.title = rest.to_string(),
+                    // OSC 7 reports the shell's cwd as a `file://host/path` URI.
+                    "7" => {
+                        if let Some(path) = crate::session::cwd_from_uri(rest) {
+                            self.cwd = Some(path);
+                        }
+                    }
+                    _ => {}
                 }
             }
         }
@@ -681,31 +718,44 @@ impl Vt {
 }
 
 /// Translate a byte through the DEC Special Graphics charset (`ESC ( 0`) — the box-drawing set that
-/// `tmux`/`mc`/ncurses table UIs use. Only the printable range `0x5f..=0x7e` is remapped; anything else
-/// passes through unchanged. The grid stores the real Unicode box char (what a full renderer draws).
+/// `tmux`/`mc`/ncurses table UIs use. The complete VT100 set covers `0x5f..=0x7e`: `_` is a blank, the
+/// `` ` ``/`a`..`~` positions map to box-drawing lines, scan lines, and symbols (including the `b`..`i`
+/// control-picture glyphs). Anything outside that range passes through unchanged. The grid stores the
+/// real Unicode char, which is what a full renderer draws.
 fn dec_graphic(ch: char) -> char {
     match ch {
+        '_' => '\u{00a0}', // NBSP (blank)
         '`' => '\u{25c6}', // ◆ diamond
-        'a' => '\u{2592}', // ▒ checker
-        'f' => '\u{00b0}', // °
-        'g' => '\u{00b1}', // ±
-        'j' => '\u{2518}', // ┘
-        'k' => '\u{2510}', // ┐
-        'l' => '\u{250c}', // ┌
-        'm' => '\u{2514}', // └
-        'n' => '\u{253c}', // ┼
-        'q' => '\u{2500}', // ─
-        't' => '\u{251c}', // ├
-        'u' => '\u{2524}', // ┤
-        'v' => '\u{2534}', // ┴
-        'w' => '\u{252c}', // ┬
-        'x' => '\u{2502}', // │
-        'y' => '\u{2264}', // ≤
-        'z' => '\u{2265}', // ≥
-        '{' => '\u{03c0}', // π
-        '|' => '\u{2260}', // ≠
-        '}' => '\u{00a3}', // £
-        '~' => '\u{00b7}', // ·
+        'a' => '\u{2592}', // ▒ checkerboard
+        'b' => '\u{2409}', // ␉ HT
+        'c' => '\u{240c}', // ␌ FF
+        'd' => '\u{240d}', // ␍ CR
+        'e' => '\u{240a}', // ␊ LF
+        'f' => '\u{00b0}', // ° degree
+        'g' => '\u{00b1}', // ± plus/minus
+        'h' => '\u{2424}', // ␤ NL
+        'i' => '\u{240b}', // ␋ VT
+        'j' => '\u{2518}', // ┘ lower-right corner
+        'k' => '\u{2510}', // ┐ upper-right corner
+        'l' => '\u{250c}', // ┌ upper-left corner
+        'm' => '\u{2514}', // └ lower-left corner
+        'n' => '\u{253c}', // ┼ crossing
+        'o' => '\u{23ba}', // ⎺ scan line 1
+        'p' => '\u{23bb}', // ⎻ scan line 3
+        'q' => '\u{2500}', // ─ horizontal (scan line 5)
+        'r' => '\u{23bc}', // ⎼ scan line 7
+        's' => '\u{23bd}', // ⎽ scan line 9
+        't' => '\u{251c}', // ├ left tee
+        'u' => '\u{2524}', // ┤ right tee
+        'v' => '\u{2534}', // ┴ bottom tee
+        'w' => '\u{252c}', // ┬ top tee
+        'x' => '\u{2502}', // │ vertical
+        'y' => '\u{2264}', // ≤ less-or-equal
+        'z' => '\u{2265}', // ≥ greater-or-equal
+        '{' => '\u{03c0}', // π pi
+        '|' => '\u{2260}', // ≠ not-equal
+        '}' => '\u{00a3}', // £ sterling
+        '~' => '\u{00b7}', // · centered dot
         other => other,
     }
 }

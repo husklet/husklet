@@ -39,7 +39,12 @@ fn processx_linux() -> Group {
         // it correctly (made/reaped/exit11 all 1) but the qemu-x86_64 oracle lacks clone3 (ENOSYS →
         // made=0) — an oracle artifact, not an engine gap (cf. pidfd/process_vm). xfail x86_64.
         src("clone3", "ext_proc/clone3.c").oracle().xfail(&[Engine::LinuxX86_64]),
-        src("futex", "ext_proc/futex.c").oracle(),       // direct FUTEX_WAIT/FUTEX_WAKE
+        src("futex", "ext_proc/futex.c").oracle(),       // direct FUTEX_WAIT/FUTEX_WAKE/FUTEX_WAKE_OP
+        // PI mutex (FUTEX_LOCK_PI/UNLOCK_PI under contention) + robust mutex (set_robust_list + OWNER_DIED
+        // handoff). .out() golden not .oracle(): qemu-user x86_64 can't run PI futexes (hangs), so the golden
+        // is the correct native-Linux result. Both dd Linux engines must give real mutual exclusion/recovery.
+        port("pi-robust", "ext_proc/pi_robust.c").only(LIN)
+            .out("pi_mutex sum=8000\nrobust eownerdead=1\n"),
         // (extends): non-PIE ET_EXEC pointer-arg rebase. Built static -no-pie (src_nopie) so the
         // loader biases the image high and dispatch.c's non-PIE g2h rebase switch (g_nonpie_lo) is armed —
         // the ONLY build that exercises it. Every syscall pointer here is a LOW static .bss/.data address;

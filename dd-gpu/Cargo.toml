@@ -1,0 +1,38 @@
+# dd-gpu — the host-GPU-agnostic command IR, wire protocol, resource-handle table, and
+# `GpuBackend` executor abstraction for dd's rung-3 GPU forwarding (see
+# ../docs/ideas/RENDERING_GPU_BACKENDS.md and ../docs/ideas/CUDA_ON_METAL.md).
+#
+# DELIBERATELY dependency-free (pure `std`, no serde, hand-rolled little-endian wire) — exactly the
+# `dd-term-core` discipline — so the IR + wire round-trip + handle table + the mock/software backends
+# `cargo test` HEADLESS on the Linux dev host with NO GPU, NO display, and NO crates.io access.
+#
+# The real executors are `#[cfg]`/feature gated and built elsewhere:
+#   * `MetalBackend`  — macOS host (`mac bash -lc "nix develop ./nix -c cargo build -p dd-gpu --features metal"`)
+#   * `CudaBackend`   — an NVIDIA host (unavailable to either side today; secondary "CUDA host" case)
+# Neither can build on this box; only the pure-`std` core below does.
+[package]
+name = "dd-gpu"
+version = "0.1.0"
+edition = "2021"
+description = "dd host-GPU-agnostic command IR + wire + resource table + GpuBackend executor trait (Metal / CUDA-host / software), dependency-free and headless-testable."
+license = "MIT"
+
+[lib]
+name = "dd_gpu"
+path = "src/lib.rs"
+
+[features]
+default = []
+# Heavy, host-only executors — NEVER part of the default build (no GPU/crates here).
+metal = []   # gates the direct-Metal executor on the macOS host
+cuda = []    # gates the NVIDIA/CUDA host executor
+# The dd-jit runtime-integration seam (`src/integration.rs`): the dd-gpu-side implementor of dd-jit's
+# generic DeviceProvider. Off by default so the pure-`std`, headless IR/wire core still tests with no
+# extra deps; dd-cli turns it on to wire a GPU into a container launch.
+runtime = ["dep:dd-jit"]
+
+[dependencies]
+# Pure std by default (see header). The ONLY dependency, and only under the `runtime` feature, is
+# dd-jit — for the DeviceProvider/DeviceRequest types the integration seam implements. It never leaks
+# into the headless core.
+dd-jit = { path = "../dd-jit", optional = true }

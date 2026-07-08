@@ -92,7 +92,7 @@ static void chroot_strip(char *guest, size_t n) {
 static char g_rootfs_canon[4200];
 static size_t g_rootfs_canon_len;
 // fd -> host path it was opened with (dir-fd confinement + cache)
-static char g_fdpath[1024][192];
+static char g_fdpath[DD_NFD][192];
 // overlay: dir-fd -> its GUEST path (for merged getdents); "" = not an overlay dir
 static char g_ovldir[1024][192];
 // O_PATH: fd opened with Linux O_PATH -- it names a file (fstat / *at dirfd / fchdir) but is NOT open for
@@ -101,12 +101,22 @@ static char g_ovldir[1024][192];
 static uint8_t g_opath[1024];
 // /dev/full: reads return zeros (backed by /dev/zero) but every WRITE fails ENOSPC. macOS has no
 // /dev/full, so we flag the fd here and gate the write family in svc_io. 1 = /dev/full.
-static uint8_t g_devfull[1024];
+static uint8_t g_devfull[DD_NFD];
+// /dev/dri/renderD128: the synthesized GPU render node (GPU rung 2). 1 = this fd is the render node, so
+// its ioctl routes to the dd GPU allocator. Set only when DD_GPU_IOSURFACE gates the path on.
+static uint8_t g_devdri[DD_NFD];
+// DD_GPU_IOSURFACE opt-in: the whole host-IOSurface GPU path (render-node synth + alloc ioctl) is inert
+// unless this is set in the engine env (the --gui launcher sets it). Cached; -1 = unqueried.
+static int g_gpu_iosurface = -1;
+static int gpu_iosurface_on(void) {
+    if (g_gpu_iosurface < 0) g_gpu_iosurface = getenv("DD_GPU_IOSURFACE") != NULL ? 1 : 0;
+    return g_gpu_iosurface;
+}
 // Overlay merged-getdents snapshot cursor reset (rewinddir/seekdir on an overlay dir). Defined in fs.c
 // where g_ovldents lives, but the lseek handler (io.c) is included before fs.c, so forward-declare it.
 static void ovldents_rewind(int fd, int pos);
 // eventfd(read-end) -> pipe write-end + 1 (0 = not an eventfd)
-static int g_eventfd_peer[1024];
+static int g_eventfd_peer[DD_NFD];
 // eventfd accumulating counter: write() adds, read() returns + resets (the pipe is only readiness).
 // _xproc-eventfd-lockf_: the counter array lives in a MAP_SHARED anonymous region so a child created by
 // dd's real host fork() updates the SAME physical counters the parent reads -- the readiness pipe is
@@ -130,12 +140,26 @@ __attribute__((constructor)) static void eventfd_count_ctor(void) {
     eventfd_count_init();
 }
 
-static uint8_t g_eventfd_sema[1024]; // EFD_SEMAPHORE: read() returns 1 and decrements by 1, not the whole counter
+// _eventfd-atomicity_: an eventfd is emulated as {accumulating counter, readiness pipe}. write() does
+// `count += add; drain-pipe; write-one-byte` and read() does `v = count; count = 0; drain-pipe; if
+// count>0 re-signal` -- a PAIR of mutations (counter + pipe) that MUST move together. With no lock, two
+// threads (Chrome's ScheduleWork writers vs its message-pump reader) interleave and strand the invariant
+// "pipe-readable IFF count>0": a byte left in the pipe with count==0 makes a level-triggered epoll_wait
+// report the fd endlessly ready while read() returns EAGAIN (the pump busy-spins), and an edge-triggered
+// watcher that saw no fresh edge never wakes at all (the "lost wakeup" park). Either way the browser main
+// thread stops making progress. Serialize every counter+pipe mutation for a given eventfd under this lock
+// so the pair is atomic; the epoll/kqueue side then only ever observes a consistent pipe state. Process-
+// private (in-process multi-threading is the case that matters -- the counter's own MAP_SHARED cross-fork
+// sharing stays best-effort, unchanged); re-init in the fork child so an inherited-locked copy can't wedge.
+static pthread_mutex_t g_eventfd_lock = PTHREAD_MUTEX_INITIALIZER;
+static void eventfd_after_fork(void) { pthread_mutex_init(&g_eventfd_lock, NULL); }
+
+static uint8_t g_eventfd_sema[DD_NFD]; // EFD_SEMAPHORE: read() returns 1 and decrements by 1, not the whole counter
 // /proc/<pid>/pagemap emulation: the file is VA-indexed (8 bytes per page, addressed by lseek to
 // vaddr/pagesize*8), so it can't be materialized as static text. We back it with a real empty seekable fd
 // (lseek to any offset works natively) and synthesize the 8-byte entries in the read path (io.c). This
 // marks which fds are pagemap backings; cleared on close (fd_reset_emul).
-static uint8_t g_pagemap_fd[1024];
+static uint8_t g_pagemap_fd[DD_NFD];
 
 // ===================== cross-process guest task-state table =====================
 // Linux's /proc/<pid>/stat field 3 is the task run state (R/S/D/T/Z). dd used to synthesize it from the
@@ -267,7 +291,7 @@ struct memf {
     size_t cap;  // allocated bytes of buf
     off_t pos;   // current file offset (for read/write/lseek SEEK_CUR)
 };
-static struct memf *g_memf[1024];
+static struct memf *g_memf[DD_NFD];
 static _Atomic uint64_t g_memf_total; // sum of logical sizes of all backed files
 
 static int memf_disabled(void) {
@@ -277,7 +301,7 @@ static int memf_disabled(void) {
 }
 
 static inline struct memf *memf_get(int fd) {
-    return (fd >= 0 && fd < 1024) ? g_memf[fd] : NULL;
+    return (fd >= 0 && fd < DD_NFD) ? g_memf[fd] : NULL;
 }
 
 // grow buf to >= need bytes, zero-filling the new tail (so a sparse write reads back as zeros).
@@ -297,7 +321,7 @@ static int memf_reserve(struct memf *m, size_t need) {
 // Attach a RAM cache to real host fd `fd`, slurping `init` bytes already present in the fd. Returns 1 if
 // backed, 0 if left as a plain host fd (kill switch / over cap / OOM). The fd becomes anonymous.
 static int memf_attach(int fd, off_t init, off_t pos) {
-    if (memf_disabled() || fd < 0 || fd >= 1024 || g_memf[fd]) return 0;
+    if (memf_disabled() || fd < 0 || fd >= DD_NFD || g_memf[fd]) return 0;
     if (init < 0 || (uint64_t)init > MEMF_CAP) return 0;
     if (atomic_load(&g_memf_total) + (uint64_t)init > MEMF_TOTAL_CAP) return 0;
     struct memf *m = calloc(1, sizeof *m);
@@ -348,7 +372,7 @@ static void memf_materialize(int fd) {
 }
 
 static void memf_materialize_all(void) {
-    for (int fd = 0; fd < 1024; fd++)
+    for (int fd = 0; fd < DD_NFD; fd++)
         if (g_memf[fd]) memf_materialize(fd);
 }
 
@@ -465,7 +489,7 @@ static int memf_room_or_spill(int fd, off_t end) {
 static void memf_try_adopt(uint64_t dev, uint64_t ino) {
     if (memf_disabled() || !ino) return;
     int found = -1;
-    for (int fd = 0; fd < 1024; fd++) {
+    for (int fd = 0; fd < DD_NFD; fd++) {
         if (g_memf[fd]) continue;
         struct stat s;
         if (fstat(fd, &s) != 0) continue;
@@ -489,28 +513,28 @@ static void memf_try_adopt(uint64_t dev, uint64_t ino) {
 // on the unmapped low address. [lo,hi) is the un-biased link span of the current main image (0 if PIE).
 static uint64_t g_nonpie_lo, g_nonpie_hi, g_nonpie_bias;
 // fd is a timerfd (a kqueue with an EVFILT_TIMER) -> read() drains it
-static uint8_t g_timerfd[1024];
+static uint8_t g_timerfd[DD_NFD];
 // fd is an inotify (a kqueue with EVFILT_VNODE watches) -> read() drains it
-static uint8_t g_inotify[1024];
+static uint8_t g_inotify[DD_NFD];
 // inotify-on-a-directory emulation: kqueue says "the dir changed" but not which entry, so we keep the
 // watched dir's path + a snapshot of its names and diff on read() to synthesize IN_CREATE/IN_DELETE+name.
-static char g_inotify_wpath[1024][512];
-static char *g_inotify_snap[1024]; // newline-joined entry names of the last snapshot (malloc'd)
+static char g_inotify_wpath[DD_NFD][512];
+static char *g_inotify_snap[DD_NFD]; // newline-joined entry names of the last snapshot (malloc'd)
 // inotify: which inotify-instance fd owns each watch fd (wd) -> read(instance) drains that wd's move queue.
-static int g_inotify_owner[1024];
+static int g_inotify_owner[DD_NFD];
 // timerfd remaining-time tracking (lsys-timerfd-gettime): absolute CLOCK_MONOTONIC deadline (ns) of the
 // next expiry + the interval (ns). timerfd_settime records them so timerfd_gettime reports it_value/interval.
-static int64_t g_tfd_deadline[1024];
-static int64_t g_tfd_interval[1024];
+static int64_t g_tfd_deadline[DD_NFD];
+static int64_t g_tfd_interval[DD_NFD];
 // memfd sealing (lsys-memfd-seal): g_memfd_is[fd]=1 marks an anonymous memfd; g_memfd_seal[fd] carries the
 // F_SEAL_* bitmask (F_SEAL_SEAL=1,SHRINK=2,GROW=4,WRITE=8,FUTURE_WRITE=16). A non-ALLOW_SEALING memfd starts
 // already F_SEAL_SEAL'd, so further F_ADD_SEALS fail EPERM exactly as on Linux.
-static uint8_t g_memfd_is[1024];
-static int g_memfd_seal[1024];
+static uint8_t g_memfd_is[DD_NFD];
+static int g_memfd_seal[DD_NFD];
 // pipe read-pushback (tee(2)): tee() consumes bytes from the source pipe to copy them, then re-queues them
 // here so the next read()/readv() on that fd re-serves them -> tee leaves the source pipe intact.
-static uint8_t *g_fd_pushback[1024];
-static size_t g_fd_pb_len[1024];
+static uint8_t *g_fd_pushback[DD_NFD];
+static size_t g_fd_pb_len[DD_NFD];
 // pinned O_DIRECTORY fd to the rootfs (set at startup)
 static int g_root_fd = -1;
 
@@ -543,6 +567,9 @@ struct vol {
     int ro;     // 1 = read-only bind (`-v …:ro`): write-intent syscalls under `guest` fail EROFS
     int isfile; // 1 = single-file bind (`-v host/f:/ctr/f`): `fd` is the host file's PARENT dir, `hcanon`
                 // is the file itself, and `guest` matches ONLY its exact path (a file has no children).
+    int dead;   // 1 = detached by a runtime umount2(2): skipped by jail_match/jail_is_vol so the mount
+                // point reverts to the underlying rootfs/overlay content (the slot is never compacted --
+                // append-only keeps concurrent path resolves race-free).
 };
 static struct vol g_vols[32];
 static int g_nvols;
@@ -598,10 +625,13 @@ static void add_vol(const char *spec) { // "[ro:]guestpath:hostdir" -> a confine
     if (!realpath(col + 1, v->hcanon)) return;
     v->hlen = strlen(v->hcanon);
     struct stat hst;
-    if (stat(v->hcanon, &hst) == 0 && S_ISREG(hst.st_mode)) {
-        // Single-file bind: openat's jail base must be a directory, so pin the file's PARENT dir as `fd`
-        // and route the exact mount point straight to `hcanon`. Dropping the O_DIRECTORY requirement here
-        // is what lets a regular-file source register at all (it ENOTDIRs otherwise -> the mount was lost).
+    if (stat(v->hcanon, &hst) == 0 && !S_ISDIR(hst.st_mode)) {
+        // Single-file bind (regular file, but ALSO a socket / fifo / device): openat's jail base must be a
+        // directory, so pin the source's PARENT dir as `fd` and route the exact mount point straight to
+        // `hcanon`. Dropping the O_DIRECTORY requirement here is what lets a non-dir source register at all
+        // (it ENOTDIRs otherwise -> the mount was silently lost). Matching on !S_ISDIR (not just S_ISREG)
+        // is what makes a bind-mounted Unix socket — e.g. the docker daemon socket — resolve so the guest's
+        // connect() dials the real host socket instead of ENOENT.
         v->isfile = 1;
         char par[1024];
         snprintf(par, sizeof par, "%s", v->hcanon);
@@ -619,6 +649,61 @@ static void add_vol(const char *spec) { // "[ro:]guestpath:hostdir" -> a confine
     vol_mkmountpoint(v->guest, v->isfile);
 }
 
+// Runtime bind/tmpfs volume registration for mount(2): like add_vol but takes an already-resolved host
+// backing (a real dir or a single file) + a guest target directly -- no "spec" string, so a guest path
+// containing ':' can never be misparsed. g_nvols is published LAST (release), so a concurrent path
+// resolver sees either the old count or a fully-populated entry (never a half-written one). The mount
+// point (+ ancestors) is materialized in the writable upper so a parent `ls` shows it. 0 or -errno.
+static int rt_add_vol(const char *guest, const char *hostsrc, int ro) {
+    if (!guest || guest[0] != '/' || !hostsrc) return -EINVAL;
+    if (g_nvols >= 32) return -ENOMEM;
+    struct vol *v = &g_vols[g_nvols];
+    memset(v, 0, sizeof *v);
+    v->ro = ro ? 1 : 0;
+    snprintf(v->guest, sizeof v->guest, "%s", guest);
+    v->glen = strlen(v->guest);
+    while (v->glen > 1 && v->guest[v->glen - 1] == '/')
+        v->guest[--v->glen] = 0;
+    if (!realpath(hostsrc, v->hcanon)) {
+        int e = errno;
+        return e ? -e : -ENOENT;
+    }
+    v->hlen = strlen(v->hcanon);
+    struct stat hst;
+    if (stat(v->hcanon, &hst) == 0 && !S_ISDIR(hst.st_mode)) {
+        // Single-file (or socket/fifo/device) bind: pin the source's PARENT dir as the jail base and route
+        // the exact mount point straight to `hcanon` (see add_vol for the full rationale).
+        v->isfile = 1;
+        char par[1024];
+        snprintf(par, sizeof par, "%s", v->hcanon);
+        char *sl = strrchr(par, '/');
+        if (!sl) return -EINVAL;
+        if (sl == par)
+            par[1] = 0;
+        else
+            *sl = 0;
+        if ((v->fd = open(par, O_RDONLY | O_DIRECTORY)) < 0) return -errno;
+    } else if ((v->fd = open(v->hcanon, O_RDONLY | O_DIRECTORY)) < 0)
+        return -errno;
+    v->fd = engine_fd_hoist(v->fd);
+    vol_mkmountpoint(v->guest, v->isfile);
+    __atomic_store_n(&g_nvols, g_nvols + 1, __ATOMIC_RELEASE); // publish the complete entry LAST
+    return 0;
+}
+
+// Detach the bind/tmpfs volume mounted at EXACTLY `guest` (runtime umount2). Marks the slot dead (never
+// compacted -> race-free) so the path reverts to the underlying rootfs/overlay. 0 if one was detached,
+// -EINVAL if no volume is mounted there (Linux umount of a non-mount-point).
+static int rt_del_vol(const char *guest) {
+    int nv = __atomic_load_n(&g_nvols, __ATOMIC_ACQUIRE), hit = -EINVAL;
+    for (int i = 0; i < nv; i++)
+        if (!g_vols[i].dead && !strcmp(g_vols[i].guest, guest)) {
+            g_vols[i].dead = 1;
+            hit = 0;
+        }
+    return hit;
+}
+
 // Longest matching bind-mount volume for an absolute guest path (the DEEPEST mount wins, exactly as the
 // kernel routes a path to the innermost mount), or -1 for the rootfs/overlay jail. Longest-prefix so a
 // nested volume (`-v H1:/x/y -v H2:/x/y/z`) routes /x/y/z to the inner mount regardless of registration
@@ -626,7 +711,9 @@ static void add_vol(const char *spec) { // "[ro:]guestpath:hostdir" -> a confine
 static int jail_match(const char *abs) {
     int best = -1;
     size_t blen = 0;
-    for (int i = 0; i < g_nvols; i++) {
+    int nv = __atomic_load_n(&g_nvols, __ATOMIC_ACQUIRE);
+    for (int i = 0; i < nv; i++) {
+        if (g_vols[i].dead) continue; // runtime-umounted: no longer routes here
         char b = abs[g_vols[i].glen];
         // A directory mount owns its children too (b=='/'); a file mount matches ONLY its exact path.
         int hit = g_vols[i].isfile ? (b == 0) : (b == '/' || b == 0);
@@ -1432,7 +1519,7 @@ static int proc_fd_dir_open(void) {
     procfd_dirs_reap(0);
     char tmpl[] = "/tmp/.ddfddirXXXXXX";
     if (!mkdtemp(tmpl)) return -1;
-    for (int fd = 0; fd < 1024; fd++) {
+    for (int fd = 0; fd < DD_NFD; fd++) {
         if (fcntl(fd, F_GETFD) == -1) continue; // not open
         char tgt[4200];
         if (fcntl(fd, F_GETPATH, tgt) == 0 && tgt[0]) {
@@ -2038,10 +2125,26 @@ static int proc_task_dir_open(int gp) {
     return fd;
 }
 
+// Rewrite a leading /proc/self/ or /proc/thread-self/ (WITH a tail) to /proc/<our-pid>/ so the
+// numeric-pid synth (proc_dir_try_open, the synth_stat task-dir block) resolves the CALLER's own
+// subtrees -- e.g. /proc/self/task, /proc/self/task/<tid>. Bare /proc/self (the magic symlink) is
+// left untouched (it stays a symlink). Returns `out` on rewrite, else the original `rp` unchanged.
+static const char *proc_deself(const char *rp, char *out, size_t osz) {
+    if (!rp) return rp;
+    const char *tail = NULL;
+    if (!strncmp(rp, "/proc/self/", 11)) tail = rp + 10; // keep the leading '/'
+    else if (!strncmp(rp, "/proc/thread-self/", 18)) tail = rp + 17;
+    if (!tail) return rp;
+    snprintf(out, osz, "/proc/%d%s", container_pid(), tail);
+    return out;
+}
+
 // If `rp` is a /proc/<pid> DIRECTORY path (the pid dir, its task/ dir, or a task/<tid>/ dir) for a live
 // container pid, materialize it and return the fd. Returns -1 on error, or -2 if `rp` is not such a
 // directory (a per-pid FILE like stat/status -> the caller falls through to proc_open). fs.c calls this.
 static int proc_dir_try_open(const char *rp) {
+    char dsb[4200];
+    rp = proc_deself(rp, dsb, sizeof dsb); // /proc/self/task -> /proc/<cpid>/task
     if (!rp || strncmp(rp, "/proc/", 6)) return -2;
     const char *q = rp + 6;
     int i = 0;
@@ -2582,7 +2685,7 @@ static int proc_open(const char *rp) {
             // VA-indexed binary pagemap: back it with an empty seekable regular fd (lseek to vaddr/pg*8
             // works natively) and synthesize the 8-byte-per-page entries on read (io.c). LTP mmap12.
             int fd = proc_text_fd("", 0);
-            if (fd >= 0 && fd < 1024) g_pagemap_fd[fd] = 1;
+            if (fd >= 0 && fd < DD_NFD) g_pagemap_fd[fd] = 1;
             return fd;
         }
         if (!strcmp(leaf, "maps") || !strcmp(leaf, "task/1/maps")) return proc_maps_fd(0);
@@ -3275,8 +3378,8 @@ static char g_pts_slavename[DEVPTS_MAX][64]; // pts index N -> host slave device
                                              // (e.g. the parent) holds the master -- so /dev/pts/N must resolve
                                              // by this cached host path. A host open() of it naturally succeeds
                                              // iff the pty is still alive and fails once it is truly gone.
-static int g_fd_ptsn[1024];                  // host fd -> (pts index + 1); 0 = not a pty fd
-static uint8_t g_fd_ptsmaster[1024];         // 1 = this fd is the MASTER end, 0 = a slave
+static int g_fd_ptsn[DD_NFD];                  // host fd -> (pts index + 1); 0 = not a pty fd
+static uint8_t g_fd_ptsmaster[DD_NFD];         // 1 = this fd is the MASTER end, 0 = a slave
 
 // Materialize/remove the on-disk /dev/pts/<N> node so `ls /dev/pts` reflects the live slaves (devpts
 // creates the node when a slave is allocated and drops it when the pty is gone). Backed by an empty upper
@@ -3307,7 +3410,7 @@ static int pts_alloc(int masterfd) {
     for (int n = start; n < DEVPTS_MAX; n++) {
         if (!g_pts_master[n]) {
             g_pts_master[n] = masterfd + 1;
-            if (masterfd >= 0 && masterfd < 1024) {
+            if (masterfd >= 0 && masterfd < DD_NFD) {
                 g_fd_ptsn[masterfd] = n + 1;
                 g_fd_ptsmaster[masterfd] = 1;
             }
@@ -3330,15 +3433,15 @@ static int pts_master_fd(int n) {
 }
 
 static int pts_index_of_master(int fd) {
-    return (fd >= 0 && fd < 1024 && g_fd_ptsmaster[fd]) ? g_fd_ptsn[fd] - 1 : -1;
+    return (fd >= 0 && fd < DD_NFD && g_fd_ptsmaster[fd]) ? g_fd_ptsn[fd] - 1 : -1;
 }
 
 static int pts_index_of_fd(int fd) {
-    return (fd >= 0 && fd < 1024 && g_fd_ptsn[fd]) ? g_fd_ptsn[fd] - 1 : -1;
+    return (fd >= 0 && fd < DD_NFD && g_fd_ptsn[fd]) ? g_fd_ptsn[fd] - 1 : -1;
 }
 
 static int pts_fd_is_master(int fd) {
-    return fd >= 0 && fd < 1024 && g_fd_ptsmaster[fd];
+    return fd >= 0 && fd < DD_NFD && g_fd_ptsmaster[fd];
 }
 
 // the cached host slave device path for index N (empty string -> NULL). Used to resolve /dev/pts/N
@@ -3349,7 +3452,7 @@ static const char *pts_slave_name(int n) {
 
 // Record a freshly-opened slave fd's pts index and publish its /dev/pts/N node.
 static void pts_note_slave(int slavefd, int n) {
-    if (slavefd >= 0 && slavefd < 1024) {
+    if (slavefd >= 0 && slavefd < DD_NFD) {
         g_fd_ptsn[slavefd] = n + 1;
         g_fd_ptsmaster[slavefd] = 0;
     }
@@ -3359,7 +3462,7 @@ static void pts_note_slave(int slavefd, int n) {
 // close(2) / CLOEXEC-sweep teardown: a master frees its index (and its /dev/pts/N node); a slave clears
 // only its own entry (other slaves / the master keep the pty alive).
 static void pts_on_close(int fd) {
-    if (fd < 0 || fd >= 1024 || !g_fd_ptsn[fd]) return;
+    if (fd < 0 || fd >= DD_NFD || !g_fd_ptsn[fd]) return;
     if (g_fd_ptsmaster[fd]) {
         int n = g_fd_ptsn[fd] - 1;
         if (n >= 0 && n < DEVPTS_MAX) g_pts_master[n] = 0;
@@ -3397,6 +3500,209 @@ static const char *dev_node_hostpath(const char *gp) {
                                          : NULL;
 }
 
+// ================= dd GPU rung 2: host-IOSurface-backed guest buffer =================
+// See include/dd_gpu.h. Entirely gated behind DD_GPU_IOSURFACE (gpu_iosurface_on()); the code compiles
+// always (the engine is always a macOS binary) but never runs for existing workloads / the gate.
+#include "../../../include/dd_gpu.h"
+#ifdef __APPLE__
+#include <CoreFoundation/CoreFoundation.h>
+#include <IOSurface/IOSurface.h>
+#include <mach/mach.h>
+#include <servers/bootstrap.h>
+
+// Mach message carrying an IOSurface send-right + its id to dd-display (must match dd-display's
+// mach_bridge.c dd_gpu_msg_t exactly).
+typedef struct {
+    mach_msg_header_t header;
+    mach_msg_body_t body;
+    mach_msg_port_descriptor_t port;
+    uint32_t id;
+} dd_gpu_msg_t;
+
+// Send the IOSurface's send-right + id to dd-display's bootstrap mach service. Best-effort: if the
+// compositor isn't up (no service), silently skip — the alloc still succeeds for the guest.
+static void dd_gpu_send_port(uint32_t id, IOSurfaceRef surf) {
+    mach_port_t server = MACH_PORT_NULL;
+    // DD_GPU_BRIDGE_NAME lets multiple dd-display instances coexist (one per agent/benchmark); the
+    // compositor registers under the SAME name. Unset → the historical singleton "com.dd.display.gpu".
+    const char *bridge = getenv("DD_GPU_BRIDGE_NAME");
+    if (!bridge || !*bridge) bridge = "com.dd.display.gpu";
+    if (bootstrap_look_up(bootstrap_port, (char *)bridge, &server) != KERN_SUCCESS) return;
+    mach_port_t port = IOSurfaceCreateMachPort(surf);
+    if (port == MACH_PORT_NULL) {
+        mach_port_deallocate(mach_task_self(), server);
+        return;
+    }
+    dd_gpu_msg_t msg;
+    memset(&msg, 0, sizeof msg);
+    msg.header.msgh_bits = MACH_MSGH_BITS_COMPLEX | MACH_MSGH_BITS(MACH_MSG_TYPE_COPY_SEND, 0);
+    msg.header.msgh_size = sizeof msg;
+    msg.header.msgh_remote_port = server;
+    msg.header.msgh_local_port = MACH_PORT_NULL;
+    msg.header.msgh_id = 1;
+    msg.body.msgh_descriptor_count = 1;
+    msg.port.name = port;
+    msg.port.disposition = MACH_MSG_TYPE_COPY_SEND;
+    msg.port.type = MACH_MSG_PORT_DESCRIPTOR;
+    msg.id = id;
+    mach_msg(&msg.header, MACH_SEND_MSG, sizeof msg, 0, MACH_PORT_NULL, MACH_MSG_TIMEOUT_NONE, MACH_PORT_NULL);
+    mach_port_deallocate(mach_task_self(), port);   // release our COPY_SEND source ref
+    mach_port_deallocate(mach_task_self(), server); // release the looked-up service port
+}
+#endif
+
+#ifdef __APPLE__
+// Per-render-node IOSurface registry: reuse a same-size surface across frames (a guest redraws into the
+// same buffer each frame) and release every surface a render-node fd owns when it closes — so a
+// long-running GUI app doesn't accumulate IOSurfaces. Bounded, gated (only the GPU path touches it).
+#define DD_GPU_REG_MAX 128
+static struct dd_gpu_reg_ent {
+    int owner_fd;
+    uint32_t id, w, h, stride;
+    IOSurfaceRef surf;
+    void *base;
+} g_gpu_reg[DD_GPU_REG_MAX];
+
+static int dd_gpu_reg_find(int fd, uint32_t w, uint32_t h) {
+    for (int i = 0; i < DD_GPU_REG_MAX; i++)
+        if (g_gpu_reg[i].surf && g_gpu_reg[i].owner_fd == fd && g_gpu_reg[i].w == w && g_gpu_reg[i].h == h)
+            return i;
+    return -1;
+}
+static void dd_gpu_reg_add(int fd, uint32_t id, uint32_t w, uint32_t h, uint32_t stride, IOSurfaceRef surf, void *base) {
+    for (int i = 0; i < DD_GPU_REG_MAX; i++)
+        if (!g_gpu_reg[i].surf) {
+            g_gpu_reg[i].owner_fd = fd;
+            g_gpu_reg[i].id = id;
+            g_gpu_reg[i].w = w;
+            g_gpu_reg[i].h = h;
+            g_gpu_reg[i].stride = stride;
+            g_gpu_reg[i].surf = surf;
+            g_gpu_reg[i].base = base;
+            return;
+        }
+    // Registry full: keep the surface live (bounded leak) rather than churn — 128 buffers is generous.
+}
+// Release every IOSurface owned by `fd` (the render node closed). Called from fd_reset_emul.
+static void dd_gpu_free_fd(int fd) {
+    for (int i = 0; i < DD_GPU_REG_MAX; i++)
+        if (g_gpu_reg[i].surf && g_gpu_reg[i].owner_fd == fd) {
+            CFRelease(g_gpu_reg[i].surf);
+            memset(&g_gpu_reg[i], 0, sizeof g_gpu_reg[i]);
+        }
+}
+// Locate a registered surface by its DRM handle (== IOSurface global id). Used by the dumb-buffer
+// ioctls (MAP/DESTROY/GEM_CLOSE/PRIME) and the mem.c MAP_DUMB mmap branch. Returns index or -1.
+static int dd_gpu_reg_by_handle(uint32_t handle) {
+    for (int i = 0; i < DD_GPU_REG_MAX; i++)
+        if (g_gpu_reg[i].surf && g_gpu_reg[i].id == handle) return i;
+    return -1;
+}
+// Release the surface for a DRM handle (DESTROY_DUMB / GEM_CLOSE). dd-display keeps its own mach-port
+// ref, so dropping ours is safe (the IOSurface is refcounted cross-process).
+static void dd_gpu_free_handle(uint32_t handle) {
+    int i = dd_gpu_reg_by_handle(handle);
+    if (i >= 0) {
+        CFRelease(g_gpu_reg[i].surf);
+        memset(&g_gpu_reg[i], 0, sizeof g_gpu_reg[i]);
+    }
+}
+#endif
+
+// Core IOSurface allocator shared by DD_IOCTL_GPU_ALLOC (glmark2/EGL shim path) and the DRM
+// CREATE_DUMB ioctl (chromium/Mesa kms_swrast path). Reuse-or-create a host IOSurface for
+// (owner_fd,w,h), announce it to dd-display over mach, register it under owner_fd, and hand back its
+// id/stride/base. `reuse` selects redraw-in-place (glmark2) vs a fresh distinct surface per call
+// (gbm bo pool). Returns 0 or -errno. Gated: only ever reached on a render-node fd with the GPU path on.
+static int dd_gpu_surface(int owner_fd, uint32_t w, uint32_t h, int reuse, uint32_t *out_id,
+                          uint32_t *out_stride, void **out_base) {
+    if (w == 0 || h == 0 || w > 16384 || h > 16384) return -EINVAL;
+    uint32_t stride = w * 4;
+    size_t size = (size_t)stride * h;
+    (void)size;
+    void *base = NULL;
+    uint32_t id = 0;
+#ifdef __APPLE__
+    if (reuse) {
+        int r = dd_gpu_reg_find(owner_fd, w, h);
+        if (r >= 0) {
+            struct dd_gpu_reg_ent *e = &g_gpu_reg[r];
+            dd_gpu_send_port(e->id, e->surf); // re-announce so a freshly-started dd-display re-caches it
+            *out_id = e->id;
+            *out_stride = e->stride;
+            *out_base = e->base;
+            return 0;
+        }
+    }
+    CFMutableDictionaryRef props =
+        CFDictionaryCreateMutable(NULL, 0, &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
+    if (!props) return -ENOMEM;
+    int32_t iw = (int32_t)w, ih = (int32_t)h, ibpe = 4, istride = (int32_t)stride, ione = 1;
+    int32_t pf = 0x42475241; // 'BGRA'
+    CFNumberRef n;
+#define PUT(key, val)                                                     \
+    n = CFNumberCreate(NULL, kCFNumberSInt32Type, &(val));                \
+    CFDictionarySetValue(props, key, n);                                  \
+    CFRelease(n)
+    PUT(kIOSurfaceWidth, iw);
+    PUT(kIOSurfaceHeight, ih);
+    PUT(kIOSurfaceBytesPerElement, ibpe);
+    PUT(kIOSurfaceBytesPerRow, istride);
+    PUT(kIOSurfacePixelFormat, pf);
+    PUT(kIOSurfaceIsGlobal, ione);
+#undef PUT
+    IOSurfaceRef surf = IOSurfaceCreate(props);
+    CFRelease(props);
+    if (!surf) return -ENOMEM;
+    id = IOSurfaceGetID(surf);
+    IOSurfaceLock(surf, 0, NULL);
+    base = IOSurfaceGetBaseAddress(surf);
+    IOSurfaceUnlock(surf, 0, NULL);
+    stride = (uint32_t)IOSurfaceGetBytesPerRow(surf);
+    dd_gpu_send_port(id, surf);
+    dd_gpu_reg_add(owner_fd, id, w, h, stride, surf, base); // own it → released on handle/fd close
+#else
+    base = mmap(NULL, size, PROT_READ | PROT_WRITE, MAP_ANON | MAP_PRIVATE, -1, 0);
+    if (base == MAP_FAILED) return -ENOMEM;
+    static uint32_t fake_id = 1;
+    id = fake_id++;
+    (void)reuse;
+#endif
+    if (!base) return -ENOMEM;
+    *out_id = id;
+    *out_stride = stride;
+    *out_base = base;
+    return 0;
+}
+
+// Service DD_IOCTL_GPU_ALLOC: host-allocate (or reuse) an IOSurface, return its base pointer
+// (guest==host VA), its global id, stride, and a throwaway dmabuf fd. `owner_fd` is the render node so
+// the surface's lifetime is tied to it. Returns 0 on success, a negative errno otherwise.
+static int64_t dd_gpu_alloc(int owner_fd, void *arg) {
+    struct dd_gpu_alloc *r = (struct dd_gpu_alloc *)arg;
+    if (!r) return -EFAULT;
+    uint32_t id = 0, stride = 0;
+    void *base = NULL;
+    // reuse=1: redraw-in-place across frames (the EGL shim redraws the same-size surface each frame).
+    int rc = (int)dd_gpu_surface(owner_fd, r->width, r->height, 1, &id, &stride, &base);
+    if (rc) return rc;
+    size_t size = (size_t)stride * r->height;
+    // A throwaway anonymous fd to satisfy linux-dmabuf's params.add (its pages are unused; dd-display
+    // resolves the IOSurface by id from the modifier).
+    char tn[] = "/tmp/.ddgpuXXXXXX";
+    int fd = mkstemp(tn);
+    if (fd >= 0) {
+        unlink(tn);
+        if (ftruncate(fd, (off_t)size) != 0) { /* non-fatal: fd still a valid handle */
+        }
+    }
+    r->stride = stride;
+    r->id = id;
+    r->fd = fd;
+    r->ptr = (uint64_t)(uintptr_t)base;
+    return 0;
+}
+
 // Populate the container's /dev at start-up. dd flattens the image into one rootfs (no per-container
 // devtmpfs) and the OCI unpacker strips every `dev/*` node (unprivileged mknod fails on macOS), so the
 // rootfs /dev is empty. Docker mounts a fresh /dev with these standard entries; we materialize the ones
@@ -3412,6 +3718,7 @@ static void container_populate_dev(void) {
     mkdir(base, 0755); // ensure /dev exists (image /dev contents were excluded at unpack)
     // helper: build <rootfs>/dev/<leaf> into a scratch buffer
 #define DEVP(leaf) (snprintf(base + bl, sizeof base - bl, "/%s", (leaf)), base)
+#define DEVP2(d, leaf) (snprintf(base + bl, sizeof base - bl, "/%s/%s", (d), (leaf)), base)
     // /dev/fd + the std stream aliases: the standard Linux symlinks into /proc/self/fd (which the engine
     // already synthesizes). readlink/ls see the symlink; open("/dev/fd/N") is caught by procfd_num().
     symlink("/proc/self/fd", DEVP("fd"));
@@ -3442,7 +3749,20 @@ static void container_populate_dev(void) {
     }
     mkdir(DEVP("shm"), 01777); // POSIX shm dir (shm_open names get redirected to a host tmp file in fs.c)
     mkdir(DEVP("mqueue"), 01777);
+    // GPU rung 2 (opt-in): a /dev/dri directory with card0 + renderD128 placeholder nodes so opendir/
+    // readdir (libdrm's drmGetDevices2 enumeration) lists them via the real overlay; stat()/open() of the
+    // two nodes are intercepted (drm_synth_stat -> char dev 226:0/226:128, fs.c open -> render-node tag).
+    // Inert unless DD_GPU_IOSURFACE is set (existing workloads never see /dev/dri).
+    if (gpu_iosurface_on()) {
+        mkdir(DEVP("dri"), 0755);
+        static const char *const dri[] = {"card0", "renderD128"};
+        for (size_t i = 0; i < sizeof dri / sizeof *dri; i++) {
+            int fd = open(DEVP2("dri", dri[i]), O_CREAT | O_WRONLY, 0666);
+            if (fd >= 0) close(fd);
+        }
+    }
 #undef DEVP
+#undef DEVP2
 }
 
 // materialize /etc/machine-id (32 lowercase hex + newline) so libdbus/systemd/journald/gnome find a
@@ -3561,8 +3881,279 @@ static void container_populate_machine_id(void) {
 }
 
 // -> macOS struct stat for a synth file
+// ================= DRM render-node synthesis (chromium ozone GPU discovery) =================
+// Gated on DD_GPU_IOSURFACE. libdrm's drmGetDevices2() enumerates /dev/dri, stats each node's st_rdev ->
+// major:minor, then walks /sys/dev/char/<maj>:<min>/... to classify the DRM device's bus. We advertise
+// ONE platform DRM device with a primary node (card0 = 226:0) and a render node (renderD128 = 226:128),
+// both parented to a single platform device ("dd-gpu") so libdrm MERGES them into one drmDevice exposing a
+// render node -- which chromium opens instead of hold-and-wait deadlocking in its viz buffer-manager
+// fallback. Every sysfs path is matched EXACTLY (no real /sys tree); /dev/dri itself is a real placeholder
+// dir in the writable upper (container_populate_dev) so opendir/readdir just work through the overlay.
+#define DD_DRM_MAJOR 226
+
+static int drm_dbg(void) {
+    static int v = -1;
+    if (v < 0) v = getenv("DD_DRM_DEBUG") != NULL;
+    return v;
+}
+static void drm_trace(const char *op, const char *path, int hit) {
+    if (drm_dbg() && path &&
+        (!strncmp(path, "/dev/dri", 8) || !strncmp(path, "/sys/dev/char", 13) || !strncmp(path, "/sys/class/drm", 14)))
+        fprintf(stderr, "[DRMSYNTH] %-9s %-6s %s\n", op, hit ? "HIT" : "miss", path);
+}
+
+// Map a /dev/dri child name to its DRM minor. 1 (+ *minor) on hit, 0 on miss.
+static int drm_dev_minor(const char *name, int *minor) {
+    if (!strcmp(name, "renderD128")) { *minor = 128; return 1; }
+    if (!strcmp(name, "card0")) { *minor = 0; return 1; }
+    return 0;
+}
+// Parse the <minor> of a "/sys/dev/char/226:<minor>" path prefix; returns the tail after <minor> (points at
+// '/' or '\0'), or NULL if not a 226:{0,128} node.
+static const char *drm_char_tail(const char *gp, int *minor) {
+    if (strncmp(gp, "/sys/dev/char/226:", 18)) return NULL;
+    const char *r = gp + 18;
+    if (*r < '0' || *r > '9') return NULL;
+    int m = 0;
+    for (; *r >= '0' && *r <= '9'; r++) m = m * 10 + (*r - '0');
+    if (m != 0 && m != 128) return NULL;
+    *minor = m;
+    return r;
+}
+
+// stat() for a DRM synth path. 1 (filled) / 0 (not ours). Char device for the /dev/dri nodes; directory for
+// the /dev/dri dir and the sysfs container dirs libdrm stats or opendirs (drm/, the class dir, device dir).
+static int drm_synth_stat(const char *gp, struct stat *s) {
+    if (!gpu_iosurface_on() || !gp) return 0;
+    int minor = -1;
+    if (!strcmp(gp, "/dev/dri")) {
+        memset(s, 0, sizeof *s); s->st_mode = S_IFDIR | 0755; s->st_nlink = 2; return 1;
+    }
+    if (!strncmp(gp, "/dev/dri/", 9) && drm_dev_minor(gp + 9, &minor)) {
+        memset(s, 0, sizeof *s);
+        s->st_mode = S_IFCHR | 0666;
+        s->st_rdev = (dev_t)(((uint64_t)DD_DRM_MAJOR << 8) | (unsigned)minor); // gnu_dev-decodable 226:minor
+        s->st_nlink = 1;
+        return 1;
+    }
+    if (!strcmp(gp, "/sys/class/drm") || !strcmp(gp, "/sys/class/drm/card0") ||
+        !strcmp(gp, "/sys/class/drm/renderD128") || !strcmp(gp, "/sys/class/drm/card0/device") ||
+        !strcmp(gp, "/sys/class/drm/renderD128/device")) {
+        memset(s, 0, sizeof *s); s->st_mode = S_IFDIR | 0555; s->st_nlink = 2; return 1;
+    }
+    const char *tail = drm_char_tail(gp, &minor);
+    if (tail && (*tail == 0 || !strcmp(tail, "/device") || !strcmp(tail, "/device/drm"))) {
+        memset(s, 0, sizeof *s); s->st_mode = S_IFDIR | 0555; s->st_nlink = 2; return 1;
+    }
+    return 0;
+}
+
+// fstat() fixup for a synthesized DRM render-node fd. The node is backed by a host /dev/null, so a bare
+// fstat(fd) reports /dev/null's rdev -- libdrm then builds /sys/dev/char/<bogus>/... and the enumeration
+// fails. Overwrite `s` to the char device (S_IFCHR, rdev 226:<minor>) matching drm_synth_stat's by-path
+// answer. `g_devdri[fd]` holds minor+1 (renderD128 -> 129, card0 -> 1). Returns 1 if it patched.
+static int drm_fd_stat_fixup(int fd, struct stat *s) {
+    if (!gpu_iosurface_on() || fd < 0 || fd >= DD_NFD || !g_devdri[fd]) return 0;
+    int minor = g_devdri[fd] - 1;
+    s->st_mode = S_IFCHR | 0666;
+    s->st_rdev = (dev_t)(((uint64_t)DD_DRM_MAJOR << 8) | (unsigned)minor); // gnu_dev-decodable 226:minor
+    s->st_nlink = 1;
+    return 1;
+}
+
+// readlink() for the DRM synth symlinks libdrm resolves (subsystem/device classification). Returns the
+// written length, or -1 if `gp` is not a synth symlink. `buf` need not be NUL-terminated (readlink).
+static int drm_synth_readlink(const char *gp, char *buf, size_t bs) {
+    if (!gpu_iosurface_on() || !gp) return -1;
+    char t[128];
+    int l = -1, minor = -1;
+    const char *tail = drm_char_tail(gp, &minor);
+    if (tail) {
+        const char *node = (minor == 128) ? "renderD128" : "card0";
+        if (*tail == 0)
+            l = snprintf(t, sizeof t, "/sys/devices/platform/dd-gpu/drm/%s", node); // node -> its drm sysdir
+        else if (!strcmp(tail, "/device"))
+            l = snprintf(t, sizeof t, "/sys/devices/platform/dd-gpu"); // -> parent platform device (fullname)
+        else if (!strcmp(tail, "/device/subsystem"))
+            l = snprintf(t, sizeof t, "/sys/bus/platform"); // -> bus type "platform"
+    } else if (!strcmp(gp, "/sys/class/drm/renderD128"))
+        l = snprintf(t, sizeof t, "/sys/devices/platform/dd-gpu/drm/renderD128");
+    else if (!strcmp(gp, "/sys/class/drm/card0"))
+        l = snprintf(t, sizeof t, "/sys/devices/platform/dd-gpu/drm/card0");
+    else if (!strcmp(gp, "/sys/class/drm/renderD128/device") || !strcmp(gp, "/sys/class/drm/card0/device"))
+        l = snprintf(t, sizeof t, "/sys/devices/platform/dd-gpu");
+    if (l < 0) return -1;
+    size_t n = (size_t)l > bs ? bs : (size_t)l;
+    memcpy(buf, t, n);
+    return (int)n;
+}
+
+// Content of a DRM synth sysfs FILE (uevent / dev). Returns length (NUL-terminated in `out`) or -1.
+static int drm_synth_content(const char *gp, char *out, size_t n) {
+    if (!gpu_iosurface_on() || !gp) return -1;
+    int minor = -1;
+    const char *tail = drm_char_tail(gp, &minor);
+    if (tail) {
+        const char *node = (minor == 128) ? "renderD128" : "card0";
+        if (!strcmp(tail, "/uevent"))
+            return snprintf(out, n, "MAJOR=226\nMINOR=%d\nDEVNAME=dri/%s\n", minor, node);
+        if (!strcmp(tail, "/dev")) return snprintf(out, n, "226:%d\n", minor);
+        // the PARENT platform device's uevent (drmParsePlatformDeviceInfo parses OF_COMPATIBLE_N; absent -> 0)
+        if (!strcmp(tail, "/device/uevent"))
+            return snprintf(out, n, "DRIVER=dd_gpu\nOF_NAME=gpu\nOF_FULLNAME=/dd-gpu\n");
+    }
+    if (!strcmp(gp, "/sys/class/drm/renderD128/dev")) return snprintf(out, n, "226:128\n");
+    if (!strcmp(gp, "/sys/class/drm/card0/dev")) return snprintf(out, n, "226:0\n");
+    if (!strcmp(gp, "/sys/class/drm/renderD128/uevent"))
+        return snprintf(out, n, "MAJOR=226\nMINOR=128\nDEVNAME=dri/renderD128\n");
+    if (!strcmp(gp, "/sys/class/drm/card0/uevent"))
+        return snprintf(out, n, "MAJOR=226\nMINOR=0\nDEVNAME=dri/card0\n");
+    return -1;
+}
+
+// opendir() for the DRM synth directories libdrm readdirs: the drm class dir and each node's device/drm dir
+// both list card0 + renderD128. Materializes a real temp dir (shared g_procfd_dirs machinery) -> -2 (not
+// ours), -1 (error), or the fd.
+static int drm_dir_open(const char *rp) {
+    if (!gpu_iosurface_on() || !rp) return -2;
+    int minor = -1, want = 0;
+    const char *tail = drm_char_tail(rp, &minor);
+    if (!strcmp(rp, "/sys/class/drm"))
+        want = 1;
+    else if (tail && !strcmp(tail, "/device/drm"))
+        want = 1;
+    if (!want) return -2;
+    static int registered = 0;
+    if (!registered) { atexit(procfd_dirs_atexit); registered = 1; }
+    procfd_dirs_reap(0);
+    char tmpl[] = "/tmp/.dddrmXXXXXX";
+    if (!mkdtemp(tmpl)) return -1;
+    static const char *const ent[] = {"card0", "renderD128", 0};
+    for (int i = 0; ent[i]; i++) {
+        char p[96];
+        snprintf(p, sizeof p, "%s/%s", tmpl, ent[i]);
+        int f = open(p, O_WRONLY | O_CREAT | O_TRUNC, 0444);
+        if (f >= 0) close(f);
+    }
+    int fd = open(tmpl, O_RDONLY | O_DIRECTORY);
+    if (fd < 0) { procfd_dir_rm(tmpl); return -1; }
+    proc_dir_register(fd, tmpl, rp);
+    return fd;
+}
+
+// DRM ioctls on a render-node fd (drmGetVersion / GET_CAP / SET_CLIENT_CAP). In-process JIT: guest VA ==
+// host VA, so `arg` is dereferenced directly. Returns 0 / -errno. Two-call length-probe honored for VERSION.
+static int64_t drm_synth_ioctl(int fd, unsigned long rq, void *arg) {
+    switch (rq) {
+    case 0xc02064b2: { // DRM_IOCTL_MODE_CREATE_DUMB {u32 height,width,bpp,flags; u32 handle,pitch; u64 size}
+        // Mesa's kms_swrast GBM winsys allocates the window buffer as a DRM dumb buffer. Back it with a
+        // fresh host IOSurface (no reuse — gbm keeps a small bo pool and reuses at its own layer, and
+        // distinct handles keep DESTROY_DUMB lifetimes independent). handle == IOSurface id.
+        uint8_t *d = (uint8_t *)arg;
+        if (!d) return -EFAULT;
+        uint32_t height, width;
+        memcpy(&height, d + 0, 4);
+        memcpy(&width, d + 4, 4);
+        uint32_t id = 0, stride = 0;
+        void *base = NULL;
+        int rc = (int)dd_gpu_surface(fd, width, height, 0, &id, &stride, &base);
+        if (rc) return rc;
+        uint64_t size = (uint64_t)stride * height;
+        memcpy(d + 16, &id, 4);     // handle
+        memcpy(d + 20, &stride, 4); // pitch
+        memcpy(d + 24, &size, 8);   // size
+        return 0;
+    }
+    case 0xc01064b3: { // DRM_IOCTL_MODE_MAP_DUMB {u32 handle,pad; u64 offset}
+        // Return a synthetic fake mmap offset encoding the handle; mem.c's mmap branch (case 222) decodes
+        // it back to the surface's base VA (guest==host VA, so no real mapping is done).
+        uint8_t *d = (uint8_t *)arg;
+        if (!d) return -EFAULT;
+        uint32_t handle;
+        memcpy(&handle, d, 4);
+        uint64_t offset = ((uint64_t)handle) << 12;
+        memcpy(d + 8, &offset, 8);
+        return 0;
+    }
+    case 0xc00464b4: { // DRM_IOCTL_MODE_DESTROY_DUMB {u32 handle}
+        uint8_t *d = (uint8_t *)arg;
+        if (!d) return -EFAULT;
+        uint32_t handle;
+        memcpy(&handle, d, 4);
+#ifdef __APPLE__
+        dd_gpu_free_handle(handle);
+#endif
+        return 0;
+    }
+    case 0x40086409: { // DRM_IOCTL_GEM_CLOSE {u32 handle,pad} — drop the handle (1:1 handle↔surface)
+        uint8_t *d = (uint8_t *)arg;
+        if (!d) return -EFAULT;
+        uint32_t handle;
+        memcpy(&handle, d, 4);
+#ifdef __APPLE__
+        dd_gpu_free_handle(handle);
+#endif
+        return 0;
+    }
+    case 0xc00c642d: { // DRM_IOCTL_PRIME_HANDLE_TO_FD {u32 handle,flags; s32 fd}
+        // Export the dumb buffer as a dmabuf. The fd is a throwaway placeholder — dd-display resolves the
+        // real IOSurface by id (announced over mach at alloc time / carried in the wl dmabuf modifier).
+        uint8_t *d = (uint8_t *)arg;
+        if (!d) return -EFAULT;
+        int32_t ofd = -1;
+        char tn[] = "/tmp/.ddgpuXXXXXX";
+        int nfd = mkstemp(tn);
+        if (nfd >= 0) {
+            unlink(tn);
+            ofd = nfd;
+        }
+        memcpy(d + 8, &ofd, 4);
+        return 0;
+    }
+    case 0xc0406400: { // DRM_IOCTL_VERSION (DRM_IOWR(0x00, struct drm_version), 64-byte arg)
+        uint8_t *v = (uint8_t *)arg;
+        if (!v) return -EFAULT;
+        static const char NM[] = "dd_gpu", DT[] = "20260707", DS[] = "dd virtual GPU";
+        int32_t maj = 1, min = 0, pat = 0;
+        memcpy(v + 0, &maj, 4); memcpy(v + 4, &min, 4); memcpy(v + 8, &pat, 4);
+        uint64_t name_len, date_len, desc_len, name_p, date_p, desc_p;
+        memcpy(&name_len, v + 16, 8); memcpy(&name_p, v + 24, 8);
+        memcpy(&date_len, v + 32, 8); memcpy(&date_p, v + 40, 8);
+        memcpy(&desc_len, v + 48, 8); memcpy(&desc_p, v + 56, 8);
+        size_t nl = sizeof NM - 1, dl = sizeof DT - 1, sl = sizeof DS - 1;
+        if (name_p && name_len >= nl) memcpy((void *)(uintptr_t)name_p, NM, nl);
+        if (date_p && date_len >= dl) memcpy((void *)(uintptr_t)date_p, DT, dl);
+        if (desc_p && desc_len >= sl) memcpy((void *)(uintptr_t)desc_p, DS, sl);
+        uint64_t o;
+        o = nl; memcpy(v + 16, &o, 8);
+        o = dl; memcpy(v + 32, &o, 8);
+        o = sl; memcpy(v + 48, &o, 8);
+        return 0;
+    }
+    case 0xc0106c0c: { // DRM_IOCTL_GET_CAP (DRM_IOWR(0x0c, struct drm_get_cap), {u64 cap; u64 value;})
+        uint8_t *g = (uint8_t *)arg;
+        if (!g) return -EFAULT;
+        uint64_t cap, val = 0;
+        memcpy(&cap, g, 8);
+        switch (cap) {
+        case 0x1: val = 1; break; // DRM_CAP_DUMB_BUFFER
+        case 0x2: val = 32; break; // DRM_CAP_DUMB_PREFERRED_DEPTH
+        case 0x3: val = 3; break; // DRM_CAP_PRIME (import|export)
+        case 0x10: val = 1; break; // DRM_CAP_ADDFB2_MODIFIERS
+        default: val = 0;
+        }
+        memcpy(g + 8, &val, 8);
+        return 0;
+    }
+    case 0x400c6d0d: return 0; // DRM_IOCTL_SET_CLIENT_CAP: accept/no-op
+    }
+    return -ENOTTY;
+}
+
 static int synth_stat_raw(const char *gp, struct stat *s) {
     if (!gp) return 0; // NULL (bad) guest path: not a synthetic node; let the caller's host stat EFAULT
+    if (drm_synth_stat(gp, s)) { drm_trace("stat", gp, 1); return 1; } // /dev/dri + DRM sysfs (DD_GPU_IOSURFACE)
+    if (drm_dbg()) drm_trace("stat", gp, 0); // trace DRM-prefix misses for gap-finding
     // The controlling terminal, named /dev/pts/0 in the container: fstat the real pty slave so it reports as
     // a character device with the correct rdev. ttyname(3) reads /proc/self/fd/0 -> "/dev/pts/0", then
     // stat()s it and checks S_ISCHR + rdev == fstat(0).rdev; this makes that check pass so `tty` prints
@@ -3719,20 +4310,42 @@ static int synth_stat_raw(const char *gp, struct stat *s) {
     }
     { // /proc/<pid>/task and /proc/<pid>/task/<tid> are directories (htop/`test -e` stat them)
         int pid;
-        const char *lf = proc_any_leaf(gp, &pid);
+        char dsb[4200];
+        const char *lf = proc_any_leaf(proc_deself(gp, dsb, sizeof dsb), &pid); // resolve /proc/self/task/*
         if (lf && pid > 0) {
             int host;
             if (pid == (int)getpid() || pid == container_pid() || pid == 1 || proc_pid_member(pid, &host)) {
-                int istaskdir = !strcmp(lf, "task");
+                int istaskdir = !strcmp(lf, "task") || !strcmp(lf, "task/"); // chromium stats "self/task/"
+                int istid = 0;
                 if (!istaskdir && !strncmp(lf, "task/", 5) && lf[5]) {
-                    istaskdir = 1;
+                    istid = 1;
                     for (const char *t = lf + 5; *t; t++)
-                        if (*t < '0' || *t > '9') istaskdir = 0; // task/<tid> only (not task/<tid>/<leaf>)
+                        if (*t < '0' || *t > '9') istid = 0; // task/<tid> only (not task/<tid>/<leaf>)
                 }
-                if (istaskdir) {
+                if (istaskdir || istid) {
+                    // For OUR OWN process, reflect the REAL live-thread set: /proc/self/task st_nlink must be
+                    // 2 + live-thread-count, and /proc/self/task/<tid> must ENOENT once that thread has
+                    // joined/exited. Chromium's sandbox (thread_helpers.cc) fstatat-watches /proc/self/task/<tid>
+                    // for ENOENT after stopping a helper thread and reads /proc/self/task st_nlink==3 for
+                    // single-threadedness; a fixed nlink=3 + a per-tid dir synthesized for ANY number made the
+                    // stopped thread never "disappear" -> the GPU process spun 30 iterations and FATAL'd. A PEER
+                    // process's threads we cannot enumerate from here, so keep the coarse present/nlink=3 there.
+                    int is_self = (pid == (int)getpid() || pid == container_pid());
                     memset(s, 0, sizeof *s);
                     s->st_mode = S_IFDIR | 0555;
-                    s->st_nlink = 3;
+                    if (is_self && istaskdir) {
+                        s->st_nlink = 2 + thread_live_count();
+                        return 1;
+                    }
+                    if (is_self && istid) {
+                        int tid = atoi(lf + 5);
+                        if (tid == pid || thread_tid_alive(tid)) {
+                            s->st_nlink = 3;
+                            return 1;
+                        }
+                        return 0; // not a live thread of ours -> fall through -> ENOENT (the "disappear" signal)
+                    }
+                    s->st_nlink = 3; // peer process (or non-self): coarse present, threads unenumerable here
                     return 1;
                 }
             }

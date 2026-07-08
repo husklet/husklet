@@ -8,7 +8,7 @@
 
 use crate::cli::WorkspaceCmd;
 use crate::paths;
-use dd_term_core::workspace::{Arch, LocalShellLauncher, Launcher, Workspace, WorkspaceStore};
+use dd_term_core::workspace::{Arch, CudaDevice, LocalShellLauncher, Launcher, VpnConfig, Workspace, WorkspaceStore};
 use std::io::Write;
 use std::os::unix::io::RawFd;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -20,11 +20,11 @@ fn store_path() -> std::path::PathBuf {
 pub(crate) fn run(action: WorkspaceCmd) {
     match action {
         WorkspaceCmd::List => list(),
-        WorkspaceCmd::Create { name, image, arch } => create(name, image, arch),
+        WorkspaceCmd::Create { name, image, arch, vpn, cuda, gui } => create(name, image, arch, vpn, cuda, gui),
         WorkspaceCmd::Rm { name } => rm(name),
-        WorkspaceCmd::Launch { name, restore } => launch(name, restore),
-        WorkspaceCmd::Restore { name } => launch(name, true),
-        WorkspaceCmd::Checkpoint { name } => checkpoint(name),
+        WorkspaceCmd::Launch { name, restore, cwd, slot } => launch(name, restore, cwd, slot),
+        WorkspaceCmd::Restore { name } => launch(name, true, None, None),
+        WorkspaceCmd::Checkpoint { name, slot } => checkpoint(name, slot),
         WorkspaceCmd::Daemon { name } => match crate::wsdaemon::ensure(&name) {
             Ok(sock) => println!("{}", sock.display()),
             Err(e) => {
@@ -47,17 +47,85 @@ fn list() {
     }
 }
 
-fn create(name: String, image: String, arch: String) {
-    let Some(arch) = Arch::parse(&arch) else {
-        eprintln!("unknown arch {arch:?} (use arm64 | amd64 | darwin-arm64)");
-        std::process::exit(2);
+/// Build the workspace to persist for `workspace create`, merging the create-flags over any PRIOR
+/// workspace of the same name. This is the pure core of [`create`] (no IO, no `exit`) so it is unit-tested.
+///
+/// Re-creating an existing workspace is an UPDATE, not a wipe: every field the CLI does not expose
+/// (`env`, `mounts`, `cpus`, `memory_mb`, `storage`, `shell`, `scrollback`, `docker_sock`) is carried over
+/// from `prior`, and `--arch` when omitted keeps the workspace's current arch (a *fresh* workspace defaults
+/// to arm64). Only identity (image, and arch when given) and the CLI-exposed flags (`vpn`/`cuda`/`gui`) are
+/// (re)written, each with three-way semantics: absent → preserve prior, `off`/`none`/`""` → clear, else set.
+/// Returns `Err(message)` on any invalid input (bad arch / vpn / cuda spec).
+fn build_workspace(
+    prior: Option<&Workspace>,
+    name: &str,
+    image: &str,
+    arch: Option<&str>,
+    vpn: Option<&str>,
+    cuda: Option<&str>,
+    gui: Option<&str>,
+) -> Result<Workspace, String> {
+    // arch: explicit `--arch` always wins; omitted keeps the prior workspace's arch, else defaults arm64.
+    let arch = match arch {
+        Some(s) => Arch::parse(s).ok_or_else(|| format!("unknown arch {s:?} (use arm64 | amd64 | darwin-arm64)"))?,
+        None => prior.map(|w| w.arch).unwrap_or(Arch::Arm64),
     };
+    let vpn_cfg = match vpn {
+        None => prior.and_then(|w| w.vpn.clone()),
+        Some(s) if s.trim().is_empty() || s.eq_ignore_ascii_case("off") || s.eq_ignore_ascii_case("none") => None,
+        Some(s) => Some(
+            VpnConfig::parse(s)
+                .ok_or_else(|| format!("invalid --vpn {s:?} (use e.g. `socks5:127.30.0.1:1080` or a bare `host:port`)"))?,
+        ),
+    };
+    // Same three-way semantics as `--vpn`, plus a bare `--cuda` (default_missing_value "default") = the
+    // default simulated device: absent → preserve prior; `off`/`none`/`""` → clear; `default` → default
+    // device; anything else → parse a `Name|cc|VRAM-MB` spec.
+    let cuda_cfg = match cuda {
+        None => prior.and_then(|w| w.cuda.clone()),
+        Some(s) if s.trim().is_empty() || s.eq_ignore_ascii_case("off") || s.eq_ignore_ascii_case("none") => None,
+        Some(s) if s.eq_ignore_ascii_case("default") => Some(CudaDevice::default_device()),
+        Some(s) => Some(
+            CudaDevice::parse(s)
+                .ok_or_else(|| format!("invalid --cuda {s:?} (use `--cuda`, `--cuda \"Name|8.6|8192\"`, or `--cuda off`)"))?,
+        ),
+    };
+    // Same three-way semantics: absent → preserve prior; `off`/`none`/`false`/`""` → clear; anything else → on.
+    let gui_on = match gui {
+        None => prior.map(|w| w.gui).unwrap_or(false),
+        Some(s) if s.trim().is_empty() || s.eq_ignore_ascii_case("off") || s.eq_ignore_ascii_case("none") || s.eq_ignore_ascii_case("false") => false,
+        Some(_) => true,
+    };
+    // Start from the prior workspace so its non-CLI-exposed config survives the update; only re-create from
+    // scratch (with the safe defaults) when this is a brand-new workspace.
+    let mut ws = prior.cloned().unwrap_or_else(|| Workspace::new(name, image, arch));
+    ws.name = name.to_string();
+    ws.image = image.to_string();
+    ws.arch = arch;
+    ws.vpn = vpn_cfg;
+    ws.cuda = cuda_cfg;
+    ws.gui = gui_on;
+    Ok(ws)
+}
+
+fn create(name: String, image: String, arch: Option<String>, vpn: Option<String>, cuda: Option<String>, gui: Option<String>) {
     let mut store = WorkspaceStore::load(store_path());
-    if let Err(e) = store.upsert(Workspace::new(&name, &image, arch)) {
+    let ws = match build_workspace(store.get(&name), &name, &image, arch.as_deref(), vpn.as_deref(), cuda.as_deref(), gui.as_deref()) {
+        Ok(w) => w,
+        Err(msg) => {
+            eprintln!("{msg}");
+            std::process::exit(2);
+        }
+    };
+    let arch = ws.arch;
+    let vpn_note = ws.vpn.as_ref().map(|c| format!("  vpn={}", c.to_spec())).unwrap_or_default();
+    let cuda_note = ws.cuda.as_ref().map(|c| format!("  cuda={}", c.to_spec())).unwrap_or_default();
+    let gui_note = if ws.gui { "  gui=on" } else { "" };
+    if let Err(e) = store.upsert(ws) {
         eprintln!("failed to save workspace: {e}");
         std::process::exit(1);
     }
-    println!("workspace {name:?} → {image} ({})  saved. launch it:  ddcli workspace launch {name}", arch.as_str());
+    println!("workspace {name:?} → {image} ({}){vpn_note}{cuda_note}{gui_note}  saved. launch it:  ddcli workspace launch {name}", arch.as_str());
 }
 
 fn rm(name: String) {
@@ -79,14 +147,18 @@ extern "C" fn on_winch(_sig: libc::c_int) {
 
 /// Checkpoint a running workspace's whole process tree to disk. Reads the init pid recorded at launch,
 /// sends the engine's checkpoint control signal, and waits for the complete on-disk checkpoint.
-fn checkpoint(name: String) {
+fn checkpoint(name: String, slot: Option<String>) {
     let store = WorkspaceStore::load(store_path());
     let Some(ws) = store.get(&name).cloned() else {
         eprintln!("no workspace named {name:?} — see:  ddcli workspace list");
         std::process::exit(2);
     };
-    let pid_file = ws.checkpoint_pid_file(&paths::dd_root());
-    let ckpt_dir = ws.checkpoint_dir(&paths::dd_root());
+    // A per-pane SLOT freezes that pane's own engine into `<storage>/checkpoint/<slot>`; None uses the
+    // single shared slot (back-compat).
+    let (pid_file, ckpt_dir) = match slot.as_deref() {
+        Some(s) => (ws.checkpoint_slot_pid_file(&paths::dd_root(), s), ws.checkpoint_slot_dir(&paths::dd_root(), s)),
+        None => (ws.checkpoint_pid_file(&paths::dd_root()), ws.checkpoint_dir(&paths::dd_root())),
+    };
     let pid: u32 = match std::fs::read_to_string(&pid_file).ok().and_then(|s| s.trim().parse().ok()) {
         Some(p) => p,
         None => {
@@ -114,7 +186,7 @@ fn checkpoint(name: String) {
     }
 }
 
-fn launch(name: String, restore: bool) {
+fn launch(name: String, restore: bool, cwd: Option<String>, slot: Option<String>) {
     let store = WorkspaceStore::load(store_path());
     let Some(ws) = store.get(&name).cloned() else {
         eprintln!("no workspace named {name:?} — see:  ddcli workspace list");
@@ -125,7 +197,7 @@ fn launch(name: String, restore: bool) {
     // Enter the workspace's IMAGE as a real container IN-PROCESS via dd-jit — no daemon, no docker, no
     // socket. When `restore`, resume the last whole-workspace checkpoint (process tree) instead of a fresh
     // shell. When this host's engine can't run the workspace's arch, fall back to a plain host shell.
-    let launched = match crate::ddjit_launcher::launch_ex(&ws, cols, rows, restore) {
+    let launched = match crate::ddjit_launcher::launch_ex(&ws, cols, rows, restore, cwd.as_deref(), slot.as_deref()) {
         Ok(pty) => Ok(pty),
         Err(e) => {
             eprintln!("[dd] (dd-jit unavailable here — {e}; running a local shell instead)");
@@ -261,5 +333,113 @@ impl Drop for RawMode {
                 libc::tcsetattr(self.fd, libc::TCSANOW, &saved);
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use dd_term_core::workspace::{Mount, VpnKind};
+
+    // A prior workspace carrying config that the `create` CLI does NOT expose as flags — exactly the
+    // state a user builds via `~/.dd/workspaces.conf` or the GUI. Re-running `create` must preserve it.
+    fn prior_rich() -> Workspace {
+        let mut w = Workspace::new("api", "node:20", Arch::Amd64);
+        w.cpus = Some(4);
+        w.memory_mb = Some(2048);
+        w.docker_sock = false;
+        w.scrollback = Some(5000);
+        w.shell = Some("/bin/zsh".into());
+        w.storage = Some(std::path::PathBuf::from("/data/api"));
+        w.env = vec![("FOO".into(), "bar".into())];
+        w.mounts = vec![Mount { host: "/h".into(), container: "/c".into(), ro: true }];
+        w
+    }
+
+    // REGRESSION: re-creating an existing workspace (e.g. to change its image or toggle a flag) must NOT
+    // wipe the fields the CLI can't set. The old `create` rebuilt from `Workspace::new`, silently dropping
+    // env/mounts/cpus/memory/storage/shell/scrollback and resetting docker_sock back to `true`.
+    #[test]
+    fn recreate_preserves_non_cli_config() {
+        let prior = prior_rich();
+        // Change only the image; leave arch/vpn/cuda/gui unspecified.
+        let got = build_workspace(Some(&prior), "api", "node:22", None, None, None, None).unwrap();
+        assert_eq!(got.image, "node:22", "image is updated");
+        assert_eq!(got.cpus, Some(4), "cpus preserved");
+        assert_eq!(got.memory_mb, Some(2048), "memory preserved");
+        assert!(!got.docker_sock, "docker_sock must NOT reset to true");
+        assert_eq!(got.scrollback, Some(5000), "scrollback preserved");
+        assert_eq!(got.shell.as_deref(), Some("/bin/zsh"), "shell preserved");
+        assert_eq!(got.storage, prior.storage, "storage preserved");
+        assert_eq!(got.env, prior.env, "env preserved");
+        assert_eq!(got.mounts, prior.mounts, "mounts preserved");
+    }
+
+    // REGRESSION: `--arch` had a clap `default_value = "arm64"`, so re-creating an amd64 workspace WITHOUT
+    // `--arch` silently flipped it to arm64. With `arch: Option`, an omitted `--arch` keeps the prior arch.
+    #[test]
+    fn recreate_without_arch_keeps_prior_arch() {
+        let prior = prior_rich(); // Amd64
+        let got = build_workspace(Some(&prior), "api", "node:20", None, None, None, Some("on")).unwrap();
+        assert_eq!(got.arch, Arch::Amd64, "omitted --arch must not reset an amd64 workspace to arm64");
+        assert!(got.gui, "the flag the user DID pass still applies");
+        // Passing --arch explicitly still changes it.
+        let got2 = build_workspace(Some(&prior), "api", "node:20", Some("arm64"), None, None, None).unwrap();
+        assert_eq!(got2.arch, Arch::Arm64);
+    }
+
+    #[test]
+    fn fresh_workspace_defaults_arm64() {
+        let got = build_workspace(None, "ws", "alpine", None, None, None, None).unwrap();
+        assert_eq!(got.arch, Arch::Arm64);
+        assert!(got.docker_sock, "fresh workspace defaults docker_sock on");
+        assert!(got.vpn.is_none() && got.cuda.is_none() && !got.gui);
+    }
+
+    #[test]
+    fn vpn_three_way_semantics() {
+        let mut prior = Workspace::new("w", "img", Arch::Arm64);
+        prior.vpn = Some(VpnConfig::socks5("127.0.0.1:1080"));
+        // absent → preserve
+        let keep = build_workspace(Some(&prior), "w", "img", None, None, None, None).unwrap();
+        assert_eq!(keep.vpn, prior.vpn);
+        // off → clear
+        let cleared = build_workspace(Some(&prior), "w", "img", None, Some("off"), None, None).unwrap();
+        assert!(cleared.vpn.is_none());
+        // explicit kind → set
+        let set = build_workspace(None, "w", "img", None, Some("socks5:10.0.0.1:9050"), None, None).unwrap();
+        assert_eq!(set.vpn.as_ref().unwrap().kind, VpnKind::Socks5);
+        assert_eq!(set.vpn.as_ref().unwrap().endpoint, "10.0.0.1:9050");
+    }
+
+    #[test]
+    fn cuda_three_way_semantics() {
+        let mut prior = Workspace::new("w", "img", Arch::Arm64);
+        prior.cuda = Some(CudaDevice::default_device());
+        let keep = build_workspace(Some(&prior), "w", "img", None, None, None, None).unwrap();
+        assert_eq!(keep.cuda, prior.cuda);
+        let cleared = build_workspace(Some(&prior), "w", "img", None, None, Some("none"), None).unwrap();
+        assert!(cleared.cuda.is_none());
+        let dfl = build_workspace(None, "w", "img", None, None, Some("default"), None).unwrap();
+        assert_eq!(dfl.cuda, Some(CudaDevice::default_device()));
+        let spec = build_workspace(None, "w", "img", None, None, Some("My GPU|7.5|8192"), None).unwrap();
+        assert_eq!(spec.cuda.as_ref().unwrap().vram_mb, 8192);
+    }
+
+    #[test]
+    fn gui_three_way_semantics() {
+        let mut prior = Workspace::new("w", "img", Arch::Arm64);
+        prior.gui = true;
+        assert!(build_workspace(Some(&prior), "w", "img", None, None, None, None).unwrap().gui, "absent preserves on");
+        assert!(!build_workspace(Some(&prior), "w", "img", None, None, None, Some("off")).unwrap().gui, "off clears");
+        assert!(build_workspace(None, "w", "img", None, None, None, Some("on")).unwrap().gui, "on sets");
+        assert!(!build_workspace(None, "w", "img", None, None, None, Some("false")).unwrap().gui, "false clears");
+    }
+
+    #[test]
+    fn bad_input_is_err_not_panic() {
+        assert!(build_workspace(None, "w", "img", Some("sparc"), None, None, None).is_err(), "bad arch");
+        // A `--vpn` that VpnConfig::parse rejects. An empty host:port (`socks5:`) has no endpoint.
+        assert!(build_workspace(None, "w", "img", None, Some("socks5:"), None, None).is_err(), "bad vpn");
     }
 }

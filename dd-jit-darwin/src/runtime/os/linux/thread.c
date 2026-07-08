@@ -432,7 +432,262 @@ static __thread int g_my_threg = -1;
 static void thread_wait_publish(pthread_mutex_t *m, pthread_cond_t *cnd);
 static void thread_wait_clear(void);
 
-static long futex_op(struct cpu *c, int *uaddr, int op, int val, const struct timespec *ts) {
+// DDWAKELOG (env-gated): futex WAIT/WAKE tracing for the Chromium cross-thread stall. Logs the uaddr, op,
+// and val with a per-thread id so a thread parked in FUTEX_WAIT whose FUTEX_WAKE never arrives (a lost
+// cross-thread futex wake) is visible. thread.c is included before io.c, so it has its own logger.
+static int g_flog = -1;
+
+static void futexlog(const char *ev, const void *uaddr, int op, int val, long extra) {
+    if (g_flog < 0) g_flog = getenv("DDWAKELOG") != NULL ? 1 : 0;
+    if (!g_flog) return;
+    struct timespec _t;
+    clock_gettime(CLOCK_MONOTONIC, &_t);
+    __uint64_t tid = 0;
+    pthread_threadid_np(NULL, &tid);
+    fprintf(stderr, "[DDWAKE] t=%ld.%03ld pid=%d tid=%lu %s uaddr=%p op=%d val=%d x=%ld\n", (long)_t.tv_sec,
+            _t.tv_nsec / 1000000, getpid(), (unsigned long)tid, ev, uaddr, op, val, extra);
+}
+
+// Wake up to `n` waiters parked on uaddr's W5C bucket and report the number actually woken (capped at n).
+// Factored out of the FUTEX_WAKE path so FUTEX_WAKE_OP wakes through the SAME buckets -- its wakes must
+// reach real WAIT-parked waiters (in this process or, across a shared page, a forked peer). Mirrors the
+// WAKE block exactly: PROF fast/slow split, lock+broadcast (the lock orders the guest's pre-syscall store
+// to *uaddr ahead of an arriving waiter's under-lock value-check, so no wakeup is lost), and a count taken
+// from the per-address slot (the number of waiters that will re-check their word and leave).
+static int futex_wake_bucket(const int *uaddr, int n) {
+    struct futex_bucket *b = fbk_of(uaddr);
+    if (g_prof) {
+        if (atomic_load_explicit(&b->waiters, memory_order_relaxed))
+            g_futex_wake_slow++;
+        else
+            g_futex_wake_fast++;
+    }
+    pthread_mutex_lock(&b->m);
+    int woke = fbk_parked(b, (uintptr_t)uaddr);
+    if (woke > n) woke = n;
+    pthread_cond_broadcast(&b->c); // waiters re-check their own word; spurious wakes are legal
+    pthread_mutex_unlock(&b->m);
+    return woke;
+}
+
+// FUTEX_WAKE_OP arithmetic half (Linux-exact): atomically apply the val3-encoded op to *uaddr2 and report,
+// via *do_wake2, whether the PRE-mutation value satisfies the encoded comparison (=> uaddr2 waiters are also
+// woken by the caller). val3 layout: bits 28-31 op (bit 3 = FUTEX_OP_OPARG_SHIFT), 24-27 cmp, 12-23 oparg,
+// 0-11 cmparg. Returns 0, or -EFAULT for an unmapped uaddr2 (kernel's copy semantics), -ENOSYS for an
+// unknown op/cmp. Comparisons are signed, exactly as the kernel's futex_atomic_op_inuser.
+static int futex_wake_op_apply(int *uaddr2, uint32_t val3, int *do_wake2) {
+    unsigned enc = val3;
+    int op2 = (enc >> 28) & 0xf;
+    int cmp = (enc >> 24) & 0xf;
+    int oparg = (enc >> 12) & 0xfff;
+    int cmparg = enc & 0xfff;
+    if (op2 & 8) { // FUTEX_OP_OPARG_SHIFT: oparg is a shift count (masked to 31, as the kernel does)
+        op2 &= 7;
+        oparg = 1 << (oparg & 31);
+    }
+    if (!uaddr2 || !host_addr_mapped((uintptr_t)uaddr2)) return -EFAULT;
+    int oldval;
+    switch (op2) {
+    case 0: oldval = __atomic_exchange_n(uaddr2, oparg, __ATOMIC_SEQ_CST); break; // FUTEX_OP_SET
+    case 1: oldval = __atomic_fetch_add(uaddr2, oparg, __ATOMIC_SEQ_CST); break;  // FUTEX_OP_ADD
+    case 2: oldval = __atomic_fetch_or(uaddr2, oparg, __ATOMIC_SEQ_CST); break;   // FUTEX_OP_OR
+    case 3: oldval = __atomic_fetch_and(uaddr2, ~oparg, __ATOMIC_SEQ_CST); break; // FUTEX_OP_ANDN
+    case 4: oldval = __atomic_fetch_xor(uaddr2, oparg, __ATOMIC_SEQ_CST); break;  // FUTEX_OP_XOR
+    default: return -ENOSYS;
+    }
+    int cond;
+    switch (cmp) {
+    case 0: cond = (oldval == cmparg); break; // FUTEX_OP_CMP_EQ
+    case 1: cond = (oldval != cmparg); break; // FUTEX_OP_CMP_NE
+    case 2: cond = (oldval < cmparg); break;  // FUTEX_OP_CMP_LT
+    case 3: cond = (oldval <= cmparg); break; // FUTEX_OP_CMP_LE
+    case 4: cond = (oldval > cmparg); break;  // FUTEX_OP_CMP_GT
+    case 5: cond = (oldval >= cmparg); break; // FUTEX_OP_CMP_GE
+    default: return -ENOSYS;
+    }
+    *do_wake2 = cond;
+    return 0;
+}
+
+// FUTEX PI (priority-inheritance) mutex constants: the futex word holds the owner's guest TID in the low 30
+// bits, plus FUTEX_WAITERS (contended -> userspace must trap into the kernel) and FUTEX_OWNER_DIED (robust:
+// the owner exited still holding it). dd does not model priority BOOSTING (a latency/QoS property, not a
+// correctness one), but it enforces real MUTUAL EXCLUSION and the exact futex-word contract glibc's userspace
+// fast paths depend on -- so two threads can never both believe they own a PTHREAD_PRIO_INHERIT/robust mutex
+// (the old return-0 fake-acquire silently let them into the critical section together -> data corruption).
+#define DD_FUTEX_WAITERS 0x80000000u
+#define DD_FUTEX_OWNER_DIED 0x40000000u
+#define DD_FUTEX_TID_MASK 0x3fffffffu
+
+static int cpu_tid(const struct cpu *c);
+
+// Acquire the PI mutex at uaddr for this thread (block until free, unless `trylock`). On success writes
+// this thread's TID -- OR'd with FUTEX_WAITERS when other threads remain queued on the same word -- into the
+// futex word and returns 0, or -EOWNERDEAD when the prior owner died holding it (robust recovery). NEVER
+// returns 0 without the word actually naming this thread as the owner. `mono`: the (absolute) timeout is on
+// CLOCK_MONOTONIC (FUTEX_LOCK_PI2) rather than the FUTEX_LOCK_PI default of CLOCK_REALTIME. Interruptible
+// (a thread-directed signal returns -EINTR, exactly as a real LOCK_PI is interrupted -> glibc retries).
+static long futex_lock_pi(struct cpu *c, int *uaddr, int trylock, const struct timespec *ts, int mono) {
+    if (!uaddr || !host_addr_mapped((uintptr_t)uaddr)) return -EFAULT;
+    int mytid = cpu_tid(c);
+    struct futex_bucket *b = fbk_of(uaddr);
+    pthread_mutex_lock(&b->m);
+    int parked = 0;
+    long ret;
+    for (;;) {
+        int expect = __atomic_load_n(uaddr, __ATOMIC_SEQ_CST);
+        uint32_t v = (uint32_t)expect;
+        uint32_t owner = v & DD_FUTEX_TID_MASK;
+        if (owner == 0) { // free (owner slot 0; FUTEX_OWNER_DIED may still be set on a robust mutex)
+            int others = fbk_parked(b, (uintptr_t)uaddr) - (parked ? 1 : 0); // waiters left behind
+            int nv = (int)((uint32_t)mytid | (others > 0 ? DD_FUTEX_WAITERS : 0));
+            // Acquire atomically vs a racing userspace fast-path locker (cmpxchg 0->tid): if the word moved
+            // underfoot, retry from the re-read instead of clobbering the new owner (double-ownership bug).
+            if (!__atomic_compare_exchange_n(uaddr, &expect, nv, 0, __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST)) continue;
+            ret = (v & DD_FUTEX_OWNER_DIED) ? -EOWNERDEAD : 0;
+            break;
+        }
+        if (owner == (uint32_t)mytid) {
+            ret = -EDEADLK;
+            break;
+        } // this thread already owns it
+        if (trylock) {
+            ret = -EAGAIN;
+            break;
+        } // TRYLOCK_PI: contended -> fail, no block
+        // Contended: set FUTEX_WAITERS so glibc's userspace unlock fast path traps to FUTEX_UNLOCK_PI and a
+        // userspace lock fast path can't steal ahead of us. Do it as a CMPXCHG under b->m: if the owner just
+        // released in userspace (word -> 0) our swap fails and we loop to re-read + acquire -- WITHOUT this
+        // the stale store would resurrect a dead owner and every waiter would block forever (the deadlock).
+        if (!__atomic_compare_exchange_n(uaddr, &expect, (int)(v | DD_FUTEX_WAITERS), 0, __ATOMIC_SEQ_CST,
+                                         __ATOMIC_SEQ_CST))
+            continue;
+        if (!parked) {
+            atomic_fetch_add_explicit(&b->waiters, 1, memory_order_relaxed);
+            fbk_park(b, (uintptr_t)uaddr);
+            parked = 1;
+        }
+        thread_wait_publish(&b->m, &b->c);
+        if (cpu_wait_interrupted(c)) {
+            thread_wait_clear();
+            ret = -EINTR;
+            break;
+        }
+        int rc = 0;
+        if (ts) {
+            struct timespec abs, rel;
+            if (mono) { // FUTEX_LOCK_PI2: absolute CLOCK_MONOTONIC deadline -> realtime abs for the condvar
+                futex_rel_from_abs(&rel, ts);
+                abs_from_rel(&abs, &rel);
+            } else {
+                abs = *ts; // FUTEX_LOCK_PI: already an absolute CLOCK_REALTIME deadline (the condvar's clock)
+            }
+            rc = pthread_cond_timedwait(&b->c, &b->m, &abs);
+        } else {
+            pthread_cond_wait(&b->c, &b->m);
+        }
+        thread_wait_clear();
+        if (cpu_wait_interrupted(c)) {
+            ret = -EINTR;
+            break;
+        }
+        if (rc == ETIMEDOUT) {
+            ret = -ETIMEDOUT;
+            break;
+        }
+        // otherwise loop and re-read the word (the releaser cleared the owner; race for ownership under b->m)
+    }
+    if (parked) {
+        fbk_unpark(b, (uintptr_t)uaddr);
+        if (atomic_fetch_sub_explicit(&b->waiters, 1, memory_order_relaxed) == 1) b->imprecise = 0;
+    }
+    pthread_mutex_unlock(&b->m);
+    return ret;
+}
+
+// Release the PI mutex at uaddr (FUTEX_UNLOCK_PI): only the owner may unlock (-EPERM otherwise). Hand off by
+// clearing the owner TID; if waiters remain, keep FUTEX_WAITERS set (word = FUTEX_WAITERS, owner 0) so a
+// userspace fast-path locker can't steal in ahead of a parked waiter, and broadcast -- the woken waiters
+// re-contend for ownership under the bucket mutex in futex_lock_pi, so exactly one acquires. Returns 0.
+static long futex_unlock_pi(struct cpu *c, int *uaddr) {
+    if (!uaddr || !host_addr_mapped((uintptr_t)uaddr)) return -EFAULT;
+    int mytid = cpu_tid(c);
+    struct futex_bucket *b = fbk_of(uaddr);
+    pthread_mutex_lock(&b->m);
+    uint32_t v = (uint32_t)__atomic_load_n(uaddr, __ATOMIC_SEQ_CST);
+    if ((v & DD_FUTEX_TID_MASK) != (uint32_t)mytid) {
+        pthread_mutex_unlock(&b->m);
+        return -EPERM; // not the owner -- Linux rejects an UNLOCK_PI from a non-owner
+    }
+    int waiters = fbk_parked(b, (uintptr_t)uaddr);
+    __atomic_store_n(uaddr, (int)(waiters > 0 ? DD_FUTEX_WAITERS : 0), __ATOMIC_SEQ_CST);
+    if (waiters > 0) pthread_cond_broadcast(&b->c);
+    pthread_mutex_unlock(&b->m);
+    return 0;
+}
+
+// nr_wake2 is the raw 4th syscall arg (a3) reinterpreted as a count for FUTEX_WAKE_OP (WAIT ops use a3 as a
+// timespec instead -- the two never overlap because op selects one interpretation); uaddr2 (a4) + val3 (a5)
+// carry the WAKE_OP / REQUEUE second-address operands, and are ignored by the WAIT/plain-WAKE branches.
+static long futex_op(struct cpu *c, int *uaddr, int op, int val, const struct timespec *ts, int nr_wake2, int *uaddr2,
+                     uint32_t val3) {
+    // PI-mutex ops use per-address ownership tracked in the (always-present) buckets, independent of the
+    // legacy single-queue mode below, so dispatch them first. FUTEX_LOCK_PI=6, UNLOCK_PI=7, TRYLOCK_PI=8,
+    // WAIT_REQUEUE_PI=11, CMP_REQUEUE_PI=12, LOCK_PI2=13.
+    if (op == 6) return futex_lock_pi(c, uaddr, 0, ts, 0);
+    if (op == 13) return futex_lock_pi(c, uaddr, 0, ts, 1);
+    if (op == 8) return futex_lock_pi(c, uaddr, 1, NULL, 0);
+    if (op == 7) return futex_unlock_pi(c, uaddr);
+    if (op == 11) { // FUTEX_WAIT_REQUEUE_PI: wait on uaddr (while *uaddr==val), then acquire the PI mutex uaddr2.
+        // Modern glibc (>=2.25) condvars no longer use requeue_pi, so this path is cold; implement it as a
+        // plain WAIT followed by a LOCK_PI on uaddr2 -- semantically what pthread_cond_wait on a PI mutex
+        // needs, and always CORRECT (a woken waiter re-acquires uaddr2 itself; see CMP_REQUEUE_PI below).
+        if (!uaddr || !host_addr_mapped((uintptr_t)uaddr)) return -EFAULT;
+        struct futex_bucket *b = fbk_of(uaddr);
+        pthread_mutex_lock(&b->m);
+        if ((uint32_t)__atomic_load_n(uaddr, __ATOMIC_SEQ_CST) != (uint32_t)val) {
+            pthread_mutex_unlock(&b->m);
+            return -EAGAIN;
+        }
+        atomic_fetch_add_explicit(&b->waiters, 1, memory_order_relaxed);
+        fbk_park(b, (uintptr_t)uaddr);
+        thread_wait_publish(&b->m, &b->c);
+        long ret = 0;
+        if (cpu_wait_interrupted(c)) {
+            ret = -EINTR;
+        } else {
+            int rc = 0;
+            if (ts) {
+                struct timespec abs, rel;
+                futex_rel_from_abs(&rel, ts); // WAIT_REQUEUE_PI's timeout is an absolute deadline
+                abs_from_rel(&abs, &rel);
+                rc = pthread_cond_timedwait(&b->c, &b->m, &abs);
+            } else {
+                pthread_cond_wait(&b->c, &b->m);
+            }
+            if (cpu_wait_interrupted(c))
+                ret = -EINTR;
+            else if (rc == ETIMEDOUT)
+                ret = -ETIMEDOUT;
+        }
+        thread_wait_clear();
+        fbk_unpark(b, (uintptr_t)uaddr);
+        if (atomic_fetch_sub_explicit(&b->waiters, 1, memory_order_relaxed) == 1) b->imprecise = 0;
+        pthread_mutex_unlock(&b->m);
+        if (ret < 0) return ret;                   // on error the caller does NOT own uaddr2 (kernel-exact)
+        return futex_lock_pi(c, uaddr2, 0, ts, 0); // woken -> acquire the target PI mutex before returning
+    }
+    if (op == 12) { // FUTEX_CMP_REQUEUE_PI: verify *uaddr==val3, wake uaddr waiters (they self-acquire uaddr2).
+        // We don't physically move queues -- each woken WAIT_REQUEUE_PI waiter re-acquires uaddr2's PI lock on
+        // its own, so waking them and letting them serialize there is correct (the requeue is only a
+        // thundering-herd optimization). Returns the number woken.
+        if (uaddr && host_addr_mapped((uintptr_t)uaddr) && (uint32_t)__atomic_load_n(uaddr, __ATOMIC_SEQ_CST) != val3)
+            return -EAGAIN;
+        // Wake up to `val` signalled + `nr_wake2` requeue-budget waiters in one broadcast; each self-acquires
+        // uaddr2, so the physical requeue is unnecessary. (A single broadcast wakes all parked in the bucket.)
+        long budget = (long)(val < 1 ? 1 : val) + (nr_wake2 > 0 ? nr_wake2 : 0);
+        return futex_wake_bucket(uaddr, budget > 0x7fffffff ? 0x7fffffff : (int)budget);
+    }
     if (!g_futexq) {
         // ---- legacy single global queue ----
         if (op == 0 || op == 9) {
@@ -473,6 +728,19 @@ static long futex_op(struct cpu *c, int *uaddr, int op, int val, const struct ti
             pthread_mutex_unlock(&g_futex_m);
             return woke;
         }
+        if (op == 5) { // FUTEX_WAKE_OP on the legacy single global queue
+            int do_wake2 = 0;
+            int rc = futex_wake_op_apply(uaddr2, val3, &do_wake2);
+            if (rc < 0) return rc;
+            pthread_mutex_lock(&g_futex_m);
+            // One global queue can't split by address: broadcast wakes waiters on both uaddr and uaddr2, so
+            // report min(parked, val) as the uaddr count (+ the requested nr_wake2 when the cmp fires).
+            int woke = g_futex_parked < val ? g_futex_parked : val;
+            if (do_wake2) woke += nr_wake2 < 0 ? 0 : nr_wake2;
+            pthread_cond_broadcast(&g_futex_c);
+            pthread_mutex_unlock(&g_futex_m);
+            return woke;
+        }
         return 0;
     }
     // ---- W5C per-address buckets ----
@@ -503,6 +771,7 @@ static long futex_op(struct cpu *c, int *uaddr, int op, int val, const struct ti
         // process or, across a shared page, another) can report the true woken count. Kept in the SHARED
         // bucket, so a cross-fork waker sees it.
         fbk_park(b, (uintptr_t)uaddr);
+        futexlog(ts ? "fwait_park" : "fwait_parkINF", uaddr, op, val, (long)G_PC(c));
         int rc = 0;
         if (ts) {
             struct timespec abs, rel;
@@ -513,6 +782,7 @@ static long futex_op(struct cpu *c, int *uaddr, int op, int val, const struct ti
         } else
             pthread_cond_wait(&b->c, &b->m);
         thread_wait_clear();
+        futexlog("fwait_wake", uaddr, op, rc, 0);
         fbk_unpark(b, (uintptr_t)uaddr);
         int intr = cpu_wait_interrupted(c);
         // fetch_sub returns the PREVIOUS value; == 1 means the bucket just fully drained -> a stale
@@ -533,29 +803,30 @@ static long futex_op(struct cpu *c, int *uaddr, int op, int val, const struct ti
     // word and re-waits if needed -- and the requeue target is only an optimization to avoid a
     // thundering herd, so broadcasting is correct, just less efficient under heavy contention.
     if (op == 1 || op == 10 || op == 3 || op == 4) {
-        // Always take the bucket mutex + broadcast. The lock's release/acquire orders the guest's
-        // pre-syscall store to *uaddr ahead of an arriving waiter's under-lock value-check, so the
-        // waiter either observes the new word and bails (EAGAIN) or is already in cond_wait and gets
-        // signalled -- no lost wakeup. (The old lock-free no-sleeper skip lost wakeups on ARM; see
-        // the header note.) bucket.waiters is read only to keep the PROF fast/slow split meaningful.
-        if (g_prof) {
-            if (atomic_load_explicit(&b->waiters, memory_order_relaxed))
-                g_futex_wake_slow++;
-            else
-                g_futex_wake_fast++;
-        }
-        pthread_mutex_lock(&b->m);
         // A real FUTEX_WAKE returns the NUMBER of waiters actually woken (capped at the requested `val`),
-        // NOT `val` itself. Count the waiters parked on THIS uaddr before broadcasting: every one of them
-        // re-checks its word and, seeing the waker's store, leaves -- so this is exactly the woken count.
-        // (Returning `val` broke LTP tst_checkpoint_wake's `waked += WAKE(INT_MAX)` loop -> fork04 ETIMEDOUT.)
-        int woke = fbk_parked(b, (uintptr_t)uaddr);
-        if (woke > val) woke = val;
-        pthread_cond_broadcast(&b->c); // waiters re-check their own word; spurious wakes are legal
-        pthread_mutex_unlock(&b->m);
+        // NOT `val` itself. futex_wake_bucket takes the bucket mutex + broadcasts (the lock orders the
+        // guest's pre-syscall store to *uaddr ahead of an arriving waiter's under-lock value-check, so no
+        // wakeup is lost -- the old lock-free no-sleeper skip lost wakeups on ARM) and counts the waiters
+        // parked on THIS uaddr: each re-checks its word, sees the store, and leaves -- exactly the woken
+        // count. (Returning `val` broke LTP tst_checkpoint_wake's `waked += WAKE(INT_MAX)` -> fork04.)
+        int woke = futex_wake_bucket(uaddr, val);
+        futexlog("fwake", uaddr, op, val, (long)woke);
         return woke;
     }
-    // other ops (WAKE_OP/LOCK_PI/...): unchanged -- pretend success (baseline behavior)
+    if (op == 5) { // FUTEX_WAKE_OP: atomically mutate *uaddr2, wake uaddr waiters, conditionally uaddr2's.
+        // glibc's pthread_cond_signal/broadcast issue this (bump the internal seq/counter at uaddr2 and wake
+        // the condvar's futex at uaddr) -- the old "other ops -> return 0" reported success WITHOUT waking,
+        // so every glibc condvar signal was silently dropped (Chromium's main thread waited forever on the
+        // in-process Viz/GPU thread's condvar -> the live-window stall).
+        int do_wake2 = 0;
+        int rc = futex_wake_op_apply(uaddr2, val3, &do_wake2);
+        if (rc < 0) return rc; // -EFAULT (bad uaddr2) / -ENOSYS (unknown op|cmp): report to the guest as-is
+        int woke = futex_wake_bucket(uaddr, val);
+        if (do_wake2) woke += futex_wake_bucket(uaddr2, nr_wake2);
+        futexlog("fwakeop", uaddr, op, val, (long)woke);
+        return woke;
+    }
+    // Any remaining op (e.g. the deprecated FD ops) is unmodelled -- pretend success (baseline behavior).
     return 0;
 }
 
@@ -768,6 +1039,20 @@ static int thread_tid_alive(int tid) {
     return alive;
 }
 
+// Count of currently-live guest threads of THIS process (main + every spawned one still in run_guest). The
+// /proc/<self>/task st_nlink synth reports 2 + this (Linux: `.`, `..`, one subdir per thread) so chromium's
+// sandbox `IsSingleThreaded` (fstatat st_nlink == 3) and per-tid `IsThreadPresentInProcFS` (fstatat ENOENT
+// on a joined/exited thread) both track the real thread set -- otherwise the GPU process's thread_helpers
+// spins 30 iterations waiting for a stopped thread's /proc/self/task/<tid> to disappear, then FATALs.
+static int thread_live_count(void) {
+    int n = 0;
+    pthread_mutex_lock(&g_threg_m);
+    for (int i = 0; i < THREAD_REG_MAX; i++)
+        if (g_threg[i].c) n++;
+    pthread_mutex_unlock(&g_threg_m);
+    return n < 1 ? 1 : n; // the caller is always itself a live thread even in a registration window
+}
+
 // execve makes the process single-threaded: the kernel terminates every OTHER thread in the group before the
 // new image runs. The JIT re-loads the new image IN-PROCESS, so we must do that teardown by hand -- BEFORE
 // flushing the address space and closing CLOEXEC fds -- or a surviving sibling M keeps running the old image
@@ -801,12 +1086,64 @@ static void thread_exit_others(struct cpu *self) {
     }
 }
 
+// ---- robust futex list (set_robust_list / thread-exit cleanup) ----------------------------------------
+// A thread that dies while holding a robust mutex must not wedge its waiters forever: the kernel walks the
+// thread's registered robust list on exit and, for each futex it still owns, sets FUTEX_OWNER_DIED and wakes
+// one waiter so a blocked peer returns EOWNERDEAD (and can pthread_mutex_consistent the lock) instead of
+// hanging. dd did neither (set_robust_list was a no-op), so a crash/exit under a PTHREAD_MUTEX_ROBUST lock
+// deadlocked every waiter. Layout (LP64 kernel/glibc ABI, 24-byte head):
+//   struct robust_list_head { void *list; long futex_offset; void *list_op_pending; };
+// `list` chains each mutex's embedded robust_list node (first word = next; LSB is a PI flag we mask off) and
+// terminates by pointing back at &head->list (== head, list is at offset 0). The futex word for a node is at
+// node + futex_offset. list_op_pending covers a mutex mid-(un)lock and is handled once, at the end.
+#define DD_ROBUST_LIST_LIMIT 2048
+
+// If the dying thread still owns *futex_addr, set FUTEX_OWNER_DIED (preserving FUTEX_WAITERS) and wake one
+// waiter. cmpxchg-loops so a concurrent lock/unlock on the same word can't clobber the OWNER_DIED marking.
+static void robust_handle_death(uint64_t futex_addr, int mytid) {
+    if (!futex_addr || !host_range_mapped((uintptr_t)futex_addr, 4)) return;
+    int *w = (int *)(uintptr_t)futex_addr;
+    int v = __atomic_load_n(w, __ATOMIC_SEQ_CST);
+    for (;;) {
+        if (((uint32_t)v & DD_FUTEX_TID_MASK) != (uint32_t)mytid) return; // not (or no longer) ours
+        int nv = (int)(((uint32_t)v & DD_FUTEX_WAITERS) | DD_FUTEX_OWNER_DIED);
+        if (__atomic_compare_exchange_n(w, &v, nv, 0, __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST)) {
+            if ((uint32_t)v & DD_FUTEX_WAITERS) futex_wake_bucket(w, 1); // one waiter -> EOWNERDEAD
+            return;
+        }
+        // v was reloaded with the current word by the failed cmpxchg -> re-check ownership and retry
+    }
+}
+
+// Walk this thread's robust list (if any) and mark+wake each still-owned mutex. Clears c->robust_list so a
+// second call (thread exit then process exit) is a no-op. Every guest pointer is bounds-checked before deref.
+static void futex_robust_exit(struct cpu *c) {
+    uint64_t head = c->robust_list;
+    c->robust_list = 0;
+    if (!head || !host_range_mapped((uintptr_t)head, 24)) return;
+    uint64_t raw_first = *(uint64_t *)(uintptr_t)head;                // head->list.next (LSB = PI flag)
+    long futex_offset = *(long *)(uintptr_t)(head + 8);               // head->futex_offset
+    uint64_t pending = (*(uint64_t *)(uintptr_t)(head + 16)) & ~1ULL; // head->list_op_pending
+    int mytid = cpu_tid(c);
+    uint64_t entry = raw_first & ~1ULL;
+    for (int limit = 0; limit < DD_ROBUST_LIST_LIMIT; limit++) {
+        if (entry == head) break; // wrapped back to &head->list -> done
+        if (!host_range_mapped((uintptr_t)entry, 8)) break;
+        uint64_t next = (*(uint64_t *)(uintptr_t)entry) & ~1ULL; // entry->next
+        if (entry != pending) robust_handle_death(entry + (uint64_t)futex_offset, mytid);
+        entry = next;
+    }
+    if (pending && pending != head) robust_handle_death(pending + (uint64_t)futex_offset, mytid);
+}
+
 static void *thread_trampoline(void *p) {
     struct cpu *child = (struct cpu *)p;
     // sets its own TSD, runs to thread exit
     run_guest(child);
     // cgroup pids: task ended
     atomic_fetch_sub(&g_pids_cur, 1);
+    // robust mutexes this thread still holds -> mark OWNER_DIED + wake a waiter (before the join wakeup)
+    futex_robust_exit(child);
     // pthread_join waits on this
     futex_wake_addr(child->ctid);
     free(child);
@@ -842,6 +1179,9 @@ static int spawn_thread(struct cpu *parent, uint64_t flags, uint64_t stack_top, 
     if ((flags & 0x01000000) && ctid) *(int *)ctid = tid;
     // CLONE_CHILD_CLEARTID
     child->ctid = (flags & 0x00200000) ? ctid : 0;
+    // robust list is per-thread and NOT inherited: a new thread starts empty and re-registers via
+    // set_robust_list itself (otherwise the copied parent head would be walked twice on exit).
+    child->robust_list = 0;
     g_threaded = 1;
     pthread_t th;
     if (pthread_create(&th, NULL, thread_trampoline, child) != 0) {

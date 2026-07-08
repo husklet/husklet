@@ -66,7 +66,10 @@ fn main() {
             continue;
         }
         let script = format!(
-            "clang -O2 -o {bin} {tu} && codesign -s - --entitlements {ent} -f {bin}",
+            // -framework IOSurface/CoreFoundation: the GPU rung 2 host-IOSurface allocator (dd_gpu.h /
+            // vfs.c dd_gpu_alloc). Always linked (the engine is always a macOS binary); the code path is
+            // runtime-gated behind DD_GPU_IOSURFACE so it's inert for every existing workload.
+            "clang -O2 -framework IOSurface -framework CoreFoundation -o {bin} {tu} && codesign -s - --entitlements {ent} -f {bin}",
             bin = sh(&bin),
             tu = sh(&tu),
             ent = sh(&ent),

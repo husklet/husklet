@@ -28,11 +28,21 @@ static inline uint64_t repstr_g2h(uint64_t a) {
     return (g_nonpie_lo && a >= g_nonpie_lo && a < g_nonpie_hi) ? a + g_nonpie_bias : a;
 }
 
-static void dd_rep_movs(uint8_t *dst, const uint8_t *src, uint64_t nbytes, int w) {
+static void dd_rep_movs(uint8_t *dst, const uint8_t *src, uint64_t nbytes, int w, int df) {
     g_repmovs_n++;
     dst = (uint8_t *)repstr_g2h((uint64_t)dst);
     src = (const uint8_t *)repstr_g2h((uint64_t)src);
     if (nbytes == 0) return;
+    if (df) { // DF=1 backward: dst/src point at the HIGHEST element; copy high->low, element-granular (the
+        // x86 `std; rep movs` used by memmove for dst>src overlap). Element-by-element replays the scalar
+        // loop's exact bytes for every overlap/width; byte-identical to the -w element loop below.
+        uint64_t n = nbytes / (unsigned)w;
+        for (uint64_t i = 0; i < n; i++) {
+            uint64_t o = i * (uint64_t)w;
+            memcpy(dst - o, src - o, (size_t)w); // one whole w-wide element per step
+        }
+        return;
+    }
     if (dst <= src || dst >= src + nbytes) { // disjoint, or forward-safe (dst before src)
         memcpy(dst, src, nbytes);
         return;
@@ -67,9 +77,15 @@ static void dd_rep_movs(uint8_t *dst, const uint8_t *src, uint64_t nbytes, int w
 }
 
 // Host helper for `rep stos`: fill `n` elements of width `w` with `val` (AL/AX/EAX/RAX).
-static void dd_rep_stos(uint8_t *dst, uint64_t val, uint64_t n, int w) {
+static void dd_rep_stos(uint8_t *dst, uint64_t val, uint64_t n, int w, int df) {
     g_repstos_n++;
     dst = (uint8_t *)repstr_g2h((uint64_t)dst);
+    if (df) { // DF=1 backward: dst points at the highest element; write val at dst, dst-w, dst-2w, ...
+        uint8_t *p = dst;
+        for (uint64_t i = 0; i < n; i++, p -= (unsigned)w)
+            memcpy(p, &val, (size_t)w); // low w bytes of RAX, little-endian (== AL/AX/EAX/RAX)
+        return;
+    }
     switch (w) {
     case 2: {
         uint16_t *p = (uint16_t *)dst, v = (uint16_t)val;
@@ -109,7 +125,9 @@ static void emit_reload(void) {
 // RDI/RSI (+= count*w) and RCX (->0) in the membank snapshot, and reload. Guest GPRs live in
 // host x0..x15 (caller-saved) so the spill/reload around the call is mandatory; x28 (cpu) is
 // callee-saved and survives; the host SP is untouched (guest RSP is x4), so ABI alignment holds.
-static void emit_rep_string(int movs, int w, int shift) {
+// df_static: the block-static DF (DF_FWD/DF_BWD/DF_DYN). The helper takes the runtime direction as its 5th
+// arg (x4); on DF_DYN we load cpu->df and the pointer fixup negates the delta at runtime (backward => -nbytes).
+static void emit_rep_string(int movs, int w, int shift, int df_static) {
     // emit_spill (below) clears cpu->vdirty and republishes cpu->V, and emit_reload restores host
     // v0..v15 FROM cpu->V, so this leaves cpu->V current -> no vdirty mark needed (a later syscall may slim).
     emit_spill();                          // x0..x15 + xmm0..15 + flags -> cpu (membank)
@@ -117,6 +135,10 @@ static void emit_rep_string(int movs, int w, int shift) {
     e_ldr(1, 28, R_OFF(movs ? RSI : RAX)); // x1 = src (rsi) / fill value (rax)
     e_ldr(2, 28, R_OFF(RCX));              // x2 = element count (rcx)
     e_movconst(3, (uint64_t)w);            // x3 = element width
+    if (df_static == DF_DYN)
+        e_ldr(4, 28, OFF_DF); // x4 = cpu->df (0 fwd / 1 bwd) -- runtime direction
+    else
+        e_movconst(4, (uint64_t)(df_static == DF_BWD)); // x4 = statically-known direction
     if (movs) {
         if (shift) e_lsl_i(2, 2, shift, 1); // x2 = nbytes = count << shift
         emit_host_ptr(16, (uint64_t)(uintptr_t)&dd_rep_movs, PRELOC_HOSTGLOBAL);
@@ -130,12 +152,20 @@ static void emit_rep_string(int movs, int w, int shift) {
         e_lsl_i(16, 17, shift, 1); // x16 = nbytes = count << shift
     else
         e_mov_rr(16, 17, 1);
+    // signed pointer delta: forward => +nbytes, backward => -nbytes.
+    if (df_static == DF_BWD) {
+        e_rrr(A_SUB, 16, 31, 16, 1, 0); // x16 = -nbytes
+    } else if (df_static == DF_DYN) {
+        e_ldr(20, 28, OFF_DF);               // x20 = cpu->df
+        emit32(0x34000000u | (2 << 5) | 20); // cbz x20, .+8  (df==0 -> keep +nbytes)
+        e_rrr(A_SUB, 16, 31, 16, 1, 0);      // df==1 -> x16 = -nbytes
+    }
     e_ldr(19, 28, R_OFF(RDI));
-    e_rrr(A_ADD, 19, 19, 16, 1, 0); // rdi += nbytes
+    e_rrr(A_ADD, 19, 19, 16, 1, 0); // rdi += delta
     e_str(19, 28, R_OFF(RDI));
     if (movs) {
         e_ldr(19, 28, R_OFF(RSI));
-        e_rrr(A_ADD, 19, 19, 16, 1, 0); // rsi += nbytes
+        e_rrr(A_ADD, 19, 19, 16, 1, 0); // rsi += delta
         e_str(19, 28, R_OFF(RSI));
     }
     e_str(31, 28, R_OFF(RCX)); // rcx = 0 (str xzr); EFLAGS unchanged by movs/stos
@@ -160,35 +190,54 @@ static int translate_string(struct insn *I, uint64_t next) {
         int w = (op & 1) ? I->opsize : 1;
         int movs = (op == 0xA4 || op == 0xA5), lods = (op == 0xAC || op == 0xAD);
         // opt5: `rep movs`/`rep stos` -> one optimized host memcpy/memset call (bit-exact with the scalar
-        // loop below). Fall back to that loop for NOREP=1, `lods` (result is RAX, not a bulk move), a segment
-        // override / 32-bit address size (the scalar loop ignores both too), or DF=1 (host helper is forward-
-        // only; the backward case takes the per-element scalar loop with a decrementing stride).
-        if (I->rep && !lods && !I->seg && !I->addr32 && !g_df && (w == 1 || w == 2 || w == 4 || w == 8) &&
+        // loop below). The host helper is now direction-aware (takes cpu->df / the static DF as its 5th arg),
+        // so this fast path serves BOTH forward and backward. Fall back to the scalar loop only for NOREP=1,
+        // `lods` (result is RAX, not a bulk move), or a segment override / 32-bit address size (the scalar
+        // loop ignores both too).
+        if (I->rep && !lods && !I->seg && !I->addr32 && (w == 1 || w == 2 || w == 4 || w == 8) &&
             !norep_disabled()) {
             int shift = w == 1 ? 0 : w == 2 ? 1 : w == 4 ? 2 : 3;
-            emit_rep_string(movs, w, shift);
+            emit_rep_string(movs, w, shift, g_df);
             return TX_NEXT;
         }
+        // Scalar element loop. DF stride: forward +w, backward -w. When DF is statically known (DF_FWD/DF_BWD)
+        // use an immediate add/sub; when DF_DYN (block entry / after popfq) compute a runtime stride reg (x17)
+        // from cpu->df so a cross-block `std`/popfq direction is honored.
+        int dyn = (g_df == DF_DYN);
+        if (dyn) {
+            e_movconst(17, (uint64_t)w);         // x17 = +w
+            e_ldr(16, 28, OFF_DF);               // x16 = cpu->df
+            emit32(0xB4000000u | (2 << 5) | 16); // cbz x16, .+8   (df==0 -> keep +w)
+            e_rrr(A_SUB, 17, 31, 17, 1, 0);      // df==1 -> x17 = -w
+        }
+#define REP_STEP(reg)                                                                                                  \
+    do {                                                                                                               \
+        if (dyn)                                                                                                       \
+            e_rrr(A_ADD, (reg), (reg), 17, 1, 0);                                                                      \
+        else if (g_df == DF_BWD)                                                                                       \
+            e_subi((reg), (reg), w, 1);                                                                                \
+        else                                                                                                          \
+            e_addi((reg), (reg), w, 1);                                                                                \
+    } while (0)
         uint32_t *cbz = NULL, *top = NULL;
         if (I->rep) {
             top = (uint32_t *)g_cp;
             cbz = (uint32_t *)g_cp;
             emit32(0);
         } // cbz RCX,done
-        // DF: forward (g_df==0) advances pointers by +w; backward (std) by -w.
-        void (*e_step)(int, int, unsigned, int) = g_df ? e_subi : e_addi;
         if (movs) {
             e_load(w, 16, RSI);
             e_store(w, 16, RDI);
-            e_step(RSI, RSI, w, 1);
-            e_step(RDI, RDI, w, 1);
+            REP_STEP(RSI);
+            REP_STEP(RDI);
         } else if (lods) {
             e_load(w, RAX, RSI);
-            e_step(RSI, RSI, w, 1);
+            REP_STEP(RSI);
         } else {
             e_store(w, RAX, RDI);
-            e_step(RDI, RDI, w, 1);
+            REP_STEP(RDI);
         } // stos
+#undef REP_STEP
         if (I->rep) {
             e_subi(RCX, RCX, 1, 1);
             int64_t back = (int64_t)(top - (uint32_t *)g_cp);
@@ -207,18 +256,20 @@ static int translate_string(struct insn *I, uint64_t next) {
         int isscas = (op == 0xAE || op == 0xAF);
         int isrep = (I->rep || I->repne);
         uint64_t desc = (uint64_t)w | ((uint64_t)isscas << 8) | ((uint64_t)(I->repne ? 1 : 0) << 9) |
-                        ((uint64_t)isrep << 10) | ((uint64_t)(g_df ? 1 : 0) << 11);
+                        ((uint64_t)isrep << 10) | ((uint64_t)(g_df == DF_BWD ? 1 : 0) << 11);
         e_movconst(16, desc);
+        if (g_df == DF_DYN) {              // DF unknown statically -> OR in the runtime direction bit
+            e_ldr(18, 28, OFF_DF);         // x18 = cpu->df (0/1)
+            e_rrr(A_ORR, 16, 16, 18, 1, 11); // desc |= df << 11
+        }
         e_str(16, 28, OFF_DIVOP);
         emit_exit_const(next, R_REPSTR); // spills regs+flags; do_repstr() resumes at `next`
         return TX_BREAK;                 // block ends here (helper runs, dispatcher continues)
     }
-    if (op == 0xFC) {
-        g_df = 0; // cld: forward string ops
-        return TX_NEXT;
-    }
-    if (op == 0xFD) {
-        g_df = 1; // std: backward string ops (consumed at translate time by the lowering below)
+    if (op == 0xFC || op == 0xFD) { // cld (FC) / std (FD): update BOTH the runtime bit and the static shadow
+        e_movconst(16, (uint64_t)(op == 0xFD));
+        e_str(16, 28, OFF_DF);            // cpu->df = 0 (fwd) / 1 (bwd) -- persists across blocks
+        g_df = (op == 0xFD) ? DF_BWD : DF_FWD; // statically known for the rest of THIS block (fast stride)
         return TX_NEXT;
     }
     return TX_FALL;

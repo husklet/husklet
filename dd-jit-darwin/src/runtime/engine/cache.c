@@ -133,11 +133,36 @@ static void txpg_put(uint64_t p) { // insert one guest page (addr>>12) into the 
 // appends. Sized 2^21 slots (16MB) so even a large JIT working set (~1M lines = 64MB of guest code) keeps
 // the open-addressed load factor low; saturation degrades conservatively (assume present -> wholesale drop).
 #define TXLN_N (1u << 21)
+// Cap the open-addressed linear probe. Once this set saturates (a >128MB guest code working set --
+// e.g. a 206MB chromium/musl binary translates >2M distinct 64B lines during startup), an UNBOUNDED
+// probe walks the whole 2M-slot table on every lookup/insert. txln_put() is on translate_block's HOT
+// path (via txpg_mark), so a full table turned each block's translation into an O(TXLN_N) scan per 64B
+// line -> `chromium --version` pinned translate_block at 100% CPU with RSS flat (no progress) forever.
+// (This is DISTINCT from the SMC re-translation livelock the content gate below fixes; it is a hash-set
+// saturation blowup on the translate path.) Bounding the probe restores O(1) amortized and degrades to
+// the conservative fallback the callers already document ("saturated -> assume present -> wholesale
+// drop"). Correctness is preserved: txln_put only ever inserts a line within TXLN_PROBE_CAP of its hash,
+// and slots are never individually emptied (only txln_clear wholesale-zeroes), so a line that WAS
+// inserted is always re-found within the same cap; any probe that exhausts the cap means the line was
+// never recorded -> returning "present"/"drop" over-approximates safely (never misses stale code).
+#define TXLN_PROBE_CAP 512u
 static uint64_t g_txln[TXLN_N]; // value = guest line (addr>>6); 0 = empty
+// ---- SMC content gate: benign icache-flush detection (the chromium/V8 startup livelock fix) ----
+// A code-generating guest re-flushes ALREADY-TRANSLATED, UNCHANGED code lines constantly at startup (a
+// builtin/trampoline flushed as part of a range every call; a block flushing its OWN executing source
+// line). smc_icflush() answered EVERY such line-hit with a WHOLESALE drop of the whole translation map,
+// re-translating the entire working set -> `chromium --version` spun in translate_block at 100% CPU
+// forever (RSS flat, no real progress). This parallel array (SAME slot index as g_txln) holds a 64-bit
+// content hash of each translated line; the FIRST flush of a line records it (and drops conservatively,
+// since we did not capture the pre-flush bytes), and every LATER flush compares -- unchanged bytes
+// (benign icache maintenance) SKIP the drop; genuinely-rewritten bytes (soak_smc/smc2, a V8 IC patch)
+// still drop + re-record. Cost is on the SMC slow path only (zero translate-path overhead). Cleared in
+// lockstep with g_txln (txln_clear) so a slot's hash always matches the line living in that slot.
+static uint64_t g_txlh[TXLN_N]; // 64-bit content hash of the line at the SAME slot as g_txln (0 = unrecorded)
 
 static void txln_put(uint64_t l) {
     uint32_t h = (uint32_t)(l * 2654435761u) & (TXLN_N - 1);
-    for (uint32_t i = 0; i < TXLN_N; i++) {
+    for (uint32_t i = 0; i < TXLN_PROBE_CAP; i++) { // bounded probe: see TXLN_PROBE_CAP
         uint32_t j = (h + i) & (TXLN_N - 1);
         if (g_txln[j] == l) break;
         if (g_txln[j] == 0) {
@@ -145,21 +170,69 @@ static void txln_put(uint64_t l) {
             break;
         }
     }
+    // cap exhausted: the line's home cluster is full -> leave it unrecorded. txln_has/txln_flush_class
+    // then over-approximate it as present (conservative drop), never miss it. Keeps the hot path O(cap).
 }
 
 static int txln_has(uint64_t addr) { // is the 64B line at addr the source of any live translation?
     uint64_t l = addr >> 6;
     uint32_t h = (uint32_t)(l * 2654435761u) & (TXLN_N - 1);
-    for (uint32_t i = 0; i < TXLN_N; i++) {
+    for (uint32_t i = 0; i < TXLN_PROBE_CAP; i++) { // bounded probe: see TXLN_PROBE_CAP
         uint32_t j = (h + i) & (TXLN_N - 1);
         if (g_txln[j] == l) return 1;
         if (g_txln[j] == 0) return 0;
     }
-    return 1; // saturated -> conservative
+    return 1; // cap exhausted (saturated cluster) -> conservative: assume present
 }
 
 static void txln_clear(void) {
     memset(g_txln, 0, sizeof g_txln);
+    memset(g_txlh, 0, sizeof g_txlh); // keep the content-hash array in lockstep with the line set
+}
+
+// NOSMCHASH=1: revert the content gate to the legacy always-drop behaviour (A/B for the SMC-livelock fix).
+static int g_smc_nohash = -1;
+
+// FNV-1a over the 64B guest line at `line_base` (64B-aligned). The line was just executed/flushed by the
+// guest, so it is in a mapped code page -> the 64-byte read never faults. Guest VA == host VA under the
+// JIT, so this reads the guest's own current bytes.
+static uint64_t line_hash64(uint64_t line_base) {
+    const uint8_t *p = (const uint8_t *)line_base;
+    uint64_t h = 1469598103934665603ull;
+    for (int i = 0; i < 64; i++) {
+        h ^= p[i];
+        h *= 1099511628211ull;
+    }
+    return h ? h : 1; // never 0 (0 sentinel == "unrecorded")
+}
+
+// Classify a guest `ic ivau` of the 64B line containing `addr`:
+//   0 = the line is NOT the source of any live translation (nothing stale to drop)
+//   1 = translated, and this is its FIRST flush OR its bytes CHANGED -> GENUINE, take the wholesale drop
+//   2 = translated but bytes UNCHANGED since the last flush -> BENIGN icache maintenance, SKIP the drop
+// Case 2 is what breaks the V8/chromium re-translation livelock: a hot loop re-flushing its own unchanged
+// code no longer nukes the working set. Correct-by-construction: a genuine in-place rewrite changes the
+// 64B line -> case 1 -> the block still re-translates (g_smc_seen already latched by the caller).
+static int txln_flush_class(uint64_t addr) {
+    if (g_smc_nohash < 0) g_smc_nohash = (getenv("NOSMCHASH") != NULL);
+    uint64_t l = addr >> 6;
+    uint32_t h = (uint32_t)(l * 2654435761u) & (TXLN_N - 1);
+    for (uint32_t i = 0; i < TXLN_PROBE_CAP; i++) { // bounded probe: see TXLN_PROBE_CAP
+        uint32_t j = (h + i) & (TXLN_N - 1);
+        if (g_txln[j] == l) {
+            if (g_smc_nohash) return 1;                        // A/B: always drop (legacy)
+            uint64_t cur = line_hash64(l << 6);
+            if (g_txlh[j] == 0) {                              // first flush: no pre-flush baseline -> drop
+                g_txlh[j] = cur;
+                return 1;
+            }
+            if (g_txlh[j] == cur) return 2;                    // unchanged -> benign, skip the drop
+            g_txlh[j] = cur;                                   // changed -> genuine rewrite, drop + re-record
+            return 1;
+        }
+        if (g_txln[j] == 0) return 0; // empty slot before the line -> not translated
+    }
+    return 1; // table saturated -> conservative drop
 }
 
 static void txpg_mark(uint64_t lo, uint64_t hi) {

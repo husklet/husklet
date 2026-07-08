@@ -102,5 +102,21 @@ fn ext_ipc() -> Group {
         src("eventfd", "ext_ipc/ipc_eventfd.c").oracle(),
         // socketpair(AF_UNIX, SOCK_SEQPACKET) returns -1 under the JIT → empty. xfail Linux; GAPS "ext-seqpacket".
         src("seqpacket", "ext_ipc/ipc_seqpacket.c").oracle(),
+        // SEQPACKET Mojo-IPC fidelity (chromium NodeChannel): no premature EOF when the parent drops the
+        // child's fork-inherited pair end while keeping its own; SCM_RIGHTS fd passing over SEQPACKET; and
+        // SO_PASSCRED -> a synthesized SCM_CREDENTIALS record (ucred.uid == getuid()). Diffed vs native.
+        src("seqcred", "ext_ipc/ipc_seqcred.c").oracle(),
+        // SCM_CREDENTIALS peer-pid IDENTITY (chromium Mojo ports node-merge): two distinct children over
+        // two SEQPACKET socketpairs must present two DISTINCT ucred.pids, neither equal to the receiver's own
+        // pid. macOS reports the socketpair creator's pid on both ends, so before the synthetic-peer-id fix
+        // the creating parent read its own pid for every child -> all collapsed to guest 1 (self-equal,
+        // colliding). Booleans only, so native (real pids) and guest (synthetic ids) agree. Diffed vs native.
+        src("credpid", "ext_ipc/ipc_credpid.c").oracle(),
+        // SEQPACKET bystander-EOF guard (chromium Mojo child-bootstrap wall): a third process that inherits a
+        // channel's SEND end across fork and closes it UNUSED must not inject a zero-length "EOF" datagram
+        // into the live peer's recv queue -- the parent's first read on the retained end must be the real
+        // 4-byte record, never a spurious 0. The old close-time EOF injection fired for any inherited end;
+        // the fix only injects for an end this process actually wrote to. Diffed vs native.
+        src("seqbystander", "ext_ipc/ipc_seqbystander.c").oracle(),
     ])
 }

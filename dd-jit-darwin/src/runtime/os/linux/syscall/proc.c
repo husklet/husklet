@@ -209,7 +209,11 @@ static void fork_child_hooks(struct cpu *c) {
                                  // (also reinits g_ep_mtx, inherited-locked if a peer forked mid-epoll)
     if (fp) t[3] = now_ns();
     thread_after_fork();    // reset process-private thread/futex locks a dead peer may have held at fork
+    seq_wrote_after_fork(); // a forked child has WRITTEN to none of its inherited SEQPACKET/pipe ends yet:
+                            // clear the "wrote" table so a bystander child closing an inherited Mojo channel
+                            // end injects no spurious peer-EOF into another process's live channel (see netns.c)
     sysv_after_fork();      // reset the SysV-shm lock (same fork-unsafe-mutex class)
+    eventfd_after_fork();   // reset the eventfd counter+pipe lock (fork-unsafe-mutex class)
     ts_after_fork();        // drop the inherited task-state slot cache so the child re-claims its own
     poslk_after_fork();     // re-cache pid; child inherits NONE of the parent's fcntl record locks
     wipefork_apply_child(); // MADV_WIPEONFORK: zero-fill the ranges the guest marked wipe-on-fork
@@ -483,21 +487,36 @@ static int svc_proc(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64
 #ifdef PCACHE_SAVE_HOOK
         PCACHE_SAVE_HOOK; // opt8: persist the translated arena before the one-shot _exit (DDJIT_PCACHE only)
 #endif
-        proc_reg_unlink(); // drop our /proc process-table entry (_exit bypasses the atexit handler)
-        poslk_on_exit();   // release this process's in-engine fcntl advisory locks
-        sysv_on_exit();    // apply SEM_UNDO + GC this container's SysV objects (_exit skips atexit)
+        futex_robust_exit(c); // robust mutexes still held by the calling thread -> OWNER_DIED + wake waiters
+        proc_reg_unlink();    // drop our /proc process-table entry (_exit bypasses the atexit handler)
+        poslk_on_exit();      // release this process's in-engine fcntl advisory locks
+        sysv_on_exit();       // apply SEM_UNDO + GC this container's SysV objects (_exit skips atexit)
         _exit((int)a0);
     case 96:
-        G_RET(c) = (uint64_t)getpid();
-        // set_tid_address -> returns caller's TID (musl stores it; 0 -> a_crash())
+        // set_tid_address(tidptr): store tidptr as this thread's clear_child_tid so thread exit zeroes it and
+        // FUTEX_WAKEs a joiner (futex_wake_addr on c->ctid). Returns the caller's TID (gettid, not the tgid).
+        c->ctid = a0;
+        G_RET(c) = (uint64_t)cpu_tid(c);
         break;
     case 97:
     // unshare / setns -> ok (no real ns)
     case 268: G_RET(c) = 0; break;
     // futex
-    case 98: G_RET(c) = (uint64_t)futex_op(c, (int *)a0, (int)a1 & 0x7f, (int)a2, (struct timespec *)a3); break;
-    // set_robust_list
-    case 99: G_RET(c) = 0; break;
+    case 98: // futex(uaddr, op, val, timeout|nr_wake2=a3, uaddr2=a4, val3=a5); a3 is a timespec* for WAIT
+        // ops and a wake count for WAKE_OP -- pass it both ways, the op selects the interpretation.
+        G_RET(c) = (uint64_t)futex_op(c, (int *)a0, (int)a1 & 0x7f, (int)a2, (struct timespec *)a3, (int)a3, (int *)a4,
+                                      (uint32_t)a5);
+        break;
+    // set_robust_list(head, len): record the per-thread robust-list head (walked on exit to mark OWNER_DIED +
+    // wake robust-mutex waiters). Linux rejects len != sizeof(struct robust_list_head) (24 on LP64).
+    case 99:
+        if ((size_t)a1 != 24) {
+            G_RET(c) = (uint64_t)(-EINVAL);
+        } else {
+            c->robust_list = a0;
+            G_RET(c) = 0;
+        }
+        break;
     // syslog
     case 116: G_RET(c) = 0; break;
     // sched_setaffinity(pid, size, MASK=a2) -- record the requested mask (intersected with the online
@@ -1636,8 +1655,10 @@ static int svc_proc(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64
         }
         // checkpoint restore: a wait targeting a specific checkpoint-time guest pid must name the live host
         // pid the tree was re-forked with (identity no-op on a normal launch, g_pidmap_n==0).
-        if (g_pidmap_n && (int)a0 > 0) a0 = (uint64_t)(unsigned)pidmap_to_live((int)a0);
-        else if (g_pidmap_n && (int)a0 < -1) a0 = (uint64_t)(int64_t)(-pidmap_to_live(-(int)a0));
+        if (g_pidmap_n && (int)a0 > 0)
+            a0 = (uint64_t)(unsigned)pidmap_to_live((int)a0);
+        else if (g_pidmap_n && (int)a0 < -1)
+            a0 = (uint64_t)(int64_t)(-pidmap_to_live(-(int)a0));
         // when ptrace is already in use in this session (a tracee link exists -> nactive>0) route the
         // wait through the ptrace pump, which surfaces tracee ptrace-stops (Linux-encoded) AND real child
         // exits and tears a link down when its tracee dies. For the ENTIRE non-ptrace matrix nactive is 0,

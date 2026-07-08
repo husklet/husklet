@@ -8,6 +8,7 @@
 //! from its broadcast, and `write_stdin`/`resize`/`waitpid` are plain synchronous calls.
 
 use crate::paths;
+use dd_jit::DeviceProvider;
 use dd_term_core::workspace::{Arch, Workspace};
 use dd_term_core::PtyBackend;
 use std::collections::VecDeque;
@@ -57,11 +58,17 @@ fn split_ref(image: &str) -> (String, String) {
 /// `restore`, `DDJIT_RESTORE_DIR` is set too, so the engine rebuilds the saved process tree instead of
 /// starting a fresh shell. The container init's host pid is recorded so a separate `workspace checkpoint`
 /// invocation can signal the live tree.
-pub fn launch_ex(ws: &Workspace, cols: u16, rows: u16, restore: bool) -> io::Result<Box<dyn PtyBackend>> {
+pub fn launch_ex(ws: &Workspace, cols: u16, rows: u16, restore: bool, cwd: Option<&str>, slot: Option<&str>) -> io::Result<Box<dyn PtyBackend>> {
     let guest = guest_of(ws.arch);
     // Deterministic high placement + fixed image bases (required for a restore's MAP_FIXED to land on free
     // VAs) need the persistent translated-code cache ON, so give the runtime a per-workspace cache dir.
-    let ckpt_dir = ws.checkpoint_dir(&paths::dd_root());
+    // Each terminal pane is its OWN engine, so a per-pane SLOT freezes/restores into its own checkpoint
+    // dir (`<storage>/checkpoint/<slot>`); None keeps the single shared slot (back-compat). The pcache is
+    // a translation cache — safe (and cheaper) to SHARE across all of a workspace's slots.
+    let (ckpt_dir, ckpt_pid_file) = match slot {
+        Some(s) => (ws.checkpoint_slot_dir(&paths::dd_root(), s), ws.checkpoint_slot_pid_file(&paths::dd_root(), s)),
+        None => (ws.checkpoint_dir(&paths::dd_root()), ws.checkpoint_pid_file(&paths::dd_root())),
+    };
     let pcache_dir = ws.storage_dir(&paths::dd_root()).join("pcache");
     let _ = std::fs::create_dir_all(&pcache_dir);
     if let Some(p) = ckpt_dir.parent() {
@@ -76,6 +83,28 @@ pub fn launch_ex(ws: &Workspace, cols: u16, rows: u16, restore: bool) -> io::Res
         std::env::remove_var("DDJIT_RESTORE_DIR");
         if restore {
             eprintln!("[dd] no checkpoint to restore for {:?}; starting a fresh workspace", ws.name);
+        }
+        // A FRESH launch (not resuming a saved tree): wipe any leftover checkpoint dir + control-channel
+        // files for this slot so the new engine starts from a clean, self-contained slot and never inherits
+        // a stale trigger generation or pid from a prior session. The engine re-creates the trigger fresh.
+        let ckpt_str = ckpt_dir.to_string_lossy().into_owned();
+        let _ = std::fs::remove_dir_all(&ckpt_dir);
+        let _ = std::fs::remove_file(format!("{ckpt_str}.trigger"));
+        let _ = std::fs::remove_file(format!("{ckpt_str}.pid"));
+        // GUI reliability: a fresh `--gui` launch resets the persistent pcache first. The persistent
+        // translated-code cache bakes host-arena-relative absolute addresses that are only valid when the
+        // engine re-secures the SAME fixed arena base it was written at. A large C++/PIE Wayland binary
+        // (glmark2, Chrome) that was cached in a PRIOR session can be re-loaded in a later session at a
+        // MISMATCHED base (the fixed VA is occupied → NULL-hint fallback) → stale absolutes → an
+        // intermittent SIGSEGV (exit 139) or garbage reads during EGL/config init, BEFORE any draw. This is
+        // the "rendered one session, exit-139'd the next with no code change" flakiness. Building the cache
+        // cold at the current session's base (then reusing it in-session, where the base stays available) is
+        // 100% reliable and costs only a one-time re-translation at startup (negligible for an interactive
+        // GUI app). A `restore` keeps the cache (its MAP_FIXED placement needs it) — this only fires on a
+        // fresh gui launch.
+        if ws.gui {
+            let _ = std::fs::remove_dir_all(&pcache_dir);
+            let _ = std::fs::create_dir_all(&pcache_dir);
         }
     }
     let rt = dd_jit::Runtime::new().map_err(to_io)?.cache_dir(pcache_dir.to_string_lossy().into_owned());
@@ -119,9 +148,20 @@ pub fn launch_ex(ws: &Workspace, cols: u16, rows: u16, restore: bool) -> io::Res
     // interactive from isatty(stderr) AND writes its prompt (PS1) to stderr, so a `2>/dev/null` would
     // silently make it non-interactive with a hidden prompt (looks hung).
     // Honor a configured shell; else auto-pick bash (interactive login) then sh.
-    let inner = match ws.shell.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+    let base = match ws.shell.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
         Some(s) => format!("exec {s}"),
         None => "if command -v bash >/dev/null 2>&1; then exec bash -il; else exec sh -i; fi".to_string(),
+    };
+    // OSC-7 "new tab in same cwd": start in `cwd` when the GUI passes one (a plain guest path). Guarded
+    // with `2>/dev/null` so a stale/removed dir just falls back to the default working dir. Ignored on a
+    // restore (the checkpoint already carries every process's cwd).
+    let start_dir = cwd
+        .map(str::trim)
+        .filter(|s| !s.is_empty() && s.starts_with('/') && !restore)
+        .map(|s| s.to_string());
+    let inner = match &start_dir {
+        Some(dir) => format!("cd {} 2>/dev/null; {base}", shell_quote(dir)),
+        None => base,
     };
     let shell = vec!["/bin/sh".to_string(), "-c".to_string(), inner];
 
@@ -137,10 +177,26 @@ pub fn launch_ex(ws: &Workspace, cols: u16, rows: u16, restore: bool) -> io::Res
 
     let mut builder = dd_jit::Container::builder(image)
         .cmd(shell)
-        .cwd("/root".to_string())
+        .cwd(start_dir.clone().unwrap_or_else(|| "/root".to_string()))
         .guest_env(&env, true)
         .hostname(sanitize_host(&ws.name))
         .private_network(format!("ws-{}", sanitize_host(&ws.name)));
+    // Per-workspace VPN egress (docs/VPN.md): when the workspace is configured with a VPN that resolves to a
+    // SOCKS5 endpoint, arm the engine's egress redirect so every genuine external TCP connect the guest makes
+    // is funneled through that proxy. Absent a VPN (the default), nothing is set and the engine's direct
+    // connect() path runs unchanged — zero overhead, no behavior change. Tunnel kinds (WireGuard/OpenVPN)
+    // model a config path but need the userspace-tunnel helper to front them as SOCKS first (future `wsvpn`).
+    if let Some(vpn) = &ws.vpn {
+        match vpn.socks_endpoint() {
+            Some(sock) => {
+                builder = builder.egress_socks(sock.to_string());
+            }
+            None => eprintln!(
+                "[dd] workspace {:?} VPN kind {:?} needs the userspace-tunnel helper (not yet wired); egress is direct",
+                ws.name, vpn.kind
+            ),
+        }
+    }
     // Configured bind mounts + resource caps from the workspace definition.
     for m in &ws.mounts {
         builder = builder.bind(m.host.clone(), m.container.clone(), m.ro);
@@ -161,6 +217,107 @@ pub fn launch_ex(ws: &Workspace, cols: u16, rows: u16, restore: bool) -> io::Res
             }
             builder = builder.guest_env(&env, true); // re-apply so DOCKER_HOST is included
         }
+    }
+    // GPU integration (accelerated `--gui` display + simulated CUDA device) is now expressed to dd-jit
+    // through a GENERIC device-provider seam (docs/ideas/{RENDERING_PLAN,CUDA_ON_METAL}.md): dd-cli
+    // resolves *where the host artifacts live* (the `~/.dd/...` drop-ins, the socket paths, the guest ISA)
+    // and hands a `dd_gpu::integration::GpuIntegration` to the dd-jit builder as a `DeviceProvider`. The
+    // provider (in dd-gpu) owns *how a GPU maps into a guest* — target multiarch lib dir, guest socket
+    // paths, the WAYLAND_DISPLAY/DD_GPU_EXEC/DD_CUDA_* env contract, the LD_LIBRARY_PATH composition, and
+    // the render-node request — while dd-jit / the engine stay device-agnostic (they only see mounts +
+    // env + a render-node bool; no CUDA/IOSurface/Wayland vocabulary crosses the runtime boundary). Inert
+    // unless the workspace is `gui` and/or configures a `cuda` device → headless workspaces byte-identical.
+    let mut gpu = dd_gpu::integration::GpuIntegration::new(match ws.arch {
+        Arch::Amd64 => dd_gpu::integration::GuestArch::X86_64,
+        _ => dd_gpu::integration::GuestArch::Aarch64,
+    });
+    if ws.gui {
+        // Host socket paths: `DD_DISPLAY_SOCK`/`DD_GPU_EXEC_SOCK` overrides (tests / bespoke layouts), else
+        // the per-session shared endpoints under the dd root (`dd-display`, spawned lazily elsewhere,
+        // creates + listens on them). Drop-in dirs (client libs / demo bins) are passed only when present,
+        // so a bare image needs no "dd-gpu image".
+        let host_sock = std::env::var("DD_DISPLAY_SOCK")
+            .unwrap_or_else(|_| paths::dd_root().join("run").join("wayland-0").to_string_lossy().into_owned());
+        let host_gpu_sock = std::env::var("DD_GPU_EXEC_SOCK").unwrap_or_else(|_| {
+            std::path::Path::new(&host_sock)
+                .parent()
+                .map(|d| d.join("dd-gpu.sock").to_string_lossy().into_owned())
+                .unwrap_or_else(|| paths::dd_root().join("run").join("dd-gpu.sock").to_string_lossy().into_owned())
+        });
+        let gui_arch = match ws.arch {
+            Arch::Amd64 => "x86_64",
+            _ => "aarch64",
+        };
+        let host_gui_lib = paths::dd_root().join("gui").join(gui_arch).join("lib");
+        let host_gui_bin = paths::dd_root().join("gui").join(gui_arch).join("bin");
+        gpu = gpu.with_display(dd_gpu::integration::DisplayIntegration {
+            wayland_sock: host_sock,
+            gpu_exec_sock: host_gpu_sock,
+            // Pass a dir only when it exists, matching the original `is_dir()` gate (an empty string = no
+            // drop-ins → the provider binds nothing and adds no LD_LIBRARY_PATH for that slot).
+            lib_dir: if host_gui_lib.is_dir() { host_gui_lib.to_string_lossy().into_owned() } else { String::new() },
+            bin_dir: if host_gui_bin.is_dir() { host_gui_bin.to_string_lossy().into_owned() } else { String::new() },
+        });
+    }
+    if let Some(cuda) = &ws.cuda {
+        // Host-side artifacts follow the same drop-in pattern as the injected `docker` CLI:
+        //   ~/.dd/nvml/<arch>/libnvidia-ml.so.1   (built by dd-gpu/nvml/build.sh install)
+        //   ~/.dd/bin/nvidia-smi[-<arch>]         (the REAL NVIDIA binary; user-provided, never committed)
+        // dd-cli resolves + existence-checks them (and warns exactly as before); dd-gpu injects whatever is
+        // present (an empty path = not injected).
+        let (nvml_arch, smi_arch) = match ws.arch {
+            Arch::Amd64 => ("x86_64", "nvidia-smi-amd64"),
+            _ => ("aarch64", "nvidia-smi-arm64"),
+        };
+        let dd = paths::dd_root();
+        let nvml_pb = dd.join("nvml").join(nvml_arch).join("libnvidia-ml.so.1");
+        let nvml_so = if nvml_pb.exists() {
+            nvml_pb.to_string_lossy().into_owned()
+        } else {
+            eprintln!(
+                "[dd] workspace {:?} has a CUDA device configured but the NVML shim is missing ({}); \
+                 build it with dd-gpu/nvml/build.sh install. nvidia-smi will not find a GPU.",
+                ws.name,
+                nvml_pb.display()
+            );
+            String::new()
+        };
+        // Prefer the arch-specific nvidia-smi name, then a generic `nvidia-smi`. Never ship the closed binary.
+        let smi_a = dd.join("bin").join(smi_arch);
+        let smi_g = dd.join("bin").join("nvidia-smi");
+        let nvidia_smi = if smi_a.exists() {
+            smi_a.to_string_lossy().into_owned()
+        } else if smi_g.exists() {
+            smi_g.to_string_lossy().into_owned()
+        } else {
+            eprintln!(
+                "[dd] workspace {:?}: drop the real nvidia-smi at {} (or {}) to run it against dd's NVML; \
+                 the NVML shim is still injected so any NVML client sees the device.",
+                ws.name,
+                smi_a.display(),
+                smi_g.display()
+            );
+            String::new()
+        };
+        gpu = gpu.with_cuda(dd_gpu::integration::CudaIntegration {
+            name: cuda.name.clone(),
+            compute_capability: cuda.compute_capability.clone(),
+            vram_mb: cuda.vram_mb,
+            nvml_so,
+            nvidia_smi,
+            // Merge our lib dir ahead of any user-set LD_LIBRARY_PATH (first match, as the original did).
+            prior_ld_library_path: ws.env.iter().find(|(k, _)| k == "LD_LIBRARY_PATH").map(|(_, v)| v.clone()),
+        });
+    }
+    if !gpu.is_inert() {
+        // Ask the provider what it needs (composing its LD_LIBRARY_PATH against the current guest `env`),
+        // apply the mounts + render-node generically, fold its env in, and re-apply the guest env once so
+        // the added K=V lines go through the normal docker last-wins dedup — byte-identical to the old
+        // inline gui+cuda blocks (same volumes, same env order, same DD_GPU_IOSURFACE flag).
+        let req = gpu.device_request(&env);
+        builder = builder.apply_device(&req);
+        env.extend(req.env);
+        builder = builder.guest_env(&env, true);
     }
     if let Some(c) = ws.cpus {
         builder = builder.cpus(c);
@@ -189,8 +346,9 @@ pub fn launch_ex(ws: &Workspace, cols: u16, rows: u16, restore: bool) -> io::Res
         .block_on(async { rt.start_into(&container, dd_jit::Stdio3 { tty: true }, out, log_chunks, stdin_rx) })
         .map_err(to_io)?;
 
-    // Record the container init's host pid so a separate `workspace checkpoint` can signal the live tree.
-    let _ = std::fs::write(ws.checkpoint_pid_file(&paths::dd_root()), launched.pid.to_string());
+    // Record the container init's host pid so a separate `workspace checkpoint` can signal the live tree
+    // (per-pane slot when given, else the shared slot).
+    let _ = std::fs::write(&ckpt_pid_file, launched.pid.to_string());
 
     let mut pty = DdJitPty {
         _rt: trt,
@@ -203,6 +361,11 @@ pub fn launch_ex(ws: &Workspace, cols: u16, rows: u16, restore: bool) -> io::Res
     };
     pty.resize(cols, rows);
     Ok(Box::new(pty))
+}
+
+/// Single-quote a path for safe inclusion in the `sh -c` script (wrap in `'…'`, escaping embedded `'`).
+fn shell_quote(s: &str) -> String {
+    format!("'{}'", s.replace('\'', "'\\''"))
 }
 
 /// Sanitize a workspace name into a hostname/netns-safe token.

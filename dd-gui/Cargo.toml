@@ -4,10 +4,17 @@ version = "0.4.0"
 edition = "2021"
 description = "dd-app — a GTK4/libadwaita desktop UI for the dd VM-less container runtime."
 license = "MIT"
+autobins = false
 
 [[bin]]
 name = "dd-app"
 path = "src/main.rs"
+
+# dd-term — a standalone GPU-rendered (GTK4/GSK) terminal window with iTerm2-style tabs + splits,
+# launching dd workspaces daemon-free via `ddcli workspace launch`.
+[[bin]]
+name = "dd-term"
+path = "src/bin/term.rs"
 
 [dependencies]
 # Shared dd daemon client (a thin façade over bollard); GUI + CLI both use it.
@@ -24,8 +31,10 @@ dd-term-core = { path = "../dd-term-core" }
 relm4 = "0.9"
 gtk = { version = "0.9", package = "gtk4", features = ["v4_10"] }
 # VTE terminal widget (for the container exec terminal). 0.8 pairs with gtk4 0.9 (both on glib 0.20).
-# C lib `vte-2.91-gtk4` comes from the nix devShell (pkgs.vte-gtk4, darwin-supported).
-vte4 = "0.8"
+# C lib `vte-2.91-gtk4` comes from the nix devShell (pkgs.vte-gtk4, darwin-supported; 0.84 there).
+# `v0_72` unlocks get_text_range_format (full-scrollback dump for history persistence) + get_text_selected_full.
+vte4 = { version = "0.8", features = ["v0_72"] }
+libc = "0.2"
 tokio = { version = "1", features = ["time", "process"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
@@ -35,4 +44,4 @@ serde_json = "1"
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = "0.5"
 objc2-foundation = "0.2"
-objc2-app-kit = { version = "0.2", features = ["NSApplication", "NSWindow", "NSResponder", "NSView"] }
+objc2-app-kit = { version = "0.2", features = ["NSApplication", "NSWindow", "NSResponder", "NSView", "NSAppearance", "NSColor"] }

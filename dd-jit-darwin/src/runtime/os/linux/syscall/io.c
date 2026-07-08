@@ -2,6 +2,29 @@
 // (dup/dup3/fcntl/pipe2/sendfile/splice/tee/copy_file_range/fsync/etc). Returns 1 if nr was handled, 0 otherwise.
 // Included by service.c after service/helpers.c, before service() — same TU scope (globals + helpers).
 
+// DDWAKELOG (env-gated, inert without the var so the gate is unaffected): cross-thread wakeup tracing for
+// the Chromium Mojo-connection stall. Logs eventfd read/write and epoll_pwait enter/return with a per-thread
+// id + monotonic timestamp, so a lost wake (IO thread writes an eventfd but the peer's epoll_pwait never
+// returns) is distinguishable from a missing post (IO thread never writes). Visible to event.c (included
+// after io.c in the unity TU).
+static int g_wakelog = -1;
+static int wakelog_on(void) {
+    if (g_wakelog < 0) g_wakelog = getenv("DDWAKELOG") != NULL ? 1 : 0;
+    return g_wakelog;
+}
+static unsigned long wake_tid(void) {
+    __uint64_t t = 0;
+    pthread_threadid_np(NULL, &t);
+    return (unsigned long)t;
+}
+static void wakelog(const char *op, int fd, long v1, long v2) {
+    if (!wakelog_on()) return;
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    fprintf(stderr, "[DDWAKE] t=%ld.%03ld pid=%d tid=%lu %s fd=%d a=%ld b=%ld\n", (long)ts.tv_sec,
+            ts.tv_nsec / 1000000, getpid(), wake_tid(), op, fd, v1, v2);
+}
+
 // Guest O_DIRECT differs per arch (aarch64/asm-generic = 0x10000, x86-64 = 0x4000); derive it from the
 // arch's O_DIRECTORY (provided by abi.h) so pipe2(O_DIRECT) is recognised on both targets.
 #if G_O_DIRECTORY == 0x10000
@@ -299,13 +322,22 @@ static int svc_io(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t
                 G_RET(c) = (uint64_t)(-EFAULT);
                 break;
             }
-            if (g_eventfd_count[rfd] == 0) {
+            // The counter read/reset + pipe drain/re-signal is done atomically under g_eventfd_lock so it
+            // never races a concurrent write() (which mutates the same counter+pipe pair) -- see the
+            // _eventfd-atomicity_ note. The BLOCKING branch (count==0, not O_NONBLOCK) must wait for a
+            // writer's byte OUTSIDE the lock (or it would deadlock the very writer that unblocks it), then
+            // re-take the lock and re-check.
+            pthread_mutex_lock(&g_eventfd_lock);
+            while (g_eventfd_count[rfd] == 0) {
                 if (fcntl(rfd, F_GETFL) & O_NONBLOCK) {
+                    pthread_mutex_unlock(&g_eventfd_lock);
                     G_RET(c) = (uint64_t)(-EAGAIN);
-                    break;
+                    goto eventfd_read_done;
                 }
+                pthread_mutex_unlock(&g_eventfd_lock);
                 char b;
                 if (read(rfd, &b, 1) < 0) {} // block until a writer signals 0->positive
+                pthread_mutex_lock(&g_eventfd_lock);
             }
             uint64_t v;
             if (g_eventfd_sema[rfd]) {
@@ -326,8 +358,11 @@ static int svc_io(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t
                 char b = 1;
                 if (write(g_eventfd_peer[rfd] - 1, &b, 1) < 0) {}
             }
+            pthread_mutex_unlock(&g_eventfd_lock);
             if (a1) *(uint64_t *)a1 = v;
+            wakelog("efd_read", rfd, (long)v, (long)g_eventfd_count[rfd]);
             G_RET(c) = 8;
+        eventfd_read_done:
             break;
         }
         // /proc/<pid>/pagemap (vfs.c backs it with an empty seekable fd; g_pagemap_fd marks it): synthesize
@@ -363,13 +398,16 @@ static int svc_io(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t
         // SEQPACKET/O_DIRECT-pipe EOF over a DGRAM backing: a peer-closed read reports ECONNRESET, but the
         // emulated endpoint must return 0 (EOF) like the Linux original. (See netns.c / case 199 / pipe2.)
         if (r < 0 && errno == ECONNRESET && seq_is(rfd)) r = 0;
+        // DDWAKELOG: a small read drains a pipe/socketpair-based cross-thread wakeup (MessagePumpLibevent /
+        // base::WaitableEvent use a pipe, not an eventfd) -- log it so a lost pipe-wake is visible like an eventfd.
+        if (wakelog_on() && a2 <= 64 && rfd >= 0) wakelog("pread", rfd, (long)a2, (long)r);
         G_RET(c) = r < 0 ? (uint64_t)(-errno) : (uint64_t)r;
         break;
     }
     case 64: {
         int wfd = (int)a0;
         // memfd F_SEAL_WRITE: a write to a write-sealed memfd fails EPERM (emulated seal state).
-        if (wfd >= 0 && wfd < 1024 && (g_memfd_seal[wfd] & 0x8)) {
+        if (wfd >= 0 && wfd < DD_NFD && (g_memfd_seal[wfd] & 0x8)) {
             G_RET(c) = (uint64_t)(-EPERM);
             break;
         }
@@ -383,7 +421,7 @@ static int svc_io(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t
         }
         // Container DNS: a query write(2)'d on a DNS socket (TCP DNS via write, or a connected-UDP write) is
         // parsed + answered by the host resolver (net.c/netns.c dns_send); nothing reaches the wire.
-        if (wfd >= 0 && wfd < 1024 && g_dns_sock[wfd]) {
+        if (wfd >= 0 && wfd < DD_NFD && g_dns_sock[wfd]) {
             G_RET(c) = (uint64_t)dns_send(wfd, (const uint8_t *)a1, (size_t)a2, g_sock_stream[wfd]);
             break;
         }
@@ -400,7 +438,7 @@ static int svc_io(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t
             break;
         }
         // eventfd write: ADD to the counter (not a raw pipe write); regenerate the readable edge.
-        if (wfd >= 0 && wfd < 1024 && g_eventfd_peer[wfd]) {
+        if (wfd >= 0 && wfd < DD_NFD && g_eventfd_peer[wfd]) {
             if (a2 < 8) {
                 G_RET(c) = (uint64_t)(-EINVAL);
                 break;
@@ -415,6 +453,10 @@ static int svc_io(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t
                 G_RET(c) = (uint64_t)(-EINVAL);
                 break;
             }
+            // Counter bump + pipe re-signal held together under g_eventfd_lock so a concurrent read()'s
+            // drain (or a peer write) can never strand the pipe readable-with-count-0 / empty-with-count>0
+            // (the Chrome pump spin / lost-wakeup root cause -- see the _eventfd-atomicity_ note in vfs.c).
+            pthread_mutex_lock(&g_eventfd_lock);
             g_eventfd_count[wfd] += add;
             // Linux wakes epoll edge-triggered waiters on EVERY write, not just the 0->positive transition.
             // A waker eventfd that is never drained (mio/tokio's cross-thread wakeup) would otherwise lose
@@ -430,6 +472,9 @@ static int svc_io(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t
                 char b = 1;
                 if (write(g_eventfd_peer[wfd] - 1, &b, 1) < 0) {}
             }
+            long cnt = (long)g_eventfd_count[wfd];
+            pthread_mutex_unlock(&g_eventfd_lock);
+            wakelog("efd_write", wfd, (long)add, cnt);
             G_RET(c) = 8;
             break;
         }
@@ -438,6 +483,10 @@ static int svc_io(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t
         do {
             r = write(wfd, (void *)a1, (size_t)a2);
         } while (r < 0 && SVC_EINTR_RESTART(c));
+        if (r >= 0) seq_mark_wrote(wfd); // genuine writer on a SEQPACKET/O_DIRECT-pipe end: may EOF its peer on close
+        // DDWAKELOG: a small write is (very likely) a cross-thread wakeup on a pipe/socketpair (the pump/
+        // WaitableEvent kick). Log it so a wake delivered to a peer thread's blocked epoll is traceable.
+        if (wakelog_on() && a2 <= 64 && wfd >= 0) wakelog("pwrite", wfd, (long)a2, (long)r);
         G_RET(c) = r < 0 ? (uint64_t)(-errno) : (uint64_t)r;
         break;
     }
@@ -521,6 +570,7 @@ static int svc_io(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t
         do {
             r = writev((int)a0, (void *)a1, (int)a2);
         } while (r < 0 && SVC_EINTR_RESTART(c));
+        if (r >= 0) seq_mark_wrote((int)a0); // genuine writer on a SEQPACKET/O_DIRECT-pipe end (see netns.c)
         G_RET(c) = r < 0 ? (uint64_t)(-errno) : (uint64_t)r;
         break;
         // writev
@@ -574,17 +624,27 @@ static int svc_io(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t
         if (po) lseek(infd, *po, SEEK_SET);
         char bf[65536];
         size_t tot = 0;
+        int rerr = 0; // a read/write error hit with NOTHING transferred yet -> report -errno, not a fake 0
         while (tot < cnt) {
             size_t w = cnt - tot < sizeof bf ? cnt - tot : sizeof bf;
             ssize_t n = read(infd, bf, w);
-            if (n <= 0) break;
+            if (n < 0) { // a mid-copy read error was previously swallowed as EOF -> silent truncation
+                if (tot == 0) rerr = errno;
+                break;
+            }
+            if (n == 0) break; // genuine EOF
             ssize_t wr = write(outfd, bf, n);
-            if (wr < 0) break;
+            if (wr < 0) {
+                if (tot == 0) rerr = errno;
+                break;
+            }
             tot += wr;
             if (wr < n) break;
         }
+        // Linux: once ANY bytes were transferred, sendfile returns that count (a later error surfaces on the
+        // next call); an error before the first byte returns -errno.
         if (po) *po += tot;
-        G_RET(c) = tot;
+        G_RET(c) = rerr ? (uint64_t)(-rerr) : (uint64_t)tot;
         break;
     }
     // vmsplice(fd, iov, nr_segs, flags): gather user memory INTO a pipe (write end) or scatter a pipe's
@@ -681,7 +741,7 @@ static int svc_io(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t
         memf_materialize((int)a0);
         int r = nofile_gate(dup((int)a0)); // EMFILE if the new fd would be >= the guest's soft RLIMIT_NOFILE
         // carry path + socket-emulation metadata to the new fd
-        if (r >= 0 && r < 1024 && (int)a0 >= 0 && (int)a0 < 1024) {
+        if (r >= 0 && r < DD_NFD && (int)a0 >= 0 && (int)a0 < DD_NFD) {
             strcpy(g_fdpath[r], g_fdpath[(int)a0]);
             fd_carry_sock(r, (int)a0);
         }
@@ -892,7 +952,8 @@ static int svc_io(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t
         // return EINVAL, as on Linux.
         else if (lcmd == 1033) { // F_ADD_SEALS(fd, seals)
             int fd = (int)a0;
-            if (fd < 0 || fd >= 1024 || !g_memfd_is[fd]) {
+            if (wakelog_on()) wakelog("F_ADD_SEALS", fd, (long)a2, (long)((fd >= 0 && fd < DD_NFD) ? g_memfd_is[fd] : -1));
+            if (fd < 0 || fd >= DD_NFD || !g_memfd_is[fd]) {
                 G_RET(c) = (uint64_t)(-EINVAL);
                 break;
             }
@@ -905,16 +966,22 @@ static int svc_io(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t
             break;
         } else if (lcmd == 1034) { // F_GET_SEALS(fd)
             int fd = (int)a0;
-            if (fd < 0 || fd >= 1024 || !g_memfd_is[fd]) {
+            if (wakelog_on()) wakelog("F_GET_SEALS", fd, (long)((fd >= 0 && fd < DD_NFD) ? g_memfd_is[fd] : -1), (long)((fd >= 0 && fd < DD_NFD) ? g_memfd_seal[fd] : -1));
+            if (fd < 0 || fd >= DD_NFD || !g_memfd_is[fd]) {
                 G_RET(c) = (uint64_t)(-EINVAL);
                 break;
             }
             G_RET(c) = (uint64_t)(unsigned)g_memfd_seal[fd];
             break;
-        } else if (lcmd == 1024 || lcmd == 1025 || lcmd == 1026) {
+        } else if (lcmd == 1025) { // F_GETLEASE: dd holds no lease on any fd -> F_UNLCK(2), NOT 0(=F_RDLCK).
+            // Returning 0 fabricated a held READ lease, so a guest that checks for an existing lease before
+            // acquiring one (or reports it) saw a phantom lease it never took.
+            G_RET(c) = 2; // F_UNLCK
+            break;
+        } else if (lcmd == 1024 || lcmd == 1026) {
             G_RET(c) = 0;
             break;
-            // lease/notify: no-op
+            // F_SETLEASE / F_NOTIFY: no-op (dnotify arms nothing; a lease is never actually granted)
         }
         // A command this kernel does not recognize is EINVAL (Linux do_fcntl default), NOT forwarded to
         // macOS -- whose fcntl cmd numbering DIVERGES, so a stray Linux cmd# would mean a different op there.
@@ -939,7 +1006,7 @@ static int svc_io(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t
         }
         int r = fcntl((int)a0, mcmd, a2);
         if (lcmd == 0 || lcmd == 1030) r = nofile_gate(r); // F_DUPFD(_CLOEXEC): EMFILE past the guest fd cap
-        if (r >= 0 && (lcmd == 0 || lcmd == 1030) && r < 1024 && (int)a0 >= 0 && (int)a0 < 1024) {
+        if (r >= 0 && (lcmd == 0 || lcmd == 1030) && r < DD_NFD && (int)a0 >= 0 && (int)a0 < DD_NFD) {
             // F_DUPFD(_CLOEXEC)
             strcpy(g_fdpath[r], g_fdpath[(int)a0]);
             fd_carry_sock(r, (int)a0);
@@ -1011,8 +1078,14 @@ static int svc_io(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t
         // when the write end closes, but macOS DGRAM sockets don't -- mark both ends so close() sends a
         // zero-length EOF datagram and read() coerces the peer-closed ECONNRESET to 0. (See netns.c.)
         if ((fl & G_O_DIRECT)) {
-            if (fds[0] >= 0 && fds[0] < 1024) g_sock_seqpacket[fds[0]] = 1;
-            if (fds[1] >= 0 && fds[1] < 1024) g_sock_seqpacket[fds[1]] = 1;
+            if (fds[0] >= 0 && fds[0] < 1024) {
+                g_sock_seqpacket[fds[0]] = 1;
+                g_sock_pair_peer[fds[0]] = fds[1] + 1; // partner end (see seq_send_eof)
+            }
+            if (fds[1] >= 0 && fds[1] < 1024) {
+                g_sock_seqpacket[fds[1]] = 1;
+                g_sock_pair_peer[fds[1]] = fds[0] + 1;
+            }
         }
         G_RET(c) = 0;
         break;

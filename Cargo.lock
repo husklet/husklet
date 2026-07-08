@@ -325,6 +325,7 @@ version = "0.4.0"
 dependencies = [
  "clap",
  "dd-client",
+ "dd-gpu",
  "dd-images",
  "dd-jit",
  "dd-term-core",
@@ -361,12 +362,34 @@ dependencies = [
 ]
 
 [[package]]
+name = "dd-display"
+version = "0.1.0"
+dependencies = [
+ "dd-gpu",
+ "dd-term-core",
+ "libc",
+ "objc2",
+ "objc2-app-kit",
+ "objc2-foundation",
+ "objc2-metal",
+ "objc2-quartz-core",
+]
+
+[[package]]
+name = "dd-gpu"
+version = "0.1.0"
+dependencies = [
+ "dd-jit",
+]
+
+[[package]]
 name = "dd-gui"
 version = "0.4.0"
 dependencies = [
  "dd-client",
  "dd-term-core",
  "gtk4",
+ "libc",
  "objc2",
  "objc2-app-kit",
  "objc2-foundation",

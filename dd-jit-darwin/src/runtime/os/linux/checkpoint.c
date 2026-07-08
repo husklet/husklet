@@ -53,7 +53,7 @@
 
 #define CKPT_MAGIC 0x325450434b444444ull          // "DDDKCPT2" (LE) -- per-process meta
 #define CKPT_MANIFEST_MAGIC 0x324e414d504b4444ull // "DDKPMAN2" (LE) -- workspace manifest
-#define CKPT_VERSION 2
+#define CKPT_VERSION 4 // v4: meta carries the guest signal-disposition table (sig_*), re-installed on restore
 #define CKPT_ARCH_AARCH64 2
 
 #define CKF_TTY 1  // controlling terminal / any tty -- inherited down the restore fork from the launcher pty
@@ -62,7 +62,11 @@
 struct ckpt_manifest {
     uint64_t magic, version, arch;
     uint64_t n_procs;
-    int32_t root_gpid, _pad;
+    int32_t root_gpid;
+    // The controlling terminal's FOREGROUND process group at checkpoint, in guest terms (1 == the container
+    // init's own group; 0 == none/unknown). Restore re-points the fresh pty at it (tcsetpgrp) so ^C/^Z reach
+    // the foreground job -- without it the resumed tree's fg group defaults to the init and ^C kills the tree.
+    int32_t fg_pgid_gpid;
 };
 
 struct ckpt_meta {
@@ -75,6 +79,12 @@ struct ckpt_meta {
     int32_t self_gpid, ppid_gpid; // guest identity: this process's pid + its parent's (0 for init's parent)
     int32_t pgid_gpid, sid_gpid;  // guest process group + session (1 == the container init's group/session)
     char exe_path[512];
+    // Guest signal-disposition table (g_sigact[65]), captured per process. It is ENGINE C state -- not in
+    // the guest RAM dump and not in struct cpu -- so a restored process would otherwise start all-SIG_DFL
+    // with DEFAULT host dispositions, and a ^C (SIGINT) at a restored prompt would hit the host default
+    // action (terminate) and KILL the shell instead of running its interrupt handler. Carried here and
+    // replayed on restore (ckpt_reinstall_sigacts) so async signals route back through the engine handler.
+    uint64_t sig_handler[65], sig_flags[65], sig_mask[65];
 };
 
 struct ckpt_region {
@@ -178,7 +188,7 @@ static void ckpt_control_init(void) {
 // descriptor (a global kqueue, the netns control socket, ...) the guest cannot see -- skipped. A guest-owned
 // one is the P3 case ckpt_dump_self refuses cleanly.
 static const char *ckpt_guest_kernel_fd(int fd) {
-    if (fd < 0 || fd >= 1024) return NULL;
+    if (fd < 0 || fd >= DD_NFD) return NULL;
     if (g_epoll[fd]) return "epoll";
     if (g_sock_stream[fd] || g_sock_dgram[fd] || g_sock_seqpacket[fd] || g_dns_sock[fd] || g_sock_fam[fd])
         return "socket";
@@ -204,7 +214,7 @@ static int ckpt_live_threads(void) {
 // never mistaken for guest fds.
 static int ckpt_scan_fds(struct ckpt_fd *recs, int cap, int *out_n) {
     int n = 0;
-    for (int fd = 0; fd < 1024 && n < cap; fd++) {
+    for (int fd = 0; fd < DD_NFD && n < cap; fd++) {
         if (fcntl(fd, F_GETFD) < 0) continue; // not open
         struct stat st;
         if (fstat(fd, &st) != 0) continue;
@@ -212,7 +222,8 @@ static int ckpt_scan_fds(struct ckpt_fd *recs, int cap, int *out_n) {
         memset(&r, 0, sizeof r);
         r.gfd = fd;
         if (isatty(fd)) {
-            r.kind = CKF_TTY; // inherited from the launcher pty down the restore fork
+            r.kind = CKF_TTY;              // inherited from the launcher pty down the restore fork
+            r.flags = fcntl(fd, F_GETFD);  // preserve FD_CLOEXEC (bash's job-control fd-255 dup is cloexec)
         } else if (S_ISREG(st.st_mode)) {
             const char *p = (g_fdpath[fd][0]) ? g_fdpath[fd] : NULL;
             char fp[512];
@@ -355,6 +366,11 @@ static int ckpt_dump_self(struct cpu *c, const char *procdir) {
     m.n_fds = (uint64_t)nfd;
     ckpt_self_identity(&m);
     snprintf(m.exe_path, sizeof m.exe_path, "%s", g_exe_path ? g_exe_path : "");
+    for (int s = 0; s < 65; s++) { // capture this process's guest signal dispositions (restored on thaw)
+        m.sig_handler[s] = g_sigact[s].handler;
+        m.sig_flags[s] = g_sigact[s].flags;
+        m.sig_mask[s] = g_sigact[s].mask;
+    }
 
     snprintf(pf, sizeof pf, "%s/pages", tmp);
     fp = fopen(pf, "wb");
@@ -485,6 +501,14 @@ static void ckpt_coordinate_and_exit(struct cpu *c) {
     man.arch = CKPT_ARCH_AARCH64;
     man.n_procs = (uint64_t)nproc;
     man.root_gpid = 1;
+    // Record which group owns the controlling terminal's foreground (in guest terms). The init is the tty's
+    // session leader here, so tcgetpgrp reads the real fg host pgid; child job groups pass through untranslated
+    // (guest pgid == host pgid), only the init's own group folds to guest pgid 1.
+    {
+        int tf = isatty(0) ? 0 : isatty(1) ? 1 : isatty(2) ? 2 : -1;
+        int fgh = (tf >= 0) ? tcgetpgrp(tf) : -1;
+        man.fg_pgid_gpid = (fgh <= 0) ? 0 : (g_init_hostpid && fgh == g_init_hostpid) ? 1 : fgh;
+    }
     char mp[1200];
     snprintf(mp, sizeof mp, "%s/MANIFEST", base);
     FILE *mf = fopen(mp, "wb");
@@ -636,7 +660,18 @@ static int ckpt_restore_fds_dir(const char *procdir) {
     if (!f) return 0;
     struct ckpt_fd r;
     while (ckpt_rd_all(f, &r, sizeof r) == 0) {
-        if (r.kind == CKF_TTY) continue; // inherited from the launcher pty
+        if (r.kind == CKF_TTY) {
+            // 0/1/2 are inherited from the launcher pty. But an interactive shell also keeps a HIGH-fd dup of
+            // the controlling terminal for job control (bash uses fd 255); the launcher doesn't provide it, so
+            // recreate it by duping the ctty onto that number -- else the shell's tcsetattr/tcgetattr on it
+            // fails EBADF after restore ("tcsetattr: Bad file descriptor" when a foreground job finishes).
+            if (r.gfd > 2) {
+                int ct = isatty(0) ? 0 : isatty(1) ? 1 : isatty(2) ? 2 : -1;
+                if (ct >= 0 && r.gfd != ct && dup2(ct, r.gfd) >= 0 && (r.flags & FD_CLOEXEC))
+                    fcntl(r.gfd, F_SETFD, FD_CLOEXEC);
+            }
+            continue;
+        }
         if (r.kind == CKF_FILE) {
             int flags = r.flags & ~(O_CREAT | O_EXCL | O_TRUNC);
             int hf = open(r.path, flags);
@@ -680,6 +715,40 @@ static int ckpt_restore_cpu_dir(const char *procdir, struct cpu *c) {
     return 0;
 }
 
+// Re-install this process's guest signal DISPOSITIONS after a restore, from the table carried in `m`.
+// g_sigact (the guest handler table) is engine C state, not guest RAM, so it is NOT in the page dump; a
+// freshly re-launched/-forked restore process starts with an all-SIG_DFL table and DEFAULT host
+// dispositions -- so a ^C (SIGINT) at a restored bash prompt hit the host default action (terminate) and
+// KILLED the shell instead of running bash's interrupt handler (the "restore + Ctrl-C closes the tab" bug).
+// This restores g_sigact and replays the exact host-side installation rt_sigaction(case 134) performs, so
+// async signals route back through the engine's host_sigh and reach the guest handler.
+static void ckpt_reinstall_sigacts(const struct ckpt_meta *m) {
+    for (int s = 1; s <= 64; s++) {
+        uint64_t h = m->sig_handler[s];
+        g_sigact[s].handler = h;
+        g_sigact[s].flags = m->sig_flags[s];
+        g_sigact[s].mask = m->sig_mask[s];
+        if (s == 9 || s == 19) continue; // SIGKILL/SIGSTOP: unmaskable, no host disposition to forward
+        // SIGSEGV(11)/SIGBUS(7) keep the engine's permanent hardware-fault guard -- never overwrite it with a
+        // plain disposition (that is exactly what rt_sigaction refuses to do). Only ILL/TRAP/FPE(4/5/8), whose
+        // POSIX handler only ever sees an EXTERNAL kill, and the async signals forward to the host here.
+        if (s == 7 || s == 11) continue;
+        int ms = sig_l2m(s);
+        if (h == 0) {
+            signal(ms, SIG_DFL);
+        } else if (h == 1) {
+            signal(ms, SIG_IGN);
+        } else {
+            struct sigaction sa;
+            memset(&sa, 0, sizeof sa);
+            sa.sa_sigaction = (s == 4 || s == 5 || s == 8) ? host_sigh_sync : host_sigh_si;
+            sa.sa_flags = SA_SIGINFO;
+            sigfillset(&sa.sa_mask);
+            sigaction(ms, &sa, NULL);
+        }
+    }
+}
+
 // The process table read from the checkpoint (one entry per proc.<gpid>/meta), used to rebuild the tree.
 struct ckpt_proc {
     int gpid, ppid, pgid, sid;
@@ -709,6 +778,26 @@ static int ckpt_scan_procs(const char *base) {
     }
     closedir(d);
     return g_nrprocs > 0 ? 0 : -1;
+}
+
+// The guest group (guest pgid; 1 == init) that owned the controlling terminal's foreground at checkpoint,
+// carried from the manifest so the matching re-forked leader can reclaim the tty. Inherited across the
+// restore forks (set in the init before it forks the tree).
+static int g_ckpt_fg_gpid = 0;
+
+// Make THIS process's group the controlling terminal's foreground group. Called by the process that led the
+// foreground job's group at checkpoint, right AFTER it re-creates that group (ckpt_restore_pgrp), so the pgid
+// argument names a group that already exists. SIGTTOU is blocked so a background caller isn't stopped by the
+// handoff. Best-effort -- a failure just leaves the (safe) inherited foreground group.
+static void ckpt_claim_tty_fg(void) {
+    int tf = isatty(0) ? 0 : isatty(1) ? 1 : isatty(2) ? 2 : -1;
+    if (tf < 0) return;
+    sigset_t sv, bl;
+    sigemptyset(&bl);
+    sigaddset(&bl, SIGTTOU);
+    sigprocmask(SIG_BLOCK, &bl, &sv);
+    (void)tcsetpgrp(tf, getpgrp());
+    sigprocmask(SIG_SETMASK, &sv, NULL);
 }
 
 // Best-effort reconstruction of this process's group/session relative to the LIVE (re-forked) tree. A
@@ -765,9 +854,11 @@ static void ckpt_restore_proc_run(const char *base, int gpid) {
     struct cpu c;
     if (ckpt_restore_cpu_dir(pd, &c) != 0) _exit(70);
     fork_child_hooks(&c); // shared after-fork engine reset (cache re-alias, kqueue rebuild, lock/threg/Mach)
+    ckpt_reinstall_sigacts(&m); // restore guest signal dispositions (AFTER the fork hooks reset host state)
 
     ckpt_restore_fds_dir(pd);
     ckpt_restore_pgrp(gpid, m.pgid_gpid, m.sid_gpid);
+    if (g_ckpt_fg_gpid == gpid) ckpt_claim_tty_fg(); // this process led the tty's foreground job -> reclaim it
 
     static char exe[512];
     snprintf(exe, sizeof exe, "%s", m.exe_path);
@@ -776,7 +867,8 @@ static void ckpt_restore_proc_run(const char *base, int gpid) {
     proc_reg_publish(g_exe_path, 1, pubargv);
 
     ckpt_fork_children(base, gpid); // re-fork our own children before we resume (so a wait finds them)
-    fprintf(stderr, "[restore] proc %d resuming at pc=%llx\n", gpid, (unsigned long long)c.pc);
+    if (getenv("DDJIT_CKPT_DEBUG"))
+        fprintf(stderr, "[restore] proc %d resuming at pc=%llx\n", gpid, (unsigned long long)c.pc);
     run_guest(&c);
     _exit(c.exit_code);
 }
@@ -807,12 +899,21 @@ static int ckpt_restore_tree(const char *rootfs, const char *dir) {
     ckpt_restore_fds_dir(ipd);
     struct cpu c;
     if (ckpt_restore_cpu_dir(ipd, &c) != 0) return 70;
+    ckpt_reinstall_sigacts(&im); // restore the init's guest signal dispositions (so ^C reaches bash's handler)
     char *pubargv[2] = {(char *)(exe[0] ? exe : "guest"), NULL};
     proc_reg_publish(g_exe_path, 1, pubargv);
 
+    // Publish which guest group owned the tty foreground, so whichever re-forked process is that group's leader
+    // claims the controlling terminal AFTER it re-creates its group (see ckpt_claim_tty_fg). Set before the fork
+    // so every child inherits it. Without this the resumed tree's fg group defaults to the init's, and a tty
+    // SIGINT hits the init instead of the foreground job -> the whole tree dies on ^C.
+    g_ckpt_fg_gpid = man.fg_pgid_gpid;
     ckpt_fork_children(dir, 1); // rebuild the tree BEFORE init runs (empty block map -> no stale translation)
-    fprintf(stderr, "[restore] init resuming at pc=%llx (%llu process(es))\n", (unsigned long long)c.pc,
-            (unsigned long long)man.n_procs);
+    if (g_ckpt_fg_gpid == 1) ckpt_claim_tty_fg(); // the init itself was foreground (idle prompt)
+
+    if (getenv("DDJIT_CKPT_DEBUG"))
+        fprintf(stderr, "[restore] init resuming at pc=%llx (%llu process(es))\n", (unsigned long long)c.pc,
+                (unsigned long long)man.n_procs);
     run_guest(&c);
     return c.exit_code;
 }

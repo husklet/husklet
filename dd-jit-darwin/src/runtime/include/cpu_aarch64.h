@@ -43,6 +43,8 @@ struct cpu {
     int redirect;
     // CLONE_CHILD_CLEARTID addr: cleared + futex-woken on thread exit
     uint64_t ctid;
+    // set_robust_list head (per-thread): walked on exit to mark OWNER_DIED + wake robust-mutex waiters
+    uint64_t robust_list;
     // per-thread blocked-signal mask
     uint64_t sigmask;
     // §B shadow stack: (guest_ret, host_ret) PAIRS, interleaved (per-thread)

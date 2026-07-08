@@ -43,7 +43,7 @@ static void build_signal_frame(struct cpu *c, int sig) {
     for (int i = 0; i < 16; i++)
         *(uint64_t *)(mc + i * 8) = c->r[GREG2R[i]];      // gregs[0..15]
     *(uint64_t *)(mc + 16 * 8) = c->rip;                  // gregs[16] = RIP
-    *(uint64_t *)(mc + 17 * 8) = nzcv_to_eflags(c->nzcv); // gregs[17] = EFL
+    *(uint64_t *)(mc + 17 * 8) = nzcv_to_eflags(c->nzcv) | ((c->df & 1) << 10); // gregs[17] = EFL (+DF bit10)
     *(uint64_t *)(uc + 296) = c->sigmask;                 // uc_sigmask (restored on sigreturn)
     memcpy((void *)xs, c->v, sizeof c->v);                // preserve guest xmm across the handler
     *(int *)(info + 0) = sig;                             // siginfo.si_signo
@@ -81,6 +81,7 @@ static void do_sigreturn(struct cpu *c) {
         c->r[GREG2R[i]] = *(uint64_t *)(mc + i * 8);
     c->rip = *(uint64_t *)(mc + 16 * 8);
     c->nzcv = eflags_to_nzcv(*(uint64_t *)(mc + 17 * 8));
+    c->df = (*(uint64_t *)(mc + 17 * 8) >> 10) & 1; // restore DF a handler may have changed
     c->sigmask = *(uint64_t *)(uc + 296);
     memcpy(c->v, (void *)xs, sizeof c->v);
 }
