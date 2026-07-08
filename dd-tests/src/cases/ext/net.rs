@@ -99,6 +99,13 @@ fn ext_net() -> Group {
             // ---- error semantics ----
             port("connect-refused", "ext_net/net_connect_refused.c")
                 .out("connect_refused refused=1\n"),
+            // #261 — IPv4-only container network: a connect() to a genuine external IPv6 address has no route
+            // and fails at once with ENETUNREACH (not a 2-min host-v6 timeout), so a happy-eyeballs client
+            // that tried the AAAA first (apt/curl) falls straight back to IPv4 without Acquire::ForceIPv4.
+            // Fixed golden (dd's IPv4-only contract deliberately differs from a raw v6-capable host, matching
+            // a real Docker default-bridge container); same syscall path serves both Linux engines.
+            src("v6-unreach", "ext_net/net_v6_unreach.c")
+                .out("v6_connect enetunreach=1 fast=1\n"),
             // ---- Linux-only extensions — diffed vs native oracle ----
             src("accept4", "ext_net/net_accept4.c").oracle(), // accept4 flag inheritance (no macOS)
             // SO_PEERCRED returns a zeroed ucred under the JIT (uid/pid not populated). xfail Linux;

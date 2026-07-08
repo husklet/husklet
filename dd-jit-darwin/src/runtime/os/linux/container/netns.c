@@ -1358,6 +1358,31 @@ static int egress_should_redirect(const struct sockaddr *m) {
     }
     return 0;
 }
+
+// #261 — IPv4-only container network: dd models eth0 exactly like Docker's default bridge does — one IPv4
+// address, NO global IPv6 address, and an empty IPv6 routing table (see the RTM_GETADDR/RTM_GETROUTE dumps
+// in nl_emit_dump: eth0 gets only an AF_INET addr, and the only v6 addr is ::1 on lo). So a genuine external
+// (global-unicast) IPv6 destination has NO ROUTE and, on a real container kernel, connect()/sendto() to it
+// fails *immediately* with ENETUNREACH. dd must reproduce that instead of forwarding the dial to the
+// underlying host's v6 stack: on a mac whose v6 path to the destination is black-holed (orbstack NAT is
+// v4-only), that forward hangs the guest for the full ~2-minute connect timeout, and a happy-eyeballs client
+// (apt, curl, glibc) that tried the AAAA first never falls back — the exact #261 stall. Failing fast is what
+// lets it fall back to IPv4 in milliseconds, so `apt-get update` Just Works without Acquire::ForceIPv4.
+// The AAAA record itself is still returned by the embedded resolver (dns_build_response), matching Docker's
+// embedded DNS which also serves AAAA on a v4-only network — the guest learns the v6 addr, tries it, and is
+// bounced instantly. Loopback (::1 -> private lo), link-local, unspecified, and the bridge/DNS classes are
+// all peeled off before the direct-connect site, so only true external v6 reaches this predicate.
+// Gate NOV6UNREACH=1 restores the old host-passthrough for A/B. When DD_EGRESS_SOCKS is armed the v6 dest is
+// tunneled through the proxy instead (egress_should_redirect handles AF_INET6), so this is consulted only on
+// the direct path, after that redirect has had its chance.
+static int v6_no_route(const struct sockaddr *m) {
+    static int off = -1;
+    if (off < 0) off = (getenv("NOV6UNREACH") != NULL);
+    if (off) return 0;
+    if (!m || m->sa_family != AF_INET6) return 0;
+    const struct in6_addr *a6 = &((const struct sockaddr_in6 *)m)->sin6_addr;
+    return !(IN6_IS_ADDR_LOOPBACK(a6) || IN6_IS_ADDR_UNSPECIFIED(a6) || IN6_IS_ADDR_LINKLOCAL(a6));
+}
 // Blocking read/write of exactly `n` bytes (EINTR-retried); 0 = ok, -1 = errno set (peer close = ECONNRESET).
 static int egress_io_write(int fd, const void *buf, size_t n) {
     const uint8_t *p = buf;
