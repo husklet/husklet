@@ -16,6 +16,11 @@ pub(super) fn heavy() -> Group {
             src("ibtc-dispatch", "ibtc_dispatch.c")
                 .out("ibtc vm=10240120795314104034 rec=2178309 chk=12619423276023875997\n"),
             port("bigmem", "bigmem.c").out("bigmem pages=131072 sum=16711680\n"), // mmap 512 MiB, fault pages
+            // #104: large heap array (2M u64, 16 MiB, idx > 2^20). Differential vs qemu: catches a
+            // 32-bit index/offset truncation or large-copy length truncation in the x86->ARM64 lowering.
+            src("bigarr", "bigarr.c")
+                .only(&[Engine::LinuxAarch64, Engine::LinuxX86_64])
+                .oracle(),
             // fork-per-connection TCP server backed by real SQLite (WAL) + a 50-connection client (links
             // libsqlite3 -> Linux/aarch64 only), diffed against a native run.
             src("dbserver", "dbserver.c")
