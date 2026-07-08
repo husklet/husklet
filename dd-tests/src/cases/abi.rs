@@ -67,6 +67,11 @@ pub(super) fn libc() -> Group {
             src("statfile", "statfile.c").oracle(), // open/write/stat/access/unlink
             src("pipe", "pipe.c").out("pipe n=10 piped-data\n"),
             src("mmapanon", "mmapanon.c").oracle(), // mmap/munmap anon
+            // #209: partial munmap (head/middle split) keeps the surviving sub-region(s) mapped + tracked.
+            src("munmap_partial", "munmap_partial.c").out(
+                "munmap_partial head: unmap=0 tail_a=17 tail_b=90 free=0\n\
+                 munmap_partial middle: unmap=0 head=51 tail=68 free_h=0 free_t=0\n",
+            ),
         ],
     )
 }
