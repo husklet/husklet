@@ -14,8 +14,11 @@ static int wakelog_on(void) {
     // environ, so an ambient DDWAKELOG does not reach getenv() here (the "mac bridge drops env" seam).
     // access() runs in engine context against the HOST fs (not the guest jail), so touch /tmp/ddwakelog
     // mac-side to arm the trace. Cached once; inert (returns 0) when neither is present -> gate-neutral.
-    if (g_wakelog < 0)
-        g_wakelog = (getenv("DDWAKELOG") != NULL || access("/tmp/ddwakelog", F_OK) == 0) ? 1 : 0;
+    if (g_wakelog < 0) {
+        int saved = errno; // access() sets errno=ENOENT when the sentinel is absent -- MUST NOT leak into a
+        g_wakelog = (getenv("DDWAKELOG") != NULL || access("/tmp/ddwakelog", F_OK) == 0) ? 1 : 0; // just-
+        errno = saved; // failed syscall's errno (this call runs AFTER read()/write() in the hot path).
+    }
     return g_wakelog;
 }
 static unsigned long wake_tid(void) {

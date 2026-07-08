@@ -313,6 +313,9 @@ static int svc_event(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint6
             memcpy(&data, (void *)(a3 + G_EPEV_DOFF), 8);
             // struct epoll_event {u32 events; [pad;] u64 data} -- layout per guest arch (see G_EPEV_*)
         }
+        // DDWAKELOG: the events mask (EPOLLIN=1/EPOLLOUT=4/EPOLLET=0x80000000/EPOLLONESHOT=0x40000000) for
+        // this fd on this epoll instance -- pins whether the wayland fd is watched level/edge/oneshot.
+        if (wakelog_on()) wakelog("epctl_ev", fd, (long)epfd, (long)(uint32_t)ev);
         // (7/8/9) EEXIST (ADD an already-registered fd) / ENOENT (MOD|DEL an absent fd) on a dd-tracked epoll
         // instance (membership bitmap). Confined to fd < DD_NFD, matching the readiness path below.
         if (epfd >= 0 && epfd < DD_NFD && g_epoll[epfd] && fd >= 0 && fd < DD_NFD) {
@@ -484,6 +487,9 @@ static int svc_event(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint6
                 // event. With correct armed-state tracking these do not occur; skip them if they do.
                 if (opt && (kv[i].flags & EV_ERROR)) continue;
                 uint32_t ev = (kv[i].filter == EVFILT_READ) ? 0x1u : (kv[i].filter == EVFILT_WRITE) ? 0x4u : 0u;
+                // DDWAKELOG: which fd (kevent ident) + filter actually woke this epoll_wait -- the direct
+                // signal for "did the wayland fd's readiness ever fire the guest's epoll".
+                if (wakelog_on()) wakelog("epw_fd", (int)kv[i].ident, (long)kv[i].filter, (long)kv[i].flags);
                 // EPOLLHUP
                 if (kv[i].flags & EV_EOF) ev |= 0x10u;
                 // EPOLLERR (immediate-path semantics preserved when opt is off)
@@ -713,9 +719,15 @@ static int svc_event(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint6
                     (int64_t)(deadline.tv_sec - now.tv_sec) * 1000LL + (deadline.tv_nsec - now.tv_nsec) / 1000000LL;
                 tmo = ms < 0 ? 0 : (ms > 0x7fffffff ? 0x7fffffff : (int)ms);
             }
+            // DDWAKELOG: pin which fd(s) a blocking poll parks on (wl_display_roundtrip uses poll(2)
+            // directly on the wayland fd during init). Log the first fd + nfds + timeout before the block.
+            if (wakelog_on() && tmo != 0 && a1 > 0)
+                wakelog("ppoll_enter", (int)fds[0].fd, (long)a1, (long)tmo);
             ts_wait_enter();
             r = poll(fds, (nfds_t)a1, tmo);
             ts_wait_leave(); // S while blocked (glibc pause on aarch64 -> ppoll)
+            if (wakelog_on() && tmo != 0 && a1 > 0)
+                wakelog("ppoll_ret", (int)fds[0].fd, (long)r, (long)(r > 0 ? fds[0].revents : -1));
             // poll/ppoll is never restarted by a handler; loop only on a spurious EINTR (svc_poll_retry).
             if (r < 0 && svc_poll_retry(c)) continue;
             break;
