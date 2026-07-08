@@ -17,16 +17,24 @@ static struct {
     uint64_t handler, flags, mask;
 } g_sigact[65];
 
-// ---------------- INTERIM: Go async-preempt SIGURG suppression for iscgo aarch64 images ----------------
-// Go's scheduler asynchronously preempts a running goroutine by sending itself SIGURG (23) and running the
-// preemption in the signal handler. For an EXTERNALLY-LINKED / cgo (runtime.iscgo==1) aarch64 Go binary, dd's
-// path that delivers SIGURG into the guest (Go's cgoSigtramp) currently corrupts a stack return address: when
-// SIGURG preempts a thread mid-cgo / mid-stack-transition, the guest SP captured for the signal frame is wrong
-// and a callee frame overlaps a still-live frame (a FRAME/SP OVERLAP -- see). The complete fix is to
-// capture the preempted guest SP correctly in build_signal_frame; until that lands, we suppress SIGURG
-// delivery for exactly this class. That is functionally identical to Go's own supported `GODEBUG=
+// ---------------- Go async-preempt SIGURG suppression for iscgo aarch64 images (#423) ----------------
+// Go's scheduler asynchronously preempts a running goroutine by sending itself SIGURG (23) and injecting a
+// call to runtime.asyncPreempt from the signal handler. For an EXTERNALLY-LINKED / cgo (runtime.iscgo==1)
+// aarch64 Go binary, delivering SIGURG into the guest crashes it -- but NOT via a sigframe/SP overlap (that
+// hypothesis was investigated with the go_cgo_stackgrow_arm fixture under DD_SIGURG=deliver + CRASHDBG and
+// DISPROVEN: build_signal_frame captures a correct, consistent guest SP/PC/LR and the frame sits strictly
+// below SP). The real defect is ASYNC-PREEMPT SAFETY: dd delivers the caught signal at TRANSLATION-BLOCK
+// boundaries (the cpu->irq poll), which do NOT coincide with Go's compiler-inserted async-safe points. Go's
+// own guard (doSigPreempt -> isAsyncSafePoint / canPreemptM) is meant to no-op an unsafe delivery, but under
+// dd's non-PIE HIGH-bias translation the interaction with Go's stack-growth machinery corrupts state: the
+// fixture's crash lands squarely in runtime.copystack / runtime.adjustframe / (*stkframe).getStackMap with
+// `fatal error: wirep: already in go` and `untyped locals` (a stack-map/scheduler invariant violation), i.e.
+// an async preempt injected around a stack copy rewrites a frame's return address / pointer. A correct fix
+// requires honoring Go's async-safe-point model (parsing the guest pclntab's PCDATA_UnsafePoint, or a
+// safepoint-accurate delivery scheme) -- a large, fragile undertaking not yet landed. Until then we suppress
+// SIGURG for exactly this class, which is functionally identical to Go's OWN supported `GODEBUG=
 // asyncpreemptoff=1`: async (tight-loop) preemption is disabled, but COOPERATIVE preemption at safepoints
-// still works, so the program runs correctly (proven: influxd boots, victoria-metrics serves).
+// still works, so the program runs correctly (proven: this fixture completes, influxd boots, vmetrics serves).
 //
 // Scoped TIGHTLY on purpose: g_go_iscgo (set once by the aarch64 load_elf in os/linux/elf.c) is 1 ONLY for a
 // cgo-enabled aarch64 Go main image. It stays 0 for non-Go guests (some legitimately use SIGURG for OOB TCP

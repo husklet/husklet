@@ -95,6 +95,13 @@ pub(super) fn system() -> Group {
             src("threads", "threads.c").out("threads sum=800000\n"),
             src("atomics", "atomics.c").out("atomic v=1000000\n"),
             src("signals", "signals.c").out("signal got=12\n"), // SIGUSR2 = 12
+            // #423: an async SIGURG (Go async-preempt) storm delivered at arbitrary instruction boundaries
+            // must not corrupt the interrupted frame's return address or callee-saved regs. aarch64-only
+            // (inline-asm register/RA residency); oracle-diffed against a native run (deterministic csum).
+            src("sigurg-preempt", "sigurg_preempt.c")
+                .only(&[Engine::LinuxAarch64])
+                .has("sigurg: regs=1 stormed=1")
+                .oracle(),
             src("sysinfo", "sysinfo.c").has("sys=Linux pid_ok=1"), // uname + getpid
             src("shm", "shm.c").out("SHM-ROUNDTRIP-OK\n"),      // SysV shared memory get/at/dt/ctl
             src("sem", "sem.c").out("SEM v=0 w=1\n"),           // SysV semaphores get/op/ctl
