@@ -273,9 +273,8 @@ static void *exc_thread(void *arg) {
 static void install_mach_exc(void) {
     if (mach_port_allocate(mach_task_self(), MACH_PORT_RIGHT_RECEIVE, &g_exc_port) != KERN_SUCCESS) return;
     mach_port_insert_right(mach_task_self(), g_exc_port, g_exc_port, MACH_MSG_TYPE_MAKE_SEND);
-    task_set_exception_ports(mach_task_self(),
-                             EXC_MASK_BAD_ACCESS | EXC_MASK_BAD_INSTRUCTION | EXC_MASK_BREAKPOINT, g_exc_port,
-                             EXCEPTION_DEFAULT | MACH_EXCEPTION_CODES, ARM_THREAD_STATE64);
+    task_set_exception_ports(mach_task_self(), EXC_MASK_BAD_ACCESS | EXC_MASK_BAD_INSTRUCTION | EXC_MASK_BREAKPOINT,
+                             g_exc_port, EXCEPTION_DEFAULT | MACH_EXCEPTION_CODES, ARM_THREAD_STATE64);
     pthread_t t;
     pthread_create(&t, NULL, exc_thread, NULL);
 }
@@ -569,6 +568,15 @@ static const char *load_program(const char *prog, struct loaded *lm, struct load
     static char gb[1024];
     prog = find_in_path(prog, gb, sizeof gb); // bare "sh" (docker) -> "/bin/sh" via the container PATH
     g_exe_path = prog;
+    // /proc/self/exe must be the ABSOLUTE, CANONICAL guest path of the loaded image: a RELATIVE guest
+    // invocation ("./x" from a harness) or an entry symlink (/bin/sh->busybox) otherwise leaks into the
+    // link value, and glibc static-pie ASSERTS on it at startup ("dl-origin.c: linkval[0]=='/'"). Done
+    // HERE (not only in dd_run) so the fork-server's parent preload -- which calls load_program directly,
+    // NOT dd_run -- also hands every COW warm worker a canonical g_exe_path (#378: byte-identical to a
+    // cold launch). Static: the value must outlive this call, like gb above. Mirrors linux_x86_64.c.
+    static char bootexe[4200];
+    exe_canon(prog, bootexe, sizeof bootexe);
+    g_exe_path = bootexe;
     static char pb[4200];
     const char *prog_host =
         // resolve through the overlay (upper, then lowers) + follow the entry symlink (/bin/sh->busybox)
@@ -694,13 +702,10 @@ int dd_run(const char *rootfs, int argc, char *const argv[]) {
         // load_program below re-resolves argv[0] and re-sets g_exe_path to the binary actually loaded
         // (matches /proc/self/exe for a script exec).
     }
-    // /proc/self/exe must be the ABSOLUTE, CANONICAL guest path of the loaded image: a RELATIVE guest
-    // invocation ("./x" from a harness) or an entry symlink otherwise leaks straight into the link value,
-    // and glibc static-pie ASSERTS on it at startup ("dl-origin.c: linkval[0]=='/'"). `bootexe` is
-    // static because g_exe_path must outlive this frame across run_guest.
-    static char bootexe[4200];
-    exe_canon(g_exe_path, bootexe, sizeof bootexe);
-    g_exe_path = bootexe;
+    // /proc/self/exe canonicalization now happens inside load_program (below), so it also covers the
+    // fork-server's parent preload path (which never calls dd_run) -- see #378. load_program re-resolves
+    // argv[0] and sets g_exe_path to the canonical absolute path of the binary actually loaded, matching
+    // /proc/self/exe for a script exec.
     struct loaded lm, li;
     uint64_t jump, at_base;
     int have_interp;

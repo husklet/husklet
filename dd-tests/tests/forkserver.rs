@@ -287,6 +287,40 @@ fn engine_lane(guest: ddjit::Guest) {
     assert_eq!(rcw2, 5, "[warm-exit {arch}] warm path exit code");
     drop(wsrv);
 
+    // ---- 6b. /proc/self/exe canonicalization through the WARM path (#378) ----
+    // The probe's `id` output includes `exe=<readlink /proc/self/exe>`, which MUST be the absolute,
+    // canonical (symlink-resolved) binary path — byte-identical cold and through the fork-server. The
+    // warm runner sets g_exe_path from the PARENT's load_program(prewarm), which on aarch64 used to leak
+    // the raw (non-canonical) invocation path; here we invoke via a SYMLINK (so canonical != invoked) and
+    // prewarm the server on that SAME symlink so the warm branch (argv[0]==g_wprog) actually fires. Both
+    // the cold launch and the warm runner must report the RESOLVED target, not the symlink.
+    let link = format!(
+        "{}/probe-link-{}",
+        std::path::Path::new(&probe).parent().unwrap().display(),
+        std::process::id()
+    );
+    let real = std::fs::canonicalize(&probe)
+        .unwrap()
+        .to_string_lossy()
+        .into_owned();
+    mac_sh(&format!("ln -sf {probe} {link}"), 20);
+    let lsock = format!("/tmp/{tag}-link.sock");
+    let lsrv = Server::start(
+        &engine,
+        &lsock,
+        &format!("--prewarm {link}"),
+        &format!("/tmp/{tag}-link.log"),
+    )
+    .unwrap_or_else(|| panic!("symlink-prewarm server failed to start for {arch}"));
+    let (olink, _) = assert_equiv("warm-canon", &engine, &lsock, "", &format!("{link} id"));
+    assert!(
+        olink.contains(&format!("exe={real}\n")),
+        "[warm-canon {arch}] /proc/self/exe must be the canonical resolved path {real}, not the \
+         symlink {link}: {olink}"
+    );
+    drop(lsrv);
+    mac_sh(&format!("rm -f {link} /tmp/{tag}-link.log"), 20);
+
     // ---- 7. pcache discipline through the fork-server (client env carries DDJIT_PCACHE) ----
     let pcdir = format!("/tmp/{tag}-pcache");
     let sock2 = format!("/tmp/{tag}-pc.sock");
