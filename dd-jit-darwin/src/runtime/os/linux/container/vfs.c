@@ -1384,6 +1384,28 @@ static int proc_maps_fd(int smaps) {
 // reflect the cgroup memory charge so a reader sees a plausible footprint.
 static unsigned long long self_rss_bytes(void); // defined after dd_get_procinfo (real engine resident floor)
 
+// /proc/[pid]/status Cpus_allowed / Cpus_allowed_list. A default container is allowed to run on ALL of its
+// online CPUs (contiguous 0..N-1, N = container_online_cpus()), so this MUST agree with sched_getaffinity
+// (dispatch.c cpu_online_mask) and nproc -- the old hardcoded "1"/"0" (CPU 0 only) contradicted both, and a
+// reader like the JVM/tokio that cross-checks Cpus_allowed against availableProcessors saw an inconsistency
+// no real container shows. Linux renders the mask as comma-separated 32-bit hex groups, most-significant
+// first, no leading zeros on the top group (e.g. 18 CPUs -> "3ffff"); the list is the "0-(N-1)" range.
+static void cpus_allowed_strs(char *mask, size_t mn, char *list, size_t ln) {
+    int nc = container_online_cpus();
+    if (nc < 1) nc = 1;
+    uint32_t w[2] = {0, 0}; // container_online_cpus() caps at 64, so two 32-bit words cover every bit
+    for (int c = 0; c < nc && c < 64; c++)
+        w[c / 32] |= (uint32_t)1u << (c % 32);
+    int hi = (nc - 1) / 32; // most-significant populated word
+    int o = 0;
+    for (int i = hi; i >= 0 && o < (int)mn; i--)
+        o += snprintf(mask + o, mn - (size_t)o, i == hi ? "%x" : ",%08x", w[i]);
+    if (nc == 1)
+        snprintf(list, ln, "0");
+    else
+        snprintf(list, ln, "0-%d", nc - 1);
+}
+
 static int proc_status_text(char *b, size_t n) {
     char comm[16];
     proc_comm(comm, sizeof comm);
@@ -1395,6 +1417,8 @@ static int proc_status_text(char *b, size_t n) {
     unsigned long vmlck = (unsigned long)(mlk_total_locked() / 1024); // mlock/mlockall'd bytes (LTP munlockall01)
     char groups[512]; // image-derived supplementary set (runc additionalGids), == getgroups(2)
     groups_status_str(groups, sizeof groups);
+    char cpumask[40], cpulist[24];
+    cpus_allowed_strs(cpumask, sizeof cpumask, cpulist, sizeof cpulist);
     return snprintf(
         b, n,
         "Name:\t%s\nUmask:\t0022\nState:\tR (running)\nTgid:\t%d\nNgid:\t0\nPid:\t%d\nPPid:\t%d\n"
@@ -1411,10 +1435,10 @@ static int proc_status_text(char *b, size_t n) {
         "CapInh:\t0000000000000000\nCapPrm:\t%016llx\nCapEff:\t%016llx\nCapBnd:\t%016llx\n"
         "CapAmb:\t0000000000000000\nNoNewPrivs:\t%d\nSeccomp:\t2\nSeccomp_filters:\t1\n"
         "Speculation_Store_Bypass:\tvulnerable\nSpeculationIndirectBranch:\tunknown\n"
-        "Cpus_allowed:\t1\nCpus_allowed_list:\t0\nvoluntary_ctxt_switches:\t1\n"
+        "Cpus_allowed:\t%s\nCpus_allowed_list:\t%s\nvoluntary_ctxt_switches:\t1\n"
         "nonvoluntary_ctxt_switches:\t0\n",
         comm, pid, pid, ppid, groups, vsz, vsz, vmlck, rss, rss, rss, (unsigned long long)DD_CAP_DEFAULT,
-        (unsigned long long)g_cap_eff, (unsigned long long)g_cap_bnd, g_nnp);
+        (unsigned long long)g_cap_eff, (unsigned long long)g_cap_bnd, g_nnp, cpumask, cpulist);
 }
 
 // /proc/[pid]/stat -- the 52-field single line (pid (comm) state ppid ...). Field 23 = vsize (bytes),
@@ -1967,6 +1991,8 @@ static int proc_status_pid_text(char *b, size_t n, int gp, int host) {
     if (ov && state != 'Z' && state != 'T') state = (char)ov;
     char groups[512]; // peers carry the same container supplementary set (image-derived, see self)
     groups_status_str(groups, sizeof groups);
+    char cpumask[40], cpulist[24];
+    cpus_allowed_strs(cpumask, sizeof cpumask, cpulist, sizeof cpulist);
     return snprintf(
         b, n,
         "Name:\t%s\nUmask:\t0022\nState:\t%c\nTgid:\t%d\nNgid:\t0\nPid:\t%d\nPPid:\t%d\n"
@@ -1980,10 +2006,11 @@ static int proc_status_pid_text(char *b, size_t n, int gp, int host) {
         "CapInh:\t0000000000000000\nCapPrm:\t%016llx\nCapEff:\t%016llx\nCapBnd:\t%016llx\n"
         "CapAmb:\t0000000000000000\nNoNewPrivs:\t0\nSeccomp:\t2\nSeccomp_filters:\t1\n"
         "Speculation_Store_Bypass:\tvulnerable\nSpeculationIndirectBranch:\tunknown\n"
-        "Cpus_allowed:\t1\nCpus_allowed_list:\t0\nvoluntary_ctxt_switches:\t1\n"
+        "Cpus_allowed:\t%s\nCpus_allowed_list:\t%s\nvoluntary_ctxt_switches:\t1\n"
         "nonvoluntary_ctxt_switches:\t0\n",
         comm, state, gp, gp, ppid, groups, vsz, vsz, rss, rss, rss, ok ? pi.nthreads : 1,
-        (unsigned long long)DD_CAP_DEFAULT, (unsigned long long)DD_CAP_DEFAULT, (unsigned long long)DD_CAP_DEFAULT);
+        (unsigned long long)DD_CAP_DEFAULT, (unsigned long long)DD_CAP_DEFAULT, (unsigned long long)DD_CAP_DEFAULT,
+        cpumask, cpulist);
 }
 
 // /proc/<pid>/cmdline for a peer -- the published NUL-separated argv (fallback: the comm).
@@ -2462,7 +2489,7 @@ static int proc_boot_id(char *out, size_t cap) {
 
 // /proc/[self|<pid>]/limits -- the rlimit table (Go runtime, nginx, java, systemd read RLIMIT_NOFILE from
 // it). Values mirror the engine's own getrlimit/prlimit answers (svc_fill_rlimit: stack 8MB, nofile
-// 1024/1048576, everything else unlimited) so the file and the syscall agree.
+// 20480/1048576, everything else unlimited) so the file and the syscall agree.
 static int proc_limits_text(char *buf, size_t cap) {
     // name, soft, hard, units ("" -> no unit column value). "unlimited" for RLIM_INFINITY rows.
     static const struct {
@@ -2475,7 +2502,7 @@ static int proc_limits_text(char *buf, size_t cap) {
         {"Max core file size", "unlimited", "unlimited", "bytes"},
         {"Max resident set", "unlimited", "unlimited", "bytes"},
         {"Max processes", "unlimited", "unlimited", "processes"},
-        {"Max open files", "1024", "1048576", "files"},
+        {"Max open files", "20480", "1048576", "files"}, // oracle (docker default soft): was 1024
         {"Max locked memory", "unlimited", "unlimited", "bytes"},
         {"Max address space", "unlimited", "unlimited", "bytes"},
         {"Max file locks", "unlimited", "unlimited", "locks"},
@@ -3253,6 +3280,10 @@ static int proc_open(const char *rp) {
             {"/proc/sys/kernel/random/poolsize", "256\n"},
             {"/proc/sys/kernel/printk", "4\t4\t1\t7\n"},
             {"/proc/sys/kernel/panic", "10\n"}, // oracle: 10s reboot-on-panic (was 0)
+            // ASLR posture. A guest/security probe (Go's runtime, glibc, hardening scanners) reads this to
+            // learn whether the kernel randomizes mmap/stack/brk; dd omitted it -> ENOENT where real docker
+            // serves 2 (full ASLR: mmap + stack + brk + VDSO). Oracle: 2.
+            {"/proc/sys/kernel/randomize_va_space", "2\n"},
             // vm
             {"/proc/sys/vm/overcommit_ratio", "50\n"},
             {"/proc/sys/vm/overcommit_kbytes", "0\n"},
@@ -3316,6 +3347,10 @@ static int proc_open(const char *rp) {
             {"/proc/sys/fs/mqueue/queues_max", "256\n"},
             {"/proc/sys/fs/mqueue/msg_default", "10\n"},
             {"/proc/sys/fs/mqueue/msgsize_default", "8192\n"},
+            // Transparent-hugepage policy. jemalloc/tcmalloc, the JVM (-XX:+UseTransparentHugePages), redis
+            // (THP warning), and mongod all read this; dd omitted it -> ENOENT, where real docker exposes the
+            // host's setting with the active mode bracketed. Oracle: "always [madvise] never".
+            {"/sys/kernel/mm/transparent_hugepage/enabled", "always [madvise] never\n"},
         };
 
         for (size_t i = 0; i < sizeof K / sizeof *K; i++)

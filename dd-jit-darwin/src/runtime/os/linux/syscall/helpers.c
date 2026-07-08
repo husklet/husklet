@@ -7,12 +7,12 @@ static int g_pipesz[DD_NFD];
 // ---- guest RLIMIT_NOFILE enforcement -------------------------------------------------------------
 // dd shares the host descriptor table, whose real cap is far larger than the guest's (engine-private fds
 // are hoisted above 1<<20, see engine_fd_hoist), so the guest's soft RLIMIT_NOFILE is purely EMULATED
-// (svc_fill_rlimit reports 1024, or the docker --ulimit / guest setrlimit override in g_ulimit[7]). The
+// (svc_fill_rlimit reports 20480, or the docker --ulimit / guest setrlimit override in g_ulimit[7]). The
 // host therefore never enforces it: a raw dup/open/dup2 at or past the guest cap wrongly succeeds. These
 // helpers restore the Linux contract -- Linux allocates the lowest free fd and fails EMFILE if it would be
 // >= the soft limit; an explicit dup2/dup3 newfd >= the limit is EBADF. (LTP dup03/dup201.)
 static int guest_nofile_cur(void) {
-    uint64_t cur = 1024; // dd default soft RLIMIT_NOFILE (mirror svc_fill_rlimit, defined later in proc.c)
+    uint64_t cur = 20480; // dd default soft RLIMIT_NOFILE (mirror svc_fill_rlimit, defined later in proc.c)
     if (g_ulimit[7].set) cur = g_ulimit[7].cur; // docker --ulimit / guest setrlimit(RLIMIT_NOFILE)
     return cur > 0x7fffffff ? 0x7fffffff : (int)cur;
 }

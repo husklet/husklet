@@ -2004,6 +2004,18 @@ static int svc_fs(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t
                     break;
                 }
             }
+            // Other synthesized /sys/kernel attribute files (e.g. /sys/kernel/mm/transparent_hugepage/enabled):
+            // served by proc_open's constant table, same as their stat() (synth_stat_raw). proc_open returns
+            // -2 for anything it doesn't recognize, so a genuine rootfs /sys path or ENOENT falls through
+            // untouched to the normal handler below.
+            if (rp && !strncmp(rp, "/sys/kernel/", 12)) {
+                int pf = proc_open(rp);
+                if (pf != -2) {
+                    if (pf >= 0 && (lf & 0x80000)) fcntl(pf, F_SETFD, FD_CLOEXEC); // honor O_CLOEXEC
+                    G_RET(c) = pf < 0 ? (uint64_t)(-errno) : (uint64_t)pf;
+                    break;
+                }
+            }
             // GPU rung 2 (opt-in): the DRM render-node discovery + allocation path. Inert unless
             // DD_GPU_IOSURFACE is set (existing workloads never touch /dev/dri or the DRM sysfs).
             if (rp && gpu_iosurface_on()) {

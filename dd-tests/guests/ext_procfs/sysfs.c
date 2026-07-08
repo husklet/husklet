@@ -23,6 +23,8 @@ int main(void) {
     ok &= pf_read("/sys/fs/cgroup/memory.max", b, sizeof b) > 0 && b[0];
     ok &= pf_read("/sys/fs/cgroup/pids.max", b, sizeof b) > 0 && b[0];
     ok &= pf_read("/sys/fs/cgroup/memory.current", b, sizeof b) > 0;
+    // transparent-hugepage policy: the active mode is bracketed (oracle: "always [madvise] never")
+    ok &= eq("/sys/kernel/mm/transparent_hugepage/enabled", "always [madvise] never\n");
     printf("sysfs ok=%d\n", ok);
     return 0;
 }

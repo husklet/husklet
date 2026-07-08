@@ -35,6 +35,7 @@ int main(void) {
     // ---- deterministic well-known defaults (regression guards) ----
     ok &= eq("/proc/sys/kernel/pid_max", "4194304\n");
     ok &= eq("/proc/sys/kernel/cap_last_cap", "40\n");
+    ok &= eq("/proc/sys/kernel/randomize_va_space", "2\n"); // full ASLR (oracle); dd used to ENOENT this
     ok &= eq("/proc/sys/kernel/ostype", "Linux\n");
     ok &= eq("/proc/sys/kernel/overflowuid", "65534\n");
     ok &= eq("/proc/sys/kernel/sem", "32000\t1024000000\t500\t32000\n"); // TAB-separated, kernel format

@@ -46,8 +46,8 @@ static void exec_forward_env(uint64_t envp_guest) {
 // Fill a guest `struct rlimit { rlim_cur; rlim_max; }` for {get,set}rlimit/prlimit64 (cases 163/261).
 // Shared so both forms report identical limits. Most resources are unlimited, but a few MUST be finite or
 // guests size data structures off them: RLIMIT_STACK(3) reports the conventional 8MB main-stack size, and
-// RLIMIT_NOFILE(7) reports a finite fd cap (soft 1024 / hard 1048576, the typical Linux default) -- a guest
-// like memcached does calloc(rlim_cur, sizeof(conn)), which overflows if the soft limit is RLIM_INFINITY.
+// RLIMIT_NOFILE(7) reports a finite fd cap (soft 20480 / hard 1048576, the docker container default) -- a
+// guest like memcached does calloc(rlim_cur, sizeof(conn)), which overflows if the soft limit is RLIM_INFINITY.
 static void svc_fill_rlimit(int resource, uint64_t *o) {
     // docker --ulimit override wins (g_ulimit, seeded from DD_ULIMITS in state.c): a guest that reads its
     // limits (memcached calloc's off RLIMIT_NOFILE, the JVM sizes threads off RLIMIT_NPROC) must see the
@@ -62,8 +62,8 @@ static void svc_fill_rlimit(int resource, uint64_t *o) {
         o[0] = 8ull << 20;
         o[1] = ~0ull;
         break;
-    case 7: // RLIMIT_NOFILE
-        o[0] = 1024;
+    case 7: // RLIMIT_NOFILE -- docker container default (oracle: soft 20480, hard 1048576; was 1024/1048576)
+        o[0] = 20480;
         o[1] = 1048576;
         break;
     case 4: // RLIMIT_CORE -- match the Linux/docker default: cores OFF via soft=0, hard unlimited. A guest that
