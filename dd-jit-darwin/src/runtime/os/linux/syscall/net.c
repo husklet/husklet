@@ -782,6 +782,12 @@ static int svc_net(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_
                 if (er == 0 && (int)a0 >= 0 && (int)a0 < DD_NFD) g_sock_conn[(int)a0] = 1; // sticky-connected
                 break;
             }
+            // #261 IPv4-only network: a genuine external IPv6 dest has no route -> ENETUNREACH *now* (not a
+            // 2-min host-v6 timeout), so happy-eyeballs (apt/curl) falls back to the IPv4 answer immediately.
+            if (hl != (socklen_t)-1 && v6_no_route((struct sockaddr *)&ss)) {
+                G_RET(c) = (uint64_t)(-ENETUNREACH);
+                break;
+            }
             int cr;
             do {
                 cr = (hl != (socklen_t)-1) ? connect((int)a0, (struct sockaddr *)&ss, hl)
@@ -931,6 +937,12 @@ static int svc_net(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_
         socklen_t dhl = a4 ? sa_l2m((uint8_t *)a4, (socklen_t)a5, &dss) : (socklen_t)-1;
         const void *dst = (dhl != (socklen_t)-1) ? (void *)&dss : (void *)a4;
         socklen_t dl = (dhl != (socklen_t)-1) ? dhl : (socklen_t)a5;
+        // #261 IPv4-only network: an external IPv6 datagram dest has no route -> ENETUNREACH now (mirrors the
+        // connect() path; a QUIC/DoH client's v6 attempt fails fast and it retries over IPv4).
+        if (dhl != (socklen_t)-1 && v6_no_route((struct sockaddr *)&dss)) {
+            G_RET(c) = (uint64_t)(-ENETUNREACH);
+            break;
+        }
         ssize_t r;
         do {
             r = sendto((int)a0, (void *)a1, (size_t)a2, msgflags_l2m((int)a3), dst, dl);
@@ -1190,6 +1202,12 @@ static int svc_net(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_
             } else {
                 socklen_t hl = sa_l2m(gname, gnamelen, &nss);
                 if (hl != (socklen_t)-1) {
+                    // #261 IPv4-only network: an external IPv6 dest has no route -> ENETUNREACH now (mirrors
+                    // connect()/sendto), so a v6-first datagram client falls back to IPv4 immediately.
+                    if (v6_no_route((struct sockaddr *)&nss)) {
+                        G_RET(c) = (uint64_t)(-ENETUNREACH);
+                        break;
+                    }
                     mh.msg_name = &nss;
                     mh.msg_namelen = hl;
                 }
