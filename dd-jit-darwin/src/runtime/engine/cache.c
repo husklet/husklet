@@ -917,6 +917,75 @@ static int stw_peers_live(void) {
     return n;
 }
 
+// ---- #186 diagnostic: dump md_dump on a LIVE (hung) process via a trigger file ----
+// MAPDUMP only fires at exit_group, but a hung JVM never exits -- and a POSIX signal can't be used
+// because the engine forwards host signals to the guest (HotSpot itself claims SIGUSR2). Instead, when
+// MAPDUMP is set we spawn ONE detached watcher thread that polls for the trigger file "<prefix>.trig".
+// When it appears, the watcher (a) snapshots every registered guest thread's host PC via Mach
+// thread_get_state (so the SPINNING thread's in-cache PC can be attributed to a region head), writing
+// them to "<prefix>.pc", then (b) calls md_dump() for the stitched host map + raw code cache. Purely a
+// reader of engine state; gated entirely by MAPDUMP -> not even spawned otherwise.
+#include <mach/arm/thread_status.h>
+#include <mach/thread_act.h>
+
+static void md_snapshot_pcs(const char *pfx) {
+    char p[1088];
+    snprintf(p, sizeof p, "%s.pc", pfx);
+    FILE *f = fopen(p, "w");
+    if (!f) return;
+    fprintf(f, "CACHE rw=%p rx=%p cp=%p gen=%llu\n", (void *)g_cache, J_RX(g_cache), (void *)g_cp,
+            (unsigned long long)g_cache_gen);
+    for (int i = 0; i < STW_MAXTHREAD; i++) {
+        if (!atomic_load_explicit(&g_stw_threads[i].used, memory_order_acquire)) continue;
+        pthread_t th = g_stw_threads[i].th;
+        mach_port_t mp = pthread_mach_thread_np(th);
+        if (!mp) continue;
+        arm_thread_state64_t st;
+        mach_msg_type_number_t cnt = ARM_THREAD_STATE64_COUNT;
+        if (thread_suspend(mp) != KERN_SUCCESS) continue;
+        kern_return_t kr = thread_get_state(mp, ARM_THREAD_STATE64, (thread_state_t)&st, &cnt);
+        thread_resume(mp);
+        if (kr != KERN_SUCCESS) continue;
+        uint64_t pc = (uint64_t)__darwin_arm_thread_state64_get_pc(st);
+        uint64_t x28 = (uint64_t)st.__x[28];
+        // is the PC inside the RX code cache?
+        uint64_t rx = (uint64_t)(uintptr_t)J_RX(g_cache), rxe = rx + (uint64_t)(g_cp - g_cache);
+        fprintf(f, "TH slot=%d pc=%llx x28=%llx incache=%d\n", i, (unsigned long long)pc, (unsigned long long)x28,
+                (pc >= rx && pc < rxe));
+    }
+    fclose(f);
+}
+
+static void *md_watcher(void *arg) {
+    const char *pfx = (const char *)arg;
+    char trig[1088];
+    snprintf(trig, sizeof trig, "%s.trig", pfx);
+    for (;;) {
+        struct stat sb;
+        if (stat(trig, &sb) == 0) {
+            unlink(trig);
+            md_snapshot_pcs(pfx);
+            md_dump();
+            char done[1088];
+            snprintf(done, sizeof done, "%s.done", pfx);
+            int fd = open(done, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+            if (fd >= 0) close(fd);
+        }
+        struct timespec ts = {0, 100000000}; // 100ms
+        nanosleep(&ts, NULL);
+    }
+    return NULL;
+}
+
+static void md_sig_install(void) {
+    const char *pfx = getenv("MAPDUMP");
+    if (!pfx) return;
+    static _Atomic int spawned;
+    if (atomic_exchange_explicit(&spawned, 1, memory_order_seq_cst) != 0) return;
+    pthread_t t;
+    if (pthread_create(&t, NULL, md_watcher, (void *)pfx) == 0) pthread_detach(t);
+}
+
 // Unmap a retired cache's mapping(s): the RW base, plus the RX alias when dual-mapped (delta != 0).
 static void cache_unmap(uint8_t *rw, ptrdiff_t rw2rx) {
     munmap(rw, CACHE_SZ);

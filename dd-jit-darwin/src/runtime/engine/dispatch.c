@@ -88,6 +88,9 @@ static void run_guest(struct cpu *c) {
     // (and so we are enumerated when WE flush). Unregistered after the loop -> an exited thread is never
     // signalled.
     stw_register();
+    // #186 diagnostic: install the SIGUSR2 -> md_dump hook (no-op unless MAPDUMP is set) so a hung
+    // guest can be dumped on demand. Idempotent (pthread_once) + unblocks USR2 on this thread.
+    md_sig_install();
     // Join the tid->thread registry so a tkill()/tgkill() to this thread can find it (thread-directed
     // signal delivery via cpu->tpending); left at loop exit so a dead thread is never targeted.
     thread_register(c);
