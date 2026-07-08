@@ -1459,8 +1459,17 @@ static void *translate_block(uint64_t gpc) {
                     break;
                 }
             }
-            // opt4: lay the fall-through inline; invert the condition so TAKEN is the exit
-            if (STITCH_OK && fall != start && !seen_has(seen, nseen, fall) && !map_body(fall)) {
+            // opt4: lay the fall-through inline; invert the condition so TAKEN is the exit. This inverts by
+            // flipping cond bit0 (stitch_cond: in ^ 1) -- valid ONLY for a genuinely conditional branch.
+            // The condition field 0b111x is special: 0b1110 = AL and 0b1111 = NV BOTH mean "always execute"
+            // in A64 (NV is not "never"; it is a reserved alias of AL). So a guest `b.al` is an
+            // UNCONDITIONAL branch with a DEAD fall-through, and flipping its bit0 yields NV -- still
+            // "always" -- so the "inverted" branch never actually diverts: the stitched superblock would
+            // then ALWAYS fall into the (guest-unreachable) fall-through and NEVER reach the guest's real
+            // always-taken target. HotSpot's generated interpreter emits `b.al` as a plain jump, so this
+            // silently mislowered its dispatch -> an infinite spin (#186). Exclude cond >= 0xE from the fold;
+            // an always-branch takes the ordinary b.cond emit below, which chains straight to `taken`.
+            if (STITCH_OK && cond < 0xE && fall != start && !seen_has(seen, nseen, fall) && !map_body(fall)) {
                 stitch_cond(in ^ 1u, taken);
                 seen[nseen++] = fall;
                 trace_blk++;
