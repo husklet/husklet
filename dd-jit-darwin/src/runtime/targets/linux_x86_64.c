@@ -107,6 +107,25 @@ static void container_init(const char *rootfs) {
     // foreground command got SIGTTOU/SIGTTIN-stopped ("[N]+ Stopped  ls") instead of running.
     if (rootfs) g_init_hostpid = getpid();
     container_read_resource_env(); // docker --cpus / --read-only / --ulimit (DD_CPUS/DD_ROOTFS_RO/DD_ULIMITS)
+    // #353: the daemon's DEFAULT launch path is the typed --configfd bridge, which hands the container
+    // model to the engine as DD_* ENV (ddjit_configfd.c), NOT as the --hostname/--mem-max/--pids-max CLI
+    // flags that ddjit_entry() parses. aarch64's container_init() already re-reads these from the env
+    // (linux_aarch64.c); x86-64 did not, so a `docker run --hostname h` on x86 dropped the hostname
+    // (uname/gethostname/`/etc/hostname` returned "jit") and --memory/--pids-limit were ignored. The
+    // out-of-process SpawnConfig::script() path passes them as CLI flags, which is why the default test
+    // matrix missed this. Guard on the CLI value (only fill when the flag path left it unset), matching
+    // aarch64, so a genuine --hostname flag still wins.
+    {
+        const char *h = getenv("DD_HOSTNAME");
+        if (h && h[0] && !g_hostname[0]) {
+            strncpy(g_hostname, h, 64);
+            g_hostname[64] = 0;
+        }
+        const char *m = getenv("DD_MEM_MAX");
+        if (m && m[0] && !g_mem_max) g_mem_max = parse_size(m);
+        const char *p = getenv("DD_PIDS_MAX");
+        if (p && p[0] && !g_pids_max) g_pids_max = dd_parse_id("DD_PIDS_MAX", p);
+    }
     if (rootfs && rootfs[0]) {     // the shared container jails against the canonical rootfs + its dir fd
         g_rootfs = (char *)rootfs;
         if (!realpath(g_rootfs, g_rootfs_canon)) snprintf(g_rootfs_canon, sizeof g_rootfs_canon, "%s", g_rootfs);

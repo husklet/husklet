@@ -1,6 +1,6 @@
 //! Container behaviour, sandbox containment, and x86-64 / macOS guest fixtures.
 
-use crate::{darwin_libc, darwin_src, fixture, group, src, Engine, Group};
+use crate::{darwin_libc, darwin_src, fixture, group, in_rootfs, src, Engine, Group};
 
 use super::sh;
 
@@ -14,6 +14,19 @@ pub(super) fn container() -> Group {
         sh("mkdir", "mkdir -p /x/y && echo /x/y; rm -rf /x").out("/x/y\n"),
         sh("chmod", "rm -f /f; touch /f && chmod 700 /f && stat -c %a /f; rm -f /f").out("700\n"),
         sh("symlink", "rm -f /l; ln -s /etc/hostname /l && readlink /l; rm -f /l").out("/etc/hostname\n"),
+        // #353 regression guard: the daemon's DEFAULT launch is the typed --configfd bridge, which hands the
+        // UTS hostname to the engine as the DD_HOSTNAME *env* (ddjit_configfd.c) — NOT the --hostname CLI flag
+        // that the out-of-process SpawnConfig::script path emits. aarch64's container_init() already re-read
+        // DD_HOSTNAME; x86-64 dropped it, so `docker run --hostname h` on x86 returned "jit". The flag-only
+        // matrix never drove the env path (the coverage gap), so inject DD_HOSTNAME directly and assert the
+        // guest's gethostname() sees it — on BOTH Linux engines.
+        {
+            let mut c = in_rootfs("hostname-env", "alpine", &["/bin/hostname"]);
+            c.engines = vec![Engine::LinuxAarch64, Engine::LinuxX86_64];
+            c.env.push(("DD_HOSTNAME".to_string(), "ddenvhost".to_string()));
+            c
+        }
+        .out("ddenvhost\n"),
         sh("proc-self", "test -r /proc/self/status && echo proc-ok").out("proc-ok\n"),
         sh("dev-null", "echo discard > /dev/null && echo dev-ok").out("dev-ok\n"),
         // /dev completeness: fd/std* symlinks + ptmx/pts/shm/console nodes the OCI unpacker strips.
