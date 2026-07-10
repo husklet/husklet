@@ -1145,6 +1145,13 @@ static void *translate_block(uint64_t gpc) {
         // decodes the insn at rip and advances past it. Done BEFORE the lazy-flag classifier (which only
         // knows legacy opcodes) -- AVX touches no EFLAGS we model, so just spill any pending flags first.
         if (I.vex) {
+            // An EVEX prefix (0x62) whose map field mm==0 is a RESERVED/invalid encoding -> x86 raises #UD.
+            // (0x62 is also the legacy BOUND opcode, invalid in 64-bit mode -> #UD.) Deliver SIGILL to the
+            // guest instead of aborting the engine as "UNIMPLEMENTED EVEX".
+            if (I.evex && I.vex_map == 0) {
+                emit_guest_signal(gpc, 4, 2); // #UD -> SIGILL (si_code ILL_ILLOPN), rip = the faulting insn
+                break;
+            }
             if (g_fl_pending) flags_materialize();
             emit_exit_const(gpc, R_AVX);
             break;
@@ -2398,6 +2405,10 @@ static void *translate_block(uint64_t gpc) {
             // default-terminates); previously this fell through to report_unimpl -> engine abort (70).
             if (op == 0xCC) {
                 emit_guest_signal(next, 5, 0x80); // int3 -> SIGTRAP (si_code SI_KERNEL), rip past the int3
+                break;
+            }
+            if (op == 0xF1) { // ICEBP/INT1 (#DB): userspace delivery is SIGTRAP with si_code TRAP_BRKPT (Linux
+                emit_guest_signal(next, 5, 1); // send_sigtrap), rip past the insn (a trap, not a fault, not an abort)
                 break;
             }
             if (op >= 0x91 && op <= 0x97) {

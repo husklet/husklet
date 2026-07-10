@@ -56,10 +56,31 @@
     6 // BUMP on ANY codegen change (different emitted bytes -> stale). v5: IRQSLIM layout.
       // v6: exec re-key, argv0 key, full-width (JIT_MAP_N) map persistence,
       // library manifest + deferred activation, warm-stat sidecar.
-// IRQSLIM changes the block-entry layout (2-insn poll header + body+8 forward entries), and it is
-// env-toggleable (NOIRQSLIM/NOIRQCHECK) -- mix the mode into the version so a cache written in one
-// mode can never be reloaded into the other (a +8 chain into a legacy-layout block would land mid-exit).
-#define PC_VERSION_EFF (PC_VERSION | ((uint64_t)(g_fwdskip ? 0x100 : 0)))
+// Every env var that changes the EMITTED BYTES must also key the persistent cache, or a warm load with
+// DDJIT_PCACHE=1 can dispatch translations produced under a DIFFERENT codegen mode (silently making the
+// env-driven compat/debug switch ineffective, or worse, dispatching a mismatched block layout). IRQSLIM
+// (g_fwdskip) changes the block-entry layout; the rest gate distinct emitted sequences. Read the env vars
+// directly (they are process-global + immutable for the run) with the SAME truthiness each codegen site
+// uses. Bits are stable/disjoint so a cache written in one mode can never be reloaded into another.
+static uint64_t pcache_env_nz(const char *n) { // "any non-0 value" gate (NOLAZY/NOX*DIRECT style)
+    const char *s = getenv(n);
+    return (s && strcmp(s, "0")) ? 1 : 0;
+}
+static uint64_t pcache_codegen_mode_bits(void) {
+    uint64_t b = 0;
+    if (g_fwdskip) b |= 1ull << 8; // IRQSLIM block-entry layout (kept at bit 8 for continuity)
+    if (pcache_env_nz("NOLAZY")) b |= 1ull << 9;
+    if (pcache_env_nz("NOXALUDIRECT")) b |= 1ull << 10;
+    if (pcache_env_nz("NOXSHIFTDIRECT")) b |= 1ull << 11;
+    if (getenv("NOSTITCH")) b |= 1ull << 12;
+    if (getenv("NOREPCMP")) b |= 1ull << 13;
+    if (getenv("NOSSEOPT")) b |= 1ull << 14;
+    if (getenv("NOEAOPT")) b |= 1ull << 15;
+    if (getenv("NOGUESTFOLD")) b |= 1ull << 16;
+    if (getenv("NOIRQCHECK")) b |= 1ull << 17;
+    return b;
+}
+#define PC_VERSION_EFF (PC_VERSION | pcache_codegen_mode_bits())
 // Fixed guest VA bases (high, reliably free above the kernel-chosen heap/stack and below the dyld shared
 // cache). Probed stable on Apple silicon; PIE images so we choose the base.
 #define PC_IMG_BASE 0x0000040000000000ull    // 4 TB
