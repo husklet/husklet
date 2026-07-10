@@ -8,9 +8,30 @@ use serde_json::Value;
 use std::collections::HashMap;
 use std::path::Path;
 
-/// The store path component for a reference: its canonical form with `/` and `:` flattened to `_`.
+/// Encode an arbitrary image name into a SINGLE, injective, filesystem-safe path component for use as a
+/// store directory. The old scheme flattened both `/` and `:` to `_`, which was NOT injective —
+/// `owner/app:1_2` and `owner/app_1:2` both became `owner_app_1_2` and collided. This percent-encodes the
+/// escape char and the two separators (`%`->`%25`, `/`->`%2F`, `:`->`%3A`), which is reversible and keeps
+/// distinct refs distinct. Because the result contains no `/` and (via the `.`/`..`/empty guard) is never
+/// a traversal component, it also cannot escape the store root when appended to it.
+pub(crate) fn encode_store_component(name: &str) -> String {
+    let encoded = name
+        .replace('%', "%25")
+        .replace('/', "%2F")
+        .replace(':', "%3A");
+    // A bare `.`/`..`/empty component would still traverse or alias the store dir; make it inert.
+    match encoded.as_str() {
+        "" => "%2E".to_string(),
+        "." => "%2E".to_string(),
+        ".." => "%2E%2E".to_string(),
+        _ => encoded,
+    }
+}
+
+/// The store path component for a reference: its canonical form encoded via [`encode_store_component`]
+/// (injective, filesystem-safe, reversible — `/`->`%2F`, `:`->`%3A`).
 pub fn safe_name(r: &ImageRef) -> String {
-    r.canonical().replace(['/', ':'], "_")
+    encode_store_component(&r.canonical())
 }
 
 /// Parse `from_image` into an [`ImageRef`], overriding the tag with `tag` when non-empty.
@@ -184,10 +205,30 @@ mod tests {
     }
 
     #[test]
-    fn safe_name_flattens_canonical() {
+    fn safe_name_encodes_canonical() {
         let r = ImageRef::parse("nginx");
-        // canonical() == "docker.io/library/nginx:latest"
-        assert_eq!(safe_name(&r), "docker.io_library_nginx_latest");
+        // canonical() == "docker.io/library/nginx:latest"; `/`->%2F, `:`->%3A (injective + reversible).
+        assert_eq!(safe_name(&r), "docker.io%2Flibrary%2Fnginx%3Alatest");
+    }
+
+    // Finding 7 — encode_store_component is injective for refs that collided under the old flatten-to-`_`.
+    #[test]
+    fn encode_store_component_is_injective() {
+        // These two both flattened to `owner_app_1_2` before; now distinct.
+        assert_ne!(
+            encode_store_component("owner/app:1_2"),
+            encode_store_component("owner/app_1:2")
+        );
+        // A `%` in the source is escaped so it can't forge an encoded separator.
+        assert_ne!(encode_store_component("a%2Fb"), encode_store_component("a/b"));
+        // No path separator survives, so the result is always a single component.
+        assert!(!encode_store_component("a/b:c").contains('/'));
+        // Traversal / empty names are made inert.
+        assert_eq!(encode_store_component(".."), "%2E%2E");
+        assert_eq!(encode_store_component("."), "%2E");
+        assert_eq!(encode_store_component(""), "%2E");
+        // Ordinary underscore-only names are untouched (readable + stable).
+        assert_eq!(encode_store_component("busybox_latest"), "busybox_latest");
     }
 
     #[test]

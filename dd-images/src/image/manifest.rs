@@ -54,6 +54,13 @@ impl Manifest {
     pub fn is_darwin(&self) -> bool {
         self.os.as_deref() == Some("darwin")
     }
+
+    /// True when this manifest's `os` is one dd can run: absent/empty, `linux`, or `darwin`. A PRESENT but
+    /// unsupported os (e.g. `"windows"`) is NOT supported and the load path must reject it rather than
+    /// importing it as Linux.
+    pub fn os_is_supported(&self) -> bool {
+        matches!(self.os.as_deref(), None | Some("") | Some("linux") | Some("darwin"))
+    }
 }
 
 #[cfg(test)]
@@ -112,6 +119,22 @@ mod tests {
         // behavior; see report.
         let r = serde_json::from_str::<Manifest>("{}");
         assert!(r.is_err());
+    }
+
+    // Finding 8 — os support classification: only absent/empty/linux/darwin are runnable.
+    #[test]
+    fn os_is_supported_classifies_os() {
+        let mk = |os: Option<&str>| Manifest {
+            name: "x:1".to_string(),
+            os: os.map(str::to_string),
+            ..Default::default()
+        };
+        assert!(mk(None).os_is_supported());
+        assert!(mk(Some("")).os_is_supported());
+        assert!(mk(Some("linux")).os_is_supported());
+        assert!(mk(Some("darwin")).os_is_supported());
+        assert!(!mk(Some("windows")).os_is_supported());
+        assert!(!mk(Some("plan9")).os_is_supported());
     }
 
     #[test]

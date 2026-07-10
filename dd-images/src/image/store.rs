@@ -47,7 +47,18 @@ impl Store {
         let iref = image_ref(from, tag);
         let rootfs = self.rootfs_path(&iref);
         let pulled = Client::new(iref.clone(), creds).pull(&rootfs, archs, progress)?;
-        let arch = arch_from_config(&pulled.config).unwrap_or(Arch::LinuxAarch64);
+        // Map the config's os/arch; a PRESENT but unsupported os yields `None` from `arch_from_config`
+        // (finding 9). Only fall back to the linux/arm64 default when the os is acceptable (absent/empty/
+        // linux/darwin) but the arch simply couldn't be classified — never for an explicitly-unsupported os.
+        let arch = match arch_from_config(&pulled.config) {
+            Some(a) => a,
+            None => match pulled.config["os"].as_str() {
+                Some(os) if !os.is_empty() && os != "linux" && os != "darwin" => {
+                    return Err(Error::Manifest(format!("unsupported image os: {os}")));
+                }
+                _ => Arch::LinuxAarch64,
+            },
+        };
         Ok(LocalImage { rootfs, arch, config: pulled.config, iref })
     }
 }
@@ -60,10 +71,10 @@ mod tests {
     fn rootfs_path_uses_canonical_safe_name_layout() {
         let store = Store::new("/var/lib/dd/images");
         let iref = ImageRef::parse("nginx");
-        // safe_name(nginx) == canonical "docker.io/library/nginx:latest" flattened -> underscores.
+        // safe_name(nginx) == canonical "docker.io/library/nginx:latest" percent-encoded (`/`->%2F, `:`->%3A).
         assert_eq!(
             store.rootfs_path(&iref),
-            PathBuf::from("/var/lib/dd/images/docker.io_library_nginx_latest/rootfs")
+            PathBuf::from("/var/lib/dd/images/docker.io%2Flibrary%2Fnginx%3Alatest/rootfs")
         );
     }
 }
