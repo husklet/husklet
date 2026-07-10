@@ -100,31 +100,6 @@ Coverage gap:
 
 `dd-tests/guests/completeness/x86_sse42.c` checks the comparison index, not full flag state.
 
-## `fxsave` / `fxrstor` Skip MXCSR, x87, And MMX State
-
-Priority: P1
-Impact: restored rounding mode and floating-point state are wrong
-Confidence: High
-
-Verification status: Proven in isolated worktree `/Users/x/dd/dd-worker-b-jit-audit`.
-
-Evidence:
-
-- `fxsave` / `fxrstor` only save or restore XMM lanes from the memory image: `dd-jit-darwin/src/runtime/translate/x86_64/translate.c:3377`.
-
-Why this is bad:
-
-`fxrstor` must restore MXCSR and x87/MMX state. Skipping MXCSR means code that saves a context, changes rounding mode, and restores it keeps the wrong rounding mode.
-
-Isolated proof:
-
-```sh
-DDJIT_DIR="$PWD/target-worker-b-jit-audit/release/build/dd-jit-darwin-16122afd27b6bb64/out" \
-  cargo run -q -p dd-tests --target-dir target-worker-b-jit-audit -- -e x86_64 fxrstor-mxcsr
-```
-
-Observed: dd `fxrstor-mxcsr r=2`; qemu/native `fxrstor-mxcsr r=1`.
-
 ## `mremap(MREMAP_FIXED)` Can Reuse Stale Translations
 
 Priority: P1

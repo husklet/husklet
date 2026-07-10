@@ -30,6 +30,9 @@ pub(super) fn op_x86_misc() -> Group {
             x("pfaf", "completeness/x86_pfaf.c"), // lazy PF/AF dead-elim: live/dead/block vs qemu
             x("flags", "completeness/x86_flags.c"), // shift/rotate/imul/mul DEFINED flags (CF/OF/SF/ZF/PF) all widths
             x("x87b", "completeness/x86_x87b.c"), // FCOMI/FUCOMI, FDIV/FDIVR/FSUBR/FSCALE/FPREM/FIDIV/FXTRACT
+            // fxsave/fxrstor round-trip MXCSR (SSE rounding mode) + FCW, not just the XMM lanes. Regression
+            // for the "restored rounding mode is wrong" bug (fxrstor left MXCSR.RC unchanged).
+            x("fxsave-mxcsr", "completeness/x86_fxsave_mxcsr.c"),
             x("ntload", "completeness/x86_ntload.c"), // MOVNTDQA (66 0F38 2A) + MASKMOVDQU (66 0F F7)
             x("vdsoclk", "completeness/x86_vdsoclk.c"), // vDSO clock_gettime ns scaling (monotonic sleep window)
             // x86-xflags: cross-block dead-flag elimination (NZCV + PF/AF liveness across direct edges).
