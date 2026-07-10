@@ -71,32 +71,6 @@ Verification:
 
 Inject an invalid IOSurface id or no-drawable presenter state and assert `wl_buffer.release`/`wl_callback.done` behavior matches the chosen failure policy.
 
-## xdg Configure/Ack Race Allows Pre-Ack Presentation
-
-Priority: P1
-Impact: xdg-shell clients can present before acknowledging configure
-Confidence: High
-
-Verification status: Proven in isolated worktree `/Users/x/dd/dd-workerJ-display-gpu-20260710`.
-
-Evidence:
-
-- `maybe_configure_surface` sends configure and immediately marks the surface configured: `dd-display/src/server.rs:871`, `dd-display/src/server.rs:875`.
-- `ack_configure` is accepted but ignored: `dd-display/src/server.rs:1178`.
-- Commit presents attached buffers once configured state is true: `dd-display/src/server.rs:807`.
-
-Why this is bad:
-
-xdg-shell requires clients to acknowledge configure serials before committing configured content. Marking configured before ack can hide client protocol errors and present out-of-order buffers.
-
-Isolated proof:
-
-```sh
-CARGO_TARGET_DIR=/Users/x/dd/dd-workerJ-display-gpu-target cargo test -p dd-display audit_ -- --nocapture
-```
-
-Result: `audit_xdg_buffer_commit_before_ack_is_not_presented` failed as expected.
-
 ## Data-Device Objects Are Inert
 
 Priority: P1
@@ -250,31 +224,6 @@ comm -23 \
 Suggested gate:
 
 Add a static test that every `dd-tests/guests/gui_matrix/*.c` probe is either in the matrix or listed in a documented exclusion table with owner and reason.
-
-## Shm Pool Mappings Survive Client Disconnect
-
-Priority: P1
-Impact: compositor memory leak under client churn
-Confidence: High
-
-Verification status: Proven in isolated worktree `/Users/x/dd/dd-worker-T-display-gpu-20260710`.
-
-Evidence:
-
-- `wl_shm.create_pool` maps fd-backed memory and stores `Obj::ShmPool`: `dd-display/src/server.rs:686`.
-- There is no disconnect cleanup path that walks pool mappings and releases them.
-
-Why this is bad:
-
-A client can create shm pools and disconnect without sending destroy requests. The compositor should release per-client objects and mappings when the connection dies; otherwise repeated clients leak address space and file-backed mappings.
-
-Isolated proof:
-
-```sh
-cargo test -p dd-display poc_disconnect_drops_shm_pool_mappings -- --nocapture
-```
-
-Result: failed; shm pool mappings survived connection teardown.
 
 ## Native Window Close Is Not Propagated
 

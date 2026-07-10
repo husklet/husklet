@@ -320,6 +320,10 @@ struct Surface {
     pending_frame: Vec<u32>,
     xdg_surface: Option<u32>,
     configured: bool,
+    // Set once the client has acknowledged a configure serial (xdg_surface.ack_configure). xdg-shell
+    // requires an ack before configured content is committed/presented; a latch, so later resize
+    // configures don't re-block an already-mapped surface.
+    acked: bool,
     title: String,
     buffer_scale: i32,
     window_geometry: Option<(i32, i32, i32, i32)>, // committed x,y,w,h from xdg_surface.set_window_geometry
@@ -1358,8 +1362,8 @@ impl<P: Presenter> Server<P> {
         }
 
         // ---- root / regular surface ----
-        let (attached, buffer, xdg_surface, configured) = match self.objs.get(&sid) {
-            Some(Obj::Surface(s)) => (s.attached, s.pending_buffer, s.xdg_surface, s.configured),
+        let (attached, buffer, xdg_surface, configured, acked) = match self.objs.get(&sid) {
+            Some(Obj::Surface(s)) => (s.attached, s.pending_buffer, s.xdg_surface, s.configured, s.acked),
             _ => return,
         };
 
@@ -1377,6 +1381,12 @@ impl<P: Presenter> Server<P> {
                 s.pending_release = buffer;
                 s.attached = false;
             }
+        }
+        // xdg-shell: configured content must not be presented until the client has acknowledged a
+        // configure. Apply the buffer state above (so it is ready), but hold the present until ack —
+        // ack_configure will drive present_root once the serial is acknowledged.
+        if xdg_surface.is_some() && !acked {
+            return;
         }
         // A committed wp_viewport source rectangle that falls outside the attached buffer is a protocol
         // error (out_of_buffer), not a silently-clamped crop of different content.
@@ -2082,7 +2092,24 @@ target_surface={} crop=({},{} {}x{}) backing={}x{} mapped_src=({},{}..{},{}) map
                     }
                 }
             }
-            _ => {} // ack_configure(4): the client accepted a configure; accepted (single-window MVP).
+            4 => {
+                // ack_configure(serial): the client acknowledged a configure. Latch it so configured
+                // content may now present; if a buffer was committed while we were waiting for the ack,
+                // present it now.
+                if let Some(surface) = self.wl_surface_of_xdg(m.object) {
+                    let present_now = if let Some(Obj::Surface(s)) = self.objs.get_mut(&surface) {
+                        let was = s.acked;
+                        s.acked = true;
+                        !was && s.current_buffer.is_some()
+                    } else {
+                        false
+                    };
+                    if present_now {
+                        self.present_root(self.root_surface(surface));
+                    }
+                }
+            }
+            _ => {}
         }
     }
 
@@ -2985,19 +3012,35 @@ target_surface={} crop=({},{} {}x{}) backing={}x{} mapped_src=({},{}..{},{}) map
     }
 }
 
+impl<P: Presenter> Server<P> {
+    /// Unmap + close every shm pool the client left mapped, removing the objects. Returns how many
+    /// pools were released. Called on disconnect (Drop) so a client that never destroys its pools does
+    /// not leak the shared mapping + fd for the compositor's lifetime.
+    fn release_all_pools(&mut self) -> usize {
+        let pools: Vec<u32> = self
+            .objs
+            .iter()
+            .filter_map(|(id, o)| matches!(o, Obj::ShmPool { .. }).then_some(*id))
+            .collect();
+        let n = pools.len();
+        for pool in pools {
+            if let Some(Obj::ShmPool { fd, ptr, size, .. }) = self.objs.remove(&pool) {
+                unsafe {
+                    libc::munmap(ptr as *mut libc::c_void, size.max(1));
+                    libc::close(fd);
+                }
+            }
+        }
+        n
+    }
+}
+
 impl<P: Presenter> Drop for Server<P> {
     /// Unmap every shm pool still mapped when the client disconnects. Without this, each pool's `mmap`
     /// (kept alive across the connection for `resize`) would leak the shared mapping + fd until process
     /// exit — a real address-space/fd leak for a long-lived compositor serving many connections.
     fn drop(&mut self) {
-        for obj in self.objs.values() {
-            if let Obj::ShmPool { fd, ptr, size, .. } = obj {
-                unsafe {
-                    libc::munmap(*ptr as *mut libc::c_void, (*size).max(1));
-                    libc::close(*fd);
-                }
-            }
-        }
+        self.release_all_pools();
     }
 }
 
@@ -3875,6 +3918,53 @@ mod tests {
         assert!(msgs.iter().any(|(o, op, _)| *o == 61 && *op == 2), "keyboard leave, got {msgs:?}");
         assert_eq!(h.server.focus, Some(20));
         assert!(!h.server.ptr_entered && !h.server.kbd_entered);
+    }
+
+    #[test]
+    fn xdg_buffer_commit_before_ack_is_not_presented() {
+        let mut h = Harness::new();
+        // shm pool + buffer 3
+        let data = vec![0u8; 64];
+        let fd = crate::keymap::anon_fd_with(&data).expect("anon fd");
+        let ptr = unsafe { mmap_ro(fd, data.len()) };
+        h.server.objs.insert(2, Obj::ShmPool { fd, ptr, size: data.len(), buffers: 1, zombie: false });
+        h.server.objs.insert(3, Obj::Buffer { pool: 2, offset: 0, width: 2, height: 2, stride: 8, format: FMT_ARGB8888 });
+        // xdg surface that has been configured but not yet acked.
+        let mut s = Surface::default();
+        s.xdg_surface = Some(20);
+        s.configured = true;
+        s.acked = false;
+        h.server.objs.insert(10, Obj::Surface(s));
+        h.server.objs.insert(20, Obj::XdgSurface { surface: 10 });
+        // attach buffer 3, request a frame callback, commit — content is configured but unacked, so it
+        // must be held: the frame callback (which only fires on present) does NOT complete yet.
+        h.req(10, 1, body().u32(3).i32(0).i32(0)); // attach
+        h.req(10, 3, body().u32(101)); // frame(101)
+        h.req(10, 6, body()); // commit
+        let msgs = h.drain();
+        assert!(!msgs.iter().any(|(o, op, _)| *o == 101 && *op == 0), "unacked buffer must not present, got {msgs:?}");
+        // ack the configure — now the held buffer presents and the frame callback fires.
+        h.req(20, 4, body().u32(1)); // ack_configure(serial=1)
+        let msgs = h.drain();
+        assert!(msgs.iter().any(|(o, op, _)| *o == 101 && *op == 0), "ack releases the held present, got {msgs:?}");
+    }
+
+    #[test]
+    fn disconnect_releases_shm_pool_mappings() {
+        // A client that disconnects without destroying its pools must not leak the mappings; the
+        // disconnect path walks and releases every pool.
+        let (mut server, sv) = test_server();
+        let data = vec![0u8; 64];
+        for pid in [2u32, 4u32] {
+            let fd = crate::keymap::anon_fd_with(&data).expect("anon fd");
+            let ptr = unsafe { mmap_ro(fd, data.len()) };
+            server.objs.insert(pid, Obj::ShmPool { fd, ptr, size: data.len(), buffers: 1, zombie: false });
+        }
+        let released = server.release_all_pools();
+        assert_eq!(released, 2, "both leaked pools released on disconnect");
+        assert!(server.release_all_pools() == 0, "idempotent: nothing left to release");
+        assert!(!server.objs.values().any(|o| matches!(o, Obj::ShmPool { .. })));
+        teardown(server, sv);
     }
 
     #[test]
