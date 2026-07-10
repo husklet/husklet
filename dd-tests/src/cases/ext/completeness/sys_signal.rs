@@ -11,6 +11,7 @@ pub(super) fn sys_signal() -> Group {
             // GAP pidfd_open / pidfd_send_signal: engine returns an error from pidfd_open (open_ok=0);
             // real Linux opens a pidfd and signal-0 existence-check succeeds.
             sy("pidfd-signal", "completeness/sys_pidfd_signal.c"),
+            sy("pidfd-flags", "completeness/sys_pidfd_flags.c"),
         ],
     )
 }

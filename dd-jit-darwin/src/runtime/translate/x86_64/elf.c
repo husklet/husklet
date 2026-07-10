@@ -441,11 +441,30 @@ static uint64_t build_stack(int argc, char **argv, struct loaded *lm, uint64_t a
     // shared aarch64 build_stack (os/linux/elf.c) -- without this, x86 guests ignored the container env.
     const char *estr[256];
     char *ge = getenv("DD_GUEST_ENV"), *gecopy = NULL;
+    // execve() escape-encodes records (DD_GUEST_ENV_ESC=1) so a value's own newline isn't mistaken for a
+    // record separator -- unescape "\\n"->'\n' and "\\\\"->'\\' after splitting. Mirrors os/linux/elf.c.
+    int env_escaped = (getenv("DD_GUEST_ENV_ESC") != NULL);
     if (ge) {
         gecopy = strdup(ge);
         char *save = NULL;
-        for (char *ln = strtok_r(gecopy, "\n", &save); ln && envc < 250; ln = strtok_r(NULL, "\n", &save))
+        for (char *ln = strtok_r(gecopy, "\n", &save); ln && envc < 250; ln = strtok_r(NULL, "\n", &save)) {
+            if (env_escaped) {
+                char *r = ln, *w = ln; // unescape in place (only ever shrinks)
+                while (*r) {
+                    if (r[0] == '\\' && r[1] == 'n') {
+                        *w++ = '\n';
+                        r += 2;
+                    } else if (r[0] == '\\' && r[1] == '\\') {
+                        *w++ = '\\';
+                        r += 2;
+                    } else {
+                        *w++ = *r++;
+                    }
+                }
+                *w = 0;
+            }
             estr[envc++] = ln;
+        }
     }
     int guest_envc = envc;
     for (int i = 0; g_guest_env[i] && envc < 255; i++) {

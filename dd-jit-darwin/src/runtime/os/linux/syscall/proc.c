@@ -25,8 +25,11 @@ static void exec_forward_env(uint64_t envp_guest) {
     for (int i = 0; ev[i]; i++) {
         const char *e = (const char *)nonpie_p(ev[i]);
         size_t el = strlen(e);
-        if (len + el + 2 > cap) {
-            cap = (len + el + 2) * 2;
+        // '\n' is DD_GUEST_ENV's record separator, but Linux permits newline (and any non-NUL byte) INSIDE an
+        // env value. Escape '\\'->"\\\\" and '\n'->"\\n" so a raw '\n' only ever marks a record boundary;
+        // build_stack unescapes when DD_GUEST_ENV_ESC=1. Worst case each byte becomes 2 -> reserve 2*el+2.
+        if (len + 2 * el + 2 > cap) {
+            cap = (len + 2 * el + 2) * 2;
             char *nb = realloc(buf, cap);
             if (!nb) {
                 free(buf);
@@ -34,12 +37,23 @@ static void exec_forward_env(uint64_t envp_guest) {
             }
             buf = nb;
         }
-        memcpy(buf + len, e, el);
-        len += el;
+        for (size_t j = 0; j < el; j++) {
+            char ch = e[j];
+            if (ch == '\\') {
+                buf[len++] = '\\';
+                buf[len++] = '\\';
+            } else if (ch == '\n') {
+                buf[len++] = '\\';
+                buf[len++] = 'n';
+            } else {
+                buf[len++] = ch;
+            }
+        }
         buf[len++] = '\n'; // DD_GUEST_ENV record separator (build_stack splits on '\n')
         buf[len] = 0;
     }
     setenv("DD_GUEST_ENV", buf, 1);
+    setenv("DD_GUEST_ENV_ESC", "1", 1); // tell build_stack the records are escape-encoded
     free(buf);
 }
 
@@ -631,9 +645,22 @@ static int svc_proc(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64
         c->ctid = a0;
         G_RET(c) = (uint64_t)cpu_tid(c);
         break;
-    case 97:
-    // unshare / setns -> ok (no real ns)
-    case 268: G_RET(c) = 0; break;
+    case 97: {
+        // unshare(flags): no real namespaces here, but honour Linux's flag validation so a probe of an
+        // unknown flag (e.g. 0xdeadbeef) fails EINVAL instead of a fake success that misleads isolation setup.
+        unsigned uf = (unsigned)a0;
+        const unsigned UNSHARE_OK = 0x80u /*NEWTIME*/ | 0x200u /*FS*/ | 0x400u /*FILES*/ | 0x20000u /*NEWNS*/ |
+                                    0x40000u /*SYSVSEM*/ | 0x2000000u /*NEWCGROUP*/ | 0x4000000u /*NEWUTS*/ |
+                                    0x8000000u /*NEWIPC*/ | 0x10000000u /*NEWUSER*/ | 0x20000000u /*NEWPID*/ |
+                                    0x40000000u /*NEWNET*/;
+        G_RET(c) = (uf & ~UNSHARE_OK) ? (uint64_t)(int64_t)(-EINVAL) : 0;
+        break;
+    }
+    // setns(fd, nstype): no real namespaces, but a negative/invalid fd must fail EBADF (Linux copies the ns fd
+    // first). Fake success on setns(-1, ...) would let isolation setup proceed on a false premise.
+    case 268:
+        G_RET(c) = ((int)a0 < 0) ? (uint64_t)(int64_t)(-EBADF) : 0;
+        break;
     // futex
     case 98: // futex(uaddr, op, val, timeout|nr_wake2=a3, uaddr2=a4, val3=a5); a3 is a timespec* for WAIT
         // ops and a wake count for WAKE_OP -- pass it both ways, the op selects the interpretation.
@@ -998,19 +1025,28 @@ static int svc_proc(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64
     }
     case 148: {
         // getresuid(r,e,s) -- report the overlay so a runtime drop is observed (apt verifies all three).
+        // Linux faults the whole call if any output pointer is NULL/unwritable (EFAULT), writing none.
         cred_init();
-        if (a0) *(uint32_t *)a0 = (uint32_t)g_ruid;
-        if (a1) *(uint32_t *)a1 = (uint32_t)g_euid;
-        if (a2) *(uint32_t *)a2 = (uint32_t)g_suid;
+        if (!a0 || !a1 || !a2 || guest_bad_ptr(a0, 4) || guest_bad_ptr(a1, 4) || guest_bad_ptr(a2, 4)) {
+            G_RET(c) = (uint64_t)(-EFAULT);
+            break;
+        }
+        *(uint32_t *)a0 = (uint32_t)g_ruid;
+        *(uint32_t *)a1 = (uint32_t)g_euid;
+        *(uint32_t *)a2 = (uint32_t)g_suid;
         G_RET(c) = 0;
         break;
     }
     case 150: {
-        // getresgid(r,e,s) -- report the overlay (see getresuid above).
+        // getresgid(r,e,s) -- report the overlay (see getresuid above). NULL/unwritable pointer -> EFAULT.
         cred_init();
-        if (a0) *(uint32_t *)a0 = (uint32_t)g_rgid;
-        if (a1) *(uint32_t *)a1 = (uint32_t)g_egid;
-        if (a2) *(uint32_t *)a2 = (uint32_t)g_sgid;
+        if (!a0 || !a1 || !a2 || guest_bad_ptr(a0, 4) || guest_bad_ptr(a1, 4) || guest_bad_ptr(a2, 4)) {
+            G_RET(c) = (uint64_t)(-EFAULT);
+            break;
+        }
+        *(uint32_t *)a0 = (uint32_t)g_rgid;
+        *(uint32_t *)a1 = (uint32_t)g_egid;
+        *(uint32_t *)a2 = (uint32_t)g_sgid;
         G_RET(c) = 0;
         break;
     }

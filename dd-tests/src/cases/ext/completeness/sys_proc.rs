@@ -17,6 +17,8 @@ pub(super) fn sys_proc() -> Group {
             sy("sched-attr", "completeness/sys_sched_attr.c"),
             sy("capget", "completeness/sys_capget.c"),
             sy("set-tid-address", "completeness/sys_set_tid_address.c"),
+            sy("unshare-setns", "completeness/sys_unshare_setns.c"),
+            sy("exec-newline-env", "completeness/exec_newline_env.c"),
         ],
     )
 }
