@@ -55,6 +55,7 @@ mod tests {
             workdir: String::new(),
             user: String::new(),
             exposed_ports: vec![],
+            labels: std::collections::HashMap::new(),
             created: 0,
             stop_signal: String::new(),
             img_volumes: vec![],

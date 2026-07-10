@@ -56,7 +56,24 @@ pub(crate) fn load_state(inner: &mut Inner, path: &str) {
                 c.arch = Some(img.arch);
                 c.rootfs = img.rootfs.clone();
             }
-            None => c.arch = Some(Guest::LinuxAarch64),
+            // No image resolves: keep the PERSISTED arch (deserialized from state.json) rather than
+            // forcing arm64 — an amd64 container whose image was removed must not silently switch engines
+            // on restart. Only fall back to the arm64 default when nothing was persisted either.
+            None => c.arch = c.arch.or(Some(Guest::LinuxAarch64)),
+        }
+        // A daemon restart loses every live process. A container persisted as running/paused/restarting has
+        // no backing process after reload, so normalize it to a terminal state — otherwise inspect reports
+        // Running=true with Pid=0 and `POST /start` becomes a 304 no-op instead of (re)starting it, and a
+        // `restarting` container stays stuck forever with no supervisor to advance it. Docker uses exit code
+        // 255 for containers still running at daemon shutdown.
+        if matches!(c.status.as_str(), "running" | "paused" | "restarting") {
+            c.status = "exited".into();
+            if c.exit_code == 0 {
+                c.exit_code = 255;
+            }
+            if c.finished_at == 0 {
+                c.finished_at = crate::util::now_secs();
+            }
         }
         inner.containers.insert(c.id.clone(), c);
     }
@@ -121,7 +138,53 @@ mod tests {
         let _ = std::fs::remove_file(&path);
     }
 
-    // No matching image at all -> the safe arm64 default (behavior unchanged for orphaned containers).
+    // "Restart State Load Overwrites Persisted Container Arch": when the image is gone the PERSISTED arch
+    // must survive (an amd64 container must not silently become arm64 and run x86 on the wrong engine).
+    #[test]
+    fn load_state_preserves_persisted_arch_when_image_absent() {
+        let path = tmp("persistarch");
+        let _ = std::fs::remove_file(&path);
+        let mut src = Inner::default();
+        src.containers.insert(
+            "c4".into(),
+            Container { id: "c4".into(), image: "gone".into(), arch: Some(Guest::LinuxX86_64), ..Default::default() },
+        );
+        save_state(&src, &path);
+        let mut dst = Inner::default(); // no images -> nothing resolves
+        load_state(&mut dst, &path);
+        assert_eq!(
+            dst.containers.get("c4").unwrap().arch,
+            Some(Guest::LinuxX86_64),
+            "persisted amd64 arch must survive a restart with the image absent"
+        );
+        let _ = std::fs::remove_file(&path);
+    }
+
+    // "Daemon Restart Reloads Running Containers Without Live Process" / "Restarting Containers Can Stay
+    // Stuck": a running/paused/restarting container has no process after reload, so it normalizes to exited.
+    #[test]
+    fn load_state_normalizes_orphaned_running_and_restarting_to_exited() {
+        let path = tmp("orphanrun");
+        let _ = std::fs::remove_file(&path);
+        let mut src = Inner::default();
+        for (id, st) in [("run1", "running"), ("pau1", "paused"), ("res1", "restarting")] {
+            src.containers.insert(
+                id.into(),
+                Container { id: id.into(), image: "x".into(), status: st.into(), ..Default::default() },
+            );
+        }
+        save_state(&src, &path);
+        let mut dst = Inner::default();
+        load_state(&mut dst, &path);
+        for id in ["run1", "pau1", "res1"] {
+            let c = dst.containers.get(id).unwrap();
+            assert_eq!(c.status, "exited", "{id} must normalize to exited (no live process after restart)");
+            assert_eq!(c.exit_code, 255, "{id} takes docker's shutdown exit code");
+        }
+        let _ = std::fs::remove_file(&path);
+    }
+
+    // No matching image at all AND no persisted arch -> the safe arm64 default (unchanged for orphans).
     #[test]
     fn load_state_defaults_arm64_when_image_absent() {
         let path = tmp("orphan");

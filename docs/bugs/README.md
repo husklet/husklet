@@ -12,8 +12,6 @@ This directory is a working inventory of suspicious behavior, bad architecture, 
 | P1 | daemon/runtime | published port bind failures do not fail container start | Medium-high | [daemon-tests-docs.md](daemon-tests-docs.md#published-port-bind-failures-do-not-fail-start) |
 | P1 | daemon/compat | inline named volume sources can escape `volumes_dir` | Medium | [daemon-tests-docs.md](daemon-tests-docs.md#inline-volume-sources-can-escape-volumes_dir) |
 | P1 | JIT/memory | 4K guest `munmap` subpage remains readable | High | [jit-and-opcodes.md](jit-and-opcodes.md#4k-guest-munmap-subpage-remains-readable) |
-| P1 | daemon/data | `docker commit` drops container writes | High | [daemon-tests-docs.md](daemon-tests-docs.md#docker-commit-drops-container-writes) |
-| P1 | daemon/data | `docker export` drops container writes | High | [daemon-tests-docs.md](daemon-tests-docs.md#docker-export-drops-container-writes) |
 | P1 | daemon/runtime | failed start leaves a spent `Live` and later fake success | High | [daemon-tests-docs.md](daemon-tests-docs.md#failed-start-leaves-a-spent-live) |
 | P1 | sentry/compat | untrusted split breaks Linux `EFAULT` compatibility | High | [gpu-display-sentry.md](gpu-display-sentry.md#untrusted-split-breaks-linux-efault-compatibility) |
 | P1 | sentry/ipc | `DDJIT_UNTRUSTED` SCM_RIGHTS + eventfd loses events | High | [completeness-and-env.md](completeness-and-env.md#ddjit_untrusted-scm_rights-eventfd-loses-events) |
@@ -29,13 +27,8 @@ This directory is a working inventory of suspicious behavior, bad architecture, 
 | P1 | syscall/fd | sentry close-on-exec does not clean virtual fds | High | [syscall-compat.md](syscall-compat.md#sentry-close-on-exec-does-not-clean-virtual-fds) |
 | P1 | daemon/cache | build-cache layer replacement is non-atomic | High | [daemon-tests-docs.md](daemon-tests-docs.md#build-cache-layer-replacement-is-non-atomic) |
 | P1 | daemon/cgroup | fractional `--cpus` loses quota precision | High | [daemon-tests-docs.md](daemon-tests-docs.md#fractional---cpus-loses-quota-precision) |
-| P1 | daemon/restart | daemon restart reloads running containers without live process | High | [daemon-tests-docs.md](daemon-tests-docs.md#daemon-restart-reloads-running-containers-without-live-process) |
 | P1 | image/tag | `docker tag` aliases do not survive discovery | High | [daemon-tests-docs.md](daemon-tests-docs.md#docker-tag-aliases-do-not-survive-discovery) |
 | P1 | daemon/logs | retained container logs are lost across daemon restart | High | [daemon-tests-docs.md](daemon-tests-docs.md#retained-container-logs-are-lost-across-daemon-restart) |
-| P1 | image/arch | committed ELF-less x86_64 images rediscover as arm64 | High | [daemon-tests-docs.md](daemon-tests-docs.md#committed-elf-less-x86_64-images-rediscover-as-arm64) |
-| P1 | image/arch | Docker save/load corrupts ELF-less Linux x86 images to arm64 | High | [daemon-tests-docs.md](daemon-tests-docs.md#docker-saveload-corrupts-elf-less-linux-x86-images-to-arm64) |
-| P1 | image/delete | forced `rmi` deletes rootfs referenced by containers | High | [daemon-tests-docs.md](daemon-tests-docs.md#forced-rmi-deletes-rootfs-referenced-by-containers) |
-| P1 | image/delete | non-forced `rmi` can delete rootfs used through alias | High | [daemon-tests-docs.md](daemon-tests-docs.md#non-forced-rmi-can-delete-rootfs-used-through-alias) |
 | P1 | image/load | `docker load` of same tag rewrites existing container rootfs | High | [daemon-tests-docs.md](daemon-tests-docs.md#docker-load-of-same-tag-rewrites-existing-container-rootfs) |
 | P1 | daemon/create | create accepts image records whose rootfs is missing | High | [daemon-tests-docs.md](daemon-tests-docs.md#create-accepts-image-records-whose-rootfs-is-missing) |
 | P1 | daemon/create | anonymous volume materialization failures are ignored | High | [daemon-tests-docs.md](daemon-tests-docs.md#anonymous-volume-materialization-failures-are-ignored) |
@@ -58,7 +51,6 @@ This directory is a working inventory of suspicious behavior, bad architecture, 
 | P2 | daemon/stats | stats stream captures a stale pid | Medium | [daemon-tests-docs.md](daemon-tests-docs.md#stats-stream-captures-a-stale-pid) |
 | P2 | daemon/events | events are live-only and lossy | High | [daemon-tests-docs.md](daemon-tests-docs.md#events-are-live-only-and-lossy) |
 | P2 | daemon/logs | `logs -f` can drop output for slow clients | Medium-high | [daemon-tests-docs.md](daemon-tests-docs.md#logs--f-can-drop-output-for-slow-clients) |
-| P2 | daemon/health | `Healthcheck: [NONE]` create override makes fake health | High | [daemon-tests-docs.md](daemon-tests-docs.md#healthcheck-none-create-override-makes-fake-health) |
 | P2 | daemon/lifecycle | stop timeout marks exited before reaper confirms death | Medium | [daemon-tests-docs.md](daemon-tests-docs.md#stop-timeout-marks-exited-before-reaper-confirms-death) |
 | P2 | daemon/config | `DDOCKERD_SOCK` startup unlinks configured path | Medium-high | [daemon-tests-docs.md](daemon-tests-docs.md#ddockerd_sock-startup-unlinks-configured-path) |
 | P2 | daemon/events | fast-exit event ordering can emit `die` before `start` | Medium | [daemon-tests-docs.md](daemon-tests-docs.md#fast-exit-event-ordering-can-emit-die-before-start) |
@@ -94,11 +86,6 @@ This directory is a working inventory of suspicious behavior, bad architecture, 
 | P2 | procfs/tty | `/proc/tty` surface is absent | High | [completeness-and-env.md](completeness-and-env.md#proctty-surface-is-absent) |
 | P2 | launch/config | path-list config still uses delimiter env strings | Medium | [completeness-and-env.md](completeness-and-env.md#typed-launch-path-lists-still-use-delimiter-env-strings) |
 | P2 | rendering/tests | GUI probe sources are outside default matrix | High | [gpu-display-sentry.md](gpu-display-sentry.md#rendering-coverage-gaps-are-silent) |
-| P2 | image/metadata | daemon save/load drops image labels | High | [daemon-tests-docs.md](daemon-tests-docs.md#daemon-saveload-drops-image-labels) |
-| P2 | image/metadata | daemon discovery drops image labels | High | [daemon-tests-docs.md](daemon-tests-docs.md#daemon-discovery-drops-image-labels) |
-| P2 | daemon/restart | restart state load overwrites persisted container arch | High | [daemon-tests-docs.md](daemon-tests-docs.md#restart-state-load-overwrites-persisted-container-arch) |
-| P1 | image/commit | Docker commit drops container user | High | [daemon-tests-docs.md](daemon-tests-docs.md#docker-commit-drops-container-user) |
-| P1 | daemon/restart | restarting containers can stay stuck after daemon restart | High | [daemon-tests-docs.md](daemon-tests-docs.md#restarting-containers-can-stay-stuck-after-daemon-restart) |
 | P2 | daemon/stats | stats JSON is internally inconsistent | High | [daemon-tests-docs.md](daemon-tests-docs.md#stats-json-is-internally-inconsistent) |
 | P1 | syscall/fd | inotify/timerfd create without flags still sets close-on-exec | High | [syscall-compat.md](syscall-compat.md#inotify_init10-and-timerfd_create-0-set-close-on-exec) |
 | P1 | syscall/timerfd | `timerfd` CLOCK_REALTIME absolute deadlines are treated as monotonic | High | [syscall-compat.md](syscall-compat.md#timerfd-clock_realtime-absolute-deadlines-are-treated-as-monotonic) |

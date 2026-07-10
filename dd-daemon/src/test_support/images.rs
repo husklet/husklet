@@ -481,3 +481,163 @@ async fn flow_image_three_tag_chain_delete_middle_first() {
     );
     assert!(image_repotags(&app).await.is_empty(), "store empty after the last tag is removed");
 }
+
+// ---- rmi ref-safety: forced rmi keeps rootfs used by a container; alias keys on rootfs --------
+#[tokio::test]
+async fn forced_rmi_untags_but_keeps_rootfs_used_by_container() {
+    let app = test_app();
+    seed_image_rootfs(&app, "busy:1", "/store/busyF/rootfs").await;
+    let r = crate::containers::containers_create(
+        State(app.clone()),
+        Query(create_q(serde_json::json!({}))),
+        create_body(serde_json::json!({"Image":"busy:1"})),
+    )
+    .await;
+    assert_eq!(r.status(), StatusCode::CREATED);
+    // forced rmi: untag succeeds, but the store dir must NOT be reported Deleted (a container uses it).
+    let forced: crate::images::RmiQ = serde_json::from_value(serde_json::json!({"force":"true"})).unwrap();
+    let r = crate::images::image_delete(State(app.clone()), Path("busy:1".into()), Query(forced)).await;
+    assert_eq!(r.status(), StatusCode::OK);
+    let arr = to_body_json(r).await;
+    let arr = arr.as_array().unwrap();
+    assert!(arr.iter().any(|x| x.get("Untagged").is_some()), "forced rmi untags: {arr:?}");
+    assert!(
+        !arr.iter().any(|x| x.get("Deleted").is_some()),
+        "forced rmi must NOT delete rootfs still used by a container: {arr:?}"
+    );
+}
+
+#[tokio::test]
+async fn nonforced_rmi_last_alias_409_when_container_uses_rootfs_under_old_tag() {
+    let app = test_app();
+    // Image tagged `old:1`; a container is created from it (c.image=old:1, c.rootfs=R).
+    seed_image_rootfs(&app, "old:1", "/store/aliasR/rootfs").await;
+    let r = crate::containers::containers_create(
+        State(app.clone()),
+        Query(create_q(serde_json::json!({}))),
+        create_body(serde_json::json!({"Image":"old:1"})),
+    )
+    .await;
+    assert_eq!(r.status(), StatusCode::CREATED);
+    // Retag to new:1 (same R) and drop the old tag from the store, so `new:1` is the last tag of R while
+    // the container still references R through the now-removed `old:1` name.
+    {
+        let mut g = app.inner.lock().await;
+        // Replace the image tag old:1 -> new:1 (same rootfs), leaving the container's c.image = "old:1".
+        for i in g.images.iter_mut() {
+            if i.name == "old:1" { i.name = "new:1".into(); }
+        }
+    }
+    // Non-forced rmi of the last tag must 409 (a container still uses that rootfs), not delete the store.
+    let r = crate::images::image_delete(State(app.clone()), Path("new:1".into()), Query(empty_q())).await;
+    assert_eq!(r.status(), StatusCode::CONFLICT, "rmi must refuse while a container uses the rootfs");
+    assert!(
+        app.inner.lock().await.images.iter().any(|i| i.name == "new:1"),
+        "the in-use image survives the refused rmi"
+    );
+}
+
+// ---- commit captures upper-layer WRITES + the container's User -------------------------------
+#[tokio::test]
+async fn commit_captures_upper_writes_and_user() {
+    let app = test_app();
+    let uniq = format!("{}-{}", std::process::id(), std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos());
+    let base = std::env::temp_dir().join(format!("dd-commit-{uniq}"));
+    let lower = base.join("lower");
+    let upper = base.join("upper");
+    std::fs::create_dir_all(&lower).unwrap();
+    std::fs::create_dir_all(&upper).unwrap();
+    // Lower image content: marker=lower. Container write in the upper: marker=upper (+ a new file).
+    std::fs::write(lower.join("marker"), b"lower\n").unwrap();
+    std::fs::write(upper.join("marker"), b"upper\n").unwrap();
+    std::fs::write(upper.join("added"), b"new\n").unwrap();
+    {
+        let mut g = app.inner.lock().await;
+        g.containers.insert("commitme0000".into(), Container {
+            id: "commitme0000".into(), image: "src:1".into(),
+            rootfs: lower.to_string_lossy().into_owned(),
+            upper: upper.to_string_lossy().into_owned(),
+            user: "1001:1002".into(), status: "exited".into(), ..Default::default()
+        });
+    }
+    let q: crate::build::CommitQ = serde_json::from_value(serde_json::json!({
+        "container": "commitme0000", "repo": "committed", "tag": "v1"
+    })).unwrap();
+    let r = crate::build::commit_container(State(app.clone()), Query(q)).await;
+    assert_eq!(r.status(), StatusCode::CREATED, "commit succeeds");
+    // The committed image records the container's User.
+    let g = app.inner.lock().await;
+    let img = g.images.iter().find(|i| i.name == "committed:v1").expect("committed image registered");
+    assert_eq!(img.user, "1001:1002", "commit preserves the container User");
+    // The committed rootfs reflects the UPPER writes, not the stale lower content.
+    let marker = std::fs::read_to_string(std::path::Path::new(&img.rootfs).join("marker")).unwrap();
+    assert_eq!(marker, "upper\n", "commit captures the container's writable-layer writes");
+    assert!(std::path::Path::new(&img.rootfs).join("added").exists(), "commit captures new files");
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+// ---- discovery restores sidecar labels + arch ------------------------------------------------
+#[tokio::test]
+async fn discover_images_restores_labels_and_arch_from_sidecar() {
+    let app = test_app();
+    let dir = std::path::Path::new(&app.images_dir).join("scratchx86");
+    std::fs::create_dir_all(dir.join("rootfs")).unwrap();
+    std::fs::write(dir.join("dd-image.json"), serde_json::json!({
+        "name": "scratchx86:latest", "arch": "x86_64", "os": "linux",
+        "labels": {"com.example.k": "v"}
+    }).to_string()).unwrap();
+    let imgs = crate::util::discover_images(&app.images_dir);
+    let img = imgs.iter().find(|i| i.name == "scratchx86:latest").expect("discovered");
+    assert_eq!(img.labels.get("com.example.k").map(String::as_str), Some("v"), "sidecar labels restored");
+    assert_eq!(img.arch, ddjit::Guest::LinuxX86_64, "sidecar arch restored (not arm64 fallback)");
+}
+
+// ---- healthcheck NONE override disables the probe --------------------------------------------
+#[tokio::test]
+async fn create_healthcheck_none_disables_probe() {
+    let app = test_app();
+    seed_image_rootfs(&app, "alpine", "/store/alpine-hc").await;
+    let q: crate::containers::CreateQ = serde_json::from_value(serde_json::json!({})).unwrap();
+    let body = create_body(serde_json::json!({
+        "Image": "alpine", "Healthcheck": {"Test": ["NONE"]}
+    }));
+    let r = crate::containers::containers_create(State(app.clone()), Query(q), body).await;
+    assert_eq!(r.status(), StatusCode::CREATED);
+    let g = app.inner.lock().await;
+    let c = g.containers.values().next().unwrap();
+    assert!(c.healthcheck.is_none(), "Test=[NONE] must disable the healthcheck (no fake health monitor)");
+}
+
+// ---- export merges the writable upper layer (captures container writes) -----------------------
+#[tokio::test]
+async fn export_includes_upper_layer_writes() {
+    let app = test_app();
+    let uniq = format!("{}-{}", std::process::id(), std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos());
+    let base = std::env::temp_dir().join(format!("dd-export-{uniq}"));
+    let lower = base.join("lower");
+    let upper = base.join("upper");
+    std::fs::create_dir_all(&lower).unwrap();
+    std::fs::create_dir_all(&upper).unwrap();
+    std::fs::write(lower.join("base.txt"), b"lower\n").unwrap();
+    std::fs::write(upper.join("written.txt"), b"upper\n").unwrap();
+    {
+        let mut g = app.inner.lock().await;
+        g.containers.insert("exportme0000".into(), Container {
+            id: "exportme0000".into(), image: "x".into(),
+            rootfs: lower.to_string_lossy().into_owned(),
+            upper: upper.to_string_lossy().into_owned(),
+            status: "exited".into(), ..Default::default()
+        });
+    }
+    let resp = crate::containers::containers_export(State(app.clone()), Path("exportme0000".into())).await;
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+    // The tar stream must include BOTH the lower base file AND the container's upper-layer write.
+    let hay = body.as_ref();
+    let contains = |needle: &[u8]| hay.windows(needle.len()).any(|w| w == needle);
+    assert!(contains(b"base.txt"), "export includes the lower rootfs");
+    assert!(contains(b"written.txt"), "export must include the container's writable-layer write");
+    let _ = std::fs::remove_dir_all(&base);
+}

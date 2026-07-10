@@ -29,6 +29,7 @@ pub(crate) async fn image_load(State(a): State<App>, body: axum::body::Bytes) ->
         workdir: loaded.workdir,
         user: loaded.user,
         exposed_ports: loaded.exposed_ports,
+        labels: loaded.labels,
         stop_signal: loaded.stop_signal,
         img_volumes: loaded.img_volumes,
         healthcheck,

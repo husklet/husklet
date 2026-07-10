@@ -298,7 +298,13 @@ pub(crate) async fn containers_create(
         .filter(|s| !s.is_empty())
         .unwrap_or_else(|| img.stop_signal.clone());
     let stop_timeout = body.stop_timeout.unwrap_or(0).max(0);
-    let healthcheck = body.healthcheck.or_else(|| img.healthcheck.clone());
+    // Resolve the healthcheck (create-body override else the image's), but DISABLE it when the effective
+    // Test is `["NONE"]` or empty — docker's `--no-healthcheck` / `Healthcheck.Test=["NONE"]` turns the
+    // probe OFF. Storing it as `Some` made spawn start a monitor that reported fake "healthy" state.
+    let healthcheck = body
+        .healthcheck
+        .or_else(|| img.healthcheck.clone())
+        .filter(|h| !matches!(h.test.first().map(String::as_str), Some("NONE") | None));
     // Names of anon volumes materialized above — kept for rollback if the durable save fails below.
     let anon_names = anon_volumes.clone();
     let c = Container {

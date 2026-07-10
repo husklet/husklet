@@ -46,6 +46,7 @@ impl Store {
             workdir: String::new(),
             user: String::new(),
             exposed_ports: Vec::new(),
+            labels: std::collections::HashMap::new(),
             stop_signal: String::new(),
             img_volumes: Vec::new(),
             healthcheck: None,

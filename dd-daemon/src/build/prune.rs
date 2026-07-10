@@ -74,7 +74,7 @@ pub(crate) async fn commit_container(State(a): State<App>, Query(q): Query<Commi
         q.pause.as_deref(),
         Some("0") | Some("false") | Some("False")
     );
-    let (rootfs, cmd, entrypoint, env, workdir, labels, arch, pause_pid) = {
+    let (rootfs, upper, user, cmd, entrypoint, env, workdir, labels, arch, pause_pid) = {
         let g = a.inner.lock().await;
         let Some(full) = resolve_cid(&g, &cid) else {
             return no_such(&cid);
@@ -99,6 +99,8 @@ pub(crate) async fn commit_container(State(a): State<App>, Query(q): Query<Commi
             .flatten();
         (
             c.rootfs.clone(),
+            c.upper.clone(),
+            c.user.clone(),
             c.cmd.clone(),
             entrypoint,
             c.env.clone(),
@@ -182,6 +184,18 @@ pub(crate) async fn commit_container(State(a): State<App>, Query(q): Query<Commi
         )
             .into_response();
     }
+    // Overlay the container's writable UPPER layer on top of the copied lower rootfs so the committed
+    // image captures the container's file WRITES (docker commits the container filesystem, not the base
+    // image). Without this, commit silently produced an image with stale lower-layer content. `cp -a
+    // upper/. new_rootfs/` merges additions/modifications (upper wins); linux containers only (darwin has
+    // no upper). Deletions modeled as overlay whiteouts aren't replayed — a best-effort merge of writes.
+    if !upper.is_empty() && std::path::Path::new(&upper).is_dir() {
+        let _ = std::process::Command::new("cp")
+            .arg("-a")
+            .arg(format!("{upper}/."))
+            .arg(&new_rootfs)
+            .status();
+    }
     // A content-ish id (deterministic per source + time so repeated commits get distinct ids).
     let id = {
         let manifest = format!(
@@ -197,8 +211,12 @@ pub(crate) async fn commit_container(State(a): State<App>, Query(q): Query<Commi
             fake_id(&manifest)
         }
     };
-    // Persist a dd-image.json so the image survives a daemon restart (discover_images reads it).
-    let mut dd = json!({"name": key, "cmd": cmd, "entrypoint": entrypoint, "env": env, "workdir": workdir, "labels": labels});
+    // Persist a dd-image.json so the image survives a daemon restart (discover_images reads it). Include
+    // the effective `user` (Config.User) and the guest `arch`/`os` so a committed ELF-less image keeps its
+    // default runtime user and doesn't get relabeled to arm64 by discovery's ELF-sniffing fallback.
+    let mut dd = json!({"name": key, "cmd": cmd, "entrypoint": entrypoint, "env": env,
+        "workdir": workdir, "labels": labels, "user": user,
+        "arch": arch.arch(), "os": arch.os()});
     if let Some(c) = &q.comment {
         dd["comment"] = json!(c);
     }
@@ -220,6 +238,7 @@ pub(crate) async fn commit_container(State(a): State<App>, Query(q): Query<Commi
             entrypoint,
             env,
             workdir,
+            user,
             labels,
             created: now_secs(),
             ..Default::default()

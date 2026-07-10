@@ -81,10 +81,17 @@ impl Store {
         let target = self.dir_for(&name);
         self.install_dir(staging, &target)?;
         let rootfs = target.join("rootfs");
+        // Prefer the arch the manifest recorded (round-trips an ELF-less linux/amd64 exactly); else sniff
+        // the rootfs, else native arm64. Without this, a scratch/distroless amd64 image loaded back as arm64.
         let arch = if darwin {
             Arch::DarwinAarch64
         } else {
-            detect_arch(&rootfs).unwrap_or(Arch::LinuxAarch64)
+            manifest
+                .arch
+                .as_deref()
+                .and_then(|a| Arch::detect("linux", a))
+                .or_else(|| detect_arch(&rootfs))
+                .unwrap_or(Arch::LinuxAarch64)
         };
         let mut cmd = manifest.cmd.clone();
         if cmd.is_empty() {
@@ -101,6 +108,7 @@ impl Store {
             user: manifest.user.clone(),
             exposed_ports: manifest.exposed_ports.clone(),
             stop_signal: manifest.stop_signal.clone().unwrap_or_default(),
+            labels: manifest.labels.clone(),
             img_volumes: manifest.img_volumes.clone(),
             healthcheck: manifest.healthcheck.clone(),
         };
@@ -208,6 +216,14 @@ impl Store {
             user: section["User"].as_str().unwrap_or_default().to_string(),
             exposed_ports: sorted_keys("ExposedPorts"),
             stop_signal: section["StopSignal"].as_str().unwrap_or_default().to_string(),
+            labels: section["Labels"]
+                .as_object()
+                .map(|o| {
+                    o.iter()
+                        .filter_map(|(k, v)| v.as_str().map(|s| (k.clone(), s.to_string())))
+                        .collect()
+                })
+                .unwrap_or_default(),
             img_volumes: sorted_keys("Volumes"),
             healthcheck,
         };
@@ -303,6 +319,30 @@ mod tests {
             "no manifest here\n"
         );
 
+        let _ = std::fs::remove_dir_all(&src);
+        let _ = std::fs::remove_dir_all(&store_dir);
+    }
+
+    // Save/load must round-trip a linux/amd64 image's ARCH and LABELS even when the rootfs has NO
+    // sniffable ELF (scratch/distroless) — previously it fell back to arm64 and dropped labels.
+    #[test]
+    fn load_restores_arch_and_labels_from_manifest_without_elf() {
+        let src = unique_dir("arch-src");
+        let rootfs = src.join("rootfs");
+        write_file(&rootfs.join("etc/hostname"), b"scratch\n"); // no ELF anywhere
+        let mut labels = std::collections::HashMap::new();
+        labels.insert("org.example".to_string(), "yes".to_string());
+        let manifest = Manifest {
+            name: "scratch:amd64".to_string(),
+            arch: Some("x86_64".to_string()),
+            labels: labels.clone(),
+            ..Default::default()
+        };
+        let bytes = Store::new("/unused").save_archive(&rootfs, &manifest).unwrap();
+        let store_dir = unique_dir("arch-store");
+        let loaded = Store::new(store_dir.to_str().unwrap()).load_archive(&bytes).unwrap();
+        assert_eq!(loaded.arch, Arch::LinuxX86_64, "manifest arch restores amd64 (not the arm64 fallback)");
+        assert_eq!(loaded.labels.get("org.example").map(String::as_str), Some("yes"), "labels round-trip");
         let _ = std::fs::remove_dir_all(&src);
         let _ = std::fs::remove_dir_all(&store_dir);
     }

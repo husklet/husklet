@@ -52,6 +52,10 @@ pub(crate) async fn image_save(State(a): State<App>, Query(q): Query<SaveQ>) -> 
             .healthcheck
             .as_ref()
             .and_then(|h| serde_json::to_value(h).ok()),
+        // Record the linux instruction set so an ELF-less rootfs (scratch/distroless linux/amd64) restores
+        // its arch on load instead of being ELF-sniffed down to arm64. Labels carry through too.
+        arch: (img.arch.os() == "linux").then(|| img.arch.arch().to_string()),
+        labels: img.labels.clone(),
         ..Default::default()
     };
     let rootfs = std::path::PathBuf::from(&img.rootfs);

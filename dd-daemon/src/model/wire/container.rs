@@ -35,6 +35,26 @@ pub(crate) struct Ulimit {
     pub(crate) hard: i64,
 }
 
+/// Serialize `Container.arch` (an `Option<Guest>`) as the guest's stable `target()` string (e.g.
+/// `"linux_x86_64"`) in `state.json`, so the arch survives a daemon restart even when the backing image
+/// is gone. `Guest` itself has no serde derive, so this bridges it without touching the ddjit crate.
+mod arch_serde {
+    use super::Guest;
+    use serde::{Deserialize, Deserializer, Serializer};
+
+    pub(super) fn serialize<S: Serializer>(g: &Option<Guest>, s: S) -> Result<S::Ok, S::Error> {
+        match g {
+            Some(g) => s.serialize_some(g.target()),
+            None => s.serialize_none(),
+        }
+    }
+
+    pub(super) fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<Option<Guest>, D::Error> {
+        let opt = Option::<String>::deserialize(d)?;
+        Ok(opt.and_then(|t| Guest::ALL.into_iter().find(|g| g.target() == t)))
+    }
+}
+
 /// `HostConfig.LogConfig` (`--log-driver`/`--log-opt`). Metadata only — dd has a single built-in log
 /// sink — but accepted at create and round-tripped verbatim through inspect so clients diff it cleanly.
 #[derive(Clone, Default, Serialize, Deserialize)]
@@ -188,8 +208,11 @@ pub(crate) struct Container {
     pub(crate) healthcheck: Option<HealthConfig>,
     #[serde(default)]
     pub(crate) health: Option<HealthState>,
-    // Re-derived from the image at load; never serialized.
-    #[serde(skip)]
+    // The guest architecture. Re-derived from the image at load when the image is present, but ALSO
+    // persisted (as the target string) so a container whose image has since disappeared keeps its correct
+    // arch across a daemon restart instead of defaulting to arm64 (which would run x86 code on the wrong
+    // engine). See `load_state`: the persisted value is the fallback when no image resolves.
+    #[serde(default, with = "arch_serde")]
     pub(crate) arch: Option<Guest>,
     // `docker exec` only: overrides the id-derived DD_NETNS loopback key so the exec'd process SHARES the
     // TARGET container's 127.0.0.1 address space instead of getting its own isolated loopback. Set to the

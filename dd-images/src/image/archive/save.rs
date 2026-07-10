@@ -93,6 +93,8 @@ mod tests {
             user: "1000".to_string(),
             exposed_ports: vec!["8080/tcp".to_string()],
             os: None,
+            arch: None,
+            labels: std::collections::HashMap::new(),
             stop_signal: Some("SIGINT".to_string()),
             img_volumes: vec!["/data".to_string()],
             healthcheck: Some(serde_json::json!({"Test": ["CMD", "true"]})),

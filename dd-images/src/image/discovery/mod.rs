@@ -35,6 +35,8 @@ pub struct DiscoveredImage {
     pub user: String,
     /// The exposed-port keys (e.g. `"5432/tcp"`).
     pub exposed_ports: Vec<String>,
+    /// The image labels (`LABEL` / build/commit `--label`), recovered from the sidecar.
+    pub labels: std::collections::HashMap<String, String>,
     /// The rootfs mtime as unix seconds (image creation/discovery time).
     pub created: i64,
     /// The `docker stop` signal (`Config.StopSignal`); empty ⇒ SIGTERM.
@@ -141,6 +143,16 @@ pub fn discover_images(images_dir: &str) -> Vec<DiscoveredImage> {
         // signal and anon volumes / healthcheck survive a daemon restart.
         let stop_signal = meta_str(&meta, "stop_signal");
         let img_volumes = arr("img_volumes");
+        // Image labels from the sidecar (a `{"k":"v"}` object) so they survive a daemon restart/discovery.
+        let labels: std::collections::HashMap<String, String> = meta
+            .as_ref()
+            .and_then(|m| m["labels"].as_object())
+            .map(|o| {
+                o.iter()
+                    .filter_map(|(k, v)| v.as_str().map(|s| (k.clone(), s.to_string())))
+                    .collect()
+            })
+            .unwrap_or_default();
         let healthcheck = meta
             .as_ref()
             .map(|m| m["healthcheck"].clone())
@@ -155,6 +167,7 @@ pub fn discover_images(images_dir: &str) -> Vec<DiscoveredImage> {
             workdir,
             user,
             exposed_ports,
+            labels,
             created,
             stop_signal,
             img_volumes,
