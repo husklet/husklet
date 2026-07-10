@@ -144,7 +144,7 @@ impl CocoaPresenter {
 }
 
 impl Presenter for CocoaPresenter {
-    fn present(&mut self, surf: &SurfaceBuffer) {
+    fn present(&mut self, surf: &SurfaceBuffer) -> bool {
         let rgba = surf.to_rgba();
         let (w, h) = (surf.width, surf.height);
 
@@ -194,6 +194,7 @@ impl Presenter for CocoaPresenter {
             win.size = (w, h);
         }
         unsafe { win.image_view.setImage(Some(&image)) };
+        true
     }
 
     fn surface_size(&self, sid: u32) -> Option<(i32, i32)> {
@@ -569,9 +570,9 @@ fragment float4 fmain(VOut in [[stage_in]], texture2d<float> src [[texture(0)]],
 }
 
 impl Presenter for MetalPresenter {
-    fn present(&mut self, surf: &SurfaceBuffer) {
+    fn present(&mut self, surf: &SurfaceBuffer) -> bool {
         if surf.width <= 0 || surf.height <= 0 || surf.texture_width <= 0 || surf.texture_height <= 0 {
-            return;
+            return false;
         }
         let (w, h) = (surf.width as u32, surf.height as u32);
         let (tex_w, tex_h) = (surf.texture_width as u32, surf.texture_height as u32);
@@ -582,7 +583,7 @@ impl Presenter for MetalPresenter {
                 let surface = unsafe { crate::metal::resolve_iosurface(id) };
                 if surface.is_null() {
                     eprintln!("dd-display[metal]: IOSurface id {id} not found; skipping frame");
-                    return;
+                    return false;
                 }
                 let tex = self.ctx.texture_from_iosurface(surface, tex_w, tex_h);
                 if surf.gpu_render && std::env::var_os("DD_DISPLAY_TEST_TRIANGLE").is_some() {
@@ -648,7 +649,7 @@ impl Presenter for MetalPresenter {
                 win,
                 None,
             );
-            return;
+            return false;
         };
         let dst = unsafe { drawable.texture() };
         let drawable_texture_size = Some((dst.width() as u64, dst.height() as u64));
@@ -746,6 +747,7 @@ impl Presenter for MetalPresenter {
                 }
             }
         }
+        true
     }
 
     fn frame_count(&self) -> u32 {

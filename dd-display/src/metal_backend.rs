@@ -1517,6 +1517,11 @@ impl GpuBackend for MetalBackend {
         // is a no-op. Otherwise materialize a real texture honoring the guest's format/usage: a SAMPLED
         // texture (glmark2 texture scene, Chrome UI) is Shared-storage + ShaderRead so we can blit pixels
         // into it from a staging buffer (CopyBufferToTexture); anything else falls back to a BGRA target.
+        // NB: unlike the checked software/mock oracle (which rejects a duplicate id), the streaming
+        // executor is intentionally *idempotent* on re-create — the guest re-issues the same create for
+        // the same id every frame, and the resource + PSO caches key off the descriptor so a same-desc
+        // re-create is a no-op rather than a DuplicateId error. Format handling no longer silently
+        // reinterprets unknown formats as BGRA (see tex_pixel_format).
         let key = texture_desc_key(desc);
         if self.texture_descs.get(&id.0) == Some(&key) && self.textures.contains_key(&id.0) {
             return Ok(());

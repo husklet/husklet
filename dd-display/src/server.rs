@@ -1492,6 +1492,10 @@ impl<P: Presenter> Server<P> {
         };
 
         let mut did_present = false;
+        // Whether a buffer was actually handed to the presenter this commit. If one was but the present
+        // FAILED, we must not release the buffer or fire frame callbacks (that would advance the client's
+        // frame pacing for a frame that never reached the screen).
+        let mut present_attempted = false;
         if let Some(bid) = root_bid {
             if let Some(mut sb) = self.extract(root, bid, &title) {
                 if sb.iosurface_id.is_none() && !sb.bgra.is_empty() {
@@ -1507,10 +1511,13 @@ impl<P: Presenter> Server<P> {
                         }
                     }
                 }
-                self.present.present(&sb);
-                did_present = true;
+                present_attempted = true;
+                did_present = self.present.present(&sb);
             }
         }
+        // Advance frame pacing (release buffers + fire frame callbacks) unless a present was attempted
+        // and failed. A bufferless commit (nothing to present) still advances, as before.
+        let advance = !present_attempted || did_present;
 
         // Release freshly-committed buffers + fire frame callbacks for the root and every descendant, then
         // answer presentation feedback (the frame is on-screen by the time Presenter::present returns — the
@@ -1519,8 +1526,12 @@ impl<P: Presenter> Server<P> {
         let mut subtree = vec![root];
         subtree.extend(self.collect_composite_children(root).into_iter().map(|(c, _, _)| c));
         for s in subtree {
+            // On a failed present, leave pending_release / pending_frame in place so the buffer is held
+            // and the callbacks fire on a later successful present instead of now.
             let (rel, frames) = match self.objs.get_mut(&s) {
-                Some(Obj::Surface(su)) => (su.pending_release.take(), std::mem::take(&mut su.pending_frame)),
+                Some(Obj::Surface(su)) if advance => {
+                    (su.pending_release.take(), std::mem::take(&mut su.pending_frame))
+                }
                 _ => (None, Vec::new()),
             };
             if let Some(bid) = rel {
@@ -2376,7 +2387,11 @@ target_surface={} crop=({},{} {}x{}) backing={}x{} mapped_src=({},{}..{},{}) map
                         );
                     }
                     None => {
-                        self.objs.insert(buffer_id, Obj::Other); // no dd IOSurface tag → unusable
+                        // No dd IOSurface tag (e.g. the advertised LINEAR modifier): the compositor
+                        // cannot back this buffer. create_immed has no `failed` event, so report the
+                        // spec's INVALID_FORMAT protocol error rather than handing back an inert object
+                        // the client would attach and get missing frames from.
+                        self.post_error(m.object, 4 /* invalid_format */, "unsupported dmabuf modifier (only dd IOSurface-tagged buffers are usable)");
                     }
                 }
             }
@@ -3949,6 +3964,67 @@ mod tests {
         assert!(msgs.iter().any(|(o, op, _)| *o == 101 && *op == 0), "ack releases the held present, got {msgs:?}");
     }
 
+    struct FailPresenter;
+    impl Presenter for FailPresenter {
+        fn present(&mut self, _surf: &SurfaceBuffer) -> bool {
+            false // simulate an IOSurface/drawable acquisition failure
+        }
+    }
+
+    #[test]
+    fn failed_present_holds_buffer_release_and_frame_callbacks() {
+        let mut sv = [0i32; 2];
+        assert_eq!(unsafe { libc::socketpair(libc::AF_UNIX, libc::SOCK_STREAM, 0, sv.as_mut_ptr()) }, 0);
+        unsafe {
+            let fl = libc::fcntl(sv[0], libc::F_GETFL);
+            libc::fcntl(sv[0], libc::F_SETFL, fl | libc::O_NONBLOCK);
+        }
+        let mut server = Server::new(sv[1], FailPresenter);
+        // shm pool + buffer 3
+        let data = vec![0u8; 64];
+        let fd = crate::keymap::anon_fd_with(&data).expect("anon fd");
+        let ptr = unsafe { mmap_ro(fd, data.len()) };
+        server.objs.insert(2, Obj::ShmPool { fd, ptr, size: data.len(), buffers: 1, zombie: false });
+        server.objs.insert(3, Obj::Buffer { pool: 2, offset: 0, width: 2, height: 2, stride: 8, format: FMT_ARGB8888 });
+        let mut s = Surface::default();
+        s.current_buffer = Some(3);
+        s.pending_release = Some(3);
+        s.pending_frame = vec![101];
+        server.objs.insert(10, Obj::Surface(s));
+        // present fails → the frame did not reach the screen, so the buffer is NOT released and the
+        // frame callback does NOT fire (frame pacing must not advance).
+        server.present_root(10);
+        server.conn.flush().ok();
+        let mut buf = [0u8; 4096];
+        let n = unsafe { libc::read(sv[0], buf.as_mut_ptr() as *mut _, buf.len()) };
+        let got = if n > 0 { &buf[..n as usize] } else { &[][..] };
+        // decode messages
+        let mut released = false;
+        let mut done = false;
+        let mut pos = 0;
+        while pos + 8 <= got.len() {
+            let object = u32::from_ne_bytes(got[pos..pos + 4].try_into().unwrap());
+            let word = u32::from_ne_bytes(got[pos + 4..pos + 8].try_into().unwrap());
+            let size = (word >> 16) as usize;
+            let opcode = (word & 0xffff) as u16;
+            if size < 8 || pos + size > got.len() { break; }
+            if object == 3 && opcode == 0 { released = true; } // wl_buffer.release
+            if object == 101 && opcode == 0 { done = true; } // wl_callback.done
+            pos += size;
+        }
+        assert!(!released, "failed present must not release the buffer");
+        assert!(!done, "failed present must not fire the frame callback");
+        // state is retained for a later successful present
+        if let Some(Obj::Surface(su)) = server.objs.get(&10) {
+            assert_eq!(su.pending_release, Some(3));
+            assert_eq!(su.pending_frame, vec![101]);
+        } else {
+            panic!("surface gone");
+        }
+        drop(server);
+        unsafe { libc::close(sv[0]); libc::close(sv[1]); }
+    }
+
     #[test]
     fn disconnect_releases_shm_pool_mappings() {
         // A client that disconnects without destroying its pools must not leak the mappings; the
@@ -3965,6 +4041,20 @@ mod tests {
         assert!(server.release_all_pools() == 0, "idempotent: nothing left to release");
         assert!(!server.objs.values().any(|o| matches!(o, Obj::ShmPool { .. })));
         teardown(server, sv);
+    }
+
+    #[test]
+    fn dmabuf_untagged_create_immed_is_protocol_error() {
+        // A dmabuf buffer created without the dd IOSurface tag (e.g. the advertised LINEAR modifier)
+        // cannot be presented — create_immed must post a protocol error, not hand back an inert object.
+        let mut h = Harness::new();
+        h.server.objs.insert(50, Obj::DmabufParams { iosurface_id: None, stride: 0, gpu_render: false });
+        // create_immed(buffer_id=60, w=4, h=4, format=0x3432_5241, flags=0)
+        h.req(50, 3, body().u32(60).i32(4).i32(4).u32(0x3432_5241).u32(0));
+        let msgs = h.drain();
+        assert!(has_display_error(&msgs), "untagged dmabuf create_immed must error, got {msgs:?}");
+        // and it must NOT create an inert buffer object under that id.
+        assert!(h.server.objs.get(&60).is_none(), "no inert buffer object created");
     }
 
     #[test]

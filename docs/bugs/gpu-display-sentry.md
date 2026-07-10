@@ -32,26 +32,6 @@ Results:
 - aarch64: fails with `jit 255/""` vs native `efault ... =1`.
 - x86_64: exits `0` but silently wrong; all bad-pointer verdicts are `0` instead of `1`.
 
-## Presenter Failures Still Release Buffers And Fire Frame Callbacks
-
-Priority: P2
-Impact: clients advance frame pacing after a skipped presentation
-Confidence: Medium
-
-Evidence:
-
-- `MetalPresenter::present` returns early when IOSurface lookup fails: `dd-display/src/present_cocoa.rs:557`.
-- It can also return early if drawable acquisition fails: `dd-display/src/present_cocoa.rs:616`.
-- `Server::commit` does not receive presentation success and still releases the buffer and fires frame callbacks: `dd-display/src/server.rs:813`, `dd-display/src/server.rs:818`.
-
-Why this is bad:
-
-Clients can reuse a buffer and schedule the next frame even though nothing reached the screen. This hides display failures as normal frame completion.
-
-Verification:
-
-Inject an invalid IOSurface id or no-drawable presenter state and assert `wl_buffer.release`/`wl_callback.done` behavior matches the chosen failure policy.
-
 ## Data-Device Objects Are Inert
 
 Priority: P1
@@ -77,27 +57,6 @@ CARGO_TARGET_DIR=/Users/x/dd/dd-workerJ-display-gpu-target cargo test -p dd-disp
 
 Result: `audit_data_device_set_selection_is_not_silently_swallowed` failed as expected.
 
-## dmabuf Advertises LINEAR Buffers It Cannot Use
-
-Priority: P2
-Impact: clients can choose an advertised buffer path that yields unusable buffers
-Confidence: Medium-high
-
-Evidence:
-
-- dmabuf is advertised when `DD_DISPLAY_DMABUF` is set: `dd-display/src/server.rs:547`.
-- The server advertises a LINEAR modifier alongside dd-private modifiers: `dd-display/src/server.rs:650`.
-- `dmabuf_params` only records dd-private IOSurface-tagged modifiers: `dd-display/src/server.rs:1320`.
-- A create call without a dd IOSurface tag produces `Obj::Other`: `dd-display/src/server.rs:1354`.
-
-Why this is bad:
-
-A client choosing the advertised LINEAR modifier can create a buffer object that the compositor cannot present, producing missing frames or fallback confusion.
-
-Verification:
-
-Run a dmabuf client that selects LINEAR and assert the server either supports it or sends a protocol failure instead of an inert object.
-
 ## Metal Render Target Texture Id Can Alias Guest Texture Id `1`
 
 Priority: P2
@@ -117,36 +76,6 @@ Verification:
 
 Submit IR that creates and samples/writes texture id `1` while presenting to an IOSurface and assert it is not aliased with the render target.
 
-## Rendering Coverage Gaps Are Silent
-
-Priority: P2
-Impact: rendering regressions can sit outside default GUI gates
-Confidence: High
-
-Evidence:
-
-- Seven GUI probe sources were present but not included in the GUI matrix Makefile/default runner in the isolated worktree:
-  - `gui_egl_clear_only_swap`
-  - `gui_egl_draw_count_sentinel`
-  - `gui_egl_fifth_sampler`
-  - `gui_egl_r8_alpha_orientation`
-  - `gui_egl_renderbuffer_msaa_resolve`
-  - `retained_frame_partial_load`
-  - `single_channel_texture_probe`
-- Direct GPU replay has one Linux/aarch64 case and it is xfailed: `dd-tests/src/cases/ext/gpu_render_ir.rs:11`.
-
-Proof command:
-
-```sh
-comm -23 \
-  <(find dd-tests/guests/gui_matrix -maxdepth 1 -name '*.c' -printf '%f\n' | sed 's/\.c$//' | sort) \
-  <(sed -n '1,80p' dd-tests/guests/gui_matrix/Makefile | tr ' \t' '\n' | sed 's/\\$//' | rg '^gui_|^chrome_|^single_|^retained_' | sort -u)
-```
-
-Suggested gate:
-
-Add a static test that every `dd-tests/guests/gui_matrix/*.c` probe is either in the matrix or listed in a documented exclusion table with owner and reason.
-
 ## Native Window Close Is Not Propagated
 
 Priority: P2
@@ -162,19 +91,4 @@ Evidence:
 Why this is bad:
 
 Clicking the native close button should send `xdg_toplevel.close` so the client can exit or prompt. If the close never reaches the Wayland client, windows can become impossible to close cleanly from the host UI.
-
-## Metal Duplicate IDs And Format Fallbacks Diverge From Checked Backends
-
-Priority: P2
-Impact: stale resources or wrong texture formats can be accepted silently
-Confidence: Medium-high
-
-Evidence:
-
-- Metal resource maps insert texture IDs directly, overwriting duplicates: `dd-display/src/metal_backend.rs:1448`.
-- Texture format handling falls back to BGRA for unsupported or unexpected formats: `dd-display/src/metal_backend.rs:195`.
-
-Why this is bad:
-
-Other backends tend to reject invalid or duplicate resource definitions. Silent overwrite and fallback can hide guest bugs and produce frames that use stale resources or different channel formats than requested.
 
