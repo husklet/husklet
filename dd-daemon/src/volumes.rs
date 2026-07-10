@@ -23,6 +23,46 @@ pub(crate) fn volume_in_use(g: &Inner, name: &str, mp: Option<&str>) -> bool {
     })
 }
 
+/// A fresh, UNIQUE name for an anonymous `docker volume create` (empty `Name`). Docker mints a random
+/// id per call; dd uses `vol_<12 hex>`. The seed MUST be unique per call: an earlier version seeded
+/// `fake_id("v")` — a pure hash of a constant — so every unnamed create produced the SAME name, and the
+/// second call returned the FIRST volume, silently sharing one backing dir across unrelated containers.
+fn new_unnamed_volume_name() -> String {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static SEQ: AtomicU64 = AtomicU64::new(0);
+    let seq = SEQ.fetch_add(1, Ordering::Relaxed);
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    format!("vol_{}", &fake_id(&format!("v{nanos}-{seq}"))[..12])
+}
+
+/// Outcome of a `DELETE /volumes/{name}` request, decided against daemon state. Existence is checked
+/// BEFORE the in-use scan: a nonexistent volume is `NotFound` even if some container's bind string
+/// happens to mention its name (previously that produced a spurious `409 volume is in use`).
+#[derive(Debug, PartialEq)]
+pub(crate) enum VolDeleteVerdict {
+    NotFound,
+    InUse,
+    Remove(String), // mountpoint to unlink
+}
+
+pub(crate) fn volume_delete_verdict(g: &Inner, name: &str) -> VolDeleteVerdict {
+    let Some(mp) = g
+        .volumes
+        .iter()
+        .find(|v| v.name == name)
+        .map(|v| v.mountpoint.clone())
+    else {
+        return VolDeleteVerdict::NotFound;
+    };
+    if volume_in_use(g, name, Some(&mp)) {
+        return VolDeleteVerdict::InUse;
+    }
+    VolDeleteVerdict::Remove(mp)
+}
+
 pub(crate) fn vol_json(v: &Vol) -> crate::api::VolumeJson {
     let driver = if v.driver.is_empty() {
         "local".to_string()
@@ -67,7 +107,7 @@ pub(crate) async fn volumes_create(
     let name = body
         .name
         .filter(|n| !n.is_empty())
-        .unwrap_or_else(|| format!("vol_{}", fake_id("v")[..12].to_string()));
+        .unwrap_or_else(new_unnamed_volume_name);
     if !name
         .chars()
         .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-' || c == '.')
@@ -117,30 +157,24 @@ pub(crate) async fn volume_inspect(State(a): State<App>, Path(name): Path<String
 
 pub(crate) async fn volume_delete(State(a): State<App>, Path(name): Path<String>) -> Response {
     let mut g = a.inner.lock().await;
-    let mountpoint = g
-        .volumes
-        .iter()
-        .find(|v| v.name == name)
-        .map(|v| v.mountpoint.clone());
-    let in_use = volume_in_use(&g, &name, mountpoint.as_deref());
-    if in_use {
-        return conflict(format!("remove {name}: volume is in use"));
-    }
-    let before = g.volumes.len();
-    g.volumes.retain(|v| v.name != name);
-    if g.volumes.len() != before {
-        let _ = std::fs::remove_dir_all(PathBuf::from(&a.volumes_dir).join(&name));
-        save_state(&g, &a.state_path);
-        crate::events::emit_event(
-            &a.events,
-            "volume",
-            "destroy",
-            &name,
-            json!({"driver": "local"}),
-        );
-        StatusCode::NO_CONTENT.into_response()
-    } else {
-        no_such_volume(&name)
+    // Existence is checked BEFORE the in-use scan: a missing volume is 404 even if a container's bind
+    // string mentions its name — otherwise cleanup tools see a spurious `409 volume is in use`.
+    match volume_delete_verdict(&g, &name) {
+        VolDeleteVerdict::NotFound => no_such_volume(&name),
+        VolDeleteVerdict::InUse => conflict(format!("remove {name}: volume is in use")),
+        VolDeleteVerdict::Remove(_) => {
+            g.volumes.retain(|v| v.name != name);
+            let _ = std::fs::remove_dir_all(PathBuf::from(&a.volumes_dir).join(&name));
+            save_state(&g, &a.state_path);
+            crate::events::emit_event(
+                &a.events,
+                "volume",
+                "destroy",
+                &name,
+                json!({"driver": "local"}),
+            );
+            StatusCode::NO_CONTENT.into_response()
+        }
     }
 }
 
@@ -271,5 +305,54 @@ mod tests {
             labels: Default::default(),
         };
         assert_eq!(vol_json(&v).driver, "nfs");
+    }
+
+    fn vol(name: &str) -> Vol {
+        Vol {
+            name: name.into(),
+            mountpoint: format!("/vol/{name}"),
+            created_at: 0,
+            driver: "local".into(),
+            options: Default::default(),
+            labels: Default::default(),
+        }
+    }
+
+    // "Unnamed Volume Creation Reuses One Deterministic Name" (P1): each anonymous create must mint a
+    // distinct name, else unrelated containers silently share one backing dir.
+    #[test]
+    fn unnamed_volume_create_allocates_unique_names() {
+        let a = new_unnamed_volume_name();
+        let b = new_unnamed_volume_name();
+        assert_ne!(a, b, "two anonymous volume creates must not share a name");
+        assert!(a.starts_with("vol_") && b.starts_with("vol_"));
+    }
+
+    // "Volume Delete Checks Binds Before Existence" (P2): a missing volume is NotFound even when a
+    // container's bind string mentions its name — not a spurious InUse (409).
+    #[test]
+    fn volume_delete_missing_name_is_not_found_even_if_bind_mentions_it() {
+        let mut c = ctr();
+        c.binds = vec!["ghost:/data".into()];
+        let g = inner_with(c);
+        assert_eq!(
+            volume_delete_verdict(&g, "ghost"),
+            VolDeleteVerdict::NotFound,
+            "deleting a nonexistent volume must be NotFound, not InUse"
+        );
+    }
+
+    #[test]
+    fn volume_delete_verdict_reports_in_use_and_removable() {
+        let mut c = ctr();
+        c.binds = vec!["data:/data".into()];
+        let mut g = inner_with(c);
+        g.volumes.push(vol("data"));
+        g.volumes.push(vol("free"));
+        assert_eq!(volume_delete_verdict(&g, "data"), VolDeleteVerdict::InUse);
+        assert_eq!(
+            volume_delete_verdict(&g, "free"),
+            VolDeleteVerdict::Remove("/vol/free".into())
+        );
     }
 }

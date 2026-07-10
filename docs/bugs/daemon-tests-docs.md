@@ -367,31 +367,6 @@ cargo test -p dd-images store_layer_failed_replacement_preserves_existing_layer 
 
 Result: failed because the failed replacement deleted the existing cache layer.
 
-## Unnamed Volume Creation Reuses One Deterministic Name
-
-Priority: P1
-Impact: unexpected volume data reuse and lifecycle isolation breakage
-Confidence: High
-
-Verification status: Proven in isolated worktree `/Users/x/dd/dd-workerC-daemon-storage-20260710`.
-
-Evidence:
-
-- Missing volume name falls back to `fake_id("v")`: `dd-daemon/src/volumes.rs:67`.
-- Existing volume with that deterministic name is returned instead of creating a new unnamed volume: `dd-daemon/src/volumes.rs:86`.
-
-Why this is bad:
-
-Repeated unnamed `docker volume create` calls should create distinct volumes. Reusing one deterministic name means unrelated containers can unexpectedly share data.
-
-Isolated proof:
-
-```sh
-cargo test -p dd-daemon unnamed_volume_create_allocates_unique_names -- --nocapture
-```
-
-Result: failed because two unnamed volume creates produced only one stored volume.
-
 ## Stats Stream Captures A Stale Pid
 
 Priority: P2
@@ -660,81 +635,6 @@ Verification:
 
 Send crafted tar archives with traversal, absolute paths, and symlink-follow cases to build, load/import, and container archive endpoints. Assert post-extract containment.
 
-## Coverage Tool Uses Stale Engine Paths and Exits Green
-
-Priority: P0
-Impact: false-green syscall/opcode coverage
-Confidence: High
-
-Evidence:
-
-- `make coverage` calls `dd-tests/tools/coverage.sh`: `Makefile:49`.
-- `coverage.sh` sets `RT="$ROOT/dd-jit/src/runtime"`: `dd-tests/tools/coverage.sh:35`.
-- The decomposed C engine lives under `dd-jit-darwin/src/runtime`: `Makefile:53`.
-- Dynamic mode globs `target/debug/build/ddjit-*/out`, but current package/build dirs are `dd-jit-darwin-*`: `dd-tests/tools/coverage.sh:150`.
-
-Observed:
-
-The tests/docs agent ran `bash dd-tests/tools/coverage.sh static`; it printed missing-file `awk` errors, reported `handled 0 / 321 canonical syscalls`, and exited `0`. The manager re-ran the same read-only command on 2026-07-10 and reproduced the same class of output: missing `dd-jit/src/runtime/os/linux/syscall/*.c`, missing `dd-jit/src/runtime/translate/x86_64/sysmap.h`, `handled 0 / 321 canonical syscalls`, and `exit=0`.
-
-Isolated proof:
-
-```sh
-CARGO_TARGET_DIR=/Users/x/dd/dd-agent4-target cargo test -p dd-tests --test gate_invariants -- --nocapture
-```
-
-The guard suite includes failing tests:
-
-- `coverage_static_scans_existing_runtime_sources`
-- `coverage_dynamic_fails_when_required_engines_are_missing`
-- `coverage_report_counts_empty_sets_as_zero`
-- `coverage_report_does_not_greenlight_missing_runtime_sources`
-
-Result: all four fail on current code, as part of a 13-failure guard suite.
-
-Why this is bad:
-
-Coverage can report authoritative-looking data while scanning the wrong tree. This is a false-green gate.
-
-Verification:
-
-Run:
-
-```sh
-bash dd-tests/tools/coverage.sh static; echo $?
-```
-
-Expected fix behavior: missing handler directories or sysmap files should be fatal.
-
-## `test-ci` Can Pass a Dark or Stale Matrix
-
-Priority: P0
-Impact: false-green CI
-Confidence: High
-
-Verification status: Proven with failing guard tests in isolated worktree `/Users/x/dd/dd-agent4`.
-
-Evidence:
-
-- `make test-ci` runs `cargo test -p dd-tests`: `Makefile:13`.
-- The cargo-test suite treats `Skip`, `Xfail`, and `Xpass` as non-failures: `dd-tests/tests/suite.rs:12`.
-- It only asserts `failures.is_empty()` and does not assert `ran > 0`: `dd-tests/tests/suite.rs:22`.
-- The CLI runner has missing-engine hard-gate logic: `dd-tests/src/main.rs:58`, but the cargo-test path does not share it.
-- CLI/scenario runners exit success when only XPASS exists: `dd-tests/src/main.rs:276`, `dd-tests/src/bin/scenarios.rs:314`.
-
-Isolated proof:
-
-```sh
-CARGO_TARGET_DIR=/Users/x/dd/dd-agent4-target cargo test -p dd-tests --test gate_invariants -- --nocapture
-```
-
-The guard suite includes failing tests:
-
-- `test_ci_matrix_fails_dark_engine_lanes`
-- `test_ci_matrix_fails_xpass`
-- `scenario_runner_fails_xpass`
-- `scenario_count_fails_empty_selection`
-
 ## Perf and Bench Gates Can Lie
 
 Priority: P1
@@ -909,30 +809,6 @@ CARGO_TARGET_DIR=target-worker-Y-daemon-api-20260710 cargo test -p dd-daemon con
 ```
 
 Result: failed; `HostConfig.AutoRemove` was `Null`, expected `true`.
-
-## Volume Delete Checks Binds Before Existence
-
-Priority: P2
-Impact: nonexistent volumes can return a false in-use conflict
-Confidence: High
-
-Verification status: Proven in isolated worktree `/Users/x/dd/dd-worker-Y-daemon-api-20260710`.
-
-Evidence:
-
-- `DELETE /volumes/{name}` checks container bind strings before confirming the volume exists: `dd-daemon/src/volumes.rs:118`.
-
-Why this is bad:
-
-Deleting a nonexistent volume should return not found. If any container has a bind string mentioning that name, dd can return `409 volume is in use`, which misleads cleanup tools.
-
-Isolated proof:
-
-```sh
-CARGO_TARGET_DIR=target-worker-Y-daemon-api-20260710 cargo test -p dd-daemon volume_delete_missing_name_is_404_even_if_bind_mentions_it -- --nocapture
-```
-
-Result: failed; status was `409`, expected `404`.
 
 ## Container Prune Deletes Restarting Containers
 

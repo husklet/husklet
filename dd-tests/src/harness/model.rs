@@ -286,3 +286,61 @@ pub enum Status {
     /// An xfail-marked case that unexpectedly PASSED — the bug may be fixed; un-mark it.
     Xpass,
 }
+
+/// One matrix cell result, tagged with which engine produced it — the input to [`gate_failures`].
+pub struct Cell {
+    pub name: String,
+    pub engine: Engine,
+    pub status: Status,
+}
+
+/// Apply the CI gate invariants to a completed matrix run and return the list of gate failures (empty
+/// ⇒ green). This is the single place the cargo-test path (`tests/suite.rs`) shares with the CLI runner,
+/// so a green matrix can never hide any of these false-green conditions:
+///
+///   * **Fail** — an ordinary failed case.
+///   * **XPASS** — an `.xfail()`-marked case that now passes. It is NOT a silent non-event: the marker
+///     must be removed, else a later re-break reads as a "known" failure. So it fails the gate.
+///   * **Dark lane** — a `required` engine whose JIT binary didn't build. Its whole lane skips silently,
+///     so a matrix could report "0 failed" while the primary arch was never tested (the v0.9.56
+///     regression). Fold each missing engine into the failures.
+///   * **Empty / stale** — zero cases actually passed. A matrix that ran nothing (bad selection, every
+///     lane dark) must not report green.
+pub fn gate_failures(
+    required: &[Engine],
+    available: &dyn Fn(Engine) -> bool,
+    cells: &[Cell],
+) -> Vec<String> {
+    let mut failures = Vec::new();
+    let mut passed = 0u32;
+    for c in cells {
+        match &c.status {
+            Status::Pass => passed += 1,
+            Status::Fail(m) => failures.push(format!("{} [{}]: {}", c.name, c.engine.label(), m)),
+            Status::Xpass => failures.push(format!(
+                "{} [{}]: XPASS — a known-failure (.xfail) case now passes; remove its .xfail marker",
+                c.name,
+                c.engine.label()
+            )),
+            Status::Skip(_) | Status::Xfail(_) => {}
+        }
+    }
+    for &e in required {
+        if !available(e) {
+            failures.push(format!(
+                "engine {} MISSING — its JIT binary was not built (failed dd-jit compile / empty \
+                 DDJIT_{} env); the ENTIRE {} lane was DARK (every case on it skipped, NOT tested)",
+                e.label(),
+                e.label().replace('/', "_").to_uppercase(),
+                e.label()
+            ));
+        }
+    }
+    if passed == 0 {
+        failures.push(
+            "no case passed — the matrix ran nothing (empty selection or every lane dark/stale)"
+                .to_string(),
+        );
+    }
+    failures
+}

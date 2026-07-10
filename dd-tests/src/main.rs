@@ -273,5 +273,7 @@ fn main() {
         }
     }
 
-    std::process::exit(if fail > 0 { 1 } else { 0 }); // xfail/xpass don't fail the suite
+    // XPASS is a red gate: an .xfail-marked case that now passes must have its marker removed, else a
+    // later re-break silently reads as a "known" failure. (xfail alone stays green.)
+    std::process::exit(if fail > 0 || xpass > 0 { 1 } else { 0 });
 }
