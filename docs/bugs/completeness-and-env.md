@@ -196,31 +196,6 @@ Verification:
 
 Launch two containers through the typed runtime with global pcache defaults and per-container `DDJIT_NOPCACHE`, then assert no pcache file is loaded or written for the opted-out container.
 
-### `sysinfo(2)` Ignores Container Memory Cap
-
-Priority: P1
-Impact: runtimes can oversize heaps/workers under `--memory`
-Confidence: High
-
-Verification status: Proven in isolated worktree `/Users/x/dd/dd-worker-K-sparse`.
-
-Evidence:
-
-- `sysinfo.totalram` is hardcoded to 8 GiB: `dd-jit-darwin/src/runtime/os/linux/syscall/misc.c:51`.
-- cgroup `memory.max` reports `g_mem_max`: `dd-jit-darwin/src/runtime/os/linux/container/vfs.c:3351`.
-
-Why this is bad:
-
-Some runtimes size memory from `sysinfo`, while others read cgroups. Under a memory cap, those two views disagree and can cause excessive heap sizing.
-
-Isolated proof:
-
-```sh
-DD_MEM_MAX=536870912 "$E" target-slot-k/slot_k_sysinfo_memcg_static
-```
-
-Observed: `sysinfo total=8589934592 memory.max=536870912`.
-
 ### Typed Launch Path Lists Still Use Delimiter Env Strings
 
 Priority: P2
