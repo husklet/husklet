@@ -26,9 +26,7 @@ This directory is a working inventory of suspicious behavior, bad architecture, 
 | P1 | image/compat | Docker save/load format is not Docker-compatible | High | [archive-fs-compat.md](archive-fs-compat.md#docker-saveload-archive-format-is-not-docker-compatible) |
 | P1 | cp/contents | `docker cp` GET drops lower overlay entries | High | [archive-fs-compat.md](archive-fs-compat.md#docker-cp-get-drops-lower-entries-from-overlay-directories) |
 | P1 | syscall/time | periodic `timerfd` ignores earlier first deadline | High | [syscall-compat.md](syscall-compat.md#periodic-timerfd-ignores-earlier-first-deadline) |
-| P1 | syscall/poll | `pselect6`/`ppoll` ignore temporary signal masks | High | [syscall-compat.md](syscall-compat.md#pselect6-and-ppoll-ignore-temporary-signal-masks) |
 | P1 | syscall/signal | multiple `signalfd` descriptors are not independent | High | [syscall-compat.md](syscall-compat.md#multiple-signalfd-descriptors-are-not-independent) |
-| P1 | syscall/time | `clock_nanosleep(TIMER_ABSTIME)` swallows interrupts | High | [syscall-compat.md](syscall-compat.md#clock_nanosleeptimer_abstime-swallows-interrupts) |
 | P1 | syscall/eventfd | `dup(eventfd)` loses eventfd semantics | High | [syscall-compat.md](syscall-compat.md#dupeventfd-loses-eventfd-semantics) |
 | P1 | syscall/signalfd | `signalfd` update keeps stale signals and short reads consume events | High | [syscall-compat.md](syscall-compat.md#signalfd-update-keeps-stale-signals-and-short-reads-consume-events) |
 | P1 | syscall/epoll | epoll loses readiness when watched fd closes but dup remains | High | [syscall-compat.md](syscall-compat.md#epoll-loses-readiness-when-watched-fd-closes-but-dup-remains) |
@@ -75,12 +73,6 @@ This directory is a working inventory of suspicious behavior, bad architecture, 
 | P1 | display/input | focus transfer sends enter without leave | High | [gpu-display-sentry.md](gpu-display-sentry.md#focus-transfer-sends-enter-without-leave) |
 | P1 | display/input | pointer release/id reuse corrupts input routing | High | [gpu-display-sentry.md](gpu-display-sentry.md#pointer-release-and-id-reuse-corrupt-input-routing) |
 | P1 | display/xdg | `xdg_popup` never gets configured or mapped | High | [gpu-display-sentry.md](gpu-display-sentry.md#xdg_popup-never-gets-configured-or-mapped) |
-| P1 | gpu/corruption | nonzero texture mip copies alias base level | High | [gpu-display-sentry.md](gpu-display-sentry.md#nonzero-texture-mip-copies-alias-base-level) |
-| P1 | gpu/depth | depth attachments ignore guest texture and load/store semantics | High | [gpu-display-sentry.md](gpu-display-sentry.md#depth-attachments-ignore-guest-texture-and-loadstore-semantics) |
-| P1 | gpu/bounds | texture copy extents ignore texture dimensions | High | [gpu-display-sentry.md](gpu-display-sentry.md#texture-copy-extents-ignore-texture-dimensions) |
-| P1 | gpu/bounds | bind-group buffer ranges are not validated | High | [gpu-display-sentry.md](gpu-display-sentry.md#bind-group-buffer-ranges-are-not-validated) |
-| P1 | gpu/usage | GPU resource usage bits are ignored for render attachments | High | [gpu-display-sentry.md](gpu-display-sentry.md#gpu-resource-usage-bits-are-ignored-for-render-attachments) |
-| P1 | gpu/usage | copy commands ignore copy usage bits | High | [gpu-display-sentry.md](gpu-display-sentry.md#copy-commands-ignore-copy-usage-bits) |
 | P1 | display/shm | invalid shm buffer offset can panic compositor | High | [gpu-display-sentry.md](gpu-display-sentry.md#invalid-shm-buffer-offset-can-panic-compositor) |
 | P1 | display/shm | shm buffer stride smaller than row is accepted | High | [gpu-display-sentry.md](gpu-display-sentry.md#shm-buffer-stride-smaller-than-row-is-accepted) |
 | P1 | display/viewport | viewport source outside buffer is clamped | High | [gpu-display-sentry.md](gpu-display-sentry.md#viewport-source-outside-buffer-is-clamped) |
@@ -110,11 +102,9 @@ This directory is a working inventory of suspicious behavior, bad architecture, 
 | P2 | JIT/race | `LOCK BTS/BTR/BTC` use non-atomic bit-op path | High | [jit-and-opcodes.md](jit-and-opcodes.md#lock-btsbtrbtc-use-non-atomic-bit-op-path) |
 | P2 | JIT/fp | MXCSR sticky exception flags/control bits are not modeled | Medium | [jit-and-opcodes.md](jit-and-opcodes.md#mxcsr-sticky-exception-flags-are-not-modeled) |
 | P2 | JIT/x87 | x87 long double precision is truncated | High | [jit-and-opcodes.md](jit-and-opcodes.md#x87-long-double-precision-is-truncated) |
-| P2 | syscall/mm | x86_64 `mincore(..., vec=NULL)` succeeds | High | [syscall-compat.md](syscall-compat.md#x86_64-mincore-vecnull-succeeds) |
 | P2 | syscall/futex | unknown futex ops/flags can report success | Medium-high | [syscall-compat.md](syscall-compat.md#unknown-futex-opsflags-can-report-success) |
 | P2 | syscall/fd | plain `dup()` drops proc-text read-only metadata | Medium | [syscall-compat.md](syscall-compat.md#plain-dup-drops-proc-text-read-only-metadata) |
 | P2 | syscall/select | sentry `pselect6` masks invalid virtual fd bits | Medium | [syscall-compat.md](syscall-compat.md#sentry-pselect6-masks-invalid-virtual-fd-bits) |
-| P2 | syscall/fd | pipe-size fcntls fake success on invalid fds | High | [syscall-compat.md](syscall-compat.md#pipe-size-fcntls-fake-success-on-invalid-fds) |
 | P2 | syscall/signal | signal ucontext stack metadata is zero | High | [syscall-compat.md](syscall-compat.md#signal-ucontext-stack-metadata-is-zero) |
 | P2 | syscall/timerfd | `dup(timerfd)` loses timerfd semantics | High | [syscall-compat.md](syscall-compat.md#duptimerfd-loses-timerfd-semantics) |
 | P2 | syscall/inotify | `dup(inotify_fd)` loses inotify read semantics | High | [syscall-compat.md](syscall-compat.md#dupinotify_fd-loses-inotify-read-semantics) |
@@ -140,7 +130,6 @@ This directory is a working inventory of suspicious behavior, bad architecture, 
 | P2 | daemon/events | image event filters drop image events | High | [daemon-tests-docs.md](daemon-tests-docs.md#image-event-filters-drop-image-events) |
 | P2 | daemon/routes | `POST /system/prune` is not routed | High | [daemon-tests-docs.md](daemon-tests-docs.md#post-systemprune-is-not-routed) |
 | P2 | docs/tests | gap inventory and architecture docs are stale/missing | High | [daemon-tests-docs.md](daemon-tests-docs.md#gap-and-architecture-docs-are-not-auditable) |
-| P2 | gpu/robustness | software backend panics on wrapping offsets | High | [gpu-display-sentry.md](gpu-display-sentry.md#gpu-software-backend-panics-on-wrapping-offsets) |
 | P2 | gpu/compat | dmabuf advertises LINEAR buffers it cannot use | Medium-high | [gpu-display-sentry.md](gpu-display-sentry.md#dmabuf-advertises-linear-buffers-it-cannot-use) |
 | P2 | gpu/compat | Metal backend skips missing bind-group resources | High | [gpu-display-sentry.md](gpu-display-sentry.md#metal-backend-skips-missing-bind-group-resources) |
 | P2 | gpu/compat | Metal render target texture id aliases guest texture id `1` | Medium-high | [gpu-display-sentry.md](gpu-display-sentry.md#metal-render-target-texture-id-can-alias-guest-texture-id-1) |
@@ -150,33 +139,10 @@ This directory is a working inventory of suspicious behavior, bad architecture, 
 | P2 | display/input | keyboard repeat is internally contradictory | Medium | [gpu-display-sentry.md](gpu-display-sentry.md#keyboard-repeat-is-internally-contradictory) |
 | P2 | gpu/compat | Metal duplicate IDs and format fallbacks diverge | Medium-high | [gpu-display-sentry.md](gpu-display-sentry.md#metal-duplicate-ids-and-format-fallbacks-diverge-from-checked-backends) |
 | P2 | gpu/compat | Metal shader id can retain stale MSL | Medium-high | [gpu-display-sentry.md](gpu-display-sentry.md#metal-shader-id-can-retain-stale-msl) |
-| P2 | gpu/corruption | software texture readback ignores `bytes_per_row` | High | [gpu-display-sentry.md](gpu-display-sentry.md#software-texture-readback-ignores-bytes_per_row) |
-| P2 | gpu/oracle | software backend accepts draws with missing vertex buffers | High | [gpu-display-sentry.md](gpu-display-sentry.md#software-backend-accepts-draws-with-missing-vertex-buffers) |
-| P2 | gpu/compat | multisample texture descriptors are silently downleveled | High | [gpu-display-sentry.md](gpu-display-sentry.md#multisample-texture-descriptors-are-silently-downleveled) |
-| P2 | gpu/present | present accepts texture size mismatch | High | [gpu-display-sentry.md](gpu-display-sentry.md#present-accepts-texture-size-mismatch) |
 | P2 | display/shm | unsupported `wl_shm` formats are accepted | High | [gpu-display-sentry.md](gpu-display-sentry.md#unsupported-wl_shm-formats-are-accepted) |
-| P2 | gpu/compat | 3D/depth texture descriptors are flattened | High | [gpu-display-sentry.md](gpu-display-sentry.md#3ddepth-texture-descriptors-are-flattened) |
-| P1 | gpu/robustness | oversized texture descriptors panic software backend | High | [gpu-display-sentry.md](gpu-display-sentry.md#oversized-texture-descriptors-panic-software-backend) |
 | P2 | display/scale | `wl_surface.set_buffer_scale(0)` is silently normalized | High | [gpu-display-sentry.md](gpu-display-sentry.md#wl_surfaceset_buffer_scale0-is-silently-normalized) |
 | P1 | display/viewport | invalid viewport destination keeps stale state | High | [gpu-display-sentry.md](gpu-display-sentry.md#invalid-viewport-destination-keeps-stale-state) |
-| P1 | gpu/viewport | GPU `SetViewport` invalid depth range is accepted | High | [gpu-display-sentry.md](gpu-display-sentry.md#gpu-setviewport-invalid-depth-range-is-accepted) |
-| P1 | gpu/corruption | failed GPU submit leaves partial resource mutations | High | [gpu-display-sentry.md](gpu-display-sentry.md#failed-gpu-submit-leaves-partial-resource-mutations) |
-| P1 | gpu/lifecycle | bind groups can mutate reused resource IDs | High | [gpu-display-sentry.md](gpu-display-sentry.md#bind-groups-can-mutate-reused-resource-ids) |
-| P1 | gpu/validation | invalid texture copy row pitch is accepted | High | [gpu-display-sentry.md](gpu-display-sentry.md#invalid-texture-copy-row-pitch-is-accepted) |
-| P1 | gpu/validation | pipeline color-target format can diverge from attachment | High | [gpu-display-sentry.md](gpu-display-sentry.md#pipeline-color-target-format-can-diverge-from-attachment) |
-| P1 | gpu/validation | vertex and index draw range validation is missing | High | [gpu-display-sentry.md](gpu-display-sentry.md#vertex-and-index-draw-range-validation-is-missing) |
-| P1 | gpu/shader | invalid shader modules are accepted | High | [gpu-display-sentry.md](gpu-display-sentry.md#invalid-shader-modules-are-accepted) |
-| P1 | gpu/binding | storage textures can be bound as sampled textures | High | [gpu-display-sentry.md](gpu-display-sentry.md#storage-textures-can-be-bound-as-sampled-textures) |
-| P1 | gpu/hazard | same-pass sampled render-target hazard is accepted | High | [gpu-display-sentry.md](gpu-display-sentry.md#same-pass-sampled-render-target-hazard-is-accepted) |
-| P1 | gpu/lifecycle | destroyed sampled textures remain usable through bind groups | High | [gpu-display-sentry.md](gpu-display-sentry.md#destroyed-sampled-textures-remain-usable-through-bind-groups) |
-| P2 | gpu/compat | zero-mip texture descriptors are accepted | High | [gpu-display-sentry.md](gpu-display-sentry.md#zero-mip-texture-descriptors-are-accepted) |
-| P2 | gpu/validation | command encoder pass sequencing is not validated | High | [gpu-display-sentry.md](gpu-display-sentry.md#command-encoder-pass-sequencing-is-not-validated) |
-| P2 | gpu/validation | vertex attribute layout validation is missing | High | [gpu-display-sentry.md](gpu-display-sentry.md#vertex-attribute-layout-validation-is-missing) |
-| P2 | gpu/sync | software fence waits fabricate completion | High | [gpu-display-sentry.md](gpu-display-sentry.md#software-fence-waits-fabricate-completion) |
 | P2 | gpu/sampler | Metal sampler creation drops descriptor fields | High | [gpu-display-sentry.md](gpu-display-sentry.md#metal-sampler-creation-drops-descriptor-fields) |
-| P2 | gpu/readback | texture-to-buffer readback accepts unaligned offsets | High | [gpu-display-sentry.md](gpu-display-sentry.md#texture-to-buffer-readback-accepts-unaligned-offsets) |
-| P2 | gpu/compat | zero-sized GPU textures are accepted | High | [gpu-display-sentry.md](gpu-display-sentry.md#zero-sized-gpu-textures-are-accepted) |
-| P2 | gpu/robustness | wrapping bind-group offsets panic during dispatch | High | [gpu-display-sentry.md](gpu-display-sentry.md#wrapping-bind-group-offsets-panic-during-dispatch) |
 | P2 | display/lifecycle | Metal cleanup diverges from checked backends | Medium-high | [gpu-display-sentry.md](gpu-display-sentry.md#metal-cleanup-diverges-from-checked-backends) |
 | P2 | env/runtime | `DDJIT_SANDBOX` public mode is intentionally avoided by tests | High | [completeness-and-env.md](completeness-and-env.md#ddjit_sandbox-public-mode-is-intentionally-avoided-by-tests) |
 | P2 | env/durability | `S3DB_DURABILITY` silently changes fsync semantics | High | [completeness-and-env.md](completeness-and-env.md#s3db_durability-hidden-fsync-semantics) |
@@ -273,34 +239,25 @@ This directory is a working inventory of suspicious behavior, bad architecture, 
 | P1 | registry/push | Docker push drops runtime metadata from OCI config | High | [archive-fs-compat.md](archive-fs-compat.md#docker-push-drops-runtime-metadata-from-oci-config) |
 | P1 | syscall/fd | inotify/timerfd create without flags still sets close-on-exec | High | [syscall-compat.md](syscall-compat.md#inotify_init10-and-timerfd_create-0-set-close-on-exec) |
 | P1 | syscall/timerfd | `timerfd` CLOCK_REALTIME absolute deadlines are treated as monotonic | High | [syscall-compat.md](syscall-compat.md#timerfd-clock_realtime-absolute-deadlines-are-treated-as-monotonic) |
-| P1 | syscall/epoll | `epoll_pwait` ignores temporary signal mask | High | [syscall-compat.md](syscall-compat.md#epoll_pwait-ignores-temporary-signal-mask) |
 | P1 | syscall/futex | `FUTEX_WAIT_BITSET` / `FUTEX_WAKE_BITSET` ignore masks | High | [syscall-compat.md](syscall-compat.md#futex_wait_bitset-futex_wake_bitset-ignore-masks) |
 | P1 | syscall/wait | `wait4` misses `WCONTINUED` and corrupts final status | High | [syscall-compat.md](syscall-compat.md#wait4-misses-wcontinued-and-corrupts-final-status) |
 | P1 | syscall/signal | `SA_NOCLDWAIT` does not suppress zombies | High | [syscall-compat.md](syscall-compat.md#sa_nocldwait-does-not-suppress-zombies) |
 | P1 | syscall/signal | aarch64 signal ucontext omits FPSIMD context record | High | [syscall-compat.md](syscall-compat.md#aarch64-signal-ucontext-omits-fpsimd-context-record) |
 | P1 | syscall/signal | `kill(0, sig)` only signals the caller | High | [syscall-compat.md](syscall-compat.md#kill0-sig-only-signals-the-caller) |
-| P1 | syscall/tty | `tcgetpgrp` / `tcsetpgrp` fake success on non-TTY fds | High | [syscall-compat.md](syscall-compat.md#tcgetpgrp-tcsetpgrp-fake-success-on-non-tty-fds) |
 | P1 | syscall/mm | guest `PROT_NONE` mappings remain directly readable | High | [syscall-compat.md](syscall-compat.md#guest-prot_none-mappings-remain-directly-readable) |
 | P1 | syscall/mm | writes to `mprotect(PROT_READ)` pages do not fault | High | [syscall-compat.md](syscall-compat.md#writes-to-mprotectprot_read-pages-do-not-fault) |
 | P1 | syscall/mm | execute permission is not enforced for guest fetch | High | [syscall-compat.md](syscall-compat.md#execute-permission-is-not-enforced-for-guest-fetch) |
 | P1 | aarch64/atomic | low-address exclusive and pair atomics hang | High | [jit-and-opcodes.md](jit-and-opcodes.md#aarch64-low-address-exclusive-and-pair-atomics-hang) |
 | P1 | aarch64/smc | threaded self-modifying code executes stale translations | High | [jit-and-opcodes.md](jit-and-opcodes.md#aarch64-threaded-self-modifying-code-executes-stale-translations) |
-| P1 | syscall/fs | `unlinkat` ignores unknown flags and deletes the file | High | [syscall-compat.md](syscall-compat.md#unlinkat-ignores-unknown-flags-and-deletes-the-file) |
-| P1 | syscall/fs | `fallocate` accepts invalid modes and mutates data | High | [syscall-compat.md](syscall-compat.md#fallocate-accepts-invalid-modes-and-mutates-data) |
-| P1 | syscall/fs | `fallocate` range overflow reports success | High | [syscall-compat.md](syscall-compat.md#fallocate-range-overflow-reports-success) |
-| P1 | syscall/fs | `fchown` / `fchownat` fake success and corrupt ownership | High | [syscall-compat.md](syscall-compat.md#fchown-fchownat-fake-success-and-corrupt-ownership) |
-| P1 | syscall/fs | `openat2` ignores ABI validation and resolve restrictions | High | [syscall-compat.md](syscall-compat.md#openat2-ignores-abi-validation-and-resolve-restrictions) |
 | P1 | syscall/wait | raw `waitid(..., rusage)` leaves buffer untouched | High | [syscall-compat.md](syscall-compat.md#raw-waitid-rusage-leaves-buffer-untouched) |
 | P1 | syscall/wait | default core status contradicts `RLIMIT_CORE=0` | High | [syscall-compat.md](syscall-compat.md#default-core-status-contradicts-rlimit_core0) |
 | P2 | syscall/clone | `clone` ignores parent and child TID stores | High | [syscall-compat.md](syscall-compat.md#clone-ignores-parent-and-child-tid-stores) |
 | P2 | syscall/signal | `SA_NOCLDSTOP` still delivers stop SIGCHLD | High | [syscall-compat.md](syscall-compat.md#sa_nocldstop-still-delivers-stop-sigchld) |
 | P2 | syscall/mm | aarch64 4K subpage `munmap` returns `EINVAL` | High | [syscall-compat.md](syscall-compat.md#aarch64-4k-subpage-munmap-returns-einval) |
 | P2 | syscall/mm | aligned `mprotect` on unmapped range succeeds | High | [syscall-compat.md](syscall-compat.md#aligned-mprotect-on-unmapped-range-succeeds) |
-| P2 | syscall/mm | aarch64 `mincore` accepts `PROT_NONE` vec | High | [syscall-compat.md](syscall-compat.md#aarch64-mincore-accepts-prot_none-vec) |
 | P2 | syscall/wait | `wait4` writes host rusage units into guest layout | High | [syscall-compat.md](syscall-compat.md#wait4-writes-host-rusage-units-into-guest-layout) |
 | P2 | procfs/process | `/proc/<pid>/stat` reports wrong process group and session | High | [syscall-compat.md](syscall-compat.md#proc-stat-reports-wrong-process-group-and-session) |
 | P2 | JIT/cache | x86 persistent cache key ignores codegen env modes | Medium-high | [jit-and-opcodes.md](jit-and-opcodes.md#x86-persistent-cache-key-ignores-codegen-env-modes) |
-| P2 | syscall/fs | `utimensat` ignores unknown flags and updates timestamps | High | [syscall-compat.md](syscall-compat.md#utimensat-ignores-unknown-flags-and-updates-timestamps) |
 | P2 | syscall/fs | `renameat2(RENAME_WHITEOUT)` silently becomes plain rename | High | [syscall-compat.md](syscall-compat.md#renameat2rename_whiteout-silently-becomes-plain-rename) |
 | P2 | build/compat | `COPY --from=<external-image>` is rejected | High | [archive-fs-compat.md](archive-fs-compat.md#copy---from-is-rejected) |
 | P3 | daemon/events | container rename updates state without event | High | [daemon-tests-docs.md](daemon-tests-docs.md#container-rename-updates-state-without-event) |
