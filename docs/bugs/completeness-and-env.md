@@ -437,31 +437,6 @@ Linux: proc_net_unix has_path=1 ok=1
 dd:    proc_net_unix has_path=0 lines=1 ok=0
 ```
 
-### `/proc/self/fdinfo` Is Missing
-
-Priority: P2
-Impact: fd diagnostics and event-loop introspection lose per-fd metadata
-Confidence: High
-
-Verification status: Proven in isolated worktree `/Users/x/dd/dd-procfs-audit-BN`.
-
-Evidence:
-
-- Per-pid listing creates `fd` but not `fdinfo`: `dd-jit-darwin/src/runtime/os/linux/container/vfs.c:2396`.
-- Synthetic stat special-cases `fd` and `fd/N`, not `fdinfo`: `dd-jit-darwin/src/runtime/os/linux/container/vfs.c:4748`.
-- Direct proc open has no `fdinfo` handling: `dd-jit-darwin/src/runtime/os/linux/container/vfs.c:3027`.
-
-Why this is bad:
-
-Linux exposes `/proc/self/fdinfo` and per-fd entries. Runtimes use it for descriptor flags, positions, eventfd counters, and epoll details. dd exposes `/proc/self/fd` but omits fdinfo entirely.
-
-Observed proof:
-
-```text
-Linux: fdinfo root_listed=1 root_stat=1 root_open=1; fdinfo_entry listed=1 stat=1 open=1
-dd:    fdinfo root_listed=0 root_stat=0 root_open=0; fdinfo_entry listed=0 stat=0 open=0
-```
-
 ### Bind Mounts Are Missing From Mount Tables
 
 Priority: P1

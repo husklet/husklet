@@ -1790,6 +1790,49 @@ static int proc_fd_dir_open(void) {
     return d;
 }
 
+static void proc_dir_register(int fd, const char *tmpl, const char *guestpath); // defined below (dir synth)
+
+// Build the temp dir of /proc/self/fdinfo entries -- one REGULAR-file placeholder per open fd (content is
+// served live by proc_open on the relative reopen). Linux exposes per-fd pos/flags/mnt_id here; runtimes
+// read it for descriptor flags, eventfd counters, epoll details. Tagged "/proc/<pid>/fdinfo" so an
+// openat(dirfd,"N") re-enters proc_open. Returns the fd, -1 on error.
+static int proc_fdinfo_dir_open(const char *guestpath) {
+    static int registered = 0;
+    if (!registered) {
+        atexit(procfd_dirs_atexit);
+        registered = 1;
+    }
+    procfd_dirs_reap(0);
+    char tmpl[] = "/tmp/.ddfdinfoXXXXXX";
+    if (!mkdtemp(tmpl)) return -1;
+    for (int fd = 0; fd < DD_NFD; fd++) {
+        if (eventfd_hidden_peer_fd(fd)) continue;
+        if (fcntl(fd, F_GETFD) == -1) continue; // not open
+        char p[96];
+        snprintf(p, sizeof p, "%s/%d", tmpl, fd);
+        int f = open(p, O_WRONLY | O_CREAT | O_TRUNC, 0444);
+        if (f >= 0) close(f);
+    }
+    int d = open(tmpl, O_RDONLY | O_DIRECTORY);
+    if (d < 0) {
+        procfd_dir_rm(tmpl);
+        return -1;
+    }
+    proc_dir_register(d, tmpl, guestpath);
+    return d;
+}
+
+// The /proc/self/fdinfo/<N> body: Linux reports pos/flags/mnt_id (+ per-type extras). Returns the length or
+// -1 if fd N is not open. `off` is the current file offset (lseek CUR), `flags` the O_* access/status bits.
+static int proc_fdinfo_text(int fd, char *b, size_t n) {
+    if (fd < 0 || fcntl(fd, F_GETFD) == -1) return -1; // not an open fd
+    off_t pos = lseek(fd, 0, SEEK_CUR);
+    if (pos < 0) pos = 0; // pipe/socket/eventfd: unseekable -> 0, like Linux
+    int fl = fcntl(fd, F_GETFL);
+    if (fl < 0) fl = 0;
+    return snprintf(b, n, "pos:\t%lld\nflags:\t0%o\nmnt_id:\t1\nino:\t1\n", (long long)pos, (unsigned)fl);
+}
+
 static int proc_reg_read(int hostpid, char *comm, size_t csz, char *cmd, size_t cmdsz, int *cmdlen);
 
 // The running process's own argv as a NUL-separated, NUL-terminated blob, captured by build_stack at every
@@ -2831,6 +2874,7 @@ static int synth_misc_dir_is(const char *gp) {
             while (q[i] >= '0' && q[i] <= '9')
                 i++;
             if (i > 0 && (!strcmp(q + i, "/ns") || !strcmp(q + i, "/ns/"))) return 1;
+            if (i > 0 && (!strcmp(q + i, "/fdinfo") || !strcmp(q + i, "/fdinfo/"))) return 1;
         }
     }
     if (!strncmp(gp, "/sys/devices/system/cpu/cpu", 27)) {
@@ -2873,6 +2917,7 @@ static int synth_misc_dir_open(const char *gp) {
                                                  "time",   "time_for_children", "user", "uts", 0};
                 return synth_names_dir_open(rp, ns, 1);
             }
+            if (i > 0 && (!strcmp(q + i, "/fdinfo") || !strcmp(q + i, "/fdinfo/"))) return proc_fdinfo_dir_open(rp);
         }
     }
     // /sys/fs/cgroup root: advertised in mountinfo, so a directory walk of the hierarchy must list it.
@@ -3249,6 +3294,17 @@ static int proc_open(const char *rp) {
     const char *leaf = proc_self_leaf(rp);
     if (leaf) {
         if (!strcmp(leaf, "fd")) return proc_fd_dir_open();
+        if (!strncmp(leaf, "fdinfo/", 7) && leaf[7]) { // /proc/self/fdinfo/<N> body
+            int isnum = 1;
+            for (const char *t = leaf + 7; *t; t++)
+                if (*t < '0' || *t > '9') isnum = 0;
+            if (isnum) {
+                int fn = atoi(leaf + 7);
+                int m = proc_fdinfo_text(fn, buf, sizeof buf);
+                if (m < 0) return -2; // closed/invalid fd -> ENOENT
+                return proc_text_fd(buf, m);
+            }
+        }
         if (!strcmp(leaf, "pagemap")) {
             // VA-indexed binary pagemap: back it with an empty seekable regular fd (lseek to vaddr/pg*8
             // works natively) and synthesize the 8-byte-per-page entries on read (io.c). LTP mmap12.
@@ -5050,6 +5106,19 @@ static int synth_stat_raw(const char *gp, struct stat *s) {
             s->st_mode = S_IFDIR | 0555;
             s->st_nlink = 2;
             return 1;
+        }
+        if (!strncmp(leaf, "fdinfo/", 7) && leaf[7]) { // /proc/self/fdinfo/<N> -> a regular file (if fd open)
+            int isnum = 1;
+            for (const char *t = leaf + 7; *t; t++)
+                if (*t < '0' || *t > '9') isnum = 0;
+            if (isnum) {
+                int fn = atoi(leaf + 7);
+                if (eventfd_hidden_peer_fd(fn) || fcntl(fn, F_GETFD) < 0) return 0;
+                memset(s, 0, sizeof *s);
+                s->st_mode = S_IFREG | 0444;
+                s->st_nlink = 1;
+                return 1;
+            }
         }
         if (!strncmp(leaf, "fd/", 3) && leaf[3]) {
             int isnum = 1;
