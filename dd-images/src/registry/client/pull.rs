@@ -58,7 +58,7 @@ impl Client {
 
     pub(super) fn resolve_manifest(&mut self, want_archs: &[&str]) -> Result<Value, Error> {
         let man = self.get_json(
-            &format!("/manifests/{}", self.image.tag),
+            &format!("/manifests/{}", self.image.manifest_reference()),
             Some(MANIFEST_ACCEPT),
         )?;
         let Some(list) = man["manifests"].as_array() else {
