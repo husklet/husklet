@@ -857,3 +857,45 @@ async fn start_installs_starting_health_state_synchronously() {
     let h = c.health.as_ref().expect("health object installed at start");
     assert_eq!(h.status, "starting", "health must be visible as starting from the start transition");
 }
+
+// ---- create rejects an image whose (store-managed) rootfs has disappeared --------------------
+#[tokio::test]
+async fn create_rejects_image_with_missing_store_rootfs() {
+    let app = test_app();
+    // An image whose rootfs is UNDER images_dir but does not exist on disk (store entry vanished).
+    let gone = std::path::Path::new(&app.images_dir).join("gone/rootfs").to_string_lossy().into_owned();
+    {
+        let mut g = app.inner.lock().await;
+        g.images.push(Image { name: "ghost:1".into(), rootfs: gone, ..Default::default() });
+    }
+    let q: crate::containers::CreateQ = serde_json::from_value(serde_json::json!({})).unwrap();
+    let body = create_body(serde_json::json!({"Image":"ghost:1"}));
+    let mut rx = app.events.subscribe();
+    let r = crate::containers::containers_create(State(app.clone()), Query(q), body).await;
+    assert_eq!(r.status(), StatusCode::NOT_FOUND, "create on a missing store rootfs is 404");
+    assert!(app.inner.lock().await.containers.is_empty(), "no container recorded");
+    assert!(rx.try_recv().is_err(), "no create event on the rejected create");
+}
+
+// ---- create fails when the volumes root can't host anonymous volumes -------------------------
+#[tokio::test]
+async fn create_fails_when_anon_volume_root_is_unusable() {
+    let app0 = test_app();
+    // Point the volumes root at a FILE so anon-volume dirs can't be created.
+    let volfile = std::path::Path::new(&app0.images_dir).join("not-a-dir");
+    std::fs::write(&volfile, b"x").unwrap();
+    let app = App { volumes_dir: volfile.to_string_lossy().into_owned(), ..app0 };
+    // An image with an image VOLUME so create must materialize an anon volume.
+    {
+        let mut g = app.inner.lock().await;
+        g.images.push(Image { name: "voly:1".into(), rootfs: "/store/voly-R".into(),
+            img_volumes: vec!["/data".into()], ..Default::default() });
+    }
+    let q: crate::containers::CreateQ = serde_json::from_value(serde_json::json!({})).unwrap();
+    let body = create_body(serde_json::json!({"Image":"voly:1"}));
+    let r = crate::containers::containers_create(State(app.clone()), Query(q), body).await;
+    assert_eq!(r.status(), StatusCode::INTERNAL_SERVER_ERROR, "unusable volumes root fails the create");
+    let g = app.inner.lock().await;
+    assert!(g.containers.is_empty(), "no container recorded");
+    assert!(g.volumes.is_empty(), "no phantom volume recorded");
+}

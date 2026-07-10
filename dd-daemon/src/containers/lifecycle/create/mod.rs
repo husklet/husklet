@@ -55,6 +55,16 @@ pub(crate) async fn containers_create(
         Some(i) => i,
         None => return no_such_image(&image),
     };
+    // Reject a create whose selected image rootfs has DISAPPEARED from the store: recording a container
+    // that points at a gone rootfs (then returning 201 + emitting container/create) is worse than a clean
+    // 404. Scoped to STORE-managed rootfs paths (under images_dir) so bundled/host images — and test
+    // fixtures that seed images with synthetic rootfs paths — are unaffected.
+    if !img.rootfs.is_empty()
+        && std::path::Path::new(&img.rootfs).starts_with(&a.images_dir)
+        && !std::path::Path::new(&img.rootfs).exists()
+    {
+        return no_such_image(&image);
+    }
     // Final argv = entrypoint ++ cmd (docker semantics). The entrypoint is the user's --entrypoint or the
     // IMAGE's ENTRYPOINT; a user --entrypoint resets CMD, but the image's own ENTRYPOINT still keeps the
     // image CMD. An empty Cmd falls back to the image default.
@@ -206,6 +216,24 @@ pub(crate) async fn containers_create(
             true
         }
     });
+    // If this container will materialize ANY anonymous volume, the volumes root must be a usable directory
+    // — otherwise `create_dir_all(<volumes_dir>/<name>)` silently no-ops and we'd record volumes whose
+    // mountpoints don't exist (and a container that can't mount them). Fail the create up front instead.
+    let needs_anon = mounts
+        .iter()
+        .any(|m| m.typ == "volume" && m.source.is_empty() && !m.target.is_empty())
+        || binds.iter().any(|b| !b.contains(':') && b.starts_with('/'))
+        || !img.img_volumes.is_empty()
+        || body.volumes.as_ref().map_or(false, |v| !v.is_empty());
+    if needs_anon
+        && (std::fs::create_dir_all(&a.volumes_dir).is_err()
+            || !std::path::Path::new(&a.volumes_dir).is_dir())
+    {
+        return server_error(format!(
+            "cannot create anonymous volumes: volumes root {} is not a usable directory",
+            a.volumes_dir
+        ));
+    }
     // An ANONYMOUS volume mount (Type=volume with empty Source) — the shape the docker CLI often sends for
     // a bare `-v /path` and for `--mount type=volume,destination=/x` with no source. Materialize it into a
     // real anonymous volume seeded from the image (populateVolumes), so it persists/GCs like a named one.
