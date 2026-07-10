@@ -66,6 +66,12 @@ require_runtime_sources() {
         echo "FATAL: coverage.sh cannot scan the engine (RT=$RT). Refusing to report false-green coverage." >&2
         exit 3
     fi
+    # Files present but the nr-switch extraction yields nothing => the scan itself is broken (wrong tree,
+    # or a parser/layout change). That is ALSO a false-green ("handled 0 / N ... exit 0"), so fail hard.
+    if [ -z "$(handled_syscalls)" ]; then
+        echo "FATAL: scanned $SYSCALL_DIR but extracted 0 handled syscalls (broken scan / moved sources)." >&2
+        exit 3
+    fi
 }
 
 # ---- canonical syscall name<->number table from the kernel headers (via the preprocessor) ----------
@@ -170,10 +176,14 @@ dynamic() {
     echo ""
     echo "== dynamic: syscalls/opcodes the engines hit at runtime over the test corpus =="
     local A X RF
-    A="$(ls "$ROOT"/target/debug/build/dd-jit-darwin-*/out/ddjit-linux_aarch64 2>/dev/null | head -1)"
-    X="$(ls "$ROOT"/target/debug/build/dd-jit-darwin-*/out/ddjit-linux_x86_64 2>/dev/null | head -1)"
+    # Engine paths are env-overridable (DDCOV_ENGINE_*) so the missing-engine guard is regression-testable.
+    A="${DDCOV_ENGINE_A:-$(ls "$ROOT"/target/debug/build/dd-jit-darwin-*/out/ddjit-linux_aarch64 2>/dev/null | head -1)}"
+    X="${DDCOV_ENGINE_X:-$(ls "$ROOT"/target/debug/build/dd-jit-darwin-*/out/ddjit-linux_x86_64 2>/dev/null | head -1)}"
+    [ -e "$A" ] || A=""   # a non-existent override path counts as "not built"
     RF="$(ls -d /Users/x/dd/poc/images/*alpine*/rootfs 2>/dev/null | head -1)"
-    [ -z "$A" ] && { echo "  (engines not built; run \`make jit\`)"; return; }
+    # A dynamic run that can't find the engines has measured NOTHING; returning green here is a
+    # false-green gate (no hits printed, exit 0 — indistinguishable from "everything handled"). Fail hard.
+    [ -z "$A" ] && { echo "FATAL: engines not built (no target/debug/build/dd-jit-darwin-*/out/ddjit-linux_aarch64); run \`make jit\` first" >&2; exit 4; }
     local log; log="$(mktemp)"
     # bare aarch64 + x86 guests
     for b in "$ROOT"/target/dd-tests/aarch64/*; do [ -f "$b" ] && dyn_one "$A" "'$b'" >>"$log" 2>&1; done

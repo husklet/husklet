@@ -154,6 +154,12 @@ fn main() {
             }
         }
         println!("\n{n} scenario×target cases");
+        // An empty selection is a false-green: a typo'd `-c <cat>` / `-t <target>` filter that matches
+        // nothing must not report "0 cases" and exit 0 — that reads as "all clear" to a CI wrapper.
+        if n == 0 {
+            eprintln!("scenarios: FATAL: selection matched 0 scenario×target cases (bad filter?)");
+            std::process::exit(2);
+        }
         return;
     }
 
@@ -308,8 +314,10 @@ fn main() {
     for x in &xpasses {
         println!("\x1b[35m✓!\x1b[0m {x} — XPASS (gap fixed? drop the .xfail marker)");
     }
-    let color = if fail > 0 { "31" } else { "32" };
+    let bad = fail > 0 || xpass > 0;
+    let color = if bad { "31" } else { "32" };
     println!("\x1b[1;{color}m{pass} passed\x1b[0m  {fail} failed  \x1b[33m{xfail} xfail\x1b[0m  \x1b[35m{xpass} xpass\x1b[0m  \x1b[90m{skip} skip   {}ms\x1b[0m",
         wall.elapsed().as_millis());
-    std::process::exit(if fail > 0 { 1 } else { 0 });
+    // XPASS is a red gate here too: a gap marked .xfail that now passes must drop the marker.
+    std::process::exit(if bad { 1 } else { 0 });
 }
