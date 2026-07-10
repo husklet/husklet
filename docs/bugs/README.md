@@ -106,7 +106,6 @@ This directory is a working inventory of suspicious behavior, bad architecture, 
 | P2 | JIT/opcode | SSE2 `CVTPD2DQ` / `CVTTPD2DQ` return wrong integer-indefinite values | High | [jit-and-opcodes.md](jit-and-opcodes.md#sse2-cvtpd2dq-cvttpd2dq-return-wrong-integer-indefinite-values) |
 | P2 | JIT/opcode | SSE `UCOMISS` / `COMISD` leave AF stale | High | [jit-and-opcodes.md](jit-and-opcodes.md#sse-ucomiss-comisd-leave-af-stale) |
 | P2 | JIT/signal | `ICEBP` and invalid `0x62` bytes abort instead of guest traps | High | [jit-and-opcodes.md](jit-and-opcodes.md#icebp-and-invalid-0x62-bytes-abort-instead-of-guest-traps) |
-| P2 | JIT/cache | SMC tracking has a capacity cliff | Medium | [jit-and-opcodes.md](jit-and-opcodes.md#smc-tracking-has-a-capacity-cliff) |
 | P2 | JIT/signal | thread-directed signals do not interrupt blocking reads | High | [jit-and-opcodes.md](jit-and-opcodes.md#thread-directed-signals-do-not-interrupt-blocking-reads) |
 | P2 | JIT/race | `LOCK BTS/BTR/BTC` use non-atomic bit-op path | High | [jit-and-opcodes.md](jit-and-opcodes.md#lock-btsbtrbtc-use-non-atomic-bit-op-path) |
 | P2 | JIT/fp | MXCSR sticky exception flags/control bits are not modeled | Medium | [jit-and-opcodes.md](jit-and-opcodes.md#mxcsr-sticky-exception-flags-are-not-modeled) |
@@ -286,7 +285,6 @@ This directory is a working inventory of suspicious behavior, bad architecture, 
 | P1 | syscall/mm | execute permission is not enforced for guest fetch | High | [syscall-compat.md](syscall-compat.md#execute-permission-is-not-enforced-for-guest-fetch) |
 | P1 | aarch64/atomic | low-address exclusive and pair atomics hang | High | [jit-and-opcodes.md](jit-and-opcodes.md#aarch64-low-address-exclusive-and-pair-atomics-hang) |
 | P1 | aarch64/smc | threaded self-modifying code executes stale translations | High | [jit-and-opcodes.md](jit-and-opcodes.md#aarch64-threaded-self-modifying-code-executes-stale-translations) |
-| P1 | x86/smc | SMC protection table overflow can hang on code rewrite | High | [jit-and-opcodes.md](jit-and-opcodes.md#x86-smc-protection-table-overflow-can-hang-on-code-rewrite) |
 | P1 | syscall/fs | `unlinkat` ignores unknown flags and deletes the file | High | [syscall-compat.md](syscall-compat.md#unlinkat-ignores-unknown-flags-and-deletes-the-file) |
 | P1 | syscall/fs | `fallocate` accepts invalid modes and mutates data | High | [syscall-compat.md](syscall-compat.md#fallocate-accepts-invalid-modes-and-mutates-data) |
 | P1 | syscall/fs | `fallocate` range overflow reports success | High | [syscall-compat.md](syscall-compat.md#fallocate-range-overflow-reports-success) |
