@@ -97,17 +97,21 @@ pub(crate) async fn image_delete(
         }
     }
     let untagged = repo_tag(&target.name);
-    g.images.retain(|i| !matches(i)); // remove only this tag, never sibling tags of the same repo
-                                      // Delete the on-disk rootfs only when this was its last reference: another tag sharing the same
-                                      // rootfs (a `docker tag` alias) keeps it alive, so we report an untag and leave the layers in place.
-    let last_ref = !g.images.iter().any(|i| i.rootfs == target.rootfs);
+    // Whether removing THIS tag leaves the rootfs unreferenced (its layers should then be deleted). Computed
+    // BEFORE mutating the store so a failed on-disk removal can abort WITHOUT having dropped image state.
+    let last_ref = g.images.iter().filter(|i| i.rootfs == target.rootfs).count() == 1;
     let mut report = vec![DeleteRecord::Untagged(untagged)];
     if last_ref && target.name != "macos" {
         // the host `macos` image's rootfs is the live `/` — never delete. dd-images owns the store-guarded
-        // dir removal (a rootfs outside the writable store — a bundled starter — is left untouched).
-        dd_images::Store::new(&a.images_dir).remove_image_dir(&target.rootfs);
+        // dir removal (a rootfs outside the writable store — a bundled starter — is left untouched). If the
+        // on-disk removal FAILS, keep the image in state (retryable) and report an error rather than
+        // dropping state while the store entry lingers on disk.
+        if let Err(e) = dd_images::Store::new(&a.images_dir).remove_image_dir(&target.rootfs) {
+            return server_error(format!("failed to remove image store entry: {e}"));
+        }
         report.push(DeleteRecord::Deleted(image_id(&target)));
     }
+    g.images.retain(|i| !matches(i)); // remove only this tag, never sibling tags of the same repo
     crate::events::emit_event(
         &a.events,
         "image",

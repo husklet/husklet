@@ -45,7 +45,12 @@ pub(crate) async fn networks_create(
     let ev_name = n.name.clone();
     let ev_driver = n.driver.clone();
     g.networks.push(n);
-    save_state(&g, &a.state_path);
+    // Persist BEFORE returning 201: if the state save fails, roll back the in-memory network and fail —
+    // a `201 Created` must not describe a network that vanishes on the next daemon restart.
+    if let Err(e) = save_state_checked(&g, &a.state_path) {
+        g.networks.retain(|nn| nn.id != id);
+        return server_error(format!("failed to persist network state: {e}"));
+    }
     crate::events::emit_event(
         &a.events,
         "network",

@@ -2,25 +2,30 @@
 use super::*;
 
 /// Write containers/volumes/networks to `path` atomically (temp file + rename). Best-effort:
-/// persistence failures are logged but never abort a request.
+/// persistence failures are logged but never abort a request. Durability-sensitive handlers that must
+/// fail/roll back on a persistence error call [`save_state_checked`] instead.
 pub(crate) fn save_state(inner: &Inner, path: &str) {
+    if let Err(e) = save_state_checked(inner, path) {
+        eprintln!("[dd-daemon] state save failed: {e}");
+    }
+}
+
+/// Like [`save_state`] but returns the I/O error so a caller can fail the request or roll back the
+/// in-memory mutation — a successful `201`/`204` must not describe state that will vanish on restart.
+pub(crate) fn save_state_checked(inner: &Inner, path: &str) -> std::io::Result<()> {
     let p = Persisted {
         containers: inner.containers.values().cloned().collect(),
         volumes: inner.volumes.clone(),
         networks: inner.networks.clone(),
     };
-    let Ok(bytes) = serde_json::to_vec_pretty(&p) else {
-        return;
-    };
+    let bytes = serde_json::to_vec_pretty(&p)
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
     if let Some(parent) = std::path::Path::new(path).parent() {
         let _ = std::fs::create_dir_all(parent);
     }
     let tmp = format!("{path}.tmp");
-    if std::fs::write(&tmp, &bytes).is_ok() {
-        if let Err(e) = std::fs::rename(&tmp, path) {
-            eprintln!("[dd-daemon] state save failed: {e}");
-        }
-    }
+    std::fs::write(&tmp, &bytes)?;
+    std::fs::rename(&tmp, path)
 }
 
 /// Load persisted state into `inner`, re-resolving each container's arch/rootfs from the

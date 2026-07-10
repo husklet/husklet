@@ -170,14 +170,17 @@ impl Store {
     /// Remove an image's on-disk directory (`<store>/<safe>/`, the parent of its `rootfs/`). Guarded to the
     /// writable store: a rootfs under a read-only bundled starter dir (or anywhere outside the store root)
     /// is left untouched so removing a discovered alias can't wipe shipped images.
-    pub fn remove_image_dir(&self, rootfs: &str) {
+    /// Returns `Ok(())` when the dir was removed OR is guarded/absent (a no-op); `Err` only when an actual
+    /// removal of an in-store dir failed, so the caller can keep image state (retryable) and report an error.
+    pub fn remove_image_dir(&self, rootfs: &str) -> std::io::Result<()> {
         let Some(dir) = Path::new(rootfs).parent() else {
-            return;
+            return Ok(());
         };
         let base = Path::new(&self.dir);
-        if dir != base && dir.starts_with(base) {
-            let _ = std::fs::remove_dir_all(dir);
+        if dir != base && dir.starts_with(base) && dir.exists() {
+            std::fs::remove_dir_all(dir)?;
         }
+        Ok(())
     }
 
     /// Write the `dd-image.json` sidecar for a freshly loaded image so discovery restores its run config
@@ -313,7 +316,7 @@ mod tests {
         std::fs::create_dir_all(&rootfs).unwrap();
 
         let store = Store::new(root.to_str().unwrap());
-        store.remove_image_dir(rootfs.to_str().unwrap());
+        store.remove_image_dir(rootfs.to_str().unwrap()).unwrap();
 
         // The image dir (parent of rootfs) is strictly under the store root -> removed.
         assert!(!img_dir.exists(), "image dir under store root should be removed");
@@ -329,7 +332,7 @@ mod tests {
         std::fs::create_dir_all(&rootfs).unwrap();
 
         let store = Store::new(root.to_str().unwrap());
-        store.remove_image_dir(rootfs.to_str().unwrap());
+        store.remove_image_dir(rootfs.to_str().unwrap()).unwrap();
 
         // Guard: parent == store root -> left untouched (won't wipe the store itself).
         assert!(rootfs.exists(), "rootfs whose parent is the store root must be left untouched");
@@ -418,7 +421,7 @@ mod tests {
         std::fs::create_dir_all(&rootfs).unwrap();
 
         let store = Store::new(root.to_str().unwrap());
-        store.remove_image_dir(rootfs.to_str().unwrap());
+        store.remove_image_dir(rootfs.to_str().unwrap()).unwrap();
 
         // Guard: parent does not start with the store root -> left untouched.
         assert!(img_dir.exists(), "rootfs outside the store root must be left untouched");

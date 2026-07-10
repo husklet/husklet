@@ -771,3 +771,50 @@ async fn failed_spawn_persists_terminal_exit_state() {
     let status = saved["containers"][0]["status"].as_str().unwrap_or("");
     assert_eq!(status, "exited", "terminal state must be durably saved, not left running");
 }
+
+// ---- durability/atomicity: create rollback + missing-network 404 -----------------------------
+/// An app whose `state_path` points at an existing directory, so `save_state_checked` (write temp +
+/// rename ONTO a dir) always fails — used to exercise the durable-save failure/rollback paths.
+fn app_with_failing_state() -> App {
+    let app = test_app();
+    App { state_path: app.volumes_dir.clone(), ..app } // volumes_dir is a dir -> rename onto it fails
+}
+
+#[tokio::test]
+async fn create_with_missing_network_is_404_and_records_nothing() {
+    let app = test_app();
+    seed_image_rootfs(&app, "alpine", "/store/alpine-R").await;
+    let q: crate::containers::CreateQ = serde_json::from_value(serde_json::json!({})).unwrap();
+    let body = axum::Json(
+        serde_json::from_value(serde_json::json!({
+            "Image": "alpine",
+            "HostConfig": {"NetworkMode": "does-not-exist"}
+        }))
+        .unwrap(),
+    );
+    let mut rx = app.events.subscribe();
+    let r = crate::containers::containers_create(State(app.clone()), Query(q), body).await;
+    assert_eq!(r.status(), StatusCode::NOT_FOUND, "create on a missing network is 404");
+    let g = app.inner.lock().await;
+    assert!(g.containers.is_empty(), "no partial container is recorded");
+    assert!(g.volumes.is_empty(), "no partial volumes are recorded");
+    assert!(rx.try_recv().is_err(), "no create/volume event emitted on the failed create");
+}
+
+#[tokio::test]
+async fn create_rolls_back_and_500s_when_state_cannot_persist() {
+    let app = app_with_failing_state();
+    seed_image_rootfs(&app, "alpine", "/store/alpine-R").await;
+    let q: crate::containers::CreateQ = serde_json::from_value(serde_json::json!({})).unwrap();
+    let body = axum::Json(serde_json::from_value(serde_json::json!({"Image":"alpine"})).unwrap());
+    let mut rx = app.events.subscribe();
+    let r = crate::containers::containers_create(State(app.clone()), Query(q), body).await;
+    assert_eq!(r.status(), StatusCode::INTERNAL_SERVER_ERROR, "a failed durable save fails the create");
+    assert!(app.inner.lock().await.containers.is_empty(), "the partial container is rolled back");
+    // No container/create event before durable state.
+    let mut saw_create = false;
+    while let Ok(ev) = rx.try_recv() {
+        if ev["Type"] == "container" && ev["Action"] == "create" { saw_create = true; }
+    }
+    assert!(!saw_create, "no container/create event when the state save failed");
+}

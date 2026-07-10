@@ -117,6 +117,31 @@ pub(crate) async fn containers_create(
     }
     let id = new_id(&image);
     let hc = body.host_config;
+    // Atomic network validation: a create attached to a MISSING user network must fail 404 BEFORE any
+    // state mutation or event — previously the join silently no-oped and the daemon recorded a partial
+    // container (plus anon volumes + events) and returned 201.
+    {
+        let nm = hc
+            .as_ref()
+            .and_then(|h| h.network_mode.clone())
+            .unwrap_or_default();
+        let mut wanted: Vec<String> = match nm.as_str() {
+            "" | "default" | "bridge" | "host" | "none" => Vec::new(),
+            other => vec![other.to_string()],
+        };
+        if let Some(nc) = body
+            .networking_config
+            .as_ref()
+            .and_then(|n| n.endpoints_config.as_ref())
+        {
+            wanted.extend(nc.keys().filter(|k| !k.is_empty()).cloned());
+        }
+        for w in &wanted {
+            if !g.networks.iter().any(|n| n.name == *w) {
+                return no_such_network(w);
+            }
+        }
+    }
     // Per-container copy-on-write upper layer over the read-only image rootfs (linux guests only; darwin
     // runs natively jailed and writes into its own rootfs). The guest's writes/creates/deletes land in
     // this private dir, so the shared image is never mutated. Reclaimed on `docker rm`/prune.
@@ -274,6 +299,8 @@ pub(crate) async fn containers_create(
         .unwrap_or_else(|| img.stop_signal.clone());
     let stop_timeout = body.stop_timeout.unwrap_or(0).max(0);
     let healthcheck = body.healthcheck.or_else(|| img.healthcheck.clone());
+    // Names of anon volumes materialized above — kept for rollback if the durable save fails below.
+    let anon_names = anon_volumes.clone();
     let c = Container {
         id: id.clone(),
         image,
@@ -453,17 +480,29 @@ pub(crate) async fn containers_create(
             }
         }
     }
-    // Include the container's labels in the event attributes (docker flattens object labels into
-    // Actor.Attributes) so `docker events --filter label=...` can select this create event.
+    // Build the create-event attributes now (flatten labels so `--filter label=...` selects it), but do
+    // NOT emit yet: the event must represent DURABLE state. Insert, persist (checked), then emit.
     let mut cre_attrs = serde_json::Map::new();
     cre_attrs.insert("name".into(), json!(c.name));
     cre_attrs.insert("image".into(), json!(c.image));
     for (k, v) in &c.labels {
         cre_attrs.insert(k.clone(), json!(v));
     }
-    crate::events::emit_event(&a.events, "container", "create", &id, Value::Object(cre_attrs));
     g.containers.insert(id.clone(), c);
-    save_state(&g, &a.state_path);
+    // Persist BEFORE emitting the create event / returning 201. If the state save fails, roll back the
+    // whole partial create (container, anon volumes, network endpoints) and fail — a `201` + create event
+    // must never describe state that vanishes on restart.
+    if let Err(e) = save_state_checked(&g, &a.state_path) {
+        g.containers.remove(&id);
+        for name in &anon_names {
+            g.volumes.retain(|v| &v.name != name);
+        }
+        for n in g.networks.iter_mut() {
+            leave_network(n, &id);
+        }
+        return server_error(format!("failed to persist container state: {e}"));
+    }
+    crate::events::emit_event(&a.events, "container", "create", &id, Value::Object(cre_attrs));
     (
         StatusCode::CREATED,
         Json(crate::api::CreateResponse {
