@@ -1025,6 +1025,14 @@ static int thread_target_signal(int tid, int sig) {
                     pthread_mutex_lock(m); // serialize with the target's pre-wait window; broadcast can't be lost
                     pthread_cond_broadcast(cnd);
                     pthread_mutex_unlock(m);
+                } else if (!pthread_equal(g_threg[i].th, pthread_self())) {
+                    // No published futex wait: the target is either running translated code (cpu->irq already
+                    // bounces it to a dispatcher boundary) or PARKED IN A BLOCKING HOST SYSCALL (read/accept/
+                    // recv/poll/nanosleep/...), which reaches no boundary on its own. Poke it with
+                    // THREAD_INT_SIG (no SA_RESTART) so that syscall returns EINTR; syscall_should_restart
+                    // (now tpending-aware) then declines to restart and the guest sees EINTR + the delivered
+                    // signal. Harmless (near-empty handler) if the target was in-cache. Skip a self-signal.
+                    pthread_kill(g_threg[i].th, THREAD_INT_SIG);
                 }
             }
             found = 1;
