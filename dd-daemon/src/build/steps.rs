@@ -120,6 +120,100 @@ mod tests {
         assert_eq!(desc("CMD", "[\"sh\"]", &HashMap::new()), "CMD [\"sh\"]");
         assert_eq!(desc("USER", "root", &HashMap::new()), "USER root");
     }
+
+    // --- copy_step filesystem-behavior regression tests (shell out to tar/cp) ---
+
+    fn scratch(label: &str) -> PathBuf {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        let d = std::env::temp_dir()
+            .join(format!("dd-steps-test-{}-{}-{}", label, std::process::id(), nanos));
+        std::fs::create_dir_all(&d).unwrap();
+        d
+    }
+
+    // Dockerfile `ADD archive.tar /out/` must EXTRACT the local archive into the destination, not copy the
+    // tar file itself (a common Docker compatibility expectation).
+    #[test]
+    fn add_local_tar_is_extracted_into_destination() {
+        let base = scratch("add-tar");
+        let ctx = base.join("ctx");
+        let rootfs = base.join("rootfs");
+        let inner = base.join("inner");
+        std::fs::create_dir_all(&ctx).unwrap();
+        std::fs::create_dir_all(&rootfs).unwrap();
+        std::fs::create_dir_all(&inner).unwrap();
+        std::fs::write(inner.join("inside.txt"), b"extracted!\n").unwrap();
+        let ok = std::process::Command::new("tar")
+            .arg("cf").arg(ctx.join("payload.tar"))
+            .arg("-C").arg(&inner).arg("inside.txt")
+            .status().unwrap().success();
+        assert!(ok, "build the fixture tar");
+
+        let sn: HashMap<String, usize> = HashMap::new();
+        let stages: Vec<PathBuf> = Vec::new();
+        copy_step("ADD", "payload.tar /out/", &rootfs, "/", &sn, &stages, &ctx)
+            .expect("ADD extract");
+
+        assert!(rootfs.join("out/inside.txt").is_file(), "archive contents extracted into dest");
+        assert!(!rootfs.join("out/payload.tar").exists(), "archive file itself must not be copied");
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    // Plain `COPY` still copies a tar verbatim (only ADD auto-extracts).
+    #[test]
+    fn copy_local_tar_is_not_extracted() {
+        let base = scratch("copy-tar");
+        let ctx = base.join("ctx");
+        let rootfs = base.join("rootfs");
+        let inner = base.join("inner");
+        std::fs::create_dir_all(&ctx).unwrap();
+        std::fs::create_dir_all(&rootfs).unwrap();
+        std::fs::create_dir_all(&inner).unwrap();
+        std::fs::write(inner.join("inside.txt"), b"x\n").unwrap();
+        assert!(std::process::Command::new("tar")
+            .arg("cf").arg(ctx.join("payload.tar")).arg("-C").arg(&inner).arg("inside.txt")
+            .status().unwrap().success());
+
+        let sn: HashMap<String, usize> = HashMap::new();
+        let stages: Vec<PathBuf> = Vec::new();
+        copy_step("COPY", "payload.tar /out/", &rootfs, "/", &sn, &stages, &ctx)
+            .expect("COPY tar");
+
+        assert!(rootfs.join("out/payload.tar").is_file(), "COPY copies the tar verbatim");
+        assert!(!rootfs.join("out/inside.txt").exists(), "COPY must not extract");
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    // A pre-existing symlink at the COPY destination must NOT be followed: the copy must land at the
+    // literal rootfs path, never write through the symlink to an outside directory.
+    #[test]
+    fn copy_does_not_follow_symlinked_destination() {
+        use std::os::unix::fs::symlink;
+        let base = scratch("copy-symdst");
+        let ctx = base.join("ctx");
+        let rootfs = base.join("rootfs");
+        let outside = base.join("outside");
+        std::fs::create_dir_all(&ctx).unwrap();
+        std::fs::create_dir_all(&rootfs).unwrap();
+        std::fs::create_dir_all(&outside).unwrap();
+        std::fs::write(ctx.join("payload"), b"data\n").unwrap();
+        // rootfs/dstlink -> outside (a directory outside the requested path).
+        symlink(&outside, rootfs.join("dstlink")).unwrap();
+
+        let sn: HashMap<String, usize> = HashMap::new();
+        let stages: Vec<PathBuf> = Vec::new();
+        copy_step("COPY", "payload dstlink", &rootfs, "/", &sn, &stages, &ctx)
+            .expect("COPY to symlinked dest");
+
+        assert!(!outside.join("payload").exists(), "copy must not write through the dest symlink");
+        let md = std::fs::symlink_metadata(rootfs.join("dstlink")).unwrap();
+        assert!(!md.file_type().is_symlink(), "dest symlink replaced by a real entry");
+        assert!(rootfs.join("dstlink").is_file(), "payload landed at the literal dest path");
+        let _ = std::fs::remove_dir_all(&base);
+    }
 }
 
 /// Execute a `RUN` instruction in the JIT against the current stage's rootfs. stdout/stderr are appended
@@ -169,9 +263,37 @@ pub(super) async fn run_step(
     Ok(())
 }
 
+/// Whether `p` is a local archive that Dockerfile `ADD` auto-extracts (identity tar, gzip, bzip2, xz,
+/// zstd). Detected by leading magic bytes plus the `ustar` magic at offset 257 for an uncompressed tar,
+/// matching Docker's `archive.DecompressStream` sniffing. Only regular local files are candidates.
+fn is_local_archive(p: &std::path::Path) -> bool {
+    use std::io::Read;
+    let Ok(mut f) = std::fs::File::open(p) else {
+        return false;
+    };
+    let mut buf = [0u8; 262];
+    let n = f.read(&mut buf).unwrap_or(0);
+    if n >= 2 && buf[0] == 0x1f && buf[1] == 0x8b {
+        return true; // gzip
+    }
+    if n >= 3 && &buf[0..3] == b"BZh" {
+        return true; // bzip2
+    }
+    if n >= 6 && &buf[0..6] == b"\xfd7zXZ\x00" {
+        return true; // xz
+    }
+    if n >= 4 && buf[0] == 0x28 && buf[1] == 0xb5 && buf[2] == 0x2f && buf[3] == 0xfd {
+        return true; // zstd
+    }
+    // Uncompressed tar: POSIX ustar magic ("ustar\0" or "ustar  ") at offset 257.
+    n >= 262 && &buf[257..262] == b"ustar"
+}
+
 /// Execute a `COPY`/`ADD` instruction: copy each source (from the build context, or `--from=<stage>`'s
-/// rootfs) into the current stage's rootfs at the resolved destination. Only touches the filesystem;
-/// returns `Err(message)` for the caller to surface via `build_err`.
+/// rootfs) into the current stage's rootfs at the resolved destination. `ADD` of a local archive source
+/// is extracted into the destination (Docker semantics); a pre-existing symlink at the destination is
+/// replaced rather than followed, so writes cannot escape the requested rootfs path. Only touches the
+/// filesystem; returns `Err(message)` for the caller to surface via `build_err`.
 pub(super) fn copy_step(
     inst: &str,
     args: &str,
@@ -198,6 +320,13 @@ pub(super) fn copy_step(
         format!("{}/{}", workdir.trim_end_matches('/'), dst)
     };
     let dst_host = archive_host_path(&rootfs.to_string_lossy(), &[], "", &dst_guest);
+    // A pre-existing symlink at the destination leaf must not be followed: an attacker-controlled base
+    // image or earlier COPY could leave `dst -> ../../etc`, and `cp -a`/`tar` would then write THROUGH it
+    // to a different (possibly outside-rootfs) path than the Dockerfile requested. Replace it with a real
+    // entry at the literal rootfs path so the copy lands where asked.
+    if std::fs::symlink_metadata(&dst_host).map(|m| m.file_type().is_symlink()).unwrap_or(false) {
+        let _ = std::fs::remove_file(&dst_host);
+    }
     let into_dir = dst.ends_with('/') || parts.len() > 2;
     if into_dir {
         std::fs::create_dir_all(&dst_host).ok();
@@ -218,6 +347,17 @@ pub(super) fn copy_step(
         } else {
             src_root.join(src)
         };
+        // Dockerfile `ADD` extracts a LOCAL archive source (tar/gzip/bzip2/xz/zstd) into the destination
+        // directory instead of copying the archive file itself. `COPY` never extracts, and `--from` stage
+        // sources are treated as plain files (Docker does not auto-extract those either).
+        if inst == "ADD" && from_stage.is_none() && src_host.is_file() && is_local_archive(&src_host) {
+            let _ = std::fs::create_dir_all(&dst_host);
+            if !matches!(std::process::Command::new("tar").arg("xf").arg(&src_host).arg("-C").arg(&dst_host).status(), Ok(s) if s.success())
+            {
+                return Err(format!("{inst} {src}: failed to extract archive"));
+            }
+            continue;
+        }
         if !matches!(std::process::Command::new("cp").arg("-a").arg(&src_host).arg(&dst_host).status(), Ok(s) if s.success())
         {
             return Err(format!("{inst} {src}: not found"));

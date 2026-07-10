@@ -60,24 +60,6 @@ Isolated proof:
 
 PoC observed silent write to the symlink target outside the requested destination.
 
-## Build `COPY` Follows Symlinked Destination Directory
-
-Priority: P1
-Impact: silent wrong image contents
-Confidence: High
-
-Evidence:
-
-- Build `COPY` uses host `cp -a <src> <dst_host>`: `dd-daemon/src/build/steps.rs:221`.
-
-Why this is bad:
-
-If the destination path already exists as a symlink to a directory, `cp -a` writes into the symlink target. That changes image contents at a different path than the Dockerfile requested.
-
-Isolated proof:
-
-PoC used `COPY payload dstlink` where `dstlink` was a symlink to a directory. `cp -a` exited `0` and wrote into the target directory.
-
 ## Import Failure Leaves Partial Target
 
 Priority: P2
@@ -97,31 +79,6 @@ A malformed import archive can leave partial rootfs contents behind. Future oper
 Isolated proof:
 
 PoC created `linkout -> ../outside` and `linkout/from_import.txt`; GNU tar failed loudly, but the target rootfs remained with `linkout`.
-
-## Dockerfile `ADD` Copies Local Tar Instead Of Extracting
-
-Priority: P1
-Impact: common Dockerfile compatibility breakage
-Confidence: High
-
-Verification status: Proven in isolated worktree `/Users/x/dd/dd-verify-5b`.
-
-Evidence:
-
-- `COPY` and `ADD` share the same `copy_step` path: `dd-daemon/src/build/steps.rs:172`.
-- The implementation copies sources with `cp -a`: `dd-daemon/src/build/steps.rs:221`.
-
-Why this is bad:
-
-Docker `ADD archive.tar /dest/` extracts local tar archives. dd copies the tar file itself, so files expected inside `/dest` are absent.
-
-Isolated proof:
-
-```sh
-cargo test -p dd-daemon poc_add_local_tar_must_extract_archive_contents -- --ignored
-```
-
-Observed: `/out/payload.tar` is copied and `/out/inside.txt` is not extracted.
 
 ## `docker cp` GET Drops Lower Entries From Overlay Directories
 
