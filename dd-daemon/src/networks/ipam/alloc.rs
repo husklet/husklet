@@ -36,9 +36,12 @@ pub(crate) fn alloc_subnet(nets: &[Net]) -> (String, String) {
     ("172.18.0.0/16".into(), "172.18.0.1".into()) // pool exhausted — degrade rather than fail
 }
 
-/// Next free host address in a network's subnet (`.1` reserved for the gateway, hosts start at `.2`).
-/// Assumes a `/16` "172.B.0.0" subnet — IPs are handed out as `172.B.0.N`.
-pub(crate) fn alloc_ip(net: &Net) -> String {
+/// Next free host address in a network's subnet, `None` when the subnet is exhausted (`.1` reserved for
+/// the gateway, hosts start at `.2`). Assumes a `/16` "172.B.0.0" subnet, but scans the WHOLE /16 host
+/// space — `172.B.0.2 … 172.B.255.254` — not just `172.B.0.x`. The old code scanned only `.0.2..=.0.254`
+/// and, once those 253 were taken, degraded to `.0.2`, colliding with an existing endpoint on a network
+/// advertised as a /16. `None` on true exhaustion so the caller fails the join instead of double-issuing.
+pub(crate) fn alloc_ip(net: &Net) -> Option<String> {
     let base = net.subnet.split('/').next().unwrap_or("172.18.0.0");
     let p: Vec<&str> = base.split('.').collect();
     let (a, b) = (
@@ -47,13 +50,19 @@ pub(crate) fn alloc_ip(net: &Net) -> String {
     );
     let used: std::collections::HashSet<&str> =
         net.endpoints.values().map(|e| e.ip.as_str()).collect();
-    for k in 2u32..=254 {
-        let ip = format!("{a}.{b}.0.{k}");
-        if !used.contains(ip.as_str()) {
-            return ip;
+    for third in 0u32..=255 {
+        for fourth in 0u32..=255 {
+            // Skip the network address (.0.0), the gateway (.0.1), and the broadcast address (.255.255).
+            if (third == 0 && (fourth == 0 || fourth == 1)) || (third == 255 && fourth == 255) {
+                continue;
+            }
+            let ip = format!("{a}.{b}.{third}.{fourth}");
+            if !used.contains(ip.as_str()) {
+                return Some(ip);
+            }
         }
     }
-    format!("{a}.{b}.0.2")
+    None
 }
 
 /// Join container `cid` (reporting as `cname`) to the network named `net_name` in `nets`: lazily
@@ -79,7 +88,7 @@ pub(crate) fn join_network(
     if let Some(e) = n.endpoints.get(cid) {
         return Some(e.ip.clone());
     }
-    let ip = alloc_ip(n);
+    let ip = alloc_ip(n)?; // subnet exhausted -> fail the join rather than double-issue an address
     if !n.containers.iter().any(|c| c == cid) {
         n.containers.push(cid.to_string());
     }
@@ -211,7 +220,7 @@ mod tests {
     fn alloc_ip_first_is_dot2() {
         // .1 is the reserved gateway, so hosts start at .2.
         let n = net_with_subnet("172.18.0.0/16");
-        assert_eq!(alloc_ip(&n), "172.18.0.2");
+        assert_eq!(alloc_ip(&n).as_deref(), Some("172.18.0.2"));
     }
 
     #[test]
@@ -225,20 +234,39 @@ mod tests {
             "c2".into(),
             Endpoint { name: "c2".into(), ip: "172.18.0.3".into() },
         );
-        assert_eq!(alloc_ip(&n), "172.18.0.4");
+        assert_eq!(alloc_ip(&n).as_deref(), Some("172.18.0.4"));
     }
 
+    // "IPAM Reuses .0.2 After 253 Endpoints In /16" (P1): once .0.2..=.0.254 are taken the allocator must
+    // continue into the rest of the /16 (.1.0, .1.1, …), NOT wrap back and re-issue .0.2.
     #[test]
-    fn alloc_ip_exhausted_falls_back_to_dot2() {
+    fn alloc_ip_continues_past_first_octet_into_the_16() {
         let mut n = net_with_subnet("172.18.0.0/16");
-        for k in 2u32..=254 {
+        // Fill the entire first /24 host range (.0.2 .. .0.255).
+        for k in 2u32..=255 {
             n.endpoints.insert(
                 format!("c{k}"),
                 Endpoint { name: format!("c{k}"), ip: format!("172.18.0.{k}") },
             );
         }
-        // Every .2..=.254 taken -> degrade to .2.
-        assert_eq!(alloc_ip(&n), "172.18.0.2");
+        // Next free address is the start of the second /24, not a reused .0.2.
+        assert_eq!(alloc_ip(&n).as_deref(), Some("172.18.1.0"));
+    }
+
+    #[test]
+    fn alloc_ip_none_when_subnet_truly_exhausted() {
+        let mut n = net_with_subnet("172.18.0.0/16");
+        for third in 0u32..=255 {
+            for fourth in 0u32..=255 {
+                if (third == 0 && (fourth == 0 || fourth == 1)) || (third == 255 && fourth == 255) {
+                    continue;
+                }
+                let ip = format!("172.18.{third}.{fourth}");
+                n.endpoints
+                    .insert(ip.clone(), Endpoint { name: ip.clone(), ip });
+            }
+        }
+        assert_eq!(alloc_ip(&n), None, "a full /16 must not hand out a colliding address");
     }
 
     #[test]

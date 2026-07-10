@@ -473,32 +473,6 @@ Verification:
 
 Run a high-output container with a deliberately slow `logs -f` consumer and compare live stream bytes against buffered logs after exit.
 
-## IPAM Reuses `.0.2` After 253 Endpoints In `/16`
-
-Priority: P1
-Impact: silent IP collision on user-defined networks
-Confidence: High
-
-Verification status: Proven in isolated worktree `/Users/x/dd/dd-worker-M-daemon-api-20260710`.
-
-Evidence:
-
-- Allocator scans only `.0.2..=.0.254`: `dd-daemon/src/networks/ipam/alloc.rs:50`.
-- It falls back to `.0.2` when exhausted: `dd-daemon/src/networks/ipam/alloc.rs:56`.
-- `join_network` stores the returned IP without detecting duplicate allocation: `dd-daemon/src/networks/ipam/alloc.rs:82`.
-
-Why this is bad:
-
-The network is advertised as a `/16`, but allocation wraps after 253 endpoints and collides with an existing endpoint.
-
-Isolated proof:
-
-```sh
-CARGO_TARGET_DIR=/Users/x/dd/dd-worker-M-daemon-api-20260710-target cargo test -p dd-daemon alloc_ip_does_not_reuse_address_inside_advertised_16 -- --nocapture
-```
-
-Result: failed as intended. Allocator reused `172.18.0.2`.
-
 ## Healthcheck `NONE` Create Override Makes Fake Health
 
 Priority: P2
