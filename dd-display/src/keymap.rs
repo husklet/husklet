@@ -106,7 +106,10 @@ xkb_types "dd" {
 };
 xkb_compatibility "dd" {
     virtual_modifiers NumLock,Alt,LevelThree,Super,Meta;
-    interpret.repeat = False;
+    // Keys repeat by default — consistent with the wl_keyboard.repeat_info(rate>0) the compositor
+    // advertises. (Leaving this False would tell xkbcommon "no key repeats" while the protocol said
+    // repeat is enabled, so toolkits combining the two would behave inconsistently.)
+    interpret.repeat = True;
     interpret Any + AnyOf(all) { action = SetMods(modifiers = modMapMods); };
     interpret Caps_Lock { action = LockMods(modifiers = Lock); };
     interpret Num_Lock { action = LockMods(modifiers = NumLock); };
