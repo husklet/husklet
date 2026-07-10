@@ -178,33 +178,27 @@ DD_PCACHE=0 cargo run -q -p dd-jit --example ah_run_guest -- target/ah-probes/ep
 
 Linux/qemu observed `wait=1 ... read=1 char=Q`; dd observed `wait=0 ... read=1 char=Q`.
 
-## Fork Children Lose Inherited Epoll/Timerfd State
+## Fork Children Lose Inherited Epoll Interest
 
 Priority: P1
-Impact: child processes lose inherited event sources and timers
+Impact: child processes lose inherited epoll interest lists
 Confidence: High
 
-Verification status: Proven in isolated worktree `/Users/x/dd/dd-worker-AH-jit-runtime-20260710`.
+(The timerfd half is FIXED: the fork child's kqueue rebuild now re-arms an inherited timerfd from its
+tracked deadline/interval, so the child sees the expiration. Only the epoll interest-list half remains.)
 
 Evidence:
 
-- Fork child calls kqueue rebuild: `dd-jit-darwin/src/runtime/os/linux/syscall/proc.c:300`.
-- Rebuild creates empty kqueues for epoll/timerfd/inotify: `dd-jit-darwin/src/runtime/os/linux/syscall/event.c:151`.
-- Timerfd state uses kqueue: `dd-jit-darwin/src/runtime/os/linux/syscall/event.c:811`.
-- Timerfd read drains kqueue state: `dd-jit-darwin/src/runtime/os/linux/syscall/io.c:438`.
+- Rebuild creates empty kqueues for epoll on fork: `dd-jit-darwin/src/runtime/os/linux/syscall/event.c` (`kqueue_rebuild_after_fork`).
 
 Why this is bad:
 
-Linux children inherit epoll and timerfd objects. Replacing them with empty kqueues drops interest lists and armed timers, so child event loops can time out or hang.
-
-Isolated proof:
-
-```sh
-DD_PCACHE=0 cargo run -q -p dd-jit --example ah_run_guest -- target/ah-probes/epoll_fork_childwait.aarch64
-timeout 5 env DD_PCACHE=0 cargo run -q -p dd-jit --example ah_run_guest -- target/ah-probes/timerfd_fork.aarch64
-```
-
-Linux/qemu epoll child observed `wait=1 data=61626364 child_ok=1`; dd observed `wait=0 data=0 child_ok=0`. Linux/qemu timerfd child read one expiration; dd timed out.
+Linux children inherit the epoll interest list. dd rebuilds an empty kqueue and has no persistent record of
+each registration's `epoll_event.data` (udata) to re-register with, so a child that epoll_waits WITHOUT
+re-registering (rather than re-initialising its event loop, as most runtimes do) sees no events. A full fix
+needs a per-instance registration table (fd + events + udata) written on every epoll_ctl -- a hot-path
+change deferred to avoid destabilising the epoll fast path; most real runtimes re-register post-fork so this
+is rarely hit.
 
 ## Forked Child Loses Inherited Inotify Watch And Can Hang
 

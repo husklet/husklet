@@ -166,6 +166,23 @@ static void kqueue_rebuild_after_fork(void) {
             dup2(kq, fd);
             close(kq);
         }
+        // timerfd: Linux children INHERIT the armed timer. The deadline/interval survive the fork (COW BSS),
+        // so re-arm the EVFILT_TIMER on the fresh kqueue from them (converting the absolute monotonic
+        // deadline back to a relative first delay), rather than leaving the child's timer disarmed.
+        if (g_timerfd[fd] && g_tfd_deadline[fd] > 0) {
+            struct timespec now;
+            clock_gettime(CLOCK_MONOTONIC, &now);
+            int64_t now_ns = (int64_t)now.tv_sec * 1000000000LL + now.tv_nsec;
+            int64_t iv = g_tfd_interval[fd];
+            int64_t delay = g_tfd_deadline[fd] - now_ns;
+            if (delay < 0) delay = (iv > 0) ? (iv - ((-delay) % iv)) : 0;
+            struct kevent kv;
+            uint16_t flg = EV_ADD | (iv > 0 ? 0 : EV_ONESHOT);
+            int64_t arm = (iv > 0) ? iv : delay;
+            if (arm < 0) arm = 0;
+            EV_SET(&kv, 1, EVFILT_TIMER, flg, NOTE_NSECONDS, arm, NULL);
+            kevent(fd, &kv, 1, NULL, 0, NULL);
+        }
         // the fresh instance carries no registrations: drop this epoll fd's inherited (now-invalid) changelist
         // and prime buffer so a later epoll_ctl/epoll_wait re-arms against the new kqueue, not stale state.
         if (g_ep_chg[fd]) {
