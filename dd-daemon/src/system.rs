@@ -53,6 +53,16 @@ pub(crate) fn host_mem_total() -> i64 {
     0
 }
 
+/// dd's only container runtime. `/info` advertises it as `DefaultRuntime` AND lists it in `Runtimes`
+/// (via [`runtimes`]) so the two stay consistent — Docker clients validate the default against that map.
+pub(crate) const DEFAULT_RUNTIME: &str = "dd-jit";
+
+/// The `Runtimes` map for `/info`. Always contains [`DEFAULT_RUNTIME`] so runtime validation/capability
+/// discovery sees a well-formed shape (dd previously omitted `Runtimes` while advertising a default).
+pub(crate) fn runtimes() -> std::collections::HashMap<&'static str, crate::api::Runtime> {
+    std::collections::HashMap::from([(DEFAULT_RUNTIME, crate::api::Runtime { path: DEFAULT_RUNTIME })])
+}
+
 pub(crate) async fn info(State(a): State<App>) -> Json<crate::api::Info> {
     use crate::api::{Info, Plugins, Swarm};
     let g = a.inner.lock().await;
@@ -87,7 +97,8 @@ pub(crate) async fn info(State(a): State<App>) -> Json<crate::api::Info> {
         server_version: "0.1.0-dd",
         docker_root_dir: dd_home().to_string_lossy().into_owned(),
         cgroup_driver: "none",
-        default_runtime: "dd-jit",
+        default_runtime: DEFAULT_RUNTIME,
+        runtimes: runtimes(),
         swarm: Swarm {
             local_node_state: "inactive",
             control_available: false,
@@ -261,5 +272,15 @@ mod capacity_tests {
     #[cfg(target_os = "linux")]
     fn host_mem_total_is_nonzero_on_linux() {
         assert!(host_mem_total() > 0, "MemTotal must be read from /proc/meminfo on Linux");
+    }
+
+    // "Info Default Runtime Is Not Declared" (P1): /info advertises a DefaultRuntime, so the Runtimes map
+    // must declare it — otherwise runtime validation sees a broken shape.
+    #[test]
+    fn default_runtime_is_present_in_runtimes_map() {
+        assert!(
+            super::runtimes().contains_key(super::DEFAULT_RUNTIME),
+            "the declared DefaultRuntime must appear in the Runtimes map"
+        );
     }
 }

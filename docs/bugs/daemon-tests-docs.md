@@ -1715,30 +1715,6 @@ Why this is bad:
 
 Docker attach selectors are part of the API contract. Ignoring them can leak unwanted stdout/stderr into clients, block on stdin unexpectedly, or break clients that attach only to one stream.
 
-## Resize Missing Container Or Exec Reports Success
-
-Priority: P2
-Impact: callers cannot distinguish a real resize from a missing target
-Confidence: High
-
-Verification status: Proven in isolated worktree `/Users/x/dd/dd-audit-daemon-exec-health-wait`.
-
-Evidence:
-
-- Resize handler returns success without checking whether the target container or exec exists: `dd-daemon/src/containers/exec/resize.rs:18`.
-
-Why this is bad:
-
-Terminal resize for a missing container or exec should return a not-found error. dd returns `200`, so clients silently believe a resize was applied to no target.
-
-Isolated proof:
-
-```sh
-CARGO_TARGET_DIR=/Users/x/dd/dd-audit-daemon-exec-health-wait-target cargo test -p dd-daemon audit_resize_missing_container_or_exec_is_404 -- --nocapture
-```
-
-Result: observed `200`, expected `404`.
-
 ## Exec Inspect Omits Docker State Fields
 
 Priority: P2
@@ -2155,31 +2131,6 @@ CARGO_TARGET_DIR=/Users/x/dd/dd-audit-system-endpoints-20260710-target cargo tes
 ```
 
 Result: one `~/.dd/pcache/*.pcache` file produced total count `1` with empty item lists.
-
-## Info Default Runtime Is Not Declared
-
-Priority: P1
-Impact: runtime capability data is internally inconsistent
-Confidence: High
-
-Verification status: Proven in isolated worktree `/Users/x/dd/dd-audit-info-version-20260710`.
-
-Evidence:
-
-- `/info` sets `DefaultRuntime: "dd-jit"`: `dd-daemon/src/system.rs:66`.
-- The system DTO has no `Runtimes` field at all: `dd-daemon/src/api/system.rs:10`.
-
-Why this is bad:
-
-Docker clients expect the default runtime to be declared in the runtimes map. dd advertises `dd-jit` as default but omits `Runtimes`, so runtime validation and capability discovery see a broken shape.
-
-Isolated proof:
-
-```sh
-CARGO_TARGET_DIR=/Users/x/dd/dd-audit-info-version-20260710-target cargo test -p dd-daemon system_info -- --ignored --nocapture
-```
-
-Result: `DefaultRuntime="dd-jit"` and `Runtimes=null`.
 
 ## Daemon Version Endpoints And Server Header Are Stale
 

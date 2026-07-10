@@ -31,10 +31,18 @@ pub(crate) struct Info {
     pub docker_root_dir: String,
     pub cgroup_driver: &'static str,
     pub default_runtime: &'static str,
+    /// The runtimes map Docker clients validate `DefaultRuntime` against. Must contain `default_runtime`.
+    pub runtimes: std::collections::HashMap<&'static str, Runtime>,
     pub swarm: Swarm,
     pub plugins: Plugins,
     pub security_options: Vec<Value>,
     pub warnings: Vec<Value>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "PascalCase")]
+pub(crate) struct Runtime {
+    pub path: &'static str,
 }
 
 #[derive(Serialize)]
