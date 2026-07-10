@@ -287,7 +287,6 @@ This directory is a working inventory of suspicious behavior, bad architecture, 
 | P2 | daemon/system | image usage active count counts containers, not images | High | [daemon-tests-docs.md](daemon-tests-docs.md#image-usage-active-count-counts-containers-not-images) |
 | P2 | daemon/system | volume usage never reports live references | High | [daemon-tests-docs.md](daemon-tests-docs.md#volume-usage-never-reports-live-references) |
 | P2 | daemon/system | build-cache totals can be nonzero with empty item lists | High | [daemon-tests-docs.md](daemon-tests-docs.md#build-cache-totals-can-be-nonzero-with-empty-item-lists) |
-| P1 | daemon/info | `/info` default runtime is not declared | High | [daemon-tests-docs.md](daemon-tests-docs.md#info-default-runtime-is-not-declared) |
 | P2 | daemon/version | daemon version endpoints and Server header are stale | High | [daemon-tests-docs.md](daemon-tests-docs.md#daemon-version-endpoints-and-server-header-are-stale) |
 | P2 | daemon/events | `event=health_status` filter misses health transitions | High | [daemon-tests-docs.md](daemon-tests-docs.md#eventhealth_status-filter-misses-health-transitions) |
 | P2 | daemon/events | non-epoch `until` values turn bounded events into unbounded streams | High | [daemon-tests-docs.md](daemon-tests-docs.md#non-epoch-until-values-turn-bounded-events-into-unbounded-streams) |
