@@ -403,3 +403,58 @@ async fn flow_image_three_tag_chain_delete_middle_first() {
     );
     assert!(image_repotags(&app).await.is_empty(), "store empty after the last tag is removed");
 }
+
+// ---- rmi ref-safety: forced rmi keeps rootfs used by a container; alias keys on rootfs --------
+#[tokio::test]
+async fn forced_rmi_untags_but_keeps_rootfs_used_by_container() {
+    let app = test_app();
+    seed_image_rootfs(&app, "busy:1", "/store/busyF/rootfs").await;
+    let r = crate::containers::containers_create(
+        State(app.clone()),
+        Query(create_q(serde_json::json!({}))),
+        create_body(serde_json::json!({"Image":"busy:1"})),
+    )
+    .await;
+    assert_eq!(r.status(), StatusCode::CREATED);
+    // forced rmi: untag succeeds, but the store dir must NOT be reported Deleted (a container uses it).
+    let forced: crate::images::RmiQ = serde_json::from_value(serde_json::json!({"force":"true"})).unwrap();
+    let r = crate::images::image_delete(State(app.clone()), Path("busy:1".into()), Query(forced)).await;
+    assert_eq!(r.status(), StatusCode::OK);
+    let arr = to_body_json(r).await;
+    let arr = arr.as_array().unwrap();
+    assert!(arr.iter().any(|x| x.get("Untagged").is_some()), "forced rmi untags: {arr:?}");
+    assert!(
+        !arr.iter().any(|x| x.get("Deleted").is_some()),
+        "forced rmi must NOT delete rootfs still used by a container: {arr:?}"
+    );
+}
+
+#[tokio::test]
+async fn nonforced_rmi_last_alias_409_when_container_uses_rootfs_under_old_tag() {
+    let app = test_app();
+    // Image tagged `old:1`; a container is created from it (c.image=old:1, c.rootfs=R).
+    seed_image_rootfs(&app, "old:1", "/store/aliasR/rootfs").await;
+    let r = crate::containers::containers_create(
+        State(app.clone()),
+        Query(create_q(serde_json::json!({}))),
+        create_body(serde_json::json!({"Image":"old:1"})),
+    )
+    .await;
+    assert_eq!(r.status(), StatusCode::CREATED);
+    // Retag to new:1 (same R) and drop the old tag from the store, so `new:1` is the last tag of R while
+    // the container still references R through the now-removed `old:1` name.
+    {
+        let mut g = app.inner.lock().await;
+        // Replace the image tag old:1 -> new:1 (same rootfs), leaving the container's c.image = "old:1".
+        for i in g.images.iter_mut() {
+            if i.name == "old:1" { i.name = "new:1".into(); }
+        }
+    }
+    // Non-forced rmi of the last tag must 409 (a container still uses that rootfs), not delete the store.
+    let r = crate::images::image_delete(State(app.clone()), Path("new:1".into()), Query(empty_q())).await;
+    assert_eq!(r.status(), StatusCode::CONFLICT, "rmi must refuse while a container uses the rootfs");
+    assert!(
+        app.inner.lock().await.images.iter().any(|i| i.name == "new:1"),
+        "the in-use image survives the refused rmi"
+    );
+}

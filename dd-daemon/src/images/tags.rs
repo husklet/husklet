@@ -80,28 +80,35 @@ pub(crate) async fn image_delete(
     let Some(target) = g.images.iter().find(|i| matches(i)).cloned() else {
         return no_such_image(&name);
     };
-    // If this is the LAST tag of the underlying rootfs (deleting it removes the image itself), a
-    // container still created from this exact tag makes `rmi` a 409 unless forced — docker refuses to
-    // delete an image in use. A non-last tag just untags (rootfs kept alive by a sibling) and is allowed.
+    // Whether ANY container is still backed by this rootfs. Keyed on the resolved `rootfs`, NOT the tag
+    // being deleted: a container created through an OLDER alias (`c.image = "old"`) still references the
+    // same storage even when the last surviving tag is `new`, so a tag-only comparison would wrongly let
+    // the store be deleted out from under it.
+    let container_uses_rootfs = g.containers.values().any(|c| c.rootfs == target.rootfs);
+    // If this is the LAST tag of the underlying rootfs (deleting it removes the image itself), a container
+    // still backed by that rootfs makes `rmi` a 409 unless forced — docker refuses to delete an image in
+    // use. A non-last tag just untags (rootfs kept alive by a sibling) and is allowed.
     let would_be_last = g.images.iter().filter(|i| i.rootfs == target.rootfs).count() == 1;
-    if would_be_last && !force && target.name != "macos" {
-        if let Some(c) = g
+    if would_be_last && !force && target.name != "macos" && container_uses_rootfs {
+        let cid = g
             .containers
             .values()
-            .find(|c| ref_repo(&c.image) == want_repo && ref_tag(&c.image) == want_tag)
-        {
-            let cid = c.id[..c.id.len().min(12)].to_string();
-            return conflict(format!(
-                "conflict: unable to delete {name} (must be forced) - image is being used by container {cid}"
-            ));
-        }
+            .find(|c| c.rootfs == target.rootfs)
+            .map(|c| c.id[..c.id.len().min(12)].to_string())
+            .unwrap_or_default();
+        return conflict(format!(
+            "conflict: unable to delete {name} (must be forced) - image is being used by container {cid}"
+        ));
     }
     let untagged = repo_tag(&target.name);
     // Whether removing THIS tag leaves the rootfs unreferenced (its layers should then be deleted). Computed
     // BEFORE mutating the store so a failed on-disk removal can abort WITHOUT having dropped image state.
     let last_ref = g.images.iter().filter(|i| i.rootfs == target.rootfs).count() == 1;
     let mut report = vec![DeleteRecord::Untagged(untagged)];
-    if last_ref && target.name != "macos" {
+    // Delete the backing store only when this was the last tag AND no container still uses the rootfs —
+    // even a FORCED rmi must not delete storage a live container reads (docker refcounts the layers by the
+    // container; dd shares the rootfs directly, so deleting it would break the container's restart/export).
+    if last_ref && target.name != "macos" && !container_uses_rootfs {
         // the host `macos` image's rootfs is the live `/` — never delete. dd-images owns the store-guarded
         // dir removal (a rootfs outside the writable store — a bundled starter — is left untouched). If the
         // on-disk removal FAILS, keep the image in state (retryable) and report an error rather than

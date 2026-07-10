@@ -526,32 +526,6 @@ Verification:
 
 Run a fast-exiting container repeatedly under event capture and assert each container's event order is create, start, die.
 
-## Daemon Restart Reloads Running Containers Without Live Process
-
-Priority: P1
-Impact: persisted state can report running while no process exists
-Confidence: High
-
-Verification status: Proven in isolated worktree `/Users/x/dd/dd-worker-AA-daemon-image-20260710`.
-
-Evidence:
-
-- State reload reads persisted model directly: `dd-daemon/src/util/state.rs:28`.
-- Start returns not-modified for containers already marked running: `dd-daemon/src/containers/lifecycle/run.rs:20`.
-- Inspect derives running state and pid from model/live state: `dd-daemon/src/containers/inspect/detail.rs:14`.
-
-Why this is bad:
-
-After daemon restart, no live process is attached. If persisted status remains running, inspect can report `Running=true` with `Pid=0`, and `POST /start` can become a no-op instead of reconciling or restarting the container.
-
-Isolated proof:
-
-```sh
-CARGO_TARGET_DIR=/Users/x/dd/dd-worker-AA-daemon-image-20260710/target-aa pocs/slot-aa/reload-running-no-live.sh
-```
-
-Observed: `State.Status=running`, `State.Running=true`, `State.Pid=0`, and start returned `304`.
-
 ## `docker tag` Aliases Do Not Survive Discovery
 
 Priority: P1
@@ -602,56 +576,6 @@ CARGO_TARGET_DIR=/Users/x/dd/dd-audit-daemon-state-ai/target-audit cargo test -p
 ```
 
 Result: failed; logs body was empty, expected `hello after restart`.
-
-## Forced `rmi` Deletes Rootfs Referenced By Containers
-
-Priority: P1
-Impact: existing containers can lose their backing rootfs
-Confidence: High
-
-Verification status: Proven in isolated worktree `/Users/x/dd/dd-worker-AX-daemon-lifecycle-events-prune-image-20260710`.
-
-Evidence:
-
-- Forced image removal bypasses in-use conflict checks: `dd-daemon/src/images/tags.rs:75`.
-- Last-reference deletion removes the on-disk image dir: `dd-daemon/src/images/tags.rs:91`, `dd-daemon/src/images/tags.rs:96`.
-
-Why this is bad:
-
-Containers keep `Container.rootfs` paths pointing into image storage. Forced image removal may remove tags, but it must not delete backing storage while existing containers still reference it; otherwise restart/export/diff/commit can break.
-
-Isolated proof:
-
-```sh
-CARGO_TARGET_DIR=/Users/x/dd/dd-worker-AX-daemon-lifecycle-events-prune-image-20260710/target-ax cargo test -p dd-daemon audit_forced_rmi_preserves_container_backing_rootfs -- --ignored --nocapture
-```
-
-Result: failed because `rootfs/bin/sh` was deleted.
-
-## Non-Forced `rmi` Can Delete Rootfs Used Through Alias
-
-Priority: P1
-Impact: alias removal can delete backing storage still used by containers
-Confidence: High
-
-Verification status: Proven in isolated worktree `/Users/x/dd/dd-worker-BB2-daemon-image-ref-state-20260710`.
-
-Evidence:
-
-- In-use checks compare only the tag being deleted: `dd-daemon/src/images/tags.rs:74`.
-- Last-reference deletion removes the rootfs: `dd-daemon/src/images/tags.rs:91`.
-
-Why this is bad:
-
-A container can reference an image/rootfs through an older alias while the current last tag points to the same storage. Non-forced `rmi` should conflict if any container still references that rootfs, not delete the storage.
-
-Isolated proof:
-
-```sh
-CARGO_TARGET_DIR=/Users/x/dd/dd-worker-BB2-daemon-image-ref-state-20260710-target cargo test -p dd-daemon image_rmi_last_alias_refuses_when_container_uses_same_rootfs_under_old_tag -- --nocapture
-```
-
-Result: failed; observed `status=200 OK, rootfs_survived=false`, expected `409 CONFLICT` and preserved rootfs.
 
 ## Docker Load Of Same Tag Rewrites Existing Container Rootfs
 
@@ -784,30 +708,6 @@ CARGO_TARGET_DIR=/Users/x/dd/dd-worker-AQ-daemon-ref-config-20260710/target-aq c
 
 Result: failed with restored arch `LinuxAarch64`, expected `LinuxX86_64`.
 
-## Restart State Load Overwrites Persisted Container Arch
-
-Priority: P2
-Impact: unresolved images can change persisted container architecture
-Confidence: High
-
-Verification status: Proven in isolated worktree `/Users/x/dd/dd-worker-AQ-daemon-ref-config-20260710`.
-
-Evidence:
-
-- State load forces unresolved images to `Guest::LinuxAarch64`: `dd-daemon/src/util/state.rs:49`.
-
-Why this is bad:
-
-Persisted container state may already contain the correct architecture. If image discovery misses the referenced image, reload should preserve that arch instead of defaulting to arm64.
-
-Isolated proof:
-
-```sh
-CARGO_TARGET_DIR=/Users/x/dd/dd-worker-AQ-daemon-ref-config-20260710/target-aq cargo test -p dd-daemon load_state_preserves_persisted_arch_when_image_absent -- --nocapture
-```
-
-Result: failed with `Some(LinuxAarch64)`, expected `Some(LinuxX86_64)`.
-
 ## Docker Commit Drops Container User
 
 Priority: P1
@@ -834,32 +734,6 @@ cargo test -p dd-daemon audit_commit_preserves_effective_user_in_image_config --
 ```
 
 Result: failed with observed user `""`, expected `"1001:1002"`.
-
-## Restarting Containers Can Stay Stuck After Daemon Restart
-
-Priority: P1
-Impact: restart-policy backoff state can persist without a supervisor
-Confidence: High
-
-Verification status: Proven in isolated worktree `/Users/x/dd/dd-audit-daemon-events-logs-stats-restart-20260710`.
-
-Evidence:
-
-- State load restores container status directly: `dd-daemon/src/util/state.rs:28`.
-- Daemon startup loads state without recreating sleeping restart-policy supervisors: `dd-daemon/src/main.rs:89`.
-- Restart supervisor logic lives separately: `dd-daemon/src/runtime/restart.rs:47`.
-
-Why this is bad:
-
-Reload should reconcile restart-backoff state by resuming restart, marking exited, or normalizing status. dd can preserve `restarting` forever with no task that will actually restart the container.
-
-Isolated proof:
-
-```sh
-CARGO_TARGET_DIR=/Users/x/dd/dd-audit-daemon-events-logs-stats-restart-target cargo test -p dd-daemon load_state_does_not_preserve_restarting_without_restart_supervisor -- --nocapture
-```
-
-Result: failed; status remained `"restarting"`.
 
 ## Stats JSON Is Internally Inconsistent
 
