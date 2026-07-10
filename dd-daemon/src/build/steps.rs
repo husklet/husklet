@@ -448,7 +448,11 @@ pub(super) fn copy_step(
         // sources are treated as plain files (Docker does not auto-extract those either).
         if inst == "ADD" && from_stage.is_none() && src_host.is_file() && is_local_archive(&src_host) {
             let _ = std::fs::create_dir_all(&dst_host);
-            if !matches!(std::process::Command::new("tar").arg("xf").arg(&src_host).arg("-C").arg(&dst_host).status(), Ok(s) if s.success())
+            // Refuse a traversal-laden archive before extracting it into the stage rootfs.
+            if let Err(e) = crate::util::tar_members_contained(&src_host) {
+                return Err(format!("{inst} {src}: {e}"));
+            }
+            if !matches!(std::process::Command::new("tar").arg("--no-same-owner").arg("-xf").arg(&src_host).arg("-C").arg(&dst_host).status(), Ok(s) if s.success())
             {
                 return Err(format!("{inst} {src}: failed to extract archive"));
             }

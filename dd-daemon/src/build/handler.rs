@@ -16,8 +16,14 @@ fn unpack_build_context(body: &[u8], ctx: &std::path::Path, _images_dir: &str) -
     if std::fs::write(&ctar, body).is_err() {
         return Err("cannot write context".into());
     }
+    // Refuse a traversal-laden context (absolute / `..` members) before extracting; `--no-same-owner`
+    // avoids chowning extracted files to arbitrary uids.
+    if let Err(e) = crate::util::tar_members_contained(&ctar) {
+        let _ = std::fs::remove_file(&ctar);
+        return Err(e);
+    }
     let ok = matches!(
-        std::process::Command::new("tar").arg("xf").arg(&ctar).arg("-C").arg(ctx).status(),
+        std::process::Command::new("tar").arg("--no-same-owner").arg("-xf").arg(&ctar).arg("-C").arg(ctx).status(),
         Ok(s) if s.success()
     );
     let _ = std::fs::remove_file(&ctar);
