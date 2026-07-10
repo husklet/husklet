@@ -750,6 +750,19 @@ static int svc_mem(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_
             G_RET(c) = (uint64_t)(-EINVAL);
             break;
         }
+        // Linux: `vec` must be a writable buffer of ceil(len/pagesize) bytes; a NULL or inaccessible vec is
+        // EFAULT. Validate against GUEST protections up front (both paths), because dd force-maps guest
+        // PROT_NONE pages host-writable -- so a raw host mincore would happily scribble a guest guard page
+        // (aarch64 fast path) and the slow path skipped the check entirely when a2==NULL (x86 null-vec).
+        // len==0 is a success no-op regardless of vec, matching the kernel.
+        if (len) {
+            size_t ps = gps ? gps : hps;
+            size_t needp = (len + ps - 1) / ps;
+            if (!a2 || guest_bad_ptr((uintptr_t)a2, needp)) {
+                G_RET(c) = (uint64_t)(int64_t)(-EFAULT);
+                break;
+            }
+        }
         // Fast path: guest page == host page (aarch64) -- the host vec is already one byte per guest page.
         if (gps == hps || gps == 0 || len == 0) {
             int r = mincore((void *)a0, len, (char *)a2);

@@ -749,7 +749,13 @@ static int svc_fs(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t
         // through to the real host tcget/tcsetpgrp; (2) rt_sigprocmask mirrors the terminal-stop signals onto
         // the host mask, so bash's background tcsetpgrp handoff isn't SIG_DFL-stopped by the host kernel.
         case 0x540f: { // tcgetpgrp
-            pid_t fg = isatty(fd) ? tcgetpgrp(fd) : -1;
+            // Linux: a non-tty fd (regular file, pipe, socket) fails ENOTTY. The old getpgrp() fallback
+            // faked success and let terminal detection treat a plain file as a controlling terminal.
+            if (!isatty(fd)) {
+                G_RET(c) = (uint64_t)(int64_t)(-ENOTTY);
+                break;
+            }
+            pid_t fg = tcgetpgrp(fd);
             if (fg <= 0) fg = getpgrp();
             if (g_init_hostpid && fg == g_init_hostpid) fg = 1; // init's real group -> guest pgid 1
             if (arg) *(int *)arg = (int)fg;
@@ -757,6 +763,11 @@ static int svc_fs(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t
             break;
         }
         case 0x5410: { // tcsetpgrp
+            // Linux: a non-tty fd fails ENOTTY rather than silently accepting a foreground-group set.
+            if (!isatty(fd)) {
+                G_RET(c) = (uint64_t)(int64_t)(-ENOTTY);
+                break;
+            }
             pid_t pg = arg ? *(int *)arg : 0;
             if (pg == 1 && g_init_hostpid) pg = g_init_hostpid; // guest pgid 1 -> init's real host group
             if (isatty(fd) && pg > 0) {
@@ -899,6 +910,13 @@ static int svc_fs(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t
     }
     // unlinkat(dirfd, path, flags) -- confined
     case 35: {
+        // Linux rejects unknown flag bits (only AT_REMOVEDIR=0x200 is valid) with EINVAL BEFORE any
+        // path resolution or removal -- otherwise a corrupted/probed flag value would silently fall
+        // through and delete the target. This check precedes the EFAULT path check to match the kernel.
+        if (a2 & ~0x200u) {
+            G_RET(c) = (uint64_t)(int64_t)(-EINVAL);
+            break;
+        }
         // a bad pathname pointer -> EFAULT (getname copy_from_user), before any resolution; and a
         // relative path under a bad/non-dir dirfd -> EBADF/ENOTDIR. (LTP unlink07.) guest_bad_ptr also faults
         // a PROT_NONE guard page (tst_get_bad_addr), which dd force-maps host-readable.
@@ -1481,6 +1499,22 @@ static int svc_fs(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t
             G_RET(c) = (uint64_t)(-EINVAL);
             break;
         }
+        // Linux mode-combination validity (vfs_fallocate/do_fallocate): the range ops must be used
+        // exclusively, otherwise the historical "dispatch on the first matching bit" logic silently ran one
+        // op and dropped the rest (e.g. COLLAPSE|KEEP_SIZE shrank the file, ZERO|COLLAPSE overwrote bytes).
+        if (((mode & 0x02) && !(mode & 0x01)) ||           // PUNCH_HOLE requires KEEP_SIZE
+            ((mode & 0x08) && (mode & ~0x08)) ||           // COLLAPSE_RANGE must be used alone
+            ((mode & 0x20) && (mode & ~0x20)) ||           // INSERT_RANGE must be used alone
+            ((mode & 0x40) && (mode & ~(0x40 | 0x01)))) {  // UNSHARE_RANGE only with KEEP_SIZE
+            G_RET(c) = (uint64_t)(-EINVAL);
+            break;
+        }
+        // off+len overflow (or wrap through zero) -> EFBIG, matching vfs_fallocate's wrap check. off>=0 and
+        // len>0 here, so the sum overflows iff off > INT64_MAX - len.
+        if (off > (off_t)0x7fffffffffffffffLL - len) {
+            G_RET(c) = (uint64_t)(-EFBIG);
+            break;
+        }
         int seal = (fd >= 0 && fd < DD_NFD) ? memfd_seals_fd(fd) : 0;
         memf_materialize(fd); // flush any RAM cache; every branch below works on the real host fd
         struct stat s;
@@ -1761,6 +1795,14 @@ static int svc_fs(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t
     }
     // fchownat(dirfd,path,uid,gid,flags) -- best-effort (rootless)
     case 54: {
+        // Linux validates the flag word before touching the path: only AT_SYMLINK_NOFOLLOW (0x100) and
+        // AT_EMPTY_PATH (0x1000) are defined; any other bit is EINVAL. dd emulates a root container, so an
+        // actual ownership change is faked-success (a real host chown is a rootless no-op), but a syntactically
+        // invalid call must still fail exactly as Linux does rather than silently mutate the owner xattr.
+        if (a4 & ~0x1100u) {
+            G_RET(c) = (uint64_t)(int64_t)(-EINVAL);
+            break;
+        }
         if (jail_ro_at((int)a0, (const char *)a1)) {
             G_RET(c) = (uint64_t)(int64_t)(-EROFS);
             break;
@@ -1796,7 +1838,13 @@ static int svc_fs(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t
         break;
     }
     case 55: {
-        fchown((int)a0, (uid_t)a1, (gid_t)a2);
+        // A genuinely invalid fd must fail EBADF like Linux -- don't fake-success and poison the owner
+        // xattr on a descriptor that isn't open. (Host EPERM from the rootless chown is still faked OK,
+        // matching the emulated root container.)
+        if (fchown((int)a0, (uid_t)a1, (gid_t)a2) < 0 && errno == EBADF) {
+            G_RET(c) = (uint64_t)(int64_t)(-EBADF);
+            break;
+        }
         chown_xattr_set_fd((int)a0, (int)(int32_t)(uint32_t)a1, (int)(int32_t)(uint32_t)a2);
         // the guest-owner xattr just changed -> drop this path's cached stat so a later stat reports it
         if ((int)a0 >= 0 && (int)a0 < 1024 && g_fdpath[(int)a0][0]) fc_evict_path(g_fdpath[(int)a0]);
@@ -1805,12 +1853,52 @@ static int svc_fs(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t
         // fchown(fd,uid,gid) -- best-effort
     }
     // openat2(dirfd, path, open_how*, size): unpack open_how { u64 flags; u64 mode; u64 resolve; } into
-    // the openat arg positions, then share the full openat path (O_* xlate, overlay, jail). The RESOLVE_*
-    // restriction flags are advisory here -- the rootfs jail already confines every resolution.
+    // the openat arg positions, then share the full openat path (O_* xlate, overlay, jail). Linux validates
+    // the ABI up front, so we do too: NULL how -> EFAULT, size < v0 (24) -> EINVAL, size > PAGE_SIZE or
+    // non-zero extension bytes -> E2BIG, unknown resolve bits / mode>07777 / mode set without a create flag
+    // -> EINVAL. RESOLVE_NO_SYMLINKS is enforced as O_NOFOLLOW (ELOOP on a symlink final component); the
+    // rootfs jail already confines every resolution so the containment RESOLVE_* bits stay advisory.
     case 437: {
-        uint64_t *how = (uint64_t *)a2;
-        a2 = how ? how[0] : 0; // open_how.flags -> openat flags
-        a3 = how ? how[1] : 0; // open_how.mode  -> openat mode
+        uint64_t how_ptr = a2, usize = a3;
+        if (!how_ptr || guest_bad_ptr(how_ptr, 8)) {
+            G_RET(c) = (uint64_t)(int64_t)(-EFAULT);
+            break;
+        }
+        if (usize < 24) {
+            G_RET(c) = (uint64_t)(int64_t)(-EINVAL);
+            break;
+        }
+        if (usize > 4096) {
+            G_RET(c) = (uint64_t)(int64_t)(-E2BIG);
+            break;
+        }
+        if (guest_bad_ptr(how_ptr, usize)) {
+            G_RET(c) = (uint64_t)(int64_t)(-EFAULT);
+            break;
+        }
+        const uint8_t *hb = (const uint8_t *)how_ptr;
+        int extbad = 0;
+        for (uint64_t i = 24; i < usize; i++)
+            if (hb[i]) {
+                extbad = 1;
+                break;
+            }
+        if (extbad) {
+            G_RET(c) = (uint64_t)(int64_t)(-E2BIG);
+            break;
+        }
+        const uint64_t *how = (const uint64_t *)how_ptr;
+        uint64_t oflags = how[0], omode = how[1], resolve = how[2];
+        // RESOLVE_* valid mask: NO_XDEV|NO_MAGICLINKS|NO_SYMLINKS|BENEATH|IN_ROOT|CACHED = 0x3f
+        if ((resolve & ~0x3fULL) || (omode & ~07777ULL) ||
+            (omode && !(oflags & (0x40ULL /*O_CREAT*/ | 0x400000ULL /*__O_TMPFILE*/)))) {
+            G_RET(c) = (uint64_t)(int64_t)(-EINVAL);
+            break;
+        }
+        if (resolve & 0x04ULL /*RESOLVE_NO_SYMLINKS*/)
+            oflags |= (uint64_t)G_O_NOFOLLOW;
+        a2 = oflags; // open_how.flags -> openat flags
+        a3 = omode;  // open_how.mode  -> openat mode
     } /* fall through to openat */
     case 56: {
         // openat -- Linux O_* -> macOS O_* (they differ!)
@@ -2868,6 +2956,12 @@ static int svc_fs(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t
         break;
     // utimensat(dirfd, path, times, flags)
     case 88: {
+        // Linux rejects unknown flag bits (only AT_SYMLINK_NOFOLLOW=0x100 is valid) with EINVAL before
+        // touching the file -- otherwise a bad flag value would still update the timestamps.
+        if (a3 & ~0x100u) {
+            G_RET(c) = (uint64_t)(int64_t)(-EINVAL);
+            break;
+        }
         struct timespec *ts = (struct timespec *)a2;
         struct timespec lts[2];
         // Linux and macOS disagree on the tv_nsec "special" sentinels: Linux UTIME_NOW = 0x3fffffff /
