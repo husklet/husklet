@@ -119,12 +119,16 @@ fn stats_sample(
         precpu_stats: stats_cpu_block(pre_total, pre_sys),
         memory_stats: crate::api::MemoryStats {
             usage: mem,
+            max_usage: mem,
             limit: mem_limit,
+            failcnt: 0,
             stats: std::collections::BTreeMap::new(),
         },
         blkio_stats: crate::api::BlkioStats::empty(),
         networks: std::collections::BTreeMap::new(),
-        num_procs: 0,
+        // num_procs MUST agree with pids_stats.current (both count the container's processes) — a mismatch
+        // (0 vs 1) is a contradictory document docker clients reject/misreport.
+        num_procs: cur as u32,
         storage_stats: std::collections::BTreeMap::new(),
     };
     (v, total, system)

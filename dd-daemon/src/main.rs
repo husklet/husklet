@@ -68,7 +68,23 @@ async fn main() {
         .unwrap_or_else(|_| dd_home().join("state.json").to_string_lossy().into_owned());
     let volumes_dir = std::env::var("DD_VOLUMES")
         .unwrap_or_else(|_| dd_home().join("volumes").to_string_lossy().into_owned());
-    let _ = std::fs::remove_file(&sock);
+    // Only unlink the configured socket path when it is actually a (stale) unix socket — an env-only
+    // override must NOT blindly delete an arbitrary regular file/dir a misconfigured DDOCKERD_SOCK points
+    // at. A non-socket is left in place (the bind below then fails loudly instead of eating user data).
+    match std::fs::symlink_metadata(&sock) {
+        Ok(meta) => {
+            use std::os::unix::fs::FileTypeExt;
+            if meta.file_type().is_socket() {
+                let _ = std::fs::remove_file(&sock);
+            } else {
+                eprintln!(
+                    "[dd-daemon] refusing to remove non-socket DDOCKERD_SOCK path {sock:?} \
+                     (not a stale socket); bind will fail if it is occupied"
+                );
+            }
+        }
+        Err(_) => {} // path doesn't exist yet — nothing to unlink
+    }
     let _ = std::fs::create_dir_all(&volumes_dir);
 
     let mut inner = Inner::default();

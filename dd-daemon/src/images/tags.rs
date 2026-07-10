@@ -35,6 +35,10 @@ pub(crate) async fn image_tag(
         None => repo,
     };
     apply_tag(&mut g.images, &src, &full);
+    // Persist the alias so it SURVIVES a daemon restart / rediscovery: tags live only in memory otherwise,
+    // and discovery rebuilds images from on-disk rootfs dirs (which carry only the canonical name), so a
+    // `docker tag` alias would silently vanish on restart. `persist_tag_alias` records alias -> rootfs.
+    crate::util::persist_tag_alias(&a.images_dir, &full, &src.rootfs);
     crate::events::emit_event(&a.events, "image", "tag", &full, json!({"name": full}));
     StatusCode::CREATED.into_response()
 }

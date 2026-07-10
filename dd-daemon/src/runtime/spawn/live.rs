@@ -400,6 +400,11 @@ pub(crate) async fn live_fail(app: &App, cid: &str, live: &Arc<Live>, msg: Strin
             cc.finished_at = now_secs();
             cc.finished_at_ns = now_nanos();
         }
+        // Drop the SPENT Live entry: a failed spawn leaves a Live whose `started` flag is set, and
+        // spawn_live is idempotent per-Live — so a second `docker start` would reuse it and no-op (returning
+        // 204 without actually spawning). Removing it makes a retry create a FRESH Live and truly re-spawn.
+        // (Streaming consumers already got exit+out_done above, so they drain and close cleanly.)
+        g.live.remove(cid);
         // PERSIST the terminal state: without this, a daemon restart reloads the container as `running`
         // (the failed start was only corrected in memory), so inspect/wait see a live-looking container
         // with no process. The normal reaper path saves state; the failed-spawn path must too.

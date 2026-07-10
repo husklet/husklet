@@ -563,3 +563,44 @@ async fn export_includes_upper_layer_writes() {
     assert!(contains(b"written.txt"), "export must include the container's writable-layer write");
     let _ = std::fs::remove_dir_all(&base);
 }
+
+// ---- docker tag alias survives discovery (persisted alias record) ----------------------------
+#[tokio::test]
+async fn tag_alias_survives_discovery() {
+    let app = test_app();
+    // A real image dir under images_dir so discovery finds the base image.
+    let dir = std::path::Path::new(&app.images_dir).join("base_latest");
+    std::fs::create_dir_all(dir.join("rootfs")).unwrap();
+    let rootfs = dir.join("rootfs").to_string_lossy().into_owned();
+    std::fs::write(dir.join("dd-image.json"),
+        serde_json::json!({"name":"base:latest","arch":"aarch64","os":"linux"}).to_string()).unwrap();
+    {
+        let mut g = app.inner.lock().await;
+        g.images.push(Image { name: "base:latest".into(), rootfs: rootfs.clone(), ..Default::default() });
+    }
+    // Tag base:latest as alias:v2.
+    let q: crate::images::TagQ = serde_json::from_value(serde_json::json!({"repo":"alias","tag":"v2"})).unwrap();
+    let r = crate::images::image_tag(State(app.clone()), Path("base:latest".into()), Query(q)).await;
+    assert_eq!(r.status(), StatusCode::CREATED);
+    // Simulate a daemon restart: rediscover from disk. The alias must still resolve.
+    let rediscovered = crate::util::discover_images(&app.images_dir);
+    assert!(
+        rediscovered.iter().any(|i| i.name == "alias:v2" && i.rootfs == rootfs),
+        "the docker tag alias must survive rediscovery: {:?}",
+        rediscovered.iter().map(|i| &i.name).collect::<Vec<_>>()
+    );
+}
+
+// ---- stats: pids/num_procs agree + memory carries max_usage/failcnt ---------------------------
+#[tokio::test]
+async fn stats_num_procs_agrees_with_pids_and_memory_shape() {
+    let app = test_app();
+    seed_container(&app, "statsone0000", "exited").await; // no live pid -> both counts 0 (consistent)
+    let q: crate::containers::StatsQ = serde_json::from_value(serde_json::json!({"stream":"false"})).unwrap();
+    let resp = crate::containers::containers_stats(State(app.clone()), Path("statsone0000".into()), Query(q)).await;
+    let v = to_body_json(resp).await;
+    assert_eq!(v["num_procs"], v["pids_stats"]["current"], "num_procs must equal pids_stats.current");
+    let mem = v["memory_stats"].as_object().unwrap();
+    assert!(mem.contains_key("max_usage"), "memory_stats must carry max_usage");
+    assert!(mem.contains_key("failcnt"), "memory_stats must carry failcnt");
+}
