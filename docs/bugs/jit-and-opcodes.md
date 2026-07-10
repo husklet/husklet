@@ -100,31 +100,6 @@ Coverage gap:
 
 `dd-tests/guests/completeness/x86_sse42.c` checks the comparison index, not full flag state.
 
-## `fxsave` / `fxrstor` Skip MXCSR, x87, And MMX State
-
-Priority: P1
-Impact: restored rounding mode and floating-point state are wrong
-Confidence: High
-
-Verification status: Proven in isolated worktree `/Users/x/dd/dd-worker-b-jit-audit`.
-
-Evidence:
-
-- `fxsave` / `fxrstor` only save or restore XMM lanes from the memory image: `dd-jit-darwin/src/runtime/translate/x86_64/translate.c:3377`.
-
-Why this is bad:
-
-`fxrstor` must restore MXCSR and x87/MMX state. Skipping MXCSR means code that saves a context, changes rounding mode, and restores it keeps the wrong rounding mode.
-
-Isolated proof:
-
-```sh
-DDJIT_DIR="$PWD/target-worker-b-jit-audit/release/build/dd-jit-darwin-16122afd27b6bb64/out" \
-  cargo run -q -p dd-tests --target-dir target-worker-b-jit-audit -- -e x86_64 fxrstor-mxcsr
-```
-
-Observed: dd `fxrstor-mxcsr r=2`; qemu/native `fxrstor-mxcsr r=1`.
-
 ## `mremap(MREMAP_FIXED)` Can Reuse Stale Translations
 
 Priority: P1
@@ -207,33 +182,6 @@ Once the table is full, later translated pages can be protected without being re
 Verification:
 
 Generate more than `SMC_MAX` executable pages, execute each once, then patch and re-execute a late page.
-
-## x86 Signal Return Drops AVX Upper And x87 State
-
-Priority: P1
-Impact: signal handlers corrupt vector/FPU state
-Confidence: High
-
-Verification status: Proven in isolated worktree `/Users/x/dd/dd-worker-I-jit-runtime-20260710`.
-
-Evidence:
-
-- Signal frame setup saves only `c->v`: `dd-jit-darwin/src/runtime/translate/x86_64/sigframe.c:48`.
-- Signal return restores only `c->v`: `dd-jit-darwin/src/runtime/translate/x86_64/sigframe.c:86`.
-- AVX upper state and x87 control/status live elsewhere: `dd-jit-darwin/src/runtime/include/cpu_x86_64.h:40`, `dd-jit-darwin/src/runtime/include/cpu_x86_64.h:48`.
-
-Why this is bad:
-
-Signals should preserve the interrupted machine state. Losing AVX upper lanes or x87 state can corrupt code that uses vectors/FPU across signal handlers.
-
-Isolated proof:
-
-```sh
-timeout 5 qemu-x86_64 target-worker-I/poc/avx_sigreturn_upper
-timeout 10 mac bash -lc "exec '$PWD/target-worker-I/release/build/dd-jit-darwin-5b0dabfbe6f0af2e/out/ddjit-linux_x86_64' '$PWD/target-worker-I/poc/avx_sigreturn_upper'"
-```
-
-Observed: qemu `high=1 rc=0`; dd `high=0 hi0=00 hi15=00 rc=1`.
 
 ## Thread-Directed Signals Do Not Interrupt Blocking Reads
 
@@ -327,61 +275,6 @@ Generate a checked-in matrix with at least:
 - opcode family/subform
 - semantic dimensions tested, such as flags, MXCSR/rounding, memory vs register, VEX vs legacy, scalar merge, fault behavior
 
-## MMX `movq` / `paddb` Use 128-Bit XMM Width
-
-Priority: P1
-Impact: MMX stores can corrupt adjacent memory
-Confidence: High
-
-Verification status: Proven in isolated worktree `/Users/x/dd/dd-bf2-audit-20260710`.
-
-Evidence:
-
-- MMX is advertised: `dd-jit-darwin/src/runtime/translate/x86_64/x86_ops.c:238`.
-- No-prefix SIMD routes through XMM paths: `dd-jit-darwin/src/runtime/translate/x86_64/translate.c:2399`.
-- `0F 6F/7F` loads/stores use 128-bit width: `dd-jit-darwin/src/runtime/translate/x86_64/translate.c:2444`.
-- `paddb` lowers as a 16-byte vector op: `dd-jit-darwin/src/runtime/translate/x86_64/translate.c:2652`.
-
-Why this is bad:
-
-MMX operations are 64-bit. Running them through 128-bit XMM load/store and arithmetic paths overwrites bytes adjacent to the intended 8-byte destination.
-
-Isolated proof:
-
-```sh
-qemu-x86_64 target/bf2/mmx_64bit_width
-ddjit-linux_x86_64 target/bf2/mmx_64bit_width
-```
-
-qemu left bytes 8..15 as `aa`; dd changed them to `f2 f4 f6 f8 fa fc fe 00`.
-
-## x87 Control Word Is Ignored
-
-Priority: P1
-Impact: x87 rounding mode and saved control word are wrong
-Confidence: High
-
-Verification status: Proven in isolated worktree `/Users/x/dd/dd-bf2-audit-20260710`.
-
-Evidence:
-
-- `fldcw` is ignored: `dd-jit-darwin/src/runtime/translate/x86_64/translate.c:1943`.
-- `fnstcw` always stores `0x037f`: `dd-jit-darwin/src/runtime/translate/x86_64/translate.c:1945`.
-- `fist/fistp` lower through a fixed conversion: `dd-jit-darwin/src/runtime/translate/x86_64/translate.c:2007`.
-
-Why this is bad:
-
-Software uses x87 control word rounding modes for integer conversion and ABI-visible state. dd reports the default control word and rounds as if the mode never changed.
-
-Isolated proof:
-
-```sh
-qemu-x86_64 target/bf2/x87_cw_fistp
-ddjit-linux_x86_64 target/bf2/x87_cw_fistp
-```
-
-qemu reported distinct `down/up/zero` control words and rounding results; dd reported `037f` for every mode and reused nearest rounding.
-
 ## x87 Long Double Precision Is Truncated
 
 Priority: P2
@@ -407,6 +300,26 @@ ddjit-linux_x86_64 target/bf2/x87_ext_precision
 ```
 
 qemu printed `positive=1 out=1.08420217248550443401e-19`; dd printed `positive=0 out=0`.
+
+## `fxsave` / `fxrstor` Do Not Preserve x87/MMX Register Data Or FSW
+
+Priority: P2
+Impact: a context that saves/restores actual FPU register values via fxsave/fxrstor gets stale registers
+Confidence: High
+
+Status: Remainder of a previously-fixed finding. The proven impact (MXCSR + FCW control/rounding round-trip) is FIXED — fxsave now writes MXCSR@24 + FCW@0 and fxrstor restores both (see `dd-jit-darwin/src/runtime/translate/x86_64/translate.c`, the `0F AE` fxsave/fxrstor block), with regression `dd-tests` case `comp-x86-misc/fxsave-mxcsr`. This section tracks only the register-DATA remainder.
+
+Evidence:
+
+- fxsave/fxrstor move the XMM lanes (@160) and now MXCSR/FCW, but NOT the x87 register stack ST0-7 (@32, ten bytes each), MMX register contents, or the FSW (@2): `dd-jit-darwin/src/runtime/translate/x86_64/translate.c` (fxsave/fxrstor `0F AE` block).
+
+Why this is bad:
+
+`fxrstor` should restore the full x87/MMX register file and status word. A program that fxsaves actual FPU register values and later fxrstors them keeps the values the handler/other code left, not the saved ones. (Restoring ST0-7 also intersects the separate "x87 long double precision is truncated" gap, since the engine models the x87 stack as double.)
+
+Verification:
+
+Extend a probe like `dd-tests/guests/completeness/x86_fxsave_mxcsr.c` to load distinct ST0-7 values, fxsave, clobber the x87 stack, fxrstor, and compare the restored ST values against native/qemu.
 
 ## SSE2 `CVTPD2DQ` / `CVTTPD2DQ` Return Wrong Integer-Indefinite Values
 

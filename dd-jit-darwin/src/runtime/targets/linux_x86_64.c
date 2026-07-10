@@ -357,6 +357,7 @@ static int run_loaded(int argc, char *const argv[], struct loaded *lm, uint64_t 
 
     struct cpu c;
     memset(&c, 0, sizeof c);
+    c.fpcw = 0x037f; // x87 default control word (round-to-nearest, all exceptions masked, 64-bit precision)
     c.r[RSP] = build_stack(argc, (char **)argv, lm, at_base); // rsp -> argc
     c.r[RDX] = 0;                                             // rtld_fini = 0
     c.rip = jump;

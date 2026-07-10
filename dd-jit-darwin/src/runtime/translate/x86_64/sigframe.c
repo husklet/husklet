@@ -46,6 +46,17 @@ static void build_signal_frame(struct cpu *c, int sig) {
     *(uint64_t *)(mc + 17 * 8) = nzcv_to_eflags(c->nzcv) | ((c->df & 1) << 10); // gregs[17] = EFL (+DF bit10)
     *(uint64_t *)(uc + 296) = c->sigmask;                 // uc_sigmask (restored on sigreturn)
     memcpy((void *)xs, c->v, sizeof c->v);                // preserve guest xmm across the handler
+    // Preserve the EXTENDED vector + x87 state too: the xmm area above holds only the low 128 bits, so a
+    // handler that touches YMM/ZMM upper lanes or the x87 stack would otherwise leave the interrupted state
+    // corrupted on sigreturn (proven: an AVX handler zeroed the interrupted ymm UPPER lanes). Stash it in the
+    // frame's free tail, just past the 256-byte xmm area (well below the handler's rsp = sp-8, so untouched).
+    uint64_t xe = xs + sizeof c->v;                       // extended-state save area, inside the 2048B frame
+    memcpy((void *)(xe + 0), c->vhi, sizeof c->vhi);      // ymm/zmm bits[128:256) of regs 0..15
+    memcpy((void *)(xe + 256), c->kreg, sizeof c->kreg);  // AVX-512 opmask k0..k7
+    memcpy((void *)(xe + 320), c->st, sizeof c->st);      // x87 register stack (double model)
+    *(uint64_t *)(xe + 384) = c->fptop;
+    *(uint64_t *)(xe + 392) = c->fpsw;
+    *(uint64_t *)(xe + 400) = c->fpcw;
     *(int *)(info + 0) = sig;                             // siginfo.si_signo
     *(int *)(info + 8) = g_sigcode[sig];                  // si_code (SI_QUEUE for sigqueue, else 0)
     *(uint64_t *)(info + 16) = g_sigaddr[sig];            // si_addr (synchronous fault address; 0 for async)
@@ -84,6 +95,15 @@ static void do_sigreturn(struct cpu *c) {
     c->df = (*(uint64_t *)(mc + 17 * 8) >> 10) & 1; // restore DF a handler may have changed
     c->sigmask = *(uint64_t *)(uc + 296);
     memcpy(c->v, (void *)xs, sizeof c->v);
+    // Restore the extended vector + x87 state saved by build_signal_frame (see there), so the interrupted
+    // YMM/ZMM upper lanes, opmasks, and x87 stack survive a handler that clobbered them.
+    uint64_t xe = xs + sizeof c->v;
+    memcpy(c->vhi, (void *)(xe + 0), sizeof c->vhi);
+    memcpy(c->kreg, (void *)(xe + 256), sizeof c->kreg);
+    memcpy(c->st, (void *)(xe + 320), sizeof c->st);
+    c->fptop = *(uint64_t *)(xe + 384);
+    c->fpsw = *(uint64_t *)(xe + 392);
+    c->fpcw = *(uint64_t *)(xe + 400);
 }
 
 // Synchronous-fault delivery support (driven by os/linux/signal.c's deliver_guest_fault; see the matching

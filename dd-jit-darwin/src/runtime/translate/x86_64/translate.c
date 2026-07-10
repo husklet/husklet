@@ -911,6 +911,29 @@ static void emit_guest_signal(uint64_t rip, int lsig, int code) {
     emit_exit_const(rip, R_TRAP);
 }
 
+// x87 fist/fistp round ST0 (already in d16) to an integral double using the CURRENT x87 rounding control
+// (cpu->fpcw bits[11:10]), so the caller's FCVTZS then converts it exactly. x86 x87 defaults to round-to-
+// NEAREST-even (not toward-zero) and honors fldcw's RC, but the old code emitted a bare FCVTZS (truncate) --
+// so fistp(2.7) gave 2 instead of 3, and a round-up/down control word had no effect. x87 has its OWN rounding
+// domain, SEPARATE from SSE MXCSR (both share ARM FPCR.RMode), so round under a SAVED/RESTORED FPCR: set
+// FPCR.RMode from the x87 RC (same two-bit swap as ldmxcsr), FRINTI, then restore FPCR so SSE rounding is
+// untouched. Scratch x20/x21/x22/x23; x19 (the store EA at every caller) is left intact.
+static void emit_x87_round_st0(void) {
+    e_ldr(20, 28, OFF_FPCW);                                          // w20 = cpu->fpcw
+    emit32(0x53000000u | (10u << 16) | (11u << 10) | (20 << 5) | 20); // ubfx w20,w20,#10,#2 -> RC (0..3)
+    e_movconst(21, 1);
+    e_rrr(A_AND, 22, 20, 21, 0, 0);       // w22 = RC & 1
+    e_lsr_i(21, 20, 1, 0);                // w21 = RC >> 1
+    e_rrr(A_ORR, 22, 21, 22, 0, 1);       // w22 = (RC>>1) | (RC&1)<<1 = ARM RMode (x87 RC bits swapped)
+    emit32(0xD53B4400u | 23);             // mrs x23, fpcr  (save the live -- SSE -- rounding mode)
+    e_movconst(21, 3u << 22);             // RMode mask
+    e_rrr(A_BIC, 20, 23, 21, 1, 0);       // x20 = fpcr & ~RMode
+    e_rrr(A_ORR, 20, 20, 22, 1, 22);      // x20 = | (ARM RMode << 22)
+    emit32(0xD51B4400u | 20);             // msr fpcr, x20  (x87 rounding mode)
+    emit32(0x1E67C000u | (16 << 5) | 16); // frinti d16, d16 (round to integral per FPCR.RMode)
+    emit32(0xD51B4400u | 23);             // msr fpcr, x23  (restore SSE rounding mode)
+}
+
 // Integer DIV/IDIV by zero raises #DE (SIGFPE) on x86, but ARM sdiv/udiv quietly return 0 -- a guest
 // #DE would be silently swallowed. Guard the inline (8/16/32-bit) divides: when the (width-extended)
 // divisor in divreg is zero, route to the C div path (R_DIV/R_IDIV in dispatch.c), which reports the
@@ -1938,19 +1961,21 @@ static void *translate_block(uint64_t gpc) {
                             e_str_s(16, 19);
                             if (reg == 3) fp_settop(1);
                         } // fst/fstp
-                        else if (reg == 5) { /* fldcw: ignore */
-                        } else if (reg == 7) {
-                            e_movconst(16, 0x037f);
-                            emit32(0x79000000u | (19 << 5) | 16);
+                        else if (reg == 5) { // fldcw m16: load the x87 control word (RC/PC/exception masks)
+                            emit32(0x79400000u | (19 << 5) | 16); // ldrh w16, [x19]
+                            e_str(16, 28, OFF_FPCW);              // cpu->fpcw = CW (honored by fist rounding)
+                        } else if (reg == 7) {                    // fnstcw m16: store the live x87 control word
+                            e_ldr(16, 28, OFF_FPCW);
+                            emit32(0x79000000u | (19 << 5) | 16); // strh w16, [x19]
                         } // fnstcw
                         else if (reg == 6) {
                             // FNSTENV m28: store the 28-byte 32-bit protected-mode x87 environment --
                             // FCW@0, FSW@4 (TOP in bits 11:13), FTW@8, then FIP/FCS/FOO/FOS @12/16/20/24.
-                            // The engine keeps no per-reg tags and a fixed default FCW, so emit FCW=0x037f
-                            // (mirrors fnstcw) and FTW=0xffff (all-empty); the instruction/data pointers are
-                            // zeroed. OpenBLAS (R startup, the only caller) just saves/restores FCW/FSW/FTW.
+                            // The engine keeps no per-reg tags, so emit the live FCW (cpu->fpcw, mirrors fnstcw)
+                            // and FTW=0xffff (all-empty); the instruction/data pointers are zeroed. OpenBLAS (R
+                            // startup, the only caller) just saves/restores FCW/FSW/FTW.
                             // x19 = EA. emit_fpsw_with_top() materializes cpu->fptop and yields FSW in x16.
-                            e_movconst(16, 0x037f);
+                            e_ldr(16, 28, OFF_FPCW);
                             emit32(0x79000000u | (0u << 10) | (19 << 5) | 16); // strh FCW, [x19,#0]
                             emit_fpsw_with_top();                              // x16 = FSW | (TOP<<11)
                             emit32(0x79000000u | (2u << 10) | (19 << 5) | 16); // strh FSW, [x19,#4]
@@ -1964,11 +1989,13 @@ static void *translate_block(uint64_t gpc) {
                             // default 0x037f (exception-mask bits 0-5 already set), so nothing to update.
                         } // fnstenv m28
                         else if (reg == 4) {
-                            // FLDENV m28: reload the x87 environment (inverse of FNSTENV). Restore the FSW
-                            // condition codes and TOP from [EA+4]; FCW (fixed default) and FTW (no per-reg
-                            // tags) are ignored, exactly like fldcw. The reloaded TOP is unknown at translate
+                            // FLDENV m28: reload the x87 environment (inverse of FNSTENV). Restore the FCW
+                            // (so a later fist rounds per the reloaded RC) and the FSW condition codes + TOP;
+                            // FTW (no per-reg tags) is ignored. The reloaded TOP is unknown at translate
                             // time, so leave the static-top model -> runtime-top addressing afterwards.
                             fp_drop();
+                            emit32(0x79400000u | (0u << 10) | (19 << 5) | 16); // ldrh w16, [x19,#0]  (FCW)
+                            e_str(16, 28, OFF_FPCW);                           // cpu->fpcw = FCW
                             emit32(0x79400000u | (2u << 10) | (19 << 5) | 16); // ldrh w16, [x19,#4]  (FSW)
                             e_str(16, 28, OFF_FPSW);                           // cpu->fpsw  = FSW
                             emit32(0x53000000u | (11u << 16) | (13u << 10) | (16 << 5) | 17); // ubfx w17,w16,#11,#3
@@ -2004,7 +2031,8 @@ static void *translate_block(uint64_t gpc) {
                         } // fild m32
                         else if (reg == 2 || reg == 3) {
                             fp_ld(16, 0);
-                            emit32(0x1E780000u | (16 << 5) | 16);
+                            emit_x87_round_st0();                 // round per x87 control word (default: nearest)
+                            emit32(0x1E780000u | (16 << 5) | 16); // FCVTZS w16,d16 (exact: d16 already integral)
                             emit32(0xB9000000u | (19 << 5) | 16);
                             if (reg == 3) fp_settop(1);
                         } // fist/fistp m32
@@ -2030,7 +2058,8 @@ static void *translate_block(uint64_t gpc) {
                         } // fild m16 (ldrsh)
                         else if (reg == 3) {
                             fp_ld(16, 0);
-                            emit32(0x1E780000u | (16 << 5) | 16);
+                            emit_x87_round_st0();                 // round per x87 control word (default: nearest)
+                            emit32(0x1E780000u | (16 << 5) | 16); // FCVTZS w16,d16 (exact: d16 already integral)
                             emit32(0x79000000u | (19 << 5) | 16);
                             fp_settop(1);
                         } // fistp m16
@@ -2041,7 +2070,8 @@ static void *translate_block(uint64_t gpc) {
                         } // fild m64
                         else if (reg == 7) {
                             fp_ld(16, 0);
-                            emit32(0x9E780000u | (16 << 5) | 16);
+                            emit_x87_round_st0();                 // round per x87 control word (default: nearest)
+                            emit32(0x9E780000u | (16 << 5) | 16); // FCVTZS x16,d16 (exact: d16 already integral)
                             e_str(16, 19, 0);
                             fp_settop(1);
                         } // fistp m64
@@ -2437,6 +2467,21 @@ static void *translate_block(uint64_t gpc) {
                     if (I.is_mem) {
                         emit_ea(&I, next);
                         e_str_d(vd, 17);
+                    } else
+                        e_vmov8(vm, vd);
+                } else if (op == 0x6F && !I.p66 && !I.rep && !I.repne) { // MMX movq mm, mm/m64 (NO prefix): 64-bit
+                    // Plain 0F 6F is the 64-bit MMX movq (66=movdqa / F3=movdqu are the 128-bit forms below).
+                    // Loading/storing 128 bits here read/WROTE 8 bytes past the 64-bit MMX operand -> a store
+                    // corrupted the adjacent 8 bytes of guest memory. Keep MMX at its architectural 64-bit width.
+                    if (I.is_mem) {
+                        emit_ea(&I, next);
+                        e_ldr_d(vd, 17);
+                    } else
+                        e_vmov8(vd, vm);
+                } else if (op == 0x7F && !I.p66 && !I.rep && !I.repne) { // MMX movq mm/m64, mm (NO prefix): 64-bit
+                    if (I.is_mem) {
+                        emit_ea(&I, next);
+                        e_str_d(vd, 17); // 64-bit store: must NOT clobber the 8 bytes after the MMX destination
                     } else
                         e_vmov8(vm, vd);
                 } else if (op == 0x6F || op == 0x28 || (op == 0x10 && !I.rep && !I.repne)) { // load 128 -> xmm
@@ -3372,16 +3417,47 @@ static void *translate_block(uint64_t gpc) {
                     gpc = next;
                     continue;
                 }
-                if ((sub == 0 || sub == 1) && I.is_mem) { // fxsave / fxrstor: XMM0-15 @+160, MXCSR @+24
-                    emit_ea(&I, next);
+                if ((sub == 0 || sub == 1) && I.is_mem) { // fxsave / fxrstor: FCW@0, MXCSR@24, XMM0-15@160
+                    emit_ea(&I, next);                    // x17 = base of the 512-byte FXSAVE area
                     for (int i = 0; i < 16; i++) {
                         if (sub == 0)
                             e_str_q(i, 17, 160 + i * 16);
                         else
                             e_ldr_q(i, 17, 160 + i * 16);
                     }
+                    if (sub == 0) { // fxsave: also save MXCSR (from FPCR.RMode, mirrors stmxcsr) + FCW
+                        emit32(0xD53B4400u | 19);       // mrs x19, fpcr
+                        e_lsr_i(19, 19, 22, 0);         // x19 = FPCR >> 22
+                        e_movconst(20, 3);
+                        e_rrr(A_AND, 19, 19, 20, 0, 0); // x19 = ARM RMode
+                        e_movconst(20, 1);
+                        e_rrr(A_AND, 21, 19, 20, 0, 0);
+                        e_lsr_i(22, 19, 1, 0);
+                        e_rrr(A_ORR, 19, 22, 21, 0, 1);                    // x19 = x86 RC (swap the two bits back)
+                        e_movconst(16, 0x1f80);                            // default MXCSR (all masks set, RC=00)
+                        e_rrr(A_ORR, 16, 16, 19, 0, 13);                   // MXCSR |= RC << 13
+                        emit32(0xB9000000u | (6u << 10) | (17 << 5) | 16); // str  w16, [x17,#24]  (MXCSR)
+                        e_ldr(16, 28, OFF_FPCW);
+                        emit32(0x79000000u | (0u << 10) | (17 << 5) | 16); // strh w16, [x17,#0]   (FCW)
+                    } else {                                               // fxrstor: restore MXCSR.RC -> FPCR + FCW
+                        emit32(0xB9400000u | (6u << 10) | (17 << 5) | 16); // ldr  w16, [x17,#24]  (MXCSR)
+                        e_lsr_i(16, 16, 13, 0);                            // x16 = MXCSR >> 13
+                        e_movconst(19, 3);
+                        e_rrr(A_AND, 16, 16, 19, 0, 0); // x16 = RC (0..3)
+                        e_movconst(19, 1);
+                        e_rrr(A_AND, 20, 16, 19, 0, 0);
+                        e_lsr_i(21, 16, 1, 0);
+                        e_rrr(A_ORR, 20, 21, 20, 0, 1);  // x20 = ARM RMode (swap the two RC bits)
+                        emit32(0xD53B4400u | 19);        // mrs x19, fpcr
+                        e_movconst(21, 3u << 22);
+                        e_rrr(A_BIC, 19, 19, 21, 1, 0);  // clear RMode
+                        e_rrr(A_ORR, 19, 19, 20, 1, 22); // FPCR.RMode = ARM RMode
+                        emit32(0xD51B4400u | 19);        // msr fpcr, x19
+                        emit32(0x79400000u | (0u << 10) | (17 << 5) | 16); // ldrh w16, [x17,#0]   (FCW)
+                        e_str(16, 28, OFF_FPCW);                           // cpu->fpcw = FCW
+                    }
                     gpc = next;
-                    continue; // (x87/MMX + MXCSR areas left as-is; we don't honor them)
+                    continue; // (x87/MMX register data + FSW still left as-is; MXCSR/FCW are honored)
                 }
             }
             // bsf/tzcnt (0F BC), bsr/lzcnt (0F BD). The F3 prefix selects the BMI/ABM count form, which is
