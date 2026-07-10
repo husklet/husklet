@@ -11,15 +11,10 @@ This directory is a working inventory of suspicious behavior, bad architecture, 
 | P1 | JIT/cache | stale translation after `munmap`/`MAP_FIXED` VA reuse | High | [jit-and-opcodes.md](jit-and-opcodes.md#stale-translation-after-unmapremap) |
 | P1 | JIT/cache | stale translation after `mremap(MREMAP_FIXED)` VA reuse | High | [jit-and-opcodes.md](jit-and-opcodes.md#mremapmremap_fixed-can-reuse-stale-translations) |
 | P1 | daemon/runtime | workspace VPN egress env is dropped before engine launch | High | [daemon-tests-docs.md](daemon-tests-docs.md#workspace-vpn-egress-is-dropped) |
-| P1 | daemon/build | Dockerfile `WORKDIR` is ignored for `RUN` steps | High | [daemon-tests-docs.md](daemon-tests-docs.md#dockerfile-workdir-is-ignored-for-run) |
 | P1 | daemon/runtime | published port bind failures do not fail container start | Medium-high | [daemon-tests-docs.md](daemon-tests-docs.md#published-port-bind-failures-do-not-fail-start) |
 | P1 | daemon/compat | inline named volume sources can escape `volumes_dir` | Medium | [daemon-tests-docs.md](daemon-tests-docs.md#inline-volume-sources-can-escape-volumes_dir) |
-| P1 | JIT/opcode | `fxsave` / `fxrstor` skip MXCSR/x87/MMX state | High | [jit-and-opcodes.md](jit-and-opcodes.md#fxsave-fxrstor-skip-mxcsr-x87-and-mmx-state) |
-| P1 | JIT/opcode | MMX `movq` / `paddb` use 128-bit XMM width | High | [jit-and-opcodes.md](jit-and-opcodes.md#mmx-movq-paddb-use-128-bit-xmm-width) |
 | P1 | JIT/memory | 4K guest `munmap` subpage remains readable | High | [jit-and-opcodes.md](jit-and-opcodes.md#4k-guest-munmap-subpage-remains-readable) |
-| P1 | JIT/x87 | x87 control word is ignored | High | [jit-and-opcodes.md](jit-and-opcodes.md#x87-control-word-is-ignored) |
 | P1 | JIT/race | `cmpxchg16b` is non-atomic | Medium-high | [jit-and-opcodes.md](jit-and-opcodes.md#cmpxchg16b-is-non-atomic) |
-| P1 | JIT/signal | x86 signal return drops AVX upper/x87 state | High | [jit-and-opcodes.md](jit-and-opcodes.md#x86-signal-return-drops-avx-upper-and-x87-state) |
 | P1 | daemon/data | `docker commit` drops container writes | High | [daemon-tests-docs.md](daemon-tests-docs.md#docker-commit-drops-container-writes) |
 | P1 | daemon/data | `docker export` drops container writes | High | [daemon-tests-docs.md](daemon-tests-docs.md#docker-export-drops-container-writes) |
 | P1 | daemon/runtime | failed start leaves a spent `Live` and later fake success | High | [daemon-tests-docs.md](daemon-tests-docs.md#failed-start-leaves-a-spent-live) |
@@ -36,23 +31,18 @@ This directory is a working inventory of suspicious behavior, bad architecture, 
 | P1 | syscall/poll | `pselect6`/`ppoll` ignore temporary signal masks | High | [syscall-compat.md](syscall-compat.md#pselect6-and-ppoll-ignore-temporary-signal-masks) |
 | P1 | syscall/signal | multiple `signalfd` descriptors are not independent | High | [syscall-compat.md](syscall-compat.md#multiple-signalfd-descriptors-are-not-independent) |
 | P1 | syscall/time | `clock_nanosleep(TIMER_ABSTIME)` swallows interrupts | High | [syscall-compat.md](syscall-compat.md#clock_nanosleeptimer_abstime-swallows-interrupts) |
-| P1 | syscall/eventfd | `eventfd` counter overflow wraps to zero | High | [syscall-compat.md](syscall-compat.md#eventfd-counter-overflow-wraps-to-zero) |
 | P1 | syscall/eventfd | `dup(eventfd)` loses eventfd semantics | High | [syscall-compat.md](syscall-compat.md#dupeventfd-loses-eventfd-semantics) |
 | P1 | syscall/signalfd | `signalfd` update keeps stale signals and short reads consume events | High | [syscall-compat.md](syscall-compat.md#signalfd-update-keeps-stale-signals-and-short-reads-consume-events) |
 | P1 | syscall/epoll | epoll loses readiness when watched fd closes but dup remains | High | [syscall-compat.md](syscall-compat.md#epoll-loses-readiness-when-watched-fd-closes-but-dup-remains) |
 | P1 | syscall/epoll | `dup(epoll_fd)` loses pending interest registration | High | [syscall-compat.md](syscall-compat.md#dupepoll_fd-loses-pending-interest-registration) |
 | P1 | syscall/fork | fork children lose inherited epoll/timerfd state | High | [syscall-compat.md](syscall-compat.md#fork-children-lose-inherited-epolltimerfd-state) |
 | P1 | syscall/fork | forked child loses inherited inotify watch and can hang | High | [syscall-compat.md](syscall-compat.md#forked-child-loses-inherited-inotify-watch-and-can-hang) |
-| P1 | syscall/inotify | `inotify_rm_watch` can close an unrelated fd | High | [syscall-compat.md](syscall-compat.md#inotify_rm_watch-can-close-an-unrelated-fd) |
 | P1 | syscall/signalfd | `dup(signalfd)` loses signalfd semantics | High | [syscall-compat.md](syscall-compat.md#dupsignalfd-loses-signalfd-semantics) |
 | P1 | syscall/poll | sentry `ppoll` masks stale fds instead of `POLLNVAL` | High | [syscall-compat.md](syscall-compat.md#sentry-ppoll-masks-stale-fds-instead-of-pollnval) |
 | P1 | syscall/fd | sentry close-on-exec does not clean virtual fds | High | [syscall-compat.md](syscall-compat.md#sentry-close-on-exec-does-not-clean-virtual-fds) |
-| P1 | syscall/signal | `SIGKILL`/`SIGSTOP` can enter the guest signal mask | High | [syscall-compat.md](syscall-compat.md#sigkillsigstop-can-enter-the-guest-signal-mask) |
 | P1 | daemon/cache | build-cache layer replacement is non-atomic | High | [daemon-tests-docs.md](daemon-tests-docs.md#build-cache-layer-replacement-is-non-atomic) |
 | P1 | daemon/cgroup | fractional `--cpus` loses quota precision | High | [daemon-tests-docs.md](daemon-tests-docs.md#fractional---cpus-loses-quota-precision) |
-| P1 | daemon/lifecycle | ignored kill signals fabricate container exit | High | [daemon-tests-docs.md](daemon-tests-docs.md#ignored-kill-signals-fabricate-container-exit) |
 | P1 | daemon/exec | exec start is not single-use | High | [daemon-tests-docs.md](daemon-tests-docs.md#exec-start-is-not-single-use) |
-| P1 | daemon/attach | attach to exited container creates fresh live hijack | High | [daemon-tests-docs.md](daemon-tests-docs.md#attach-exited-container-without-live-state-creates-hijack) |
 | P1 | daemon/restart | daemon restart reloads running containers without live process | High | [daemon-tests-docs.md](daemon-tests-docs.md#daemon-restart-reloads-running-containers-without-live-process) |
 | P1 | daemon/prune | container prune leaves network endpoints | High | [daemon-tests-docs.md](daemon-tests-docs.md#container-prune-leaves-network-endpoints) |
 | P1 | image/delete | `rmi nginx` removes unrelated repositories sharing basename | High | [daemon-tests-docs.md](daemon-tests-docs.md#rmi-nginx-removes-unrelated-repositories-sharing-basename) |
@@ -61,7 +51,6 @@ This directory is a working inventory of suspicious behavior, bad architecture, 
 | P1 | daemon/logs | retained container logs are lost across daemon restart | High | [daemon-tests-docs.md](daemon-tests-docs.md#retained-container-logs-are-lost-across-daemon-restart) |
 | P1 | daemon/ports | failed spawn leaks published host-port forwarders | High | [daemon-tests-docs.md](daemon-tests-docs.md#failed-spawn-leaks-published-host-port-forwarders) |
 | P1 | daemon/ports | natural container exit leaves published host ports bound | High | [daemon-tests-docs.md](daemon-tests-docs.md#natural-container-exit-leaves-published-host-ports-bound) |
-| P1 | image/ref | explicit tag lookup falls back to another tag | High | [daemon-tests-docs.md](daemon-tests-docs.md#explicit-tag-lookup-falls-back-to-another-tag) |
 | P1 | image/commit | `docker commit` can inherit config from wrong repository | High | [daemon-tests-docs.md](daemon-tests-docs.md#docker-commit-can-inherit-config-from-wrong-repository) |
 | P1 | image/arch | committed ELF-less x86_64 images rediscover as arm64 | High | [daemon-tests-docs.md](daemon-tests-docs.md#committed-elf-less-x86_64-images-rediscover-as-arm64) |
 | P1 | image/arch | Docker save/load corrupts ELF-less Linux x86 images to arm64 | High | [daemon-tests-docs.md](daemon-tests-docs.md#docker-saveload-corrupts-elf-less-linux-x86-images-to-arm64) |
@@ -82,7 +71,6 @@ This directory is a working inventory of suspicious behavior, bad architecture, 
 | P1 | daemon/events | malformed filters JSON becomes an unfiltered stream | High | [daemon-tests-docs.md](daemon-tests-docs.md#malformed-filters-json-becomes-an-unfiltered-stream) |
 | P1 | daemon/attach | attach ignores stream selectors | High | [daemon-tests-docs.md](daemon-tests-docs.md#attach-ignores-stream-selectors) |
 | P1 | env/exec | `execve(..., envp=NULL)` leaks default/stale env | High | [completeness-and-env.md](completeness-and-env.md#execve-envpnull-leaks-a-default-or-stale-environment) |
-| P1 | env/exec | newline-containing env values split across exec | High | [completeness-and-env.md](completeness-and-env.md#newline-containing-env-values-split-across-exec) |
 | P1 | env/exec | guest exec truncates argv at 255 args | High | [completeness-and-env.md](completeness-and-env.md#guest-exec-truncates-argv-at-255-args) |
 | P1 | procfs/memory | `sysinfo(2)` ignores container memory cap | High | [completeness-and-env.md](completeness-and-env.md#sysinfo2-ignores-container-memory-cap) |
 | P1 | display/xdg | xdg configure/ack race allows pre-ack presentation | High | [gpu-display-sentry.md](gpu-display-sentry.md#xdg-configureack-race-allows-pre-ack-presentation) |
@@ -129,26 +117,15 @@ This directory is a working inventory of suspicious behavior, bad architecture, 
 | P2 | JIT/race | `LOCK BTS/BTR/BTC` use non-atomic bit-op path | High | [jit-and-opcodes.md](jit-and-opcodes.md#lock-btsbtrbtc-use-non-atomic-bit-op-path) |
 | P2 | JIT/fp | MXCSR sticky exception flags/control bits are not modeled | Medium | [jit-and-opcodes.md](jit-and-opcodes.md#mxcsr-sticky-exception-flags-are-not-modeled) |
 | P2 | JIT/x87 | x87 long double precision is truncated | High | [jit-and-opcodes.md](jit-and-opcodes.md#x87-long-double-precision-is-truncated) |
-| P2 | syscall/compat | `epoll_wait` / `epoll_pwait` accept `maxevents <= 0` | High | [syscall-compat.md](syscall-compat.md#epoll_wait-epoll_pwait-accept-maxevents-0) |
-| P2 | syscall/compat | `inotify_init1` accepts unknown flags | High | [syscall-compat.md](syscall-compat.md#inotify_init1-accepts-unknown-flag-bits) |
-| P2 | syscall/mm | `mprotect` unaligned address succeeds | High | [syscall-compat.md](syscall-compat.md#mprotect-unaligned-address-succeeds) |
-| P2 | syscall/poll | `ppoll` accepts invalid `tv_nsec` | High | [syscall-compat.md](syscall-compat.md#ppoll-accepts-invalid-tv_nsec) |
-| P2 | syscall/poll | raw `pselect6` accepts invalid `tv_nsec` | High | [syscall-compat.md](syscall-compat.md#raw-pselect6-accepts-invalid-tv_nsec) |
-| P2 | syscall/mm | `madvise` fake-succeeds invalid advice/unaligned ranges | High | [syscall-compat.md](syscall-compat.md#madvise-fake-succeeds-invalid-advice-and-unaligned-ranges) |
-| P2 | syscall/rlimit | `prlimit64` accepts invalid pid/resource | High | [syscall-compat.md](syscall-compat.md#prlimit64-accepts-invalid-pid-and-resource) |
 | P2 | syscall/mm | x86_64 `mincore(..., vec=NULL)` succeeds | High | [syscall-compat.md](syscall-compat.md#x86_64-mincore-vecnull-succeeds) |
 | P2 | syscall/futex | unknown futex ops/flags can report success | Medium-high | [syscall-compat.md](syscall-compat.md#unknown-futex-opsflags-can-report-success) |
 | P2 | syscall/fd | plain `dup()` drops proc-text read-only metadata | Medium | [syscall-compat.md](syscall-compat.md#plain-dup-drops-proc-text-read-only-metadata) |
 | P2 | syscall/select | sentry `pselect6` masks invalid virtual fd bits | Medium | [syscall-compat.md](syscall-compat.md#sentry-pselect6-masks-invalid-virtual-fd-bits) |
-| P2 | syscall/signal | raw signal validation is too permissive | High | [syscall-compat.md](syscall-compat.md#raw-signal-validation-is-too-permissive) |
 | P2 | syscall/fd | pipe-size fcntls fake success on invalid fds | High | [syscall-compat.md](syscall-compat.md#pipe-size-fcntls-fake-success-on-invalid-fds) |
 | P2 | syscall/signal | signal ucontext stack metadata is zero | High | [syscall-compat.md](syscall-compat.md#signal-ucontext-stack-metadata-is-zero) |
 | P2 | syscall/timerfd | `dup(timerfd)` loses timerfd semantics | High | [syscall-compat.md](syscall-compat.md#duptimerfd-loses-timerfd-semantics) |
 | P2 | syscall/inotify | `dup(inotify_fd)` loses inotify read semantics | High | [syscall-compat.md](syscall-compat.md#dupinotify_fd-loses-inotify-read-semantics) |
-| P2 | syscall/signal | `sigaltstack` accepts invalid stack configs | High | [syscall-compat.md](syscall-compat.md#sigaltstack-accepts-invalid-stack-configs) |
-| P2 | syscall/signal | `signalfd4` ignores `sizemask` | High | [syscall-compat.md](syscall-compat.md#signalfd4-ignores-sizemask) |
 | P2 | syscall/compat | pidfd invalid flags and fixed registry capacity | High | [syscall-compat.md](syscall-compat.md#pidfd-invalid-flags-and-fixed-registry-capacity) |
-| P2 | syscall/compat | `sched_setscheduler(SCHED_FIFO)` reports fake success | High | [syscall-compat.md](syscall-compat.md#sched_setschedulersched_fifo-reports-success-without-applying-policy) |
 | P2 | syscall/compat | aarch64 `AT_PAGESZ` exposes host page size | High | [syscall-compat.md](syscall-compat.md#aarch64-at_pagesz-exposes-host-page-size) |
 | P2 | syscall/compat | `F_SETLEASE` / `F_NOTIFY` fake support | High | [syscall-compat.md](syscall-compat.md#f_setlease-f_notify-return-success-without-arming-anything) |
 | P2 | daemon/runtime | live network connect/disconnect mutates daemon state only | High | [daemon-tests-docs.md](daemon-tests-docs.md#live-network-connectdisconnect-mutates-daemon-state-only) |
@@ -178,7 +155,6 @@ This directory is a working inventory of suspicious behavior, bad architecture, 
 | P2 | gpu/compat | Metal backend skips missing bind-group resources | High | [gpu-display-sentry.md](gpu-display-sentry.md#metal-backend-skips-missing-bind-group-resources) |
 | P2 | gpu/compat | Metal render target texture id aliases guest texture id `1` | Medium-high | [gpu-display-sentry.md](gpu-display-sentry.md#metal-render-target-texture-id-can-alias-guest-texture-id-1) |
 | P2 | display/input | released input objects remain active | Medium | [gpu-display-sentry.md](gpu-display-sentry.md#released-input-objects-remain-active) |
-| P2 | display/leak | `wl_shm_pool.destroy` leaves stale pools | High | [gpu-display-sentry.md](gpu-display-sentry.md#wl_shm_pooldestroy-leaves-stale-pools) |
 | P2 | display/compat | presenter failures still release buffers and fire callbacks | Medium | [gpu-display-sentry.md](gpu-display-sentry.md#presenter-failures-still-release-buffers-and-fire-frame-callbacks) |
 | P2 | display/window | native window close is not propagated | Medium-high | [gpu-display-sentry.md](gpu-display-sentry.md#native-window-close-is-not-propagated) |
 | P2 | display/input | keyboard repeat is internally contradictory | Medium | [gpu-display-sentry.md](gpu-display-sentry.md#keyboard-repeat-is-internally-contradictory) |
@@ -188,7 +164,6 @@ This directory is a working inventory of suspicious behavior, bad architecture, 
 | P2 | gpu/oracle | software backend accepts draws with missing vertex buffers | High | [gpu-display-sentry.md](gpu-display-sentry.md#software-backend-accepts-draws-with-missing-vertex-buffers) |
 | P2 | gpu/compat | multisample texture descriptors are silently downleveled | High | [gpu-display-sentry.md](gpu-display-sentry.md#multisample-texture-descriptors-are-silently-downleveled) |
 | P2 | gpu/present | present accepts texture size mismatch | High | [gpu-display-sentry.md](gpu-display-sentry.md#present-accepts-texture-size-mismatch) |
-| P2 | display/transform | `wl_surface.set_buffer_transform` is ignored | High | [gpu-display-sentry.md](gpu-display-sentry.md#wl_surfaceset_buffer_transform-is-ignored) |
 | P2 | display/shm | unsupported `wl_shm` formats are accepted | High | [gpu-display-sentry.md](gpu-display-sentry.md#unsupported-wl_shm-formats-are-accepted) |
 | P2 | gpu/compat | 3D/depth texture descriptors are flattened | High | [gpu-display-sentry.md](gpu-display-sentry.md#3ddepth-texture-descriptors-are-flattened) |
 | P1 | gpu/robustness | oversized texture descriptors panic software backend | High | [gpu-display-sentry.md](gpu-display-sentry.md#oversized-texture-descriptors-panic-software-backend) |
@@ -302,10 +277,8 @@ This directory is a working inventory of suspicious behavior, bad architecture, 
 | P2 | daemon/inspect | create `ExposedPorts` is dropped from inspect | High | [daemon-tests-docs.md](daemon-tests-docs.md#create-exposedports-is-dropped-from-inspect) |
 | P2 | daemon/inspect | interactive create config is not reported | High | [daemon-tests-docs.md](daemon-tests-docs.md#interactive-create-config-is-not-reported) |
 | P2 | daemon/inspect | `HostConfig.LogConfig` is accepted then lost | High | [daemon-tests-docs.md](daemon-tests-docs.md#hostconfiglogconfig-is-accepted-then-lost) |
-| P1 | daemon/update | container update drops resource body | High | [daemon-tests-docs.md](daemon-tests-docs.md#container-update-drops-resource-body) |
 | P1 | daemon/config | DNS and ExtraHosts options are lost | High | [daemon-tests-docs.md](daemon-tests-docs.md#dns-and-extrahosts-options-are-lost) |
 | P1 | daemon/network | endpoint static IPs and aliases are ignored | High | [daemon-tests-docs.md](daemon-tests-docs.md#endpoint-static-ips-and-aliases-are-ignored) |
-| P1 | daemon/archive | archive PUT writes through read-only bind mounts | High | [daemon-tests-docs.md](daemon-tests-docs.md#archive-put-writes-through-read-only-bind-mounts) |
 | P1 | daemon/restart | restarting containers can stay stuck after daemon restart | High | [daemon-tests-docs.md](daemon-tests-docs.md#restarting-containers-can-stay-stuck-after-daemon-restart) |
 | P2 | daemon/config | `HostConfig.DeviceRequests` is accepted then lost | High | [daemon-tests-docs.md](daemon-tests-docs.md#hostconfigdevicerequests-is-accepted-then-lost) |
 | P2 | daemon/inspect | `HostConfig.NetworkMode` is missing from inspect | High | [daemon-tests-docs.md](daemon-tests-docs.md#hostconfignetworkmode-is-missing-from-inspect) |
@@ -337,8 +310,6 @@ This directory is a working inventory of suspicious behavior, bad architecture, 
 | P1 | image/load | Docker load same-name archives delete existing rootfs in place | High | [archive-fs-compat.md](archive-fs-compat.md#docker-load-same-name-archives-delete-existing-rootfs-in-place) |
 | P1 | registry/push | Docker push drops runtime metadata from OCI config | High | [archive-fs-compat.md](archive-fs-compat.md#docker-push-drops-runtime-metadata-from-oci-config) |
 | P1 | syscall/fd | inotify/timerfd create without flags still sets close-on-exec | High | [syscall-compat.md](syscall-compat.md#inotify_init10-and-timerfd_create-0-set-close-on-exec) |
-| P1 | syscall/timerfd | short `read(timerfd)` consumes the expiration | High | [syscall-compat.md](syscall-compat.md#short-readtimerfd-consumes-the-expiration) |
-| P1 | syscall/inotify | short `read(inotify)` consumes the event | High | [syscall-compat.md](syscall-compat.md#short-readinotify-consumes-the-event) |
 | P1 | syscall/timerfd | `timerfd` CLOCK_REALTIME absolute deadlines are treated as monotonic | High | [syscall-compat.md](syscall-compat.md#timerfd-clock_realtime-absolute-deadlines-are-treated-as-monotonic) |
 | P1 | syscall/epoll | `epoll_pwait` ignores temporary signal mask | High | [syscall-compat.md](syscall-compat.md#epoll_pwait-ignores-temporary-signal-mask) |
 | P1 | syscall/futex | `FUTEX_WAIT_BITSET` / `FUTEX_WAKE_BITSET` ignore masks | High | [syscall-compat.md](syscall-compat.md#futex_wait_bitset-futex_wake_bitset-ignore-masks) |
@@ -360,7 +331,6 @@ This directory is a working inventory of suspicious behavior, bad architecture, 
 | P1 | syscall/fs | `openat2` ignores ABI validation and resolve restrictions | High | [syscall-compat.md](syscall-compat.md#openat2-ignores-abi-validation-and-resolve-restrictions) |
 | P1 | syscall/wait | raw `waitid(..., rusage)` leaves buffer untouched | High | [syscall-compat.md](syscall-compat.md#raw-waitid-rusage-leaves-buffer-untouched) |
 | P1 | syscall/wait | default core status contradicts `RLIMIT_CORE=0` | High | [syscall-compat.md](syscall-compat.md#default-core-status-contradicts-rlimit_core0) |
-| P2 | syscall/eventfd | `eventfd` read with null buffer reports success | High | [syscall-compat.md](syscall-compat.md#eventfd-read-with-null-buffer-reports-success) |
 | P2 | syscall/clone | `clone` ignores parent and child TID stores | High | [syscall-compat.md](syscall-compat.md#clone-ignores-parent-and-child-tid-stores) |
 | P2 | syscall/signal | `SA_NOCLDSTOP` still delivers stop SIGCHLD | High | [syscall-compat.md](syscall-compat.md#sa_nocldstop-still-delivers-stop-sigchld) |
 | P2 | syscall/mm | aarch64 4K subpage `munmap` returns `EINVAL` | High | [syscall-compat.md](syscall-compat.md#aarch64-4k-subpage-munmap-returns-einval) |
