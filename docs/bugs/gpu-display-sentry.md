@@ -113,18 +113,3 @@ Why this is bad:
 
 Clicking the native close button should send `xdg_toplevel.close` so the client can exit or prompt. If the close never reaches the Wayland client, windows can become impossible to close cleanly from the host UI.
 
-## Metal Duplicate IDs And Format Fallbacks Diverge From Checked Backends
-
-Priority: P2
-Impact: stale resources or wrong texture formats can be accepted silently
-Confidence: Medium-high
-
-Evidence:
-
-- Metal resource maps insert texture IDs directly, overwriting duplicates: `dd-display/src/metal_backend.rs:1448`.
-- Texture format handling falls back to BGRA for unsupported or unexpected formats: `dd-display/src/metal_backend.rs:195`.
-
-Why this is bad:
-
-Other backends tend to reject invalid or duplicate resource definitions. Silent overwrite and fallback can hide guest bugs and produce frames that use stale resources or different channel formats than requested.
-
