@@ -229,6 +229,28 @@ async fn build_unknown_target_errors() {
     assert!(built(&app, "tgt:latest").await.is_none(), "no image registered for an unknown target");
 }
 
+// ---- Exec-form JSON with a non-string element is rejected (not silently truncated) ------------
+#[tokio::test]
+async fn build_rejects_non_string_exec_form() {
+    let app = test_app();
+    seed_base(&app, "base:latest", |_| {}).await;
+    // `["echo", 123]` is invalid exec form (123 is not a string) — Docker fails the build.
+    let df = "FROM base:latest\nCMD [\"echo\", 123]\n";
+    let (body, err) = run_build(&app, "execbad:latest", df, &[], None).await;
+    assert!(err, "non-string exec-form element must fail the build: {body}");
+    assert!(built(&app, "execbad:latest").await.is_none(), "no image for a rejected Dockerfile");
+}
+
+// A `[`-prefixed shell command (`RUN [ -f x ]`) is NOT valid JSON, so it stays shell-form and builds.
+#[tokio::test]
+async fn build_allows_bracket_shell_command() {
+    let app = test_app();
+    seed_base(&app, "base:latest", |_| {}).await;
+    let df = "FROM base:latest\nCMD [ -f /x ] && echo hi\n";
+    let (body, err) = run_build(&app, "execsh:latest", df, &[], None).await;
+    assert!(!err, "a `[`-prefixed shell command must not be rejected as bad exec form: {body}");
+}
+
 // ---- Finding 12: a failed build leaves no partial image dir -----------------------------------
 #[tokio::test]
 async fn build_failure_cleans_partial_image_dir() {

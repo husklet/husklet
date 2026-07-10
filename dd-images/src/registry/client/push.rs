@@ -10,10 +10,15 @@ use std::path::Path;
 impl Client {
     /// Push `rootfs` to the registry as a single-layer image under `self.image`. Returns the manifest
     /// digest. Requires credentials for a registry that demands auth.
+    ///
+    /// `config_obj` is the OCI image `config.config` object — the full runtime metadata Docker records
+    /// (`Cmd`, `Entrypoint`, `Env`, `WorkingDir`, `User`, `ExposedPorts`, `Labels`, `StopSignal`,
+    /// `Volumes`, `Healthcheck`). The caller assembles it from the image state so a pushed image starts
+    /// and inspects exactly like the local one; passing `{"Cmd": [...]}` reproduces the old behavior.
     pub fn push(
         &mut self,
         rootfs: &Path,
-        cmd: &[String],
+        config_obj: &serde_json::Value,
         arch: &str,
         os: &str,
         work: &Path,
@@ -25,7 +30,7 @@ impl Client {
 
         let config = json!({
             "architecture": arch, "os": os, // os=darwin for mac containers; the manifest is os/arch-tagged
-            "config": { "Cmd": cmd },
+            "config": config_obj,
             "rootfs": { "type": "layers", "diff_ids": [diff_id] },
         });
         let config_path = work.join("config.json");

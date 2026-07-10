@@ -321,6 +321,20 @@ pub(crate) async fn images_build(
         }
     }
 
+    // Reject a Dockerfile whose exec-form (JSON array) instruction has a non-string element — e.g.
+    // `CMD ["echo", 123]`. Docker fails the build; dd previously filtered the bad element and built a
+    // truncated command. Only a *valid JSON array* with a non-string trips this: a `[`-prefixed shell
+    // command like `RUN [ -f x ]` is not valid JSON and stays shell-form. Validate up front so we fail
+    // before creating any image output.
+    for (inst, raw) in &steps {
+        if matches!(inst.as_str(), "RUN" | "CMD" | "ENTRYPOINT" | "SHELL") {
+            if let Err(e) = parse_exec_form_checked(raw) {
+                cleanup(&ctx);
+                return build_err(log, format!("{inst}: {e}"));
+            }
+        }
+    }
+
     // the new image's rootfs dir under DD_IMAGES — derived from the user's raw `-t` so a bare tag keeps a
     // predictable dir name (`scen-built`), while a namespaced/tagged build still gets a distinct dir.
     let safe: String = safe_dir_name(&raw_tag);
