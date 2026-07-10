@@ -17,7 +17,10 @@ static int syscall_should_restart(struct cpu *c) {
     if (ckpt_pending()) return 0; // a whole-tree checkpoint was requested: return EINTR so this process reaches
                                   // its dispatcher safepoint (ckpt_poll) instead of transparently re-blocking
     if (__atomic_load_n(&c->exited, __ATOMIC_SEQ_CST)) return 0; // execve teardown: don't re-block, unwind out
-    uint64_t p = __atomic_load_n(&g_pending, __ATOMIC_SEQ_CST);
+    // Process-wide pending (g_pending) AND this thread's directed-pending (c->tpending, set by tkill/tgkill):
+    // a thread blocked in read/accept/recv must be interrupted by a thread-directed signal too, not only a
+    // process one. For each deliverable-now signal whose guest handler lacks SA_RESTART, return 0 (EINTR).
+    uint64_t p = __atomic_load_n(&g_pending, __ATOMIC_SEQ_CST) | __atomic_load_n(&c->tpending, __ATOMIC_SEQ_CST);
     for (int s = 1; s <= 64; s++) {
         uint64_t bit = 1ull << s;
         if (!(p & bit)) continue;
