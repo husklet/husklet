@@ -41,6 +41,10 @@ pub fn groups() -> Vec<Group> {
             p("sc-badtimeout", "syscallbug/badtimeout.c"),
             // prlimit64 invalid resource -> EINVAL, dead pid -> ESRCH.
             p("sc-prlimit-invalid", "syscallbug/prlimit_invalid.c"),
+            // sigaltstack invalid flags -> EINVAL, tiny stack -> ENOMEM.
+            p("sc-sigaltstack-validate", "syscallbug/sigaltstack_validate.c"),
+            // rt_sigprocmask invalid how / wrong sigsetsize -> EINVAL.
+            p("sc-sigprocmask-validate", "syscallbug/sigprocmask_validate.c"),
         ],
     )]
 }

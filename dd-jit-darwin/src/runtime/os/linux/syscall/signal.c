@@ -172,8 +172,28 @@ static int svc_signal(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint
         G_RET(c) = 0;
         break;
     }
-    // sigaltstack(new, old)
+    // sigaltstack(new, old): struct sigaltstack { void *ss_sp; int ss_flags; size_t ss_size; } (24 bytes).
     case 132: {
+        // Linux validates BEFORE writing `old`: bad pointers -> EFAULT; an unknown ss_flags mode -> EINVAL;
+        // and, unless SS_DISABLE, a stack smaller than MINSIGSTKSZ -> ENOMEM. Without this dd installs a
+        // bogus/tiny altstack that corrupts later SA_ONSTACK signal delivery.
+        if ((a1 && guest_bad_ptr(a1, 24)) || (a0 && guest_bad_ptr(a0, 24))) {
+            G_RET(c) = (uint64_t)(-EFAULT);
+            break;
+        }
+        if (a0) {
+            uint32_t nflags = *(uint32_t *)(a0 + 8);
+            uint64_t nsize = *(uint64_t *)(a0 + 16);
+            // valid set-flag bits: SS_ONSTACK(1), SS_DISABLE(2), SS_AUTODISARM(0x80000000).
+            if (nflags & ~(uint32_t)(1u | 2u | 0x80000000u)) {
+                G_RET(c) = (uint64_t)(-EINVAL);
+                break;
+            }
+            if (!(nflags & 2u) && nsize < 2048 /* MINSIGSTKSZ */) {
+                G_RET(c) = (uint64_t)(-ENOMEM);
+                break;
+            }
+        }
         if (a1) {
             // report current (or SS_DISABLE=2 if none)
             *(uint64_t *)(a1 + 0) = c->alt_sp;
@@ -450,9 +470,20 @@ static int svc_signal(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint
         G_RET(c) = 0;
         break;
     }
-    // rt_sigprocmask(how, *set, *old)
+    // rt_sigprocmask(how, *set, *old, sigsetsize)
     case 135: {
         // (W4F slow-path counter removed: it lived in x86 emit.c, undefined in the shared/aarch64 TU)
+        // Linux validates the ABI: sigsetsize must equal sizeof(kernel sigset)=8, and when a `set` is
+        // supplied `how` must be SIG_BLOCK/UNBLOCK/SETMASK(0/1/2) -- an unknown `how` is EINVAL, not a
+        // silent set-mask. Otherwise malformed mask ops report success and mis-shape the guest mask.
+        if ((size_t)a3 != 8) {
+            G_RET(c) = (uint64_t)(-EINVAL);
+            break;
+        }
+        if (a1 && (int)a0 != 0 && (int)a0 != 1 && (int)a0 != 2) {
+            G_RET(c) = (uint64_t)(-EINVAL);
+            break;
+        }
         if (a2) *(uint64_t *)a2 = c->sigmask;
         if (a1) {
             uint64_t set = *(uint64_t *)a1;

@@ -166,31 +166,6 @@ Verification:
 
 Run an untrusted-mode `pselect6` probe with an invalid positive fd bit and compare against native `EBADF`.
 
-## `sigaltstack` Accepts Invalid Stack Configs
-
-Priority: P2
-Impact: later `SA_ONSTACK` delivery can use invalid or tiny stacks
-Confidence: High
-
-Verification status: Proven in isolated worktree `/Users/x/dd/dd-worker-P-jit-runtime-20260710`.
-
-Evidence:
-
-- `sigaltstack` copies old/new state directly and returns success: `dd-jit-darwin/src/runtime/os/linux/syscall/signal.c:175`.
-
-Why this is bad:
-
-Linux validates invalid flags, minimum stack size, active-stack changes, and bad pointers. dd accepts invalid configurations that can corrupt later signal delivery.
-
-Isolated proof:
-
-```sh
-cargo run -q -p dd-tests -- -e aarch64 slotp-sigaltstack-validate
-cargo run -q -p dd-tests -- -e x86_64 slotp-sigaltstack-validate
-```
-
-Result: failed both engines; dd accepts invalid inputs that native rejects.
-
 ## Seccomp Filter Install Reports Success But Does Not Enforce
 
 Priority: P1
@@ -269,31 +244,6 @@ Evidence:
 Why this is bad:
 
 Programs using `mlockall` for latency control can receive success-like state while pages are still pageable by the host. This is mainly a documented model gap, but it should stay visible because it affects performance-sensitive workloads.
-
-## Raw Signal Validation Is Too Permissive
-
-Priority: P2
-Impact: invalid signal setup reports success
-Confidence: High
-
-Verification status: Proven in isolated worktree `/Users/x/dd/dd-worker-U`.
-
-Evidence:
-
-- `sigaltstack` accepts stack state without full Linux validation: `dd-jit-darwin/src/runtime/os/linux/syscall/signal.c:175`.
-- `rt_sigprocmask` treats invalid `how` as set-mask behavior and ignores `sigsetsize`: `dd-jit-darwin/src/runtime/os/linux/syscall/signal.c:453`.
-
-Why this is bad:
-
-Signal setup APIs are frequently used as feature probes and runtime invariants. dd can accept invalid flags, undersized altstacks, and malformed mask operations that Linux rejects.
-
-Isolated proof:
-
-```sh
-aarch64-linux-gnu-gcc -O2 -static -Wall -Wextra -o scratch-worker-U/poc_signal_validation scratch-worker-U/poc_signal_validation.c
-```
-
-Native returned `EINVAL/EINVAL/ENOMEM`; dd returned success for all three cases.
 
 ## `pselect6` And `ppoll` Ignore Temporary Signal Masks
 
