@@ -3200,6 +3200,10 @@ static void *translate_block(uint64_t gpc) {
             if (op == 0xC7 && (I.reg & 7) == 1 && I.is_mem) { // cmpxchg16b: REX.W 0F C7 /1 (128-bit compare+swap)
                 // Non-atomic emulation (single 128-bit CAS): correct for the in-process model. Compares
                 // RDX:RAX with [m]; on equal stores RCX:RBX and sets ZF=1, else loads [m] into RDX:RAX, ZF=0.
+                // NOTE: NOT atomic across guest threads (finding "cmpxchg16b Is Non-Atomic"). A CASPAL-based
+                // atomic version was tried but LIVELOCKS under sustained multi-thread contention on Apple
+                // Silicon (store-forwarding replay: the 128-bit CASP spuriously replays/aborts forever while
+                // a 64-bit CAS is immune) -- gate-unsafe. A livelock-free fix needs hashed-spinlock DWCAS.
                 emit_ea(&I, next);         // x17 = EA
                 e_load_uoff(8, 19, 17, 0); // x19 = lo
                 e_load_uoff(8, 20, 17, 8); // x20 = hi
