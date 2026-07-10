@@ -2,6 +2,14 @@
 use super::super::*;
 use super::diff::discard_container_layer;
 
+/// Whether a container in `status` is eligible for `docker container prune`. Prune reclaims STOPPED
+/// containers (created / exited / dead) but must NOT remove ones still active from the user's point of
+/// view: `running`, `paused`, or `restarting` — a restarting container is waiting on restart-policy
+/// backoff, and pruning it silently cancels the scheduled restart.
+pub(crate) fn container_is_prunable(status: &str) -> bool {
+    !matches!(status, "running" | "paused" | "restarting")
+}
+
 /// `POST /containers/prune` — `docker container prune`. Removes exited (non-running) containers and
 /// reports what was deleted.
 pub(crate) async fn containers_prune(State(a): State<App>) -> Json<crate::api::ContainersPruneReport> {
@@ -9,7 +17,7 @@ pub(crate) async fn containers_prune(State(a): State<App>) -> Json<crate::api::C
     let dead: Vec<String> = g
         .containers
         .iter()
-        .filter(|(_, c)| c.status != "running" && c.status != "paused")
+        .filter(|(_, c)| container_is_prunable(&c.status))
         .map(|(id, _)| id.clone())
         .collect();
     for id in &dead {
@@ -64,5 +72,22 @@ pub(crate) async fn containers_export(State(a): State<App>, Path(id): Path<Strin
             .body(Body::from(o.stdout))
             .unwrap(),
         _ => server_error("export failed"),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // "Container Prune Deletes Restarting Containers" (P1): prune reclaims stopped containers but must
+    // keep running/paused/restarting ones (a restarting container is waiting on restart-policy backoff).
+    #[test]
+    fn prune_keeps_active_containers_including_restarting() {
+        assert!(container_is_prunable("exited"));
+        assert!(container_is_prunable("created"));
+        assert!(container_is_prunable("dead"));
+        assert!(!container_is_prunable("running"));
+        assert!(!container_is_prunable("paused"));
+        assert!(!container_is_prunable("restarting"));
     }
 }

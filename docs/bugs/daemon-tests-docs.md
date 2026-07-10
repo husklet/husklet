@@ -735,31 +735,6 @@ CARGO_TARGET_DIR=target-worker-Y-daemon-api-20260710 cargo test -p dd-daemon con
 
 Result: failed; `HostConfig.AutoRemove` was `Null`, expected `true`.
 
-## Container Prune Deletes Restarting Containers
-
-Priority: P1
-Impact: prune can cancel pending restart-policy containers
-Confidence: High
-
-Verification status: Proven in isolated worktree `/Users/x/dd/dd-worker-Y-daemon-api-20260710`.
-
-Evidence:
-
-- Restart backoff marks containers as restarting: `dd-daemon/src/runtime/restart.rs:41`.
-- Container prune logic lives in `dd-daemon/src/containers/inspect/admin.rs:7`.
-
-Why this is bad:
-
-A restarting container is active from the user's point of view and may be waiting for policy backoff. Prune should not remove it and cancel the scheduled restart.
-
-Isolated proof:
-
-```sh
-CARGO_TARGET_DIR=target-worker-Y-daemon-api-20260710 cargo test -p dd-daemon containers_prune_keeps_restarting_container -- --nocapture
-```
-
-Result: failed; prune deleted `["restartid0000"]`.
-
 ## Fast-Exit Event Ordering Can Emit `die` Before `start`
 
 Priority: P2
