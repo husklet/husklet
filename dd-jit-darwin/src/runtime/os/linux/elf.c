@@ -133,8 +133,9 @@ static uint64_t nonpie_cas(void *p, int size, uint64_t expected, uint64_t newv) 
 // on any non-exclusive served store to the same granule so a stale reservation cannot wrongly succeed.
 static __thread struct {
     uint64_t addr; // host (high) address reserved by the last LL, 0 = no reservation
-    uint64_t val;  // value observed by the LL (size-masked)
-    int size;      // access width log2 (0=B 1=H 2=W 3=X)
+    uint64_t val;  // value observed by the LL (size-masked); low word for a pair reservation
+    uint64_t val2; // second word observed by a PAIR LL (LDXP/LDAXP)
+    int size;      // access width log2 (0=B 1=H 2=W 3=X); 4 = 64-bit pair (16B), 5 = 32-bit pair (8B)
 } g_llsc;
 
 static int nonpie_sc(uint64_t real, int size, uint64_t newv, uint64_t *llval) {
@@ -299,6 +300,75 @@ static int nonpie_fixup(siginfo_t *si, void *ucv) {
             int ok = nonpie_sc(real, size, newv, &g_llsc.val);
             if (rs != 31) X[rs] = ok ? 0 : 1;
         }
+        uc->uc_mcontext->__ss.__pc += 4;
+        return 1;
+    }
+
+    // ---- Exclusive PAIR: LDXP/LDAXP/STXP/STLXP. bit30=element width (0=32-bit pair/8B, 1=64-bit pair/16B),
+    //      bit22=L (load). These fell through the single-register handler above (o1==0 there) and every other
+    //      case -> return 0 -> the low non-PIE fault re-raised on the SAME instruction forever (the observed
+    //      hang). Serve them as a software 128-bit (or 64-bit) LL/SC, mirroring the single-register monitor. ----
+    if ((insn & 0xBFA00000u) == 0x88200000u) {
+        int is64 = (insn >> 30) & 1, load = (insn >> 22) & 1, rs = (insn >> 16) & 0x1F, rt2 = (insn >> 10) & 0x1F;
+        if (is64) {                                                          // 16-byte pair
+            if (load) {                                                      // LDXP/LDAXP: open a 128-bit reservation
+                unsigned __int128 v = __atomic_load_n((unsigned __int128 *)real, __ATOMIC_ACQUIRE);
+                g_llsc.addr = real, g_llsc.size = 4, g_llsc.val = (uint64_t)v, g_llsc.val2 = (uint64_t)(v >> 64);
+                if (rt != 31) X[rt] = (uint64_t)v;
+                if (rt2 != 31) X[rt2] = (uint64_t)(v >> 64);
+            } else { // STXP/STLXP: CAS the whole 16 bytes against the reservation -> status 0 (ok) / 1 (fail)
+                int ok = 0;
+                if (g_llsc.addr == real && g_llsc.size == 4) {
+                    g_llsc.addr = 0;
+                    unsigned __int128 exp = ((unsigned __int128)g_llsc.val2 << 64) | g_llsc.val;
+                    unsigned __int128 nv =
+                        ((unsigned __int128)((rt2 == 31) ? 0 : X[rt2]) << 64) | ((rt == 31) ? 0 : X[rt]);
+                    ok = __atomic_compare_exchange_n((unsigned __int128 *)real, &exp, nv, 0, __ATOMIC_SEQ_CST,
+                                                     __ATOMIC_SEQ_CST);
+                }
+                if (rs != 31) X[rs] = ok ? 0 : 1;
+            }
+        } else {          // 8-byte pair (two 32-bit words: Rt=low, Rt2=high)
+            if (load) {   // LDXP/LDAXP
+                uint64_t v = __atomic_load_n((uint64_t *)real, __ATOMIC_ACQUIRE);
+                g_llsc.addr = real, g_llsc.size = 5, g_llsc.val = v;
+                if (rt != 31) X[rt] = (uint32_t)v;
+                if (rt2 != 31) X[rt2] = (uint32_t)(v >> 32);
+            } else { // STXP/STLXP
+                int ok = 0;
+                if (g_llsc.addr == real && g_llsc.size == 5) {
+                    g_llsc.addr = 0;
+                    uint64_t exp = g_llsc.val;
+                    uint64_t nv = ((uint64_t)(uint32_t)((rt2 == 31) ? 0 : X[rt2]) << 32) |
+                                  (uint32_t)((rt == 31) ? 0 : X[rt]);
+                    ok = __atomic_compare_exchange_n((uint64_t *)real, &exp, nv, 0, __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST);
+                }
+                if (rs != 31) X[rs] = ok ? 0 : 1;
+            }
+        }
+        uc->uc_mcontext->__ss.__pc += 4;
+        return 1;
+    }
+
+    // ---- CASP/CASPA/CASPL/CASPAL (compare-and-swap PAIR): Rs:Rs+1 = comparison in / old out, Rt:Rt+1 = swap.
+    //      bit30 = element width (0=32-bit pair, 1=64-bit pair). Same hang class as the exclusive pair above. ----
+    if ((insn & 0xBFA07C00u) == 0x08207C00u) {
+        int is64 = (insn >> 30) & 1, rs = (insn >> 16) & 0x1F;
+#define NP_XR(n) (((n) == 31) ? 0 : X[(n)])
+        if (is64) { // 16-byte pair
+            unsigned __int128 exp = ((unsigned __int128)NP_XR(rs + 1) << 64) | NP_XR(rs);
+            unsigned __int128 nv = ((unsigned __int128)NP_XR(rt + 1) << 64) | NP_XR(rt);
+            __atomic_compare_exchange_n((unsigned __int128 *)real, &exp, nv, 0, __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST);
+            if (rs != 31) X[rs] = (uint64_t)exp;                    // old value written back to Rs:Rs+1
+            if ((rs + 1) != 31) X[rs + 1] = (uint64_t)(exp >> 64);
+        } else { // 8-byte pair (two 32-bit words)
+            uint64_t exp = ((uint64_t)(uint32_t)NP_XR(rs + 1) << 32) | (uint32_t)NP_XR(rs);
+            uint64_t nv = ((uint64_t)(uint32_t)NP_XR(rt + 1) << 32) | (uint32_t)NP_XR(rt);
+            __atomic_compare_exchange_n((uint64_t *)real, &exp, nv, 0, __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST);
+            if (rs != 31) X[rs] = (uint32_t)exp;
+            if ((rs + 1) != 31) X[rs + 1] = (uint32_t)(exp >> 32);
+        }
+#undef NP_XR
         uc->uc_mcontext->__ss.__pc += 4;
         return 1;
     }
