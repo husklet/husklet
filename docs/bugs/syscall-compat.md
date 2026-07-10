@@ -85,25 +85,6 @@ Verification:
 
 Run an untrusted-mode probe that sets `FD_CLOEXEC` on a pipe, execs, and verifies the peer observes EOF.
 
-## Unknown Futex Ops/Flags Can Report Success
-
-Priority: P2
-Impact: futex capability probes misdetect unsupported behavior
-Confidence: Medium-high
-
-Evidence:
-
-- The futex syscall masks op bits with `& 0x7f`: `dd-jit-darwin/src/runtime/os/linux/syscall/proc.c:638`.
-- Unmodelled futex ops fall through to success: `dd-jit-darwin/src/runtime/os/linux/thread.c:840`.
-
-Why this is bad:
-
-Native Linux returns errors for unknown futex op/flag cases. dd can report success and make libraries choose an unsupported synchronization path.
-
-Verification:
-
-Promote the native oracle checked in `/Users/x/dd/dd-slot-G` into a dd-tests probe for unknown op and flag combinations.
-
 ## Sentry `pselect6` Masks Invalid Virtual Fd Bits
 
 Priority: P2
@@ -480,31 +461,6 @@ Observed proof:
 ```text
 Linux: rem_sec=0 ... poll=1 ... elapsed_ms=85 read=8 ... count=1
 dd:    rem_sec=1782499723 ... poll=0 ... elapsed_ms=401 read=-1 read_errno=11 count=0
-```
-
-## `FUTEX_WAIT_BITSET` / `FUTEX_WAKE_BITSET` Ignore Masks
-
-Priority: P1
-Impact: futex waiters can wake on non-matching bitsets and invalid zero masks
-Confidence: High
-
-Verification status: Proven in isolated worktree `/Users/x/dd/dd-audit-wait-futex-20260710`.
-
-Evidence:
-
-- Futex syscall dispatch routes bitset operations through the shared futex path: `dd-jit-darwin/src/runtime/os/linux/syscall/proc.c:638`.
-- Wait handling treats bitset waits like plain waits: `dd-jit-darwin/src/runtime/os/linux/thread.c:760`.
-- Wake handling treats bitset wakes like plain wakes: `dd-jit-darwin/src/runtime/os/linux/thread.c:816`.
-
-Why this is bad:
-
-Linux rejects `val3 == 0` for bitset futex operations and wakes only waiters whose masks overlap. dd ignores masks and wakes a waiter even when the wake bitset does not match.
-
-Observed proof:
-
-```text
-qemu: waiter r=-1 errno=110 timedout=1 woke=0; zero_wait_einval=1 zero_wake_einval=1 mismatch_wake=0
-dd:   waiter r=0 errno=0 timedout=0 woke=1; zero_wait_einval=0 zero_wake_einval=0 mismatch_wake=1
 ```
 
 ## `wait4` Misses `WCONTINUED` And Corrupts Final Status

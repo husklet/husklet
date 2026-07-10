@@ -72,15 +72,21 @@ struct futex_bucket {
     _Atomic int waiters;           // aggregate parked count in this bucket (PROF + imprecise fallback)
     uintptr_t saddr[FUTEX_ASLOTS]; // distinct uaddrs with >=1 parked waiter (0 == free slot)
     uint32_t scnt[FUTEX_ASLOTS];   // parked-waiter count for saddr[i]
+    uint32_t sbits[FUTEX_ASLOTS];  // OR of the FUTEX_WAIT_BITSET masks parked on saddr[i] (plain WAIT = ~0)
     int imprecise;                 // slots overflowed while waiters were parked -> WAKE count approximate
 };
 
 // Called under b->m. Register/unregister one parked waiter on `a`, and report the parked count for `a`.
-static void fbk_park(struct futex_bucket *b, uintptr_t a) {
+// `bits` is the waiter's FUTEX_WAIT_BITSET mask (~0u for a plain FUTEX_WAIT); it is OR'd into the address's
+// aggregate so a FUTEX_WAKE_BITSET can tell whether any waiter here can match its wake mask. The aggregate
+// over-approximates (bits are only cleared when the address fully drains), which can only cause an extra --
+// always-legal -- spurious wakeup, never a missed one.
+static void fbk_park(struct futex_bucket *b, uintptr_t a, uint32_t bits) {
     int freeslot = -1;
     for (int i = 0; i < FUTEX_ASLOTS; i++) {
         if (b->scnt[i] && b->saddr[i] == a) {
             b->scnt[i]++;
+            b->sbits[i] |= bits;
             return;
         }
         if (freeslot < 0 && !b->scnt[i]) freeslot = i;
@@ -88,6 +94,7 @@ static void fbk_park(struct futex_bucket *b, uintptr_t a) {
     if (freeslot >= 0) {
         b->saddr[freeslot] = a;
         b->scnt[freeslot] = 1;
+        b->sbits[freeslot] = bits;
         return;
     }
     b->imprecise = 1; // no free slot: this bucket's WAKE counts are approximate until it drains
@@ -96,9 +103,22 @@ static void fbk_park(struct futex_bucket *b, uintptr_t a) {
 static void fbk_unpark(struct futex_bucket *b, uintptr_t a) {
     for (int i = 0; i < FUTEX_ASLOTS; i++)
         if (b->scnt[i] && b->saddr[i] == a) {
-            if (--b->scnt[i] == 0) b->saddr[i] = 0;
+            if (--b->scnt[i] == 0) {
+                b->saddr[i] = 0;
+                b->sbits[i] = 0; // address drained -> reset the aggregate wait-mask
+            }
             return;
         }
+}
+
+// Under b->m: does any waiter parked on `a` have a bitset overlapping `mask`? A plain FUTEX_WAKE passes ~0u
+// (always matches). When the bucket overflowed (imprecise), we cannot trust the per-address aggregate, so
+// conservatively report a match (broadcast + let waiters re-check) rather than risk missing a wakeup.
+static int fbk_match(struct futex_bucket *b, uintptr_t a, uint32_t mask) {
+    if (b->imprecise) return 1;
+    for (int i = 0; i < FUTEX_ASLOTS; i++)
+        if (b->scnt[i] && b->saddr[i] == a) return (b->sbits[i] & mask) != 0;
+    return 0;
 }
 
 static int fbk_parked(struct futex_bucket *b, uintptr_t a) {
@@ -465,7 +485,7 @@ static void futexlog(const char *ev, const void *uaddr, int op, int val, long ex
 // WAKE block exactly: PROF fast/slow split, lock+broadcast (the lock orders the guest's pre-syscall store
 // to *uaddr ahead of an arriving waiter's under-lock value-check, so no wakeup is lost), and a count taken
 // from the per-address slot (the number of waiters that will re-check their word and leave).
-static int futex_wake_bucket(const int *uaddr, int n) {
+static int futex_wake_bucket(const int *uaddr, int n, uint32_t match) {
     struct futex_bucket *b = fbk_of(uaddr);
     if (g_prof) {
         if (atomic_load_explicit(&b->waiters, memory_order_relaxed))
@@ -474,6 +494,12 @@ static int futex_wake_bucket(const int *uaddr, int n) {
             g_futex_wake_fast++;
     }
     pthread_mutex_lock(&b->m);
+    // FUTEX_WAKE_BITSET only wakes waiters whose bitset overlaps `match`; a plain FUTEX_WAKE passes ~0u.
+    // If no parked waiter on this address can match, wake nobody (Linux does not disturb them).
+    if (!fbk_match(b, (uintptr_t)uaddr, match)) {
+        pthread_mutex_unlock(&b->m);
+        return 0;
+    }
     int woke = fbk_parked(b, (uintptr_t)uaddr);
     if (woke > n) woke = n;
     pthread_cond_broadcast(&b->c); // waiters re-check their own word; spurious wakes are legal
@@ -575,7 +601,7 @@ static long futex_lock_pi(struct cpu *c, int *uaddr, int trylock, const struct t
             continue;
         if (!parked) {
             atomic_fetch_add_explicit(&b->waiters, 1, memory_order_relaxed);
-            fbk_park(b, (uintptr_t)uaddr);
+            fbk_park(b, (uintptr_t)uaddr, ~0u); // PI-mutex waiter: matches any wake bitset
             parked = 1;
         }
         thread_wait_publish(&b->m, &b->c);
@@ -642,6 +668,9 @@ static long futex_unlock_pi(struct cpu *c, int *uaddr) {
 // carry the WAKE_OP / REQUEUE second-address operands, and are ignored by the WAIT/plain-WAKE branches.
 static long futex_op(struct cpu *c, int *uaddr, int op, int val, const struct timespec *ts, int nr_wake2, int *uaddr2,
                      uint32_t val3) {
+    // FUTEX_WAIT_BITSET(9)/WAKE_BITSET(10) require a non-empty bitset: Linux rejects val3==0 with EINVAL
+    // (a zero mask can match no waiter). The old shared WAIT/WAKE path ignored val3 entirely and accepted it.
+    if ((op == 9 || op == 10) && val3 == 0) return -EINVAL;
     // PI-mutex ops use per-address ownership tracked in the (always-present) buckets, independent of the
     // legacy single-queue mode below, so dispatch them first. FUTEX_LOCK_PI=6, UNLOCK_PI=7, TRYLOCK_PI=8,
     // WAIT_REQUEUE_PI=11, CMP_REQUEUE_PI=12, LOCK_PI2=13.
@@ -661,7 +690,7 @@ static long futex_op(struct cpu *c, int *uaddr, int op, int val, const struct ti
             return -EAGAIN;
         }
         atomic_fetch_add_explicit(&b->waiters, 1, memory_order_relaxed);
-        fbk_park(b, (uintptr_t)uaddr);
+        fbk_park(b, (uintptr_t)uaddr, ~0u); // PI-mutex waiter: matches any wake bitset
         thread_wait_publish(&b->m, &b->c);
         long ret = 0;
         if (cpu_wait_interrupted(c)) {
@@ -697,7 +726,7 @@ static long futex_op(struct cpu *c, int *uaddr, int op, int val, const struct ti
         // Wake up to `val` signalled + `nr_wake2` requeue-budget waiters in one broadcast; each self-acquires
         // uaddr2, so the physical requeue is unnecessary. (A single broadcast wakes all parked in the bucket.)
         long budget = (long)(val < 1 ? 1 : val) + (nr_wake2 > 0 ? nr_wake2 : 0);
-        return futex_wake_bucket(uaddr, budget > 0x7fffffff ? 0x7fffffff : (int)budget);
+        return futex_wake_bucket(uaddr, budget > 0x7fffffff ? 0x7fffffff : (int)budget, ~0u);
     }
     if (!g_futexq) {
         // ---- legacy single global queue ----
@@ -780,8 +809,9 @@ static long futex_op(struct cpu *c, int *uaddr, int op, int val, const struct ti
         }
         // We are now about to actually park: record this waiter against its uaddr so a FUTEX_WAKE (this
         // process or, across a shared page, another) can report the true woken count. Kept in the SHARED
-        // bucket, so a cross-fork waker sees it.
-        fbk_park(b, (uintptr_t)uaddr);
+        // bucket, so a cross-fork waker sees it. Carry the wait bitset (op 9 = FUTEX_WAIT_BITSET's val3;
+        // plain FUTEX_WAIT matches any) so FUTEX_WAKE_BITSET can skip a non-overlapping wake.
+        fbk_park(b, (uintptr_t)uaddr, op == 9 ? val3 : ~0u);
         futexlog(ts ? "fwait_park" : "fwait_parkINF", uaddr, op, val, (long)G_PC(c));
         int rc = 0;
         if (ts) {
@@ -820,7 +850,8 @@ static long futex_op(struct cpu *c, int *uaddr, int op, int val, const struct ti
         // wakeup is lost -- the old lock-free no-sleeper skip lost wakeups on ARM) and counts the waiters
         // parked on THIS uaddr: each re-checks its word, sees the store, and leaves -- exactly the woken
         // count. (Returning `val` broke LTP tst_checkpoint_wake's `waked += WAKE(INT_MAX)` -> fork04.)
-        int woke = futex_wake_bucket(uaddr, val);
+        // FUTEX_WAKE_BITSET (op 10) wakes only waiters whose bitset overlaps val3; the others match any.
+        int woke = futex_wake_bucket(uaddr, val, op == 10 ? val3 : ~0u);
         futexlog("fwake", uaddr, op, val, (long)woke);
         return woke;
     }
@@ -832,12 +863,17 @@ static long futex_op(struct cpu *c, int *uaddr, int op, int val, const struct ti
         int do_wake2 = 0;
         int rc = futex_wake_op_apply(uaddr2, val3, &do_wake2);
         if (rc < 0) return rc; // -EFAULT (bad uaddr2) / -ENOSYS (unknown op|cmp): report to the guest as-is
-        int woke = futex_wake_bucket(uaddr, val);
-        if (do_wake2) woke += futex_wake_bucket(uaddr2, nr_wake2);
+        int woke = futex_wake_bucket(uaddr, val, ~0u);
+        if (do_wake2) woke += futex_wake_bucket(uaddr2, nr_wake2, ~0u);
         futexlog("fwakeop", uaddr, op, val, (long)woke);
         return woke;
     }
-    // Any remaining op (e.g. the deprecated FD ops) is unmodelled -- pretend success (baseline behavior).
+    // A genuinely undefined command (the removed FUTEX_FD=2, or any value >= 14 that names no futex op) is
+    // -ENOSYS on Linux, not a silent success -- the old fall-through masked capability probes. The PI ops
+    // (6-8,11-13) that dd does not model are left as best-effort success above to avoid breaking a PI-mutex
+    // fast-path fallback; only the truly-undefined range is rejected here.
+    if (op == 2 || op >= 14) return -ENOSYS;
+    // Any remaining op is unmodelled -- pretend success (baseline behavior).
     return 0;
 }
 
@@ -1119,7 +1155,7 @@ static void robust_handle_death(uint64_t futex_addr, int mytid) {
         if (((uint32_t)v & DD_FUTEX_TID_MASK) != (uint32_t)mytid) return; // not (or no longer) ours
         int nv = (int)(((uint32_t)v & DD_FUTEX_WAITERS) | DD_FUTEX_OWNER_DIED);
         if (__atomic_compare_exchange_n(w, &v, nv, 0, __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST)) {
-            if ((uint32_t)v & DD_FUTEX_WAITERS) futex_wake_bucket(w, 1); // one waiter -> EOWNERDEAD
+            if ((uint32_t)v & DD_FUTEX_WAITERS) futex_wake_bucket(w, 1, ~0u); // one waiter -> EOWNERDEAD
             return;
         }
         // v was reloaded with the current word by the failed cmpxchg -> re-check ownership and retry
