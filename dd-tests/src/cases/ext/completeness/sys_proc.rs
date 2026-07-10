@@ -23,6 +23,10 @@ pub(super) fn sys_proc() -> Group {
             sy("pf-status-meta", "completeness/pf_status_meta.c"),
             sy("pf-proc-files", "completeness/pf_proc_files.c"),
             sy("pf-procstat-forks", "completeness/pf_procstat_forks.c"),
+            sy("pf-cgroup-files", "completeness/pf_cgroup_files.c"),
+            sy("pf-taskdir", "completeness/pf_taskdir.c"),
+            sy("pf-selfdir", "completeness/pf_selfdir.c"),
+            sy("pf-dirs", "completeness/pf_dirs.c"),
         ],
     )
 }

@@ -2392,8 +2392,13 @@ static int proc_leaf_dir_open(const char *guestpath, int with_task) {
     procfd_dirs_reap(0);
     char tmpl[] = "/tmp/.ddppidXXXXXX";
     if (!mkdtemp(tmpl)) return -1;
-    static const char *const files[] = {"stat",          "statm",    "status",    "cmdline", "comm",
-                                        "maps",          "oom_score_adj", "oom_adj", "oom_score", 0};
+    // The per-pid file set. Direct open/stat serve every name here (proc_open), so listing them makes
+    // readdir-based discovery agree with direct probing (mountinfo/limits/environ/smaps/pagemap/io were
+    // openable but hidden from `ls /proc/self`).
+    static const char *const files[] = {"stat",      "statm",         "status",  "cmdline",   "comm",
+                                        "maps",      "oom_score_adj", "oom_adj", "oom_score", "mountinfo",
+                                        "limits",    "environ",       "smaps",   "pagemap",   "io",
+                                        "mounts",    "cgroup",        0};
     for (int i = 0; files[i]; i++) {
         char p[64];
         snprintf(p, sizeof p, "%s/%s", tmpl, files[i]);
@@ -2434,7 +2439,19 @@ static int proc_task_dir_open(int gp) {
     if (!mkdtemp(tmpl)) return -1;
     char p[64];
     snprintf(p, sizeof p, "%s/%d", tmpl, gp);
-    mkdir(p, 0555);
+    mkdir(p, 0555); // the main thread tid (== pid)
+    // For OUR OWN process, enumerate every live guest thread's tid so a /proc/self/task walk sees them all
+    // (thread enumerators, profilers, debuggers). Peer processes keep just the main entry (no cross-process
+    // thread registry yet).
+    if (gp == (int)getpid() || gp == container_pid()) {
+        int tids[256];
+        int nt = thread_tid_list(tids, 256, gp);
+        for (int i = 0; i < nt; i++) {
+            if (tids[i] == gp) continue; // main already created
+            snprintf(p, sizeof p, "%s/%d", tmpl, tids[i]);
+            mkdir(p, 0555);
+        }
+    }
     int fd = open(tmpl, O_RDONLY | O_DIRECTORY);
     if (fd < 0) {
         procfd_dir_rm(tmpl);
@@ -2703,6 +2720,139 @@ static int syscpu_dir_open(const char *gp) {
     }
     proc_dir_register(fd, tmpl, gpath); // tag guest path so a relative openat(cpuN)/readfileat re-enters synth
     return fd;
+}
+
+// Materialize an arbitrary synthetic directory as a temp dir of placeholder entries so opendir/getdents
+// enumerate `names`; the CONTENT/target of each entry is served live on the (re-intercepted) open /
+// readlink by proc_open / the fs.c readlink synth. kind: 0 = regular-file placeholders, 1 = symlink
+// placeholders (namespace/fd magic links), 2 = subdir placeholders. `guestpath` tags the fd so a relative
+// reopen re-enters the synth. Returns the fd, or -1 on error.
+static int synth_names_dir_open(const char *guestpath, const char *const *names, int kind) {
+    static int registered = 0;
+    if (!registered) {
+        atexit(procfd_dirs_atexit);
+        registered = 1;
+    }
+    procfd_dirs_reap(0);
+    char tmpl[] = "/tmp/.ddsdirXXXXXX";
+    if (!mkdtemp(tmpl)) return -1;
+    for (int i = 0; names[i]; i++) {
+        char p[160];
+        snprintf(p, sizeof p, "%s/%s", tmpl, names[i]);
+        if (kind == 2)
+            mkdir(p, 0555);
+        else if (kind == 1)
+            symlink(".", p); // inert target; readlink of the guest path is intercepted separately
+        else {
+            int f = open(p, O_WRONLY | O_CREAT | O_TRUNC, 0444);
+            if (f >= 0) close(f);
+        }
+    }
+    int fd = open(tmpl, O_RDONLY | O_DIRECTORY);
+    if (fd < 0) {
+        procfd_dir_rm(tmpl);
+        return -1;
+    }
+    proc_dir_register(fd, tmpl, guestpath);
+    return fd;
+}
+
+// If `gp` is one of the synthetic non-pid directories we enumerate (/proc/net, /proc/[self|pid]/ns,
+// /sys/fs/cgroup, /sys/class/block, /sys/block, a cpuN/topology dir), materialize + return its fd; -2 if
+// `gp` is not such a directory (caller falls through). Peer/self ns share the same name set.
+// Predicate form (no materialization side effect): is `gp` one of the synthetic directories above? Used by
+// synth_stat so a tool that stats the dir before opening it sees it as present.
+static int synth_misc_dir_is(const char *gp) {
+    if (!gp) return 0;
+    if (!strcmp(gp, "/proc/net") || !strcmp(gp, "/proc/net/")) return 1;
+    if (!strcmp(gp, "/sys/fs/cgroup") || !strcmp(gp, "/sys/fs/cgroup/")) return 1;
+    if (!strcmp(gp, "/sys/class/block") || !strcmp(gp, "/sys/class/block/")) return 1;
+    if (!strcmp(gp, "/sys/block") || !strcmp(gp, "/sys/block/")) return 1;
+    {
+        char dsb[4200];
+        const char *rp = proc_deself(gp, dsb, sizeof dsb);
+        const char *q = rp && !strncmp(rp, "/proc/", 6) ? rp + 6 : NULL;
+        if (q) {
+            int i = 0;
+            while (q[i] >= '0' && q[i] <= '9')
+                i++;
+            if (i > 0 && (!strcmp(q + i, "/ns") || !strcmp(q + i, "/ns/"))) return 1;
+        }
+    }
+    if (!strncmp(gp, "/sys/devices/system/cpu/cpu", 27)) {
+        const char *d = gp + 27;
+        if (*d >= '0' && *d <= '9') {
+            while (*d >= '0' && *d <= '9')
+                d++;
+            if (!strcmp(d, "/topology") || !strcmp(d, "/topology/")) return 1;
+        }
+    }
+    return 0;
+}
+
+static int synth_misc_dir_open(const char *gp) {
+    if (!gp) return -2;
+    if (!strcmp(gp, "/dev/fd") || !strcmp(gp, "/dev/fd/")) return proc_fd_dir_open(); // /dev/fd == /proc/self/fd
+    // /proc/net: direct leaves (tcp/dev/unix/…) exist but the dir must enumerate them too.
+    if (!strcmp(gp, "/proc/net") || !strcmp(gp, "/proc/net/")) {
+        static const char *const net[] = {"tcp",   "tcp6",     "udp",  "udp6",  "unix", "dev",
+                                          "route", "if_inet6", "snmp", "snmp6", "netstat",
+                                          "sockstat", "sockstat6", "ipv6_route", 0};
+        return synth_names_dir_open("/proc/net", net, 0);
+    }
+    // /proc/[self|<pid>]/ns: enumerate the namespace magic links (readlink served in fs.c).
+    {
+        char dsb[4200];
+        const char *rp = proc_deself(gp, dsb, sizeof dsb);
+        const char *q = rp && !strncmp(rp, "/proc/", 6) ? rp + 6 : NULL;
+        if (q) {
+            int i = 0;
+            while (q[i] >= '0' && q[i] <= '9')
+                i++;
+            if (i > 0 && (!strcmp(q + i, "/ns") || !strcmp(q + i, "/ns/"))) {
+                static const char *const ns[] = {"cgroup", "ipc", "mnt",  "net", "pid", "pid_for_children",
+                                                 "time",   "time_for_children", "user", "uts", 0};
+                return synth_names_dir_open(rp, ns, 1);
+            }
+        }
+    }
+    // /sys/fs/cgroup root: advertised in mountinfo, so a directory walk of the hierarchy must list it.
+    if (!strcmp(gp, "/sys/fs/cgroup") || !strcmp(gp, "/sys/fs/cgroup/")) {
+        static const char *const cg[] = {
+            "cgroup.controllers", "cgroup.subtree_control", "cgroup.type",      "cgroup.procs",
+            "cgroup.threads",     "cgroup.events",          "cgroup.stat",      "cgroup.max.depth",
+            "cgroup.max.descendants", "cpu.max",            "cpu.stat",         "cpu.weight",
+            "cpuset.cpus",        "cpuset.mems",            "cpuset.cpus.effective", "cpuset.mems.effective",
+            "memory.max",         "memory.min",             "memory.low",       "memory.high",
+            "memory.current",     "memory.peak",            "memory.events",    "memory.stat",
+            "memory.swap.max",    "memory.swap.current",    "memory.oom.group", "pids.max",
+            "pids.current",       "pids.peak",              "pids.events",      "io.max",
+            "io.stat",            "io.weight",              0};
+        return synth_names_dir_open("/sys/fs/cgroup", cg, 0);
+    }
+    // /sys/class/block + /sys/block: storage sysfs (lsblk/installers). No real block devices are backed,
+    // but the directories must EXIST and be enumerable (Linux exposes them inside containers).
+    if (!strcmp(gp, "/sys/class/block") || !strcmp(gp, "/sys/class/block/") || !strcmp(gp, "/sys/block") ||
+        !strcmp(gp, "/sys/block/")) {
+        static const char *const empty[] = {0};
+        return synth_names_dir_open(gp, empty, 2);
+    }
+    // /sys/devices/system/cpu/cpuN/topology: lscpu enumerates this dir before opening the leaves.
+    if (!strncmp(gp, "/sys/devices/system/cpu/cpu", 27)) {
+        const char *d = gp + 27;
+        if (*d >= '0' && *d <= '9') {
+            while (*d >= '0' && *d <= '9')
+                d++;
+            if (!strcmp(d, "/topology") || !strcmp(d, "/topology/")) {
+                static const char *const topo[] = {
+                    "core_id",          "physical_package_id", "cluster_id",        "thread_siblings",
+                    "thread_siblings_list", "core_siblings",   "core_siblings_list", "core_cpus",
+                    "core_cpus_list",   "package_cpus",        "package_cpus_list", 0};
+                return synth_names_dir_open(gp, topo, 0);
+            }
+        }
+    }
+    return -2;
 }
 
 // Format a Linux cpumask hex string (as /sys topology mask files print it): zero-padded groups of up to 32
@@ -2995,16 +3145,21 @@ static int proc_open(const char *rp) {
             while (*s >= '0' && *s <= '9')
                 s++;
             if (s > t + 6 && *s == '/') { // a real /task/<tid>/ segment with a trailing leaf
-                if (q + k != t || k == 0) return -2;
-                char pbuf[16], tbuf[16];
-                int plen = k < (int)sizeof pbuf ? k : (int)sizeof pbuf - 1;
+                // The pid segment between /proc/ and /task is EITHER numeric OR the "self"/"thread-self"
+                // magic name -- /proc/self/task/<tid>/<leaf> must fold just like the numeric form (else a
+                // task walker that descends /proc/self/task/<tid> can list but not open its files).
+                int seglen = (int)(t - q);
+                int is_self = (seglen == 4 && !strncmp(q, "self", 4)) ||
+                              (seglen == 11 && !strncmp(q, "thread-self", 11));
+                int is_num = (k > 0 && q + k == t);
+                if (!is_self && !is_num) return -2;
+                char tbuf[16];
                 int tlen = (int)(s - (t + 6));
                 tlen = tlen < (int)sizeof tbuf ? tlen : (int)sizeof tbuf - 1;
-                memcpy(pbuf, q, (size_t)plen);
-                pbuf[plen] = 0;
                 memcpy(tbuf, t + 6, (size_t)tlen);
                 tbuf[tlen] = 0;
-                if (!proc_task_tid_visible(atoi(pbuf), atoi(tbuf))) return -2;
+                int pid = is_self ? container_pid() : atoi(q);
+                if (!proc_task_tid_visible(pid, atoi(tbuf))) return -2;
                 int head = (int)(t - rp);
                 snprintf(taskbuf, sizeof taskbuf, "%.*s%s", head, rp, s);
                 rp = taskbuf;
@@ -3394,6 +3549,28 @@ static int proc_open(const char *rp) {
             n = snprintf(buf, sizeof buf, "max\n");
     } else if (!strcmp(rp, "/sys/fs/cgroup/pids.current")) {
         n = snprintf(buf, sizeof buf, "%d\n", atomic_load(&g_pids_cur));
+    } else if (!strcmp(rp, "/sys/fs/cgroup/pids.peak")) {
+        n = snprintf(buf, sizeof buf, "%d\n", atomic_load(&g_pids_cur)); // no historical peak tracked -> live
+    } else if (!strcmp(rp, "/sys/fs/cgroup/pids.events") || !strcmp(rp, "/sys/fs/cgroup/pids.events.local")) {
+        n = snprintf(buf, sizeof buf, "max 0\n"); // pids limit never hit (structural)
+    } else if (!strcmp(rp, "/sys/fs/cgroup/cpuset.cpus.effective") ||
+               !strcmp(rp, "/sys/fs/cgroup/cpuset.cpus")) {
+        // The CPUs this cgroup may run on. cpuset.cpus.effective is what cpuset-aware runtimes read; advertise
+        // the container's online set so a cpuset walk sees a populated range (was ENOENT -> walk failed).
+        int nc = container_online_cpus();
+        if (nc < 1) nc = 1;
+        n = (nc == 1) ? snprintf(buf, sizeof buf, "0\n") : snprintf(buf, sizeof buf, "0-%d\n", nc - 1);
+    } else if (!strcmp(rp, "/sys/fs/cgroup/cpuset.mems.effective") ||
+               !strcmp(rp, "/sys/fs/cgroup/cpuset.mems")) {
+        n = snprintf(buf, sizeof buf, "0\n"); // single (emulated) memory node
+    } else if (!strcmp(rp, "/sys/fs/cgroup/cpu.stat.local")) {
+        n = snprintf(buf, sizeof buf, "throttled_usec 0\n");
+    } else if (!strcmp(rp, "/sys/fs/cgroup/memory.oom.group")) {
+        n = snprintf(buf, sizeof buf, "0\n");
+    } else if (!strcmp(rp, "/sys/fs/cgroup/memory.swap.events")) {
+        n = snprintf(buf, sizeof buf, "high 0\nmax 0\nfail 0\n");
+    } else if (!strcmp(rp, "/sys/fs/cgroup/memory.swap.peak")) {
+        n = snprintf(buf, sizeof buf, "0\n");
         // ---- cgroup v2 unified-hierarchy surface real runtimes SIZE THEMSELVES from ----------------------
         // The JVM (-XX:+UseContainerSupport), the Go runtime (GOMAXPROCS/GOMEMLIMIT tooling), Node/libuv, and
         // systemd read these to pick heap size, GC/CommonPool/worker thread counts, and to detect that they are
@@ -4585,6 +4762,14 @@ static int64_t drm_synth_ioctl(int fd, unsigned long rq, void *arg) {
 
 static int synth_stat_raw(const char *gp, struct stat *s) {
     if (!gp) return 0; // NULL (bad) guest path: not a synthetic node; let the caller's host stat EFAULT
+    // Synthetic non-pid directories (/proc/net, /proc/[self|pid]/ns, /sys/fs/cgroup, /sys/class/block,
+    // /sys/block, cpuN/topology): a tool that stats the dir before opening it must see it as present.
+    if (synth_misc_dir_is(gp)) {
+        memset(s, 0, sizeof *s);
+        s->st_mode = S_IFDIR | 0555;
+        s->st_nlink = 2;
+        return 1;
+    }
     if (drm_synth_stat(gp, s)) { drm_trace("stat", gp, 1); return 1; } // /dev/dri + DRM sysfs (DD_GPU_IOSURFACE)
     if (drm_dbg()) drm_trace("stat", gp, 0); // trace DRM-prefix misses for gap-finding
     // The controlling terminal, named /dev/pts/0 in the container: fstat the real pty slave so it reports as
