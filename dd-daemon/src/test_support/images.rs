@@ -30,6 +30,84 @@ async fn image_repotags(app: &App) -> std::collections::HashSet<String> {
     set
 }
 
+// ---- Finding 17: save/load round-trips lifecycle metadata (stop_signal/volumes/healthcheck) ----
+#[tokio::test]
+async fn save_load_round_trips_lifecycle_metadata() {
+    let app = test_app();
+    // A real rootfs dir under the store so `docker save` can tar it (the store tars a dir literally
+    // named `rootfs` from its parent).
+    let rootfs = std::path::PathBuf::from(&app.images_dir).join("lifecycle").join("rootfs");
+    std::fs::create_dir_all(&rootfs).unwrap();
+    std::fs::write(rootfs.join("marker"), b"x").unwrap();
+    {
+        let mut g = app.inner.lock().await;
+        g.images.push(Image {
+            name: "lifecycle:latest".into(),
+            rootfs: rootfs.to_string_lossy().into_owned(),
+            stop_signal: "SIGQUIT".into(),
+            img_volumes: vec!["/data".into(), "/cache".into()],
+            healthcheck: Some(crate::model::HealthConfig {
+                test: vec!["CMD".into(), "true".into()],
+                interval: 5,
+                retries: 3,
+                ..Default::default()
+            }),
+            ..Default::default()
+        });
+    }
+    // docker save -> tar bytes.
+    let q: crate::images::SaveQ =
+        serde_json::from_value(serde_json::json!({"names": "lifecycle:latest"})).unwrap();
+    let resp = crate::images::image_save(State(app.clone()), Query(q)).await;
+    assert_eq!(resp.status(), StatusCode::OK, "save succeeds");
+    let tar = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+
+    // Fresh daemon; docker load the archive back.
+    let app2 = test_app();
+    let resp = crate::images::image_load(State(app2.clone()), axum::body::Bytes::from(tar)).await;
+    assert_eq!(resp.status(), StatusCode::OK, "load succeeds");
+    let loaded = app2
+        .inner
+        .lock()
+        .await
+        .images
+        .iter()
+        .find(|i| i.name == "lifecycle:latest")
+        .cloned()
+        .expect("loaded image present");
+    assert_eq!(loaded.stop_signal, "SIGQUIT", "stop signal round-trips");
+    assert_eq!(loaded.img_volumes, vec!["/data", "/cache"], "volumes round-trip");
+    let hc = loaded.healthcheck.expect("healthcheck round-trips");
+    assert_eq!(hc.test, vec!["CMD", "true"]);
+    assert_eq!(hc.interval, 5);
+}
+
+// ---- Finding 18: image id is a stable sha256 shared by list + inspect --------------------------
+#[tokio::test]
+async fn image_id_is_stable_sha256_shared_by_list_and_inspect() {
+    let app = test_app();
+    seed_image_rootfs(&app, "idimg:1.0", "/store/idimg-rootfs").await;
+
+    // list id
+    let axum::Json(list) = crate::images::images_json(State(app.clone())).await;
+    let list_id = serde_json::to_value(&list).unwrap()[0]["Id"].as_str().unwrap().to_string();
+    // inspect id
+    let resp =
+        crate::images::image_inspect(State(app.clone()), Path("idimg:1.0".into())).await;
+    let inspect = to_body_json(resp).await;
+    let inspect_id = inspect["Id"].as_str().unwrap().to_string();
+
+    assert_eq!(list_id, inspect_id, "list id == inspect id for the same image");
+    // sha256:<64 lowercase hex> — a real digest shape, not a tiled/synthetic placeholder.
+    let hex = list_id.strip_prefix("sha256:").expect("sha256: prefix");
+    assert_eq!(hex.len(), 64, "64 hex chars: {list_id}");
+    assert!(hex.chars().all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase()), "lowercase hex");
+    // Deterministic for the same content.
+    let axum::Json(list2) = crate::images::images_json(State(app.clone())).await;
+    let list_id2 = serde_json::to_value(&list2).unwrap()[0]["Id"].as_str().unwrap().to_string();
+    assert_eq!(list_id, list_id2, "stable across calls");
+}
+
 // ---- 11. images_json wire shape --------------------------------------------------------------
 #[tokio::test]
 async fn images_json_wire_shape() {

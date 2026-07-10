@@ -44,6 +44,14 @@ pub(crate) async fn image_save(State(a): State<App>, Query(q): Query<SaveQ>) -> 
         user: img.user.clone(),
         exposed_ports: img.exposed_ports.clone(),
         os: (img.arch.os() == "darwin").then(|| "darwin".to_string()),
+        // Lifecycle/volume config a container inherits at run — must round-trip through save/load (the
+        // load path already restores these). Omitted when unset so the manifest stays minimal.
+        stop_signal: (!img.stop_signal.is_empty()).then(|| img.stop_signal.clone()),
+        img_volumes: img.img_volumes.clone(),
+        healthcheck: img
+            .healthcheck
+            .as_ref()
+            .and_then(|h| serde_json::to_value(h).ok()),
         ..Default::default()
     };
     let rootfs = std::path::PathBuf::from(&img.rootfs);

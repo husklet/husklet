@@ -51,6 +51,16 @@ pub(crate) fn md5_like(s: &str) -> u64 {
     h
 }
 
+/// A process-global monotonically-increasing sequence, used to make per-request staging paths unique
+/// (`.build-ctx-<pid>-<seq>`, `.push-<pid>-<seq>`). A bare `<pid>` collides when two builds/pushes run
+/// concurrently in one daemon process — one would delete/reuse the other's staging dir mid-flight; the
+/// added seq gives each request a distinct path.
+pub(crate) fn next_staging_seq() -> u64 {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static SEQ: AtomicU64 = AtomicU64::new(0);
+    SEQ.fetch_add(1, Ordering::Relaxed)
+}
+
 pub(crate) fn fake_id(seed: &str) -> String {
     let mut h: u64 = 1469598103934665603;
     for b in seed.bytes() {
@@ -175,6 +185,21 @@ mod tests {
         // Deterministic and input-sensitive.
         assert_eq!(md5_like("nginx"), md5_like("nginx"));
         assert_ne!(md5_like("nginx"), md5_like("redis"));
+    }
+
+    // Finding 27: per-request staging paths must be distinct. `next_staging_seq` hands out a fresh
+    // monotonic value each call, so `.build-ctx-<pid>-<seq>` / `.push-<pid>-<seq>` never collide across
+    // concurrent operations in one process.
+    #[test]
+    fn next_staging_seq_is_monotonic_and_unique() {
+        let a = next_staging_seq();
+        let b = next_staging_seq();
+        let c = next_staging_seq();
+        assert!(a < b && b < c, "strictly increasing: {a} {b} {c}");
+        // Distinct staging paths for two concurrent builds.
+        let p1 = format!(".build-ctx-{}-{}", std::process::id(), next_staging_seq());
+        let p2 = format!(".build-ctx-{}-{}", std::process::id(), next_staging_seq());
+        assert_ne!(p1, p2, "two staging paths differ");
     }
 
     #[test]

@@ -155,6 +155,9 @@ pub(crate) fn image_from_config(
         stop_signal,
         img_volumes,
         healthcheck,
+        // A pulled image has no per-instruction build history / ONBUILD triggers of its own.
+        history: Vec::new(),
+        onbuild: Vec::new(),
     }
 }
 

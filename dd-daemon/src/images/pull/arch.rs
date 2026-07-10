@@ -26,11 +26,28 @@ pub(crate) fn docker_arch(g: Guest) -> &'static str {
     }
 }
 
-/// A docker `--platform` value (`"linux/amd64"`, `"arm64"`, `"linux/arm64/v8"`, …) mapped to dd's arch
-/// label, if recognized. OCI platform strings are `os/arch[/variant]`, so we scan every `/`-segment for
-/// a known arch token rather than only the last — a trailing variant (`.../arm64/v8`) must not hide it.
+/// A docker `--platform` value mapped to dd's arch label, if recognized. OCI platform strings are
+/// `os/arch[/variant]`; dd only runs Linux guests, so an explicit OS prefix MUST be `linux` — a
+/// non-Linux request (`windows/amd64`, `nonsense/amd64`) is rejected (`None`) rather than silently
+/// mapped to the matching arch. Accepted forms: a bare `<arch>` (no OS prefix), `linux/<arch>`, or
+/// `linux/<arch>/<variant>` (a trailing variant like `.../arm64/v8` must not hide the arch).
 pub(crate) fn platform_arch(platform: Option<&str>) -> Option<&'static str> {
-    platform?.split('/').find_map(|seg| match seg {
+    let p = platform?;
+    if p.is_empty() {
+        return None;
+    }
+    let segs: Vec<&str> = p.split('/').collect();
+    // With an OS prefix present (2+ segments), the OS must be linux; the arch is then in the remaining
+    // segments. A single bare segment is treated as the arch itself (no OS to validate).
+    let arch_segs: &[&str] = if segs.len() == 1 {
+        &segs[..]
+    } else {
+        if segs[0] != "linux" {
+            return None;
+        }
+        &segs[1..]
+    };
+    arch_segs.iter().find_map(|seg| match *seg {
         "amd64" | "x86_64" => Some("amd64"),
         "arm64" | "aarch64" => Some("arm64"),
         _ => None,
@@ -107,8 +124,23 @@ mod arch_map_tests {
         assert_eq!(platform_arch(Some("banana")), None);
         // 32-bit arm (`arm`/`v7`) is not a supported dd arch -> None.
         assert_eq!(platform_arch(Some("linux/arm/v7")), None);
-        // A bogus os prefix is fine — any segment matching a known arch wins.
-        assert_eq!(platform_arch(Some("nonsense/amd64")), Some("amd64"));
+    }
+
+    // Finding 19: a non-Linux OS prefix must be REJECTED, not silently mapped to the matching arch.
+    // dd only runs Linux guests, so `windows/amd64` / `nonsense/amd64` are None; only `linux/<arch>`
+    // (or a bare `<arch>`) is accepted.
+    #[test]
+    fn platform_arch_rejects_non_linux_os_prefix() {
+        // Non-linux OS prefixes are rejected even though the arch token is recognized.
+        assert_eq!(platform_arch(Some("windows/amd64")), None);
+        assert_eq!(platform_arch(Some("nonsense/amd64")), None);
+        assert_eq!(platform_arch(Some("darwin/arm64")), None);
+        // The linux OS prefix (and a bare arch) are accepted.
+        assert_eq!(platform_arch(Some("linux/amd64")), Some("amd64"));
+        assert_eq!(platform_arch(Some("linux/arm64")), Some("arm64"));
+        assert_eq!(platform_arch(Some("amd64")), Some("amd64"));
+        // A linux prefix with a trailing variant still resolves the arch.
+        assert_eq!(platform_arch(Some("linux/arm64/v8")), Some("arm64"));
     }
 
     #[test]
