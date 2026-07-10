@@ -899,3 +899,38 @@ async fn create_fails_when_anon_volume_root_is_unusable() {
     assert!(g.containers.is_empty(), "no container recorded");
     assert!(g.volumes.is_empty(), "no phantom volume recorded");
 }
+
+// ---- a published host-port conflict FAILS the start (no running-but-unreachable container) -----
+#[tokio::test]
+async fn published_port_bind_conflict_fails_start() {
+    let app = test_app();
+    // Occupy a host port so the container's publish of the same port collides at bind time.
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let base = std::env::temp_dir().join(format!("dd-portfail-{}-{}", std::process::id(), port));
+    std::fs::create_dir_all(&base).unwrap();
+    let c = Container {
+        id: "portfail0000".into(),
+        image: "x".into(),
+        rootfs: base.to_string_lossy().into_owned(),
+        arch: Some(ddjit::Guest::LinuxAarch64),
+        publish: format!("127.0.0.1:{port}:80/tcp"),
+        status: "running".into(),
+        ..Default::default()
+    };
+    {
+        let mut g = app.inner.lock().await;
+        g.containers.insert(c.id.clone(), c.clone());
+    }
+    let live = crate::model::Live::new();
+    app.inner.lock().await.live.insert(c.id.clone(), live.clone());
+    let ok = crate::runtime::spawn_live(&app, &c, &[], live).await;
+    assert!(!ok, "start must fail when the published host port is already bound");
+    let g = app.inner.lock().await;
+    let cc = g.containers.get("portfail0000").unwrap();
+    assert_eq!(cc.status, "exited", "a bind conflict leaves the container exited, not running");
+    assert_eq!(cc.exit_code, 127);
+    drop(g);
+    let _ = std::fs::remove_dir_all(&base);
+    drop(listener);
+}
