@@ -481,9 +481,10 @@ static int svc_io(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t
                 G_RET(c) = (uint64_t)(-EINVAL);
                 break;
             }
-            // a1 (the result counter) is written directly below; reject a bad pointer here, before any side
-            // effect (counter reset / pipe drain), so it returns -EFAULT rather than faulting the engine.
-            if (a1 && !host_range_mapped((uintptr_t)a1, 8)) {
+            // a1 (the result counter) is written directly below; reject a bad/NULL pointer here, before any
+            // side effect (counter reset / pipe drain). Linux read(eventfd, NULL, 8) is EFAULT, not a
+            // silent 8-byte success, so a null pointer must fault too (not just an out-of-range one).
+            if (!a1 || !host_range_mapped((uintptr_t)a1, 8)) {
                 G_RET(c) = (uint64_t)(-EFAULT);
                 break;
             }

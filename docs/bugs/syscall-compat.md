@@ -46,30 +46,6 @@ DDJIT_DIR="$PWD/target-workerA-syscall-audit/release/build/dd-jit-darwin-16122af
 
 Observed: native fires within 20ms (`ready=1 n8=1 exp=1`); dd does not fire within 150ms (`ready=0 n8=0 exp=0`). x86_64 showed the same mismatch.
 
-## `ppoll` Accepts Invalid `tv_nsec`
-
-Priority: P2
-Impact: invalid timeout probes silently succeed or become immediate timeouts
-Confidence: High
-
-Verification status: Proven in isolated worktree `/Users/x/dd/dd-slot-G`.
-
-Evidence:
-
-- `ppoll` validates pointer accessibility but does not reject `tv_nsec < 0` or `tv_nsec >= 1000000000`: `dd-jit-darwin/src/runtime/os/linux/syscall/event.c:690`.
-
-Why this is bad:
-
-Linux rejects invalid timespec values with `EINVAL`. dd can treat them as normal timeouts, hiding caller bugs.
-
-Isolated proof:
-
-```sh
-DDJIT_DIR=/Users/x/dd/dd-slot-G/target-slot-G/release/build/dd-jit-darwin-16122afd27b6bb64/out make test FILTER=audit-slot-g
-```
-
-Result: filtered run had `0 passed, 2 failed`; one failing oracle probe covers invalid `ppoll` timeout handling.
-
 ## Sentry `ppoll` Masks Stale Fds Instead Of `POLLNVAL`
 
 Priority: P1
@@ -127,30 +103,6 @@ Native Linux returns errors for unknown futex op/flag cases. dd can report succe
 Verification:
 
 Promote the native oracle checked in `/Users/x/dd/dd-slot-G` into a dd-tests probe for unknown op and flag combinations.
-
-## Raw `pselect6` Accepts Invalid `tv_nsec`
-
-Priority: P2
-Impact: invalid timeout probes silently succeed or sleep
-Confidence: High
-
-Verification status: Proven in isolated worktree `/Users/x/dd/dd-audit-slotN`.
-
-Evidence:
-
-- The raw `pselect6` path copies the timeout and normalizes nanoseconds instead of rejecting invalid values: `dd-jit-darwin/src/runtime/os/linux/syscall/event.c:640`.
-
-Why this is bad:
-
-Linux rejects `tv_nsec < 0` or `tv_nsec >= 1e9` with `EINVAL`. dd accepts both and returns success-like results.
-
-Isolated proof:
-
-```sh
-cargo run -p dd-tests -- audit-pselect-bad-timeout
-```
-
-Result: failed both Linux engines. dd `hi=0 neg=0`; native `hi=1 neg=1`.
 
 ## `prlimit64` Accepts Invalid Pid And Resource
 
@@ -797,30 +749,6 @@ Observed proof:
 ```text
 Linux: ret=-1 errno=4 hit=1 elapsed_ms=105
 dd:    ret=0 errno=0 hit=0 elapsed_ms=800
-```
-
-## `eventfd` Read With Null Buffer Reports Success
-
-Priority: P2
-Impact: bad guest pointers can fake reads instead of returning `EFAULT`
-Confidence: High
-
-Verification status: Proven in isolated worktree `/Users/x/dd/dd-worker-BQ2-fd-event-20260710`.
-
-Evidence:
-
-- Eventfd read validates the user buffer only when the pointer is non-null: `dd-jit-darwin/src/runtime/os/linux/syscall/io.c:466`.
-- The read path can then report an 8-byte success: `dd-jit-darwin/src/runtime/os/linux/syscall/io.c:519`.
-
-Why this is bad:
-
-Linux rejects `read(eventfd, NULL, 8)` with `EFAULT`. dd returns success, so bad-pointer probes can see a false read and lose compatibility with runtimes that depend on precise errno behavior.
-
-Observed proof:
-
-```text
-Linux: bad=-1 bad_errno=14 good=-1 good_errno=11 val=0
-dd:    bad=8 bad_errno=0 good=-1 good_errno=11 val=0
 ```
 
 ## `FUTEX_WAIT_BITSET` / `FUTEX_WAKE_BITSET` Ignore Masks

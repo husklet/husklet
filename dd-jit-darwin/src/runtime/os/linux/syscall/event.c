@@ -644,6 +644,15 @@ static int svc_event(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint6
             G_RET(c) = (uint64_t)(-EFAULT);
             break;
         }
+        // Linux rejects an out-of-range timeout nanoseconds field (tv_nsec < 0 or >= 1e9) with EINVAL
+        // before waiting; dd must not treat it as a normal timeout and hide the caller bug.
+        if (have_to) {
+            long tns = ((const struct timespec *)a4)->tv_nsec;
+            if (tns < 0 || tns >= 1000000000L) {
+                G_RET(c) = (uint64_t)(-EINVAL);
+                break;
+            }
+        }
         // a spurious EINTR (a signal dd hooks with host_sigh but the guest has BLOCKED or defaults to
         // ignore -- e.g. an LTP heartbeat, or SIGCHLD from a reaped child) interrupts the host pselect but
         // must NOT restart the FULL original timeout: that overshoots the deadline and, under a *repeating*
@@ -707,6 +716,11 @@ static int svc_event(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint6
         if ((a0 && a1 && guest_bad_ptr(a0, (size_t)a1 * sizeof(struct pollfd))) ||
             (ts && guest_bad_ptr(a2, sizeof(struct timespec)))) {
             G_RET(c) = (uint64_t)(-EFAULT);
+            break;
+        }
+        // Linux rejects an out-of-range timeout nanoseconds field (tv_nsec < 0 or >= 1e9) with EINVAL.
+        if (ts && (ts->tv_nsec < 0 || ts->tv_nsec >= 1000000000L)) {
+            G_RET(c) = (uint64_t)(-EINVAL);
             break;
         }
         int have_to = ts != NULL;

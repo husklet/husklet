@@ -35,6 +35,10 @@ pub fn groups() -> Vec<Group> {
             p("sc-shortread-timerfd", "syscallbug/shortread_timerfd.c"),
             p("sc-shortread-signalfd", "syscallbug/shortread_signalfd.c"),
             p("sc-shortread-inotify", "syscallbug/shortread_inotify.c"),
+            // read(eventfd, NULL, 8) -> EFAULT, counter not consumed.
+            p("sc-eventfd-nullread", "syscallbug/eventfd_nullread.c"),
+            // pselect6/ppoll invalid tv_nsec -> EINVAL.
+            p("sc-badtimeout", "syscallbug/badtimeout.c"),
         ],
     )]
 }
