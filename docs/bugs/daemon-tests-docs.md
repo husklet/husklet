@@ -666,32 +666,6 @@ CARGO_TARGET_DIR=/Users/x/dd/dd-worker-AA-daemon-image-20260710/target-aa pocs/s
 
 Observed: prune deleted the exited container, but `network inspect` still listed its endpoint and deleting the network returned `403`.
 
-## `rmi nginx` Removes Unrelated Repositories Sharing Basename
-
-Priority: P1
-Impact: image delete can remove unrelated repository tags
-Confidence: High
-
-Verification status: Proven in isolated worktree `/Users/x/dd/dd-worker-AA-daemon-image-20260710`.
-
-Evidence:
-
-- Image tag deletion resolves aliases through basename-style matching: `dd-daemon/src/images/tags.rs:64`.
-- Deletion applies to matching references later in the same module: `dd-daemon/src/images/tags.rs:88`.
-- The basename helper is explicitly risky for repository identity: `dd-images/src/image/config.rs:100`.
-
-Why this is bad:
-
-`nginx:latest` and `linuxserver/nginx:latest` are distinct repositories. Deleting the short library name should not delete unrelated images that happen to share the same basename and tag.
-
-Isolated proof:
-
-```sh
-CARGO_TARGET_DIR=/Users/x/dd/dd-worker-AA-daemon-image-20260710/target-aa pocs/slot-aa/rmi-basename-removes-other-repos.sh
-```
-
-Observed: before delete `['linuxserver/nginx:latest', 'nginx:latest']`; after `DELETE /images/nginx`, no tags remained.
-
 ## Failed Spawn Terminal State Is Not Persisted
 
 Priority: P1
@@ -1173,30 +1147,6 @@ CARGO_TARGET_DIR=/Users/x/dd/dd-worker-AX-daemon-lifecycle-events-prune-image-20
 
 Result: failed with status `404`.
 
-## `docker commit` Can Inherit Config From Wrong Repository
-
-Priority: P1
-Impact: committed images can silently get wrong entrypoint/config
-Confidence: High
-
-Verification status: Proven in isolated worktree `/Users/x/dd/dd-worker-AL-daemon-image-20260710`.
-
-Evidence:
-
-- Commit resolves the source image with basename-style `ref_name`: `dd-daemon/src/build/prune.rs:85`.
-
-Why this is bad:
-
-A container created from `linuxserver/nginx:latest` should inherit that image config during commit. Basename matching can instead find `nginx:latest` and copy the wrong entrypoint or runtime metadata.
-
-Isolated proof:
-
-```sh
-TMPDIR="$PWD/target/tmp" cargo test -p dd-daemon flow_commit_source_image_lookup_preserves_full_repository_identity -- --nocapture
-```
-
-Result: failed; committed config had `["/wrong-entrypoint"]`, expected `["/right-entrypoint"]`.
-
 ## Committed ELF-Less x86_64 Images Rediscover As arm64
 
 Priority: P1
@@ -1273,30 +1223,6 @@ CARGO_TARGET_DIR=/Users/x/dd/dd-worker-AQ-daemon-ref-config-20260710/target-aq c
 ```
 
 Result: failed with restored arch `LinuxAarch64`, expected `LinuxX86_64`.
-
-## `docker save nginx` Can Serialize `linuxserver/nginx`
-
-Priority: P1
-Impact: save can export the wrong repository image
-Confidence: High
-
-Verification status: Proven in isolated worktree `/Users/x/dd/dd-worker-AQ-daemon-ref-config-20260710`.
-
-Evidence:
-
-- `image_save` matches exact `repo_tag`, then falls back to basename-only `ref_name`: `dd-daemon/src/images/transfer/save.rs:20`.
-
-Why this is bad:
-
-Short official names must not match unrelated repositories with the same basename. Saving `nginx` can serialize `linuxserver/nginx:latest`, corrupting backups and transfers.
-
-Isolated proof:
-
-```sh
-CARGO_TARGET_DIR=/Users/x/dd/dd-worker-AQ-daemon-ref-config-20260710/target-aq cargo test -p dd-daemon image_save -- --nocapture
-```
-
-Result: failed; short `nginx` returned success for unrelated `linuxserver/nginx`, expected not found.
 
 ## Restart State Load Overwrites Persisted Container Arch
 
@@ -2058,31 +1984,6 @@ CARGO_TARGET_DIR=/Users/x/dd/dd-audit-events-api-apiworker-20260710-target cargo
 
 Result: `label=...`, `network=frontend`, `volume=cache`, and `scope=swarm` filters all leaked unrelated events.
 
-## Malformed Filters JSON Becomes An Unfiltered Stream
-
-Priority: P1
-Impact: client filter encoding bugs subscribe to every daemon event
-Confidence: High
-
-Verification status: Proven in isolated worktree `/Users/x/dd/dd-audit-events-api-apiworker-20260710`.
-
-Evidence:
-
-- Bad filter JSON returns `Filters::default()`: `dd-daemon/src/events.rs:103`.
-- The handler still returns `200 OK`: `dd-daemon/src/events.rs:229`.
-
-Why this is bad:
-
-Malformed JSON in the `filters` query should be a bad-parameter response. dd broadens it to match-all, so clients or proxies with encoding bugs can act on unrelated events.
-
-Isolated proof:
-
-```sh
-CARGO_TARGET_DIR=/Users/x/dd/dd-audit-events-api-apiworker-20260710-target cargo test -p dd-daemon audit_ -- --nocapture
-```
-
-Result: malformed `{"type":["container"` became an unfiltered event stream.
-
 ## Non-Epoch Until Values Turn Bounded Events Into Unbounded Streams
 
 Priority: P2
@@ -2254,31 +2155,6 @@ CARGO_TARGET_DIR=/Users/x/dd/dd-audit-system-endpoints-20260710-target cargo tes
 ```
 
 Result: one `~/.dd/pcache/*.pcache` file produced total count `1` with empty item lists.
-
-## Info Under-Reports Daemon Capacity
-
-Priority: P1
-Impact: clients and schedulers see one CPU and zero memory
-Confidence: High
-
-Verification status: Proven in isolated worktree `/Users/x/dd/dd-audit-info-version-20260710`.
-
-Evidence:
-
-- `/info` hardcodes `NCPU: 1`: `dd-daemon/src/system.rs:60`.
-- `/info` hardcodes `MemTotal: 0`: `dd-daemon/src/system.rs:61`.
-
-Why this is bad:
-
-Docker-compatible `/info` reports logical CPUs usable by the daemon and total physical memory in bytes. dd reports `NCPU=1` and `MemTotal=0` on a host where the proof test observed `18` CPUs and nonzero memory, so clients can under-size workloads or reject capacity assumptions.
-
-Isolated proof:
-
-```sh
-CARGO_TARGET_DIR=/Users/x/dd/dd-audit-info-version-20260710-target cargo test -p dd-daemon system_info -- --ignored --nocapture
-```
-
-Result: `NCPU=1 MemTotal=0`, expected host-derived CPU count and nonzero memory.
 
 ## Info Default Runtime Is Not Declared
 

@@ -82,11 +82,10 @@ pub(crate) async fn commit_container(State(a): State<App>, Query(q): Query<Commi
         let Some(c) = g.containers.get(&full) else {
             return no_such(&cid);
         };
-        let img = g
-            .images
-            .iter()
-            .find(|i| ref_name(&i.name) == ref_name(&c.image))
-            .cloned();
+        // Resolve the source image through the repo-qualified `find_image` (NOT a bare-basename match):
+        // a container from `linuxserver/nginx:latest` must inherit that image's config, not an unrelated
+        // `nginx:latest` that merely shares the basename.
+        let img = find_image(&g.images, &c.image).cloned();
         let entrypoint = img
             .as_ref()
             .map(|i| i.entrypoint.clone())
@@ -228,4 +227,31 @@ pub(crate) async fn commit_container(State(a): State<App>, Query(q): Query<Commi
         }),
     )
         .into_response()
+}
+
+#[cfg(test)]
+mod commit_source_tests {
+    use crate::model::Image;
+    use crate::util::find_image;
+
+    fn img(name: &str, entrypoint: &str) -> Image {
+        Image {
+            name: name.into(),
+            rootfs: format!("/store/{name}"),
+            entrypoint: vec![entrypoint.into()],
+            ..Default::default()
+        }
+    }
+
+    // "docker commit Can Inherit Config From Wrong Repository" (P1): the commit source image is resolved
+    // via repo-qualified find_image, so a container from linuxserver/nginx must not inherit nginx's config.
+    #[test]
+    fn commit_source_resolves_full_repository_not_basename() {
+        let imgs = vec![
+            img("nginx:latest", "/wrong-entrypoint"),
+            img("linuxserver/nginx:latest", "/right-entrypoint"),
+        ];
+        let resolved = find_image(&imgs, "linuxserver/nginx:latest").unwrap();
+        assert_eq!(resolved.entrypoint, vec!["/right-entrypoint".to_string()]);
+    }
 }

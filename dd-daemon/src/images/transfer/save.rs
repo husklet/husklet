@@ -13,12 +13,12 @@ pub(crate) async fn image_save(State(a): State<App>, Query(q): Query<SaveQ>) -> 
     if names.is_empty() {
         return bad_request("names is required");
     }
+    // Resolve through the repo-qualified `find_image` (NOT a bare-basename match): `docker save nginx`
+    // must not serialize an unrelated `linuxserver/nginx` that merely shares the basename, and an explicit
+    // missing tag is a not-found rather than a fallback to a sibling tag.
     let img = {
         let g = a.inner.lock().await;
-        g.images
-            .iter()
-            .find(|i| repo_tag(&i.name) == names || ref_name(&i.name) == ref_name(&names))
-            .cloned()
+        find_image(&g.images, &names).cloned()
     };
     let Some(img) = img else {
         return no_such_image(&names);
@@ -61,5 +61,31 @@ pub(crate) async fn image_save(State(a): State<App>, Query(q): Query<SaveQ>) -> 
             Json(ErrorMessage { message: e }),
         )
             .into_response(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::model::Image;
+    use crate::util::find_image;
+
+    fn img(name: &str) -> Image {
+        Image { name: name.into(), rootfs: format!("/store/{name}"), ..Default::default() }
+    }
+
+    // "docker save nginx Can Serialize linuxserver/nginx" (P1): save resolves through the repo-qualified
+    // find_image, so a bare official name must not serialize an unrelated same-basename repository.
+    #[test]
+    fn save_bare_name_does_not_match_foreign_repo_basename() {
+        let imgs = vec![img("linuxserver/nginx:latest")];
+        assert!(
+            find_image(&imgs, "nginx").is_none(),
+            "save nginx must not resolve linuxserver/nginx"
+        );
+        // The full repository still resolves to itself.
+        assert_eq!(
+            find_image(&imgs, "linuxserver/nginx").unwrap().name,
+            "linuxserver/nginx:latest"
+        );
     }
 }
