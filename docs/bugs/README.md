@@ -23,7 +23,6 @@ This directory is a working inventory of suspicious behavior, bad architecture, 
 | P1 | gpu/corruption | `DrawIndexed.base_vertex` is ignored by Metal replay | Medium-high | [gpu-display-sentry.md](gpu-display-sentry.md#drawindexedbase_vertex-is-ignored-by-metal-replay) |
 | P1 | gpu/corruption | Metal replay silently no-ops supported IR commands | Medium-high | [gpu-display-sentry.md](gpu-display-sentry.md#metal-replay-silently-no-ops-supported-ir-commands) |
 | P1 | cp/contents | `docker cp` put follows existing destination symlink | High | [archive-fs-compat.md](archive-fs-compat.md#docker-cp-put-follows-existing-destination-symlink) |
-| P1 | image/compat | Docker save/load format is not Docker-compatible | High | [archive-fs-compat.md](archive-fs-compat.md#docker-saveload-archive-format-is-not-docker-compatible) |
 | P1 | cp/contents | `docker cp` GET drops lower overlay entries | High | [archive-fs-compat.md](archive-fs-compat.md#docker-cp-get-drops-lower-entries-from-overlay-directories) |
 | P1 | syscall/time | periodic `timerfd` ignores earlier first deadline | High | [syscall-compat.md](syscall-compat.md#periodic-timerfd-ignores-earlier-first-deadline) |
 | P1 | syscall/signal | multiple `signalfd` descriptors are not independent | High | [syscall-compat.md](syscall-compat.md#multiple-signalfd-descriptors-are-not-independent) |
@@ -85,10 +84,7 @@ This directory is a working inventory of suspicious behavior, bad architecture, 
 | P1 | registry/layer | opaque whiteout pre-pass can remove paths outside rootfs | High | [archive-fs-compat.md](archive-fs-compat.md#opaque-whiteout-pre-pass-can-remove-paths-outside-rootfs) |
 | P1 | registry/layer | registry layer extraction follows existing rootfs symlinks | High | [archive-fs-compat.md](archive-fs-compat.md#registry-layer-extraction-follows-existing-rootfs-symlinks) |
 | P1 | registry/pull | pull accepts invalid config blobs as empty config | High | [archive-fs-compat.md](archive-fs-compat.md#pull-accepts-invalid-config-blobs-as-empty-config) |
-| P1 | image/load | Docker load manifest name can delete outside image store | High | [archive-fs-compat.md](archive-fs-compat.md#docker-load-manifest-name-can-delete-outside-image-store) |
-| P1 | image/load | malformed `dd-manifest.json` is treated as rootfs-only | High | [archive-fs-compat.md](archive-fs-compat.md#malformed-dd-manifestjson-is-treated-as-rootfs-only) |
 | P1 | registry/push | concurrent registry manifest PUTs share one temp body file | High | [archive-fs-compat.md](archive-fs-compat.md#concurrent-registry-manifest-puts-share-one-temp-body-file) |
-| P1 | image/store | image store path encoding collides distinct refs | High | [archive-fs-compat.md](archive-fs-compat.md#image-store-path-encoding-collides-distinct-refs) |
 | P1 | archive/race | fixed per-process temp dirs race concurrent operations | Medium-high | [archive-fs-compat.md](archive-fs-compat.md#fixed-per-process-temp-dirs-race-concurrent-operations) |
 | P2 | JIT/opcode | F16C `vcvtps2ph` ignores rounding immediate | High | [jit-and-opcodes.md](jit-and-opcodes.md#f16c-vcvtps2ph-ignores-rounding-immediate) |
 | P2 | JIT/opcode | SSE4.2 string compare leaves AF stale | High | [jit-and-opcodes.md](jit-and-opcodes.md#sse42-string-compare-leaves-af-stale) |
@@ -172,14 +168,12 @@ This directory is a working inventory of suspicious behavior, bad architecture, 
 | P2 | procfs/tty | `/proc/tty` surface is absent | High | [completeness-and-env.md](completeness-and-env.md#proctty-surface-is-absent) |
 | P2 | launch/config | path-list config still uses delimiter env strings | Medium | [completeness-and-env.md](completeness-and-env.md#typed-launch-path-lists-still-use-delimiter-env-strings) |
 | P2 | rendering/tests | GUI probe sources are outside default matrix | High | [gpu-display-sentry.md](gpu-display-sentry.md#rendering-coverage-gaps-are-silent) |
-| P2 | import/cleanup | failed image import leaves partial target | High | [archive-fs-compat.md](archive-fs-compat.md#import-failure-leaves-partial-target) |
 | P2 | volume/metadata | anonymous volume copy-up drops seeded metadata | High | [archive-fs-compat.md](archive-fs-compat.md#anonymous-volume-copy-up-drops-seeded-directory-metadata) |
 | P1 | volume/contents | image `VOLUME` copy-up can escape the image rootfs | High | [archive-fs-compat.md](archive-fs-compat.md#image-volume-copy-up-can-escape-the-image-rootfs) |
 | P1 | archive/metadata | UID/GID metadata is lost on load/import/cp PUT | High | [archive-fs-compat.md](archive-fs-compat.md#uidgid-metadata-is-lost-on-loadimportcp-put) |
 | P2 | build/metadata | Dockerfile `COPY`/`ADD` metadata flags are ignored | High | [archive-fs-compat.md](archive-fs-compat.md#dockerfile-copy-add-metadata-flags-are-ignored) |
 | P2 | archive/perf | sparse files expand through save/push tar paths | High | [archive-fs-compat.md](archive-fs-compat.md#sparse-files-expand-through-savepush-tar-paths) |
 | P2 | archive/metadata | save/cp GET truncate nanosecond mtimes | High | [archive-fs-compat.md](archive-fs-compat.md#savecp-get-truncate-nanosecond-mtimes) |
-| P2 | archive/devices | valid device-node tars fail load/import | High | [archive-fs-compat.md](archive-fs-compat.md#valid-device-node-tars-fail-loadimport) |
 | P2 | image/metadata | daemon save/load drops lifecycle metadata | High | [archive-fs-compat.md](archive-fs-compat.md#daemon-saveload-drops-lifecycle-metadata) |
 | P2 | build/cache | build cache digests break on apostrophes in paths | High | [archive-fs-compat.md](archive-fs-compat.md#build-cache-digests-break-on-apostrophes-in-paths) |
 | P1 | build/history | built image history is synthetic | High | [archive-fs-compat.md](archive-fs-compat.md#built-image-history-is-synthetic) |
@@ -196,7 +190,6 @@ This directory is a working inventory of suspicious behavior, bad architecture, 
 | P2 | build/parser | exec-form JSON drops non-string elements | High | [archive-fs-compat.md](archive-fs-compat.md#exec-form-json-drops-non-string-elements) |
 | P2 | build/workdir | relative `WORKDIR ..` persists a different config path | High | [archive-fs-compat.md](archive-fs-compat.md#relative-workdir-dotdot-persists-a-different-config-path) |
 | P2 | build/env | `ENV` override moves inherited keys to the end | High | [archive-fs-compat.md](archive-fs-compat.md#env-override-moves-inherited-keys-to-the-end) |
-| P2 | image/metadata | save/load drops xattrs | High | [archive-fs-compat.md](archive-fs-compat.md#saveload-drops-xattrs) |
 | P2 | build/metadata | Dockerfile `USER` is ignored in build output | High | [archive-fs-compat.md](archive-fs-compat.md#dockerfile-user-is-ignored-in-build-output) |
 | P2 | build/base | `FROM` local lookup ignores tag | Medium-high | [archive-fs-compat.md](archive-fs-compat.md#from-local-lookup-ignores-tag) |
 | P2 | image/identity | tag/digest reporting is synthetic and inconsistent | Medium-high | [archive-fs-compat.md](archive-fs-compat.md#tagdigest-reporting-is-synthetic-and-inconsistent) |
@@ -213,12 +206,9 @@ This directory is a working inventory of suspicious behavior, bad architecture, 
 | P2 | image/cleanup | image rmi reports deletion when backing store removal fails | High | [daemon-tests-docs.md](daemon-tests-docs.md#image-rmi-reports-deletion-when-backing-store-removal-fails) |
 | P3 | daemon/inspect | inspect can serialize contradictory dead state | High | [daemon-tests-docs.md](daemon-tests-docs.md#inspect-can-serialize-contradictory-dead-state) |
 | P2 | registry/platform | platform selection discards OCI variant | Medium | [archive-fs-compat.md](archive-fs-compat.md#platform-selection-discards-oci-variant) |
-| P2 | image/load | Docker load accepts unsupported manifest OS as Linux | High | [archive-fs-compat.md](archive-fs-compat.md#docker-load-accepts-unsupported-manifest-os-as-linux) |
-| P2 | registry/platform | registry config with unsupported OS imports as Linux | High | [archive-fs-compat.md](archive-fs-compat.md#registry-config-with-unsupported-os-imports-as-linux) |
 | P2 | registry/pull | valid zero-layer manifests are rejected | High | [archive-fs-compat.md](archive-fs-compat.md#valid-zero-layer-manifests-are-rejected) |
 | P2 | registry/http | layer downloads treat HTTP error bodies as blobs | High | [archive-fs-compat.md](archive-fs-compat.md#layer-downloads-treat-http-error-bodies-as-blobs) |
 | P2 | registry/push | registry push layer packaging breaks on apostrophes in paths | High | [archive-fs-compat.md](archive-fs-compat.md#registry-push-layer-packaging-breaks-on-apostrophes-in-paths) |
-| P1 | image/load | Docker load same-name archives delete existing rootfs in place | High | [archive-fs-compat.md](archive-fs-compat.md#docker-load-same-name-archives-delete-existing-rootfs-in-place) |
 | P1 | registry/push | Docker push drops runtime metadata from OCI config | High | [archive-fs-compat.md](archive-fs-compat.md#docker-push-drops-runtime-metadata-from-oci-config) |
 | P1 | syscall/fd | inotify/timerfd create without flags still sets close-on-exec | High | [syscall-compat.md](syscall-compat.md#inotify_init10-and-timerfd_create-0-set-close-on-exec) |
 | P1 | syscall/timerfd | `timerfd` CLOCK_REALTIME absolute deadlines are treated as monotonic | High | [syscall-compat.md](syscall-compat.md#timerfd-clock_realtime-absolute-deadlines-are-treated-as-monotonic) |
