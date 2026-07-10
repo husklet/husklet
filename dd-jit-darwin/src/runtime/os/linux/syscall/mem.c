@@ -654,6 +654,14 @@ static int svc_mem(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_
         // mprotect is harmful on macOS -- would fault the guest's own RELRO writes). The g_gna PROT_NONE
         // registry tracks the guest's INTENT (reserve PROT_NONE -> commit RW) so buffer checks EFAULT.
         if (a1) {
+            // Linux mm/mprotect.c rejects a start not aligned to the (guest) page size with EINVAL BEFORE
+            // touching anything, so a bad-alignment probe must not read as success. (The "unmapped range ->
+            // ENOMEM" check is NOT emulated here: dd force-maps a persistent host cage and does not track
+            // loader/stack VMAs, so there is no faithful, regression-free "is this range mapped" oracle.)
+            if (a0 & (uint64_t)(guest_pagesz() - 1)) {
+                G_RET(c) = (uint64_t)(-EINVAL);
+                break;
+            }
             uint64_t glo = a0 & ~(uint64_t)0xfff, ghi = (a0 + a1 + 0xfff) & ~(uint64_t)0xfff;
             if ((int)a2 == PROT_NONE)
                 gna_add(glo, ghi);
@@ -798,6 +806,21 @@ static int svc_mem(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_
         // with an unrelated macOS one (e.g. Linux DONTFORK=10 vs macOS PAGEOUT=10), so no-op those.
         // (Note: macOS MADV_DONTNEED does not zero anonymous pages the way Linux's does.)
         int adv = (int)a2, hadv = -1;
+        // Linux validates the advice value and start alignment BEFORE any work (mm/madvise.c). An advice
+        // number the kernel does not define, or a start not aligned to the guest page size, is EINVAL --
+        // otherwise a bad feature probe reads dd's best-effort no-op as success. (Valid Linux advice:
+        // 0..4, 8..23, 25, 100, 101.)
+        {
+            int ok = (adv >= 0 && adv <= 4) || (adv >= 8 && adv <= 23) || adv == 25 || adv == 100 || adv == 101;
+            if (!ok) {
+                G_RET(c) = (uint64_t)(-EINVAL);
+                break;
+            }
+            if (a0 & (uint64_t)(guest_pagesz() - 1)) {
+                G_RET(c) = (uint64_t)(-EINVAL);
+                break;
+            }
+        }
         // MADV_WIPEONFORK(18) / MADV_KEEPONFORK(19): valid ONLY on private-anon ranges (Linux EINVALs
         // otherwise). WIPEONFORK records the range so the fork child sees it zero-filled
         // (fork_child_hooks -> wipefork_apply_child); KEEPONFORK undoes that by dropping the range.

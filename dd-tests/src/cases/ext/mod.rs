@@ -14,6 +14,7 @@ pub mod memory;
 pub mod net; // tcp/udp/unix/sockopt/nonblock/sendmsg/poll-loops/half-close
 pub mod posix; // file/dir/mmap/poll/signal/process/fs-metadata syscalls (portable + oracle)
 pub mod soak; // long-run JIT machinery: code-cache/IBTC/SMC/churn endurance
+pub mod syscallcompat; // syscall lifecycle/edge-case regression probes (docs/bugs/syscall-compat.md)
 pub mod threads; // mutex/condvar/rwlock/barrier/atomics/TLS/futex contention // RSS leak / sustainability probes (guest-visible memory growth over churn)
                  // compatibility-coverage expansion (one file per category, each self-owned):
 pub mod clitools; // real CLI tools (busybox coreutils) in the alpine rootfs
@@ -47,6 +48,7 @@ pub fn all() -> Vec<Group> {
     g.extend(ipc::groups());
     g.extend(net::groups());
     g.extend(soak::groups());
+    g.extend(syscallcompat::groups());
     g.extend(darwin::groups());
     g.extend(completeness::groups());
     g.extend(fsx::groups());

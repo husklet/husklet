@@ -2,216 +2,23 @@
 
 This file keeps syscall findings framed around Linux compatibility, fake-success behavior, data loss, probe correctness, hangs, and workload breakage.
 
-## `close_range` Unknown Flags Close File Descriptors
-
-Priority: P1
-Impact: fd sanitizer data loss and wrong feature-probe result
-Confidence: High
-
-Verification status: Proven in isolated worktree `/Users/x/dd/dd-verify-agent1-src2-20260710-112023`.
-
-Evidence:
-
-- `close_range(first, last, flags)` validates only `first > last`: `dd-jit-darwin/src/runtime/os/linux/syscall/rare.c:137`.
-- Unknown flags are not rejected before the close loop: `dd-jit-darwin/src/runtime/os/linux/syscall/rare.c:152`.
-
-Why this is bad:
-
-Linux rejects unknown `close_range` flag bits with `EINVAL` and leaves the requested fd range unchanged. dd can report success and close the fd anyway, which turns a feature probe or defensive sanitizer into silent fd loss.
-
-Isolated proof:
-
-```sh
-DDJIT_DIR=/Users/x/dd/dd-verify-agent1-src2-20260710-112023/target-verify-agent1/release/build/dd-jit-darwin-16122afd27b6bb64/out \
-  CARGO_TARGET_DIR=/Users/x/dd/dd-verify-agent1-src2-20260710-112023/target-linux-harness \
-  cargo run -q -p dd-tests -- -e aarch64 close_range_flags
-```
-
-Observed: dd prints `einval=0 unchanged=0`; Linux oracle prints `einval=1 unchanged=1`.
-
-## `SO_PASSCRED` and `SO_PEERCRED` Bad Fds Fake Success
-
-Priority: P1
-Impact: socket capability probes and credential checks receive synthetic results
-Confidence: High
-
-Verification status: Proven in isolated worktree `/Users/x/dd/dd-verify-agent1-src2-20260710-112023`.
-
-Evidence:
-
-- `setsockopt(SO_PASSCRED)` stores a per-fd flag without first validating the fd/socket: `dd-jit-darwin/src/runtime/os/linux/syscall/net.c:1080`.
-- `getsockopt(SO_PASSCRED)` can answer from synthetic state: `dd-jit-darwin/src/runtime/os/linux/syscall/net.c:1144`.
-- `getsockopt(SO_PEERCRED)` falls back to synthetic credentials: `dd-jit-darwin/src/runtime/os/linux/syscall/net.c:1152`.
-
-Why this is bad:
-
-Linux returns `EBADF` for bad fds and `ENOTSOCK` for regular files. dd returns success for cases that should reject, so callers can believe they have valid socket credentials or credential passing on an invalid target.
-
-Isolated proof:
-
-```sh
-DDJIT_DIR=/Users/x/dd/dd-verify-agent1-src2-20260710-112023/target-verify-agent1/release/build/dd-jit-darwin-16122afd27b6bb64/out \
-  CARGO_TARGET_DIR=/Users/x/dd/dd-verify-agent1-src2-20260710-112023/target-linux-harness \
-  cargo run -q -p dd-tests -- -e aarch64 net_sockcred_badfd
-```
-
-Observed: dd prints all five bad-fd/non-socket checks as `0`; Linux prints all five as `1`.
-
-## `pidfd` Invalid Flags and Fixed Registry Capacity
+## `pidfd` Fixed Registry Capacity Cliff
 
 Priority: P2
-Impact: wrong errno and pidfd allocation cliff
+Impact: pidfd allocation cliff
 Confidence: High
 
-Verification status: Proven in isolated worktree `/Users/x/dd/dd-verify-agent1-src2-20260710-112023`.
+(The invalid-flags half of this finding is FIXED: `pidfd_open` now rejects unknown flag bits with
+`EINVAL` in `rare.c`. Only the capacity cliff below remains.)
 
 Evidence:
 
-- `pidfd_open(pid, flags)` does not reject unknown flags: `dd-jit-darwin/src/runtime/os/linux/syscall/rare.c:166`.
-- The pidfd table is fixed-size in syscall dispatch state: `dd-jit-darwin/src/runtime/os/linux/syscall/dispatch.c:209`.
+- The pidfd table is fixed-size (`PIDFD_MAX 64`) in syscall dispatch state: `dd-jit-darwin/src/runtime/os/linux/syscall/dispatch.c:209`.
 
 Why this is bad:
 
-Linux rejects invalid pidfd flags and can allocate more than the current fixed table size. dd accepts bad flags and then hits a capacity cliff, which makes pidfd-heavy tests or runtimes fail differently from Linux.
-
-Isolated proof:
-
-```sh
-DDJIT_DIR=/Users/x/dd/dd-verify-agent1-src2-20260710-112023/target-verify-agent1/release/build/dd-jit-darwin-16122afd27b6bb64/out \
-  CARGO_TARGET_DIR=/Users/x/dd/dd-verify-agent1-src2-20260710-112023/target-linux-harness \
-  cargo run -q -p dd-tests -- -e aarch64 pidfd_flags_capacity
-```
-
-Observed: dd prints `bad_open=0 bad_send=0 many_ok=0`; Linux prints `bad_open=1 bad_send=0 many_ok=1`.
-
-## `unshare` and `setns` Invalid Inputs Fake Success
-
-Priority: P1
-Impact: namespace feature probes continue under false assumptions
-Confidence: High
-
-Verification status: Proven in isolated worktree `/Users/x/dd/dd-verify-agent1-src2-20260710-112023`.
-
-Evidence:
-
-- `unshare` and `setns` return success unconditionally: `dd-jit-darwin/src/runtime/os/linux/syscall/proc.c:634`.
-
-Why this is bad:
-
-Invalid inputs such as `setns(-1, ...)` and unknown `unshare` flags should fail. Returning success lets setup code believe namespace state changed when it did not.
-
-Isolated proof:
-
-```sh
-DDJIT_DIR=/Users/x/dd/dd-verify-agent1-src2-20260710-112023/target-verify-agent1/release/build/dd-jit-darwin-16122afd27b6bb64/out \
-  CARGO_TARGET_DIR=/Users/x/dd/dd-verify-agent1-src2-20260710-112023/target-linux-harness \
-  cargo run -q -p dd-tests -- -e aarch64 ns_invalid
-```
-
-Observed: dd prints all invalid-input checks as `0`; Linux prints all as `1`.
-
-## `getresuid` and `getresgid` Accept Null Outputs
-
-Priority: P3
-Impact: wrong errno and missed caller bugs
-Confidence: High
-
-Verification status: Proven in isolated worktree `/Users/x/dd/dd-verify-agent1-src2-20260710-112023`.
-
-Evidence:
-
-- `getresuid` skips null outputs and returns success: `dd-jit-darwin/src/runtime/os/linux/syscall/proc.c:999`.
-- `getresgid` has the same shape: `dd-jit-darwin/src/runtime/os/linux/syscall/proc.c:1008`.
-
-Why this is bad:
-
-Linux returns `EFAULT` for invalid output pointers. dd masks caller bugs and gives a false success path.
-
-Isolated proof:
-
-```sh
-DDJIT_DIR=/Users/x/dd/dd-verify-agent1-src2-20260710-112023/target-verify-agent1/release/build/dd-jit-darwin-16122afd27b6bb64/out \
-  CARGO_TARGET_DIR=/Users/x/dd/dd-verify-agent1-src2-20260710-112023/target-linux-harness \
-  cargo run -q -p dd-tests -- -e aarch64 sys_getresid_null
-```
-
-Observed: dd prints `uid_efault=0 gid_efault=0`; Linux prints `uid_efault=1 gid_efault=1`.
-
-## `sched_setscheduler(SCHED_FIFO)` Reports Success Without Applying Policy
-
-Priority: P2
-Impact: real-time scheduling probes silently lie
-Confidence: High
-
-Verification status: Proven in isolated worktree `/Users/x/dd/dd-verify-agent1-src2-20260710-112023`.
-
-Evidence:
-
-- Scheduler policy emulation returns synthetic success for accepted policy shapes: `dd-jit-darwin/src/runtime/os/linux/syscall/rare.c:493`.
-
-Why this is bad:
-
-Unprivileged Linux normally rejects real-time `SCHED_FIFO` with `EPERM`. dd returns success without applying RT scheduling, so programs can believe latency-sensitive scheduling was installed when it was not.
-
-Isolated proof:
-
-```sh
-DDJIT_DIR=/Users/x/dd/dd-verify-agent1-src2-20260710-112023/target-verify-agent1/release/build/dd-jit-darwin-16122afd27b6bb64/out \
-  CARGO_TARGET_DIR=/Users/x/dd/dd-verify-agent1-src2-20260710-112023/target-linux-harness \
-  cargo run -q -p dd-tests -- -e aarch64 sched_policy_guard
-```
-
-Observed: dd prints `fifo_eperm=0 badpol_einval=1 getbad_einval=1`; Linux prints `fifo_eperm=1 badpol_einval=1 getbad_einval=1`.
-
-## `epoll_wait` / `epoll_pwait` Accept `maxevents <= 0`
-
-Priority: P2
-Impact: wrong errno and input-validation compatibility
-Confidence: High
-
-Verification status: Proven across aarch64 and x86_64 in isolated worktree `/Users/x/dd/dd-workerA-syscall-audit-20260710`.
-
-Evidence:
-
-- `epoll_pwait` clamps negative `maxevents` to zero instead of rejecting zero/negative values: `dd-jit-darwin/src/runtime/os/linux/syscall/event.c:405`.
-
-Why this is bad:
-
-Linux returns `EINVAL` when `maxevents <= 0`. dd returns success-like behavior, so bad caller input and feature probes get the wrong verdict.
-
-Isolated proof:
-
-```sh
-DDJIT_DIR="$PWD/target-workerA-syscall-audit/release/build/dd-jit-darwin-16122afd27b6bb64/out" \
-  cargo run -q -p dd-tests -- -e aarch64 epoll-wait-badmax
-```
-
-Observed: native `zero=1 neg=1`; dd `zero=0 neg=0`. x86_64 showed the same mismatch.
-
-## `inotify_init1` Accepts Unknown Flag Bits
-
-Priority: P2
-Impact: feature probes can believe unsupported behavior exists
-Confidence: High
-
-Verification status: Proven across aarch64 and x86_64 in isolated worktree `/Users/x/dd/dd-workerA-syscall-audit-20260710`.
-
-Evidence:
-
-- `inotify_init1(flags)` creates a kqueue and applies known bits without rejecting unknown flags: `dd-jit-darwin/src/runtime/os/linux/syscall/event.c:567`.
-
-Why this is bad:
-
-Linux rejects unknown `inotify_init1` flags with `EINVAL`. Accepting them creates false support signals.
-
-Isolated proof:
-
-```sh
-DDJIT_DIR="$PWD/target-workerA-syscall-audit/release/build/dd-jit-darwin-16122afd27b6bb64/out" \
-  cargo run -q -p dd-tests -- -e aarch64 inotify-init-flags
-```
-
-Observed: native `badflag=1 valid=1`; dd `badflag=0 valid=1`. x86_64 showed the same mismatch.
+Linux can allocate far more than 64 pidfds. dd hits a capacity cliff once the table fills, which makes
+pidfd-heavy tests or runtimes fail differently from Linux (`many_ok=0` where Linux prints `many_ok=1`).
 
 ## Periodic `timerfd` Ignores Earlier First Deadline
 
@@ -238,80 +45,6 @@ DDJIT_DIR="$PWD/target-workerA-syscall-audit/release/build/dd-jit-darwin-16122af
 ```
 
 Observed: native fires within 20ms (`ready=1 n8=1 exp=1`); dd does not fire within 150ms (`ready=0 n8=0 exp=0`). x86_64 showed the same mismatch.
-
-## `mprotect` Unaligned Address Succeeds
-
-Priority: P2
-Impact: errno/order compatibility and hidden allocator misuse
-Confidence: High
-
-Verification status: Proven across aarch64 and x86_64 in isolated worktree `/Users/x/dd/dd-workerA-syscall-audit-20260710`.
-
-Evidence:
-
-- `mprotect` is modeled as a no-op/intent tracker and does not reject unaligned addresses before returning success: `dd-jit-darwin/src/runtime/os/linux/syscall/mem.c:652`.
-
-Why this is bad:
-
-Linux requires the address to be page-aligned and returns `EINVAL` otherwise. dd can hide bad allocator/runtime calls by reporting success.
-
-Isolated proof:
-
-```sh
-DDJIT_DIR="$PWD/target-workerA-syscall-audit/release/build/dd-jit-darwin-16122afd27b6bb64/out" \
-  cargo run -q -p dd-tests -- -e aarch64 mprotect-invalid
-```
-
-Observed: native `unaligned=1 valid=1`; dd `unaligned=0 valid=1`. x86_64 showed the same mismatch.
-
-## `ppoll` Accepts Invalid `tv_nsec`
-
-Priority: P2
-Impact: invalid timeout probes silently succeed or become immediate timeouts
-Confidence: High
-
-Verification status: Proven in isolated worktree `/Users/x/dd/dd-slot-G`.
-
-Evidence:
-
-- `ppoll` validates pointer accessibility but does not reject `tv_nsec < 0` or `tv_nsec >= 1000000000`: `dd-jit-darwin/src/runtime/os/linux/syscall/event.c:690`.
-
-Why this is bad:
-
-Linux rejects invalid timespec values with `EINVAL`. dd can treat them as normal timeouts, hiding caller bugs.
-
-Isolated proof:
-
-```sh
-DDJIT_DIR=/Users/x/dd/dd-slot-G/target-slot-G/release/build/dd-jit-darwin-16122afd27b6bb64/out make test FILTER=audit-slot-g
-```
-
-Result: filtered run had `0 passed, 2 failed`; one failing oracle probe covers invalid `ppoll` timeout handling.
-
-## `madvise` Fake-Succeeds Invalid Advice And Unaligned Ranges
-
-Priority: P2
-Impact: false feature probes and missed memory API bugs
-Confidence: High
-
-Verification status: Proven in isolated worktree `/Users/x/dd/dd-slot-G`.
-
-Evidence:
-
-- `madvise` is treated as best-effort and only selected advice values are forwarded: `dd-jit-darwin/src/runtime/os/linux/syscall/mem.c:794`.
-- Host `madvise` errors are ignored before returning success: `dd-jit-darwin/src/runtime/os/linux/syscall/mem.c:868`.
-
-Why this is bad:
-
-Linux rejects unknown advice and unaligned invalid ranges. dd can return success, making software believe a memory policy was accepted when nothing happened.
-
-Isolated proof:
-
-```sh
-DDJIT_DIR=/Users/x/dd/dd-slot-G/target-slot-G/release/build/dd-jit-darwin-16122afd27b6bb64/out make test FILTER=audit-slot-g
-```
-
-Result: filtered run had `0 passed, 2 failed`; one failing oracle probe covers invalid `madvise` behavior.
 
 ## Sentry `ppoll` Masks Stale Fds Instead Of `POLLNVAL`
 
@@ -370,55 +103,6 @@ Native Linux returns errors for unknown futex op/flag cases. dd can report succe
 Verification:
 
 Promote the native oracle checked in `/Users/x/dd/dd-slot-G` into a dd-tests probe for unknown op and flag combinations.
-
-## Raw `pselect6` Accepts Invalid `tv_nsec`
-
-Priority: P2
-Impact: invalid timeout probes silently succeed or sleep
-Confidence: High
-
-Verification status: Proven in isolated worktree `/Users/x/dd/dd-audit-slotN`.
-
-Evidence:
-
-- The raw `pselect6` path copies the timeout and normalizes nanoseconds instead of rejecting invalid values: `dd-jit-darwin/src/runtime/os/linux/syscall/event.c:640`.
-
-Why this is bad:
-
-Linux rejects `tv_nsec < 0` or `tv_nsec >= 1e9` with `EINVAL`. dd accepts both and returns success-like results.
-
-Isolated proof:
-
-```sh
-cargo run -p dd-tests -- audit-pselect-bad-timeout
-```
-
-Result: failed both Linux engines. dd `hi=0 neg=0`; native `hi=1 neg=1`.
-
-## `prlimit64` Accepts Invalid Pid And Resource
-
-Priority: P2
-Impact: resource-limit probes see unsupported inputs as valid
-Confidence: High
-
-Verification status: Proven in isolated worktree `/Users/x/dd/dd-audit-slotN`.
-
-Evidence:
-
-- `prlimit64` fills and sets limits without validating pid or resource first: `dd-jit-darwin/src/runtime/os/linux/syscall/proc.c:1939`.
-- It returns success unconditionally at the end: `dd-jit-darwin/src/runtime/os/linux/syscall/proc.c:1955`.
-
-Why this is bad:
-
-Linux returns errors for invalid resources and invalid target pids. dd can make runtimes believe unsupported limits or dead pids are valid.
-
-Isolated proof:
-
-```sh
-cargo run -p dd-tests -- audit-prlimit-invalid
-```
-
-Result: failed both Linux engines. dd `resource=0 pid=0`; native `resource=1 pid=1`.
 
 ## x86_64 `mincore(..., vec=NULL)` Succeeds
 
@@ -481,81 +165,6 @@ Linux `select`/`pselect` should fail `EBADF` for invalid positive fd bits. Skipp
 Verification:
 
 Run an untrusted-mode `pselect6` probe with an invalid positive fd bit and compare against native `EBADF`.
-
-## `SIGKILL`/`SIGSTOP` Can Enter The Guest Signal Mask
-
-Priority: P1
-Impact: unmaskable signals can become pending instead of fatal/stopping
-Confidence: High
-
-Verification status: Proven in isolated worktree `/Users/x/dd/dd-worker-P-jit-runtime-20260710`.
-
-Evidence:
-
-- `rt_sigprocmask` applies guest masks without clearing unmaskable signals: `dd-jit-darwin/src/runtime/os/linux/syscall/signal.c:453`.
-- `raise_guest_signal` checks the guest mask before fatal/default handling, so blocked `SIGKILL` becomes pending: `dd-jit-darwin/src/runtime/os/linux/signal.c:415`.
-
-Why this is bad:
-
-Linux does not allow `SIGKILL` or `SIGSTOP` to be blocked. dd can let a process survive a blocked `SIGKILL`.
-
-Isolated proof:
-
-```sh
-cargo run -q -p dd-tests -- -e aarch64 slotp-sigmask-unmaskable
-cargo run -q -p dd-tests -- -e x86_64 slotp-sigmask-unmaskable
-```
-
-Result: failed both engines. dd `killed=0`; native `killed=1`.
-
-## `sigaltstack` Accepts Invalid Stack Configs
-
-Priority: P2
-Impact: later `SA_ONSTACK` delivery can use invalid or tiny stacks
-Confidence: High
-
-Verification status: Proven in isolated worktree `/Users/x/dd/dd-worker-P-jit-runtime-20260710`.
-
-Evidence:
-
-- `sigaltstack` copies old/new state directly and returns success: `dd-jit-darwin/src/runtime/os/linux/syscall/signal.c:175`.
-
-Why this is bad:
-
-Linux validates invalid flags, minimum stack size, active-stack changes, and bad pointers. dd accepts invalid configurations that can corrupt later signal delivery.
-
-Isolated proof:
-
-```sh
-cargo run -q -p dd-tests -- -e aarch64 slotp-sigaltstack-validate
-cargo run -q -p dd-tests -- -e x86_64 slotp-sigaltstack-validate
-```
-
-Result: failed both engines; dd accepts invalid inputs that native rejects.
-
-## `signalfd4` Ignores `sizemask`
-
-Priority: P2
-Impact: raw syscall validation mismatch and potential bad-pointer behavior
-Confidence: High on aarch64; medium cross-arch
-
-Verification status: Proven on aarch64 in isolated worktree `/Users/x/dd/dd-worker-P-jit-runtime-20260710`.
-
-Evidence:
-
-- `signalfd4(fd, mask, sizemask, flags)` validates flags and fd but then dereferences the mask without validating `sizemask`: `dd-jit-darwin/src/runtime/os/linux/syscall/event.c:764`.
-
-Why this is bad:
-
-Linux rejects invalid `sizemask` values such as zero with `EINVAL`. Bad mask pointers should return `EFAULT`, not fault the engine.
-
-Isolated proof:
-
-```sh
-cargo run -q -p dd-tests -- -e aarch64 slotp-signalfd-size
-```
-
-Result: failed on aarch64. dd `einval=0`; native `einval=1`. The exact PoC passed on x86_64.
 
 ## Seccomp Filter Install Reports Success But Does Not Enforce
 
@@ -635,31 +244,6 @@ Evidence:
 Why this is bad:
 
 Programs using `mlockall` for latency control can receive success-like state while pages are still pageable by the host. This is mainly a documented model gap, but it should stay visible because it affects performance-sensitive workloads.
-
-## Raw Signal Validation Is Too Permissive
-
-Priority: P2
-Impact: invalid signal setup reports success
-Confidence: High
-
-Verification status: Proven in isolated worktree `/Users/x/dd/dd-worker-U`.
-
-Evidence:
-
-- `sigaltstack` accepts stack state without full Linux validation: `dd-jit-darwin/src/runtime/os/linux/syscall/signal.c:175`.
-- `rt_sigprocmask` treats invalid `how` as set-mask behavior and ignores `sigsetsize`: `dd-jit-darwin/src/runtime/os/linux/syscall/signal.c:453`.
-
-Why this is bad:
-
-Signal setup APIs are frequently used as feature probes and runtime invariants. dd can accept invalid flags, undersized altstacks, and malformed mask operations that Linux rejects.
-
-Isolated proof:
-
-```sh
-aarch64-linux-gnu-gcc -O2 -static -Wall -Wextra -o scratch-worker-U/poc_signal_validation scratch-worker-U/poc_signal_validation.c
-```
-
-Native returned `EINVAL/EINVAL/ENOMEM`; dd returned success for all three cases.
 
 ## `pselect6` And `ppoll` Ignore Temporary Signal Masks
 
@@ -788,30 +372,6 @@ mac bash -lc 'DDJIT_DIR=$OUT $OUT/ddjit-linux_aarch64 scratch-worker-V/clock_abs
 
 Native printed `rc=4 hit=1 elapsed_ms=101`; dd printed `rc=0 hit=1 elapsed_ms=1002`.
 
-## `eventfd` Counter Overflow Wraps To Zero
-
-Priority: P1
-Impact: event counters and wake state can be silently lost
-Confidence: High
-
-Verification status: Proven in isolated worktree `/Users/x/dd/dd-worker-AC-signal-runtime-20260710`.
-
-Evidence:
-
-- Eventfd write adds to the counter without checking saturation: `dd-jit-darwin/src/runtime/os/linux/syscall/io.c:611`.
-
-Why this is bad:
-
-Linux rejects eventfd writes that would overflow the counter with `EAGAIN` and preserves the prior value. dd accepts the write, wraps the counter to zero, and loses the pending event state.
-
-Isolated proof:
-
-```sh
-DDWAKE_ROLE=__none ddjit-linux_aarch64 target/ac-probes/eventfd_overflow
-```
-
-Linux observed `w2=-1 e2=11 r=8 got=18446744073709551614`; dd observed `w2=8 e2=0 r=-1 er=11 got=0`.
-
 ## `dup(eventfd)` Loses Eventfd Semantics
 
 Priority: P1
@@ -837,30 +397,24 @@ DDWAKE_ROLE=__none ddjit-linux_aarch64 target/ac-probes/eventfd_dup
 
 Linux observed `rd=8 got=5`; dd observed `rd=1 got=1`.
 
-## `signalfd` Update Keeps Stale Signals And Short Reads Consume Events
+## `signalfd` Update Keeps Stale Signals (ORs Masks Instead Of Replacing)
 
 Priority: P1
-Impact: signal event loops can receive masked-out signals and lose pending records
+Impact: signal event loops can receive masked-out signals
 Confidence: High
 
-Verification status: Proven in isolated worktree `/Users/x/dd/dd-worker-AC-signal-runtime-20260710`.
+(The short-read half of this finding is FIXED: a signalfd `read` with `count < 128` now returns `EINVAL`
+without consuming the pending signal. Only the mask-update half below remains.)
 
 Evidence:
 
-- `signalfd` update ORs new masks instead of replacing them: `dd-jit-darwin/src/runtime/os/linux/syscall/event.c:793`.
-- Signalfd read lacks a `count < 128` `EINVAL` guard and consumes before validating the user count: `dd-jit-darwin/src/runtime/os/linux/syscall/io.c:340`.
+- `signalfd` update ORs new masks into the shared mask instead of replacing them: `dd-jit-darwin/src/runtime/os/linux/syscall/event.c:793`.
 
 Why this is bad:
 
-Linux updates an existing signalfd mask to the new set. It also rejects short reads without consuming the pending signal. dd can keep stale signals enabled and consume an event while returning a short-read-shaped success.
-
-Isolated proof:
-
-```sh
-DDWAKE_ROLE=__none ddjit-linux_aarch64 target/ac-probes/signalfd_update_shortread
-```
-
-Linux observed `usr1_n=-1 usr1_e=11 ... short_n=-1 short_e=22 final_n=128 final_sig=12`; dd observed `usr1_n=128 usr1_sig=10 short_n=128 short_e=0 final_n=-1 final_e=11`.
+Linux updates an existing signalfd mask to exactly the new set. dd's OR keeps previously-enabled signals
+active, so an event loop that narrowed its mask can still receive signals it meant to drop. (This is also
+entangled with the single shared-signalfd model -- see the multiple-signalfd-independence finding.)
 
 ## `dup(timerfd)` Loses Timerfd Semantics
 
@@ -996,30 +550,6 @@ mac bash -lc 'timeout 5 ddjit-linux_aarch64 scratch-BA2/inotify_fork_watch.aarch
 
 Linux observed `child_read=32 errno=0 mask=0x100`; dd produced no child result and was killed by timeout.
 
-## `inotify_rm_watch` Can Close An Unrelated Fd
-
-Priority: P1
-Impact: bad watch descriptors can silently close arbitrary guest fd numbers
-Confidence: High
-
-Verification status: Proven in isolated worktree `/Users/x/dd/dd-worker-AT-jit-fd-event-20260710`.
-
-Evidence:
-
-- `inotify_rm_watch` closes `(int)a1` and returns success without verifying that `wd` belongs to the inotify instance: `dd-jit-darwin/src/runtime/os/linux/syscall/event.c:610`.
-
-Why this is bad:
-
-Linux rejects invalid watch descriptors with `EINVAL` and leaves other fds alone. dd can close a victim fd whose number matches the bad `wd`, causing silent fd loss.
-
-Isolated proof:
-
-```sh
-./scratch-t186/ddjit-aarch64 ./scratch-AT/.inotify_rm.bin
-```
-
-Linux observed `rm=-1 rm_errno=22 victim_open=1`; dd observed `rm=0 rm_errno=0 victim_open=0`.
-
 ## `dup(signalfd)` Loses Signalfd Semantics
 
 Priority: P1
@@ -1098,54 +628,6 @@ Linux: parent_inotify=1 parent_timerfd=1 child_inotify=1 child_timerfd=1
 dd:    parent_inotify=2 parent_timerfd=2 child_inotify=-9 child_timerfd=-9
 ```
 
-## Short `read(timerfd)` Consumes The Expiration
-
-Priority: P1
-Impact: timer wakeups can be lost after an invalid short read
-Confidence: High
-
-Verification status: Proven in isolated worktree `/Users/x/dd/dd-worker-BJ2-fd-event-20260710`.
-
-Evidence:
-
-- Timerfd read calls `kevent` before validating that `count >= 8`: `dd-jit-darwin/src/runtime/os/linux/syscall/io.c:438`.
-- It can return `8` even when the user buffer is too small: `dd-jit-darwin/src/runtime/os/linux/syscall/io.c:456`.
-
-Why this is bad:
-
-Linux rejects short timerfd reads with `EINVAL` and leaves the expiration pending. dd reports success and drains the event, so the next read can return `EAGAIN`.
-
-Observed proof:
-
-```text
-Linux: short_read=-1 errno=22 small=0xaaaaaaaa next_read=8 next_errno=0 val=1
-dd:    short_read=8 errno=0 small=0xaaaaaaaa next_read=-1 next_errno=11 val=0
-```
-
-## Short `read(inotify)` Consumes The Event
-
-Priority: P1
-Impact: file-watch events can be lost after an invalid short read
-Confidence: High
-
-Verification status: Proven in isolated worktree `/Users/x/dd/dd-worker-BJ2-fd-event-20260710`.
-
-Evidence:
-
-- Inotify read drains `kevent` before ensuring the buffer can hold one `struct inotify_event`: `dd-jit-darwin/src/runtime/os/linux/syscall/io.c:367`, `dd-jit-darwin/src/runtime/os/linux/syscall/io.c:384`.
-- If the buffer is too small, the loop breaks and returns the current offset: `dd-jit-darwin/src/runtime/os/linux/syscall/io.c:422`, `dd-jit-darwin/src/runtime/os/linux/syscall/io.c:435`.
-
-Why this is bad:
-
-Linux rejects too-small inotify reads with `EINVAL` and preserves the queued event. dd returns `0`, consumes the event, and leaves the next read with no event.
-
-Observed proof:
-
-```text
-Linux: wd=1 short_read=-1 errno=22 next_read=16 next_errno=0 next_wd=1 mask=0x2
-dd:    wd=5 short_read=0 errno=0 next_read=-1 next_errno=11 next_wd=-1 mask=0x0
-```
-
 ## `timerfd` CLOCK_REALTIME Absolute Deadlines Are Treated As Monotonic
 
 Priority: P1
@@ -1192,30 +674,6 @@ Observed proof:
 ```text
 Linux: ret=-1 errno=4 hit=1 elapsed_ms=105
 dd:    ret=0 errno=0 hit=0 elapsed_ms=800
-```
-
-## `eventfd` Read With Null Buffer Reports Success
-
-Priority: P2
-Impact: bad guest pointers can fake reads instead of returning `EFAULT`
-Confidence: High
-
-Verification status: Proven in isolated worktree `/Users/x/dd/dd-worker-BQ2-fd-event-20260710`.
-
-Evidence:
-
-- Eventfd read validates the user buffer only when the pointer is non-null: `dd-jit-darwin/src/runtime/os/linux/syscall/io.c:466`.
-- The read path can then report an 8-byte success: `dd-jit-darwin/src/runtime/os/linux/syscall/io.c:519`.
-
-Why this is bad:
-
-Linux rejects `read(eventfd, NULL, 8)` with `EFAULT`. dd returns success, so bad-pointer probes can see a false read and lose compatibility with runtimes that depend on precise errno behavior.
-
-Observed proof:
-
-```text
-Linux: bad=-1 bad_errno=14 good=-1 good_errno=11 val=0
-dd:    bad=8 bad_errno=0 good=-1 good_errno=11 val=0
 ```
 
 ## `FUTEX_WAIT_BITSET` / `FUTEX_WAKE_BITSET` Ignore Masks

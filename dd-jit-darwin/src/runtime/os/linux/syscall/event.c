@@ -405,8 +405,12 @@ static int svc_event(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint6
     // epoll_pwait(epfd, events, max, timeout_ms, sigmask)
     case 22: {
         int maxev = (int)a2;
+        // Linux rejects maxevents <= 0 with EINVAL before waiting; do not clamp it to a poll.
+        if (maxev <= 0) {
+            G_RET(c) = (uint64_t)(int64_t)(-EINVAL);
+            break;
+        }
         if (maxev > 256) maxev = 256;
-        if (maxev < 0) maxev = 0;
         struct kevent kv[256];
         uint8_t *out = (uint8_t *)a1;
         int ep = (int)a0;
@@ -565,7 +569,12 @@ static int svc_event(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint6
         break;
     }
     case 26: {
-        // inotify_init1(flags) -> kqueue
+        // inotify_init1(flags) -> kqueue. Only IN_NONBLOCK(0x800) and IN_CLOEXEC(0x80000) are defined;
+        // Linux rejects any other flag bit with EINVAL, so a bad-flag probe must not read as supported.
+        if ((int)a0 & ~(0x800 | 0x80000)) {
+            G_RET(c) = (uint64_t)(int64_t)(-EINVAL);
+            break;
+        }
         int r = kqueue();
         if (r >= 0) {
             if (r < DD_NFD) g_inotify[r] = 1;
@@ -609,9 +618,15 @@ static int svc_event(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint6
     }
     case 28: {
         struct kevent kv;
-        // inotify_rm_watch(fd, wd)
+        // inotify_rm_watch(fd, wd). The wd is the watched fd; deleting the EVFILT_VNODE knote from THIS
+        // inotify kqueue is the source of truth for "is this a real watch of this instance". If the knote
+        // is not registered here (bad/foreign wd), kevent fails ENOENT -- Linux returns EINVAL and leaves
+        // the fd alone, so we must NOT close(wd) or we would silently destroy an unrelated guest fd.
         EV_SET(&kv, (int)a1, EVFILT_VNODE, EV_DELETE, 0, 0, NULL);
-        kevent((int)a0, &kv, 1, NULL, 0, NULL);
+        if (kevent((int)a0, &kv, 1, NULL, 0, NULL) < 0) {
+            G_RET(c) = (uint64_t)(int64_t)(-EINVAL);
+            break;
+        }
         close((int)a1);
         G_RET(c) = 0;
         break;
@@ -628,6 +643,15 @@ static int svc_event(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint6
             (have_to && guest_bad_ptr(a4, sizeof(struct timespec)))) {
             G_RET(c) = (uint64_t)(-EFAULT);
             break;
+        }
+        // Linux rejects an out-of-range timeout nanoseconds field (tv_nsec < 0 or >= 1e9) with EINVAL
+        // before waiting; dd must not treat it as a normal timeout and hide the caller bug.
+        if (have_to) {
+            long tns = ((const struct timespec *)a4)->tv_nsec;
+            if (tns < 0 || tns >= 1000000000L) {
+                G_RET(c) = (uint64_t)(-EINVAL);
+                break;
+            }
         }
         // a spurious EINTR (a signal dd hooks with host_sigh but the guest has BLOCKED or defaults to
         // ignore -- e.g. an LTP heartbeat, or SIGCHLD from a reaped child) interrupts the host pselect but
@@ -692,6 +716,11 @@ static int svc_event(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint6
         if ((a0 && a1 && guest_bad_ptr(a0, (size_t)a1 * sizeof(struct pollfd))) ||
             (ts && guest_bad_ptr(a2, sizeof(struct timespec)))) {
             G_RET(c) = (uint64_t)(-EFAULT);
+            break;
+        }
+        // Linux rejects an out-of-range timeout nanoseconds field (tv_nsec < 0 or >= 1e9) with EINVAL.
+        if (ts && (ts->tv_nsec < 0 || ts->tv_nsec >= 1000000000L)) {
+            G_RET(c) = (uint64_t)(-EINVAL);
             break;
         }
         int have_to = ts != NULL;
@@ -767,6 +796,17 @@ static int svc_event(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint6
         // (1) EINVAL: the only valid flag bits are SFD_CLOEXEC(0x80000) and SFD_NONBLOCK(0x800).
         if ((int)a3 & ~(int)(0x80000 | 0x800)) {
             G_RET(c) = (uint64_t)(-EINVAL);
+            break;
+        }
+        // (1b) EINVAL: the kernel requires sizemask == sizeof(sigset_t) (8 on the 64-bit ABI). A zero or
+        // otherwise wrong sizemask is rejected BEFORE the mask is read (LTP signalfd4_01).
+        if ((size_t)a2 != 8) {
+            G_RET(c) = (uint64_t)(-EINVAL);
+            break;
+        }
+        // (1c) EFAULT: a non-null but inaccessible mask pointer must return EFAULT, never fault the engine.
+        if (a1 && guest_bad_ptr(a1, 8)) {
+            G_RET(c) = (uint64_t)(-EFAULT);
             break;
         }
         // (2) fd == -1 creates a new signalfd; otherwise it must reference an EXISTING signalfd -- EBADF if
