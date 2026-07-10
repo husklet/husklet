@@ -688,6 +688,11 @@ static int svc_rare(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64
                 G_RET(c) = (uint64_t)(int64_t)(-EFAULT);
                 break;
             }
+            // Raw waitid(2) also copies out arg 5 (struct rusage *) when non-NULL; a bad pointer is EFAULT.
+            if (a4 && !host_range_mapped((uintptr_t)a4, 144)) {
+                G_RET(c) = (uint64_t)(int64_t)(-EFAULT);
+                break;
+            }
         }
         // P_PIDFD (Linux idtype 3): macOS has no pidfd, so resolve the emulated pidfd back to its pid and
         // wait on P_PID. Go's os.(*Process).pidfdWait reaps a CLONE_PIDFD child exactly this way.
@@ -743,6 +748,17 @@ static int svc_rare(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64
                 *(int *)(gi + 20) = (int)si.si_uid;
                 *(int *)(gi + 24) = status; // si_status
             }
+        }
+        // Raw waitid(2) fills arg 5 (struct rusage *) when non-NULL (glibc's wrapper passes NULL, but the
+        // raw syscall and some runtimes use it). macOS waitid has no rusage variant, so report the reaped
+        // child's accounting best-effort from RUSAGE_CHILDREN in the guest's Linux layout -- leaving the
+        // buffer untouched exposed sentinel garbage (a wild ru_maxrss). Only on an actual reap (si_pid set).
+        if (a4 && si.si_pid != 0) {
+            struct rusage cru;
+            if (getrusage(RUSAGE_CHILDREN, &cru) == 0)
+                rusage_to_linux((uint8_t *)a4, &cru);
+            else
+                memset((void *)a4, 0, 144);
         }
         G_RET(c) = 0;
         break;

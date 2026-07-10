@@ -443,6 +443,25 @@ static int sched_pid_live(int gpid) {
     return (errno == ESRCH) ? -ESRCH : 0; // EPERM etc. -> the task exists, just not signalable
 }
 
+// Write a host `struct rusage` into the guest's 144-byte Linux `struct rusage` layout: the field offsets
+// differ and ru_maxrss is kilobytes on Linux vs bytes on macOS. Zeroes the buffer first. Shared by
+// getrusage/wait4/waitid so those all report Linux-scale accounting instead of raw Darwin byte values.
+static void rusage_to_linux(uint8_t *d, const struct rusage *ru) {
+    memset(d, 0, 144);
+    *(int64_t *)(d + 0) = ru->ru_utime.tv_sec;
+    *(int64_t *)(d + 8) = ru->ru_utime.tv_usec;
+    *(int64_t *)(d + 16) = ru->ru_stime.tv_sec;
+    *(int64_t *)(d + 24) = ru->ru_stime.tv_usec;
+    *(int64_t *)(d + 32) = ru->ru_maxrss / 1024; // macOS bytes -> Linux KB
+    *(int64_t *)(d + 64) = ru->ru_minflt;
+    *(int64_t *)(d + 72) = ru->ru_majflt;
+    *(int64_t *)(d + 88) = ru->ru_inblock;
+    *(int64_t *)(d + 96) = ru->ru_oublock;
+    *(int64_t *)(d + 120) = ru->ru_nsignals;
+    *(int64_t *)(d + 128) = ru->ru_nvcsw;
+    *(int64_t *)(d + 136) = ru->ru_nivcsw;
+}
+
 static int svc_proc(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4,
                     uint64_t a5) {
     switch (nr) {
@@ -1212,21 +1231,7 @@ static int svc_proc(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64
             uint8_t *d = (uint8_t *)a1;
             // Linux struct rusage layout (18 longs)
             memset(d, 0, 144);
-            if (getrusage(who, &ru) == 0) {
-                *(int64_t *)(d + 0) = ru.ru_utime.tv_sec;
-                *(int64_t *)(d + 8) = ru.ru_utime.tv_usec;
-                *(int64_t *)(d + 16) = ru.ru_stime.tv_sec;
-                *(int64_t *)(d + 24) = ru.ru_stime.tv_usec;
-                // macOS bytes -> Linux KB
-                *(int64_t *)(d + 32) = ru.ru_maxrss / 1024;
-                *(int64_t *)(d + 64) = ru.ru_minflt;
-                *(int64_t *)(d + 72) = ru.ru_majflt;
-                *(int64_t *)(d + 88) = ru.ru_inblock;
-                *(int64_t *)(d + 96) = ru.ru_oublock;
-                *(int64_t *)(d + 120) = ru.ru_nsignals;
-                *(int64_t *)(d + 128) = ru.ru_nvcsw;
-                *(int64_t *)(d + 136) = ru.ru_nivcsw;
-            }
+            if (getrusage(who, &ru) == 0) rusage_to_linux(d, &ru);
         }
         G_RET(c) = 0;
         break;
@@ -1896,13 +1901,29 @@ static int svc_proc(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64
         // no other syscall is affected, the guest's waitpid never returns a spurious EINTR (the do/while
         // retries), and a guest that never calls wait4 is never armed. pt_wait_arm returns 0 (no-op) for a
         // WNOHANG wait, a guest with its own SIGCHLD handler, or if the ptrace arena is absent.
+        // Translate Linux wait4 options to the host's (they DIVERGE): Linux WCONTINUED is 0x8, but that value
+        // is macOS WSTOPPED -- passing the raw bits made a WCONTINUED wait miss continued children and mis-
+        // encode the following status. Only WNOHANG/WUNTRACED share a value; the __W* thread-selection bits
+        // have no host form and are dropped. rusage goes into a LOCAL host struct and is converted to the
+        // guest's Linux layout after the reap (a raw host rusage buffer would leave Darwin byte-scale values
+        // in the Linux ru_maxrss/... fields).
+        int mopt = 0;
+        if ((int)a2 & 1) mopt |= WNOHANG;
+        if ((int)a2 & 2) mopt |= WUNTRACED;
+        if ((int)a2 & 8) mopt |= WCONTINUED;
+        struct rusage ruloc;
+        memset(&ruloc, 0, sizeof ruloc);
+        if (a3 && !host_range_mapped((uintptr_t)a3, 144)) {
+            G_RET(c) = (uint64_t)(int64_t)(-EFAULT);
+            break;
+        }
         struct sigaction pt_saved;
         int pt_armed = ((int)a2 & 1 /*WNOHANG*/) ? 0 : pt_wait_arm(&pt_saved);
         // SA_RESTART: a wait interrupted by a handler that asked to restart (e.g. a SIGCHLD reaper, or
         // gcc's driver) must transparently retry instead of failing the guest with EINTR.
         ts_wait_enter(); // 'S' while blocked waiting on a child (WNOHANG returns immediately, harmless)
         do {
-            r = wait4((pid_t)(int)a0, &st, (int)a2, (struct rusage *)a3);
+            r = wait4((pid_t)(int)a0, &st, mopt, a3 ? &ruloc : NULL);
             // Reroute to the ptrace pump if the interrupt was a tracee of ours stopping (we became a tracer
             // while blocked). Gated on nactive>0 -> the non-ptrace matrix never enters this branch.
             if (r < 0 && errno == EINTR && ptrace_wait_active() && ptrace_any_tracee_of_self()) {
@@ -1939,7 +1960,12 @@ static int svc_proc(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64
         // RLIMIT_CORE soft limit > 0) -- the Linux rule -- while still honoring the host's own core flag if it
         // did dump. Non-core signals (SIGKILL/SIGTERM/...) or rlim_cur==0 => no bit (WCOREDUMP false).
         int rawsig = st & 0x7f;
-        if (rawsig != 0 && rawsig != 0x7f) {
+        // WIFCONTINUED: macOS encodes a continued child as a "stopped" status whose stop-signal is SIGCONT
+        // (low byte 0x7f, high byte 19); Linux uses the sentinel status 0xffff. Check this BEFORE the stopped
+        // branch below, which would otherwise mistranslate it as a stop.
+        if ((st & 0xff) == 0x7f && ((st >> 8) & 0xff) == SIGCONT) {
+            st = 0xffff;
+        } else if (rawsig != 0 && rawsig != 0x7f) {
             int lsig = sig_m2l(rawsig) & 0x7f;
             int core = sig_coredumps(lsig) && (((st & 0x80) != 0) || svc_core_rlimit_cur() > 0);
             st = (st & ~0xff) | lsig | (core ? 0x80 : 0);
@@ -1955,6 +1981,8 @@ static int svc_proc(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64
             int gsig, gcore;
             if (sigexit_lookup(r, &gsig, &gcore, 1)) st = (gsig & 0x7f) | (gcore ? 0x80 : 0);
         }
+        // Fill the guest's Linux-layout rusage from the reaped child's host accounting (kilobyte-scaled).
+        if (a3 && r > 0) rusage_to_linux((uint8_t *)a3, &ruloc);
         if (a1) *(int *)a1 = st;
         if (proc_exit_log_on()) {
             proc_log_prefix("wait4");

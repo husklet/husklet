@@ -444,30 +444,6 @@ Linux: rem_sec=0 ... poll=1 ... elapsed_ms=85 read=8 ... count=1
 dd:    rem_sec=1782499723 ... poll=0 ... elapsed_ms=401 read=-1 read_errno=11 count=0
 ```
 
-## `wait4` Misses `WCONTINUED` And Corrupts Final Status
-
-Priority: P1
-Impact: child continuation and exit status reporting is wrong
-Confidence: High
-
-Verification status: Proven in isolated worktree `/Users/x/dd/dd-wait-audit-20260710`.
-
-Evidence:
-
-- Wait options are passed to host `wait4`: `dd-jit-darwin/src/runtime/os/linux/syscall/proc.c:1813`.
-- Status is translated afterward: `dd-jit-darwin/src/runtime/os/linux/syscall/proc.c:1862`.
-
-Why this is bad:
-
-Linux `WCONTINUED` is `0x8`, while macOS uses a different bit. Passing Linux bits directly to host wait misses continued events and can corrupt the following final exit status.
-
-Observed proof:
-
-```text
-qemu: wait_continued stop=1 r2=95844 errno2=0 cont=1 r3=95844 errno3=0 exit=1 raw2=0xffff raw3=0x700
-dd:   wait_continued stop=1 r2=0 errno2=0 cont=0 r3=38816 errno3=0 exit=0 raw2=0x0 raw3=0x9300
-```
-
 ## `SA_NOCLDWAIT` Does Not Suppress Zombies
 
 Priority: P1
@@ -609,29 +585,6 @@ Linux: mprotect_unmapped enomem=1 success=0 errno=12
 dd:    enomem=0 success=1 errno=0
 ```
 
-## Raw `waitid(..., rusage)` Leaves Buffer Untouched
-
-Priority: P1
-Impact: raw waitid callers lose child CPU/RSS accounting
-Confidence: High
-
-Verification status: Proven in isolated worktree `/Users/x/dd/dd-audit-proc-lifecycle-20260710`.
-
-Evidence:
-
-- `waitid` handles pid/status but never reads or writes arg 5 `struct rusage *`: `dd-jit-darwin/src/runtime/os/linux/syscall/rare.c:642`.
-
-Why this is bad:
-
-Linux raw `waitid` fills a non-null rusage buffer. dd leaves the guest buffer unchanged, so CPU and RSS accounting can contain sentinel garbage.
-
-Observed proof:
-
-```text
-Linux/qemu: waitid_rusage cpu_pos=1 maxrss=192
-dd:         waitid_rusage cpu_pos=0 maxrss_reasonable=0 maxrss=-6510615555426900571
-```
-
 ## Default Core Status Contradicts `RLIMIT_CORE=0`
 
 Priority: P1
@@ -655,30 +608,6 @@ Observed proof:
 ```text
 Linux: wait4_default_core soft0=1 core=0; waitid_default_core code=2 dumped=0
 dd:    wait4_default_core soft0=1 core=1; waitid_default_core code=3 dumped=1
-```
-
-## `wait4` Writes Host Rusage Units Into Guest Layout
-
-Priority: P2
-Impact: child resource accounting reports byte-scale Darwin values
-Confidence: High
-
-Verification status: Proven in isolated worktree `/Users/x/dd/dd-audit-proc-lifecycle-20260710`.
-
-Evidence:
-
-- `wait4` passes the guest `struct rusage *` directly to host `wait4`: `dd-jit-darwin/src/runtime/os/linux/syscall/proc.c:1862`.
-- `getrusage` has an explicit Linux conversion path, showing the needed pattern: `dd-jit-darwin/src/runtime/os/linux/syscall/proc.c:1177`.
-
-Why this is bad:
-
-Linux `ru_maxrss` is in kilobytes. dd exposes Darwin byte-scale values in the Linux guest layout.
-
-Observed proof:
-
-```text
-Linux/qemu: wait4_rusage maxrss=192 / 8612
-dd:         wait4_rusage maxrss=4898816 / 4325376
 ```
 
 ## `kill(0, sig)` Only Signals The Caller
