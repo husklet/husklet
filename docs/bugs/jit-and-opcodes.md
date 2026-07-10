@@ -183,33 +183,6 @@ Verification:
 
 Generate more than `SMC_MAX` executable pages, execute each once, then patch and re-execute a late page.
 
-## x86 Signal Return Drops AVX Upper And x87 State
-
-Priority: P1
-Impact: signal handlers corrupt vector/FPU state
-Confidence: High
-
-Verification status: Proven in isolated worktree `/Users/x/dd/dd-worker-I-jit-runtime-20260710`.
-
-Evidence:
-
-- Signal frame setup saves only `c->v`: `dd-jit-darwin/src/runtime/translate/x86_64/sigframe.c:48`.
-- Signal return restores only `c->v`: `dd-jit-darwin/src/runtime/translate/x86_64/sigframe.c:86`.
-- AVX upper state and x87 control/status live elsewhere: `dd-jit-darwin/src/runtime/include/cpu_x86_64.h:40`, `dd-jit-darwin/src/runtime/include/cpu_x86_64.h:48`.
-
-Why this is bad:
-
-Signals should preserve the interrupted machine state. Losing AVX upper lanes or x87 state can corrupt code that uses vectors/FPU across signal handlers.
-
-Isolated proof:
-
-```sh
-timeout 5 qemu-x86_64 target-worker-I/poc/avx_sigreturn_upper
-timeout 10 mac bash -lc "exec '$PWD/target-worker-I/release/build/dd-jit-darwin-5b0dabfbe6f0af2e/out/ddjit-linux_x86_64' '$PWD/target-worker-I/poc/avx_sigreturn_upper'"
-```
-
-Observed: qemu `high=1 rc=0`; dd `high=0 hi0=00 hi15=00 rc=1`.
-
 ## Thread-Directed Signals Do Not Interrupt Blocking Reads
 
 Priority: P2

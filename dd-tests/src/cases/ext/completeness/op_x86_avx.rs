@@ -13,6 +13,9 @@ pub(super) fn op_x86_avx() -> Group {
             x("f16c", "completeness/x86_f16c.c"),
             // VEX vmovss/vmovsd reg-reg scalar merge: upper low-lane bits come from vvvv.
             x("vmov-scalar-merge", "completeness/x86_vmov_scalar_merge.c"),
+            // A signal must preserve the interrupted YMM UPPER lanes; the frame saved only xmm (low 128),
+            // so a handler that touched ymm zeroed the interrupted upper lanes on sigreturn.
+            x("avx-sigreturn", "completeness/x86_avx_sigreturn.c"),
         ],
     )
 }
