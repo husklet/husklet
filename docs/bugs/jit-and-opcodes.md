@@ -2,113 +2,6 @@
 
 This file covers instruction fidelity, opcode coverage, stale translation, and hidden completeness holes.
 
-## F16C `vcvtps2ph` Ignores Rounding Immediate
-
-Priority: P2
-Impact: wrong half-float results for non-default rounding modes
-Confidence: High
-
-Verification status: Proven in isolated worktree `/Users/x/dd/dd-verifier2-wt`.
-
-Evidence:
-
-- Conversion helper is documented as round-to-nearest-even only: `dd-jit-darwin/src/runtime/translate/x86_64/avx.c:202`.
-- `vcvtps2ph` emulation ignores `I.imm`: `dd-jit-darwin/src/runtime/translate/x86_64/avx.c:924`.
-
-Why this is bad:
-
-The x86 F16C immediate selects nearest, down, up, trunc, or MXCSR-controlled rounding. Ignoring it silently returns nearest-even results for all modes.
-
-Isolated proof:
-
-```sh
-x86_64-linux-gnu-gcc -O2 -static-pie -pthread -o target/verifier2-probes/f16c_roundimm dd-tests/guests/completeness/x86_f16c_roundimm.c -lm
-qemu-x86_64 target/verifier2-probes/f16c_roundimm
-DDJIT_DIR=/Users/x/dd/dd-verifier2-wt/target-verifier2/release/build/dd-jit-darwin-16122afd27b6bb64/out \
-  cargo run -q -p dd-tests -- --engine x86_64 f16c-roundimm
-```
-
-Observed dd result: all immediate modes returned `3c01 3c01 bc01 bc01`. The qemu oracle differs for down/trunc as expected.
-
-Coverage gap:
-
-`dd-tests/guests/completeness/x86_f16c.c` tests only `_mm_cvtps_ph(..., 0)`, so it cannot catch non-RNE modes.
-
-## SSE4.2 String Compare Leaves AF Stale
-
-Priority: P2
-Impact: wrong flags after `PCMP*STR*`
-Confidence: High
-
-Verification status: Proven in isolated worktree `/Users/x/dd/dd-verifier2-wt`.
-
-Evidence:
-
-- The implementation documents Intel flag behavior: `AF=PF=0`: `dd-jit-darwin/src/runtime/translate/x86_64/avx.c:1191`.
-- `sse42_flags` sets `nzcv` and `pf`, but does not set `af`: `dd-jit-darwin/src/runtime/translate/x86_64/avx.c:1194`.
-- PTEST explicitly clears `af`, showing the expected style exists elsewhere: `dd-jit-darwin/src/runtime/translate/x86_64/avx.c:1377`.
-
-Why this is bad:
-
-If AF was set by a previous instruction, `PCMP*STR*` should clear it. Leaving stale AF can break code that reads full flags with `pushfq`/`lahf` after SSE4.2 string compares.
-
-Isolated proof:
-
-```sh
-x86_64-linux-gnu-gcc -O2 -static-pie -pthread -o target/verifier2-probes/sse42_pcmp_flags dd-tests/guests/completeness/x86_sse42_pcmp_flags.c -lm
-qemu-x86_64 target/verifier2-probes/sse42_pcmp_flags
-DDJIT_DIR=/Users/x/dd/dd-verifier2-wt/target-verifier2/release/build/dd-jit-darwin-16122afd27b6bb64/out \
-  cargo run -q -p dd-tests -- --engine x86_64 sse42-pcmp-flags
-```
-
-Observed: dd leaves `AF=1` (`raw=ad3`), while the qemu oracle clears it (`raw=ac3`).
-
-Coverage gap:
-
-`dd-tests/guests/completeness/x86_sse42.c` checks the comparison index, not full flag state.
-
-## VEX `vcvt*ss/sd2si` Lacks Legacy Overflow Fixups
-
-Priority: P2
-Impact: likely wrong integer-indefinite results for NaN/overflow
-Confidence: Medium-high
-
-Evidence:
-
-- VEX scalar float-to-int conversion uses direct casts / rounding helper paths: `dd-jit-darwin/src/runtime/translate/x86_64/avx.c:436`.
-- Legacy SSE conversion has explicit integer-indefinite fixups: `dd-jit-darwin/src/runtime/translate/x86_64/translate.c:2855`.
-
-Why this is suspicious:
-
-NaN and positive overflow cases for x86 float-to-int conversion have specific integer-indefinite behavior. If the VEX path skips the fixups present in the legacy path, AVX code can return host-C-cast artifacts instead of x86 results.
-
-Verification:
-
-Add qemu/native oracle probes for `vcvttss2si`, `vcvttsd2si`, `vcvtss2si`, and `vcvtsd2si` with NaN and out-of-range positive/negative values.
-
-## `cmpxchg16b` Is Non-Atomic
-
-Priority: P1
-Impact: guest-thread race in 128-bit compare-exchange algorithms
-Confidence: Medium-high
-
-Evidence:
-
-- `cmpxchg16b` is implemented as two loads plus stores: `dd-jit-darwin/src/runtime/translate/x86_64/translate.c:3157`.
-- Narrower `cmpxchg` uses a CAS primitive: `dd-jit-darwin/src/runtime/translate/x86_64/translate.c:3526`.
-
-Why this is bad:
-
-`lock cmpxchg16b` is used by lock-free runtimes and atomics libraries. A non-atomic emulation can allow torn updates or incorrect success/failure races between guest threads.
-
-Attempted fix (does NOT work on this hardware — do not naively retry): lowering to LSE `CASPAL` (paired 128-bit compare-and-swap) is functionally correct (verified single-thread and light 2-thread), and the resulting tight self-loop was excluded from the tier-2 self-loop fold. BUT `CASPAL` under sustained multi-thread contention on this Apple Silicon LIVELOCKS — verified at 219% CPU with no forward progress: 4 threads hang immediately, 2 threads hang intermittently at higher iteration counts. A 64-bit LSE `CAS` (the narrower `cmpxchg` path) is IMMUNE at 4 threads x 30000, so this is a `CASP`-specific store-forwarding-replay pathology, not a general contention issue. `CASPAL` is therefore gate-unsafe here.
-
-Proper fix (deferred): a livelock-free double-width CAS — a hashed spinlock array keyed on the aligned address (acquire via a single-word CAS, which does NOT livelock, then a plain 128-bit load/compare/conditional-store, then release). This guarantees forward progress and atomicity. It is a larger emitter change (engine-side lock array + ~20-30 emitted instructions per `cmpxchg16b`), left for a dedicated change.
-
-Verification:
-
-Any multi-threaded stress test is currently FLAKY because of the `CASPAL` livelock above, so a deterministic regression must wait for the hashed-spinlock implementation. Then: a multi-threaded guest CAS-loop maintaining an invariant (e.g. two 64-bit halves kept equal) that a torn update would break, checked deterministically (not oracle-vs-qemu).
-
 ## Thread-Directed Signals Do Not Interrupt Blocking Reads
 
 Priority: P2
@@ -135,26 +28,6 @@ timeout 10 mac bash -lc "exec '$PWD/target-worker-I/release/build/dd-jit-darwin-
 ```
 
 Observed: qemu `read_ret=-1 errno=4 delayed=0 rc=0`; dd `read_ret=1 errno=0 delayed=1 rc=1`.
-
-## `LOCK BTS/BTR/BTC` Use Non-Atomic Bit-Op Path
-
-Priority: P2
-Impact: contended bitsets can lose updates
-Confidence: High
-
-Evidence:
-
-- LOCK-aware ALU operations have an atomic LSE path: `dd-jit-darwin/src/runtime/translate/x86_64/translate.c:768`.
-- Bit ops are handled by normal load/modify/store code: `dd-jit-darwin/src/runtime/translate/x86_64/translate.c:3464`.
-- Modified memory writes use `rm_store` without checking `I.lock`: `dd-jit-darwin/src/runtime/translate/x86_64/translate.c:3516`.
-
-Why this is bad:
-
-`lock bts/btr/btc` are used for concurrent bitsets and synchronization. A non-atomic read-modify-write can lose updates across guest threads.
-
-Verification:
-
-Add a multi-threaded guest stress test that contends on the same bitset word with `lock bts`/`lock btr`.
 
 ## MXCSR Sticky Exception Flags Are Not Modeled
 
@@ -246,62 +119,6 @@ Why this is bad:
 Verification:
 
 Extend a probe like `dd-tests/guests/completeness/x86_fxsave_mxcsr.c` to load distinct ST0-7 values, fxsave, clobber the x87 stack, fxrstor, and compare the restored ST values against native/qemu.
-
-## SSE2 `CVTPD2DQ` / `CVTTPD2DQ` Return Wrong Integer-Indefinite Values
-
-Priority: P2
-Impact: NaN and overflow conversions produce wrong integer results
-Confidence: High
-
-Verification status: Proven in isolated worktree `/Users/x/dd/dd-audit-BM2-copy`.
-
-Evidence:
-
-- Packed double-to-int conversion is handled in the SSE path: `dd-jit-darwin/src/runtime/translate/x86_64/translate.c:2757`.
-- It emits host `FCVTZS` / `FCVTNS`: `dd-jit-darwin/src/runtime/translate/x86_64/translate.c:2766`.
-- It narrows with `SQXTN` without x86 integer-indefinite fixup: `dd-jit-darwin/src/runtime/translate/x86_64/translate.c:2769`.
-
-Why this is bad:
-
-x86 returns integer indefinite `0x80000000` for NaN and overflow cases. dd instead returns ARM saturation or zero for some lanes, causing silent numeric corruption.
-
-Isolated proof:
-
-```sh
-x86_64-linux-gnu-gcc -O2 -static-pie -pthread -msse2 -o target/bm2-probes/x86_cvtpd_indef dd-tests/guests/completeness/x86_cvtpd_indef.c -lm
-qemu-x86_64 target/bm2-probes/x86_cvtpd_indef
-cargo run -q -p dd-tests --target-dir target-bm2-audit -- -e x86_64 cvtpd-indef
-```
-
-qemu returned `80000000` for positive overflow and NaN; dd returned values such as `7fffffff` and `00000000` for those lanes.
-
-## SSE `UCOMISS` / `COMISD` Leave AF Stale
-
-Priority: P2
-Impact: flag consumers can observe stale auxiliary flag state
-Confidence: High
-
-Verification status: Proven in isolated worktree `/Users/x/dd/dd-audit-BM2-copy`.
-
-Evidence:
-
-- The compare path calls `e_nzcv_save_fcmp`: `dd-jit-darwin/src/runtime/translate/x86_64/translate.c:3031`.
-- The helper updates NZCV and parity only: `dd-jit-darwin/src/runtime/translate/x86_64/emit.c:269`.
-- It stores parity but never clears AF: `dd-jit-darwin/src/runtime/translate/x86_64/emit.c:284`.
-
-Why this is bad:
-
-x86 SSE compare instructions clear AF. dd leaves AF from prior arithmetic, so code that saves or tests full flags can see impossible flag combinations.
-
-Isolated proof:
-
-```sh
-x86_64-linux-gnu-gcc -O2 -static-pie -pthread -o target/bm2-probes/x86_comi_af_flags dd-tests/guests/completeness/x86_comi_af_flags.c -lm
-qemu-x86_64 target/bm2-probes/x86_comi_af_flags
-cargo run -q -p dd-tests --target-dir target-bm2-audit -- -e x86_64 comi-af-flags
-```
-
-qemu observed `comi-af ucomiss=001 comisd=040 fucomi=010`; dd observed `comi-af ucomiss=011 comisd=050 fucomi=010`.
 
 ## 4K Guest `munmap` Subpage Remains Readable
 
