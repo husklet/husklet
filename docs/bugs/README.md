@@ -40,11 +40,7 @@ This directory is a working inventory of suspicious behavior, bad architecture, 
 | P1 | gpu/corruption | GPU executor acks success after replay errors/skipped writes | Medium-high | [gpu-display-sentry.md](gpu-display-sentry.md#gpu-executor-acks-success-after-replay-errors-or-skipped-writes) |
 | P1 | gpu/corruption | `DrawIndexed.base_vertex` is ignored by Metal replay | Medium-high | [gpu-display-sentry.md](gpu-display-sentry.md#drawindexedbase_vertex-is-ignored-by-metal-replay) |
 | P1 | gpu/corruption | Metal replay silently no-ops supported IR commands | Medium-high | [gpu-display-sentry.md](gpu-display-sentry.md#metal-replay-silently-no-ops-supported-ir-commands) |
-| P1 | build/contents | `COPY .` includes `.context.tar` in images | High | [archive-fs-compat.md](archive-fs-compat.md#build-context-copy-copies-contexttar) |
-| P1 | build/contents | Dockerfile symlink is followed outside context | High | [archive-fs-compat.md](archive-fs-compat.md#dockerfile-symlink-is-followed-outside-context) |
 | P1 | cp/contents | `docker cp` put follows existing destination symlink | High | [archive-fs-compat.md](archive-fs-compat.md#docker-cp-put-follows-existing-destination-symlink) |
-| P1 | build/contents | `COPY` follows symlinked destination directory | High | [archive-fs-compat.md](archive-fs-compat.md#build-copy-follows-symlinked-destination-directory) |
-| P1 | build/compat | Dockerfile `ADD` copies local tar instead of extracting | High | [archive-fs-compat.md](archive-fs-compat.md#dockerfile-add-copies-local-tar-instead-of-extracting) |
 | P1 | image/compat | Docker save/load format is not Docker-compatible | High | [archive-fs-compat.md](archive-fs-compat.md#docker-saveload-archive-format-is-not-docker-compatible) |
 | P1 | cp/contents | `docker cp` GET drops lower overlay entries | High | [archive-fs-compat.md](archive-fs-compat.md#docker-cp-get-drops-lower-entries-from-overlay-directories) |
 | P1 | syscall/time | periodic `timerfd` ignores earlier first deadline | High | [syscall-compat.md](syscall-compat.md#periodic-timerfd-ignores-earlier-first-deadline) |
