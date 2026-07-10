@@ -6,15 +6,24 @@
 //! **clear** into a color target, and buffer↔texture / buffer↔buffer copies. Draw/Dispatch are recorded
 //! but not rasterized/run (that needs a SPIR-V interpreter — out of scope). Enough to prove the whole
 //! IR→wire→replay→execute→readback chain works headless on this Linux host.
+//!
+//! Because it doubles as the headless *oracle* that other backends are checked against, it validates
+//! the command stream the way a real driver would: it rejects malformed IR (bad ids, out-of-bounds or
+//! wrapping ranges, missing usage bits, contradictory descriptors, stale/reused resources, illegal
+//! pass sequencing) with a typed [`GpuError`] instead of panicking or silently doing the wrong thing.
+//! `submit` validates the *entire* command buffer before mutating anything, so a stream that fails
+//! validation leaves all resources untouched (no partial side effects).
 
 use crate::backend::{Capabilities, GpuBackend, PresentKind, PresentToken};
 use crate::id::*;
 use crate::ir::*;
 use crate::ptx::{self, KernelDescriptor, KernelProgram};
 use crate::{GpuError, Result};
+use std::collections::HashMap;
 
 struct Buffer {
     data: Vec<u8>,
+    usage: u32,
 }
 
 struct Texture {
@@ -33,10 +42,34 @@ enum ShaderModule {
     Spirv(#[allow(dead_code)] Vec<u32>),
 }
 
-/// A created pipeline. Compute pipelines remember their kernel shader so a `Dispatch` can run it.
+/// A created pipeline. Compute pipelines remember their kernel shader so a `Dispatch` can run it;
+/// render pipelines remember the state a draw must be validated against (color-target formats and the
+/// vertex buffer layouts).
 enum Pipeline {
-    Render,
-    Compute { shader: u32 },
+    Render {
+        color_formats: Vec<TextureFormat>,
+        vertex_layouts: Vec<VertexLayout>,
+    },
+    Compute {
+        shader: u32,
+    },
+}
+
+/// A generation stamp captured for one resource a bind group references, so a later use can detect
+/// that the id was destroyed and (possibly) reused for a different resource since binding.
+#[derive(Clone, Copy)]
+struct GenRef {
+    id: u32,
+    gen: u32,
+}
+
+/// A created bind group: the descriptor plus the generation of every resource it referenced at
+/// creation time (used to reject stale references after destroy/reuse).
+struct BindGroupState {
+    desc: BindGroupDesc,
+    buffers: Vec<GenRef>,
+    textures: Vec<GenRef>,
+    samplers: Vec<GenRef>,
 }
 
 pub struct SoftwareBackend {
@@ -44,7 +77,7 @@ pub struct SoftwareBackend {
     textures: ResourceTable<Texture>,
     shaders: ResourceTable<ShaderModule>,
     pipelines: ResourceTable<Pipeline>,
-    bind_groups: ResourceTable<BindGroupDesc>,
+    bind_groups: ResourceTable<BindGroupState>,
     surfaces: ResourceTable<SurfaceDesc>,
     fences: ResourceTable<u64>,
     samplers: ResourceTable<()>,
@@ -92,14 +125,16 @@ impl SoftwareBackend {
         };
         let shader_id = match self.pipelines.get(pid)? {
             Pipeline::Compute { shader } => *shader,
-            Pipeline::Render => return Err(GpuError::Unsupported("dispatch on a render pipeline")),
+            Pipeline::Render { .. } => {
+                return Err(GpuError::Unsupported("dispatch on a render pipeline"))
+            }
         };
         // Clone the program out so the shader-table borrow is released before we touch buffers.
         let prog = match self.shaders.get(shader_id)? {
             ShaderModule::Kernel(p) => (**p).clone(),
             ShaderModule::Spirv(_) => return Ok(()), // software oracle cannot run SPIR-V
         };
-        let bg = self.bind_groups.get(bgid)?.clone();
+        let bg = self.bind_groups.get(bgid)?.desc.clone();
         self.run_kernel(&prog, &bg, grid)
     }
 
@@ -111,15 +146,7 @@ impl SoftwareBackend {
         for e in &bg.entries {
             if let BindResource::Buffer { id, offset, size } = e.resource {
                 let buf = self.buffers.get(id)?;
-                let off = offset as usize;
-                let len = if size == 0 {
-                    buf.data.len().saturating_sub(off)
-                } else {
-                    size as usize
-                };
-                if off + len > buf.data.len() {
-                    return Err(GpuError::OutOfBounds);
-                }
+                let (off, len) = buffer_slice_bounds(buf.data.len(), offset, size)?;
                 let bytes = buf.data[off..off + len].to_vec();
                 if e.binding == 0 {
                     param_blob = bytes;
@@ -137,7 +164,11 @@ impl SoftwareBackend {
             if let Some((id, offset)) = wb {
                 let buf = self.buffers.get_mut(*id)?;
                 let off = *offset as usize;
-                buf.data[off..off + regions[r].len()].copy_from_slice(&regions[r]);
+                let end = off
+                    .checked_add(regions[r].len())
+                    .filter(|e| *e <= buf.data.len())
+                    .ok_or(GpuError::OutOfBounds)?;
+                buf.data[off..end].copy_from_slice(&regions[r]);
             }
         }
         Ok(())
@@ -180,6 +211,362 @@ impl SoftwareBackend {
         }
         Ok(())
     }
+
+    // --- validation helpers -----------------------------------------------------------------------
+
+    fn buffer_with_usage(&self, id: u32, usage: u32, what: &'static str) -> Result<&Buffer> {
+        let b = self.buffers.get(id)?;
+        if b.usage & usage == 0 {
+            return Err(GpuError::Invalid(what));
+        }
+        Ok(b)
+    }
+
+    fn texture_with_usage(&self, id: u32, usage: u32, what: &'static str) -> Result<&Texture> {
+        let t = self.textures.get(id)?;
+        if t.desc.usage & usage == 0 {
+            return Err(GpuError::Invalid(what));
+        }
+        Ok(t)
+    }
+
+    /// Re-check that every resource a bind group referenced is still live *and* still the same
+    /// allocation it was bound against (generation match), rejecting a stale reference into a reused
+    /// id.
+    fn check_bind_group_live(&self, bgid: u32) -> Result<&BindGroupState> {
+        let bg = self.bind_groups.get(bgid)?;
+        for r in &bg.buffers {
+            if self.buffers.generation(r.id) != Some(r.gen) {
+                return Err(GpuError::UnknownId { kind: BufferId::KIND, id: r.id });
+            }
+        }
+        for r in &bg.textures {
+            if self.textures.generation(r.id) != Some(r.gen) {
+                return Err(GpuError::UnknownId { kind: TextureId::KIND, id: r.id });
+            }
+        }
+        for r in &bg.samplers {
+            if self.samplers.generation(r.id) != Some(r.gen) {
+                return Err(GpuError::UnknownId { kind: SamplerId::KIND, id: r.id });
+            }
+        }
+        Ok(bg)
+    }
+
+    /// Validate the whole command buffer against a simulated encoder state without mutating any
+    /// resource. Returns `Ok` only if every op in the stream is legal, so the executor that follows
+    /// cannot fail partway and leave partial side effects.
+    fn validate_cb(&self, cb: &CommandBuffer) -> Result<()> {
+        let mut st = EncoderState::default();
+        for op in &cb.encoder {
+            self.validate_op(op, &mut st)?;
+        }
+        if st.in_render_pass || st.in_compute_pass {
+            return Err(GpuError::Invalid("command buffer ends inside an open pass"));
+        }
+        Ok(())
+    }
+
+    fn validate_op(&self, op: &Enc, st: &mut EncoderState) -> Result<()> {
+        match op {
+            Enc::BeginRenderPass { color, depth } => {
+                if st.in_render_pass || st.in_compute_pass {
+                    return Err(GpuError::Invalid("nested render pass"));
+                }
+                let mut formats = Vec::with_capacity(color.len());
+                for c in color {
+                    let t = self.texture_with_usage(
+                        c.texture,
+                        texture_usage::RENDER_TARGET,
+                        "color attachment lacks RENDER_TARGET usage",
+                    )?;
+                    if c.load == LoadOp::Clear {
+                        Self::clear_texel(t.desc.format, c.clear)?; // reject unclearable formats up front
+                    }
+                    formats.push(t.desc.format);
+                }
+                if let Some(dp) = depth {
+                    // A depth attachment must name a real texture created with render-target usage;
+                    // the software oracle does not fabricate an internal depth buffer.
+                    self.texture_with_usage(
+                        dp.texture,
+                        texture_usage::RENDER_TARGET,
+                        "depth attachment lacks RENDER_TARGET usage",
+                    )?;
+                }
+                st.in_render_pass = true;
+                st.color_targets = color.iter().map(|c| c.texture).collect();
+                st.color_formats = formats;
+            }
+            Enc::EndRenderPass => {
+                if !st.in_render_pass {
+                    return Err(GpuError::Invalid("EndRenderPass outside a render pass"));
+                }
+                st.end_pass();
+            }
+            Enc::BeginComputePass => {
+                if st.in_render_pass || st.in_compute_pass {
+                    return Err(GpuError::Invalid("nested compute pass"));
+                }
+                st.in_compute_pass = true;
+            }
+            Enc::EndComputePass => {
+                if !st.in_compute_pass {
+                    return Err(GpuError::Invalid("EndComputePass outside a compute pass"));
+                }
+                st.end_pass();
+            }
+            Enc::SetPipeline(p) => {
+                self.pipelines.get(*p)?;
+                st.pipeline = Some(*p);
+            }
+            Enc::SetBindGroup { group, .. } => {
+                self.bind_groups.get(*group)?;
+                st.bind_group = Some(*group);
+            }
+            Enc::SetVertexBuffer { slot, buffer, offset } => {
+                self.buffers.get(*buffer)?;
+                st.vertex_buffers.insert(*slot, (*buffer, *offset));
+            }
+            Enc::SetIndexBuffer { buffer, offset, format } => {
+                self.buffers.get(*buffer)?;
+                st.index_buffer = Some((*buffer, *offset, *format));
+            }
+            Enc::SetViewport { min_depth, max_depth, .. } => {
+                if !(0.0..=1.0).contains(min_depth)
+                    || !(0.0..=1.0).contains(max_depth)
+                    || min_depth > max_depth
+                {
+                    return Err(GpuError::Invalid("viewport depth range out of [0,1] or inverted"));
+                }
+            }
+            Enc::SetScissor { .. } => {}
+            Enc::ClearRect { texture, .. } => {
+                self.textures.get(*texture)?;
+            }
+            Enc::Draw { vertex_count, instance_count, first_vertex, first_instance } => {
+                self.validate_draw(st, |layout, slot| {
+                    let (buffer, offset) = st
+                        .vertex_buffers
+                        .get(&slot)
+                        .copied()
+                        .ok_or(GpuError::Invalid("draw with no vertex buffer bound for a layout slot"))?;
+                    let count = if layout.step_mode == 1 {
+                        first_instance.checked_add(*instance_count)
+                    } else {
+                        first_vertex.checked_add(*vertex_count)
+                    };
+                    self.check_vertex_range(buffer, offset, layout.stride, count)
+                })?;
+            }
+            Enc::DrawIndexed { index_count, first_index, .. } => {
+                self.validate_draw(st, |layout, slot| {
+                    // Indexed vertex fetch depends on index values we can't read here, so only require
+                    // that a vertex buffer is bound for each layout slot.
+                    st.vertex_buffers
+                        .get(&slot)
+                        .map(|_| ())
+                        .ok_or(GpuError::Invalid("indexed draw with no vertex buffer bound for a layout slot"))?;
+                    let _ = layout;
+                    Ok(())
+                })?;
+                let (buffer, offset, format) = st
+                    .index_buffer
+                    .ok_or(GpuError::Invalid("indexed draw with no index buffer bound"))?;
+                let isz = match format {
+                    IndexFormat::U16 => 2usize,
+                    IndexFormat::U32 => 4usize,
+                };
+                let last = first_index
+                    .checked_add(*index_count)
+                    .ok_or(GpuError::OutOfBounds)?;
+                let need = (last as usize).checked_mul(isz).ok_or(GpuError::OutOfBounds)?;
+                let b = self.buffers.get(buffer)?;
+                let end = (offset as usize).checked_add(need).ok_or(GpuError::OutOfBounds)?;
+                if end > b.data.len() {
+                    return Err(GpuError::OutOfBounds);
+                }
+            }
+            Enc::Dispatch { .. } => {
+                if !st.in_compute_pass {
+                    return Err(GpuError::Invalid("Dispatch outside a compute pass"));
+                }
+                match st.pipeline {
+                    Some(p) => match self.pipelines.get(p)? {
+                        Pipeline::Compute { .. } => {}
+                        Pipeline::Render { .. } => {
+                            return Err(GpuError::Unsupported("dispatch on a render pipeline"))
+                        }
+                    },
+                    None => return Err(GpuError::Invalid("Dispatch with no pipeline bound")),
+                }
+                if let Some(bg) = st.bind_group {
+                    self.check_bind_group_live(bg)?;
+                }
+            }
+            Enc::CopyBufferToBuffer { src, src_offset, dst, dst_offset, size } => {
+                let s = self.buffer_with_usage(*src, buffer_usage::COPY_SRC, "copy src lacks COPY_SRC")?;
+                check_range(s.data.len(), *src_offset, *size)?;
+                let d = self.buffer_with_usage(*dst, buffer_usage::COPY_DST, "copy dst lacks COPY_DST")?;
+                check_range(d.data.len(), *dst_offset, *size)?;
+            }
+            Enc::CopyBufferToTexture { src, src_offset, bytes_per_row, dst, mip, width, height } => {
+                if *mip != 0 {
+                    return Err(GpuError::Unsupported("software: non-zero mip copy"));
+                }
+                let s = self.buffer_with_usage(*src, buffer_usage::COPY_SRC, "copy src lacks COPY_SRC")?;
+                let t = self.texture_with_usage(*dst, texture_usage::COPY_DST, "copy dst lacks COPY_DST")?;
+                let (_, _, src_span) = texture_copy_layout(t, *width, *height, *bytes_per_row)?;
+                check_len(s.data.len(), *src_offset, src_span)?;
+            }
+            Enc::CopyTextureToBuffer { src, mip, width, height, dst, dst_offset, bytes_per_row } => {
+                if *mip != 0 {
+                    return Err(GpuError::Unsupported("software: non-zero mip copy"));
+                }
+                let t = self.texture_with_usage(*src, texture_usage::COPY_SRC, "copy src lacks COPY_SRC")?;
+                let bpt = Self::texel_bytes(t.desc.format)?;
+                if *dst_offset % bpt as u64 != 0 {
+                    return Err(GpuError::Invalid("texture readback offset not texel-aligned"));
+                }
+                let (_, _, dst_span) = texture_copy_layout(t, *width, *height, *bytes_per_row)?;
+                let d = self.buffer_with_usage(*dst, buffer_usage::COPY_DST, "copy dst lacks COPY_DST")?;
+                check_len(d.data.len(), *dst_offset, dst_span)?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Shared draw validation: must be inside a render pass with a bound render pipeline whose color
+    /// formats match the current attachments, and (via `per_layout`) each vertex layout satisfied.
+    /// Also rejects the read/write hazard of sampling a texture that is a current color attachment.
+    fn validate_draw<F>(&self, st: &EncoderState, mut per_layout: F) -> Result<()>
+    where
+        F: FnMut(&VertexLayout, u32) -> Result<()>,
+    {
+        if !st.in_render_pass {
+            return Err(GpuError::Invalid("draw outside a render pass"));
+        }
+        let pid = st.pipeline.ok_or(GpuError::Invalid("draw with no pipeline bound"))?;
+        let (color_formats, vertex_layouts) = match self.pipelines.get(pid)? {
+            Pipeline::Render { color_formats, vertex_layouts } => (color_formats, vertex_layouts),
+            Pipeline::Compute { .. } => return Err(GpuError::Unsupported("draw on a compute pipeline")),
+        };
+        // Pipeline color-target formats must be compatible with the render pass attachments.
+        if color_formats.len() != st.color_formats.len()
+            || color_formats.iter().zip(&st.color_formats).any(|(a, b)| a != b)
+        {
+            return Err(GpuError::Invalid("pipeline color format mismatches render attachment"));
+        }
+        for (slot, layout) in vertex_layouts.iter().enumerate() {
+            per_layout(layout, slot as u32)?;
+        }
+        if let Some(bg) = st.bind_group {
+            let bg = self.check_bind_group_live(bg)?;
+            for r in &bg.textures {
+                if st.color_targets.contains(&r.id) {
+                    return Err(GpuError::Invalid("texture sampled while bound as a color attachment"));
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn check_vertex_range(&self, buffer: u32, offset: u64, stride: u32, count: Option<u32>) -> Result<()> {
+        let b = self.buffers.get(buffer)?;
+        let count = count.ok_or(GpuError::OutOfBounds)?;
+        let need = (count as u64)
+            .checked_mul(stride as u64)
+            .ok_or(GpuError::OutOfBounds)?;
+        let end = offset.checked_add(need).ok_or(GpuError::OutOfBounds)?;
+        if end > b.data.len() as u64 {
+            return Err(GpuError::OutOfBounds);
+        }
+        Ok(())
+    }
+}
+
+/// Simulated encoder state used by the validation pass.
+#[derive(Default)]
+struct EncoderState {
+    in_render_pass: bool,
+    in_compute_pass: bool,
+    pipeline: Option<u32>,
+    bind_group: Option<u32>,
+    vertex_buffers: HashMap<u32, (u32, u64)>,
+    index_buffer: Option<(u32, u64, IndexFormat)>,
+    color_targets: Vec<u32>,
+    color_formats: Vec<TextureFormat>,
+}
+
+impl EncoderState {
+    fn end_pass(&mut self) {
+        self.in_render_pass = false;
+        self.in_compute_pass = false;
+        self.color_targets.clear();
+        self.color_formats.clear();
+    }
+}
+
+/// Resolve a bind-group buffer slice's `(offset, len)`, treating `size == 0` as "to the end of the
+/// buffer" and rejecting any offset/size that would run past the buffer (with wrapping-safe math).
+fn buffer_slice_bounds(buf_len: usize, offset: u64, size: u64) -> Result<(usize, usize)> {
+    if offset > buf_len as u64 {
+        return Err(GpuError::OutOfBounds);
+    }
+    let off = offset as usize;
+    let len = if size == 0 {
+        buf_len - off
+    } else {
+        let end = offset.checked_add(size).ok_or(GpuError::OutOfBounds)?;
+        if end > buf_len as u64 {
+            return Err(GpuError::OutOfBounds);
+        }
+        size as usize
+    };
+    Ok((off, len))
+}
+
+/// Bounds-check `[offset, offset+size)` against `len` with wrapping-safe arithmetic.
+fn check_range(len: usize, offset: u64, size: u64) -> Result<()> {
+    let end = offset.checked_add(size).ok_or(GpuError::OutOfBounds)?;
+    if end > len as u64 {
+        return Err(GpuError::OutOfBounds);
+    }
+    Ok(())
+}
+
+/// Bounds-check a `usize` span starting at `offset` against `len`.
+fn check_len(len: usize, offset: u64, span: usize) -> Result<()> {
+    check_range(len, offset, span as u64)
+}
+
+/// Compute `(row_bytes, tight_bytes, buffer_span)` for a width×height texture copy, honoring the row
+/// stride and validating the extent against the texture dimensions. `bytes_per_row == 0` means tight.
+fn texture_copy_layout(t: &Texture, width: u32, height: u32, bytes_per_row: u32) -> Result<(usize, usize, usize)> {
+    if width > t.desc.width || height > t.desc.height {
+        return Err(GpuError::OutOfBounds);
+    }
+    let bpt = t
+        .desc
+        .format
+        .bytes_per_texel()
+        .ok_or(GpuError::Unsupported("software: non-color texture format"))?;
+    let row_bytes = bpt.checked_mul(width as usize).ok_or(GpuError::OutOfBounds)?;
+    let rows = height as usize;
+    let stride = if bytes_per_row == 0 { row_bytes } else { bytes_per_row as usize };
+    if stride < row_bytes {
+        return Err(GpuError::OutOfBounds);
+    }
+    let tight = row_bytes.checked_mul(rows).ok_or(GpuError::OutOfBounds)?;
+    let span = if rows == 0 {
+        0
+    } else {
+        (rows - 1)
+            .checked_mul(stride)
+            .and_then(|v| v.checked_add(row_bytes))
+            .ok_or(GpuError::OutOfBounds)?
+    };
+    Ok((row_bytes, tight, span))
 }
 
 impl GpuBackend for SoftwareBackend {
@@ -195,7 +582,7 @@ impl GpuBackend for SoftwareBackend {
     }
 
     fn create_buffer(&mut self, id: BufferId, desc: &BufferDesc) -> Result<()> {
-        self.buffers.insert(id.0, Buffer { data: vec![0u8; desc.size as usize] })
+        self.buffers.insert(id.0, Buffer { data: vec![0u8; desc.size as usize], usage: desc.usage })
     }
     fn destroy_buffer(&mut self, id: BufferId) -> Result<()> {
         self.buffers.remove(id.0).map(|_| ())
@@ -203,29 +590,45 @@ impl GpuBackend for SoftwareBackend {
     fn write_buffer(&mut self, id: BufferId, offset: u64, data: &[u8]) -> Result<()> {
         let b = self.buffers.get_mut(id.0)?;
         let off = offset as usize;
-        if off + data.len() > b.data.len() {
-            return Err(GpuError::OutOfBounds);
-        }
-        b.data[off..off + data.len()].copy_from_slice(data);
+        let end = offset
+            .checked_add(data.len() as u64)
+            .filter(|e| *e <= b.data.len() as u64)
+            .ok_or(GpuError::OutOfBounds)? as usize;
+        b.data[off..end].copy_from_slice(data);
         Ok(())
     }
     fn read_buffer(&mut self, id: BufferId, offset: u64, out: &mut [u8]) -> Result<()> {
         let b = self.buffers.get(id.0)?;
         let off = offset as usize;
-        if off + out.len() > b.data.len() {
-            return Err(GpuError::OutOfBounds);
-        }
-        out.copy_from_slice(&b.data[off..off + out.len()]);
+        let end = offset
+            .checked_add(out.len() as u64)
+            .filter(|e| *e <= b.data.len() as u64)
+            .ok_or(GpuError::OutOfBounds)? as usize;
+        out.copy_from_slice(&b.data[off..end]);
         Ok(())
     }
 
     fn create_texture(&mut self, id: TextureId, desc: &TextureDesc) -> Result<()> {
+        // Reject descriptors whose shape the software oracle cannot faithfully materialize, rather
+        // than silently flattening/downleveling them (which would diverge from a real backend).
+        if desc.width == 0 || desc.height == 0 {
+            return Err(GpuError::Invalid("zero-sized texture"));
+        }
+        if desc.dim != TextureDim::D2 || desc.depth != 1 {
+            return Err(GpuError::Unsupported("software: only 2D single-layer textures"));
+        }
+        if desc.mip_levels == 0 {
+            return Err(GpuError::Invalid("texture mip_levels must be >= 1"));
+        }
+        if desc.sample_count != 1 {
+            return Err(GpuError::Unsupported("software: multisample textures"));
+        }
         let bpt = Self::texel_bytes(desc.format)?;
-        let n = bpt * desc.width as usize * desc.height as usize;
-        self.textures.insert(
-            id.0,
-            Texture { desc: desc.clone(), pixels: vec![0u8; n] },
-        )
+        let n = bpt
+            .checked_mul(desc.width as usize)
+            .and_then(|v| v.checked_mul(desc.height as usize))
+            .ok_or(GpuError::OutOfBounds)?;
+        self.textures.insert(id.0, Texture { desc: desc.clone(), pixels: vec![0u8; n] })
     }
     fn destroy_texture(&mut self, id: TextureId) -> Result<()> {
         self.textures.remove(id.0).map(|_| ())
@@ -247,6 +650,11 @@ impl GpuBackend for SoftwareBackend {
     }
 
     fn create_shader(&mut self, id: ShaderId, spirv: &[u32]) -> Result<()> {
+        // An empty shader module is never valid — reject it rather than record an unusable module
+        // that would later fall through to a builtin or a no-op draw.
+        if spirv.is_empty() {
+            return Err(GpuError::Invalid("empty shader module"));
+        }
         // A dd-GPU kernel descriptor (forwarded PTX + launch config) is compiled to an executable
         // kernel program here; anything else is treated as opaque SPIR-V (recorded, not run).
         let module = match KernelDescriptor::from_words(spirv) {
@@ -268,7 +676,21 @@ impl GpuBackend for SoftwareBackend {
         if let Some(f) = &desc.fragment {
             self.shaders.get(f.module)?;
         }
-        self.pipelines.insert(id.0, Pipeline::Render)
+        // Reject impossible vertex layouts: an attribute must start within the vertex stride.
+        for vb in &desc.vertex_buffers {
+            for a in &vb.attrs {
+                if vb.stride == 0 || a.offset >= vb.stride {
+                    return Err(GpuError::Invalid("vertex attribute offset outside stride"));
+                }
+            }
+        }
+        self.pipelines.insert(
+            id.0,
+            Pipeline::Render {
+                color_formats: desc.color_targets.iter().map(|c| c.format).collect(),
+                vertex_layouts: desc.vertex_buffers.clone(),
+            },
+        )
     }
     fn create_compute_pipeline(&mut self, id: PipelineId, desc: &ComputePipelineDesc) -> Result<()> {
         self.shaders.get(desc.compute.module)?;
@@ -279,20 +701,29 @@ impl GpuBackend for SoftwareBackend {
     }
 
     fn create_bind_group(&mut self, id: BindGroupId, desc: &BindGroupDesc) -> Result<()> {
+        let mut buffers = Vec::new();
+        let mut textures = Vec::new();
+        let mut samplers = Vec::new();
         for e in &desc.entries {
             match &e.resource {
-                BindResource::Buffer { id, .. } => {
-                    self.buffers.get(*id)?;
+                BindResource::Buffer { id, offset, size } => {
+                    let b = self.buffers.get(*id)?;
+                    // Reject a slice that runs past the buffer end (wrapping-safe).
+                    buffer_slice_bounds(b.data.len(), *offset, *size)?;
+                    buffers.push(GenRef { id: *id, gen: self.buffers.generation(*id).unwrap() });
                 }
                 BindResource::Texture { id } => {
-                    self.textures.get(*id)?;
+                    // A texture bound as a (sampled) resource must actually be usable as one.
+                    self.texture_with_usage(*id, texture_usage::SAMPLED, "texture bound without SAMPLED usage")?;
+                    textures.push(GenRef { id: *id, gen: self.textures.generation(*id).unwrap() });
                 }
                 BindResource::Sampler { id } => {
                     self.samplers.get(*id)?;
+                    samplers.push(GenRef { id: *id, gen: self.samplers.generation(*id).unwrap() });
                 }
             }
         }
-        self.bind_groups.insert(id.0, desc.clone())
+        self.bind_groups.insert(id.0, BindGroupState { desc: desc.clone(), buffers, textures, samplers })
     }
     fn destroy_bind_group(&mut self, id: BindGroupId) -> Result<()> {
         self.bind_groups.remove(id.0).map(|_| ())
@@ -312,21 +743,26 @@ impl GpuBackend for SoftwareBackend {
         self.fences.remove(id.0).map(|_| ())
     }
     fn wait_fence(&mut self, id: FenceId, value: u64) -> Result<()> {
-        // Synchronous executor: work already completed at submit; just record the reached value.
-        let v = self.fences.get_mut(id.0)?;
-        *v = (*v).max(value);
+        // A wait must *observe* completion, not fabricate it. The executor runs submits synchronously,
+        // so a fence only reaches `value` if a submit signalled it there; otherwise the wait is on an
+        // unreached value and is a validation error, not a silent success.
+        let v = *self.fences.get(id.0)?;
+        if v < value {
+            return Err(GpuError::Invalid("wait on a fence value that was never signalled"));
+        }
         Ok(())
     }
 
     fn submit(&mut self, cb: &CommandBuffer) -> Result<()> {
-        // Walk the encoder; execute clears + copies + compute dispatches, record draws.
-        let mut cur_targets: Vec<ColorAttachment> = Vec::new();
+        // Validate the entire stream first so a failure leaves all resources untouched (no partial
+        // side effects), then execute the clears/copies/dispatches.
+        self.validate_cb(cb)?;
+
         let mut cur_pipeline: Option<u32> = None;
         let mut cur_bind_group: Option<u32> = None;
         for op in &cb.encoder {
             match op {
                 Enc::BeginRenderPass { color, .. } => {
-                    // execute Clear load ops immediately
                     for c in color {
                         if c.load == LoadOp::Clear {
                             let (fmt, w, h) = {
@@ -341,26 +777,15 @@ impl GpuBackend for SoftwareBackend {
                             for _ in 0..n {
                                 t.pixels.extend_from_slice(&texel);
                             }
-                        } else {
-                            self.textures.get(c.texture)?; // validate
                         }
                     }
-                    cur_targets = color.clone();
                 }
-                Enc::EndRenderPass => cur_targets.clear(),
                 Enc::ClearRect { texture, x, y, w, h, color } => {
                     self.clear_rect(*texture, *x, *y, *w, *h, *color)?;
                 }
-                Enc::SetPipeline(p) => {
-                    self.pipelines.get(*p)?;
-                    cur_pipeline = Some(*p);
-                }
-                Enc::SetBindGroup { group, .. } => {
-                    self.bind_groups.get(*group)?;
-                    cur_bind_group = Some(*group);
-                }
+                Enc::SetPipeline(p) => cur_pipeline = Some(*p),
+                Enc::SetBindGroup { group, .. } => cur_bind_group = Some(*group),
                 Enc::Draw { .. } | Enc::DrawIndexed { .. } => {
-                    let _ = &cur_targets;
                     self.draws += 1;
                 }
                 Enc::Dispatch { x, y, z } => {
@@ -372,55 +797,22 @@ impl GpuBackend for SoftwareBackend {
                         let s = self.buffers.get(*src)?;
                         let so = *src_offset as usize;
                         let sz = *size as usize;
-                        if so + sz > s.data.len() {
-                            return Err(GpuError::OutOfBounds);
-                        }
                         s.data[so..so + sz].to_vec()
                     };
                     let d = self.buffers.get_mut(*dst)?;
                     let d_off = *dst_offset as usize;
-                    if d_off + chunk.len() > d.data.len() {
-                        return Err(GpuError::OutOfBounds);
-                    }
                     d.data[d_off..d_off + chunk.len()].copy_from_slice(&chunk);
                 }
                 Enc::CopyBufferToTexture { src, src_offset, bytes_per_row, dst, width, height, .. } => {
-                    let (fmt,) = {
+                    let (row_bytes, tight, _span) = {
                         let t = self.textures.get(*dst)?;
-                        (t.desc.format,)
+                        texture_copy_layout(t, *width, *height, *bytes_per_row)?
                     };
-                    let bpt = Self::texel_bytes(fmt)?;
-                    // Texture rows are stored tightly (`bpt*width`); the *source* buffer may pad each row up
-                    // to `bytes_per_row`. Copy row-by-row honoring the source stride so padding bytes never
-                    // leak into texels. `bytes_per_row == 0` means the rows are tightly packed.
-                    let row_bytes = bpt
-                        .checked_mul(*width as usize)
-                        .ok_or(GpuError::OutOfBounds)?;
                     let rows = *height as usize;
-                    let src_stride = if *bytes_per_row == 0 {
-                        row_bytes
-                    } else {
-                        *bytes_per_row as usize
-                    };
-                    if src_stride < row_bytes {
-                        return Err(GpuError::OutOfBounds);
-                    }
-                    let tight = row_bytes.checked_mul(rows).ok_or(GpuError::OutOfBounds)?;
-                    // Source must hold (rows-1)*stride + row_bytes starting at src_offset.
-                    let src_span = if rows == 0 {
-                        0
-                    } else {
-                        (rows - 1)
-                            .checked_mul(src_stride)
-                            .and_then(|v| v.checked_add(row_bytes))
-                            .ok_or(GpuError::OutOfBounds)?
-                    };
+                    let src_stride = if *bytes_per_row == 0 { row_bytes } else { *bytes_per_row as usize };
                     let so = *src_offset as usize;
                     let chunk = {
                         let s = self.buffers.get(*src)?;
-                        if so.checked_add(src_span).ok_or(GpuError::OutOfBounds)? > s.data.len() {
-                            return Err(GpuError::OutOfBounds);
-                        }
                         let mut out = Vec::with_capacity(tight);
                         for row in 0..rows {
                             let start = so + row * src_stride;
@@ -429,31 +821,38 @@ impl GpuBackend for SoftwareBackend {
                         out
                     };
                     let t = self.textures.get_mut(*dst)?;
-                    if tight > t.pixels.len() {
-                        return Err(GpuError::OutOfBounds);
-                    }
                     t.pixels[..tight].copy_from_slice(&chunk);
                 }
-                Enc::CopyTextureToBuffer { src, width, height, dst, dst_offset, .. } => {
-                    let (fmt,) = {
+                Enc::CopyTextureToBuffer { src, width, height, dst, dst_offset, bytes_per_row, .. } => {
+                    // Read tight texel rows out of the texture, then write them into the destination
+                    // buffer honoring the requested row stride (padding bytes between rows are left
+                    // untouched, matching a real GPU readback).
+                    let (row_bytes, _tight, _span) = {
                         let t = self.textures.get(*src)?;
-                        (t.desc.format,)
+                        texture_copy_layout(t, *width, *height, *bytes_per_row)?
                     };
-                    let bpt = Self::texel_bytes(fmt)?;
-                    let need = bpt * (*width as usize) * (*height as usize);
-                    let chunk = {
+                    let rows = *height as usize;
+                    let dst_stride = if *bytes_per_row == 0 { row_bytes } else { *bytes_per_row as usize };
+                    let (tw, bpt) = {
                         let t = self.textures.get(*src)?;
-                        if need > t.pixels.len() {
-                            return Err(GpuError::OutOfBounds);
+                        (t.desc.width as usize, Self::texel_bytes(t.desc.format)?)
+                    };
+                    let rows_data: Vec<u8> = {
+                        let t = self.textures.get(*src)?;
+                        let mut out = Vec::with_capacity(rows * row_bytes);
+                        for row in 0..rows {
+                            let start = row * tw * bpt;
+                            out.extend_from_slice(&t.pixels[start..start + row_bytes]);
                         }
-                        t.pixels[..need].to_vec()
+                        out
                     };
                     let d = self.buffers.get_mut(*dst)?;
-                    let d_off = *dst_offset as usize;
-                    if d_off + chunk.len() > d.data.len() {
-                        return Err(GpuError::OutOfBounds);
+                    let base = *dst_offset as usize;
+                    for row in 0..rows {
+                        let dstart = base + row * dst_stride;
+                        d.data[dstart..dstart + row_bytes]
+                            .copy_from_slice(&rows_data[row * row_bytes..row * row_bytes + row_bytes]);
                     }
-                    d.data[d_off..d_off + chunk.len()].copy_from_slice(&chunk);
                 }
                 _ => {}
             }
@@ -468,6 +867,11 @@ impl GpuBackend for SoftwareBackend {
     fn present(&mut self, surface: SurfaceId, texture: TextureId) -> Result<PresentToken> {
         let sdesc = self.surfaces.get(surface.0)?.clone();
         let t = self.textures.get(texture.0)?;
+        // A present must hand over a frame that matches the surface geometry; a size mismatch is a
+        // swapchain bug, not a valid present.
+        if t.desc.width != sdesc.width || t.desc.height != sdesc.height {
+            return Err(GpuError::Invalid("present texture size does not match surface"));
+        }
         let format_ok = t.desc.format == sdesc.format;
         let handle = self.next_present_handle;
         self.next_present_handle += 1;
