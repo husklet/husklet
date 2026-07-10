@@ -45,13 +45,19 @@ pub(super) fn rootfs_machine(rootfs: &Path) -> Option<u16> {
 ///   2 — the dir is literally named `name` (hand-built bundle dirs like `gcc-bundle`).
 ///   `None` — no exact match (the caller may still fall back to a substring match).
 pub(super) fn image_name_tier(dir: &Path, dname: &str, name: &str) -> Option<u8> {
-    // Decode the docker dir encoding: docker.io_library_alpine_latest -> repo "alpine".
-    if let Some(rest) = dname.strip_prefix("docker.io_library_") {
-        if let Some((repo, _tag)) = rest.rsplit_once('_') {
-            if repo == name {
-                return Some(0);
-            }
-        }
+    // Decode the docker store-dir encoding for a Hub `library/` image and match its repo. The store now
+    // percent-encodes refs (`docker.io%2Flibrary%2Falpine%3Alatest`); older dirs used a `_`-flattened
+    // form (`docker.io_library_alpine_latest`). Accept both so tier-0 still matches real pulled images.
+    let decoded_repo = dname
+        .strip_prefix("docker.io%2Flibrary%2F")
+        .and_then(|rest| rest.split("%3A").next()) // repo before the `:`-tag separator
+        .or_else(|| {
+            dname
+                .strip_prefix("docker.io_library_")
+                .and_then(|rest| rest.rsplit_once('_').map(|(repo, _tag)| repo))
+        });
+    if decoded_repo == Some(name) {
+        return Some(0);
     }
     if let Ok(json) = std::fs::read_to_string(dir.join("dd-image.json")) {
         if let Some(img) = json

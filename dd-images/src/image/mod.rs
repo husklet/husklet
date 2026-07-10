@@ -27,7 +27,8 @@ pub use arch::{arch_from_config, Arch};
 pub use archive::LoadedImage;
 pub use config::{
     config_exposed_ports, config_labels, config_stop_signal, config_strs, config_volumes,
-    default_shell, image_ref, ref_name, ref_repo, ref_tag, repo_tag, safe_name,
+    default_shell, encode_store_component, image_ref, ref_name, ref_repo, ref_tag, repo_tag,
+    safe_name,
 };
 pub use discovery::{detect_arch, discover_images, image_score, DiscoveredImage};
 pub use local_image::LocalImage;
