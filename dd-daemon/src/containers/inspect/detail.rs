@@ -50,6 +50,7 @@ pub(crate) async fn containers_inspect(State(a): State<App>, Path(id): Path<Stri
                             n.name.clone(),
                             crate::api::EndpointJson {
                                 network_id: n.id.clone(),
+                                endpoint_id: c.id.clone(),
                                 ip_address: e.ip.clone(),
                                 gateway: n.gateway.clone(),
                                 ip_prefix_len: n
@@ -59,6 +60,7 @@ pub(crate) async fn containers_inspect(State(a): State<App>, Path(id): Path<Stri
                                     .and_then(|p| p.parse::<i64>().ok())
                                     .unwrap_or(16),
                                 mac_address: ip_mac(&e.ip),
+                                aliases: e.aliases.clone(),
                             },
                         )
                     })
@@ -96,11 +98,28 @@ pub(crate) async fn containers_inspect(State(a): State<App>, Path(id): Path<Stri
             };
             // Config.Healthcheck / StopSignal round-trip so a client diffs the resolved lifecycle config
             // (Healthcheck reuses the model's `HealthConfig`; both are `null` when unset).
+            // Config.ExposedPorts: the declared-port set as docker's `{"8080/tcp":{}}` object.
+            let exposed_ports = {
+                let mut m = serde_json::Map::new();
+                for p in &c.exposed_ports {
+                    m.insert(p.clone(), serde_json::json!({}));
+                }
+                serde_json::Value::Object(m)
+            };
+            // Docker keeps Entrypoint/Cmd SPLIT and reports WorkingDir/User/Domainname/interactive flags.
             let config = crate::api::ContainerConfig {
-                cmd: c.cmd.clone(),
                 hostname: c.hostname.clone(),
+                domainname: c.domainname.clone(),
+                user: c.user.clone(),
                 image: c.image.clone(),
+                entrypoint: c.entrypoint.clone(),
+                cmd: c.cmd_config.clone(),
+                working_dir: c.working_dir.clone(),
                 env: c.env.clone(),
+                tty: c.tty,
+                open_stdin: c.open_stdin,
+                stdin_once: c.stdin_once,
+                exposed_ports,
                 labels: c.labels.clone(),
                 healthcheck: c.healthcheck.clone(),
                 stop_signal: if c.stop_signal.is_empty() {
@@ -126,6 +145,14 @@ pub(crate) async fn containers_inspect(State(a): State<App>, Path(id): Path<Stri
                 stop_timeout: c.stop_timeout,
                 privileged: c.privileged,
                 security_opt: c.security_opt.clone(),
+                network_mode: c.network_mode.clone(),
+                auto_remove: c.auto_remove,
+                log_config: c.log_config.clone().unwrap_or_default(),
+                dns: c.dns.clone(),
+                dns_search: c.dns_search.clone(),
+                dns_options: c.dns_options.clone(),
+                extra_hosts: c.extra_hosts.clone(),
+                device_requests: c.device_requests.clone(),
             };
             Json(crate::api::ContainerInspect {
                 id: c.id.clone(),
@@ -147,7 +174,17 @@ pub(crate) async fn containers_inspect(State(a): State<App>, Path(id): Path<Stri
                 host_config,
                 // NetworkSettings present so `docker port` (reads .NetworkSettings.Ports) doesn't panic.
                 network_settings: crate::api::NetworkSettingsJson {
-                    ports: ports_map_json(&c.publish),
+                    ports: {
+                        // Published ports carry their host bindings; exposed-but-unpublished ports appear
+                        // as `null` (docker parity) so `Config.ExposedPorts` is reflected here too.
+                        let mut ports = ports_map_json(&c.publish);
+                        if let Some(obj) = ports.as_object_mut() {
+                            for p in &c.exposed_ports {
+                                obj.entry(p.clone()).or_insert(serde_json::Value::Null);
+                            }
+                        }
+                        ports
+                    },
                     ip_address: primary.0,
                     gateway: primary.1,
                     networks,

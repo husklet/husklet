@@ -58,10 +58,34 @@ pub(crate) async fn containers_create(
     // Final argv = entrypoint ++ cmd (docker semantics). The entrypoint is the user's --entrypoint or the
     // IMAGE's ENTRYPOINT; a user --entrypoint resets CMD, but the image's own ENTRYPOINT still keeps the
     // image CMD. An empty Cmd falls back to the image default.
-    let cmd = resolve_argv(body.entrypoint, body.cmd, &img.entrypoint, &img.cmd);
+    let cmd = resolve_argv(
+        body.entrypoint.clone(),
+        body.cmd.clone(),
+        &img.entrypoint,
+        &img.cmd,
+    );
+    // Docker inspect reports Config.Entrypoint / Config.Cmd SPLIT — keep the resolved parts (not the merged
+    // launch argv) for inspect/commit fidelity. Mirrors resolve_argv: a user --entrypoint resets the cmd
+    // part unless the user also gave a cmd; otherwise the image's entrypoint keeps the image cmd.
+    let entrypoint_cfg = body
+        .entrypoint
+        .clone()
+        .unwrap_or_else(|| img.entrypoint.clone());
+    let cmd_config = body
+        .cmd
+        .clone()
+        .filter(|c| !c.is_empty())
+        .unwrap_or_else(|| {
+            if body.entrypoint.is_some() {
+                Vec::new()
+            } else {
+                img.cmd.clone()
+            }
+        });
     // env = image ENV then `docker run -e` (later wins); working dir = -w or the image WORKDIR.
-    let mut env = img.env.clone();
-    env.extend(body.env.unwrap_or_default());
+    // Dedup last-wins so inspect/state don't expose a stale image value that the runtime already overrides
+    // (the guest launch env dedups the same way): `-e FOO=run` over image `FOO=image` yields one `FOO=run`.
+    let env = dedup_env_last_wins(img.env.iter().cloned().chain(body.env.unwrap_or_default()));
     let working_dir = body
         .working_dir
         .filter(|w| !w.is_empty())
@@ -240,6 +264,7 @@ pub(crate) async fn containers_create(
             source: name,
             target: vdir.clone(),
             read_only: false,
+            bind_options: None,
         });
     }
     // Resolved stop signal / timeout / healthcheck: the create-body override, else the image's.
@@ -255,6 +280,8 @@ pub(crate) async fn containers_create(
         rootfs: img.rootfs,
         upper,
         cmd,
+        entrypoint: entrypoint_cfg,
+        cmd_config,
         arch: Some(img.arch),
         binds: std::mem::take(&mut binds),
         // Effective hostname: Docker defaults an unset `--hostname` to the container's
@@ -280,11 +307,20 @@ pub(crate) async fn containers_create(
             .unwrap_or_default(),
         created: now_secs(),
         tty,
+        // Interactive stdio flags — persisted for inspect fidelity (attach/exec reconstruction).
+        open_stdin: body.open_stdin.unwrap_or(false),
+        stdin_once: body.stdin_once.unwrap_or(false),
         name: want_name,
         working_dir,
         env,
         user,
-        labels: body.labels.unwrap_or_default(),
+        // Container labels INHERIT the image's, with create-body labels overriding same-key entries
+        // (docker semantics). Dropping the inherited set broke label selectors on run-from-image.
+        labels: {
+            let mut l = img.labels.clone();
+            l.extend(body.labels.unwrap_or_default());
+            l
+        },
         network_mode: hc
             .as_ref()
             .and_then(|h| h.network_mode.clone())
@@ -316,6 +352,36 @@ pub(crate) async fn containers_create(
             .and_then(|h| h.security_opt.clone())
             .unwrap_or_default(),
         auto_remove: hc.as_ref().and_then(|h| h.auto_remove).unwrap_or(false),
+        // `Config.Domainname` (UTS domain) — metadata + inspect fidelity.
+        domainname: body.domainname.unwrap_or_default(),
+        // `Config.ExposedPorts` — image EXPOSE ports plus create-body ExposedPorts keys (deduped, sorted).
+        exposed_ports: {
+            let mut ps: std::collections::BTreeSet<String> =
+                img.exposed_ports.iter().cloned().collect();
+            if let Some(ep) = body.exposed_ports {
+                ps.extend(ep.into_keys());
+            }
+            ps.into_iter().collect()
+        },
+        // Logging / DNS / device-request fidelity — accepted, persisted, round-tripped through inspect.
+        log_config: hc.as_ref().and_then(|h| h.log_config.clone()),
+        dns: hc.as_ref().and_then(|h| h.dns.clone()).unwrap_or_default(),
+        dns_search: hc
+            .as_ref()
+            .and_then(|h| h.dns_search.clone())
+            .unwrap_or_default(),
+        dns_options: hc
+            .as_ref()
+            .and_then(|h| h.dns_options.clone())
+            .unwrap_or_default(),
+        extra_hosts: hc
+            .as_ref()
+            .and_then(|h| h.extra_hosts.clone())
+            .unwrap_or_default(),
+        device_requests: hc
+            .as_ref()
+            .and_then(|h| h.device_requests.clone())
+            .unwrap_or_default(),
         // Lifecycle/volume fidelity (Moby §6/§8): resolved stop signal/timeout, tmpfs mounts, the anon
         // volumes this container owns (for `rm -v`/prune GC), and the resolved HEALTHCHECK.
         stop_signal,
@@ -334,8 +400,36 @@ pub(crate) async fn containers_create(
         "host" | "none" => "", // no L3 identity
         other => other,        // a user-defined network by name
     };
+    // Parse a network's requested static IP (EndpointsConfig[name].IPAMConfig.IPv4Address) and DNS
+    // aliases (.Aliases) so a `docker network connect --ip`/compose `ipv4_address`/`aliases` is honored.
+    let ep_settings = |name: &str| -> (Option<String>, Vec<String>) {
+        body.networking_config
+            .as_ref()
+            .and_then(|n| n.endpoints_config.as_ref())
+            .and_then(|m| m.get(name))
+            .map(|v| {
+                let ip = v
+                    .get("IPAMConfig")
+                    .and_then(|i| i.get("IPv4Address"))
+                    .and_then(|s| s.as_str())
+                    .filter(|s| !s.is_empty())
+                    .map(|s| s.to_string());
+                let aliases = v
+                    .get("Aliases")
+                    .and_then(|a| a.as_array())
+                    .map(|a| {
+                        a.iter()
+                            .filter_map(|x| x.as_str().map(String::from))
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                (ip, aliases)
+            })
+            .unwrap_or((None, Vec::new()))
+    };
     if !net_name.is_empty() {
-        join_network(&mut g.networks, net_name, &id, &cname);
+        let (req_ip, aliases) = ep_settings(net_name);
+        join_network_ex(&mut g.networks, net_name, &id, &cname, req_ip.as_deref(), &aliases);
     }
     // Additionally join every network named in NetworkingConfig.EndpointsConfig (compose lists all of a
     // service's networks here; NetworkMode only carries the primary). join_network is idempotent, so
@@ -347,7 +441,15 @@ pub(crate) async fn containers_create(
     {
         for ep_name in nc.keys() {
             if !ep_name.is_empty() {
-                join_network(&mut g.networks, ep_name, &id, &cname);
+                let (req_ip, aliases) = ep_settings(ep_name);
+                join_network_ex(
+                    &mut g.networks,
+                    ep_name,
+                    &id,
+                    &cname,
+                    req_ip.as_deref(),
+                    &aliases,
+                );
             }
         }
     }

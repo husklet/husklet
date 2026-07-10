@@ -528,3 +528,151 @@ async fn logs_since_until_filter_per_chunk_not_per_coalesced_run() {
     assert!(has(&body, b"early"), "until=150 must keep the t=100 line");
     assert!(!has(&body, b"late"), "until=150 must drop the t=200 line");
 }
+
+// ---- Inspect round-trip cluster: Config/HostConfig/NetworkSettings fidelity ------------------
+// docker create accepts a large set of Config/HostConfig fields that inspect must round-trip. These
+// were silently dropped (AutoRemove, split Entrypoint/Cmd, WorkingDir/User/Domainname, Tty/OpenStdin/
+// StdinOnce, ExposedPorts, LogConfig, Dns/DnsSearch/DnsOptions/ExtraHosts, DeviceRequests, NetworkMode,
+// bind propagation, inherited image labels/env dedup). One create+inspect asserts they all survive.
+async fn seed_rich_image(app: &App) {
+    let mut g = app.inner.lock().await;
+    g.images.push(Image {
+        name: "richimg".into(),
+        rootfs: "/store/rich".into(),
+        entrypoint: vec!["/entry".into()],
+        cmd: vec!["imgcmd".into()],
+        env: vec!["FOO=image".into(), "BAR=base".into()],
+        workdir: "/img/wd".into(),
+        user: "imguser".into(),
+        exposed_ports: vec!["5432/tcp".into()],
+        labels: std::collections::HashMap::from([
+            ("com.example.inherited".to_string(), "yes".to_string()),
+            ("over".to_string(), "image".to_string()),
+        ]),
+        ..Default::default()
+    });
+}
+
+#[tokio::test]
+async fn container_inspect_round_trips_full_create_config() {
+    let app = test_app();
+    seed_rich_image(&app).await;
+    let q: crate::containers::CreateQ =
+        serde_json::from_value(serde_json::json!({"name":"rich"})).unwrap();
+    let body = axum::Json(
+        serde_json::from_value(serde_json::json!({
+            "Image": "richimg",
+            "Entrypoint": ["/entry"],
+            "Cmd": ["--serve"],
+            "Domainname": "example.test",
+            "WorkingDir": "/srv/app",
+            "User": "1001:1002",
+            "Tty": true,
+            "OpenStdin": true,
+            "StdinOnce": true,
+            "Env": ["FOO=run"],
+            "ExposedPorts": {"8080/tcp": {}},
+            "Labels": {"over": "run"},
+            "HostConfig": {
+                "NetworkMode": "none",
+                "AutoRemove": true,
+                "LogConfig": {"Type": "json-file", "Config": {"max-size": "10m"}},
+                "Dns": ["9.9.9.9"],
+                "DnsSearch": ["corp.test"],
+                "DnsOptions": ["ndots:2"],
+                "ExtraHosts": ["db:10.9.0.2"],
+                "DeviceRequests": [{"Driver": "nvidia", "Count": -1}],
+                "Mounts": [{"Type": "bind", "Source": "/h", "Target": "/c",
+                            "BindOptions": {"Propagation": "rshared"}}]
+            }
+        }))
+        .unwrap(),
+    );
+    let r = crate::containers::containers_create(State(app.clone()), Query(q), body).await;
+    assert_eq!(r.status(), StatusCode::CREATED);
+
+    let resp = crate::containers::containers_inspect(State(app.clone()), Path("rich".into()))
+        .await
+        .into_response();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let v = to_body_json(resp).await;
+    let cfg = &v["Config"];
+    // Entrypoint/Cmd split (not collapsed into one argv).
+    assert_eq!(cfg["Entrypoint"], serde_json::json!(["/entry"]));
+    assert_eq!(cfg["Cmd"], serde_json::json!(["--serve"]));
+    assert_eq!(cfg["WorkingDir"], "/srv/app");
+    assert_eq!(cfg["User"], "1001:1002");
+    assert_eq!(cfg["Domainname"], "example.test");
+    assert_eq!(cfg["Tty"], true);
+    assert_eq!(cfg["OpenStdin"], true);
+    assert_eq!(cfg["StdinOnce"], true);
+    // ExposedPorts merges image EXPOSE (5432) and create-body (8080), reported as `{}` values.
+    assert!(cfg["ExposedPorts"]["8080/tcp"].is_object());
+    assert!(cfg["ExposedPorts"]["5432/tcp"].is_object());
+    // Env dedups last-wins: image FOO=image is replaced by run FOO=run (exactly one FOO=).
+    let envs: Vec<String> = cfg["Env"].as_array().unwrap().iter()
+        .map(|e| e.as_str().unwrap().to_string()).collect();
+    assert_eq!(envs.iter().filter(|e| e.starts_with("FOO=")).count(), 1, "one FOO= after dedup");
+    assert!(envs.contains(&"FOO=run".to_string()));
+    assert!(envs.contains(&"BAR=base".to_string()));
+    // Inherited image label survives; create-body label overrides same key.
+    assert_eq!(cfg["Labels"]["com.example.inherited"], "yes");
+    assert_eq!(cfg["Labels"]["over"], "run");
+
+    let hc = &v["HostConfig"];
+    assert_eq!(hc["NetworkMode"], "none");
+    assert_eq!(hc["AutoRemove"], true);
+    assert_eq!(hc["LogConfig"]["Type"], "json-file");
+    assert_eq!(hc["LogConfig"]["Config"]["max-size"], "10m");
+    assert_eq!(hc["Dns"], serde_json::json!(["9.9.9.9"]));
+    assert_eq!(hc["DnsSearch"], serde_json::json!(["corp.test"]));
+    assert_eq!(hc["DnsOptions"], serde_json::json!(["ndots:2"]));
+    assert_eq!(hc["ExtraHosts"], serde_json::json!(["db:10.9.0.2"]));
+    assert_eq!(hc["DeviceRequests"][0]["Driver"], "nvidia");
+    // Bind propagation round-trips through HostConfig.Mounts[].BindOptions.
+    assert_eq!(hc["Mounts"][0]["BindOptions"]["Propagation"], "rshared");
+    // Exposed-but-unpublished ports appear as null bindings in NetworkSettings.Ports.
+    assert!(v["NetworkSettings"]["Ports"].as_object().unwrap().contains_key("8080/tcp"));
+}
+
+#[tokio::test]
+async fn container_create_honors_endpoint_static_ip_and_aliases() {
+    let app = test_app();
+    seed_image_rootfs(&app, "alpine", "/store/alpine").await;
+    // A user network the container will attach to with a static IP + aliases.
+    {
+        let mut g = app.inner.lock().await;
+        g.networks.push(Net {
+            id: "net-frontend".into(),
+            name: "frontend".into(),
+            driver: "bridge".into(),
+            scope: "local".into(),
+            containers: vec![],
+            created: 0,
+            subnet: "172.18.0.0/16".into(),
+            gateway: "172.18.0.1".into(),
+            endpoints: std::collections::HashMap::new(),
+        });
+    }
+    let q: crate::containers::CreateQ =
+        serde_json::from_value(serde_json::json!({"name":"web"})).unwrap();
+    let body = axum::Json(
+        serde_json::from_value(serde_json::json!({
+            "Image": "alpine",
+            "HostConfig": {"NetworkMode": "frontend"},
+            "NetworkingConfig": {"EndpointsConfig": {"frontend": {
+                "IPAMConfig": {"IPv4Address": "172.18.0.77"},
+                "Aliases": ["web", "api"]
+            }}}
+        }))
+        .unwrap(),
+    );
+    let r = crate::containers::containers_create(State(app.clone()), Query(q), body).await;
+    assert_eq!(r.status(), StatusCode::CREATED);
+    let g = app.inner.lock().await;
+    let net = g.networks.iter().find(|n| n.name == "frontend").unwrap();
+    let ep = net.endpoints.values().next().expect("endpoint recorded");
+    assert_eq!(ep.ip, "172.18.0.77", "requested static IP honored");
+    assert!(ep.aliases.contains(&"web".to_string()));
+    assert!(ep.aliases.contains(&"api".to_string()));
+}

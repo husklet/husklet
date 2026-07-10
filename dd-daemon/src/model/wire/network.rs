@@ -7,6 +7,10 @@ use std::collections::HashMap;
 pub(crate) struct Endpoint {
     pub(crate) name: String, // container name (or short id) — what `network inspect`/embedded DNS reports
     pub(crate) ip: String, // IPAM-assigned host address within the network subnet, e.g. "172.18.0.2"
+    // `--network-alias` / `NetworkingConfig.EndpointsConfig[].Aliases`: extra DNS names peers resolve this
+    // container by, in addition to `name`. Round-tripped through inspect (NetworkSettings.Networks[].Aliases).
+    #[serde(default)]
+    pub(crate) aliases: Vec<String>,
 }
 
 /// A user-defined network. dd's isolation is a per-container loopback netns (see `run_in_jit`);

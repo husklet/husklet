@@ -247,8 +247,7 @@ mod tests {
             typ: "volume".into(),
             source: "myvol".into(),
             target: "/data".into(),
-            read_only: false,
-        }];
+            read_only: false, bind_options: None }];
         let g = inner_with(c);
         assert!(volume_in_use(&g, "myvol", None));
         // A type=bind mount with the same source name must NOT count as a volume reference.
@@ -257,8 +256,7 @@ mod tests {
             typ: "bind".into(),
             source: "myvol".into(),
             target: "/data".into(),
-            read_only: false,
-        }];
+            read_only: false, bind_options: None }];
         assert!(!volume_in_use(&inner_with(c2), "myvol", None));
     }
 

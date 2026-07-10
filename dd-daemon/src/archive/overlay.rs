@@ -176,7 +176,7 @@ mod tests {
     use super::*;
 
     fn ro_mount(target: &str) -> Mount {
-        Mount { typ: "volume".into(), source: "vol".into(), target: target.into(), read_only: true }
+        Mount { typ: "volume".into(), source: "vol".into(), target: target.into(), read_only: true, bind_options: None }
     }
 
     // "Archive PUT Writes Through Read-Only Bind Mounts" (P1): a read-only bind/volume mount's target
@@ -192,8 +192,7 @@ mod tests {
             typ: "bind".into(),
             source: "/h/x".into(),
             target: "/mnt/rw".into(),
-            read_only: false,
-        }];
+            read_only: false, bind_options: None }];
         let t = readonly_mount_targets(&binds, &mounts);
         assert!(t.contains(&"/data".to_string()), "ro bind target");
         assert!(t.contains(&"/named".to_string()), "ro,z bind target");

@@ -35,6 +35,16 @@ pub(crate) struct Ulimit {
     pub(crate) hard: i64,
 }
 
+/// `HostConfig.LogConfig` (`--log-driver`/`--log-opt`). Metadata only — dd has a single built-in log
+/// sink — but accepted at create and round-tripped verbatim through inspect so clients diff it cleanly.
+#[derive(Clone, Default, Serialize, Deserialize)]
+pub(crate) struct LogConfig {
+    #[serde(rename = "Type", default)]
+    pub(crate) typ: String,
+    #[serde(rename = "Config", default)]
+    pub(crate) config: std::collections::HashMap<String, String>,
+}
+
 #[derive(Clone, Default, Serialize, Deserialize)]
 pub(crate) struct Container {
     pub(crate) id: String,
@@ -47,9 +57,19 @@ pub(crate) struct Container {
     // for darwin containers and for state predating overlay, in which case the flat `rootfs` is used.
     #[serde(default)]
     pub(crate) upper: String,
-    pub(crate) cmd: Vec<String>,
+    pub(crate) cmd: Vec<String>, // the resolved LAUNCH argv (entrypoint ++ cmd) handed to the engine
+    // Docker inspect reports Config.Entrypoint and Config.Cmd SPLIT, not collapsed into one argv. These
+    // hold the resolved parts (entrypoint = user `--entrypoint` else image ENTRYPOINT; cmd_config = the
+    // cmd part only) purely for inspect/commit fidelity; the engine still launches the merged `cmd` above.
+    #[serde(default)]
+    pub(crate) entrypoint: Vec<String>,
+    #[serde(default)]
+    pub(crate) cmd_config: Vec<String>,
     pub(crate) binds: Vec<String>,
     pub(crate) hostname: String,
+    // `Config.Domainname` (`--domainname`): the container's DNS domain (UTS). Metadata + inspect fidelity.
+    #[serde(default)]
+    pub(crate) domainname: String,
     pub(crate) memory: i64,
     pub(crate) pids_limit: i64,
     // `--cpus` (HostConfig.NanoCpus, billionths of a CPU): the container's CPU allotment. Threaded to the
@@ -69,6 +89,31 @@ pub(crate) struct Container {
     pub(crate) exit_code: i64,
     #[serde(default)]
     pub(crate) tty: bool,
+    // `Config.OpenStdin` (`-i`) / `Config.StdinOnce`: interactive-stdio flags. Metadata + inspect fidelity
+    // so attach/exec tooling can reconstruct whether the container keeps stdin open.
+    #[serde(default)]
+    pub(crate) open_stdin: bool,
+    #[serde(default)]
+    pub(crate) stdin_once: bool,
+    // `Config.ExposedPorts` (image EXPOSE + create-body ExposedPorts): "port/proto" keys the container
+    // declares as listening. Distinct from published (host-bound) ports; inspect reports them as null
+    // bindings in NetworkSettings.Ports and under Config.ExposedPorts.
+    #[serde(default)]
+    pub(crate) exposed_ports: Vec<String>,
+    // `HostConfig.LogConfig`, DNS settings, and DeviceRequests — accepted at create, round-tripped through
+    // inspect. DeviceRequests is stored opaquely (its NVIDIA-style shape varies) and echoed verbatim.
+    #[serde(default)]
+    pub(crate) log_config: Option<LogConfig>,
+    #[serde(default)]
+    pub(crate) dns: Vec<String>,
+    #[serde(default)]
+    pub(crate) dns_search: Vec<String>,
+    #[serde(default)]
+    pub(crate) dns_options: Vec<String>,
+    #[serde(default)]
+    pub(crate) extra_hosts: Vec<String>, // "host:ip" entries for /etc/hosts + inspect
+    #[serde(default)]
+    pub(crate) device_requests: Vec<serde_json::Value>,
     #[serde(default)]
     pub(crate) name: String,
     #[serde(default)]
