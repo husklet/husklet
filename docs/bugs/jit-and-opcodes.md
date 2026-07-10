@@ -327,33 +327,6 @@ Generate a checked-in matrix with at least:
 - opcode family/subform
 - semantic dimensions tested, such as flags, MXCSR/rounding, memory vs register, VEX vs legacy, scalar merge, fault behavior
 
-## x87 Control Word Is Ignored
-
-Priority: P1
-Impact: x87 rounding mode and saved control word are wrong
-Confidence: High
-
-Verification status: Proven in isolated worktree `/Users/x/dd/dd-bf2-audit-20260710`.
-
-Evidence:
-
-- `fldcw` is ignored: `dd-jit-darwin/src/runtime/translate/x86_64/translate.c:1943`.
-- `fnstcw` always stores `0x037f`: `dd-jit-darwin/src/runtime/translate/x86_64/translate.c:1945`.
-- `fist/fistp` lower through a fixed conversion: `dd-jit-darwin/src/runtime/translate/x86_64/translate.c:2007`.
-
-Why this is bad:
-
-Software uses x87 control word rounding modes for integer conversion and ABI-visible state. dd reports the default control word and rounds as if the mode never changed.
-
-Isolated proof:
-
-```sh
-qemu-x86_64 target/bf2/x87_cw_fistp
-ddjit-linux_x86_64 target/bf2/x87_cw_fistp
-```
-
-qemu reported distinct `down/up/zero` control words and rounding results; dd reported `037f` for every mode and reused nearest rounding.
-
 ## x87 Long Double Precision Is Truncated
 
 Priority: P2

@@ -16,6 +16,9 @@ pub(super) fn op_x86_misc() -> Group {
             x("cmpxchg16b", "completeness/x86_cmpxchg16b.c"), // jit86 UNIMPL 0F C7 /1 (CMPXCHG16B)
             x("rdtsc", "completeness/x86_rdtsc.c"), // jit86 UNIMPL 0F 01 F9 (RDTSCP); rdtsc(0F31) ok
             x("x87", "completeness/x86_x87.c"),
+            // x87 control word: fnstcw reports the live CW, fldcw takes effect, fist/fistp round per RC
+            // (default nearest-even, not truncate). Regression for the hardcoded-0x037f / always-FCVTZS bug.
+            x("x87-control", "completeness/x86_x87_control.c"),
             x("repstring", "completeness/x86_repstring.c"), // rep movs/stos/cmps — handled
             x("movnt", "completeness/x86_movnt.c"),         // jit86 UNIMPL 0F E7 (MOVNTDQ)
             x("sbb-acc-imm", "completeness/x86_sbb.c"), // acc-imm SBB 0x1C/0x1D (+REX.W) — result+flags vs qemu
