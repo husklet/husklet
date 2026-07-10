@@ -161,6 +161,12 @@ static pthread_mutex_t g_eventfd_lock = PTHREAD_MUTEX_INITIALIZER;
 static void eventfd_after_fork(void) { pthread_mutex_init(&g_eventfd_lock, NULL); }
 
 static uint8_t g_eventfd_sema[DD_NFD]; // EFD_SEMAPHORE: read() returns 1 and decrements by 1, not the whole counter
+// Alias refcount per counter-slot: a dup() of an eventfd creates a second guest fd that shares the SAME
+// eventfd object (peer write end + counter slot). Keyed by eventfd_counter_slot(); the creator sets it to 1
+// and each dup increments it. fd_reset_emul only closes the shared peer / zeroes the shared counter when the
+// LAST alias closes, so closing one duplicate never tears the object out from under the others. A non-dup'd
+// eventfd keeps refs==1, so its close path is byte-identical to before.
+static int g_eventfd_refs[DD_NFD];
 static int eventfd_counter_slot(int fd) {
     if (fd >= 0 && fd < DD_NFD && g_eventfd_cslot[fd] > 0) return g_eventfd_cslot[fd] - 1;
     return fd;

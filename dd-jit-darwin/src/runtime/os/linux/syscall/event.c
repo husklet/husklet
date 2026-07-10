@@ -265,6 +265,7 @@ static int svc_event(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint6
             g_eventfd_cslot[fds[0]] = fds[0] + 1;
             g_eventfd_sema[fds[0]] = (a1 & 1) != 0; // EFD_SEMAPHORE
             g_eventfd_count[fds[0]] = a0;           // initval
+            g_eventfd_refs[fds[0]] = 1;             // one alias (this fd); dup() bumps it (fd_carry_virt)
             if (a0 > 0) {
                 char b = 1;
                 if (write(peer, &b, 1) < 0) {}
