@@ -352,6 +352,44 @@ mod tests {
     }
 
     #[test]
+    fn software_backend_copy_buffer_to_texture_honors_bytes_per_row() {
+        // A 2x2 RGBA8 texture: 8 tightly-packed bytes per row. The *source* buffer pads each row up to
+        // bytes_per_row=12 (4 padding bytes of 0xaa). Software replay must copy only the real 8 bytes of
+        // each row, never letting padding bytes become visible texels.
+        let mut be = SoftwareBackend::new();
+        be.create_texture(
+            TextureId(1),
+            &TextureDesc { width: 2, height: 2, depth: 1, mip_levels: 1, sample_count: 1,
+                dim: TextureDim::D2, format: TextureFormat::Rgba8Unorm,
+                usage: texture_usage::COPY_DST, label: String::new() },
+        ).unwrap();
+        be.create_buffer(
+            BufferId(1),
+            &BufferDesc { size: 24, usage: buffer_usage::COPY_SRC, label: String::new() },
+        ).unwrap();
+        // row0 pixels, 4 bytes padding, row1 pixels, 4 bytes padding.
+        let mut src = Vec::new();
+        src.extend_from_slice(&[0, 1, 2, 3, 4, 5, 6, 7]); // row 0 (2 texels)
+        src.extend_from_slice(&[0xaa; 4]); // padding
+        src.extend_from_slice(&[16, 17, 18, 19, 20, 21, 22, 23]); // row 1
+        src.extend_from_slice(&[0xaa; 4]); // padding
+        be.write_buffer(BufferId(1), 0, &src).unwrap();
+        be.submit(&CommandBuffer {
+            encoder: vec![Enc::CopyBufferToTexture {
+                src: 1, src_offset: 0, bytes_per_row: 12, dst: 1, mip: 0, width: 2, height: 2,
+            }],
+            signal: None,
+        }).unwrap();
+        let mut px = [0u8; 16];
+        be.read_texture(TextureId(1), &mut px).unwrap();
+        assert_eq!(
+            px,
+            [0, 1, 2, 3, 4, 5, 6, 7, 16, 17, 18, 19, 20, 21, 22, 23],
+            "padding bytes (0xaa) leaked into texels — bytes_per_row was ignored"
+        );
+    }
+
+    #[test]
     fn software_backend_present_format_check() {
         let mut be = SoftwareBackend::new();
         be.create_surface(SurfaceId(1), &SurfaceDesc { width: 4, height: 4, format: TextureFormat::Bgra8Unorm, ddp_surface: 1 }).unwrap();

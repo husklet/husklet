@@ -384,26 +384,55 @@ impl GpuBackend for SoftwareBackend {
                     }
                     d.data[d_off..d_off + chunk.len()].copy_from_slice(&chunk);
                 }
-                Enc::CopyBufferToTexture { src, src_offset, dst, width, height, .. } => {
+                Enc::CopyBufferToTexture { src, src_offset, bytes_per_row, dst, width, height, .. } => {
                     let (fmt,) = {
                         let t = self.textures.get(*dst)?;
                         (t.desc.format,)
                     };
                     let bpt = Self::texel_bytes(fmt)?;
-                    let need = bpt * (*width as usize) * (*height as usize);
-                    let chunk = {
-                        let s = self.buffers.get(*src)?;
-                        let so = *src_offset as usize;
-                        if so + need > s.data.len() {
-                            return Err(GpuError::OutOfBounds);
-                        }
-                        s.data[so..so + need].to_vec()
+                    // Texture rows are stored tightly (`bpt*width`); the *source* buffer may pad each row up
+                    // to `bytes_per_row`. Copy row-by-row honoring the source stride so padding bytes never
+                    // leak into texels. `bytes_per_row == 0` means the rows are tightly packed.
+                    let row_bytes = bpt
+                        .checked_mul(*width as usize)
+                        .ok_or(GpuError::OutOfBounds)?;
+                    let rows = *height as usize;
+                    let src_stride = if *bytes_per_row == 0 {
+                        row_bytes
+                    } else {
+                        *bytes_per_row as usize
                     };
-                    let t = self.textures.get_mut(*dst)?;
-                    if need > t.pixels.len() {
+                    if src_stride < row_bytes {
                         return Err(GpuError::OutOfBounds);
                     }
-                    t.pixels[..need].copy_from_slice(&chunk);
+                    let tight = row_bytes.checked_mul(rows).ok_or(GpuError::OutOfBounds)?;
+                    // Source must hold (rows-1)*stride + row_bytes starting at src_offset.
+                    let src_span = if rows == 0 {
+                        0
+                    } else {
+                        (rows - 1)
+                            .checked_mul(src_stride)
+                            .and_then(|v| v.checked_add(row_bytes))
+                            .ok_or(GpuError::OutOfBounds)?
+                    };
+                    let so = *src_offset as usize;
+                    let chunk = {
+                        let s = self.buffers.get(*src)?;
+                        if so.checked_add(src_span).ok_or(GpuError::OutOfBounds)? > s.data.len() {
+                            return Err(GpuError::OutOfBounds);
+                        }
+                        let mut out = Vec::with_capacity(tight);
+                        for row in 0..rows {
+                            let start = so + row * src_stride;
+                            out.extend_from_slice(&s.data[start..start + row_bytes]);
+                        }
+                        out
+                    };
+                    let t = self.textures.get_mut(*dst)?;
+                    if tight > t.pixels.len() {
+                        return Err(GpuError::OutOfBounds);
+                    }
+                    t.pixels[..tight].copy_from_slice(&chunk);
                 }
                 Enc::CopyTextureToBuffer { src, width, height, dst, dst_offset, .. } => {
                     let (fmt,) = {
