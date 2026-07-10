@@ -41,13 +41,16 @@ pub fn sha256_hex(data: &[u8]) -> String {
     crate::image::digest::sha256_hex(data)
 }
 
-/// A deterministic content digest of an assembled rootfs: hash of a sorted (type,size,path) listing
-/// combined with the sha256 of every regular file's contents. Same tree -> same hash, independent of
-/// filesystem iteration order. Returns "" on failure.
+/// A deterministic content digest of an assembled rootfs: hash of a sorted
+/// (type,mode,nlink,symlink-target,size,path) listing combined with the sha256 of every regular file's
+/// contents. Including `%m` (mode) means a permission change (e.g. `0644 -> 0755`) changes the digest, so
+/// image/cache identity tracks the executable bit and other mode/metadata; `%n`/`%l` fold in hardlink
+/// count and symlink target so topology/target changes are not aliased. Same tree -> same hash,
+/// independent of filesystem iteration order. Returns "" on failure.
 pub fn rootfs_digest(rootfs: &Path) -> String {
     let script = format!(
         "cd '{}' 2>/dev/null || exit 0; \
-         {{ find . -printf '%y %s %p\\n' 2>/dev/null | LC_ALL=C sort; \
+         {{ find . -printf '%y %m %n %l %s %p\\n' 2>/dev/null | LC_ALL=C sort; \
             find . -type f -print0 2>/dev/null | LC_ALL=C sort -z | xargs -0 sha256sum 2>/dev/null; \
          }} | sha256sum",
         rootfs.display());
@@ -66,15 +69,19 @@ pub fn rootfs_digest(rootfs: &Path) -> String {
 }
 
 /// Deterministic content+metadata digest of a file or directory subtree at `p` (absolute host path):
-/// type, mode and size of every entry plus the sha256 of each regular file's contents, sorted so it is
-/// independent of fs iteration order. Used to make COPY/ADD cache keys content-addressed. Returns "" on
-/// failure (the caller then forces a miss rather than risk serving a stale layer).
+/// type, mode, hardlink count (`%n`), symlink target (`%l`) and size of every entry plus the sha256 of
+/// each regular file's contents, sorted so it is independent of fs iteration order. Including `%l` means a
+/// changed symlink target (`link -> aa` vs `link -> bb`) changes the digest; including `%n`/hardlink-count
+/// distinguishes a hardlinked tree from independent files with identical bytes, so a `COPY`/`ADD` cache
+/// key does not alias those. Used to make COPY/ADD cache keys content-addressed. Returns "" on failure
+/// (the caller then forces a miss rather than risk serving a stale layer).
 pub fn path_digest(p: &Path) -> String {
     let script = format!(
         "p='{}'; if [ -d \"$p\" ]; then cd \"$p\" 2>/dev/null || exit 0; \
-            {{ find . -printf '%y %m %s %p\\n' 2>/dev/null | LC_ALL=C sort; \
+            {{ find . -printf '%y %m %n %l %s %p\\n' 2>/dev/null | LC_ALL=C sort; \
                find . -type f -print0 2>/dev/null | LC_ALL=C sort -z | xargs -0 sha256sum 2>/dev/null; }} | sha256sum; \
-         elif [ -e \"$p\" ]; then {{ stat -c '%F %a %s' \"$p\" 2>/dev/null; sha256sum \"$p\" 2>/dev/null; }} | sha256sum; \
+         elif [ -h \"$p\" ]; then {{ stat -c '%F %a' \"$p\" 2>/dev/null; readlink \"$p\" 2>/dev/null; }} | sha256sum; \
+         elif [ -e \"$p\" ]; then {{ stat -c '%F %a %h %s' \"$p\" 2>/dev/null; sha256sum \"$p\" 2>/dev/null; }} | sha256sum; \
          else echo missing; fi",
         p.display());
     match std::process::Command::new("sh")
@@ -112,6 +119,72 @@ pub fn is_fs_inst(inst: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // --- content+metadata digest regression tests (shell out to find/stat/sha256sum) ---
+
+    fn scratch(label: &str) -> PathBuf {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        let d = std::env::temp_dir()
+            .join(format!("dd-cache-test-{}-{}-{}", label, std::process::id(), nanos));
+        std::fs::create_dir_all(&d).unwrap();
+        d
+    }
+
+    // rootfs_digest MUST fold in file mode: flipping a file `0644 -> 0755` (a runtime-behavior change)
+    // must change the digest so cache/image identity does not reuse a stale layer with different bits.
+    #[test]
+    fn rootfs_digest_changes_when_file_mode_changes() {
+        use std::os::unix::fs::PermissionsExt;
+        let root = scratch("rootfs-mode");
+        let f = root.join("tool");
+        std::fs::write(&f, b"#!/bin/sh\n").unwrap();
+        std::fs::set_permissions(&f, std::fs::Permissions::from_mode(0o644)).unwrap();
+        let before = rootfs_digest(&root);
+        std::fs::set_permissions(&f, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let after = rootfs_digest(&root);
+        assert_eq!(before.len(), 64, "digest is a sha256 hex string");
+        assert_ne!(before, after, "0644 -> 0755 must change the rootfs digest");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    // path_digest MUST fold in symlink target: two symlinks with the same path (and same target length)
+    // but different targets must hash differently, else a rebuild can reuse a layer with the old target.
+    #[test]
+    fn path_digest_changes_when_symlink_target_changes() {
+        use std::os::unix::fs::symlink;
+        let a = scratch("sym-a");
+        let b = scratch("sym-b");
+        symlink("aa", a.join("link")).unwrap();
+        symlink("bb", b.join("link")).unwrap();
+        let da = path_digest(&a);
+        let db = path_digest(&b);
+        assert_eq!(da.len(), 64);
+        assert_ne!(da, db, "link -> aa and link -> bb must produce distinct digests");
+        let _ = std::fs::remove_dir_all(&a);
+        let _ = std::fs::remove_dir_all(&b);
+    }
+
+    // path_digest MUST fold in hardlink topology: a two-name hardlink tree and two independent files with
+    // identical bytes must hash differently, else `cp -a` (which preserves hardlinks) can produce a
+    // different filesystem than the cache key claims.
+    #[test]
+    fn path_digest_changes_when_hardlink_topology_changes() {
+        let linked = scratch("hl-linked");
+        let indep = scratch("hl-indep");
+        std::fs::write(linked.join("a"), b"same bytes\n").unwrap();
+        std::fs::hard_link(linked.join("a"), linked.join("b")).unwrap();
+        std::fs::write(indep.join("a"), b"same bytes\n").unwrap();
+        std::fs::write(indep.join("b"), b"same bytes\n").unwrap();
+        let dl = path_digest(&linked);
+        let di = path_digest(&indep);
+        assert_eq!(dl.len(), 64);
+        assert_ne!(dl, di, "hardlinked tree must digest differently from independent files");
+        let _ = std::fs::remove_dir_all(&linked);
+        let _ = std::fs::remove_dir_all(&indep);
+    }
 
     #[test]
     fn fs_instructions_true() {
