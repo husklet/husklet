@@ -166,6 +166,29 @@ static void eventfd_peer_vacate(int fd) {
     }
 }
 
+// Carry dd's virtual-fd emulation state from oldfd to newfd on dup/dup2/dup3/F_DUPFD. Linux duplicated
+// descriptors refer to the SAME open file description, so a dup'd eventfd/timerfd must share the underlying
+// object. The host dup already shares the backing pipe/kqueue; these tables are what route the guest's
+// read/write to the virtual handler, so without carrying them the duplicate degraded to a raw pipe/fd.
+static void fd_carry_virt(int newfd, int oldfd) {
+    if (newfd < 0 || newfd >= DD_NFD || oldfd < 0 || oldfd >= DD_NFD || newfd == oldfd) return;
+    // eventfd: share the peer write end + counter slot; bump the slot refcount so closing either alias does
+    // not tear the shared object down until the last one closes (see fd_reset_emul / g_eventfd_refs).
+    if (g_eventfd_peer[oldfd]) {
+        g_eventfd_peer[newfd] = g_eventfd_peer[oldfd];
+        g_eventfd_cslot[newfd] = g_eventfd_cslot[oldfd];
+        g_eventfd_sema[newfd] = g_eventfd_sema[oldfd];
+        g_eventfd_refs[eventfd_counter_slot(oldfd)]++;
+    }
+    // timerfd: the timer is armed on the (host-shared) kqueue, so the dup drains the same expirations; carry
+    // the routing flag plus the deadline/interval bookkeeping timerfd_gettime reports against.
+    if (g_timerfd[oldfd]) {
+        g_timerfd[newfd] = 1;
+        g_tfd_deadline[newfd] = g_tfd_deadline[oldfd];
+        g_tfd_interval[newfd] = g_tfd_interval[oldfd];
+    }
+}
+
 // Guest O_DIRECT differs per arch (aarch64/asm-generic = 0x10000, x86-64 = 0x4000); derive it from the
 // arch's O_DIRECTORY (provided by abi.h) so pipe2(O_DIRECT) is recognised on both targets.
 #if G_O_DIRECTORY == 0x10000
@@ -933,6 +956,7 @@ static int svc_io(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t
         if (r >= 0 && r < DD_NFD && (int)a0 >= 0 && (int)a0 < DD_NFD) {
             strcpy(g_fdpath[r], g_fdpath[(int)a0]);
             strcpy(g_proc_text_desc[r], g_proc_text_desc[(int)a0]);
+            g_proc_text_ro[r] = g_proc_text_ro[(int)a0]; // dup shares the open file description (dup3/F_DUPFD do too)
             g_pagemap_fd[r] = g_pagemap_fd[(int)a0];
             if (memfd_ensure_fd((int)a0)) {
                 g_memfd_is[r] = 1;
@@ -940,6 +964,7 @@ static int svc_io(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t
                 memfd_reg_set_fd(r, g_memfd_seal[r]);
             }
             fd_carry_sock(r, (int)a0);
+            fd_carry_virt(r, (int)a0); // eventfd/timerfd share the same object across a dup
         }
         G_RET(c) = r < 0 ? (uint64_t)(-errno) : (uint64_t)r;
         break;
@@ -998,6 +1023,7 @@ static int svc_io(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t
                     memfd_reg_set_fd((int)a1, g_memfd_seal[(int)a1]);
                 }
                 fd_carry_sock((int)a1, (int)a0);
+                fd_carry_virt((int)a1, (int)a0); // eventfd/timerfd share the same object across a dup
             }
             fdtrace_log("dup3", r, oldfd, newfd);
         }
@@ -1256,6 +1282,7 @@ static int svc_io(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t
             g_proc_text_ro[r] = g_proc_text_ro[(int)a0];
             g_pagemap_fd[r] = g_pagemap_fd[(int)a0];
             fd_carry_sock(r, (int)a0);
+            fd_carry_virt(r, (int)a0); // eventfd/timerfd share the same object across a dup
             fdtrace_log(lcmd == 1030 ? "fcntl_dupfd_cloexec" : "fcntl_dupfd", r, (long)a0, (long)a2);
         }
         G_RET(c) = r < 0 ? (uint64_t)(-errno) : (uint64_t)r;

@@ -164,8 +164,18 @@ static void ptm_apply_to_slave(int ptn, int slavefd) {
 static void fd_reset_emul(int fd) {
     if (fd >= 0 && fd < DD_NFD) {
         if (g_eventfd_peer[fd]) {
-            close(g_eventfd_peer[fd] - 1);
+            // Refcounted teardown: a dup()'d eventfd shares the peer write end + counter slot, so only close
+            // the peer and zero the shared counter when the LAST alias closes -- otherwise closing one
+            // duplicate would break the object for the others (fd_carry_virt bumps the slot refcount on dup).
+            int eslot = eventfd_counter_slot(fd);
+            if (--g_eventfd_refs[eslot] <= 0) {
+                close(g_eventfd_peer[fd] - 1);
+                g_eventfd_count[eslot] = 0;
+                g_eventfd_refs[eslot] = 0;
+            }
             g_eventfd_peer[fd] = 0;
+            g_eventfd_cslot[fd] = 0;
+            g_eventfd_sema[fd] = 0;
         }
         g_timerfd[fd] = 0;
         g_tfd_deadline[fd] = 0;
@@ -220,9 +230,8 @@ static void fd_reset_emul(int fd) {
             g_dns_sock[fd] = 0;
         }
         nl_close(fd); // tear down a netlink socket's socketpair peer
-        g_eventfd_count[eventfd_counter_slot(fd)] = 0;
-        g_eventfd_cslot[fd] = 0;
-        g_eventfd_sema[fd] = 0;
+        // (eventfd counter/cslot/sema teardown is handled refcounted in the g_eventfd_peer block above so a
+        // surviving dup keeps the shared counter; do NOT unconditionally zero the shared slot here.)
         ep_fd_reset(fd);
         flock_on_close(fd);
         poslk_on_close(fd); // POSIX drops all this process's fcntl record locks when any fd closes

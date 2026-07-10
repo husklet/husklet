@@ -104,25 +104,6 @@ Verification:
 
 Promote the native oracle checked in `/Users/x/dd/dd-slot-G` into a dd-tests probe for unknown op and flag combinations.
 
-## Plain `dup()` Drops Proc-Text Read-Only Metadata
-
-Priority: P2
-Impact: duplicated synthetic proc fds can diverge from source behavior
-Confidence: Medium
-
-Evidence:
-
-- `dup()` copies path/description/pagemap/socket metadata but omits `g_proc_text_ro`: `dd-jit-darwin/src/runtime/os/linux/syscall/io.c:905`.
-- `dup3` and `F_DUPFD` copy that metadata: `dd-jit-darwin/src/runtime/os/linux/syscall/io.c:965`, `dd-jit-darwin/src/runtime/os/linux/syscall/io.c:1214`.
-
-Why this is suspicious:
-
-Plain `dup()` should preserve the same open file description semantics as the other dup paths. Missing proc-text read-only metadata can make the duplicate behave differently.
-
-Verification:
-
-Open the affected proc text synthetic fd, `dup()` it, then verify write/read-only behavior matches the source and `dup3`/`F_DUPFD`.
-
 ## Sentry `pselect6` Masks Invalid Virtual Fd Bits
 
 Priority: P2
@@ -272,31 +253,6 @@ mac bash -lc 'DDJIT_DIR=$OUT $OUT/ddjit-linux_aarch64 scratch-worker-V/sig_uc_st
 
 Native printed `seen=1 on_alt=1 uc_stack=1`; dd printed `seen=1 on_alt=1 uc_stack=0`.
 
-## `dup(eventfd)` Loses Eventfd Semantics
-
-Priority: P1
-Impact: duplicated fds do not share the eventfd object
-Confidence: High
-
-Verification status: Proven in isolated worktree `/Users/x/dd/dd-worker-AC-signal-runtime-20260710`.
-
-Evidence:
-
-- `dup` carries path/socket/memfd metadata but not eventfd peer/counter state: `dd-jit-darwin/src/runtime/os/linux/syscall/io.c:900`.
-- `dup2`/`dup3` and `F_DUPFD` have the same class of risk: `dd-jit-darwin/src/runtime/os/linux/syscall/io.c:956`, `dd-jit-darwin/src/runtime/os/linux/syscall/io.c:1210`.
-
-Why this is bad:
-
-Linux duplicated eventfds refer to the same eventfd object and read/write the same 8-byte counter. dd can turn the duplicate into an ordinary fd-like path, corrupting event loops that dup descriptors.
-
-Isolated proof:
-
-```sh
-DDWAKE_ROLE=__none ddjit-linux_aarch64 target/ac-probes/eventfd_dup
-```
-
-Linux observed `rd=8 got=5`; dd observed `rd=1 got=1`.
-
 ## `signalfd` Update Keeps Stale Signals (ORs Masks Instead Of Replacing)
 
 Priority: P1
@@ -315,32 +271,6 @@ Why this is bad:
 Linux updates an existing signalfd mask to exactly the new set. dd's OR keeps previously-enabled signals
 active, so an event loop that narrowed its mask can still receive signals it meant to drop. (This is also
 entangled with the single shared-signalfd model -- see the multiple-signalfd-independence finding.)
-
-## `dup(timerfd)` Loses Timerfd Semantics
-
-Priority: P2
-Impact: duplicated timer fds cannot read timer expirations
-Confidence: High
-
-Verification status: Proven in isolated worktree `/Users/x/dd/dd-worker-AC-signal-runtime-20260710`.
-
-Evidence:
-
-- Timerfd metadata is stamped only on the original fd: `dd-jit-darwin/src/runtime/os/linux/syscall/event.c:826`.
-- Timerfd read is gated by the per-fd timer table: `dd-jit-darwin/src/runtime/os/linux/syscall/io.c:438`.
-- Duplication does not carry that state: `dd-jit-darwin/src/runtime/os/linux/syscall/io.c:900`.
-
-Why this is bad:
-
-Linux duplicated timerfds share the same timer object. dd loses the virtual timer metadata, so reads from the duplicated fd fail instead of returning the expiration count.
-
-Isolated proof:
-
-```sh
-DDWAKE_ROLE=__none ddjit-linux_aarch64 target/ac-probes/timerfd_dup
-```
-
-Linux observed `rd=8 re=0 got=1`; dd observed `rd=-1 re=6 got=0`.
 
 ## Epoll Loses Readiness When Watched Fd Closes But Dup Remains
 
