@@ -25,11 +25,7 @@ This directory is a working inventory of suspicious behavior, bad architecture, 
 | P1 | daemon/runtime | failed start leaves a spent `Live` and later fake success | High | [daemon-tests-docs.md](daemon-tests-docs.md#failed-start-leaves-a-spent-live) |
 | P1 | sentry/compat | untrusted split breaks Linux `EFAULT` compatibility | High | [gpu-display-sentry.md](gpu-display-sentry.md#untrusted-split-breaks-linux-efault-compatibility) |
 | P1 | sentry/ipc | `DDJIT_UNTRUSTED` SCM_RIGHTS + eventfd loses events | High | [completeness-and-env.md](completeness-and-env.md#ddjit_untrusted-scm_rights-eventfd-loses-events) |
-| P1 | display/race | Wayland nonblocking flush drops queued messages/fds | High | [gpu-display-sentry.md](gpu-display-sentry.md#wayland-nonblocking-flush-drops-messagesfds) |
-| P1 | display/leak | queued `SCM_RIGHTS` fds leak on connection drop | High | [gpu-display-sentry.md](gpu-display-sentry.md#queued-scm_rights-fds-leak-on-connection-drop) |
-| P1 | display/compat | `wl_shm_pool.resize` is ignored | High | [gpu-display-sentry.md](gpu-display-sentry.md#wl_shm_poolresize-is-ignored) |
 | P1 | display/compat | multiple `wl_surface.frame` requests collapse to one | High | [gpu-display-sentry.md](gpu-display-sentry.md#multiple-wl_surfaceframe-requests-collapse-to-one) |
-| P1 | gpu/corruption | software replay corrupts padded texture uploads | High | [gpu-display-sentry.md](gpu-display-sentry.md#gpu-software-replay-corrupts-padded-texture-uploads) |
 | P1 | gpu/corruption | GPU executor acks success after replay errors/skipped writes | Medium-high | [gpu-display-sentry.md](gpu-display-sentry.md#gpu-executor-acks-success-after-replay-errors-or-skipped-writes) |
 | P1 | gpu/corruption | `DrawIndexed.base_vertex` is ignored by Metal replay | Medium-high | [gpu-display-sentry.md](gpu-display-sentry.md#drawindexedbase_vertex-is-ignored-by-metal-replay) |
 | P1 | gpu/corruption | Metal replay silently no-ops supported IR commands | Medium-high | [gpu-display-sentry.md](gpu-display-sentry.md#metal-replay-silently-no-ops-supported-ir-commands) |
@@ -52,21 +48,15 @@ This directory is a working inventory of suspicious behavior, bad architecture, 
 | P1 | syscall/poll | sentry `ppoll` masks stale fds instead of `POLLNVAL` | High | [syscall-compat.md](syscall-compat.md#sentry-ppoll-masks-stale-fds-instead-of-pollnval) |
 | P1 | syscall/fd | sentry close-on-exec does not clean virtual fds | High | [syscall-compat.md](syscall-compat.md#sentry-close-on-exec-does-not-clean-virtual-fds) |
 | P1 | syscall/signal | `SIGKILL`/`SIGSTOP` can enter the guest signal mask | High | [syscall-compat.md](syscall-compat.md#sigkillsigstop-can-enter-the-guest-signal-mask) |
-| P1 | daemon/images | image aliases report different IDs for same rootfs | High | [daemon-tests-docs.md](daemon-tests-docs.md#image-aliases-report-different-ids-for-the-same-rootfs) |
 | P1 | daemon/cache | build-cache layer replacement is non-atomic | High | [daemon-tests-docs.md](daemon-tests-docs.md#build-cache-layer-replacement-is-non-atomic) |
 | P1 | daemon/cgroup | fractional `--cpus` loses quota precision | High | [daemon-tests-docs.md](daemon-tests-docs.md#fractional---cpus-loses-quota-precision) |
-| P1 | daemon/lifecycle | pause/unpause can fake state on non-live containers | High | [daemon-tests-docs.md](daemon-tests-docs.md#pauseunpause-can-fake-state-on-non-live-containers) |
 | P1 | daemon/lifecycle | ignored kill signals fabricate container exit | High | [daemon-tests-docs.md](daemon-tests-docs.md#ignored-kill-signals-fabricate-container-exit) |
-| P1 | daemon/network | rename leaves network endpoint aliases stale | High | [daemon-tests-docs.md](daemon-tests-docs.md#rename-leaves-network-endpoint-aliases-stale) |
-| P1 | daemon/network | IPAM reuses `.0.2` after 253 endpoints in `/16` | High | [daemon-tests-docs.md](daemon-tests-docs.md#ipam-reuses-02-after-253-endpoints-in-16) |
 | P1 | daemon/exec | exec start is not single-use | High | [daemon-tests-docs.md](daemon-tests-docs.md#exec-start-is-not-single-use) |
 | P1 | daemon/attach | attach to exited container creates fresh live hijack | High | [daemon-tests-docs.md](daemon-tests-docs.md#attach-exited-container-without-live-state-creates-hijack) |
-| P1 | daemon/prune | container prune deletes restarting containers | High | [daemon-tests-docs.md](daemon-tests-docs.md#container-prune-deletes-restarting-containers) |
 | P1 | daemon/restart | daemon restart reloads running containers without live process | High | [daemon-tests-docs.md](daemon-tests-docs.md#daemon-restart-reloads-running-containers-without-live-process) |
 | P1 | daemon/prune | container prune leaves network endpoints | High | [daemon-tests-docs.md](daemon-tests-docs.md#container-prune-leaves-network-endpoints) |
 | P1 | image/delete | `rmi nginx` removes unrelated repositories sharing basename | High | [daemon-tests-docs.md](daemon-tests-docs.md#rmi-nginx-removes-unrelated-repositories-sharing-basename) |
 | P1 | daemon/persistence | failed spawn terminal state is not persisted | High | [daemon-tests-docs.md](daemon-tests-docs.md#failed-spawn-terminal-state-is-not-persisted) |
-| P1 | image/tag | `docker tag` onto existing tag is a silent no-op | High | [daemon-tests-docs.md](daemon-tests-docs.md#docker-tag-onto-existing-tag-is-a-silent-no-op) |
 | P1 | image/tag | `docker tag` aliases do not survive discovery | High | [daemon-tests-docs.md](daemon-tests-docs.md#docker-tag-aliases-do-not-survive-discovery) |
 | P1 | daemon/logs | retained container logs are lost across daemon restart | High | [daemon-tests-docs.md](daemon-tests-docs.md#retained-container-logs-are-lost-across-daemon-restart) |
 | P1 | daemon/ports | failed spawn leaks published host-port forwarders | High | [daemon-tests-docs.md](daemon-tests-docs.md#failed-spawn-leaks-published-host-port-forwarders) |
@@ -170,7 +160,6 @@ This directory is a working inventory of suspicious behavior, bad architecture, 
 | P2 | daemon/logs | `logs -f` can drop output for slow clients | Medium-high | [daemon-tests-docs.md](daemon-tests-docs.md#logs--f-can-drop-output-for-slow-clients) |
 | P2 | daemon/health | `Healthcheck: [NONE]` create override makes fake health | High | [daemon-tests-docs.md](daemon-tests-docs.md#healthcheck-none-create-override-makes-fake-health) |
 | P2 | daemon/lifecycle | stop timeout marks exited before reaper confirms death | Medium | [daemon-tests-docs.md](daemon-tests-docs.md#stop-timeout-marks-exited-before-reaper-confirms-death) |
-| P2 | daemon/network | disconnect missing container returns OK | High | [daemon-tests-docs.md](daemon-tests-docs.md#network-disconnect-missing-container-returns-ok) |
 | P2 | daemon/config | `DDOCKERD_SOCK` startup unlinks configured path | Medium-high | [daemon-tests-docs.md](daemon-tests-docs.md#ddockerd_sock-startup-unlinks-configured-path) |
 | P2 | daemon/inspect | inspect network endpoint JSON is sparse | Medium | [daemon-tests-docs.md](daemon-tests-docs.md#inspect-network-endpoint-json-is-sparse) |
 | P2 | daemon/inspect | `HostConfig.AutoRemove` is omitted from inspect | High | [daemon-tests-docs.md](daemon-tests-docs.md#hostconfigautoremove-is-omitted-from-inspect) |
