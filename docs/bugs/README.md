@@ -45,11 +45,8 @@ This directory is a working inventory of suspicious behavior, bad architecture, 
 | P2 | daemon/logs | `logs -f` can drop output for slow clients | Medium-high | [daemon-tests-docs.md](daemon-tests-docs.md#logs--f-can-drop-output-for-slow-clients) |
 | P2 | daemon/lifecycle | stop timeout marks exited before reaper confirms death | Medium | [daemon-tests-docs.md](daemon-tests-docs.md#stop-timeout-marks-exited-before-reaper-confirms-death) |
 | P2 | docs/tests | gap inventory and architecture docs are stale/missing | High | [daemon-tests-docs.md](daemon-tests-docs.md#gap-and-architecture-docs-are-not-auditable) |
-| P2 | gpu/compat | dmabuf advertises LINEAR buffers it cannot use | Medium-high | [gpu-display-sentry.md](gpu-display-sentry.md#dmabuf-advertises-linear-buffers-it-cannot-use) |
 | P2 | gpu/compat | Metal render target texture id aliases guest texture id `1` | Medium-high | [gpu-display-sentry.md](gpu-display-sentry.md#metal-render-target-texture-id-can-alias-guest-texture-id-1) |
-| P2 | display/compat | presenter failures still release buffers and fire callbacks | Medium | [gpu-display-sentry.md](gpu-display-sentry.md#presenter-failures-still-release-buffers-and-fire-frame-callbacks) |
 | P2 | display/window | native window close is not propagated | Medium-high | [gpu-display-sentry.md](gpu-display-sentry.md#native-window-close-is-not-propagated) |
-| P2 | gpu/compat | Metal duplicate IDs and format fallbacks diverge | Medium-high | [gpu-display-sentry.md](gpu-display-sentry.md#metal-duplicate-ids-and-format-fallbacks-diverge-from-checked-backends) |
 | P2 | env/runtime | `DDJIT_SANDBOX` public mode is intentionally avoided by tests | High | [completeness-and-env.md](completeness-and-env.md#ddjit_sandbox-public-mode-is-intentionally-avoided-by-tests) |
 | P2 | env/durability | `S3DB_DURABILITY` silently changes fsync semantics | High | [completeness-and-env.md](completeness-and-env.md#s3db_durability-hidden-fsync-semantics) |
 | P2 | env/cache | aarch64 pcache key omits `NOSTEALFAST` | Medium | [completeness-and-env.md](completeness-and-env.md#aarch64-pcache-key-omits-nostealfast) |
@@ -69,7 +66,6 @@ This directory is a working inventory of suspicious behavior, bad architecture, 
 | P2 | procfs/state | futex-blocked processes report running in procfs | High | [completeness-and-env.md](completeness-and-env.md#futex-blocked-processes-report-running-in-procfs) |
 | P2 | procfs/maps | `/proc/self/maps` omits RELRO mapping detail | High | [completeness-and-env.md](completeness-and-env.md#procselfmaps-omits-relro-mapping-detail) |
 | P2 | launch/config | path-list config still uses delimiter env strings | Medium | [completeness-and-env.md](completeness-and-env.md#typed-launch-path-lists-still-use-delimiter-env-strings) |
-| P2 | rendering/tests | GUI probe sources are outside default matrix | High | [gpu-display-sentry.md](gpu-display-sentry.md#rendering-coverage-gaps-are-silent) |
 | P1 | syscall/signal | `SA_NOCLDWAIT` does not suppress zombies | High | [syscall-compat.md](syscall-compat.md#sa_nocldwait-does-not-suppress-zombies) |
 | P1 | syscall/signal | aarch64 signal ucontext omits FPSIMD context record | High | [syscall-compat.md](syscall-compat.md#aarch64-signal-ucontext-omits-fpsimd-context-record) |
 | P1 | syscall/signal | `kill(0, sig)` only signals the caller | High | [syscall-compat.md](syscall-compat.md#kill0-sig-only-signals-the-caller) |
