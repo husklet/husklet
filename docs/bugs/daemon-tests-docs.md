@@ -39,46 +39,6 @@ Coverage gap:
 
 Add a unit/integration check that every builder env key is either mapped to `LaunchConfig` or explicitly rejected.
 
-## Dockerfile `WORKDIR` Is Ignored for `RUN`
-
-Priority: P1
-Impact: build semantics mismatch
-Confidence: High
-
-Verification status: Proven in isolated worktree `/Users/x/dd/verify3-dd-worktree`.
-
-Evidence:
-
-- Build parser tracks `WORKDIR` and creates it: `dd-daemon/src/build/handler.rs:367`.
-- `RUN` uses `.host_workdir(workdir.to_string())` but does not set guest cwd: `dd-daemon/src/build/steps.rs:140`.
-- Typed launch uses `LaunchConfig.cwd` for guest working directory: `dd-jit-darwin/src/launch/mod.rs:57`.
-- `SpawnConfig.work_dir` is host-side path resolution state, not guest cwd: `dd-jit-darwin/src/spawn_config.rs:6`.
-
-Why this is bad:
-
-`WORKDIR /app; RUN pwd > /x` should run from `/app`. Current source indicates `RUN` executes from `/`, while later runtime `CMD` paths may use the intended cwd.
-
-Verification:
-
-Build:
-
-```Dockerfile
-FROM alpine
-WORKDIR /app
-RUN pwd > /pwd
-CMD cat /pwd
-```
-
-Expected output is `/app`.
-
-Isolated proof:
-
-```sh
-CARGO_TARGET_DIR=/Users/x/dd/verify3-target cargo test -p dd-jit --lib host_workdir_is_not_guest_cwd -- --nocapture
-```
-
-Result: `1 passed; 0 failed`. The test demonstrates that `.host_workdir(...)` does not populate guest `LaunchConfig.cwd`.
-
 ## Published Port Bind Failures Do Not Fail Start
 
 Priority: P1
@@ -1622,32 +1582,6 @@ CARGO_TARGET_DIR=/Users/x/dd/dd-audit-netmount-target cargo test -p dd-daemon --
 ```
 
 Result: requested `172.18.0.77`, stored endpoint IP was `172.18.0.2`.
-
-## Archive PUT Writes Through Read-Only Bind Mounts
-
-Priority: P1
-Impact: `docker cp` can mutate read-only host bind sources
-Confidence: High
-
-Verification status: Proven in isolated worktree `/Users/x/dd/dd-audit-netmount-20260710-131246`.
-
-Evidence:
-
-- Runtime spawn honors mount `read_only` for the guest: `dd-daemon/src/runtime/spawn/mod.rs:107`.
-- Archive overlay converts mounts to `source:target` without flags: `dd-daemon/src/archive/overlay.rs:9`.
-- Archive PUT writes into the resolved host path: `dd-daemon/src/archive/handlers.rs:126`.
-
-Why this is bad:
-
-A read-only bind mount should reject writes through `docker cp` / archive PUT. dd's archive path bypasses the read-only flag and writes directly into the host source.
-
-Isolated proof:
-
-```sh
-CARGO_TARGET_DIR=/Users/x/dd/dd-audit-netmount-target cargo test -p dd-daemon --bin dd-daemon archive_put_rejects_writes_through_readonly_mount -- --nocapture
-```
-
-Result: archive PUT returned `200` and created `host/new.txt` containing `new`.
 
 ## Bind Mount Propagation Is Dropped
 

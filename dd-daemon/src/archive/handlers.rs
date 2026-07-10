@@ -123,7 +123,7 @@ pub(crate) async fn archive_put(
     Query(q): Query<ArchiveQ>,
     body: axum::body::Bytes,
 ) -> Response {
-    let (cid, upper, rootfs, binds) = {
+    let (cid, upper, rootfs, binds, ro_targets) = {
         let g = a.inner.lock().await;
         let Some((full, c)) = resolve_get(&g, &id) else {
             return no_such(&id);
@@ -137,8 +137,20 @@ pub(crate) async fn archive_put(
                 .cloned()
                 .chain(mounts_as_binds(&c.mounts))
                 .collect::<Vec<_>>(),
+            readonly_mount_targets(&c.binds, &c.mounts),
         )
     };
+    // A read-only bind/volume mount must reject writes through `docker cp` / archive PUT — otherwise the
+    // write lands in the host source dir, silently bypassing the read-only flag the guest sees.
+    if path_under_readonly_mount(&q.path, &ro_targets) {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(crate::api::ErrorMessage {
+                message: format!("cannot copy to {}: mounted path is marked read-only", q.path),
+            }),
+        )
+            .into_response();
+    }
     // cp INTO the container writes to the upper layer. The extraction dir may exist only in the read-only
     // image (lower); mirror it into the upper (copy-up the dir) so the files land in the writable layer
     // and the image is never touched.

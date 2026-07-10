@@ -231,12 +231,19 @@ pub(super) async fn run_step(
     // (loose `K=V` lines: image ENV + Dockerfile ENV/ARG) through `.guest_env`, which encodes it into
     // `DD_GUEST_ENV` — the launch_config mapper only translates known `DD_*`/`DDJIT_*` keys and would drop
     // arbitrary RUN env otherwise, so a plain `.env()` per pair would silently lose the step's environment.
-    let container = ddjit::Container::builder(
+    let mut builder = ddjit::Container::builder(
         ddjit::Image::from_rootfs(rootfs.to_string_lossy().into_owned()).guest(arch),
     )
     .host_workdir(workdir.to_string())
     .cmd(vec!["/bin/sh".to_string(), "-c".to_string(), args.to_string()])
     .guest_env(env, false);
+    // WORKDIR must set the GUEST cwd for the RUN, not just host-side path resolution: `WORKDIR /app`
+    // followed by `RUN pwd` should print `/app`. `.host_workdir` only feeds host ADD/COPY resolution;
+    // `.workdir` populates LaunchConfig.cwd. Empty workdir leaves the guest's default cwd untouched.
+    if !workdir.is_empty() {
+        builder = builder.workdir(workdir.to_string());
+    }
+    let container = builder;
     let container = match container.build() {
         Ok(c) => c,
         Err(e) => return Err(format!("RUN: {e}")),
