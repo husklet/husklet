@@ -626,7 +626,10 @@ static int svc_event(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint6
         if (r >= 0) {
             if (r < DD_NFD) g_inotify[r] = 1;
             if (a0 & 0x800) fcntl(r, F_SETFL, O_NONBLOCK);
-            if (a0 & 0x80000) fcntl(r, F_SETFD, FD_CLOEXEC);
+            // macOS kqueue() defaults FD_CLOEXEC SET; Linux inotify_init1(0) leaves it CLEAR. Set it exactly
+            // per IN_CLOEXEC (clearing the kqueue default otherwise) so an inotify fd created without the
+            // flag survives exec instead of being swept by dd's close-on-exec pass.
+            fcntl(r, F_SETFD, (a0 & 0x80000) ? FD_CLOEXEC : 0);
         }
         fdtrace_log("inotify_init1", r, (long)a0, 0);
         G_RET(c) = r < 0 ? (uint64_t)(-errno) : (uint64_t)r;
@@ -918,7 +921,14 @@ static int svc_event(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint6
             G_RET(c) = (uint64_t)(-errno);
             break;
         }
-        g_sigfd_mask |= pm;
+        // Linux signalfd(fd != -1, mask): UPDATE replaces the existing mask EXACTLY with the new set -- a
+        // narrowed mask must drop the signals it removed. The old unconditional OR kept previously-enabled
+        // signals active, so an event loop that narrowed its mask still received signals it meant to drop.
+        // A fresh create (fd == -1) still accumulates into the (single shared) signalfd's mask.
+        if ((int)a0 != -1)
+            g_sigfd_mask = pm;
+        else
+            g_sigfd_mask |= pm;
         g_sigfd_read = g_sigfd_pipe[0];
         for (int s = 1; s < 64; s++)
             // make sure the host delivers them
@@ -953,9 +963,15 @@ static int svc_event(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint6
         }
         int r = kqueue();
         if (r >= 0) {
-            if (r < DD_NFD) g_timerfd[r] = 1;
-            if (a1 & 0x800) fcntl(r, F_SETFL, O_NONBLOCK);   // TFD_NONBLOCK
-            if (a1 & 0x80000) fcntl(r, F_SETFD, FD_CLOEXEC); // TFD_CLOEXEC
+            if (r < DD_NFD) {
+                g_timerfd[r] = 1;
+                g_tfd_clock[r] = (int)a0; // remember the clockid for TFD_TIMER_ABSTIME conversion
+            }
+            if (a1 & 0x800) fcntl(r, F_SETFL, O_NONBLOCK); // TFD_NONBLOCK
+            // macOS kqueue() defaults FD_CLOEXEC SET; Linux timerfd_create(...,0) leaves it CLEAR. Set it
+            // exactly per TFD_CLOEXEC (clearing the kqueue default otherwise) so a timerfd created without
+            // the flag survives exec instead of being swept by dd's close-on-exec pass.
+            fcntl(r, F_SETFD, (a1 & 0x80000) ? FD_CLOEXEC : 0);
         }
         fdtrace_log("timerfd_create", r, (long)a0, (long)a1);
         G_RET(c) = r < 0 ? (uint64_t)(-errno) : (uint64_t)r;
@@ -1041,10 +1057,23 @@ static int svc_event(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint6
         struct timespec now;
         clock_gettime(CLOCK_MONOTONIC, &now);
         int64_t now_ns = (int64_t)now.tv_sec * 1000000000LL + now.tv_nsec;
-        // TFD_TIMER_ABSTIME (flags bit 1): it_value is an ABSOLUTE CLOCK_MONOTONIC deadline. The kqueue
-        // EVFILT_TIMER delay is always RELATIVE, so convert -- arming it with the absolute deadline (billions
-        // of ns) made the timerfd fire ~years later (a blocking read hung). A past deadline fires asap (0).
-        int64_t first_delay = ((int)a1 & 1) ? (value_ns - now_ns) : value_ns;
+        // TFD_TIMER_ABSTIME (flags bit 1): it_value is an ABSOLUTE deadline expressed in the TIMER'S OWN
+        // clock. The kqueue EVFILT_TIMER delay is always RELATIVE, so convert by subtracting "now" IN THAT
+        // SAME CLOCK -- a CLOCK_REALTIME timerfd's absolute deadline is a realtime epoch value, and
+        // subtracting CLOCK_MONOTONIC from it made the delay ~decades (a near-future realtime deadline never
+        // fired). A past deadline fires asap (0).
+        int64_t first_delay;
+        if ((int)a1 & 1) {
+            int clkid = ((int)a0 >= 0 && (int)a0 < DD_NFD) ? g_tfd_clock[(int)a0] : 1;
+            // Linux CLOCK_REALTIME(0)/REALTIME_ALARM(8) are wall-clock; everything else is monotonic-scale.
+            clockid_t tc = (clkid == 0 || clkid == 8) ? CLOCK_REALTIME : CLOCK_MONOTONIC;
+            struct timespec tnow;
+            clock_gettime(tc, &tnow);
+            int64_t tnow_ns = (int64_t)tnow.tv_sec * 1000000000LL + tnow.tv_nsec;
+            first_delay = value_ns - tnow_ns;
+        } else {
+            first_delay = value_ns;
+        }
         if (first_delay < 0) first_delay = 0;
         // Record the absolute next-expiry deadline + interval so timerfd_gettime can report the remaining time.
         if ((int)a0 >= 0 && (int)a0 < DD_NFD) {
