@@ -11,6 +11,8 @@ pub(super) fn op_x86_avx() -> Group {
             x("avx2", "completeness/x86_avx2.c"),
             x("fma", "completeness/x86_fma.c"),
             x("f16c", "completeness/x86_f16c.c"),
+            // VEX vmovss/vmovsd reg-reg scalar merge: upper low-lane bits come from vvvv.
+            x("vmov-scalar-merge", "completeness/x86_vmov_scalar_merge.c"),
         ],
     )
 }

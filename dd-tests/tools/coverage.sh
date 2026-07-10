@@ -32,7 +32,10 @@
 # the built engines (`make jit`) and reaches the macOS JIT through the `mac` bridge (test-harness path).
 set -u
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
-RT="$ROOT/dd-jit/src/runtime"
+# The decomposed C engine lives under dd-jit-darwin/src/runtime (see Makefile RUNTIME_C).
+# NOT dd-jit/src/runtime -- that is the Rust runtime wrapper (container/, engine/ *.rs), which
+# contains none of the syscall handlers and would false-green the coverage report at 0/321 (#coverage).
+RT="${DDCOV_RT:-$ROOT/dd-jit-darwin/src/runtime}"   # DDCOV_RT overrides for tests/CI probing
 SYSCALL_DIR="$RT/os/linux/syscall"
 SYSMAP="$RT/translate/x86_64/sysmap.h"
 # the handler modules that own a top-level `switch (nr)` (dispatch.c's two switches are pre-dispatch
@@ -44,6 +47,26 @@ SYSMAP="$RT/translate/x86_64/sysmap.h"
 HANDLER_MODULES="sysv mem signal time io aio fs proc net event misc rare"
 UNISTD="/usr/include/asm-generic/unistd.h"
 MODE="${1:-all}"
+
+# ---- preflight: the runtime sources MUST exist, or every "handled" lens silently reads 0 -----------
+# Without this a stale/wrong RT path (e.g. the pre-refactor dd-jit/src/runtime tree) makes the static
+# report claim "handled 0 / N" and exit 0 -- an authoritative-looking false green (#coverage). A missing
+# handler tree or sysmap is a fatal misconfiguration of this tool, not a real coverage result.
+require_runtime_sources() {
+    local missing=0 m
+    if [ ! -d "$SYSCALL_DIR" ]; then
+        echo "FATAL: syscall handler dir not found: $SYSCALL_DIR" >&2; missing=1
+    else
+        for m in $HANDLER_MODULES; do
+            [ -r "$SYSCALL_DIR/$m.c" ] || { echo "FATAL: missing handler module: $SYSCALL_DIR/$m.c" >&2; missing=1; }
+        done
+    fi
+    [ -r "$SYSMAP" ] || { echo "FATAL: missing x86-64 sysmap: $SYSMAP" >&2; missing=1; }
+    if [ "$missing" -ne 0 ]; then
+        echo "FATAL: coverage.sh cannot scan the engine (RT=$RT). Refusing to report false-green coverage." >&2
+        exit 3
+    fi
+}
 
 # ---- canonical syscall name<->number table from the kernel headers (via the preprocessor) ----------
 # names_table: lines "<num> <name>" for every real __NR_* the asm-generic ABI defines. The count
@@ -147,8 +170,8 @@ dynamic() {
     echo ""
     echo "== dynamic: syscalls/opcodes the engines hit at runtime over the test corpus =="
     local A X RF
-    A="$(ls "$ROOT"/target/debug/build/ddjit-*/out/ddjit-linux_aarch64 2>/dev/null | head -1)"
-    X="$(ls "$ROOT"/target/debug/build/ddjit-*/out/ddjit-linux_x86_64 2>/dev/null | head -1)"
+    A="$(ls "$ROOT"/target/debug/build/dd-jit-darwin-*/out/ddjit-linux_aarch64 2>/dev/null | head -1)"
+    X="$(ls "$ROOT"/target/debug/build/dd-jit-darwin-*/out/ddjit-linux_x86_64 2>/dev/null | head -1)"
     RF="$(ls -d /Users/x/dd/poc/images/*alpine*/rootfs 2>/dev/null | head -1)"
     [ -z "$A" ] && { echo "  (engines not built; run \`make jit\`)"; return; }
     local log; log="$(mktemp)"
@@ -273,9 +296,9 @@ report() {
 }
 
 case "$MODE" in
-    static)  static_aarch64; static_x86 ;;
-    dynamic) dynamic ;;
-    all)     static_aarch64; static_x86; dynamic ;;
-    report)  report ;;
+    static)  require_runtime_sources; static_aarch64; static_x86 ;;
+    dynamic) require_runtime_sources; dynamic ;;
+    all)     require_runtime_sources; static_aarch64; static_x86; dynamic ;;
+    report)  require_runtime_sources; report ;;
     *) echo "usage: coverage.sh [static|dynamic|all|report]"; exit 2 ;;
 esac
