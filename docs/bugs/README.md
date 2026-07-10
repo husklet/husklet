@@ -134,8 +134,6 @@ This directory is a working inventory of suspicious behavior, bad architecture, 
 | P2 | daemon/health | `Healthcheck: [NONE]` create override makes fake health | High | [daemon-tests-docs.md](daemon-tests-docs.md#healthcheck-none-create-override-makes-fake-health) |
 | P2 | daemon/lifecycle | stop timeout marks exited before reaper confirms death | Medium | [daemon-tests-docs.md](daemon-tests-docs.md#stop-timeout-marks-exited-before-reaper-confirms-death) |
 | P2 | daemon/config | `DDOCKERD_SOCK` startup unlinks configured path | Medium-high | [daemon-tests-docs.md](daemon-tests-docs.md#ddockerd_sock-startup-unlinks-configured-path) |
-| P2 | daemon/inspect | inspect network endpoint JSON is sparse | Medium | [daemon-tests-docs.md](daemon-tests-docs.md#inspect-network-endpoint-json-is-sparse) |
-| P2 | daemon/inspect | `HostConfig.AutoRemove` is omitted from inspect | High | [daemon-tests-docs.md](daemon-tests-docs.md#hostconfigautoremove-is-omitted-from-inspect) |
 | P2 | daemon/events | fast-exit event ordering can emit `die` before `start` | Medium | [daemon-tests-docs.md](daemon-tests-docs.md#fast-exit-event-ordering-can-emit-die-before-start) |
 | P2 | daemon/events | container prune deletes without destroy events | High | [daemon-tests-docs.md](daemon-tests-docs.md#container-prune-deletes-without-destroy-events) |
 | P2 | daemon/events | network prune deletes without destroy events | High | [daemon-tests-docs.md](daemon-tests-docs.md#network-prune-deletes-without-destroy-events) |
@@ -258,22 +256,10 @@ This directory is a working inventory of suspicious behavior, bad architecture, 
 | P2 | build/base | `FROM` local lookup ignores tag | Medium-high | [archive-fs-compat.md](archive-fs-compat.md#from-local-lookup-ignores-tag) |
 | P2 | image/identity | tag/digest reporting is synthetic and inconsistent | Medium-high | [archive-fs-compat.md](archive-fs-compat.md#tagdigest-reporting-is-synthetic-and-inconsistent) |
 | P2 | image/metadata | daemon save/load drops image labels | High | [daemon-tests-docs.md](daemon-tests-docs.md#daemon-saveload-drops-image-labels) |
-| P2 | image/metadata | container create drops inherited image labels | High | [daemon-tests-docs.md](daemon-tests-docs.md#container-create-drops-inherited-image-labels) |
 | P2 | image/metadata | daemon discovery drops image labels | High | [daemon-tests-docs.md](daemon-tests-docs.md#daemon-discovery-drops-image-labels) |
-| P2 | daemon/config | create env overrides remain duplicated in config | High | [daemon-tests-docs.md](daemon-tests-docs.md#create-env-overrides-remain-duplicated-in-config) |
 | P2 | daemon/restart | restart state load overwrites persisted container arch | High | [daemon-tests-docs.md](daemon-tests-docs.md#restart-state-load-overwrites-persisted-container-arch) |
-| P1 | daemon/inspect | container inspect collapses entrypoint and cmd | High | [daemon-tests-docs.md](daemon-tests-docs.md#container-inspect-collapses-entrypoint-and-cmd) |
 | P1 | image/commit | Docker commit drops container user | High | [daemon-tests-docs.md](daemon-tests-docs.md#docker-commit-drops-container-user) |
-| P2 | daemon/inspect | create `ExposedPorts` is dropped from inspect | High | [daemon-tests-docs.md](daemon-tests-docs.md#create-exposedports-is-dropped-from-inspect) |
-| P2 | daemon/inspect | interactive create config is not reported | High | [daemon-tests-docs.md](daemon-tests-docs.md#interactive-create-config-is-not-reported) |
-| P2 | daemon/inspect | `HostConfig.LogConfig` is accepted then lost | High | [daemon-tests-docs.md](daemon-tests-docs.md#hostconfiglogconfig-is-accepted-then-lost) |
-| P1 | daemon/config | DNS and ExtraHosts options are lost | High | [daemon-tests-docs.md](daemon-tests-docs.md#dns-and-extrahosts-options-are-lost) |
-| P1 | daemon/network | endpoint static IPs and aliases are ignored | High | [daemon-tests-docs.md](daemon-tests-docs.md#endpoint-static-ips-and-aliases-are-ignored) |
 | P1 | daemon/restart | restarting containers can stay stuck after daemon restart | High | [daemon-tests-docs.md](daemon-tests-docs.md#restarting-containers-can-stay-stuck-after-daemon-restart) |
-| P2 | daemon/config | `HostConfig.DeviceRequests` is accepted then lost | High | [daemon-tests-docs.md](daemon-tests-docs.md#hostconfigdevicerequests-is-accepted-then-lost) |
-| P2 | daemon/inspect | `HostConfig.NetworkMode` is missing from inspect | High | [daemon-tests-docs.md](daemon-tests-docs.md#hostconfignetworkmode-is-missing-from-inspect) |
-| P2 | daemon/config | `Config.Domainname` is accepted then lost | High | [daemon-tests-docs.md](daemon-tests-docs.md#configdomainname-is-accepted-then-lost) |
-| P2 | daemon/mounts | bind mount propagation is dropped | High | [daemon-tests-docs.md](daemon-tests-docs.md#bind-mount-propagation-is-dropped) |
 | P2 | daemon/logs | logs time filters reject RFC3339 forms | High | [daemon-tests-docs.md](daemon-tests-docs.md#logs-time-filters-reject-rfc3339-forms) |
 | P2 | daemon/logs | logs timestamps are second-precision | High | [daemon-tests-docs.md](daemon-tests-docs.md#logs-timestamps-are-second-precision) |
 | P2 | daemon/stats | stats JSON is internally inconsistent | High | [daemon-tests-docs.md](daemon-tests-docs.md#stats-json-is-internally-inconsistent) |
