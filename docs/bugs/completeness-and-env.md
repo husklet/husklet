@@ -196,31 +196,6 @@ Verification:
 
 Launch two containers through the typed runtime with global pcache defaults and per-container `DDJIT_NOPCACHE`, then assert no pcache file is loaded or written for the opted-out container.
 
-### `/proc/self/limits` Disagrees With `getrlimit(RLIMIT_CORE)`
-
-Priority: P2
-Impact: procfs-scraping tools think core dumps are enabled
-Confidence: High
-
-Verification status: Proven in isolated worktree `/Users/x/dd/dd-worker-K-sparse`.
-
-Evidence:
-
-- `getrlimit(RLIMIT_CORE)` returns soft limit `0`: `dd-jit-darwin/src/runtime/os/linux/syscall/proc.c:190`.
-- `/proc/self/limits` reports core size as `unlimited`: `dd-jit-darwin/src/runtime/os/linux/container/vfs.c:2806`.
-
-Why this is bad:
-
-Tools that read `/proc/self/limits` can believe core dumps are enabled while syscalls and wait/core behavior follow soft limit `0`.
-
-Isolated proof:
-
-```sh
-mac bash -lc 'E=/Users/x/dd/dd/target/release/build/dd-jit-darwin-16122afd27b6bb64/out/ddjit-linux_aarch64; "$E" target-slot-k/slot_k_rlimit_proc_core_static'
-```
-
-Observed: `rlimit_core get=0 soft=0 proc_zero=0`; native oracle passed with `proc_zero=1`.
-
 ### `sysinfo(2)` Ignores Container Memory Cap
 
 Priority: P1
@@ -245,21 +220,6 @@ DD_MEM_MAX=536870912 "$E" target-slot-k/slot_k_sysinfo_memcg_static
 ```
 
 Observed: `sysinfo total=8589934592 memory.max=536870912`.
-
-### `/proc/version` Is Guest-ISA Blind
-
-Priority: P2
-Impact: contradictory platform metadata for x86_64 guests
-Confidence: Medium
-
-Evidence:
-
-- `uname.machine` is per guest ISA: `dd-jit-darwin/src/runtime/os/linux/syscall/misc.c:19`.
-- `/proc/version` always says `aarch64`: `dd-jit-darwin/src/runtime/os/linux/container/vfs.c:3250`.
-
-Why this is bad:
-
-x86_64 guests can see `uname -m` as `x86_64` while `/proc/version` contains `aarch64`, confusing platform probes and diagnostic tooling.
 
 ### Typed Launch Path Lists Still Use Delimiter Env Strings
 
@@ -333,31 +293,6 @@ make test FILTER=pf-exec-manyargs
 ```
 
 Result: failed on both Linux engines; observed `argc=255 last=arg252 proc_count=1`, expected `argc=302 last=arg299 proc_count=302`.
-
-### `/proc/self/status` Reports Root Uid/Gid
-
-Priority: P2
-Impact: procfs identity disagrees with guest uid/gid
-Confidence: High
-
-Verification status: Proven in isolated worktree `/Users/x/dd/dd-worker-R-envproc-20260710`.
-
-Evidence:
-
-- `/proc/self/status` formats `Uid` and `Gid` as zero: `dd-jit-darwin/src/runtime/os/linux/container/vfs.c:1605`.
-- The Linux target runtime reads configured guest uid/gid from `DD_UID` and `DD_GID`: `dd-jit-darwin/src/runtime/targets/linux_aarch64.c:592`.
-
-Why this is bad:
-
-Tools that read `/proc/self/status` for privilege or ownership checks can think the process is root even when guest uid/gid syscalls report a configured non-root identity.
-
-Isolated proof:
-
-```sh
-make test FILTER=pf-status-uidgid
-```
-
-Result: failed on both Linux engines. aarch64 observed `uid=1001/0 gid=1002/0`.
 
 ### Hidden Proc Switches Change Peer Procfs
 
@@ -503,31 +438,6 @@ cargo run -q -p dd-tests -- -e x86_64 audit-af-taskdir-threads
 ```
 
 Observed dd: `entries=1 expected=4 all_listed=0`; Linux oracle listed all four threads.
-
-### `/proc/stat processes` Is Live Count Instead Of Cumulative Forks
-
-Priority: P2
-Impact: fork churn and process creation telemetry are wrong
-Confidence: High
-
-Verification status: Proven in isolated worktree `/Users/x/dd/dd-worker-AF-envproc-src-20260710`.
-
-Evidence:
-
-- `/proc/stat` formats `processes` from proc registry count: `dd-jit-darwin/src/runtime/os/linux/container/vfs.c:3156`, `dd-jit-darwin/src/runtime/os/linux/container/vfs.c:3189`.
-
-Why this is bad:
-
-Linux reports cumulative forks since boot. dd reports the live registry count, so the value does not increase with fork churn and cannot be used for process creation telemetry.
-
-Isolated proof:
-
-```sh
-cargo run -q -p dd-tests -- -e aarch64 audit-af-procstat-processes
-cargo run -q -p dd-tests -- -e x86_64 audit-af-procstat-processes
-```
-
-Observed dd: `before=1 after=1 delta=0 ge_forks=0`; Linux oracle increased by the fork count.
 
 ### Network-None Hides `eth0` In Readdir But Direct Lookup Exposes It
 
@@ -707,30 +617,6 @@ Linux: advertises=1 cpu_eff=1 mem_eff=1 pids_peak=1 ok=1
 dd:    advertises=1 cpu_eff=0:2:- mem_eff=0:2:- pids_peak=0:2:- ok=0
 ```
 
-### `/proc/self/status` Threads Is Hardcoded To One
-
-Priority: P1
-Impact: status summary hides live pthreads
-Confidence: High
-
-Verification status: Proven in isolated worktree `/Users/x/dd/dd-worker-BE2-clean-20260710`.
-
-Evidence:
-
-- Self status is rendered in procfs: `dd-jit-darwin/src/runtime/os/linux/container/vfs.c:1589`.
-- `Threads:\t1` is hardcoded: `dd-jit-darwin/src/runtime/os/linux/container/vfs.c:1608`.
-
-Why this is bad:
-
-Tools read `/proc/self/status` for thread counts even when they do not enumerate `/proc/self/task`. dd reports one thread while pthreads are live, hiding concurrency from diagnostics and runtimes.
-
-Observed proof:
-
-```text
-Linux: status_threads threads=4 expected_ge=4 ok=1
-dd:    status_threads threads=1 expected_ge=4 ok=0
-```
-
 ### `/proc/net/unix` Ignores Live AF_UNIX Sockets
 
 Priority: P2
@@ -778,30 +664,6 @@ Observed proof:
 ```text
 dd:    procnet_dir dir=0 tcp=0 dev=0 sockstat=0 direct_tcp=1 direct_dev=1
 Linux: procnet_dir dir=1 tcp=1 dev=1 sockstat=1 direct_tcp=1 direct_dev=1
-```
-
-### `/proc/net/sockstat` And `sockstat6` Are Missing
-
-Priority: P1
-Impact: socket accounting probes and diagnostics fail
-Confidence: High
-
-Verification status: Proven in isolated worktree `/Users/x/dd/dd-bk2-audit-20260710`.
-
-Evidence:
-
-- `/proc/self/net/*` mirrors fold to `/proc/net/*`: `dd-jit-darwin/src/runtime/os/linux/container/vfs.c:3007`.
-- The synthesized net leaves omit `sockstat` and `sockstat6`: `dd-jit-darwin/src/runtime/os/linux/container/vfs.c:3253`, `dd-jit-darwin/src/runtime/os/linux/container/vfs.c:3281`.
-
-Why this is bad:
-
-Linux provides socket accounting through both `/proc/net/sockstat` and `/proc/self/net/sockstat`. dd reports neither, so runtimes and diagnostics can mis-detect socket pressure or feature availability.
-
-Observed proof:
-
-```text
-dd:    procnet_sockstat sockstat=0 self_sockstat=0 sockstat6=0
-Linux: procnet_sockstat sockstat=1 self_sockstat=1 sockstat6=1
 ```
 
 ### Cgroup V2 Omits Additional Standard Controller Files
@@ -1062,29 +924,6 @@ dd:    /proc flags=0 /sys flags=0 /dev flags=0 /dev/shm flags=0 /tmp flags=0
 Linux: /proc flags=102e /sys flags=1020 /dev flags=1020 /dev/shm flags=26
 ```
 
-### `/proc/self/io` Is Missing
-
-Priority: P1
-Impact: IO accounting probes and language runtimes see absent Linux procfs data
-Confidence: High
-
-Verification status: Proven in isolated worktree `/Users/x/dd/dd-procfs-statfs-audit-20260710`.
-
-Evidence:
-
-- Direct proc file dispatch does not include `io`: `dd-jit-darwin/src/runtime/os/linux/container/vfs.c:3027`.
-
-Why this is bad:
-
-Linux containers expose `/proc/self/io` with fields such as `rchar` and `read_bytes`. dd returns `ENOENT`, breaking monitoring agents and libraries that use procfs IO counters opportunistically.
-
-Observed proof:
-
-```text
-dd:    open(/proc/self/io)=-1 errno=2
-Linux: open(/proc/self/io)=3 contains rchar/read_bytes fields
-```
-
 ### `/dev/fd` Symlink Cannot Be Enumerated
 
 Priority: P2
@@ -1130,29 +969,6 @@ Observed proof:
 ```text
 dd:    executable rows include r-xp and rw-p only
 Linux: executable rows include r--p plus vdso mapping
-```
-
-### `/proc/meminfo` And `/proc/stat` Are Sparse
-
-Priority: P2
-Impact: common procfs consumers see missing or zeroed accounting fields
-Confidence: High
-
-Verification status: Proven in isolated worktree `/Users/x/dd/dd-procfs-statfs-audit-20260710`.
-
-Evidence:
-
-- Synthetic procfs emits short meminfo/stat content: `dd-jit-darwin/src/runtime/os/linux/container/vfs.c:3150`, `dd-jit-darwin/src/runtime/os/linux/container/vfs.c:3189`.
-
-Why this is bad:
-
-Linux exposes many standard `/proc/meminfo` fields and live `/proc/stat` counters. dd emits a sparse meminfo and zeroes key stat fields such as `intr` and `ctxt`, which can disable monitoring heuristics or feed bad capacity data to applications.
-
-Observed proof:
-
-```text
-dd:    meminfo has 9 lines and omits Active/Inactive/Dirty/AnonPages; proc/stat has intr 0 ctxt 0
-Linux: meminfo includes those fields and proc/stat counters are nonzero
 ```
 
 ### `/dev/urandom` Writes Fail With EPERM
@@ -1224,29 +1040,6 @@ Observed proof:
 ```text
 dd:    /proc/tty, /proc/tty/drivers, /proc/tty/driver, /proc/tty/driver/serial -> ENOENT
 Linux: /proc/tty exists and /proc/tty/drivers is readable
-```
-
-### `/proc/devices` Has Empty Block Device Section
-
-Priority: P2
-Impact: device-major discovery underreports block device classes
-Confidence: High
-
-Verification status: Proven in isolated worktree `/Users/x/dd/dd-audit-devfs-procfs-20260710`.
-
-Evidence:
-
-- `/proc/devices` content is synthesized with an empty block-device section: `dd-jit-darwin/src/runtime/os/linux/container/vfs.c:3481`.
-
-Why this is bad:
-
-Linux and qemu expose block majors such as `loop` in `/proc/devices`. dd prints `Block devices:` with no entries, so installers and diagnostics that inspect major numbers get a false device surface.
-
-Observed proof:
-
-```text
-Linux/qemu: has_block_loop=1
-dd:         has_block_loop=0
 ```
 
 ## Regression Gate Shape

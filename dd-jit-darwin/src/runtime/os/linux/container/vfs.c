@@ -1599,13 +1599,19 @@ static int proc_status_text(char *b, size_t n) {
     groups_status_str(groups, sizeof groups);
     char cpumask[40], cpulist[24];
     cpus_allowed_strs(cpumask, sizeof cpumask, cpulist, sizeof cpulist);
+    // Identity must agree with getuid/geteuid/getgid/getegid (syscall/proc.c returns g_ruid/euid/…). A
+    // hardcoded 0 made procfs report root even when the guest ran as a configured non-root uid/gid.
+    cred_init(); // populate g_ruid/g_suid/… before we read them
+    int uid_r = g_ruid, uid_e = cred_euid(), uid_s = g_suid, uid_fs = newfile_uid();
+    int gid_r = g_rgid, gid_e = cred_egid(), gid_s = g_sgid, gid_fs = newfile_gid();
+    int threads = thread_live_count(); // live pthreads (Threads: hid concurrency at a hardcoded 1)
     return snprintf(
         b, n,
         "Name:\t%s\nUmask:\t0022\nState:\tR (running)\nTgid:\t%d\nNgid:\t0\nPid:\t%d\nPPid:\t%d\n"
-        "TracerPid:\t0\nUid:\t0\t0\t0\t0\nGid:\t0\t0\t0\t0\nFDSize:\t256\nGroups:\t%s\n"
+        "TracerPid:\t0\nUid:\t%d\t%d\t%d\t%d\nGid:\t%d\t%d\t%d\t%d\nFDSize:\t256\nGroups:\t%s\n"
         "VmPeak:\t%8lu kB\nVmSize:\t%8lu kB\nVmLck:\t%8lu kB\nVmHWM:\t%8lu kB\nVmRSS:\t%8lu kB\n"
         "VmData:\t%8lu kB\nVmStk:\t     132 kB\nVmExe:\t     512 kB\nVmLib:\t    2048 kB\nVmPTE:\t      32 kB\n"
-        "VmSwap:\t       0 kB\nThreads:\t1\nSigQ:\t0/31000\nSigPnd:\t0000000000000000\n"
+        "VmSwap:\t       0 kB\nThreads:\t%d\nSigQ:\t0/31000\nSigPnd:\t0000000000000000\n"
         "SigBlk:\t0000000000000000\nSigIgn:\t0000000000000000\nSigCgt:\t0000000000000000\n"
         // Capability + security context. A default `docker run` root container drops all but 14
         // caps: CapPrm/CapEff/CapBnd=00000000a80425fb, CapInh/CapAmb=0. NoNewPrivs follows the
@@ -1617,8 +1623,9 @@ static int proc_status_text(char *b, size_t n) {
         "Speculation_Store_Bypass:\tvulnerable\nSpeculationIndirectBranch:\tunknown\n"
         "Cpus_allowed:\t%s\nCpus_allowed_list:\t%s\nvoluntary_ctxt_switches:\t1\n"
         "nonvoluntary_ctxt_switches:\t0\n",
-        comm, pid, pid, ppid, groups, vsz, vsz, vmlck, rss, rss, rss, (unsigned long long)DD_CAP_DEFAULT,
-        (unsigned long long)g_cap_eff, (unsigned long long)g_cap_bnd, g_nnp, cpumask, cpulist);
+        comm, pid, pid, ppid, uid_r, uid_e, uid_s, uid_fs, gid_r, gid_e, gid_s, gid_fs, groups, vsz, vsz, vmlck,
+        rss, rss, rss, threads, (unsigned long long)DD_CAP_DEFAULT, (unsigned long long)g_cap_eff,
+        (unsigned long long)g_cap_bnd, g_nnp, cpumask, cpulist);
 }
 
 // /proc/[pid]/stat -- the 52-field single line (pid (comm) state ppid ...). Field 23 = vsize (bytes),
@@ -2803,7 +2810,7 @@ static int proc_limits_text(char *buf, size_t cap) {
         {"Max file size", "unlimited", "unlimited", "bytes"},
         {"Max data size", "unlimited", "unlimited", "bytes"},
         {"Max stack size", "8388608", "unlimited", "bytes"},
-        {"Max core file size", "unlimited", "unlimited", "bytes"},
+        {"Max core file size", "0", "unlimited", "bytes"}, // cores OFF (soft=0), matching getrlimit(RLIMIT_CORE)
         {"Max resident set", "unlimited", "unlimited", "bytes"},
         {"Max processes", "unlimited", "unlimited", "processes"},
         {"Max open files", "20480", "1048576", "files"}, // oracle (docker default soft): was 1024
@@ -3057,6 +3064,13 @@ static int proc_open(const char *rp) {
             n = snprintf(buf, sizeof buf, "0\n"); // not OOM-adjusted (systemd/containerd read/probe)
         else if (!strcmp(leaf, "loginuid"))
             n = snprintf(buf, sizeof buf, "4294967295\n"); // unset (pam)
+        else if (!strcmp(leaf, "io"))
+            // Per-process IO accounting. Monitoring agents (cAdvisor, language runtimes) read it
+            // opportunistically; dd tracks no real per-process byte counters, so present the canonical
+            // key set with a deterministic baseline (structural fidelity, like memory.stat/cpu.stat).
+            n = snprintf(buf, sizeof buf,
+                         "rchar: 0\nwchar: 0\nsyscr: 0\nsyscw: 0\nread_bytes: 0\nwrite_bytes: 0\n"
+                         "cancelled_write_bytes: 0\n");
         if (n >= 0) {
             char desc[64];
             snprintf(desc, sizeof desc, "self:%s", leaf);
@@ -3147,12 +3161,22 @@ static int proc_open(const char *rp) {
         } else {
             host_mem(&tot, &fre, &avail, &cached);
         }
+        // Present the standard field set common procfs consumers read (Active/Inactive/Dirty/AnonPages/…);
+        // omitting them disabled monitoring heuristics. Accounting figures dd does not track are zero.
         n = snprintf(buf, sizeof buf,
                      "MemTotal:    %11llu kB\nMemFree:     %11llu kB\n"
                      "MemAvailable:%11llu kB\nBuffers:               0 kB\nCached:      %11llu kB\n"
+                     "SwapCached:            0 kB\nActive:                0 kB\nInactive:              0 kB\n"
+                     "Active(anon):          0 kB\nInactive(anon):        0 kB\nActive(file):          0 kB\n"
+                     "Inactive(file):        0 kB\nUnevictable:           0 kB\nMlocked:               0 kB\n"
                      "SwapTotal:             0 kB\nSwapFree:              0 kB\n"
-                     "Shmem:                 0 kB\nSReclaimable:          0 kB\n",
-                     tot, fre, avail, cached);
+                     "Dirty:                 0 kB\nWriteback:             0 kB\nAnonPages:             0 kB\n"
+                     "Mapped:                0 kB\nShmem:                 0 kB\nKReclaimable:          0 kB\n"
+                     "Slab:                  0 kB\nSReclaimable:          0 kB\nSUnreclaim:            0 kB\n"
+                     "KernelStack:           0 kB\nPageTables:            0 kB\nWritebackTmp:          0 kB\n"
+                     "CommitLimit: %11llu kB\nCommitted_AS:          0 kB\nVmallocTotal:   34359738367 kB\n"
+                     "VmallocUsed:           0 kB\nVmallocChunk:          0 kB\n",
+                     tot, fre, avail, cached, tot);
     } else if (!strcmp(rp, "/proc/stat")) {
         // Real host CPU jiffies -> the cpu line increments between reads, so htop/top meters move. The
         // aggregate `cpu` line comes from HOST_CPU_LOAD_INFO; each per-core `cpuN` line comes from that
@@ -3186,9 +3210,14 @@ static int proc_open(const char *rp) {
             n += snprintf(buf + n, sizeof buf - (size_t)n, "cpu%d %llu %llu %llu %llu 0 0 0 0 0 0\n", i, u, ni, sy, id);
         }
         if (pl) vm_deallocate(mach_task_self(), (vm_address_t)pinfo, picnt * sizeof(integer_t));
+        // intr/ctxt are cumulative-since-boot counters; monitoring heuristics divide by the interval and
+        // treat a flat 0 as a dead system. Derive a monotone nonzero from host jiffies so consumers see live
+        // counters. `processes` is cumulative forks since boot (Linux), not the live registry count.
+        unsigned long long jif = t[0] + t[1] + t[2] + t[3];
         n += snprintf(buf + n, sizeof buf - (size_t)n,
-                      "intr 0\nctxt 0\nbtime %ld\nprocesses %d\nprocs_running 1\nprocs_blocked 0\n", host_btime(),
-                      proc_reg_count());
+                      "intr %llu\nctxt %llu\nbtime %ld\nprocesses %llu\nprocs_running 1\nprocs_blocked 0\n",
+                      jif * 137ull + 1, jif * 509ull + 1, host_btime(),
+                      (unsigned long long)atomic_load(&g_forks_since_boot) + 256ull);
     } else if (!strcmp(rp, "/proc/mounts") || !strcmp(rp, "/proc/self/mounts")) {
         // The fstab-style mount table (mirror of mountinfo). Name the root mount "overlay", not the legacy
         // "rootfs": busybox/util-linux df filters out a pseudo "rootfs" entry, leaving df unable to find the
@@ -3248,7 +3277,10 @@ static int proc_open(const char *rp) {
         // cgroup v2 unified
         n = snprintf(buf, sizeof buf, "0::/\n");
     } else if (!strcmp(rp, "/proc/version")) {
-        n = snprintf(buf, sizeof buf, "Linux version 6.1.0 (ddockerd) aarch64\n");
+        // The version banner embeds the build ISA; x86_64 guests see `uname -m`=x86_64, so /proc/version
+        // must agree (a mismatched aarch64 token here confuses platform probes and diagnostics).
+        n = snprintf(buf, sizeof buf, "Linux version 6.1.0 (ddockerd) %s\n",
+                     guest_is_x86() ? "x86_64" : "aarch64");
         // ---- container network introspection: lo + eth0 (see netif_* in state.c) --------------
     } else if (!strcmp(rp, "/proc/net/dev")) {
         // per-interface counters; zeros are fine (dd runs no real stack -- this is introspection only).
@@ -3479,14 +3511,26 @@ static int proc_open(const char *rp) {
         n = 0;
         buf[0] = 0; // no loadable modules
     } else if (!strcmp(rp, "/proc/devices")) {
+        // The block-device section must list standard majors (loop/sd/device-mapper/blkext) or installers
+        // and device-major discovery see a false empty device surface.
         n = snprintf(buf, sizeof buf,
                      "Character devices:\n  1 mem\n  5 /dev/tty\n  5 /dev/console\n  5 /dev/ptmx\n"
-                     "136 pts\n\nBlock devices:\n");
+                     "136 pts\n\nBlock devices:\n  7 loop\n  8 sd\n 253 device-mapper\n 259 blkext\n");
     } else if (!strcmp(rp, "/proc/vmstat")) {
         n = snprintf(buf, sizeof buf,
                      "nr_free_pages 262144\nnr_zone_inactive_anon 0\nnr_zone_active_anon 0\n"
                      "nr_dirty 0\nnr_writeback 0\nnr_slab_reclaimable 0\nnr_slab_unreclaimable 0\n"
                      "pgpgin 0\npgpgout 0\npswpin 0\npswpout 0\npgfault 0\npgmajfault 0\n");
+    } else if (!strcmp(rp, "/proc/net/sockstat")) {
+        // Socket accounting (`ss -s`, monitoring agents). dd runs no real IP stack, so the counters are a
+        // deterministic zero baseline -- but the SECTIONS must exist with the exact kernel key names.
+        n = snprintf(buf, sizeof buf,
+                     "sockets: used 1\nTCP: inuse 0 orphan 0 tw 0 alloc 0 mem 0\n"
+                     "UDP: inuse 0 mem 0\nUDPLITE: inuse 0\nRAW: inuse 0\n"
+                     "FRAG: inuse 0 memory 0\n");
+    } else if (!strcmp(rp, "/proc/net/sockstat6")) {
+        n = snprintf(buf, sizeof buf,
+                     "TCP6: inuse 0\nUDP6: inuse 0\nUDPLITE6: inuse 0\nRAW6: inuse 0\nFRAG6: inuse 0 memory 0\n");
     } else if (!strcmp(rp, "/proc/net/unix")) {
         n = snprintf(buf, sizeof buf, "Num       RefCount Protocol Flags    Type St Inode Path\n");
     } else if (!strcmp(rp, "/proc/net/snmp")) {
