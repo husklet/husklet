@@ -17,8 +17,6 @@ This directory is a working inventory of suspicious behavior, bad architecture, 
 | P1 | daemon/runtime | failed start leaves a spent `Live` and later fake success | High | [daemon-tests-docs.md](daemon-tests-docs.md#failed-start-leaves-a-spent-live) |
 | P1 | sentry/compat | untrusted split breaks Linux `EFAULT` compatibility | High | [gpu-display-sentry.md](gpu-display-sentry.md#untrusted-split-breaks-linux-efault-compatibility) |
 | P1 | sentry/ipc | `DDJIT_UNTRUSTED` SCM_RIGHTS + eventfd loses events | High | [completeness-and-env.md](completeness-and-env.md#ddjit_untrusted-scm_rights-eventfd-loses-events) |
-| P1 | cp/contents | `docker cp` put follows existing destination symlink | High | [archive-fs-compat.md](archive-fs-compat.md#docker-cp-put-follows-existing-destination-symlink) |
-| P1 | cp/contents | `docker cp` GET drops lower overlay entries | High | [archive-fs-compat.md](archive-fs-compat.md#docker-cp-get-drops-lower-entries-from-overlay-directories) |
 | P1 | syscall/time | periodic `timerfd` ignores earlier first deadline | High | [syscall-compat.md](syscall-compat.md#periodic-timerfd-ignores-earlier-first-deadline) |
 | P1 | syscall/signal | multiple `signalfd` descriptors are not independent | High | [syscall-compat.md](syscall-compat.md#multiple-signalfd-descriptors-are-not-independent) |
 | P1 | syscall/signalfd | `signalfd` update keeps stale signals and short reads consume events | High | [syscall-compat.md](syscall-compat.md#signalfd-update-keeps-stale-signals-and-short-reads-consume-events) |
@@ -44,8 +42,6 @@ This directory is a working inventory of suspicious behavior, bad architecture, 
 | P1 | env/exec | `execve(..., envp=NULL)` leaks default/stale env | High | [completeness-and-env.md](completeness-and-env.md#execve-envpnull-leaks-a-default-or-stale-environment) |
 | P1 | procfs/memory | `sysinfo(2)` ignores container memory cap | High | [completeness-and-env.md](completeness-and-env.md#sysinfo2-ignores-container-memory-cap) |
 | P1 | display/clipboard | inert data-device objects silently swallow selection | High | [gpu-display-sentry.md](gpu-display-sentry.md#data-device-objects-are-inert) |
-| P1 | registry/pull | `--platform` ignores OS prefix | High | [archive-fs-compat.md](archive-fs-compat.md#--platform-ignores-os-prefix) |
-| P1 | archive/race | fixed per-process temp dirs race concurrent operations | Medium-high | [archive-fs-compat.md](archive-fs-compat.md#fixed-per-process-temp-dirs-race-concurrent-operations) |
 | P2 | JIT/signal | `ICEBP` and invalid `0x62` bytes abort instead of guest traps | High | [jit-and-opcodes.md](jit-and-opcodes.md#icebp-and-invalid-0x62-bytes-abort-instead-of-guest-traps) |
 | P2 | JIT/signal | thread-directed signals do not interrupt blocking reads | High | [jit-and-opcodes.md](jit-and-opcodes.md#thread-directed-signals-do-not-interrupt-blocking-reads) |
 | P2 | JIT/fp | MXCSR sticky exception flags/control bits are not modeled | Medium | [jit-and-opcodes.md](jit-and-opcodes.md#mxcsr-sticky-exception-flags-are-not-modeled) |
@@ -98,35 +94,12 @@ This directory is a working inventory of suspicious behavior, bad architecture, 
 | P2 | procfs/tty | `/proc/tty` surface is absent | High | [completeness-and-env.md](completeness-and-env.md#proctty-surface-is-absent) |
 | P2 | launch/config | path-list config still uses delimiter env strings | Medium | [completeness-and-env.md](completeness-and-env.md#typed-launch-path-lists-still-use-delimiter-env-strings) |
 | P2 | rendering/tests | GUI probe sources are outside default matrix | High | [gpu-display-sentry.md](gpu-display-sentry.md#rendering-coverage-gaps-are-silent) |
-| P2 | volume/metadata | anonymous volume copy-up drops seeded metadata | High | [archive-fs-compat.md](archive-fs-compat.md#anonymous-volume-copy-up-drops-seeded-directory-metadata) |
-| P1 | volume/contents | image `VOLUME` copy-up can escape the image rootfs | High | [archive-fs-compat.md](archive-fs-compat.md#image-volume-copy-up-can-escape-the-image-rootfs) |
-| P1 | archive/metadata | UID/GID metadata is lost on load/import/cp PUT | High | [archive-fs-compat.md](archive-fs-compat.md#uidgid-metadata-is-lost-on-loadimportcp-put) |
-| P2 | build/metadata | Dockerfile `COPY`/`ADD` metadata flags are ignored | High | [archive-fs-compat.md](archive-fs-compat.md#dockerfile-copy-add-metadata-flags-are-ignored) |
-| P2 | archive/metadata | save/cp GET truncate nanosecond mtimes | High | [archive-fs-compat.md](archive-fs-compat.md#savecp-get-truncate-nanosecond-mtimes) |
-| P2 | image/metadata | daemon save/load drops lifecycle metadata | High | [archive-fs-compat.md](archive-fs-compat.md#daemon-saveload-drops-lifecycle-metadata) |
-| P1 | build/history | built image history is synthetic | High | [archive-fs-compat.md](archive-fs-compat.md#built-image-history-is-synthetic) |
-| P1 | build/cache | build cache seed ignores base image config | High | [archive-fs-compat.md](archive-fs-compat.md#build-cache-seed-ignores-base-image-config) |
-| P2 | build/metadata | Dockerfile `LABEL` does not merge base labels | High | [archive-fs-compat.md](archive-fs-compat.md#dockerfile-label-does-not-merge-base-labels) |
-| P2 | build/context | `.dockerignore` is not applied | High | [archive-fs-compat.md](archive-fs-compat.md#dockerignore-is-not-applied) |
-| P1 | build/env | Dockerfile `ENV` interpolation ignores prior ENV | High | [archive-fs-compat.md](archive-fs-compat.md#dockerfile-env-interpolation-ignores-prior-env) |
-| P1 | build/arg | pre-FROM `ARG` leaks into stage scope | High | [archive-fs-compat.md](archive-fs-compat.md#pre-from-arg-leaks-into-stage-scope) |
-| P1 | build/shell | Dockerfile `SHELL` is ignored | High | [archive-fs-compat.md](archive-fs-compat.md#dockerfile-shell-is-ignored) |
-| P1 | build/onbuild | Dockerfile `ONBUILD` triggers are ignored | High | [archive-fs-compat.md](archive-fs-compat.md#dockerfile-onbuild-triggers-are-ignored) |
-| P1 | build/target | unknown build target builds last stage | High | [archive-fs-compat.md](archive-fs-compat.md#unknown-build-target-builds-last-stage) |
-| P2 | build/cleanup | failed build leaves partial image directory | High | [archive-fs-compat.md](archive-fs-compat.md#failed-build-leaves-partial-image-directory) |
-| P2 | build/parser | exec-form JSON drops non-string elements | High | [archive-fs-compat.md](archive-fs-compat.md#exec-form-json-drops-non-string-elements) |
-| P2 | build/workdir | relative `WORKDIR ..` persists a different config path | High | [archive-fs-compat.md](archive-fs-compat.md#relative-workdir-dotdot-persists-a-different-config-path) |
-| P2 | build/env | `ENV` override moves inherited keys to the end | High | [archive-fs-compat.md](archive-fs-compat.md#env-override-moves-inherited-keys-to-the-end) |
-| P2 | build/metadata | Dockerfile `USER` is ignored in build output | High | [archive-fs-compat.md](archive-fs-compat.md#dockerfile-user-is-ignored-in-build-output) |
-| P2 | build/base | `FROM` local lookup ignores tag | Medium-high | [archive-fs-compat.md](archive-fs-compat.md#from-local-lookup-ignores-tag) |
-| P2 | image/identity | tag/digest reporting is synthetic and inconsistent | Medium-high | [archive-fs-compat.md](archive-fs-compat.md#tagdigest-reporting-is-synthetic-and-inconsistent) |
 | P2 | image/metadata | daemon save/load drops image labels | High | [daemon-tests-docs.md](daemon-tests-docs.md#daemon-saveload-drops-image-labels) |
 | P2 | image/metadata | daemon discovery drops image labels | High | [daemon-tests-docs.md](daemon-tests-docs.md#daemon-discovery-drops-image-labels) |
 | P2 | daemon/restart | restart state load overwrites persisted container arch | High | [daemon-tests-docs.md](daemon-tests-docs.md#restart-state-load-overwrites-persisted-container-arch) |
 | P1 | image/commit | Docker commit drops container user | High | [daemon-tests-docs.md](daemon-tests-docs.md#docker-commit-drops-container-user) |
 | P1 | daemon/restart | restarting containers can stay stuck after daemon restart | High | [daemon-tests-docs.md](daemon-tests-docs.md#restarting-containers-can-stay-stuck-after-daemon-restart) |
 | P2 | daemon/stats | stats JSON is internally inconsistent | High | [daemon-tests-docs.md](daemon-tests-docs.md#stats-json-is-internally-inconsistent) |
-| P1 | registry/push | Docker push drops runtime metadata from OCI config | High | [archive-fs-compat.md](archive-fs-compat.md#docker-push-drops-runtime-metadata-from-oci-config) |
 | P1 | syscall/fd | inotify/timerfd create without flags still sets close-on-exec | High | [syscall-compat.md](syscall-compat.md#inotify_init10-and-timerfd_create-0-set-close-on-exec) |
 | P1 | syscall/timerfd | `timerfd` CLOCK_REALTIME absolute deadlines are treated as monotonic | High | [syscall-compat.md](syscall-compat.md#timerfd-clock_realtime-absolute-deadlines-are-treated-as-monotonic) |
 | P1 | syscall/wait | `wait4` misses `WCONTINUED` and corrupts final status | High | [syscall-compat.md](syscall-compat.md#wait4-misses-wcontinued-and-corrupts-final-status) |
@@ -148,7 +121,6 @@ This directory is a working inventory of suspicious behavior, bad architecture, 
 | P2 | JIT/cache | x86 persistent cache key ignores codegen env modes | Medium-high | [jit-and-opcodes.md](jit-and-opcodes.md#x86-persistent-cache-key-ignores-codegen-env-modes) |
 | P2 | syscall/fs | `renameat2(RENAME_WHITEOUT)` silently becomes plain rename | High | [syscall-compat.md](syscall-compat.md#renameat2rename_whiteout-silently-becomes-plain-rename) |
 | P2 | build/compat | `COPY --from=<external-image>` is rejected | High | [archive-fs-compat.md](archive-fs-compat.md#copy---from-is-rejected) |
-| P3 | cp/stat | docker cp stat header mis-encodes special mode bits | Medium | [archive-fs-compat.md](archive-fs-compat.md#docker-cp-stat-header-mis-encodes-special-mode-bits) |
 
 ## Deprioritized
 
