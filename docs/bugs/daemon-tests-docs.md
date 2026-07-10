@@ -386,30 +386,6 @@ CARGO_TARGET_DIR=/Users/x/dd/dd-slot-e-target cargo test -p dd-daemon fractional
 
 Result: failed as intended; left `1`, right `0`.
 
-## Pause/Unpause Can Fake State On Non-Live Containers
-
-Priority: P1
-Impact: container lifecycle state corruption
-Confidence: High
-
-Verification status: Proven in isolated worktree `/Users/x/dd/dd-workerH-daemon-api-20260710`.
-
-Evidence:
-
-- `freeze` resolves any container id, optionally signals a pid if present, and then continues to write state: `dd-daemon/src/containers/lifecycle/run.rs:251`.
-
-Why this is bad:
-
-Pausing an exited or created container should fail without changing state. dd can return `204`, mark an exited container `paused`, then `unpause` can mark it `running` without a live pid.
-
-Isolated proof:
-
-```sh
-cargo test -p dd-daemon pause_unpause_exited_is_409_and_unchanged -- --nocapture
-```
-
-Result: failed as expected; pause returned `204`, expected `409`.
-
 ## Rename Leaves Network Endpoint Aliases Stale
 
 Priority: P1
@@ -496,31 +472,6 @@ If a client or response channel backpressures while a container produces output 
 Verification:
 
 Run a high-output container with a deliberately slow `logs -f` consumer and compare live stream bytes against buffered logs after exit.
-
-## Ignored Kill Signals Fabricate Container Exit
-
-Priority: P1
-Impact: daemon state says exited while the process is still alive
-Confidence: High
-
-Verification status: Proven in isolated worktree `/Users/x/dd/dd-worker-M-daemon-api-20260710`.
-
-Evidence:
-
-- `containers_kill` parses any signal and sends it to the group: `dd-daemon/src/containers/lifecycle/run.rs:136`.
-- It then stops ports and unconditionally writes `status = "exited"`: `dd-daemon/src/containers/lifecycle/run.rs:149`.
-
-Why this is bad:
-
-Signals such as `SIGWINCH` are normally ignored by many processes. Docker kill with a non-terminal signal should not fabricate exit state if the process remains alive.
-
-Isolated proof:
-
-```sh
-CARGO_TARGET_DIR=/Users/x/dd/dd-worker-M-daemon-api-20260710-target cargo test -p dd-daemon kill_ignored_signal_must_not_mark_container_exited -- --nocapture
-```
-
-Result: failed as intended. Child remains alive after `SIGWINCH`; daemon state is `"exited"`, expected `"running"`.
 
 ## IPAM Reuses `.0.2` After 253 Endpoints In `/16`
 
