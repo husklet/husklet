@@ -11,7 +11,6 @@ This directory is a working inventory of suspicious behavior, bad architecture, 
 | P1 | daemon/runtime | workspace VPN egress env is dropped before engine launch | High | [daemon-tests-docs.md](daemon-tests-docs.md#workspace-vpn-egress-is-dropped) |
 | P1 | daemon/runtime | published port bind failures do not fail container start | Medium-high | [daemon-tests-docs.md](daemon-tests-docs.md#published-port-bind-failures-do-not-fail-start) |
 | P1 | daemon/compat | inline named volume sources can escape `volumes_dir` | Medium | [daemon-tests-docs.md](daemon-tests-docs.md#inline-volume-sources-can-escape-volumes_dir) |
-| P1 | JIT/memory | 4K guest `munmap` subpage remains readable | High | [jit-and-opcodes.md](jit-and-opcodes.md#4k-guest-munmap-subpage-remains-readable) |
 | P1 | daemon/runtime | failed start leaves a spent `Live` and later fake success | High | [daemon-tests-docs.md](daemon-tests-docs.md#failed-start-leaves-a-spent-live) |
 | P1 | sentry/compat | untrusted split breaks Linux `EFAULT` compatibility | High | [gpu-display-sentry.md](gpu-display-sentry.md#untrusted-split-breaks-linux-efault-compatibility) |
 | P1 | sentry/ipc | `DDJIT_UNTRUSTED` SCM_RIGHTS + eventfd loses events | High | [completeness-and-env.md](completeness-and-env.md#ddjit_untrusted-scm_rights-eventfd-loses-events) |
@@ -35,7 +34,6 @@ This directory is a working inventory of suspicious behavior, bad architecture, 
 | P1 | env/exec | `execve(..., envp=NULL)` leaks default/stale env | High | [completeness-and-env.md](completeness-and-env.md#execve-envpnull-leaks-a-default-or-stale-environment) |
 | P1 | procfs/memory | `sysinfo(2)` ignores container memory cap | High | [completeness-and-env.md](completeness-and-env.md#sysinfo2-ignores-container-memory-cap) |
 | P1 | display/clipboard | inert data-device objects silently swallow selection | High | [gpu-display-sentry.md](gpu-display-sentry.md#data-device-objects-are-inert) |
-| P2 | JIT/signal | `ICEBP` and invalid `0x62` bytes abort instead of guest traps | High | [jit-and-opcodes.md](jit-and-opcodes.md#icebp-and-invalid-0x62-bytes-abort-instead-of-guest-traps) |
 | P2 | JIT/signal | thread-directed signals do not interrupt blocking reads | High | [jit-and-opcodes.md](jit-and-opcodes.md#thread-directed-signals-do-not-interrupt-blocking-reads) |
 | P2 | JIT/fp | MXCSR sticky exception flags/control bits are not modeled | Medium | [jit-and-opcodes.md](jit-and-opcodes.md#mxcsr-sticky-exception-flags-are-not-modeled) |
 | P2 | JIT/x87 | x87 long double precision is truncated | High | [jit-and-opcodes.md](jit-and-opcodes.md#x87-long-double-precision-is-truncated) |
@@ -96,7 +94,6 @@ This directory is a working inventory of suspicious behavior, bad architecture, 
 | P1 | syscall/mm | guest `PROT_NONE` mappings remain directly readable | High | [syscall-compat.md](syscall-compat.md#guest-prot_none-mappings-remain-directly-readable) |
 | P1 | syscall/mm | writes to `mprotect(PROT_READ)` pages do not fault | High | [syscall-compat.md](syscall-compat.md#writes-to-mprotectprot_read-pages-do-not-fault) |
 | P1 | syscall/mm | execute permission is not enforced for guest fetch | High | [syscall-compat.md](syscall-compat.md#execute-permission-is-not-enforced-for-guest-fetch) |
-| P1 | aarch64/smc | threaded self-modifying code executes stale translations | High | [jit-and-opcodes.md](jit-and-opcodes.md#aarch64-threaded-self-modifying-code-executes-stale-translations) |
 | P1 | syscall/wait | raw `waitid(..., rusage)` leaves buffer untouched | High | [syscall-compat.md](syscall-compat.md#raw-waitid-rusage-leaves-buffer-untouched) |
 | P1 | syscall/wait | default core status contradicts `RLIMIT_CORE=0` | High | [syscall-compat.md](syscall-compat.md#default-core-status-contradicts-rlimit_core0) |
 | P2 | syscall/clone | `clone` ignores parent and child TID stores | High | [syscall-compat.md](syscall-compat.md#clone-ignores-parent-and-child-tid-stores) |
@@ -105,7 +102,6 @@ This directory is a working inventory of suspicious behavior, bad architecture, 
 | P2 | syscall/mm | aligned `mprotect` on unmapped range succeeds | High | [syscall-compat.md](syscall-compat.md#aligned-mprotect-on-unmapped-range-succeeds) |
 | P2 | syscall/wait | `wait4` writes host rusage units into guest layout | High | [syscall-compat.md](syscall-compat.md#wait4-writes-host-rusage-units-into-guest-layout) |
 | P2 | procfs/process | `/proc/<pid>/stat` reports wrong process group and session | High | [syscall-compat.md](syscall-compat.md#proc-stat-reports-wrong-process-group-and-session) |
-| P2 | JIT/cache | x86 persistent cache key ignores codegen env modes | Medium-high | [jit-and-opcodes.md](jit-and-opcodes.md#x86-persistent-cache-key-ignores-codegen-env-modes) |
 | P2 | syscall/fs | `renameat2(RENAME_WHITEOUT)` silently becomes plain rename | High | [syscall-compat.md](syscall-compat.md#renameat2rename_whiteout-silently-becomes-plain-rename) |
 | P2 | build/compat | `COPY --from=<external-image>` is rejected | High | [archive-fs-compat.md](archive-fs-compat.md#copy---from-is-rejected) |
 
