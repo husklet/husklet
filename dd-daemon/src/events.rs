@@ -100,18 +100,22 @@ struct Filters {
 }
 
 impl Filters {
-    fn parse(raw: &Option<String>) -> Filters {
+    /// Parse the `filters` query param. `None`/empty ⇒ the empty (match-all) filter. Malformed JSON is an
+    /// ERROR, not a silent fall-through to match-all: `docker events --filter '<bad json>'` must be a
+    /// 400 bad-parameter, otherwise a client/proxy encoding bug silently subscribes to EVERY daemon event.
+    fn parse(raw: &Option<String>) -> Result<Filters, String> {
         let mut f = Filters::default();
-        let Some(s) = raw else { return f };
-        let Ok(v) = serde_json::from_str::<Value>(s) else {
-            return f;
+        let Some(s) = raw.as_deref().filter(|s| !s.is_empty()) else {
+            return Ok(f);
         };
+        let v: Value =
+            serde_json::from_str(s).map_err(|e| format!("invalid filters JSON: {e}"))?;
         f.types = filter_values(&v, "type");
         f.actions = filter_values(&v, "event");
         f.actions.extend(filter_values(&v, "action"));
         f.containers = filter_values(&v, "container");
         f.images = filter_values(&v, "image");
-        f
+        Ok(f)
     }
 
     /// Does this event pass every active filter? (An empty filter list = "match all" for that key.)
@@ -162,7 +166,10 @@ fn filter_values(v: &Value, key: &str) -> Vec<String> {
 /// only when the client disconnects or the bus is torn down (daemon shutdown).
 pub(crate) async fn events(State(a): State<App>, Query(q): Query<EventsQ>) -> Response {
     let rx = a.events.subscribe();
-    let mut filters = Filters::parse(&q.filters);
+    let mut filters = match Filters::parse(&q.filters) {
+        Ok(f) => f,
+        Err(e) => return crate::util::bad_request(e),
+    };
     // `--filter container=<name|id>` is matched against each event's Actor.ID / name. Some lifecycle
     // events (die/stop/kill) carry no `name` attribute, so a name-only filter would miss them. Resolve
     // every container filter value to its FULL id now (by name or id-prefix) and add it to the match
@@ -231,4 +238,34 @@ pub(crate) async fn events(State(a): State<App>, Query(q): Query<EventsQ>) -> Re
         .header("Content-Type", "application/json")
         .body(Body::from_stream(body))
         .unwrap()
+}
+
+#[cfg(test)]
+mod filter_tests {
+    use super::Filters;
+
+    // "Malformed Filters JSON Becomes An Unfiltered Stream" (P1): bad filters JSON must be an error
+    // (-> 400), never a silent fall-through to the empty match-all filter.
+    #[test]
+    fn malformed_filters_json_is_an_error() {
+        assert!(Filters::parse(&Some("{\"type\":[\"container\"".into())).is_err(), "truncated JSON");
+        assert!(Filters::parse(&Some("not json".into())).is_err());
+    }
+
+    #[test]
+    fn absent_or_empty_filters_is_match_all_ok() {
+        assert!(Filters::parse(&None).is_ok());
+        assert!(Filters::parse(&Some(String::new())).is_ok());
+    }
+
+    #[test]
+    fn valid_filters_parse_keys() {
+        let f = Filters::parse(&Some(
+            "{\"type\":[\"container\"],\"event\":[\"start\"],\"image\":[\"nginx\"]}".into(),
+        ))
+        .expect("valid filters parse");
+        assert_eq!(f.types, vec!["container".to_string()]);
+        assert_eq!(f.actions, vec!["start".to_string()]);
+        assert_eq!(f.images, vec!["nginx".to_string()]);
+    }
 }

@@ -1984,31 +1984,6 @@ CARGO_TARGET_DIR=/Users/x/dd/dd-audit-events-api-apiworker-20260710-target cargo
 
 Result: `label=...`, `network=frontend`, `volume=cache`, and `scope=swarm` filters all leaked unrelated events.
 
-## Malformed Filters JSON Becomes An Unfiltered Stream
-
-Priority: P1
-Impact: client filter encoding bugs subscribe to every daemon event
-Confidence: High
-
-Verification status: Proven in isolated worktree `/Users/x/dd/dd-audit-events-api-apiworker-20260710`.
-
-Evidence:
-
-- Bad filter JSON returns `Filters::default()`: `dd-daemon/src/events.rs:103`.
-- The handler still returns `200 OK`: `dd-daemon/src/events.rs:229`.
-
-Why this is bad:
-
-Malformed JSON in the `filters` query should be a bad-parameter response. dd broadens it to match-all, so clients or proxies with encoding bugs can act on unrelated events.
-
-Isolated proof:
-
-```sh
-CARGO_TARGET_DIR=/Users/x/dd/dd-audit-events-api-apiworker-20260710-target cargo test -p dd-daemon audit_ -- --nocapture
-```
-
-Result: malformed `{"type":["container"` became an unfiltered event stream.
-
 ## Non-Epoch Until Values Turn Bounded Events Into Unbounded Streams
 
 Priority: P2
