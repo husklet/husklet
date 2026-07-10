@@ -33,16 +33,19 @@ pub(crate) struct ImageSummary {
     pub containers: i64,
 }
 
-/// One synthetic layer of `GET /images/{name}/history` (`docker history`).
+/// One row of `GET /images/{name}/history` (`docker history`). For a built image this is one row per
+/// Dockerfile instruction (`created_by` = the instruction text); for a pulled/imported image it is a
+/// single synthetic row. `EmptyLayer` marks config-only instructions that add no filesystem layer.
 #[derive(Serialize)]
 #[serde(rename_all = "PascalCase")]
 pub(crate) struct HistoryLayer {
     pub id: String,
     pub created: i64,
-    pub created_by: &'static str,
+    pub created_by: String,
     pub tags: Vec<String>,
     pub size: i64,
     pub comment: &'static str,
+    pub empty_layer: bool,
 }
 
 /// `POST /images/prune` — nothing reclaimed (dd tracks no dangling images).
