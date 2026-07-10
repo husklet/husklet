@@ -420,30 +420,6 @@ Linux/qemu: kill_zero ready=1 kill_ok=1 child_got=1
 dd:         kill_zero ready=1 kill_ok=1 child_got=0
 ```
 
-## Proc Stat Reports Wrong Process Group And Session
-
-Priority: P2
-Impact: process discovery sees false job-control identity for forked children
-Confidence: High
-
-Verification status: Proven in isolated worktree `/Users/x/dd/dd-audit-pgrp-signal-20260710`.
-
-Evidence:
-
-- Self stat prints process group and session as `pid,pid`: `dd-jit-darwin/src/runtime/os/linux/container/vfs.c:1635`.
-- Peer stat prints session from process group data: `dd-jit-darwin/src/runtime/os/linux/container/vfs.c:2212`.
-
-Why this is bad:
-
-For a normal forked child, `/proc/<pid>/stat` fields 5 and 6 should match `getpgrp()` and `getsid()`. dd reports child-local values, so supervisors and job-control tools reconstruct the wrong process tree.
-
-Observed proof:
-
-```text
-Linux: child self stat_ok=1 pgrp_match=1 sid_match=1; parent peer stat_ok=1 sid_match=1
-dd:    child self stat_ok=1 pgrp_match=0 sid_match=0; parent peer stat_ok=1 sid_match=0
-```
-
 ## Guest PROT_NONE Mappings Remain Directly Readable
 
 Priority: P1
