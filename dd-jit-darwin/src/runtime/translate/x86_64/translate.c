@@ -911,6 +911,38 @@ static void emit_guest_signal(uint64_t rip, int lsig, int code) {
     emit_exit_const(rip, R_TRAP);
 }
 
+// MXCSR sticky exception flags <-> ARM FPSR cumulative flags. x86 MXCSR bits 0..5 are IE/DE/ZE/OE/UE/PE
+// (invalid/denormal/divide-by-zero/overflow/underflow/precision). ARM FPSR cumulative bits are IOC(0)/
+// DZC(1)/OFC(2)/UFC(3)/IXC(4)/IDC(7). The per-bit map (MXCSR bit i <- FPSR bit fpsr_src[i]) is:
+//   IE<-IOC(0)  DE<-IDC(7)  ZE<-DZC(1)  OE<-OFC(2)  UE<-UFC(3)  PE<-IXC(4)
+// SSE ops execute as host NEON, so the host FPSR already accumulates the real exceptions; stmxcsr/fxsave
+// just need to project them into MXCSR bits 0..5 (previously hard-zeroed), and ldmxcsr/fxrstor project a
+// loaded MXCSR back so a guest that CLEARS the sticky flags (feclearexcept) actually clears the host FPSR.
+static const int g_mxcsr_fpsr_bit[6] = {0, 7, 1, 2, 3, 4};
+static void emit_fpsr_to_mxcsr(int dst) { // OR the host FPSR sticky flags into `dst` at MXCSR bits 0..5
+    emit32(0xD53B4420u | 22);             // mrs x22, fpsr
+    e_movconst(21, 0);                    // accumulator
+    e_movconst(19, 1);
+    for (int i = 0; i < 6; i++) {
+        e_lsr_i(20, 22, g_mxcsr_fpsr_bit[i], 0);
+        e_rrr(A_AND, 20, 20, 19, 0, 0);
+        e_rrr(A_ORR, 21, 21, 20, 0, i); // x21 |= bit << i
+    }
+    e_rrr(A_ORR, dst, dst, 21, 0, 0);
+}
+static void emit_mxcsr_to_fpsr(int src) { // set the host FPSR sticky flags from `src` (MXCSR) bits 0..5
+    emit32(0xD53B4420u | 22);             // mrs x22, fpsr
+    e_movconst(19, 0x9f);                 // ARM cumulative-flag mask: IOC|DZC|OFC|UFC|IXC|IDC (bits 0-4,7)
+    e_rrr(A_BIC, 22, 22, 19, 0, 0);       // clear the existing sticky flags
+    e_movconst(19, 1);
+    for (int i = 0; i < 6; i++) {
+        e_lsr_i(20, src, i, 0);
+        e_rrr(A_AND, 20, 20, 19, 0, 0);
+        e_rrr(A_ORR, 22, 22, 20, 0, g_mxcsr_fpsr_bit[i]); // FPSR bit |= MXCSR bit i
+    }
+    emit32(0xD51B4420u | 22); // msr fpsr, x22
+}
+
 // x87 fist/fistp round ST0 (already in d16) to an integral double using the CURRENT x87 rounding control
 // (cpu->fpcw bits[11:10]), so the caller's FCVTZS then converts it exactly. x86 x87 defaults to round-to-
 // NEAREST-even (not toward-zero) and honors fldcw's RC, but the old code emitted a bare FCVTZS (truncate) --
@@ -3427,8 +3459,8 @@ static void *translate_block(uint64_t gpc) {
                 if (sub == 2) { // ldmxcsr: thread MXCSR.RC (bits 14:13) -> ARM FPCR.RMode (bits 23:22)
                     if (I.is_mem) {
                         emit_ea(&I, next);
-                        e_load(4, 16, 17);      // x16 = MXCSR
-                        e_lsr_i(16, 16, 13, 0); // x16 = MXCSR >> 13
+                        e_load(4, 23, 17);      // x23 = MXCSR (full, kept for the sticky-flag projection)
+                        e_lsr_i(16, 23, 13, 0); // x16 = MXCSR >> 13
                         e_movconst(19, 3);
                         e_rrr(A_AND, 16, 16, 19, 0, 0); // x16 = RC (0..3): 00 nearest,01 down,10 up,11 zero
                         // ARM RMode swaps the two RC bits: 00 RN,01 RP(up),10 RM(down),11 RZ -> arm = bitrev2(RC)
@@ -3441,6 +3473,7 @@ static void *translate_block(uint64_t gpc) {
                         e_rrr(A_BIC, 19, 19, 21, 1, 0);  // clear RMode
                         e_rrr(A_ORR, 19, 19, 20, 1, 22); // FPCR.RMode = ARM RMode
                         emit32(0xD51B4400u | 19);        // msr fpcr, x19
+                        emit_mxcsr_to_fpsr(23);          // MXCSR sticky flags -> host FPSR (so feclearexcept clears)
                     }
                     gpc = next;
                     continue;
@@ -3458,6 +3491,7 @@ static void *translate_block(uint64_t gpc) {
                         e_rrr(A_ORR, 19, 22, 21, 0, 1);  // x19 = x86 RC (swap back)
                         e_movconst(16, 0x1f80);          // default MXCSR (all exceptions masked, RC=00)
                         e_rrr(A_ORR, 16, 16, 19, 0, 13); // MXCSR |= RC << 13
+                        emit_fpsr_to_mxcsr(16);          // + live sticky exception flags (IE/DE/ZE/OE/UE/PE)
                         e_store(4, 16, 17);
                     }
                     gpc = next;
@@ -3482,12 +3516,14 @@ static void *translate_block(uint64_t gpc) {
                         e_rrr(A_ORR, 19, 22, 21, 0, 1);                    // x19 = x86 RC (swap the two bits back)
                         e_movconst(16, 0x1f80);                            // default MXCSR (all masks set, RC=00)
                         e_rrr(A_ORR, 16, 16, 19, 0, 13);                   // MXCSR |= RC << 13
+                        emit_fpsr_to_mxcsr(16);                            // + live sticky exception flags
                         emit32(0xB9000000u | (6u << 10) | (17 << 5) | 16); // str  w16, [x17,#24]  (MXCSR)
                         e_ldr(16, 28, OFF_FPCW);
                         emit32(0x79000000u | (0u << 10) | (17 << 5) | 16); // strh w16, [x17,#0]   (FCW)
                     } else {                                               // fxrstor: restore MXCSR.RC -> FPCR + FCW
-                        emit32(0xB9400000u | (6u << 10) | (17 << 5) | 16); // ldr  w16, [x17,#24]  (MXCSR)
-                        e_lsr_i(16, 16, 13, 0);                            // x16 = MXCSR >> 13
+                        emit32(0xB9400000u | (6u << 10) | (17 << 5) | 23); // ldr  w23, [x17,#24]  (MXCSR, full)
+                        emit_mxcsr_to_fpsr(23);                            // restore sticky exception flags -> FPSR
+                        e_lsr_i(16, 23, 13, 0);                            // x16 = MXCSR >> 13
                         e_movconst(19, 3);
                         e_rrr(A_AND, 16, 16, 19, 0, 0); // x16 = RC (0..3)
                         e_movconst(19, 1);

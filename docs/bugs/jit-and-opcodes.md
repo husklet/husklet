@@ -29,25 +29,6 @@ timeout 10 mac bash -lc "exec '$PWD/target-worker-I/release/build/dd-jit-darwin-
 
 Observed: qemu `read_ret=-1 errno=4 delayed=0 rc=0`; dd `read_ret=1 errno=0 delayed=1 rc=1`.
 
-## MXCSR Sticky Exception Flags Are Not Modeled
-
-Priority: P2
-Impact: `stmxcsr`/exception tests see stale or default flags
-Confidence: Medium
-
-Evidence:
-
-- `ldmxcsr` maps only rounding-control bits into host FPCR: `dd-jit-darwin/src/runtime/translate/x86_64/translate.c:3338`.
-- `stmxcsr` reports default MXCSR plus current rounding mode: `dd-jit-darwin/src/runtime/translate/x86_64/translate.c:3359`.
-
-Why this is bad:
-
-MXCSR includes sticky exception flags and control bits beyond rounding mode. Code using `stmxcsr` or `fetestexcept` after FP operations can observe wrong state.
-
-Verification:
-
-Add probes for invalid/divide-by-zero/overflow sticky bits after SSE operations and compare dd against native/qemu.
-
 ## x87 Long Double Precision Is Truncated
 
 Priority: P2
