@@ -111,6 +111,24 @@ pub(super) fn kill_group(pid: i32, sig: i32) {
     }
 }
 
+/// Whether a signal's DEFAULT disposition terminates the process. The handful that do NOT — child/urgent
+/// notifications (SIGCHLD, SIGURG), job-control stop/continue (SIGSTOP, SIGTSTP, SIGTTIN, SIGTTOU,
+/// SIGCONT), and window-resize (SIGWINCH) — leave a running container alive, so `docker kill` with one of
+/// them must not fabricate an `exited` state. Everything else terminates (or core-dumps) by default.
+pub(crate) fn signal_terminates_by_default(sig: i32) -> bool {
+    !matches!(
+        sig,
+        libc::SIGCHLD
+            | libc::SIGURG
+            | libc::SIGSTOP
+            | libc::SIGTSTP
+            | libc::SIGTTIN
+            | libc::SIGTTOU
+            | libc::SIGCONT
+            | libc::SIGWINCH
+    )
+}
+
 /// POST /containers/:id/kill?signal=SIG -- default signal SIGKILL, delivered immediately.
 pub(crate) async fn containers_kill(
     State(a): State<App>,
@@ -138,12 +156,24 @@ pub(crate) async fn containers_kill(
         .as_deref()
         .map(|s| parse_signal(s, libc::SIGKILL))
         .unwrap_or(libc::SIGKILL);
+    // A non-terminating signal (SIGWINCH/SIGCONT/SIGURG/SIGCHLD/…) does NOT kill the process, so the
+    // container must stay running — only a signal whose default disposition is "terminate" transitions it
+    // to exited. Without this, `docker kill --signal SIGWINCH` fabricated an `exited` state (and freed the
+    // host ports) while the guest was still alive.
+    let terminates = signal_terminates_by_default(sig);
     if let Some(l) = g.live.get(&full) {
-        l.stop_requested
-            .store(true, std::sync::atomic::Ordering::SeqCst); // deliberate stop: no auto-restart
+        if terminates {
+            l.stop_requested
+                .store(true, std::sync::atomic::Ordering::SeqCst); // deliberate stop: no auto-restart
+        }
         if let Some(pid) = *l.pid.lock().unwrap() {
             kill_group(pid as i32, sig);
         } // whole group, not just the leader
+    }
+    if !terminates {
+        // Signal delivered, but state is unchanged (Docker still returns 204). The reaper will flip the
+        // container to exited if the process actually dies later.
+        return StatusCode::NO_CONTENT.into_response();
     }
     crate::containers::ports::stop(&full); // free published host ports (docker kill releases the binding)
     if let Some(c) = g.containers.get_mut(&full) {
@@ -248,11 +278,34 @@ pub(crate) async fn containers_unpause(State(a): State<App>, Path(id): Path<Stri
 /// a single SIGSTOP/SIGCONT to the GROUP freezes/resumes the WHOLE container -- the main process AND any
 /// forked children -- not just the leader. We signal the group via killpg (`kill(-pgid)`) and, only if
 /// that fails (e.g. the leader is mid-teardown), fall back to the leader pid alone.
+/// Whether `docker pause`/`unpause` is allowed from the container's current status. Pause requires a
+/// running container; unpause requires a paused one. Anything else (created/exited/restarting) is a 409
+/// — otherwise pausing an exited container would fake a `paused` state with no live process behind it,
+/// and a later unpause would mark it `running` again.
+pub(crate) fn freeze_allowed(status: &str, pause: bool) -> bool {
+    if pause {
+        status == "running"
+    } else {
+        status == "paused"
+    }
+}
+
 pub(crate) async fn freeze(a: App, id: String, pause: bool) -> Response {
     let mut g = a.inner.lock().await;
     let Some(full) = resolve_cid(&g, &id) else {
         return no_such(&id);
     };
+    let status = g
+        .containers
+        .get(&full)
+        .map(|c| c.status.clone())
+        .unwrap_or_default();
+    if !freeze_allowed(&status, pause) {
+        return conflict(format!(
+            "Container {id} is not {}",
+            if pause { "running" } else { "paused" }
+        ));
+    }
     if let Some(pid) = g.live.get(&full).and_then(|l| *l.pid.lock().unwrap()) {
         let pid = pid as i32;
         let sig = if pause { libc::SIGSTOP } else { libc::SIGCONT };
@@ -268,4 +321,44 @@ pub(crate) async fn freeze(a: App, id: String, pause: bool) -> Response {
     }
     save_state(&g, &a.state_path);
     StatusCode::NO_CONTENT.into_response()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // "Ignored Kill Signals Fabricate Container Exit" (P1): only terminating signals may transition a
+    // container to exited; non-terminating ones (SIGWINCH/SIGCONT/…) must leave it running.
+    #[test]
+    fn only_terminating_signals_end_a_container() {
+        for sig in [libc::SIGKILL, libc::SIGTERM, libc::SIGINT, libc::SIGQUIT, libc::SIGHUP] {
+            assert!(signal_terminates_by_default(sig), "sig {sig} should terminate");
+        }
+        for sig in [
+            libc::SIGWINCH,
+            libc::SIGCONT,
+            libc::SIGCHLD,
+            libc::SIGURG,
+            libc::SIGSTOP,
+            libc::SIGTSTP,
+            libc::SIGTTIN,
+            libc::SIGTTOU,
+        ] {
+            assert!(!signal_terminates_by_default(sig), "sig {sig} must NOT fabricate exit");
+        }
+    }
+
+    // "Pause/Unpause Can Fake State On Non-Live Containers" (P1): pause needs a running container,
+    // unpause needs a paused one; anything else is a 409, never a fake state flip.
+    #[test]
+    fn pause_only_from_running_unpause_only_from_paused() {
+        assert!(freeze_allowed("running", true), "pause a running container");
+        assert!(!freeze_allowed("exited", true), "pause an exited container must be rejected");
+        assert!(!freeze_allowed("created", true), "pause a created container must be rejected");
+        assert!(!freeze_allowed("paused", true), "double-pause must be rejected");
+
+        assert!(freeze_allowed("paused", false), "unpause a paused container");
+        assert!(!freeze_allowed("running", false), "unpause a running container must be rejected");
+        assert!(!freeze_allowed("exited", false), "unpause an exited container must be rejected");
+    }
 }

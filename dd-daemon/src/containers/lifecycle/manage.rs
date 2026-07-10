@@ -28,6 +28,9 @@ pub(crate) async fn containers_rename(
                 "Conflict. The container name \"/{new_name}\" is already in use"
             ));
         }
+        // Re-alias the container's network endpoints so `network inspect` and the live DNS `.names`
+        // track the rename (endpoints are keyed by container id, not name).
+        crate::networks::rename_endpoints(&mut g.networks, &full, &new_name);
         if let Some(c) = g.containers.get_mut(&full) {
             c.name = new_name;
         }

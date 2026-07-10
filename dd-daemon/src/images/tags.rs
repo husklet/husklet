@@ -34,14 +34,25 @@ pub(crate) async fn image_tag(
         Some(t) => format!("{repo}:{t}"),
         None => repo,
     };
-    if !g.images.iter().any(|i| i.name == full) {
-        g.images.push(Image {
-            name: full.clone(),
-            ..src
-        });
-    }
+    apply_tag(&mut g.images, &src, &full);
     crate::events::emit_event(&a.events, "image", "tag", &full, json!({"name": full}));
     StatusCode::CREATED.into_response()
+}
+
+/// Apply `docker tag`: make `full` (dest `repo:tag`) reference `src`'s content. If `full` already exists,
+/// REPOINT it at the source (Docker replaces the destination mapping). The old code skipped the write when
+/// the dest tag was present, so a retag was a silent no-op and clients kept running/pushing the STALE
+/// rootfs the tag used to point at.
+pub(crate) fn apply_tag(images: &mut Vec<Image>, src: &Image, full: &str) {
+    let tagged = Image {
+        name: full.to_string(),
+        ..src.clone()
+    };
+    if let Some(existing) = images.iter_mut().find(|i| i.name == full) {
+        *existing = tagged;
+    } else {
+        images.push(tagged);
+    }
 }
 
 /// DELETE /images/:name -- `docker rmi`. Tag-precise, matching Docker semantics: `rmi <name>:<tag>`
@@ -94,10 +105,7 @@ pub(crate) async fn image_delete(
         // the host `macos` image's rootfs is the live `/` — never delete. dd-images owns the store-guarded
         // dir removal (a rootfs outside the writable store — a bundled starter — is left untouched).
         dd_images::Store::new(&a.images_dir).remove_image_dir(&target.rootfs);
-        report.push(DeleteRecord::Deleted(format!(
-            "sha256:{}",
-            fake_id(&target.name)
-        )));
+        report.push(DeleteRecord::Deleted(image_id(&target)));
     }
     crate::events::emit_event(
         &a.events,
@@ -137,4 +145,58 @@ pub(crate) async fn register_image(a: &App, img: Image) {
     let tag = repo_tag(&img.name);
     g.images.retain(|i| repo_tag(&i.name) != tag);
     g.images.push(img);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::model::Image;
+
+    fn img(name: &str, rootfs: &str) -> Image {
+        Image {
+            name: name.into(),
+            rootfs: rootfs.into(),
+            ..Default::default()
+        }
+    }
+
+    // "docker tag Onto Existing Tag Is A Silent No-Op" (P1): retagging an existing dest must REPOINT it
+    // at the source content, not leave the stale mapping.
+    #[test]
+    fn image_tag_existing_repo_tag_repoints_to_source() {
+        let mut images = vec![img("src:latest", "/store/src"), img("dst:latest", "/store/old-dst")];
+        let src = images[0].clone();
+        apply_tag(&mut images, &src, "dst:latest");
+        let dst = images.iter().find(|i| i.name == "dst:latest").unwrap();
+        assert_eq!(dst.rootfs, "/store/src", "retag must repoint dst at the source rootfs");
+        assert_eq!(
+            images.iter().filter(|i| i.name == "dst:latest").count(),
+            1,
+            "retag must not duplicate the dest entry"
+        );
+    }
+
+    // "Image Aliases Report Different IDs For The Same Rootfs" (P1): a new tag of one rootfs is another
+    // reference to the SAME content, so both must report the same content-derived image id.
+    #[test]
+    fn image_tag_new_alias_shares_content_image_id() {
+        let mut images = vec![img("src:latest", "/store/src")];
+        let src = images[0].clone();
+        apply_tag(&mut images, &src, "src:v2");
+        assert_eq!(images.len(), 2, "a new tag adds a second reference");
+        assert_eq!(
+            image_id(&images[0]),
+            image_id(&images[1]),
+            "two tags of one rootfs must share one image id"
+        );
+    }
+
+    #[test]
+    fn image_id_differs_for_distinct_rootfs() {
+        assert_ne!(
+            image_id(&img("a:latest", "/store/a")),
+            image_id(&img("b:latest", "/store/b")),
+            "distinct rootfs content must yield distinct image ids"
+        );
+    }
 }

@@ -159,16 +159,21 @@ pub(crate) async fn network_disconnect(
 ) -> Response {
     let req = b.container.unwrap_or_default();
     let mut g = a.inner.lock().await;
-    let cid = resolve_cid(&g, &req).unwrap_or(req);
-    let r = match g.networks.iter_mut().find(|n| net_matches(n, &id)) {
-        Some(n) => {
-            leave_network(n, &cid);
-            StatusCode::OK.into_response()
-        }
-        None => return no_such_network(&id),
+    // Docker order (mirrors connect): the network must exist (404 network), then the CONTAINER must
+    // exist (404 container). The old code fell back to the raw request string on a container miss and
+    // returned 200, so disconnecting a nonexistent container looked successful to cleanup tooling.
+    if !g.networks.iter().any(|n| net_matches(n, &id)) {
+        return no_such_network(&id);
+    }
+    let cid = match resolve_cid(&g, &req) {
+        Some(c) => c,
+        None => return no_such(&req),
     };
+    if let Some(n) = g.networks.iter_mut().find(|n| net_matches(n, &id)) {
+        leave_network(n, &cid);
+    }
     save_state(&g, &a.state_path);
-    r
+    StatusCode::OK.into_response()
 }
 
 /// `POST /networks/prune` — `docker network prune`. Removes user-defined networks with no attached

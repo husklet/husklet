@@ -316,32 +316,6 @@ Verification:
 
 Run two concurrent pulls of images sharing a layer inside one daemon and trace `dd-layer-<pid>-<layer-id>.tar.gz`. Expected fix behavior: each unpack uses a unique temp path or serializes per layer digest.
 
-## Image Aliases Report Different IDs For The Same Rootfs
-
-Priority: P1
-Impact: clients cache, compare, delete, or display retagged content as unrelated images
-Confidence: High
-
-Verification status: Proven in isolated worktree `/Users/x/dd/dd-workerC-daemon-storage-20260710`.
-
-Evidence:
-
-- `docker tag` clones the image entry while keeping the same rootfs: `dd-daemon/src/images/tags.rs:37`.
-- Image list and inspect derive the image ID from `i.name`: `dd-daemon/src/images/query.rs:22`, `dd-daemon/src/images/query.rs:115`.
-- `system df` also derives ID from `i.name`: `dd-daemon/src/system.rs:115`.
-
-Why this is bad:
-
-A tag should be another reference to the same image content. Deriving IDs from the tag name makes one rootfs look like multiple unrelated images.
-
-Isolated proof:
-
-```sh
-cargo test -p dd-daemon images_json_same_rootfs_aliases_share_image_id -- --nocapture
-```
-
-Result: failed because `repo/app:latest` and `repo/app:v2` reported different `sha256:` IDs for the same rootfs.
-
 ## Build-Cache Layer Replacement Is Non-Atomic
 
 Priority: P1
@@ -412,56 +386,6 @@ CARGO_TARGET_DIR=/Users/x/dd/dd-slot-e-target cargo test -p dd-daemon fractional
 
 Result: failed as intended; left `1`, right `0`.
 
-## Pause/Unpause Can Fake State On Non-Live Containers
-
-Priority: P1
-Impact: container lifecycle state corruption
-Confidence: High
-
-Verification status: Proven in isolated worktree `/Users/x/dd/dd-workerH-daemon-api-20260710`.
-
-Evidence:
-
-- `freeze` resolves any container id, optionally signals a pid if present, and then continues to write state: `dd-daemon/src/containers/lifecycle/run.rs:251`.
-
-Why this is bad:
-
-Pausing an exited or created container should fail without changing state. dd can return `204`, mark an exited container `paused`, then `unpause` can mark it `running` without a live pid.
-
-Isolated proof:
-
-```sh
-cargo test -p dd-daemon pause_unpause_exited_is_409_and_unchanged -- --nocapture
-```
-
-Result: failed as expected; pause returned `204`, expected `409`.
-
-## Rename Leaves Network Endpoint Aliases Stale
-
-Priority: P1
-Impact: stale network inspect output and stale peer name resolution
-Confidence: High
-
-Verification status: Proven in isolated worktree `/Users/x/dd/dd-workerH-daemon-api-20260710`.
-
-Evidence:
-
-- `containers_rename` updates only `Container.name`: `dd-daemon/src/containers/lifecycle/manage.rs:31`.
-- Network endpoint names are copied at join time: `dd-daemon/src/networks/ipam/alloc.rs:86`.
-- Live name resolver files are written from endpoint names: `dd-daemon/src/runtime/spawn/net.rs:10`.
-
-Why this is bad:
-
-After rename, `docker network inspect` and live resolver `.names` can keep the old container name. Peers and API clients see stale aliases.
-
-Isolated proof:
-
-```sh
-cargo test -p dd-daemon network_endpoint_name_tracks_container_rename -- --nocapture
-```
-
-Result: failed as expected; network inspect reported `"web"`, expected `"app"`.
-
 ## Exec Start Is Not Single-Use
 
 Priority: P1
@@ -522,57 +446,6 @@ If a client or response channel backpressures while a container produces output 
 Verification:
 
 Run a high-output container with a deliberately slow `logs -f` consumer and compare live stream bytes against buffered logs after exit.
-
-## Ignored Kill Signals Fabricate Container Exit
-
-Priority: P1
-Impact: daemon state says exited while the process is still alive
-Confidence: High
-
-Verification status: Proven in isolated worktree `/Users/x/dd/dd-worker-M-daemon-api-20260710`.
-
-Evidence:
-
-- `containers_kill` parses any signal and sends it to the group: `dd-daemon/src/containers/lifecycle/run.rs:136`.
-- It then stops ports and unconditionally writes `status = "exited"`: `dd-daemon/src/containers/lifecycle/run.rs:149`.
-
-Why this is bad:
-
-Signals such as `SIGWINCH` are normally ignored by many processes. Docker kill with a non-terminal signal should not fabricate exit state if the process remains alive.
-
-Isolated proof:
-
-```sh
-CARGO_TARGET_DIR=/Users/x/dd/dd-worker-M-daemon-api-20260710-target cargo test -p dd-daemon kill_ignored_signal_must_not_mark_container_exited -- --nocapture
-```
-
-Result: failed as intended. Child remains alive after `SIGWINCH`; daemon state is `"exited"`, expected `"running"`.
-
-## IPAM Reuses `.0.2` After 253 Endpoints In `/16`
-
-Priority: P1
-Impact: silent IP collision on user-defined networks
-Confidence: High
-
-Verification status: Proven in isolated worktree `/Users/x/dd/dd-worker-M-daemon-api-20260710`.
-
-Evidence:
-
-- Allocator scans only `.0.2..=.0.254`: `dd-daemon/src/networks/ipam/alloc.rs:50`.
-- It falls back to `.0.2` when exhausted: `dd-daemon/src/networks/ipam/alloc.rs:56`.
-- `join_network` stores the returned IP without detecting duplicate allocation: `dd-daemon/src/networks/ipam/alloc.rs:82`.
-
-Why this is bad:
-
-The network is advertised as a `/16`, but allocation wraps after 253 endpoints and collides with an existing endpoint.
-
-Isolated proof:
-
-```sh
-CARGO_TARGET_DIR=/Users/x/dd/dd-worker-M-daemon-api-20260710-target cargo test -p dd-daemon alloc_ip_does_not_reuse_address_inside_advertised_16 -- --nocapture
-```
-
-Result: failed as intended. Allocator reused `172.18.0.2`.
 
 ## Healthcheck `NONE` Create Override Makes Fake Health
 
@@ -704,30 +577,6 @@ Create one canonical gap registry with:
 - current dd behavior
 - close condition
 
-## Network Disconnect Missing Container Returns OK
-
-Priority: P2
-Impact: Docker API state mutation reports success for a nonexistent target
-Confidence: High
-
-Verification status: Proven in isolated worktree `/Users/x/dd/dd-slot-s`.
-
-Evidence:
-
-- Network disconnect handler starts at `dd-daemon/src/networks/handlers.rs:155`.
-
-Why this is bad:
-
-Docker-compatible callers expect a missing container to fail with a not-found status. Returning success makes orchestration cleanup believe it detached a container that was never present.
-
-Isolated proof:
-
-```sh
-cargo test -p dd-daemon network_disconnect_missing_container_is_404_noop -- --nocapture
-```
-
-Result: failed; observed status `200`, expected `404`.
-
 ## Attach Exited Container Without Live State Creates Hijack
 
 Priority: P1
@@ -809,31 +658,6 @@ CARGO_TARGET_DIR=target-worker-Y-daemon-api-20260710 cargo test -p dd-daemon con
 ```
 
 Result: failed; `HostConfig.AutoRemove` was `Null`, expected `true`.
-
-## Container Prune Deletes Restarting Containers
-
-Priority: P1
-Impact: prune can cancel pending restart-policy containers
-Confidence: High
-
-Verification status: Proven in isolated worktree `/Users/x/dd/dd-worker-Y-daemon-api-20260710`.
-
-Evidence:
-
-- Restart backoff marks containers as restarting: `dd-daemon/src/runtime/restart.rs:41`.
-- Container prune logic lives in `dd-daemon/src/containers/inspect/admin.rs:7`.
-
-Why this is bad:
-
-A restarting container is active from the user's point of view and may be waiting for policy backoff. Prune should not remove it and cancel the scheduled restart.
-
-Isolated proof:
-
-```sh
-CARGO_TARGET_DIR=target-worker-Y-daemon-api-20260710 cargo test -p dd-daemon containers_prune_keeps_restarting_container -- --nocapture
-```
-
-Result: failed; prune deleted `["restartid0000"]`.
 
 ## Fast-Exit Event Ordering Can Emit `die` Before `start`
 
@@ -957,30 +781,6 @@ CARGO_TARGET_DIR=/Users/x/dd/dd-worker-AD-daemon-api-20260710-target cargo test 
 ```
 
 Result: failed; reloaded state remained `running`, expected `exited` with exit code `127`.
-
-## `docker tag` Onto Existing Tag Is A Silent No-Op
-
-Priority: P1
-Impact: tag replacement leaves clients using stale image contents
-Confidence: High
-
-Verification status: Proven in isolated worktree `/Users/x/dd/dd-worker-AG-daemon-image-20260710`.
-
-Evidence:
-
-- Image tagging only pushes the new tag if the tag is not already present: `dd-daemon/src/images/tags.rs:37`.
-
-Why this is bad:
-
-Docker tag replacement should repoint the destination `repo:tag` to the source image. dd leaves the old destination mapping in place while reporting success, so subsequent runs or pushes use stale rootfs content.
-
-Isolated proof:
-
-```sh
-CARGO_TARGET_DIR=/Users/x/dd/dd-worker-AG-daemon-image-20260710/target-ag cargo test -p dd-daemon image_tag_existing_repo_tag_repoints_to_source -- --ignored --nocapture
-```
-
-Result: failed; `dst:latest` still pointed to `/store/old-dst-rootfs`, expected `/store/src-rootfs`.
 
 ## `docker tag` Aliases Do Not Survive Discovery
 
