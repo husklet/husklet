@@ -161,6 +161,28 @@ mod tests {
         assert_eq!(lc.lowers, vec!["/lo0".to_string(), "/lo1".to_string()]);
     }
 
+    // "Dockerfile WORKDIR Is Ignored for RUN" (P1): `.host_workdir` feeds HOST-side ADD/COPY path
+    // resolution only — it must NOT populate the guest cwd. Setting the guest cwd (so `WORKDIR /app;
+    // RUN pwd` prints `/app`) requires `.workdir`/`.cwd`. The build RUN step used to call only
+    // `.host_workdir`, so RUN executed from `/`. This locks the distinction the fix relies on.
+    #[test]
+    fn host_workdir_is_not_guest_cwd_but_workdir_is() {
+        let host_only = Container::builder(Image::from_rootfs("/img").guest(Guest::LinuxAarch64))
+            .cmd(["/bin/true"])
+            .host_workdir("/app")
+            .build()
+            .unwrap();
+        assert_eq!(host_only.launch_config().cwd, "", "host_workdir must NOT set the guest cwd");
+
+        let with_wd = Container::builder(Image::from_rootfs("/img").guest(Guest::LinuxAarch64))
+            .cmd(["/bin/true"])
+            .host_workdir("/app")
+            .workdir("/app")
+            .build()
+            .unwrap();
+        assert_eq!(with_wd.launch_config().cwd, "/app", "workdir sets the guest cwd");
+    }
+
     #[test]
     fn launch_config_defaults_surface_nothing() {
         // A minimal runnable container: no env pairs, so every optional/env-backed field stays at its default.

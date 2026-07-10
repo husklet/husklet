@@ -39,46 +39,6 @@ Coverage gap:
 
 Add a unit/integration check that every builder env key is either mapped to `LaunchConfig` or explicitly rejected.
 
-## Dockerfile `WORKDIR` Is Ignored for `RUN`
-
-Priority: P1
-Impact: build semantics mismatch
-Confidence: High
-
-Verification status: Proven in isolated worktree `/Users/x/dd/verify3-dd-worktree`.
-
-Evidence:
-
-- Build parser tracks `WORKDIR` and creates it: `dd-daemon/src/build/handler.rs:367`.
-- `RUN` uses `.host_workdir(workdir.to_string())` but does not set guest cwd: `dd-daemon/src/build/steps.rs:140`.
-- Typed launch uses `LaunchConfig.cwd` for guest working directory: `dd-jit-darwin/src/launch/mod.rs:57`.
-- `SpawnConfig.work_dir` is host-side path resolution state, not guest cwd: `dd-jit-darwin/src/spawn_config.rs:6`.
-
-Why this is bad:
-
-`WORKDIR /app; RUN pwd > /x` should run from `/app`. Current source indicates `RUN` executes from `/`, while later runtime `CMD` paths may use the intended cwd.
-
-Verification:
-
-Build:
-
-```Dockerfile
-FROM alpine
-WORKDIR /app
-RUN pwd > /pwd
-CMD cat /pwd
-```
-
-Expected output is `/app`.
-
-Isolated proof:
-
-```sh
-CARGO_TARGET_DIR=/Users/x/dd/verify3-target cargo test -p dd-jit --lib host_workdir_is_not_guest_cwd -- --nocapture
-```
-
-Result: `1 passed; 0 failed`. The test demonstrates that `.host_workdir(...)` does not populate guest `LaunchConfig.cwd`.
-
 ## Published Port Bind Failures Do Not Fail Start
 
 Priority: P1
