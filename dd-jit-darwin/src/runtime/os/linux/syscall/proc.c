@@ -792,6 +792,13 @@ static int svc_proc(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64
             G_RET(c) = (uint64_t)(-EINVAL);
             break;
         } // priority out of band
+        // Real-time classes (SCHED_FIFO=1 / SCHED_RR=2) need CAP_SYS_NICE or a nonzero RLIMIT_RTPRIO.
+        // The container runs unprivileged, so the kernel rejects them with EPERM after arg validation --
+        // otherwise a latency-sensitive probe believes RT scheduling was installed when nothing changed.
+        if (base == 1 || base == 2) {
+            G_RET(c) = (uint64_t)(-EPERM);
+            break;
+        }
         g_sched_policy = base;
         g_sched_prio = prio;
         G_RET(c) = 0;
