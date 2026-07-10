@@ -40,6 +40,16 @@ pub(super) fn regress() -> Group {
         // Byte-exact vs native proves the fixup now serves the acquire load correctly.
         src_nopie("ldapr-nonpie-fixup", "nonpie_ldapr.c").env("NOGUESTFOLD", "1").oracle()
             .only(&[Engine::LinuxAarch64]),
+        // aarch64 PAIR atomics (LDXP/STXP exclusive pair + CASP compare-and-swap pair) on a NON-PIE image's
+        // low absolute .data. nonpie_fixup only served the single-register exclusive/CAS forms; the pair forms
+        // fell through -> return 0 -> the low-address fault re-raised on the SAME instruction forever (hang).
+        // Now emulated as a software 128-bit LL/SC + 128-bit CAS; byte-exact vs native.
+        src_nopie("pairatomics-nonpie", "nonpie_pairatomics.c").oracle()
+            .only(&[Engine::LinuxAarch64]),
+        // Same guest with the bias-fold DISABLED so every LDXP/STXP/CASP faults into nonpie_fixup — the path
+        // that formerly hung on the pair forms.
+        src_nopie("pairatomics-nonpie-fixup", "nonpie_pairatomics.c").env("NOGUESTFOLD", "1").oracle()
+            .only(&[Engine::LinuxAarch64]),
         // REGRESSION GUARD: an externally-linked / cgo (runtime.iscgo==1) aarch64 Go binary that forces
         // heavy goroutine stack growth + GC (64 goroutines, morestack copies, runtime.GC). Go async-preempts
         // running goroutines with SIGURG; dd's delivery of SIGURG into a preempted cgo thread (Go's

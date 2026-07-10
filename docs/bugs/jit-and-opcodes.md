@@ -354,31 +354,6 @@ timeout 8 /Users/x/dd/dd-jitfault-audit-20260710/target-jitfault-audit/release/b
 
 qemu reported guest traps; dd reported `UNIMPL 1B opcode 0xf1` or `UNIMPLEMENTED EVEX` and exited `70`.
 
-## aarch64 Low-Address Exclusive And Pair Atomics Hang
-
-Priority: P1
-Impact: guest atomic instructions can spin forever at low non-PIE addresses
-Confidence: High
-
-Verification status: Proven in isolated worktree `/Users/x/dd/dd-audit-aarch64-atomics-perms-20260710`.
-
-Evidence:
-
-- Low non-PIE `LDXR`/`STXR` is intended to be handled by software LL/SC: `dd-jit-darwin/src/runtime/os/linux/elf.c:269`.
-- `LDXR`/`LDAXR` records a software reservation: `dd-jit-darwin/src/runtime/os/linux/elf.c:285`.
-- Pair forms including `CASP` are called out as rare and left to abort, but the observed behavior is a hang: `dd-jit-darwin/src/runtime/os/linux/elf.c:270`.
-
-Why this is bad:
-
-Low-address ordinary loads complete under dd, and native aarch64 completes the exclusive and pair atomic probes. dd times out on low-address `LDXR` and `CASP`, so guest code that uses atomics in a non-PIE low mapping can hang instead of completing or failing cleanly.
-
-Observed proof:
-
-```text
-native: ldr_only_min ok; ldxr_only_min ok; casp_min ok
-dd:     ldr_only_min ok; ldxr_only_min timed out; casp_min timed out
-```
-
 ## aarch64 Threaded Self-Modifying Code Executes Stale Translations
 
 Priority: P1
