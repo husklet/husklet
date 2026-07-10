@@ -1274,30 +1274,6 @@ CARGO_TARGET_DIR=/Users/x/dd/dd-worker-AQ-daemon-ref-config-20260710/target-aq c
 
 Result: failed with restored arch `LinuxAarch64`, expected `LinuxX86_64`.
 
-## `docker save nginx` Can Serialize `linuxserver/nginx`
-
-Priority: P1
-Impact: save can export the wrong repository image
-Confidence: High
-
-Verification status: Proven in isolated worktree `/Users/x/dd/dd-worker-AQ-daemon-ref-config-20260710`.
-
-Evidence:
-
-- `image_save` matches exact `repo_tag`, then falls back to basename-only `ref_name`: `dd-daemon/src/images/transfer/save.rs:20`.
-
-Why this is bad:
-
-Short official names must not match unrelated repositories with the same basename. Saving `nginx` can serialize `linuxserver/nginx:latest`, corrupting backups and transfers.
-
-Isolated proof:
-
-```sh
-CARGO_TARGET_DIR=/Users/x/dd/dd-worker-AQ-daemon-ref-config-20260710/target-aq cargo test -p dd-daemon image_save -- --nocapture
-```
-
-Result: failed; short `nginx` returned success for unrelated `linuxserver/nginx`, expected not found.
-
 ## Restart State Load Overwrites Persisted Container Arch
 
 Priority: P2
