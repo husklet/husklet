@@ -19,7 +19,6 @@ This directory is a working inventory of suspicious behavior, bad architecture, 
 | P1 | syscall/fork | fork children lose inherited epoll/timerfd state | High | [syscall-compat.md](syscall-compat.md#fork-children-lose-inherited-epolltimerfd-state) |
 | P1 | syscall/fork | forked child loses inherited inotify watch and can hang | High | [syscall-compat.md](syscall-compat.md#forked-child-loses-inherited-inotify-watch-and-can-hang) |
 | P1 | syscall/signalfd | `dup(signalfd)` loses signalfd semantics | High | [syscall-compat.md](syscall-compat.md#dupsignalfd-loses-signalfd-semantics) |
-| P1 | syscall/poll | sentry `ppoll` masks stale fds instead of `POLLNVAL` | High | [syscall-compat.md](syscall-compat.md#sentry-ppoll-masks-stale-fds-instead-of-pollnval) |
 | P1 | syscall/fd | sentry close-on-exec does not clean virtual fds | High | [syscall-compat.md](syscall-compat.md#sentry-close-on-exec-does-not-clean-virtual-fds) |
 | P1 | daemon/cache | build-cache layer replacement is non-atomic | High | [daemon-tests-docs.md](daemon-tests-docs.md#build-cache-layer-replacement-is-non-atomic) |
 | P1 | daemon/cgroup | fractional `--cpus` loses quota precision | High | [daemon-tests-docs.md](daemon-tests-docs.md#fractional---cpus-loses-quota-precision) |
@@ -29,8 +28,6 @@ This directory is a working inventory of suspicious behavior, bad architecture, 
 | P1 | daemon/create | anonymous volume materialization failures are ignored | High | [daemon-tests-docs.md](daemon-tests-docs.md#anonymous-volume-materialization-failures-are-ignored) |
 | P1 | env/exec | `execve(..., envp=NULL)` leaks default/stale env | High | [completeness-and-env.md](completeness-and-env.md#execve-envpnull-leaks-a-default-or-stale-environment) |
 | P1 | display/clipboard | inert data-device objects silently swallow selection | High | [gpu-display-sentry.md](gpu-display-sentry.md#data-device-objects-are-inert) |
-| P2 | syscall/select | sentry `pselect6` masks invalid virtual fd bits | Medium | [syscall-compat.md](syscall-compat.md#sentry-pselect6-masks-invalid-virtual-fd-bits) |
-| P2 | syscall/signal | signal ucontext stack metadata is zero | High | [syscall-compat.md](syscall-compat.md#signal-ucontext-stack-metadata-is-zero) |
 | P2 | syscall/inotify | `dup(inotify_fd)` loses inotify read semantics | High | [syscall-compat.md](syscall-compat.md#dupinotify_fd-loses-inotify-read-semantics) |
 | P2 | syscall/compat | aarch64 `AT_PAGESZ` exposes host page size | High | [syscall-compat.md](syscall-compat.md#aarch64-at_pagesz-exposes-host-page-size) |
 | P2 | syscall/compat | `F_SETLEASE` / `F_NOTIFY` fake support | High | [syscall-compat.md](syscall-compat.md#f_setlease-f_notify-return-success-without-arming-anything) |
@@ -63,17 +60,12 @@ This directory is a working inventory of suspicious behavior, bad architecture, 
 | P2 | procfs/state | futex-blocked processes report running in procfs | High | [completeness-and-env.md](completeness-and-env.md#futex-blocked-processes-report-running-in-procfs) |
 | P2 | procfs/maps | `/proc/self/maps` omits RELRO mapping detail | High | [completeness-and-env.md](completeness-and-env.md#procselfmaps-omits-relro-mapping-detail) |
 | P2 | launch/config | path-list config still uses delimiter env strings | Medium | [completeness-and-env.md](completeness-and-env.md#typed-launch-path-lists-still-use-delimiter-env-strings) |
-| P1 | syscall/signal | `SA_NOCLDWAIT` does not suppress zombies | High | [syscall-compat.md](syscall-compat.md#sa_nocldwait-does-not-suppress-zombies) |
-| P1 | syscall/signal | aarch64 signal ucontext omits FPSIMD context record | High | [syscall-compat.md](syscall-compat.md#aarch64-signal-ucontext-omits-fpsimd-context-record) |
 | P1 | syscall/signal | `kill(0, sig)` only signals the caller | High | [syscall-compat.md](syscall-compat.md#kill0-sig-only-signals-the-caller) |
 | P1 | syscall/mm | guest `PROT_NONE` mappings remain directly readable | High | [syscall-compat.md](syscall-compat.md#guest-prot_none-mappings-remain-directly-readable) |
 | P1 | syscall/mm | writes to `mprotect(PROT_READ)` pages do not fault | High | [syscall-compat.md](syscall-compat.md#writes-to-mprotectprot_read-pages-do-not-fault) |
 | P1 | syscall/mm | execute permission is not enforced for guest fetch | High | [syscall-compat.md](syscall-compat.md#execute-permission-is-not-enforced-for-guest-fetch) |
-| P1 | syscall/wait | default core status contradicts `RLIMIT_CORE=0` | High | [syscall-compat.md](syscall-compat.md#default-core-status-contradicts-rlimit_core0) |
-| P2 | syscall/signal | `SA_NOCLDSTOP` still delivers stop SIGCHLD | High | [syscall-compat.md](syscall-compat.md#sa_nocldstop-still-delivers-stop-sigchld) |
 | P2 | syscall/mm | aarch64 4K subpage `munmap` returns `EINVAL` | High | [syscall-compat.md](syscall-compat.md#aarch64-4k-subpage-munmap-returns-einval) |
 | P2 | syscall/mm | aligned `mprotect` on unmapped range succeeds | High | [syscall-compat.md](syscall-compat.md#aligned-mprotect-on-unmapped-range-succeeds) |
-| P2 | procfs/process | `/proc/<pid>/stat` reports wrong process group and session | High | [syscall-compat.md](syscall-compat.md#proc-stat-reports-wrong-process-group-and-session) |
 | P2 | syscall/fs | `renameat2(RENAME_WHITEOUT)` silently becomes plain rename | High | [syscall-compat.md](syscall-compat.md#renameat2rename_whiteout-silently-becomes-plain-rename) |
 
 ## Deprioritized
