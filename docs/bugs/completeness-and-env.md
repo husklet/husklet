@@ -157,26 +157,6 @@ so a value's own newline never masquerades as a record separator. The daemon-lau
 `DD_GUEST_ENV`, no marker) is byte-for-byte unchanged. Test: `comp-sys-proc/exec-newline-env`
 (`exec_newline_env.c`) — passes on both engines (`value_ok=1 split_entry=0`, matching native).
 
-### aarch64 Pcache Key Omits `NOSTEALFAST`
-
-Priority: P2
-Impact: warm persistent cache can hide codegen/perf mode changes
-Confidence: Medium
-
-Evidence:
-
-- `NOSTEALFAST` is forwarded into the runtime environment: `dd-jit-darwin/src/spawn_config.rs:181`.
-- It changes emitted aarch64 codegen behavior: `dd-jit-darwin/src/runtime/translate/aarch64/translate.c:126`.
-- The aarch64 pcache mode-key list omits it: `dd-jit-darwin/src/runtime/translate/aarch64/pcache.c:231`.
-
-Why this is bad:
-
-Perf/debug A/B runs can load code emitted under a previous mode, making the toggle appear ineffective or producing mixed-mode measurements.
-
-Verification:
-
-Run an aarch64 guest twice with persistent cache enabled, toggling `NOSTEALFAST`, and assert the cache file identity or emitted bytes differ.
-
 ### Per-Container `DDJIT_NOPCACHE` Is Dropped By Typed Launch
 
 Priority: P2
