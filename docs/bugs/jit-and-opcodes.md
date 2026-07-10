@@ -94,28 +94,3 @@ Verification:
 
 Extend a probe like `dd-tests/guests/completeness/x86_fxsave_mxcsr.c` to load distinct ST0-7 values, fxsave, clobber the x87 stack, fxrstor, and compare the restored ST values against native/qemu.
 
-## 4K Guest `munmap` Subpage Remains Readable
-
-Priority: P1
-Impact: guest SIGSEGV is not delivered for unmapped 4K subpages
-Confidence: High
-
-Verification status: Proven in isolated worktree `/Users/x/dd/dd-jitfault-audit-20260710`.
-
-Evidence:
-
-- Guest `munmap` handles subpage bookkeeping: `dd-jit-darwin/src/runtime/os/linux/syscall/mem.c:228`, `dd-jit-darwin/src/runtime/os/linux/syscall/mem.c:245`, `dd-jit-darwin/src/runtime/os/linux/syscall/mem.c:256`.
-- x86 data loads dereference host memory directly: `dd-jit-darwin/src/runtime/translate/x86_64/decode.c:433`.
-
-Why this is bad:
-
-After a guest 4K page is unmapped, scalar loads and `rep movsb` should fault and deliver guest `SIGSEGV`. dd continues reading the host backing bytes, so guest fault handlers never run and memory safety/probing semantics are wrong.
-
-Isolated proof:
-
-```sh
-DDJIT_DIR=/Users/x/dd/dd-jitfault-audit-20260710/target-jitfault-audit/release/build/dd-jit-darwin-16122afd27b6bb64/out cargo run -q -p dd-tests --target-dir /Users/x/dd/dd-jitfault-audit-cargo -- -e x86_64 repmovs-fault
-```
-
-qemu observed `repmovs_fault scalar=1 sig=1 copied4=1 tail=1 regs=1 addr=1 rip_nonzero=1`; dd observed `scalar=0 sig=0 ... addr=0 rip_nonzero=0`.
-

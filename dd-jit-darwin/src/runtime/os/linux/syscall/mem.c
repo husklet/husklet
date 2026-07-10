@@ -257,6 +257,16 @@ static int svc_mem(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_
             anon_split_unmap(u_lo, u_hi);
             wipefork_del(u_lo, u_hi - u_lo); // a wipe-on-fork range that was unmapped no longer applies
             mlk_del(u_lo, u_hi - u_lo);      // an unmapped range is implicitly unlocked (mlock -> VmLck)
+            // The host pages [u_lo,u_hi) are now genuinely released, so a guest access there must fault
+            // (SIGSEGV). Without this the JIT's lazy zero-page grower (jit86_lazyguard) would re-serve the
+            // fault -- growth budget for an adjacent live mapping, small budget otherwise -- and the guest
+            // would silently read fresh zero memory instead of faulting. Mark the released range inaccessible
+            // so the fault handler delivers the guest SIGSEGV; a later mmap over it clears the coverage.
+            // (16 KB host-page granularity residual: a 4 KB sub-page whose 16 KB host page still backs a LIVE
+            // neighbour is NOT released above -> not marked here -> stays readable. That mixed-page case needs
+            // per-4 KB software fault checks the JIT deliberately avoids; the common aligned/whole-page case is
+            // now correct.)
+            gna_add(u_lo, u_hi);
         }
         if (r == 0 && g_mem_max) {
             // uncharge (clamp >=0)
