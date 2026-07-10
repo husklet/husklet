@@ -40,6 +40,14 @@ static void build_signal_frame(struct cpu *c, int sig) {
     uint64_t sp = (base - 2048) & ~15ull;                           // 16-aligned frame base; uc lives here
     uint64_t uc = sp, mc = uc + 40, info = uc + 512, xs = uc + 768; // ucontext / mcontext(gregs) / siginfo / xmm save
     memset((void *)sp, 0, 2048);
+    // uc_stack: expose the configured sigaltstack (ss_sp@16, ss_flags@24, ss_size@32) so a handler or crash
+    // reporter can discover the active stack (Linux fills this from the task's sigaltstack). SS_DISABLE when
+    // none is configured; SS_ONSTACK(1) when this handler runs on the alt stack. Was left zero.
+    *(uint64_t *)(uc + 16) = c->alt_sp;   // ss_sp
+    *(uint64_t *)(uc + 32) = c->alt_size; // ss_size
+    *(int *)(uc + 24) = (!c->alt_sp || (c->alt_flags & SS_DISABLE_L)) ? (int)SS_DISABLE_L
+                        : (base != c->r[4])                           ? 1 /*SS_ONSTACK*/
+                                                                      : 0;
     for (int i = 0; i < 16; i++)
         *(uint64_t *)(mc + i * 8) = c->r[GREG2R[i]];      // gregs[0..15]
     *(uint64_t *)(mc + 16 * 8) = c->rip;                  // gregs[16] = RIP

@@ -190,32 +190,6 @@ mac bash -lc 'DDJIT_DIR=$OUT $OUT/ddjit-linux_aarch64 scratch-worker-V/signalfd_
 
 Native printed `distinct=1 s2_eagain=1 s1_usr1=1`; dd printed `distinct=0 s2_eagain=0 s1_usr1=0`.
 
-## Signal Ucontext Stack Metadata Is Zero
-
-Priority: P2
-Impact: signal handlers see corrupted `ucontext_t.uc_stack`
-Confidence: High
-
-Verification status: Proven on aarch64 in isolated worktree `/Users/x/dd/dd-worker-V-jit-runtime-20260710`.
-
-Evidence:
-
-- aarch64 signal frames are zeroed and then selected fields are filled: `dd-jit-darwin/src/runtime/translate/aarch64/sigframe.c:27`.
-- aarch64 mask/register setup does not populate `uc_stack`: `dd-jit-darwin/src/runtime/translate/aarch64/sigframe.c:46`.
-- x86_64 signal frame construction has the same zeroed-frame pattern: `dd-jit-darwin/src/runtime/translate/x86_64/sigframe.c:40`.
-
-Why this is bad:
-
-Runtimes and crash handlers inspect `ucontext_t` to understand the active stack and altstack state. dd delivers handlers on the altstack but exposes zero stack metadata.
-
-Isolated proof:
-
-```sh
-mac bash -lc 'DDJIT_DIR=$OUT $OUT/ddjit-linux_aarch64 scratch-worker-V/sig_uc_stack.aarch64'
-```
-
-Native printed `seen=1 on_alt=1 uc_stack=1`; dd printed `seen=1 on_alt=1 uc_stack=0`.
-
 ## Epoll Loses Readiness When Watched Fd Closes But Dup Remains
 
 Priority: P1
@@ -420,30 +394,6 @@ Observed proof:
 ```text
 Linux: sa_nocldstop before=0 after=1 stop_ok=1 suppressed=1 raw=0x9
 dd:    sa_nocldstop before=1 after=2 stop_ok=1 suppressed=0 raw=0x137f
-```
-
-## aarch64 Signal Ucontext Omits FPSIMD Context Record
-
-Priority: P1
-Impact: signal handlers and crash reporters cannot discover SIMD state
-Confidence: High
-
-Verification status: Proven in isolated worktree `/Users/x/dd/dd-audit-aarch64-runtime-20260710`.
-
-Evidence:
-
-- aarch64 sigframe construction writes signal context directly: `dd-jit-darwin/src/runtime/translate/aarch64/sigframe.c:4`.
-- It copies raw NEON bytes into the reserved area without an `_aarch64_ctx` / `fpsimd_context` header: `dd-jit-darwin/src/runtime/translate/aarch64/sigframe.c:58`.
-
-Why this is bad:
-
-Linux aarch64 signal frames expose `FPSIMD_MAGIC` in `uc_mcontext.__reserved`. dd omits the context record, so handlers and unwind/crash tooling cannot locate SIMD state.
-
-Observed proof:
-
-```text
-Linux: fpsimd_ctx found=1 sane_size=1
-dd:    fpsimd_ctx found=0 sane_size=0
 ```
 
 ## aarch64 4K Subpage `munmap` Returns `EINVAL`
