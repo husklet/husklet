@@ -32,25 +32,6 @@ Results:
 - aarch64: fails with `jit 255/""` vs native `efault ... =1`.
 - x86_64: exits `0` but silently wrong; all bad-pointer verdicts are `0` instead of `1`.
 
-## Metal Replay Silently No-Ops Supported IR Commands
-
-Priority: P1
-Impact: submitted compute/copy/readback work can be skipped while frame success continues
-Confidence: Medium-high
-
-Evidence:
-
-- IR defines command variants such as `Dispatch`, `CopyBufferToBuffer`, and `CopyTextureToBuffer`.
-- Metal replay falls through to `_ => {}` for unhandled encoder ops: `dd-display/src/metal_backend.rs:2109`.
-
-Why this is bad:
-
-If a guest emits a supported IR command that the Metal backend does not handle, the command stream can appear accepted while the work is missing. That is silent render or readback corruption.
-
-Verification:
-
-Add a Metal replay probe that performs a copy/readback-dependent operation and asserts the destination changed. The backend should return an error or implement the command, not silently skip it.
-
 ## Presenter Failures Still Release Buffers And Fire Frame Callbacks
 
 Priority: P2
@@ -117,26 +98,6 @@ Verification:
 
 Run a dmabuf client that selects LINEAR and assert the server either supports it or sends a protocol failure instead of an inert object.
 
-## Metal Backend Skips Missing Bind-Group Resources
-
-Priority: P2
-Impact: cross-backend divergence and black/wrong frames
-Confidence: High
-
-Evidence:
-
-- Metal bind-group creation records referenced ids: `dd-display/src/metal_backend.rs:1739`.
-- Replay only binds resources if they are found: `dd-display/src/metal_backend.rs:1885`, `dd-display/src/metal_backend.rs:1907`.
-- Software/mock backends validate bind-group resources up front: `dd-gpu/src/software.rs:281`, `dd-gpu/src/mock.rs:148`.
-
-Why this is bad:
-
-Missing buffers/textures/samplers become nil bindings or no-op draws on Metal, while other backends reject them. That can turn invalid IR into black frames instead of an error.
-
-Verification:
-
-Add a backend parity test for bind groups referencing missing resources and require consistent `GpuError` behavior.
-
 ## Metal Render Target Texture Id Can Alias Guest Texture Id `1`
 
 Priority: P2
@@ -155,45 +116,6 @@ If guest IR creates an ordinary texture id `1`, it can silently alias the presen
 Verification:
 
 Submit IR that creates and samples/writes texture id `1` while presenting to an IOSurface and assert it is not aliased with the render target.
-
-## GPU Executor Acks Success After Replay Errors Or Skipped Writes
-
-Priority: P1
-Impact: guest believes a frame rendered while stale pixels remain
-Confidence: Medium-high
-
-Evidence:
-
-- `replay_stream` errors are logged but the executor still writes ack `1`: `dd-display/src/metal_backend.rs:1201`, `dd-display/src/metal_backend.rs:1209`.
-- Out-of-bounds `write_buffer` logs and returns `Ok(())`: `dd-display/src/metal_backend.rs:1465`.
-- Out-of-bounds `CopyBufferToTexture` logs and skips the copy without surfacing failure: `dd-display/src/metal_backend.rs:2017`.
-
-Why this is bad:
-
-The guest-side renderer receives a success ack even when the frame did not replay correctly. That converts malformed IR, stale resources, or bounds bugs into silent stale-frame output.
-
-Verification:
-
-Run a guest render that intentionally submits an OOB upload or malformed replay stream, then assert the guest sees failure instead of a rendered-frame ack.
-
-## `DrawIndexed.base_vertex` Is Ignored By Metal Replay
-
-Priority: P1
-Impact: indexed draws can use the wrong vertices
-Confidence: Medium-high
-
-Evidence:
-
-- IR encodes and decodes `base_vertex`: `dd-gpu/src/ir.rs:773`, `dd-gpu/src/ir.rs:884`.
-- Metal replay destructures `DrawIndexed` with `..` and does not use `base_vertex`: `dd-display/src/metal_backend.rs:1976`.
-
-Why this is bad:
-
-APIs such as `glDrawElementsBaseVertex` depend on adding `base_vertex` to fetched vertex indices. Ignoring it renders geometry from the wrong vertex range.
-
-Verification:
-
-Add a small indexed draw probe where `base_vertex` selects visibly different vertices. Expected fix behavior: Metal replay uses the base-vertex draw call or adjusts offsets correctly.
 
 ## Rendering Coverage Gaps Are Silent
 
@@ -256,50 +178,3 @@ Why this is bad:
 
 Other backends tend to reject invalid or duplicate resource definitions. Silent overwrite and fallback can hide guest bugs and produce frames that use stale resources or different channel formats than requested.
 
-## Metal Shader Id Can Retain Stale MSL
-
-Priority: P2
-Impact: pipelines can keep using an old shader after id reuse
-Confidence: Medium-high
-
-Evidence:
-
-- Shader creation does nothing when `msl_from_words` returns `None`: `dd-display/src/metal_backend.rs:1546`.
-
-Why this is bad:
-
-If a shader id previously held MSL and is recreated with non-MSL or empty payload data, the old library may remain in the map. Later pipelines using that id can render with stale shader code rather than failing or replacing the resource.
-
-## Metal Sampler Creation Drops Descriptor Fields
-
-Priority: P2
-Impact: sampler `mip_filter` and `address_w` silently diverge
-Confidence: High
-
-Verification status: Source-proven in isolated worktree `/Users/x/dd/dd-gpu-tex-audit`.
-
-Evidence:
-
-- `SamplerDesc` carries and wire-encodes `mip_filter` and `address_w`: `dd-gpu/src/ir.rs:145`, `dd-gpu/src/ir.rs:491`.
-- Metal sampler creation applies min/mag filters and U/V address modes, but not mip filter or W address mode: `dd-display/src/metal_backend.rs:1518`.
-
-Why this is bad:
-
-Sampler descriptors should either apply all supported fields or reject unsupported settings. Dropping fields silently changes texture sampling behavior.
-
-## Metal Cleanup Diverges From Checked Backends
-
-Priority: P2
-Impact: Metal resource cleanup coverage does not match backend expectations
-Confidence: Medium-high
-
-Verification status: Source-proven in isolated worktree `/Users/x/dd/dd-audit-gpu-cleanup-20260710`.
-
-Evidence:
-
-- Metal backend cleanup paths are spread through resource-specific code: `dd-display/src/metal_backend.rs:304`, `dd-display/src/metal_backend.rs:1602`, `dd-display/src/metal_backend.rs:1725`.
-- No `destroy_pipeline` override was found for the Metal backend.
-
-Why this is bad:
-
-Checked backends should expose matching cleanup semantics for every resource kind. Missing or divergent Metal cleanup can leave backend objects alive after the IR resource was destroyed, and tests that only exercise software cleanup will miss it.
