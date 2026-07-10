@@ -577,30 +577,6 @@ Create one canonical gap registry with:
 - current dd behavior
 - close condition
 
-## Attach Exited Container Without Live State Creates Hijack
-
-Priority: P1
-Impact: clients can hang on a fresh attach stream for an exited container
-Confidence: High
-
-Verification status: Proven in isolated worktree `/Users/x/dd/dd-slot-s`.
-
-Evidence:
-
-- Attach creates a new `Live` entry when one is absent: `dd-daemon/src/containers/exec/attach.rs:20`.
-
-Why this is bad:
-
-Attaching to an exited container without retained live IO should return a conflict or similar error. Creating fresh live state and upgrading to a hijack stream gives clients a connection that cannot deliver the expected process IO.
-
-Isolated proof:
-
-```sh
-cargo test -p dd-daemon attach_exited_container_without_live_state_is_409_no_hang -- --nocapture
-```
-
-Result: failed; observed status `101`, expected `409`.
-
 ## `DDOCKERD_SOCK` Startup Unlinks Configured Path
 
 Priority: P2
