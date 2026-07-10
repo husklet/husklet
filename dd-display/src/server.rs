@@ -196,6 +196,11 @@ enum Obj {
         h: i32,
     },
     Seat,
+    // wl_seat input children. Tracked distinctly (not Obj::Other) so their `release` destructor can
+    // stop event routing and free the id.
+    Pointer,
+    Keyboard,
+    Touch,
     Output,
     // wl_region: an accumulated set of rectangles built by add()/subtract(). Referenced by
     // set_opaque_region / set_input_region; the region object itself is not double-buffered (its rects are
@@ -309,7 +314,10 @@ struct Surface {
     current_buffer: Option<u32>,
     attach_x: i32,
     attach_y: i32,
-    pending_frame: Option<u32>, // wl_callback id from wl_surface.frame
+    // wl_callback ids from wl_surface.frame. A client may request several frame callbacks before a
+    // single commit (each schedules one throwaway wl_callback); ALL of them must fire on the next
+    // presentation, so this is a queue, not a single slot that later requests would overwrite.
+    pending_frame: Vec<u32>,
     xdg_surface: Option<u32>,
     configured: bool,
     title: String,
@@ -349,7 +357,7 @@ struct Surface {
     // Synchronized-mode commit is cached and applied when the parent commits.
     cached_buffer: Option<u32>,
     has_cached: bool,
-    cached_frame: Option<u32>,
+    cached_frame: Vec<u32>,
     // Direct child subsurfaces, ordered bottom→top (z-order). Composited above this surface.
     children: Vec<u32>,
     // Buffer id to wl_buffer.release after the next present (the freshly-committed buffer; shm is
@@ -618,6 +626,21 @@ impl<P: Presenter> Server<P> {
         self.conn.flush().ok();
     }
 
+    /// Send `wl_display.error(object, code, message)` — the protocol-level rejection a conformant
+    /// client interprets as a fatal error on that object. Used for genuinely invalid requests
+    /// (unsupported formats, invalid scale/viewport geometry) that a well-behaved client never sends.
+    fn post_error(&mut self, object: u32, code: u32, message: &str) {
+        self.conn.send(&Message::new(WL_DISPLAY, 0).u32(object).u32(code).string(message));
+    }
+
+    /// Retire a destroyed object id: drop it from the object map and tell the client (via
+    /// `wl_display.delete_id`) that the id is free to reuse — the acknowledgement every Wayland
+    /// destructor owes the client so libwayland can recycle the id.
+    fn retire_id(&mut self, id: u32) {
+        self.objs.remove(&id);
+        self.conn.send(&Message::new(WL_DISPLAY, 1).u32(id));
+    }
+
     fn next_serial(&mut self) -> u32 {
         self.serial += 1;
         self.serial
@@ -664,6 +687,9 @@ impl<P: Presenter> Server<P> {
                 Some(Obj::XdgPositioner(_)) => "xdg_positioner",
                 Some(Obj::XdgPopup { .. }) => "xdg_popup",
                 Some(Obj::Seat) => "wl_seat",
+                Some(Obj::Pointer) => "wl_pointer",
+                Some(Obj::Keyboard) => "wl_keyboard",
+                Some(Obj::Touch) => "wl_touch",
                 Some(Obj::Subcompositor) => "wl_subcompositor",
                 Some(Obj::Viewporter) => "wp_viewporter",
                 Some(Obj::DataDeviceManager) => "wl_data_device_manager",
@@ -703,6 +729,7 @@ impl<P: Presenter> Server<P> {
             Some(Obj::XdgPositioner(_)) => self.xdg_positioner(m),
             Some(Obj::XdgPopup { .. }) => self.xdg_popup(m),
             Some(Obj::Seat) => self.wl_seat(m),
+            Some(Obj::Pointer) | Some(Obj::Keyboard) | Some(Obj::Touch) => self.wl_input_device(m),
             Some(Obj::Subcompositor) => self.wl_subcompositor(m),
             Some(Obj::Viewporter) => self.wp_viewporter(m),
             Some(Obj::DataDeviceManager) => self.wl_data_device_manager(m),
@@ -1073,6 +1100,8 @@ impl<P: Presenter> Server<P> {
         };
         if let Some(pool) = pool {
             self.release_pool_ref(pool);
+            // Acknowledge the buffer id is free to reuse.
+            self.conn.send(&Message::new(WL_DISPLAY, 1).u32(m.object)); // wl_display.delete_id
         }
     }
 
@@ -1105,7 +1134,7 @@ impl<P: Presenter> Server<P> {
         let mut r = m.reader();
         match m.opcode {
             0 => {
-                self.objs.remove(&m.object);
+                self.retire_id(m.object); // destroy: drop + wl_display.delete_id
             }
             1 | 2 => {
                 let x = r.i32();
@@ -1145,7 +1174,7 @@ impl<P: Presenter> Server<P> {
                 // frame(callback)
                 let cb = r.u32();
                 if let Some(Obj::Surface(s)) = self.objs.get_mut(&m.object) {
-                    s.pending_frame = Some(cb);
+                    s.pending_frame.push(cb);
                 }
             }
             4 => {
@@ -1180,8 +1209,14 @@ impl<P: Presenter> Server<P> {
                 }
             }
             8 => {
-                // set_buffer_scale(scale)
-                let scale = r.i32().max(1);
+                // set_buffer_scale(scale): scale must be positive. A value <= 0 is invalid; reject it
+                // with a protocol error (wl_surface.invalid_scale) instead of silently normalizing it to
+                // 1 and clobbering the previously-valid scale.
+                let scale = r.i32();
+                if scale <= 0 {
+                    self.post_error(m.object, 0 /* invalid_scale */, "buffer scale must be positive");
+                    return;
+                }
                 if let Some(Obj::Surface(s)) = self.objs.get_mut(&m.object) {
                     s.buffer_scale = scale;
                 }
@@ -1231,6 +1266,36 @@ impl<P: Presenter> Server<P> {
             self.ptr_entered = false;
             self.kbd_entered = false;
         }
+        // Acknowledge the id is free to reuse (the destructor's half of libwayland id recycling).
+        self.conn.send(&Message::new(WL_DISPLAY, 1).u32(sid)); // wl_display.delete_id
+    }
+
+    /// wl_pointer / wl_keyboard / wl_touch: the only requests are `set_cursor` (pointer) and `release`.
+    /// A released input object must stop receiving events and free its id — otherwise later input still
+    /// routes to the (possibly reused) id, corrupting the client's protocol stream.
+    fn wl_input_device(&mut self, m: Message) {
+        let is_release = match self.objs.get(&m.object) {
+            // wl_pointer.release is opcode 1 (opcode 0 is set_cursor, a no-op for us).
+            Some(Obj::Pointer) => m.opcode == 1,
+            // wl_keyboard.release / wl_touch.release are opcode 0.
+            Some(Obj::Keyboard) | Some(Obj::Touch) => m.opcode == 0,
+            _ => false,
+        };
+        if !is_release {
+            return;
+        }
+        if self.pointer == Some(m.object) {
+            self.pointer = None;
+            self.ptr_entered = false;
+        }
+        if self.keyboard == Some(m.object) {
+            self.keyboard = None;
+            self.kbd_entered = false;
+        }
+        if self.touch == Some(m.object) {
+            self.touch = None;
+        }
+        self.retire_id(m.object);
     }
 
     fn commit(&mut self, sid: u32) {
@@ -1272,9 +1337,7 @@ impl<P: Presenter> Server<P> {
                         s.has_cached = true;
                         s.attached = false;
                     }
-                    if let Some(cb) = s.pending_frame.take() {
-                        s.cached_frame = Some(cb);
-                    }
+                    s.cached_frame.append(&mut s.pending_frame);
                     return;
                 }
                 // Desynchronized: apply this commit immediately.
@@ -1314,6 +1377,12 @@ impl<P: Presenter> Server<P> {
                 s.pending_release = buffer;
                 s.attached = false;
             }
+        }
+        // A committed wp_viewport source rectangle that falls outside the attached buffer is a protocol
+        // error (out_of_buffer), not a silently-clamped crop of different content.
+        if let Some(vp) = self.viewport_source_out_of_buffer(sid) {
+            self.post_error(vp, 2 /* out_of_buffer */, "wp_viewport source rectangle is outside the buffer");
+            return;
         }
         self.apply_cached_subtree(sid);
         self.present_root(sid);
@@ -1370,9 +1439,7 @@ impl<P: Presenter> Server<P> {
                     s.current_buffer = s.cached_buffer;
                     s.pending_release = s.cached_buffer;
                     s.has_cached = false;
-                    if let Some(cb) = s.cached_frame.take() {
-                        s.pending_frame = Some(cb);
-                    }
+                    s.pending_frame.append(&mut s.cached_frame);
                 }
             }
             self.apply_cached_subtree(c);
@@ -1442,14 +1509,16 @@ impl<P: Presenter> Server<P> {
         let mut subtree = vec![root];
         subtree.extend(self.collect_composite_children(root).into_iter().map(|(c, _, _)| c));
         for s in subtree {
-            let (rel, frame) = match self.objs.get_mut(&s) {
-                Some(Obj::Surface(su)) => (su.pending_release.take(), su.pending_frame.take()),
-                _ => (None, None),
+            let (rel, frames) = match self.objs.get_mut(&s) {
+                Some(Obj::Surface(su)) => (su.pending_release.take(), std::mem::take(&mut su.pending_frame)),
+                _ => (None, Vec::new()),
             };
             if let Some(bid) = rel {
                 self.conn.send(&Message::new(bid, 0)); // wl_buffer.release
             }
-            if let Some(cb) = frame {
+            // Fire EVERY frame callback the client queued for this commit (in request order), each with
+            // its own wl_callback.done + delete_id.
+            for cb in frames {
                 let t = self.frame_time_ms();
                 self.conn.send(&Message::new(cb, 0).u32(t)); // wl_callback.done (CLOCK_MONOTONIC msec)
                 self.conn.send(&Message::new(WL_DISPLAY, 1).u32(cb)); // delete_id
@@ -1609,14 +1678,26 @@ impl<P: Presenter> Server<P> {
             Some(Obj::ShmPool { ptr, size, .. }) => (*ptr, *size),
             _ => return None,
         };
-        if width <= 0 || height <= 0 || stride <= 0 {
+        if width <= 0 || height <= 0 || stride <= 0 || offset < 0 {
             return None;
         }
-        let need = offset as usize
-            + (height as usize).saturating_sub(1) * stride as usize
-            + width as usize * 4;
-        if offset < 0 || need > size {
+        // Only the advertised shm formats decode to BGRA pixels; anything else must not be
+        // reinterpreted as pixels and presented.
+        if format != FMT_ARGB8888 && format != FMT_XRGB8888 {
             return None;
+        }
+        // A row must physically fit the stride, or rows would overlap and present corrupted pixels.
+        let row_bytes = (width as usize).saturating_mul(4);
+        if (stride as usize) < row_bytes {
+            return None;
+        }
+        // Bounds-check with wrapping-safe math (a huge/negative-derived offset must not overflow).
+        let need = (offset as usize)
+            .checked_add((height as usize).saturating_sub(1).saturating_mul(stride as usize))
+            .and_then(|v| v.checked_add(row_bytes));
+        match need {
+            Some(n) if n <= size => {}
+            _ => return None,
         }
         let mut bgra = vec![0u8; width as usize * height as usize * 4];
         unsafe {
@@ -1670,6 +1751,36 @@ impl<P: Presenter> Server<P> {
                 }
             }
         }
+    }
+
+    /// If the surface's committed `wp_viewport` source rectangle extends past its attached buffer,
+    /// return the wp_viewport object id that should receive an `out_of_buffer` protocol error. Valid
+    /// (in-buffer) sources — including the fractional-scale case Chrome uses — return `None`.
+    fn viewport_source_out_of_buffer(&self, sid: u32) -> Option<u32> {
+        let (src, scale, bid) = match self.objs.get(&sid) {
+            Some(Obj::Surface(s)) => (s.viewport_source?, s.buffer_scale.max(1), s.current_buffer?),
+            _ => return None,
+        };
+        let (bw, bh) = match self.objs.get(&bid) {
+            Some(Obj::Buffer { width, height, .. })
+            | Some(Obj::DmaBuffer { width, height, .. })
+            | Some(Obj::SolidColorBuffer { width, height, .. }) => (*width, *height),
+            _ => return None,
+        };
+        let (sx, sy, sw, sh) = src;
+        // Source coords are surface-local 24.8 fixed; scale them up to buffer pixels (as surface_mapping
+        // does) and compare the rectangle's extent to the backing buffer size.
+        let left = fixed_floor(sx).saturating_mul(scale);
+        let top = fixed_floor(sy).saturating_mul(scale);
+        let right = fixed_ceil(sx.saturating_add(sw)).saturating_mul(scale);
+        let bottom = fixed_ceil(sy.saturating_add(sh)).saturating_mul(scale);
+        if left < 0 || top < 0 || right > bw || bottom > bh {
+            return self.objs.iter().find_map(|(id, o)| match o {
+                Obj::Viewport { surface } if *surface == sid => Some(*id),
+                _ => None,
+            });
+        }
+        None
     }
 
     fn surface_mapping(&self, sid: u32, src_w: i32, src_h: i32) -> Option<SurfaceMapping> {
@@ -1932,9 +2043,7 @@ target_surface={} crop=({},{} {}x{}) backing={}x{} mapped_src=({},{}..{},{}) map
                 );
                 // Give input focus to this toplevel's surface (MVP: newest toplevel is focused).
                 if let Some(surface) = self.wl_surface_of_xdg(m.object) {
-                    self.focus = Some(surface);
-                    self.ptr_entered = false;
-                    self.kbd_entered = false;
+                    self.transfer_focus(surface);
                 }
             }
             2 => {
@@ -2331,13 +2440,13 @@ target_surface={} crop=({},{} {}x{}) backing={}x{} mapped_src=({},{}..{},{}) map
         match m.opcode {
             0 => {
                 let id = r.u32();
-                self.objs.insert(id, Obj::Other);
+                self.objs.insert(id, Obj::Pointer);
                 self.pointer = Some(id);
                 self.ptr_entered = false;
             }
             1 => {
                 let id = r.u32();
-                self.objs.insert(id, Obj::Other);
+                self.objs.insert(id, Obj::Keyboard);
                 self.keyboard = Some(id);
                 self.kbd_entered = false;
                 self.send_keymap(id);
@@ -2351,7 +2460,7 @@ target_surface={} crop=({},{} {}x{}) backing={}x{} mapped_src=({},{}..{},{}) map
                 // no touch input source on the macOS backend today, but a touch-capable seat must hand out a
                 // working wl_touch (the events are wired in touch_down/up/motion/frame/cancel below).
                 let id = r.u32();
-                self.objs.insert(id, Obj::Other);
+                self.objs.insert(id, Obj::Touch);
                 self.touch = Some(id);
             }
             _ => {}
@@ -2455,9 +2564,7 @@ target_surface={} crop=({},{} {}x{}) backing={}x{} mapped_src=({},{}..{},{}) map
                             s.current_buffer = s.cached_buffer;
                             s.pending_release = s.cached_buffer;
                             s.has_cached = false;
-                            if let Some(cb) = s.cached_frame.take() {
-                                s.pending_frame = Some(cb);
-                            }
+                            s.pending_frame.append(&mut s.cached_frame);
                             dirty = true;
                         }
                         if s.has_pending_pos {
@@ -2532,23 +2639,35 @@ target_surface={} crop=({},{} {}x{}) backing={}x{} mapped_src=({},{}..{},{}) map
                 let y = r.i32();
                 let w = r.i32();
                 let h = r.i32();
-                if let Some(Obj::Surface(s)) = self.objs.get_mut(&surface) {
-                    if x == -1 && y == -1 && w == -1 && h == -1 {
+                if x == -1 && y == -1 && w == -1 && h == -1 {
+                    if let Some(Obj::Surface(s)) = self.objs.get_mut(&surface) {
                         s.viewport_source = None;
-                    } else if w > 0 && h > 0 {
+                    }
+                } else if w > 0 && h > 0 {
+                    if let Some(Obj::Surface(s)) = self.objs.get_mut(&surface) {
                         s.viewport_source = Some((x, y, w, h));
                     }
+                } else {
+                    // A source rect that is neither the (-1,-1,-1,-1) unset sentinel nor strictly
+                    // positive is invalid — reject it rather than silently ignoring it.
+                    self.post_error(m.object, 0 /* bad_value */, "wp_viewport.set_source: invalid rectangle");
                 }
             }
             2 => {
                 let w = r.i32();
                 let h = r.i32();
-                if let Some(Obj::Surface(s)) = self.objs.get_mut(&surface) {
-                    if w == -1 && h == -1 {
+                if w == -1 && h == -1 {
+                    if let Some(Obj::Surface(s)) = self.objs.get_mut(&surface) {
                         s.viewport_destination = None;
-                    } else if w > 0 && h > 0 {
+                    }
+                } else if w > 0 && h > 0 {
+                    if let Some(Obj::Surface(s)) = self.objs.get_mut(&surface) {
                         s.viewport_destination = Some((w, h));
                     }
+                } else {
+                    // An invalid destination (e.g. 0x1) must be a protocol error, not silently ignored
+                    // while an older valid destination lingers and drives later commits with stale geometry.
+                    self.post_error(m.object, 0 /* bad_value */, "wp_viewport.set_destination: invalid size");
                 }
             }
             _ => {}
@@ -2588,6 +2707,35 @@ target_surface={} crop=({},{} {}x{}) backing={}x{} mapped_src=({},{}..{},{}) map
     // ================= M2 input injection API =================
     // The host backend (NSEvent path on macOS; the headless test directly) calls these to deliver input.
     // Events route to the focused/pointed surface; enter is sent lazily before the first event.
+
+    /// Move input focus to `new`, sending `wl_pointer.leave` / `wl_keyboard.leave` to the previously
+    /// focused surface first (when it had received the matching enter). Without the leave, a client can
+    /// believe it still holds pointer/keyboard focus after focus has moved elsewhere.
+    fn transfer_focus(&mut self, new: u32) {
+        if self.focus == Some(new) {
+            return;
+        }
+        if let Some(old) = self.focus {
+            if self.ptr_entered {
+                if let Some(ptr) = self.pointer {
+                    let s = self.next_serial();
+                    self.conn.send(&Message::new(ptr, 1).u32(s).u32(old)); // wl_pointer.leave
+                    if self.seat_ver >= 5 {
+                        self.conn.send(&Message::new(ptr, 5)); // frame
+                    }
+                }
+            }
+            if self.kbd_entered {
+                if let Some(kbd) = self.keyboard {
+                    let s = self.next_serial();
+                    self.conn.send(&Message::new(kbd, 2).u32(s).u32(old)); // wl_keyboard.leave
+                }
+            }
+        }
+        self.focus = Some(new);
+        self.ptr_entered = false;
+        self.kbd_entered = false;
+    }
 
     fn ensure_pointer_enter(&mut self) {
         if self.ptr_entered {
@@ -3429,6 +3577,30 @@ mod tests {
     }
 
     #[test]
+    fn commit_fires_all_queued_frame_callbacks() {
+        // A client may request several wl_surface.frame callbacks before one commit; each is a distinct
+        // wl_callback that must receive its own .done. A single-slot pending_frame would drop all but
+        // the last.
+        let mut h = Harness::new();
+        h.server.objs.insert(10, Obj::Surface(Surface::default()));
+        // two frame() requests (opcode 3) with callback ids 101 and 102, then commit (opcode 6).
+        h.req(10, 3, body().u32(101));
+        h.req(10, 3, body().u32(102));
+        h.req(10, 6, body());
+        let msgs = h.drain();
+        let done101 = msgs.iter().any(|(o, op, _)| *o == 101 && *op == 0);
+        let done102 = msgs.iter().any(|(o, op, _)| *o == 102 && *op == 0);
+        assert!(done101 && done102, "both frame callbacks must fire, got {msgs:?}");
+        // each callback id is also released via wl_display.delete_id.
+        let del: Vec<u32> = msgs
+            .iter()
+            .filter(|(o, op, _)| *o == WL_DISPLAY && *op == 1)
+            .map(|(_, _, b)| u32::from_ne_bytes(b[0..4].try_into().unwrap()))
+            .collect();
+        assert!(del.contains(&101) && del.contains(&102), "delete_id for both, got {del:?}");
+    }
+
+    #[test]
     fn popup_gets_configure_handshake() {
         let mut h = Harness::new();
         // wl_surface(10), xdg_wm_base(5)
@@ -3543,6 +3715,172 @@ mod tests {
         // wm_base.destroy removes it.
         h.req(5, 0, body());
         assert!(h.server.objs.get(&5).is_none());
+    }
+
+    // ---- shm buffer validation: no crash, no corrupted present ----
+
+    fn shm_pool_and_buffer(server: &mut Server<PngPresenter>, offset: i32, w: i32, h: i32, stride: i32, format: u32) {
+        let data = vec![0u8; 4096];
+        let fd = crate::keymap::anon_fd_with(&data).expect("anon fd");
+        let ptr = unsafe { mmap_ro(fd, data.len()) };
+        server.objs.insert(2, Obj::ShmPool { fd, ptr, size: data.len(), buffers: 1, zombie: false });
+        server.objs.insert(3, Obj::Buffer { pool: 2, offset, width: w, height: h, stride, format });
+        server.objs.insert(7, Obj::Surface(Surface::default()));
+    }
+
+    #[test]
+    fn shm_negative_offset_is_rejected_without_panic() {
+        let (mut server, sv) = test_server();
+        shm_pool_and_buffer(&mut server, -4, 2, 2, 8, FMT_ARGB8888);
+        assert!(server.extract(7, 3, "t").is_none(), "negative offset rejected, no panic");
+        teardown(server, sv);
+    }
+
+    #[test]
+    fn shm_stride_smaller_than_row_is_rejected() {
+        let (mut server, sv) = test_server();
+        // 2px row needs 8 bytes; stride=4 would overlap rows.
+        shm_pool_and_buffer(&mut server, 0, 2, 2, 4, FMT_ARGB8888);
+        assert!(server.extract(7, 3, "t").is_none(), "stride < row rejected");
+        teardown(server, sv);
+    }
+
+    #[test]
+    fn shm_unsupported_format_is_rejected() {
+        let (mut server, sv) = test_server();
+        shm_pool_and_buffer(&mut server, 0, 2, 2, 8, 0xdead_beef);
+        assert!(server.extract(7, 3, "t").is_none(), "unadvertised format not presented");
+        teardown(server, sv);
+    }
+
+    #[test]
+    fn destroyed_buffer_is_not_presented() {
+        // A buffer that was destroyed must not be extracted/presented on a later no-attach commit.
+        let (mut server, sv) = test_server();
+        shm_pool_and_buffer(&mut server, 0, 2, 2, 8, FMT_ARGB8888);
+        assert!(server.extract(7, 3, "t").is_some(), "live buffer extracts");
+        server.wl_buffer(Message::new(3, 0)); // destroy the buffer
+        assert!(server.extract(7, 3, "t").is_none(), "destroyed buffer must not present");
+        teardown(server, sv);
+    }
+
+    // ---- protocol errors on invalid state ----
+
+    fn has_display_error(msgs: &[(u32, u16, Vec<u8>)]) -> bool {
+        msgs.iter().any(|(o, op, _)| *o == WL_DISPLAY && *op == 0)
+    }
+
+    #[test]
+    fn set_buffer_scale_zero_is_protocol_error_and_keeps_state() {
+        let mut h = Harness::new();
+        h.server.objs.insert(10, Obj::Surface(Surface::default()));
+        h.req(10, 8, body().i32(2)); // valid scale 2
+        let _ = h.drain();
+        h.req(10, 8, body().i32(0)); // invalid scale 0
+        let msgs = h.drain();
+        assert!(has_display_error(&msgs), "scale 0 must be a protocol error, got {msgs:?}");
+        let scale = match h.server.objs.get(&10) {
+            Some(Obj::Surface(s)) => s.buffer_scale,
+            _ => panic!(),
+        };
+        assert_eq!(scale, 2, "valid scale must not be clobbered by the invalid one");
+    }
+
+    #[test]
+    fn viewport_invalid_destination_is_protocol_error() {
+        let mut h = Harness::new();
+        h.server.objs.insert(10, Obj::Surface(Surface::default()));
+        h.server.objs.insert(50, Obj::Viewport { surface: 10 });
+        // set_destination(0, 1) — invalid.
+        h.req(50, 2, body().i32(0).i32(1));
+        let msgs = h.drain();
+        assert!(has_display_error(&msgs), "invalid destination must error, got {msgs:?}");
+    }
+
+    #[test]
+    fn viewport_source_out_of_buffer_is_detected() {
+        let (mut server, sv) = test_server();
+        server.objs.insert(3, Obj::Buffer { pool: 2, offset: 0, width: 4, height: 1, stride: 16, format: FMT_ARGB8888 });
+        let mut s = Surface::default();
+        s.buffer_scale = 1;
+        s.current_buffer = Some(3);
+        s.viewport_source = Some((3 << 8, 0, 4 << 8, 1 << 8)); // x=3,w=4 → right=7 > buffer width 4
+        server.objs.insert(7, Obj::Surface(s));
+        server.objs.insert(50, Obj::Viewport { surface: 7 });
+        assert_eq!(server.viewport_source_out_of_buffer(7), Some(50), "out-of-buffer source flagged");
+        // A source that fits returns None.
+        if let Some(Obj::Surface(s)) = server.objs.get_mut(&7) {
+            s.viewport_source = Some((0, 0, 4 << 8, 1 << 8));
+        }
+        assert_eq!(server.viewport_source_out_of_buffer(7), None, "in-buffer source is fine");
+        teardown(server, sv);
+    }
+
+    // ---- destructors free ids / stop routing ----
+
+    #[test]
+    fn surface_destroy_emits_delete_id() {
+        let mut h = Harness::new();
+        h.server.objs.insert(10, Obj::Surface(Surface::default()));
+        h.req(10, 0, body()); // wl_surface.destroy
+        let msgs = h.drain();
+        let deleted: Vec<u32> = msgs
+            .iter()
+            .filter(|(o, op, _)| *o == WL_DISPLAY && *op == 1)
+            .map(|(_, _, b)| u32::from_ne_bytes(b[0..4].try_into().unwrap()))
+            .collect();
+        assert!(deleted.contains(&10), "destroy must emit delete_id(10), got {msgs:?}");
+        assert!(h.server.objs.get(&10).is_none());
+    }
+
+    #[test]
+    fn pointer_release_stops_routing_and_frees_id() {
+        let mut h = Harness::new();
+        h.server.objs.insert(3, Obj::Seat);
+        // get_pointer(id=60)
+        h.req(3, 0, body().u32(60));
+        assert_eq!(h.server.pointer, Some(60));
+        let _ = h.drain();
+        // wl_pointer.release (opcode 1)
+        h.req(60, 1, body());
+        assert_eq!(h.server.pointer, None, "released pointer no longer routes");
+        assert!(h.server.objs.get(&60).is_none(), "released pointer id freed");
+        let msgs = h.drain();
+        assert!(
+            msgs.iter().any(|(o, op, b)| *o == WL_DISPLAY && *op == 1 && u32::from_ne_bytes(b[0..4].try_into().unwrap()) == 60),
+            "release emits delete_id(60), got {msgs:?}"
+        );
+    }
+
+    #[test]
+    fn focus_transfer_emits_pointer_and_keyboard_leave() {
+        let mut h = Harness::new();
+        h.server.objs.insert(10, Obj::Surface(Surface::default()));
+        h.server.objs.insert(20, Obj::Surface(Surface::default()));
+        h.server.pointer = Some(60);
+        h.server.keyboard = Some(61);
+        h.server.seat_ver = 5;
+        h.server.focus = Some(10);
+        h.server.ptr_entered = true;
+        h.server.kbd_entered = true;
+        let _ = h.drain();
+        h.server.transfer_focus(20);
+        let msgs = h.drain();
+        // wl_pointer.leave (obj 60, opcode 1) naming old focus 10
+        let ptr_leave = msgs.iter().find(|(o, op, _)| *o == 60 && *op == 1);
+        assert!(ptr_leave.is_some(), "pointer leave to old focus, got {msgs:?}");
+        let (_, _, b) = ptr_leave.unwrap();
+        assert_eq!(u32::from_ne_bytes(b[4..8].try_into().unwrap()), 10, "leave names old surface");
+        // wl_keyboard.leave (obj 61, opcode 2)
+        assert!(msgs.iter().any(|(o, op, _)| *o == 61 && *op == 2), "keyboard leave, got {msgs:?}");
+        assert_eq!(h.server.focus, Some(20));
+        assert!(!h.server.ptr_entered && !h.server.kbd_entered);
+    }
+
+    #[test]
+    fn keymap_enables_key_repeat() {
+        // The keymap must agree with the repeat_info the compositor advertises (repeat enabled).
+        assert!(crate::keymap::US_XKB_KEYMAP.contains("interpret.repeat = True"));
     }
 }
 

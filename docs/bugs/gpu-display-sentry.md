@@ -32,32 +32,6 @@ Results:
 - aarch64: fails with `jit 255/""` vs native `efault ... =1`.
 - x86_64: exits `0` but silently wrong; all bad-pointer verdicts are `0` instead of `1`.
 
-## Multiple `wl_surface.frame` Requests Collapse To One
-
-Priority: P1
-Impact: unresolved callback objects and stalled frame pacing
-Confidence: High
-
-Verification status: Proven in isolated worktree `/Users/x/dd/dd-workerD-render-audit-20260710`.
-
-Evidence:
-
-- `Surface` stores one `pending_frame: Option<u32>`: `dd-display/src/server.rs:201`.
-- Each `wl_surface.frame` overwrites the previous callback id: `dd-display/src/server.rs:752`.
-- Commit emits only that one callback: `dd-display/src/server.rs:818`.
-
-Why this is bad:
-
-Wayland permits multiple frame callback requests before a commit. Earlier callback objects should be completed or otherwise handled; overwriting them can leave clients waiting forever.
-
-Isolated proof:
-
-```sh
-CARGO_TARGET_DIR=/Users/x/dd/target-workerD-render-audit cargo test -p dd-display commit_completes_all_pending_frame_callbacks -- --nocapture
-```
-
-Result: failed as expected; observed callbacks `[102]`, expected `[101, 102]`.
-
 ## Metal Replay Silently No-Ops Supported IR Commands
 
 Priority: P1
@@ -189,57 +163,6 @@ Verification:
 
 Add a backend parity test for bind groups referencing missing resources and require consistent `GpuError` behavior.
 
-## Wayland Destructors Do Not Remove Objects
-
-Priority: P1
-Impact: stale compositor state and client object-id reuse failures
-Confidence: High
-
-Verification status: Proven in isolated worktree `/Users/x/dd/dd-worker-O`.
-
-Evidence:
-
-- Dispatch routes buffers, outputs, regions, and inert objects to a no-op destroy path: `dd-display/src/server.rs:495`.
-- `wl_surface.destroy` falls through the surface default arm, and `xdg_toplevel` only handles `set_title`: `dd-display/src/server.rs:1178`, `dd-display/src/server.rs:1182`.
-
-Why this is bad:
-
-Wayland destructors should remove objects and usually emit `wl_display.delete_id` so clients can reuse ids. Ignoring destroy leaves stale server objects and can break libwayland id reuse.
-
-Isolated proof:
-
-```sh
-CARGO_TARGET_DIR=/Users/x/dd/dd-worker-O/target-worker-O cargo test -p dd-display wl_surface_destroy_emits_delete_id -- --nocapture
-```
-
-Result: failed as intended.
-
-## Destroyed `wl_buffer` Can Still Be Presented
-
-Priority: P1
-Impact: stale buffer contents can appear after destroy
-Confidence: High
-
-Verification status: Proven in isolated worktree `/Users/x/dd/dd-worker-O`.
-
-Evidence:
-
-- A no-attach commit reuses `current_buffer`: `dd-display/src/server.rs:799`.
-- Commit then presents that buffer if extraction succeeds: `dd-display/src/server.rs:807`.
-- `wl_buffer.destroy` is ignored by the no-op destroy path: `dd-display/src/server.rs:495`.
-
-Why this is bad:
-
-After a client destroys a buffer, later commits should not present that object. dd can keep presenting stale contents.
-
-Isolated proof:
-
-```sh
-CARGO_TARGET_DIR=/Users/x/dd/dd-worker-O/target-worker-O cargo test -p dd-display destroyed_buffer_is_not_presented_on_later_commit -- --nocapture
-```
-
-Result: failed as intended.
-
 ## Metal Render Target Texture Id Can Alias Guest Texture Id `1`
 
 Priority: P2
@@ -258,26 +181,6 @@ If guest IR creates an ordinary texture id `1`, it can silently alias the presen
 Verification:
 
 Submit IR that creates and samples/writes texture id `1` while presenting to an IOSurface and assert it is not aliased with the render target.
-
-## Released Input Objects Remain Active
-
-Priority: P2
-Impact: input events can target released pointer/keyboard objects
-Confidence: Medium
-
-Evidence:
-
-- `wl_seat.get_pointer/get_keyboard` caches object ids in `self.pointer` / `self.keyboard`: `dd-display/src/server.rs:1367`.
-- Released `Obj::Other` objects are ignored by the no-op destroy path: `dd-display/src/server.rs:495`.
-- Later pointer/key events still use the cached ids: `dd-display/src/server.rs:1531`, `dd-display/src/server.rs:1583`.
-
-Why this is bad:
-
-Clients that release input objects can still receive events to those ids, violating object lifetime expectations.
-
-Verification:
-
-Create pointer/keyboard objects, release them, then inject input and assert no events target released ids.
 
 ## GPU Executor Acks Success After Replay Errors Or Skipped Writes
 
@@ -373,31 +276,6 @@ cargo test -p dd-display poc_disconnect_drops_shm_pool_mappings -- --nocapture
 
 Result: failed; shm pool mappings survived connection teardown.
 
-## Focus Transfer Sends Enter Without Leave
-
-Priority: P1
-Impact: Wayland clients can keep stale keyboard/pointer focus
-Confidence: High
-
-Verification status: Proven in isolated worktree `/Users/x/dd/dd-worker-T-display-gpu-20260710`.
-
-Evidence:
-
-- Focus assignment resets entered flags: `dd-display/src/server.rs:1153`.
-- Input helpers send enter/key/motion paths but have no corresponding leave emission for old focus: `dd-display/src/server.rs:1497`.
-
-Why this is bad:
-
-When focus moves between surfaces, the old surface should receive leave events before the new surface receives enter. Missing leave can make clients believe they still own keyboard or pointer focus.
-
-Isolated proof:
-
-```sh
-cargo test -p dd-display poc_focus_switch_emits_pointer_and_keyboard_leave -- --nocapture
-```
-
-Result: failed; new focus received enter without old focus leave.
-
 ## Native Window Close Is Not Propagated
 
 Priority: P2
@@ -414,21 +292,6 @@ Why this is bad:
 
 Clicking the native close button should send `xdg_toplevel.close` so the client can exit or prompt. If the close never reaches the Wayland client, windows can become impossible to close cleanly from the host UI.
 
-## Keyboard Repeat Is Internally Contradictory
-
-Priority: P2
-Impact: clients receive repeat metadata even though keymap says no repeat
-Confidence: Medium
-
-Evidence:
-
-- The compositor sends `repeat_info`: `dd-display/src/server.rs:1383`.
-- The generated keymap sets `interpret.repeat = False`: `dd-display/src/keymap.rs:105`.
-
-Why this is bad:
-
-Toolkits combine keymap and protocol repeat information. Contradictory repeat state can produce missing repeats or double-repeat behavior depending on the client.
-
 ## Metal Duplicate IDs And Format Fallbacks Diverge From Checked Backends
 
 Priority: P2
@@ -444,57 +307,6 @@ Why this is bad:
 
 Other backends tend to reject invalid or duplicate resource definitions. Silent overwrite and fallback can hide guest bugs and produce frames that use stale resources or different channel formats than requested.
 
-## Pointer Release And Id Reuse Corrupt Input Routing
-
-Priority: P1
-Impact: protocol stream corruption after toolkit object churn
-Confidence: High
-
-Verification status: Proven in isolated worktree `/Users/x/dd/dd-slot-z`.
-
-Evidence:
-
-- The server stores `wl_pointer` ids for later input routing: `dd-display/src/server.rs:1367`.
-- Release/destroy requests on inert objects are ignored: `dd-display/src/server.rs:495`.
-- Later input still emits to the cached id: `dd-display/src/server.rs:1497`.
-
-Why this is bad:
-
-Wayland object ids can be released and reused. Sending pointer events to a released/reused id can corrupt the client's protocol stream or deliver input to the wrong object.
-
-Isolated proof:
-
-```sh
-cargo test -p dd-display pointer_release_stops_events_to_reused_id -- --ignored --nocapture
-```
-
-Result: failed; server emitted `[(6,0), (6,2), (6,5)]` to a released/reused id.
-
-## `xdg_popup` Never Gets Configured Or Mapped
-
-Priority: P1
-Impact: menus, tooltips, and context popups can hang invisible
-Confidence: High
-
-Verification status: Proven in isolated worktree `/Users/x/dd/dd-slot-z`.
-
-Evidence:
-
-- `get_popup` creates `Obj::Other`: `dd-display/src/server.rs:1158`.
-- Initial xdg commits only configure when `find_toplevel` succeeds: `dd-display/src/server.rs:855`.
-
-Why this is bad:
-
-xdg popup surfaces require configure/ack sequencing before clients can map them. Treating popups as inert objects means common toolkit UI such as menus and tooltips can wait forever for a configure event.
-
-Isolated proof:
-
-```sh
-cargo test -p dd-display xdg_popup_gets_configure_handshake -- --ignored --nocapture
-```
-
-Result: failed; no popup configure messages were emitted.
-
 ## Metal Shader Id Can Retain Stale MSL
 
 Priority: P2
@@ -508,157 +320,6 @@ Evidence:
 Why this is bad:
 
 If a shader id previously held MSL and is recreated with non-MSL or empty payload data, the old library may remain in the map. Later pipelines using that id can render with stale shader code rather than failing or replacing the resource.
-
-## Unsupported `wl_shm` Formats Are Accepted
-
-Priority: P2
-Impact: arbitrary shm formats can be reinterpreted as pixels
-Confidence: High
-
-Verification status: Proven in isolated worktree `/Users/x/dd/dd-aw-gpu-20260710`.
-
-Evidence:
-
-- `wl_shm_pool.create_buffer` stores arbitrary client format: `dd-display/src/server.rs:711`.
-- Extraction/presentation proceeds without format validation: `dd-display/src/server.rs:938`.
-- PNG conversion only special-cases XRGB: `dd-display/src/present.rs:44`.
-
-Why this is bad:
-
-The compositor should reject formats it did not advertise or cannot decode. Accepting `0xdead_beef` can reinterpret bytes as BGRA/ARGB and present corrupted frames.
-
-Isolated proof:
-
-```sh
-CARGO_TARGET_DIR=/Users/x/dd/dd-aw-gpu-20260710-target cargo test -p dd-display "server::tests::" -- --nocapture
-```
-
-Result: failed; unsupported format `0xdead_beef` still presented one frame.
-
-## Invalid Shm Buffer Offset Can Panic Compositor
-
-Priority: P1
-Impact: malformed Wayland client can crash the compositor process
-Confidence: High
-
-Verification status: Proven in isolated worktree `/Users/x/dd/dd-bd2-worktree`.
-
-Evidence:
-
-- `wl_shm_pool.create_buffer` stores negative offsets unchecked: `dd-display/src/server.rs:712`.
-- Buffer extraction casts offset to `usize` and adds row size before rejecting negative offsets: `dd-display/src/server.rs:956`.
-
-Why this is bad:
-
-Invalid shm buffer offsets should be rejected cleanly with a protocol error or disconnect. dd can panic on overflow during extraction, taking down the compositor.
-
-Isolated proof:
-
-```sh
-CARGO_TARGET_DIR=/Users/x/dd/dd-bd2-target cargo test -p dd-display shm_buffer_ -- --nocapture
-```
-
-Result: `shm_buffer_negative_offset_is_rejected_without_panic` panicked at `server.rs:956` with `attempt to add with overflow`.
-
-## Shm Buffer Stride Smaller Than Row Is Accepted
-
-Priority: P1
-Impact: invalid shm rows can overlap and present corrupted pixels
-Confidence: High
-
-Verification status: Proven in isolated worktree `/Users/x/dd/dd-bd2-worktree`.
-
-Evidence:
-
-- Validation only checks that stride is positive: `dd-display/src/server.rs:953`.
-- Extraction copies `width * 4` bytes from each row: `dd-display/src/server.rs:965`.
-
-Why this is bad:
-
-Wayland shm buffers need enough stride for a full row. Accepting `stride < width * bytes_per_pixel` makes rows overlap and can present corrupted pixels from invalid buffers.
-
-Isolated proof:
-
-```sh
-CARGO_TARGET_DIR=/Users/x/dd/dd-bd2-target cargo test -p dd-display shm_buffer_ -- --nocapture
-```
-
-Result: `shm_buffer_stride_smaller_than_row_is_rejected` failed because the invalid buffer still produced a presentable frame.
-
-## Viewport Source Outside Buffer Is Clamped
-
-Priority: P1
-Impact: invalid viewport rectangles silently present different content
-Confidence: High
-
-Verification status: Proven in isolated worktree `/Users/x/dd/dd-bg2-display-gpu-20260710`.
-
-Evidence:
-
-- Viewport source handling clips/crops during extraction: `dd-display/src/server.rs:1007`.
-- Viewport state is applied later to the presented buffer: `dd-display/src/server.rs:1443`.
-
-Why this is bad:
-
-`wp_viewport.set_source` rectangles outside the buffer should be rejected with a protocol error. Clamping an invalid source such as `x=3, w=4` on a `4x1` buffer silently changes the requested content to a `1x1` crop.
-
-Isolated proof:
-
-```sh
-CARGO_TARGET_DIR=/Users/x/dd/dd-bg2-display-gpu-20260710-target cargo test -p dd-display viewport_source_outside_buffer_is_rejected_not_clamped -- --nocapture
-```
-
-Result: failed because the out-of-bounds source was clamped instead of rejected.
-
-## `wl_surface.set_buffer_scale(0)` Is Silently Normalized
-
-Priority: P2
-Impact: invalid Wayland scale mutates state instead of protocol error
-Confidence: High
-
-Verification status: Proven in isolated worktree `/Users/x/dd/dd-audit-bl2`.
-
-Evidence:
-
-- `set_buffer_scale` uses `r.i32().max(1)`: `dd-display/src/server.rs:762`.
-- The normalized value is stored as surface scale: `dd-display/src/server.rs:764`.
-
-Why this is bad:
-
-Wayland treats scale `0` as invalid. dd silently turns it into scale `1`, changing previously valid state and hiding client protocol bugs.
-
-Isolated proof:
-
-```sh
-CARGO_TARGET_DIR=/Users/x/dd/dd-audit-bl2-target cargo test -p dd-display wl_surface_set_buffer_scale_zero_is_not_silently_normalized -- --nocapture
-```
-
-Result: after valid scale `2`, sending scale `0` changed state to `1`.
-
-## Invalid Viewport Destination Keeps Stale State
-
-Priority: P1
-Impact: invalid Wayland viewport state silently reuses old geometry
-Confidence: High
-
-Verification status: Proven in isolated worktree `/Users/x/dd/dd-audit-BO2-20260710`.
-
-Evidence:
-
-- Viewport destination state is applied during presentation: `dd-display/src/server.rs:1448`.
-- Invalid destination handling does not clear or error the prior valid state: `dd-display/src/server.rs:1003`.
-
-Why this is bad:
-
-`wp_viewport.set_destination(0, 1)` is invalid and should produce a protocol error or disconnect. Ignoring it while keeping an older `2x2` destination makes later commits use stale geometry.
-
-Isolated proof:
-
-```sh
-CARGO_TARGET_DIR=/Users/x/dd/dd-audit-BO2-target cargo test -p dd-display viewport_invalid_destination_does_not_keep_stale_destination -- --nocapture
-```
-
-Result: after a valid `2x2` destination, invalid `set_destination(0, 1)` was ignored and the stale `2x2` mapping remained.
 
 ## Metal Sampler Creation Drops Descriptor Fields
 
