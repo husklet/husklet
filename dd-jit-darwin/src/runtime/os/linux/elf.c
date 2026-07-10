@@ -866,11 +866,31 @@ static uint64_t build_stack(int argc, char **argv, struct loaded *lm, uint64_t a
     // defaults fill ONLY the keys the container didn't set.
     const char *estr[256];
     char *ge = getenv("DD_GUEST_ENV"), *gecopy = NULL;
+    // execve() escape-encodes records (DD_GUEST_ENV_ESC=1) so a value's own newline isn't mistaken for a
+    // record separator -- unescape "\\n"->'\n' and "\\\\"->'\\' after splitting. The daemon-launch path sets
+    // DD_GUEST_ENV plain (no marker) and is left byte-for-byte unchanged.
+    int env_escaped = (getenv("DD_GUEST_ENV_ESC") != NULL);
     if (ge) {
         gecopy = strdup(ge);
         char *save = NULL;
-        for (char *ln = strtok_r(gecopy, "\n", &save); ln && envc < 250; ln = strtok_r(NULL, "\n", &save))
+        for (char *ln = strtok_r(gecopy, "\n", &save); ln && envc < 250; ln = strtok_r(NULL, "\n", &save)) {
+            if (env_escaped) {
+                char *r = ln, *w = ln; // unescape in place (only ever shrinks)
+                while (*r) {
+                    if (r[0] == '\\' && r[1] == 'n') {
+                        *w++ = '\n';
+                        r += 2;
+                    } else if (r[0] == '\\' && r[1] == '\\') {
+                        *w++ = '\\';
+                        r += 2;
+                    } else {
+                        *w++ = *r++;
+                    }
+                }
+                *w = 0;
+            }
             estr[envc++] = ln;
+        }
     }
     int guest_envc = envc; // [0..guest_envc) came from the container; the rest are defaults
     for (int i = 0; g_guest_env[i] && envc < 255; i++) {

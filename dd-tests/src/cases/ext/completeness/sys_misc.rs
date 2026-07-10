@@ -13,6 +13,8 @@ pub(super) fn sys_misc() -> Group {
             sy("sysconf-nproc", "completeness/sys_sysconf_nproc.c"),
             // GAP close_range: engine returns an error (ok=0); real Linux closes the fd range (ok=1).
             sy("close-range", "completeness/sys_close_range.c"),
+            sy("close-range-flags", "completeness/sys_close_range_flags.c"),
+            sy("passcred-badfd", "completeness/sys_passcred_badfd.c"),
         ],
     )
 }

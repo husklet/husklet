@@ -22,11 +22,11 @@ This is the standing hunt for unhandled subcases, silent corruption, badly handl
 | JIT cache | executable VA unmap/remap stale translation | old code can run after remap | [jit-and-opcodes.md](jit-and-opcodes.md#stale-translation-after-unmapremap) |
 | coverage | static coverage scans wrong tree and exits green | completeness report is false | [daemon-tests-docs.md](daemon-tests-docs.md#coverage-tool-uses-stale-engine-paths-and-exits-green) |
 | tests | completeness suite is curated, not exhaustive | hidden subform bugs pass | [jit-and-opcodes.md](jit-and-opcodes.md#opcode-completeness-is-still-curated-not-exhaustive) |
-| sentry/ipc | `DDJIT_UNTRUSTED` SCM_RIGHTS + eventfd loses wakeups | dense fd passing can drop events or leave child failure | [this file](#ddjit_untrusted-scm_rights-eventfd-loses-events) |
+| sentry/ipc | `DDJIT_UNTRUSTED` SCM_RIGHTS + eventfd loses wakeups (SKIPPED — deep, cross-process) | dense fd passing can drop events or leave child failure | [this file](#ddjit_untrusted-scm_rights-eventfd-loses-events) |
 | auxv/page | aarch64 `AT_PAGESZ` exposes host 16K page size | allocators and page-size probes see non-Linux ABI | [syscall-compat.md](syscall-compat.md#aarch64-at_pagesz-exposes-host-page-size) |
 | fcntl | `F_SETLEASE` / `F_NOTIFY` fake success | callers believe coordination/invalidation was armed | [syscall-compat.md](syscall-compat.md#f_setlease-f_notify-return-success-without-arming-anything) |
-| exec env | `envp=NULL` leaks defaults/stale env | empty-env execs receive unexpected variables | this file |
-| exec env | newline-containing env values split across exec | silent environment corruption | this file |
+| exec env | `envp=NULL` leaks defaults/stale env (SKIPPED — default-injection entanglement) | empty-env execs receive unexpected variables | this file |
+| exec env | newline-containing env values split across exec (FIXED 2026-07-10) | silent environment corruption | this file |
 
 ## Env-Var Inventory Targets
 
@@ -69,6 +69,12 @@ observed: woke=46 read=46 sum=1081 child=4
 Why this is bad:
 
 Dense fd passing plus eventfd wakeups should be deterministic. Lost events mean IPC workloads can hang, under-count work, or propagate child failures only intermittently in untrusted mode.
+
+Status (2026-07-10): SKIPPED for now — deep. The loss is in the sentry SCM_RIGHTS fd-translation + eventfd
+copyback path across processes (`sentry.c:628`/`:1876`), a cross-process delivery race rather than a local
+one-line bug. Reproduction is non-deterministic (`woke=46/48`), so a fix needs instrumenting the sentry
+recvmsg copyback to prove where wakeups are dropped before changing the delivery protocol. Left for a focused
+sentry pass; not a minimal-fix candidate.
 
 ### `DDJIT_SANDBOX` Public Mode Is Intentionally Avoided By Tests
 
@@ -124,6 +130,16 @@ Why this is bad:
 
 On Linux, `execve(path, argv, NULL)` produces an empty environment. dd leaves the previous/default guest environment intact, so programs launched as empty-env can see variables they should not.
 
+Status (2026-07-10): SKIPPED — entangled with the engine's default-env injection. The observed `envc=4` is
+exactly the `g_guest_env` defaults (`PATH`,`HOME`,`LANG`,`GLIBC_TUNABLES`) that `build_stack` merges
+unconditionally on EVERY launch/exec, not stale container env. Matching native `envc=0` requires suppressing
+those defaults on a guest-initiated exec, but `GLIBC_TUNABLES=glibc.cpu.aarch64_gcs=0` is load-bearing for the
+re-exec'd aarch64 image (disables Guard Control Stack) — dropping it risks crashing real workloads on a shared
+engine gate. A safe fix needs an exec-vs-initial-launch marker plus a decision on which defaults are
+engine-internal necessities vs guest-visible env; deferred. NOTE: this default-injection also perturbs
+non-NULL execs (a minimal `execve(path,argv,["FOO=bar"])` yields `envc=5` on dd vs `1` on native), so the fix
+should address the general case, not just NULL.
+
 Isolated proof:
 
 ```sh
@@ -132,30 +148,14 @@ CARGO_TARGET_DIR=/Users/x/dd/dd-slot-e-target cargo run -p dd-tests -- -e aarch6
 
 Observed: dd prints `envc=4`; native prints `envc=0`.
 
-### Newline-Containing Env Values Split Across Exec
+### Newline-Containing Env Values Split Across Exec — FIXED (2026-07-10)
 
-Priority: P1
-Impact: environment corruption across exec
-Confidence: High
-
-Verification status: Proven in isolated worktree `/Users/x/dd/dd-slot-e`.
-
-Evidence:
-
-- Exec env forwarding serializes entries as newline-separated records: `dd-jit-darwin/src/runtime/os/linux/syscall/proc.c:37`.
-- Stack construction splits `DD_GUEST_ENV` with `strtok_r(..., "\n", ...)`: `dd-jit-darwin/src/runtime/os/linux/elf.c:872`.
-
-Why this is bad:
-
-Linux permits newline bytes inside environment values. dd treats newline as a record separator, splitting one value into multiple entries and silently corrupting the environment.
-
-Isolated proof:
-
-```sh
-CARGO_TARGET_DIR=/Users/x/dd/dd-slot-e-target cargo run -p dd-tests -- -e aarch64 exec-newline-env
-```
-
-Observed: dd prints `value_ok=0 split_entry=1`; native prints `value_ok=1 split_entry=0`.
+Fixed on branch bugfix/completeness-env-v2. `exec_forward_env` now escape-encodes each record
+(`'\\'`->`"\\\\"`, `'\n'`->`"\\n"`) and sets `DD_GUEST_ENV_ESC=1`; both `build_stack` implementations
+(`os/linux/elf.c` for aarch64 and `translate/x86_64/elf.c` for x86_64) unescape when the marker is present,
+so a value's own newline never masquerades as a record separator. The daemon-launch path (plain
+`DD_GUEST_ENV`, no marker) is byte-for-byte unchanged. Test: `comp-sys-proc/exec-newline-env`
+(`exec_newline_env.c`) — passes on both engines (`value_ok=1 split_entry=0`, matching native).
 
 ### aarch64 Pcache Key Omits `NOSTEALFAST`
 

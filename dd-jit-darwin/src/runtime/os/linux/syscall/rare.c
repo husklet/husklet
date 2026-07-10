@@ -141,6 +141,12 @@ static int svc_rare(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64
             fprintf(stderr, "[DRMSYNTH] close_range pid=%d first=%u last=%u flags=%#x\n", getpid(), first, last,
                     flags);
         }
+        // Linux rejects unknown flag bits with EINVAL (only CLOSE_RANGE_UNSHARE=2 and CLOSE_RANGE_CLOEXEC=4
+        // are defined). Validate before touching any fd so an invalid contract never closes/cloexecs fds.
+        if (flags & ~(int)(2 | 4)) {
+            G_RET(c) = (uint64_t)(int64_t)(-EINVAL);
+            break;
+        }
         if (first > last) {
             G_RET(c) = (uint64_t)(int64_t)(-EINVAL);
             break;
@@ -165,6 +171,12 @@ static int svc_rare(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64
     // pidfd_open(pid, flags): no macOS pidfd -> back it with a real fd and record the target pid.
     case 434: {
         pid_t pid = (pid_t)a0;
+        // Linux validates flags before the pid: only PIDFD_NONBLOCK(0x800, O_NONBLOCK) is defined; any
+        // other bit is EINVAL. Without this a probe with a bogus flag gets a usable fd it should not.
+        if ((unsigned)a1 & ~(unsigned)0x800u) {
+            G_RET(c) = (uint64_t)(int64_t)(-EINVAL);
+            break;
+        }
         if (pid <= 0 || (pid != container_pid() && kill(pid, 0) < 0 && errno == ESRCH)) {
             G_RET(c) = (uint64_t)(int64_t)(-ESRCH);
             break;
@@ -181,6 +193,13 @@ static int svc_rare(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64
     // sig 0 is the existence check. Self/own-pgrp signals raise into the guest (mirrors kill, case 129).
     case 424: {
         pid_t pid;
+        // Reject unknown flag bits (Linux >=6.9 defines PIDFD_SIGNAL_THREAD=1 / _THREAD_GROUP=2 /
+        // _PROCESS_GROUP=4; older kernels require 0). Anything outside that set is EINVAL, validated before
+        // delivery so a bad-flags probe never signals the target.
+        if ((unsigned)a3 & ~(unsigned)(1 | 2 | 4)) {
+            G_RET(c) = (uint64_t)(int64_t)(-EINVAL);
+            break;
+        }
         if (pidfd_lookup((int)a0, &pid) < 0) {
             G_RET(c) = (uint64_t)(int64_t)(-EBADF);
             break;

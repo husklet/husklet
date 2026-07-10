@@ -21,113 +21,15 @@ Verification:
 
 Create a guest probe that calls `pidfd_open` on a known same-user host pid outside the container, then calls `pidfd_send_signal(fd, 0, NULL, 0)`. Expected container behavior is failure; current source suggests dd can report success.
 
-Coverage gap:
+Status (2026-07-10): SKIPPED — architectural. This mirrors dd's deliberate 1:1 host-pid model for `kill(2)` (guest processes ARE host processes; `sched_pid_live` and `kill` case 129 intentionally allow cross-guest-process signalling via `kill(pid,0)`/`kill(pid,sig)`). Closing pidfd alone while `kill(2)` stays open does not close the leak, and restricting to a per-process registry would break legitimate cross-guest-process pidfd signalling (rare.c case 424 explicitly supports it). A real fix needs a container-wide guest-pid namespace (map guest pids to a private table shared across engine processes) so `pidfd_open`/`kill` reject any pid not in the container — a large cross-cutting change tracked separately. Invalid-flags fidelity was fixed independently (see the pidfd flags fix below).
 
-Existing pidfd tests cover self/child happy paths, not host-pid rejection, invalid flags, or capacity stress.
-
-## `unshare` and `setns` Blanket Fake-Success
-
-Priority: P1
-Impact: namespace isolation and feature probes can silently lie
-Confidence: High
-
-Evidence:
-
-- `unshare` and `setns` return success unconditionally: `dd-jit-darwin/src/runtime/os/linux/syscall/proc.c:634`.
-
-Why this is bad:
-
-`unshare(CLONE_NEWNET)` and `setns(fd, nstype)` can report success without changing namespace state. Invalid calls like `setns(-1, CLONE_NEWNET)` should fail with `EBADF`; unknown flag combinations should fail with `EINVAL`. Fake success is worse than honest `ENOSYS` or `EPERM` because setup code may continue under false isolation assumptions.
-
-Verification:
-
-Probe `setns(-1, CLONE_NEWNET)` and `unshare(0xdeadbeef)`. Linux returns errors; current dd source returns `0`.
-
-Coverage gap:
-
-The current `unshare-files` test only checks a benign `CLONE_FILES` path. It does not exercise namespace creation, invalid flags, or `setns` error ordering.
-
-## `close_range` Accepts Unknown Flags
+## `pidfd` Capacity Gap (registry table full)
 
 Priority: P2
-Impact: fd sanitizers and probes can get fake success
-Confidence: High
+Impact: silently unusable pidfds once the fixed table is exhausted
+Confidence: Medium
 
-Evidence:
-
-- `close_range(first, last, flags)` validates only `first > last`: `dd-jit-darwin/src/runtime/os/linux/syscall/rare.c:135`.
-- Unknown flag bits are ignored; `flags & 4` selects `CLOSE_RANGE_CLOEXEC`, everything else closes: `dd-jit-darwin/src/runtime/os/linux/syscall/rare.c:151`.
-
-Why this is bad:
-
-Linux rejects unknown `close_range` flag bits with `EINVAL`. dd reports success and may close fds or set cloexec under an invalid contract.
-
-Verification:
-
-Raw syscall `close_range(fd, fd, 0x80000000)` should return `-1/EINVAL`.
-
-Coverage gap:
-
-Existing probes cover `flags=0`, not unknown bits or `CLOSE_RANGE_UNSHARE` fidelity.
-
-## `pidfd` Validation and Capacity Gaps
-
-Priority: P2
-Impact: wrong errno and silently unusable pidfds
-Confidence: High
-
-Evidence:
-
-- `pidfd_open(pid, flags)` ignores `flags`: `dd-jit-darwin/src/runtime/os/linux/syscall/rare.c:165`.
-- `pidfd_send_signal(pidfd, sig, siginfo, flags)` ignores `flags`: `dd-jit-darwin/src/runtime/os/linux/syscall/rare.c:180`.
-- The pidfd registry has a fixed table in `dd-jit-darwin/src/runtime/os/linux/syscall/dispatch.c` and no obvious failure path when full.
-
-Why this is bad:
-
-Linux rejects unknown pidfd flags with `EINVAL`. A fixed table can return a real fd that later fails pidfd lookup once more than the internal capacity is opened.
-
-Verification:
-
-Probe `pidfd_open(getpid(), 0x40000000)`, `pidfd_send_signal(fd, 0, NULL, 1)`, and 65 simultaneous pidfds.
-
-## `SO_PASSCRED` and `SO_PEERCRED` Skip Fd/Type Validation
-
-Priority: P2
-Impact: invalid fds and non-sockets can receive synthetic success
-Confidence: High
-
-Evidence:
-
-- `setsockopt(SO_PASSCRED)` records a per-fd flag and returns `0` without validating the fd first: `dd-jit-darwin/src/runtime/os/linux/syscall/net.c:1074`.
-- `getsockopt(SO_PASSCRED)` returns recorded state without validating socket type: `dd-jit-darwin/src/runtime/os/linux/syscall/net.c:1137`.
-- `getsockopt(SO_PEERCRED)` falls back to synthetic credentials after failed `LOCAL_PEERPID`: `dd-jit-darwin/src/runtime/os/linux/syscall/net.c:1152`.
-
-Why this is bad:
-
-Linux should return `EBADF` for closed fds and `ENOTSOCK` for regular files. Returning synthetic credentials on a non-socket is fake-success behavior.
-
-Verification:
-
-Probe `setsockopt(-1, SOL_SOCKET, SO_PASSCRED, ...)`, `getsockopt(-1, SOL_SOCKET, SO_PASSCRED, ...)`, and `getsockopt(open("/dev/null"), SOL_SOCKET, SO_PEERCRED, ...)`.
-
-## `getresuid` / `getresgid` Accept Null Output Pointers
-
-Priority: P3
-Impact: wrong errno and weaker fault-path fidelity
-Confidence: High
-
-Evidence:
-
-- `getresuid` writes each output only if non-null and then returns success: `dd-jit-darwin/src/runtime/os/linux/syscall/proc.c:999`.
-- `getresgid` has the same shape: `dd-jit-darwin/src/runtime/os/linux/syscall/proc.c:1008`.
-
-Why this is bad:
-
-Linux treats invalid output pointers as `EFAULT`. Optional output pointers can mask caller bugs and diverge from native oracle behavior.
-
-Verification:
-
-Probe `syscall(SYS_getresuid, NULL, &euid, &suid)` and the gid equivalent.
+Remaining after the flags fix below: the pidfd registry has a fixed table in `dd-jit-darwin/src/runtime/os/linux/syscall/dispatch.c` and no obvious failure path when full. Opening more than the internal capacity can return a real fd that later fails `pidfd_lookup`. Verification: open 65+ simultaneous pidfds and assert each stays resolvable or the excess fails cleanly. (Not yet addressed — needs a capacity/eviction policy, out of the minimal-fix scope.)
 
 ## Deliberate But High-Impact: `seccomp` No-Op
 
@@ -146,3 +48,13 @@ The source comment is explicit that this is deliberate. It should remain visible
 Verification:
 
 Install a deny filter for a harmless syscall such as `getpid` and then call it. Linux should block according to filter action; dd is expected to allow it.
+
+## Fixed (2026-07-10, branch bugfix/completeness-env-v2)
+
+Each fix is minimal at the cited source and guarded by a scoped completeness guest that oracle-diffs dd vs native (aarch64) / qemu (x86_64), passing on both engines.
+
+- `unshare`/`setns` blanket fake-success — `unshare(unknown flags)` now returns `EINVAL`, `setns(-1, …)` returns `EBADF` (`syscall/proc.c` cases 97/268). Test: `comp-sys-proc/unshare-setns` (`sys_unshare_setns.c`).
+- `close_range` unknown flags — bits outside `CLOSE_RANGE_UNSHARE|CLOSE_RANGE_CLOEXEC` now return `EINVAL` before any fd is touched (`syscall/rare.c` case 436). Test: `comp-sys-misc/close-range-flags` (`sys_close_range_flags.c`).
+- pidfd flags fidelity — `pidfd_open` rejects flags outside `PIDFD_NONBLOCK`; `pidfd_send_signal` rejects bits outside `PIDFD_SIGNAL_{THREAD,THREAD_GROUP,PROCESS_GROUP}` (kernel ≥6.9) with `EINVAL`, validated before delivery (`syscall/rare.c` cases 434/424). Test: `comp-sys-signal/pidfd-flags` (`sys_pidfd_flags.c`). (Host-pid authority + registry capacity remain open — see above.)
+- `SO_PASSCRED`/`SO_PEERCRED` fd/type validation — both now validate the fd via `SO_TYPE` first, so a closed fd is `EBADF` and a non-socket is `ENOTSOCK` (`syscall/net.c` cases 208/209). Test: `comp-sys-misc/passcred-badfd` (`sys_passcred_badfd.c`).
+- `getresuid`/`getresgid` NULL output pointers — a NULL/unwritable pointer now faults `EFAULT`, writing none (`syscall/proc.c` cases 148/150). Test: `comp-sys-cred/getresuid-null` (`sys_getresuid_null.c`).

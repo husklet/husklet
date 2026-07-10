@@ -1078,6 +1078,14 @@ static int svc_net(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_
         // synthesizes the SCM_CREDENTIALS ancillary record the Linux kernel would auto-attach (Chromium's
         // Mojo bootstrap requires it). Never fail the guest.
         if (lvl == 1 && opt == 16) {
+            // Validate the fd like the real kernel before recording state: a closed fd is EBADF, a non-socket
+            // is ENOTSOCK. SO_TYPE succeeds for any socket and reproduces both errnos on the host.
+            int st_;
+            socklen_t stl_ = sizeof st_;
+            if (getsockopt((int)a0, SOL_SOCKET, SO_TYPE, &st_, &stl_) < 0) {
+                G_RET(c) = (uint64_t)(-errno);
+                break;
+            }
             int on = (a3 && (socklen_t)a4 >= 4) ? *(int *)a3 : 0;
             if ((int)a0 >= 0 && (int)a0 < DD_NFD) g_sock_passcred[(int)a0] = on ? 1 : 0;
             G_RET(c) = 0;
@@ -1141,6 +1149,16 @@ static int svc_net(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_
         // container identity (so cr.uid/gid match the guest's getuid/getgid) and the peer pid via macOS
         // LOCAL_PEERPID. struct ucred is { pid_t pid; uid_t uid; gid_t gid; } (3x u32 = 12 bytes).
         // SO_PASSCRED (16): report the per-fd flag we recorded at setsockopt (macOS has no such option).
+        // Both SO_PASSCRED and SO_PEERCRED must first validate the fd like the kernel: EBADF for a closed fd,
+        // ENOTSOCK for a regular file. Returning synthetic creds on a non-socket is fake success.
+        if (lvl == 1 && (opt == 16 || opt == 17)) {
+            int st_;
+            socklen_t stl_ = sizeof st_;
+            if (getsockopt((int)a0, SOL_SOCKET, SO_TYPE, &st_, &stl_) < 0) {
+                G_RET(c) = (uint64_t)(-errno);
+                break;
+            }
+        }
         if (lvl == 1 && opt == 16) {
             if (a3 && a4 && *(socklen_t *)a4 >= 4) {
                 *(int *)a3 = ((int)a0 >= 0 && (int)a0 < DD_NFD) ? g_sock_passcred[(int)a0] : 0;
