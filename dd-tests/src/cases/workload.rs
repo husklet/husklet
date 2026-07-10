@@ -86,6 +86,13 @@ pub(super) fn soak() -> Group {
             src("smcmremap", "smc_mremap.c")
                 .only(&[Engine::LinuxX86_64])
                 .out("smc mremap first=11 moved=1 second=22\n"),
+            // SMC protection-table overflow: after SMC_MAX 16 KB code pages are translated+protected, a further
+            // page was left read-only but UNTRACKED (mprotect ran before the capacity check), so a later
+            // rewrite of it faulted un-handled -> SIGSEGV/hang. Fills the table past the limit, then rewrites +
+            // re-runs a LATE page: a correct engine returns the patched value. x86 machine code, golden.
+            src("smctableoverflow", "smc_table_overflow.c")
+                .only(&[Engine::LinuxX86_64])
+                .out("smc overflow patched=4242\n"),
         ],
     )
 }
