@@ -44,11 +44,8 @@ This directory is a working inventory of suspicious behavior, bad architecture, 
 | P1 | image/delete | forced `rmi` deletes rootfs referenced by containers | High | [daemon-tests-docs.md](daemon-tests-docs.md#forced-rmi-deletes-rootfs-referenced-by-containers) |
 | P1 | image/delete | non-forced `rmi` can delete rootfs used through alias | High | [daemon-tests-docs.md](daemon-tests-docs.md#non-forced-rmi-can-delete-rootfs-used-through-alias) |
 | P1 | image/load | `docker load` of same tag rewrites existing container rootfs | High | [daemon-tests-docs.md](daemon-tests-docs.md#docker-load-of-same-tag-rewrites-existing-container-rootfs) |
-| P1 | daemon/durability | lifecycle mutations can succeed without durable state | High | [daemon-tests-docs.md](daemon-tests-docs.md#lifecycle-mutations-can-succeed-without-durable-state) |
-| P1 | daemon/create | create with missing network persists partial container state | High | [daemon-tests-docs.md](daemon-tests-docs.md#create-with-missing-network-persists-partial-container-state) |
 | P1 | daemon/create | create accepts image records whose rootfs is missing | High | [daemon-tests-docs.md](daemon-tests-docs.md#create-accepts-image-records-whose-rootfs-is-missing) |
 | P1 | daemon/create | anonymous volume materialization failures are ignored | High | [daemon-tests-docs.md](daemon-tests-docs.md#anonymous-volume-materialization-failures-are-ignored) |
-| P1 | daemon/volumes | volume create/delete/prune report success while storage is wrong | High | [daemon-tests-docs.md](daemon-tests-docs.md#volume-createdeleteprune-report-success-while-storage-is-wrong) |
 | P1 | env/exec | `execve(..., envp=NULL)` leaks default/stale env | High | [completeness-and-env.md](completeness-and-env.md#execve-envpnull-leaks-a-default-or-stale-environment) |
 | P1 | env/exec | guest exec truncates argv at 255 args | High | [completeness-and-env.md](completeness-and-env.md#guest-exec-truncates-argv-at-255-args) |
 | P1 | procfs/memory | `sysinfo(2)` ignores container memory cap | High | [completeness-and-env.md](completeness-and-env.md#sysinfo2-ignores-container-memory-cap) |
@@ -151,9 +148,6 @@ This directory is a working inventory of suspicious behavior, bad architecture, 
 | P1 | image/commit | Docker commit drops container user | High | [daemon-tests-docs.md](daemon-tests-docs.md#docker-commit-drops-container-user) |
 | P1 | daemon/restart | restarting containers can stay stuck after daemon restart | High | [daemon-tests-docs.md](daemon-tests-docs.md#restarting-containers-can-stay-stuck-after-daemon-restart) |
 | P2 | daemon/stats | stats JSON is internally inconsistent | High | [daemon-tests-docs.md](daemon-tests-docs.md#stats-json-is-internally-inconsistent) |
-| P2 | daemon/events | create events can be emitted before durable state success | High | [daemon-tests-docs.md](daemon-tests-docs.md#create-events-can-be-emitted-before-durable-state-success) |
-| P2 | daemon/cleanup | container rm/prune drop state when writable-layer cleanup fails | High | [daemon-tests-docs.md](daemon-tests-docs.md#container-rmprune-drop-state-when-writable-layer-cleanup-fails) |
-| P2 | image/cleanup | image rmi reports deletion when backing store removal fails | High | [daemon-tests-docs.md](daemon-tests-docs.md#image-rmi-reports-deletion-when-backing-store-removal-fails) |
 | P1 | registry/push | Docker push drops runtime metadata from OCI config | High | [archive-fs-compat.md](archive-fs-compat.md#docker-push-drops-runtime-metadata-from-oci-config) |
 | P1 | syscall/fd | inotify/timerfd create without flags still sets close-on-exec | High | [syscall-compat.md](syscall-compat.md#inotify_init10-and-timerfd_create-0-set-close-on-exec) |
 | P1 | syscall/timerfd | `timerfd` CLOCK_REALTIME absolute deadlines are treated as monotonic | High | [syscall-compat.md](syscall-compat.md#timerfd-clock_realtime-absolute-deadlines-are-treated-as-monotonic) |
