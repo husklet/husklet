@@ -173,6 +173,13 @@ _Static_assert(__builtin_offsetof(struct cpu, mmscratch) == OFF_MM, "OFF_MM drif
 // byte/word) which is awkward in emitted code, so the translator exits here and do_rcl() performs the whole
 // rotate + CF/OF update in C. Descriptor in cpu->divop; a memory operand's host EA in cpu->x87_ea.
 #define R_RCL 12
+// int3 (#BP -> SIGTRAP) and UD2 (#UD -> SIGILL): deliver the guest signal from C at a block exit, the
+// same way R_DIV/#DE routes through raise_guest_de. On Apple Silicon a JIT'd host BRK/UDF raises a Mach
+// exception the x86 engine does not catch (only the aarch64 target installs a Mach port), so relying on a
+// host BSD SIGTRAP/SIGILL reaching jit86_syncguard silently DIED (exit 133/132) instead of running the
+// guest handler. cpu->divop carries (linux_signo | si_code<<8); cpu->rip is the architectural PC the
+// handler observes (the insn AFTER int3, the UD2 insn itself for #UD). See raise_guest_trap().
+#define R_TRAP 13
 
 enum { X87_F2XM1, X87_FYL2X, X87_FPTAN, X87_FPATAN, X87_FYL2XP1, X87_FSINCOS, X87_FSIN, X87_FCOS };
 

@@ -897,20 +897,18 @@ static void emit_dnan_post(int vd, int dbl) {
     e_v3(0x4EA01C00u, vd, vd, 21); // vd |= signbits        (ORR.16b)
 }
 
-// Emit a REAL host trap (UDF -> SIGILL, BRK -> SIGTRAP) for an x86 fault/trap the guest may handle.
-// It is emitted INLINE with the 16 guest GPRs still live in host x0..x15 and xmm in v0..v15, so the
-// synchronous-fault guard (jit86_syncguard -> deliver_guest_fault -> sigframe_capture_fault, frontend/
-// x86_64/sigframe.c) reconstructs guest state from the host fault context and either delivers the signal
-// to the guest's handler or default-terminates when there is none. cpu->rip is set to the architectural
-// PC the handler observes and sigreturn resumes at -- the faulting insn for a #UD/#DE fault, the
-// following insn for an int3 (#BP) trap. Lazy flags and the x87 shadow top are spilled first so the
-// rt_sigframe (built from cpu->nzcv / cpu->st[]) is current.
-static void emit_guest_trap(uint64_t rip, uint32_t trap) {
+// Deliver a guest trap SIGNAL (int3 -> SIGTRAP, UD2 -> SIGILL) by EXITING the block to the dispatcher with
+// R_TRAP, rather than emitting a host BRK/UDF. On Apple Silicon a JIT'd BRK/UDF raises a Mach exception the
+// x86 engine does not catch, so the host BSD SIGTRAP/SIGILL never reaches jit86_syncguard and the process
+// dies (exit 133/132) instead of running the guest handler. Routing through the dispatcher (raise_guest_trap)
+// is the same C-delivery path #DE already uses (raise_guest_de) and is host-trap-independent. lsig/code are
+// packed into cpu->divop; emit_exit_const spills guest GPR+xmm and sets cpu->rip = the architectural PC.
+static void emit_guest_signal(uint64_t rip, int lsig, int code) {
     if (g_fl_pending) flags_materialize();
     if (g_fp_known) fp_drop();
-    e_movconst(16, rip); // scratch x16 (not a guest GPR) -> cpu->rip
-    e_str(16, 28, OFF_RIP);
-    emit32(trap); // guest GPRs x0..x15 + xmm v0..v15 are still live at the trap
+    e_movconst(16, (uint64_t)((lsig & 0xff) | ((code & 0xff) << 8)));
+    e_str(16, 28, OFF_DIVOP); // (linux_signo | si_code<<8) -> cpu->divop for raise_guest_trap
+    emit_exit_const(rip, R_TRAP);
 }
 
 // Integer DIV/IDIV by zero raises #DE (SIGFPE) on x86, but ARM sdiv/udiv quietly return 0 -- a guest
@@ -1019,7 +1017,7 @@ static void emit_sigill(uint64_t pc) {
     // Quiet by default: UD2 frequently sits on never-taken paths (compiler trap/unreachable slots) that get
     // translated as block fall-through but never run; an unconditional message would falsely imply delivery.
     if (getenv("CRASHDBG")) fprintf(stderr, "[dd] #UD ud2 at rip=%llx -> SIGILL\n", (unsigned long long)pc);
-    emit_guest_trap(pc, 0x00000000u); // udf #0 -> host SIGILL
+    emit_guest_signal(pc, 4, 2); // ud2 -> SIGILL (si_code ILL_ILLOPN), rip = the faulting insn
 }
 
 // async-interrupt poll: emit a CHEAP flag-free check of cpu->irq at the block body entry (the target
@@ -2342,7 +2340,7 @@ static void *translate_block(uint64_t gpc) {
             // the int3 (trap semantics). Emit a host BRK so the SIGTRAP guard runs the guest handler (or
             // default-terminates); previously this fell through to report_unimpl -> engine abort (70).
             if (op == 0xCC) {
-                emit_guest_trap(next, 0xD4200000u); // brk #0 -> host SIGTRAP
+                emit_guest_signal(next, 5, 0x80); // int3 -> SIGTRAP (si_code SI_KERNEL), rip past the int3
                 break;
             }
             if (op >= 0x91 && op <= 0x97) {

@@ -408,34 +408,6 @@ ddjit-linux_x86_64 target/bf2/x87_ext_precision
 
 qemu printed `positive=1 out=1.08420217248550443401e-19`; dd printed `positive=0 out=0`.
 
-## `int3` SIGTRAP Is Not Delivered To Guest Handler
-
-Priority: P1
-Impact: debuggers, breakpoint probes, and trap handlers can terminate the process
-Confidence: High
-
-Verification status: Proven in isolated worktree `/Users/x/dd/dd-audit-BM2-copy`.
-
-Evidence:
-
-- x86 `int3` emits host `BRK`: `dd-jit-darwin/src/runtime/translate/x86_64/translate.c:2341`.
-- The signal path is supposed to route `SIGTRAP` through `deliver_guest_fault`: `dd-jit-darwin/src/runtime/translate/x86_64/elf.c:898`.
-- The sigframe path only captures faults inside the code cache: `dd-jit-darwin/src/runtime/translate/x86_64/sigframe.c:96`.
-
-Why this is bad:
-
-Guest `int3` should deliver `SIGTRAP` to the guest handler with correct saved state. dd exits `255`, so breakpoint-based runtime probes and debuggers fail instead of handling the trap.
-
-Isolated proof:
-
-```sh
-x86_64-linux-gnu-gcc -O2 -static-pie -pthread -o target/bm2-probes/x86_sigreturn_pfaf dd-tests/guests/completeness/x86_sigreturn_pfaf.c -lm
-qemu-x86_64 target/bm2-probes/x86_sigreturn_pfaf
-cargo run -q -p dd-tests --target-dir target-bm2-audit -- -e x86_64 sigreturn-pfaf
-```
-
-qemu observed `sigreturn-pfaf seen=1 flags=010`; dd reported `oracle mismatch (jit 255/"" vs native 0/"sigreturn-pfaf seen=1 flags=010\n")`.
-
 ## SSE2 `CVTPD2DQ` / `CVTTPD2DQ` Return Wrong Integer-Indefinite Values
 
 Priority: P2
@@ -516,33 +488,6 @@ DDJIT_DIR=/Users/x/dd/dd-jitfault-audit-20260710/target-jitfault-audit/release/b
 ```
 
 qemu observed `repmovs_fault scalar=1 sig=1 copied4=1 tail=1 regs=1 addr=1 rip_nonzero=1`; dd observed `scalar=0 sig=0 ... addr=0 rip_nonzero=0`.
-
-## `UD2` With Guest SIGILL Handler Hangs
-
-Priority: P1
-Impact: invalid-instruction handlers cannot resume
-Confidence: High
-
-Verification status: Proven in isolated worktree `/Users/x/dd/dd-jitfault-audit-20260710`.
-
-Evidence:
-
-- UD2/fault translation paths are in `dd-jit-darwin/src/runtime/translate/x86_64/translate.c:908` and `dd-jit-darwin/src/runtime/translate/x86_64/translate.c:1018`.
-- Sigframe capture is involved in returning from the guest handler: `dd-jit-darwin/src/runtime/translate/x86_64/sigframe.c:94`.
-
-Why this is bad:
-
-Linux delivers `SIGILL` for `UD2` and lets a handler adjust RIP and resume. dd prints the pre-UD2 line and then hangs until timeout.
-
-Isolated proof:
-
-```sh
-x86_64-linux-gnu-gcc -O2 -static-pie -o target/dd-tests/x86_64/completeness/x86_fault_traps dd-tests/guests/completeness/x86_fault_traps.c -lm
-timeout 5 qemu-x86_64 target/dd-tests/x86_64/completeness/x86_fault_traps
-timeout 8 /Users/x/dd/dd-jitfault-audit-20260710/target-jitfault-audit/release/build/dd-jit-darwin-16122afd27b6bb64/out/ddjit-linux_x86_64 target/dd-tests/x86_64/completeness/x86_fault_traps
-```
-
-qemu reached `ud2 sig=1 rip=fault code_nz=1`; dd printed `before ud2` and timed out.
 
 ## `ICEBP` And Invalid `0x62` Bytes Abort Instead Of Guest Traps
 
