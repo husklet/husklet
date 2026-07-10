@@ -14,6 +14,34 @@ pub(crate) fn mounts_as_binds(mounts: &[Mount]) -> Vec<String> {
         .collect()
 }
 
+/// Container-side destination paths of every READ-ONLY mount — `-v src:dst:ro` binds and
+/// `--mount ...,readonly` mounts. The runtime honors the read-only flag for the guest, so a `docker cp` /
+/// archive PUT that resolved the mount to its HOST source and wrote there would silently bypass it; the
+/// archive path must refuse writes under these targets instead.
+pub(crate) fn readonly_mount_targets(binds: &[String], mounts: &[Mount]) -> Vec<String> {
+    let mut targets = Vec::new();
+    for b in binds {
+        if let Some((_, dst, true)) = crate::containers::parse_bind(b) {
+            targets.push(dst.to_string());
+        }
+    }
+    for m in mounts {
+        if m.read_only && !m.target.is_empty() {
+            targets.push(m.target.clone());
+        }
+    }
+    targets
+}
+
+/// Whether container `path` is inside (or equal to) any read-only mount target.
+pub(crate) fn path_under_readonly_mount(path: &str, ro_targets: &[String]) -> bool {
+    let p = path.trim_end_matches('/');
+    ro_targets.iter().any(|t| {
+        let t = t.trim_end_matches('/');
+        !t.is_empty() && (p == t || p.starts_with(&format!("{t}/")))
+    })
+}
+
 /// Map a container path to its host path. A path inside a bind/volume mount maps to its host source dir
 /// (so `docker cp` to e.g. ddcli's mounted cwd, or a `-v name:/mnt` mount, hits the real files);
 /// otherwise it lands in the container rootfs (the overlay upper). `..` is lexically clamped inside
@@ -141,4 +169,46 @@ pub(crate) fn path_stat_b64(host: &std::path::Path) -> Option<String> {
     let stat = json!({"name": name, "size": md.len(), "mode": go_filemode(&md),
         "mtime": fmt_rfc3339(md.mtime()), "linkTarget": link});
     Some(base64_std(stat.to_string().as_bytes()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn ro_mount(target: &str) -> Mount {
+        Mount { typ: "volume".into(), source: "vol".into(), target: target.into(), read_only: true }
+    }
+
+    // "Archive PUT Writes Through Read-Only Bind Mounts" (P1): a read-only bind/volume mount's target
+    // must be recognized so archive PUT can refuse writes into it.
+    #[test]
+    fn readonly_targets_cover_ro_binds_and_mounts() {
+        let binds = vec![
+            "/h/ro:/data:ro".to_string(),
+            "/h/rw:/rw".to_string(),
+            "vol:/named:ro,z".to_string(),
+        ];
+        let mounts = vec![ro_mount("/mnt/ro"), Mount {
+            typ: "bind".into(),
+            source: "/h/x".into(),
+            target: "/mnt/rw".into(),
+            read_only: false,
+        }];
+        let t = readonly_mount_targets(&binds, &mounts);
+        assert!(t.contains(&"/data".to_string()), "ro bind target");
+        assert!(t.contains(&"/named".to_string()), "ro,z bind target");
+        assert!(t.contains(&"/mnt/ro".to_string()), "ro --mount target");
+        assert!(!t.contains(&"/rw".to_string()), "rw bind not included");
+        assert!(!t.contains(&"/mnt/rw".to_string()), "rw mount not included");
+    }
+
+    #[test]
+    fn path_under_readonly_mount_matches_target_and_children() {
+        let ro = vec!["/data".to_string()];
+        assert!(path_under_readonly_mount("/data", &ro), "the mount root itself");
+        assert!(path_under_readonly_mount("/data/sub/x.txt", &ro), "a child path");
+        assert!(path_under_readonly_mount("/data/", &ro), "trailing slash");
+        assert!(!path_under_readonly_mount("/database", &ro), "sibling prefix must NOT match");
+        assert!(!path_under_readonly_mount("/other", &ro));
+    }
 }
