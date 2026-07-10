@@ -40,7 +40,6 @@ This directory is a working inventory of suspicious behavior, bad architecture, 
 | P1 | daemon/cgroup | fractional `--cpus` loses quota precision | High | [daemon-tests-docs.md](daemon-tests-docs.md#fractional---cpus-loses-quota-precision) |
 | P1 | daemon/exec | exec start is not single-use | High | [daemon-tests-docs.md](daemon-tests-docs.md#exec-start-is-not-single-use) |
 | P1 | daemon/restart | daemon restart reloads running containers without live process | High | [daemon-tests-docs.md](daemon-tests-docs.md#daemon-restart-reloads-running-containers-without-live-process) |
-| P1 | daemon/prune | container prune leaves network endpoints | High | [daemon-tests-docs.md](daemon-tests-docs.md#container-prune-leaves-network-endpoints) |
 | P1 | daemon/persistence | failed spawn terminal state is not persisted | High | [daemon-tests-docs.md](daemon-tests-docs.md#failed-spawn-terminal-state-is-not-persisted) |
 | P1 | image/tag | `docker tag` aliases do not survive discovery | High | [daemon-tests-docs.md](daemon-tests-docs.md#docker-tag-aliases-do-not-survive-discovery) |
 | P1 | daemon/logs | retained container logs are lost across daemon restart | High | [daemon-tests-docs.md](daemon-tests-docs.md#retained-container-logs-are-lost-across-daemon-restart) |
@@ -60,7 +59,6 @@ This directory is a working inventory of suspicious behavior, bad architecture, 
 | P1 | daemon/create | create accepts image records whose rootfs is missing | High | [daemon-tests-docs.md](daemon-tests-docs.md#create-accepts-image-records-whose-rootfs-is-missing) |
 | P1 | daemon/create | anonymous volume materialization failures are ignored | High | [daemon-tests-docs.md](daemon-tests-docs.md#anonymous-volume-materialization-failures-are-ignored) |
 | P1 | daemon/volumes | volume create/delete/prune report success while storage is wrong | High | [daemon-tests-docs.md](daemon-tests-docs.md#volume-createdeleteprune-report-success-while-storage-is-wrong) |
-| P1 | daemon/events | event filters broaden to match-all for supported keys | High | [daemon-tests-docs.md](daemon-tests-docs.md#event-filters-broaden-to-match-all-for-supported-keys) |
 | P1 | daemon/attach | attach ignores stream selectors | High | [daemon-tests-docs.md](daemon-tests-docs.md#attach-ignores-stream-selectors) |
 | P1 | env/exec | `execve(..., envp=NULL)` leaks default/stale env | High | [completeness-and-env.md](completeness-and-env.md#execve-envpnull-leaks-a-default-or-stale-environment) |
 | P1 | env/exec | guest exec truncates argv at 255 args | High | [completeness-and-env.md](completeness-and-env.md#guest-exec-truncates-argv-at-255-args) |
@@ -122,13 +120,6 @@ This directory is a working inventory of suspicious behavior, bad architecture, 
 | P2 | daemon/lifecycle | stop timeout marks exited before reaper confirms death | Medium | [daemon-tests-docs.md](daemon-tests-docs.md#stop-timeout-marks-exited-before-reaper-confirms-death) |
 | P2 | daemon/config | `DDOCKERD_SOCK` startup unlinks configured path | Medium-high | [daemon-tests-docs.md](daemon-tests-docs.md#ddockerd_sock-startup-unlinks-configured-path) |
 | P2 | daemon/events | fast-exit event ordering can emit `die` before `start` | Medium | [daemon-tests-docs.md](daemon-tests-docs.md#fast-exit-event-ordering-can-emit-die-before-start) |
-| P2 | daemon/events | container prune deletes without destroy events | High | [daemon-tests-docs.md](daemon-tests-docs.md#container-prune-deletes-without-destroy-events) |
-| P2 | daemon/events | network prune deletes without destroy events | High | [daemon-tests-docs.md](daemon-tests-docs.md#network-prune-deletes-without-destroy-events) |
-| P2 | daemon/events | volume prune deletes without destroy events | High | [daemon-tests-docs.md](daemon-tests-docs.md#volume-prune-deletes-without-destroy-events) |
-| P2 | daemon/events | network connect/disconnect mutate endpoints without events | High | [daemon-tests-docs.md](daemon-tests-docs.md#network-connectdisconnect-mutate-endpoints-without-events) |
-| P2 | image/prune | image prune is a hard-coded no-op | High | [daemon-tests-docs.md](daemon-tests-docs.md#image-prune-is-a-hard-coded-no-op) |
-| P2 | daemon/events | image event filters drop image events | High | [daemon-tests-docs.md](daemon-tests-docs.md#image-event-filters-drop-image-events) |
-| P2 | daemon/routes | `POST /system/prune` is not routed | High | [daemon-tests-docs.md](daemon-tests-docs.md#post-systemprune-is-not-routed) |
 | P2 | docs/tests | gap inventory and architecture docs are stale/missing | High | [daemon-tests-docs.md](daemon-tests-docs.md#gap-and-architecture-docs-are-not-auditable) |
 | P2 | gpu/compat | dmabuf advertises LINEAR buffers it cannot use | Medium-high | [gpu-display-sentry.md](gpu-display-sentry.md#dmabuf-advertises-linear-buffers-it-cannot-use) |
 | P2 | gpu/compat | Metal backend skips missing bind-group resources | High | [gpu-display-sentry.md](gpu-display-sentry.md#metal-backend-skips-missing-bind-group-resources) |
@@ -217,18 +208,10 @@ This directory is a working inventory of suspicious behavior, bad architecture, 
 | P2 | daemon/logs | logs time filters reject RFC3339 forms | High | [daemon-tests-docs.md](daemon-tests-docs.md#logs-time-filters-reject-rfc3339-forms) |
 | P2 | daemon/logs | logs timestamps are second-precision | High | [daemon-tests-docs.md](daemon-tests-docs.md#logs-timestamps-are-second-precision) |
 | P2 | daemon/stats | stats JSON is internally inconsistent | High | [daemon-tests-docs.md](daemon-tests-docs.md#stats-json-is-internally-inconsistent) |
-| P2 | daemon/system | system df overcounts containers for sibling tags | High | [daemon-tests-docs.md](daemon-tests-docs.md#system-df-overcounts-containers-for-sibling-tags) |
-| P2 | daemon/system | image usage active count counts containers, not images | High | [daemon-tests-docs.md](daemon-tests-docs.md#image-usage-active-count-counts-containers-not-images) |
-| P2 | daemon/system | volume usage never reports live references | High | [daemon-tests-docs.md](daemon-tests-docs.md#volume-usage-never-reports-live-references) |
-| P2 | daemon/system | build-cache totals can be nonzero with empty item lists | High | [daemon-tests-docs.md](daemon-tests-docs.md#build-cache-totals-can-be-nonzero-with-empty-item-lists) |
-| P2 | daemon/version | daemon version endpoints and Server header are stale | High | [daemon-tests-docs.md](daemon-tests-docs.md#daemon-version-endpoints-and-server-header-are-stale) |
-| P2 | daemon/events | `event=health_status` filter misses health transitions | High | [daemon-tests-docs.md](daemon-tests-docs.md#eventhealth_status-filter-misses-health-transitions) |
-| P2 | daemon/events | non-epoch `until` values turn bounded events into unbounded streams | High | [daemon-tests-docs.md](daemon-tests-docs.md#non-epoch-until-values-turn-bounded-events-into-unbounded-streams) |
 | P2 | daemon/events | create events can be emitted before durable state success | High | [daemon-tests-docs.md](daemon-tests-docs.md#create-events-can-be-emitted-before-durable-state-success) |
 | P2 | daemon/cleanup | container rm/prune drop state when writable-layer cleanup fails | High | [daemon-tests-docs.md](daemon-tests-docs.md#container-rmprune-drop-state-when-writable-layer-cleanup-fails) |
 | P2 | image/cleanup | image rmi reports deletion when backing store removal fails | High | [daemon-tests-docs.md](daemon-tests-docs.md#image-rmi-reports-deletion-when-backing-store-removal-fails) |
 | P3 | daemon/inspect | inspect can serialize contradictory dead state | High | [daemon-tests-docs.md](daemon-tests-docs.md#inspect-can-serialize-contradictory-dead-state) |
-| P3 | daemon/plugins | plugin inventory endpoint is missing despite info advertising plugins | High | [daemon-tests-docs.md](daemon-tests-docs.md#plugin-inventory-endpoint-is-missing-despite-info-advertising-plugins) |
 | P2 | registry/platform | platform selection discards OCI variant | Medium | [archive-fs-compat.md](archive-fs-compat.md#platform-selection-discards-oci-variant) |
 | P2 | image/load | Docker load accepts unsupported manifest OS as Linux | High | [archive-fs-compat.md](archive-fs-compat.md#docker-load-accepts-unsupported-manifest-os-as-linux) |
 | P2 | registry/platform | registry config with unsupported OS imports as Linux | High | [archive-fs-compat.md](archive-fs-compat.md#registry-config-with-unsupported-os-imports-as-linux) |
@@ -260,7 +243,6 @@ This directory is a working inventory of suspicious behavior, bad architecture, 
 | P2 | JIT/cache | x86 persistent cache key ignores codegen env modes | Medium-high | [jit-and-opcodes.md](jit-and-opcodes.md#x86-persistent-cache-key-ignores-codegen-env-modes) |
 | P2 | syscall/fs | `renameat2(RENAME_WHITEOUT)` silently becomes plain rename | High | [syscall-compat.md](syscall-compat.md#renameat2rename_whiteout-silently-becomes-plain-rename) |
 | P2 | build/compat | `COPY --from=<external-image>` is rejected | High | [archive-fs-compat.md](archive-fs-compat.md#copy---from-is-rejected) |
-| P3 | daemon/events | container rename updates state without event | High | [daemon-tests-docs.md](daemon-tests-docs.md#container-rename-updates-state-without-event) |
 | P3 | cp/stat | docker cp stat header mis-encodes special mode bits | Medium | [archive-fs-compat.md](archive-fs-compat.md#docker-cp-stat-header-mis-encodes-special-mode-bits) |
 
 ## Deprioritized
