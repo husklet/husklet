@@ -328,6 +328,26 @@ ddjit-linux_x86_64 target/bf2/x87_ext_precision
 
 qemu printed `positive=1 out=1.08420217248550443401e-19`; dd printed `positive=0 out=0`.
 
+## `fxsave` / `fxrstor` Do Not Preserve x87/MMX Register Data Or FSW
+
+Priority: P2
+Impact: a context that saves/restores actual FPU register values via fxsave/fxrstor gets stale registers
+Confidence: High
+
+Status: Remainder of a previously-fixed finding. The proven impact (MXCSR + FCW control/rounding round-trip) is FIXED — fxsave now writes MXCSR@24 + FCW@0 and fxrstor restores both (see `dd-jit-darwin/src/runtime/translate/x86_64/translate.c`, the `0F AE` fxsave/fxrstor block), with regression `dd-tests` case `comp-x86-misc/fxsave-mxcsr`. This section tracks only the register-DATA remainder.
+
+Evidence:
+
+- fxsave/fxrstor move the XMM lanes (@160) and now MXCSR/FCW, but NOT the x87 register stack ST0-7 (@32, ten bytes each), MMX register contents, or the FSW (@2): `dd-jit-darwin/src/runtime/translate/x86_64/translate.c` (fxsave/fxrstor `0F AE` block).
+
+Why this is bad:
+
+`fxrstor` should restore the full x87/MMX register file and status word. A program that fxsaves actual FPU register values and later fxrstors them keeps the values the handler/other code left, not the saved ones. (Restoring ST0-7 also intersects the separate "x87 long double precision is truncated" gap, since the engine models the x87 stack as double.)
+
+Verification:
+
+Extend a probe like `dd-tests/guests/completeness/x86_fxsave_mxcsr.c` to load distinct ST0-7 values, fxsave, clobber the x87 stack, fxrstor, and compare the restored ST values against native/qemu.
+
 ## SSE2 `CVTPD2DQ` / `CVTTPD2DQ` Return Wrong Integer-Indefinite Values
 
 Priority: P2
