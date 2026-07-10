@@ -309,31 +309,6 @@ Why this is bad:
 
 These switches alter procfs compatibility without an obvious typed launch contract or documented test gate. They can make process discovery and diagnostics differ between otherwise identical runs based only on inherited environment.
 
-### `/sys/fs/cgroup` Root Is Advertised But Not Listable
-
-Priority: P1
-Impact: cgroup discovery by directory walk fails
-Confidence: High
-
-Verification status: Proven in isolated worktree `/Users/x/dd/dd-worker-W-envproc-20260710`.
-
-Evidence:
-
-- Mountinfo advertises `/sys/fs/cgroup`: `dd-jit-darwin/src/runtime/os/linux/container/vfs.c:1805`.
-- Synthetic open/stat paths match children under `/sys/fs/cgroup/` but not the root itself: `dd-jit-darwin/src/runtime/os/linux/syscall/fs.c:1968`, `dd-jit-darwin/src/runtime/os/linux/container/vfs.c:4670`.
-
-Why this is bad:
-
-Runtimes commonly discover cgroup layout by statting and listing the hierarchy root. dd says the mount exists but makes the root unusable, so directory-walk discovery fails even though direct child paths may work.
-
-Isolated proof:
-
-```sh
-FILTER=cgroup-root-dir
-```
-
-Result: failed on both Linux engines. Actual `cgroup_root stat=0 list=0`; expected `stat=1 list=1`.
-
 ### Cgroup Membership Omits Forked Children
 
 Priority: P1
@@ -492,55 +467,6 @@ cargo run -p dd-tests -- -e x86_64 proc-peer-fd-dir
 
 Observed dd: `proc_peer_fd dir=0:2 lstat=0:2 readlink=0:2`; native Linux succeeded.
 
-### CPU Topology Sysfs Is Direct-Readable But Not Listable
-
-Priority: P1
-Impact: topology walkers see an incomplete sysfs tree
-Confidence: High
-
-Verification status: Proven in isolated worktree `/Users/x/dd/dd-worker-AR-procfs-sysfs-20260710`.
-
-Evidence:
-
-- Sysfs CPU directory materializes `/sys/devices/system/cpu` and `cpuN` but not `topology`: `dd-jit-darwin/src/runtime/os/linux/container/vfs.c:2650`.
-- Direct topology file reads are served: `dd-jit-darwin/src/runtime/os/linux/syscall/fs.c:2001`.
-- Stat advertises the topology dir/files: `dd-jit-darwin/src/runtime/os/linux/container/vfs.c:4631`.
-
-Why this is bad:
-
-Tools such as `lscpu` enumerate topology directories before opening direct files. dd reports direct files as readable while hiding them from readdir, so topology discovery is incomplete.
-
-Observed proof:
-
-```text
-native: cpu_topology topo_stat=1 topo_readdir_core=1 core_read=1
-dd:     cpu_topology topo_stat=1 topo_readdir_core=0 core_read=1
-```
-
-### `/proc/self/ns` Is Missing While Namespace Links Work
-
-Priority: P1
-Impact: namespace tools fail enumeration before readlink
-Confidence: High
-
-Verification status: Proven in isolated worktree `/Users/x/dd/dd-worker-AR-procfs-sysfs-20260710`.
-
-Evidence:
-
-- Self pid directory materialization omits `ns`: `dd-jit-darwin/src/runtime/os/linux/container/vfs.c:2388`.
-- `readlink("/proc/self/ns/<name>")` is synthesized separately: `dd-jit-darwin/src/runtime/os/linux/syscall/fs.c:2603`.
-
-Why this is bad:
-
-Namespace tools enumerate `/proc/self/ns` and then read each link. dd supports the direct `net` readlink but makes the containing directory absent, causing tools to fail or miss namespace metadata.
-
-Observed proof:
-
-```text
-native: proc_ns ns_stat=1 ns_readdir_net=1 net_readlink=1
-dd:     proc_ns ns_stat=0 ns_readdir_net=0 net_readlink=1
-```
-
 ### Peer `/proc/<pid>/ns` Is Absent
 
 Priority: P2
@@ -587,31 +513,6 @@ Observed proof:
 ```text
 Linux: proc_net_unix has_path=1 ok=1
 dd:    proc_net_unix has_path=0 lines=1 ok=0
-```
-
-### `/proc/net` Direct Leaves Exist But Directory Is Not Enumerable
-
-Priority: P1
-Impact: network diagnostics miss supported procfs leaves during directory walks
-Confidence: High
-
-Verification status: Proven in isolated worktree `/Users/x/dd/dd-bk2-audit-20260710`.
-
-Evidence:
-
-- `/proc` directory opening only materializes numeric pid directories: `dd-jit-darwin/src/runtime/os/linux/syscall/fs.c:1920`.
-- Proc directory listing omits `net`: `dd-jit-darwin/src/runtime/os/linux/container/vfs.c:2472`.
-- Direct `/proc/net/tcp` and `/proc/net/dev` leaves are still synthesized: `dd-jit-darwin/src/runtime/os/linux/container/vfs.c:3253`.
-
-Why this is bad:
-
-Tools usually enumerate `/proc/net` before opening individual network files. dd exposes direct leaves but hides the containing directory, producing contradictory feature detection.
-
-Observed proof:
-
-```text
-dd:    procnet_dir dir=0 tcp=0 dev=0 sockstat=0 direct_tcp=1 direct_dev=1
-Linux: procnet_dir dir=1 tcp=1 dev=1 sockstat=1 direct_tcp=1 direct_dev=1
 ```
 
 ### `/proc/self/fdinfo` Is Missing
@@ -685,30 +586,6 @@ Observed proof:
 ```text
 dd:    timeout after 10 seconds reading /proc/self/smaps
 Linux: smaps_read n=3991
-```
-
-### `/sys/class/block` And `/sys/block` Are Absent
-
-Priority: P2
-Impact: storage diagnostics and installers see missing block sysfs
-Confidence: High
-
-Verification status: Proven in isolated worktree `/Users/x/dd/dd-audit-procfs-20260710-130826`.
-
-Evidence:
-
-- Sysfs directory materialization covers only selected classes/devices: `dd-jit-darwin/src/runtime/os/linux/container/vfs.c:2577`, `dd-jit-darwin/src/runtime/os/linux/container/vfs.c:2650`.
-- Synthetic stat has no block sysfs support: `dd-jit-darwin/src/runtime/os/linux/container/vfs.c:4607`.
-
-Why this is bad:
-
-Linux exposes `/sys/class/block` and `/sys/block` inside containers. Tools such as `lsblk`, storage diagnostics, and installers that test block sysfs get `ENOENT` under dd.
-
-Observed proof:
-
-```text
-dd:    sysblock class_dir=0 class_n=-2 block_dir=0 block_n=-2
-Linux: sysblock class_dir=1 class_n=13 block_dir=1 block_n=12
 ```
 
 ### Futex-Blocked Processes Report Running In Procfs
@@ -795,30 +672,6 @@ Observed proof:
 ```text
 dd:    /proc flags=0 /sys flags=0 /dev flags=0 /dev/shm flags=0 /tmp flags=0
 Linux: /proc flags=102e /sys flags=1020 /dev flags=1020 /dev/shm flags=26
-```
-
-### `/dev/fd` Symlink Cannot Be Enumerated
-
-Priority: P2
-Impact: POSIX fd-discovery paths fail through a standard compatibility symlink
-Confidence: High
-
-Verification status: Proven in isolated worktree `/Users/x/dd/dd-procfs-statfs-audit-20260710`.
-
-Evidence:
-
-- `/dev/fd` resolves to `/proc/self/fd`: `dd-jit-darwin/src/runtime/os/linux/container/vfs.c:4111`.
-- Directory support does not make that target enumerable through the symlink path: `dd-jit-darwin/src/runtime/os/linux/container/vfs.c:3030`.
-
-Why this is bad:
-
-Linux lets applications enumerate `/dev/fd` as a standard alias for `/proc/self/fd`. dd resolves the symlink but `opendir("/dev/fd")` fails, breaking shell, libc, and scripting-language fd discovery paths.
-
-Observed proof:
-
-```text
-dd:    readlink(/dev/fd)=/proc/self/fd; opendir(/dev/fd)=-1 errno=2
-Linux: readlink(/dev/fd)=/proc/self/fd; opendir(/dev/fd)=ok with fd entries
 ```
 
 ### `/proc/self/maps` Omits RELRO Mapping Detail

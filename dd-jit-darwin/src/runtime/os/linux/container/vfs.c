@@ -2722,6 +2722,139 @@ static int syscpu_dir_open(const char *gp) {
     return fd;
 }
 
+// Materialize an arbitrary synthetic directory as a temp dir of placeholder entries so opendir/getdents
+// enumerate `names`; the CONTENT/target of each entry is served live on the (re-intercepted) open /
+// readlink by proc_open / the fs.c readlink synth. kind: 0 = regular-file placeholders, 1 = symlink
+// placeholders (namespace/fd magic links), 2 = subdir placeholders. `guestpath` tags the fd so a relative
+// reopen re-enters the synth. Returns the fd, or -1 on error.
+static int synth_names_dir_open(const char *guestpath, const char *const *names, int kind) {
+    static int registered = 0;
+    if (!registered) {
+        atexit(procfd_dirs_atexit);
+        registered = 1;
+    }
+    procfd_dirs_reap(0);
+    char tmpl[] = "/tmp/.ddsdirXXXXXX";
+    if (!mkdtemp(tmpl)) return -1;
+    for (int i = 0; names[i]; i++) {
+        char p[160];
+        snprintf(p, sizeof p, "%s/%s", tmpl, names[i]);
+        if (kind == 2)
+            mkdir(p, 0555);
+        else if (kind == 1)
+            symlink(".", p); // inert target; readlink of the guest path is intercepted separately
+        else {
+            int f = open(p, O_WRONLY | O_CREAT | O_TRUNC, 0444);
+            if (f >= 0) close(f);
+        }
+    }
+    int fd = open(tmpl, O_RDONLY | O_DIRECTORY);
+    if (fd < 0) {
+        procfd_dir_rm(tmpl);
+        return -1;
+    }
+    proc_dir_register(fd, tmpl, guestpath);
+    return fd;
+}
+
+// If `gp` is one of the synthetic non-pid directories we enumerate (/proc/net, /proc/[self|pid]/ns,
+// /sys/fs/cgroup, /sys/class/block, /sys/block, a cpuN/topology dir), materialize + return its fd; -2 if
+// `gp` is not such a directory (caller falls through). Peer/self ns share the same name set.
+// Predicate form (no materialization side effect): is `gp` one of the synthetic directories above? Used by
+// synth_stat so a tool that stats the dir before opening it sees it as present.
+static int synth_misc_dir_is(const char *gp) {
+    if (!gp) return 0;
+    if (!strcmp(gp, "/proc/net") || !strcmp(gp, "/proc/net/")) return 1;
+    if (!strcmp(gp, "/sys/fs/cgroup") || !strcmp(gp, "/sys/fs/cgroup/")) return 1;
+    if (!strcmp(gp, "/sys/class/block") || !strcmp(gp, "/sys/class/block/")) return 1;
+    if (!strcmp(gp, "/sys/block") || !strcmp(gp, "/sys/block/")) return 1;
+    {
+        char dsb[4200];
+        const char *rp = proc_deself(gp, dsb, sizeof dsb);
+        const char *q = rp && !strncmp(rp, "/proc/", 6) ? rp + 6 : NULL;
+        if (q) {
+            int i = 0;
+            while (q[i] >= '0' && q[i] <= '9')
+                i++;
+            if (i > 0 && (!strcmp(q + i, "/ns") || !strcmp(q + i, "/ns/"))) return 1;
+        }
+    }
+    if (!strncmp(gp, "/sys/devices/system/cpu/cpu", 27)) {
+        const char *d = gp + 27;
+        if (*d >= '0' && *d <= '9') {
+            while (*d >= '0' && *d <= '9')
+                d++;
+            if (!strcmp(d, "/topology") || !strcmp(d, "/topology/")) return 1;
+        }
+    }
+    return 0;
+}
+
+static int synth_misc_dir_open(const char *gp) {
+    if (!gp) return -2;
+    if (!strcmp(gp, "/dev/fd") || !strcmp(gp, "/dev/fd/")) return proc_fd_dir_open(); // /dev/fd == /proc/self/fd
+    // /proc/net: direct leaves (tcp/dev/unix/…) exist but the dir must enumerate them too.
+    if (!strcmp(gp, "/proc/net") || !strcmp(gp, "/proc/net/")) {
+        static const char *const net[] = {"tcp",   "tcp6",     "udp",  "udp6",  "unix", "dev",
+                                          "route", "if_inet6", "snmp", "snmp6", "netstat",
+                                          "sockstat", "sockstat6", "ipv6_route", 0};
+        return synth_names_dir_open("/proc/net", net, 0);
+    }
+    // /proc/[self|<pid>]/ns: enumerate the namespace magic links (readlink served in fs.c).
+    {
+        char dsb[4200];
+        const char *rp = proc_deself(gp, dsb, sizeof dsb);
+        const char *q = rp && !strncmp(rp, "/proc/", 6) ? rp + 6 : NULL;
+        if (q) {
+            int i = 0;
+            while (q[i] >= '0' && q[i] <= '9')
+                i++;
+            if (i > 0 && (!strcmp(q + i, "/ns") || !strcmp(q + i, "/ns/"))) {
+                static const char *const ns[] = {"cgroup", "ipc", "mnt",  "net", "pid", "pid_for_children",
+                                                 "time",   "time_for_children", "user", "uts", 0};
+                return synth_names_dir_open(rp, ns, 1);
+            }
+        }
+    }
+    // /sys/fs/cgroup root: advertised in mountinfo, so a directory walk of the hierarchy must list it.
+    if (!strcmp(gp, "/sys/fs/cgroup") || !strcmp(gp, "/sys/fs/cgroup/")) {
+        static const char *const cg[] = {
+            "cgroup.controllers", "cgroup.subtree_control", "cgroup.type",      "cgroup.procs",
+            "cgroup.threads",     "cgroup.events",          "cgroup.stat",      "cgroup.max.depth",
+            "cgroup.max.descendants", "cpu.max",            "cpu.stat",         "cpu.weight",
+            "cpuset.cpus",        "cpuset.mems",            "cpuset.cpus.effective", "cpuset.mems.effective",
+            "memory.max",         "memory.min",             "memory.low",       "memory.high",
+            "memory.current",     "memory.peak",            "memory.events",    "memory.stat",
+            "memory.swap.max",    "memory.swap.current",    "memory.oom.group", "pids.max",
+            "pids.current",       "pids.peak",              "pids.events",      "io.max",
+            "io.stat",            "io.weight",              0};
+        return synth_names_dir_open("/sys/fs/cgroup", cg, 0);
+    }
+    // /sys/class/block + /sys/block: storage sysfs (lsblk/installers). No real block devices are backed,
+    // but the directories must EXIST and be enumerable (Linux exposes them inside containers).
+    if (!strcmp(gp, "/sys/class/block") || !strcmp(gp, "/sys/class/block/") || !strcmp(gp, "/sys/block") ||
+        !strcmp(gp, "/sys/block/")) {
+        static const char *const empty[] = {0};
+        return synth_names_dir_open(gp, empty, 2);
+    }
+    // /sys/devices/system/cpu/cpuN/topology: lscpu enumerates this dir before opening the leaves.
+    if (!strncmp(gp, "/sys/devices/system/cpu/cpu", 27)) {
+        const char *d = gp + 27;
+        if (*d >= '0' && *d <= '9') {
+            while (*d >= '0' && *d <= '9')
+                d++;
+            if (!strcmp(d, "/topology") || !strcmp(d, "/topology/")) {
+                static const char *const topo[] = {
+                    "core_id",          "physical_package_id", "cluster_id",        "thread_siblings",
+                    "thread_siblings_list", "core_siblings",   "core_siblings_list", "core_cpus",
+                    "core_cpus_list",   "package_cpus",        "package_cpus_list", 0};
+                return synth_names_dir_open(gp, topo, 0);
+            }
+        }
+    }
+    return -2;
+}
+
 // Format a Linux cpumask hex string (as /sys topology mask files print it): zero-padded groups of up to 32
 // bits, most-significant group first, comma-separated. `all` -> every online CPU set; else just bit `bit`.
 // `ndig` is the low-group width the kernel pads to for this machine (DIV_ROUND_UP(nc,4)); e.g. nc=18 -> 5.
@@ -4629,6 +4762,14 @@ static int64_t drm_synth_ioctl(int fd, unsigned long rq, void *arg) {
 
 static int synth_stat_raw(const char *gp, struct stat *s) {
     if (!gp) return 0; // NULL (bad) guest path: not a synthetic node; let the caller's host stat EFAULT
+    // Synthetic non-pid directories (/proc/net, /proc/[self|pid]/ns, /sys/fs/cgroup, /sys/class/block,
+    // /sys/block, cpuN/topology): a tool that stats the dir before opening it must see it as present.
+    if (synth_misc_dir_is(gp)) {
+        memset(s, 0, sizeof *s);
+        s->st_mode = S_IFDIR | 0555;
+        s->st_nlink = 2;
+        return 1;
+    }
     if (drm_synth_stat(gp, s)) { drm_trace("stat", gp, 1); return 1; } // /dev/dri + DRM sysfs (DD_GPU_IOSURFACE)
     if (drm_dbg()) drm_trace("stat", gp, 0); // trace DRM-prefix misses for gap-finding
     // The controlling terminal, named /dev/pts/0 in the container: fstat the real pty slave so it reports as

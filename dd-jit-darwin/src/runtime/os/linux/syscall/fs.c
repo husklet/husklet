@@ -1914,6 +1914,18 @@ static int svc_fs(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t
                     break;
                 }
             }
+            // Synthetic non-pid directories whose direct leaves already exist but whose DIRECTORY was not
+            // enumerable: /proc/net, /proc/[self|pid]/ns, /sys/fs/cgroup, /sys/class/block, /sys/block,
+            // cpuN/topology, and /dev/fd (== /proc/self/fd). A directory walk of these now sees their entries.
+            if (rp) {
+                int md = synth_misc_dir_open(rp);
+                if (md != -2) {
+                    if (md >= 0 && (lf & 0x80000)) fcntl(md, F_SETFD, FD_CLOEXEC); // honor O_CLOEXEC
+                    if (md >= 0 && md < DD_NFD) g_opath[md] = is_opath;             // O_PATH fd -> I/O EBADF
+                    G_RET(c) = md < 0 ? (uint64_t)(-errno) : (uint64_t)md;
+                    break;
+                }
+            }
             // opendir("/proc"): materialize the process table (numeric pid dir per live container process
             // + the synthesized static files) so getdents enumerates the whole container -- `ps`/top/htop
             // read this to find processes. Without it the empty rootfs /proc dir yielded an empty table.
