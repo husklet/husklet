@@ -128,6 +128,33 @@ async fn network_connect_missing_container_is_404_no_phantom() {
     assert_eq!(r.status(), StatusCode::NOT_FOUND, "connect to a missing network is 404");
 }
 
+// "Network Disconnect Missing Container Returns OK" (P2): disconnecting a NONEXISTENT container must 404
+// (docker "No such container"), not silently 200 — otherwise cleanup tooling believes it detached a
+// container that was never present.
+#[tokio::test]
+async fn network_disconnect_missing_container_is_404_noop() {
+    let app = test_app();
+    let r = crate::networks::networks_create(State(app.clone()), net_create_body("mynet")).await;
+    assert_eq!(r.status(), StatusCode::CREATED);
+
+    let r = crate::networks::network_disconnect(
+        State(app.clone()),
+        Path("mynet".into()),
+        net_attach_body("ghost"),
+    )
+    .await;
+    assert_eq!(r.status(), StatusCode::NOT_FOUND, "disconnect of a missing container is 404");
+
+    // A missing NETWORK is still resolved first -> 404 network.
+    let r = crate::networks::network_disconnect(
+        State(app.clone()),
+        Path("nope".into()),
+        net_attach_body("also-ghost"),
+    )
+    .await;
+    assert_eq!(r.status(), StatusCode::NOT_FOUND, "disconnect on a missing network is 404");
+}
+
 #[tokio::test]
 async fn flow_network_endpoint_refcount_lifecycle() {
     let app = test_app();

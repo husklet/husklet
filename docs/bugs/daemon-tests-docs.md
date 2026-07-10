@@ -603,30 +603,6 @@ Create one canonical gap registry with:
 - current dd behavior
 - close condition
 
-## Network Disconnect Missing Container Returns OK
-
-Priority: P2
-Impact: Docker API state mutation reports success for a nonexistent target
-Confidence: High
-
-Verification status: Proven in isolated worktree `/Users/x/dd/dd-slot-s`.
-
-Evidence:
-
-- Network disconnect handler starts at `dd-daemon/src/networks/handlers.rs:155`.
-
-Why this is bad:
-
-Docker-compatible callers expect a missing container to fail with a not-found status. Returning success makes orchestration cleanup believe it detached a container that was never present.
-
-Isolated proof:
-
-```sh
-cargo test -p dd-daemon network_disconnect_missing_container_is_404_noop -- --nocapture
-```
-
-Result: failed; observed status `200`, expected `404`.
-
 ## Attach Exited Container Without Live State Creates Hijack
 
 Priority: P1
