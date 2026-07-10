@@ -339,6 +339,12 @@ static int svc_io(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t
         }
         // signalfd read -> struct signalfd_siginfo
         if (rfd >= 0 && rfd == g_sigfd_read) {
+            // Linux needs room for at least one struct signalfd_siginfo (128 bytes); a shorter buffer is
+            // EINVAL and must NOT consume a pending signal (checked before draining the wake byte).
+            if (a2 < 128) {
+                G_RET(c) = (uint64_t)(int64_t)(-EINVAL);
+                break;
+            }
             char b;
             // drain one wake byte
             ssize_t pr = read(rfd, &b, 1);
@@ -366,6 +372,12 @@ static int svc_io(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t
         }
         // inotify read -> struct inotify_event[]
         if (rfd >= 0 && rfd < 1024 && g_inotify[rfd]) {
+            // Linux needs room for at least one struct inotify_event (16-byte header); a shorter buffer is
+            // EINVAL and must NOT consume the queued event (checked before any kqueue drain / snapshot diff).
+            if (a2 < 16) {
+                G_RET(c) = (uint64_t)(int64_t)(-EINVAL);
+                break;
+            }
             // The whole [a1, a1+a2) buffer is written directly by the engine below; validate it up front so a
             // bad/unmapped pointer returns -EFAULT (without consuming events) instead of faulting the engine.
             if (!host_range_mapped((uintptr_t)a1, (size_t)a2)) {
@@ -437,6 +449,12 @@ static int svc_io(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t
         }
         // timerfd read -> drain timer, return count
         if (rfd >= 0 && rfd < DD_NFD && g_timerfd[rfd]) {
+            // Linux needs an 8-byte buffer; a shorter read is EINVAL and must NOT drain the expiration
+            // (checked before the kqueue drain so the pending tick survives an invalid short read).
+            if (a2 < 8) {
+                G_RET(c) = (uint64_t)(int64_t)(-EINVAL);
+                break;
+            }
             struct kevent kv;
             struct timespec zero = {0, 0};
             int nb = fcntl(rfd, F_GETFL) & O_NONBLOCK;

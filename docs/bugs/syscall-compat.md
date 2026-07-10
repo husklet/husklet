@@ -520,30 +520,24 @@ DDWAKE_ROLE=__none ddjit-linux_aarch64 target/ac-probes/eventfd_dup
 
 Linux observed `rd=8 got=5`; dd observed `rd=1 got=1`.
 
-## `signalfd` Update Keeps Stale Signals And Short Reads Consume Events
+## `signalfd` Update Keeps Stale Signals (ORs Masks Instead Of Replacing)
 
 Priority: P1
-Impact: signal event loops can receive masked-out signals and lose pending records
+Impact: signal event loops can receive masked-out signals
 Confidence: High
 
-Verification status: Proven in isolated worktree `/Users/x/dd/dd-worker-AC-signal-runtime-20260710`.
+(The short-read half of this finding is FIXED: a signalfd `read` with `count < 128` now returns `EINVAL`
+without consuming the pending signal. Only the mask-update half below remains.)
 
 Evidence:
 
-- `signalfd` update ORs new masks instead of replacing them: `dd-jit-darwin/src/runtime/os/linux/syscall/event.c:793`.
-- Signalfd read lacks a `count < 128` `EINVAL` guard and consumes before validating the user count: `dd-jit-darwin/src/runtime/os/linux/syscall/io.c:340`.
+- `signalfd` update ORs new masks into the shared mask instead of replacing them: `dd-jit-darwin/src/runtime/os/linux/syscall/event.c:793`.
 
 Why this is bad:
 
-Linux updates an existing signalfd mask to the new set. It also rejects short reads without consuming the pending signal. dd can keep stale signals enabled and consume an event while returning a short-read-shaped success.
-
-Isolated proof:
-
-```sh
-DDWAKE_ROLE=__none ddjit-linux_aarch64 target/ac-probes/signalfd_update_shortread
-```
-
-Linux observed `usr1_n=-1 usr1_e=11 ... short_n=-1 short_e=22 final_n=128 final_sig=12`; dd observed `usr1_n=128 usr1_sig=10 short_n=128 short_e=0 final_n=-1 final_e=11`.
+Linux updates an existing signalfd mask to exactly the new set. dd's OR keeps previously-enabled signals
+active, so an event loop that narrowed its mask can still receive signals it meant to drop. (This is also
+entangled with the single shared-signalfd model -- see the multiple-signalfd-independence finding.)
 
 ## `dup(timerfd)` Loses Timerfd Semantics
 
@@ -755,54 +749,6 @@ Observed proof:
 ```text
 Linux: parent_inotify=1 parent_timerfd=1 child_inotify=1 child_timerfd=1
 dd:    parent_inotify=2 parent_timerfd=2 child_inotify=-9 child_timerfd=-9
-```
-
-## Short `read(timerfd)` Consumes The Expiration
-
-Priority: P1
-Impact: timer wakeups can be lost after an invalid short read
-Confidence: High
-
-Verification status: Proven in isolated worktree `/Users/x/dd/dd-worker-BJ2-fd-event-20260710`.
-
-Evidence:
-
-- Timerfd read calls `kevent` before validating that `count >= 8`: `dd-jit-darwin/src/runtime/os/linux/syscall/io.c:438`.
-- It can return `8` even when the user buffer is too small: `dd-jit-darwin/src/runtime/os/linux/syscall/io.c:456`.
-
-Why this is bad:
-
-Linux rejects short timerfd reads with `EINVAL` and leaves the expiration pending. dd reports success and drains the event, so the next read can return `EAGAIN`.
-
-Observed proof:
-
-```text
-Linux: short_read=-1 errno=22 small=0xaaaaaaaa next_read=8 next_errno=0 val=1
-dd:    short_read=8 errno=0 small=0xaaaaaaaa next_read=-1 next_errno=11 val=0
-```
-
-## Short `read(inotify)` Consumes The Event
-
-Priority: P1
-Impact: file-watch events can be lost after an invalid short read
-Confidence: High
-
-Verification status: Proven in isolated worktree `/Users/x/dd/dd-worker-BJ2-fd-event-20260710`.
-
-Evidence:
-
-- Inotify read drains `kevent` before ensuring the buffer can hold one `struct inotify_event`: `dd-jit-darwin/src/runtime/os/linux/syscall/io.c:367`, `dd-jit-darwin/src/runtime/os/linux/syscall/io.c:384`.
-- If the buffer is too small, the loop breaks and returns the current offset: `dd-jit-darwin/src/runtime/os/linux/syscall/io.c:422`, `dd-jit-darwin/src/runtime/os/linux/syscall/io.c:435`.
-
-Why this is bad:
-
-Linux rejects too-small inotify reads with `EINVAL` and preserves the queued event. dd returns `0`, consumes the event, and leaves the next read with no event.
-
-Observed proof:
-
-```text
-Linux: wd=1 short_read=-1 errno=22 next_read=16 next_errno=0 next_wd=1 mask=0x2
-dd:    wd=5 short_read=0 errno=0 next_read=-1 next_errno=11 next_wd=-1 mask=0x0
 ```
 
 ## `timerfd` CLOCK_REALTIME Absolute Deadlines Are Treated As Monotonic

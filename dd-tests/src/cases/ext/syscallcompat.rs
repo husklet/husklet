@@ -31,6 +31,10 @@ pub fn groups() -> Vec<Group> {
             p("sc-sigkill-unmaskable", "syscallbug/sigkill_unmaskable.c"),
             // eventfd counter overflow -> EAGAIN + prior value preserved (no wrap to zero).
             p("sc-eventfd-overflow", "syscallbug/eventfd_overflow.c"),
+            // short read() of timerfd/inotify/signalfd -> EINVAL, event NOT consumed.
+            p("sc-shortread-timerfd", "syscallbug/shortread_timerfd.c"),
+            p("sc-shortread-signalfd", "syscallbug/shortread_signalfd.c"),
+            p("sc-shortread-inotify", "syscallbug/shortread_inotify.c"),
         ],
     )]
 }
