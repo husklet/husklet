@@ -57,27 +57,6 @@ CARGO_TARGET_DIR=/Users/x/dd/dd-workerJ-display-gpu-target cargo test -p dd-disp
 
 Result: `audit_data_device_set_selection_is_not_silently_swallowed` failed as expected.
 
-## dmabuf Advertises LINEAR Buffers It Cannot Use
-
-Priority: P2
-Impact: clients can choose an advertised buffer path that yields unusable buffers
-Confidence: Medium-high
-
-Evidence:
-
-- dmabuf is advertised when `DD_DISPLAY_DMABUF` is set: `dd-display/src/server.rs:547`.
-- The server advertises a LINEAR modifier alongside dd-private modifiers: `dd-display/src/server.rs:650`.
-- `dmabuf_params` only records dd-private IOSurface-tagged modifiers: `dd-display/src/server.rs:1320`.
-- A create call without a dd IOSurface tag produces `Obj::Other`: `dd-display/src/server.rs:1354`.
-
-Why this is bad:
-
-A client choosing the advertised LINEAR modifier can create a buffer object that the compositor cannot present, producing missing frames or fallback confusion.
-
-Verification:
-
-Run a dmabuf client that selects LINEAR and assert the server either supports it or sends a protocol failure instead of an inert object.
-
 ## Metal Render Target Texture Id Can Alias Guest Texture Id `1`
 
 Priority: P2

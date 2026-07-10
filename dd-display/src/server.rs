@@ -2387,7 +2387,11 @@ target_surface={} crop=({},{} {}x{}) backing={}x{} mapped_src=({},{}..{},{}) map
                         );
                     }
                     None => {
-                        self.objs.insert(buffer_id, Obj::Other); // no dd IOSurface tag → unusable
+                        // No dd IOSurface tag (e.g. the advertised LINEAR modifier): the compositor
+                        // cannot back this buffer. create_immed has no `failed` event, so report the
+                        // spec's INVALID_FORMAT protocol error rather than handing back an inert object
+                        // the client would attach and get missing frames from.
+                        self.post_error(m.object, 4 /* invalid_format */, "unsupported dmabuf modifier (only dd IOSurface-tagged buffers are usable)");
                     }
                 }
             }
@@ -4037,6 +4041,20 @@ mod tests {
         assert!(server.release_all_pools() == 0, "idempotent: nothing left to release");
         assert!(!server.objs.values().any(|o| matches!(o, Obj::ShmPool { .. })));
         teardown(server, sv);
+    }
+
+    #[test]
+    fn dmabuf_untagged_create_immed_is_protocol_error() {
+        // A dmabuf buffer created without the dd IOSurface tag (e.g. the advertised LINEAR modifier)
+        // cannot be presented — create_immed must post a protocol error, not hand back an inert object.
+        let mut h = Harness::new();
+        h.server.objs.insert(50, Obj::DmabufParams { iosurface_id: None, stride: 0, gpu_render: false });
+        // create_immed(buffer_id=60, w=4, h=4, format=0x3432_5241, flags=0)
+        h.req(50, 3, body().u32(60).i32(4).i32(4).u32(0x3432_5241).u32(0));
+        let msgs = h.drain();
+        assert!(has_display_error(&msgs), "untagged dmabuf create_immed must error, got {msgs:?}");
+        // and it must NOT create an inert buffer object under that id.
+        assert!(h.server.objs.get(&60).is_none(), "no inert buffer object created");
     }
 
     #[test]
