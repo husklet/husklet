@@ -6,6 +6,10 @@ pub(super) fn op_x86_misc() -> Group {
         "comp-x86-misc",
         vec![
             x("movbe", "completeness/x86_movbe.c"), // jit86 UNIMPL 0F 38 F0 (MOVBE)
+            // int3 (#BP -> SIGTRAP) + ud2 (#UD -> SIGILL) reach the guest handler and RESUME. Regression for
+            // the Apple-Silicon Mach-exception gap where a JIT'd BRK/UDF killed the process (exit 133/132)
+            // instead of delivering the guest signal; now routed through the dispatcher (R_TRAP).
+            x("trap-signals", "completeness/x86_trap_signals.c"),
             x("cmpxchg16b", "completeness/x86_cmpxchg16b.c"), // jit86 UNIMPL 0F C7 /1 (CMPXCHG16B)
             x("rdtsc", "completeness/x86_rdtsc.c"), // jit86 UNIMPL 0F 01 F9 (RDTSCP); rdtsc(0F31) ok
             x("x87", "completeness/x86_x87.c"),

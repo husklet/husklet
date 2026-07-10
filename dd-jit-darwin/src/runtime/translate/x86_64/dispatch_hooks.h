@@ -306,6 +306,12 @@ static int smc_on_write(uint64_t a) {
         (c)->r[RDX] = (uint64_t)(num % d);                                                                             \
         continue;                                                                                                      \
     }                                                                                                                  \
+    if ((c)->reason == R_TRAP) { /* int3 -> SIGTRAP, UD2 -> SIGILL: deliver from C (cpu->divop = signo|code<<8) */    \
+        if (raise_guest_trap(c)) continue; /* queued -> maybe_deliver_signal runs the guest handler at loop top */    \
+        (c)->exited = 1;                   /* no guest handler: default action terminates with the signal */          \
+        (c)->exit_code = 128 + ((int)((c)->divop & 0xff));                                                             \
+        break;                                                                                                         \
+    }                                                                                                                  \
     if ((c)->reason == R_SYSCALL) {                                                                                    \
         service(c);                                                                                                    \
         if ((c)->exited) break;                                                                                        \

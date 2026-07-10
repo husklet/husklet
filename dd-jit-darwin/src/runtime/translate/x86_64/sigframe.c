@@ -151,3 +151,21 @@ static int raise_guest_de(struct cpu *c) {
     __atomic_or_fetch(&g_pending, 1ull << 8, __ATOMIC_SEQ_CST);
     return 1;
 }
+
+// int3 (#BP -> SIGTRAP) / UD2 (#UD -> SIGILL): the block exited with R_TRAP carrying (linux_signo |
+// si_code<<8) in cpu->divop and the architectural PC in cpu->rip. Deliver the guest signal exactly like
+// raise_guest_de: queue it + force it deliverable even if the guest blocked it, then resume as a plain
+// branch so run_guest's maybe_deliver_signal builds the rt_sigframe and runs the handler (which typically
+// siglongjmps out, or -- for UD2 -- advances rip and resumes). Returns 1 when queued, 0 when the guest
+// has no handler (caller default-terminates with 128+signo, mirroring the #DE path).
+static int raise_guest_trap(struct cpu *c) {
+    int sig = (int)(c->divop & 0xff);
+    int code = (int)((c->divop >> 8) & 0xff);
+    if (sig < 1 || sig > 64 || g_sigact[sig].handler <= 1) return 0; // SIG_DFL/IGN -> default action
+    g_sigcode[sig] = code;
+    g_sigaddr[sig] = (sig == 4) ? c->rip : 0; // #UD si_addr = faulting insn; int3 SIGTRAP si_addr = 0
+    c->sigmask &= ~(1ull << (sig - 1));        // a synchronous trap forces delivery even if blocked
+    c->reason = R_BRANCH;
+    __atomic_or_fetch(&g_pending, 1ull << sig, __ATOMIC_SEQ_CST);
+    return 1;
+}
