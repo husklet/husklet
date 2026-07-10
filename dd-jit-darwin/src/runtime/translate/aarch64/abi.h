@@ -36,6 +36,9 @@
 #define G_PC(c) ((c)->pc)
 #define G_SP(c) ((c)->sp)
 #define G_TLS(c) ((c)->tls)
+// x86 uses this to drop stale translations on munmap/MAP_FIXED/mremap of an executable VA. The aarch64
+// engine keeps its own guest-`ic ivau` (smc_icflush) coherence model, so the shared-path seam is a no-op.
+#define G_SMC_UNMAP(lo, hi) ((void)(lo), (void)(hi))
 #define G_SHADOW_RESET(c) ((c)->ssp = 0) // reset the §B shadow stack (fork/exec); no-op on engines without it
 
 // Child thread resume PC: aarch64 services a syscall with pc still at the SVC, so advance +4.
