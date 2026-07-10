@@ -18,7 +18,6 @@ This directory is a working inventory of suspicious behavior, bad architecture, 
 | P1 | daemon/runtime | failed start leaves a spent `Live` and later fake success | High | [daemon-tests-docs.md](daemon-tests-docs.md#failed-start-leaves-a-spent-live) |
 | P1 | sentry/compat | untrusted split breaks Linux `EFAULT` compatibility | High | [gpu-display-sentry.md](gpu-display-sentry.md#untrusted-split-breaks-linux-efault-compatibility) |
 | P1 | sentry/ipc | `DDJIT_UNTRUSTED` SCM_RIGHTS + eventfd loses events | High | [completeness-and-env.md](completeness-and-env.md#ddjit_untrusted-scm_rights-eventfd-loses-events) |
-| P1 | display/compat | multiple `wl_surface.frame` requests collapse to one | High | [gpu-display-sentry.md](gpu-display-sentry.md#multiple-wl_surfaceframe-requests-collapse-to-one) |
 | P1 | gpu/corruption | GPU executor acks success after replay errors/skipped writes | Medium-high | [gpu-display-sentry.md](gpu-display-sentry.md#gpu-executor-acks-success-after-replay-errors-or-skipped-writes) |
 | P1 | gpu/corruption | `DrawIndexed.base_vertex` is ignored by Metal replay | Medium-high | [gpu-display-sentry.md](gpu-display-sentry.md#drawindexedbase_vertex-is-ignored-by-metal-replay) |
 | P1 | gpu/corruption | Metal replay silently no-ops supported IR commands | Medium-high | [gpu-display-sentry.md](gpu-display-sentry.md#metal-replay-silently-no-ops-supported-ir-commands) |
@@ -55,15 +54,7 @@ This directory is a working inventory of suspicious behavior, bad architecture, 
 | P1 | procfs/memory | `sysinfo(2)` ignores container memory cap | High | [completeness-and-env.md](completeness-and-env.md#sysinfo2-ignores-container-memory-cap) |
 | P1 | display/xdg | xdg configure/ack race allows pre-ack presentation | High | [gpu-display-sentry.md](gpu-display-sentry.md#xdg-configureack-race-allows-pre-ack-presentation) |
 | P1 | display/clipboard | inert data-device objects silently swallow selection | High | [gpu-display-sentry.md](gpu-display-sentry.md#data-device-objects-are-inert) |
-| P1 | display/lifecycle | Wayland destructors do not remove objects/delete ids | High | [gpu-display-sentry.md](gpu-display-sentry.md#wayland-destructors-do-not-remove-objects) |
-| P1 | display/lifecycle | destroyed `wl_buffer` can still be presented | High | [gpu-display-sentry.md](gpu-display-sentry.md#destroyed-wl_buffer-can-still-be-presented) |
 | P1 | display/leak | shm pool mappings survive client disconnect | High | [gpu-display-sentry.md](gpu-display-sentry.md#shm-pool-mappings-survive-client-disconnect) |
-| P1 | display/input | focus transfer sends enter without leave | High | [gpu-display-sentry.md](gpu-display-sentry.md#focus-transfer-sends-enter-without-leave) |
-| P1 | display/input | pointer release/id reuse corrupts input routing | High | [gpu-display-sentry.md](gpu-display-sentry.md#pointer-release-and-id-reuse-corrupt-input-routing) |
-| P1 | display/xdg | `xdg_popup` never gets configured or mapped | High | [gpu-display-sentry.md](gpu-display-sentry.md#xdg_popup-never-gets-configured-or-mapped) |
-| P1 | display/shm | invalid shm buffer offset can panic compositor | High | [gpu-display-sentry.md](gpu-display-sentry.md#invalid-shm-buffer-offset-can-panic-compositor) |
-| P1 | display/shm | shm buffer stride smaller than row is accepted | High | [gpu-display-sentry.md](gpu-display-sentry.md#shm-buffer-stride-smaller-than-row-is-accepted) |
-| P1 | display/viewport | viewport source outside buffer is clamped | High | [gpu-display-sentry.md](gpu-display-sentry.md#viewport-source-outside-buffer-is-clamped) |
 | P1 | registry/pull | `--platform` ignores OS prefix | High | [archive-fs-compat.md](archive-fs-compat.md#--platform-ignores-os-prefix) |
 | P1 | archive/race | fixed per-process temp dirs race concurrent operations | Medium-high | [archive-fs-compat.md](archive-fs-compat.md#fixed-per-process-temp-dirs-race-concurrent-operations) |
 | P2 | JIT/opcode | F16C `vcvtps2ph` ignores rounding immediate | High | [jit-and-opcodes.md](jit-and-opcodes.md#f16c-vcvtps2ph-ignores-rounding-immediate) |
@@ -99,15 +90,10 @@ This directory is a working inventory of suspicious behavior, bad architecture, 
 | P2 | gpu/compat | dmabuf advertises LINEAR buffers it cannot use | Medium-high | [gpu-display-sentry.md](gpu-display-sentry.md#dmabuf-advertises-linear-buffers-it-cannot-use) |
 | P2 | gpu/compat | Metal backend skips missing bind-group resources | High | [gpu-display-sentry.md](gpu-display-sentry.md#metal-backend-skips-missing-bind-group-resources) |
 | P2 | gpu/compat | Metal render target texture id aliases guest texture id `1` | Medium-high | [gpu-display-sentry.md](gpu-display-sentry.md#metal-render-target-texture-id-can-alias-guest-texture-id-1) |
-| P2 | display/input | released input objects remain active | Medium | [gpu-display-sentry.md](gpu-display-sentry.md#released-input-objects-remain-active) |
 | P2 | display/compat | presenter failures still release buffers and fire callbacks | Medium | [gpu-display-sentry.md](gpu-display-sentry.md#presenter-failures-still-release-buffers-and-fire-frame-callbacks) |
 | P2 | display/window | native window close is not propagated | Medium-high | [gpu-display-sentry.md](gpu-display-sentry.md#native-window-close-is-not-propagated) |
-| P2 | display/input | keyboard repeat is internally contradictory | Medium | [gpu-display-sentry.md](gpu-display-sentry.md#keyboard-repeat-is-internally-contradictory) |
 | P2 | gpu/compat | Metal duplicate IDs and format fallbacks diverge | Medium-high | [gpu-display-sentry.md](gpu-display-sentry.md#metal-duplicate-ids-and-format-fallbacks-diverge-from-checked-backends) |
 | P2 | gpu/compat | Metal shader id can retain stale MSL | Medium-high | [gpu-display-sentry.md](gpu-display-sentry.md#metal-shader-id-can-retain-stale-msl) |
-| P2 | display/shm | unsupported `wl_shm` formats are accepted | High | [gpu-display-sentry.md](gpu-display-sentry.md#unsupported-wl_shm-formats-are-accepted) |
-| P2 | display/scale | `wl_surface.set_buffer_scale(0)` is silently normalized | High | [gpu-display-sentry.md](gpu-display-sentry.md#wl_surfaceset_buffer_scale0-is-silently-normalized) |
-| P1 | display/viewport | invalid viewport destination keeps stale state | High | [gpu-display-sentry.md](gpu-display-sentry.md#invalid-viewport-destination-keeps-stale-state) |
 | P2 | gpu/sampler | Metal sampler creation drops descriptor fields | High | [gpu-display-sentry.md](gpu-display-sentry.md#metal-sampler-creation-drops-descriptor-fields) |
 | P2 | display/lifecycle | Metal cleanup diverges from checked backends | Medium-high | [gpu-display-sentry.md](gpu-display-sentry.md#metal-cleanup-diverges-from-checked-backends) |
 | P2 | env/runtime | `DDJIT_SANDBOX` public mode is intentionally avoided by tests | High | [completeness-and-env.md](completeness-and-env.md#ddjit_sandbox-public-mode-is-intentionally-avoided-by-tests) |
