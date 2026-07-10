@@ -234,25 +234,6 @@ mac bash -lc 'DDJIT_DIR=$OUT $OUT/ddjit-linux_aarch64 scratch-worker-V/sig_uc_st
 
 Native printed `seen=1 on_alt=1 uc_stack=1`; dd printed `seen=1 on_alt=1 uc_stack=0`.
 
-## `signalfd` Update Keeps Stale Signals (ORs Masks Instead Of Replacing)
-
-Priority: P1
-Impact: signal event loops can receive masked-out signals
-Confidence: High
-
-(The short-read half of this finding is FIXED: a signalfd `read` with `count < 128` now returns `EINVAL`
-without consuming the pending signal. Only the mask-update half below remains.)
-
-Evidence:
-
-- `signalfd` update ORs new masks into the shared mask instead of replacing them: `dd-jit-darwin/src/runtime/os/linux/syscall/event.c:793`.
-
-Why this is bad:
-
-Linux updates an existing signalfd mask to exactly the new set. dd's OR keeps previously-enabled signals
-active, so an event loop that narrowed its mask can still receive signals it meant to drop. (This is also
-entangled with the single shared-signalfd model -- see the multiple-signalfd-independence finding.)
-
 ## Epoll Loses Readiness When Watched Fd Closes But Dup Remains
 
 Priority: P1

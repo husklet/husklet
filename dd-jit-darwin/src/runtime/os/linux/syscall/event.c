@@ -918,7 +918,14 @@ static int svc_event(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint6
             G_RET(c) = (uint64_t)(-errno);
             break;
         }
-        g_sigfd_mask |= pm;
+        // Linux signalfd(fd != -1, mask): UPDATE replaces the existing mask EXACTLY with the new set -- a
+        // narrowed mask must drop the signals it removed. The old unconditional OR kept previously-enabled
+        // signals active, so an event loop that narrowed its mask still received signals it meant to drop.
+        // A fresh create (fd == -1) still accumulates into the (single shared) signalfd's mask.
+        if ((int)a0 != -1)
+            g_sigfd_mask = pm;
+        else
+            g_sigfd_mask |= pm;
         g_sigfd_read = g_sigfd_pipe[0];
         for (int s = 1; s < 64; s++)
             // make sure the host delivers them
