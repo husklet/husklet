@@ -606,7 +606,7 @@ impl crate::present::Presenter for MetalPngPresenter {
     fn frame_count(&self) -> u32 {
         self.frames
     }
-    fn present(&mut self, surf: &crate::present::SurfaceBuffer) {
+    fn present(&mut self, surf: &crate::present::SurfaceBuffer) -> bool {
         let (w, h) = (surf.width as u32, surf.height as u32);
         let dump = self.frames % self.png_every == 0; // sample: only some frames pay readback+PNG
                                                       // GPU rung 2: an IOSurface-backed dmabuf composites zero-copy (wrap → GPU-blit → readback); an
@@ -617,7 +617,7 @@ impl crate::present::Presenter for MetalPngPresenter {
                 let surface = unsafe { resolve_iosurface(id) };
                 if surface.is_null() {
                     eprintln!("[dd-display/metal] IOSurface id {id} not found");
-                    return;
+                    return false;
                 }
                 let src = self.ctx.texture_from_iosurface(surface, w, h);
                 if surf.gpu_render && std::env::var_os("DD_DISPLAY_TEST_TRIANGLE").is_some() {
@@ -640,7 +640,7 @@ impl crate::present::Presenter for MetalPngPresenter {
                 unsafe { cfrelease(surface) };
                 if !dump {
                     self.frames += 1;
-                    return; // composited on-GPU; skip the CPU readback+PNG this frame
+                    return true; // composited on-GPU; skip the CPU readback+PNG this frame
                 }
                 let bgra = self.ctx.readback_bgra(&dst, w, h);
                 let mut out = vec![0u8; bgra.len()];
@@ -655,7 +655,7 @@ impl crate::present::Presenter for MetalPngPresenter {
             None => {
                 if !dump {
                     self.frames += 1;
-                    return;
+                    return true;
                 }
                 self.ctx.composite_to_rgba(&surf.bgra, w, h)
             }
@@ -678,6 +678,7 @@ impl crate::present::Presenter for MetalPngPresenter {
                 path.display()
             );
         }
+        true
     }
 }
 

@@ -32,26 +32,6 @@ Results:
 - aarch64: fails with `jit 255/""` vs native `efault ... =1`.
 - x86_64: exits `0` but silently wrong; all bad-pointer verdicts are `0` instead of `1`.
 
-## Presenter Failures Still Release Buffers And Fire Frame Callbacks
-
-Priority: P2
-Impact: clients advance frame pacing after a skipped presentation
-Confidence: Medium
-
-Evidence:
-
-- `MetalPresenter::present` returns early when IOSurface lookup fails: `dd-display/src/present_cocoa.rs:557`.
-- It can also return early if drawable acquisition fails: `dd-display/src/present_cocoa.rs:616`.
-- `Server::commit` does not receive presentation success and still releases the buffer and fires frame callbacks: `dd-display/src/server.rs:813`, `dd-display/src/server.rs:818`.
-
-Why this is bad:
-
-Clients can reuse a buffer and schedule the next frame even though nothing reached the screen. This hides display failures as normal frame completion.
-
-Verification:
-
-Inject an invalid IOSurface id or no-drawable presenter state and assert `wl_buffer.release`/`wl_callback.done` behavior matches the chosen failure policy.
-
 ## Data-Device Objects Are Inert
 
 Priority: P1

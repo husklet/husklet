@@ -52,8 +52,11 @@ impl SurfaceBuffer {
 }
 
 pub trait Presenter {
-    /// A surface has committed a new frame. `surf` aliases nothing — it's a fresh snapshot.
-    fn present(&mut self, surf: &SurfaceBuffer);
+    /// A surface has committed a new frame. `surf` aliases nothing — it's a fresh snapshot. Returns
+    /// `true` if the frame actually reached the screen; `false` if the present was skipped (e.g. an
+    /// IOSurface lookup or drawable acquisition failed). The compositor uses this to decide whether to
+    /// release the buffer and fire frame callbacks — a failed present must NOT advance frame pacing.
+    fn present(&mut self, surf: &SurfaceBuffer) -> bool;
     /// Number of frames presented so far (for a generic multiplexer's disconnect log). Default 0.
     fn frame_count(&self) -> u32 {
         0
@@ -122,7 +125,7 @@ impl Presenter for PngPresenter {
     fn frame_count(&self) -> u32 {
         self.frames
     }
-    fn present(&mut self, surf: &SurfaceBuffer) {
+    fn present(&mut self, surf: &SurfaceBuffer) -> bool {
         let rgba = surf.to_rgba();
         let png = dd_term_core::png::encode_rgba(surf.width as u32, surf.height as u32, &rgba);
         let _ = std::fs::create_dir_all(&self.dir);
@@ -138,5 +141,6 @@ impl Presenter for PngPresenter {
             surf.title,
             path.display()
         );
+        true
     }
 }
