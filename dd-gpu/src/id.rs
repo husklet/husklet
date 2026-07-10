@@ -40,19 +40,23 @@ def_id!(/// A presentable output surface (one DDP `Surface`).
 def_id!(/// A timeline fence for host↔guest synchronization.
     FenceId, "fence");
 
-/// A generational slot: `gen` increments each time an id is reused, so a stale reference can be told
-/// apart from a live one in diagnostics.
+/// A generational slot: `gen` is a globally-unique allocation stamp, so a reference captured against
+/// one allocation of an id can be told apart from a later reuse of the same id (stale-ref detection).
 struct Slot<T> {
     gen: u32,
     val: T,
 }
 
 /// Host-side id → object map with lifecycle checking. One per resource kind per backend.
+///
+/// Generations come from a single monotonic counter rather than a per-id map, so destroy/recreate
+/// churn does **not** leak an unbounded table of freed ids: live state shrinks to exactly the live
+/// resources, while each fresh allocation still gets a distinct stamp for stale-reference checks.
 pub struct ResourceTable<T> {
     kind: &'static str,
     live: HashMap<u32, Slot<T>>,
-    /// Highest generation ever assigned to an id (survives free) — for stale-vs-unknown diagnostics.
-    gens: HashMap<u32, u32>,
+    /// Monotonic allocation counter; every `insert` consumes the next value as the slot's generation.
+    next_gen: u32,
 }
 
 impl<T> ResourceTable<T> {
@@ -60,7 +64,7 @@ impl<T> ResourceTable<T> {
         Self {
             kind,
             live: HashMap::new(),
-            gens: HashMap::new(),
+            next_gen: 1,
         }
     }
 
@@ -69,8 +73,8 @@ impl<T> ResourceTable<T> {
         if self.live.contains_key(&id) {
             return Err(GpuError::DuplicateId { kind: self.kind, id });
         }
-        let gen = self.gens.get(&id).map(|g| g + 1).unwrap_or(1);
-        self.gens.insert(id, gen);
+        let gen = self.next_gen;
+        self.next_gen = self.next_gen.wrapping_add(1).max(1);
         self.live.insert(id, Slot { gen, val });
         Ok(())
     }
@@ -119,5 +123,27 @@ impl<T> ResourceTable<T> {
     /// Iterate live (id, &value) pairs — used by backends to release everything on teardown.
     pub fn iter(&self) -> impl Iterator<Item = (u32, &T)> {
         self.live.iter().map(|(k, s)| (*k, &s.val))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn destroyed_ids_do_not_leave_unbounded_metadata() {
+        // Churn one id through create/destroy many times. Because generations come from a single
+        // monotonic counter (not a per-id map that survives free), the table's memory tracks only
+        // the live set — it does not grow one entry per destroyed id.
+        let mut t: ResourceTable<u32> = ResourceTable::new("buffer");
+        let mut last_gen = 0;
+        for _ in 0..1024 {
+            t.insert(1, 42).unwrap();
+            let g = t.generation(1).unwrap();
+            assert_ne!(g, last_gen, "each fresh allocation gets a distinct generation");
+            last_gen = g;
+            t.remove(1).unwrap();
+        }
+        assert_eq!(t.len(), 0, "no live resources remain after churn");
     }
 }

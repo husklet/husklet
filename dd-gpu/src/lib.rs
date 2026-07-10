@@ -71,6 +71,10 @@ pub enum GpuError {
     BadEnum { what: &'static str, val: u32 },
     /// A string field was not valid UTF-8.
     Utf8,
+    /// A length-prefixed frame held extra bytes after its message decoded (trailing garbage).
+    TrailingBytes,
+    /// A boolean wire field held a byte other than the canonical `0`/`1`.
+    NonCanonicalBool(u8),
     /// Created an id that is already live.
     DuplicateId { kind: &'static str, id: u32 },
     /// Referenced an id that was never created or was already freed.
@@ -79,6 +83,10 @@ pub enum GpuError {
     Unsupported(&'static str),
     /// A copy/write/read fell outside the resource's bounds.
     OutOfBounds,
+    /// A descriptor/command field was structurally invalid (zero size, contradictory range,
+    /// unsupported dimensionality, missing required usage bit, etc.) — a validation rejection
+    /// distinct from a plain bounds violation.
+    Invalid(&'static str),
     /// Malformed or unsupported PTX while compiling a kernel to dd-GPU kernel IR.
     Ptx(String),
     /// Higher-level decode context wrapped around a low-level wire error.
@@ -92,10 +100,13 @@ impl std::fmt::Display for GpuError {
             GpuError::BadTag(t) => write!(f, "bad command/encoder tag {t}"),
             GpuError::BadEnum { what, val } => write!(f, "bad {what} enum value {val}"),
             GpuError::Utf8 => write!(f, "invalid utf-8 in string field"),
+            GpuError::TrailingBytes => write!(f, "trailing bytes after framed message"),
+            GpuError::NonCanonicalBool(b) => write!(f, "non-canonical boolean wire byte {b}"),
             GpuError::DuplicateId { kind, id } => write!(f, "duplicate {kind} id {id}"),
             GpuError::UnknownId { kind, id } => write!(f, "unknown/freed {kind} id {id}"),
             GpuError::Unsupported(op) => write!(f, "backend does not support {op}"),
             GpuError::OutOfBounds => write!(f, "access out of bounds"),
+            GpuError::Invalid(m) => write!(f, "invalid argument: {m}"),
             GpuError::Ptx(m) => write!(f, "ptx: {m}"),
             GpuError::Decode(m) => write!(f, "decode: {m}"),
         }
@@ -198,6 +209,40 @@ mod tests {
     }
 
     #[test]
+    fn framed_command_decode_rejects_trailing_bytes() {
+        use crate::wire::{Decoder, Encoder};
+        let cmd = Cmd::CreateFence(1);
+        // A well-formed frame round-trips.
+        let good = cmd.frame();
+        let mut d = Decoder::new(&good);
+        assert_eq!(Cmd::decode_frame(&mut d).unwrap(), cmd);
+        // Now append a trailing byte inside the frame body: the frame is malformed.
+        let mut e = Encoder::new();
+        e.frame(|inner| {
+            cmd.encode(inner);
+            inner.u8(0xEE); // trailing garbage after a valid command
+        });
+        let framed = e.into_vec();
+        let mut d = Decoder::new(&framed);
+        assert_eq!(Cmd::decode_frame(&mut d), Err(GpuError::TrailingBytes));
+    }
+
+    #[test]
+    fn decoder_does_not_preallocate_on_bogus_counts() {
+        use crate::wire::Encoder;
+        // A CreateBindGroup claiming ~4 billion entries but with an empty body must fail cleanly as a
+        // decode/short-buffer error — never attempt a multi-gigabyte Vec::with_capacity first.
+        let mut e = Encoder::new();
+        e.u8(crate::ir::tag::CREATE_BIND_GROUP);
+        e.u32(1); // id
+        e.u32(0); // set
+        e.u32(0xFFFF_FFFF); // entry count = ~4 billion, no entries follow
+        let bytes = e.into_vec();
+        let err = decode_stream(&bytes).unwrap_err();
+        assert!(matches!(&err, GpuError::Decode(m) if m.contains("short buffer")));
+    }
+
+    #[test]
     fn decode_rejects_truncation_and_bad_tags() {
         let bytes = encode_stream(&sample_stream());
         // truncate mid-stream -> contextual ShortBuffer, never a panic
@@ -222,10 +267,12 @@ mod tests {
         assert_eq!(t.get(1), Err(GpuError::UnknownId { kind: "buffer", id: 1 }));
         // double free
         assert_eq!(t.remove(1), Err(GpuError::UnknownId { kind: "buffer", id: 1 }));
-        // reuse bumps generation
+        // reuse assigns a fresh, distinct generation (from a global monotonic counter), so a stale
+        // reference to the old allocation can be told apart from the reused one; id 2 is untouched.
         let g_before = t.generation(2);
         assert!(t.insert(1, 333).is_ok());
-        assert_eq!(t.generation(1), Some(2)); // id 1 reused → gen 2
+        assert_ne!(t.generation(1), g_before); // id 1 reused → new, distinct generation
+        assert!(t.generation(1).is_some());
         assert_eq!(t.generation(2), g_before);
     }
 
@@ -500,6 +547,15 @@ mod tests {
         let func = ctx.module_get_function(module, "saxpy").expect("entry");
 
         let ir = ctx.launch(func, (64, 1, 1), (256, 1, 1), &[KernelArg::Ptr(a), KernelArg::Ptr(b)]);
+        // A launch's transient parameter buffer + bind group must be released after the (synchronous)
+        // submit, so repeated launches don't leak backend resources.
+        let param_creates = ir.iter().filter(|c| matches!(c, Cmd::CreateBuffer(_, d) if d.label == "kernel-params")).count();
+        let bg_creates = ir.iter().filter(|c| matches!(c, Cmd::CreateBindGroup(..))).count();
+        let buf_destroys = ir.iter().filter(|c| matches!(c, Cmd::DestroyBuffer(..))).count();
+        let bg_destroys = ir.iter().filter(|c| matches!(c, Cmd::DestroyBindGroup(..))).count();
+        assert_eq!(param_creates, buf_destroys, "each launch's param buffer is destroyed");
+        assert_eq!(bg_creates, bg_destroys, "each launch's bind group is destroyed");
+        assert!(bg_destroys >= 1);
         // first launch creates shader+pipeline+bindgroup then submits
         for c in &ir {
             replay::apply(&mut be, c).unwrap();

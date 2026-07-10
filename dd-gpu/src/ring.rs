@@ -70,13 +70,49 @@ impl CommandRing {
         true
     }
 
-    /// Dequeue one frame body, or `None` if the ring is empty.
-    pub fn pop_frame(&mut self) -> Option<Vec<u8>> {
+    /// Peek the length prefix of the frame at `head` without consuming any bytes.
+    fn peek_len(&self) -> Option<usize> {
         if self.len < 4 {
             return None;
         }
-        let lb = self.read_bytes(4);
-        let n = u32::from_le_bytes([lb[0], lb[1], lb[2], lb[3]]) as usize;
+        let cap = self.buf.len();
+        let mut lb = [0u8; 4];
+        for (i, b) in lb.iter_mut().enumerate() {
+            *b = self.buf[(self.head + i) % cap];
+        }
+        Some(u32::from_le_bytes(lb) as usize)
+    }
+
+    /// Dequeue one complete frame body, or `None` if the ring is empty **or** only holds a partial
+    /// frame. A partial frame (header present but body not yet fully written) stays buffered until the
+    /// producer supplies the rest — the reader never consumes the header early or fabricates body bytes.
+    pub fn pop_frame(&mut self) -> Option<Vec<u8>> {
+        let n = self.peek_len()?;
+        // The full frame is `4 + n` bytes; if the ring doesn't hold all of it yet, leave it buffered.
+        if self.len < 4 + n {
+            return None;
+        }
+        let _ = self.read_bytes(4);
         Some(self.read_bytes(n))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn pop_frame_waits_for_complete_body() {
+        // Model a torn write: the producer has written the 4-byte length header and only part of the
+        // body. The reader must NOT consume the header or fabricate the missing bytes — it leaves the
+        // partial frame buffered and returns None until the whole body arrives.
+        let mut ring = CommandRing::with_capacity(64);
+        ring.write_bytes(&(6u32).to_le_bytes()); // header: body is 6 bytes
+        ring.write_bytes(&[1, 2, 3]); // only 3 of 6 body bytes so far
+        assert_eq!(ring.pop_frame(), None, "partial frame must not be popped");
+        assert_eq!(ring.used(), 7, "partial frame stays buffered intact");
+        ring.write_bytes(&[4, 5, 6]); // rest of the body
+        assert_eq!(ring.pop_frame(), Some(vec![1, 2, 3, 4, 5, 6]));
+        assert!(ring.is_empty());
     }
 }
