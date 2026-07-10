@@ -30,6 +30,15 @@ fn copy_dir_into(src: &std::path::Path, dst: &std::path::Path) {
             Ok(ft) if ft.is_dir() => {
                 let _ = std::fs::create_dir_all(&to);
                 copy_dir_into(&from, &to);
+                // Preserve the source directory's mode (populateVolumes seeds a data dir like
+                // `/var/lib/postgresql/data`, whose 0700/0711 perms matter — `create_dir_all` uses the
+                // umask default and drops them). Apply the mode AFTER recursing so a restrictive source
+                // mode (e.g. 0555, no write bit) can't block us from writing the children first.
+                if let Ok(md) = std::fs::metadata(&from) {
+                    use std::os::unix::fs::PermissionsExt;
+                    let mode = md.permissions().mode() & 0o7777;
+                    let _ = std::fs::set_permissions(&to, std::fs::Permissions::from_mode(mode));
+                }
             }
             Ok(ft) if ft.is_symlink() => {
                 if let Ok(t) = std::fs::read_link(&from) {
@@ -43,6 +52,32 @@ fn copy_dir_into(src: &std::path::Path, dst: &std::path::Path) {
     }
 }
 
+/// Lexically resolve container-absolute mount `target` against `rootfs`, collapsing `.`/`..` WITHOUT
+/// touching the filesystem (the seed dir may not exist yet, so `canonicalize` is unusable). Returns
+/// `None` when the normalized path would climb ABOVE `rootfs` — an image `VOLUME /../outside` (or any
+/// `..`-laden target) must never seed a volume from OUTSIDE the image rootfs (a container-escape /
+/// host-file-disclosure vector). Interior `..` that stays within rootfs (e.g. `/a/../b`) is allowed.
+fn confine_to_rootfs(rootfs: &std::path::Path, target: &str) -> Option<PathBuf> {
+    use std::path::Component;
+    let mut rel = PathBuf::new();
+    let mut depth: usize = 0;
+    for comp in std::path::Path::new(target).components() {
+        match comp {
+            Component::RootDir | Component::Prefix(_) | Component::CurDir => {}
+            Component::Normal(c) => {
+                rel.push(c);
+                depth += 1;
+            }
+            Component::ParentDir => {
+                // A `..` at rootfs depth 0 escapes — reject the whole target.
+                depth = depth.checked_sub(1)?;
+                rel.pop();
+            }
+        }
+    }
+    Some(rootfs.join(rel))
+}
+
 /// Create an ANONYMOUS local volume (64-hex name, docker-style) backing container path `target`, seeding
 /// it from the image's content at that path (populateVolumes). Returns the [`Vol`]; the caller registers
 /// it + records the name in the container's `anon_volumes` (so `rm -v`/prune can reclaim it).
@@ -50,9 +85,12 @@ pub(super) fn anon_volume(volumes_dir: &str, image_rootfs: &str, target: &str, c
     let name = fake_id(&format!("anon:{cid}:{target}:{}", now_nanos()));
     let mountpoint = PathBuf::from(volumes_dir).join(&name);
     let _ = std::fs::create_dir_all(&mountpoint);
-    let src = PathBuf::from(image_rootfs).join(target.trim_start_matches('/'));
-    if src.is_dir() {
-        copy_dir_into(&src, &mountpoint);
+    // Confine the copy-up source to the image rootfs: a `..`-escaping target seeds NOTHING (the empty
+    // volume is still created/registered so the mount point exists — matching a covered-but-empty dir).
+    if let Some(src) = confine_to_rootfs(std::path::Path::new(image_rootfs), target) {
+        if src.is_dir() {
+            copy_dir_into(&src, &mountpoint);
+        }
     }
     Vol {
         name,
@@ -147,6 +185,72 @@ mod tests {
         let meta = std::fs::symlink_metadata(dst.join("l")).unwrap();
         assert!(meta.file_type().is_symlink());
         assert_eq!(std::fs::read_link(dst.join("l")).unwrap(), std::path::Path::new("a"));
+    }
+
+    // Finding 20: copy-up must PRESERVE the source directory's mode (create_dir_all uses the umask
+    // default and drops it). A seeded data dir like postgres's 0700/0711 must keep its perms.
+    #[test]
+    fn copy_dir_into_preserves_source_dir_mode() {
+        use std::os::unix::fs::PermissionsExt;
+        let root = Tmp::new("dirmode");
+        let src = root.0.join("src");
+        let dst = root.0.join("dst");
+        std::fs::create_dir_all(&dst).unwrap();
+        let sub = src.join("seeded");
+        std::fs::create_dir_all(&sub).unwrap();
+        std::fs::set_permissions(&sub, std::fs::Permissions::from_mode(0o711)).unwrap();
+
+        copy_dir_into(&src, &dst);
+
+        let mode = std::fs::metadata(dst.join("seeded"))
+            .unwrap()
+            .permissions()
+            .mode()
+            & 0o777;
+        assert_eq!(mode, 0o711, "seeded dir should keep source mode 0711, got {mode:o}");
+    }
+
+    // Finding 21 (P1 security): an image VOLUME whose target escapes the rootfs via `..` must NOT seed
+    // the anonymous volume from OUTSIDE the image rootfs.
+    #[test]
+    fn anon_volume_does_not_seed_from_outside_rootfs() {
+        let root = Tmp::new("escape");
+        let volumes_dir = root.0.join("volumes");
+        let rootfs = root.0.join("rootfs");
+        let outside = root.0.join("outside");
+        std::fs::create_dir_all(&volumes_dir).unwrap();
+        std::fs::create_dir_all(&rootfs).unwrap();
+        std::fs::create_dir_all(&outside).unwrap();
+        // A secret living OUTSIDE the image rootfs (sibling dir). `/../outside` resolves to it.
+        std::fs::write(outside.join("secret"), b"top-secret").unwrap();
+
+        let v = anon_volume(
+            volumes_dir.to_str().unwrap(),
+            rootfs.to_str().unwrap(),
+            "/../outside",
+            "cid",
+        );
+
+        assert!(
+            !PathBuf::from(&v.mountpoint).join("secret").exists(),
+            "volume must not be seeded from outside the image rootfs"
+        );
+    }
+
+    // confine_to_rootfs: escaping `..` is rejected; interior `..` that stays within is kept.
+    #[test]
+    fn confine_to_rootfs_rejects_escape_allows_interior() {
+        let rootfs = std::path::Path::new("/img/rootfs");
+        assert_eq!(confine_to_rootfs(rootfs, "/../outside"), None);
+        assert_eq!(confine_to_rootfs(rootfs, "/a/../../outside"), None);
+        assert_eq!(
+            confine_to_rootfs(rootfs, "/a/../b"),
+            Some(PathBuf::from("/img/rootfs/b"))
+        );
+        assert_eq!(
+            confine_to_rootfs(rootfs, "/data"),
+            Some(PathBuf::from("/img/rootfs/data"))
+        );
     }
 
     #[test]
