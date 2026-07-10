@@ -48,32 +48,6 @@ Verification:
 
 Add probes for invalid/divide-by-zero/overflow sticky bits after SSE operations and compare dd against native/qemu.
 
-## Opcode Completeness Is Still Curated, Not Exhaustive
-
-Priority: P2
-Impact: false confidence in opcode/syscall completeness
-Confidence: Medium-high
-
-Evidence:
-
-- `dd-tests/src/cases/ext/completeness/mod.rs` describes systematic syscall-table and opcode-space coverage.
-- Current registered probes are a curated subset; the static backstop is also suspect because `coverage.sh` uses stale paths (see [daemon-tests-docs.md](daemon-tests-docs.md#coverage-tool-uses-stale-engine-paths-and-exits-green)).
-
-Why this is bad:
-
-The suite can be valuable while still failing to prove completeness. The hidden AVX/F16C/SSE4.2 issues above are examples: implemented op families are present, but narrow tests miss important semantic variants.
-
-Suggested improvement:
-
-Generate a checked-in matrix with at least:
-
-- syscall number/name
-- handler location or explicit unsupported verdict
-- dynamic test coverage
-- xfail/gap row
-- opcode family/subform
-- semantic dimensions tested, such as flags, MXCSR/rounding, memory vs register, VEX vs legacy, scalar merge, fault behavior
-
 ## x87 Long Double Precision Is Truncated
 
 Priority: P2
@@ -145,70 +119,3 @@ DDJIT_DIR=/Users/x/dd/dd-jitfault-audit-20260710/target-jitfault-audit/release/b
 
 qemu observed `repmovs_fault scalar=1 sig=1 copied4=1 tail=1 regs=1 addr=1 rip_nonzero=1`; dd observed `scalar=0 sig=0 ... addr=0 rip_nonzero=0`.
 
-## `ICEBP` And Invalid `0x62` Bytes Abort Instead Of Guest Traps
-
-Priority: P2
-Impact: unsupported x86 trap encodings terminate instead of delivering guest signals
-Confidence: High
-
-Verification status: Proven in isolated worktree `/Users/x/dd/dd-jitfault-audit-20260710`.
-
-Evidence:
-
-- x86 decode covers single-byte and prefix paths: `dd-jit-darwin/src/runtime/translate/x86_64/decode.c:65`, `dd-jit-darwin/src/runtime/translate/x86_64/decode.c:175`, `dd-jit-darwin/src/runtime/translate/x86_64/decode.c:209`.
-- Unhandled instruction paths abort as unimplemented: `dd-jit-darwin/src/runtime/translate/x86_64/translate.c:3808`, `dd-jit-darwin/src/runtime/translate/x86_64/avx.c:1958`.
-
-Why this is bad:
-
-`ICEBP` should deliver a guest trap, and invalid `0x62`/BOUND-family byte sequences should produce guest fault behavior. dd aborts with unimplemented errors and exit code `70`.
-
-Isolated proof:
-
-```sh
-timeout 5 qemu-x86_64 target/dd-tests/x86_64/completeness/x86_fault_traps icebp
-timeout 8 /Users/x/dd/dd-jitfault-audit-20260710/target-jitfault-audit/release/build/dd-jit-darwin-16122afd27b6bb64/out/ddjit-linux_x86_64 target/dd-tests/x86_64/completeness/x86_fault_traps icebp
-```
-
-qemu reported guest traps; dd reported `UNIMPL 1B opcode 0xf1` or `UNIMPLEMENTED EVEX` and exited `70`.
-
-## aarch64 Threaded Self-Modifying Code Executes Stale Translations
-
-Priority: P1
-Impact: patched code keeps executing old translated bytes when another guest thread is live
-Confidence: High
-
-Verification status: Proven in isolated worktree `/Users/x/dd/dd-audit-jit-memorder-cache-20260710`.
-
-Evidence:
-
-- aarch64 `smc_icflush()` skips in-place SMC drop when another guest thread is live: `dd-jit-darwin/src/runtime/translate/aarch64/translate.c:1184`.
-- Translation cache drop behavior is in the shared engine cache: `dd-jit-darwin/src/runtime/engine/cache.c:999`.
-
-Why this is bad:
-
-Guest code that patches an already-executed function and calls `__clear_cache` should execute the new bytes. dd keeps running the old translation in threaded cases, breaking JITs, trampolines, and hot patching.
-
-Observed proof:
-
-```text
-Linux: threaded-smc before=1 after=2 expected=2
-dd:    threaded-smc before=1 after=1 expected=2
-```
-
-## x86 Persistent Cache Key Ignores Codegen Env Modes
-
-Priority: P2
-Impact: persistent cache can reuse translations emitted under different codegen settings
-Confidence: Medium-high
-
-Verification status: Source-proven in isolated worktree `/Users/x/dd/dd-audit-jit-memorder-cache-20260710`.
-
-Evidence:
-
-- x86 pcache effective version keys only the IRQSLIM layout bit: `dd-jit-darwin/src/runtime/translate/x86_64/pcache.c:59`.
-- `pcache_make_id()` does not include many env-driven codegen gates: `dd-jit-darwin/src/runtime/translate/x86_64/pcache.c:196`.
-- Codegen reads env-controlled modes in translation setup: `dd-jit-darwin/src/runtime/translate/x86_64/translate.c:394`.
-
-Why this is bad:
-
-With `DDJIT_PCACHE=1`, switching env modes such as `NOLAZY`, `NOSTITCH`, `NOXALUDIRECT`, `NOXSHIFTDIRECT`, `NOREPCMP`, `NOSSEOPT`, `NOEAOPT`, or `NOGUESTFOLD` can load cached translations generated under a different mode. That makes env-driven compatibility/debug settings silently ineffective or inconsistent.
