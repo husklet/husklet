@@ -19,15 +19,55 @@ use serde::Deserialize;
 use serde_json::Value;
 use tokio::sync::broadcast;
 
-/// The shared event bus. A clone of this `Sender` lives in [`App`]; every `/events` client holds a
-/// `Receiver` from `subscribe()`. Carries one fully-formed Docker event JSON object per message.
-pub(crate) type EventBus = broadcast::Sender<Value>;
+/// Max events kept in the replay history ring (bounds memory; docker's own event log is also bounded).
+const EVENT_HISTORY_CAP: usize = 4096;
+
+/// The shared event bus: a broadcast `Sender` for LIVE `/events` streams PLUS a bounded in-memory history
+/// ring so `docker events --since <t>` can replay past events (a live-only bus dropped them entirely).
+/// A clone lives in [`App`]; every `/events` client holds a `Receiver` from `subscribe()`.
+#[derive(Clone)]
+pub(crate) struct EventBus {
+    tx: broadcast::Sender<Value>,
+    history: std::sync::Arc<std::sync::Mutex<std::collections::VecDeque<Value>>>,
+}
+
+impl EventBus {
+    /// A new receiver for the LIVE stream (past events come from [`history_since`], not this).
+    pub(crate) fn subscribe(&self) -> broadcast::Receiver<Value> {
+        self.tx.subscribe()
+    }
+    /// Record `ev` in the bounded history ring, then broadcast it to any live receivers.
+    fn publish(&self, ev: Value) {
+        if let Ok(mut h) = self.history.lock() {
+            if h.len() >= EVENT_HISTORY_CAP {
+                h.pop_front();
+            }
+            h.push_back(ev.clone());
+        }
+        let _ = self.tx.send(ev); // Err == no live receivers; the history still has it for replay.
+    }
+    /// Every recorded event with `time >= since` (unix secs), oldest-first — the `--since` replay set.
+    fn history_since(&self, since: i64) -> Vec<Value> {
+        self.history
+            .lock()
+            .map(|h| {
+                h.iter()
+                    .filter(|e| e["time"].as_i64().unwrap_or(0) >= since)
+                    .cloned()
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+}
 
 /// Create a fresh bus. Capacity is the per-receiver backlog before a slow client lags (and skips the
 /// oldest events rather than blocking publishers). Used by `main.rs` to init `App.events`.
 pub(crate) fn new_bus() -> EventBus {
     let (tx, _rx) = broadcast::channel(256);
-    tx
+    EventBus {
+        tx,
+        history: std::sync::Arc::new(std::sync::Mutex::new(std::collections::VecDeque::new())),
+    }
 }
 
 /// Publish one lifecycle event. `type_`/`action` are Docker's event taxonomy (`"container"`/`"start"`,
@@ -36,9 +76,8 @@ pub(crate) fn new_bus() -> EventBus {
 /// (`{"name":..,"image":..}`); a non-object is treated as empty. Best-effort: a send with no live
 /// `/events` clients is silently dropped.
 pub(crate) fn emit_event(bus: &EventBus, type_: &str, action: &str, id: &str, attrs: Value) {
-    if bus.receiver_count() == 0 {
-        return; // no listeners — skip building the value entirely
-    }
+    // Always build + RECORD the event (even with no live listeners) so `--since` can replay it later — a
+    // live-only bus silently lost every event emitted while no client was attached.
     let (secs, nanos) = crate::util::now_epoch_parts();
     let attributes = match attrs {
         Value::Object(m) => Value::Object(m),
@@ -68,17 +107,16 @@ pub(crate) fn emit_event(bus: &EventBus, type_: &str, action: &str, id: &str, at
         }
     }
     // The bus carries `Value` (the `/events` stream re-serializes it and `Filters::matches` reads it
-    // by key), so convert the typed DTO once here.
-    let _ = bus.send(serde_json::to_value(&ev).unwrap_or_default()); // Err == no receivers; fine.
+    // by key), so convert the typed DTO once here. `publish` records it in history AND broadcasts it live.
+    bus.publish(serde_json::to_value(&ev).unwrap_or_default());
 }
 
 #[derive(Deserialize, Default)]
 pub(crate) struct EventsQ {
     /// `docker events --filter`, sent as a URL-encoded JSON map (`{"type":["container"],...}`).
     pub(crate) filters: Option<String>,
-    /// `since` is accepted (so the query deserializes) but not applied — dd keeps no historical event
-    /// store, so `--since <past>` simply streams live events from now.
-    #[allow(dead_code)] // wire-contract field: deserialized but intentionally unused (see above)
+    /// `docker events --since <t>`: replay recorded events at/after `t` (from the bounded history ring)
+    /// before streaming live ones.
     pub(crate) since: Option<String>,
     /// `--until <t>`: makes `docker events` a BOUNDED command that ends once wall-clock passes `t`.
     pub(crate) until: Option<String>,
@@ -248,21 +286,44 @@ pub(crate) async fn events(State(a): State<App>, Query(q): Query<EventsQ>) -> Re
     // the past has nothing to replay and closes IMMEDIATELY (an unbounded live stream here would hang the
     // client forever, e.g. `docker events --until $(date +%s)`); a future `--until` ends the live stream
     // once wall-clock passes it. Without `--until` the stream stays unbounded (ends on client disconnect).
-    let until = q
-        .until
-        .as_deref()
-        .and_then(|s| crate::util::parse_docker_ts(s, crate::util::now_secs()));
-    if matches!(until, Some(u) if u <= crate::util::now_secs()) {
+    let now = crate::util::now_secs();
+    let until = q.until.as_deref().and_then(|s| crate::util::parse_docker_ts(s, now));
+    let since_ts = q.since.as_deref().and_then(|s| crate::util::parse_docker_ts(s, now));
+    let bounded_past = matches!(until, Some(u) if u <= now);
+
+    // `--since <t>` replays recorded events at/after `t` from the bounded history ring (a live-only bus
+    // lost them). Also used to satisfy a fully-past `--until` window `[since, until]`. Filter the replay
+    // by the same filters and the `--until` upper bound.
+    let replay: Vec<Result<Vec<u8>, std::io::Error>> = if since_ts.is_some() || bounded_past {
+        a.events
+            .history_since(since_ts.unwrap_or(0))
+            .into_iter()
+            .filter(|ev| filters.matches(ev))
+            .filter(|ev| until.map_or(true, |u| ev["time"].as_i64().unwrap_or(0) <= u))
+            .map(|ev| {
+                let mut line = serde_json::to_vec(&ev).unwrap_or_default();
+                line.push(b'\n');
+                Ok(line)
+            })
+            .collect()
+    } else {
+        Vec::new()
+    };
+
+    // A fully-past `--until` is a BOUNDED command with nothing more to stream live: emit the replay window
+    // and close (an unbounded live stream here would hang the client, e.g. `docker events --until <now>`).
+    if bounded_past {
+        let body = stream::iter(replay);
         return Response::builder()
             .status(StatusCode::OK)
             .header("Content-Type", "application/json")
-            .body(Body::empty())
+            .body(Body::from_stream(body))
             .unwrap();
     }
 
     // `unfold` drives the broadcast receiver into a byte stream. Returning `Some` yields a line;
     // `continue` skips a filtered-out / lagged event; `None` ends the stream (bus closed, or `--until`).
-    let body = stream::unfold((rx, filters, until), |(mut rx, filters, until)| async move {
+    let live = stream::unfold((rx, filters, until), |(mut rx, filters, until)| async move {
         loop {
             // End the stream the moment a future `--until` bound passes (docker closes the bounded stream
             // then). Recomputed each iteration so a filtered-out event doesn't reset the deadline.
@@ -291,11 +352,34 @@ pub(crate) async fn events(State(a): State<App>, Query(q): Query<EventsQ>) -> Re
         }
     });
 
+    // Replay the `--since` history first, THEN the live stream (docker replays past then follows live).
+    use futures_util::StreamExt;
+    let body = stream::iter(replay).chain(live);
     Response::builder()
         .status(StatusCode::OK)
         .header("Content-Type", "application/json")
         .body(Body::from_stream(body))
         .unwrap()
+}
+
+#[cfg(test)]
+mod history_tests {
+    use super::{emit_event, new_bus};
+
+    // "Events Are Live-Only And Lossy": an event emitted with NO subscriber must still be recorded in the
+    // history ring so `--since` can replay it (a live-only bus dropped it entirely).
+    #[test]
+    fn history_records_events_without_a_subscriber() {
+        let bus = new_bus();
+        emit_event(&bus, "container", "create", "c1", serde_json::json!({"name": "c1"}));
+        emit_event(&bus, "image", "pull", "busybox:1", serde_json::json!({}));
+        let all = bus.history_since(0);
+        assert_eq!(all.len(), 2, "both events recorded despite zero live receivers");
+        assert_eq!(all[0]["Type"], "container");
+        assert_eq!(all[0]["Action"], "create");
+        // A `since` in the far future excludes past events.
+        assert!(bus.history_since(i64::MAX).is_empty(), "since in the future replays nothing");
+    }
 }
 
 #[cfg(test)]

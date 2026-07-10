@@ -291,6 +291,14 @@ pub(crate) async fn spawn_live(app: &App, c: &Container, vols: &[Vol], live: Arc
                         se.extend_from_slice(data);
                     }
                 }
+                // Persist the finalized per-stream logs to disk so `docker logs` on an exited container
+                // still works AFTER a daemon restart — the in-memory cc.stdout/cc.stderr are `#[serde(skip)]`
+                // and the Live's ordered log is gone on reload, so without this the log body comes back
+                // empty. Written under the per-container dir (reclaimed with the container on `docker rm`).
+                let logdir = dd_home().join("containers").join(&cid).join("logs");
+                let _ = std::fs::create_dir_all(&logdir);
+                let _ = std::fs::write(logdir.join("stdout"), &so);
+                let _ = std::fs::write(logdir.join("stderr"), &se);
                 cc.stdout = so;
                 cc.stderr = se;
             }
