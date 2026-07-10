@@ -32,85 +32,6 @@ Results:
 - aarch64: fails with `jit 255/""` vs native `efault ... =1`.
 - x86_64: exits `0` but silently wrong; all bad-pointer verdicts are `0` instead of `1`.
 
-## Wayland Nonblocking Flush Drops Messages/Fds
-
-Priority: P1
-Impact: frame stalls, missing keymap fds, protocol deadlocks
-Confidence: High
-
-Evidence:
-
-- `flush` drains `self.tx` and `self.tx_fds` with `std::mem::take` before `sendmsg`: `dd-display/src/wire.rs:240`.
-
-Why this is bad:
-
-If the nonblocking Wayland socket returns `EAGAIN` or performs a short write, the queued protocol bytes and `SCM_RIGHTS` fds have already been removed from the connection state. The client never receives them.
-
-Isolated proof:
-
-```sh
-CARGO_TARGET_DIR=/Users/x/dd/dd-verifier6/target-agent6 cargo test -p dd-display flush_preserves_pending_message_after_would_block -- --nocapture
-```
-
-Result: failing test reports `message was lost after the first EAGAIN flush`.
-
-Additional isolated proof from `/Users/x/dd/dd-verifier6b`:
-
-```sh
-CARGO_TARGET_DIR=/Users/x/dd/dd-verifier6b-target cargo test -p dd-display wire::tests -- --nocapture
-```
-
-Result: `flush_preserves_pending_bytes_after_would_block` fails because `conn.tx.len()` becomes `0`; expected `12`.
-
-## Queued `SCM_RIGHTS` Fds Leak On Connection Drop
-
-Priority: P1
-Impact: fd leak under malformed or disconnecting Wayland clients
-Confidence: High
-
-Verification status: Proven in isolated worktree `/Users/x/dd/dd-verifier6b`.
-
-Evidence:
-
-- `Conn` stores received fds in `rx_fds`: `dd-display/src/wire.rs:129`.
-- `fill` harvests every fd from `SCM_RIGHTS` into that queue: `dd-display/src/wire.rs:205`.
-- There is no `Drop` cleanup for unconsumed queued fds before the connection object is dropped.
-
-Why this is bad:
-
-A client can send more fds than protocol requests consume, or disconnect before a request consumes them. Those fds remain open in the compositor process, causing a resource leak under churn.
-
-Isolated proof:
-
-```sh
-CARGO_TARGET_DIR=/Users/x/dd/dd-verifier6b-target cargo test -p dd-display wire::tests -- --nocapture
-```
-
-Result: `drop_closes_queued_received_fds` fails; the queued fd remains open after `Conn` drop.
-
-## GPU Software Replay Corrupts Padded Texture Uploads
-
-Priority: P1
-Impact: silent render corruption in software backend/oracle
-Confidence: High
-
-Evidence:
-
-- `CopyBufferToTexture` computes `need = bpt * width * height` and copies a tight chunk into the texture: `dd-gpu/src/software.rs:392`.
-- The path ignores source `bytes_per_row` even though texture uploads commonly have padded rows.
-
-Why this is bad:
-
-When the source buffer has row padding, padding bytes become visible texels. The software replay/oracle can disagree with real GPU semantics and hide or invent rendering bugs.
-
-Isolated proof:
-
-```sh
-CARGO_TARGET_DIR=/Users/x/dd/dd-verifier6/target-agent6 cargo test -p dd-gpu software_backend_copy_buffer_to_texture_honors_bytes_per_row -- --nocapture
-```
-
-Result: second texture row contains `0xaa` padding bytes instead of intended row pixels.
-
 ## GPU Software Backend Panics On Wrapping Offsets
 
 Priority: P2
@@ -133,59 +54,6 @@ CARGO_TARGET_DIR=/Users/x/dd/dd-verifier6/target-agent6 cargo test -p dd-gpu sof
 ```
 
 Result: panics at `software.rs` offset checks.
-
-## `wl_shm_pool.destroy` Leaves Stale Pools
-
-Priority: P2
-Impact: mapped memory/object leak under client churn
-Confidence: High for stale object; memory leak impact likely
-
-Evidence:
-
-- `wl_shm.create_pool` maps pool memory and stores `Obj::ShmPool`: `dd-display/src/server.rs:685`.
-- `wl_shm_pool` returns for all opcodes except `create_buffer(0)`: `dd-display/src/server.rs:712`.
-- Dispatch treats some destroy-only objects as inert: `dd-display/src/server.rs:495`.
-
-Why this is bad:
-
-`wl_shm_pool.destroy` should release the pool object and unmap associated memory when appropriate. Current behavior leaves the pool live.
-
-Isolated proof:
-
-```sh
-CARGO_TARGET_DIR=/Users/x/dd/dd-verifier6/target-agent6 cargo test -p dd-display shm_pool_destroy_removes_pool_object -- --nocapture
-```
-
-Result: failing test reports `wl_shm_pool.destroy left the pool live`.
-
-Follow-up concern:
-
-`wl_shm_pool.resize` is also ignored at the same dispatch point. That can make later buffers observe stale size/mapping behavior while the compositor continues to release buffers and fire callbacks as if the protocol state was valid.
-
-## `wl_shm_pool.resize` Is Ignored
-
-Priority: P1
-Impact: larger post-resize shm buffers fail extraction and frames disappear
-Confidence: High
-
-Verification status: Proven in isolated worktree `/Users/x/dd/dd-workerD-render-audit-20260710`.
-
-Evidence:
-
-- `wl_shm_pool` returns for every opcode except `create_buffer(0)`: `dd-display/src/server.rs:711`.
-- Buffer extraction rejects buffers whose computed footprint exceeds the stale stored pool size: `dd-display/src/server.rs:956`.
-
-Why this is bad:
-
-Wayland clients can resize a shm pool and then create larger buffers from it. dd keeps the old size, so the compositor drops frames from otherwise valid buffers.
-
-Isolated proof:
-
-```sh
-CARGO_TARGET_DIR=/Users/x/dd/target-workerD-render-audit cargo test -p dd-display shm_pool_resize_allows_larger_committed_buffer -- --nocapture
-```
-
-Result: failed as expected; observed `frames = 0`, expected `1`.
 
 ## Multiple `wl_surface.frame` Requests Collapse To One
 
@@ -940,32 +808,6 @@ CARGO_TARGET_DIR=/Users/x/dd/dd-worker-AS-display-gpu-20260710/target-as cargo t
 ```
 
 Result: failed through the success path; expected rejection or an explicit size-incompatibility signal.
-
-## `wl_surface.set_buffer_transform` Is Ignored
-
-Priority: P2
-Impact: rotated buffers present with wrong dimensions and pixels
-Confidence: High
-
-Verification status: Proven in isolated worktree `/Users/x/dd/dd-aw-gpu-20260710`.
-
-Evidence:
-
-- `wl_surface` dispatch handles surface opcodes but ignores transform semantics: `dd-display/src/server.rs:737`.
-- The opcode falls through without storing transform state: `dd-display/src/server.rs:767`.
-- Buffer extraction presents original dimensions: `dd-display/src/server.rs:938`.
-
-Why this is bad:
-
-Wayland clients use buffer transforms for rotated outputs and pre-rotated buffers. Ignoring `set_buffer_transform(90)` presents a `2x1` buffer as `2x1` instead of the transformed `1x2` logical output.
-
-Isolated proof:
-
-```sh
-CARGO_TARGET_DIR=/Users/x/dd/dd-aw-gpu-20260710-target cargo test -p dd-display "server::tests::" -- --nocapture
-```
-
-Result: failed; `set_buffer_transform(90)` on a `2x1` shm buffer presented `2x1`.
 
 ## Unsupported `wl_shm` Formats Are Accepted
 
