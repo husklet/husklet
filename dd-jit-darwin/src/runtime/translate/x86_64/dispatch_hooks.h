@@ -276,6 +276,14 @@ static int smc_on_write(uint64_t a) {
         do_cmpxchg16(c);                                                                                              \
         continue;                                                                                                      \
     }                                                                                                                  \
+    if ((c)->reason == R_FXSAVE) { /* fxsave x87-register-DATA + FSW tail (rip already = next) */                     \
+        do_fxsave(c);                                                                                                  \
+        continue;                                                                                                      \
+    }                                                                                                                  \
+    if ((c)->reason == R_FXRSTOR) { /* fxrstor x87-register-DATA + FSW tail (rip already = next) */                   \
+        do_fxrstor(c);                                                                                                 \
+        continue;                                                                                                      \
+    }                                                                                                                  \
     if ((c)->reason == R_DIV) { /* 128/64 unsigned div (rip already = next) */                                         \
         uint64_t d = (c)->divop;                                                                                       \
         if (d == 0) {                                                                                                  \

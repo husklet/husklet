@@ -3538,8 +3538,14 @@ static void *translate_block(uint64_t gpc) {
                         emit32(0x79400000u | (0u << 10) | (17 << 5) | 16); // ldrh w16, [x17,#0]   (FCW)
                         e_str(16, 28, OFF_FPCW);                           // cpu->fpcw = FCW
                     }
-                    gpc = next;
-                    continue; // (x87/MMX register data + FSW still left as-is; MXCSR/FCW are honored)
+                    // The XMM/MXCSR/FCW area is done inline above; the x87-register DATA (ST0-7 @32, 80-bit)
+                    // and FSW (@2) need the modeled x87 stack (c->st[]/fptop/fpsw), so finish in C. Spill the
+                    // x87 shadow + any pending flags, stash the area base, and exit to do_fxsave/do_fxrstor.
+                    if (g_fl_pending) flags_materialize();
+                    if (g_fp_known) fp_drop();
+                    e_str(17, 28, OFF_X87EA);
+                    emit_exit_const(next, sub == 0 ? R_FXSAVE : R_FXRSTOR);
+                    break;
                 }
             }
             // bsf/tzcnt (0F BC), bsr/lzcnt (0F BD). The F3 prefix selects the BMI/ABM count form, which is

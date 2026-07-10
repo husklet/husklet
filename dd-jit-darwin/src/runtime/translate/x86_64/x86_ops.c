@@ -385,6 +385,85 @@ static void x87_fstp_m80(struct cpu *c) {
     memcpy(ea + 8, &se, 2);
 }
 
+// Pure double<->ext80 conversions (same math as x87_fld_m80/x87_fstp_m80, without the stack push/pop) for
+// the fxsave/fxrstor x87-register-DATA area. The ST stack is modeled at double precision, so an ext80 value
+// with a mantissa tail beyond binary64 is preserved only to double precision (the documented arm64 limit).
+static void x87_double_to_m80(double d, uint8_t *ea) {
+    uint64_t db;
+    memcpy(&db, &d, 8);
+    int s = (int)(db >> 63), de = (int)((db >> 52) & 0x7ff);
+    uint64_t dm = db & ((1ull << 52) - 1), sig;
+    uint16_t se;
+    if (de == 0) {
+        sig = 0;
+        se = (uint16_t)(s ? 0x8000 : 0);
+    } else if (de == 0x7ff) {
+        sig = (1ull << 63) | (dm << 11);
+        se = (uint16_t)((s << 15) | 0x7fff);
+    } else {
+        sig = (1ull << 63) | (dm << 11);
+        se = (uint16_t)((s << 15) | ((de - 1023 + 16383) & 0x7fff));
+    }
+    memcpy(ea, &sig, 8);
+    memcpy(ea + 8, &se, 2);
+}
+static double x87_m80_to_double(const uint8_t *ea) {
+    uint64_t sig;
+    uint16_t se;
+    memcpy(&sig, ea, 8);
+    memcpy(&se, ea + 8, 2);
+    int s = se >> 15, e = se & 0x7fff;
+    double d;
+    if (sig == 0 && e == 0)
+        d = 0.0;
+    else if (e == 0x7fff) {
+        uint64_t frac = sig & ((1ull << 63) - 1);
+        uint64_t db = ((uint64_t)s << 63) | (0x7ffull << 52) | (frac ? (1ull << 51) : 0);
+        memcpy(&d, &db, 8);
+    } else {
+        d = (double)sig;
+        int k = e - 16383 - 63;
+        uint64_t db;
+        memcpy(&db, &d, 8);
+        int de = (int)((db >> 52) & 0x7ff) + k;
+        if (de <= 0)
+            d = 0.0;
+        else if (de >= 0x7ff) {
+            db = (db & (1ull << 63)) | (0x7ffull << 52);
+            memcpy(&d, &db, 8);
+        } else {
+            db = (db & ~(0x7ffull << 52)) | ((uint64_t)de << 52);
+            memcpy(&d, &db, 8);
+        }
+        if (s) d = -d;
+    }
+    return d;
+}
+
+// fxsave/fxrstor x87-register-DATA + FSW (R_FXSAVE/R_FXRSTOR). The XMM lanes, MXCSR and FCW are handled by
+// the inline emitter; this C tail fills the parts that need the modeled x87 stack (c->st[]/fptop/fpsw). The
+// FXSAVE area base is stashed in c->x87_ea. Physical register j lives at offset 32 + j*16 (10 bytes ext80);
+// FSW@2 carries C0-C3 + the top-of-stack pointer; the abridged FTW@4 marks registers valid (empty-tag
+// state is not modeled, so all 8 are reported present -- exact for the common save-all-then-restore round trip).
+static void do_fxsave(struct cpu *c) {
+    uint8_t *p = (uint8_t *)c->x87_ea;
+    uint16_t fsw = (uint16_t)((c->fpsw & 0x4700) | ((c->fptop & 7) << 11));
+    memcpy(p + 2, &fsw, 2); // FSW: C0-C3 (bits 8/9/10/14) + TOP (bits 11-13)
+    p[4] = 0xff;            // abridged FTW: all registers reported valid (see note above)
+    p[5] = 0;
+    for (int j = 0; j < 8; j++)
+        x87_double_to_m80(c->st[j], p + 32 + j * 16);
+}
+static void do_fxrstor(struct cpu *c) {
+    const uint8_t *p = (const uint8_t *)c->x87_ea;
+    uint16_t fsw;
+    memcpy(&fsw, p + 2, 2);
+    c->fpsw = fsw & 0x4700;    // restore C0-C3
+    c->fptop = (fsw >> 11) & 7; // restore TOP
+    for (int j = 0; j < 8; j++)
+        c->st[j] = x87_m80_to_double(p + 32 + j * 16);
+}
+
 // x87 transcendentals (R_X87FUNC): the D9 F0-FF subset has no ARM/SSE counterpart, so it is computed
 // here on the double-precision ST stack via host libm. cpu->x87_ea carries the X87_* selector. We
 // track no tag bits, so C1 (stack over/underflow) is cleared on success; C2 (argument out of range,
