@@ -12,7 +12,6 @@ This directory is a working inventory of suspicious behavior, bad architecture, 
 | P1 | daemon/runtime | published port bind failures do not fail container start | Medium-high | [daemon-tests-docs.md](daemon-tests-docs.md#published-port-bind-failures-do-not-fail-start) |
 | P1 | daemon/compat | inline named volume sources can escape `volumes_dir` | Medium | [daemon-tests-docs.md](daemon-tests-docs.md#inline-volume-sources-can-escape-volumes_dir) |
 | P1 | JIT/memory | 4K guest `munmap` subpage remains readable | High | [jit-and-opcodes.md](jit-and-opcodes.md#4k-guest-munmap-subpage-remains-readable) |
-| P1 | JIT/race | `cmpxchg16b` is non-atomic | Medium-high | [jit-and-opcodes.md](jit-and-opcodes.md#cmpxchg16b-is-non-atomic) |
 | P1 | daemon/data | `docker commit` drops container writes | High | [daemon-tests-docs.md](daemon-tests-docs.md#docker-commit-drops-container-writes) |
 | P1 | daemon/data | `docker export` drops container writes | High | [daemon-tests-docs.md](daemon-tests-docs.md#docker-export-drops-container-writes) |
 | P1 | daemon/runtime | failed start leaves a spent `Live` and later fake success | High | [daemon-tests-docs.md](daemon-tests-docs.md#failed-start-leaves-a-spent-live) |
@@ -54,14 +53,8 @@ This directory is a working inventory of suspicious behavior, bad architecture, 
 | P1 | display/leak | shm pool mappings survive client disconnect | High | [gpu-display-sentry.md](gpu-display-sentry.md#shm-pool-mappings-survive-client-disconnect) |
 | P1 | registry/pull | `--platform` ignores OS prefix | High | [archive-fs-compat.md](archive-fs-compat.md#--platform-ignores-os-prefix) |
 | P1 | archive/race | fixed per-process temp dirs race concurrent operations | Medium-high | [archive-fs-compat.md](archive-fs-compat.md#fixed-per-process-temp-dirs-race-concurrent-operations) |
-| P2 | JIT/opcode | F16C `vcvtps2ph` ignores rounding immediate | High | [jit-and-opcodes.md](jit-and-opcodes.md#f16c-vcvtps2ph-ignores-rounding-immediate) |
-| P2 | JIT/opcode | SSE4.2 string compare leaves AF stale | High | [jit-and-opcodes.md](jit-and-opcodes.md#sse42-string-compare-leaves-af-stale) |
-| P2 | JIT/opcode | VEX `vcvt*ss/sd2si` likely lacks overflow fixups | Medium-high | [jit-and-opcodes.md](jit-and-opcodes.md#vex-vcvtsssd2si-lacks-legacy-overflow-fixups) |
-| P2 | JIT/opcode | SSE2 `CVTPD2DQ` / `CVTTPD2DQ` return wrong integer-indefinite values | High | [jit-and-opcodes.md](jit-and-opcodes.md#sse2-cvtpd2dq-cvttpd2dq-return-wrong-integer-indefinite-values) |
-| P2 | JIT/opcode | SSE `UCOMISS` / `COMISD` leave AF stale | High | [jit-and-opcodes.md](jit-and-opcodes.md#sse-ucomiss-comisd-leave-af-stale) |
 | P2 | JIT/signal | `ICEBP` and invalid `0x62` bytes abort instead of guest traps | High | [jit-and-opcodes.md](jit-and-opcodes.md#icebp-and-invalid-0x62-bytes-abort-instead-of-guest-traps) |
 | P2 | JIT/signal | thread-directed signals do not interrupt blocking reads | High | [jit-and-opcodes.md](jit-and-opcodes.md#thread-directed-signals-do-not-interrupt-blocking-reads) |
-| P2 | JIT/race | `LOCK BTS/BTR/BTC` use non-atomic bit-op path | High | [jit-and-opcodes.md](jit-and-opcodes.md#lock-btsbtrbtc-use-non-atomic-bit-op-path) |
 | P2 | JIT/fp | MXCSR sticky exception flags/control bits are not modeled | Medium | [jit-and-opcodes.md](jit-and-opcodes.md#mxcsr-sticky-exception-flags-are-not-modeled) |
 | P2 | JIT/x87 | x87 long double precision is truncated | High | [jit-and-opcodes.md](jit-and-opcodes.md#x87-long-double-precision-is-truncated) |
 | P2 | syscall/futex | unknown futex ops/flags can report success | Medium-high | [syscall-compat.md](syscall-compat.md#unknown-futex-opsflags-can-report-success) |
