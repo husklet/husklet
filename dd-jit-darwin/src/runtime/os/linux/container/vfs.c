@@ -105,6 +105,10 @@ static uint8_t g_proc_text_ro[DD_NFD];
 // /dev/full: reads return zeros (backed by /dev/zero) but every WRITE fails ENOSPC. macOS has no
 // /dev/full, so we flag the fd here and gate the write family in svc_io. 1 = /dev/full.
 static uint8_t g_devfull[DD_NFD];
+// /dev/urandom + /dev/random accept WRITEs on Linux as entropy-pool seeding (returning the byte count);
+// macOS rejects them with EPERM. 1 = this fd is such a device, so svc_io swallows its writes as a no-op
+// success -- entropy-seeding probes (libgcrypt, some init scripts) then behave as on Linux.
+static uint8_t g_devseed[DD_NFD];
 // /dev/dri/renderD128: the synthesized GPU render node (GPU rung 2). 1 = this fd is the render node, so
 // its ioctl routes to the dd GPU allocator. Set only when DD_GPU_IOSURFACE gates the path on.
 static uint8_t g_devdri[DD_NFD];
@@ -1763,9 +1767,27 @@ static int proc_fd_dir_open(void) {
 
 static int proc_reg_read(int hostpid, char *comm, size_t csz, char *cmd, size_t cmdsz, int *cmdlen);
 
+// The running process's own argv as a NUL-separated, NUL-terminated blob, captured by build_stack at every
+// launch/exec. The registry (proc_reg_*) only exists in container/rootfs mode (g_init_hostpid); this global
+// makes /proc/self/cmdline reflect the FULL argv even in bare mode -- where a fixed argv[0]-only fallback
+// otherwise lost every argument after an exec with many args.
+static char g_self_cmdline[8192];
+static int g_self_cmdline_len = 0;
+static void set_guest_cmdline(int argc, char *const argv[]) {
+    int o = 0;
+    for (int i = 0; i < argc && argv && argv[i]; i++) {
+        int L = (int)strlen(argv[i]);
+        if (o + L + 1 > (int)sizeof g_self_cmdline) break;
+        memcpy(g_self_cmdline + o, argv[i], (size_t)L);
+        o += L;
+        g_self_cmdline[o++] = 0;
+    }
+    g_self_cmdline_len = o;
+}
+
 // /proc/[pid]/cmdline -- the guest argv as NUL-separated, NUL-terminated arguments. Prefer the same
 // published argv record used for peer /proc/<pid>/cmdline so self-introspection sees Chrome's --type and
-// service switches. Fall back to argv[0] during early/non-container startup.
+// service switches. Fall back to the captured argv blob (bare mode), then argv[0].
 static int proc_cmdline_text(char *b, size_t n) {
     char comm[32], cmd[4096];
     int cl;
@@ -1778,6 +1800,12 @@ static int proc_cmdline_text(char *b, size_t n) {
             else
                 b[L - 1] = 0;
         }
+        return L;
+    }
+    if (g_self_cmdline_len > 0) { // bare mode: the captured argv (all of it, not just argv[0])
+        int L = g_self_cmdline_len > (int)n ? (int)n : g_self_cmdline_len;
+        memcpy(b, g_self_cmdline, (size_t)L);
+        if (b[L - 1] != 0) b[L - 1] = 0;
         return L;
     }
     const char *p = (g_exe_path && g_exe_path[0]) ? g_exe_path : "init";

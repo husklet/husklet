@@ -1662,10 +1662,10 @@ static int svc_proc(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64
             break;
             // ENOENT
         }
-        char *argv[256];
-        int ac = 0;
+        char *argv[DD_MAXARGV]; // Linux allows far more than 255 args within ARG_MAX -- a fixed 256 silently
+        int ac = 0;             // dropped the tail (a different command ran, and /proc/self/cmdline diverged)
         uint64_t *gv = (uint64_t *)a1; // a1 (argv array base) already nonpie_p()'d at the top redirect
-        while (gv && gv[ac] && ac < 255) {
+        while (gv && gv[ac] && ac < DD_MAXARGV - 1) {
             argv[ac] = (char *)nonpie_p(gv[ac]); // each argv[] element may itself be a low-image pointer
             ac++;
         }
@@ -1692,15 +1692,15 @@ static int svc_proc(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64
         // RECURSIVE -- the interpreter may itself be a #! script (e.g. /usr/bin/env -> coreutils multicall);
         // resolve the whole chain (Linux binfmt_script, up to SHEBANG_MAX levels) and load the FINAL interp.
         char sh_store[SHEBANG_MAX * 2][256], shpb[4200];
-        char *na[256];
+        char *na[DD_MAXARGV];
         int nn = 0;
         // Linux passes the execve path (a0) as the script-path arg; the original argv[0] is discarded.
         na[nn++] = (char *)a0;
-        for (int i = 1; i < ac && nn < 255; i++)
+        for (int i = 1; i < ac && nn < DD_MAXARGV - 1; i++)
             na[nn++] = argv[i];
         na[nn] = NULL;
         const char *sh_finalhost;
-        int sh_new = resolve_shebang_chain(na, nn, 256, p, sh_store, shpb, sizeof shpb, &sh_finalhost);
+        int sh_new = resolve_shebang_chain(na, nn, DD_MAXARGV, p, sh_store, shpb, sizeof shpb, &sh_finalhost);
         if (sh_new < 0) {
             // too many nested #! -> ELOOP. `-ELOOP` is the HOST (macOS, 62) errno; svc_done's m2l_errno
             // maps it to Linux ELOOP (40) at the syscall boundary, exactly like the vfs symlink-loop path.
@@ -1758,10 +1758,10 @@ static int svc_proc(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64
         // fixed vaddr (__PAGEZERO blocks the low 4 GB) -> its baked absolute refs collide -> SIGSEGV.
         // argv + path live in guest memory we're about to munmap, so copy them to the host heap first.
         char *xpath = strdup(p);
-        char *xargv[256];
-        for (int i = 0; i < ac && i < 255; i++)
+        char *xargv[DD_MAXARGV];
+        for (int i = 0; i < ac && i < DD_MAXARGV - 1; i++)
             xargv[i] = strdup(argv[i]);
-        xargv[ac < 255 ? ac : 255] = NULL;
+        xargv[ac < DD_MAXARGV - 1 ? ac : DD_MAXARGV - 1] = NULL;
         gmap_reset_all();
         gna_reset();                   // the old image's PROT_NONE ranges are gone with its address space
         mlk_reset();                   // ... and so are its mlock'd ranges (VmLck resets across execve)
@@ -1772,9 +1772,9 @@ static int svc_proc(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64
 #endif
         g_go_iscgo = 0; // reset; load_elf re-sets it iff the new main image is a cgo Go image
         p = xpath;
-        for (int i = 0; i < ac && i < 255; i++)
+        for (int i = 0; i < ac && i < DD_MAXARGV - 1; i++)
             argv[i] = xargv[i];
-        argv[ac < 255 ? ac : 255] = NULL;
+        argv[ac < DD_MAXARGV - 1 ? ac : DD_MAXARGV - 1] = NULL;
         struct loaded lm;
         char pc_ihost[4200];
         const char *pc_interp_host = NULL;

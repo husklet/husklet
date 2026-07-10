@@ -59,6 +59,12 @@ static struct {
 
 // current anon charge (bytes)
 static _Atomic uint64_t g_mem_charged = 0;
+// Max argv/envp entries the exec-forward + stack-build path carries. Linux caps only at ARG_MAX (bytes);
+// a former fixed 256 silently truncated large generated argv lists (a different command ran). 2048 covers
+// realistic exec argv/env while keeping the stack arrays bounded.
+#ifndef DD_MAXARGV
+#define DD_MAXARGV 2048
+#endif
 // live task count (init = 1)
 static _Atomic int g_pids_cur = 1;
 // cumulative process creations since boot (fork/clone/clone3). Linux's /proc/stat `processes` is this
