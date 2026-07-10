@@ -397,31 +397,6 @@ Linux: mprotect_unmapped enomem=1 success=0 errno=12
 dd:    enomem=0 success=1 errno=0
 ```
 
-## Default Core Status Contradicts `RLIMIT_CORE=0`
-
-Priority: P1
-Impact: wait status reports core dumps despite zero core limit
-Confidence: High
-
-Verification status: Proven in isolated worktree `/Users/x/dd/dd-audit-proc-lifecycle-20260710`.
-
-Evidence:
-
-- `getrlimit(RLIMIT_CORE)` reports soft limit `0`: `dd-jit-darwin/src/runtime/os/linux/syscall/proc.c:190`.
-- Signal/core-limit helper defaults to `RLIM_INFINITY`: `dd-jit-darwin/src/runtime/os/linux/signal.c:136`.
-- `wait4` and `waitid` consume that contradictory state: `dd-jit-darwin/src/runtime/os/linux/syscall/proc.c:1901`, `dd-jit-darwin/src/runtime/os/linux/syscall/rare.c:719`.
-
-Why this is bad:
-
-With soft core limit `0`, Linux reports a terminating signal but not a core dump. dd reports core-dumped status even while `getrlimit` says core files are disabled.
-
-Observed proof:
-
-```text
-Linux: wait4_default_core soft0=1 core=0; waitid_default_core code=2 dumped=0
-dd:    wait4_default_core soft0=1 core=1; waitid_default_core code=3 dumped=1
-```
-
 ## `kill(0, sig)` Only Signals The Caller
 
 Priority: P1
