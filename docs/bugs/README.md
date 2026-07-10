@@ -24,9 +24,6 @@ This directory is a working inventory of suspicious behavior, bad architecture, 
 | P1 | JIT/x87 | x87 control word is ignored | High | [jit-and-opcodes.md](jit-and-opcodes.md#x87-control-word-is-ignored) |
 | P1 | JIT/race | `cmpxchg16b` is non-atomic | Medium-high | [jit-and-opcodes.md](jit-and-opcodes.md#cmpxchg16b-is-non-atomic) |
 | P1 | JIT/signal | x86 signal return drops AVX upper/x87 state | High | [jit-and-opcodes.md](jit-and-opcodes.md#x86-signal-return-drops-avx-upper-and-x87-state) |
-| P1 | syscall/compat | `close_range` unknown flags close fds instead of `EINVAL` | High | [syscall-compat.md](syscall-compat.md#close_range-unknown-flags-close-file-descriptors) |
-| P1 | syscall/compat | socket credential options fake success on bad fds | High | [syscall-compat.md](syscall-compat.md#so_passcred-and-so_peercred-bad-fds-fake-success) |
-| P1 | syscall/compat | `unshare`/`setns` invalid inputs fake success | High | [syscall-compat.md](syscall-compat.md#unshare-and-setns-invalid-inputs-fake-success) |
 | P1 | daemon/data | `docker commit` drops container writes | High | [daemon-tests-docs.md](daemon-tests-docs.md#docker-commit-drops-container-writes) |
 | P1 | daemon/data | `docker export` drops container writes | High | [daemon-tests-docs.md](daemon-tests-docs.md#docker-export-drops-container-writes) |
 | P1 | daemon/runtime | failed start leaves a spent `Live` and later fake success | High | [daemon-tests-docs.md](daemon-tests-docs.md#failed-start-leaves-a-spent-live) |
