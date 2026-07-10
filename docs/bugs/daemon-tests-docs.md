@@ -2156,31 +2156,6 @@ CARGO_TARGET_DIR=/Users/x/dd/dd-audit-system-endpoints-20260710-target cargo tes
 
 Result: one `~/.dd/pcache/*.pcache` file produced total count `1` with empty item lists.
 
-## Info Default Runtime Is Not Declared
-
-Priority: P1
-Impact: runtime capability data is internally inconsistent
-Confidence: High
-
-Verification status: Proven in isolated worktree `/Users/x/dd/dd-audit-info-version-20260710`.
-
-Evidence:
-
-- `/info` sets `DefaultRuntime: "dd-jit"`: `dd-daemon/src/system.rs:66`.
-- The system DTO has no `Runtimes` field at all: `dd-daemon/src/api/system.rs:10`.
-
-Why this is bad:
-
-Docker clients expect the default runtime to be declared in the runtimes map. dd advertises `dd-jit` as default but omits `Runtimes`, so runtime validation and capability discovery see a broken shape.
-
-Isolated proof:
-
-```sh
-CARGO_TARGET_DIR=/Users/x/dd/dd-audit-info-version-20260710-target cargo test -p dd-daemon system_info -- --ignored --nocapture
-```
-
-Result: `DefaultRuntime="dd-jit"` and `Runtimes=null`.
-
 ## Daemon Version Endpoints And Server Header Are Stale
 
 Priority: P2
