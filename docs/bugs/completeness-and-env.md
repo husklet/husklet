@@ -499,53 +499,6 @@ Why this is bad:
 
 Stale xfail or gap comments hide real regressions and waste agent time. Passing cases should either move to normal coverage or keep an explicit reason for remaining quarantined.
 
-### `statfs` Is Wrong For Synthetic Proc/Sys Leaves
-
-Priority: P1
-Impact: filesystem probes misclassify procfs/sysfs leaves as missing or tmpfs
-Confidence: High
-
-Verification status: Proven in isolated worktree `/Users/x/dd/dd-procfs-statfs-audit-20260710`.
-
-Evidence:
-
-- `statfs` and `fstatfs` route through Linux syscall glue: `dd-jit-darwin/src/runtime/os/linux/syscall/fs.c:1360`, `dd-jit-darwin/src/runtime/os/linux/syscall/fs.c:1377`.
-- Synthetic proc/sys leaf resolution lives in the VFS layer: `dd-jit-darwin/src/runtime/os/linux/container/vfs.c:1192`.
-
-Why this is bad:
-
-Linux reports procfs/sysfs magic and pseudo-fs block data for paths such as `/proc/meminfo` and `/sys/class/net/lo/mtu`. dd returns `ENOENT` for path `statfs` and reports tmpfs-like host block data for fd `fstatfs`, so tools that detect pseudo-filesystems by magic or mount flags silently take the wrong path.
-
-Observed proof:
-
-```text
-dd:    statfs(/proc/meminfo)=-1 errno=2; fstatfs(open)=0 type=1021994
-Linux: statfs(/proc/meminfo)=0 type=9fa0; fstatfs(open)=0 type=9fa0
-```
-
-### `statfs.f_flags` Is Always Zero
-
-Priority: P1
-Impact: mount flags disappear from filesystem compatibility probes
-Confidence: High
-
-Verification status: Proven in isolated worktree `/Users/x/dd/dd-procfs-statfs-audit-20260710`.
-
-Evidence:
-
-- `statfs` fills the returned flags field with zero: `dd-jit-darwin/src/runtime/os/linux/syscall/fs.c:1414`.
-
-Why this is bad:
-
-Linux exposes meaningful flags for procfs, sysfs, devtmpfs, shm, and tmpfs. dd reports zero for `/proc`, `/sys`, `/dev`, `/dev/shm`, and `/tmp`, so software that checks `ST_NOSUID`, `ST_NODEV`, `ST_NOEXEC`, or read-only status gets a false mount view.
-
-Observed proof:
-
-```text
-dd:    /proc flags=0 /sys flags=0 /dev flags=0 /dev/shm flags=0 /tmp flags=0
-Linux: /proc flags=102e /sys flags=1020 /dev flags=1020 /dev/shm flags=26
-```
-
 ### `/proc/self/maps` Omits RELRO Mapping Detail
 
 Priority: P2
