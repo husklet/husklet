@@ -153,6 +153,7 @@ mod tests {
     fn launch_config_overlay_lowers_copy_across() {
         // Overlay lowers are a typed passthrough (highest-priority first).
         let c = Container::builder(Image::overlay("/upper", ["/lo0", "/lo1"]).guest(Guest::LinuxAarch64))
+            .cmd(["/bin/true"])
             .build()
             .unwrap();
         let lc = c.launch_config();
@@ -162,8 +163,9 @@ mod tests {
 
     #[test]
     fn launch_config_defaults_surface_nothing() {
-        // A bare container: no env pairs, so every optional/env-backed field stays at its default.
+        // A minimal runnable container: no env pairs, so every optional/env-backed field stays at its default.
         let c = Container::builder(Image::from_rootfs("/img").guest(Guest::LinuxAarch64))
+            .cmd(["/bin/true"])
             .build()
             .unwrap();
         assert!(c.cfg.env.is_empty()); // precondition: nothing to translate
@@ -181,7 +183,7 @@ mod tests {
         assert!(lc.publish.is_empty());
         assert!(lc.volumes.is_empty());
         assert!(lc.ulimits.is_empty());
-        assert!(lc.argv.is_empty());
+        assert_eq!(lc.argv, vec!["/bin/true"]);
         // env-backed fields: all default (empty / false) because no DD_*/DDJIT_* pairs were stored.
         assert_eq!(lc.cwd, "");
         assert!(lc.guest_env.is_empty());
@@ -198,6 +200,7 @@ mod tests {
     fn launch_config_guest_env_only_injected_path_when_empty() {
         // guest_env(&[], false) yields just the default PATH; it round-trips as a one-element Vec.
         let c = Container::builder(Image::from_rootfs("/img").guest(Guest::LinuxAarch64))
+            .cmd(["/bin/true"])
             .guest_env(&[], false)
             .build()
             .unwrap();
@@ -210,6 +213,7 @@ mod tests {
         // Pure engine tuning knobs are NOT part of the container contract: they must be dropped, never
         // surfaced into any typed LaunchConfig field. (This is why run_step still needs .guest_env.)
         let c = Container::builder(Image::from_rootfs("/img").guest(Guest::LinuxAarch64))
+            .cmd(["/bin/true"])
             .env("CRASHDBG", "1")
             .env("COLDPROF", "1")
             .env("DDJIT_NOPCACHE", "1")

@@ -246,6 +246,12 @@ impl ContainerBuilder {
         if self.cfg.rootfs.is_empty() {
             return Err(Error::Invalid("image rootfs is empty"));
         }
+        if self.cfg.argv.is_empty() {
+            return Err(Error::Invalid("container argv is empty"));
+        }
+        if self.cfg.argv.iter().any(|arg| arg.is_empty()) {
+            return Err(Error::Invalid("container argv contains empty argument"));
+        }
         Ok(Container { cfg: self.cfg, guest: self.guest })
     }
 }
@@ -260,6 +266,23 @@ mod tests {
 
     fn has(c: &Container, k: &str, v: &str) -> bool {
         c.cfg.env.iter().any(|(ek, ev)| ek == k && ev == v)
+    }
+
+    #[test]
+    fn build_rejects_empty_argv() {
+        let err = Container::builder(Image::from_rootfs("/img"))
+            .build()
+            .expect_err("empty argv must not build a runnable container");
+        assert!(matches!(err, Error::Invalid("container argv is empty")));
+    }
+
+    #[test]
+    fn build_rejects_empty_argv_element() {
+        let err = Container::builder(Image::from_rootfs("/img"))
+            .cmd(["/bin/sh", "-c", ""])
+            .build()
+            .expect_err("empty argv elements cannot round-trip through the config wire");
+        assert!(matches!(err, Error::Invalid("container argv contains empty argument")));
     }
 
     #[test]
@@ -307,6 +330,7 @@ mod tests {
             render_node: true,
         };
         let c = Container::builder(Image::from_rootfs("/img"))
+            .cmd(["/bin/true"])
             .apply_device(&req)
             .build()
             .unwrap();
@@ -332,6 +356,7 @@ mod tests {
         // A default (empty) request binds nothing and arms no flag — byte-for-byte the no-device path.
         use crate::DeviceRequest;
         let c = Container::builder(Image::from_rootfs("/img"))
+            .cmd(["/bin/true"])
             .apply_device(&DeviceRequest::default())
             .build()
             .unwrap();
@@ -343,6 +368,7 @@ mod tests {
     fn builder_off_switches_emit_nothing() {
         // Disabled flags and empty cwd must NOT emit their keys (docker parity — absence is meaningful).
         let c = Container::builder(Image::from_rootfs("/img"))
+            .cmd(["/bin/true"])
             .cwd("")
             .sandbox(false)
             .net_isolate(false)
@@ -356,18 +382,21 @@ mod tests {
     fn user_spec_numeric_and_missing_rootfs() {
         // A numeric uid needs no rootfs and defaults gid to 0 (docker semantics).
         let c = Container::builder(Image::from_rootfs("/nonexistent"))
+            .cmd(["/bin/true"])
             .user_spec("/nonexistent", "1000")
             .build()
             .unwrap();
         assert_eq!((c.cfg.uid, c.cfg.gid), (Some(1000), Some(0)));
         // `uid:gid` both numeric, verbatim.
         let c2 = Container::builder(Image::from_rootfs("/x"))
+            .cmd(["/bin/true"])
             .user_spec("/x", "1000:2000")
             .build()
             .unwrap();
         assert_eq!((c2.cfg.uid, c2.cfg.gid), (Some(1000), Some(2000)));
         // An unresolvable NAME against a missing rootfs leaves the default identity.
         let c3 = Container::builder(Image::from_rootfs("/x"))
+            .cmd(["/bin/true"])
             .user_spec("/x", "postgres")
             .build()
             .unwrap();

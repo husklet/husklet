@@ -318,15 +318,37 @@ static void do_avx(struct cpu *c) {
         // moves: vmovups/aps (np), vmovupd/apd (66), vmovss (F3), vmovsd (F2). 10/28 load, 11/29 store.
         case 0x10:
         case 0x28: { // dst.reg <- rm
-            avx_get_rm(c, &I, next, (op == 0x10 && (pp == 2 || pp == 3)) ? (pp == 2 ? 4 : 8) : W, d);
-            // scalar ss/sd merge: for 0x10 F3/F2 only the low element loads, but VEX zeroes the rest.
-            avx_put(c, rd, d, W);
+            if (op == 0x10 && (pp == 2 || pp == 3) && !I.is_mem) {
+                // VEX vmovss/vmovsd reg-reg: dst[es-1:0] = src2(r/m), dst[127:es] = src1(vvvv),
+                // dst[255:128] = 0. Merge the upper low-lane bits from vvvv, not zero.
+                int es = (pp == 2) ? 4 : 8;
+                uint8_t t[64];
+                avx_get(c, vv, d);       // src1 (vvvv) provides [127:es]
+                avx_get(c, I.rm_reg, t); // src2 (r/m) provides the low element
+                memcpy(d, t, es);
+                avx_put(c, rd, d, 16); // 128-bit result, upper 128/256 lanes zeroed
+            } else {
+                avx_get_rm(c, &I, next, (op == 0x10 && (pp == 2 || pp == 3)) ? (pp == 2 ? 4 : 8) : W, d);
+                // scalar ss/sd mem-load: only the low element loads, VEX zeroes the rest.
+                avx_put(c, rd, d, W);
+            }
             goto done;
         }
         case 0x11:
         case 0x29: { // rm <- dst.reg
-            avx_get(c, rd, d);
-            avx_put_rm(c, &I, next, (op == 0x11 && (pp == 2 || pp == 3)) ? (pp == 2 ? 4 : 8) : W, d);
+            if (op == 0x11 && (pp == 2 || pp == 3) && !I.is_mem) {
+                // VEX vmovss/vmovsd reg-reg store form: dst(r/m)[es-1:0] = src2(reg),
+                // dst[127:es] = src1(vvvv), dst[255:128] = 0.
+                int es = (pp == 2) ? 4 : 8;
+                uint8_t t[64];
+                avx_get(c, vv, d);   // src1 (vvvv) provides [127:es]
+                avx_get(c, rd, t);   // reg operand provides the low element
+                memcpy(d, t, es);
+                avx_put(c, I.rm_reg, d, 16);
+            } else {
+                avx_get(c, rd, d);
+                avx_put_rm(c, &I, next, (op == 0x11 && (pp == 2 || pp == 3)) ? (pp == 2 ? 4 : 8) : W, d);
+            }
             goto done;
         }
         case 0x6F: { // vmovdqa(66)/vmovdqu(F3) reg <- rm
