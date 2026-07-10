@@ -28,26 +28,6 @@ DDJIT_DIR="$PWD/target-workerA-syscall-audit/release/build/dd-jit-darwin-16122af
 
 Observed: native fires within 20ms (`ready=1 n8=1 exp=1`); dd does not fire within 150ms (`ready=0 n8=0 exp=0`). x86_64 showed the same mismatch.
 
-## Sentry `ppoll` Masks Stale Fds Instead Of `POLLNVAL`
-
-Priority: P1
-Impact: event loops can sleep through fd invalidation
-Confidence: High
-
-Verification status: Proven in isolated worktree `/Users/x/dd/dd-slot-G`.
-
-Evidence:
-
-- Sentry `ppoll` translates unmapped virtual fds to `-1`: `dd-jit-darwin/src/runtime/os/linux/sentry.c:1095`.
-
-Why this is bad:
-
-Linux reports `POLLNVAL` for stale or closed fds in a poll set. Mapping them to `-1` asks the host kernel to ignore them, so event loops miss invalidation.
-
-Isolated proof:
-
-The `audit_slot_g_sentry_fd.c` probe was run natively and under dd; the filtered JIT run failed with the expected oracle mismatch.
-
 ## Sentry Close-On-Exec Does Not Clean Virtual Fds
 
 Priority: P1
@@ -66,24 +46,6 @@ Guest close-on-exec semantics should close marked fds in the post-exec process. 
 Verification:
 
 Run an untrusted-mode probe that sets `FD_CLOEXEC` on a pipe, execs, and verifies the peer observes EOF.
-
-## Sentry `pselect6` Masks Invalid Virtual Fd Bits
-
-Priority: P2
-Impact: invalid fd readiness is hidden instead of `EBADF`
-Confidence: Medium
-
-Evidence:
-
-- Sentry `pselect6` rebuilds fd sets from virtual fds and silently skips unmapped/unrepresentable fds: `dd-jit-darwin/src/runtime/os/linux/sentry.c:1118`.
-
-Why this is bad:
-
-Linux `select`/`pselect` should fail `EBADF` for invalid positive fd bits. Skipping them can make event loops block instead of noticing closed fds.
-
-Verification:
-
-Run an untrusted-mode `pselect6` probe with an invalid positive fd bit and compare against native `EBADF`.
 
 ## Seccomp Filter Install Reports Success But Does Not Enforce
 
@@ -189,32 +151,6 @@ mac bash -lc 'DDJIT_DIR=$OUT $OUT/ddjit-linux_aarch64 scratch-worker-V/signalfd_
 ```
 
 Native printed `distinct=1 s2_eagain=1 s1_usr1=1`; dd printed `distinct=0 s2_eagain=0 s1_usr1=0`.
-
-## Signal Ucontext Stack Metadata Is Zero
-
-Priority: P2
-Impact: signal handlers see corrupted `ucontext_t.uc_stack`
-Confidence: High
-
-Verification status: Proven on aarch64 in isolated worktree `/Users/x/dd/dd-worker-V-jit-runtime-20260710`.
-
-Evidence:
-
-- aarch64 signal frames are zeroed and then selected fields are filled: `dd-jit-darwin/src/runtime/translate/aarch64/sigframe.c:27`.
-- aarch64 mask/register setup does not populate `uc_stack`: `dd-jit-darwin/src/runtime/translate/aarch64/sigframe.c:46`.
-- x86_64 signal frame construction has the same zeroed-frame pattern: `dd-jit-darwin/src/runtime/translate/x86_64/sigframe.c:40`.
-
-Why this is bad:
-
-Runtimes and crash handlers inspect `ucontext_t` to understand the active stack and altstack state. dd delivers handlers on the altstack but exposes zero stack metadata.
-
-Isolated proof:
-
-```sh
-mac bash -lc 'DDJIT_DIR=$OUT $OUT/ddjit-linux_aarch64 scratch-worker-V/sig_uc_stack.aarch64'
-```
-
-Native printed `seen=1 on_alt=1 uc_stack=1`; dd printed `seen=1 on_alt=1 uc_stack=0`.
 
 ## Epoll Loses Readiness When Watched Fd Closes But Dup Remains
 
@@ -376,76 +312,6 @@ Isolated proof:
 
 Linux observed `read_dup=32 read_dup_errno=0 first_mask=0x100`; dd observed `read_dup=-1 read_dup_errno=6`.
 
-## `SA_NOCLDWAIT` Does Not Suppress Zombies
-
-Priority: P1
-Impact: children remain waitable despite no-zombie signal policy
-Confidence: High
-
-Verification status: Proven in isolated worktree `/Users/x/dd/dd-wait-audit-20260710`.
-
-Evidence:
-
-- `rt_sigaction` stores flags but host handler setup uses only `SA_SIGINFO`: `dd-jit-darwin/src/runtime/os/linux/syscall/signal.c:394`, `dd-jit-darwin/src/runtime/os/linux/syscall/signal.c:420`.
-
-Why this is bad:
-
-Linux `SA_NOCLDWAIT` prevents child zombies. dd still leaves a reapable child, so supervisors can observe impossible wait behavior.
-
-Observed proof:
-
-```text
-Linux: sa_nocldwait sigs=1 wait=-1 errno=10 no_zombie=1 raw=0x0
-dd:    sa_nocldwait sigs=1 wait=38818 errno=0 no_zombie=0 raw=0x1700
-```
-
-## `SA_NOCLDSTOP` Still Delivers Stop SIGCHLD
-
-Priority: P2
-Impact: signal handlers see child-stop notifications that should be suppressed
-Confidence: High
-
-Verification status: Proven in isolated worktree `/Users/x/dd/dd-wait-audit-20260710`.
-
-Evidence:
-
-- Signal action flag handling stores flags but does not apply `SA_NOCLDSTOP` to host delivery: `dd-jit-darwin/src/runtime/os/linux/syscall/signal.c:394`, `dd-jit-darwin/src/runtime/os/linux/syscall/signal.c:420`.
-
-Why this is bad:
-
-With `SA_NOCLDSTOP`, Linux suppresses `SIGCHLD` for child stops and reports only termination. dd delivers a stop notification anyway.
-
-Observed proof:
-
-```text
-Linux: sa_nocldstop before=0 after=1 stop_ok=1 suppressed=1 raw=0x9
-dd:    sa_nocldstop before=1 after=2 stop_ok=1 suppressed=0 raw=0x137f
-```
-
-## aarch64 Signal Ucontext Omits FPSIMD Context Record
-
-Priority: P1
-Impact: signal handlers and crash reporters cannot discover SIMD state
-Confidence: High
-
-Verification status: Proven in isolated worktree `/Users/x/dd/dd-audit-aarch64-runtime-20260710`.
-
-Evidence:
-
-- aarch64 sigframe construction writes signal context directly: `dd-jit-darwin/src/runtime/translate/aarch64/sigframe.c:4`.
-- It copies raw NEON bytes into the reserved area without an `_aarch64_ctx` / `fpsimd_context` header: `dd-jit-darwin/src/runtime/translate/aarch64/sigframe.c:58`.
-
-Why this is bad:
-
-Linux aarch64 signal frames expose `FPSIMD_MAGIC` in `uc_mcontext.__reserved`. dd omits the context record, so handlers and unwind/crash tooling cannot locate SIMD state.
-
-Observed proof:
-
-```text
-Linux: fpsimd_ctx found=1 sane_size=1
-dd:    fpsimd_ctx found=0 sane_size=0
-```
-
 ## aarch64 4K Subpage `munmap` Returns `EINVAL`
 
 Priority: P2
@@ -493,31 +359,6 @@ Linux: mprotect_unmapped enomem=1 success=0 errno=12
 dd:    enomem=0 success=1 errno=0
 ```
 
-## Default Core Status Contradicts `RLIMIT_CORE=0`
-
-Priority: P1
-Impact: wait status reports core dumps despite zero core limit
-Confidence: High
-
-Verification status: Proven in isolated worktree `/Users/x/dd/dd-audit-proc-lifecycle-20260710`.
-
-Evidence:
-
-- `getrlimit(RLIMIT_CORE)` reports soft limit `0`: `dd-jit-darwin/src/runtime/os/linux/syscall/proc.c:190`.
-- Signal/core-limit helper defaults to `RLIM_INFINITY`: `dd-jit-darwin/src/runtime/os/linux/signal.c:136`.
-- `wait4` and `waitid` consume that contradictory state: `dd-jit-darwin/src/runtime/os/linux/syscall/proc.c:1901`, `dd-jit-darwin/src/runtime/os/linux/syscall/rare.c:719`.
-
-Why this is bad:
-
-With soft core limit `0`, Linux reports a terminating signal but not a core dump. dd reports core-dumped status even while `getrlimit` says core files are disabled.
-
-Observed proof:
-
-```text
-Linux: wait4_default_core soft0=1 core=0; waitid_default_core code=2 dumped=0
-dd:    wait4_default_core soft0=1 core=1; waitid_default_core code=3 dumped=1
-```
-
 ## `kill(0, sig)` Only Signals The Caller
 
 Priority: P1
@@ -539,30 +380,6 @@ Observed proof:
 ```text
 Linux/qemu: kill_zero ready=1 kill_ok=1 child_got=1
 dd:         kill_zero ready=1 kill_ok=1 child_got=0
-```
-
-## Proc Stat Reports Wrong Process Group And Session
-
-Priority: P2
-Impact: process discovery sees false job-control identity for forked children
-Confidence: High
-
-Verification status: Proven in isolated worktree `/Users/x/dd/dd-audit-pgrp-signal-20260710`.
-
-Evidence:
-
-- Self stat prints process group and session as `pid,pid`: `dd-jit-darwin/src/runtime/os/linux/container/vfs.c:1635`.
-- Peer stat prints session from process group data: `dd-jit-darwin/src/runtime/os/linux/container/vfs.c:2212`.
-
-Why this is bad:
-
-For a normal forked child, `/proc/<pid>/stat` fields 5 and 6 should match `getpgrp()` and `getsid()`. dd reports child-local values, so supervisors and job-control tools reconstruct the wrong process tree.
-
-Observed proof:
-
-```text
-Linux: child self stat_ok=1 pgrp_match=1 sid_match=1; parent peer stat_ok=1 sid_match=1
-dd:    child self stat_ok=1 pgrp_match=0 sid_match=0; parent peer stat_ok=1 sid_match=0
 ```
 
 ## Guest PROT_NONE Mappings Remain Directly Readable

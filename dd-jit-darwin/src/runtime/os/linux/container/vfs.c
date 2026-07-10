@@ -1648,6 +1648,12 @@ static int proc_stat_text(char *b, size_t n) {
     proc_comm(comm, sizeof comm);
     int pid = container_pid();
     int ppid = pid == 1 ? 0 : (int)getppid();
+    // Fields 5 (pgrp) and 6 (session) must match the guest's getpgrp()/getsid() -- for a forked child those
+    // are its real host process group / session (init's real group/session mapped to guest 1), NOT the
+    // child's own pid. The old code printed pid,pid, so a supervisor reconstructed a wrong process tree.
+    int hpgrp = (int)getpgid(0), hsid = (int)getsid(0);
+    int gpgrp = (g_init_hostpid && hpgrp == g_init_hostpid) ? 1 : hpgrp;
+    int gsid = (g_init_hostpid && hsid == g_init_hostpid) ? 1 : hsid;
     long pg = sysconf(_SC_PAGESIZE);
     unsigned long pgsz = pg > 0 ? (unsigned long)pg : 4096;
     unsigned long rss_pg = (unsigned long)(self_rss_bytes() / pgsz);
@@ -1655,7 +1661,7 @@ static int proc_stat_text(char *b, size_t n) {
     return snprintf(b, n,
                     "%d (%s) R %d %d %d 0 -1 4194560 0 0 0 0 0 0 0 0 20 0 1 0 100 %lu %lu 18446744073709551615 "
                     "0 0 0 0 0 0 0 0 0 0 0 0 0 17 0 0 0 0 0 0 0 0 0 0 0 0 0\n",
-                    pid, comm, ppid, pid, pid, vsize, rss_pg);
+                    pid, comm, ppid, gpgrp, gsid, vsize, rss_pg);
 }
 
 // /proc/[pid]/environ -- the guest environment as NUL-separated KEY=VALUE. The authoritative source is
@@ -2307,6 +2313,10 @@ static int proc_stat_pid_text(char *b, size_t n, int gp, int host) {
             ppid = pi.ppid_host;
     }
     int pgrp = ok ? (pi.pgid_host == g_init_hostpid ? 1 : pi.pgid_host) : gp;
+    // Field 6 (session): the peer's real host session id (init's session -> guest 1), NOT its own pid. The
+    // old code printed gp (the pid), so getsid() and /proc/<pid>/stat disagreed for a normal child.
+    int hsid = (int)getsid(host);
+    int psess = (hsid > 0) ? ((g_init_hostpid && hsid == g_init_hostpid) ? 1 : hsid) : gp;
     long hz = sysconf(_SC_CLK_TCK);
     if (hz <= 0) hz = 100;
     long pg = sysconf(_SC_PAGESIZE);
@@ -2324,7 +2334,7 @@ static int proc_stat_pid_text(char *b, size_t n, int gp, int host) {
     return snprintf(b, n,
                     "%d (%s) %c %d %d %d 0 -1 4194560 0 0 0 0 %llu %llu 0 0 20 0 %d 0 %llu %llu %lu "
                     "18446744073709551615 0 0 0 0 0 0 0 0 0 0 0 0 0 17 0 0 0 0 0 0 0 0 0 0 0 0 0\n",
-                    gp, comm, state, ppid, pgrp, gp, utime, stime, nthreads, start_ticks, vsize, rss_pg);
+                    gp, comm, state, ppid, pgrp, psess, utime, stime, nthreads, start_ticks, vsize, rss_pg);
 }
 
 // /proc/<pid>/status for a peer -- the key:value form with GUEST Pid/PPid and REAL VmRSS.

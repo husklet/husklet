@@ -1015,6 +1015,9 @@ static void sentry_service_one(struct sentry_ring *R) {
     static __thread uint8_t psel_save[3][128]; // pselect: saved ORIGINAL virtual fd_sets, for the result remap
     static __thread uint32_t psel_nfds;        // pselect: guest nfds (bounded to the table)
     static __thread uint8_t psel_present[3];   // pselect: which of rd/wr/ex sets were supplied
+    // ppoll: bit k set = pollfd[k] named a POSITIVE virtual fd that is not mapped (stale/closed) -> the
+    // OUT-path reports POLLNVAL for it (Linux), rather than the kernel silently ignoring a -1 entry.
+    static __thread uint8_t poll_nval[SENTRY_DATACAP / 8u / 8u + 1u];
     int handled_local = 0;
     int64_t local_ret = 0;
     {
@@ -1094,10 +1097,16 @@ static void sentry_service_one(struct sentry_ring *R) {
             }
             case 73: { // ppoll: translate each pollfd.fd (8B/entry, fd at +0) in the ring array to its real fd
                 uint32_t nfds = (uint32_t)G_A1(&tmp);
+                memset(poll_nval, 0, sizeof poll_nval);
                 for (uint32_t k = 0; k < nfds; k++) {
                     int *fdp = (int *)(R->buf + (size_t)k * 8u);
-                    int r = vfd_real(p, *fdp);
-                    *fdp = (r < 0) ? -1 : r; // an unmapped fd polls as -1 (kernel ignores it), never a wrong fd
+                    int ofd = *fdp;
+                    int r = vfd_real(p, ofd);
+                    // A POSITIVE fd the sentry never handed this guest is stale/closed -> Linux reports
+                    // POLLNVAL for it (remembered here, applied on the OUT-path). A NEGATIVE fd is a
+                    // caller-requested ignore and legitimately polls as -1 (revents 0).
+                    if (r < 0 && ofd >= 0 && k < sizeof(poll_nval) * 8u) poll_nval[k >> 3] |= (uint8_t)(1u << (k & 7));
+                    *fdp = (r < 0) ? -1 : r; // never forward a wrong fd
                 }
                 break;
             }
@@ -1118,10 +1127,15 @@ static void sentry_service_one(struct sentry_ring *R) {
                     for (uint32_t v = 0; v < nfds; v++) {
                         if (!(psel_save[s][v >> 3] & (1u << (v & 7)))) continue;
                         int r = vfd_real(p, (int)v);
-                        if (r < 0 || (uint32_t)r >= 1024u) continue; // unmapped/unrepresentable -> not selectable
+                        if (r < 0) {
+                            eb = 1; // Linux select/pselect: an invalid fd in any set -> EBADF, not a silent skip
+                            break;
+                        }
+                        if ((uint32_t)r >= 1024u) continue; // unrepresentable in the real fd_set -> not selectable
                         win[s][r >> 3] |= (uint8_t)(1u << (r & 7));
                         if (r > maxreal) maxreal = r;
                     }
+                    if (eb) break;
                 }
                 G_A0(&tmp) = (uint64_t)(maxreal + 1); // real nfds
                 break;
@@ -1215,6 +1229,22 @@ static void sentry_service_one(struct sentry_ring *R) {
                 break;
             case 212: // recvmsg: virtualize any SCM_RIGHTS real fds the sentry received in the control window
                 if (ret >= 0 && coff) sentry_cmsg_translate_in(p, R->buf + coff, (size_t)*(uint64_t *)(R->buf + 40));
+                break;
+            case 73: // ppoll: stamp POLLNVAL(0x20) into revents(+6,2B) for each entry that named a stale/closed
+                     //   positive virtual fd (marked on the IN-path). The kernel returned revents 0 for the -1
+                     //   we substituted; Linux reports POLLNVAL so an event loop notices the invalidation. A
+                     //   POLLNVAL entry also counts toward the ready-fd return value.
+                {
+                    uint32_t nf = (uint32_t)R->a[1];
+                    for (uint32_t k = 0; k < nf; k++) {
+                        if (!(poll_nval[k >> 3] & (1u << (k & 7)))) continue;
+                        uint16_t *rev = (uint16_t *)(R->buf + (size_t)k * 8u + 6u);
+                        if (!(*rev & 0x20u)) {
+                            *rev |= 0x20u; // POLLNVAL
+                            if (R->ret >= 0) R->ret++;
+                        }
+                    }
+                }
                 break;
             case 72: // pselect6: remap the kernel-narrowed REAL fd_sets back to the guest's VIRTUAL fd positions
                 if (ret >= 0) {

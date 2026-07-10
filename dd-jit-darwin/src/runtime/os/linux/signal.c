@@ -130,12 +130,15 @@ static int sig_coredumps(int sig) {
 }
 
 // Current soft RLIMIT_CORE (resource 4), guest-visible: a docker --ulimit / the guest's own
-// setrlimit/prlimit64 store (g_ulimit, seeded in state.c) wins, else the dd default (unlimited). A core
-// dump only happens when a coredumping signal kills a process whose SOFT core limit is nonzero, so this is
-// the single input WCOREDUMP is gated on. g_ulimit/DD_RLIM_MAX come from container/state.c (included first).
+// setrlimit/prlimit64 store (g_ulimit, seeded in state.c) wins, else the dd default. A core dump only
+// happens when a coredumping signal kills a process whose SOFT core limit is nonzero, so this is the single
+// input WCOREDUMP is gated on. g_ulimit/DD_RLIM_MAX come from container/state.c (included first).
+// The default MUST be 0 (cores OFF), matching getrlimit(RLIMIT_CORE)'s Linux/docker default soft=0 -- the
+// old RLIM_INFINITY default contradicted getrlimit and made every crash report WCOREDUMP even though cores
+// were disabled (wait4/waitid reported CLD_DUMPED while getrlimit said the core limit was 0).
 static uint64_t svc_core_rlimit_cur(void) {
     if (4 < DD_RLIM_MAX && g_ulimit[4].set) return g_ulimit[4].cur;
-    return ~0ull; // RLIM_INFINITY
+    return 0; // Linux/docker default: cores OFF (soft RLIMIT_CORE = 0)
 }
 
 // ---------------- guest signal-death relay ----------------
@@ -266,6 +269,15 @@ static void host_sigh_si(int sig, siginfo_t *si, void *uc) {
     if (si && si->si_pid > 0) {
         g_sigpid[ls] = (int)si->si_pid;
         g_siguid[ls] = (int)si->si_uid;
+    }
+    // SA_NOCLDWAIT on the guest's SIGCHLD: Linux still DELIVERS the SIGCHLD but leaves no zombie. macOS's own
+    // SA_NOCLDWAIT would suppress the signal entirely, so we don't set it (see rt_sigaction) -- instead
+    // auto-reap every terminated child here (WNOHANG, and no WUNTRACED so a stopped child is left alone). The
+    // guest handler still runs (host_sig_pend below) and a later wait() sees ECHILD. Gated on the guest opt-in.
+    if (ls == 17 && (g_sigact[17].flags & 0x2)) {
+        int wst;
+        while (waitpid(-1, &wst, WNOHANG) > 0) {
+        }
     }
     host_sig_pend(ls);
 }

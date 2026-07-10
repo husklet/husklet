@@ -43,7 +43,20 @@ static void build_signal_frame(struct cpu *c, int sig) {
     g_sigaddr[sig] = 0;
     g_sigpid[sig] = 0;
     g_siguid[sig] = 0; // consumed
-    uint64_t uc = frame + 128, mc = uc + 168;
+    // uc_mcontext sits at uc+176, NOT uc+168: mcontext_t is 16-byte aligned, so the kernel/glibc pad 8 bytes
+    // after the 128-byte uc_sigmask (which ends at 168). The old mc=168 placed EVERY sigcontext field -- the
+    // saved regs, sp, pc, pstate, and the __reserved FPSIMD area -- 8 bytes early, so a handler reading
+    // uc_mcontext (Go's async-preempt pc, a crash reporter's registers, the FPSIMD record) saw shifted
+    // garbage and could not locate the SIMD context. Match the real frame exactly.
+    uint64_t uc = frame + 128, mc = uc + 176;
+    // uc_stack: expose the configured sigaltstack (ss_sp@16, ss_flags@24, ss_size@32) so a handler or crash
+    // reporter can discover the active stack -- Linux fills this from the task's sigaltstack. SS_DISABLE when
+    // none is configured; SS_ONSTACK(1) when this handler is being delivered on the alt stack. Was left zero.
+    *(uint64_t *)(uc + 16) = c->alt_sp;   // ss_sp
+    *(uint64_t *)(uc + 32) = c->alt_size; // ss_size
+    *(int *)(uc + 24) = (!c->alt_sp || (c->alt_flags & SS_DISABLE_L)) ? (int)SS_DISABLE_L
+                        : (base != c->sp)                             ? 1 /*SS_ONSTACK*/
+                                                                      : 0;
     // uc_sigmask (signal mask to restore)
     *(uint64_t *)(uc + 40) = c->sigmask;
     for (int i = 0; i < 31; i++)
@@ -55,8 +68,20 @@ static void build_signal_frame(struct cpu *c, int sig) {
     // reads it back and the dispatcher re-biases low->high on resume. pcrel_base is identity for PIE.
     *(uint64_t *)(mc + 264) = pcrel_base(c->pc);
     *(uint64_t *)(mc + 272) = c->nzcv;
-    // preserve NEON across the handler
-    memcpy((void *)(mc + 280), c->v, sizeof c->v);
+    // preserve NEON across the handler. Linux wraps it in a struct fpsimd_context inside uc_mcontext.
+    // __reserved, tagged with an _aarch64_ctx{magic=FPSIMD_MAGIC, size} header so handlers and unwind/crash
+    // tooling can locate the SIMD state (they scan the reserved chain for FPSIMD_MAGIC). The old code dumped
+    // raw NEON bytes with no header, so the record was invisible. Layout: head(8) + fpsr(4) + fpcr(4) +
+    // vregs[32] (512) = 528, then a null _aarch64_ctx terminator ends the chain. __reserved is 16-aligned
+    // within the mcontext, so it starts at mc+288 (the 280-byte sigcontext head rounded up to 16).
+    uint8_t *rsv = (uint8_t *)(mc + 288);
+    *(uint32_t *)(rsv + 0) = 0x46508001u;    // FPSIMD_MAGIC
+    *(uint32_t *)(rsv + 4) = 528u;           // sizeof(struct fpsimd_context)
+    *(uint32_t *)(rsv + 8) = 0;              // fpsr (not separately modelled)
+    *(uint32_t *)(rsv + 12) = 0;             // fpcr
+    memcpy(rsv + 16, c->v, sizeof c->v);     // vregs[32]
+    *(uint32_t *)(rsv + 16 + sizeof c->v + 0) = 0; // terminator magic = 0
+    *(uint32_t *)(rsv + 16 + sizeof c->v + 4) = 0; // terminator size  = 0
     c->x[0] = (uint64_t)sig;
     c->x[1] = frame;
     // handler(signo, siginfo*, ucontext*)
@@ -71,13 +96,14 @@ static void build_signal_frame(struct cpu *c, int sig) {
 }
 
 static void do_sigreturn(struct cpu *c) {
-    uint64_t frame = c->sp, uc = frame + 128, mc = uc + 168;
+    uint64_t frame = c->sp, uc = frame + 128, mc = uc + 176; // mcontext at uc+176 (see build_signal_frame)
     for (int i = 0; i < 31; i++)
         c->x[i] = *(uint64_t *)(mc + 8 + i * 8);
     c->sp = *(uint64_t *)(mc + 256);
     c->pc = *(uint64_t *)(mc + 264);
     c->nzcv = *(uint64_t *)(mc + 272);
-    memcpy(c->v, (void *)(mc + 280), sizeof c->v);
+    // vregs live in the fpsimd_context after its 16-byte header (magic/size/fpsr/fpcr), at __reserved (mc+288).
+    memcpy(c->v, (void *)(mc + 288 + 16), sizeof c->v);
     c->sigmask = *(uint64_t *)(uc + 40);
 }
 

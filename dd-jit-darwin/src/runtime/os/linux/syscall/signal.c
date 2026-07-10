@@ -443,6 +443,13 @@ static int svc_signal(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint
                     memset(&sa, 0, sizeof sa);
                     sa.sa_sigaction = host_sigh_si;
                     sa.sa_flags = SA_SIGINFO;
+                    // SIGCHLD: honor SA_NOCLDSTOP by forwarding it to the host SIGCHLD action (Linux flag bit
+                    // NOCLDSTOP=0x1 differs from macOS's value, so translate) -- the host then suppresses the
+                    // child-stop SIGCHLD. SA_NOCLDWAIT is NOT forwarded: macOS SA_NOCLDWAIT also SUPPRESSES the
+                    // termination SIGCHLD, whereas Linux still delivers it -- so we keep the normal handler and
+                    // auto-reap the terminated child inside host_sigh_si instead (see there), which both runs
+                    // the guest handler AND leaves no zombie (guest wait() -> ECHILD).
+                    if (sig == 17 && (g_sigact[sig].flags & 0x1)) sa.sa_flags |= SA_NOCLDSTOP;
                     sigfillset(&sa.sa_mask);
                     sigaction(ms, &sa, NULL);
                 }
