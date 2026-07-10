@@ -194,6 +194,36 @@ static void kqueue_rebuild_after_fork(void) {
     pthread_mutex_init(&g_ep_mtx, NULL);
 }
 
+// pselect6/ppoll/epoll_pwait install a temporary signal mask for the duration of the wait (Linux swaps the
+// blocked mask atomically so a caller can unblock a signal exactly while it waits). dd's wait loops gate on
+// c->sigmask via svc_poll_retry, so installing the guest mask into c->sigmask for the wait makes an
+// unblocked signal interrupt the host poll/select/kevent -- previously the mask was ignored and a
+// signal-driven wait slept the full timeout. `smptr` is the guest sigset_t address (bit signo-1), or 0 for
+// "no temporary mask". Returns 1 if a mask was installed (previous mask stored in *saved).
+static int poll_sigmask_enter(struct cpu *c, uint64_t smptr, uint64_t *saved) {
+    if (!smptr) return 0;
+    uint64_t nm = *(uint64_t *)smptr;
+    nm &= ~((1ull << (9 - 1)) | (1ull << (19 - 1))); // SIGKILL/SIGSTOP can never be blocked
+    *saved = c->sigmask;
+    c->sigmask = nm;
+    return 1;
+}
+// Restore the pre-wait mask. A signal that became deliverable under the temporary mask but is blocked under
+// the restored mask must still run its handler (Linux delivers it during the wait, then restores the mask on
+// return) -- force exactly those bits via g_force_deliver, mirroring rt_sigsuspend (signal.c case 133).
+static void poll_sigmask_leave(struct cpu *c, uint64_t saved) {
+    uint64_t temp = c->sigmask;
+    uint64_t p = __atomic_load_n(&g_pending, __ATOMIC_SEQ_CST) | __atomic_load_n(&c->tpending, __ATOMIC_SEQ_CST);
+    for (int s = 1; s <= 64; s++) {
+        uint64_t bit = 1ull << s;
+        if (!(p & bit)) continue;
+        if (temp & (1ull << (s - 1))) continue; // was blocked during the wait -> not delivered
+        if ((saved & (1ull << (s - 1))) && g_sigact[s].handler > 1)
+            g_force_deliver |= bit; // blocked again on restore, but Linux already delivered it -> force it
+    }
+    c->sigmask = saved;
+}
+
 static int svc_event(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4,
                      uint64_t a5) {
     switch (nr) {
@@ -411,6 +441,20 @@ static int svc_event(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint6
             break;
         }
         if (maxev > 256) maxev = 256;
+        // epoll_pwait(epfd, events, max, tmo, sigmask, sigsetsize): a4 is the guest sigset_t pointer, a5 its
+        // size. Apply the temporary signal mask for the wait (Linux swaps it atomically); NULL a4 = no mask.
+        uint64_t sm_set = 0, sm_saved = 0;
+        if (a4) {
+            if ((size_t)a5 != 8) {
+                G_RET(c) = (uint64_t)(int64_t)(-EINVAL);
+                break;
+            }
+            if (guest_bad_ptr(a4, 8)) {
+                G_RET(c) = (uint64_t)(int64_t)(-EFAULT);
+                break;
+            }
+            sm_set = a4;
+        }
         struct kevent kv[256];
         uint8_t *out = (uint8_t *)a1;
         int ep = (int)a0;
@@ -438,6 +482,7 @@ static int svc_event(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint6
             }
         }
         int oi = 0;
+        int sm_on = poll_sigmask_enter(c, sm_set, &sm_saved);
         for (;;) {
             struct timespec ts, *tp = NULL;
             if (tmo == 0) {
@@ -566,6 +611,7 @@ static int svc_event(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint6
             G_RET(c) = (uint64_t)oi;
             break;
         }
+        if (sm_on) poll_sigmask_leave(c, sm_saved);
         break;
     }
     case 26: {
@@ -653,6 +699,29 @@ static int svc_event(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint6
                 break;
             }
         }
+        // pselect6 6th arg (a5): pointer to { const sigset_t *ss; size_t ss_len; }. Resolve the guest sigset
+        // address so the wait honours the temporary signal mask Linux swaps in atomically (see
+        // poll_sigmask_enter). NULL a5 (or a NULL inner ss) = no temporary mask.
+        uint64_t sm_set = 0, sm_saved = 0;
+        if (a5) {
+            if (guest_bad_ptr(a5, 16)) {
+                G_RET(c) = (uint64_t)(int64_t)(-EFAULT);
+                break;
+            }
+            const uint64_t *pk = (const uint64_t *)a5;
+            uint64_t ssp = pk[0], sslen = pk[1];
+            if (ssp) {
+                if (sslen != 8) {
+                    G_RET(c) = (uint64_t)(int64_t)(-EINVAL);
+                    break;
+                }
+                if (guest_bad_ptr(ssp, 8)) {
+                    G_RET(c) = (uint64_t)(int64_t)(-EFAULT);
+                    break;
+                }
+                sm_set = ssp;
+            }
+        }
         // a spurious EINTR (a signal dd hooks with host_sigh but the guest has BLOCKED or defaults to
         // ignore -- e.g. an LTP heartbeat, or SIGCHLD from a reaped child) interrupts the host pselect but
         // must NOT restart the FULL original timeout: that overshoots the deadline and, under a *repeating*
@@ -671,6 +740,7 @@ static int svc_event(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint6
                 deadline.tv_nsec -= 1000000000L;
             }
         }
+        int sm_on = poll_sigmask_enter(c, sm_set, &sm_saved);
         int r;
         for (;;) {
             struct timespec rem, *tsp = NULL;
@@ -691,6 +761,7 @@ static int svc_event(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint6
             if (r < 0 && svc_poll_retry(c)) continue;
             break;
         }
+        if (sm_on) poll_sigmask_leave(c, sm_saved);
         if (r >= 0 && have_to) {
             struct timespec now;
             clock_gettime(CLOCK_MONOTONIC, &now);
@@ -723,6 +794,20 @@ static int svc_event(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint6
             G_RET(c) = (uint64_t)(-EINVAL);
             break;
         }
+        // ppoll(fds, n, tmo, sigmask, sigsetsize): a3 is the guest sigset_t pointer, a4 its size. Apply the
+        // temporary signal mask for the duration of the wait (Linux swaps it atomically); NULL a3 = no mask.
+        uint64_t sm_set = 0, sm_saved = 0;
+        if (a3) {
+            if ((size_t)a4 != 8) {
+                G_RET(c) = (uint64_t)(int64_t)(-EINVAL);
+                break;
+            }
+            if (guest_bad_ptr(a3, 8)) {
+                G_RET(c) = (uint64_t)(int64_t)(-EFAULT);
+                break;
+            }
+            sm_set = a3;
+        }
         int have_to = ts != NULL;
         // Full requested budget in ms, clamped (see above).
         int tmo_full;
@@ -749,6 +834,7 @@ static int svc_event(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint6
                 deadline.tv_nsec -= 1000000000L;
             }
         }
+        int sm_on = poll_sigmask_enter(c, sm_set, &sm_saved);
         int r;
         for (;;) {
             int tmo = tmo_full;
@@ -772,6 +858,7 @@ static int svc_event(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint6
             if (r < 0 && svc_poll_retry(c)) continue;
             break;
         }
+        if (sm_on) poll_sigmask_leave(c, sm_saved);
         // Linux ppoll(2) writes the leftover time back into the timespec (glibc's ppoll wrapper hides it via
         // a local copy, so this is invisible to POSIX callers but correct for the raw syscall).
         if (r >= 0 && have_to) {

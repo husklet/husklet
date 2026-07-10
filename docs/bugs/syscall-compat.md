@@ -104,31 +104,6 @@ Verification:
 
 Promote the native oracle checked in `/Users/x/dd/dd-slot-G` into a dd-tests probe for unknown op and flag combinations.
 
-## x86_64 `mincore(..., vec=NULL)` Succeeds
-
-Priority: P2
-Impact: invalid copyout pointer is masked
-Confidence: High
-
-Verification status: Proven for x86_64 in isolated worktree `/Users/x/dd/dd-audit-slotN`.
-
-Evidence:
-
-- The x86 guest-page slow path uses a scratch host vector: `dd-jit-darwin/src/runtime/os/linux/syscall/mem.c:773`.
-- It validates/copies the guest vector only when `a2` is non-null: `dd-jit-darwin/src/runtime/os/linux/syscall/mem.c:774`.
-
-Why this is bad:
-
-Linux returns `EFAULT` for a null output vector. dd can return success, hiding caller bugs.
-
-Isolated proof:
-
-```sh
-cargo run -p dd-tests -- audit-mincore-nullvec
-```
-
-Result: aarch64 passed, x86_64 failed. dd `efault=0`; native `efault=1`.
-
 ## Plain `dup()` Drops Proc-Text Read-Only Metadata
 
 Priority: P2
@@ -245,56 +220,6 @@ Why this is bad:
 
 Programs using `mlockall` for latency control can receive success-like state while pages are still pageable by the host. This is mainly a documented model gap, but it should stay visible because it affects performance-sensitive workloads.
 
-## `pselect6` And `ppoll` Ignore Temporary Signal Masks
-
-Priority: P1
-Impact: signal-driven waits can sleep through deliverable signals
-Confidence: High
-
-Verification status: Proven in isolated worktree `/Users/x/dd/dd-worker-U`.
-
-Evidence:
-
-- `pselect6` validates fdsets/timeout but ignores the raw mask argument: `dd-jit-darwin/src/runtime/os/linux/syscall/event.c:619`.
-- It calls host `pselect` with a null mask: `dd-jit-darwin/src/runtime/os/linux/syscall/event.c:663`.
-- `ppoll` has the same class, calling plain `poll`: `dd-jit-darwin/src/runtime/os/linux/syscall/event.c:681`.
-
-Why this is bad:
-
-Linux atomically swaps the signal mask for `pselect6`/`ppoll`. Event loops rely on this to avoid missed wakeups. Ignoring the mask can turn a signal wakeup into a full timeout or hang.
-
-Isolated proof:
-
-```sh
-aarch64-linux-gnu-gcc -O2 -static -Wall -Wextra -o scratch-worker-U/poc_pselect_mask scratch-worker-U/poc_pselect_mask.c
-```
-
-Native woke on `SIGUSR1` in about `104ms` with `EINTR`; dd slept the full second and returned timeout with the handler not run.
-
-## Pipe Size Fcntls Fake Success On Invalid Fds
-
-Priority: P2
-Impact: pipe capability probes get wrong results
-Confidence: High
-
-Verification status: Proven in isolated worktree `/Users/x/dd/dd-worker-U`.
-
-Evidence:
-
-- `F_SETPIPE_SZ` / `F_GETPIPE_SZ` return synthetic pipe sizes without first validating the fd or pipe type: `dd-jit-darwin/src/runtime/os/linux/syscall/io.c:1123`.
-
-Why this is bad:
-
-Linux returns `EBADF` for invalid fds and rejects non-pipe fds. dd reports sizes and success, so callers can believe a regular file or bad fd is a pipe.
-
-Isolated proof:
-
-```sh
-aarch64-linux-gnu-gcc -O2 -static -Wall -Wextra -o scratch-worker-U/poc_fcntl_pipesz scratch-worker-U/poc_fcntl_pipesz.c
-```
-
-Native returned errors for a bad fd and `/dev/null`; dd reported pipe sizes and success.
-
 ## Multiple `signalfd` Descriptors Are Not Independent
 
 Priority: P1
@@ -346,31 +271,6 @@ mac bash -lc 'DDJIT_DIR=$OUT $OUT/ddjit-linux_aarch64 scratch-worker-V/sig_uc_st
 ```
 
 Native printed `seen=1 on_alt=1 uc_stack=1`; dd printed `seen=1 on_alt=1 uc_stack=0`.
-
-## `clock_nanosleep(TIMER_ABSTIME)` Swallows Interrupts
-
-Priority: P1
-Impact: signal-driven timers can sleep until the full deadline
-Confidence: High
-
-Verification status: Proven in isolated worktree `/Users/x/dd/dd-worker-V-jit-runtime-20260710`.
-
-Evidence:
-
-- Absolute `clock_nanosleep` loops on host `EINTR`: `dd-jit-darwin/src/runtime/os/linux/syscall/time.c:356`.
-- The loop returns `0` after reaching the deadline: `dd-jit-darwin/src/runtime/os/linux/syscall/time.c:378`.
-
-Why this is bad:
-
-Linux returns `EINTR` when a deliverable signal interrupts `clock_nanosleep`. dd can hide the interrupt, run the handler, sleep until the original deadline, and report success.
-
-Isolated proof:
-
-```sh
-mac bash -lc 'DDJIT_DIR=$OUT $OUT/ddjit-linux_aarch64 scratch-worker-V/clock_abs_eintr.aarch64'
-```
-
-Native printed `rc=4 hit=1 elapsed_ms=101`; dd printed `rc=0 hit=1 elapsed_ms=1002`.
 
 ## `dup(eventfd)` Loses Eventfd Semantics
 
@@ -650,30 +550,6 @@ Observed proof:
 ```text
 Linux: rem_sec=0 ... poll=1 ... elapsed_ms=85 read=8 ... count=1
 dd:    rem_sec=1782499723 ... poll=0 ... elapsed_ms=401 read=-1 read_errno=11 count=0
-```
-
-## `epoll_pwait` Ignores Temporary Signal Mask
-
-Priority: P1
-Impact: signal-interruptible epoll waits can sleep through unblocked signals
-Confidence: High
-
-Verification status: Proven in isolated worktree `/Users/x/dd/dd-worker-BQ2-fd-event-20260710`.
-
-Evidence:
-
-- The syscall dispatch path accepts and converts the sigmask pointer: `dd-jit-darwin/src/runtime/os/linux/syscall/dispatch.c:882`.
-- The event wait path does not apply the temporary mask: `dd-jit-darwin/src/runtime/os/linux/syscall/event.c:405`, `dd-jit-darwin/src/runtime/os/linux/syscall/event.c:480`.
-
-Why this is bad:
-
-`epoll_pwait` should temporarily replace the signal mask while waiting. dd ignores that mask, so a signal that should interrupt the wait remains blocked until after timeout.
-
-Observed proof:
-
-```text
-Linux: ret=-1 errno=4 hit=1 elapsed_ms=105
-dd:    ret=0 errno=0 hit=0 elapsed_ms=800
 ```
 
 ## `FUTEX_WAIT_BITSET` / `FUTEX_WAKE_BITSET` Ignore Masks
@@ -961,29 +837,6 @@ Linux/qemu: kill_zero ready=1 kill_ok=1 child_got=1
 dd:         kill_zero ready=1 kill_ok=1 child_got=0
 ```
 
-## `tcgetpgrp` `tcsetpgrp` Fake Success On Non-TTY FDs
-
-Priority: P1
-Impact: terminal control probes accept regular fds as controlling terminals
-Confidence: High
-
-Verification status: Proven in isolated worktree `/Users/x/dd/dd-audit-pgrp-signal-20260710`.
-
-Evidence:
-
-- `TIOCGPGRP` falls back to `getpgrp()` and `TIOCSPGRP` ignores failures: `dd-jit-darwin/src/runtime/os/linux/syscall/fs.c:751`.
-
-Why this is bad:
-
-Linux returns `ENOTTY` when terminal process-group ioctls target a non-tty fd. dd reports success, causing terminal detection and foreground process-group setup to believe a regular file is a usable tty.
-
-Observed proof:
-
-```text
-Linux/qemu: tty_pgrp get_enotty=1 set_enotty=1
-dd:         tty_pgrp get_enotty=0 set_enotty=0 raw_get=12413 raw_set=0
-```
-
 ## Proc Stat Reports Wrong Process Group And Session
 
 Priority: P2
@@ -1081,169 +934,6 @@ Observed proof:
 ```text
 Linux/qemu: exec_noexec outcome=fault sig=11 code=2 addr_delta=0
 dd:         exec_noexec outcome=exec_ok ret=42
-```
-
-## aarch64 `mincore` Accepts PROT_NONE Vec
-
-Priority: P2
-Impact: syscall output can write through an inaccessible guest buffer
-Confidence: High
-
-Verification status: Proven in isolated worktree `/Users/x/dd/dd-audit-jit-perm-fault-20260710`.
-
-Evidence:
-
-- aarch64 `mincore` fast path passes the guest `vec` pointer to host `mincore`: `dd-jit-darwin/src/runtime/os/linux/syscall/mem.c:745`, `dd-jit-darwin/src/runtime/os/linux/syscall/mem.c:747`.
-- The path bypasses guest `PROT_NONE` range validation: `dd-jit-darwin/src/runtime/os/linux/syscall/mem.c:779`, `dd-jit-darwin/src/runtime/os/linux/thread.c:334`.
-
-Why this is bad:
-
-Linux returns `EFAULT` when `vec` points to an inaccessible page. dd/aarch64 reports success because host memory is still writable, bypassing guest protection bookkeeping and corrupting fault compatibility.
-
-Observed proof:
-
-```text
-Linux/aarch64: mincore_vec_protnone rc=-1 errno=14
-dd/aarch64:    mincore_vec_protnone rc=0 errno=0
-```
-
-## `unlinkat` Ignores Unknown Flags And Deletes The File
-
-Priority: P1
-Impact: invalid unlink calls can delete data instead of failing
-Confidence: High
-
-Verification status: Proven in isolated worktree `/Users/x/dd/dd-audit-runtime-fs-syscalls-20260710`.
-
-Evidence:
-
-- `unlinkat` flag handling masks only `AT_REMOVEDIR` and does not reject unknown bits: `dd-jit-darwin/src/runtime/os/linux/syscall/fs.c:900`, `dd-jit-darwin/src/runtime/os/linux/syscall/fs.c:1027`, `dd-jit-darwin/src/runtime/os/linux/syscall/fs.c:1054`.
-
-Why this is bad:
-
-Linux returns `EINVAL` and preserves the target when `unlinkat` receives unknown flags. dd returns success and deletes the file, turning a bad feature probe or corrupted flag value into data loss.
-
-Observed proof:
-
-```text
-Linux/qemu: bad_errno=22 after_bad_exists=1 cleanup_errno=0
-dd:         bad_errno=0 after_bad_exists=0 cleanup_errno=2
-```
-
-## `fallocate` Accepts Invalid Modes And Mutates Data
-
-Priority: P1
-Impact: invalid allocation mode combinations can shrink, grow, or zero files
-Confidence: High
-
-Verification status: Proven in isolated worktree `/Users/x/dd/dd-audit-runtime-fs-syscalls-20260710`.
-
-Evidence:
-
-- `fallocate` validates only unknown bits, then dispatches by the first matching mode bit: `dd-jit-darwin/src/runtime/os/linux/syscall/fs.c:1480`, `dd-jit-darwin/src/runtime/os/linux/syscall/fs.c:1535`, `dd-jit-darwin/src/runtime/os/linux/syscall/fs.c:1565`, `dd-jit-darwin/src/runtime/os/linux/syscall/fs.c:1600`.
-
-Why this is bad:
-
-Linux rejects combinations such as `COLLAPSE_RANGE|KEEP_SIZE`, `INSERT_RANGE|KEEP_SIZE`, and `ZERO_RANGE|COLLAPSE_RANGE`. dd performs the first matching operation and reports success, silently changing file size or contents.
-
-Observed proof:
-
-```text
-Linux/qemu: invalid combinations return 95; size/data unchanged
-dd:         return 0; collapse shrinks 26 -> 22, insert grows 26 -> 30, zero combo overwrites bytes
-```
-
-## `fallocate` Range Overflow Reports Success
-
-Priority: P1
-Impact: impossible allocation ranges are reported as successfully reserved
-Confidence: High
-
-Verification status: Proven in isolated worktree `/Users/x/dd/dd-audit-runtime-fs-syscalls-20260710`.
-
-Evidence:
-
-- Range end calculations do not check `off + len` overflow: `dd-jit-darwin/src/runtime/os/linux/syscall/fs.c:1536`, `dd-jit-darwin/src/runtime/os/linux/syscall/fs.c:1566`, `dd-jit-darwin/src/runtime/os/linux/syscall/fs.c:1647`.
-
-Why this is bad:
-
-Linux returns `EFBIG` for overflowing allocation ranges. dd returns success for `off=LLONG_MAX-10,len=100`, so applications can believe disk space or sparse extents were reserved when nothing valid happened.
-
-Observed proof:
-
-```text
-Linux/qemu: errno=27
-dd:         errno=0
-```
-
-## `utimensat` Ignores Unknown Flags And Updates Timestamps
-
-Priority: P2
-Impact: invalid timestamp calls mutate file metadata
-Confidence: High
-
-Verification status: Proven in isolated worktree `/Users/x/dd/dd-audit-runtime-fs-syscalls-20260710`.
-
-Evidence:
-
-- `utimensat` checks `AT_SYMLINK_NOFOLLOW` but drops other flag bits: `dd-jit-darwin/src/runtime/os/linux/syscall/fs.c:2870`, `dd-jit-darwin/src/runtime/os/linux/syscall/fs.c:2907`, `dd-jit-darwin/src/runtime/os/linux/syscall/fs.c:2926`.
-
-Why this is bad:
-
-Linux rejects unknown `utimensat` flags with `EINVAL` and leaves timestamps unchanged. dd returns success and updates `mtime`, corrupting metadata on an invalid call.
-
-Observed proof:
-
-```text
-Linux/qemu: EINVAL; mtime remains 1000
-dd:         success; mtime becomes 2000
-```
-
-## `fchown` `fchownat` Fake Success And Corrupt Ownership
-
-Priority: P1
-Impact: failed ownership changes can report success and poison reported metadata
-Confidence: High
-
-Verification status: Proven in isolated worktree `/Users/x/dd/dd-audit-runtime-fs-syscalls-BR-20260710`.
-
-Evidence:
-
-- `fchown` and `fchownat` ignore host failure in non-rootfs paths and return success: `dd-jit-darwin/src/runtime/os/linux/syscall/fs.c:1762`, `dd-jit-darwin/src/runtime/os/linux/syscall/fs.c:1793`.
-- Synthetic owner xattr is still written: `dd-jit-darwin/src/runtime/os/linux/syscall/fs.c:1799`.
-
-Why this is bad:
-
-Linux rejects bad fds, missing paths, non-directory dirfds, bad flags, and unprivileged UID changes. dd reports success and can change synthetic owner metadata to an impossible UID, corrupting what later stat calls report.
-
-Observed proof:
-
-```text
-Linux/qemu: badfd_ebadf=1 missing_enoent=1 notdir_enotdir=1 badflags_einval=1 poison_eperm=1 uid_unchanged=1 uid_poisoned=0
-dd:         badfd_ebadf=0 missing_enoent=0 notdir_enotdir=0 badflags_einval=0 poison_eperm=0 uid_unchanged=0 uid_poisoned=1
-```
-
-## `openat2` Ignores ABI Validation And Resolve Restrictions
-
-Priority: P1
-Impact: invalid `openat2` calls and forbidden symlink traversal succeed
-Confidence: High
-
-Verification status: Proven in isolated worktree `/Users/x/dd/dd-audit-runtime-fs-syscalls-BR-20260710`.
-
-Evidence:
-
-- `openat2` reads `open_how` directly and ignores `size`, extension bytes, mode validation, and `resolve` restrictions: `dd-jit-darwin/src/runtime/os/linux/syscall/fs.c:1807`, `dd-jit-darwin/src/runtime/os/linux/syscall/fs.c:1811`.
-
-Why this is bad:
-
-Linux validates the `openat2` ABI and enforces `resolve` flags. dd accepts null/small/oversized structures, invalid mode combinations, invalid resolve bits, and follows symlinks under `RESOLVE_NO_SYMLINKS`.
-
-Observed proof:
-
-```text
-Linux/qemu: null_efault=1 small_einval=1 big_e2big=1 mode_einval=1 resolve_einval=1 symlink_eloop=1
-dd:         null_efault=0 small_einval=0 big_e2big=0 mode_einval=0 resolve_einval=0 symlink_eloop=0
 ```
 
 ## `renameat2(RENAME_WHITEOUT)` Silently Becomes Plain Rename

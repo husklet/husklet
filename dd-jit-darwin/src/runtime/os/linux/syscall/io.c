@@ -1149,7 +1149,21 @@ static int svc_io(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t
             break;
         }
         // F_SETPIPE_SZ(1031)/F_GETPIPE_SZ(1032): macOS can't resize a pipe, so emulate -- record the
-        // requested size (rounded up to a page, >= requested) and report it back on GET.
+        // requested size (rounded up to a page, >= requested) and report it back on GET. Linux's pipe_fcntl
+        // first rejects a non-pipe object with EBADF (and an invalid fd faults out even earlier), so validate
+        // the fd is a real FIFO before fabricating a size -- otherwise a regular file/socket or bad fd was
+        // reported as a pipe with a plausible size.
+        if (lcmd == 1031 || lcmd == 1032) {
+            struct stat pst;
+            if (fstat((int)a0, &pst) < 0) {
+                G_RET(c) = (uint64_t)(int64_t)(-EBADF);
+                break;
+            }
+            if (!S_ISFIFO(pst.st_mode)) {
+                G_RET(c) = (uint64_t)(int64_t)(-EBADF);
+                break;
+            }
+        }
         if (lcmd == 1031) {
             int want = (int)a2;
             long pg = sysconf(_SC_PAGESIZE);

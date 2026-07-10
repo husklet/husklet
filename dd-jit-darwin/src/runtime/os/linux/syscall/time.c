@@ -363,6 +363,7 @@ static int svc_time(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64
             default: mc = CLOCK_MONOTONIC; break; // 1/4/6/7 -> monotonic
             }
             struct timespec now, d;
+            int abs_intr = 0;
             // Loop on EINTR re-reading `now` each pass so a signal can't make the guest under-sleep:
             // recompute the remaining (deadline - now) against the ABSOLUTE deadline, not nanosleep's
             // own relative remainder, so accumulated scheduling slop never shortens the sleep.
@@ -376,11 +377,18 @@ static int svc_time(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64
                 }
                 if (d.tv_sec < 0 || (d.tv_sec == 0 && d.tv_nsec <= 0)) break; // deadline passed
                 if (nanosleep(&d, NULL) == 0) break;
-                if (errno != EINTR) break; // recompute against the absolute deadline and retry
+                if (errno != EINTR) break; // genuine host error -> stop
                 if (__atomic_load_n(&c->exited, __ATOMIC_SEQ_CST)) break; // execve teardown: stop re-sleeping
+                // A deliverable guest signal must surface EINTR so the dispatcher runs the handler (Linux
+                // clock_nanosleep returns EINTR here); only a spurious/internal wakeup re-sleeps the true
+                // remainder. The old code always re-slept, swallowing the interrupt and sleeping the full
+                // deadline with the handler never run.
+                if (svc_poll_retry(c)) continue;
+                abs_intr = 1;
+                break;
             }
             ts_wait_leave();
-            G_RET(c) = 0; // absolute sleep has no remainder to report
+            G_RET(c) = abs_intr ? (uint64_t)(int64_t)(-EINTR) : 0; // ABSTIME sleep has no remainder to report
             break;
         }
         // Relative sleep (flags==0): back it with the host nanosleep and PROPAGATE its result. macOS
