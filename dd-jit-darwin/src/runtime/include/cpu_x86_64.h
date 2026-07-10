@@ -180,6 +180,12 @@ _Static_assert(__builtin_offsetof(struct cpu, mmscratch) == OFF_MM, "OFF_MM drif
 // guest handler. cpu->divop carries (linux_signo | si_code<<8); cpu->rip is the architectural PC the
 // handler observes (the insn AFTER int3, the UD2 insn itself for #UD). See raise_guest_trap().
 #define R_TRAP 13
+// cmpxchg16b (REX.W 0F C7 /1): a 128-bit compare-exchange that MUST be atomic across guest threads. Neither
+// a two-loads-plus-stores sequence (torn) nor a hardware CASPAL (livelocks on Apple Silicon via 128-bit
+// store-forwarding replay) is gate-safe, so the translator stashes the operand EA in cpu->x87_ea and exits
+// here; do_cmpxchg16() performs the DWCAS under a hashed spinlock (a 64-bit atomic lock is replay-immune and
+// a spinlock is livelock-free), sets ZF, and leaves the other flags. See x86_ops.c do_cmpxchg16().
+#define R_CMPXCHG16 14
 
 enum { X87_F2XM1, X87_FYL2X, X87_FPTAN, X87_FPATAN, X87_FYL2XP1, X87_FSINCOS, X87_FSIN, X87_FCOS };
 

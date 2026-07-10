@@ -149,6 +149,37 @@ static void do_repstr(struct cpu *c) {
 // emit_rcl_rcr() constant-count path and the membank flag ABI, so the following block reloads flags
 // verbatim. x86: count is masked to 5 bits (operand size 8/16/32) or 6 bits (64), then MOD (width+1);
 // a masked count of 0 changes NO flags; OF is defined only when the masked count is exactly 1.
+// cmpxchg16b (R_CMPXCHG16): atomic 128-bit compare-exchange under a hashed spinlock. The operand's host EA
+// is in cpu->x87_ea (rip already advanced past the insn). A hashed array of 64-bit-atomic locks makes this
+// livelock-free (unlike a hardware CASPAL, which store-forwarding-replays forever on Apple Silicon) while
+// still serialising two guest threads that target the same 16 bytes (same address -> same lock). x86:
+// compare RDX:RAX with [m]; if equal store RCX:RBX and set ZF=1; else load [m] into RDX:RAX and clear ZF.
+// Only ZF is affected -- the other flags (already materialized into cpu->nzcv / pf / af) are left untouched.
+#define DWCAS_NLOCK 256
+static _Atomic unsigned g_dwcas_lock[DWCAS_NLOCK];
+static void do_cmpxchg16(struct cpu *c) {
+    uint64_t ea = c->x87_ea;
+    volatile uint64_t *m = (volatile uint64_t *)ea; // m[0]=lo, m[1]=hi
+    unsigned h = (unsigned)((ea >> 4) & (DWCAS_NLOCK - 1));
+    _Atomic unsigned *lk = &g_dwcas_lock[h];
+    while (atomic_exchange_explicit(lk, 1u, memory_order_acquire))
+        ; // spin (64-bit atomic exchange -> replay-immune, and a spinlock always makes forward progress)
+    uint64_t lo = m[0], hi = m[1];
+    int eq = (lo == c->r[RAX] && hi == c->r[RDX]);
+    if (eq) {
+        m[0] = c->r[RBX];
+        m[1] = c->r[RCX];
+    } else {
+        c->r[RAX] = lo; // Intel: on mismatch RDX:RAX <- [m]
+        c->r[RDX] = hi;
+    }
+    atomic_store_explicit(lk, 0u, memory_order_release);
+    if (eq) // x86 ZF is stored in cpu->nzcv bit 30 (ARM Z); only ZF changes.
+        c->nzcv |= (1ull << 30);
+    else
+        c->nzcv &= ~(1ull << 30);
+}
+
 static void do_rcl(struct cpu *c) {
     uint64_t d = c->divop;
     int w = (int)(d & 0xff), rcr = (d >> 8) & 1, is_mem = (d >> 9) & 1, hi8 = (d >> 10) & 1;

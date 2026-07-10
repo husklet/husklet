@@ -272,6 +272,10 @@ static int smc_on_write(uint64_t a) {
         do_rcl(c);                                                                                                     \
         continue;                                                                                                      \
     }                                                                                                                  \
+    if ((c)->reason == R_CMPXCHG16) { /* atomic 128-bit compare-exchange in C (rip already = next) */                 \
+        do_cmpxchg16(c);                                                                                              \
+        continue;                                                                                                      \
+    }                                                                                                                  \
     if ((c)->reason == R_DIV) { /* 128/64 unsigned div (rip already = next) */                                         \
         uint64_t d = (c)->divop;                                                                                       \
         if (d == 0) {                                                                                                  \

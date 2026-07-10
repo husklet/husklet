@@ -282,6 +282,7 @@ static void e_nzcv_save_fcmp(void) {
     e_rrr(A_AND, 22, 22, 20, 0, 0); // x22 = V (0/1)
     e_rrr(A_EOR, 22, 22, 20, 0, 0); // x22 = NOT V  -> PF source byte
     e_str(22, 28, OFF_PF);
+    e_str(31, 28, OFF_AF); // x86 SSE compares (UCOMISS/UCOMISD/COMISS/COMISD) clear AF
 }
 
 // x86 PF consumer: rd = x86 PF (even parity of the low byte of cpu->pf) in {0,1}. Scratch x16.

@@ -199,10 +199,26 @@ static double avx_fp_arith_f64(int op, double x, double y) {
     }
 }
 
-// F16C uses the host's native fp16 so the half<->single conversion (and round-to-nearest-even) matches x86.
-static uint16_t avx_f32_to_f16(float f) {
-    _Float16 h = (_Float16)f;
+// F16C uses the host's native fp16 so the half<->single conversion matches x86. `imm` is the vcvtps2ph
+// rounding-control immediate: imm[2]=1 -> use MXCSR (host FPCR already tracks the guest rounding mode),
+// else imm[1:0] selects 0=nearest-even, 1=down(-inf), 2=up(+inf), 3=truncate(toward-zero). x86 imm[1:0]
+// maps onto ARM FPCR.RMode {0=nearest, 1=+inf, 2=-inf, 3=zero}. Do the single->half FCVT in inline asm
+// under a locally-set FPCR so a directed mode is honored precisely (a plain _Float16 cast can be a
+// round-to-nearest libcall or be reordered around a fesetround), then restore FPCR.
+static uint16_t avx_f32_to_f16(float f, int imm) {
+    _Float16 h;
     uint16_t o;
+    if (imm & 4) { // imm[2]=1: MXCSR-controlled (current host FPCR mirrors guest MXCSR rounding)
+        h = (_Float16)f;
+        memcpy(&o, &h, 2);
+        return o;
+    }
+    static const unsigned rm[4] = {0, 2, 1, 3}; // x86 nearest/down/up/trunc -> ARM RMode nearest/-inf/+inf/zero
+    unsigned long fpcr_orig, fpcr_new;
+    __asm__ volatile("mrs %0, fpcr" : "=r"(fpcr_orig));
+    fpcr_new = (fpcr_orig & ~(3UL << 22)) | ((unsigned long)rm[imm & 3] << 22);
+    __asm__ volatile("msr fpcr, %1\n\tisb\n\tfcvt %h0, %s2" : "=w"(h) : "r"(fpcr_new), "w"(f));
+    __asm__ volatile("msr fpcr, %0\n\tisb" ::"r"(fpcr_orig));
     memcpy(&o, &h, 2);
     return o;
 }
@@ -458,19 +474,33 @@ static void do_avx(struct cpu *c) {
         case 0x2C: // vcvttss2si/sd2si (truncate) -> GPR
         case 0x2D: // vcvtss2si/sd2si (round)    -> GPR
         {
-            int dbl = (pp == 3), es = dbl ? 8 : 4, trunc = (op == 0x2C);
+            int dbl = (pp == 3), es = dbl ? 8 : 4, trunc = (op == 0x2C), w64 = I.vex_w;
             avx_get_rm(c, &I, next, es, b);
-            int64_t res;
+            // x86 float->int yields the "integer indefinite" (INT_MIN bit pattern) on NaN, infinity, or an
+            // out-of-range value; a raw C cast is undefined there (the legacy SSE path applies the same fixup,
+            // translate.c 0x2C/0x2D). Round in the float domain (0x2D honors MXCSR via the host FPCR rounding
+            // mode; 0x2C truncates toward zero), then range-check before narrowing.
+            int64_t res = 0;
+            int indef;
             if (dbl) {
                 double x;
                 memcpy(&x, b, 8);
-                res = trunc ? (int64_t)x : (int64_t)__builtin_llrint(x);
+                double r = trunc ? __builtin_trunc(x) : __builtin_rint(x);
+                indef = isnan(x) || (w64 ? (r >= 9223372036854775808.0 || r < -9223372036854775808.0)
+                                         : (r >= 2147483648.0 || r < -2147483648.0));
+                if (!indef) res = (int64_t)r;
             } else {
                 float x;
                 memcpy(&x, b, 4);
-                res = trunc ? (int64_t)x : (int64_t)__builtin_llrintf(x);
+                float r = trunc ? __builtin_truncf(x) : __builtin_rintf(x);
+                indef = isnan(x) || (w64 ? (r >= 9223372036854775808.0f || r < -9223372036854775808.0f)
+                                         : (r >= 2147483648.0f || r < -2147483648.0f));
+                if (!indef) res = (int64_t)r;
             }
-            c->r[rd] = I.vex_w ? (uint64_t)res : (uint32_t)res; // 32-bit dst zero-extends
+            if (indef)
+                c->r[rd] = w64 ? 0x8000000000000000ull : 0x80000000ull;
+            else
+                c->r[rd] = w64 ? (uint64_t)res : (uint32_t)res; // 32-bit dst zero-extends
             goto done;
         }
         case 0x5A: {       // vcvtss2sd/sd2ss (scalar) or vcvtps2pd/pd2ps (packed) per pp
@@ -943,13 +973,13 @@ static void do_avx(struct cpu *c) {
             avx_put(c, rd, d, 32);
             goto done;
         }
-        case 0x1D: { // vcvtps2ph: reg holds W/4 fp32 -> W/2 bytes of fp16 in rm (imm[1:0] rounding; RNE only)
+        case 0x1D: { // vcvtps2ph: reg holds W/4 fp32 -> W/2 bytes of fp16 in rm (imm[2:0] rounding control)
             int nf = W / 4;
             avx_get(c, rd, a);
             for (int i = 0; i < nf; i++) {
                 float f;
                 memcpy(&f, a + 4 * i, 4);
-                uint16_t h = avx_f32_to_f16(f);
+                uint16_t h = avx_f32_to_f16(f, I.imm);
                 memcpy(d + 2 * i, &h, 2);
             }
             avx_put_rm(c, &I, next, W / 2, d);
@@ -1217,6 +1247,7 @@ static void sse42_flags(struct cpu *c, int res, int la, int lb, int n) {
     int cf = (res != 0), zf = (lb < n), sf = (la < n), of = (res & 1);
     c->nzcv = ((uint64_t)sf << 31) | ((uint64_t)zf << 30) | ((uint64_t)(!cf) << 29) | ((uint64_t)of << 28);
     c->pf = 1; // PF source byte with odd popcount -> x86 PF=0
+    c->af = 0; // Intel SDM: PCMP*STR* clears AF
 }
 
 // Index output (PCMP*STRI) -> ECX: first/last set bit of IntRes2 (imm[6] picks lsb/msb), else n.

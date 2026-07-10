@@ -2835,8 +2835,25 @@ static void *translate_block(uint64_t gpc) {
                     }
                     uint32_t cvt = I.p66 ? 0x4EE1B800u  // FCVTZS v16.2d, vs.2d (toward zero)
                                          : 0x4E61A800u; // FCVTNS v16.2d, vs.2d (round to nearest even)
-                    emit32(cvt | (s << 5) | 16);
-                    emit32(0x0EA14800u | (16 << 5) | vd); // SQXTN vd.2s, v16.2d (narrow s64->s32, hi 64 = 0)
+                    // x86 CVT(T)PD2DQ yields the integer indefinite (0x80000000) on NaN or out-of-range input;
+                    // ARM FCVT*S saturates NaN->0 and SQXTN saturates positive overflow to INT32_MAX (negative
+                    // overflow already agrees at INT32_MIN == indefinite). Per lane force 0x80000000 where the
+                    // rounded s64 exceeds INT32_MAX (catches the round-up boundary too) OR the source is NaN. The
+                    // NaN mask MUST be taken from the source doubles BEFORE the convert (which writes v16 and, for
+                    // a memory operand where s==16, would otherwise clobber the doubles first).
+                    emit32(0x4E60E400u | (s << 16) | (s << 5) | 18);   // FCMEQ v18.2d, s, s  -> ordered (0 where NaN)
+                    emit32(0x6E205800u | (18 << 5) | 18);              // NOT  v18.16b       -> NaN mask
+                    emit32(cvt | (s << 5) | 16);                       // FCVT*S v16.2d = cvt(s)  (rounded s64/lane)
+                    e_movconst(19, 0x7fffffffull);
+                    emit32(0x4E080C00u | (19 << 5) | 19);              // DUP  v19.2d, x19   -> INT32_MAX threshold
+                    emit32(0x4EE03400u | (19 << 16) | (16 << 5) | 17); // CMGT v17.2d, v16.2d, v19.2d -> overflow mask
+                    e_v3(0x4EA01C00u, 17, 17, 18);                     // ORR  v17.16b       -> make-indefinite mask
+                    emit32(0x0EA12800u | (17 << 5) | 17);              // XTN  v17.2s, v17.2d (mask -> low 2 lanes)
+                    emit32(0x0EA14800u | (16 << 5) | 20);              // SQXTN v20.2s, v16.2d (saturating result)
+                    e_movconst(19, 0x80000000ull);
+                    emit32(0x0E040C00u | (19 << 5) | 18);              // DUP  v18.2s, w19   -> 0x80000000 per lane
+                    emit32(0x2E601C00u | (20 << 16) | (18 << 5) | 17); // BSL  v17.8b -> mask?indef:result (hi 64=0)
+                    e_vmov(vd, 17);
                 } else if (op == 0x60 || op == 0x61 || op == 0x62 || op == 0x6C || op == 0x68 || op == 0x69 ||
                            op == 0x6A || op == 0x6D) { // punpck l/h bw/wd/dq/qdq -> ZIP1/ZIP2
                     int s = I.is_mem ? 16 : vm;
@@ -3225,29 +3242,16 @@ static void *translate_block(uint64_t gpc) {
                 continue;
             }
             if (op == 0xC7 && (I.reg & 7) == 1 && I.is_mem) { // cmpxchg16b: REX.W 0F C7 /1 (128-bit compare+swap)
-                // Non-atomic emulation (single 128-bit CAS): correct for the in-process model. Compares
-                // RDX:RAX with [m]; on equal stores RCX:RBX and sets ZF=1, else loads [m] into RDX:RAX, ZF=0.
-                // NOTE: NOT atomic across guest threads (finding "cmpxchg16b Is Non-Atomic"). A CASPAL-based
-                // atomic version was tried but LIVELOCKS under sustained multi-thread contention on Apple
-                // Silicon (store-forwarding replay: the 128-bit CASP spuriously replays/aborts forever while
-                // a 64-bit CAS is immune) -- gate-unsafe. A livelock-free fix needs hashed-spinlock DWCAS.
-                emit_ea(&I, next);         // x17 = EA
-                e_load_uoff(8, 19, 17, 0); // x19 = lo
-                e_load_uoff(8, 20, 17, 8); // x20 = hi
-                e_rrr(A_EOR, 21, 19, RAX, 1, 0);
-                e_rrr(A_EOR, 22, 20, RDX, 1, 0);
-                e_rrr(A_ORR, 21, 21, 22, 1, 0);  // x21 = (lo^RAX) | (hi^RDX)
-                e_rrr(A_SUBS, 31, 21, 31, 1, 0); // cmp x21, 0 -> Z = (RDX:RAX == [m])
-                e_nzcv_save();                   // x86 ZF <- ARM Z
-                e_csel(23, RBX, 19, 0, 1);       // store-lo = EQ ? RBX : lo
-                e_csel(24, RCX, 20, 0, 1);       // store-hi = EQ ? RCX : hi
-                e_store(8, 23, 17);
-                e_addi(25, 17, 8, 1);
-                e_store(8, 24, 25);
-                e_csel(RAX, RAX, 19, 0, 1); // RAX <- EQ ? RAX : lo
-                e_csel(RDX, RDX, 20, 0, 1); // RDX <- EQ ? RDX : hi
-                gpc = next;
-                continue;
+                // x86 `lock cmpxchg16b` must be a single ATOMIC 128-bit compare-exchange across guest threads.
+                // A two-loads-plus-stores sequence tears, and a hardware CASPAL LIVELOCKS on Apple Silicon
+                // (128-bit store-forwarding replay). So stash the operand EA and exit to do_cmpxchg16(), which
+                // does the DWCAS under a hashed spinlock (a 64-bit atomic lock is replay-immune + livelock-free).
+                // cmpxchg16b affects ONLY ZF, so materialize any lazy flags first (the C helper edits ZF alone).
+                if (g_fl_pending) flags_materialize();
+                emit_ea(&I, next); // x17 = EA
+                e_str(17, 28, OFF_X87EA);
+                emit_exit_const(next, R_CMPXCHG16);
+                break;
             }
             if (op == 0x1E && I.imm_bytes == 0) {
                 gpc = next;
@@ -3609,16 +3613,30 @@ static void *translate_block(uint64_t gpc) {
                 e_rrr(A_SUBS, 31, 31, 21, 1, 0);
                 e_nzcv_save();  // ARM C = !bit  (subs convention -> x86 CF)
                 if (sub != 4) { // BTS/BTR/BTC: modify the bit + write back
-                    int o = mem ? 16 : I.rm_reg;
                     e_movconst(22, 1);
                     e_shv(S_LSLV, 22, 22, 19, sf); // mask = 1<<idx
-                    if (sub == 5)
-                        e_rrr(A_ORR, o, val, 22, sf, 0); // BTS
-                    else if (sub == 6)
-                        e_rrr(A_BIC, o, val, 22, sf, 0); // BTR
-                    else
-                        e_rrr(A_EOR, o, val, 22, sf, 0); // BTC
-                    rm_store(&I, w, o);
+                    if (mem && I.lock) {
+                        // LOCK BTS/BTR/BTC: the read-modify-write MUST be atomic or contending guest threads
+                        // lose updates on a shared bitset word. Use the LSE atomic (LDSET/LDCLR/LDEOR); it
+                        // returns the OLD memory value, so recompute CF from THAT -- the tested bit and the RMW
+                        // are then a single atomic operation (a pre-load CF could be stale after a peer's flip).
+                        uint32_t lse = (sub == 5) ? LSE_LDSET : (sub == 6) ? LSE_LDCLR : LSE_LDEOR;
+                        e_lse(lse, w, 22, 23, 17); // x23 = old [m]; [m] {|=,&=~,^=} mask (acquire-release)
+                        e_shv(S_LSRV, 24, 23, 19, sf);
+                        e_movconst(25, 1);
+                        e_rrr(A_AND, 24, 24, 25, sf, 0); // x24 = old tested bit
+                        e_rrr(A_SUBS, 31, 31, 24, 1, 0);
+                        e_nzcv_save(); // ARM C = !bit -> x86 CF, atomically consistent with the RMW above
+                    } else {
+                        int o = mem ? 16 : I.rm_reg;
+                        if (sub == 5)
+                            e_rrr(A_ORR, o, val, 22, sf, 0); // BTS
+                        else if (sub == 6)
+                            e_rrr(A_BIC, o, val, 22, sf, 0); // BTR
+                        else
+                            e_rrr(A_EOR, o, val, 22, sf, 0); // BTC
+                        rm_store(&I, w, o);
+                    }
                 }
                 gpc = next;
                 continue;
