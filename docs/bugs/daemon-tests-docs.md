@@ -1147,30 +1147,6 @@ CARGO_TARGET_DIR=/Users/x/dd/dd-worker-AX-daemon-lifecycle-events-prune-image-20
 
 Result: failed with status `404`.
 
-## `docker commit` Can Inherit Config From Wrong Repository
-
-Priority: P1
-Impact: committed images can silently get wrong entrypoint/config
-Confidence: High
-
-Verification status: Proven in isolated worktree `/Users/x/dd/dd-worker-AL-daemon-image-20260710`.
-
-Evidence:
-
-- Commit resolves the source image with basename-style `ref_name`: `dd-daemon/src/build/prune.rs:85`.
-
-Why this is bad:
-
-A container created from `linuxserver/nginx:latest` should inherit that image config during commit. Basename matching can instead find `nginx:latest` and copy the wrong entrypoint or runtime metadata.
-
-Isolated proof:
-
-```sh
-TMPDIR="$PWD/target/tmp" cargo test -p dd-daemon flow_commit_source_image_lookup_preserves_full_repository_identity -- --nocapture
-```
-
-Result: failed; committed config had `["/wrong-entrypoint"]`, expected `["/right-entrypoint"]`.
-
 ## Committed ELF-Less x86_64 Images Rediscover As arm64
 
 Priority: P1
