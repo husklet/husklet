@@ -220,7 +220,6 @@ This directory is a working inventory of suspicious behavior, bad architecture, 
 | P1 | syscall/mm | guest `PROT_NONE` mappings remain directly readable | High | [syscall-compat.md](syscall-compat.md#guest-prot_none-mappings-remain-directly-readable) |
 | P1 | syscall/mm | writes to `mprotect(PROT_READ)` pages do not fault | High | [syscall-compat.md](syscall-compat.md#writes-to-mprotectprot_read-pages-do-not-fault) |
 | P1 | syscall/mm | execute permission is not enforced for guest fetch | High | [syscall-compat.md](syscall-compat.md#execute-permission-is-not-enforced-for-guest-fetch) |
-| P1 | aarch64/atomic | low-address exclusive and pair atomics hang | High | [jit-and-opcodes.md](jit-and-opcodes.md#aarch64-low-address-exclusive-and-pair-atomics-hang) |
 | P1 | aarch64/smc | threaded self-modifying code executes stale translations | High | [jit-and-opcodes.md](jit-and-opcodes.md#aarch64-threaded-self-modifying-code-executes-stale-translations) |
 | P1 | syscall/wait | raw `waitid(..., rusage)` leaves buffer untouched | High | [syscall-compat.md](syscall-compat.md#raw-waitid-rusage-leaves-buffer-untouched) |
 | P1 | syscall/wait | default core status contradicts `RLIMIT_CORE=0` | High | [syscall-compat.md](syscall-compat.md#default-core-status-contradicts-rlimit_core0) |
