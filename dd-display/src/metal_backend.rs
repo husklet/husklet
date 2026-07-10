@@ -38,6 +38,7 @@ use objc2_metal::{
     MTLLoadAction, MTLOrigin, MTLPixelFormat, MTLPrimitiveType, MTLRegion, MTLRenderCommandEncoder,
     MTLRenderPassDescriptor, MTLRenderPipelineDescriptor, MTLRenderPipelineState,
     MTLResourceOptions, MTLSamplerAddressMode, MTLSamplerDescriptor, MTLSamplerMinMagFilter,
+    MTLSamplerMipFilter,
     MTLSamplerState, MTLScissorRect, MTLSize, MTLStorageMode, MTLStoreAction, MTLTexture,
     MTLTextureDescriptor, MTLTextureUsage, MTLVertexDescriptor, MTLVertexFormat, MTLViewport,
 };
@@ -197,10 +198,18 @@ fn tex_pixel_format(f: dd_gpu::ir::TextureFormat) -> MTLPixelFormat {
     match f {
         F::Rgba8Unorm => MTLPixelFormat::RGBA8Unorm,
         F::Rgba8Srgb => MTLPixelFormat::RGBA8Unorm_sRGB,
+        F::Bgra8Unorm => MTLPixelFormat::BGRA8Unorm,
         F::Bgra8Srgb => MTLPixelFormat::BGRA8Unorm_sRGB,
         F::R8Unorm => MTLPixelFormat::R8Unorm,
         F::Rg8Unorm => MTLPixelFormat::RG8Unorm,
-        _ => MTLPixelFormat::BGRA8Unorm,
+        // Map the float color formats to their real Metal formats instead of silently reinterpreting
+        // them as BGRA8 (which would change channel width/layout and hide guest bugs).
+        F::Rgba16Float => MTLPixelFormat::RGBA16Float,
+        F::Rgba32Float => MTLPixelFormat::RGBA32Float,
+        F::R32Float => MTLPixelFormat::R32Float,
+        // Depth formats are not color textures (handled via the depth attachment path); default the
+        // color slot to BGRA8.
+        F::Depth32Float | F::Depth24PlusStencil8 => MTLPixelFormat::BGRA8Unorm,
     }
 }
 
@@ -1219,15 +1228,22 @@ pub fn run_executor(sock_path: String) {
                 be.set_render_target(1, rt_cache.get(&id).unwrap().clone());
             }
             be.cur_surface_id = id; // L4: submit() fences the async render on this IOSurface id
-            match dd_gpu::replay::replay_stream(&mut be, &bytes) {
+            // The ack tells the guest whether the frame actually replayed. A replay error must ack
+            // failure (0), not success — otherwise the guest commits a stale/partly-rendered frame
+            // believing it rendered.
+            let rendered = match dd_gpu::replay::replay_stream(&mut be, &bytes) {
                 Ok(_) => {
                     if exec_debug() {
                         eprintln!("dd-gpu executor: replayed {len} IR bytes into IOSurface {id}");
                     }
+                    true
                 }
-                Err(e) => eprintln!("dd-gpu executor: replay error: {e}"),
-            }
-            s.write_all(&[1])?; // ack: frame rendered
+                Err(e) => {
+                    eprintln!("dd-gpu executor: replay error: {e}");
+                    false
+                }
+            };
+            s.write_all(&[rendered as u8])?; // ack: 1 = rendered, 0 = replay failed
             if let Some(p) = prof.as_mut() {
                 let replay_us = t_rx.elapsed().as_micros() as u64;
                 let gpu_us = be.gpu_wait_ns / 1000;
@@ -1483,9 +1499,11 @@ impl GpuBackend for MetalBackend {
         let cap = buf.length();
         let end = (offset as usize).checked_add(data.len());
         if end.map_or(true, |e| e > cap) {
-            eprintln!("[dd-display/metal_backend] write_buffer OOB: id={} offset={} len={} cap={} — skipped",
+            // Untrusted IR: an out-of-range write must fail the replay (so the executor acks failure),
+            // not be silently skipped while the guest believes the upload landed.
+            eprintln!("[dd-display/metal_backend] write_buffer OOB: id={} offset={} len={} cap={}",
                 id.0, offset, data.len(), cap);
-            return Ok(());
+            return Err(GpuError::OutOfBounds);
         }
         unsafe {
             let base = buf.contents().as_ptr() as *mut u8;
@@ -1548,10 +1566,17 @@ impl GpuBackend for MetalBackend {
             AddressMode::Repeat => MTLSamplerAddressMode::Repeat,
             AddressMode::MirrorRepeat => MTLSamplerAddressMode::MirrorRepeat,
         };
+        let mip = |f: Filter| match f {
+            Filter::Nearest => MTLSamplerMipFilter::Nearest,
+            Filter::Linear => MTLSamplerMipFilter::Linear,
+        };
         sd.setMinFilter(filt(desc.min_filter));
         sd.setMagFilter(filt(desc.mag_filter));
+        // Apply ALL descriptor fields — dropping mip_filter / address_w silently changes sampling.
+        sd.setMipFilter(mip(desc.mip_filter));
         sd.setSAddressMode(addr(desc.address_u));
         sd.setTAddressMode(addr(desc.address_v));
+        sd.setRAddressMode(addr(desc.address_w));
         let s = self
             .device
             .newSamplerStateWithDescriptor(&sd)
@@ -1617,6 +1642,12 @@ impl GpuBackend for MetalBackend {
             };
             self.shaders.insert(id.0, lib);
             self.shader_id_hash.insert(id.0, key);
+        } else {
+            // The payload is not MSL (empty / real SPIR-V). Drop any library previously installed under
+            // this id so a recreate can't leave a *stale* shader that later pipelines would compile
+            // against — the id now has no usable MSL and falls back to the builtin.
+            self.shaders.remove(&id.0);
+            self.shader_id_hash.remove(&id.0);
         }
         Ok(())
     }
@@ -1765,22 +1796,51 @@ impl GpuBackend for MetalBackend {
             match e.resource {
                 BindResource::Buffer {
                     id: bid, offset, ..
-                } => binds.push(Bind::Buffer {
-                    index: e.binding,
-                    buffer: bid,
-                    offset,
-                }),
-                BindResource::Texture { id: tid } => binds.push(Bind::Texture {
-                    index: e.binding,
-                    texture: tid,
-                }),
-                BindResource::Sampler { id: sid } => binds.push(Bind::Sampler {
-                    index: e.binding,
-                    sampler: sid,
-                }),
+                } => {
+                    // Validate the referenced resource exists up front (parity with the software/mock
+                    // oracle) so a missing id is a typed error, not a nil binding / black frame later.
+                    if !self.buffers.contains_key(&bid) {
+                        return Err(GpuError::UnknownId { kind: "buffer", id: bid });
+                    }
+                    binds.push(Bind::Buffer {
+                        index: e.binding,
+                        buffer: bid,
+                        offset,
+                    });
+                }
+                BindResource::Texture { id: tid } => {
+                    if !self.textures.contains_key(&tid) {
+                        return Err(GpuError::UnknownId { kind: "texture", id: tid });
+                    }
+                    binds.push(Bind::Texture {
+                        index: e.binding,
+                        texture: tid,
+                    });
+                }
+                BindResource::Sampler { id: sid } => {
+                    if !self.samplers.contains_key(&sid) {
+                        return Err(GpuError::UnknownId { kind: "sampler", id: sid });
+                    }
+                    binds.push(Bind::Sampler {
+                        index: e.binding,
+                        sampler: sid,
+                    });
+                }
             }
         }
         self.bind_groups.insert(id.0, binds);
+        Ok(())
+    }
+    fn destroy_bind_group(&mut self, id: BindGroupId) -> Result<()> {
+        self.bind_groups.remove(&id.0);
+        Ok(())
+    }
+
+    fn destroy_pipeline(&mut self, id: PipelineId) -> Result<()> {
+        // Match the checked backends' cleanup: releasing a pipeline drops the id's installed state
+        // (the cached compiled PSO is keyed by content hash and shared, so it is left intact).
+        self.pipelines.remove(&id.0);
+        self.pipeline_id_hash.remove(&id.0);
         Ok(())
     }
 
@@ -2030,20 +2090,25 @@ impl GpuBackend for MetalBackend {
                     index_count,
                     instance_count,
                     first_index,
-                    ..
+                    base_vertex,
+                    first_instance,
                 } => {
                     if let (Some(e), Some((bid, base_off, it))) = (&enc, index_buffer) {
                         if let Some(ibuf) = self.buffers.get(&bid) {
                             let esz = if it == MTLIndexType::UInt16 { 2u64 } else { 4 };
                             let off = base_off + *first_index as u64 * esz;
+                            // Honor base_vertex (added to every fetched index — glDrawElementsBaseVertex)
+                            // and first_instance via the full drawIndexedPrimitives variant.
                             unsafe {
-                                e.drawIndexedPrimitives_indexCount_indexType_indexBuffer_indexBufferOffset_instanceCount(
+                                e.drawIndexedPrimitives_indexCount_indexType_indexBuffer_indexBufferOffset_instanceCount_baseVertex_baseInstance(
                                     cur_prim,
                                     *index_count as usize,
                                     it,
                                     ibuf,
                                     off as usize,
                                     (*instance_count).max(1) as usize,
+                                    *base_vertex as isize,
+                                    *first_instance as usize,
                                 )
                             };
                         }
@@ -2060,16 +2125,21 @@ impl GpuBackend for MetalBackend {
                 } => {
                     // Upload a staging buffer's pixels into a sampled texture (glTexImage2D path). Runs on a
                     // standalone blit encoder between passes; a render encoder must not be open here.
-                    if let (Some(buf), Some(tex)) = (self.buffers.get(src), self.textures.get(dst))
+                    let (Some(buf), Some(tex)) = (self.buffers.get(src), self.textures.get(dst))
+                    else {
+                        return Err(GpuError::UnknownId { kind: "buffer/texture", id: *src });
+                    };
                     {
                         // Untrusted IR: the staging buffer must hold src_offset + bytes_per_row*height, else
-                        // Metal reads OOB. Verify before encoding the copy (skip on overflow/short buffer).
+                        // Metal reads OOB. Verify before encoding the copy; an out-of-range copy fails the
+                        // replay (surfacing to the executor ack) rather than being silently dropped.
                         let need = (*bytes_per_row as usize)
                             .checked_mul(*height as usize)
                             .and_then(|n| n.checked_add(*src_offset as usize));
                         if need.map_or(true, |n| n > buf.length()) {
-                            eprintln!("[dd-display/metal_backend] CopyBufferToTexture OOB: src_off={} bpr={} h={} buf_len={} — skipped",
+                            eprintln!("[dd-display/metal_backend] CopyBufferToTexture OOB: src_off={} bpr={} h={} buf_len={}",
                                 src_offset, bytes_per_row, height, buf.length());
+                            return Err(GpuError::OutOfBounds);
                         } else if let Some(blit) = cmd.blitCommandEncoder() {
                             unsafe {
                                 blit.copyFromBuffer_sourceOffset_sourceBytesPerRow_sourceBytesPerImage_sourceSize_toTexture_destinationSlice_destinationLevel_destinationOrigin(
@@ -2159,7 +2229,19 @@ impl GpuBackend for MetalBackend {
                         e.endEncoding();
                     }
                 }
-                _ => {} // compute: not in this slice
+                // Compute-pass markers carry no GPU work in this render-only slice — tolerated as no-ops.
+                Enc::BeginComputePass | Enc::EndComputePass => {}
+                // A supported IR command the render executor cannot perform (compute dispatch, buffer→buffer
+                // or texture→buffer copy) must NOT be silently dropped — that would let the guest believe
+                // work happened. Surface it as an error so the executor acks failure.
+                Enc::Dispatch { .. }
+                | Enc::CopyBufferToBuffer { .. }
+                | Enc::CopyTextureToBuffer { .. } => {
+                    if let Some(e) = enc.take() {
+                        e.endEncoding();
+                    }
+                    return Err(GpuError::Unsupported("metal replay: command not implemented"));
+                }
             }
         }
         if let Some(e) = enc.take() {
