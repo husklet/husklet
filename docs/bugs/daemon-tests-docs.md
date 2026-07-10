@@ -316,32 +316,6 @@ Verification:
 
 Run two concurrent pulls of images sharing a layer inside one daemon and trace `dd-layer-<pid>-<layer-id>.tar.gz`. Expected fix behavior: each unpack uses a unique temp path or serializes per layer digest.
 
-## Image Aliases Report Different IDs For The Same Rootfs
-
-Priority: P1
-Impact: clients cache, compare, delete, or display retagged content as unrelated images
-Confidence: High
-
-Verification status: Proven in isolated worktree `/Users/x/dd/dd-workerC-daemon-storage-20260710`.
-
-Evidence:
-
-- `docker tag` clones the image entry while keeping the same rootfs: `dd-daemon/src/images/tags.rs:37`.
-- Image list and inspect derive the image ID from `i.name`: `dd-daemon/src/images/query.rs:22`, `dd-daemon/src/images/query.rs:115`.
-- `system df` also derives ID from `i.name`: `dd-daemon/src/system.rs:115`.
-
-Why this is bad:
-
-A tag should be another reference to the same image content. Deriving IDs from the tag name makes one rootfs look like multiple unrelated images.
-
-Isolated proof:
-
-```sh
-cargo test -p dd-daemon images_json_same_rootfs_aliases_share_image_id -- --nocapture
-```
-
-Result: failed because `repo/app:latest` and `repo/app:v2` reported different `sha256:` IDs for the same rootfs.
-
 ## Build-Cache Layer Replacement Is Non-Atomic
 
 Priority: P1
@@ -957,30 +931,6 @@ CARGO_TARGET_DIR=/Users/x/dd/dd-worker-AD-daemon-api-20260710-target cargo test 
 ```
 
 Result: failed; reloaded state remained `running`, expected `exited` with exit code `127`.
-
-## `docker tag` Onto Existing Tag Is A Silent No-Op
-
-Priority: P1
-Impact: tag replacement leaves clients using stale image contents
-Confidence: High
-
-Verification status: Proven in isolated worktree `/Users/x/dd/dd-worker-AG-daemon-image-20260710`.
-
-Evidence:
-
-- Image tagging only pushes the new tag if the tag is not already present: `dd-daemon/src/images/tags.rs:37`.
-
-Why this is bad:
-
-Docker tag replacement should repoint the destination `repo:tag` to the source image. dd leaves the old destination mapping in place while reporting success, so subsequent runs or pushes use stale rootfs content.
-
-Isolated proof:
-
-```sh
-CARGO_TARGET_DIR=/Users/x/dd/dd-worker-AG-daemon-image-20260710/target-ag cargo test -p dd-daemon image_tag_existing_repo_tag_repoints_to_source -- --ignored --nocapture
-```
-
-Result: failed; `dst:latest` still pointed to `/store/old-dst-rootfs`, expected `/store/src-rootfs`.
 
 ## `docker tag` Aliases Do Not Survive Discovery
 

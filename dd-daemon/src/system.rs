@@ -112,7 +112,7 @@ pub(crate) async fn system_df(State(a): State<App>) -> Json<crate::api::DiskUsag
                 .filter(|c| ref_repo(&c.image) == ref_repo(&i.name))
                 .count();
             ImageDf {
-                id: format!("sha256:{}", fake_id(&i.name)),
+                id: image_id(i),
                 parent_id: "",
                 repo_tags: vec![repo_tag(&i.name)],
                 created: 0,

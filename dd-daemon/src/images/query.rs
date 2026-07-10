@@ -19,7 +19,7 @@ pub(crate) async fn images_json(State(a): State<App>) -> Json<Vec<ImageSummary>>
             // default), so it must be present; dd has no parent/registry-digest/shared-size accounting yet,
             // so the rest take the Docker "not calculated" sentinels (-1) or empties.
             ImageSummary {
-                id: format!("sha256:{}", fake_id(&i.name)),
+                id: image_id(i),
                 repo_tags: vec![repo_tag(&i.name)],
                 created: i.created,
                 size,
@@ -41,7 +41,7 @@ pub(crate) async fn image_history(State(a): State<App>, Path(name): Path<String>
     let g = a.inner.lock().await;
     match find_image(&g.images, &name) {
         Some(i) => Json(vec![HistoryLayer {
-            id: format!("sha256:{}", fake_id(&i.name)),
+            id: image_id(i),
             created: i.created,
             created_by: "dd import",
             tags: vec![repo_tag(&i.name)],
@@ -112,7 +112,7 @@ pub(crate) async fn image_inspect(State(a): State<App>, Path(name): Path<String>
                 i.env.clone()
             };
             Json(ImageInspect {
-                id: format!("sha256:{}", fake_id(&i.name)),
+                id: image_id(i),
                 repo_tags: vec![tag.clone()],
                 repo_digests: vec![],
                 architecture: docker_arch(i.arch).to_string(),
