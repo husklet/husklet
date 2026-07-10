@@ -37,28 +37,19 @@ This directory is a working inventory of suspicious behavior, bad architecture, 
 | P1 | syscall/fd | sentry close-on-exec does not clean virtual fds | High | [syscall-compat.md](syscall-compat.md#sentry-close-on-exec-does-not-clean-virtual-fds) |
 | P1 | daemon/cache | build-cache layer replacement is non-atomic | High | [daemon-tests-docs.md](daemon-tests-docs.md#build-cache-layer-replacement-is-non-atomic) |
 | P1 | daemon/cgroup | fractional `--cpus` loses quota precision | High | [daemon-tests-docs.md](daemon-tests-docs.md#fractional---cpus-loses-quota-precision) |
-| P1 | daemon/exec | exec start is not single-use | High | [daemon-tests-docs.md](daemon-tests-docs.md#exec-start-is-not-single-use) |
 | P1 | daemon/restart | daemon restart reloads running containers without live process | High | [daemon-tests-docs.md](daemon-tests-docs.md#daemon-restart-reloads-running-containers-without-live-process) |
-| P1 | daemon/persistence | failed spawn terminal state is not persisted | High | [daemon-tests-docs.md](daemon-tests-docs.md#failed-spawn-terminal-state-is-not-persisted) |
 | P1 | image/tag | `docker tag` aliases do not survive discovery | High | [daemon-tests-docs.md](daemon-tests-docs.md#docker-tag-aliases-do-not-survive-discovery) |
 | P1 | daemon/logs | retained container logs are lost across daemon restart | High | [daemon-tests-docs.md](daemon-tests-docs.md#retained-container-logs-are-lost-across-daemon-restart) |
-| P1 | daemon/ports | failed spawn leaks published host-port forwarders | High | [daemon-tests-docs.md](daemon-tests-docs.md#failed-spawn-leaks-published-host-port-forwarders) |
-| P1 | daemon/ports | natural container exit leaves published host ports bound | High | [daemon-tests-docs.md](daemon-tests-docs.md#natural-container-exit-leaves-published-host-ports-bound) |
 | P1 | image/arch | committed ELF-less x86_64 images rediscover as arm64 | High | [daemon-tests-docs.md](daemon-tests-docs.md#committed-elf-less-x86_64-images-rediscover-as-arm64) |
 | P1 | image/arch | Docker save/load corrupts ELF-less Linux x86 images to arm64 | High | [daemon-tests-docs.md](daemon-tests-docs.md#docker-saveload-corrupts-elf-less-linux-x86-images-to-arm64) |
 | P1 | image/delete | forced `rmi` deletes rootfs referenced by containers | High | [daemon-tests-docs.md](daemon-tests-docs.md#forced-rmi-deletes-rootfs-referenced-by-containers) |
 | P1 | image/delete | non-forced `rmi` can delete rootfs used through alias | High | [daemon-tests-docs.md](daemon-tests-docs.md#non-forced-rmi-can-delete-rootfs-used-through-alias) |
 | P1 | image/load | `docker load` of same tag rewrites existing container rootfs | High | [daemon-tests-docs.md](daemon-tests-docs.md#docker-load-of-same-tag-rewrites-existing-container-rootfs) |
-| P1 | daemon/wait | container wait returns immediately for created containers | High | [daemon-tests-docs.md](daemon-tests-docs.md#container-wait-returns-immediately-for-created-containers) |
-| P1 | daemon/wait | wait condition removed returns before removal | High | [daemon-tests-docs.md](daemon-tests-docs.md#wait-condition-removed-returns-before-removal) |
-| P1 | daemon/exec | exec start does not recheck parent container state | High | [daemon-tests-docs.md](daemon-tests-docs.md#exec-start-does-not-recheck-parent-container-state) |
-| P1 | daemon/events | exec lifecycle events are missing | High | [daemon-tests-docs.md](daemon-tests-docs.md#exec-lifecycle-events-are-missing) |
 | P1 | daemon/durability | lifecycle mutations can succeed without durable state | High | [daemon-tests-docs.md](daemon-tests-docs.md#lifecycle-mutations-can-succeed-without-durable-state) |
 | P1 | daemon/create | create with missing network persists partial container state | High | [daemon-tests-docs.md](daemon-tests-docs.md#create-with-missing-network-persists-partial-container-state) |
 | P1 | daemon/create | create accepts image records whose rootfs is missing | High | [daemon-tests-docs.md](daemon-tests-docs.md#create-accepts-image-records-whose-rootfs-is-missing) |
 | P1 | daemon/create | anonymous volume materialization failures are ignored | High | [daemon-tests-docs.md](daemon-tests-docs.md#anonymous-volume-materialization-failures-are-ignored) |
 | P1 | daemon/volumes | volume create/delete/prune report success while storage is wrong | High | [daemon-tests-docs.md](daemon-tests-docs.md#volume-createdeleteprune-report-success-while-storage-is-wrong) |
-| P1 | daemon/attach | attach ignores stream selectors | High | [daemon-tests-docs.md](daemon-tests-docs.md#attach-ignores-stream-selectors) |
 | P1 | env/exec | `execve(..., envp=NULL)` leaks default/stale env | High | [completeness-and-env.md](completeness-and-env.md#execve-envpnull-leaks-a-default-or-stale-environment) |
 | P1 | env/exec | guest exec truncates argv at 255 args | High | [completeness-and-env.md](completeness-and-env.md#guest-exec-truncates-argv-at-255-args) |
 | P1 | procfs/memory | `sysinfo(2)` ignores container memory cap | High | [completeness-and-env.md](completeness-and-env.md#sysinfo2-ignores-container-memory-cap) |
@@ -96,7 +87,6 @@ This directory is a working inventory of suspicious behavior, bad architecture, 
 | P2 | syscall/compat | `F_SETLEASE` / `F_NOTIFY` fake support | High | [syscall-compat.md](syscall-compat.md#f_setlease-f_notify-return-success-without-arming-anything) |
 | P2 | daemon/runtime | live network connect/disconnect mutates daemon state only | High | [daemon-tests-docs.md](daemon-tests-docs.md#live-network-connectdisconnect-mutates-daemon-state-only) |
 | P2 | daemon/build | Dockerfile runtime metadata is accepted but dropped | High | [daemon-tests-docs.md](daemon-tests-docs.md#dockerfile-runtime-metadata-is-accepted-but-dropped) |
-| P2 | daemon/inspect | `docker top` returns fake processes for stopped containers | High | [daemon-tests-docs.md](daemon-tests-docs.md#docker-top-returns-fake-processes-for-stopped-containers) |
 | P2 | registry/race | concurrent pulls share a layer temp file | High | [daemon-tests-docs.md](daemon-tests-docs.md#concurrent-pulls-share-a-layer-temp-file) |
 | P2 | daemon/stats | stats stream captures a stale pid | Medium | [daemon-tests-docs.md](daemon-tests-docs.md#stats-stream-captures-a-stale-pid) |
 | P2 | daemon/events | events are live-only and lossy | High | [daemon-tests-docs.md](daemon-tests-docs.md#events-are-live-only-and-lossy) |
@@ -126,23 +116,15 @@ This directory is a working inventory of suspicious behavior, bad architecture, 
 | P2 | env/cache | per-container `DDJIT_NOPCACHE` is dropped by typed launch | Medium | [completeness-and-env.md](completeness-and-env.md#per-container-ddjit_nopcache-is-dropped-by-typed-launch) |
 | P2 | procfs/env | `/proc/self/environ` omits guest defaults | High | [completeness-and-env.md](completeness-and-env.md#procselfenviron-omits-guest-defaults) |
 | P2 | procfs/env | hidden proc switches change peer procfs | Medium | [completeness-and-env.md](completeness-and-env.md#hidden-proc-switches-change-peer-procfs) |
-| P1 | cgroup/compat | `/sys/fs/cgroup` root is advertised but not listable | High | [completeness-and-env.md](completeness-and-env.md#sysfscgroup-root-is-advertised-but-not-listable) |
 | P1 | cgroup/accounting | cgroup membership omits forked children | High | [completeness-and-env.md](completeness-and-env.md#cgroup-membership-omits-forked-children) |
 | P1 | cgroup/limits | `DD_PIDS_MAX` is not enforced for forked processes | High | [completeness-and-env.md](completeness-and-env.md#dd_pids_max-is-not-enforced-for-forked-processes) |
 | P1 | cgroup/accounting | cgroup memory usage is process-local | High | [completeness-and-env.md](completeness-and-env.md#cgroup-memory-usage-is-process-local) |
-| P1 | procfs/threads | `/proc/self/task` enumeration omits live guest threads | High | [completeness-and-env.md](completeness-and-env.md#procselftask-enumeration-omits-live-guest-threads) |
 | P1 | sysfs/network | network-none hides `eth0` in readdir but direct lookup exposes it | High | [completeness-and-env.md](completeness-and-env.md#network-none-hides-eth0-in-readdir-but-direct-lookup-exposes-it) |
 | P1 | procfs/fd | closed `/proc/self/fd/N` reports stale existence | High | [completeness-and-env.md](completeness-and-env.md#closed-procselffdn-reports-stale-existence) |
 | P2 | procfs/fd | peer `/proc/<pid>/fd` is advertised but not openable | High | [completeness-and-env.md](completeness-and-env.md#peer-procfd-is-advertised-but-not-openable) |
-| P1 | sysfs/cpu | CPU topology sysfs is direct-readable but not listable | High | [completeness-and-env.md](completeness-and-env.md#cpu-topology-sysfs-is-direct-readable-but-not-listable) |
-| P1 | procfs/ns | `/proc/self/ns` is missing while namespace links work | High | [completeness-and-env.md](completeness-and-env.md#procselfns-is-missing-while-namespace-links-work) |
-| P1 | cgroup/compat | cgroup controllers advertised but required files missing | High | [completeness-and-env.md](completeness-and-env.md#cgroup-controllers-advertised-but-required-files-missing) |
 | P2 | procfs/ns | peer `/proc/<pid>/ns` is absent | High | [completeness-and-env.md](completeness-and-env.md#peer-procns-is-absent) |
 | P2 | procfs/net | `/proc/net/unix` ignores live AF_UNIX sockets | High | [completeness-and-env.md](completeness-and-env.md#procnetunix-ignores-live-af_unix-sockets) |
-| P1 | procfs/net | `/proc/net` direct leaves exist but directory is not enumerable | High | [completeness-and-env.md](completeness-and-env.md#procnet-direct-leaves-exist-but-directory-is-not-enumerable) |
-| P1 | cgroup/compat | cgroup v2 omits additional standard controller files | High | [completeness-and-env.md](completeness-and-env.md#cgroup-v2-omits-additional-standard-controller-files) |
 | P1 | procfs/task | `/proc/self/task/<tid>` lists files direct lookup cannot open | High | [completeness-and-env.md](completeness-and-env.md#procselftask-lists-files-direct-lookup-cannot-open) |
-| P1 | procfs/self | `/proc/self` readdir omits direct-supported proc files | High | [completeness-and-env.md](completeness-and-env.md#procself-readdir-omits-direct-supported-proc-files) |
 | P1 | procfs/mounts | bind mounts are missing from mount tables | High | [completeness-and-env.md](completeness-and-env.md#bind-mounts-are-missing-from-mount-tables) |
 | P1 | procfs/smaps | `/proc/self/smaps` can hang on read | High | [completeness-and-env.md](completeness-and-env.md#procselfsmaps-can-hang-on-read) |
 | P1 | procfs/statfs | `statfs` is wrong for synthetic proc/sys leaves | High | [completeness-and-env.md](completeness-and-env.md#statfs-is-wrong-for-synthetic-procsys-leaves) |
@@ -151,8 +133,6 @@ This directory is a working inventory of suspicious behavior, bad architecture, 
 | P1 | devfs/tty | `/dev/tty` nonblocking read reports EOF instead of `EAGAIN` | High | [completeness-and-env.md](completeness-and-env.md#devtty-nonblocking-read-reports-eof-instead-of-eagain) |
 | P2 | procfs/fd | `/proc/self/fdinfo` is missing | High | [completeness-and-env.md](completeness-and-env.md#procselffdinfo-is-missing) |
 | P2 | procfs/state | futex-blocked processes report running in procfs | High | [completeness-and-env.md](completeness-and-env.md#futex-blocked-processes-report-running-in-procfs) |
-| P2 | sysfs/block | `/sys/class/block` and `/sys/block` are absent | High | [completeness-and-env.md](completeness-and-env.md#sysclassblock-and-sysblock-are-absent) |
-| P2 | procfs/fd | `/dev/fd` symlink cannot be enumerated | High | [completeness-and-env.md](completeness-and-env.md#devfd-symlink-cannot-be-enumerated) |
 | P2 | procfs/maps | `/proc/self/maps` omits RELRO mapping detail | High | [completeness-and-env.md](completeness-and-env.md#procselfmaps-omits-relro-mapping-detail) |
 | P2 | procfs/tty | `/proc/tty` surface is absent | High | [completeness-and-env.md](completeness-and-env.md#proctty-surface-is-absent) |
 | P2 | launch/config | path-list config still uses delimiter env strings | Medium | [completeness-and-env.md](completeness-and-env.md#typed-launch-path-lists-still-use-delimiter-env-strings) |
@@ -184,13 +164,10 @@ This directory is a working inventory of suspicious behavior, bad architecture, 
 | P2 | daemon/restart | restart state load overwrites persisted container arch | High | [daemon-tests-docs.md](daemon-tests-docs.md#restart-state-load-overwrites-persisted-container-arch) |
 | P1 | image/commit | Docker commit drops container user | High | [daemon-tests-docs.md](daemon-tests-docs.md#docker-commit-drops-container-user) |
 | P1 | daemon/restart | restarting containers can stay stuck after daemon restart | High | [daemon-tests-docs.md](daemon-tests-docs.md#restarting-containers-can-stay-stuck-after-daemon-restart) |
-| P2 | daemon/logs | logs time filters reject RFC3339 forms | High | [daemon-tests-docs.md](daemon-tests-docs.md#logs-time-filters-reject-rfc3339-forms) |
-| P2 | daemon/logs | logs timestamps are second-precision | High | [daemon-tests-docs.md](daemon-tests-docs.md#logs-timestamps-are-second-precision) |
 | P2 | daemon/stats | stats JSON is internally inconsistent | High | [daemon-tests-docs.md](daemon-tests-docs.md#stats-json-is-internally-inconsistent) |
 | P2 | daemon/events | create events can be emitted before durable state success | High | [daemon-tests-docs.md](daemon-tests-docs.md#create-events-can-be-emitted-before-durable-state-success) |
 | P2 | daemon/cleanup | container rm/prune drop state when writable-layer cleanup fails | High | [daemon-tests-docs.md](daemon-tests-docs.md#container-rmprune-drop-state-when-writable-layer-cleanup-fails) |
 | P2 | image/cleanup | image rmi reports deletion when backing store removal fails | High | [daemon-tests-docs.md](daemon-tests-docs.md#image-rmi-reports-deletion-when-backing-store-removal-fails) |
-| P3 | daemon/inspect | inspect can serialize contradictory dead state | High | [daemon-tests-docs.md](daemon-tests-docs.md#inspect-can-serialize-contradictory-dead-state) |
 | P1 | registry/push | Docker push drops runtime metadata from OCI config | High | [archive-fs-compat.md](archive-fs-compat.md#docker-push-drops-runtime-metadata-from-oci-config) |
 | P1 | syscall/fd | inotify/timerfd create without flags still sets close-on-exec | High | [syscall-compat.md](syscall-compat.md#inotify_init10-and-timerfd_create-0-set-close-on-exec) |
 | P1 | syscall/timerfd | `timerfd` CLOCK_REALTIME absolute deadlines are treated as monotonic | High | [syscall-compat.md](syscall-compat.md#timerfd-clock_realtime-absolute-deadlines-are-treated-as-monotonic) |
