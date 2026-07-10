@@ -338,7 +338,7 @@ pub(crate) async fn spawn_live(app: &App, c: &Container, vols: &[Vol], live: Arc
                     leave_network(n, &cid);
                 }
                 // Reclaim the private writable upper layer (mirrors `docker rm`; the shared image is untouched).
-                discard_container_layer(&dc.upper);
+                let _ = discard_container_layer(&dc.upper);
                 // `--rm` acts as `rm -v` for ANONYMOUS volumes (bare `-v /path` + image `VOLUME` dirs) —
                 // Moby removes them with the container on exit; named volumes are kept. Mirrors the
                 // explicit `rm -v` path in containers/lifecycle/manage.rs.

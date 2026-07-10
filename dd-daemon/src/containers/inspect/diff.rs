@@ -7,14 +7,20 @@ use super::super::*;
 /// drops the container's writable layer — the shared image (the lower) is never touched. Removes the whole
 /// `<dd_home>/containers/<id>` tree (the `upper` dir's parent). A no-op for darwin/flat-rootfs containers
 /// (empty `upper`).
-pub(crate) fn discard_container_layer(upper: &str) {
+/// Reclaim a container's private writable upper layer. Returns the I/O result so `docker rm` can fail
+/// (keeping state for retry) rather than silently orphaning the layer while reporting success. An empty
+/// upper (darwin / legacy containers) or an already-absent dir is `Ok(())` (nothing to do).
+pub(crate) fn discard_container_layer(upper: &str) -> std::io::Result<()> {
     if upper.is_empty() {
-        return;
+        return Ok(());
     }
     let dir = std::path::Path::new(upper)
         .parent()
         .unwrap_or_else(|| std::path::Path::new(upper));
-    let _ = std::fs::remove_dir_all(dir);
+    if dir.exists() {
+        std::fs::remove_dir_all(dir)?;
+    }
+    Ok(())
 }
 
 /// Diff a container's copy-on-write upper layer against the image rootfs (the lower), producing the

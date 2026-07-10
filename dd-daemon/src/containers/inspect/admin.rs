@@ -14,16 +14,20 @@ pub(crate) fn container_is_prunable(status: &str) -> bool {
 /// reports what was deleted.
 pub(crate) async fn containers_prune(State(a): State<App>) -> Json<crate::api::ContainersPruneReport> {
     let mut g = a.inner.lock().await;
-    let dead: Vec<String> = g
+    let candidates: Vec<String> = g
         .containers
         .iter()
         .filter(|(_, c)| container_is_prunable(&c.status))
         .map(|(id, _)| id.clone())
         .collect();
-    for id in &dead {
-        // Reclaim each pruned container's private writable upper layer (mirrors `docker rm`).
-        if let Some(c) = g.containers.get(id) {
-            discard_container_layer(&c.upper.clone());
+    let mut dead: Vec<String> = Vec::new();
+    for id in &candidates {
+        // Reclaim each pruned container's private writable upper layer (mirrors `docker rm`). If that
+        // cleanup FAILS, keep the container in state (retryable) and skip it — don't drop state while
+        // orphaning the layer.
+        let upper = g.containers.get(id).map(|c| c.upper.clone()).unwrap_or_default();
+        if discard_container_layer(&upper).is_err() {
+            continue;
         }
         // Prune is equivalent to `docker rm` for eligible containers: drop the container from every
         // network's membership/endpoints (else the network keeps a phantom endpoint and becomes
@@ -43,6 +47,7 @@ pub(crate) async fn containers_prune(State(a): State<App>) -> Json<crate::api::C
                 json!({"name": dc.name, "image": dc.image}),
             );
         }
+        dead.push(id.clone());
     }
     save_state(&g, &a.state_path);
     Json(crate::api::ContainersPruneReport {

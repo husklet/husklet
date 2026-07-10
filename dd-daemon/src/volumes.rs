@@ -128,7 +128,11 @@ pub(crate) async fn volumes_create(
     let options = body.driver_opts.unwrap_or_default();
     let labels = body.labels.unwrap_or_default();
     let mountpoint = PathBuf::from(&a.volumes_dir).join(&name);
-    let _ = std::fs::create_dir_all(&mountpoint);
+    // Creating a volume WITHOUT its backing directory is a lie — a later mount would fail. Fail the
+    // request if the storage can't be created rather than reporting `201` for a volume with no storage.
+    if let Err(e) = std::fs::create_dir_all(&mountpoint) {
+        return server_error(format!("failed to create volume storage: {e}"));
+    }
     let mut g = a.inner.lock().await;
     let v = if let Some(existing) = g.volumes.iter().find(|v| v.name == name).cloned() {
         existing
@@ -170,8 +174,15 @@ pub(crate) async fn volume_delete(State(a): State<App>, Path(name): Path<String>
         VolDeleteVerdict::NotFound => no_such_volume(&name),
         VolDeleteVerdict::InUse => conflict(format!("remove {name}: volume is in use")),
         VolDeleteVerdict::Remove(_) => {
+            // Remove the backing storage FIRST; if that fails, keep the volume in state (retryable) and
+            // report an error rather than dropping state while a stale mountpoint lingers on disk.
+            let dir = PathBuf::from(&a.volumes_dir).join(&name);
+            if dir.exists() {
+                if let Err(e) = std::fs::remove_dir_all(&dir) {
+                    return server_error(format!("failed to remove volume storage: {e}"));
+                }
+            }
             g.volumes.retain(|v| v.name != name);
-            let _ = std::fs::remove_dir_all(PathBuf::from(&a.volumes_dir).join(&name));
             save_state(&g, &a.state_path);
             crate::events::emit_event(
                 &a.events,
@@ -191,18 +202,25 @@ pub(crate) async fn volumes_prune(State(a): State<App>) -> Json<crate::api::Volu
     let mut g = a.inner.lock().await;
     // Prune every volume no container references — scanning BOTH `-v`/Binds AND `--mount`/anon volumes
     // (via `volume_in_use`), so an in-use `--mount type=volume` volume is no longer wrongly reclaimed.
-    let pruned: Vec<String> = g
+    let candidates: Vec<String> = g
         .volumes
         .iter()
         .filter(|v| !volume_in_use(&g, &v.name, Some(&v.mountpoint)))
         .map(|v| v.name.clone())
         .collect();
-    g.volumes.retain(|v| !pruned.contains(&v.name));
-    for name in &pruned {
-        let _ = std::fs::remove_dir_all(std::path::Path::new(&a.volumes_dir).join(name));
+    // Only drop a volume from state once its backing dir is actually gone: a failed removal keeps the
+    // volume (retryable) instead of orphaning storage while reporting it pruned.
+    let mut pruned: Vec<String> = Vec::new();
+    for name in &candidates {
+        let dir = std::path::Path::new(&a.volumes_dir).join(name);
+        if dir.exists() && std::fs::remove_dir_all(&dir).is_err() {
+            continue; // keep this volume in state; it can be retried
+        }
+        pruned.push(name.clone());
         // Emit `volume/destroy` per pruned volume so event mirrors drop stale references (docker parity).
         crate::events::emit_event(&a.events, "volume", "destroy", name, json!({"driver": "local"}));
     }
+    g.volumes.retain(|v| !pruned.contains(&v.name));
     save_state(&g, &a.state_path);
     Json(crate::api::VolumesPruneReport {
         volumes_deleted: pruned,

@@ -81,7 +81,7 @@ pub(crate) async fn images_prune(State(a): State<App>) -> Json<PruneReport> {
             .iter()
             .any(|i| i.rootfs == img.rootfs && !i.name.is_empty());
         if !shared {
-            dd_images::Store::new(&a.images_dir).remove_image_dir(&img.rootfs);
+            let _ = dd_images::Store::new(&a.images_dir).remove_image_dir(&img.rootfs);
             deleted.push(json!({ "Deleted": image_id(img) }));
         }
         deleted.push(json!({ "Untagged": image_id(img) }));

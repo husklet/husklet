@@ -219,9 +219,14 @@ pub(crate) async fn containers_delete(
             leave_network(n, &full);
         }
         // Reclaim the container's private writable upper layer (Docker discards the writable layer on rm).
-        // The shared image rootfs (the read-only lower) is never touched. Also drop its live IO plumbing
-        // (log buffers + channels); otherwise `docker rm` leaks them.
-        discard_container_layer(&dc.upper);
+        // The shared image rootfs (the read-only lower) is never touched. If that cleanup FAILS, restore
+        // the container to state (retryable) and return an error rather than orphaning the layer while
+        // reporting a successful remove.
+        if let Err(e) = discard_container_layer(&dc.upper) {
+            g.containers.insert(full.clone(), dc);
+            return server_error(format!("failed to remove container writable layer: {e}"));
+        }
+        // Also drop its live IO plumbing (log buffers + channels); otherwise `docker rm` leaks them.
         g.live.remove(&full);
         save_state(&g, &a.state_path);
         StatusCode::NO_CONTENT.into_response()

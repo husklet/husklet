@@ -369,3 +369,21 @@ async fn flow_network_connect_idempotent_no_refcount_leak() {
     let r = crate::networks::network_delete(State(app.clone()), Path("mynet".into())).await;
     assert_eq!(r.status(), StatusCode::NO_CONTENT, "empty net deletes (refcount reached zero)");
 }
+
+// ---- durability: network create fails (500) and records nothing when state cannot persist -----
+#[tokio::test]
+async fn network_create_fails_when_state_cannot_persist() {
+    let base = test_app();
+    // state_path points at an existing directory (volumes_dir) -> the temp+rename save always fails.
+    let app = App { state_path: base.volumes_dir.clone(), ..base };
+    let body = axum::Json(
+        serde_json::from_value::<crate::networks::NetCreateBody>(serde_json::json!({"Name":"frontend"}))
+            .unwrap(),
+    );
+    let r = crate::networks::networks_create(State(app.clone()), body).await;
+    assert_eq!(r.status(), axum::http::StatusCode::INTERNAL_SERVER_ERROR);
+    assert!(
+        app.inner.lock().await.networks.iter().all(|n| n.name != "frontend"),
+        "the non-persisted network must be rolled back"
+    );
+}
