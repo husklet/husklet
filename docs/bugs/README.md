@@ -8,8 +8,6 @@ This directory is a working inventory of suspicious behavior, bad architecture, 
 
 | Priority | Area | Finding | Confidence | Detail |
 |---|---|---:|---:|---|
-| P0 | tests/build | `make coverage` reports false data and exits green | High | [daemon-tests-docs.md](daemon-tests-docs.md#coverage-tool-uses-stale-engine-paths-and-exits-green) |
-| P0 | tests/build | `make test-ci` can pass dark lanes and XPASS | High | [daemon-tests-docs.md](daemon-tests-docs.md#test-ci-can-pass-a-dark-or-stale-matrix) |
 | P1 | JIT/cache | stale translation after `munmap`/`MAP_FIXED` VA reuse | High | [jit-and-opcodes.md](jit-and-opcodes.md#stale-translation-after-unmapremap) |
 | P1 | JIT/cache | stale translation after `mremap(MREMAP_FIXED)` VA reuse | High | [jit-and-opcodes.md](jit-and-opcodes.md#mremapmremap_fixed-can-reuse-stale-translations) |
 | P1 | daemon/runtime | workspace VPN egress env is dropped before engine launch | High | [daemon-tests-docs.md](daemon-tests-docs.md#workspace-vpn-egress-is-dropped) |
@@ -58,7 +56,6 @@ This directory is a working inventory of suspicious behavior, bad architecture, 
 | P1 | syscall/signal | `SIGKILL`/`SIGSTOP` can enter the guest signal mask | High | [syscall-compat.md](syscall-compat.md#sigkillsigstop-can-enter-the-guest-signal-mask) |
 | P1 | daemon/images | image aliases report different IDs for same rootfs | High | [daemon-tests-docs.md](daemon-tests-docs.md#image-aliases-report-different-ids-for-the-same-rootfs) |
 | P1 | daemon/cache | build-cache layer replacement is non-atomic | High | [daemon-tests-docs.md](daemon-tests-docs.md#build-cache-layer-replacement-is-non-atomic) |
-| P1 | daemon/volumes | unnamed volume creation reuses one deterministic name | High | [daemon-tests-docs.md](daemon-tests-docs.md#unnamed-volume-creation-reuses-one-deterministic-name) |
 | P1 | daemon/cgroup | fractional `--cpus` loses quota precision | High | [daemon-tests-docs.md](daemon-tests-docs.md#fractional---cpus-loses-quota-precision) |
 | P1 | daemon/lifecycle | pause/unpause can fake state on non-live containers | High | [daemon-tests-docs.md](daemon-tests-docs.md#pauseunpause-can-fake-state-on-non-live-containers) |
 | P1 | daemon/lifecycle | ignored kill signals fabricate container exit | High | [daemon-tests-docs.md](daemon-tests-docs.md#ignored-kill-signals-fabricate-container-exit) |
@@ -91,7 +88,6 @@ This directory is a working inventory of suspicious behavior, bad architecture, 
 | P1 | daemon/durability | lifecycle mutations can succeed without durable state | High | [daemon-tests-docs.md](daemon-tests-docs.md#lifecycle-mutations-can-succeed-without-durable-state) |
 | P1 | daemon/create | create with missing network persists partial container state | High | [daemon-tests-docs.md](daemon-tests-docs.md#create-with-missing-network-persists-partial-container-state) |
 | P1 | daemon/create | create accepts image records whose rootfs is missing | High | [daemon-tests-docs.md](daemon-tests-docs.md#create-accepts-image-records-whose-rootfs-is-missing) |
-| P1 | daemon/create | anonymous volume materialization failures are ignored | High | [daemon-tests-docs.md](daemon-tests-docs.md#anonymous-volume-materialization-failures-are-ignored) |
 | P1 | daemon/volumes | volume create/delete/prune report success while storage is wrong | High | [daemon-tests-docs.md](daemon-tests-docs.md#volume-createdeleteprune-report-success-while-storage-is-wrong) |
 | P1 | daemon/events | event filters broaden to match-all for supported keys | High | [daemon-tests-docs.md](daemon-tests-docs.md#event-filters-broaden-to-match-all-for-supported-keys) |
 | P1 | daemon/events | malformed filters JSON becomes an unfiltered stream | High | [daemon-tests-docs.md](daemon-tests-docs.md#malformed-filters-json-becomes-an-unfiltered-stream) |
@@ -179,7 +175,6 @@ This directory is a working inventory of suspicious behavior, bad architecture, 
 | P2 | daemon/config | `DDOCKERD_SOCK` startup unlinks configured path | Medium-high | [daemon-tests-docs.md](daemon-tests-docs.md#ddockerd_sock-startup-unlinks-configured-path) |
 | P2 | daemon/inspect | inspect network endpoint JSON is sparse | Medium | [daemon-tests-docs.md](daemon-tests-docs.md#inspect-network-endpoint-json-is-sparse) |
 | P2 | daemon/inspect | `HostConfig.AutoRemove` is omitted from inspect | High | [daemon-tests-docs.md](daemon-tests-docs.md#hostconfigautoremove-is-omitted-from-inspect) |
-| P2 | daemon/volumes | volume delete checks binds before existence | High | [daemon-tests-docs.md](daemon-tests-docs.md#volume-delete-checks-binds-before-existence) |
 | P2 | daemon/events | fast-exit event ordering can emit `die` before `start` | Medium | [daemon-tests-docs.md](daemon-tests-docs.md#fast-exit-event-ordering-can-emit-die-before-start) |
 | P2 | daemon/events | container prune deletes without destroy events | High | [daemon-tests-docs.md](daemon-tests-docs.md#container-prune-deletes-without-destroy-events) |
 | P2 | daemon/events | network prune deletes without destroy events | High | [daemon-tests-docs.md](daemon-tests-docs.md#network-prune-deletes-without-destroy-events) |
@@ -282,7 +277,6 @@ This directory is a working inventory of suspicious behavior, bad architecture, 
 | P2 | launch/config | path-list config still uses delimiter env strings | Medium | [completeness-and-env.md](completeness-and-env.md#typed-launch-path-lists-still-use-delimiter-env-strings) |
 | P2 | rendering/tests | GUI probe sources are outside default matrix | High | [gpu-display-sentry.md](gpu-display-sentry.md#rendering-coverage-gaps-are-silent) |
 | P2 | import/cleanup | failed image import leaves partial target | High | [archive-fs-compat.md](archive-fs-compat.md#import-failure-leaves-partial-target) |
-| P2 | volume/metadata | anonymous volume copy-up drops seeded metadata | High | [archive-fs-compat.md](archive-fs-compat.md#anonymous-volume-copy-up-drops-seeded-directory-metadata) |
 | P1 | volume/contents | image `VOLUME` copy-up can escape the image rootfs | High | [archive-fs-compat.md](archive-fs-compat.md#image-volume-copy-up-can-escape-the-image-rootfs) |
 | P1 | archive/metadata | UID/GID metadata is lost on load/import/cp PUT | High | [archive-fs-compat.md](archive-fs-compat.md#uidgid-metadata-is-lost-on-loadimportcp-put) |
 | P2 | build/metadata | Dockerfile `COPY`/`ADD` metadata flags are ignored | High | [archive-fs-compat.md](archive-fs-compat.md#dockerfile-copy-add-metadata-flags-are-ignored) |
