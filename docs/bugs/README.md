@@ -8,8 +8,6 @@ This directory is a working inventory of suspicious behavior, bad architecture, 
 
 | Priority | Area | Finding | Confidence | Detail |
 |---|---|---:|---:|---|
-| P1 | JIT/cache | stale translation after `munmap`/`MAP_FIXED` VA reuse | High | [jit-and-opcodes.md](jit-and-opcodes.md#stale-translation-after-unmapremap) |
-| P1 | JIT/cache | stale translation after `mremap(MREMAP_FIXED)` VA reuse | High | [jit-and-opcodes.md](jit-and-opcodes.md#mremapmremap_fixed-can-reuse-stale-translations) |
 | P1 | daemon/runtime | workspace VPN egress env is dropped before engine launch | High | [daemon-tests-docs.md](daemon-tests-docs.md#workspace-vpn-egress-is-dropped) |
 | P1 | daemon/runtime | published port bind failures do not fail container start | Medium-high | [daemon-tests-docs.md](daemon-tests-docs.md#published-port-bind-failures-do-not-fail-start) |
 | P1 | daemon/compat | inline named volume sources can escape `volumes_dir` | Medium | [daemon-tests-docs.md](daemon-tests-docs.md#inline-volume-sources-can-escape-volumes_dir) |
@@ -185,11 +183,8 @@ This directory is a working inventory of suspicious behavior, bad architecture, 
 | P2 | env/durability | `S3DB_DURABILITY` silently changes fsync semantics | High | [completeness-and-env.md](completeness-and-env.md#s3db_durability-hidden-fsync-semantics) |
 | P2 | env/cache | aarch64 pcache key omits `NOSTEALFAST` | Medium | [completeness-and-env.md](completeness-and-env.md#aarch64-pcache-key-omits-nostealfast) |
 | P2 | env/cache | per-container `DDJIT_NOPCACHE` is dropped by typed launch | Medium | [completeness-and-env.md](completeness-and-env.md#per-container-ddjit_nopcache-is-dropped-by-typed-launch) |
-| P2 | procfs/limits | `/proc/self/limits` disagrees with `getrlimit(RLIMIT_CORE)` | High | [completeness-and-env.md](completeness-and-env.md#procselflimits-disagrees-with-getrlimitrlimit_core) |
 | P2 | procfs/env | `/proc/self/environ` omits guest defaults | High | [completeness-and-env.md](completeness-and-env.md#procselfenviron-omits-guest-defaults) |
-| P2 | procfs/identity | `/proc/self/status` reports root uid/gid | High | [completeness-and-env.md](completeness-and-env.md#procselfstatus-reports-root-uidgid) |
 | P2 | procfs/env | hidden proc switches change peer procfs | Medium | [completeness-and-env.md](completeness-and-env.md#hidden-proc-switches-change-peer-procfs) |
-| P2 | procfs/isa | `/proc/version` is guest-ISA blind | Medium | [completeness-and-env.md](completeness-and-env.md#procversion-is-guest-isa-blind) |
 | P1 | cgroup/compat | `/sys/fs/cgroup` root is advertised but not listable | High | [completeness-and-env.md](completeness-and-env.md#sysfscgroup-root-is-advertised-but-not-listable) |
 | P1 | cgroup/accounting | cgroup membership omits forked children | High | [completeness-and-env.md](completeness-and-env.md#cgroup-membership-omits-forked-children) |
 | P1 | cgroup/limits | `DD_PIDS_MAX` is not enforced for forked processes | High | [completeness-and-env.md](completeness-and-env.md#dd_pids_max-is-not-enforced-for-forked-processes) |
@@ -197,16 +192,13 @@ This directory is a working inventory of suspicious behavior, bad architecture, 
 | P1 | procfs/threads | `/proc/self/task` enumeration omits live guest threads | High | [completeness-and-env.md](completeness-and-env.md#procselftask-enumeration-omits-live-guest-threads) |
 | P1 | sysfs/network | network-none hides `eth0` in readdir but direct lookup exposes it | High | [completeness-and-env.md](completeness-and-env.md#network-none-hides-eth0-in-readdir-but-direct-lookup-exposes-it) |
 | P1 | procfs/fd | closed `/proc/self/fd/N` reports stale existence | High | [completeness-and-env.md](completeness-and-env.md#closed-procselffdn-reports-stale-existence) |
-| P2 | procfs/accounting | `/proc/stat processes` is live count instead of cumulative forks | High | [completeness-and-env.md](completeness-and-env.md#procstat-processes-is-live-count-instead-of-cumulative-forks) |
 | P2 | procfs/fd | peer `/proc/<pid>/fd` is advertised but not openable | High | [completeness-and-env.md](completeness-and-env.md#peer-procfd-is-advertised-but-not-openable) |
 | P1 | sysfs/cpu | CPU topology sysfs is direct-readable but not listable | High | [completeness-and-env.md](completeness-and-env.md#cpu-topology-sysfs-is-direct-readable-but-not-listable) |
 | P1 | procfs/ns | `/proc/self/ns` is missing while namespace links work | High | [completeness-and-env.md](completeness-and-env.md#procselfns-is-missing-while-namespace-links-work) |
 | P1 | cgroup/compat | cgroup controllers advertised but required files missing | High | [completeness-and-env.md](completeness-and-env.md#cgroup-controllers-advertised-but-required-files-missing) |
-| P1 | procfs/threads | `/proc/self/status` Threads is hardcoded to one | High | [completeness-and-env.md](completeness-and-env.md#procselfstatus-threads-is-hardcoded-to-one) |
 | P2 | procfs/ns | peer `/proc/<pid>/ns` is absent | High | [completeness-and-env.md](completeness-and-env.md#peer-procns-is-absent) |
 | P2 | procfs/net | `/proc/net/unix` ignores live AF_UNIX sockets | High | [completeness-and-env.md](completeness-and-env.md#procnetunix-ignores-live-af_unix-sockets) |
 | P1 | procfs/net | `/proc/net` direct leaves exist but directory is not enumerable | High | [completeness-and-env.md](completeness-and-env.md#procnet-direct-leaves-exist-but-directory-is-not-enumerable) |
-| P1 | procfs/net | `/proc/net/sockstat` and `sockstat6` are missing | High | [completeness-and-env.md](completeness-and-env.md#procnetsockstat-and-sockstat6-are-missing) |
 | P1 | cgroup/compat | cgroup v2 omits additional standard controller files | High | [completeness-and-env.md](completeness-and-env.md#cgroup-v2-omits-additional-standard-controller-files) |
 | P1 | procfs/task | `/proc/self/task/<tid>` lists files direct lookup cannot open | High | [completeness-and-env.md](completeness-and-env.md#procselftask-lists-files-direct-lookup-cannot-open) |
 | P1 | procfs/self | `/proc/self` readdir omits direct-supported proc files | High | [completeness-and-env.md](completeness-and-env.md#procself-readdir-omits-direct-supported-proc-files) |
@@ -214,7 +206,6 @@ This directory is a working inventory of suspicious behavior, bad architecture, 
 | P1 | procfs/smaps | `/proc/self/smaps` can hang on read | High | [completeness-and-env.md](completeness-and-env.md#procselfsmaps-can-hang-on-read) |
 | P1 | procfs/statfs | `statfs` is wrong for synthetic proc/sys leaves | High | [completeness-and-env.md](completeness-and-env.md#statfs-is-wrong-for-synthetic-procsys-leaves) |
 | P1 | procfs/statfs | `statfs.f_flags` is always zero | High | [completeness-and-env.md](completeness-and-env.md#statfsf_flags-is-always-zero) |
-| P1 | procfs/io | `/proc/self/io` is missing | High | [completeness-and-env.md](completeness-and-env.md#procselfio-is-missing) |
 | P1 | devfs/random | `/dev/urandom` writes fail with `EPERM` | High | [completeness-and-env.md](completeness-and-env.md#devurandom-writes-fail-with-eperm) |
 | P1 | devfs/tty | `/dev/tty` nonblocking read reports EOF instead of `EAGAIN` | High | [completeness-and-env.md](completeness-and-env.md#devtty-nonblocking-read-reports-eof-instead-of-eagain) |
 | P2 | procfs/fd | `/proc/self/fdinfo` is missing | High | [completeness-and-env.md](completeness-and-env.md#procselffdinfo-is-missing) |
@@ -222,9 +213,7 @@ This directory is a working inventory of suspicious behavior, bad architecture, 
 | P2 | sysfs/block | `/sys/class/block` and `/sys/block` are absent | High | [completeness-and-env.md](completeness-and-env.md#sysclassblock-and-sysblock-are-absent) |
 | P2 | procfs/fd | `/dev/fd` symlink cannot be enumerated | High | [completeness-and-env.md](completeness-and-env.md#devfd-symlink-cannot-be-enumerated) |
 | P2 | procfs/maps | `/proc/self/maps` omits RELRO mapping detail | High | [completeness-and-env.md](completeness-and-env.md#procselfmaps-omits-relro-mapping-detail) |
-| P2 | procfs/content | `/proc/meminfo` and `/proc/stat` are sparse | High | [completeness-and-env.md](completeness-and-env.md#procmeminfo-and-procstat-are-sparse) |
 | P2 | procfs/tty | `/proc/tty` surface is absent | High | [completeness-and-env.md](completeness-and-env.md#proctty-surface-is-absent) |
-| P2 | procfs/devices | `/proc/devices` has empty block device section | High | [completeness-and-env.md](completeness-and-env.md#procdevices-has-empty-block-device-section) |
 | P2 | launch/config | path-list config still uses delimiter env strings | Medium | [completeness-and-env.md](completeness-and-env.md#typed-launch-path-lists-still-use-delimiter-env-strings) |
 | P2 | rendering/tests | GUI probe sources are outside default matrix | High | [gpu-display-sentry.md](gpu-display-sentry.md#rendering-coverage-gaps-are-silent) |
 | P2 | import/cleanup | failed image import leaves partial target | High | [archive-fs-compat.md](archive-fs-compat.md#import-failure-leaves-partial-target) |
