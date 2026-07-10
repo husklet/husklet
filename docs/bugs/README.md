@@ -43,22 +43,15 @@ This directory is a working inventory of suspicious behavior, bad architecture, 
 | P2 | display/window | native window close is not propagated | Medium-high | [gpu-display-sentry.md](gpu-display-sentry.md#native-window-close-is-not-propagated) |
 | P2 | env/runtime | `DDJIT_SANDBOX` public mode is intentionally avoided by tests | High | [completeness-and-env.md](completeness-and-env.md#ddjit_sandbox-public-mode-is-intentionally-avoided-by-tests) |
 | P2 | env/durability | `S3DB_DURABILITY` silently changes fsync semantics | High | [completeness-and-env.md](completeness-and-env.md#s3db_durability-hidden-fsync-semantics) |
-| P2 | env/cache | aarch64 pcache key omits `NOSTEALFAST` | Medium | [completeness-and-env.md](completeness-and-env.md#aarch64-pcache-key-omits-nostealfast) |
-| P2 | env/cache | per-container `DDJIT_NOPCACHE` is dropped by typed launch | Medium | [completeness-and-env.md](completeness-and-env.md#per-container-ddjit_nopcache-is-dropped-by-typed-launch) |
 | P2 | procfs/env | hidden proc switches change peer procfs | Medium | [completeness-and-env.md](completeness-and-env.md#hidden-proc-switches-change-peer-procfs) |
 | P1 | cgroup/accounting | cgroup membership omits forked children | High | [completeness-and-env.md](completeness-and-env.md#cgroup-membership-omits-forked-children) |
 | P1 | cgroup/limits | `DD_PIDS_MAX` is not enforced for forked processes | High | [completeness-and-env.md](completeness-and-env.md#dd_pids_max-is-not-enforced-for-forked-processes) |
 | P1 | cgroup/accounting | cgroup memory usage is process-local | High | [completeness-and-env.md](completeness-and-env.md#cgroup-memory-usage-is-process-local) |
 | P1 | sysfs/network | network-none hides `eth0` in readdir but direct lookup exposes it | High | [completeness-and-env.md](completeness-and-env.md#network-none-hides-eth0-in-readdir-but-direct-lookup-exposes-it) |
 | P2 | procfs/ns | peer `/proc/<pid>/ns` is absent | High | [completeness-and-env.md](completeness-and-env.md#peer-procns-is-absent) |
-| P2 | procfs/net | `/proc/net/unix` ignores live AF_UNIX sockets | High | [completeness-and-env.md](completeness-and-env.md#procnetunix-ignores-live-af_unix-sockets) |
 | P1 | procfs/mounts | bind mounts are missing from mount tables | High | [completeness-and-env.md](completeness-and-env.md#bind-mounts-are-missing-from-mount-tables) |
-| P1 | procfs/smaps | `/proc/self/smaps` can hang on read | High | [completeness-and-env.md](completeness-and-env.md#procselfsmaps-can-hang-on-read) |
-| P1 | procfs/statfs | `statfs` is wrong for synthetic proc/sys leaves | High | [completeness-and-env.md](completeness-and-env.md#statfs-is-wrong-for-synthetic-procsys-leaves) |
-| P1 | procfs/statfs | `statfs.f_flags` is always zero | High | [completeness-and-env.md](completeness-and-env.md#statfsf_flags-is-always-zero) |
 | P1 | devfs/tty | `/dev/tty` nonblocking read reports EOF instead of `EAGAIN` | High | [completeness-and-env.md](completeness-and-env.md#devtty-nonblocking-read-reports-eof-instead-of-eagain) |
 | P2 | procfs/state | futex-blocked processes report running in procfs | High | [completeness-and-env.md](completeness-and-env.md#futex-blocked-processes-report-running-in-procfs) |
-| P2 | procfs/maps | `/proc/self/maps` omits RELRO mapping detail | High | [completeness-and-env.md](completeness-and-env.md#procselfmaps-omits-relro-mapping-detail) |
 | P2 | launch/config | path-list config still uses delimiter env strings | Medium | [completeness-and-env.md](completeness-and-env.md#typed-launch-path-lists-still-use-delimiter-env-strings) |
 | P1 | syscall/signal | `kill(0, sig)` only signals the caller | High | [syscall-compat.md](syscall-compat.md#kill0-sig-only-signals-the-caller) |
 | P1 | syscall/mm | guest `PROT_NONE` mappings remain directly readable | High | [syscall-compat.md](syscall-compat.md#guest-prot_none-mappings-remain-directly-readable) |
