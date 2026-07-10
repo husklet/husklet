@@ -12,21 +12,23 @@ impl Store {
     pub fn import_rootfs(&self, name: &str, tar_bytes: &[u8]) -> Result<LoadedImage, Error> {
         let target = self.dir_for(name);
         let rootfs = target.join("rootfs");
+        // Remove any pre-existing target and extract into a FRESH rootfs so tar can't follow a stale
+        // symlink out of the store; on ANY failure we remove the target again (finding 1) so a failed
+        // import never leaves a half-populated image behind.
         let _ = std::fs::remove_dir_all(&target);
         std::fs::create_dir_all(&rootfs).map_err(|e| Error::Archive(e.to_string()))?;
         let tmp = std::env::temp_dir().join(format!("dd-import-{}.tar", uniq()));
-        std::fs::write(&tmp, tar_bytes).map_err(|e| Error::Archive(e.to_string()))?;
-        let out = std::process::Command::new("tar")
-            .arg("xf")
-            .arg(&tmp)
-            .arg("-C")
-            .arg(&rootfs)
-            .output();
+        if let Err(e) = std::fs::write(&tmp, tar_bytes) {
+            let _ = std::fs::remove_dir_all(&target);
+            return Err(Error::Archive(e.to_string()));
+        }
+        // run_extract requests owner/perm/xattr preservation (findings 3/11) and tolerates unprivileged
+        // device-node mknod failures (finding 12) while still failing a genuinely broken archive.
+        let extract = run_extract(&tmp, &rootfs);
         let _ = std::fs::remove_file(&tmp);
-        match out {
-            Ok(o) if o.status.success() => {}
-            Ok(o) => return Err(Error::Archive(String::from_utf8_lossy(&o.stderr).into_owned())),
-            Err(e) => return Err(Error::Archive(e.to_string())),
+        if let Err(e) = extract {
+            let _ = std::fs::remove_dir_all(&target);
+            return Err(e);
         }
         let arch = detect_arch(&rootfs).unwrap_or(Arch::LinuxAarch64);
         let cmd = default_shell(&rootfs);
@@ -54,7 +56,55 @@ impl Store {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::image::archive::testutil::{fake_elf, tar_members, unique_dir, write_file};
+    use crate::image::archive::testutil::{
+        fake_elf, tar_members, tar_with_char_device, unique_dir, write_file,
+    };
+    use crate::image::archive::EXTRACT_FLAGS;
+
+    // Finding 1 — a failed import (broken tar) leaves NO partial target dir behind.
+    #[test]
+    fn import_failure_removes_partial_target() {
+        let store_dir = unique_dir("imp-fail-store");
+        let store = Store::new(store_dir.to_str().unwrap());
+        // Not a tar at all -> tar fails fatally -> import must Err AND clean up the target.
+        let err = store
+            .import_rootfs("brokenimg", b"this is definitely not a tar archive\n")
+            .expect_err("broken tar must fail import");
+        assert!(!err.to_string().is_empty());
+        // The target directory the import would have created must not survive.
+        assert!(
+            !store_dir.join("brokenimg").exists(),
+            "failed import left a partial target dir behind"
+        );
+        let _ = std::fs::remove_dir_all(&store_dir);
+    }
+
+    // Finding 12 — a tar carrying a char-device entry plus a regular file imports successfully with the
+    // regular file present (the unprivileged mknod failure must not abort the whole extract).
+    #[test]
+    fn import_tolerates_device_nodes() {
+        let bytes = tar_with_char_device("regular.txt", b"i am regular\n", "dev/fakenull");
+        let store_dir = unique_dir("imp-dev-store");
+        let store = Store::new(store_dir.to_str().unwrap());
+        let loaded = store
+            .import_rootfs("devimg", &bytes)
+            .expect("device-node tar must still import the regular file");
+        assert_eq!(
+            std::fs::read_to_string(loaded.rootfs.join("regular.txt")).unwrap(),
+            "i am regular\n"
+        );
+        let _ = std::fs::remove_dir_all(&store_dir);
+    }
+
+    // Finding 11 — extraction requests numeric-owner/permission preservation (real chown needs root; we
+    // assert the flags the extract command uses).
+    #[test]
+    fn extract_flags_preserve_owner_and_perms() {
+        assert!(EXTRACT_FLAGS.contains(&"--numeric-owner"), "numeric owner (finding 11)");
+        assert!(EXTRACT_FLAGS.contains(&"--same-owner"), "same owner (finding 11)");
+        assert!(EXTRACT_FLAGS.contains(&"-p"), "preserve permissions (finding 11)");
+        assert!(EXTRACT_FLAGS.contains(&"--xattrs"), "xattrs round-trip (finding 3)");
+    }
 
     // Flow 4 — import_rootfs unpacks a bare rootfs tar (files at top level, no wrapper/manifest).
     // Invariant: the given name is kept verbatim, the arch is probed from the rootfs, and every file lands

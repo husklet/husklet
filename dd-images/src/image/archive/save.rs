@@ -19,8 +19,11 @@ impl Store {
         std::fs::create_dir_all(&staging).map_err(|e| Error::Archive(e.to_string()))?;
         let manifest_json = serde_json::to_string(manifest).map_err(|e| Error::Archive(e.to_string()))?;
         let _ = std::fs::write(staging.join("dd-manifest.json"), manifest_json);
+        // SAVE_FLAGS: `--format=posix` (nanosecond mtimes), `--xattrs` (extended attributes round-trip),
+        // `--sparse` (holes don't expand). `-c` creates, `-f -` writes the archive to stdout.
         let out = std::process::Command::new("tar")
-            .arg("cf")
+            .args(SAVE_FLAGS)
+            .arg("-cf")
             .arg("-")
             .arg("-C")
             .arg(parent)
@@ -53,6 +56,16 @@ mod tests {
             .save_archive(Path::new("/"), &Manifest::default())
             .unwrap_err();
         assert_eq!(err.to_string(), "image has no rootfs directory");
+    }
+
+    // Findings 3/4/13 — the save `tar` requests xattr, sparse and pax(posix) preservation. A true
+    // ns-mtime / hole / xattr test is environment-sensitive (needs specific fs + privilege), so we assert
+    // the flags are present in the exact constant the save command shells out with.
+    #[test]
+    fn save_flags_request_xattrs_sparse_and_posix() {
+        assert!(SAVE_FLAGS.contains(&"--xattrs"), "xattrs round-trip (finding 3)");
+        assert!(SAVE_FLAGS.contains(&"--sparse"), "sparse files not expanded (finding 4)");
+        assert!(SAVE_FLAGS.contains(&"--format=posix"), "pax/ns mtimes (finding 13)");
     }
 
     // ---- archive round-trip integration tests (shell out to the system `tar`) ----
