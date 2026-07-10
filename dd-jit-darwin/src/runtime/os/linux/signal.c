@@ -267,6 +267,15 @@ static void host_sigh_si(int sig, siginfo_t *si, void *uc) {
         g_sigpid[ls] = (int)si->si_pid;
         g_siguid[ls] = (int)si->si_uid;
     }
+    // SA_NOCLDWAIT on the guest's SIGCHLD: Linux still DELIVERS the SIGCHLD but leaves no zombie. macOS's own
+    // SA_NOCLDWAIT would suppress the signal entirely, so we don't set it (see rt_sigaction) -- instead
+    // auto-reap every terminated child here (WNOHANG, and no WUNTRACED so a stopped child is left alone). The
+    // guest handler still runs (host_sig_pend below) and a later wait() sees ECHILD. Gated on the guest opt-in.
+    if (ls == 17 && (g_sigact[17].flags & 0x2)) {
+        int wst;
+        while (waitpid(-1, &wst, WNOHANG) > 0) {
+        }
+    }
     host_sig_pend(ls);
 }
 

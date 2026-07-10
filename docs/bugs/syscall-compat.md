@@ -350,52 +350,6 @@ Isolated proof:
 
 Linux observed `read_dup=32 read_dup_errno=0 first_mask=0x100`; dd observed `read_dup=-1 read_dup_errno=6`.
 
-## `SA_NOCLDWAIT` Does Not Suppress Zombies
-
-Priority: P1
-Impact: children remain waitable despite no-zombie signal policy
-Confidence: High
-
-Verification status: Proven in isolated worktree `/Users/x/dd/dd-wait-audit-20260710`.
-
-Evidence:
-
-- `rt_sigaction` stores flags but host handler setup uses only `SA_SIGINFO`: `dd-jit-darwin/src/runtime/os/linux/syscall/signal.c:394`, `dd-jit-darwin/src/runtime/os/linux/syscall/signal.c:420`.
-
-Why this is bad:
-
-Linux `SA_NOCLDWAIT` prevents child zombies. dd still leaves a reapable child, so supervisors can observe impossible wait behavior.
-
-Observed proof:
-
-```text
-Linux: sa_nocldwait sigs=1 wait=-1 errno=10 no_zombie=1 raw=0x0
-dd:    sa_nocldwait sigs=1 wait=38818 errno=0 no_zombie=0 raw=0x1700
-```
-
-## `SA_NOCLDSTOP` Still Delivers Stop SIGCHLD
-
-Priority: P2
-Impact: signal handlers see child-stop notifications that should be suppressed
-Confidence: High
-
-Verification status: Proven in isolated worktree `/Users/x/dd/dd-wait-audit-20260710`.
-
-Evidence:
-
-- Signal action flag handling stores flags but does not apply `SA_NOCLDSTOP` to host delivery: `dd-jit-darwin/src/runtime/os/linux/syscall/signal.c:394`, `dd-jit-darwin/src/runtime/os/linux/syscall/signal.c:420`.
-
-Why this is bad:
-
-With `SA_NOCLDSTOP`, Linux suppresses `SIGCHLD` for child stops and reports only termination. dd delivers a stop notification anyway.
-
-Observed proof:
-
-```text
-Linux: sa_nocldstop before=0 after=1 stop_ok=1 suppressed=1 raw=0x9
-dd:    sa_nocldstop before=1 after=2 stop_ok=1 suppressed=0 raw=0x137f
-```
-
 ## aarch64 4K Subpage `munmap` Returns `EINVAL`
 
 Priority: P2
