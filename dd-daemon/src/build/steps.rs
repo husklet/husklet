@@ -214,6 +214,62 @@ mod tests {
         assert!(rootfs.join("dstlink").is_file(), "payload landed at the literal dest path");
         let _ = std::fs::remove_dir_all(&base);
     }
+
+    // Finding 1: `COPY --chmod=0755 file /bin/tool` applies the mode to the copied destination.
+    #[test]
+    fn copy_chmod_applies_mode_to_destination() {
+        use std::os::unix::fs::PermissionsExt;
+        let base = scratch("copy-chmod");
+        let ctx = base.join("ctx");
+        let rootfs = base.join("rootfs");
+        std::fs::create_dir_all(&ctx).unwrap();
+        std::fs::create_dir_all(&rootfs).unwrap();
+        std::fs::write(ctx.join("file"), b"tool\n").unwrap();
+        // A deliberately-different source mode, so a preserved 0755 proves --chmod took effect.
+        std::fs::set_permissions(ctx.join("file"), std::fs::Permissions::from_mode(0o600)).unwrap();
+
+        let sn: HashMap<String, usize> = HashMap::new();
+        let stages: Vec<PathBuf> = Vec::new();
+        copy_step("COPY", "--chmod=0755 file /bin/tool", &rootfs, "/", &sn, &stages, &ctx)
+            .expect("COPY --chmod");
+
+        let mode = std::fs::metadata(rootfs.join("bin/tool")).unwrap().permissions().mode();
+        assert_eq!(mode & 0o777, 0o755, "destination has the requested 0755 mode");
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    // Finding 1: `COPY --chown=U:G` issues a numeric ownership request. Real chown needs root; here we
+    // assert the copy still lands and (when running privileged) that ownership is applied, else that the
+    // chown parser resolves the numeric ids that get requested via lchown.
+    #[test]
+    fn copy_chown_numeric_is_parsed_and_copy_succeeds() {
+        let base = scratch("copy-chown");
+        let ctx = base.join("ctx");
+        let rootfs = base.join("rootfs");
+        std::fs::create_dir_all(&ctx).unwrap();
+        std::fs::create_dir_all(&rootfs).unwrap();
+        std::fs::write(ctx.join("file"), b"x\n").unwrap();
+
+        // The numeric chown parse is what feeds the (best-effort, root-only) lchown request.
+        assert_eq!(parse_numeric_chown("1000:1000"), (Some(1000), Some(1000)));
+        assert_eq!(parse_numeric_chown("1000"), (Some(1000), None));
+        assert_eq!(parse_numeric_chown("root"), (None, None), "symbolic names aren't numeric-resolved");
+
+        let sn: HashMap<String, usize> = HashMap::new();
+        let stages: Vec<PathBuf> = Vec::new();
+        copy_step("COPY", "--chown=1000:1000 file /tool", &rootfs, "/", &sn, &stages, &ctx)
+            .expect("COPY --chown");
+        assert!(rootfs.join("tool").is_file(), "the file is copied regardless of chown privilege");
+        // If privileged, ownership actually applied; otherwise lchown is a no-op (needs root) — asserted
+        // conditionally so the test is meaningful as root and passes unprivileged.
+        if unsafe { libc::geteuid() } == 0 {
+            use std::os::unix::fs::MetadataExt;
+            let md = std::fs::metadata(rootfs.join("tool")).unwrap();
+            assert_eq!(md.uid(), 1000, "root run applies the requested uid");
+            assert_eq!(md.gid(), 1000, "root run applies the requested gid");
+        }
+        let _ = std::fs::remove_dir_all(&base);
+    }
 }
 
 /// Execute a `RUN` instruction in the JIT against the current stage's rootfs. stdout/stderr are appended
@@ -225,8 +281,30 @@ pub(super) async fn run_step(
     rootfs: &std::path::Path,
     env: &[String],
     args: &str,
+    shell: &[String],
     log: &mut Vec<String>,
 ) -> Result<(), String> {
+    // Shell-form RUN uses the current SHELL (`SHELL ["/bin/bash","-c"]`); exec-form RUN (`["a","b"]`)
+    // runs argv verbatim (finding 9). Default shell is `/bin/sh -c`.
+    let argv: Vec<String> = {
+        let a = args.trim();
+        if a.starts_with('[') {
+            if let Ok(serde_json::Value::Array(v)) = serde_json::from_str::<serde_json::Value>(a) {
+                v.into_iter()
+                    .filter_map(|x| x.as_str().map(String::from))
+                    .collect()
+            } else {
+                let mut s = shell.to_vec();
+                s.push(a.to_string());
+                s
+            }
+        } else {
+            let mut s = shell.to_vec();
+            s.push(a.to_string());
+            s
+        }
+    };
+    let shell_desc = shell.join(" ");
     // Build the RUN step's container spec through the typed dd-jit API. CRITICAL: route the step's env
     // (loose `K=V` lines: image ENV + Dockerfile ENV/ARG) through `.guest_env`, which encodes it into
     // `DD_GUEST_ENV` — the launch_config mapper only translates known `DD_*`/`DDJIT_*` keys and would drop
@@ -235,7 +313,7 @@ pub(super) async fn run_step(
         ddjit::Image::from_rootfs(rootfs.to_string_lossy().into_owned()).guest(arch),
     )
     .host_workdir(workdir.to_string())
-    .cmd(vec!["/bin/sh".to_string(), "-c".to_string(), args.to_string()])
+    .cmd(argv)
     .guest_env(env, false);
     // WORKDIR must set the GUEST cwd for the RUN, not just host-side path resolution: `WORKDIR /app`
     // followed by `RUN pwd` should print `/app`. `.host_workdir` only feeds host ADD/COPY resolution;
@@ -260,8 +338,8 @@ pub(super) async fn run_step(
             }
             if code != 0 {
                 return Err(format!(
-                    "The command '/bin/sh -c {}' returned a non-zero code: {}",
-                    args, code
+                    "The command '{} {}' returned a non-zero code: {}",
+                    shell_desc, args, code
                 ));
             }
         }
@@ -313,6 +391,17 @@ pub(super) fn copy_step(
     let from_stage = args
         .split_whitespace()
         .find_map(|p| p.strip_prefix("--from="));
+    // `COPY/ADD --chmod=MODE --chown=U[:G]` apply permissions/ownership to the copied destination
+    // (finding 1). chmod is applied via mode bits; chown is numeric best-effort (needs root).
+    let chmod = args
+        .split_whitespace()
+        .find_map(|p| p.strip_prefix("--chmod="))
+        .and_then(parse_octal_mode);
+    let (chown_uid, chown_gid) = args
+        .split_whitespace()
+        .find_map(|p| p.strip_prefix("--chown="))
+        .map(parse_numeric_chown)
+        .unwrap_or((None, None));
     let parts: Vec<&str> = args
         .split_whitespace()
         .filter(|p| !p.starts_with("--"))
@@ -363,12 +452,81 @@ pub(super) fn copy_step(
             {
                 return Err(format!("{inst} {src}: failed to extract archive"));
             }
+            apply_copy_perms(&dst_host, chmod, chown_uid, chown_gid);
             continue;
         }
         if !matches!(std::process::Command::new("cp").arg("-a").arg(&src_host).arg(&dst_host).status(), Ok(s) if s.success())
         {
             return Err(format!("{inst} {src}: not found"));
         }
+        // The copied entry lands at `dst_host` (single-file dest) or `dst_host/<basename>` (into a dir).
+        let target = if into_dir {
+            match std::path::Path::new(src).file_name() {
+                Some(name) => dst_host.join(name),
+                None => dst_host.clone(),
+            }
+        } else {
+            dst_host.clone()
+        };
+        apply_copy_perms(&target, chmod, chown_uid, chown_gid);
     }
     Ok(())
+}
+
+/// Parse a `--chmod=` octal mode (`0755`/`755`) into permission bits, or `None` if malformed.
+fn parse_octal_mode(s: &str) -> Option<u32> {
+    let t = s.trim();
+    if t.is_empty() || !t.bytes().all(|b| (b'0'..=b'7').contains(&b)) {
+        return None;
+    }
+    u32::from_str_radix(t, 8).ok()
+}
+
+/// Parse a `--chown=` value into NUMERIC (uid, gid). Symbolic names can't be resolved against the target
+/// rootfs here, so only numeric ids are honored (best-effort, matching the finding); a bare `U` sets uid.
+fn parse_numeric_chown(s: &str) -> (Option<u32>, Option<u32>) {
+    let (u, g) = match s.split_once(':') {
+        Some((u, g)) => (u, Some(g)),
+        None => (s, None),
+    };
+    (
+        u.parse::<u32>().ok(),
+        g.and_then(|g| g.parse::<u32>().ok()),
+    )
+}
+
+/// Apply `--chmod`/`--chown` to a copied destination, recursing into directories. chmod uses mode bits
+/// (works unprivileged); chown is a best-effort numeric `lchown` (a no-op without root — `-1` leaves a
+/// component unchanged), so the correct request is always issued even where privilege is unavailable.
+fn apply_copy_perms(path: &std::path::Path, mode: Option<u32>, uid: Option<u32>, gid: Option<u32>) {
+    use std::os::unix::ffi::OsStrExt;
+    use std::os::unix::fs::PermissionsExt;
+    if mode.is_none() && uid.is_none() && gid.is_none() {
+        return;
+    }
+    let is_symlink = std::fs::symlink_metadata(path)
+        .map(|m| m.file_type().is_symlink())
+        .unwrap_or(false);
+    if let Some(m) = mode {
+        if !is_symlink {
+            let _ = std::fs::set_permissions(path, std::fs::Permissions::from_mode(m));
+        }
+    }
+    if uid.is_some() || gid.is_some() {
+        if let Ok(c) = std::ffi::CString::new(path.as_os_str().as_bytes()) {
+            // -1 (u32::MAX cast) leaves that id unchanged.
+            let u = uid.unwrap_or(u32::MAX);
+            let g = gid.unwrap_or(u32::MAX);
+            unsafe {
+                libc::lchown(c.as_ptr(), u, g);
+            }
+        }
+    }
+    if !is_symlink && path.is_dir() {
+        if let Ok(rd) = std::fs::read_dir(path) {
+            for e in rd.flatten() {
+                apply_copy_perms(&e.path(), mode, uid, gid);
+            }
+        }
+    }
 }
