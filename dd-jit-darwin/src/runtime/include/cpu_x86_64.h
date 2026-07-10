@@ -186,6 +186,11 @@ _Static_assert(__builtin_offsetof(struct cpu, mmscratch) == OFF_MM, "OFF_MM drif
 // here; do_cmpxchg16() performs the DWCAS under a hashed spinlock (a 64-bit atomic lock is replay-immune and
 // a spinlock is livelock-free), sets ZF, and leaves the other flags. See x86_ops.c do_cmpxchg16().
 #define R_CMPXCHG16 14
+// fxsave/fxrstor x87-register-DATA + FSW tail: the inline emitter handles the XMM/MXCSR/FCW area; these exit
+// to do_fxsave()/do_fxrstor() to save/restore the modeled x87 stack (c->st[]/fptop/fpsw) as 80-bit ext at
+// offset 32+. cpu->x87_ea carries the FXSAVE area base. See x86_ops.c do_fxsave()/do_fxrstor().
+#define R_FXSAVE 15
+#define R_FXRSTOR 16
 
 enum { X87_F2XM1, X87_FYL2X, X87_FPTAN, X87_FPATAN, X87_FYL2XP1, X87_FSINCOS, X87_FSIN, X87_FCOS };
 
