@@ -364,6 +364,12 @@ impl CudaContext {
             ],
             signal: None,
         }));
+        // The parameter buffer and bind group are launch-local: the submit above is synchronous
+        // (the executor completes the dispatch before returning), so release them right after so
+        // repeated launches don't grow the backend's resource tables without bound. The cached
+        // shader/pipeline (keyed by entry+block) intentionally persist for reuse.
+        out.push(Cmd::DestroyBindGroup(bind_group));
+        out.push(Cmd::DestroyBuffer(param_buf));
         out
     }
 }

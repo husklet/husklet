@@ -18,4 +18,19 @@ pub(crate) struct Image {
     pub(crate) stop_signal: String, // Config.StopSignal — the signal `docker stop` sends (nginx SIGQUIT, postgres SIGINT); "" ⇒ SIGTERM
     pub(crate) img_volumes: Vec<String>, // Config.Volumes keys — dirs that get an anonymous volume at run (postgres /var/lib/postgresql/data)
     pub(crate) healthcheck: Option<HealthConfig>, // Config.Healthcheck — the container HEALTHCHECK probe (None / Test=["NONE"] ⇒ no probe)
+    // Per-instruction build history (`docker history`): one row per Dockerfile instruction, created at
+    // build time. Empty ⇒ report the single synthetic "dd import" row (pulled/imported images).
+    pub(crate) history: Vec<HistoryEntry>,
+    // ONBUILD triggers this image carries (Dockerfile `ONBUILD X`), replayed when a child `FROM` this
+    // image is built. Empty for a normal image.
+    pub(crate) onbuild: Vec<String>,
+}
+
+/// One `docker history` row (a build instruction). `empty_layer` is true for config-only instructions
+/// (ENV/LABEL/CMD/…) that add no filesystem layer, matching Docker's history schema.
+#[derive(Clone, Default)]
+pub(crate) struct HistoryEntry {
+    pub(crate) created: i64,
+    pub(crate) created_by: String,
+    pub(crate) empty_layer: bool,
 }

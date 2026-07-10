@@ -42,7 +42,15 @@ pub(crate) async fn image_push(
     // `Size` in the push progress/aux lines (a real registry manifest size would need registry.rs to
     // surface it — see note below).
     let size = image_size(&img.rootfs, &img.name);
-    let work = std::path::PathBuf::from(format!("{}/.push-{}", a.images_dir, std::process::id()));
+    // Unique per request: a bare `.push-<pid>` collides when two pushes run concurrently in one daemon
+    // process (see `next_staging_seq`). (Only the staging PATH is per-request; the push payload/config
+    // serialization is unchanged.)
+    let work = std::path::PathBuf::from(format!(
+        "{}/.push-{}-{}",
+        a.images_dir,
+        std::process::id(),
+        crate::util::next_staging_seq()
+    ));
     let res = tokio::task::spawn_blocking(move || {
         Client::new(iref, creds)
             .push(

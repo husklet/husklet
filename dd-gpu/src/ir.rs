@@ -532,7 +532,8 @@ fn dec_vertex_layout(d: &mut Decoder) -> Result<VertexLayout> {
     let stride = d.u32()?;
     let step_mode = d.u32()?;
     let n = d.u32()? as usize;
-    let mut attrs = Vec::with_capacity(n);
+    // each VertexAttr = 3×u32 = 12 bytes
+    let mut attrs = Vec::with_capacity(d.cap_count(n, 12));
     for _ in 0..n {
         attrs.push(VertexAttr {
             location: d.u32()?,
@@ -615,12 +616,14 @@ fn dec_render_pipeline(d: &mut Decoder) -> Result<RenderPipelineDesc> {
     let vertex = dec_shader_ref(d)?;
     let fragment = if d.bool()? { Some(dec_shader_ref(d)?) } else { None };
     let nvb = d.u32()? as usize;
-    let mut vertex_buffers = Vec::with_capacity(nvb);
+    // each VertexLayout is at least stride+step_mode+count = 12 bytes
+    let mut vertex_buffers = Vec::with_capacity(d.cap_count(nvb, 12));
     for _ in 0..nvb {
         vertex_buffers.push(dec_vertex_layout(d)?);
     }
     let nct = d.u32()? as usize;
-    let mut color_targets = Vec::with_capacity(nct);
+    // each ColorTargetState is at least format+blend_flag+write_mask = 9 bytes
+    let mut color_targets = Vec::with_capacity(d.cap_count(nct, 9));
     for _ in 0..nct {
         color_targets.push(dec_color_target(d)?);
     }
@@ -672,7 +675,8 @@ fn enc_bind_group(e: &mut Encoder, b: &BindGroupDesc) {
 fn dec_bind_group(d: &mut Decoder) -> Result<BindGroupDesc> {
     let set = d.u32()?;
     let n = d.u32()? as usize;
-    let mut entries = Vec::with_capacity(n);
+    // each BindEntry is at least binding+tag+id = 9 bytes
+    let mut entries = Vec::with_capacity(d.cap_count(n, 9));
     for _ in 0..n {
         let binding = d.u32()?;
         let resource = match d.u8()? {
@@ -821,7 +825,8 @@ fn dec_enc(d: &mut Decoder) -> Result<Enc> {
     Ok(match d.u8()? {
         etag::BEGIN_RENDER_PASS => {
             let n = d.u32()? as usize;
-            let mut color = Vec::with_capacity(n);
+            // each ColorAttachment = texture+load+clear[4]+store = 25 bytes
+            let mut color = Vec::with_capacity(d.cap_count(n, 25));
             for _ in 0..n {
                 let texture = d.u32()?;
                 let load = LoadOp::from_u32(d.u32()?)?;
@@ -940,7 +945,8 @@ fn enc_command_buffer(e: &mut Encoder, cb: &CommandBuffer) {
 }
 fn dec_command_buffer(d: &mut Decoder) -> Result<CommandBuffer> {
     let n = d.u32()? as usize;
-    let mut encoder = Vec::with_capacity(n);
+    // each encoder op is at least a 1-byte tag
+    let mut encoder = Vec::with_capacity(d.cap_count(n, 1));
     for i in 0..n {
         let pos = d.pos();
         let tag = d.peek_u8();
@@ -1133,6 +1139,13 @@ impl Cmd {
         let mut e = Encoder::new();
         e.frame(|inner| self.encode(inner));
         e.into_vec()
+    }
+
+    /// Decode one length-prefixed command frame (as produced by [`Cmd::frame`]). Rejects a frame body
+    /// that carries extra bytes after the command — a malformed frame is a decode error, not an
+    /// accepted command with a silently-discarded tail.
+    pub fn decode_frame(d: &mut Decoder) -> Result<Cmd> {
+        d.frame(Cmd::decode)
     }
 }
 

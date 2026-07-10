@@ -97,6 +97,13 @@ impl<'a> Decoder<'a> {
     pub fn is_empty(&self) -> bool {
         self.pos >= self.b.len()
     }
+    /// A safe `Vec::with_capacity` bound for a decoded element count: never reserve for more elements
+    /// than the remaining input could possibly supply (each element is at least `elem_min` bytes).
+    /// A truncated frame with an attacker-chosen count then fails cleanly at the per-element read
+    /// instead of forcing a huge up-front reservation.
+    pub fn cap_count(&self, n: usize, elem_min: usize) -> usize {
+        n.min(self.remaining() / elem_min.max(1))
+    }
     /// Peek the next byte (the command tag) without consuming it. `None` at end of stream.
     /// Used by `replay_stream` to fast-path `WriteBuffer` decode (borrow, don't `to_vec`).
     pub fn peek_u8(&self) -> Option<u8> {
@@ -131,8 +138,14 @@ impl<'a> Decoder<'a> {
     pub fn f32(&mut self) -> Result<f32> {
         Ok(f32::from_bits(self.u32()?))
     }
+    /// Decode a canonical boolean: only `0` and `1` are valid. A non-canonical byte (e.g. `2`) is a
+    /// malformed payload and errors rather than being normalized to `true`, so producer bugs surface.
     pub fn bool(&mut self) -> Result<bool> {
-        Ok(self.u8()? != 0)
+        match self.u8()? {
+            0 => Ok(false),
+            1 => Ok(true),
+            b => Err(GpuError::NonCanonicalBool(b)),
+        }
     }
     pub fn bytes(&mut self) -> Result<&'a [u8]> {
         let n = self.u32()? as usize;
@@ -155,11 +168,17 @@ impl<'a> Decoder<'a> {
         }
         Ok(v)
     }
-    /// Read a length-prefixed sub-frame written by [`Encoder::frame`] and decode it with `f`.
+    /// Read a length-prefixed sub-frame written by [`Encoder::frame`] and decode it with `f`,
+    /// requiring `f` to consume the **entire** body. A frame whose declared length exceeds the bytes
+    /// its content needs (trailing garbage after a valid message) is a malformed frame and errors as
+    /// `ShortBuffer` rather than being silently normalized — strict producers/consumers stay in sync.
     pub fn frame<T, F: FnOnce(&mut Decoder) -> Result<T>>(&mut self, f: F) -> Result<T> {
         let body = self.bytes()?;
         let mut inner = Decoder::new(body);
         let t = f(&mut inner)?;
+        if !inner.is_empty() {
+            return Err(GpuError::TrailingBytes);
+        }
         Ok(t)
     }
 }
@@ -175,6 +194,35 @@ mod tests {
         let bytes = e.into_vec();
         let mut d = Decoder::new(&bytes);
         assert_eq!(d.words().unwrap(), vec![1, 2, 3, 0xDEAD_BEEF]);
+    }
+
+    #[test]
+    fn bool_rejects_non_canonical_bytes() {
+        assert_eq!(Decoder::new(&[0]).bool(), Ok(false));
+        assert_eq!(Decoder::new(&[1]).bool(), Ok(true));
+        assert_eq!(Decoder::new(&[2]).bool(), Err(GpuError::NonCanonicalBool(2)));
+        assert_eq!(Decoder::new(&[0xff]).bool(), Err(GpuError::NonCanonicalBool(0xff)));
+    }
+
+    #[test]
+    fn frame_rejects_trailing_bytes() {
+        // A frame whose body is longer than the message needs is malformed.
+        let mut e = Encoder::new();
+        e.frame(|inner| {
+            inner.u32(7);
+            inner.u8(0xAA); // extra trailing byte inside the frame body
+        });
+        let bytes = e.into_vec();
+        let mut d = Decoder::new(&bytes);
+        let r: Result<u32> = d.frame(|inner| inner.u32());
+        assert_eq!(r, Err(GpuError::TrailingBytes));
+
+        // A tight frame (no trailing bytes) still decodes.
+        let mut e2 = Encoder::new();
+        e2.frame(|inner| inner.u32(7));
+        let good = e2.into_vec();
+        let mut d2 = Decoder::new(&good);
+        assert_eq!(d2.frame(|inner| inner.u32()), Ok(7));
     }
 
     #[test]

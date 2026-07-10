@@ -35,20 +35,45 @@ pub(crate) async fn images_json(State(a): State<App>) -> Json<Vec<ImageSummary>>
     Json(imgs)
 }
 
-/// `GET /images/{name}/history` — `docker history`. dd squashes images to a single rootfs, so we
-/// report one synthetic layer.
+/// `GET /images/{name}/history` — `docker history`. A built image reports one row per Dockerfile
+/// instruction (persisted at build time); a pulled/imported image with no recorded history reports a
+/// single synthetic row. Rows are newest-first (Docker order): only the top row carries the image id,
+/// tags and total size; older rows are `<missing>` with per-instruction `created_by`/`empty_layer`.
 pub(crate) async fn image_history(State(a): State<App>, Path(name): Path<String>) -> Response {
     let g = a.inner.lock().await;
     match find_image(&g.images, &name) {
-        Some(i) => Json(vec![HistoryLayer {
-            id: image_id(i),
-            created: i.created,
-            created_by: "dd import",
-            tags: vec![repo_tag(&i.name)],
-            size: image_size(&i.rootfs, &i.name),
-            comment: "",
-        }])
-        .into_response(),
+        Some(i) => {
+            let total = image_size(&i.rootfs, &i.name);
+            if i.history.is_empty() {
+                return Json(vec![HistoryLayer {
+                    id: image_id(i),
+                    created: i.created,
+                    created_by: "dd import".to_string(),
+                    tags: vec![repo_tag(&i.name)],
+                    size: total,
+                    comment: "",
+                    empty_layer: false,
+                }])
+                .into_response();
+            }
+            let rows: Vec<HistoryLayer> = i
+                .history
+                .iter()
+                .rev() // newest instruction first, matching `docker history`
+                .enumerate()
+                .map(|(pos, h)| HistoryLayer {
+                    id: if pos == 0 { image_id(i) } else { "<missing>".to_string() },
+                    created: h.created,
+                    created_by: h.created_by.clone(),
+                    tags: if pos == 0 { vec![repo_tag(&i.name)] } else { vec![] },
+                    // dd squashes to one rootfs, so report the whole size on the top row only.
+                    size: if pos == 0 && !h.empty_layer { total } else { 0 },
+                    comment: "",
+                    empty_layer: h.empty_layer,
+                })
+                .collect();
+            Json(rows).into_response()
+        }
         None => no_such_image(&name),
     }
 }
