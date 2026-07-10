@@ -306,7 +306,16 @@ pub(crate) async fn spawn_live(app: &App, c: &Container, vols: &[Vol], live: Arc
             let mut g = app.inner.lock().await;
             if let Some(e) = g.execs.get_mut(&cid) {
                 e.exit_code = code;
+                let parent = e.container_id.clone();
                 g.live.remove(&cid);
+                // Docker `exec_die` event (Actor = the parent container) so event mirrors see the exec end.
+                crate::events::emit_event(
+                    &app.events,
+                    "container",
+                    "exec_die",
+                    &parent,
+                    serde_json::json!({"execID": cid, "exitCode": code.to_string()}),
+                );
                 return;
             }
         }
@@ -351,6 +360,11 @@ pub(crate) async fn spawn_live(app: &App, c: &Container, vols: &[Vol], live: Arc
             save_state(&g, &app.state_path);
             return;
         }
+        // Release the published host-port forwarders now that the guest is gone: a naturally-exited
+        // (non-`--rm`) container must not keep host ports bound, or later containers can't reuse the port
+        // and traffic routes to a dead service. A RestartPolicy restart re-binds them in spawn_live, so
+        // freeing here is safe even for restarting containers (they re-acquire on the next start).
+        crate::containers::ports::stop(&cid);
         // RestartPolicy supervisor: re-run the container per `--restart` unless it was deliberately
         // stopped (stop/kill/rm set stop_requested). A no-op for the default `no`/empty policy, so the
         // common `docker run` path is untouched.
@@ -375,9 +389,21 @@ pub(crate) async fn live_fail(app: &App, cid: &str, live: &Arc<Live>, msg: Strin
     // exit and output-complete so a hijack/`logs -f` consumer drains the message and ends cleanly.
     let _ = live.exit.send(Some(127));
     let _ = live.out_done.send(true);
-    if let Some(cc) = app.inner.lock().await.containers.get_mut(cid) {
-        cc.status = "exited".into();
-        cc.exit_code = 127;
+    // Release any published host-port forwarders spawn_live started before the failure — a failed start
+    // must not leak a bound host port that later starts collide with.
+    crate::containers::ports::stop(cid);
+    {
+        let mut g = app.inner.lock().await;
+        if let Some(cc) = g.containers.get_mut(cid) {
+            cc.status = "exited".into();
+            cc.exit_code = 127;
+            cc.finished_at = now_secs();
+            cc.finished_at_ns = now_nanos();
+        }
+        // PERSIST the terminal state: without this, a daemon restart reloads the container as `running`
+        // (the failed start was only corrected in memory), so inspect/wait see a live-looking container
+        // with no process. The normal reaper path saves state; the failed-spawn path must too.
+        save_state(&g, &app.state_path);
     }
     false
 }

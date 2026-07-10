@@ -38,9 +38,26 @@ pub(crate) async fn exec_start(
             )
                 .into_response();
         };
+        // An exec is SINGLE-USE: a second `/exec/{id}/start` must not spawn a duplicate process (which
+        // could then race the first's Live entry). Docker returns 409 for an already-started exec.
+        if exec.started {
+            return conflict(format!("Container exec {id} is already running"));
+        }
         let Some(c) = g.containers.get(&exec.container_id).cloned() else {
             return no_such(&exec.container_id);
         };
+        // Re-validate the PARENT container's current state: it may have stopped/paused between exec create
+        // and start. Docker rejects an exec start against a non-running container (the stale exec handle
+        // must not run against a dead lifecycle).
+        if c.status == "paused" {
+            return conflict(format!(
+                "Container {} is paused, unpause the container before exec",
+                exec.container_id
+            ));
+        }
+        if c.status != "running" {
+            return conflict(format!("Container {} is not running", exec.container_id));
+        }
         let mut temp = c; // share the container's rootfs/volumes/arch; distinct id -> own process
         temp.id = id.clone();
         // Share the TARGET container's loopback network: `docker exec` joins the container's netns, so the
@@ -65,6 +82,15 @@ pub(crate) async fn exec_start(
         if let Some(e) = g.execs.get_mut(&id) {
             e.started = true;
         }
+        // Docker `exec_start: <cmd>` event (Actor = the parent container). The matching `exec_die` is
+        // emitted by the reaper when the exec process exits.
+        crate::events::emit_event(
+            &a.events,
+            "container",
+            &format!("exec_start: {}", exec.cmd.join(" ")),
+            &exec.container_id,
+            json!({"execID": id, "name": exec.container_id}),
+        );
         (temp, g.volumes.clone(), live, exec.tty)
     };
     if detach {

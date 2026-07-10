@@ -232,31 +232,6 @@ CARGO_TARGET_DIR=/Users/x/dd/dd-target-3b cargo test -p dd-daemon deeper_3b -- -
 
 PoC second start returned `204` again after the first failed spawn.
 
-## `docker top` Returns Fake Processes For Stopped Containers
-
-Priority: P2
-Impact: container state inspection lies
-Confidence: High
-
-Verification status: Proven in isolated worktree `/Users/x/dd/dd-3b-worktree`.
-
-Evidence:
-
-- `containers_top` resolves the container but never checks running state: `dd-daemon/src/containers/inspect/top.rs:5`.
-- It always returns a synthetic PID 1 row: `dd-daemon/src/containers/inspect/top.rs:15`.
-
-Why this is bad:
-
-Docker returns a conflict for `top` on a stopped container. A synthetic process row makes stopped containers look alive to orchestration code.
-
-Isolated proof:
-
-```sh
-CARGO_TARGET_DIR=/Users/x/dd/dd-target-3b cargo test -p dd-daemon deeper_3b -- --ignored --nocapture
-```
-
-PoC expected `409` but received `200`.
-
 ## Concurrent Pulls Share A Layer Temp File
 
 Priority: P2
@@ -345,27 +320,6 @@ CARGO_TARGET_DIR=/Users/x/dd/dd-slot-e-target cargo test -p dd-daemon fractional
 ```
 
 Result: failed as intended; left `1`, right `0`.
-
-## Exec Start Is Not Single-Use
-
-Priority: P1
-Impact: duplicate exec processes and detached lifecycle state
-Confidence: High
-
-Evidence:
-
-- Exec start inserts a fresh `Live` under the exec id: `dd-daemon/src/containers/exec/start.rs:63`.
-- It sets `Exec.started` but does not reject a later start: `dd-daemon/src/containers/exec/start.rs:65`.
-- `spawn_live` is idempotent only per `Live` object: `dd-daemon/src/runtime/spawn/live.rs:12`.
-- Exec reaper removes `g.live[cid]` for that exec id on exit: `dd-daemon/src/runtime/spawn/live.rs:277`.
-
-Why this is bad:
-
-A second `/exec/:id/start` can create a second process and replace live state for the same exec id. The first process can later remove the second process's live entry, making inspect/control wrong.
-
-Verification:
-
-Start one exec id twice with a long-running command and assert Docker-compatible rejection or single-use behavior.
 
 ## Events Are Live-Only And Lossy
 
@@ -598,32 +552,6 @@ CARGO_TARGET_DIR=/Users/x/dd/dd-worker-AA-daemon-image-20260710/target-aa pocs/s
 
 Observed: `State.Status=running`, `State.Running=true`, `State.Pid=0`, and start returned `304`.
 
-## Failed Spawn Terminal State Is Not Persisted
-
-Priority: P1
-Impact: daemon restart can resurrect failed starts as running
-Confidence: High
-
-Verification status: Proven in isolated worktree `/Users/x/dd/dd-worker-AD-daemon-api-20260710`.
-
-Evidence:
-
-- Failed live spawn sets status to `exited` and exit code `127`: `dd-daemon/src/runtime/spawn/live.rs:338`, `dd-daemon/src/runtime/spawn/live.rs:348`.
-- The normal reaper path persists state: `dd-daemon/src/runtime/spawn/live.rs:215`.
-- The failed-spawn path does not call the same state save path.
-
-Why this is bad:
-
-A failed start can be corrected in memory but not written to disk. After daemon restart, persisted state can still say `running`, so inspect and wait paths see a live-looking container with no process.
-
-Isolated proof:
-
-```sh
-CARGO_TARGET_DIR=/Users/x/dd/dd-worker-AD-daemon-api-20260710-target cargo test -p dd-daemon --bin dd-daemon live_fail_persists_terminal_exit_state -- --nocapture
-```
-
-Result: failed; reloaded state remained `running`, expected `exited` with exit code `127`.
-
 ## `docker tag` Aliases Do Not Survive Discovery
 
 Priority: P1
@@ -674,58 +602,6 @@ CARGO_TARGET_DIR=/Users/x/dd/dd-audit-daemon-state-ai/target-audit cargo test -p
 ```
 
 Result: failed; logs body was empty, expected `hello after restart`.
-
-## Failed Spawn Leaks Published Host-Port Forwarders
-
-Priority: P1
-Impact: failed starts can leave host ports bound
-Confidence: High
-
-Verification status: Proven in isolated worktree `/Users/x/dd/dd-audit-daemon-state-ai`.
-
-Evidence:
-
-- `spawn_live` starts published port forwarders before spawn completion: `dd-daemon/src/runtime/spawn/live.rs:137`, `dd-daemon/src/runtime/spawn/live.rs:172`.
-- Failed spawn handling marks exit state but does not stop forwarders: `dd-daemon/src/runtime/spawn/live.rs:338`.
-- Port forwarder stop logic exists separately: `dd-daemon/src/containers/ports.rs:115`.
-
-Why this is bad:
-
-A failed container start should release every resource acquired during startup. Leaking the forwarder keeps the host port bound, causing later starts to fail or route traffic to no live container.
-
-Isolated proof:
-
-```sh
-CARGO_TARGET_DIR=/Users/x/dd/dd-audit-daemon-state-ai/target-audit cargo test -p dd-daemon audit_live_fail_releases_published_port_forwarder -- --ignored --nocapture
-```
-
-Result: failed; failed spawn left `127.0.0.1:42551` bound.
-
-## Natural Container Exit Leaves Published Host Ports Bound
-
-Priority: P1
-Impact: exited containers can keep host ports occupied
-Confidence: High
-
-Verification status: Proven in isolated worktree `/Users/x/dd/dd-worker-AN-daemon-state-20260710`.
-
-Evidence:
-
-- Reaper marks non-restarting containers exited and emits `die`: `dd-daemon/src/runtime/spawn/live.rs:217`.
-- Port forwarders are stopped only in the `AutoRemove` branch: `dd-daemon/src/runtime/spawn/live.rs:287`.
-- Explicit stop/remove cleanup uses port stop logic elsewhere: `dd-daemon/src/containers/ports.rs:95`.
-
-Why this is bad:
-
-When a non-restarting container exits naturally, its published ports should be released. Keeping the forwarder bound prevents later containers from using the port and can route traffic to a dead service.
-
-Isolated proof:
-
-```sh
-CARGO_TARGET_DIR=/Users/x/dd/dd-worker-AN-target cargo test -p dd-daemon audit_exited_container_forwarder_releases_host_port_without_explicit_stop -- --nocapture
-```
-
-Result: failed; naturally exited container left host port `44931` bound.
 
 ## Forced `rmi` Deletes Rootfs Referenced By Containers
 
@@ -985,54 +861,6 @@ CARGO_TARGET_DIR=/Users/x/dd/dd-audit-daemon-events-logs-stats-restart-target ca
 
 Result: failed; status remained `"restarting"`.
 
-## Logs Time Filters Reject RFC3339 Forms
-
-Priority: P2
-Impact: Docker-supported `--since` / `--until` inputs disable filtering
-Confidence: High
-
-Verification status: Proven in isolated worktree `/Users/x/dd/dd-audit-daemon-events-logs-stats-restart-20260710`.
-
-Evidence:
-
-- Log time parsing splits on `.` and parses integer Unix seconds only: `dd-daemon/src/containers/inspect/frame.rs:7`.
-
-Why this is bad:
-
-Docker supports RFC3339, RFC3339Nano, Unix timestamps, and Go durations for log time filters. dd returns `None` for RFC3339 strings, disabling the filter instead of applying it.
-
-Isolated proof:
-
-```sh
-CARGO_TARGET_DIR=/Users/x/dd/dd-audit-daemon-events-logs-stats-restart-target cargo test -p dd-daemon parse_unix_ts_accepts_docker_rfc3339_forms -- --nocapture
-```
-
-Result: `left: None`, expected `Some(1700000000)`.
-
-## Logs Timestamps Are Second-Precision
-
-Priority: P2
-Impact: timestamped logs do not match Docker RFC3339Nano shape
-Confidence: High
-
-Verification status: Proven in isolated worktree `/Users/x/dd/dd-audit-daemon-events-logs-stats-restart-20260710`.
-
-Evidence:
-
-- Timestamped log framing emits second precision: `dd-daemon/src/containers/inspect/frame.rs:47`.
-
-Why this is bad:
-
-Docker `logs --timestamps` emits RFC3339Nano-style timestamps with padded fractional nanoseconds. dd emits `2023-11-14T22:13:20Z` instead of `...20.000000000Z`.
-
-Isolated proof:
-
-```sh
-CARGO_TARGET_DIR=/Users/x/dd/dd-audit-daemon-events-logs-stats-restart-target cargo test -p dd-daemon frame_chunk_timestamps_use_docker_rfc3339nano_shape -- --nocapture
-```
-
-Result: got `"2023-11-14T22:13:20Z a\n"`.
-
 ## Stats JSON Is Internally Inconsistent
 
 Priority: P2
@@ -1058,112 +886,6 @@ CARGO_TARGET_DIR=/Users/x/dd/dd-audit-daemon-events-logs-stats-restart-target ca
 
 Result: failed first on `num_procs=0` while `pids_stats.current=1`.
 
-## Inspect Can Serialize Contradictory Dead State
-
-Priority: P3
-Impact: `State.Status` and `State.Dead` can disagree
-Confidence: High
-
-Verification status: Proven in isolated worktree `/Users/x/dd/dd-audit-daemon-events-logs-stats-restart-20260710`.
-
-Evidence:
-
-- Inspect state details derive `Dead` separately from status: `dd-daemon/src/containers/inspect/detail.rs:81`.
-
-Why this is bad:
-
-If daemon state preserves or reloads a dead lifecycle status, `State.Dead` should agree or the status should be normalized. dd can return `State.Status="dead"` with `State.Dead=false`.
-
-Isolated proof:
-
-```sh
-CARGO_TARGET_DIR=/Users/x/dd/dd-audit-daemon-events-logs-stats-restart-target cargo test -p dd-daemon containers_inspect_dead_status_sets_dead_boolean -- --nocapture
-```
-
-Result: `State.Dead` was `false`.
-
-## Container Wait Returns Immediately For Created Containers
-
-Priority: P1
-Impact: wait clients observe a fake successful exit before the container ever starts
-Confidence: High
-
-Verification status: Proven in isolated worktree `/Users/x/dd/dd-audit-daemon-exec-health-wait`.
-
-Evidence:
-
-- Container wait falls through to `StatusCode: 0` when there is no live process and no recorded exit: `dd-daemon/src/containers/lifecycle/manage.rs:57`.
-
-Why this is bad:
-
-Docker-compatible wait on a created container should block until the container starts and exits, or until an actual terminal state exists. dd returns immediately with success, so orchestrators can mark never-started containers as completed.
-
-Isolated proof:
-
-```sh
-CARGO_TARGET_DIR=/Users/x/dd/dd-audit-daemon-exec-health-wait-target cargo test -p dd-daemon audit_wait_on_created_container_blocks_until_start_or_exit -- --nocapture
-```
-
-Result: returned immediately with `{"StatusCode":0}`.
-
-## Exec Start Does Not Recheck Parent Container State
-
-Priority: P1
-Impact: execs can start after the parent stops or pauses between create and start
-Confidence: High
-
-Verification status: Source-proven in isolated worktree `/Users/x/dd/dd-audit-daemon-exec-health-wait`.
-
-Evidence:
-
-- Exec create validates parent state up front: `dd-daemon/src/containers/exec/create.rs:38`.
-- Exec start later clones parent state without rechecking running/paused status: `dd-daemon/src/containers/exec/start.rs:41`.
-
-Why this is bad:
-
-The container can stop or pause after exec creation. Docker-compatible exec start must validate the current parent state, otherwise stale exec handles can run against a non-running container lifecycle.
-
-## Attach Ignores Stream Selectors
-
-Priority: P1
-Impact: attach clients receive or send streams they explicitly disabled
-Confidence: High
-
-Verification status: Source-proven in isolated worktree `/Users/x/dd/dd-audit-daemon-exec-health-wait`.
-
-Evidence:
-
-- Attach route does not parse `stdin`, `stdout`, `stderr`, `stream`, or `logs` selectors: `dd-daemon/src/containers/exec/attach.rs:7`, `dd-daemon/src/containers/exec/mod.rs:50`.
-- Hijack behavior forwards output and input without selector filtering.
-
-Why this is bad:
-
-Docker attach selectors are part of the API contract. Ignoring them can leak unwanted stdout/stderr into clients, block on stdin unexpectedly, or break clients that attach only to one stream.
-
-## Exec Inspect Omits Docker State Fields
-
-Priority: P2
-Impact: Docker API clients lose exec lifecycle and stream capability details
-Confidence: High
-
-Verification status: Proven in isolated worktree `/Users/x/dd/dd-audit-daemon-exec-health-wait`.
-
-Evidence:
-
-- Exec inspect returns only `ID`, `Running`, `ExitCode`, `ContainerID`, and `ProcessConfig`: `dd-daemon/src/containers/exec/inspect.rs:23`, `dd-daemon/src/api/exec.rs:18`.
-
-Why this is bad:
-
-Docker exec inspect includes fields such as `CanRemove`, `OpenStdin`, `OpenStdout`, and `OpenStderr`. dd omits them, breaking clients that inspect exec stream capabilities or removal state.
-
-Isolated proof:
-
-```sh
-CARGO_TARGET_DIR=/Users/x/dd/dd-audit-daemon-exec-health-wait-target cargo test -p dd-daemon audit_exec_inspect_reports_full_docker_state_shape -- --nocapture
-```
-
-Result: failed first on missing `CanRemove`.
-
 ## Health Starting Transition Is Asynchronous
 
 Priority: P2
@@ -1180,57 +902,6 @@ Evidence:
 Why this is bad:
 
 For containers with a healthcheck, the health object should be visible as `starting` as part of the start transition. dd has a timing gap where inspect can report running with no health state yet, which causes pollers to miss the initial health lifecycle.
-
-## Wait Condition Removed Returns Before Removal
-
-Priority: P1
-Impact: Docker wait clients can observe removal before the object is gone
-Confidence: High
-
-Verification status: Proven in isolated worktree `/Users/x/dd/dd-audit-wait-events-health-20260710`.
-
-Evidence:
-
-- Container wait does not extract or enforce the `condition` query: `dd-daemon/src/containers/lifecycle/manage.rs:43`.
-- The test support route exercises the same endpoint behavior: `dd-daemon/src/test_support/containers.rs:50`.
-
-Why this is bad:
-
-Docker wait supports conditions such as `not-running`, `next-exit`, and `removed`. dd treats `condition=removed` like a generic exited wait and returns while the container still exists, so cleanup orchestration can race with later inspect/remove calls.
-
-Isolated proof:
-
-```sh
-CARGO_TARGET_DIR=/Users/x/dd/dd-audit-wait-events-health-target cargo test -p dd-daemon --bin dd-daemon wait_condition_removed_does_not_complete_while_container_exists -- --nocapture
-```
-
-Result: `wait?condition=removed` returned immediately while the exited container still existed.
-
-## Exec Lifecycle Events Are Missing
-
-Priority: P1
-Impact: Docker event consumers miss exec create/start/die transitions
-Confidence: High
-
-Verification status: Proven in isolated worktree `/Users/x/dd/dd-audit-wait-events-health-20260710`.
-
-Evidence:
-
-- Exec create records exec state without publishing an event: `dd-daemon/src/containers/exec/create.rs:21`.
-- Exec reaper records exit code without an exec die event: `dd-daemon/src/runtime/spawn/live.rs:276`.
-- Test support confirmed no event was emitted: `dd-daemon/src/test_support/exec.rs:55`.
-
-Why this is bad:
-
-Docker emits container events for `exec_create`, `exec_start`, and `exec_die`. dd omits them, so event-driven clients cannot track exec lifecycle or correlate failures.
-
-Isolated proof:
-
-```sh
-CARGO_TARGET_DIR=/Users/x/dd/dd-audit-wait-events-health-target cargo test -p dd-daemon --bin dd-daemon exec_create_emits_container_exec_create_event -- --nocapture
-```
-
-Result: timed out waiting for an `exec_create` event.
 
 ## Lifecycle Mutations Can Succeed Without Durable State
 

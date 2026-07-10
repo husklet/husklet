@@ -2,16 +2,12 @@
 //! the persisted-buffer fallback ordering. No async / no I/O — see `logs.rs` for the handler.
 use super::super::*;
 
-/// Parse a docker `since`/`until` value into unix seconds. Docker may send `"<secs>"` or
-/// `"<secs>.<nanos>"`; we keep the integer seconds. Returns None for absent/0/unparsable.
+/// Parse a docker `since`/`until` value into unix seconds. Docker accepts unix `secs[.nanos]`, RFC3339 /
+/// RFC3339Nano, and Go durations relative to now — all handled via the shared [`crate::util::parse_docker_ts`].
+/// Returns None for absent/0/unparsable (a 0/negative result disables the filter, matching prior behavior).
 pub(super) fn parse_unix_ts(s: &Option<String>) -> Option<i64> {
     let v = s.as_deref().filter(|x| !x.is_empty())?;
-    v.split('.')
-        .next()
-        .unwrap_or(v)
-        .parse::<i64>()
-        .ok()
-        .filter(|n| *n > 0)
+    crate::util::parse_docker_ts(v, crate::util::now_secs()).filter(|n| *n > 0)
 }
 
 /// Split a log buffer into newline-terminated lines, keeping the trailing `\n` on each line and any
@@ -44,7 +40,10 @@ pub(super) fn frame_chunk(stream: u8, data: &[u8], tty: bool, timestamps: bool, 
             log_frame(stream, data)
         };
     }
-    let ts = fmt_rfc3339(ts_secs);
+    // Docker `logs --timestamps` emits RFC3339Nano (zero-padded fractional nanoseconds), e.g.
+    // `2023-11-14T22:13:20.000000000Z`. Our chunk times are second-granular, so pad the fraction to nine
+    // zeros rather than dropping it — matching docker's wire shape (a second-precision stamp diverged).
+    let ts = fmt_rfc3339_nanos(ts_secs.saturating_mul(1_000_000_000));
     let mut out = Vec::new();
     for line in split_log_lines(data) {
         let mut p = Vec::with_capacity(ts.len() + 1 + line.len());
@@ -98,6 +97,17 @@ mod tests {
     }
 
     #[test]
+    fn parse_unix_ts_accepts_docker_rfc3339_forms() {
+        // Docker also sends RFC3339 / RFC3339Nano for --since/--until; these must apply the filter,
+        // not disable it (a previous integer-only parse returned None and streamed everything).
+        assert_eq!(parse_unix_ts(&Some("2023-11-14T22:13:20Z".into())), Some(1_700_000_000));
+        assert_eq!(
+            parse_unix_ts(&Some("2023-11-14T22:13:20.123456789Z".into())),
+            Some(1_700_000_000)
+        );
+    }
+
+    #[test]
     fn split_log_lines_keeps_trailing_newline_and_fragment() {
         // Each complete line keeps its `\n`; a final unterminated fragment is its own line.
         assert_eq!(
@@ -133,17 +143,24 @@ mod tests {
 
     #[test]
     fn frame_chunk_tty_timestamps_prefixes_each_line() {
-        // With timestamps + TTY, each split line gets an RFC3339 prefix and a space, no demux header.
-        let ts = fmt_rfc3339(1_700_000_000); // "2023-11-14T22:13:20Z"
+        // With timestamps + TTY, each split line gets an RFC3339Nano prefix and a space, no demux header.
+        let ts = fmt_rfc3339_nanos(1_700_000_000i64 * 1_000_000_000); // "2023-11-14T22:13:20.000000000Z"
         let out = frame_chunk(1, b"a\nb", true, true, 1_700_000_000);
         let expected = format!("{ts} a\n{ts} b");
         assert_eq!(out, expected.into_bytes());
     }
 
     #[test]
+    fn frame_chunk_timestamps_use_rfc3339nano_shape() {
+        // Docker `logs --timestamps` pads the fraction to nine zeros, not a bare second stamp.
+        let out = frame_chunk(1, b"a\n", true, true, 1_700_000_000);
+        assert_eq!(out, b"2023-11-14T22:13:20.000000000Z a\n".to_vec());
+    }
+
+    #[test]
     fn frame_chunk_nontty_timestamps_frames_each_stamped_line() {
         // With timestamps + non-TTY, each stamped line is wrapped in its own log frame.
-        let ts = fmt_rfc3339(1_700_000_000);
+        let ts = fmt_rfc3339_nanos(1_700_000_000i64 * 1_000_000_000);
         let out = frame_chunk(2, b"a\n", false, true, 1_700_000_000);
         let expected = log_frame(2, format!("{ts} a\n").as_bytes());
         assert_eq!(out, expected);

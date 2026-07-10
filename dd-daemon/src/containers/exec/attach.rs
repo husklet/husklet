@@ -12,11 +12,36 @@ pub(crate) fn attach_conflicts(status: &str, has_live: bool) -> bool {
     !has_live && matches!(status, "exited" | "dead")
 }
 
+/// `docker attach` stream selectors (`?stdin=1&stdout=1&stderr=1`). When NONE are set docker defaults to
+/// stdout+stderr (attach without `-i`); an explicit selector narrows to exactly the requested streams.
+#[derive(Deserialize, Default)]
+pub(crate) struct AttachQ {
+    stdin: Option<String>,
+    stdout: Option<String>,
+    stderr: Option<String>,
+    #[allow(dead_code)] // `stream=`/`logs=` are accepted for wire-compat; dd always streams live.
+    stream: Option<String>,
+    #[allow(dead_code)]
+    logs: Option<String>,
+}
+
 pub(crate) async fn containers_attach(
     State(a): State<App>,
     Path(id): Path<String>,
+    Query(q): Query<AttachQ>,
     req: Request,
 ) -> Response {
+    // Resolve the requested streams. If the client set none, default to stdout+stderr (docker's default
+    // attach); otherwise honor exactly the selected ones.
+    let streams = if q.stdin.is_none() && q.stdout.is_none() && q.stderr.is_none() {
+        HijackStreams { stdin: false, stdout: true, stderr: true }
+    } else {
+        HijackStreams {
+            stdin: q_truthy(&q.stdin),
+            stdout: q_truthy(&q.stdout),
+            stderr: q_truthy(&q.stderr),
+        }
+    };
     let (full, tty, status) = {
         let g = a.inner.lock().await;
         let Some(full) = resolve_cid(&g, &id) else {
@@ -36,7 +61,7 @@ pub(crate) async fn containers_attach(
         }
         g.live.entry(full).or_insert_with(Live::new).clone()
     };
-    spawn_hijack_io(hyper::upgrade::on(req), live, tty);
+    spawn_hijack_io_sel(hyper::upgrade::on(req), live, tty, streams);
     hijack_response()
 }
 

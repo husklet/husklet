@@ -56,42 +56,38 @@ pub(crate) async fn containers_rename(
     StatusCode::NO_CONTENT.into_response()
 }
 
-/// POST /containers/:id/wait -- block until the container exits, then return {"StatusCode": n}. CRITICAL:
-/// the docker `run` CLI sends this BEFORE /start and reads it concurrently, so we must flush the response
-/// HEADERS immediately (200) and stream the JSON body only once the guest exits -- otherwise the CLI
-/// blocks waiting for the response and never sends /start (a deadlock).
-pub(crate) async fn containers_wait(State(a): State<App>, Path(id): Path<String>) -> Response {
-    let (full, live, done_code) = {
+#[derive(Deserialize)]
+pub(crate) struct WaitQ {
+    /// `docker wait --condition`: `not-running` (default), `next-exit`, or `removed`.
+    condition: Option<String>,
+}
+
+/// POST /containers/:id/wait -- block until the container reaches the requested `condition`, then return
+/// {"StatusCode": n}. CRITICAL: the docker `run` CLI sends this BEFORE /start and reads it concurrently,
+/// so we flush the response HEADERS immediately (200) and stream the JSON body only once the condition is
+/// met -- otherwise the CLI blocks waiting for the response and never sends /start (a deadlock).
+///
+/// Conditions:
+///   - `not-running` (default) / `next-exit`: block until the container EXITS. A `created` container that
+///     has never started must NOT return a fake `StatusCode:0` immediately (orchestrators would treat a
+///     never-started container as completed) — we poll until it starts and exits.
+///   - `removed`: block until the container no longer exists (a `docker rm`), so cleanup orchestration
+///     doesn't race a still-present container.
+pub(crate) async fn containers_wait(
+    State(a): State<App>,
+    Path(id): Path<String>,
+    Query(q): Query<WaitQ>,
+) -> Response {
+    let full = {
         let g = a.inner.lock().await;
-        let Some(full) = resolve_cid(&g, &id) else {
-            return no_such(&id);
-        };
-        let live = g.live.get(&full).cloned();
-        let done = g
-            .containers
-            .get(&full)
-            .filter(|c| c.status == "exited")
-            .map(|c| c.exit_code);
-        (full.clone(), live, done)
+        match resolve_cid(&g, &id) {
+            Some(f) => f,
+            None => return no_such(&id),
+        }
     };
+    let condition = q.condition.unwrap_or_default();
     let stream = futures_util::stream::once(async move {
-        let code = if let Some(c) = done_code {
-            c
-        } else if let Some(live) = live {
-            let mut rx = live.exit_rx.clone();
-            loop {
-                let cur = *rx.borrow();
-                if let Some(c) = cur {
-                    break c;
-                }
-                if rx.changed().await.is_err() {
-                    break 0;
-                }
-            }
-        } else {
-            0
-        };
-        let _ = full;
+        let code = wait_for_condition(&a, &full, &condition).await;
         Ok::<_, std::io::Error>(format!("{{\"StatusCode\":{code}}}\n").into_bytes())
     });
     Response::builder()
@@ -99,6 +95,51 @@ pub(crate) async fn containers_wait(State(a): State<App>, Path(id): Path<String>
         .header("Content-Type", "application/json")
         .body(Body::from_stream(stream))
         .unwrap()
+}
+
+/// Block until a wait condition is satisfied, returning the container's exit code (0 if never recorded).
+/// Polls daemon state (re-locking each tick, never holding the lock across an await) so it observes a
+/// concurrent start/exit/remove; when a `Live` exists it waits on its exit signal for prompt wakeup.
+async fn wait_for_condition(a: &App, full: &str, condition: &str) -> i64 {
+    let removed = condition == "removed";
+    let mut last_code = 0;
+    loop {
+        let (present, exited, code, live) = {
+            let g = a.inner.lock().await;
+            match g.containers.get(full) {
+                Some(c) => (
+                    true,
+                    c.status == "exited" || c.status == "dead",
+                    c.exit_code,
+                    g.live.get(full).cloned(),
+                ),
+                None => (false, false, last_code, None),
+            }
+        };
+        if removed {
+            if !present {
+                return last_code; // container gone — condition met
+            }
+            if exited {
+                last_code = code; // remember the exit code to report once it's actually removed
+            }
+        } else {
+            if !present {
+                return last_code; // removed out from under us — nothing left to wait on
+            }
+            if exited {
+                return code;
+            }
+        }
+        // Prefer the exit watch (prompt) when a live process exists; otherwise poll (created container
+        // that hasn't started yet, or a `removed` wait after exit). Cap the wait so removal is re-checked.
+        if let Some(live) = live {
+            let mut rx = live.exit_rx.clone();
+            let _ = tokio::time::timeout(std::time::Duration::from_millis(100), rx.changed()).await;
+        } else {
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        }
+    }
 }
 
 #[derive(Deserialize)]

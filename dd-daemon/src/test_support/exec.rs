@@ -233,3 +233,83 @@ async fn flow_exec_survives_container_stop_then_fresh_exec_409() {
         "a rejected exec must NOT record a second exec"
     );
 }
+
+// ---- exec inspect full docker shape (CanRemove/OpenStd*/DetachKeys/Pid) ----------------------
+#[tokio::test]
+async fn exec_inspect_reports_full_docker_state_shape() {
+    let app = test_app();
+    seed_container(&app, "c1", "running").await;
+    let created = crate::containers::exec_create(
+        State(app.clone()),
+        Path("c1".into()),
+        axum::Json(serde_json::from_value(serde_json::json!({"Cmd":["ls"],"Tty":true})).unwrap()),
+    )
+    .await;
+    let exec_id = to_body_json(created).await["Id"].as_str().unwrap().to_string();
+    let v = to_body_json(crate::containers::exec_inspect(State(app.clone()), Path(exec_id)).await).await;
+    for key in ["CanRemove", "OpenStdin", "OpenStdout", "OpenStderr", "DetachKeys", "Pid"] {
+        assert!(v.as_object().unwrap().contains_key(key), "exec inspect missing {key}: {v}");
+    }
+    assert_eq!(v["OpenStdout"], true);
+    assert_eq!(v["CanRemove"], false);
+}
+
+// ---- exec_create emits a container exec_create event -----------------------------------------
+#[tokio::test]
+async fn exec_create_emits_exec_create_event() {
+    let app = test_app();
+    seed_container(&app, "c1", "running").await;
+    let mut rx = app.events.subscribe();
+    let _ = crate::containers::exec_create(
+        State(app.clone()),
+        Path("c1".into()),
+        axum::Json(serde_json::from_value(serde_json::json!({"Cmd":["ls"]})).unwrap()),
+    )
+    .await;
+    let mut saw = false;
+    while let Ok(ev) = rx.try_recv() {
+        if ev["Type"] == "container" && ev["Action"].as_str().unwrap_or("").starts_with("exec_create") {
+            saw = true;
+        }
+    }
+    assert!(saw, "exec_create must emit a container exec_create event");
+}
+
+// ---- exec_start is single-use + rechecks parent state ----------------------------------------
+#[tokio::test]
+async fn exec_start_rejects_already_started_exec() {
+    let app = test_app();
+    seed_container(&app, "c1", "running").await;
+    let created = crate::containers::exec_create(
+        State(app.clone()),
+        Path("c1".into()),
+        axum::Json(serde_json::from_value(serde_json::json!({"Cmd":["sleep","5"]})).unwrap()),
+    )
+    .await;
+    let exec_id = to_body_json(created).await["Id"].as_str().unwrap().to_string();
+    // Mark it already started (as a prior /start would).
+    app.inner.lock().await.execs.get_mut(&exec_id).unwrap().started = true;
+    let req = axum::http::Request::builder().body(axum::body::Body::from("{\"Detach\":true}")).unwrap();
+    let resp = crate::containers::exec_start(State(app.clone()), Path(exec_id), req).await;
+    assert_eq!(resp.status(), StatusCode::CONFLICT, "a second start of one exec is 409");
+}
+
+#[tokio::test]
+async fn exec_start_rejects_when_parent_no_longer_running() {
+    let app = test_app();
+    seed_container(&app, "c1", "running").await;
+    let created = crate::containers::exec_create(
+        State(app.clone()),
+        Path("c1".into()),
+        axum::Json(serde_json::from_value(serde_json::json!({"Cmd":["ls"]})).unwrap()),
+    )
+    .await;
+    let exec_id = to_body_json(created).await["Id"].as_str().unwrap().to_string();
+    // The parent stops between create and start.
+    set_status(&app, "c1", "exited").await;
+    let req = axum::http::Request::builder().body(axum::body::Body::from("{\"Detach\":true}")).unwrap();
+    let resp = crate::containers::exec_start(State(app.clone()), Path(exec_id), req).await;
+    assert_eq!(resp.status(), StatusCode::CONFLICT, "exec start on a stopped parent is 409");
+    let msg = to_body_string(resp).await;
+    assert!(msg.contains("is not running"), "got: {msg}");
+}
