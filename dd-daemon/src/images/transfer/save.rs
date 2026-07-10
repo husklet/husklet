@@ -44,6 +44,10 @@ pub(crate) async fn image_save(State(a): State<App>, Query(q): Query<SaveQ>) -> 
         user: img.user.clone(),
         exposed_ports: img.exposed_ports.clone(),
         os: (img.arch.os() == "darwin").then(|| "darwin".to_string()),
+        // Record the linux instruction set so an ELF-less rootfs (scratch/distroless linux/amd64) restores
+        // its arch on load instead of being ELF-sniffed down to arm64. Labels carry through too.
+        arch: (img.arch.os() == "linux").then(|| img.arch.arch().to_string()),
+        labels: img.labels.clone(),
         ..Default::default()
     };
     let rootfs = std::path::PathBuf::from(&img.rootfs);

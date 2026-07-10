@@ -54,6 +54,8 @@ pub struct LoadedImage {
     pub user: String,
     /// The exposed-port keys (e.g. `"5432/tcp"`).
     pub exposed_ports: Vec<String>,
+    /// The image labels (`LABEL` / `--label`), preserved across save/load.
+    pub labels: std::collections::HashMap<String, String>,
     /// The `docker stop` signal (`Config.StopSignal`); empty ⇒ SIGTERM.
     pub stop_signal: String,
     /// The dirs that get an anonymous volume at run (`Config.Volumes` keys).
@@ -92,7 +94,9 @@ impl Store {
             "name": img.name, "cmd": img.cmd, "env": img.env, "entrypoint": img.entrypoint,
             "workdir": img.workdir, "user": img.user, "exposed_ports": img.exposed_ports,
             "stop_signal": img.stop_signal, "img_volumes": img.img_volumes,
-            "healthcheck": img.healthcheck,
+            "healthcheck": img.healthcheck, "labels": img.labels,
+            // Record os + instruction set so discovery restores the arch even for an ELF-less rootfs.
+            "os": img.arch.os(), "arch": img.arch.isa(),
         });
         if darwin {
             dd["os"] = json!("darwin");

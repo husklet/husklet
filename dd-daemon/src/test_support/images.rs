@@ -458,3 +458,108 @@ async fn nonforced_rmi_last_alias_409_when_container_uses_rootfs_under_old_tag()
         "the in-use image survives the refused rmi"
     );
 }
+
+// ---- commit captures upper-layer WRITES + the container's User -------------------------------
+#[tokio::test]
+async fn commit_captures_upper_writes_and_user() {
+    let app = test_app();
+    let uniq = format!("{}-{}", std::process::id(), std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos());
+    let base = std::env::temp_dir().join(format!("dd-commit-{uniq}"));
+    let lower = base.join("lower");
+    let upper = base.join("upper");
+    std::fs::create_dir_all(&lower).unwrap();
+    std::fs::create_dir_all(&upper).unwrap();
+    // Lower image content: marker=lower. Container write in the upper: marker=upper (+ a new file).
+    std::fs::write(lower.join("marker"), b"lower\n").unwrap();
+    std::fs::write(upper.join("marker"), b"upper\n").unwrap();
+    std::fs::write(upper.join("added"), b"new\n").unwrap();
+    {
+        let mut g = app.inner.lock().await;
+        g.containers.insert("commitme0000".into(), Container {
+            id: "commitme0000".into(), image: "src:1".into(),
+            rootfs: lower.to_string_lossy().into_owned(),
+            upper: upper.to_string_lossy().into_owned(),
+            user: "1001:1002".into(), status: "exited".into(), ..Default::default()
+        });
+    }
+    let q: crate::build::CommitQ = serde_json::from_value(serde_json::json!({
+        "container": "commitme0000", "repo": "committed", "tag": "v1"
+    })).unwrap();
+    let r = crate::build::commit_container(State(app.clone()), Query(q)).await;
+    assert_eq!(r.status(), StatusCode::CREATED, "commit succeeds");
+    // The committed image records the container's User.
+    let g = app.inner.lock().await;
+    let img = g.images.iter().find(|i| i.name == "committed:v1").expect("committed image registered");
+    assert_eq!(img.user, "1001:1002", "commit preserves the container User");
+    // The committed rootfs reflects the UPPER writes, not the stale lower content.
+    let marker = std::fs::read_to_string(std::path::Path::new(&img.rootfs).join("marker")).unwrap();
+    assert_eq!(marker, "upper\n", "commit captures the container's writable-layer writes");
+    assert!(std::path::Path::new(&img.rootfs).join("added").exists(), "commit captures new files");
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+// ---- discovery restores sidecar labels + arch ------------------------------------------------
+#[tokio::test]
+async fn discover_images_restores_labels_and_arch_from_sidecar() {
+    let app = test_app();
+    let dir = std::path::Path::new(&app.images_dir).join("scratchx86");
+    std::fs::create_dir_all(dir.join("rootfs")).unwrap();
+    std::fs::write(dir.join("dd-image.json"), serde_json::json!({
+        "name": "scratchx86:latest", "arch": "x86_64", "os": "linux",
+        "labels": {"com.example.k": "v"}
+    }).to_string()).unwrap();
+    let imgs = crate::util::discover_images(&app.images_dir);
+    let img = imgs.iter().find(|i| i.name == "scratchx86:latest").expect("discovered");
+    assert_eq!(img.labels.get("com.example.k").map(String::as_str), Some("v"), "sidecar labels restored");
+    assert_eq!(img.arch, ddjit::Guest::LinuxX86_64, "sidecar arch restored (not arm64 fallback)");
+}
+
+// ---- healthcheck NONE override disables the probe --------------------------------------------
+#[tokio::test]
+async fn create_healthcheck_none_disables_probe() {
+    let app = test_app();
+    seed_image_rootfs(&app, "alpine", "/store/alpine-hc").await;
+    let q: crate::containers::CreateQ = serde_json::from_value(serde_json::json!({})).unwrap();
+    let body = create_body(serde_json::json!({
+        "Image": "alpine", "Healthcheck": {"Test": ["NONE"]}
+    }));
+    let r = crate::containers::containers_create(State(app.clone()), Query(q), body).await;
+    assert_eq!(r.status(), StatusCode::CREATED);
+    let g = app.inner.lock().await;
+    let c = g.containers.values().next().unwrap();
+    assert!(c.healthcheck.is_none(), "Test=[NONE] must disable the healthcheck (no fake health monitor)");
+}
+
+// ---- export merges the writable upper layer (captures container writes) -----------------------
+#[tokio::test]
+async fn export_includes_upper_layer_writes() {
+    let app = test_app();
+    let uniq = format!("{}-{}", std::process::id(), std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos());
+    let base = std::env::temp_dir().join(format!("dd-export-{uniq}"));
+    let lower = base.join("lower");
+    let upper = base.join("upper");
+    std::fs::create_dir_all(&lower).unwrap();
+    std::fs::create_dir_all(&upper).unwrap();
+    std::fs::write(lower.join("base.txt"), b"lower\n").unwrap();
+    std::fs::write(upper.join("written.txt"), b"upper\n").unwrap();
+    {
+        let mut g = app.inner.lock().await;
+        g.containers.insert("exportme0000".into(), Container {
+            id: "exportme0000".into(), image: "x".into(),
+            rootfs: lower.to_string_lossy().into_owned(),
+            upper: upper.to_string_lossy().into_owned(),
+            status: "exited".into(), ..Default::default()
+        });
+    }
+    let resp = crate::containers::containers_export(State(app.clone()), Path("exportme0000".into())).await;
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+    // The tar stream must include BOTH the lower base file AND the container's upper-layer write.
+    let hay = body.as_ref();
+    let contains = |needle: &[u8]| hay.windows(needle.len()).any(|w| w == needle);
+    assert!(contains(b"base.txt"), "export includes the lower rootfs");
+    assert!(contains(b"written.txt"), "export must include the container's writable-layer write");
+    let _ = std::fs::remove_dir_all(&base);
+}

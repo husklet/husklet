@@ -107,23 +107,58 @@ pub(crate) async fn containers_update(
     Json(crate::api::ContainerUpdateResponse { warnings: vec![] }).into_response()
 }
 
-/// `GET /containers/{id}/export` — `docker export`. Streams a tar of the container rootfs.
+/// `GET /containers/{id}/export` — `docker export`. Streams a tar of the container FILESYSTEM (the image
+/// rootfs with the container's writable upper layer merged on top), not the bare lower image — otherwise
+/// the export silently drops every write the container made.
 pub(crate) async fn containers_export(State(a): State<App>, Path(id): Path<String>) -> Response {
-    let rootfs = {
+    let (rootfs, upper) = {
         let g = a.inner.lock().await;
-        match resolve_get(&g, &id).map(|(_, c)| c.rootfs.clone()) {
+        match resolve_get(&g, &id).map(|(_, c)| (c.rootfs.clone(), c.upper.clone())) {
             Some(r) => r,
             None => return no_such(&id),
         }
     };
-    match std::process::Command::new("tar")
+    // With no writable upper (darwin / legacy), tar the rootfs directly. With one, materialize the merged
+    // view into a temp dir (lower copied, then upper overlaid so container writes win) and tar THAT.
+    let merged_tmp = if !upper.is_empty() && std::path::Path::new(&upper).is_dir() {
+        let tmp = dd_home().join("export-tmp").join(&id[..id.len().min(16)]);
+        let _ = std::fs::remove_dir_all(&tmp);
+        if std::fs::create_dir_all(&tmp).is_err() {
+            return server_error("export: failed to stage merged rootfs");
+        }
+        let cp_lower = std::process::Command::new("cp")
+            .arg("-a")
+            .arg(format!("{rootfs}/."))
+            .arg(&tmp)
+            .status();
+        if !matches!(cp_lower, Ok(s) if s.success()) {
+            let _ = std::fs::remove_dir_all(&tmp);
+            return server_error("export: failed to stage lower rootfs");
+        }
+        let _ = std::process::Command::new("cp")
+            .arg("-a")
+            .arg(format!("{upper}/."))
+            .arg(&tmp)
+            .status();
+        Some(tmp)
+    } else {
+        None
+    };
+    let tar_dir = merged_tmp
+        .as_ref()
+        .map(|t| t.to_string_lossy().into_owned())
+        .unwrap_or_else(|| rootfs.clone());
+    let out = std::process::Command::new("tar")
         .arg("cf")
         .arg("-")
         .arg("-C")
-        .arg(&rootfs)
+        .arg(&tar_dir)
         .arg(".")
-        .output()
-    {
+        .output();
+    if let Some(t) = &merged_tmp {
+        let _ = std::fs::remove_dir_all(t);
+    }
+    match out {
         Ok(o) if o.status.success() => Response::builder()
             .status(StatusCode::OK)
             .header("Content-Type", "application/x-tar")

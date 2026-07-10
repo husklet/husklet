@@ -37,6 +37,13 @@ pub struct Manifest {
     /// `"darwin"` for a native-macOS image; absent for a normal linux image.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub os: Option<String>,
+    /// The guest instruction set (`"x86_64"` / `"aarch64"`), recorded so an ELF-less linux image (scratch/
+    /// distroless) restores its arch on load instead of the ELF-sniff-then-arm64 fallback. Omitted when unset.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub arch: Option<String>,
+    /// Image labels (`LABEL` / `--label`), preserved across save/load. Omitted when empty.
+    #[serde(default, skip_serializing_if = "std::collections::HashMap::is_empty")]
+    pub labels: std::collections::HashMap<String, String>,
     /// The `docker stop` signal (`Config.StopSignal`); omitted when unset.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub stop_signal: Option<String>,
@@ -72,6 +79,8 @@ mod tests {
             user: "1000".to_string(),
             exposed_ports: vec!["5432/tcp".to_string()],
             os: Some("darwin".to_string()),
+            arch: None,
+            labels: std::collections::HashMap::new(),
             stop_signal: Some("SIGQUIT".to_string()),
             img_volumes: vec!["/data".to_string()],
             healthcheck: Some(json!({"Test": ["CMD", "true"]})),

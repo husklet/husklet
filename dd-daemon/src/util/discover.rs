@@ -36,6 +36,7 @@ fn image_from_discovered(d: dd_images::DiscoveredImage) -> Image {
         workdir: d.workdir,
         user: d.user,
         exposed_ports: d.exposed_ports,
+        labels: d.labels,
         created: d.created,
         stop_signal: d.stop_signal,
         img_volumes: d.img_volumes,
