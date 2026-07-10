@@ -4,44 +4,6 @@ Date: 2026-07-10
 
 These findings came from isolated workspaces `/tmp/dd-agent5-sparse.seZJ2E` and `/Users/x/dd/dd-verify-5b`. The main worktree was not modified.
 
-## Build Context `COPY .` Copies `.context.tar`
-
-Priority: P1
-Impact: silent wrong image contents and build bloat
-Confidence: High
-
-Evidence:
-
-- Build handler writes request body to `ctx/.context.tar`: `dd-daemon/src/build/handler.rs:61`.
-- It then extracts that tar into the same context directory: `dd-daemon/src/build/handler.rs:69`.
-- Dockerfile `COPY` copies from the context directory with `cp -a`: `dd-daemon/src/build/steps.rs:221`.
-
-Why this is bad:
-
-For a normal context containing `Dockerfile` and `hello.txt`, `COPY . /app` should copy submitted context contents only. Because `.context.tar` lives inside the extracted context, it is copied into the image too.
-
-Isolated proof:
-
-PoC copied `.context.tar`, `Dockerfile`, and `hello.txt`; `.context.tar` was 10240 bytes. This is a deterministic content mismatch and bloat.
-
-## Dockerfile Symlink Is Followed Outside Context
-
-Priority: P1
-Impact: wrong Dockerfile source, non-reproducible builds
-Confidence: High
-
-Evidence:
-
-- Build handler reads the Dockerfile with `std::fs::read_to_string(ctx.join(&dfname))`: `dd-daemon/src/build/handler.rs:74`.
-
-Why this is bad:
-
-If the tar member `Dockerfile` is a symlink to `../outside/Dockerfile.external`, the build reads the external target. Dockerfile source should be deterministic from submitted context contents.
-
-Isolated proof:
-
-PoC created a symlinked Dockerfile and the build read `FROM external\n` from outside the context.
-
 ## Docker Cp Put Follows Existing Destination Symlink
 
 Priority: P1
