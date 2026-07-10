@@ -2793,6 +2793,7 @@ static int synth_names_dir_open(const char *guestpath, const char *const *names,
 static int synth_misc_dir_is(const char *gp) {
     if (!gp) return 0;
     if (!strcmp(gp, "/proc/net") || !strcmp(gp, "/proc/net/")) return 1;
+    if (!strcmp(gp, "/proc/tty") || !strcmp(gp, "/proc/tty/")) return 1;
     if (!strcmp(gp, "/sys/fs/cgroup") || !strcmp(gp, "/sys/fs/cgroup/")) return 1;
     if (!strcmp(gp, "/sys/class/block") || !strcmp(gp, "/sys/class/block/")) return 1;
     if (!strcmp(gp, "/sys/block") || !strcmp(gp, "/sys/block/")) return 1;
@@ -2827,6 +2828,11 @@ static int synth_misc_dir_open(const char *gp) {
                                           "route", "if_inet6", "snmp", "snmp6", "netstat",
                                           "sockstat", "sockstat6", "ipv6_route", 0};
         return synth_names_dir_open("/proc/net", net, 0);
+    }
+    // /proc/tty: tty discovery tools (agetty, `ls /proc/tty`) walk this before reading drivers.
+    if (!strcmp(gp, "/proc/tty") || !strcmp(gp, "/proc/tty/")) {
+        static const char *const tty[] = {"drivers", "ldiscs", 0};
+        return synth_names_dir_open("/proc/tty", tty, 0);
     }
     // /proc/[self|<pid>]/ns: enumerate the namespace magic links (readlink served in fs.c).
     {
@@ -3721,6 +3727,16 @@ static int proc_open(const char *rp) {
         n = snprintf(buf, sizeof buf,
                      "Character devices:\n  1 mem\n  5 /dev/tty\n  5 /dev/console\n  5 /dev/ptmx\n"
                      "136 pts\n\nBlock devices:\n  7 loop\n  8 sd\n 253 device-mapper\n 259 blkext\n");
+    } else if (!strcmp(rp, "/proc/tty/drivers")) {
+        // tty driver table (`/proc/tty/drivers`) tty-discovery tools read; the exact rows are host-variant,
+        // so present the canonical container set (pty pair + console/serial) so the file is non-empty.
+        n = snprintf(buf, sizeof buf,
+                     "/dev/tty             /dev/tty        5       0 system:/dev/tty\n"
+                     "/dev/console         /dev/console    5       1 system:console\n"
+                     "/dev/ptmx            /dev/ptmx       5       2 system\n"
+                     "unknown              /dev/tty        4    1-63 console\n"
+                     "pty_slave            /dev/pts      136 0-1048575 pty:slave\n"
+                     "pty_master           /dev/ptm      128 0-1048575 pty:master\n");
     } else if (!strcmp(rp, "/proc/vmstat")) {
         n = snprintf(buf, sizeof buf,
                      "nr_free_pages 262144\nnr_zone_inactive_anon 0\nnr_zone_active_anon 0\n"
@@ -5017,6 +5033,10 @@ static int synth_stat_raw(const char *gp, struct stat *s) {
             if (isnum) {
                 int pfd = atoi(leaf + 3);
                 if (eventfd_hidden_peer_fd(pfd)) return 0;
+                // A CLOSED fd has no /proc/self/fd/N entry on Linux -- stat/access must ENOENT, not report a
+                // stale live link (readlink already returns ENOENT for it). Only our own pid reaches here
+                // (proc_self_leaf gates on self), so F_GETFD names the caller's fd.
+                if (fcntl(pfd, F_GETFD) < 0) return 0;
                 memset(s, 0, sizeof *s);
                 s->st_mode = S_IFLNK | 0777;
                 s->st_nlink = 1;

@@ -388,32 +388,6 @@ cargo run -p dd-tests -- -e x86_64 sysnet-none-direct
 
 Observed dd: `sysnet_none eth0_list=0 eth0_stat=1:0 eth0_addr=1:0`; expected direct lookups to return `ENOENT`.
 
-### Closed `/proc/self/fd/N` Reports Stale Existence
-
-Priority: P1
-Impact: fd lifecycle probes see closed descriptors as live
-Confidence: High
-
-Verification status: Proven in isolated worktree `/Users/x/dd/dd-worker-AM-envproc-20260710`.
-
-Evidence:
-
-- `/proc/self/fd/N` readlink checks whether the fd is still open: `dd-jit-darwin/src/runtime/os/linux/container/vfs.c:4756`.
-- Synthetic stat/access treats numeric proc-fd paths as live without the same fd validity check: `dd-jit-darwin/src/runtime/os/linux/syscall/fs.c:2553`.
-
-Why this is bad:
-
-After close, Linux makes `/proc/self/fd/N` disappear. dd returns `ENOENT` for readlink but success for lstat/access, creating stale fd state for runtime probes and cleanup logic.
-
-Isolated proof:
-
-```sh
-cargo run -p dd-tests -- -e aarch64 proc-fd-closed-stat
-cargo run -p dd-tests -- -e x86_64 proc-fd-closed-stat
-```
-
-Observed dd: `proc_fd_closed lstat=1:0 readlink=0:2 access=1:0`; native Linux returned `ENOENT` for all three.
-
 ### Peer `/proc/<pid>/fd` Is Advertised But Not Openable
 
 Priority: P2
@@ -693,29 +667,6 @@ Observed proof:
 ```text
 Linux/qemu: tty nb_read=-1 errno=11
 dd:         tty nb_read=0 errno=0
-```
-
-### `/proc/tty` Surface Is Absent
-
-Priority: P2
-Impact: tty discovery tools see missing kernel metadata
-Confidence: High
-
-Verification status: Proven in isolated worktree `/Users/x/dd/dd-audit-devfs-procfs-20260710`.
-
-Evidence:
-
-- `/proc` root static entries omit `tty`: `dd-jit-darwin/src/runtime/os/linux/container/vfs.c:2527`.
-
-Why this is bad:
-
-Linux exposes `/proc/tty` and readable metadata such as `/proc/tty/drivers`. dd returns `ENOENT`, so procfs walkers and tty discovery tools underreport terminal support.
-
-Observed proof:
-
-```text
-dd:    /proc/tty, /proc/tty/drivers, /proc/tty/driver, /proc/tty/driver/serial -> ENOENT
-Linux: /proc/tty exists and /proc/tty/drivers is readable
 ```
 
 ## Regression Gate Shape
