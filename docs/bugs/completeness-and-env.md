@@ -436,30 +436,6 @@ dd:    bind content=1 mounts=0 mountinfo=0
 Linux: bind content=1 mounts=1 mountinfo=1
 ```
 
-### `/proc/self/smaps` Can Hang On Read
-
-Priority: P1
-Impact: memory diagnostics can block indefinitely
-Confidence: High
-
-Verification status: Proven in isolated worktree `/Users/x/dd/dd-audit-procfs-20260710-130826`.
-
-Evidence:
-
-- Smaps generation walks synthetic mapping data: `dd-jit-darwin/src/runtime/os/linux/container/vfs.c:1388`, `dd-jit-darwin/src/runtime/os/linux/container/vfs.c:1493`, `dd-jit-darwin/src/runtime/os/linux/container/vfs.c:1555`.
-- Direct proc open serves `smaps`: `dd-jit-darwin/src/runtime/os/linux/container/vfs.c:3038`.
-
-Why this is bad:
-
-Opening and reading `/proc/self/smaps` should return promptly. Memory profilers, Redis/kernel COW checks, JVM/native diagnostics, and opportunistic probes can hang under dd.
-
-Observed proof:
-
-```text
-dd:    timeout after 10 seconds reading /proc/self/smaps
-Linux: smaps_read n=3991
-```
-
 ### Futex-Blocked Processes Report Running In Procfs
 
 Priority: P2
