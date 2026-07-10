@@ -88,6 +88,7 @@ This directory is a working inventory of suspicious behavior, bad architecture, 
 | P1 | daemon/durability | lifecycle mutations can succeed without durable state | High | [daemon-tests-docs.md](daemon-tests-docs.md#lifecycle-mutations-can-succeed-without-durable-state) |
 | P1 | daemon/create | create with missing network persists partial container state | High | [daemon-tests-docs.md](daemon-tests-docs.md#create-with-missing-network-persists-partial-container-state) |
 | P1 | daemon/create | create accepts image records whose rootfs is missing | High | [daemon-tests-docs.md](daemon-tests-docs.md#create-accepts-image-records-whose-rootfs-is-missing) |
+| P1 | daemon/create | anonymous volume materialization failures are ignored | High | [daemon-tests-docs.md](daemon-tests-docs.md#anonymous-volume-materialization-failures-are-ignored) |
 | P1 | daemon/volumes | volume create/delete/prune report success while storage is wrong | High | [daemon-tests-docs.md](daemon-tests-docs.md#volume-createdeleteprune-report-success-while-storage-is-wrong) |
 | P1 | daemon/events | event filters broaden to match-all for supported keys | High | [daemon-tests-docs.md](daemon-tests-docs.md#event-filters-broaden-to-match-all-for-supported-keys) |
 | P1 | daemon/events | malformed filters JSON becomes an unfiltered stream | High | [daemon-tests-docs.md](daemon-tests-docs.md#malformed-filters-json-becomes-an-unfiltered-stream) |
@@ -277,6 +278,7 @@ This directory is a working inventory of suspicious behavior, bad architecture, 
 | P2 | launch/config | path-list config still uses delimiter env strings | Medium | [completeness-and-env.md](completeness-and-env.md#typed-launch-path-lists-still-use-delimiter-env-strings) |
 | P2 | rendering/tests | GUI probe sources are outside default matrix | High | [gpu-display-sentry.md](gpu-display-sentry.md#rendering-coverage-gaps-are-silent) |
 | P2 | import/cleanup | failed image import leaves partial target | High | [archive-fs-compat.md](archive-fs-compat.md#import-failure-leaves-partial-target) |
+| P2 | volume/metadata | anonymous volume copy-up drops seeded metadata | High | [archive-fs-compat.md](archive-fs-compat.md#anonymous-volume-copy-up-drops-seeded-directory-metadata) |
 | P1 | volume/contents | image `VOLUME` copy-up can escape the image rootfs | High | [archive-fs-compat.md](archive-fs-compat.md#image-volume-copy-up-can-escape-the-image-rootfs) |
 | P1 | archive/metadata | UID/GID metadata is lost on load/import/cp PUT | High | [archive-fs-compat.md](archive-fs-compat.md#uidgid-metadata-is-lost-on-loadimportcp-put) |
 | P2 | build/metadata | Dockerfile `COPY`/`ADD` metadata flags are ignored | High | [archive-fs-compat.md](archive-fs-compat.md#dockerfile-copy-add-metadata-flags-are-ignored) |
