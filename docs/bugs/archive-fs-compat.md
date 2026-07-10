@@ -98,56 +98,6 @@ Isolated proof:
 
 PoC created `linkout -> ../outside` and `linkout/from_import.txt`; GNU tar failed loudly, but the target rootfs remained with `linkout`.
 
-## `COPY` / `ADD` Cache Ignores Symlink Targets
-
-Priority: P1
-Impact: stale cached image contents after symlink target changes
-Confidence: High
-
-Verification status: Proven in isolated worktree `/Users/x/dd/dd-verify-5b`.
-
-Evidence:
-
-- `path_digest` hashes find output with type/mode/size/path plus regular-file hashes: `dd-images/src/build/cache.rs:72`.
-- Symlink target text is not included in the digest.
-
-Why this is bad:
-
-Two symlinks with same path and same target-string length but different target values can hash identically. A rebuild can reuse a cached layer containing the old symlink target.
-
-Isolated proof:
-
-```sh
-cargo test -p dd-images poc_path_digest_must_include_symlink_target -- --ignored
-```
-
-Observed: identical digest for `link -> aa` and `link -> bb`.
-
-## `COPY` / `ADD` Cache Ignores Hardlink Topology
-
-Priority: P1
-Impact: silent metadata corruption after cache hit
-Confidence: High
-
-Verification status: Proven in isolated worktree `/Users/x/dd/dd-verify-5b`.
-
-Evidence:
-
-- `path_digest` includes per-path type/mode/size/content but not inode number, link count, or tar hardlink identity: `dd-images/src/build/cache.rs:72`.
-- `COPY` uses `cp -a`, so hardlink topology is part of the produced filesystem: `dd-daemon/src/build/steps.rs:221`.
-
-Why this is bad:
-
-A cache hit can preserve old hardlinks when the context changed to independent files, or lose hardlinks in the opposite direction.
-
-Isolated proof:
-
-```sh
-cargo test -p dd-images poc_path_digest_must_include_hardlink_topology -- --ignored
-```
-
-Observed: identical digest for a two-name hardlink tree and two independent files with the same bytes.
-
 ## Dockerfile `ADD` Copies Local Tar Instead Of Extracting
 
 Priority: P1
@@ -197,32 +147,6 @@ cargo test -p dd-daemon poc_archive_get_directory_must_merge_upper_and_lower_ent
 ```
 
 Observed: upper `/etc/hosts` caused `/etc` to resolve to upper `/etc`, so lower-only `/etc/alpine-release` was missing from the tar source.
-
-## Build Rootfs Digest Ignores Mode And Metadata
-
-Priority: P1
-Impact: stale cache hits and image IDs that miss filesystem metadata changes
-Confidence: High
-
-Verification status: Proven in isolated worktree `/Users/x/dd/dd-workerF-archive-audit-20260710`.
-
-Evidence:
-
-- `rootfs_digest` hashes type, size, path, and regular file bytes, but not mode/owner/xattrs/mtime: `dd-images/src/build/cache.rs:47`.
-- The digest seeds base-image cache chains: `dd-daemon/src/build/handler.rs:319`.
-- The same digest contributes to final image IDs: `dd-daemon/src/build/handler.rs:477`.
-
-Why this is bad:
-
-Changing a file from `0644` to `0755` changes runtime behavior, but current image/cache identity can remain unchanged. That can silently reuse stale cache layers or publish identical image IDs for different executable bits.
-
-Isolated proof:
-
-```sh
-CARGO_TARGET_DIR=/Users/x/dd/dd-workerF-target cargo test -p dd-images rootfs_digest_changes_when_file_mode_changes -- --nocapture
-```
-
-Result: failed as expected; digest was identical before and after `0644 -> 0755`.
 
 ## Docker Save/Load Archive Format Is Not Docker-Compatible
 
