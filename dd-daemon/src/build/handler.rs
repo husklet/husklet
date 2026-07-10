@@ -4,6 +4,43 @@
 //! cache-descriptor live in `steps`; shared helpers/types come from `mod.rs` via `use super::*`.
 use super::*;
 
+/// Unpack the build-context tar (`body`) into `ctx`. The tar is staged OUTSIDE `ctx` (a sibling temp file
+/// under `images_dir`) and deleted after extraction, so `.context.tar` never lands inside the context
+/// tree — otherwise a `COPY . /app` would sweep the raw context archive into the image (wrong contents +
+/// bloat). Returns `Err(msg)` on write/extraction failure (the caller then cleans up `ctx`).
+fn unpack_build_context(body: &[u8], ctx: &std::path::Path, images_dir: &str) -> Result<(), String> {
+    let ctar =
+        std::path::PathBuf::from(format!("{}/.build-ctx-{}.tar", images_dir, std::process::id()));
+    let _ = std::fs::remove_file(&ctar);
+    if std::fs::write(&ctar, body).is_err() {
+        return Err("cannot write context".into());
+    }
+    let ok = matches!(
+        std::process::Command::new("tar").arg("xf").arg(&ctar).arg("-C").arg(ctx).status(),
+        Ok(s) if s.success()
+    );
+    let _ = std::fs::remove_file(&ctar);
+    if !ok {
+        return Err("cannot unpack build context".into());
+    }
+    Ok(())
+}
+
+/// Read the Dockerfile named `dfname` from the build context `ctx`, REFUSING one that (via symlinks)
+/// resolves outside `ctx`. The Dockerfile source must be deterministic from the submitted context, never
+/// read from an arbitrary host path a symlinked tar member (`Dockerfile -> ../outside/x`) points at.
+/// Returns `None` if it is missing or escapes the context. An in-context symlink is allowed (it still
+/// canonicalizes under `ctx`).
+fn read_context_dockerfile(ctx: &std::path::Path, dfname: &str) -> Option<String> {
+    let df = ctx.join(dfname);
+    let root = std::fs::canonicalize(ctx).ok()?;
+    let real = std::fs::canonicalize(&df).ok()?;
+    if !real.starts_with(&root) {
+        return None;
+    }
+    std::fs::read_to_string(&real).ok()
+}
+
 #[derive(Deserialize)]
 pub(crate) struct BuildQ {
     t: Option<String>,
@@ -58,22 +95,16 @@ pub(crate) async fn images_build(
     if std::fs::create_dir_all(&ctx).is_err() {
         return build_err(log, "cannot create build dir".into());
     }
-    let ctar = ctx.join(".context.tar");
     let cleanup = |ctx: &std::path::Path| {
         let _ = std::fs::remove_dir_all(ctx);
     };
-    if std::fs::write(&ctar, &body).is_err() {
+    if let Err(e) = unpack_build_context(&body[..], &ctx, &a.images_dir) {
         cleanup(&ctx);
-        return build_err(log, "cannot write context".into());
+        return build_err(log, e);
     }
-    if !matches!(std::process::Command::new("tar").arg("xf").arg(&ctar).arg("-C").arg(&ctx).status(), Ok(s) if s.success())
-    {
-        cleanup(&ctx);
-        return build_err(log, "cannot unpack build context".into());
-    }
-    let dockerfile = match std::fs::read_to_string(ctx.join(&dfname)) {
-        Ok(d) => d,
-        Err(_) => {
+    let dockerfile = match read_context_dockerfile(&ctx, &dfname) {
+        Some(d) => d,
+        None => {
             cleanup(&ctx);
             return build_err(log, format!("Cannot locate specified Dockerfile: {dfname}"));
         }
@@ -521,4 +552,77 @@ pub(crate) async fn images_build(
         .unwrap(),
     );
     build_stream(log)
+}
+
+#[cfg(test)]
+mod handler_tests {
+    use super::{read_context_dockerfile, unpack_build_context};
+    use std::path::PathBuf;
+
+    fn scratch(label: &str) -> PathBuf {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        let d = std::env::temp_dir()
+            .join(format!("dd-handler-test-{}-{}-{}", label, std::process::id(), nanos));
+        std::fs::create_dir_all(&d).unwrap();
+        d
+    }
+
+    // The staged `.context.tar` must NOT be left inside the context tree (else `COPY .` copies it into the
+    // image). After unpack, `ctx` holds exactly the submitted members and no `.context.tar`.
+    #[test]
+    fn unpack_build_context_excludes_context_tar() {
+        let images_dir = scratch("ctxtar");
+        // Build a context tar containing Dockerfile + hello.txt.
+        let src = images_dir.join("src");
+        std::fs::create_dir_all(&src).unwrap();
+        std::fs::write(src.join("Dockerfile"), b"FROM scratch\n").unwrap();
+        std::fs::write(src.join("hello.txt"), b"hi\n").unwrap();
+        let tar = images_dir.join("in.tar");
+        assert!(std::process::Command::new("tar")
+            .arg("cf").arg(&tar).arg("-C").arg(&src).arg("Dockerfile").arg("hello.txt")
+            .status().unwrap().success());
+        let body = std::fs::read(&tar).unwrap();
+
+        let ctx = images_dir.join(".build-ctx-x");
+        std::fs::create_dir_all(&ctx).unwrap();
+        unpack_build_context(&body, &ctx, images_dir.to_str().unwrap()).expect("unpack");
+
+        assert!(ctx.join("Dockerfile").is_file());
+        assert!(ctx.join("hello.txt").is_file());
+        assert!(!ctx.join(".context.tar").exists(), ".context.tar must not be inside the context");
+        let entries: Vec<_> = std::fs::read_dir(&ctx).unwrap().flatten().map(|e| e.file_name()).collect();
+        assert_eq!(entries.len(), 2, "only the submitted members remain: {entries:?}");
+        let _ = std::fs::remove_dir_all(&images_dir);
+    }
+
+    // A real in-context Dockerfile reads; a symlink escaping the context is refused.
+    #[test]
+    fn read_context_dockerfile_rejects_symlink_escape() {
+        use std::os::unix::fs::symlink;
+        let base = scratch("dfsym");
+        let ctx = base.join("ctx");
+        std::fs::create_dir_all(&ctx).unwrap();
+
+        // Regular Dockerfile inside the context: read succeeds.
+        std::fs::write(ctx.join("Dockerfile"), b"FROM inside\n").unwrap();
+        assert_eq!(
+            read_context_dockerfile(&ctx, "Dockerfile").as_deref(),
+            Some("FROM inside\n")
+        );
+
+        // A Dockerfile symlink pointing outside the context is refused.
+        let outside = base.join("outside");
+        std::fs::create_dir_all(&outside).unwrap();
+        std::fs::write(outside.join("Dockerfile.external"), b"FROM external\n").unwrap();
+        symlink(outside.join("Dockerfile.external"), ctx.join("Dockerfile.link")).unwrap();
+        assert_eq!(
+            read_context_dockerfile(&ctx, "Dockerfile.link"),
+            None,
+            "symlink escaping the context must be refused"
+        );
+        let _ = std::fs::remove_dir_all(&base);
+    }
 }

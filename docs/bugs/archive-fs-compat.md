@@ -4,44 +4,6 @@ Date: 2026-07-10
 
 These findings came from isolated workspaces `/tmp/dd-agent5-sparse.seZJ2E` and `/Users/x/dd/dd-verify-5b`. The main worktree was not modified.
 
-## Build Context `COPY .` Copies `.context.tar`
-
-Priority: P1
-Impact: silent wrong image contents and build bloat
-Confidence: High
-
-Evidence:
-
-- Build handler writes request body to `ctx/.context.tar`: `dd-daemon/src/build/handler.rs:61`.
-- It then extracts that tar into the same context directory: `dd-daemon/src/build/handler.rs:69`.
-- Dockerfile `COPY` copies from the context directory with `cp -a`: `dd-daemon/src/build/steps.rs:221`.
-
-Why this is bad:
-
-For a normal context containing `Dockerfile` and `hello.txt`, `COPY . /app` should copy submitted context contents only. Because `.context.tar` lives inside the extracted context, it is copied into the image too.
-
-Isolated proof:
-
-PoC copied `.context.tar`, `Dockerfile`, and `hello.txt`; `.context.tar` was 10240 bytes. This is a deterministic content mismatch and bloat.
-
-## Dockerfile Symlink Is Followed Outside Context
-
-Priority: P1
-Impact: wrong Dockerfile source, non-reproducible builds
-Confidence: High
-
-Evidence:
-
-- Build handler reads the Dockerfile with `std::fs::read_to_string(ctx.join(&dfname))`: `dd-daemon/src/build/handler.rs:74`.
-
-Why this is bad:
-
-If the tar member `Dockerfile` is a symlink to `../outside/Dockerfile.external`, the build reads the external target. Dockerfile source should be deterministic from submitted context contents.
-
-Isolated proof:
-
-PoC created a symlinked Dockerfile and the build read `FROM external\n` from outside the context.
-
 ## Docker Cp Put Follows Existing Destination Symlink
 
 Priority: P1
@@ -59,24 +21,6 @@ If the destination already contains `linkout -> ../outside` and the archive cont
 Isolated proof:
 
 PoC observed silent write to the symlink target outside the requested destination.
-
-## Build `COPY` Follows Symlinked Destination Directory
-
-Priority: P1
-Impact: silent wrong image contents
-Confidence: High
-
-Evidence:
-
-- Build `COPY` uses host `cp -a <src> <dst_host>`: `dd-daemon/src/build/steps.rs:221`.
-
-Why this is bad:
-
-If the destination path already exists as a symlink to a directory, `cp -a` writes into the symlink target. That changes image contents at a different path than the Dockerfile requested.
-
-Isolated proof:
-
-PoC used `COPY payload dstlink` where `dstlink` was a symlink to a directory. `cp -a` exited `0` and wrote into the target directory.
 
 ## Import Failure Leaves Partial Target
 
@@ -97,31 +41,6 @@ A malformed import archive can leave partial rootfs contents behind. Future oper
 Isolated proof:
 
 PoC created `linkout -> ../outside` and `linkout/from_import.txt`; GNU tar failed loudly, but the target rootfs remained with `linkout`.
-
-## Dockerfile `ADD` Copies Local Tar Instead Of Extracting
-
-Priority: P1
-Impact: common Dockerfile compatibility breakage
-Confidence: High
-
-Verification status: Proven in isolated worktree `/Users/x/dd/dd-verify-5b`.
-
-Evidence:
-
-- `COPY` and `ADD` share the same `copy_step` path: `dd-daemon/src/build/steps.rs:172`.
-- The implementation copies sources with `cp -a`: `dd-daemon/src/build/steps.rs:221`.
-
-Why this is bad:
-
-Docker `ADD archive.tar /dest/` extracts local tar archives. dd copies the tar file itself, so files expected inside `/dest` are absent.
-
-Isolated proof:
-
-```sh
-cargo test -p dd-daemon poc_add_local_tar_must_extract_archive_contents -- --ignored
-```
-
-Observed: `/out/payload.tar` is copied and `/out/inside.txt` is not extracted.
 
 ## `docker cp` GET Drops Lower Entries From Overlay Directories
 
