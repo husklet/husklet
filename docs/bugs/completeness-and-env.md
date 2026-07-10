@@ -242,32 +242,6 @@ Verification:
 
 Create a bind source path containing `:` or `,` and assert the guest sees the correct mounted content.
 
-### `/proc/self/environ` Omits Guest Defaults
-
-Priority: P2
-Impact: procfs-scraping tools see a different environment than `getenv`
-Confidence: High
-
-Verification status: Proven in isolated worktree `/Users/x/dd/dd-worker-R-envproc-20260710`.
-
-Evidence:
-
-- Stack setup merges default guest entries such as `HOME` and `LANG`: `dd-jit-darwin/src/runtime/os/linux/elf.c:831`.
-- `DD_GUEST_ENV` entries are merged later in stack construction: `dd-jit-darwin/src/runtime/os/linux/elf.c:868`.
-- `/proc/self/environ` is generated from raw `DD_GUEST_ENV` instead of the final stack environment: `dd-jit-darwin/src/runtime/os/linux/container/vfs.c:1644`.
-
-Why this is bad:
-
-Programs that compare `getenv` with `/proc/self/environ`, or helper processes that inspect procfs, can miss default variables that are actually present in the process environment.
-
-Isolated proof:
-
-```sh
-make test FILTER=pf-environ-defaults
-```
-
-Result: failed on linux/aarch64 and linux/x86_64; observed `home=1/0 lang=1/0`.
-
 ### Hidden Proc Switches Change Peer Procfs
 
 Priority: P2

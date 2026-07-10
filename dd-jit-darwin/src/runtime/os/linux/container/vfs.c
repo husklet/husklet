@@ -1652,8 +1652,33 @@ static int proc_stat_text(char *b, size_t n) {
 // /proc/[pid]/environ -- the guest environment as NUL-separated KEY=VALUE. The authoritative source is
 // DD_GUEST_ENV (the container env the daemon forwards, "K=V\nK=V"); absent it (manual/direct mode), fall
 // back to the same defaults build_stack hands the guest. Returns the byte count written.
+// The running process's FINAL environment (container env + merged engine defaults), captured by build_stack
+// -- the exact set placed on the guest stack, i.e. what getenv() sees. /proc/self/environ was generated from
+// the RAW DD_GUEST_ENV instead, omitting the defaults (HOME/LANG/…) build_stack adds, so procfs disagreed
+// with getenv. Using this blob makes them consistent. (build_stack in elf.c is compiled after vfs.c.)
+static char g_self_environ[16384];
+static int g_self_environ_len = 0;
+static void set_guest_environ(const char *const *env, int envc) {
+    int o = 0;
+    for (int i = 0; i < envc && env && env[i]; i++) {
+        int L = (int)strlen(env[i]);
+        if (o + L + 1 > (int)sizeof g_self_environ) break;
+        memcpy(g_self_environ + o, env[i], (size_t)L);
+        o += L;
+        g_self_environ[o++] = 0;
+    }
+    g_self_environ_len = o;
+}
+
 static int proc_environ_text(char *b, size_t n) {
     int o = 0;
+    // Prefer the FINAL environment build_stack placed (== getenv), so procfs and getenv agree; this includes
+    // the engine defaults (HOME/LANG/GLIBC_TUNABLES) the raw DD_GUEST_ENV path below omitted.
+    if (g_self_environ_len > 0) {
+        int L = g_self_environ_len > (int)n ? (int)n : g_self_environ_len;
+        memcpy(b, g_self_environ, (size_t)L);
+        return L;
+    }
     const char *ge = getenv("DD_GUEST_ENV");
     if (ge && ge[0]) {
         for (const char *s = ge; *s;) {

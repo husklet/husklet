@@ -31,6 +31,7 @@ pub(super) fn sys_proc() -> Group {
             sy("pf-devseed", "completeness/pf_devseed.c"),
             sy("pf-fdclose", "completeness/pf_fdclose.c"),
             sy("pf-tty", "completeness/pf_tty.c"),
+            sy("pf-environ", "completeness/pf_environ.c"),
         ],
     )
 }
