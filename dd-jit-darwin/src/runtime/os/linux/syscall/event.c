@@ -908,7 +908,9 @@ static int svc_event(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint6
                 G_RET(c) = (uint64_t)(-EBADF);
                 break;
             }
-            if ((int)a0 != g_sigfd_pipe[0]) {
+            // The original signalfd (g_sigfd_pipe[0]) OR any dup of it (g_sigfd_is) updates the SAME object;
+            // rejecting a dup as "not our signalfd" was wrong (Linux accepts a mask update on a dup'd signalfd).
+            if ((int)a0 != g_sigfd_pipe[0] && !((int)a0 >= 0 && (int)a0 < DD_NFD && g_sigfd_is[(int)a0])) {
                 G_RET(c) = (uint64_t)(-EINVAL);
                 break;
             }
@@ -942,7 +944,9 @@ static int svc_event(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint6
         if (a3 & 0x80000) fcntl(g_sigfd_pipe[0], F_SETFD, FD_CLOEXEC);
         // SFD_NONBLOCK
         if (a3 & 0x800) fcntl(g_sigfd_pipe[0], F_SETFL, O_NONBLOCK);
-        G_RET(c) = (uint64_t)g_sigfd_pipe[0];
+        // An UPDATE (fd != -1) returns the SAME fd the caller passed (Linux), including a dup alias; a fresh
+        // create returns the shared pipe read end.
+        G_RET(c) = (int)a0 != -1 ? a0 : (uint64_t)g_sigfd_pipe[0];
         break;
     }
     case 85: {

@@ -188,6 +188,7 @@ static void fd_reset_emul(int fd) {
         g_pipesz[fd] = 0;     // drop this fd's emulated F_SETPIPE_SZ so a reused number reports the default
         g_fd_cport[fd] = 0;   // drop the captured container port so getpeername on a reused fd isn't misrouted
         inotify_fd_reset(fd); // instance/watch teardown -- g_inotify[fd] used to stay stamped (stale routing)
+        g_sigfd_is[fd] = 0;   // drop any signalfd-dup alias marking on this fd number
         if (g_fd_pushback[fd]) {
             free(g_fd_pushback[fd]);
             g_fd_pushback[fd] = NULL;

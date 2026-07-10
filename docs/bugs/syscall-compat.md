@@ -260,58 +260,6 @@ mac bash -lc 'timeout 5 ddjit-linux_aarch64 scratch-BA2/inotify_fork_watch.aarch
 
 Linux observed `child_read=32 errno=0 mask=0x100`; dd produced no child result and was killed by timeout.
 
-## `dup(signalfd)` Loses Signalfd Semantics
-
-Priority: P1
-Impact: duplicated signalfds return raw pipe bytes and reject valid updates
-Confidence: High
-
-Verification status: Proven in isolated worktree `/Users/x/dd/dd-worker-AT-jit-fd-event-20260710`.
-
-Evidence:
-
-- Signalfd reads only use the virtual path when `rfd == g_sigfd_read`: `dd-jit-darwin/src/runtime/os/linux/syscall/io.c:340`.
-- Updates reject duplicated signalfds because they are not the original numeric fd: `dd-jit-darwin/src/runtime/os/linux/syscall/event.c:775`.
-- `dup` does not carry signalfd metadata: `dd-jit-darwin/src/runtime/os/linux/syscall/io.c:900`.
-
-Why this is bad:
-
-Linux duplicated signalfds refer to the same signalfd object. dd turns the duplicate into a raw pipe-like descriptor and rejects valid mask updates.
-
-Isolated proof:
-
-```sh
-./scratch-t186/ddjit-aarch64 ./scratch-AT/.signalfd_dup.bin
-```
-
-Linux observed `read_dup=128` and a successful update; dd observed `read_dup=1` and `update_errno=22`.
-
-## `dup(inotify_fd)` Loses Inotify Read Semantics
-
-Priority: P2
-Impact: duplicated inotify descriptors cannot read events
-Confidence: High
-
-Verification status: Proven in isolated worktree `/Users/x/dd/dd-worker-AT-jit-fd-event-20260710`.
-
-Evidence:
-
-- Inotify instances are stamped only on the original fd: `dd-jit-darwin/src/runtime/os/linux/syscall/event.c:567`.
-- Inotify reads require `g_inotify[rfd]`: `dd-jit-darwin/src/runtime/os/linux/syscall/io.c:367`.
-- `dup` does not carry that state: `dd-jit-darwin/src/runtime/os/linux/syscall/io.c:900`.
-
-Why this is bad:
-
-Wrappers often duplicate descriptors before passing them through event loops. dd loses the virtual inotify metadata, so events are unavailable through the duplicate.
-
-Isolated proof:
-
-```sh
-./scratch-t186/ddjit-aarch64 ./scratch-AT/.inotify_dup.bin
-```
-
-Linux observed `read_dup=32 read_dup_errno=0 first_mask=0x100`; dd observed `read_dup=-1 read_dup_errno=6`.
-
 ## aarch64 4K Subpage `munmap` Returns `EINVAL`
 
 Priority: P2
