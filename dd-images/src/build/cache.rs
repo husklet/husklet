@@ -48,15 +48,18 @@ pub fn sha256_hex(data: &[u8]) -> String {
 /// count and symlink target so topology/target changes are not aliased. Same tree -> same hash,
 /// independent of filesystem iteration order. Returns "" on failure.
 pub fn rootfs_digest(rootfs: &Path) -> String {
-    let script = format!(
-        "cd '{}' 2>/dev/null || exit 0; \
-         {{ find . -printf '%y %m %n %l %s %p\\n' 2>/dev/null | LC_ALL=C sort; \
+    // The rootfs path is passed as a POSITIONAL ARGUMENT (`$1`), never interpolated into the script
+    // text, so a path containing a single quote (or any shell metacharacter) can't break quoting or
+    // inject shell — a naive `cd '<path>'` silently produced an empty/wrong digest for such paths.
+    const SCRIPT: &str = "cd \"$1\" 2>/dev/null || exit 0; \
+         { find . -printf '%y %m %n %l %s %p\\n' 2>/dev/null | LC_ALL=C sort; \
             find . -type f -print0 2>/dev/null | LC_ALL=C sort -z | xargs -0 sha256sum 2>/dev/null; \
-         }} | sha256sum",
-        rootfs.display());
+         } | sha256sum";
     match std::process::Command::new("sh")
         .arg("-c")
-        .arg(&script)
+        .arg(SCRIPT)
+        .arg("sh") // $0
+        .arg(rootfs) // $1
         .output()
     {
         Ok(o) => String::from_utf8_lossy(&o.stdout)
@@ -76,17 +79,20 @@ pub fn rootfs_digest(rootfs: &Path) -> String {
 /// key does not alias those. Used to make COPY/ADD cache keys content-addressed. Returns "" on failure
 /// (the caller then forces a miss rather than risk serving a stale layer).
 pub fn path_digest(p: &Path) -> String {
-    let script = format!(
-        "p='{}'; if [ -d \"$p\" ]; then cd \"$p\" 2>/dev/null || exit 0; \
-            {{ find . -printf '%y %m %n %l %s %p\\n' 2>/dev/null | LC_ALL=C sort; \
-               find . -type f -print0 2>/dev/null | LC_ALL=C sort -z | xargs -0 sha256sum 2>/dev/null; }} | sha256sum; \
-         elif [ -h \"$p\" ]; then {{ stat -c '%F %a' \"$p\" 2>/dev/null; readlink \"$p\" 2>/dev/null; }} | sha256sum; \
-         elif [ -e \"$p\" ]; then {{ stat -c '%F %a %h %s' \"$p\" 2>/dev/null; sha256sum \"$p\" 2>/dev/null; }} | sha256sum; \
-         else echo missing; fi",
-        p.display());
+    // The path is passed as a POSITIONAL ARGUMENT (`$1`), never interpolated into the script text, so a
+    // path containing a single quote (or any shell metacharacter) can't break quoting or inject shell —
+    // the old `p='<path>'` interpolation silently produced an empty/wrong digest for such paths.
+    const SCRIPT: &str = "p=\"$1\"; if [ -d \"$p\" ]; then cd \"$p\" 2>/dev/null || exit 0; \
+            { find . -printf '%y %m %n %l %s %p\\n' 2>/dev/null | LC_ALL=C sort; \
+               find . -type f -print0 2>/dev/null | LC_ALL=C sort -z | xargs -0 sha256sum 2>/dev/null; } | sha256sum; \
+         elif [ -h \"$p\" ]; then { stat -c '%F %a' \"$p\" 2>/dev/null; readlink \"$p\" 2>/dev/null; } | sha256sum; \
+         elif [ -e \"$p\" ]; then { stat -c '%F %a %h %s' \"$p\" 2>/dev/null; sha256sum \"$p\" 2>/dev/null; } | sha256sum; \
+         else echo missing; fi";
     match std::process::Command::new("sh")
         .arg("-c")
-        .arg(&script)
+        .arg(SCRIPT)
+        .arg("sh") // $0
+        .arg(p) // $1
         .output()
     {
         Ok(o) => String::from_utf8_lossy(&o.stdout)
@@ -184,6 +190,39 @@ mod tests {
         assert_ne!(dl, di, "hardlinked tree must digest differently from independent files");
         let _ = std::fs::remove_dir_all(&linked);
         let _ = std::fs::remove_dir_all(&indep);
+    }
+
+    // A path containing a single quote (apostrophe) must still produce a valid 64-hex digest: paths are
+    // passed as argv, never interpolated into a single-quoted shell string (which the apostrophe broke,
+    // yielding an empty/wrong digest).
+    #[test]
+    fn rootfs_digest_handles_apostrophe_in_path() {
+        let base = scratch("rootfs-apos");
+        let root = base.join("O'Brien's rootfs");
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(root.join("file"), b"data\n").unwrap();
+        let d = rootfs_digest(&root);
+        assert_eq!(d.len(), 64, "apostrophe path must still yield a sha256 hex digest, got {d:?}");
+        assert!(d.chars().all(|c| c.is_ascii_hexdigit()));
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn path_digest_handles_apostrophe_in_path() {
+        let base = scratch("path-apos");
+        let dir = base.join("can't stop");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("f"), b"x\n").unwrap();
+        let d = path_digest(&dir);
+        assert_eq!(d.len(), 64, "apostrophe path must still yield a sha256 hex digest, got {d:?}");
+        assert!(d.chars().all(|c| c.is_ascii_hexdigit()));
+        // a distinct content under an apostrophe path digests differently (proves it hashed real content,
+        // not an empty/short-circuited digest).
+        let dir2 = base.join("won't stop");
+        std::fs::create_dir_all(&dir2).unwrap();
+        std::fs::write(dir2.join("f"), b"y\n").unwrap();
+        assert_ne!(d, path_digest(&dir2));
+        let _ = std::fs::remove_dir_all(&base);
     }
 
     #[test]
