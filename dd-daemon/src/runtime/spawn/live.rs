@@ -84,6 +84,14 @@ pub(crate) async fn spawn_live(app: &App, c: &Container, vols: &[Vol], live: Arc
         };
         let etc = format!("{base}/etc");
         let _ = std::fs::create_dir_all(&etc);
+        // Append `--add-host host:ip` (HostConfig.ExtraHosts) entries so the guest resolves them via
+        // /etc/hosts, matching Docker. Each stored entry is "host:ip"; /etc/hosts wants "ip\thost".
+        let mut hosts = hosts;
+        for eh in &c.extra_hosts {
+            if let Some((h, ip)) = eh.rsplit_once(':') {
+                hosts.push_str(&format!("{ip}\t{h}\n"));
+            }
+        }
         if let Err(e) = std::fs::write(format!("{etc}/hosts"), &hosts) {
             if std::env::var("DD_DEBUG").is_ok() {
                 eprintln!(
@@ -102,7 +110,29 @@ pub(crate) async fn spawn_live(app: &App, c: &Container, vols: &[Vol], live: Arc
         // /etc/hosts so it shadows the image's file via the overlay. --network none still gets the file, but
         // the engine leaves :53 un-intercepted under DD_NET_ISOLATE, so name resolution fails as Docker's
         // null network does. Best-effort: never fail the spawn on an I/O error.
-        let resolv = "nameserver 127.0.0.11\noptions ndots:0\n";
+        // Honor `--dns`/`--dns-search`/`--dns-option` (HostConfig.Dns*) when the user set them: those
+        // nameservers/search/options are written verbatim (Docker parity). With none set, fall back to
+        // dd's embedded nameserver (127.0.0.11), which the engine intercepts to the host resolver.
+        let resolv = if c.dns.is_empty() && c.dns_search.is_empty() && c.dns_options.is_empty() {
+            "nameserver 127.0.0.11\noptions ndots:0\n".to_string()
+        } else {
+            let mut s = String::new();
+            let nameservers: Vec<&str> = if c.dns.is_empty() {
+                vec!["127.0.0.11"]
+            } else {
+                c.dns.iter().map(String::as_str).collect()
+            };
+            for ns in nameservers {
+                s.push_str(&format!("nameserver {ns}\n"));
+            }
+            if !c.dns_search.is_empty() {
+                s.push_str(&format!("search {}\n", c.dns_search.join(" ")));
+            }
+            for opt in &c.dns_options {
+                s.push_str(&format!("options {opt}\n"));
+            }
+            s
+        };
         if let Err(e) = std::fs::write(format!("{etc}/resolv.conf"), resolv) {
             if std::env::var("DD_DEBUG").is_ok() {
                 eprintln!(

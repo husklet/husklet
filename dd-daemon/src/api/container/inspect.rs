@@ -86,10 +86,20 @@ pub(crate) struct ContainerState {
 #[derive(Serialize)]
 #[serde(rename_all = "PascalCase")]
 pub(crate) struct ContainerConfig {
-    pub cmd: Vec<String>,
     pub hostname: String,
+    pub domainname: String,
+    pub user: String,
     pub image: String,
+    /// Docker keeps Entrypoint and Cmd SPLIT (not collapsed into one launch argv).
+    pub entrypoint: Vec<String>,
+    pub cmd: Vec<String>,
+    pub working_dir: String,
     pub env: Vec<String>,
+    pub tty: bool,
+    pub open_stdin: bool,
+    pub stdin_once: bool,
+    /// `Config.ExposedPorts` (`{"8080/tcp":{}}`) — declared ports, independent of host publishing.
+    pub exposed_ports: Value,
     pub labels: HashMap<String, String>,
     /// `null` when no HEALTHCHECK is configured, else the resolved probe config.
     pub healthcheck: Option<crate::model::HealthConfig>,
@@ -115,6 +125,15 @@ pub(crate) struct HostConfigJson {
     pub stop_timeout: i64,
     pub privileged: bool,
     pub security_opt: Vec<String>,
+    pub network_mode: String,
+    pub auto_remove: bool,
+    /// `HostConfig.LogConfig` — the resolved log driver + options (default json-file when unset).
+    pub log_config: crate::model::LogConfig,
+    pub dns: Vec<String>,
+    pub dns_search: Vec<String>,
+    pub dns_options: Vec<String>,
+    pub extra_hosts: Vec<String>,
+    pub device_requests: Vec<Value>,
 }
 
 #[derive(Serialize)]
@@ -134,12 +153,16 @@ pub(crate) struct NetworkSettingsJson {
 pub(crate) struct EndpointJson {
     #[serde(rename = "NetworkID")]
     pub network_id: String,
+    #[serde(rename = "EndpointID")]
+    pub endpoint_id: String,
     #[serde(rename = "IPAddress")]
     pub ip_address: String,
     pub gateway: String,
     #[serde(rename = "IPPrefixLen")]
     pub ip_prefix_len: i64,
     pub mac_address: String,
+    /// DNS aliases peers resolve this container by, in addition to its name (docker EndpointSettings.Aliases).
+    pub aliases: Vec<String>,
 }
 
 // ---- containers: published-port binding (`NetworkSettings.Ports`) ----------

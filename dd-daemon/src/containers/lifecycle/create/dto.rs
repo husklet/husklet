@@ -17,8 +17,19 @@ pub(crate) struct CreateBody {
     pub(super) entrypoint: Option<Vec<String>>,
     #[serde(rename = "Hostname")]
     pub(super) hostname: Option<String>,
+    #[serde(rename = "Domainname")]
+    pub(super) domainname: Option<String>,
     #[serde(rename = "Tty")]
     pub(super) tty: Option<bool>,
+    // `-i` (Config.OpenStdin) and Config.StdinOnce — interactive-stdio flags, persisted for inspect fidelity.
+    #[serde(rename = "OpenStdin")]
+    pub(super) open_stdin: Option<bool>,
+    #[serde(rename = "StdinOnce")]
+    pub(super) stdin_once: Option<bool>,
+    // `Config.ExposedPorts` (`{"8080/tcp":{}}`) — ports the container declares, separate from published
+    // host bindings. Round-tripped through inspect (Config.ExposedPorts + null NetworkSettings.Ports).
+    #[serde(rename = "ExposedPorts")]
+    pub(super) exposed_ports: Option<HashMap<String, Value>>,
     #[serde(rename = "WorkingDir")]
     pub(super) working_dir: Option<String>,
     #[serde(rename = "Labels")]
@@ -98,6 +109,21 @@ pub(crate) struct HostConfig {
     // `--rm` (HostConfig.AutoRemove): the daemon removes the container automatically once it exits.
     #[serde(rename = "AutoRemove")]
     pub(super) auto_remove: Option<bool>,
+    // Logging / name-resolution / device request fidelity — accepted at create, round-tripped through
+    // inspect. LogConfig + DeviceRequests are metadata; Dns/DnsSearch/DnsOptions/ExtraHosts also feed the
+    // guest's /etc/resolv.conf + /etc/hosts at spawn.
+    #[serde(rename = "LogConfig")]
+    pub(super) log_config: Option<crate::model::LogConfig>,
+    #[serde(rename = "Dns")]
+    pub(super) dns: Option<Vec<String>>,
+    #[serde(rename = "DnsSearch")]
+    pub(super) dns_search: Option<Vec<String>>,
+    #[serde(rename = "DnsOptions")]
+    pub(super) dns_options: Option<Vec<String>>,
+    #[serde(rename = "ExtraHosts")]
+    pub(super) extra_hosts: Option<Vec<String>>,
+    #[serde(rename = "DeviceRequests")]
+    pub(super) device_requests: Option<Vec<Value>>,
 }
 
 #[derive(Deserialize, Clone)]

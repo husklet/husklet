@@ -138,8 +138,7 @@ mod tests {
             typ: "volume".into(),
             source: "data".into(),
             target: "/srv".into(),
-            read_only: true,
-        }];
+            read_only: true, bind_options: None }];
         let out = container_mounts_json(&[vol("data", "/mp/data")], &c);
         let m = &out[0];
         assert_eq!(m["Type"], "volume");
@@ -156,8 +155,7 @@ mod tests {
             typ: "bind".into(),
             source: "/h".into(),
             target: "/c".into(),
-            read_only: false,
-        }];
+            read_only: false, bind_options: None }];
         let out = container_mounts_json(&[], &c);
         let m = &out[0];
         assert_eq!(m["Type"], "bind");

@@ -74,6 +74,22 @@ pub(crate) fn join_network(
     cid: &str,
     cname: &str,
 ) -> Option<String> {
+    join_network_ex(nets, net_name, cid, cname, None, &[])
+}
+
+/// Like [`join_network`] but honors a requested static IP (`NetworkingConfig.EndpointsConfig[].IPAMConfig
+/// .IPv4Address`) and DNS aliases (`.Aliases`). A requested IP is used verbatim when it is not already
+/// taken on the network; otherwise the allocator picks the next free address (docker rejects a conflict,
+/// but degrading to auto-allocation is safer than double-issuing). Aliases are stored on the endpoint so
+/// peers resolve the container by them too.
+pub(crate) fn join_network_ex(
+    nets: &mut [Net],
+    net_name: &str,
+    cid: &str,
+    cname: &str,
+    req_ip: Option<&str>,
+    aliases: &[String],
+) -> Option<String> {
     let idx = nets.iter().position(|n| n.name == net_name)?;
     if nets[idx].subnet.is_empty() {
         let (sub, gw) = if net_name == "bridge" {
@@ -88,7 +104,12 @@ pub(crate) fn join_network(
     if let Some(e) = n.endpoints.get(cid) {
         return Some(e.ip.clone());
     }
-    let ip = alloc_ip(n)?; // subnet exhausted -> fail the join rather than double-issue an address
+    // Honor a requested static IP when it is free on this network; else fall back to auto-allocation.
+    let taken = |ip: &str| n.endpoints.values().any(|e| e.ip == ip);
+    let ip = match req_ip.filter(|ip| !ip.is_empty() && !taken(ip)) {
+        Some(ip) => ip.to_string(),
+        None => alloc_ip(n)?, // subnet exhausted -> fail the join rather than double-issue an address
+    };
     if !n.containers.iter().any(|c| c == cid) {
         n.containers.push(cid.to_string());
     }
@@ -97,6 +118,7 @@ pub(crate) fn join_network(
         Endpoint {
             name: cname.to_string(),
             ip: ip.clone(),
+            aliases: aliases.to_vec(),
         },
     );
     Some(ip)
@@ -243,11 +265,11 @@ mod tests {
         let mut n = net_with_subnet("172.18.0.0/16");
         n.endpoints.insert(
             "c1".into(),
-            Endpoint { name: "c1".into(), ip: "172.18.0.2".into() },
+            Endpoint { name: "c1".into(), ip: "172.18.0.2".into(), aliases: vec![] },
         );
         n.endpoints.insert(
             "c2".into(),
-            Endpoint { name: "c2".into(), ip: "172.18.0.3".into() },
+            Endpoint { name: "c2".into(), ip: "172.18.0.3".into(), aliases: vec![] },
         );
         assert_eq!(alloc_ip(&n).as_deref(), Some("172.18.0.4"));
     }
@@ -261,7 +283,7 @@ mod tests {
         for k in 2u32..=255 {
             n.endpoints.insert(
                 format!("c{k}"),
-                Endpoint { name: format!("c{k}"), ip: format!("172.18.0.{k}") },
+                Endpoint { name: format!("c{k}"), ip: format!("172.18.0.{k}"), aliases: vec![] },
             );
         }
         // Next free address is the start of the second /24, not a reused .0.2.
@@ -275,18 +297,18 @@ mod tests {
         let mut a = net_with_subnet("172.18.0.0/16");
         a.endpoints.insert(
             "cid1".into(),
-            Endpoint { name: "web".into(), ip: "172.18.0.2".into() },
+            Endpoint { name: "web".into(), ip: "172.18.0.2".into(), aliases: vec![] },
         );
         let mut b = net_with_subnet("172.19.0.0/16");
         b.endpoints.insert(
             "cid1".into(),
-            Endpoint { name: "web".into(), ip: "172.19.0.2".into() },
+            Endpoint { name: "web".into(), ip: "172.19.0.2".into(), aliases: vec![] },
         );
         // A network the container is NOT on must be untouched.
         let mut c = net_with_subnet("172.20.0.0/16");
         c.endpoints.insert(
             "other".into(),
-            Endpoint { name: "other".into(), ip: "172.20.0.2".into() },
+            Endpoint { name: "other".into(), ip: "172.20.0.2".into(), aliases: vec![] },
         );
         let mut nets = vec![a, b, c];
         let updated = rename_endpoints(&mut nets, "cid1", "app");
@@ -306,7 +328,7 @@ mod tests {
                 }
                 let ip = format!("172.18.{third}.{fourth}");
                 n.endpoints
-                    .insert(ip.clone(), Endpoint { name: ip.clone(), ip });
+                    .insert(ip.clone(), Endpoint { name: ip.clone(), ip, aliases: vec![] });
             }
         }
         assert_eq!(alloc_ip(&n), None, "a full /16 must not hand out a colliding address");
