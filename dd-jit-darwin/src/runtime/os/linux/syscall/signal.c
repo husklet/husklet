@@ -465,6 +465,10 @@ static int svc_signal(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint
             else
                 c->sigmask = set;
             // SIG_SETMASK
+            // Linux never lets SIGKILL(9) or SIGSTOP(19) be blocked -- the kernel silently strips them
+            // from the new mask. Without this they could sit in c->sigmask and raise_guest_signal would
+            // treat a fatal/stopping signal as merely pending, letting the guest survive a SIGKILL.
+            c->sigmask &= ~((1ull << (9 - 1)) | (1ull << (19 - 1)));
         }
         // Mirror the terminal-stop signals (SIGTSTP/SIGTTIN/SIGTTOU) onto the REAL host mask. Job control
         // depends on this: bash blocks these three around tcsetpgrp/tcsetattr so a process in a BACKGROUND

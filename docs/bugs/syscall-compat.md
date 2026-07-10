@@ -239,32 +239,6 @@ Verification:
 
 Run an untrusted-mode `pselect6` probe with an invalid positive fd bit and compare against native `EBADF`.
 
-## `SIGKILL`/`SIGSTOP` Can Enter The Guest Signal Mask
-
-Priority: P1
-Impact: unmaskable signals can become pending instead of fatal/stopping
-Confidence: High
-
-Verification status: Proven in isolated worktree `/Users/x/dd/dd-worker-P-jit-runtime-20260710`.
-
-Evidence:
-
-- `rt_sigprocmask` applies guest masks without clearing unmaskable signals: `dd-jit-darwin/src/runtime/os/linux/syscall/signal.c:453`.
-- `raise_guest_signal` checks the guest mask before fatal/default handling, so blocked `SIGKILL` becomes pending: `dd-jit-darwin/src/runtime/os/linux/signal.c:415`.
-
-Why this is bad:
-
-Linux does not allow `SIGKILL` or `SIGSTOP` to be blocked. dd can let a process survive a blocked `SIGKILL`.
-
-Isolated proof:
-
-```sh
-cargo run -q -p dd-tests -- -e aarch64 slotp-sigmask-unmaskable
-cargo run -q -p dd-tests -- -e x86_64 slotp-sigmask-unmaskable
-```
-
-Result: failed both engines. dd `killed=0`; native `killed=1`.
-
 ## `sigaltstack` Accepts Invalid Stack Configs
 
 Priority: P2
@@ -520,30 +494,6 @@ mac bash -lc 'DDJIT_DIR=$OUT $OUT/ddjit-linux_aarch64 scratch-worker-V/clock_abs
 ```
 
 Native printed `rc=4 hit=1 elapsed_ms=101`; dd printed `rc=0 hit=1 elapsed_ms=1002`.
-
-## `eventfd` Counter Overflow Wraps To Zero
-
-Priority: P1
-Impact: event counters and wake state can be silently lost
-Confidence: High
-
-Verification status: Proven in isolated worktree `/Users/x/dd/dd-worker-AC-signal-runtime-20260710`.
-
-Evidence:
-
-- Eventfd write adds to the counter without checking saturation: `dd-jit-darwin/src/runtime/os/linux/syscall/io.c:611`.
-
-Why this is bad:
-
-Linux rejects eventfd writes that would overflow the counter with `EAGAIN` and preserves the prior value. dd accepts the write, wraps the counter to zero, and loses the pending event state.
-
-Isolated proof:
-
-```sh
-DDWAKE_ROLE=__none ddjit-linux_aarch64 target/ac-probes/eventfd_overflow
-```
-
-Linux observed `w2=-1 e2=11 r=8 got=18446744073709551614`; dd observed `w2=8 e2=0 r=-1 er=11 got=0`.
 
 ## `dup(eventfd)` Loses Eventfd Semantics
 

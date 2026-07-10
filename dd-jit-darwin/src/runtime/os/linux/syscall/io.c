@@ -617,6 +617,15 @@ static int svc_io(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t
             // drain (or a peer write) can never strand the pipe readable-with-count-0 / empty-with-count>0
             // (the Chrome pump spin / lost-wakeup root cause -- see the _eventfd-atomicity_ note in vfs.c).
             pthread_mutex_lock(&g_eventfd_lock);
+            // Linux caps the counter at ULLONG_MAX-1 (0xfffffffffffffffe). A write that would overflow that
+            // maximum does NOT wrap: a nonblocking eventfd returns EAGAIN and leaves the counter unchanged
+            // (a blocking one sleeps until a reader makes room -- an extreme edge dd does not model, so it
+            // also returns EAGAIN rather than silently wrapping the counter to zero and losing wake state).
+            if (add > 0xfffffffffffffffeULL - g_eventfd_count[eslot]) {
+                pthread_mutex_unlock(&g_eventfd_lock);
+                G_RET(c) = (uint64_t)(-EAGAIN);
+                break;
+            }
             g_eventfd_count[eslot] += add;
             // Linux wakes epoll edge-triggered waiters on EVERY write, not just the 0->positive transition.
             // A waker eventfd that is never drained (mio/tokio's cross-thread wakeup) would otherwise lose

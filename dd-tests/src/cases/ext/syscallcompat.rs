@@ -27,6 +27,10 @@ pub fn groups() -> Vec<Group> {
             p("sc-sched-rt", "syscallbug/sched_rt.c"),
             // inotify_rm_watch bad wd -> EINVAL, never closes an unrelated fd.
             p("sc-inotify-rm", "syscallbug/inotify_rm.c"),
+            // SIGKILL/SIGSTOP can never be blocked via rt_sigprocmask.
+            p("sc-sigkill-unmaskable", "syscallbug/sigkill_unmaskable.c"),
+            // eventfd counter overflow -> EAGAIN + prior value preserved (no wrap to zero).
+            p("sc-eventfd-overflow", "syscallbug/eventfd_overflow.c"),
         ],
     )]
 }
