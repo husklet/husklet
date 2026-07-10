@@ -20,6 +20,6 @@ pub use image::{
 
 pub mod build;
 pub use build::{
-    cache_id, is_fs_inst, parse_dockerfile, parse_env, parse_exec_form, parse_labels, path_digest,
-    rootfs_digest, sha256_hex, substitute_args, BuildCache,
+    cache_id, is_fs_inst, parse_dockerfile, parse_env, parse_exec_form, parse_exec_form_checked,
+    parse_labels, path_digest, rootfs_digest, sha256_hex, substitute_args, BuildCache,
 };

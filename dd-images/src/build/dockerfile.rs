@@ -57,8 +57,33 @@ pub fn substitute_args(s: &str, map: &HashMap<String, String>) -> String {
     out
 }
 
-/// Parse a Dockerfile into (INSTRUCTION, args) pairs, honoring `\` line-continuations and `#` comments.
+/// The line-continuation character, honoring a leading `# escape=` parser directive. Docker's directive
+/// selects backslash (default) or backtick as the escape/continuation char; the directive must appear in
+/// the leading comment block (before the first instruction). With `# escape=\`` a trailing backtick
+/// continues a line and a backslash is literal.
+fn escape_char(text: &str) -> char {
+    for line in text.lines() {
+        let t = line.trim();
+        if t.is_empty() {
+            continue;
+        }
+        let Some(comment) = t.strip_prefix('#') else {
+            break; // first instruction: directives may only precede it
+        };
+        // a parser directive is `# <name>=<value>`; we only care about `escape`.
+        if let Some((name, value)) = comment.split_once('=') {
+            if name.trim().eq_ignore_ascii_case("escape") {
+                return if value.trim().starts_with('`') { '`' } else { '\\' };
+            }
+        }
+    }
+    '\\'
+}
+
+/// Parse a Dockerfile into (INSTRUCTION, args) pairs, honoring line-continuations (`\` by default, or the
+/// `# escape=` parser directive's char) and `#` comments.
 pub fn parse_dockerfile(text: &str) -> Vec<(String, String)> {
+    let esc = escape_char(text);
     let (mut out, mut acc) = (Vec::new(), String::new());
     for line in text.lines() {
         let l = line.trim_end();
@@ -66,7 +91,7 @@ pub fn parse_dockerfile(text: &str) -> Vec<(String, String)> {
         if acc.is_empty() && (t.is_empty() || t.starts_with('#')) {
             continue;
         }
-        if let Some(s) = l.strip_suffix('\\') {
+        if let Some(s) = l.strip_suffix(esc) {
             acc.push_str(s.trim_start());
             acc.push(' ');
             continue;
@@ -81,17 +106,41 @@ pub fn parse_dockerfile(text: &str) -> Vec<(String, String)> {
 }
 
 /// A `CMD`/`ENTRYPOINT` value: JSON-array exec form `["a","b"]` or a shell string (wrapped in sh -c).
+///
+/// A JSON array with a NON-STRING element (`["echo", 123]`) is invalid exec form: rather than silently
+/// truncating it to just the string elements (the old behavior, which dropped the `123` and could turn a
+/// meaningful command into a partial one), it is rejected by [`parse_exec_form_checked`] and this lenient
+/// wrapper falls back to treating the raw text as a shell command.
 pub fn parse_exec_form(args: &str) -> Vec<String> {
+    match parse_exec_form_checked(args) {
+        Ok(v) => v,
+        Err(_) => vec!["/bin/sh".into(), "-c".into(), args.trim().to_string()],
+    }
+}
+
+/// Strict [`parse_exec_form`]: an exec-form JSON array containing a non-string element is an ERROR
+/// (matching docker/BuildKit, which reject `CMD ["echo", 123]`) instead of being silently truncated. A
+/// value that is not a JSON array is shell form and always parses (`Ok`).
+pub fn parse_exec_form_checked(args: &str) -> Result<Vec<String>, String> {
     let a = args.trim();
     if a.starts_with('[') {
         if let Ok(Value::Array(v)) = serde_json::from_str::<Value>(a) {
-            return v
-                .into_iter()
-                .filter_map(|x| x.as_str().map(String::from))
-                .collect();
+            let mut out = Vec::with_capacity(v.len());
+            for x in v {
+                match x {
+                    Value::String(s) => out.push(s),
+                    other => {
+                        return Err(format!(
+                            "exec form must be an array of strings; got non-string element {other}"
+                        ))
+                    }
+                }
+            }
+            return Ok(out);
         }
+        // a `[`-prefixed value that isn't valid JSON (`[not json]`) is treated as shell form, unchanged.
     }
-    vec!["/bin/sh".into(), "-c".into(), a.to_string()]
+    Ok(vec!["/bin/sh".into(), "-c".into(), a.to_string()])
 }
 
 /// Parse a `LABEL` instruction's args into key/value pairs.
@@ -195,6 +244,59 @@ CMD [\"a\",\"b\"]
                 ("CMD".to_string(), "[\"a\",\"b\"]".to_string()),
             ]
         );
+    }
+
+    // Finding A: a `# escape=\`` parser directive makes a trailing BACKTICK continue the line (and a
+    // backslash literal). The backtick-continued RUN must parse as ONE instruction, not split.
+    #[test]
+    fn parse_dockerfile_honors_backtick_escape_directive() {
+        let df = "# escape=`\nFROM ubuntu\nRUN echo hi `\n    && echo bye\n";
+        assert_eq!(
+            parse_dockerfile(df),
+            vec![
+                ("FROM".to_string(), "ubuntu".to_string()),
+                ("RUN".to_string(), "echo hi  && echo bye".to_string()),
+            ]
+        );
+        // with `# escape=\``, a trailing BACKSLASH is literal (no longer a continuation): the line stands
+        // alone and the backslash is preserved.
+        let df2 = "# escape=`\nRUN echo one\\\nRUN echo two\n";
+        assert_eq!(
+            parse_dockerfile(df2),
+            vec![
+                ("RUN".to_string(), "echo one\\".to_string()),
+                ("RUN".to_string(), "echo two".to_string()),
+            ]
+        );
+    }
+
+    #[test]
+    fn parse_dockerfile_default_escape_is_backslash() {
+        // no directive -> backslash still continues (unchanged default behavior).
+        let df = "RUN a \\\n  b\n";
+        assert_eq!(parse_dockerfile(df), vec![("RUN".to_string(), "a  b".to_string())]);
+    }
+
+    // Finding B: an exec-form array with a non-string element is INVALID and must be rejected (error),
+    // not silently truncated to the string elements.
+    #[test]
+    fn parse_exec_form_checked_rejects_non_string_element() {
+        assert!(
+            parse_exec_form_checked("[\"echo\", 123]").is_err(),
+            "a non-string exec-form element must be an error"
+        );
+        // a valid all-string array is Ok and verbatim.
+        assert_eq!(
+            parse_exec_form_checked("[\"echo\", \"hi\"]").unwrap(),
+            vec!["echo".to_string(), "hi".to_string()]
+        );
+        // shell form is always Ok.
+        assert_eq!(
+            parse_exec_form_checked("echo hi").unwrap(),
+            vec!["/bin/sh".to_string(), "-c".to_string(), "echo hi".to_string()]
+        );
+        // the lenient wrapper no longer silently truncates: `["echo", 123]` is NOT `["echo"]`.
+        assert_ne!(parse_exec_form("[\"echo\", 123]"), vec!["echo".to_string()]);
     }
 
     #[test]

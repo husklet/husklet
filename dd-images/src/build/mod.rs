@@ -9,4 +9,7 @@ pub mod cache;
 pub mod dockerfile;
 
 pub use cache::{cache_id, is_fs_inst, path_digest, rootfs_digest, sha256_hex, BuildCache};
-pub use dockerfile::{parse_dockerfile, parse_env, parse_exec_form, parse_labels, substitute_args};
+pub use dockerfile::{
+    parse_dockerfile, parse_env, parse_exec_form, parse_exec_form_checked, parse_labels,
+    substitute_args,
+};

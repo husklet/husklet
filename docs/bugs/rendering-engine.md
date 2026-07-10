@@ -65,9 +65,3 @@ Verification / repro:
 `CHROME_EXTRA_FLAGS=--single-process CHROME_WINDOW_SIZE=512,384 KEEP_STATE=0` through
 the pipeline; `JTS=1` shows the main thread's idle syscall loop. Sample guest threads at
 the stall (per-tid backtrace) to identify the dropped wake.
-
-## Shelved (not a bug): cross-process PRIME/IOSurface bridge
-
-A PRIME id-passing bridge was implemented (`.claude/worktrees/content-path-analysis`) but
-Chrome makes 0 PRIME calls for content, so it is inert and NOT the fix. Do not merge or
-pursue unless a config actually exercises PRIME dmabuf sharing.
