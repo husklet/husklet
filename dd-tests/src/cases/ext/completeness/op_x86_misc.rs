@@ -10,6 +10,9 @@ pub(super) fn op_x86_misc() -> Group {
             // the Apple-Silicon Mach-exception gap where a JIT'd BRK/UDF killed the process (exit 133/132)
             // instead of delivering the guest signal; now routed through the dispatcher (R_TRAP).
             x("trap-signals", "completeness/x86_trap_signals.c"),
+            // MMX movq (plain 0F 6F/7F) is 64-bit; the 128-bit XMM store path corrupted the 8 bytes after
+            // the destination. Regression: the sentinel bytes past a 64-bit MMX store must stay intact.
+            x("mmx-width", "completeness/x86_mmx_width.c"),
             x("cmpxchg16b", "completeness/x86_cmpxchg16b.c"), // jit86 UNIMPL 0F C7 /1 (CMPXCHG16B)
             x("rdtsc", "completeness/x86_rdtsc.c"), // jit86 UNIMPL 0F 01 F9 (RDTSCP); rdtsc(0F31) ok
             x("x87", "completeness/x86_x87.c"),

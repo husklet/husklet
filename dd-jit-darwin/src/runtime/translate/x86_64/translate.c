@@ -2439,6 +2439,21 @@ static void *translate_block(uint64_t gpc) {
                         e_str_d(vd, 17);
                     } else
                         e_vmov8(vm, vd);
+                } else if (op == 0x6F && !I.p66 && !I.rep && !I.repne) { // MMX movq mm, mm/m64 (NO prefix): 64-bit
+                    // Plain 0F 6F is the 64-bit MMX movq (66=movdqa / F3=movdqu are the 128-bit forms below).
+                    // Loading/storing 128 bits here read/WROTE 8 bytes past the 64-bit MMX operand -> a store
+                    // corrupted the adjacent 8 bytes of guest memory. Keep MMX at its architectural 64-bit width.
+                    if (I.is_mem) {
+                        emit_ea(&I, next);
+                        e_ldr_d(vd, 17);
+                    } else
+                        e_vmov8(vd, vm);
+                } else if (op == 0x7F && !I.p66 && !I.rep && !I.repne) { // MMX movq mm/m64, mm (NO prefix): 64-bit
+                    if (I.is_mem) {
+                        emit_ea(&I, next);
+                        e_str_d(vd, 17); // 64-bit store: must NOT clobber the 8 bytes after the MMX destination
+                    } else
+                        e_vmov8(vm, vd);
                 } else if (op == 0x6F || op == 0x28 || (op == 0x10 && !I.rep && !I.repne)) { // load 128 -> xmm
                     if (I.is_mem) {
                         emit_ea(&I, next);

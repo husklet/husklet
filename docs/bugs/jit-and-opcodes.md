@@ -327,34 +327,6 @@ Generate a checked-in matrix with at least:
 - opcode family/subform
 - semantic dimensions tested, such as flags, MXCSR/rounding, memory vs register, VEX vs legacy, scalar merge, fault behavior
 
-## MMX `movq` / `paddb` Use 128-Bit XMM Width
-
-Priority: P1
-Impact: MMX stores can corrupt adjacent memory
-Confidence: High
-
-Verification status: Proven in isolated worktree `/Users/x/dd/dd-bf2-audit-20260710`.
-
-Evidence:
-
-- MMX is advertised: `dd-jit-darwin/src/runtime/translate/x86_64/x86_ops.c:238`.
-- No-prefix SIMD routes through XMM paths: `dd-jit-darwin/src/runtime/translate/x86_64/translate.c:2399`.
-- `0F 6F/7F` loads/stores use 128-bit width: `dd-jit-darwin/src/runtime/translate/x86_64/translate.c:2444`.
-- `paddb` lowers as a 16-byte vector op: `dd-jit-darwin/src/runtime/translate/x86_64/translate.c:2652`.
-
-Why this is bad:
-
-MMX operations are 64-bit. Running them through 128-bit XMM load/store and arithmetic paths overwrites bytes adjacent to the intended 8-byte destination.
-
-Isolated proof:
-
-```sh
-qemu-x86_64 target/bf2/mmx_64bit_width
-ddjit-linux_x86_64 target/bf2/mmx_64bit_width
-```
-
-qemu left bytes 8..15 as `aa`; dd changed them to `f2 f4 f6 f8 fa fc fe 00`.
-
 ## x87 Control Word Is Ignored
 
 Priority: P1
