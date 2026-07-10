@@ -25,8 +25,24 @@ pub(crate) async fn containers_prune(State(a): State<App>) -> Json<crate::api::C
         if let Some(c) = g.containers.get(id) {
             discard_container_layer(&c.upper.clone());
         }
-        g.containers.remove(id);
+        // Prune is equivalent to `docker rm` for eligible containers: drop the container from every
+        // network's membership/endpoints (else the network keeps a phantom endpoint and becomes
+        // undeletable — 403 "has active endpoints") and emit a `container/destroy` event so event-stream
+        // mirrors learn of the removal, exactly as the explicit remove path does.
+        let removed = g.containers.remove(id);
+        for n in g.networks.iter_mut() {
+            leave_network(n, id);
+        }
         g.live.remove(id);
+        if let Some(dc) = removed {
+            crate::events::emit_event(
+                &a.events,
+                "container",
+                "destroy",
+                id,
+                json!({"name": dc.name, "image": dc.image}),
+            );
+        }
     }
     save_state(&g, &a.state_path);
     Json(crate::api::ContainersPruneReport {

@@ -10,17 +10,24 @@ use crate::prelude::*;
 /// while a container uses it. Previously only `c.binds` was scanned, so a `--mount` volume looked unused
 /// and could be reclaimed out from under a live container (§6.3-6).
 pub(crate) fn volume_in_use(g: &Inner, name: &str, mp: Option<&str>) -> bool {
-    g.containers.values().any(|c| {
-        c.binds.iter().any(|b| {
-            b.split(':')
-                .next()
-                .map_or(false, |src| src == name || mp == Some(src))
-        }) || c
-            .mounts
-            .iter()
-            .any(|m| m.typ == "volume" && m.source == name)
-            || c.anon_volumes.iter().any(|a| a == name)
-    })
+    g.containers
+        .values()
+        .any(|c| container_uses_volume(c, name, mp))
+}
+
+/// Whether a SINGLE container references the volume named `name` (mountpoint `mp`) via any mount surface
+/// (`-v name:/dst` / bind-by-mountpoint, `--mount type=volume`, or an anonymous volume). The per-container
+/// half of [`volume_in_use`]; also used by `system df` to compute each volume's live `RefCount`.
+pub(crate) fn container_uses_volume(c: &Container, name: &str, mp: Option<&str>) -> bool {
+    c.binds.iter().any(|b| {
+        b.split(':')
+            .next()
+            .map_or(false, |src| src == name || mp == Some(src))
+    }) || c
+        .mounts
+        .iter()
+        .any(|m| m.typ == "volume" && m.source == name)
+        || c.anon_volumes.iter().any(|a| a == name)
 }
 
 /// A fresh, UNIQUE name for an anonymous `docker volume create` (empty `Name`). Docker mints a random
@@ -136,13 +143,13 @@ pub(crate) async fn volumes_create(
         };
         g.volumes.push(v.clone());
         save_state(&g, &a.state_path);
-        crate::events::emit_event(
-            &a.events,
-            "volume",
-            "create",
-            &name,
-            json!({"driver": "local"}),
-        );
+        // Flatten the volume's labels into the event attributes so `--filter label=...` selects it.
+        let mut attrs = serde_json::Map::new();
+        attrs.insert("driver".into(), json!(v.driver));
+        for (k, val) in &v.labels {
+            attrs.insert(k.clone(), json!(val));
+        }
+        crate::events::emit_event(&a.events, "volume", "create", &name, Value::Object(attrs));
         v
     };
     (StatusCode::CREATED, Json(vol_json(&v))).into_response()
@@ -193,6 +200,8 @@ pub(crate) async fn volumes_prune(State(a): State<App>) -> Json<crate::api::Volu
     g.volumes.retain(|v| !pruned.contains(&v.name));
     for name in &pruned {
         let _ = std::fs::remove_dir_all(std::path::Path::new(&a.volumes_dir).join(name));
+        // Emit `volume/destroy` per pruned volume so event mirrors drop stale references (docker parity).
+        crate::events::emit_event(&a.events, "volume", "destroy", name, json!({"driver": "local"}));
     }
     save_state(&g, &a.state_path);
     Json(crate::api::VolumesPruneReport {

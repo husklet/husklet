@@ -26,6 +26,8 @@ pub(crate) fn router(app: App) -> Router {
         .route("/info", get(info))
         .route("/events", get(events::events))
         .route("/system/df", get(system_df))
+        .route("/system/prune", post(system_prune))
+        .route("/plugins", get(plugins_list))
         .route("/auth", post(auth))
         .route("/distribution/:name/json", get(distribution_inspect))
         .route("/images/json", get(images_json))

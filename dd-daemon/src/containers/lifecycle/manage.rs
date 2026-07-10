@@ -31,9 +31,26 @@ pub(crate) async fn containers_rename(
         // Re-alias the container's network endpoints so `network inspect` and the live DNS `.names`
         // track the rename (endpoints are keyed by container id, not name).
         crate::networks::rename_endpoints(&mut g.networks, &full, &new_name);
-        if let Some(c) = g.containers.get_mut(&full) {
-            c.name = new_name;
-        }
+        let old_name = g
+            .containers
+            .get(&full)
+            .map(|c| c.name.clone())
+            .unwrap_or_default();
+        let image = if let Some(c) = g.containers.get_mut(&full) {
+            c.name = new_name.clone();
+            c.image.clone()
+        } else {
+            String::new()
+        };
+        // Emit `container/rename` so event-stream mirrors learn the new name without re-polling inspect.
+        // Docker's rename event carries the old and new names in the actor attributes.
+        crate::events::emit_event(
+            &a.events,
+            "container",
+            "rename",
+            &full,
+            json!({"name": new_name, "oldName": old_name, "image": image}),
+        );
     }
     save_state(&g, &a.state_path);
     StatusCode::NO_CONTENT.into_response()
