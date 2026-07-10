@@ -59,11 +59,41 @@ pub(crate) async fn image_search() -> Json<Vec<Value>> {
     Json(vec![])
 }
 
-/// `POST /images/prune` — `docker image prune`. dd does not track dangling images; report nothing
-/// reclaimed (correct shape so `docker system prune` succeeds).
-pub(crate) async fn images_prune() -> Json<PruneReport> {
+/// `POST /images/prune` — `docker image prune`. Reclaims DANGLING images: those with no repository tag
+/// (a `docker commit` with no repo, or an untagged leftover) that no container still references by rootfs.
+/// Deletes their on-disk store dir and reports each as an untagged/deleted record (docker parity). The
+/// default (`dangling=true`) semantics — untagged-only — is what dd tracks.
+pub(crate) async fn images_prune(State(a): State<App>) -> Json<PruneReport> {
+    let mut g = a.inner.lock().await;
+    // A dangling image has an empty (untagged) name; keep it only if a container still points at its rootfs.
+    let dangling: Vec<Image> = g
+        .images
+        .iter()
+        .filter(|i| i.name.is_empty() && !i.name.eq("macos"))
+        .filter(|i| !g.containers.values().any(|c| c.rootfs == i.rootfs))
+        .cloned()
+        .collect();
+    let mut deleted: Vec<Value> = Vec::new();
+    for img in &dangling {
+        // Only delete the rootfs when no TAGGED image shares it (a tagged sibling keeps the layers alive).
+        let shared = g
+            .images
+            .iter()
+            .any(|i| i.rootfs == img.rootfs && !i.name.is_empty());
+        if !shared {
+            dd_images::Store::new(&a.images_dir).remove_image_dir(&img.rootfs);
+            deleted.push(json!({ "Deleted": image_id(img) }));
+        }
+        deleted.push(json!({ "Untagged": image_id(img) }));
+    }
+    let dangling_rootfs: Vec<String> = dangling.iter().map(|i| i.rootfs.clone()).collect();
+    g.images
+        .retain(|i| !(i.name.is_empty() && dangling_rootfs.contains(&i.rootfs)));
+    if !deleted.is_empty() {
+        save_state(&g, &a.state_path);
+    }
     Json(PruneReport {
-        images_deleted: vec![],
+        images_deleted: deleted,
         space_reclaimed: 0,
     })
 }

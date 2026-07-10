@@ -147,8 +147,23 @@ pub(crate) async fn network_connect(
         Some(t) => t,
         None => return no_such(&req),
     };
+    let net_id = g
+        .networks
+        .iter()
+        .find(|n| n.name == net_name)
+        .map(|n| n.id.clone())
+        .unwrap_or_default();
     join_network(&mut g.networks, &net_name, &cid, &cname);
     save_state(&g, &a.state_path);
+    // `network/connect` so event mirrors track endpoint attach (Actor is the network; the attached
+    // container id is an attribute, mirroring docker's connect/disconnect events).
+    crate::events::emit_event(
+        &a.events,
+        "network",
+        "connect",
+        &net_id,
+        json!({"name": net_name, "container": cid}),
+    );
     StatusCode::OK.into_response()
 }
 
@@ -169,10 +184,21 @@ pub(crate) async fn network_disconnect(
         Some(c) => c,
         None => return no_such(&req),
     };
+    let mut net_id = String::new();
+    let mut net_name = String::new();
     if let Some(n) = g.networks.iter_mut().find(|n| net_matches(n, &id)) {
+        net_id = n.id.clone();
+        net_name = n.name.clone();
         leave_network(n, &cid);
     }
     save_state(&g, &a.state_path);
+    crate::events::emit_event(
+        &a.events,
+        "network",
+        "disconnect",
+        &net_id,
+        json!({"name": net_name, "container": cid}),
+    );
     StatusCode::OK.into_response()
 }
 
@@ -180,15 +206,27 @@ pub(crate) async fn network_disconnect(
 /// containers (never the predefined bridge/host/none).
 pub(crate) async fn networks_prune(State(a): State<App>) -> Json<crate::api::NetworksPruneReport> {
     let mut g = a.inner.lock().await;
-    let pruned: Vec<String> = g
+    // Collect (id, name, driver) so we can both report the names and emit a destroy event per network.
+    let pruned: Vec<(String, String, String)> = g
         .networks
         .iter()
         .filter(|n| !is_predefined(&n.name) && n.containers.is_empty())
-        .map(|n| n.name.clone())
+        .map(|n| (n.id.clone(), n.name.clone(), n.driver.clone()))
         .collect();
-    g.networks.retain(|n| !pruned.contains(&n.name));
+    let pruned_names: Vec<String> = pruned.iter().map(|(_, n, _)| n.clone()).collect();
+    g.networks.retain(|n| !pruned_names.contains(&n.name));
     save_state(&g, &a.state_path);
+    // Emit `network/destroy` for each pruned network so event mirrors drop them (docker parity).
+    for (nid, nname, ndriver) in &pruned {
+        crate::events::emit_event(
+            &a.events,
+            "network",
+            "destroy",
+            nid,
+            json!({"name": nname, "type": ndriver}),
+        );
+    }
     Json(crate::api::NetworksPruneReport {
-        networks_deleted: pruned,
+        networks_deleted: pruned_names,
     })
 }

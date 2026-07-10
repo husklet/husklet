@@ -3,10 +3,14 @@ use crate::model::*;
 use crate::util::*;
 use crate::prelude::*;
 
+/// The built daemon version, tracked from the crate version so `/version`, `/info` ServerVersion, and
+/// the `Server` response header all report the same real identity (previously a stale hardcoded `0.1.0`).
+pub(crate) const DD_VERSION: &str = env!("CARGO_PKG_VERSION");
+
 pub(crate) async fn version() -> Json<crate::api::Version> {
     use crate::api::{Component, ComponentDetails, Platform, Version};
     Json(Version {
-        version: "0.1.0-dd".into(),
+        version: DD_VERSION.into(),
         api_version: API_VERSION,
         min_api_version: "1.24",
         os: "linux",
@@ -19,7 +23,7 @@ pub(crate) async fn version() -> Json<crate::api::Version> {
         platform: Platform { name: "dd" },
         components: vec![Component {
             name: "Engine",
-            version: "0.1.0-dd".into(),
+            version: DD_VERSION.into(),
             details: ComponentDetails {
                 api_version: API_VERSION,
                 os: "linux",
@@ -94,7 +98,7 @@ pub(crate) async fn info(State(a): State<App>) -> Json<crate::api::Info> {
         ncpu: host_ncpu(),
         mem_total: host_mem_total(),
         kernel_version: "6.1.0-dd",
-        server_version: "0.1.0-dd",
+        server_version: DD_VERSION,
         docker_root_dir: dd_home().to_string_lossy().into_owned(),
         cgroup_driver: "none",
         default_runtime: DEFAULT_RUNTIME,
@@ -139,12 +143,14 @@ pub(crate) async fn system_df(State(a): State<App>) -> Json<crate::api::DiskUsag
         .iter()
         .map(|i| {
             let size = image_size(&i.rootfs, &i.name);
-            // Containers backed by this image (by fully qualified repository) — Docker's
-            // `system df` shows this count; a bare `nginx` must not absorb `linuxserver/nginx`'s containers.
+            // Containers backed by THIS exact image tag — Docker's `system df` counts by the precise
+            // `repository:tag`, so a container from `repo/app:v1` must not be attributed to sibling `:v2`.
             let containers = g
                 .containers
                 .values()
-                .filter(|c| ref_repo(&c.image) == ref_repo(&i.name))
+                .filter(|c| {
+                    ref_repo(&c.image) == ref_repo(&i.name) && ref_tag(&c.image) == ref_tag(&i.name)
+                })
                 .count();
             ImageDf {
                 id: image_id(i),
@@ -184,16 +190,33 @@ pub(crate) async fn system_df(State(a): State<App>) -> Json<crate::api::DiskUsag
     let volumes: Vec<VolumeDf> = g
         .volumes
         .iter()
-        .map(|v| VolumeDf {
-            name: v.name.clone(),
-            driver: "local",
-            mountpoint: v.mountpoint.clone(),
-            usage_data: VolumeUsageData {
-                size: -1,
-                ref_count: -1,
-            },
+        .map(|v| {
+            // RefCount = number of containers referencing this volume (by name/bind/mount/anon) — a
+            // mounted volume must not read back as unused. Docker reports the live reference count here.
+            let ref_count = g
+                .containers
+                .values()
+                .filter(|c| crate::volumes::container_uses_volume(c, &v.name, Some(&v.mountpoint)))
+                .count() as i64;
+            VolumeDf {
+                name: v.name.clone(),
+                driver: "local",
+                mountpoint: v.mountpoint.clone(),
+                usage_data: VolumeUsageData {
+                    size: -1,
+                    ref_count,
+                },
+            }
         })
         .collect();
+    // Volumes with at least one live container reference (for VolumeUsage.ActiveCount).
+    let volumes_active = volumes
+        .iter()
+        .filter(|v| v.usage_data.ref_count > 0)
+        .count() as i64;
+    // Images actively used by at least one container (ImageUsage.ActiveCount describes IMAGES, not the
+    // container count — two containers on one image is one active image).
+    let images_active = images.iter().filter(|i| i.containers > 0).count() as i64;
     // Emit BOTH shapes: the classic flat lists (older clients) AND the newer nested *Usage objects
     // current clients (docker CLI / bollard) read — so `docker system df` and the GUI both populate.
     let running = g
@@ -209,17 +232,42 @@ pub(crate) async fn system_df(State(a): State<App>) -> Json<crate::api::DiskUsag
     // Persistent JIT translated-code cache (~/.dd/pcache, one <binid>.pcache per guest binary). It's the
     // closest analogue to Docker's build cache, so we surface it in that slot: shown by `system df`,
     // reclaimed by `system prune` / `builder prune` (see build_prune). Fully reclaimable (rebuilds on demand).
-    let (pc_size, pc_count) = std::fs::read_dir(crate::util::dd_home().join("pcache"))
+    // Materialize one build-cache ITEM per pcache file so the reported TotalCount always matches the
+    // item list — a nonzero count with an empty Items list is internally contradictory (docker parity).
+    let pc_items: Vec<Value> = std::fs::read_dir(crate::util::dd_home().join("pcache"))
         .map(|rd| {
-            rd.filter_map(|e| e.ok().and_then(|e| e.metadata().ok()))
-                .filter(|m| m.is_file())
-                .fold((0i64, 0i64), |(s, c), m| (s + m.len() as i64, c + 1))
+            rd.filter_map(|e| e.ok())
+                .filter_map(|e| {
+                    let m = e.metadata().ok()?;
+                    if !m.is_file() {
+                        return None;
+                    }
+                    let id = e.file_name().to_string_lossy().into_owned();
+                    Some(json!({
+                        "ID": id,
+                        "Type": "regular",
+                        "Size": m.len() as i64,
+                        "InUse": false,
+                        "Shared": false,
+                        "CreatedAt": "0001-01-01T00:00:00Z",
+                        "LastUsedAt": null,
+                        "UsageCount": 0,
+                        "Parent": "",
+                        "Description": "dd JIT translated-code cache",
+                    }))
+                })
+                .collect()
         })
-        .unwrap_or((0, 0));
+        .unwrap_or_default();
+    let pc_size: i64 = pc_items
+        .iter()
+        .map(|i| i["Size"].as_i64().unwrap_or(0))
+        .sum();
+    let pc_count = pc_items.len() as i64;
     Json(DiskUsage {
         layers_size: layers,
         image_usage: Usage {
-            active_count: nctr,
+            active_count: images_active,
             total_count: nimg,
             reclaimable: 0,
             total_size: layers,
@@ -233,7 +281,7 @@ pub(crate) async fn system_df(State(a): State<App>) -> Json<crate::api::DiskUsag
             items: containers.clone(),
         },
         volume_usage: Usage {
-            active_count: 0,
+            active_count: volumes_active,
             total_count: nvol,
             reclaimable: 0,
             total_size: 0,
@@ -244,14 +292,38 @@ pub(crate) async fn system_df(State(a): State<App>) -> Json<crate::api::DiskUsag
             total_count: pc_count,
             reclaimable: pc_size,
             total_size: pc_size,
-            items: vec![],
+            items: pc_items.clone(),
         },
         images,
         containers,
         volumes,
-        build_cache: vec![],
+        build_cache: pc_items,
         builder_size: pc_size,
     })
+}
+
+/// `GET /plugins` — `docker plugin ls`. dd ships no managed plugins, but `/info` advertises plugin
+/// categories, so a compatible client may query the inventory. Return an empty list (200) rather than a
+/// 404 fallback, which strict clients treat as a daemon error.
+pub(crate) async fn plugins_list() -> Json<Vec<Value>> {
+    Json(vec![])
+}
+
+/// `POST /system/prune` — `docker system prune`. Runs the individual prune passes (stopped containers,
+/// unused user networks, unreferenced volumes, dangling images) and returns the combined report docker
+/// clients expect. Previously unrouted, so compatible clients hit a 404 fallback.
+pub(crate) async fn system_prune(State(a): State<App>) -> Json<Value> {
+    let containers = crate::containers::containers_prune(State(a.clone())).await.0;
+    let networks = crate::networks::networks_prune(State(a.clone())).await.0;
+    let volumes = crate::volumes::volumes_prune(State(a.clone())).await.0;
+    let images = crate::images::images_prune(State(a.clone())).await.0;
+    Json(json!({
+        "ContainersDeleted": containers.containers_deleted,
+        "NetworksDeleted": networks.networks_deleted,
+        "VolumesDeleted": volumes.volumes_deleted,
+        "ImagesDeleted": images.images_deleted,
+        "SpaceReclaimed": 0,
+    }))
 }
 
 // `GET /events` — `docker events`. The handler now lives in `crate::events` (the lifecycle bus):

@@ -84,12 +84,6 @@ pub(crate) struct EventsQ {
     pub(crate) until: Option<String>,
 }
 
-/// Parse a `docker events --since/--until` timestamp into unix seconds. The CLI sends unix
-/// `seconds[.nanos]`; we keep the integer seconds (the RFC3339 forms aren't emitted on this path).
-fn parse_epoch_secs(s: &str) -> Option<i64> {
-    s.split('.').next()?.trim().parse::<i64>().ok()
-}
-
 /// The parsed, best-effort subset of `docker events` filters dd honors.
 #[derive(Default, Clone)]
 struct Filters {
@@ -97,6 +91,10 @@ struct Filters {
     actions: Vec<String>,    // `event=`/`action=` (start/die/...)
     containers: Vec<String>, // `container=` (id or name)
     images: Vec<String>,     // `image=`
+    labels: Vec<String>,     // `label=key` or `label=key=value`
+    networks: Vec<String>,   // `network=` (id or name)
+    volumes: Vec<String>,    // `volume=` (name)
+    scopes: Vec<String>,     // `scope=` (local/swarm)
 }
 
 impl Filters {
@@ -115,6 +113,10 @@ impl Filters {
         f.actions.extend(filter_values(&v, "action"));
         f.containers = filter_values(&v, "container");
         f.images = filter_values(&v, "image");
+        f.labels = filter_values(&v, "label");
+        f.networks = filter_values(&v, "network");
+        f.volumes = filter_values(&v, "volume");
+        f.scopes = filter_values(&v, "scope");
         Ok(f)
     }
 
@@ -123,12 +125,19 @@ impl Filters {
         let typ = ev["Type"].as_str().unwrap_or("");
         let action = ev["Action"].as_str().unwrap_or("");
         let id = ev["Actor"]["ID"].as_str().unwrap_or("");
-        let name = ev["Actor"]["Attributes"]["name"].as_str().unwrap_or("");
-        let image = ev["Actor"]["Attributes"]["image"].as_str().unwrap_or("");
+        let attrs = &ev["Actor"]["Attributes"];
+        let name = attrs["name"].as_str().unwrap_or("");
+        let image = attrs["image"].as_str().unwrap_or("");
         if !self.types.is_empty() && !self.types.iter().any(|t| t == typ) {
             return false;
         }
-        if !self.actions.is_empty() && !self.actions.iter().any(|a| a == action) {
+        // Health transitions emit compound actions like `health_status: unhealthy`; docker's
+        // `event=health_status` (and `event=exec_die`) filters match on the action's KEY (before `:`),
+        // so compare both the full action and its `:`-prefixed key.
+        let action_key = action.split(':').next().unwrap_or(action).trim();
+        if !self.actions.is_empty()
+            && !self.actions.iter().any(|a| a == action || a == action_key)
+        {
             return false;
         }
         // Exact match on the resolved id or the name only. `events()` pre-resolves every `container=`
@@ -139,8 +148,54 @@ impl Filters {
         if !self.containers.is_empty() && !self.containers.iter().any(|c| c == id || c == name) {
             return false;
         }
-        if !self.images.is_empty() && !self.images.iter().any(|i| i == image) {
+        // Image events publish the ref under `Attributes.name` (not `image`), so match either. Non-image
+        // events (no name/image match) are still filtered out.
+        if !self.images.is_empty()
+            && !self.images.iter().any(|i| i == image || i == name)
+        {
             return false;
+        }
+        // `label=key[=value]`: every requested label must be satisfied by the actor attributes (create
+        // events now carry the object's labels as attributes). A bare `key` matches any value.
+        for lf in &self.labels {
+            let (k, want) = match lf.split_once('=') {
+                Some((k, v)) => (k, Some(v)),
+                None => (lf.as_str(), None),
+            };
+            let got = attrs[k].as_str();
+            let ok = match (got, want) {
+                (Some(g), Some(w)) => g == w,
+                (Some(_), None) => true,
+                _ => false,
+            };
+            if !ok {
+                return false;
+            }
+        }
+        // `scope=` narrows on the event scope (local/swarm).
+        if !self.scopes.is_empty() {
+            let scope = ev["scope"].as_str().or_else(|| ev["Scope"].as_str()).unwrap_or("");
+            if !self.scopes.iter().any(|s| s == scope) {
+                return false;
+            }
+        }
+        // `network=` matches network-type events by id/name, or any event carrying a `network` attribute.
+        if !self.networks.is_empty() {
+            let net_attr = attrs["network"].as_str();
+            let ok = (typ == "network" && self.networks.iter().any(|n| n == id || n == name))
+                || net_attr.map_or(false, |x| self.networks.iter().any(|n| n == x));
+            if !ok {
+                return false;
+            }
+        }
+        // `volume=` matches volume-type events by id/name, or any event carrying a `volume` attribute.
+        if !self.volumes.is_empty() {
+            let vol_attr = attrs["volume"].as_str();
+            let ok = (typ == "volume" && self.volumes.iter().any(|v| v == id || v == name))
+                || vol_attr.map_or(false, |x| self.volumes.iter().any(|v| v == x));
+            if !ok {
+                return false;
+            }
         }
         true
     }
@@ -193,7 +248,10 @@ pub(crate) async fn events(State(a): State<App>, Query(q): Query<EventsQ>) -> Re
     // the past has nothing to replay and closes IMMEDIATELY (an unbounded live stream here would hang the
     // client forever, e.g. `docker events --until $(date +%s)`); a future `--until` ends the live stream
     // once wall-clock passes it. Without `--until` the stream stays unbounded (ends on client disconnect).
-    let until = q.until.as_deref().and_then(parse_epoch_secs);
+    let until = q
+        .until
+        .as_deref()
+        .and_then(|s| crate::util::parse_docker_ts(s, crate::util::now_secs()));
     if matches!(until, Some(u) if u <= crate::util::now_secs()) {
         return Response::builder()
             .status(StatusCode::OK)
@@ -267,5 +325,66 @@ mod filter_tests {
         assert_eq!(f.types, vec!["container".to_string()]);
         assert_eq!(f.actions, vec!["start".to_string()]);
         assert_eq!(f.images, vec!["nginx".to_string()]);
+    }
+
+    use serde_json::json;
+
+    // "Image Event Filters Drop Image Events": image lifecycle events carry the ref under
+    // Attributes.name (not `image`), so `--filter image=busy:1` must still match.
+    #[test]
+    fn image_filter_matches_name_attribute() {
+        let f = Filters::parse(&Some("{\"image\":[\"busy:1\"]}".into())).unwrap();
+        let ev = json!({"Type":"image","Action":"pull",
+            "Actor":{"ID":"busy:1","Attributes":{"name":"busy:1"}}});
+        assert!(f.matches(&ev), "image filter must match the name attribute");
+        let other = json!({"Type":"image","Action":"pull",
+            "Actor":{"ID":"other:2","Attributes":{"name":"other:2"}}});
+        assert!(!f.matches(&other));
+    }
+
+    // "event=health_status Filter Misses Health Transitions": actions are `health_status: unhealthy`;
+    // the `health_status` filter matches on the action key before `:`.
+    #[test]
+    fn action_filter_matches_health_status_key() {
+        let f = Filters::parse(&Some("{\"event\":[\"health_status\"]}".into())).unwrap();
+        let ev = json!({"Type":"container","Action":"health_status: unhealthy",
+            "Actor":{"ID":"c1","Attributes":{}}});
+        assert!(f.matches(&ev), "health_status must match the compound action key");
+    }
+
+    // "Event Filters Broaden To Match-All For Supported Keys": label/network/volume/scope must NARROW,
+    // not leak unrelated events.
+    #[test]
+    fn label_network_volume_scope_filters_narrow() {
+        // label=app=web matches only events whose attributes carry that label.
+        let f = Filters::parse(&Some("{\"label\":[\"app=web\"]}".into())).unwrap();
+        let hit = json!({"Type":"container","Action":"create",
+            "Actor":{"ID":"c1","Attributes":{"app":"web"}}});
+        let miss = json!({"Type":"container","Action":"create",
+            "Actor":{"ID":"c2","Attributes":{"app":"db"}}});
+        assert!(f.matches(&hit));
+        assert!(!f.matches(&miss), "label filter must not leak a non-matching event");
+
+        // network=frontend only matches network events for that network (or events tagged with it).
+        let fnet = Filters::parse(&Some("{\"network\":[\"frontend\"]}".into())).unwrap();
+        let net_ev = json!({"Type":"network","Action":"connect",
+            "Actor":{"ID":"netid","Attributes":{"name":"frontend"}}});
+        let unrelated = json!({"Type":"container","Action":"start",
+            "Actor":{"ID":"c1","Attributes":{}}});
+        assert!(fnet.matches(&net_ev));
+        assert!(!fnet.matches(&unrelated), "network filter must not leak unrelated container events");
+
+        // volume=cache narrows to that volume.
+        let fvol = Filters::parse(&Some("{\"volume\":[\"cache\"]}".into())).unwrap();
+        let vol_ev = json!({"Type":"volume","Action":"destroy",
+            "Actor":{"ID":"cache","Attributes":{"name":"cache"}}});
+        assert!(fvol.matches(&vol_ev));
+        assert!(!fvol.matches(&unrelated));
+
+        // scope=swarm narrows on the event scope (dd only emits local).
+        let fscope = Filters::parse(&Some("{\"scope\":[\"swarm\"]}".into())).unwrap();
+        let local_ev = json!({"Type":"container","Action":"start","scope":"local",
+            "Actor":{"ID":"c1","Attributes":{}}});
+        assert!(!fscope.matches(&local_ev), "scope=swarm must not match a local event");
     }
 }

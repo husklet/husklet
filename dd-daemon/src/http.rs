@@ -86,7 +86,10 @@ pub(crate) async fn docker_headers(mut resp: Response) -> Response {
     h.insert("Ostype", HeaderValue::from_static("linux"));
     h.insert("Docker-Experimental", HeaderValue::from_static("false"));
     h.insert("Builder-Version", HeaderValue::from_static("1"));
-    h.insert("Server", HeaderValue::from_static("dd-daemon/0.1.0"));
+    h.insert(
+        "Server",
+        HeaderValue::from_static(concat!("dd-daemon/", env!("CARGO_PKG_VERSION"))),
+    );
     h.insert(
         "Cache-Control",
         HeaderValue::from_static("no-cache, no-store, must-revalidate"),

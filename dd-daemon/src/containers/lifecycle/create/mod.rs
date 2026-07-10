@@ -453,13 +453,15 @@ pub(crate) async fn containers_create(
             }
         }
     }
-    crate::events::emit_event(
-        &a.events,
-        "container",
-        "create",
-        &id,
-        json!({"name": c.name, "image": c.image}),
-    );
+    // Include the container's labels in the event attributes (docker flattens object labels into
+    // Actor.Attributes) so `docker events --filter label=...` can select this create event.
+    let mut cre_attrs = serde_json::Map::new();
+    cre_attrs.insert("name".into(), json!(c.name));
+    cre_attrs.insert("image".into(), json!(c.image));
+    for (k, v) in &c.labels {
+        cre_attrs.insert(k.clone(), json!(v));
+    }
+    crate::events::emit_event(&a.events, "container", "create", &id, Value::Object(cre_attrs));
     g.containers.insert(id.clone(), c);
     save_state(&g, &a.state_path);
     (
