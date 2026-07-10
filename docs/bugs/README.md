@@ -73,18 +73,7 @@ This directory is a working inventory of suspicious behavior, bad architecture, 
 | P1 | display/shm | invalid shm buffer offset can panic compositor | High | [gpu-display-sentry.md](gpu-display-sentry.md#invalid-shm-buffer-offset-can-panic-compositor) |
 | P1 | display/shm | shm buffer stride smaller than row is accepted | High | [gpu-display-sentry.md](gpu-display-sentry.md#shm-buffer-stride-smaller-than-row-is-accepted) |
 | P1 | display/viewport | viewport source outside buffer is clamped | High | [gpu-display-sentry.md](gpu-display-sentry.md#viewport-source-outside-buffer-is-clamped) |
-| P1 | registry/pull | digest-pinned references are parsed as tags | High | [archive-fs-compat.md](archive-fs-compat.md#digest-pinned-references-are-parsed-as-tags) |
 | P1 | registry/pull | `--platform` ignores OS prefix | High | [archive-fs-compat.md](archive-fs-compat.md#--platform-ignores-os-prefix) |
-| P1 | registry/pull | downloaded blob digests are not verified | Medium-high | [archive-fs-compat.md](archive-fs-compat.md#pull-does-not-verify-downloaded-blob-digests) |
-| P1 | registry/pull | pull ignores config `rootfs.diff_ids` | High | [archive-fs-compat.md](archive-fs-compat.md#pull-ignores-config-rootfsdiff_ids) |
-| P1 | registry/pull | failed registry pull leaves partial final rootfs | High | [archive-fs-compat.md](archive-fs-compat.md#failed-registry-pull-leaves-partial-final-rootfs) |
-| P1 | registry/pull | pull accepts invalid manifest schema version | High | [archive-fs-compat.md](archive-fs-compat.md#pull-accepts-invalid-manifest-schema-version) |
-| P1 | registry/pull | unsupported layer media type is unpacked as gzip | High | [archive-fs-compat.md](archive-fs-compat.md#unsupported-layer-media-type-is-unpacked-as-gzip) |
-| P1 | registry/pull | config and layer descriptor sizes are not enforced | High | [archive-fs-compat.md](archive-fs-compat.md#config-and-layer-descriptor-sizes-are-not-enforced) |
-| P1 | registry/layer | opaque whiteout pre-pass can remove paths outside rootfs | High | [archive-fs-compat.md](archive-fs-compat.md#opaque-whiteout-pre-pass-can-remove-paths-outside-rootfs) |
-| P1 | registry/layer | registry layer extraction follows existing rootfs symlinks | High | [archive-fs-compat.md](archive-fs-compat.md#registry-layer-extraction-follows-existing-rootfs-symlinks) |
-| P1 | registry/pull | pull accepts invalid config blobs as empty config | High | [archive-fs-compat.md](archive-fs-compat.md#pull-accepts-invalid-config-blobs-as-empty-config) |
-| P1 | registry/push | concurrent registry manifest PUTs share one temp body file | High | [archive-fs-compat.md](archive-fs-compat.md#concurrent-registry-manifest-puts-share-one-temp-body-file) |
 | P1 | archive/race | fixed per-process temp dirs race concurrent operations | Medium-high | [archive-fs-compat.md](archive-fs-compat.md#fixed-per-process-temp-dirs-race-concurrent-operations) |
 | P2 | JIT/opcode | F16C `vcvtps2ph` ignores rounding immediate | High | [jit-and-opcodes.md](jit-and-opcodes.md#f16c-vcvtps2ph-ignores-rounding-immediate) |
 | P2 | JIT/opcode | SSE4.2 string compare leaves AF stale | High | [jit-and-opcodes.md](jit-and-opcodes.md#sse42-string-compare-leaves-af-stale) |
@@ -172,10 +161,8 @@ This directory is a working inventory of suspicious behavior, bad architecture, 
 | P1 | volume/contents | image `VOLUME` copy-up can escape the image rootfs | High | [archive-fs-compat.md](archive-fs-compat.md#image-volume-copy-up-can-escape-the-image-rootfs) |
 | P1 | archive/metadata | UID/GID metadata is lost on load/import/cp PUT | High | [archive-fs-compat.md](archive-fs-compat.md#uidgid-metadata-is-lost-on-loadimportcp-put) |
 | P2 | build/metadata | Dockerfile `COPY`/`ADD` metadata flags are ignored | High | [archive-fs-compat.md](archive-fs-compat.md#dockerfile-copy-add-metadata-flags-are-ignored) |
-| P2 | archive/perf | sparse files expand through save/push tar paths | High | [archive-fs-compat.md](archive-fs-compat.md#sparse-files-expand-through-savepush-tar-paths) |
 | P2 | archive/metadata | save/cp GET truncate nanosecond mtimes | High | [archive-fs-compat.md](archive-fs-compat.md#savecp-get-truncate-nanosecond-mtimes) |
 | P2 | image/metadata | daemon save/load drops lifecycle metadata | High | [archive-fs-compat.md](archive-fs-compat.md#daemon-saveload-drops-lifecycle-metadata) |
-| P2 | build/cache | build cache digests break on apostrophes in paths | High | [archive-fs-compat.md](archive-fs-compat.md#build-cache-digests-break-on-apostrophes-in-paths) |
 | P1 | build/history | built image history is synthetic | High | [archive-fs-compat.md](archive-fs-compat.md#built-image-history-is-synthetic) |
 | P1 | build/cache | build cache seed ignores base image config | High | [archive-fs-compat.md](archive-fs-compat.md#build-cache-seed-ignores-base-image-config) |
 | P2 | build/metadata | Dockerfile `LABEL` does not merge base labels | High | [archive-fs-compat.md](archive-fs-compat.md#dockerfile-label-does-not-merge-base-labels) |
@@ -186,7 +173,6 @@ This directory is a working inventory of suspicious behavior, bad architecture, 
 | P1 | build/onbuild | Dockerfile `ONBUILD` triggers are ignored | High | [archive-fs-compat.md](archive-fs-compat.md#dockerfile-onbuild-triggers-are-ignored) |
 | P1 | build/target | unknown build target builds last stage | High | [archive-fs-compat.md](archive-fs-compat.md#unknown-build-target-builds-last-stage) |
 | P2 | build/cleanup | failed build leaves partial image directory | High | [archive-fs-compat.md](archive-fs-compat.md#failed-build-leaves-partial-image-directory) |
-| P2 | build/parser | Dockerfile `# escape=` directive is ignored | High | [archive-fs-compat.md](archive-fs-compat.md#dockerfile-escape-directive-is-ignored) |
 | P2 | build/parser | exec-form JSON drops non-string elements | High | [archive-fs-compat.md](archive-fs-compat.md#exec-form-json-drops-non-string-elements) |
 | P2 | build/workdir | relative `WORKDIR ..` persists a different config path | High | [archive-fs-compat.md](archive-fs-compat.md#relative-workdir-dotdot-persists-a-different-config-path) |
 | P2 | build/env | `ENV` override moves inherited keys to the end | High | [archive-fs-compat.md](archive-fs-compat.md#env-override-moves-inherited-keys-to-the-end) |
@@ -205,10 +191,6 @@ This directory is a working inventory of suspicious behavior, bad architecture, 
 | P2 | daemon/cleanup | container rm/prune drop state when writable-layer cleanup fails | High | [daemon-tests-docs.md](daemon-tests-docs.md#container-rmprune-drop-state-when-writable-layer-cleanup-fails) |
 | P2 | image/cleanup | image rmi reports deletion when backing store removal fails | High | [daemon-tests-docs.md](daemon-tests-docs.md#image-rmi-reports-deletion-when-backing-store-removal-fails) |
 | P3 | daemon/inspect | inspect can serialize contradictory dead state | High | [daemon-tests-docs.md](daemon-tests-docs.md#inspect-can-serialize-contradictory-dead-state) |
-| P2 | registry/platform | platform selection discards OCI variant | Medium | [archive-fs-compat.md](archive-fs-compat.md#platform-selection-discards-oci-variant) |
-| P2 | registry/pull | valid zero-layer manifests are rejected | High | [archive-fs-compat.md](archive-fs-compat.md#valid-zero-layer-manifests-are-rejected) |
-| P2 | registry/http | layer downloads treat HTTP error bodies as blobs | High | [archive-fs-compat.md](archive-fs-compat.md#layer-downloads-treat-http-error-bodies-as-blobs) |
-| P2 | registry/push | registry push layer packaging breaks on apostrophes in paths | High | [archive-fs-compat.md](archive-fs-compat.md#registry-push-layer-packaging-breaks-on-apostrophes-in-paths) |
 | P1 | registry/push | Docker push drops runtime metadata from OCI config | High | [archive-fs-compat.md](archive-fs-compat.md#docker-push-drops-runtime-metadata-from-oci-config) |
 | P1 | syscall/fd | inotify/timerfd create without flags still sets close-on-exec | High | [syscall-compat.md](syscall-compat.md#inotify_init10-and-timerfd_create-0-set-close-on-exec) |
 | P1 | syscall/timerfd | `timerfd` CLOCK_REALTIME absolute deadlines are treated as monotonic | High | [syscall-compat.md](syscall-compat.md#timerfd-clock_realtime-absolute-deadlines-are-treated-as-monotonic) |
