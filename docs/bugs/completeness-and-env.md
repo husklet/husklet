@@ -196,31 +196,6 @@ Verification:
 
 Launch two containers through the typed runtime with global pcache defaults and per-container `DDJIT_NOPCACHE`, then assert no pcache file is loaded or written for the opted-out container.
 
-### `sysinfo(2)` Ignores Container Memory Cap
-
-Priority: P1
-Impact: runtimes can oversize heaps/workers under `--memory`
-Confidence: High
-
-Verification status: Proven in isolated worktree `/Users/x/dd/dd-worker-K-sparse`.
-
-Evidence:
-
-- `sysinfo.totalram` is hardcoded to 8 GiB: `dd-jit-darwin/src/runtime/os/linux/syscall/misc.c:51`.
-- cgroup `memory.max` reports `g_mem_max`: `dd-jit-darwin/src/runtime/os/linux/container/vfs.c:3351`.
-
-Why this is bad:
-
-Some runtimes size memory from `sysinfo`, while others read cgroups. Under a memory cap, those two views disagree and can cause excessive heap sizing.
-
-Isolated proof:
-
-```sh
-DD_MEM_MAX=536870912 "$E" target-slot-k/slot_k_sysinfo_memcg_static
-```
-
-Observed: `sysinfo total=8589934592 memory.max=536870912`.
-
 ### Typed Launch Path Lists Still Use Delimiter Env Strings
 
 Priority: P2
@@ -241,32 +216,6 @@ The typed launch path avoids a shell, but path lists still pass through delimite
 Verification:
 
 Create a bind source path containing `:` or `,` and assert the guest sees the correct mounted content.
-
-### `/proc/self/environ` Omits Guest Defaults
-
-Priority: P2
-Impact: procfs-scraping tools see a different environment than `getenv`
-Confidence: High
-
-Verification status: Proven in isolated worktree `/Users/x/dd/dd-worker-R-envproc-20260710`.
-
-Evidence:
-
-- Stack setup merges default guest entries such as `HOME` and `LANG`: `dd-jit-darwin/src/runtime/os/linux/elf.c:831`.
-- `DD_GUEST_ENV` entries are merged later in stack construction: `dd-jit-darwin/src/runtime/os/linux/elf.c:868`.
-- `/proc/self/environ` is generated from raw `DD_GUEST_ENV` instead of the final stack environment: `dd-jit-darwin/src/runtime/os/linux/container/vfs.c:1644`.
-
-Why this is bad:
-
-Programs that compare `getenv` with `/proc/self/environ`, or helper processes that inspect procfs, can miss default variables that are actually present in the process environment.
-
-Isolated proof:
-
-```sh
-make test FILTER=pf-environ-defaults
-```
-
-Result: failed on linux/aarch64 and linux/x86_64; observed `home=1/0 lang=1/0`.
 
 ### Hidden Proc Switches Change Peer Procfs
 
@@ -388,32 +337,6 @@ cargo run -p dd-tests -- -e x86_64 sysnet-none-direct
 
 Observed dd: `sysnet_none eth0_list=0 eth0_stat=1:0 eth0_addr=1:0`; expected direct lookups to return `ENOENT`.
 
-### Closed `/proc/self/fd/N` Reports Stale Existence
-
-Priority: P1
-Impact: fd lifecycle probes see closed descriptors as live
-Confidence: High
-
-Verification status: Proven in isolated worktree `/Users/x/dd/dd-worker-AM-envproc-20260710`.
-
-Evidence:
-
-- `/proc/self/fd/N` readlink checks whether the fd is still open: `dd-jit-darwin/src/runtime/os/linux/container/vfs.c:4756`.
-- Synthetic stat/access treats numeric proc-fd paths as live without the same fd validity check: `dd-jit-darwin/src/runtime/os/linux/syscall/fs.c:2553`.
-
-Why this is bad:
-
-After close, Linux makes `/proc/self/fd/N` disappear. dd returns `ENOENT` for readlink but success for lstat/access, creating stale fd state for runtime probes and cleanup logic.
-
-Isolated proof:
-
-```sh
-cargo run -p dd-tests -- -e aarch64 proc-fd-closed-stat
-cargo run -p dd-tests -- -e x86_64 proc-fd-closed-stat
-```
-
-Observed dd: `proc_fd_closed lstat=1:0 readlink=0:2 access=1:0`; native Linux returned `ENOENT` for all three.
-
 ### Peer `/proc/<pid>/fd` Is Advertised But Not Openable
 
 Priority: P2
@@ -487,31 +410,6 @@ Observed proof:
 ```text
 Linux: proc_net_unix has_path=1 ok=1
 dd:    proc_net_unix has_path=0 lines=1 ok=0
-```
-
-### `/proc/self/fdinfo` Is Missing
-
-Priority: P2
-Impact: fd diagnostics and event-loop introspection lose per-fd metadata
-Confidence: High
-
-Verification status: Proven in isolated worktree `/Users/x/dd/dd-procfs-audit-BN`.
-
-Evidence:
-
-- Per-pid listing creates `fd` but not `fdinfo`: `dd-jit-darwin/src/runtime/os/linux/container/vfs.c:2396`.
-- Synthetic stat special-cases `fd` and `fd/N`, not `fdinfo`: `dd-jit-darwin/src/runtime/os/linux/container/vfs.c:4748`.
-- Direct proc open has no `fdinfo` handling: `dd-jit-darwin/src/runtime/os/linux/container/vfs.c:3027`.
-
-Why this is bad:
-
-Linux exposes `/proc/self/fdinfo` and per-fd entries. Runtimes use it for descriptor flags, positions, eventfd counters, and epoll details. dd exposes `/proc/self/fd` but omits fdinfo entirely.
-
-Observed proof:
-
-```text
-Linux: fdinfo root_listed=1 root_stat=1 root_open=1; fdinfo_entry listed=1 stat=1 open=1
-dd:    fdinfo root_listed=0 root_stat=0 root_open=0; fdinfo_entry listed=0 stat=0 open=0
 ```
 
 ### Bind Mounts Are Missing From Mount Tables
@@ -693,29 +591,6 @@ Observed proof:
 ```text
 Linux/qemu: tty nb_read=-1 errno=11
 dd:         tty nb_read=0 errno=0
-```
-
-### `/proc/tty` Surface Is Absent
-
-Priority: P2
-Impact: tty discovery tools see missing kernel metadata
-Confidence: High
-
-Verification status: Proven in isolated worktree `/Users/x/dd/dd-audit-devfs-procfs-20260710`.
-
-Evidence:
-
-- `/proc` root static entries omit `tty`: `dd-jit-darwin/src/runtime/os/linux/container/vfs.c:2527`.
-
-Why this is bad:
-
-Linux exposes `/proc/tty` and readable metadata such as `/proc/tty/drivers`. dd returns `ENOENT`, so procfs walkers and tty discovery tools underreport terminal support.
-
-Observed proof:
-
-```text
-dd:    /proc/tty, /proc/tty/drivers, /proc/tty/driver, /proc/tty/driver/serial -> ENOENT
-Linux: /proc/tty exists and /proc/tty/drivers is readable
 ```
 
 ## Regression Gate Shape

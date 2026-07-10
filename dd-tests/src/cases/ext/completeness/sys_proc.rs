@@ -29,6 +29,10 @@ pub(super) fn sys_proc() -> Group {
             sy("pf-dirs", "completeness/pf_dirs.c"),
             sy("pf-argv", "completeness/pf_argv.c"),
             sy("pf-devseed", "completeness/pf_devseed.c"),
+            sy("pf-fdclose", "completeness/pf_fdclose.c"),
+            sy("pf-tty", "completeness/pf_tty.c"),
+            sy("pf-environ", "completeness/pf_environ.c"),
+            sy("pf-fdinfo", "completeness/pf_fdinfo.c"),
         ],
     )
 }

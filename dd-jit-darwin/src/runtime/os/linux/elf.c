@@ -979,6 +979,7 @@ static uint64_t build_stack(int argc, char **argv, struct loaded *lm, uint64_t a
         if (dup) continue;
         estr[envc++] = g_guest_env[i];
     }
+    set_guest_environ(estr, envc); // capture the final env for /proc/self/environ (== getenv)
     // Place the arg/env strings top-down in the SAME memory order the Linux kernel uses, so that low->high
     // addresses hold argv[0], argv[1], …, argv[argc-1], env[0], …, env[envc-1] -- i.e. argv[0] sits at the
     // LOWEST address of the contiguous arg+env block, the last env string ends at the stack top. libuv

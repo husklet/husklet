@@ -480,6 +480,7 @@ static uint64_t build_stack(int argc, char **argv, struct loaded *lm, uint64_t a
         if (dup) continue;
         estr[envc++] = g_guest_env[i];
     }
+    set_guest_environ(estr, envc); // capture the final env for /proc/self/environ (== getenv)
     for (int i = 0; i < envc; i++) {
         size_t l = strlen(estr[i]) + 1;
         top -= l;

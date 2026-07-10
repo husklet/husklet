@@ -1658,8 +1658,33 @@ static int proc_stat_text(char *b, size_t n) {
 // /proc/[pid]/environ -- the guest environment as NUL-separated KEY=VALUE. The authoritative source is
 // DD_GUEST_ENV (the container env the daemon forwards, "K=V\nK=V"); absent it (manual/direct mode), fall
 // back to the same defaults build_stack hands the guest. Returns the byte count written.
+// The running process's FINAL environment (container env + merged engine defaults), captured by build_stack
+// -- the exact set placed on the guest stack, i.e. what getenv() sees. /proc/self/environ was generated from
+// the RAW DD_GUEST_ENV instead, omitting the defaults (HOME/LANG/…) build_stack adds, so procfs disagreed
+// with getenv. Using this blob makes them consistent. (build_stack in elf.c is compiled after vfs.c.)
+static char g_self_environ[16384];
+static int g_self_environ_len = 0;
+static void set_guest_environ(const char *const *env, int envc) {
+    int o = 0;
+    for (int i = 0; i < envc && env && env[i]; i++) {
+        int L = (int)strlen(env[i]);
+        if (o + L + 1 > (int)sizeof g_self_environ) break;
+        memcpy(g_self_environ + o, env[i], (size_t)L);
+        o += L;
+        g_self_environ[o++] = 0;
+    }
+    g_self_environ_len = o;
+}
+
 static int proc_environ_text(char *b, size_t n) {
     int o = 0;
+    // Prefer the FINAL environment build_stack placed (== getenv), so procfs and getenv agree; this includes
+    // the engine defaults (HOME/LANG/GLIBC_TUNABLES) the raw DD_GUEST_ENV path below omitted.
+    if (g_self_environ_len > 0) {
+        int L = g_self_environ_len > (int)n ? (int)n : g_self_environ_len;
+        memcpy(b, g_self_environ, (size_t)L);
+        return L;
+    }
     const char *ge = getenv("DD_GUEST_ENV");
     if (ge && ge[0]) {
         for (const char *s = ge; *s;) {
@@ -1769,6 +1794,49 @@ static int proc_fd_dir_open(void) {
             break;
         }
     return d;
+}
+
+static void proc_dir_register(int fd, const char *tmpl, const char *guestpath); // defined below (dir synth)
+
+// Build the temp dir of /proc/self/fdinfo entries -- one REGULAR-file placeholder per open fd (content is
+// served live by proc_open on the relative reopen). Linux exposes per-fd pos/flags/mnt_id here; runtimes
+// read it for descriptor flags, eventfd counters, epoll details. Tagged "/proc/<pid>/fdinfo" so an
+// openat(dirfd,"N") re-enters proc_open. Returns the fd, -1 on error.
+static int proc_fdinfo_dir_open(const char *guestpath) {
+    static int registered = 0;
+    if (!registered) {
+        atexit(procfd_dirs_atexit);
+        registered = 1;
+    }
+    procfd_dirs_reap(0);
+    char tmpl[] = "/tmp/.ddfdinfoXXXXXX";
+    if (!mkdtemp(tmpl)) return -1;
+    for (int fd = 0; fd < DD_NFD; fd++) {
+        if (eventfd_hidden_peer_fd(fd)) continue;
+        if (fcntl(fd, F_GETFD) == -1) continue; // not open
+        char p[96];
+        snprintf(p, sizeof p, "%s/%d", tmpl, fd);
+        int f = open(p, O_WRONLY | O_CREAT | O_TRUNC, 0444);
+        if (f >= 0) close(f);
+    }
+    int d = open(tmpl, O_RDONLY | O_DIRECTORY);
+    if (d < 0) {
+        procfd_dir_rm(tmpl);
+        return -1;
+    }
+    proc_dir_register(d, tmpl, guestpath);
+    return d;
+}
+
+// The /proc/self/fdinfo/<N> body: Linux reports pos/flags/mnt_id (+ per-type extras). Returns the length or
+// -1 if fd N is not open. `off` is the current file offset (lseek CUR), `flags` the O_* access/status bits.
+static int proc_fdinfo_text(int fd, char *b, size_t n) {
+    if (fd < 0 || fcntl(fd, F_GETFD) == -1) return -1; // not an open fd
+    off_t pos = lseek(fd, 0, SEEK_CUR);
+    if (pos < 0) pos = 0; // pipe/socket/eventfd: unseekable -> 0, like Linux
+    int fl = fcntl(fd, F_GETFL);
+    if (fl < 0) fl = 0;
+    return snprintf(b, n, "pos:\t%lld\nflags:\t0%o\nmnt_id:\t1\nino:\t1\n", (long long)pos, (unsigned)fl);
 }
 
 static int proc_reg_read(int hostpid, char *comm, size_t csz, char *cmd, size_t cmdsz, int *cmdlen);
@@ -2799,6 +2867,7 @@ static int synth_names_dir_open(const char *guestpath, const char *const *names,
 static int synth_misc_dir_is(const char *gp) {
     if (!gp) return 0;
     if (!strcmp(gp, "/proc/net") || !strcmp(gp, "/proc/net/")) return 1;
+    if (!strcmp(gp, "/proc/tty") || !strcmp(gp, "/proc/tty/")) return 1;
     if (!strcmp(gp, "/sys/fs/cgroup") || !strcmp(gp, "/sys/fs/cgroup/")) return 1;
     if (!strcmp(gp, "/sys/class/block") || !strcmp(gp, "/sys/class/block/")) return 1;
     if (!strcmp(gp, "/sys/block") || !strcmp(gp, "/sys/block/")) return 1;
@@ -2811,6 +2880,7 @@ static int synth_misc_dir_is(const char *gp) {
             while (q[i] >= '0' && q[i] <= '9')
                 i++;
             if (i > 0 && (!strcmp(q + i, "/ns") || !strcmp(q + i, "/ns/"))) return 1;
+            if (i > 0 && (!strcmp(q + i, "/fdinfo") || !strcmp(q + i, "/fdinfo/"))) return 1;
         }
     }
     if (!strncmp(gp, "/sys/devices/system/cpu/cpu", 27)) {
@@ -2834,6 +2904,11 @@ static int synth_misc_dir_open(const char *gp) {
                                           "sockstat", "sockstat6", "ipv6_route", 0};
         return synth_names_dir_open("/proc/net", net, 0);
     }
+    // /proc/tty: tty discovery tools (agetty, `ls /proc/tty`) walk this before reading drivers.
+    if (!strcmp(gp, "/proc/tty") || !strcmp(gp, "/proc/tty/")) {
+        static const char *const tty[] = {"drivers", "ldiscs", 0};
+        return synth_names_dir_open("/proc/tty", tty, 0);
+    }
     // /proc/[self|<pid>]/ns: enumerate the namespace magic links (readlink served in fs.c).
     {
         char dsb[4200];
@@ -2848,6 +2923,7 @@ static int synth_misc_dir_open(const char *gp) {
                                                  "time",   "time_for_children", "user", "uts", 0};
                 return synth_names_dir_open(rp, ns, 1);
             }
+            if (i > 0 && (!strcmp(q + i, "/fdinfo") || !strcmp(q + i, "/fdinfo/"))) return proc_fdinfo_dir_open(rp);
         }
     }
     // /sys/fs/cgroup root: advertised in mountinfo, so a directory walk of the hierarchy must list it.
@@ -3224,6 +3300,17 @@ static int proc_open(const char *rp) {
     const char *leaf = proc_self_leaf(rp);
     if (leaf) {
         if (!strcmp(leaf, "fd")) return proc_fd_dir_open();
+        if (!strncmp(leaf, "fdinfo/", 7) && leaf[7]) { // /proc/self/fdinfo/<N> body
+            int isnum = 1;
+            for (const char *t = leaf + 7; *t; t++)
+                if (*t < '0' || *t > '9') isnum = 0;
+            if (isnum) {
+                int fn = atoi(leaf + 7);
+                int m = proc_fdinfo_text(fn, buf, sizeof buf);
+                if (m < 0) return -2; // closed/invalid fd -> ENOENT
+                return proc_text_fd(buf, m);
+            }
+        }
         if (!strcmp(leaf, "pagemap")) {
             // VA-indexed binary pagemap: back it with an empty seekable regular fd (lseek to vaddr/pg*8
             // works natively) and synthesize the 8-byte-per-page entries on read (io.c). LTP mmap12.
@@ -3727,6 +3814,16 @@ static int proc_open(const char *rp) {
         n = snprintf(buf, sizeof buf,
                      "Character devices:\n  1 mem\n  5 /dev/tty\n  5 /dev/console\n  5 /dev/ptmx\n"
                      "136 pts\n\nBlock devices:\n  7 loop\n  8 sd\n 253 device-mapper\n 259 blkext\n");
+    } else if (!strcmp(rp, "/proc/tty/drivers")) {
+        // tty driver table (`/proc/tty/drivers`) tty-discovery tools read; the exact rows are host-variant,
+        // so present the canonical container set (pty pair + console/serial) so the file is non-empty.
+        n = snprintf(buf, sizeof buf,
+                     "/dev/tty             /dev/tty        5       0 system:/dev/tty\n"
+                     "/dev/console         /dev/console    5       1 system:console\n"
+                     "/dev/ptmx            /dev/ptmx       5       2 system\n"
+                     "unknown              /dev/tty        4    1-63 console\n"
+                     "pty_slave            /dev/pts      136 0-1048575 pty:slave\n"
+                     "pty_master           /dev/ptm      128 0-1048575 pty:master\n");
     } else if (!strcmp(rp, "/proc/vmstat")) {
         n = snprintf(buf, sizeof buf,
                      "nr_free_pages 262144\nnr_zone_inactive_anon 0\nnr_zone_active_anon 0\n"
@@ -5016,6 +5113,19 @@ static int synth_stat_raw(const char *gp, struct stat *s) {
             s->st_nlink = 2;
             return 1;
         }
+        if (!strncmp(leaf, "fdinfo/", 7) && leaf[7]) { // /proc/self/fdinfo/<N> -> a regular file (if fd open)
+            int isnum = 1;
+            for (const char *t = leaf + 7; *t; t++)
+                if (*t < '0' || *t > '9') isnum = 0;
+            if (isnum) {
+                int fn = atoi(leaf + 7);
+                if (eventfd_hidden_peer_fd(fn) || fcntl(fn, F_GETFD) < 0) return 0;
+                memset(s, 0, sizeof *s);
+                s->st_mode = S_IFREG | 0444;
+                s->st_nlink = 1;
+                return 1;
+            }
+        }
         if (!strncmp(leaf, "fd/", 3) && leaf[3]) {
             int isnum = 1;
             for (const char *t = leaf + 3; *t; t++)
@@ -5023,6 +5133,10 @@ static int synth_stat_raw(const char *gp, struct stat *s) {
             if (isnum) {
                 int pfd = atoi(leaf + 3);
                 if (eventfd_hidden_peer_fd(pfd)) return 0;
+                // A CLOSED fd has no /proc/self/fd/N entry on Linux -- stat/access must ENOENT, not report a
+                // stale live link (readlink already returns ENOENT for it). Only our own pid reaches here
+                // (proc_self_leaf gates on self), so F_GETFD names the caller's fd.
+                if (fcntl(pfd, F_GETFD) < 0) return 0;
                 memset(s, 0, sizeof *s);
                 s->st_mode = S_IFLNK | 0777;
                 s->st_nlink = 1;
