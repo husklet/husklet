@@ -35,42 +35,6 @@ Coverage gap:
 
 Existing SMC tests cover in-place rewrite and mprotect toggles. Add an unmap/remap reuse probe.
 
-## VEX `vmovss`/`vmovsd` Register-Source Merge Semantics
-
-Priority: P1
-Impact: silent vector-register corruption on AVX scalar moves
-Confidence: High
-
-Verification status: Proven in isolated worktree `/Users/x/dd/dd-verifier2-wt`.
-
-Evidence:
-
-- VEX scalar move handling reads only 4 or 8 bytes into a zeroed buffer and writes the whole 128-bit register: `dd-jit-darwin/src/runtime/translate/x86_64/avx.c:321`.
-
-Why this is bad:
-
-For the register-source form of VEX `vmovss`/`vmovsd`, bits above the scalar element in the low 128-bit lane are merged from the `vvvv` source operand, not zeroed. Zeroing those lanes can silently corrupt code that uses scalar AVX moves as lane-preserving operations. The original broad suspicion about memory-load merge was too wide; the verified bad form is the register-source scalar merge.
-
-Isolated proof:
-
-```sh
-x86_64-linux-gnu-gcc -O2 -static-pie -pthread -o target/verifier2-probes/vmov_scalar_merge dd-tests/guests/completeness/x86_vmov_scalar_merge.c -lm
-qemu-x86_64 target/verifier2-probes/vmov_scalar_merge
-DDJIT_DIR=/Users/x/dd/dd-verifier2-wt/target-verifier2/release/build/dd-jit-darwin-16122afd27b6bb64/out \
-  cargo run -q -p dd-tests -- --engine x86_64 vmov-scalar-merge
-```
-
-Observed:
-
-```text
-jit:    vmovss 41100000 00000000 00000000 00000000
-oracle: vmovss 41100000 22222222 33333333 44444444
-```
-
-Coverage gap:
-
-`dd-tests/guests/completeness/x86_avx.c` covers packed add/mul/permute, not scalar `vmovss`/`vmovsd` merge semantics.
-
 ## F16C `vcvtps2ph` Ignores Rounding Immediate
 
 Priority: P2
