@@ -1980,6 +1980,17 @@ static int svc_proc(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64
         // store (g_ulimit, also seeded by docker --ulimit) is the single source of truth. without
         // applying NEW, setrlimit "succeeded" but the value never took -- the next getrlimit saw the old.
         int res = (int)a1;
+        // Linux validates BEFORE touching the limits: the task lookup runs first (a negative or dead target
+        // pid -> ESRCH), then the resource number is range-checked (>= RLIM_NLIMITS(16) -> EINVAL). Without
+        // these dd reports success for dead pids and unsupported resources, so probes see them as valid.
+        if ((int)a0 < 0 || sched_pid_live((int)a0) < 0) {
+            G_RET(c) = (uint64_t)(int64_t)(-ESRCH);
+            break;
+        }
+        if (res < 0 || res >= DD_RLIM_MAX) {
+            G_RET(c) = (uint64_t)(int64_t)(-EINVAL);
+            break;
+        }
         if (a3) svc_fill_rlimit(res, (uint64_t *)a3);
         if (a2) {
             const uint64_t *nl = (const uint64_t *)a2;

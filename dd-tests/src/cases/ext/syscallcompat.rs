@@ -39,6 +39,8 @@ pub fn groups() -> Vec<Group> {
             p("sc-eventfd-nullread", "syscallbug/eventfd_nullread.c"),
             // pselect6/ppoll invalid tv_nsec -> EINVAL.
             p("sc-badtimeout", "syscallbug/badtimeout.c"),
+            // prlimit64 invalid resource -> EINVAL, dead pid -> ESRCH.
+            p("sc-prlimit-invalid", "syscallbug/prlimit_invalid.c"),
         ],
     )]
 }

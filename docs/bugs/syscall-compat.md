@@ -104,31 +104,6 @@ Verification:
 
 Promote the native oracle checked in `/Users/x/dd/dd-slot-G` into a dd-tests probe for unknown op and flag combinations.
 
-## `prlimit64` Accepts Invalid Pid And Resource
-
-Priority: P2
-Impact: resource-limit probes see unsupported inputs as valid
-Confidence: High
-
-Verification status: Proven in isolated worktree `/Users/x/dd/dd-audit-slotN`.
-
-Evidence:
-
-- `prlimit64` fills and sets limits without validating pid or resource first: `dd-jit-darwin/src/runtime/os/linux/syscall/proc.c:1939`.
-- It returns success unconditionally at the end: `dd-jit-darwin/src/runtime/os/linux/syscall/proc.c:1955`.
-
-Why this is bad:
-
-Linux returns errors for invalid resources and invalid target pids. dd can make runtimes believe unsupported limits or dead pids are valid.
-
-Isolated proof:
-
-```sh
-cargo run -p dd-tests -- audit-prlimit-invalid
-```
-
-Result: failed both Linux engines. dd `resource=0 pid=0`; native `resource=1 pid=1`.
-
 ## x86_64 `mincore(..., vec=NULL)` Succeeds
 
 Priority: P2
