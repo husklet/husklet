@@ -367,31 +367,6 @@ cargo test -p dd-images store_layer_failed_replacement_preserves_existing_layer 
 
 Result: failed because the failed replacement deleted the existing cache layer.
 
-## Unnamed Volume Creation Reuses One Deterministic Name
-
-Priority: P1
-Impact: unexpected volume data reuse and lifecycle isolation breakage
-Confidence: High
-
-Verification status: Proven in isolated worktree `/Users/x/dd/dd-workerC-daemon-storage-20260710`.
-
-Evidence:
-
-- Missing volume name falls back to `fake_id("v")`: `dd-daemon/src/volumes.rs:67`.
-- Existing volume with that deterministic name is returned instead of creating a new unnamed volume: `dd-daemon/src/volumes.rs:86`.
-
-Why this is bad:
-
-Repeated unnamed `docker volume create` calls should create distinct volumes. Reusing one deterministic name means unrelated containers can unexpectedly share data.
-
-Isolated proof:
-
-```sh
-cargo test -p dd-daemon unnamed_volume_create_allocates_unique_names -- --nocapture
-```
-
-Result: failed because two unnamed volume creates produced only one stored volume.
-
 ## Stats Stream Captures A Stale Pid
 
 Priority: P2
@@ -834,30 +809,6 @@ CARGO_TARGET_DIR=target-worker-Y-daemon-api-20260710 cargo test -p dd-daemon con
 ```
 
 Result: failed; `HostConfig.AutoRemove` was `Null`, expected `true`.
-
-## Volume Delete Checks Binds Before Existence
-
-Priority: P2
-Impact: nonexistent volumes can return a false in-use conflict
-Confidence: High
-
-Verification status: Proven in isolated worktree `/Users/x/dd/dd-worker-Y-daemon-api-20260710`.
-
-Evidence:
-
-- `DELETE /volumes/{name}` checks container bind strings before confirming the volume exists: `dd-daemon/src/volumes.rs:118`.
-
-Why this is bad:
-
-Deleting a nonexistent volume should return not found. If any container has a bind string mentioning that name, dd can return `409 volume is in use`, which misleads cleanup tools.
-
-Isolated proof:
-
-```sh
-CARGO_TARGET_DIR=target-worker-Y-daemon-api-20260710 cargo test -p dd-daemon volume_delete_missing_name_is_404_even_if_bind_mentions_it -- --nocapture
-```
-
-Result: failed; status was `409`, expected `404`.
 
 ## Container Prune Deletes Restarting Containers
 
