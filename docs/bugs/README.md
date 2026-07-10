@@ -45,16 +45,13 @@ This directory is a working inventory of suspicious behavior, bad architecture, 
 | P1 | daemon/exec | exec start is not single-use | High | [daemon-tests-docs.md](daemon-tests-docs.md#exec-start-is-not-single-use) |
 | P1 | daemon/restart | daemon restart reloads running containers without live process | High | [daemon-tests-docs.md](daemon-tests-docs.md#daemon-restart-reloads-running-containers-without-live-process) |
 | P1 | daemon/prune | container prune leaves network endpoints | High | [daemon-tests-docs.md](daemon-tests-docs.md#container-prune-leaves-network-endpoints) |
-| P1 | image/delete | `rmi nginx` removes unrelated repositories sharing basename | High | [daemon-tests-docs.md](daemon-tests-docs.md#rmi-nginx-removes-unrelated-repositories-sharing-basename) |
 | P1 | daemon/persistence | failed spawn terminal state is not persisted | High | [daemon-tests-docs.md](daemon-tests-docs.md#failed-spawn-terminal-state-is-not-persisted) |
 | P1 | image/tag | `docker tag` aliases do not survive discovery | High | [daemon-tests-docs.md](daemon-tests-docs.md#docker-tag-aliases-do-not-survive-discovery) |
 | P1 | daemon/logs | retained container logs are lost across daemon restart | High | [daemon-tests-docs.md](daemon-tests-docs.md#retained-container-logs-are-lost-across-daemon-restart) |
 | P1 | daemon/ports | failed spawn leaks published host-port forwarders | High | [daemon-tests-docs.md](daemon-tests-docs.md#failed-spawn-leaks-published-host-port-forwarders) |
 | P1 | daemon/ports | natural container exit leaves published host ports bound | High | [daemon-tests-docs.md](daemon-tests-docs.md#natural-container-exit-leaves-published-host-ports-bound) |
-| P1 | image/commit | `docker commit` can inherit config from wrong repository | High | [daemon-tests-docs.md](daemon-tests-docs.md#docker-commit-can-inherit-config-from-wrong-repository) |
 | P1 | image/arch | committed ELF-less x86_64 images rediscover as arm64 | High | [daemon-tests-docs.md](daemon-tests-docs.md#committed-elf-less-x86_64-images-rediscover-as-arm64) |
 | P1 | image/arch | Docker save/load corrupts ELF-less Linux x86 images to arm64 | High | [daemon-tests-docs.md](daemon-tests-docs.md#docker-saveload-corrupts-elf-less-linux-x86-images-to-arm64) |
-| P1 | image/save | `docker save nginx` can serialize `linuxserver/nginx` | High | [daemon-tests-docs.md](daemon-tests-docs.md#docker-save-nginx-can-serialize-linuxservernginx) |
 | P1 | image/delete | forced `rmi` deletes rootfs referenced by containers | High | [daemon-tests-docs.md](daemon-tests-docs.md#forced-rmi-deletes-rootfs-referenced-by-containers) |
 | P1 | image/delete | non-forced `rmi` can delete rootfs used through alias | High | [daemon-tests-docs.md](daemon-tests-docs.md#non-forced-rmi-can-delete-rootfs-used-through-alias) |
 | P1 | image/load | `docker load` of same tag rewrites existing container rootfs | High | [daemon-tests-docs.md](daemon-tests-docs.md#docker-load-of-same-tag-rewrites-existing-container-rootfs) |
@@ -68,7 +65,6 @@ This directory is a working inventory of suspicious behavior, bad architecture, 
 | P1 | daemon/create | anonymous volume materialization failures are ignored | High | [daemon-tests-docs.md](daemon-tests-docs.md#anonymous-volume-materialization-failures-are-ignored) |
 | P1 | daemon/volumes | volume create/delete/prune report success while storage is wrong | High | [daemon-tests-docs.md](daemon-tests-docs.md#volume-createdeleteprune-report-success-while-storage-is-wrong) |
 | P1 | daemon/events | event filters broaden to match-all for supported keys | High | [daemon-tests-docs.md](daemon-tests-docs.md#event-filters-broaden-to-match-all-for-supported-keys) |
-| P1 | daemon/events | malformed filters JSON becomes an unfiltered stream | High | [daemon-tests-docs.md](daemon-tests-docs.md#malformed-filters-json-becomes-an-unfiltered-stream) |
 | P1 | daemon/attach | attach ignores stream selectors | High | [daemon-tests-docs.md](daemon-tests-docs.md#attach-ignores-stream-selectors) |
 | P1 | env/exec | `execve(..., envp=NULL)` leaks default/stale env | High | [completeness-and-env.md](completeness-and-env.md#execve-envpnull-leaks-a-default-or-stale-environment) |
 | P1 | env/exec | guest exec truncates argv at 255 args | High | [completeness-and-env.md](completeness-and-env.md#guest-exec-truncates-argv-at-255-args) |
@@ -291,7 +287,6 @@ This directory is a working inventory of suspicious behavior, bad architecture, 
 | P2 | daemon/system | image usage active count counts containers, not images | High | [daemon-tests-docs.md](daemon-tests-docs.md#image-usage-active-count-counts-containers-not-images) |
 | P2 | daemon/system | volume usage never reports live references | High | [daemon-tests-docs.md](daemon-tests-docs.md#volume-usage-never-reports-live-references) |
 | P2 | daemon/system | build-cache totals can be nonzero with empty item lists | High | [daemon-tests-docs.md](daemon-tests-docs.md#build-cache-totals-can-be-nonzero-with-empty-item-lists) |
-| P1 | daemon/info | `/info` under-reports daemon capacity | High | [daemon-tests-docs.md](daemon-tests-docs.md#info-under-reports-daemon-capacity) |
 | P1 | daemon/info | `/info` default runtime is not declared | High | [daemon-tests-docs.md](daemon-tests-docs.md#info-default-runtime-is-not-declared) |
 | P2 | daemon/version | daemon version endpoints and Server header are stale | High | [daemon-tests-docs.md](daemon-tests-docs.md#daemon-version-endpoints-and-server-header-are-stale) |
 | P2 | daemon/events | `event=health_status` filter misses health transitions | High | [daemon-tests-docs.md](daemon-tests-docs.md#eventhealth_status-filter-misses-health-transitions) |
