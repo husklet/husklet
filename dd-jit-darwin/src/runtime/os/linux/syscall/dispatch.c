@@ -206,7 +206,9 @@ static int svc_adjtimex(uint8_t *tx) {
 
 // pidfd support: macOS has no pidfd, so pidfd_open() hands back a real (/dev/null) fd and we remember
 // which guest pid it stands for, so pidfd_send_signal() can resolve the fd back to its target pid.
-#define PIDFD_MAX 64
+// Sized well above the guest's default RLIMIT_NOFILE so a pidfd-heavy runtime does not hit a capacity
+// cliff (fail differently from Linux) once the table fills; entries are freed as their fds close.
+#define PIDFD_MAX 4096
 
 static struct {
     int fd;

@@ -549,6 +549,9 @@ static int g_inotify_owner[DD_NFD];
 // next expiry + the interval (ns). timerfd_settime records them so timerfd_gettime reports it_value/interval.
 static int64_t g_tfd_deadline[DD_NFD];
 static int64_t g_tfd_interval[DD_NFD];
+// The clockid the timerfd was created with (Linux CLOCK_REALTIME=0/MONOTONIC=1/BOOTTIME=7/REALTIME_ALARM=8/
+// ...). A TFD_TIMER_ABSTIME deadline is expressed in THIS clock, so timerfd_settime must convert against it.
+static int g_tfd_clock[DD_NFD];
 // memfd sealing (lsys-memfd-seal): g_memfd_is[fd]=1 marks an anonymous memfd; g_memfd_seal[fd] carries the
 // F_SEAL_* bitmask (F_SEAL_SEAL=1,SHRINK=2,GROW=4,WRITE=8,FUTURE_WRITE=16). A non-ALLOW_SEALING memfd starts
 // already F_SEAL_SEAL'd, so further F_ADD_SEALS fail EPERM exactly as on Linux.

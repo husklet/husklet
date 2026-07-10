@@ -2,24 +2,6 @@
 
 This file keeps syscall findings framed around Linux compatibility, fake-success behavior, data loss, probe correctness, hangs, and workload breakage.
 
-## `pidfd` Fixed Registry Capacity Cliff
-
-Priority: P2
-Impact: pidfd allocation cliff
-Confidence: High
-
-(The invalid-flags half of this finding is FIXED: `pidfd_open` now rejects unknown flag bits with
-`EINVAL` in `rare.c`. Only the capacity cliff below remains.)
-
-Evidence:
-
-- The pidfd table is fixed-size (`PIDFD_MAX 64`) in syscall dispatch state: `dd-jit-darwin/src/runtime/os/linux/syscall/dispatch.c:209`.
-
-Why this is bad:
-
-Linux can allocate far more than 64 pidfds. dd hits a capacity cliff once the table fills, which makes
-pidfd-heavy tests or runtimes fail differently from Linux (`many_ok=0` where Linux prints `many_ok=1`).
-
 ## Periodic `timerfd` Ignores Earlier First Deadline
 
 Priority: P1
@@ -393,56 +375,6 @@ Isolated proof:
 ```
 
 Linux observed `read_dup=32 read_dup_errno=0 first_mask=0x100`; dd observed `read_dup=-1 read_dup_errno=6`.
-
-## `inotify_init1(0)` And `timerfd_create(..., 0)` Set Close-On-Exec
-
-Priority: P1
-Impact: event fds vanish across exec even when close-on-exec was not requested
-Confidence: High
-
-Verification status: Proven in isolated worktree `/Users/x/dd/dd-worker-BJ2-fd-event-20260710`.
-
-Evidence:
-
-- Inotify creation sets `FD_CLOEXEC` only when requested but does not clear macOS kqueue's default: `dd-jit-darwin/src/runtime/os/linux/syscall/event.c:567`.
-- Timerfd creation has the same shape: `dd-jit-darwin/src/runtime/os/linux/syscall/event.c:826`.
-- Epoll creation documents the kqueue default and explicitly clears it: `dd-jit-darwin/src/runtime/os/linux/syscall/event.c:258`.
-- Exec closes fds with close-on-exec metadata: `dd-jit-darwin/src/runtime/os/linux/syscall/proc.c:207`, `dd-jit-darwin/src/runtime/os/linux/syscall/proc.c:1703`.
-
-Why this is bad:
-
-Linux preserves `inotify_init1(0)` and `timerfd_create(..., 0)` descriptors across exec. dd closes them, so event loops and supervisors can silently lose watches and timers after re-exec.
-
-Observed proof:
-
-```text
-Linux: parent_inotify=1 parent_timerfd=1 child_inotify=1 child_timerfd=1
-dd:    parent_inotify=2 parent_timerfd=2 child_inotify=-9 child_timerfd=-9
-```
-
-## `timerfd` CLOCK_REALTIME Absolute Deadlines Are Treated As Monotonic
-
-Priority: P1
-Impact: realtime absolute timers can be scheduled decades in the future
-Confidence: High
-
-Verification status: Proven in isolated worktree `/Users/x/dd/dd-worker-BQ2-fd-event-20260710`.
-
-Evidence:
-
-- `timerfd_create` accepts `CLOCK_REALTIME`: `dd-jit-darwin/src/runtime/os/linux/syscall/event.c:811`.
-- `timerfd_settime(TFD_TIMER_ABSTIME)` subtracts `CLOCK_MONOTONIC` from the absolute value regardless of the timer clock: `dd-jit-darwin/src/runtime/os/linux/syscall/event.c:913`.
-
-Why this is bad:
-
-Linux `CLOCK_REALTIME` absolute timers use realtime clock values. Treating that value as monotonic makes a near-future realtime deadline look like an enormous monotonic deadline, so poll/read never fire on time.
-
-Observed proof:
-
-```text
-Linux: rem_sec=0 ... poll=1 ... elapsed_ms=85 read=8 ... count=1
-dd:    rem_sec=1782499723 ... poll=0 ... elapsed_ms=401 read=-1 read_errno=11 count=0
-```
 
 ## `SA_NOCLDWAIT` Does Not Suppress Zombies
 
