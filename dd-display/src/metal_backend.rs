@@ -24,23 +24,24 @@ fn exec_debug() -> bool {
 }
 use dd_gpu::id::{BindGroupId, BufferId, PipelineId, SamplerId, ShaderId, TextureId};
 use dd_gpu::ir::{
-    BindGroupDesc, BindResource, BufferDesc, CommandBuffer, Enc, IndexFormat, LoadOp, RenderPipelineDesc,
-    SamplerDesc, TextureDesc, Topology,
+    BindGroupDesc, BindResource, BufferDesc, CommandBuffer, Enc, IndexFormat, LoadOp,
+    RenderPipelineDesc, SamplerDesc, TextureDesc, Topology,
 };
 use dd_gpu::{GpuError, Result};
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2_foundation::NSString;
 use objc2_metal::{
-    MTLBlitCommandEncoder, MTLBuffer, MTLClearColor, MTLCommandBuffer, MTLCommandEncoder, MTLCommandQueue,
-    MTLCompareFunction, MTLDepthStencilDescriptor, MTLDepthStencilState, MTLDevice, MTLIndexType, MTLLibrary,
-    MTLLoadAction, MTLOrigin, MTLPixelFormat, MTLPrimitiveType, MTLRenderCommandEncoder,
-    MTLRenderPassDescriptor, MTLRenderPipelineDescriptor, MTLRenderPipelineState, MTLResourceOptions,
-    MTLSamplerAddressMode, MTLSamplerDescriptor, MTLSamplerMinMagFilter, MTLSamplerState, MTLSize,
-    MTLStorageMode, MTLStoreAction, MTLTexture, MTLTextureDescriptor, MTLTextureUsage, MTLVertexDescriptor,
-    MTLVertexFormat,
+    MTLBlendFactor, MTLBlendOperation, MTLBlitCommandEncoder, MTLBuffer, MTLClearColor,
+    MTLColorWriteMask, MTLCommandBuffer, MTLCommandEncoder, MTLCommandQueue, MTLCompareFunction,
+    MTLDepthStencilDescriptor, MTLDepthStencilState, MTLDevice, MTLIndexType, MTLLibrary,
+    MTLLoadAction, MTLOrigin, MTLPixelFormat, MTLPrimitiveType, MTLRegion, MTLRenderCommandEncoder,
+    MTLRenderPassDescriptor, MTLRenderPipelineDescriptor, MTLRenderPipelineState,
+    MTLResourceOptions, MTLSamplerAddressMode, MTLSamplerDescriptor, MTLSamplerMinMagFilter,
+    MTLSamplerState, MTLScissorRect, MTLSize, MTLStorageMode, MTLStoreAction, MTLTexture,
+    MTLTextureDescriptor, MTLTextureUsage, MTLVertexDescriptor, MTLVertexFormat, MTLViewport,
 };
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::hash::{Hash, Hasher};
 
 /// FNV-ish content hash of a byte slice via the std default hasher (used to content-key shader/PSO caches).
@@ -48,6 +49,120 @@ fn hash_bytes(b: &[u8]) -> u64 {
     let mut h = std::collections::hash_map::DefaultHasher::new();
     b.hash(&mut h);
     h.finish()
+}
+
+fn metal_blend_factor(v: u32) -> MTLBlendFactor {
+    match v {
+        0 => MTLBlendFactor::Zero,
+        1 => MTLBlendFactor::One,
+        2 => MTLBlendFactor::SourceColor,
+        3 => MTLBlendFactor::OneMinusSourceColor,
+        4 => MTLBlendFactor::SourceAlpha,
+        5 => MTLBlendFactor::OneMinusSourceAlpha,
+        6 => MTLBlendFactor::DestinationColor,
+        7 => MTLBlendFactor::OneMinusDestinationColor,
+        8 => MTLBlendFactor::DestinationAlpha,
+        9 => MTLBlendFactor::OneMinusDestinationAlpha,
+        10 => MTLBlendFactor::SourceAlphaSaturated,
+        11 => MTLBlendFactor::BlendColor,
+        12 => MTLBlendFactor::OneMinusBlendColor,
+        13 => MTLBlendFactor::BlendAlpha,
+        14 => MTLBlendFactor::OneMinusBlendAlpha,
+        _ => MTLBlendFactor::One,
+    }
+}
+
+fn metal_blend_op(v: u32) -> MTLBlendOperation {
+    match v {
+        1 => MTLBlendOperation::Subtract,
+        2 => MTLBlendOperation::ReverseSubtract,
+        3 => MTLBlendOperation::Min,
+        4 => MTLBlendOperation::Max,
+        _ => MTLBlendOperation::Add,
+    }
+}
+
+fn metal_write_mask(mask: u32) -> MTLColorWriteMask {
+    let mut out = MTLColorWriteMask::None;
+    if mask & 0x1 != 0 {
+        out |= MTLColorWriteMask::Red;
+    }
+    if mask & 0x2 != 0 {
+        out |= MTLColorWriteMask::Green;
+    }
+    if mask & 0x4 != 0 {
+        out |= MTLColorWriteMask::Blue;
+    }
+    if mask & 0x8 != 0 {
+        out |= MTLColorWriteMask::Alpha;
+    }
+    out
+}
+
+fn metal_vertex_format(format: u32) -> MTLVertexFormat {
+    let comps = (format & 0xff).clamp(1, 4);
+    let kind = (format >> 8) & 0xff;
+    let normalized = (format & (1 << 16)) != 0;
+    match kind {
+        1 => match (comps, normalized) {
+            (1, true) => MTLVertexFormat::UCharNormalized,
+            (2, true) => MTLVertexFormat::UChar2Normalized,
+            (3, true) => MTLVertexFormat::UChar3Normalized,
+            (4, true) => MTLVertexFormat::UChar4Normalized,
+            (1, false) => MTLVertexFormat::UChar,
+            (2, false) => MTLVertexFormat::UChar2,
+            (3, false) => MTLVertexFormat::UChar3,
+            _ => MTLVertexFormat::UChar4,
+        },
+        2 => match (comps, normalized) {
+            (1, true) => MTLVertexFormat::CharNormalized,
+            (2, true) => MTLVertexFormat::Char2Normalized,
+            (3, true) => MTLVertexFormat::Char3Normalized,
+            (4, true) => MTLVertexFormat::Char4Normalized,
+            (1, false) => MTLVertexFormat::Char,
+            (2, false) => MTLVertexFormat::Char2,
+            (3, false) => MTLVertexFormat::Char3,
+            _ => MTLVertexFormat::Char4,
+        },
+        3 => match (comps, normalized) {
+            (1, true) => MTLVertexFormat::UShortNormalized,
+            (2, true) => MTLVertexFormat::UShort2Normalized,
+            (3, true) => MTLVertexFormat::UShort3Normalized,
+            (4, true) => MTLVertexFormat::UShort4Normalized,
+            (1, false) => MTLVertexFormat::UShort,
+            (2, false) => MTLVertexFormat::UShort2,
+            (3, false) => MTLVertexFormat::UShort3,
+            _ => MTLVertexFormat::UShort4,
+        },
+        4 => match (comps, normalized) {
+            (1, true) => MTLVertexFormat::ShortNormalized,
+            (2, true) => MTLVertexFormat::Short2Normalized,
+            (3, true) => MTLVertexFormat::Short3Normalized,
+            (4, true) => MTLVertexFormat::Short4Normalized,
+            (1, false) => MTLVertexFormat::Short,
+            (2, false) => MTLVertexFormat::Short2,
+            (3, false) => MTLVertexFormat::Short3,
+            _ => MTLVertexFormat::Short4,
+        },
+        5 => match comps {
+            1 => MTLVertexFormat::UInt,
+            2 => MTLVertexFormat::UInt2,
+            3 => MTLVertexFormat::UInt3,
+            _ => MTLVertexFormat::UInt4,
+        },
+        6 => match comps {
+            1 => MTLVertexFormat::Int,
+            2 => MTLVertexFormat::Int2,
+            3 => MTLVertexFormat::Int3,
+            _ => MTLVertexFormat::Int4,
+        },
+        _ => match comps {
+            1 => MTLVertexFormat::Float,
+            2 => MTLVertexFormat::Float2,
+            3 => MTLVertexFormat::Float3,
+            _ => MTLVertexFormat::Float4,
+        },
+    }
 }
 
 /// Metal buffer-argument index base for guest vertex buffers. Multi-VBO apps (glmark2/ANGLE bind a
@@ -60,9 +175,19 @@ const VBUF_BASE: usize = 16;
 /// One resolved binding inside a bind group: a uniform/storage buffer, a sampled texture, or a sampler,
 /// each destined for a specific MSL `[[buffer(i)]]`/`[[texture(i)]]`/`[[sampler(i)]]` index in both stages.
 enum Bind {
-    Buffer { index: u32, buffer: u32, offset: u64 },
-    Texture { index: u32, texture: u32 },
-    Sampler { index: u32, sampler: u32 },
+    Buffer {
+        index: u32,
+        buffer: u32,
+        offset: u64,
+    },
+    Texture {
+        index: u32,
+        texture: u32,
+    },
+    Sampler {
+        index: u32,
+        sampler: u32,
+    },
 }
 
 /// Map a dd-gpu `TextureFormat` to the Metal pixel format the backend can materialize as a sampled/render
@@ -76,6 +201,63 @@ fn tex_pixel_format(f: dd_gpu::ir::TextureFormat) -> MTLPixelFormat {
         F::R8Unorm => MTLPixelFormat::R8Unorm,
         F::Rg8Unorm => MTLPixelFormat::RG8Unorm,
         _ => MTLPixelFormat::BGRA8Unorm,
+    }
+}
+
+fn texture_desc_key(desc: &TextureDesc) -> (u32, u32, u32, u32, u32, u32, u32) {
+    (
+        desc.width.max(1),
+        desc.height.max(1),
+        desc.depth.max(1),
+        desc.mip_levels.max(1),
+        desc.sample_count.max(1),
+        desc.format.to_u32(),
+        desc.usage,
+    )
+}
+
+fn write_texture_png(tex: &ProtocolObject<dyn MTLTexture>, out: &str) -> bool {
+    let w = tex.width() as u32;
+    let h = tex.height() as u32;
+    if w == 0 || h == 0 {
+        return false;
+    }
+    let bpr = w as usize * 4;
+    let mut raw = vec![0u8; bpr * h as usize];
+    unsafe {
+        tex.getBytes_bytesPerRow_fromRegion_mipmapLevel(
+            std::ptr::NonNull::new(raw.as_mut_ptr() as *mut _).unwrap(),
+            bpr,
+            MTLRegion {
+                origin: MTLOrigin { x: 0, y: 0, z: 0 },
+                size: MTLSize {
+                    width: w as usize,
+                    height: h as usize,
+                    depth: 1,
+                },
+            },
+            0,
+        );
+    }
+    let is_bgra = tex.pixelFormat() == MTLPixelFormat::BGRA8Unorm
+        || tex.pixelFormat() == MTLPixelFormat::BGRA8Unorm_sRGB;
+    let mut rgba = raw;
+    if is_bgra {
+        for px in rgba.chunks_exact_mut(4) {
+            px.swap(0, 2);
+            px[3] = 0xff;
+        }
+    }
+    std::fs::write(out, dd_term_core::png::encode_rgba(w, h, &rgba)).is_ok()
+}
+
+fn dump_texture_png(id: u32, tex: &ProtocolObject<dyn MTLTexture>, dir: &str, seq: u64) {
+    let w = tex.width() as u32;
+    let h = tex.height() as u32;
+    let _ = std::fs::create_dir_all(dir);
+    let path = format!("{dir}/tex-{id}-{seq:04}-{w}x{h}.png");
+    if write_texture_png(tex, &path) {
+        eprintln!("dd-metal: dumped texture {id} -> {path}");
     }
 }
 
@@ -100,6 +282,7 @@ pub struct MetalBackend {
     lib: Retained<ProtocolObject<dyn MTLLibrary>>,
     buffers: HashMap<u32, Retained<ProtocolObject<dyn MTLBuffer>>>,
     textures: HashMap<u32, Retained<ProtocolObject<dyn MTLTexture>>>,
+    texture_descs: HashMap<u32, (u32, u32, u32, u32, u32, u32, u32)>,
     pipelines: HashMap<u32, Pipeline>,
     /// Per-app shader modules: the guest's GLSL, translated to MSL by the shim and shipped as bytes in
     /// the IR `CreateShader`, compiled here to an `MTLLibrary`. Absent → the builtin vertex-color pipeline.
@@ -119,9 +302,18 @@ pub struct MetalBackend {
     // hits after warmup → 0 compiles/frame; a genuine change (e.g. glmark2 build→texture scene switch,
     // which reuses id 20/30 with new MSL/layout) misses the cache and correctly recompiles.
     shader_lib_cache: HashMap<u64, Retained<ProtocolObject<dyn MTLLibrary>>>,
-    pipeline_cache: HashMap<u64, (Retained<ProtocolObject<dyn MTLRenderPipelineState>>, MTLPrimitiveType, bool)>,
+    failed_shader_cache: HashSet<u64>,
+    pipeline_cache: HashMap<
+        u64,
+        (
+            Retained<ProtocolObject<dyn MTLRenderPipelineState>>,
+            MTLPrimitiveType,
+            bool,
+        ),
+    >,
     shader_id_hash: HashMap<u32, u64>, // shader id → MSL hash currently installed
     pipeline_id_hash: HashMap<u32, u64>, // pipeline id → desc hash currently installed
+    clear_pipeline: Option<Retained<ProtocolObject<dyn MTLRenderPipelineState>>>,
     // Prof counters (read + reset per frame by the executor when DD_RENDER_PROF is on). `*_compiles`
     // count only ACTUAL Metal compiles (cache misses) — the key steady-state regression guard is that
     // they read 0 after warmup.
@@ -158,13 +350,17 @@ impl MetalBackend {
         let dsd = unsafe { MTLDepthStencilDescriptor::new() };
         dsd.setDepthCompareFunction(MTLCompareFunction::Less);
         dsd.setDepthWriteEnabled(true);
-        let depth_state = ctx.device.newDepthStencilStateWithDescriptor(&dsd).expect("depth-stencil state");
+        let depth_state = ctx
+            .device
+            .newDepthStencilStateWithDescriptor(&dsd)
+            .expect("depth-stencil state");
         Self {
             device: ctx.device.clone(),
             queue: ctx.queue.clone(),
             lib,
             buffers: HashMap::new(),
             textures: HashMap::new(),
+            texture_descs: HashMap::new(),
             pipelines: HashMap::new(),
             shaders: HashMap::new(),
             samplers: HashMap::new(),
@@ -172,15 +368,58 @@ impl MetalBackend {
             depth_state,
             depth_tex: None,
             shader_lib_cache: HashMap::new(),
+            failed_shader_cache: HashSet::new(),
             pipeline_cache: HashMap::new(),
             shader_id_hash: HashMap::new(),
             pipeline_id_hash: HashMap::new(),
+            clear_pipeline: None,
             shader_compiles: 0,
             pipeline_compiles: 0,
             lib_compiles: 1, // the builtin BUILTIN_MSL compile just above
             gpu_wait_ns: 0,
             cur_surface_id: 0,
         }
+    }
+
+    fn clear_pipeline(&mut self) -> Result<Retained<ProtocolObject<dyn MTLRenderPipelineState>>> {
+        if let Some(p) = &self.clear_pipeline {
+            return Ok(p.clone());
+        }
+        let vfn = self
+            .lib
+            .newFunctionWithName(&NSString::from_str("vcmain"))
+            .ok_or(GpuError::Unsupported("clear vertex fn"))?;
+        let ffn = self
+            .lib
+            .newFunctionWithName(&NSString::from_str("fcmain"))
+            .ok_or(GpuError::Unsupported("clear fragment fn"))?;
+        let pdesc = MTLRenderPipelineDescriptor::new();
+        pdesc.setVertexFunction(Some(&vfn));
+        pdesc.setFragmentFunction(Some(&ffn));
+        unsafe {
+            let ca = pdesc.colorAttachments().objectAtIndexedSubscript(0);
+            ca.setPixelFormat(MTLPixelFormat::BGRA8Unorm);
+            let vd = MTLVertexDescriptor::vertexDescriptor();
+            let a0 = vd.attributes().objectAtIndexedSubscript(0);
+            a0.setFormat(MTLVertexFormat::Float2);
+            a0.setOffset(0);
+            a0.setBufferIndex(VBUF_BASE);
+            let a1 = vd.attributes().objectAtIndexedSubscript(1);
+            a1.setFormat(MTLVertexFormat::Float4);
+            a1.setOffset(8);
+            a1.setBufferIndex(VBUF_BASE);
+            vd.layouts()
+                .objectAtIndexedSubscript(VBUF_BASE)
+                .setStride(24);
+            pdesc.setVertexDescriptor(Some(&vd));
+        }
+        let state = self
+            .device
+            .newRenderPipelineStateWithDescriptor_error(&pdesc)
+            .map_err(|_| GpuError::Unsupported("clear pipeline compile"))?;
+        self.pipeline_compiles += 1;
+        self.clear_pipeline = Some(state.clone());
+        Ok(state)
     }
 
     /// Content hash of a render-pipeline descriptor for the L3 PSO cache. Folds in the *installed*
@@ -190,13 +429,21 @@ impl MetalBackend {
         let mut h = std::collections::hash_map::DefaultHasher::new();
         desc.vertex.module.hash(&mut h);
         desc.vertex.entry.hash(&mut h);
-        self.shader_id_hash.get(&desc.vertex.module).copied().unwrap_or(0).hash(&mut h);
+        self.shader_id_hash
+            .get(&desc.vertex.module)
+            .copied()
+            .unwrap_or(0)
+            .hash(&mut h);
         match &desc.fragment {
             Some(f) => {
                 1u8.hash(&mut h);
                 f.module.hash(&mut h);
                 f.entry.hash(&mut h);
-                self.shader_id_hash.get(&f.module).copied().unwrap_or(0).hash(&mut h);
+                self.shader_id_hash
+                    .get(&f.module)
+                    .copied()
+                    .unwrap_or(0)
+                    .hash(&mut h);
             }
             None => 0u8.hash(&mut h),
         }
@@ -212,7 +459,18 @@ impl MetalBackend {
         for c in &desc.color_targets {
             c.format.to_u32().hash(&mut h);
             c.write_mask.hash(&mut h);
-            c.blend.is_some().hash(&mut h);
+            match &c.blend {
+                Some(b) => {
+                    1u8.hash(&mut h);
+                    b.src_color.hash(&mut h);
+                    b.dst_color.hash(&mut h);
+                    b.op_color.hash(&mut h);
+                    b.src_alpha.hash(&mut h);
+                    b.dst_alpha.hash(&mut h);
+                    b.op_alpha.hash(&mut h);
+                }
+                None => 0u8.hash(&mut h),
+            }
         }
         match &desc.depth {
             Some(dp) => {
@@ -246,7 +504,10 @@ impl MetalBackend {
         };
         d.setUsage(MTLTextureUsage::RenderTarget);
         d.setStorageMode(MTLStorageMode::Private);
-        let t = self.device.newTextureWithDescriptor(&d).expect("depth texture");
+        let t = self
+            .device
+            .newTextureWithDescriptor(&d)
+            .expect("depth texture");
         self.depth_tex = Some((w, h, t.clone()));
         t
     }
@@ -255,6 +516,7 @@ impl MetalBackend {
     /// MTLTexture). The guest's `BeginRenderPass` color attachment references this id.
     pub fn set_render_target(&mut self, id: u32, tex: Retained<ProtocolObject<dyn MTLTexture>>) {
         self.textures.insert(id, tex);
+        self.texture_descs.remove(&id);
     }
 }
 
@@ -291,8 +553,12 @@ pub fn selftest_shader(out: &str) -> ! {
         let mut be = MetalBackend::new(&ctx);
         be.set_render_target(1, tex.clone());
         let v: [[f32; 6]; 6] = [
-            [-0.8, 0.8, 1.0, 0.0, 0.0, 1.0], [-0.8, -0.8, 0.0, 0.0, 1.0, 1.0], [0.8, 0.8, 0.0, 1.0, 0.0, 1.0],
-            [0.8, 0.8, 0.0, 1.0, 0.0, 1.0], [-0.8, -0.8, 0.0, 0.0, 1.0, 1.0], [0.8, -0.8, 1.0, 1.0, 0.0, 1.0],
+            [-0.8, 0.8, 1.0, 0.0, 0.0, 1.0],
+            [-0.8, -0.8, 0.0, 0.0, 1.0, 1.0],
+            [0.8, 0.8, 0.0, 1.0, 0.0, 1.0],
+            [0.8, 0.8, 0.0, 1.0, 0.0, 1.0],
+            [-0.8, -0.8, 0.0, 0.0, 1.0, 1.0],
+            [0.8, -0.8, 1.0, 1.0, 0.0, 1.0],
         ];
         let mut data = Vec::new();
         for vert in &v {
@@ -301,26 +567,85 @@ pub fn selftest_shader(out: &str) -> ! {
             }
         }
         let cmds = vec![
-            Cmd::CreateBuffer(10, BufferDesc { size: data.len() as u64, usage: buffer_usage::VERTEX, label: String::new() }),
-            Cmd::WriteBuffer { id: 10, offset: 0, data },
-            Cmd::CreateShader { id: 20, spirv: words },
-            Cmd::CreateRenderPipeline(30, RenderPipelineDesc {
-                vertex: ShaderRef { module: 20, entry: "vmain".into() },
-                fragment: Some(ShaderRef { module: 20, entry: "fmain".into() }),
-                vertex_buffers: vec![VertexLayout { stride: 24, step_mode: 0, attrs: vec![VertexAttr { location: 0, format: 0, offset: 0 }, VertexAttr { location: 1, format: 0, offset: 8 }] }],
-                color_targets: vec![ColorTargetState { format: TextureFormat::Bgra8Unorm, blend: None, write_mask: 0xf }],
-                depth: None,
-                topology: Topology::TriangleList,
-                cull: 0,
-                front_face: 0,
-                label: String::new(),
-            }),
+            Cmd::CreateBuffer(
+                10,
+                BufferDesc {
+                    size: data.len() as u64,
+                    usage: buffer_usage::VERTEX,
+                    label: String::new(),
+                },
+            ),
+            Cmd::WriteBuffer {
+                id: 10,
+                offset: 0,
+                data,
+            },
+            Cmd::CreateShader {
+                id: 20,
+                spirv: words,
+            },
+            Cmd::CreateRenderPipeline(
+                30,
+                RenderPipelineDesc {
+                    vertex: ShaderRef {
+                        module: 20,
+                        entry: "vmain".into(),
+                    },
+                    fragment: Some(ShaderRef {
+                        module: 20,
+                        entry: "fmain".into(),
+                    }),
+                    vertex_buffers: vec![VertexLayout {
+                        stride: 24,
+                        step_mode: 0,
+                        attrs: vec![
+                            VertexAttr {
+                                location: 0,
+                                format: 0,
+                                offset: 0,
+                            },
+                            VertexAttr {
+                                location: 1,
+                                format: 0,
+                                offset: 8,
+                            },
+                        ],
+                    }],
+                    color_targets: vec![ColorTargetState {
+                        format: TextureFormat::Bgra8Unorm,
+                        blend: None,
+                        write_mask: 0xf,
+                    }],
+                    depth: None,
+                    topology: Topology::TriangleList,
+                    cull: 0,
+                    front_face: 0,
+                    label: String::new(),
+                },
+            ),
             Cmd::Submit(CommandBuffer {
                 encoder: vec![
-                    Enc::BeginRenderPass { color: vec![ColorAttachment { texture: 1, load: LoadOp::Clear, clear: [0.0, 0.0, 0.0, 1.0], store: true }], depth: None },
+                    Enc::BeginRenderPass {
+                        color: vec![ColorAttachment {
+                            texture: 1,
+                            load: LoadOp::Clear,
+                            clear: [0.0, 0.0, 0.0, 1.0],
+                            store: true,
+                        }],
+                        depth: None,
+                    },
                     Enc::SetPipeline(30),
-                    Enc::SetVertexBuffer { slot: 0, buffer: 10, offset: 0 },
-                    Enc::Draw { vertex_count: 6, instance_count: 1, first_vertex: 0, first_instance: 0 },
+                    Enc::SetVertexBuffer {
+                        slot: 0,
+                        buffer: 10,
+                        offset: 0,
+                    },
+                    Enc::Draw {
+                        vertex_count: 6,
+                        instance_count: 1,
+                        first_vertex: 0,
+                        first_instance: 0,
+                    },
                     Enc::EndRenderPass,
                 ],
                 signal: None,
@@ -349,7 +674,7 @@ pub fn selftest_shader(out: &str) -> ! {
 /// GL shim emits for one frame, captured via `DD_IR_DUMP`) through the real `MetalBackend` into an
 /// IOSurface → PNG. Closes the loop on the shim's RUNTIME IR (CreateTexture/CreateSampler/
 /// CopyBufferToTexture/SetIndexBuffer/DrawIndexed/bind-group) without needing the container executor socket.
-pub fn selftest_shim_ir(irfile: &str, out: &str) -> ! {
+pub fn selftest_shim_ir(irfile: &str, out: &str, w: u32, h: u32, target_id: u32) -> ! {
     use crate::metal::{cfrelease, create_iosurface};
     let Some(ctx) = MetalCtx::new() else {
         eprintln!("selftest-shim-ir: no Metal device");
@@ -362,7 +687,6 @@ pub fn selftest_shim_ir(irfile: &str, out: &str) -> ! {
             std::process::exit(1);
         }
     };
-    let (w, h): (u32, u32) = (256, 256);
     unsafe {
         let surf = create_iosurface(w, h);
         let rt = ctx.texture_from_iosurface(surf, w, h);
@@ -375,7 +699,17 @@ pub fn selftest_shim_ir(irfile: &str, out: &str) -> ! {
                 std::process::exit(1);
             }
         }
-        readback_png(&ctx, &rt, w, h, out);
+        if target_id == 1 {
+            readback_png(&ctx, &rt, w, h, out);
+        } else if let Some(tex) = be.textures.get(&target_id) {
+            if !write_texture_png(tex, out) {
+                eprintln!("selftest-shim-ir: failed to write texture target {target_id}");
+                std::process::exit(1);
+            }
+        } else {
+            eprintln!("selftest-shim-ir: texture target {target_id} was not created");
+            std::process::exit(1);
+        }
         cfrelease(surf);
     }
     println!("selftest-shim-ir: {irfile} -> {out}");
@@ -397,10 +731,17 @@ pub fn selftest_msl(path: &str) -> ! {
             std::process::exit(1);
         }
     };
-    match ctx.device.newLibraryWithSource_options_error(&NSString::from_str(&src), None) {
+    match ctx
+        .device
+        .newLibraryWithSource_options_error(&NSString::from_str(&src), None)
+    {
         Ok(lib) => {
-            let vfn = lib.newFunctionWithName(&NSString::from_str("vmain")).is_some();
-            let ffn = lib.newFunctionWithName(&NSString::from_str("fmain")).is_some();
+            let vfn = lib
+                .newFunctionWithName(&NSString::from_str("vmain"))
+                .is_some();
+            let ffn = lib
+                .newFunctionWithName(&NSString::from_str("fmain"))
+                .is_some();
             println!("selftest-msl: {path} COMPILED OK (vmain={vfn} fmain={ffn})");
             std::process::exit(0);
         }
@@ -460,8 +801,12 @@ pub fn selftest_texture(out: &str) -> ! {
     let (w, h): (u32, u32) = (256, 256);
     // quad: pos.xy + uv (16 bytes/vertex), 2 triangles
     let v: [[f32; 4]; 6] = [
-        [-0.9, 0.9, 0.0, 0.0], [-0.9, -0.9, 0.0, 1.0], [0.9, 0.9, 1.0, 0.0],
-        [0.9, 0.9, 1.0, 0.0], [-0.9, -0.9, 0.0, 1.0], [0.9, -0.9, 1.0, 1.0],
+        [-0.9, 0.9, 0.0, 0.0],
+        [-0.9, -0.9, 0.0, 1.0],
+        [0.9, 0.9, 1.0, 0.0],
+        [0.9, 0.9, 1.0, 0.0],
+        [-0.9, -0.9, 0.0, 1.0],
+        [0.9, -0.9, 1.0, 1.0],
     ];
     let mut vbytes = Vec::new();
     for vert in &v {
@@ -470,39 +815,161 @@ pub fn selftest_texture(out: &str) -> ! {
         }
     }
     // 2×2 RGBA texels: red, green, blue, white
-    let tex_px: [u8; 16] = [255, 0, 0, 255, 0, 255, 0, 255, 0, 0, 255, 255, 255, 255, 255, 255];
+    let tex_px: [u8; 16] = [
+        255, 0, 0, 255, 0, 255, 0, 255, 0, 0, 255, 255, 255, 255, 255, 255,
+    ];
     unsafe {
         let surf = create_iosurface(w, h);
         let rt = ctx.texture_from_iosurface(surf, w, h);
         let mut be = MetalBackend::new(&ctx);
         be.set_render_target(1, rt.clone());
         let cmds = vec![
-            Cmd::CreateBuffer(10, BufferDesc { size: vbytes.len() as u64, usage: buffer_usage::VERTEX, label: String::new() }),
-            Cmd::WriteBuffer { id: 10, offset: 0, data: vbytes },
-            Cmd::CreateBuffer(12, BufferDesc { size: 16, usage: buffer_usage::COPY_SRC, label: String::new() }),
-            Cmd::WriteBuffer { id: 12, offset: 0, data: tex_px.to_vec() },
-            Cmd::CreateTexture(2, TextureDesc { width: 2, height: 2, depth: 1, mip_levels: 1, sample_count: 1, dim: TextureDim::D2, format: TextureFormat::Rgba8Unorm, usage: texture_usage::SAMPLED | texture_usage::COPY_DST, label: String::new() }),
-            Cmd::CreateSampler(3, SamplerDesc { min_filter: Filter::Linear, mag_filter: Filter::Linear, mip_filter: Filter::Nearest, address_u: AddressMode::ClampToEdge, address_v: AddressMode::ClampToEdge, address_w: AddressMode::ClampToEdge }),
-            Cmd::CreateShader { id: 20, spirv: pack_msl(MSL) },
-            Cmd::CreateRenderPipeline(30, RenderPipelineDesc {
-                vertex: ShaderRef { module: 20, entry: "vmain".into() },
-                fragment: Some(ShaderRef { module: 20, entry: "fmain".into() }),
-                vertex_buffers: vec![VertexLayout { stride: 16, step_mode: 0, attrs: vec![VertexAttr { location: 0, format: 2, offset: 0 }, VertexAttr { location: 1, format: 2, offset: 8 }] }],
-                color_targets: vec![ColorTargetState { format: TextureFormat::Bgra8Unorm, blend: None, write_mask: 0xf }],
-                depth: None, topology: Topology::TriangleList, cull: 0, front_face: 0, label: String::new(),
-            }),
-            Cmd::CreateBindGroup(40, BindGroupDesc { set: 0, entries: vec![
-                BindEntry { binding: 0, resource: BindResource::Texture { id: 2 } },
-                BindEntry { binding: 0, resource: BindResource::Sampler { id: 3 } },
-            ] }),
+            Cmd::CreateBuffer(
+                10,
+                BufferDesc {
+                    size: vbytes.len() as u64,
+                    usage: buffer_usage::VERTEX,
+                    label: String::new(),
+                },
+            ),
+            Cmd::WriteBuffer {
+                id: 10,
+                offset: 0,
+                data: vbytes,
+            },
+            Cmd::CreateBuffer(
+                12,
+                BufferDesc {
+                    size: 16,
+                    usage: buffer_usage::COPY_SRC,
+                    label: String::new(),
+                },
+            ),
+            Cmd::WriteBuffer {
+                id: 12,
+                offset: 0,
+                data: tex_px.to_vec(),
+            },
+            Cmd::CreateTexture(
+                2,
+                TextureDesc {
+                    width: 2,
+                    height: 2,
+                    depth: 1,
+                    mip_levels: 1,
+                    sample_count: 1,
+                    dim: TextureDim::D2,
+                    format: TextureFormat::Rgba8Unorm,
+                    usage: texture_usage::SAMPLED | texture_usage::COPY_DST,
+                    label: String::new(),
+                },
+            ),
+            Cmd::CreateSampler(
+                3,
+                SamplerDesc {
+                    min_filter: Filter::Linear,
+                    mag_filter: Filter::Linear,
+                    mip_filter: Filter::Nearest,
+                    address_u: AddressMode::ClampToEdge,
+                    address_v: AddressMode::ClampToEdge,
+                    address_w: AddressMode::ClampToEdge,
+                },
+            ),
+            Cmd::CreateShader {
+                id: 20,
+                spirv: pack_msl(MSL),
+            },
+            Cmd::CreateRenderPipeline(
+                30,
+                RenderPipelineDesc {
+                    vertex: ShaderRef {
+                        module: 20,
+                        entry: "vmain".into(),
+                    },
+                    fragment: Some(ShaderRef {
+                        module: 20,
+                        entry: "fmain".into(),
+                    }),
+                    vertex_buffers: vec![VertexLayout {
+                        stride: 16,
+                        step_mode: 0,
+                        attrs: vec![
+                            VertexAttr {
+                                location: 0,
+                                format: 2,
+                                offset: 0,
+                            },
+                            VertexAttr {
+                                location: 1,
+                                format: 2,
+                                offset: 8,
+                            },
+                        ],
+                    }],
+                    color_targets: vec![ColorTargetState {
+                        format: TextureFormat::Bgra8Unorm,
+                        blend: None,
+                        write_mask: 0xf,
+                    }],
+                    depth: None,
+                    topology: Topology::TriangleList,
+                    cull: 0,
+                    front_face: 0,
+                    label: String::new(),
+                },
+            ),
+            Cmd::CreateBindGroup(
+                40,
+                BindGroupDesc {
+                    set: 0,
+                    entries: vec![
+                        BindEntry {
+                            binding: 0,
+                            resource: BindResource::Texture { id: 2 },
+                        },
+                        BindEntry {
+                            binding: 0,
+                            resource: BindResource::Sampler { id: 3 },
+                        },
+                    ],
+                },
+            ),
             Cmd::Submit(CommandBuffer {
                 encoder: vec![
-                    Enc::CopyBufferToTexture { src: 12, src_offset: 0, bytes_per_row: 8, dst: 2, mip: 0, width: 2, height: 2 },
-                    Enc::BeginRenderPass { color: vec![ColorAttachment { texture: 1, load: LoadOp::Clear, clear: [0.0, 0.0, 0.0, 1.0], store: true }], depth: None },
+                    Enc::CopyBufferToTexture {
+                        src: 12,
+                        src_offset: 0,
+                        bytes_per_row: 8,
+                        dst: 2,
+                        mip: 0,
+                        width: 2,
+                        height: 2,
+                    },
+                    Enc::BeginRenderPass {
+                        color: vec![ColorAttachment {
+                            texture: 1,
+                            load: LoadOp::Clear,
+                            clear: [0.0, 0.0, 0.0, 1.0],
+                            store: true,
+                        }],
+                        depth: None,
+                    },
                     Enc::SetPipeline(30),
-                    Enc::SetBindGroup { index: 0, group: 40 },
-                    Enc::SetVertexBuffer { slot: 0, buffer: 10, offset: 0 },
-                    Enc::Draw { vertex_count: 6, instance_count: 1, first_vertex: 0, first_instance: 0 },
+                    Enc::SetBindGroup {
+                        index: 0,
+                        group: 40,
+                    },
+                    Enc::SetVertexBuffer {
+                        slot: 0,
+                        buffer: 10,
+                        offset: 0,
+                    },
+                    Enc::Draw {
+                        vertex_count: 6,
+                        instance_count: 1,
+                        first_vertex: 0,
+                        first_instance: 0,
+                    },
                     Enc::EndRenderPass,
                 ],
                 signal: None,
@@ -554,25 +1021,104 @@ pub fn selftest_indexed(out: &str) -> ! {
         let mut be = MetalBackend::new(&ctx);
         be.set_render_target(1, rt.clone());
         let cmds = vec![
-            Cmd::CreateBuffer(10, BufferDesc { size: vbytes.len() as u64, usage: buffer_usage::VERTEX, label: String::new() }),
-            Cmd::WriteBuffer { id: 10, offset: 0, data: vbytes },
-            Cmd::CreateBuffer(11, BufferDesc { size: ibytes.len() as u64, usage: buffer_usage::INDEX, label: String::new() }),
-            Cmd::WriteBuffer { id: 11, offset: 0, data: ibytes },
-            Cmd::CreateShader { id: 20, spirv: pack_msl(MSL) },
-            Cmd::CreateRenderPipeline(30, RenderPipelineDesc {
-                vertex: ShaderRef { module: 20, entry: "vmain".into() },
-                fragment: Some(ShaderRef { module: 20, entry: "fmain".into() }),
-                vertex_buffers: vec![VertexLayout { stride: 24, step_mode: 0, attrs: vec![VertexAttr { location: 0, format: 2, offset: 0 }, VertexAttr { location: 1, format: 4, offset: 8 }] }],
-                color_targets: vec![ColorTargetState { format: TextureFormat::Bgra8Unorm, blend: None, write_mask: 0xf }],
-                depth: None, topology: Topology::TriangleList, cull: 0, front_face: 0, label: String::new(),
-            }),
+            Cmd::CreateBuffer(
+                10,
+                BufferDesc {
+                    size: vbytes.len() as u64,
+                    usage: buffer_usage::VERTEX,
+                    label: String::new(),
+                },
+            ),
+            Cmd::WriteBuffer {
+                id: 10,
+                offset: 0,
+                data: vbytes,
+            },
+            Cmd::CreateBuffer(
+                11,
+                BufferDesc {
+                    size: ibytes.len() as u64,
+                    usage: buffer_usage::INDEX,
+                    label: String::new(),
+                },
+            ),
+            Cmd::WriteBuffer {
+                id: 11,
+                offset: 0,
+                data: ibytes,
+            },
+            Cmd::CreateShader {
+                id: 20,
+                spirv: pack_msl(MSL),
+            },
+            Cmd::CreateRenderPipeline(
+                30,
+                RenderPipelineDesc {
+                    vertex: ShaderRef {
+                        module: 20,
+                        entry: "vmain".into(),
+                    },
+                    fragment: Some(ShaderRef {
+                        module: 20,
+                        entry: "fmain".into(),
+                    }),
+                    vertex_buffers: vec![VertexLayout {
+                        stride: 24,
+                        step_mode: 0,
+                        attrs: vec![
+                            VertexAttr {
+                                location: 0,
+                                format: 2,
+                                offset: 0,
+                            },
+                            VertexAttr {
+                                location: 1,
+                                format: 4,
+                                offset: 8,
+                            },
+                        ],
+                    }],
+                    color_targets: vec![ColorTargetState {
+                        format: TextureFormat::Bgra8Unorm,
+                        blend: None,
+                        write_mask: 0xf,
+                    }],
+                    depth: None,
+                    topology: Topology::TriangleList,
+                    cull: 0,
+                    front_face: 0,
+                    label: String::new(),
+                },
+            ),
             Cmd::Submit(CommandBuffer {
                 encoder: vec![
-                    Enc::BeginRenderPass { color: vec![ColorAttachment { texture: 1, load: LoadOp::Clear, clear: [0.05, 0.05, 0.1, 1.0], store: true }], depth: None },
+                    Enc::BeginRenderPass {
+                        color: vec![ColorAttachment {
+                            texture: 1,
+                            load: LoadOp::Clear,
+                            clear: [0.05, 0.05, 0.1, 1.0],
+                            store: true,
+                        }],
+                        depth: None,
+                    },
                     Enc::SetPipeline(30),
-                    Enc::SetVertexBuffer { slot: 0, buffer: 10, offset: 0 },
-                    Enc::SetIndexBuffer { buffer: 11, offset: 0, format: IndexFormat::U16 },
-                    Enc::DrawIndexed { index_count: 6, instance_count: 1, first_index: 0, base_vertex: 0, first_instance: 0 },
+                    Enc::SetVertexBuffer {
+                        slot: 0,
+                        buffer: 10,
+                        offset: 0,
+                    },
+                    Enc::SetIndexBuffer {
+                        buffer: 11,
+                        offset: 0,
+                        format: IndexFormat::U16,
+                    },
+                    Enc::DrawIndexed {
+                        index_count: 6,
+                        instance_count: 1,
+                        first_index: 0,
+                        base_vertex: 0,
+                        first_instance: 0,
+                    },
                     Enc::EndRenderPass,
                 ],
                 signal: None,
@@ -664,11 +1210,17 @@ pub fn run_executor(sock_path: String) {
             if let Some(p) = prof.as_mut() {
                 let replay_us = t_rx.elapsed().as_micros() as u64;
                 let gpu_us = be.gpu_wait_ns / 1000;
-                let (dsh, dpso, dlib) = (be.shader_compiles - cum_sh, be.pipeline_compiles - cum_pso, be.lib_compiles - cum_lib);
+                let (dsh, dpso, dlib) = (
+                    be.shader_compiles - cum_sh,
+                    be.pipeline_compiles - cum_pso,
+                    be.lib_compiles - cum_lib,
+                );
                 cum_sh = be.shader_compiles;
                 cum_pso = be.pipeline_compiles;
                 cum_lib = be.lib_compiles;
-                p.line(&format!("{seq},{replay_us},{gpu_us},{dsh},{dpso},{dlib},{len}"));
+                p.line(&format!(
+                    "{seq},{replay_us},{gpu_us},{dsh},{dpso},{dlib},{len}"
+                ));
             }
             seq += 1;
         }
@@ -702,7 +1254,9 @@ impl RenderProf {
         let mut f = std::fs::File::create(&path).ok()?;
         use std::io::Write;
         let hdr = match who {
-            "exec" => "seq,replay_us,gpu_us,shader_compiles,pipeline_compiles,lib_compiles,ir_bytes",
+            "exec" => {
+                "seq,replay_us,gpu_us,shader_compiles,pipeline_compiles,lib_compiles,ir_bytes"
+            }
             _ => "seq,fields",
         };
         let _ = writeln!(f, "{hdr}");
@@ -753,40 +1307,96 @@ pub fn selftest_replay(out: &str) -> ! {
             }
         }
         let cmds = vec![
-            Cmd::CreateBuffer(10, BufferDesc { size: data.len() as u64, usage: buffer_usage::VERTEX, label: String::new() }),
-            Cmd::WriteBuffer { id: 10, offset: 0, data },
-            Cmd::CreateShader { id: 20, spirv: vec![] },
-            Cmd::CreateRenderPipeline(30, RenderPipelineDesc {
-                vertex: ShaderRef { module: 20, entry: "vcmain".into() },
-                fragment: Some(ShaderRef { module: 20, entry: "fcmain".into() }),
-                vertex_buffers: vec![VertexLayout {
-                    stride: 24,
-                    step_mode: 0,
-                    attrs: vec![VertexAttr { location: 0, format: 0, offset: 0 }, VertexAttr { location: 1, format: 0, offset: 8 }],
-                }],
-                color_targets: vec![ColorTargetState { format: TextureFormat::Bgra8Unorm, blend: None, write_mask: 0xf }],
-                depth: None,
-                topology: Topology::TriangleList,
-                cull: 0,
-                front_face: 0,
-                label: String::new(),
-            }),
+            Cmd::CreateBuffer(
+                10,
+                BufferDesc {
+                    size: data.len() as u64,
+                    usage: buffer_usage::VERTEX,
+                    label: String::new(),
+                },
+            ),
+            Cmd::WriteBuffer {
+                id: 10,
+                offset: 0,
+                data,
+            },
+            Cmd::CreateShader {
+                id: 20,
+                spirv: vec![],
+            },
+            Cmd::CreateRenderPipeline(
+                30,
+                RenderPipelineDesc {
+                    vertex: ShaderRef {
+                        module: 20,
+                        entry: "vcmain".into(),
+                    },
+                    fragment: Some(ShaderRef {
+                        module: 20,
+                        entry: "fcmain".into(),
+                    }),
+                    vertex_buffers: vec![VertexLayout {
+                        stride: 24,
+                        step_mode: 0,
+                        attrs: vec![
+                            VertexAttr {
+                                location: 0,
+                                format: 0,
+                                offset: 0,
+                            },
+                            VertexAttr {
+                                location: 1,
+                                format: 0,
+                                offset: 8,
+                            },
+                        ],
+                    }],
+                    color_targets: vec![ColorTargetState {
+                        format: TextureFormat::Bgra8Unorm,
+                        blend: None,
+                        write_mask: 0xf,
+                    }],
+                    depth: None,
+                    topology: Topology::TriangleList,
+                    cull: 0,
+                    front_face: 0,
+                    label: String::new(),
+                },
+            ),
             Cmd::Submit(CommandBuffer {
                 encoder: vec![
                     Enc::BeginRenderPass {
-                        color: vec![ColorAttachment { texture: 1, load: LoadOp::Clear, clear: [0.09, 0.09, 0.14, 1.0], store: true }],
+                        color: vec![ColorAttachment {
+                            texture: 1,
+                            load: LoadOp::Clear,
+                            clear: [0.09, 0.09, 0.14, 1.0],
+                            store: true,
+                        }],
                         depth: None,
                     },
                     Enc::SetPipeline(30),
-                    Enc::SetVertexBuffer { slot: 0, buffer: 10, offset: 0 },
-                    Enc::Draw { vertex_count: 6, instance_count: 1, first_vertex: 0, first_instance: 0 },
+                    Enc::SetVertexBuffer {
+                        slot: 0,
+                        buffer: 10,
+                        offset: 0,
+                    },
+                    Enc::Draw {
+                        vertex_count: 6,
+                        instance_count: 1,
+                        first_vertex: 0,
+                        first_instance: 0,
+                    },
                     Enc::EndRenderPass,
                 ],
                 signal: None,
             }),
         ];
         let bytes = encode_stream(&cmds);
-        eprintln!("selftest-replay: streaming {} IR cmds ({} bytes)", cmds.len(), bytes.len());
+        eprintln!(
+            "selftest-replay: streaming {} IR cmds ({} bytes)",
+            cmds.len(),
+            bytes.len()
+        );
         dd_gpu::replay::replay_stream(&mut be, &bytes).expect("replay_stream");
 
         let dst = ctx.new_bgra_texture(w, h);
@@ -843,7 +1453,10 @@ impl GpuBackend for MetalBackend {
         Ok(())
     }
     fn write_buffer(&mut self, id: BufferId, offset: u64, data: &[u8]) -> Result<()> {
-        let buf = self.buffers.get(&id.0).ok_or(GpuError::UnknownId { kind: "buffer", id: id.0 })?;
+        let buf = self.buffers.get(&id.0).ok_or(GpuError::UnknownId {
+            kind: "buffer",
+            id: id.0,
+        })?;
         // The guest streams WriteBuffer over the socket (untrusted IR); reject any range that would write
         // past the buffer rather than corrupting adjacent heap.
         let cap = buf.length();
@@ -865,7 +1478,11 @@ impl GpuBackend for MetalBackend {
         // is a no-op. Otherwise materialize a real texture honoring the guest's format/usage: a SAMPLED
         // texture (glmark2 texture scene, Chrome UI) is Shared-storage + ShaderRead so we can blit pixels
         // into it from a staging buffer (CopyBufferToTexture); anything else falls back to a BGRA target.
-        if self.textures.contains_key(&id.0) {
+        let key = texture_desc_key(desc);
+        if self.texture_descs.get(&id.0) == Some(&key) && self.textures.contains_key(&id.0) {
+            return Ok(());
+        }
+        if self.textures.contains_key(&id.0) && !self.texture_descs.contains_key(&id.0) {
             return Ok(());
         }
         use dd_gpu::ir::texture_usage;
@@ -884,12 +1501,17 @@ impl GpuBackend for MetalBackend {
         }
         d.setUsage(usage);
         d.setStorageMode(MTLStorageMode::Shared);
-        let tex = self.device.newTextureWithDescriptor(&d).ok_or(GpuError::Unsupported("newTexture"))?;
+        let tex = self
+            .device
+            .newTextureWithDescriptor(&d)
+            .ok_or(GpuError::Unsupported("newTexture"))?;
         self.textures.insert(id.0, tex);
+        self.texture_descs.insert(id.0, key);
         Ok(())
     }
     fn destroy_texture(&mut self, id: TextureId) -> Result<()> {
         self.textures.remove(&id.0);
+        self.texture_descs.remove(&id.0);
         Ok(())
     }
 
@@ -909,7 +1531,10 @@ impl GpuBackend for MetalBackend {
         sd.setMagFilter(filt(desc.mag_filter));
         sd.setSAddressMode(addr(desc.address_u));
         sd.setTAddressMode(addr(desc.address_v));
-        let s = self.device.newSamplerStateWithDescriptor(&sd).ok_or(GpuError::Unsupported("newSampler"))?;
+        let s = self
+            .device
+            .newSamplerStateWithDescriptor(&sd)
+            .ok_or(GpuError::Unsupported("newSampler"))?;
         self.samplers.insert(id.0, s);
         Ok(())
     }
@@ -924,14 +1549,24 @@ impl GpuBackend for MetalBackend {
         if let Some(src) = msl_from_words(spirv) {
             let key = hash_bytes(src.as_bytes());
             // L3: identical MSL already installed for this id → nothing to compile (steady state).
-            if self.shader_id_hash.get(&id.0) == Some(&key) && self.shaders.contains_key(&id.0) {
+            if self.shader_id_hash.get(&id.0) == Some(&key)
+                && (self.shaders.contains_key(&id.0) || self.failed_shader_cache.contains(&key))
+            {
+                return Ok(());
+            }
+            if self.failed_shader_cache.contains(&key) {
+                self.shaders.remove(&id.0);
+                self.shader_id_hash.insert(id.0, key);
                 return Ok(());
             }
             // Content-cache hit (same MSL compiled earlier under any id) → reuse the library, no compile.
             let lib = if let Some(cached) = self.shader_lib_cache.get(&key) {
                 cached.clone()
             } else {
-                match self.device.newLibraryWithSource_options_error(&NSString::from_str(&src), None) {
+                match self
+                    .device
+                    .newLibraryWithSource_options_error(&NSString::from_str(&src), None)
+                {
                     Ok(lib) => {
                         self.shader_compiles += 1;
                         self.shader_lib_cache.insert(key, lib.clone());
@@ -939,7 +1574,23 @@ impl GpuBackend for MetalBackend {
                     }
                     Err(e) => {
                         eprintln!("dd-metal: shader {} MSL compile failed: {e:?}", id.0);
-                        return Err(GpuError::Unsupported("shader compile"));
+                        let dir = std::env::var("DD_SHADER_DUMP_DIR")
+                            .unwrap_or_else(|_| "/tmp/dd-metal-shaders".into());
+                        if let Err(err) = std::fs::create_dir_all(&dir) {
+                            eprintln!("dd-metal: shader dump mkdir {dir}: {err}");
+                        } else {
+                            let path = format!("{dir}/shader-{}-{key:016x}.metal", id.0);
+                            match std::fs::write(&path, &src) {
+                                Ok(()) => {
+                                    eprintln!("dd-metal: dumped failed shader {} to {path}", id.0)
+                                }
+                                Err(err) => eprintln!("dd-metal: shader dump write {path}: {err}"),
+                            }
+                        }
+                        self.failed_shader_cache.insert(key);
+                        self.shaders.remove(&id.0);
+                        self.shader_id_hash.insert(id.0, key);
+                        return Ok(());
                     }
                 }
             };
@@ -950,6 +1601,7 @@ impl GpuBackend for MetalBackend {
     }
     fn destroy_shader(&mut self, id: ShaderId) -> Result<()> {
         self.shaders.remove(&id.0);
+        self.shader_id_hash.remove(&id.0);
         Ok(())
     }
 
@@ -962,34 +1614,70 @@ impl GpuBackend for MetalBackend {
         }
         if let Some((state, primitive, depth)) = self.pipeline_cache.get(&key) {
             let (state, primitive, depth) = (state.clone(), *primitive, *depth);
-            self.pipelines.insert(id.0, Pipeline { state, primitive, depth });
+            self.pipelines.insert(
+                id.0,
+                Pipeline {
+                    state,
+                    primitive,
+                    depth,
+                },
+            );
             self.pipeline_id_hash.insert(id.0, key);
             return Ok(());
         }
         // Prefer the guest's own translated shaders (per module); fall back to the builtin vertex-color
         // library + its vcmain/fcmain entry points when the app didn't ship MSL.
         let vlib = self.shaders.get(&desc.vertex.module).unwrap_or(&self.lib);
-        let ventry = if self.shaders.contains_key(&desc.vertex.module) { desc.vertex.entry.as_str() } else { "vcmain" };
-        let vfn = vlib.newFunctionWithName(&NSString::from_str(ventry)).ok_or(GpuError::Unsupported("vertex fn"))?;
+        let ventry = if self.shaders.contains_key(&desc.vertex.module) {
+            desc.vertex.entry.as_str()
+        } else {
+            "vcmain"
+        };
+        let vfn = vlib
+            .newFunctionWithName(&NSString::from_str(ventry))
+            .ok_or(GpuError::Unsupported("vertex fn"))?;
         let (flib, fentry) = match &desc.fragment {
-            Some(f) if self.shaders.contains_key(&f.module) => (self.shaders.get(&f.module).unwrap(), f.entry.as_str()),
+            Some(f) if self.shaders.contains_key(&f.module) => {
+                (self.shaders.get(&f.module).unwrap(), f.entry.as_str())
+            }
             _ => (&self.lib, "fcmain"),
         };
-        let ffn = flib.newFunctionWithName(&NSString::from_str(fentry)).ok_or(GpuError::Unsupported("fragment fn"))?;
+        let ffn = flib
+            .newFunctionWithName(&NSString::from_str(fentry))
+            .ok_or(GpuError::Unsupported("fragment fn"))?;
         let pdesc = MTLRenderPipelineDescriptor::new();
         pdesc.setVertexFunction(Some(&vfn));
         pdesc.setFragmentFunction(Some(&ffn));
         unsafe {
-            pdesc.colorAttachments().objectAtIndexedSubscript(0).setPixelFormat(MTLPixelFormat::BGRA8Unorm);
+            let ca = pdesc.colorAttachments().objectAtIndexedSubscript(0);
+            let color_format = desc
+                .color_targets
+                .first()
+                .map(|target| tex_pixel_format(target.format))
+                .unwrap_or(MTLPixelFormat::BGRA8Unorm);
+            ca.setPixelFormat(color_format);
+            if let Some(target) = desc.color_targets.first() {
+                ca.setWriteMask(metal_write_mask(target.write_mask));
+            }
+            if let Some(blend) = desc.color_targets.first().and_then(|c| c.blend.as_ref()) {
+                ca.setBlendingEnabled(true);
+                ca.setSourceRGBBlendFactor(metal_blend_factor(blend.src_color));
+                ca.setDestinationRGBBlendFactor(metal_blend_factor(blend.dst_color));
+                ca.setRgbBlendOperation(metal_blend_op(blend.op_color));
+                ca.setSourceAlphaBlendFactor(metal_blend_factor(blend.src_alpha));
+                ca.setDestinationAlphaBlendFactor(metal_blend_factor(blend.dst_alpha));
+                ca.setAlphaBlendOperation(metal_blend_op(blend.op_alpha));
+            }
         }
         // Vertex layout: derive the Metal vertex descriptor from the guest's attributes. The IR carries
         // one `VertexLayout` per SOURCE VBO — glmark2/ANGLE bind a separate tightly-packed buffer per
         // attribute (position in one, normal in another) — where layout index i == the guest's vertex-
         // buffer slot i. Each attribute references its layout's Metal buffer via setBufferIndex, so a
         // secondary attribute (normal/texcoord) reads its own stream instead of aliasing slot 0. `format`
-        // carries the float-component count (1/2/3/4). Vertex buffers live at VBUF_BASE.. (see const) so
-        // they never collide with the uniform block at `[[buffer(1)]]`; `SetVertexBuffer` applies the same
-        // base. Falls back to the builtin float2+float4 layout at VBUF_BASE.
+        // carries the guest vertex attribute type/normalization/component count in a compact shim-private
+        // encoding. Vertex buffers live at VBUF_BASE.. (see const) so they never collide with the uniform
+        // block at `[[buffer(1)]]`; `SetVertexBuffer` applies the same base. Falls back to the builtin
+        // float2+float4 layout at VBUF_BASE.
         let vd = MTLVertexDescriptor::vertexDescriptor();
         let any_attrs = desc.vertex_buffers.iter().any(|l| !l.attrs.is_empty());
         unsafe {
@@ -997,19 +1685,17 @@ impl GpuBackend for MetalBackend {
                 for (li, layout) in desc.vertex_buffers.iter().enumerate() {
                     let slot = VBUF_BASE + li;
                     for a in &layout.attrs {
-                        let mf = match a.format {
-                            1 => MTLVertexFormat::Float,
-                            2 => MTLVertexFormat::Float2,
-                            3 => MTLVertexFormat::Float3,
-                            4 => MTLVertexFormat::Float4,
-                            _ => MTLVertexFormat::Float4,
-                        };
-                        let ad = vd.attributes().objectAtIndexedSubscript(a.location as usize);
+                        let mf = metal_vertex_format(a.format);
+                        let ad = vd
+                            .attributes()
+                            .objectAtIndexedSubscript(a.location as usize);
                         ad.setFormat(mf);
                         ad.setOffset(a.offset as usize);
                         ad.setBufferIndex(slot);
                     }
-                    vd.layouts().objectAtIndexedSubscript(slot).setStride(layout.stride.max(4) as usize);
+                    vd.layouts()
+                        .objectAtIndexedSubscript(slot)
+                        .setStride(layout.stride.max(4) as usize);
                 }
             } else {
                 let a0 = vd.attributes().objectAtIndexedSubscript(0);
@@ -1020,7 +1706,9 @@ impl GpuBackend for MetalBackend {
                 a1.setFormat(MTLVertexFormat::Float4);
                 a1.setOffset(8);
                 a1.setBufferIndex(VBUF_BASE);
-                vd.layouts().objectAtIndexedSubscript(VBUF_BASE).setStride(24);
+                vd.layouts()
+                    .objectAtIndexedSubscript(VBUF_BASE)
+                    .setStride(24);
             }
         }
         pdesc.setVertexDescriptor(Some(&vd));
@@ -1034,9 +1722,17 @@ impl GpuBackend for MetalBackend {
             .map_err(|_| GpuError::Unsupported("pipeline compile"))?;
         self.pipeline_compiles += 1;
         let primitive = prim(desc.topology);
-        self.pipeline_cache.insert(key, (state.clone(), primitive, depth));
+        self.pipeline_cache
+            .insert(key, (state.clone(), primitive, depth));
         self.pipeline_id_hash.insert(id.0, key);
-        self.pipelines.insert(id.0, Pipeline { state, primitive, depth });
+        self.pipelines.insert(
+            id.0,
+            Pipeline {
+                state,
+                primitive,
+                depth,
+            },
+        );
         Ok(())
     }
 
@@ -1046,11 +1742,21 @@ impl GpuBackend for MetalBackend {
         let mut binds = Vec::new();
         for e in &desc.entries {
             match e.resource {
-                BindResource::Buffer { id: bid, offset, .. } => {
-                    binds.push(Bind::Buffer { index: e.binding, buffer: bid, offset })
-                }
-                BindResource::Texture { id: tid } => binds.push(Bind::Texture { index: e.binding, texture: tid }),
-                BindResource::Sampler { id: sid } => binds.push(Bind::Sampler { index: e.binding, sampler: sid }),
+                BindResource::Buffer {
+                    id: bid, offset, ..
+                } => binds.push(Bind::Buffer {
+                    index: e.binding,
+                    buffer: bid,
+                    offset,
+                }),
+                BindResource::Texture { id: tid } => binds.push(Bind::Texture {
+                    index: e.binding,
+                    texture: tid,
+                }),
+                BindResource::Sampler { id: sid } => binds.push(Bind::Sampler {
+                    index: e.binding,
+                    sampler: sid,
+                }),
             }
         }
         self.bind_groups.insert(id.0, binds);
@@ -1058,7 +1764,10 @@ impl GpuBackend for MetalBackend {
     }
 
     fn submit(&mut self, cb: &CommandBuffer) -> Result<()> {
-        let cmd = self.queue.commandBuffer().ok_or(GpuError::Unsupported("commandBuffer"))?;
+        let cmd = self
+            .queue
+            .commandBuffer()
+            .ok_or(GpuError::Unsupported("commandBuffer"))?;
         // L4: async submit + cross-queue tearing fence. Reserve this frame's render generation for the
         // target IOSurface and make the render pass WAIT for the compositor's previous blit of that surface
         // (fence b) before it begins — encoded at the very start of the command buffer, before any encoder.
@@ -1082,14 +1791,26 @@ impl GpuBackend for MetalBackend {
                     let mut cw = 0u32;
                     let mut chh = 0u32;
                     for (i, ca) in color.iter().enumerate() {
-                        let tex = self.textures.get(&ca.texture).ok_or(GpuError::UnknownId { kind: "texture", id: ca.texture })?;
+                        let tex = self.textures.get(&ca.texture).ok_or(GpuError::UnknownId {
+                            kind: "texture",
+                            id: ca.texture,
+                        })?;
                         cw = tex.width() as u32;
                         chh = tex.height() as u32;
                         let att = unsafe { pass.colorAttachments().objectAtIndexedSubscript(i) };
                         att.setTexture(Some(tex));
-                        att.setLoadAction(if ca.load == LoadOp::Clear { MTLLoadAction::Clear } else { MTLLoadAction::Load });
+                        att.setLoadAction(if ca.load == LoadOp::Clear {
+                            MTLLoadAction::Clear
+                        } else {
+                            MTLLoadAction::Load
+                        });
                         let c = ca.clear;
-                        att.setClearColor(MTLClearColor { red: c[0] as f64, green: c[1] as f64, blue: c[2] as f64, alpha: c[3] as f64 });
+                        att.setClearColor(MTLClearColor {
+                            red: c[0] as f64,
+                            green: c[1] as f64,
+                            blue: c[2] as f64,
+                            alpha: c[3] as f64,
+                        });
                         att.setStoreAction(MTLStoreAction::Store);
                     }
                     if let Some(da) = depth {
@@ -1100,10 +1821,16 @@ impl GpuBackend for MetalBackend {
                         datt.setClearDepth(da.clear_depth as f64);
                         datt.setStoreAction(MTLStoreAction::DontCare);
                     }
-                    enc = Some(cmd.renderCommandEncoderWithDescriptor(&pass).ok_or(GpuError::Unsupported("encoder"))?);
+                    enc = Some(
+                        cmd.renderCommandEncoderWithDescriptor(&pass)
+                            .ok_or(GpuError::Unsupported("encoder"))?,
+                    );
                 }
                 Enc::SetPipeline(p) => {
-                    let pl = self.pipelines.get(p).ok_or(GpuError::UnknownId { kind: "pipeline", id: *p })?;
+                    let pl = self.pipelines.get(p).ok_or(GpuError::UnknownId {
+                        kind: "pipeline",
+                        id: *p,
+                    })?;
                     cur_prim = pl.primitive;
                     let pd = pl.depth;
                     if let Some(e) = &enc {
@@ -1113,15 +1840,33 @@ impl GpuBackend for MetalBackend {
                         }
                     }
                 }
-                Enc::SetVertexBuffer { slot, buffer, offset } => {
-                    let buf = self.buffers.get(buffer).ok_or(GpuError::UnknownId { kind: "buffer", id: *buffer })?;
+                Enc::SetVertexBuffer {
+                    slot,
+                    buffer,
+                    offset,
+                } => {
+                    let buf = self.buffers.get(buffer).ok_or(GpuError::UnknownId {
+                        kind: "buffer",
+                        id: *buffer,
+                    })?;
                     if let Some(e) = &enc {
                         // Bind at VBUF_BASE + slot to match the vertex descriptor's buffer indices (keeps
                         // guest vertex buffers clear of the uniform block at [[buffer(1)]]).
-                        unsafe { e.setVertexBuffer_offset_atIndex(Some(buf), *offset as usize, VBUF_BASE + *slot as usize) };
+                        unsafe {
+                            e.setVertexBuffer_offset_atIndex(
+                                Some(buf),
+                                *offset as usize,
+                                VBUF_BASE + *slot as usize,
+                            )
+                        };
                     }
                 }
-                Enc::Draw { vertex_count, instance_count, first_vertex, .. } => {
+                Enc::Draw {
+                    vertex_count,
+                    instance_count,
+                    first_vertex,
+                    ..
+                } => {
                     if let Some(e) = &enc {
                         unsafe {
                             e.drawPrimitives_vertexStart_vertexCount_instanceCount(
@@ -1143,7 +1888,11 @@ impl GpuBackend for MetalBackend {
                         .map(|v| {
                             v.iter()
                                 .map(|b| match b {
-                                    Bind::Buffer { index, buffer, offset } => (0u8, *index, *buffer, *offset),
+                                    Bind::Buffer {
+                                        index,
+                                        buffer,
+                                        offset,
+                                    } => (0u8, *index, *buffer, *offset),
                                     Bind::Texture { index, texture } => (1, *index, *texture, 0),
                                     Bind::Sampler { index, sampler } => (2, *index, *sampler, 0),
                                 })
@@ -1156,8 +1905,16 @@ impl GpuBackend for MetalBackend {
                             match kind {
                                 0 => {
                                     if let Some(buf) = self.buffers.get(&id) {
-                                        e.setVertexBuffer_offset_atIndex(Some(buf), off as usize, idx as usize);
-                                        e.setFragmentBuffer_offset_atIndex(Some(buf), off as usize, idx as usize);
+                                        e.setVertexBuffer_offset_atIndex(
+                                            Some(buf),
+                                            off as usize,
+                                            idx as usize,
+                                        );
+                                        e.setFragmentBuffer_offset_atIndex(
+                                            Some(buf),
+                                            off as usize,
+                                            idx as usize,
+                                        );
                                     }
                                 }
                                 1 => {
@@ -1176,14 +1933,52 @@ impl GpuBackend for MetalBackend {
                         }
                     }
                 }
-                Enc::SetIndexBuffer { buffer, offset, format } => {
+                Enc::SetIndexBuffer {
+                    buffer,
+                    offset,
+                    format,
+                } => {
                     let it = match format {
                         IndexFormat::U16 => MTLIndexType::UInt16,
                         IndexFormat::U32 => MTLIndexType::UInt32,
                     };
                     index_buffer = Some((*buffer, *offset, it));
                 }
-                Enc::DrawIndexed { index_count, instance_count, first_index, .. } => {
+                Enc::SetViewport {
+                    x,
+                    y,
+                    w,
+                    h,
+                    min_depth,
+                    max_depth,
+                } => {
+                    if let Some(e) = &enc {
+                        e.setViewport(MTLViewport {
+                            originX: *x as f64,
+                            originY: *y as f64,
+                            width: (*w).max(0.0) as f64,
+                            height: (*h).max(0.0) as f64,
+                            znear: *min_depth as f64,
+                            zfar: *max_depth as f64,
+                        });
+                    }
+                }
+                Enc::SetScissor { x, y, w, h } => {
+                    if let Some(e) = &enc {
+                        e.setScissorRect(MTLScissorRect {
+                            x: *x as _,
+                            y: *y as _,
+                            width: *w as _,
+                            height: *h as _,
+                        });
+                    }
+                }
+                Enc::DrawIndexed {
+                    index_count,
+                    instance_count,
+                    first_index,
+                    ..
+                } => {
                     if let (Some(e), Some((bid, base_off, it))) = (&enc, index_buffer) {
                         if let Some(ibuf) = self.buffers.get(&bid) {
                             let esz = if it == MTLIndexType::UInt16 { 2u64 } else { 4 };
@@ -1201,10 +1996,19 @@ impl GpuBackend for MetalBackend {
                         }
                     }
                 }
-                Enc::CopyBufferToTexture { src, src_offset, bytes_per_row, dst, width, height, .. } => {
+                Enc::CopyBufferToTexture {
+                    src,
+                    src_offset,
+                    bytes_per_row,
+                    dst,
+                    width,
+                    height,
+                    ..
+                } => {
                     // Upload a staging buffer's pixels into a sampled texture (glTexImage2D path). Runs on a
                     // standalone blit encoder between passes; a render encoder must not be open here.
-                    if let (Some(buf), Some(tex)) = (self.buffers.get(src), self.textures.get(dst)) {
+                    if let (Some(buf), Some(tex)) = (self.buffers.get(src), self.textures.get(dst))
+                    {
                         // Untrusted IR: the staging buffer must hold src_offset + bytes_per_row*height, else
                         // Metal reads OOB. Verify before encoding the copy (skip on overflow/short buffer).
                         let need = (*bytes_per_row as usize)
@@ -1231,17 +2035,88 @@ impl GpuBackend for MetalBackend {
                         }
                     }
                 }
+                Enc::ClearRect {
+                    texture,
+                    x,
+                    y,
+                    w,
+                    h,
+                    color,
+                } => {
+                    if let Some(e) = enc.take() {
+                        e.endEncoding();
+                    }
+                    let Some(tex) = self.textures.get(texture).cloned() else {
+                        continue;
+                    };
+                    let tw = tex.width() as u32;
+                    let th = tex.height() as u32;
+                    let x0 = (*x).min(tw);
+                    let y0 = (*y).min(th);
+                    let x1 = x.saturating_add(*w).min(tw);
+                    let y1 = y.saturating_add(*h).min(th);
+                    if x1 <= x0 || y1 <= y0 {
+                        continue;
+                    }
+                    let state = self.clear_pipeline()?;
+                    let pass = unsafe { MTLRenderPassDescriptor::renderPassDescriptor() };
+                    unsafe {
+                        let att = pass.colorAttachments().objectAtIndexedSubscript(0);
+                        att.setTexture(Some(&tex));
+                        att.setLoadAction(MTLLoadAction::Load);
+                        att.setStoreAction(MTLStoreAction::Store);
+                    }
+                    let e = cmd
+                        .renderCommandEncoderWithDescriptor(&pass)
+                        .ok_or(GpuError::Unsupported("clear encoder"))?;
+                    e.setRenderPipelineState(&state);
+                    e.setScissorRect(MTLScissorRect {
+                        x: x0 as _,
+                        y: y0 as _,
+                        width: (x1 - x0) as _,
+                        height: (y1 - y0) as _,
+                    });
+                    let c = *color;
+                    let verts: [f32; 36] = [
+                        -1.0, -1.0, c[0], c[1], c[2], c[3], 1.0, -1.0, c[0], c[1], c[2], c[3],
+                        -1.0, 1.0, c[0], c[1], c[2], c[3], 1.0, -1.0, c[0], c[1], c[2], c[3], 1.0,
+                        1.0, c[0], c[1], c[2], c[3], -1.0, 1.0, c[0], c[1], c[2], c[3],
+                    ];
+                    let nbytes = std::mem::size_of_val(&verts);
+                    let vbuf = self
+                        .device
+                        .newBufferWithLength_options(
+                            nbytes,
+                            MTLResourceOptions::MTLResourceStorageModeShared,
+                        )
+                        .ok_or(GpuError::Unsupported("clear buffer"))?;
+                    unsafe {
+                        std::ptr::copy_nonoverlapping(
+                            verts.as_ptr() as *const u8,
+                            vbuf.contents().as_ptr() as *mut u8,
+                            nbytes,
+                        );
+                        e.setVertexBuffer_offset_atIndex(Some(&vbuf), 0, VBUF_BASE);
+                        e.drawPrimitives_vertexStart_vertexCount(MTLPrimitiveType::Triangle, 0, 6);
+                    }
+                    e.endEncoding();
+                }
                 Enc::EndRenderPass => {
                     if let Some(e) = enc.take() {
                         e.endEncoding();
                     }
                 }
-                _ => {} // SetViewport/compute: not in this slice
+                _ => {} // compute: not in this slice
             }
         }
         if let Some(e) = enc.take() {
             e.endEncoding();
         }
+        let dump_ids = std::env::var("DD_GPU_DUMP_TEXTURES").ok().map(|s| {
+            s.split(',')
+                .filter_map(|p| p.trim().parse::<u32>().ok())
+                .collect::<Vec<_>>()
+        });
         if let Some((render_ev, _present_ev, gen, _wait)) = &fence {
             // fence a: signal render-complete for this gen so the compositor's blit (which WAITs on this
             // event) never samples the surface mid-render.
@@ -1249,13 +2124,34 @@ impl GpuBackend for MetalBackend {
             cmd.commit();
             // Async: DO NOT wait for GPU completion — ack immediately (in run_executor) so the guest builds
             // the next frame while this one renders. The event fence, not a CPU stall, guarantees ordering.
-            self.gpu_wait_ns = 0;
+            if dump_ids.as_ref().is_some_and(|ids| !ids.is_empty()) {
+                let t = std::time::Instant::now();
+                unsafe { cmd.waitUntilCompleted() };
+                self.gpu_wait_ns = t.elapsed().as_nanos() as u64;
+            } else {
+                self.gpu_wait_ns = 0;
+            }
         } else {
             cmd.commit();
             // Baseline (DD_RENDER_NOASYNC): CPU stalls on GPU completion — the only hop that overlaps nothing.
             let t = std::time::Instant::now();
             unsafe { cmd.waitUntilCompleted() };
             self.gpu_wait_ns = t.elapsed().as_nanos() as u64;
+        }
+        if let Some(ids) = dump_ids {
+            if !ids.is_empty() {
+                let dir = std::env::var("DD_GPU_DUMP_DIR")
+                    .unwrap_or_else(|_| "/tmp/dd-gpu-textures".into());
+                let seq = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_millis() as u64)
+                    .unwrap_or(0);
+                for id in ids {
+                    if let Some(tex) = self.textures.get(&id) {
+                        dump_texture_png(id, tex, &dir, seq);
+                    }
+                }
+            }
         }
         Ok(())
     }

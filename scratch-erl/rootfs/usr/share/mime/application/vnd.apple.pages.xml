@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<mime-type xmlns="http://www.freedesktop.org/standards/shared-mime-info" type="application/vnd.apple.pages">
+  <!--Created automatically by update-mime-database. DO NOT EDIT!-->
+  <comment>Apple Pages document</comment>
+  <sub-class-of type="application/zip"/>
+  <generic-icon name="x-office-document"/>
+  <glob pattern="*.pages"/>
+  <alias type="application/x-iwork-pages-sffpages"/>
+</mime-type>

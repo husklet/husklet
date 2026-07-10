@@ -1,0 +1,12 @@
+#!/bin/sh
+
+set -e
+
+if [ "$1" = "purge" ] ; then
+    rm -f "${DPKG_ROOT:-/}var/lib/dbus/machine-id"
+    rmdir "${DPKG_ROOT:-/}var/lib/dbus" || true
+fi
+
+
+
+exit 0

@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<mime-type xmlns="http://www.freedesktop.org/standards/shared-mime-info" type="image/x-nikon-nrw">
+  <!--Created automatically by update-mime-database. DO NOT EDIT!-->
+  <comment>Nikon NRW raw image</comment>
+  <sub-class-of type="image/x-dcraw"/>
+  <sub-class-of type="image/tiff"/>
+  <glob pattern="*.nrw"/>
+</mime-type>

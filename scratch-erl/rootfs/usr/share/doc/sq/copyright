@@ -1,0 +1,32 @@
+Format: https://www.debian.org/doc/packaging-manuals/copyright-format/1.0/
+Upstream-Name: sequoia-sq
+Upstream-Contact:
+ Azul <azul@sequoia-pgp.org>
+ Igor Matuszewski <igor@sequoia-pgp.org>
+ Justus Winter <justus@sequoia-pgp.org>
+ Kai Michaelis <kai@sequoia-pgp.org>
+ Neal H. Walfield <neal@sequoia-pgp.org>
+ Nora Widdecke <nora@sequoia-pgp.org>
+ Wiktor Kwapisiewicz <wiktor@sequoia-pgp.org>
+Source: https://gitlab.com/sequoia-pgp/sequoia
+
+Files: *
+Copyright:
+ 2017-2021 Azul <azul@sequoia-pgp.org>
+ 2017-2021 Igor Matuszewski <igor@sequoia-pgp.org>
+ 2017-2022 Justus Winter <justus@sequoia-pgp.org>
+ 2017-2021 Kai Michaelis <kai@sequoia-pgp.org>
+ 2017-2022 Neal H. Walfield <neal@sequoia-pgp.org>
+ 2017-2022 Nora Widdecke <nora@sequoia-pgp.org>
+ 2017-2022 Wiktor Kwapisiewicz <wiktor@sequoia-pgp.org>
+ 2022 Lars Wirzenius <liw@sequoia-pgp.org>
+License: GPL-2.0-or-later
+
+Files: debian/*
+Copyright:
+ 2021-2022 Debian Rust Maintainers <pkg-rust-maintainers@alioth-lists.debian.net>
+ 2021-2022 Daniel Kahn Gillmor <dkg@fifthhorseman.net>
+License: GPL-2.0-or-later
+
+License: GPL-2.0-or-later
+ Debian systems provide the GPL 2.0 in /usr/share/common-licenses/GPL-2

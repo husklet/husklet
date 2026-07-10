@@ -1,0 +1,8 @@
+ad3d50ed7d285f06ec8ea783036a2fce  usr/include/aarch64-linux-gnu/maxminddb.h
+16fbf9f4f246ab7d6f59ec9d22022e53  usr/include/aarch64-linux-gnu/maxminddb_config.h
+8a458dd08026ea52694bcc4983a7324b  usr/lib/aarch64-linux-gnu/libmaxminddb.a
+c8d51e83820f5fe6d21783eb00a300fe  usr/lib/aarch64-linux-gnu/pkgconfig/libmaxminddb.pc
+5938ba21a884df30644f389800675dfb  usr/share/doc/libmaxminddb-dev/changelog.Debian.gz
+79c532b1417beb238a66d19010c2063f  usr/share/doc/libmaxminddb-dev/changelog.gz
+fdd65108723f240316bb4a5ae7eaa44f  usr/share/doc/libmaxminddb-dev/copyright
+39875c472e236c0e2e63d733d7e94790  usr/share/man/man3/libmaxminddb.3.gz

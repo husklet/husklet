@@ -1,0 +1,20 @@
+ucf_helper_functions
+====================
+
+This directory contains a suggestion for code to help using
+ucf covering most of the real-life use cases. This code is in use 
+since many months in the aide package and seems to work "well enough".
+
+See aide-common's maintainer scripts for usage examples. The package ships the
+current version of all config files in /usr/share/aide-common/config, and
+handles all of them in a single call of handle_all_ucf_files
+/usr/share/aide-common/config /etc. The code expects that the first parameter
+of handle_all_ucf_files is a pointer to the directory structure, and
+handle_all_ucf_files rebuilds that structure in the target directory. See the
+aide-common package for reference.
+
+This directory also contains a test suite so that the correct behavior of the
+function can be verified. Call ./testsuite as root. Sorry, the test suite
+needs root privileges and uses the ucf database of the host system. The test
+cases are kind of documented in the test-list file.
+

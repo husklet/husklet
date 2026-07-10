@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<mime-type xmlns="http://www.freedesktop.org/standards/shared-mime-info" type="image/x-canon-cr3">
+  <!--Created automatically by update-mime-database. DO NOT EDIT!-->
+  <comment>Canon CR3 raw image</comment>
+  <acronym>CR3</acronym>
+  <expanded-acronym>Canon Raw 3</expanded-acronym>
+  <sub-class-of type="image/x-dcraw"/>
+  <glob pattern="*.cr3"/>
+</mime-type>

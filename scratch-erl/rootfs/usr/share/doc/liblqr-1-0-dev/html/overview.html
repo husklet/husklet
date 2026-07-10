@@ -1,0 +1,32 @@
+<html><head><meta http-equiv="Content-Type" content="text/html; charset=ISO-8859-1"><title>Overview of the library</title><meta name="generator" content="DocBook XSL Stylesheets V1.79.1"><link rel="home" href="index.html" title="The Liquid Rescale library Manual"><link rel="up" href="Introduction.html" title="Chapter 1. Introduction"><link rel="prev" href="seam-carve.html" title="Seam carving in brief"><link rel="next" href="basic.html" title="Basic methods"></head><body bgcolor="white" text="black" link="#0000FF" vlink="#840084" alink="#0000FF"><div class="navheader"><table width="100%" summary="Navigation header"><tr><th colspan="3" align="center">Overview of the library</th></tr><tr><td width="20%" align="left"><a accesskey="p" href="seam-carve.html">Prev</a> </td><th width="60%" align="center">Chapter 1. Introduction</th><td width="20%" align="right"> <a accesskey="n" href="basic.html">Next</a></td></tr></table><hr></div><div class="sect1"><div class="titlepage"><div><div><h2 class="title" style="clear: both"><a name="overview"></a>Overview of the library</h2></div></div></div><p>
+                The Liquid Rescale library is written in C, but can be used into C++ programs without any modification. It has an
+                object-oriented design, so that the terminology in this manual is borrowed from C++. The central class
+                of the library is called <code class="classname">LqrCarver</code>. Carver objects can generate and store multi-size images, or load
+                them, and read them out at the desired size.
+            </p><p>
+                Internally, multi-size images are stored simply as plain images with the addition of a visibility map.
+                Each pixel in the image has its own visibility level. Whether to display a pixel or not simply depends
+                on the comparison of each pixel's visibility with a given global visibility level. In this way, images
+                of different sizes can be read out, simply by setting a global visibility level.
+            </p><p>
+                Therefore, once the visibility map has been computed, it allows effortless, real-time scaling. However,
+                visibility maps also necessarily have an orientation, either horizontal or vertical. If we want to
+                resize on the other direction, the visibility map has to be computed afresh, and the previous visibility
+                map becomes useless, because the two maps are not consistent one with the other.
+            </p><p>
+                This also implies that the resizing order affects the final result: rescaling horizontally first, then
+                vertically, does not yield the same result as following the reverse order. Moreover, one could choose an
+                intermediate way, e.g. by rescaling by one pixel in one direction, one in the other, then iterating as
+                needed to reach the final size.
+            </p><p>
+                The default behaviour of the library is to rescale horizontally first, then vertically, but this order
+                can be reversed.
+            </p><p>
+                Visibility maps can be stored in objects of type <code class="classname">LqrVMap</code>. When an <code class="classname">LqrCarver</code> object is created from
+                an input image, the visibility of each pixel is uninitialised. At this point, one could either import a
+                previously computed <code class="classname">LqrVMap</code>, or activate the <code class="classname">LqrCarver</code> so that it creates one afresh when asked to.
+            </p><p>
+                In either case, there's a single method to call, specifiying the new desired size; all the rest will
+                automatically be computed as necessary. By default, the visibility maps are only computed up to the
+                extent to which they are needed for resizing.
+            </p></div><div class="navfooter"><hr><table width="100%" summary="Navigation footer"><tr><td width="40%" align="left"><a accesskey="p" href="seam-carve.html">Prev</a> </td><td width="20%" align="center"><a accesskey="u" href="Introduction.html">Up</a></td><td width="40%" align="right"> <a accesskey="n" href="basic.html">Next</a></td></tr><tr><td width="40%" align="left" valign="top">Seam carving in brief </td><td width="20%" align="center"><a accesskey="h" href="index.html">Home</a></td><td width="40%" align="right" valign="top"> Basic methods</td></tr></table></div></body></html>

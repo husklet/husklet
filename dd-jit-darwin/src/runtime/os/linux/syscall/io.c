@@ -8,6 +8,12 @@
 // returns) is distinguishable from a missing post (IO thread never writes). Visible to event.c (included
 // after io.c in the unity TU).
 static int g_wakelog = -1;
+static int wakelog_role_match(void) {
+    const char *want = getenv("DDWAKE_ROLE");
+    if (!want || !want[0]) return 1;
+    const char *got = getenv("DD_CHROME_TYPE");
+    return got && strcmp(got, want) == 0;
+}
 static int wakelog_on(void) {
     // Gated by EITHER the DDWAKELOG env var OR a host sentinel file /tmp/ddwakelog. The file gate is the
     // reliable one: the engine is spawned with a curated config (via --configfd), NOT the full parent
@@ -19,7 +25,7 @@ static int wakelog_on(void) {
         g_wakelog = (getenv("DDWAKELOG") != NULL || access("/tmp/ddwakelog", F_OK) == 0) ? 1 : 0; // just-
         errno = saved; // failed syscall's errno (this call runs AFTER read()/write() in the hot path).
     }
-    return g_wakelog;
+    return g_wakelog && wakelog_role_match();
 }
 static unsigned long wake_tid(void) {
     __uint64_t t = 0;
@@ -32,6 +38,132 @@ static void wakelog(const char *op, int fd, long v1, long v2) {
     clock_gettime(CLOCK_MONOTONIC, &ts);
     fprintf(stderr, "[DDWAKE] t=%ld.%03ld pid=%d tid=%lu %s fd=%d a=%ld b=%ld\n", (long)ts.tv_sec,
             ts.tv_nsec / 1000000, getpid(), wake_tid(), op, fd, v1, v2);
+}
+
+static int ipclog_role_match(void) {
+    const char *want = getenv("DDIPC_ROLE");
+    if (!want || !want[0]) return 1;
+    const char *got = getenv("DD_CHROME_TYPE");
+    const char *util = getenv("DD_CHROME_UTILITY_SUBTYPE");
+    return (got && strcmp(got, want) == 0) || (util && strstr(util, want) != NULL);
+}
+
+static int ipclog_on(void) {
+    static int on = -1;
+    if (on < 0) {
+        int saved = errno;
+        on = (getenv("DDIPCLOG") != NULL || access("/tmp/DDIPCLOG", F_OK) == 0) ? 1 : 0;
+        errno = saved;
+    }
+    return on && ipclog_role_match();
+}
+
+static int ipclog_fd_match(int fd) {
+    if (!ipclog_on()) return 0;
+    const char *want = getenv("DDIPC_FD");
+    if (want && want[0]) return fd == atoi(want);
+    const char *type = getenv("DD_CHROME_TYPE");
+    if (type && strcmp(type, "browser") == 0) {
+        if (!getenv("DDIPC_BROWSER")) return 0;
+        return fd >= 0 && fd < DD_NFD && (g_sock_stream[fd] || g_sock_dgram[fd] || seq_is(fd));
+    }
+    if (!type || !type[0]) return 0;
+    return fd >= 0 && fd <= 8;
+}
+
+static void ipclog_bytes(const uint8_t *p, size_t n) {
+    size_t lim = n < 24 ? n : 24;
+    for (size_t i = 0; p && i < lim; i++) dprintf(STDERR_FILENO, "%02x", p[i]);
+    if (n > lim) dprintf(STDERR_FILENO, "...");
+}
+
+static void ipclog_io(const char *op, int fd, long req, long ret, const void *buf, size_t len) {
+    if (!ipclog_fd_match(fd)) return;
+    int saved = errno;
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    dprintf(STDERR_FILENO,
+            "[DDIPC] t=%ld.%03ld pid=%d tid=%lu type=%s utility=%s op=%s fd=%d req=%ld ret=%ld fl=0x%x seq=%d stream=%u dgram=%u passcred=%u pair=%d peerpid=%d data=",
+            (long)ts.tv_sec, ts.tv_nsec / 1000000, getpid(), wake_tid(),
+            getenv("DD_CHROME_TYPE") ? getenv("DD_CHROME_TYPE") : "-",
+            getenv("DD_CHROME_UTILITY_SUBTYPE") ? getenv("DD_CHROME_UTILITY_SUBTYPE") : "-", op, fd, req, ret,
+            fcntl(fd, F_GETFL), seq_is(fd), fd >= 0 && fd < DD_NFD ? g_sock_stream[fd] : 0,
+            fd >= 0 && fd < DD_NFD ? g_sock_dgram[fd] : 0, fd >= 0 && fd < DD_NFD ? g_sock_passcred[fd] : 0,
+            fd >= 0 && fd < DD_NFD ? g_sock_pair_peer[fd] : 0, fd >= 0 && fd < DD_NFD ? g_sock_peer_pid[fd] : 0);
+    if (ret > 0 && buf && len) ipclog_bytes((const uint8_t *)buf, len < (size_t)ret ? len : (size_t)ret);
+    dprintf(STDERR_FILENO, "\n");
+    errno = saved;
+}
+
+static int g_seqlog = -1;
+static int seqlog_role_match(void) {
+    const char *want = getenv("DDSEQ_ROLE");
+    if (!want || !want[0]) return 1;
+    const char *got = getenv("DD_CHROME_TYPE");
+    return got && strcmp(got, want) == 0;
+}
+static int seqlog_on(void) {
+    if (g_seqlog < 0) {
+        int saved = errno;
+        g_seqlog = (getenv("DDSEQLOG") != NULL || getenv("DDSEQ_TRACE_FILE") != NULL ||
+                    access("/tmp/DDSEQLOG", F_OK) == 0)
+                       ? 1
+                       : 0;
+        errno = saved;
+    }
+    return g_seqlog && seqlog_role_match();
+}
+static int seqlog_trace_fd(void) {
+    static int trace_fd = -2;
+    if (trace_fd == -2) {
+        const char *path = getenv("DDSEQ_TRACE_FILE");
+        trace_fd = (path && path[0]) ? open(path, O_CREAT | O_WRONLY | O_APPEND, 0644) : -1;
+    }
+    return trace_fd;
+}
+static void seqlog(const char *op, int fd, long a, long b) {
+    if (!seqlog_on()) return;
+    int out = seqlog_trace_fd();
+    if (out < 0) out = STDERR_FILENO;
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    dprintf(out, "[DDSEQ] t=%ld.%03ld pid=%d role=%s op=%s fd=%d a=%ld b=%ld\n", (long)ts.tv_sec,
+            ts.tv_nsec / 1000000, getpid(), getenv("DD_CHROME_TYPE") ? getenv("DD_CHROME_TYPE") : "-", op, fd, a, b);
+}
+
+static int fdtrace_fd(int fd) {
+    return drm_dbg() && fd >= 32 && fd < 200;
+}
+
+static void fdtrace_log(const char *op, int fd, long a, long b) {
+    if (!fdtrace_fd(fd)) return;
+    int saved = errno;
+    int fl = fcntl(fd, F_GETFD);
+    int ferr = errno;
+    fprintf(stderr, "[DDFD] pid=%d %s fd=%d a=%ld b=%ld getfd=%d errno=%d\n", getpid(), op, fd, a, b, fl,
+            fl < 0 ? ferr : 0);
+    errno = saved;
+}
+
+static int eventfd_peer_owner(int fd) {
+    if (fd < 0) return -1;
+    for (int i = 0; i < DD_NFD; i++)
+        if (g_eventfd_peer[i] == fd + 1) return i;
+    return -1;
+}
+
+static int eventfd_peer_is_engine_fd(int fd) {
+    return eventfd_peer_owner(fd) >= 0;
+}
+
+static void eventfd_peer_vacate(int fd) {
+    int owner = eventfd_peer_owner(fd);
+    if (owner < 0) return;
+    int hi = fcntl(fd, F_DUPFD, 1 << 20);
+    if (hi < 0) hi = fcntl(fd, F_DUPFD, 64);
+    if (hi >= 0 && hi != fd) {
+        g_eventfd_peer[owner] = hi + 1;
+    }
 }
 
 // Guest O_DIRECT differs per arch (aarch64/asm-generic = 0x10000, x86-64 = 0x4000); derive it from the
@@ -60,6 +192,7 @@ static void engine_fd_reloc(int *slot, int newfd) {
 
 static void engine_fd_vacate(int newfd) {
     if (newfd < 0) return;
+    eventfd_peer_vacate(newfd);
     engine_fd_reloc(&g_root_fd, newfd);
     engine_fd_reloc(&g_gtimer_kq, newfd);
     engine_fd_reloc(&g_sigfd_pipe[0], newfd);
@@ -74,6 +207,10 @@ static void engine_fd_vacate_range(unsigned first, unsigned last) {
     int fds[4] = {g_root_fd, g_gtimer_kq, g_sigfd_pipe[0], g_sigfd_pipe[1]};
     for (int i = 0; i < 4; i++)
         if (fds[i] >= 0 && (unsigned)fds[i] >= first && (unsigned)fds[i] <= last) engine_fd_vacate(fds[i]);
+    for (int i = 0; i < DD_NFD; i++) {
+        int p = g_eventfd_peer[i] - 1;
+        if (p >= 0 && (unsigned)p >= first && (unsigned)p <= last) eventfd_peer_vacate(p);
+    }
     for (int i = 0; i < g_nvols; i++)
         if (g_vols[i].fd >= 0 && (unsigned)g_vols[i].fd >= first && (unsigned)g_vols[i].fd <= last)
             engine_fd_vacate(g_vols[i].fd);
@@ -99,7 +236,7 @@ static int svc_io(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t
     }
     // /dev/full: any write fails ENOSPC (reads are served from the /dev/zero backing). Installers and
     // test suites probe this to check out-of-space handling.
-    if ((int)a0 >= 0 && (int)a0 < 1024 && g_devfull[(int)a0]) {
+    if ((int)a0 >= 0 && (int)a0 < DD_NFD && g_devfull[(int)a0]) {
         switch (nr) {
         case 64:
         case 66:
@@ -177,7 +314,7 @@ static int svc_io(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t
     case 63: {
         int rfd = (int)a0;
         // tee(2) pushback: bytes a prior tee() peeked out of this pipe are re-served here first, in order.
-        if (rfd >= 0 && rfd < 1024 && g_fd_pb_len[rfd]) {
+        if (rfd >= 0 && rfd < DD_NFD && g_fd_pb_len[rfd]) {
             G_RET(c) = (uint64_t)pipe_pushback_take(rfd, (void *)a1, (size_t)a2);
             break;
         }
@@ -299,7 +436,7 @@ static int svc_io(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t
             break;
         }
         // timerfd read -> drain timer, return count
-        if (rfd >= 0 && rfd < 1024 && g_timerfd[rfd]) {
+        if (rfd >= 0 && rfd < DD_NFD && g_timerfd[rfd]) {
             struct kevent kv;
             struct timespec zero = {0, 0};
             int nb = fcntl(rfd, F_GETFL) & O_NONBLOCK;
@@ -320,7 +457,8 @@ static int svc_io(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t
             break;
         }
         // eventfd read: return the accumulated counter, reset it, drain the readiness pipe
-        if (rfd >= 0 && rfd < 1024 && g_eventfd_peer[rfd]) {
+        if (rfd >= 0 && rfd < DD_NFD && g_eventfd_peer[rfd]) {
+            int eslot = eventfd_counter_slot(rfd);
             if (a2 < 8) {
                 G_RET(c) = (uint64_t)(-EINVAL);
                 break;
@@ -337,9 +475,19 @@ static int svc_io(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t
             // writer's byte OUTSIDE the lock (or it would deadlock the very writer that unblocks it), then
             // re-take the lock and re-check.
             pthread_mutex_lock(&g_eventfd_lock);
-            while (g_eventfd_count[rfd] == 0) {
+            while (g_eventfd_count[eslot] == 0) {
                 if (fcntl(rfd, F_GETFL) & O_NONBLOCK) {
+                    // If the backing pipe ever gets out of sync (readable while the logical eventfd counter is
+                    // zero), a nonblocking eventfd reader must not leave that stale byte behind: epoll would
+                    // report the fd ready forever while every read returns EAGAIN. Drain under the eventfd lock
+                    // so a concurrent writer cannot lose its fresh wake byte.
+                    int fl = fcntl(rfd, F_GETFL);
+                    if (fl >= 0 && !(fl & O_NONBLOCK)) fcntl(rfd, F_SETFL, fl | O_NONBLOCK);
+                    char stale[64];
+                    while (read(rfd, stale, sizeof stale) > 0) {}
+                    if (fl >= 0 && !(fl & O_NONBLOCK)) fcntl(rfd, F_SETFL, fl);
                     pthread_mutex_unlock(&g_eventfd_lock);
+                    wakelog("efd_read_eagain", rfd, 0, 0);
                     G_RET(c) = (uint64_t)(-EAGAIN);
                     goto eventfd_read_done;
                 }
@@ -351,11 +499,11 @@ static int svc_io(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t
             uint64_t v;
             if (g_eventfd_sema[rfd]) {
                 v = 1;
-                g_eventfd_count[rfd] -= 1;
+                g_eventfd_count[eslot] -= 1;
             } // EFD_SEMAPHORE: one at a time
             else {
-                v = g_eventfd_count[rfd];
-                g_eventfd_count[rfd] = 0;
+                v = g_eventfd_count[eslot];
+                g_eventfd_count[eslot] = 0;
             }
             // re-sync the pipe to "counter > 0": drain it, then re-signal one byte if still positive
             int fl = fcntl(rfd, F_GETFL);
@@ -363,13 +511,13 @@ static int svc_io(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t
             char buf[64];
             while (read(rfd, buf, sizeof buf) > 0) {}
             fcntl(rfd, F_SETFL, fl);
-            if (g_eventfd_count[rfd] > 0) {
+            if (g_eventfd_count[eslot] > 0) {
                 char b = 1;
                 if (write(g_eventfd_peer[rfd] - 1, &b, 1) < 0) {}
             }
             pthread_mutex_unlock(&g_eventfd_lock);
             if (a1) *(uint64_t *)a1 = v;
-            wakelog("efd_read", rfd, (long)v, (long)g_eventfd_count[rfd]);
+            wakelog("efd_read", rfd, (long)v, (long)g_eventfd_count[eslot]);
             G_RET(c) = 8;
         eventfd_read_done:
             break;
@@ -377,7 +525,7 @@ static int svc_io(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t
         // /proc/<pid>/pagemap (vfs.c backs it with an empty seekable fd; g_pagemap_fd marks it): synthesize
         // one 64-bit entry per page with the PRESENT bit (63) set. The guest lseek'd to vaddr/pagesize*8 and
         // reads sequentially; advance the real fd offset so its position tracks what we "read" (LTP mmap12).
-        if (rfd >= 0 && rfd < 1024 && g_pagemap_fd[rfd]) {
+        if (rfd >= 0 && rfd < DD_NFD && g_pagemap_fd[rfd]) {
             size_t want = (size_t)a2 & ~(size_t)7; // whole 8-byte pagemap entries only
             if (want == 0) {
                 G_RET(c) = 0;
@@ -400,6 +548,7 @@ static int svc_io(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t
         // always return EINTR -- and only read when ready, so this never defers a needed handler.)
         ssize_t r;
         ts_wait_enter(); // 'S' while a read may block (pipe/socket/tty; a ready/regular fd returns at once)
+        if (ipclog_fd_match(rfd)) ipclog_io("read_enter", rfd, (long)a2, -999, NULL, 0);
         do {
             r = read(rfd, (void *)a1, (size_t)a2);
         } while (r < 0 && SVC_EINTR_RESTART(c));
@@ -410,13 +559,14 @@ static int svc_io(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t
         // DDWAKELOG: a small read drains a pipe/socketpair-based cross-thread wakeup (MessagePumpLibevent /
         // base::WaitableEvent use a pipe, not an eventfd) -- log it so a lost pipe-wake is visible like an eventfd.
         if (wakelog_on() && a2 <= 64 && rfd >= 0) wakelog("pread", rfd, (long)a2, (long)r);
+        ipclog_io("read", rfd, (long)a2, r < 0 ? -errno : r, (void *)a1, r > 0 ? (size_t)r : 0);
         G_RET(c) = r < 0 ? (uint64_t)(-errno) : (uint64_t)r;
         break;
     }
     case 64: {
         int wfd = (int)a0;
         // memfd F_SEAL_WRITE: a write to a write-sealed memfd fails EPERM (emulated seal state).
-        if (wfd >= 0 && wfd < DD_NFD && (g_memfd_seal[wfd] & 0x8)) {
+        if (wfd >= 0 && wfd < DD_NFD && (memfd_seals_fd(wfd) & 0x8)) {
             G_RET(c) = (uint64_t)(-EPERM);
             break;
         }
@@ -448,6 +598,7 @@ static int svc_io(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t
         }
         // eventfd write: ADD to the counter (not a raw pipe write); regenerate the readable edge.
         if (wfd >= 0 && wfd < DD_NFD && g_eventfd_peer[wfd]) {
+            int eslot = eventfd_counter_slot(wfd);
             if (a2 < 8) {
                 G_RET(c) = (uint64_t)(-EINVAL);
                 break;
@@ -466,7 +617,7 @@ static int svc_io(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t
             // drain (or a peer write) can never strand the pipe readable-with-count-0 / empty-with-count>0
             // (the Chrome pump spin / lost-wakeup root cause -- see the _eventfd-atomicity_ note in vfs.c).
             pthread_mutex_lock(&g_eventfd_lock);
-            g_eventfd_count[wfd] += add;
+            g_eventfd_count[eslot] += add;
             // Linux wakes epoll edge-triggered waiters on EVERY write, not just the 0->positive transition.
             // A waker eventfd that is never drained (mio/tokio's cross-thread wakeup) would otherwise lose
             // its 2nd and later wakeups: the backing pipe already holds a byte, so an EV_CLEAR kqueue filter
@@ -481,7 +632,7 @@ static int svc_io(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t
                 char b = 1;
                 if (write(g_eventfd_peer[wfd] - 1, &b, 1) < 0) {}
             }
-            long cnt = (long)g_eventfd_count[wfd];
+            long cnt = (long)g_eventfd_count[eslot];
             pthread_mutex_unlock(&g_eventfd_lock);
             wakelog("efd_write", wfd, (long)add, cnt);
             G_RET(c) = 8;
@@ -496,14 +647,15 @@ static int svc_io(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t
         // DDWAKELOG: a small write is (very likely) a cross-thread wakeup on a pipe/socketpair (the pump/
         // WaitableEvent kick). Log it so a wake delivered to a peer thread's blocked epoll is traceable.
         if (wakelog_on() && a2 <= 64 && wfd >= 0) wakelog("pwrite", wfd, (long)a2, (long)r);
+        ipclog_io("write", wfd, (long)a2, r < 0 ? -errno : r, (void *)a1, a2);
         G_RET(c) = r < 0 ? (uint64_t)(-errno) : (uint64_t)r;
         break;
     }
     case 65: {
-        if ((int)a0 >= 0 && (int)a0 < 1024 && g_fd_pb_len[(int)a0]) { // tee(2) pushback served first
+        if ((int)a0 >= 0 && (int)a0 < DD_NFD && g_fd_pb_len[(int)a0]) { // tee(2) pushback served first
             const struct iovec *iv = (const struct iovec *)a1;
             size_t tot = 0;
-            for (int i = 0; i < (int)a2 && (int)a0 < 1024 && g_fd_pb_len[(int)a0]; i++) {
+            for (int i = 0; i < (int)a2 && (int)a0 < DD_NFD && g_fd_pb_len[(int)a0]; i++) {
                 size_t k = pipe_pushback_take((int)a0, iv[i].iov_base, iv[i].iov_len);
                 tot += k;
                 if (k < iv[i].iov_len) break;
@@ -531,7 +683,7 @@ static int svc_io(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t
         // readv
     }
     case 66: {
-        if ((int)a0 >= 0 && (int)a0 < 1024 && (g_memfd_seal[(int)a0] & 0x8)) {
+        if ((int)a0 >= 0 && (int)a0 < DD_NFD && (memfd_seals_fd((int)a0) & 0x8)) {
             G_RET(c) = (uint64_t)(-EPERM);
             break;
         } // F_SEAL_WRITE
@@ -550,7 +702,7 @@ static int svc_io(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t
             break;
         }
         // Container DNS: TCP DNS is commonly writev(len-prefix, query) (glibc send_vc). Gather + answer it.
-        if ((int)a0 >= 0 && (int)a0 < 1024 && g_dns_sock[(int)a0]) {
+        if ((int)a0 >= 0 && (int)a0 < DD_NFD && g_dns_sock[(int)a0]) {
             uint8_t tmp[2048];
             size_t tl = dns_gather((const struct iovec *)a1, (int)a2, tmp, sizeof tmp);
             G_RET(c) = (uint64_t)dns_send((int)a0, tmp, tl, g_sock_stream[(int)a0]);
@@ -600,7 +752,7 @@ static int svc_io(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t
     }
     case 68: {
         // pwrite64
-        if ((int)a0 >= 0 && (int)a0 < 1024 && (g_memfd_seal[(int)a0] & 0x8)) {
+        if ((int)a0 >= 0 && (int)a0 < DD_NFD && (memfd_seals_fd((int)a0) & 0x8)) {
             G_RET(c) = (uint64_t)(-EPERM);
             break;
         } // F_SEAL_WRITE
@@ -726,7 +878,7 @@ static int svc_io(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t
         static __thread char sb[65536];
         fd_evict(fout);
         // front of the source stream = existing pushback ++ kernel-buffered bytes
-        size_t oldlen = (fin >= 0 && fin < 1024) ? g_fd_pb_len[fin] : 0;
+        size_t oldlen = (fin >= 0 && fin < DD_NFD) ? g_fd_pb_len[fin] : 0;
         if (oldlen > sizeof sb) oldlen = sizeof sb;
         if (oldlen) memcpy(sb, g_fd_pushback[fin], oldlen);
         size_t pos = oldlen;
@@ -752,6 +904,13 @@ static int svc_io(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t
         // carry path + socket-emulation metadata to the new fd
         if (r >= 0 && r < DD_NFD && (int)a0 >= 0 && (int)a0 < DD_NFD) {
             strcpy(g_fdpath[r], g_fdpath[(int)a0]);
+            strcpy(g_proc_text_desc[r], g_proc_text_desc[(int)a0]);
+            g_pagemap_fd[r] = g_pagemap_fd[(int)a0];
+            if (memfd_ensure_fd((int)a0)) {
+                g_memfd_is[r] = 1;
+                g_memfd_seal[r] = g_memfd_seal[(int)a0];
+                memfd_reg_set_fd(r, g_memfd_seal[r]);
+            }
             fd_carry_sock(r, (int)a0);
         }
         G_RET(c) = r < 0 ? (uint64_t)(-errno) : (uint64_t)r;
@@ -800,10 +959,19 @@ static int svc_io(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t
         int r = dup2((int)a0, (int)a1);
         if (r >= 0) {
             if (d3flags & 0x80000) fcntl(r, F_SETFD, FD_CLOEXEC); // O_CLOEXEC
-            if ((int)a1 >= 0 && (int)a1 < 1024 && (int)a0 >= 0 && (int)a0 < 1024) {
+            if ((int)a1 >= 0 && (int)a1 < DD_NFD && (int)a0 >= 0 && (int)a0 < DD_NFD) {
                 strcpy(g_fdpath[(int)a1], g_fdpath[(int)a0]);
+                strcpy(g_proc_text_desc[(int)a1], g_proc_text_desc[(int)a0]);
+                g_proc_text_ro[(int)a1] = g_proc_text_ro[(int)a0];
+                g_pagemap_fd[(int)a1] = g_pagemap_fd[(int)a0];
+                if (memfd_ensure_fd((int)a0)) {
+                    g_memfd_is[(int)a1] = 1;
+                    g_memfd_seal[(int)a1] = g_memfd_seal[(int)a0];
+                    memfd_reg_set_fd((int)a1, g_memfd_seal[(int)a1]);
+                }
                 fd_carry_sock((int)a1, (int)a0);
             }
+            fdtrace_log("dup3", r, oldfd, newfd);
         }
         G_RET(c) = r < 0 ? (uint64_t)(-errno) : (uint64_t)r;
         break;
@@ -832,10 +1000,31 @@ static int svc_io(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t
             }
             // access mode identical
             int lf = r & 0x3;
+            if ((int)a0 >= 0 && (int)a0 < DD_NFD && g_proc_text_ro[(int)a0]) lf = 0;
+            char fgetpath_buf[4096] = {0};
+            int have_fgetpath = 0;
+#ifdef F_GETPATH
+            if ((lf & 0x3) && fcntl((int)a0, F_GETPATH, fgetpath_buf) == 0) {
+                have_fgetpath = 1;
+                if (proc_text_host_path(fgetpath_buf)) lf &= ~0x3;
+            }
+#endif
             if (r & 0x8) lf |= 0x400;
             if (r & 0x4) lf |= 0x800;
             // APPEND/NONBLOCK/ASYNC
             if (r & 0x40) lf |= 0x2000;
+            int proc_text_for_log = ((int)a0 >= 0 && (int)a0 < DD_NFD && g_proc_text_ro[(int)a0]) ||
+                                    (have_fgetpath && proc_text_host_path(fgetpath_buf));
+            if (getenv("DD_FATALSIG_LOG") && proc_text_for_log) {
+                char p[4096] = {0};
+                if (have_fgetpath) {
+                    snprintf(p, sizeof p, "%s", fgetpath_buf);
+                } else {
+                    (void)fcntl((int)a0, F_GETPATH, p);
+                }
+                fprintf(stderr, "[DDFCNTL] pid=%d cpid=%d fd=%d mflags=0x%x lflags=0x%x path=%s\n",
+                        getpid(), container_pid(), (int)a0, r, lf, p);
+            }
             G_RET(c) = (uint64_t)(unsigned)lf;
             break;
         }
@@ -939,12 +1128,12 @@ static int svc_io(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t
             if (pg <= 0) pg = 4096;
             int rounded = (int)(((want + pg - 1) / pg) * pg);
             if (rounded < (int)pg) rounded = (int)pg;
-            if ((int)a0 >= 0 && (int)a0 < 1024) g_pipesz[(int)a0] = rounded;
+            if ((int)a0 >= 0 && (int)a0 < DD_NFD) g_pipesz[(int)a0] = rounded;
             G_RET(c) = (uint64_t)(unsigned)rounded;
             break;
         }
         if (lcmd == 1032) {
-            int sz = ((int)a0 >= 0 && (int)a0 < 1024 && g_pipesz[(int)a0]) ? g_pipesz[(int)a0] : 65536;
+            int sz = ((int)a0 >= 0 && (int)a0 < DD_NFD && g_pipesz[(int)a0]) ? g_pipesz[(int)a0] : 65536;
             G_RET(c) = (uint64_t)(unsigned)sz;
             break;
         }
@@ -961,6 +1150,7 @@ static int svc_io(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t
         // return EINVAL, as on Linux.
         else if (lcmd == 1033) { // F_ADD_SEALS(fd, seals)
             int fd = (int)a0;
+            memfd_ensure_fd(fd);
             if (wakelog_on()) wakelog("F_ADD_SEALS", fd, (long)a2, (long)((fd >= 0 && fd < DD_NFD) ? g_memfd_is[fd] : -1));
             if (fd < 0 || fd >= DD_NFD || !g_memfd_is[fd]) {
                 G_RET(c) = (uint64_t)(-EINVAL);
@@ -971,10 +1161,12 @@ static int svc_io(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t
                 break;
             } // already F_SEAL_SEAL'd
             g_memfd_seal[fd] |= (int)a2 & 0x1f; // SEAL|SHRINK|GROW|WRITE|FUTURE_WRITE
+            memfd_reg_set_fd(fd, g_memfd_seal[fd]);
             G_RET(c) = 0;
             break;
         } else if (lcmd == 1034) { // F_GET_SEALS(fd)
             int fd = (int)a0;
+            memfd_ensure_fd(fd);
             if (wakelog_on()) wakelog("F_GET_SEALS", fd, (long)((fd >= 0 && fd < DD_NFD) ? g_memfd_is[fd] : -1), (long)((fd >= 0 && fd < DD_NFD) ? g_memfd_seal[fd] : -1));
             if (fd < 0 || fd >= DD_NFD || !g_memfd_is[fd]) {
                 G_RET(c) = (uint64_t)(-EINVAL);
@@ -1018,7 +1210,11 @@ static int svc_io(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t
         if (r >= 0 && (lcmd == 0 || lcmd == 1030) && r < DD_NFD && (int)a0 >= 0 && (int)a0 < DD_NFD) {
             // F_DUPFD(_CLOEXEC)
             strcpy(g_fdpath[r], g_fdpath[(int)a0]);
+            strcpy(g_proc_text_desc[r], g_proc_text_desc[(int)a0]);
+            g_proc_text_ro[r] = g_proc_text_ro[(int)a0];
+            g_pagemap_fd[r] = g_pagemap_fd[(int)a0];
             fd_carry_sock(r, (int)a0);
+            fdtrace_log(lcmd == 1030 ? "fcntl_dupfd_cloexec" : "fcntl_dupfd", r, (long)a0, (long)a2);
         }
         G_RET(c) = r < 0 ? (uint64_t)(-errno) : (uint64_t)r;
     fcntl_done:
@@ -1083,15 +1279,17 @@ static int svc_io(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t
         }
         ((int *)a0)[0] = fds[0];
         ((int *)a0)[1] = fds[1];
+        fdtrace_log("pipe2", fds[0], fds[1], (long)fl);
+        fdtrace_log("pipe2", fds[1], fds[0], (long)fl);
         // An O_DIRECT pipe is backed by a DGRAM socketpair (above). Like a real pipe it must report EOF
         // when the write end closes, but macOS DGRAM sockets don't -- mark both ends so close() sends a
         // zero-length EOF datagram and read() coerces the peer-closed ECONNRESET to 0. (See netns.c.)
         if ((fl & G_O_DIRECT)) {
-            if (fds[0] >= 0 && fds[0] < 1024) {
+            if (fds[0] >= 0 && fds[0] < DD_NFD) {
                 g_sock_seqpacket[fds[0]] = 1;
                 g_sock_pair_peer[fds[0]] = fds[1] + 1; // partner end (see seq_send_eof)
             }
-            if (fds[1] >= 0 && fds[1] < 1024) {
+            if (fds[1] >= 0 && fds[1] < DD_NFD) {
                 g_sock_seqpacket[fds[1]] = 1;
                 g_sock_pair_peer[fds[1]] = fds[0] + 1;
             }
@@ -1160,6 +1358,10 @@ static int svc_io(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t
         break;
     }
     case 70: {
+        if ((int)a0 >= 0 && (int)a0 < DD_NFD && (memfd_seals_fd((int)a0) & 0x8)) {
+            G_RET(c) = (uint64_t)(-EPERM);
+            break;
+        } // F_SEAL_WRITE
         if (memf_get((int)a0)) {
             // memf path dereferences the iovec array a1 directly (the host pwritev path validates its own) ->
             // guard it before the loop so a bad array pointer returns -EFAULT instead of faulting the engine.

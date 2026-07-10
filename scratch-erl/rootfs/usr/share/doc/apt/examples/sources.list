@@ -1,0 +1,10 @@
+# See sources.list(5) manpage for more information
+# Remember that CD-ROMs, DVDs and such are managed through the apt-cdrom tool.
+deb http://deb.debian.org/debian bookworm main contrib non-free non-free-firmware
+deb http://deb.debian.org/debian bookworm-updates main contrib non-free non-free-firmware
+deb http://deb.debian.org/debian-security bookworm-security main contrib non-free non-free-firmware
+
+# Uncomment if you want the apt-get source function to work
+#deb-src http://deb.debian.org/debian bookworm main contrib non-free
+#deb-src http://deb.debian.org/debian bookworm-updates main contrib non-free
+#deb-src http://deb.debian.org/debian-security bookworm-security main contrib non-free

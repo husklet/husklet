@@ -1,0 +1,99 @@
+<!DOCTYPE html PUBLIC "-//W3C//DTD HTML 4.01 Transitional//EN" "http://www.w3.org/TR/html4/loose.dtd">
+<html>
+<!-- Created by GNU Texinfo 6.8, https://www.gnu.org/software/texinfo/ -->
+<head>
+<meta http-equiv="Content-Type" content="text/html; charset=utf-8">
+<!-- 
+This manual is for libffi, a portable foreign function interface
+library.
+
+Copyright (C) 2008-2019, 2021, 2022 Anthony Green and Red Hat, Inc.
+
+Permission is hereby granted, free of charge, to any person obtaining
+a copy of this software and associated documentation files (the
+"Software"), to deal in the Software without restriction, including
+without limitation the rights to use, copy, modify, merge, publish,
+distribute, sublicense, and/or sell copies of the Software, and to
+permit persons to whom the Software is furnished to do so, subject to
+the following conditions:
+
+The above copyright notice and this permission notice shall be
+included in all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
+EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.
+IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY
+CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT,
+TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
+SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+ -->
+<title>Thread Safety (libffi: the portable foreign function interface library)</title>
+
+<meta name="description" content="Thread Safety (libffi: the portable foreign function interface library)">
+<meta name="keywords" content="Thread Safety (libffi: the portable foreign function interface library)">
+<meta name="resource-type" content="document">
+<meta name="distribution" content="global">
+<meta name="Generator" content="makeinfo">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+
+<link href="index.html" rel="start" title="Top">
+<link href="Index.html" rel="index" title="Index">
+<link href="Using-libffi.html" rel="up" title="Using libffi">
+<link href="Closure-Example.html" rel="prev" title="Closure Example">
+<style type="text/css">
+<!--
+a.copiable-anchor {visibility: hidden; text-decoration: none; line-height: 0em}
+a.summary-letter {text-decoration: none}
+blockquote.indentedblock {margin-right: 0em}
+div.display {margin-left: 3.2em}
+div.example {margin-left: 3.2em}
+kbd {font-style: oblique}
+pre.display {font-family: inherit}
+pre.format {font-family: inherit}
+pre.menu-comment {font-family: serif}
+pre.menu-preformatted {font-family: serif}
+span.nolinebreak {white-space: nowrap}
+span.roman {font-family: initial; font-weight: normal}
+span.sansserif {font-family: sans-serif; font-weight: normal}
+span:hover a.copiable-anchor {visibility: visible}
+ul.no-bullet {list-style: none}
+-->
+</style>
+
+
+</head>
+
+<body lang="en">
+<div class="section" id="Thread-Safety">
+<div class="header">
+<p>
+Previous: <a href="Closure-Example.html" accesskey="p" rel="prev">Closure Example</a>, Up: <a href="Using-libffi.html" accesskey="u" rel="up">Using libffi</a> &nbsp; [<a href="Index.html" title="Index" rel="index">Index</a>]</p>
+</div>
+<hr>
+<span id="Thread-Safety-1"></span><h3 class="section">2.7 Thread Safety</h3>
+
+<p><code>libffi</code> is not completely thread-safe.  However, many parts are,
+and if you follow some simple rules, you can use it safely in a
+multi-threaded program.
+</p>
+<ul>
+<li> <code>ffi_prep_cif</code> may modify the <code>ffi_type</code> objects passed to
+it.  It is best to ensure that only a single thread prepares a given
+<code>ffi_cif</code> at a time.
+
+</li><li> On some platforms, <code>ffi_prep_cif</code> may modify the size and
+alignment of some types, depending on the chosen ABI.  On these
+platforms, if you switch between ABIs, you must ensure that there is
+only one call to <code>ffi_prep_cif</code> at a time.
+
+<p>Currently the only affected platform is PowerPC and the only affected
+type is <code>long double</code>.
+</p></li></ul>
+
+</div>
+
+
+
+</body>
+</html>

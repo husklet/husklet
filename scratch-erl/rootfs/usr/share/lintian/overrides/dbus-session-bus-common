@@ -1,0 +1,4 @@
+# yes we do want to ship these
+package-contains-empty-directory [usr/share/dbus-1/services/]
+# we're careful to say D-Bus for the protocol and dbus for the implementation
+capitalization-error-in-description dbus D-Bus

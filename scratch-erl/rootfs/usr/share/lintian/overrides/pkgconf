@@ -1,0 +1,6 @@
+# some versions of lintian erroneously trip on this
+pkgconf: non-etc-file-marked-as-conffile remove-on-upgrade /etc/dpkg/dpkg.cfg.d/pkgconf-hook-config
+
+# manpages should probably eventually move elsewhere...
+pkgconf: no-manual-page
+pkgconf: spare-manual-page

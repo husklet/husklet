@@ -1,0 +1,16 @@
+/.
+/usr
+/usr/include
+/usr/include/libmount
+/usr/include/libmount/libmount.h
+/usr/lib
+/usr/lib/aarch64-linux-gnu
+/usr/lib/aarch64-linux-gnu/pkgconfig
+/usr/lib/aarch64-linux-gnu/pkgconfig/mount.pc
+/usr/share
+/usr/share/doc
+/usr/share/doc/libmount-dev
+/usr/share/doc/libmount-dev/changelog.Debian.gz
+/usr/share/doc/libmount-dev/changelog.gz
+/usr/share/doc/libmount-dev/copyright
+/usr/lib/aarch64-linux-gnu/libmount.so

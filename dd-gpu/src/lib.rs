@@ -81,6 +81,8 @@ pub enum GpuError {
     OutOfBounds,
     /// Malformed or unsupported PTX while compiling a kernel to dd-GPU kernel IR.
     Ptx(String),
+    /// Higher-level decode context wrapped around a low-level wire error.
+    Decode(String),
 }
 
 impl std::fmt::Display for GpuError {
@@ -95,6 +97,7 @@ impl std::fmt::Display for GpuError {
             GpuError::Unsupported(op) => write!(f, "backend does not support {op}"),
             GpuError::OutOfBounds => write!(f, "access out of bounds"),
             GpuError::Ptx(m) => write!(f, "ptx: {m}"),
+            GpuError::Decode(m) => write!(f, "decode: {m}"),
         }
     }
 }
@@ -197,10 +200,12 @@ mod tests {
     #[test]
     fn decode_rejects_truncation_and_bad_tags() {
         let bytes = encode_stream(&sample_stream());
-        // truncate mid-stream → ShortBuffer, never a panic
-        assert_eq!(decode_stream(&bytes[..bytes.len() - 3]), Err(GpuError::ShortBuffer));
+        // truncate mid-stream -> contextual ShortBuffer, never a panic
+        let err = decode_stream(&bytes[..bytes.len() - 3]).unwrap_err();
+        assert!(matches!(&err, GpuError::Decode(m) if m.contains("command") && m.contains("short buffer")));
         // a bogus leading tag byte
-        assert_eq!(decode_stream(&[250, 0, 0, 0, 0]), Err(GpuError::BadTag(250)));
+        let err = decode_stream(&[250, 0, 0, 0, 0]).unwrap_err();
+        assert!(matches!(&err, GpuError::Decode(m) if m.contains("command 0") && m.contains("bad command/encoder tag 250")));
     }
 
     #[test]

@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<mime-type xmlns="http://www.freedesktop.org/standards/shared-mime-info" type="application/x-vmdk-disk">
+  <!--Created automatically by update-mime-database. DO NOT EDIT!-->
+  <comment>VMDK disk image</comment>
+  <acronym>VMDK</acronym>
+  <expanded-acronym>Virtual Machine Disk</expanded-acronym>
+  <glob pattern="*.vmdk"/>
+  <alias type="application/x-virtualbox-vmdk"/>
+</mime-type>

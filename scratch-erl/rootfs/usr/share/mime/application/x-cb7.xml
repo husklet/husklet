@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<mime-type xmlns="http://www.freedesktop.org/standards/shared-mime-info" type="application/x-cb7">
+  <!--Created automatically by update-mime-database. DO NOT EDIT!-->
+  <comment>comic book archive (7z container)</comment>
+  <sub-class-of type="application/x-7z-compressed"/>
+  <generic-icon name="x-office-document"/>
+  <glob pattern="*.cb7"/>
+</mime-type>

@@ -1,0 +1,12 @@
+/.
+/usr
+/usr/bin
+/usr/bin/xdg-dbus-proxy
+/usr/share
+/usr/share/doc
+/usr/share/doc/xdg-dbus-proxy
+/usr/share/doc/xdg-dbus-proxy/changelog.Debian.gz
+/usr/share/doc/xdg-dbus-proxy/copyright
+/usr/share/man
+/usr/share/man/man1
+/usr/share/man/man1/xdg-dbus-proxy.1.gz

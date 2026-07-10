@@ -1,0 +1,1904 @@
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.1//EN"
+   "http://www.w3.org/TR/xhtml11/DTD/xhtml11.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>Apache Subversion 1.14 LTS Release Notes</title>
+<meta http-equiv="Content-Type" content="text/html;charset=utf-8" />
+<base href="https://subversion.apache.org"/>
+<style type="text/css">
+  @import url("/style/site.css");
+</style>
+</head>
+
+<body>
+<div id="site-banner">
+<div style="float: right; width: 379px; height: 80px; font-style: italic; 
+            text-align: center;">
+  <a href="https://www.apache.org/"
+  ><img src="/images/apache-logo.png"
+        alt="Apache Software Foundation" /></a>
+</div>
+<a href="/">
+  <img src="/images/svn-square.jpg"
+       alt="[S]"
+       style="width: 80px; height: 80px;"/>
+  <img src="/images/svn-name-banner.jpg"
+       alt="Subversion"
+       style="width: 320px; height: 80px;"/></a>
+</div> <!-- #site-banner -->
+
+<div id="site-nav">
+<div id="site-nav-menu">
+<ul>
+  <li>About Subversion
+    <ul>
+      <li><a href="/news.html">News</a></li>
+      <li><a href="/features.html">Features</a></li>
+      <li><a href="/docs/">Documentation</a></li>
+      <li><a href="/faq.html">FAQ</a></li>
+      <li><a href="/roadmap.html">Roadmap</a></li>
+      <li><a href="/security/">Security</a></li>
+      <li><a href="/quick-start">Quick Start</a></li>
+    </ul>
+  </li>
+  <li>Getting Subversion
+      <ul>
+      <!-- A parameter in the form '?update=YYYYMMDDhhmm' may
+           be appended to 'download.cgi' to only offer mirrors that have
+           synced after the specified date. We update it after a security
+           release when the email announcement is less than 24 hours after
+           the upload to /dist/release, in order to prevent offering mirrors
+           that don't carry the just-released artifacts. -->
+      <li><a href="/packages.html">Binary Packages</a></li>
+      <li><a href="/download.cgi">Source Download</a></li>
+      <li><a href="/docs/release-notes/">Release Notes</a></li>
+    </ul>
+  </li>
+  <li>Community
+    <ul>
+      <li><a href="/mailing-lists.html">Mailing Lists</a></li>
+      <li><a href="/reporting-issues.html">Reporting Issues</a></li>
+      <li><a href="https://cwiki.apache.org/confluence/display/SVN/">Wiki</a></li>
+      <li><a href="/contributing.html">Getting Involved</a></li>
+      <li><a href="/source-code.html">Source Code</a></li>
+    </ul>
+  </li>
+  <li>About the <acronym title="Apache Software Foundation">ASF</acronym>
+    <ul>
+      <li><a class="linkaway"
+             href="https://www.apache.org/licenses/">Licenses</a></li>
+      <li><a class="linkaway"
+             href="https://www.apache.org/foundation/sponsorship.html">Donate</a></li>
+      <li><a class="linkaway"
+             href="https://www.apache.org/foundation/thanks.html">Thanks</a></li>
+    </ul>
+  </li>
+</ul>
+</div> <!-- #site-nav-menu -->
+
+<div id="site-search">
+  <form action="https://www.google.com/search" method="get"
+        style="margin-top: 10px; margin-bottom: 10px; display: inline;">
+  <div style="display: inline;">
+    <input value="subversion.apache.org" name="sitesearch" type="hidden" />
+    <input name="q" id="query" type="text" placeholder="Search..."
+           style="width: 10em"
+           />
+    <input name="Search" value="Go" type="submit"/>
+  </div>
+  </form>
+</div> <!-- #site-search -->
+
+<div id="site-svnbook-block">
+<p>Read the official Subversion
+   documentation <a href="http://svnbook.org" class="linkaway">online</a>!</p>
+<p><a href="http://svnbook.org/"
+      ><img src="/images/svnbook-cover.jpg"
+            alt="Version Control With Subversion"/></a></p>
+</div> <!-- #site-svnbook-block -->
+
+<div id="copyright">
+<p>Copyright &#169; 2018 <a href="https://www.apache.org/">The Apache
+   Software Foundation</a>, Licensed under
+   the <a href="https://www.apache.org/licenses/LICENSE-2.0" >Apache
+   License, Version 2.0</a>.  Apache, Apache Subversion, and
+   the Apache feather logo are trademarks of The Apache Software
+   Foundation.  Subversion and the Apache Subversion logo are
+   registered trademarks of The Apache Software Foundation.</p>
+</div> <!-- #copyright -->
+
+</div> <!-- #site-nav -->
+
+<div id="site-content">
+<div id="site-notice">
+
+<!-- PUT SITE-WIDE NOTICES HERE AS NECESSARY -->
+
+</div> <!-- #site-notice -->
+
+<!-- **************** BEGIN CONTENT ***************** -->
+
+<!-- ************************************************ -->
+<!-- Sections start with "###" are either templates   -->
+<!-- or TODOs.  Remove them before release.           -->
+<!-- ************************************************ -->
+
+<h1 style="text-align: center">Apache Subversion 1.14 LTS Release Notes</h1>
+
+<!-- ### -->
+
+<div class="h2" id="news">
+<h2>What's New in Apache Subversion 1.14
+  <a class="sectionlink" href="#news"
+    title="Link to this section">&para;</a>
+</h2>
+
+<ul>
+  <!-- The main changes...
+  <li><a href="#"
+      >###</a></li>
+  -->
+  <li><a href="#python3"
+      >Support for Python 3.x</a></li>
+  <li><a href="#python2"
+      >Support for Python 2.7 is being phased out</a></li>
+  <li><a href="#py3c"
+      >New Build-Time Dependency: py3c</a></li>
+  <li><a href="#enhancements"
+      >Many enhancements and bug fixes</a></li>
+  <li><a href="#issues"
+      >Known issues in the release</a></li>
+  <!--
+  <li><a href="#troubleshooting"
+      >Troubleshooting issues specific to this release</a></li>
+  -->
+</ul>
+
+<p>Apache Subversion 1.14 is a superset of all previous Subversion
+releases, and is as of the time of its release considered the current
+"best" release.  Any feature or bugfix in 1.0.x through 1.13.x is also
+in 1.14, but 1.14 contains features and bugfixes not present in any
+earlier release.</p>
+
+<p>Because 1.14 is the next LTS release following 1.10, these release
+notes describe major changes since 1.10, including changes released in
+1.11.x through 1.13.x.</p>
+
+<p>This page describes only major changes.  For a complete list of
+changes, see the 1.14 section of the <a
+href="https://svn.apache.org/repos/asf/subversion/trunk/CHANGES" >CHANGES</a>
+file.</p>
+
+</div>  <!-- news -->
+
+<div class="h2" id="compatibility">
+<h2>Compatibility Concerns
+  <a class="sectionlink" href="#compatibility"
+    title="Link to this section">&para;</a>
+</h2>
+
+<p>Older clients and servers interoperate transparently with 1.14
+servers and clients.  However, some of the new 1.14 features may not be
+available unless both client and server are the latest version.  There are
+also cases where a new feature will work but will run less efficiently if
+the client is new and the server old.</p>
+
+<p>There is <strong>no need</strong> to <a href="http://svnbook.red-bean.com/en/1.8/svn.reposadmin.maint.html#svn.reposadmin.maint.migrate.svnadmin"
+>dump and reload</a> your repositories.
+Subversion 1.14 servers can read and write to repositories created by
+earlier versions.  To upgrade an existing server installation, just install the
+newest libraries and binaries on top of the older ones.</p>
+
+<p>Subversion 1.14 maintains API/ABI compatibility with earlier
+releases, by only adding new functions, never removing old ones.  A
+program written to any previous 1.x API can both compile
+and run using 1.14 libraries.  However, a program written for 1.14
+cannot necessarily compile or run against older libraries.</p>
+
+<p>There may be limited cases where the behavior of old APIs has been
+slightly modified from previous releases.  These are cases where edge cases
+of the functionality has been deemed buggy, and therefore improved or removed.
+Please consult the
+<a href="https://svn.apache.org/repos/asf/subversion/trunk/notes/api-errata/1.14/"
+>API errata</a> for more detailed information on what these APIs are
+and what impact these changes may have.</p>
+
+<div class="h3" id="new-feature-compatibility-table">
+<h3>New Feature Compatibility Table
+  <a class="sectionlink" href="#new-feature-compatibility-table"
+    title="Link to this section">&para;</a>
+</h3>
+<table border="1">
+  <tr>
+    <th>New Feature</th>
+    <th>Minimum Client<sup>1</sup></th>
+    <th>Minimum Server</th>
+    <th>Minimum Repository</th>
+    <th>Notes</th></tr>
+  <tr>
+    <td><a href="#svnadmin-rev-size"><tt>svnadmin rev-size</tt></a></td>
+    <td>n/a</td>
+    <td>1.13</td>
+    <td>any FSFS repo</td>
+    <td></td></tr>
+  <tr>
+    <td><a href="#svnadmin-build-repcache"><tt>svnadmin build-repcache</tt></a></td>
+    <td>n/a</td>
+    <td>1.14</td>
+    <td>FSFS format 4</td>
+    <td>see <tt>Filesystem Format</tt> in the output of <tt>svnadmin info /path/to/repo</tt></td></tr>
+  <tr>
+    <td>
+      <a href="#shelving">Shelving (experimental)</a>
+    </td>
+    <td>1.12</td>
+    <td>any</td>
+    <td>any</td>
+    <td>shelves created by 1.10 are not compatible&mdash;see
+        <a href="#shelving-transition">Upgrading 1.10&ndash;1.13 shelves to 1.14</a></td></tr>
+  <tr>
+    <td>
+      <a href="#shelving-checkpointing">Commit checkpointing (experimental)</a>
+    </td>
+    <td>1.12</td>
+    <td>any</td>
+    <td>any</td>
+    <td></td></tr>
+  <tr>
+    <td>
+      <a href="#viewspec-output">Viewspec output command (experimental)</a>
+    </td>
+    <td>1.11</td>
+    <td>any</td>
+    <td>any</td>
+    <td></td></tr>
+  <tr>
+    <td colspan="5"><sup>1</sup>Reminder: when using the <tt>file://</tt>
+    repository access method, the Subversion program is both the client
+    <em>and</em> the server.</td></tr>
+</table>
+
+</div>  <!-- new-feature-compatibility-table -->
+
+<div class="h3" id="wc-upgrade">
+<h3>Upgrading the Working Copy
+  <a class="sectionlink" href="#wc-upgrade"
+    title="Link to this section">&para;</a>
+</h3>
+
+<p>Subversion 1.14 uses the same working copy format as Subversion 1.8 through 1.13.</p>
+
+<p>Before using Subversion 1.14 with an existing Subversion 1.7 or older
+working copy, users will be required to run the <tt>svn upgrade</tt> command
+to upgrade working copy metadata to the new format. This command may take a
+while in some cases, and for some users, it may be more practical to simply
+checkout a new working copy.</p>
+
+<p><strong>Note:</strong> Subversion 1.14 cannot upgrade working copies that
+a 1.6 client would have refused to operate upon before an <tt>svn cleanup</tt>
+was run (with a 1.6 client).  In other words, before upgrading to 1.8 or newer,
+a 1.6
+or older client must be used to run <tt>svn cleanup</tt> on all 1.6 or older
+working copies that require cleanup.  Likewise, Subversion 1.14 cannot upgrade
+corrupt working copies. Unfixable problems can arise from missing or corrupt
+meta-data inside <tt>.svn</tt> directories.  Such damage to the working copy
+is permanent, and cannot be fixed even if <tt>svn cleanup</tt> is run prior
+to the upgrade.</p>
+
+<p>If your working copy does not upgrade cleanly, please check out a new one.
+</p>
+
+</div>  <!-- wc-upgrade -->
+
+<div class="h3 experimental-feature" id="compatibility-shelving">
+<h3>Changes to Experimental Shelving Feature
+  <a class="sectionlink" href="#compatibility-shelving"
+    title="Link to this section">&para;</a>
+</h3>
+
+<p>Since 1.10, Subversion provides an experimental "Shelving" feature aimed
+at addressing <a href="https://issues.apache.org/jira/browse/SVN-3625">issue
+#3625</a>. There is no promise of backward compatibility for features
+designated "experimental."</p>
+
+<p>Shelving in 1.14 has changed significantly since 1.10 and is incompatible
+with shelves created by 1.10. See <a href="#shelving">Shelving and
+Checkpointing (experimental)</a> for the major changes and differences in
+commands. See its subsection, <a href="#shelving-transition">Upgrading
+1.10&ndash;1.13 shelves to 1.14</a> to learn how to recover 1.10 shelves in
+an existing working copy.</p>
+
+</div>  <!-- compatibility-shelving -->
+
+<div class="h3" id="compat-misc">
+<h3>Miscellaneous Compatibility Notes
+  <a class="sectionlink" href="#compat-misc"
+    title="Link to this section">&para;</a>
+</h3>
+
+<p>There are some additional specific areas where changes made in this
+release might necessitate further adjustment by administrators or
+users.  We'll cover those in this section.</p>
+
+<div class="h4" id="compat-misc-authz">
+<h4>Path-based authorization compatibility
+  <a class="sectionlink" href="#compat-misc-authz"
+    title="Link to this section">&para;</a>
+</h4>
+
+<p>A fix for <a href="https://issues.apache.org/jira/browse/SVN-4762?issueNumber=4762"
+>Issue #4762</a> may change the way path-based authorization rules are applied
+in some circumstances. See <a href="http://svn.apache.org/r1882326">r1882326</a>.</p>
+
+<p>Background: Subversion 1.10 introduced a new implementation of path-based
+authorization (authz) to deliver wildcard support and improved performance
+over that of Subversion 1.9 and earlier. From Subversion 1.10 through 1.14.0,
+the new implementation did not correctly combine global rules with repository
+rules: if a global rule and a per-repository rule were both present for a
+path, the global rule would be ignored and the per-repository rule would
+apply by itself. As a result, from Subversion 1.10 through 1.14.0, it was not
+possible to override per-path access rules for specific users (or groups) at
+the global level. Administrators whose authz rules rely on this incorrect
+behavior may need to adjust their rules accordingly.
+</p>
+
+<p>This issue is fixed in 1.14.1, making it possible once again to
+override per-path access rules for specific users (and groups) at the global level.
+Such global rules are overridden by repository-specific rules only if both the
+user and the path match the repository-specific rule.</p>
+
+<p>As an example, consider the following rule set:</p>
+
+<pre>
+[groups]
+company = developer1, developer2, developer3
+customer = customer1, customer2
+
+# company can read-write on everything
+[/]
+@company = rw
+
+[project1:/]
+@customer = r
+</pre>
+
+<p>
+Does <tt>developer1</tt> have <tt>rw</tt> access to <tt>"/trunk"</tt> in <tt>project1</tt>?
+</p>
+
+<p>
+Subversion servers running 1.10.0 up to 1.10.6 or 1.14.0, without the fix for
+<a href="https://issues.apache.org/jira/browse/SVN-4762?issueNumber=4762"
+>issue #4762</a>, will only apply the repository-specific part of the rule set:</p>
+<pre>
+[project1:/]
+@customer = r
+</pre>
+<p>
+The answer in this case is that <tt>developer1</tt> has no access at all because the
+global rule which grants <tt>rw</tt> access to the <tt>@company</tt> group is ignored.
+</p>
+
+<p>
+Subversion servers running 1.14.1 or later match the behaviour of
+Subversion 1.9, meaning they will apply both the global and the repository-specific
+part of the rule set:</p>
+<pre>
+# company can read-write on everything
+[/]
+@company = rw
+
+[project1:/]
+@customer = r
+</pre>
+<p>
+The answer in this case is that <tt>developer1</tt> has <tt>rw</tt> access
+to any path in <tt>project1</tt>.
+Global rules are overridden by repository-specific rules only if both the
+user (<tt>developer1</tt>) and the path (<tt>"/"</tt>, including child paths
+for which no specific rules exist) match the repository-specific rule.
+While the repository-specific rule matches <tt>"/trunk"</tt> it does not
+match <tt>developer1</tt>, and hence the global rule will be used.
+</p>
+
+</div>  <!-- compat-misc-authz -->
+
+</div>  <!-- compat-misc -->
+
+</div>  <!-- compatibility -->
+
+<div class="h2" id="new-features">
+<h2>New Features
+  <a class="sectionlink" href="#new-features"
+    title="Link to this section">&para;</a>
+</h2>
+
+<div class="h3" id="svnadmin-rev-size">
+<h3>New <tt>svnadmin rev-size</tt> command
+  <a class="sectionlink" href="#svnadmin-rev-size"
+     title="Link to this section">&para;</a>
+</h3>
+
+<p>This change was first introduced in 1.13.</p>
+
+<p>Add an <tt>svnadmin rev-size</tt> command to report the total size in
+bytes of the representation on disk of a revision, including rev-props,
+but excluding FSFS indexes. For example:</p>
+
+<pre>
+    $ svnadmin rev-size /path/to/repo -r1
+            1337 bytes in revision 1
+</pre>
+
+<p>(See <a href="http://svn.apache.org/r1857624">r1857624</a>.)</p>
+</div> <!-- svnadmin-rev-size -->
+
+<div class="h3" id="svnadmin-build-repcache">
+<h3>New <tt>svnadmin build-repcache</tt> command
+  <a class="sectionlink" href="#svnadmin-build-repcache"
+     title="Link to this section">&para;</a>
+</h3>
+
+<p>Representation Sharing (also called rep-sharing) is a data storage
+de-duplication feature first introduced in Subversion 1.6. It reduces the disk
+size of a repository by storing duplicate data only once. (See <a
+href="https://issues.apache.org/jira/browse/SVN-2286">issue #2286</a>.)</p>
+
+<p>This optional feature is enabled by default. It relies on a rep-cache
+database, which Subversion automatically maintains with the repository, to
+identify duplicate pieces of data.</p>
+
+<p>Over time, some administrators have disabled and/or re-enabled rep-sharing,
+which has the effect of excluding from the rep-cache any revisions that were
+committed while the feature was disabled.</p>
+
+<p>Subversion 1.14 introduces a new <tt>svnadmin build-repcache</tt>
+subcommand, which administrators can use to populate any missing entries in
+the rep-cache database for a specified revision range (or all revisions). (See
+<a href="http://svn.apache.org/r1875921">r1875921</a>.)</p>
+
+<p>For example, to process revisions 20 through 25, inclusive, and ensure that
+their data is known to the rep-cache:</p>
+
+<pre>
+    $ svnadmin build-repcache /path/to/repo -r20:25
+    * Processed revision 20.
+    * Processed revision 21.
+    * Processed revision 22.
+    * Processed revision 23.
+    * Processed revision 24.
+    * Processed revision 25.
+</pre>
+
+<p>If only one revision argument is given, <tt>svnadmin build-repcache</tt>
+will process that revision only:</p>
+
+<pre>
+    $ svnadmin build-repcache /path/to/repo -r20
+    * Processed revision 20.
+</pre>
+
+<p>If no revision argument is given, <tt>svnadmin build-repcache</tt> will
+process all revisions.</p>
+
+</div> <!-- svnadmin-build-repcache -->
+
+</div>  <!-- new-features -->
+
+<div class="h2" id="enhancements">
+<h2>Enhancements and Bugfixes
+  <a class="sectionlink" href="#enhancements"
+    title="Link to this section">&para;</a>
+</h2>
+
+<!-- Don't need to highlight every bugfix, just major ones which aren't in
+     any patch release. -->
+
+<div class="h3" id="cmdline">
+<h3>Command-line client improvements (<em>client</em>)
+  <a class="sectionlink" href="#cmdline"
+    title="Link to this section">&para;</a>
+</h3>
+
+<div class="h4" id="log-quiet-diff">
+<h4><tt>svn log </tt> improvements
+  <a class="sectionlink" href="#log-quiet-diff"
+     title="Link to this section">&para;</a>
+</h4>
+
+<p><tt>svn log --quiet </tt> and <tt>--diff </tt> options are no longer
+mutually exclusive. This makes it easier to display only the differences
+in a range of revisions. (See <a href="http://svn.apache.org/r1871916">r1871916</a>.)</p>
+
+</div> <!-- log-quiet-diff -->
+
+<div class="h4" id="info-show-item-changelist">
+<h4><tt>svn info </tt> improvements
+  <a class="sectionlink" href="#info-show-item-changelist"
+     title="Link to this section">&para;</a>
+</h4>
+
+<p>New <tt>changelist </tt> argument to <tt>svn info --show-item </tt>
+(<a href="http://svn.apache.org/r1869481">r1869481</a>).</p>
+
+</div> <!-- info-show-item-changelist -->
+
+<div class="h4" id="editor-filename-escaping">
+<h4>Escaping/quoting of pathname arguments to the user-defined editor
+  <a class="sectionlink" href="#editor-filename-escaping"
+     title="Link to this section">&para;</a>
+</h4>
+
+<p>When invoking the user-defined editor, such as during interactive conflict
+resolution, Subversion now performs escaping of any special characters in the
+pathname of the file to be edited. This corrects a problem that would occur
+previously when the file to be edited (and/or the path leading to it)
+contained spaces or other special characters. (See
+<a href="http://svn.apache.org/r1874057">r1874057</a>,
+<a href="http://svn.apache.org/r1874093">r1874093</a>, and
+<a href="http://svn.apache.org/r1875230">r1875230</a>.)</p>
+
+<p>Note that escaping is performed only on the pathname argument. As before,
+the editor itself is invoked through the shell and the user must properly
+quote/escape the command line used to launch it. This is intentional, as it
+allows the user to construct a shell command which itself contains command
+line arguments. See the related
+<a href="https://subversion.apache.org/faq.html#svn-editor">FAQ entry</a> for
+more on spaces and/or command line options in the editor path.</p>
+
+<p>The user-defined editor can be specified in the following ways, in this
+order of precedence:</p>
+
+<ul>
+  <li>The <tt>--editor-cmd</tt> command-line option</li>
+  <li>The <tt>$SVN_EDITOR</tt> environment variable</li>
+  <li>The <tt>editor-cmd</tt> runtime configuration option</li>
+  <li>The <tt>$VISUAL</tt> environment variable</li>
+  <li>The <tt>$EDITOR</tt> environment variable</li>
+</ul>
+
+<p>The escaped pathname of the file to be edited is passed to the editor as
+its last command line argument.</p>
+
+<p>For example, suppose that <tt>$SVN_EDITOR</tt> is set as follows:</p>
+
+<pre>SVN_EDITOR='vim -N --'
+export SVN_EDITOR
+</pre>
+
+<p>Furthermore, suppose 'svn up' finds a text conflict in a file called
+<tt>foo bar.txt</tt>:</p>
+
+<pre>
+$ svn up
+Updating '.':
+C    foo bar.txt
+Updated to revision 2.
+Summary of conflicts:
+  Text conflicts: 1
+Merge conflict discovered in file 'foo bar.txt'.
+Select: (p) Postpone, (df) Show diff, (e) Edit file, (m) Merge,
+        (s) Show all options: <b>e</b>
+</pre>
+
+<p>When Subversion launches the editor, the spaces in <tt>vim -N --</tt> will
+<strong>not</strong> be escaped, allowing vim to be invoked with <tt>-N</tt>
+and <tt>--</tt> as its first two arguments, but the space in
+<tt>foo bar.txt</tt> <strong>will</strong> be escaped.</p>
+
+</div> <!-- editor-filename-escaping -->
+
+<div class="h4" id="conflict-resolver">
+<h4>Improvements to the interactive conflict resolver
+  <a class="sectionlink" href="#conflict-resolver"
+     title="Link to this section">&para;</a>
+</h4>
+
+<p>Since its introduction in 1.10, the new interactive conflict resolver has
+received various improvements.</p>
+
+<p>Starting in 1.11, the interactive conflict resolver supports more conflict
+situations which involve moved files and directories. Specifically, many tree
+conflicts which report a "locally missing" item, as a result of an item having
+moved on the merge source branch, can now be resolved automatically.</p>
+
+<p>For example, when a file edit is cherry-picked from a branch on which
+the edited file has been renamed, the edit will now be applied to the file's
+location in the merge target branch, provided it has not been renamed
+on that branch as well. For details, see
+<a href="https://issues.apache.org/jira/browse/SVN-4694">issue #4694</a>,
+"Unresolvable tree conflict when cherrypicking a file-edit after file was
+moved on source branch".</p>
+
+<p>Furthermore, since 1.12, the interactive conflict resolver supports some
+cases where items were moved to disparate locations. Support for unversioned
+items in the working copy has been improved as well. The table below lists
+these cases and available resolution options for each.</p>
+
+<table border="1">
+  <tr>
+    <th>local change</th>
+    <th>incoming change</th>
+    <th>operation</th>
+    <th>resolution options</th>
+  </tr>
+  <tr>
+    <td><ul>
+      <li>move file</li>
+    </ul></td>
+    <td><ul>
+      <li>move file</li>
+    </ul></td>
+    <td>update, merge</td>
+    <td><ul>
+      <li>merge<br>(applies textual changes only and leaves the tree structure
+      of the working copy as it is)
+      <li>move and merge<br>(changes the file's location in the working copy
+      to match that of the merge source before merging changes)
+    </ul></td>
+  </tr>
+  <tr>
+    <td><ul>
+      <li>move directory</li>
+    </ul></td>
+    <td><ul>
+      <li>move directory</li>
+    </ul></td>
+    <td>merge</td>
+    <td><ul>
+      <li>merge<br>(applies changes to the corresponding directory and leaves
+       the tree structure of the working copy as it is)
+      <li>move and merge<br>(changes the directory's location in the working
+       copy to match that of the merge source before merging changes)
+    </ul></td>
+  <tr>
+    <td><ul>
+      <li>unversioned file</li>
+    </ul></td>
+    <td><ul>
+      <li>add file</li>
+    </ul></td>
+    <td>update, switch </td>
+    <td><ul>
+      <li>merge<br>(merges the unversioned file with the incoming file)
+    </ul></td>
+  </tr>
+  <tr>
+    <td><ul>
+      <li>unversioned directory</li>
+    </ul></td>
+    <td><ul>
+      <li>add directory</li>
+    </ul></td>
+    <td>update, switch </td>
+    <td><ul>
+      <li>merge<br>(re-adds directory to working copy but leaves any on-disk
+      files as they were)
+    </ul></td>
+  </tr>
+</table>
+
+<p>During <tt>svn update</tt>, the deletion of a directory which contains
+unversioned items but is otherwise unmodified no longer causes a tree
+conflict. This avoids tree conflicts caused by software build artifacts
+in the working copy, for example.</p>
+
+<p>Several bugs have been fixed in the conflict resolver, including:
+<ul>
+<li><a href="https://issues.apache.org/jira/browse/SVN-4744">Issue #4744</a>
+&quot;assertion failed (start_rev &gt; end_rev)&quot;</li>
+<li><a href="https://issues.apache.org/jira/browse/SVN-4766">Issue #4766</a>
+&quot;resolver adds unrelated moves to move target list&quot;</li>
+<li>A problem where the resolver mistakenly
+<a href="https://svn.apache.org/r1839662">searched back through
+the entire history of the repository</a></li>
+<li>A case where text conflicts were created with the incoming changes
+theirs) and local changes (mine) swapped within text conflict markers. This
+caused unexpected results when the <tt>svn resolve</tt> command was used with
+the <tt>--accept theirs</tt> or <tt>--accept mine</tt> options. This is fixed
+as of 1.12.</li>
+</ul>
+</p>
+
+<p>Fixes for conflict resolver bugs found during the development of
+Subversion 1.11 and 1.12 have been backported to the
+<a href="1.10.html">Subversion 1.10</a> release series as well.</p>
+
+</div> <!-- conflict-resolver -->
+
+<div class="h4" id="info-show-item">
+<h4>Additions to <tt>svn info --show-item</tt>
+  <a class="sectionlink" href="#info-show-item"
+     title="Link to this section">&para;</a>
+</h4>
+
+<p>This change was first introduced in 1.11.</p>
+
+<p>Add '<tt>schedule</tt>' and '<tt>depth</tt>' items to '<tt>svn info --show-item</tt>' (<a href="http://svn.apache.org/r1827032">r1827032</a>).</p>
+
+</div> <!-- info-show-item -->
+
+<div class="h4" id="save-client-cert-pw">
+<h4>Allow the client cert password to be saved
+  <a class="sectionlink" href="#save-client-cert-pw"
+     title="Link to this section">&para;</a>
+</h4>
+
+<p>This change was first introduced in 1.11.</p>
+
+<p>Allow the client cert password to be saved (<a href="http://svn.apache.org/r1836762">r1836762</a>).</p>
+
+</div> <!-- save-client-cert-pw -->
+
+<div class="h4" id="help-hide-experimental">
+<h4><tt>svn help</tt> hides experimental commands by default
+  <a class="sectionlink" href="#help-hide-experimental"
+     title="Link to this section">&para;</a>
+</h4>
+
+<p>This change was first introduced in 1.13.</p>
+
+<p>By default, <tt>svn help</tt> no longer lists experimental commands.
+To show experimental commands, use <tt>svn help -v</tt> or
+<tt>svn help --verbose</tt>. (See <a href="https://issues.apache.org/jira/browse/SVN-4766">issue #4828</a>.)</p>
+
+</div> <!-- help-hide-experimental -->
+
+<div class="h4" id="sqlite-omit-wal">
+<h4>Improved performance for working copy commands like <tt>svn status</tt>
+  <a class="sectionlink" href="#sqlite-omit-wal"
+     title="Link to this section">&para;</a>
+</h4>
+
+<p>This change was first introduced in 1.13.</p>
+
+<p>Some local operations, such as <tt>svn status</tt> on a large working copy,
+now perform more quickly as a result of reduced I/O. This is achieved by
+disabling SQLite's WAL (write-ahead logging) feature, which Subversion does
+not use, but which introduces more I/O when left enabled.
+(See <a href="http://svn.apache.org/r1865523">r1865523</a>.)</p>
+
+</div> <!-- sqlite-omit-wal -->
+
+</div> <!-- cmdline -->
+
+<div class="h3" id="server-side-improvements">
+<h3>Server-side improvements
+  <a class="sectionlink" href="#server-side-improvements"
+     title="Link to this section">&para;</a>
+</h3>
+
+<div class="h4" id="issue-4767">
+<h4><tt>svnadmin dump</tt> shouldn't canonicalize <tt>svn:date</tt>
+  (<a href="https://issues.apache.org/jira/browse/SVN-4767">issue #4767</a>)
+  <a class="sectionlink" href="#issue-4767"
+     title="Link to this section">&para;</a>
+</h4>
+
+<p>This change was first introduced in 1.11.</p>
+
+<p><tt>svnadmin dump</tt> no longer attempts to canonicalize the
+  <tt>svn:date</tt> revision property value in its output. The dump output
+  will now contain the value exactly as it exists in the repository.</p>
+
+</div> <!-- issue-4767 -->
+
+<div class="h4" id="authz-groups">
+<h4>Empty group definitions in authz rules
+  <a class="sectionlink" href="#authz-groups"
+     title="Link to this section">&para;</a>
+</h4>
+
+<p>This change was first introduced in 1.12.</p>
+
+<p>Subversion servers will now ignore empty group definitions in their
+path-based authorization rules. The <tt>svnauthz</tt> command will print
+a warning if it detects empty group definitions.</p>
+</div> <!-- authz-groups -->
+
+<div class="h4" id="mod-dav-svn-twice-hint">
+<h4>Provide a hint about a possible mod_dav_svn misconfiguration
+  <a class="sectionlink" href="#mod-dav-svn-twice-hint"
+     title="Link to this section">&para;</a>
+</h4>
+
+<p>This change was first introduced in 1.13.</p>
+
+<p>Add a hint about a possible mod_dav_svn misconfiguration: When warning
+about an overlapping configuration, if two configuration blocks are for the
+same URL, then hint that the problem may be including the same configuration
+twice. (See <a href="http://svn.apache.org/r1866738">r1866738</a>.)</p>
+
+</div> <!-- mod-dav-svn-twice-hint -->
+
+</div> <!-- server-side-improvements -->
+
+<div class="h3" id="client-server-improvements">
+<h3>Client- and server-side improvements
+  <a class="sectionlink" href="#client-server-improvements"
+     title="Link to this section">&para;</a>
+</h3>
+
+<div class="h4" id="plaintext-passwords-disabled">
+<h4>Plaintext passwords on disk disabled by default
+  <a class="sectionlink" href="#plaintext-passwords-disabled"
+     title="Link to this section">&para;</a>
+</h4>
+
+<p>This change was first introduced in 1.12.</p>
+
+<p>On Unix-like systems, client-side storage of passwords in plaintext on
+disk is now disabled by default <em>at compile-time</em>.
+Password caching mechanisms based on Gnome Keyring, Kwallet, or GPG-Agent,
+are recommended instead.</p>
+
+<p>This change does not affect Windows or Mac OS platforms, where passwords
+have always been stored in an encrypted representation.</p>
+</div> <!-- plaintext-passwords-disabled -->
+
+<div class="h4" id="repos-wc-copy">
+<h4>Improved copying from repository source to working copy target
+  <a class="sectionlink" href="#repos-wc-copy"
+     title="Link to this section">&para;</a>
+</h4>
+
+<p>This change was first introduced in 1.12.</p>
+
+<p>Behaviour of copy operations with a repository source and a working copy
+target has been improved:</p>
+
+<ul>
+<li>Existing parent directories are now handled correctly.</li>
+<li>Peg and operative revisions are now handled correctly (see
+<a href="https://issues.apache.org/jira/browse/SVN-4785">issue #4785</a>
+for details).</li>
+</ul>
+</div> <!-- repos-wc-copy -->
+
+<div class="h4" id="svn-list">
+<h4><tt>svn list</tt> improvements
+  <a class="sectionlink" href="#svn-list"
+     title="Link to this section">&para;</a>
+</h4>
+
+<p>This change was first introduced in 1.12.</p>
+<p>The <tt>svn list</tt> command now avoids truncation of long author names
+by dynamically adjusting the width of columns displayed.</p>
+<p>The <tt>svn list</tt> command now supports a <tt>--human-readable</tt>
+(<tt>-H</tt>) option which will display sizes in human-readable units
+(Bytes, Kilobytes, Megabytes, Gigabytes, Terabytes and Petabytes).</p>
+</div> <!-- svn-list -->
+
+<div class="h4" id="svn-info">
+<h4><tt>svn info</tt> improvements
+  <a class="sectionlink" href="#svn-info"
+     title="Link to this section">&para;</a>
+</h4>
+
+<p>This change was first introduced in 1.12.</p>
+<p>The <tt>svn info</tt> command can now display the size of files in the
+repository. The file size is only displayed if the target of <tt>svn info</tt>
+is a file URL.</p>
+</div> <!-- svn-info -->
+
+<div class="h4" id="svn-cleanup">
+<h4><tt>svn cleanup</tt> improvements
+  <a class="sectionlink" href="#svn-cleanup"
+     title="Link to this section">&para;</a>
+</h4>
+
+<p>This change was first introduced in 1.12.</p>
+<p>The <tt>svn cleanup</tt> command, when asked to remove unversioned or
+ignored items, will now remove directories even if they are write-protected.</p>
+</div> <!-- svn-cleanup -->
+
+</div> <!-- client-server-improvements -->
+
+<div class="h3" id="apis">
+<h3>API changes, improvements and language bindings
+    (<em>client and server</em>)
+  <a class="sectionlink" href="#apis"
+    title="Link to this section">&para;</a>
+</h3>
+
+<div class="h4" id="python3">
+<h4>Support for Python 3.x
+  <a class="sectionlink" href="#python3"
+    title="Link to this section">&para;</a>
+</h4>
+
+<p>Some optional features of Subversion utilize the Python scripting
+language.</p>
+
+<p>Subversion's SWIG Python bindings and Subversion's test suite now
+support Python 3.x (and newer).</p>
+
+<p>Of course, we welcome contributions that extend Subversion's Python
+support to include other versions, subject to the project's other needs.
+See the section
+<a href="#enthusiastic-contributors">Enthusiastic Contributors
+Welcome</a> below.</p>
+
+</div>  <!-- python3 -->
+
+<div class="h4" id="python2">
+<h4>Support for Python 2.7 is being phased out
+  <a class="sectionlink" href="#python2"
+    title="Link to this section">&para;</a>
+</h4>
+
+<div class="notice">
+<p><strong>Python is Optional.</strong>
+Read more <a href="#pythonoptional">below</a>.</p>
+</div> <!-- notice -->
+
+<p>As of 1 January 2020, <a href="https://www.python.org/dev/peps/pep-0373/"
+>Python 2.7 has reached end of life</a>. All users are strongly encouraged
+to move to Python 3.</p>
+
+<p>As Subversion 1.14 is a Long Term Support (LTS) release with
+planned support into 2024, well beyond end-of-life for Python 2.7, the
+core Subversion developers cannot commit to supporting and testing
+with Python 2.7, or to fixing bugs that affect Python 2.7 only, for
+the duration of this support period.</p>
+
+<p>This means that although Subversion 1.14.0 still technically works
+with Python 2.7, any later 1.14.x point release may drop this support
+if it becomes too difficult to maintain.</p>
+
+<p>If you must continue using Python 2.7, our previous Long Term Support
+release, Subversion 1.10, is supported until 2022. Python 2.7 support
+will not be removed from Subversion 1.10.</p>
+
+<p>Of course, we welcome contributions that extend Subversion's Python
+2.7 support, subject to the project's other needs. See the section
+<a href="#enthusiastic-contributors">Enthusiastic Contributors
+Welcome</a> below.</p>
+
+</div>  <!-- python2 -->
+
+ <div class="h4" id="pythonoptional">
+<h4>Python is Optional
+  <a class="sectionlink" href="#pythonoptional"
+    title="Link to this section">&para;</a>
+</h4>
+
+<p>Subversion does <strong>not</strong> require Python for its basic
+operation. Python is only required for building Subversion and for
+using Subversion's SWIG Python bindings.  If you do not do either of
+these things, then this change does not affect you.</p>
+
+<p>The Python bindings are used by:</p>
+
+<ul>
+<li>Third-party programs (e.g.,
+    <a href="https://github.com/viewvc/viewvc/">ViewVC</a>)</li>
+<li>Scripts distributed with Subversion itself in the tools/
+    subdirectory.</li>
+<li>Any in-house scripts you may have.</li>
+</ul>
+
+<p>In more detail, Python is required for doing any of the
+following:</p>
+
+<ul>
+<li>Use the SWIG Python bindings</li>
+<li>Use the ctypes Python bindings</li>
+<li>Build Subversion on Windows</li>
+<li>Build Subversion from a tarball on Unix-like systems and run
+    Subversion's test suite</li>
+<li>Build Subversion from a working copy checked out from Subversion's
+    own repository</li>
+<li>Build the SWIG Python bindings</li>
+<li>Build the ctypes Python bindings</li>
+</ul>
+
+<p>Python is <strong>not</strong> required for doing any of the
+following:</p>
+
+<ul>
+<li>Use the core command-line binaries (svn, svnadmin, svnsync,
+    &hellip;)</li>
+<li>Use Subversion's C libraries</li>
+<li>Use any of Subversion's other language bindings</li>
+<li>Build Subversion from a tarball on Unix-like systems without
+    running Subversion's test suite</li>
+</ul>
+
+</div> <!-- pythonoptional -->
+
+<div class="h4" id="py3c">
+<h4>New Build-Time Dependency: py3c
+  <a class="sectionlink" href="#py3c"
+    title="Link to this section">&para;</a>
+</h4>
+
+<p>Subversion's support for Python 3.x SWIG bindings introduces a new
+optional dependency on the <a href="https://github.com/encukou/py3c"
+>Python 3 Compatibility layer for C extensions (py3c)</a>.</p>
+
+<p>You need py3c to build the SWIG Python bindings, regardless of the
+version of Python. As py3c is a header-only library, it is needed only
+to build the bindings, not to use them.</p>
+
+<p>The convenience script that downloads Subversion's minimal
+build-time dependencies,
+<a href="https://svn.apache.org/viewvc/subversion/branches/1.14.x/get-deps.sh"
+>get-deps.sh</a>, has been updated to download py3c. This script is
+found in the source distribution's root directory. For the full list
+of Subversion's dependencies, see the
+<a href="https://svn.apache.org/viewvc/subversion/branches/1.14.x/INSTALL"
+>INSTALL</a> file in the same directory.</p>
+
+</div>  <!-- py3c -->
+
+<div class="h4" id="swig4-on-py3">
+<h4>Support for building with SWIG 4 on Python 3.x
+  <a class="sectionlink" href="#swig4-on-py3"
+    title="Link to this section">&para;</a>
+</h4>
+
+<p><em>This section only affects those who build Subversion from a working
+  copy.  If you build Subversion from a tarball or zip file, you may skip
+  this section.</em></p>
+
+<p>Subversion's SWIG Python bindings can be built with SWIG 4 on Python 3.
+The bindings can be built with SWIG 3.x on Python 3 as well (the
+<tt>-modern</tt> argument to SWIG is automatically used). (See
+<a href="http://svn.apache.org/r1869853">r1869853</a>.)</p>
+
+</div>  <!-- swig4-on-py3 -->
+
+<div class="h4" id="javahl">
+<h4>JavaHL Updates
+  <a class="sectionlink" href="#javahl"
+    title="Link to this section">&para;</a>
+</h4>
+
+<p>This change was first introduced in 1.11.</p>
+
+<p>The JavaHL bindings have been updated to be compatible with Java 10.  Due
+  to required build changes, JavaHL now requires at least Java 8 to compile.</p>
+
+</div>  <!-- javahl -->
+
+</div>  <!-- apis -->
+
+</div>  <!-- enhancements -->
+
+<div class="h2" id="experimental">
+<h2>Experimental Features
+  <a class="sectionlink" href="#experimental"
+    title="Link to this section">&para;</a>
+</h2>
+
+<!--
+<p>There are no experimental features in this release at the moment.</p>
+-->
+
+<div class="notice">
+  <p>The Subversion 1.14.x release includes several "EXPERIMENTAL" features.
+  These are released in an early form for purposes of testing, feedback, and
+  to entice interested users to <a href="#enthusiastic-contributors"
+  >contribute</a> to their further development.</p>
+
+  <p><span style="color: red"><b>WARNING:</b></span> Features and APIs which
+  are designated "EXPERIMENTAL" are considered incomplete and may change
+  significantly during and after the 1.14.x series. There is no promise of
+  backward compatibility, even from one point release to another, while they
+  remain experimental.</p>
+</div>
+
+<div class="h3 experimental-feature" id="shelving">
+<h3>Shelving and Checkpointing (experimental)
+  <a class="sectionlink" href="#shelving"
+     title="Link to this section">&para;</a>
+</h3>
+
+<p>Shelving (<a href="https://issues.apache.org/jira/browse/SVN-3625">issue
+#3625</a>), first introduced in Subversion 1.10, has been developed further to
+handle more kinds of changes more robustly. Two different versions of shelving
+CLIs, each with different pros and cons, are available for experimentation.
+Also, changes have been made under the hood to support a related feature,
+Commit Checkpointing (<a href="https://issues.apache.org/jira/browse/SVN-3626"
+>issue #3626</a>).</p>
+
+<p>You can read <a href="https://cwiki.apache.org/confluence/x/MxbcC">a
+review</a> of the development of experimental support for shelving to find
+out more about the differences between the versions, and the further work
+that would be needed in Subversion to make shelving a first-class
+feature.</p>
+
+<div class="notice">
+  <p>Shelving in 1.14 is incompatible with shelves created by 1.10. See
+  <a href="#shelving-transition">Upgrading 1.10&ndash;1.13 shelves to 1.14</a>
+  to learn how to recover 1.10 shelves in a working copy.</p>
+</div>
+
+<p>Shelving commands (see their help for details):</p>
+<ul>
+    <li><tt>svn x-shelf-diff</tt></li>
+    <li><tt>svn x-shelf-drop</tt></li>
+    <li><tt>svn x-shelf-list, x-shelves</tt></li>
+    <li><tt>svn x-shelf-list-by-paths</tt></li>
+    <li><tt>svn x-shelf-log</tt></li>
+    <li><tt>svn x-shelf-save</tt></li>
+    <li><tt>svn x-shelve</tt></li>
+    <li><tt>svn x-unshelve</tt></li>
+</ul>
+
+<p>Differences in the main shelving commands since 1.10:</p>
+
+<table>
+<tr><th>Subversion 1.10 command</th>
+    <th>Subversion 1.14 equivalent</th></tr>
+<tr><td><tt>svn [x-]shelve [--keep-local] SHELF [PATH...]</tt></td>
+    <td>works similarly; saves a new version each time it is used</td></tr>
+<tr><td><tt>svn [x-]unshelve [SHELF]</tt></td>
+    <td><tt>svn x-unshelve --drop [SHELF]</tt></td></tr>
+<tr><td><tt>svn [x-]unshelve --keep-shelved [SHELF]</tt></td>
+    <td><tt>svn x-unshelve [SHELF]</tt></td></tr>
+<tr><td><tt>svn [x-]shelve --delete SHELF</tt></td>
+    <td><tt>svn x-shelf-drop SHELF</tt></td></tr>
+<tr><td><tt>svn [x-]shelves</tt> or <tt>svn [x-]shelve --list</tt></td>
+    <td><tt>svn x-shelves</tt> or <tt>svn x-shelf-list</tt></td></tr>
+</table>
+
+<div class="h4 experimental-feature" id="shelving-enabling">
+<h4>Choosing and Enabling a Shelving CLI
+  <a class="sectionlink" href="#shelving-enabling"
+     title="Link to this section">&para;</a>
+</h4>
+
+<p>Because shelving is a work-in-progress, the shelving CLI is disabled by
+default. Users who wish to experiment with shelving should enable one of the
+two available shelving CLI implementations by setting an environment variable
+(see <a href="http://svn.apache.org/r1875037">r1875037</a> and
+<a href="http://svn.apache.org/r1875039">r1875039</a>.)</p>
+
+<p>The two implementations are "Shelving-v2" as introduced in 1.11, and
+"Shelving-v3" as introduced in 1.12. These are incompatible with each other,
+but both are offered because they have substantially different pros and
+cons. (See <a href="https://cwiki.apache.org/confluence/x/MxbcC">the
+review</a>.)</p>
+
+<p>The shelving CLI implementation is selected by an environment variable,
+<tt>SVN_EXPERIMENTAL_COMMANDS</tt>, as follows:</p>
+
+<table border="1">
+  <tr>
+    <th>environment variable</th>
+    <th>shelving CLI implementation</th>
+  </tr>
+  <tr>
+    <td><tt>SVN_EXPERIMENTAL_COMMANDS=shelf3</tt></td>
+    <td>Shelving-v3, as introduced in 1.12</td>
+  </tr>
+  <tr>
+    <td><tt>SVN_EXPERIMENTAL_COMMANDS=shelf2</tt></td>
+    <td>Shelving-v2, as introduced in 1.11</td>
+  </tr>
+  <tr>
+    <td><tt>SVN_EXPERIMENTAL_COMMANDS=</tt></td>
+    <td>No shelving CLI</td>
+  </tr>
+  <tr>
+    <td>Environment variable not set</td>
+    <td>No shelving CLI</td>
+  </tr>
+</table>
+
+<p>The following table summarizes the kinds of changes that can be shelved by
+the two implementations:</p>
+
+<table border="1">
+  <tr>
+    <th>WC State or Change</th>
+    <th>Shelving-v2</th>
+    <th>Shelving-v3</th>
+  </tr>
+  <tr>
+    <td>file text, file delete/add, most properties</td>
+    <td>yes</td>
+    <td>yes</td>
+  </tr>
+  <tr>
+    <td>mergeinfo changes</td>
+    <td>yes</td>
+    <td>yes</td>
+  </tr>
+  <tr>
+    <td>copies and moves</td>
+    <td>no</td>
+    <td>as copies<sup>1</sup></td>
+  </tr>
+  <tr>
+    <td>directories (mkdir/rmdir/...)</td>
+    <td>no</td>
+    <td>yes</td>
+  </tr>
+  <tr>
+    <td>binary files & properties</td>
+    <td>yes</td>
+    <td>yes</td>
+  </tr>
+  <tr>
+    <td colspan="3"><sup>1</sup>On shelving, a move is converted to
+    copy-and-delete, just like it is on commit.
+    </td>
+  </tr>
+</table>
+
+</div>  <!-- shelving-enabling -->
+
+<div class="h4 experimental-feature" id="shelving-v2">
+<h4>Shelving-v2
+  <a class="sectionlink" href="#shelving-v2"
+     title="Link to this section">&para;</a>
+</h4>
+
+<p>Shelving-v2, first introduced in 1.11, improves upon the initial shelving
+feature introduced in 1.10. The main improvements and changes are:</p>
+<ul>
+    <li>checkpointing support: a shelf stores multiple versions of a
+        change; shelving adds a new version to the named shelf; you can
+        unshelve an older version instead of the newest&mdash;see the
+        <a href="#shelving-checkpointing">commit checkpointing</a> feature</li>
+    <li>'binary' files (and property values) are fully supported</li>
+    <li>patch files are no longer used as the storage mechanism;
+        limitations and bugs due to patch file format are gone, such as
+        handling svn:mergeinfo properties, binary data, and end-of-line
+        characters</li>
+    <li>shelving and unshelving both warn and refuse to run if they detect
+        states that they cannot handle (e.g. copies or moves)</li>
+    <li>unshelving applies the changes to the WC using a mechanism similar
+        to merging, so that changes can be more robustly applied when the
+        WC has been modified (e.g. updated) since the shelf was saved</li>
+</ul>
+
+<p>Shelving-v2 can shelve committable changes to files and properties, except
+the following kinds which it does not support:</p>
+<ul>
+    <li>copies and moves</li>
+    <li>creating and deleting directories</li>
+</ul>
+
+<p>Shelves created by Shelving-v2 are stored under
+<tt><i>&lt;WC&gt;</i>/.svn/experimental/shelves/v2</tt>.</p>
+
+</div>  <!-- shelving-v2 -->
+
+<div class="h4 experimental-feature" id="shelving-v3">
+<h4>Shelving-v3
+  <a class="sectionlink" href="#shelving-v3"
+     title="Link to this section">&para;</a>
+</h4>
+
+<p>Shelving-v3, first introduced in 1.12, can handle more kinds of changes
+than Shelving-v2. In particular, it supports shelving of all committable
+changes. However, it performs much more slowly than Shelving-v2 and uses more
+disk space, especially when used with large working copies.</p>
+
+<p>This version of shelving represents a series of significant refactorings
+under the hood to eventually support better shelving, commit checkpointing,
+and the possibility of future client-side features for manipulating and
+sharing committable changes.</p>
+
+<p>Shelves created by Shelving-v3 are stored under
+<tt><i>&lt;WC&gt;</i>/.svn/experimental/shelves/v3</tt>.</p>
+
+</div>  <!-- shelving-v3 -->
+
+<div class="h4 experimental-feature" id="shelving-transition">
+<h4>Upgrading 1.10&ndash;1.13 shelves to 1.14
+  <a class="sectionlink" href="#shelving-transition"
+    title="Link to this section">&para;</a>
+</h4>
+
+<p>The presence in the working copy of any shelves created by Subversion 1.10
+has no effect on a Subversion 1.14 client. Subversion 1.14 will ignore them;
+it cannot interoperate with them nor even list their presence.</p>
+
+<p>The <tt>svn upgrade</tt> command has no effect on shelves, as the
+working copy format is formally unchanged.</p>
+
+<p>To recover a shelf created by 1.10, either
+<ul><li>use a 1.10 client to find and unshelve it, or</li>
+    <li>as 1.10 shelves are stored as patch files under
+        <tt><i>&lt;WC&gt;</i>/.svn/shelves/</tt>, find the patch file and
+        use any 1.10&ndash;1.14 or later <tt>svn patch</tt> to apply it.</li>
+</ul></p>
+
+<p>To access shelves created by 1.11, first select Shelving-v2 by setting the
+environment variable <tt>SVN_EXPERIMENTAL_COMMANDS=shelf2</tt>.</p>
+
+<p>To access shelves created by 1.12&ndash;1.13, first select Shelving-v3 by
+setting the environment variable <tt>SVN_EXPERIMENTAL_COMMANDS=shelf3</tt>.</p>
+
+</div>  <!-- shelving-transition -->
+
+<div class="h4 experimental-feature" id="shelving-checkpointing">
+<h4>Commit checkpointing (experimental)
+  <a class="sectionlink" href="#shelving-checkpointing"
+     title="Link to this section">&para;</a>
+</h4>
+
+<p>This change was first introduced in 1.11.</p>
+
+<p>Since 1.11, Subversion provides an experimental first cut at solving some
+of the use cases envisioned in <a
+href="https://issues.apache.org/jira/browse/SVN-3626">issue #3626</a> named
+"Commit checkpointing".</p>
+
+<p>It provides the ability to save a snapshot of an uncommitted change from
+time to time, and later restore one of those previous versions of your
+change back into the working copy.</p>
+
+<p>It does not provide the kind of exact WC state roll back that is also
+discussed in that issue, that could make it possible after a messy update to
+roll back to the exact WC state that existed just before. This remains a
+future possibility.</p>
+
+<p>The ability to checkpoint and roll back an uncommitted change is provided
+within the shelving feature, by letting a shelf hold multiple versions of
+your change. Therefore, see also <a href="#shelving"> Shelving</a>.</p>
+
+<p>The main checkpointing operations are accomplished by the following
+commands, as also listed in
+<a href="https://cwiki.apache.org/confluence/x/70cYBQ">the Wiki page</a>:</p>
+
+<table>
+<tr><th>Save a checkpoint and continue</th>
+    <td><tt>svn x-<b>shelf-save</b> foo</tt></td>
+    <td>copy the local changes into a new version of shelf 'foo';<br/>
+        doesn't revert the changes from the WC</td>
+</tr>
+<tr><th>Save a checkpoint and shelve</th>
+    <td><tt>svn x-<b>shelve</b> foo</tt></td>
+    <td>move the local changes into a new version of shelf 'foo'<br/>
+        and revert the changes from the WC</td>
+</tr>
+<tr><th>Restore / roll back</th>
+    <td>first revert your unwanted changes; then<br/>
+        <tt>svn x-<b>unshelve</b> foo 3</tt></td>
+    <td>apply version 3 of shelf 'foo' to the WC<br/>
+        and delete any newer versions</td>
+</tr>
+<tr><th>Review checkpoints</th>
+    <td><tt>svn x-<b>shelf-log</b> foo</tt></td>
+    <td>list all the versions of shelf 'foo'</td>
+</tr>
+<tr><th></th>
+    <td><tt>svn x-<b>shelf-diff</b> foo 3</tt></td>
+    <td>show version 3 as a diff</td>
+</tr>
+</table>
+
+</div>  <!-- shelving-checkpointing -->
+
+<p>Further information can be found in the Subversion Wiki under
+<a href="https://cwiki.apache.org/confluence/display/SVN/Shelving+and+Checkpointing"
+>Shelving and Checkpointing</a>, including internal design and development
+notes.</p>
+
+</div>  <!-- shelving -->
+
+<div class="h3 experimental-feature" id="viewspec-output">
+<h3>Viewspec output command (experimental)
+  (<a href="https://issues.apache.org/jira/browse/SVN-4753">issue #4753</a>)
+  <a class="sectionlink" href="#viewspec-output"
+     title="Link to this section">&para;</a>
+</h3>
+
+<p>This change was first introduced in 1.11.</p>
+
+<p>There is an experimental command to write out a view spec describing the
+current WC shape.</p>
+
+<p>A view spec describes whether each subtree is at a limited depth, excluded,
+switched to a different URL, or updated to a different revision number,
+compared with its parent directory. This information is sometimes referred
+to as the shape or the layout of a WC.</p>
+
+<p>'<tt>svn info --x-viewspec=classic</tt>' writes in the format used by the old script
+<a href="http://svn.apache.org/viewvc/subversion/trunk/tools/client-side/svn-viewspec.py">tools/client-side/svn-viewspec.py</a>.</p>
+
+<p>'<tt>svn info --x-viewspec=svn11</tt>' writes a series of '<tt>svn</tt>'
+command lines. You can create a new WC of the same layout by running these
+commands.</p>
+
+</div> <!-- viewspec-output -->
+
+</div>  <!-- experimental -->
+
+<div class="h2" id="issues">
+<h2>Known Issues in the Release
+  <a class="sectionlink" href="#issues"
+    title="Link to this section">&para;</a>
+</h2>
+
+<!--
+<p>There are no known issues specific to this release at the moment.</p>
+-->
+
+<p>There are some known issues in the Subversion 1.14 releases.  These
+may be fixed in later 1.14.x releases.</p>
+
+<div class="h3" id="python3-work-in-progress">
+<h3>Python 3 support is incomplete
+  <a class="sectionlink" href="#python3-work-in-progress"
+    title="Link to this section">&para;</a>
+</h3>
+
+<p>Some Python scripts that are included in Subversion's release
+distribution do not support Python 3 yet.</p>
+
+<p>For an exhaustive list of all Python scripts and files that use
+Python, categorized by their Python 3 support status as of the
+1.14.0 release, see <a href="https://cwiki.apache.org/confluence/pages/viewpage.action?pageId=138021580"
+>Subversion's Python 3 Support Status</a> wiki page.</p>
+
+<p>The <a href="https://cwiki.apache.org/confluence/display/SVN/Subversion%27s+Python+3+Support+Status"
+>latest version</a> of that page reflects changes made after
+the release, which may be included in future releases.</p>
+
+<div class="h4" id="autogen_sh-py2-py3">
+<h4>The build system prefers Python 2 to Python 3
+  <a class="sectionlink" href="#autogen_sh-py2-py3"
+     title="Link to this section">&para;</a>
+</h4>
+
+<p>Although <a href="#pythonoptional">Python is not required for building
+Subversion</a>, it <em>is</em> required for running the test suite, and
+therefore, on Unix-like systems, Subversion's build system looks for a Python
+executable.</p>
+
+<p>The build system checks the environment variables <tt>$PYTHON</tt>,
+<tt>$PYTHON2</tt>, and <tt>$PYTHON3</tt> in this order, followed by the command
+names <tt>python</tt>, </tt>python2</tt>, and <tt>python3</tt> (in
+<tt>$PATH</tt>) in this order.  The first of these that is an executable
+implementing Python version 2.7 or greater is used.</p>
+
+<p>Since <a href="#python2">support for Python 2.7 is being phased out</a>, we
+expect to change this to prefer Python 3 to Python 2.7 in a 1.14.x patch release.
+When we do, we will mention the change in the <tt>CHANGES</tt> file and update
+this section of the release notes.</p>
+
+<p>This affects both tarball builds (using <tt>configure</tt>) and working copy
+builds (using <tt>autogen.sh</tt>).  The release rolling scripts are also
+affected.</p>
+
+<p>As a workaround, the environment variable <tt>PYTHON</tt> may be set to the
+full path of a Python 3 executable prior to running <tt>configure</tt> (or
+<tt>autogen.sh</tt>, if you build from a working copy).</p>
+
+</div> <!-- autogen_sh-py2-py3 -->
+
+<div class="h4" id="issues-py3-testsuite-windows">
+<h4>Test suite broken when run with Python 3 on Windows
+  <a class="sectionlink" href="#issues-py3-testsuite-windows"
+     title="Link to this section">&para;</a>
+</h4>
+
+<p>As of 1.14.0, Subversion's test suite does not run correctly with Python 3
+on Windows due to differences in the way that Python 2.7 and Python 3 handle
+End-Of-Line (EOL) conversions, special characters in pathnames, escaping of
+backslashes used in Windows pathnames, and handling of UTF-8 character
+sequences.</p>
+
+<p>Most of these issues are corrected in 1.14.1. See
+<a href="http://svn.apache.org/r1876707">r1876707</a>,
+<a href="http://svn.apache.org/r1876734">r1876734</a>,
+<a href="http://svn.apache.org/r1877318">r1877318</a>,
+<a href="http://svn.apache.org/r1877712">r1877712</a>,
+<a href="http://svn.apache.org/r1878141">r1878141</a>,
+<a href="http://svn.apache.org/r1878142">r1878142</a>,
+<a href="http://svn.apache.org/r1878143">r1878143</a>, and
+<a href="http://svn.apache.org/r1878144">r1878144</a>.</p>
+
+</div> <!-- issues-py3-testsuite-windows -->
+
+<div class="h4" id="issues-py3-windows-os-dup">
+<h4>Cannot redirect test suite output to a log file with Python 3.6 or later on Windows
+  <a class="sectionlink" href="#issues-py3-windows-os-dup"
+     title="Link to this section">&para;</a>
+</h4>
+
+<p>This issue affects Subversion 1.14.0 on Windows when using Python 3.6 or
+later due to changes in Python's handling of os.dup2().</p>
+
+<p>When using <tt>win-tests.py</tt> to run Subversion's unit tests on Windows
+and redirecting the output to a log file, the following errors may occur:</p>
+
+<pre>
+Testing Release configuration on local repository.
+[1/1] authz_tests.pyTraceback (most recent call last):
+  File "win-tests.py", line 1126, in <module>
+    failed = th.run(tests_to_run)
+  File "build\run_tests.py",
+line 590, in run
+    failed = self._run_local_schedulers(testlist)
+  File "build\run_tests.py",
+line 536, in _run_local_schedulers
+    failed = self._run_test(testcase, count, testcount) or failed
+  File "build\run_tests.py",
+line 947, in _run_test
+    failed = testcase(progabs, progdir, progbase, test_nums, dots_needed)
+  File "build\run_tests.py",
+line 853, in _run_py_test
+    print("PING")
+OSError: [WinError 6] The handle is invalid
+Exception ignored in: <_io.TextIOWrapper name='<stdout>' mode='w'
+encoding='utf-8'>
+OSError: [WinError 6] The handle is invalid
+</pre>
+
+<p>Two workarounds are available:</p>
+
+<ul>
+<li>Define the <tt>PYTHONLEGACYWINDOWSSTDIO</tt> environment variable as
+described in <a href="https://stackoverflow.com/questions/52373180/python-on-windows-handle-invalid-when-redirecting-stdout-writing-to-file"
+>this Stack Overflow question</a>, or:</li>
+<li>Pass the <tt>--log-to-stdout</tt> switch to <tt>win-tests.py</tt>.</li>
+</ul>
+
+<p>This issue is fixed as of Subversion 1.14.1. See
+<a href="http://svn.apache.org/r1883337">r1883337</a>.</p>
+
+</div> <!-- issues-py3-windows-os-dup -->
+
+</div>  <!-- python3-work-in-progress -->
+
+<div class="h3" id="issues-building-without-swig">
+<h3>Installed SWIG prevents building Subversion's Python 3 bindings
+  <a class="sectionlink" href="#issues-building-without-swig"
+     title="Link to this section">&para;</a>
+</h3>
+
+<p>When building Subversion from a 1.14.0 distribution tarball, you may not be
+able to build Subversion's language bindings for Python 3 if
+<tt>configure</tt> detects an unsuitable version of SWIG on your system. This
+is a bug because the sources generated by SWIG for Python 3 bindings are
+included with the release.</p>
+
+<p>For this situation, a workaround is available as of 1.14.1: pass the
+<tt>--without-swig</tt> option to <tt>configure</tt>.</p>
+
+<p>See <a href="http://svn.apache.org/r1876662">r1876662</a>.</p>
+
+<p>The workaround does not apply in the following situations:</p>
+
+<ul>
+  <li>building Subversion from sources checked out from the repository, where
+    the SWIG-generated files are not included</li>
+  <li>building Subversion's SWIG bindings for Python 2.x, in which case SWIG
+    is needed to regenerate the language bindings because the included ones
+    target Python 3</li>
+</ul>
+
+<p>In these cases, you will need a suitable version of SWIG:</p>
+
+<ul>
+  <li>To target Python 2: SWIG 2.0.0 through 3.x. (Note that
+    <tt>configure</tt> will allow SWIG 1.3.24 through 3.x, but SWIG 4.0.0 or
+    later are not supported for Python 2.)</li>
+  <li>To target Python 3: SWIG 3.0.10 or later.</li>
+</ul>
+
+</div> <!-- issues-building-without-swig -->
+
+<div class="h3" id="ruby-swig-issue-602">
+<h3>Ruby bindings require swig 3.0.9
+  <a class="sectionlink" href="#ruby-swig-issue-602"
+    title="Link to this section">&para;</a>
+</h3>
+
+<p>This change was first introduced in 1.11.</p>
+
+<p><em>This section only affects those who build Subversion from a working
+  copy.  If you build Subversion from a tarball or zip file, you may skip
+  this section.</em></p>
+
+<p>The Ruby bindings are known not to build with swig version 3.0.8 (and only
+that version) due to <a href="https://github.com/swig/swig/issues/602">swig
+issue #602</a>.  We recommend to use swig 3.0.9 or newer.</p>
+
+<p>The failure is detected by the test suite.
+To test whether your version of swig is affected, run
+<tt>make check-swig-rb</tt>.  (Some distros might have backported the swig
+patch into their swig-3.0.8 packages.)</p>
+
+<p>The Perl and Python bindings are not affected.</p>
+
+</div>  <!-- ruby-swig-issue-602 -->
+
+<div class="h3" id="issues-javahl-crash">
+<h3>JavaHL crash
+  <a class="sectionlink" href="#issues-javahl-crash"
+    title="Link to this section">&para;</a>
+</h3>
+
+<p>Subversion 1.14.0 and earlier may crash when using the JavaHL bindings.</p>
+
+<p>A crash is known to manifest when Subversion is built with GCC 10. The
+failure is detected by the test suite. This issue is fixed as of 1.14.1. See
+<a href="http://svn.apache.org/r1880886">r1880886</a>.</p>
+
+<p>A crash is known to occur when using JDK14. The failure is detected by the
+test suite. This issue is fixed as of 1.14.1. See
+<a href="http://svn.apache.org/r1882115">r1882115</a>.</p>
+
+<p>Several potential crashes in JavaHL TunnelAgent are known which are related
+to exception handling cleanup and garbage-collected Java objects. As of
+1.14.1, new regression tests are introduced to detect these failures and the
+issues have been fixed. See <a href="http://svn.apache.org/r1886029"
+>r1886029</a>.</p>
+
+</p>
+
+</div>  <!-- issues-javahl-crash -->
+
+<div class="h3" id="issues-mergeinfo-issue-4859">
+<h3>Merge may fail when removing a folder
+  <a class="sectionlink" href="#issues-mergeinfo-issue-4859"
+     title="Link to this section">&para;</a>
+</h3>
+
+<p>Subversion 1.14.0 and earlier could fail to perform a merge that removes a
+folder that has non-inheritable mergeinfo. The merge would fail with:</p>
+
+<pre>
+svn: E155023: Can't set properties on '...': invalid status for updating properties
+</pre>
+
+(See <a href="https://issues.apache.org/jira/browse/SVN-4859">issue #4859</a>.)
+
+<p>This issue is fixed as of Subversion 1.14.1. See
+<a href="http://svn.apache.org/r1878997">r1878997</a>,
+<a href="http://svn.apache.org/r1879192">r1879192</a>,
+<a href="http://svn.apache.org/r1879474">r1879474</a>, and
+<a href="http://svn.apache.org/r1879959">r1879959</a>.</p>
+
+</div> <!-- issues-mergeinfo-issue-4859 -->
+
+<div class="h3" id="issues-filesizes-human-readable">
+<h3>Incorrect file sizes shown with <tt>svn list</tt> command
+  <a class="sectionlink" href="#issues-filesizes-human-readable"
+     title="Link to this section">&para;</a>
+</h3>
+
+<p>The <tt>svn list --verbose --human-readable</tt> command
+(<tt>svn ls -vH</tt>) shows file sizes with base-2 unit suffixes (Byte,
+Kilobyte, Megabyte, Gigabyte, etc.), limiting the number of digits to three
+or less.</p>
+
+<p>In Subversion 1.14.0 and earlier, this command may produce incorrect output
+for certain file sizes. If built in Debug mode, the Subversion client may
+abort with an assertion failure:</p>
+
+<pre>
+    svn: subversion/svn/filesize.c:93: format_size: Assertion `absolute_human_readable_size < 1000.0' failed.
+</pre>
+
+<p>This issue is fixed as of Subversion 1.14.1. See
+<a href="http://svn.apache.org/r1878909">r1878909</a>,
+<a href="http://svn.apache.org/r1878918">r1878918</a>, and
+<a href="http://svn.apache.org/r1878950">r1878950</a>.</p>
+
+</div> <!-- issues-filesizes-human-readable -->
+
+<div class="h3" id="issues-authz-4762">
+<h3>Path-based authorization doesn't combine global and per-repository rules
+  <a class="sectionlink" href="#issues-authz-4762"
+     title="Link to this section">&para;</a>
+</h3>
+
+<p>Subversion 1.10.0 through 1.14.0 did not combine global and per-repository
+path-based authorization (authz) rules: if a global rule and a per-repository
+rule were both present for a path, the global rule would be ignored and the
+per-repository rule would apply by itself.</p>
+
+<p>This issue is fixed as of 1.14.1. See <a
+href="https://issues.apache.org/jira/browse/SVN-4762?issueNumber=4762"
+>Issue #4762</a> and <a href="http://svn.apache.org/r1882326">r1882326</a>.</p>
+
+<p>See the section <a href="#compat-misc-authz"
+>Path-based authorization compatibility</a> for compatibility notes relating
+to this change.</p>
+
+</div> <!-- issues-authz-4762 -->
+
+<div class="h3" id="issues-sqlite-dqs">
+<h3>SQLite error when upgrading a SVN 1.7 working copy
+  <a class="sectionlink" href="#issues-sqlite-dqs"
+     title="Link to this section">&para;</a>
+</h3>
+
+<p>Upgrading a Subversion 1.7 working copy could fail with a SQLite error
+under specific circumstances:</p>
+
+<p>This could occur in Subversion 1.14.0 or older, if built with SQLite 3.29
+or newer, and if SQLite is built without deprecated support for double-quoted
+string literals.</p>
+
+<p>This issue is fixed in Subversion 1.14.1.</p>
+
+<p>See <a href="http://svn.apache.org/r1879198">r1879198</a>.</p>
+
+</div> <!-- issues-sqlite-dqs -->
+
+<div class="h3" id="issues-other">
+<h3>Other issues
+  <a class="sectionlink" href="#issues-other"
+    title="Link to this section">&para;</a>
+</h3>
+
+<p>This section lists minor issues that do not fit well elsewhere.</p>
+
+<div class="h4" id="issues-other-c90compat">
+<h4>C90 compatibility fixes
+  <a class="sectionlink" href="#issues-other-c90compat"
+     title="Link to this section">&para;</a>
+</h4>
+
+<p>In 1.14.0, several variable declarations in mid-block were reported to
+prevent building Subversion with VC9 (Visual Studio 2008). This issue is fixed
+as of 1.14.1. See <a href="http://svn.apache.org/r1877259">r1877259</a>.</p>
+
+</div> <!-- issues-other-c90compat -->
+
+<div class="h4" id="issues-other-apr-1-4">
+<h4>Restored support for building with APR 1.4
+  <a class="sectionlink" href="#issues-other-apr-1-4"
+     title="Link to this section">&para;</a>
+</h4>
+
+<p>Subversion 1.14.0 increased the minimum required version of
+<a href="https://apr.apache.org">APR</a> to 1.5. By request to support
+building Subversion on older operating system distributions such as CentOS 7,
+Subversion 1.14.1 restores support for building with APR 1.4 or newer. See
+<a href="http://svn.apache.org/r1881958">r1881958</a> and
+<a href="http://svn.apache.org/r1882128">r1882128</a>.</p>
+
+</div> <!-- issues-other-apr-1-4 -->
+
+</div>  <!-- issues-other -->
+
+</div>  <!-- issues -->
+
+<!-- (This section only makes sense when there are some issues listed in it.)
+<div class="h2" id="troubleshooting">
+<h2>Troubleshooting issues specific to this release
+  <a class="sectionlink" href="#troubleshooting"
+    title="Link to this section">&para;</a>
+</h2>
+
+<p>Subversion 1.14 introduces new features and makes use of new techniques
+which can trigger problems not encountered in previous versions. In contrast to
+known issues, things listed here are not due to some bug or issue in Subversion
+itself and therefore cannot be fixed with a new patch release.
+This section lists all known problems and provides instructions to solve them,
+if they occur.</p>
+
+<p>There are no known issues specific to this release at the moment.</p>
+
+</div>  <!- - troubleshooting - ->
+-->
+
+<div class="h2" id="support">
+<h2>Support and Release Planning
+  <a class="sectionlink" href="#lts-release"
+    title="Link to this section">&para;</a>
+</h2>
+
+<div class="h3" id="lts-release">
+<h3>Subversion 1.14.x is a Long-Term Support (LTS) Release
+  <a class="sectionlink" href="#lts-release"
+    title="Link to this section">&para;</a>
+</h3>
+
+<p>1.14 is a Long-Term Support (LTS) release.
+   See <a href="/docs/release-notes/#supported-versions">Supported Versions</a>
+   and <a href="/roadmap.html#release-planning">How We Plan Releases</a>.</p>
+
+</div>  <!-- lts-release -->
+
+<div class="h3" id="svn-1.13-deprecation">
+<h3>Subversion 1.13.x is end of life
+  <a class="sectionlink" href="#svn-1.13-deprecation"
+    title="Link to this section">&para;</a>
+</h3>
+
+<p>The Subversion 1.13.x line is end of life (<abbr title="End Of Life">EOL</abbr>).
+This doesn't mean that your 1.13 installation is doomed; if it works
+well and is all you need, that's fine.  "End of life" just means we've
+stopped accepting bug reports against 1.13.x versions, and will not
+make any more 1.13.x releases.</p>
+
+</div>  <!-- svn-1.13-deprecation -->
+
+<div class="h3" id="svn-1.10-old-stable">
+<h3>Subversion 1.10.x is now the old stable version
+  <a class="sectionlink" href="#svn-1.10-old-stable"
+    title="Link to this section">&para;</a>
+</h3>
+
+<p>The Subversion 1.10.x line is now the old stable version.  This means
+that 1.10.x will still receive security relevant fixes as well as
+bugfixes. While we will evaluate any bugreport with regards to its
+severity, there might be issues with a lower severity which will
+only get fixed in 1.14.x, particularly if the patches would be invasive,
+destabilizing, and/or require a significant investment to get backported to the
+old stable version.</p>
+
+<p>Therefore, if you are running into an issue with the old stable
+version which has already been fixed in the latest version, we might
+ask you to upgrade to that version to resolve the issue.</p>
+
+</div>  <!-- svn-1.10-old-stable -->
+
+<div class="h3" id="svn-1.9-deprecation">
+<h3>Subversion 1.9.x is end of life
+  <a class="sectionlink" href="#svn-1.9-deprecation"
+    title="Link to this section">&para;</a>
+</h3>
+
+<p>The Subversion 1.9.x line is end of life (<abbr title="End Of Life">EOL</abbr>).
+This doesn't mean that your 1.9 installation is doomed; if it works
+well and is all you need, that's fine.  "End of life" just means we've
+stopped accepting bug reports against 1.9.x versions, and will not
+make any more 1.9.x releases.</p>
+
+</div>  <!-- svn-1.9-deprecation -->
+
+</div>  <!-- support -->
+
+<div class="h2" id="enthusiastic-contributors">
+<h2>Enthusiastic Contributors Welcome!
+  <a class="sectionlink" href="#enthusiastic-contributors"
+    title="Link to this section">&para;</a>
+</h2>
+
+<p>You can contribute to Subversion!</p>
+
+<p>As Subversion is an open source project developed and supported by
+volunteers, we are always happy to welcome enthusiastic participants
+to the community.</p>
+
+<p>Whether you'd like to see support for additional versions of Python,
+want to help finish Shelving and Checkpointing, or have ideas for some big
+new features, if you're willing to invest the effort, Subversion can be
+anything you imagine.</p>
+
+<p>Join the conversation by email: For our mailing lists, see
+<a href="https://subversion.apache.org/mailing-lists.html">
+https://subversion.apache.org/mailing-lists.html</a></p>
+
+<p>Or by IRC at irc.freenode.net:</p>
+<ul>
+  <li>#svn channel: User chat and help using Subversion</li>
+  <li>#svn-dev channel: Get involved in development!</li>
+</ul>
+
+<p>Get the source:</p>
+<ul>
+  <li>Check out Subversion's source:
+    <pre>$ svn checkout https://svn.apache.org/repos/asf/subversion/trunk/</pre></li>
+
+  <!-- TODO: Use the URL to the *.apache.org mirror of subversion.git -->
+  <li>For those who prefer it, a Git mirror is also available:
+    <pre>$ git clone https://github.com/apache/subversion.git</pre></li>
+
+  <li>Or download the latest release tarball:
+    <a href="https://subversion.apache.org/download.cgi"
+    >https://subversion.apache.org/download.cgi</a></li>
+</ul>
+
+<p>Join us today!</p>
+
+</div>  <!-- enthusiastic-contributors -->
+
+<!-- ***************** END CONTENT ****************** -->
+</div> <!-- #site-content -->
+</body>
+</html>

@@ -121,8 +121,10 @@ static int svc_rare(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64
             if (fd < DD_NFD) {
                 g_memfd_is[fd] = 1;
                 g_memfd_seal[fd] = (a1 & 2) ? 0 : 0x1 /*F_SEAL_SEAL*/;
+                memfd_reg_set_fd(fd, g_memfd_seal[fd]);
             }
         }
+        fdtrace_log("memfd_create", fd, (long)a1, 0);
         G_RET(c) = fd < 0 ? (uint64_t)(-errno) : (uint64_t)fd;
         break;
     }
@@ -135,6 +137,10 @@ static int svc_rare(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64
     case 436: {
         unsigned first = (unsigned)a0, last = (unsigned)a1;
         int flags = (int)a2;
+        if (drm_dbg()) {
+            fprintf(stderr, "[DRMSYNTH] close_range pid=%d first=%u last=%u flags=%#x\n", getpid(), first, last,
+                    flags);
+        }
         if (first > last) {
             G_RET(c) = (uint64_t)(int64_t)(-EINVAL);
             break;
@@ -614,6 +620,10 @@ static int svc_rare(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64
         break;
     }
     case 287: {
+        if ((int)a0 >= 0 && (int)a0 < DD_NFD && (memfd_seals_fd((int)a0) & 0x8)) {
+            G_RET(c) = (uint64_t)(-EPERM);
+            break;
+        } // F_SEAL_WRITE
         if (memf_get((int)a0)) {
             const struct iovec *iv = (const struct iovec *)a1;
             off_t end = (off_t)a3;

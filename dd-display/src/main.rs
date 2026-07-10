@@ -9,7 +9,7 @@
 //!   WAYLAND_DISPLAY / XDG_RUNTIME_DIR — if `--socket` is absent, the socket path is
 //!   `$XDG_RUNTIME_DIR/$WAYLAND_DISPLAY` (default `$XDG_RUNTIME_DIR/wayland-0`).
 
-use dd_display::present::{Presenter, PngPresenter};
+use dd_display::present::{PngPresenter, Presenter};
 use dd_display::server::Server;
 use std::os::unix::io::RawFd;
 
@@ -32,7 +32,9 @@ fn main() {
                 // wl_seat → guest client), dumping the live window to a PNG.
                 #[cfg(target_os = "macos")]
                 {
-                    let out = args.next().unwrap_or_else(|| "/tmp/dd-display-input.png".into());
+                    let out = args
+                        .next()
+                        .unwrap_or_else(|| "/tmp/dd-display-input.png".into());
                     dd_display::present_cocoa::selftest_input(&out);
                 }
                 #[cfg(not(target_os = "macos"))]
@@ -43,7 +45,9 @@ fn main() {
             }
             "selftest" => {
                 // Real-socket end-to-end proof (portable; run on the Mac to validate the macOS shm path).
-                let out = args.next().unwrap_or_else(|| "/tmp/dd-display-selftest.png".into());
+                let out = args
+                    .next()
+                    .unwrap_or_else(|| "/tmp/dd-display-selftest.png".into());
                 match dd_display::selftest::run(&out) {
                     Ok(()) => return,
                     Err(e) => {
@@ -56,7 +60,9 @@ fn main() {
                 // macOS-only: prove the Metal upload+blit+readback present path, dumping a PNG.
                 #[cfg(target_os = "macos")]
                 {
-                    let out = args.next().unwrap_or_else(|| "/tmp/dd-display-metal.png".into());
+                    let out = args
+                        .next()
+                        .unwrap_or_else(|| "/tmp/dd-display-metal.png".into());
                     dd_display::metal::selftest_metal(&out);
                 }
                 #[cfg(not(target_os = "macos"))]
@@ -68,7 +74,9 @@ fn main() {
             "selftest-shader" => {
                 #[cfg(target_os = "macos")]
                 {
-                    let out = args.next().unwrap_or_else(|| "/tmp/dd-display-shader.png".into());
+                    let out = args
+                        .next()
+                        .unwrap_or_else(|| "/tmp/dd-display-shader.png".into());
                     dd_display::metal_backend::selftest_shader(&out);
                 }
                 #[cfg(not(target_os = "macos"))]
@@ -81,8 +89,13 @@ fn main() {
                 #[cfg(target_os = "macos")]
                 {
                     let irf = args.next().unwrap_or_default();
-                    let out = args.next().unwrap_or_else(|| "/tmp/dd-display-shim-ir.png".into());
-                    dd_display::metal_backend::selftest_shim_ir(&irf, &out);
+                    let out = args
+                        .next()
+                        .unwrap_or_else(|| "/tmp/dd-display-shim-ir.png".into());
+                    let w = args.next().and_then(|s| s.parse().ok()).unwrap_or(256);
+                    let h = args.next().and_then(|s| s.parse().ok()).unwrap_or(256);
+                    let target = args.next().and_then(|s| s.parse().ok()).unwrap_or(1);
+                    dd_display::metal_backend::selftest_shim_ir(&irf, &out, w, h, target);
                 }
                 #[cfg(not(target_os = "macos"))]
                 {
@@ -105,7 +118,9 @@ fn main() {
             "selftest-texture" => {
                 #[cfg(target_os = "macos")]
                 {
-                    let out = args.next().unwrap_or_else(|| "/tmp/dd-display-texture.png".into());
+                    let out = args
+                        .next()
+                        .unwrap_or_else(|| "/tmp/dd-display-texture.png".into());
                     dd_display::metal_backend::selftest_texture(&out);
                 }
                 #[cfg(not(target_os = "macos"))]
@@ -117,7 +132,9 @@ fn main() {
             "selftest-indexed" => {
                 #[cfg(target_os = "macos")]
                 {
-                    let out = args.next().unwrap_or_else(|| "/tmp/dd-display-indexed.png".into());
+                    let out = args
+                        .next()
+                        .unwrap_or_else(|| "/tmp/dd-display-indexed.png".into());
                     dd_display::metal_backend::selftest_indexed(&out);
                 }
                 #[cfg(not(target_os = "macos"))]
@@ -130,7 +147,9 @@ fn main() {
                 // macOS-only: GPU rung 3 — replay a streamed dd-gpu IR quad through the Metal executor.
                 #[cfg(target_os = "macos")]
                 {
-                    let out = args.next().unwrap_or_else(|| "/tmp/dd-display-replay.png".into());
+                    let out = args
+                        .next()
+                        .unwrap_or_else(|| "/tmp/dd-display-replay.png".into());
                     dd_display::metal_backend::selftest_replay(&out);
                 }
                 #[cfg(not(target_os = "macos"))]
@@ -143,7 +162,9 @@ fn main() {
                 // macOS-only: GPU rung 3 — render a triangle into an IOSurface via a Metal render pass.
                 #[cfg(target_os = "macos")]
                 {
-                    let out = args.next().unwrap_or_else(|| "/tmp/dd-display-render.png".into());
+                    let out = args
+                        .next()
+                        .unwrap_or_else(|| "/tmp/dd-display-render.png".into());
                     dd_display::metal::selftest_render(&out);
                 }
                 #[cfg(not(target_os = "macos"))]
@@ -156,7 +177,9 @@ fn main() {
                 // macOS-only: prove the zero-copy IOSurface→MTLTexture composite path (GPU rung 2).
                 #[cfg(target_os = "macos")]
                 {
-                    let out = args.next().unwrap_or_else(|| "/tmp/dd-display-iosurface.png".into());
+                    let out = args
+                        .next()
+                        .unwrap_or_else(|| "/tmp/dd-display-iosurface.png".into());
                     dd_display::metal::selftest_iosurface(&out);
                 }
                 #[cfg(not(target_os = "macos"))]
@@ -169,7 +192,9 @@ fn main() {
                 // macOS-only: prove the live on-screen NSView renders, dumping it to a PNG.
                 #[cfg(target_os = "macos")]
                 {
-                    let out = args.next().unwrap_or_else(|| "/tmp/dd-display-cocoa.png".into());
+                    let out = args
+                        .next()
+                        .unwrap_or_else(|| "/tmp/dd-display-cocoa.png".into());
                     dd_display::present_cocoa::selftest_cocoa(&out);
                 }
                 #[cfg(not(target_os = "macos"))]
@@ -238,7 +263,9 @@ fn serve_loop_metal(lfd: RawFd, dir: &str) {
         std::thread::spawn(move || dd_display::metal_backend::run_executor(p));
     }
     let dir = dir.to_string();
-    serve_multiplex(lfd, "metal-png", move || dd_display::metal::MetalPngPresenter::new(&dir));
+    serve_multiplex(lfd, "metal-png", move || {
+        dd_display::metal::MetalPngPresenter::new(&dir)
+    });
 }
 
 /// Accept clients and pump each with a fresh PNG presenter. The Cocoa backend has its own run loop; this
@@ -254,14 +281,26 @@ fn serve_loop(lfd: RawFd, dir: &str) {
 /// connection to commit the rendered IOSurface. The old one-client-at-a-time loop deadlocked on the first
 /// connection and never serviced the second, so nothing composited. Here every client fd is polled and
 /// pumped independently; a client is dropped when its pump reports EOF/error.
-fn serve_multiplex<P: Presenter>(lfd: RawFd, tag: &str, mut make_presenter: impl FnMut() -> Option<P>) {
+fn serve_multiplex<P: Presenter>(
+    lfd: RawFd,
+    tag: &str,
+    mut make_presenter: impl FnMut() -> Option<P>,
+) {
     set_nonblock(lfd);
     let mut clients: Vec<Server<P>> = Vec::new();
     loop {
         let mut pfds: Vec<libc::pollfd> = Vec::with_capacity(clients.len() + 1);
-        pfds.push(libc::pollfd { fd: lfd, events: libc::POLLIN, revents: 0 });
+        pfds.push(libc::pollfd {
+            fd: lfd,
+            events: libc::POLLIN,
+            revents: 0,
+        });
         for c in &clients {
-            pfds.push(libc::pollfd { fd: c.raw_fd(), events: libc::POLLIN, revents: 0 });
+            pfds.push(libc::pollfd {
+                fd: c.raw_fd(),
+                events: libc::POLLIN,
+                revents: 0,
+            });
         }
         let n = unsafe { libc::poll(pfds.as_mut_ptr(), pfds.len() as _, -1) };
         if n < 0 {
@@ -288,7 +327,10 @@ fn serve_multiplex<P: Presenter>(lfd: RawFd, tag: &str, mut make_presenter: impl
                 set_nonblock(cfd);
                 match make_presenter() {
                     Some(p) => {
-                        eprintln!("dd-display[{tag}]: client connected (fd {cfd}, {} live)", clients.len() + 1);
+                        eprintln!(
+                            "dd-display[{tag}]: client connected (fd {cfd}, {} live)",
+                            clients.len() + 1
+                        );
                         clients.push(Server::new(cfd, p));
                     }
                     None => {
@@ -300,11 +342,20 @@ fn serve_multiplex<P: Presenter>(lfd: RawFd, tag: &str, mut make_presenter: impl
         }
         // Service each ready client (looked up by fd, so swap_remove reordering can't misindex it).
         for fd in ready_fds {
-            let Some(idx) = clients.iter().position(|c| c.raw_fd() == fd) else { continue };
+            let Some(idx) = clients.iter().position(|c| c.raw_fd() == fd) else {
+                continue;
+            };
             let pr = clients[idx].pump();
             if !matches!(pr, Ok(true)) {
-                let why = match &pr { Ok(false) => "EOF (peer closed)".to_string(), Err(e) => format!("io error: {e}"), _ => String::new() };
-                eprintln!("dd-display[{tag}]: client disconnected ({} frame(s)) [{why}]", clients[idx].presenter().frame_count());
+                let why = match &pr {
+                    Ok(false) => "EOF (peer closed)".to_string(),
+                    Err(e) => format!("io error: {e}"),
+                    _ => String::new(),
+                };
+                eprintln!(
+                    "dd-display[{tag}]: client disconnected ({} frame(s)) [{why}]",
+                    clients[idx].presenter().frame_count()
+                );
                 unsafe { libc::close(fd) };
                 clients.swap_remove(idx);
             }

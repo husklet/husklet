@@ -1,0 +1,18 @@
+#!/bin/sh
+
+set -e
+
+flavor="$1"
+
+echo "emacsen-common: Handling install of emacsen flavor $flavor"
+
+rm -f \
+   "/usr/share/$flavor/site-lisp/debian-startup.el" \
+   "/usr/share/$flavor/site-lisp/debian-startup.elc"
+
+# Create symlinks to the .el files (see section 5E in debian-emacs polcy).
+(cd "/usr/share/$flavor/site-lisp"
+ ln -s ../../emacsen-common/debian-startup.el .)
+
+"$flavor" --no-init-file --no-site-file -batch -f batch-byte-compile \
+          "/usr/share/$flavor/site-lisp/debian-startup.el"

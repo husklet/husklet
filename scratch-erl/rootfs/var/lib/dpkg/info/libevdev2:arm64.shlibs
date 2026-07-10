@@ -1,0 +1,2 @@
+libevdev 2 libevdev2 (>= 1.13.0+dfsg)
+udeb: libevdev 2 libevdev2-udeb (>= 1.13.0+dfsg)

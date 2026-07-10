@@ -1,0 +1,11 @@
+04f7e014671136cebc933bda6cfaec00  usr/include/readline/chardefs.h
+069f766d4ef4f5b042d1443d13e8ad3f  usr/include/readline/history.h
+4174d5e02ce3504d4075b50ea62862bf  usr/include/readline/keymaps.h
+dfb701179c6914e71bc88ce8c0e4d7ae  usr/include/readline/readline.h
+d6bbfb3e33fbc3488a10452670d5755e  usr/include/readline/rlconf.h
+d9119f3872939a3ea5a26b1a8de6a913  usr/include/readline/rlstdc.h
+9fd1686887ca8b3d46ffd3d33475984c  usr/include/readline/rltypedefs.h
+9228b7c96b20abc7fc48559137a9377c  usr/include/readline/tilde.h
+f90157633f50dabb729ac318bd80e8f8  usr/lib/aarch64-linux-gnu/libhistory.a
+c93ad28b97737cec014c4c4ebed890ef  usr/lib/aarch64-linux-gnu/libreadline.a
+9a0fe52d7f7f8643c6f34d34145e0ca6  usr/lib/aarch64-linux-gnu/pkgconfig/readline.pc

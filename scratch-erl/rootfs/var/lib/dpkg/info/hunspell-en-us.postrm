@@ -1,0 +1,13 @@
+#!/bin/sh
+set -e
+# Automatically added by installdeb-hunspell/UNDECLARED
+rmscript="update-dictcommon-hunspell"
+
+case "$1" in abort-install|remove)
+	if command -v $rmscript >/dev/null; then
+	    $rmscript 
+	else
+	    echo "Warning: $rmscript not present or executable." >&2
+	fi
+esac
+# End automatically added section

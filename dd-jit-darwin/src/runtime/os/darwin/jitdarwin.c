@@ -470,6 +470,7 @@ int ddjit_entry(int argc, char **argv) {
     // typed-config launch: `--configfd <fd>` streams a serialized ddjit_config over the inherited fd
     // instead of the flag dialect below. Dispatched before all other flags.
     if (argc > 2 && strcmp(argv[1], "--configfd") == 0) return ddjit_run_configfd(atoi(argv[2]));
+    if (argc > 2 && strcmp(argv[1], "--configfile") == 0) return ddjit_run_configfile(argv[2]);
     int ai = 1;
     for (; ai < argc && argv[ai][0] == '-'; ai++) { // flags (mirrors jit.c's CLI)
         if (!strcmp(argv[ai], "--rootfs") && ai + 1 < argc)

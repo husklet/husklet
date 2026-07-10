@@ -1,0 +1,10 @@
+prefix=/usr
+exec_prefix=${prefix}
+libdir=${prefix}/lib/aarch64-linux-gnu
+includedir=${prefix}/include
+
+Name: libwmf
+Description: A library for reading and converting Windows MetaFile vector graphics (WMF)
+Version: 0.2.12
+Libs: -lwmf -lwmflite   -lfreetype   -lX11 -lexpat -ljpeg -lpng -lz -lm
+Cflags: -I/usr/include/freetype2 -I/usr/include/libpng16   

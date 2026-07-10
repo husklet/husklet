@@ -14,11 +14,19 @@ use std::os::unix::io::RawFd;
 const WL_DISPLAY: u32 = 1;
 
 fn main() {
-    let out = std::env::args().nth(1).unwrap_or_else(|| "/tmp/dd-display-pattern.png".into());
-    let dir = std::path::Path::new(&out).parent().map(|p| p.to_path_buf()).unwrap_or_else(|| ".".into());
+    let out = std::env::args()
+        .nth(1)
+        .unwrap_or_else(|| "/tmp/dd-display-pattern.png".into());
+    let dir = std::path::Path::new(&out)
+        .parent()
+        .map(|p| p.to_path_buf())
+        .unwrap_or_else(|| ".".into());
 
     let mut sv = [0i32; 2];
-    assert_eq!(unsafe { libc::socketpair(libc::AF_UNIX, libc::SOCK_STREAM, 0, sv.as_mut_ptr()) }, 0);
+    assert_eq!(
+        unsafe { libc::socketpair(libc::AF_UNIX, libc::SOCK_STREAM, 0, sv.as_mut_ptr()) },
+        0
+    );
     let (client_fd, server_fd) = (sv[0], sv[1]);
     for fd in [client_fd, server_fd] {
         nonblock(fd);
@@ -35,9 +43,21 @@ fn main() {
     let (reg, comp, shm, wm, surface, xdg, toplevel, pool, buffer) = (2, 3, 4, 5, 6, 7, 8, 9, 10);
     c.send(&Message::new(WL_DISPLAY, 1).u32(reg)); // get_registry
     flush(&mut c, &mut server);
-    c.send(&Message::new(reg, 0).u32(1).string("wl_compositor").u32(4).u32(comp));
+    c.send(
+        &Message::new(reg, 0)
+            .u32(1)
+            .string("wl_compositor")
+            .u32(4)
+            .u32(comp),
+    );
     c.send(&Message::new(reg, 0).u32(2).string("wl_shm").u32(1).u32(shm));
-    c.send(&Message::new(reg, 0).u32(3).string("xdg_wm_base").u32(1).u32(wm));
+    c.send(
+        &Message::new(reg, 0)
+            .u32(3)
+            .string("xdg_wm_base")
+            .u32(1)
+            .u32(wm),
+    );
     c.send(&Message::new(comp, 0).u32(surface)); // create_surface
     c.send(&Message::new(wm, 2).u32(xdg).u32(surface)); // get_xdg_surface
     c.send(&Message::new(xdg, 1).u32(toplevel)); // get_toplevel
@@ -52,7 +72,14 @@ fn main() {
     assert!(mfd >= 0);
     assert_eq!(unsafe { libc::ftruncate(mfd, size as libc::off_t) }, 0);
     let map = unsafe {
-        libc::mmap(std::ptr::null_mut(), size, libc::PROT_READ | libc::PROT_WRITE, libc::MAP_SHARED, mfd, 0)
+        libc::mmap(
+            std::ptr::null_mut(),
+            size,
+            libc::PROT_READ | libc::PROT_WRITE,
+            libc::MAP_SHARED,
+            mfd,
+            0,
+        )
     };
     assert_ne!(map, libc::MAP_FAILED);
     let px = map as *mut u8;
@@ -63,10 +90,14 @@ fn main() {
             let (b, g, r);
             if x < 8 || x >= w - 8 || y < 8 || y >= h - 8 {
                 // colored border
-                r = 0xff; g = ((x * 255 / w) as u8) & 0xff; b = ((y * 255 / h) as u8) & 0xff;
+                r = 0xff;
+                g = ((x * 255 / w) as u8) & 0xff;
+                b = ((y * 255 / h) as u8) & 0xff;
             } else {
                 let v = ((x ^ y) & 0xff) as u8;
-                r = v; g = v; b = v;
+                r = v;
+                g = v;
+                b = v;
             }
             unsafe {
                 *px.add(o) = b;
@@ -80,7 +111,15 @@ fn main() {
     c.send(&Message::new(shm, 0).u32(pool).u32(size as u32)); // create_pool (fd OOB)
     c.queue_fd(mfd);
     flush(&mut c, &mut server);
-    c.send(&Message::new(pool, 0).u32(buffer).i32(0).i32(w).i32(h).i32(stride).u32(1)); // XRGB8888
+    c.send(
+        &Message::new(pool, 0)
+            .u32(buffer)
+            .i32(0)
+            .i32(w)
+            .i32(h)
+            .i32(stride)
+            .u32(1),
+    ); // XRGB8888
     c.send(&Message::new(surface, 1).u32(buffer).i32(0).i32(0)); // attach
     c.send(&Message::new(surface, 2).i32(0).i32(0).i32(w).i32(h)); // damage
     c.send(&Message::new(surface, 6)); // commit
@@ -95,7 +134,12 @@ fn main() {
     if produced != std::path::Path::new(&out) {
         let _ = std::fs::rename(&produced, &out);
     }
-    println!("wrote {out} ({}x{}), frames={}", w, h, server.presenter().frames);
+    println!(
+        "wrote {out} ({}x{}), frames={}",
+        w,
+        h,
+        server.presenter().frames
+    );
 }
 
 fn nonblock(fd: RawFd) {

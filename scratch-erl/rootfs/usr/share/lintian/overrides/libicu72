@@ -1,0 +1,3 @@
+# libicu72 installs multiple shared libraries, none of which is
+# actually called libicu.so.72, but all of which are libicu*.so.72 .
+libicu72: package-name-doesnt-match-sonames libicudata72 libicui18n72 libicuio72 libicutest72 libicutu72 libicuuc72

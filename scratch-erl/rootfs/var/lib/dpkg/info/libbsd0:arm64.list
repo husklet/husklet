@@ -1,0 +1,15 @@
+/.
+/usr
+/usr/lib
+/usr/lib/aarch64-linux-gnu
+/usr/lib/aarch64-linux-gnu/libbsd.so.0.11.7
+/usr/share
+/usr/share/doc
+/usr/share/doc/libbsd0
+/usr/share/doc/libbsd0/changelog.Debian.gz
+/usr/share/doc/libbsd0/changelog.gz
+/usr/share/doc/libbsd0/copyright
+/usr/share/lintian
+/usr/share/lintian/overrides
+/usr/share/lintian/overrides/libbsd0
+/usr/lib/aarch64-linux-gnu/libbsd.so.0

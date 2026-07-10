@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<mime-type xmlns="http://www.freedesktop.org/standards/shared-mime-info" type="application/vnd.comicbook-rar">
+  <!--Created automatically by update-mime-database. DO NOT EDIT!-->
+  <comment>comic book archive (rar container)</comment>
+  <sub-class-of type="application/vnd.rar"/>
+  <generic-icon name="x-office-document"/>
+  <glob pattern="*.cbr"/>
+  <alias type="application/x-cbr"/>
+</mime-type>

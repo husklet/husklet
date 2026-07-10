@@ -8,6 +8,7 @@
 // readers) already consumes, rebuild the guest argv, and hand off to dd_run() -- the identical call the
 // normal env/flag launch makes. Reusing the env path means ZERO duplication of container setup logic.
 #include <errno.h>
+#include <fcntl.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -28,9 +29,17 @@ static int cfd_read_full(int fd, void *buf, size_t n) {
         ssize_t r = read(fd, p + got, n - got);
         if (r < 0) {
             if (errno == EINTR) continue;
+            if (getenv("DD_CONFIGFD_DEBUG"))
+                fprintf(stderr, "[DDCONFIGFD] fd=%d read error got=%zu want=%zu errno=%d\n", fd, got, n, errno);
             return -1;
         }
-        if (r == 0) return -1; // premature EOF
+        if (r == 0) {
+            if (getenv("DD_CONFIGFD_DEBUG")) {
+                int fl = fcntl(fd, F_GETFD, 0);
+                fprintf(stderr, "[DDCONFIGFD] fd=%d eof got=%zu want=%zu fdflags=%d errno=%d\n", fd, got, n, fl, errno);
+            }
+            return -1;
+        } // premature EOF
         got += (size_t)r;
     }
     return 0;
@@ -44,8 +53,9 @@ static const char *cfd_str(const char *pool, uint32_t pool_len, uint32_t off) {
 }
 
 // Read a `ddjit_config` (+ its trailing string pool) from `fd`, re-hydrate the engine's DD_*/DDJIT_* env,
-// rebuild the guest argv, and dispatch to dd_run(). Returns dd_run()'s exit code, or a nonzero code on any
-// read/validation failure. Single-shot per process (the launched guest _exit()s the worker).
+// rebuild the guest argv, and dispatch to dd_run(). The spawn shim normally enters through
+// ddjit_run_configfile() below; --configfd remains supported for direct/debug launches. Returns dd_run()'s
+// exit code, or a nonzero code on any read/validation failure. Single-shot per process.
 int ddjit_run_configfd(int fd) {
     struct ddjit_config cfg;
     if (cfd_read_full(fd, &cfg, sizeof cfg) != 0) {
@@ -111,7 +121,11 @@ int ddjit_run_configfd(int fd) {
     s = cfd_str(pool, cfg.pool_len, cfg.netns_off);
     if (s[0]) setenv("DD_NETNS", s, 1);
     s = cfd_str(pool, cfg.pool_len, cfg.volumes_off);
-    if (s[0]) setenv("DDVOL", s, 1);
+    if (s[0]) {
+        if (getenv("DD_VOL_DEBUG") && (strstr(s, "wayland-0") || strstr(s, "dd-gpu-0")))
+            fprintf(stderr, "[DDVOLCFG] %s\n", s);
+        setenv("DDVOL", s, 1);
+    }
     s = cfd_str(pool, cfg.pool_len, cfg.cwd_off);
     if (s[0]) setenv("DD_CWD", s, 1);
     s = cfd_str(pool, cfg.pool_len, cfg.guest_env_off);
@@ -170,5 +184,18 @@ int ddjit_run_configfd(int fd) {
     // Single-shot process: dd_run typically _exit()s the worker and never returns; if it does, release.
     free(argv2);
     free(pool);
+    return rc;
+}
+
+int ddjit_run_configfile(const char *path) {
+    if (!path || !path[0]) return 78;
+    int fd = open(path, O_RDONLY);
+    if (fd < 0) {
+        fprintf(stderr, "dd: --configfile: open failed: %s\n", path);
+        return 78;
+    }
+    unlink(path);
+    int rc = ddjit_run_configfd(fd);
+    close(fd);
     return rc;
 }

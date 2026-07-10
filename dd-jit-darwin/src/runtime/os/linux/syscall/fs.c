@@ -172,6 +172,8 @@ static void fd_reset_emul(int fd) {
         g_tfd_interval[fd] = 0;
         g_memfd_is[fd] = 0;
         g_memfd_seal[fd] = 0;
+        g_proc_text_desc[fd][0] = 0;
+        g_proc_text_ro[fd] = 0;
         g_pagemap_fd[fd] = 0;
         g_pipesz[fd] = 0;     // drop this fd's emulated F_SETPIPE_SZ so a reused number reports the default
         g_fd_cport[fd] = 0;   // drop the captured container port so getpeername on a reused fd isn't misrouted
@@ -181,8 +183,17 @@ static void fd_reset_emul(int fd) {
             g_fd_pushback[fd] = NULL;
             g_fd_pb_len[fd] = 0;
         }
-        g_ovldir[fd][0] = 0;
-        g_opath[fd] = 0;
+        // g_ovldir/g_opath are sized [1024], NOT [DD_NFD] (see the io.c read guards, all `fd < 1024`). The
+        // enclosing `fd < DD_NFD` guard is too loose for these two: close_range(first, ~0U) — glibc's fd
+        // sanitize, which erl_child_setup runs before every port fork — is clamped to fd 65535 and calls
+        // fd_reset_emul() for EVERY fd in the range, so an unguarded g_ovldir[fd][0]/g_opath[fd] write here
+        // stored WILD into BSS for any fd >= 1024 (fd*192 bytes past g_ovldir). That intermittently hit an
+        // unmapped page (SIGSEGV/SIGBUS -> a hang when g_in_service re-faults, or SIGILL after it corrupted
+        // engine state into a wild control-flow jump) — the #215 "beam.smp fork+exec control-flow corruption".
+        if (fd < 1024) {
+            g_ovldir[fd][0] = 0;
+            g_opath[fd] = 0;
+        }
         g_devfull[fd] = 0;
 #ifdef __APPLE__
         if (g_devdri[fd]) dd_gpu_free_fd(fd); // release the render node's IOSurfaces on close
@@ -209,7 +220,8 @@ static void fd_reset_emul(int fd) {
             g_dns_sock[fd] = 0;
         }
         nl_close(fd); // tear down a netlink socket's socketpair peer
-        g_eventfd_count[fd] = 0;
+        g_eventfd_count[eventfd_counter_slot(fd)] = 0;
+        g_eventfd_cslot[fd] = 0;
         g_eventfd_sema[fd] = 0;
         ep_fd_reset(fd);
         flock_on_close(fd);
@@ -537,6 +549,8 @@ static int svc_fs(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t
             G_RET(c) = (uint64_t)rr;
             break;
         }
+        if (gpu_iosurface_on() && fd >= 0 && fd < DD_NFD && g_devdri[fd] && drm_dbg())
+            fprintf(stderr, "[DRMSYNTH] ioctl fd=%d rq=%#lx unhandled\n", fd, rq);
         // macOS pty MASTERS reject every termios/winsize ioctl with ENOTTY -- unlike Linux, where the master
         // accepts them and they act on the shared line discipline (apt/dpkg's StartPtyMagic does TIOCSWINSZ +
         // tcsetattr(TCSANOW) on the master; that ENOTTY is apt's "Setting TIOCSWINSZ for master fd N failed"
@@ -1405,8 +1419,9 @@ static int svc_fs(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t
         // memfd sealing: F_SEAL_SHRINK(0x2) blocks a size-reducing ftruncate, F_SEAL_GROW(0x4) blocks a
         // size-increasing one -> EPERM (matching the write/pwrite F_SEAL_WRITE guards). A sealed shared
         // buffer must not be resized under a receiver (SIGBUS/OOB). Compare against the CURRENT size.
-        if ((int)a0 >= 0 && (int)a0 < DD_NFD && (g_memfd_seal[(int)a0] & 0x6)) {
+        if ((int)a0 >= 0 && (int)a0 < DD_NFD && (memfd_seals_fd((int)a0) & 0x6)) {
             off_t nlen = (off_t)a1, cur;
+            int seals = memfd_seals_fd((int)a0);
             struct memf *sm = memf_get((int)a0);
             struct stat ss;
             if (sm)
@@ -1417,7 +1432,7 @@ static int svc_fs(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t
                 G_RET(c) = (uint64_t)(-errno);
                 break;
             }
-            if ((nlen < cur && (g_memfd_seal[(int)a0] & 0x2)) || (nlen > cur && (g_memfd_seal[(int)a0] & 0x4))) {
+            if ((nlen < cur && (seals & 0x2)) || (nlen > cur && (seals & 0x4))) {
                 G_RET(c) = (uint64_t)(-EPERM);
                 break;
             }
@@ -1466,7 +1481,7 @@ static int svc_fs(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t
             G_RET(c) = (uint64_t)(-EINVAL);
             break;
         }
-        int seal = (fd >= 0 && fd < DD_NFD) ? g_memfd_seal[fd] : 0;
+        int seal = (fd >= 0 && fd < DD_NFD) ? memfd_seals_fd(fd) : 0;
         memf_materialize(fd); // flush any RAM cache; every branch below works on the real host fd
         struct stat s;
         if (fstat(fd, &s) < 0) {
@@ -1869,6 +1884,8 @@ static int svc_fs(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t
             // makes htop's relative openat(pid_dirfd, "stat"/"task"/...) re-enter the /proc synthesis.
             while (rp && rp[0] == '/' && rp[1] == '/')
                 rp++;
+            if ((getenv("DD_PROC_DEBUG") || getenv("DD_DRM_DEBUG")) && rp && strstr(rp, "oom_score"))
+                fprintf(stderr, "[DDPROC] openat dirfd=%d path=%s flags=0x%lx\n", (int)a0, rp, (unsigned long)lf);
             // A bare "/proc/self" (or thread-self) opened as a DIRECTORY (`cd /proc/self`, then relative
             // reads) follows the magic symlink to the numeric pid dir -- rewrite it so the /proc/<pid>
             // materialization below (proc_dir_try_open) serves it and tags the fd's guest path.
@@ -2316,13 +2333,36 @@ static int svc_fs(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t
     }
     case 57: {
         int cf = (int)a0;
+        int was_dri = (cf >= 0 && cf < DD_NFD && g_devdri[cf]);
+        int pre_fl = fcntl(cf, F_GETFD);
+        int pre_errno = errno;
+        char pre_path[192];
+        pre_path[0] = 0;
+        if (cf >= 0 && cf < DD_NFD && g_fdpath[cf][0]) snprintf(pre_path, sizeof pre_path, "%s", g_fdpath[cf]);
         engine_fd_vacate(cf); // guest close must not clobber an engine-private fd (g_root_fd etc.) on this number
         // Drop every dd-side emulation-table entry for this fd (eventfd peer/timerfd/overlay-dir/socket/epoll/
         // flock/pidfd/memf/getdents caches/path) BEFORE the real close, so a reused number can't be misrouted.
         // SEQPACKET/O_DIRECT-pipe EOF is injected here (inside fd_reset_emul's seq_send_eof) while this end is
         // still open, so a blocked peer recv wakes and returns 0. Shared with the execve CLOEXEC sweep.
+        if (seq_is(cf)) {
+            seqlog("close_seq_pre", cf, g_sock_seq_wrote[cf], g_sock_peer_pid[cf]);
+            if (seqerrlog_on()) {
+                fprintf(stderr,
+                        "[DDSEQERR] pid=%d close_seq_pre fd=%d wrote=%u peerpid=%d pair=%d passcred=%u\n",
+                        getpid(), cf, cf < DD_NFD ? g_sock_seq_wrote[cf] : 0,
+                        cf < DD_NFD ? g_sock_peer_pid[cf] : 0, cf < DD_NFD ? g_sock_pair_peer[cf] : 0,
+                        cf < DD_NFD ? g_sock_passcred[cf] : 0);
+            }
+        }
         fd_reset_emul(cf);
         int r = close(cf);
+        if (seqlog_on()) seqlog("close", cf, r, r < 0 ? errno : 0);
+        if (drm_dbg() && (was_dri || r < 0 || fdtrace_fd(cf))) {
+            const char *p = pre_path[0] ? pre_path : "-";
+            fprintf(stderr, "[DRMSYNTH] close pid=%d fd=%d%s path=%s pre_getfd=%d pre_errno=%d -> %d errno=%d\n",
+                    getpid(), cf, was_dri ? " dri" : "", p, pre_fl, pre_fl < 0 ? pre_errno : 0, r,
+                    r < 0 ? errno : 0);
+        }
         G_RET(c) = r < 0 ? (uint64_t)(-errno) : 0;
         break;
         // close: -errno on fail
@@ -2474,6 +2514,10 @@ static int svc_fs(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t
         // /proc/self/fd/N -> the path host fd N currently points at (recovered via F_GETPATH on macOS).
         int pfn = procfd_num(gp);
         if (pfn >= 0) {
+            if (eventfd_peer_is_engine_fd(pfn)) {
+                G_RET(c) = (uint64_t)(-ENOENT);
+                break;
+            }
             // a guest-created pty. Its slave must readlink to /dev/pts/N (never the host /dev/ttysNNN)
             // so ttyname(3)/`ls -l /proc/self/fd` resolve the Linux path; its master to the /dev/ptmx
             // multiplexer. Checked ahead of F_GETPATH, which would otherwise leak the host device name.
@@ -3113,6 +3157,20 @@ static int svc_fs(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t
         }
         // faccessat
         const char *p = atpath((int)a0, (const char *)a1, pb, sizeof pb, 0);
+        {
+            const char *gp = (g_rootfs && p && !strncmp(p, g_rootfs_canon, g_rootfs_canon_len)) ? p + g_rootfs_canon_len : p;
+            if (gp48 && gp48 != (const char *)a1 && !strncmp(gp48, "/proc/", 6)) gp = gp48;
+            struct stat ss;
+            if (synth_stat_raw(gp, &ss)) {
+                int mode = (int)a2 & 7;
+                int ok = 1;
+                if ((mode & 4) && !(ss.st_mode & 0444)) ok = 0;
+                if ((mode & 2) && !(ss.st_mode & 0222)) ok = 0;
+                if ((mode & 1) && !(S_ISDIR(ss.st_mode) || (ss.st_mode & 0111))) ok = 0;
+                G_RET(c) = ok ? 0 : (uint64_t)(int64_t)(-EACCES);
+                break;
+            }
+        }
         // F_OK existence check: cacheable
         if (a2 == 0 && p) {
             int rc;

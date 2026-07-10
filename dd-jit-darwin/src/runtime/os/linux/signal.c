@@ -254,6 +254,9 @@ static void host_sigh(int sig) {
     host_sig_pend(sig_m2l(sig));
 } // host(macOS) signo -> Linux
 
+static void sig_diag_sync_reraise(int sig, int ls, siginfo_t *si, void *ucv);
+static void sig_diag_raise_default(struct cpu *c, int sig);
+
 // SA_SIGINFO host handler: same delivery as host_sigh, plus it captures the sender's pid/uid so an
 // SA_SIGINFO guest handler (or sigwaitinfo) sees si_pid/si_uid. macOS populates si_pid for a kill(2) but
 // does NOT set the Linux SI_USER si_code, so gate on si_pid>0 (a real sender) rather than the code.
@@ -276,13 +279,13 @@ static void host_sigh_si(int sig, siginfo_t *si, void *uc) {
 // thread is in a syscall (g_in_service) mark it pending (the async path host_sigh_si uses) and capture
 // the sender. Otherwise (a genuine fault that somehow surfaced as POSIX) restore the default and re-raise.
 static void host_sigh_sync(int sig, siginfo_t *si, void *uc) {
-    (void)uc;
     int ls = sig_m2l(sig);
     // Only ever an EXTERNAL kill(2) when it lands while the thread is blocked in a syscall (g_in_service):
     // a real illegal-instruction/#DE never reaches a POSIX handler here (arm64 uses the Mach exception
     // port, x86 synthesizes #DE at the dispatcher). In-syscall => deliver async (wakes pause()/sigsuspend
     // + runs the handler); otherwise a genuine fault surfaced as POSIX -> restore default and re-raise.
     if (!g_in_service) {
+        sig_diag_sync_reraise(sig, ls, si, uc);
         signal(sig, SIG_DFL);
         raise(sig);
         return;
@@ -292,6 +295,27 @@ static void host_sigh_sync(int sig, siginfo_t *si, void *uc) {
         g_siguid[ls] = (int)si->si_uid;
     }
     host_sig_pend(ls);
+}
+
+// Mach exception delivery runs on a dedicated helper thread, so it cannot read the faulting thread's
+// g_in_service TLS directly. CRASHDBG passes the faulting cpu via x28; use its syscall-stamped guest PC as
+// the cross-thread equivalent of "the target was in service(c)" for async fault-class signals caught by the
+// Mach port before POSIX host_sigh_sync can run.
+static int mach_async_fault_signal(struct cpu *c, int hostsig, siginfo_t *si) {
+    int sig = sig_m2l(hostsig);
+    if (!c || sig < 1 || sig > 64) return 0;
+    if (!sig_is_sync(sig)) return 0;
+    if (!host_range_mapped((uintptr_t)c, sizeof *c)) return 0;
+    uint64_t pc = G_PC(c);
+    if (!host_range_mapped((uintptr_t)pc, 4)) return 0;
+    if (!pc || *(uint32_t *)pc != 0xD4000001u) return 0; // aarch64 svc #0
+    if (si && si->si_pid > 0) {
+        g_sigpid[sig] = (int)si->si_pid;
+        g_siguid[sig] = (int)si->si_uid;
+    }
+    __atomic_or_fetch(&g_pending, 1ull << sig, __ATOMIC_SEQ_CST);
+    __atomic_store_n(&c->irq, 1, __ATOMIC_SEQ_CST);
+    return 1;
 }
 
 // build_signal_frame + do_sigreturn are per-arch (the sigframe register layout) -> frontend/<arch>/sigframe.c
@@ -405,6 +429,7 @@ static void raise_guest_signal(struct cpu *c, int sig) {
     // signal that kills the engine BY the signal. The stop signals keep the host path below (job control
     // mirrors them onto the host mask, so a real host stop is the correct default action).
     if (container_pid() == 1 && sig_default_terminates(sig)) {
+        sig_diag_raise_default(c, sig);
         c->exited = 1;
         c->exit_code = 128 + sig;
         return;
@@ -419,6 +444,7 @@ static void raise_guest_signal(struct cpu *c, int sig) {
     // RLIMIT_CORE > 0. If the relay slot table is exhausted the parent simply sees the WIFEXITED(128+signo)
     // fallback — the same graceful degradation as before this fix.
     if (sig_default_terminates(sig)) {
+        sig_diag_raise_default(c, sig);
         int core = sig_coredumps(sig) && svc_core_rlimit_cur() > 0;
         sigexit_record(sig, core);
         c->exited = 1;
@@ -507,6 +533,107 @@ static int deliver_guest_fault(int hostsig, siginfo_t *si, void *ucv) {
     return deliver_guest_fault_hint(NULL, hostsig, si, ucv);
 }
 
+static void sig_diag_hex16(char *p, uint64_t v) {
+    static const char h[] = "0123456789abcdef";
+    for (int i = 15; i >= 0; i--) {
+        p[i] = h[v & 0xf];
+        v >>= 4;
+    }
+}
+
+static int sig_diag_put(char *b, int n, const char *s) {
+    while (*s) b[n++] = *s++;
+    return n;
+}
+
+static int sig_diag_put_hex(char *b, int n, const char *k, uint64_t v) {
+    n = sig_diag_put(b, n, k);
+    n = sig_diag_put(b, n, "0x");
+    sig_diag_hex16(b + n, v);
+    return n + 16;
+}
+
+static void sig_diag_fatal_fault(int sig, int hostsig, siginfo_t *si, struct cpu *c) {
+    if (!getenv("DD_FATALSIG_LOG")) return;
+    char b[384];
+    int n = 0;
+    n = sig_diag_put(b, n, "[DDFATAL]");
+    n = sig_diag_put_hex(b, n, " pid=", (uint64_t)getpid());
+    n = sig_diag_put_hex(b, n, " cpid=", (uint64_t)container_pid());
+    n = sig_diag_put_hex(b, n, " sig=", (uint64_t)sig);
+    n = sig_diag_put_hex(b, n, " hostsig=", (uint64_t)hostsig);
+    n = sig_diag_put_hex(b, n, " pc=", c ? G_PC(c) : 0);
+    n = sig_diag_put_hex(b, n, " sp=", c ? G_SP(c) : 0);
+#if G_GPC_HASH_SHIFT == 2
+    n = sig_diag_put_hex(b, n, " lr=", c ? c->x[30] : 0);
+    n = sig_diag_put_hex(b, n, " x0=", c ? c->x[0] : 0);
+    n = sig_diag_put_hex(b, n, " x1=", c ? c->x[1] : 0);
+    n = sig_diag_put_hex(b, n, " x20=", c ? c->x[20] : 0);
+#endif
+    n = sig_diag_put_hex(b, n, " si_addr=", si ? (uint64_t)si->si_addr : 0);
+    b[n++] = '\n';
+    (void)write(2, b, (size_t)n);
+}
+
+static void sig_diag_sync_reraise(int sig, int ls, siginfo_t *si, void *ucv) {
+    if (!getenv("DD_FATALSIG_LOG")) return;
+    ucontext_t *u = (ucontext_t *)ucv;
+#if defined(__aarch64__)
+    uint64_t hpc = u ? (uint64_t)u->uc_mcontext->__ss.__pc : 0;
+#elif defined(__x86_64__)
+    uint64_t hpc = u ? (uint64_t)u->uc_mcontext->__ss.__rip : 0;
+#else
+    uint64_t hpc = 0;
+#endif
+    uint64_t hgpc = 0, hoff = 0;
+    uint32_t hinsn = 0;
+    extern int jit_hostpc_lookup(uint64_t hpc, uint64_t *gpc, uint64_t *off, uint32_t *insn);
+    int hit = jit_hostpc_lookup(hpc, &hgpc, &hoff, &hinsn);
+    struct cpu *c = (struct cpu *)pthread_getspecific(g_cpu_key);
+    char b[512];
+    int n = 0;
+    n = sig_diag_put(b, n, "[DDSYNC]");
+    n = sig_diag_put_hex(b, n, " pid=", (uint64_t)getpid());
+    n = sig_diag_put_hex(b, n, " cpid=", (uint64_t)container_pid());
+    n = sig_diag_put_hex(b, n, " hostsig=", (uint64_t)sig);
+    n = sig_diag_put_hex(b, n, " sig=", (uint64_t)ls);
+    n = sig_diag_put_hex(b, n, " hpc=", hpc);
+    n = sig_diag_put_hex(b, n, " pc=", c ? G_PC(c) : 0);
+    n = sig_diag_put_hex(b, n, " sp=", c ? G_SP(c) : 0);
+#if G_GPC_HASH_SHIFT == 2
+    n = sig_diag_put_hex(b, n, " lr=", c ? c->x[30] : 0);
+#endif
+    n = sig_diag_put_hex(b, n, " si_addr=", si ? (uint64_t)si->si_addr : 0);
+    n = sig_diag_put_hex(b, n, " jhit=", (uint64_t)hit);
+    if (hit) {
+        n = sig_diag_put_hex(b, n, " hblk=", hgpc);
+        n = sig_diag_put_hex(b, n, " hoff=", hoff);
+        n = sig_diag_put_hex(b, n, " hinsn=", (uint64_t)hinsn);
+    }
+    b[n++] = '\n';
+    (void)write(2, b, (size_t)n);
+}
+
+static void sig_diag_raise_default(struct cpu *c, int sig) {
+    if (!getenv("DD_FATALSIG_LOG")) return;
+    char b[384];
+    int n = 0;
+    n = sig_diag_put(b, n, "[DDRAISE]");
+    n = sig_diag_put_hex(b, n, " pid=", (uint64_t)getpid());
+    n = sig_diag_put_hex(b, n, " cpid=", (uint64_t)container_pid());
+    n = sig_diag_put_hex(b, n, " tid=", c ? (uint64_t)cpu_tid(c) : 0);
+    n = sig_diag_put_hex(b, n, " sig=", (uint64_t)sig);
+    n = sig_diag_put_hex(b, n, " pc=", c ? G_PC(c) : 0);
+    n = sig_diag_put_hex(b, n, " sp=", c ? G_SP(c) : 0);
+#if G_GPC_HASH_SHIFT == 2
+    n = sig_diag_put_hex(b, n, " lr=", c ? c->x[30] : 0);
+#endif
+    n = sig_diag_put_hex(b, n, " handler=", (sig >= 1 && sig <= 64) ? g_sigact[sig].handler : 0);
+    n = sig_diag_put_hex(b, n, " mask=", c ? c->sigmask : 0);
+    b[n++] = '\n';
+    (void)write(2, b, (size_t)n);
+}
+
 // a GENUINE synchronous CPU fault (SIGSEGV/SIGBUS/...) taken in translated code for which the guest
 // installed NO handler. Such a fault is fatal and cannot be masked or ignored (a stack overflow into the
 // guard gap, a wild pointer, a NULL deref). Terminate the guest process the SAME way dd terminates any
@@ -530,6 +657,7 @@ static int deliver_guest_fatal_fault(int hostsig, siginfo_t *si, void *ucv) {
     struct cpu *c = (struct cpu *)pthread_getspecific(g_cpu_key);
     if (!c) return 0;
     if (!sigframe_capture_fault(c, ucv)) return 0; // host PC not in translated code -> engine/async: re-raise
+    sig_diag_fatal_fault(sig, hostsig, si, c);
     // A genuine, fatal, unmaskable guest fault. Terminate the guest process HERE (async-signal-safe _exit),
     // not by resuming the dispatcher: the guest state is captured mid-fault (e.g. SP overrun into the guard),
     // so re-entering the code cache would run off into garbage. A non-init guest records its Linux

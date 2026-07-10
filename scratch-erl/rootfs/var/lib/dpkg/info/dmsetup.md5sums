@@ -1,0 +1,12 @@
+0300d36297cb71f9579ca143b80eea2e  lib/udev/rules.d/55-dm.rules
+b59956f4e27bfb9e53afc2df30a25acd  lib/udev/rules.d/60-persistent-storage-dm.rules
+d6a150e3deff383fbeb57b09823c8bb9  lib/udev/rules.d/95-dm-notify.rules
+edb3e0c3d10c15a879a569109f56eaa0  sbin/blkdeactivate
+94b3c8919f53489c09d16321eb384949  sbin/dmsetup
+8558caef620d38c73382391260fb0f04  usr/share/doc/dmsetup/changelog.Debian.devmapper.gz
+94c80d0b1d2f651eab3dbc134ebfed00  usr/share/doc/dmsetup/changelog.Debian.gz
+356882271d166f18b2a75be414763861  usr/share/doc/dmsetup/copyright
+dff1d6572b8e4fce0845cbfa00029169  usr/share/initramfs-tools/hooks/dmsetup
+30eb4c1597e9fc79d33affb8d0d10225  usr/share/man/man8/blkdeactivate.8.gz
+6c50d46c5d862a45e0647bb2ba98c9e0  usr/share/man/man8/dmsetup.8.gz
+05f798b7ba6d4bdcaa11b237ab00a497  usr/share/man/man8/dmstats.8.gz

@@ -1,0 +1,3 @@
+automake: extra-license-file usr/share/automake-1.16/COPYING
+automake: package-contains-documentation-outside-usr-share-doc usr/share/automake-1.16/texinfo.tex
+automake: package-contains-empty-directory usr/share/aclocal/

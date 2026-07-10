@@ -1,0 +1,4 @@
+libgl_plugin 0 libcaca0 (>= 0.99.beta20)
+libx11_plugin 0 libcaca0 (>= 0.99.beta20)
+libcaca++ 0 libcaca0 (>= 0.99.beta20)
+libcaca 0 libcaca0 (>= 0.99.beta20)

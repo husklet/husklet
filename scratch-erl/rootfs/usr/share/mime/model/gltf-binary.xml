@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<mime-type xmlns="http://www.freedesktop.org/standards/shared-mime-info" type="model/gltf-binary">
+  <!--Created automatically by update-mime-database. DO NOT EDIT!-->
+  <comment>glTF model</comment>
+  <acronym>glTF</acronym>
+  <expanded-acronym>GL Transmission Format</expanded-acronym>
+  <glob pattern="*.glb"/>
+</mime-type>

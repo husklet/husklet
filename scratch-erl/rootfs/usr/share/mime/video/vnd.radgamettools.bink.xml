@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<mime-type xmlns="http://www.freedesktop.org/standards/shared-mime-info" type="video/vnd.radgamettools.bink">
+  <!--Created automatically by update-mime-database. DO NOT EDIT!-->
+  <comment>Bink Video</comment>
+  <glob pattern="*.bik"/>
+  <glob pattern="*.bk2"/>
+</mime-type>

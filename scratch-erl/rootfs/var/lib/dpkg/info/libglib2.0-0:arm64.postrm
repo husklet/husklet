@@ -1,0 +1,86 @@
+#! /bin/sh
+# Debian Policy §10.4 says /bin/sh has a superset of POSIX functionality
+# shellcheck disable=SC3043
+
+set -e
+
+
+
+clean_up_giomodule_cache ()
+{
+    local multiarch="aarch64-linux-gnu"
+    local modules="/usr/lib/${multiarch}/gio/modules"
+    local iter
+
+    if ! [ -d "$modules" ]; then
+        return 0
+    fi
+
+    # Don't remove giomodule.cache if libglib2.0-0 is replaced
+    # by some other ABI variant of essentially the same library
+    # (for example libglib2.0-0t64 in trixie), to avoid causing
+    # <https://bugs.debian.org/1065022>.
+    #
+    # This implementation is based on the assumption that any GLib
+    # version that still uses ${libdir}/gio/modules/giomodule.cache
+    # will also continue to ship ${libdir}/glib-2.0.
+    if [ -d "/usr/lib/${multiarch}/glib-2.0" ]; then
+        return 0
+    fi
+
+    # As an additional safety-catch, don't remove giomodule.cache if
+    # there is at least one module that should have been listed in it.
+    for iter in "$modules"/*.so; do
+        if [ -e "$iter" ]; then
+            echo "$0: not removing $modules/giomodule.cache because $iter still exists" >&2
+            return 0
+        fi
+    done
+
+    rm -f "$modules/giomodule.cache"
+    rmdir -p --ignore-fail-on-non-empty "$modules"
+}
+
+clean_up_gsettings_schemas ()
+{
+    local schemas="/usr/share/glib-2.0/schemas"
+    local iter
+
+    if ! [ -d "$schemas" ]; then
+        return 0
+    fi
+
+    # Similarly, instead of using $DPKG_MAINTSCRIPT_PACKAGE_REFCOUNT, only
+    # remove gschemas.compiled if GLib has completely gone away - not just
+    # libglib2.0-0, but any future ABI variant like libglib2.0-0t64.
+    #
+    # This implementation is based on the assumption that any GLib
+    # version that still uses ${datadir}/glib-2.0/schemas
+    # will also continue to ship ${libdir}/glib-2.0.
+    for iter in /usr/lib/*/glib-2.0; do
+        if [ -e "$iter" ]; then
+            return 0
+        fi
+    done
+
+    # As an additional safety-catch, don't remove gschemas.compiled if
+    # there is at least one schema that should have been listed in it.
+    for iter in "$schemas"/*.xml; do
+        if [ -e "$iter" ]; then
+            echo "$0: not removing $schemas/gschemas.compiled because $iter still exists" >&2
+            return 0
+        fi
+    done
+
+    rm -f "$schemas/gschemas.compiled"
+    rmdir -p --ignore-fail-on-non-empty "$schemas"
+}
+
+case "$1" in
+    (purge)
+        clean_up_giomodule_cache
+        clean_up_gsettings_schemas
+        ;;
+esac
+
+# vim:set sw=4 sts=4 et:

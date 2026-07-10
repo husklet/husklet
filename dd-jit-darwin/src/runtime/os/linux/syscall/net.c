@@ -30,10 +30,38 @@ static int netlog_on(void) {
     // gate is lost per guest process. A /tmp/DDNETLOG file survives (checked once, cached per process).
     if (g_netlog < 0) {
         int saved = errno; // access() sets errno when the sentinel is absent -- preserve the caller's errno
-        g_netlog = (getenv("DDNETLOG") != NULL || access("/tmp/DDNETLOG", F_OK) == 0) ? 1 : 0; // (this runs
+        g_netlog = (getenv("DDNETLOG") != NULL || getenv("DDNET_ROLE") != NULL || getenv("DDNET_FD") != NULL ||
+                    getenv("DDNET_TRACE_FILE") != NULL || access("/tmp/DDNETLOG", F_OK) == 0)
+                       ? 1
+                       : 0; // (this runs
         errno = saved; // AFTER a send/recv in the hot path; a leaked ENOENT would corrupt its reported errno).
     }
     return g_netlog;
+}
+
+static int netlog_role_match(void) {
+    const char *want = getenv("DDNET_ROLE");
+    if (!want || !want[0]) want = getenv("DDWAKE_ROLE");
+    if (!want || !want[0]) return 1;
+    const char *got = getenv("DD_CHROME_TYPE");
+    return got && strcmp(got, want) == 0;
+}
+
+static int netlog_fd_match(int fd) {
+    const char *want = getenv("DDNET_FD");
+    if (!want || !want[0]) return 1;
+    char *end = NULL;
+    long v = strtol(want, &end, 10);
+    return end && *end == '\0' && fd == (int)v;
+}
+
+static int netlog_trace_fd(void) {
+    static int trace_fd = -2;
+    if (trace_fd == -2) {
+        const char *path = getenv("DDNET_TRACE_FILE");
+        trace_fd = (path && path[0]) ? open(path, O_CREAT | O_WRONLY | O_APPEND, 0644) : -1;
+    }
+    return trace_fd;
 }
 
 // Count SCM_RIGHTS fds in a host-layout msghdr control buffer (post-recvmsg, or pre-sendmsg from hctl).
@@ -49,14 +77,42 @@ static int cmsg_count_fds(const struct msghdr *m) {
 static void netlog(const char *dir, int fd, ssize_t reqlen, ssize_t ret, int scmfds, int credpid,
                    const void *payload, size_t plen) {
     if (!netlog_on()) return;
+    if (!netlog_role_match() || !netlog_fd_match(fd)) return;
+    int trace_fd = netlog_trace_fd();
     unsigned char b[8] = {0};
     size_t n = plen < 8 ? plen : 8;
     if (payload && ret > 0 && n) memcpy(b, payload, n < (size_t)ret ? n : (size_t)ret);
     struct timespec _ts;
     clock_gettime(CLOCK_MONOTONIC, &_ts);
+    if (trace_fd >= 0) {
+        dprintf(trace_fd,
+                "[DDNETLOG] t=%ld.%03ld pid=%d tid=%lu fd=%d %s req=%ld ret=%ld scmfds=%d credpid=%d p8=%02x%02x%02x%02x%02x%02x%02x%02x\n",
+                (long)_ts.tv_sec, _ts.tv_nsec / 1000000, getpid(), wake_tid(), fd, dir, (long)reqlen, (long)ret,
+                scmfds, credpid, b[0], b[1], b[2], b[3], b[4], b[5], b[6], b[7]);
+        return;
+    }
     fprintf(stderr, "[DDNETLOG] t=%ld.%03ld pid=%d tid=%lu fd=%d %s req=%ld ret=%ld scmfds=%d credpid=%d p8=%02x%02x%02x%02x%02x%02x%02x%02x\n",
             (long)_ts.tv_sec, _ts.tv_nsec / 1000000, getpid(), wake_tid(), fd, dir, (long)reqlen, (long)ret, scmfds, credpid,
             b[0], b[1], b[2], b[3], b[4], b[5], b[6], b[7]);
+}
+
+static void netlog_socketpair(int lty, int hty, int r, const int sv[2]) {
+    if (!netlog_on() || !netlog_role_match()) return;
+    if (getenv("DDNET_FD") != NULL) return;
+    int out = netlog_trace_fd();
+    if (out < 0) out = STDERR_FILENO;
+    dprintf(out, "[DDNETLOG] pid=%d socketpair lty=%d hty=%d ret=%d sv=[%d,%d]%s\n", getpid(), lty, hty, r,
+            r == 0 ? sv[0] : -1, r == 0 ? sv[1] : -1, lty == SOCK_SEQPACKET ? " SEQPACKET" : "");
+}
+
+static int seqerrlog_on(void) {
+    static int on = -1;
+    if (on < 0) {
+        int saved = errno;
+        on = (getenv("DDSEQERRLOG") != NULL || access("/tmp/DDSEQERRLOG", F_OK) == 0) ? 1 : 0;
+        errno = saved;
+    }
+    return on;
 }
 
 // IPPROTO_IPV6 optname: Linux -> macOS. CRITICAL: like IPPROTO_TCP, these numbers diverge, so a raw
@@ -289,6 +345,7 @@ static int svc_net(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_
                 g_dns_sock[r] = 0;
             }
         }
+        fdtrace_log("socket", r, (long)a0, (long)ty);
         G_RET(c) = r < 0 ? (uint64_t)(-errno) : (uint64_t)r;
         break;
     }
@@ -316,8 +373,36 @@ static int svc_net(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_
             int on = 1;
             setsockopt(sv[0], SOL_SOCKET, SO_NOSIGPIPE, &on, sizeof on);
             setsockopt(sv[1], SOL_SOCKET, SO_NOSIGPIPE, &on, sizeof on);
+            if ((int)a1 & 0x80000) { // SOCK_CLOEXEC
+                fcntl(sv[0], F_SETFD, FD_CLOEXEC);
+                fcntl(sv[1], F_SETFD, FD_CLOEXEC);
+            }
+            if ((int)a1 & 0x800) { // SOCK_NONBLOCK
+                int f0 = fcntl(sv[0], F_GETFL);
+                int f1 = fcntl(sv[1], F_GETFL);
+                if (f0 >= 0) fcntl(sv[0], F_SETFL, f0 | O_NONBLOCK);
+                if (f1 >= 0) fcntl(sv[1], F_SETFL, f1 | O_NONBLOCK);
+            }
             ((int *)a3)[0] = sv[0];
             ((int *)a3)[1] = sv[1];
+            if ((int)a0 == AF_UNIX) {
+                if (sv[0] >= 0 && sv[0] < DD_NFD) {
+                    g_sock_fam[sv[0]] = AF_UNIX;
+                    g_sock_stream[sv[0]] = (lty == SOCK_STREAM);
+                    g_sock_dgram[sv[0]] = (lty == SOCK_DGRAM || lty == SOCK_SEQPACKET);
+                    g_sock_pair_peer[sv[0]] = sv[1] + 1;
+                    g_sock_peer_pid[sv[0]] = sock_alloc_synth_peer();
+                    g_sock_passcred[sv[0]] = 0;
+                }
+                if (sv[1] >= 0 && sv[1] < DD_NFD) {
+                    g_sock_fam[sv[1]] = AF_UNIX;
+                    g_sock_stream[sv[1]] = (lty == SOCK_STREAM);
+                    g_sock_dgram[sv[1]] = (lty == SOCK_DGRAM || lty == SOCK_SEQPACKET);
+                    g_sock_pair_peer[sv[1]] = sv[0] + 1;
+                    g_sock_peer_pid[sv[1]] = sock_alloc_synth_peer();
+                    g_sock_passcred[sv[1]] = 0;
+                }
+            }
             // macOS AF_UNIX has no SEQPACKET, so a SEQPACKET pair is backed by SOCK_DGRAM (above) to keep
             // message boundaries. But a connected DGRAM socket does NOT deliver EOF when its peer closes
             // (a blocked recv never wakes; a fresh recv gets ECONNRESET) -- whereas Linux SEQPACKET recv
@@ -345,21 +430,15 @@ static int svc_net(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_
                 // CREATOR's pid via LOCAL_PEERPID on BOTH ends (never updated on fork), so once the browser
                 // forks a renderer the browser's cred/peercred query on its end degenerates to self; without a
                 // distinct id every forked child collided on guest pid 1 and Mojo's ports node-merge hung.
-                if (sv[0] >= 0 && sv[0] < DD_NFD) {
-                    g_sock_seqpacket[sv[0]] = 1;
-                    g_sock_pair_peer[sv[0]] = sv[1] + 1; // remember the partner end (see seq_send_eof)
-                    g_sock_peer_pid[sv[0]] = sock_alloc_synth_peer();
-                }
-                if (sv[1] >= 0 && sv[1] < DD_NFD) {
-                    g_sock_seqpacket[sv[1]] = 1;
-                    g_sock_pair_peer[sv[1]] = sv[0] + 1;
-                    g_sock_peer_pid[sv[1]] = sock_alloc_synth_peer();
-                }
+                if (sv[0] >= 0 && sv[0] < DD_NFD) g_sock_seqpacket[sv[0]] = 1;
+                if (sv[1] >= 0 && sv[1] < DD_NFD) g_sock_seqpacket[sv[1]] = 1;
             }
         }
-        if (netlog_on())
-            fprintf(stderr, "[DDNETLOG] pid=%d socketpair lty=%d hty=%d ret=%d sv=[%d,%d]%s\n", getpid(), lty, hty, r,
-                    r == 0 ? sv[0] : -1, r == 0 ? sv[1] : -1, lty == SOCK_SEQPACKET ? " SEQPACKET" : "");
+        netlog_socketpair(lty, hty, r, sv);
+        if (r == 0) {
+            fdtrace_log("socketpair", sv[0], sv[1], (long)a1);
+            fdtrace_log("socketpair", sv[1], sv[0], (long)a1);
+        }
         G_RET(c) = r < 0 ? (uint64_t)(-errno) : 0;
         break;
     }
@@ -1221,17 +1300,38 @@ static int svc_net(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_
         // with no control buffer stays on the old path).
         uint8_t *gc = (void *)*(uint64_t *)(g + 32);
         size_t gcl = *(uint64_t *)(g + 40);
-        uint8_t hctl[4096]; // host-layout scratch (macOS hdr is smaller, so this is ample)
+        size_t hcap = 0;
+        if (gc && gcl) {
+            if (gcl > (SIZE_MAX - 256) / 3) {
+                G_RET(c) = (uint64_t)(-ENOMEM);
+                break;
+            }
+            hcap = CMSG_SPACE(gcl * 3 + 256);
+        }
+        if (hcap < 4096) hcap = 4096;
+        uint8_t hstack[4096];
+        uint8_t *hctl = hcap <= sizeof hstack ? hstack : malloc(hcap);
+        if (hcap && !hctl) {
+            G_RET(c) = (uint64_t)(-ENOMEM);
+            break;
+        }
         if (nr == 211) {    // sendmsg: translate guest -> host before the call
             // Ancillary data may carry SCM_RIGHTS fds to another process; flush all RAM-backed scratch so a
             // passed fd (and any other) is a coherent host file on the receiving side.
             if (gc && gcl) memf_materialize_all();
-            ssize_t hn = (gc && gcl) ? cmsg_l2m(gc, gcl, hctl, sizeof hctl) : 0;
+            int cerr = 0;
+            ssize_t hn = (gc && gcl) ? cmsg_l2m(gc, gcl, hctl, hcap, &cerr) : 0;
+            if (hn < 0) {
+                if (hctl != hstack) free(hctl);
+                G_RET(c) = (uint64_t)(-(cerr ? cerr : EINVAL));
+                break;
+            }
             mh.msg_control = hn > 0 ? hctl : NULL;
             mh.msg_controllen = hn > 0 ? (socklen_t)hn : 0;
         } else { // recvmsg: receive into host scratch
+            if (gc && gcl) memset(hctl, 0, hcap);
             mh.msg_control = (gc && gcl) ? hctl : NULL;
-            mh.msg_controllen = (gc && gcl) ? (socklen_t)sizeof hctl : 0;
+            mh.msg_controllen = (gc && gcl) ? (socklen_t)hcap : 0;
         }
         // MSG_NOSIGNAL(0x4000) -> SO_NOSIGPIPE (macOS has no per-call flag); EPIPE instead of SIGPIPE.
         if (nr == 211 && ((int)a2 & 0x4000)) {
@@ -1257,10 +1357,13 @@ static int svc_net(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_
         ssize_t r;
         int log_credpid = -1; // ucred.pid synthesized for this recvmsg (DDNETLOG); -1 = none
         do {
+            if (nr == 212 && ipclog_fd_match((int)a0))
+                ipclog_io("recvmsg_enter", (int)a0, (long)mh.msg_iovlen, -999, NULL, 0);
             r = (nr == 211) ? (ud_route ? (ssize_t)unix_dgram_sendmsg_at((int)a0, ud_host, &mh, msgflags_l2m((int)a2))
                                         : sendmsg((int)a0, &mh, msgflags_l2m((int)a2)))
                             : recvmsg((int)a0, &mh, msgflags_l2m((int)a2));
         } while (r < 0 && SVC_EINTR_RESTART(c));
+        if (nr == 211) cmsg_tmpfds_close();
         if (nr == 211 && r >= 0) seq_mark_wrote((int)a0); // genuine writer: may inject peer-EOF on its close
         if (r > 0 && peekaddr) r = 0; // guest supplied no data room; only the source address was wanted
         // SEQPACKET-as-DGRAM EOF: coerce a peer-closed recvmsg's ECONNRESET to 0 (EOF). (See case 199.)
@@ -1278,13 +1381,14 @@ static int svc_net(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_
                     memcpy(gname, &nss, mh.msg_namelen < gnamelen ? mh.msg_namelen : gnamelen);
             } else
                 *(uint32_t *)(g + 8) = mh.msg_namelen;
-            size_t ln = (gc && gcl) ? (size_t)cmsg_m2l(&mh, gc, gcl) : 0;
-            int mfl = msgflags_m2l((int)mh.msg_flags);
             // SO_PASSCRED: the Linux kernel auto-attaches an SCM_CREDENTIALS record with the peer's ucred to
             // every received message; macOS does not, so synthesize it (uid/gid = container identity, pid =
             // the peer's -- LOCAL_PEERPID, mapping the container init's host pid back to guest pid 1, self as
             // the container pid). Chromium's Mojo bootstrap aborts ("missing credentials") without it.
-            if (gc && gcl && (int)a0 >= 0 && (int)a0 < DD_NFD && g_sock_passcred[(int)a0]) {
+            int passcred_active = gc && gcl && (int)a0 >= 0 && (int)a0 < DD_NFD && g_sock_passcred[(int)a0];
+            int cred_trunc = 0;
+            size_t ln = 0;
+            if (passcred_active) {
                 int ppid = 0;
                 socklen_t pl = sizeof ppid;
                 if (getsockopt((int)a0, SOL_LOCAL, LOCAL_PEERPID, &ppid, &pl) < 0 || ppid <= 0 || ppid == getpid()) {
@@ -1297,11 +1401,31 @@ static int svc_net(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_
                 } else if (g_init_hostpid && ppid == g_init_hostpid)
                     ppid = 1;
                 log_credpid = ppid;
-                size_t ln2 = cmsg_add_cred(gc, ln, gcl, ppid, cuid(), cgid());
-                if (ln2 == ln)
-                    mfl |= 0x8; // MSG_CTRUNC (Linux): no room for the credentials record
-                ln = ln2;
+                size_t ln2 = cmsg_add_cred(gc, 0, gcl, ppid, cuid(), cgid());
+                if (ln2 == 0)
+                    cred_trunc = 1; // no room for the Linux-mandated credentials record
+                else
+                    ln = ln2;
             }
+            int cmsg_trunc = 0;
+            if (gc && gcl) ln = (size_t)cmsg_m2l(&mh, gc, gcl, ln, &cmsg_trunc);
+            int host_mflags = (int)mh.msg_flags;
+            if (!cmsg_trunc && gc && gcl) host_mflags &= ~0x20; // host-side sideband expansion compressed cleanly
+            int mfl = msgflags_m2l(host_mflags);
+            if (cred_trunc || (cmsg_trunc && !passcred_active)) mfl |= 0x8; // MSG_CTRUNC
+            if (seqerrlog_on() && seq_is((int)a0) && (mfl & (0x20 | 0x8))) {
+                size_t tot = 0;
+                struct iovec *giov = (struct iovec *)*(uint64_t *)(g + 16);
+                size_t gcnt = *(uint64_t *)(g + 24);
+                for (size_t i = 0; giov && i < gcnt; i++)
+                    tot += giov[i].iov_len;
+                dprintf(STDERR_FILENO,
+                        "[DDSEQERR] pid=%d tid=%lu fd=%d ret=%ld req=%zu gcl=%zu ln=%zu host_flags=0x%x linux_flags=0x%x cmsg_trunc=%d passcred=%d credpid=%d hctrl=%u\n",
+                        getpid(), wake_tid(), (int)a0, (long)r, tot, gcl, ln, host_mflags, mfl, cmsg_trunc,
+                        ((int)a0 >= 0 && (int)a0 < DD_NFD) ? g_sock_passcred[(int)a0] : 0, log_credpid,
+                        (unsigned)mh.msg_controllen);
+            }
+            if (((int)a2 & 0x40000000) && gc && ln) cmsg_lx_set_cloexec_fds(gc, ln); // MSG_CMSG_CLOEXEC
             *(uint64_t *)(g + 40) = ln;
             *(uint32_t *)(g + 48) = (uint32_t)mfl;
         }
@@ -1314,6 +1438,20 @@ static int svc_net(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_
             netlog(nr == 211 ? "sendmsg" : "recvmsg", (int)a0, (ssize_t)tot, r < 0 ? -errno : r,
                    cmsg_count_fds(&mh), log_credpid, pay, pay ? giov[0].iov_len : 0);
         }
+        if (ipclog_fd_match((int)a0)) {
+            struct iovec *giov = (struct iovec *)*(uint64_t *)(g + 16);
+            size_t gcnt = *(uint64_t *)(g + 24), tot = 0;
+            for (size_t i = 0; giov && i < gcnt; i++) tot += giov[i].iov_len;
+            void *pay = (giov && gcnt) ? giov[0].iov_base : NULL;
+            ipclog_io(nr == 211 ? "sendmsg" : "recvmsg", (int)a0, (long)tot, r < 0 ? -errno : r, pay,
+                      pay ? giov[0].iov_len : 0);
+            if (r >= 0 && cmsg_count_fds(&mh)) {
+                dprintf(STDERR_FILENO, "[DDIPC] pid=%d fd=%d op=%s cmsg_fds=%d controllen=%u flags=0x%x\n",
+                        getpid(), (int)a0, nr == 211 ? "sendmsg" : "recvmsg", cmsg_count_fds(&mh),
+                        (unsigned)mh.msg_controllen, (unsigned)mh.msg_flags);
+            }
+        }
+        if (hctl != hstack) free(hctl);
         G_RET(c) = r < 0 ? (uint64_t)(-errno) : (uint64_t)r;
         break;
     }
@@ -1389,14 +1527,35 @@ static int svc_net(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_
             // Ancillary data: route the per-submessage control buf through a host-layout scratch buffer.
             uint8_t *gc = (void *)*(uint64_t *)(g + 32);
             size_t gcl = *(uint64_t *)(g + 40);
-            uint8_t hctl[4096];
+            size_t hcap = 0;
+            if (gc && gcl) {
+                if (gcl > (SIZE_MAX - 256) / 3) {
+                    err = ENOMEM;
+                    break;
+                }
+                hcap = CMSG_SPACE(gcl * 3 + 256);
+            }
+            if (hcap < 4096) hcap = 4096;
+            uint8_t hstack[4096];
+            uint8_t *hctl = hcap <= sizeof hstack ? hstack : malloc(hcap);
+            if (hcap && !hctl) {
+                err = ENOMEM;
+                break;
+            }
             if (nr == 269) { // sendmmsg: translate guest -> host
-                ssize_t hn = (gc && gcl) ? cmsg_l2m(gc, gcl, hctl, sizeof hctl) : 0;
+                int cerr = 0;
+                ssize_t hn = (gc && gcl) ? cmsg_l2m(gc, gcl, hctl, hcap, &cerr) : 0;
+                if (hn < 0) {
+                    if (hctl != hstack) free(hctl);
+                    err = cerr ? cerr : EINVAL;
+                    break;
+                }
                 mh.msg_control = hn > 0 ? hctl : NULL;
                 mh.msg_controllen = hn > 0 ? (socklen_t)hn : 0;
             } else { // recvmmsg: receive into host scratch
+                if (gc && gcl) memset(hctl, 0, hcap);
                 mh.msg_control = (gc && gcl) ? hctl : NULL;
-                mh.msg_controllen = (gc && gcl) ? (socklen_t)sizeof hctl : 0;
+                mh.msg_controllen = (gc && gcl) ? (socklen_t)hcap : 0;
             }
             int rf = (int)a3;
             // after the first, don't block (MSG_WAITFORONE-ish)
@@ -1405,8 +1564,10 @@ static int svc_net(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_
                             ? (ud_route ? (ssize_t)unix_dgram_sendmsg_at((int)a0, ud_host, &mh, msgflags_l2m(rf))
                                         : sendmsg((int)a0, &mh, msgflags_l2m(rf)))
                             : recvmsg((int)a0, &mh, msgflags_l2m(rf));
+            if (nr == 269) cmsg_tmpfds_close();
             if (r < 0) {
                 err = errno;
+                if (hctl != hstack) free(hctl);
                 break;
             }
             // msg_len
@@ -1422,10 +1583,17 @@ static int svc_net(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_
                         memcpy(gname, &nss, mh.msg_namelen < gnamelen ? mh.msg_namelen : gnamelen);
                 } else
                     *(uint32_t *)(g + 8) = mh.msg_namelen;
-                size_t ln = (gc && gcl) ? (size_t)cmsg_m2l(&mh, gc, gcl) : 0;
+                int cmsg_trunc = 0;
+                size_t ln = (gc && gcl) ? (size_t)cmsg_m2l(&mh, gc, gcl, 0, &cmsg_trunc) : 0;
+                if (((int)a3 & 0x40000000) && gc && ln) cmsg_lx_set_cloexec_fds(gc, ln); // MSG_CMSG_CLOEXEC
                 *(uint64_t *)(g + 40) = ln;
-                *(uint32_t *)(g + 48) = (uint32_t)msgflags_m2l((int)mh.msg_flags);
+                int host_mflags = (int)mh.msg_flags;
+                if (!cmsg_trunc && gc && gcl) host_mflags &= ~0x20; // host-side sideband expansion compressed cleanly
+                int mfl = msgflags_m2l(host_mflags);
+                if (cmsg_trunc) mfl |= 0x8; // MSG_CTRUNC
+                *(uint32_t *)(g + 48) = (uint32_t)mfl;
             }
+            if (hctl != hstack) free(hctl);
             done++;
         }
         G_RET(c) = (done == 0 && err) ? (uint64_t)(-(int64_t)err) : (uint64_t)done;

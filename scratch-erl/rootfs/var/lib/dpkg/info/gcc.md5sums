@@ -1,0 +1,5 @@
+ddef29c39d1a5d5ac6a5380627309ad5  usr/bin/c89-gcc
+aa80579d73b66c41e169b80f5fbc9324  usr/bin/c99-gcc
+efd746ef443e18040bfcaf0a0e4b5aa1  usr/share/lintian/overrides/gcc
+287a0336854892fb97eb314e19502acb  usr/share/man/man1/c89-gcc.1.gz
+7f95a1268ed812dc20e04d74acac8181  usr/share/man/man1/c99-gcc.1.gz

@@ -1,0 +1,8 @@
+f25cec0cf31c557b16c569e1901878bd  usr/include/fontconfig/fcfreetype.h
+85e725e25bbda2c2f3ee3fdf90708faf  usr/include/fontconfig/fcprivate.h
+4e45e004d9ad0bbb329960f161ab20b1  usr/include/fontconfig/fontconfig.h
+a57ce6a4f790db9a7df649f130f54a10  usr/lib/aarch64-linux-gnu/libfontconfig.a
+6f17e8a578336d5a0a85da9295c21d65  usr/lib/aarch64-linux-gnu/pkgconfig/fontconfig.pc
+c0bd1960baa6b09c09f4b7546e5141d8  usr/share/doc/libfontconfig-dev/changelog.Debian.gz
+ffc010f3b92c1f32a60a4edf138c7b9a  usr/share/doc/libfontconfig-dev/changelog.gz
+4648df9e8d6215ae7dd16ce863b16967  usr/share/doc/libfontconfig-dev/copyright

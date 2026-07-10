@@ -1,0 +1,183 @@
+<!DOCTYPE html PUBLIC "-//W3C//DTD HTML 4.01 Transitional//EN" "http://www.w3.org/TR/html4/loose.dtd">
+<html>
+<!-- Created by GNU Texinfo 6.8, https://www.gnu.org/software/texinfo/ -->
+<head>
+<meta http-equiv="Content-Type" content="text/html; charset=utf-8">
+<!-- 
+This manual is for libffi, a portable foreign function interface
+library.
+
+Copyright (C) 2008-2019, 2021, 2022 Anthony Green and Red Hat, Inc.
+
+Permission is hereby granted, free of charge, to any person obtaining
+a copy of this software and associated documentation files (the
+"Software"), to deal in the Software without restriction, including
+without limitation the rights to use, copy, modify, merge, publish,
+distribute, sublicense, and/or sell copies of the Software, and to
+permit persons to whom the Software is furnished to do so, subject to
+the following conditions:
+
+The above copyright notice and this permission notice shall be
+included in all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
+EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.
+IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY
+CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT,
+TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
+SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+ -->
+<title>Arrays Unions Enums (libffi: the portable foreign function interface library)</title>
+
+<meta name="description" content="Arrays Unions Enums (libffi: the portable foreign function interface library)">
+<meta name="keywords" content="Arrays Unions Enums (libffi: the portable foreign function interface library)">
+<meta name="resource-type" content="document">
+<meta name="distribution" content="global">
+<meta name="Generator" content="makeinfo">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+
+<link href="index.html" rel="start" title="Top">
+<link href="Index.html" rel="index" title="Index">
+<link href="Types.html" rel="up" title="Types">
+<link href="Type-Example.html" rel="next" title="Type Example">
+<link href="Size-and-Alignment.html" rel="prev" title="Size and Alignment">
+<style type="text/css">
+<!--
+a.copiable-anchor {visibility: hidden; text-decoration: none; line-height: 0em}
+a.summary-letter {text-decoration: none}
+blockquote.indentedblock {margin-right: 0em}
+div.display {margin-left: 3.2em}
+div.example {margin-left: 3.2em}
+kbd {font-style: oblique}
+pre.display {font-family: inherit}
+pre.format {font-family: inherit}
+pre.menu-comment {font-family: serif}
+pre.menu-preformatted {font-family: serif}
+span.nolinebreak {white-space: nowrap}
+span.roman {font-family: initial; font-weight: normal}
+span.sansserif {font-family: sans-serif; font-weight: normal}
+span:hover a.copiable-anchor {visibility: visible}
+ul.no-bullet {list-style: none}
+-->
+</style>
+
+
+</head>
+
+<body lang="en">
+<div class="subsection" id="Arrays-Unions-Enums">
+<div class="header">
+<p>
+Next: <a href="Type-Example.html" accesskey="n" rel="next">Type Example</a>, Previous: <a href="Size-and-Alignment.html" accesskey="p" rel="prev">Size and Alignment</a>, Up: <a href="Types.html" accesskey="u" rel="up">Types</a> &nbsp; [<a href="Index.html" title="Index" rel="index">Index</a>]</p>
+</div>
+<hr>
+<span id="Arrays_002c-Unions_002c-and-Enumerations"></span><h4 class="subsection">2.3.4 Arrays, Unions, and Enumerations</h4>
+
+<ul class="section-toc">
+<li><a href="#Arrays" accesskey="1">Arrays</a></li>
+<li><a href="#Unions" accesskey="2">Unions</a></li>
+<li><a href="#Enumerations" accesskey="3">Enumerations</a></li>
+</ul>
+<div class="subsubsection" id="Arrays">
+<h4 class="subsubsection">2.3.4.1 Arrays</h4>
+
+<p><code>libffi</code> does not have direct support for arrays or unions.
+However, they can be emulated using structures.
+</p>
+<p>To emulate an array, simply create an <code>ffi_type</code> using
+<code>FFI_TYPE_STRUCT</code> with as many members as there are elements in
+the array.
+</p>
+<div class="example">
+<pre class="example">ffi_type array_type;
+ffi_type **elements
+int i;
+
+elements = malloc ((n + 1) * sizeof (ffi_type *));
+for (i = 0; i &lt; n; ++i)
+  elements[i] = array_element_type;
+elements[n] = NULL;
+
+array_type.size = array_type.alignment = 0;
+array_type.type = FFI_TYPE_STRUCT;
+array_type.elements = elements;
+</pre></div>
+
+<p>Note that arrays cannot be passed or returned by value in C &ndash;
+structure types created like this should only be used to refer to
+members of real <code>FFI_TYPE_STRUCT</code> objects.
+</p>
+<p>However, a phony array type like this will not cause any errors from
+<code>libffi</code> if you use it as an argument or return type.  This may
+be confusing.
+</p>
+</div>
+<div class="subsubsection" id="Unions">
+<h4 class="subsubsection">2.3.4.2 Unions</h4>
+
+<p>A union can also be emulated using <code>FFI_TYPE_STRUCT</code>.  In this
+case, however, you must make sure that the size and alignment match
+the real requirements of the union.
+</p>
+<p>One simple way to do this is to ensue that each element type is laid
+out.  Then, give the new structure type a single element; the size of
+the largest element; and the largest alignment seen as well.
+</p>
+<p>This example uses the <code>ffi_prep_cif</code> trick to ensure that each
+element type is laid out.
+</p>
+<div class="example">
+<pre class="example">ffi_abi desired_abi;
+ffi_type union_type;
+ffi_type **union_elements;
+
+int i;
+ffi_type element_types[2];
+
+element_types[1] = NULL;
+
+union_type.size = union_type.alignment = 0;
+union_type.type = FFI_TYPE_STRUCT;
+union_type.elements = element_types;
+
+for (i = 0; union_elements[i]; ++i)
+  {
+    ffi_cif cif;
+    if (ffi_prep_cif (&amp;cif, desired_abi, 0, union_elements[i], NULL) == FFI_OK)
+      {
+        if (union_elements[i]-&gt;size &gt; union_type.size)
+          {
+            union_type.size = union_elements[i];
+            size = union_elements[i]-&gt;size;
+          }
+        if (union_elements[i]-&gt;alignment &gt; union_type.alignment)
+          union_type.alignment = union_elements[i]-&gt;alignment;
+      }
+  }
+</pre></div>
+
+</div>
+<div class="subsubsection" id="Enumerations">
+<h4 class="subsubsection">2.3.4.3 Enumerations</h4>
+
+<p><code>libffi</code> does not have any special support for C <code>enum</code>s.
+Although any given <code>enum</code> is implemented using a specific
+underlying integral type, exactly which type will be used cannot be
+determined by <code>libffi</code> &ndash; it may depend on the values in the
+enumeration or on compiler flags such as <samp>-fshort-enums</samp>.
+See <a data-manual="gcc" href="https://gcc.gnu.org/onlinedocs/gcc/Structures-unions-enumerations-and-bit_002dfields-implementation.html#Structures-unions-enumerations-and-bit_002dfields-implementation">(gcc)Structures unions enumerations and bit-fields implementation</a>,
+for more information about how GCC handles enumerations.
+</p>
+</div>
+</div>
+<hr>
+<div class="header">
+<p>
+Next: <a href="Type-Example.html">Type Example</a>, Previous: <a href="Size-and-Alignment.html">Size and Alignment</a>, Up: <a href="Types.html">Types</a> &nbsp; [<a href="Index.html" title="Index" rel="index">Index</a>]</p>
+</div>
+
+
+
+</body>
+</html>

@@ -1,0 +1,122 @@
+Format: https://www.debian.org/doc/packaging-manuals/copyright-format/1.0/
+Upstream-Name: unixODBC
+Upstream-Contact: Nick Gorham <nick.gorham@easysoft.com>
+Source: http://www.unixodbc.org/
+
+Files: *
+Copyright: 1999-2022 Nick Gorham
+           1999-2007 Peter Harvey, et al.
+License: LGPL-2.1+
+
+Files: Drivers/nn/*
+Copyright: 1995-1996 Ke Jin
+           1999 Peter Harvey
+License: GPL-2+
+
+Files: Drivers/nn/yyparse.y
+Copyright: 1995-1996 Ke Jin
+License: GPL-2+
+
+Files: Drivers/Postgre7.1/*
+Copyright: 1998 Byron Nikolaidis
+License: GPL-2+
+
+Files: Drivers/Postgre7.1/md5.c
+Copyright: 1998 Sverre H. Huseby
+           1994 Regents of the University of California
+           1996-2002 PostgreSQL Global Development Group
+           1999 Nick Gorham
+License: GPL-2+
+
+Files: DRVConfig/esoob/esoobS.c
+Copyright: 1999 Easysoft Ltd.
+License: LGPL-2+
+
+Files: DRVConfig/Mimer/mimerS.c
+Copyright: 2004 Per Bengtsson
+License: LGPL-2+
+
+Files: DRVConfig/sapdb/sapdb.c
+Copyright: 2001 Holger Schurig
+           2005 Martin Kittel
+License: LGPL-2+
+
+Files: exe/*
+Copyright: 1999-2022 Nick Gorham, Peter Harvey, et al.
+License: GPL-2+
+
+Files: extras/snprintf.c
+Copyright: 1995 Patrick Powell
+License: ppowell
+
+Files: include/uodbc_extras.h
+Copyright: 2005 Eric Sharkey
+License: LGPL-2+
+
+Files: debian/*
+Copyright: 2000-2001 Ivan E. Moore II
+           2001 Bas Zoetekouw
+           2001 LaMont Jones
+           2001-2016 Steve Langasek
+           2016 John Paul Adrian Glaubitz
+           2017-2018, 2020-2022 Hugh McMaster
+License: GPL-2+
+
+License: LGPL-2.1+
+ This library is free software; you can redistribute it and/or
+ modify it under the terms of the GNU Lesser General Public
+ License as published by the Free Software Foundation; either
+ version 2.1 of the License, or (at your option) any later version.
+ .
+ This library is distributed in the hope that it will be useful,
+ but WITHOUT ANY WARRANTY; without even the implied warranty of
+ MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+ Lesser General Public License for more details.
+ .
+ You should have received a copy of the GNU Lesser General Public
+ License along with this library; if not, write to the Free Software
+ Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301  USA
+ .
+ On Debian GNU/Linux systems, the complete text of the GNU Lesser General
+ Public License can be found in `/usr/share/common-licenses/LGPL-2.1'.
+
+License: LGPL-2+
+ This library is free software; you can redistribute it and/or
+ modify it under the terms of the GNU Lesser General Public
+ License as published by the Free Software Foundation; either
+ version 2 of the License, or (at your option) any later version.
+ .
+ This library is distributed in the hope that it will be useful,
+ but WITHOUT ANY WARRANTY; without even the implied warranty of
+ MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+ Lesser General Public License for more details.
+ .
+ You should have received a copy of the GNU Lesser General Public
+ License along with this library; if not, write to the Free Software
+ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301, USA.
+ .
+ On Debian GNU/Linux systems, the complete text of the GNU Lesser General
+ Public License can be found in `/usr/share/common-licenses/LGPL-2'.
+
+License: GPL-2+
+ This program is free software; you can redistribute it and/or
+ modify it under the terms of the GNU General Public License
+ as published by the Free Software Foundation; either version 2
+ of the License, or (at your option) any later version.
+ .
+ This program is distributed in the hope that it will be useful,
+ but WITHOUT ANY WARRANTY; without even the implied warranty of
+ MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ GNU General Public License for more details.
+ .
+ You should have received a copy of the GNU General Public License
+ along with this program; if not, write to the Free Software
+ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301, USA.
+ .
+ On Debian GNU/Linux systems, the complete text of the GNU General
+ Public License can be found in `/usr/share/common-licenses/GPL-2'.
+
+License: ppowell
+ This code is based on code written by Patrick Powell (papowell@astart.com)
+ It may be used for any purpose as long as this notice remains intact
+ on all source code distributions

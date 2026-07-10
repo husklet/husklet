@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<mime-type xmlns="http://www.freedesktop.org/standards/shared-mime-info" type="application/x-godot-scene">
+  <!--Created automatically by update-mime-database. DO NOT EDIT!-->
+  <comment>Godot Engine scene</comment>
+  <glob pattern="*.scn"/>
+  <glob pattern="*.tscn"/>
+  <glob pattern="*.escn"/>
+</mime-type>

@@ -1,0 +1,41 @@
+try 1 PASS
+try 2 FAIL :: [ENGFAULT] sig=10 hpc=0x00000001024d5800 fault=0x000000010f164000 hsp=0x000000016d952ab0 rxbase=0x0000000123970000 incache=0 :: Failed to write to erl_child_setup: 32
+try 3 PASS
+try 4 PASS
+try 5 PASS
+try 6 PASS
+try 7 PASS
+try 8 PASS
+try 9 PASS
+try 10 PASS
+try 11 PASS
+try 12 FAIL :: [ENGFAULT] sig=10 hpc=0x00000001003f1800 fault=0x000000010d084000 hsp=0x000000016fa36ab0 rxbase=0x000000013a298000 incache=0 :: Failed to write to erl_child_setup: 32
+try 13 FAIL :: [ENGFAULT] sig=11 hpc=0x0000000104d35800 fault=0x0000000111878000 hsp=0x000000016b0f2ab0 rxbase=0x000000013e614000 incache=0 :: Failed to write to erl_child_setup: 32
+try 14 FAIL :: [ENGFAULT] sig=10 hpc=0x000000010070d800 fault=0x000000010d150000 hsp=0x000000016f71aab0 rxbase=0x0000000121ba0000 incache=0 :: Failed to write to erl_child_setup: 32
+try 15 PASS
+try 16 PASS
+try 17 PASS
+try 18 PASS
+try 19 PASS
+try 20 FAIL :: [ENGFAULT] sig=10 hpc=0x0000000104835800 fault=0x00000001114e0000 hsp=0x000000016b5f2ab0 rxbase=0x000000013e704000 incache=0 :: Failed to write to erl_child_setup: 32
+try 21 PASS
+try 22 PASS
+try 23 PASS
+try 24 PASS
+try 25 PASS
+try 26 PASS
+try 27 FAIL :: [ENGFAULT] sig=11 hpc=0x0000000100489800 fault=0x000000010d134000 hsp=0x000000016f99eab0 rxbase=0x000000013c604000 incache=0 :: Failed to write to erl_child_setup: 32
+try 28 PASS
+try 29 FAIL :: [ENGFAULT] sig=11 hpc=0x0000000102421800 fault=0x000000010ef84000 hsp=0x000000016da06ab0 rxbase=0x000000012c278000 incache=0 :: Failed to write to erl_child_setup: 32
+try 30 PASS
+try 31 PASS
+try 32 PASS
+try 33 PASS
+try 34 PASS
+try 35 PASS
+try 36 PASS
+try 37 PASS
+try 38 PASS
+try 39 PASS
+try 40 FAIL :: [ENGFAULT] sig=11 hpc=0x0000000100d7d800 fault=0x000000010da34000 hsp=0x000000016f0aaab0 rxbase=0x000000013ac44000 incache=0 :: Failed to write to erl_child_setup: 32
+DONE

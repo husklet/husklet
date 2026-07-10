@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<mime-type xmlns="http://www.freedesktop.org/standards/shared-mime-info" type="application/sparql-query">
+  <!--Created automatically by update-mime-database. DO NOT EDIT!-->
+  <comment>SPARQL query</comment>
+  <acronym>SPARQL</acronym>
+  <expanded-acronym>SPARQL Protocol and RDF Query Language</expanded-acronym>
+  <glob pattern="*.qs"/>
+</mime-type>

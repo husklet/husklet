@@ -1,0 +1,2 @@
+gcc-12 binary: hardening-no-pie
+gcc-12 binary: binary-without-manpage

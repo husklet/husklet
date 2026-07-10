@@ -1,0 +1,10 @@
+prefix=/usr
+exec_prefix=/usr
+libdir=/usr/lib/aarch64-linux-gnu
+includedir=/usr/include
+
+Name: blkid
+Description: Block device id library
+Version: 2.38.1
+Cflags: -I${includedir}/blkid
+Libs: -L${libdir} -lblkid

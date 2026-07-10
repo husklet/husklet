@@ -1,5 +1,5 @@
 // dd/runtime/jit -- the code cache, the gpc->host block map, and lazy inter-block chaining.
-// One 64MB W^X MAP_JIT arena; blocks appended + chained (b/bl backpatch). Host-ISA engine state.
+// One W^X MAP_JIT arena; blocks appended + chained (b/bl backpatch). Host-ISA engine state.
 
 // ---------------- JIT code cache ----------------
 #define CACHE_SZ (64u << 20)
@@ -21,6 +21,13 @@ static int g_dualmap;                                // 1 when the RW/RX dual ma
 static uint64_t g_wx_toggles;                        // # of pthread_jit_write_protect_np() calls actually made (PROF)
 #define J_RX(p) ((void *)((uint8_t *)(p) + g_rw2rx)) // RW alias addr -> RX alias addr
 #define J_RW(p) ((void *)((uint8_t *)(p) - g_rw2rx)) // RX alias addr -> RW alias addr
+
+// DIAGNOSTIC predicate (elf.c fatal-fault guard): is a host PC inside the CURRENT RX code cache arena?
+int jit_pc_in_cache(uint64_t pc, uint64_t *base) {
+    uint64_t lo = (uint64_t)g_cache + g_rw2rx, hi = lo + CACHE_SZ;
+    if (base) *base = lo;
+    return g_cache && pc >= lo && pc < hi;
+}
 
 // The single W^X gate. Under dual mapping it is a no-op: writes land on the RW alias and
 // execution reads the RX alias, so no per-region permission flip (and no peer-thread race).
@@ -84,7 +91,7 @@ static pthread_mutex_t g_cache_lock = PTHREAD_MUTEX_INITIALIZER;
 // >0 once a guest thread is spawned
 static int g_threaded;
 
-// gpc->host block map capacity. Sized so the 64MB CACHE_SZ arena fills (-> the dispatcher's wholesale
+// gpc->host block map capacity. Sized so the CACHE_SZ arena fills (-> the dispatcher's wholesale
 // flush) LONG before this open-addressed table does: even all-minimum-size blocks (prologue + a one-insn
 // exit, ~90 host words ~360B) cap at ~186K live blocks in a full cache, so 2^19 slots keeps the load
 // factor under ~40% (short linear-probe chains) and guarantees map_put never silently fails mid-run. A
@@ -98,6 +105,34 @@ static struct {
     void *host;
     void *body;
 } g_map[JIT_MAP_N];
+
+// Crash-only reverse lookup: map a host RX pc back to the nearest translated block start.
+int jit_hostpc_lookup(uint64_t hpc, uint64_t *gpc, uint64_t *off, uint32_t *insn) {
+    if (!g_cache) return 0;
+    uint64_t rxlo = (uint64_t)g_cache + g_rw2rx;
+    uint64_t rwlo = (uint64_t)g_cache;
+    uint64_t rwpc = 0;
+    if (hpc >= rxlo && hpc < rxlo + CACHE_SZ)
+        rwpc = hpc - g_rw2rx;
+    else if (hpc >= rwlo && hpc < rwlo + CACHE_SZ)
+        rwpc = hpc;
+    else
+        return 0;
+    uint64_t best = 0;
+    uint64_t bgpc = 0;
+    for (uint32_t i = 0; i < JIT_MAP_N; i++) {
+        uint64_t h = (uint64_t)g_map[i].host;
+        if (h && h <= rwpc && h >= best) {
+            best = h;
+            bgpc = g_map[i].gpc;
+        }
+    }
+    if (!best) return 0;
+    if (gpc) *gpc = bgpc;
+    if (off) *off = rwpc - best;
+    if (insn) *insn = *(uint32_t *)rwpc;
+    return 1;
+}
 
 // ---- SMC precise gate: the set of guest 4KB pages we have translated ANY block from ----
 // A code-generating guest (V8, a JIT) issues `ic ivau` (icache invalidate by VA) after writing each
@@ -553,8 +588,7 @@ static void ctx_dump(void) {
 // code cache so an offline tool can attribute sampled host PCs to guest blocks/instructions.
 // <prefix>.map is text: "CACHE <rw> <rx> <cp>" then one "MAP <gpc> <host> <body>" per live block.
 // <prefix>.bin is the raw [g_cache, g_cp) bytes. Zero cost unless the env is set.
-static void md_dump(void) {
-    const char *pfx = getenv("MAPDUMP");
+static void md_dump_to(const char *pfx) {
     if (!pfx || !g_cache) return;
     char p[1024];
     snprintf(p, sizeof p, "%s.map", pfx);
@@ -570,6 +604,10 @@ static void md_dump(void) {
     if (!f) return;
     fwrite(g_cache, 1, (size_t)(g_cp - g_cache), f);
     fclose(f);
+}
+
+static void md_dump(void) {
+    md_dump_to(getenv("MAPDUMP"));
 }
 
 // ARM-B1: recognize a clang jump-table switch dispatch at a guest `br xN`. The compiler emits
@@ -846,6 +884,59 @@ static struct {
 } g_retired[STW_RETIRED_MAX];
 
 static int g_nretired;
+static int g_no_stw_reclaim;
+
+// Crash diagnostics: keep a bounded tombstone ring of retired caches we have unmapped. If a later crash PC
+// falls in one of these ranges, the process resumed through a stale cache pointer after reclamation.
+#define STW_FREED_MAX 4096
+static struct {
+    uint8_t *rw;
+    ptrdiff_t rw2rx;
+    uint64_t gen;
+} g_freed[STW_FREED_MAX];
+static uint64_t g_nfreed_total;
+
+static void cache_oom_abort(void);
+
+int jit_pc_in_retained_cache(uint64_t pc) {
+    if (!g_cache) return 0;
+    uint64_t lo = (uint64_t)g_cache + g_rw2rx;
+    if (pc >= lo && pc < lo + CACHE_SZ) return 1;
+    for (int i = 0; i < g_nretired; i++) {
+        lo = (uint64_t)g_retired[i].rw + g_retired[i].rw2rx;
+        if (pc >= lo && pc < lo + CACHE_SZ) return 1;
+    }
+    return 0;
+}
+
+int jit_hostpc_alias_kind(uint64_t hpc) {
+    if (!g_cache) return 0;
+    uint64_t lo = (uint64_t)g_cache + g_rw2rx;
+    if (hpc >= lo && hpc < lo + CACHE_SZ) return 1; // current RX alias
+    lo = (uint64_t)g_cache;
+    if (hpc >= lo && hpc < lo + CACHE_SZ) return 2; // current RW alias
+    for (int i = 0; i < g_nretired; i++) {
+        lo = (uint64_t)g_retired[i].rw + g_retired[i].rw2rx;
+        if (hpc >= lo && hpc < lo + CACHE_SZ) return 3; // retained RX alias
+        lo = (uint64_t)g_retired[i].rw;
+        if (hpc >= lo && hpc < lo + CACHE_SZ) return 4; // retained RW alias
+    }
+    uint64_t n = g_nfreed_total < STW_FREED_MAX ? g_nfreed_total : STW_FREED_MAX;
+    for (uint64_t i = 0; i < n; i++) {
+        lo = (uint64_t)g_freed[i].rw + g_freed[i].rw2rx;
+        if (hpc >= lo && hpc < lo + CACHE_SZ) return 5; // freed RX alias tombstone
+        lo = (uint64_t)g_freed[i].rw;
+        if (hpc >= lo && hpc < lo + CACHE_SZ) return 6; // freed RW alias tombstone
+    }
+    return 0;
+}
+
+void jit_cache_diag(uint64_t *gen, uint64_t *flushes, uint32_t *retired, uint32_t *freed) {
+    if (gen) *gen = g_cache_gen;
+    if (flushes) *flushes = g_stw_flushes;
+    if (retired) *retired = (uint32_t)g_nretired;
+    if (freed) *freed = (uint32_t)(g_nfreed_total > UINT32_MAX ? UINT32_MAX : g_nfreed_total);
+}
 
 // Park safepoint handler -- async-signal-safe (atomics + nanosleep only). A peer caught here is, by
 // definition, no longer executing a translated block (it is on its host stack in this handler), so the
@@ -960,14 +1051,26 @@ static void *md_watcher(void *arg) {
     const char *pfx = (const char *)arg;
     char trig[1088];
     snprintf(trig, sizeof trig, "%s.trig", pfx);
+    time_t seen_sec = 0;
+    long seen_nsec = 0;
     for (;;) {
         struct stat sb;
         if (stat(trig, &sb) == 0) {
-            unlink(trig);
-            md_snapshot_pcs(pfx);
-            md_dump();
+            time_t sec = sb.st_mtimespec.tv_sec;
+            long nsec = sb.st_mtimespec.tv_nsec;
+            if (sec == seen_sec && nsec == seen_nsec) {
+                struct timespec ts = {0, 100000000}; // 100ms
+                nanosleep(&ts, NULL);
+                continue;
+            }
+            seen_sec = sec;
+            seen_nsec = nsec;
+            char ppfx[1088];
+            snprintf(ppfx, sizeof ppfx, "%s.%d", pfx, getpid());
+            md_snapshot_pcs(ppfx);
+            md_dump_to(ppfx);
             char done[1088];
-            snprintf(done, sizeof done, "%s.done", pfx);
+            snprintf(done, sizeof done, "%s.%d.done", pfx, getpid());
             int fd = open(done, O_WRONLY | O_CREAT | O_TRUNC, 0644);
             if (fd >= 0) close(fd);
         }
@@ -988,6 +1091,10 @@ static void md_sig_install(void) {
 
 // Unmap a retired cache's mapping(s): the RW base, plus the RX alias when dual-mapped (delta != 0).
 static void cache_unmap(uint8_t *rw, ptrdiff_t rw2rx) {
+    uint64_t slot = g_nfreed_total++ % STW_FREED_MAX;
+    g_freed[slot].rw = rw;
+    g_freed[slot].rw2rx = rw2rx;
+    g_freed[slot].gen = 0;
     munmap(rw, CACHE_SZ);
     if (rw2rx) munmap(rw + rw2rx, CACHE_SZ);
 }
@@ -1006,9 +1113,12 @@ static int gen_in_use(uint64_t gen) {
 // (so no peer can transition into a new block) and g_stw_reg_lock (so the registry is stable). Called from
 // jit_flush_to_fresh before the fresh allocation, so freed VA is available to it.
 static void reclaim_retired(void) {
+    if (g_no_stw_reclaim) return;
     for (int i = 0; i < g_nretired;) {
         if (!gen_in_use(g_retired[i].gen)) {
+            uint64_t gen = g_retired[i].gen;
             cache_unmap(g_retired[i].rw, g_retired[i].rw2rx);
+            if (g_nfreed_total) g_freed[(g_nfreed_total - 1) % STW_FREED_MAX].gen = gen;
             g_retired[i] = g_retired[--g_nretired]; // swap-remove
         } else
             i++;
@@ -1023,6 +1133,8 @@ static void retire_current(void) {
         g_retired[g_nretired].rw2rx = g_rw2rx;
         g_retired[g_nretired].gen = g_cache_gen;
         g_nretired++;
+    } else {
+        cache_oom_abort();
     }
 }
 

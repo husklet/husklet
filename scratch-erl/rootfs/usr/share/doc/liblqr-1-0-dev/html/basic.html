@@ -1,0 +1,59 @@
+<html><head><meta http-equiv="Content-Type" content="text/html; charset=ISO-8859-1"><title>Basic methods</title><meta name="generator" content="DocBook XSL Stylesheets V1.79.1"><link rel="home" href="index.html" title="The Liquid Rescale library Manual"><link rel="up" href="Introduction.html" title="Chapter 1. Introduction"><link rel="prev" href="overview.html" title="Overview of the library"><link rel="next" href="api-manual.html" title="Chapter 2. LqR library API user manual"></head><body bgcolor="white" text="black" link="#0000FF" vlink="#840084" alink="#0000FF"><div class="navheader"><table width="100%" summary="Navigation header"><tr><th colspan="3" align="center">Basic methods</th></tr><tr><td width="20%" align="left"><a accesskey="p" href="overview.html">Prev</a> </td><th width="60%" align="center">Chapter 1. Introduction</th><td width="20%" align="right"> <a accesskey="n" href="api-manual.html">Next</a></td></tr></table><hr></div><div class="sect1"><div class="titlepage"><div><div><h2 class="title" style="clear: both"><a name="basic"></a>Basic methods</h2></div></div></div><p>
+                Following is a list of the basic public methods associated with the <code class="classname">LqrCarver</code> objects:
+            </p><p>
+                </p><div class="itemizedlist"><ul class="itemizedlist" style="list-style-type: disc; "><li class="listitem"><p>
+                            constructors and destructor
+                        </p><p>
+                            </p><pre class="programlisting">
+LqrCarver * lqr_carver_new (guchar *buffer, gint width, gint height, gint channels);
+LqrCarver * lqr_carver_new_ext (void *buffer, gint width, gint height, gint channels, LqrColDepth colour_depth);
+void lqr_carver_destroy (LqrCarver *carver);
+                            </pre><p>
+                        </p></li><li class="listitem"><p>
+                            initialization
+                        </p><p>
+                            </p><pre class="programlisting">
+LqrRetVal lqr_carver_init (LqrCarver *carver, gint delta_x, gfloat rigidity);
+                            </pre><p>
+                        </p></li><li class="listitem"><p>
+                            image manipulations
+                        </p><p>
+                            </p><pre class="programlisting">
+LqrRetVal lqr_carver_resize (LqrCarver *carver, gint new_width, gint new_width);
+LqrRetVal lqr_carver_flatten (LqrCarver *carver);
+                            </pre><p>
+                        </p></li><li class="listitem"><p>
+                            readout
+                        </p><p>
+                            </p><pre class="programlisting">
+gboolean lqr_carver_scan (LqrCarver *carver, gint *x, gint *y, guchar **rgb);
+gboolean lqr_carver_scan_ext (LqrCarver *carver, gint *x, gint *y, void **rgb);
+gboolean lqr_carver_scan_by_row (LqrCarver *carver);
+gboolean lqr_carver_scan_line (LqrCarver *carver, gint *n, guchar **rgb);
+gboolean lqr_carver_scan_line_ext (LqrCarver *carver, gint *n, void **rgb);
+                            </pre><p>
+                        </p></li><li class="listitem"><p>
+                            get values
+                        </p><p>
+                            </p><pre class="programlisting">
+gint lqr_carver_get_width (LqrCarver *carver);
+gint lqr_carver_get_height (LqrCarver *carver);
+gint lqr_carver_get_channels (LqrCarver *carver);
+LqrColDepth lqr_carver_get_col_depth (LqrCarver *carver);
+                            </pre><p>
+                        </p></li></ul></div><p>
+            </p><p>
+                The fastest way to see how they work is having a look at the code of
+                <code class="filename">examples/liquidrescale-basic.cpp</code>, which is a very simple and fully commented
+                demostrative program.
+            </p><p>
+                The return value of many functions is of type <code class="classname">LqrRetVal</code>. This is just an enum
+                type which can be used for signal handling, see the <a class="link" href="api-manual.html#signals" title="Signal handling">Signal handling
+                section</a>.
+            </p><p>
+                The other classes are optional: the class <code class="classname">LqrVMap</code> is used to hold the carving information (and the
+                class <code class="classname">LqrVMapList</code> is used to retrieve it from the <code class="classname">LqrCarver</code> ojects); the class <code class="classname">LqrProgress</code> is used to
+                customize progress report from the resizing engine (by default it is turned off).
+            </p><p>
+                A complete list of the library public methods can be found in the reference at the end of this document.
+            </p></div><div class="navfooter"><hr><table width="100%" summary="Navigation footer"><tr><td width="40%" align="left"><a accesskey="p" href="overview.html">Prev</a> </td><td width="20%" align="center"><a accesskey="u" href="Introduction.html">Up</a></td><td width="40%" align="right"> <a accesskey="n" href="api-manual.html">Next</a></td></tr><tr><td width="40%" align="left" valign="top">Overview of the library </td><td width="20%" align="center"><a accesskey="h" href="index.html">Home</a></td><td width="40%" align="right" valign="top"> Chapter 2. LqR library API user manual</td></tr></table></div></body></html>

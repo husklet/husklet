@@ -1,0 +1,9 @@
+940d5d87552dae8312fc84b4c20d240c  usr/lib/aarch64-linux-gnu/enchant-2/enchant_aspell.so
+0388a11f121cad43769b6b712e4687ed  usr/lib/aarch64-linux-gnu/enchant-2/enchant_hspell.so
+6fa2e804fc9d5991e0099656c398233c  usr/lib/aarch64-linux-gnu/enchant-2/enchant_hunspell.so
+50ef09555926014a28178fa53917199f  usr/lib/aarch64-linux-gnu/libenchant-2.so.2.3.3
+f215c9574d7c387a3b3d9685f85051b6  usr/share/doc/libenchant-2-2/README
+d22eb7cbc37a16704bbca168026cdab3  usr/share/doc/libenchant-2-2/changelog.Debian.gz
+f03ded3d87ca3d477078b2992bade65c  usr/share/doc/libenchant-2-2/changelog.gz
+989629e410bb4b6447c3971c9652b8e1  usr/share/doc/libenchant-2-2/copyright
+0eb4659806b5d6ba27acf0578a8d3f37  usr/share/enchant-2/enchant.ordering

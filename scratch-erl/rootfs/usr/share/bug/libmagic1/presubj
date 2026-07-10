@@ -1,0 +1,22 @@
+Reporting missing or buggy detection
+
+* Suggested bug severities
+
+  - Missing detection (just 'data'), or enhancements: wishlist
+  - Mis-detection: normal
+  - Regressions: important
+  - Overall correct detection, but with some glitches: minor
+
+* Reproducers
+
+It's crucial to test whether a detection works as expected, or why it
+fails. So please provide something suitable: Attach a short sample, or
+send an information where to find it. As a last resort, provide a hex
+dump of the first 256 bytes. Your package maintainer will ask for more
+if necessary. Double-check this file neither contains sensitive data
+nor infringes a copyright.
+
+* File format descriptions
+
+For any file types not detected yet: Pointers to documents that
+describe the file format are a great help, too.

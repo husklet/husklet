@@ -1,0 +1,31 @@
+<html><head><meta http-equiv="Content-Type" content="text/html; charset=ISO-8859-1"><title>lqr_vmap_new</title><meta name="generator" content="DocBook XSL Stylesheets V1.79.1"><link rel="home" href="index.html" title="The Liquid Rescale library Manual"><link rel="up" href="ref-vmaps.html" title="Visibiliy maps"><link rel="prev" href="ref-vmaps.html" title="Visibiliy maps"><link rel="next" href="ref-lqr-vmap-destroy.html" title="lqr_vmap_destroy"></head><body bgcolor="white" text="black" link="#0000FF" vlink="#840084" alink="#0000FF"><div class="navheader"><table width="100%" summary="Navigation header"><tr><th colspan="3" align="center"><code class="function">lqr_vmap_new</code></th></tr><tr><td width="20%" align="left"><a accesskey="p" href="ref-vmaps.html">Prev</a> </td><th width="60%" align="center">Visibiliy maps</th><td width="20%" align="right"> <a accesskey="n" href="ref-lqr-vmap-destroy.html">Next</a></td></tr></table><hr></div><div class="refentry"><a name="ref-lqr-vmap-new"></a><div class="titlepage"></div><div class="refnamediv"><h2>Name</h2><p>lqr_vmap_new &#8212; the <code class="classname">LqrVMap</code> object constructor</p></div><div class="refsynopsisdiv"><h2>Synopsis</h2><div class="funcsynopsis"><pre class="funcsynopsisinfo">#include &lt;lqr.h&gt;</pre><table border="0" class="funcprototype-table" summary="Function synopsis" style="cellspacing: 0; cellpadding: 0;"><tr><td><code class="funcdef">LqrVMap* <b class="fsfunc">lqr_vmap_new</b>(</code></td><td>gint* <var class="pdparam">buffer</var>, </td></tr><tr><td> </td><td>gint <var class="pdparam">width</var>, </td></tr><tr><td> </td><td>gint <var class="pdparam">height</var>, </td></tr><tr><td> </td><td>gint <var class="pdparam">depth</var>, </td></tr><tr><td> </td><td>gint <var class="pdparam">orientation</var><code>)</code>;</td></tr></table><div class="funcprototype-spacer"> </div></div></div><div class="refsect1"><a name="idm3621"></a><h2>Description</h2><p>
+                        The function <code class="function">lqr_vmap_new</code> is the constructor for <code class="classname">LqrVMap</code> objects. It can
+                        be used to convert saved data in a format which can be loaded in an <code class="classname">LqrCarver</code> object.
+                    </p><p>
+                        The parameter <em class="parameter"><code>buffer</code></em> must point to an an array of
+                        <code class="literal"><em class="parameter"><code>width</code></em> * <em class="parameter"><code>height</code></em></code>
+                        <span class="type">int</span>s holding the visibility information.
+                    </p><p>
+                        The parameter <em class="parameter"><code>depth</code></em> represents the maximum possible amount of rescaling
+                        with the given map.
+                    </p><p>
+                        The parameter <em class="parameter"><code>orientation</code></em> must be <code class="literal">0</code> if the map is to
+                        be used for horizontal rescaling, <code class="literal">1</code> if it is to be used for vertical
+                        rescaling.
+                    </p></div><div class="refsect1"><a name="idm3639"></a><h2>Visibility maps format</h2><p>
+                        The <em class="parameter"><code>buffer</code></em> must be an array of integers of size
+                        <code class="literal"><em class="parameter"><code>width</code></em> * <em class="parameter"><code>height</code></em></code>. For an
+                        horizontally oriented visibility map, the format is as such: each row must contain all values
+                        between 1 and <em class="parameter"><code>depth</code></em> (included) exactly once, with low values indicating
+                        the pixels which will be operated on first during rescaling. All other pixels must be 0, which
+                        means that they won't be affected by rescaling. Such a map allows for horizontal rescaling in
+                        the range from <code class="literal"><em class="parameter"><code>width</code></em> - <em class="parameter"><code>depth</code></em></code> to
+                        <code class="literal"><em class="parameter"><code>width</code></em> + <em class="parameter"><code>depth</code></em></code>. The same
+                        applies to vertically oriented visibility maps, with columns in place of rows and
+                        <em class="parameter"><code>height</code></em> in place of <em class="parameter"><code>width</code></em>.
+                    </p></div><div class="refsect1"><a name="idm3655"></a><h2>Return value</h2><p>
+                        The function returns the newly created <code class="classname">LqrVMap</code> if successful, or <code class="literal"><span class="returnvalue">NULL</span></code> in case of
+                        insufficient memory.
+                    </p></div><div class="refsect1"><a name="idm3661"></a><h2>See also</h2><p>
+                        <span class="simplelist"><a class="xref" href="ref-lqr-vmap-destroy.html" title="lqr_vmap_destroy"><span class="refentrytitle"><code class="function">lqr_vmap_destroy</code></span>(3)</a>, <a class="xref" href="ref-lqr-vmap-load.html" title="lqr_vmap_load"><span class="refentrytitle"><code class="function">lqr_vmap_load</code></span>(3)</a></span>
+                    </p></div></div><div class="navfooter"><hr><table width="100%" summary="Navigation footer"><tr><td width="40%" align="left"><a accesskey="p" href="ref-vmaps.html">Prev</a> </td><td width="20%" align="center"><a accesskey="u" href="ref-vmaps.html">Up</a></td><td width="40%" align="right"> <a accesskey="n" href="ref-lqr-vmap-destroy.html">Next</a></td></tr><tr><td width="40%" align="left" valign="top">Visibiliy maps </td><td width="20%" align="center"><a accesskey="h" href="index.html">Home</a></td><td width="40%" align="right" valign="top"> <code class="function">lqr_vmap_destroy</code></td></tr></table></div></body></html>

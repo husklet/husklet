@@ -1,0 +1,17 @@
+bfa09e777f6d533a3805d1a6c97ed8d1  usr/bin/libtoolize
+977b5a5821f9013ef0cd54824d232a20  usr/share/aclocal/libtool.m4
+a67764b25473f70b98df411a494d8ae9  usr/share/aclocal/ltargz.m4
+98312682443b415dc42558ee6c7f25a9  usr/share/aclocal/ltoptions.m4
+057a003c14ef81b6c16d1dc54d491105  usr/share/aclocal/ltsugar.m4
+665ef728f05b03734804931333632de4  usr/share/aclocal/ltversion.m4
+42fc54566fd6a8055fad65f78f32960c  usr/share/aclocal/lt~obsolete.m4
+609391be7a11cf79c10b61b6dc85af13  usr/share/doc/libtool/README.Debian
+1a4daf7a55fa8288924da7881910cee9  usr/share/doc/libtool/changelog.Debian.gz
+0d9d82597d1252b8680d281bcf042832  usr/share/doc/libtool/changelog.gz
+b77254c1c900d174b9e7baf1cf36acd2  usr/share/doc/libtool/copyright
+b816f92498a6ec8138d9ec53a14bcaa4  usr/share/libtool/build-aux/compile
+6ecafe15a6088eb7a2f4f2aadbb240ce  usr/share/libtool/build-aux/depcomp
+b090c5891571c820e91d345a9551af44  usr/share/libtool/build-aux/install-sh
+b0a11fe33e33e254e8ee04314fb71c25  usr/share/libtool/build-aux/ltmain.sh
+086b8da5a251be943f06d3a927bbe60e  usr/share/libtool/build-aux/missing
+b639bc688f6bce390a4ca8c212241c29  usr/share/man/man1/libtoolize.1.gz

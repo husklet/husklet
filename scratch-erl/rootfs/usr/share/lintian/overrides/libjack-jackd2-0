@@ -1,0 +1,2 @@
+# libjack0 != libjack-jackd2-0
+package-name-doesnt-match-sonames

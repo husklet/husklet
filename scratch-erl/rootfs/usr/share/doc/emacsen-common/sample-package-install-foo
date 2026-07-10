@@ -1,0 +1,31 @@
+#!/bin/sh
+# /usr/lib/emacsen-common/packages/install/foo
+# [ Sample only -- this script hasn't been tested, so be careful. ]
+set -e
+
+flavor="$1"
+echo "install/foo: Handling install of emacsen flavor $flavor"
+
+byte_compile_options='-batch -f batch-byte-compile'
+elc_dir="/usr/share/$flavor/site-lisp/foo/"
+
+mkdir -p "$elc_dir"
+
+# Create symlinks to the .el files (see debian-emacs-polcy).  This
+# makes complation easy, and allows find-function and find-library to
+# work properly.
+(cd "$elc_dir" && cp -s ../../../foo/*.el .)
+
+# Byte compile them
+(cd "$elc_dir"
+ set +e
+ "$flavor" $byte_compile_options *.el > install.log 2>&1
+ if test $? -ne 0
+ then
+   cat install.log
+   exit 1
+ fi
+ set -e
+ gzip -9v install.log)
+
+exit 0

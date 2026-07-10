@@ -1,0 +1,14 @@
+/.
+/usr
+/usr/lib
+/usr/lib/aarch64-linux-gnu
+/usr/lib/aarch64-linux-gnu/libmaxminddb.so.0.0.7
+/usr/share
+/usr/share/doc
+/usr/share/doc/libmaxminddb0
+/usr/share/doc/libmaxminddb0/NOTICE
+/usr/share/doc/libmaxminddb0/README.md.gz
+/usr/share/doc/libmaxminddb0/changelog.Debian.gz
+/usr/share/doc/libmaxminddb0/changelog.gz
+/usr/share/doc/libmaxminddb0/copyright
+/usr/lib/aarch64-linux-gnu/libmaxminddb.so.0

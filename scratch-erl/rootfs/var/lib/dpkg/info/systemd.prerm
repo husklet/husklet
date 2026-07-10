@@ -1,0 +1,21 @@
+#!/bin/sh
+
+set -e
+
+#
+# Prevent systemd from being removed if it's the active init.  That
+# will not work.
+#
+
+if [ "$1" = "remove" ] && [ -d /run/systemd/system ]; then
+    echo "systemd is the active init system, please switch to another before removing systemd."
+    exit 1
+fi
+
+# Automatically added by dh_installdeb/13.11.4
+dpkg-maintscript-helper rm_conffile /etc/dhcp/dhclient-exit-hooks.d/timesyncd 245.4-2\~ -- "$@"
+dpkg-maintscript-helper rm_conffile /etc/systemd/timesyncd.conf 245.4-2\~ -- "$@"
+dpkg-maintscript-helper rm_conffile /etc/pam.d/systemd-user 247\~rc2-3\~ -- "$@"
+dpkg-maintscript-helper rm_conffile /etc/systemd/resolved.conf 251.3-2\~ -- "$@"
+# End automatically added section
+

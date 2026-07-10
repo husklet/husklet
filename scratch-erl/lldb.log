@@ -1,0 +1,4 @@
+try 1 PASS
+try 2 HANG
+CAPTURED try 2
+DONE

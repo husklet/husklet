@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<mime-type xmlns="http://www.freedesktop.org/standards/shared-mime-info" type="model/3mf">
+  <!--Created automatically by update-mime-database. DO NOT EDIT!-->
+  <comment>3MF document</comment>
+  <acronym>3MF</acronym>
+  <expanded-acronym>3D Manufacturing Format</expanded-acronym>
+  <glob pattern="*.3mf"/>
+  <alias type="application/vnd.ms-3mfdocument"/>
+  <sub-class-of type="application/zip"/>
+</mime-type>

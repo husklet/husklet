@@ -1,0 +1,19 @@
+systemd: maintainer-script-calls-systemctl
+# Our units without [Install] are either event driven or statically enabled
+systemd: systemd-service-file-missing-install-key
+# Lintian is really bad at associating manpages
+systemd: spare-manual-page
+systemd: package-supports-alternative-init-but-no-init.d-script
+# These are shipped intentionally to provide a skeleton
+systemd: package-contains-empty-directory [lib/systemd/system-shutdown/]
+systemd: package-contains-empty-directory [lib/systemd/system-sleep/]
+systemd: package-contains-empty-directory [lib/systemd/system/local-fs.target.wants/]
+systemd: package-contains-empty-directory [lib/systemd/system/runlevel1.target.wants/]
+systemd: package-contains-empty-directory [lib/systemd/system/runlevel2.target.wants/]
+systemd: package-contains-empty-directory [lib/systemd/system/runlevel3.target.wants/]
+systemd: package-contains-empty-directory [lib/systemd/system/runlevel4.target.wants/]
+systemd: package-contains-empty-directory [lib/systemd/system/runlevel5.target.wants/]
+systemd: package-contains-empty-directory [usr/lib/binfmt.d/]
+systemd: package-contains-empty-directory [usr/lib/modules-load.d/]
+# netlink keyword
+systemd: spelling-error-in-binary iif if [lib/systemd/systemd-networkd]

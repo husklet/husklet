@@ -1,0 +1,31 @@
+% This is an -*- erlang -*- file.
+
+{application, edoc,
+ [
+  {description, "EDoc, the Erlang documentation engine"},
+  {vsn, "1.2.1"},
+  {modules, [edoc,
+	     edoc_cli,
+	     edoc_data,
+	     edoc_doclet,
+	     edoc_doclet_chunks,
+	     edoc_extract,
+	     edoc_layout,
+	     edoc_layout_chunks,
+	     edoc_lib,
+	     edoc_macros,
+	     edoc_parser,
+	     edoc_refs,
+	     edoc_report,
+	     edoc_run,
+	     edoc_scanner,
+	     edoc_specs,
+	     edoc_tags,
+	     edoc_types,
+	     edoc_wiki]},
+  {registered,[]},
+  {applications, [compiler, kernel, stdlib, syntax_tools]},
+  {env, []},
+  {runtime_dependencies, ["xmerl-1.3.7", "syntax_tools-2.0", "stdlib-3.15",
+			  "kernel-3.0", "inets-5.10", "erts-6.0"]}
+ ]}.

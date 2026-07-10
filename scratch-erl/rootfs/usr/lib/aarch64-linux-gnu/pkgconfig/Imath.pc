@@ -1,0 +1,17 @@
+##
+## SPDX-License-Identifier: BSD-3-Clause
+## Copyright Contributors to the OpenEXR Project.
+##
+
+prefix=/usr
+exec_prefix=${prefix}
+libdir=/usr/lib/aarch64-linux-gnu
+includedir=/usr/include
+libsuffix=-3_1
+Name: Imath
+Description: Imath library: vector/matrix and math operations, plus the half type.
+Version: 3.1.6
+Requires:
+Conflicts:
+Libs: -L${libdir} -lImath${libsuffix}
+Cflags: -I${includedir} -I${includedir}/Imath

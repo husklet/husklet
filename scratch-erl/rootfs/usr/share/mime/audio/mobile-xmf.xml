@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<mime-type xmlns="http://www.freedesktop.org/standards/shared-mime-info" type="audio/mobile-xmf">
+  <!--Created automatically by update-mime-database. DO NOT EDIT!-->
+  <comment>Mobile XMF audio</comment>
+  <acronym>XMF</acronym>
+  <expanded-acronym>eXtensible Music Format</expanded-acronym>
+  <glob pattern="*.mxmf"/>
+  <alias type="audio/vnd.nokia.mobile-xmf"/>
+</mime-type>

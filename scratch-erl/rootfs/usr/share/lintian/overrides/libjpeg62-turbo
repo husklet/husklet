@@ -1,0 +1,7 @@
+# Debian has libjpeg62 and it's IJG libjpeg, this one is libjpeg-turbo...
+libjpeg62-turbo: package-name-doesnt-match-sonames libjpeg62
+
+# upstream (DRC <dcommander@users.sourceforge.net>) states that the below issue
+# can be ignored, see:
+# http://bugs.debian.org/cgi-bin/bugreport.cgi?bug=612341#255
+libjpeg62-turbo: exit-in-shared-library [usr/lib/x86_64-linux-gnu/libjpeg.so.62.3.0]

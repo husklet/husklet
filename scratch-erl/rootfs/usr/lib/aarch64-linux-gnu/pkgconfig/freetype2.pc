@@ -1,0 +1,14 @@
+prefix=/usr
+exec_prefix=/usr
+libdir=/usr/lib/aarch64-linux-gnu
+includedir=/usr/include
+
+Name: FreeType 2
+URL: https://freetype.org
+Description: A free, high-quality, and portable font engine.
+Version: 24.3.18
+Requires: 
+Requires.private: zlib, libpng, libbrotlidec
+Libs: -L/usr/lib/aarch64-linux-gnu -lfreetype
+Libs.private: 
+Cflags: -I${includedir}/freetype2

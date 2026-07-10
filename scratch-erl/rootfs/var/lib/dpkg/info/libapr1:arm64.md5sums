@@ -1,0 +1,6 @@
+cef9dc962fe062482816b0307344e848  usr/lib/aarch64-linux-gnu/libapr-1.so.0.7.2
+ffd5498678e96244b4e0679c1113cfcb  usr/share/doc/libapr1/NOTICE
+10d2c4dc552fbbc3d9a218eddcea7b3c  usr/share/doc/libapr1/changelog.Debian.gz
+0704cb5d003844ec5ccedb4a2062e7d1  usr/share/doc/libapr1/changelog.gz
+0dcc1b76135fe160249d5e190bb05aae  usr/share/doc/libapr1/copyright
+b6372415ff6072588dec2c4d93d781c0  usr/share/lintian/overrides/libapr1

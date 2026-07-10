@@ -1,0 +1,199 @@
+<!DOCTYPE html PUBLIC "-//W3C//DTD HTML 4.01 Transitional//EN" "http://www.w3.org/TR/html4/loose.dtd">
+<html>
+<!-- Created by GNU Texinfo 6.8, https://www.gnu.org/software/texinfo/ -->
+<head>
+<meta http-equiv="Content-Type" content="text/html; charset=utf-8">
+<!-- 
+This manual is for libffi, a portable foreign function interface
+library.
+
+Copyright (C) 2008-2019, 2021, 2022 Anthony Green and Red Hat, Inc.
+
+Permission is hereby granted, free of charge, to any person obtaining
+a copy of this software and associated documentation files (the
+"Software"), to deal in the Software without restriction, including
+without limitation the rights to use, copy, modify, merge, publish,
+distribute, sublicense, and/or sell copies of the Software, and to
+permit persons to whom the Software is furnished to do so, subject to
+the following conditions:
+
+The above copyright notice and this permission notice shall be
+included in all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
+EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.
+IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY
+CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT,
+TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
+SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+ -->
+<title>The Basics (libffi: the portable foreign function interface library)</title>
+
+<meta name="description" content="The Basics (libffi: the portable foreign function interface library)">
+<meta name="keywords" content="The Basics (libffi: the portable foreign function interface library)">
+<meta name="resource-type" content="document">
+<meta name="distribution" content="global">
+<meta name="Generator" content="makeinfo">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+
+<link href="index.html" rel="start" title="Top">
+<link href="Index.html" rel="index" title="Index">
+<link href="Using-libffi.html" rel="up" title="Using libffi">
+<link href="Simple-Example.html" rel="next" title="Simple Example">
+<style type="text/css">
+<!--
+a.copiable-anchor {visibility: hidden; text-decoration: none; line-height: 0em}
+a.summary-letter {text-decoration: none}
+blockquote.indentedblock {margin-right: 0em}
+div.display {margin-left: 3.2em}
+div.example {margin-left: 3.2em}
+kbd {font-style: oblique}
+pre.display {font-family: inherit}
+pre.format {font-family: inherit}
+pre.menu-comment {font-family: serif}
+pre.menu-preformatted {font-family: serif}
+span.nolinebreak {white-space: nowrap}
+span.roman {font-family: initial; font-weight: normal}
+span.sansserif {font-family: sans-serif; font-weight: normal}
+span:hover a.copiable-anchor {visibility: visible}
+ul.no-bullet {list-style: none}
+-->
+</style>
+
+
+</head>
+
+<body lang="en">
+<div class="section" id="The-Basics">
+<div class="header">
+<p>
+Next: <a href="Simple-Example.html" accesskey="n" rel="next">Simple Example</a>, Up: <a href="Using-libffi.html" accesskey="u" rel="up">Using libffi</a> &nbsp; [<a href="Index.html" title="Index" rel="index">Index</a>]</p>
+</div>
+<hr>
+<span id="The-Basics-1"></span><h3 class="section">2.1 The Basics</h3>
+
+<p><code>libffi</code> assumes that you have a pointer to the function you wish
+to call and that you know the number and types of arguments to pass
+it, as well as the return type of the function.
+</p>
+<p>The first thing you must do is create an <code>ffi_cif</code> object that
+matches the signature of the function you wish to call.  This is a
+separate step because it is common to make multiple calls using a
+single <code>ffi_cif</code>.  The <em>cif</em> in <code>ffi_cif</code> stands for
+Call InterFace.  To prepare a call interface object, use the function
+<code>ffi_prep_cif</code>.
+<span id="index-cif"></span>
+</p>
+<span id="index-ffi_005fprep_005fcif"></span>
+<dl class="def">
+<dt id="index-ffi_005fstatus"><span class="category">Function: </span><span><strong>ffi_status</strong> <em>ffi_prep_cif (ffi_cif *<var>cif</var>, ffi_abi <var>abi</var>, unsigned int <var>nargs</var>, ffi_type *<var>rtype</var>, ffi_type **<var>argtypes</var>)</em><a href='#index-ffi_005fstatus' class='copiable-anchor'> &para;</a></span></dt>
+<dd><p>This initializes <var>cif</var> according to the given parameters.
+</p>
+<p><var>abi</var> is the ABI to use; normally <code>FFI_DEFAULT_ABI</code> is what
+you want.  <a href="Multiple-ABIs.html">Multiple ABIs</a> for more information.
+</p>
+<p><var>nargs</var> is the number of arguments that this function accepts.
+</p>
+<p><var>rtype</var> is a pointer to an <code>ffi_type</code> structure that
+describes the return type of the function.  See <a href="Types.html">Types</a>.
+</p>
+<p><var>argtypes</var> is a vector of <code>ffi_type</code> pointers.
+<var>argtypes</var> must have <var>nargs</var> elements.  If <var>nargs</var> is 0,
+this argument is ignored.
+</p>
+<p><code>ffi_prep_cif</code> returns a <code>libffi</code> status code, of type
+<code>ffi_status</code>.  This will be either <code>FFI_OK</code> if everything
+worked properly; <code>FFI_BAD_TYPEDEF</code> if one of the <code>ffi_type</code>
+objects is incorrect; or <code>FFI_BAD_ABI</code> if the <var>abi</var> parameter
+is invalid.
+</p></dd></dl>
+
+<p>If the function being called is variadic (varargs) then
+<code>ffi_prep_cif_var</code> must be used instead of <code>ffi_prep_cif</code>.
+</p>
+<span id="index-ffi_005fprep_005fcif_005fvar"></span>
+<dl class="def">
+<dt id="index-ffi_005fstatus-1"><span class="category">Function: </span><span><strong>ffi_status</strong> <em>ffi_prep_cif_var (ffi_cif *<var>cif</var>, ffi_abi <var>abi</var>, unsigned int <var>nfixedargs</var>, unsigned int <var>ntotalargs</var>, ffi_type *<var>rtype</var>, ffi_type **<var>argtypes</var>)</em><a href='#index-ffi_005fstatus-1' class='copiable-anchor'> &para;</a></span></dt>
+<dd><p>This initializes <var>cif</var> according to the given parameters for
+a call to a variadic function.  In general its operation is the
+same as for <code>ffi_prep_cif</code> except that:
+</p>
+<p><var>nfixedargs</var> is the number of fixed arguments, prior to any
+variadic arguments.  It must be greater than zero.
+</p>
+<p><var>ntotalargs</var> the total number of arguments, including variadic
+and fixed arguments.  <var>argtypes</var> must have this many elements.
+</p>
+<p><code>ffi_prep_cif_var</code> will return <code>FFI_BAD_ARGTYPE</code> if any of
+the variable argument types are <code>ffi_type_float</code> (promote to
+<code>ffi_type_double</code> first), or any integer type small than an int
+(promote to an int-sized type first).
+</p>
+<p>Note that, different cif&rsquo;s must be prepped for calls to the same
+function when different numbers of arguments are passed.
+</p>
+<p>Also note that a call to <code>ffi_prep_cif_var</code> with
+<var>nfixedargs</var>=<var>nototalargs</var> is NOT equivalent to a call to
+<code>ffi_prep_cif</code>.
+</p>
+</dd></dl>
+
+<p>Note that the resulting <code>ffi_cif</code> holds pointers to all the
+<code>ffi_type</code> objects that were used during initialization.  You
+must ensure that these type objects have a lifetime at least as long
+as that of the <code>ffi_cif</code>.
+</p>
+<p>To call a function using an initialized <code>ffi_cif</code>, use the
+<code>ffi_call</code> function:
+</p>
+<span id="index-ffi_005fcall"></span>
+<dl class="def">
+<dt id="index-void"><span class="category">Function: </span><span><strong>void</strong> <em>ffi_call (ffi_cif *<var>cif</var>, void *<var>fn</var>, void *<var>rvalue</var>, void **<var>avalues</var>)</em><a href='#index-void' class='copiable-anchor'> &para;</a></span></dt>
+<dd><p>This calls the function <var>fn</var> according to the description given in
+<var>cif</var>.  <var>cif</var> must have already been prepared using
+<code>ffi_prep_cif</code>.
+</p>
+<p><var>rvalue</var> is a pointer to a chunk of memory that will hold the
+result of the function call.  This must be large enough to hold the
+result, no smaller than the system register size (generally 32 or 64
+bits), and must be suitably aligned; it is the caller&rsquo;s responsibility
+to ensure this.  If <var>cif</var> declares that the function returns
+<code>void</code> (using <code>ffi_type_void</code>), then <var>rvalue</var> is
+ignored.
+</p>
+<p>In most situations, <code>libffi</code> will handle promotion according to
+the ABI.  However, for historical reasons, there is a special case
+with return values that must be handled by your code.  In particular,
+for integral (not <code>struct</code>) types that are narrower than the
+system register size, the return value will be widened by
+<code>libffi</code>.  <code>libffi</code> provides a type, <code>ffi_arg</code>, that
+can be used as the return type.  For example, if the CIF was defined
+with a return type of <code>char</code>, <code>libffi</code> will try to store a
+full <code>ffi_arg</code> into the return value.
+</p>
+<p><var>avalues</var> is a vector of <code>void *</code> pointers that point to the
+memory locations holding the argument values for a call.  If <var>cif</var>
+declares that the function has no arguments (i.e., <var>nargs</var> was 0),
+then <var>avalues</var> is ignored.
+</p>
+<p>Note that while the return value must be register-sized, arguments
+should exactly match their declared type.  For example, if an argument
+is a <code>short</code>, then the entry in <var>avalues</var> should point to an
+object declared as <code>short</code>; but if the return type is
+<code>short</code>, then <var>rvalue</var> should point to an object declared as
+a larger type &ndash; usually <code>ffi_arg</code>.
+</p></dd></dl>
+
+
+</div>
+<hr>
+<div class="header">
+<p>
+Next: <a href="Simple-Example.html">Simple Example</a>, Up: <a href="Using-libffi.html">Using libffi</a> &nbsp; [<a href="Index.html" title="Index" rel="index">Index</a>]</p>
+</div>
+
+
+
+</body>
+</html>

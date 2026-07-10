@@ -1,0 +1,22 @@
+This MySQL or variant installation has entered "frozen mode". Maintainer
+scripts will avoid making changes or starting the daemon until manually
+released from this state. See /usr/share/doc/mysql-common/README for
+general information about this mode.
+
+In this particular case, an incompatible downgrade attempt has been
+detected. This can be resolved in one of two ways:
+
+1. Change the contents of /var/lib/mysql/ to contain database data that
+is compatible with the currently installed MySQL or variant daemon
+version. For example: you could restore from a backup. Alternatively you
+could do a dump using a future version binary and then a restore using
+the current version binary.
+
+2. Switch to a MySQL or variant daemon version that is compatible with
+the data currently in /var/lib/mysql/. For example, if you have
+attempted a downgrade from mysql-server-5.7 to mysql-server-5.6, you
+could "apt install mysql-server-5.7" again.
+
+Please resolve this situation and only then remove the /etc/mysql/FROZEN
+symlink. You can then run "dpkg-reconfigure <package>" where <package>
+should usually be in the form <variant>-server-<version>.

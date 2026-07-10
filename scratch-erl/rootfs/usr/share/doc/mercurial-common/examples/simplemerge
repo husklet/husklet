@@ -1,0 +1,140 @@
+#!/usr/bin/env python3
+
+import getopt
+import sys
+
+import hgdemandimport
+
+hgdemandimport.enable()
+
+from mercurial.i18n import _
+from mercurial import (
+    context,
+    error,
+    fancyopts,
+    simplemerge,
+    ui as uimod,
+    util,
+)
+from mercurial.utils import procutil, stringutil
+
+options = [
+    (b'L', b'label', [], _(b'labels to use on conflict markers')),
+    (b'a', b'text', None, _(b'treat all files as text')),
+    (b'p', b'print', None, _(b'print results instead of overwriting LOCAL')),
+    (b'', b'no-minimal', None, _(b'no effect (DEPRECATED)')),
+    (b'h', b'help', None, _(b'display help and exit')),
+    (b'q', b'quiet', None, _(b'suppress output')),
+]
+
+usage = _(
+    b'''simplemerge [OPTS] LOCAL BASE OTHER
+
+    Simple three-way file merge utility with a minimal feature set.
+
+    Apply to LOCAL the changes necessary to go from BASE to OTHER.
+
+    By default, LOCAL is overwritten with the results of this operation.
+'''
+)
+
+
+class ParseError(Exception):
+    """Exception raised on errors in parsing the command line."""
+
+
+def showhelp():
+    procutil.stdout.write(usage)
+    procutil.stdout.write(b'\noptions:\n')
+
+    out_opts = []
+    for shortopt, longopt, default, desc in options:
+        out_opts.append(
+            (
+                b'%2s%s'
+                % (
+                    shortopt and b'-%s' % shortopt,
+                    longopt and b' --%s' % longopt,
+                ),
+                b'%s' % desc,
+            )
+        )
+    opts_len = max([len(opt[0]) for opt in out_opts])
+    for first, second in out_opts:
+        procutil.stdout.write(b' %-*s  %s\n' % (opts_len, first, second))
+
+
+def _verifytext(input, ui, quiet=False, allow_binary=False):
+    """verifies that text is non-binary (unless opts[text] is passed,
+    then we just warn)"""
+    if stringutil.binary(input.text()):
+        msg = _(b"%s looks like a binary file.") % input.fctx.path()
+        if not quiet:
+            ui.warn(_(b'warning: %s\n') % msg)
+        if not allow_binary:
+            sys.exit(1)
+
+
+try:
+    for fp in (sys.stdin, procutil.stdout, sys.stderr):
+        procutil.setbinary(fp)
+
+    opts = {}
+    try:
+        bargv = [a.encode('utf8') for a in sys.argv[1:]]
+        args = fancyopts.fancyopts(bargv, options, opts)
+    except getopt.GetoptError as e:
+        raise ParseError(e)
+    if opts[b'help']:
+        showhelp()
+        sys.exit(0)
+    if len(args) != 3:
+        raise ParseError(_(b'wrong number of arguments').decode('utf8'))
+    mode = b'merge'
+    if len(opts[b'label']) > 2:
+        mode = b'merge3'
+    local, base, other = args
+    overrides = opts[b'label']
+    if len(overrides) > 3:
+        raise error.InputError(b'can only specify three labels.')
+    labels = [local, other, base]
+    labels[: len(overrides)] = overrides
+    local_input = simplemerge.MergeInput(
+        context.arbitraryfilectx(local), labels[0]
+    )
+    other_input = simplemerge.MergeInput(
+        context.arbitraryfilectx(other), labels[1]
+    )
+    base_input = simplemerge.MergeInput(
+        context.arbitraryfilectx(base), labels[2]
+    )
+
+    quiet = opts.get(b'quiet')
+    allow_binary = opts.get(b'text')
+    ui = uimod.ui.load()
+    _verifytext(local_input, ui, quiet=quiet, allow_binary=allow_binary)
+    _verifytext(base_input, ui, quiet=quiet, allow_binary=allow_binary)
+    _verifytext(other_input, ui, quiet=quiet, allow_binary=allow_binary)
+
+    merged_text, conflicts = simplemerge.simplemerge(
+        local_input,
+        base_input,
+        other_input,
+        mode,
+        allow_binary=allow_binary,
+    )
+    if opts.get(b'print'):
+        ui.fout.write(merged_text)
+    else:
+        util.writefile(local, merged_text)
+    sys.exit(1 if conflicts else 0)
+except ParseError as e:
+    e = stringutil.forcebytestr(e)
+    procutil.stdout.write(b"%s: %s\n" % (sys.argv[0].encode('utf8'), e))
+    showhelp()
+    sys.exit(1)
+except error.Abort as e:
+    procutil.stderr.write(b"abort: %s\n" % e)
+    sys.exit(255)
+except KeyboardInterrupt:
+    sys.exit(255)

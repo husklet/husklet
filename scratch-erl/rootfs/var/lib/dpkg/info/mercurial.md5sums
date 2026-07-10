@@ -1,0 +1,16 @@
+b6ca8462dd67973e506f84f6a8960815  usr/bin/chg
+3537f6f4602c66315da19a4634abb3de  usr/bin/hg
+e58fb1e858bdf4bdcabc0036750a05c8  usr/lib/python3/dist-packages/hgext/fsmonitor/pywatchman/bser.cpython-311-aarch64-linux-gnu.so
+01e511df316fa7738dd89d0620efa22c  usr/lib/python3/dist-packages/mercurial/cext/base85.cpython-311-aarch64-linux-gnu.so
+e3c9cefbf6633f5a7c95af505d3ef915  usr/lib/python3/dist-packages/mercurial/cext/bdiff.cpython-311-aarch64-linux-gnu.so
+03a6808ad4dc1ea76397158a51a0dace  usr/lib/python3/dist-packages/mercurial/cext/mpatch.cpython-311-aarch64-linux-gnu.so
+017055182712132ce51585007e11ac9d  usr/lib/python3/dist-packages/mercurial/cext/osutil.cpython-311-aarch64-linux-gnu.so
+6fc2e180ee307be2559fc1bb2698da10  usr/lib/python3/dist-packages/mercurial/cext/parsers.cpython-311-aarch64-linux-gnu.so
+6e68e06b477fdcddbb1e30369f5dcdaa  usr/lib/python3/dist-packages/mercurial/thirdparty/sha1dc.cpython-311-aarch64-linux-gnu.so
+20247d657212d65d7cceb978f675542d  usr/lib/python3/dist-packages/mercurial/thirdparty/zope/interface/_zope_interface_coptimizations.cpython-311-aarch64-linux-gnu.so
+3abee2a646989c99c330a46c9de06f31  usr/lib/python3/dist-packages/mercurial/zstd.cpython-311-aarch64-linux-gnu.so
+005f89daa34296fb399cc41b04024c09  usr/share/doc/mercurial/NEWS.Debian.gz
+65650f1577956d6f24075fb237f56e19  usr/share/doc/mercurial/changelog.Debian.gz
+c5aae55d13db5fae4ac559a14ae8f5f5  usr/share/doc/mercurial/copyright
+b1bb45b31cf1af831d2bf22153459c22  usr/share/mercurial/hgext.rc
+4301dd96556917738b895bf82f9124e3  usr/share/mercurial/hgext.rc.md5sums

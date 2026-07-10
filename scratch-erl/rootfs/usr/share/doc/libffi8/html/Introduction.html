@@ -1,0 +1,116 @@
+<!DOCTYPE html PUBLIC "-//W3C//DTD HTML 4.01 Transitional//EN" "http://www.w3.org/TR/html4/loose.dtd">
+<html>
+<!-- Created by GNU Texinfo 6.8, https://www.gnu.org/software/texinfo/ -->
+<head>
+<meta http-equiv="Content-Type" content="text/html; charset=utf-8">
+<!-- 
+This manual is for libffi, a portable foreign function interface
+library.
+
+Copyright (C) 2008-2019, 2021, 2022 Anthony Green and Red Hat, Inc.
+
+Permission is hereby granted, free of charge, to any person obtaining
+a copy of this software and associated documentation files (the
+"Software"), to deal in the Software without restriction, including
+without limitation the rights to use, copy, modify, merge, publish,
+distribute, sublicense, and/or sell copies of the Software, and to
+permit persons to whom the Software is furnished to do so, subject to
+the following conditions:
+
+The above copyright notice and this permission notice shall be
+included in all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
+EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.
+IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY
+CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT,
+TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
+SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+ -->
+<title>Introduction (libffi: the portable foreign function interface library)</title>
+
+<meta name="description" content="Introduction (libffi: the portable foreign function interface library)">
+<meta name="keywords" content="Introduction (libffi: the portable foreign function interface library)">
+<meta name="resource-type" content="document">
+<meta name="distribution" content="global">
+<meta name="Generator" content="makeinfo">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+
+<link href="index.html" rel="start" title="Top">
+<link href="Index.html" rel="index" title="Index">
+<link href="index.html" rel="up" title="Top">
+<link href="Using-libffi.html" rel="next" title="Using libffi">
+<link href="index.html" rel="prev" title="Top">
+<style type="text/css">
+<!--
+a.copiable-anchor {visibility: hidden; text-decoration: none; line-height: 0em}
+a.summary-letter {text-decoration: none}
+blockquote.indentedblock {margin-right: 0em}
+div.display {margin-left: 3.2em}
+div.example {margin-left: 3.2em}
+kbd {font-style: oblique}
+pre.display {font-family: inherit}
+pre.format {font-family: inherit}
+pre.menu-comment {font-family: serif}
+pre.menu-preformatted {font-family: serif}
+span.nolinebreak {white-space: nowrap}
+span.roman {font-family: initial; font-weight: normal}
+span.sansserif {font-family: sans-serif; font-weight: normal}
+span:hover a.copiable-anchor {visibility: visible}
+ul.no-bullet {list-style: none}
+-->
+</style>
+
+
+</head>
+
+<body lang="en">
+<div class="chapter" id="Introduction">
+<div class="header">
+<p>
+Next: <a href="Using-libffi.html" accesskey="n" rel="next">Using libffi</a>, Previous: <a href="index.html" accesskey="p" rel="prev">libffi</a>, Up: <a href="index.html" accesskey="u" rel="up">libffi</a> &nbsp; [<a href="Index.html" title="Index" rel="index">Index</a>]</p>
+</div>
+<hr>
+<span id="What-is-libffi_003f"></span><h2 class="chapter">1 What is libffi?</h2>
+
+<p>Compilers for high level languages generate code that follow certain
+conventions.  These conventions are necessary, in part, for separate
+compilation to work.  One such convention is the <em>calling
+convention</em>.  The calling convention is a set of assumptions made by
+the compiler about where function arguments will be found on entry to
+a function.  A calling convention also specifies where the return
+value for a function is found.  The calling convention is also
+sometimes called the <em>ABI</em> or <em>Application Binary Interface</em>.
+<span id="index-calling-convention"></span>
+<span id="index-ABI"></span>
+<span id="index-Application-Binary-Interface"></span>
+</p>
+<p>Some programs may not know at the time of compilation what arguments
+are to be passed to a function.  For instance, an interpreter may be
+told at run-time about the number and types of arguments used to call
+a given function.  <code>libffi</code> can be used in such programs to
+provide a bridge from the interpreter program to compiled code.
+</p>
+<p>The <code>libffi</code> library provides a portable, high level programming
+interface to various calling conventions.  This allows a programmer to
+call any function specified by a call interface description at run
+time.
+</p>
+<p><acronym>FFI</acronym> stands for Foreign Function Interface.  A foreign
+function interface is the popular name for the interface that allows
+code written in one language to call code written in another language.
+The <code>libffi</code> library really only provides the lowest, machine
+dependent layer of a fully featured foreign function interface.  A
+layer must exist above <code>libffi</code> that handles type conversions for
+values passed between the two languages.
+<span id="index-FFI"></span>
+<span id="index-Foreign-Function-Interface"></span>
+</p>
+
+</div>
+
+
+
+</body>
+</html>

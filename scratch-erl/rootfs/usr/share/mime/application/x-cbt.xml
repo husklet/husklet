@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<mime-type xmlns="http://www.freedesktop.org/standards/shared-mime-info" type="application/x-cbt">
+  <!--Created automatically by update-mime-database. DO NOT EDIT!-->
+  <comment>comic book archive (tar container)</comment>
+  <sub-class-of type="application/x-tar"/>
+  <generic-icon name="x-office-document"/>
+  <glob pattern="*.cbt"/>
+</mime-type>

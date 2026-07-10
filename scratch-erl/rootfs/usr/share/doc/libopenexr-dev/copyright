@@ -1,0 +1,246 @@
+Format: https://www.debian.org/doc/packaging-manuals/copyright-format/1.0/
+Upstream-Name: openexr
+Upstream-Contact: openexr-devel@nongnu.org
+Source: https://www.openexr.com/
+
+Files: *
+Copyright: 2002-2018, Industrial Light & Magic, a division of Lucas Digital Ltd. LLC
+           2019, Academy Software Foundation
+           2020, Contributors to the OpenEXR Project
+License: openexr
+
+Files: src/lib/*
+Copyright: 2002-2014, Industrial Light & Magic, a division of Lucas
+License: BSD-3-clause
+
+Files: src/lib/OpenEXR/ImfCompositeDeepScanLine.cpp
+  src/lib/OpenEXR/ImfCompositeDeepScanLine.h
+  src/lib/OpenEXR/ImfDeepCompositing.cpp
+  src/lib/OpenEXR/ImfDeepCompositing.h
+  src/lib/OpenEXR/ImfFloatVectorAttribute.h
+  src/lib/OpenEXR/ImfMultiView.cpp
+  src/lib/OpenEXR/ImfMultiView.h
+  src/lib/OpenEXR/ImfPartHelper.h
+  src/lib/OpenEXR/ImfStringVectorAttribute.cpp
+  src/lib/OpenEXR/ImfStringVectorAttribute.h
+Copyright: 2007, 2012, 2013, Weta Digital Ltd
+License: BSD-3-clause
+
+Files: src/lib/OpenEXR/ImfDwaCompressor.cpp
+  src/lib/OpenEXR/ImfDwaCompressor.h
+  src/lib/OpenEXR/ImfDwaCompressorSimd.h
+  src/lib/OpenEXR/ImfFastHuf.cpp
+  src/lib/OpenEXR/ImfFastHuf.h
+  src/lib/OpenEXR/ImfSystemSpecific.cpp
+  src/lib/OpenEXR/dwaLookups.cpp
+Copyright: 2009-2014, DreamWorks Animation LLC.
+License: BSD-3-clause
+
+Files: src/lib/OpenEXR/ImfForward.h
+  src/lib/OpenEXR/ImfMultiPartOutputFile.h
+Copyright: 2012, Weta Digital Ltd
+  2011, Industrial Light & Magic, a division of Lucas
+License: BSD-3-clause
+
+Files: src/lib/OpenEXR/ImfOptimizedPixelReading.h
+  src/lib/OpenEXR/ImfSimd.h
+Copyright: 2012, Autodesk, Inc.
+License: BSD-3-clause
+
+Files: src/lib/OpenEXR/ImfPxr24Compressor.cpp
+  src/lib/OpenEXR/ImfPxr24Compressor.h
+Copyright: 2004, Pixar Animation Studios
+License: BSD-3-clause
+
+Files: src/lib/OpenEXR/ImfRgbaYca.cpp
+  src/lib/OpenEXR/ImfRgbaYca.h
+Copyright: held/ 2004, Industrial Light & Magic, a division of Lucasfilm
+License: BSD-3-clause
+
+Files: src/lib/OpenEXR/b44ExpLogTable.h
+  src/lib/OpenEXR/dwaLookups.h
+Copyright: 2002, Industrial Light & Magic, a division of Lucas Digital Ltd. LLC
+License: openexr
+
+Files: src/examples/*
+Copyright: 2002-2014, Industrial Light & Magic, a division of Lucas
+License: BSD-3-clause
+
+Files: src/test/OpenEXRFuzzTest/*
+Copyright: 2002-2014, Industrial Light & Magic, a division of Lucas
+License: BSD-3-clause
+
+Files: src/test/OpenEXRTest/*
+Copyright: 2002-2014, Industrial Light & Magic, a division of Lucas
+License: BSD-3-clause
+
+Files: src/test/OpenEXRTest/compareDwa.cpp
+  src/test/OpenEXRTest/compareDwa.h
+  src/test/OpenEXRTest/testDwaCompressorSimd.cpp
+  src/test/OpenEXRTest/testDwaCompressorSimd.h
+  src/test/OpenEXRTest/testRle.cpp
+  src/test/OpenEXRTest/testRle.h
+Copyright: 2009-2014, DreamWorks Animation LLC.
+License: BSD-3-clause
+
+Files: src/test/OpenEXRTest/compareFloat.cpp
+  src/test/OpenEXRTest/compareFloat.h
+Copyright: held/ 2004, Industrial Light & Magic, a division of Lucasfilm
+License: BSD-3-clause
+
+Files: src/test/OpenEXRTest/testBadTypeAttributes.cpp
+  src/test/OpenEXRTest/testBadTypeAttributes.h
+  src/test/OpenEXRTest/testCompositeDeepScanLine.cpp
+  src/test/OpenEXRTest/testCompositeDeepScanLine.h
+  src/test/OpenEXRTest/testDeepScanLineMultipleRead.cpp
+  src/test/OpenEXRTest/testDeepScanLineMultipleRead.h
+  src/test/OpenEXRTest/testFutureProofing.h
+  src/test/OpenEXRTest/testOptimizedInterleavePatterns.cpp
+  src/test/OpenEXRTest/testOptimizedInterleavePatterns.h
+  src/test/OpenEXRTest/testPartHelper.cpp
+  src/test/OpenEXRTest/testPartHelper.h
+Copyright: 2007, 2012, 2013, Weta Digital Ltd
+License: BSD-3-clause
+
+Files: src/test/OpenEXRTest/testConversion.cpp
+Copyright: held/ 2003-2012, Industrial Light & Magic, a division of Lucasfilm
+License: BSD-3-clause
+
+Files: src/test/OpenEXRTest/testCopyDeepScanLine.cpp
+  src/test/OpenEXRTest/testCopyDeepScanLine.h
+  src/test/OpenEXRTest/testCopyMultiPartFile.h
+Copyright: 2012, Weta Digital Ltd
+  2011, Industrial Light & Magic, a division of Lucas
+License: BSD-3-clause
+
+Files: src/test/OpenEXRTest/testCopyMultiPartFile.cpp
+  src/test/OpenEXRTest/testFutureProofing.cpp
+  src/test/OpenEXRTest/testInputPart.cpp
+  src/test/OpenEXRTest/testMultiPartFileMixingBasic.cpp
+Copyright: 2012, 2013, Weta Digital Ltd
+  2011, Industrial Light & Magic, a division of Lucas
+License: BSD-3-clause
+
+Files: src/test/OpenEXRTest/testMultiView.cpp
+  src/test/OpenEXRTest/testMultiView.h
+Copyright: 2012, Industrial Light & Magic, a division of Lucasfilm
+  2007, Weta Digital Ltd
+License: BSD-3-clause
+
+Files: src/test/OpenEXRTest/testTiledYa.cpp
+  src/test/OpenEXRTest/testTiledYa.h
+  src/test/OpenEXRTest/testYca.cpp
+  src/test/OpenEXRTest/testYca.h
+Copyright: held/ 2004-2012, Industrial Light & Magic, a division of Lucasfilm
+License: BSD-3-clause
+
+Files: src/lib/OpenEXRUtil/*
+Copyright: 2002-2014, Industrial Light & Magic, a division of Lucas
+License: BSD-3-clause
+
+Files: src/test/OpenEXRUtilTest/*
+Copyright: 2002-2014, Industrial Light & Magic, a division of Lucas
+License: BSD-3-clause
+
+Files: PATENTS
+Copyright: able works distributedDreamWorks Animation as part of the OpenEXR
+License: openexr
+
+Files: debian/*
+Copyright: 2014, Matteo F. Vescovi <mfv@debian.org>
+  2014, Mathieu Malaterre <malat@debian.org>
+  2009, Cyril Brulebois <kibi@debian.org>
+  2007, 2008, Adeodato Simó <dato@debian.org>
+License: openexr
+
+Files: src/bin/exrenvmap/*
+Copyright: 2002-2014, Industrial Light & Magic, a division of Lucas
+License: BSD-3-clause
+
+Files: src/bin/exrheader/main.cpp
+Copyright: 2002-2014, Industrial Light & Magic, a division of Lucas
+License: BSD-3-clause
+
+Files: src/bin/exrmakepreview/*
+Copyright: 2002-2014, Industrial Light & Magic, a division of Lucas
+License: BSD-3-clause
+
+Files: src/bin/exrmaketiled/*
+Copyright: 2002-2014, Industrial Light & Magic, a division of Lucas
+License: BSD-3-clause
+
+Files: src/bin/exrmultipart/exrmultipart.cpp
+Copyright: heldothers as indicated. / 2012, Industrial Light & Magic, a division of Lucas
+License: BSD-3-clause
+
+Files: src/bin/exrmultiview/*
+Copyright: 2002-2014, Industrial Light & Magic, a division of Lucas
+License: BSD-3-clause
+
+Files: src/bin/exrstdattr/main.cpp
+Copyright: 2002-2014, Industrial Light & Magic, a division of Lucas
+License: BSD-3-clause
+
+License: BSD-3-clause
+ This software is Copyright (c) 2019 by ASWF.
+ .
+ This is free software, licensed under:
+ .
+   The (three-clause) BSD License
+ .
+ The BSD License
+ .
+ Redistribution and use in source and binary forms, with or without
+ modification, are permitted provided that the following conditions are
+ met:
+ .
+   * Redistributions of source code must retain the above copyright
+     notice, this list of conditions and the following disclaimer.
+ .
+   * Redistributions in binary form must reproduce the above copyright
+     notice, this list of conditions and the following disclaimer in the
+     documentation and/or other materials provided with the distribution.
+ .
+   * Neither the name of foo nor the names of its
+     contributors may be used to endorse or promote products derived from
+     this software without specific prior written permission.
+ .
+ THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS
+ IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED
+ TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A
+ PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR
+ CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL,
+ EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO,
+ PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR
+ PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF
+ LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING
+ NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
+ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+
+License: openexr
+ All rights reserved.
+ .
+ Redistribution and use in source and binary forms, with or without
+ modification, are permitted provided that the following conditions are
+ met:
+ *       Redistributions of source code must retain the above copyright
+ notice, this list of conditions and the following disclaimer.
+ *       Redistributions in binary form must reproduce the above
+ copyright notice, this list of conditions and the following disclaimer
+ in the documentation and/or other materials provided with the
+ distribution.
+ *       Neither the name of Industrial Light & Magic nor the names of
+ its contributors may be used to endorse or promote products derived
+ from this software without specific prior written permission.
+ .
+ THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+ "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+ LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
+ A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
+ OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+ SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
+ LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
+ DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
+ THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+ (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.

@@ -1,0 +1,4 @@
+# The library provides APIs that do exit.
+libbsd0: exit-in-shared-library [usr/lib/*/libbsd.so.*]
+# We use a linker script.
+libbsd0: lacks-unversioned-link-to-shared-library example: usr/lib/*/libbsd.so [usr/lib/*/libbsd.so.*]

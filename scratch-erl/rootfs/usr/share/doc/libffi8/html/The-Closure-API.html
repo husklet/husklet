@@ -1,0 +1,200 @@
+<!DOCTYPE html PUBLIC "-//W3C//DTD HTML 4.01 Transitional//EN" "http://www.w3.org/TR/html4/loose.dtd">
+<html>
+<!-- Created by GNU Texinfo 6.8, https://www.gnu.org/software/texinfo/ -->
+<head>
+<meta http-equiv="Content-Type" content="text/html; charset=utf-8">
+<!-- 
+This manual is for libffi, a portable foreign function interface
+library.
+
+Copyright (C) 2008-2019, 2021, 2022 Anthony Green and Red Hat, Inc.
+
+Permission is hereby granted, free of charge, to any person obtaining
+a copy of this software and associated documentation files (the
+"Software"), to deal in the Software without restriction, including
+without limitation the rights to use, copy, modify, merge, publish,
+distribute, sublicense, and/or sell copies of the Software, and to
+permit persons to whom the Software is furnished to do so, subject to
+the following conditions:
+
+The above copyright notice and this permission notice shall be
+included in all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
+EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.
+IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY
+CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT,
+TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
+SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+ -->
+<title>The Closure API (libffi: the portable foreign function interface library)</title>
+
+<meta name="description" content="The Closure API (libffi: the portable foreign function interface library)">
+<meta name="keywords" content="The Closure API (libffi: the portable foreign function interface library)">
+<meta name="resource-type" content="document">
+<meta name="distribution" content="global">
+<meta name="Generator" content="makeinfo">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+
+<link href="index.html" rel="start" title="Top">
+<link href="Index.html" rel="index" title="Index">
+<link href="Using-libffi.html" rel="up" title="Using libffi">
+<link href="Closure-Example.html" rel="next" title="Closure Example">
+<link href="Multiple-ABIs.html" rel="prev" title="Multiple ABIs">
+<style type="text/css">
+<!--
+a.copiable-anchor {visibility: hidden; text-decoration: none; line-height: 0em}
+a.summary-letter {text-decoration: none}
+blockquote.indentedblock {margin-right: 0em}
+div.display {margin-left: 3.2em}
+div.example {margin-left: 3.2em}
+kbd {font-style: oblique}
+pre.display {font-family: inherit}
+pre.format {font-family: inherit}
+pre.menu-comment {font-family: serif}
+pre.menu-preformatted {font-family: serif}
+span.nolinebreak {white-space: nowrap}
+span.roman {font-family: initial; font-weight: normal}
+span.sansserif {font-family: sans-serif; font-weight: normal}
+span:hover a.copiable-anchor {visibility: visible}
+ul.no-bullet {list-style: none}
+-->
+</style>
+
+
+</head>
+
+<body lang="en">
+<div class="section" id="The-Closure-API">
+<div class="header">
+<p>
+Next: <a href="Closure-Example.html" accesskey="n" rel="next">Closure Example</a>, Previous: <a href="Multiple-ABIs.html" accesskey="p" rel="prev">Multiple ABIs</a>, Up: <a href="Using-libffi.html" accesskey="u" rel="up">Using libffi</a> &nbsp; [<a href="Index.html" title="Index" rel="index">Index</a>]</p>
+</div>
+<hr>
+<span id="The-Closure-API-1"></span><h3 class="section">2.5 The Closure API</h3>
+
+<p><code>libffi</code> also provides a way to write a generic function &ndash; a
+function that can accept and decode any combination of arguments.
+This can be useful when writing an interpreter, or to provide wrappers
+for arbitrary functions.
+</p>
+<p>This facility is called the <em>closure API</em>.  Closures are not
+supported on all platforms; you can check the <code>FFI_CLOSURES</code>
+define to determine whether they are supported on the current
+platform.
+<span id="index-closures"></span>
+<span id="index-closure-API"></span>
+<span id="index-FFI_005fCLOSURES"></span>
+</p>
+<p>Because closures work by assembling a tiny function at runtime, they
+require special allocation on platforms that have a non-executable
+heap.  Memory management for closures is handled by a pair of
+functions:
+</p>
+<span id="index-ffi_005fclosure_005falloc"></span>
+<dl class="def">
+<dt id="index-void-1"><span class="category">Function: </span><span><strong>void</strong> <em>*ffi_closure_alloc (size_t <var>size</var>, void **<var>code</var>)</em><a href='#index-void-1' class='copiable-anchor'> &para;</a></span></dt>
+<dd><p>Allocate a chunk of memory holding <var>size</var> bytes.  This returns a
+pointer to the writable address, and sets *<var>code</var> to the
+corresponding executable address.
+</p>
+<p><var>size</var> should be sufficient to hold a <code>ffi_closure</code> object.
+</p></dd></dl>
+
+<span id="index-ffi_005fclosure_005ffree"></span>
+<dl class="def">
+<dt id="index-void-2"><span class="category">Function: </span><span><strong>void</strong> <em>ffi_closure_free (void *<var>writable</var>)</em><a href='#index-void-2' class='copiable-anchor'> &para;</a></span></dt>
+<dd><p>Free memory allocated using <code>ffi_closure_alloc</code>.  The argument is
+the writable address that was returned.
+</p></dd></dl>
+
+<p>Once you have allocated the memory for a closure, you must construct a
+<code>ffi_cif</code> describing the function call.  Finally you can prepare
+the closure function:
+</p>
+<span id="index-ffi_005fprep_005fclosure_005floc"></span>
+<dl class="def">
+<dt id="index-ffi_005fstatus-3"><span class="category">Function: </span><span><strong>ffi_status</strong> <em>ffi_prep_closure_loc (ffi_closure *<var>closure</var>, ffi_cif *<var>cif</var>, void (*<var>fun</var>) (ffi_cif *<var>cif</var>, void *<var>ret</var>, void **<var>args</var>, void *<var>user_data</var>), void *<var>user_data</var>, void *<var>codeloc</var>)</em><a href='#index-ffi_005fstatus-3' class='copiable-anchor'> &para;</a></span></dt>
+<dd><p>Prepare a closure function.  The arguments to
+<code>ffi_prep_closure_loc</code> are:
+</p>
+<dl compact="compact">
+<dt><span><var>closure</var></span></dt>
+<dd><p>The address of a <code>ffi_closure</code> object; this is the writable
+address returned by <code>ffi_closure_alloc</code>.
+</p>
+</dd>
+<dt><span><var>cif</var></span></dt>
+<dd><p>The <code>ffi_cif</code> describing the function parameters.  Note that this
+object, and the types to which it refers, must be kept alive until the
+closure itself is freed.
+</p>
+</dd>
+<dt><span><var>user_data</var></span></dt>
+<dd><p>An arbitrary datum that is passed, uninterpreted, to your closure
+function.
+</p>
+</dd>
+<dt><span><var>codeloc</var></span></dt>
+<dd><p>The executable address returned by <code>ffi_closure_alloc</code>.
+</p>
+</dd>
+<dt><span><var>fun</var></span></dt>
+<dd><p>The function which will be called when the closure is invoked.  It is
+called with the arguments:
+</p>
+<dl compact="compact">
+<dt><span><var>cif</var></span></dt>
+<dd><p>The <code>ffi_cif</code> passed to <code>ffi_prep_closure_loc</code>.
+</p>
+</dd>
+<dt><span><var>ret</var></span></dt>
+<dd><p>A pointer to the memory used for the function&rsquo;s return value.
+</p>
+<p>If the function is declared as returning <code>void</code>, then this value
+is garbage and should not be used.
+</p>
+<p>Otherwise, <var>fun</var> must fill the object to which this points,
+following the same special promotion behavior as <code>ffi_call</code>.
+That is, in most cases, <var>ret</var> points to an object of exactly the
+size of the type specified when <var>cif</var> was constructed.  However,
+integral types narrower than the system register size are widened.  In
+these cases your program may assume that <var>ret</var> points to an
+<code>ffi_arg</code> object.
+</p>
+</dd>
+<dt><span><var>args</var></span></dt>
+<dd><p>A vector of pointers to memory holding the arguments to the function.
+</p>
+</dd>
+<dt><span><var>user_data</var></span></dt>
+<dd><p>The same <var>user_data</var> that was passed to
+<code>ffi_prep_closure_loc</code>.
+</p></dd>
+</dl>
+</dd>
+</dl>
+
+<p><code>ffi_prep_closure_loc</code> will return <code>FFI_OK</code> if everything
+went ok, and one of the other <code>ffi_status</code> values on error.
+</p>
+<p>After calling <code>ffi_prep_closure_loc</code>, you can cast <var>codeloc</var>
+to the appropriate pointer-to-function type.
+</p></dd></dl>
+
+<p>You may see old code referring to <code>ffi_prep_closure</code>.  This
+function is deprecated, as it cannot handle the need for separate
+writable and executable addresses.
+</p>
+</div>
+<hr>
+<div class="header">
+<p>
+Next: <a href="Closure-Example.html">Closure Example</a>, Previous: <a href="Multiple-ABIs.html">Multiple ABIs</a>, Up: <a href="Using-libffi.html">Using libffi</a> &nbsp; [<a href="Index.html" title="Index" rel="index">Index</a>]</p>
+</div>
+
+
+
+</body>
+</html>

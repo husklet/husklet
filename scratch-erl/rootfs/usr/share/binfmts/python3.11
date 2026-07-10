@@ -1,0 +1,3 @@
+package python3.11
+interpreter /usr/bin/python3.11
+magic \xa7\x0d\x0d\x0a

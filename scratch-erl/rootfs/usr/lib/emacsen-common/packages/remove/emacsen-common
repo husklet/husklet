@@ -1,0 +1,11 @@
+#!/bin/sh
+
+set -e
+
+flavor="$1"
+
+echo "emacsen-common: Handling removal of emacsen flavor $flavor"
+
+rm -f \
+   "/usr/share/$flavor/site-lisp/debian-startup.el" \
+   "/usr/share/$flavor/site-lisp/debian-startup.elc"

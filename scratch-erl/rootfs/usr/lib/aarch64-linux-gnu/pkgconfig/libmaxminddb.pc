@@ -1,0 +1,11 @@
+prefix=/usr
+exec_prefix=/usr
+libdir=${prefix}/lib/aarch64-linux-gnu
+includedir=${prefix}/include/aarch64-linux-gnu
+
+Name: libmaxminddb
+Description: C library for the MaxMind DB file format
+URL: https://maxmind.github.io/libmaxminddb/
+Version: 1.7.1
+Libs: -L${libdir} -lmaxminddb
+Cflags: -I${includedir}

@@ -23,7 +23,13 @@ fn main() {
         .status()
         .map(|s| s.success())
         .unwrap_or(false)
-        && Command::new(&ar).arg("rcs").arg(&lib).arg(&obj).status().map(|s| s.success()).unwrap_or(false);
+        && Command::new(&ar)
+            .arg("rcs")
+            .arg(&lib)
+            .arg(&obj)
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false);
     if !ok {
         panic!("failed to compile dd-display mach_bridge.c");
     }

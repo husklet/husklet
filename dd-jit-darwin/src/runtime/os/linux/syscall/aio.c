@@ -114,11 +114,12 @@ static long aio_drain(struct aio_ctx *x, uint8_t *ev, long max) {
 // accumulating counter and regenerate a single fresh readable edge on the backing pipe so a blocked/
 // edge-triggered epoll_wait on the eventfd wakes. No-op for a non-eventfd / out-of-range fd.
 static void aio_eventfd_kick(int fd) {
-    if (fd < 0 || fd >= 1024 || !g_eventfd_peer[fd]) return;
+    if (fd < 0 || fd >= DD_NFD || !g_eventfd_peer[fd]) return;
+    int eslot = eventfd_counter_slot(fd);
     // Same counter+pipe atomicity as io.c's eventfd write (see _eventfd-atomicity_): hold g_eventfd_lock
     // across the bump + drain + re-signal so an AIO completion never races the guest's read()/write().
     pthread_mutex_lock(&g_eventfd_lock);
-    g_eventfd_count[fd] += 1;
+    g_eventfd_count[eslot] += 1;
     int fl = fcntl(fd, F_GETFL);
     if (fl >= 0 && !(fl & O_NONBLOCK)) fcntl(fd, F_SETFL, fl | O_NONBLOCK);
     char buf[64];

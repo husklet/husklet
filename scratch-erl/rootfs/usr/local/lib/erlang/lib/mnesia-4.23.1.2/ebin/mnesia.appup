@@ -1,0 +1,11 @@
+%% -*- erlang -*-
+{"4.23.1.2",
+ [
+  {<<"4\\.2[0-9].*">>, [{restart_application, mnesia}]},
+  {<<"4\\.1[0-9].*">>, [{restart_application, mnesia}]}
+ ],
+ [
+  {<<"4\\.2[0-9].*">>, [{restart_application, mnesia}]},
+  {<<"4\\.1[0-9].*">>, [{restart_application, mnesia}]}
+ ]
+}.

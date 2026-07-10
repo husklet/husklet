@@ -1,0 +1,5 @@
+libgstbase-1.0 0 libgstreamer1.0-0 (>= 1.22.0)
+libgstcheck-1.0 0 libgstreamer1.0-0 (>= 1.22.0)
+libgstcontroller-1.0 0 libgstreamer1.0-0 (>= 1.22.0)
+libgstnet-1.0 0 libgstreamer1.0-0 (>= 1.22.0)
+libgstreamer-1.0 0 libgstreamer1.0-0 (>= 1.22.0)

@@ -1,0 +1,18 @@
+#!/bin/sh
+
+set -e
+
+# The emacsen-common package is a special case; we can't call
+# emacs-package-install from here since the new version hasn't been
+# unpacked yet, so just do the important bit that it would have done.
+installed_state_dir=/var/lib/emacsen-common/state/package/installed
+if test -d "$installed_state_dir"
+then
+  rm -f "$installed_state_dir"/emacsen-common
+fi
+
+# Automatically added by dh_installdeb/13.11.3
+dpkg-maintscript-helper rm_conffile /etc/emacs/site-start.d/00debian-vars.el 3.0.3\~ emacsen-common -- "$@"
+dpkg-maintscript-helper rm_conffile /etc/emacs/site-start.el 3.0.3\~ emacsen-common -- "$@"
+# End automatically added section
+

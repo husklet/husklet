@@ -302,6 +302,20 @@ pub enum Enc {
         min_depth: f32,
         max_depth: f32,
     },
+    SetScissor {
+        x: u32,
+        y: u32,
+        w: u32,
+        h: u32,
+    },
+    ClearRect {
+        texture: u32,
+        x: u32,
+        y: u32,
+        w: u32,
+        h: u32,
+        color: [f32; 4],
+    },
     Draw {
         vertex_count: u32,
         instance_count: u32,
@@ -428,6 +442,8 @@ mod etag {
     pub const COPY_B2B: u8 = 13;
     pub const COPY_B2T: u8 = 14;
     pub const COPY_T2B: u8 = 15;
+    pub const SET_SCISSOR: u8 = 16;
+    pub const CLEAR_RECT: u8 = 17;
 }
 
 // ---------------------------------------------------------------------------------------------------
@@ -729,6 +745,24 @@ fn enc_enc(e: &mut Encoder, op: &Enc) {
                 e.f32(v);
             }
         }
+        Enc::SetScissor { x, y, w, h } => {
+            e.u8(etag::SET_SCISSOR);
+            e.u32(*x);
+            e.u32(*y);
+            e.u32(*w);
+            e.u32(*h);
+        }
+        Enc::ClearRect { texture, x, y, w, h, color } => {
+            e.u8(etag::CLEAR_RECT);
+            e.u32(*texture);
+            e.u32(*x);
+            e.u32(*y);
+            e.u32(*w);
+            e.u32(*h);
+            for v in color {
+                e.f32(*v);
+            }
+        }
         Enc::Draw { vertex_count, instance_count, first_vertex, first_instance } => {
             e.u8(etag::DRAW);
             e.u32(*vertex_count);
@@ -827,6 +861,20 @@ fn dec_enc(d: &mut Decoder) -> Result<Enc> {
             min_depth: d.f32()?,
             max_depth: d.f32()?,
         },
+        etag::SET_SCISSOR => Enc::SetScissor {
+            x: d.u32()?,
+            y: d.u32()?,
+            w: d.u32()?,
+            h: d.u32()?,
+        },
+        etag::CLEAR_RECT => Enc::ClearRect {
+            texture: d.u32()?,
+            x: d.u32()?,
+            y: d.u32()?,
+            w: d.u32()?,
+            h: d.u32()?,
+            color: [d.f32()?, d.f32()?, d.f32()?, d.f32()?],
+        },
         etag::DRAW => Enc::Draw {
             vertex_count: d.u32()?,
             instance_count: d.u32()?,
@@ -893,8 +941,20 @@ fn enc_command_buffer(e: &mut Encoder, cb: &CommandBuffer) {
 fn dec_command_buffer(d: &mut Decoder) -> Result<CommandBuffer> {
     let n = d.u32()? as usize;
     let mut encoder = Vec::with_capacity(n);
-    for _ in 0..n {
-        encoder.push(dec_enc(d)?);
+    for i in 0..n {
+        let pos = d.pos();
+        let tag = d.peek_u8();
+        match dec_enc(d) {
+            Ok(op) => encoder.push(op),
+            Err(e) => {
+                return Err(GpuError::Decode(format!(
+                    "submit encoder op {i}/{n} at byte {pos}/{} tag {:?} remaining {}: {e}",
+                    d.len(),
+                    tag,
+                    d.remaining()
+                )));
+            }
+        }
     }
     let signal = if d.bool()? { Some((d.u32()?, d.u64()?)) } else { None };
     Ok(CommandBuffer { encoder, signal })
@@ -1090,7 +1150,20 @@ pub fn decode_stream(bytes: &[u8]) -> Result<Vec<Cmd>> {
     let mut d = Decoder::new(bytes);
     let mut out = Vec::new();
     while !d.is_empty() {
-        out.push(Cmd::decode(&mut d)?);
+        let idx = out.len();
+        let pos = d.pos();
+        let tag = d.peek_u8();
+        match Cmd::decode(&mut d) {
+            Ok(cmd) => out.push(cmd),
+            Err(e) => {
+                return Err(GpuError::Decode(format!(
+                    "command {idx} at byte {pos}/{} tag {:?} remaining {}: {e}",
+                    d.len(),
+                    tag,
+                    d.remaining()
+                )));
+            }
+        }
     }
     Ok(out)
 }

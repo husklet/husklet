@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<mime-type xmlns="http://www.freedesktop.org/standards/shared-mime-info" type="application/x-asar">
+  <!--Created automatically by update-mime-database. DO NOT EDIT!-->
+  <comment>Electron Archive (ASAR)</comment>
+  <acronym>ASAR</acronym>
+  <expanded-acronym>Atom Shell Archive Format</expanded-acronym>
+  <glob pattern="*.asar"/>
+</mime-type>

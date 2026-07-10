@@ -1,0 +1,70 @@
+<html><head><meta http-equiv="Content-Type" content="text/html; charset=ISO-8859-1"><title>Adding a rigidity mask</title><meta name="generator" content="DocBook XSL Stylesheets V1.79.1"><link rel="home" href="index.html" title="The Liquid Rescale library Manual"><link rel="up" href="api-manual.html" title="Chapter 2. LqR library API user manual"><link rel="prev" href="bias.html" title="Adding a bias"><link rel="next" href="tuning.html" title="Tuning"></head><body bgcolor="white" text="black" link="#0000FF" vlink="#840084" alink="#0000FF"><div class="navheader"><table width="100%" summary="Navigation header"><tr><th colspan="3" align="center">Adding a rigidity mask</th></tr><tr><td width="20%" align="left"><a accesskey="p" href="bias.html">Prev</a> </td><th width="60%" align="center">Chapter 2. LqR library API user manual</th><td width="20%" align="right"> <a accesskey="n" href="tuning.html">Next</a></td></tr></table><hr></div><div class="sect1"><div class="titlepage"><div><div><h2 class="title" style="clear: both"><a name="rigmask"></a>Adding a rigidity mask</h2></div></div></div><div class="toc"><dl class="toc"><dt><span class="sect2"><a href="rigmask.html#rigmask-foreword">Foreword</a></span></dt><dt><span class="sect2"><a href="rigmask.html#rigmask-xy">Adding an individual rigidity coefficient to a pixel</a></span></dt><dt><span class="sect2"><a href="rigmask.html#rigmask-float">Using an array of floating-point values</a></span></dt><dt><span class="sect2"><a href="rigmask.html#rigmask-rgb">Using another image</a></span></dt><dt><span class="sect2"><a href="rigmask.html#rigmask-areas">Operating on a specific area</a></span></dt></dl></div><div class="sect2"><div class="titlepage"><div><div><h3 class="title"><a name="rigmask-foreword"></a>Foreword</h3></div></div></div><p>
+                    The rigidity parameter which is set at carver activation time (see section
+                    <a class="link" href="generate-multi-size.html#carver-init" title="Carver activation">Carver activation</a>) normally affects the whole image. It is
+                    possible, however, to specify which areas of the image should be affected by using a rigidity mask.
+                </p><p>
+                    When a rigidity mask is used, each pixel of the image acquires an individual rigidity coefficient,
+                    which has to be multiplied with the overall rigidity parameter to get the actual pixel's rigidity.
+                    This is useful in some situations to reduce distorsions in specific areas of the image while keeping
+                    the seams optimal in other areas.
+                </p><p>
+                    The library interface to deal with rigidity masks follows very closely the scheme for bias masks as
+                    described in the <a class="link" href="bias.html" title="Adding a bias">bias section</a>, the main difference being that no
+                    equivalent to the bias factor has to be provided (since it is already given in the
+                    <code class="function">lqr_carver_init</code> function).
+                </p><div class="important" style="margin-left: 0.5in; margin-right: 0.5in;"><h3 class="title">Important</h3><p>
+                        The rigidity mask has to be added always <span class="emphasis"><em>after</em></span> the <code class="classname">LqrCarver</code>
+                        initialization and <span class="emphasis"><em>before</em></span> resizing takes place. (Note that this is
+                        different from the bias, which instead can also be added to non-initialised carver objects.)
+                    </p></div><div class="important" style="margin-left: 0.5in; margin-right: 0.5in;"><h3 class="title">Important</h3><p>
+                        Whenever a rigidity mask is set, all pixels for which the value is not explicitly defined will
+                        have coefficient 0, i.e. the rigidity setting will will be disabled.
+                    </p></div><div class="note" style="margin-left: 0.5in; margin-right: 0.5in;"><h3 class="title">Note</h3><p>
+                        All of the functions can be called multiple times, but their effect is not summed up, to the
+                        contrary of what happens for the bias functions; instead, new values will substitute old ones
+                        when the affected regions overlap.
+                    </p></div></div><div class="sect2"><div class="titlepage"><div><div><h3 class="title"><a name="rigmask-xy"></a>Adding an individual rigidity coefficient to a pixel</h3></div></div></div><p>
+                    The function to use in order to set the rigidity mask at a given pixel is:
+                    </p><div class="funcsynopsis"><table border="0" class="funcprototype-table" summary="Function synopsis" style="cellspacing: 0; cellpadding: 0;"><tr><td><code class="funcdef">LqrRetVal <b class="fsfunc">lqr_carver_rigmask_add_xy</b>(</code></td><td>LqrCarver* <var class="pdparam">carver</var>, </td></tr><tr><td> </td><td>gdouble <var class="pdparam">rigidity</var>, </td></tr><tr><td> </td><td>gint <var class="pdparam">x</var>, </td></tr><tr><td> </td><td>gint <var class="pdparam">y</var><code>)</code>;</td></tr></table><div class="funcprototype-spacer"> </div></div><p>
+                </p></div><div class="sect2"><div class="titlepage"><div><div><h3 class="title"><a name="rigmask-float"></a>Using an array of floating-point values</h3></div></div></div><p>
+                    It is possible to use a whole array of floating points at once through this function:
+                    </p><div class="funcsynopsis"><table border="0" class="funcprototype-table" summary="Function synopsis" style="cellspacing: 0; cellpadding: 0;"><tr><td><code class="funcdef">LqrRetVal <b class="fsfunc">lqr_carver_rigmask_add</b>(</code></td><td>LqrCarver* <var class="pdparam">carver</var>, </td></tr><tr><td> </td><td>gdouble* <var class="pdparam">buffer</var><code>)</code>;</td></tr></table><div class="funcprototype-spacer"> </div></div><p>
+                </p><p>
+                    Here, <em class="parameter"><code>buffer</code></em> is an array contining the rigidity coefficients values, and it
+                    is assumed to have the same size as the image loaded in <em class="parameter"><code>carver</code></em>.
+                </p><div class="note" style="margin-left: 0.5in; margin-right: 0.5in;"><h3 class="title">Note</h3><p>
+                        This function, and all the following, will not swallow the buffer (to the contrary of what
+                        happens e.g. when creating a new <code class="classname">LqrCarver</code> object and allowing the default behaviour),
+                        therefore the buffer must be freed by the user afterwards.
+                    </p></div></div><div class="sect2"><div class="titlepage"><div><div><h3 class="title"><a name="rigmask-rgb"></a>Using another image</h3></div></div></div><p>
+                    The rigidity mask can also be read from an 8-bit rgb buffer. This buffer has to be in the same
+                    format as the one used in the 8-bit LqrCarver constructor (but may have a different number of
+                    colours per channel). The function is:
+                    </p><div class="funcsynopsis"><table border="0" class="funcprototype-table" summary="Function synopsis" style="cellspacing: 0; cellpadding: 0;"><tr><td><code class="funcdef">LqrRetVal <b class="fsfunc">lqr_carver_rigmask_add_rgb</b>(</code></td><td>LqrCarver* <var class="pdparam">carver</var>, </td></tr><tr><td> </td><td>guchar* <var class="pdparam">buffer</var>, </td></tr><tr><td> </td><td>gint <var class="pdparam">channels</var><code>)</code>;</td></tr></table><div class="funcprototype-spacer"> </div></div><p>
+                </p><p>
+                    As in the previous case, <em class="parameter"><code>buffer</code></em> is assumed to hold and image of the same size
+                    as the one in the <em class="parameter"><code>carver</code></em>.
+                </p><p>
+                    The <em class="parameter"><code>buffer</code></em> contents will be transformed into floating-points by averaging the
+                    colour components and multiplying the result by the alpha channel (transparency) value.
+                </p><div class="important" style="margin-left: 0.5in; margin-right: 0.5in;"><h3 class="title">Important</h3><p>
+                        The existence of an alpha channel is inferred from the <em class="parameter"><code>channels</code></em> value: if
+                        this is 1 or 3, no alpha channel is assumed, if it is 2 or 4, it is assumed that the last
+                        channel is holds the alpha value. If this is not what you want, you should resort to one of the
+                        previous methods.
+                    </p></div></div><div class="sect2"><div class="titlepage"><div><div><h3 class="title"><a name="rigmask-areas"></a>Operating on a specific area</h3></div></div></div><p>
+                    The two previously described functions operate on the whole <code class="classname">LqrCarver</code> image. It is also possible
+                    to access specific image regions in a similar way; for the floating point use:
+                    </p><div class="funcsynopsis"><table border="0" class="funcprototype-table" summary="Function synopsis" style="cellspacing: 0; cellpadding: 0;"><tr><td><code class="funcdef">LqrRetVal <b class="fsfunc">lqr_carver_rigmask_add_area</b>(</code></td><td>LqrCarver* <var class="pdparam">carver</var>, </td></tr><tr><td> </td><td>gdouble* <var class="pdparam">buffer</var>, </td></tr><tr><td> </td><td>gint <var class="pdparam">width</var>, </td></tr><tr><td> </td><td>gint <var class="pdparam">height</var>, </td></tr><tr><td> </td><td>gint <var class="pdparam">x_off</var>, </td></tr><tr><td> </td><td>gint <var class="pdparam">y_off</var><code>)</code>;</td></tr></table><div class="funcprototype-spacer"> </div></div><p>
+                    while for the rgb image use:
+                    </p><div class="funcsynopsis"><table border="0" class="funcprototype-table" summary="Function synopsis" style="cellspacing: 0; cellpadding: 0;"><tr><td><code class="funcdef">LqrRetVal <b class="fsfunc">lqr_carver_rigmask_add_rgb_area</b>(</code></td><td>LqrCarver* <var class="pdparam">carver</var>, </td></tr><tr><td> </td><td>guchar* <var class="pdparam">buffer</var>, </td></tr><tr><td> </td><td>gint <var class="pdparam">channels</var>, </td></tr><tr><td> </td><td>gint <var class="pdparam">width</var>, </td></tr><tr><td> </td><td>gint <var class="pdparam">height</var>, </td></tr><tr><td> </td><td>gint <var class="pdparam">x_off</var>, </td></tr><tr><td> </td><td>gint <var class="pdparam">y_off</var><code>)</code>;</td></tr></table><div class="funcprototype-spacer"> </div></div><p>
+                </p><p>
+                    In both functions, <em class="parameter"><code>width</code></em> and <em class="parameter"><code>height</code></em> are used to specify the size of the area of interest,
+                    while <em class="parameter"><code>x_off</code></em> and <em class="parameter"><code>y_off</code></em> specify its offset. For the
+                    rest, both functions work in the same way as their global couterpart.
+                </p><p>
+                    The provided buffers have to be of size <code class="literal"><em class="parameter"><code>width</code></em> * <em class="parameter"><code>height</code></em></code> (or
+                    <code class="literal"><em class="parameter"><code>width</code></em> * <em class="parameter"><code>height</code></em> * <em class="parameter"><code>channels</code></em></code> for the rgb case) but the specified
+                    areas need not to be strictly included inside the <code class="classname">LqrCarver</code> image area: only the parts which
+                    overlap with it will be used. For example, the offsets can also be negative.
+                </p></div></div><div class="navfooter"><hr><table width="100%" summary="Navigation footer"><tr><td width="40%" align="left"><a accesskey="p" href="bias.html">Prev</a> </td><td width="20%" align="center"><a accesskey="u" href="api-manual.html">Up</a></td><td width="40%" align="right"> <a accesskey="n" href="tuning.html">Next</a></td></tr><tr><td width="40%" align="left" valign="top">Adding a bias </td><td width="20%" align="center"><a accesskey="h" href="index.html">Home</a></td><td width="40%" align="right" valign="top"> Tuning</td></tr></table></div></body></html>

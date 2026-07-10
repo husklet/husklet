@@ -1,0 +1,13 @@
+#!/bin/bash
+
+handle_all_ucf_files $PKGDIR $LOCDIR
+mv $PKGF $PKGRF
+rm -f $LOCF
+take_ref
+echo "rename_ucf_file"
+rename_ucf_file $LOCF $LOCRF
+echo "handle_all_ucf_files"
+handle_all_ucf_files $PKGDIR $LOCDIR
+is_deleted $LOCF && is_deleted $LOCRF && check_ucfq_number 1
+return $?
+

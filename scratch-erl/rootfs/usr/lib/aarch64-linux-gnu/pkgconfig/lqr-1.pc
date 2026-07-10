@@ -1,0 +1,11 @@
+prefix=/usr
+exec_prefix=${prefix}
+libdir=${prefix}/lib/aarch64-linux-gnu
+includedir=${prefix}/include
+
+Name: lqr-1
+Description: LiquidRescale seam-carving library
+Requires: glib-2.0
+Version: 0.4.2
+Libs: -llqr-1
+Cflags: -I${includedir}/lqr-1

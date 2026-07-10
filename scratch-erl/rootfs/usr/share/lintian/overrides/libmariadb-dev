@@ -1,0 +1,2 @@
+# This is how upstream does it, wont' fix
+repeated-path-segment mariadb [usr/include/mariadb/mariadb/]

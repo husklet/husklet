@@ -1,0 +1,2 @@
+# only the build scripts are covered by GPL
+libevent-openssl-2.1-7: possible-gpl-code-linked-with-openssl

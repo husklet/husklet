@@ -1,0 +1,10 @@
+#!/bin/sh
+
+set -e
+
+
+
+# Apply sysctl configuration after upgrade
+if command -v sysctl > /dev/null; then
+    sysctl --quiet --pattern '^kernel\.unprivileged_userns_clone$' --system || :
+fi

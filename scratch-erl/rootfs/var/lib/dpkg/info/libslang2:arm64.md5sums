@@ -1,0 +1,9 @@
+a19084f676c64c6359efd23a5e586606  usr/lib/aarch64-linux-gnu/libslang.so.2.3.3
+6ad1a2366077dd467a55851647500a47  usr/share/doc/libslang2/NEWS.gz
+d5af9414143dbd915f13ed10dedba5b5  usr/share/doc/libslang2/README
+3b120a02ebab0c43a306e1819fcea623  usr/share/doc/libslang2/changelog.Debian.gz
+428c0fdb15b0a45e2d15230ca3e8f18d  usr/share/doc/libslang2/changelog.gz
+33632ca35d82ed3cbad54edf2400f5f8  usr/share/doc/libslang2/copyright
+3744b73f9e0b7869d009995726c76cdc  usr/share/doc/libslang2/slang.txt.gz
+b583ca2ca43360683fb5868cffa51a03  usr/share/doc/libslang2/slangfun.txt.gz
+5ed2c967fb0a3b7ea9987f381dc653d2  usr/share/lintian/overrides/libslang2

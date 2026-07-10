@@ -1,0 +1,9 @@
+#!/bin/sh
+set -e
+# Automatically added by dh_installsystemduser/13.11.4
+if [ "$1" = "purge" ]; then
+	if [ -z "${DPKG_ROOT:-}" ] && [ -x "/usr/bin/deb-systemd-helper" ] ; then
+		deb-systemd-helper --user purge 'gpg-agent-browser.socket' 'gpg-agent-extra.socket' 'gpg-agent-ssh.socket' 'gpg-agent.socket' >/dev/null || true
+	fi
+fi
+# End automatically added section

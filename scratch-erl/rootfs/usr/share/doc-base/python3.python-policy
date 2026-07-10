@@ -1,0 +1,14 @@
+Document: python-policy
+Title: Debian Python Policy
+Author: Neil Schemenauer, Matthias Klose, Gregor Hoffleit
+Abstract: This document describes the packaging of Python within the Debian
+ GNU/Linux distribution and the policy requirements for packaged Python
+ programs and modules.
+Section: Debian
+
+Format: text
+Files: /usr/share/doc/python3/python-policy.txt.gz
+
+Format: HTML
+Files: /usr/share/doc/python3/python-policy.html
+Index: /usr/share/doc/python3/python-policy.html

@@ -1,0 +1,2869 @@
+libsvn_client-1.so.1 libsvn1 #MINVER#
+| libsvn-private
+* Build-Depends-Package: libsvn-dev
+ svn_cl__rev_default_to_head_or_base@Base 0 1
+ svn_cl__rev_default_to_head_or_working@Base 0 1
+ svn_cl__rev_default_to_peg@Base 0 1
+ svn_client__arbitrary_nodes_diff@Base 0 1
+ svn_client__assert_homogeneous_target_type@Base 0 1
+ svn_client__calc_youngest_common_ancestor@Base 0 1
+ svn_client__checkout_internal@Base 0 1
+ svn_client__condense_commit_items2@Base 0 1
+ svn_client__condense_commit_items@Base 0 1
+ svn_client__create_status@Base 0 1
+ svn_client__dirent_fetcher@Base 0 1
+ svn_client__do_commit@Base 0 1
+ svn_client__elide_mergeinfo@Base 0 1
+ svn_client__elide_mergeinfo_catalog@Base 0 1
+ svn_client__ensure_ra_session_url@Base 0 1
+ svn_client__ensure_revprop_table@Base 0 1
+ svn_client__export_externals@Base 0 1
+ svn_client__get_all_auto_props@Base 0 1
+ svn_client__get_copy_committables@Base 0 1
+ svn_client__get_copy_source@Base 0 1
+ svn_client__get_diff_editor2@Base 0 1
+ svn_client__get_diff_summarize_callbacks@Base 0 1
+ svn_client__get_diff_writer_svn@Base 0 1
+ svn_client__get_history_as_mergeinfo@Base 0 1
+ svn_client__get_inheritable_props@Base 0 1
+ svn_client__get_log_msg@Base 0 1
+ svn_client__get_normalized_stream@Base 0 1
+ svn_client__get_paths_auto_props@Base 0 1
+ svn_client__get_private_ctx@Base 0 1
+ svn_client__get_repos_mergeinfo@Base 0 1
+ svn_client__get_repos_mergeinfo_catalog@Base 0 1
+ svn_client__get_revision_number@Base 0 1
+ svn_client__get_shim_callbacks@Base 0 1
+ svn_client__get_wc_mergeinfo@Base 0 1
+ svn_client__get_wc_mergeinfo_catalog@Base 0 1
+ svn_client__get_wc_or_repos_mergeinfo@Base 0 1
+ svn_client__get_wc_or_repos_mergeinfo_catalog@Base 0 1
+ svn_client__get_youngest_common_ancestor@Base 0 1
+ svn_client__handle_externals@Base 0 1
+ svn_client__harvest_committables@Base 0 1
+ svn_client__iprop_relpaths_to_urls@Base 0 1
+ svn_client__layout_list@Base 0 1
+ svn_client__make_local_parents@Base 0 1
+ svn_client__make_merge_conflict_error@Base 0 1
+ svn_client__merge_elements@Base 0 1
+ svn_client__merge_locked@Base 0 1
+ svn_client__merge_path_create@Base 0 1
+ svn_client__merge_path_dup@Base 0 1
+ svn_client__mergeinfo_log@Base 0 1
+ svn_client__mergeinfo_status@Base 0 1
+ svn_client__mtcc_add_add_file@Base 0 1
+ svn_client__mtcc_add_copy@Base 0 1
+ svn_client__mtcc_add_delete@Base 0 1
+ svn_client__mtcc_add_mkdir@Base 0 1
+ svn_client__mtcc_add_move@Base 0 1
+ svn_client__mtcc_add_propset@Base 0 1
+ svn_client__mtcc_add_update_file@Base 0 1
+ svn_client__mtcc_check_path@Base 0 1
+ svn_client__mtcc_commit@Base 0 1
+ svn_client__mtcc_create@Base 0 1
+ svn_client__open_ra_session_internal@Base 0 1
+ svn_client__parse_mergeinfo@Base 0 1
+ svn_client__pathrev_create@Base 0 1
+ svn_client__pathrev_create_with_relpath@Base 0 1
+ svn_client__pathrev_create_with_session@Base 0 1
+ svn_client__pathrev_dup@Base 0 1
+ svn_client__pathrev_fspath@Base 0 1
+ svn_client__pathrev_join_relpath@Base 0 1
+ svn_client__pathrev_relpath@Base 0 1
+ svn_client__ra_get_copysrc_kind@Base 0 1
+ svn_client__ra_make_cb_baton@Base 0 1
+ svn_client__ra_provide_base@Base 0 1
+ svn_client__ra_provide_props@Base 0 1
+ svn_client__ra_session_from_path2@Base 0 1
+ svn_client__record_wc_mergeinfo@Base 0 1
+ svn_client__record_wc_mergeinfo_catalog@Base 0 1
+ svn_client__remote_propget@Base 0 1
+ svn_client__repos_location@Base 0 1
+ svn_client__repos_location_segments@Base 0 1
+ svn_client__repos_locations@Base 0 1
+ svn_client__repos_to_wc_copy_by_editor@Base 0 1
+ svn_client__repos_to_wc_copy_internal@Base 0 1
+ svn_client__resolve_conflicts@Base 0 1
+ svn_client__resolve_rev_and_url@Base 0 1
+ svn_client__shelf2_apply@Base 0 1
+ svn_client__shelf2_close@Base 0 1
+ svn_client__shelf2_delete@Base 0 1
+ svn_client__shelf2_delete_newer_versions@Base 0 1
+ svn_client__shelf2_diff@Base 0 1
+ svn_client__shelf2_get_all_versions@Base 0 1
+ svn_client__shelf2_get_log_message@Base 0 1
+ svn_client__shelf2_get_newest_version@Base 0 1
+ svn_client__shelf2_list@Base 0 1
+ svn_client__shelf2_open_existing@Base 0 1
+ svn_client__shelf2_open_or_create@Base 0 1
+ svn_client__shelf2_paths_changed@Base 0 1
+ svn_client__shelf2_revprop_get@Base 0 1
+ svn_client__shelf2_revprop_list@Base 0 1
+ svn_client__shelf2_revprop_set@Base 0 1
+ svn_client__shelf2_revprop_set_all@Base 0 1
+ svn_client__shelf2_save_new_version3@Base 0 1
+ svn_client__shelf2_set_log_message@Base 0 1
+ svn_client__shelf2_test_apply_file@Base 0 1
+ svn_client__shelf2_unapply@Base 0 1
+ svn_client__shelf2_version_open@Base 0 1
+ svn_client__shelf2_version_status_walk@Base 0 1
+ svn_client__shelf_apply@Base 0 1
+ svn_client__shelf_close@Base 0 1
+ svn_client__shelf_delete@Base 0 1
+ svn_client__shelf_delete_newer_versions@Base 0 1
+ svn_client__shelf_diff@Base 0 1
+ svn_client__shelf_get_all_versions@Base 0 1
+ svn_client__shelf_get_log_message@Base 0 1
+ svn_client__shelf_get_newest_version@Base 0 1
+ svn_client__shelf_list@Base 0 1
+ svn_client__shelf_mods_editor@Base 0 1
+ svn_client__shelf_open_existing@Base 0 1
+ svn_client__shelf_open_or_create@Base 0 1
+ svn_client__shelf_paths_changed@Base 0 1
+ svn_client__shelf_replay@Base 0 1
+ svn_client__shelf_revprop_get@Base 0 1
+ svn_client__shelf_revprop_list@Base 0 1
+ svn_client__shelf_revprop_set@Base 0 1
+ svn_client__shelf_revprop_set_all@Base 0 1
+ svn_client__shelf_save_new_version3@Base 0 1
+ svn_client__shelf_set_log_message@Base 0 1
+ svn_client__shelf_test_apply_file@Base 0 1
+ svn_client__shelf_unapply@Base 0 1
+ svn_client__shelf_version_open@Base 0 1
+ svn_client__shelf_version_status_walk@Base 0 1
+ svn_client__switch_internal@Base 0 1
+ svn_client__update_internal@Base 0 1
+ svn_client__wc_copy_mods@Base 0 1
+ svn_client__wc_delete@Base 0 1
+ svn_client__wc_delete_many@Base 0 1
+ svn_client__wc_editor@Base 0 1
+ svn_client__wc_editor_internal@Base 0 1
+ svn_client__wc_node_get_base@Base 0 1
+ svn_client__wc_node_get_origin@Base 0 1
+ svn_client__wc_replay@Base 0 1
+ svn_client_add2@Base 1.4
+ svn_client_add3@Base 1.4
+ svn_client_add4@Base 1.5
+ svn_client_add5@Base 1.8
+ svn_client_add@Base 1.4
+ svn_client_add_to_changelist@Base 1.5
+ svn_client_args_to_target_array2@Base 1.7
+ svn_client_args_to_target_array@Base 1.6
+ svn_client_blame2@Base 1.4
+ svn_client_blame3@Base 1.4
+ svn_client_blame4@Base 1.5
+ svn_client_blame5@Base 1.7
+ svn_client_blame6@Base 1.12
+ svn_client_blame@Base 1.4
+ svn_client_cat2@Base 1.4
+ svn_client_cat3@Base 1.9
+ svn_client_cat@Base 1.4
+ svn_client_checkout2@Base 1.4
+ svn_client_checkout3@Base 1.5
+ svn_client_checkout@Base 1.4
+ svn_client_cleanup2@Base 1.9
+ svn_client_cleanup@Base 1.4
+ svn_client_commit2@Base 1.4
+ svn_client_commit3@Base 1.4
+ svn_client_commit4@Base 1.5
+ svn_client_commit5@Base 1.7
+ svn_client_commit6@Base 1.8
+ svn_client_commit@Base 1.4
+ svn_client_commit_item2_dup@Base 1.4
+ svn_client_commit_item3_create@Base 1.6
+ svn_client_commit_item3_dup@Base 1.5
+ svn_client_commit_item_create@Base 1.5
+ svn_client_conflict_get@Base 1.10
+ svn_client_conflict_get_conflicted@Base 1.10
+ svn_client_conflict_get_incoming_change@Base 1.10
+ svn_client_conflict_get_incoming_new_repos_location@Base 1.10
+ svn_client_conflict_get_incoming_old_repos_location@Base 1.10
+ svn_client_conflict_get_local_abspath@Base 1.10
+ svn_client_conflict_get_local_change@Base 1.10
+ svn_client_conflict_get_operation@Base 1.10
+ svn_client_conflict_get_recommended_option_id@Base 1.10
+ svn_client_conflict_get_repos_info@Base 1.10
+ svn_client_conflict_option_find_by_id@Base 1.10
+ svn_client_conflict_option_get_description@Base 1.10
+ svn_client_conflict_option_get_id@Base 1.10
+ svn_client_conflict_option_get_label@Base 1.10
+ svn_client_conflict_option_get_moved_to_abspath_candidates2@Base 1.11
+ svn_client_conflict_option_get_moved_to_abspath_candidates@Base 1.10
+ svn_client_conflict_option_get_moved_to_repos_relpath_candidates2@Base 1.11
+ svn_client_conflict_option_get_moved_to_repos_relpath_candidates@Base 1.10
+ svn_client_conflict_option_set_merged_propval@Base 1.10
+ svn_client_conflict_option_set_moved_to_abspath2@Base 1.11
+ svn_client_conflict_option_set_moved_to_abspath@Base 1.10
+ svn_client_conflict_option_set_moved_to_repos_relpath2@Base 1.11
+ svn_client_conflict_option_set_moved_to_repos_relpath@Base 1.10
+ svn_client_conflict_prop_get_description@Base 1.10
+ svn_client_conflict_prop_get_propvals@Base 1.10
+ svn_client_conflict_prop_get_reject_abspath@Base 1.10
+ svn_client_conflict_prop_get_resolution@Base 1.10
+ svn_client_conflict_prop_get_resolution_options@Base 1.10
+ svn_client_conflict_prop_resolve@Base 1.10
+ svn_client_conflict_prop_resolve_by_id@Base 1.10
+ svn_client_conflict_text_get_contents@Base 1.10
+ svn_client_conflict_text_get_mime_type@Base 1.10
+ svn_client_conflict_text_get_resolution@Base 1.10
+ svn_client_conflict_text_get_resolution_options@Base 1.10
+ svn_client_conflict_text_resolve@Base 1.10
+ svn_client_conflict_text_resolve_by_id@Base 1.10
+ svn_client_conflict_tree_get_description@Base 1.10
+ svn_client_conflict_tree_get_details@Base 1.10
+ svn_client_conflict_tree_get_resolution@Base 1.10
+ svn_client_conflict_tree_get_resolution_options@Base 1.10
+ svn_client_conflict_tree_get_victim_node_kind@Base 1.10
+ svn_client_conflict_tree_resolve@Base 1.10
+ svn_client_conflict_tree_resolve_by_id@Base 1.10
+ svn_client_conflict_walk@Base 1.10
+ svn_client_copy2@Base 1.4
+ svn_client_copy3@Base 1.4
+ svn_client_copy4@Base 1.5
+ svn_client_copy5@Base 1.6
+ svn_client_copy6@Base 1.7
+ svn_client_copy7@Base 1.9
+ svn_client_copy@Base 1.4
+ svn_client_create_context2@Base 1.8
+ svn_client_create_context@Base 1.4
+ svn_client_delete2@Base 1.4
+ svn_client_delete3@Base 1.5
+ svn_client_delete4@Base 1.7
+ svn_client_delete@Base 1.4
+ svn_client_diff2@Base 1.4
+ svn_client_diff3@Base 1.4
+ svn_client_diff4@Base 1.5
+ svn_client_diff5@Base 1.7
+ svn_client_diff6@Base 1.8
+ svn_client_diff7@Base 1.11
+ svn_client_diff@Base 1.4
+ svn_client_diff_peg2@Base 1.4
+ svn_client_diff_peg3@Base 1.4
+ svn_client_diff_peg4@Base 1.5
+ svn_client_diff_peg5@Base 1.7
+ svn_client_diff_peg6@Base 1.8
+ svn_client_diff_peg7@Base 1.11
+ svn_client_diff_peg@Base 1.4
+ svn_client_diff_summarize2@Base 1.5
+ svn_client_diff_summarize@Base 1.4
+ svn_client_diff_summarize_dup@Base 1.4
+ svn_client_diff_summarize_peg2@Base 1.5
+ svn_client_diff_summarize_peg@Base 1.4
+ svn_client_export2@Base 1.4
+ svn_client_export3@Base 1.4
+ svn_client_export4@Base 1.5
+ svn_client_export5@Base 1.7
+ svn_client_export@Base 1.4
+ svn_client_get_changelists@Base 1.5
+ svn_client_get_merging_summary@Base 1.8
+ svn_client_get_repos_root@Base 1.8
+ svn_client_get_simple_prompt_provider@Base 1.4
+ svn_client_get_simple_provider@Base 1.4
+ svn_client_get_ssl_client_cert_file_provider@Base 1.4
+ svn_client_get_ssl_client_cert_prompt_provider@Base 1.4
+ svn_client_get_ssl_client_cert_pw_file_provider@Base 1.4
+ svn_client_get_ssl_client_cert_pw_prompt_provider@Base 1.4
+ svn_client_get_ssl_server_trust_file_provider@Base 1.4
+ svn_client_get_ssl_server_trust_prompt_provider@Base 1.4
+ svn_client_get_username_prompt_provider@Base 1.4
+ svn_client_get_username_provider@Base 1.4
+ svn_client_get_wc_root@Base 1.7
+ svn_client_import2@Base 1.4
+ svn_client_import3@Base 1.5
+ svn_client_import4@Base 1.7
+ svn_client_import5@Base 1.8
+ svn_client_import@Base 1.4
+ svn_client_info2@Base 1.5
+ svn_client_info2_dup@Base 1.7
+ svn_client_info3@Base 1.7
+ svn_client_info4@Base 1.9
+ svn_client_info@Base 1.4
+ svn_client_list2@Base 1.5
+ svn_client_list3@Base 1.8
+ svn_client_list4@Base 1.10
+ svn_client_list@Base 1.4
+ svn_client_lock@Base 1.4
+ svn_client_log2@Base 1.4
+ svn_client_log3@Base 1.4
+ svn_client_log4@Base 1.5
+ svn_client_log5@Base 1.6
+ svn_client_log@Base 1.4
+ svn_client_ls2@Base 1.4
+ svn_client_ls3@Base 1.4
+ svn_client_ls@Base 1.4
+ svn_client_merge2@Base 1.4
+ svn_client_merge3@Base 1.5
+ svn_client_merge4@Base 1.7
+ svn_client_merge5@Base 1.8
+ svn_client_merge@Base 1.4
+ svn_client_merge_peg2@Base 1.4
+ svn_client_merge_peg3@Base 1.5
+ svn_client_merge_peg4@Base 1.7
+ svn_client_merge_peg5@Base 1.8
+ svn_client_merge_peg@Base 1.4
+ svn_client_merge_reintegrate@Base 1.5
+ svn_client_mergeinfo_get_merged@Base 1.5
+ svn_client_mergeinfo_log2@Base 1.8
+ svn_client_mergeinfo_log@Base 1.7
+ svn_client_mergeinfo_log_eligible@Base 1.5
+ svn_client_mergeinfo_log_merged@Base 1.5
+ svn_client_min_max_revisions@Base 1.7
+ svn_client_mkdir2@Base 1.4
+ svn_client_mkdir3@Base 1.5
+ svn_client_mkdir4@Base 1.7
+ svn_client_mkdir@Base 1.4
+ svn_client_move2@Base 1.4
+ svn_client_move3@Base 1.4
+ svn_client_move4@Base 1.4
+ svn_client_move5@Base 1.5
+ svn_client_move6@Base 1.7
+ svn_client_move7@Base 1.8
+ svn_client_move@Base 1.4
+ svn_client_open_ra_session2@Base 1.8
+ svn_client_open_ra_session@Base 1.4
+ svn_client_patch@Base 1.7
+ svn_client_propget2@Base 1.4
+ svn_client_propget3@Base 1.5
+ svn_client_propget4@Base 1.7
+ svn_client_propget5@Base 1.8
+ svn_client_propget@Base 1.4
+ svn_client_proplist2@Base 1.4
+ svn_client_proplist3@Base 1.5
+ svn_client_proplist4@Base 1.8
+ svn_client_proplist@Base 1.4
+ svn_client_proplist_item_dup@Base 1.4
+ svn_client_propset2@Base 1.4
+ svn_client_propset3@Base 1.5
+ svn_client_propset@Base 1.4
+ svn_client_propset_local@Base 1.7
+ svn_client_propset_remote@Base 1.7
+ svn_client_relocate2@Base 1.7
+ svn_client_relocate@Base 1.4
+ svn_client_remove_from_changelists@Base 1.5
+ svn_client_resolve@Base 1.5
+ svn_client_resolved@Base 1.4
+ svn_client_revert2@Base 1.5
+ svn_client_revert3@Base 1.9
+ svn_client_revert4@Base 1.11
+ svn_client_revert@Base 1.4
+ svn_client_revprop_get@Base 1.4
+ svn_client_revprop_list@Base 1.4
+ svn_client_revprop_set2@Base 1.6
+ svn_client_revprop_set@Base 1.4
+ svn_client_root_url_from_path@Base 1.5
+ svn_client_status2@Base 1.4
+ svn_client_status3@Base 1.5
+ svn_client_status4@Base 1.6
+ svn_client_status5@Base 1.7
+ svn_client_status6@Base 1.9
+ svn_client_status@Base 1.4
+ svn_client_status_dup@Base 1.7
+ svn_client_suggest_merge_sources@Base 1.5
+ svn_client_switch2@Base 1.5
+ svn_client_switch3@Base 1.7
+ svn_client_switch@Base 1.4
+ svn_client_unlock@Base 1.4
+ svn_client_update2@Base 1.4
+ svn_client_update3@Base 1.5
+ svn_client_update4@Base 1.7
+ svn_client_update@Base 1.4
+ svn_client_upgrade@Base 1.7
+ svn_client_url_from_path2@Base 1.7
+ svn_client_url_from_path@Base 1.4
+ svn_client_uuid_from_path2@Base 1.7
+ svn_client_uuid_from_path@Base 1.4
+ svn_client_uuid_from_url@Base 1.4
+ svn_client_vacuum@Base 1.9
+ svn_client_version@Base 1.4
+ svn_info_dup@Base 1.4
+libsvn_delta-1.so.1 libsvn1 #MINVER#
+| libsvn-private
+* Build-Depends-Package: libsvn-dev
+ svn_branch__compat_delta_from_txn_for_commit@Base 0 1
+ svn_branch__compat_delta_from_txn_for_update@Base 0 1
+ svn_branch__compat_fetch@Base 0 1
+ svn_branch__compat_get_migration_editor@Base 0 1
+ svn_branch__compat_insert_shims@Base 0 1
+ svn_branch__compat_txn_from_delta_for_commit@Base 0 1
+ svn_branch__compat_txn_from_delta_for_update@Base 0 1
+ svn_branch__el_rev_id_create@Base 0 1
+ svn_branch__el_rev_id_dup@Base 0 1
+ svn_branch__find_nested_branch_element_by_relpath@Base 0 1
+ svn_branch__get_default_r0_metadata@Base 0 1
+ svn_branch__get_eid_by_path@Base 0 1
+ svn_branch__get_id@Base 0 1
+ svn_branch__get_immediate_subbranches@Base 0 1
+ svn_branch__get_outer_branch_and_eid@Base 0 1
+ svn_branch__get_path_by_eid@Base 0 1
+ svn_branch__get_root_rrpath@Base 0 1
+ svn_branch__get_rrpath_by_eid@Base 0 1
+ svn_branch__get_subbranch_at_eid@Base 0 1
+ svn_branch__get_subtree@Base 0 1
+ svn_branch__history_create@Base 0 1
+ svn_branch__history_create_empty@Base 0 1
+ svn_branch__history_dup@Base 0 1
+ svn_branch__id_nest@Base 0 1
+ svn_branch__id_unnest@Base 0 1
+ svn_branch__instantiate_elements_r@Base 0 1
+ svn_branch__nested_txn_create@Base 0 1
+ svn_branch__repos_add_revision@Base 0 1
+ svn_branch__repos_create@Base 0 1
+ svn_branch__repos_find_el_rev_by_id@Base 0 1
+ svn_branch__repos_find_el_rev_by_path_rev@Base 0 1
+ svn_branch__repos_get_base_revision_root@Base 0 1
+ svn_branch__repos_get_branch_by_id@Base 0 1
+ svn_branch__repos_get_revision@Base 0 1
+ svn_branch__rev_bid_create@Base 0 1
+ svn_branch__rev_bid_dup@Base 0 1
+ svn_branch__rev_bid_eid_create@Base 0 1
+ svn_branch__rev_bid_eid_dup@Base 0 1
+ svn_branch__rev_bid_equal@Base 0 1
+ svn_branch__root_eid@Base 0 1
+ svn_branch__state_alter_one@Base 0 1
+ svn_branch__state_copy_tree@Base 0 1
+ svn_branch__state_create@Base 0 1
+ svn_branch__state_delete_one@Base 0 1
+ svn_branch__state_get_element@Base 0 1
+ svn_branch__state_get_elements@Base 0 1
+ svn_branch__state_get_history@Base 0 1
+ svn_branch__state_purge@Base 0 1
+ svn_branch__state_serialize@Base 0 1
+ svn_branch__state_set_element@Base 0 1
+ svn_branch__state_set_history@Base 0 1
+ svn_branch__subtree_create@Base 0 1
+ svn_branch__subtree_get_subbranch_at_eid@Base 0 1
+ svn_branch__txn_abort@Base 0 1
+ svn_branch__txn_complete@Base 0 1
+ svn_branch__txn_create@Base 0 1
+ svn_branch__txn_delete_branch@Base 0 1
+ svn_branch__txn_finalize_eids@Base 0 1
+ svn_branch__txn_get_branch_by_id@Base 0 1
+ svn_branch__txn_get_branches@Base 0 1
+ svn_branch__txn_get_num_new_eids@Base 0 1
+ svn_branch__txn_new_eid@Base 0 1
+ svn_branch__txn_open_branch@Base 0 1
+ svn_branch__txn_parse@Base 0 1
+ svn_branch__txn_sequence_point@Base 0 1
+ svn_branch__txn_serialize@Base 0 1
+ svn_compat_wrap_file_rev_handler@Base 1.5
+ svn_delta__delta_from_editor@Base 0 1
+ svn_delta__editor_from_delta@Base 0 1
+ svn_delta__get_debug_editor@Base 0 1
+ svn_delta_default_editor@Base 1.4
+ svn_delta_depth_filter_editor@Base 1.5
+ svn_delta_get_cancellation_editor@Base 1.4
+ svn_delta_noop_window_handler@Base 1.4
+ svn_delta_path_driver2@Base 1.8
+ svn_delta_path_driver3@Base 1.12
+ svn_delta_path_driver@Base 1.4
+ svn_delta_path_driver_finish@Base 1.12
+ svn_delta_path_driver_start@Base 1.12
+ svn_delta_path_driver_step@Base 1.12
+ svn_delta_shim_callbacks_default@Base 0 1
+ svn_delta_version@Base 1.4
+ svn_editor__insert_shims@Base 0 1
+ svn_editor_abort@Base 0 1
+ svn_editor_add_absent@Base 0 1
+ svn_editor_add_directory@Base 0 1
+ svn_editor_add_file@Base 0 1
+ svn_editor_add_symlink@Base 0 1
+ svn_editor_alter_directory@Base 0 1
+ svn_editor_alter_file@Base 0 1
+ svn_editor_alter_symlink@Base 0 1
+ svn_editor_complete@Base 0 1
+ svn_editor_copy@Base 0 1
+ svn_editor_create@Base 0 1
+ svn_editor_delete@Base 0 1
+ svn_editor_get_baton@Base 0 1
+ svn_editor_move@Base 0 1
+ svn_editor_setcb_abort@Base 0 1
+ svn_editor_setcb_add_absent@Base 0 1
+ svn_editor_setcb_add_directory@Base 0 1
+ svn_editor_setcb_add_file@Base 0 1
+ svn_editor_setcb_add_symlink@Base 0 1
+ svn_editor_setcb_alter_directory@Base 0 1
+ svn_editor_setcb_alter_file@Base 0 1
+ svn_editor_setcb_alter_symlink@Base 0 1
+ svn_editor_setcb_complete@Base 0 1
+ svn_editor_setcb_copy@Base 0 1
+ svn_editor_setcb_delete@Base 0 1
+ svn_editor_setcb_many@Base 0 1
+ svn_editor_setcb_move@Base 0 1
+ svn_eid__hash_get@Base 0 1
+ svn_eid__hash_set@Base 0 1
+ svn_eid__hash_sort_compare_items_by_eid@Base 0 1
+ svn_eid__hash_sorted_first@Base 0 1
+ svn_eid__hash_sorted_next@Base 0 1
+ svn_eid__hash_this_key@Base 0 1
+ svn_element__content_create@Base 0 1
+ svn_element__content_dup@Base 0 1
+ svn_element__content_equal@Base 0 1
+ svn_element__payload_create_dir@Base 0 1
+ svn_element__payload_create_file@Base 0 1
+ svn_element__payload_create_ref@Base 0 1
+ svn_element__payload_create_subbranch@Base 0 1
+ svn_element__payload_create_symlink@Base 0 1
+ svn_element__payload_dup@Base 0 1
+ svn_element__payload_equal@Base 0 1
+ svn_element__payload_invariants@Base 0 1
+ svn_element__tree_create@Base 0 1
+ svn_element__tree_get@Base 0 1
+ svn_element__tree_get_path_by_eid@Base 0 1
+ svn_element__tree_get_subtree_at_eid@Base 0 1
+ svn_element__tree_purge_orphans@Base 0 1
+ svn_element__tree_set@Base 0 1
+ svn_txdelta2@Base 1.8
+ svn_txdelta@Base 1.4
+ svn_txdelta__copy_window@Base 0 1
+ svn_txdelta__insert_op@Base 0 1
+ svn_txdelta__make_window@Base 0 1
+ svn_txdelta__read_raw_window_len@Base 0 1
+ svn_txdelta__remove_copy@Base 0 1
+ svn_txdelta__xdelta@Base 0 1
+ svn_txdelta_apply@Base 1.4
+ svn_txdelta_apply_instructions@Base 1.4
+ svn_txdelta_compose_windows@Base 1.4
+ svn_txdelta_md5_digest@Base 1.4
+ svn_txdelta_next_window@Base 1.4
+ svn_txdelta_parse_svndiff@Base 1.4
+ svn_txdelta_read_svndiff_window@Base 1.4
+ svn_txdelta_run@Base 1.6
+ svn_txdelta_send_contents@Base 1.8
+ svn_txdelta_send_stream@Base 1.4
+ svn_txdelta_send_string@Base 1.4
+ svn_txdelta_send_txstream@Base 1.4
+ svn_txdelta_skip_svndiff_window@Base 1.4
+ svn_txdelta_stream_create@Base 1.4
+ svn_txdelta_target_push@Base 1.4
+ svn_txdelta_to_svndiff2@Base 1.4
+ svn_txdelta_to_svndiff3@Base 1.7
+ svn_txdelta_to_svndiff@Base 1.4
+ svn_txdelta_to_svndiff_stream@Base 1.10
+ svn_txdelta_window_dup@Base 1.4
+libsvn_diff-1.so.1 libsvn1 #MINVER#
+| libsvn-private
+* Build-Depends-Package: libsvn-dev
+ svn_diff__base85_decode_line@Base 0 1
+ svn_diff__diff@Base 0 1
+ svn_diff__display_prop_diffs@Base 0 1
+ svn_diff__get_node_count@Base 0 1
+ svn_diff__get_token_counts@Base 0 1
+ svn_diff__get_tokens@Base 0 1
+ svn_diff__lcs@Base 0 1
+ svn_diff__normalize_buffer@Base 0 1
+ svn_diff__resolve_conflict@Base 0 1
+ svn_diff__source_create@Base 0 1
+ svn_diff__tree_create@Base 0 1
+ svn_diff__tree_processor_copy_as_changed_create@Base 0 1
+ svn_diff__tree_processor_create@Base 0 1
+ svn_diff__tree_processor_filter_create@Base 0 1
+ svn_diff__tree_processor_reverse_create@Base 0 1
+ svn_diff__tree_processor_tee_create@Base 0 1
+ svn_diff__unidiff_write_header@Base 0 1
+ svn_diff__unified_append_no_newline_msg@Base 0 1
+ svn_diff__unified_write_hunk_header@Base 0 1
+ svn_diff_close_patch_file@Base 1.7
+ svn_diff_contains_conflicts@Base 1.4
+ svn_diff_contains_diffs@Base 1.4
+ svn_diff_diff3@Base 1.4
+ svn_diff_diff3_2@Base 1.7
+ svn_diff_diff4@Base 1.4
+ svn_diff_diff4_2@Base 1.7
+ svn_diff_diff@Base 1.4
+ svn_diff_diff_2@Base 1.7
+ svn_diff_file_diff3@Base 1.4
+ svn_diff_file_diff3_2@Base 1.4
+ svn_diff_file_diff4@Base 1.4
+ svn_diff_file_diff4_2@Base 1.4
+ svn_diff_file_diff@Base 1.4
+ svn_diff_file_diff_2@Base 1.4
+ svn_diff_file_options_create@Base 1.4
+ svn_diff_file_options_parse@Base 1.4
+ svn_diff_file_output_merge2@Base 1.6
+ svn_diff_file_output_merge3@Base 1.9
+ svn_diff_file_output_merge@Base 1.4
+ svn_diff_file_output_unified2@Base 1.4
+ svn_diff_file_output_unified3@Base 1.5
+ svn_diff_file_output_unified4@Base 1.9
+ svn_diff_file_output_unified@Base 1.4
+ svn_diff_get_binary_diff_original_stream@Base 1.10
+ svn_diff_get_binary_diff_result_stream@Base 1.10
+ svn_diff_hunk__create_adds_single_line@Base 0 1
+ svn_diff_hunk__create_deletes_single_line@Base 0 1
+ svn_diff_hunk__get_fuzz_penalty@Base 0 1
+ svn_diff_hunk_get_leading_context@Base 1.7
+ svn_diff_hunk_get_modified_length@Base 1.7
+ svn_diff_hunk_get_modified_start@Base 1.7
+ svn_diff_hunk_get_original_length@Base 1.7
+ svn_diff_hunk_get_original_start@Base 1.7
+ svn_diff_hunk_get_trailing_context@Base 1.7
+ svn_diff_hunk_readline_diff_text@Base 1.7
+ svn_diff_hunk_readline_modified_text@Base 1.7
+ svn_diff_hunk_readline_original_text@Base 1.7
+ svn_diff_hunk_reset_diff_text@Base 1.7
+ svn_diff_hunk_reset_modified_text@Base 1.7
+ svn_diff_hunk_reset_original_text@Base 1.7
+ svn_diff_mem_string_diff3@Base 1.5
+ svn_diff_mem_string_diff4@Base 1.5
+ svn_diff_mem_string_diff@Base 1.5
+ svn_diff_mem_string_output_merge2@Base 1.6
+ svn_diff_mem_string_output_merge3@Base 1.9
+ svn_diff_mem_string_output_merge@Base 1.5
+ svn_diff_mem_string_output_unified2@Base 1.7
+ svn_diff_mem_string_output_unified3@Base 1.9
+ svn_diff_mem_string_output_unified@Base 1.5
+ svn_diff_open_patch_file@Base 1.7
+ svn_diff_output2@Base 1.9
+ svn_diff_output@Base 1.4
+ svn_diff_output_binary@Base 1.9
+ svn_diff_parse_next_patch@Base 1.7
+ svn_diff_version@Base 1.4
+libsvn_fs-1.so.1 libsvn1 #MINVER#
+| libsvn-private
+* Build-Depends-Package: libsvn-dev
+ svn_fs__access_get_lock_tokens@Base 0 1
+ svn_fs__editor_commit@Base 0 1
+ svn_fs__editor_create@Base 0 1
+ svn_fs__editor_create_for@Base 0 1
+ svn_fs__get_deleted_node@Base 0 1
+ svn_fs__get_mergeinfo_for_path@Base 0 1
+ svn_fs__path_valid@Base 0 1
+ svn_fs_abort_txn@Base 1.4
+ svn_fs_access_add_lock_token2@Base 1.6
+ svn_fs_access_add_lock_token@Base 1.4
+ svn_fs_access_get_username@Base 1.4
+ svn_fs_apply_text@Base 1.4
+ svn_fs_apply_textdelta@Base 1.4
+ svn_fs_begin_txn2@Base 1.4
+ svn_fs_begin_txn@Base 1.4
+ svn_fs_berkeley_logfiles@Base 1.4
+ svn_fs_berkeley_path@Base 1.4
+ svn_fs_berkeley_recover@Base 1.4
+ svn_fs_change_node_prop@Base 1.4
+ svn_fs_change_rev_prop2@Base 1.7
+ svn_fs_change_rev_prop@Base 1.4
+ svn_fs_change_txn_prop@Base 1.4
+ svn_fs_change_txn_props@Base 1.5
+ svn_fs_check_path@Base 1.4
+ svn_fs_check_related@Base 1.4
+ svn_fs_close_root@Base 1.4
+ svn_fs_closest_copy@Base 1.4
+ svn_fs_commit_txn@Base 1.4
+ svn_fs_compare_ids@Base 1.4
+ svn_fs_config@Base 1.8
+ svn_fs_contents_changed@Base 1.4
+ svn_fs_contents_different@Base 1.9
+ svn_fs_copied_from@Base 1.4
+ svn_fs_copy@Base 1.4
+ svn_fs_create2@Base 1.10
+ svn_fs_create@Base 1.4
+ svn_fs_create_access@Base 1.4
+ svn_fs_create_berkeley@Base 1.4
+ svn_fs_delete@Base 1.4
+ svn_fs_delete_berkeley@Base 1.4
+ svn_fs_delete_fs@Base 1.4
+ svn_fs_deltify_revision@Base 1.4
+ svn_fs_dir_entries@Base 1.4
+ svn_fs_dir_optimal_order@Base 1.9
+ svn_fs_file_checksum@Base 1.6
+ svn_fs_file_contents@Base 1.4
+ svn_fs_file_length@Base 1.4
+ svn_fs_file_md5_checksum@Base 1.4
+ svn_fs_freeze@Base 1.8
+ svn_fs_generate_lock_token@Base 1.4
+ svn_fs_get_access@Base 1.4
+ svn_fs_get_file_delta_stream@Base 1.4
+ svn_fs_get_lock@Base 1.4
+ svn_fs_get_locks2@Base 1.7
+ svn_fs_get_locks@Base 1.4
+ svn_fs_get_mergeinfo2@Base 1.8
+ svn_fs_get_mergeinfo3@Base 1.10
+ svn_fs_get_mergeinfo@Base 1.5
+ svn_fs_get_uuid@Base 1.4
+ svn_fs_history_location@Base 1.4
+ svn_fs_history_prev2@Base 1.9
+ svn_fs_history_prev@Base 1.4
+ svn_fs_hotcopy2@Base 1.8
+ svn_fs_hotcopy3@Base 1.9
+ svn_fs_hotcopy@Base 1.4
+ svn_fs_hotcopy_berkeley@Base 1.4
+ svn_fs_info@Base 1.9
+ svn_fs_info_config_files@Base 1.9
+ svn_fs_info_dup@Base 1.9
+ svn_fs_info_format@Base 1.9
+ svn_fs_initialize@Base 1.4
+ svn_fs_ioctl@Base 1.13
+ svn_fs_is_dir@Base 1.4
+ svn_fs_is_file@Base 1.4
+ svn_fs_is_revision_root@Base 1.4
+ svn_fs_is_txn_root@Base 1.4
+ svn_fs_list_transactions@Base 1.4
+ svn_fs_lock@Base 1.4
+ svn_fs_lock_many@Base 1.9
+ svn_fs_lock_target_create@Base 1.9
+ svn_fs_lock_target_set_token@Base 1.9
+ svn_fs_make_dir@Base 1.4
+ svn_fs_make_file@Base 1.4
+ svn_fs_merge@Base 1.4
+ svn_fs_new@Base 1.4
+ svn_fs_node_created_path@Base 1.4
+ svn_fs_node_created_rev@Base 1.4
+ svn_fs_node_has_props@Base 1.9
+ svn_fs_node_history2@Base 1.9
+ svn_fs_node_history@Base 1.4
+ svn_fs_node_id@Base 1.4
+ svn_fs_node_origin_rev@Base 1.5
+ svn_fs_node_prop@Base 1.4
+ svn_fs_node_proplist@Base 1.4
+ svn_fs_node_relation@Base 1.9
+ svn_fs_open2@Base 1.9
+ svn_fs_open@Base 1.4
+ svn_fs_open_berkeley@Base 1.4
+ svn_fs_open_txn@Base 1.4
+ svn_fs_pack@Base 1.6
+ svn_fs_parse_id@Base 1.4
+ svn_fs_path@Base 1.4
+ svn_fs_path_change2_create@Base 1.6
+ svn_fs_path_change3_create@Base 1.10
+ svn_fs_path_change3_dup@Base 1.10
+ svn_fs_path_change_get@Base 1.10
+ svn_fs_paths_changed2@Base 1.6
+ svn_fs_paths_changed3@Base 1.10
+ svn_fs_paths_changed@Base 1.4
+ svn_fs_print_modules@Base 1.4
+ svn_fs_props_changed@Base 1.4
+ svn_fs_props_different@Base 1.9
+ svn_fs_purge_txn@Base 1.4
+ svn_fs_recover@Base 1.5
+ svn_fs_refresh_revision_props@Base 1.10
+ svn_fs_revision_link@Base 1.4
+ svn_fs_revision_prop2@Base 1.10
+ svn_fs_revision_prop@Base 1.4
+ svn_fs_revision_proplist2@Base 1.10
+ svn_fs_revision_proplist@Base 1.4
+ svn_fs_revision_root@Base 1.4
+ svn_fs_revision_root_revision@Base 1.4
+ svn_fs_root_fs@Base 1.4
+ svn_fs_set_access@Base 1.4
+ svn_fs_set_berkeley_errcall@Base 1.4
+ svn_fs_set_uuid@Base 1.4
+ svn_fs_set_warning_func@Base 1.4
+ svn_fs_try_process_file_contents@Base 1.8
+ svn_fs_txn_base_revision@Base 1.4
+ svn_fs_txn_name@Base 1.4
+ svn_fs_txn_prop@Base 1.4
+ svn_fs_txn_proplist@Base 1.4
+ svn_fs_txn_root@Base 1.4
+ svn_fs_txn_root_base_revision@Base 1.5
+ svn_fs_txn_root_name@Base 1.4
+ svn_fs_type@Base 1.4
+ svn_fs_unlock@Base 1.4
+ svn_fs_unlock_many@Base 1.9
+ svn_fs_unparse_id@Base 1.4
+ svn_fs_upgrade2@Base 1.9
+ svn_fs_upgrade@Base 1.5
+ svn_fs_verify@Base 1.8
+ svn_fs_verify_root@Base 1.8
+ svn_fs_version@Base 1.4
+ svn_fs_youngest_rev@Base 1.4
+libsvn_ra-1.so.1 libsvn1 #MINVER#
+| libsvn-private
+* Build-Depends-Package: libsvn-dev
+ svn_ra__assert_capable_server@Base 0 1
+ svn_ra__assert_mergeinfo_capable_server@Base 0 1
+ svn_ra__dup_session@Base 0 1
+ svn_ra__file_revs_from_log@Base 0 1
+ svn_ra__get_commit_ev2@Base 0 1
+ svn_ra__get_debug_reporter@Base 0 1
+ svn_ra__get_deleted_rev_from_log@Base 0 1
+ svn_ra__get_inherited_props_walk@Base 0 1
+ svn_ra__get_operational_lock@Base 0 1
+ svn_ra__location_segments_from_log@Base 0 1
+ svn_ra__locations_from_log@Base 0 1
+ svn_ra__register_editor_shim_callbacks@Base 0 1
+ svn_ra__release_operational_lock@Base 0 1
+ svn_ra__replay_ev2@Base 0 1
+ svn_ra__replay_range_ev2@Base 0 1
+ svn_ra__use_commit_shim@Base 0 1
+ svn_ra__use_replay_range_shim@Base 0 1
+ svn_ra_change_rev_prop2@Base 1.7
+ svn_ra_change_rev_prop@Base 1.4
+ svn_ra_check_path@Base 1.4
+ svn_ra_create_callbacks@Base 1.4
+ svn_ra_dav_init@Base 1.8
+ svn_ra_do_diff2@Base 1.4
+ svn_ra_do_diff3@Base 1.5
+ svn_ra_do_diff@Base 1.4
+ svn_ra_do_status2@Base 1.5
+ svn_ra_do_status@Base 1.4
+ svn_ra_do_switch2@Base 1.5
+ svn_ra_do_switch3@Base 1.8
+ svn_ra_do_switch@Base 1.4
+ svn_ra_do_update2@Base 1.5
+ svn_ra_do_update3@Base 1.8
+ svn_ra_do_update@Base 1.4
+ svn_ra_get_commit_editor2@Base 1.4
+ svn_ra_get_commit_editor3@Base 1.5
+ svn_ra_get_commit_editor@Base 1.4
+ svn_ra_get_dated_revision@Base 1.4
+ svn_ra_get_deleted_rev@Base 1.6
+ svn_ra_get_dir2@Base 1.4
+ svn_ra_get_dir@Base 1.4
+ svn_ra_get_file@Base 1.4
+ svn_ra_get_file_revs2@Base 1.5
+ svn_ra_get_file_revs@Base 1.4
+ svn_ra_get_inherited_props@Base 1.8
+ svn_ra_get_latest_revnum@Base 1.4
+ svn_ra_get_location_segments@Base 1.5
+ svn_ra_get_locations@Base 1.4
+ svn_ra_get_lock@Base 1.4
+ svn_ra_get_locks2@Base 1.7
+ svn_ra_get_locks@Base 1.4
+ svn_ra_get_log2@Base 1.5
+ svn_ra_get_log@Base 1.4
+ svn_ra_get_mergeinfo@Base 1.5
+ svn_ra_get_path_relative_to_root@Base 1.7
+ svn_ra_get_path_relative_to_session@Base 1.7
+ svn_ra_get_ra_library@Base 1.4
+ svn_ra_get_repos_root2@Base 1.5
+ svn_ra_get_repos_root@Base 1.4
+ svn_ra_get_session_url@Base 1.5
+ svn_ra_get_uuid2@Base 1.5
+ svn_ra_get_uuid@Base 1.4
+ svn_ra_has_capability@Base 1.5
+ svn_ra_init_ra_libs@Base 1.4
+ svn_ra_initialize@Base 1.4
+ svn_ra_list@Base 1.10
+ svn_ra_local__deprecated_init@Base 0 1
+ svn_ra_lock@Base 1.4
+ svn_ra_open2@Base 1.4
+ svn_ra_open3@Base 1.5
+ svn_ra_open4@Base 1.7
+ svn_ra_open5@Base 1.14
+ svn_ra_open@Base 1.4
+ svn_ra_print_modules@Base 1.4
+ svn_ra_print_ra_libraries@Base 1.4
+ svn_ra_reparent@Base 1.4
+ svn_ra_replay@Base 1.4
+ svn_ra_replay_range@Base 1.5
+ svn_ra_rev_prop@Base 1.4
+ svn_ra_rev_proplist@Base 1.4
+ svn_ra_serf__deprecated_init@Base 0 1
+ svn_ra_stat@Base 1.4
+ svn_ra_svn__deprecated_init@Base 0 1
+ svn_ra_unlock@Base 1.4
+ svn_ra_version@Base 1.4
+libsvn_ra_svn-1.so.1 libsvn1 #MINVER#
+| libsvn-private
+* Build-Depends-Package: libsvn-dev
+ svn_ra_svn__auth_response@Base 0 1
+ svn_ra_svn__cram_client@Base 0 1
+ svn_ra_svn__data_available@Base 0 1
+ svn_ra_svn__default_secprops@Base 0 1
+ svn_ra_svn__do_cyrus_auth@Base 0 1
+ svn_ra_svn__do_internal_auth@Base 0 1
+ svn_ra_svn__enable_sasl_encryption@Base 0 1
+ svn_ra_svn__end_list@Base 0 1
+ svn_ra_svn__find_mech@Base 0 1
+ svn_ra_svn__flush@Base 0 1
+ svn_ra_svn__get_addresses@Base 0 1
+ svn_ra_svn__get_pool@Base 0 1
+ svn_ra_svn__handle_command@Base 0 1
+ svn_ra_svn__handle_commands2@Base 0 1
+ svn_ra_svn__handle_failure_status@Base 0 1
+ svn_ra_svn__has_command@Base 0 1
+ svn_ra_svn__init@Base 0 1
+ svn_ra_svn__locate_real_error_child@Base 0 1
+ svn_ra_svn__parse_proplist@Base 0 1
+ svn_ra_svn__parse_tuple@Base 0 1
+ svn_ra_svn__read_cmd_response@Base 0 1
+ svn_ra_svn__read_command_only@Base 0 1
+ svn_ra_svn__read_data_log_changed_entry@Base 0 1
+ svn_ra_svn__read_item@Base 0 1
+ svn_ra_svn__read_tuple@Base 0 1
+ svn_ra_svn__reset_command_io_counters@Base 0 1
+ svn_ra_svn__sasl_common_init@Base 0 1
+ svn_ra_svn__sasl_init@Base 0 1
+ svn_ra_svn__sasl_status@Base 0 1
+ svn_ra_svn__set_block_handler@Base 0 1
+ svn_ra_svn__set_capabilities@Base 0 1
+ svn_ra_svn__set_shim_callbacks@Base 0 1
+ svn_ra_svn__skip_leading_garbage@Base 0 1
+ svn_ra_svn__start_list@Base 0 1
+ svn_ra_svn__stream_create@Base 0 1
+ svn_ra_svn__stream_data_available@Base 0 1
+ svn_ra_svn__stream_from_sock@Base 0 1
+ svn_ra_svn__stream_from_streams@Base 0 1
+ svn_ra_svn__stream_read@Base 0 1
+ svn_ra_svn__stream_timeout@Base 0 1
+ svn_ra_svn__stream_write@Base 0 1
+ svn_ra_svn__svndiff_version@Base 0 1
+ svn_ra_svn__to_private_array@Base 0 1
+ svn_ra_svn__to_private_item@Base 0 1
+ svn_ra_svn__to_public_array@Base 0 1
+ svn_ra_svn__to_public_item@Base 0 1
+ svn_ra_svn__write_boolean@Base 0 1
+ svn_ra_svn__write_cmd_abort_edit@Base 0 1
+ svn_ra_svn__write_cmd_abort_report@Base 0 1
+ svn_ra_svn__write_cmd_absent_dir@Base 0 1
+ svn_ra_svn__write_cmd_absent_file@Base 0 1
+ svn_ra_svn__write_cmd_add_dir@Base 0 1
+ svn_ra_svn__write_cmd_add_file@Base 0 1
+ svn_ra_svn__write_cmd_apply_textdelta@Base 0 1
+ svn_ra_svn__write_cmd_change_dir_prop@Base 0 1
+ svn_ra_svn__write_cmd_change_file_prop@Base 0 1
+ svn_ra_svn__write_cmd_change_rev_prop2@Base 0 1
+ svn_ra_svn__write_cmd_change_rev_prop@Base 0 1
+ svn_ra_svn__write_cmd_check_path@Base 0 1
+ svn_ra_svn__write_cmd_close_dir@Base 0 1
+ svn_ra_svn__write_cmd_close_edit@Base 0 1
+ svn_ra_svn__write_cmd_close_file@Base 0 1
+ svn_ra_svn__write_cmd_delete_entry@Base 0 1
+ svn_ra_svn__write_cmd_delete_path@Base 0 1
+ svn_ra_svn__write_cmd_diff@Base 0 1
+ svn_ra_svn__write_cmd_failure@Base 0 1
+ svn_ra_svn__write_cmd_finish_replay@Base 0 1
+ svn_ra_svn__write_cmd_finish_report@Base 0 1
+ svn_ra_svn__write_cmd_get_dated_rev@Base 0 1
+ svn_ra_svn__write_cmd_get_deleted_rev@Base 0 1
+ svn_ra_svn__write_cmd_get_file@Base 0 1
+ svn_ra_svn__write_cmd_get_file_revs@Base 0 1
+ svn_ra_svn__write_cmd_get_iprops@Base 0 1
+ svn_ra_svn__write_cmd_get_latest_rev@Base 0 1
+ svn_ra_svn__write_cmd_get_lock@Base 0 1
+ svn_ra_svn__write_cmd_get_locks@Base 0 1
+ svn_ra_svn__write_cmd_link_path@Base 0 1
+ svn_ra_svn__write_cmd_lock@Base 0 1
+ svn_ra_svn__write_cmd_open_dir@Base 0 1
+ svn_ra_svn__write_cmd_open_file@Base 0 1
+ svn_ra_svn__write_cmd_open_root@Base 0 1
+ svn_ra_svn__write_cmd_reparent@Base 0 1
+ svn_ra_svn__write_cmd_replay@Base 0 1
+ svn_ra_svn__write_cmd_replay_range@Base 0 1
+ svn_ra_svn__write_cmd_response@Base 0 1
+ svn_ra_svn__write_cmd_rev_prop@Base 0 1
+ svn_ra_svn__write_cmd_rev_proplist@Base 0 1
+ svn_ra_svn__write_cmd_set_path@Base 0 1
+ svn_ra_svn__write_cmd_stat@Base 0 1
+ svn_ra_svn__write_cmd_status@Base 0 1
+ svn_ra_svn__write_cmd_switch@Base 0 1
+ svn_ra_svn__write_cmd_target_rev@Base 0 1
+ svn_ra_svn__write_cmd_textdelta_chunk@Base 0 1
+ svn_ra_svn__write_cmd_textdelta_end@Base 0 1
+ svn_ra_svn__write_cmd_unlock@Base 0 1
+ svn_ra_svn__write_cmd_update@Base 0 1
+ svn_ra_svn__write_cstring@Base 0 1
+ svn_ra_svn__write_data_log_changed_path@Base 0 1
+ svn_ra_svn__write_data_log_entry@Base 0 1
+ svn_ra_svn__write_dirent@Base 0 1
+ svn_ra_svn__write_number@Base 0 1
+ svn_ra_svn__write_proplist@Base 0 1
+ svn_ra_svn__write_string@Base 0 1
+ svn_ra_svn__write_tuple@Base 0 1
+ svn_ra_svn__write_word@Base 0 1
+ svn_ra_svn_compression_level@Base 1.7
+ svn_ra_svn_conn_remote_host@Base 1.6
+ svn_ra_svn_cram_server@Base 1.4
+ svn_ra_svn_create_conn2@Base 1.7
+ svn_ra_svn_create_conn3@Base 1.8
+ svn_ra_svn_create_conn4@Base 1.9
+ svn_ra_svn_create_conn5@Base 1.10
+ svn_ra_svn_create_conn@Base 1.4
+ svn_ra_svn_drive_editor2@Base 1.4
+ svn_ra_svn_drive_editor@Base 1.4
+ svn_ra_svn_end_list@Base 1.4
+ svn_ra_svn_flush@Base 1.4
+ svn_ra_svn_get_editor@Base 1.4
+ svn_ra_svn_handle_commands2@Base 1.6
+ svn_ra_svn_handle_commands@Base 1.4
+ svn_ra_svn_has_capability@Base 1.4
+ svn_ra_svn_init@Base 1.4
+ svn_ra_svn_parse_proplist@Base 1.5
+ svn_ra_svn_parse_tuple@Base 1.4
+ svn_ra_svn_read_cmd_response@Base 1.4
+ svn_ra_svn_read_item@Base 1.4
+ svn_ra_svn_read_tuple@Base 1.4
+ svn_ra_svn_set_capabilities@Base 1.4
+ svn_ra_svn_skip_leading_garbage@Base 1.4
+ svn_ra_svn_start_list@Base 1.4
+ svn_ra_svn_version@Base 1.4
+ svn_ra_svn_write_cmd@Base 1.4
+ svn_ra_svn_write_cmd_failure@Base 1.4
+ svn_ra_svn_write_cmd_response@Base 1.4
+ svn_ra_svn_write_cstring@Base 1.4
+ svn_ra_svn_write_number@Base 1.4
+ svn_ra_svn_write_proplist@Base 1.5
+ svn_ra_svn_write_string@Base 1.4
+ svn_ra_svn_write_tuple@Base 1.4
+ svn_ra_svn_write_word@Base 1.4
+ svn_ra_svn_zero_copy_limit@Base 1.8
+ svn_sasl__client_init@Base 0 1
+ svn_sasl__client_new@Base 0 1
+ svn_sasl__client_start@Base 0 1
+ svn_sasl__client_step@Base 0 1
+ svn_sasl__decode@Base 0 1
+ svn_sasl__dispose@Base 0 1
+ svn_sasl__done@Base 0 1
+ svn_sasl__encode@Base 0 1
+ svn_sasl__errdetail@Base 0 1
+ svn_sasl__errstring@Base 0 1
+ svn_sasl__getprop@Base 0 1
+ svn_sasl__listmech@Base 0 1
+ svn_sasl__server_init@Base 0 1
+ svn_sasl__server_new@Base 0 1
+ svn_sasl__server_start@Base 0 1
+ svn_sasl__server_step@Base 0 1
+ svn_sasl__set_mutex@Base 0 1
+ svn_sasl__setprop@Base 0 1
+libsvn_repos-1.so.1 libsvn1 #MINVER#
+| libsvn-private
+* Build-Depends-Package: libsvn-dev
+ svn_authz__acl_applies_to_repo@Base 0 1
+ svn_authz__compare_paths@Base 0 1
+ svn_authz__compare_rules@Base 0 1
+ svn_authz__get_acl_access@Base 0 1
+ svn_authz__get_global_rights@Base 0 1
+ svn_authz__parse@Base 0 1
+ svn_authz__reverse_string@Base 0 1
+ svn_repos__adjust_mergeinfo_property@Base 0 1
+ svn_repos__config_pool_create@Base 0 1
+ svn_repos__config_pool_get@Base 0 1
+ svn_repos__create_config_access@Base 0 1
+ svn_repos__destroy_config_access@Base 0 1
+ svn_repos__dump_headers@Base 0 1
+ svn_repos__dump_magic_header_record@Base 0 1
+ svn_repos__dump_node_record@Base 0 1
+ svn_repos__dump_revision_record@Base 0 1
+ svn_repos__dump_uuid_header_record@Base 0 1
+ svn_repos__dumpfile_header_push@Base 0 1
+ svn_repos__dumpfile_header_pushf@Base 0 1
+ svn_repos__dumpfile_headers_create@Base 0 1
+ svn_repos__fs_type@Base 0 1
+ svn_repos__get_commit_ev2@Base 0 1
+ svn_repos__get_config@Base 0 1
+ svn_repos__get_dump_editor@Base 0 1
+ svn_repos__get_logs_compat@Base 0 1
+ svn_repos__hooks_post_commit@Base 0 1
+ svn_repos__hooks_post_lock@Base 0 1
+ svn_repos__hooks_post_revprop_change@Base 0 1
+ svn_repos__hooks_post_unlock@Base 0 1
+ svn_repos__hooks_pre_commit@Base 0 1
+ svn_repos__hooks_pre_lock@Base 0 1
+ svn_repos__hooks_pre_revprop_change@Base 0 1
+ svn_repos__hooks_pre_unlock@Base 0 1
+ svn_repos__hooks_start_commit@Base 0 1
+ svn_repos__normalize_prop@Base 0 1
+ svn_repos__parse_hooks_env@Base 0 1
+ svn_repos__post_commit_error_str@Base 0 1
+ svn_repos__prev_location@Base 0 1
+ svn_repos__replay_ev2@Base 0 1
+ svn_repos__validate_new_path@Base 0 1
+ svn_repos__validate_prop@Base 0 1
+ svn_repos_abort_report@Base 1.4
+ svn_repos_authz_check_access@Base 1.4
+ svn_repos_authz_initialize@Base 1.10
+ svn_repos_authz_parse2@Base 1.12
+ svn_repos_authz_parse@Base 1.8
+ svn_repos_authz_read2@Base 1.8
+ svn_repos_authz_read3@Base 1.10
+ svn_repos_authz_read4@Base 1.12
+ svn_repos_authz_read@Base 1.4
+ svn_repos_begin_report2@Base 1.5
+ svn_repos_begin_report3@Base 1.8
+ svn_repos_begin_report@Base 1.4
+ svn_repos_capabilities@Base 1.9
+ svn_repos_check_revision_access@Base 1.5
+ svn_repos_conf_dir@Base 1.4
+ svn_repos_create@Base 1.4
+ svn_repos_dated_revision@Base 1.4
+ svn_repos_db_env@Base 1.4
+ svn_repos_db_lockfile@Base 1.4
+ svn_repos_db_logfiles@Base 1.4
+ svn_repos_db_logs_lockfile@Base 1.4
+ svn_repos_delete@Base 1.4
+ svn_repos_delete_path@Base 1.4
+ svn_repos_deleted_rev@Base 1.5
+ svn_repos_dir_delta2@Base 1.5
+ svn_repos_dir_delta@Base 1.4
+ svn_repos_dump_fs2@Base 1.4
+ svn_repos_dump_fs3@Base 1.7
+ svn_repos_dump_fs4@Base 1.10
+ svn_repos_dump_fs@Base 1.4
+ svn_repos_find_root_path@Base 1.4
+ svn_repos_finish_report@Base 1.4
+ svn_repos_freeze@Base 1.8
+ svn_repos_fs@Base 1.4
+ svn_repos_fs_begin_txn_for_commit2@Base 1.5
+ svn_repos_fs_begin_txn_for_commit@Base 1.4
+ svn_repos_fs_begin_txn_for_update@Base 1.4
+ svn_repos_fs_change_node_prop@Base 1.4
+ svn_repos_fs_change_rev_prop2@Base 1.4
+ svn_repos_fs_change_rev_prop3@Base 1.5
+ svn_repos_fs_change_rev_prop4@Base 1.7
+ svn_repos_fs_change_rev_prop@Base 1.4
+ svn_repos_fs_change_txn_prop@Base 1.4
+ svn_repos_fs_change_txn_props@Base 1.5
+ svn_repos_fs_commit_txn@Base 1.4
+ svn_repos_fs_get_inherited_props@Base 1.8
+ svn_repos_fs_get_locks2@Base 1.7
+ svn_repos_fs_get_locks@Base 1.4
+ svn_repos_fs_get_mergeinfo2@Base 1.10
+ svn_repos_fs_get_mergeinfo@Base 1.5
+ svn_repos_fs_lock@Base 1.4
+ svn_repos_fs_lock_many@Base 1.9
+ svn_repos_fs_pack2@Base 1.7
+ svn_repos_fs_pack@Base 1.6
+ svn_repos_fs_revision_prop@Base 1.4
+ svn_repos_fs_revision_proplist@Base 1.4
+ svn_repos_fs_type@Base 1.9
+ svn_repos_fs_unlock@Base 1.4
+ svn_repos_fs_unlock_many@Base 1.9
+ svn_repos_get_commit_editor2@Base 1.4
+ svn_repos_get_commit_editor3@Base 1.4
+ svn_repos_get_commit_editor4@Base 1.4
+ svn_repos_get_commit_editor5@Base 1.5
+ svn_repos_get_commit_editor@Base 1.4
+ svn_repos_get_committed_info@Base 1.4
+ svn_repos_get_file_revs2@Base 1.5
+ svn_repos_get_file_revs@Base 1.4
+ svn_repos_get_fs_build_parser2@Base 1.4
+ svn_repos_get_fs_build_parser3@Base 1.7
+ svn_repos_get_fs_build_parser4@Base 1.8
+ svn_repos_get_fs_build_parser5@Base 1.9
+ svn_repos_get_fs_build_parser6@Base 1.10
+ svn_repos_get_fs_build_parser@Base 1.4
+ svn_repos_get_logs2@Base 1.4
+ svn_repos_get_logs3@Base 1.4
+ svn_repos_get_logs4@Base 1.5
+ svn_repos_get_logs5@Base 1.10
+ svn_repos_get_logs@Base 1.4
+ svn_repos_has_capability@Base 1.5
+ svn_repos_history2@Base 1.4
+ svn_repos_history@Base 1.4
+ svn_repos_hook_dir@Base 1.4
+ svn_repos_hooks_setenv@Base 1.8
+ svn_repos_hotcopy2@Base 1.8
+ svn_repos_hotcopy3@Base 1.9
+ svn_repos_hotcopy@Base 1.4
+ svn_repos_info_format@Base 1.9
+ svn_repos_link_path2@Base 1.4
+ svn_repos_link_path3@Base 1.5
+ svn_repos_link_path@Base 1.4
+ svn_repos_list@Base 1.10
+ svn_repos_load_fs2@Base 1.4
+ svn_repos_load_fs3@Base 1.7
+ svn_repos_load_fs4@Base 1.8
+ svn_repos_load_fs5@Base 1.9
+ svn_repos_load_fs6@Base 1.10
+ svn_repos_load_fs@Base 1.4
+ svn_repos_load_fs_revprops@Base 1.10
+ svn_repos_lock_dir@Base 1.4
+ svn_repos_log_entry_create@Base 1.10
+ svn_repos_log_entry_dup@Base 1.10
+ svn_repos_node_editor@Base 1.4
+ svn_repos_node_from_baton@Base 1.4
+ svn_repos_node_location_segments@Base 1.5
+ svn_repos_notify_create@Base 1.7
+ svn_repos_open2@Base 1.7
+ svn_repos_open3@Base 1.9
+ svn_repos_open@Base 1.4
+ svn_repos_parse_dumpstream2@Base 1.4
+ svn_repos_parse_dumpstream3@Base 1.8
+ svn_repos_parse_dumpstream@Base 1.4
+ svn_repos_path@Base 1.4
+ svn_repos_path_change_create@Base 1.10
+ svn_repos_path_change_dup@Base 1.10
+ svn_repos_post_commit_hook@Base 1.4
+ svn_repos_post_lock_hook@Base 1.4
+ svn_repos_post_revprop_change_hook@Base 1.4
+ svn_repos_post_unlock_hook@Base 1.4
+ svn_repos_pre_commit_hook@Base 1.4
+ svn_repos_pre_lock_hook@Base 1.4
+ svn_repos_pre_revprop_change_hook@Base 1.4
+ svn_repos_pre_unlock_hook@Base 1.4
+ svn_repos_recover2@Base 1.4
+ svn_repos_recover3@Base 1.5
+ svn_repos_recover4@Base 1.7
+ svn_repos_recover@Base 1.4
+ svn_repos_remember_client_capabilities@Base 1.5
+ svn_repos_replay2@Base 1.4
+ svn_repos_replay@Base 1.4
+ svn_repos_set_path2@Base 1.4
+ svn_repos_set_path3@Base 1.5
+ svn_repos_set_path@Base 1.4
+ svn_repos_start_commit_hook@Base 1.4
+ svn_repos_stat@Base 1.4
+ svn_repos_svnserve_conf@Base 1.4
+ svn_repos_trace_node_locations@Base 1.4
+ svn_repos_upgrade2@Base 1.7
+ svn_repos_upgrade@Base 1.5
+ svn_repos_verify_fs2@Base 1.7
+ svn_repos_verify_fs3@Base 1.9
+ svn_repos_verify_fs@Base 1.5
+ svn_repos_version@Base 1.4
+libsvn_subr-1.so.1 libsvn1 #MINVER#
+| libsvn-private
+* Build-Depends-Package: libsvn-dev
+ svn__adler32@Base 0 1
+ svn__base36toui64@Base 0 1
+ svn__compress_lz4@Base 0 1
+ svn__compress_zlib@Base 0 1
+ svn__decode_int@Base 0 1
+ svn__decode_uint@Base 0 1
+ svn__decompress_lz4@Base 0 1
+ svn__decompress_zlib@Base 0 1
+ svn__digest_to_cstring@Base 0 1
+ svn__digest_to_cstring_display@Base 0 1
+ svn__digests_match@Base 0 1
+ svn__empty_string_digest@Base 0 1
+ svn__encode_int@Base 0 1
+ svn__encode_uint@Base 0 1
+ svn__fake__apr_escape@Base 0 1
+ svn__fake__config_win@Base 0 1
+ svn__fake__lz4internal@Base 0 1
+ svn__fake__sqlite3wrapper@Base 0 1
+ svn__fake__win32_crashrpt@Base 0 1
+ svn__fake__win32_crypto@Base 0 1
+ svn__fake__win32_xlate@Base 0 1
+ svn__fnv1a_32@Base 0 1
+ svn__fnv1a_32x4@Base 0 1
+ svn__fnv1a_32x4_raw@Base 0 1
+ svn__i64toa@Base 0 1
+ svn__i64toa_sep@Base 0 1
+ svn__strtoul@Base 0 1
+ svn__ui64toa@Base 0 1
+ svn__ui64toa_sep@Base 0 1
+ svn__ui64tobase36@Base 0 1
+ svn_atomic__init_once@Base 0 1
+ svn_atomic__init_once_no_error@Base 0 1
+ svn_atomic__unique_counter@Base 0 1
+ svn_auth__file_path@Base 0 1
+ svn_auth__get_dummmy_simple_provider@Base 0 1
+ svn_auth__get_gpg_agent_simple_provider@Base 0 1
+ svn_auth__make_session_auth@Base 0 1
+ svn_auth__simple_creds_cache_get@Base 0 1
+ svn_auth__simple_creds_cache_set@Base 0 1
+ svn_auth__simple_password_get@Base 0 1
+ svn_auth__simple_password_set@Base 0 1
+ svn_auth__ssl_client_cert_pw_cache_get@Base 0 1
+ svn_auth__ssl_client_cert_pw_cache_set@Base 0 1
+ svn_auth__ssl_client_cert_pw_get@Base 0 1
+ svn_auth__ssl_client_cert_pw_set@Base 0 1
+ svn_auth_first_credentials@Base 1.4
+ svn_auth_forget_credentials@Base 1.8
+ svn_auth_get_gpg_agent_simple_provider@Base 1.8
+ svn_auth_get_parameter@Base 1.4
+ svn_auth_get_platform_specific_client_providers@Base 1.6
+ svn_auth_get_platform_specific_provider@Base 1.6
+ svn_auth_get_simple_prompt_provider@Base 1.4
+ svn_auth_get_simple_provider2@Base 1.6
+ svn_auth_get_simple_provider@Base 1.4
+ svn_auth_get_ssl_client_cert_file_provider@Base 1.4
+ svn_auth_get_ssl_client_cert_prompt_provider@Base 1.4
+ svn_auth_get_ssl_client_cert_pw_file_provider2@Base 1.6
+ svn_auth_get_ssl_client_cert_pw_file_provider@Base 1.4
+ svn_auth_get_ssl_client_cert_pw_prompt_provider@Base 1.4
+ svn_auth_get_ssl_server_trust_file_provider@Base 1.4
+ svn_auth_get_ssl_server_trust_prompt_provider@Base 1.4
+ svn_auth_get_username_prompt_provider@Base 1.4
+ svn_auth_get_username_provider@Base 1.4
+ svn_auth_next_credentials@Base 1.4
+ svn_auth_open@Base 1.4
+ svn_auth_save_credentials@Base 1.4
+ svn_auth_set_parameter@Base 1.4
+ svn_auth_ssl_server_cert_info_dup@Base 1.4
+ svn_base64_decode@Base 1.4
+ svn_base64_decode_string@Base 1.4
+ svn_base64_encode2@Base 1.10
+ svn_base64_encode@Base 1.4
+ svn_base64_encode_string2@Base 1.6
+ svn_base64_encode_string@Base 1.4
+ svn_base64_from_md5@Base 1.4
+ svn_bit_array__create@Base 0 1
+ svn_bit_array__get@Base 0 1
+ svn_bit_array__set@Base 0 1
+ svn_cache__create_inprocess@Base 0 1
+ svn_cache__create_membuffer_cache@Base 0 1
+ svn_cache__create_memcache@Base 0 1
+ svn_cache__create_null@Base 0 1
+ svn_cache__format_info@Base 0 1
+ svn_cache__get@Base 0 1
+ svn_cache__get_global_membuffer_cache@Base 0 1
+ svn_cache__get_info@Base 0 1
+ svn_cache__get_partial@Base 0 1
+ svn_cache__has_key@Base 0 1
+ svn_cache__is_cachable@Base 0 1
+ svn_cache__iter@Base 0 1
+ svn_cache__make_memcache_from_config@Base 0 1
+ svn_cache__membuffer_cache_create@Base 0 1
+ svn_cache__membuffer_clear@Base 0 1
+ svn_cache__membuffer_get_global_info@Base 0 1
+ svn_cache__set@Base 0 1
+ svn_cache__set_error_handler@Base 0 1
+ svn_cache__set_partial@Base 0 1
+ svn_cache_config_get@Base 1.7
+ svn_cache_config_set@Base 1.7
+ svn_categorize_props@Base 1.4
+ svn_cert__match_dns_identity@Base 0 1
+ svn_checksum@Base 1.6
+ svn_checksum__from_digest_fnv1a_32@Base 0 1
+ svn_checksum__from_digest_fnv1a_32x4@Base 0 1
+ svn_checksum__from_digest_md5@Base 0 1
+ svn_checksum__from_digest_sha1@Base 0 1
+ svn_checksum__wrap_write_stream@Base 0 1
+ svn_checksum__wrap_write_stream_fnv1a_32x4@Base 0 1
+ svn_checksum_clear@Base 1.6
+ svn_checksum_create@Base 1.6
+ svn_checksum_ctx_create@Base 1.6
+ svn_checksum_ctx_reset@Base 1.10
+ svn_checksum_deserialize@Base 1.7
+ svn_checksum_dup@Base 1.6
+ svn_checksum_empty_checksum@Base 1.6
+ svn_checksum_final@Base 1.6
+ svn_checksum_is_empty_checksum@Base 1.8
+ svn_checksum_match@Base 1.6
+ svn_checksum_mismatch_err@Base 1.7
+ svn_checksum_parse_hex@Base 1.6
+ svn_checksum_serialize@Base 1.7
+ svn_checksum_size@Base 1.6
+ svn_checksum_to_cstring@Base 1.6
+ svn_checksum_to_cstring_display@Base 1.6
+ svn_checksum_update@Base 1.6
+ svn_cmdline__apply_config_options@Base 0 1
+ svn_cmdline__auth_gnome_keyring_unlock_prompt@Base 0 1
+ svn_cmdline__be_interactive@Base 0 1
+ svn_cmdline__cancellation_exit@Base 0 1
+ svn_cmdline__disable_cancellation_handler@Base 0 1
+ svn_cmdline__edit_file_externally@Base 0 1
+ svn_cmdline__edit_string_externally@Base 0 1
+ svn_cmdline__getopt_init@Base 0 1
+ svn_cmdline__indent_string@Base 0 1
+ svn_cmdline__parse_config_option@Base 0 1
+ svn_cmdline__parse_trust_options@Base 0 1
+ svn_cmdline__print_prop_hash@Base 0 1
+ svn_cmdline__print_xml_prop@Base 0 1
+ svn_cmdline__print_xml_prop_hash@Base 0 1
+ svn_cmdline__setup_cancellation_handler@Base 0 1
+ svn_cmdline__stderr_is_a_terminal@Base 0 1
+ svn_cmdline__stdin_is_a_terminal@Base 0 1
+ svn_cmdline__stdin_readline@Base 0 1
+ svn_cmdline__stdout_is_a_terminal@Base 0 1
+ svn_cmdline_auth_plaintext_passphrase_prompt@Base 1.6
+ svn_cmdline_auth_plaintext_prompt@Base 1.6
+ svn_cmdline_auth_simple_prompt@Base 1.4
+ svn_cmdline_auth_ssl_client_cert_prompt@Base 1.4
+ svn_cmdline_auth_ssl_client_cert_pw_prompt@Base 1.4
+ svn_cmdline_auth_ssl_server_trust_prompt@Base 1.4
+ svn_cmdline_auth_username_prompt@Base 1.4
+ svn_cmdline_create_auth_baton2@Base 1.9
+ svn_cmdline_create_auth_baton@Base 1.6
+ svn_cmdline_cstring_from_utf8@Base 1.4
+ svn_cmdline_cstring_from_utf8_fuzzy@Base 1.4
+ svn_cmdline_cstring_to_utf8@Base 1.4
+ svn_cmdline_fflush@Base 1.4
+ svn_cmdline_fprintf@Base 1.4
+ svn_cmdline_fputs@Base 1.4
+ svn_cmdline_handle_exit_error@Base 1.4
+ svn_cmdline_init@Base 1.4
+ svn_cmdline_output_encoding@Base 1.4
+ svn_cmdline_path_local_style_from_utf8@Base 1.4
+ svn_cmdline_printf@Base 1.4
+ svn_cmdline_prompt_user2@Base 1.5
+ svn_cmdline_prompt_user@Base 1.4
+ svn_cmdline_setup_auth_baton@Base 1.4
+ svn_commit_info_dup@Base 1.4
+ svn_compat_log_revprops_clear@Base 1.5
+ svn_compat_log_revprops_in@Base 1.5
+ svn_compat_log_revprops_out@Base 1.5
+ svn_compat_log_revprops_out_string@Base 1.9
+ svn_compat_wrap_commit_callback@Base 1.4
+ svn_compat_wrap_log_receiver@Base 1.5
+ svn_config__constructor_create@Base 0 1
+ svn_config__default_add_value_fn@Base 0 1
+ svn_config__get_default_config@Base 0 1
+ svn_config__is_expanded@Base 0 1
+ svn_config__is_read_only@Base 0 1
+ svn_config__parse_file@Base 0 1
+ svn_config__parse_stream@Base 0 1
+ svn_config__set_read_only@Base 0 1
+ svn_config__shallow_copy@Base 0 1
+ svn_config__shallow_replace_section@Base 0 1
+ svn_config__sys_config_path@Base 0 1
+ svn_config__write@Base 0 1
+ svn_config_copy_config@Base 1.8
+ svn_config_create2@Base 1.8
+ svn_config_create@Base 1.7
+ svn_config_dup@Base 1.8
+ svn_config_ensure@Base 1.4
+ svn_config_enumerate2@Base 1.4
+ svn_config_enumerate@Base 1.4
+ svn_config_enumerate_sections2@Base 1.4
+ svn_config_enumerate_sections@Base 1.4
+ svn_config_find_group@Base 1.4
+ svn_config_get@Base 1.4
+ svn_config_get_bool@Base 1.4
+ svn_config_get_config@Base 1.4
+ svn_config_get_int64@Base 1.8
+ svn_config_get_server_setting@Base 1.4
+ svn_config_get_server_setting_bool@Base 1.6
+ svn_config_get_server_setting_int@Base 1.4
+ svn_config_get_tristate@Base 1.8
+ svn_config_get_user_config_path@Base 1.6
+ svn_config_get_yes_no_ask@Base 1.6
+ svn_config_has_section@Base 1.4
+ svn_config_merge@Base 1.4
+ svn_config_parse@Base 1.8
+ svn_config_read2@Base 1.7
+ svn_config_read3@Base 1.8
+ svn_config_read@Base 1.4
+ svn_config_read_auth_data@Base 1.4
+ svn_config_set@Base 1.4
+ svn_config_set_bool@Base 1.4
+ svn_config_set_int64@Base 1.8
+ svn_config_walk_auth_data@Base 1.8
+ svn_config_write_auth_data@Base 1.4
+ svn_create_commit_info@Base 1.4
+ svn_crypto__context_create@Base 0 1
+ svn_crypto__decrypt_password@Base 0 1
+ svn_crypto__encrypt_password@Base 0 1
+ svn_crypto__generate_secret_checktext@Base 0 1
+ svn_crypto__is_available@Base 0 1
+ svn_crypto__verify_secret@Base 0 1
+ svn_cstring__match_length@Base 0 1
+ svn_cstring__reverse_match_length@Base 0 1
+ svn_cstring__similarity@Base 0 1
+ svn_cstring_atoi64@Base 1.7
+ svn_cstring_atoi@Base 1.7
+ svn_cstring_atoui64@Base 1.7
+ svn_cstring_atoui@Base 1.7
+ svn_cstring_casecmp@Base 1.5
+ svn_cstring_count_newlines@Base 1.4
+ svn_cstring_join2@Base 1.10
+ svn_cstring_join@Base 1.4
+ svn_cstring_match_glob_list@Base 1.4
+ svn_cstring_match_list@Base 1.7
+ svn_cstring_skip_prefix@Base 1.9
+ svn_cstring_split@Base 1.4
+ svn_cstring_split_append@Base 1.4
+ svn_cstring_strtoi64@Base 1.7
+ svn_cstring_strtoui64@Base 1.7
+ svn_cstring_tokenize@Base 1.8
+ svn_ctype_casecmp@Base 1.5
+ svn_ctype_table@Base 1.4
+ svn_dbg__preamble@Base 0 1
+ svn_dbg__print_props@Base 0 1
+ svn_dbg__printf@Base 0 1
+ svn_depth_from_word@Base 1.5
+ svn_depth_to_word@Base 1.5
+ svn_dirent_basename@Base 1.7
+ svn_dirent_canonicalize@Base 1.6
+ svn_dirent_canonicalize_safe@Base 1.12
+ svn_dirent_condense_targets@Base 1.7
+ svn_dirent_create@Base 1.8
+ svn_dirent_dirname@Base 1.6
+ svn_dirent_dup@Base 1.4
+ svn_dirent_get_absolute@Base 1.6
+ svn_dirent_get_longest_ancestor@Base 1.6
+ svn_dirent_internal_style@Base 1.6
+ svn_dirent_internal_style_safe@Base 1.12
+ svn_dirent_is_absolute@Base 1.6
+ svn_dirent_is_ancestor@Base 1.6
+ svn_dirent_is_canonical@Base 1.6
+ svn_dirent_is_child@Base 1.6
+ svn_dirent_is_root@Base 1.5
+ svn_dirent_is_under_root@Base 1.7
+ svn_dirent_join@Base 1.6
+ svn_dirent_join_many@Base 1.6
+ svn_dirent_local_style@Base 1.6
+ svn_dirent_skip_ancestor@Base 1.7
+ svn_dirent_split@Base 1.7
+ svn_dso__pool@Base 0 1
+ svn_dso_initialize2@Base 1.6
+ svn_dso_initialize@Base 1.4
+ svn_dso_load@Base 1.4
+ svn_eol__detect_eol@Base 0 1
+ svn_eol__find_eol_start@Base 0 1
+ svn_err_best_message@Base 1.4
+ svn_error__is_tracing_link@Base 0 1
+ svn_error__locate@Base 1.0
+ svn_error__malfunction@Base 0 1
+ svn_error__trace@Base 0 1
+ svn_error__wrap_zlib@Base 0 1
+ svn_error_abort_on_malfunction@Base 1.6
+ svn_error_clear@Base 1.4
+ svn_error_compose@Base 1.4
+ svn_error_compose_create@Base 1.6
+ svn_error_create@Base 1.4
+ svn_error_createf@Base 1.4
+ svn_error_dup@Base 1.4
+ svn_error_find_cause@Base 1.7
+ svn_error_get_malfunction_handler@Base 1.9
+ svn_error_purge_tracing@Base 1.7
+ svn_error_quick_wrap@Base 1.4
+ svn_error_quick_wrapf@Base 1.9
+ svn_error_raise_on_malfunction@Base 1.6
+ svn_error_root_cause@Base 1.5
+ svn_error_set_malfunction_handler@Base 1.6
+ svn_error_symbolic_name@Base 1.8
+ svn_error_wrap_apr@Base 1.4
+ svn_fnv1a_32__context_create@Base 0 1
+ svn_fnv1a_32__context_reset@Base 0 1
+ svn_fnv1a_32__finalize@Base 0 1
+ svn_fnv1a_32__update@Base 0 1
+ svn_fnv1a_32x4__context_create@Base 0 1
+ svn_fnv1a_32x4__context_reset@Base 0 1
+ svn_fnv1a_32x4__finalize@Base 0 1
+ svn_fnv1a_32x4__update@Base 0 1
+ svn_fspath__basename@Base 0 1
+ svn_fspath__canonicalize@Base 0 1
+ svn_fspath__dirname@Base 0 1
+ svn_fspath__get_longest_ancestor@Base 0 1
+ svn_fspath__is_canonical@Base 0 1
+ svn_fspath__is_root@Base 0 1
+ svn_fspath__join@Base 0 1
+ svn_fspath__skip_ancestor@Base 0 1
+ svn_fspath__split@Base 0 1
+ svn_handle_error2@Base 1.4
+ svn_handle_error@Base 1.4
+ svn_handle_warning2@Base 1.4
+ svn_handle_warning@Base 1.4
+ svn_hash__get_bool@Base 0 1
+ svn_hash__get_cstring@Base 0 1
+ svn_hash__gets_debug@Base 0 1
+ svn_hash__make@Base 0 1
+ svn_hash__read_entry@Base 0 1
+ svn_hash__sets_debug@Base 0 1
+ svn_hash_diff@Base 1.4
+ svn_hash_from_cstring_keys@Base 1.5
+ svn_hash_keys@Base 1.5
+ svn_hash_read2@Base 1.4
+ svn_hash_read@Base 1.4
+ svn_hash_read_incremental@Base 1.4
+ svn_hash_write2@Base 1.4
+ svn_hash_write@Base 1.4
+ svn_hash_write_incremental@Base 1.4
+ svn_inheritance_from_word@Base 1.5
+ svn_inheritance_to_word@Base 1.5
+ svn_io__file_lock_autocreate@Base 0 1
+ svn_io__is_finfo_executable@Base 0 1
+ svn_io__is_finfo_read_only@Base 0 1
+ svn_io_append_file@Base 1.4
+ svn_io_check_path@Base 1.4
+ svn_io_check_resolved_path@Base 1.4
+ svn_io_check_special_path@Base 1.4
+ svn_io_copy_dir_recursively@Base 1.4
+ svn_io_copy_file@Base 1.4
+ svn_io_copy_link@Base 1.4
+ svn_io_copy_perms@Base 1.6
+ svn_io_create_unique_link@Base 1.4
+ svn_io_detect_mimetype2@Base 1.5
+ svn_io_detect_mimetype@Base 1.4
+ svn_io_dir_close@Base 1.7
+ svn_io_dir_empty@Base 1.4
+ svn_io_dir_file_copy@Base 1.4
+ svn_io_dir_make@Base 1.4
+ svn_io_dir_make_hidden@Base 1.4
+ svn_io_dir_make_sgid@Base 1.4
+ svn_io_dir_open@Base 1.4
+ svn_io_dir_read@Base 1.4
+ svn_io_dir_remove_nonrecursive@Base 1.4
+ svn_io_dir_walk2@Base 1.7
+ svn_io_dir_walk@Base 1.4
+ svn_io_dirent2_create@Base 1.7
+ svn_io_dirent2_dup@Base 1.7
+ svn_io_file_affected_time@Base 1.4
+ svn_io_file_aligned_seek@Base 1.9
+ svn_io_file_checksum2@Base 1.6
+ svn_io_file_checksum@Base 1.4
+ svn_io_file_close@Base 1.4
+ svn_io_file_create@Base 1.4
+ svn_io_file_create_bytes@Base 1.9
+ svn_io_file_create_empty@Base 1.9
+ svn_io_file_flush@Base 1.9
+ svn_io_file_flush_to_disk@Base 1.4
+ svn_io_file_get_offset@Base 1.10
+ svn_io_file_getc@Base 1.4
+ svn_io_file_info_get@Base 1.4
+ svn_io_file_lock2@Base 1.4
+ svn_io_file_lock@Base 1.4
+ svn_io_file_move@Base 1.4
+ svn_io_file_name_get@Base 1.7
+ svn_io_file_open@Base 1.4
+ svn_io_file_putc@Base 1.7
+ svn_io_file_read@Base 1.4
+ svn_io_file_read_full2@Base 1.7
+ svn_io_file_read_full@Base 1.4
+ svn_io_file_readline@Base 1.8
+ svn_io_file_rename2@Base 1.10
+ svn_io_file_rename@Base 1.4
+ svn_io_file_seek@Base 1.4
+ svn_io_file_size_get@Base 1.10
+ svn_io_file_trunc@Base 1.6
+ svn_io_file_write@Base 1.4
+ svn_io_file_write_full@Base 1.4
+ svn_io_files_contents_same_p@Base 1.4
+ svn_io_files_contents_three_same_p@Base 1.8
+ svn_io_filesizes_different_p@Base 1.4
+ svn_io_filesizes_three_different_p@Base 1.8
+ svn_io_get_dir_filenames@Base 1.4
+ svn_io_get_dirents2@Base 1.4
+ svn_io_get_dirents3@Base 1.7
+ svn_io_get_dirents@Base 1.4
+ svn_io_is_binary_data@Base 1.7
+ svn_io_is_file_executable@Base 1.4
+ svn_io_lock_open_file@Base 1.8
+ svn_io_make_dir_recursively@Base 1.4
+ svn_io_open_unique_file2@Base 1.4
+ svn_io_open_unique_file3@Base 1.6
+ svn_io_open_unique_file@Base 1.4
+ svn_io_open_uniquely_named@Base 1.6
+ svn_io_parse_mimetypes_file@Base 1.5
+ svn_io_read_length_line@Base 1.4
+ svn_io_read_link@Base 1.4
+ svn_io_read_version_file@Base 1.4
+ svn_io_remove_dir2@Base 1.5
+ svn_io_remove_dir@Base 1.4
+ svn_io_remove_file2@Base 1.7
+ svn_io_remove_file@Base 1.4
+ svn_io_run_cmd@Base 1.4
+ svn_io_run_diff2@Base 1.6
+ svn_io_run_diff3@Base 1.4
+ svn_io_run_diff3_2@Base 1.4
+ svn_io_run_diff3_3@Base 1.6
+ svn_io_run_diff@Base 1.4
+ svn_io_set_file_affected_time@Base 1.4
+ svn_io_set_file_executable@Base 1.4
+ svn_io_set_file_read_only@Base 1.4
+ svn_io_set_file_read_write@Base 1.4
+ svn_io_set_file_read_write_carefully@Base 1.4
+ svn_io_sleep_for_timestamps@Base 1.6
+ svn_io_start_cmd2@Base 1.7
+ svn_io_start_cmd3@Base 1.8
+ svn_io_start_cmd@Base 1.4
+ svn_io_stat@Base 1.4
+ svn_io_stat_dirent2@Base 1.8
+ svn_io_stat_dirent@Base 1.7
+ svn_io_temp_dir@Base 1.4
+ svn_io_unlock_open_file@Base 1.8
+ svn_io_wait_for_cmd@Base 1.4
+ svn_io_write_atomic2@Base 1.10
+ svn_io_write_atomic@Base 1.9
+ svn_io_write_unique@Base 1.6
+ svn_io_write_version_file@Base 1.4
+ svn_iter__break@Base 1.5
+ svn_iter_apr_array@Base 1.5
+ svn_iter_apr_hash@Base 1.5
+ svn_location_segment_dup@Base 1.5
+ svn_lock_create@Base 1.4
+ svn_lock_dup@Base 1.4
+ svn_log__change_rev_prop@Base 0 1
+ svn_log__checkout@Base 0 1
+ svn_log__commit@Base 0 1
+ svn_log__diff@Base 0 1
+ svn_log__get_dir@Base 0 1
+ svn_log__get_file@Base 0 1
+ svn_log__get_file_revs@Base 0 1
+ svn_log__get_inherited_props@Base 0 1
+ svn_log__get_location_segments@Base 0 1
+ svn_log__get_locations@Base 0 1
+ svn_log__get_mergeinfo@Base 0 1
+ svn_log__list@Base 0 1
+ svn_log__lock@Base 0 1
+ svn_log__lock_one_path@Base 0 1
+ svn_log__log@Base 0 1
+ svn_log__reparent@Base 0 1
+ svn_log__replay@Base 0 1
+ svn_log__rev_prop@Base 0 1
+ svn_log__rev_proplist@Base 0 1
+ svn_log__status@Base 0 1
+ svn_log__switch@Base 0 1
+ svn_log__unlock@Base 0 1
+ svn_log__unlock_one_path@Base 0 1
+ svn_log__update@Base 0 1
+ svn_log_changed_path2_create@Base 1.6
+ svn_log_changed_path2_dup@Base 1.6
+ svn_log_changed_path_dup@Base 1.4
+ svn_log_entry_create@Base 1.5
+ svn_log_entry_dup@Base 1.6
+ svn_lz4__compiled_version@Base 0 1
+ svn_lz4__runtime_version@Base 0 1
+ svn_magic__detect_binary_mimetype@Base 0 1
+ svn_magic__init@Base 0 1
+ svn_md5_digest_to_cstring@Base 1.4
+ svn_md5_digest_to_cstring_display@Base 1.4
+ svn_md5_digests_match@Base 1.4
+ svn_md5_empty_string_digest@Base 1.4
+ svn_membuf__create@Base 0 1
+ svn_membuf__ensure@Base 0 1
+ svn_membuf__nzero@Base 0 1
+ svn_membuf__resize@Base 0 1
+ svn_membuf__zero@Base 0 1
+ svn_merge_range_contains_rev@Base 1.5
+ svn_merge_range_dup@Base 1.5
+ svn_mergeinfo__add_prefix_to_catalog@Base 0 1
+ svn_mergeinfo__add_suffix_to_mergeinfo@Base 0 1
+ svn_mergeinfo__adjust_mergeinfo_rangelists@Base 0 1
+ svn_mergeinfo__canonicalize_ranges@Base 0 1
+ svn_mergeinfo__catalog_to_formatted_string@Base 0 1
+ svn_mergeinfo__equals@Base 0 1
+ svn_mergeinfo__filter_catalog_by_ranges@Base 0 1
+ svn_mergeinfo__filter_mergeinfo_by_ranges@Base 0 1
+ svn_mergeinfo__get_range_endpoints@Base 0 1
+ svn_mergeinfo__is_noninheritable@Base 0 1
+ svn_mergeinfo__mergeinfo_from_segments@Base 0 1
+ svn_mergeinfo__remove_empty_rangelists@Base 0 1
+ svn_mergeinfo__remove_prefix_from_catalog@Base 0 1
+ svn_mergeinfo__set_inheritance@Base 0 1
+ svn_mergeinfo_catalog_dup@Base 1.6
+ svn_mergeinfo_catalog_merge@Base 1.7
+ svn_mergeinfo_diff2@Base 1.8
+ svn_mergeinfo_diff@Base 1.5
+ svn_mergeinfo_dup@Base 1.5
+ svn_mergeinfo_inheritable2@Base 1.7
+ svn_mergeinfo_inheritable@Base 1.5
+ svn_mergeinfo_intersect2@Base 1.7
+ svn_mergeinfo_intersect@Base 1.5
+ svn_mergeinfo_merge2@Base 1.8
+ svn_mergeinfo_merge@Base 1.5
+ svn_mergeinfo_parse@Base 1.5
+ svn_mergeinfo_remove2@Base 1.7
+ svn_mergeinfo_remove@Base 1.5
+ svn_mergeinfo_sort@Base 1.5
+ svn_mergeinfo_to_string@Base 1.5
+ svn_mime_type_is_binary@Base 1.4
+ svn_mime_type_validate@Base 1.4
+ svn_mutex__get@Base 0 1
+ svn_mutex__init@Base 0 1
+ svn_mutex__lock@Base 0 1
+ svn_mutex__unlock@Base 0 1
+ svn_nls_init@Base 1.4
+ svn_node_kind_from_word@Base 1.6
+ svn_node_kind_to_word@Base 1.6
+ svn_object_pool__create@Base 0 1
+ svn_object_pool__insert@Base 0 1
+ svn_object_pool__lookup@Base 0 1
+ svn_object_pool__new_item_pool@Base 0 1
+ svn_opt__arg_canonicalize_path@Base 0 1
+ svn_opt__arg_canonicalize_url@Base 0 1
+ svn_opt__args_to_target_array@Base 0 1
+ svn_opt__print_version_info@Base 0 1
+ svn_opt__revision_range_create@Base 0 1
+ svn_opt__revision_range_from_revnums@Base 0 1
+ svn_opt__revision_to_string@Base 0 1
+ svn_opt__split_arg_at_peg_revision@Base 0 1
+ svn_opt_args_to_target_array2@Base 1.4
+ svn_opt_args_to_target_array3@Base 1.5
+ svn_opt_args_to_target_array@Base 1.4
+ svn_opt_format_option@Base 1.4
+ svn_opt_get_canonical_subcommand2@Base 1.4
+ svn_opt_get_canonical_subcommand3@Base 1.11
+ svn_opt_get_canonical_subcommand@Base 1.4
+ svn_opt_get_option_from_code2@Base 1.4
+ svn_opt_get_option_from_code3@Base 1.11
+ svn_opt_get_option_from_code@Base 1.4
+ svn_opt_parse_all_args@Base 1.4
+ svn_opt_parse_num_args@Base 1.4
+ svn_opt_parse_path@Base 1.4
+ svn_opt_parse_revision@Base 1.4
+ svn_opt_parse_revision_to_range@Base 1.5
+ svn_opt_parse_revprop@Base 1.6
+ svn_opt_print_generic_help2@Base 1.4
+ svn_opt_print_generic_help3@Base 1.11
+ svn_opt_print_generic_help@Base 1.4
+ svn_opt_print_help2@Base 1.4
+ svn_opt_print_help3@Base 1.5
+ svn_opt_print_help4@Base 1.8
+ svn_opt_print_help5@Base 1.11
+ svn_opt_print_help@Base 1.4
+ svn_opt_push_implicit_dot_target@Base 1.4
+ svn_opt_resolve_revisions@Base 1.5
+ svn_opt_subcommand_help2@Base 1.4
+ svn_opt_subcommand_help3@Base 1.5
+ svn_opt_subcommand_help4@Base 1.11
+ svn_opt_subcommand_help@Base 1.4
+ svn_opt_subcommand_takes_option2@Base 1.4
+ svn_opt_subcommand_takes_option3@Base 1.5
+ svn_opt_subcommand_takes_option4@Base 1.11
+ svn_opt_subcommand_takes_option@Base 1.4
+ svn_packed__add_bytes@Base 0 1
+ svn_packed__add_int@Base 0 1
+ svn_packed__add_uint@Base 0 1
+ svn_packed__byte_block_count@Base 0 1
+ svn_packed__byte_count@Base 0 1
+ svn_packed__create_bytes_stream@Base 0 1
+ svn_packed__create_int_stream@Base 0 1
+ svn_packed__create_int_substream@Base 0 1
+ svn_packed__data_create_root@Base 0 1
+ svn_packed__data_read@Base 0 1
+ svn_packed__data_write@Base 0 1
+ svn_packed__first_byte_stream@Base 0 1
+ svn_packed__first_int_stream@Base 0 1
+ svn_packed__first_int_substream@Base 0 1
+ svn_packed__get_bytes@Base 0 1
+ svn_packed__get_int@Base 0 1
+ svn_packed__get_uint@Base 0 1
+ svn_packed__int_count@Base 0 1
+ svn_packed__next_byte_stream@Base 0 1
+ svn_packed__next_int_stream@Base 0 1
+ svn_parse_date@Base 1.4
+ svn_path_add_component@Base 1.4
+ svn_path_basename@Base 1.4
+ svn_path_canonicalize@Base 1.4
+ svn_path_check_valid@Base 1.4
+ svn_path_compare_paths@Base 1.4
+ svn_path_component_count@Base 1.4
+ svn_path_compose@Base 1.5
+ svn_path_condense_targets@Base 1.4
+ svn_path_cstring_from_utf8@Base 1.4
+ svn_path_cstring_to_utf8@Base 1.4
+ svn_path_decompose@Base 1.4
+ svn_path_dirname@Base 1.4
+ svn_path_get_absolute@Base 1.4
+ svn_path_get_longest_ancestor@Base 1.4
+ svn_path_illegal_path_escape@Base 1.8
+ svn_path_internal_style@Base 1.4
+ svn_path_is_ancestor@Base 1.4
+ svn_path_is_backpath_present@Base 1.4
+ svn_path_is_canonical@Base 1.5
+ svn_path_is_child@Base 1.4
+ svn_path_is_dotpath_present@Base 1.6
+ svn_path_is_empty@Base 1.4
+ svn_path_is_repos_relative_url@Base 1.8
+ svn_path_is_single_path_component@Base 1.4
+ svn_path_is_uri_safe@Base 1.4
+ svn_path_is_url@Base 1.4
+ svn_path_join@Base 1.4
+ svn_path_join_many@Base 1.4
+ svn_path_local_style@Base 1.4
+ svn_path_remove_component@Base 1.4
+ svn_path_remove_components@Base 1.4
+ svn_path_remove_redundancies@Base 1.4
+ svn_path_resolve_repos_relative_url@Base 1.8
+ svn_path_split@Base 1.4
+ svn_path_split_if_file@Base 1.4
+ svn_path_splitext@Base 1.5
+ svn_path_uri_autoescape@Base 1.4
+ svn_path_uri_decode@Base 1.4
+ svn_path_uri_encode@Base 1.4
+ svn_path_uri_from_iri@Base 1.4
+ svn_path_url_add_component2@Base 1.6
+ svn_path_url_add_component@Base 1.4
+ svn_pool__create_unmanaged@Base 0 1
+ svn_pool_create_allocator@Base 1.8
+ svn_pool_create_ex@Base 1.4
+ svn_pool_create_ex_debug@Base 1.4
+ svn_prefix_string__compare@Base 0 1
+ svn_prefix_string__create@Base 0 1
+ svn_prefix_string__expand@Base 0 1
+ svn_prefix_tree__create@Base 0 1
+ svn_priority_queue__create@Base 0 1
+ svn_priority_queue__peek@Base 0 1
+ svn_priority_queue__pop@Base 0 1
+ svn_priority_queue__push@Base 0 1
+ svn_priority_queue__size@Base 0 1
+ svn_priority_queue__update@Base 0 1
+ svn_prop__patch@Base 0 1
+ svn_prop_array_dup@Base 1.4
+ svn_prop_array_to_hash@Base 1.7
+ svn_prop_diffs@Base 1.4
+ svn_prop_dup@Base 1.4
+ svn_prop_get_value@Base 1.7
+ svn_prop_has_svn_prop@Base 1.5
+ svn_prop_hash_dup@Base 1.6
+ svn_prop_hash_to_array@Base 1.5
+ svn_prop_is_boolean@Base 1.5
+ svn_prop_is_known_svn_dir_prop@Base 1.8
+ svn_prop_is_known_svn_file_prop@Base 1.8
+ svn_prop_is_known_svn_node_prop@Base 1.8
+ svn_prop_is_known_svn_rev_prop@Base 1.8
+ svn_prop_is_svn_prop@Base 1.4
+ svn_prop_name_is_valid@Base 1.5
+ svn_prop_needs_translation@Base 1.4
+ svn_property_kind2@Base 1.8
+ svn_property_kind@Base 1.4
+ svn_quoprint_decode@Base 1.4
+ svn_quoprint_decode_string@Base 1.4
+ svn_quoprint_encode@Base 1.4
+ svn_quoprint_encode_string@Base 1.4
+ svn_rangelist__canonicalize@Base 0 1
+ svn_rangelist__initialize@Base 0 1
+ svn_rangelist__is_canonical@Base 0 1
+ svn_rangelist__merge_many@Base 0 1
+ svn_rangelist__parse@Base 0 1
+ svn_rangelist__set_inheritance@Base 0 1
+ svn_rangelist_diff@Base 1.5
+ svn_rangelist_dup@Base 1.5
+ svn_rangelist_inheritable2@Base 1.7
+ svn_rangelist_inheritable@Base 1.5
+ svn_rangelist_intersect@Base 1.5
+ svn_rangelist_merge2@Base 1.8
+ svn_rangelist_merge@Base 1.5
+ svn_rangelist_remove@Base 1.5
+ svn_rangelist_reverse@Base 1.5
+ svn_rangelist_to_string@Base 1.5
+ svn_relpath__make_internal@Base 0 1
+ svn_relpath_basename@Base 1.7
+ svn_relpath_canonicalize@Base 1.7
+ svn_relpath_canonicalize_safe@Base 1.12
+ svn_relpath_dirname@Base 1.7
+ svn_relpath_get_longest_ancestor@Base 1.7
+ svn_relpath_is_canonical@Base 1.7
+ svn_relpath_join@Base 1.7
+ svn_relpath_prefix@Base 1.9
+ svn_relpath_skip_ancestor@Base 1.7
+ svn_relpath_split@Base 1.7
+ svn_revnum_parse@Base 1.5
+ svn_root_pools__acquire_pool@Base 0 1
+ svn_root_pools__create@Base 0 1
+ svn_root_pools__release_pool@Base 0 1
+ svn_skel__append@Base 0 1
+ svn_skel__dup@Base 0 1
+ svn_skel__list_length@Base 0 1
+ svn_skel__make_empty_list@Base 0 1
+ svn_skel__matches_atom@Base 0 1
+ svn_skel__mem_atom@Base 0 1
+ svn_skel__parse@Base 0 1
+ svn_skel__parse_int@Base 0 1
+ svn_skel__parse_iprops@Base 0 1
+ svn_skel__parse_prop@Base 0 1
+ svn_skel__parse_proplist@Base 0 1
+ svn_skel__prepend@Base 0 1
+ svn_skel__prepend_int@Base 0 1
+ svn_skel__prepend_str@Base 0 1
+ svn_skel__str_atom@Base 0 1
+ svn_skel__unparse@Base 0 1
+ svn_skel__unparse_iproplist@Base 0 1
+ svn_skel__unparse_proplist@Base 0 1
+ svn_sleep_for_timestamps@Base 1.4
+ svn_sort__array@Base 0 1
+ svn_sort__array_delete2@Base 0 1
+ svn_sort__array_insert2@Base 0 1
+ svn_sort__array_lookup@Base 0 1
+ svn_sort__array_reverse@Base 0 1
+ svn_sort__bsearch_lower_bound@Base 0 1
+ svn_sort__hash@Base 1.0
+ svn_sort_compare_items_as_paths@Base 1.4
+ svn_sort_compare_items_lexically@Base 1.4
+ svn_sort_compare_paths@Base 1.4
+ svn_sort_compare_ranges@Base 1.5
+ svn_sort_compare_revisions@Base 1.4
+ svn_spillbuf__create@Base 0 1
+ svn_spillbuf__create_extended@Base 0 1
+ svn_spillbuf__get_file@Base 0 1
+ svn_spillbuf__get_filename@Base 0 1
+ svn_spillbuf__get_memory_size@Base 0 1
+ svn_spillbuf__get_size@Base 0 1
+ svn_spillbuf__process@Base 0 1
+ svn_spillbuf__read@Base 0 1
+ svn_spillbuf__reader_create@Base 0 1
+ svn_spillbuf__reader_getc@Base 0 1
+ svn_spillbuf__reader_read@Base 0 1
+ svn_spillbuf__reader_write@Base 0 1
+ svn_spillbuf__write@Base 0 1
+ svn_sqlite__begin_immediate_transaction@Base 0 1
+ svn_sqlite__begin_savepoint@Base 0 1
+ svn_sqlite__begin_transaction@Base 0 1
+ svn_sqlite__bind_blob@Base 0 1
+ svn_sqlite__bind_checksum@Base 0 1
+ svn_sqlite__bind_int64@Base 0 1
+ svn_sqlite__bind_int@Base 0 1
+ svn_sqlite__bind_iprops@Base 0 1
+ svn_sqlite__bind_properties@Base 0 1
+ svn_sqlite__bind_revnum@Base 0 1
+ svn_sqlite__bind_text@Base 0 1
+ svn_sqlite__bind_token@Base 0 1
+ svn_sqlite__bindf@Base 0 1
+ svn_sqlite__close@Base 0 1
+ svn_sqlite__column_blob@Base 0 1
+ svn_sqlite__column_boolean@Base 0 1
+ svn_sqlite__column_bytes@Base 0 1
+ svn_sqlite__column_checksum@Base 0 1
+ svn_sqlite__column_int64@Base 0 1
+ svn_sqlite__column_int@Base 0 1
+ svn_sqlite__column_iprops@Base 0 1
+ svn_sqlite__column_is_null@Base 0 1
+ svn_sqlite__column_properties@Base 0 1
+ svn_sqlite__column_revnum@Base 0 1
+ svn_sqlite__column_text@Base 0 1
+ svn_sqlite__column_token@Base 0 1
+ svn_sqlite__column_token_null@Base 0 1
+ svn_sqlite__compiled_version@Base 0 1
+ svn_sqlite__create_scalar_function@Base 0 1
+ svn_sqlite__dbg_enable_errorlog@Base 0 1
+ svn_sqlite__exec_statements@Base 0 1
+ svn_sqlite__finalize@Base 0 1
+ svn_sqlite__finish_savepoint@Base 0 1
+ svn_sqlite__finish_transaction@Base 0 1
+ svn_sqlite__get_statement@Base 0 1
+ svn_sqlite__hotcopy@Base 0 1
+ svn_sqlite__insert@Base 0 1
+ svn_sqlite__open@Base 0 1
+ svn_sqlite__read_schema_version@Base 0 1
+ svn_sqlite__reset@Base 0 1
+ svn_sqlite__result_error@Base 0 1
+ svn_sqlite__result_int64@Base 0 1
+ svn_sqlite__result_null@Base 0 1
+ svn_sqlite__runtime_version@Base 0 1
+ svn_sqlite__step@Base 0 1
+ svn_sqlite__step_done@Base 0 1
+ svn_sqlite__step_row@Base 0 1
+ svn_sqlite__update@Base 0 1
+ svn_sqlite__value_text@Base 0 1
+ svn_sqlite__value_type@Base 0 1
+ svn_sqlite__with_immediate_transaction@Base 0 1
+ svn_sqlite__with_lock@Base 0 1
+ svn_sqlite__with_transaction@Base 0 1
+ svn_stream__aprfile@Base 0 1
+ svn_stream__create_for_install@Base 0 1
+ svn_stream__from_aprfile@Base 0 1
+ svn_stream__from_spillbuf@Base 0 1
+ svn_stream__install_delete@Base 0 1
+ svn_stream__install_get_info@Base 0 1
+ svn_stream__install_stream@Base 0 1
+ svn_stream_buffered@Base 1.8
+ svn_stream_checksummed2@Base 1.6
+ svn_stream_checksummed@Base 1.4
+ svn_stream_close@Base 1.4
+ svn_stream_compressed@Base 1.4
+ svn_stream_contents_checksum@Base 1.10
+ svn_stream_contents_same2@Base 1.7
+ svn_stream_contents_same@Base 1.4
+ svn_stream_copy2@Base 1.5
+ svn_stream_copy3@Base 1.6
+ svn_stream_copy@Base 1.4
+ svn_stream_create@Base 1.4
+ svn_stream_data_available@Base 1.9
+ svn_stream_disown@Base 1.4
+ svn_stream_empty@Base 1.4
+ svn_stream_for_stderr@Base 1.7
+ svn_stream_for_stdin2@Base 1.10
+ svn_stream_for_stdin@Base 1.7
+ svn_stream_for_stdout@Base 1.4
+ svn_stream_from_aprfile2@Base 1.4
+ svn_stream_from_aprfile@Base 1.4
+ svn_stream_from_string@Base 1.6
+ svn_stream_from_stringbuf@Base 1.4
+ svn_stream_lazyopen_create@Base 1.8
+ svn_stream_mark@Base 1.7
+ svn_stream_open_readonly@Base 1.6
+ svn_stream_open_unique@Base 1.6
+ svn_stream_open_writable@Base 1.6
+ svn_stream_printf@Base 1.4
+ svn_stream_printf_from_utf8@Base 1.4
+ svn_stream_puts@Base 1.8
+ svn_stream_read2@Base 1.9
+ svn_stream_read@Base 1.4
+ svn_stream_read_full@Base 1.9
+ svn_stream_readline@Base 1.4
+ svn_stream_reset@Base 1.7
+ svn_stream_seek@Base 1.7
+ svn_stream_set_baton@Base 1.4
+ svn_stream_set_close@Base 1.4
+ svn_stream_set_data_available@Base 1.9
+ svn_stream_set_mark@Base 1.7
+ svn_stream_set_read2@Base 1.9
+ svn_stream_set_read@Base 1.4
+ svn_stream_set_readline@Base 1.10
+ svn_stream_set_seek@Base 1.7
+ svn_stream_set_skip@Base 1.7
+ svn_stream_set_write@Base 1.4
+ svn_stream_skip@Base 1.7
+ svn_stream_supports_mark@Base 1.7
+ svn_stream_supports_partial_read@Base 1.9
+ svn_stream_supports_reset@Base 1.10
+ svn_stream_tee@Base 1.7
+ svn_stream_write@Base 1.4
+ svn_strerror@Base 1.4
+ svn_string__similarity@Base 0 1
+ svn_string_compare@Base 1.4
+ svn_string_compare_stringbuf@Base 1.4
+ svn_string_create@Base 1.4
+ svn_string_create_empty@Base 1.8
+ svn_string_create_from_buf@Base 1.4
+ svn_string_createf@Base 1.4
+ svn_string_createv@Base 1.4
+ svn_string_dup@Base 1.4
+ svn_string_find_char_backward@Base 1.4
+ svn_string_first_non_whitespace@Base 1.4
+ svn_string_from_stream2@Base 1.10
+ svn_string_from_stream@Base 1.6
+ svn_string_isempty@Base 1.4
+ svn_string_ncreate@Base 1.4
+ svn_stringbuf__morph_into_string@Base 0 1
+ svn_stringbuf_appendbyte@Base 1.7
+ svn_stringbuf_appendbytes@Base 1.4
+ svn_stringbuf_appendcstr@Base 1.4
+ svn_stringbuf_appendfill@Base 1.9
+ svn_stringbuf_appendstr@Base 1.4
+ svn_stringbuf_chop@Base 1.4
+ svn_stringbuf_compare@Base 1.4
+ svn_stringbuf_create@Base 1.4
+ svn_stringbuf_create_empty@Base 1.8
+ svn_stringbuf_create_ensure@Base 1.6
+ svn_stringbuf_create_from_string@Base 1.4
+ svn_stringbuf_create_wrap@Base 1.9
+ svn_stringbuf_createf@Base 1.4
+ svn_stringbuf_createv@Base 1.4
+ svn_stringbuf_dup@Base 1.4
+ svn_stringbuf_ensure@Base 1.4
+ svn_stringbuf_fillchar@Base 1.4
+ svn_stringbuf_find_char_backward@Base 1.4
+ svn_stringbuf_first_non_whitespace@Base 1.4
+ svn_stringbuf_from_aprfile@Base 1.4
+ svn_stringbuf_from_file2@Base 1.5
+ svn_stringbuf_from_file@Base 1.4
+ svn_stringbuf_from_stream@Base 1.9
+ svn_stringbuf_insert@Base 1.8
+ svn_stringbuf_isempty@Base 1.4
+ svn_stringbuf_leftchop@Base 1.10
+ svn_stringbuf_ncreate@Base 1.4
+ svn_stringbuf_remove@Base 1.8
+ svn_stringbuf_replace@Base 1.8
+ svn_stringbuf_replace_all@Base 1.10
+ svn_stringbuf_set@Base 1.4
+ svn_stringbuf_setempty@Base 1.4
+ svn_stringbuf_strip_whitespace@Base 1.4
+ svn_subr_version@Base 1.4
+ svn_subst_build_keywords2@Base 1.4
+ svn_subst_build_keywords3@Base 1.8
+ svn_subst_build_keywords@Base 1.4
+ svn_subst_copy_and_translate2@Base 1.4
+ svn_subst_copy_and_translate3@Base 1.4
+ svn_subst_copy_and_translate4@Base 1.7
+ svn_subst_copy_and_translate@Base 1.4
+ svn_subst_create_specialfile@Base 1.6
+ svn_subst_detranslate_string@Base 1.4
+ svn_subst_eol_style_from_value@Base 1.4
+ svn_subst_keywords_differ2@Base 1.4
+ svn_subst_keywords_differ@Base 1.4
+ svn_subst_read_specialfile@Base 1.6
+ svn_subst_stream_detranslated@Base 1.4
+ svn_subst_stream_from_specialfile@Base 1.5
+ svn_subst_stream_translated@Base 1.4
+ svn_subst_stream_translated_to_normal_form@Base 1.5
+ svn_subst_translate_cstring2@Base 1.4
+ svn_subst_translate_cstring@Base 1.4
+ svn_subst_translate_stream2@Base 1.4
+ svn_subst_translate_stream3@Base 1.4
+ svn_subst_translate_stream@Base 1.4
+ svn_subst_translate_string2@Base 1.7
+ svn_subst_translate_string@Base 1.4
+ svn_subst_translate_to_normal_form@Base 1.4
+ svn_subst_translation_required@Base 1.4
+ svn_sysinfo__canonical_host@Base 0 1
+ svn_sysinfo__linked_libs@Base 0 1
+ svn_sysinfo__loaded_libs@Base 0 1
+ svn_sysinfo__release_name@Base 0 1
+ svn_temp_deserializer__ptr@Base 0 1
+ svn_temp_deserializer__resolve@Base 0 1
+ svn_temp_serializer__add_leaf@Base 0 1
+ svn_temp_serializer__add_string@Base 0 1
+ svn_temp_serializer__get@Base 0 1
+ svn_temp_serializer__get_length@Base 0 1
+ svn_temp_serializer__init@Base 0 1
+ svn_temp_serializer__init_append@Base 0 1
+ svn_temp_serializer__pop@Base 0 1
+ svn_temp_serializer__push@Base 0 1
+ svn_temp_serializer__set_null@Base 0 1
+ svn_time_from_cstring@Base 1.4
+ svn_time_to_cstring@Base 1.4
+ svn_time_to_human_cstring@Base 1.4
+ svn_token__from_mem@Base 0 1
+ svn_token__from_word@Base 0 1
+ svn_token__from_word_err@Base 0 1
+ svn_token__from_word_strict@Base 0 1
+ svn_token__to_word@Base 0 1
+ svn_tristate__from_word@Base 0 1
+ svn_tristate__to_word@Base 0 1
+ svn_uri__char_validity@Base 0 1
+ svn_uri__is_ancestor@Base 0 1
+ svn_uri_basename@Base 1.7
+ svn_uri_canonicalize@Base 1.6
+ svn_uri_canonicalize_safe@Base 1.12
+ svn_uri_condense_targets@Base 1.7
+ svn_uri_dirname@Base 1.6
+ svn_uri_get_dirent_from_file_url@Base 1.7
+ svn_uri_get_file_url_from_dirent@Base 1.7
+ svn_uri_get_longest_ancestor@Base 1.6
+ svn_uri_is_canonical@Base 1.6
+ svn_uri_is_root@Base 1.6
+ svn_uri_skip_ancestor@Base 1.7
+ svn_uri_split@Base 1.7
+ svn_urlpath__canonicalize@Base 0 1
+ svn_user_get_homedir@Base 1.4
+ svn_user_get_name@Base 1.4
+ svn_utf__cstring_from_utf8_fuzzy@Base 0 1
+ svn_utf__cstring_is_valid@Base 0 1
+ svn_utf__encode_ucs4_string@Base 0 1
+ svn_utf__fuzzy_escape@Base 0 1
+ svn_utf__fuzzy_glob_match@Base 0 1
+ svn_utf__glob@Base 0 1
+ svn_utf__is_normalized@Base 0 1
+ svn_utf__is_valid@Base 0 1
+ svn_utf__last_valid2@Base 0 1
+ svn_utf__last_valid@Base 0 1
+ svn_utf__normalize@Base 0 1
+ svn_utf__normcmp@Base 0 1
+ svn_utf__utf16_to_utf8@Base 0 1
+ svn_utf__utf32_to_utf8@Base 0 1
+ svn_utf__utf8proc_compiled_version@Base 0 1
+ svn_utf__utf8proc_runtime_version@Base 0 1
+ svn_utf__xfrm@Base 0 1
+ svn_utf_cstring_from_utf8@Base 1.4
+ svn_utf_cstring_from_utf8_ex2@Base 1.4
+ svn_utf_cstring_from_utf8_ex@Base 1.4
+ svn_utf_cstring_from_utf8_fuzzy@Base 1.4
+ svn_utf_cstring_from_utf8_string@Base 1.4
+ svn_utf_cstring_from_utf8_stringbuf@Base 1.4
+ svn_utf_cstring_to_utf8@Base 1.4
+ svn_utf_cstring_to_utf8_ex2@Base 1.4
+ svn_utf_cstring_to_utf8_ex@Base 1.4
+ svn_utf_cstring_utf8_width@Base 1.8
+ svn_utf_initialize2@Base 1.8
+ svn_utf_initialize@Base 1.4
+ svn_utf_string_from_utf8@Base 1.4
+ svn_utf_string_to_utf8@Base 1.4
+ svn_utf_stringbuf_from_utf8@Base 1.4
+ svn_utf_stringbuf_to_utf8@Base 1.4
+ svn_uuid_generate@Base 1.4
+ svn_ver_check_list2@Base 1.9
+ svn_ver_check_list@Base 1.4
+ svn_ver_compatible@Base 1.4
+ svn_ver_equal@Base 1.4
+ svn_version__at_least@Base 0 1
+ svn_version__parse_version_string@Base 0 1
+ svn_version_ext_build_date@Base 1.8
+ svn_version_ext_build_host@Base 1.8
+ svn_version_ext_build_time@Base 1.8
+ svn_version_ext_copyright@Base 1.8
+ svn_version_ext_linked_libs@Base 1.8
+ svn_version_ext_loaded_libs@Base 1.8
+ svn_version_ext_runtime_host@Base 1.8
+ svn_version_ext_runtime_osname@Base 1.8
+ svn_version_extended@Base 1.8
+ svn_x509_certinfo_dup@Base 1.9
+ svn_x509_certinfo_get_digest@Base 1.9
+ svn_x509_certinfo_get_hostnames@Base 1.9
+ svn_x509_certinfo_get_issuer@Base 1.9
+ svn_x509_certinfo_get_issuer_attrs@Base 1.9
+ svn_x509_certinfo_get_subject@Base 1.9
+ svn_x509_certinfo_get_subject_attrs@Base 1.9
+ svn_x509_certinfo_get_valid_from@Base 1.9
+ svn_x509_certinfo_get_valid_to@Base 1.9
+ svn_x509_name_attr_dup@Base 1.9
+ svn_x509_name_attr_get_oid@Base 1.9
+ svn_x509_name_attr_get_value@Base 1.9
+ svn_x509_oid_to_string@Base 1.9
+ svn_x509_parse_cert@Base 1.9
+ svn_xml__compiled_version@Base 0 1
+ svn_xml__runtime_version@Base 0 1
+ svn_xml_ap_to_hash@Base 1.4
+ svn_xml_escape_attr_cstring@Base 1.4
+ svn_xml_escape_attr_string@Base 1.4
+ svn_xml_escape_attr_stringbuf@Base 1.4
+ svn_xml_escape_cdata_cstring@Base 1.4
+ svn_xml_escape_cdata_string@Base 1.4
+ svn_xml_escape_cdata_stringbuf@Base 1.4
+ svn_xml_free_parser@Base 1.4
+ svn_xml_fuzzy_escape@Base 1.4
+ svn_xml_get_attr_value@Base 1.4
+ svn_xml_hash_atts_overlaying@Base 1.4
+ svn_xml_hash_atts_preserving@Base 1.4
+ svn_xml_is_xml_safe@Base 1.4
+ svn_xml_make_att_hash@Base 1.4
+ svn_xml_make_close_tag@Base 1.4
+ svn_xml_make_header2@Base 1.7
+ svn_xml_make_header@Base 1.4
+ svn_xml_make_open_tag@Base 1.4
+ svn_xml_make_open_tag_hash@Base 1.4
+ svn_xml_make_open_tag_v@Base 1.4
+ svn_xml_make_parser@Base 1.4
+ svn_xml_parse@Base 1.4
+ svn_xml_signal_bailout@Base 1.4
+ svn_zlib__compiled_version@Base 0 1
+ svn_zlib__runtime_version@Base 0 1
+libsvn_wc-1.so.1 libsvn1 #MINVER#
+| libsvn-private
+* Build-Depends-Package: libsvn-dev
+ svn_wc__acquire_write_lock@Base 0 1
+ svn_wc__acquire_write_lock_for_resolve@Base 0 1
+ svn_wc__add_tree_conflict@Base 0 1
+ svn_wc__adm_access_abspath@Base 0 1
+ svn_wc__adm_access_entries@Base 0 1
+ svn_wc__adm_access_pool_internal@Base 0 1
+ svn_wc__adm_access_set_entries@Base 0 1
+ svn_wc__adm_area_exists@Base 0 1
+ svn_wc__adm_child@Base 0 1
+ svn_wc__adm_cleanup_tmp_area@Base 0 1
+ svn_wc__adm_destroy@Base 0 1
+ svn_wc__adm_get_db@Base 0 1
+ svn_wc__adm_retrieve_internal2@Base 0 1
+ svn_wc__ambient_depth_filter_editor@Base 0 1
+ svn_wc__call_with_write_lock@Base 0 1
+ svn_wc__canonicalize_props@Base 0 1
+ svn_wc__cd2_to_cd@Base 0 1
+ svn_wc__changelist_filter_tree_processor_create@Base 0 1
+ svn_wc__changelist_match@Base 0 1
+ svn_wc__check_for_obstructions@Base 0 1
+ svn_wc__close_db@Base 0 1
+ svn_wc__committable_externals_below@Base 0 1
+ svn_wc__complete_directory_add@Base 0 1
+ svn_wc__conflict_action_map@Base 0 1
+ svn_wc__conflict_create_markers@Base 0 1
+ svn_wc__conflict_description2_dup@Base 0 1
+ svn_wc__conflict_invoke_resolver@Base 0 1
+ svn_wc__conflict_prop_mark_resolved@Base 0 1
+ svn_wc__conflict_read_info@Base 0 1
+ svn_wc__conflict_read_markers@Base 0 1
+ svn_wc__conflict_read_prop_conflict@Base 0 1
+ svn_wc__conflict_read_text_conflict@Base 0 1
+ svn_wc__conflict_read_tree_conflict@Base 0 1
+ svn_wc__conflict_reason_map@Base 0 1
+ svn_wc__conflict_skel_add_prop_conflict@Base 0 1
+ svn_wc__conflict_skel_add_text_conflict@Base 0 1
+ svn_wc__conflict_skel_add_tree_conflict@Base 0 1
+ svn_wc__conflict_skel_create@Base 0 1
+ svn_wc__conflict_skel_is_complete@Base 0 1
+ svn_wc__conflict_skel_resolve@Base 0 1
+ svn_wc__conflict_skel_set_op_merge@Base 0 1
+ svn_wc__conflict_skel_set_op_switch@Base 0 1
+ svn_wc__conflict_skel_set_op_update@Base 0 1
+ svn_wc__conflict_text_mark_resolved@Base 0 1
+ svn_wc__conflict_tree_update_break_moved_away@Base 0 1
+ svn_wc__conflict_tree_update_incoming_move@Base 0 1
+ svn_wc__conflict_tree_update_local_add@Base 0 1
+ svn_wc__conflict_tree_update_moved_away_node@Base 0 1
+ svn_wc__conflict_tree_update_raise_moved_away@Base 0 1
+ svn_wc__conflicted_for_update_p@Base 0 1
+ svn_wc__context_create_with_db@Base 0 1
+ svn_wc__crawl_file_external@Base 0 1
+ svn_wc__create_prejfile@Base 0 1
+ svn_wc__db_base_add_directory@Base 0 1
+ svn_wc__db_base_add_excluded_node@Base 0 1
+ svn_wc__db_base_add_file@Base 0 1
+ svn_wc__db_base_add_incomplete_directory@Base 0 1
+ svn_wc__db_base_add_not_present_node@Base 0 1
+ svn_wc__db_base_add_symlink@Base 0 1
+ svn_wc__db_base_clear_dav_cache_recursive@Base 0 1
+ svn_wc__db_base_get_children@Base 0 1
+ svn_wc__db_base_get_children_info@Base 0 1
+ svn_wc__db_base_get_dav_cache@Base 0 1
+ svn_wc__db_base_get_info@Base 0 1
+ svn_wc__db_base_get_info_internal@Base 0 1
+ svn_wc__db_base_get_lock_tokens_recursive@Base 0 1
+ svn_wc__db_base_get_props@Base 0 1
+ svn_wc__db_base_moved_to@Base 0 1
+ svn_wc__db_base_read_not_present_children@Base 0 1
+ svn_wc__db_base_remove@Base 0 1
+ svn_wc__db_base_set_dav_cache@Base 0 1
+ svn_wc__db_bump_format@Base 0 1
+ svn_wc__db_bump_moved_away@Base 0 1
+ svn_wc__db_close@Base 0 1
+ svn_wc__db_close_many_wcroots@Base 0 1
+ svn_wc__db_commit_queue_add@Base 0 1
+ svn_wc__db_committable_externals_below@Base 0 1
+ svn_wc__db_create_commit_queue@Base 0 1
+ svn_wc__db_depth_get_info@Base 0 1
+ svn_wc__db_drop_root@Base 0 1
+ svn_wc__db_external_add_dir@Base 0 1
+ svn_wc__db_external_add_file@Base 0 1
+ svn_wc__db_external_add_symlink@Base 0 1
+ svn_wc__db_external_read@Base 0 1
+ svn_wc__db_external_remove@Base 0 1
+ svn_wc__db_externals_defined_below@Base 0 1
+ svn_wc__db_externals_gather_definitions@Base 0 1
+ svn_wc__db_fetch_repos_info@Base 0 1
+ svn_wc__db_find_copies_of_repos_path@Base 0 1
+ svn_wc__db_find_repos_node_in_wc@Base 0 1
+ svn_wc__db_find_working_nodes_with_basename@Base 0 1
+ svn_wc__db_follow_moved_to@Base 0 1
+ svn_wc__db_from_relpath@Base 0 1
+ svn_wc__db_get_children_with_cached_iprops@Base 0 1
+ svn_wc__db_get_conflict_marker_files@Base 0 1
+ svn_wc__db_get_excluded_subtrees@Base 0 1
+ svn_wc__db_get_not_present_descendants@Base 0 1
+ svn_wc__db_get_wcroot@Base 0 1
+ svn_wc__db_global_commit@Base 0 1
+ svn_wc__db_global_record_fileinfo@Base 0 1
+ svn_wc__db_global_relocate@Base 0 1
+ svn_wc__db_global_update@Base 0 1
+ svn_wc__db_has_db_mods@Base 0 1
+ svn_wc__db_has_switched_subtrees@Base 0 1
+ svn_wc__db_info_below_working@Base 0 1
+ svn_wc__db_init@Base 0 1
+ svn_wc__db_install_schema_statistics@Base 0 1
+ svn_wc__db_is_switched@Base 0 1
+ svn_wc__db_is_wcroot@Base 0 1
+ svn_wc__db_lock_add@Base 0 1
+ svn_wc__db_lock_remove@Base 0 1
+ svn_wc__db_mark_conflict_internal@Base 0 1
+ svn_wc__db_min_max_revisions@Base 0 1
+ svn_wc__db_node_check_replace@Base 0 1
+ svn_wc__db_op_add_directory@Base 0 1
+ svn_wc__db_op_add_file@Base 0 1
+ svn_wc__db_op_add_symlink@Base 0 1
+ svn_wc__db_op_break_move_internal@Base 0 1
+ svn_wc__db_op_break_moved_away@Base 0 1
+ svn_wc__db_op_bump_revisions_post_update@Base 0 1
+ svn_wc__db_op_copy@Base 0 1
+ svn_wc__db_op_copy_dir@Base 0 1
+ svn_wc__db_op_copy_file@Base 0 1
+ svn_wc__db_op_copy_layer_internal@Base 0 1
+ svn_wc__db_op_copy_shadowed_layer@Base 0 1
+ svn_wc__db_op_copy_symlink@Base 0 1
+ svn_wc__db_op_delete@Base 0 1
+ svn_wc__db_op_delete_many@Base 0 1
+ svn_wc__db_op_depth_for_upgrade@Base 0 1
+ svn_wc__db_op_handle_move_back@Base 0 1
+ svn_wc__db_op_make_copy@Base 0 1
+ svn_wc__db_op_make_copy_internal@Base 0 1
+ svn_wc__db_op_mark_conflict@Base 0 1
+ svn_wc__db_op_mark_resolved@Base 0 1
+ svn_wc__db_op_mark_resolved_internal@Base 0 1
+ svn_wc__db_op_modified@Base 0 1
+ svn_wc__db_op_raise_moved_away@Base 0 1
+ svn_wc__db_op_raise_moved_away_internal@Base 0 1
+ svn_wc__db_op_remove_node@Base 0 1
+ svn_wc__db_op_revert@Base 0 1
+ svn_wc__db_op_set_base_depth@Base 0 1
+ svn_wc__db_op_set_changelist@Base 0 1
+ svn_wc__db_op_set_props@Base 0 1
+ svn_wc__db_op_set_props_internal@Base 0 1
+ svn_wc__db_open@Base 0 1
+ svn_wc__db_pdh_create_wcroot@Base 0 1
+ svn_wc__db_pristine_check@Base 0 1
+ svn_wc__db_pristine_cleanup@Base 0 1
+ svn_wc__db_pristine_get_future_path@Base 0 1
+ svn_wc__db_pristine_get_md5@Base 0 1
+ svn_wc__db_pristine_get_path@Base 0 1
+ svn_wc__db_pristine_get_sha1@Base 0 1
+ svn_wc__db_pristine_install@Base 0 1
+ svn_wc__db_pristine_install_abort@Base 0 1
+ svn_wc__db_pristine_prepare_install@Base 0 1
+ svn_wc__db_pristine_read@Base 0 1
+ svn_wc__db_pristine_remove@Base 0 1
+ svn_wc__db_pristine_transfer@Base 0 1
+ svn_wc__db_process_commit_queue@Base 0 1
+ svn_wc__db_prop_retrieve_recursive@Base 0 1
+ svn_wc__db_read_children@Base 0 1
+ svn_wc__db_read_children_info@Base 0 1
+ svn_wc__db_read_children_of_working_node@Base 0 1
+ svn_wc__db_read_children_walker_info@Base 0 1
+ svn_wc__db_read_conflict@Base 0 1
+ svn_wc__db_read_conflict_internal@Base 0 1
+ svn_wc__db_read_conflict_victims@Base 0 1
+ svn_wc__db_read_info@Base 0 1
+ svn_wc__db_read_info_internal@Base 0 1
+ svn_wc__db_read_inherited_props@Base 0 1
+ svn_wc__db_read_kind@Base 0 1
+ svn_wc__db_read_node_install_info@Base 0 1
+ svn_wc__db_read_pristine_info@Base 0 1
+ svn_wc__db_read_pristine_props@Base 0 1
+ svn_wc__db_read_props@Base 0 1
+ svn_wc__db_read_props_internal@Base 0 1
+ svn_wc__db_read_props_streamily@Base 0 1
+ svn_wc__db_read_repos_info@Base 0 1
+ svn_wc__db_read_single_info@Base 0 1
+ svn_wc__db_revert_list_done@Base 0 1
+ svn_wc__db_revert_list_notify@Base 0 1
+ svn_wc__db_revert_list_read@Base 0 1
+ svn_wc__db_revert_list_read_copied_children@Base 0 1
+ svn_wc__db_revision_status@Base 0 1
+ svn_wc__db_scan_addition@Base 0 1
+ svn_wc__db_scan_addition_internal@Base 0 1
+ svn_wc__db_scan_deletion@Base 0 1
+ svn_wc__db_scan_deletion_internal@Base 0 1
+ svn_wc__db_scan_moved@Base 0 1
+ svn_wc__db_scan_moved_to_internal@Base 0 1
+ svn_wc__db_temp_borrow_sdb@Base 0 1
+ svn_wc__db_temp_clear_access@Base 0 1
+ svn_wc__db_temp_close_access@Base 0 1
+ svn_wc__db_temp_get_access@Base 0 1
+ svn_wc__db_temp_get_all_access@Base 0 1
+ svn_wc__db_temp_get_format@Base 0 1
+ svn_wc__db_temp_op_end_directory_update@Base 0 1
+ svn_wc__db_temp_op_start_directory_update@Base 0 1
+ svn_wc__db_temp_set_access@Base 0 1
+ svn_wc__db_temp_wcroot_tempdir@Base 0 1
+ svn_wc__db_to_relpath@Base 0 1
+ svn_wc__db_update_incoming_move@Base 0 1
+ svn_wc__db_update_local_add@Base 0 1
+ svn_wc__db_update_move_list_notify@Base 0 1
+ svn_wc__db_update_moved_away_conflict_victim@Base 0 1
+ svn_wc__db_upgrade_begin@Base 0 1
+ svn_wc__db_upgrade_insert_external@Base 0 1
+ svn_wc__db_util_fetch_wc_id@Base 0 1
+ svn_wc__db_util_open_db@Base 0 1
+ svn_wc__db_vacuum@Base 0 1
+ svn_wc__db_verify@Base 0 1
+ svn_wc__db_verify_db_full@Base 0 1
+ svn_wc__db_verify_db_full_internal@Base 0 1
+ svn_wc__db_verify_no_work@Base 0 1
+ svn_wc__db_wclock_find_root@Base 0 1
+ svn_wc__db_wclock_obtain@Base 0 1
+ svn_wc__db_wclock_owns_lock@Base 0 1
+ svn_wc__db_wclock_owns_lock_internal@Base 0 1
+ svn_wc__db_wclock_release@Base 0 1
+ svn_wc__db_wclocked@Base 0 1
+ svn_wc__db_wcroot_parse_local_abspath@Base 0 1
+ svn_wc__db_wq_add@Base 0 1
+ svn_wc__db_wq_add_internal@Base 0 1
+ svn_wc__db_wq_fetch_next@Base 0 1
+ svn_wc__db_wq_record_and_fetch_next@Base 0 1
+ svn_wc__del_tree_conflict@Base 0 1
+ svn_wc__delete_many@Base 0 1
+ svn_wc__deserialize_conflict@Base 0 1
+ svn_wc__diff7@Base 0 1
+ svn_wc__diff_base_only_dir@Base 0 1
+ svn_wc__diff_base_only_file@Base 0 1
+ svn_wc__diff_base_working_diff@Base 0 1
+ svn_wc__diff_local_only_dir@Base 0 1
+ svn_wc__diff_local_only_file@Base 0 1
+ svn_wc__ensure_directory@Base 0 1
+ svn_wc__entries_read_internal@Base 0 1
+ svn_wc__entry_is_hidden@Base 0 1
+ svn_wc__eol_value_from_string@Base 0 1
+ svn_wc__expand_keywords@Base 0 1
+ svn_wc__external_register@Base 0 1
+ svn_wc__external_remove@Base 0 1
+ svn_wc__externals_defined_below@Base 0 1
+ svn_wc__externals_find_target_dups@Base 0 1
+ svn_wc__externals_gather_definitions@Base 0 1
+ svn_wc__fetch_base_func@Base 0 1
+ svn_wc__fetch_kind_func@Base 0 1
+ svn_wc__fetch_props_func@Base 0 1
+ svn_wc__find_copies_of_repos_path@Base 0 1
+ svn_wc__find_working_nodes_with_basename@Base 0 1
+ svn_wc__get_actual_props@Base 0 1
+ svn_wc__get_cached_iprop_children@Base 0 1
+ svn_wc__get_committed_queue_pool@Base 0 1
+ svn_wc__get_diff_editor@Base 0 1
+ svn_wc__get_entry@Base 0 1
+ svn_wc__get_excluded_subtrees@Base 0 1
+ svn_wc__get_experimental_dir@Base 0 1
+ svn_wc__get_file_external_editor@Base 0 1
+ svn_wc__get_info@Base 0 1
+ svn_wc__get_iprops@Base 0 1
+ svn_wc__get_not_present_descendants@Base 0 1
+ svn_wc__get_pristine_contents@Base 0 1
+ svn_wc__get_pristine_contents_by_checksum@Base 0 1
+ svn_wc__get_status_editor@Base 0 1
+ svn_wc__get_switch_editor@Base 0 1
+ svn_wc__get_tmpdir@Base 0 1
+ svn_wc__get_translate_info@Base 0 1
+ svn_wc__get_tree_conflict@Base 0 1
+ svn_wc__get_update_editor@Base 0 1
+ svn_wc__get_wcroot@Base 0 1
+ svn_wc__guess_incoming_move_target_nodes@Base 0 1
+ svn_wc__has_local_mods@Base 0 1
+ svn_wc__has_magic_property@Base 0 1
+ svn_wc__has_switched_subtrees@Base 0 1
+ svn_wc__internal_changelist_match@Base 0 1
+ svn_wc__internal_check_wc@Base 0 1
+ svn_wc__internal_conflicted_p@Base 0 1
+ svn_wc__internal_ensure_adm@Base 0 1
+ svn_wc__internal_file_modified_p@Base 0 1
+ svn_wc__internal_get_origin@Base 0 1
+ svn_wc__internal_merge@Base 0 1
+ svn_wc__internal_propdiff@Base 0 1
+ svn_wc__internal_propget@Base 0 1
+ svn_wc__internal_remove_from_revision_control@Base 0 1
+ svn_wc__internal_translated_file@Base 0 1
+ svn_wc__internal_translated_stream@Base 0 1
+ svn_wc__internal_transmit_prop_deltas@Base 0 1
+ svn_wc__internal_transmit_text_deltas@Base 0 1
+ svn_wc__internal_walk_children@Base 0 1
+ svn_wc__internal_walk_status@Base 0 1
+ svn_wc__is_wcroot@Base 0 1
+ svn_wc__mark_resolved_prop_conflicts@Base 0 1
+ svn_wc__mark_resolved_text_conflict@Base 0 1
+ svn_wc__merge_props@Base 0 1
+ svn_wc__min_max_revisions@Base 0 1
+ svn_wc__move2@Base 0 1
+ svn_wc__node_clear_dav_cache_recursive@Base 0 1
+ svn_wc__node_get_base@Base 0 1
+ svn_wc__node_get_changed_info@Base 0 1
+ svn_wc__node_get_children_of_working_node@Base 0 1
+ svn_wc__node_get_commit_status@Base 0 1
+ svn_wc__node_get_lock_tokens_recursive@Base 0 1
+ svn_wc__node_get_md5_from_sha1@Base 0 1
+ svn_wc__node_get_not_present_children@Base 0 1
+ svn_wc__node_get_origin@Base 0 1
+ svn_wc__node_get_pre_ng_status_data@Base 0 1
+ svn_wc__node_get_repos_info@Base 0 1
+ svn_wc__node_get_url@Base 0 1
+ svn_wc__node_has_local_mods@Base 0 1
+ svn_wc__node_has_working@Base 0 1
+ svn_wc__node_is_added@Base 0 1
+ svn_wc__node_is_not_present@Base 0 1
+ svn_wc__node_was_moved_away@Base 0 1
+ svn_wc__node_was_moved_here@Base 0 1
+ svn_wc__open_adm_stream@Base 0 1
+ svn_wc__operation_map@Base 0 1
+ svn_wc__parse_externals_description@Base 0 1
+ svn_wc__perform_file_merge@Base 0 1
+ svn_wc__prop_array_to_hash@Base 0 1
+ svn_wc__prop_list_recursive@Base 0 1
+ svn_wc__prop_retrieve_recursive@Base 0 1
+ svn_wc__props_modified@Base 0 1
+ svn_wc__read_conflict_descriptions2_t@Base 0 1
+ svn_wc__read_conflicts@Base 0 1
+ svn_wc__read_entries_old@Base 0 1
+ svn_wc__read_external_info@Base 0 1
+ svn_wc__release_write_lock@Base 0 1
+ svn_wc__rename_wc@Base 0 1
+ svn_wc__required_lock_for_resolve@Base 0 1
+ svn_wc__resolve_conflicts@Base 0 1
+ svn_wc__resolve_relative_external_url@Base 0 1
+ svn_wc__serialize_conflict@Base 0 1
+ svn_wc__serialize_file_external@Base 0 1
+ svn_wc__status2_from_3@Base 0 1
+ svn_wc__sync_flags_with_props@Base 0 1
+ svn_wc__text_base_path_to_read@Base 0 1
+ svn_wc__translated_stream@Base 0 1
+ svn_wc__unserialize_file_external@Base 0 1
+ svn_wc__upgrade_add_external_info@Base 0 1
+ svn_wc__upgrade_conflict_skel_from_raw@Base 0 1
+ svn_wc__upgrade_sdb@Base 0 1
+ svn_wc__version_string_from_format@Base 0 1
+ svn_wc__walker_default_error_handler@Base 0 1
+ svn_wc__wipe_postupgrade@Base 0 1
+ svn_wc__wq_build_dir_install@Base 0 1
+ svn_wc__wq_build_dir_remove@Base 0 1
+ svn_wc__wq_build_file_commit@Base 0 1
+ svn_wc__wq_build_file_copy_translated@Base 0 1
+ svn_wc__wq_build_file_install@Base 0 1
+ svn_wc__wq_build_file_move@Base 0 1
+ svn_wc__wq_build_file_remove@Base 0 1
+ svn_wc__wq_build_postupgrade@Base 0 1
+ svn_wc__wq_build_prej_install@Base 0 1
+ svn_wc__wq_build_sync_file_flags@Base 0 1
+ svn_wc__wq_merge@Base 0 1
+ svn_wc__wq_run@Base 0 1
+ svn_wc__wrap_diff_callbacks@Base 0 1
+ svn_wc__write_check@Base 0 1
+ svn_wc__write_upgraded_entries@Base 0 1
+ svn_wc_add2@Base 1.4
+ svn_wc_add3@Base 1.6
+ svn_wc_add4@Base 1.7
+ svn_wc_add@Base 1.4
+ svn_wc_add_from_disk2@Base 1.8
+ svn_wc_add_from_disk3@Base 1.9
+ svn_wc_add_from_disk@Base 1.7
+ svn_wc_add_lock2@Base 1.7
+ svn_wc_add_lock@Base 1.4
+ svn_wc_add_repos_file2@Base 1.4
+ svn_wc_add_repos_file3@Base 1.6
+ svn_wc_add_repos_file4@Base 1.7
+ svn_wc_add_repos_file@Base 1.4
+ svn_wc_adm_access_path@Base 1.4
+ svn_wc_adm_access_pool@Base 1.4
+ svn_wc_adm_close2@Base 1.6
+ svn_wc_adm_close@Base 1.4
+ svn_wc_adm_locked@Base 1.4
+ svn_wc_adm_open2@Base 1.4
+ svn_wc_adm_open3@Base 1.4
+ svn_wc_adm_open@Base 1.4
+ svn_wc_adm_open_anchor@Base 1.4
+ svn_wc_adm_probe_open2@Base 1.4
+ svn_wc_adm_probe_open3@Base 1.4
+ svn_wc_adm_probe_open@Base 1.4
+ svn_wc_adm_probe_retrieve@Base 1.4
+ svn_wc_adm_probe_try2@Base 1.4
+ svn_wc_adm_probe_try3@Base 1.4
+ svn_wc_adm_probe_try@Base 1.4
+ svn_wc_adm_retrieve@Base 1.4
+ svn_wc_canonicalize_svn_prop@Base 1.5
+ svn_wc_check_root@Base 1.8
+ svn_wc_check_wc2@Base 1.7
+ svn_wc_check_wc@Base 1.4
+ svn_wc_cleanup2@Base 1.4
+ svn_wc_cleanup3@Base 1.7
+ svn_wc_cleanup4@Base 1.9
+ svn_wc_cleanup@Base 1.4
+ svn_wc_committed_queue_create@Base 1.5
+ svn_wc_conflict_description2_dup@Base 1.9
+ svn_wc_conflict_description_create_prop2@Base 1.7
+ svn_wc_conflict_description_create_prop@Base 1.6
+ svn_wc_conflict_description_create_text2@Base 1.7
+ svn_wc_conflict_description_create_text@Base 1.6
+ svn_wc_conflict_description_create_tree2@Base 1.7
+ svn_wc_conflict_description_create_tree@Base 1.6
+ svn_wc_conflict_version_create2@Base 1.8
+ svn_wc_conflict_version_create@Base 1.6
+ svn_wc_conflict_version_dup@Base 1.6
+ svn_wc_conflicted_p2@Base 1.6
+ svn_wc_conflicted_p3@Base 1.7
+ svn_wc_conflicted_p@Base 1.4
+ svn_wc_context_create@Base 1.7
+ svn_wc_context_destroy@Base 1.7
+ svn_wc_copy2@Base 1.4
+ svn_wc_copy3@Base 1.7
+ svn_wc_copy@Base 1.4
+ svn_wc_crawl_revisions2@Base 1.4
+ svn_wc_crawl_revisions3@Base 1.5
+ svn_wc_crawl_revisions4@Base 1.6
+ svn_wc_crawl_revisions5@Base 1.7
+ svn_wc_crawl_revisions@Base 1.4
+ svn_wc_create_conflict_result@Base 1.5
+ svn_wc_create_notify@Base 1.4
+ svn_wc_create_notify_url@Base 1.6
+ svn_wc_create_tmp_file2@Base 1.4
+ svn_wc_create_tmp_file@Base 1.4
+ svn_wc_crop_tree2@Base 1.7
+ svn_wc_crop_tree@Base 1.6
+ svn_wc_delete2@Base 1.4
+ svn_wc_delete3@Base 1.5
+ svn_wc_delete4@Base 1.7
+ svn_wc_delete@Base 1.4
+ svn_wc_diff2@Base 1.4
+ svn_wc_diff3@Base 1.4
+ svn_wc_diff4@Base 1.5
+ svn_wc_diff5@Base 1.6
+ svn_wc_diff6@Base 1.7
+ svn_wc_diff@Base 1.4
+ svn_wc_dup_notify@Base 1.4
+ svn_wc_dup_status2@Base 1.4
+ svn_wc_dup_status3@Base 1.7
+ svn_wc_dup_status@Base 1.4
+ svn_wc_edited_externals@Base 1.4
+ svn_wc_ensure_adm2@Base 1.4
+ svn_wc_ensure_adm3@Base 1.5
+ svn_wc_ensure_adm4@Base 1.7
+ svn_wc_ensure_adm@Base 1.4
+ svn_wc_entries_read@Base 1.4
+ svn_wc_entry@Base 1.4
+ svn_wc_entry_dup@Base 1.4
+ svn_wc_exclude@Base 1.7
+ svn_wc_external_item2_create@Base 1.8
+ svn_wc_external_item2_dup@Base 1.5
+ svn_wc_external_item_create@Base 1.5
+ svn_wc_external_item_dup@Base 1.4
+ svn_wc_get_actual_target2@Base 1.7
+ svn_wc_get_actual_target@Base 1.4
+ svn_wc_get_adm_dir@Base 1.4
+ svn_wc_get_ancestry@Base 1.4
+ svn_wc_get_changelists@Base 1.7
+ svn_wc_get_default_ignores@Base 1.4
+ svn_wc_get_diff_editor2@Base 1.4
+ svn_wc_get_diff_editor3@Base 1.4
+ svn_wc_get_diff_editor4@Base 1.5
+ svn_wc_get_diff_editor5@Base 1.6
+ svn_wc_get_diff_editor6@Base 1.7
+ svn_wc_get_diff_editor@Base 1.4
+ svn_wc_get_ignores2@Base 1.7
+ svn_wc_get_ignores@Base 1.4
+ svn_wc_get_pristine_contents2@Base 1.7
+ svn_wc_get_pristine_contents@Base 1.6
+ svn_wc_get_pristine_copy_path@Base 1.4
+ svn_wc_get_pristine_props@Base 1.7
+ svn_wc_get_prop_diffs2@Base 1.7
+ svn_wc_get_prop_diffs@Base 1.4
+ svn_wc_get_status_editor2@Base 1.4
+ svn_wc_get_status_editor3@Base 1.5
+ svn_wc_get_status_editor4@Base 1.6
+ svn_wc_get_status_editor5@Base 1.7
+ svn_wc_get_status_editor@Base 1.4
+ svn_wc_get_switch_editor2@Base 1.4
+ svn_wc_get_switch_editor3@Base 1.5
+ svn_wc_get_switch_editor4@Base 1.7
+ svn_wc_get_switch_editor@Base 1.4
+ svn_wc_get_update_editor2@Base 1.4
+ svn_wc_get_update_editor3@Base 1.5
+ svn_wc_get_update_editor4@Base 1.7
+ svn_wc_get_update_editor@Base 1.4
+ svn_wc_has_binary_prop@Base 1.4
+ svn_wc_info_dup@Base 1.7
+ svn_wc_init_traversal_info@Base 1.4
+ svn_wc_is_adm_dir@Base 1.4
+ svn_wc_is_entry_prop@Base 1.4
+ svn_wc_is_normal_prop@Base 1.4
+ svn_wc_is_wc_prop@Base 1.4
+ svn_wc_is_wc_root2@Base 1.7
+ svn_wc_is_wc_root@Base 1.4
+ svn_wc_locked2@Base 1.7
+ svn_wc_locked@Base 1.4
+ svn_wc_mark_missing_deleted@Base 1.4
+ svn_wc_match_ignore_list@Base 1.5
+ svn_wc_maybe_set_repos_root@Base 1.4
+ svn_wc_merge2@Base 1.4
+ svn_wc_merge3@Base 1.5
+ svn_wc_merge4@Base 1.7
+ svn_wc_merge5@Base 1.8
+ svn_wc_merge@Base 1.4
+ svn_wc_merge_prop_diffs@Base 1.4
+ svn_wc_merge_props2@Base 1.5
+ svn_wc_merge_props3@Base 1.7
+ svn_wc_merge_props@Base 1.4
+ svn_wc_move@Base 1.7
+ svn_wc_parse_externals_description2@Base 1.4
+ svn_wc_parse_externals_description3@Base 1.5
+ svn_wc_parse_externals_description@Base 1.4
+ svn_wc_process_committed2@Base 1.4
+ svn_wc_process_committed3@Base 1.4
+ svn_wc_process_committed4@Base 1.5
+ svn_wc_process_committed@Base 1.4
+ svn_wc_process_committed_queue2@Base 1.7
+ svn_wc_process_committed_queue@Base 1.5
+ svn_wc_prop_get2@Base 1.7
+ svn_wc_prop_get@Base 1.4
+ svn_wc_prop_list2@Base 1.7
+ svn_wc_prop_list@Base 1.4
+ svn_wc_prop_set2@Base 1.4
+ svn_wc_prop_set3@Base 1.6
+ svn_wc_prop_set4@Base 1.7
+ svn_wc_prop_set@Base 1.4
+ svn_wc_props_modified_p2@Base 1.7
+ svn_wc_props_modified_p@Base 1.4
+ svn_wc_queue_committed2@Base 1.6
+ svn_wc_queue_committed3@Base 1.7
+ svn_wc_queue_committed4@Base 1.9
+ svn_wc_queue_committed@Base 1.5
+ svn_wc_read_kind2@Base 1.8
+ svn_wc_read_kind@Base 1.7
+ svn_wc_relocate2@Base 1.4
+ svn_wc_relocate3@Base 1.5
+ svn_wc_relocate4@Base 1.7
+ svn_wc_relocate@Base 1.4
+ svn_wc_remove_from_revision_control2@Base 1.7
+ svn_wc_remove_from_revision_control@Base 1.4
+ svn_wc_remove_lock2@Base 1.7
+ svn_wc_remove_lock@Base 1.4
+ svn_wc_resolved_conflict2@Base 1.4
+ svn_wc_resolved_conflict3@Base 1.5
+ svn_wc_resolved_conflict4@Base 1.6
+ svn_wc_resolved_conflict5@Base 1.7
+ svn_wc_resolved_conflict@Base 1.4
+ svn_wc_restore@Base 1.7
+ svn_wc_revert2@Base 1.4
+ svn_wc_revert3@Base 1.5
+ svn_wc_revert4@Base 1.7
+ svn_wc_revert5@Base 1.9
+ svn_wc_revert6@Base 1.11
+ svn_wc_revert@Base 1.4
+ svn_wc_revision_status2@Base 1.7
+ svn_wc_revision_status@Base 1.4
+ svn_wc_set_adm_dir@Base 1.4
+ svn_wc_set_changelist2@Base 1.7
+ svn_wc_set_changelist@Base 1.5
+ svn_wc_status2@Base 1.4
+ svn_wc_status3@Base 1.7
+ svn_wc_status@Base 1.4
+ svn_wc_status_set_repos_locks@Base 1.4
+ svn_wc_text_modified_p2@Base 1.7
+ svn_wc_text_modified_p@Base 1.4
+ svn_wc_translated_file2@Base 1.4
+ svn_wc_translated_file@Base 1.4
+ svn_wc_translated_stream@Base 1.5
+ svn_wc_transmit_prop_deltas2@Base 1.7
+ svn_wc_transmit_prop_deltas@Base 1.4
+ svn_wc_transmit_text_deltas2@Base 1.4
+ svn_wc_transmit_text_deltas3@Base 1.7
+ svn_wc_transmit_text_deltas@Base 1.4
+ svn_wc_traversed_depths@Base 1.5
+ svn_wc_upgrade@Base 1.7
+ svn_wc_version@Base 1.4
+ svn_wc_walk_entries2@Base 1.4
+ svn_wc_walk_entries3@Base 1.5
+ svn_wc_walk_entries@Base 1.4
+ svn_wc_walk_status@Base 1.7

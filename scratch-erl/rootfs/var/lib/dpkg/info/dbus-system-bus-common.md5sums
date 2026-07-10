@@ -1,0 +1,9 @@
+62f04719035a96fab36b5d7a7b00446b  lib/systemd/system/dbus.socket
+17cb6df807faecf963bde389ed9ff078  usr/lib/sysusers.d/dbus.conf
+961a23093ba5aef8968cab1b29ea97fa  usr/share/dbus-1/system.conf
+aca3da2de2b54aac8d4c162f399f3ee7  usr/share/doc/dbus-system-bus-common/AUTHORS.gz
+f11a43861a6c42ac58db0a8bb090e0c2  usr/share/doc/dbus-system-bus-common/NEWS.gz
+81e84fc00d29830e437f710a117793e8  usr/share/doc/dbus-system-bus-common/README.gz
+ddd9c1c17ec66501ca71aa7ddb97b717  usr/share/doc/dbus-system-bus-common/changelog.Debian.gz
+e71ad57060aace39bb80ab360f757e93  usr/share/doc/dbus-system-bus-common/copyright
+fea77843636a136e2aeea5516ee2e46c  usr/share/lintian/overrides/dbus-system-bus-common

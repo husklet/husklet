@@ -1,0 +1,66 @@
+PIN entry for Debian
+--------------------
+
+This package and its sibling packages are intended to be used as a
+pass-phrase entry dialog for the program gpg-agent (Debian package
+gnupg-agent).  To configure gpg-agent to use one of the provided
+pinentry programs, put something like this into your
+~/.gnupg/gpg-agent.conf:
+
+    pinentry-program /usr/bin/pinentry-FLAVOR
+
+You have the following pinentry variants to choose from:
+
+/usr/bin/pinentry
+    Generic name that points, via the Debian alternatives system, to
+    the "best" installed PIN entry program.  gpg-agent uses this by
+    default.
+
+/usr/bin/pinentry-gnome
+    Graphical PIN entry program that uses GNOME's gcr prompter.  This
+    package will work on systems that use Wayland as well as X11, and
+    it is the preferred pinentry for desktop systems (package
+    pinentry-gnome).
+
+/usr/bin/pinentry-x11
+    Generic name that points, via the Debian alternatives system, to
+    the "best" installed PIN entry program with X11 support (that is,
+    one of the GNOME, Qt, GTK+2, or FLTK flavors).
+
+/usr/bin/pinentry-qt
+    Graphical PIN entry program that uses the Qt tool kit
+    (package pinentry-qt).
+
+/usr/bin/pinentry-curses
+    Text-mode PIN entry program that uses the curses tool kit (package
+    pinentry-curses).
+
+/usr/bin/pinentry-tty
+    Minimal Text-mode dumb-terminal PIN entry program (package
+    pinentry-tty).
+
+/usr/bin/pinentry-gtk-2
+    Graphical PIN entry program that uses the GTK+ tool kit version 2
+    (package pinentry-gtk2).
+
+/usr/bin/pinentry-fltk
+    Graphical PIN entry program that uses the Fast Light Toolkit (FLTK)
+    (package pinentry-fltk).
+
+The graphical variants automatically fall back to the curses interface
+if no desktop environment is available.  So for example, if you
+frequently switch between text mode and KDE, and you want to use both
+Mutt and KMail with GnuPG pass-phrase agent support, then configuring
+/usr/bin/pinentry-qt would work.  (In this case, leaving your
+configuration alone would also work, if you only have pinentry-qt
+installed)
+
+Note that while pinentry-curses and pinentry-tty will work in some
+cases in a non-graphical environment, they are likely to fail when
+used while sharing a tty with a terminal-intensive program like emacs.
+If a graphical pinentry isn't possible, the recommended workaround is
+to have a pinentry-tty or pinentry-curses attached to a separate,
+dedicated pseudoterminal.  (see https://dev.gnupg.org/T3217 for more
+details)
+
+ -- Daniel Kahn Gillmor <dkg@fifthhorseman.net>, Fri,  8 May 2020 12:11:12 -0400

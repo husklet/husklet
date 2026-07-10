@@ -32,6 +32,7 @@ const G_DMABUF: u32 = 6;
 const G_SUBCOMPOSITOR: u32 = 7;
 const G_VIEWPORTER: u32 = 8;
 const G_DATA_DEV_MGR: u32 = 9;
+const G_SURFACE_AUGMENTER: u32 = 10;
 
 // wl_shm formats (the two mandatory ones). Memory byte order is BGRA (little-endian ARGB word).
 const FMT_ARGB8888: u32 = 0;
@@ -39,12 +40,92 @@ const FMT_XRGB8888: u32 = 1;
 // DRM fourccs for zwp_linux_dmabuf format events.
 const DRM_FMT_ARGB8888: u32 = 0x3432_5241; // 'AR24'
 const DRM_FMT_XRGB8888: u32 = 0x3432_5258; // 'XR24'
-// dd-private dmabuf modifier: modifier_lo = IOSurface id; modifier_hi low-16 = magic tag; bit 16 of
-// modifier_hi = "the guest asked the host GPU to RENDER into this surface" (rung 3 first slice).
+                                           // dd-private dmabuf modifier: modifier_lo = IOSurface id; modifier_hi low-16 = magic tag; bit 16 of
+                                           // modifier_hi = "the guest asked the host GPU to RENDER into this surface" (rung 3 first slice).
 const DD_DMABUF_MOD_MAGIC: u32 = 0x6464;
 const DD_DMABUF_RENDER_BIT: u32 = 0x1_0000;
 
 const WL_DISPLAY: u32 = 1;
+
+fn fixed_floor(v: i32) -> i32 {
+    v >> 8
+}
+
+fn fixed_ceil(v: i32) -> i32 {
+    (v + 255) >> 8
+}
+
+struct SurfaceMapping {
+    src_x: i32,
+    src_y: i32,
+    src_x2: i32,
+    src_y2: i32,
+    dst_w: i32,
+    dst_h: i32,
+    uv_rect: [f32; 4],
+}
+
+impl SurfaceMapping {
+    fn identity(w: i32, h: i32) -> SurfaceMapping {
+        SurfaceMapping::new(w, h, 0, 0, w, h, w, h)
+    }
+
+    fn new(
+        tex_w: i32,
+        tex_h: i32,
+        src_x: i32,
+        src_y: i32,
+        src_x2: i32,
+        src_y2: i32,
+        dst_w: i32,
+        dst_h: i32,
+    ) -> SurfaceMapping {
+        SurfaceMapping {
+            src_x,
+            src_y,
+            src_x2,
+            src_y2,
+            dst_w,
+            dst_h,
+            uv_rect: [
+                src_x as f32 / tex_w as f32,
+                src_y as f32 / tex_h as f32,
+                src_x2 as f32 / tex_w as f32,
+                src_y2 as f32 / tex_h as f32,
+            ],
+        }
+    }
+
+    fn is_identity(&self, w: i32, h: i32) -> bool {
+        self.src_x == 0
+            && self.src_y == 0
+            && self.src_x2 == w
+            && self.src_y2 == h
+            && self.dst_w == w
+            && self.dst_h == h
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct FocusedLogicalGeometry {
+    pub surface: u32,
+    pub x: i32,
+    pub y: i32,
+    pub w: i32,
+    pub h: i32,
+    pub source: &'static str,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ExternalLogicalCrop {
+    pub source_client: usize,
+    pub source_surface: u32,
+    pub source: &'static str,
+    pub x: i32,
+    pub y: i32,
+    pub w: i32,
+    pub h: i32,
+}
 
 /// What each live object id refers to. The compositor only needs to remember enough per object to route
 /// the next request and, for buffers/pools/surfaces, to reconstruct pixels on commit.
@@ -52,12 +133,29 @@ enum Obj {
     Registry,
     Compositor,
     Shm,
-    ShmPool { ptr: *mut u8, size: usize },
-    Buffer { pool: u32, offset: i32, width: i32, height: i32, stride: i32, format: u32 },
+    ShmPool {
+        ptr: *mut u8,
+        size: usize,
+    },
+    Buffer {
+        pool: u32,
+        offset: i32,
+        width: i32,
+        height: i32,
+        stride: i32,
+        format: u32,
+    },
     Surface(Surface),
+    Viewport {
+        surface: u32,
+    },
     XdgWmBase,
-    XdgSurface { surface: u32 },
-    XdgToplevel { xdg_surface: u32 },
+    XdgSurface {
+        surface: u32,
+    },
+    XdgToplevel {
+        xdg_surface: u32,
+    },
     Seat,
     Output,
     Region,
@@ -67,8 +165,29 @@ enum Obj {
     DataDeviceManager,
     // GPU rung 2: zwp_linux_dmabuf_v1 objects.
     LinuxDmabuf,
-    DmabufParams { iosurface_id: Option<u32>, stride: i32, gpu_render: bool }, // accrues add()
-    DmaBuffer { width: i32, height: i32, format: u32, iosurface_id: u32, gpu_render: bool },
+    DmabufParams {
+        iosurface_id: Option<u32>,
+        stride: i32,
+        gpu_render: bool,
+    }, // accrues add()
+    DmaBuffer {
+        width: i32,
+        height: i32,
+        format: u32,
+        iosurface_id: u32,
+        gpu_render: bool,
+    },
+    // Chromium's surface_augmenter protocol. Version 1 provides wl_buffer objects backed only by a
+    // solid color; Chrome's surfaceless path uses these during startup before regular buffers flow.
+    SurfaceAugmenter,
+    AugmentedSurface {
+        surface: u32,
+    },
+    SolidColorBuffer {
+        width: i32,
+        height: i32,
+        bgra: [u8; 4],
+    },
     Other,
 }
 
@@ -76,10 +195,18 @@ enum Obj {
 struct Surface {
     pending_buffer: Option<u32>, // buffer id from the most recent attach (0 ⇒ detach)
     attached: bool,
+    current_buffer: Option<u32>,
+    attach_x: i32,
+    attach_y: i32,
     pending_frame: Option<u32>, // wl_callback id from wl_surface.frame
     xdg_surface: Option<u32>,
     configured: bool,
     title: String,
+    buffer_scale: i32,
+    window_geometry: Option<(i32, i32, i32, i32)>, // committed x,y,w,h from xdg_surface.set_window_geometry
+    pending_window_geometry: Option<(i32, i32, i32, i32)>,
+    viewport_source: Option<(i32, i32, i32, i32)>, // wl_fixed 24.8: x,y,w,h in buffer coords
+    viewport_destination: Option<(i32, i32)>,      // surface-local output size
 }
 
 pub struct Server<P: Presenter> {
@@ -90,15 +217,17 @@ pub struct Server<P: Presenter> {
     /// Cache surface→title so the presenter can label the window (title is set on xdg_toplevel).
     titles: HashMap<u32, String>,
     // ---- M2 input (wl_seat) ----
-    seat_ver: u32,             // version the client bound wl_seat at (gates versioned events)
-    pointer: Option<u32>,      // client's wl_pointer object id (from wl_seat.get_pointer)
-    keyboard: Option<u32>,     // client's wl_keyboard object id (from wl_seat.get_keyboard)
-    focus: Option<u32>,        // the surface that has input focus (the toplevel, for MVP)
-    ptr_entered: bool,         // has wl_pointer.enter been sent for `focus`?
-    kbd_entered: bool,         // has wl_keyboard.enter been sent for `focus`?
-    time_ms: u32,             // monotonic-ish event timestamp
-    last_ptr: (i32, i32),      // last pointer position (surface-local, integer px)
+    seat_ver: u32, // version the client bound wl_seat at (gates versioned events)
+    pointer: Option<u32>, // client's wl_pointer object id (from wl_seat.get_pointer)
+    keyboard: Option<u32>, // client's wl_keyboard object id (from wl_seat.get_keyboard)
+    output: Option<u32>, // client's wl_output object id (from wl_registry.bind)
+    focus: Option<u32>, // the surface that has input focus (the toplevel, for MVP)
+    ptr_entered: bool, // has wl_pointer.enter been sent for `focus`?
+    kbd_entered: bool, // has wl_keyboard.enter been sent for `focus`?
+    time_ms: u32,  // monotonic-ish event timestamp
+    last_ptr: (i32, i32), // last pointer position (surface-local, integer px)
     last_cfg: Option<(i32, i32)>, // last on-screen window size we sent a configure for (resize debounce)
+    external_logical_crop: Option<ExternalLogicalCrop>,
 }
 
 impl<P: Presenter> Server<P> {
@@ -114,12 +243,14 @@ impl<P: Presenter> Server<P> {
             seat_ver: 1,
             pointer: None,
             keyboard: None,
+            output: None,
             focus: None,
             ptr_entered: false,
             kbd_entered: false,
             time_ms: 0,
             last_ptr: (0, 0),
             last_cfg: None,
+            external_logical_crop: None,
         }
     }
 
@@ -139,6 +270,88 @@ impl<P: Presenter> Server<P> {
         self.focus
     }
 
+    /// True once the client has bound input objects and has a focused toplevel surface. Chrome uses a
+    /// separate GPU-presenting connection for the IOSurface; that connection owns the native window in our
+    /// current presenter, but the browser connection owns wl_seat. The live AppKit router uses this to send
+    /// clicks/keys to the client that can actually consume them.
+    pub fn can_receive_input(&self) -> bool {
+        self.focus.is_some() && (self.pointer.is_some() || self.keyboard.is_some())
+    }
+
+    /// Best known logical geometry for the focused input surface. In Chrome's split-client path this
+    /// lives on the browser/input connection, while the visible IOSurface is committed by the shim
+    /// connection; `run_multi` can mirror this onto that non-input connection for the next present.
+    pub fn focused_logical_geometry(&self) -> Option<FocusedLogicalGeometry> {
+        let sid = self.focus?;
+        let Some(Obj::Surface(surface)) = self.objs.get(&sid) else {
+            return None;
+        };
+        if let Some((x, y, w, h)) = surface.window_geometry {
+            if w > 0 && h > 0 {
+                return Some(FocusedLogicalGeometry {
+                    surface: sid,
+                    x,
+                    y,
+                    w,
+                    h,
+                    source: "xdg_window_geometry",
+                });
+            }
+        }
+        if let Some((w, h)) = self.presenter().window_content_size(sid) {
+            if w > 0 && h > 0 {
+                return Some(FocusedLogicalGeometry {
+                    surface: sid,
+                    x: 0,
+                    y: 0,
+                    w,
+                    h,
+                    source: "presenter_content_size",
+                });
+            }
+        }
+        if let Some((w, h)) = self.presenter().surface_size(sid) {
+            if w > 0 && h > 0 {
+                return Some(FocusedLogicalGeometry {
+                    surface: sid,
+                    x: 0,
+                    y: 0,
+                    w,
+                    h,
+                    source: "presenter_surface_size",
+                });
+            }
+        }
+        if let Some((w, h)) = surface.viewport_destination {
+            if w > 0 && h > 0 {
+                return Some(FocusedLogicalGeometry {
+                    surface: sid,
+                    x: 0,
+                    y: 0,
+                    w,
+                    h,
+                    source: "viewport_destination",
+                });
+            }
+        }
+        let bid = surface.current_buffer.or(surface.pending_buffer)?;
+        let (w, h) = self.buffer_logical_size(surface, bid)?;
+        Some(FocusedLogicalGeometry {
+            surface: sid,
+            x: 0,
+            y: 0,
+            w,
+            h,
+            source: "buffer_logical_size",
+        })
+    }
+
+    /// Temporary logical crop supplied by the multi-client presenter path. It is intentionally server-wide:
+    /// the shim/GPU connection is expected to own the visible IOSurface surface and not input surfaces.
+    pub fn set_external_logical_crop(&mut self, crop: Option<ExternalLogicalCrop>) {
+        self.external_logical_crop = crop;
+    }
+
     /// Every IOSurface id this client referenced (via `zwp_linux_dmabuf` buffers/params). The multi-client
     /// loop drops each id's cross-queue fence + cached IOSurface when the client disconnects, so a departed
     /// compositor can't leak `MTLEvent`s/IOSurfaces or leave a stale fence generation that would deadlock a
@@ -148,7 +361,10 @@ impl<P: Presenter> Server<P> {
         for obj in self.objs.values() {
             match obj {
                 Obj::DmaBuffer { iosurface_id, .. } => ids.push(*iosurface_id),
-                Obj::DmabufParams { iosurface_id: Some(id), .. } => ids.push(*id),
+                Obj::DmabufParams {
+                    iosurface_id: Some(id),
+                    ..
+                } => ids.push(*id),
                 _ => {}
             }
         }
@@ -189,10 +405,13 @@ impl<P: Presenter> Server<P> {
             _ => None,
         };
         let Some(xdg) = xdg else { return };
-        let Some(tl) = self.find_toplevel(xdg) else { return };
+        let Some(tl) = self.find_toplevel(xdg) else {
+            return;
+        };
         // states array: [4] = XDG_TOPLEVEL_STATE_ACTIVATED (little-endian u32).
         let states = 4u32.to_ne_bytes();
-        self.conn.send(&Message::new(tl, 0).i32(w).i32(h).array(&states));
+        self.conn
+            .send(&Message::new(tl, 0).i32(w).i32(h).array(&states));
         let s = self.next_serial();
         self.conn.send(&Message::new(xdg, 0).u32(s));
         self.conn.flush().ok();
@@ -228,6 +447,7 @@ impl<P: Presenter> Server<P> {
                 Some(Obj::ShmPool { .. }) => "wl_shm_pool",
                 Some(Obj::Buffer { .. }) => "wl_buffer",
                 Some(Obj::Surface(_)) => "wl_surface",
+                Some(Obj::Viewport { .. }) => "wp_viewport",
                 Some(Obj::XdgWmBase) => "xdg_wm_base",
                 Some(Obj::XdgSurface { .. }) => "xdg_surface",
                 Some(Obj::XdgToplevel { .. }) => "xdg_toplevel",
@@ -240,10 +460,19 @@ impl<P: Presenter> Server<P> {
                 Some(Obj::LinuxDmabuf) => "zwp_linux_dmabuf",
                 Some(Obj::DmabufParams { .. }) => "zwp_linux_buffer_params",
                 Some(Obj::DmaBuffer { .. }) => "wl_buffer(dmabuf)",
+                Some(Obj::SurfaceAugmenter) => "surface_augmenter",
+                Some(Obj::AugmentedSurface { .. }) => "augmented_surface",
+                Some(Obj::SolidColorBuffer { .. }) => "wl_buffer(solid_color)",
                 Some(Obj::Other) => "other",
                 None => "UNKNOWN-OBJ",
             };
-            eprintln!("[dd-display] req obj={} op={} iface={} ({}b)", m.object, m.opcode, kind, m.body.len());
+            eprintln!(
+                "[dd-display] req obj={} op={} iface={} ({}b)",
+                m.object,
+                m.opcode,
+                kind,
+                m.body.len()
+            );
         }
         match self.objs.get(&m.object) {
             Some(Obj::Other) if m.object == WL_DISPLAY => self.wl_display(m),
@@ -252,6 +481,7 @@ impl<P: Presenter> Server<P> {
             Some(Obj::Shm) => self.wl_shm(m),
             Some(Obj::ShmPool { .. }) => self.wl_shm_pool(m),
             Some(Obj::Surface(_)) => self.wl_surface(m),
+            Some(Obj::Viewport { .. }) => self.wp_viewport(m),
             Some(Obj::XdgWmBase) => self.xdg_wm_base(m),
             Some(Obj::XdgSurface { .. }) => self.xdg_surface(m),
             Some(Obj::XdgToplevel { .. }) => self.xdg_toplevel(m),
@@ -261,8 +491,11 @@ impl<P: Presenter> Server<P> {
             Some(Obj::DataDeviceManager) => self.wl_data_device_manager(m),
             Some(Obj::LinuxDmabuf) => self.linux_dmabuf(m),
             Some(Obj::DmabufParams { .. }) => self.dmabuf_params(m),
+            Some(Obj::SurfaceAugmenter) => self.surface_augmenter(m),
             Some(Obj::Buffer { .. })
             | Some(Obj::DmaBuffer { .. })
+            | Some(Obj::SolidColorBuffer { .. })
+            | Some(Obj::AugmentedSurface { .. })
             | Some(Obj::Output)
             | Some(Obj::Region)
             | Some(Obj::Other) => {
@@ -306,19 +539,26 @@ impl<P: Presenter> Server<P> {
             (G_SUBCOMPOSITOR, "wl_subcompositor", 1),
             (G_VIEWPORTER, "wp_viewporter", 1),
             (G_DATA_DEV_MGR, "wl_data_device_manager", 3),
+            (G_SURFACE_AUGMENTER, "surface_augmenter", 1),
         ];
         // zwp_linux_dmabuf_v1 (GPU rung 2) is advertised only when DD_DISPLAY_DMABUF is set — until the
         // cross-process IOSurface handle bridge (mach port) is wired, a toolkit that PREFERS dmabuf could
         // commit buffers we can't resolve, so keep the proven shm path the default.
         let dmabuf_on = std::env::var("DD_DISPLAY_DMABUF").is_ok();
         for (name, iface, ver) in globals {
-            self.conn.send(&Message::new(reg, 0).u32(*name).string(iface).u32(*ver));
+            self.conn
+                .send(&Message::new(reg, 0).u32(*name).string(iface).u32(*ver));
         }
         if dmabuf_on {
             // v4: chromium's ozone GPU derives its DRM render-node path from the dmabuf-feedback
             // `main_device` (get_default_feedback), so advertise v4 and implement feedback below. The v3
             // format/modifier events on the main object are kept (bind) so v3 clients (glmark2) still work.
-            self.conn.send(&Message::new(reg, 0).u32(G_DMABUF).string("zwp_linux_dmabuf_v1").u32(4));
+            self.conn.send(
+                &Message::new(reg, 0)
+                    .u32(G_DMABUF)
+                    .string("zwp_linux_dmabuf_v1")
+                    .u32(4),
+            );
         }
     }
 
@@ -360,6 +600,9 @@ impl<P: Presenter> Server<P> {
             G_DATA_DEV_MGR => {
                 self.objs.insert(id, Obj::DataDeviceManager);
             }
+            G_SURFACE_AUGMENTER => {
+                self.objs.insert(id, Obj::SurfaceAugmenter);
+            }
             G_SEAT => {
                 self.objs.insert(id, Obj::Seat);
                 self.seat_ver = ver;
@@ -372,14 +615,22 @@ impl<P: Presenter> Server<P> {
             }
             G_OUTPUT => {
                 self.objs.insert(id, Obj::Output);
+                self.output = Some(id);
                 // geometry(x,y,pw,ph,subpixel,make,model,transform) — v1
                 self.conn.send(
                     &Message::new(id, 0)
-                        .i32(0).i32(0).i32(300).i32(200).i32(0)
-                        .string("dd").string("dd-display").i32(0),
+                        .i32(0)
+                        .i32(0)
+                        .i32(300)
+                        .i32(200)
+                        .i32(0)
+                        .string("dd")
+                        .string("dd-display")
+                        .i32(0),
                 );
                 // mode(flags=current(1)|preferred(2), w, h, refresh) — v1
-                self.conn.send(&Message::new(id, 1).u32(3).i32(1920).i32(1080).i32(60000));
+                self.conn
+                    .send(&Message::new(id, 1).u32(3).i32(1920).i32(1080).i32(60000));
                 if ver >= 2 {
                     self.conn.send(&Message::new(id, 3).i32(1)); // scale (wl_output v2+)
                     self.conn.send(&Message::new(id, 2)); // done (wl_output v2+)
@@ -394,8 +645,10 @@ impl<P: Presenter> Server<P> {
                     self.conn.send(&Message::new(id, 0).u32(fmt));
                     if ver >= 3 {
                         // modifier(format, modifier_hi, modifier_lo) [v3]
-                        self.conn.send(&Message::new(id, 1).u32(fmt).u32(DD_DMABUF_MOD_MAGIC).u32(0));
-                        self.conn.send(&Message::new(id, 1).u32(fmt).u32(0).u32(0)); // LINEAR
+                        self.conn
+                            .send(&Message::new(id, 1).u32(fmt).u32(DD_DMABUF_MOD_MAGIC).u32(0));
+                        self.conn.send(&Message::new(id, 1).u32(fmt).u32(0).u32(0));
+                        // LINEAR
                     }
                 }
             }
@@ -431,11 +684,24 @@ impl<P: Presenter> Server<P> {
         let size = r.u32() as usize;
         if let Some(fd) = fd {
             let ptr = unsafe {
-                libc::mmap(std::ptr::null_mut(), size, libc::PROT_READ, libc::MAP_SHARED, fd, 0)
+                libc::mmap(
+                    std::ptr::null_mut(),
+                    size,
+                    libc::PROT_READ,
+                    libc::MAP_SHARED,
+                    fd,
+                    0,
+                )
             };
             unsafe { libc::close(fd) };
             if ptr != libc::MAP_FAILED {
-                self.objs.insert(id, Obj::ShmPool { ptr: ptr as *mut u8, size });
+                self.objs.insert(
+                    id,
+                    Obj::ShmPool {
+                        ptr: ptr as *mut u8,
+                        size,
+                    },
+                );
                 return;
             }
         }
@@ -454,7 +720,17 @@ impl<P: Presenter> Server<P> {
         let height = r.i32();
         let stride = r.i32();
         let format = r.u32();
-        self.objs.insert(id, Obj::Buffer { pool: m.object, offset, width, height, stride, format });
+        self.objs.insert(
+            id,
+            Obj::Buffer {
+                pool: m.object,
+                offset,
+                width,
+                height,
+                stride,
+                format,
+            },
+        );
     }
 
     // ---- wl_surface: attach(1), damage(2), frame(3), commit(6) ----
@@ -464,8 +740,12 @@ impl<P: Presenter> Server<P> {
             1 => {
                 // attach(buffer, x, y)
                 let buffer = r.u32();
+                let x = r.i32();
+                let y = r.i32();
                 if let Some(Obj::Surface(s)) = self.objs.get_mut(&m.object) {
                     s.pending_buffer = if buffer == 0 { None } else { Some(buffer) };
+                    s.attach_x = x;
+                    s.attach_y = y;
                     s.attached = true;
                 }
             }
@@ -477,11 +757,24 @@ impl<P: Presenter> Server<P> {
                 }
             }
             6 => self.commit(m.object),
-            _ => {} // damage/opaque/input/scale/offset: no-op for the MVP present path
+            8 => {
+                // set_buffer_scale(scale)
+                let scale = r.i32().max(1);
+                if let Some(Obj::Surface(s)) = self.objs.get_mut(&m.object) {
+                    s.buffer_scale = scale;
+                }
+            }
+            _ => {} // damage/opaque/input/transform/offset: no-op for the MVP present path
         }
     }
 
     fn commit(&mut self, sid: u32) {
+        if let Some(Obj::Surface(s)) = self.objs.get_mut(&sid) {
+            if let Some(geometry) = s.pending_window_geometry.take() {
+                s.window_geometry = Some(geometry);
+            }
+        }
+
         // Snapshot the surface's committed state without holding a &mut across the borrows we need.
         let (attached, buffer, frame, xdg_surface, configured, title) = {
             match self.objs.get(&sid) {
@@ -497,33 +790,27 @@ impl<P: Presenter> Server<P> {
             }
         };
 
-        // Initial commit of an xdg_surface with no buffer yet → send the configure handshake.
+        // Initial commit of an xdg_surface with no buffer yet -> send the configure handshake.
         if xdg_surface.is_some() && !configured {
-            if let Some(xdg) = xdg_surface {
-                // xdg_toplevel.configure(w,h,states) — find the toplevel bound to this xdg_surface.
-                let toplevel = self.find_toplevel(xdg);
-                if let Some(tl) = toplevel {
-                    self.conn.send(&Message::new(tl, 0).i32(0).i32(0).array(&[])); // let client size itself
-                }
-                let s = self.next_serial();
-                self.conn.send(&Message::new(xdg, 0).u32(s)); // xdg_surface.configure(serial)
-            }
-            if let Some(Obj::Surface(su)) = self.objs.get_mut(&sid) {
-                su.configured = true;
-            }
-            self.conn.flush().ok();
+            self.maybe_configure_surface(sid);
             return;
         }
 
-        if !attached {
-            return;
-        }
+        let bid_to_present = if attached { buffer } else {
+            match self.objs.get(&sid) {
+                Some(Obj::Surface(s)) => s.current_buffer,
+                _ => None,
+            }
+        };
+        let release_bid = if attached { buffer } else { None };
 
-        // Present the attached buffer.
-        if let Some(bid) = buffer {
+        // Present the attached buffer, or the current buffer for damage/frame-only commits.
+        if let Some(bid) = bid_to_present {
             if let Some(sb) = self.extract(sid, bid, &title) {
                 self.present.present(&sb);
             }
+        }
+        if let Some(bid) = release_bid {
             // Release the buffer so the client may reuse it.
             self.conn.send(&Message::new(bid, 0)); // wl_buffer.release
         }
@@ -534,6 +821,9 @@ impl<P: Presenter> Server<P> {
             self.conn.send(&Message::new(WL_DISPLAY, 1).u32(cb)); // delete_id
         }
         if let Some(Obj::Surface(su)) = self.objs.get_mut(&sid) {
+            if attached {
+                su.current_buffer = buffer;
+            }
             su.pending_frame = None;
             su.attached = false;
         }
@@ -546,28 +836,114 @@ impl<P: Presenter> Server<P> {
         })
     }
 
+    fn buffer_logical_size(&self, surface: &Surface, bid: u32) -> Option<(i32, i32)> {
+        if let Some((w, h)) = surface.viewport_destination {
+            return (w > 0 && h > 0).then_some((w, h));
+        }
+        let (w, h) = match self.objs.get(&bid) {
+            Some(Obj::Buffer { width, height, .. })
+            | Some(Obj::DmaBuffer { width, height, .. })
+            | Some(Obj::SolidColorBuffer { width, height, .. }) => (*width, *height),
+            _ => return None,
+        };
+        let scale = surface.buffer_scale.max(1);
+        let w = w / scale;
+        let h = h / scale;
+        (w > 0 && h > 0).then_some((w, h))
+    }
+
+    fn maybe_configure_surface(&mut self, sid: u32) {
+        let xdg = match self.objs.get(&sid) {
+            Some(Obj::Surface(s)) if !s.configured => s.xdg_surface,
+            _ => None,
+        };
+        let Some(xdg) = xdg else { return };
+        let Some(tl) = self.find_toplevel(xdg) else {
+            return;
+        };
+        if let Some(output) = self.output {
+            self.conn.send(&Message::new(sid, 0).u32(output)); // wl_surface.enter(output)
+        }
+        let states = 4u32.to_ne_bytes(); // XDG_TOPLEVEL_STATE_ACTIVATED
+        self.conn
+            .send(&Message::new(tl, 0).i32(0).i32(0).array(&states));
+        self.last_cfg = None;
+        let serial = self.next_serial();
+        self.conn
+            .send(&Message::new(xdg, 0).u32(serial)); // xdg_surface.configure(serial)
+        if let Some(Obj::Surface(s)) = self.objs.get_mut(&sid) {
+            s.configured = true;
+        }
+        self.conn.flush().ok();
+    }
+
     /// Read the committed buffer into a `SurfaceBuffer` for the presenter. An shm buffer is unpacked to a
     /// tight BGRA framebuffer; a linux-dmabuf buffer carries only the IOSurface id (the presenter wraps it
     /// as an `MTLTexture` — zero copy, no bytes read here).
     fn extract(&self, sid: u32, bid: u32, title: &str) -> Option<SurfaceBuffer> {
         // GPU rung 2: an IOSurface-backed dmabuf buffer — no CPU pixels, just the id.
-        if let Some(Obj::DmaBuffer { width, height, format, iosurface_id, gpu_render }) = self.objs.get(&bid) {
+        if let Some(Obj::DmaBuffer {
+            width,
+            height,
+            format,
+            iosurface_id,
+            gpu_render,
+        }) = self.objs.get(&bid)
+        {
+            let map = self.surface_mapping(sid, *width, *height)?;
             return Some(SurfaceBuffer {
                 sid,
-                width: *width,
-                height: *height,
-                stride: *width * 4,
+                width: map.dst_w,
+                height: map.dst_h,
+                texture_width: *width,
+                texture_height: *height,
+                stride: map.dst_w * 4,
                 format: *format,
                 bgra: Vec::new(),
                 title: title.to_string(),
                 iosurface_id: Some(*iosurface_id),
                 gpu_render: *gpu_render,
+                uv_rect: map.uv_rect,
+            });
+        }
+        if let Some(Obj::SolidColorBuffer {
+            width,
+            height,
+            bgra,
+        }) = self.objs.get(&bid)
+        {
+            if *width <= 0 || *height <= 0 {
+                return None;
+            }
+            let mut pixels = vec![0u8; *width as usize * *height as usize * 4];
+            for px in pixels.chunks_exact_mut(4) {
+                px.copy_from_slice(bgra);
+            }
+            let (width, height, pixels) = self.apply_viewport(sid, *width, *height, pixels)?;
+            return Some(SurfaceBuffer {
+                sid,
+                width,
+                height,
+                texture_width: width,
+                texture_height: height,
+                stride: width * 4,
+                format: FMT_ARGB8888,
+                bgra: pixels,
+                title: title.to_string(),
+                iosurface_id: None,
+                gpu_render: false,
+                uv_rect: [0.0, 0.0, 1.0, 1.0],
             });
         }
         let (pool, offset, width, height, stride, format) = match self.objs.get(&bid) {
-            Some(Obj::Buffer { pool, offset, width, height, stride, format }) => {
-                (*pool, *offset, *width, *height, *stride, *format)
-            }
+            Some(Obj::Buffer {
+                pool,
+                offset,
+                width,
+                height,
+                stride,
+                format,
+            }) => (*pool, *offset, *width, *height, *stride, *format),
             _ => return None,
         };
         let (ptr, size) = match self.objs.get(&pool) {
@@ -577,7 +953,8 @@ impl<P: Presenter> Server<P> {
         if width <= 0 || height <= 0 || stride <= 0 {
             return None;
         }
-        let need = offset as usize + (height as usize).saturating_sub(1) * stride as usize
+        let need = offset as usize
+            + (height as usize).saturating_sub(1) * stride as usize
             + width as usize * 4;
         if offset < 0 || need > size {
             return None;
@@ -591,7 +968,150 @@ impl<P: Presenter> Server<P> {
                 std::ptr::copy_nonoverlapping(src, dst, width as usize * 4);
             }
         }
-        Some(SurfaceBuffer { sid, width, height, stride: width * 4, format, bgra, title: title.to_string(), iosurface_id: None, gpu_render: false })
+        let (width, height, bgra) = self.apply_viewport(sid, width, height, bgra)?;
+        Some(SurfaceBuffer {
+            sid,
+            width,
+            height,
+            texture_width: width,
+            texture_height: height,
+            stride: width * 4,
+            format,
+            bgra,
+            title: title.to_string(),
+            iosurface_id: None,
+            gpu_render: false,
+            uv_rect: [0.0, 0.0, 1.0, 1.0],
+        })
+    }
+
+    fn surface_mapping(&self, sid: u32, src_w: i32, src_h: i32) -> Option<SurfaceMapping> {
+        let Some(Obj::Surface(surface)) = self.objs.get(&sid) else {
+            return Some(SurfaceMapping::identity(src_w, src_h));
+        };
+        let scale = surface.buffer_scale.max(1);
+        if surface.viewport_source.is_none()
+            && surface.viewport_destination.is_none()
+            && surface.window_geometry.is_none()
+            && self.external_logical_crop.is_none()
+            && scale == 1
+        {
+            return Some(SurfaceMapping::identity(src_w, src_h));
+        }
+
+        let (mut src_x, mut src_y, mut src_x2, mut src_y2, mut dst_w, mut dst_h) =
+            if surface.viewport_source.is_some() || surface.viewport_destination.is_some() {
+                let (sx, sy, sw, sh) = surface
+                    .viewport_source
+                    .unwrap_or((0, 0, src_w << 8, src_h << 8));
+                let src_x = fixed_floor(sx).clamp(0, src_w);
+                let src_y = fixed_floor(sy).clamp(0, src_h);
+                let src_x2 = fixed_ceil(sx.saturating_add(sw)).clamp(src_x, src_w);
+                let src_y2 = fixed_ceil(sy.saturating_add(sh)).clamp(src_y, src_h);
+                let crop_w = src_x2 - src_x;
+                let crop_h = src_y2 - src_y;
+                let (dst_w, dst_h) = surface.viewport_destination.unwrap_or((
+                    (crop_w + scale - 1) / scale,
+                    (crop_h + scale - 1) / scale,
+                ));
+                (src_x, src_y, src_x2, src_y2, dst_w, dst_h)
+            } else {
+                (0, 0, src_w, src_h, src_w / scale, src_h / scale)
+            };
+
+        let own_geometry = surface.window_geometry;
+        let mirrored_geometry = if own_geometry.is_none() {
+            self.external_logical_crop
+                .map(|crop| (crop.x, crop.y, crop.w, crop.h, crop))
+        } else {
+            None
+        };
+        let logical_geometry =
+            own_geometry.or_else(|| mirrored_geometry.map(|(x, y, w, h, _)| (x, y, w, h)));
+
+        if let Some((gx, gy, gw, gh)) = logical_geometry {
+            let rel_x = (gx - surface.attach_x).clamp(0, dst_w);
+            let rel_y = (gy - surface.attach_y).clamp(0, dst_h);
+            let rel_x2 = (gx - surface.attach_x + gw).clamp(rel_x, dst_w);
+            let rel_y2 = (gy - surface.attach_y + gh).clamp(rel_y, dst_h);
+            let base_src_x = src_x;
+            let base_src_y = src_y;
+            let base_crop_w = src_x2 - src_x;
+            let base_crop_h = src_y2 - src_y;
+
+            src_x = base_src_x + div_floor_i32(rel_x, base_crop_w, dst_w);
+            src_y = base_src_y + div_floor_i32(rel_y, base_crop_h, dst_h);
+            src_x2 = base_src_x + div_ceil_i32(rel_x2, base_crop_w, dst_w);
+            src_y2 = base_src_y + div_ceil_i32(rel_y2, base_crop_h, dst_h);
+            dst_w = rel_x2 - rel_x;
+            dst_h = rel_y2 - rel_y;
+
+            if let Some((_, _, _, _, crop)) = mirrored_geometry {
+                eprintln!(
+                    "dd-display[mirror-geometry]: source_client={} source_surface={} source={} \
+target_surface={} crop=({},{} {}x{}) backing={}x{} mapped_src=({},{}..{},{}) mapped_dst={}x{}",
+                    crop.source_client,
+                    crop.source_surface,
+                    crop.source,
+                    sid,
+                    crop.x,
+                    crop.y,
+                    crop.w,
+                    crop.h,
+                    src_w,
+                    src_h,
+                    src_x,
+                    src_y,
+                    src_x2,
+                    src_y2,
+                    dst_w,
+                    dst_h,
+                );
+            }
+        }
+
+        let crop_w = src_x2 - src_x;
+        let crop_h = src_y2 - src_y;
+        if crop_w <= 0 || crop_h <= 0 || dst_w <= 0 || dst_h <= 0 {
+            return None;
+        }
+        Some(SurfaceMapping::new(
+            src_w,
+            src_h,
+            src_x,
+            src_y,
+            src_x2,
+            src_y2,
+            dst_w,
+            dst_h,
+        ))
+    }
+
+    fn apply_viewport(
+        &self,
+        sid: u32,
+        src_w: i32,
+        src_h: i32,
+        src: Vec<u8>,
+    ) -> Option<(i32, i32, Vec<u8>)> {
+        let map = self.surface_mapping(sid, src_w, src_h)?;
+        if map.is_identity(src_w, src_h) {
+            return Some((src_w, src_h, src));
+        }
+
+        let mut out = vec![0u8; map.dst_w as usize * map.dst_h as usize * 4];
+        let crop_w = map.src_x2 - map.src_x;
+        let crop_h = map.src_y2 - map.src_y;
+        for dy in 0..map.dst_h {
+            let sy = map.src_y + ((dy as i64 * crop_h as i64) / map.dst_h as i64) as i32;
+            for dx in 0..map.dst_w {
+                let sx = map.src_x + ((dx as i64 * crop_w as i64) / map.dst_w as i64) as i32;
+                let si = ((sy as usize * src_w as usize) + sx as usize) * 4;
+                let di = ((dy as usize * map.dst_w as usize) + dx as usize) * 4;
+                out[di..di + 4].copy_from_slice(&src[si..si + 4]);
+            }
+        }
+        Some((map.dst_w, map.dst_h, out))
     }
 
     // ---- xdg_wm_base: destroy(0), create_positioner(1), get_xdg_surface(2), pong(3) ----
@@ -621,10 +1141,16 @@ impl<P: Presenter> Server<P> {
         match m.opcode {
             1 => {
                 let id = r.u32();
-                self.objs.insert(id, Obj::XdgToplevel { xdg_surface: m.object });
+                self.objs.insert(
+                    id,
+                    Obj::XdgToplevel {
+                        xdg_surface: m.object,
+                    },
+                );
                 // Give input focus to this toplevel's surface (MVP: newest toplevel is focused).
                 if let Some(Obj::XdgSurface { surface }) = self.objs.get(&m.object) {
-                    self.focus = Some(*surface);
+                    let surface = *surface;
+                    self.focus = Some(surface);
                     self.ptr_entered = false;
                     self.kbd_entered = false;
                 }
@@ -633,7 +1159,23 @@ impl<P: Presenter> Server<P> {
                 let id = r.u32();
                 self.objs.insert(id, Obj::Other); // get_popup
             }
-            _ => {} // ack_configure / set_window_geometry: accepted, no state needed for MVP
+            3 => {
+                // xdg_surface state is double-buffered and takes effect on the next wl_surface.commit.
+                let x = r.i32();
+                let y = r.i32();
+                let w = r.i32();
+                let h = r.i32();
+                if w > 0 && h > 0 {
+                    let surface = match self.objs.get(&m.object) {
+                        Some(Obj::XdgSurface { surface }) => *surface,
+                        _ => return,
+                    };
+                    if let Some(Obj::Surface(s)) = self.objs.get_mut(&surface) {
+                        s.pending_window_geometry = Some((x, y, w, h));
+                    }
+                }
+            }
+            _ => {} // ack_configure: accepted
         }
     }
 
@@ -656,13 +1198,51 @@ impl<P: Presenter> Server<P> {
         }
     }
 
+    // ---- surface_augmenter: destroy(0), create_solid_color_buffer(1), get_augmented_surface(2) ----
+    fn surface_augmenter(&mut self, m: Message) {
+        let mut r = m.reader();
+        match m.opcode {
+            0 => {
+                self.objs.remove(&m.object);
+            }
+            1 => {
+                // create_solid_color_buffer(id, color[float r,g,b,a], width, height)
+                let id = r.u32();
+                let color = r.array();
+                let width = r.i32();
+                let height = r.i32();
+                self.objs.insert(
+                    id,
+                    Obj::SolidColorBuffer {
+                        width,
+                        height,
+                        bgra: color_to_bgra(&color),
+                    },
+                );
+            }
+            2 => {
+                let id = r.u32();
+                let surface = r.u32();
+                self.objs.insert(id, Obj::AugmentedSurface { surface });
+            }
+            _ => {}
+        }
+    }
+
     // ---- zwp_linux_dmabuf_v1: create_params(1), get_default_feedback(2), get_surface_feedback(3) ----
     fn linux_dmabuf(&mut self, m: Message) {
         let mut r = m.reader();
         match m.opcode {
             1 => {
                 let id = r.u32();
-                self.objs.insert(id, Obj::DmabufParams { iosurface_id: None, stride: 0, gpu_render: false });
+                self.objs.insert(
+                    id,
+                    Obj::DmabufParams {
+                        iosurface_id: None,
+                        stride: 0,
+                        gpu_render: false,
+                    },
+                );
             }
             2 | 3 => {
                 // get_default_feedback(id) / get_surface_feedback(id, surface): the v4 render-node
@@ -730,7 +1310,12 @@ impl<P: Presenter> Server<P> {
                 let stride = r.i32();
                 let mod_hi = r.u32();
                 let mod_lo = r.u32();
-                if let Some(Obj::DmabufParams { iosurface_id, stride: s, gpu_render }) = self.objs.get_mut(&m.object) {
+                if let Some(Obj::DmabufParams {
+                    iosurface_id,
+                    stride: s,
+                    gpu_render,
+                }) = self.objs.get_mut(&m.object)
+                {
                     *s = stride;
                     if mod_hi & 0xffff == DD_DMABUF_MOD_MAGIC {
                         *iosurface_id = Some(mod_lo);
@@ -745,12 +1330,25 @@ impl<P: Presenter> Server<P> {
                 let h = r.i32();
                 let format = r.u32();
                 let (iosurface_id, gpu_render) = match self.objs.get(&m.object) {
-                    Some(Obj::DmabufParams { iosurface_id, gpu_render, .. }) => (*iosurface_id, *gpu_render),
+                    Some(Obj::DmabufParams {
+                        iosurface_id,
+                        gpu_render,
+                        ..
+                    }) => (*iosurface_id, *gpu_render),
                     _ => (None, false),
                 };
                 match iosurface_id {
                     Some(id) => {
-                        self.objs.insert(buffer_id, Obj::DmaBuffer { width: w, height: h, format, iosurface_id: id, gpu_render });
+                        self.objs.insert(
+                            buffer_id,
+                            Obj::DmaBuffer {
+                                width: w,
+                                height: h,
+                                format,
+                                iosurface_id: id,
+                                gpu_render,
+                            },
+                        );
                     }
                     None => {
                         self.objs.insert(buffer_id, Obj::Other); // no dd IOSurface tag → unusable
@@ -808,13 +1406,57 @@ impl<P: Presenter> Server<P> {
     }
 
     // ---- wp_viewporter: destroy(0), get_viewport(1, id, surface) ----
-    // A viewport lets a client crop/scale a surface; for the MVP we present the surface's buffer as-is, so
-    // the viewport object is inert (its set_source/set_destination are no-ops).
+    // Chromium uses viewports for logical crop/scale. Track the object so set_source/set_destination can
+    // affect the next committed wl_shm buffer instead of letting oversized buffers spill past the window.
     fn wp_viewporter(&mut self, m: Message) {
         if m.opcode == 1 {
             let mut r = m.reader();
             let id = r.u32(); // new wp_viewport id
-            self.objs.insert(id, Obj::Other);
+            let surface = r.u32();
+            self.objs.insert(id, Obj::Viewport { surface });
+        }
+    }
+
+    // ---- wp_viewport: destroy(0), set_source(1), set_destination(2) ----
+    fn wp_viewport(&mut self, m: Message) {
+        let surface = match self.objs.get(&m.object) {
+            Some(Obj::Viewport { surface }) => *surface,
+            _ => return,
+        };
+        let mut r = m.reader();
+        match m.opcode {
+            0 => {
+                if let Some(Obj::Surface(s)) = self.objs.get_mut(&surface) {
+                    s.viewport_source = None;
+                    s.viewport_destination = None;
+                }
+                self.objs.remove(&m.object);
+            }
+            1 => {
+                let x = r.i32();
+                let y = r.i32();
+                let w = r.i32();
+                let h = r.i32();
+                if let Some(Obj::Surface(s)) = self.objs.get_mut(&surface) {
+                    if x == -1 && y == -1 && w == -1 && h == -1 {
+                        s.viewport_source = None;
+                    } else if w > 0 && h > 0 {
+                        s.viewport_source = Some((x, y, w, h));
+                    }
+                }
+            }
+            2 => {
+                let w = r.i32();
+                let h = r.i32();
+                if let Some(Obj::Surface(s)) = self.objs.get_mut(&surface) {
+                    if w == -1 && h == -1 {
+                        s.viewport_destination = None;
+                    } else if w > 0 && h > 0 {
+                        s.viewport_destination = Some((w, h));
+                    }
+                }
+            }
+            _ => {}
         }
     }
 
@@ -856,11 +1498,19 @@ impl<P: Presenter> Server<P> {
         if self.ptr_entered {
             return;
         }
-        let (Some(ptr), Some(focus)) = (self.pointer, self.focus) else { return };
+        let (Some(ptr), Some(focus)) = (self.pointer, self.focus) else {
+            return;
+        };
         let s = self.next_serial();
         let (x, y) = self.last_ptr;
         // enter(serial, surface, surface_x(fixed), surface_y(fixed))
-        self.conn.send(&Message::new(ptr, 0).u32(s).u32(focus).i32(fixed(x)).i32(fixed(y)));
+        self.conn.send(
+            &Message::new(ptr, 0)
+                .u32(s)
+                .u32(focus)
+                .i32(fixed(x))
+                .i32(fixed(y)),
+        );
         self.ptr_entered = true;
     }
 
@@ -868,10 +1518,13 @@ impl<P: Presenter> Server<P> {
         if self.kbd_entered {
             return;
         }
-        let (Some(kbd), Some(focus)) = (self.keyboard, self.focus) else { return };
+        let (Some(kbd), Some(focus)) = (self.keyboard, self.focus) else {
+            return;
+        };
         let s = self.next_serial();
         // enter(serial, surface, keys[] (currently-pressed, empty))
-        self.conn.send(&Message::new(kbd, 1).u32(s).u32(focus).array(&[]));
+        self.conn
+            .send(&Message::new(kbd, 1).u32(s).u32(focus).array(&[]));
         self.kbd_entered = true;
     }
 
@@ -883,7 +1536,8 @@ impl<P: Presenter> Server<P> {
         self.time_ms = self.time_ms.wrapping_add(8);
         let t = self.time_ms;
         // motion(time, x(fixed), y(fixed))
-        self.conn.send(&Message::new(ptr, 2).u32(t).i32(fixed(x)).i32(fixed(y)));
+        self.conn
+            .send(&Message::new(ptr, 2).u32(t).i32(fixed(x)).i32(fixed(y)));
         if self.seat_ver >= 5 {
             self.conn.send(&Message::new(ptr, 5)); // frame
         }
@@ -898,7 +1552,13 @@ impl<P: Presenter> Server<P> {
         self.time_ms = self.time_ms.wrapping_add(8);
         let t = self.time_ms;
         // button(serial, time, button, state)
-        self.conn.send(&Message::new(ptr, 3).u32(s).u32(t).u32(button).u32(pressed as u32));
+        self.conn.send(
+            &Message::new(ptr, 3)
+                .u32(s)
+                .u32(t)
+                .u32(button)
+                .u32(pressed as u32),
+        );
         if self.seat_ver >= 5 {
             self.conn.send(&Message::new(ptr, 5)); // frame
         }
@@ -912,7 +1572,8 @@ impl<P: Presenter> Server<P> {
         self.time_ms = self.time_ms.wrapping_add(8);
         let t = self.time_ms;
         // axis(time, axis, value(fixed))
-        self.conn.send(&Message::new(ptr, 4).u32(t).u32(axis).i32(fixed(value)));
+        self.conn
+            .send(&Message::new(ptr, 4).u32(t).u32(axis).i32(fixed(value)));
         if self.seat_ver >= 5 {
             self.conn.send(&Message::new(ptr, 5)); // frame
         }
@@ -927,7 +1588,13 @@ impl<P: Presenter> Server<P> {
         self.time_ms = self.time_ms.wrapping_add(8);
         let t = self.time_ms;
         // key(serial, time, key, state)  state: 0=released 1=pressed
-        self.conn.send(&Message::new(kbd, 3).u32(s).u32(t).u32(keycode).u32(pressed as u32));
+        self.conn.send(
+            &Message::new(kbd, 3)
+                .u32(s)
+                .u32(t)
+                .u32(keycode)
+                .u32(pressed as u32),
+        );
         self.conn.flush().ok();
     }
 
@@ -937,12 +1604,97 @@ impl<P: Presenter> Server<P> {
         let Some(kbd) = self.keyboard else { return };
         let s = self.next_serial();
         // modifiers(serial, depressed, latched, locked, group)
-        self.conn.send(&Message::new(kbd, 4).u32(s).u32(depressed).u32(latched).u32(locked).u32(group));
+        self.conn.send(
+            &Message::new(kbd, 4)
+                .u32(s)
+                .u32(depressed)
+                .u32(latched)
+                .u32(locked)
+                .u32(group),
+        );
         self.conn.flush().ok();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::present::PngPresenter;
+
+    #[test]
+    fn external_logical_crop_maps_presenting_surface() {
+        let mut sv = [0i32; 2];
+        assert_eq!(
+            unsafe { libc::socketpair(libc::AF_UNIX, libc::SOCK_STREAM, 0, sv.as_mut_ptr()) },
+            0
+        );
+        let mut server = Server::new(sv[1], PngPresenter::new("/tmp/dd-display-mirror-test"));
+        server.objs.insert(7, Obj::Surface(Surface::default()));
+        server.set_external_logical_crop(Some(ExternalLogicalCrop {
+            source_client: 0,
+            source_surface: 42,
+            source: "test",
+            x: 16,
+            y: 8,
+            w: 200,
+            h: 100,
+        }));
+
+        let map = server.surface_mapping(7, 532, 384).expect("mapped crop");
+        assert_eq!(
+            (map.src_x, map.src_y, map.src_x2, map.src_y2),
+            (16, 8, 216, 108)
+        );
+        assert_eq!((map.dst_w, map.dst_h), (200, 100));
+        assert!((map.uv_rect[0] - 16.0 / 532.0).abs() < f32::EPSILON);
+        assert!((map.uv_rect[3] - 108.0 / 384.0).abs() < f32::EPSILON);
+
+        drop(server);
+        unsafe {
+            libc::close(sv[0]);
+            libc::close(sv[1]);
+        }
     }
 }
 
 /// Convert an integer pixel coordinate to a `wl_fixed` (24.8 fixed-point).
 fn fixed(v: i32) -> i32 {
     v * 256
+}
+
+fn div_floor_i32(n: i32, mul: i32, div: i32) -> i32 {
+    if div <= 0 {
+        return 0;
+    }
+    ((n as i64 * mul as i64) / div as i64) as i32
+}
+
+fn div_ceil_i32(n: i32, mul: i32, div: i32) -> i32 {
+    if div <= 0 {
+        return 0;
+    }
+    ((n as i64 * mul as i64 + div as i64 - 1) / div as i64) as i32
+}
+
+fn color_to_bgra(bytes: &[u8]) -> [u8; 4] {
+    fn channel(bytes: &[u8], idx: usize, fallback: f32) -> u8 {
+        let start = idx * 4;
+        let value = if start + 4 <= bytes.len() {
+            f32::from_ne_bytes(bytes[start..start + 4].try_into().unwrap())
+        } else {
+            fallback
+        };
+        let value = if value.is_finite() {
+            value.clamp(0.0, 1.0)
+        } else {
+            fallback
+        };
+        (value * 255.0 + 0.5) as u8
+    }
+
+    let r = channel(bytes, 0, 0.0);
+    let g = channel(bytes, 1, 0.0);
+    let b = channel(bytes, 2, 0.0);
+    let a = channel(bytes, 3, 1.0);
+    [b, g, r, a]
 }

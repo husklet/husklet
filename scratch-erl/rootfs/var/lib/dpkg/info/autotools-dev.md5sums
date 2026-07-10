@@ -1,0 +1,15 @@
+b8d5c59b535d3556f437259bdac0362b  usr/bin/dh_autotools-dev_restoreconfig
+2b1f616ab4421d38b08b815dc784d07f  usr/bin/dh_autotools-dev_updateconfig
+6be2ca2a4a02a464bbe927d6bb6d4cad  usr/share/doc/autotools-dev/NEWS.Debian.gz
+3f52bb0de6b204eb66353b7f08c2e7af  usr/share/doc/autotools-dev/README.Debian.gz
+c71b8f9ddf21dd8a413746a5735fd386  usr/share/doc/autotools-dev/TODO
+7a55a47d2e7d00b2faef998322aee61b  usr/share/doc/autotools-dev/changelog.gz
+10305571c5c8f6857723f0f31590710d  usr/share/doc/autotools-dev/copyright
+e7c34c1ecad66d9f27bea50de5fc6beb  usr/share/doc/autotools-dev/upstream.mail.template
+df98e913fea247ad2194961e87516d50  usr/share/man/man1/config.guess.1.gz
+9689a65a91df08ec01c5ab2d6b5dbb5b  usr/share/man/man1/config.sub.1.gz
+2829229dfecbe5be0eee361227e04e87  usr/share/man/man1/dh_autotools-dev_restoreconfig.1.gz
+7516893c5e46f61743067ac6553b25ae  usr/share/man/man1/dh_autotools-dev_updateconfig.1.gz
+32828e0f15b831b50dbb2c7503b8d89b  usr/share/misc/config.guess
+b706ac2ba26475072c6dc72a68bd5ea0  usr/share/misc/config.sub
+8776e6fa1ae942ac3860ea956aa814e7  usr/share/perl5/Debian/Debhelper/Sequence/autotools_dev.pm

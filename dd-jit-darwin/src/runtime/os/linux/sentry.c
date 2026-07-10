@@ -410,6 +410,7 @@ static int sentry_forwarded(uint64_t nr) {
     // --- multiplexing over sentry-owned fds (item 3): these BLOCK on an fd that lives in the sentry ---
     case 72: // pselect6     (three fd_sets in/out + timeout)
     case 73: // ppoll        (pollfd array in/out + timeout)
+    case 19: // eventfd2     (returns a sentry-owned eventfd backing pipe)
     case 20: // epoll_create1(returns a sentry-owned kqueue fd)
     case 21: // epoll_ctl    (in epoll_event; operates on sentry fds)
     case 22: // epoll_pwait  (out events buffer)
@@ -576,6 +577,18 @@ static void sentry_proc_fork(pid_t parent, pid_t child) {
     pthread_mutex_lock(&g_fd_lock);
     struct sentry_proc *pp = proc_lookup_locked(parent);
     struct sentry_proc *cp = proc_find_locked(child); // default (stdio) table for the child
+    if (cp) {
+        int already = 0;
+        for (uint32_t v = 3; v < SENTRY_VFD_MAX; v++)
+            if (cp->real[v] >= 0) {
+                already = 1;
+                break;
+            }
+        if (already) {
+            pthread_mutex_unlock(&g_fd_lock);
+            return;
+        }
+    }
     if (cp && pp)
         for (uint32_t v = 3; v < SENTRY_VFD_MAX; v++) { // 0/1/2 already mapped borrowed by proc_init_table
             if (pp->real[v] < 0) continue;
@@ -586,6 +599,13 @@ static void sentry_proc_fork(pid_t parent, pid_t child) {
                 int d = dup(pp->real[v]);
                 cp->real[v] = d;
                 cp->borrowed[v] = (d < 0); // dup failure: leave the slot unusable but never closeable
+                if (d >= 0 && d < DD_NFD && pp->real[v] >= 0 && pp->real[v] < DD_NFD) {
+                    strcpy(g_fdpath[d], g_fdpath[pp->real[v]]);
+                    strcpy(g_proc_text_desc[d], g_proc_text_desc[pp->real[v]]);
+                    g_proc_text_ro[d] = g_proc_text_ro[pp->real[v]];
+                    g_pagemap_fd[d] = g_pagemap_fd[pp->real[v]];
+                    fd_carry_sock(d, pp->real[v]);
+                }
             }
         }
     pthread_mutex_unlock(&g_fd_lock);
@@ -617,12 +637,15 @@ static int sentry_cmsg_translate_out(struct sentry_proc *p, uint8_t *ctl, size_t
         int level = *(const int *)(ctl + o + 8);
         int type = *(const int *)(ctl + o + 12);
         if (clen < 16u || o + clen > len) break;
-        if (level == SOL_SOCKET && type == SCM_RIGHTS) {
+        if (level == LX_SOL_SOCKET && type == SCM_RIGHTS) {
             size_t nfd = (size_t)(clen - 16u) / sizeof(int);
             for (size_t i = 0; i < nfd; i++) {
                 int *slot = (int *)(ctl + o + 16u + i * sizeof(int));
                 int rfd = vfd_real(p, *slot);
                 if (rfd < 0) return -1; // not this guest's fd -> reject the whole sendmsg
+                if (cmsg_debug_on())
+                    fprintf(stderr, "[DDSENTRYFD] pid=%d send wpid=%d vfd=%d rfd=%d\n", getpid(), (int)p->wpid,
+                            *slot, rfd);
                 *slot = rfd;
             }
         }
@@ -641,15 +664,21 @@ static void sentry_cmsg_translate_in(struct sentry_proc *p, uint8_t *ctl, size_t
         int level = *(int *)(ctl + o + 8);
         int type = *(int *)(ctl + o + 12);
         if (clen < 16u || o + clen > len) break;
-        if (level == SOL_SOCKET && type == SCM_RIGHTS) {
+        if (level == LX_SOL_SOCKET && type == SCM_RIGHTS) {
             size_t nfd = (size_t)(clen - 16u) / sizeof(int);
             for (size_t i = 0; i < nfd; i++) {
                 int *slot = (int *)(ctl + o + 16u + i * sizeof(int));
                 int v = vfd_alloc(p, *slot, 0);
                 if (v < 0) {
+                    if (cmsg_debug_on())
+                        fprintf(stderr, "[DDSENTRYFD] pid=%d recv wpid=%d rfd=%d vfd=-1\n", getpid(), (int)p->wpid,
+                                *slot);
                     close(*slot);
                     *slot = -1;
                 } else {
+                    if (cmsg_debug_on())
+                        fprintf(stderr, "[DDSENTRYFD] pid=%d recv wpid=%d rfd=%d vfd=%d\n", getpid(), (int)p->wpid,
+                                *slot, v);
                     *slot = v;
                 }
             }
@@ -1144,6 +1173,7 @@ static void sentry_service_one(struct sentry_ring *R) {
             case 198:
             case 202:
             case 242:
+            case 19:
             case 23:
             case 20: // openat/socket/accept*/dup/epoll_create1
                 if (ret >= 0) {
@@ -1348,7 +1378,10 @@ static void syscall_route(struct cpu *c) {
             sentry_ctl_op(SENTRY_OP_FORK, (uint64_t)(uint32_t)parent, (uint64_t)(uint32_t)g_worker_pid);
             return;
         }
-        if (!is_thread && (int64_t)G_RET(c) > 0) atomic_fetch_add(&g_guest_children, 1); // parent: a child appeared
+        if (!is_thread && (int64_t)G_RET(c) > 0) {
+            sentry_ctl_op(SENTRY_OP_FORK, (uint64_t)(uint32_t)g_worker_pid, G_RET(c));
+            atomic_fetch_add(&g_guest_children, 1); // parent: a child appeared
+        }
         return;
     }
     // execve(221) stays LOCAL: service_local reloads the guest image IN THIS PROCESS (it is not a host

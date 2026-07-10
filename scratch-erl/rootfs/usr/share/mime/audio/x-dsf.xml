@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<mime-type xmlns="http://www.freedesktop.org/standards/shared-mime-info" type="audio/x-dsf">
+  <!--Created automatically by update-mime-database. DO NOT EDIT!-->
+  <comment>DSF audio</comment>
+  <acronym>DSF</acronym>
+  <expanded-acronym>Direct stream digital Stream File</expanded-acronym>
+  <glob pattern="*.dsf"/>
+  <alias type="audio/dsf"/>
+  <alias type="audio/x-dsd"/>
+  <alias type="audio/dsd"/>
+</mime-type>

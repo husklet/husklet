@@ -20,11 +20,18 @@ pub fn anon_fd_with(bytes: &[u8]) -> Option<i32> {
         let nm = format!(
             "/ddkm{}.{}",
             unsafe { libc::getpid() },
-            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).ok()?.subsec_nanos()
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .ok()?
+                .subsec_nanos()
         );
         let c = std::ffi::CString::new(nm).ok()?;
         unsafe {
-            let fd = libc::shm_open(c.as_ptr(), libc::O_RDWR | libc::O_CREAT | libc::O_EXCL, 0o600);
+            let fd = libc::shm_open(
+                c.as_ptr(),
+                libc::O_RDWR | libc::O_CREAT | libc::O_EXCL,
+                0o600,
+            );
             if fd >= 0 {
                 libc::shm_unlink(c.as_ptr());
             }
@@ -39,7 +46,14 @@ pub fn anon_fd_with(bytes: &[u8]) -> Option<i32> {
             libc::close(fd);
             return None;
         }
-        let map = libc::mmap(std::ptr::null_mut(), size, libc::PROT_READ | libc::PROT_WRITE, libc::MAP_SHARED, fd, 0);
+        let map = libc::mmap(
+            std::ptr::null_mut(),
+            size,
+            libc::PROT_READ | libc::PROT_WRITE,
+            libc::MAP_SHARED,
+            fd,
+            0,
+        );
         if map == libc::MAP_FAILED {
             libc::close(fd);
             return None;

@@ -1,0 +1,16 @@
+#libevent pkg-config source file
+
+prefix=/usr
+exec_prefix=${prefix}
+libdir=${prefix}/lib/aarch64-linux-gnu
+includedir=${prefix}/include
+
+Name: libevent_extra
+Description: libevent_extra
+Version: 2.1.12-stable
+Requires:
+Conflicts:
+Libs: -L${libdir} -levent_extra
+Libs.private: 
+Cflags: -I${includedir}
+

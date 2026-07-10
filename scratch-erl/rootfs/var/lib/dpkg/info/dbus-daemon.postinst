@@ -1,0 +1,23 @@
+#!/bin/sh
+
+set -e
+
+if [ "$1" = configure ]; then
+    # This is idempotent, so it's OK to do every time. The system bus' init
+    # script does this anyway, but you also have to do this before a session
+    # bus will work on non-systemd systems, so we do this here for the
+    # benefit of people starting a temporary session bus in a chroot.
+    mkdir -p /var/lib/dbus
+    dbus-uuidgen --ensure
+fi
+
+# Automatically added by dh_installtmpfiles/13.11.4
+if [ "$1" = "configure" ] || [ "$1" = "abort-upgrade" ] || [ "$1" = "abort-deconfigure" ] || [ "$1" = "abort-remove" ] ; then
+	if [ -x "$(command -v systemd-tmpfiles)" ]; then
+		systemd-tmpfiles ${DPKG_ROOT:+--root="$DPKG_ROOT"} --create dbus.conf >/dev/null || true
+	fi
+fi
+# End automatically added section
+
+
+exit 0

@@ -1,0 +1,13 @@
+#!/bin/sh
+
+set -e
+
+case "$1" in
+    configure)
+        dpkg-trigger --no-await update-initramfs
+    ;;
+esac
+
+
+
+exit 0

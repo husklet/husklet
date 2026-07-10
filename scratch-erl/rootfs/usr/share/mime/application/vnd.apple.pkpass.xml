@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<mime-type xmlns="http://www.freedesktop.org/standards/shared-mime-info" type="application/vnd.apple.pkpass">
+  <!--Created automatically by update-mime-database. DO NOT EDIT!-->
+  <comment>Apple Wallet pass</comment>
+  <sub-class-of type="application/zip"/>
+  <glob pattern="*.pkpass"/>
+</mime-type>

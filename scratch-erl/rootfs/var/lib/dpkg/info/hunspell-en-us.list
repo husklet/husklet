@@ -1,0 +1,16 @@
+/.
+/usr
+/usr/share
+/usr/share/doc
+/usr/share/doc/hunspell-en-us
+/usr/share/doc/hunspell-en-us/NEWS.Debian.gz
+/usr/share/doc/hunspell-en-us/changelog.Debian.gz
+/usr/share/doc/hunspell-en-us/copyright
+/usr/share/hunspell
+/usr/share/hunspell/en_US.aff
+/usr/share/hunspell/en_US.dic
+/var
+/var/lib
+/var/lib/dictionaries-common
+/var/lib/dictionaries-common/hunspell
+/var/lib/dictionaries-common/hunspell/hunspell-en-us

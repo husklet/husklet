@@ -1,0 +1,166 @@
+<!DOCTYPE html PUBLIC "-//W3C//DTD HTML 4.01 Transitional//EN" "http://www.w3.org/TR/html4/loose.dtd">
+<html>
+<!-- Created by GNU Texinfo 6.8, https://www.gnu.org/software/texinfo/ -->
+<head>
+<meta http-equiv="Content-Type" content="text/html; charset=utf-8">
+<!-- 
+This manual is for libffi, a portable foreign function interface
+library.
+
+Copyright (C) 2008-2019, 2021, 2022 Anthony Green and Red Hat, Inc.
+
+Permission is hereby granted, free of charge, to any person obtaining
+a copy of this software and associated documentation files (the
+"Software"), to deal in the Software without restriction, including
+without limitation the rights to use, copy, modify, merge, publish,
+distribute, sublicense, and/or sell copies of the Software, and to
+permit persons to whom the Software is furnished to do so, subject to
+the following conditions:
+
+The above copyright notice and this permission notice shall be
+included in all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
+EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.
+IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY
+CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT,
+TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
+SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+ -->
+<title>Complex Type Example (libffi: the portable foreign function interface library)</title>
+
+<meta name="description" content="Complex Type Example (libffi: the portable foreign function interface library)">
+<meta name="keywords" content="Complex Type Example (libffi: the portable foreign function interface library)">
+<meta name="resource-type" content="document">
+<meta name="distribution" content="global">
+<meta name="Generator" content="makeinfo">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+
+<link href="index.html" rel="start" title="Top">
+<link href="Index.html" rel="index" title="Index">
+<link href="Types.html" rel="up" title="Types">
+<link href="Complex.html" rel="prev" title="Complex">
+<style type="text/css">
+<!--
+a.copiable-anchor {visibility: hidden; text-decoration: none; line-height: 0em}
+a.summary-letter {text-decoration: none}
+blockquote.indentedblock {margin-right: 0em}
+div.display {margin-left: 3.2em}
+div.example {margin-left: 3.2em}
+kbd {font-style: oblique}
+pre.display {font-family: inherit}
+pre.format {font-family: inherit}
+pre.menu-comment {font-family: serif}
+pre.menu-preformatted {font-family: serif}
+span.nolinebreak {white-space: nowrap}
+span.roman {font-family: initial; font-weight: normal}
+span.sansserif {font-family: sans-serif; font-weight: normal}
+span:hover a.copiable-anchor {visibility: visible}
+ul.no-bullet {list-style: none}
+-->
+</style>
+
+
+</head>
+
+<body lang="en">
+<div class="subsection" id="Complex-Type-Example">
+<div class="header">
+<p>
+Previous: <a href="Complex.html" accesskey="p" rel="prev">Complex Types</a>, Up: <a href="Types.html" accesskey="u" rel="up">Types</a> &nbsp; [<a href="Index.html" title="Index" rel="index">Index</a>]</p>
+</div>
+<hr>
+<span id="Complex-Type-Example-1"></span><h4 class="subsection">2.3.7 Complex Type Example</h4>
+
+<p>This example demonstrates how to use complex types:
+</p>
+<div class="example">
+<pre class="example">#include &lt;stdio.h&gt;
+#include &lt;ffi.h&gt;
+#include &lt;complex.h&gt;
+
+void complex_fn(_Complex float cf,
+                _Complex double cd,
+                _Complex long double cld)
+{
+  printf(&quot;cf=%f+%fi\ncd=%f+%fi\ncld=%f+%fi\n&quot;,
+         (float)creal (cf), (float)cimag (cf),
+         (float)creal (cd), (float)cimag (cd),
+         (float)creal (cld), (float)cimag (cld));
+}
+
+int main()
+{
+  ffi_cif cif;
+  ffi_type *args[3];
+  void *values[3];
+  _Complex float cf;
+  _Complex double cd;
+  _Complex long double cld;
+
+  /* Initialize the argument info vectors */
+  args[0] = &amp;ffi_type_complex_float;
+  args[1] = &amp;ffi_type_complex_double;
+  args[2] = &amp;ffi_type_complex_longdouble;
+  values[0] = &amp;cf;
+  values[1] = &amp;cd;
+  values[2] = &amp;cld;
+
+  /* Initialize the cif */
+  if (ffi_prep_cif(&amp;cif, FFI_DEFAULT_ABI, 3,
+                   &amp;ffi_type_void, args) == FFI_OK)
+    {
+      cf = 1.0 + 20.0 * I;
+      cd = 300.0 + 4000.0 * I;
+      cld = 50000.0 + 600000.0 * I;
+      /* Call the function */
+      ffi_call(&amp;cif, (void (*)(void))complex_fn, 0, values);
+    }
+
+  return 0;
+}
+</pre></div>
+
+<p>This is an example for defining a custom complex type descriptor
+for compilers that support them:
+</p>
+<div class="example">
+<pre class="example">/*
+ * This macro can be used to define new complex type descriptors
+ * in a platform independent way.
+ *
+ * name: Name of the new descriptor is ffi_type_complex_&lt;name&gt;.
+ * type: The C base type of the complex type.
+ */
+#define FFI_COMPLEX_TYPEDEF(name, type, ffitype)             \
+  static ffi_type *ffi_elements_complex_##name [2] = {      \
+    (ffi_type *)(&amp;ffitype), NULL                             \
+  };                                                        \
+  struct struct_align_complex_##name {                      \
+    char c;                                                  \
+    _Complex type x;                                         \
+  };                                                        \
+  ffi_type ffi_type_complex_##name = {                      \
+    sizeof(_Complex type),                                   \
+    offsetof(struct struct_align_complex_##name, x),         \
+    FFI_TYPE_COMPLEX,                                        \
+    (ffi_type **)ffi_elements_complex_##name                 \
+  }
+
+/* Define new complex type descriptors using the macro: */
+/* ffi_type_complex_sint */
+FFI_COMPLEX_TYPEDEF(sint, int, ffi_type_sint);
+/* ffi_type_complex_uchar */
+FFI_COMPLEX_TYPEDEF(uchar, unsigned char, ffi_type_uint8);
+</pre></div>
+
+<p>The new type descriptors can then be used like one of the built-in
+type descriptors in the previous example.
+</p>
+</div>
+
+
+
+</body>
+</html>

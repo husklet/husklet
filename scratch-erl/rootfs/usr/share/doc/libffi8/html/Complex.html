@@ -1,0 +1,126 @@
+<!DOCTYPE html PUBLIC "-//W3C//DTD HTML 4.01 Transitional//EN" "http://www.w3.org/TR/html4/loose.dtd">
+<html>
+<!-- Created by GNU Texinfo 6.8, https://www.gnu.org/software/texinfo/ -->
+<head>
+<meta http-equiv="Content-Type" content="text/html; charset=utf-8">
+<!-- 
+This manual is for libffi, a portable foreign function interface
+library.
+
+Copyright (C) 2008-2019, 2021, 2022 Anthony Green and Red Hat, Inc.
+
+Permission is hereby granted, free of charge, to any person obtaining
+a copy of this software and associated documentation files (the
+"Software"), to deal in the Software without restriction, including
+without limitation the rights to use, copy, modify, merge, publish,
+distribute, sublicense, and/or sell copies of the Software, and to
+permit persons to whom the Software is furnished to do so, subject to
+the following conditions:
+
+The above copyright notice and this permission notice shall be
+included in all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
+EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.
+IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY
+CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT,
+TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
+SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+ -->
+<title>Complex (libffi: the portable foreign function interface library)</title>
+
+<meta name="description" content="Complex (libffi: the portable foreign function interface library)">
+<meta name="keywords" content="Complex (libffi: the portable foreign function interface library)">
+<meta name="resource-type" content="document">
+<meta name="distribution" content="global">
+<meta name="Generator" content="makeinfo">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+
+<link href="index.html" rel="start" title="Top">
+<link href="Index.html" rel="index" title="Index">
+<link href="Types.html" rel="up" title="Types">
+<link href="Complex-Type-Example.html" rel="next" title="Complex Type Example">
+<link href="Type-Example.html" rel="prev" title="Type Example">
+<style type="text/css">
+<!--
+a.copiable-anchor {visibility: hidden; text-decoration: none; line-height: 0em}
+a.summary-letter {text-decoration: none}
+blockquote.indentedblock {margin-right: 0em}
+div.display {margin-left: 3.2em}
+div.example {margin-left: 3.2em}
+kbd {font-style: oblique}
+pre.display {font-family: inherit}
+pre.format {font-family: inherit}
+pre.menu-comment {font-family: serif}
+pre.menu-preformatted {font-family: serif}
+span.nolinebreak {white-space: nowrap}
+span.roman {font-family: initial; font-weight: normal}
+span.sansserif {font-family: sans-serif; font-weight: normal}
+span:hover a.copiable-anchor {visibility: visible}
+ul.no-bullet {list-style: none}
+-->
+</style>
+
+
+</head>
+
+<body lang="en">
+<div class="subsection" id="Complex">
+<div class="header">
+<p>
+Next: <a href="Complex-Type-Example.html" accesskey="n" rel="next">Complex Type Example</a>, Previous: <a href="Type-Example.html" accesskey="p" rel="prev">Type Example</a>, Up: <a href="Types.html" accesskey="u" rel="up">Types</a> &nbsp; [<a href="Index.html" title="Index" rel="index">Index</a>]</p>
+</div>
+<hr>
+<span id="Complex-Types"></span><h4 class="subsection">2.3.6 Complex Types</h4>
+
+<p><code>libffi</code> supports the complex types defined by the C99
+standard (<code>_Complex float</code>, <code>_Complex double</code> and
+<code>_Complex long double</code> with the built-in type descriptors
+<code>ffi_type_complex_float</code>, <code>ffi_type_complex_double</code> and
+<code>ffi_type_complex_longdouble</code>.
+</p>
+<p>Custom complex types like <code>_Complex int</code> can also be used.
+An <code>ffi_type</code> object has to be defined to describe the
+complex type to <code>libffi</code>.
+</p>
+<span id="index-ffi_005ftype-2"></span>
+<dl class="def">
+<dt id="index-ffi_005ftype-3"><span class="category">Data type: </span><span><strong>ffi_type</strong><a href='#index-ffi_005ftype-3' class='copiable-anchor'> &para;</a></span></dt>
+<dd><dl compact="compact">
+<dt><span><code>size_t size</code></span></dt>
+<dd><p>This must be manually set to the size of the complex type.
+</p>
+</dd>
+<dt><span><code>unsigned short alignment</code></span></dt>
+<dd><p>This must be manually set to the alignment of the complex type.
+</p>
+</dd>
+<dt><span><code>unsigned short type</code></span></dt>
+<dd><p>For a complex type, this must be set to <code>FFI_TYPE_COMPLEX</code>.
+</p>
+</dd>
+<dt><span><code>ffi_type **elements</code></span></dt>
+<dd>
+<p>This is a &lsquo;<samp>NULL</samp>&rsquo;-terminated array of pointers to
+<code>ffi_type</code> objects.  The first element is set to the
+<code>ffi_type</code> of the complex&rsquo;s base type.  The second element
+must be set to <code>NULL</code>.
+</p></dd>
+</dl>
+</dd></dl>
+
+<p>The section <a href="Complex-Type-Example.html">Complex Type Example</a> shows a way to determine
+the <code>size</code> and <code>alignment</code> members in a platform
+independent way.
+</p>
+<p>For platforms that have no complex support in <code>libffi</code> yet,
+the functions <code>ffi_prep_cif</code> and <code>ffi_prep_args</code> abort
+the program if they encounter a complex type.
+</p>
+</div>
+
+
+
+</body>
+</html>

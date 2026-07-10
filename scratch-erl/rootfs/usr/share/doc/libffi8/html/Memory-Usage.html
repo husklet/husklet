@@ -1,0 +1,117 @@
+<!DOCTYPE html PUBLIC "-//W3C//DTD HTML 4.01 Transitional//EN" "http://www.w3.org/TR/html4/loose.dtd">
+<html>
+<!-- Created by GNU Texinfo 6.8, https://www.gnu.org/software/texinfo/ -->
+<head>
+<meta http-equiv="Content-Type" content="text/html; charset=utf-8">
+<!-- 
+This manual is for libffi, a portable foreign function interface
+library.
+
+Copyright (C) 2008-2019, 2021, 2022 Anthony Green and Red Hat, Inc.
+
+Permission is hereby granted, free of charge, to any person obtaining
+a copy of this software and associated documentation files (the
+"Software"), to deal in the Software without restriction, including
+without limitation the rights to use, copy, modify, merge, publish,
+distribute, sublicense, and/or sell copies of the Software, and to
+permit persons to whom the Software is furnished to do so, subject to
+the following conditions:
+
+The above copyright notice and this permission notice shall be
+included in all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
+EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.
+IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY
+CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT,
+TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
+SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+ -->
+<title>Memory Usage (libffi: the portable foreign function interface library)</title>
+
+<meta name="description" content="Memory Usage (libffi: the portable foreign function interface library)">
+<meta name="keywords" content="Memory Usage (libffi: the portable foreign function interface library)">
+<meta name="resource-type" content="document">
+<meta name="distribution" content="global">
+<meta name="Generator" content="makeinfo">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+
+<link href="index.html" rel="start" title="Top">
+<link href="Index.html" rel="index" title="Index">
+<link href="index.html" rel="up" title="Top">
+<link href="Missing-Features.html" rel="next" title="Missing Features">
+<link href="Using-libffi.html" rel="prev" title="Using libffi">
+<style type="text/css">
+<!--
+a.copiable-anchor {visibility: hidden; text-decoration: none; line-height: 0em}
+a.summary-letter {text-decoration: none}
+blockquote.indentedblock {margin-right: 0em}
+div.display {margin-left: 3.2em}
+div.example {margin-left: 3.2em}
+kbd {font-style: oblique}
+pre.display {font-family: inherit}
+pre.format {font-family: inherit}
+pre.menu-comment {font-family: serif}
+pre.menu-preformatted {font-family: serif}
+span.nolinebreak {white-space: nowrap}
+span.roman {font-family: initial; font-weight: normal}
+span.sansserif {font-family: sans-serif; font-weight: normal}
+span:hover a.copiable-anchor {visibility: visible}
+ul.no-bullet {list-style: none}
+-->
+</style>
+
+
+</head>
+
+<body lang="en">
+<div class="chapter" id="Memory-Usage">
+<div class="header">
+<p>
+Next: <a href="Missing-Features.html" accesskey="n" rel="next">Missing Features</a>, Previous: <a href="Using-libffi.html" accesskey="p" rel="prev">Using libffi</a>, Up: <a href="index.html" accesskey="u" rel="up">libffi</a> &nbsp; [<a href="Index.html" title="Index" rel="index">Index</a>]</p>
+</div>
+<hr>
+<span id="Memory-Usage-1"></span><h2 class="chapter">3 Memory Usage</h2>
+
+<p>Note that memory allocated by <code>ffi_closure_alloc</code> and freed by
+<code>ffi_closure_free</code> does not come from the same general pool of
+memory that <code>malloc</code> and <code>free</code> use.  To accomodate security
+settings, <code>libffi</code> may aquire memory, for example, by mapping
+temporary files into multiple places in the address space (once to
+write out the closure, a second to execute it).  The search follows
+this list, using the first that works:
+</p>
+<ul>
+<li> A anonymous mapping (i.e. not file-backed)
+
+</li><li> <code>memfd_create()</code>, if the kernel supports it.
+
+</li><li> A file created in the directory referenced by the environment variable
+<code>LIBFFI_TMPDIR</code>.
+
+</li><li> Likewise for the environment variable <code>TMPDIR</code>.
+
+</li><li> A file created in <code>/tmp</code>.
+
+</li><li> A file created in <code>/var/tmp</code>.
+
+</li><li> A file created in <code>/dev/shm</code>.
+
+</li><li> A file created in the user&rsquo;s home directory (<code>$HOME</code>).
+
+</li><li> A file created in any directory listed in <code>/etc/mtab</code>.
+
+</li><li> A file created in any directory listed in <code>/proc/mounts</code>.
+
+</li></ul>
+
+<p>If security settings prohibit using any of these for closures,
+<code>ffi_closure_alloc</code> will fail.
+</p>
+</div>
+
+
+
+</body>
+</html>

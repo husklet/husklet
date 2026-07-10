@@ -39,7 +39,10 @@ pub fn listen_unix(path: &str) -> std::io::Result<RawFd> {
     addr.sun_family = libc::AF_UNIX as _;
     let bytes = path.as_bytes();
     if bytes.len() >= addr.sun_path.len() {
-        return Err(std::io::Error::new(std::io::ErrorKind::InvalidInput, "socket path too long"));
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "socket path too long",
+        ));
     }
     for (i, b) in bytes.iter().enumerate() {
         addr.sun_path[i] = *b as _;
@@ -77,7 +80,11 @@ mod headless {
 
     impl Client {
         fn new(fd: RawFd) -> Client {
-            Client { conn: Conn::new(fd), next_id: 2, globals: Default::default() }
+            Client {
+                conn: Conn::new(fd),
+                next_id: 2,
+                globals: Default::default(),
+            }
         }
         fn alloc(&mut self) -> u32 {
             let id = self.next_id;
@@ -131,7 +138,10 @@ mod headless {
     fn shm_client_draws_a_frame_the_server_composites() {
         // Socketpair: one end is the client, the other is the compositor.
         let mut sv = [0i32; 2];
-        assert_eq!(unsafe { libc::socketpair(libc::AF_UNIX, libc::SOCK_STREAM, 0, sv.as_mut_ptr()) }, 0);
+        assert_eq!(
+            unsafe { libc::socketpair(libc::AF_UNIX, libc::SOCK_STREAM, 0, sv.as_mut_ptr()) },
+            0
+        );
         let (client_fd, server_fd) = (sv[0], sv[1]);
         for fd in [client_fd, server_fd] {
             unsafe {
@@ -140,7 +150,8 @@ mod headless {
             }
         }
 
-        let dir = std::env::var("DD_DISPLAY_DUMP").unwrap_or_else(|_| "/tmp/dd-display-selftest".into());
+        let dir =
+            std::env::var("DD_DISPLAY_DUMP").unwrap_or_else(|_| "/tmp/dd-display-selftest".into());
         let mut server = Server::new(server_fd, PngPresenter::new(&dir));
 
         let mut c = Client::new(client_fd);
@@ -150,17 +161,48 @@ mod headless {
         c.flush();
         server.pump().unwrap(); // server advertises globals + shm formats
         c.drain();
-        assert!(c.globals.contains_key("wl_compositor"), "registry advertised: {:?}", c.globals.keys().collect::<Vec<_>>());
+        assert!(
+            c.globals.contains_key("wl_compositor"),
+            "registry advertised: {:?}",
+            c.globals.keys().collect::<Vec<_>>()
+        );
         assert!(c.globals.contains_key("wl_shm"));
         assert!(c.globals.contains_key("xdg_wm_base"));
+        assert!(c.globals.contains_key("wp_viewporter"));
 
         // bind the three globals we need.
         let comp = c.alloc();
-        c.conn.send(&Message::new(reg, 0).u32(c.globals["wl_compositor"].0).string("wl_compositor").u32(4).u32(comp));
+        c.conn.send(
+            &Message::new(reg, 0)
+                .u32(c.globals["wl_compositor"].0)
+                .string("wl_compositor")
+                .u32(4)
+                .u32(comp),
+        );
         let shm = c.alloc();
-        c.conn.send(&Message::new(reg, 0).u32(c.globals["wl_shm"].0).string("wl_shm").u32(1).u32(shm));
+        c.conn.send(
+            &Message::new(reg, 0)
+                .u32(c.globals["wl_shm"].0)
+                .string("wl_shm")
+                .u32(1)
+                .u32(shm),
+        );
         let wm = c.alloc();
-        c.conn.send(&Message::new(reg, 0).u32(c.globals["xdg_wm_base"].0).string("xdg_wm_base").u32(1).u32(wm));
+        c.conn.send(
+            &Message::new(reg, 0)
+                .u32(c.globals["xdg_wm_base"].0)
+                .string("xdg_wm_base")
+                .u32(1)
+                .u32(wm),
+        );
+        let viewporter = c.alloc();
+        c.conn.send(
+            &Message::new(reg, 0)
+                .u32(c.globals["wp_viewporter"].0)
+                .string("wp_viewporter")
+                .u32(1)
+                .u32(viewporter),
+        );
 
         // surface + xdg toplevel.
         let surface = c.alloc();
@@ -169,7 +211,8 @@ mod headless {
         c.conn.send(&Message::new(wm, 2).u32(xdg).u32(surface)); // get_xdg_surface
         let toplevel = c.alloc();
         c.conn.send(&Message::new(xdg, 1).u32(toplevel)); // get_toplevel
-        c.conn.send(&Message::new(toplevel, 2).string("dd-selftest")); // set_title
+        c.conn
+            .send(&Message::new(toplevel, 2).string("dd-selftest")); // set_title
         c.conn.send(&Message::new(surface, 6)); // initial commit (no buffer)
         c.flush();
         server.pump().unwrap();
@@ -185,7 +228,14 @@ mod headless {
         assert!(mfd >= 0, "memfd_create failed");
         assert_eq!(unsafe { libc::ftruncate(mfd, size as libc::off_t) }, 0);
         let map = unsafe {
-            libc::mmap(std::ptr::null_mut(), size, libc::PROT_READ | libc::PROT_WRITE, libc::MAP_SHARED, mfd, 0)
+            libc::mmap(
+                std::ptr::null_mut(),
+                size,
+                libc::PROT_READ | libc::PROT_WRITE,
+                libc::MAP_SHARED,
+                mfd,
+                0,
+            )
         };
         assert_ne!(map, libc::MAP_FAILED);
         // Fill BGRA: a per-pixel gradient (B=col*40, G=row*60, R=200, X=0).
@@ -194,17 +244,18 @@ mod headless {
             for col in 0..w {
                 let o = (row * stride + col * 4) as usize;
                 unsafe {
-                    *px.add(o) = (col * 40) as u8;     // B
+                    *px.add(o) = (col * 40) as u8; // B
                     *px.add(o + 1) = (row * 60) as u8; // G
-                    *px.add(o + 2) = 200;              // R
-                    *px.add(o + 3) = 0;                // X
+                    *px.add(o + 2) = 200; // R
+                    *px.add(o + 3) = 0; // X
                 }
             }
         }
 
         // create_pool(fd, size) — the fd rides SCM_RIGHTS with this flush.
         let pool = c.alloc();
-        c.conn.send(&Message::new(shm, 0).u32(pool).u32(size as u32)); // note: fd is OOB
+        c.conn
+            .send(&Message::new(shm, 0).u32(pool).u32(size as u32)); // note: fd is OOB
         c.conn.queue_fd(mfd);
         c.flush();
         server.pump().unwrap();
@@ -212,9 +263,19 @@ mod headless {
 
         // create_buffer, attach, damage, commit → the server composites this frame.
         let buffer = c.alloc();
-        c.conn.send(&Message::new(pool, 0).u32(buffer).i32(0).i32(w).i32(h).i32(stride).u32(1)); // XRGB8888
-        c.conn.send(&Message::new(surface, 1).u32(buffer).i32(0).i32(0)); // attach
-        c.conn.send(&Message::new(surface, 2).i32(0).i32(0).i32(w).i32(h)); // damage
+        c.conn.send(
+            &Message::new(pool, 0)
+                .u32(buffer)
+                .i32(0)
+                .i32(w)
+                .i32(h)
+                .i32(stride)
+                .u32(1),
+        ); // XRGB8888
+        c.conn
+            .send(&Message::new(surface, 1).u32(buffer).i32(0).i32(0)); // attach
+        c.conn
+            .send(&Message::new(surface, 2).i32(0).i32(0).i32(w).i32(h)); // damage
         c.conn.send(&Message::new(surface, 6)); // commit
         c.flush();
         server.pump().unwrap();
@@ -226,9 +287,141 @@ mod headless {
         assert_eq!(sid, surface);
         // pixel (col=2,row=1): R=200,G=60,B=80,A=255
         let o = (1 * gw + 2) as usize * 4;
-        assert_eq!(&rgba[o..o + 4], &[200, 60, 80, 255], "composited pixel mismatch");
+        assert_eq!(
+            &rgba[o..o + 4],
+            &[200, 60, 80, 255],
+            "composited pixel mismatch"
+        );
+
+        // Chromium uses wp_viewport destination/source state for logical surface sizing. Crop the 4x3
+        // buffer to a 2x2 surface and verify both the size and top-left pixel come from the crop origin.
+        let viewport = c.alloc();
+        c.conn
+            .send(&Message::new(viewporter, 1).u32(viewport).u32(surface)); // get_viewport
+        c.conn.send(
+            &Message::new(viewport, 1)
+                .i32(256)
+                .i32(256)
+                .i32(2 * 256)
+                .i32(2 * 256),
+        ); // set_source
+        c.conn.send(&Message::new(viewport, 2).i32(2).i32(2)); // set_destination
+        c.conn
+            .send(&Message::new(surface, 1).u32(buffer).i32(0).i32(0)); // attach
+        c.conn.send(&Message::new(surface, 6)); // commit
+        c.flush();
+        server.pump().unwrap();
+
+        let (sid, gw, gh, rgba) =
+            server_last(&server).expect("server did not composite viewport frame");
+        assert_eq!((sid, gw, gh), (surface, 2, 2));
+        assert_eq!(
+            &rgba[0..4],
+            &[200, 60, 40, 255],
+            "viewport crop origin pixel mismatch"
+        );
+
+        // Destroying a wp_viewport clears the viewport state; buffer scale below should now drive mapping.
+        c.conn.send(&Message::new(viewport, 0)); // destroy wp_viewport; buffer scale now drives mapping
+
+        // Buffer scale turns backing pixels into logical surface units. With a full 4x3 buffer at scale 2
+        // the logical output is 2x1, sampled from the full backing texture.
+        c.conn.send(&Message::new(surface, 8).i32(2)); // wl_surface.set_buffer_scale
+        c.conn
+            .send(&Message::new(surface, 1).u32(buffer).i32(0).i32(0));
+        c.conn.send(&Message::new(surface, 6));
+        c.flush();
+        server.pump().unwrap();
+
+        let (sid, gw, gh, _rgba) =
+            server_last(&server).expect("server did not composite buffer scale frame");
+        assert_eq!((sid, gw, gh), (surface, w / 2, h / 2));
+
+        // Chrome can request a 512x384 xdg window geometry while committing a wider 532x384 backing
+        // surface. The compositor must crop to the logical window bounds instead of presenting 532 wide.
+        let (wide_w, wide_h): (i32, i32) = (532, 384);
+        let wide_stride = wide_w * 4;
+        let wide_size = (wide_stride * wide_h) as usize;
+        let wide_name = std::ffi::CString::new("dd-wide-shm").unwrap();
+        let wide_mfd = unsafe { libc::memfd_create(wide_name.as_ptr(), 0) };
+        assert!(wide_mfd >= 0, "wide memfd_create failed");
+        assert_eq!(unsafe { libc::ftruncate(wide_mfd, wide_size as libc::off_t) }, 0);
+        let wide_map = unsafe {
+            libc::mmap(
+                std::ptr::null_mut(),
+                wide_size,
+                libc::PROT_READ | libc::PROT_WRITE,
+                libc::MAP_SHARED,
+                wide_mfd,
+                0,
+            )
+        };
+        assert_ne!(wide_map, libc::MAP_FAILED);
+        let wide_px = wide_map as *mut u8;
+        for row in 0..wide_h {
+            for col in 0..wide_w {
+                let (r, g, b) = if col < 10 {
+                    (255, 0, 0)
+                } else if col >= 522 {
+                    (0, 0, 255)
+                } else {
+                    (((col - 10) % 251) as u8, (row % 251) as u8, 40)
+                };
+                let o = (row * wide_stride + col * 4) as usize;
+                unsafe {
+                    *wide_px.add(o) = b; // B
+                    *wide_px.add(o + 1) = g; // G
+                    *wide_px.add(o + 2) = r; // R
+                    *wide_px.add(o + 3) = 0; // X
+                }
+            }
+        }
+
+        let wide_pool = c.alloc();
+        c.conn
+            .send(&Message::new(shm, 0).u32(wide_pool).u32(wide_size as u32));
+        c.conn.queue_fd(wide_mfd);
+        c.flush();
+        server.pump().unwrap();
+        unsafe { libc::close(wide_mfd) };
+
+        let wide_buffer = c.alloc();
+        c.conn.send(
+            &Message::new(wide_pool, 0)
+                .u32(wide_buffer)
+                .i32(0)
+                .i32(wide_w)
+                .i32(wide_h)
+                .i32(wide_stride)
+                .u32(1),
+        );
+        c.conn.send(&Message::new(surface, 8).i32(1)); // reset buffer scale
+        c.conn
+            .send(&Message::new(xdg, 3).i32(10).i32(0).i32(512).i32(384));
+        c.conn
+            .send(&Message::new(surface, 1).u32(wide_buffer).i32(0).i32(0));
+        c.conn.send(&Message::new(surface, 6));
+        c.flush();
+        server.pump().unwrap();
+
+        let (sid, gw, gh, rgba) =
+            server_last(&server).expect("server did not composite xdg geometry frame");
+        assert_eq!((sid, gw, gh), (surface, 512, 384));
+        assert_eq!(rgba.len(), 512 * 384 * 4);
+        assert_eq!(
+            &rgba[0..4],
+            &[0, 0, 40, 255],
+            "xdg geometry crop must start at source x=10, not the left sentinel"
+        );
+        let right = (gw - 1) as usize * 4;
+        assert_eq!(
+            &rgba[right..right + 4],
+            &[9, 0, 40, 255],
+            "xdg geometry crop must end at source x=521, before the right sentinel"
+        );
         eprintln!("[headless] PNG written under {dir}");
 
+        unsafe { libc::munmap(wide_map, wide_size) };
         unsafe { libc::munmap(map, size) };
     }
 
@@ -244,7 +437,10 @@ mod headless {
     #[test]
     fn input_events_route_to_the_focused_surface() {
         let mut sv = [0i32; 2];
-        assert_eq!(unsafe { libc::socketpair(libc::AF_UNIX, libc::SOCK_STREAM, 0, sv.as_mut_ptr()) }, 0);
+        assert_eq!(
+            unsafe { libc::socketpair(libc::AF_UNIX, libc::SOCK_STREAM, 0, sv.as_mut_ptr()) },
+            0
+        );
         let (client_fd, server_fd) = (sv[0], sv[1]);
         for fd in [client_fd, server_fd] {
             unsafe {
@@ -264,11 +460,29 @@ mod headless {
         assert!(c.globals.contains_key("wl_seat"), "seat advertised");
 
         let seat = c.alloc();
-        c.conn.send(&Message::new(reg, 0).u32(c.globals["wl_seat"].0).string("wl_seat").u32(5).u32(seat));
+        c.conn.send(
+            &Message::new(reg, 0)
+                .u32(c.globals["wl_seat"].0)
+                .string("wl_seat")
+                .u32(5)
+                .u32(seat),
+        );
         let comp = c.alloc();
-        c.conn.send(&Message::new(reg, 0).u32(c.globals["wl_compositor"].0).string("wl_compositor").u32(4).u32(comp));
+        c.conn.send(
+            &Message::new(reg, 0)
+                .u32(c.globals["wl_compositor"].0)
+                .string("wl_compositor")
+                .u32(4)
+                .u32(comp),
+        );
         let wm = c.alloc();
-        c.conn.send(&Message::new(reg, 0).u32(c.globals["xdg_wm_base"].0).string("xdg_wm_base").u32(1).u32(wm));
+        c.conn.send(
+            &Message::new(reg, 0)
+                .u32(c.globals["xdg_wm_base"].0)
+                .string("xdg_wm_base")
+                .u32(1)
+                .u32(wm),
+        );
         let pointer = c.alloc();
         c.conn.send(&Message::new(seat, 0).u32(pointer)); // get_pointer
         let keyboard = c.alloc();
@@ -284,13 +498,23 @@ mod headless {
 
         // The keymap event (with an fd) is sent on get_keyboard; drain + verify the fd maps to our keymap.
         let msgs = c.poll_messages();
-        let keymap = msgs.iter().find(|m| m.object == keyboard && m.opcode == 0).expect("wl_keyboard.keymap");
+        let keymap = msgs
+            .iter()
+            .find(|m| m.object == keyboard && m.opcode == 0)
+            .expect("wl_keyboard.keymap");
         let mut kr = keymap.reader();
         assert_eq!(kr.u32(), 1, "keymap format = XKB_V1");
         let km_size = kr.u32();
         let kfd = c.conn.take_fd().expect("keymap fd via SCM_RIGHTS");
         unsafe {
-            let map = libc::mmap(std::ptr::null_mut(), km_size as usize, libc::PROT_READ, libc::MAP_SHARED, kfd, 0);
+            let map = libc::mmap(
+                std::ptr::null_mut(),
+                km_size as usize,
+                libc::PROT_READ,
+                libc::MAP_SHARED,
+                kfd,
+                0,
+            );
             assert_ne!(map, libc::MAP_FAILED, "keymap fd mmaps");
             let head = std::slice::from_raw_parts(map as *const u8, 11);
             assert_eq!(&head[..11], b"xkb_keymap ", "keymap content over the fd");
@@ -306,29 +530,47 @@ mod headless {
         let ev = c.poll_messages();
 
         // wl_pointer.enter(serial, surface, x, y) then motion(time, x, y).
-        let enter = ev.iter().find(|m| m.object == pointer && m.opcode == 0).expect("pointer.enter");
+        let enter = ev
+            .iter()
+            .find(|m| m.object == pointer && m.opcode == 0)
+            .expect("pointer.enter");
         let mut r = enter.reader();
         let _serial = r.u32();
         assert_eq!(r.u32(), surface, "pointer entered the focused surface");
         assert_eq!(r.i32(), 10 * 256, "enter x (wl_fixed)");
         assert_eq!(r.i32(), 20 * 256, "enter y (wl_fixed)");
-        let motion = ev.iter().find(|m| m.object == pointer && m.opcode == 2).expect("pointer.motion");
+        let motion = ev
+            .iter()
+            .find(|m| m.object == pointer && m.opcode == 2)
+            .expect("pointer.motion");
         let mut r = motion.reader();
         let _t = r.u32();
         assert_eq!(r.i32(), 10 * 256);
         assert_eq!(r.i32(), 20 * 256);
-        let button = ev.iter().find(|m| m.object == pointer && m.opcode == 3).expect("pointer.button");
+        let button = ev
+            .iter()
+            .find(|m| m.object == pointer && m.opcode == 3)
+            .expect("pointer.button");
         let mut r = button.reader();
         let (_s, _t2, btn, state) = (r.u32(), r.u32(), r.u32(), r.u32());
         assert_eq!((btn, state), (0x110, 1), "BTN_LEFT pressed");
 
         // wl_keyboard.enter then key(serial, time, key, state).
-        assert!(ev.iter().any(|m| m.object == keyboard && m.opcode == 1), "keyboard.enter");
-        let key = ev.iter().find(|m| m.object == keyboard && m.opcode == 3).expect("keyboard.key");
+        assert!(
+            ev.iter().any(|m| m.object == keyboard && m.opcode == 1),
+            "keyboard.enter"
+        );
+        let key = ev
+            .iter()
+            .find(|m| m.object == keyboard && m.opcode == 3)
+            .expect("keyboard.key");
         let mut r = key.reader();
         let (_s, _t, code, kstate) = (r.u32(), r.u32(), r.u32(), r.u32());
         assert_eq!((code, kstate), (30, 1), "KEY_A pressed (raw evdev code)");
-        assert!(ev.iter().any(|m| m.object == keyboard && m.opcode == 4), "keyboard.modifiers");
+        assert!(
+            ev.iter().any(|m| m.object == keyboard && m.opcode == 4),
+            "keyboard.modifiers"
+        );
         eprintln!("[headless] input events routed + asserted OK");
     }
 }

@@ -1,0 +1,13 @@
+a3e2b070541ab3aeae800295a9d60b2e  usr/include/crypt.h
+c47325ac90ad95f49305b975d2a9389a  usr/lib/aarch64-linux-gnu/libcrypt.a
+c677bd3ddf253ad41ac6e3289b1f4219  usr/lib/aarch64-linux-gnu/pkgconfig/libxcrypt.pc
+7715de78939047d00cf298837453c11e  usr/share/doc/libcrypt-dev/README.md.gz
+a74438b1487c8db5812e8b632f652a39  usr/share/doc/libcrypt-dev/TODO.md.gz
+64e54b2d86ae25ac23394ae0cbd52bdc  usr/share/doc/libcrypt-dev/changelog.Debian.gz
+6a85f86f7c809f05907ee4b031db2f03  usr/share/doc/libcrypt-dev/changelog.gz
+8112c930acedacaa33e5d62f5721c526  usr/share/doc/libcrypt-dev/copyright
+ed0f2a984e335c21a6049953648f35b5  usr/share/man/man3/crypt.3.gz
+51ff9756e44227bdd09731520f1423ed  usr/share/man/man3/crypt_checksalt.3.gz
+fb338688d2acc13085dd018fb6604082  usr/share/man/man3/crypt_gensalt.3.gz
+95db2fbe64f724579bb8973bb5f05d3f  usr/share/man/man3/crypt_preferred_method.3.gz
+15d772806e4d88685f190a2043d67b32  usr/share/man/man5/crypt.5.gz

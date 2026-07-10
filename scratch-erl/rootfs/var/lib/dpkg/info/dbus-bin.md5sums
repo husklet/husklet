@@ -1,0 +1,15 @@
+4d92a1b64e30c24caf19f088eb712ea4  usr/bin/dbus-cleanup-sockets
+e83237540f61b625c1122d89a86e9ad4  usr/bin/dbus-monitor
+abcc427756b00815977501b8759ce708  usr/bin/dbus-send
+2629eacbed7bf97423bd43b95b5fa6cb  usr/bin/dbus-update-activation-environment
+485e9f1297b44d4cbb9850558ccaaade  usr/bin/dbus-uuidgen
+aca3da2de2b54aac8d4c162f399f3ee7  usr/share/doc/dbus-bin/AUTHORS.gz
+f11a43861a6c42ac58db0a8bb090e0c2  usr/share/doc/dbus-bin/NEWS.gz
+81e84fc00d29830e437f710a117793e8  usr/share/doc/dbus-bin/README.gz
+b01c5f2eb7d5e01af1f09f2d079053dc  usr/share/doc/dbus-bin/changelog.Debian.gz
+e71ad57060aace39bb80ab360f757e93  usr/share/doc/dbus-bin/copyright
+02f3870f12925bec991a4c97dcbf8182  usr/share/man/man1/dbus-cleanup-sockets.1.gz
+8f2b46b3339012645657db9af6092c30  usr/share/man/man1/dbus-monitor.1.gz
+ccd4338c6384faddc23865da01802e8f  usr/share/man/man1/dbus-send.1.gz
+c6017cd1b464ce6d7c9d8bf18c99e68d  usr/share/man/man1/dbus-update-activation-environment.1.gz
+841cbc6e6a8764257fe1fdcfc7eb3426  usr/share/man/man1/dbus-uuidgen.1.gz

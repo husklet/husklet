@@ -126,6 +126,121 @@
 > `epoll_wait` never sees. Owner: sync/net readiness (io.c/net.c/epoll), NOT the compositor. Two separable
 > fixes: **(A)** host `run_inline` must not busy-spin when stdin is a non-tty/regular file (block on the
 > guest-output fd, or drop STDIN from the poll set at EOF); **(B)** the guest Viz wakeup delivery.
+>
+> **UPDATE 2026-07-08 — (A) FIXED + VERIFIED; (B) RE-DIAGNOSED (both prior hypotheses DISPROVEN by trace).**
+> **(A)** `dd-cli/src/workspace.rs run_inline` now drops STDIN from the poll set at EOF (a redirected regular
+> file always returns POLLIN, defeating the 10ms pace) and paces with a 10ms `nanosleep`. Verified: during a
+> live chromium run the `ddcli workspace launch` main thread sits at **0.0% CPU** (was pinning a core). Gate-
+> neutral (ddcli only).
+> **(B)** A file-gated readiness trace was required — the `DDWAKELOG`/`DDNETLOG` **env** gates do NOT reach the
+> engine (it is spawned with a curated `--configfd`, not the parent environ; the "mac bridge drops env" seam).
+> `DDNETLOG` was already file-gated (`/tmp/DDNETLOG`); `wakelog_on()` now also file-gates on `/tmp/ddwakelog`.
+> New file-gated trace points added (all `wakelog_on()`-guarded → gate-neutral): net.c `wl_connect` (pins the
+> wayland fd), event.c `epctl_ev`/`epw_fd`/`ppoll_enter`/`ppoll_ret`. With these, a bounded chromium run gives:
+> - **The wayland lost-wakeup hypothesis (i) is WRONG.** The wl roundtrip (`wl_display.sync`) uses **`ppoll(2)`**,
+>   not epoll, and it **RETURNS `POLLIN` correctly** (`ppoll_enter fd=39 …-1` → `ppoll_ret fd=39 … revents=1`).
+>   The wayland fd is a real host unix socket and is **never even registered on epoll**. Wayland readiness works.
+> - **The eventfd cross-thread hypothesis (ii) is WRONG.** Every `efd_write fd=31` is matched by an immediate
+>   `epw_fd fd=31` on the IO thread's epoll and an `efd_read` drain. eventfd wakeups fire perfectly.
+> - **The SEQPACKET-ECONNRESET / invitation-loss hypothesis is ALSO WRONG (no ECONNRESET in the trace).** The
+>   Mojo bootstrap works: the browser delivers the invitation intact **with SCM_RIGHTS fds** (e.g. a 908-byte
+>   send `scmfds=6` received whole by the child, a 1464-byte `scmfds=1` to NetworkService). All Mojo messages
+>   are small (≤908B, no 2KB-chunk path). The **only** EOFs are clean `ret=0` on a **native `SOCK_STREAM`**
+>   pair — a child that ALREADY timed out and exited (symptom, not cause). `recvmsg` never returns `-ECONNRESET`.
+>
+> **THE ACTUAL WALL (frame blocker):** a **utility/service process starves after a fully-successful handshake.**
+> In the pinned run, **NetworkService** (`utility.networkService`, a child pid) receives its invitation and
+> then exchanges Mojo messages with the browser **bidirectionally over a native `SOCK_STREAM` socketpair**
+> (`[62,91]`, `lty=1` — NOT emulated, so byte-exact with Linux) up to `t=…163.157`: the browser **receives the
+> NetworkService's full interface-registration burst** (`ret=232/416/768/…`, each matching the child's send)
+> **and then goes silent — it never replies.** ~15s later NetworkService hits `content/child/child_thread_impl.cc:908`
+> "Terminating current process after 15 seconds with no connection", exits, and the browser sees the clean
+> `ret=0` EOF. NetworkService is required to load even a `file://` page, so **no content renders → the browser
+> never issues `create_surface`/`xdg_surface`/`commit` → dd-display dump dir stays empty (0 frames), blank window.**
+> The victim differs per run (run A: a renderer pid; run B: NetworkService) → a **race**, but on the **browser
+> side after recv**, NOT a lost socket-readiness wakeup on the tested paths. Every socket/eventfd/wayland
+> readiness primitive the guest actually uses was proven to fire. The remaining seam is **one layer up**: after
+> the browser's IO thread `recvmsg`'s the service's requests, the cross-thread handoff to the thread that must
+> reply (Mojo task-queue / a specific internal signal) does not complete — the browser stops responding on that
+> channel. **Recommended next diagnostic (one bounded run, no rebuild): arm BOTH `/tmp/ddwakelog` AND
+> `/tmp/DDNETLOG` and correlate the browser IO thread's post-`recvmsg` `efd_write`/`pwrite` (which internal fd
+> it kicks) against whether the target thread's `epw_fd`/`ppoll_ret` fires** — that isolates whether it is a
+> genuine lost wakeup on an as-yet-unseen internal fd or a higher-level Mojo/browser deadlock. Do NOT ship the
+> SEQPACKET-ECONNRESET "fix": the trace shows that path never fires here, so it would be a no-op that risks the gate.
+>
+> **UPDATE 2026-07-08b — `--single-process` bet + a self-inflicted `errno` regression (fixed).**
+> **`--single-process` does NOT paint a window, but it splits the wall in two.** With
+> `--single-process --no-sandbox --disable-gpu --ozone-platform=wayland` (local `file://`), chromium reaches the
+> **identical** wall: binds all globals, `wl_shm_pool` create+resize, **`wl_compositor.create_surface`**, a
+> `wl_display.sync` roundtrip — then silent, **no `xdg_wm_base.get_xdg_surface`, no `xdg_toplevel`, no
+> `wl_surface.commit`, 0 frames.** BUT single-process has **zero** "no connection" child timeouts (vs the
+> multi-process runs that always have ≥1). So there are **two independent layers**: (a) the multi-process Mojo
+> child-connection timeout (a real per-run race — **bypassed** by single-process), and (b) a **render-pipeline
+> frame-production stall that persists even single-process** — chromium creates the surface + roundtrips, then
+> never maps the window because no first frame is ever composited (a chromium window is mapped only once it has
+> content to show: renderer raster → Viz composite → `attach`+`commit`). Layer (b) is the true frame blocker and
+> is upstream of the window/`xdg_surface`. Next diagnostic must target the software-raster / renderer→Viz
+> compositor-frame path (still with the both-gates DDWAKELOG+DDNETLOG correlation), not the window/wayland layer.
+>
+> **UPDATE 2026-07-08c — layer (b) VERDICT: NOT a dropped dd wakeup/message (futex-traced, decisive).** Added a
+> file-gated (errno-safe) **futex** trace to `thread.c` (`fwait_park`/`fwait_wake`/`fwake` with the woken-count)
+> and re-ran single-process chromium with `/tmp/ddwakelog`+`/tmp/DDNETLOG` armed, sampling during the stall. A
+> park/wake correlation over the main process's 680 futex events shows **3 threads parked in `FUTEX_WAIT`
+> forever — and ZERO `fwake` is ever issued on any of their 3 uaddrs.** No thread even *attempts* to wake them:
+> this is NOT a dropped `FUTEX_WAKE` (dd is not reporting woke=0 on a real waiter — there is simply no waker).
+> Corroborating, every other dd sync/IPC primitive the frame pipeline uses **verifiably delivers**: eventfd
+> `efd_write`(16) == `epw_fd` wakes(16) — no dropped eventfd kick; all Mojo SEQPACKET messages + SCM_RIGHTS fds
+> delivered (traffic ceases with a *balanced* final send/recv, no dangling send); epoll/ppoll/wayland readiness
+> all fire; and **no thread is blocked in a dd-stubbed syscall** (zero `ioctl`/`mmap`/`ftruncate`/`memfd` waits
+> in any sample). The process settles into timer loops (a ~10ms compositor BeginFrame thread that finds no frame
+> work and re-parks; 60s keepalive eventfd kicks) — the compositor waits for a `CompositorFrame` the renderer
+> never submits, and Mojo traffic stops after the last handshake exchange with nothing pending. **VERDICT: the
+> first-frame stall is a chromium-internal quiescence (work never enqueued at chromium's own scheduler level),
+> NOT a dropped-wakeup/message dd bug.** Every wakeup/IPC/readiness primitive dd owns was proven to work.
+>
+> **Honest caveat + the only remaining dd-attributable class.** This rules out the dropped-wakeup/message class
+> (WAKE_OP family) definitively. It does NOT rule out a dd **wrong-VALUE / fake-success** (a syscall/ioctl
+> returning a plausible-but-wrong result that sends chromium's bring-up down a branch that waits forever) — the
+> trace tools (wakelog/netlog/futexlog) only catch *dropped wakeups*, not *wrong returns*. The honest next
+> diagnostic is a **syscall-return-value diff vs a real-Linux oracle** for the browser's startup window (strace
+> chromium under dd vs qemu/native, diff the first divergent return), NOT more wakeup tracing.
+>
+> **UPDATE 2026-07-08d — ORACLE-DIFF (real-Linux arm64 via OrbStack) on the frame-gating syscall surface:
+> substantively FAITHFUL; no frame-gating wrong-return.** Ran the same frame-gating kernel-surface probe (the
+> suspects: CPU count/affinity, mmap/overcommit/pid_max, cgroup, memfd-adjacent, seccomp/caps, rlimits) in the
+> chromedeb container under dd vs `docker -c orbstack run debian:bookworm` (real arm64 kernel) and diffed:
+> - **CPU count/affinity — the #1 suspect — is CORRECT at the syscall level.** `nproc`/`sysconf(_SC_NPROCESSORS_ONLN)`
+>   /`grep -c ^processor /proc/cpuinfo`/`/sys/.../cpu/{online,possible}` and **`sched_getaffinity` all return
+>   18 / 0-17**, matching the oracle. Chromium's thread-pool/raster sizing reads these, and they are faithful.
+> - MATCH: `mmap_min_addr`(32768), `max_map_count`(1048576), `overcommit`(1), `pid_max`(4194304), cgroup2
+>   type + `cpu.max`(max 100000) + `memory.max`(max), `Seccomp`(2, 1 filter), `CapBnd`(a80425fb). All identical.
+> - Real but **non-frame-gating** divergences (fidelity gaps, not stall causes): (1) `/proc/self/status`
+>   `Cpus_allowed:1 / Cpus_allowed_list:0` is a **hardcoded stub** (`container/vfs.c:1414` & `:1983`) —
+>   INCONSISTENT with the correct 18-CPU `sched_getaffinity`; cosmetic (chromium sizes off the syscall, not this
+>   text). (2) `/proc/sys/kernel/randomize_va_space` and (3) `/sys/kernel/mm/transparent_hugepage/enabled` are
+>   ABSENT in dd (oracle has 2 / "always [madvise] never") → chromium/partition_alloc take the graceful-fallback
+>   branch. (4) `RLIMIT_NOFILE` soft = 1024 vs oracle 20480 (chromium raises its own). (5) `/dev/shm` size 64M vs
+>   14G and MemTotal differ (container-config; and the run uses `--disable-dev-shm-usage`). None gates first-frame.
+>
+> **FINAL VERDICT (Chrome window, layers a+b): NOT a fixable dd defect in the wakeup/IPC/readiness OR the
+> frame-gating syscall-return surface.** Across two decisive diagnostics: (1) futex/eventfd/epoll/wayland/Mojo
+> wakeups + messages all DELIVER (no dropped wakeup; parked threads have no waker); (2) the frame-gating syscall
+> RETURNS substantively MATCH real Linux (CPU/mem/cgroup/seccomp/caps identical; only cosmetic /proc-text stubs
+> and graceful-fallback gaps diverge). So the first-frame stall of glibc-Chromium-150 (software render) under dd
+> is **chromium-internal quiescence under emulation — the renderer never enqueues a CompositorFrame — not a dd
+> bug we can point at.** Honest residual: the probe tested the enumerated suspects in isolation, so a
+> context-specific wrong-return buried in chromium's exact sequence is not 100% excluded, but every prime
+> suspect is clean. Optional fidelity fixes (independently worth doing, NOT the frame blocker): make
+> `/proc/self/status` `Cpus_allowed[_list]` reflect the real online-CPU mask; surface `randomize_va_space` +
+> `transparent_hugepage`; raise default `RLIMIT_NOFILE`.
+> **`errno`-clobber regression — INTRODUCED then FIXED (lesson).** The new file-gate in `wakelog_on()`
+> (`io.c`) and the pre-existing one in `netlog_on()` (`net.c`) call `access("/tmp/…", F_OK)`, which **sets
+> `errno=ENOENT` when the sentinel is absent**. These probes run in the hot path *after* a `read()/write()/
+> send()/recv()`, and the value is cached, so the **first** such call per process **clobbered the just-failed
+> syscall's `errno`** before it was returned to the guest → 7 gate failures (`ext_ipc/pipe-eof` EPIPE→0,
+> `ltpgaps/procmisc` read-EBADF, `posixlin/pipe2`, `comp-sys-time/clock-getres`). Fix: **save+restore `errno`
+> around the probe** in both functions (`int saved=errno; …; errno=saved;`). Verified: `pipe-eof`/`pipe2` back
+> to ✓. **General rule for any env/file-gated trace in a syscall hot path: it MUST be `errno`-transparent.**
 
 **What this is.** A whole-engine sweep for the bug class that cost us the entire Chrome
 saga: a syscall/op/instruction that **returns success (or a plausible value) without

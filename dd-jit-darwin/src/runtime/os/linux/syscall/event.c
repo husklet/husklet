@@ -213,27 +213,36 @@ static int svc_event(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint6
             G_RET(c) = (uint64_t)(-errno);
             break;
         }
+        int peer = fds[1];
+        int hi = fcntl(peer, F_DUPFD, 1 << 20);
+        if (hi < 0) hi = fcntl(peer, F_DUPFD, 64);
+        if (hi >= 0) {
+            close(peer);
+            peer = hi;
+        }
         if (a1 & 0x80000) {
             fcntl(fds[0], F_SETFD, FD_CLOEXEC);
-            fcntl(fds[1], F_SETFD, FD_CLOEXEC);
+            fcntl(peer, F_SETFD, FD_CLOEXEC);
             // EFD_CLOEXEC
         }
         if (a1 & 0x800) {
             fcntl(fds[0], F_SETFL, O_NONBLOCK);
-            fcntl(fds[1], F_SETFL, O_NONBLOCK);
             // EFD_NONBLOCK
         }
         // writes to the eventfd go to fds[1]; the counter + sema-flag live alongside.
-        if (fds[0] < 1024 && fds[1] < 1024) {
-            g_eventfd_peer[fds[0]] = fds[1] + 1;
+        if (fds[0] >= 0 && fds[0] < DD_NFD) {
+            g_eventfd_peer[fds[0]] = peer + 1;
+            g_eventfd_cslot[fds[0]] = fds[0] + 1;
             g_eventfd_sema[fds[0]] = (a1 & 1) != 0; // EFD_SEMAPHORE
             g_eventfd_count[fds[0]] = a0;           // initval
             if (a0 > 0) {
                 char b = 1;
-                if (write(fds[1], &b, 1) < 0) {}
+                if (write(peer, &b, 1) < 0) {}
             } // make it readable
         }
-        if (wakelog_on()) wakelog("eventfd2", fds[0], (long)fds[1], (long)((fds[0] < 1024 && fds[1] < 1024) ? 1 : 0));
+        if (wakelog_on()) wakelog("eventfd2", fds[0], (long)peer, (long)((fds[0] >= 0 && fds[0] < DD_NFD) ? 1 : 0));
+        fdtrace_log("eventfd2", fds[0], peer, (long)a1);
+        fdtrace_log("eventfd2_peer", peer, fds[0], (long)a1);
         G_RET(c) = (uint64_t)fds[0];
         break;
     }
@@ -257,6 +266,7 @@ static int svc_event(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint6
             g_epoll[r] = 1;
             ep_mem_clear(r);
         }
+        fdtrace_log("epoll_create1", r, (long)a0, 0);
         G_RET(c) = r < 0 ? (uint64_t)(-errno) : (uint64_t)r;
         break;
     }
@@ -497,7 +507,7 @@ static int svc_event(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint6
                 *(uint32_t *)(out + (size_t)oi * G_EPEV_SZ) = ev;
                 memcpy(out + (size_t)oi * G_EPEV_SZ + G_EPEV_DOFF, &kv[i].udata, 8);
                 // EPOLLONESHOT: the kernel auto-removed this registration; keep our armed map in sync.
-                if (opt && kv[i].ident < 1024 && g_ep_os[kv[i].ident]) {
+                if (opt && kv[i].ident < DD_NFD && g_ep_os[kv[i].ident]) {
                     if (kv[i].filter == EVFILT_READ)
                         g_ep_rd[kv[i].ident] = 0;
                     else if (kv[i].filter == EVFILT_WRITE)
@@ -562,6 +572,7 @@ static int svc_event(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint6
             if (a0 & 0x800) fcntl(r, F_SETFL, O_NONBLOCK);
             if (a0 & 0x80000) fcntl(r, F_SETFD, FD_CLOEXEC);
         }
+        fdtrace_log("inotify_init1", r, (long)a0, 0);
         G_RET(c) = r < 0 ? (uint64_t)(-errno) : (uint64_t)r;
         break;
     }
@@ -818,6 +829,7 @@ static int svc_event(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint6
             if (a1 & 0x800) fcntl(r, F_SETFL, O_NONBLOCK);   // TFD_NONBLOCK
             if (a1 & 0x80000) fcntl(r, F_SETFD, FD_CLOEXEC); // TFD_CLOEXEC
         }
+        fdtrace_log("timerfd_create", r, (long)a0, (long)a1);
         G_RET(c) = r < 0 ? (uint64_t)(-errno) : (uint64_t)r;
         break;
     }
@@ -869,8 +881,8 @@ static int svc_event(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint6
         if (a3) {
             memset((void *)a3, 0, 32);
             int ofd = (int)a0;
-            int64_t odl = (ofd >= 0 && ofd < 1024) ? g_tfd_deadline[ofd] : 0;
-            int64_t oiv = (ofd >= 0 && ofd < 1024) ? g_tfd_interval[ofd] : 0;
+            int64_t odl = (ofd >= 0 && ofd < DD_NFD) ? g_tfd_deadline[ofd] : 0;
+            int64_t oiv = (ofd >= 0 && ofd < DD_NFD) ? g_tfd_interval[ofd] : 0;
             if (odl > 0) {
                 struct timespec onow;
                 clock_gettime(CLOCK_MONOTONIC, &onow);
@@ -890,7 +902,7 @@ static int svc_event(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint6
         if (value_ns <= 0) {
             EV_SET(&kv, 1, EVFILT_TIMER, EV_DELETE, 0, 0, NULL);
             kevent((int)a0, &kv, 1, NULL, 0, NULL);
-            if ((int)a0 >= 0 && (int)a0 < 1024) {
+            if ((int)a0 >= 0 && (int)a0 < DD_NFD) {
                 g_tfd_deadline[(int)a0] = 0;
                 g_tfd_interval[(int)a0] = 0;
             }
@@ -907,7 +919,7 @@ static int svc_event(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint6
         int64_t first_delay = ((int)a1 & 1) ? (value_ns - now_ns) : value_ns;
         if (first_delay < 0) first_delay = 0;
         // Record the absolute next-expiry deadline + interval so timerfd_gettime can report the remaining time.
-        if ((int)a0 >= 0 && (int)a0 < 1024) {
+        if ((int)a0 >= 0 && (int)a0 < DD_NFD) {
             g_tfd_deadline[(int)a0] = now_ns + first_delay;
             g_tfd_interval[(int)a0] = interval_ns;
         }

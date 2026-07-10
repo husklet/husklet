@@ -1,0 +1,6 @@
+%% coding: utf-8
+[{release,"Erlang/OTP","26","14.2.5.15",
+          [{kernel,"9.2.4.11","lib/kernel-9.2.4.11"},
+           {stdlib,"5.2.3.6","lib/stdlib-5.2.3.6"},
+           {sasl,"4.2.1","lib/sasl-4.2.1"}],
+          permanent}].

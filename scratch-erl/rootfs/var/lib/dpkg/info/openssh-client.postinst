@@ -1,0 +1,51 @@
+#!/bin/sh
+set -e
+
+action="$1"
+
+umask 022
+
+
+update_ssh_group_name() {
+	# The _ssh group used to be called ssh, but that could clash with
+	# locally-created user accounts.  Since this only exists as an
+	# otherwise-empty group to which ssh-agent is installed setgid, it's
+	# easy to rename.
+	if getent group ssh >/dev/null && ! getent group _ssh >/dev/null; then
+		groupmod -n _ssh ssh
+	fi
+}
+
+set_ssh_agent_permissions() {
+	if ! getent group _ssh >/dev/null; then
+		addgroup --system --quiet --force-badname _ssh
+	fi
+	if ! dpkg-statoverride --list /usr/bin/ssh-agent >/dev/null; then
+		chgrp _ssh /usr/bin/ssh-agent
+		chmod 2755 /usr/bin/ssh-agent
+	fi
+}
+
+remove_obsolete_alternatives() {
+	update-alternatives --remove rcp /usr/bin/scp
+	update-alternatives --remove rlogin /usr/bin/slogin
+	update-alternatives --remove rsh /usr/bin/ssh
+}
+
+
+if [ "$action" = configure ]; then
+	if dpkg --compare-versions "$2" lt-nl 1:8.4p1-6~; then
+		update_ssh_group_name
+	fi
+	set_ssh_agent_permissions
+	if dpkg --compare-versions "$2" lt-nl 1:9.1p1-1~; then
+		remove_obsolete_alternatives
+	fi
+fi
+
+# Automatically added by dh_installdeb/13.11.4
+dpkg-maintscript-helper rm_conffile /etc/ssh/moduli 1:7.9p1-8\~ -- "$@"
+# End automatically added section
+
+
+exit 0

@@ -1,0 +1,23 @@
+******************************************************************************
+				 W A R N I N G
+******************************************************************************
+
+Gdbm files have never been `portable' between different operating systems,
+system architectures, or potentially even different compilers.  Differences
+in byte order, the size of file offsets, and even structure packing make
+gdbm files non-portable.
+
+Therefore, if you intend to send your database to somebody over the wire,
+please dump it into a portable format using gdbm_dump and send the resulting
+file instead. The receiving party will be able to recreate the database from
+the dump using the gdbm_load command.
+
+Please refer to the documentation, chapters 25 and 26, for a detailed
+discussion of these two tools. Run `info gdbm gdbm_dump', if gdbm is
+already installed on your system, or `info -f doc/gdbm.info gdbm_dump'
+to read the docs from the source tree.
+
+The documentation is also available online at
+http://www.gnu.org.ua/software/gdbm/manual.
+
+

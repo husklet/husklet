@@ -1,0 +1,59 @@
+<html><head><meta http-equiv="Content-Type" content="text/html; charset=ISO-8859-1"><title>Progress indicators</title><meta name="generator" content="DocBook XSL Stylesheets V1.79.1"><link rel="home" href="index.html" title="The Liquid Rescale library Manual"><link rel="up" href="api-manual.html" title="Chapter 2. LqR library API user manual"><link rel="prev" href="attach-images.html" title="Attaching extra images"><link rel="next" href="release.html" title="Releasing the memory"></head><body bgcolor="white" text="black" link="#0000FF" vlink="#840084" alink="#0000FF"><div class="navheader"><table width="100%" summary="Navigation header"><tr><th colspan="3" align="center">Progress indicators</th></tr><tr><td width="20%" align="left"><a accesskey="p" href="attach-images.html">Prev</a> </td><th width="60%" align="center">Chapter 2. LqR library API user manual</th><td width="20%" align="right"> <a accesskey="n" href="release.html">Next</a></td></tr></table><hr></div><div class="sect1"><div class="titlepage"><div><div><h2 class="title" style="clear: both"><a name="progress"></a>Progress indicators</h2></div></div></div><div class="toc"><dl class="toc"><dt><span class="sect2"><a href="progress.html#progress-init">Creating and attaching a progress report object</a></span></dt><dt><span class="sect2"><a href="progress.html#progress-set-up">Setting up progress hooks</a></span></dt><dt><span class="sect2"><a href="progress.html#progress-messages">Initial and ending progress messages</a></span></dt><dt><span class="sect2"><a href="progress.html#progress-upd-step">Progress update step</a></span></dt></dl></div><p>
+                By default, the resizing is performed silently. However, it is possible to define progress report
+                functions, to receive feedback while the resizing is in progress. This is done through the <code class="classname">LqrProgress</code>
+                objects. 
+            </p><div class="sect2"><div class="titlepage"><div><div><h3 class="title"><a name="progress-init"></a>Creating and attaching a progress report object</h3></div></div></div><p> 
+                    A <code class="classname">LqrProgress</code> object is created through the function:
+                    </p><div class="funcsynopsis"><table border="0" class="funcprototype-table" summary="Function synopsis" style="cellspacing: 0; cellpadding: 0;"><tr><td><code class="funcdef">LqrProgress* <b class="fsfunc">lqr_progress_new</b>(</code></td><td><code>void)</code>;</td><td> </td></tr></table><div class="funcprototype-spacer"> </div></div><p>
+                    and can be associated to an <code class="classname">LqrCarver</code> object through this function:
+                    </p><div class="funcsynopsis"><table border="0" class="funcprototype-table" summary="Function synopsis" style="cellspacing: 0; cellpadding: 0;"><tr><td><code class="funcdef">void <b class="fsfunc">lqr_carver_set_progress</b>(</code></td><td>LqrCarver* <var class="pdparam">carver</var>, </td></tr><tr><td> </td><td>LqrProgress* <var class="pdparam">p</var><code>)</code>;</td></tr></table><div class="funcprototype-spacer"> </div></div><p>
+                </p></div><div class="sect2"><div class="titlepage"><div><div><h3 class="title"><a name="progress-set-up"></a>Setting up progress hooks</h3></div></div></div><p>
+                    Newly created progress objects are inactive, and need to be set up.
+                </p><p>
+                    First, hook functions have to be set, which specify the action to take as the rescaling process
+                    starts, progresses, and ends, by using the functions:
+                    </p><pre class="programlisting">
+LqrRetVal <code class="function">lqr_progress_set_init</code> (<code class="classname">LqrProgress</code> * <em class="parameter"><code>p</code></em>, LqrProgressFuncInit <em class="parameter"><code>init_func</code></em>)
+LqrRetVal <code class="function">lqr_progress_set_update</code> (<code class="classname">LqrProgress</code> * <em class="parameter"><code>p</code></em>, LqrProgressFuncUpdate <em class="parameter"><code>update_func</code></em>)
+LqrRetVal <code class="function">lqr_progress_set_end</code> (<code class="classname">LqrProgress</code> * <em class="parameter"><code>p</code></em>, LqrProgressFuncEnd <em class="parameter"><code>end_func</code></em>)
+                    </pre><p>
+                    as in this sample piece of code:
+                    </p><div class="example"><a name="ex-set-progress"></a><p class="title"><b>Example 2.12. Setting progress hooks</b></p><div class="example-contents"><pre class="programlisting">
+LqrProgress *p;
+
+p = lqr_progress_new();
+lqr_progress_set_init (p, my_init);
+lqr_progress_set_update (p, my_update);
+lqr_progress_set_end (p, my_end);
+                        </pre></div></div><p><br class="example-break">
+                </p><p>
+                    The above example requires that the hook functions <code class="function">my_init</code>,
+                    <code class="function">my_update</code> and <code class="function">my_end</code> are defined as in the following
+                    sample declarations:
+                    </p><div class="example"><a name="ex-hook-decl"></a><p class="title"><b>Example 2.13. Progress hooks declaration</b></p><div class="example-contents"><pre class="programlisting">
+LqrRetVal my_init (const gchar *init_message);
+LqrRetVal my_update (gdouble percentage);
+LqrRetVal my_end (const gchar *end_message);
+                        </pre></div></div><p><br class="example-break">
+                </p></div><div class="sect2"><div class="titlepage"><div><div><h3 class="title"><a name="progress-messages"></a>Initial and ending progress messages</h3></div></div></div><p>
+                    The init and end hooks will be called at the beginning and at the end of each rescaling operation by
+                    function <code class="function">lqr_carver_resize</code>. The messages that will be passed to these hooks
+                    will change, depending if the resizing is occurring in the horizontal or in the vertical direction.
+                    The defaults for newly created <code class="classname">LqrProgress</code> objects are:
+                    </p><div class="table"><a name="progress-mess-def"></a><p class="title"><b>Table 2.2. Default progress messages</b></p><div class="table-contents"><table class="table" summary="Default progress messages" border="1"><colgroup><col><col><col></colgroup><thead><tr><th> </th><th>init</th><th>end</th></tr></thead><tbody><tr><td>horizontal</td><td><code class="computeroutput">"Resizing width..."</code></td><td><code class="computeroutput">"done"</code></td></tr><tr><td>vertical</td><td><code class="computeroutput">"Resizing height..."</code></td><td><code class="computeroutput">"done"</code></td></tr></tbody></table></div></div><p><br class="table-break">
+                    These can be changed using these functions:
+                    </p><pre class="programlisting">
+LqrRetVal <code class="function">lqr_progress_set_init_width_message</code> (<code class="classname">LqrProgress</code> *<em class="parameter"><code>p</code></em>, const gchar * <em class="parameter"><code>message</code></em>)
+LqrRetVal <code class="function">lqr_progress_set_init_height_message</code> (<code class="classname">LqrProgress</code> *<em class="parameter"><code>p</code></em>, const gchar * <em class="parameter"><code>message</code></em>)
+LqrRetVal <code class="function">lqr_progress_set_end_width_message</code> (<code class="classname">LqrProgress</code> *<em class="parameter"><code>p</code></em>, const gchar * <em class="parameter"><code>message</code></em>)
+LqrRetVal <code class="function">lqr_progress_set_end_height_message</code> (<code class="classname">LqrProgress</code> *<em class="parameter"><code>p</code></em>, const gchar * <em class="parameter"><code>message</code></em>)
+                    </pre><p>
+                </p></div><div class="sect2"><div class="titlepage"><div><div><h3 class="title"><a name="progress-upd-step"></a>Progress update step</h3></div></div></div><p>
+                    The update hook will be called at regular intervals, and it will be passed the completion percentage
+                    as the argument.
+                </p><p>
+                    The update step can be specified through:
+                    </p><div class="funcsynopsis"><table border="0" class="funcprototype-table" summary="Function synopsis" style="cellspacing: 0; cellpadding: 0;"><tr><td><code class="funcdef">LqrRetVal <b class="fsfunc">lqr_progress_set_update_step</b>(</code></td><td>LqrProgress* <var class="pdparam">p</var>, </td></tr><tr><td> </td><td>gfloat <var class="pdparam">update_step</var><code>)</code>;</td></tr></table><div class="funcprototype-spacer"> </div></div><p>
+                </p><p>
+                    The default step is 0.02 (i.e. 2%).
+                </p></div></div><div class="navfooter"><hr><table width="100%" summary="Navigation footer"><tr><td width="40%" align="left"><a accesskey="p" href="attach-images.html">Prev</a> </td><td width="20%" align="center"><a accesskey="u" href="api-manual.html">Up</a></td><td width="40%" align="right"> <a accesskey="n" href="release.html">Next</a></td></tr><tr><td width="40%" align="left" valign="top">Attaching extra images </td><td width="20%" align="center"><a accesskey="h" href="index.html">Home</a></td><td width="40%" align="right" valign="top"> Releasing the memory</td></tr></table></div></body></html>

@@ -1,0 +1,137 @@
+<!DOCTYPE html PUBLIC "-//W3C//DTD HTML 4.01 Transitional//EN" "http://www.w3.org/TR/html4/loose.dtd">
+<html>
+<!-- Created by GNU Texinfo 6.8, https://www.gnu.org/software/texinfo/ -->
+<head>
+<meta http-equiv="Content-Type" content="text/html; charset=utf-8">
+<!-- 
+This manual is for libffi, a portable foreign function interface
+library.
+
+Copyright (C) 2008-2019, 2021, 2022 Anthony Green and Red Hat, Inc.
+
+Permission is hereby granted, free of charge, to any person obtaining
+a copy of this software and associated documentation files (the
+"Software"), to deal in the Software without restriction, including
+without limitation the rights to use, copy, modify, merge, publish,
+distribute, sublicense, and/or sell copies of the Software, and to
+permit persons to whom the Software is furnished to do so, subject to
+the following conditions:
+
+The above copyright notice and this permission notice shall be
+included in all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
+EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.
+IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY
+CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT,
+TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
+SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+ -->
+<title>Closure Example (libffi: the portable foreign function interface library)</title>
+
+<meta name="description" content="Closure Example (libffi: the portable foreign function interface library)">
+<meta name="keywords" content="Closure Example (libffi: the portable foreign function interface library)">
+<meta name="resource-type" content="document">
+<meta name="distribution" content="global">
+<meta name="Generator" content="makeinfo">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+
+<link href="index.html" rel="start" title="Top">
+<link href="Index.html" rel="index" title="Index">
+<link href="Using-libffi.html" rel="up" title="Using libffi">
+<link href="Thread-Safety.html" rel="next" title="Thread Safety">
+<link href="The-Closure-API.html" rel="prev" title="The Closure API">
+<style type="text/css">
+<!--
+a.copiable-anchor {visibility: hidden; text-decoration: none; line-height: 0em}
+a.summary-letter {text-decoration: none}
+blockquote.indentedblock {margin-right: 0em}
+div.display {margin-left: 3.2em}
+div.example {margin-left: 3.2em}
+kbd {font-style: oblique}
+pre.display {font-family: inherit}
+pre.format {font-family: inherit}
+pre.menu-comment {font-family: serif}
+pre.menu-preformatted {font-family: serif}
+span.nolinebreak {white-space: nowrap}
+span.roman {font-family: initial; font-weight: normal}
+span.sansserif {font-family: sans-serif; font-weight: normal}
+span:hover a.copiable-anchor {visibility: visible}
+ul.no-bullet {list-style: none}
+-->
+</style>
+
+
+</head>
+
+<body lang="en">
+<div class="section" id="Closure-Example">
+<div class="header">
+<p>
+Next: <a href="Thread-Safety.html" accesskey="n" rel="next">Thread Safety</a>, Previous: <a href="The-Closure-API.html" accesskey="p" rel="prev">The Closure API</a>, Up: <a href="Using-libffi.html" accesskey="u" rel="up">Using libffi</a> &nbsp; [<a href="Index.html" title="Index" rel="index">Index</a>]</p>
+</div>
+<hr>
+<span id="Closure-Example-1"></span><h3 class="section">2.6 Closure Example</h3>
+
+<p>A trivial example that creates a new <code>puts</code> by binding
+<code>fputs</code> with <code>stdout</code>.
+</p>
+<div class="example">
+<pre class="example">#include &lt;stdio.h&gt;
+#include &lt;ffi.h&gt;
+
+/* Acts like puts with the file given at time of enclosure. */
+void puts_binding(ffi_cif *cif, void *ret, void* args[],
+                  void *stream)
+{
+  *(ffi_arg *)ret = fputs(*(char **)args[0], (FILE *)stream);
+}
+
+typedef int (*puts_t)(char *);
+
+int main()
+{
+  ffi_cif cif;
+  ffi_type *args[1];
+  ffi_closure *closure;
+
+  void *bound_puts;
+  int rc;
+
+  /* Allocate closure and bound_puts */
+  closure = ffi_closure_alloc(sizeof(ffi_closure), &amp;bound_puts);
+
+  if (closure)
+    {
+      /* Initialize the argument info vectors */
+      args[0] = &amp;ffi_type_pointer;
+
+      /* Initialize the cif */
+      if (ffi_prep_cif(&amp;cif, FFI_DEFAULT_ABI, 1,
+                       &amp;ffi_type_sint, args) == FFI_OK)
+        {
+          /* Initialize the closure, setting stream to stdout */
+          if (ffi_prep_closure_loc(closure, &amp;cif, puts_binding,
+                                   stdout, bound_puts) == FFI_OK)
+            {
+              rc = ((puts_t)bound_puts)(&quot;Hello World!&quot;);
+              /* rc now holds the result of the call to fputs */
+            }
+        }
+    }
+
+  /* Deallocate both closure, and bound_puts */
+  ffi_closure_free(closure);
+
+  return 0;
+}
+
+</pre></div>
+
+</div>
+
+
+
+</body>
+</html>

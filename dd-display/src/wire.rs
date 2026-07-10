@@ -27,7 +27,11 @@ pub struct Message {
 
 impl Message {
     pub fn new(object: u32, opcode: u16) -> Message {
-        Message { object, opcode, body: Vec::new() }
+        Message {
+            object,
+            opcode,
+            body: Vec::new(),
+        }
     }
 
     // ---- encoders (append to body) ----
@@ -51,7 +55,8 @@ impl Message {
     }
     /// A wl_array: a size-prefixed opaque byte blob, padded to 4.
     pub fn array(mut self, bytes: &[u8]) -> Self {
-        self.body.extend_from_slice(&(bytes.len() as u32).to_ne_bytes());
+        self.body
+            .extend_from_slice(&(bytes.len() as u32).to_ne_bytes());
         self.body.extend_from_slice(bytes);
         while self.body.len() % 4 != 0 {
             self.body.push(0);
@@ -69,7 +74,10 @@ impl Message {
 
     /// A cursor for decoding this message's argument body.
     pub fn reader(&self) -> ArgReader<'_> {
-        ArgReader { b: &self.body, pos: 0 }
+        ArgReader {
+            b: &self.body,
+            pos: 0,
+        }
     }
 }
 
@@ -103,21 +111,38 @@ impl<'a> ArgReader<'a> {
         self.pos += padded;
         s
     }
+    pub fn array(&mut self) -> Vec<u8> {
+        let len = self.u32() as usize;
+        if self.pos + len > self.b.len() {
+            self.pos = self.b.len();
+            return Vec::new();
+        }
+        let out = self.b[self.pos..self.pos + len].to_vec();
+        let padded = (len + 3) & !3;
+        self.pos = self.pos.saturating_add(padded).min(self.b.len());
+        out
+    }
 }
 
 /// A buffered Wayland connection: a `SOCK_STREAM` fd carrying message bytes plus an out-of-band queue of
 /// received/pending file descriptors (`SCM_RIGHTS`). One per client.
 pub struct Conn {
     fd: RawFd,
-    rx: Vec<u8>,          // unparsed inbound bytes
+    rx: Vec<u8>,             // unparsed inbound bytes
     rx_fds: VecDeque<RawFd>, // received fds, consumed in order by `fd`-typed args
-    tx: Vec<u8>,          // pending outbound bytes
-    tx_fds: Vec<RawFd>,   // fds to send with the next flush
+    tx: Vec<u8>,             // pending outbound bytes
+    tx_fds: Vec<RawFd>,      // fds to send with the next flush
 }
 
 impl Conn {
     pub fn new(fd: RawFd) -> Conn {
-        Conn { fd, rx: Vec::new(), rx_fds: VecDeque::new(), tx: Vec::new(), tx_fds: Vec::new() }
+        Conn {
+            fd,
+            rx: Vec::new(),
+            rx_fds: VecDeque::new(),
+            tx: Vec::new(),
+            tx_fds: Vec::new(),
+        }
     }
 
     pub fn raw_fd(&self) -> RawFd {
@@ -146,7 +171,10 @@ impl Conn {
     pub fn fill(&mut self) -> io::Result<isize> {
         let mut buf = [0u8; 4096];
         let mut cbuf = [0u8; 256];
-        let mut iov = libc::iovec { iov_base: buf.as_mut_ptr() as *mut _, iov_len: buf.len() };
+        let mut iov = libc::iovec {
+            iov_base: buf.as_mut_ptr() as *mut _,
+            iov_len: buf.len(),
+        };
         let mut mh: libc::msghdr = unsafe { std::mem::zeroed() };
         mh.msg_iov = &mut iov;
         mh.msg_iovlen = 1;
@@ -155,7 +183,8 @@ impl Conn {
         let n = unsafe { libc::recvmsg(self.fd, &mut mh, 0) };
         if n < 0 {
             let e = io::Error::last_os_error();
-            if e.raw_os_error() == Some(libc::EAGAIN) || e.raw_os_error() == Some(libc::EWOULDBLOCK) {
+            if e.raw_os_error() == Some(libc::EAGAIN) || e.raw_os_error() == Some(libc::EWOULDBLOCK)
+            {
                 return Ok(-1);
             }
             return Err(e);
@@ -196,7 +225,11 @@ impl Conn {
         }
         let body = self.rx[8..size].to_vec();
         self.rx.drain(0..size);
-        Some(Message { object, opcode, body })
+        Some(Message {
+            object,
+            opcode,
+            body,
+        })
     }
 
     /// Flush pending outbound bytes (and any queued fds via `SCM_RIGHTS`) to the socket.
@@ -206,7 +239,10 @@ impl Conn {
         }
         let tx = std::mem::take(&mut self.tx);
         let fds = std::mem::take(&mut self.tx_fds);
-        let mut iov = libc::iovec { iov_base: tx.as_ptr() as *mut _, iov_len: tx.len().max(1) };
+        let mut iov = libc::iovec {
+            iov_base: tx.as_ptr() as *mut _,
+            iov_len: tx.len().max(1),
+        };
         let mut mh: libc::msghdr = unsafe { std::mem::zeroed() };
         mh.msg_iov = &mut iov;
         mh.msg_iovlen = 1;
@@ -239,7 +275,11 @@ mod tests {
 
     #[test]
     fn roundtrip_args() {
-        let m = Message::new(3, 0).u32(0xdead).i32(-7).string("wl_shm").array(&[1, 2, 3]);
+        let m = Message::new(3, 0)
+            .u32(0xdead)
+            .i32(-7)
+            .string("wl_shm")
+            .array(&[1, 2, 3]);
         let mut buf = Vec::new();
         m.encode(&mut buf);
         // header: object then (size<<16|op)

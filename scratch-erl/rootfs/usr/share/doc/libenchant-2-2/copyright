@@ -1,0 +1,169 @@
+Format: https://www.debian.org/doc/packaging-manuals/copyright-format/1.0/
+Upstream-Name: enchant
+Upstream-Contact: Dom Lachowicz <domlachowicz@yahoo.com> et. al.
+Source: https://abiword.github.io/enchant/
+
+Files: *
+Copyright: 2003-2004, Dom Lachowicz <domlachowicz@yahoo.com>
+License: LGPL-2.1+
+
+Files: src/enchant-lsmod.c src/lib.c
+Copyright: 2003-2004, Dom Lachowicz <domlachowicz@yahoo.com>
+           2017, Reuben Thomas <rrt@sc3d.org>
+License: LGPL-2.1+
+
+Files: tests/*
+Copyright: 2007-2008 Eric Scott Albright
+License: Expat
+
+Files: tests/dictionary/enchant_dict_get_extra_word_characters_tests.cpp
+ tests/dictionary/enchant_dict_is_word_character_tests.cpp
+Copyright: 2017, Reuben Thomas
+License: Expat
+
+Files: lib/malloc.c lib/msvc-inval.c lib/msvc-inval.h lib/msvc-nothrow.c
+ lib/msvc-nothrow.h lib/stddef.in.h lib/strdup.c lib/string.in.h
+ lib/sys_file.in.h lib/sys_types.in.h lib/unistd.in.h
+Copyright: 1995-1998, 2001-2018, Free Software Foundation, Inc.
+License: LGPL-2.0+
+ This package is free software; you can redistribute it and/or
+ modify it under the terms of the GNU Lesser General Public
+ License as published by the Free Software Foundation; either
+ version 2 of the License, or (at your option) any later version.
+ .
+ This package is distributed in the hope that it will be useful,
+ but WITHOUT ANY WARRANTY; without even the implied warranty of
+ MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+ Lesser General Public License for more details.
+ .
+ You should have received a copy of the GNU Lesser General Public License
+ along with this program. If not, see <https://www.gnu.org/licenses/>.
+ .
+ On Debian systems, the complete text of the GNU Lesser General
+ Public License can be found in "/usr/share/common-licenses/LGPL-2".
+
+Files: lib/rawmemchr.c lib/relocatable.c lib/relocatable.h lib/stdlib.in.h
+ lib/strchrnul.c
+Copyright: 1995, 2001-2018, Free Software Foundation, Inc.
+License: LGPL-3.0+
+ This package is free software; you can redistribute it and/or
+ modify it under the terms of the GNU Lesser General Public
+ License as published by the Free Software Foundation; either
+ version 3 of the License, or (at your option) any later version.
+ .
+ This package is distributed in the hope that it will be useful,
+ but WITHOUT ANY WARRANTY; without even the implied warranty of
+ MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+ Lesser General Public License for more details.
+ .
+ You should have received a copy of the GNU Lesser General Public License
+ along with this program. If not, see <https://www.gnu.org/licenses/>.
+ .
+ On Debian systems, the complete text of the GNU Lesser General
+ Public License can be found in "/usr/share/common-licenses/LGPL-3".
+
+Files: build-aux/snippet/arg-nonnull.h build-aux/snippet/c++defs.h
+ build-aux/snippet/unused-parameter.h build-aux/snippet/warn-on-use.h
+ lib/Makefile.gnulib lib/Makefile.in m4/gnulib-cache.m4 m4/gnulib-comp.m4
+ tests/arg-nonnull.h tests/c++defs.h tests/unused-parameter.h
+ tests/warn-on-use.h
+Copyright: 1994-2018, Free Software Foundation, Inc.
+License: GPL-3.0+
+ This program is free software: you can redistribute it and/or modify
+ it under the terms of the GNU General Public License as published by
+ the Free Software Foundation, either version 3 of the License, or
+ (at your option) any later version.
+ .
+ This package is distributed in the hope that it will be useful,
+ but WITHOUT ANY WARRANTY; without even the implied warranty of
+ MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ GNU General Public License for more details.
+ .
+ You should have received a copy of the GNU General Public License
+ along with this program. If not, see <https://www.gnu.org/licenses/>.
+ .
+ On Debian systems, the complete text of the GNU General
+ Public License version 3 can be found in "/usr/share/common-licenses/GPL-3".
+
+Files: ./m4/ax_cxx_compile_stdcxx.m4
+Copyright: 2008, Benjamin Kosnik <bkoz@redhat.com>
+  2012, Zack Weinberg <zackw@panix.com>
+  2013, Roy Stogner <roystgnr@ices.utexas.edu>
+  2014-2015, Google Inc.; contributed by Alexey Sokolov <sokolov@google.com>
+  2015, Moritz Klammler <moritz@klammler.eu>
+  2015, Paul Norman <penorman@mac.com>
+  2016, Krzesimir Nowak <qdlacz@gmail.com>
+License: FSFAP
+
+Files: ./m4/ax_require_defined.m4
+Copyright: 2014, Mike Frysinger <vapier@gentoo.org>
+License: FSFAP
+
+Files: ./providers/applespell_checker.mm
+Copyright: 2004, Francis James Franklin
+           2004, Remi Payette
+License: GPL-2.0+
+ This package is free software; you can redistribute it and/or modify
+ it under the terms of the GNU General Public License as published by
+ the Free Software Foundation; either version 2 of the License, or
+ (at your option) any later version.
+ .
+ This package is distributed in the hope that it will be useful,
+ but WITHOUT ANY WARRANTY; without even the implied warranty of
+ MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ GNU General Public License for more details.
+ .
+ You should have received a copy of the GNU General Public License
+ along with this program. If not, see <https://www.gnu.org/licenses/>
+ .
+ On Debian systems, the complete text of the GNU General
+ Public License version 2 can be found in "/usr/share/common-licenses/GPL-2".
+
+Files: debian/*
+Copyright: 2003-2019 Masayuki Hatta <mhatta@debian.org>
+           2019 Laurent Bigonville <bigon@debian.org>
+License: LGPL-2.1+
+
+License: LGPL-2.1+
+ This package is free software; you can redistribute it and/or
+ modify it under the terms of the GNU Lesser General Public
+ License as published by the Free Software Foundation; either
+ version 2 of the License, or (at your option) any later version.
+ .
+ This package is distributed in the hope that it will be useful,
+ but WITHOUT ANY WARRANTY; without even the implied warranty of
+ MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+ Lesser General Public License for more details.
+ .
+ You should have received a copy of the GNU Lesser General Public
+ License along with this package; if not, write to the Free Software
+ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301  USA
+ .
+ On Debian systems, the complete text of the GNU Lesser General
+ Public License can be found in `/usr/share/common-licenses/LGPL-2.1'.
+
+License: Expat
+ Permission is hereby granted, free of charge, to any person obtaining
+ a copy of this software and associated documentation files (the
+ "Software"), to deal in the Software without restriction, including
+ without limitation the rights to use, copy, modify, merge, publish,
+ distribute, sublicense, and/or sell copies of the Software, and to
+ permit persons to whom the Software is furnished to do so, subject to
+ the following conditions:
+ .
+ The above copyright notice and this permission notice shall be included
+ in all copies or substantial portions of the Software.
+ .
+ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
+ EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+ MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.
+ IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY
+ CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT,
+ TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
+ SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
+License: FSFAP
+ Copying and distribution of this file, with or without modification, are
+ permitted in any medium without royalty provided the copyright notice
+ and this notice are preserved.  This file is offered as-is, without any
+ warranty.

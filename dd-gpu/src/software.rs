@@ -158,6 +158,28 @@ impl SoftwareBackend {
             _ => return Err(GpuError::Unsupported("software: clear for this format")),
         })
     }
+
+    fn clear_rect(&mut self, texture: u32, x: u32, y: u32, w: u32, h: u32, color: [f32; 4]) -> Result<()> {
+        let (fmt, tw, th) = {
+            let t = self.textures.get(texture)?;
+            (t.desc.format, t.desc.width, t.desc.height)
+        };
+        let texel = Self::clear_texel(fmt, color)?;
+        let bpt = texel.len();
+        let x0 = x.min(tw) as usize;
+        let y0 = y.min(th) as usize;
+        let x1 = x.saturating_add(w).min(tw) as usize;
+        let y1 = y.saturating_add(h).min(th) as usize;
+        let tw = tw as usize;
+        let t = self.textures.get_mut(texture)?;
+        for yy in y0..y1 {
+            for xx in x0..x1 {
+                let off = (yy * tw + xx) * bpt;
+                t.pixels[off..off + bpt].copy_from_slice(&texel);
+            }
+        }
+        Ok(())
+    }
 }
 
 impl GpuBackend for SoftwareBackend {
@@ -326,6 +348,9 @@ impl GpuBackend for SoftwareBackend {
                     cur_targets = color.clone();
                 }
                 Enc::EndRenderPass => cur_targets.clear(),
+                Enc::ClearRect { texture, x, y, w, h, color } => {
+                    self.clear_rect(*texture, *x, *y, *w, *h, *color)?;
+                }
                 Enc::SetPipeline(p) => {
                     self.pipelines.get(*p)?;
                     cur_pipeline = Some(*p);

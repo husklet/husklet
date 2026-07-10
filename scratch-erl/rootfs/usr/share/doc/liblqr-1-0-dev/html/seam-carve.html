@@ -1,0 +1,39 @@
+<html><head><meta http-equiv="Content-Type" content="text/html; charset=ISO-8859-1"><title>Seam carving in brief</title><meta name="generator" content="DocBook XSL Stylesheets V1.79.1"><link rel="home" href="index.html" title="The Liquid Rescale library Manual"><link rel="up" href="Introduction.html" title="Chapter 1. Introduction"><link rel="prev" href="about-this-doc.html" title="About this document"><link rel="next" href="overview.html" title="Overview of the library"></head><body bgcolor="white" text="black" link="#0000FF" vlink="#840084" alink="#0000FF"><div class="navheader"><table width="100%" summary="Navigation header"><tr><th colspan="3" align="center">Seam carving in brief</th></tr><tr><td width="20%" align="left"><a accesskey="p" href="about-this-doc.html">Prev</a> </td><th width="60%" align="center">Chapter 1. Introduction</th><td width="20%" align="right"> <a accesskey="n" href="overview.html">Next</a></td></tr></table><hr></div><div class="sect1"><div class="titlepage"><div><div><h2 class="title" style="clear: both"><a name="seam-carve"></a>Seam carving in brief</h2></div></div></div><div class="toc"><dl class="toc"><dt><span class="sect2"><a href="seam-carve.html#about-enlarge">About enlarging</a></span></dt></dl></div><p>
+                Basically, the rescaling algorithm tries to find out which parts of the image are important, and which
+                are not, based on the contrast between adjacent pixels; then, the image is resized through the
+                elimination or insertion of continuous paths, called `seams'. The seams connect the top of the image
+                with the bottom when rescaling horizontally, or they connect the left side with the right side when
+                rescaling vertically. In the seam carving process, seams are removed in sequence, therefore shrinking
+                the image by one pixel at a time. The seam insertion process mirrors the seam carving process,
+                introducing interpolated seams in regions where they would have been carved.
+            </p><p>
+                Once it has been computed, the carving information can be efficiently stored in a so called multi-sized
+                image, which can be used to reproduce the carving operation on the fly at any later moment. 
+            </p><p>
+                It often happens that the automatic feature detection fails to identify as significant some image
+                regions; in these cases a preservation mask can be specified, which marks those regions. In fact, the
+                feature recognition process can be manually driven quite easily to its full extent, by using custom
+                masks.
+            </p><p>
+                See also the <a class="link" href="references.html" title="Chapter 4. References">References</a> section for more information about the
+                algorithm.
+            </p><div class="sect2"><div class="titlepage"><div><div><h3 class="title"><a name="about-enlarge"></a>About enlarging</h3></div></div></div><p>
+                    As mentioneed above, the enlargment process mirrors the carving process. More precisely, in order to
+                    enlarge the image by a given amount of pixels, say N, the library first computes which would be the
+                    first N seams to be removed; then, it inserts N new seams nearby those.
+                </p><p>
+                    This means that it is clearly not possible to go beyond twice the original size in a single step. It
+                    also means that doubling the image size in this way is just equivalent to standard scaling, since
+                    the result is that each seam is just duplicated. For these reasons, the library rescaling engine
+                    automatically divides enlarging sessions in steps, and allows to set the step size.
+                </p><p>
+                    This same issue also affects in a tricky way the preservation of image areas when enlarging: suppose
+                    your image is 1000 pixels wide, and you have protected an area which is 800 pixels wide. It is then
+                    clear that you cannot shrink the image to less than 800 pixels without affecting the preserved area,
+                    but the same is true when enlarging, so you should not go beyond 1200 pixels in a single step (=
+                    1000 + (1000 - 800)), i.e. you should use a value lower than 1.2 for the enlargement step size.
+                </p><p>
+                    In general, however, the optimal enlargement step size depends on the image, since large step sizes
+                    have the disadvantages discussed above, while small step sizes will tend to inflate the same areas
+                    of the image over and over at each step.
+                </p></div></div><div class="navfooter"><hr><table width="100%" summary="Navigation footer"><tr><td width="40%" align="left"><a accesskey="p" href="about-this-doc.html">Prev</a> </td><td width="20%" align="center"><a accesskey="u" href="Introduction.html">Up</a></td><td width="40%" align="right"> <a accesskey="n" href="overview.html">Next</a></td></tr><tr><td width="40%" align="left" valign="top">About this document </td><td width="20%" align="center"><a accesskey="h" href="index.html">Home</a></td><td width="40%" align="right" valign="top"> Overview of the library</td></tr></table></div></body></html>

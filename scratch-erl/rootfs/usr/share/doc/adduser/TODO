@@ -1,0 +1,37 @@
+TODO for adduser
+----------------
+
+For adduser 3.x there is to do:
+
+ * make adduser also work with super and in taint mode (fix #214546)
+ * Use --msgid-bugs-address when using po4a in debian/rules
+ * Address lintian's "untranslatable debconf template"
+   This is triggered by adduser/title, which is not intended for translation.
+   The suggestion in the lintian output is to state "for internal use only" as part of the description, but this isn't the case; it's just a name.
+
+ * The SETGID_HOME configuration option is deprecated,
+   as of bookworm+1.  Run-time warnings should be added
+   to notify users of the change; the feature is slated
+   for removal in bookworm+3.
+
+ * The --add_extra_groups configuration option is deprecated,
+   as of bookworm+1.  Run-time warnings should be added
+   to notify users of the change; the feature is slated
+   for removal in bookworm+2.
+
+ * The --force-badname command line is deprecated as of bookworm+1.
+   Run-time warnings shold be added to notify users of the change;
+   the feature is slated for removal in bookworm+2.
+
+ * get rid of --no-preserve-root, refuse removing the root account in any case
+
+ * define meaningful return values, document them
+
+ * remove interactive stuff ("enter group name to remove")
+
+ * discuss users_group default
+
+ * streamline .conf options (/yes, 1, no, 0, true, false)
+
+ * see whether users is default in too many places
+

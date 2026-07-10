@@ -206,6 +206,9 @@ impl GpuBackend for RecordingBackend {
                     self.log.push(Rec::BeginRenderPass(color.len()));
                 }
                 Enc::EndRenderPass => self.log.push(Rec::EndRenderPass),
+                Enc::ClearRect { texture, .. } => {
+                    self.textures.get(*texture)?;
+                }
                 Enc::SetPipeline(p) => {
                     self.pipelines.get(*p)?;
                     self.log.push(Rec::SetPipeline(*p));

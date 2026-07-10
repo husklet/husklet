@@ -1,0 +1,6 @@
+47fd5811db1f3062a756c1562034b534  usr/lib/aarch64-linux-gnu/libcdda_interface.so.0.10.2
+20a08eaab07e5cc4465bf722ad65fece  usr/lib/aarch64-linux-gnu/libcdda_paranoia.so.0.10.2
+7ccb50160fee60ff9527e877027d7491  usr/share/doc/libcdparanoia0/README.gz
+d77005ffd1ac230ea1d7f8cce12f876d  usr/share/doc/libcdparanoia0/changelog.Debian.gz
+f0ef9e656bbae6c72aa8efefb0cbc963  usr/share/doc/libcdparanoia0/copyright
+9d3c57a7a485b399ea873c7d9d3dfb9d  usr/share/lintian/overrides/libcdparanoia0

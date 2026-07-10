@@ -1,0 +1,1285 @@
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.1//EN" 
+   "http://www.w3.org/TR/xhtml11/DTD/xhtml11.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>Apache Subversion 1.10 Release Notes</title>
+<meta http-equiv="Content-Type" content="text/html;charset=utf-8" />
+<base href="https://subversion.apache.org"/>
+<style type="text/css">
+  @import url("/style/site.css");
+</style>
+</head>
+
+<body>
+<div id="site-banner">
+<div style="float: right; width: 379px; height: 80px; font-style: italic; 
+            text-align: center;">
+  <a href="https://www.apache.org/"
+  ><img src="/images/apache-logo.png"
+        alt="Apache Software Foundation" /></a>
+</div>
+<a href="/">
+  <img src="/images/svn-square.jpg"
+       alt="[S]"
+       style="width: 80px; height: 80px;"/>
+  <img src="/images/svn-name-banner.jpg"
+       alt="Subversion"
+       style="width: 320px; height: 80px;"/></a>
+</div> <!-- #site-banner -->
+
+<div id="site-nav">
+<div id="site-nav-menu">
+<ul>
+  <li>About Subversion
+    <ul>
+      <li><a href="/news.html">News</a></li>
+      <li><a href="/features.html">Features</a></li>
+      <li><a href="/docs/">Documentation</a></li>
+      <li><a href="/faq.html">FAQ</a></li>
+      <li><a href="/roadmap.html">Roadmap</a></li>
+      <li><a href="/security/">Security</a></li>
+      <li><a href="/quick-start">Quick Start</a></li>
+    </ul>
+  </li>
+  <li>Getting Subversion
+      <ul>
+      <!-- A parameter in the form '?update=YYYYMMDDhhmm' may
+           be appended to 'download.cgi' to only offer mirrors that have
+           synced after the specified date. We update it after a security
+           release when the email announcement is less than 24 hours after
+           the upload to /dist/release, in order to prevent offering mirrors
+           that don't carry the just-released artifacts. -->
+      <li><a href="/packages.html">Binary Packages</a></li>
+      <li><a href="/download.cgi">Source Download</a></li>
+      <li><a href="/docs/release-notes/">Release Notes</a></li>
+    </ul>
+  </li>
+  <li>Community
+    <ul>
+      <li><a href="/mailing-lists.html">Mailing Lists</a></li>
+      <li><a href="/reporting-issues.html">Reporting Issues</a></li>
+      <li><a href="https://cwiki.apache.org/confluence/display/SVN/">Wiki</a></li>
+      <li><a href="/contributing.html">Getting Involved</a></li>
+      <li><a href="/source-code.html">Source Code</a></li>
+    </ul>
+  </li>
+  <li>About the <acronym title="Apache Software Foundation">ASF</acronym>
+    <ul>
+      <li><a class="linkaway"
+             href="https://www.apache.org/licenses/">Licenses</a></li>
+      <li><a class="linkaway"
+             href="https://www.apache.org/foundation/sponsorship.html">Donate</a></li>
+      <li><a class="linkaway"
+             href="https://www.apache.org/foundation/thanks.html">Thanks</a></li>
+    </ul>
+  </li>
+</ul>
+</div> <!-- #site-nav-menu -->
+
+<div id="site-search">
+  <form action="https://www.google.com/search" method="get"
+        style="margin-top: 10px; margin-bottom: 10px; display: inline;">
+  <div style="display: inline;">
+    <input value="subversion.apache.org" name="sitesearch" type="hidden" />
+    <input name="q" id="query" type="text" placeholder="Search..."
+           style="width: 10em"
+           />
+    <input name="Search" value="Go" type="submit"/>
+  </div>
+  </form>
+</div> <!-- #site-search -->
+
+<div id="site-svnbook-block">
+<p>Read the official Subversion
+   documentation <a href="http://svnbook.org" class="linkaway">online</a>!</p>
+<p><a href="http://svnbook.org/"
+      ><img src="/images/svnbook-cover.jpg"
+            alt="Version Control With Subversion"/></a></p>
+</div> <!-- #site-svnbook-block -->
+
+<div id="copyright">
+<p>Copyright &#169; 2018 <a href="https://www.apache.org/">The Apache
+   Software Foundation</a>, Licensed under
+   the <a href="https://www.apache.org/licenses/LICENSE-2.0" >Apache
+   License, Version 2.0</a>.  Apache, Apache Subversion, and
+   the Apache feather logo are trademarks of The Apache Software
+   Foundation.  Subversion and the Apache Subversion logo are
+   registered trademarks of The Apache Software Foundation.</p>
+</div> <!-- #copyright -->
+
+</div> <!-- #site-nav -->
+
+<div id="site-content">
+<div id="site-notice">
+
+<!-- PUT SITE-WIDE NOTICES HERE AS NECESSARY -->
+
+</div> <!-- #site-notice -->
+
+<!-- **************** BEGIN CONTENT ***************** -->
+
+<!-- ************************************************ -->
+<!-- Sections start with "###" are either templates   -->
+<!-- or TODOs.  Remove them before release.           -->
+<!-- ************************************************ -->
+
+<h1 style="text-align: center">Apache Subversion 1.10 Release Notes</h1>
+
+<div class="h2" id="news">
+<h2>What's New in Apache Subversion 1.10
+  <a class="sectionlink" href="#news"
+    title="Link to this section">&para;</a>
+</h2>
+
+<ul>
+  <li><a href="#authzperf"
+      >Improved path-based authorization</a></li>
+  <li><a href="#conflict-resolver"
+      >New interactive conflict resolver</a></li>
+  <li><a href="#lz4"
+      >LZ4 Compression</a></li>
+  <li><a href="#shelving"
+      >Shelving (experimental)</a></li>
+  <li><a href="#enhancements"
+      >Many enhancements and bug fixes</a></li>
+  <li><a href="#issues"
+      >Known issues in the release</a></li>
+  <!--
+  <li><a href="#troubleshooting"
+      >Troubleshooting issues specific to this release</a></li>
+  -->
+</ul>
+
+<p>Apache Subversion 1.10 is a superset of all previous Subversion
+releases, and is as of the time of its release considered the current
+"best" release.  Any feature or bugfix in 1.0.x through 1.9.x is also
+in 1.10, but 1.10 contains features and bugfixes not present in any
+earlier release.  The new features will eventually be documented in a
+1.10 version of the free Subversion book
+(<a href="http://svnbook.red-bean.com/" >svnbook.red-bean.com</a>).</p>
+
+<p>This page describes only major changes.  For a complete list of
+changes, see the 1.10 section of the <a
+href="https://svn.apache.org/repos/asf/subversion/trunk/CHANGES" >CHANGES</a>
+file.</p>
+
+</div>  <!-- news -->
+
+<div class="h2" id="compatibility">
+<h2>Compatibility Concerns
+  <a class="sectionlink" href="#compatibility"
+    title="Link to this section">&para;</a>
+</h2>
+
+<p>Older clients and servers interoperate transparently with 1.10
+servers and clients.  However, some of the new 1.10 features may not be
+available unless both client and server are the latest version.  There are
+also cases where a new feature will work but will run less efficiently if
+the client is new and the server old.</p>
+
+<p>There is <strong>no need</strong> to <a href="http://svnbook.red-bean.com/en/1.8/svn.reposadmin.maint.html#svn.reposadmin.maint.migrate.svnadmin"
+>dump and reload</a> your repositories. 
+Subversion 1.10 servers can read and write to repositories created by
+earlier versions.  To upgrade an existing server installation, just install the
+newest libraries and binaries on top of the older ones.</p>
+
+<p>Subversion 1.10 maintains API/ABI compatibility with earlier
+releases, by only adding new functions, never removing old ones.  A
+program written to any previous 1.x API can both compile
+and run using 1.10 libraries.  However, a program written for 1.10
+cannot necessarily compile or run against older libraries.</p>
+
+<p>There may be limited cases where the behavior of old APIs has been
+slightly modified from previous releases.  These are cases where edge cases
+of the functionality has been deemed buggy, and therefore improved or removed.
+Please consult the
+<a href="https://svn.apache.org/repos/asf/subversion/trunk/notes/api-errata/1.10/"
+>API errata</a> for more detailed information on what these APIs are
+and what impact these changes may have.</p>
+
+<div class="h3" id="new-feature-compatibility-table">
+<h3>New Feature Compatibility Table
+  <a class="sectionlink" href="#new-feature-compatibility-table"
+    title="Link to this section">&para;</a>
+</h3>
+<table border="1">
+  <tr>
+    <th>New Feature</th>
+    <th>Minimum Client<sup>1</sup></th>
+    <th>Minimum Server</th>
+    <th>Minimum Repository</th>
+    <th>Notes</th></tr>
+  <tr>
+    <td>
+      <a href="#authzperf">Improved path-based authorization</a>
+    </td>
+    <td>any</td>
+    <td>1.10</td>
+    <td>any</td>
+    <td><a href="#authz-compatibility">Existing authz configurations</a> may need to be adjusted.</td></tr>
+  <tr>
+    <td>
+      <a href="#conflict-resolver">New interactive conflict resolver</a>
+    </td>
+    <td>1.10</td>
+    <td>any</td>
+    <td>any</td>
+    <td>Use SVN 1.8 and above clients only for best results.</td></tr>
+  <tr>
+    <td>
+      <a href="#lz4-over-the-wire">LZ4 compression over the wire in http:// and svn:// connections</a>
+    </td>
+    <td>1.10</td>
+    <td>1.10</td>
+    <td>any</td>
+    <td></td></tr>
+  <tr>
+    <td>
+      <a href="#lz4">LZ4 compression in the backend storage</a>
+    </td>
+    <td>any</td>
+    <td>1.10</td>
+    <td>1.10</td>
+    <td>FSFS only</td></tr>
+  <tr>
+    <td colspan="5"><sup>1</sup>Reminder: when using the <tt>file://</tt>
+    repository access method, the Subversion program is both the client
+    <em>and</em> the server.</td></tr>
+</table>
+
+</div>  <!-- new-feature-compatibility-table -->
+
+<div class="h3" id="wc-upgrade">
+<h3>Upgrading the Working Copy
+  <a class="sectionlink" href="#wc-upgrade"
+    title="Link to this section">&para;</a>
+</h3>
+
+<p>Subversion 1.10 uses the same working copy format as Subversion 1.8 and 1.9.</p>
+
+<p>Before using Subversion 1.10 with an existing Subversion 1.7 or older
+working copy, users will be required to run the <tt>svn upgrade</tt> command
+to upgrade working copy metadata to the new format. This command may take a
+while in some cases, and for some users, it may be more practical to simply
+checkout a new working copy.</p>
+
+<p><strong>Note:</strong> Subversion 1.10 cannot upgrade working copies that
+a 1.6 client would have refused to operate upon before an <tt>svn cleanup</tt>
+was run (with a 1.6 client).  In other words, before upgrading to 1.8 or newer,
+a 1.6
+or older client must be used to run <tt>svn cleanup</tt> on all 1.6 or older
+working copies that require cleanup.  Likewise, Subversion 1.10 cannot upgrade
+corrupt working copies. Unfixable problems can arise from missing or corrupt
+meta-data inside <tt>.svn</tt> directories.  Such damage to the working copy
+is permanent, and cannot be fixed even if <tt>svn cleanup</tt> is run prior
+to the upgrade.</p>
+
+<p>If your working copy does not upgrade cleanly, please check out a new one.
+</p>
+
+</div>  <!-- wc-upgrade -->
+
+<!-- TODO:
+<div class="h3" id="protocol-changes">
+<h3>Client-Server Protocol Changes
+  <a class="sectionlink" href="#protocol-changes"
+    title="Link to this section">&para;</a>
+</h3>
+
+<p>LZ4 compression: see <a href="#fsfs-lz4-configuration">Configuring the
+repository to use LZ4 compression</a> below.</p>
+
+<p>List with search...</p>
+
+<p>...</p>
+
+</div>
+-->
+
+<div class="h3" id="compat-misc">
+<h3>Miscellaneous Compatibility Notes
+  <a class="sectionlink" href="#compat-misc"
+    title="Link to this section">&para;</a>
+</h3>
+
+<p>There are some additional specific areas where changes made in this
+release might necessitate further adjustment by administrators or
+users.  We'll cover those in this section.</p>
+
+<div class="h4" id="this-release-is-1.10">
+<h4>This release is numbered 1.10
+  <a class="sectionlink" href="#this-release-is-1.10"
+    title="Link to this section">&para;</a>
+</h4>
+
+<p>Since "1.10.0" is smaller than "1.9.0" when considered as ASCII strings,
+scripts that compare Subversion versions as strings may fail to correctly
+determine which of "1.10.0" and "1.9.0" is the more recent one.  Such
+scripts should be changed to compare Subversion version numbers correctly:
+as tuples of integers, with an optional suffix for development or pre-release
+versions.  See
+<a href="/docs/community-guide/releasing#release-numbering"
+>the Subversion release numbering documentation</a>
+for details.  (Programs written against the C API or the various bindings
+should refer to the 
+<!-- TODO: link is broken (doxygen not yet generated) -->
+<a href="https://subversion.apache.org/docs/api/1.9/svn__version_8h.html"
+><tt>svn_version_*</tt> interfaces</a>.)</p>
+
+</div>  <!-- this-release-is-1.10 -->
+
+<div class="h4" id="authz-compatibility">
+<h4>New path-based authorization compatibility
+  <a class="sectionlink" href="#authz-compatibility"
+    title="Link to this section">&para;</a>
+</h4>
+
+<p>The <a href="#authzperf">improved path-based authorization</a>
+  changes the behaviour of some existing authz files.</p>
+
+<p>The 1.9 and earlier implementations allowed multiple rules for the
+same path:</p>
+
+<pre>
+  [/some/path]
+  userA = r
+  [/some/path]
+  userB = rw
+</pre>
+
+<p>In 1.9 this would define access for both <tt>userA</tt>
+and <tt>userB</tt>, in 1.10 this raises an error and no access is
+possible.</p>
+
+<p>The 1.9 and earlier implementations allowed multiple entries
+matching the same name, alias or group and the last match applied:</p>
+
+<pre>
+  [/some/path]
+  user = rw
+  user = r
+  &alias = rw
+  &alias = r
+  @group = rw
+  @group = r
+</pre>
+
+<p>In 1.9 the final, read-only, match
+for <tt>user</tt>, <tt>&alias</tt> and <tt>@group</tt> would be
+selected while 1.10 combines all the lines to give read-write access.
+The 1.10 implementation may change in future releases, perhaps to
+<a href="/issue/4794">make this case an error</a>.</p>
+
+<p>A fix for <a href="https://issues.apache.org/jira/browse/SVN-4762?issueNumber=4762"
+>Issue #4762</a> may change the way path-based authorization rules are applied
+in some circumstances. See <a href="http://svn.apache.org/r1882326">r1882326</a>.</p>
+
+<p>Background: Subversion 1.10 introduced a new implementation of path-based
+authorization (authz) to deliver wildcard support and improved performance
+over that of Subversion 1.9 and earlier. From Subversion 1.10 through 1.14.0,
+the new implementation did not correctly combine global rules with repository
+rules: if a global rule and a per-repository rule were both present for a
+path, the global rule would be ignored and the per-repository rule would
+apply by itself. As a result, from Subversion 1.10 through 1.14.0, it was not
+possible to override per-path access rules for specific users (or groups) at
+the global level. Administrators whose authz rules rely on this incorrect
+behavior may need to adjust their rules accordingly.
+</p>
+
+<p>This issue is fixed in 1.14.1, making it possible once again to
+override per-path access rules for specific users (and groups) at the global level.
+Such global rules are overridden by repository-specific rules only if both the
+user and the path match the repository-specific rule.</p>
+
+<p>As an example, consider the following rule set:</p>
+
+<pre>
+[groups]
+company = developer1, developer2, developer3
+customer = customer1, customer2
+
+# company can read-write on everything
+[/]
+@company = rw
+
+[project1:/]
+@customer = r
+</pre>
+
+<p>
+Does <tt>developer1</tt> have <tt>rw</tt> access to <tt>"/trunk"</tt> in <tt>project1</tt>?
+</p>
+
+<p>
+Subversion servers running 1.10.0 up to 1.10.6 or 1.14.0, without the fix for
+<a href="https://issues.apache.org/jira/browse/SVN-4762?issueNumber=4762"
+>issue #4762</a>, will only apply the repository-specific part of the rule set:</p>
+<pre>
+[project1:/]
+@customer = r
+</pre>
+<p>
+The answer in this case is that <tt>developer1</tt> has no access at all because the
+global rule which grants <tt>rw</tt> access to the <tt>@company</tt> group is ignored.
+</p>
+
+<p>
+Subversion servers running 1.14.1 or later match the behaviour of
+Subversion 1.9, meaning they will apply both the global and the repository-specific
+part of the rule set:</p>
+<pre>
+# company can read-write on everything
+[/]
+@company = rw
+
+[project1:/]
+@customer = r
+</pre>
+<p>
+The answer in this case is that <tt>developer1</tt> has <tt>rw</tt> access
+to any path in <tt>project1</tt>.
+Global rules are overridden by repository-specific rules only if both the
+user (<tt>developer1</tt>) and the path (<tt>"/"</tt>, including child paths
+for which no specific rules exist) match the repository-specific rule.
+While the repository-specific rule matches <tt>"/trunk"</tt> it does not
+match <tt>developer1</tt>, and hence the global rule will be used.
+</p>
+
+
+</div>  <!-- authz-compatibility -->
+
+<div class="h4" id="svnadmin-LOCK_PATH-canonical">
+<h4><tt>svnadmin</tt> subcommands print locked paths differently
+  <a class="sectionlink" href="#svnadmin-LOCK_PATH-canonical"
+    title="Link to this section">&para;</a>
+</h4>
+
+<!-- This documents https://svn.apache.org/r1797122 -->
+
+<p>The
+<tt>svnadmin lock</tt>,
+<tt>svnadmin unlock</tt>, and
+<tt>svnadmin rmlocks</tt>
+subcommands print the locked path differently.</p>
+
+<p>In 1.9 and earlier, the path would be printed out in exactly the form it was input.
+In 1.10, the path is printed in "canonical" form:
+with dot components (<tt>foo/./bar</tt>) elided and multiple slashes (<tt>foo//bar</tt>) compressed to one.
+The path also starts with a slash in the output,
+regardless of whether a leading slash was present in the input.</p>
+
+<p>Example:</p>
+
+<pre>
+$ svnadmin-1.9 lock r //iota jrandom logmsg opaquelocktoken:42
+'//iota' locked by user 'jrandom'.
+$ svnadmin-1.9 unlock r //iota jrandom opaquelocktoken:42
+'//iota' unlocked by user 'jrandom'.
+
+
+$ svnadmin-1.10 lock r //iota jrandom logmsg opaquelocktoken:42
+'/iota' locked by user 'jrandom'.
+$ svnadmin-1.10 unlock r //iota jrandom opaquelocktoken:42
+'/iota' unlocked by user 'jrandom'.
+$
+</pre>
+
+<p>Only the output is changed.
+The set of valid inputs and the behaviour of <tt>svnadmin</tt> on them are unchanged.
+<tt>svnadmin</tt> continues to accept paths either with or without multiple slashes,
+dot components, and so on as command-line arguments.</p>
+
+</div>  <!-- svnadmin-LOCK_PATH-canonical -->
+
+<div class="h4" id="svnserve-use-sasl">
+<h4><tt>svnserve</tt> honours <tt>use-sasl = true</tt> when built without SASL
+  <a class="sectionlink" href="#svnserve-use-sasl"
+    title="Link to this section">&para;</a>
+</h4>
+
+<!-- This documents https://svn.apache.org/r1803188 -->
+
+<p>The behaviour of <tt>svnserve</tt> when built <em>without support for Cyrus SASL</em>
+transport has changed.</p>
+
+<p>In Subversion 1.9 and earlier, <tt>svnserve</tt>, when built without SASL support,
+  would ignore the <tt>svnserve.conf</tt> <tt>use-sasl</tt> setting;
+In Subversion 1.10, <tt>svnserve</tt>, when built without SASL support,
+  errors out if <tt>use-sasl</tt> is set to <tt>true</tt>.</p>
+
+<p><tt>svnserve</tt>'s behaviour is otherwise unchanged.
+In particular, the behaviour of builds <em>with</em> SASL support is unchanged.</p>
+
+<p>An <a href="https://svn.apache.org/repos/asf/subversion/trunk/notes/api-errata/1.10/svnserve001.txt"
+>API erratum</a> is available.</p>
+
+</div>  <!-- svnserve-use-sasl -->
+
+<div class="h4" id="new-ca-keys">
+<h4>New CA keys may be required
+  <a class="sectionlink" href="#new-ca-keys"
+    title="Link to this section">&para;</a>
+</h4>
+
+<p>
+Some binary distributions of this new Subversion version
+may link to a newer OpenSSL version than previous distributions.
+This may lead to different behavior.
+</p>
+
+<p>
+Especially, some distributions may link this Subversion release to OpenSSL 1.1 instead of OpenSSL 1.0.
+OpenSSL 1.1 does not allow md5 hashes for CA keys anymore.
+When using client certificates signed by such a CA,
+the new Subversion client may fail with <tt>An error occurred during SSL communication</tt>.
+You can analyze the underlying cause by first converting the client certificate from p12 to pem by
+<pre>
+openssl pkcs12 -in path/to/svn/cert.p12 -out cert.pem
+</pre>
+and then testing the SSL connection by
+<pre>
+openssl s_client -connect example.com:443 -servername example.com -cert cert.pem
+</pre>
+If this test connection fails with <tt>ca md too weak</tt>
+then creating new CA keys using sha256 instead of md5
+and corresponding new client certificates should solve the problem.
+</p>
+
+<p>
+See also <a href="/faq.html#ssl-communication-error">When performing Subversion operations
+over SSL, I get the error <tt>An error occurred during SSL communication</tt></a>
+</p>
+
+</div>  <!-- new-ca-keys -->
+
+</div>  <!-- compat-misc -->
+
+</div>  <!-- compatibility -->
+
+<div class="h2" id="new-features">
+<h2>New Features
+  <a class="sectionlink" href="#new-features"
+    title="Link to this section">&para;</a>
+</h2>
+
+<div class="h3" id="authzperf">
+<h3>Improved path-based authorization 
+  <a class="sectionlink" href="#authzperf"
+     title="Link to this section">&para;</a>
+</h3>
+<p> Subversion 1.10 provides a new implementation of path-based authorization
+    with improved performance and wildcard support. There are some
+    <a href="#authz-compatibility">compatibility</a> issues.</p>
+
+<p>Existing authz rules come in two flavours, repository-specific and global:
+   <pre>
+   [repos:/path]
+   [/path]</pre>
+   In these rules, <tt>/path</tt> is always matched literally.</p>
+
+<p>The new authz rule parser supports two new forms for rules which may contain
+   wildcards in the path element:
+   <pre>
+   [:glob:repos:/path]
+   [:glob:/path]</pre></p>
+
+<p>The following wildcard syntax elements are supported in glob rules:
+<ul>
+<li><tt>*</tt> matches a single (exactly one), arbitrary path segment</li>
+<li><tt>**</tt> matches an arbitrary number of path segments, separated by a forward slash: <tt>/</tt></li>
+<li>Classic wildcard patterns such as <tt>*foo*.bar</tt> work as expected, including escaping of special
+    characters with a backslash: <tt>\</tt></li>
+</ul>
+</p>
+
+<p>All wildcards apply to full path segments only, i.e. <tt>*</tt> never matches <tt>/</tt>, except for the
+case where <tt>/**/</tt> matches zero or more path segments. For example, <tt>/*/**/*</tt> will match any path
+which contains at least 2 segments and is equivalent to <tt>/**/*/*</tt> as well as <tt>/*/*/**</tt>. </p>
+
+<p>Because a glob rule is not required to contain wildcards in the path, two sections
+   with different names may apply to the same path. For example, the following two
+   rules are identical:
+   <pre>
+   [/path/without/wildcards]
+   [:glob:/path/without/wildcards]</pre>
+   The new authz rule parser detects and rejects such collisions.</p>
+
+<p>The old authz parser, in Subversion 1.9 and earlier, allowed syntactic
+   entries which grant write-only access. For example:
+   <pre>
+   [/]
+   * = w</pre>
+  The new parser flags such entries as invalid.
+  Neither the old nor the new authz implementation support write-only access.</p>
+
+</div>  <!-- authzperf -->
+
+<div class="h3" id="conflict-resolver">
+<h3>New interactive conflict resolver
+  <a class="sectionlink" href="#conflict-resolver"
+     title="Link to this section">&para;</a>
+</h3>
+
+<p>Subversion 1.10 provides much better interactive resolution of tree conflicts
+   than previous releases.
+   Interactive conflict resolution has been completely redesigned and rewritten.
+   This new conflict resolver supersedes the first implementation introduced
+   in Subversion 1.5.</p>
+
+<p>The new conflict resolver searches repository history for structural changes
+   (additions, deletions, copies, and moves) which conflict with local changes
+   in the working copy and cause tree conflicts. Tree conflicts are now described
+   in detail, including revision numbers and names of authors of conflicting changes.
+   In previous versions of Subversion, the task of finding such information was
+   left to the user. Automating this task is a huge usability improvement.</p>
+
+<p>The new conflict resolver is able to detect moves and renames in repository
+   history, and take them into account while modifying the local working copy.
+   This makes seamless merging between branches possible even if one or both
+   branches rename files or directories. For best results, all SVN clients
+   committing to the repository should be at version 1.8 or higher.</p>
+
+<p>The new conflict resolver will avoid asking users about resolution options
+   whenever there is a only one reasonable course of action. For example, if
+   a file was moved to another location in the repository, the conflict
+   resolver will attempt to resolve the tree conflict on behalf of the user
+   by performing the same move locally if necessary. This allows users to focus
+   their attention on conflicts which cannot be resolved automatically.</p>
+
+<p>Because detection of moves and renames involves heuristics, detection
+   is not perfect and won't work in all conceivable cases. For a detailed
+   description of how incoming moves and renames are detected, see <a
+   href="https://svn.apache.org/repos/asf/subversion/trunk/notes/resolve-moves">
+   How Subversion's conflict resolver handles incoming moves</a>.
+   </p>
+ 
+<p>The conflict resolver user interface remains largely unchanged. Like in
+   previous releases, the resolver will be started automatically if an update,
+   merge, or switch operation ends with unresolved conflicts. It can also be
+   started on demand by running the <tt>svn resolve</tt> command. For more
+   information, run <tt>svn help resolve</tt> after installing Subversion 1.10.</p>
+
+<p>In some situations, resolving one tree conflict will cause new other tree conflicts
+   to appear. The <tt>svn resolve</tt> command will keep iterating over such conflicts
+   until none are left, or until the user decides to quit the operation.</p>
+
+<p>The new conflict resolver can be driven interactively with
+   <tt>svn resolve</tt>, from Subversion's client API (in C and other language
+   bindings), or with the non-interactive <a
+   href="https://svn.apache.org/repos/asf/subversion/trunk/tools/client-side/svnconflict">svnconflict</a>
+   tool which is intended for use in shell scripts.</p>
+
+<p>The new conflict resolver offers a variety of automated tree conflict resolution
+   options which users can choose from. Not all kinds of tree conflicts can yet be
+   described and resolved. The options available in Subversion 1.10.0 are listed in
+   the table below. In this table, the items on the incoming and local side are either
+   both files or both directories. Most cases where files clash with directories are
+   not handled yet.</p>
+
+<p>Future releases of Subversion will continue to provide enhancements for the new
+   conflict resolver. We expect to add coverage of additional conflict cases and add
+   additional resolution options even in patch releases (i.e. in 1.10.1, 1.10.2, etc.).</p>
+
+<table border="1">
+  <tr>
+    <th>local change</th>
+    <th>incoming change</th>
+    <th>operation</th>
+    <th>resolution options</th>
+  </tr>
+  <tr>
+    <td rowspan="2"><ul>
+      <li>edit file</li>
+      <li>any change inside a directory</li>
+    </ul></td>
+    <td><ul>
+      <li>delete file / directory</li>
+    </ul></td>
+    <td>update, switch, merge</td>
+    <td><ul>
+      <li>ignore deletion<br>
+      <li>accept deletion<br>
+    </ul></td>
+  </tr>
+  <tr>
+    <td><ul>
+      <li>move file / directory</li>
+    </ul></td>
+    <td>update, switch, merge</td>
+    <td><ul>
+      <li>move and merge<br>
+          (applies the same move locally and merges items)</li>
+    </ul></td>
+  </tr>
+  <tr>
+    <td rowspan="2"><ul>
+      <li>add item</li>
+    </ul></td>
+    <td rowspan="2"><ul>
+      <li>add item</li>
+    </ul></td>
+    <td>update, switch</td>
+    <td><ul>
+      <li>ignore incoming addition<br>
+          (discards the incoming change)</li>
+      <li>merge incoming and local item</li>
+    </ul></td>
+  </tr>
+  <tr>
+    <td>merge</td>
+    <td>
+    <ul>
+      <li>ignore incoming addition<br>
+          (discards the incoming change)</li>
+      <li>merge incoming and local item<br>
+          (item's log history will trace back on local branch)</li>
+      <li>replace local item with incoming item, then merge them<br>
+          (item's log history will trace back to other branch)</li>
+    </ul></td>
+  </tr>
+  <tr>
+    <td rowspan="2"><ul>
+      <li>move item</li>
+    </ul></td>
+    <td rowspan="2"><ul>
+      <li>edit file</li>
+      <li>any change inside directory</li>
+    </ul></td>
+    <td>update, switch</td>
+    <td><ul>
+      <li>apply change to move destination</li>
+      <li>break move and update any moved away children<br>
+          (updates items moved outside of the moved directory)</li>
+    </ul></td>
+  </tr>
+  <tr>
+    <td>merge</td>
+    <td><ul>
+      <li>apply change to move destination</li>
+    </ul></td>
+  </tr>
+  <tr>
+    <td><ul>
+      <li>delete item</li>
+    </ul></td>
+    <td><ul>
+      <li>edit file</li>
+      <li>any change inside directory</li>
+    </ul></td>
+    <td>update, switch, merge</td>
+    <td><ul>
+      <li>keep working copy state (deleted file / directory),<br>
+      discarding incoming changes</li>
+    </ul></td>
+  </tr>
+</table>
+
+</div>  <!-- conflict-resolver -->
+
+<div class="h3" id="lz4">
+<h3>LZ4 compression
+  <a class="sectionlink" href="#lz4"
+     title="Link to this section">&para;</a>
+</h3>
+
+<p>Subversion 1.10 adds support for <a href="https://lz4.github.io/lz4/">LZ4</a>
+compression as an alternative to the <a href="https://zlib.net/">zlib</a>
+compression that has been used in the previous versions.  LZ4 offers fast
+compression and decompression while still maintaining a decent compression
+ratio.  Using LZ4 compression can significantly improve performance of most
+of the Subversion read and write operations, especially for repositories
+containing large files.
+</p>
+
+<p>LZ4 compression is now used by default for the on-disk data in repositories
+with filesystem format 8.  Also, Subversion 1.10 adds support for automatic
+negotiation and use of LZ4 compression over the wire for http:// and svn://
+connections when it is supported by both endpoints.</p>
+
+<div class="h4" id="fsfs-format8">
+<h4>Filesystem format bump
+  <a class="sectionlink" href="#fsfs-format8"
+     title="Link to this section">&para;</a>
+</h4>
+
+<p>The default filesystem format is now version 8, introduced in 1.10.
+The format
+bump is required to allow using LZ4 compression for the data that is stored
+on the disk.  (The
+<a href="1.9#svnadmin-info"><tt>svnadmin info</tt></a>
+command displays the filesystem
+format number of a repository.)</p>
+
+<p>Existing repositories can be upgraded to the new format with the
+<tt>svnadmin upgrade</tt> command.
+
+</div>  <!-- fsfs-format8 -->
+
+<div class="h4" id="fsfs-lz4-configuration">
+<h4>Configuring the repository to use LZ4 compression
+  <a class="sectionlink" href="#fsfs-lz4-configuration"
+     title="Link to this section">&para;</a>
+</h4>
+
+Repositories created with Subversion 1.10 and existing repositories
+upgraded to format 8 will by default compress new data using LZ4.
+The compression algorithm can also be configured explicitly by setting the
+<tt>compression = none | lz4 | zlib | zlib-1 ... zlib-9</tt> option in the
+<tt>fsfs.conf</tt> repository configuration file.</p>
+
+<p>Existing repositories with the configured <tt>compression-level</tt>
+option in the <tt>fsfs.conf</tt> file will continue to use zlib compression.
+In order to start using LZ4 compression for such repositories, consider
+setting the <tt>compression = lz4</tt> option in the <tt>fsfs.conf</tt>
+file.</p>
+
+<p>In order to speed up read and write operations for existing repositories,
+consider recompressing the data stored in them with LZ4.  This can be achieved
+by performing a full
+<a href="http://svnbook.red-bean.com/en/1.8/svn.reposadmin.maint.html#svn.reposadmin.maint.migrate.svnadmin">dump/load</a>
+cycle into a new format 8 repository created with Subversion 1.10.
+
+</div>  <!-- fsfs-lz4-configuration -->
+
+<div class="h4" id="lz4-over-the-wire">
+<h4>LZ4 compression over the wire in http:// and svn:// connections
+  <a class="sectionlink" href="#lz4-over-the-wire"
+     title="Link to this section">&para;</a>
+</h4>
+
+<p>Deltas transferred between Subversion 1.10 clients and servers may be
+compressed with LZ4.  The actual choice of the compression algorithm depends
+on the used protocol, environment and its configuration &mdash; see below.</p>
+
+<p>For the <b>http://</b> protocol, use of LZ4 compression depends on the values
+of the server-side <tt>SVNCompressionLevel</tt> directive, client-side
+<tt>http-compression</tt> configuration option and on the network
+capabilities.  LZ4 compression generally offers much faster compression
+and decompression speeds, but slightly worse compression ratio than zlib.
+By default, it is only preferred for low latency networks where the
+overhead associated with transferring the additional amount of data is
+assumed to be negligible.</p>
+
+<ul>
+  <li>
+    <p>On the <b>server-side</b>, <tt>SVNCompressionLevel 0</tt>
+    can be used to disable compression altogether.  The special value of
+    <tt>SVNCompressionLevel 1</tt> forces the use of LZ4 compression for
+    clients that support it. All other values result in preferring zlib
+    compression with the respective compression level.  Note that the
+    negotiated algorithm is still subject to the client's configuration.
+    For example, even if the server is configured to prefer zlib compression
+    over LZ4, a client may still negotiate the use of LZ4 compression when
+    its <tt>http-compression</tt> option is set to <tt>auto</tt>.</p>
+  </li>
+  <li>
+    <p>On the <b>client-side</b>, setting <tt>http-compression</tt> to
+    either <tt>yes</tt> or <tt>no</tt> will enable or disable compression
+    that is then negotiated based on the server's configuration.
+    The default value of <tt>auto</tt> will result in preferring LZ4
+    compression for low latency networks and zlib compression otherwise.</p>
+  </li>
+</ul>
+
+<p>Below is the table explaining the used compression algorithm in each
+combination of the client- and server-side configuration options:</p>
+
+<table border="1">
+  <tr>
+    <th></th>
+    <th colspan="3">1.10 Server<br />with SVNCompressionLevel:</th>
+    <th colspan="2">1.9 and older Server<br />with SVNCompressionLevel:</th>
+  </tr>
+  <tr>
+    <th width="30%">Subversion Client</th>
+    <th width="10%">0</th>
+    <th width="10%">1</th>
+    <th width="10%">2-9 (default:&nbsp;5)<sup>*</sup></th>
+    <th width="10%">0</th>
+    <th width="10%">1-9 (default:&nbsp;5)<sup>*</sup></th>
+  </tr>
+  <tr>
+    <td>1.10, <tt>http-compression: auto</tt><sup>*</sup>, low latency</td>
+    <td>None</td>
+    <td><b>LZ4</b></td>
+    <td><b>LZ4</b></td>
+    <td>None</td>
+    <td>zlib</td>
+  </tr>
+  <tr>
+    <td>1.10, <tt>http-compression: auto</tt><sup>*</sup>, high latency</td>
+    <td>None</td>
+    <td><b>LZ4</b></td>
+    <td>zlib</td>
+    <td>None</td>
+    <td>zlib</td>
+  </tr>
+  <tr>
+    <td>1.10, <tt>http-compression: yes</tt></td>
+    <td>None</td>
+    <td><b>LZ4</b></td>
+    <td>zlib</td>
+    <td>None</td>
+    <td>zlib</td>
+  </tr>
+  <tr>
+    <td>1.10, <tt>http-compression: no</tt></td>
+    <td>None</td>
+    <td>None</td>
+    <td>None</td>
+    <td>None</td>
+    <td>None</td>
+  </tr>
+  <tr>
+    <td>1.9 and older, <tt>http-compression: yes</tt><sup>*</sup></td>
+    <td>None</td>
+    <td>zlib</td>
+    <td>zlib</td>
+    <td>None</td>
+    <td>zlib</td>
+  </tr>
+  <tr>
+    <td>1.9 and older, <tt>http-compression: no</tt></td>
+    <td>None</td>
+    <td>None</td>
+    <td>None</td>
+    <td>None</td>
+    <td>None</td>
+  </tr>
+</table>
+
+<p><sup>*</sup>&nbsp;Default configurations</p>
+
+<p>For the <b>svn://</b> protocol, use of LZ4 compression depends on the value
+of the server-side <tt>-c/--compression</tt> option.  A value of <tt>0</tt>
+disables compression entirely; any other value causes lz4 or zlib compression
+to be used.  At this time, lz4 is always used in preference to zlib when both
+are supported by the remote end<!-- see svn_ra_svn__svndiff_version() -->.</p>
+
+</div>  <!-- lz4-over-the-wire -->
+
+</div>  <!-- lz4 -->
+
+<div class="h3" id="shelving">
+<h3>Shelving (experimental)
+  <a class="sectionlink" href="#shelving"
+     title="Link to this section">&para;</a>
+</h3>
+
+<p>Shelving (<a href="https://issues.apache.org/jira/browse/SVN-3625">issue
+#3625</a>) is the ability to put aside an uncommitted change in the WC, as
+if putting it on a shelf, in order to work on something else, and later
+bring the change back in to the WC. It is very similar to saving a patch
+file created by <tt>svn diff</tt> and later applying it with <tt>svn
+patch</tt>.</p>
+
+<p>The following <tt>svn</tt> commands are new; see their help for details.</p>
+<ul><li><tt>svn shelve [--keep-local] NAME [PATH...]</tt></li>
+    <li><tt>svn unshelve [--keep-shelved] [NAME]</tt></li>
+    <li><tt>svn shelve --delete NAME</tt></li>
+    <li><tt>svn shelves</tt> (or <tt>svn shelve --list</tt>)</li>
+</ul>
+
+<div class="notice">
+  <p><span style="color: red"><b>WARNING:</b></span> The shelving feature is
+  designated "EXPERIMENTAL" in 1.10. It is being released in an early form
+  while development continues. It is expected to change significantly during
+  and after the 1.10.x series. There is no promise of backward compatibility
+  while it remains experimental.</p>
+</div>
+
+</div>  <!-- shelving -->
+
+</div>  <!-- new-features -->
+
+<div class="h2" id="enhancements">
+<h2>Enhancements and Bugfixes
+  <a class="sectionlink" href="#enhancements"
+    title="Link to this section">&para;</a>
+</h2>
+
+<!-- Don't need to highlight every bugfix, just major ones which aren't in
+     any patch release. -->
+
+<div class="h3" id="cmdline">
+<h3>Command-line client improvements (<em>client</em>)
+  <a class="sectionlink" href="#cmdline"
+    title="Link to this section">&para;</a>
+</h3>
+
+<div class="h4" id="log-search">
+<h4><tt>svn log --search </tt> improvements
+  <a class="sectionlink" href="#log-search"
+     title="Link to this section">&para;</a>
+</h4>
+
+<p><tt>svn log --search</tt> is now case-insensitive and ignores diacriticals
+when matching words. This makes it easier to match paths and log messages
+which happen to contain upper-case and non-English characters.</p>
+
+</div> <!-- log-search -->
+
+<div class="h4" id="ls-search">
+<h4>New <tt>svn ls --search</tt> option
+  <a class="sectionlink" href="#ls-search"
+     title="Link to this section">&para;</a>
+</h3>
+
+<p>You may now specify one or more glob patterns in a <tt>svn ls</tt>
+request.  Note that most shells require globs to be put in quotation
+marks to be passed as-is to SVN.  Example:
+   <pre>
+   svn ls svn://server/repo --recursive --search "readme*"</pre>
+Against a Subversion 1.10 server, this command will be executed
+as a single, efficient server-side query.
+</p>
+
+</div>  <!-- ls-search -->
+
+<div class="h4" id="svnbench">
+<h4><tt>svnbench</tt> improvements
+  <a class="sectionlink" href="#svnbench"
+     title="Link to this section">&para;</a>
+</h4>
+
+<p><tt>svnbench</tt> now displays its wall-clock run time and the total
+number of bytes transferred across the network. The <tt>--with-no-revprops</tt>
+option which did not actually work in Subversion 1.9 has been fixed.</p>
+
+</div> <!-- svnbench -->
+
+<div class="h4" id="accept-recommended">
+<h4>New option <tt>--accept recommended</tt>
+  <a class="sectionlink" href="#accept-recommended"
+     title="Link to this section">&para;</a>
+</h4>
+
+<p>The new option <tt>--accept recommended</tt> will automatically
+resolve tree conflicts for which a recommended resolution option is
+available. Any other conflicts will be postponed.</p>
+
+<p>Note that <tt>--accept recommended</tt> is now the default behaviour
+if the <tt>--non-interactive</tt> option is used. In previous releases,
+the <tt>--non-interactive</tt> option implied <tt>--accept postpone</tt>
+by default instead.
+
+</div> <!-- accept-recommended -->
+
+</div> <!-- cmdline -->
+
+<div class="h3" id="server-side-improvements">
+<h3>Server-side improvements
+  <a class="sectionlink" href="#server-side-improvements"
+     title="Link to this section">&para;</a>
+</h3>
+
+<div class="h4" id="revprop-caching">
+<h4>Revprop caching enabled</tt>
+  <a class="sectionlink" href="#revprop-caching"
+     title="Link to this section">&para;</a>
+</h4>
+
+<p>Revprop caching was an optional FSFS feature in previous releases
+but is now always enabled.  In previous releases revprop caching could
+be enabled for mod_dav_svn via the <tt>SVNCacheRevprops</tt>
+directive, and for svnserve by the <tt>--cache-revprops</tt> command
+line option.  That directive and command line option are now silently
+ignored and revprop caching is enabled for all FSFS access.</p>
+
+</div> <!-- revprop-caching -->
+
+<div class="h4" id="no-flush-to-disk">
+<h4>New <tt>--no-flush-to-disk</tt> option for <tt>svnadmin load</tt>
+  <a class="sectionlink" href="#no-flush-to-disk"
+     title="Link to this section">&para;</a>
+</h4>
+
+<p>A new <tt>--no-flush-to-disk</tt> option has been added to the
+<tt>svnadmin load</tt> command.
+This option can be used to dramatically speed up the load process when
+there is no need to ensure that the resulting data survives a system crash
+or power loss, e.g. when loading a dump file into a fresh repository.</p>
+
+</div> <!-- no-flush-to-disk -->
+
+<div class="h4" id="normalize-props">
+<h4>New <tt>--normalize-props</tt> option for <tt>svnadmin load</tt>
+  <a class="sectionlink" href="#normalize-props"
+     title="Link to this section">&para;</a>
+</h4>
+
+<p>A new <tt>--normalize-props</tt> option has been added to the
+<tt>svnadmin load</tt> command. This option can be used to automatically
+repair <a href="/faq.html#fix-nonLF-log">non-LF line endings</a> in properties
+such as <tt>svn:log</tt> or <tt>svn:ignore</tt>.  Such invalid line endings
+were accepted by older servers and can be found in repository dumps of older
+repositories, but are rejected by Subversion 1.6 and later.</p>
+
+<p>Calling <tt>svnadmin load</tt> with <tt>--normalize-props</tt> will
+automatically repair all invalid property line endings found in the dumpstream,
+thus ensuring that the appropriate values are loaded into the repository.</p>
+
+</div> <!-- normalize-props -->
+
+<div class="h4" id="svnadmin-revprops">
+<h4>New <tt>svnadmin dump-revprops</tt> and <tt>svnadmin load-revprops</tt> subcommands
+  <a class="sectionlink" href="#svnadmin-revprops"
+     title="Link to this section">&para;</a>
+</h4>
+
+<p>svnadmin can now dump and load revision properties independently of
+other changes made to the repository. This is useful because revision
+properties are not versioned but their values may change if the administrator
+has configured the <a
+href="http://svnbook.red-bean.com/nightly/en/svn.ref.reposhooks.pre-revprop-change.html"
+>repository's pre-revprop-change hook</a>.</p>
+
+<p><tt>svnadmin dump-revprops</tt> will save the current values of all revision
+properties to a dump file. <tt>svnadmin load-revprops</tt> can be used to set
+revision properties in a repository to the values saved in a dump file.</p>
+
+<div class="h4" id="dump-include-exclude">
+<h4><tt>svnadmin dump</tt> can now include or exclude paths
+  (<a href="https://issues.apache.org/jira/browse/SVN-4729">issue #4729</a>)
+  <a class="sectionlink" href="#dump-include-exclude"
+     title="Link to this section">&para;</a>
+</h4>
+
+<p>New <tt>--include</tt> and <tt>--exclude</tt> options have been added to the
+<tt>svnadmin dump</tt> command.
+Using --exclude or --include gives results equivalent to authz-based
+path exclusions. In particular, when the source of a copy is excluded,
+the copy is transformed into an add (unlike in 'svndumpfilter').</p>
+
+<p>A <tt>--pattern</tt> option allows the include or exclude rules to contain
+wildcards (the same as in 'svndumpfilter').</p>
+
+</div> <!-- dump-include-exclude -->
+
+</div> <!-- svnadmin-revprops -->
+
+</div> <!-- server-side-improvements -->
+
+<div class="h3" id="client-server-improvements">
+<h3>Client- and server-side improvements
+  <a class="sectionlink" href="#client-server-improvements"
+     title="Link to this section">&para;</a>
+</h3>
+
+<div class="h4" id="serf-svndiff">
+<!-- compatibility with an old version of the anchor -->
+<a name="serf-svndiff1"></a>
+<h4>RA-serf now compresses deltas when possible
+  <a class="sectionlink" href="#serf-svndiff"
+     title="Link to this section">&para;</a>
+</h4>
+
+<p>RA-serf now sends deltas compressed when possible, unless compression is
+disabled by the '<tt>http-compression = no</tt>' client configuration option.
+This is enabled for servers that advertise support for this specific (new)
+capability.</p>
+
+<p>mod_dav_svn servers now advertise this specific (new) capability.<p>
+
+<p>Ref. <a href="https://svn.apache.org/r1704317">r1704317</a>,
+<a href="https://svn.apache.org/r1704891">r1704891</a>,
+<a href="https://svn.apache.org/r1791290">r1791290</a>. </p>
+
+</div> <!-- serf-svndiff -->
+
+</div> <!-- client-server-improvements -->
+
+</div>  <!-- enhancements -->
+
+<div class="h2" id="issues">
+<h2>Known issues in the release
+  <a class="sectionlink" href="#issues"
+    title="Link to this section">&para;</a>
+</h2>
+
+<p>There are some known issues in the Subversion 1.10 releases.  These
+may be fixed in later 1.10.x releases.  Selected issues are listed here;
+see the <a href="https://issues.apache.org/jira/projects/SVN">issue
+tracker</a> for details and for other issues.</p>
+
+<div class="h3" id="issue-svn-4741">
+<h3>
+  <a href="https://issues.apache.org/jira/browse/SVN-4741">SVN-4741</a>:
+  authz group cannot refer to multiple groups
+  <a class="sectionlink" href="#issue-svn-4741"
+    title="Link to this section">&para;</a>
+</h3>
+<p>Broken in 1.10.0. Fixed in 1.10.1.</p>
+</div>
+
+<div class="h3" id="issue-svn-4762">
+<h3>
+  <a href="https://issues.apache.org/jira/browse/SVN-4762">SVN-4762</a>:
+  authz doesn't combine global and repository rules
+  <a class="sectionlink" href="#issue-svn-4762"
+    title="Link to this section">&para;</a>
+</h3>
+<p>Broken in 1.10.0 and 1.10.1.  See also
+  <a href="#authz-compatibility">path-based authorization compatibility</a>.</p>
+</div>
+
+</div>  <!-- issues -->
+
+<!-- (This section only makes sense when there are some issues listed in it.)
+<div class="h2" id="troubleshooting">
+<h2>Troubleshooting issues specific to this release
+  <a class="sectionlink" href="#troubleshooting"
+    title="Link to this section">&para;</a>
+</h2>
+
+<p>Subversion 1.10 introduces new features and makes use of new techniques
+which can trigger problems not encountered in previous versions. In contrast to
+known issues, things listed here are not due to some bug or issue in Subversion
+itself and therefore cannot be fixed with a new patch release.
+This section lists all known problems and provides instructions to solve them,
+if they occur.</p>
+
+<p>There are no known issues specific to this release at the moment.</p>
+
+</div>  < !-- troubleshooting -- >
+-->
+
+<div class="h2" id="svn-1.9-old-stable">
+<h2>Subversion 1.9.x is now the old stable version
+  <a class="sectionlink" href="#svn-1.9-old-stable"
+    title="Link to this section">&para;</a>
+</h2>
+
+<p>The Subversion 1.9.x line is now the old stable version.  This means
+that 1.9.x will still receive security relevant fixes as well as
+bugfixes. While we will evaluate any bugreport with regards to its
+severity, there might be issues with a lower severity which will
+only get fixed in 1.10.x, particularly if the patches would be invasive,
+destabilizing, and/or require a significant investment to get backported to the
+old stable version.</p>
+
+<p>Therefore, if you are running into an issue with the old stable
+version which has already been fixed in the latest version, we might
+ask you to upgrade to that version to resolve the issue.</p>
+
+</div>  <!-- svn-1.9-old-stable -->
+
+<div class="h2" id="svn-1.8-deprecation">
+<h2>Subversion 1.8.x is end of life
+  <a class="sectionlink" href="#svn-1.8-deprecation"
+    title="Link to this section">&para;</a>
+</h2>
+
+<p>The Subversion 1.8.x line is end of life (<abbr title="End Of Life">EOL</abbr>).
+This doesn't
+mean that your 1.8 installation is doomed; if it works well and is all
+you need, that's fine.  "End of life" just means we've stopped
+accepting bug reports against 1.8.x versions, and will not make any
+more 1.8.x releases.</p>
+
+</div>  <!-- svn-1.8-deprecation -->
+
+<!-- ***************** END CONTENT ****************** -->
+</div> <!-- #site-content -->
+</body>
+</html>

@@ -1,0 +1,10 @@
+libaspell15: package-contains-documentation-outside-usr-share-doc usr/lib/aspell/x86_64-linux-gnu/context-filter.info
+libaspell15: package-contains-documentation-outside-usr-share-doc usr/lib/aspell/x86_64-linux-gnu/ddtp-filter.info
+libaspell15: package-contains-documentation-outside-usr-share-doc usr/lib/aspell/x86_64-linux-gnu/debctrl-filter.info
+libaspell15: package-contains-documentation-outside-usr-share-doc usr/lib/aspell/x86_64-linux-gnu/email-filter.info
+libaspell15: package-contains-documentation-outside-usr-share-doc usr/lib/aspell/x86_64-linux-gnu/html-filter.info
+libaspell15: package-contains-documentation-outside-usr-share-doc usr/lib/aspell/x86_64-linux-gnu/markdown-filter.info
+libaspell15: package-contains-documentation-outside-usr-share-doc usr/lib/aspell/x86_64-linux-gnu/nroff-filter.info
+libaspell15: package-contains-documentation-outside-usr-share-doc usr/lib/aspell/x86_64-linux-gnu/sgml-filter.info
+libaspell15: package-contains-documentation-outside-usr-share-doc usr/lib/aspell/x86_64-linux-gnu/tex-filter.info
+libaspell15: package-contains-documentation-outside-usr-share-doc usr/lib/aspell/x86_64-linux-gnu/texinfo-filter.info

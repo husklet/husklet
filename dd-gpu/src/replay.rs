@@ -7,7 +7,7 @@ use crate::backend::{GpuBackend, PresentToken};
 use crate::id::*;
 use crate::ir::*;
 use crate::wire::Decoder;
-use crate::Result;
+use crate::{GpuError, Result};
 
 /// Apply one decoded command to a backend. Returns an optional present token when the command was a
 /// `Present` (so the caller can hand the buffer to DDP).
@@ -56,22 +56,53 @@ pub fn replay(be: &mut dyn GpuBackend, cmds: &[Cmd]) -> Result<Vec<PresentToken>
 pub fn replay_stream(be: &mut dyn GpuBackend, bytes: &[u8]) -> Result<Vec<PresentToken>> {
     let mut d = Decoder::new(bytes);
     let mut presents = Vec::new();
+    let mut idx = 0usize;
     while !d.is_empty() {
+        let pos = d.pos();
+        let tag = d.peek_u8();
         // L8 fast-path: `WriteBuffer` carries the bulk of a frame's bytes (glmark2's horse re-uploads
         // ~1 MB/frame). Decode its header in place and hand the backend a BORROWED slice of the stream,
         // skipping the `to_vec` copy that `Cmd::decode` would otherwise make. Semantically identical.
         if d.peek_u8() == Some(crate::ir::tag::WRITE_BUFFER) {
-            let _ = d.u8()?; // tag
-            let id = d.u32()?;
-            let offset = d.u64()?;
-            let data = d.bytes()?; // &[u8] view into the stream — zero copy
-            be.write_buffer(BufferId(id), offset, data)?;
+            let write = (|| -> Result<(u32, u64, &[u8])> {
+                let _ = d.u8()?; // tag
+                let id = d.u32()?;
+                let offset = d.u64()?;
+                let len_pos = d.pos();
+                let len = d.u32()? as usize;
+                if len > d.remaining() {
+                    return Err(GpuError::Decode(format!(
+                        "write-buffer id {id} offset {offset} claims {len} bytes at length byte {len_pos}, only {} remain",
+                        d.remaining()
+                    )));
+                }
+                let data = d.raw_bytes(len)?; // &[u8] view into the stream — zero copy
+                Ok((id, offset, data))
+            })()
+            .map_err(|e| {
+                GpuError::Decode(format!(
+                    "replay command {idx} write-buffer fast path at byte {pos}/{} tag {:?} remaining {}: {e}",
+                    d.len(),
+                    tag,
+                    d.remaining()
+                ))
+            })?;
+            be.write_buffer(BufferId(write.0), write.1, write.2)?;
+            idx += 1;
             continue;
         }
-        let cmd = Cmd::decode(&mut d)?;
+        let cmd = Cmd::decode(&mut d).map_err(|e| {
+            GpuError::Decode(format!(
+                "replay command {idx} at byte {pos}/{} tag {:?} remaining {}: {e}",
+                d.len(),
+                tag,
+                d.remaining()
+            ))
+        })?;
         if let Some(tok) = apply(be, &cmd)? {
             presents.push(tok);
         }
+        idx += 1;
     }
     Ok(presents)
 }

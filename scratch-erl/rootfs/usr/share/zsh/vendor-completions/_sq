@@ -1,0 +1,1035 @@
+#compdef sq
+
+autoload -U is-at-least
+
+_sq() {
+    typeset -A opt_args
+    typeset -a _arguments_options
+    local ret=1
+
+    if is-at-least 5.2; then
+        _arguments_options=(-s -S -C)
+    else
+        _arguments_options=(-s -C)
+    fi
+
+    local context curcontext="$curcontext" state line
+    _arguments "${_arguments_options[@]}" \
+'--output-format=[Produces output in FORMAT, if possible]:FORMAT:(human-readable json)' \
+'--output-version=[Produces output variant VERSION]:VERSION: ' \
+'*--known-notation=[Adds NOTATION to the list of known notations]:NOTATION: ' \
+'-h[Print help information]' \
+'--help[Print help information]' \
+'-V[Print version information]' \
+'--version[Print version information]' \
+'-f[Overwrites existing files]' \
+'--force[Overwrites existing files]' \
+":: :_sq_commands" \
+"*::: :->sq" \
+&& ret=0
+    case $state in
+    (sq)
+        words=($line[1] "${words[@]}")
+        (( CURRENT += 1 ))
+        curcontext="${curcontext%:*:*}:sq-command-$line[1]:"
+        case $line[1] in
+            (armor)
+_arguments "${_arguments_options[@]}" \
+'-o+[Writes to FILE or stdout if omitted]:FILE: ' \
+'--output=[Writes to FILE or stdout if omitted]:FILE: ' \
+'--label=[Selects the kind of armor header]:LABEL:(auto message cert key sig file)' \
+'-h[Print help information]' \
+'--help[Print help information]' \
+'::input -- Reads from FILE or stdin if omitted:' \
+&& ret=0
+;;
+(dearmor)
+_arguments "${_arguments_options[@]}" \
+'-o+[Writes to FILE or stdout if omitted]:FILE: ' \
+'--output=[Writes to FILE or stdout if omitted]:FILE: ' \
+'-h[Print help information]' \
+'--help[Print help information]' \
+'::input -- Reads from FILE or stdin if omitted:' \
+&& ret=0
+;;
+(sign)
+_arguments "${_arguments_options[@]}" \
+'-o+[Writes to FILE or stdout if omitted]:FILE: ' \
+'--output=[Writes to FILE or stdout if omitted]:FILE: ' \
+'--private-key-store=[Provides parameters for private key store]:KEY_STORE: ' \
+'(-a --append --detached --cleartext-signature -n --notarize --signer-key -t --time)--merge=[Merges signatures from the input and SIGNED-MESSAGE]:SIGNED-MESSAGE: ' \
+'*--signer-key=[Signs using KEY]:KEY: ' \
+'-t+[Chooses keys valid at the specified time and sets the signature'\''s creation time]:TIME: ' \
+'--time=[Chooses keys valid at the specified time and sets the signature'\''s creation time]:TIME: ' \
+'(--merge)*--notation=[Adds a notation to the certification.]:NAME: :NAME: ' \
+'-B[Emits binary data]' \
+'--binary[Emits binary data]' \
+'--detached[Creates a detached signature]' \
+'(--detached -a --append -n --notarize -B --binary)--cleartext-signature[Creates a cleartext signature]' \
+'(-n --notarize)-a[Appends a signature to existing signature]' \
+'(-n --notarize)--append[Appends a signature to existing signature]' \
+'(-a --append)-n[Signs a message and all existing signatures]' \
+'(-a --append)--notarize[Signs a message and all existing signatures]' \
+'-h[Print help information]' \
+'--help[Print help information]' \
+'::input -- Reads from FILE or stdin if omitted:' \
+&& ret=0
+;;
+(verify)
+_arguments "${_arguments_options[@]}" \
+'-o+[Writes to FILE or stdout if omitted]:FILE: ' \
+'--output=[Writes to FILE or stdout if omitted]:FILE: ' \
+'--detached=[Verifies a detached signature]:SIG: ' \
+'-n+[Sets the threshold of valid signatures to N]:N: ' \
+'--signatures=[Sets the threshold of valid signatures to N]:N: ' \
+'*--signer-cert=[Verifies signatures with CERT]:CERT: ' \
+'-h[Print help information]' \
+'--help[Print help information]' \
+'::input -- Reads from FILE or stdin if omitted:' \
+&& ret=0
+;;
+(wkd)
+_arguments "${_arguments_options[@]}" \
+'-n+[Sets the network policy to use]:NETWORK-POLICY:(offline anonymized encrypted insecure)' \
+'--network-policy=[Sets the network policy to use]:NETWORK-POLICY:(offline anonymized encrypted insecure)' \
+'-h[Print help information]' \
+'--help[Print help information]' \
+":: :_sq__wkd_commands" \
+"*::: :->wkd" \
+&& ret=0
+
+    case $state in
+    (wkd)
+        words=($line[1] "${words[@]}")
+        (( CURRENT += 1 ))
+        curcontext="${curcontext%:*:*}:sq-wkd-command-$line[1]:"
+        case $line[1] in
+            (url)
+_arguments "${_arguments_options[@]}" \
+'-h[Print help information]' \
+'--help[Print help information]' \
+':email-address -- Queries for ADDRESS:' \
+&& ret=0
+;;
+(direct-url)
+_arguments "${_arguments_options[@]}" \
+'-h[Print help information]' \
+'--help[Print help information]' \
+':email-address -- Queries for ADDRESS:' \
+&& ret=0
+;;
+(get)
+_arguments "${_arguments_options[@]}" \
+'-o+[Writes to FILE or stdout if omitted]:FILE: ' \
+'--output=[Writes to FILE or stdout if omitted]:FILE: ' \
+'-B[Emits binary data]' \
+'--binary[Emits binary data]' \
+'-h[Print help information]' \
+'--help[Print help information]' \
+':email-address -- Queries a cert for ADDRESS:' \
+&& ret=0
+;;
+(generate)
+_arguments "${_arguments_options[@]}" \
+'-d[Uses the direct method \[default: advanced method\]]' \
+'--direct-method[Uses the direct method \[default: advanced method\]]' \
+'-s[Skips certificates that do not have User IDs for given domain.]' \
+'--skip[Skips certificates that do not have User IDs for given domain.]' \
+'-h[Print help information]' \
+'--help[Print help information]' \
+':base-directory -- Writes the WKD to WEB-ROOT:' \
+':domain -- Generates a WKD for a fully qualified domain name for email:' \
+'::input -- Adds certificates from CERT-RING to the WKD:' \
+&& ret=0
+;;
+(help)
+_arguments "${_arguments_options[@]}" \
+'*::subcommand -- The subcommand whose help message to display:' \
+&& ret=0
+;;
+        esac
+    ;;
+esac
+;;
+(keyserver)
+_arguments "${_arguments_options[@]}" \
+'-p+[Sets the network policy to use]:NETWORK-POLICY:(offline anonymized encrypted insecure)' \
+'--policy=[Sets the network policy to use]:NETWORK-POLICY:(offline anonymized encrypted insecure)' \
+'-s+[Sets the keyserver to use]:URI: ' \
+'--server=[Sets the keyserver to use]:URI: ' \
+'-h[Print help information]' \
+'--help[Print help information]' \
+":: :_sq__keyserver_commands" \
+"*::: :->keyserver" \
+&& ret=0
+
+    case $state in
+    (keyserver)
+        words=($line[1] "${words[@]}")
+        (( CURRENT += 1 ))
+        curcontext="${curcontext%:*:*}:sq-keyserver-command-$line[1]:"
+        case $line[1] in
+            (get)
+_arguments "${_arguments_options[@]}" \
+'-o+[Writes to FILE or stdout if omitted]:FILE: ' \
+'--output=[Writes to FILE or stdout if omitted]:FILE: ' \
+'-B[Emits binary data]' \
+'--binary[Emits binary data]' \
+'-h[Print help information]' \
+'--help[Print help information]' \
+':query -- Retrieve certificate(s) using QUERY. This may be a fingerprint, a KeyID, or an email address.:' \
+&& ret=0
+;;
+(send)
+_arguments "${_arguments_options[@]}" \
+'-h[Print help information]' \
+'--help[Print help information]' \
+'::input -- Reads from FILE or stdin if omitted:' \
+&& ret=0
+;;
+(help)
+_arguments "${_arguments_options[@]}" \
+'*::subcommand -- The subcommand whose help message to display:' \
+&& ret=0
+;;
+        esac
+    ;;
+esac
+;;
+(revoke)
+_arguments "${_arguments_options[@]}" \
+'-h[Print help information]' \
+'--help[Print help information]' \
+":: :_sq__revoke_commands" \
+"*::: :->revoke" \
+&& ret=0
+
+    case $state in
+    (revoke)
+        words=($line[1] "${words[@]}")
+        (( CURRENT += 1 ))
+        curcontext="${curcontext%:*:*}:sq-revoke-command-$line[1]:"
+        case $line[1] in
+            (certificate)
+_arguments "${_arguments_options[@]}" \
+'--certificate=[The certificate to revoke]:FILE: ' \
+'--revocation-key=[Signs the revocation certificate using KEY]:KEY: ' \
+'--private-key-store=[Provides parameters for private key store]:KEY_STORE: ' \
+'-t+[Chooses keys valid at the specified time and sets the revocation certificate'\''s creation time]:TIME: ' \
+'--time=[Chooses keys valid at the specified time and sets the revocation certificate'\''s creation time]:TIME: ' \
+'*--notation=[Adds a notation to the certification.]:NAME: :NAME: ' \
+'-B[Emits binary data]' \
+'--binary[Emits binary data]' \
+'-h[Print help information]' \
+'--help[Print help information]' \
+':reason -- The reason for the revocation:(compromised superseded retired unspecified)' \
+':message -- A short, explanatory text:' \
+&& ret=0
+;;
+(subkey)
+_arguments "${_arguments_options[@]}" \
+'--certificate=[The certificate containing the subkey to revoke]:FILE: ' \
+'--revocation-key=[Signs the revocation certificate using KEY]:KEY: ' \
+'--private-key-store=[Provides parameters for private key store]:KEY_STORE: ' \
+'-t+[Chooses keys valid at the specified time and sets the revocation certificate'\''s creation time]:TIME: ' \
+'--time=[Chooses keys valid at the specified time and sets the revocation certificate'\''s creation time]:TIME: ' \
+'*--notation=[Adds a notation to the certification.]:NAME: :NAME: ' \
+'-B[Emits binary data]' \
+'--binary[Emits binary data]' \
+'-h[Print help information]' \
+'--help[Print help information]' \
+':subkey -- The subkey to revoke:' \
+':reason -- The reason for the revocation:(compromised superseded retired unspecified)' \
+':message -- A short, explanatory text:' \
+&& ret=0
+;;
+(userid)
+_arguments "${_arguments_options[@]}" \
+'--certificate=[The certificate containing the User ID to revoke]:FILE: ' \
+'--revocation-key=[Signs the revocation certificate using KEY]:KEY: ' \
+'--private-key-store=[Provides parameters for private key store]:KEY_STORE: ' \
+'-t+[Chooses keys valid at the specified time and sets the revocation certificate'\''s creation time]:TIME: ' \
+'--time=[Chooses keys valid at the specified time and sets the revocation certificate'\''s creation time]:TIME: ' \
+'*--notation=[Adds a notation to the certification.]:NAME: :NAME: ' \
+'-B[Emits binary data]' \
+'--binary[Emits binary data]' \
+'-h[Print help information]' \
+'--help[Print help information]' \
+':userid -- The User ID to revoke:' \
+':reason -- The reason for the revocation:(retired unspecified)' \
+':message -- A short, explanatory text:' \
+&& ret=0
+;;
+(help)
+_arguments "${_arguments_options[@]}" \
+'*::subcommand -- The subcommand whose help message to display:' \
+&& ret=0
+;;
+        esac
+    ;;
+esac
+;;
+(packet)
+_arguments "${_arguments_options[@]}" \
+'-h[Print help information]' \
+'--help[Print help information]' \
+":: :_sq__packet_commands" \
+"*::: :->packet" \
+&& ret=0
+
+    case $state in
+    (packet)
+        words=($line[1] "${words[@]}")
+        (( CURRENT += 1 ))
+        curcontext="${curcontext%:*:*}:sq-packet-command-$line[1]:"
+        case $line[1] in
+            (dump)
+_arguments "${_arguments_options[@]}" \
+'-o+[Writes to FILE or stdout if omitted]:FILE: ' \
+'--output=[Writes to FILE or stdout if omitted]:FILE: ' \
+'--session-key=[Decrypts an encrypted message using SESSION-KEY]:SESSION-KEY: ' \
+'--mpis[Prints cryptographic artifacts]' \
+'-x[Prints a hexdump]' \
+'--hex[Prints a hexdump]' \
+'-h[Print help information]' \
+'--help[Print help information]' \
+'::input -- Reads from FILE or stdin if omitted:' \
+&& ret=0
+;;
+(decrypt)
+_arguments "${_arguments_options[@]}" \
+'-o+[Writes to FILE or stdout if omitted]:FILE: ' \
+'--output=[Writes to FILE or stdout if omitted]:FILE: ' \
+'*--recipient-key=[Decrypts the message with KEY]:KEY: ' \
+'--private-key-store=[Provides parameters for private key store]:KEY_STORE: ' \
+'*--session-key=[Decrypts an encrypted message using SESSION-KEY]:SESSION-KEY: ' \
+'-B[Emits binary data]' \
+'--binary[Emits binary data]' \
+'--dump-session-key[Prints the session key to stderr]' \
+'-h[Print help information]' \
+'--help[Print help information]' \
+'::input -- Reads from FILE or stdin if omitted:' \
+&& ret=0
+;;
+(split)
+_arguments "${_arguments_options[@]}" \
+'-p+[Writes to files with PREFIX \[defaults: "FILE-" if FILE is set, or "output-" if read from stdin\]]:PREFIX: ' \
+'--prefix=[Writes to files with PREFIX \[defaults: "FILE-" if FILE is set, or "output-" if read from stdin\]]:PREFIX: ' \
+'-h[Print help information]' \
+'--help[Print help information]' \
+'::input -- Reads from FILE or stdin if omitted:' \
+&& ret=0
+;;
+(join)
+_arguments "${_arguments_options[@]}" \
+'-o+[Writes to FILE or stdout if omitted]:FILE: ' \
+'--output=[Writes to FILE or stdout if omitted]:FILE: ' \
+'(-B --binary)--label=[Selects the kind of armor header]:LABEL:(auto message cert key sig file)' \
+'-B[Emits binary data]' \
+'--binary[Emits binary data]' \
+'-h[Print help information]' \
+'--help[Print help information]' \
+'*::input -- Reads from FILE or stdin if omitted:' \
+&& ret=0
+;;
+(help)
+_arguments "${_arguments_options[@]}" \
+'*::subcommand -- The subcommand whose help message to display:' \
+&& ret=0
+;;
+        esac
+    ;;
+esac
+;;
+(certify)
+_arguments "${_arguments_options[@]}" \
+'-o+[Writes to FILE or stdout if omitted]:FILE: ' \
+'--output=[Writes to FILE or stdout if omitted]:FILE: ' \
+'--time=[Sets the certification time to TIME (as ISO 8601)]:TIME: ' \
+'-d+[Sets the trust depth]:TRUST_DEPTH: ' \
+'--depth=[Sets the trust depth]:TRUST_DEPTH: ' \
+'-a+[Sets the amount of trust]:TRUST_AMOUNT: ' \
+'--amount=[Sets the amount of trust]:TRUST_AMOUNT: ' \
+'*-r+[Adds a regular expression to constrain what a trusted introducer can certify]:REGEX: ' \
+'*--regex=[Adds a regular expression to constrain what a trusted introducer can certify]:REGEX: ' \
+'*--notation=[Adds a notation to the certification.]:NAME: :NAME: ' \
+'--expires=[Makes the certification expire at TIME (as ISO 8601)]:TIME: ' \
+'--expires-in=[Makes the certification expire after DURATION (as N\[ymwds\]) \[default: 5y\]]:DURATION: ' \
+'--private-key-store=[Provides parameters for private key store]:KEY_STORE: ' \
+'-B[Emits binary data]' \
+'--binary[Emits binary data]' \
+'-l[Makes the certification a local certification]' \
+'--local[Makes the certification a local certification]' \
+'--non-revocable[Marks the certification as being non-revocable]' \
+'--allow-not-alive-certifier[Don'\''t fail if the certificate making the certification is not alive.]' \
+'--allow-revoked-certifier[Don'\''t fail if the certificate making the certification is revoked.]' \
+'-h[Print help information]' \
+'--help[Print help information]' \
+':certifier -- Creates the certification using CERTIFIER-KEY.:' \
+':certificate -- Certifies CERTIFICATE.:' \
+':userid -- Certifies USERID for CERTIFICATE.:' \
+&& ret=0
+;;
+(keyring)
+_arguments "${_arguments_options[@]}" \
+'-h[Print help information]' \
+'--help[Print help information]' \
+":: :_sq__keyring_commands" \
+"*::: :->keyring" \
+&& ret=0
+
+    case $state in
+    (keyring)
+        words=($line[1] "${words[@]}")
+        (( CURRENT += 1 ))
+        curcontext="${curcontext%:*:*}:sq-keyring-command-$line[1]:"
+        case $line[1] in
+            (filter)
+_arguments "${_arguments_options[@]}" \
+'-o+[Writes to FILE or stdout if omitted]:FILE: ' \
+'--output=[Writes to FILE or stdout if omitted]:FILE: ' \
+'*--userid=[Matches on USERID]:USERID: ' \
+'*--name=[Matches on NAME]:NAME: ' \
+'*--email=[Matches on email ADDRESS]:ADDRESS: ' \
+'*--domain=[Matches on email domain FQDN]:FQDN: ' \
+'*--handle=[Matches on (sub)key fingerprints and key ids]:FINGERPRINT|KEYID: ' \
+'-P[Removes certificate components not matching the filter]' \
+'--prune-certs[Removes certificate components not matching the filter]' \
+'-B[Emits binary data]' \
+'--binary[Emits binary data]' \
+'--to-cert[Converts any keys in the input to certificates.  Converting a key to a certificate removes secret key material from the key thereby turning it into a certificate.]' \
+'-h[Print help information]' \
+'--help[Print help information]' \
+'*::input -- Reads from FILE or stdin if omitted:' \
+&& ret=0
+;;
+(join)
+_arguments "${_arguments_options[@]}" \
+'-o+[Sets the output file to use]:FILE: ' \
+'--output=[Sets the output file to use]:FILE: ' \
+'-B[Don'\''t ASCII-armor the keyring]' \
+'--binary[Don'\''t ASCII-armor the keyring]' \
+'-h[Print help information]' \
+'--help[Print help information]' \
+'*::input -- Sets the input files to use:' \
+&& ret=0
+;;
+(merge)
+_arguments "${_arguments_options[@]}" \
+'-o+[Writes to FILE or stdout if omitted]:FILE: ' \
+'--output=[Writes to FILE or stdout if omitted]:FILE: ' \
+'-B[Emits binary data]' \
+'--binary[Emits binary data]' \
+'-h[Print help information]' \
+'--help[Print help information]' \
+'*::input -- Reads from FILE:' \
+&& ret=0
+;;
+(list)
+_arguments "${_arguments_options[@]}" \
+'--all-userids[Lists all user ids]' \
+'-h[Print help information]' \
+'--help[Print help information]' \
+'::input -- Reads from FILE or stdin if omitted:' \
+&& ret=0
+;;
+(split)
+_arguments "${_arguments_options[@]}" \
+'-p+[Writes to files with PREFIX \[defaults: "FILE-" if FILE is set, or "output-" if read from stdin\]]:PREFIX: ' \
+'--prefix=[Writes to files with PREFIX \[defaults: "FILE-" if FILE is set, or "output-" if read from stdin\]]:PREFIX: ' \
+'-B[Emits binary data]' \
+'--binary[Emits binary data]' \
+'-h[Print help information]' \
+'--help[Print help information]' \
+'::input -- Reads from FILE or stdin if omitted:' \
+&& ret=0
+;;
+(help)
+_arguments "${_arguments_options[@]}" \
+'*::subcommand -- The subcommand whose help message to display:' \
+&& ret=0
+;;
+        esac
+    ;;
+esac
+;;
+(key)
+_arguments "${_arguments_options[@]}" \
+'-h[Print help information]' \
+'--help[Print help information]' \
+":: :_sq__key_commands" \
+"*::: :->key" \
+&& ret=0
+
+    case $state in
+    (key)
+        words=($line[1] "${words[@]}")
+        (( CURRENT += 1 ))
+        curcontext="${curcontext%:*:*}:sq-key-command-$line[1]:"
+        case $line[1] in
+            (generate)
+_arguments "${_arguments_options[@]}" \
+'*-u+[Adds a userid to the key]:EMAIL: ' \
+'*--userid=[Adds a userid to the key]:EMAIL: ' \
+'-c+[Selects the cryptographic algorithms for the key]:CIPHER-SUITE:(rsa3k rsa4k cv25519)' \
+'--cipher-suite=[Selects the cryptographic algorithms for the key]:CIPHER-SUITE:(rsa3k rsa4k cv25519)' \
+'--creation-time=[Sets the key'\''s creation time to TIME (as ISO 8601)]:CREATION_TIME: ' \
+'--expires=[Makes the key expire at TIME (as ISO 8601)]:TIME: ' \
+'--expires-in=[Makes the key expire after DURATION (as N\[ymwds\]) \[default: 5y\]]:DURATION: ' \
+'--can-encrypt=[Adds an encryption-capable subkey \[default: universal\]]:PURPOSE:(transport storage universal)' \
+'-e+[Writes the key to OUTFILE]:OUTFILE: ' \
+'--export=[Writes the key to OUTFILE]:OUTFILE: ' \
+'--rev-cert=[Writes the revocation certificate to FILE]:FILE or -: ' \
+'--with-password[Protects the key with a password]' \
+'--can-sign[Adds a signing-capable subkey (default)]' \
+'--cannot-sign[Adds no signing-capable subkey]' \
+'--can-authenticate[Adds an authentication-capable subkey (default)]' \
+'--cannot-authenticate[Adds no authentication-capable subkey]' \
+'--cannot-encrypt[Adds no encryption-capable subkey]' \
+'-h[Print help information]' \
+'--help[Print help information]' \
+&& ret=0
+;;
+(password)
+_arguments "${_arguments_options[@]}" \
+'-o+[Writes to FILE or stdout if omitted]:FILE: ' \
+'--output=[Writes to FILE or stdout if omitted]:FILE: ' \
+'--clear[Emit a key with unencrypted secrets]' \
+'-B[Emits binary data]' \
+'--binary[Emits binary data]' \
+'-h[Print help information]' \
+'--help[Print help information]' \
+'::input -- Reads from FILE or stdin if omitted:' \
+&& ret=0
+;;
+(userid)
+_arguments "${_arguments_options[@]}" \
+'-h[Print help information]' \
+'--help[Print help information]' \
+":: :_sq__key__userid_commands" \
+"*::: :->userid" \
+&& ret=0
+
+    case $state in
+    (userid)
+        words=($line[1] "${words[@]}")
+        (( CURRENT += 1 ))
+        curcontext="${curcontext%:*:*}:sq-key-userid-command-$line[1]:"
+        case $line[1] in
+            (add)
+_arguments "${_arguments_options[@]}" \
+'-o+[Writes to FILE or stdout if omitted]:FILE: ' \
+'--output=[Writes to FILE or stdout if omitted]:FILE: ' \
+'*-u+[User ID to add]:USERID: ' \
+'*--userid=[User ID to add]:USERID: ' \
+'--creation-time=[Sets the binding signature creation time to TIME (as ISO 8601)]:CREATION_TIME: ' \
+'--private-key-store=[Provides parameters for private key store]:KEY_STORE: ' \
+'-B[Emits binary data]' \
+'--binary[Emits binary data]' \
+'-h[Print help information]' \
+'--help[Print help information]' \
+'::input -- Reads from FILE or stdin if omitted:' \
+&& ret=0
+;;
+(strip)
+_arguments "${_arguments_options[@]}" \
+'-o+[Writes to FILE or stdout if omitted]:FILE: ' \
+'--output=[Writes to FILE or stdout if omitted]:FILE: ' \
+'*-u+[User IDs to strip]:USERID: ' \
+'*--userid=[User IDs to strip]:USERID: ' \
+'-B[Emits binary data]' \
+'--binary[Emits binary data]' \
+'-h[Print help information]' \
+'--help[Print help information]' \
+'::input -- Reads from FILE or stdin if omitted:' \
+&& ret=0
+;;
+(help)
+_arguments "${_arguments_options[@]}" \
+'*::subcommand -- The subcommand whose help message to display:' \
+&& ret=0
+;;
+        esac
+    ;;
+esac
+;;
+(extract-cert)
+_arguments "${_arguments_options[@]}" \
+'-o+[Writes to FILE or stdout if omitted]:FILE: ' \
+'--output=[Writes to FILE or stdout if omitted]:FILE: ' \
+'-B[Emits binary data]' \
+'--binary[Emits binary data]' \
+'-h[Print help information]' \
+'--help[Print help information]' \
+'::input -- Reads from FILE or stdin if omitted:' \
+&& ret=0
+;;
+(adopt)
+_arguments "${_arguments_options[@]}" \
+'*-r+[Supplies keys for use in --key.]:KEY-RING: ' \
+'*--keyring=[Supplies keys for use in --key.]:KEY-RING: ' \
+'*-k+[Adds the key or subkey KEY to the TARGET-KEY]:KEY: ' \
+'*--key=[Adds the key or subkey KEY to the TARGET-KEY]:KEY: ' \
+'-o+[Writes to FILE or stdout if omitted]:FILE: ' \
+'--output=[Writes to FILE or stdout if omitted]:FILE: ' \
+'--allow-broken-crypto[Allows adopting keys from certificates using broken cryptography]' \
+'-B[Emits binary data]' \
+'--binary[Emits binary data]' \
+'-h[Print help information]' \
+'--help[Print help information]' \
+'::certificate -- Adds keys to TARGET-KEY:' \
+&& ret=0
+;;
+(attest-certifications)
+_arguments "${_arguments_options[@]}" \
+'-o+[Writes to FILE or stdout if omitted]:FILE: ' \
+'--output=[Writes to FILE or stdout if omitted]:FILE: ' \
+'(--all)--none[Removes all prior attestations]' \
+'(--none)--all[Attests to all certifications \[default\]]' \
+'-B[Emits binary data]' \
+'--binary[Emits binary data]' \
+'-h[Print help information]' \
+'--help[Print help information]' \
+'::key -- Changes attestations on KEY:' \
+&& ret=0
+;;
+(help)
+_arguments "${_arguments_options[@]}" \
+'*::subcommand -- The subcommand whose help message to display:' \
+&& ret=0
+;;
+        esac
+    ;;
+esac
+;;
+(inspect)
+_arguments "${_arguments_options[@]}" \
+'--certifications[Prints third-party certifications]' \
+'-h[Print help information]' \
+'--help[Print help information]' \
+'::input -- Reads from FILE or stdin if omitted:' \
+&& ret=0
+;;
+(encrypt)
+_arguments "${_arguments_options[@]}" \
+'-o+[Writes to FILE or stdout if omitted]:FILE: ' \
+'--output=[Writes to FILE or stdout if omitted]:FILE: ' \
+'*--recipient-cert=[Encrypts for all recipients in CERT-RING]:CERT-RING: ' \
+'*--signer-key=[Signs the message with KEY]:KEY: ' \
+'--private-key-store=[Provides parameters for private key store]:KEY_STORE: ' \
+'--mode=[Selects what kind of keys are considered for encryption.]:MODE:(transport rest all)' \
+'--compression=[Selects compression scheme to use]:KIND:(none pad zip zlib bzip2)' \
+'-t+[Chooses keys valid at the specified time and sets the signature'\''s creation time]:TIME: ' \
+'--time=[Chooses keys valid at the specified time and sets the signature'\''s creation time]:TIME: ' \
+'-B[Emits binary data]' \
+'--binary[Emits binary data]' \
+'*-s[Adds a password to encrypt with]' \
+'*--symmetric[Adds a password to encrypt with]' \
+'--use-expired-subkey[Falls back to expired encryption subkeys]' \
+'-h[Print help information]' \
+'--help[Print help information]' \
+'::input -- Reads from FILE or stdin if omitted:' \
+&& ret=0
+;;
+(decrypt)
+_arguments "${_arguments_options[@]}" \
+'-o+[Writes to FILE or stdout if omitted]:FILE: ' \
+'--output=[Writes to FILE or stdout if omitted]:FILE: ' \
+'-n+[Sets the threshold of valid signatures to N]:N: ' \
+'--signatures=[Sets the threshold of valid signatures to N]:N: ' \
+'*--signer-cert=[Verifies signatures with CERT]:CERT: ' \
+'*--recipient-key=[Decrypts with KEY]:KEY: ' \
+'--private-key-store=[Provides parameters for private key store]:KEY_STORE: ' \
+'*--session-key=[Decrypts an encrypted message using SESSION-KEY]:SESSION-KEY: ' \
+'--dump-session-key[Prints the session key to stderr]' \
+'--dump[Prints a packet dump to stderr]' \
+'-x[Prints a hexdump (implies --dump)]' \
+'--hex[Prints a hexdump (implies --dump)]' \
+'-h[Print help information]' \
+'--help[Print help information]' \
+'::input -- Reads from FILE or stdin if omitted:' \
+&& ret=0
+;;
+(autocrypt)
+_arguments "${_arguments_options[@]}" \
+'-h[Print help information]' \
+'--help[Print help information]' \
+":: :_sq__autocrypt_commands" \
+"*::: :->autocrypt" \
+&& ret=0
+
+    case $state in
+    (autocrypt)
+        words=($line[1] "${words[@]}")
+        (( CURRENT += 1 ))
+        curcontext="${curcontext%:*:*}:sq-autocrypt-command-$line[1]:"
+        case $line[1] in
+            (decode)
+_arguments "${_arguments_options[@]}" \
+'-o+[Writes to FILE or stdout if omitted]:FILE: ' \
+'--output=[Writes to FILE or stdout if omitted]:FILE: ' \
+'-B[Emits binary data]' \
+'--binary[Emits binary data]' \
+'-h[Print help information]' \
+'--help[Print help information]' \
+'::input -- Reads from FILE or stdin if omitted:' \
+&& ret=0
+;;
+(encode-sender)
+_arguments "${_arguments_options[@]}" \
+'-o+[Writes to FILE or stdout if omitted]:FILE: ' \
+'--output=[Writes to FILE or stdout if omitted]:FILE: ' \
+'--email=[Sets the address \[default: primary userid\]]:ADDRESS: ' \
+'--prefer-encrypt=[Sets the prefer-encrypt attribute]:PREFER-ENCRYPT:(nopreference mutual)' \
+'-h[Print help information]' \
+'--help[Print help information]' \
+'::input -- Reads from FILE or stdin if omitted:' \
+&& ret=0
+;;
+(help)
+_arguments "${_arguments_options[@]}" \
+'*::subcommand -- The subcommand whose help message to display:' \
+&& ret=0
+;;
+        esac
+    ;;
+esac
+;;
+(help)
+_arguments "${_arguments_options[@]}" \
+'*::subcommand -- The subcommand whose help message to display:' \
+&& ret=0
+;;
+        esac
+    ;;
+esac
+}
+
+(( $+functions[_sq_commands] )) ||
+_sq_commands() {
+    local commands; commands=(
+'armor:Converts binary to ASCII' \
+'dearmor:Converts ASCII to binary' \
+'sign:Signs messages or data files' \
+'verify:Verifies signed messages or detached signatures' \
+'wkd:Interacts with Web Key Directories' \
+'keyserver:Interacts with keyservers' \
+'revoke:Generates revocation certificates' \
+'packet:Low-level packet manipulation' \
+'certify:Certifies a User ID for a Certificate' \
+'keyring:Manages collections of keys or certs' \
+'key:Manages keys' \
+'inspect:Inspects data, like file(1)' \
+'encrypt:Encrypts a message' \
+'decrypt:Decrypts a message' \
+'autocrypt:Communicates certificates using Autocrypt' \
+'help:Print this message or the help of the given subcommand(s)' \
+    )
+    _describe -t commands 'sq commands' commands "$@"
+}
+(( $+functions[_sq__key__userid__add_commands] )) ||
+_sq__key__userid__add_commands() {
+    local commands; commands=()
+    _describe -t commands 'sq key userid add commands' commands "$@"
+}
+(( $+functions[_sq__key__adopt_commands] )) ||
+_sq__key__adopt_commands() {
+    local commands; commands=()
+    _describe -t commands 'sq key adopt commands' commands "$@"
+}
+(( $+functions[_sq__armor_commands] )) ||
+_sq__armor_commands() {
+    local commands; commands=()
+    _describe -t commands 'sq armor commands' commands "$@"
+}
+(( $+functions[_sq__key__attest-certifications_commands] )) ||
+_sq__key__attest-certifications_commands() {
+    local commands; commands=()
+    _describe -t commands 'sq key attest-certifications commands' commands "$@"
+}
+(( $+functions[_sq__autocrypt_commands] )) ||
+_sq__autocrypt_commands() {
+    local commands; commands=(
+'decode:Reads Autocrypt-encoded certificates' \
+'encode-sender:Encodes a certificate into an Autocrypt header' \
+'help:Print this message or the help of the given subcommand(s)' \
+    )
+    _describe -t commands 'sq autocrypt commands' commands "$@"
+}
+(( $+functions[_sq__revoke__certificate_commands] )) ||
+_sq__revoke__certificate_commands() {
+    local commands; commands=()
+    _describe -t commands 'sq revoke certificate commands' commands "$@"
+}
+(( $+functions[_sq__certify_commands] )) ||
+_sq__certify_commands() {
+    local commands; commands=()
+    _describe -t commands 'sq certify commands' commands "$@"
+}
+(( $+functions[_sq__dearmor_commands] )) ||
+_sq__dearmor_commands() {
+    local commands; commands=()
+    _describe -t commands 'sq dearmor commands' commands "$@"
+}
+(( $+functions[_sq__autocrypt__decode_commands] )) ||
+_sq__autocrypt__decode_commands() {
+    local commands; commands=()
+    _describe -t commands 'sq autocrypt decode commands' commands "$@"
+}
+(( $+functions[_sq__decrypt_commands] )) ||
+_sq__decrypt_commands() {
+    local commands; commands=()
+    _describe -t commands 'sq decrypt commands' commands "$@"
+}
+(( $+functions[_sq__packet__decrypt_commands] )) ||
+_sq__packet__decrypt_commands() {
+    local commands; commands=()
+    _describe -t commands 'sq packet decrypt commands' commands "$@"
+}
+(( $+functions[_sq__wkd__direct-url_commands] )) ||
+_sq__wkd__direct-url_commands() {
+    local commands; commands=()
+    _describe -t commands 'sq wkd direct-url commands' commands "$@"
+}
+(( $+functions[_sq__packet__dump_commands] )) ||
+_sq__packet__dump_commands() {
+    local commands; commands=()
+    _describe -t commands 'sq packet dump commands' commands "$@"
+}
+(( $+functions[_sq__autocrypt__encode-sender_commands] )) ||
+_sq__autocrypt__encode-sender_commands() {
+    local commands; commands=()
+    _describe -t commands 'sq autocrypt encode-sender commands' commands "$@"
+}
+(( $+functions[_sq__encrypt_commands] )) ||
+_sq__encrypt_commands() {
+    local commands; commands=()
+    _describe -t commands 'sq encrypt commands' commands "$@"
+}
+(( $+functions[_sq__key__extract-cert_commands] )) ||
+_sq__key__extract-cert_commands() {
+    local commands; commands=()
+    _describe -t commands 'sq key extract-cert commands' commands "$@"
+}
+(( $+functions[_sq__keyring__filter_commands] )) ||
+_sq__keyring__filter_commands() {
+    local commands; commands=()
+    _describe -t commands 'sq keyring filter commands' commands "$@"
+}
+(( $+functions[_sq__key__generate_commands] )) ||
+_sq__key__generate_commands() {
+    local commands; commands=()
+    _describe -t commands 'sq key generate commands' commands "$@"
+}
+(( $+functions[_sq__wkd__generate_commands] )) ||
+_sq__wkd__generate_commands() {
+    local commands; commands=()
+    _describe -t commands 'sq wkd generate commands' commands "$@"
+}
+(( $+functions[_sq__keyserver__get_commands] )) ||
+_sq__keyserver__get_commands() {
+    local commands; commands=()
+    _describe -t commands 'sq keyserver get commands' commands "$@"
+}
+(( $+functions[_sq__wkd__get_commands] )) ||
+_sq__wkd__get_commands() {
+    local commands; commands=()
+    _describe -t commands 'sq wkd get commands' commands "$@"
+}
+(( $+functions[_sq__autocrypt__help_commands] )) ||
+_sq__autocrypt__help_commands() {
+    local commands; commands=()
+    _describe -t commands 'sq autocrypt help commands' commands "$@"
+}
+(( $+functions[_sq__help_commands] )) ||
+_sq__help_commands() {
+    local commands; commands=()
+    _describe -t commands 'sq help commands' commands "$@"
+}
+(( $+functions[_sq__key__help_commands] )) ||
+_sq__key__help_commands() {
+    local commands; commands=()
+    _describe -t commands 'sq key help commands' commands "$@"
+}
+(( $+functions[_sq__key__userid__help_commands] )) ||
+_sq__key__userid__help_commands() {
+    local commands; commands=()
+    _describe -t commands 'sq key userid help commands' commands "$@"
+}
+(( $+functions[_sq__keyring__help_commands] )) ||
+_sq__keyring__help_commands() {
+    local commands; commands=()
+    _describe -t commands 'sq keyring help commands' commands "$@"
+}
+(( $+functions[_sq__keyserver__help_commands] )) ||
+_sq__keyserver__help_commands() {
+    local commands; commands=()
+    _describe -t commands 'sq keyserver help commands' commands "$@"
+}
+(( $+functions[_sq__packet__help_commands] )) ||
+_sq__packet__help_commands() {
+    local commands; commands=()
+    _describe -t commands 'sq packet help commands' commands "$@"
+}
+(( $+functions[_sq__revoke__help_commands] )) ||
+_sq__revoke__help_commands() {
+    local commands; commands=()
+    _describe -t commands 'sq revoke help commands' commands "$@"
+}
+(( $+functions[_sq__wkd__help_commands] )) ||
+_sq__wkd__help_commands() {
+    local commands; commands=()
+    _describe -t commands 'sq wkd help commands' commands "$@"
+}
+(( $+functions[_sq__inspect_commands] )) ||
+_sq__inspect_commands() {
+    local commands; commands=()
+    _describe -t commands 'sq inspect commands' commands "$@"
+}
+(( $+functions[_sq__keyring__join_commands] )) ||
+_sq__keyring__join_commands() {
+    local commands; commands=()
+    _describe -t commands 'sq keyring join commands' commands "$@"
+}
+(( $+functions[_sq__packet__join_commands] )) ||
+_sq__packet__join_commands() {
+    local commands; commands=()
+    _describe -t commands 'sq packet join commands' commands "$@"
+}
+(( $+functions[_sq__key_commands] )) ||
+_sq__key_commands() {
+    local commands; commands=(
+'generate:Generates a new key' \
+'password:Changes password protecting secrets' \
+'userid:Manages User IDs' \
+'extract-cert:Converts a key to a cert' \
+'adopt:Binds keys from one certificate to another' \
+'attest-certifications:Attests to third-party certifications' \
+'help:Print this message or the help of the given subcommand(s)' \
+    )
+    _describe -t commands 'sq key commands' commands "$@"
+}
+(( $+functions[_sq__keyring_commands] )) ||
+_sq__keyring_commands() {
+    local commands; commands=(
+'filter:Joins keys into a keyring applying a filter' \
+'join:Joins keys or keyrings into a single keyring' \
+'merge:Merges keys or keyrings into a single keyring' \
+'list:Lists keys in a keyring' \
+'split:Splits a keyring into individual keys' \
+'help:Print this message or the help of the given subcommand(s)' \
+    )
+    _describe -t commands 'sq keyring commands' commands "$@"
+}
+(( $+functions[_sq__keyserver_commands] )) ||
+_sq__keyserver_commands() {
+    local commands; commands=(
+'get:Retrieves a key' \
+'send:Sends a key' \
+'help:Print this message or the help of the given subcommand(s)' \
+    )
+    _describe -t commands 'sq keyserver commands' commands "$@"
+}
+(( $+functions[_sq__keyring__list_commands] )) ||
+_sq__keyring__list_commands() {
+    local commands; commands=()
+    _describe -t commands 'sq keyring list commands' commands "$@"
+}
+(( $+functions[_sq__keyring__merge_commands] )) ||
+_sq__keyring__merge_commands() {
+    local commands; commands=()
+    _describe -t commands 'sq keyring merge commands' commands "$@"
+}
+(( $+functions[_sq__packet_commands] )) ||
+_sq__packet_commands() {
+    local commands; commands=(
+'dump:Lists packets' \
+'decrypt:Unwraps an encryption container' \
+'split:Splits a message into packets' \
+'join:Joins packets split across files' \
+'help:Print this message or the help of the given subcommand(s)' \
+    )
+    _describe -t commands 'sq packet commands' commands "$@"
+}
+(( $+functions[_sq__key__password_commands] )) ||
+_sq__key__password_commands() {
+    local commands; commands=()
+    _describe -t commands 'sq key password commands' commands "$@"
+}
+(( $+functions[_sq__revoke_commands] )) ||
+_sq__revoke_commands() {
+    local commands; commands=(
+'certificate:Revoke a certificate' \
+'subkey:Revoke a subkey' \
+'userid:Revoke a User ID' \
+'help:Print this message or the help of the given subcommand(s)' \
+    )
+    _describe -t commands 'sq revoke commands' commands "$@"
+}
+(( $+functions[_sq__keyserver__send_commands] )) ||
+_sq__keyserver__send_commands() {
+    local commands; commands=()
+    _describe -t commands 'sq keyserver send commands' commands "$@"
+}
+(( $+functions[_sq__sign_commands] )) ||
+_sq__sign_commands() {
+    local commands; commands=()
+    _describe -t commands 'sq sign commands' commands "$@"
+}
+(( $+functions[_sq__keyring__split_commands] )) ||
+_sq__keyring__split_commands() {
+    local commands; commands=()
+    _describe -t commands 'sq keyring split commands' commands "$@"
+}
+(( $+functions[_sq__packet__split_commands] )) ||
+_sq__packet__split_commands() {
+    local commands; commands=()
+    _describe -t commands 'sq packet split commands' commands "$@"
+}
+(( $+functions[_sq__key__userid__strip_commands] )) ||
+_sq__key__userid__strip_commands() {
+    local commands; commands=()
+    _describe -t commands 'sq key userid strip commands' commands "$@"
+}
+(( $+functions[_sq__revoke__subkey_commands] )) ||
+_sq__revoke__subkey_commands() {
+    local commands; commands=()
+    _describe -t commands 'sq revoke subkey commands' commands "$@"
+}
+(( $+functions[_sq__wkd__url_commands] )) ||
+_sq__wkd__url_commands() {
+    local commands; commands=()
+    _describe -t commands 'sq wkd url commands' commands "$@"
+}
+(( $+functions[_sq__key__userid_commands] )) ||
+_sq__key__userid_commands() {
+    local commands; commands=(
+'add:Adds a User ID' \
+'strip:Strips a User ID' \
+'help:Print this message or the help of the given subcommand(s)' \
+    )
+    _describe -t commands 'sq key userid commands' commands "$@"
+}
+(( $+functions[_sq__revoke__userid_commands] )) ||
+_sq__revoke__userid_commands() {
+    local commands; commands=()
+    _describe -t commands 'sq revoke userid commands' commands "$@"
+}
+(( $+functions[_sq__verify_commands] )) ||
+_sq__verify_commands() {
+    local commands; commands=()
+    _describe -t commands 'sq verify commands' commands "$@"
+}
+(( $+functions[_sq__wkd_commands] )) ||
+_sq__wkd_commands() {
+    local commands; commands=(
+'url:Prints the advanced Web Key Directory URL of an email address.' \
+'direct-url:Prints the direct Web Key Directory URL of an email address.' \
+'get:Queries for certs using Web Key Directory' \
+'generate:Generates a Web Key Directory for the given domain and keys.' \
+'help:Print this message or the help of the given subcommand(s)' \
+    )
+    _describe -t commands 'sq wkd commands' commands "$@"
+}
+
+_sq "$@"

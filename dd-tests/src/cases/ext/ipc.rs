@@ -106,6 +106,25 @@ fn ext_ipc() -> Group {
         // child's fork-inherited pair end while keeping its own; SCM_RIGHTS fd passing over SEQPACKET; and
         // SO_PASSCRED -> a synthesized SCM_CREDENTIALS record (ucred.uid == getuid()). Diffed vs native.
         src("seqcred", "ext_ipc/ipc_seqcred.c").oracle(),
+        src("seqpacket-flags", "ext_ipc/ipc_seqpacket_flags.c")
+            .out("seqpacket_flags cloexec=1 nonblock=1 msg=1 recvclo=1 passcred=1\n"),
+        src("seqpacket-epoll-drain", "ext_ipc/ipc_seqpacket_epoll_drain.c")
+            .out("seqpacket_epoll_drain send=1 ep1=1 msg=1 cred=1 fd=1 clo=1 drained=1 quiet=1 child=0\n"),
+        src("seqpacket-passcred-full", "ext_ipc/ipc_seqpacket_passcred_full.c")
+            .out("seqpass_full n=5 data=mojo! trunc=0 ctrunc=0 rights=1 fdbyte=R cred=1 credpid=1 child=1\n"),
+        src("seqpacket-passcred-ctrunc", "ext_ipc/ipc_seqpacket_passcred_ctrunc.c")
+            .out("seqpass_ctrunc n=4 data=tiny trunc=0 ctrunc=0 controllen=32 cmsgs=1 rights=0 fdbyte=- cred=1 credpid=1 child=1\n"),
+        src("scm-eventfd", "ext_ipc/ipc_scm_eventfd.c").out("scm_eventfd epoll=1 read=8 val=1 child=0\n"),
+        src("scm-eventfd-untrusted", "ext_ipc/ipc_scm_eventfd.c")
+            .out("scm_eventfd epoll=1 read=8 val=1 child=0\n")
+            .untrusted(),
+        src("scm-eventfd-dense", "ext_ipc/ipc_scm_eventfd_dense.c")
+            .out("scm_eventfd_dense recv=48 trunc=0 woke=48 read=48 sum=1176 child=0\n"),
+        src("scm-eventfd-dense-untrusted", "ext_ipc/ipc_scm_eventfd_dense.c")
+            .out("scm_eventfd_dense recv=48 trunc=0 woke=48 read=48 sum=1176 child=0\n")
+            .untrusted(),
+        src("scm-memfd-seal", "ext_ipc/ipc_scm_memfd_seal.c")
+            .out("scm_memfd_seal seal=1 send=1 child=0\n"),
         // SCM_CREDENTIALS peer-pid IDENTITY (chromium Mojo ports node-merge): two distinct children over
         // two SEQPACKET socketpairs must present two DISTINCT ucred.pids, neither equal to the receiver's own
         // pid. macOS reports the socketpair creator's pid on both ends, so before the synthetic-peer-id fix
@@ -118,5 +137,11 @@ fn ext_ipc() -> Group {
         // 4-byte record, never a spurious 0. The old close-time EOF injection fired for any inherited end;
         // the fix only injects for an end this process actually wrote to. Diffed vs native.
         src("seqbystander", "ext_ipc/ipc_seqbystander.c").oracle(),
+        // Chromium renderer bootstrap shape: the browser opens /proc/<renderer-pid>/{status,statm},
+        // sends both read-only fds to the child over a Mojo-like AF_UNIX channel, and the child reads
+        // them after sandboxing. This catches proc peer-file synthesis plus multi-fd SCM_RIGHTS in the
+        // exact path Chrome hits before first Viz frame submission.
+        src("chrome-procfd", "ext_ipc/ipc_chrome_procfd.c")
+            .out("chrome_procfd open=1 send=1 recv=3 status=1 statm=1 maps=1 child=1\n"),
     ])
 }

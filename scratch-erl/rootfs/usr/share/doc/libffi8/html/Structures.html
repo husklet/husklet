@@ -1,0 +1,116 @@
+<!DOCTYPE html PUBLIC "-//W3C//DTD HTML 4.01 Transitional//EN" "http://www.w3.org/TR/html4/loose.dtd">
+<html>
+<!-- Created by GNU Texinfo 6.8, https://www.gnu.org/software/texinfo/ -->
+<head>
+<meta http-equiv="Content-Type" content="text/html; charset=utf-8">
+<!-- 
+This manual is for libffi, a portable foreign function interface
+library.
+
+Copyright (C) 2008-2019, 2021, 2022 Anthony Green and Red Hat, Inc.
+
+Permission is hereby granted, free of charge, to any person obtaining
+a copy of this software and associated documentation files (the
+"Software"), to deal in the Software without restriction, including
+without limitation the rights to use, copy, modify, merge, publish,
+distribute, sublicense, and/or sell copies of the Software, and to
+permit persons to whom the Software is furnished to do so, subject to
+the following conditions:
+
+The above copyright notice and this permission notice shall be
+included in all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
+EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.
+IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY
+CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT,
+TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
+SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+ -->
+<title>Structures (libffi: the portable foreign function interface library)</title>
+
+<meta name="description" content="Structures (libffi: the portable foreign function interface library)">
+<meta name="keywords" content="Structures (libffi: the portable foreign function interface library)">
+<meta name="resource-type" content="document">
+<meta name="distribution" content="global">
+<meta name="Generator" content="makeinfo">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+
+<link href="index.html" rel="start" title="Top">
+<link href="Index.html" rel="index" title="Index">
+<link href="Types.html" rel="up" title="Types">
+<link href="Size-and-Alignment.html" rel="next" title="Size and Alignment">
+<link href="Primitive-Types.html" rel="prev" title="Primitive Types">
+<style type="text/css">
+<!--
+a.copiable-anchor {visibility: hidden; text-decoration: none; line-height: 0em}
+a.summary-letter {text-decoration: none}
+blockquote.indentedblock {margin-right: 0em}
+div.display {margin-left: 3.2em}
+div.example {margin-left: 3.2em}
+kbd {font-style: oblique}
+pre.display {font-family: inherit}
+pre.format {font-family: inherit}
+pre.menu-comment {font-family: serif}
+pre.menu-preformatted {font-family: serif}
+span.nolinebreak {white-space: nowrap}
+span.roman {font-family: initial; font-weight: normal}
+span.sansserif {font-family: sans-serif; font-weight: normal}
+span:hover a.copiable-anchor {visibility: visible}
+ul.no-bullet {list-style: none}
+-->
+</style>
+
+
+</head>
+
+<body lang="en">
+<div class="subsection" id="Structures">
+<div class="header">
+<p>
+Next: <a href="Size-and-Alignment.html" accesskey="n" rel="next">Size and Alignment</a>, Previous: <a href="Primitive-Types.html" accesskey="p" rel="prev">Primitive Types</a>, Up: <a href="Types.html" accesskey="u" rel="up">Types</a> &nbsp; [<a href="Index.html" title="Index" rel="index">Index</a>]</p>
+</div>
+<hr>
+<span id="Structures-1"></span><h4 class="subsection">2.3.2 Structures</h4>
+
+<p><code>libffi</code> is perfectly happy passing structures back and forth.
+You must first describe the structure to <code>libffi</code> by creating a
+new <code>ffi_type</code> object for it.
+</p>
+<span id="index-ffi_005ftype"></span>
+<dl class="def">
+<dt id="index-ffi_005ftype-1"><span class="category">Data type: </span><span><strong>ffi_type</strong><a href='#index-ffi_005ftype-1' class='copiable-anchor'> &para;</a></span></dt>
+<dd><p>The <code>ffi_type</code> has the following members:
+</p><dl compact="compact">
+<dt><span><code>size_t size</code></span></dt>
+<dd><p>This is set by <code>libffi</code>; you should initialize it to zero.
+</p>
+</dd>
+<dt><span><code>unsigned short alignment</code></span></dt>
+<dd><p>This is set by <code>libffi</code>; you should initialize it to zero.
+</p>
+</dd>
+<dt><span><code>unsigned short type</code></span></dt>
+<dd><p>For a structure, this should be set to <code>FFI_TYPE_STRUCT</code>.
+</p>
+</dd>
+<dt><span><code>ffi_type **elements</code></span></dt>
+<dd><p>This is a &lsquo;<samp>NULL</samp>&rsquo;-terminated array of pointers to <code>ffi_type</code>
+objects.  There is one element per field of the struct.
+</p>
+<p>Note that <code>libffi</code> has no special support for bit-fields.  You
+must manage these manually.
+</p></dd>
+</dl>
+</dd></dl>
+
+<p>The <code>size</code> and <code>alignment</code> fields will be filled in by
+<code>ffi_prep_cif</code> or <code>ffi_prep_cif_var</code>, as needed.
+</p>
+</div>
+
+
+
+</body>
+</html>

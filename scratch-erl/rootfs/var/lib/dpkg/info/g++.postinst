@@ -1,0 +1,9 @@
+#! /bin/sh -e
+
+update-alternatives \
+    --install /usr/bin/c++ c++ /usr/bin/g++ 20 \
+    #--slave /usr/share/man/man1/c++.1.gz c++.1.gz /usr/share/man/man1/g++.1.gz
+
+
+
+exit 0

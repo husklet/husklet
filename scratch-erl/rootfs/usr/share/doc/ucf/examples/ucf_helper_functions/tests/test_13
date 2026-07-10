@@ -1,0 +1,10 @@
+#!/bin/bash
+
+handle_all_ucf_files $PKGDIR $LOCDIR
+mv $PKGF $PKGRF
+take_ref
+rename_ucf_file $LOCF $LOCRF
+handle_all_ucf_files $PKGDIR $LOCDIR
+is_local $LOCRF && check_ucfq_number 1
+return $?
+

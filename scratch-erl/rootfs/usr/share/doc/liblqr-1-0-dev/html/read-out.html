@@ -1,0 +1,109 @@
+<html><head><meta http-equiv="Content-Type" content="text/html; charset=ISO-8859-1"><title>Reading the multi-size image</title><meta name="generator" content="DocBook XSL Stylesheets V1.79.1"><link rel="home" href="index.html" title="The Liquid Rescale library Manual"><link rel="up" href="api-manual.html" title="Chapter 2. LqR library API user manual"><link rel="prev" href="lqr.html" title="Liquid rescaling"><link rel="next" href="energy.html" title="Automatic feature detection"></head><body bgcolor="white" text="black" link="#0000FF" vlink="#840084" alink="#0000FF"><div class="navheader"><table width="100%" summary="Navigation header"><tr><th colspan="3" align="center">Reading the multi-size image</th></tr><tr><td width="20%" align="left"><a accesskey="p" href="lqr.html">Prev</a> </td><th width="60%" align="center">Chapter 2. LqR library API user manual</th><td width="20%" align="right"> <a accesskey="n" href="energy.html">Next</a></td></tr></table><hr></div><div class="sect1"><div class="titlepage"><div><div><h2 class="title" style="clear: both"><a name="read-out"></a>Reading the multi-size image</h2></div></div></div><div class="toc"><dl class="toc"><dt><span class="sect2"><a href="read-out.html#px-by-px">Pixel by pixel</a></span></dt><dt><span class="sect2"><a href="read-out.html#line-by-line">One line at a time</a></span></dt><dt><span class="sect2"><a href="read-out.html#reset">Resetting</a></span></dt></dl></div><div class="sect2"><div class="titlepage"><div><div><h3 class="title"><a name="px-by-px"></a>Pixel by pixel</h3></div></div></div><p>
+                    Once you have rescaled the image, you can read out the result through the functions:
+                    </p><div class="funcsynopsis"><table border="0" class="funcprototype-table" summary="Function synopsis" style="cellspacing: 0; cellpadding: 0;"><tr><td><code class="funcdef">gboolean <b class="fsfunc">lqr_carver_scan</b>(</code></td><td> LqrCarver * <var class="pdparam">carver</var>, </td></tr><tr><td> </td><td> gint* <var class="pdparam">x</var>, </td></tr><tr><td> </td><td> gint* <var class="pdparam">y</var>, </td></tr><tr><td> </td><td> guchar** <var class="pdparam">rgb</var><code>)</code>;</td></tr></table><div class="funcprototype-spacer"> </div></div><p>
+                    or
+                    </p><div class="funcsynopsis"><table border="0" class="funcprototype-table" summary="Function synopsis" style="cellspacing: 0; cellpadding: 0;"><tr><td><code class="funcdef">gboolean <b class="fsfunc">lqr_carver_scan_ext</b>(</code></td><td> LqrCarver * <var class="pdparam">carver</var>, </td></tr><tr><td> </td><td> gint* <var class="pdparam">x</var>, </td></tr><tr><td> </td><td> gint* <var class="pdparam">y</var>, </td></tr><tr><td> </td><td> void** <var class="pdparam">rgb</var><code>)</code>;</td></tr></table><div class="funcprototype-spacer"> </div></div><p>
+                </p><p>
+                    Here, <em class="parameter"><code>x</code></em> and <em class="parameter"><code>y</code></em> are pointers to the varaibles which will
+                    hold the pixel coordinate, while <em class="parameter"><code>rgb</code></em> is a pointer to an array which will
+                    contain the pixel colour information. If the carver was created using the standard 8-bit constructor
+                    <code class="function">lqr_carver_new</code>, the first form can be used, otherwise you must use the extended
+                    form <code class="function">lqr_carver_scan_ext</code>. In this last case, the output pointer
+                    <em class="parameter"><code>rgb</code></em> must be passed as a pointer to <span class="type">void*</span>, but the outcome should
+                    actually be cast to a pointer to an array of the appropriate type, depending on the <code class="classname">LqrCarver</code>
+                    colour depth.
+                </p><p>
+                    The return value is <code class="literal"><span class="returnvalue">FALSE</span></code> when the end of the image is reached, or the buffer has the wrong
+                    number of bits, <code class="literal"><span class="returnvalue">TRUE</span></code> otherwise.
+                </p><p>
+                    Each time these functions are invoked, they will store the coordinates and rgb information in the
+                    output pointers and move to the next pixel. If they reach the end, they reset the reader and return
+                    <code class="literal"><span class="returnvalue">FALSE</span></code>.
+                </p><p>
+                    Here is a sample code usage:
+                    </p><div class="example"><a name="ex-read-out"></a><p class="title"><b>Example 2.1. A simple readout example</b></p><div class="example-contents"><pre class="programlisting">
+gint x, y;
+guchar *rgb;
+
+while (lqr_carver_scan (carver, &amp;x, &amp;y, &amp;rgb) {
+    my_plot (x, y, rgb[0], rgb[1], rgb[2]);
+}
+                        </pre></div></div><p><br class="example-break">
+
+                    In this example, it is assumed that the image has three 8-bit colour channels, and that there exist
+                    some function <code class="function">my_plot</code> which writes out the pixels somewhere.
+                </p><p>
+                    The same readout example with different colour depth would read like this:
+                    </p><div class="example"><a name="ex-read-out-ext"></a><p class="title"><b>Example 2.2. A simple readout example - extended version</b></p><div class="example-contents"><pre class="programlisting">
+gint x, y;
+void *rgb;
+gdouble *rgb_out;
+
+while (lqr_carver_scan (carver, &amp;x, &amp;y, &amp;rgb) {
+    rgb_out = (gdouble*) rgb;
+    my_plot (x, y, rgb_out[0], rgb_out[1], rgb_out[2]);
+}
+                        </pre></div></div><p><br class="example-break">
+
+                    In this example it is assumed that the carver was loaded with the <code class="literal">LQR_COLDEPTH_64F</code> as the
+                    <em class="parameter"><code>colour_depth</code></em> argument in the constructor
+                    <code class="function">lqr_carver_new_ext</code>, and that it has <code class="literal">3</code> colour channels (see
+                    the <a class="link" href="generate-multi-size.html#carver-new" title="Carver object creation">constructor section</a> for details); therefore, the output is
+                    cast to type <span class="type">gdouble</span> before using it.
+                </p><div class="important" style="margin-left: 0.5in; margin-right: 0.5in;"><h3 class="title">Important</h3><p>
+                        The <em class="parameter"><code>rgb</code></em> array is owned by to the carver object, so it doesn't need
+                        initialization, as in the example. Indeed, it must be used for read-only purposes, and the
+                        content should always be copyed after each call to a scan function.
+                    </p></div></div><div class="sect2"><div class="titlepage"><div><div><h3 class="title"><a name="line-by-line"></a>One line at a time</h3></div></div></div><p>
+                    The image can also be read one line at a time, but it is not possible to freely decide if it is to
+                    be read by row or by column. Instead, this has to be queried by calling this function: 
+                    </p><div class="funcsynopsis"><table border="0" class="funcprototype-table" summary="Function synopsis" style="cellspacing: 0; cellpadding: 0;"><tr><td><code class="funcdef">gboolean <b class="fsfunc">lqr_carver_scan_by_row</b>(</code></td><td>LqrCarver* <var class="pdparam">carver</var><code>)</code>;</td></tr></table><div class="funcprototype-spacer"> </div></div><p>
+                </p><p>
+                    The function returns <code class="literal"><span class="returnvalue">TRUE</span></code> if the image is read by row, and <code class="literal"><span class="returnvalue">FALSE</span></code> if it is read by
+                    column.
+                </p><p>
+                    Then, the image can be read through these functions:
+                    </p><div class="funcsynopsis"><table border="0" class="funcprototype-table" summary="Function synopsis" style="cellspacing: 0; cellpadding: 0;"><tr><td><code class="funcdef">gboolean <b class="fsfunc">lqr_carver_scan_line</b>(</code></td><td>LqrCarver* <var class="pdparam">carver</var>, </td></tr><tr><td> </td><td>gint* <var class="pdparam">n</var>, </td></tr><tr><td> </td><td>guchar** <var class="pdparam">rgb</var><code>)</code>;</td></tr></table><div class="funcprototype-spacer"> </div></div><p>
+                    or
+                    </p><div class="funcsynopsis"><table border="0" class="funcprototype-table" summary="Function synopsis" style="cellspacing: 0; cellpadding: 0;"><tr><td><code class="funcdef">gboolean <b class="fsfunc">lqr_carver_scan_line_ext</b>(</code></td><td>LqrCarver* <var class="pdparam">carver</var>, </td></tr><tr><td> </td><td>gint* <var class="pdparam">n</var>, </td></tr><tr><td> </td><td>void** <var class="pdparam">rgb</var><code>)</code>;</td></tr></table><div class="funcprototype-spacer"> </div></div><p>
+                </p><p>
+                    These functions work exactly the same way as <code class="function">lqr_carver_scan</code> and
+                    <code class="function">lqr_carver_scan_ext</code>, but only one coordinate is stored (either the row or the
+                    column number), and the <em class="parameter"><code>rgb</code></em> array will contain a whole line.
+                </p><p>
+                    Here is a sample code usage for the standard 8-bit case:
+                    </p><div class="example"><a name="ex-scan-line"></a><p class="title"><b>Example 2.3. Line-by-line readout example</b></p><div class="example-contents"><pre class="programlisting">
+gint n;
+guchar *rgb;
+gboolean by_row;
+
+by_row = lqr_carver_scan_by_row (carver);
+
+while (lqr_carver_scan_line (carver, &amp;n, &amp;rgb) {
+    by_row ? my_plot_row (n, rgb) : my_plot_col (n, rgb);
+}
+                        </pre></div></div><p><br class="example-break">
+
+                    where, as before, it is assumed that the <code class="function">my_plot_row</code> and
+                    <code class="function">my_plot_col</code> functions have been previously defined and "know what to do".
+                </p><p>
+                    The extended version for images with more colour depth is very similar, it only requires an
+                    additional cast:
+                    </p><div class="example"><a name="ex-scan-line-ext"></a><p class="title"><b>Example 2.4. Line-by-line readout example - extended version</b></p><div class="example-contents"><pre class="programlisting">
+gint n;
+void *rgb;
+guchar *rgb_out;
+gboolean by_row;
+
+by_row = lqr_carver_scan_by_row (carver);
+
+while (lqr_carver_scan_line_ext (carver, &amp;n, &amp;rgb) {
+    rgb_out = (gboolean*) rgb;
+    by_row ? my_plot_row (n, rgb_out) : my_plot_col (n, rgb_out);
+}
+                        </pre></div></div><p><br class="example-break">
+                </p></div><div class="sect2"><div class="titlepage"><div><div><h3 class="title"><a name="reset"></a>Resetting</h3></div></div></div><p>
+                    Normally, it is not needed to reset the image scan. However, if the scan has been stopped at same
+                    intermediate step for some reason, the following function can be used to restart from the beginning:
+                    </p><div class="funcsynopsis"><table border="0" class="funcprototype-table" summary="Function synopsis" style="cellspacing: 0; cellpadding: 0;"><tr><td><code class="funcdef">void <b class="fsfunc">lqr_carver_scan_reset</b>(</code></td><td>LqrCarver* <var class="pdparam">carver</var><code>)</code>;</td></tr></table><div class="funcprototype-spacer"> </div></div><p>
+                </p></div></div><div class="navfooter"><hr><table width="100%" summary="Navigation footer"><tr><td width="40%" align="left"><a accesskey="p" href="lqr.html">Prev</a> </td><td width="20%" align="center"><a accesskey="u" href="api-manual.html">Up</a></td><td width="40%" align="right"> <a accesskey="n" href="energy.html">Next</a></td></tr><tr><td width="40%" align="left" valign="top">Liquid rescaling </td><td width="20%" align="center"><a accesskey="h" href="index.html">Home</a></td><td width="40%" align="right" valign="top"> Automatic feature detection</td></tr></table></div></body></html>

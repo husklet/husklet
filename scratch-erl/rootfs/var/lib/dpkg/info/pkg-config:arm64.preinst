@@ -1,0 +1,19 @@
+#!/bin/sh
+
+set -e
+
+if [ "$1" = upgrade ] && dpkg --compare-versions "$2" le '1.8.0-1+'
+then
+    for symlink in /usr/bin/*-pkg-config
+    do
+        [ ! -L $symlink ] && continue
+        target="$(readlink -n $symlink)"
+        if [ "$target" = /usr/share/pkg-config-crosswrapper ]
+        then
+            echo Removing leftover symlink $symlink >&2
+            rm -f "$symlink"
+        fi
+    done
+fi
+
+

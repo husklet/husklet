@@ -1,0 +1,3 @@
+/etc/mercurial/hgrc
+/etc/mercurial/hgrc.d/cacerts.rc
+/etc/mercurial/hgrc.d/default-tools.rc

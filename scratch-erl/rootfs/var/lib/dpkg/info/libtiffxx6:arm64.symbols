@@ -1,0 +1,4 @@
+libtiffxx.so.6 libtiffxx6 #MINVER#
+ LIBTIFFXX_4.0@LIBTIFFXX_4.0 4.0
+ _Z14TIFFStreamOpenPKcPSi@LIBTIFFXX_4.0 4.0
+ _Z14TIFFStreamOpenPKcPSo@LIBTIFFXX_4.0 4.0

@@ -1,0 +1,19 @@
+dictionaries-common: debconf-is-not-a-registry [*]
+# This diverts wamerican words file. Required and agreed with maintainer.
+dictionaries-common: diversion-for-unknown-file usr/share/dict/words [*]
+# This is used, but not here and not in the usual way.
+dictionaries-common: unused-debconf-template dictionaries-common/debconf_database_corruption [*]
+# This is used, but not here and not in the usual way.
+dictionaries-common: unused-debconf-template dictionaries-common/default-ispell [*]
+# This is used, but not here and not in the usual way.
+dictionaries-common: unused-debconf-template dictionaries-common/default-wordlist [*]
+# This is used, but not here and not in the usual way.
+dictionaries-common: unused-debconf-template dictionaries-common/invalid_debconf_value [*]
+# This is used, but not here and not in the usual way.
+dictionaries-common: unused-debconf-template dictionaries-common/ispell-autobuildhash-message [*]
+# This is used, but not here and not in the usual way.
+dictionaries-common: unused-debconf-template dictionaries-common/selecting_ispell_wordlist_default [*]
+# This README is a placeholder containing dir specific info
+dictionaries-common: package-contains-documentation-outside-usr-share-doc [var/lib/?spell/README]
+# This should also work with XEmacs (and has some specific requirements)
+dictionaries-common: emacsen-common-without-dh-elpa

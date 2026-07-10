@@ -11,8 +11,14 @@
 /// little-endian, i.e. memory order B,G,R,A — the same order Metal's `BGRA8Unorm` wants).
 pub struct SurfaceBuffer {
     pub sid: u32,
+    /// Logical surface size after Wayland viewport/buffer transforms. Presenters size the native output
+    /// to this, not necessarily to the backing texture dimensions.
     pub width: i32,
     pub height: i32,
+    /// Backing texture size. For CPU buffers this matches `width/height`; for IOSurface/dmabuf it can be
+    /// larger when `wp_viewport` crops/scales Chrome's render target into a logical surface.
+    pub texture_width: i32,
+    pub texture_height: i32,
     pub stride: i32, // tight: width*4
     pub format: u32,
     pub bgra: Vec<u8>,
@@ -23,6 +29,8 @@ pub struct SurfaceBuffer {
     /// GPU rung 3 (first slice): the guest requested the host GPU to *render* into this IOSurface (a
     /// forwarded render command). The Metal presenter runs a render pass before compositing.
     pub gpu_render: bool,
+    /// Normalized source rectangle in the backing texture, `(u0, v0, u1, v1)`.
+    pub uv_rect: [f32; 4],
 }
 
 impl SurfaceBuffer {
@@ -30,10 +38,14 @@ impl SurfaceBuffer {
     pub fn to_rgba(&self) -> Vec<u8> {
         let mut out = vec![0u8; self.bgra.len()];
         for i in (0..self.bgra.len()).step_by(4) {
-            out[i] = self.bgra[i + 2];     // R <- ...
+            out[i] = self.bgra[i + 2]; // R <- ...
             out[i + 1] = self.bgra[i + 1]; // G
-            out[i + 2] = self.bgra[i];     // B
-            out[i + 3] = if self.format == 1 { 0xff } else { self.bgra[i + 3] }; // XRGB ⇒ opaque
+            out[i + 2] = self.bgra[i]; // B
+            out[i + 3] = if self.format == 1 {
+                0xff
+            } else {
+                self.bgra[i + 3]
+            }; // XRGB ⇒ opaque
         }
         out
     }
@@ -69,6 +81,11 @@ pub trait Presenter {
     fn window_content_size(&self, _sid: u32) -> Option<(i32, i32)> {
         None
     }
+    /// AppKit backing scale for a native window. Input events arrive in points, while Wayland clients in
+    /// this compositor use pixel-space surface coordinates.
+    fn surface_scale(&self, _sid: u32) -> f64 {
+        1.0
+    }
 }
 
 /// Writes each committed surface to `<dir>/surface-<sid>.png`, and records the last frame for tests.
@@ -80,7 +97,11 @@ pub struct PngPresenter {
 
 impl PngPresenter {
     pub fn new(dir: impl Into<std::path::PathBuf>) -> PngPresenter {
-        PngPresenter { dir: dir.into(), last: None, frames: 0 }
+        PngPresenter {
+            dir: dir.into(),
+            last: None,
+            frames: 0,
+        }
     }
 }
 
@@ -98,7 +119,11 @@ impl Presenter for PngPresenter {
         self.last = Some((surf.sid, surf.width, surf.height, rgba));
         eprintln!(
             "[dd-display] present sid={} {}x{} title={:?} -> {}",
-            surf.sid, surf.width, surf.height, surf.title, path.display()
+            surf.sid,
+            surf.width,
+            surf.height,
+            surf.title,
+            path.display()
         );
     }
 }

@@ -83,6 +83,10 @@ fn fsx() -> Group {
                 .oracle(),
             // memfd F_ADD_SEALS / F_SEAL_WRITE enforced (a write after F_SEAL_WRITE fails EPERM).
             src("memfd-seal", "ext_linuxsys/memfd_seal.c").oracle(),
+            // eventfd/timerfd/memfd emulation must still be active when real fd numbers exceed 1024.
+            src("high-fd-emul", "ext_linuxsys/high_fd_emul.c")
+                .out("highfd base=1 event=1 timer=1 seals=1111\n")
+                .oracle(),
             // tee(2): duplicate pipe->pipe via peek+pushback so the source pipe is left intact.
             src("tee", "ext_linuxsys/tee.c").oracle(),
             // vmsplice(2): gather user memory into a pipe (write end) / scatter it back (read end).
@@ -115,6 +119,11 @@ fn procx() -> Group {
                 .has("PRCTL_GUARD_OK")
                 .exit(0),
             src("gettid", "ext_linuxsys/gettid.c").oracle(),
+            // A fork-without-exec child must publish its own /proc entry, and its exit must not unlink
+            // the parent's inherited registry path. Chrome zygote renderer children depend on this shape.
+            src("proc-fork-registry", "ext_linuxsys/proc_fork_registry.c")
+                .out("proc_fork_registry child=1 self_before=1 self_after=1 exit=1\n")
+                .oracle(),
             // pidfd_open(2) unsupported on the JIT (returns failure). GAPS `lsys-pidfd`.
             src("pidfd-open", "ext_linuxsys/pidfd_open.c").oracle(),
             // pidfd_send_signal IS implemented and delivers correctly (opened=1 sent=1). The test's `killed`

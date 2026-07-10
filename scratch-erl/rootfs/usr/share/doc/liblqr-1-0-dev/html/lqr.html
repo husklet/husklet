@@ -1,0 +1,54 @@
+<html><head><meta http-equiv="Content-Type" content="text/html; charset=ISO-8859-1"><title>Liquid rescaling</title><meta name="generator" content="DocBook XSL Stylesheets V1.79.1"><link rel="home" href="index.html" title="The Liquid Rescale library Manual"><link rel="up" href="api-manual.html" title="Chapter 2. LqR library API user manual"><link rel="prev" href="generate-multi-size.html" title="Generating the multi-size image"><link rel="next" href="read-out.html" title="Reading the multi-size image"></head><body bgcolor="white" text="black" link="#0000FF" vlink="#840084" alink="#0000FF"><div class="navheader"><table width="100%" summary="Navigation header"><tr><th colspan="3" align="center">Liquid rescaling</th></tr><tr><td width="20%" align="left"><a accesskey="p" href="generate-multi-size.html">Prev</a> </td><th width="60%" align="center">Chapter 2. LqR library API user manual</th><td width="20%" align="right"> <a accesskey="n" href="read-out.html">Next</a></td></tr></table><hr></div><div class="sect1"><div class="titlepage"><div><div><h2 class="title" style="clear: both"><a name="lqr"></a>Liquid rescaling</h2></div></div></div><div class="toc"><dl class="toc"><dt><span class="sect2"><a href="lqr.html#lqr-resize">The resizing method</a></span></dt><dt><span class="sect2"><a href="lqr.html#flatten">Flattening</a></span></dt><dt><span class="sect2"><a href="lqr.html#lqr-cancel">Cancelling an action</a></span></dt></dl></div><div class="sect2"><div class="titlepage"><div><div><h3 class="title"><a name="lqr-resize"></a>The resizing method</h3></div></div></div><p>
+                    Once initialised, or if a visibility map has been loaded, the image can be resized through this
+                    function:
+                    </p><div class="funcsynopsis"><table border="0" class="funcprototype-table" summary="Function synopsis" style="cellspacing: 0; cellpadding: 0;"><tr><td><code class="funcdef">LqrRetVal <b class="fsfunc">lqr_carver_resize</b>(</code></td><td> LqrCarver * <var class="pdparam">carver</var>, </td></tr><tr><td> </td><td> gint <var class="pdparam">new_width</var>, </td></tr><tr><td> </td><td> gint <var class="pdparam">new_height</var><code>)</code>;</td></tr></table><div class="funcprototype-spacer"> </div></div><p>
+                </p><p>
+                    This function decides automatically whether it can use the already computed visibility map, it has
+                    to update it or waste it completely and start afresh. This last event occurs when the map was
+                    computed for horizontal resizing and a vertical resize has been requested, or vice versa, and also
+                    when the required enlargment is bigger than the enlargement step value (see
+                    <a class="link" href="tuning.html#lqr-enl-step" title="Setting the enlargement step">Setting the enlargement step</a>). Note that only initialised
+                    carvers can update or change the visibility map; if this is not the case, an error is returned.
+                </p><p>
+                    The function also takes advantage of the fact that the enlargment process mirrors the shrink
+                    process. For example, if the original size of the image is <code class="literal">(<span class="symbol">w0</span>,
+                    <span class="symbol">h0</span>)</code> and <code class="function">lqr_carver_resize</code> is invoked with
+                    <code class="literal">(<span class="symbol">w0</span> - 100, <span class="symbol">h0</span>)</code> as an argument, then subsequent
+                    calls to the function will allow on-the-fly resizing in the whole range from
+                    <code class="literal">(<span class="symbol">w0</span> - 100, <span class="symbol">h0</span>)</code> to <code class="literal">(<span class="symbol">w0</span>
+                    + 100, <span class="symbol">h0</span>)</code>. (But note that this may be overcome if
+                    <code class="literal"><span class="symbol">w0</span> + 100</code> is bigger than the enlargement step.)
+                </p></div><div class="sect2"><div class="titlepage"><div><div><h3 class="title"><a name="flatten"></a>Flattening</h3></div></div></div><p>
+                    In order to resize in more than one step, the image can be flattened in its current state, thrugh
+                    this function:
+                    </p><div class="funcsynopsis"><table border="0" class="funcprototype-table" summary="Function synopsis" style="cellspacing: 0; cellpadding: 0;"><tr><td><code class="funcdef">gboolean <b class="fsfunc">lqr_carver_flatten</b>(</code></td><td> LqrCarver * <var class="pdparam">carver</var><code>)</code>;</td></tr></table><div class="funcprototype-spacer"> </div></div><p>
+                </p><p>
+                    The return value is <code class="literal"><span class="returnvalue">FALSE</span></code> in case of insufficient memory, <code class="literal"><span class="returnvalue">TRUE</span></code> otherwise.
+                </p><p>
+                    This function destroys the current visibility map and reinitialises the multi-size image from its
+                    current state.
+                </p><div class="note" style="margin-left: 0.5in; margin-right: 0.5in;"><h3 class="title">Note</h3><p>
+                        Every time that the image is flattened (including when changing the resize direction) the
+                        original image and all information about it is lost.
+                    </p></div></div><div class="sect2"><div class="titlepage"><div><div><h3 class="title"><a name="lqr-cancel"></a>Cancelling an action</h3></div></div></div><p>
+                    The resizing and flattening operations can be aborted using this function:
+                    </p><div class="funcsynopsis"><table border="0" class="funcprototype-table" summary="Function synopsis" style="cellspacing: 0; cellpadding: 0;"><tr><td><code class="funcdef">LqrRetVal <b class="fsfunc">lqr_carver_cancel</b>(</code></td><td> LqrCarver * <var class="pdparam">carver</var><code>)</code>;</td></tr></table><div class="funcprototype-spacer"> </div></div><p>
+                </p><p>
+                    This function can be invoked asynchronously, from a different thread with respect to the one in
+                    which the resizing or flattening methods were called. If successful, this function will return
+                    <code class="literal"><span class="errorcode">LQR_OK</span></code>, and any ongoing resizing or flattening functions will immidiately abort and return the
+                    special value <code class="literal"><span class="errorcode">LQR_USRCANCEL</span></code>; however, this function will have no effect if no operation was in
+                    progress when calling it.
+                </p><p>
+                    This function can be called multiple times.
+                </p><div class="important" style="margin-left: 0.5in; margin-right: 0.5in;"><h3 class="title">Important</h3><p>
+                        Whenever a function returns <code class="literal"><span class="errorcode">LQR_USRCANCEL</span></code>, it means that the <code class="classname">LqrCarver</code> object is in an
+                        inconsistent state, and there is currently no way to recover from this situation. Therefore, any
+                        further operation on it must be avoided, and it must be destroyed.
+                    </p></div><div class="important" style="margin-left: 0.5in; margin-right: 0.5in;"><h3 class="title">Important</h3><p>
+                        The functions <code class="function">lqr_carver_resize</code> and <code class="function">lqr_carver_flatten</code>
+                        are not the only ones which can return <code class="literal"><span class="errorcode">LQR_USRCANCEL</span></code>; instead, any function in the library whose
+                        return type is <code class="classname">LqrRetVal</code> and which operates on <code class="classname">LqrCarver</code> objects can
+                        return such value: for example, any function will do so if called over a <code class="classname">LqrCarver</code> object for
+                        which an operation was actually cancelled (but this is not the only possibility).
+                    </p></div></div></div><div class="navfooter"><hr><table width="100%" summary="Navigation footer"><tr><td width="40%" align="left"><a accesskey="p" href="generate-multi-size.html">Prev</a> </td><td width="20%" align="center"><a accesskey="u" href="api-manual.html">Up</a></td><td width="40%" align="right"> <a accesskey="n" href="read-out.html">Next</a></td></tr><tr><td width="40%" align="left" valign="top">Generating the multi-size image </td><td width="20%" align="center"><a accesskey="h" href="index.html">Home</a></td><td width="40%" align="right" valign="top"> Reading the multi-size image</td></tr></table></div></body></html>

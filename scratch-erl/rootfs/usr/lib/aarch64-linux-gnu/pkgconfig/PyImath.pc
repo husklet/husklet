@@ -1,0 +1,16 @@
+##
+## SPDX-License-Identifier: BSD-3-Clause
+## Copyright Contributors to the OpenEXR Project.
+##
+
+prefix=/usr
+exec_prefix=${prefix}
+libdir=${exec_prefix}/lib/aarch64-linux-gnu
+includedir=${prefix}/include
+libsuffix=-3_1
+
+Name: PyImath
+Description: Python bindings for the Imath libraries
+Version: 3.1.6
+Libs: -L${libdir} -lImath${libsuffix} -lPyImath_Python3_11${libsuffix}
+Cflags: -I${includedir} -I${includedir}/Imath

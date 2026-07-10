@@ -1,0 +1,15 @@
+#!/bin/bash
+
+handle_all_ucf_files $PKGDIR $LOCDIR
+cp package-changed $PKGRF
+rm -f $PKGF
+rm -f $LOCF
+take_ref
+echo "rename_ucf_file $LOCF $LOCRF"
+rename_ucf_file $LOCF $LOCRF
+echo "handle_all_ucf_files $PKGDIR $LOCDIR"
+export UCF_FORCE_CONFFNEW=1
+handle_all_ucf_files $PKGDIR $LOCDIR
+echo "final check"
+is_package $LOCRF $PKGRREF && check_ucfq_number 1
+return $?

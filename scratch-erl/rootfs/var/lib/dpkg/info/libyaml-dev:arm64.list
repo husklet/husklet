@@ -1,0 +1,16 @@
+/.
+/usr
+/usr/include
+/usr/include/yaml.h
+/usr/lib
+/usr/lib/aarch64-linux-gnu
+/usr/lib/aarch64-linux-gnu/libyaml.a
+/usr/lib/aarch64-linux-gnu/pkgconfig
+/usr/lib/aarch64-linux-gnu/pkgconfig/yaml-0.1.pc
+/usr/share
+/usr/share/doc
+/usr/share/doc/libyaml-dev
+/usr/share/doc/libyaml-dev/changelog.Debian.gz
+/usr/share/doc/libyaml-dev/changelog.gz
+/usr/share/doc/libyaml-dev/copyright
+/usr/lib/aarch64-linux-gnu/libyaml.so

@@ -1,0 +1,196 @@
+<html><head><meta http-equiv="Content-Type" content="text/html; charset=ISO-8859-1"><title>Automatic feature detection</title><meta name="generator" content="DocBook XSL Stylesheets V1.79.1"><link rel="home" href="index.html" title="The Liquid Rescale library Manual"><link rel="up" href="api-manual.html" title="Chapter 2. LqR library API user manual"><link rel="prev" href="read-out.html" title="Reading the multi-size image"><link rel="next" href="bias.html" title="Adding a bias"></head><body bgcolor="white" text="black" link="#0000FF" vlink="#840084" alink="#0000FF"><div class="navheader"><table width="100%" summary="Navigation header"><tr><th colspan="3" align="center">Automatic feature detection</th></tr><tr><td width="20%" align="left"><a accesskey="p" href="read-out.html">Prev</a> </td><th width="60%" align="center">Chapter 2. LqR library API user manual</th><td width="20%" align="right"> <a accesskey="n" href="bias.html">Next</a></td></tr></table><hr></div><div class="sect1"><div class="titlepage"><div><div><h2 class="title" style="clear: both"><a name="energy"></a>Automatic feature detection</h2></div></div></div><div class="toc"><dl class="toc"><dt><span class="sect2"><a href="energy.html#energy-foreword">Foreword</a></span></dt><dt><span class="sect2"><a href="energy.html#energy-builtin">Builtin energy functions</a></span></dt><dt><span class="sect2"><a href="energy.html#energy-custom">Custom energy functions</a></span></dt><dt><span class="sect2"><a href="energy.html#energy-readout">Reading out the energy</a></span></dt></dl></div><div class="sect2"><div class="titlepage"><div><div><h3 class="title"><a name="energy-foreword"></a>Foreword</h3></div></div></div><p>
+                    The automatic feature detection relies on the evaluation of the relevance of each pixel; this
+                    quantity is called `energy': the higher the energy of a pixel, the less likely it will be that such
+                    pixel will be directly involved in the rescaling. The energy function which the library uses can be
+                    customised; normally, edge detector filters are the best choices for this purpose.
+                </p><p>
+                    There is a unified framework in the Liquid Rescale library for energy fucntions: briefly, each energy function used
+                    by the library receives the current position and image size as parameters, and is provided access to
+                    a square of values from the image, centered around the current position. This access is provided
+                    through an object which is called a "reading window", and the image pixels are not read directly,
+                    but rather they are accessed according to a "reader type", which means that the energy function can
+                    get e.g. the brightness of a pixel without needing to care for the underlying image representation,
+                    i.e. the image type or the colour depth.
+                </p><p>
+                    The library provides a small set of very simple (yet normally effective) gradient-based energy
+                    functions, and a customisation framework for defining more functions.
+                </p></div><div class="sect2"><div class="titlepage"><div><div><h3 class="title"><a name="energy-builtin"></a>Builtin energy functions</h3></div></div></div><p>
+                    The library has some builtin functions for energy evaluation; in order to set one of the builtin
+                    functions in a <code class="classname">LqrCarver</code> object this function is used:
+                    </p><div class="funcsynopsis"><table border="0" class="funcprototype-table" summary="Function synopsis" style="cellspacing: 0; cellpadding: 0;"><tr><td><code class="funcdef">LqrRetVal <b class="fsfunc">lqr_carver_set_energy_function_builtin</b>(</code></td><td>LqrCarver* <var class="pdparam">carver</var>, </td></tr><tr><td> </td><td>LqrEnergyFunctionBuiltinType <var class="pdparam">ef_ind</var><code>)</code>;</td></tr></table><div class="funcprototype-spacer"> </div></div><p>
+                </p><p>
+                    The currently available builtin functions which can be used as <em class="parameter"><code>ef_ind</code></em> are:
+                    </p><div class="variablelist"><dl class="variablelist"><dt><span class="term"><code class="literal">LQR_EF_GRAD_XABS</code></span></dt><dd><p>
+                                    absolute value of the brightness gradient in the direction
+                                    of the rescaling (this is the default)
+                                </p></dd><dt><span class="term"><code class="literal">LQR_EF_GRAD_SUMABS</code></span></dt><dd><p>
+                                    sum of absolute values of the brightness gradients in both directions
+                                </p></dd><dt><span class="term"><code class="literal">LQR_EF_GRAD_NORM</code></span></dt><dd><p>
+                                    norm of the brightness gradient
+                                </p></dd><dt><span class="term"><code class="literal">LQR_EF_LUMA_GRAD_XABS</code></span></dt><dd><p>
+                                    absolute value of the luma gradient in the direction
+                                    of the rescaling
+                                </p></dd><dt><span class="term"><code class="literal">LQR_EF_LUMA_GRAD_SUMABS</code></span></dt><dd><p>
+                                    sum of absolute values of the luma gradients in both directions
+                                </p></dd><dt><span class="term"><code class="literal">LQR_EF_LUMA_GRAD_NORM</code></span></dt><dd><p>
+                                    norm of the luma gradient
+                                </p></dd><dt><span class="term"><code class="literal">LQR_EF_NULL</code></span></dt><dd><p>
+                                    null
+                                </p></dd></dl></div><p>
+                </p><p>
+                    All of the above gradient functions have a radius of 1 pixel.
+                </p></div><div class="sect2"><div class="titlepage"><div><div><h3 class="title"><a name="energy-custom"></a>Custom energy functions</h3></div></div></div><p>
+                    Custom energy functions for a <code class="classname">LqrCarver</code> object are set using this function:
+                    </p><div class="funcsynopsis"><table border="0" class="funcprototype-table" summary="Function synopsis" style="cellspacing: 0; cellpadding: 0;"><tr><td><code class="funcdef">LqrRetVal <b class="fsfunc">lqr_carver_set_energy_function</b>(</code></td><td>LqrCarver* <var class="pdparam">carver</var>, </td></tr><tr><td> </td><td>LqrEnergyFunc <var class="pdparam">ef_func</var>, </td></tr><tr><td> </td><td>gint <var class="pdparam">radius</var>, </td></tr><tr><td> </td><td>LqrEnergyReaderType <var class="pdparam">reader_type</var>, </td></tr><tr><td> </td><td>gpointer <var class="pdparam">extra_data</var><code>)</code>;</td></tr></table><div class="funcprototype-spacer"> </div></div><p>
+                    Here, <em class="parameter"><code>ef_func</code></em> is the function (the prototype will be explained below),
+                    <em class="parameter"><code>radius</code></em> is used to set the size of the square region around each pixel which
+                    is used to evaluate the energy for that pixel, <em class="parameter"><code>reader_type</code></em> is used to set
+                    which quantity is used for the energy computation (e.g. brightness, luma etc.) and
+                    <em class="parameter"><code>extra_data</code></em> is a (void) pointer which can be used to pass additional
+                    parameters to the energy function.
+                </p><p>
+                    The <span class="type"><code class="literal">LqrEnergyReaderType</code></span> is an enum which can take these values (also
+                    noted is the number of channels of the corresponging output):
+                    </p><div class="variablelist"><dl class="variablelist"><dt><span class="term"><code class="literal">LQR_ER_BRIGHTNESS</code></span></dt><dd><p>
+                                    brightness (1 channel)
+                                </p></dd><dt><span class="term"><code class="literal">LQR_ER_LUMA</code></span></dt><dd><p>
+                                    luma (1 channel)
+                                </p></dd><dt><span class="term"><code class="literal">LQR_ER_RGBA</code></span></dt><dd><p>
+                                    RGBA (4 channels)
+                                </p></dd><dt><span class="term"><code class="literal">LQR_ER_CUSTOM</code></span></dt><dd><p>
+                                    read the normalised image channels as they are (as many channels as the image has)
+                                </p></dd></dl></div><p>
+                    These readouts always return values beetween <code class="literal">0</code> and <code class="literal">1</code>.
+                </p><div class="note" style="margin-left: 0.5in; margin-right: 0.5in;"><h3 class="title">Note</h3><p>
+                        Note that these readouts may have special meanings depending on the image type:
+                        </p><div class="itemizedlist"><ul class="itemizedlist" style="list-style-type: disc; "><li class="listitem"><p>
+                                    for <code class="literal">LQR_GREY_IMAGE</code>, <code class="literal">LQR_GREYA_IMAGE</code> and
+                                    <code class="literal">LQR_CUSTOM_IMAGE</code> images, the <code class="literal">LQR_ER_LUMA</code>
+                                    readout will yield the same result as <code class="literal">LQR_ER_BRIGHTNESS</code>
+                                </p></li><li class="listitem"><p>
+                                    for <code class="literal">LQR_CUSTOM_IMAGE</code> images, the <code class="literal">LQR_ER_BRIGHTNESS</code>
+                                    readout will return the average pixel value (additive, i.e. if a black channel is
+                                    present the channel values will be inverted and multiplied by the black channel
+                                    inverse), multiplied by the alpha channel value.
+                                </p></li><li class="listitem"><p>
+                                    for <code class="literal">LQR_CUSTOM_IMAGE</code> images, the <code class="literal">LQR_ER_RGBA</code>
+                                    readout <span class="emphasis"><em>cannot be used</em></span>: it will always return
+                                    <code class="literal">0</code>
+                                </p></li></ul></div><p>
+                    </p></div><p>
+                    The custom energy function must be declared like in the following sample declaration:
+                    </p><div class="example"><a name="ex-custom-en-decl"></a><p class="title"><b>Example 2.5. Custom energy declaration</b></p><div class="example-contents"><pre class="programlisting">
+gfloat my_energy (gint x, gint y, gint width, gint height, LqrReadingWindow *rwindow, gpointer extra_data);
+                        </pre></div></div><p><br class="example-break">
+                    This function should return the energy at pixel <em class="parameter"><code>x</code></em>, <em class="parameter"><code>y</code></em>,
+                    based on the knowledge of the current image size (obtained from <em class="parameter"><code>width</code></em> and
+                    <em class="parameter"><code>height</code></em>) and the content of the image in a square around that pixel, which is
+                    passed through the <em class="parameter"><code>rwindow</code></em> reading window: in order to access this content,
+                    this function must be used:
+                    </p><div class="funcsynopsis"><table border="0" class="funcprototype-table" summary="Function synopsis" style="cellspacing: 0; cellpadding: 0;"><tr><td><code class="funcdef">gdouble <b class="fsfunc">lqr_rwindow_read</b>(</code></td><td>LqrReadingWindow * <var class="pdparam">rwindow</var>, </td></tr><tr><td> </td><td>gint <var class="pdparam">x</var>, </td></tr><tr><td> </td><td>gint <var class="pdparam">y</var>, </td></tr><tr><td> </td><td>channel <var class="pdparam">channel</var><code>)</code>;</td></tr></table><div class="funcprototype-spacer"> </div></div><p>
+                    When reading out the content from a window, the <em class="parameter"><code>x</code></em> and
+                    <em class="parameter"><code>y</code></em> parameters are relative to the window centre (which instead is given by the
+                    <em class="parameter"><code>x</code></em>, <em class="parameter"><code>y</code></em> parameters passed to the custom energy function),
+                    and they both range between <code class="literal"><span class="symbol">-radius</span></code> and
+                    <code class="literal"><span class="symbol">radius</span></code> included (<em class="parameter"><code>radius</code></em> being the same
+                    one which is used in <code class="function">lqr_carver_set_energy_function</code>). The parameter
+                    <em class="parameter"><code>channel</code></em> specifies which channel to read out; depending on the
+                    <em class="parameter"><code>read_type</code></em> passed to <code class="function">lqr_carver_set_energy_function</code> the
+                    range and meaning of this parameter will change: for the cases <code class="literal">LQR_ER_BRIGHTNESS</code> and
+                    <code class="literal">LQR_ER_LUMA</code> it must be <code class="literal">0</code>, because the readout consists of a
+                    single channel, for <code class="literal">LQR_ER_RGBA</code> it must be between <code class="literal">0</code> and
+                    <code class="literal">3</code> (and then the readout will contain the RGBA information), while for
+                    <code class="literal">LQR_ER_CUSTOM</code> it must be one of the original image channels.
+                </p><p>
+                    The <em class="parameter"><code>rwindow</code></em> parameters can be read out from within a custom defined energy
+                    function using these functions:
+                    </p><div class="funcsynopsis"><table border="0" class="funcprototype-table" summary="Function synopsis" style="cellspacing: 0; cellpadding: 0;"><tr><td><code class="funcdef">LqrEnergyReaderType <b class="fsfunc">lqr_rwindow_get_read_t</b>(</code></td><td>LqrReadingWindow * <var class="pdparam">rwindow</var><code>)</code>;</td></tr></table><div class="funcprototype-spacer"> </div><table border="0" class="funcprototype-table" summary="Function synopsis" style="cellspacing: 0; cellpadding: 0;"><tr><td><code class="funcdef">gint <b class="fsfunc">lqr_rwindow_get_radius</b>(</code></td><td>LqrReadingWindow * <var class="pdparam">rwindow</var><code>)</code>;</td></tr></table><div class="funcprototype-spacer"> </div><table border="0" class="funcprototype-table" summary="Function synopsis" style="cellspacing: 0; cellpadding: 0;"><tr><td><code class="funcdef">gint <b class="fsfunc">lqr_rwindow_get_channels</b>(</code></td><td>LqrReadingWindow * <var class="pdparam">rwindow</var><code>)</code>;</td></tr></table><div class="funcprototype-spacer"> </div></div><p>
+                </p><p>
+                    Following is an example of how a simple Sobel fliter can be defined and used within this framework:
+                    </p><div class="example"><a name="ex-custom-en-def"></a><p class="title"><b>Example 2.6. Custom energy definition and setup</b></p><div class="example-contents"><pre class="programlisting">
+/* definition */
+
+gfloat sobel(gint x, gint y, gint width, gint height, LqrReadingWindow *rw, gpointer extra_data)
+{
+    gint i, j;
+    gdouble ex = 0;
+    gdouble ey = 0;
+    gdouble k[3][3] = {{0.125, 0.25, 0.125}, {0, 0, 0}, {-0.125, -0.25, -0.125}};
+
+    for (i = -1; i &lt;=1; i++) {
+        for (j = -1; j &lt;=1; j++) {
+            ex += k[i + 1][j + 1] * lqr_rwindow_read(rw, i, j, 0);
+            ey += k[j + 1][i + 1] * lqr_rwindow_read(rw, i, j, 0);
+        }
+    }
+    return (gfloat) sqrt(ex * ex + ey * ey);
+}
+
+/* usage */
+
+lqr_carver_set_energy_function (carver, sobel, 1, LQR_ER_BRIGHTNESS, NULL);
+                        </pre></div></div><p><br class="example-break">
+                </p><p>
+                    In the above <code class="function">sobel</code> function it is assumed that the radius is 1 and that the
+                    readout will consist of a single channel. Furthermore, no boundary checking is performed, and
+                    therefore the parameters <em class="parameter"><code>x</code></em>, <em class="parameter"><code>y</code></em>, <em class="parameter"><code>width</code></em> and <em class="parameter"><code>height</code></em> are not used. Also, no extra
+                    parameters are passed to the function.
+                </p><div class="note" style="margin-left: 0.5in; margin-right: 0.5in;"><h3 class="title">Note</h3><p>
+                        The function <code class="function">lqr_rwindow_read</code> returns <code class="literal">0</code> when the
+                        requested value is out of the image boundary or beyond the reading window radius.
+                    </p></div><div class="note" style="margin-left: 0.5in; margin-right: 0.5in;"><h3 class="title">Note</h3><p>
+                        The energy functions are called over the transposed image in case of vertical scaling,
+                        therefore, if they are asymmetrical, the result will be different depending on the scaling
+                        orientation (this is the case for example for the <code class="literal">LQR_EF_GRAD_XABS</code> builtin
+                        function).
+                    </p></div><div class="note" style="margin-left: 0.5in; margin-right: 0.5in;"><h3 class="title">Note</h3><p>
+                        The energy function output should be normalised in order to be comparable with the builtin
+                        functions, otherwise the scale of the bias would be different depending on the energy function
+                        used. This is the reason why in the Sobel filter written above the kernel
+                        <em class="parameter"><code>k</code></em> is scaled so that the sum of the absolute values of the matrix is equal
+                        to <code class="literal">1</code>.
+                    </p></div><div class="note" style="margin-left: 0.5in; margin-right: 0.5in;"><h3 class="title">Note</h3><p>
+                        In actual code, the call to <code class="function">lqr_carver_set_energy_function</code> should be
+                        protected to test its return value.
+                    </p></div></div><div class="sect2"><div class="titlepage"><div><div><h3 class="title"><a name="energy-readout"></a>Reading out the energy</h3></div></div></div><p>
+                    The energy can be read out with three similar functions, all of which fill a buffer provided by
+                    the user, but in different ways: two of them are suitable for plotting, while the third one can be
+                    used to retreive the true values of the energy, as used internally.
+                </p><p>
+                    The first function can be used to get a buffer of normalised values, and it has a simple syntax:
+                    </p><div class="funcsynopsis"><table border="0" class="funcprototype-table" summary="Function synopsis" style="cellspacing: 0; cellpadding: 0;"><tr><td><code class="funcdef">LqrRetVal <b class="fsfunc">lqr_carver_get_energy</b>(</code></td><td>LqrCarver * <var class="pdparam">carver</var>, </td></tr><tr><td> </td><td>gfloat * <var class="pdparam">buffer</var>, </td></tr><tr><td> </td><td>gint <var class="pdparam">orientation</var><code>)</code>;</td></tr></table><div class="funcprototype-spacer"> </div></div><p>
+                    This function writes the the energy values at the time of calling to the given
+                    <em class="parameter"><code>buffer</code></em>, ordered by row and then by column. All values range between
+                    <code class="literal">0</code> and <code class="literal">1</code>. The buffer must be allocated by the user before
+                    calling it.
+                </p><p>
+                    The <em class="parameter"><code>orientation</code></em> parameter determines which orientation will be used when
+                    computing the energy: <code class="literal">0</code> means horizontal, <code class="literal">1</code> means vertical.
+                </p><p>
+                    The <em class="parameter"><code>carver</code></em> need not be initialised; if a bias was added to it (see the
+                    <a class="link" href="bias.html" title="Adding a bias">Adding a bias</a> section), its effect is included in the output.
+                </p><p>
+                    The above function does not return the true energy which is used internally, because that would not
+                    be suitable for plotting, since the energy range is arbitrary (only the energy differences are
+                    meaningful, and there is no upper nor lower bound to the values). In order to get the true energy
+                    values used internally, this function must be used instead (with the same syntax):
+                    </p><div class="funcsynopsis"><table border="0" class="funcprototype-table" summary="Function synopsis" style="cellspacing: 0; cellpadding: 0;"><tr><td><code class="funcdef">LqrRetVal <b class="fsfunc">lqr_carver_get_true_energy</b>(</code></td><td>LqrCarver * <var class="pdparam">carver</var>, </td></tr><tr><td> </td><td>gfloat * <var class="pdparam">buffer</var>, </td></tr><tr><td> </td><td>gint <var class="pdparam">orientation</var><code>)</code>;</td></tr></table><div class="funcprototype-spacer"> </div></div><p>
+                </p><p>
+                    The third function can be used to fill directly an image buffer:
+                    </p><div class="funcsynopsis"><table border="0" class="funcprototype-table" summary="Function synopsis" style="cellspacing: 0; cellpadding: 0;"><tr><td><code class="funcdef">LqrRetVal <b class="fsfunc">lqr_carver_get_energy_image</b>(</code></td><td>LqrCarver * <var class="pdparam">carver</var>, </td></tr><tr><td> </td><td>void * <var class="pdparam">buffer</var>, </td></tr><tr><td> </td><td>gint <var class="pdparam">orientation</var>, </td></tr><tr><td> </td><td>LqrColDepth <var class="pdparam">col_depth</var>, </td></tr><tr><td> </td><td>LqrImageType <var class="pdparam">image_type</var><code>)</code>;</td></tr></table><div class="funcprototype-spacer"> </div></div><p>
+                    In this case, the buffer must be passed as <span class="type">void*</span>, while the
+                    <em class="parameter"><code>col_depth</code></em> and <em class="parameter"><code>image_type</code></em> are used to specify the
+                    colour depth and the image type, in the same way as is done when creating an <code class="classname">LqrCarver</code> object (see
+                    <a class="link" href="generate-multi-size.html#carver-new" title="Carver object creation">Carver objcet creation</a> and the
+                    <a class="link" href="generate-multi-size.html#image-type" title="Choosing the image type">Choosing the image type</a> sections). The only restriction is that it
+                    is not possible to ask for <code class="literal">LQR_CUSTOM_IMAGE</code> image types.
+                </p><p>
+                    For any choice of the parameters, the <em class="parameter"><code>buffer</code></em> will hold a greyscale image,
+                    ranging from black (lowest energy) to white (highest energy). The opacity (alpha) will be set to
+                    <code class="literal">1</code>, if present. All the information will be stored in the black channel in
+                    <code class="literal">LQR_CMYK_IMAGE</code> and <code class="literal">LQR_CMYKA_IMAGE</code> image types.
+                </p><div class="note" style="margin-left: 0.5in; margin-right: 0.5in;"><h3 class="title">Note</h3><p>
+                        Calling the function <code class="function">lqr_carver_get_energy_image</code> with <code class="literal">LQR_COLDEPTH_32F</code> and
+                        <code class="literal">LQR_GREY_IMAGE</code> arguments will yield the same result as calling the function
+                        <code class="function">lqr_carver_get_energy</code>, but the latter is slightly more efficient.
+                    </p></div></div></div><div class="navfooter"><hr><table width="100%" summary="Navigation footer"><tr><td width="40%" align="left"><a accesskey="p" href="read-out.html">Prev</a> </td><td width="20%" align="center"><a accesskey="u" href="api-manual.html">Up</a></td><td width="40%" align="right"> <a accesskey="n" href="bias.html">Next</a></td></tr><tr><td width="40%" align="left" valign="top">Reading the multi-size image </td><td width="20%" align="center"><a accesskey="h" href="index.html">Home</a></td><td width="40%" align="right" valign="top"> Adding a bias</td></tr></table></div></body></html>

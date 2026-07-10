@@ -437,9 +437,20 @@ static void thread_wait_clear(void);
 // cross-thread futex wake) is visible. thread.c is included before io.c, so it has its own logger.
 static int g_flog = -1;
 
+static int futexlog_role_match(void) {
+    const char *want = getenv("DDWAKE_ROLE");
+    if (!want || !want[0]) return 1;
+    const char *got = getenv("DD_CHROME_TYPE");
+    return got && strcmp(got, want) == 0;
+}
+
 static void futexlog(const char *ev, const void *uaddr, int op, int val, long extra) {
-    if (g_flog < 0) g_flog = getenv("DDWAKELOG") != NULL ? 1 : 0;
-    if (!g_flog) return;
+    if (g_flog < 0) {
+        int saved = errno; // access() sets errno when the sentinel is absent -- MUST be errno-transparent
+        g_flog = (getenv("DDWAKELOG") != NULL || access("/tmp/ddwakelog", F_OK) == 0) ? 1 : 0; // (this runs
+        errno = saved; // in the futex hot path; a leaked ENOENT would corrupt a syscall's reported errno).
+    }
+    if (!g_flog || !futexlog_role_match()) return;
     struct timespec _t;
     clock_gettime(CLOCK_MONOTONIC, &_t);
     __uint64_t tid = 0;

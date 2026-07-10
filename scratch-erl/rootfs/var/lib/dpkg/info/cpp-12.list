@@ -1,0 +1,16 @@
+/.
+/usr
+/usr/bin
+/usr/bin/aarch64-linux-gnu-cpp-12
+/usr/lib
+/usr/lib/gcc
+/usr/lib/gcc/aarch64-linux-gnu
+/usr/lib/gcc/aarch64-linux-gnu/12
+/usr/lib/gcc/aarch64-linux-gnu/12/cc1
+/usr/share
+/usr/share/doc
+/usr/share/lintian
+/usr/share/lintian/overrides
+/usr/share/lintian/overrides/cpp-12
+/usr/bin/cpp-12
+/usr/share/doc/cpp-12

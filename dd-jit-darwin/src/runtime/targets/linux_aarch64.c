@@ -101,6 +101,20 @@ static void diag_hx(char *b, uint64_t v) {
     }
 }
 
+static void diag_hx8(char *b, uint32_t v);
+
+static int diag_reg(char *b, int bp, int r, uint64_t v) {
+    b[bp++] = ' ';
+    b[bp++] = 'x';
+    if (r >= 10) b[bp++] = (char)('0' + r / 10);
+    b[bp++] = (char)('0' + r % 10);
+    b[bp++] = '=';
+    b[bp++] = '0';
+    b[bp++] = 'x';
+    diag_hx(b + bp, v);
+    return bp + 16;
+}
+
 // async-signal-safe (write only)
 static void diag_crash(int s, siginfo_t *si, void *uc) {
     // mirror the normal-path nonpie_guard so CRASHDBG does not false-report faults that path
@@ -112,18 +126,110 @@ static void diag_crash(int s, siginfo_t *si, void *uc) {
     if (nonpie_fixup(si, uc)) return;
     if (deliver_guest_fault(s, si, uc)) return;
     struct cpu *c = (struct cpu *)pthread_getspecific(g_cpu_key);
-    char b[96];
-    for (int i = 0; i < 96; i++)
+    ucontext_t *u = (ucontext_t *)uc;
+    uint64_t hpc = u ? (uint64_t)u->uc_mcontext->__ss.__pc : 0;
+    uint64_t hx0 = u ? (uint64_t)u->uc_mcontext->__ss.__x[0] : 0;
+    uint64_t hx1 = u ? (uint64_t)u->uc_mcontext->__ss.__x[1] : 0;
+    uint64_t hx9 = u ? (uint64_t)u->uc_mcontext->__ss.__x[9] : 0;
+    uint64_t hx10 = u ? (uint64_t)u->uc_mcontext->__ss.__x[10] : 0;
+    uint64_t hx16 = u ? (uint64_t)u->uc_mcontext->__ss.__x[16] : 0;
+    uint64_t hx17 = u ? (uint64_t)u->uc_mcontext->__ss.__x[17] : 0;
+    uint64_t hx30 = u ? (uint64_t)u->uc_mcontext->__ss.__x[30] : 0;
+    char b[1600];
+    for (int i = 0; i < 1600; i++)
         b[i] = ' ';
     memcpy(b, "[CRASH] sig=X fault=0x", 22);
     b[11] = '0' + (s % 10);
     diag_hx(b + 22, (uint64_t)si->si_addr);
     memcpy(b + 38, " pc=0x", 6);
     diag_hx(b + 44, c ? c->pc : 0);
-    memcpy(b + 60, " tid=0x", 7);
-    diag_hx(b + 67, (uint64_t)(c ? c->ctid : 0));
-    b[83] = '\n';
-    if (write(2, b, 84) < 0) {}
+    memcpy(b + 60, " hpc=0x", 7);
+    diag_hx(b + 67, hpc);
+    memcpy(b + 83, " tid=0x", 7);
+    diag_hx(b + 90, (uint64_t)(c ? c->ctid : 0));
+    int bp = 106;
+    memcpy(b + bp, " x16=0x", 7);
+    bp += 7;
+    diag_hx(b + bp, hx16);
+    bp += 16;
+    memcpy(b + bp, " x17=0x", 7);
+    bp += 7;
+    diag_hx(b + bp, hx17);
+    bp += 16;
+    memcpy(b + bp, " x30=0x", 7);
+    bp += 7;
+    diag_hx(b + bp, hx30);
+    bp += 16;
+    memcpy(b + bp, " x0=0x", 6);
+    bp += 6;
+    diag_hx(b + bp, hx0);
+    bp += 16;
+    memcpy(b + bp, " x1=0x", 6);
+    bp += 6;
+    diag_hx(b + bp, hx1);
+    bp += 16;
+    memcpy(b + bp, " x9=0x", 6);
+    bp += 6;
+    diag_hx(b + bp, hx9);
+    bp += 16;
+    memcpy(b + bp, " x10=0x", 7);
+    bp += 7;
+    diag_hx(b + bp, hx10);
+    bp += 16;
+    if (u) {
+        for (int r = 2; r <= 8; r++) bp = diag_reg(b, bp, r, (uint64_t)u->uc_mcontext->__ss.__x[r]);
+        for (int r = 11; r <= 15; r++) bp = diag_reg(b, bp, r, (uint64_t)u->uc_mcontext->__ss.__x[r]);
+        for (int r = 18; r <= 27; r++) bp = diag_reg(b, bp, r, (uint64_t)u->uc_mcontext->__ss.__x[r]);
+    }
+    extern int jit_pc_in_retained_cache(uint64_t pc);
+    memcpy(b + bp, " jit=0x", 7);
+    bp += 7;
+    diag_hx8(b + bp, jit_pc_in_retained_cache(hpc) ? 1 : 0);
+    bp += 8;
+    extern int jit_hostpc_alias_kind(uint64_t hpc);
+    memcpy(b + bp, " alias=0x", 9);
+    bp += 9;
+    diag_hx8(b + bp, jit_hostpc_alias_kind(hpc));
+    bp += 8;
+    extern void jit_cache_diag(uint64_t *gen, uint64_t *flushes, uint32_t *retired, uint32_t *freed);
+    uint64_t cgen = 0, stwf = 0;
+    uint32_t nret = 0, nfree = 0;
+    jit_cache_diag(&cgen, &stwf, &nret, &nfree);
+    memcpy(b + bp, " cgen=0x", 8);
+    bp += 8;
+    diag_hx(b + bp, cgen);
+    bp += 16;
+    memcpy(b + bp, " stwf=0x", 8);
+    bp += 8;
+    diag_hx(b + bp, stwf);
+    bp += 16;
+    memcpy(b + bp, " ret=0x", 7);
+    bp += 7;
+    diag_hx8(b + bp, nret);
+    bp += 8;
+    memcpy(b + bp, " freed=0x", 9);
+    bp += 9;
+    diag_hx8(b + bp, nfree);
+    bp += 8;
+    extern int jit_hostpc_lookup(uint64_t hpc, uint64_t *gpc, uint64_t *off, uint32_t *insn);
+    uint64_t hgpc = 0, hoff = 0;
+    uint32_t hinsn = 0;
+    if (jit_hostpc_lookup(hpc, &hgpc, &hoff, &hinsn)) {
+        memcpy(b + bp, " hblk=0x", 8);
+        bp += 8;
+        diag_hx(b + bp, hgpc);
+        bp += 16;
+        memcpy(b + bp, " hoff=0x", 8);
+        bp += 8;
+        diag_hx(b + bp, hoff);
+        bp += 16;
+        memcpy(b + bp, " hinsn=0x", 9);
+        bp += 9;
+        diag_hx8(b + bp, hinsn);
+        bp += 8;
+    }
+    b[bp] = '\n';
+    if (write(2, b, bp + 1) < 0) {}
     _exit(139);
 }
 
@@ -190,7 +296,9 @@ static int mach_resolve_fault(mach_port_t thread, int hostsig, uint64_t fault, a
     // code cache -- the only case deliver_guest_fault_hint dereferences it (it validates the host PC first).
     // Without this the exc_thread found no cpu and declined EVERY guest-handled fault -> a spurious [MACH].
     struct cpu *fcpu = (struct cpu *)ss->__x[28];
-    if (!nonpie_fixup(&si, &uc) && !deliver_guest_fault_hint(fcpu, hostsig, &si, &uc)) return 0;
+    if (!nonpie_fixup(&si, &uc) && !mach_async_fault_signal(fcpu, hostsig, &si) &&
+        !deliver_guest_fault_hint(fcpu, hostsig, &si, &uc))
+        return 0;
     thread_set_state(thread, ARM_THREAD_STATE64, (thread_state_t)&mc.__ss, ARM_THREAD_STATE64_COUNT);
     thread_set_state(thread, ARM_NEON_STATE64, (thread_state_t)&mc.__ns, ARM_NEON_STATE64_COUNT);
     return 1;
@@ -227,8 +335,8 @@ static void *exc_thread(void *arg) {
                      MACH_PORT_NULL);
             continue;
         }
-        char b[200];
-        for (int i = 0; i < 200; i++)
+        char b[1600];
+        for (int i = 0; i < 1600; i++)
             b[i] = ' ';
         memcpy(b, "[MACH] exc=0x", 13);
         diag_hx8(b + 13, msg.exception);
@@ -255,14 +363,121 @@ static void *exc_thread(void *arg) {
             b[130 + sl] = sn[sl];
             sl++;
         }
+        mach_vm_address_t raddr = st.__pc;
+        mach_vm_size_t rsz = 0;
+        vm_region_basic_info_data_64_t rinfo;
+        mach_msg_type_number_t ricnt = VM_REGION_BASIC_INFO_COUNT_64;
+        mach_port_t robj = MACH_PORT_NULL;
+        kern_return_t rkr =
+            mach_vm_region(mach_task_self(), &raddr, &rsz, VM_REGION_BASIC_INFO_64, (vm_region_info_t)&rinfo, &ricnt, &robj);
         // Append the GUEST pc (x28 is the reserved CPUREG -> struct cpu*), so a guest `brk`/fault maps to a
         // guest instruction, not just the host JIT pc. Guarded: x28 may not be a cpu ptr outside the cache.
         int bp = 130 + sl;
+        memcpy(b + bp, " rkr=0x", 7);
+        bp += 7;
+        diag_hx8(b + bp, rkr);
+        bp += 8;
+        if (rkr == KERN_SUCCESS) {
+            memcpy(b + bp, " rbase=0x", 9);
+            bp += 9;
+            diag_hx(b + bp, raddr);
+            bp += 16;
+            memcpy(b + bp, " rsz=0x", 7);
+            bp += 7;
+            diag_hx(b + bp, rsz);
+            bp += 16;
+            memcpy(b + bp, " prot=0x", 8);
+            bp += 8;
+            diag_hx8(b + bp, (uint32_t)rinfo.protection);
+            bp += 8;
+            memcpy(b + bp, " rmap=0x", 8);
+            bp += 8;
+            diag_hx8(b + bp, (st.__pc >= raddr && st.__pc < raddr + rsz) ? 1 : 0);
+            bp += 8;
+        }
         memcpy(b + bp, " gpc=0x", 7);
         bp += 7;
         struct cpu *bcpu = (struct cpu *)st.__x[28];
         diag_hx(b + bp, bcpu ? bcpu->pc : 0);
         bp += 16;
+        memcpy(b + bp, " x16=0x", 7);
+        bp += 7;
+        diag_hx(b + bp, st.__x[16]);
+        bp += 16;
+        memcpy(b + bp, " x17=0x", 7);
+        bp += 7;
+        diag_hx(b + bp, st.__x[17]);
+        bp += 16;
+        memcpy(b + bp, " x30=0x", 7);
+        bp += 7;
+        diag_hx(b + bp, st.__lr);
+        bp += 16;
+        memcpy(b + bp, " x0=0x", 6);
+        bp += 6;
+        diag_hx(b + bp, st.__x[0]);
+        bp += 16;
+        memcpy(b + bp, " x1=0x", 6);
+        bp += 6;
+        diag_hx(b + bp, st.__x[1]);
+        bp += 16;
+        memcpy(b + bp, " x9=0x", 6);
+        bp += 6;
+        diag_hx(b + bp, st.__x[9]);
+        bp += 16;
+        memcpy(b + bp, " x10=0x", 7);
+        bp += 7;
+        diag_hx(b + bp, st.__x[10]);
+        bp += 16;
+        for (int r = 2; r <= 8; r++) bp = diag_reg(b, bp, r, st.__x[r]);
+        for (int r = 11; r <= 15; r++) bp = diag_reg(b, bp, r, st.__x[r]);
+        for (int r = 18; r <= 27; r++) bp = diag_reg(b, bp, r, st.__x[r]);
+        extern int jit_pc_in_retained_cache(uint64_t pc);
+        memcpy(b + bp, " jit=0x", 7);
+        bp += 7;
+        diag_hx8(b + bp, jit_pc_in_retained_cache(st.__pc) ? 1 : 0);
+        bp += 8;
+        extern int jit_hostpc_alias_kind(uint64_t hpc);
+        memcpy(b + bp, " alias=0x", 9);
+        bp += 9;
+        diag_hx8(b + bp, jit_hostpc_alias_kind(st.__pc));
+        bp += 8;
+        extern void jit_cache_diag(uint64_t *gen, uint64_t *flushes, uint32_t *retired, uint32_t *freed);
+        uint64_t cgen = 0, stwf = 0;
+        uint32_t nret = 0, nfree = 0;
+        jit_cache_diag(&cgen, &stwf, &nret, &nfree);
+        memcpy(b + bp, " cgen=0x", 8);
+        bp += 8;
+        diag_hx(b + bp, cgen);
+        bp += 16;
+        memcpy(b + bp, " stwf=0x", 8);
+        bp += 8;
+        diag_hx(b + bp, stwf);
+        bp += 16;
+        memcpy(b + bp, " ret=0x", 7);
+        bp += 7;
+        diag_hx8(b + bp, nret);
+        bp += 8;
+        memcpy(b + bp, " freed=0x", 9);
+        bp += 9;
+        diag_hx8(b + bp, nfree);
+        bp += 8;
+        extern int jit_hostpc_lookup(uint64_t hpc, uint64_t *gpc, uint64_t *off, uint32_t *insn);
+        uint64_t hgpc = 0, hoff = 0;
+        uint32_t hinsn = 0;
+        if (jit_hostpc_lookup(st.__pc, &hgpc, &hoff, &hinsn)) {
+            memcpy(b + bp, " hblk=0x", 8);
+            bp += 8;
+            diag_hx(b + bp, hgpc);
+            bp += 16;
+            memcpy(b + bp, " hoff=0x", 8);
+            bp += 8;
+            diag_hx(b + bp, hoff);
+            bp += 16;
+            memcpy(b + bp, " hinsn=0x", 9);
+            bp += 9;
+            diag_hx8(b + bp, hinsn);
+            bp += 8;
+        }
         b[bp] = '\n';
         if (write(2, b, bp + 1) < 0) {}
         _exit(139);
@@ -518,6 +733,7 @@ static int engine_global_init(void) {
     g_dbg_nochain = getenv("DDDBG_NOCHAIN") != NULL; // debug-only: force every block through the dispatcher
     g_dbg_gprdump = getenv("DDDBG_GPRDUMP") != NULL; // debug-only: dump all GPRs per block (register differential)
     g_prof = getenv("PROF") != NULL;
+    g_no_stw_reclaim = getenv("NOSTWRECLAIM") != NULL;
     g_ibprof = getenv("IBPROF") != NULL;          // ARM-B1 feasibility: indirect-branch traffic + stability log
     g_vdbetrace = getenv("VDBETRACE") != NULL;    // ARM-B1 prototype: VDBE dispatch threading PoC
     g_vt_hitcount = getenv("VTHITCOUNT") != NULL; // ARM-B1: inline SDC guard-hit counter (diagnostic)
@@ -776,6 +992,7 @@ int ddjit_entry(int argc, char **argv) {
     // typed-config launch (the daemon's default path): `--configfd <fd>` streams a serialized ddjit_config
     // over the inherited fd instead of the DD_* env/flag dialect. Dispatched before all other flags.
     if (argc > 2 && strcmp(argv[1], "--configfd") == 0) return ddjit_run_configfd(atoi(argv[2]));
+    if (argc > 2 && strcmp(argv[1], "--configfile") == 0) return ddjit_run_configfile(argv[2]);
     // fork-server dispatch (gated; standalone path untouched when neither flag is present):
     //   --server SOCK [--rootfs DIR] [--prewarm PROG] : run resident ddjitd, listen on SOCK
     //   --client SOCK [--rootfs DIR] PROG [args...]   : forward a launch request to a ddjitd

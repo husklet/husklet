@@ -93,8 +93,8 @@ static void block_return(void);
 static int sigframe_capture_fault(struct cpu *c, void *ucv) {
     ucontext_t *uc = (ucontext_t *)ucv;
     uint64_t hpc = (uint64_t)uc->uc_mcontext->__ss.__pc;
-    uint64_t lo = (uint64_t)g_cache + g_rw2rx, hi = lo + CACHE_SZ;
-    if (hpc < lo || hpc >= hi) return 0;     // host PC outside the code cache -> a genuine engine fault
+    extern int jit_pc_in_retained_cache(uint64_t pc);
+    if (!jit_pc_in_retained_cache(hpc)) return 0; // host PC outside all retained code caches -> engine fault
     uint64_t *X = uc->uc_mcontext->__ss.__x; // __x[0..28], then fp=X[29] lr=X[30] sp=X[31]
     for (int r = 0; r <= 30; r++)
         if (!is_stolen(r)) c->x[r] = X[r];

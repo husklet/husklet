@@ -1,0 +1,37 @@
+Debian packages of the form <variant>-server-core-<version> provide
+binaries for MySQL and variant server daemons only. These are intended
+for users who wish to manage database data directories and daemon and
+service configurations themselves.
+
+Debian packages of the form <variant>-server-<version> depend on the
+corresponding <variant>-server-core-<version> packages and add automatic
+management of database data directories and daemon and service
+configuration via maintainer scripts.
+
+It is possible for a <variant>-server-<version> maintainer script to
+detect a local customisation that means that it cannot continue. Each
+known case is documented in a separate file in this directory.
+
+When such a situation arises, the <variant>-server-<version> maintainer
+scripts will enter "frozen mode". We consider this preferable to the
+maintainer script failing with a non-zero return code, which was the
+previous behaviour. The previous behaviour would cause dpkg to fail,
+causing apt to fail, leaving system packaging in a broken state and
+causing a release upgrade to fail for example. This seemed excessive for
+what could be an intended configuration change by the user.
+
+Instead, "frozen mode" stops the <variant>-server-<version> maintainer
+scripts from making changes until the user intervenes. The maintainer
+scripts will not start the daemon, perform database upgrades or make
+similar changes.
+
+When "/etc/mysql/FROZEN" exists (even if it is a broken symlink), then
+frozen mode is defined to be turned on. Usually a maintainer script
+turning frozen mode on will create a symlink at /etc/mysql/FROZEN
+pointing to further documentation on the specific case encountered in
+this directory with an explanation and suggestions for resolution.
+
+To resolve frozen mode, resolve the situation documented by
+/etc/mysql/FROZEN and only then remove the /etc/mysql/FROZEN symlink,
+and run "dpkg-reconfigure <package>" where <package> should usually be
+in the form <variant>-server-<version>.

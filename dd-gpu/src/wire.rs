@@ -88,6 +88,12 @@ impl<'a> Decoder<'a> {
     pub fn remaining(&self) -> usize {
         self.b.len() - self.pos
     }
+    pub fn pos(&self) -> usize {
+        self.pos
+    }
+    pub fn len(&self) -> usize {
+        self.b.len()
+    }
     pub fn is_empty(&self) -> bool {
         self.pos >= self.b.len()
     }
@@ -103,6 +109,9 @@ impl<'a> Decoder<'a> {
         let s = &self.b[self.pos..self.pos + n];
         self.pos += n;
         Ok(s)
+    }
+    pub fn raw_bytes(&mut self, n: usize) -> Result<&'a [u8]> {
+        self.take(n)
     }
     pub fn u8(&mut self) -> Result<u8> {
         Ok(self.take(1)?[0])

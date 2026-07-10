@@ -1,0 +1,10 @@
+prefix=/usr
+exec_prefix=/usr
+libdir=/usr/lib/aarch64-linux-gnu
+includedir=/usr/include
+
+Name: libjpeg
+Description: A SIMD-accelerated JPEG codec that provides the libjpeg API
+Version: 2.1.5
+Libs: -L${libdir} -ljpeg
+Cflags: -I${includedir}

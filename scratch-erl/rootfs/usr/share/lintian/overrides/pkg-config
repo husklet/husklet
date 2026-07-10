@@ -1,0 +1,2 @@
+# some versions of lintian erroneously trip on this
+pkg-config: non-etc-file-marked-as-conffile remove-on-upgrade /etc/dpkg/dpkg.cfg.d/pkg-config-hook-config

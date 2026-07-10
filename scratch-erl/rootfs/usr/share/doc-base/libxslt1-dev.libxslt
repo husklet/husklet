@@ -1,0 +1,13 @@
+Document: libxslt
+Title: GNOME XSLT Library Reference Manual
+Author: Daniel Veillard
+Abstract: This manual documents the interfaces of the libxslt library and
+ has some short notes to help get you up to speed with using the library.
+Section: Programming
+
+Format: HTML
+Index: /usr/share/doc/libxslt1-dev/html/index.html
+Files: /usr/share/doc/libxslt1-dev/html/*.html
+ /usr/share/doc/libxslt1-dev/html/html/*.html
+ /usr/share/doc/libxslt1-dev/html/EXSLT/*.html
+ /usr/share/doc/libxslt1-dev/html/tutorial*/*.html

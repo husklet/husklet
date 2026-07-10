@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<mime-type xmlns="http://www.freedesktop.org/standards/shared-mime-info" type="application/x-openzim">
+  <!--Created automatically by update-mime-database. DO NOT EDIT!-->
+  <comment>OpenZIM file</comment>
+  <acronym>ZIM</acronym>
+  <expanded-acronym>Zeno IMproved</expanded-acronym>
+  <glob pattern="*.zim"/>
+</mime-type>

@@ -1,0 +1,7 @@
+6d986154987dca2aa3474b17fd7c9540  usr/include/X11/Xauth.h
+bf9232f6b1f23c9f8a07aa967b0d5879  usr/lib/aarch64-linux-gnu/libXau.a
+db2188787a6cd76533009ccf3d2c8aa0  usr/lib/aarch64-linux-gnu/pkgconfig/xau.pc
+bda3f8b71d243198ee8355c5cd13d2ee  usr/share/doc/libxau-dev/changelog.Debian.gz
+241a09e109a40c191a1823c92d01cb42  usr/share/doc/libxau-dev/changelog.gz
+68d1360baf180902ffd5a66615982847  usr/share/doc/libxau-dev/copyright
+9a82e4b59cf80d32656a0ad318b6c7d7  usr/share/man/man3/Xau.3.gz

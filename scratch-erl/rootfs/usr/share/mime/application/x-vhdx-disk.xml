@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<mime-type xmlns="http://www.freedesktop.org/standards/shared-mime-info" type="application/x-vhdx-disk">
+  <!--Created automatically by update-mime-database. DO NOT EDIT!-->
+  <comment>VHDX disk image</comment>
+  <acronym>VHDX</acronym>
+  <expanded-acronym>Virtual Hard Disk v2</expanded-acronym>
+  <glob pattern="*.vhdx"/>
+  <alias type="application/x-virtualbox-vhdx"/>
+</mime-type>

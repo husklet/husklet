@@ -1,0 +1,7 @@
+213365f54400d0ce3178fa8bfc2527bf  usr/bin/pkgconf
+a4ff3af702f8285b863bd89ccd79c4c9  usr/share/doc/pkgconf-bin/AUTHORS
+386294363cd4faa619ab71a72f2a619b  usr/share/doc/pkgconf-bin/README.md.gz
+d9d032f009d3e40e7f38f81b4e18e611  usr/share/doc/pkgconf-bin/changelog.Debian.gz
+591b5cb7e62535a23134e06cd50b3a37  usr/share/doc/pkgconf-bin/changelog.gz
+549a3ecb9fbd7dd4cc0b2b90137a9dfd  usr/share/doc/pkgconf-bin/copyright
+672f3855008278ab7d4019acdc384d8b  usr/share/lintian/overrides/pkgconf-bin

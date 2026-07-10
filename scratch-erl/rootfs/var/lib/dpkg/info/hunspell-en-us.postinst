@@ -1,0 +1,14 @@
+#!/bin/sh
+set -e
+# Automatically added by installdeb-hunspell/UNDECLARED
+SCRIPT="update-dictcommon-hunspell"
+
+if [ "$1" = "configure" ] ; then
+    if command -v $SCRIPT >/dev/null; then
+	$SCRIPT  
+    else
+	echo "Error: $SCRIPT not present or executable. Missing dependency on dictionaries-common?" >&2
+	exit 1
+    fi
+fi
+# End automatically added section

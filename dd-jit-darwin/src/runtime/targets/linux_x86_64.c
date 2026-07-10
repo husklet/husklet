@@ -462,6 +462,7 @@ int ddjit_entry(int argc, char **argv) {
     // typed-config launch (the daemon's default path): `--configfd <fd>` streams a serialized ddjit_config
     // over the inherited fd instead of the DD_* env/flag dialect. Dispatched before all other flags.
     if (argc > 2 && strcmp(argv[1], "--configfd") == 0) return ddjit_run_configfd(atoi(argv[2]));
+    if (argc > 2 && strcmp(argv[1], "--configfile") == 0) return ddjit_run_configfile(argv[2]);
     // W3D fork-server dispatch (gated; standalone path untouched when neither flag is present):
     //   --server SOCK [--rootfs DIR] [--prewarm PROG] : run resident ddjitd, listen on SOCK
     //   --client SOCK [--rootfs DIR] PROG [args...]   : forward a launch request to a ddjitd

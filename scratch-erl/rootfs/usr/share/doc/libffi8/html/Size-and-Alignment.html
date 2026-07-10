@@ -1,0 +1,146 @@
+<!DOCTYPE html PUBLIC "-//W3C//DTD HTML 4.01 Transitional//EN" "http://www.w3.org/TR/html4/loose.dtd">
+<html>
+<!-- Created by GNU Texinfo 6.8, https://www.gnu.org/software/texinfo/ -->
+<head>
+<meta http-equiv="Content-Type" content="text/html; charset=utf-8">
+<!-- 
+This manual is for libffi, a portable foreign function interface
+library.
+
+Copyright (C) 2008-2019, 2021, 2022 Anthony Green and Red Hat, Inc.
+
+Permission is hereby granted, free of charge, to any person obtaining
+a copy of this software and associated documentation files (the
+"Software"), to deal in the Software without restriction, including
+without limitation the rights to use, copy, modify, merge, publish,
+distribute, sublicense, and/or sell copies of the Software, and to
+permit persons to whom the Software is furnished to do so, subject to
+the following conditions:
+
+The above copyright notice and this permission notice shall be
+included in all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
+EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.
+IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY
+CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT,
+TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
+SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+ -->
+<title>Size and Alignment (libffi: the portable foreign function interface library)</title>
+
+<meta name="description" content="Size and Alignment (libffi: the portable foreign function interface library)">
+<meta name="keywords" content="Size and Alignment (libffi: the portable foreign function interface library)">
+<meta name="resource-type" content="document">
+<meta name="distribution" content="global">
+<meta name="Generator" content="makeinfo">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+
+<link href="index.html" rel="start" title="Top">
+<link href="Index.html" rel="index" title="Index">
+<link href="Types.html" rel="up" title="Types">
+<link href="Arrays-Unions-Enums.html" rel="next" title="Arrays Unions Enums">
+<link href="Structures.html" rel="prev" title="Structures">
+<style type="text/css">
+<!--
+a.copiable-anchor {visibility: hidden; text-decoration: none; line-height: 0em}
+a.summary-letter {text-decoration: none}
+blockquote.indentedblock {margin-right: 0em}
+div.display {margin-left: 3.2em}
+div.example {margin-left: 3.2em}
+kbd {font-style: oblique}
+pre.display {font-family: inherit}
+pre.format {font-family: inherit}
+pre.menu-comment {font-family: serif}
+pre.menu-preformatted {font-family: serif}
+span.nolinebreak {white-space: nowrap}
+span.roman {font-family: initial; font-weight: normal}
+span.sansserif {font-family: sans-serif; font-weight: normal}
+span:hover a.copiable-anchor {visibility: visible}
+ul.no-bullet {list-style: none}
+-->
+</style>
+
+
+</head>
+
+<body lang="en">
+<div class="subsection" id="Size-and-Alignment">
+<div class="header">
+<p>
+Next: <a href="Arrays-Unions-Enums.html" accesskey="n" rel="next">Arrays, Unions, and Enumerations</a>, Previous: <a href="Structures.html" accesskey="p" rel="prev">Structures</a>, Up: <a href="Types.html" accesskey="u" rel="up">Types</a> &nbsp; [<a href="Index.html" title="Index" rel="index">Index</a>]</p>
+</div>
+<hr>
+<span id="Size-and-Alignment-1"></span><h4 class="subsection">2.3.3 Size and Alignment</h4>
+
+<p><code>libffi</code> will set the <code>size</code> and <code>alignment</code> fields of
+an <code>ffi_type</code> object for you.  It does so using its knowledge of
+the ABI.
+</p>
+<p>You might expect that you can simply read these fields for a type that
+has been laid out by <code>libffi</code>.  However, there are some caveats.
+</p>
+<ul>
+<li> The size or alignment of some of the built-in types may vary depending
+on the chosen ABI.
+
+</li><li> The size and alignment of a new structure type will not be set by
+<code>libffi</code> until it has been passed to <code>ffi_prep_cif</code> or
+<code>ffi_get_struct_offsets</code>.
+
+</li><li> A structure type cannot be shared across ABIs.  Instead each ABI needs
+its own copy of the structure type.
+</li></ul>
+
+<p>So, before examining these fields, it is safest to pass the
+<code>ffi_type</code> object to <code>ffi_prep_cif</code> or
+<code>ffi_get_struct_offsets</code> first.  This function will do all the
+needed setup.
+</p>
+<div class="example">
+<pre class="example">ffi_type *desired_type;
+ffi_abi desired_abi;
+&hellip;
+ffi_cif cif;
+if (ffi_prep_cif (&amp;cif, desired_abi, 0, desired_type, NULL) == FFI_OK)
+  {
+    size_t size = desired_type-&gt;size;
+    unsigned short alignment = desired_type-&gt;alignment;
+  }
+</pre></div>
+
+<p><code>libffi</code> also provides a way to get the offsets of the members of
+a structure.
+</p>
+<span id="index-ffi_005fget_005fstruct_005foffsets"></span>
+<dl class="def">
+<dt id="index-ffi_005fstatus-2"><span class="category">Function: </span><span><strong>ffi_status</strong> <em>ffi_get_struct_offsets (ffi_abi abi, ffi_type *struct_type, size_t *offsets)</em><a href='#index-ffi_005fstatus-2' class='copiable-anchor'> &para;</a></span></dt>
+<dd><p>Compute the offset of each element of the given structure type.
+<var>abi</var> is the ABI to use; this is needed because in some cases the
+layout depends on the ABI.
+</p>
+<p><var>offsets</var> is an out parameter.  The caller is responsible for
+providing enough space for all the results to be written &ndash; one
+element per element type in <var>struct_type</var>.  If <var>offsets</var> is
+<code>NULL</code>, then the type will be laid out but not otherwise
+modified.  This can be useful for accessing the type&rsquo;s size or layout,
+as mentioned above.
+</p>
+<p>This function returns <code>FFI_OK</code> on success; <code>FFI_BAD_ABI</code> if
+<var>abi</var> is invalid; or <code>FFI_BAD_TYPEDEF</code> if <var>struct_type</var>
+is invalid in some way.  Note that only <code>FFI_STRUCT</code> types are
+valid here.
+</p></dd></dl>
+
+</div>
+<hr>
+<div class="header">
+<p>
+Next: <a href="Arrays-Unions-Enums.html">Arrays, Unions, and Enumerations</a>, Previous: <a href="Structures.html">Structures</a>, Up: <a href="Types.html">Types</a> &nbsp; [<a href="Index.html" title="Index" rel="index">Index</a>]</p>
+</div>
+
+
+
+</body>
+</html>

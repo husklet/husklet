@@ -1,0 +1,13 @@
+# Variable tzdata/Zones/$AREA used
+unused-debconf-template tzdata/Zones/Africa *
+unused-debconf-template tzdata/Zones/America *
+unused-debconf-template tzdata/Zones/Antarctica *
+unused-debconf-template tzdata/Zones/Arctic *
+unused-debconf-template tzdata/Zones/Asia *
+unused-debconf-template tzdata/Zones/Atlantic *
+unused-debconf-template tzdata/Zones/Australia *
+unused-debconf-template tzdata/Zones/Etc *
+unused-debconf-template tzdata/Zones/Europe *
+unused-debconf-template tzdata/Zones/Indian *
+unused-debconf-template tzdata/Zones/Pacific *
+unused-debconf-template tzdata/Zones/US *

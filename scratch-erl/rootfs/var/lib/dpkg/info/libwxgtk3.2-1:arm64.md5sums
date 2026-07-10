@@ -1,0 +1,14 @@
+dc4f67316b35c49e28436ab2bc06983b  usr/lib/aarch64-linux-gnu/libwx_gtk3u_adv-3.2.so.0.2.0
+8fe819628d78aa055d328fe9f7ebc6cd  usr/lib/aarch64-linux-gnu/libwx_gtk3u_aui-3.2.so.0.2.0
+603d151859b7c9825ea120882af27853  usr/lib/aarch64-linux-gnu/libwx_gtk3u_core-3.2.so.0.2.0
+847072ba521ac2a221624eaefd5b0333  usr/lib/aarch64-linux-gnu/libwx_gtk3u_html-3.2.so.0.2.0
+93ffd898836923e46530b1bab571aece  usr/lib/aarch64-linux-gnu/libwx_gtk3u_propgrid-3.2.so.0.2.0
+e3c690f1c00e79d61ad5621d1bf9b7f5  usr/lib/aarch64-linux-gnu/libwx_gtk3u_qa-3.2.so.0.2.0
+af7e00ef1d752d19b93b566d4b4a648c  usr/lib/aarch64-linux-gnu/libwx_gtk3u_ribbon-3.2.so.0.2.0
+0371ecdc02b8268eeae3fa50d951d473  usr/lib/aarch64-linux-gnu/libwx_gtk3u_richtext-3.2.so.0.2.0
+56d6c889355be5657d2824e94ddf6a26  usr/lib/aarch64-linux-gnu/libwx_gtk3u_stc-3.2.so.0.2.0
+1ce40fedda95821fb7cab195fb5a240a  usr/lib/aarch64-linux-gnu/libwx_gtk3u_xrc-3.2.so.0.2.0
+16ee2e9b28eb924a620eb6788fc0de24  usr/share/doc/libwxgtk3.2-1/changelog.Debian.gz
+728329417fd0c0c379498404310949cd  usr/share/doc/libwxgtk3.2-1/changelog.gz
+f49ef5a96494fa94b5b6dfce8ad12870  usr/share/doc/libwxgtk3.2-1/copyright
+7f090b0f70f087b42b03e24941db2bd6  usr/share/lintian/overrides/libwxgtk3.2-1

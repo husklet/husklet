@@ -24,10 +24,21 @@ fn anon_shared_fd(size: usize) -> RawFd {
     #[cfg(not(target_os = "linux"))]
     let fd = {
         // macOS: shm_open a uniquely-named object, then immediately unlink it → anonymous, lives with the fd.
-        let nm = format!("/dd{}.{}", unsafe { libc::getpid() }, std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().subsec_nanos());
+        let nm = format!(
+            "/dd{}.{}",
+            unsafe { libc::getpid() },
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .subsec_nanos()
+        );
         let c = std::ffi::CString::new(nm).unwrap();
         unsafe {
-            let fd = libc::shm_open(c.as_ptr(), libc::O_RDWR | libc::O_CREAT | libc::O_EXCL, 0o600);
+            let fd = libc::shm_open(
+                c.as_ptr(),
+                libc::O_RDWR | libc::O_CREAT | libc::O_EXCL,
+                0o600,
+            );
             if fd >= 0 {
                 libc::shm_unlink(c.as_ptr());
             }
@@ -35,7 +46,11 @@ fn anon_shared_fd(size: usize) -> RawFd {
         }
     };
     assert!(fd >= 0, "anon shared fd failed");
-    assert_eq!(unsafe { libc::ftruncate(fd, size as libc::off_t) }, 0, "ftruncate failed");
+    assert_eq!(
+        unsafe { libc::ftruncate(fd, size as libc::off_t) },
+        0,
+        "ftruncate failed"
+    );
     fd
 }
 
@@ -70,12 +85,25 @@ pub fn client(sock: &str) {
     let stride = w * 4;
     let size = (stride * h) as usize;
 
-    let (reg, comp, shm, wm, surface, xdg, toplevel, pool, buffer) = (2u32, 3, 4, 5, 6, 7, 8, 9, 10);
+    let (reg, comp, shm, wm, surface, xdg, toplevel, pool, buffer) =
+        (2u32, 3, 4, 5, 6, 7, 8, 9, 10);
     c.send(&Message::new(WL_DISPLAY, 1).u32(reg)); // get_registry
     drain(&mut c);
-    c.send(&Message::new(reg, 0).u32(1).string("wl_compositor").u32(4).u32(comp));
+    c.send(
+        &Message::new(reg, 0)
+            .u32(1)
+            .string("wl_compositor")
+            .u32(4)
+            .u32(comp),
+    );
     c.send(&Message::new(reg, 0).u32(2).string("wl_shm").u32(1).u32(shm));
-    c.send(&Message::new(reg, 0).u32(3).string("xdg_wm_base").u32(1).u32(wm));
+    c.send(
+        &Message::new(reg, 0)
+            .u32(3)
+            .string("xdg_wm_base")
+            .u32(1)
+            .u32(wm),
+    );
     c.send(&Message::new(comp, 0).u32(surface));
     c.send(&Message::new(wm, 2).u32(xdg).u32(surface));
     c.send(&Message::new(xdg, 1).u32(toplevel));
@@ -86,7 +114,14 @@ pub fn client(sock: &str) {
 
     let mfd = anon_shared_fd(size);
     let map = unsafe {
-        libc::mmap(std::ptr::null_mut(), size, libc::PROT_READ | libc::PROT_WRITE, libc::MAP_SHARED, mfd, 0)
+        libc::mmap(
+            std::ptr::null_mut(),
+            size,
+            libc::PROT_READ | libc::PROT_WRITE,
+            libc::MAP_SHARED,
+            mfd,
+            0,
+        )
     };
     assert_ne!(map, libc::MAP_FAILED);
     let px = map as *mut u8;
@@ -117,7 +152,15 @@ pub fn client(sock: &str) {
     c.queue_fd(mfd);
     c.flush().unwrap();
     unsafe { libc::close(mfd) };
-    c.send(&Message::new(pool, 0).u32(buffer).i32(0).i32(w).i32(h).i32(stride).u32(1)); // XRGB8888
+    c.send(
+        &Message::new(pool, 0)
+            .u32(buffer)
+            .i32(0)
+            .i32(w)
+            .i32(h)
+            .i32(stride)
+            .u32(1),
+    ); // XRGB8888
     c.send(&Message::new(surface, 1).u32(buffer).i32(0).i32(0));
     c.send(&Message::new(surface, 2).i32(0).i32(0).i32(w).i32(h));
     c.send(&Message::new(surface, 6)); // commit
@@ -157,10 +200,28 @@ pub fn input_client(sock: &str, results: &str, run_ms: u64) {
         (2u32, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13);
     c.send(&Message::new(WL_DISPLAY, 1).u32(reg)); // get_registry
     drain(&mut c);
-    c.send(&Message::new(reg, 0).u32(1).string("wl_compositor").u32(4).u32(comp));
+    c.send(
+        &Message::new(reg, 0)
+            .u32(1)
+            .string("wl_compositor")
+            .u32(4)
+            .u32(comp),
+    );
     c.send(&Message::new(reg, 0).u32(2).string("wl_shm").u32(1).u32(shm));
-    c.send(&Message::new(reg, 0).u32(3).string("xdg_wm_base").u32(1).u32(wm));
-    c.send(&Message::new(reg, 0).u32(4).string("wl_seat").u32(5).u32(seat));
+    c.send(
+        &Message::new(reg, 0)
+            .u32(3)
+            .string("xdg_wm_base")
+            .u32(1)
+            .u32(wm),
+    );
+    c.send(
+        &Message::new(reg, 0)
+            .u32(4)
+            .string("wl_seat")
+            .u32(5)
+            .u32(seat),
+    );
     c.send(&Message::new(comp, 0).u32(surface));
     c.send(&Message::new(wm, 2).u32(xdg).u32(surface));
     c.send(&Message::new(xdg, 1).u32(toplevel));
@@ -177,7 +238,14 @@ pub fn input_client(sock: &str, results: &str, run_ms: u64) {
     let size = (stride * h) as usize;
     let mfd = anon_shared_fd(size);
     let map = unsafe {
-        libc::mmap(std::ptr::null_mut(), size, libc::PROT_READ | libc::PROT_WRITE, libc::MAP_SHARED, mfd, 0)
+        libc::mmap(
+            std::ptr::null_mut(),
+            size,
+            libc::PROT_READ | libc::PROT_WRITE,
+            libc::MAP_SHARED,
+            mfd,
+            0,
+        )
     };
     assert_ne!(map, libc::MAP_FAILED);
     let px = map as *mut u8;
@@ -188,12 +256,24 @@ pub fn input_client(sock: &str, results: &str, run_ms: u64) {
     c.queue_fd(mfd);
     c.flush().unwrap();
     unsafe { libc::close(mfd) };
-    c.send(&Message::new(pool, 0).u32(buffer).i32(0).i32(w).i32(h).i32(stride).u32(1)); // XRGB8888
+    c.send(
+        &Message::new(pool, 0)
+            .u32(buffer)
+            .i32(0)
+            .i32(w)
+            .i32(h)
+            .i32(stride)
+            .u32(1),
+    ); // XRGB8888
     c.send(&Message::new(surface, 1).u32(buffer).i32(0).i32(0));
     c.send(&Message::new(surface, 6)); // commit → window appears, focus granted
     c.flush().unwrap();
 
-    let mut log = std::fs::OpenOptions::new().create(true).append(true).open(results).ok();
+    let mut log = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(results)
+        .ok();
     let mut emit = |line: String| {
         eprintln!("CLIENT-INPUT: {line}");
         if let Some(f) = log.as_mut() {
@@ -205,7 +285,11 @@ pub fn input_client(sock: &str, results: &str, run_ms: u64) {
 
     let deadline = std::time::Instant::now() + std::time::Duration::from_millis(run_ms);
     while std::time::Instant::now() < deadline {
-        let mut pfd = libc::pollfd { fd, events: libc::POLLIN, revents: 0 };
+        let mut pfd = libc::pollfd {
+            fd,
+            events: libc::POLLIN,
+            revents: 0,
+        };
         unsafe { libc::poll(&mut pfd, 1, 30) };
         match c.fill().unwrap_or(0) {
             0 => break, // server closed
@@ -215,28 +299,66 @@ pub fn input_client(sock: &str, results: &str, run_ms: u64) {
             let mut r = m.reader();
             if m.object == ptr {
                 match m.opcode {
-                    0 => { let s = r.u32(); let surf = r.u32(); let x = r.i32(); let y = r.i32();
-                           emit(format!("PTR_ENTER serial={s} surface={surf} x={} y={}", x / 256, y / 256)); }
+                    0 => {
+                        let s = r.u32();
+                        let surf = r.u32();
+                        let x = r.i32();
+                        let y = r.i32();
+                        emit(format!(
+                            "PTR_ENTER serial={s} surface={surf} x={} y={}",
+                            x / 256,
+                            y / 256
+                        ));
+                    }
                     1 => emit("PTR_LEAVE".into()),
-                    2 => { let _t = r.u32(); let x = r.i32(); let y = r.i32();
-                           emit(format!("PTR_MOTION x={} y={}", x / 256, y / 256)); }
-                    3 => { let _s = r.u32(); let _t = r.u32(); let b = r.u32(); let st = r.u32();
-                           emit(format!("PTR_BUTTON button={b} state={st}")); }
-                    4 => { let _t = r.u32(); let ax = r.u32(); let v = r.i32();
-                           emit(format!("PTR_AXIS axis={ax} value={}", v / 256)); }
+                    2 => {
+                        let _t = r.u32();
+                        let x = r.i32();
+                        let y = r.i32();
+                        emit(format!("PTR_MOTION x={} y={}", x / 256, y / 256));
+                    }
+                    3 => {
+                        let _s = r.u32();
+                        let _t = r.u32();
+                        let b = r.u32();
+                        let st = r.u32();
+                        emit(format!("PTR_BUTTON button={b} state={st}"));
+                    }
+                    4 => {
+                        let _t = r.u32();
+                        let ax = r.u32();
+                        let v = r.i32();
+                        emit(format!("PTR_AXIS axis={ax} value={}", v / 256));
+                    }
                     _ => {}
                 }
             } else if m.object == kbd {
                 match m.opcode {
-                    0 => { // keymap(format, size) — the fd rides OOB; consume + close it.
-                        if let Some(kfd) = c.take_fd() { unsafe { libc::close(kfd) }; }
+                    0 => {
+                        // keymap(format, size) — the fd rides OOB; consume + close it.
+                        if let Some(kfd) = c.take_fd() {
+                            unsafe { libc::close(kfd) };
+                        }
                         emit("KBD_KEYMAP".into());
                     }
-                    1 => { let s = r.u32(); let surf = r.u32(); emit(format!("KBD_ENTER serial={s} surface={surf}")); }
+                    1 => {
+                        let s = r.u32();
+                        let surf = r.u32();
+                        emit(format!("KBD_ENTER serial={s} surface={surf}"));
+                    }
                     2 => emit("KBD_LEAVE".into()),
-                    3 => { let _s = r.u32(); let _t = r.u32(); let k = r.u32(); let st = r.u32();
-                           emit(format!("KBD_KEY key={k} state={st}")); }
-                    4 => { let _s = r.u32(); let dep = r.u32(); emit(format!("KBD_MOD depressed={dep}")); }
+                    3 => {
+                        let _s = r.u32();
+                        let _t = r.u32();
+                        let k = r.u32();
+                        let st = r.u32();
+                        emit(format!("KBD_KEY key={k} state={st}"));
+                    }
+                    4 => {
+                        let _s = r.u32();
+                        let dep = r.u32();
+                        emit(format!("KBD_MOD depressed={dep}"));
+                    }
                     _ => {}
                 }
             }
@@ -258,7 +380,9 @@ fn drain(c: &mut Conn) {
 
 /// Run the real-socket self-test: fork a client, serve it, dump a PNG. Returns the PNG path.
 pub fn run(out: &str) -> std::io::Result<()> {
-    let sock = format!("/tmp/dd-display-selftest-{}.sock", unsafe { libc::getpid() });
+    let sock = format!("/tmp/dd-display-selftest-{}.sock", unsafe {
+        libc::getpid()
+    });
     let _ = std::fs::remove_file(&sock);
     let lfd = crate::listen_unix(&sock)?;
 
@@ -278,13 +402,20 @@ pub fn run(out: &str) -> std::io::Result<()> {
         }
     };
     nonblock(cfd);
-    let dir = std::path::Path::new(out).parent().map(|p| p.to_path_buf()).unwrap_or_else(|| ".".into());
+    let dir = std::path::Path::new(out)
+        .parent()
+        .map(|p| p.to_path_buf())
+        .unwrap_or_else(|| ".".into());
     let mut server = Server::new(cfd, PngPresenter::new(&dir));
 
     // Pump until the client has committed a frame (or a short deadline elapses).
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
     while server.presenter().frames == 0 && std::time::Instant::now() < deadline {
-        let mut pfd = libc::pollfd { fd: cfd, events: libc::POLLIN, revents: 0 };
+        let mut pfd = libc::pollfd {
+            fd: cfd,
+            events: libc::POLLIN,
+            revents: 0,
+        };
         unsafe { libc::poll(&mut pfd, 1, 50) };
         if !server.pump()? {
             break;
@@ -302,7 +433,10 @@ pub fn run(out: &str) -> std::io::Result<()> {
         let _ = std::fs::rename(&produced, out);
     }
     if server.presenter().frames == 0 {
-        return Err(std::io::Error::new(std::io::ErrorKind::TimedOut, "no frame composited"));
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::TimedOut,
+            "no frame composited",
+        ));
     }
     println!("dd-display selftest: composited 1 frame over a real AF_UNIX socket -> {out}");
     Ok(())

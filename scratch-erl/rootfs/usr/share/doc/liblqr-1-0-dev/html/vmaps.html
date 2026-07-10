@@ -1,0 +1,134 @@
+<html><head><meta http-equiv="Content-Type" content="text/html; charset=ISO-8859-1"><title>Dealing with the visibility maps (the seams)</title><meta name="generator" content="DocBook XSL Stylesheets V1.79.1"><link rel="home" href="index.html" title="The Liquid Rescale library Manual"><link rel="up" href="api-manual.html" title="Chapter 2. LqR library API user manual"><link rel="prev" href="tuning.html" title="Tuning"><link rel="next" href="attach-images.html" title="Attaching extra images"></head><body bgcolor="white" text="black" link="#0000FF" vlink="#840084" alink="#0000FF"><div class="navheader"><table width="100%" summary="Navigation header"><tr><th colspan="3" align="center">Dealing with the visibility maps (the seams)</th></tr><tr><td width="20%" align="left"><a accesskey="p" href="tuning.html">Prev</a> </td><th width="60%" align="center">Chapter 2. LqR library API user manual</th><td width="20%" align="right"> <a accesskey="n" href="attach-images.html">Next</a></td></tr></table><hr></div><div class="sect1"><div class="titlepage"><div><div><h2 class="title" style="clear: both"><a name="vmaps"></a>Dealing with the visibility maps (the seams)</h2></div></div></div><div class="toc"><dl class="toc"><dt><span class="sect2"><a href="vmaps.html#vmap-dump">Dumping the visibility map</a></span></dt><dt><span class="sect2"><a href="vmaps.html#activate-dump">Storing the visibility maps</a></span></dt><dt><span class="sect2"><a href="vmaps.html#access-vmap">Accessing the internally attached visibility maps</a></span></dt><dt><span class="sect2"><a href="vmaps.html#vmaps-objs">The visibility map objects</a></span></dt><dt><span class="sect2"><a href="vmaps.html#import-vmap">Importing a visibility map in a carver</a></span></dt><dt><span class="sect2"><a href="vmaps.html#save-load-vmaps">Saving and loading visibility maps to/from files</a></span></dt></dl></div><div class="sect2"><div class="titlepage"><div><div><h3 class="title"><a name="vmap-dump"></a>Dumping the visibility map</h3></div></div></div><p>
+                    The visibility map can be saved at any moment by calling the function:
+                    </p><div class="funcsynopsis"><table border="0" class="funcprototype-table" summary="Function synopsis" style="cellspacing: 0; cellpadding: 0;"><tr><td><code class="funcdef">LqrVMap* <b class="fsfunc">lqr_vmap_dump</b>(</code></td><td>LqrCarver* <var class="pdparam">carver</var><code>)</code>;</td></tr></table><div class="funcprototype-spacer"> </div></div><p>
+                </p><p>
+                    This function will return a pointer to a newly allocated <code class="classname">LqrVMap</code> object, or <code class="literal"><span class="returnvalue">NULL</span></code> in case of
+                    failure. See also the section "<a class="link" href="vmaps.html#vmaps-objs" title="The visibility map objects">The visibility map objects</a>".
+                </p></div><div class="sect2"><div class="titlepage"><div><div><h3 class="title"><a name="activate-dump"></a>Storing the visibility maps</h3></div></div></div><p>
+                    By default, the computed visibility maps are wasted. Instead of saving them individually, it is
+                    possible to automatically dump them at the end of the carving process, attaching them to their
+                    associated <code class="classname">LqrCarver</code>. In order to activate this feature, the following function has to be called:
+                    </p><div class="funcsynopsis"><table border="0" class="funcprototype-table" summary="Function synopsis" style="cellspacing: 0; cellpadding: 0;"><tr><td><code class="funcdef">void <b class="fsfunc">lqr_carver_set_dump_vmaps</b>(</code></td><td>LqrCarver* <var class="pdparam">carver</var><code>)</code>;</td></tr></table><div class="funcprototype-spacer"> </div></div><p>
+                </p><p>
+                    This will have the effect of dumping the visibility map each time
+                    <code class="function">lqr_carver_resize</code> is invoked, and storing it internally. When resizing along
+                    both directions, two maps will be dumped, one for each direction.
+                </p><p>
+                    In order to revert the effect of <code class="function">lqr_carver_set_dump_vmaps</code>, thus stopping the
+                    automatic dumping, use the function
+                    </p><div class="funcsynopsis"><table border="0" class="funcprototype-table" summary="Function synopsis" style="cellspacing: 0; cellpadding: 0;"><tr><td><code class="funcdef">void <b class="fsfunc">lqr_carver_set_no_dump_vmaps</b>(</code></td><td>LqrCarver* <var class="pdparam">carver</var><code>)</code>;</td></tr></table><div class="funcprototype-spacer"> </div></div><p>
+                </p><p>
+                    Alternatively, the internal storage mechanism can be called over the current visibility map at any
+                    given moment by calling this function:
+                    </p><div class="funcsynopsis"><table border="0" class="funcprototype-table" summary="Function synopsis" style="cellspacing: 0; cellpadding: 0;"><tr><td><code class="funcdef">LqrRetVal <b class="fsfunc">lqr_vmap_internal_dump</b>(</code></td><td>LqrCarver* <var class="pdparam">carver</var><code>)</code>;</td></tr></table><div class="funcprototype-spacer"> </div></div><p>
+                </p><p>
+                    The dumped maps are stored inside <code class="classname">LqrVMap</code> objects, and these are attached to their corresponing
+                    <code class="classname">LqrCarver</code> object through a linked list, whose type is <code class="classname">LqrVMapList</code>
+                </p></div><div class="sect2"><div class="titlepage"><div><div><h3 class="title"><a name="access-vmap"></a>Accessing the internally attached visibility maps</h3></div></div></div><p>
+                    To access the maps attached to a carver one has first to obtain the pointer to the list, with the
+                    function:
+                    </p><div class="funcsynopsis"><table border="0" class="funcprototype-table" summary="Function synopsis" style="cellspacing: 0; cellpadding: 0;"><tr><td><code class="funcdef">LqrVMapList* <b class="fsfunc">lqr_vmap_list_start</b>(</code></td><td>LqrCarver* <var class="pdparam">carver</var><code>)</code>;</td></tr></table><div class="funcprototype-spacer"> </div></div><p>
+                </p><p>
+                    Then, one can iterate through the attached maps by using these two functions:
+                    </p><div class="funcsynopsis"><table border="0" class="funcprototype-table" summary="Function synopsis" style="cellspacing: 0; cellpadding: 0;"><tr><td><code class="funcdef">LqrVMap* <b class="fsfunc">lqr_vmap_list_current</b>(</code></td><td>LqrVMapList* <var class="pdparam">list</var><code>)</code>;</td></tr></table><div class="funcprototype-spacer"> </div></div><p>
+                    </p><div class="funcsynopsis"><table border="0" class="funcprototype-table" summary="Function synopsis" style="cellspacing: 0; cellpadding: 0;"><tr><td><code class="funcdef">LqrVMapList* <b class="fsfunc">lqr_vmap_list_next</b>(</code></td><td>LqrVMapList* <var class="pdparam">list</var><code>)</code>;</td></tr></table><div class="funcprototype-spacer"> </div></div><p>
+                </p><p>
+                    Here is a sample code usage:
+                    </p><div class="example"><a name="ex-vmaplist1"></a><p class="title"><b>Example 2.7. Accessing visibility maps #1</b></p><div class="example-contents"><pre class="programlisting">
+LqrVMap *vmap;
+LqrVMapList *list;
+
+list = lqr_vmap_list_start (carver);
+while (list) {
+    vmap = lqr_vmap_list_current (list);
+    /* ... do something on vmap ... */
+    list = lqr_vmap_list_next (list);
+}
+                        </pre></div></div><p><br class="example-break">
+                </p><p>
+                    The maps will always be accessed in the order in which they were dumped.
+                </p><p>
+                    Alternatively, one can apply a function to all the elements of the list, through this function:
+                    </p><div class="funcsynopsis"><table border="0" class="funcprototype-table" summary="Function synopsis" style="cellspacing: 0; cellpadding: 0;"><tr><td><code class="funcdef">LqrRetVal <b class="fsfunc">lqr_vmap_list_foreach</b>(</code></td><td>LqrVMapList* <var class="pdparam">list</var>, </td></tr><tr><td> </td><td>LqrVMapFunc <var class="pdparam">func</var>, </td></tr><tr><td> </td><td>gpointer <var class="pdparam">data</var><code>)</code>;</td></tr></table><div class="funcprototype-spacer"> </div></div><p>
+                </p><p>
+                    To use this second method, you'll need to define a function first, as in this sample code:
+                    </p><div class="example"><a name="ex-vmaplist2"></a><p class="title"><b>Example 2.8. Accessing visibility maps #2</b></p><div class="example-contents"><pre class="programlisting">
+LqrRetVal my_func (LqrVMap vmap, gpointer data)
+{
+    /* ... do something on vmap ... */
+    return LQR_OK;
+}
+
+LqrVMapList *list;
+
+list = lqr_vmap_list_start (carver);
+lqr_vmap_list_foreach (list, my_func, NULL);
+                        </pre></div></div><p><br class="example-break">
+                </p><p>
+                    In the above example, no data is actually passed on to the function.
+                </p><div class="note" style="margin-left: 0.5in; margin-right: 0.5in;"><h3 class="title">Note</h3><p>
+                        In actual code the call to <code class="function">lqr_vmap_list_foreach</code> should be protected to
+                        test its return value, which is <code class="literal"><span class="errorcode">LQR_OK</span></code> if all <code class="function">my_func</code> calls have been
+                        successful, or it will hold the first non-successful return value from
+                        <code class="function">my_func</code>.
+                    </p></div></div><div class="sect2"><div class="titlepage"><div><div><h3 class="title"><a name="vmaps-objs"></a>The visibility map objects</h3></div></div></div><p>
+                    The <code class="classname">LqrVMap</code> objects contain an int buffer with the actual map data (plain array, ordered by row),
+                    plus all the information needed to be able to recover it from scratch.
+                </p><p>
+                    The information can be extracted with these functions:
+                    </p><pre class="programlisting">
+gint* <code class="function">lqr_vmap_get_data</code> (<code class="classname">LqrVMap</code>* <em class="parameter"><code>vmap</code></em>);
+gint <code class="function">lqr_vmap_get_width</code> (<code class="classname">LqrVMap</code>* <em class="parameter"><code>vmap</code></em>);
+gint <code class="function">lqr_vmap_get_height</code> (<code class="classname">LqrVMap</code>* <em class="parameter"><code>vmap</code></em>);
+gint <code class="function">lqr_vmap_get_orientation</code> (<code class="classname">LqrVMap</code>* <em class="parameter"><code>vmap</code></em>);
+gint <code class="function">lqr_vmap_get_depth</code> (<code class="classname">LqrVMap</code>* <em class="parameter"><code>vmap</code></em>);
+                    </pre><p>
+                </p><p>
+                    The first one returns a pointer to the data buffer.
+                </p><p>
+                    The orientation of the map is 0 if the map is to be used for horizontal rescaling, 1 otherwise.
+                </p><p>
+                    The depth of the map is the maximum amount of rescaling possible with that map, either shrinking or
+                    enlarging.
+                </p><p>
+                    </p><div class="example"><a name="vmap-data"></a><p class="title"><b>Example 2.9. Reading visibility maps data</b></p><div class="example-contents"><p>
+                            If we have a <code class="classname">LqrVMap</code> pointer called <em class="parameter"><code>vmap</code></em>, we could access the
+                            value at <code class="literal">(<span class="symbol">x</span>,<span class="symbol">y</span>)</code> by:
+                        </p><pre class="programlisting">
+gint *buffer;
+gint width;
+gint vis;
+
+buffer = lqr_vmap_get_data (vmap);
+width = lqr_vmap_get_width (vmap);
+vis =  buffer[y * width + x];
+                        </pre><p>
+                            Uninitialised points will yield <code class="literal"><span class="symbol">vis</span> = 0</code>. For
+			    initialised points, <code class="literal"><span class="symbol">vis</span></code> will store a positive value between
+                            <code class="literal">1</code> (least visible points, the first to be carved away or to be duplicated)
+                            and <code class="literal">(<em class="parameter"><code>depth</code></em> + 1)</code> (most visible points, the last to be carved away
+                            or to be duplicated).
+                        </p><p>
+                            If the orientation is 0, the map allows resizing in the whole range form <code class="literal">(<em class="parameter"><code>width</code></em>
+                            - <em class="parameter"><code>depth</code></em>)</code> to <code class="literal">(<em class="parameter"><code>width</code></em> + <em class="parameter"><code>depth</code></em>)</code>. If the
+                            orientation is 1, the analogue formula holds with <em class="parameter"><code>height</code></em> in place of <em class="parameter"><code>width</code></em>.
+                        </p></div></div><p><br class="example-break">
+                </p></div><div class="sect2"><div class="titlepage"><div><div><h3 class="title"><a name="import-vmap"></a>Importing a visibility map in a carver</h3></div></div></div><p>
+                    Having an <code class="classname">LqrVMap</code> object, one can load it in an <code class="classname">LqrCarver</code> simply by calling this function:
+                    </p><div class="funcsynopsis"><table border="0" class="funcprototype-table" summary="Function synopsis" style="cellspacing: 0; cellpadding: 0;"><tr><td><code class="funcdef">LqrRetVal <b class="fsfunc">lqr_vmap_load</b>(</code></td><td>LqrCarver* <var class="pdparam">carver</var>, </td></tr><tr><td> </td><td>LqrVMap* <var class="pdparam">vmap</var><code>)</code>;</td></tr></table><div class="funcprototype-spacer"> </div></div><p>
+                </p><p>
+                    The carver must not to be initialised, neither before nor after invoking this function.
+                </p><div class="note" style="margin-left: 0.5in; margin-right: 0.5in;"><h3 class="title">Note</h3><p>
+                        This implies that the map cannot be updated, and that it will only be possible to resize the
+                        carver by an amount <em class="parameter"><code>depth</code></em> along the orientation given by
+                        <code class="function">lqr_vmap_orientation</code>. The enlargment step is also set to its maximum, 2.0.
+                        Invoking <code class="function">lqr_carver_resize</code> with an out-of-bounds argument results in a
+                        <span class="errortype">fatal</span> error (i.e. it returns <code class="literal"><span class="errorcode">LQR_ERROR</span></code>).
+                    </p></div><div class="note" style="margin-left: 0.5in; margin-right: 0.5in;"><h3 class="title">Note</h3><p>
+                        Do not attach other carvers after you have loaded a visibility map (see also the
+                        <a class="link" href="attach-images.html" title="Attaching extra images">Attaching extra images</a> section).
+                    </p></div></div><div class="sect2"><div class="titlepage"><div><div><h3 class="title"><a name="save-load-vmaps"></a>Saving and loading visibility maps to/from files</h3></div></div></div><p>
+                    The library does not include methods to load/save visibility maps to/from files. However, a way to
+                    do so is shown in the demo program `<span class="application">liquidrescale</span>' in the
+                    `<code class="filename">examples</code>' directory.
+                </p></div></div><div class="navfooter"><hr><table width="100%" summary="Navigation footer"><tr><td width="40%" align="left"><a accesskey="p" href="tuning.html">Prev</a> </td><td width="20%" align="center"><a accesskey="u" href="api-manual.html">Up</a></td><td width="40%" align="right"> <a accesskey="n" href="attach-images.html">Next</a></td></tr><tr><td width="40%" align="left" valign="top">Tuning </td><td width="20%" align="center"><a accesskey="h" href="index.html">Home</a></td><td width="40%" align="right" valign="top"> Attaching extra images</td></tr></table></div></body></html>

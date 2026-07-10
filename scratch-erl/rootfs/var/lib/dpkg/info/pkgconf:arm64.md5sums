@@ -1,0 +1,10 @@
+aa7c426863a0fe264c2d4475e32a149c  usr/share/aclocal/pkg.m4
+9791423d1d8a41d5e1e9819c4e89b85e  usr/share/doc/pkgconf/changelog.Debian.gz
+591b5cb7e62535a23134e06cd50b3a37  usr/share/doc/pkgconf/changelog.gz
+549a3ecb9fbd7dd4cc0b2b90137a9dfd  usr/share/doc/pkgconf/copyright
+109b7144012fe349f3e692e6771157b7  usr/share/lintian/overrides/pkgconf
+425057ea2446c210df42e31143848fb5  usr/share/man/man1/pkgconf.1.gz
+c8602309e12d18524b6d7c16e98efcf0  usr/share/man/man5/pc.5.gz
+13d825c130cea842c503e7d605c29f41  usr/share/man/man5/pkgconf-personality.5.gz
+be8f44cfa0f830709f866ce9510e6b1e  usr/share/man/man7/pkg.m4.7.gz
+ebaaff6010c35235f4e08ccf3706d789  usr/share/pkgconfig/personality.d/aarch64-linux-gnu.personality

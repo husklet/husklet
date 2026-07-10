@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<mime-type xmlns="http://www.freedesktop.org/standards/shared-mime-info" type="application/x-bcpio">
+  <!--Created automatically by update-mime-database. DO NOT EDIT!-->
+  <comment>BCPIO archive</comment>
+  <acronym>BCPIO</acronym>
+  <expanded-acronym>Binary CPIO</expanded-acronym>
+  <generic-icon name="package-x-generic"/>
+  <glob pattern="*.bcpio"/>
+</mime-type>

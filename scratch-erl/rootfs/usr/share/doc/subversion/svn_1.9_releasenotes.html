@@ -1,0 +1,1659 @@
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.1//EN" 
+   "http://www.w3.org/TR/xhtml11/DTD/xhtml11.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>Apache Subversion 1.9 Release Notes</title>
+<meta http-equiv="Content-Type" content="text/html;charset=utf-8" />
+<base href="https://subversion.apache.org"/>
+<style type="text/css">
+  @import url("/style/site.css");
+</style>
+</head>
+
+<body>
+<div id="site-banner">
+<div style="float: right; width: 379px; height: 80px; font-style: italic; 
+            text-align: center;">
+  <a href="https://www.apache.org/"
+  ><img src="/images/apache-logo.png"
+        alt="Apache Software Foundation" /></a>
+</div>
+<a href="/">
+  <img src="/images/svn-square.jpg"
+       alt="[S]"
+       style="width: 80px; height: 80px;"/>
+  <img src="/images/svn-name-banner.jpg"
+       alt="Subversion"
+       style="width: 320px; height: 80px;"/></a>
+</div> <!-- #site-banner -->
+
+<div id="site-nav">
+<div id="site-nav-menu">
+<ul>
+  <li>About Subversion
+    <ul>
+      <li><a href="/news.html">News</a></li>
+      <li><a href="/features.html">Features</a></li>
+      <li><a href="/docs/">Documentation</a></li>
+      <li><a href="/faq.html">FAQ</a></li>
+      <li><a href="/roadmap.html">Roadmap</a></li>
+      <li><a href="/security/">Security</a></li>
+      <li><a href="/quick-start">Quick Start</a></li>
+    </ul>
+  </li>
+  <li>Getting Subversion
+      <ul>
+      <!-- A parameter in the form '?update=YYYYMMDDhhmm' may
+           be appended to 'download.cgi' to only offer mirrors that have
+           synced after the specified date. We update it after a security
+           release when the email announcement is less than 24 hours after
+           the upload to /dist/release, in order to prevent offering mirrors
+           that don't carry the just-released artifacts. -->
+      <li><a href="/packages.html">Binary Packages</a></li>
+      <li><a href="/download.cgi">Source Download</a></li>
+      <li><a href="/docs/release-notes/">Release Notes</a></li>
+    </ul>
+  </li>
+  <li>Community
+    <ul>
+      <li><a href="/mailing-lists.html">Mailing Lists</a></li>
+      <li><a href="/reporting-issues.html">Reporting Issues</a></li>
+      <li><a href="https://cwiki.apache.org/confluence/display/SVN/">Wiki</a></li>
+      <li><a href="/contributing.html">Getting Involved</a></li>
+      <li><a href="/source-code.html">Source Code</a></li>
+    </ul>
+  </li>
+  <li>About the <acronym title="Apache Software Foundation">ASF</acronym>
+    <ul>
+      <li><a class="linkaway"
+             href="https://www.apache.org/licenses/">Licenses</a></li>
+      <li><a class="linkaway"
+             href="https://www.apache.org/foundation/sponsorship.html">Donate</a></li>
+      <li><a class="linkaway"
+             href="https://www.apache.org/foundation/thanks.html">Thanks</a></li>
+    </ul>
+  </li>
+</ul>
+</div> <!-- #site-nav-menu -->
+
+<div id="site-search">
+  <form action="https://www.google.com/search" method="get"
+        style="margin-top: 10px; margin-bottom: 10px; display: inline;">
+  <div style="display: inline;">
+    <input value="subversion.apache.org" name="sitesearch" type="hidden" />
+    <input name="q" id="query" type="text" placeholder="Search..."
+           style="width: 10em"
+           />
+    <input name="Search" value="Go" type="submit"/>
+  </div>
+  </form>
+</div> <!-- #site-search -->
+
+<div id="site-svnbook-block">
+<p>Read the official Subversion
+   documentation <a href="http://svnbook.org" class="linkaway">online</a>!</p>
+<p><a href="http://svnbook.org/"
+      ><img src="/images/svnbook-cover.jpg"
+            alt="Version Control With Subversion"/></a></p>
+</div> <!-- #site-svnbook-block -->
+
+<div id="copyright">
+<p>Copyright &#169; 2018 <a href="https://www.apache.org/">The Apache
+   Software Foundation</a>, Licensed under
+   the <a href="https://www.apache.org/licenses/LICENSE-2.0" >Apache
+   License, Version 2.0</a>.  Apache, Apache Subversion, and
+   the Apache feather logo are trademarks of The Apache Software
+   Foundation.  Subversion and the Apache Subversion logo are
+   registered trademarks of The Apache Software Foundation.</p>
+</div> <!-- #copyright -->
+
+</div> <!-- #site-nav -->
+
+<div id="site-content">
+<div id="site-notice">
+
+<!-- PUT SITE-WIDE NOTICES HERE AS NECESSARY -->
+
+</div> <!-- #site-notice -->
+
+<!-- **************** BEGIN CONTENT ***************** -->
+
+<!-- ************************************************ -->
+<!-- Sections start with "###" are either templates   -->
+<!-- or TODOs.  Remove them before release.           -->
+<!-- ************************************************ -->
+
+<h1 style="text-align: center">Apache Subversion 1.9 Release Notes</h1>
+
+<div class="h2" id="news">
+<h2>What's New in Apache Subversion 1.9
+  <a class="sectionlink" href="#news"
+    title="Link to this section">&para;</a>
+</h2>
+
+<ul>
+  <li><a href="#fsfs-improvements"
+      >FSFS improvements</a></li>
+  <li><a href="#fsx"
+      >FSX &ndash; A new experimental repository backend</a></li>
+  <li><a href="#enhancements"
+      >Many enhancements and bug fixes</a></li>
+  <li><a href="#issues"
+      >Known issues in the release</a></li>
+  <li><a href="#troubleshooting"
+      >Troubleshooting issues specific to this release</a></li>
+</ul>
+
+<p>Apache Subversion 1.9 is a superset of all previous Subversion
+releases, and is as of the time of its release considered the current
+"best" release.  Any feature or bugfix in 1.0.x through 1.8.x is also
+in 1.9, but 1.9 contains features and bugfixes not present in any
+earlier release.  The new features will eventually be documented in a
+1.9 version of the free Subversion book
+(<a href="http://svnbook.red-bean.com/" >svnbook.red-bean.com</a>).</p>
+
+<p>This page describes only major changes.  For a complete list of
+changes, see the 1.9 section of the <a
+href="https://svn.apache.org/repos/asf/subversion/trunk/CHANGES" >CHANGES</a>
+file.</p>
+
+</div>  <!-- news -->
+
+<div class="h2" id="compatibility">
+<h2>Compatibility Concerns
+  <a class="sectionlink" href="#compatibility"
+    title="Link to this section">&para;</a>
+</h2>
+
+<p>Older clients and servers interoperate transparently with 1.9
+servers and clients.  However, some of the new 1.9 features may not be
+available unless both client and server are the latest version.  There are
+also cases where a new feature will work but will run less efficiently if
+the client is new and the server old.</p>
+
+<p>There is <strong>no need</strong> to <a href="http://svnbook.red-bean.com/en/1.7/svn.reposadmin.maint.html#svn.reposadmin.maint.migrate.svnadmin"
+>dump and reload</a> your repositories. 
+Subversion 1.9 servers can read and write to repositories created by
+earlier versions.  To upgrade an existing server installation, just install the
+newest libraries and binaries on top of the older ones.</p>
+
+<p>Subversion 1.9 maintains API/ABI compatibility with earlier
+releases, by only adding new functions, never removing old ones.  A
+program written to any previous 1.x API can both compile
+and run using 1.9 libraries.  However, a program written for 1.9
+cannot necessarily compile or run against older libraries.</p>
+
+<p>There may be limited cases where the behavior of old APIs has been
+slightly modified from previous releases.  These are cases where edge cases
+of the functionality has been deemed buggy, and therefore improved or removed.
+Please consult the
+<a href="https://svn.apache.org/repos/asf/subversion/trunk/notes/api-errata/1.9/"
+>API errata</a> for more detailed information on what these APIs are
+and what impact these changes may have.</p>
+
+<div class="h3" id="new-feature-compatibility-table">
+<h3>New Feature Compatibility Table
+  <a class="sectionlink" href="#new-feature-compatibility-table"
+    title="Link to this section">&para;</a>
+</h3>
+<table border="1">
+  <tr>
+    <th>New Feature</th>
+    <th>Minimum Client<sup>1</sup></th>
+    <th>Minimum Server</th>
+    <th>Minimum Repository</th>
+    <th>Notes</th></tr>
+  <tr>
+    <td><a href="#prospective-blame">Prospective blame</a></td>
+    <td>1.9</td>
+    <td>1.8</td>
+    <td>any</td>
+    <td></td></tr>
+  <tr>
+    <td><a href="#fsfs-improvements">FSFS format 7</a></td>
+    <td>any</td>
+    <td>1.9</td>
+    <td>1.9</td>
+    <td>Older formats remain supported.</td></tr>
+  <tr>
+    <td><a href="#lock-http-pipelining">Lock HTTP pipelining</a></td>
+    <td>1.9</td>
+    <td>1.2</td>
+    <td>1.2</td>
+    <td></td></tr>
+  <tr>
+    <td><a href="#locking-multiple-files">Commit unlocking</a></td>
+    <td>1.2</td>
+    <td>1.9</td>
+    <td>1.2</td>
+    <td></td></tr>
+  <tr>
+    <td><a href="#locking-multiple-files">Locking multiple files</a></td>
+    <td>1.3</td>
+    <td>1.9</td>
+    <td>1.2</td>
+    <td>Over the svn:// protocol.</td></tr>
+  <tr>
+    <td><a href="#fsx">FSX</a></td>
+    <td>any</td>
+    <td>1.9</td>
+    <td>1.9</td>
+    <td>Will not be compatible with 1.10</td></tr>
+   <tr>
+     <td colspan="5"><sup>1</sup>Reminder: when using the <tt>file://</tt>
+       repository access method, the Subversion program is both the client
+       <em>and</em> the server.</td></tr>
+</table>
+
+</div>  <!-- new-feature-compatibility-table -->
+
+<div class="h3" id="wc-upgrade">
+<h3>Upgrading the Working Copy
+  <a class="sectionlink" href="#wc-upgrade"
+    title="Link to this section">&para;</a>
+</h3>
+
+<p>Subversion 1.9 uses the same working copy format as Subversion 1.8.</p>
+
+<p>Before using Subversion 1.9 with an existing Subversion 1.7 or older
+working copy, users will be required to run the <tt>svn upgrade</tt> command
+to upgrade working copy metadata to the new format. This command may take a
+while in some cases, and for some users, it may be more practical to simply
+checkout a new working copy.</p>
+
+<p><strong>Note:</strong> Subversion 1.9 cannot upgrade working copies that
+a 1.6 client would have refused to operate upon before an <tt>svn cleanup</tt>
+was run (with a 1.6 client).  In other words, before upgrading to 1.9, a 1.6
+or older client must be used to run <tt>svn cleanup</tt> on all 1.6 or older
+working copies that require cleanup.  Likewise, Subversion 1.9 cannot upgrade
+corrupt working copies. Unfixable problems can arise from missing or corrupt
+meta-data inside <tt>.svn</tt> directories.  Such damage to the working copy
+is permanent, and cannot be fixed even if <tt>svn cleanup</tt> is run prior
+to the upgrade.</p>
+
+<p>If your working copy does not upgrade cleanly, please check out a new one.
+</p>
+
+</div>  <!-- wc-upgrade -->
+
+<div class="h3" id="compat-deps">
+<h3>Upgraded Minimal Dependencies
+  <a class="sectionlink" href="#compat-deps"
+    title="Link to this section">&para;</a>
+</h3>
+
+<div class="h4" id="python-2.7">
+<h4>Python (optional dependency) must be ≥2.7
+  <a class="sectionlink" href="#python-2.7"
+    title="Link to this section">&para;</a>
+</h4>
+
+<p>The <a href="https://www.python.org/">Python</a> programming language is an
+optional dependency.  It is required for running the test suite and for
+building nightly versions, but not for building from packaged releases.</p>
+
+<p>Subversion 1.8 supported Python 2.5 and newer.  Subversion 1.9 requires
+Python 2.7.  Older versions of Python are no longer guaranteed to work.</p>
+
+<p>We break compatibility with Python 2.6 and older since it has been
+end-of-life for nearly two years, and in order to introduce compatibility with
+Python 3.x in patch releases of the 1.9.x line.</p>
+
+</div>  <!-- python-2.7 -->
+
+</div>  <!-- compat-deps -->
+
+<div class="h3" id="compat-misc">
+<h3>Miscellaneous Compatibility Notes
+  <a class="sectionlink" href="#compat-misc"
+    title="Link to this section">&para;</a>
+</h3>
+
+<p>There are some additional specific areas where changes made in this
+release might necessitate further adjustment by administrators or
+users.  We'll cover those in this section.</p>
+
+<div class="h4" id="next-release-is-1.10">
+<h4>Next release will be numbered 1.10
+  <a class="sectionlink" href="#next-release-is-1.10"
+    title="Link to this section">&para;</a>
+</h4>
+
+<p>The next minor release after 1.9.0 will be numbered 1.10.0.</p>
+
+<p>Since "1.10.0" is smaller than "1.9.0" when considered as ASCII strings,
+scripts that compare Subversion versions as strings may fail to correctly
+determine which of "1.10.0" and "1.9.0" is the more recent one.  Such
+scripts should be changed to compare Subversion version numbers correctly:
+as tuples of integers, with an optional suffix for development or pre-release
+versions.  See
+<a href="/docs/community-guide/releasing#release-numbering"
+>the Subversion release numbering documentation</a>
+for details.  (Programs written against the C API or the various bindings
+should refer to the 
+<!-- TODO: link is broken (doxygen not yet generated) -->
+<a href="https://subversion.apache.org/docs/api/1.9/svn__version_8h.html"
+><tt>svn_version_*</tt> interfaces</a>.)</p>
+
+<p>The next patch releases on the 1.9.x line will be numbered 1.9.1, 1.9.2,
+&hellip;, as usual.</p>
+
+</div>  <!-- next-release-is-1.10 -->
+
+</div>  <!-- compat-misc -->
+
+</div>  <!-- compatibility -->
+
+<div class="h2" id="new-features">
+<h2>New Features
+  <a class="sectionlink" href="#new-features"
+    title="Link to this section">&para;</a>
+</h2>
+
+<div class="h3" id="fsfs-improvements">
+<h3>FSFS improvements
+  <a class="sectionlink" href="#fsfs-improvements"
+     title="Link to this section">&para;</a>
+</h3>
+    
+<div class="h4" id="fsfs-format7">
+<h4>Format bump
+  <a class="sectionlink" href="#fsfs-format7"
+     title="Link to this section">&para;</a>
+</h4>
+
+<p>The default filesystem format is now a new format, numbered 7.
+(The new command <a href="#svnadmin-info" title="svnadmin info">
+<tt>svnadmin info</tt></a> displays the filesystem format number
+of a repository.)
+In contrast to previous
+releases, format 7 is a major overhaul with the general goal of I/O reduction.
+Major changes include:
+</p>
+
+<ul>
+  <li>Revision content is no longer addressed by physical location (offset)
+      within the rev file but by logical item numbers.  Two indexes provide
+      the necessary mapping information.  You can no longer manipulate the
+      rev / pack file contents manually.</li>
+  <li><tt>svnadmin pack</tt> reorders the revision data such that related
+      information is put next to each other and can often be read with a
+      single I/O.</li>
+  <li>Block reads are an option now and will fetch data in larger blocks of
+      configurable size (64kB by default) and cache all of their contents.
+      This eliminates much of the OS overhead.</li>
+  <li>Explicit flags for <tt>svn:mergeinfo</tt> changes speed up
+      mergeinfo-related operations like <tt>svn log -g</tt>.</li>
+  <li>Full checksum coverage of all revision data, including meta data and
+      structural information.</li>
+  <li>Allow commits while packing is in progress.</li>
+</ul>
+
+<p>As with earlier releases, you may simply run <tt>svnadmin upgrade</tt> on
+your repository.  However, the new addressing, checksumming and packing scheme
+will not be used in that case but only in repositories that got created as format
+7. For best performance and to enable all features, it is recommended to
+perform a full
+<a href="http://svnbook.red-bean.com/en/1.7/svn.reposadmin.maint.html#svn.reposadmin.maint.migrate.svnadmin">
+dump / load</a> cycle.  You can tell whether all format 7 features are enabled
+by looking for <tt>FSFS Logical Addressing: yes</tt> in the output of
+<tt>svnadmin info</tt>: if that line is printed, then the repository has
+all format 7 features enabled.
+</p>
+
+<div class="notice">
+  <p><span style="color: red"><b>WARNING:</b></span> <b>Server restart
+  required!</b>  Replacing an existing repository with one rebuilt from a
+  dump or restored from backup requires a server restart.  This is true for
+  any repository format.  Alternatively, you may store the new repository in
+  a different directory and redirect the Apache configuration to use that
+  instead of the old one; <tt>svnserve</tt> does not offer that option.</p>
+</div>
+
+<p>The next subsection compares performance characteristics of repositories
+created directly as format 7 with those upgraded to format 7 from older formats.
+</p>
+
+</div>  <!-- fsfs-format7 -->
+
+<div class="h4" id="format7-comparison">
+  <h4>Service quality
+    <a class="sectionlink" href="#format7-comparison"
+      title="Link to this section">&para;</a>
+  </h4>
+
+<p>The FSFS changes in 1.9 are aimed at better service quality and do not
+translate into client-side features being available or not.  Depending on
+your setup, some of the improvements may be relevant while others are not.
+This table shall help you decide what features are relevant to your environment
+and whether you need to upgrade or dump and load your repositories to reap
+the benefits.
+</p>
+
+<table border="1">
+  <tr>
+    <th>Feature</th>
+    <th>Format 6<br />or older</th>
+    <th>Upgraded to format 7<br />from older formats</th>
+    <th>Created as format 7<br />not packed</th>
+    <th>Created as format 7<br />packed</th></tr>
+  <tr>
+    <td>Reduction in dynamic memory usage<sup>1</sup></td>
+    <td><span style="color: green"><b>yes</b></span></td>
+    <td><span style="color: green"><b>yes</b></span></td>
+    <td><span style="color: green"><b>yes</b></span></td>
+    <td><span style="color: green"><b>yes</b></span></td></tr>
+  <tr>
+    <td>Saturate 10Gb networks from SVN caches<sup>2</sup></td>
+    <td><span style="color: green"><b>yes</b></span></td>
+    <td><span style="color: green"><b>yes</b></span></td>
+    <td><span style="color: green"><b>yes</b></span></td>
+    <td><span style="color: green"><b>yes</b></span></td></tr>
+  <tr>
+    <td>Saturate 1Gb networks from OS caches<sup>3</sup></td>
+    <td><span style="color: green"><b>yes</b></span></td>
+    <td><span style="color: green"><b>yes</b></span></td>
+    <td><span style="color: green"><b>yes</b></span></td>
+    <td><span style="color: green"><b>yes</b></span></td></tr>
+  <tr>
+    <td><tt>svnadmin pack</tt> does not block commits</td>
+    <td><span style="color: red"><b>no</b></span></td>
+    <td><span style="color: green"><b>yes</b></span></td>
+    <td><span style="color: green"><b>yes</b></span></td>
+    <td><span style="color: green"><b>yes</b></span></td></tr>
+  <tr>
+    <td>Full checksum coverage of revision data<sup>4</sup></td>
+    <td><span style="color: red"><b>no</b></span></td>
+    <td><span style="color: red"><b>no</b></span></td>
+    <td><span style="color: green"><b>yes</b></span></td>
+    <td><span style="color: green"><b>yes</b></span></td></tr>
+  <tr>
+    <td><a href="#svnadmin-verify" title="svnadmin verify">Quick
+      verification</a> to find external corruption<sup>5</sup></td>
+    <td><span style="color: red"><b>no</b></span></td>
+    <td><span style="color: red"><b>no</b></span></td>
+    <td><span style="color: green"><b>yes</b></span></td>
+    <td><span style="color: green"><b>yes</b></span></td></tr>
+  <tr>
+    <td>Fast access to cold data on disk<sup>6</sup></td>
+    <td><span style="color: red"><b>no</b></span></td>
+    <td><span style="color: red"><b>no</b></span></td>
+    <td><span style="color: red"><b>no</b></span></td>
+    <td><span style="color: green"><b>yes</b></span></td></tr>
+  <tr>
+    <td colspan="5"><p><sup>1</sup> Where feasible, temporary buffers have a
+      fixed maximum size now.  Other temporary containers have been reduced
+      in memory consumption.</p>
+      <p><sup>2</sup> If almost all requests can be served from SVN fulltext
+      caches etc., an 8-core server running Apache can saturate a 10Gb network
+      with uncompressed data.  It will take 20+ concurrent checkout or export
+      requests to generate that load.</p>
+      <p><sup>3</sup> If virtually all requests can be served from the OS file
+      cache, a 4-core server running Apache can saturate a 1Gb network with
+      uncompressed data.  It will take 2 or more concurrent checkout or export
+      requests to generate that load.</p>
+      <p><sup>4</sup> Not only user file contents, directories and properties
+      are protected by checksums but also the meta-data tying them together.
+      This only detects external corruption caused by rogue scripts, hard
+      disk failure etc. and will not help against internal corruption caused
+      by faulty SVN logic.</p>
+      <p><sup>5</sup> Verifies a repository at several 100MB/s and does not
+      slow down with increasing number of revisions.  This allows for a much
+      faster health check after system failure.</p>
+      <p><sup>6</sup> Core feature of format 7.  Revision data is read about
+      twice as fast as with older formats.  Assuming reading data from disk
+      being 10x slower than from OS caches and a mere 10% OS cache misses,
+      this translates into 30% higher overall throughput with format 7 over
+      previous formats.</p>
+      </td></tr>
+</table>
+
+<p>Most users will want to not only <tt>svnadmin upgrade</tt> to migrate
+their repositories but to eventually migrate them to format 7.  For some,
+it will be the fast verification feature, others will need the disk I/O
+improvements. Note that the key I/O characteristics here is the 
+<a href="https://en.wikipedia.org/wiki/Bandwidth-delay_product">Bandwidth
+Delay Product</a> of your storage, which is usually between 100kB and 1MB.
+Even with SSDs you will see a speed-up, unless your storage bandwidth is
+severely limited.
+</p>
+
+<p>There is no appreciable difference in CPU usage between the new format
+and the older ones.  Hence, the few setups that work almost entirely from
+RAM due to very large caches will see little extra performance with format
+7.  These environments will still benefit from the improved checksum coverage
+and the support for quick verification.
+</p>
+
+<div class="notice">
+  <p>Make sure to run <tt>svnadmin pack</tt> on your format 7 repositories
+  at regular intervals.  Otherwise, you'll waste performance.
+  </p>
+</div>
+
+</div>  <!-- format7-comparison -->
+
+<div class="h4" id="format7-options">
+  <h4>Format 7 tuning options
+    <a class="sectionlink" href="#format7-options"
+      title="Link to this section">&para;</a>
+  </h4>
+  
+<p>New configuration options are available for tuning read block sizes (format
+7 only).  They may be changed at any time without causing consistency issues
+with existing revisions.  Changing them is rarely necessary, but may result in
+slightly improved performance with your specific storage backend or when
+dealing with multi-TB repositories.  See the commentary in <tt>fsfs.conf</tt>
+for more information.  (You may have to create a new repository to see
+the documentation about these settings in <tt>fsfs.conf</tt>.)
+</p>
+
+<pre>
+  [io]
+  block-size = 256
+  l2p-page-size = 32768
+  p2l-page-size = 16384
+</pre>
+
+</div>  <!-- fsfs-format7 -->
+
+<div class="h4" id="fsfs-compression">
+<h4>Zlib compresssion is now optional
+  <a class="sectionlink" href="#fsfs-compression"
+     title="Link to this section">&para;</a>
+</h4>
+
+<p>FSFS uses a combination of two methods to reduce on-disk data size.  First,
+we determine the changes (delta) against some previous version of the same file.
+This process can be controlled by <tt>fsfs.conf</tt> settings since 1.8.  The result
+would then be compressed using ZIP/deflate.  That relatively costly operation
+limits commit speeds of large incompressible files.  You may now specify the
+compression level in <tt>fsfs.conf</tt> or disable compression entirely:
+</p>
+
+<pre>
+  [deltification]
+  compression-level = 0
+</pre>
+
+</div>  <!-- fsfs-compression -->
+    
+<div class="h4" id="fsfs-defaults">
+<h4>Changed deltification defaults
+  <a class="sectionlink" href="#fsfs-defaults"
+     title="Link to this section">&para;</a>
+</h4>
+        
+<p>Directory and property deltification are now enabled by default for FSFS
+repositories in 1.6 format or newer.  Various optimizations were added to the
+delta creation code to minimize the read amplification effect and to provide
+a net speedup when using deltification vs. not using it.  Keep
+<a href="#fsfs-caching">txdelta caches</a> enabled when using directories
+deltification. Otherwise, you may suffer a significant performance hit.</p>
+
+<p>To prevent Subversion 1.9 from deltifying properties and directories in
+older format repositories, set the following options in the
+repository’s <tt>fsfs.conf</tt> file:
+</p>
+
+<pre>
+    [deltification]
+    enable-dir-deltification = false
+    enable-props-deltification = false
+</pre>
+
+</div>  <!-- fsfs-defaults -->
+    
+<div class="h4" id="fsfs-caching">
+<h4>Changes to the caching
+  <a class="sectionlink" href="#fsfs-caching"
+     title="Link to this section">&para;</a>
+</h4>
+
+<p>The caching logic has been enhanced to cope with the extra load caused by
+the access indirection introduced in FSFS format 7.  While most of this simply
+means more net speed, some changes may affect your configuration settings.</p>
+
+<ul>
+  <li>Fulltext and txdelta caching are now enabled by default for all servers
+      as well as for local repository access.</li>
+  <li>Revision property caching is disabled and the respective server option
+      will be ignored.</li>
+  <li>Directories 3x as large as in 1.8 can now be cached.</li>
+  <li>Caching is quasi-perfect on short time scales (requesting data equal or
+      less than approx. 10% of the cache size).  This greatly improves
+      performance when e.g. many clients check out the same project.</li>
+  <li>Long-term caching is now priority-based with text deltas having the lowest
+      priority.  This results in slower but more reliable heating up, i.e. it
+      takes multiple similar requests until all frequently used data is kept in
+      cache, but it will reach this point eventually while older releases might
+      not.</li>
+</ul>
+
+</div>  <!-- fsfs-caching -->
+    
+</div>  <!-- fsfs-improvements -->
+
+<div class="h3" id="svnfsfs">
+<h3><tt>svnfsfs</tt> &ndash; A low-level FSFS manipulation tool
+  <a class="sectionlink" href="#svnfsfs"
+    title="Link to this section">&para;</a>
+</h3>
+
+<div class="h4" id="svnfsfs-overview">
+<h4>Overview
+  <a class="sectionlink" href="#svnfsfs-overview"
+    title="Link to this section">&para;</a>
+</h4>
+
+<p>Where the <tt>svnadmin</tt> tool covers typical administrative tasks
+in a mostly back-end agnostic way, <tt>svnfsfs</tt> is a specialist tool
+for analyzing and manipulating of FSFS repositories.  It is not intended
+for everyday use.
+</p>
+
+</div>  <!-- svnfsfs-overview -->
+
+<div class="h4" id="svnfsfs-stats">
+<h4><tt>stats</tt> sub-command replacing the <tt>fsfs-stats</tt> tool
+  <a class="sectionlink" href="#svnfsfs-stats"
+    title="Link to this section">&para;</a>
+</h4>
+
+<p>The <tt>fsfs-stats</tt> tool first released with Subversion 1.8 has
+been replaced by the <tt>svnfsfs stats</tt> sub-command and is no longer
+part of Subversion 1.9.  Both produce similar output.
+</p>
+
+</div>  <!-- svnfsfs-stats -->
+
+<div class="h4" id="svnfsfs-index-manipulation">
+<h4>Reading and writing format 7 indexes
+  <a class="sectionlink" href="#svnfsfs-index-manipulation"
+    title="Link to this section">&para;</a>
+</h4>
+
+<p>During forensics or data recovery, it is necessary for experts to
+directly "look into" the raw database files.  While the FSFS on-disk
+format is fully documented, the indirect addressing and reordering
+added in format 7 makes it hard for humans to trace internal references.
+This is where the <tt>svnfsfs dump-index</tt> sub-command is used.
+It produces a table describing all items in revision and pack files:
+</p>
+
+<pre>
+    $ svnfsfs dump-index /path/to/repo -r0
+       Start       Length Type   Revision     Item Checksum
+           0           11 drep          0        3 60232b75
+          11           59 node          0        2 403dbe48
+          6a            1 chgs          0        1 f28a4f1d
+</pre>
+
+<p>Because the index information must always match the actual file
+contents, updating the index data after every revision / pack file
+manipulation is mandatory in format 7. <tt>svnfsfs load-index</tt>
+allows you to do that.  It consumes the same table format as produced
+above, except that the checksum field is optional and will be ignored
+if given.  See <a href="#svnfsfs-issues">the known issues list</a>
+for problems in released versions of that tool.
+</p>
+
+<div class="notice">
+  <p><span style="color: red"><b>WARNING:</b></span> Be sure to
+    create a backup of your repository before trying to manipulate
+    it through <tt>svnfsfs</tt> !</p>
+</div>
+
+</div>  <!-- svnfsfs-index-manipulation -->
+
+<div class="h4" id="svnfsfs-issues">
+<h4>Known issues
+  <a class="sectionlink" href="#svnfsfs-issues"
+    title="Link to this section">&para;</a>
+</h4>
+
+<p>In 1.9.0, the <tt>svnfsfs load-index</tt> does not work as described
+in its documentation.  The following restrictions and workarounds apply:
+</p>
+
+<ul>
+  <li>The lines must be sorted by offset (first column).</li>
+  <li>The item number (5th column) must be given as hexadecimal.  However,
+      <tt>svnfsfs dump-index</tt> produces decimal numbers in that column.
+  </li>
+  <li>The first entry must refer to the first revision in the pack file.
+      This is a non-issue for unpacked revisions. A simple solution is
+      inserting a line for empty section of length 0: 
+      <pre>
+       Start       Length Type   Revision     Item 
+           0            0 none       3000        0
+           0          25a chgs       3999        1
+         25a          3b9 chgs       3998        1
+       ...
+     </pre>
+  </li>
+</ul>
+
+<p>These problems have been fixed in 1.9.1.
+</p>
+
+</div>  <!-- svnfsfs-issues -->
+
+</div>  <!-- svnfsfs -->
+
+<div class="h3" id="fsx">
+<h3>FSX &ndash; A new experimental repository backend
+  <a class="sectionlink" href="#fsx"
+    title="Link to this section">&para;</a>
+</h3>
+
+<div class="h4" id="fsx-overview">
+<h4>Overview
+  <a class="sectionlink" href="#fsx-overview"
+    title="Link to this section">&para;</a>
+</h4>
+
+<p>Since its inception 10 years ago, FSFS has been improved greatly and the
+<a href="#fsfs-format7">improvements provided with format 7</a> are another
+major step forward.  However, there are limits to what can be done in a
+meaningful and backward compatible way.  FSX is being designed to overcome
+these limitations.  Here some of the intended improvements:
+</p>
+
+<ul>
+  <li>90% reduction in metadata overhead.</li>
+  <li>Efficient handling of very large files.</li>
+  <li>Higher overall compression rates, in particular for office-style
+      documents.</li>
+  <li>Information required for log and merge operations is more readily
+      available.</li>
+  <li>O(1) handling of large directories.</li>
+  <li>Versioned revision properties.</li>
+  <li>Partitionable storage.</li>
+  <li>Arbitrary meta data storage and indexing facilities.</li>
+</ul>
+
+<p>Development of FSX was started as a fork of FSFS to guarantee
+functional completeness and testability.  The current code still contains
+remnants of FSFS legacy code and not all of the above improvements have been
+implemented yet.  Later releases will close the gap and remove transitional
+code.
+</p>
+
+<div class="notice">
+  <p><span style="color: red"><b>WARNING:</b></span> FSX is <b>NOT</b> production
+    ready.  DO NOT USE IT &ndash; unless you have read this section carefully and
+    understand the limitations of FSX in Subversion 1.9.</p>
+</div>
+
+</div>  <!-- fsx-overview -->
+
+<div class="h4" id="fsx-usage-scenarios">
+<h4>Usage scenarios
+  <a class="sectionlink" href="#fsx-usage-scenarios"
+    title="Link to this section">&para;</a>
+</h4>
+
+<p>FSX is nowhere near as stable and reliable as FSFS.  Furthermore, there will
+be no support for 1.9-style FSX repositories in 1.10
+(see <a href="#fsx-incompatibility">Incompatibility</a>).  Think, therefore,
+of all data in a FSX repository as being potentially corrupt.  Its improved
+performance and storage characteristics, though, might make FSX a viable
+option for the following use-cases:</p>
+
+<ul>
+  <li>Running analysis or reporting tools whose output does not need to be 100%
+      reliable.  Use FSX as a high-speed data source in a read-only mirror.</li>
+  <li>Investigate how FSX may fit into your future infrastructure.  How well
+      does it perform with your data set concerning disk, I/O, RAM and CPU
+      usage?</li>
+</ul>
+
+<p></p>
+
+<div class="notice">
+  <p>If you experiment with FSX, please <a href="/mailing-lists">let
+     us know</a> your findings.  This is your chance to get your
+     use-case covered before storage format and principles of
+     operation are set in stone.</p>
+</div>
+
+</div>  <!-- fsx-usage-scenarios -->
+
+<div class="h4" id="fsx-incompatibility">
+<h4>Incompatibility
+  <a class="sectionlink" href="#fsx-incompatibility"
+    title="Link to this section">&para;</a>
+</h4>
+
+<p>The FSX code and storage representation is in an intermediate state with
+respect to the feature set that its developers have in mind.  For as long as
+it keeps its experimental status, there will be neither forward nor backward
+compatibility between FSX repositories of different Subversion feature releases.
+Subversion 1.10 and later will recognize 1.9 FSX repositories and error out
+on them.  You may use <a href="http://svnbook.red-bean.com/en/1.7/svn.reposadmin.maint.html#svn.reposadmin.maint.migrate.svnadmin">
+dump and load</a> to upgrade an FSX repository from one release to another.</p>
+
+<p>Dump and load is also the only upgrade path between FSFS and FSX.</p>
+
+<p>Finally, there is no guarantee that FSX will eventually be released at all;
+as an experimental backend, we make no promise that future releases will
+support reading or writing FSX repositories.</p>
+
+</div>  <!-- fsx-incompatibility -->
+
+</div>  <!-- fsx -->
+
+</div>  <!-- new-features -->
+
+<div class="h2" id="enhancements">
+<h2>Enhancements and Bugfixes
+  <a class="sectionlink" href="#enhancements"
+    title="Link to this section">&para;</a>
+</h2>
+
+<!-- Don't need to highlight every bugfix, just major ones which aren't in
+     any patch release. -->
+
+<div class="h3" id="cmdline">
+<h3>Command-line client improvements (<em>client</em>)
+  <a class="sectionlink" href="#cmdline"
+    title="Link to this section">&para;</a>
+</h3>
+
+<div class="h4" id="svn-auth">
+<h4>New sub-command <tt>svn auth</tt>
+  <a class="sectionlink" href="#svn-auth"
+     title="Link to this section">&para;</a>
+</h4>
+
+<p>The new <tt>svn auth</tt> sub-command can be used to view or remove
+authentication credentials saved in any of the supported password caches.
+Authentication credentials include usernames, passwords,
+SSL certificates, and SSL client-certificate passphrases.</p>
+
+<p>Specific credentials can be selected with an arbitrary number of pattern
+arguments which are matched against the attributes of each credential.
+For example, view cached SSL certificates for the <i>apache.org</i> domain,
+matched via credential kind (svn.ssl.server) and authentication realm and
+certificate subject (apache.org):
+</p>
+<pre>
+$ svn auth svn.ssl.server apache.org
+------------------------------------------------------------------------
+Credential kind: svn.ssl.server
+Authentication realm: https://svn.us.apache.org:443
+Subject: C=US, ST=Maryland, L=Forest Hill, O=The Apache Software Foundation, OU=Infrastructure, CN=*.apache.org
+Valid from: 2015-04-29 02:00:00 +0200 (Wed, 29 Apr 2015)
+Valid until: 2017-04-30 01:59:59 +0200 (Sun, 30 Apr 2017)
+Issuer: C=US, O=Symantec Corporation, OU=Symantec Trust Network, CN=Symantec Class 3 Secure Server CA - G4
+Fingerprint: 4ad722dd0442043657d176f9c81aab66094d4223
+Hostnames: *.apache.org
+Automatic certificate validity check failed because:
+  The certificate's Common Name (hostname) does not match the remote hostname.
+
+  Credentials cache in '~/.subversion' contains 1 matching credentials
+</pre>
+
+<p>For more information, see <tt>svn help auth</tt>.</p>
+
+</div> <!-- svn-auth -->
+
+<div class="h4" id="svn-info-item">
+<h4><tt>svn info --show-item=<i>arg</i> [--no-newline]</tt>
+  <a class="sectionlink" href="#svn-info-item"
+     title="Link to this section">&para;</a>
+</h4>
+
+<p>The <tt>svn info</tt> command can now display the value of one of the fields
+and nothing else, for easier consumption by scripts.</p>
+
+<p>Subversion 1.8 and earlier had two output modes: the default, human-oriented
+output, mode and the XML mode for scripted use.  Subversion 1.9 adds a third
+output mode, whereby exactly one attribute will be displayed:</p>
+
+<pre>
+## Display the youngest revision of a repository:
+% svn info --show-item=revision https://svn.apache.org/repos/asf/subversion/trunk
+1693514
+
+## Find the root directory of a working copy:
+% svn info --show-item=wc-root
+/home/jrandom/src/svn/trunk
+</pre>
+
+<p>Incidentally, Subversion will also attempt to offer the correct selector name
+if the argument was misspelled:</p>
+
+<pre>
+% svn info --show-item=wcroot
+svn: E205000: Try 'svn help info' for more information
+svn: E205000: 'wcroot' is not a valid value for --show-item; did you mean 'wc-root'?
+</pre>
+
+<p>The list of valid arguments to <tt>--show-item</tt> may be found in its help
+message, <tt>svn help info</tt>.  As of 1.9, the valid values are
+<tt>kind</tt>,
+<tt>url</tt>,
+<tt>relative-url</tt>,
+<tt>repos-root-url</tt>,
+<tt>repos-uuid</tt>,
+<tt>revision</tt>,
+<tt>last-changed-revision</tt>,
+<tt>last-changed-date</tt>,
+<tt>last-changed-author</tt>,
+and
+<tt>wc-root</tt>.</p>
+
+<p>The <tt>--no-newline</tt> argument instructs <tt>svn</tt>
+not to emit a cosmetic newline (<tt>\n</tt>) after the value.</p>
+
+</div> <!-- svn-info-item -->
+
+<div class="h4" id="svn-propget-no-newline">
+<h4><tt>svn propget --no-newline</tt>
+  <a class="sectionlink" href="#svn-propget-no-newline"
+     title="Link to this section">&para;</a>
+</h4>
+
+<p>The <tt>svn propget</tt> sub-command has a new <tt>--no-newline</tt> option.
+It is equivalent to the old <tt>--strict</tt> option which is now deprecated.</p>
+
+</div> <!-- svn-propget-no-newline -->
+
+<div class="h4" id="svn-trust">
+<h4>New HTTPS-related argument <tt>--trust-server-cert-failures</tt>
+  <a class="sectionlink" href="#svn-trust"
+     title="Link to this section">&para;</a>
+</h4>
+
+<p>The new <tt>--trust-server-cert-failures</tt> option is intended to be used
+by scripts which for some reason must accept SSL certificates which fail
+validation for various reasons (e.g. expired certificates).</p>
+
+<p>If at all possible, fixing a certificate problem is preferable to using
+this option.</p>
+
+<p>The <tt>--trust-server-cert-failures</tt> option only works in conjunction with
+the <tt>--non-interactive</tt> option.</p>
+
+<p>Previous versions of Subversion in non-interactive mode could only ignore
+certificates with an unknown certificate authority, but expired or otherwise
+invalid SSL certificates could not be accepted.</p>
+
+</div> <!-- svn-trust -->
+
+<div class="h4" id="svn-copy-pin-externals">
+<h4>New <tt>--pin-externals</tt> option for <tt>svn copy</tt>
+  <a class="sectionlink" href="#svn-copy-pin-externals"
+     title="Link to this section">&para;</a>
+</h4>
+
+<p>The <tt>svn copy</tt> sub-command now supports a new <tt>--pin-externals</tt> option.
+Use of this option is recommended when creating tags.</p>
+
+<p>If this option is used, <tt>svn copy</tt> pins the URLs in <tt>svn:externals</tt>
+properties in the copied tree to their current revision, such that externals keep
+their current contents when the copied tree is checked out at a later time.</p>
+
+<p>Note that external references within externals cannot be pinned as this would require
+<tt>svn copy</tt> to make commits to any foreign repositories referenced by externals.</p>
+
+</div> <!-- svn-copy-pin-externals -->
+
+<div class="h4" id="svn-cleanup-options">
+<h4>New options for <tt>svn cleanup</tt>
+  <a class="sectionlink" href="#svn-cleanup-options"
+     title="Link to this section">&para;</a>
+</h4>
+
+<p>The <tt>svn cleanup</tt> command has new <tt>--remove-unversioned</tt>
+and <tt>--remove-ignored</tt> options which can be used to remove unversioned
+and ignored files from the working copy.</p>
+
+<p><tt>svn cleanup</tt> can now recurse into externals with the new
+<tt>--include-externals</tt> option.</p>
+
+</div> <!-- svn-cleanup-options-->
+
+<div class="h4" id="svn-resolver-m">
+<h4>Interactive conflict resolver changes
+  <a class="sectionlink" href="#svn-resolver-m"
+     title="Link to this section">&para;</a>
+</h4>
+
+<p>In the interactive conflict resolver, the <tt>(m) merge</tt> command now
+tries an external file merge tool if one is defined. Else the internal file
+merge tool is used.</p>
+
+<p>In Subversion 1.8, the <tt>(m) merge</tt> command always triggered the
+internal file merge tool. The <tt>(i) internal merge tool</tt> command was
+added to Subversion 1.9 and has the old meaning of the <tt>(m) merge</tt>
+command.</p>
+
+</div> <!-- svn-resolver-m -->
+
+<div class="h4" id="svn-status-r">
+<h4><tt>svn status</tt> now takes <tt>--revision</tt> (<tt>-r</tt>)
+  <a class="sectionlink" href="#svn-status-r"
+     title="Link to this section">&para;</a>
+</h4>
+
+<p>The <tt>status</tt> command, when given the <tt>--show-updates</tt>
+(<tt>-u</tt>) flag, can now compare the working copy to specific remote
+revision, given by the <tt>-r</tt> (<tt>--revision</tt>) flag.  (Previously,
+the remote revision would default to HEAD.)</p>
+
+</div> <!-- svn-status-r -->
+
+</div> <!-- cmdline -->
+
+<div class="h3" id="server-side-improvements">
+<h3>Server-side improvements
+  <a class="sectionlink" href="#server-side-improvements"
+     title="Link to this section">&para;</a>
+</h3>
+
+<div class="h4" id="fewer-ood-conditions">
+<h4>Committing the result of large merges
+  <a class="sectionlink" href="#fewer-ood-conditions"
+     title="Link to this section">&para;</a>
+</h4>
+
+<p>Our best practices suggest that projects should branch and merge
+at the project root level.  Each merge will then usually change the
+<tt>svn:mergeinfo</tt> property at the project base folder.  To commit
+that change, pre-1.9 servers require the client to have the latest
+version of that base folder.  Whenever there is a commit in that tree,
+its base folder will get a new revision as well, though.   Thus, in
+large, busy projects, it is likely that by the time a large merge commit
+would actually have reached its finalization phase, some other commit
+got through and the merge commit is rejected for being out of date.  
+</p>
+
+<p>Subversion 1.9 now allows to modify directory properties based on
+old revisions as long as the directory contents itself did no change.
+Directory contents changes would either be property changes,  added or
+removed entries.  Sub-tree or file contents changes no longer prevent
+the property change from going through.  Of course, true file and tree
+change conflicts will still result in out-of-date errors.
+</p>
+
+<p>This new behavior is not restricted to <tt>svn:mergeinfo</tt> changes
+but applies to any directory properties.  Changes to <tt>svn:ignore</tt>
+are another common scenario previously prone to update / commit /
+out-of-date races.
+</p>
+
+</div> <!-- fewer-ood-conditions -->
+
+<div class="h4" id="rate-limiting-svnserve">
+<h4>Rate limiting <tt>svnserve</tt>
+  <a class="sectionlink" href="#rate-limiting-svnserve"
+     title="Link to this section">&para;</a>
+</h4>
+
+<p>In threaded mode, <tt>svnserve</tt> starts one thread per network
+connection - potentially consuming a large amount of resources.
+Subversion 1.9 now uses a thread pool with a configurable minimum and
+maximum number of threads.  Use the command line options
+<tt>--min-threads</tt> and <tt>--max-threads</tt> if the defaults
+don't suite your needs.
+</p>
+  
+<div class="notice">
+  <p>Once there are more connections than threads, the threads will serve
+  incoming requests in a round-robin fashion.  If all those requests are
+  long-running reports like checkout or export, connections with waiting
+  requests may eventually time out.</p>
+</div>
+
+<p>Whether or not the new options are available depends on the platform
+and APR capabilities.  Also, the default for <tt>--max-threads</tt> is
+lower on 32 bit systems than on 64 bit ones.  Run <tt>svnserve --help</tt>
+to see your system's defaults and whether the options are available at all.
+</p>
+  
+</div> <!-- rate-limiting-svnserve -->
+
+</div> <!-- server-side-improvements -->
+
+<div class="h3" id="svnadmin-improvements">
+<h3><tt>svnadmin</tt> changes and improvements
+  <a class="sectionlink" href="#svnadmin-improvements"
+     title="Link to this section">&para;</a>
+</h3>
+
+<div class="h4" id="svnadmin-info">
+<h4>New sub-command <tt>svnadmin info</tt>
+  <a class="sectionlink" href="#svnadmin-info"
+     title="Link to this section">&para;</a>
+</h4>
+  
+<p>This prints detailed format information for the given repository.
+</p>
+
+<pre>
+  $ svnadmin info /repos/apache/
+  Path: /repos/apache
+  UUID: ac336b0e-000b-11e0-b354-23d019ddd9ed
+  Repository Format: 5
+  Compatible With Version: 1.8.0
+  Repository Capability: mergeinfo
+  Filesystem Type: fsfs
+  Filesystem Format: 6
+  FSFS Sharded: yes
+  FSFS Shard Size: 1000
+  FSFS Shards Packed: 1631/1631
+  FSFS Logical Addressing: no
+  Configuration File: /repos/apache/db/fsfs.conf
+</pre>
+
+</div> <!-- svnadmin-info -->
+
+<div class="h4" id="svnadmin-pack">
+<h4><tt>svnadmin pack</tt>
+  <a class="sectionlink" href="#svnadmin-pack"
+     title="Link to this section">&para;</a>
+</h4>
+  
+<p>Packing now takes a cache size parameter (<tt>-M</tt>) which is used for
+efficient operation on <a href="#fsfs-format7">FSFS format 7 repositories</a>.
+</p>
+
+<pre>
+  $ svnadmin pack -M 1000 /path/to/repository
+</pre>
+
+<p></p>
+
+<div class="notice">
+  <p>Packing is paramount to FSFS format 7 performance; do it often.  To make
+  this feasible, packing FSFS format 7 repositories will no longer block
+  commits for the whole time of its execution.  Instead, individual commits may
+  now get delayed by much shorter periods of time, usually by less than one
+  second.</p>
+</div>
+
+</div>  <!-- svnadmin-pack -->
+
+<div class="h4" id="svnadmin-verify">
+<h4><tt>svnadmin verify</tt>
+  <a class="sectionlink" href="#svnadmin-verify"
+     title="Link to this section">&para;</a>
+</h4>
+  
+<p>Verification will terminate by default once a problem has been found.  The
+new <tt>--keep-going</tt> option instructs svnadmin to continue with the next
+revision such that multiple issues may be found in a single run.  If a revision
+has multiple issues and depending on the verification logic, still only the
+first problem may be reported.</p>
+
+<p>The new <tt>--check-normalization</tt> option reports any path names
+within the same directory or svn:mergeinfo property which differ only
+in character representation (e.g. Unicode precomposed and decomposed
+character representations), but are otherwise identical.</p>
+
+<p>Thorough verification is expensive and becomes slower as the repository
+history grows.  The new <tt>--metadata-only</tt> flag will skip the expensive
+internal consistency checks and reconstruction of all user data.
+In format 7 repositories, this will still perform a quick on-disk checksum
+test of all data in rev / pack files but will only detect cases where
+external forces (storage crash, rogue scripts etc.) modified committed data.
+Also, the checksums are weaker (about a 1 in a billion chance that a random
+change remains undetected) than the ones used to protect the user data.  If
+you suspect internal repository corruption caused by a bug within SVN itself,
+you still need to run a full verification.</p>
+
+</div>  <!-- svnadmin-verify -->
+
+<div class="h4" id="svnadmin-revprop">
+<h4><tt>svnadmin setrevprop --transaction</tt> and
+    <tt>svnadmin delrevprop</tt>
+  <a class="sectionlink" href="#svnadmin-revprop"
+     title="Link to this section">&para;</a>
+</h4>
+
+<p>The <tt>setrevprop</tt> command now takes the <tt>--transaction</tt> flag.
+It can be used from <tt>pre-commit</tt> hooks to set revision properties
+on the transaction (commit-in-progress) before it becomes a commit.</p>
+
+<p>The new <tt>delrevprop</tt> command deletes a revision property from either
+a revision or a transaction.  It complements <tt>setrevprop</tt> which adds
+or modifies revprops.</p>
+
+</div>  <!-- svnadmin-revprop -->
+
+<div class="h4" id="svnadmin-load-ignore-dates">
+<h4><tt>svnadmin load --ignore-dates</tt>
+  <a class="sectionlink" href="#svnadmin-load-ignore-dates"
+     title="Link to this section">&para;</a>
+</h4>
+
+<p>The <tt>svnadmin load</tt> command has a new flag, <tt>--ignore-dates</tt>,
+which causes it to ignore revision datestamps (<tt>svn:date</tt>) in the input
+dumpfile.</p>
+
+</div>  <!-- load-ignore-dates-revprop -->
+
+</div> <!-- svnadmin-improvements -->
+
+<div class="h3" id="svnbench-improvements">
+<h3><tt>svnbench</tt> changes and improvements
+  <a class="sectionlink" href="#svnbench-improvements"
+     title="Link to this section">&para;</a>
+</h3>
+
+<div class="h4" id="svnbench-renamed">
+<h4>Tool renamed from <tt>svn-bench</tt> to <tt>svnbench</tt>
+  <a class="sectionlink" href="#svnbench-renamed"
+     title="Link to this section">&para;</a>
+</h4>
+
+<p>With Subversion 1.9 this tool is now part of the standard set of SVN
+binaries.  In keeping with the existing programs, it has been renamed to
+<tt>svnbench</tt>.</p>
+
+</div> <!-- svnbench-renamed -->
+
+<div class="h4" id="svnbench-null-blame">
+<h4>New sub-command <tt>svnbench null-blame</tt>
+  <a class="sectionlink" href="#svnbench-null-blame"
+     title="Link to this section">&para;</a>
+</h4>
+
+<p>To investigate bottlenecks in <tt>svn blame</tt>, we added a protocol
+driver variant of it to <tt>svnbench</tt>.  The new <tt>null-blame</tt>
+sub-command requests the same data from the server as the normal command
+line client and shows a summary of the amount of data received.</p>
+
+<pre>
+  $ svnbench null-blame -g http://example.org/repo/path/to/file
+               34 revisions
+               31 deltas
+        1,161,077 bytes in deltas
+</pre>
+
+</div> <!-- svnbench-null-blame -->
+
+</div> <!-- svnbench-improvements -->
+
+<div class="h3" id="three-way-conflict-markers">
+<h3>Three-way conflict display, and <tt>diff3</tt> enhancements
+  <a class="sectionlink" href="#three-way-conflict-markers"
+     title="Link to this section">&para;</a>
+</h3>
+  
+<p>When a text conflict occurs (and is not resolved by the interactive conflicts
+resolver during <tt>svn update</tt>, <tt>svn switch</tt> or <tt>svn merge</tt>),
+<em>conflicts markers</em> are written into the conflicted file.  Previous versions
+of Subversion would render conflict markers as follows:</p>
+
+<pre>
+   Unconflicted lines
+   &lt;&lt;&lt;&lt;&lt;&lt;&lt; .mine
+   Contents of the file in the working copy (including local modifications)
+   =======
+   Contents of the file in the revision being updated to
+   &gt;&gt;&gt;&gt;&gt;&gt;&gt; .r2
+   Unconflicted lines
+</pre>
+
+<p>As of Subversion 1.9, conflict markers would be rendered with information on
+the base (called "older" in diff3 parlance):</p>
+
+<pre>
+   Unconflicted lines
+   &lt;&lt;&lt;&lt;&lt;&lt;&lt; .mine
+   Contents of the file in the working copy (including local modifications)
+   ||||||| .r1
+   Contents of the file in the working copy's BASE revision
+   =======
+   Contents of the file in the revision being updated to
+   &gt;&gt;&gt;&gt;&gt;&gt;&gt; .r2
+   Unconflicted lines
+</pre>
+
+<p>Here, one resolves the conflict by manually applying to the
+<tt>&lt;&lt;&lt;&lt;&lt;&lt;&lt;</tt> hunk the same changes that would transform
+the <tt>|||||||</tt> hunk into the <tt>&gt;&gt;&gt;&gt;&gt;&gt;&gt;</tt> hunk.
+For example, the following conflict:</p>
+
+<pre>
+   Unconflicted lines
+   &lt;&lt;&lt;&lt;&lt;&lt;&lt; .mine
+   "Hello hello, world!"
+   ||||||| .r1
+   "Hello, world!"
+   =======
+   "Hello, ${name}!"
+   &gt;&gt;&gt;&gt;&gt;&gt;&gt; .r2
+   Unconflicted lines
+</pre>
+
+<p>should be resolved to:</p>
+
+<pre>
+   Unconflicted lines
+   "Hello hello, ${name}!"
+   Unconflicted lines
+</pre>
+
+<p>The three-way conflict display was already used by property conflicts and
+by the interactive conflicts resolver in previous releases of Subversion.</p>
+
+<p>The old, two-way conflict markers output can be obtained by setting
+<tt>diff3-cmd</tt> in the <a
+href="http://svnbook.red-bean.com/nightly/en/svn.advanced.confarea.html"
+>Subversion runtime configuration</a> (or via the <tt>--config-option</tt>
+or <tt>--diff3-cmd</tt> command-line options) to a <tt>diff3</tt>
+command that generates two-way conflict markers.  Your system may already
+include such a <tt>diff3</tt> program; one is also included with Subversion
+and can be installed via <tt>make install-tools</tt> (Unix) or by building the
+<tt>diff3</tt> or <tt>__MORE__</tt> targets (Windows).  On a typical Unix system,
+simply setting <tt>diff3-cmd=diff3</tt> will restore two-way conflict markers.</p>
+
+<p>Subversion 1.9 adds to the included <tt>diff3</tt> program
+a <tt>--conflict-style</tt> marker that can be used to explicitly choose among
+two-way conflict markers, three-way conflict markers, and a few other options.
+That program can be used independently of Subversion anywhere a <tt>diff3</tt>
+command is needed.</p>
+
+</div>  <!-- three-way-conflict-markers -->
+
+<div class="h3" id="prospective-blame">
+<h3>Prospective blame
+  <a class="sectionlink" href="#prospective-blame"
+     title="Link to this section">&para;</a>
+</h3>
+  
+<p>The <tt>blame</tt> command can now show not only when the <em>last</em>
+change to each line of a given file was, but also when the <em>next</em> change
+will be.</p>
+
+<p>For example, to see for each line in revision&nbsp;3 of README.txt what the
+next revision that changed (or removed) that line would be, run
+<tt>svn blame -r HEAD:3 README.txt</tt>.  (You may need to pass a
+<!-- TODO: link points to nightly (no 1.9 book branch yet) -->
+<a href="http://svnbook.red-bean.com/nightly/en/svn.advanced.pegrevs.html">peg
+revision</a> if the file had been renamed since r3.)</p>
+
+<p>In the <tt>blame</tt> command, the range <tt>-r&nbsp;M:N</tt> always means
+"display information about the file at revision&nbsp;N".  If the range is
+"forward" (M&lt;N) then the normal blame algorithm is used, displaying for each
+line in the file when it was added or last changed; if the range is "reversed"
+(M&gt;N) then the above-described sense is used, describing for each line in rN
+when it was first changed (or deleted) after rN and before rM.</p>
+
+<p>Here is an example, from Subversion's own repository.  The autoconf macro
+<tt>SVN_CHECK_FOR_DUNDER_BUILTINS</tt> was
+<a href="https://svn.apache.org/viewvc/subversion/trunk/build/ac-macros/svn-macros.m4?view=markup&amp;pathrev=1509167#l167"
+>present in r1509167</a> but is not present in HEAD.  The <tt>blame</tt>
+command can determine the revision in which the macro was removed:</p>
+
+<pre>
+% svn blame -r HEAD:1509167 svn-macros.m4
+&vellip;
+1509168   danielsh AC_DEFUN([SVN_CHECK_FOR_DUNDER_BUILTINS],
+</pre>
+
+<p>And indeed, <tt>svn diff -c r1509168</tt> shows that revision 
+<a href="https://svn.apache.org/viewvc/subversion/trunk/build/ac-macros/svn-macros.m4?r1=1509168&amp;r2=1509167&amp;pathrev=1509168&amp;diff_format=h"
+>deleting the definition of the macro</a>.</p>
+
+</div> <!-- prospective-blame -->
+
+<div class="h3" id="lock-http-pipelining">
+<h3>Lock HTTP pipelining
+  <a class="sectionlink" href="#lock-http-pipelining"
+     title="Link to this section">&para;</a>
+</h3>
+
+<p>When locking, or unlocking, multiple files in a single operation
+over HTTP the client will use HTTP pipelining for the individual
+WebDAV LOCK and UNLOCK requests.  This makes the operation faster
+particularly on connections with large network latency.  While HTTP
+pipelining is new for LOCK and UNLOCK the client was already using it
+for GET requests.</p>
+
+</div> <!-- lock-http-pipelining -->
+
+<div class="h3" id="locking-multiple-files">
+<h3>Locking multiple files
+  <a class="sectionlink" href="#locking-multiple-files"
+     title="Link to this section">&para;</a>
+</h3>
+
+<p>Subversion locks, the locks that prevent commits from other working
+copies, are stored in the repository. When adding or removing locks
+the FSFS backend can now operate on several locks at once.  This
+reduces the amount of disk IO when handling multiple locks and is
+significant when the total number of locks in the repository is large,
+100,000 say.</p>
+
+<p>The default behaviour for commits is to automatically release locks
+after a successful commit and this takes advantage of the more
+efficient lock process.  In previous releases the disk IO involved in
+releasing the locks would sometimes be greater than that involved in
+creating the new revision.</p>
+
+<p>Clients using the svn:// protocol will also benefit from the more
+efficient lock handling when locking or unlocking multiple files in a
+single operation.  Clients using HTTP will not get this benefit since
+the client still sends multiple, pipelined, LOCK and UNLOCK requests,
+one for each file.</p>
+
+</div> <!-- locking-multiple-files -->
+
+<div class="h3" id="locking-post-hooks">
+<h3>Multiple paths in post-lock and post-unlock hooks
+  <a class="sectionlink" href="#locking-post-hooks"
+     title="Link to this section">&para;</a>
+</h3>
+
+<p>The post-lock and post-unlock hooks receive multiple paths via
+standard input.  In previous releases the repository backends always
+operated on a single path at a time so only one path was ever passed
+to the hook.  In 1.9 when multiple paths are locked or unlocked in a
+single operation multiple paths will be passed to the hook.</p>
+
+<p>The pre-lock and pre-unlock hooks continue to be passed a single
+path as a parameter.</p>
+
+</div> <!-- locking-post-hooks -->
+
+<div class="h3" id="apache-cache-status">
+<h3>Apache FSFS cache status
+  <a class="sectionlink" href="#apache-cache-status"
+     title="Link to this section">&para;</a>
+</h3>
+
+<p>Subversion's Apache module, mod_dav_svn, can display statistics
+that describe the status of the FSFS cache for the running Apache
+instance.  To enable this define a Location block in the Apache
+configuration file:</p>
+
+<pre>
+  &lt;Location /svn-status&gt;
+    SetHandler svn-status
+  &lt;/Location&gt;
+</pre>
+
+<p>Visiting the Location with a web browser will display statistics
+about the FSFS cache for the running Apache instance.  If Apache is
+configured to use multiple processes, most Unix deployments, the
+statistics will only apply to the process that served the GET request
+and repeating the request will cause different processes to be
+queried.</p>
+
+</div> <!-- apache-cache-status -->
+
+</div>  <!-- enhancements -->
+
+<div class="h2" id="issues">
+<h2>Known issues in the release
+  <a class="sectionlink" href="#issues"
+    title="Link to this section">&para;</a>
+</h2>
+
+<p>There are some known issues in the Subversion 1.9 releases.  These
+may be fixed in later 1.9.x releases.</p>
+
+<div class="h3" id="no-op-changes">
+<h3>No-op changes no longer dumped by '<tt>svnadmin dump</tt>'
+  <a class="sectionlink" href="#no-op-changes"
+    title="Link to this section">&para;</a>
+</h3>
+
+<p>See <a href="https://issues.apache.org/jira/browse/SVN-4598">issue #4598 "No-op changes no longer dumped by 'svnadmin dump' in 1.9"</a>.
+</p>
+
+<p>It has always been possible, in atypical cases, for a commit to mark a
+file as 'changed' without actually changing the file's text and/or
+properties to a different value. Starting from 1.9.0, <tt>svnadmin dump</tt>
+still outputs a record for such a file, including a header saying that the
+action is 'change', but no longer appends a block describing the new text
+for the file. (And similarly for properties, perhaps? TBD.) When
+<tt>svnadmin load</tt> (1.8 or 1.9) reads this dumpfile, it does not record
+any change in the repository for such a file.
+</p>
+
+<p>One user-visible effect is that, after dump and load, 'svn log -v' will
+no longer list the path of such a file in its list of 'changed paths'.
+</p>
+
+<p>A fix for this problem has been included in the 1.9.3 release.
+</p>
+
+</div>  <!-- no-op-changes -->
+
+<div class="h3" id="httpv1-commit-race">
+<h3>"Out of date" errors when committing over HTTPv1
+  <a class="sectionlink" href="#httpv1-commit-race"
+    title="Link to this section">&para;</a>
+</h3>
+
+<p>If there are concurrent commits to the same repository, they may
+randomly fail with an "out of date" error message without actually
+being in conflict.  The problem presents itself to the user like any
+legitimate out-of-date condition and retrying the commit as usual
+will fix the problem.
+</p>
+
+<p>This problem is not new to Subversion 1.9 and limited to repositories
+with high commit frequencies.  Triggering it requires either pre-1.7
+clients, a pre-1.7 server or a server that has HTTPv2 explicitly disabled
+via the <tt>SVNAdvertiseV2Protocol off</tt> option.  To avoid the problem,
+consider upgrading clients and configuring the server to use the HTTPv2
+protocol.
+</p>
+
+<p>svnserve and local repository access are not affected.
+</p>
+
+</div>  <!-- httpv1-commit-race -->
+
+<div class="h3" id="shattered-sha1">
+<h3>Subversion is unable to store SHA1 collisions
+  <a class="sectionlink" href="#shattered-sha1"
+    title="Link to this section">&para;</a>
+</h3>
+
+<p>
+Subversion up to and including 1.9.5 can incorrectly store files with
+different content but the same SHA1 checksum. We recommend that all
+servers update to 1.9.6 and enable representation sharing.
+See our <a href="/security/sha1-advisory.txt">SHA1 advisory</a> for details.
+</p>
+
+</div>  <!-- shattered-sha1 -->
+
+<div class="h3" id="svn-4722">
+<h3>Commit can fail with an undeserved SHA1 collision error
+  <a class="sectionlink" href="#svn-4722"
+    title="Link to this section">&para;</a>
+</h3>
+
+<p>When using a Subversion 1.9.6 or 1.9.7 server, a commit may fail
+with an undeserved SHA1 collision error: "E160000: SHA1 of reps
+&hellip; and &hellip; matches (&hellip;) but contents differ." This
+bug affects the 1.9.6 and 1.9.7 releases.</p>
+
+<p>See <a href="https://issues.apache.org/jira/browse/SVN-4722?issueNumber=4722"
+>issue 4722, "checksum fail during commit when delta is 16K"</a>.
+</p>
+
+<p>A fix for this problem has been included in the 1.9.9 release
+(1.9.8 was not publicly released).</p>
+
+</div>  <!-- svn-4722 -->
+
+</div>  <!-- issues -->
+
+<div class="h2" id="troubleshooting">
+<h2>Troubleshooting issues specific to this release
+  <a class="sectionlink" href="#troubleshooting"
+    title="Link to this section">&para;</a>
+</h2>
+
+<p>Subversion 1.9 introduces new features and makes use of new techniques
+which can trigger problems not encountered in previous versions. In contrast to
+known issues, things listed here are not due to some bug or issue in Subversion
+itself and therefore cannot be fixed with a new patch release.
+This section lists all known problems and provides instructions to solve them,
+if they occur.</p>
+
+<div class="h3" id="http-pipelining-issue">
+<h3>Lock/Unlock errors related to HTTP pipelining
+  <a class="sectionlink" href="#http-pipelining-issue"
+    title="Link to this section">&para;</a>
+</h3>
+
+<p>Subversion 1.9.0 introduces the use of HTTP pipelining for locking/unlocking
+multiple files. While SVN detects whether HTTP pipelining is supported (and
+falls back to non HTTP pipelining mode, if it isn't), issues can arrise, if
+there are flaws or bugs with any of the protocols/applications involved in
+processing pipelined HTTP requests.</p>
+
+<p>Especially, if there are older proxies present in the network topology, it's
+possible that you run into issues, since being a technology which was
+introduced in HTTP/1.1 (and the full performance benefit is not expected unless
+you are using HTTP/2), this feature might have not been extensively tested by
+your proxy vendor.</p>
+
+<p>To troubleshoot whether the proxy is causing an issue, try to lock/unlock
+multiple files bypassing the proxy. If that works, please get in touch with
+the proxy vendor to notify him about the problem and ask for support.</p>
+
+<p>It's also appreciated, if you would let the SVN developers know about the
+effected proxy via the users mailing list so this troubleshooting section can
+be updated.</p>
+
+<p>At the moment there is one potentially known proprietary proxy running into
+this issue: Java-SSL-tunnel. See
+<a href="https://groups.google.com/d/msg/tortoisesvn/h72AhfjwcbQ/RfTVgbXqCwAJ"
+  >Tortoise SVN mailing list</a>.
+</p>
+
+</div>  <!-- http-pipelining-issue -->
+
+</div>  <!-- troubleshooting -->
+
+<div class="h2" id="svn-1.7-deprecation">
+<h2>Subversion 1.7.x series no longer supported
+  <a class="sectionlink" href="#svn-1.7-deprecation"
+    title="Link to this section">&para;</a>
+</h2>
+
+<p>The Subversion 1.7.x line is no longer supported.  This doesn't
+mean that your 1.7 installation is doomed; if it works well and is all
+you need, that's fine.  "No longer supported" just means we've stopped
+accepting bug reports against 1.7.x versions, and will not make any
+more 1.7.x bugfix releases.</p>
+
+</div>  <!-- svn-1.7-deprecation -->
+
+<!-- ***************** END CONTENT ****************** -->
+</div> <!-- #site-content -->
+</body>
+</html>

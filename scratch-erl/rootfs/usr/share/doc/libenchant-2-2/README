@@ -1,0 +1,85 @@
+libenchant -- Generic spell checking library
+Maintainer: Reuben Thomas
+Home page: https://abiword.github.io/enchant/
+
+libenchant is licensed under the terms of the GNU LGPL (see the file
+COPYING.LIB), with a special exception allowing the use of proprietary
+spell-checking systems.
+
+Enchant aims to provide a simple but comprehensive abstraction for dealing
+with different spell checking libraries in a consistent way. A client, such
+as a text editor or word processor, need not know anything about a specific
+spell-checker, and since all back-ends are plugins, new spell-checkers can
+be added without needing any change to the program using Enchant.
+
+Enchant can be configured by the user, who can even add spell-checker
+plugins if desired.
+
+Enchant currently works with the following spell-checkers:
+
+    * Hunspell (formerly Myspell)
+    * Nuspell
+    * GNU Aspell
+    * Hspell
+    * Voikko
+    * Apple Spell (macOS only)
+    * Zemberek
+
+Enchant is written in C and C++, and its only external dependency is glib.
+
+Enchant bindings are supplied for C and C++; there are third-party bindings
+for various languages (see the home page).
+
+
+Installation
+------------
+
+Users should install from a release tarball. See the file INSTALL for
+instructions.
+
+Developers or others wishing to install from a git repository, see HACKING.
+
+
+Sharing personal word lists between spell-checkers
+--------------------------------------------------
+
+It is possible, and usually safe, to share Enchant’s personal word lists
+with other spelling checkers that use the same format (a simple plain text
+file with one word per line). The spell-checkers known to be compatible are
+Hunspell, Nuspell and Ispell. (Although Enchant does not support Ispell as a
+back-end, it’s still fine to share word lists with it.) Other spell-checkers
+supported by Enchant are either incompatible, or have no personal word list
+mechanism. There may well be yet other spell-checkers, unknown to Enchant,
+that use the same format.
+
+Some applications use Hunspell or Nuspell, but store the personal word list
+under another name or in another location. Firefox is one example. Firefox
+also seems to reorder its word list when updating it; again, this is OK, as
+the result is still in the same format. Anonther example is Thunderbird.
+
+To share word lists with Enchant, find the other spelling checker’s word
+list file, e.g. ~/.hunspell_fr_FR or ~/.config/nuspell/fr_FR, and merge it
+with the corresponding Enchant file, in this case ~/.config/enchant/fr_FR.dic
+(on a GNU or BSD system). Use the following command, replacing ENCHANT-DICT
+and OTHER-DICT with the corresponding dictionary file names:
+
+cat ENCHANT-DICT OTHER-DICT | sort -u > merged.txt
+
+Take a look at merged.txt to check the merge has worked, then
+
+mv merged.txt ENCHANT-DICT
+rm OTHER-DICT
+ln -s OTHER-DICT ENCHANT-DICT
+
+to replace the other dictionary file with a link to the Enchant dictionary,
+again filling in the name of the dictionary files.
+
+
+Bug reports and development
+---------------------------
+
+To report libenchant bugs or request features, please visit
+https://github.com/AbiWord/enchant
+
+If you can't use GitHub do get in touch with the maintainer, Reuben Thomas:
+<rrt@sc3d.org>.

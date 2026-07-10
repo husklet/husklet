@@ -1,0 +1,11 @@
+#!/bin/bash
+
+handle_all_ucf_files $PKGDIR $LOCDIR
+cp package-changed $PKGF
+echo "this is a locally changed file" > $LOCF
+take_ref
+export UCF_FORCE_CONFFNEW=1
+handle_all_ucf_files $PKGDIR $LOCDIR
+is_package $LOCF && check_ucfq_number 1
+return $?
+

@@ -189,6 +189,23 @@ static int msgflags_m2l(int mf) {
 #define LX_CMSG_ALIGN(n) (((n) + 7u) & ~(size_t)7u) // Linux: 8-byte align
 #define LX_CMSGHDR 16u                              // Linux cmsg header: 8(len)+4(level)+4(type)
 #define LX_SOL_SOCKET 1
+#define DD_CMSG_EVENTFD_MAGIC 0xddefd001u
+
+struct dd_cmsg_eventfd_meta {
+    uint32_t magic;
+    uint32_t ordinal;
+    uint32_t slot;
+    uint32_t sema;
+};
+
+static __thread int g_cmsg_tmpfds[1024];
+static __thread int g_cmsg_ntmpfds;
+
+static void cmsg_tmpfds_close(void) {
+    for (int i = 0; i < g_cmsg_ntmpfds; i++)
+        if (g_cmsg_tmpfds[i] >= 0) close(g_cmsg_tmpfds[i]);
+    g_cmsg_ntmpfds = 0;
+}
 
 static int cmsg_level_l2m(int lv) {
     return lv == LX_SOL_SOCKET ? SOL_SOCKET : lv;
@@ -198,38 +215,258 @@ static int cmsg_level_m2l(int lv) {
     return lv == SOL_SOCKET ? LX_SOL_SOCKET : lv;
 }
 
-// guest(Linux) control buf -> host(macOS) control buf. Returns host bytes written (<=cap), or 0/none.
-static ssize_t cmsg_l2m(const uint8_t *g, size_t glen, uint8_t *h, size_t cap) {
+static int cmsg_eventfd_marker(const struct dd_cmsg_eventfd_meta *m) {
+    if (g_cmsg_ntmpfds >= (int)(sizeof g_cmsg_tmpfds / sizeof g_cmsg_tmpfds[0])) return -1;
+    char tn[] = "/tmp/.ddcmsgXXXXXX";
+    int fd = mkstemp(tn);
+    if (fd < 0) return -1;
+    unlink(tn);
+    if (write(fd, m, sizeof *m) != (ssize_t)sizeof *m) {
+        close(fd);
+        return -1;
+    }
+    lseek(fd, 0, SEEK_SET);
+    fcntl(fd, F_SETFD, FD_CLOEXEC);
+    g_cmsg_tmpfds[g_cmsg_ntmpfds++] = fd;
+    return fd;
+}
+
+static int cmsg_fd_is_write_sideband(int fd) {
+    if (fd < 0) return 0;
+    int fl = fcntl(fd, F_GETFL);
+    if (fl < 0) return 0;
+    if ((fl & O_ACCMODE) != O_WRONLY) return 0;
+    if (!(fl & O_NONBLOCK)) return 0;
+    struct stat st;
+    if (fstat(fd, &st) != 0) return 0;
+    return S_ISFIFO(st.st_mode);
+}
+
+static int cmsg_read_eventfd_marker(int fd, struct dd_cmsg_eventfd_meta *m) {
+    if (fd < 0 || !m) return 0;
+    memset(m, 0, sizeof *m);
+    if (pread(fd, m, sizeof *m, 0) != (ssize_t)sizeof *m) return 0;
+    return m->magic == DD_CMSG_EVENTFD_MAGIC;
+}
+
+static int cmsg_debug_on(void) {
+    static int on = -1;
+    if (on < 0) {
+        int saved = errno;
+        on = (getenv("DDNETLOG") != NULL || access("/tmp/DDNETLOG", F_OK) == 0) ? 1 : 0;
+        errno = saved;
+    }
+    return on;
+}
+
+static void cmsg_log_fd(const char *phase, int ordinal, int fd) {
+    if (!cmsg_debug_on()) return;
+    int saved = errno;
+    struct stat st;
+    memset(&st, 0, sizeof st);
+    int ferr = fstat(fd, &st) == 0 ? 0 : errno;
+    off_t off = lseek(fd, 0, SEEK_CUR);
+    unsigned char b[16] = {0};
+    ssize_t pn = pread(fd, b, sizeof b, 0);
+    const char *kind = "other";
+    if (!ferr) {
+        if (S_ISREG(st.st_mode))
+            kind = "reg";
+        else if (S_ISFIFO(st.st_mode))
+            kind = "fifo";
+        else if (S_ISSOCK(st.st_mode))
+            kind = "sock";
+        else if (S_ISCHR(st.st_mode))
+            kind = "chr";
+        else if (S_ISDIR(st.st_mode))
+            kind = "dir";
+    }
+    char path[256] = "-";
+#ifdef F_GETPATH
+    if (fd >= 0) (void)fcntl(fd, F_GETPATH, path);
+#endif
+    const char *desc = (fd >= 0 && fd < DD_NFD && g_proc_text_desc[fd][0]) ? g_proc_text_desc[fd] : "-";
+    fprintf(stderr,
+            "[DDCMSGFD] pid=%d %s ord=%d fd=%d kind=%s ferr=%d size=%lld off=%lld pread=%lld desc=%s "
+            "path=%s p16=%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x\n",
+            getpid(), phase, ordinal, fd, kind, ferr, (long long)st.st_size, (long long)off, (long long)pn, desc,
+            path, b[0], b[1], b[2], b[3], b[4], b[5], b[6], b[7], b[8], b[9], b[10], b[11], b[12], b[13], b[14], b[15]);
+    errno = saved;
+}
+
+static int cmsg_import_eventfd_trailer(int *fds, int nfds) {
+    if (!fds || nfds <= 2) return nfds;
+    int cap = nfds / 3 + 1;
+    int *hidden = calloc((size_t)cap, sizeof(int));
+    int *marker_fd = calloc((size_t)cap, sizeof(int));
+    struct dd_cmsg_eventfd_meta *metas = calloc((size_t)cap, sizeof(*metas));
+    if (!hidden || !marker_fd || !metas) {
+        free(hidden);
+        free(marker_fd);
+        free(metas);
+        return nfds;
+    }
+    int nmeta = 0;
+    int visible = nfds;
+    while (visible >= 3 && nmeta < cap) {
+        int h = fds[visible - 2];
+        int marker = fds[visible - 1];
+        struct dd_cmsg_eventfd_meta m;
+        if (!cmsg_fd_is_write_sideband(h)) break;
+        if (!cmsg_read_eventfd_marker(marker, &m)) break;
+        hidden[nmeta] = h;
+        marker_fd[nmeta] = marker;
+        metas[nmeta] = m;
+        nmeta++;
+        visible -= 2;
+    }
+    if (!nmeta) {
+        free(hidden);
+        free(marker_fd);
+        free(metas);
+        return nfds;
+    }
+    for (int i = 0; i < nmeta; i++)
+        if (metas[i].ordinal >= (uint32_t)visible) {
+            free(hidden);
+            free(marker_fd);
+            free(metas);
+            return nfds;
+        }
+    for (int i = 0; i < nmeta; i++) {
+        int h = hidden[i];
+        int marker = marker_fd[i];
+        struct dd_cmsg_eventfd_meta *m = &metas[i];
+        int pub = fds[m->ordinal];
+        if (pub >= 0 && pub < DD_NFD) {
+            g_eventfd_peer[pub] = h + 1;
+            g_eventfd_cslot[pub] = (int)m->slot + 1;
+            g_eventfd_sema[pub] = (uint8_t)(m->sema != 0);
+        } else {
+            close(h);
+        }
+        close(marker);
+    }
+    free(hidden);
+    free(marker_fd);
+    free(metas);
+    return visible;
+}
+
+static void cmsg_note_recv_sock_fd(int fd);
+
+// guest(Linux) control buf -> host(macOS) control buf. Returns host bytes written (<=cap), 0/none,
+// or -1 with *errp set. A partial ancillary conversion must never be sent: silently dropping SCM_RIGHTS
+// fds leaves higher-level protocols like Mojo with a successful data message but missing handles.
+static ssize_t cmsg_l2m(const uint8_t *g, size_t glen, uint8_t *h, size_t cap, int *errp) {
+    if (errp) *errp = 0;
+    cmsg_tmpfds_close();
     size_t go = 0, ho = 0;
     while (go + LX_CMSGHDR <= glen) {
         uint64_t clen = *(const uint64_t *)(g + go); // Linux cmsg_len (8B)
         int lvl = *(const int *)(g + go + 8);
         int typ = *(const int *)(g + go + 12);
-        if (clen < LX_CMSGHDR || go + clen > glen) break; // malformed guest input
+        if (clen < LX_CMSGHDR || go + clen > glen) {
+            if (errp) *errp = EINVAL;
+            return -1;
+        }
         size_t dlen = (size_t)clen - LX_CMSGHDR;          // payload bytes (e.g. N*4 fds)
+        int *combo = NULL;
+        int combo_cap = 0;
+        int combo_n = 0;
+        if (lvl == LX_SOL_SOCKET && typ == SCM_RIGHTS && dlen >= sizeof(int)) {
+            const int *fds = (const int *)(g + go + LX_CMSGHDR);
+            int nfds = (int)(dlen / sizeof(int));
+            if (nfds > 253) {
+                if (errp) *errp = EINVAL;
+                return -1;
+            }
+            combo_cap = nfds * 3; // visible fd + possible eventfd write-side fd + marker fd
+            combo = malloc((size_t)combo_cap * sizeof(int));
+            if (!combo) {
+                if (errp) *errp = ENOMEM;
+                return -1;
+            }
+            for (int i = 0; i < nfds; i++) {
+                cmsg_log_fd("send", i, fds[i]);
+                combo[combo_n++] = fds[i];
+            }
+            for (int i = 0; i < nfds; i++) {
+                int fd = fds[i];
+                if (fd < 0 || fd >= DD_NFD || !g_eventfd_peer[fd]) continue;
+                if (combo_n + 2 > combo_cap) {
+                    free(combo);
+                    if (errp) *errp = EMSGSIZE;
+                    return -1;
+                }
+                int hidden = g_eventfd_peer[fd] - 1;
+                int fl = fcntl(hidden, F_GETFL);
+                if (fl >= 0) fcntl(hidden, F_SETFL, fl | O_NONBLOCK);
+                fcntl(hidden, F_SETFD, FD_CLOEXEC);
+                struct dd_cmsg_eventfd_meta m = {
+                    .magic = DD_CMSG_EVENTFD_MAGIC,
+                    .ordinal = (uint32_t)i,
+                    .slot = (uint32_t)eventfd_counter_slot(fd),
+                    .sema = (uint32_t)(g_eventfd_sema[fd] != 0),
+                };
+                int marker = cmsg_eventfd_marker(&m);
+                if (marker < 0) {
+                    free(combo);
+                    if (errp) *errp = EMSGSIZE;
+                    return -1;
+                }
+                combo[combo_n++] = hidden;
+                combo[combo_n++] = marker;
+            }
+            dlen = (size_t)combo_n * sizeof(int);
+        }
         size_t need = CMSG_SPACE(dlen);
-        if (ho + need > cap) break; // host scratch full
+        if (ho + need > cap) {
+            free(combo);
+            if (errp) *errp = EMSGSIZE;
+            return -1;
+        }
         struct cmsghdr ch;
         memset(&ch, 0, sizeof ch);
         ch.cmsg_len = CMSG_LEN(dlen); // macOS 12+dlen
         ch.cmsg_level = cmsg_level_l2m(lvl);
         ch.cmsg_type = typ; // SCM_RIGHTS==1 on both
         memcpy(h + ho, &ch, sizeof ch);
-        memcpy(CMSG_DATA((struct cmsghdr *)(h + ho)), g + go + LX_CMSGHDR, dlen);
+        if (lvl == LX_SOL_SOCKET && typ == SCM_RIGHTS && combo_n > 0)
+            memcpy(CMSG_DATA((struct cmsghdr *)(h + ho)), combo, dlen);
+        else
+            memcpy(CMSG_DATA((struct cmsghdr *)(h + ho)), g + go + LX_CMSGHDR, dlen);
+        free(combo);
         ho += need;
         go += LX_CMSG_ALIGN(clen);
     }
     return (ssize_t)ho;
 }
 
-// host(macOS) control buf -> guest(Linux) control buf. Returns Linux bytes written (<=cap; stops at
-// the guest-buffer boundary, leaving the kernel's MSG_CTRUNC in mh->msg_flags to be translated).
-static ssize_t cmsg_m2l(const struct msghdr *mh, uint8_t *g, size_t cap) {
-    size_t go = 0;
+// host(macOS) control buf -> guest(Linux) control buf, appending at `off`. Returns Linux bytes written
+// (<=cap; stops at the guest-buffer boundary, leaving the kernel's MSG_CTRUNC in mh->msg_flags to be
+// translated).
+static ssize_t cmsg_m2l(const struct msghdr *mh, uint8_t *g, size_t cap, size_t off, int *truncp) {
+    if (truncp) *truncp = 0;
+    size_t go = off;
     for (struct cmsghdr *c = CMSG_FIRSTHDR((struct msghdr *)mh); c; c = CMSG_NXTHDR((struct msghdr *)mh, c)) {
+        if (c->cmsg_len < CMSG_LEN(0)) break;
         size_t dlen = (size_t)c->cmsg_len - CMSG_LEN(0); // payload bytes (macOS hdr=12)
+        if (c->cmsg_level == SOL_SOCKET && c->cmsg_type == SCM_RIGHTS && dlen >= sizeof(int)) {
+            int nfds = (int)(dlen / sizeof(int));
+            int *fds = (int *)CMSG_DATA(c);
+            int visible = cmsg_import_eventfd_trailer(fds, nfds);
+            for (int i = 0; i < visible; i++) {
+                cmsg_note_recv_sock_fd(fds[i]);
+                cmsg_log_fd("recv", i, fds[i]);
+            }
+            dlen = (size_t)visible * sizeof(int);
+        }
         size_t need = LX_CMSG_ALIGN(LX_CMSGHDR + dlen);
-        if (go + LX_CMSGHDR + dlen > cap) break;               // guest buf full -> truncate (kernel set MSG_CTRUNC)
+        if (go + LX_CMSGHDR + dlen > cap) {
+            if (truncp) *truncp = 1;
+            break;
+        }
         *(uint64_t *)(g + go) = (uint64_t)(LX_CMSGHDR + dlen); // Linux cmsg_len
         *(int *)(g + go + 8) = cmsg_level_m2l(c->cmsg_level);
         *(int *)(g + go + 12) = c->cmsg_type;
@@ -237,6 +474,25 @@ static ssize_t cmsg_m2l(const struct msghdr *mh, uint8_t *g, size_t cap) {
         go += need;
     }
     return (ssize_t)go;
+}
+
+static void cmsg_lx_set_cloexec_fds(uint8_t *g, size_t glen) {
+    size_t go = 0;
+    while (go + LX_CMSGHDR <= glen) {
+        uint64_t clen = *(uint64_t *)(g + go);
+        int lvl = *(int *)(g + go + 8);
+        int typ = *(int *)(g + go + 12);
+        if (clen < LX_CMSGHDR || go + clen > glen) break;
+        if (lvl == LX_SOL_SOCKET && typ == SCM_RIGHTS) {
+            size_t dlen = (size_t)clen - LX_CMSGHDR;
+            int *fds = (int *)(g + go + LX_CMSGHDR);
+            for (size_t i = 0; i + sizeof(int) <= dlen; i += sizeof(int)) {
+                int fd = fds[i / sizeof(int)];
+                if (fd >= 0) fcntl(fd, F_SETFD, FD_CLOEXEC);
+            }
+        }
+        go += LX_CMSG_ALIGN(clen);
+    }
 }
 
 // Append a synthesized Linux SCM_CREDENTIALS record (SOL_SOCKET / type 2, struct ucred {pid,uid,gid}) at
@@ -400,6 +656,27 @@ static int seq_is(int fd) {
 // Chromium's Mojo NodeChannel sets SO_PASSCRED and REQUIRES an SCM_CREDENTIALS cmsg on the bootstrap message
 // -- without it the receiver logs "missing credentials" and aborts. Carried on dup, reset on close.
 static uint8_t g_sock_passcred[DD_NFD];
+
+static void cmsg_note_recv_sock_fd(int fd) {
+    if (fd < 0 || fd >= DD_NFD) return;
+    struct stat st;
+    if (fstat(fd, &st) != 0 || !S_ISSOCK(st.st_mode)) return;
+
+    int ty = 0;
+    socklen_t tyl = sizeof ty;
+    if (getsockopt(fd, SOL_SOCKET, SO_TYPE, &ty, &tyl) != 0) ty = 0;
+
+    struct sockaddr_storage ss;
+    socklen_t sl = sizeof ss;
+    memset(&ss, 0, sizeof ss);
+    if (getsockname(fd, (struct sockaddr *)&ss, &sl) != 0 || ss.ss_family != AF_UNIX) return;
+
+    g_sock_fam[fd] = AF_UNIX;
+    g_sock_stream[fd] = (ty == SOCK_STREAM);
+    g_sock_dgram[fd] = (ty == SOCK_DGRAM);
+    if (!g_sock_peer_pid[fd]) g_sock_peer_pid[fd] = sock_alloc_synth_peer();
+    g_sock_passcred[fd] = 1;
+}
 
 // fd -> guest-requested TCP bind port (host order), 0 = none. Set at bind(200) for AF_INET/INET6 stream
 // sockets; consumed by the /proc/net/tcp[6] synth to surface a LISTEN row (see netns_tcp_* below).
@@ -1629,6 +1906,16 @@ static int nl_is(int fd) {
     return fd >= 0 && fd < DD_NFD && g_nl_peer[fd];
 }
 
+static int nl_force_eagain(void) {
+    static int on = -1;
+    if (on < 0) {
+        int saved = errno;
+        on = access("/tmp/ddnl_eagain", F_OK) == 0;
+        errno = saved;
+    }
+    return on;
+}
+
 // close a netlink fd's peer (called from fd_reset_emul on the guest close). Idempotent.
 static void nl_close(int fd) {
     if (fd >= 0 && fd < DD_NFD && g_nl_peer[fd]) {
@@ -1838,8 +2125,11 @@ static size_t nl_scatter(const uint8_t *src, size_t n, struct iovec *iov, int io
 static int64_t nl_recv(int fd, struct iovec *iov, int iovn, int gflags, int *msgflags) {
     uint8_t hb[8192]; // dumps are <=4096 (see nl_emit_dump's out[]); big enough to peek the full length
     ssize_t truelen;
+    int force_eagain = nl_force_eagain();
+    int hpeek = MSG_PEEK | (((gflags & 0x40 /* Linux MSG_DONTWAIT */) || force_eagain) ? MSG_DONTWAIT : 0);
+    int hread = ((gflags & 0x40 /* Linux MSG_DONTWAIT */) || force_eagain) ? MSG_DONTWAIT : 0;
     do {
-        truelen = recv(fd, hb, sizeof hb, MSG_PEEK);
+        truelen = recv(fd, hb, sizeof hb, hpeek);
     } while (truelen < 0 && errno == EINTR);
     if (truelen < 0) {
         if (msgflags) *msgflags = 0;
@@ -1852,7 +2142,7 @@ static int64_t nl_recv(int fd, struct iovec *iov, int iovn, int gflags, int *msg
     if (!(gflags & 0x2 /*MSG_PEEK*/)) { // real read: consume the whole datagram (rest discarded, DGRAM)
         ssize_t consumed;
         do {
-            consumed = recv(fd, hb, sizeof hb, 0);
+            consumed = recv(fd, hb, sizeof hb, hread);
         } while (consumed < 0 && errno == EINTR);
         if (consumed < 0) {
             if (msgflags) *msgflags = 0;

@@ -102,7 +102,8 @@ pub fn launch_ex(ws: &Workspace, cols: u16, rows: u16, restore: bool, cwd: Optio
         // 100% reliable and costs only a one-time re-translation at startup (negligible for an interactive
         // GUI app). A `restore` keeps the cache (its MAP_FIXED placement needs it) — this only fires on a
         // fresh gui launch.
-        if ws.gui {
+        let keep_gui_pcache = std::env::var("CHROME_KEEP_STATE").ok().as_deref() == Some("1");
+        if ws.gui && !keep_gui_pcache {
             let _ = std::fs::remove_dir_all(&pcache_dir);
             let _ = std::fs::create_dir_all(&pcache_dir);
         }
@@ -173,6 +174,26 @@ pub fn launch_ex(ws: &Workspace, cols: u16, rows: u16, restore: bool, cwd: Optio
     // The workspace's configured environment variables.
     for (k, v) in &ws.env {
         env.push(format!("{k}={v}"));
+    }
+    // Chrome rendering diagnostics used by the bounded GUI harness. These are intentionally opt-in host
+    // variables so ordinary workspace launches keep their configured environment byte-for-byte.
+    for k in [
+        "CHROME_SW",
+        "CHROME_DEBUG",
+        "CHROME_EXTRA_FLAGS",
+        "CHROME_KEEP_STATE",
+        "CHROME_PROFILE_DIR",
+        "CHROME_TIMEOUT",
+        "WAYLAND_DEBUG",
+        "DD_SHIM_DEBUG",
+        "DD_SHADER_DUMP_DIR",
+        "DD_TEXTURE_DUMP_DIR",
+        "DD_HIDE_CHROME_PROCFILES",
+        "DD_PROC_CHROME_MODE",
+    ] {
+        if let Ok(v) = std::env::var(k) {
+            env.push(format!("{k}={v}"));
+        }
     }
 
     let mut builder = dd_jit::Container::builder(image)

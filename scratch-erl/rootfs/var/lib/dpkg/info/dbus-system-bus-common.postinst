@@ -1,0 +1,26 @@
+#!/bin/sh
+# Copyright © 2003 Colin Walters <walters@debian.org>
+# Copyright © 2006 Sjoerd Simons <sjoerd@debian.org>
+
+set -e
+
+MESSAGEUSER=messagebus
+
+in_sysroot () {
+    if [ -z "${DPKG_ROOT:-}" ]; then
+        "$@"
+    else
+        chroot "${DPKG_ROOT}" "$@"
+    fi
+}
+
+if [ "$1" = configure ]; then
+    in_sysroot adduser --system \
+            --quiet \
+            --home /nonexistent \
+            --no-create-home \
+            --disabled-password \
+            --group "$MESSAGEUSER"
+fi
+
+

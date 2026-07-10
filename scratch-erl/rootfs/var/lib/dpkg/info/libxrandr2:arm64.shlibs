@@ -1,0 +1,2 @@
+libXrandr 2 libxrandr2 (>= 2:1.5)
+udeb: libXrandr 2 libxrandr2-udeb (>= 2:1.5)

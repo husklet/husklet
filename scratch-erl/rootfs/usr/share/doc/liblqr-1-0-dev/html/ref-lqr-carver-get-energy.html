@@ -1,0 +1,49 @@
+<html><head><meta http-equiv="Content-Type" content="text/html; charset=ISO-8859-1"><title>lqr_carver_get_energy</title><meta name="generator" content="DocBook XSL Stylesheets V1.79.1"><link rel="home" href="index.html" title="The Liquid Rescale library Manual"><link rel="up" href="ref-energy.html" title="Energy"><link rel="prev" href="ref-lqr-carver-set-energy-function.html" title="lqr_carver_set_energy_function"><link rel="next" href="ref-lqr-rwindow-read.html" title="lqr_rwindow_read"></head><body bgcolor="white" text="black" link="#0000FF" vlink="#840084" alink="#0000FF"><div class="navheader"><table width="100%" summary="Navigation header"><tr><th colspan="3" align="center"><code class="function">lqr_carver_get_energy</code></th></tr><tr><td width="20%" align="left"><a accesskey="p" href="ref-lqr-carver-set-energy-function.html">Prev</a> </td><th width="60%" align="center">Energy</th><td width="20%" align="right"> <a accesskey="n" href="ref-lqr-rwindow-read.html">Next</a></td></tr></table><hr></div><div class="refentry"><a name="ref-lqr-carver-get-energy"></a><div class="titlepage"></div><div class="refnamediv"><h2>Name</h2><p>lqr_carver_get_energy, lqr_carver_get_true_energy, lqr_carver_get_energy_image &#8212; get the energy map for a <code class="classname">LqrCarver</code> object</p></div><div class="refsynopsisdiv"><h2>Synopsis</h2><div class="funcsynopsis"><pre class="funcsynopsisinfo">#include &lt;lqr.h&gt;</pre><table border="0" class="funcprototype-table" summary="Function synopsis" style="cellspacing: 0; cellpadding: 0;"><tr><td><code class="funcdef">LqrRetVal <b class="fsfunc">lqr_carver_get_energy</b>(</code></td><td>LqrCarver* <var class="pdparam">carver</var>, </td></tr><tr><td> </td><td>gfloat * <var class="pdparam">buffer</var>, </td></tr><tr><td> </td><td>gint <var class="pdparam">orientation</var><code>)</code>;</td></tr></table><div class="funcprototype-spacer"> </div></div></div><div class="refsynopsisdiv"><h2>Synopsis</h2><div class="funcsynopsis"><pre class="funcsynopsisinfo">#include &lt;lqr.h&gt;</pre><table border="0" class="funcprototype-table" summary="Function synopsis" style="cellspacing: 0; cellpadding: 0;"><tr><td><code class="funcdef">LqrRetVal <b class="fsfunc">lqr_carver_get_true_energy</b>(</code></td><td>LqrCarver* <var class="pdparam">carver</var>, </td></tr><tr><td> </td><td>gfloat * <var class="pdparam">buffer</var>, </td></tr><tr><td> </td><td>gint <var class="pdparam">orientation</var><code>)</code>;</td></tr></table><div class="funcprototype-spacer"> </div></div></div><div class="refsynopsisdiv"><h2>Synopsis</h2><div class="funcsynopsis"><pre class="funcsynopsisinfo">#include &lt;lqr.h&gt;</pre><table border="0" class="funcprototype-table" summary="Function synopsis" style="cellspacing: 0; cellpadding: 0;"><tr><td><code class="funcdef">LqrRetVal <b class="fsfunc">lqr_carver_get_energy</b>(</code></td><td>LqrCarver* <var class="pdparam">carver</var>, </td></tr><tr><td> </td><td>void * <var class="pdparam">buffer</var>, </td></tr><tr><td> </td><td>gint <var class="pdparam">orientation</var>, </td></tr><tr><td> </td><td>LqrColDepth <var class="pdparam">col_depth</var>, </td></tr><tr><td> </td><td>LqrImageType <var class="pdparam">image_type</var><code>)</code>;</td></tr></table><div class="funcprototype-spacer"> </div></div></div><div class="refsect1"><a name="idm4476"></a><h2>Description</h2><p>
+                        The function <code class="function">lqr_carver_get_energy</code> writes the energy map of the <code class="classname">LqrCarver</code>
+                        object pointed to by <em class="parameter"><code>carver</code></em> to the given <em class="parameter"><code>buffer</code></em>,
+                        in a format suitable for plotting: all values are in the range between <code class="literal">0</code> and
+                        <code class="literal">1</code>, and the true values are mapped nonlinearly and stretched on this whole
+                        range, so that the differences between the middle values are enhanced with respect to very high
+                        or very low values.
+                    </p><p>
+                        The <em class="parameter"><code>orientation</code></em> parameter must be either <code class="literal">0</code> to get the
+                        energy map used for horizontal scalings, or <code class="literal">1</code> to get the map for vertical
+                        scalings.
+                    </p><p>
+                        The buffer must be allocated by the user before calling this function, and its size must be at
+                        least <code class="literal"><em class="parameter"><code>width</code></em> * <em class="parameter"><code>height</code></em></code>, where <em class="parameter"><code>width</code></em> and <em class="parameter"><code>height</code></em> are the current
+                        width and height of the <em class="parameter"><code>carver</code></em>. The energy values are ordered by row
+                        first, then by column.
+                    </p><p>
+                        The outcome will include the effect of the bias added to the <em class="parameter"><code>carver</code></em>, if
+                        any.
+                    </p><p>
+                        This function can be called over non-initialised <code class="classname">LqrCarver</code> objects, e.g. to provide previews on
+                        the effect of different energy functions, but it can also be invoked at any later time. Note,
+                        however, that in this latter case the <em class="parameter"><code>carver</code></em> could be flattened if
+                        necessary, therefore the function invocation is potentially destructive of the internal
+                        visibiliy map.
+                    </p><p>
+                        The function <code class="function">lqr_carvet_get_true_energy</code> is identical to the previous one,
+                        but the resulting buffer will contain the true energy, not scaled nor shifted.
+                    </p><p>
+                        The function <code class="function">lqr_carver_get_energy_image</code> is very similar to the function
+                        <code class="function">lqr_carveR_get_energy</code>, but it can be used to fill directly an image buffer
+                        of the format specified through the additional parameters <em class="parameter"><code>col_depth</code></em> and
+                        <em class="parameter"><code>image_type</code></em> (see <a class="xref" href="ref-lqr-col-depth.html" title="LqrColDepth"><span class="refentrytitle"><span class="type">LqrColDepth</span></span>(3)</a> and
+                        <a class="xref" href="ref-lqr-image-type.html" title="LqrImageType"><span class="refentrytitle"><span class="type">LqrImageType</span></span>(3)</a>). The <em class="parameter"><code>buffer</code></em> must be passed as
+                        <span class="type">void*</span>, but it must point to a memory area with sufficient allocated space for the
+                        chosen image type and colour depth. The image type cannot be <code class="literal">LQR_CUSTOM_IMAGE</code>.
+                    </p><p>
+                        For any choice of the parameters describing the image, the resulting
+                        <em class="parameter"><code>buffer</code></em> will hold a greyscale image, ranging from black (lowest energy) to
+                        white (highest energy). The opacity (alpha) will be set to <code class="literal">1</code>, if present. All
+                        the information will be stored in the black channel in <code class="literal">LQR_CMYK_IMAGE</code> and <code class="literal">LQR_CMYKA_IMAGE</code>
+                        image types.
+                    </p></div><div class="refsect1"><a name="idm4518"></a><h2>Return values</h2><p>
+                        The return values follow the Liquid Rescale library signalling system. The function
+                        <code class="function">lqr_carver_get_energy_image</code> will return an error if
+                        <em class="parameter"><code>image_type</code></em> is <code class="literal">LQR_CUSTOM_IMAGE</code>.
+                    </p></div><div class="refsect1"><a name="idm4524"></a><h2>See also</h2><p>
+                        <span class="simplelist"><a class="xref" href="ref-lqr-carver-set-energy-function-builtin.html" title="lqr_carver_set_energy_function_builtin"><span class="refentrytitle"><code class="function">lqr_carver_set_energy_function_builtin</code></span>(3)</a>, <a class="xref" href="ref-lqr-carver-set-energy-function.html" title="lqr_carver_set_energy_function"><span class="refentrytitle"><code class="function">lqr_carver_set_energy_function</code></span>(3)</a>, <a class="xref" href="ref-lqr-carver-bias-add.html" title="lqr_carver_bias_add"><span class="refentrytitle"><code class="function">lqr_carver_bias_add</code></span>(3)</a></span>
+                    </p></div></div><div class="navfooter"><hr><table width="100%" summary="Navigation footer"><tr><td width="40%" align="left"><a accesskey="p" href="ref-lqr-carver-set-energy-function.html">Prev</a> </td><td width="20%" align="center"><a accesskey="u" href="ref-energy.html">Up</a></td><td width="40%" align="right"> <a accesskey="n" href="ref-lqr-rwindow-read.html">Next</a></td></tr><tr><td width="40%" align="left" valign="top"><code class="function">lqr_carver_set_energy_function</code> </td><td width="20%" align="center"><a accesskey="h" href="index.html">Home</a></td><td width="40%" align="right" valign="top"> <code class="function">lqr_rwindow_read</code></td></tr></table></div></body></html>

@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<mime-type xmlns="http://www.freedesktop.org/standards/shared-mime-info" type="application/ovf">
+  <!--Created automatically by update-mime-database. DO NOT EDIT!-->
+  <comment>OVF disk image</comment>
+  <acronym>OVF</acronym>
+  <expanded-acronym>Open Virtualization Format</expanded-acronym>
+  <glob pattern="*.ova"/>
+  <alias type="application/x-virtualbox-ova"/>
+  <sub-class-of type="application/x-tar"/>
+</mime-type>

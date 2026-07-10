@@ -1,0 +1,29 @@
+number	op	packagefile	localfile	ucfr	UCF_FORCE_	expected result
+1	update	unchanged	unchanged	1			local
+2	update	unchanged	changed		1			local
+3	update	unchanged	deleted		1			deleted
+4	update	changed		unchanged	1			package
+5	update	changed		changed		1	CONFFOLD	local
+6	update	changed		changed		1	CONFFNEW	package
+7	update	changed		deleted		1	CONFFOLD	deleted
+8	update	changed		deleted		1	CONFFNEW	package
+9	update	deleted		unchanged	0			deleted
+10	update	deleted		changed		0	CONFFOLD	local
+11	update	deleted		changed		0	CONFFNEW	deleted
+12	update	deleted		deleted		0	(*)		deleted
+13	rename	unchanged	unchanged	1			newname
+14	rename	unchanged	changed		1			changed newname
+15	rename	unchanged	deleted		1			oldname and newname deleted
+16	rename	changed		unchanged	1			package newname
+17	rename	changed		changed		1	CONFFOLD	local
+18	rename	changed		changed		1	CONFFNEW	package
+19	rename	changed		deleted		1			local
+20	rename	changed		deleted		1			package
+
+the column ucfr says how many files should be registered (check_ucfq_number)
+after the second ucf run. Tests do also check this.
+
+(*) the second ucf call causes a question to be asked while that it not
+strictly necessary. Since both options yield the same result, and this is an
+exotic corner case, we can live with that.
+

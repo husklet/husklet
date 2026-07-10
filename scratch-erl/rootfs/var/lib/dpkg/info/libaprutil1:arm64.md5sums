@@ -1,0 +1,9 @@
+12086c25ca87ab3bab59054092f74d6e  usr/lib/aarch64-linux-gnu/apr-util-1/apr_crypto_openssl-1.so
+5fb165e161fca268f05789b6be442694  usr/lib/aarch64-linux-gnu/apr-util-1/apr_dbm_db-1.so
+b240395d60cf55ee9d84559a3649b01b  usr/lib/aarch64-linux-gnu/apr-util-1/apr_dbm_gdbm-1.so
+83ef02b2ffc62adcecce1bd7d86666f0  usr/lib/aarch64-linux-gnu/libaprutil-1.so.0.6.3
+14ccfc83a7be429d31b2209260a39c4c  usr/share/doc/libaprutil1/NOTICE
+4bc25885081e53d235330ad8e90dd608  usr/share/doc/libaprutil1/changelog.Debian.gz
+0a693e8ae995fd45743b7c9cf2c9c24e  usr/share/doc/libaprutil1/changelog.gz
+2568f2df7b9bb44393b66a2e98333b30  usr/share/doc/libaprutil1/copyright
+d48e63d631f91ae4bc6829562725dd5c  usr/share/lintian/overrides/libaprutil1

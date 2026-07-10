@@ -43,6 +43,127 @@ static void exec_forward_env(uint64_t envp_guest) {
     free(buf);
 }
 
+static int proc_log_on(void) {
+    static int on = -1;
+    if (on < 0) {
+        int saved = errno;
+        on = (getenv("DDPROCLOG") != NULL || access("/tmp/DDPROCLOG", F_OK) == 0) ? 1 : 0;
+        errno = saved;
+    }
+    return on;
+}
+
+static int proc_exit_log_on(void) {
+    static int on = -1;
+    if (on < 0) {
+        int saved = errno;
+        on = (proc_log_on() || getenv("DDPROCEXITLOG") != NULL || access("/tmp/DDPROCEXITLOG", F_OK) == 0) ? 1 : 0;
+        errno = saved;
+    }
+    return on;
+}
+
+static int proc_fd_log_on(void) {
+    static int on = -1;
+    if (on < 0) {
+        int saved = errno;
+        on = (getenv("DDPROCFDLOG") != NULL || access("/tmp/DDPROCFDLOG", F_OK) == 0) ? 1 : 0;
+        errno = saved;
+    }
+    return on;
+}
+
+static void proc_log_prefix(const char *op) {
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    fprintf(stderr, "[DDPROC] t=%ld.%03ld pid=%d ppid=%d %s", (long)ts.tv_sec, ts.tv_nsec / 1000000, getpid(),
+            getppid(), op);
+}
+
+static const char *proc_argv_type(char **argv, int ac) {
+    for (int i = 0; i < ac && argv[i]; i++)
+        if (strncmp(argv[i], "--type=", 7) == 0) return argv[i] + 7;
+    return "browser";
+}
+
+static const char *proc_argv_utility_subtype(char **argv, int ac) {
+    for (int i = 0; i < ac && argv[i]; i++)
+        if (strncmp(argv[i], "--utility-sub-type=", 19) == 0) return argv[i] + 19;
+    return "-";
+}
+
+static void proc_log_exec(const char *host_path, char **argv, int ac) {
+    if (!proc_log_on()) return;
+    proc_log_prefix("exec");
+    fprintf(stderr, " host=%s argc=%d argv0=%s type=%s utility=%s", host_path ? host_path : "-", ac,
+            (ac > 0 && argv[0]) ? argv[0] : "-", proc_argv_type(argv, ac), proc_argv_utility_subtype(argv, ac));
+    int max_args = getenv("DDPROCLOG_FULL") ? 64 : 10;
+    for (int i = 1; i < ac && i < max_args; i++)
+        fprintf(stderr, " arg%d=%s", i, argv[i] ? argv[i] : "-");
+    fprintf(stderr, "\n");
+}
+
+static void proc_set_chrome_role(char **argv, int ac) {
+    const char *type = proc_argv_type(argv, ac);
+    if (type && type[0])
+        setenv("DD_CHROME_TYPE", type, 1);
+    else
+        unsetenv("DD_CHROME_TYPE");
+    const char *utility = proc_argv_utility_subtype(argv, ac);
+    if (utility && utility[0] && strcmp(utility, "-") != 0)
+        setenv("DD_CHROME_UTILITY_SUBTYPE", utility, 1);
+    else
+        unsetenv("DD_CHROME_UTILITY_SUBTYPE");
+}
+
+static void proc_exit_log_suffix(uint64_t code) {
+    const char *type = getenv("DD_CHROME_TYPE");
+    const char *utility = getenv("DD_CHROME_UTILITY_SUBTYPE");
+    fprintf(stderr, " code=%d type=%s utility=%s\n", (int)code, type && type[0] ? type : "-",
+            utility && utility[0] ? utility : "-");
+}
+
+static void proc_log_fd_snapshot(const char *stage) {
+    if (!proc_fd_log_on()) return;
+    const char *type = getenv("DD_CHROME_TYPE");
+    if (!type || !type[0] || strcmp(type, "browser") == 0) return;
+    const char *utility = getenv("DD_CHROME_UTILITY_SUBTYPE");
+    int saved = errno;
+    proc_log_prefix(stage);
+    fprintf(stderr, " type=%s utility=%s", type, utility && utility[0] ? utility : "-");
+    for (int fd = 0; fd <= 16; fd++) {
+        errno = 0;
+        int fdf = fcntl(fd, F_GETFD);
+        int fd_errno = errno;
+        if (fdf < 0) {
+            if (fd >= 3 && fd <= 8) fprintf(stderr, " fd%d=closed/e%d", fd, fd_errno);
+            continue;
+        }
+        errno = 0;
+        int fl = fcntl(fd, F_GETFL);
+        int fl_errno = errno;
+        struct stat st;
+        int st_ok = fstat(fd, &st) == 0;
+        int sty = 0;
+        socklen_t styl = sizeof sty;
+        int so_ok = getsockopt(fd, SOL_SOCKET, SO_TYPE, &sty, &styl) == 0;
+        const char *kind = st_ok && S_ISSOCK(st.st_mode) ? "sock" : st_ok && S_ISREG(st.st_mode) ? "reg"
+                                                                  : st_ok && S_ISCHR(st.st_mode)   ? "chr"
+                                                                  : st_ok && S_ISFIFO(st.st_mode)  ? "fifo"
+                                                                                                  : "?";
+        fprintf(stderr,
+                " fd%d={fdfl=0x%x%s fl=0x%x%s kind=%s so=%d seq=%d fam=%u stream=%u dgram=%u passcred=%u pair=%d wrote=%u peerpid=%d}",
+                fd, fdf, (fdf & FD_CLOEXEC) ? "/cloexec" : "", fl, fl < 0 ? "/err" : "", kind,
+                so_ok ? sty : -1, seq_is(fd), fd < DD_NFD ? g_sock_fam[fd] : 0,
+                fd < DD_NFD ? g_sock_stream[fd] : 0, fd < DD_NFD ? g_sock_dgram[fd] : 0,
+                fd < DD_NFD ? g_sock_passcred[fd] : 0, fd < DD_NFD ? g_sock_pair_peer[fd] : 0,
+                fd < DD_NFD ? g_sock_seq_wrote[fd] : 0, fd < DD_NFD ? g_sock_peer_pid[fd] : 0);
+        (void)fl_errno;
+    }
+    fprintf(stderr, "\n");
+    errno = saved;
+}
+
 // Fill a guest `struct rlimit { rlim_cur; rlim_max; }` for {get,set}rlimit/prlimit64 (cases 163/261).
 // Shared so both forms report identical limits. Most resources are unlimited, but a few MUST be finite or
 // guests size data structures off them: RLIMIT_STACK(3) reports the conventional 8MB main-stack size, and
@@ -95,6 +216,7 @@ static void svc_fill_rlimit(int resource, uint64_t *o) {
 // numbers the new guest could reuse, corrupting timer/signal delivery and path confinement.
 static int exec_fd_is_engine(int fd) {
     if (fd < 0) return 1;
+    if (eventfd_peer_is_engine_fd(fd)) return 1;
     if (fd == g_root_fd || fd == g_gtimer_kq || fd == g_sigfd_pipe[0] || fd == g_sigfd_pipe[1]) return 1;
     for (int i = 0; i < g_nvols; i++)
         if (fd == g_vols[i].fd) return 1;
@@ -111,6 +233,7 @@ static void exec_close_cloexec_scan(int maxfd) {
         if (exec_fd_is_engine(fd)) continue;
         int fl = fcntl(fd, F_GETFD);
         if (fl >= 0 && (fl & FD_CLOEXEC)) {
+            fdtrace_log("exec_close_cloexec", fd, fl, 0);
             fd_reset_emul(fd); // drop dd's emulation tables for this fd so a reused number isn't misrouted
             close(fd);
         }
@@ -152,6 +275,7 @@ static void exec_close_cloexec(void) {
         if (exec_fd_is_engine(fd)) continue;
         int fl = fcntl(fd, F_GETFD);
         if (fl >= 0 && (fl & FD_CLOEXEC)) {
+            fdtrace_log("exec_close_cloexec", fd, fl, 0);
             fd_reset_emul(fd); // drop dd's emulation tables for this fd so a reused number isn't misrouted
             close(fd);
         }
@@ -216,6 +340,7 @@ static void fork_child_hooks(struct cpu *c) {
     eventfd_after_fork();   // reset the eventfd counter+pipe lock (fork-unsafe-mutex class)
     ts_after_fork();        // drop the inherited task-state slot cache so the child re-claims its own
     poslk_after_fork();     // re-cache pid; child inherits NONE of the parent's fcntl record locks
+    proc_reg_after_fork();  // publish the fork child in /proc and stop it inheriting the parent's registry path
     wipefork_apply_child(); // MADV_WIPEONFORK: zero-fill the ranges the guest marked wipe-on-fork
     mlk_reset();            // mlock(2): memory locks are NOT inherited across fork -> child starts unlocked
     if (fp) t[4] = now_ns();
@@ -438,12 +563,20 @@ static int svc_proc(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64
         break;
     }
     case 93:
+        if (proc_exit_log_on()) {
+            proc_log_prefix("exit");
+            proc_exit_log_suffix(a0);
+        }
         c->exited = 1;
         c->exit_code = (int)a0;
         // exit: end THIS thread
         break;
     // exit_group: end the whole process
     case 94:
+        if (proc_exit_log_on()) {
+            proc_log_prefix("exit_group");
+            proc_exit_log_suffix(a0);
+        }
         if (getenv("PROF"))
             fprintf(stderr,
                     "[prof] crossings=%llu syscalls=%llu ibtc_miss=%llu branch_cross=%llu translations=%llu lse=%llu "
@@ -1243,6 +1376,19 @@ static int svc_proc(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64
             G_RET(c) = 2;
             break;
         }
+        // PR_SET_SECCOMP(22): direct seccomp(2) is modeled as an accepted no-op in rare.c. Chromium and
+        // crashpad can use the prctl fallback; accept strict/filter modes the same way so sandbox setup
+        // probes do not abort solely because they used this entry point.
+        if ((int)a0 == 22) {
+            G_RET(c) = (a1 == 1 || a1 == 2) ? 0 : (uint64_t)(-EINVAL);
+            break;
+        }
+        // PR_SET_PTRACER (0x59616d61, "Yama"): Chromium/crashpad allows a specific helper pid to ptrace it
+        // when Linux's Yama LSM is present. dd has no Yama policy to enforce, so accept the request as a no-op.
+        if ((int)a0 == 1499557217) {
+            G_RET(c) = 0;
+            break;
+        }
         // PR_SET_SECUREBITS(28) and PR_CAPBSET_DROP(24) require CAP_SETPCAP in the effective set; without it
         // the kernel returns -EPERM before any further validation (LTP prctl02 drops CAP_SETPCAP first). With
         // the cap held (the container default) they succeed for a well-formed argument.
@@ -1276,7 +1422,15 @@ static int svc_proc(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64
         // NAME/SECCOMP/TIMERSLACK/THP/SPECCTRL...
         case 59: G_RET(c) = 0; break;
         // EINVAL -- so feature probes (e.g. magic "AUXV") fail as on Linux
-        default: G_RET(c) = (uint64_t)(-22); break;
+        default:
+            if (proc_log_on()) {
+                proc_log_prefix("prctl_unknown");
+                fprintf(stderr, " opt=%lld arg2=%#llx arg3=%#llx arg4=%#llx arg5=%#llx -> -EINVAL\n",
+                        (long long)a0, (unsigned long long)a1, (unsigned long long)a2,
+                        (unsigned long long)a3, (unsigned long long)a4);
+            }
+            G_RET(c) = (uint64_t)(-22);
+            break;
         }
         break;
     }
@@ -1330,8 +1484,18 @@ static int svc_proc(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64
             // garbage branch (SIGILL — broke initdb). a1==0 for a plain fork (bash), keeping the inherited SP.
             if ((a0 & 0x100) && a1) G_SP(c) = a1;
             fork_child_hooks(c); // shared child-side engine reset (cache re-alias, caches, kqueues, locks)
+            if (proc_log_on()) {
+                proc_log_prefix("clone_child");
+                fprintf(stderr, " flags=0x%llx child_stack=0x%llx ret=0\n", (unsigned long long)a0,
+                        (unsigned long long)a1);
+            }
         } else if (fk0) {
             fprintf(stderr, "[forkprof] parent fork()=%llu ns\n", (unsigned long long)(now_ns() - fk0));
+        }
+        if (pid != 0 && proc_log_on()) {
+            proc_log_prefix("clone_parent");
+            fprintf(stderr, " flags=0x%llx child_stack=0x%llx child=%d err=%d\n", (unsigned long long)a0,
+                    (unsigned long long)a1, (int)pid, pid < 0 ? errno : 0);
         }
         // CLONE_PIDFD(0x1000): the kernel stores a pidfd for the new child at the address in `parent_tid`
         // (a2, the aarch64 clone slot). macOS has no pidfd, so mint a kqueue that fires on the child's exit
@@ -1459,6 +1623,8 @@ static int svc_proc(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64
             ac++;
         }
         argv[ac] = NULL;
+        proc_set_chrome_role(argv, ac);
+        proc_log_exec(p, argv, ac);
         // Forward the guest's ACTUAL environment across the exec: build_stack rebuilds the new process env
         // from DD_GUEST_ENV, so serialize envp (a2) into it NOW while guest memory is still mapped. A guest
         // that set/modified env vars (FOO=bar, a tweaked PATH) thus sees them survive; a NULL envp keeps the
@@ -1536,7 +1702,9 @@ static int svc_proc(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64
 #endif
         // emulate the kernel's close-on-exec sweep. No real host exec runs below -- we re-load the new image
         // in this same process -- so FD_CLOEXEC fds must be closed by hand or they leak into the new program.
+        proc_log_fd_snapshot("exec_fds_pre_cloexec");
         exec_close_cloexec();
+        proc_log_fd_snapshot("exec_fds_post_cloexec");
         sysv_after_exec(); // detach SysV shm + clear semadj across execve (registry itself survives)
         // Tear down the inherited guest address space before loading the new image: a post-fork exec
         // otherwise keeps the parent's DENSE layout, and load_elf must bias a non-PIE ET_EXEC off its
@@ -1712,6 +1880,12 @@ static int svc_proc(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64
         pt_wait_disarm(pt_armed, &pt_saved);
         ts_wait_leave();
         if (r < 0) {
+            if (proc_exit_log_on()) {
+                int e = errno;
+                proc_log_prefix("wait4");
+                fprintf(stderr, " req=%d opts=0x%x ret=-1 errno=%d\n", (int)a0, (int)a2, e);
+                errno = e;
+            }
             G_RET(c) = (uint64_t)(-errno);
             break;
         }
@@ -1739,6 +1913,10 @@ static int svc_proc(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64
             if (sigexit_lookup(r, &gsig, &gcore, 1)) st = (gsig & 0x7f) | (gcore ? 0x80 : 0);
         }
         if (a1) *(int *)a1 = st;
+        if (proc_exit_log_on()) {
+            proc_log_prefix("wait4");
+            fprintf(stderr, " req=%d opts=0x%x ret=%d status=0x%x errno=0\n", (int)a0, (int)a2, (int)r, st);
+        }
         // checkpoint restore: report the reaped child under the guest pid the checkpoint recorded, and drop
         // its translation once it is reaped so a future host pid can never alias it (no-op on normal launch).
         if (g_pidmap_n && r > 0) {
@@ -1803,7 +1981,20 @@ static int svc_proc(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64
         // child: the same shared engine reset as the clone/fork site above (cache re-alias / §B shadow /
         // path caches / kqueues / fork-unsafe locks). clone3 historically lacked the W^X re-assert and the
         // DIR*-cache drop the clone site had; the shared helper closes that drift.
-        if (pid == 0) fork_child_hooks(c);
+        if (pid == 0) {
+            if ((flags & 0x100) && ca[5]) G_SP(c) = ca[5] + ca[6];
+            fork_child_hooks(c);
+            if (proc_log_on()) {
+                proc_log_prefix("clone3_child");
+                fprintf(stderr, " flags=0x%llx stack=0x%llx stack_size=0x%llx ret=0\n",
+                        (unsigned long long)flags, (unsigned long long)ca[5], (unsigned long long)ca[6]);
+            }
+        } else if (proc_log_on()) {
+            proc_log_prefix("clone3_parent");
+            fprintf(stderr, " flags=0x%llx stack=0x%llx stack_size=0x%llx child=%d err=%d\n",
+                    (unsigned long long)flags, (unsigned long long)ca[5], (unsigned long long)ca[6], (int)pid,
+                    pid < 0 ? errno : 0);
+        }
         // CLONE_PIDFD: clone3 stores the child pidfd via the `pidfd` field (clone_args[1]); back it the same
         // way as case 220 so a clone3-based spawn (newer glibc/runtimes) can epoll_wait/poll it to reap.
         if (pid > 0 && (flags & 0x1000) && ca[1]) {

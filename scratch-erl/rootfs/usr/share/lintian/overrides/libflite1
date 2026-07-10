@@ -1,0 +1,7 @@
+# Yes, these aren't using any libc symbol
+libflite1: library-not-linked-against-libc [usr/lib/*/libflite_cmu_time_awb.so.*]
+libflite1: library-not-linked-against-libc [usr/lib/*/libflite_cmu_us_awb.so.*]
+libflite1: library-not-linked-against-libc [usr/lib/*/libflite_cmu_us_kal.so.*]
+libflite1: library-not-linked-against-libc [usr/lib/*/libflite_cmu_us_kal16.so.*]
+libflite1: library-not-linked-against-libc [usr/lib/*/libflite_cmu_us_rms.so.*]
+libflite1: library-not-linked-against-libc [usr/lib/*/libflite_cmu_us_slt.so.*]

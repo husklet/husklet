@@ -1,0 +1,14 @@
+7831a657a6cad4def58b106095ec2470  usr/bin/bwrap
+0e0151a772dc5e5805a79b6ed32e9dba  usr/lib/sysctl.d/50-bubblewrap.conf
+1dc590a851fba16e33e224dddb1aa951  usr/share/bash-completion/completions/bwrap
+2f4ae24605660e5f02a4cc8917f4f643  usr/share/bug/bubblewrap
+bb3d153068b4913728dcd7b2bf65cdb1  usr/share/doc/bubblewrap/README.Debian.gz
+ac7f0235ac10c9b8ee560c32abebe321  usr/share/doc/bubblewrap/README.md.gz
+bec5722177ff89092127ee25820c2d83  usr/share/doc/bubblewrap/changelog.Debian.gz
+9a62ed0ff96defbacc7ca87c05b918d5  usr/share/doc/bubblewrap/copyright
+4b804568f72df421edd88ccb3edf9619  usr/share/doc/bubblewrap/examples/bubblewrap-shell.sh
+b46035888d3ac7d3822b29bea02fc15f  usr/share/doc/bubblewrap/examples/flatpak-run.sh
+429811b60fe9261d2a1838d39d7c24d2  usr/share/doc/bubblewrap/examples/flatpak.bpf
+7a2f420ff65e48ea591ebaf8542cafd0  usr/share/doc/bubblewrap/examples/userns-block-fd.py
+ddfe2b6f5256d93b8f9ef75379d2371b  usr/share/man/man1/bwrap.1.gz
+ed349cccdeb550b9ed845a0f54917d3c  usr/share/zsh/vendor-completions/_bwrap

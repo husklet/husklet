@@ -1,0 +1,57 @@
+Format: https://www.debian.org/doc/packaging-manuals/copyright-format/1.0/
+Upstream-Name: aalib
+Source: http://aa-project.sourceforge.net/aalib
+
+Files: *
+Copyright: 1998-2001 Jan Hubicka <hubicka@freesoft.cz>
+           1998-2001 Kamil Toman <toman@artax.karlin.mff.cuni.cz>
+License: LGPL-2.0+
+
+Files: src/aalinuxkbd.c
+Copyright: 1994-1995 Russell Marks
+License: Custom
+ This library may be freely used/copied/modified provided this copyright
+ notice is left intact.
+
+Files: doc/aalib*
+Copyright: 1997 Jan Hubicka & Kamil Toman
+License: Abstyles
+ Permission is granted to make and distribute verbatim copies of this
+ manual provided the copyright notice and this permission notice are
+ preserved on all copies.
+
+Files: man/aalib-config.1
+Copyright: 1998 Owen Taylor
+Comment: The below license is the old-style MIT license, not
+         the newer, Expat variation.
+License: MIT
+ Permission to use, copy, modify, and distribute this software and its
+ documentation for any purpose and without fee is hereby granted,
+ provided that the above copyright notice appear in all copies and that
+ both that copyright notice and this permission notice appear in
+ supporting documentation.
+
+Files: debian/*
+Copyright: 2019-2020 Jonathan Carter <jcc@debian.org>
+           2012-2015 Gergely Nagy <algernon@madhouse-project.org>
+           2008-2011 Bart Martens <bartm@debian.org>
+           1997-2008 Joey Hess <joeyh@debian.org>
+License: LGPL-2.0+
+
+License: LGPL-2.0+
+ This package is free software; you can redistribute it and/or
+ modify it under the terms of the GNU Lesser General Public
+ License as published by the Free Software Foundation; either
+ version 2 of the License, or (at your option) any later version.
+ .
+ This package is distributed in the hope that it will be useful,
+ but WITHOUT ANY WARRANTY; without even the implied warranty of
+ MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+ Lesser General Public License for more details.
+ .
+ You should have received a copy of the GNU General Public License
+ along with this program. If not, see <http://www.gnu.org/licenses/>.
+ .
+ On Debian systems, the complete text of the GNU Lesser General
+ Public License can be found in "/usr/share/common-licenses/LGPL-2".
+

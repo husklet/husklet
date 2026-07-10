@@ -1,0 +1,2 @@
+autoconf: spare-manual-page usr/share/man/man1/config.guess.1.gz
+autoconf: spare-manual-page usr/share/man/man1/config.sub.1.gz

@@ -21,11 +21,16 @@ use objc2::runtime::ProtocolObject;
 use objc2_foundation::{NSDictionary, NSNumber, NSString};
 use objc2_metal::{
     MTLBlitCommandEncoder, MTLClearColor, MTLCommandBuffer, MTLCommandEncoder, MTLCommandQueue,
-    MTLDevice, MTLEvent, MTLLibrary, MTLLoadAction, MTLOrigin, MTLPixelFormat, MTLPrimitiveType, MTLRegion,
-    MTLRenderCommandEncoder, MTLRenderPassDescriptor, MTLRenderPipelineDescriptor, MTLSize,
-    MTLStorageMode, MTLStoreAction, MTLTexture, MTLTextureDescriptor, MTLTextureUsage,
+    MTLDevice, MTLEvent, MTLLibrary, MTLLoadAction, MTLOrigin, MTLPixelFormat, MTLPrimitiveType,
+    MTLRegion, MTLRenderCommandEncoder, MTLRenderPassDescriptor, MTLRenderPipelineDescriptor,
+    MTLSize, MTLStorageMode, MTLStoreAction, MTLTexture, MTLTextureDescriptor, MTLTextureUsage,
 };
 use std::ffi::c_void;
+
+fn display_debug() -> bool {
+    static D: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *D.get_or_init(|| std::env::var_os("DD_DISPLAY_DEBUG").is_some())
+}
 
 #[link(name = "Metal", kind = "framework")]
 extern "C" {
@@ -198,9 +203,9 @@ pub fn async_on() -> bool {
 }
 
 struct SurfFence {
-    render_ev: usize,  // *mut ProtocolObject<dyn MTLEvent>, +1 retained (leaked, one per surface id)
+    render_ev: usize, // *mut ProtocolObject<dyn MTLEvent>, +1 retained (leaked, one per surface id)
     present_ev: usize,
-    render_gen: u64,   // last render generation the executor reserved for this surface
+    render_gen: u64, // last render generation the executor reserved for this surface
 }
 static FENCES: std::sync::OnceLock<std::sync::Mutex<std::collections::HashMap<u32, SurfFence>>> =
     std::sync::OnceLock::new();
@@ -248,7 +253,11 @@ pub fn fence_begin_render(
 /// `encodeWaitForEvent(render_ev, gen)` BEFORE its blit and `encodeSignalEvent(present_ev, gen)` AFTER.
 pub fn fence_begin_present(
     id: u32,
-) -> Option<(Retained<ProtocolObject<dyn MTLEvent>>, Retained<ProtocolObject<dyn MTLEvent>>, u64)> {
+) -> Option<(
+    Retained<ProtocolObject<dyn MTLEvent>>,
+    Retained<ProtocolObject<dyn MTLEvent>>,
+    u64,
+)> {
     let m = fences().lock().unwrap();
     let f = m.get(&id)?;
     if f.render_ev == 0 || f.present_ev == 0 || f.render_gen == 0 {
@@ -269,10 +278,14 @@ pub fn fence_drop(id: u32) {
         // Reclaim the two leaked +1 owning refs so the MTLEvents are actually released.
         unsafe {
             if f.render_ev != 0 {
-                drop(Retained::from_raw(f.render_ev as *mut ProtocolObject<dyn MTLEvent>));
+                drop(Retained::from_raw(
+                    f.render_ev as *mut ProtocolObject<dyn MTLEvent>,
+                ));
             }
             if f.present_ev != 0 {
-                drop(Retained::from_raw(f.present_ev as *mut ProtocolObject<dyn MTLEvent>));
+                drop(Retained::from_raw(
+                    f.present_ev as *mut ProtocolObject<dyn MTLEvent>,
+                ));
             }
         }
     }
@@ -325,7 +338,9 @@ impl MetalCtx {
         };
         desc.setUsage(MTLTextureUsage::ShaderRead | MTLTextureUsage::RenderTarget);
         desc.setStorageMode(MTLStorageMode::Shared);
-        self.device.newTextureWithDescriptor(&desc).expect("newTextureWithDescriptor failed")
+        self.device
+            .newTextureWithDescriptor(&desc)
+            .expect("newTextureWithDescriptor failed")
     }
 
     /// Wrap a host `IOSurface` as an `MTLTexture` with **zero copy** — the IOSurface's pages ARE the
@@ -354,7 +369,12 @@ impl MetalCtx {
     }
 
     /// Upload tight BGRA bytes into a fresh GPU texture (real `replaceRegion:` upload).
-    pub fn upload_bgra(&self, bgra: &[u8], w: u32, h: u32) -> Retained<ProtocolObject<dyn MTLTexture>> {
+    pub fn upload_bgra(
+        &self,
+        bgra: &[u8],
+        w: u32,
+        h: u32,
+    ) -> Retained<ProtocolObject<dyn MTLTexture>> {
         let tex = self.new_bgra_texture(w, h);
         let region = full_region(w, h);
         unsafe {
@@ -388,13 +408,20 @@ fragment float4 fmain(VOut in [[stage_in]]) { return in.color; }
             .device
             .newLibraryWithSource_options_error(&NSString::from_str(SRC), None)
             .expect("MSL compile failed");
-        let vfn = lib.newFunctionWithName(&NSString::from_str("vmain")).expect("vmain");
-        let ffn = lib.newFunctionWithName(&NSString::from_str("fmain")).expect("fmain");
+        let vfn = lib
+            .newFunctionWithName(&NSString::from_str("vmain"))
+            .expect("vmain");
+        let ffn = lib
+            .newFunctionWithName(&NSString::from_str("fmain"))
+            .expect("fmain");
         let pdesc = MTLRenderPipelineDescriptor::new();
         pdesc.setVertexFunction(Some(&vfn));
         pdesc.setFragmentFunction(Some(&ffn));
         unsafe {
-            pdesc.colorAttachments().objectAtIndexedSubscript(0).setPixelFormat(MTLPixelFormat::BGRA8Unorm);
+            pdesc
+                .colorAttachments()
+                .objectAtIndexedSubscript(0)
+                .setPixelFormat(MTLPixelFormat::BGRA8Unorm);
         }
         let pipeline = self
             .device
@@ -405,11 +432,18 @@ fragment float4 fmain(VOut in [[stage_in]]) { return in.color; }
         let ca = unsafe { pass.colorAttachments().objectAtIndexedSubscript(0) };
         ca.setTexture(Some(target));
         ca.setLoadAction(MTLLoadAction::Clear);
-        ca.setClearColor(MTLClearColor { red: 0.05, green: 0.06, blue: 0.12, alpha: 1.0 });
+        ca.setClearColor(MTLClearColor {
+            red: 0.05,
+            green: 0.06,
+            blue: 0.12,
+            alpha: 1.0,
+        });
         ca.setStoreAction(MTLStoreAction::Store);
 
         let cmd = self.queue.commandBuffer().expect("commandBuffer");
-        let enc = cmd.renderCommandEncoderWithDescriptor(&pass).expect("render encoder");
+        let enc = cmd
+            .renderCommandEncoderWithDescriptor(&pass)
+            .expect("render encoder");
         enc.setRenderPipelineState(&pipeline);
         unsafe { enc.drawPrimitives_vertexStart_vertexCount(MTLPrimitiveType::Triangle, 0, 3) };
         enc.endEncoding();
@@ -418,11 +452,7 @@ fragment float4 fmain(VOut in [[stage_in]]) { return in.color; }
     }
 
     /// GPU blit `src` → `dst` (same size), synchronously.
-    pub fn blit(
-        &self,
-        src: &ProtocolObject<dyn MTLTexture>,
-        dst: &ProtocolObject<dyn MTLTexture>,
-    ) {
+    pub fn blit(&self, src: &ProtocolObject<dyn MTLTexture>, dst: &ProtocolObject<dyn MTLTexture>) {
         let cmd = self.queue.commandBuffer().expect("commandBuffer");
         let enc = cmd.blitCommandEncoder().expect("blitCommandEncoder");
         unsafe { enc.copyFromTexture_toTexture(src, dst) };
@@ -462,7 +492,11 @@ fragment float4 fmain(VOut in [[stage_in]]) { return in.color; }
         surface_id: u32,
         wait_completion: bool,
     ) {
-        let fence = if async_on() { fence_begin_present(surface_id) } else { None };
+        let fence = if async_on() {
+            fence_begin_present(surface_id)
+        } else {
+            None
+        };
         let cmd = self.queue.commandBuffer().expect("commandBuffer");
         if let Some((render_ev, _present_ev, gen)) = &fence {
             cmd.encodeWaitForEvent_value(render_ev, *gen); // fence a: don't read S until render(gen) done
@@ -517,7 +551,11 @@ fragment float4 fmain(VOut in [[stage_in]]) { return in.color; }
 fn full_region(w: u32, h: u32) -> MTLRegion {
     MTLRegion {
         origin: MTLOrigin { x: 0, y: 0, z: 0 },
-        size: MTLSize { width: w as usize, height: h as usize, depth: 1 },
+        size: MTLSize {
+            width: w as usize,
+            height: h as usize,
+            depth: 1,
+        },
     }
 }
 
@@ -546,9 +584,21 @@ pub struct MetalPngPresenter {
 
 impl MetalPngPresenter {
     pub fn new(dir: impl Into<std::path::PathBuf>) -> Option<MetalPngPresenter> {
-        let png_every = std::env::var("DD_DISPLAY_PNG_EVERY").ok().and_then(|v| v.parse().ok()).unwrap_or(1u32).max(1);
+        let png_every = std::env::var("DD_DISPLAY_PNG_EVERY")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(1u32)
+            .max(1);
         let sync_present = std::env::var_os("DD_DISPLAY_SYNC_PRESENT").is_some();
-        Some(MetalPngPresenter { ctx: MetalCtx::new()?, dir: dir.into(), frames: 0, last: None, png_every, dst_cache: std::collections::HashMap::new(), sync_present })
+        Some(MetalPngPresenter {
+            ctx: MetalCtx::new()?,
+            dir: dir.into(),
+            frames: 0,
+            last: None,
+            png_every,
+            dst_cache: std::collections::HashMap::new(),
+            sync_present,
+        })
     }
 }
 
@@ -559,9 +609,9 @@ impl crate::present::Presenter for MetalPngPresenter {
     fn present(&mut self, surf: &crate::present::SurfaceBuffer) {
         let (w, h) = (surf.width as u32, surf.height as u32);
         let dump = self.frames % self.png_every == 0; // sample: only some frames pay readback+PNG
-        // GPU rung 2: an IOSurface-backed dmabuf composites zero-copy (wrap → GPU-blit → readback); an
-        // shm buffer uploads its bytes first. The GPU blit (hop 15) runs EVERY frame; only sampled frames
-        // pay the CPU readback + PNG encode.
+                                                      // GPU rung 2: an IOSurface-backed dmabuf composites zero-copy (wrap → GPU-blit → readback); an
+                                                      // shm buffer uploads its bytes first. The GPU blit (hop 15) runs EVERY frame; only sampled frames
+                                                      // pay the CPU readback + PNG encode.
         let rgba = match surf.iosurface_id {
             Some(id) => {
                 let surface = unsafe { resolve_iosurface(id) };
@@ -570,7 +620,7 @@ impl crate::present::Presenter for MetalPngPresenter {
                     return;
                 }
                 let src = self.ctx.texture_from_iosurface(surface, w, h);
-                if surf.gpu_render {
+                if surf.gpu_render && std::env::var_os("DD_DISPLAY_TEST_TRIANGLE").is_some() {
                     self.ctx.render_triangle_into(&src); // rung 3: host GPU renders into the guest IOSurface
                 }
                 // Reuse a persistent composite target for this surface (zero per-frame allocation).
@@ -613,11 +663,21 @@ impl crate::present::Presenter for MetalPngPresenter {
         let png = dd_term_core::png::encode_rgba(w, h, &rgba);
         let _ = std::fs::create_dir_all(&self.dir);
         // Frame-indexed so an animated client's successive frames are all captured (not overwritten).
-        let path = self.dir.join(format!("surface-{}-{:03}.png", surf.sid, self.frames));
+        let path = self
+            .dir
+            .join(format!("surface-{}-{:03}.png", surf.sid, self.frames));
         let _ = std::fs::write(&path, png);
         self.frames += 1;
         self.last = Some((surf.sid, w, h, rgba));
-        eprintln!("[dd-display/metal] GPU-composited sid={} {}x{} -> {}", surf.sid, w, h, path.display());
+        if display_debug() {
+            eprintln!(
+                "[dd-display/metal] GPU-composited sid={} {}x{} -> {}",
+                surf.sid,
+                w,
+                h,
+                path.display()
+            );
+        }
     }
 }
 
@@ -711,7 +771,7 @@ pub fn selftest_render(out: &str) -> ! {
         }
         let tex = ctx.texture_from_iosurface(surf, w, h);
         ctx.render_triangle_into(&tex); // GPU render pass INTO the IOSurface
-        // Read the IOSurface back (it now holds GPU-rasterized pixels) and PNG it.
+                                        // Read the IOSurface back (it now holds GPU-rasterized pixels) and PNG it.
         let dst = ctx.new_bgra_texture(w, h);
         ctx.blit(&tex, &dst);
         let bgra = ctx.readback_bgra(&dst, w, h);
@@ -736,7 +796,9 @@ pub fn selftest_render(out: &str) -> ! {
 /// read back → PNG. Proves the hardware present path end to end on real Metal. Exits.
 pub fn selftest_metal(out: &str) -> ! {
     let Some(presenter) = MetalPngPresenter::new(
-        std::path::Path::new(out).parent().unwrap_or_else(|| std::path::Path::new(".")),
+        std::path::Path::new(out)
+            .parent()
+            .unwrap_or_else(|| std::path::Path::new(".")),
     ) else {
         eprintln!("selftest-metal: no Metal device available");
         std::process::exit(1);
@@ -764,7 +826,11 @@ pub fn selftest_metal(out: &str) -> ! {
     let mut server = crate::server::Server::new(cfd, presenter);
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
     while server.presenter().frames == 0 && std::time::Instant::now() < deadline {
-        let mut pfd = libc::pollfd { fd: cfd, events: libc::POLLIN, revents: 0 };
+        let mut pfd = libc::pollfd {
+            fd: cfd,
+            events: libc::POLLIN,
+            revents: 0,
+        };
         unsafe { libc::poll(&mut pfd, 1, 50) };
         if !server.pump().unwrap_or(false) {
             break;
@@ -776,7 +842,10 @@ pub fn selftest_metal(out: &str) -> ! {
         libc::close(lfd);
     }
     let _ = std::fs::remove_file(&sock);
-    let produced = std::path::Path::new(out).parent().unwrap_or_else(|| std::path::Path::new(".")).join("surface-6.png");
+    let produced = std::path::Path::new(out)
+        .parent()
+        .unwrap_or_else(|| std::path::Path::new("."))
+        .join("surface-6.png");
     if produced != std::path::Path::new(out) {
         let _ = std::fs::rename(&produced, out);
     }
