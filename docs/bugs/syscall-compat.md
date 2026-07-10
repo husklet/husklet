@@ -28,26 +28,6 @@ DDJIT_DIR="$PWD/target-workerA-syscall-audit/release/build/dd-jit-darwin-16122af
 
 Observed: native fires within 20ms (`ready=1 n8=1 exp=1`); dd does not fire within 150ms (`ready=0 n8=0 exp=0`). x86_64 showed the same mismatch.
 
-## Sentry `ppoll` Masks Stale Fds Instead Of `POLLNVAL`
-
-Priority: P1
-Impact: event loops can sleep through fd invalidation
-Confidence: High
-
-Verification status: Proven in isolated worktree `/Users/x/dd/dd-slot-G`.
-
-Evidence:
-
-- Sentry `ppoll` translates unmapped virtual fds to `-1`: `dd-jit-darwin/src/runtime/os/linux/sentry.c:1095`.
-
-Why this is bad:
-
-Linux reports `POLLNVAL` for stale or closed fds in a poll set. Mapping them to `-1` asks the host kernel to ignore them, so event loops miss invalidation.
-
-Isolated proof:
-
-The `audit_slot_g_sentry_fd.c` probe was run natively and under dd; the filtered JIT run failed with the expected oracle mismatch.
-
 ## Sentry Close-On-Exec Does Not Clean Virtual Fds
 
 Priority: P1
@@ -66,24 +46,6 @@ Guest close-on-exec semantics should close marked fds in the post-exec process. 
 Verification:
 
 Run an untrusted-mode probe that sets `FD_CLOEXEC` on a pipe, execs, and verifies the peer observes EOF.
-
-## Sentry `pselect6` Masks Invalid Virtual Fd Bits
-
-Priority: P2
-Impact: invalid fd readiness is hidden instead of `EBADF`
-Confidence: Medium
-
-Evidence:
-
-- Sentry `pselect6` rebuilds fd sets from virtual fds and silently skips unmapped/unrepresentable fds: `dd-jit-darwin/src/runtime/os/linux/sentry.c:1118`.
-
-Why this is bad:
-
-Linux `select`/`pselect` should fail `EBADF` for invalid positive fd bits. Skipping them can make event loops block instead of noticing closed fds.
-
-Verification:
-
-Run an untrusted-mode `pselect6` probe with an invalid positive fd bit and compare against native `EBADF`.
 
 ## Seccomp Filter Install Reports Success But Does Not Enforce
 
