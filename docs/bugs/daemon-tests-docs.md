@@ -2255,31 +2255,6 @@ CARGO_TARGET_DIR=/Users/x/dd/dd-audit-system-endpoints-20260710-target cargo tes
 
 Result: one `~/.dd/pcache/*.pcache` file produced total count `1` with empty item lists.
 
-## Info Under-Reports Daemon Capacity
-
-Priority: P1
-Impact: clients and schedulers see one CPU and zero memory
-Confidence: High
-
-Verification status: Proven in isolated worktree `/Users/x/dd/dd-audit-info-version-20260710`.
-
-Evidence:
-
-- `/info` hardcodes `NCPU: 1`: `dd-daemon/src/system.rs:60`.
-- `/info` hardcodes `MemTotal: 0`: `dd-daemon/src/system.rs:61`.
-
-Why this is bad:
-
-Docker-compatible `/info` reports logical CPUs usable by the daemon and total physical memory in bytes. dd reports `NCPU=1` and `MemTotal=0` on a host where the proof test observed `18` CPUs and nonzero memory, so clients can under-size workloads or reject capacity assumptions.
-
-Isolated proof:
-
-```sh
-CARGO_TARGET_DIR=/Users/x/dd/dd-audit-info-version-20260710-target cargo test -p dd-daemon system_info -- --ignored --nocapture
-```
-
-Result: `NCPU=1 MemTotal=0`, expected host-derived CPU count and nonzero memory.
-
 ## Info Default Runtime Is Not Declared
 
 Priority: P1

@@ -29,6 +29,30 @@ pub(crate) async fn version() -> Json<crate::api::Version> {
     })
 }
 
+/// Logical CPUs usable by the daemon, for `/info` `NCPU`. Docker reports the host's usable CPU count;
+/// dd hardcoded 1, so schedulers/clients under-sized workloads.
+pub(crate) fn host_ncpu() -> i64 {
+    std::thread::available_parallelism()
+        .map(|n| n.get() as i64)
+        .unwrap_or(1)
+}
+
+/// Total physical memory in bytes, for `/info` `MemTotal`. Reads Linux `/proc/meminfo`; `0` when it is
+/// unavailable (e.g. non-Linux host) — the same sentinel as before, so no regression there.
+pub(crate) fn host_mem_total() -> i64 {
+    let Ok(s) = std::fs::read_to_string("/proc/meminfo") else {
+        return 0;
+    };
+    for line in s.lines() {
+        if let Some(rest) = line.strip_prefix("MemTotal:") {
+            if let Some(kb) = rest.split_whitespace().next().and_then(|v| v.parse::<i64>().ok()) {
+                return kb.saturating_mul(1024);
+            }
+        }
+    }
+    0
+}
+
 pub(crate) async fn info(State(a): State<App>) -> Json<crate::api::Info> {
     use crate::api::{Info, Plugins, Swarm};
     let g = a.inner.lock().await;
@@ -57,8 +81,8 @@ pub(crate) async fn info(State(a): State<App>) -> Json<crate::api::Info> {
         operating_system: "dd (VM-less JIT on macOS)",
         os_type: "linux",
         architecture: "aarch64",
-        ncpu: 1,
-        mem_total: 0,
+        ncpu: host_ncpu(),
+        mem_total: host_mem_total(),
         kernel_version: "6.1.0-dd",
         server_version: "0.1.0-dd",
         docker_root_dir: dd_home().to_string_lossy().into_owned(),
@@ -221,3 +245,21 @@ pub(crate) async fn system_df(State(a): State<App>) -> Json<crate::api::DiskUsag
 
 // `GET /events` — `docker events`. The handler now lives in `crate::events` (the lifecycle bus):
 // see `events.rs` for the broadcast-backed, newline-delimited JSON stream and `emit_event`.
+
+#[cfg(test)]
+mod capacity_tests {
+    use super::{host_mem_total, host_ncpu};
+
+    // "Info Under-Reports Daemon Capacity" (P1): /info must report the real usable CPU count (>=1),
+    // not a hardcoded 1, and on Linux a nonzero MemTotal derived from /proc/meminfo.
+    #[test]
+    fn host_ncpu_is_at_least_one() {
+        assert!(host_ncpu() >= 1);
+    }
+
+    #[test]
+    #[cfg(target_os = "linux")]
+    fn host_mem_total_is_nonzero_on_linux() {
+        assert!(host_mem_total() > 0, "MemTotal must be read from /proc/meminfo on Linux");
+    }
+}
