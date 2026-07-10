@@ -412,33 +412,6 @@ cargo run -q -p dd-tests -- -e x86_64 audit-af-cgroup-mem-fork
 
 Observed dd: `before=0 during=0 delta=0 ge32m=0`. Linux oracle showed a positive child allocation delta above 32 MiB.
 
-### `/proc/self/task` Enumeration Omits Live Guest Threads
-
-Priority: P1
-Impact: thread enumerators miss live guest TIDs
-Confidence: High
-
-Verification status: Proven in isolated worktree `/Users/x/dd/dd-worker-AF-envproc-src-20260710`.
-
-Evidence:
-
-- `proc_task_dir_open()` materializes only the main pid entry: `dd-jit-darwin/src/runtime/os/linux/container/vfs.c:2422`.
-- Direct task TID visibility recognizes spawned guest threads: `dd-jit-darwin/src/runtime/os/linux/container/vfs.c:2456`.
-- Guest threads receive TIDs in the runtime thread path: `dd-jit-darwin/src/runtime/os/linux/thread.c:1184`.
-
-Why this is bad:
-
-Linux tools enumerate `/proc/self/task` to discover threads. dd can make direct task paths visible while omitting the same TIDs from directory enumeration, confusing profilers, debuggers, and runtimes.
-
-Isolated proof:
-
-```sh
-cargo run -q -p dd-tests -- -e aarch64 audit-af-taskdir-threads
-cargo run -q -p dd-tests -- -e x86_64 audit-af-taskdir-threads
-```
-
-Observed dd: `entries=1 expected=4 all_listed=0`; Linux oracle listed all four threads.
-
 ### Network-None Hides `eth0` In Readdir But Direct Lookup Exposes It
 
 Priority: P1
@@ -592,31 +565,6 @@ native: peer_ns ns_stat=1 ns_readdir_net=1 net_readlink=1
 dd:     peer_ns ns_stat=0 ns_readdir_net=0 net_readlink=0
 ```
 
-### Cgroup Controllers Advertised But Required Files Missing
-
-Priority: P1
-Impact: cgroup v2 controllers look available but standard files are absent
-Confidence: High
-
-Verification status: Proven in isolated worktree `/Users/x/dd/dd-worker-BE2-clean-20260710`.
-
-Evidence:
-
-- `cgroup.controllers` advertises `cpuset cpu io memory pids`: `dd-jit-darwin/src/runtime/os/linux/container/vfs.c:3374`.
-- `/sys/fs/cgroup/*` paths route to synthetic proc open: `dd-jit-darwin/src/runtime/os/linux/syscall/fs.c:1968`.
-- The cgroup file list omits `cpuset.cpus.effective`, `cpuset.mems.effective`, and `pids.peak`: `dd-jit-darwin/src/runtime/os/linux/container/vfs.c:3351`.
-
-Why this is bad:
-
-Runtimes read advertised controller files to configure and inspect resource state. Advertising controllers while omitting required files causes feature probes and cgroup walkers to fail.
-
-Observed proof:
-
-```text
-Linux: advertises=1 cpu_eff=1 mem_eff=1 pids_peak=1 ok=1
-dd:    advertises=1 cpu_eff=0:2:- mem_eff=0:2:- pids_peak=0:2:- ok=0
-```
-
 ### `/proc/net/unix` Ignores Live AF_UNIX Sockets
 
 Priority: P2
@@ -664,81 +612,6 @@ Observed proof:
 ```text
 dd:    procnet_dir dir=0 tcp=0 dev=0 sockstat=0 direct_tcp=1 direct_dev=1
 Linux: procnet_dir dir=1 tcp=1 dev=1 sockstat=1 direct_tcp=1 direct_dev=1
-```
-
-### Cgroup V2 Omits Additional Standard Controller Files
-
-Priority: P1
-Impact: advertised controllers still lack standard inspection/control files
-Confidence: High
-
-Verification status: Proven in isolated worktree `/Users/x/dd/dd-bk2-audit-20260710`.
-
-Evidence:
-
-- `/sys/fs/cgroup/*` paths route through synthetic proc open: `dd-jit-darwin/src/runtime/os/linux/syscall/fs.c:1968`.
-- The cgroup v2 file set omits `memory.oom.group`, `pids.events`, `pids.events.local`, `memory.swap.events`, `memory.swap.peak`, and `cpu.stat.local`: `dd-jit-darwin/src/runtime/os/linux/container/vfs.c:3374`, `dd-jit-darwin/src/runtime/os/linux/container/vfs.c:3398`, `dd-jit-darwin/src/runtime/os/linux/container/vfs.c:3444`.
-
-Why this is bad:
-
-This is separate from the earlier missing `cpuset.*.effective` and `pids.peak` cases. Tools that inspect cgroup v2 controller state expect these files when the controllers are advertised.
-
-Observed proof:
-
-```text
-dd:    cgroup_more controllers=1 oom_group=0 pids_events=0 pids_events_local=0 swap_events=0 swap_peak=0 cpu_stat_local=0
-Linux: cgroup_more controllers=1 oom_group=1 pids_events=1 pids_events_local=1 swap_events=1 swap_peak=1 cpu_stat_local=1
-```
-
-### `/proc/self/task/<tid>` Lists Files Direct Lookup Cannot Open
-
-Priority: P1
-Impact: task procfs walkers see entries that cannot be stat/opened
-Confidence: High
-
-Verification status: Proven in isolated worktree `/Users/x/dd/dd-procfs-audit-BN`.
-
-Evidence:
-
-- Task TID directories are materialized: `dd-jit-darwin/src/runtime/os/linux/container/vfs.c:2424`.
-- `task/<tid>` directory listing reuses the generic per-pid list containing `status`: `dd-jit-darwin/src/runtime/os/linux/container/vfs.c:2388`, `dd-jit-darwin/src/runtime/os/linux/container/vfs.c:2506`.
-- Direct proc open handles only `task/1/maps`, not `task/<tid>/status`: `dd-jit-darwin/src/runtime/os/linux/container/vfs.c:3038`.
-- Stat fallback depends on `proc_open`: `dd-jit-darwin/src/runtime/os/linux/container/vfs.c:4771`.
-
-Why this is bad:
-
-Linux lets tools open files listed under each task directory. dd lists `status` under `/proc/self/task/<tid>` but fails direct stat/open, creating a broken enumerable tree.
-
-Observed proof:
-
-```text
-Linux: task_listed=1 dir_stat=1 dir_open=1 status_listed=1 status_stat=1 status_open=1
-dd:    task_listed=1 dir_stat=1 dir_open=1 status_listed=1 status_stat=0 status_open=0
-```
-
-### `/proc/self` Readdir Omits Direct-Supported Proc Files
-
-Priority: P1
-Impact: procfs feature discovery misses files that direct lookup supports
-Confidence: High
-
-Verification status: Proven in isolated worktree `/Users/x/dd/dd-procfs-audit-BN`.
-
-Evidence:
-
-- `/proc/<pid>` listing is a hard-coded set omitting `mountinfo`, `limits`, `environ`, `smaps`, and `pagemap`: `dd-jit-darwin/src/runtime/os/linux/container/vfs.c:2388`.
-- Direct open supports those files: `dd-jit-darwin/src/runtime/os/linux/container/vfs.c:3031`.
-- Synthetic stat confirms direct-supported proc files by opening them: `dd-jit-darwin/src/runtime/os/linux/container/vfs.c:4771`.
-
-Why this is bad:
-
-Tools commonly discover proc files via readdir. dd supports direct access but hides the same files from `/proc/self`, so directory-based discovery and direct probing disagree.
-
-Observed proof:
-
-```text
-Linux: mountinfo/limits/environ/smaps/pagemap listed=1 stat=1 open=1
-dd:    mountinfo/limits/environ/smaps/pagemap listed=0 stat=1 open=1
 ```
 
 ### `/proc/self/fdinfo` Is Missing

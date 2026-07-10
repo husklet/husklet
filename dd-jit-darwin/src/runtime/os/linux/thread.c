@@ -1064,6 +1064,26 @@ static int thread_live_count(void) {
     return n < 1 ? 1 : n; // the caller is always itself a live thread even in a registration window
 }
 
+// Fill `out` with the tids of every live guest thread of THIS process (the registered spawned threads;
+// the main/init thread carries tid 0 in the registry and reports `main_tid` to the guest, so callers pass
+// their own pid as main_tid to substitute it). Returns the count written (<= max). Used to enumerate
+// /proc/<self>/task so a directory walk sees every live TID, not just the main thread.
+static int thread_tid_list(int *out, int max, int main_tid) {
+    int n = 0;
+    pthread_mutex_lock(&g_threg_m);
+    for (int i = 0; i < THREAD_REG_MAX && n < max; i++) {
+        if (!g_threg[i].c) continue;
+        int tid = cpu_tid(g_threg[i].c);
+        if (tid == 0) tid = main_tid; // init thread -> its guest-visible tid (== pid)
+        int dup = 0;
+        for (int j = 0; j < n; j++)
+            if (out[j] == tid) { dup = 1; break; }
+        if (!dup) out[n++] = tid;
+    }
+    pthread_mutex_unlock(&g_threg_m);
+    return n;
+}
+
 // execve makes the process single-threaded: the kernel terminates every OTHER thread in the group before the
 // new image runs. The JIT re-loads the new image IN-PROCESS, so we must do that teardown by hand -- BEFORE
 // flushing the address space and closing CLOEXEC fds -- or a surviving sibling M keeps running the old image

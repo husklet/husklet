@@ -2392,8 +2392,13 @@ static int proc_leaf_dir_open(const char *guestpath, int with_task) {
     procfd_dirs_reap(0);
     char tmpl[] = "/tmp/.ddppidXXXXXX";
     if (!mkdtemp(tmpl)) return -1;
-    static const char *const files[] = {"stat",          "statm",    "status",    "cmdline", "comm",
-                                        "maps",          "oom_score_adj", "oom_adj", "oom_score", 0};
+    // The per-pid file set. Direct open/stat serve every name here (proc_open), so listing them makes
+    // readdir-based discovery agree with direct probing (mountinfo/limits/environ/smaps/pagemap/io were
+    // openable but hidden from `ls /proc/self`).
+    static const char *const files[] = {"stat",      "statm",         "status",  "cmdline",   "comm",
+                                        "maps",      "oom_score_adj", "oom_adj", "oom_score", "mountinfo",
+                                        "limits",    "environ",       "smaps",   "pagemap",   "io",
+                                        "mounts",    "cgroup",        0};
     for (int i = 0; files[i]; i++) {
         char p[64];
         snprintf(p, sizeof p, "%s/%s", tmpl, files[i]);
@@ -2434,7 +2439,19 @@ static int proc_task_dir_open(int gp) {
     if (!mkdtemp(tmpl)) return -1;
     char p[64];
     snprintf(p, sizeof p, "%s/%d", tmpl, gp);
-    mkdir(p, 0555);
+    mkdir(p, 0555); // the main thread tid (== pid)
+    // For OUR OWN process, enumerate every live guest thread's tid so a /proc/self/task walk sees them all
+    // (thread enumerators, profilers, debuggers). Peer processes keep just the main entry (no cross-process
+    // thread registry yet).
+    if (gp == (int)getpid() || gp == container_pid()) {
+        int tids[256];
+        int nt = thread_tid_list(tids, 256, gp);
+        for (int i = 0; i < nt; i++) {
+            if (tids[i] == gp) continue; // main already created
+            snprintf(p, sizeof p, "%s/%d", tmpl, tids[i]);
+            mkdir(p, 0555);
+        }
+    }
     int fd = open(tmpl, O_RDONLY | O_DIRECTORY);
     if (fd < 0) {
         procfd_dir_rm(tmpl);
@@ -2995,16 +3012,21 @@ static int proc_open(const char *rp) {
             while (*s >= '0' && *s <= '9')
                 s++;
             if (s > t + 6 && *s == '/') { // a real /task/<tid>/ segment with a trailing leaf
-                if (q + k != t || k == 0) return -2;
-                char pbuf[16], tbuf[16];
-                int plen = k < (int)sizeof pbuf ? k : (int)sizeof pbuf - 1;
+                // The pid segment between /proc/ and /task is EITHER numeric OR the "self"/"thread-self"
+                // magic name -- /proc/self/task/<tid>/<leaf> must fold just like the numeric form (else a
+                // task walker that descends /proc/self/task/<tid> can list but not open its files).
+                int seglen = (int)(t - q);
+                int is_self = (seglen == 4 && !strncmp(q, "self", 4)) ||
+                              (seglen == 11 && !strncmp(q, "thread-self", 11));
+                int is_num = (k > 0 && q + k == t);
+                if (!is_self && !is_num) return -2;
+                char tbuf[16];
                 int tlen = (int)(s - (t + 6));
                 tlen = tlen < (int)sizeof tbuf ? tlen : (int)sizeof tbuf - 1;
-                memcpy(pbuf, q, (size_t)plen);
-                pbuf[plen] = 0;
                 memcpy(tbuf, t + 6, (size_t)tlen);
                 tbuf[tlen] = 0;
-                if (!proc_task_tid_visible(atoi(pbuf), atoi(tbuf))) return -2;
+                int pid = is_self ? container_pid() : atoi(q);
+                if (!proc_task_tid_visible(pid, atoi(tbuf))) return -2;
                 int head = (int)(t - rp);
                 snprintf(taskbuf, sizeof taskbuf, "%.*s%s", head, rp, s);
                 rp = taskbuf;
@@ -3394,6 +3416,28 @@ static int proc_open(const char *rp) {
             n = snprintf(buf, sizeof buf, "max\n");
     } else if (!strcmp(rp, "/sys/fs/cgroup/pids.current")) {
         n = snprintf(buf, sizeof buf, "%d\n", atomic_load(&g_pids_cur));
+    } else if (!strcmp(rp, "/sys/fs/cgroup/pids.peak")) {
+        n = snprintf(buf, sizeof buf, "%d\n", atomic_load(&g_pids_cur)); // no historical peak tracked -> live
+    } else if (!strcmp(rp, "/sys/fs/cgroup/pids.events") || !strcmp(rp, "/sys/fs/cgroup/pids.events.local")) {
+        n = snprintf(buf, sizeof buf, "max 0\n"); // pids limit never hit (structural)
+    } else if (!strcmp(rp, "/sys/fs/cgroup/cpuset.cpus.effective") ||
+               !strcmp(rp, "/sys/fs/cgroup/cpuset.cpus")) {
+        // The CPUs this cgroup may run on. cpuset.cpus.effective is what cpuset-aware runtimes read; advertise
+        // the container's online set so a cpuset walk sees a populated range (was ENOENT -> walk failed).
+        int nc = container_online_cpus();
+        if (nc < 1) nc = 1;
+        n = (nc == 1) ? snprintf(buf, sizeof buf, "0\n") : snprintf(buf, sizeof buf, "0-%d\n", nc - 1);
+    } else if (!strcmp(rp, "/sys/fs/cgroup/cpuset.mems.effective") ||
+               !strcmp(rp, "/sys/fs/cgroup/cpuset.mems")) {
+        n = snprintf(buf, sizeof buf, "0\n"); // single (emulated) memory node
+    } else if (!strcmp(rp, "/sys/fs/cgroup/cpu.stat.local")) {
+        n = snprintf(buf, sizeof buf, "throttled_usec 0\n");
+    } else if (!strcmp(rp, "/sys/fs/cgroup/memory.oom.group")) {
+        n = snprintf(buf, sizeof buf, "0\n");
+    } else if (!strcmp(rp, "/sys/fs/cgroup/memory.swap.events")) {
+        n = snprintf(buf, sizeof buf, "high 0\nmax 0\nfail 0\n");
+    } else if (!strcmp(rp, "/sys/fs/cgroup/memory.swap.peak")) {
+        n = snprintf(buf, sizeof buf, "0\n");
         // ---- cgroup v2 unified-hierarchy surface real runtimes SIZE THEMSELVES from ----------------------
         // The JVM (-XX:+UseContainerSupport), the Go runtime (GOMAXPROCS/GOMEMLIMIT tooling), Node/libuv, and
         // systemd read these to pick heap size, GC/CommonPool/worker thread counts, and to detect that they are
