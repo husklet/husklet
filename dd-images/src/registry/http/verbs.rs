@@ -4,8 +4,17 @@
 
 use super::*;
 use crate::Error;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::atomic::{AtomicU64, Ordering};
+
+/// A process-unique temp path `<tmp>/dd-reg-body-<pid>-<seq>.bin` for a request body, so concurrent
+/// `put_bytes` calls in ONE process never share (and clobber) the same file.
+fn reg_body_tmp() -> PathBuf {
+    static SEQ: AtomicU64 = AtomicU64::new(0);
+    let n = SEQ.fetch_add(1, Ordering::Relaxed);
+    std::env::temp_dir().join(format!("dd-reg-body-{}-{n}.bin", std::process::id()))
+}
 
 pub(in crate::registry) fn get(url: &str, accept: Option<&str>, token: Option<&str>) -> Result<Resp, Error> {
     // `-L` FOLLOW REDIRECTS: registries (Docker Hub, ECR, GCR, …) serve blob GETs — including the
@@ -63,7 +72,7 @@ pub(in crate::registry) fn put_bytes(
     content_type: &str,
     token: Option<&str>,
 ) -> Result<Resp, Error> {
-    let tmp = std::env::temp_dir().join(format!("dd-reg-body-{}.bin", std::process::id()));
+    let tmp = reg_body_tmp();
     std::fs::write(&tmp, body).map_err(|e| Error::Registry(e.to_string()))?;
     let r = put_file(url, &tmp, content_type, token);
     let _ = std::fs::remove_file(&tmp);
@@ -80,7 +89,11 @@ pub(in crate::registry) fn download_to_file(
     progress: &mut dyn FnMut(u64),
 ) -> Result<(), Error> {
     let mut cmd = Command::new("curl");
-    cmd.arg("-sSL")
+    // `-f` FAIL ON HTTP ERROR: without it, curl writes a 404/500 error body straight to `dest` and exits
+    // 0, so an HTTP error page would be saved as if it were the layer blob (then fed to tar). With `-f`
+    // curl emits nothing on >=400 and exits non-zero, so the download surfaces as an Err.
+    cmd.arg("-f")
+        .arg("-sSL")
         .arg("--connect-timeout")
         .arg(CONNECT_TIMEOUT_SECS)
         .arg("--max-time")
@@ -97,6 +110,9 @@ pub(in crate::registry) fn download_to_file(
         match child.try_wait().map_err(|e| Error::Registry(e.to_string()))? {
             Some(st) => {
                 if !st.success() {
+                    // `-f` failed the transfer (e.g. HTTP >=400): make sure no partial/empty file is left
+                    // behind to be mistaken for a valid blob, and surface the failure.
+                    let _ = std::fs::remove_file(dest);
                     return Err(Error::Registry(format!("curl blob download failed ({st})")));
                 }
                 progress(file_len(dest)); // final, exact size
@@ -107,5 +123,62 @@ pub(in crate::registry) fn download_to_file(
                 std::thread::sleep(std::time::Duration::from_millis(150));
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
+
+    // Finding 7: two `put_bytes`-class calls must get DISTINCT temp body files (was a single fixed
+    // `dd-reg-body-<pid>.bin`, so concurrent calls clobbered each other's body).
+    #[test]
+    fn reg_body_tmp_is_unique_per_call() {
+        let a = reg_body_tmp();
+        let b = reg_body_tmp();
+        assert_ne!(a, b, "each request body gets its own temp path");
+        assert!(a.starts_with(std::env::temp_dir()));
+        // writing different bytes to each path does not clobber the other.
+        std::fs::write(&a, b"AAA").unwrap();
+        std::fs::write(&b, b"BBBB").unwrap();
+        assert_eq!(std::fs::read(&a).unwrap(), b"AAA");
+        assert_eq!(std::fs::read(&b).unwrap(), b"BBBB");
+        let _ = std::fs::remove_file(&a);
+        let _ = std::fs::remove_file(&b);
+    }
+
+    // Finding 6: a layer download that gets a 404 must return Err (not save the error body as a blob).
+    #[test]
+    fn download_to_file_404_is_error_not_a_blob() {
+        // one-shot local server that answers every request with 404 + an error body.
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let handle = std::thread::spawn(move || {
+            if let Ok((mut sock, _)) = listener.accept() {
+                let mut buf = [0u8; 1024];
+                let _ = sock.read(&mut buf);
+                let body = b"404 page not found";
+                let resp = format!(
+                    "HTTP/1.1 404 Not Found\r\nContent-Type: text/plain\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                    body.len()
+                );
+                let _ = sock.write_all(resp.as_bytes());
+                let _ = sock.write_all(body);
+            }
+        });
+
+        let dest = reg_body_tmp(); // borrow the unique-temp helper for a scratch path
+        let url = format!("http://127.0.0.1:{port}/v2/x/blobs/sha256:deadbeef");
+        let r = download_to_file(&url, None, &dest, &mut |_| {});
+        let _ = handle.join();
+
+        assert!(r.is_err(), "a 404 layer download must be an Err");
+        assert!(
+            !dest.exists(),
+            "the HTTP error body must not be left on disk as a saved blob"
+        );
+        let _ = std::fs::remove_file(&dest);
     }
 }

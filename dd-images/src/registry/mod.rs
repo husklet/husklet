@@ -40,8 +40,25 @@ application/vnd.oci.image.index.v1+json,\
 application/vnd.docker.distribution.manifest.v2+json,\
 application/vnd.oci.image.manifest.v1+json";
 const MEDIA_MANIFEST: &str = "application/vnd.docker.distribution.manifest.v2+json";
+const MEDIA_MANIFEST_OCI: &str = "application/vnd.oci.image.manifest.v1+json";
 const MEDIA_CONFIG: &str = "application/vnd.docker.container.image.v1+json";
 const MEDIA_LAYER: &str = "application/vnd.docker.image.rootfs.diff.tar.gzip";
+const MEDIA_LAYER_OCI_GZIP: &str = "application/vnd.oci.image.layer.v1.tar+gzip";
+
+/// A single image manifest's `mediaType` we understand (NOT an index — that's resolved earlier). An
+/// absent `mediaType` is tolerated (some registries omit it on the manifest body); a present one must be
+/// one of these.
+fn is_supported_manifest_media(m: &str) -> bool {
+    m == MEDIA_MANIFEST || m == MEDIA_MANIFEST_OCI
+}
+
+/// A layer `mediaType` we can actually unpack. Extraction is `tar xzf` (gzip), so only the docker/OCI
+/// GZIP layer types are supported; zstd (`…tar+zstd`), plain uncompressed tar, and foreign/unknown types
+/// are rejected rather than blindly gzip-extracted. An empty/absent type defaults to the docker gzip type
+/// (older registries omit it).
+fn is_supported_layer_media(m: &str) -> bool {
+    m.is_empty() || m == MEDIA_LAYER || m == MEDIA_LAYER_OCI_GZIP
+}
 
 #[cfg(test)]
 mod tests {

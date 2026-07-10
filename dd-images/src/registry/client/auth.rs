@@ -44,7 +44,7 @@ impl Client {
         }
         // probe to discover the auth realm
         let probe = http::get(
-            &format!("{}/manifests/{}", self.image.base_url(), self.image.tag),
+            &format!("{}/manifests/{}", self.image.base_url(), self.image.manifest_reference()),
             Some(MANIFEST_ACCEPT),
             None,
         )?;

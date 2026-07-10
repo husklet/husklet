@@ -2,7 +2,7 @@
 
 use super::*;
 
-/// A parsed image reference: `[registry/]repository[:tag]`.
+/// A parsed image reference: `[registry/]repository[:tag][@digest]`.
 #[derive(Clone, Debug, PartialEq)]
 pub struct ImageRef {
     /// Registry `host[:port]`, e.g. `"registry-1.docker.io"`, `"ghcr.io"`, `"localhost:5000"`.
@@ -11,13 +11,24 @@ pub struct ImageRef {
     pub repository: String,
     /// Image tag, defaulting to `"latest"` when the reference omits one.
     pub tag: String,
+    /// A pinned content digest (`sha256:<hex>`) when the reference used the `@digest` form
+    /// (`alpine@sha256:…`); manifest requests then target the digest, not the tag. `None` for a plain
+    /// tag reference.
+    pub digest: Option<String>,
 }
 impl ImageRef {
     /// Parse a reference the way docker does: the leading segment is a registry host if it contains a
     /// `.` or `:` or is `localhost`; otherwise it's a Docker Hub image (and a single-element repository
-    /// gets the implicit `library/` namespace).
+    /// gets the implicit `library/` namespace). A trailing `@sha256:<hex>` is a pinned DIGEST — it is
+    /// split off first (so it is not mistaken for a `:tag`) and carried in [`digest`](Self::digest).
     pub fn parse(s: &str) -> ImageRef {
-        let (path, tag) = split_tag(s.trim());
+        // Split off a `@digest` suffix BEFORE tag parsing, so `alpine@sha256:<hex>` doesn't get its
+        // digest colon read as a `:tag` split (which produced repo `library/alpine@sha256`, tag `<hex>`).
+        let (name, digest) = match s.trim().split_once('@') {
+            Some((n, d)) if !d.is_empty() => (n, Some(d.to_string())),
+            _ => (s.trim(), None),
+        };
+        let (path, tag) = split_tag(name);
         match path.split_once('/') {
             Some((host, rest)) if is_registry_host(host) => {
                 let registry = if host == "docker.io" {
@@ -29,6 +40,7 @@ impl ImageRef {
                     registry,
                     repository: rest.to_string(),
                     tag,
+                    digest,
                 }
             }
             _ => {
@@ -41,9 +53,16 @@ impl ImageRef {
                     registry: DOCKER_HUB.to_string(),
                     repository,
                     tag,
+                    digest,
                 }
             }
         }
+    }
+
+    /// The manifest reference to request: the pinned `@digest` when present, else the tag. A digest-pinned
+    /// pull fetches `/manifests/sha256:<hex>` (exact content), a plain reference `/manifests/<tag>`.
+    pub(super) fn manifest_reference(&self) -> &str {
+        self.digest.as_deref().unwrap_or(&self.tag)
     }
     /// `registry/repository:tag`, with Docker Hub abbreviated back to `docker.io`.
     pub fn canonical(&self) -> String {
@@ -127,6 +146,40 @@ mod tests {
         // registry host has a port; short()/canonical() show it verbatim, default tag latest.
         assert_eq!(r.short(), "localhost:5000/img:latest");
         assert_eq!(r.canonical(), "localhost:5000/img:latest");
+    }
+
+    // Finding 9: a `@sha256:<hex>` digest-pinned reference must parse to the repository WITHOUT the
+    // `@sha256` suffix and carry the digest, so the pull requests `/manifests/sha256:<hex>`.
+    #[test]
+    fn digest_pinned_reference_parses_repository_and_digest() {
+        let hex = "a".repeat(64);
+        let r = ImageRef::parse(&format!("alpine@sha256:{hex}"));
+        // canonical Hub namespacing, and NO `@sha256` bleed into the repository.
+        assert_eq!(r.repository, "library/alpine");
+        assert!(!r.repository.contains('@'), "repo must not carry the digest");
+        assert_eq!(r.digest, Some(format!("sha256:{hex}")));
+        // manifest requests target the digest, not the (defaulted) tag.
+        assert_eq!(r.manifest_reference(), format!("sha256:{hex}"));
+        assert_eq!(r.tag, "latest");
+    }
+
+    #[test]
+    fn digest_pinned_reference_with_registry_and_tag() {
+        let hex = "b".repeat(64);
+        // registry + user repo + explicit tag + digest all together.
+        let r = ImageRef::parse(&format!("ghcr.io/o/a:v2@sha256:{hex}"));
+        assert_eq!(r.registry, "ghcr.io");
+        assert_eq!(r.repository, "o/a");
+        assert_eq!(r.tag, "v2");
+        assert_eq!(r.digest, Some(format!("sha256:{hex}")));
+        assert_eq!(r.manifest_reference(), format!("sha256:{hex}"));
+    }
+
+    #[test]
+    fn plain_reference_has_no_digest_and_uses_tag() {
+        let r = ImageRef::parse("alpine:3.19");
+        assert_eq!(r.digest, None);
+        assert_eq!(r.manifest_reference(), "3.19");
     }
 
     // ---- split_tag: the single source of the "final :tag with no slash after it" rule ----
