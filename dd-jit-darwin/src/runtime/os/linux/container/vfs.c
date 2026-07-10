@@ -1436,6 +1436,24 @@ static int maps_phdr_segs(struct mseg *seg, int maxn) {
             break;
         } // PT_PHDR
     }
+    // PT_GNU_RELRO (0x6474e552): the prefix of the data segment the loader RE-PROTECTS read-only after
+    // relocation. The kernel splits the writable load VMA there, so /proc/self/maps shows that prefix as
+    // r--p then the rest rw-p. Toolchains that fold rodata into the r-xp text segment (aarch64 gcc default,
+    // unlike x86 -z separate-code) otherwise expose NO r--p image row at all -- so replay the relro split.
+    uint64_t relro_lo = 0, relro_hi = 0;
+    for (uint64_t i = 0; i < phnum; i++) {
+        const uint8_t *e = ph + i * phent;
+        uint32_t type;
+        memcpy(&type, e, 4);
+        if (type == 0x6474e552u) {
+            uint64_t vaddr, memsz;
+            memcpy(&vaddr, e + 16, 8);
+            memcpy(&memsz, e + 40, 8);
+            relro_lo = (bias + vaddr) & ~0xfffULL;
+            relro_hi = (bias + vaddr + memsz + 0xfffULL) & ~0xfffULL;
+            break;
+        }
+    }
     int nseg = 0;
     for (uint64_t i = 0; i < phnum && nseg < maxn; i++) {
         const uint8_t *e = ph + i * phent;
@@ -1449,6 +1467,17 @@ static int maps_phdr_segs(struct mseg *seg, int maxn) {
         uint64_t lo = (bias + vaddr) & ~0xfffULL;
         uint64_t hi = (bias + vaddr + memsz + 0xfff) & ~0xfffULL;
         int prot = ((flags & 4) ? 4 : 0) | ((flags & 2) ? 2 : 0) | ((flags & 1) ? 1 : 0); // R|W|X
+        // A writable segment whose start is covered by relro: emit the relro prefix as r--p, the rest rw-p.
+        if ((prot & 2) && relro_hi > relro_lo && relro_lo >= lo && relro_hi <= hi && relro_hi > lo &&
+            nseg + 1 < maxn) {
+            if (relro_lo > lo) { seg[nseg].lo = lo; seg[nseg].hi = relro_lo; seg[nseg].prot = prot; nseg++; }
+            seg[nseg].lo = relro_lo > lo ? relro_lo : lo;
+            seg[nseg].hi = relro_hi;
+            seg[nseg].prot = 4; // r--p (read-only after relocation)
+            nseg++;
+            if (relro_hi < hi) { seg[nseg].lo = relro_hi; seg[nseg].hi = hi; seg[nseg].prot = prot; nseg++; }
+            continue;
+        }
         seg[nseg].lo = lo;
         seg[nseg].hi = hi;
         seg[nseg].prot = prot;

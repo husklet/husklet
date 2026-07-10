@@ -475,29 +475,6 @@ Why this is bad:
 
 Stale xfail or gap comments hide real regressions and waste agent time. Passing cases should either move to normal coverage or keep an explicit reason for remaining quarantined.
 
-### `/proc/self/maps` Omits RELRO Mapping Detail
-
-Priority: P2
-Impact: memory layout diagnostics see an impossible executable image shape
-Confidence: High
-
-Verification status: Proven in isolated worktree `/Users/x/dd/dd-procfs-statfs-audit-20260710`.
-
-Evidence:
-
-- Maps rendering is synthesized from internal mapping data: `dd-jit-darwin/src/runtime/os/linux/container/vfs.c:1407`, `dd-jit-darwin/src/runtime/os/linux/container/vfs.c:1444`.
-
-Why this is bad:
-
-Static PIE binaries on Linux expose read-only RELRO/load segments and vdso mappings. dd reports only executable and writable rows for the executable, so crash reporters, profilers, and hardening probes cannot reconstruct the real layout.
-
-Observed proof:
-
-```text
-dd:    executable rows include r-xp and rw-p only
-Linux: executable rows include r--p plus vdso mapping
-```
-
 ### `/dev/tty` Nonblocking Read Reports EOF Instead Of EAGAIN
 
 Priority: P1
