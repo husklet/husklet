@@ -276,7 +276,7 @@ async fn flow_container_rename_then_inspect_lookup_and_update_noop() {
     });
     assert!(found, "ps lists the container under its new name /app");
 
-    // Step 5: update with a Memory limit -> 200. dd does NOT persist it (documented no-op).
+    // Step 5: update with a Memory limit -> 200, and the new limit is now PERSISTED (inspect reflects it).
     let r = crate::containers::containers_update(
         State(app.clone()),
         Path(cid.clone()),
@@ -289,8 +289,8 @@ async fn flow_container_rename_then_inspect_lookup_and_update_noop() {
         .into_response();
     let v = to_body_json(r).await;
     assert_eq!(
-        v["HostConfig"]["Memory"], 0,
-        "NOTE/divergence: dd's update is a no-op — Memory stays 0; docker would reflect 16000000"
+        v["HostConfig"]["Memory"], 16000000,
+        "docker update now persists the Memory limit and inspect reflects it"
     );
 }
 
