@@ -28,6 +28,13 @@ use std::process::Command;
 /// Real corruption (truncated/damaged gzip, "Unexpected EOF", "not in gzip format", "No space left")
 /// is never swallowed — those still fail the pull.
 pub(in crate::registry) fn extract_targz(src: &Path, rootfs: &Path) -> Result<(), Error> {
+    // CONTAINMENT: dd flattens every layer into ONE shared rootfs with sequential `tar` runs, so a
+    // pre-existing symlink left by an earlier layer (e.g. `rootfs/linkout -> ../outside`) plus a later
+    // entry that writes THROUGH it (`linkout/file.txt`) would make tar follow the symlink and write
+    // `outside/file.txt` — outside the rootfs. Before extracting, remove any existing symlink sitting at
+    // a directory-component position of an entry in THIS layer; tar then recreates a real directory
+    // there (layers legitimately replace lower entries), and the write stays inside the rootfs.
+    scrub_symlink_prefixes(src, rootfs);
     let attempt = || {
         Command::new("tar")
             .args(["--exclude", "dev/*", "--exclude", "./dev/*", "-xzf"])
@@ -94,19 +101,109 @@ pub(in crate::registry) fn extract_targz(src: &Path, rootfs: &Path) -> Result<()
     }
 }
 
-pub(in crate::registry) fn run(prog: &str, args: &[&str]) -> Result<String, Error> {
-    let out = Command::new(prog)
-        .args(args)
-        .output()
-        .map_err(|e| Error::Other(format!("{prog}: {e}")))?;
-    if !out.status.success() {
-        let stderr = String::from_utf8_lossy(&out.stderr);
-        let detail = if stderr.trim().is_empty() {
-            format!("exited with {}", out.status)
-        } else {
-            stderr.trim().to_string()
-        };
-        return Err(Error::Other(format!("{prog} {args:?} failed: {detail}")));
+/// Remove any pre-existing SYMLINK that sits at a path-component position of an entry in the layer at
+/// `src`, so `tar` can't be tricked into writing THROUGH it to outside the rootfs. Purely defensive and
+/// contained: it walks each entry's components lexically (rejecting `..`/absolute escapes so the walk
+/// itself never leaves the rootfs) and `unlink`s a symlink found at any prefix. A symlink the layer
+/// itself ships is recreated by the subsequent extraction, so this never loses layer content.
+fn scrub_symlink_prefixes(src: &Path, rootfs: &Path) {
+    let out = match Command::new("tar").arg("tzf").arg(src).output() {
+        Ok(o) if o.status.success() => o.stdout,
+        _ => return,
+    };
+    for line in String::from_utf8_lossy(&out).lines() {
+        let rel = line
+            .trim_end_matches('/')
+            .trim_start_matches("./")
+            .trim_start_matches('/');
+        if rel.is_empty() {
+            continue;
+        }
+        let mut cur = rootfs.to_path_buf();
+        for comp in rel.split('/') {
+            match comp {
+                "" | "." => continue,
+                ".." => break, // never walk above the rootfs for a malformed entry
+                c => cur.push(c),
+            }
+            match std::fs::symlink_metadata(&cur) {
+                Ok(m) if m.file_type().is_symlink() => {
+                    let _ = std::fs::remove_file(&cur);
+                    // path no longer exists; deeper components can't be pre-existing symlinks.
+                    break;
+                }
+                Ok(_) => {}   // a real dir/file — keep descending
+                Err(_) => break, // nothing here (or below) yet
+            }
+        }
     }
-    Ok(String::from_utf8_lossy(&out.stdout).into_owned())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::os::unix::fs::symlink;
+
+    struct Tmp(std::path::PathBuf);
+    impl Tmp {
+        fn new(tag: &str) -> Self {
+            use std::sync::atomic::{AtomicU64, Ordering};
+            static SEQ: AtomicU64 = AtomicU64::new(0);
+            let n = SEQ.fetch_add(1, Ordering::Relaxed);
+            let p = std::env::temp_dir()
+                .join(format!("dd_archive_test_{}_{}_{}", tag, std::process::id(), n));
+            let _ = std::fs::remove_dir_all(&p);
+            std::fs::create_dir_all(&p).unwrap();
+            Tmp(p)
+        }
+    }
+    impl Drop for Tmp {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    // Finding 5: a pre-existing `rootfs/linkout -> ../outside` symlink plus a later layer entry
+    // `linkout/file.txt` must NOT write outside the rootfs. Extraction must be contained: the file lands
+    // under rootfs/linkout/ (a real dir), and nothing appears in the sibling `outside/`.
+    #[test]
+    fn extract_does_not_write_through_existing_symlink() {
+        let t = Tmp::new("symthrough");
+        let rootfs = t.0.join("rootfs");
+        let outside = t.0.join("outside");
+        std::fs::create_dir_all(&rootfs).unwrap();
+        std::fs::create_dir_all(&outside).unwrap();
+        // a base-layer symlink that escapes the rootfs.
+        symlink("../outside", rootfs.join("linkout")).unwrap();
+
+        // the next layer writes THROUGH linkout/.
+        let layerdir = t.0.join("layer");
+        std::fs::create_dir_all(layerdir.join("linkout")).unwrap();
+        std::fs::write(layerdir.join("linkout").join("file.txt"), b"pwn").unwrap();
+        let tar = t.0.join("layer.tar.gz");
+        let st = Command::new("tar")
+            .arg("-czf")
+            .arg(&tar)
+            .arg("-C")
+            .arg(&layerdir)
+            .arg(".")
+            .status()
+            .unwrap();
+        assert!(st.success(), "build layer tar");
+
+        extract_targz(&tar, &rootfs).unwrap();
+
+        assert!(
+            !outside.join("file.txt").exists(),
+            "extraction must NOT write through the escaping symlink to outside the rootfs"
+        );
+        assert!(
+            rootfs.join("linkout").join("file.txt").exists(),
+            "the layer's file must land inside the rootfs (symlink replaced by a real dir)"
+        );
+        assert!(
+            !rootfs.join("linkout").symlink_metadata().unwrap().file_type().is_symlink(),
+            "the escaping symlink must have been replaced by a real directory"
+        );
+    }
 }

@@ -1,6 +1,5 @@
 //! Rootfs / whiteout / tar / gzip / sha256 tools used while unpacking and building layers.
 
-use super::*;
 use crate::Error;
 use std::path::{Path, PathBuf};
 use std::process::Command;
