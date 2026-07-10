@@ -1715,30 +1715,6 @@ Why this is bad:
 
 Docker attach selectors are part of the API contract. Ignoring them can leak unwanted stdout/stderr into clients, block on stdin unexpectedly, or break clients that attach only to one stream.
 
-## Resize Missing Container Or Exec Reports Success
-
-Priority: P2
-Impact: callers cannot distinguish a real resize from a missing target
-Confidence: High
-
-Verification status: Proven in isolated worktree `/Users/x/dd/dd-audit-daemon-exec-health-wait`.
-
-Evidence:
-
-- Resize handler returns success without checking whether the target container or exec exists: `dd-daemon/src/containers/exec/resize.rs:18`.
-
-Why this is bad:
-
-Terminal resize for a missing container or exec should return a not-found error. dd returns `200`, so clients silently believe a resize was applied to no target.
-
-Isolated proof:
-
-```sh
-CARGO_TARGET_DIR=/Users/x/dd/dd-audit-daemon-exec-health-wait-target cargo test -p dd-daemon audit_resize_missing_container_or_exec_is_404 -- --nocapture
-```
-
-Result: observed `200`, expected `404`.
-
 ## Exec Inspect Omits Docker State Fields
 
 Priority: P2
