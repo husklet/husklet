@@ -14,7 +14,7 @@ use std::path::Path;
 /// escape char and the two separators (`%`->`%25`, `/`->`%2F`, `:`->`%3A`), which is reversible and keeps
 /// distinct refs distinct. Because the result contains no `/` and (via the `.`/`..`/empty guard) is never
 /// a traversal component, it also cannot escape the store root when appended to it.
-pub(crate) fn encode_store_component(name: &str) -> String {
+pub fn encode_store_component(name: &str) -> String {
     let encoded = name
         .replace('%', "%25")
         .replace('/', "%2F")

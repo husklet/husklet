@@ -135,7 +135,13 @@ pub(crate) async fn commit_container(State(a): State<App>, Query(q): Query<Commi
         name.clone()
     };
     // Snapshot the rootfs into a fresh image dir (mirrors image_load/import's <images_dir>/<sanitized>).
-    let target = PathBuf::from(format!("{}/{}", a.images_dir, key.replace(['/', ':'], "_")));
+    // Use the shared injective store encoder so commit dirs match load/import/pull and can't collide
+    // (`owner/app:1_2` vs `owner/app_1:2` both flattened to the same `_`-joined name under the old scheme).
+    let target = PathBuf::from(format!(
+        "{}/{}",
+        a.images_dir,
+        dd_images::encode_store_component(&key)
+    ));
     let new_rootfs = target.join("rootfs");
     let _ = std::fs::remove_dir_all(&target);
     if let Err(e) = std::fs::create_dir_all(&target) {

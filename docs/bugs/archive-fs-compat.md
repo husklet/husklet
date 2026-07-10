@@ -22,26 +22,6 @@ Isolated proof:
 
 PoC observed silent write to the symlink target outside the requested destination.
 
-## Import Failure Leaves Partial Target
-
-Priority: P2
-Impact: cleanup leak and possible stale partial image directory
-Confidence: High
-
-Evidence:
-
-- Image import creates rootfs before extracting: `dd-images/src/image/archive/import.rs:16`.
-- On tar failure it returns an error without removing the target/rootfs: `dd-images/src/image/archive/import.rs:26`.
-- Image load, in contrast, removes staging on tar error: `dd-images/src/image/archive/load.rs:30`.
-
-Why this is bad:
-
-A malformed import archive can leave partial rootfs contents behind. Future operations may see stale directories or consume disk.
-
-Isolated proof:
-
-PoC created `linkout -> ../outside` and `linkout/from_import.txt`; GNU tar failed loudly, but the target rootfs remained with `linkout`.
-
 ## `docker cp` GET Drops Lower Entries From Overlay Directories
 
 Priority: P1
@@ -66,31 +46,6 @@ cargo test -p dd-daemon poc_archive_get_directory_must_merge_upper_and_lower_ent
 ```
 
 Observed: upper `/etc/hosts` caused `/etc` to resolve to upper `/etc`, so lower-only `/etc/alpine-release` was missing from the tar source.
-
-## Docker Save/Load Archive Format Is Not Docker-Compatible
-
-Priority: P1
-Impact: normal Docker save archives cannot be loaded
-Confidence: High
-
-Verification status: Proven in isolated worktree `/Users/x/dd/dd-workerF-archive-audit-20260710`.
-
-Evidence:
-
-- Save emits `rootfs/` plus `dd-manifest.json`: `dd-images/src/image/archive/save.rs:22`.
-- Load rejects archives without top-level `rootfs/`: `dd-images/src/image/archive/load.rs:39`.
-
-Why this is bad:
-
-Docker save archives normally contain `manifest.json`, config JSON, and layer tar entries. dd exposes save/load endpoints but rejects that normal Docker shape, limiting interoperability.
-
-Isolated proof:
-
-```sh
-CARGO_TARGET_DIR=/Users/x/dd/dd-workerF-target cargo test -p dd-images load_accepts_docker_save_archive_manifest_and_layers -- --nocapture
-```
-
-Result: failed as expected with `archive is not a dd image (no rootfs/ at top level)`.
 
 ## Anonymous Volume Copy-Up Drops Seeded Directory Metadata
 
@@ -475,31 +430,6 @@ Why this is bad:
 
 `["echo", 123]` is invalid exec-form JSON for Dockerfile commands. dd parses it as `["echo"]` instead of rejecting the Dockerfile.
 
-## Save/Load Drops Xattrs
-
-Priority: P2
-Impact: image archives lose extended attributes
-Confidence: High
-
-Verification status: Proven in isolated worktree `/Users/x/dd/worker-Q/dd-Q3`.
-
-Evidence:
-
-- Save uses plain `tar cf`: `dd-images/src/image/archive/save.rs:22`.
-- Load uses plain `tar xf`: `dd-images/src/image/archive/load.rs:21`.
-
-Why this is bad:
-
-Extended attributes can carry application metadata, labels, and filesystem behavior hints. A save/load round trip that reports success but strips them is silent metadata loss.
-
-Isolated proof:
-
-```sh
-cargo test -p dd-images save_then_load_preserves_user_xattrs --target-dir /Users/x/dd/worker-Q/target-Q
-```
-
-Result: failed; the loaded file returned `No data available` for the xattr.
-
 ## Fixed Per-Process Temp Dirs Race Concurrent Operations
 
 Priority: P1
@@ -764,59 +694,6 @@ TMPDIR=/Users/x/dd/dd-worker-AJ-archive-registry-20260710-target/tmp CARGO_TARGE
 
 Result: failed; `Client::pull` returned `Ok(Pulled { config: {} })` after the fake registry served `not json`.
 
-## Docker Load Manifest Name Can Delete Outside Image Store
-
-Priority: P1
-Impact: malformed load archive can delete host files outside the store
-Confidence: High
-
-Verification status: Proven in isolated worktree `/Users/x/dd/dd-worker-AP-archive-registry-layer-20260710`.
-
-Evidence:
-
-- Load parses `dd-manifest.json`: `dd-images/src/image/archive/load.rs:47`.
-- It computes a target directory from the manifest name: `dd-images/src/image/archive/load.rs:57`.
-- It removes that target before rename: `dd-images/src/image/archive/load.rs:58`.
-- `dir_for` replaces `/` and `:` but leaves `..` as a parent path component: `dd-images/src/image/archive/mod.rs:68`.
-
-Why this is bad:
-
-Archive metadata must not control filesystem placement outside the image store. A manifest image name containing parent components can make load remove a path outside the store before failing.
-
-Isolated proof:
-
-```sh
-CARGO_TARGET_DIR=/Users/x/dd/dd-worker-AP-archive-registry-layer-20260710-target cargo test -p dd-images poc_load_manifest_name_must_not_target_store_parent -- --ignored --nocapture
-```
-
-Result: failed; `load_archive` removed a sentinel outside the store, then returned an error.
-
-## Malformed `dd-manifest.json` Is Treated As Rootfs-Only
-
-Priority: P1
-Impact: image name and config loss is silently accepted
-Confidence: High
-
-Verification status: Proven in isolated worktree `/Users/x/dd/dd-worker-AP-archive-registry-layer-20260710`.
-
-Evidence:
-
-- Load reads manifest bytes: `dd-images/src/image/archive/load.rs:47`.
-- Parse errors become `None`: `dd-images/src/image/archive/load.rs:49`.
-- The code then falls back to a default manifest: `dd-images/src/image/archive/load.rs:50`.
-
-Why this is bad:
-
-A missing manifest may be a deliberate rootfs-only import mode. A present but malformed manifest should reject; otherwise load can silently drop image name, command, environment, and metadata.
-
-Isolated proof:
-
-```sh
-CARGO_TARGET_DIR=/Users/x/dd/dd-worker-AP-archive-registry-layer-20260710-target cargo test -p dd-images poc_load_must_reject_malformed_dd_manifest -- --ignored --nocapture
-```
-
-Result: failed; malformed JSON loaded as `Ok(("loaded", ["/bin/sh"], [], []))`.
-
 ## Registry Push Layer Packaging Breaks On Apostrophes In Paths
 
 Priority: P2
@@ -866,87 +743,6 @@ CARGO_TARGET_DIR=/Users/x/dd/dd-worker-AV-archive-load-save-push-registry-202607
 ```
 
 Result: failed; the first upload captured an empty body instead of `first manifest body`.
-
-## Image Store Path Encoding Collides Distinct Refs
-
-Priority: P1
-Impact: distinct image references can overwrite or alias rootfs data
-Confidence: High
-
-Verification status: Proven in isolated worktree `/Users/x/dd/dd-worker-BC2-archive-registry-load-save-push-20260710`.
-
-Evidence:
-
-- `safe_name` flattens `/` and `:` to `_`: `dd-images/src/image/config.rs:11`.
-- Registry pull store paths use `safe_name`: `dd-images/src/image/store.rs:22`.
-- Load/import `dir_for` uses the same lossy flattening: `dd-images/src/image/archive/mod.rs:68`.
-- Load computes target and removes it before rename: `dd-images/src/image/archive/load.rs:57`.
-
-Why this is bad:
-
-Image store path encoding must be injective for canonical references. `owner/app:1_2` and `owner/app_1:2` collide, so load or pull can overwrite another distinct image's rootfs.
-
-Isolated proof:
-
-```sh
-CARGO_TARGET_DIR=/Users/x/dd/dd-worker-BC2-archive-registry-load-save-push-20260710-target cargo test -p dd-images poc_safe_name_must_not_collide_distinct_repositories -- --ignored --nocapture
-CARGO_TARGET_DIR=/Users/x/dd/dd-worker-BC2-archive-registry-load-save-push-20260710-target cargo test -p dd-images poc_load_distinct_manifest_names_must_not_collide_after_flattening -- --ignored --nocapture
-```
-
-Result: both reference pairs mapped to the same store path/rootfs.
-
-## Docker Load Accepts Unsupported Manifest OS As Linux
-
-Priority: P2
-Impact: unsupported OS archives can be imported under Linux architecture
-Confidence: High
-
-Verification status: Proven in isolated worktree `/Users/x/dd/dd-worker-BC2-archive-registry-load-save-push-20260710`.
-
-Evidence:
-
-- Manifest `os` is arbitrary optional string data: `dd-images/src/image/manifest.rs:37`.
-- Only `darwin` is recognized specially: `dd-images/src/image/manifest.rs:54`.
-- Load uses `is_darwin`: `dd-images/src/image/archive/load.rs:56`.
-- Non-Darwin manifests fall into Linux arch detection/defaulting: `dd-images/src/image/archive/load.rs:64`.
-
-Why this is bad:
-
-A present manifest with `os: "windows"` should reject. Importing unsupported OS data as Linux can create unusable or misidentified images.
-
-Isolated proof:
-
-```sh
-CARGO_TARGET_DIR=/Users/x/dd/dd-worker-BC2-archive-registry-load-save-push-20260710-target cargo test -p dd-images poc_load_rejects_unsupported_manifest_os -- --ignored --nocapture
-```
-
-Result: failed; `os: "windows"` loaded successfully as `LinuxX86_64`.
-
-## Registry Config With Unsupported OS Imports As Linux
-
-Priority: P2
-Impact: unsupported registry images can be relabeled as Linux
-Confidence: High
-
-Verification status: Proven in isolated worktree `/Users/x/dd/dd-audit-BP2-registry-metadata-20260710`.
-
-Evidence:
-
-- `Arch::from_config` maps any non-Darwin `amd64` or `arm64` config to Linux: `dd-images/src/image/arch.rs:63`.
-- Store defaults unresolved architecture to Linux arm64: `dd-images/src/image/store.rs:49`.
-
-Why this is bad:
-
-Registry configs with `os: "windows"` should be rejected or left unsupported. Relabeling them as Linux can import unusable images under the wrong runtime identity.
-
-Isolated proof:
-
-```sh
-cd /Users/x/dd/dd-audit-BP2-registry-metadata-20260710
-CARGO_TARGET_DIR=/Users/x/dd/dd-audit-BP2-registry-metadata-20260710-target cargo test -p dd-images poc_registry_config_must_reject_unsupported_os -- --ignored --nocapture
-```
-
-Result: observed `Some(LinuxX86_64)`, expected `None`, for `{"os":"windows","architecture":"amd64"}`.
 
 ## Pull Accepts Invalid Manifest Schema Version
 
@@ -1048,32 +844,6 @@ CARGO_TARGET_DIR=/Users/x/dd/dd-oci-audit-target cargo test -p dd-images audit_p
 ```
 
 Result: returned `Manifest("manifest has no layers")`; expected an empty rootfs.
-
-## Docker Load Same-Name Archives Delete Existing Rootfs In Place
-
-Priority: P1
-Impact: existing containers or aliases can lose backing filesystem contents
-Confidence: High
-
-Verification status: Proven in isolated worktree `/Users/x/dd/dd-audit-BI2-copy`.
-
-Evidence:
-
-- Load computes the target store path from the manifest name: `dd-images/src/image/archive/load.rs:57`.
-- It removes the existing target before renaming the staged rootfs: `dd-images/src/image/archive/load.rs:58`.
-- Daemon tag registration later only swaps in-memory tags and cannot protect rootfs paths still referenced by containers: `dd-daemon/src/images/tags.rs:135`.
-
-Why this is bad:
-
-Loading an archive with the same manifest name should allocate distinct storage, reject unsafe replacement, or preserve old storage while moving the tag. Removing the existing target in place can mutate or delete the filesystem snapshot that older containers still use.
-
-Isolated proof:
-
-```sh
-CARGO_TARGET_DIR=/Users/x/dd/dd-audit-BI2-target cargo test -p dd-images poc_load_same_manifest_name_must_not_overwrite_existing_rootfs -- --ignored --nocapture
-```
-
-Result: failed as expected; `old-sentinel` under the pre-existing `repo_app_latest/rootfs` was deleted and replaced by the loaded archive.
 
 ## Docker Push Drops Runtime Metadata From OCI Config
 
@@ -1252,37 +1022,6 @@ audit/archive_timestamp_probe.sh
 ```
 
 Result: `FAIL nanosecond mtime lost; expected fractional ns 987654321, observed 000000000`.
-
-## Valid Device-Node Tars Fail Load/Import
-
-Priority: P2
-Impact: valid Docker-compatible archives fail or depend on host privilege details
-Confidence: High
-
-Verification status: Proven in isolated worktree `/Users/x/dd/dd-audit-archive-meta-20260710`.
-
-Evidence:
-
-- Load and import rely on unprivileged `tar xf`: `dd-images/src/image/archive/load.rs:21`, `dd-images/src/image/archive/import.rs:19`.
-- Registry extraction has special device-node handling that excludes `/dev/*` and suppresses mknod-related errors: `dd-images/src/registry/http/archive.rs:32`.
-
-Why this is bad:
-
-Docker-compatible archive handling should preserve, virtualize, or explicitly handle device-node metadata. dd's unprivileged tar path rejects ordinary valid tar entries with `mknod` failure, while the registry path has platform-sensitive suppression behavior.
-
-Isolated proof:
-
-```sh
-cd /Users/x/dd/dd-audit-archive-meta-20260710
-audit/archive_device_probe.py
-```
-
-Observed:
-
-```text
-tar status: 2
-tar: rootfs/run/inaccessible/chr: Cannot mknod: Operation not permitted
-```
 
 ## Failed Registry Pull Leaves Partial Final Rootfs
 
