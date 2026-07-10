@@ -41,7 +41,11 @@ static uint64_t g_prevpc, g_curpc;
 // the page + drops the stale translations so the modified bytes re-translate. Entirely inert unless
 // g_rwx_guest is set -> zero effect on the normal (non-JIT) matrix.
 extern int g_rwx_guest;
-#define SMC_MAX 8192
+// SMC-protected 16 KB code-page table. Sized to cover 64K pages (~1 GB of distinct executed code) so a real
+// JIT (V8/PyPy/.NET use tens of MB) never overflows -> no "capacity cliff" stale code in practice; and if a
+// pathological guest still exceeds it, smc_protect degrades GRACEFULLY (leaves the overflow page writable
+// rather than read-only-but-untracked, which would hang on the un-recognized write). 64K * 8 B = 512 KB BSS.
+#define SMC_MAX 65536
 static uint64_t g_smc_pg[SMC_MAX];
 static int g_smc_n;
 static uint64_t g_smc_flushes; // PROF: number of SMC re-translate events
@@ -53,9 +57,14 @@ static void smc_protect(uint64_t pc) {
     if (g_nosmc) return;
     uint64_t pg = pc & ~0x3FFFull; // 16KB macOS hardware page
     for (int i = 0; i < g_smc_n; i++)
-        if (g_smc_pg[i] == pg) return;                        // already protected
+        if (g_smc_pg[i] == pg) return; // already protected
+    // Capacity check BEFORE the mprotect. If the table is full, leave the page WRITABLE: a protected-but-
+    // untracked page would trap a later guest write that smc_on_write() cannot recognize (returns 0), so the
+    // fault falls through as a real SIGSEGV / hangs on the un-handled write. Not protecting past SMC_MAX only
+    // loses SMC coherence for the overflow pages (the separate "SMC capacity cliff" -> stale code, not a hang).
+    if (g_smc_n >= SMC_MAX) return;
     if (mprotect((void *)pg, 0x4000, PROT_READ) != 0) return; // code page -> read-only; writes trap
-    if (g_smc_n < SMC_MAX) g_smc_pg[g_smc_n++] = pg;
+    g_smc_pg[g_smc_n++] = pg;
 }
 
 // If `a` falls in a protected SMC page, unprotect+forget it and return 1 (caller drops translations).

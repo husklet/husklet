@@ -109,25 +109,6 @@ Verification:
 
 Any multi-threaded stress test is currently FLAKY because of the `CASPAL` livelock above, so a deterministic regression must wait for the hashed-spinlock implementation. Then: a multi-threaded guest CAS-loop maintaining an invariant (e.g. two 64-bit halves kept equal) that a torn update would break, checked deterministically (not oracle-vs-qemu).
 
-## SMC Tracking Has A Capacity Cliff
-
-Priority: P2
-Impact: stale code or write-fault handling failure after many protected code pages
-Confidence: Medium
-
-Evidence:
-
-- `smc_protect` calls `mprotect` before checking whether the page can be recorded in the fixed SMC table: `dd-jit-darwin/src/runtime/translate/x86_64/dispatch_hooks.h:57`.
-- If `g_smc_n >= SMC_MAX`, the page can be left read-only but untracked: `dd-jit-darwin/src/runtime/translate/x86_64/dispatch_hooks.h:58`.
-
-Why this is bad:
-
-Once the table is full, later translated pages can be protected without being recognizable by `smc_on_write`. A write fault to such a page may not invalidate translations or may fail the expected SMC recovery path.
-
-Verification:
-
-Generate more than `SMC_MAX` executable pages, execute each once, then patch and re-execute a late page.
-
 ## Thread-Directed Signals Do Not Interrupt Blocking Reads
 
 Priority: P2
@@ -420,30 +401,6 @@ Observed proof:
 ```text
 Linux: threaded-smc before=1 after=2 expected=2
 dd:    threaded-smc before=1 after=1 expected=2
-```
-
-## x86 SMC Protection Table Overflow Can Hang On Code Rewrite
-
-Priority: P1
-Impact: code rewrite faults can become unhandled hangs after SMC table exhaustion
-Confidence: High
-
-Verification status: Proven with isolated proof patch in `/Users/x/dd/dd-audit-jit-memorder-cache-20260710`.
-
-Evidence:
-
-- `smc_protect()` calls `mprotect(PROT_READ)` before checking table capacity: `dd-jit-darwin/src/runtime/translate/x86_64/dispatch_hooks.h:44`, `dd-jit-darwin/src/runtime/translate/x86_64/dispatch_hooks.h:57`.
-- SMC fault handling depends on recorded table entries: `dd-jit-darwin/src/runtime/translate/x86_64/elf.c:807`.
-
-Why this is bad:
-
-Once the SMC table is full, later translated pages can be made read-only without being recorded. A later guest code rewrite faults, but `smc_on_write()` cannot identify the page as SMC and dd hangs instead of invalidating or failing cleanly.
-
-Observed proof:
-
-```text
-qemu: after=777777, exit 0
-dd:   before-patch, then timeout 124
 ```
 
 ## x86 Persistent Cache Key Ignores Codegen Env Modes
