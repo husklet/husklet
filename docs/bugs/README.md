@@ -16,7 +16,6 @@ This directory is a working inventory of suspicious behavior, bad architecture, 
 | P1 | daemon/build | Dockerfile `WORKDIR` is ignored for `RUN` steps | High | [daemon-tests-docs.md](daemon-tests-docs.md#dockerfile-workdir-is-ignored-for-run) |
 | P1 | daemon/runtime | published port bind failures do not fail container start | Medium-high | [daemon-tests-docs.md](daemon-tests-docs.md#published-port-bind-failures-do-not-fail-start) |
 | P1 | daemon/compat | inline named volume sources can escape `volumes_dir` | Medium | [daemon-tests-docs.md](daemon-tests-docs.md#inline-volume-sources-can-escape-volumes_dir) |
-| P1 | JIT/opcode | VEX `vmovss`/`vmovsd` register-source merge semantics are wrong | High | [jit-and-opcodes.md](jit-and-opcodes.md#vex-vmovssvmovsd-register-source-merge-semantics) |
 | P1 | JIT/opcode | `fxsave` / `fxrstor` skip MXCSR/x87/MMX state | High | [jit-and-opcodes.md](jit-and-opcodes.md#fxsave-fxrstor-skip-mxcsr-x87-and-mmx-state) |
 | P1 | JIT/opcode | MMX `movq` / `paddb` use 128-bit XMM width | High | [jit-and-opcodes.md](jit-and-opcodes.md#mmx-movq-paddb-use-128-bit-xmm-width) |
 | P1 | JIT/signal | `int3` SIGTRAP is not delivered to guest handler | High | [jit-and-opcodes.md](jit-and-opcodes.md#int3-sigtrap-is-not-delivered-to-guest-handler) |
@@ -45,9 +44,6 @@ This directory is a working inventory of suspicious behavior, bad architecture, 
 | P1 | build/contents | Dockerfile symlink is followed outside context | High | [archive-fs-compat.md](archive-fs-compat.md#dockerfile-symlink-is-followed-outside-context) |
 | P1 | cp/contents | `docker cp` put follows existing destination symlink | High | [archive-fs-compat.md](archive-fs-compat.md#docker-cp-put-follows-existing-destination-symlink) |
 | P1 | build/contents | `COPY` follows symlinked destination directory | High | [archive-fs-compat.md](archive-fs-compat.md#build-copy-follows-symlinked-destination-directory) |
-| P1 | build/cache | `COPY`/`ADD` cache ignores symlink targets | High | [archive-fs-compat.md](archive-fs-compat.md#copy-add-cache-ignores-symlink-targets) |
-| P1 | build/cache | `COPY`/`ADD` cache ignores hardlink topology | High | [archive-fs-compat.md](archive-fs-compat.md#copy-add-cache-ignores-hardlink-topology) |
-| P1 | build/cache | rootfs digest ignores mode and metadata | High | [archive-fs-compat.md](archive-fs-compat.md#build-rootfs-digest-ignores-mode-and-metadata) |
 | P1 | build/compat | Dockerfile `ADD` copies local tar instead of extracting | High | [archive-fs-compat.md](archive-fs-compat.md#dockerfile-add-copies-local-tar-instead-of-extracting) |
 | P1 | image/compat | Docker save/load format is not Docker-compatible | High | [archive-fs-compat.md](archive-fs-compat.md#docker-saveload-archive-format-is-not-docker-compatible) |
 | P1 | cp/contents | `docker cp` GET drops lower overlay entries | High | [archive-fs-compat.md](archive-fs-compat.md#docker-cp-get-drops-lower-entries-from-overlay-directories) |
