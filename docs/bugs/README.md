@@ -24,7 +24,6 @@ This directory is a working inventory of suspicious behavior, bad architecture, 
 | P1 | cp/contents | `docker cp` GET drops lower overlay entries | High | [archive-fs-compat.md](archive-fs-compat.md#docker-cp-get-drops-lower-entries-from-overlay-directories) |
 | P1 | syscall/time | periodic `timerfd` ignores earlier first deadline | High | [syscall-compat.md](syscall-compat.md#periodic-timerfd-ignores-earlier-first-deadline) |
 | P1 | syscall/signal | multiple `signalfd` descriptors are not independent | High | [syscall-compat.md](syscall-compat.md#multiple-signalfd-descriptors-are-not-independent) |
-| P1 | syscall/eventfd | `dup(eventfd)` loses eventfd semantics | High | [syscall-compat.md](syscall-compat.md#dupeventfd-loses-eventfd-semantics) |
 | P1 | syscall/signalfd | `signalfd` update keeps stale signals and short reads consume events | High | [syscall-compat.md](syscall-compat.md#signalfd-update-keeps-stale-signals-and-short-reads-consume-events) |
 | P1 | syscall/epoll | epoll loses readiness when watched fd closes but dup remains | High | [syscall-compat.md](syscall-compat.md#epoll-loses-readiness-when-watched-fd-closes-but-dup-remains) |
 | P1 | syscall/epoll | `dup(epoll_fd)` loses pending interest registration | High | [syscall-compat.md](syscall-compat.md#dupepoll_fd-loses-pending-interest-registration) |
@@ -57,11 +56,8 @@ This directory is a working inventory of suspicious behavior, bad architecture, 
 | P2 | JIT/signal | thread-directed signals do not interrupt blocking reads | High | [jit-and-opcodes.md](jit-and-opcodes.md#thread-directed-signals-do-not-interrupt-blocking-reads) |
 | P2 | JIT/fp | MXCSR sticky exception flags/control bits are not modeled | Medium | [jit-and-opcodes.md](jit-and-opcodes.md#mxcsr-sticky-exception-flags-are-not-modeled) |
 | P2 | JIT/x87 | x87 long double precision is truncated | High | [jit-and-opcodes.md](jit-and-opcodes.md#x87-long-double-precision-is-truncated) |
-| P2 | syscall/futex | unknown futex ops/flags can report success | Medium-high | [syscall-compat.md](syscall-compat.md#unknown-futex-opsflags-can-report-success) |
-| P2 | syscall/fd | plain `dup()` drops proc-text read-only metadata | Medium | [syscall-compat.md](syscall-compat.md#plain-dup-drops-proc-text-read-only-metadata) |
 | P2 | syscall/select | sentry `pselect6` masks invalid virtual fd bits | Medium | [syscall-compat.md](syscall-compat.md#sentry-pselect6-masks-invalid-virtual-fd-bits) |
 | P2 | syscall/signal | signal ucontext stack metadata is zero | High | [syscall-compat.md](syscall-compat.md#signal-ucontext-stack-metadata-is-zero) |
-| P2 | syscall/timerfd | `dup(timerfd)` loses timerfd semantics | High | [syscall-compat.md](syscall-compat.md#duptimerfd-loses-timerfd-semantics) |
 | P2 | syscall/inotify | `dup(inotify_fd)` loses inotify read semantics | High | [syscall-compat.md](syscall-compat.md#dupinotify_fd-loses-inotify-read-semantics) |
 | P2 | syscall/compat | pidfd invalid flags and fixed registry capacity | High | [syscall-compat.md](syscall-compat.md#pidfd-invalid-flags-and-fixed-registry-capacity) |
 | P2 | syscall/compat | aarch64 `AT_PAGESZ` exposes host page size | High | [syscall-compat.md](syscall-compat.md#aarch64-at_pagesz-exposes-host-page-size) |
@@ -144,7 +140,6 @@ This directory is a working inventory of suspicious behavior, bad architecture, 
 | P1 | registry/push | Docker push drops runtime metadata from OCI config | High | [archive-fs-compat.md](archive-fs-compat.md#docker-push-drops-runtime-metadata-from-oci-config) |
 | P1 | syscall/fd | inotify/timerfd create without flags still sets close-on-exec | High | [syscall-compat.md](syscall-compat.md#inotify_init10-and-timerfd_create-0-set-close-on-exec) |
 | P1 | syscall/timerfd | `timerfd` CLOCK_REALTIME absolute deadlines are treated as monotonic | High | [syscall-compat.md](syscall-compat.md#timerfd-clock_realtime-absolute-deadlines-are-treated-as-monotonic) |
-| P1 | syscall/futex | `FUTEX_WAIT_BITSET` / `FUTEX_WAKE_BITSET` ignore masks | High | [syscall-compat.md](syscall-compat.md#futex_wait_bitset-futex_wake_bitset-ignore-masks) |
 | P1 | syscall/wait | `wait4` misses `WCONTINUED` and corrupts final status | High | [syscall-compat.md](syscall-compat.md#wait4-misses-wcontinued-and-corrupts-final-status) |
 | P1 | syscall/signal | `SA_NOCLDWAIT` does not suppress zombies | High | [syscall-compat.md](syscall-compat.md#sa_nocldwait-does-not-suppress-zombies) |
 | P1 | syscall/signal | aarch64 signal ucontext omits FPSIMD context record | High | [syscall-compat.md](syscall-compat.md#aarch64-signal-ucontext-omits-fpsimd-context-record) |
