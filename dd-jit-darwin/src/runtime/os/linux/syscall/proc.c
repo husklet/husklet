@@ -1549,6 +1549,10 @@ static int svc_proc(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64
             int pfd = pidfd_make(pid);
             if (pfd >= 0) *(int *)a2 = pfd;
         }
+        if (pid > 0) { // parent side of a successful fork: count it for /proc/stat processes + pids.current
+            atomic_fetch_add(&g_forks_since_boot, 1);
+            atomic_fetch_add(&g_pids_cur, 1);
+        }
         // parent: pid, child: 0
         G_RET(c) = pid < 0 ? (uint64_t)(-errno) : (uint64_t)pid;
         // A fork/vfork that was normalized to clone repurposed the guest's arg registers; put them back so
@@ -2054,6 +2058,10 @@ static int svc_proc(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64
         if (pid > 0 && (flags & 0x1000) && ca[1]) {
             int pfd = pidfd_make(pid);
             if (pfd >= 0) *(int *)ca[1] = pfd;
+        }
+        if (pid > 0) { // parent side of a successful clone3 fork: count it (see case 220)
+            atomic_fetch_add(&g_forks_since_boot, 1);
+            atomic_fetch_add(&g_pids_cur, 1);
         }
         G_RET(c) = pid < 0 ? (uint64_t)(-errno) : (uint64_t)pid;
         break;

@@ -61,6 +61,9 @@ static struct {
 static _Atomic uint64_t g_mem_charged = 0;
 // live task count (init = 1)
 static _Atomic int g_pids_cur = 1;
+// cumulative process creations since boot (fork/clone/clone3). Linux's /proc/stat `processes` is this
+// running total, not the live count -- process-creation telemetry keys on its delta.
+static _Atomic unsigned long long g_forks_since_boot = 0;
 // PID ns: host pid of the container init -> guest sees it as PID 1
 static int g_init_hostpid = 0;
 
