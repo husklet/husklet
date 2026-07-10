@@ -146,7 +146,6 @@ This directory is a working inventory of suspicious behavior, bad architecture, 
 | P2 | daemon/routes | `POST /system/prune` is not routed | High | [daemon-tests-docs.md](daemon-tests-docs.md#post-systemprune-is-not-routed) |
 | P2 | docs/tests | gap inventory and architecture docs are stale/missing | High | [daemon-tests-docs.md](daemon-tests-docs.md#gap-and-architecture-docs-are-not-auditable) |
 | P2 | gpu/robustness | software backend panics on wrapping offsets | High | [gpu-display-sentry.md](gpu-display-sentry.md#gpu-software-backend-panics-on-wrapping-offsets) |
-| P2 | gpu/perf | GPU IR length fields preallocate before validation | Medium-high | [gpu-display-sentry.md](gpu-display-sentry.md#gpu-ir-length-fields-preallocate-before-validation) |
 | P2 | gpu/compat | dmabuf advertises LINEAR buffers it cannot use | Medium-high | [gpu-display-sentry.md](gpu-display-sentry.md#dmabuf-advertises-linear-buffers-it-cannot-use) |
 | P2 | gpu/compat | Metal backend skips missing bind-group resources | High | [gpu-display-sentry.md](gpu-display-sentry.md#metal-backend-skips-missing-bind-group-resources) |
 | P2 | gpu/compat | Metal render target texture id aliases guest texture id `1` | Medium-high | [gpu-display-sentry.md](gpu-display-sentry.md#metal-render-target-texture-id-can-alias-guest-texture-id-1) |
@@ -175,8 +174,6 @@ This directory is a working inventory of suspicious behavior, bad architecture, 
 | P1 | gpu/binding | storage textures can be bound as sampled textures | High | [gpu-display-sentry.md](gpu-display-sentry.md#storage-textures-can-be-bound-as-sampled-textures) |
 | P1 | gpu/hazard | same-pass sampled render-target hazard is accepted | High | [gpu-display-sentry.md](gpu-display-sentry.md#same-pass-sampled-render-target-hazard-is-accepted) |
 | P1 | gpu/lifecycle | destroyed sampled textures remain usable through bind groups | High | [gpu-display-sentry.md](gpu-display-sentry.md#destroyed-sampled-textures-remain-usable-through-bind-groups) |
-| P1 | gpu/queue | partial GPU command ring frames can panic and corrupt queue state | High | [gpu-display-sentry.md](gpu-display-sentry.md#partial-gpu-command-ring-frames-can-panic-and-corrupt-queue-state) |
-| P1 | gpu/leak | CUDA launches leak transient GPU resources | High | [gpu-display-sentry.md](gpu-display-sentry.md#cuda-launches-leak-transient-gpu-resources) |
 | P2 | gpu/compat | zero-mip texture descriptors are accepted | High | [gpu-display-sentry.md](gpu-display-sentry.md#zero-mip-texture-descriptors-are-accepted) |
 | P2 | gpu/validation | command encoder pass sequencing is not validated | High | [gpu-display-sentry.md](gpu-display-sentry.md#command-encoder-pass-sequencing-is-not-validated) |
 | P2 | gpu/validation | vertex attribute layout validation is missing | High | [gpu-display-sentry.md](gpu-display-sentry.md#vertex-attribute-layout-validation-is-missing) |
@@ -185,9 +182,6 @@ This directory is a working inventory of suspicious behavior, bad architecture, 
 | P2 | gpu/readback | texture-to-buffer readback accepts unaligned offsets | High | [gpu-display-sentry.md](gpu-display-sentry.md#texture-to-buffer-readback-accepts-unaligned-offsets) |
 | P2 | gpu/compat | zero-sized GPU textures are accepted | High | [gpu-display-sentry.md](gpu-display-sentry.md#zero-sized-gpu-textures-are-accepted) |
 | P2 | gpu/robustness | wrapping bind-group offsets panic during dispatch | High | [gpu-display-sentry.md](gpu-display-sentry.md#wrapping-bind-group-offsets-panic-during-dispatch) |
-| P2 | gpu/serde | length-prefixed command frames accept trailing bytes | High | [gpu-display-sentry.md](gpu-display-sentry.md#length-prefixed-command-frames-accept-trailing-bytes) |
-| P2 | gpu/serde | non-canonical boolean wire values are normalized | High | [gpu-display-sentry.md](gpu-display-sentry.md#non-canonical-boolean-wire-values-are-normalized) |
-| P2 | gpu/lifecycle | ResourceTable keeps generation metadata forever | High | [gpu-display-sentry.md](gpu-display-sentry.md#resourcetable-keeps-generation-metadata-forever) |
 | P2 | display/lifecycle | Metal cleanup diverges from checked backends | Medium-high | [gpu-display-sentry.md](gpu-display-sentry.md#metal-cleanup-diverges-from-checked-backends) |
 | P2 | env/runtime | `DDJIT_SANDBOX` public mode is intentionally avoided by tests | High | [completeness-and-env.md](completeness-and-env.md#ddjit_sandbox-public-mode-is-intentionally-avoided-by-tests) |
 | P2 | env/durability | `S3DB_DURABILITY` silently changes fsync semantics | High | [completeness-and-env.md](completeness-and-env.md#s3db_durability-hidden-fsync-semantics) |
