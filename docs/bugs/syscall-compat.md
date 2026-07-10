@@ -220,32 +220,6 @@ Why this is bad:
 
 Programs using `mlockall` for latency control can receive success-like state while pages are still pageable by the host. This is mainly a documented model gap, but it should stay visible because it affects performance-sensitive workloads.
 
-## `pselect6` And `ppoll` Ignore Temporary Signal Masks
-
-Priority: P1
-Impact: signal-driven waits can sleep through deliverable signals
-Confidence: High
-
-Verification status: Proven in isolated worktree `/Users/x/dd/dd-worker-U`.
-
-Evidence:
-
-- `pselect6` validates fdsets/timeout but ignores the raw mask argument: `dd-jit-darwin/src/runtime/os/linux/syscall/event.c:619`.
-- It calls host `pselect` with a null mask: `dd-jit-darwin/src/runtime/os/linux/syscall/event.c:663`.
-- `ppoll` has the same class, calling plain `poll`: `dd-jit-darwin/src/runtime/os/linux/syscall/event.c:681`.
-
-Why this is bad:
-
-Linux atomically swaps the signal mask for `pselect6`/`ppoll`. Event loops rely on this to avoid missed wakeups. Ignoring the mask can turn a signal wakeup into a full timeout or hang.
-
-Isolated proof:
-
-```sh
-aarch64-linux-gnu-gcc -O2 -static -Wall -Wextra -o scratch-worker-U/poc_pselect_mask scratch-worker-U/poc_pselect_mask.c
-```
-
-Native woke on `SIGUSR1` in about `104ms` with `EINTR`; dd slept the full second and returned timeout with the handler not run.
-
 ## Multiple `signalfd` Descriptors Are Not Independent
 
 Priority: P1
@@ -297,31 +271,6 @@ mac bash -lc 'DDJIT_DIR=$OUT $OUT/ddjit-linux_aarch64 scratch-worker-V/sig_uc_st
 ```
 
 Native printed `seen=1 on_alt=1 uc_stack=1`; dd printed `seen=1 on_alt=1 uc_stack=0`.
-
-## `clock_nanosleep(TIMER_ABSTIME)` Swallows Interrupts
-
-Priority: P1
-Impact: signal-driven timers can sleep until the full deadline
-Confidence: High
-
-Verification status: Proven in isolated worktree `/Users/x/dd/dd-worker-V-jit-runtime-20260710`.
-
-Evidence:
-
-- Absolute `clock_nanosleep` loops on host `EINTR`: `dd-jit-darwin/src/runtime/os/linux/syscall/time.c:356`.
-- The loop returns `0` after reaching the deadline: `dd-jit-darwin/src/runtime/os/linux/syscall/time.c:378`.
-
-Why this is bad:
-
-Linux returns `EINTR` when a deliverable signal interrupts `clock_nanosleep`. dd can hide the interrupt, run the handler, sleep until the original deadline, and report success.
-
-Isolated proof:
-
-```sh
-mac bash -lc 'DDJIT_DIR=$OUT $OUT/ddjit-linux_aarch64 scratch-worker-V/clock_abs_eintr.aarch64'
-```
-
-Native printed `rc=4 hit=1 elapsed_ms=101`; dd printed `rc=0 hit=1 elapsed_ms=1002`.
 
 ## `dup(eventfd)` Loses Eventfd Semantics
 
@@ -601,30 +550,6 @@ Observed proof:
 ```text
 Linux: rem_sec=0 ... poll=1 ... elapsed_ms=85 read=8 ... count=1
 dd:    rem_sec=1782499723 ... poll=0 ... elapsed_ms=401 read=-1 read_errno=11 count=0
-```
-
-## `epoll_pwait` Ignores Temporary Signal Mask
-
-Priority: P1
-Impact: signal-interruptible epoll waits can sleep through unblocked signals
-Confidence: High
-
-Verification status: Proven in isolated worktree `/Users/x/dd/dd-worker-BQ2-fd-event-20260710`.
-
-Evidence:
-
-- The syscall dispatch path accepts and converts the sigmask pointer: `dd-jit-darwin/src/runtime/os/linux/syscall/dispatch.c:882`.
-- The event wait path does not apply the temporary mask: `dd-jit-darwin/src/runtime/os/linux/syscall/event.c:405`, `dd-jit-darwin/src/runtime/os/linux/syscall/event.c:480`.
-
-Why this is bad:
-
-`epoll_pwait` should temporarily replace the signal mask while waiting. dd ignores that mask, so a signal that should interrupt the wait remains blocked until after timeout.
-
-Observed proof:
-
-```text
-Linux: ret=-1 errno=4 hit=1 elapsed_ms=105
-dd:    ret=0 errno=0 hit=0 elapsed_ms=800
 ```
 
 ## `FUTEX_WAIT_BITSET` / `FUTEX_WAKE_BITSET` Ignore Masks
