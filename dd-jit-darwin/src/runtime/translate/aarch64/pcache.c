@@ -228,8 +228,8 @@ static uint64_t pcache_engine_id(void) {
 // Codegen-mode env flags that change the EMITTED BYTES (A/B kill-switches). Folded into the cache id so
 // an arena saved under one mode is never loaded under another (each mode gets its own cache file).
 static uint64_t pcache_mode_id(void) {
-    static const char *envs[] = {"NOSTEAL1617", "NOGUESTFOLD", "NOSHADOWTUNE", "SHADOWGATE", "NOSTITCH", "NOLSE",
-                                 "NOTIER2",
+    static const char *envs[] = {"NOSTEAL1617", "NOSTEALFAST", "NOGUESTFOLD", "NOSHADOWTUNE", "SHADOWGATE",
+                                 "NOSTITCH", "NOLSE", "NOTIER2",
                                  // perf-wave-2 codegen toggles: IRQSLIM (2-insn poll header + body+8
                                  // forward entries; also mixed into PC_VERSION_EFF via the LIVE
                                  // g_fwdskip), IBSLIM (set_x30 + hash_tail shapes), CTXDISP (also

@@ -50,7 +50,7 @@ struct ddjit_config {
     uint32_t argv_off;      // the guest argv: NUL-separated, double-NUL terminated
 
     uint32_t gpu_iosurface; // bool: opt-in the host-IOSurface GPU path (--gui); render-node synth + DD_IOCTL_GPU_ALLOC
-    uint32_t reserved2;     // explicit tail pad → header is a clean 112 bytes, no implicit padding
+    uint32_t nopcache;      // bool: per-container persistent-cache kill switch (DDJIT_NOPCACHE) — was reserved pad
 };
 
 // `flags` bits for ddjit_spawn(): how the child is placed relative to the caller's session/terminal.

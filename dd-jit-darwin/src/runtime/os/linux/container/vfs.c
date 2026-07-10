@@ -109,6 +109,16 @@ static uint8_t g_devfull[DD_NFD];
 // macOS rejects them with EPERM. 1 = this fd is such a device, so svc_io swallows its writes as a no-op
 // success -- entropy-seeding probes (libgcrypt, some init scripts) then behave as on Linux.
 static uint8_t g_devseed[DD_NFD];
+// Guest-visible bound AF_UNIX socket names, for /proc/net/unix enumeration (`ss -x`, socket-inventory
+// tools). Recorded on a successful AF_UNIX bind (net.c); a pathname keeps its guest path, an abstract name
+// is stored as "@name". Empty slot = not a bound unix socket. Process-local (one net-namespace per engine).
+static char g_unix_bind[DD_NFD][108];
+static void unix_bind_note(int fd, const char *guestname) {
+    if (fd >= 0 && fd < DD_NFD && guestname) snprintf(g_unix_bind[fd], sizeof g_unix_bind[fd], "%s", guestname);
+}
+static void unix_bind_clear(int fd) {
+    if (fd >= 0 && fd < DD_NFD) g_unix_bind[fd][0] = 0;
+}
 // /dev/dri/renderD128: the synthesized GPU render node (GPU rung 2). 1 = this fd is the render node, so
 // its ioctl routes to the dd GPU allocator. Set only when DD_GPU_IOSURFACE gates the path on.
 static uint8_t g_devdri[DD_NFD];
@@ -1445,6 +1455,24 @@ static int maps_phdr_segs(struct mseg *seg, int maxn) {
             break;
         } // PT_PHDR
     }
+    // PT_GNU_RELRO (0x6474e552): the prefix of the data segment the loader RE-PROTECTS read-only after
+    // relocation. The kernel splits the writable load VMA there, so /proc/self/maps shows that prefix as
+    // r--p then the rest rw-p. Toolchains that fold rodata into the r-xp text segment (aarch64 gcc default,
+    // unlike x86 -z separate-code) otherwise expose NO r--p image row at all -- so replay the relro split.
+    uint64_t relro_lo = 0, relro_hi = 0;
+    for (uint64_t i = 0; i < phnum; i++) {
+        const uint8_t *e = ph + i * phent;
+        uint32_t type;
+        memcpy(&type, e, 4);
+        if (type == 0x6474e552u) {
+            uint64_t vaddr, memsz;
+            memcpy(&vaddr, e + 16, 8);
+            memcpy(&memsz, e + 40, 8);
+            relro_lo = (bias + vaddr) & ~0xfffULL;
+            relro_hi = (bias + vaddr + memsz + 0xfffULL) & ~0xfffULL;
+            break;
+        }
+    }
     int nseg = 0;
     for (uint64_t i = 0; i < phnum && nseg < maxn; i++) {
         const uint8_t *e = ph + i * phent;
@@ -1458,6 +1486,17 @@ static int maps_phdr_segs(struct mseg *seg, int maxn) {
         uint64_t lo = (bias + vaddr) & ~0xfffULL;
         uint64_t hi = (bias + vaddr + memsz + 0xfff) & ~0xfffULL;
         int prot = ((flags & 4) ? 4 : 0) | ((flags & 2) ? 2 : 0) | ((flags & 1) ? 1 : 0); // R|W|X
+        // A writable segment whose start is covered by relro: emit the relro prefix as r--p, the rest rw-p.
+        if ((prot & 2) && relro_hi > relro_lo && relro_lo >= lo && relro_hi <= hi && relro_hi > lo &&
+            nseg + 1 < maxn) {
+            if (relro_lo > lo) { seg[nseg].lo = lo; seg[nseg].hi = relro_lo; seg[nseg].prot = prot; nseg++; }
+            seg[nseg].lo = relro_lo > lo ? relro_lo : lo;
+            seg[nseg].hi = relro_hi;
+            seg[nseg].prot = 4; // r--p (read-only after relocation)
+            nseg++;
+            if (relro_hi < hi) { seg[nseg].lo = relro_hi; seg[nseg].hi = hi; seg[nseg].prot = prot; nseg++; }
+            continue;
+        }
         seg[nseg].lo = lo;
         seg[nseg].hi = hi;
         seg[nseg].prot = prot;
@@ -3854,6 +3893,15 @@ static int proc_open(const char *rp) {
                      "TCP6: inuse 0\nUDP6: inuse 0\nUDPLITE6: inuse 0\nRAW6: inuse 0\nFRAG6: inuse 0 memory 0\n");
     } else if (!strcmp(rp, "/proc/net/unix")) {
         n = snprintf(buf, sizeof buf, "Num       RefCount Protocol Flags    Type St Inode Path\n");
+        // One row per live guest-bound AF_UNIX socket (socket-inventory tools read this). Columns match the
+        // kernel: a bound listener is Flags 00010000, St 01 (LISTEN); the inode is a stable synthetic id.
+        for (int fd = 0; fd < DD_NFD && n < (int)sizeof buf - 128; fd++) {
+            if (!g_unix_bind[fd][0]) continue;
+            if (fcntl(fd, F_GETFD) == -1) { g_unix_bind[fd][0] = 0; continue; } // closed -> drop
+            n += snprintf(buf + n, sizeof buf - (size_t)n,
+                          "%016x: %08x %08x %08x %04x %02x %5d %s\n", fd, 2u, 0u, 0x10000u, 1u, 1u,
+                          100000 + fd, g_unix_bind[fd]);
+        }
     } else if (!strcmp(rp, "/proc/net/snmp")) {
         // The full protocol-counter table `netstat -s` / `ss -s` parse: paired header+value lines for
         // Ip/Icmp/IcmpMsg/Tcp/Udp/UdpLite. dd runs no real IP stack, so the counters are zero -- but the

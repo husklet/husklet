@@ -215,13 +215,16 @@ static struct {
     pid_t pid;
 } g_pidfd[PIDFD_MAX];
 
-static void pidfd_register(int fd, pid_t pid) {
+// Returns 0 on success, -1 if the fixed table is full (caller then fails the open cleanly rather than
+// handing back an fd that later can't be resolved by pidfd_lookup).
+static int pidfd_register(int fd, pid_t pid) {
     for (int i = 0; i < PIDFD_MAX; i++)
         if (g_pidfd[i].fd == 0 || g_pidfd[i].fd == fd) {
             g_pidfd[i].fd = fd;
             g_pidfd[i].pid = pid;
-            return;
+            return 0;
         }
+    return -1; // table exhausted
 }
 
 static int pidfd_lookup(int fd, pid_t *pid) {
@@ -255,14 +258,22 @@ static int pidfd_make(pid_t pid) {
         EV_SET(&kv, (uintptr_t)pid, EVFILT_PROC, EV_ADD, NOTE_EXIT, 0, NULL);
         if (kevent(kq, &kv, 1, NULL, 0, NULL) == 0) {
             fcntl(kq, F_SETFD, FD_CLOEXEC);
-            pidfd_register(kq, pid);
+            if (pidfd_register(kq, pid) != 0) { // table full: don't hand back an unresolvable fd
+                close(kq);
+                errno = EMFILE;
+                return -1;
+            }
             return kq;
         }
         close(kq);
     }
     int fd = open("/dev/null", O_RDONLY | O_CLOEXEC);
     if (fd < 0) return -1;
-    pidfd_register(fd, pid);
+    if (pidfd_register(fd, pid) != 0) { // table full: fail cleanly instead of leaking an unresolvable fd
+        close(fd);
+        errno = EMFILE;
+        return -1;
+    }
     return fd;
 }
 

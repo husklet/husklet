@@ -12,6 +12,7 @@ pub(super) fn sys_signal() -> Group {
             // real Linux opens a pidfd and signal-0 existence-check succeeds.
             sy("pidfd-signal", "completeness/sys_pidfd_signal.c"),
             sy("pidfd-flags", "completeness/sys_pidfd_flags.c"),
+            sy("pidfd-cap", "completeness/sys_pidfd_cap.c"),
         ],
     )
 }

@@ -157,45 +157,6 @@ so a value's own newline never masquerades as a record separator. The daemon-lau
 `DD_GUEST_ENV`, no marker) is byte-for-byte unchanged. Test: `comp-sys-proc/exec-newline-env`
 (`exec_newline_env.c`) — passes on both engines (`value_ok=1 split_entry=0`, matching native).
 
-### aarch64 Pcache Key Omits `NOSTEALFAST`
-
-Priority: P2
-Impact: warm persistent cache can hide codegen/perf mode changes
-Confidence: Medium
-
-Evidence:
-
-- `NOSTEALFAST` is forwarded into the runtime environment: `dd-jit-darwin/src/spawn_config.rs:181`.
-- It changes emitted aarch64 codegen behavior: `dd-jit-darwin/src/runtime/translate/aarch64/translate.c:126`.
-- The aarch64 pcache mode-key list omits it: `dd-jit-darwin/src/runtime/translate/aarch64/pcache.c:231`.
-
-Why this is bad:
-
-Perf/debug A/B runs can load code emitted under a previous mode, making the toggle appear ineffective or producing mixed-mode measurements.
-
-Verification:
-
-Run an aarch64 guest twice with persistent cache enabled, toggling `NOSTEALFAST`, and assert the cache file identity or emitted bytes differ.
-
-### Per-Container `DDJIT_NOPCACHE` Is Dropped By Typed Launch
-
-Priority: P2
-Impact: cache kill-switch is hard to apply to one container through the typed runtime path
-Confidence: Medium
-
-Evidence:
-
-- `launch_config` explicitly drops engine tuning env vars including `DDJIT_NOPCACHE`: `dd-jit/src/runtime/container/mod.rs:37`.
-- Runtime defaults can still inject `DDJIT_PCACHE` / `DDJIT_PCACHE_DIR`: `dd-jit/src/runtime/runtime.rs:48`.
-
-Why this is bad:
-
-Operators can enable persistent cache defaults globally, but a per-container cache disable knob in the container env is not carried through typed launch. Debug/perf A/B runs can accidentally stay warm-cached.
-
-Verification:
-
-Launch two containers through the typed runtime with global pcache defaults and per-container `DDJIT_NOPCACHE`, then assert no pcache file is loaded or written for the opted-out container.
-
 ### Typed Launch Path Lists Still Use Delimiter Env Strings
 
 Priority: P2
@@ -388,30 +349,6 @@ native: peer_ns ns_stat=1 ns_readdir_net=1 net_readlink=1
 dd:     peer_ns ns_stat=0 ns_readdir_net=0 net_readlink=0
 ```
 
-### `/proc/net/unix` Ignores Live AF_UNIX Sockets
-
-Priority: P2
-Impact: socket diagnostics miss Unix-domain listeners
-Confidence: High
-
-Verification status: Proven in isolated worktree `/Users/x/dd/dd-worker-BE2-clean-20260710`.
-
-Evidence:
-
-- dd supports AF_UNIX path sockets: `dd-jit-darwin/src/runtime/os/linux/container/netns.c:1841`.
-- `/proc/net/unix` returns only the header: `dd-jit-darwin/src/runtime/os/linux/container/vfs.c:3490`.
-
-Why this is bad:
-
-Software and diagnostics use `/proc/net/unix` to discover Unix-domain sockets. dd can create a live socket but omit it from procfs, causing stale or empty socket inventory.
-
-Observed proof:
-
-```text
-Linux: proc_net_unix has_path=1 ok=1
-dd:    proc_net_unix has_path=0 lines=1 ok=0
-```
-
 ### Bind Mounts Are Missing From Mount Tables
 
 Priority: P1
@@ -434,30 +371,6 @@ Observed proof:
 ```text
 dd:    bind content=1 mounts=0 mountinfo=0
 Linux: bind content=1 mounts=1 mountinfo=1
-```
-
-### `/proc/self/smaps` Can Hang On Read
-
-Priority: P1
-Impact: memory diagnostics can block indefinitely
-Confidence: High
-
-Verification status: Proven in isolated worktree `/Users/x/dd/dd-audit-procfs-20260710-130826`.
-
-Evidence:
-
-- Smaps generation walks synthetic mapping data: `dd-jit-darwin/src/runtime/os/linux/container/vfs.c:1388`, `dd-jit-darwin/src/runtime/os/linux/container/vfs.c:1493`, `dd-jit-darwin/src/runtime/os/linux/container/vfs.c:1555`.
-- Direct proc open serves `smaps`: `dd-jit-darwin/src/runtime/os/linux/container/vfs.c:3038`.
-
-Why this is bad:
-
-Opening and reading `/proc/self/smaps` should return promptly. Memory profilers, Redis/kernel COW checks, JVM/native diagnostics, and opportunistic probes can hang under dd.
-
-Observed proof:
-
-```text
-dd:    timeout after 10 seconds reading /proc/self/smaps
-Linux: smaps_read n=3991
 ```
 
 ### Futex-Blocked Processes Report Running In Procfs
@@ -498,76 +411,6 @@ Targeted filters for `seqpacket`, `lockf-fork`, `mincore`, `membarrier`, `close-
 Why this is bad:
 
 Stale xfail or gap comments hide real regressions and waste agent time. Passing cases should either move to normal coverage or keep an explicit reason for remaining quarantined.
-
-### `statfs` Is Wrong For Synthetic Proc/Sys Leaves
-
-Priority: P1
-Impact: filesystem probes misclassify procfs/sysfs leaves as missing or tmpfs
-Confidence: High
-
-Verification status: Proven in isolated worktree `/Users/x/dd/dd-procfs-statfs-audit-20260710`.
-
-Evidence:
-
-- `statfs` and `fstatfs` route through Linux syscall glue: `dd-jit-darwin/src/runtime/os/linux/syscall/fs.c:1360`, `dd-jit-darwin/src/runtime/os/linux/syscall/fs.c:1377`.
-- Synthetic proc/sys leaf resolution lives in the VFS layer: `dd-jit-darwin/src/runtime/os/linux/container/vfs.c:1192`.
-
-Why this is bad:
-
-Linux reports procfs/sysfs magic and pseudo-fs block data for paths such as `/proc/meminfo` and `/sys/class/net/lo/mtu`. dd returns `ENOENT` for path `statfs` and reports tmpfs-like host block data for fd `fstatfs`, so tools that detect pseudo-filesystems by magic or mount flags silently take the wrong path.
-
-Observed proof:
-
-```text
-dd:    statfs(/proc/meminfo)=-1 errno=2; fstatfs(open)=0 type=1021994
-Linux: statfs(/proc/meminfo)=0 type=9fa0; fstatfs(open)=0 type=9fa0
-```
-
-### `statfs.f_flags` Is Always Zero
-
-Priority: P1
-Impact: mount flags disappear from filesystem compatibility probes
-Confidence: High
-
-Verification status: Proven in isolated worktree `/Users/x/dd/dd-procfs-statfs-audit-20260710`.
-
-Evidence:
-
-- `statfs` fills the returned flags field with zero: `dd-jit-darwin/src/runtime/os/linux/syscall/fs.c:1414`.
-
-Why this is bad:
-
-Linux exposes meaningful flags for procfs, sysfs, devtmpfs, shm, and tmpfs. dd reports zero for `/proc`, `/sys`, `/dev`, `/dev/shm`, and `/tmp`, so software that checks `ST_NOSUID`, `ST_NODEV`, `ST_NOEXEC`, or read-only status gets a false mount view.
-
-Observed proof:
-
-```text
-dd:    /proc flags=0 /sys flags=0 /dev flags=0 /dev/shm flags=0 /tmp flags=0
-Linux: /proc flags=102e /sys flags=1020 /dev flags=1020 /dev/shm flags=26
-```
-
-### `/proc/self/maps` Omits RELRO Mapping Detail
-
-Priority: P2
-Impact: memory layout diagnostics see an impossible executable image shape
-Confidence: High
-
-Verification status: Proven in isolated worktree `/Users/x/dd/dd-procfs-statfs-audit-20260710`.
-
-Evidence:
-
-- Maps rendering is synthesized from internal mapping data: `dd-jit-darwin/src/runtime/os/linux/container/vfs.c:1407`, `dd-jit-darwin/src/runtime/os/linux/container/vfs.c:1444`.
-
-Why this is bad:
-
-Static PIE binaries on Linux expose read-only RELRO/load segments and vdso mappings. dd reports only executable and writable rows for the executable, so crash reporters, profilers, and hardening probes cannot reconstruct the real layout.
-
-Observed proof:
-
-```text
-dd:    executable rows include r-xp and rw-p only
-Linux: executable rows include r--p plus vdso mapping
-```
 
 ### `/dev/tty` Nonblocking Read Reports EOF Instead Of EAGAIN
 

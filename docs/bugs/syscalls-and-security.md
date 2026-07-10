@@ -23,14 +23,6 @@ Create a guest probe that calls `pidfd_open` on a known same-user host pid outsi
 
 Status (2026-07-10): SKIPPED — architectural. This mirrors dd's deliberate 1:1 host-pid model for `kill(2)` (guest processes ARE host processes; `sched_pid_live` and `kill` case 129 intentionally allow cross-guest-process signalling via `kill(pid,0)`/`kill(pid,sig)`). Closing pidfd alone while `kill(2)` stays open does not close the leak, and restricting to a per-process registry would break legitimate cross-guest-process pidfd signalling (rare.c case 424 explicitly supports it). A real fix needs a container-wide guest-pid namespace (map guest pids to a private table shared across engine processes) so `pidfd_open`/`kill` reject any pid not in the container — a large cross-cutting change tracked separately. Invalid-flags fidelity was fixed independently (see the pidfd flags fix below).
 
-## `pidfd` Capacity Gap (registry table full)
-
-Priority: P2
-Impact: silently unusable pidfds once the fixed table is exhausted
-Confidence: Medium
-
-Remaining after the flags fix below: the pidfd registry has a fixed table in `dd-jit-darwin/src/runtime/os/linux/syscall/dispatch.c` and no obvious failure path when full. Opening more than the internal capacity can return a real fd that later fails `pidfd_lookup`. Verification: open 65+ simultaneous pidfds and assert each stays resolvable or the excess fails cleanly. (Not yet addressed — needs a capacity/eviction policy, out of the minimal-fix scope.)
-
 ## Deliberate But High-Impact: `seccomp` No-Op
 
 Priority: architectural risk
@@ -55,6 +47,7 @@ Each fix is minimal at the cited source and guarded by a scoped completeness gue
 
 - `unshare`/`setns` blanket fake-success — `unshare(unknown flags)` now returns `EINVAL`, `setns(-1, …)` returns `EBADF` (`syscall/proc.c` cases 97/268). Test: `comp-sys-proc/unshare-setns` (`sys_unshare_setns.c`).
 - `close_range` unknown flags — bits outside `CLOSE_RANGE_UNSHARE|CLOSE_RANGE_CLOEXEC` now return `EINVAL` before any fd is touched (`syscall/rare.c` case 436). Test: `comp-sys-misc/close-range-flags` (`sys_close_range_flags.c`).
-- pidfd flags fidelity — `pidfd_open` rejects flags outside `PIDFD_NONBLOCK`; `pidfd_send_signal` rejects bits outside `PIDFD_SIGNAL_{THREAD,THREAD_GROUP,PROCESS_GROUP}` (kernel ≥6.9) with `EINVAL`, validated before delivery (`syscall/rare.c` cases 434/424). Test: `comp-sys-signal/pidfd-flags` (`sys_pidfd_flags.c`). (Host-pid authority + registry capacity remain open — see above.)
+- pidfd flags fidelity — `pidfd_open` rejects flags outside `PIDFD_NONBLOCK`; `pidfd_send_signal` rejects bits outside `PIDFD_SIGNAL_{THREAD,THREAD_GROUP,PROCESS_GROUP}` (kernel ≥6.9) with `EINVAL`, validated before delivery (`syscall/rare.c` cases 434/424). Test: `comp-sys-signal/pidfd-flags` (`sys_pidfd_flags.c`). (Host-pid authority remains open — see above.)
+- pidfd registry capacity — `pidfd_register` now signals table-full and `pidfd_make` fails the open with `EMFILE` (closing the minted fd) instead of returning a real fd that later can't be resolved (`syscall/dispatch.c`). Test: `comp-sys-signal/pidfd-cap` (`sys_pidfd_cap.c`) — every successful `pidfd_open` stays resolvable; overflow fails cleanly.
 - `SO_PASSCRED`/`SO_PEERCRED` fd/type validation — both now validate the fd via `SO_TYPE` first, so a closed fd is `EBADF` and a non-socket is `ENOTSOCK` (`syscall/net.c` cases 208/209). Test: `comp-sys-misc/passcred-badfd` (`sys_passcred_badfd.c`).
 - `getresuid`/`getresgid` NULL output pointers — a NULL/unwritable pointer now faults `EFAULT`, writing none (`syscall/proc.c` cases 148/150). Test: `comp-sys-cred/getresuid-null` (`sys_getresuid_null.c`).

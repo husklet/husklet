@@ -206,6 +206,7 @@ static void fd_reset_emul(int fd) {
         }
         g_devfull[fd] = 0;
         g_devseed[fd] = 0;
+        unix_bind_clear(fd);
 #ifdef __APPLE__
         if (g_devdri[fd]) dd_gpu_free_fd(fd); // release the render node's IOSurfaces on close
 #endif
@@ -1386,19 +1387,30 @@ static int svc_fs(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t
             }
             char pb[4200];
             const char *p = atpath(-100, (const char *)a0, pb, sizeof pb, 0);
-            if (g_rootfs) guest_abspath_at(-100, (const char *)a0, gpath, sizeof gpath);
+            guest_abspath_at(-100, (const char *)a0, gpath, sizeof gpath); // guest-absolute path (both modes)
             r = statfs(p, &hs);
-            // The cgroup2 hierarchy is a SYNTHETIC mount dd presents at /sys/fs/cgroup (its files are served
-            // by the /proc·/sys synth, not the image), so an overlay rootfs has no such directory to
-            // host-statfs -> ENOENT. A runtime's UseContainerSupport still statfs()es the mount to confirm
-            // the CGROUP2 magic. Populate the base geometry from the rootfs root (always present) and let
-            // the pseudo-fs classification below stamp CGROUP2 + zero the block/inode counts, exactly like
-            // /proc and /sys (which happen to exist in the image so their host-statfs succeeds).
-            if (r < 0 && g_rootfs && gpath[0] &&
-                (!strcmp(gpath, "/sys/fs/cgroup") || !strncmp(gpath, "/sys/fs/cgroup/", 15))) {
-                char rb[4200];
-                const char *rroot = atpath(-100, "/", rb, sizeof rb, 0);
-                r = statfs(rroot, &hs);
+            // A SYNTHETIC proc/sys/cgroup leaf (its content is served by the /proc·/sys synth, not the image)
+            // has no host file to statfs -> ENOENT. But Linux reports the pseudo-fs magic + geometry for these
+            // paths, and tools (UseContainerSupport, magic-based pseudo-fs detection) rely on it. If dd
+            // synthesizes the path, adopt the rootfs-root geometry (container mode) or a zeroed pseudo geometry
+            // (bare mode), and let the classification below stamp the magic + zero the block/inode counts.
+            if (r < 0 && gpath[0] && (!strncmp(gpath, "/proc", 5) || !strncmp(gpath, "/sys", 4))) {
+                struct stat stx;
+                int is_synth = synth_stat_raw(gpath, &stx) || !strcmp(gpath, "/sys/fs/cgroup") ||
+                               !strncmp(gpath, "/sys/fs/cgroup/", 15) || !strcmp(gpath, "/proc") ||
+                               !strcmp(gpath, "/sys");
+                if (is_synth) {
+                    if (g_rootfs) {
+                        char rb[4200];
+                        const char *rroot = atpath(-100, "/", rb, sizeof rb, 0);
+                        r = statfs(rroot, &hs);
+                    }
+                    if (r < 0) { // bare mode (no rootfs root to borrow): a pseudo-fs geometry
+                        memset(&hs, 0, sizeof hs);
+                        hs.f_bsize = 4096;
+                        r = 0;
+                    }
+                }
             }
         } else {
             r = fstatfs((int)a0, &hs);
@@ -1421,7 +1433,11 @@ static int svc_fs(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t
         // hides it and stat -f names it correctly. Bare (no rootfs) keeps the legacy tmpfs magic + host geo.
         int64_t f_type = 0x01021994;
         int pseudo_zero = 0;
-        if (g_rootfs && gpath[0]) f_type = guest_statfs_magic(gpath, &pseudo_zero);
+        // Classify by the guest mount. In container mode every path is classified (as before); in bare mode
+        // only the SYNTHETIC pseudo/dev trees are (a real host file keeps its host-statfs magic -- no regression).
+        int classify = gpath[0] && (g_rootfs || !strncmp(gpath, "/proc", 5) || !strncmp(gpath, "/sys", 4) ||
+                                    !strncmp(gpath, "/dev", 4));
+        if (classify) f_type = guest_statfs_magic(gpath, &pseudo_zero);
         uint64_t blocks = pseudo_zero ? 0 : (uint64_t)hs.f_blocks;
         uint64_t bfree = pseudo_zero ? 0 : (uint64_t)hs.f_bfree;
         uint64_t bavail = pseudo_zero ? 0 : (uint64_t)hs.f_bavail;
@@ -1439,7 +1455,16 @@ static int svc_fs(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t
         *(int32_t *)(b + 60) = hs.f_fsid.val[1];    // f_fsid[1]
         *(int64_t *)(b + 64) = 255;                 // f_namelen (NAME_MAX)
         *(int64_t *)(b + 72) = (int64_t)hs.f_bsize; // f_frsize
-        *(int64_t *)(b + 80) = 0;                   // f_flags
+        // f_flags: Linux exposes the mount flags (ST_VALID + mount options). dd's mounts are all relatime;
+        // the pseudo-fs + tmpfs mounts (/proc /sys /dev /dev/shm) are nosuid,nodev,noexec (per mountinfo).
+        // Reporting 0 made ST_NOSUID/NODEV/NOEXEC/RDONLY probes see a false mount view.
+        int64_t f_flags = 0;
+        if (classify) {
+            f_flags = 0x0020 | 0x1000; // ST_VALID | ST_RELATIME
+            if (!strncmp(gpath, "/proc", 5) || !strncmp(gpath, "/sys", 4) || !strncmp(gpath, "/dev", 4))
+                f_flags |= 0x0002 | 0x0004 | 0x0008; // ST_NOSUID | ST_NODEV | ST_NOEXEC
+        }
+        *(int64_t *)(b + 80) = f_flags; // f_flags
         G_RET(c) = 0;
         break;
     }
