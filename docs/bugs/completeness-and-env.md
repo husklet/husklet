@@ -268,32 +268,6 @@ make test FILTER=pf-environ-defaults
 
 Result: failed on linux/aarch64 and linux/x86_64; observed `home=1/0 lang=1/0`.
 
-### Guest Exec Truncates Argv At 255 Args
-
-Priority: P1
-Impact: silent argument loss across exec and stale `/proc/self/cmdline`
-Confidence: High
-
-Verification status: Proven in isolated worktree `/Users/x/dd/dd-worker-R-envproc-20260710`.
-
-Evidence:
-
-- Exec forwarding uses `char *argv[256]` and stops while `ac < 255`: `dd-jit-darwin/src/runtime/os/linux/syscall/proc.c:1618`.
-- ELF stack construction also uses fixed argv/envp arrays: `dd-jit-darwin/src/runtime/os/linux/elf.c:861`.
-- Procfs command-line state is recorded separately in the proc registry: `dd-jit-darwin/src/runtime/os/linux/container/vfs.c:1908`.
-
-Why this is bad:
-
-Linux supports far more than 255 arguments within `ARG_MAX`. dd silently drops arguments, so tools with large generated argv lists can execute a different command while procfs metadata can disagree with the expected argv.
-
-Isolated proof:
-
-```sh
-make test FILTER=pf-exec-manyargs
-```
-
-Result: failed on both Linux engines; observed `argc=255 last=arg252 proc_count=1`, expected `argc=302 last=arg299 proc_count=302`.
-
 ### Hidden Proc Switches Change Peer Procfs
 
 Priority: P2
@@ -695,30 +669,6 @@ Observed proof:
 ```text
 dd:    executable rows include r-xp and rw-p only
 Linux: executable rows include r--p plus vdso mapping
-```
-
-### `/dev/urandom` Writes Fail With EPERM
-
-Priority: P1
-Impact: entropy seeding probes see a false permission failure
-Confidence: High
-
-Verification status: Proven in isolated worktree `/Users/x/dd/dd-audit-devfs-procfs-20260710`.
-
-Evidence:
-
-- `/dev/urandom` is represented by the synthetic devfs table: `dd-jit-darwin/src/runtime/os/linux/container/vfs.c:3881`.
-- Device writes return through syscall write handling: `dd-jit-darwin/src/runtime/os/linux/syscall/fs.c:2073`.
-
-Why this is bad:
-
-Linux accepts writes to `/dev/urandom` as seed input. dd returns `EPERM`, so compatibility probes and libraries that opportunistically mix seed material can fail or switch to degraded behavior.
-
-Observed proof:
-
-```text
-Linux/qemu: w1=1 wv=2
-dd:         w1=-1 ew1=1 wv=-1 ewv=1
 ```
 
 ### `/dev/tty` Nonblocking Read Reports EOF Instead Of EAGAIN

@@ -27,6 +27,8 @@ pub(super) fn sys_proc() -> Group {
             sy("pf-taskdir", "completeness/pf_taskdir.c"),
             sy("pf-selfdir", "completeness/pf_selfdir.c"),
             sy("pf-dirs", "completeness/pf_dirs.c"),
+            sy("pf-argv", "completeness/pf_argv.c"),
+            sy("pf-devseed", "completeness/pf_devseed.c"),
         ],
     )
 }

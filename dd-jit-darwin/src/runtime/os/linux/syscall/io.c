@@ -268,6 +268,25 @@ static int svc_io(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t
         default: break;
         }
     }
+    // /dev/urandom + /dev/random: Linux accepts writes as entropy seeding and returns the byte count;
+    // macOS EPERMs them. Swallow the write (count for write/pwrite; summed iov length for writev/pwritev).
+    if ((int)a0 >= 0 && (int)a0 < DD_NFD && g_devseed[(int)a0]) {
+        switch (nr) {
+        case 64:
+        case 68: G_RET(c) = a2; return svc_done(c); // write / pwrite64: count = a2
+        case 66:
+        case 70: { // writev / pwritev: sum the iovec lengths
+            uint64_t tot = 0;
+            const struct iovec *iov = (const struct iovec *)a1;
+            if (iov)
+                for (int i = 0; i < (int)a2; i++)
+                    tot += iov[i].iov_len;
+            G_RET(c) = tot;
+            return svc_done(c);
+        }
+        default: break;
+        }
+    }
     // Guest PROT_NONE buffer in the fd-I/O family (fd, BUF=a1, count=a2): dd force-maps guest anon pages
     // host-writable (mem.c case 222) so the host read/write does NOT fault on a guest PROT_NONE page the way
     // Linux's copy_{to,from}_user would. Reject it here with -EFAULT, exactly as Linux. Near-free when no

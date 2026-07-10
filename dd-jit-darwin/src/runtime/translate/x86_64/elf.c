@@ -427,7 +427,8 @@ static uint64_t build_stack(int argc, char **argv, struct loaded *lm, uint64_t a
     extern uint64_t g_stack_lo, g_stack_hi; // publish for /proc/self/maps [stack] synthesis (vfs.c)
     g_stack_lo = (uint64_t)stk;
     g_stack_hi = (uint64_t)(stk + SZ + GUARD);
-    uint64_t argp[256], envp_[256];
+    uint64_t argp[DD_MAXARGV], envp_[256]; // argv can be large post-exec (ARG_MAX); env stays small
+    set_guest_cmdline(argc, argv); // capture the full argv for /proc/self/cmdline (bare-mode fallback)
     int envc = 0;
     for (int i = 0; i < argc; i++) {
         size_t l = strlen(argv[i]) + 1;

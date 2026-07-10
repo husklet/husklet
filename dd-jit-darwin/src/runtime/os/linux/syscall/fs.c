@@ -205,6 +205,7 @@ static void fd_reset_emul(int fd) {
             g_opath[fd] = 0;
         }
         g_devfull[fd] = 0;
+        g_devseed[fd] = 0;
 #ifdef __APPLE__
         if (g_devdri[fd]) dd_gpu_free_fd(fd); // release the render node's IOSurfaces on close
 #endif
@@ -2185,6 +2186,9 @@ static int svc_fs(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t
                     int d = open(hd, mf);
                     // /dev/full is backed by /dev/zero for reads; flag the fd so its writes fail ENOSPC.
                     if (d >= 0 && d < DD_NFD) g_devfull[d] = !strcmp(rp, "/dev/full");
+                    // /dev/urandom + /dev/random accept seed writes on Linux (macOS EPERMs); flag the fd.
+                    if (d >= 0 && d < DD_NFD)
+                        g_devseed[d] = (!strcmp(rp, "/dev/urandom") || !strcmp(rp, "/dev/random"));
                     G_RET(c) = d < 0 ? (uint64_t)(-errno) : (uint64_t)d;
                     break;
                 }
