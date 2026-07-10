@@ -233,39 +233,72 @@ impl Conn {
     }
 
     /// Flush pending outbound bytes (and any queued fds via `SCM_RIGHTS`) to the socket.
+    ///
+    /// The socket is nonblocking, so `sendmsg` can report `EAGAIN` (kernel send buffer full) or accept
+    /// only part of `self.tx` (short write). In either case the un-sent bytes and any still-unsent fds
+    /// MUST stay queued so a later flush retries them — otherwise clients lose protocol messages and
+    /// keymap/`SCM_RIGHTS` fds. We therefore only drain what the kernel actually accepted.
     pub fn flush(&mut self) -> io::Result<()> {
-        if self.tx.is_empty() && self.tx_fds.is_empty() {
-            return Ok(());
-        }
-        let tx = std::mem::take(&mut self.tx);
-        let fds = std::mem::take(&mut self.tx_fds);
-        let mut iov = libc::iovec {
-            iov_base: tx.as_ptr() as *mut _,
-            iov_len: tx.len().max(1),
-        };
-        let mut mh: libc::msghdr = unsafe { std::mem::zeroed() };
-        mh.msg_iov = &mut iov;
-        mh.msg_iovlen = 1;
-        let mut cbuf = vec![0u8; unsafe { libc::CMSG_SPACE((fds.len() * 4) as u32) } as usize];
-        if !fds.is_empty() {
-            mh.msg_control = cbuf.as_mut_ptr() as *mut _;
-            mh.msg_controllen = cbuf.len() as _;
-            unsafe {
-                let cmsg = libc::CMSG_FIRSTHDR(&mh);
-                (*cmsg).cmsg_level = libc::SOL_SOCKET;
-                (*cmsg).cmsg_type = libc::SCM_RIGHTS;
-                (*cmsg).cmsg_len = libc::CMSG_LEN((fds.len() * 4) as u32) as _;
-                let data = libc::CMSG_DATA(cmsg) as *mut RawFd;
-                for (i, fd) in fds.iter().enumerate() {
-                    *data.add(i) = *fd;
+        while !self.tx.is_empty() || !self.tx_fds.is_empty() {
+            let mut iov = libc::iovec {
+                iov_base: self.tx.as_ptr() as *mut _,
+                iov_len: self.tx.len().max(1),
+            };
+            let mut mh: libc::msghdr = unsafe { std::mem::zeroed() };
+            mh.msg_iov = &mut iov;
+            mh.msg_iovlen = 1;
+            let mut cbuf =
+                vec![0u8; unsafe { libc::CMSG_SPACE((self.tx_fds.len() * 4) as u32) } as usize];
+            if !self.tx_fds.is_empty() {
+                mh.msg_control = cbuf.as_mut_ptr() as *mut _;
+                mh.msg_controllen = cbuf.len() as _;
+                unsafe {
+                    let cmsg = libc::CMSG_FIRSTHDR(&mh);
+                    (*cmsg).cmsg_level = libc::SOL_SOCKET;
+                    (*cmsg).cmsg_type = libc::SCM_RIGHTS;
+                    (*cmsg).cmsg_len = libc::CMSG_LEN((self.tx_fds.len() * 4) as u32) as _;
+                    let data = libc::CMSG_DATA(cmsg) as *mut RawFd;
+                    for (i, fd) in self.tx_fds.iter().enumerate() {
+                        *data.add(i) = *fd;
+                    }
                 }
             }
-        }
-        let n = unsafe { libc::sendmsg(self.fd, &mh, 0) };
-        if n < 0 {
-            return Err(io::Error::last_os_error());
+            let n = unsafe { libc::sendmsg(self.fd, &mh, 0) };
+            if n < 0 {
+                let e = io::Error::last_os_error();
+                if e.raw_os_error() == Some(libc::EAGAIN)
+                    || e.raw_os_error() == Some(libc::EWOULDBLOCK)
+                {
+                    // Send buffer full: leave everything queued and retry on the next flush.
+                    return Ok(());
+                }
+                return Err(e);
+            }
+            // Ancillary fds are delivered atomically with the first data byte the kernel accepts, so once
+            // any progress is made they are gone from our queue (whether or not every data byte fit).
+            self.tx_fds.clear();
+            let n = n as usize;
+            if n == 0 {
+                // No progress and not EAGAIN; retry later rather than spin.
+                return Ok(());
+            }
+            self.tx.drain(0..n.min(self.tx.len()));
         }
         Ok(())
+    }
+}
+
+impl Drop for Conn {
+    /// Close any `SCM_RIGHTS` fds the client passed that no protocol request ever consumed. Without this,
+    /// a client that sends more fds than its requests take (or disconnects mid-stream) leaks those
+    /// kernel-dup'd descriptors in the compositor process. Fds handed out via `take_fd` are already gone
+    /// from `rx_fds`, so this never double-closes them.
+    fn drop(&mut self) {
+        for fd in self.rx_fds.drain(..) {
+            unsafe {
+                libc::close(fd);
+            }
+        }
     }
 }
 
@@ -299,5 +332,127 @@ mod tests {
         // "ab" -> len 3 (incl NUL) -> padded to 4 data bytes, plus the 4-byte length word = 8.
         let m = Message::new(1, 0).string("ab");
         assert_eq!(m.body.len(), 8);
+    }
+
+    // A nonblocking socketpair whose send buffer we can saturate to force `EAGAIN` in `flush`.
+    fn nonblocking_pair() -> (RawFd, RawFd) {
+        let mut fds = [0 as RawFd; 2];
+        let r = unsafe { libc::socketpair(libc::AF_UNIX, libc::SOCK_STREAM, 0, fds.as_mut_ptr()) };
+        assert_eq!(r, 0, "socketpair failed");
+        // Shrink the sender's send buffer so a modest write saturates it, then mark both ends
+        // nonblocking (the receiver too, so a drain loop terminates on EAGAIN instead of blocking).
+        let sndbuf: libc::c_int = 1024;
+        unsafe {
+            libc::setsockopt(
+                fds[0],
+                libc::SOL_SOCKET,
+                libc::SO_SNDBUF,
+                &sndbuf as *const _ as *const libc::c_void,
+                std::mem::size_of::<libc::c_int>() as libc::socklen_t,
+            );
+            for &f in &fds {
+                let fl = libc::fcntl(f, libc::F_GETFL);
+                libc::fcntl(f, libc::F_SETFL, fl | libc::O_NONBLOCK);
+            }
+        }
+        (fds[0], fds[1])
+    }
+
+    // Saturate the send side by writing directly until the kernel returns EAGAIN, so a subsequent
+    // `flush` on the same fd cannot make progress.
+    fn saturate(fd: RawFd) {
+        let junk = [0u8; 4096];
+        loop {
+            let n = unsafe { libc::send(fd, junk.as_ptr() as *const _, junk.len(), 0) };
+            if n < 0 {
+                let e = io::Error::last_os_error();
+                assert!(
+                    e.raw_os_error() == Some(libc::EAGAIN)
+                        || e.raw_os_error() == Some(libc::EWOULDBLOCK),
+                    "unexpected send error while saturating: {e}"
+                );
+                break;
+            }
+        }
+    }
+
+    #[test]
+    fn flush_preserves_pending_message_after_would_block() {
+        let (tx, rx) = nonblocking_pair();
+        let mut conn = Conn::new(tx);
+        saturate(tx);
+        // Queue a real message and try to flush into the already-full socket.
+        conn.send(&Message::new(1, 0).u32(0xabcd));
+        let queued = conn.tx.len();
+        assert!(queued > 0);
+        conn.flush().expect("flush should not error on EAGAIN");
+        // The message must remain queued for a later retry, not be silently dropped.
+        assert_eq!(
+            conn.tx.len(),
+            queued,
+            "message was lost after the first EAGAIN flush"
+        );
+        // Drain the receiver so the socket accepts data, then a second flush delivers it.
+        let mut buf = [0u8; 8192];
+        loop {
+            let n = unsafe { libc::recv(rx, buf.as_mut_ptr() as *mut _, buf.len(), 0) };
+            if n <= 0 {
+                break;
+            }
+        }
+        conn.flush().expect("second flush");
+        assert_eq!(conn.tx.len(), 0, "message should be delivered once space frees");
+        unsafe {
+            libc::close(tx);
+            libc::close(rx);
+        }
+    }
+
+    #[test]
+    fn flush_preserves_pending_fd_after_would_block() {
+        let (tx, rx) = nonblocking_pair();
+        let mut conn = Conn::new(tx);
+        saturate(tx);
+        // A dup'd fd to ride SCM_RIGHTS; it must survive a would-block flush.
+        let passed = unsafe { libc::dup(rx) };
+        assert!(passed >= 0);
+        conn.queue_fd(passed);
+        conn.send(&Message::new(2, 0).u32(1));
+        conn.flush().expect("flush should not error on EAGAIN");
+        assert_eq!(
+            conn.tx_fds.len(),
+            1,
+            "queued SCM_RIGHTS fd was lost after the first EAGAIN flush"
+        );
+        assert!(!conn.tx.is_empty(), "message bytes were lost alongside the fd");
+        unsafe {
+            libc::close(passed);
+            libc::close(tx);
+            libc::close(rx);
+        }
+    }
+
+    #[test]
+    fn drop_closes_queued_received_fds() {
+        // Simulate a client that passed an fd the compositor never consumed via `take_fd`.
+        let mut pipe = [0 as RawFd; 2];
+        assert_eq!(unsafe { libc::pipe(pipe.as_mut_ptr()) }, 0);
+        let read_fd = pipe[0];
+        let write_fd = pipe[1];
+        {
+            let mut conn = Conn::new(-1);
+            conn.rx_fds.push_back(read_fd);
+            // conn dropped here — Drop should close read_fd.
+        }
+        // read_fd must now be closed: fcntl returns EBADF.
+        let r = unsafe { libc::fcntl(read_fd, libc::F_GETFD) };
+        assert_eq!(r, -1, "queued received fd was not closed on Conn drop");
+        assert_eq!(
+            io::Error::last_os_error().raw_os_error(),
+            Some(libc::EBADF)
+        );
+        unsafe {
+            libc::close(write_fd);
+        }
     }
 }
