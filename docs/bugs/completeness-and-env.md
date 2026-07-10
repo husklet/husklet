@@ -157,25 +157,6 @@ so a value's own newline never masquerades as a record separator. The daemon-lau
 `DD_GUEST_ENV`, no marker) is byte-for-byte unchanged. Test: `comp-sys-proc/exec-newline-env`
 (`exec_newline_env.c`) — passes on both engines (`value_ok=1 split_entry=0`, matching native).
 
-### Per-Container `DDJIT_NOPCACHE` Is Dropped By Typed Launch
-
-Priority: P2
-Impact: cache kill-switch is hard to apply to one container through the typed runtime path
-Confidence: Medium
-
-Evidence:
-
-- `launch_config` explicitly drops engine tuning env vars including `DDJIT_NOPCACHE`: `dd-jit/src/runtime/container/mod.rs:37`.
-- Runtime defaults can still inject `DDJIT_PCACHE` / `DDJIT_PCACHE_DIR`: `dd-jit/src/runtime/runtime.rs:48`.
-
-Why this is bad:
-
-Operators can enable persistent cache defaults globally, but a per-container cache disable knob in the container env is not carried through typed launch. Debug/perf A/B runs can accidentally stay warm-cached.
-
-Verification:
-
-Launch two containers through the typed runtime with global pcache defaults and per-container `DDJIT_NOPCACHE`, then assert no pcache file is loaded or written for the opted-out container.
-
 ### Typed Launch Path Lists Still Use Delimiter Env Strings
 
 Priority: P2

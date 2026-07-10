@@ -37,7 +37,7 @@ struct WireHeader {
     fsgen_off: u32,
     argv_off: u32,
     gpu_iosurface: u32,
-    reserved2: u32,
+    nopcache: u32, // bool: per-container DDJIT_NOPCACHE kill switch (was reserved tail pad)
 }
 
 /// Builds the string pool (offset 0 is always a lone NUL so a 0 offset reads as the empty string).
@@ -140,7 +140,7 @@ impl LaunchConfig {
             fsgen_off,
             argv_off,
             gpu_iosurface: self.gpu_iosurface as u32,
-            reserved2: 0,
+            nopcache: self.nopcache as u32,
         };
         let hbytes = unsafe {
             std::slice::from_raw_parts(
@@ -261,9 +261,14 @@ mod tests {
         assert_eq!(read_str(hdr.fsgen_off), "/run/fsgen");
 
         // Unset string fields (never assigned above) must read as offset 0 == "".
-        // (`gpu_iosurface` defaults off; `reserved2` is pad — neither is a pool offset.)
+        // (`gpu_iosurface` and `nopcache` default off; neither is a pool offset.)
         assert_eq!(hdr.gpu_iosurface, 0);
-        assert_eq!(hdr.reserved2, 0);
+        assert_eq!(hdr.nopcache, 0);
+
+        // The per-container pcache kill switch round-trips as a header bool (was the reserved tail pad).
+        let np = LaunchConfig { nopcache: true, ..Default::default() }.to_wire();
+        let nphdr: WireHeader = unsafe { std::ptr::read_unaligned(np.as_ptr() as *const WireHeader) };
+        assert_eq!(nphdr.nopcache, 1);
 
         // argv: NUL-separated args, terminated by an extra NUL (double-NUL after the last arg).
         let astart = hdr.argv_off as usize;

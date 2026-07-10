@@ -73,7 +73,9 @@ impl Container {
                 "DD_PUBLISH_DAEMON" => lc.publish_daemon = true,
                 "DD_GPU_IOSURFACE" => lc.gpu_iosurface = true,
                 // "DDJIT_PCACHE" is a bare enable gate; the pcache dir's presence enables it engine-side.
-                // CRASHDBG/COLDPROF/DDJIT_NOPCACHE are tuning knobs, not container config — dropped here.
+                // DDJIT_NOPCACHE is a per-container pcache kill switch — carried through so an operator can opt
+                // one container out even under global pcache defaults. CRASHDBG/COLDPROF stay tuning-only.
+                "DDJIT_NOPCACHE" => lc.nopcache = true,
                 _ => {}
             }
         }
@@ -147,6 +149,25 @@ mod tests {
         assert_eq!(lc.fsgen_file, "/run/fsgen"); // DD_FSGEN_FILE
         assert_eq!(lc.pcache_dir, "/home/dd/pcache"); // DDJIT_PCACHE_DIR
         assert!(lc.gpu_iosurface); // DD_GPU_IOSURFACE
+    }
+
+    #[test]
+    fn launch_config_carries_per_container_nopcache() {
+        // A per-container DDJIT_NOPCACHE (pcache kill switch) must reach the typed LaunchConfig, so an
+        // operator can opt ONE container out even under global pcache defaults. It was silently dropped.
+        let c = Container::builder(Image::from_rootfs("/img").guest(Guest::LinuxAarch64))
+            .cmd(["/bin/true"])
+            .env("DDJIT_NOPCACHE", "1")
+            .build()
+            .unwrap();
+        assert!(c.launch_config().nopcache, "per-container DDJIT_NOPCACHE must carry through typed launch");
+
+        // A container that did NOT set it keeps pcache following the global gate.
+        let d = Container::builder(Image::from_rootfs("/img").guest(Guest::LinuxAarch64))
+            .cmd(["/bin/true"])
+            .build()
+            .unwrap();
+        assert!(!d.launch_config().nopcache);
     }
 
     #[test]

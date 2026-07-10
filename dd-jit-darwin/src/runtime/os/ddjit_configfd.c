@@ -143,6 +143,9 @@ int ddjit_run_configfd(int fd) {
         setenv("DDJIT_PCACHE", "1", 1);
         setenv("DDJIT_PCACHE_DIR", s, 1);
     }
+    // per-container persistent-cache kill switch: carried through typed launch so a single container can opt
+    // out even when the runtime enables pcache defaults globally (DDJIT_NOPCACHE wins over DDJIT_PCACHE).
+    if (cfg.nopcache) setenv("DDJIT_NOPCACHE", "1", 1);
     // untrusted-guest sentry: both gates as the engine reads them.
     if (cfg.sandbox) {
         setenv("DDJIT_UNTRUSTED", "1", 1);
