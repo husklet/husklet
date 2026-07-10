@@ -160,6 +160,21 @@ pub(crate) fn endpoint_name(c: &Container) -> String {
     }
 }
 
+/// Re-alias container `cid`'s endpoints to `new_name` across every network it has joined. Endpoints are
+/// keyed by container id and their `name` is copied at join time, so a `docker rename` that only touched
+/// `Container.name` left `network inspect` (and the live DNS `.names`, regenerated from endpoint names)
+/// reporting the OLD name to peers. Returns how many endpoints were updated.
+pub(crate) fn rename_endpoints(nets: &mut [Net], cid: &str, new_name: &str) -> usize {
+    let mut count = 0;
+    for net in nets.iter_mut() {
+        if let Some(e) = net.endpoints.get_mut(cid) {
+            e.name = new_name.to_string();
+            count += 1;
+        }
+    }
+    count
+}
+
 pub(crate) fn net_matches(n: &Net, id: &str) -> bool {
     n.id == id || n.name == id || n.id.starts_with(id)
 }
@@ -251,6 +266,34 @@ mod tests {
         }
         // Next free address is the start of the second /24, not a reused .0.2.
         assert_eq!(alloc_ip(&n).as_deref(), Some("172.18.1.0"));
+    }
+
+    // "Rename Leaves Network Endpoint Aliases Stale" (P1): renaming a container must re-alias its
+    // endpoints so `network inspect` / live DNS report the new name, not the old join-time name.
+    #[test]
+    fn rename_endpoints_reales_across_joined_networks() {
+        let mut a = net_with_subnet("172.18.0.0/16");
+        a.endpoints.insert(
+            "cid1".into(),
+            Endpoint { name: "web".into(), ip: "172.18.0.2".into() },
+        );
+        let mut b = net_with_subnet("172.19.0.0/16");
+        b.endpoints.insert(
+            "cid1".into(),
+            Endpoint { name: "web".into(), ip: "172.19.0.2".into() },
+        );
+        // A network the container is NOT on must be untouched.
+        let mut c = net_with_subnet("172.20.0.0/16");
+        c.endpoints.insert(
+            "other".into(),
+            Endpoint { name: "other".into(), ip: "172.20.0.2".into() },
+        );
+        let mut nets = vec![a, b, c];
+        let updated = rename_endpoints(&mut nets, "cid1", "app");
+        assert_eq!(updated, 2, "both joined networks re-aliased");
+        assert_eq!(nets[0].endpoints["cid1"].name, "app");
+        assert_eq!(nets[1].endpoints["cid1"].name, "app");
+        assert_eq!(nets[2].endpoints["other"].name, "other", "unrelated endpoint untouched");
     }
 
     #[test]

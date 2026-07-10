@@ -386,32 +386,6 @@ CARGO_TARGET_DIR=/Users/x/dd/dd-slot-e-target cargo test -p dd-daemon fractional
 
 Result: failed as intended; left `1`, right `0`.
 
-## Rename Leaves Network Endpoint Aliases Stale
-
-Priority: P1
-Impact: stale network inspect output and stale peer name resolution
-Confidence: High
-
-Verification status: Proven in isolated worktree `/Users/x/dd/dd-workerH-daemon-api-20260710`.
-
-Evidence:
-
-- `containers_rename` updates only `Container.name`: `dd-daemon/src/containers/lifecycle/manage.rs:31`.
-- Network endpoint names are copied at join time: `dd-daemon/src/networks/ipam/alloc.rs:86`.
-- Live name resolver files are written from endpoint names: `dd-daemon/src/runtime/spawn/net.rs:10`.
-
-Why this is bad:
-
-After rename, `docker network inspect` and live resolver `.names` can keep the old container name. Peers and API clients see stale aliases.
-
-Isolated proof:
-
-```sh
-cargo test -p dd-daemon network_endpoint_name_tracks_container_rename -- --nocapture
-```
-
-Result: failed as expected; network inspect reported `"web"`, expected `"app"`.
-
 ## Exec Start Is Not Single-Use
 
 Priority: P1
