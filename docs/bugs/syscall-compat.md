@@ -178,33 +178,6 @@ DD_PCACHE=0 cargo run -q -p dd-jit --example ah_run_guest -- target/ah-probes/ep
 
 Linux/qemu observed `wait=1 ... read=1 char=Q`; dd observed `wait=0 ... read=1 char=Q`.
 
-## `dup(epoll_fd)` Loses Pending Interest Registration
-
-Priority: P1
-Impact: duplicated epoll fds can miss readiness
-Confidence: High
-
-Verification status: Proven in isolated worktree `/Users/x/dd/dd-worker-BA2-fd-event-20260710`.
-
-Evidence:
-
-- Deferred changelists are stored per numeric epoll fd: `dd-jit-darwin/src/runtime/os/linux/syscall/helpers.c:924`.
-- `epoll_ctl` queues changes under the original epfd: `dd-jit-darwin/src/runtime/os/linux/syscall/event.c:348`.
-- `epoll_wait` submits only the waiting fd's changelist: `dd-jit-darwin/src/runtime/os/linux/syscall/event.c:471`.
-- `dup` does not copy epoll instance metadata: `dd-jit-darwin/src/runtime/os/linux/syscall/io.c:900`.
-
-Why this is bad:
-
-Linux treats a duplicated epoll fd as the same epoll instance. If `epoll_ctl` registers interest on the original epfd, `epoll_wait` on the duplicate must see the ready event.
-
-Isolated proof:
-
-```sh
-mac bash -lc 'timeout 5 ddjit-linux_aarch64 scratch-BA2/epoll_dup_instance.aarch64'
-```
-
-Linux observed `wait_dup=1 ... data=0xabcddcba`; dd observed `wait_dup=0 errno=0`.
-
 ## Fork Children Lose Inherited Epoll/Timerfd State
 
 Priority: P1

@@ -927,6 +927,10 @@ static uint8_t g_ep_rd[DD_NFD], g_ep_wr[DD_NFD]; // per guest fd: read/write fil
 static uint8_t g_ep_os[DD_NFD];                // per guest fd: EPOLLONESHOT requested (kernel auto-removes on fire)
 static uint8_t g_epoll[DD_NFD]; // per fd: an epoll instance (backed by kqueue) -- rebuilt across fork (macOS kqueue() is
                               // not inherited)
+// per fd: this epoll instance has a dup alias. A dup() shares the SAME kqueue, so both aliases must submit
+// interest DIRECTLY to the kernel (the deferred per-epfd changelist would strand a change on one alias);
+// forces epoll_ctl/epoll_wait onto the immediate path for a dup'd instance.
+static uint8_t g_ep_dupd[DD_NFD];
 static unsigned long long g_ep_kevent_calls; // PROF: kevent() syscalls issued by the epoll path
 static int g_epprof = -1;
 
@@ -981,7 +985,8 @@ static void ep_fd_reset(int fd) {
         g_ep_chg[fd] = NULL;
     } // if fd was an epoll fd, drop its pending changelist
     g_ep_chgn[fd] = g_ep_chgcap[fd] = 0;
-    g_epoll[fd] = 0; // a reused fd number is no longer an epoll instance
+    g_epoll[fd] = 0;    // a reused fd number is no longer an epoll instance
+    g_ep_dupd[fd] = 0;  // ...nor a dup alias of one
 }
 
 // close() hook for the inotify family (event.c cases 26/27/28). dd emulates inotify with a kqueue: the

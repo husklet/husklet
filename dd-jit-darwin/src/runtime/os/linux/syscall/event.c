@@ -376,8 +376,9 @@ static int svc_event(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint6
         uint16_t xf = (uint16_t)((ev & 0x80000000u ? EV_CLEAR : 0) | (ev & 0x40000000u ? EV_ONESHOT : 0));
         int want_rd = (op != 2) && (ev & 0x1); // EPOLLIN
         int want_wr = (op != 2) && (ev & 0x4); // EPOLLOUT
-        if (epopt_on() && (int)a0 >= 0 && (int)a0 < DD_NFD && fd >= 0 && fd < DD_NFD) {
-            // W3E fast path: track armed filters, defer the change to the next epoll_wait kevent().
+        if (epopt_on() && (int)a0 >= 0 && (int)a0 < DD_NFD && !g_ep_dupd[(int)a0] && fd >= 0 && fd < DD_NFD) {
+            // W3E fast path: track armed filters, defer the change to the next epoll_wait kevent(). A dup'd
+            // instance is excluded (g_ep_dupd) so its interest is submitted immediately to the shared kqueue.
             int ep = (int)a0;
             int lk = ep_lock();
             if (want_rd) {
@@ -459,7 +460,9 @@ static int svc_event(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint6
         struct kevent kv[256];
         uint8_t *out = (uint8_t *)a1;
         int ep = (int)a0;
-        int opt = epopt_on() && ep >= 0 && ep < DD_NFD;
+        // A dup'd instance opts out of the deferred-changelist machinery (its interest was submitted straight
+        // to the shared kqueue), so it just blocks on the kqueue like the immediate path.
+        int opt = epopt_on() && ep >= 0 && ep < DD_NFD && !g_ep_dupd[ep];
         int32_t tmo = (int32_t)a3; // guest timeout ms: <0 = infinite (must NEVER return 0), 0 = poll, >0 = finite
         if (wakelog_on() && tmo < 0) wakelog("epw_enter", ep, (long)tmo, (long)maxev);
         // regression fix: a cross-thread epoll_ctl fires the internal EVFILT_USER wake knote, which

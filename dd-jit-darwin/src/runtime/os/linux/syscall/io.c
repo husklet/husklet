@@ -193,6 +193,18 @@ static void fd_carry_virt(int newfd, int oldfd) {
     if (oldfd < 1024 && newfd < 1024 && g_inotify[oldfd]) g_inotify[newfd] = 1;
     // signalfd: a duplicate reads the same shared self-pipe; mark it so the signalfd read/update paths accept it.
     if (g_sigfd_is[oldfd] || oldfd == g_sigfd_read) g_sigfd_is[newfd] = 1;
+    // epoll: a duplicate shares the same (host-shared) kqueue. Mark BOTH aliases dup'd so epoll_ctl/wait use
+    // the immediate path (interest goes straight to the shared kqueue, visible to both fds); flush any
+    // changelist queued before the dup now so already-registered interest is not stranded on the original.
+    if (g_epoll[oldfd]) {
+        g_epoll[newfd] = 1;
+        g_ep_dupd[oldfd] = 1;
+        g_ep_dupd[newfd] = 1;
+        if (g_ep_chgn[oldfd] > 0) {
+            kevent(oldfd, g_ep_chg[oldfd], g_ep_chgn[oldfd], NULL, 0, NULL);
+            g_ep_chgn[oldfd] = 0;
+        }
+    }
 }
 
 // Guest O_DIRECT differs per arch (aarch64/asm-generic = 0x10000, x86-64 = 0x4000); derive it from the
