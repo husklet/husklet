@@ -22,6 +22,11 @@
 #define G_PC(c) ((c)->rip)
 #define G_SP(c) ((c)->r[4])         // rsp
 #define G_TLS(c) ((c)->fs_base)     // x86 TLS base (arch_prctl SET_FS)
+// A JIT guest unmapped / remapped an executable VA range [lo,hi) -> drop stale cached translations for it
+// (jit86_drop_range_translations, defined in translate.c). Expanded in the shared os/linux munmap / MAP_FIXED
+// / mremap paths. Inert unless a JIT guest is present (g_rwx_guest). See the "stale translation after
+// unmap/remap" bug. (aarch64 keeps its own smc_icflush model, so its seam is a no-op.)
+#define G_SMC_UNMAP(lo, hi) jit86_drop_range_translations((lo), (hi))
 #define G_SHADOW_RESET(c) ((void)0) // no §B shadow stack on the x86 frontend
 
 // Child thread resume PC: x86 pre-advances rip past `syscall` before servicing, so the copy is correct.

@@ -2,39 +2,6 @@
 
 This file covers instruction fidelity, opcode coverage, stale translation, and hidden completeness holes.
 
-## Stale Translation After Unmap/Remap
-
-Priority: P1
-Impact: wrong code execution after guest VA reuse
-Confidence: High
-
-Evidence:
-
-- Dispatch reuses translated code by guest PC: `dd-jit-darwin/src/runtime/engine/dispatch.c:130`.
-- `munmap` updates mapping registries but does not invalidate block map or IBTC entries: `dd-jit-darwin/src/runtime/os/linux/syscall/mem.c:250`.
-- `mmap` / `MAP_FIXED` tracks the new mapping but does not drop old translations for the same VA: `dd-jit-darwin/src/runtime/os/linux/syscall/mem.c:617`.
-- A broad invalidator exists (`smc_inplace_drop`) but is not called from unmap/remap: `dd-jit-darwin/src/runtime/engine/cache.c:1225`.
-
-Why this is bad:
-
-If code at VA `X` is translated, unmapped, and a different executable page is mapped at `X`, the dispatcher can jump to stale host code for the previous bytes. Existing SMC paths mainly cover write-fault/in-place rewrite, not VA reuse after unmap.
-
-Verification:
-
-Guest PoC:
-
-1. Map executable code returning `111`.
-2. Call it.
-3. `munmap` the range.
-4. `mmap(MAP_FIXED)` a different executable page at the same VA returning `222`.
-5. Call it again.
-
-Expected: `111 222`. Suspicious stale-cache result: `111 111`.
-
-Coverage gap:
-
-Existing SMC tests cover in-place rewrite and mprotect toggles. Add an unmap/remap reuse probe.
-
 ## F16C `vcvtps2ph` Ignores Rounding Immediate
 
 Priority: P2
@@ -100,32 +67,6 @@ Coverage gap:
 
 `dd-tests/guests/completeness/x86_sse42.c` checks the comparison index, not full flag state.
 
-## `mremap(MREMAP_FIXED)` Can Reuse Stale Translations
-
-Priority: P1
-Impact: old code can run after executable mapping relocation
-Confidence: High
-
-Verification status: Proven in isolated worktree `/Users/x/dd/dd-worker-b-jit-audit`.
-
-Evidence:
-
-- `mremap(MREMAP_FIXED)` can place a fresh mapping at the requested address: `dd-jit-darwin/src/runtime/os/linux/syscall/mem.c:315`.
-- Current SMC invalidation only drops code on write faults: `dd-jit-darwin/src/runtime/translate/x86_64/elf.c:807`.
-
-Why this is bad:
-
-This is the same class as `munmap`/`MAP_FIXED` stale code, but through `mremap`. A translated executable VA can be replaced and still dispatch old host code.
-
-Isolated proof:
-
-```sh
-DDJIT_DIR="$PWD/target-worker-b-jit-audit/release/build/dd-jit-darwin-16122afd27b6bb64/out" \
-  cargo run -q -p dd-tests --target-dir target-worker-b-jit-audit -- -e x86_64 smc-mremap-fixed
-```
-
-Observed: dd `first=11 second=11`; qemu/native `first=11 second=22`.
-
 ## VEX `vcvt*ss/sd2si` Lacks Legacy Overflow Fixups
 
 Priority: P2
@@ -160,9 +101,13 @@ Why this is bad:
 
 `lock cmpxchg16b` is used by lock-free runtimes and atomics libraries. A non-atomic emulation can allow torn updates or incorrect success/failure races between guest threads.
 
+Attempted fix (does NOT work on this hardware — do not naively retry): lowering to LSE `CASPAL` (paired 128-bit compare-and-swap) is functionally correct (verified single-thread and light 2-thread), and the resulting tight self-loop was excluded from the tier-2 self-loop fold. BUT `CASPAL` under sustained multi-thread contention on this Apple Silicon LIVELOCKS — verified at 219% CPU with no forward progress: 4 threads hang immediately, 2 threads hang intermittently at higher iteration counts. A 64-bit LSE `CAS` (the narrower `cmpxchg` path) is IMMUNE at 4 threads x 30000, so this is a `CASP`-specific store-forwarding-replay pathology, not a general contention issue. `CASPAL` is therefore gate-unsafe here.
+
+Proper fix (deferred): a livelock-free double-width CAS — a hashed spinlock array keyed on the aligned address (acquire via a single-word CAS, which does NOT livelock, then a plain 128-bit load/compare/conditional-store, then release). This guarantees forward progress and atomicity. It is a larger emitter change (engine-side lock array + ~20-30 emitted instructions per `cmpxchg16b`), left for a dedicated change.
+
 Verification:
 
-Add a multi-threaded guest stress test around a 16-byte compare-exchange loop and compare against native/qemu.
+Any multi-threaded stress test is currently FLAKY because of the `CASPAL` livelock above, so a deterministic regression must wait for the hashed-spinlock implementation. Then: a multi-threaded guest CAS-loop maintaining an invariant (e.g. two 64-bit halves kept equal) that a torn update would break, checked deterministically (not oracle-vs-qemu).
 
 ## SMC Tracking Has A Capacity Cliff
 

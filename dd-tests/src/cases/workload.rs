@@ -74,6 +74,18 @@ pub(super) fn soak() -> Group {
             port("smcmprotect", "smc_mprotect.c")
                 .only(&[Engine::LinuxAarch64, Engine::LinuxX86_64])
                 .out("smc mprotect r1=111 r2=222 r3=333\n"),
+            // Stale translation after VA REUSE: an executable VA is translated, then unmapped + re-mapped
+            // (munmap+MAP_FIXED, then MAP_FIXED-in-place) with DIFFERENT code. The dispatcher keys cached host
+            // code by guest PC, so without invalidation on unmap/MAP_FIXED it re-runs the OLD translation
+            // (111/111/111). x86 machine code -> LinuxX86_64 only; golden-checked.
+            src("smcremapreuse", "smc_remap_reuse.c")
+                .only(&[Engine::LinuxX86_64])
+                .out("smc remap r1=111 r2=222 r3=333\n"),
+            // Same class through mremap(MREMAP_FIXED): a translated VA is relocated and its freed source VA is
+            // re-mapped with new code; the source VA's stale translation must be dropped (else second=11).
+            src("smcmremap", "smc_mremap.c")
+                .only(&[Engine::LinuxX86_64])
+                .out("smc mremap first=11 moved=1 second=22\n"),
         ],
     )
 }

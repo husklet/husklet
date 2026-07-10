@@ -934,6 +934,33 @@ static void emit_x87_round_st0(void) {
     emit32(0xD51B4400u | 23);             // msr fpcr, x23  (restore SSE rounding mode)
 }
 
+// A JIT guest unmapped / remapped an executable VA range: any block translations we cached for guest PCs in
+// that range are now STALE -- the same VA can be re-mapped with DIFFERENT code (JITs, trampolines, dlopen VA
+// reuse), and the dispatcher keys cached host code by guest PC, so it would jump to the OLD host code for the
+// new bytes. Called from the guest munmap / MAP_FIXED / mremap(MREMAP_FIXED) paths. This is the SAME wholesale
+// map/IBTC drop the SMC write-fault path uses (a currently-running block's host code stays intact; orphaned
+// translations are reclaimed by the next wholesale flush) -- but ONLY fired when the range actually overlaps a
+// write-protected code page (g_smc_pg), so ordinary data munmap/mmap churn pays nothing and re-translates
+// nothing. Inert unless a JIT guest is present (g_rwx_guest) -> the normal (non-JIT) matrix is byte-exact.
+static void jit86_drop_range_translations(uint64_t lo, uint64_t hi) {
+    if (!g_rwx_guest || g_smc_n == 0 || hi <= lo) return;
+    uint64_t plo = lo & ~0x3FFFull, phi = (hi + 0x3FFFull) & ~0x3FFFull;
+    int hit = 0;
+    for (int i = 0; i < g_smc_n;) {
+        if (g_smc_pg[i] >= plo && g_smc_pg[i] < phi) { // a translated code page lived in the range
+            hit = 1;
+            g_smc_pg[i] = g_smc_pg[--g_smc_n]; // forget it -> re-protected when the fresh mapping is translated
+        } else {
+            i++;
+        }
+    }
+    if (!hit) return; // no translated code in the range -> nothing to invalidate (the common data-munmap case)
+    memset(g_map, 0, sizeof g_map);
+    memset(g_ibtc, 0, sizeof g_ibtc);
+    memset(g_xibtc, 0, sizeof g_xibtc);
+    g_npend = 0;
+}
+
 // Integer DIV/IDIV by zero raises #DE (SIGFPE) on x86, but ARM sdiv/udiv quietly return 0 -- a guest
 // #DE would be silently swallowed. Guard the inline (8/16/32-bit) divides: when the (width-extended)
 // divisor in divreg is zero, route to the C div path (R_DIV/R_IDIV in dispatch.c), which reports the
@@ -3200,6 +3227,10 @@ static void *translate_block(uint64_t gpc) {
             if (op == 0xC7 && (I.reg & 7) == 1 && I.is_mem) { // cmpxchg16b: REX.W 0F C7 /1 (128-bit compare+swap)
                 // Non-atomic emulation (single 128-bit CAS): correct for the in-process model. Compares
                 // RDX:RAX with [m]; on equal stores RCX:RBX and sets ZF=1, else loads [m] into RDX:RAX, ZF=0.
+                // NOTE: NOT atomic across guest threads (finding "cmpxchg16b Is Non-Atomic"). A CASPAL-based
+                // atomic version was tried but LIVELOCKS under sustained multi-thread contention on Apple
+                // Silicon (store-forwarding replay: the 128-bit CASP spuriously replays/aborts forever while
+                // a 64-bit CAS is immune) -- gate-unsafe. A livelock-free fix needs hashed-spinlock DWCAS.
                 emit_ea(&I, next);         // x17 = EA
                 e_load_uoff(8, 19, 17, 0); // x19 = lo
                 e_load_uoff(8, 20, 17, 8); // x20 = hi

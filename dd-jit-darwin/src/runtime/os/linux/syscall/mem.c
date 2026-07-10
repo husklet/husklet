@@ -263,6 +263,9 @@ static int svc_mem(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_
             uint64_t cur = atomic_load(&g_mem_charged), d = (uint64_t)a1;
             atomic_fetch_sub(&g_mem_charged, d > cur ? cur : d);
         }
+        // stale-translation: the guest may re-map DIFFERENT code at this now-free VA -> drop any cached block
+        // translations for the unmapped range so the dispatcher re-translates the new bytes (JITs/trampolines).
+        if (r == 0) G_SMC_UNMAP(a0, a0 + (uint64_t)a1);
         G_RET(c) = (uint64_t)r;
         break;
     }
@@ -340,6 +343,10 @@ static int svc_mem(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_
                     gmap_set_glen(a4, (uint64_t)a2);
                     anon_track(a4, (uint64_t)a2 + guard, PROT_READ | PROT_WRITE);
                     gna_clear(a4 & ~(uint64_t)0xfff, (nhi + 0xfff) & ~(uint64_t)0xfff);
+                    // stale-translation: the mapping (and any executable code in it) relocated. Drop cached
+                    // translations for BOTH the freed source VA and the replaced destination VA.
+                    G_SMC_UNMAP(a0, a0 + (uint64_t)a1);
+                    G_SMC_UNMAP(a4, a4 + (uint64_t)a2);
                     G_RET(c) = a4;
                     break;
                 }
@@ -646,6 +653,9 @@ static int svc_mem(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_
                 pcache_note_libmap((uint64_t)(uintptr_t)r, (uint64_t)a1, (int)a4);
 #endif
         }
+        // stale-translation: a MAP_FIXED mmap REPLACES whatever code lived at the destination VA, so drop any
+        // translations cached for it (Linux MAP_FIXED implicitly unmaps the range first).
+        if (r != MAP_FAILED && (a3 & 0x10 /*MAP_FIXED*/)) G_SMC_UNMAP((uint64_t)(uintptr_t)r, (uint64_t)(uintptr_t)r + a1);
         G_RET(c) = (r == MAP_FAILED) ? (uint64_t)(-errno) : (uint64_t)r;
         break;
     }
