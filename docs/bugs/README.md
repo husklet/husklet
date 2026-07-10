@@ -16,9 +16,7 @@ This directory is a working inventory of suspicious behavior, bad architecture, 
 | P1 | daemon/compat | inline named volume sources can escape `volumes_dir` | Medium | [daemon-tests-docs.md](daemon-tests-docs.md#inline-volume-sources-can-escape-volumes_dir) |
 | P1 | JIT/opcode | `fxsave` / `fxrstor` skip MXCSR/x87/MMX state | High | [jit-and-opcodes.md](jit-and-opcodes.md#fxsave-fxrstor-skip-mxcsr-x87-and-mmx-state) |
 | P1 | JIT/opcode | MMX `movq` / `paddb` use 128-bit XMM width | High | [jit-and-opcodes.md](jit-and-opcodes.md#mmx-movq-paddb-use-128-bit-xmm-width) |
-| P1 | JIT/signal | `int3` SIGTRAP is not delivered to guest handler | High | [jit-and-opcodes.md](jit-and-opcodes.md#int3-sigtrap-is-not-delivered-to-guest-handler) |
 | P1 | JIT/memory | 4K guest `munmap` subpage remains readable | High | [jit-and-opcodes.md](jit-and-opcodes.md#4k-guest-munmap-subpage-remains-readable) |
-| P1 | JIT/signal | `UD2` with guest SIGILL handler hangs | High | [jit-and-opcodes.md](jit-and-opcodes.md#ud2-with-guest-sigill-handler-hangs) |
 | P1 | JIT/x87 | x87 control word is ignored | High | [jit-and-opcodes.md](jit-and-opcodes.md#x87-control-word-is-ignored) |
 | P1 | JIT/race | `cmpxchg16b` is non-atomic | Medium-high | [jit-and-opcodes.md](jit-and-opcodes.md#cmpxchg16b-is-non-atomic) |
 | P1 | JIT/signal | x86 signal return drops AVX upper/x87 state | High | [jit-and-opcodes.md](jit-and-opcodes.md#x86-signal-return-drops-avx-upper-and-x87-state) |
