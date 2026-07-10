@@ -3,11 +3,12 @@
 use dd_display::metal::MetalCtx;
 use dd_display::metal_backend::MetalBackend;
 use dd_gpu::backend::GpuBackend;
-use dd_gpu::id::{BindGroupId, BufferId, PipelineId, SamplerId, ShaderId};
+use dd_gpu::id::{BindGroupId, BufferId, PipelineId, SamplerId, ShaderId, TextureId};
 use dd_gpu::ir::{
-    self, AddressMode, BindEntry, BindGroupDesc, BindResource, BufferDesc, ColorAttachment,
-    ColorTargetState, CommandBuffer, Enc, Filter, LoadOp, RenderPipelineDesc, SamplerDesc,
-    ShaderRef, TextureFormat, Topology, VertexAttr, VertexLayout,
+    self, texture_usage, AddressMode, BindEntry, BindGroupDesc, BindResource, BufferDesc,
+    ColorAttachment, ColorTargetState, CommandBuffer, Enc, Filter, LoadOp, RenderPipelineDesc,
+    SamplerDesc, ShaderRef, TextureDesc, TextureDim, TextureFormat, Topology, VertexAttr,
+    VertexLayout,
 };
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
@@ -596,4 +597,128 @@ fn chrome_like_rgba_triangle_strip_rtadjust_fills_offscreen_quad() {
     assert_rgba_near(&rgba, width, 240, 128, want);
     assert_rgba_near(&rgba, width, 479, 255, want);
     assert_rgba_near(&rgba, width, 500, 240, [0, 0, 0, 255]);
+}
+
+// A quad covering the TOP half of clip space (NDC y in [0, +1]) with solid_red. Rendering it into a
+// framebuffer reveals that framebuffer's Y convention: Metal (top-left) puts red in the top rows; GL
+// (bottom-left) puts red in the bottom rows.
+fn top_half_quad_vertices() -> Vec<u8> {
+    let verts: [[f32; 4]; 6] = [
+        [-1.0, 1.0, 0.0, 0.0],
+        [-1.0, 0.0, 0.0, 1.0],
+        [1.0, 1.0, 1.0, 0.0],
+        [1.0, 1.0, 1.0, 0.0],
+        [-1.0, 0.0, 0.0, 1.0],
+        [1.0, 0.0, 1.0, 1.0],
+    ];
+    let mut out = Vec::with_capacity(verts.len() * 16);
+    for v in verts {
+        for f in v {
+            out.extend_from_slice(&f.to_le_bytes());
+        }
+    }
+    out
+}
+
+// Regression for the web-content upside-down bug: Chrome GPU-rasterizes page body text into offscreen
+// content tiles (e.g. textures 512/514, created by the guest via CreateTexture and used as render-pass
+// targets) and then composites them with GL-convention texcoords. GL's framebuffer origin is bottom-left
+// but Metal's is top-left, so without compensation the tile is stored Y-mirrored and the page renders
+// upside-down while the directly-drawn UI stays upright. The backend Y-flips passes that target an
+// OFFSCREEN texture (not the presented surface registered via set_render_target) so the tile is stored
+// bottom-left like GL. This test draws the SAME top-half quad into (a) the presented surface and (b) an
+// offscreen tile, and asserts the tile is the vertical MIRROR of the surface — i.e. the offscreen flip is
+// active for the tile and NOT for the surface.
+#[test]
+fn offscreen_render_target_is_stored_bottom_left_like_gl() {
+    let Some(ctx) = MetalCtx::new() else {
+        eprintln!("skipping offscreen Y-flip test: no Metal device");
+        return;
+    };
+    let surface = ctx.new_bgra_texture(W, H);
+    let mut be = MetalBackend::new(&ctx);
+    // Presented surface: registered via set_render_target → NOT flipped (scanned out top-left).
+    be.set_render_target(1, surface.clone());
+    // Content tile: created by the guest as a sampled render target → an OFFSCREEN target → flipped.
+    be.create_texture(
+        TextureId(50),
+        &TextureDesc {
+            width: W,
+            height: H,
+            depth: 1,
+            mip_levels: 1,
+            sample_count: 1,
+            dim: TextureDim::D2,
+            format: TextureFormat::Bgra8Unorm,
+            usage: texture_usage::SAMPLED | texture_usage::RENDER_TARGET | texture_usage::COPY_DST,
+            label: "content-tile".into(),
+        },
+    )
+    .unwrap();
+
+    let vertices = top_half_quad_vertices();
+    be.create_buffer(
+        BufferId(10),
+        &BufferDesc {
+            size: vertices.len() as u64,
+            usage: ir::buffer_usage::VERTEX,
+            label: "top-half-quad".into(),
+        },
+    )
+    .unwrap();
+    be.write_buffer(BufferId(10), 0, &vertices).unwrap();
+    be.create_shader(ShaderId(20), &pack_msl(QUAD_MSL)).unwrap();
+    // solid_red, Bgra8Unorm color target (matches both surface and tile).
+    be.create_render_pipeline(PipelineId(32), &pipeline("solid_red"))
+        .unwrap();
+
+    let draw_pass = |target: u32| CommandBuffer {
+        encoder: vec![
+            Enc::BeginRenderPass {
+                color: vec![ColorAttachment {
+                    texture: target,
+                    load: LoadOp::Clear,
+                    clear: [0.0, 0.0, 0.0, 1.0],
+                    store: true,
+                }],
+                depth: None,
+            },
+            Enc::SetPipeline(32),
+            Enc::SetViewport {
+                x: 0.0,
+                y: 0.0,
+                w: W as f32,
+                h: H as f32,
+                min_depth: 0.0,
+                max_depth: 1.0,
+            },
+            Enc::SetVertexBuffer {
+                slot: 0,
+                buffer: 10,
+                offset: 0,
+            },
+            Enc::Draw {
+                vertex_count: 6,
+                instance_count: 1,
+                first_vertex: 0,
+                first_instance: 0,
+            },
+            Enc::EndRenderPass,
+        ],
+        signal: None,
+    };
+
+    be.submit(&draw_pass(1)).unwrap();
+    let surf = read_bgra(&ctx, &surface);
+    be.submit(&draw_pass(50)).unwrap();
+    let tile = read_bgra(&ctx, be.texture(50).expect("content tile materialized"));
+
+    let red = [0u8, 0, 255, 255]; // solid_red = RGBA(1,0,0,1) → BGRA
+    let black = [0u8, 0, 0, 255];
+    // Presented surface keeps Metal's top-left convention: top half red, bottom half black.
+    assert_px_near(&surf, 4, 1, red);
+    assert_px_near(&surf, 4, 6, black);
+    // Offscreen tile is flipped to GL's bottom-left convention: the vertical mirror.
+    assert_px_near(&tile, 4, 1, black);
+    assert_px_near(&tile, 4, 6, red);
 }

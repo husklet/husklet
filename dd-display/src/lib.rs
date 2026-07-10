@@ -525,9 +525,24 @@ mod headless {
         // Inject synthetic input; assert the client receives the right events on the right objects.
         server.pointer_motion(10, 20);
         server.pointer_button(0x110, true); // BTN_LEFT down
+        server.pointer_scroll(0, 3, false); // stepped wheel: 3px down, 1 detent
         server.key(30, true); // KEY_A down
         server.modifiers(0, 0, 0, 0);
         let ev = c.poll_messages();
+
+        // The pointer's event stream must open with enter immediately closed by a frame (v5): a client
+        // accumulates a pointer event group until frame, so enter without frame is never processed.
+        let ptr_stream: Vec<&Message> = ev.iter().filter(|m| m.object == pointer).collect();
+        assert_eq!(ptr_stream[0].opcode, 0, "first pointer event is enter");
+        assert_eq!(
+            ptr_stream[1].opcode, 5,
+            "pointer.enter is immediately followed by wl_pointer.frame (v5)"
+        );
+        assert_eq!(
+            ptr_stream.last().unwrap().opcode,
+            5,
+            "the pointer stream ends on a frame (the scroll group is closed)"
+        );
 
         // wl_pointer.enter(serial, surface, x, y) then motion(time, x, y).
         let enter = ev
@@ -555,10 +570,41 @@ mod headless {
         let (_s, _t2, btn, state) = (r.u32(), r.u32(), r.u32(), r.u32());
         assert_eq!((btn, state), (0x110, 1), "BTN_LEFT pressed");
 
-        // wl_keyboard.enter then key(serial, time, key, state).
-        assert!(
-            ev.iter().any(|m| m.object == keyboard && m.opcode == 1),
-            "keyboard.enter"
+        // Scroll: axis_source(6) → axis(4) → axis_discrete(8) → frame(5). Without axis+frame the client
+        // never dispatches the scroll (it accumulates until frame), so this group must be complete.
+        let axis_source = ev
+            .iter()
+            .find(|m| m.object == pointer && m.opcode == 6)
+            .expect("wl_pointer.axis_source");
+        assert_eq!(axis_source.reader().u32(), 0, "axis_source = wheel(0)");
+        let axis = ev
+            .iter()
+            .find(|m| m.object == pointer && m.opcode == 4)
+            .expect("wl_pointer.axis");
+        let mut r = axis.reader();
+        let (_t, ax, val) = (r.u32(), r.u32(), r.i32());
+        assert_eq!(ax, 0, "vertical axis");
+        assert_eq!(val, 30 * 256, "axis value = 3 detents * 10 units (wl_fixed)");
+        let discrete = ev
+            .iter()
+            .find(|m| m.object == pointer && m.opcode == 8)
+            .expect("wl_pointer.axis_discrete");
+        let mut r = discrete.reader();
+        assert_eq!((r.u32(), r.i32()), (0, 1), "1 discrete detent on the vertical axis");
+
+        // wl_keyboard.enter(1) must be immediately followed by modifiers(4) carrying the SAME serial, so the
+        // client's xkb_state starts consistent (weston send_enter_to_resource_list pairs the two).
+        let kbd_stream: Vec<&Message> = ev.iter().filter(|m| m.object == keyboard && m.opcode != 0).collect();
+        assert_eq!(kbd_stream[0].opcode, 1, "keyboard stream opens with enter");
+        assert_eq!(
+            kbd_stream[1].opcode, 4,
+            "keyboard.enter is immediately followed by wl_keyboard.modifiers"
+        );
+        let enter_serial = kbd_stream[0].reader().u32();
+        assert_eq!(
+            kbd_stream[1].reader().u32(),
+            enter_serial,
+            "the focus-in modifiers event reuses the enter serial"
         );
         let key = ev
             .iter()
@@ -572,5 +618,182 @@ mod headless {
             "keyboard.modifiers"
         );
         eprintln!("[headless] input events routed + asserted OK");
+    }
+
+    fn socketpair_nonblocking() -> (RawFd, RawFd) {
+        let mut sv = [0i32; 2];
+        assert_eq!(
+            unsafe { libc::socketpair(libc::AF_UNIX, libc::SOCK_STREAM, 0, sv.as_mut_ptr()) },
+            0
+        );
+        for fd in sv {
+            unsafe {
+                let fl = libc::fcntl(fd, libc::F_GETFL);
+                libc::fcntl(fd, libc::F_SETFL, fl | libc::O_NONBLOCK);
+            }
+        }
+        (sv[0], sv[1])
+    }
+
+    fn bind(c: &mut Client, reg: u32, iface: &str, ver: u32) -> u32 {
+        let id = c.alloc();
+        let name = c.globals[iface].0;
+        c.conn
+            .send(&Message::new(reg, 0).u32(name).string(iface).u32(ver).u32(id));
+        id
+    }
+
+    /// wl_output v4: the compositor sends geometry/mode/scale/name/description then `done` LAST, and the
+    /// scale event carries the presenter's `output_scale` (1 for the headless PngPresenter). Chrome derives
+    /// its logical layout from exactly this sequence, so ordering + the scale value are asserted.
+    #[test]
+    fn wl_output_reports_scale_name_and_done_last() {
+        let (client_fd, server_fd) = socketpair_nonblocking();
+        let mut server = Server::new(server_fd, PngPresenter::new("/tmp/dd-display-output"));
+        let mut c = Client::new(client_fd);
+
+        let reg = c.alloc();
+        c.conn.send(&Message::new(WL_DISPLAY, 1).u32(reg));
+        c.flush();
+        server.pump().unwrap();
+        c.drain();
+        let (_name, out_ver) = c.globals["wl_output"];
+        assert_eq!(out_ver, 4, "wl_output advertised at v4 (name/description)");
+
+        let output = bind(&mut c, reg, "wl_output", 4);
+        c.flush();
+        server.pump().unwrap();
+        let msgs: Vec<Message> = c
+            .poll_messages()
+            .into_iter()
+            .filter(|m| m.object == output)
+            .collect();
+
+        // scale (opcode 3) == presenter output_scale (default 1).
+        let scale = msgs
+            .iter()
+            .find(|m| m.opcode == 3)
+            .expect("wl_output.scale");
+        assert_eq!(scale.reader().i32(), 1, "headless output scale = 1");
+
+        // name (opcode 4) is the stable display id.
+        let name = msgs.iter().find(|m| m.opcode == 4).expect("wl_output.name");
+        assert_eq!(name.reader().string(), "dd-0");
+        assert!(
+            msgs.iter().any(|m| m.opcode == 5),
+            "wl_output.description (v4)"
+        );
+
+        // done (opcode 2) MUST be the final event for the output object.
+        let done_pos = msgs.iter().rposition(|m| m.opcode == 2).expect("done");
+        assert_eq!(done_pos, msgs.len() - 1, "done must be the last output event");
+    }
+
+    /// wp_presentation: binding sends `clock_id`, and a `feedback` request followed by a buffer commit
+    /// yields `sync_output` + `presented` (with the mode's refresh interval, incrementing MSC, vsync flag)
+    /// then a `delete_id` retiring the feedback object. This is the frame-pacing signal Chrome/viz waits
+    /// on; its absence is a candidate for the "spinner spins then stops" stall.
+    #[test]
+    fn wp_presentation_feedback_reports_presented() {
+        let (client_fd, server_fd) = socketpair_nonblocking();
+        let mut server = Server::new(server_fd, PngPresenter::new("/tmp/dd-display-presentation"));
+        let mut c = Client::new(client_fd);
+
+        let reg = c.alloc();
+        c.conn.send(&Message::new(WL_DISPLAY, 1).u32(reg));
+        c.flush();
+        server.pump().unwrap();
+        c.drain();
+        assert!(c.globals.contains_key("wp_presentation"), "presentation advertised");
+
+        let comp = bind(&mut c, reg, "wl_compositor", 4);
+        let shm = bind(&mut c, reg, "wl_shm", 1);
+        let wm = bind(&mut c, reg, "xdg_wm_base", 1);
+        let _output = bind(&mut c, reg, "wl_output", 4); // so sync_output has an output to name
+        let presentation = bind(&mut c, reg, "wp_presentation", 1);
+        c.flush();
+        server.pump().unwrap();
+
+        // clock_id(clk_id) is sent on bind — must be the guest CLOCK_MONOTONIC (1), not host libc's.
+        let clk = c
+            .poll_messages()
+            .into_iter()
+            .find(|m| m.object == presentation && m.opcode == 0)
+            .expect("wp_presentation.clock_id");
+        assert_eq!(clk.reader().u32(), 1, "clock_id == CLOCK_MONOTONIC (linux)");
+
+        // surface + toplevel + configure handshake.
+        let surface = c.alloc();
+        c.conn.send(&Message::new(comp, 0).u32(surface));
+        let xdg = c.alloc();
+        c.conn.send(&Message::new(wm, 2).u32(xdg).u32(surface));
+        let toplevel = c.alloc();
+        c.conn.send(&Message::new(xdg, 1).u32(toplevel));
+        c.conn.send(&Message::new(surface, 6)); // initial commit → configure
+        c.flush();
+        server.pump().unwrap();
+        c.conn.send(&Message::new(xdg, 4).u32(1)); // ack_configure
+
+        // Back a 2x2 XRGB buffer.
+        let (w, h): (i32, i32) = (2, 2);
+        let stride = w * 4;
+        let size = (stride * h) as usize;
+        let nm = std::ffi::CString::new("dd-pres-shm").unwrap();
+        let mfd = unsafe { libc::memfd_create(nm.as_ptr(), 0) };
+        assert!(mfd >= 0);
+        assert_eq!(unsafe { libc::ftruncate(mfd, size as libc::off_t) }, 0);
+        let pool = c.alloc();
+        c.conn.send(&Message::new(shm, 0).u32(pool).u32(size as u32));
+        c.conn.queue_fd(mfd);
+        c.flush();
+        server.pump().unwrap();
+        unsafe { libc::close(mfd) };
+        let buffer = c.alloc();
+        c.conn.send(
+            &Message::new(pool, 0)
+                .u32(buffer)
+                .i32(0)
+                .i32(w)
+                .i32(h)
+                .i32(stride)
+                .u32(1),
+        );
+        c.conn.send(&Message::new(surface, 1).u32(buffer).i32(0).i32(0)); // attach
+
+        // Request feedback for THIS submission, then commit — order matches Chrome (feedback then commit).
+        let fb = c.alloc();
+        c.conn.send(&Message::new(presentation, 1).u32(surface).u32(fb)); // feedback(surface, cb)
+        c.conn.send(&Message::new(surface, 6)); // commit → present
+        c.flush();
+        server.pump().unwrap();
+
+        let ev = c.poll_messages();
+        // sync_output(output) precedes presented.
+        assert!(
+            ev.iter().any(|m| m.object == fb && m.opcode == 0),
+            "feedback.sync_output"
+        );
+        let presented = ev
+            .iter()
+            .find(|m| m.object == fb && m.opcode == 1)
+            .expect("feedback.presented");
+        let mut r = presented.reader();
+        let _tv_sec_hi = r.u32();
+        let _tv_sec_lo = r.u32();
+        let tv_nsec = r.u32();
+        let refresh = r.u32();
+        let seq_hi = r.u32();
+        let seq_lo = r.u32();
+        let flags = r.u32();
+        assert!(tv_nsec < 1_000_000_000, "tv_nsec in range");
+        assert_eq!(refresh, 16_666_666, "refresh = 60Hz interval (ns)");
+        assert_eq!((seq_hi, seq_lo), (0, 1), "first presented frame MSC = 1");
+        assert_eq!(flags, 0x1, "vsync flag set");
+        // The feedback object is terminal: a delete_id retires it.
+        assert!(
+            ev.iter()
+                .any(|m| m.object == 1 && m.opcode == 1 && m.reader().u32() == fb),
+            "wl_display.delete_id(fb)"
+        );
     }
 }

@@ -33,6 +33,20 @@ const G_SUBCOMPOSITOR: u32 = 7;
 const G_VIEWPORTER: u32 = 8;
 const G_DATA_DEV_MGR: u32 = 9;
 const G_SURFACE_AUGMENTER: u32 = 10;
+const G_PRESENTATION: u32 = 11;
+
+// wp_presentation clock domain. The `feedback.presented` timestamp is read back by the CLIENT via its own
+// clock_gettime(), so this must be the value the *guest* (Linux) libc uses for CLOCK_MONOTONIC (== 1),
+// NOT the host macOS libc::CLOCK_MONOTONIC (== 6). Weston reports the compositor's presentation clock the
+// same way (libweston `compositor->presentation_clock`).
+const CLOCK_MONOTONIC_LINUX: u32 = 1;
+// wp_presentation_feedback.kind bit: presentation was vsync'd (tearing-free). We composite/copy on a
+// display-synced CADisplayLink-equivalent, so advertise vsync but not zero_copy/hw_clock/hw_completion.
+const WP_PRESENTATION_KIND_VSYNC: u32 = 0x1;
+// The single mode we advertise on wl_output (mHz). Also drives the `presented.refresh` interval.
+const OUTPUT_REFRESH_MHZ: i32 = 60000;
+const OUTPUT_WIDTH: i32 = 1920;
+const OUTPUT_HEIGHT: i32 = 1080;
 
 // wl_shm formats (the two mandatory ones). Memory byte order is BGRA (little-endian ARGB word).
 const FMT_ARGB8888: u32 = 0;
@@ -134,8 +148,18 @@ enum Obj {
     Compositor,
     Shm,
     ShmPool {
+        // The pool's mmap. We keep `fd` for the pool's whole lifetime so `resize` can re-map (portable
+        // mremap emulation: mmap-new + munmap-old — Linux `mremap` is unavailable on the macOS target).
+        // Matches wl_shm.c, which keeps `pool->mmap_fd` alive for the same reason (wayland-shm.c:69,166).
+        fd: RawFd,
         ptr: *mut u8,
         size: usize,
+        // Live wl_buffer children. The mapping is torn down only when the pool is destroyed AND no buffer
+        // still references it — the spec keeps buffers valid after `wl_shm_pool.destroy` ("The mmapped
+        // memory will be released when all buffers … are gone"), mirroring wl_shm.c's shm_pool_unref
+        // (wayland-shm.c:145-170).
+        buffers: u32,
+        zombie: bool, // destroy() seen; free once `buffers` hits 0.
     },
     Buffer {
         pool: u32,
@@ -149,6 +173,10 @@ enum Obj {
     Viewport {
         surface: u32,
     },
+    // wl_subsurface: a role object whose requests (set_position/place_*/set_sync) target `surface`.
+    Subsurface {
+        surface: u32,
+    },
     XdgWmBase,
     XdgSurface {
         surface: u32,
@@ -156,9 +184,25 @@ enum Obj {
     XdgToplevel {
         xdg_surface: u32,
     },
+    // xdg_positioner: accrues placement rules; consumed by get_popup to derive the popup geometry.
+    XdgPositioner(XdgPositioner),
+    // xdg_popup: a menu/dropdown surface. `x,y,w,h` is the geometry computed from its positioner,
+    // sent back to the client in the xdg_popup.configure that completes the initial handshake.
+    XdgPopup {
+        xdg_surface: u32,
+        x: i32,
+        y: i32,
+        w: i32,
+        h: i32,
+    },
     Seat,
     Output,
-    Region,
+    // wl_region: an accumulated set of rectangles built by add()/subtract(). Referenced by
+    // set_opaque_region / set_input_region; the region object itself is not double-buffered (its rects are
+    // snapshotted onto the surface when assigned), but the assignment is applied at commit.
+    Region {
+        ops: Vec<RegionOp>,
+    },
     // Chromium-ozone init globals (inert for the MVP present path).
     Subcompositor,
     Viewporter,
@@ -188,7 +232,74 @@ enum Obj {
         height: i32,
         bgra: [u8; 4],
     },
+    // wp_presentation (presentation-time): the global object + one per-submission feedback object. A
+    // feedback object is created by `wp_presentation.feedback(surface, cb)` and delivers exactly one
+    // `presented`/`discarded` event (then the server destroys it), so it carries no state of its own.
+    Presentation,
+    PresentationFeedback,
     Other,
+}
+
+/// Accumulated `xdg_positioner` placement rules. Popups derive their on-screen position from an anchor
+/// rectangle (a sub-region of the parent's window geometry), an `anchor` point on that rectangle, a
+/// `gravity` direction the popup extends toward, and an `offset`. See xdg-shell.xml `xdg_positioner`.
+#[derive(Default, Clone, Copy)]
+struct XdgPositioner {
+    width: i32,
+    height: i32,
+    anchor_x: i32,
+    anchor_y: i32,
+    anchor_w: i32,
+    anchor_h: i32,
+    anchor: u32,  // xdg_positioner.anchor enum
+    gravity: u32, // xdg_positioner.gravity enum
+    offset_x: i32,
+    offset_y: i32,
+}
+
+impl XdgPositioner {
+    /// Resolve to `(x, y, w, h)` relative to the top-left of the parent's window geometry, following the
+    /// same anchor→gravity→offset placement weston/wlroots use (`xdg_positioner_get_geometry`). Constraint
+    /// adjustment (flip/slide/resize) is not applied — the unconstrained placement is returned, which is
+    /// correct for menus that fit on-screen (the common Chrome case).
+    fn geometry(&self) -> (i32, i32, i32, i32) {
+        // Placement is only well-defined once the client has set a size; fall back to a 1x1 rect otherwise
+        // so we still emit a valid configure rather than a zero-size (protocol-invalid) one.
+        let w = if self.width > 0 { self.width } else { 1 };
+        let h = if self.height > 0 { self.height } else { 1 };
+        // anchor/gravity enum encoding (shared by both): none=0, top=1, bottom=2, left=3, right=4,
+        // top_left=5, bottom_left=6, top_right=7, bottom_right=8. "left" set = {3,5,6}; "right" = {4,7,8};
+        // "top" = {1,5,7}; "bottom" = {2,6,8}; anything else is centered on that axis.
+        let is_left = |v: u32| matches!(v, 3 | 5 | 6);
+        let is_right = |v: u32| matches!(v, 4 | 7 | 8);
+        let is_top = |v: u32| matches!(v, 1 | 5 | 7);
+        let is_bottom = |v: u32| matches!(v, 2 | 6 | 8);
+        // anchor point within the anchor rectangle
+        let mut x = self.anchor_x;
+        let mut y = self.anchor_y;
+        if is_right(self.anchor) {
+            x += self.anchor_w;
+        } else if !is_left(self.anchor) {
+            x += self.anchor_w / 2;
+        }
+        if is_bottom(self.anchor) {
+            y += self.anchor_h;
+        } else if !is_top(self.anchor) {
+            y += self.anchor_h / 2;
+        }
+        // gravity: which direction the popup extends from the anchor point
+        if is_left(self.gravity) {
+            x -= w;
+        } else if !is_right(self.gravity) {
+            x -= w / 2;
+        }
+        if is_top(self.gravity) {
+            y -= h;
+        } else if !is_bottom(self.gravity) {
+            y -= h / 2;
+        }
+        (x + self.offset_x, y + self.offset_y, w, h)
+    }
 }
 
 #[derive(Default)]
@@ -207,6 +318,74 @@ struct Surface {
     pending_window_geometry: Option<(i32, i32, i32, i32)>,
     viewport_source: Option<(i32, i32, i32, i32)>, // wl_fixed 24.8: x,y,w,h in buffer coords
     viewport_destination: Option<(i32, i32)>,      // surface-local output size
+    // wp_presentation_feedback callback ids requested (via wp_presentation.feedback) for the NEXT commit's
+    // content update. Drained + answered (presented/discarded) when that commit is processed.
+    pending_feedback: Vec<u32>,
+    // wl_surface.set_buffer_transform: how the client pre-rotated/flipped its buffer; we apply the inverse
+    // when reading pixels. Double-buffered: staged in `pending_buffer_transform`, applied at commit
+    // (weston applies it in the pending→current state copy, surface-state.c:388).
+    buffer_transform: i32,
+    pending_buffer_transform: Option<i32>,
+    // wl_surface.offset (v5) / attach(x,y): the buffer's placement delta, applied at commit.
+    pending_offset: Option<(i32, i32)>,
+    // wl_surface.set_opaque_region: rectangles the client guarantees are fully opaque. Where they cover the
+    // whole surface we force alpha=1 in the extracted pixels so the over-white composite doesn't bleed the
+    // background through undefined/zero alpha bytes (the reported white border). Empty ⇒ nothing opaque.
+    opaque_region: Vec<RegionOp>,
+    pending_opaque_region: Option<Vec<RegionOp>>,
+    // wl_surface.set_input_region: tracked for protocol completeness (our single-window present path treats
+    // the whole surface as the input region; no consumer yet).
+    #[allow(dead_code)]
+    input_region: Option<Vec<RegionOp>>,
+    pending_input_region: Option<Option<Vec<RegionOp>>>,
+    // ---- wl_subsurface role (Some(parent) ⇒ this surface is a subsurface) ----
+    subsurface_parent: Option<u32>,
+    subsurface_sync: bool, // synchronized mode; starts true per wl_subcompositor.get_subsurface
+    subsurface_x: i32,     // applied position, relative to the parent's origin
+    subsurface_y: i32,
+    pending_sub_x: i32, // set_position is double-buffered onto the parent commit
+    pending_sub_y: i32,
+    has_pending_pos: bool,
+    // Synchronized-mode commit is cached and applied when the parent commits.
+    cached_buffer: Option<u32>,
+    has_cached: bool,
+    cached_frame: Option<u32>,
+    // Direct child subsurfaces, ordered bottom→top (z-order). Composited above this surface.
+    children: Vec<u32>,
+    // Buffer id to wl_buffer.release after the next present (the freshly-committed buffer; shm is
+    // memcpied in extract() so releasing post-present is legal — see WAYLAND_GAPS §1).
+    pending_release: Option<u32>,
+    max_size: (i32, i32), // xdg_toplevel.set_max_size (0 ⇒ unbounded on that axis)
+    min_size: (i32, i32), // xdg_toplevel.set_min_size (0 ⇒ no minimum on that axis)
+}
+
+/// One rectangle contributed to a `wl_region`. `add=false` is a subtract().
+#[derive(Clone, Copy, Debug)]
+struct RegionOp {
+    x: i32,
+    y: i32,
+    w: i32,
+    h: i32,
+    add: bool,
+}
+
+/// Does the region (union of adds, minus subtracts) fully cover `[0,0,w,h]`? Conservative: true iff some
+/// single add-rect contains the surface bounds and no subtract-rect intersects them — which is exactly how
+/// a toolkit declares a fully-opaque window (one add of the whole surface, no subtracts).
+fn region_covers(ops: &[RegionOp], w: i32, h: i32) -> bool {
+    if w <= 0 || h <= 0 {
+        return false;
+    }
+    let covered = ops.iter().any(|r| {
+        r.add && r.x <= 0 && r.y <= 0 && r.x + r.w >= w && r.y + r.h >= h
+    });
+    if !covered {
+        return false;
+    }
+    let clipped = ops.iter().any(|r| {
+        !r.add && r.w > 0 && r.h > 0 && r.x < w && r.y < h && r.x + r.w > 0 && r.y + r.h > 0
+    });
+    !clipped
 }
 
 pub struct Server<P: Presenter> {
@@ -220,6 +399,7 @@ pub struct Server<P: Presenter> {
     seat_ver: u32, // version the client bound wl_seat at (gates versioned events)
     pointer: Option<u32>, // client's wl_pointer object id (from wl_seat.get_pointer)
     keyboard: Option<u32>, // client's wl_keyboard object id (from wl_seat.get_keyboard)
+    touch: Option<u32>, // client's wl_touch object id (from wl_seat.get_touch)
     output: Option<u32>, // client's wl_output object id (from wl_registry.bind)
     focus: Option<u32>, // the surface that has input focus (the toplevel, for MVP)
     ptr_entered: bool, // has wl_pointer.enter been sent for `focus`?
@@ -228,6 +408,13 @@ pub struct Server<P: Presenter> {
     last_ptr: (i32, i32), // last pointer position (surface-local, integer px)
     last_cfg: Option<(i32, i32)>, // last on-screen window size we sent a configure for (resize debounce)
     external_logical_crop: Option<ExternalLogicalCrop>,
+    present_seq: u64, // wp_presentation MSC / vblank counter, incremented once per presented frame
+    /// A surface for which the client issued `xdg_toplevel.move` (interactive drag). Drained by the live
+    /// presenter loop via [`Server::take_move_request`] to start a HOST window drag — the request-gated
+    /// replacement for the blanket `DD_DISPLAY_WINDOW_DRAG` movable-by-background behavior.
+    pending_move: Option<u32>,
+    /// Monotonic clock start, for frame-callback timestamps (see `frame_time_ms`).
+    start: std::time::Instant,
 }
 
 impl<P: Presenter> Server<P> {
@@ -238,11 +425,13 @@ impl<P: Presenter> Server<P> {
             conn: Conn::new(fd),
             objs,
             serial: 0,
+            start: std::time::Instant::now(),
             present,
             titles: HashMap::new(),
             seat_ver: 1,
             pointer: None,
             keyboard: None,
+            touch: None,
             output: None,
             focus: None,
             ptr_entered: false,
@@ -251,7 +440,16 @@ impl<P: Presenter> Server<P> {
             last_ptr: (0, 0),
             last_cfg: None,
             external_logical_crop: None,
+            present_seq: 0,
+            pending_move: None,
         }
+    }
+
+    /// Drain a pending interactive-move request (from `xdg_toplevel.move`), returning the surface id the
+    /// client wants dragged, if any. The live loop feeds this to the presenter to start a native window
+    /// drag ONLY when Chrome actually requested one.
+    pub fn take_move_request(&mut self) -> Option<u32> {
+        self.pending_move.take()
     }
 
     /// The presenter this server drives (read-only; used by the headless self-test to assert pixels).
@@ -400,14 +598,17 @@ impl<P: Presenter> Server<P> {
     /// `xdg_surface.configure(serial)`; the client acks and commits a resized buffer.
     pub fn resize_focused(&mut self, w: i32, h: i32) {
         let Some(surface) = self.focus else { return };
-        let xdg = match self.objs.get(&surface) {
-            Some(Obj::Surface(s)) => s.xdg_surface,
-            _ => None,
+        let (xdg, min, max) = match self.objs.get(&surface) {
+            Some(Obj::Surface(s)) => (s.xdg_surface, s.min_size, s.max_size),
+            _ => (None, (0, 0), (0, 0)),
         };
         let Some(xdg) = xdg else { return };
         let Some(tl) = self.find_toplevel(xdg) else {
             return;
         };
+        // Honor the client's set_min_size / set_max_size (0 ⇒ unbounded on that axis).
+        let w = clamp_axis(w, min.0, max.0);
+        let h = clamp_axis(h, min.1, max.1);
         // states array: [4] = XDG_TOPLEVEL_STATE_ACTIVATED (little-endian u32).
         let states = 4u32.to_ne_bytes();
         self.conn
@@ -420,6 +621,14 @@ impl<P: Presenter> Server<P> {
     fn next_serial(&mut self) -> u32 {
         self.serial += 1;
         self.serial
+    }
+
+    /// Milliseconds since server start, for `wl_callback.done` (wl_surface.frame). Weston sends a
+    /// CLOCK_MONOTONIC msec here (compositor.c `wl_callback_send_done`); Chrome/viz paces its frame
+    /// clock off this value, so a serial (1,2,3…) gives it a bogus, non-ms time and stalls the frame
+    /// callback ("spinner spins then stops"). A monotonic ms counter is what the client needs.
+    fn frame_time_ms(&self) -> u32 {
+        self.start.elapsed().as_millis() as u32
     }
 
     /// Drive one readable event: read available bytes + dispatch every complete message, then flush.
@@ -448,21 +657,26 @@ impl<P: Presenter> Server<P> {
                 Some(Obj::Buffer { .. }) => "wl_buffer",
                 Some(Obj::Surface(_)) => "wl_surface",
                 Some(Obj::Viewport { .. }) => "wp_viewport",
+                Some(Obj::Subsurface { .. }) => "wl_subsurface",
                 Some(Obj::XdgWmBase) => "xdg_wm_base",
                 Some(Obj::XdgSurface { .. }) => "xdg_surface",
                 Some(Obj::XdgToplevel { .. }) => "xdg_toplevel",
+                Some(Obj::XdgPositioner(_)) => "xdg_positioner",
+                Some(Obj::XdgPopup { .. }) => "xdg_popup",
                 Some(Obj::Seat) => "wl_seat",
                 Some(Obj::Subcompositor) => "wl_subcompositor",
                 Some(Obj::Viewporter) => "wp_viewporter",
                 Some(Obj::DataDeviceManager) => "wl_data_device_manager",
                 Some(Obj::Output) => "wl_output",
-                Some(Obj::Region) => "wl_region",
+                Some(Obj::Region { .. }) => "wl_region",
                 Some(Obj::LinuxDmabuf) => "zwp_linux_dmabuf",
                 Some(Obj::DmabufParams { .. }) => "zwp_linux_buffer_params",
                 Some(Obj::DmaBuffer { .. }) => "wl_buffer(dmabuf)",
                 Some(Obj::SurfaceAugmenter) => "surface_augmenter",
                 Some(Obj::AugmentedSurface { .. }) => "augmented_surface",
                 Some(Obj::SolidColorBuffer { .. }) => "wl_buffer(solid_color)",
+                Some(Obj::Presentation) => "wp_presentation",
+                Some(Obj::PresentationFeedback) => "wp_presentation_feedback",
                 Some(Obj::Other) => "other",
                 None => "UNKNOWN-OBJ",
             };
@@ -482,9 +696,12 @@ impl<P: Presenter> Server<P> {
             Some(Obj::ShmPool { .. }) => self.wl_shm_pool(m),
             Some(Obj::Surface(_)) => self.wl_surface(m),
             Some(Obj::Viewport { .. }) => self.wp_viewport(m),
+            Some(Obj::Subsurface { .. }) => self.wl_subsurface(m),
             Some(Obj::XdgWmBase) => self.xdg_wm_base(m),
             Some(Obj::XdgSurface { .. }) => self.xdg_surface(m),
             Some(Obj::XdgToplevel { .. }) => self.xdg_toplevel(m),
+            Some(Obj::XdgPositioner(_)) => self.xdg_positioner(m),
+            Some(Obj::XdgPopup { .. }) => self.xdg_popup(m),
             Some(Obj::Seat) => self.wl_seat(m),
             Some(Obj::Subcompositor) => self.wl_subcompositor(m),
             Some(Obj::Viewporter) => self.wp_viewporter(m),
@@ -492,14 +709,17 @@ impl<P: Presenter> Server<P> {
             Some(Obj::LinuxDmabuf) => self.linux_dmabuf(m),
             Some(Obj::DmabufParams { .. }) => self.dmabuf_params(m),
             Some(Obj::SurfaceAugmenter) => self.surface_augmenter(m),
-            Some(Obj::Buffer { .. })
-            | Some(Obj::DmaBuffer { .. })
+            Some(Obj::Presentation) => self.wp_presentation(m),
+            Some(Obj::Region { .. }) => self.wl_region(m),
+            Some(Obj::Buffer { .. }) => self.wl_buffer(m),
+            Some(Obj::DmaBuffer { .. })
             | Some(Obj::SolidColorBuffer { .. })
             | Some(Obj::AugmentedSurface { .. })
+            | Some(Obj::PresentationFeedback)
             | Some(Obj::Output)
-            | Some(Obj::Region)
             | Some(Obj::Other) => {
-                // destroy-only / inert objects: nothing to do (buffer.destroy, region.*, output.*).
+                // destroy-only / inert objects: nothing to do (dmabuf-buffer.destroy, output.*,
+                // wp_presentation_feedback has no requests — the server destroys it after presented).
             }
             None => {}
         }
@@ -531,7 +751,9 @@ impl<P: Presenter> Server<P> {
         let globals: &[(u32, &str, u32)] = &[
             (G_COMPOSITOR, "wl_compositor", 4),
             (G_SHM, "wl_shm", 1),
-            (G_OUTPUT, "wl_output", 2),
+            // wl_output v4: adds name/description (display identification) + keeps scale (HiDPI). The
+            // per-event version gating below still lets a v1/v2 client bind at its own version.
+            (G_OUTPUT, "wl_output", 4),
             (G_SEAT, "wl_seat", 5),
             (G_XDG_WM_BASE, "xdg_wm_base", 1),
             // chromium ozone binds all three of these during init; absence is a divergence from a real
@@ -539,7 +761,10 @@ impl<P: Presenter> Server<P> {
             (G_SUBCOMPOSITOR, "wl_subcompositor", 1),
             (G_VIEWPORTER, "wp_viewporter", 1),
             (G_DATA_DEV_MGR, "wl_data_device_manager", 3),
-            (G_SURFACE_AUGMENTER, "surface_augmenter", 1),
+            // wp_presentation (presentation-time). Chrome/viz drives frame scheduling off the
+            // `presented` feedback; without it, the BeginFrameSource can stall (the "spinner spins then
+            // stops" symptom). We advertise v1 (feedback wire format is identical in v1/v2).
+            (G_PRESENTATION, "wp_presentation", 1),
         ];
         // zwp_linux_dmabuf_v1 (GPU rung 2) is advertised only when DD_DISPLAY_DMABUF is set — until the
         // cross-process IOSurface handle bridge (mach port) is wired, a toolkit that PREFERS dmabuf could
@@ -548,6 +773,18 @@ impl<P: Presenter> Server<P> {
         for (name, iface, ver) in globals {
             self.conn
                 .send(&Message::new(reg, 0).u32(*name).string(iface).u32(*ver));
+        }
+        // surface_augmenter is a ChromeOS-only global that stock compositors (Weston) never advertise.
+        // The oracle trace shows the real client probes for it and tolerates its absence, so advertising
+        // it can steer Chrome onto an augmented path a real compositor never exposes. Default OFF to match
+        // Weston; DD_DISPLAY_AUGMENTER=1 re-enables it for debugging the augmented path.
+        if std::env::var("DD_DISPLAY_AUGMENTER").is_ok() {
+            self.conn.send(
+                &Message::new(reg, 0)
+                    .u32(G_SURFACE_AUGMENTER)
+                    .string("surface_augmenter")
+                    .u32(1),
+            );
         }
         if dmabuf_on {
             // v4: chromium's ozone GPU derives its DRM render-node path from the dmabuf-feedback
@@ -606,9 +843,11 @@ impl<P: Presenter> Server<P> {
             G_SEAT => {
                 self.objs.insert(id, Obj::Seat);
                 self.seat_ver = ver;
-                // capabilities: pointer(1) | keyboard(2) — toolkits (SDL2/GTK/Chrome) require these to
-                // initialize input. Touch(4) is deferred.
-                self.conn.send(&Message::new(id, 0).u32(0b11));
+                // capabilities: pointer(1) | keyboard(2) | touch(4). A full seat advertises all three;
+                // toolkits (SDL2/GTK/Chrome) require pointer+keyboard to initialize input, and a
+                // touch-capable seat is what a reference compositor (weston/wlroots) reports for a laptop.
+                // wl_seat.capabilities enum: pointer=1, keyboard=2, touch=4 (wayland.xml wl_seat::capability).
+                self.conn.send(&Message::new(id, 0).u32(0b111));
                 if ver >= 2 {
                     self.conn.send(&Message::new(id, 1).string("seat0")); // name (wl_seat v2+)
                 }
@@ -616,25 +855,53 @@ impl<P: Presenter> Server<P> {
             G_OUTPUT => {
                 self.objs.insert(id, Obj::Output);
                 self.output = Some(id);
+                // Integer scale the compositor is driving (2 on a Retina backing store, else 1). Sizing the
+                // physical mm from the mode at a nominal ~96dpi*scale keeps the reported DPI sane. See
+                // wlroots `wlr_output_send_geometry`/`wlr_output.scale`.
+                let scale = self.present.output_scale().max(1);
+                let phys_w = OUTPUT_WIDTH * 254 / (96 * 10); // ~mm at 96dpi
+                let phys_h = OUTPUT_HEIGHT * 254 / (96 * 10);
                 // geometry(x,y,pw,ph,subpixel,make,model,transform) — v1
                 self.conn.send(
                     &Message::new(id, 0)
                         .i32(0)
                         .i32(0)
-                        .i32(300)
-                        .i32(200)
+                        .i32(phys_w)
+                        .i32(phys_h)
                         .i32(0)
                         .string("dd")
                         .string("dd-display")
                         .i32(0),
                 );
-                // mode(flags=current(1)|preferred(2), w, h, refresh) — v1
-                self.conn
-                    .send(&Message::new(id, 1).u32(3).i32(1920).i32(1080).i32(60000));
+                // mode(flags=current(1)|preferred(2), w, h, refresh) — v1. Reported in physical device
+                // pixels; the client derives its logical size by dividing by `scale`.
+                self.conn.send(
+                    &Message::new(id, 1)
+                        .u32(3)
+                        .i32(OUTPUT_WIDTH)
+                        .i32(OUTPUT_HEIGHT)
+                        .i32(OUTPUT_REFRESH_MHZ),
+                );
                 if ver >= 2 {
-                    self.conn.send(&Message::new(id, 3).i32(1)); // scale (wl_output v2+)
-                    self.conn.send(&Message::new(id, 2)); // done (wl_output v2+)
+                    self.conn.send(&Message::new(id, 3).i32(scale)); // scale (wl_output v2+)
                 }
+                if ver >= 4 {
+                    // name(string) [opcode 4] + description(string) [opcode 5] — wl_output v4. Chrome/GTK
+                    // use the stable name to identify the display across hotplugs.
+                    self.conn.send(&Message::new(id, 4).string("dd-0"));
+                    self.conn
+                        .send(&Message::new(id, 5).string("dd virtual display"));
+                }
+                if ver >= 2 {
+                    self.conn.send(&Message::new(id, 2)); // done (wl_output v2+) — must come last.
+                }
+            }
+            G_PRESENTATION => {
+                self.objs.insert(id, Obj::Presentation);
+                // clock_id(clk_id) [opcode 0] — sent once on bind. The client reads its own
+                // clock_gettime(CLOCK_MONOTONIC) to interpret the `presented` timestamps we emit.
+                self.conn
+                    .send(&Message::new(id, 0).u32(CLOCK_MONOTONIC_LINUX));
             }
             G_DMABUF => {
                 self.objs.insert(id, Obj::LinuxDmabuf);
@@ -667,7 +934,7 @@ impl<P: Presenter> Server<P> {
                 self.objs.insert(id, Obj::Surface(Surface::default()));
             }
             1 => {
-                self.objs.insert(id, Obj::Region);
+                self.objs.insert(id, Obj::Region { ops: Vec::new() });
             }
             _ => {}
         }
@@ -686,59 +953,184 @@ impl<P: Presenter> Server<P> {
             let ptr = unsafe {
                 libc::mmap(
                     std::ptr::null_mut(),
-                    size,
+                    size.max(1),
                     libc::PROT_READ,
                     libc::MAP_SHARED,
                     fd,
                     0,
                 )
             };
-            unsafe { libc::close(fd) };
             if ptr != libc::MAP_FAILED {
+                // Keep `fd` open for the pool's lifetime (needed by resize; closed in `release_pool_ref`).
                 self.objs.insert(
                     id,
                     Obj::ShmPool {
+                        fd,
                         ptr: ptr as *mut u8,
                         size,
+                        buffers: 0,
+                        zombie: false,
                     },
                 );
                 return;
             }
+            unsafe { libc::close(fd) };
         }
         self.objs.insert(id, Obj::Other);
     }
 
     // ---- wl_shm_pool: create_buffer(0), destroy(1), resize(2) ----
     fn wl_shm_pool(&mut self, m: Message) {
+        let mut r = m.reader();
+        match m.opcode {
+            0 => {
+                // create_buffer(id, offset, width, height, stride, format)
+                let id = r.u32();
+                let offset = r.i32();
+                let width = r.i32();
+                let height = r.i32();
+                let stride = r.i32();
+                let format = r.u32();
+                if let Some(Obj::ShmPool { buffers, .. }) = self.objs.get_mut(&m.object) {
+                    *buffers += 1; // pool stays mapped until this buffer is destroyed (spec: buffers pin it).
+                }
+                self.objs.insert(
+                    id,
+                    Obj::Buffer {
+                        pool: m.object,
+                        offset,
+                        width,
+                        height,
+                        stride,
+                        format,
+                    },
+                );
+            }
+            1 => {
+                // destroy(): the pool object is gone, but the mapping outlives it until its buffers are all
+                // destroyed. Mark it a zombie and free now iff no buffers remain (wl_shm.c shm_pool_unref).
+                if let Some(Obj::ShmPool { zombie, buffers, .. }) = self.objs.get_mut(&m.object) {
+                    *zombie = true;
+                    if *buffers == 0 {
+                        self.free_pool(m.object);
+                    }
+                }
+            }
+            2 => {
+                // resize(size): pools may only grow. Re-map from the retained fd (portable mremap emulation:
+                // map the new size, then unmap the old range). wl_shm.c does the same via
+                // wl_os_mremap_maymove where MREMAP_MAYMOVE is unavailable (wayland-shm.c:104-122).
+                let new_size = r.i32();
+                if new_size <= 0 {
+                    return;
+                }
+                let new_size = new_size as usize;
+                let Some(Obj::ShmPool { fd, ptr, size, .. }) = self.objs.get(&m.object) else {
+                    return;
+                };
+                let (fd, old_ptr, old_size) = (*fd, *ptr, *size);
+                if new_size <= old_size {
+                    return; // never shrink.
+                }
+                let np = unsafe {
+                    libc::mmap(
+                        std::ptr::null_mut(),
+                        new_size,
+                        libc::PROT_READ,
+                        libc::MAP_SHARED,
+                        fd,
+                        0,
+                    )
+                };
+                if np == libc::MAP_FAILED {
+                    return; // keep the old (smaller) mapping usable.
+                }
+                unsafe { libc::munmap(old_ptr as *mut libc::c_void, old_size.max(1)) };
+                if let Some(Obj::ShmPool { ptr, size, .. }) = self.objs.get_mut(&m.object) {
+                    *ptr = np as *mut u8;
+                    *size = new_size;
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// wl_buffer.destroy(0): drop the buffer object and release its hold on the backing shm pool (which
+    /// may now be freed if it was already destroyed). Prevents the per-buffer object leak and, together
+    /// with pool zombie-tracking, the mmap leak.
+    fn wl_buffer(&mut self, m: Message) {
         if m.opcode != 0 {
             return;
         }
-        let mut r = m.reader();
-        let id = r.u32();
-        let offset = r.i32();
-        let width = r.i32();
-        let height = r.i32();
-        let stride = r.i32();
-        let format = r.u32();
-        self.objs.insert(
-            id,
-            Obj::Buffer {
-                pool: m.object,
-                offset,
-                width,
-                height,
-                stride,
-                format,
-            },
-        );
+        let pool = match self.objs.remove(&m.object) {
+            Some(Obj::Buffer { pool, .. }) => Some(pool),
+            other => {
+                if let Some(o) = other {
+                    self.objs.insert(m.object, o);
+                }
+                None
+            }
+        };
+        if let Some(pool) = pool {
+            self.release_pool_ref(pool);
+        }
     }
 
-    // ---- wl_surface: attach(1), damage(2), frame(3), commit(6) ----
+    /// A buffer that referenced `pool` is gone: drop the pool's refcount and free the mapping if the pool
+    /// was already destroyed and no buffers remain (mirrors wl_shm.c shm_pool_unref, wayland-shm.c:145).
+    fn release_pool_ref(&mut self, pool: u32) {
+        let free = if let Some(Obj::ShmPool { buffers, zombie, .. }) = self.objs.get_mut(&pool) {
+            *buffers = buffers.saturating_sub(1);
+            *zombie && *buffers == 0
+        } else {
+            false
+        };
+        if free {
+            self.free_pool(pool);
+        }
+    }
+
+    /// Unmap a pool's shared memory, close its retained fd, and drop the object.
+    fn free_pool(&mut self, pool: u32) {
+        if let Some(Obj::ShmPool { fd, ptr, size, .. }) = self.objs.remove(&pool) {
+            unsafe {
+                libc::munmap(ptr as *mut libc::c_void, size.max(1));
+                libc::close(fd);
+            }
+        }
+    }
+
+    // ---- wl_region: destroy(0), add(1, x,y,w,h), subtract(2, x,y,w,h) ----
+    fn wl_region(&mut self, m: Message) {
+        let mut r = m.reader();
+        match m.opcode {
+            0 => {
+                self.objs.remove(&m.object);
+            }
+            1 | 2 => {
+                let x = r.i32();
+                let y = r.i32();
+                let w = r.i32();
+                let h = r.i32();
+                let add = m.opcode == 1;
+                if let Some(Obj::Region { ops }) = self.objs.get_mut(&m.object) {
+                    ops.push(RegionOp { x, y, w, h, add });
+                }
+            }
+            _ => {}
+        }
+    }
+
+    // ---- wl_surface: destroy(0), attach(1), damage(2), frame(3), set_opaque_region(4),
+    //      set_input_region(5), commit(6), set_buffer_transform(7), set_buffer_scale(8),
+    //      damage_buffer(9), offset(10) ----
     fn wl_surface(&mut self, m: Message) {
         let mut r = m.reader();
         match m.opcode {
+            0 => self.destroy_surface(m.object),
             1 => {
-                // attach(buffer, x, y)
+                // attach(buffer, x, y). x/y are the buffer-placement offset (superseded by offset() in v5;
+                // there they must be 0 and offset() carries the delta — we honor both).
                 let buffer = r.u32();
                 let x = r.i32();
                 let y = r.i32();
@@ -756,7 +1148,37 @@ impl<P: Presenter> Server<P> {
                     s.pending_frame = Some(cb);
                 }
             }
+            4 => {
+                // set_opaque_region(region): double-buffered. Snapshot the region's rects now; the
+                // assignment takes effect at commit. region==0 clears it (nothing opaque).
+                let region = r.u32();
+                let ops = self.region_ops(region);
+                if let Some(Obj::Surface(s)) = self.objs.get_mut(&m.object) {
+                    s.pending_opaque_region = Some(ops);
+                }
+            }
+            5 => {
+                // set_input_region(region): double-buffered. region==0 ⇒ infinite (whole surface).
+                let region = r.u32();
+                let val = if region == 0 {
+                    None
+                } else {
+                    Some(self.region_ops(region))
+                };
+                if let Some(Obj::Surface(s)) = self.objs.get_mut(&m.object) {
+                    s.pending_input_region = Some(val);
+                }
+            }
             6 => self.commit(m.object),
+            7 => {
+                // set_buffer_transform(transform): double-buffered (applied at commit).
+                let transform = r.i32();
+                if (0..=7).contains(&transform) {
+                    if let Some(Obj::Surface(s)) = self.objs.get_mut(&m.object) {
+                        s.pending_buffer_transform = Some(transform);
+                    }
+                }
+            }
             8 => {
                 // set_buffer_scale(scale)
                 let scale = r.i32().max(1);
@@ -764,30 +1186,118 @@ impl<P: Presenter> Server<P> {
                     s.buffer_scale = scale;
                 }
             }
-            _ => {} // damage/opaque/input/transform/offset: no-op for the MVP present path
+            10 => {
+                // offset(x, y) [v5]: double-buffered buffer-placement delta, applied at commit.
+                let x = r.i32();
+                let y = r.i32();
+                if let Some(Obj::Surface(s)) = self.objs.get_mut(&m.object) {
+                    s.pending_offset = Some((x, y));
+                }
+            }
+            // damage(2) / damage_buffer(9): we always re-present the whole committed buffer, which is
+            // always a correct superset of the damaged sub-rectangles, so accumulating them is unnecessary
+            // (weston tracks them only to minimize the GL/pixman blit region — an optimization, not a
+            // correctness requirement; compositor.c weston_surface_damage).
+            _ => {}
+        }
+    }
+
+    /// Snapshot a wl_region's accumulated rectangles (empty if the id is not a live region or is null).
+    fn region_ops(&self, region: u32) -> Vec<RegionOp> {
+        match self.objs.get(&region) {
+            Some(Obj::Region { ops }) => ops.clone(),
+            _ => Vec::new(),
+        }
+    }
+
+    /// wl_surface.destroy(0): release any buffer the surface still holds (courtesy release + pool refcount)
+    /// and drop the surface object. Without this, a surface and its last buffer leak until disconnect, and
+    /// the pool it pinned can never be unmapped.
+    fn destroy_surface(&mut self, sid: u32) {
+        let held = match self.objs.remove(&sid) {
+            Some(Obj::Surface(s)) => s.current_buffer.or(s.pending_buffer),
+            other => {
+                if let Some(o) = other {
+                    self.objs.insert(sid, o);
+                }
+                return;
+            }
+        };
+        if let Some(bid) = held {
+            self.conn.send(&Message::new(bid, 0)); // wl_buffer.release (client owns the buffer object)
+        }
+        if self.focus == Some(sid) {
+            self.focus = None;
+            self.ptr_entered = false;
+            self.kbd_entered = false;
         }
     }
 
     fn commit(&mut self, sid: u32) {
+        // Apply all double-buffered surface state atomically before we read pixels (weston applies the
+        // whole pending state in one pass at commit, surface-state.c weston_surface_commit_state).
         if let Some(Obj::Surface(s)) = self.objs.get_mut(&sid) {
             if let Some(geometry) = s.pending_window_geometry.take() {
                 s.window_geometry = Some(geometry);
             }
+            if let Some(t) = s.pending_buffer_transform.take() {
+                s.buffer_transform = t;
+            }
+            if let Some((x, y)) = s.pending_offset.take() {
+                s.attach_x = x;
+                s.attach_y = y;
+            }
+            if let Some(ops) = s.pending_opaque_region.take() {
+                s.opaque_region = ops;
+            }
+            if let Some(region) = s.pending_input_region.take() {
+                s.input_region = region;
+            }
         }
 
         // Snapshot the surface's committed state without holding a &mut across the borrows we need.
-        let (attached, buffer, frame, xdg_surface, configured, title) = {
-            match self.objs.get(&sid) {
-                Some(Obj::Surface(s)) => (
-                    s.attached,
-                    s.pending_buffer,
-                    s.pending_frame,
-                    s.xdg_surface,
-                    s.configured,
-                    s.title.clone(),
-                ),
-                _ => return,
+        // ---- wl_subsurface role ----
+        // A subsurface never drives a native window of its own; its pixels are composited into the root
+        // ancestor's frame. In *synchronized* mode (the default) a subsurface commit is CACHED and only
+        // applied when the parent surface commits — the child's state is atomically coupled to the
+        // parent (wl_subsurface spec; wlroots subsurface_handle_surface_client_commit +
+        // subsurface_handle_parent_commit, types/wlr_subcompositor.c:262-294). In *desynchronized* mode
+        // it applies immediately and re-composites the root.
+        if matches!(self.objs.get(&sid), Some(Obj::Surface(s)) if s.subsurface_parent.is_some()) {
+            let sync = self.is_effectively_synchronized(sid);
+            if let Some(Obj::Surface(s)) = self.objs.get_mut(&sid) {
+                if sync {
+                    if s.attached {
+                        s.cached_buffer = s.pending_buffer;
+                        s.has_cached = true;
+                        s.attached = false;
+                    }
+                    if let Some(cb) = s.pending_frame.take() {
+                        s.cached_frame = Some(cb);
+                    }
+                    return;
+                }
+                // Desynchronized: apply this commit immediately.
+                if s.attached {
+                    s.current_buffer = s.pending_buffer;
+                    s.pending_release = s.pending_buffer;
+                    s.attached = false;
+                }
+                if s.has_pending_pos {
+                    s.subsurface_x = s.pending_sub_x;
+                    s.subsurface_y = s.pending_sub_y;
+                    s.has_pending_pos = false;
+                }
             }
+            let root = self.root_surface(sid);
+            self.present_root(root);
+            return;
+        }
+
+        // ---- root / regular surface ----
+        let (attached, buffer, xdg_surface, configured) = match self.objs.get(&sid) {
+            Some(Obj::Surface(s)) => (s.attached, s.pending_buffer, s.xdg_surface, s.configured),
+            _ => return,
         };
 
         // Initial commit of an xdg_surface with no buffer yet -> send the configure handshake.
@@ -796,42 +1306,175 @@ impl<P: Presenter> Server<P> {
             return;
         }
 
-        let bid_to_present = if attached { buffer } else {
-            match self.objs.get(&sid) {
-                Some(Obj::Surface(s)) => s.current_buffer,
-                _ => None,
+        // Apply the root's own freshly-attached buffer, then atomically apply any cached synchronized
+        // descendant state, then present the composited frame.
+        if attached {
+            if let Some(Obj::Surface(s)) = self.objs.get_mut(&sid) {
+                s.current_buffer = buffer;
+                s.pending_release = buffer;
+                s.attached = false;
             }
-        };
-        let release_bid = if attached { buffer } else { None };
+        }
+        self.apply_cached_subtree(sid);
+        self.present_root(sid);
+    }
 
-        // Present the attached buffer, or the current buffer for damage/frame-only commits.
-        if let Some(bid) = bid_to_present {
-            if let Some(sb) = self.extract(sid, bid, &title) {
+    /// Walk up the subsurface parent chain to the root (non-subsurface) surface.
+    fn root_surface(&self, mut sid: u32) -> u32 {
+        while let Some(Obj::Surface(s)) = self.objs.get(&sid) {
+            match s.subsurface_parent {
+                Some(p) => sid = p,
+                None => break,
+            }
+        }
+        sid
+    }
+
+    /// A subsurface is *effectively synchronized* if it, or any of its ancestors, is in sync mode
+    /// (wl_subsurface: "the cached state of a sub-surface ... is only applied when its parent's state is
+    /// applied"; wlroots `subsurface_is_synchronized`, types/wlr_subcompositor.c:13-24).
+    fn is_effectively_synchronized(&self, sid: u32) -> bool {
+        let mut cur = sid;
+        loop {
+            let Some(Obj::Surface(s)) = self.objs.get(&cur) else {
+                return false;
+            };
+            match s.subsurface_parent {
+                None => return false, // reached the root toplevel — not synchronized
+                Some(p) => {
+                    if s.subsurface_sync {
+                        return true;
+                    }
+                    cur = p;
+                }
+            }
+        }
+    }
+
+    /// Depth-first over the subsurface tree rooted at `root`, promoting each synchronized child's cached
+    /// commit (position + buffer + frame) so it becomes current — the parent-commit half of the
+    /// double-buffered subsurface protocol (wlroots `subsurface_handle_parent_commit`).
+    fn apply_cached_subtree(&mut self, root: u32) {
+        let children = match self.objs.get(&root) {
+            Some(Obj::Surface(s)) => s.children.clone(),
+            _ => return,
+        };
+        for c in children {
+            if let Some(Obj::Surface(s)) = self.objs.get_mut(&c) {
+                if s.has_pending_pos {
+                    s.subsurface_x = s.pending_sub_x;
+                    s.subsurface_y = s.pending_sub_y;
+                    s.has_pending_pos = false;
+                }
+                if s.has_cached {
+                    s.current_buffer = s.cached_buffer;
+                    s.pending_release = s.cached_buffer;
+                    s.has_cached = false;
+                    if let Some(cb) = s.cached_frame.take() {
+                        s.pending_frame = Some(cb);
+                    }
+                }
+            }
+            self.apply_cached_subtree(c);
+        }
+    }
+
+    /// Every subsurface descendant of `root`, in bottom→top composite order, each with its absolute
+    /// offset from the root surface's origin (nested positions accumulate).
+    fn collect_composite_children(&self, root: u32) -> Vec<(u32, i32, i32)> {
+        let mut out = Vec::new();
+        self.collect_children_rec(root, 0, 0, &mut out);
+        out
+    }
+
+    fn collect_children_rec(&self, sid: u32, base_x: i32, base_y: i32, out: &mut Vec<(u32, i32, i32)>) {
+        let children = match self.objs.get(&sid) {
+            Some(Obj::Surface(s)) => s.children.clone(),
+            _ => return,
+        };
+        for c in children {
+            let (cx, cy) = match self.objs.get(&c) {
+                Some(Obj::Surface(s)) => (s.subsurface_x, s.subsurface_y),
+                _ => continue,
+            };
+            let (ax, ay) = (base_x + cx, base_y + cy);
+            out.push((c, ax, ay));
+            self.collect_children_rec(c, ax, ay, out);
+        }
+    }
+
+    /// Present the root surface, compositing every subsurface descendant onto it at its position in
+    /// z-order, then drain pending buffer releases + frame callbacks for the whole subtree, and answer
+    /// any wp_presentation_feedback. Subsurface composition is CPU-side, so it applies when the root
+    /// carries readable pixels (wl_shm / solid-color); an IOSurface/dmabuf root is presented as a single
+    /// zero-copy texture and its subsurfaces are not blended here (documented limitation — WAYLAND_GAPS §7).
+    fn present_root(&mut self, root: u32) {
+        let (root_bid, title) = match self.objs.get(&root) {
+            Some(Obj::Surface(s)) => (s.current_buffer, s.title.clone()),
+            _ => return,
+        };
+
+        let mut did_present = false;
+        if let Some(bid) = root_bid {
+            if let Some(mut sb) = self.extract(root, bid, &title) {
+                if sb.iosurface_id.is_none() && !sb.bgra.is_empty() {
+                    for (csid, ox, oy) in self.collect_composite_children(root) {
+                        let cbid = match self.objs.get(&csid) {
+                            Some(Obj::Surface(s)) => s.current_buffer,
+                            _ => None,
+                        };
+                        if let Some(cbid) = cbid {
+                            if let Some(csb) = self.extract(csid, cbid, "") {
+                                blend_subsurface(&mut sb, &csb, ox, oy);
+                            }
+                        }
+                    }
+                }
                 self.present.present(&sb);
+                did_present = true;
             }
         }
-        if let Some(bid) = release_bid {
-            // Release the buffer so the client may reuse it.
-            self.conn.send(&Message::new(bid, 0)); // wl_buffer.release
-        }
-        // Fire the frame callback so the client draws the next frame.
-        if let Some(cb) = frame {
-            let t = self.next_serial();
-            self.conn.send(&Message::new(cb, 0).u32(t)); // wl_callback.done
-            self.conn.send(&Message::new(WL_DISPLAY, 1).u32(cb)); // delete_id
-        }
-        if let Some(Obj::Surface(su)) = self.objs.get_mut(&sid) {
-            if attached {
-                su.current_buffer = buffer;
+
+        // Release freshly-committed buffers + fire frame callbacks for the root and every descendant, then
+        // answer presentation feedback (the frame is on-screen by the time Presenter::present returns — the
+        // analogue of weston sending feedback on the KMS pageflip-complete event; this is what keeps
+        // Chrome/viz's frame pacing from stalling).
+        let mut subtree = vec![root];
+        subtree.extend(self.collect_composite_children(root).into_iter().map(|(c, _, _)| c));
+        for s in subtree {
+            let (rel, frame) = match self.objs.get_mut(&s) {
+                Some(Obj::Surface(su)) => (su.pending_release.take(), su.pending_frame.take()),
+                _ => (None, None),
+            };
+            if let Some(bid) = rel {
+                self.conn.send(&Message::new(bid, 0)); // wl_buffer.release
             }
-            su.pending_frame = None;
-            su.attached = false;
+            if let Some(cb) = frame {
+                let t = self.frame_time_ms();
+                self.conn.send(&Message::new(cb, 0).u32(t)); // wl_callback.done (CLOCK_MONOTONIC msec)
+                self.conn.send(&Message::new(WL_DISPLAY, 1).u32(cb)); // delete_id
+            }
+            self.send_presentation_feedback(s, did_present);
         }
     }
 
     fn find_toplevel(&self, xdg_surface: u32) -> Option<u32> {
         self.objs.iter().find_map(|(id, o)| match o {
             Obj::XdgToplevel { xdg_surface: x } if *x == xdg_surface => Some(*id),
+            _ => None,
+        })
+    }
+
+    /// The `xdg_popup` object id bound to `xdg_surface`, plus its resolved `(x,y,w,h)` geometry.
+    fn find_popup(&self, xdg_surface: u32) -> Option<(u32, i32, i32, i32, i32)> {
+        self.objs.iter().find_map(|(id, o)| match o {
+            Obj::XdgPopup {
+                xdg_surface: x,
+                x: px,
+                y: py,
+                w,
+                h,
+            } if *x == xdg_surface => Some((*id, *px, *py, *w, *h)),
             _ => None,
         })
     }
@@ -858,6 +1501,20 @@ impl<P: Presenter> Server<P> {
             _ => None,
         };
         let Some(xdg) = xdg else { return };
+        // A popup completes its initial handshake with xdg_popup.configure(x,y,w,h) (the placement its
+        // positioner resolved to) followed by the paired xdg_surface.configure(serial). Without this the
+        // client's menu/dropdown never maps → Chrome menus break or paint stale.
+        if let Some((popup, px, py, pw, ph)) = self.find_popup(xdg) {
+            self.conn
+                .send(&Message::new(popup, 0).i32(px).i32(py).i32(pw).i32(ph));
+            let serial = self.next_serial();
+            self.conn.send(&Message::new(xdg, 0).u32(serial)); // xdg_surface.configure(serial)
+            if let Some(Obj::Surface(s)) = self.objs.get_mut(&sid) {
+                s.configured = true;
+            }
+            self.conn.flush().ok();
+            return;
+        }
         let Some(tl) = self.find_toplevel(xdg) else {
             return;
         };
@@ -919,7 +1576,9 @@ impl<P: Presenter> Server<P> {
             for px in pixels.chunks_exact_mut(4) {
                 px.copy_from_slice(bgra);
             }
-            let (width, height, pixels) = self.apply_viewport(sid, *width, *height, pixels)?;
+            let (bw, bh, pixels) = self.apply_transform(sid, *width, *height, pixels);
+            let (width, height, mut pixels) = self.apply_viewport(sid, bw, bh, pixels)?;
+            self.force_opaque(sid, width, height, &mut pixels);
             return Some(SurfaceBuffer {
                 sid,
                 width,
@@ -947,7 +1606,7 @@ impl<P: Presenter> Server<P> {
             _ => return None,
         };
         let (ptr, size) = match self.objs.get(&pool) {
-            Some(Obj::ShmPool { ptr, size }) => (*ptr, *size),
+            Some(Obj::ShmPool { ptr, size, .. }) => (*ptr, *size),
             _ => return None,
         };
         if width <= 0 || height <= 0 || stride <= 0 {
@@ -968,7 +1627,11 @@ impl<P: Presenter> Server<P> {
                 std::ptr::copy_nonoverlapping(src, dst, width as usize * 4);
             }
         }
-        let (width, height, bgra) = self.apply_viewport(sid, width, height, bgra)?;
+        // Apply buffer_transform (buffer→surface orientation) first, then viewport/scale in surface space,
+        // then force alpha where the client declared the surface fully opaque.
+        let (bw, bh, bgra) = self.apply_transform(sid, width, height, bgra);
+        let (width, height, mut bgra) = self.apply_viewport(sid, bw, bh, bgra)?;
+        self.force_opaque(sid, width, height, &mut bgra);
         Some(SurfaceBuffer {
             sid,
             width,
@@ -983,6 +1646,30 @@ impl<P: Presenter> Server<P> {
             gpu_render: false,
             uv_rect: [0.0, 0.0, 1.0, 1.0],
         })
+    }
+
+    /// Apply this surface's committed `buffer_transform` to a tight BGRA buffer, returning the
+    /// surface-oriented pixels and their (possibly swapped) dimensions. Identity is a zero-copy passthrough
+    /// (the Chrome path, which always uses WL_OUTPUT_TRANSFORM_NORMAL).
+    fn apply_transform(&self, sid: u32, w: i32, h: i32, src: Vec<u8>) -> (i32, i32, Vec<u8>) {
+        let t = match self.objs.get(&sid) {
+            Some(Obj::Surface(s)) => s.buffer_transform,
+            _ => 0,
+        };
+        apply_buffer_transform(w, h, src, t)
+    }
+
+    /// If the surface's committed opaque region covers its whole logical bounds, force every pixel opaque.
+    /// The over-white composite blends by alpha, so an ARGB buffer with undefined/zero alpha in a region
+    /// the client swore was opaque would otherwise bleed the white background through (the white border).
+    fn force_opaque(&self, sid: u32, w: i32, h: i32, bgra: &mut [u8]) {
+        if let Some(Obj::Surface(s)) = self.objs.get(&sid) {
+            if region_covers(&s.opaque_region, w, h) {
+                for px in bgra.chunks_exact_mut(4) {
+                    px[3] = 0xff;
+                }
+            }
+        }
     }
 
     fn surface_mapping(&self, sid: u32, src_w: i32, src_h: i32) -> Option<SurfaceMapping> {
@@ -1001,13 +1688,19 @@ impl<P: Presenter> Server<P> {
 
         let (mut src_x, mut src_y, mut src_x2, mut src_y2, mut dst_w, mut dst_h) =
             if surface.viewport_source.is_some() || surface.viewport_destination.is_some() {
+                let has_src = surface.viewport_source.is_some();
                 let (sx, sy, sw, sh) = surface
                     .viewport_source
                     .unwrap_or((0, 0, src_w << 8, src_h << 8));
-                let src_x = fixed_floor(sx).clamp(0, src_w);
-                let src_y = fixed_floor(sy).clamp(0, src_h);
-                let src_x2 = fixed_ceil(sx.saturating_add(sw)).clamp(src_x, src_w);
-                let src_y2 = fixed_ceil(sy.saturating_add(sh)).clamp(src_y, src_h);
+                // wp_viewport source coordinates are given AFTER buffer_transform + buffer_scale, i.e.
+                // in surface-local units (viewporter.xml lines 97-104). Scale them back up into buffer
+                // pixels before cropping the backing texture. (No-op at scale==1, the common Chrome
+                // fractional-scale path where the client sets buffer_scale=1 and crops via the viewport.)
+                let sc = if has_src { scale } else { 1 };
+                let src_x = (fixed_floor(sx) * sc).clamp(0, src_w);
+                let src_y = (fixed_floor(sy) * sc).clamp(0, src_h);
+                let src_x2 = (fixed_ceil(sx.saturating_add(sw)) * sc).clamp(src_x, src_w);
+                let src_y2 = (fixed_ceil(sy.saturating_add(sh)) * sc).clamp(src_y, src_h);
                 let crop_w = src_x2 - src_x;
                 let crop_h = src_y2 - src_y;
                 let (dst_w, dst_h) = surface.viewport_destination.unwrap_or((
@@ -1114,10 +1807,54 @@ target_surface={} crop=({},{} {}x{}) backing={}x{} mapped_src=({},{}..{},{}) map
         Some((map.dst_w, map.dst_h, out))
     }
 
+    /// The `wl_surface` id backing an `xdg_surface` object.
+    fn wl_surface_of_xdg(&self, xdg: u32) -> Option<u32> {
+        match self.objs.get(&xdg) {
+            Some(Obj::XdgSurface { surface }) => Some(*surface),
+            _ => None,
+        }
+    }
+
+    /// The `wl_surface` id backing an `xdg_toplevel` object (toplevel → xdg_surface → wl_surface).
+    fn wl_surface_of_toplevel(&self, tl: u32) -> Option<u32> {
+        let xdg = match self.objs.get(&tl) {
+            Some(Obj::XdgToplevel { xdg_surface }) => *xdg_surface,
+            _ => return None,
+        };
+        self.wl_surface_of_xdg(xdg)
+    }
+
+    /// Emit an `xdg_toplevel.configure(w,h,states)` + paired `xdg_surface.configure(serial)` handshake for
+    /// the toplevel bound to `xdg`. Used for state changes (maximize/fullscreen) the client must ack.
+    fn send_toplevel_configure(&mut self, xdg: u32, w: i32, h: i32, states: &[u32]) {
+        let Some(tl) = self.find_toplevel(xdg) else {
+            return;
+        };
+        let mut bytes = Vec::with_capacity(states.len() * 4);
+        for s in states {
+            bytes.extend_from_slice(&s.to_ne_bytes());
+        }
+        self.conn
+            .send(&Message::new(tl, 0).i32(w).i32(h).array(&bytes));
+        let serial = self.next_serial();
+        self.conn.send(&Message::new(xdg, 0).u32(serial));
+        self.conn.flush().ok();
+    }
+
     // ---- xdg_wm_base: destroy(0), create_positioner(1), get_xdg_surface(2), pong(3) ----
     fn xdg_wm_base(&mut self, m: Message) {
         let mut r = m.reader();
         match m.opcode {
+            0 => {
+                // destroy
+                self.objs.remove(&m.object);
+            }
+            1 => {
+                // create_positioner(id)
+                let id = r.u32();
+                self.objs
+                    .insert(id, Obj::XdgPositioner(XdgPositioner::default()));
+            }
             2 => {
                 // get_xdg_surface(id, surface)
                 let id = r.u32();
@@ -1127,18 +1864,64 @@ target_surface={} crop=({},{} {}x{}) backing={}x{} mapped_src=({},{}..{},{}) map
                     s.xdg_surface = Some(id);
                 }
             }
-            1 => {
-                let id = r.u32();
-                self.objs.insert(id, Obj::Other); // positioner (popup path, unused in MVP)
+            3 => {
+                // pong(serial): the client answered our ping. We do not currently originate pings, so this
+                // just confirms liveness — consume it (a silent fallthrough would be indistinguishable from
+                // an unhandled request).
             }
             _ => {}
         }
     }
 
-    // ---- xdg_surface: get_toplevel(1), ack_configure(4) ----
+    // ---- xdg_positioner: destroy(0), set_size(1), set_anchor_rect(2), set_anchor(3), set_gravity(4),
+    //      set_constraint_adjustment(5), set_offset(6), set_reactive(7), set_parent_size(8),
+    //      set_parent_configure(9). We accumulate the fields get_popup needs to place the popup. ----
+    fn xdg_positioner(&mut self, m: Message) {
+        if m.opcode == 0 {
+            self.objs.remove(&m.object); // destroy
+            return;
+        }
+        let mut r = m.reader();
+        let Some(Obj::XdgPositioner(p)) = self.objs.get_mut(&m.object) else {
+            return;
+        };
+        match m.opcode {
+            1 => {
+                p.width = r.i32();
+                p.height = r.i32();
+            }
+            2 => {
+                p.anchor_x = r.i32();
+                p.anchor_y = r.i32();
+                p.anchor_w = r.i32();
+                p.anchor_h = r.i32();
+            }
+            3 => p.anchor = r.u32(),
+            4 => p.gravity = r.u32(),
+            6 => {
+                p.offset_x = r.i32();
+                p.offset_y = r.i32();
+            }
+            // set_constraint_adjustment(5) / set_reactive(7) / set_parent_size(8) / set_parent_configure(9):
+            // accepted; unconstrained placement is used (see XdgPositioner::geometry).
+            _ => {}
+        }
+    }
+
+    // ---- xdg_surface: destroy(0), get_toplevel(1), get_popup(2), set_window_geometry(3), ack_configure(4) ----
     fn xdg_surface(&mut self, m: Message) {
         let mut r = m.reader();
         match m.opcode {
+            0 => {
+                // destroy: the role object must be gone already; drop our xdg_surface entry.
+                if let Some(surface) = self.wl_surface_of_xdg(m.object) {
+                    if let Some(Obj::Surface(s)) = self.objs.get_mut(&surface) {
+                        s.xdg_surface = None;
+                        s.configured = false;
+                    }
+                }
+                self.objs.remove(&m.object);
+            }
             1 => {
                 let id = r.u32();
                 self.objs.insert(
@@ -1148,53 +1931,159 @@ target_surface={} crop=({},{} {}x{}) backing={}x{} mapped_src=({},{}..{},{}) map
                     },
                 );
                 // Give input focus to this toplevel's surface (MVP: newest toplevel is focused).
-                if let Some(Obj::XdgSurface { surface }) = self.objs.get(&m.object) {
-                    let surface = *surface;
+                if let Some(surface) = self.wl_surface_of_xdg(m.object) {
                     self.focus = Some(surface);
                     self.ptr_entered = false;
                     self.kbd_entered = false;
                 }
             }
             2 => {
+                // get_popup(id, parent: xdg_surface?, positioner). Resolve the positioner NOW into a fixed
+                // (x,y,w,h) geometry; the initial commit will replay it as xdg_popup.configure.
                 let id = r.u32();
-                self.objs.insert(id, Obj::Other); // get_popup
+                let _parent = r.u32();
+                let positioner = r.u32();
+                let (x, y, w, h) = match self.objs.get(&positioner) {
+                    Some(Obj::XdgPositioner(p)) => p.geometry(),
+                    _ => (0, 0, 1, 1),
+                };
+                self.objs.insert(
+                    id,
+                    Obj::XdgPopup {
+                        xdg_surface: m.object,
+                        x,
+                        y,
+                        w,
+                        h,
+                    },
+                );
             }
             3 => {
-                // xdg_surface state is double-buffered and takes effect on the next wl_surface.commit.
+                // set_window_geometry: double-buffered, takes effect on the next wl_surface.commit.
                 let x = r.i32();
                 let y = r.i32();
                 let w = r.i32();
                 let h = r.i32();
                 if w > 0 && h > 0 {
-                    let surface = match self.objs.get(&m.object) {
-                        Some(Obj::XdgSurface { surface }) => *surface,
-                        _ => return,
+                    let Some(surface) = self.wl_surface_of_xdg(m.object) else {
+                        return;
                     };
                     if let Some(Obj::Surface(s)) = self.objs.get_mut(&surface) {
                         s.pending_window_geometry = Some((x, y, w, h));
                     }
                 }
             }
-            _ => {} // ack_configure: accepted
+            _ => {} // ack_configure(4): the client accepted a configure; accepted (single-window MVP).
         }
     }
 
-    // ---- xdg_toplevel: set_title(2) ----
+    // ---- xdg_toplevel: destroy(0), set_parent(1), set_title(2), set_app_id(3), show_window_menu(4),
+    //      move(5), resize(6), set_max_size(7), set_min_size(8), set_maximized(9), unset_maximized(10),
+    //      set_fullscreen(11), unset_fullscreen(12), set_minimized(13). ----
     fn xdg_toplevel(&mut self, m: Message) {
-        if m.opcode == 2 {
-            let mut r = m.reader();
-            let title = r.string();
-            // Route the title back to the owning surface.
-            if let Some(Obj::XdgToplevel { xdg_surface }) = self.objs.get(&m.object) {
-                let xdg = *xdg_surface;
-                if let Some(Obj::XdgSurface { surface }) = self.objs.get(&xdg) {
-                    let surface = *surface;
+        // XDG_TOPLEVEL_STATE_*: maximized=1, fullscreen=2, resizing=3, activated=4.
+        const ST_MAXIMIZED: u32 = 1;
+        const ST_FULLSCREEN: u32 = 2;
+        const ST_ACTIVATED: u32 = 4;
+        let mut r = m.reader();
+        let xdg = match self.objs.get(&m.object) {
+            Some(Obj::XdgToplevel { xdg_surface }) => *xdg_surface,
+            _ => return,
+        };
+        match m.opcode {
+            0 => {
+                // destroy: unmap the toplevel. Clear focus if this was the focused surface.
+                if let Some(surface) = self.wl_surface_of_toplevel(m.object) {
+                    if self.focus == Some(surface) {
+                        self.focus = None;
+                    }
+                }
+                self.objs.remove(&m.object);
+            }
+            2 => {
+                // set_title(title)
+                let title = r.string();
+                if let Some(surface) = self.wl_surface_of_xdg(xdg) {
                     self.titles.insert(surface, title.clone());
                     if let Some(Obj::Surface(s)) = self.objs.get_mut(&surface) {
                         s.title = title;
                     }
                 }
             }
+            5 => {
+                // move(seat, serial): the client asks the compositor to start an interactive, user-driven
+                // window drag. Record the target surface; the live presenter loop turns this into a HOST
+                // NSWindow drag ONLY here (the request-gated fix vs. blanket movable-by-window-background).
+                if let Some(surface) = self.wl_surface_of_toplevel(m.object) {
+                    self.pending_move = Some(surface);
+                }
+            }
+            7 => {
+                // set_max_size(width, height)
+                let w = r.i32().max(0);
+                let h = r.i32().max(0);
+                if let Some(surface) = self.wl_surface_of_xdg(xdg) {
+                    if let Some(Obj::Surface(s)) = self.objs.get_mut(&surface) {
+                        s.max_size = (w, h);
+                    }
+                }
+            }
+            8 => {
+                // set_min_size(width, height)
+                let w = r.i32().max(0);
+                let h = r.i32().max(0);
+                if let Some(surface) = self.wl_surface_of_xdg(xdg) {
+                    if let Some(Obj::Surface(s)) = self.objs.get_mut(&surface) {
+                        s.min_size = (w, h);
+                    }
+                }
+            }
+            9 => {
+                // set_maximized: compositor MUST answer with a configure carrying the maximized state so the
+                // client repaints for it. Use the current on-screen size as the hint.
+                let (w, h) = self.configure_hint_size(xdg);
+                self.send_toplevel_configure(xdg, w, h, &[ST_MAXIMIZED, ST_ACTIVATED]);
+            }
+            10 => {
+                // unset_maximized → back to floating.
+                let (w, h) = self.configure_hint_size(xdg);
+                self.send_toplevel_configure(xdg, w, h, &[ST_ACTIVATED]);
+            }
+            11 => {
+                // set_fullscreen(output)
+                let (w, h) = self.configure_hint_size(xdg);
+                self.send_toplevel_configure(xdg, w, h, &[ST_FULLSCREEN, ST_ACTIVATED]);
+            }
+            12 => {
+                // unset_fullscreen
+                let (w, h) = self.configure_hint_size(xdg);
+                self.send_toplevel_configure(xdg, w, h, &[ST_ACTIVATED]);
+            }
+            // set_parent(1) / set_app_id(3) / show_window_menu(4) / resize(6) / set_minimized(13):
+            // accepted. resize is left to native window chrome (no host-driven interactive resize hook);
+            // set_minimized needs no configure per spec.
+            _ => {}
+        }
+    }
+
+    /// Size hint `(w,h)` to put in a state-change configure: the live window content size if the presenter
+    /// knows it, else `(0,0)` meaning "client decides" (a valid configure per xdg_toplevel.configure).
+    fn configure_hint_size(&self, xdg: u32) -> (i32, i32) {
+        self.wl_surface_of_xdg(xdg)
+            .and_then(|sid| self.present.window_content_size(sid))
+            .unwrap_or((0, 0))
+    }
+
+    // ---- xdg_popup: destroy(0), grab(1), reposition(2). ----
+    fn xdg_popup(&mut self, m: Message) {
+        match m.opcode {
+            0 => {
+                // destroy: dismiss + unmap the popup.
+                self.objs.remove(&m.object);
+            }
+            // grab(seat, serial): grant the explicit grab (menus). We do not model a separate grab-focus
+            // stack in this MVP; accepting keeps Chrome's menu open until it destroys the popup itself.
+            _ => {}
         }
     }
 
@@ -1364,6 +2253,78 @@ target_surface={} crop=({},{} {}x{}) backing={}x{} mapped_src=({},{}..{},{}) map
         }
     }
 
+    // ---- wp_presentation: destroy(0), feedback(1, surface, callback) ----
+    // `feedback` requests presentation timing for the surface's NEXT content update (the commit that
+    // follows). We record the callback id against the surface; it is answered in `commit` once the frame
+    // is presented. See weston `presentation_feedback` / wlroots `wlr_presentation_surface_textured`.
+    fn wp_presentation(&mut self, m: Message) {
+        if m.opcode != 1 {
+            return; // destroy(0): the global object is inert; existing feedback objects are unaffected.
+        }
+        let mut r = m.reader();
+        let surface = r.u32();
+        let callback = r.u32();
+        self.objs.insert(callback, Obj::PresentationFeedback);
+        if let Some(Obj::Surface(s)) = self.objs.get_mut(&surface) {
+            s.pending_feedback.push(callback);
+        } else {
+            // No such surface (or wrong role): discard immediately so the client's object is cleaned up.
+            self.conn.send(&Message::new(callback, 2)); // discarded [opcode 2]
+            self.conn.send(&Message::new(WL_DISPLAY, 1).u32(callback)); // delete_id
+            self.objs.remove(&callback);
+        }
+    }
+
+    /// Answer every `wp_presentation_feedback` requested for surface `sid`'s just-processed commit. When
+    /// `presented` is true we emit `sync_output` + `presented` (monotonic timestamp, mode refresh interval,
+    /// MSC, vsync flag); otherwise `discarded`. Each feedback object is terminal, so we also send the
+    /// matching `wl_display.delete_id` (exactly as the frame `wl_callback` is retired). Mirrors weston
+    /// `weston_presentation_feedback_present`/`_discard`.
+    fn send_presentation_feedback(&mut self, sid: u32, presented: bool) {
+        let cbs = match self.objs.get_mut(&sid) {
+            Some(Obj::Surface(s)) if !s.pending_feedback.is_empty() => {
+                std::mem::take(&mut s.pending_feedback)
+            }
+            _ => return,
+        };
+        if presented {
+            let (secs, nsec) = monotonic_now();
+            let tv_sec_hi = (secs >> 32) as u32;
+            let tv_sec_lo = (secs & 0xffff_ffff) as u32;
+            let refresh = output_refresh_ns();
+            self.present_seq = self.present_seq.wrapping_add(1);
+            let seq = self.present_seq;
+            let seq_hi = (seq >> 32) as u32;
+            let seq_lo = (seq & 0xffff_ffff) as u32;
+            let output = self.output;
+            for cb in cbs {
+                if let Some(out) = output {
+                    // sync_output(output) [opcode 0] — precedes presented, names the surface's output.
+                    self.conn.send(&Message::new(cb, 0).u32(out));
+                }
+                // presented(tv_sec_hi, tv_sec_lo, tv_nsec, refresh, seq_hi, seq_lo, flags) [opcode 1]
+                self.conn.send(
+                    &Message::new(cb, 1)
+                        .u32(tv_sec_hi)
+                        .u32(tv_sec_lo)
+                        .u32(nsec)
+                        .u32(refresh)
+                        .u32(seq_hi)
+                        .u32(seq_lo)
+                        .u32(WP_PRESENTATION_KIND_VSYNC),
+                );
+                self.conn.send(&Message::new(WL_DISPLAY, 1).u32(cb)); // delete_id
+                self.objs.remove(&cb);
+            }
+        } else {
+            for cb in cbs {
+                self.conn.send(&Message::new(cb, 2)); // discarded [opcode 2]
+                self.conn.send(&Message::new(WL_DISPLAY, 1).u32(cb)); // delete_id
+                self.objs.remove(&cb);
+            }
+        }
+    }
+
     // ---- wl_seat: get_pointer(0)/get_keyboard(1)/get_touch(2) ----
     fn wl_seat(&mut self, m: Message) {
         let mut r = m.reader();
@@ -1386,22 +2347,156 @@ target_surface={} crop=({},{} {}x{}) backing={}x{} mapped_src=({},{}..{},{}) map
                 }
             }
             2 => {
+                // get_touch(id): track the object so the touch injection API can deliver events. There is
+                // no touch input source on the macOS backend today, but a touch-capable seat must hand out a
+                // working wl_touch (the events are wired in touch_down/up/motion/frame/cancel below).
                 let id = r.u32();
-                self.objs.insert(id, Obj::Other); // wl_touch (deferred)
+                self.objs.insert(id, Obj::Other);
+                self.touch = Some(id);
             }
             _ => {}
         }
     }
 
     // ---- wl_subcompositor: destroy(0), get_subsurface(1, id, surface, parent) ----
-    // A subsurface is a *role* attached to an existing wl_surface; the surface keeps committing buffers
-    // through the normal wl_surface path. We only need to consume the new_id so the client's object map
-    // stays in sync — positioning/sync semantics are a no-op for the single-window MVP present path.
+    // get_subsurface gives `surface` the subsurface role: it becomes a child of `parent`, composited
+    // into the parent's frame at a client-set position/z-order, initially in synchronized mode
+    // (wl_subcompositor.xml get_subsurface; wlroots `subcompositor_handle_get_subsurface`,
+    // types/wlr_subcompositor.c:308-354).
     fn wl_subcompositor(&mut self, m: Message) {
-        if m.opcode == 1 {
-            let mut r = m.reader();
-            let id = r.u32(); // new wl_subsurface id
+        if m.opcode != 1 {
+            return;
+        }
+        let mut r = m.reader();
+        let id = r.u32(); // new wl_subsurface id
+        let surface = r.u32();
+        let parent = r.u32();
+        let valid = surface != parent
+            && matches!(self.objs.get(&surface), Some(Obj::Surface(_)))
+            && matches!(self.objs.get(&parent), Some(Obj::Surface(_)))
+            // bad_parent: a surface may not be an ancestor of its own parent (cycle).
+            && self.root_surface(parent) != surface;
+        if !valid {
             self.objs.insert(id, Obj::Other);
+            return;
+        }
+        self.objs.insert(id, Obj::Subsurface { surface });
+        if let Some(Obj::Surface(s)) = self.objs.get_mut(&surface) {
+            s.subsurface_parent = Some(parent);
+            s.subsurface_sync = true; // subsurfaces start synchronized
+        }
+        if let Some(Obj::Surface(p)) = self.objs.get_mut(&parent) {
+            if !p.children.contains(&surface) {
+                p.children.push(surface); // new subsurface goes on top of the stack
+            }
+        }
+    }
+
+    // ---- wl_subsurface: destroy(0), set_position(1), place_above(2), place_below(3), set_sync(4),
+    //      set_desync(5) ----
+    // Reference: wlroots `subsurface_implementation` (types/wlr_subcompositor.c:184-191).
+    fn wl_subsurface(&mut self, m: Message) {
+        let surface = match self.objs.get(&m.object) {
+            Some(Obj::Subsurface { surface }) => *surface,
+            _ => return,
+        };
+        let mut r = m.reader();
+        match m.opcode {
+            0 => {
+                // destroy: detach the role; the wl_surface itself lives on.
+                let parent = match self.objs.get(&surface) {
+                    Some(Obj::Surface(s)) => s.subsurface_parent,
+                    _ => None,
+                };
+                if let Some(p) = parent {
+                    if let Some(Obj::Surface(ps)) = self.objs.get_mut(&p) {
+                        ps.children.retain(|c| *c != surface);
+                    }
+                }
+                if let Some(Obj::Surface(s)) = self.objs.get_mut(&surface) {
+                    s.subsurface_parent = None;
+                }
+                self.objs.remove(&m.object);
+            }
+            1 => {
+                // set_position(x, y): double-buffered onto the parent's commit (wlroots writes
+                // subsurface->pending.x/y, applied in surface_state_move at parent commit).
+                let x = r.i32();
+                let y = r.i32();
+                if let Some(Obj::Surface(s)) = self.objs.get_mut(&surface) {
+                    s.pending_sub_x = x;
+                    s.pending_sub_y = y;
+                    s.has_pending_pos = true;
+                }
+            }
+            2 => {
+                let sibling = r.u32();
+                self.subsurface_place(surface, sibling, true);
+            }
+            3 => {
+                let sibling = r.u32();
+                self.subsurface_place(surface, sibling, false);
+            }
+            4 => {
+                if let Some(Obj::Surface(s)) = self.objs.get_mut(&surface) {
+                    s.subsurface_sync = true;
+                }
+            }
+            5 => {
+                // set_desync: if the subsurface is now effectively desynchronized and holds a cached
+                // commit, apply it immediately and recomposite (wlroots subsurface_handle_set_desync).
+                if let Some(Obj::Surface(s)) = self.objs.get_mut(&surface) {
+                    s.subsurface_sync = false;
+                }
+                if !self.is_effectively_synchronized(surface) {
+                    let mut dirty = false;
+                    if let Some(Obj::Surface(s)) = self.objs.get_mut(&surface) {
+                        if s.has_cached {
+                            s.current_buffer = s.cached_buffer;
+                            s.pending_release = s.cached_buffer;
+                            s.has_cached = false;
+                            if let Some(cb) = s.cached_frame.take() {
+                                s.pending_frame = Some(cb);
+                            }
+                            dirty = true;
+                        }
+                        if s.has_pending_pos {
+                            s.subsurface_x = s.pending_sub_x;
+                            s.subsurface_y = s.pending_sub_y;
+                            s.has_pending_pos = false;
+                            dirty = true;
+                        }
+                    }
+                    if dirty {
+                        let root = self.root_surface(surface);
+                        self.present_root(root);
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// Reorder `surface` within its parent's bottom→top child stack relative to `sibling`. All
+    /// subsurfaces are modeled as stacking above the parent, so place_above/below the parent itself both
+    /// resolve to the bottom of that stack (place_below-the-parent — rendering under the parent — is not
+    /// represented; overlays place above). place relative to a real sibling honors true z-order.
+    fn subsurface_place(&mut self, surface: u32, sibling: u32, above: bool) {
+        let parent = match self.objs.get(&surface) {
+            Some(Obj::Surface(s)) => s.subsurface_parent,
+            _ => return,
+        };
+        let Some(parent) = parent else { return };
+        if let Some(Obj::Surface(p)) = self.objs.get_mut(&parent) {
+            p.children.retain(|c| *c != surface);
+            if sibling == parent {
+                p.children.insert(0, surface);
+            } else if let Some(pos) = p.children.iter().position(|c| *c == sibling) {
+                let idx = if above { pos + 1 } else { pos };
+                p.children.insert(idx.min(p.children.len()), surface);
+            } else {
+                p.children.push(surface); // unknown sibling: leave on top
+            }
         }
     }
 
@@ -1511,6 +2606,13 @@ target_surface={} crop=({},{} {}x{}) backing={}x{} mapped_src=({},{}..{},{}) map
                 .i32(fixed(x))
                 .i32(fixed(y)),
         );
+        // enter is a logical pointer event and must be closed by a frame at v5+ so the client processes
+        // the focus change before the first motion/button/axis group (weston libweston/input.c: every
+        // wl_pointer_send_enter is immediately followed by pointer_send_frame; wayland.xml wl_pointer.frame:
+        // "The wl_pointer.enter and wl_pointer.leave events ... are also grouped by a wl_pointer.frame").
+        if self.seat_ver >= 5 {
+            self.conn.send(&Message::new(ptr, 5)); // frame
+        }
         self.ptr_entered = true;
     }
 
@@ -1525,6 +2627,18 @@ target_surface={} crop=({},{} {}x{}) backing={}x{} mapped_src=({},{}..{},{}) map
         // enter(serial, surface, keys[] (currently-pressed, empty))
         self.conn
             .send(&Message::new(kbd, 1).u32(s).u32(focus).array(&[]));
+        // A keyboard.enter must be paired with the initial modifier state, using the SAME serial, so the
+        // client's xkb_state starts consistent (weston libweston/input.c send_enter_to_resource_list:
+        // wl_keyboard_send_enter is immediately followed by send_modifiers_to_resource with `serial`).
+        // modifiers(serial, depressed, latched, locked, group) — all zero at focus-in.
+        self.conn.send(
+            &Message::new(kbd, 4)
+                .u32(s)
+                .u32(0)
+                .u32(0)
+                .u32(0)
+                .u32(0),
+        );
         self.kbd_entered = true;
     }
 
@@ -1565,17 +2679,58 @@ target_surface={} crop=({},{} {}x{}) backing={}x{} mapped_src=({},{}..{},{}) map
         self.conn.flush().ok();
     }
 
-    /// Scroll axis (0=vertical, 1=horizontal), `value` in surface coords (fixed).
-    pub fn pointer_axis(&mut self, axis: u32, value: i32) {
+    /// One scroll event group. `dx`/`dy` are surface-local scroll amounts in pixels (positive dy = scroll
+    /// down/content up, positive dx = scroll right), already sign-corrected by the caller. `precise` marks a
+    /// smooth/trackpad source (continuous pixel scrolling) vs a stepped mouse wheel.
+    ///
+    /// A single logical scroll is delivered as one wl_pointer.frame group: an optional axis_source, then the
+    /// per-axis wl_pointer.axis (+ wl_pointer.axis_discrete for a stepped wheel at v5-7), then the frame that
+    /// tells the client the group is complete. Missing the axis/frame pairing is why scroll appears dead:
+    /// Chrome/viz accumulates axis deltas and only dispatches them on frame (wayland.xml wl_pointer.frame:
+    /// "A client is expected to accumulate the data in all events within the frame before proceeding").
+    pub fn pointer_scroll(&mut self, dx: i32, dy: i32, precise: bool) {
         self.ensure_pointer_enter();
         let Some(ptr) = self.pointer else { return };
+        if dx == 0 && dy == 0 {
+            return;
+        }
         self.time_ms = self.time_ms.wrapping_add(8);
         let t = self.time_ms;
-        // axis(time, axis, value(fixed))
-        self.conn
-            .send(&Message::new(ptr, 4).u32(t).u32(axis).i32(fixed(value)));
+        // axis_source (v5+): finger/continuous smooth scroll for a trackpad, physical wheel otherwise. Sent
+        // once, before the axis events of this frame (wayland.xml wl_pointer.axis_source: "sent before a
+        // wl_pointer.frame event and carries the source information for all events within that frame").
+        const AXIS_SOURCE_WHEEL: u32 = 0;
+        const AXIS_SOURCE_CONTINUOUS: u32 = 2;
+        const AXIS_VERTICAL: u32 = 0;
+        const AXIS_HORIZONTAL: u32 = 1;
         if self.seat_ver >= 5 {
-            self.conn.send(&Message::new(ptr, 5)); // frame
+            let source = if precise {
+                AXIS_SOURCE_CONTINUOUS
+            } else {
+                AXIS_SOURCE_WHEEL
+            };
+            self.conn.send(&Message::new(ptr, 6).u32(source)); // axis_source
+        }
+        // For a stepped wheel the axis value is a small multiple of the click count (weston uses ~10 units
+        // per detent) and axis_discrete carries the integer click count; for a smooth source the pixel delta
+        // is sent verbatim with no discrete steps.
+        for (axis, delta) in [(AXIS_VERTICAL, dy), (AXIS_HORIZONTAL, dx)] {
+            if delta == 0 {
+                continue;
+            }
+            let value = if precise { delta } else { delta * 10 };
+            // axis(time, axis, value(fixed))
+            self.conn
+                .send(&Message::new(ptr, 4).u32(t).u32(axis).i32(fixed(value)));
+            if self.seat_ver >= 5 && !precise {
+                // axis_discrete(axis, discrete) — v5..7 stepped-wheel hint (deprecated by value120 at v8; we
+                // bind v5 so this is the correct field). One detent per unit of delta.
+                self.conn
+                    .send(&Message::new(ptr, 8).u32(axis).i32(delta.signum()));
+            }
+        }
+        if self.seat_ver >= 5 {
+            self.conn.send(&Message::new(ptr, 5)); // frame — closes the scroll group
         }
         self.conn.flush().ok();
     }
@@ -1614,6 +2769,121 @@ target_surface={} crop=({},{} {}x{}) backing={}x{} mapped_src=({},{}..{},{}) map
         );
         self.conn.flush().ok();
     }
+
+    // ---- wl_touch injection (down/motion/up + frame; cancel) ----
+    // Touch events are double-grouped like pointer events: a set of down/motion/up events for one logical
+    // frame is closed by wl_touch.frame (wayland.xml wl_touch.frame: "indicates the end of a contact point
+    // list"). down/motion/up therefore do NOT flush — the caller closes the group with `touch_frame`.
+
+    /// A new touch point `id` at surface-local `(x,y)` pixels. Routed to the focused surface.
+    pub fn touch_down(&mut self, id: i32, x: i32, y: i32) {
+        let (Some(touch), Some(focus)) = (self.touch, self.focus) else {
+            return;
+        };
+        self.last_ptr = (x, y);
+        let s = self.next_serial();
+        self.time_ms = self.time_ms.wrapping_add(8);
+        let t = self.time_ms;
+        // down(serial, time, surface, id, x(fixed), y(fixed))
+        self.conn.send(
+            &Message::new(touch, 0)
+                .u32(s)
+                .u32(t)
+                .u32(focus)
+                .i32(id)
+                .i32(fixed(x))
+                .i32(fixed(y)),
+        );
+    }
+
+    /// Movement of an existing touch point `id`.
+    pub fn touch_motion(&mut self, id: i32, x: i32, y: i32) {
+        let Some(touch) = self.touch else { return };
+        self.last_ptr = (x, y);
+        self.time_ms = self.time_ms.wrapping_add(8);
+        let t = self.time_ms;
+        // motion(time, id, x(fixed), y(fixed))
+        self.conn.send(
+            &Message::new(touch, 2)
+                .u32(t)
+                .i32(id)
+                .i32(fixed(x))
+                .i32(fixed(y)),
+        );
+    }
+
+    /// Release of touch point `id`.
+    pub fn touch_up(&mut self, id: i32) {
+        let Some(touch) = self.touch else { return };
+        let s = self.next_serial();
+        self.time_ms = self.time_ms.wrapping_add(8);
+        let t = self.time_ms;
+        // up(serial, time, id)
+        self.conn.send(&Message::new(touch, 1).u32(s).u32(t).i32(id));
+    }
+
+    /// Close the current touch contact-point set (wl_touch.frame) and flush.
+    pub fn touch_frame(&mut self) {
+        let Some(touch) = self.touch else { return };
+        self.conn.send(&Message::new(touch, 3)); // frame
+        self.conn.flush().ok();
+    }
+
+    /// Cancel the whole active touch sequence (e.g. a gesture was recognized by the compositor).
+    pub fn touch_cancel(&mut self) {
+        let Some(touch) = self.touch else { return };
+        self.conn.send(&Message::new(touch, 4)); // cancel
+        self.conn.flush().ok();
+    }
+}
+
+impl<P: Presenter> Drop for Server<P> {
+    /// Unmap every shm pool still mapped when the client disconnects. Without this, each pool's `mmap`
+    /// (kept alive across the connection for `resize`) would leak the shared mapping + fd until process
+    /// exit — a real address-space/fd leak for a long-lived compositor serving many connections.
+    fn drop(&mut self) {
+        for obj in self.objs.values() {
+            if let Obj::ShmPool { fd, ptr, size, .. } = obj {
+                unsafe {
+                    libc::munmap(*ptr as *mut libc::c_void, (*size).max(1));
+                    libc::close(*fd);
+                }
+            }
+        }
+    }
+}
+
+/// Apply a `wl_output` buffer transform (0..=7) to a tight BGRA image, producing the surface-oriented
+/// image. The per-pixel mapping matches wlroots' `wlr_box_transform` (util/box.c:129-162): for each
+/// destination (surface) pixel we read the corresponding source (buffer) pixel. Transform 0 (NORMAL) is a
+/// zero-copy passthrough.
+fn apply_buffer_transform(w: i32, h: i32, src: Vec<u8>, transform: i32) -> (i32, i32, Vec<u8>) {
+    if transform == 0 || w <= 0 || h <= 0 {
+        return (w, h, src);
+    }
+    // Surface (destination) dimensions: odd transforms (90/270/flipped-90/flipped-270) swap w/h.
+    let (sw, sh) = if transform % 2 == 1 { (h, w) } else { (w, h) };
+    let bw = w; // buffer width, for indexing source rows.
+    let mut out = vec![0u8; (sw as usize) * (sh as usize) * 4];
+    for dy in 0..sh {
+        for dx in 0..sw {
+            // Inverse map: surface pixel (dx,dy) → buffer pixel (bx,by).
+            let (bx, by) = match transform {
+                1 => (sh - 1 - dy, dx),           // 90
+                2 => (sw - 1 - dx, sh - 1 - dy),  // 180
+                3 => (dy, sw - 1 - dx),           // 270
+                4 => (sw - 1 - dx, dy),           // flipped
+                5 => (dy, dx),                    // flipped-90
+                6 => (dx, sh - 1 - dy),           // flipped-180
+                7 => (sh - 1 - dy, sw - 1 - dx),  // flipped-270
+                _ => (dx, dy),
+            };
+            let si = ((by as usize) * (bw as usize) + bx as usize) * 4;
+            let di = ((dy as usize) * (sw as usize) + dx as usize) * 4;
+            out[di..di + 4].copy_from_slice(&src[si..si + 4]);
+        }
+    }
+    (sw, sh, out)
 }
 
 #[cfg(test)]
@@ -1655,11 +2925,706 @@ mod tests {
             libc::close(sv[1]);
         }
     }
+
+    fn test_server() -> (Server<PngPresenter>, [i32; 2]) {
+        let mut sv = [0i32; 2];
+        assert_eq!(
+            unsafe { libc::socketpair(libc::AF_UNIX, libc::SOCK_STREAM, 0, sv.as_mut_ptr()) },
+            0
+        );
+        (
+            Server::new(sv[1], PngPresenter::new("/tmp/dd-display-unit-test")),
+            sv,
+        )
+    }
+
+    fn teardown(server: Server<PngPresenter>, sv: [i32; 2]) {
+        drop(server);
+        unsafe {
+            libc::close(sv[0]);
+            libc::close(sv[1]);
+        }
+    }
+
+    /// Map `fd`'s first `size` bytes read-only; caller stashes it into an `Obj::ShmPool`.
+    unsafe fn mmap_ro(fd: i32, size: usize) -> *mut u8 {
+        let p = libc::mmap(
+            std::ptr::null_mut(),
+            size.max(1),
+            libc::PROT_READ,
+            libc::MAP_SHARED,
+            fd,
+            0,
+        );
+        assert_ne!(p, libc::MAP_FAILED, "mmap failed");
+        p as *mut u8
+    }
+
+    // ---- wl_surface.set_buffer_transform: the CPU orientation matches wlroots' box.c convention ----
+    #[test]
+    fn buffer_transform_180_reverses_pixels() {
+        // 2x1 buffer: red, then green.
+        let src = vec![1, 0, 0, 255, 2, 0, 0, 255];
+        let (w, h, out) = apply_buffer_transform(2, 1, src, 2); // WL_OUTPUT_TRANSFORM_180
+        assert_eq!((w, h), (2, 1));
+        assert_eq!(out, vec![2, 0, 0, 255, 1, 0, 0, 255]);
+    }
+
+    #[test]
+    fn buffer_transform_90_swaps_dimensions() {
+        // 2x1 buffer rotated 90°: dims swap to 1x2.
+        let src = vec![1, 0, 0, 255, 2, 0, 0, 255];
+        let (w, h, out) = apply_buffer_transform(2, 1, src, 1); // WL_OUTPUT_TRANSFORM_90
+        assert_eq!((w, h), (1, 2));
+        // dst(0,0)->buffer(1,0)=green ; dst(0,1)->buffer(0,0)=red
+        assert_eq!(out, vec![2, 0, 0, 255, 1, 0, 0, 255]);
+    }
+
+    #[test]
+    fn buffer_transform_normal_is_passthrough() {
+        let src = vec![9, 8, 7, 6];
+        let (w, h, out) = apply_buffer_transform(1, 1, src.clone(), 0);
+        assert_eq!((w, h, out), (1, 1, src));
+    }
+
+    // ---- wl_region coverage used by set_opaque_region ----
+    #[test]
+    fn region_covers_only_when_fully_contained_and_unclipped() {
+        let full = vec![RegionOp { x: 0, y: 0, w: 100, h: 50, add: true }];
+        assert!(region_covers(&full, 100, 50));
+        assert!(region_covers(&full, 80, 40));
+        // A subtract punching a hole means it is no longer fully opaque.
+        let holed = vec![
+            RegionOp { x: 0, y: 0, w: 100, h: 50, add: true },
+            RegionOp { x: 10, y: 10, w: 5, h: 5, add: false },
+        ];
+        assert!(!region_covers(&holed, 100, 50));
+        // A partial add does not cover the surface.
+        let partial = vec![RegionOp { x: 0, y: 0, w: 50, h: 50, add: true }];
+        assert!(!region_covers(&partial, 100, 50));
+        assert!(!region_covers(&[], 100, 50));
+    }
+
+    // ---- set_opaque_region forces alpha in the extracted shm pixels (white-border fix) ----
+    #[test]
+    fn opaque_region_forces_alpha_opaque() {
+        let (mut server, sv) = test_server();
+        // 2x2 ARGB buffer, every pixel with alpha=0 (fully transparent bytes).
+        let data = vec![10u8, 20, 30, 0, 11, 21, 31, 0, 12, 22, 32, 0, 13, 23, 33, 0];
+        let fd = crate::keymap::anon_fd_with(&data).expect("anon fd");
+        let ptr = unsafe { mmap_ro(fd, data.len()) };
+        server.objs.insert(
+            2,
+            Obj::ShmPool { fd, ptr, size: data.len(), buffers: 1, zombie: false },
+        );
+        server.objs.insert(
+            3,
+            Obj::Buffer { pool: 2, offset: 0, width: 2, height: 2, stride: 8, format: FMT_ARGB8888 },
+        );
+        let mut surface = Surface::default();
+        surface.opaque_region = vec![RegionOp { x: 0, y: 0, w: 2, h: 2, add: true }];
+        server.objs.insert(7, Obj::Surface(surface));
+
+        let sb = server.extract(7, 3, "t").expect("extracted");
+        assert!(sb.bgra.chunks_exact(4).all(|p| p[3] == 0xff), "alpha forced opaque");
+
+        // Without an opaque region the transparent alpha is preserved.
+        if let Some(Obj::Surface(s)) = server.objs.get_mut(&7) {
+            s.opaque_region.clear();
+        }
+        let sb = server.extract(7, 3, "t").expect("extracted");
+        assert!(sb.bgra.chunks_exact(4).all(|p| p[3] == 0x00), "alpha preserved");
+        teardown(server, sv);
+    }
+
+    // ---- wl_shm_pool.resize: a buffer in the grown region extracts only after resize ----
+    #[test]
+    fn shm_pool_resize_grows_mapping() {
+        let (mut server, sv) = test_server();
+        // Back the fd with the full 4x4 image, but map only the first row (16 bytes) initially.
+        let full: Vec<u8> = (0..64).map(|i| i as u8).collect();
+        let fd = crate::keymap::anon_fd_with(&full).expect("anon fd");
+        let ptr = unsafe { mmap_ro(fd, 16) };
+        server.objs.insert(
+            2,
+            Obj::ShmPool { fd, ptr, size: 16, buffers: 0, zombie: false },
+        );
+        // create_buffer(4x4) via the real handler so refcount is exercised.
+        server.wl_shm_pool(
+            Message::new(2, 0).u32(3).i32(0).i32(4).i32(4).i32(16).u32(FMT_ARGB8888),
+        );
+        server.objs.insert(7, Obj::Surface(Surface::default()));
+        // Before resize the buffer's rows spill past the 16-byte mapping → rejected.
+        assert!(server.extract(7, 3, "t").is_none(), "oversized buffer rejected pre-resize");
+        // resize(64) re-maps.
+        server.wl_shm_pool(Message::new(2, 2).i32(64));
+        let sb = server.extract(7, 3, "t").expect("extracts after resize");
+        assert_eq!((sb.width, sb.height), (4, 4));
+        teardown(server, sv);
+    }
+
+    // ---- pool + buffer refcount: mapping is freed only once buffers are gone ----
+    #[test]
+    fn pool_freed_after_buffers_destroyed() {
+        let (mut server, sv) = test_server();
+        let data = vec![0u8; 16];
+        let fd = crate::keymap::anon_fd_with(&data).expect("anon fd");
+        let ptr = unsafe { mmap_ro(fd, data.len()) };
+        server.objs.insert(
+            2,
+            Obj::ShmPool { fd, ptr, size: data.len(), buffers: 0, zombie: false },
+        );
+        server.wl_shm_pool(
+            Message::new(2, 0).u32(3).i32(0).i32(2).i32(2).i32(8).u32(FMT_ARGB8888),
+        );
+        // Destroying the pool while a buffer is alive must NOT unmap it (spec: buffers keep it alive).
+        server.wl_shm_pool(Message::new(2, 1));
+        assert!(matches!(server.objs.get(&2), Some(Obj::ShmPool { zombie: true, .. })));
+        // Destroying the last buffer frees the pool.
+        server.wl_buffer(Message::new(3, 0));
+        assert!(server.objs.get(&2).is_none(), "pool unmapped after last buffer");
+        assert!(server.objs.get(&3).is_none(), "buffer object removed");
+        teardown(server, sv);
+    }
+
+    // ---- wl_surface.destroy releases the held buffer and drops the surface + focus ----
+    #[test]
+    fn surface_destroy_cleans_up() {
+        let (mut server, sv) = test_server();
+        let mut surface = Surface::default();
+        surface.current_buffer = Some(3);
+        server.objs.insert(7, Obj::Surface(surface));
+        server.focus = Some(7);
+        server.wl_surface(Message::new(7, 0)); // destroy
+        assert!(server.objs.get(&7).is_none(), "surface removed");
+        assert_eq!(server.focus, None, "focus cleared");
+        teardown(server, sv);
+    }
+
+    // ---- double-buffered transform/offset/opaque only take effect at commit ----
+    #[test]
+    fn buffer_transform_is_double_buffered() {
+        let (mut server, sv) = test_server();
+        server.objs.insert(7, Obj::Surface(Surface::default()));
+        // Configure so commit() doesn't short-circuit into the xdg handshake.
+        if let Some(Obj::Surface(s)) = server.objs.get_mut(&7) {
+            s.configured = true;
+        }
+        server.wl_surface(Message::new(7, 7).i32(2)); // set_buffer_transform(180)
+        // Not applied until commit.
+        match server.objs.get(&7) {
+            Some(Obj::Surface(s)) => {
+                assert_eq!(s.buffer_transform, 0);
+                assert_eq!(s.pending_buffer_transform, Some(2));
+            }
+            _ => panic!(),
+        }
+        server.commit(7);
+        match server.objs.get(&7) {
+            Some(Obj::Surface(s)) => {
+                assert_eq!(s.buffer_transform, 2);
+                assert_eq!(s.pending_buffer_transform, None);
+            }
+            _ => panic!(),
+        }
+        teardown(server, sv);
+    }
+
+    // ---- wl_subsurface composition ----
+
+    fn solid(bgra: [u8; 4], w: i32, h: i32) -> Obj {
+        Obj::SolidColorBuffer {
+            width: w,
+            height: h,
+            bgra,
+        }
+    }
+
+    // rgba pixel at (x,y) in the last presented frame.
+    fn px(last: &(u32, i32, i32, Vec<u8>), x: i32, y: i32) -> [u8; 4] {
+        let (_, w, _, rgba) = last;
+        let i = ((y * *w + x) * 4) as usize;
+        [rgba[i], rgba[i + 1], rgba[i + 2], rgba[i + 3]]
+    }
+
+    // BGRA constants (memory order) and their RGBA-after-present equivalents.
+    const RED_BGRA: [u8; 4] = [0, 0, 255, 255];
+    const BLUE_BGRA: [u8; 4] = [255, 0, 0, 255];
+    const GREEN_BGRA: [u8; 4] = [0, 255, 0, 255];
+    const RED_RGBA: [u8; 4] = [255, 0, 0, 255];
+    const BLUE_RGBA: [u8; 4] = [0, 0, 255, 255];
+    const GREEN_RGBA: [u8; 4] = [0, 255, 0, 255];
+
+    #[test]
+    fn subsurface_composited_at_position_after_parent_commit() {
+        let (mut server, sv) = test_server();
+        // Parent: red 4x4. Child subsurface: blue 2x2 at (1,1).
+        server.objs.insert(10, Obj::Surface(Surface::default()));
+        server.objs.insert(11, solid(RED_BGRA, 4, 4));
+        server.objs.insert(20, Obj::Surface(Surface::default()));
+        server.objs.insert(21, solid(BLUE_BGRA, 2, 2));
+        server.objs.insert(5, Obj::Subcompositor);
+        // get_subsurface(id=30, surface=20, parent=10)
+        server.wl_subcompositor(Message::new(5, 1).u32(30).u32(20).u32(10));
+        // set_position(1, 1)
+        server.wl_subsurface(Message::new(30, 1).i32(1).i32(1));
+
+        // Commit the child first (synchronized ⇒ cached, NOT presented, NOT applied).
+        if let Some(Obj::Surface(s)) = server.objs.get_mut(&20) {
+            s.pending_buffer = Some(21);
+            s.attached = true;
+        }
+        server.commit(20);
+        assert_eq!(server.present.frames, 0, "sync child commit must not present");
+        assert!(
+            matches!(server.objs.get(&20), Some(Obj::Surface(s)) if s.current_buffer.is_none()),
+            "sync child commit must be cached, not applied"
+        );
+
+        // Commit the parent ⇒ cached child state applied + composited.
+        if let Some(Obj::Surface(s)) = server.objs.get_mut(&10) {
+            s.pending_buffer = Some(11);
+            s.attached = true;
+        }
+        server.commit(10);
+        assert_eq!(server.present.frames, 1);
+        let last = server.present.last.clone().expect("presented");
+        assert_eq!((last.1, last.2), (4, 4));
+        // Corners are the parent (red); the 2x2 block at (1,1)..(2,2) is the child (blue).
+        assert_eq!(px(&last, 0, 0), RED_RGBA);
+        assert_eq!(px(&last, 3, 3), RED_RGBA);
+        assert_eq!(px(&last, 1, 1), BLUE_RGBA);
+        assert_eq!(px(&last, 2, 2), BLUE_RGBA);
+        assert_eq!(px(&last, 0, 3), RED_RGBA);
+
+        teardown(server, sv);
+    }
+
+    #[test]
+    fn subsurface_place_above_controls_z_order() {
+        let (mut server, sv) = test_server();
+        // Parent red 4x4; two full-cover children A(blue) and B(green) both at (0,0).
+        server.objs.insert(10, Obj::Surface(Surface::default()));
+        server.objs.insert(11, solid(RED_BGRA, 4, 4));
+        server.objs.insert(20, Obj::Surface(Surface::default())); // A
+        server.objs.insert(21, solid(BLUE_BGRA, 4, 4));
+        server.objs.insert(40, Obj::Surface(Surface::default())); // B
+        server.objs.insert(41, solid(GREEN_BGRA, 4, 4));
+        server.objs.insert(5, Obj::Subcompositor);
+        server.wl_subcompositor(Message::new(5, 1).u32(30).u32(20).u32(10)); // A obj 30
+        server.wl_subcompositor(Message::new(5, 1).u32(50).u32(40).u32(10)); // B obj 50
+        // Default stack order = insertion order [A, B] ⇒ B (green) on top.
+        for (sid, bid) in [(20, 21), (40, 41)] {
+            if let Some(Obj::Surface(s)) = server.objs.get_mut(&sid) {
+                s.pending_buffer = Some(bid);
+                s.attached = true;
+            }
+            server.commit(sid); // cached (sync)
+        }
+        if let Some(Obj::Surface(s)) = server.objs.get_mut(&10) {
+            s.pending_buffer = Some(11);
+            s.attached = true;
+        }
+        server.commit(10);
+        let last = server.present.last.clone().unwrap();
+        assert_eq!(px(&last, 2, 2), GREEN_RGBA, "B (green) starts on top");
+
+        // place_above A over sibling B ⇒ A (blue) now on top.
+        server.wl_subsurface(Message::new(30, 2).u32(40)); // A.place_above(sibling surface B=40)
+        server.commit(10);
+        let last = server.present.last.clone().unwrap();
+        assert_eq!(px(&last, 2, 2), BLUE_RGBA, "after place_above, A (blue) is on top");
+
+        // place_below A under B ⇒ B (green) back on top.
+        server.wl_subsurface(Message::new(30, 3).u32(40)); // A.place_below(B)
+        server.commit(10);
+        let last = server.present.last.clone().unwrap();
+        assert_eq!(px(&last, 2, 2), GREEN_RGBA, "after place_below, B (green) is on top");
+
+        teardown(server, sv);
+    }
+
+    #[test]
+    fn subsurface_desync_applies_immediately() {
+        let (mut server, sv) = test_server();
+        server.objs.insert(10, Obj::Surface(Surface::default()));
+        server.objs.insert(11, solid(RED_BGRA, 4, 4));
+        server.objs.insert(20, Obj::Surface(Surface::default()));
+        server.objs.insert(21, solid(BLUE_BGRA, 2, 2));
+        server.objs.insert(5, Obj::Subcompositor);
+        server.wl_subcompositor(Message::new(5, 1).u32(30).u32(20).u32(10));
+        // Map the parent first.
+        if let Some(Obj::Surface(s)) = server.objs.get_mut(&10) {
+            s.pending_buffer = Some(11);
+            s.attached = true;
+        }
+        server.commit(10);
+        let base_frames = server.present.frames;
+        // Switch child to desync; a subsequent child commit recomposites the root immediately.
+        server.wl_subsurface(Message::new(30, 5)); // set_desync
+        if let Some(Obj::Surface(s)) = server.objs.get_mut(&20) {
+            s.pending_buffer = Some(21);
+            s.attached = true;
+        }
+        server.commit(20);
+        assert_eq!(
+            server.present.frames,
+            base_frames + 1,
+            "desync child commit recomposites the root"
+        );
+        let last = server.present.last.clone().unwrap();
+        assert_eq!(px(&last, 0, 0), BLUE_RGBA, "desync child applied immediately");
+
+        teardown(server, sv);
+    }
+
+    #[test]
+    fn viewport_source_crop_and_dest_scale_mapping() {
+        let (mut server, sv) = test_server();
+        server.objs.insert(7, Obj::Surface(Surface::default()));
+        // Source crop only (dst unset): surface size becomes the source-rect size.
+        if let Some(Obj::Surface(s)) = server.objs.get_mut(&7) {
+            s.viewport_source = Some((fixed(10), fixed(20), fixed(100), fixed(50)));
+        }
+        let map = server.surface_mapping(7, 200, 100).expect("crop");
+        assert_eq!((map.src_x, map.src_y, map.src_x2, map.src_y2), (10, 20, 110, 70));
+        assert_eq!((map.dst_w, map.dst_h), (100, 50));
+
+        // Add a destination size ⇒ the cropped region scales to dst.
+        if let Some(Obj::Surface(s)) = server.objs.get_mut(&7) {
+            s.viewport_destination = Some((50, 25));
+        }
+        let map = server.surface_mapping(7, 200, 100).expect("crop+scale");
+        assert_eq!((map.src_x, map.src_y, map.src_x2, map.src_y2), (10, 20, 110, 70));
+        assert_eq!((map.dst_w, map.dst_h), (50, 25));
+
+        teardown(server, sv);
+    }
+
+    #[test]
+    fn viewport_source_scales_by_buffer_scale() {
+        let (mut server, sv) = test_server();
+        server.objs.insert(7, Obj::Surface(Surface::default()));
+        // wp_viewport source is in post-buffer-scale surface coords; at buffer_scale=2 it maps to 2x
+        // buffer pixels, and the (dst-unset) surface size is the source size in surface coords.
+        if let Some(Obj::Surface(s)) = server.objs.get_mut(&7) {
+            s.buffer_scale = 2;
+            s.viewport_source = Some((fixed(5), fixed(5), fixed(20), fixed(10)));
+        }
+        let map = server.surface_mapping(7, 100, 100).expect("scaled crop");
+        assert_eq!((map.src_x, map.src_y, map.src_x2, map.src_y2), (10, 10, 50, 30));
+        assert_eq!((map.dst_w, map.dst_h), (20, 10));
+
+        teardown(server, sv);
+    }
+
+    // ---- xdg_shell helpers ----
+
+    /// A server wired to a socketpair; `peer` is the client end we read the compositor's events from.
+    struct Harness {
+        server: Server<PngPresenter>,
+        peer: RawFd,
+        srv: RawFd,
+    }
+
+    impl Harness {
+        fn new() -> Harness {
+            let mut sv = [0i32; 2];
+            assert_eq!(
+                unsafe { libc::socketpair(libc::AF_UNIX, libc::SOCK_STREAM, 0, sv.as_mut_ptr()) },
+                0
+            );
+            // Non-blocking peer so draining never hangs.
+            unsafe {
+                let fl = libc::fcntl(sv[0], libc::F_GETFL);
+                libc::fcntl(sv[0], libc::F_SETFL, fl | libc::O_NONBLOCK);
+            }
+            let server = Server::new(sv[1], PngPresenter::new("/tmp/dd-display-xdg-test"));
+            Harness {
+                server,
+                peer: sv[0],
+                srv: sv[1],
+            }
+        }
+
+        fn req(&mut self, object: u32, opcode: u16, body: Message) {
+            let m = Message {
+                object,
+                opcode,
+                body: body.body,
+            };
+            self.server.dispatch(m);
+        }
+
+        /// Flush the server's outbound queue and decode every complete message the client would receive.
+        fn drain(&mut self) -> Vec<(u32, u16, Vec<u8>)> {
+            self.server.conn.flush().ok();
+            let mut buf = [0u8; 8192];
+            let n = unsafe { libc::read(self.peer, buf.as_mut_ptr() as *mut _, buf.len()) };
+            let mut out = Vec::new();
+            if n <= 0 {
+                return out;
+            }
+            let bytes = &buf[..n as usize];
+            let mut pos = 0;
+            while pos + 8 <= bytes.len() {
+                let object = u32::from_ne_bytes(bytes[pos..pos + 4].try_into().unwrap());
+                let word = u32::from_ne_bytes(bytes[pos + 4..pos + 8].try_into().unwrap());
+                let size = (word >> 16) as usize;
+                let opcode = (word & 0xffff) as u16;
+                if size < 8 || pos + size > bytes.len() {
+                    break;
+                }
+                out.push((object, opcode, bytes[pos + 8..pos + size].to_vec()));
+                pos += size;
+            }
+            out
+        }
+    }
+
+    impl Drop for Harness {
+        fn drop(&mut self) {
+            unsafe {
+                libc::close(self.peer);
+                libc::close(self.srv);
+            }
+        }
+    }
+
+    fn body() -> Message {
+        Message::new(0, 0)
+    }
+
+    #[test]
+    fn positioner_geometry_anchor_gravity() {
+        // anchor bottom_left of rect (10,20,100,40) ⇒ (10,60); gravity bottom_right ⇒ no shift; offset 0.
+        let p = XdgPositioner {
+            width: 50,
+            height: 30,
+            anchor_x: 10,
+            anchor_y: 20,
+            anchor_w: 100,
+            anchor_h: 40,
+            anchor: 6,  // bottom_left
+            gravity: 8, // bottom_right
+            offset_x: 0,
+            offset_y: 0,
+        };
+        assert_eq!(p.geometry(), (10, 60, 50, 30));
+
+        // anchor none (centered) of rect (0,0,100,20) ⇒ (50,10); gravity none (centered) ⇒ (-25,-5)+(size)
+        let c = XdgPositioner {
+            width: 40,
+            height: 10,
+            anchor_x: 0,
+            anchor_y: 0,
+            anchor_w: 100,
+            anchor_h: 20,
+            anchor: 0,
+            gravity: 0,
+            offset_x: 5,
+            offset_y: -2,
+        };
+        assert_eq!(c.geometry(), (50 - 20 + 5, 10 - 5 - 2, 40, 10));
+    }
+
+    #[test]
+    fn popup_gets_configure_handshake() {
+        let mut h = Harness::new();
+        // wl_surface(10), xdg_wm_base(5)
+        h.server.objs.insert(10, Obj::Surface(Surface::default()));
+        h.server.objs.insert(5, Obj::XdgWmBase);
+        // create_positioner(40) then set_size + set_anchor_rect.
+        h.req(5, 1, body().u32(40));
+        // set_size(120, 80)
+        h.req(40, 1, body().i32(120).i32(80));
+        // set_anchor_rect(4, 6, 20, 10)
+        h.req(40, 2, body().i32(4).i32(6).i32(20).i32(10));
+        // get_xdg_surface(20, surface=10)
+        h.req(5, 2, body().u32(20).u32(10));
+        // get_popup(30, parent=0, positioner=40)
+        h.req(20, 2, body().u32(30).u32(0).u32(40));
+        let _ = h.drain();
+        // Initial bufferless commit → popup configure handshake.
+        h.req(10, 6, body());
+        let msgs = h.drain();
+        // xdg_popup.configure(30) carries the resolved (x,y,w,h).
+        let popup_cfg = msgs.iter().find(|(o, op, _)| *o == 30 && *op == 0);
+        assert!(
+            popup_cfg.is_some(),
+            "expected xdg_popup.configure, got {msgs:?}"
+        );
+        let (_, _, b) = popup_cfg.unwrap();
+        let w = i32::from_ne_bytes(b[8..12].try_into().unwrap());
+        let hh = i32::from_ne_bytes(b[12..16].try_into().unwrap());
+        assert_eq!((w, hh), (120, 80));
+        // followed by xdg_surface.configure(20, serial).
+        assert!(
+            msgs.iter().any(|(o, op, _)| *o == 20 && *op == 0),
+            "expected xdg_surface.configure, got {msgs:?}"
+        );
+    }
+
+    #[test]
+    fn toplevel_move_records_request() {
+        let mut h = Harness::new();
+        h.server.objs.insert(10, Obj::Surface(Surface::default()));
+        h.server.objs.insert(20, Obj::XdgSurface { surface: 10 });
+        h.server
+            .objs
+            .insert(30, Obj::XdgToplevel { xdg_surface: 20 });
+        assert_eq!(h.server.take_move_request(), None);
+        // move(seat=4, serial=7)
+        h.req(30, 5, body().u32(4).u32(7));
+        assert_eq!(h.server.take_move_request(), Some(10));
+        // drained: a second take yields nothing.
+        assert_eq!(h.server.take_move_request(), None);
+    }
+
+    #[test]
+    fn set_maximized_sends_configure_with_state() {
+        let mut h = Harness::new();
+        h.server.objs.insert(10, Obj::Surface(Surface::default()));
+        h.server.objs.insert(20, Obj::XdgSurface { surface: 10 });
+        h.server
+            .objs
+            .insert(30, Obj::XdgToplevel { xdg_surface: 20 });
+        // set_maximized
+        h.req(30, 9, body());
+        let msgs = h.drain();
+        let cfg = msgs
+            .iter()
+            .find(|(o, op, _)| *o == 30 && *op == 0)
+            .expect("xdg_toplevel.configure");
+        // states array is the 3rd arg: i32 w, i32 h, then array(len, bytes...).
+        let b = &cfg.2;
+        let arr_len = u32::from_ne_bytes(b[8..12].try_into().unwrap()) as usize;
+        let states: Vec<u32> = b[12..12 + arr_len]
+            .chunks_exact(4)
+            .map(|c| u32::from_ne_bytes(c.try_into().unwrap()))
+            .collect();
+        assert!(states.contains(&1), "MAXIMIZED state missing: {states:?}");
+        assert!(states.contains(&4), "ACTIVATED state missing: {states:?}");
+        assert!(msgs.iter().any(|(o, op, _)| *o == 20 && *op == 0));
+    }
+
+    #[test]
+    fn min_max_size_clamps_resize_configure() {
+        let mut h = Harness::new();
+        let mut s = Surface::default();
+        s.xdg_surface = Some(20);
+        s.min_size = (200, 150);
+        s.max_size = (800, 600);
+        h.server.objs.insert(10, Obj::Surface(s));
+        h.server.objs.insert(20, Obj::XdgSurface { surface: 10 });
+        h.server
+            .objs
+            .insert(30, Obj::XdgToplevel { xdg_surface: 20 });
+        h.server.focus = Some(10);
+        // Ask for a size below the minimum → clamped up to min.
+        h.server.resize_focused(50, 50);
+        let msgs = h.drain();
+        let cfg = msgs
+            .iter()
+            .find(|(o, op, _)| *o == 30 && *op == 0)
+            .expect("configure");
+        let w = i32::from_ne_bytes(cfg.2[0..4].try_into().unwrap());
+        let hh = i32::from_ne_bytes(cfg.2[4..8].try_into().unwrap());
+        assert_eq!((w, hh), (200, 150));
+    }
+
+    #[test]
+    fn pong_and_destroy_are_inert() {
+        let mut h = Harness::new();
+        h.server.objs.insert(5, Obj::XdgWmBase);
+        // pong(serial) must not panic and must not remove the wm_base.
+        h.req(5, 3, body().u32(99));
+        assert!(matches!(h.server.objs.get(&5), Some(Obj::XdgWmBase)));
+        // wm_base.destroy removes it.
+        h.req(5, 0, body());
+        assert!(h.server.objs.get(&5).is_none());
+    }
 }
 
 /// Convert an integer pixel coordinate to a `wl_fixed` (24.8 fixed-point).
 fn fixed(v: i32) -> i32 {
     v * 256
+}
+
+/// Current monotonic clock as `(whole_seconds, nanoseconds)` for a `wp_presentation.presented` timestamp.
+/// Read from the host's `CLOCK_MONOTONIC`; the wire `clock_id` we advertise is the guest's value (1).
+fn monotonic_now() -> (u64, u32) {
+    let mut ts: libc::timespec = unsafe { std::mem::zeroed() };
+    unsafe {
+        libc::clock_gettime(libc::CLOCK_MONOTONIC, &mut ts);
+    }
+    (ts.tv_sec as u64, (ts.tv_nsec as u32) % 1_000_000_000)
+}
+
+/// The `presented.refresh` interval (ns until the next output refresh) derived from the advertised mode.
+/// 60000 mHz ⇒ 16_666_666 ns. Clients add multiples of this to predict future vblanks.
+fn output_refresh_ns() -> u32 {
+    if OUTPUT_REFRESH_MHZ <= 0 {
+        return 0;
+    }
+    (1_000_000_000_000u64 / OUTPUT_REFRESH_MHZ as u64) as u32
+}
+
+/// Composite a subsurface's BGRA framebuffer `src` onto the root frame `dst` at offset `(ox, oy)`,
+/// clipping to the root bounds. Wayland buffers carry premultiplied alpha, so blending is straight
+/// src-over: `out = src + dst·(1 - a_src)`. XRGB (format 1) is treated as opaque.
+fn blend_subsurface(dst: &mut SurfaceBuffer, src: &SurfaceBuffer, ox: i32, oy: i32) {
+    if src.bgra.is_empty() || dst.bgra.is_empty() {
+        return;
+    }
+    let (dw, dh) = (dst.width, dst.height);
+    let (sw, sh) = (src.width, src.height);
+    for sy in 0..sh {
+        let dy = oy + sy;
+        if dy < 0 || dy >= dh {
+            continue;
+        }
+        for sx in 0..sw {
+            let dx = ox + sx;
+            if dx < 0 || dx >= dw {
+                continue;
+            }
+            let si = ((sy as usize * sw as usize) + sx as usize) * 4;
+            let di = ((dy as usize * dw as usize) + dx as usize) * 4;
+            if si + 4 > src.bgra.len() || di + 4 > dst.bgra.len() {
+                continue;
+            }
+            let sa = if src.format == FMT_XRGB8888 {
+                255u32
+            } else {
+                src.bgra[si + 3] as u32
+            };
+            if sa == 0 {
+                continue; // fully transparent
+            }
+            if sa == 255 {
+                dst.bgra[di..di + 4].copy_from_slice(&src.bgra[si..si + 4]);
+                dst.bgra[di + 3] = 255;
+                continue;
+            }
+            let inv = 255 - sa;
+            for c in 0..4 {
+                let s = if c == 3 { sa } else { src.bgra[si + c] as u32 };
+                let d = dst.bgra[di + c] as u32;
+                dst.bgra[di + c] = (s + d * inv / 255).min(255) as u8;
+            }
+        }
+    }
+}
+
+/// Clamp a configure dimension to a client's `[min, max]` (a bound of 0 ⇒ unconstrained on that side).
+fn clamp_axis(v: i32, min: i32, max: i32) -> i32 {
+    let v = if min > 0 { v.max(min) } else { v };
+    if max > 0 {
+        v.min(max)
+    } else {
+        v
+    }
 }
 
 fn div_floor_i32(n: i32, mul: i32, div: i32) -> i32 {

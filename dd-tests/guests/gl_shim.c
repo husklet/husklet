@@ -707,8 +707,15 @@ static void gl_type_to_msl(const char *t, char *out) {
     else if (!strcmp(t, "uvec2")) strcpy(out, "uint2");
     else if (!strcmp(t, "uvec3")) strcpy(out, "uint3");
     else if (!strcmp(t, "uvec4")) strcpy(out, "uint4");
-    else if (!strcmp(t, "mat4")) strcpy(out, "float4x4");
-    else if (!strcmp(t, "mat3")) strcpy(out, "float3x3");
+    else if (!strcmp(t, "mat2") || !strcmp(t, "mat2x2")) strcpy(out, "float2x2");
+    else if (!strcmp(t, "mat3") || !strcmp(t, "mat3x3")) strcpy(out, "float3x3");
+    else if (!strcmp(t, "mat4") || !strcmp(t, "mat4x4")) strcpy(out, "float4x4");
+    else if (!strcmp(t, "mat2x3")) strcpy(out, "float2x3");
+    else if (!strcmp(t, "mat3x2")) strcpy(out, "float3x2");
+    else if (!strcmp(t, "mat2x4")) strcpy(out, "float2x4");
+    else if (!strcmp(t, "mat4x2")) strcpy(out, "float4x2");
+    else if (!strcmp(t, "mat3x4")) strcpy(out, "float3x4");
+    else if (!strcmp(t, "mat4x3")) strcpy(out, "float4x3");
     else strcpy(out, t);
 }
 static int is_space(char c) {
@@ -804,6 +811,17 @@ static void type_fixups(char *b) {
     wreplace(b, "uvec2", "uint2");
     wreplace(b, "uvec3", "uint3");
     wreplace(b, "uvec4", "uint4");
+    // Non-square forms first (word-boundary replace already protects mat3 inside mat3x2, but list all).
+    wreplace(b, "mat2x2", "float2x2");
+    wreplace(b, "mat2x3", "float2x3");
+    wreplace(b, "mat2x4", "float2x4");
+    wreplace(b, "mat3x2", "float3x2");
+    wreplace(b, "mat3x3", "float3x3");
+    wreplace(b, "mat3x4", "float3x4");
+    wreplace(b, "mat4x2", "float4x2");
+    wreplace(b, "mat4x3", "float4x3");
+    wreplace(b, "mat4x4", "float4x4");
+    wreplace(b, "mat2", "float2x2");
     wreplace(b, "mat3", "float3x3");
     wreplace(b, "mat4", "float4x4");
 }
@@ -862,6 +880,44 @@ static void relational_fixups(char *b) {
     call2_fixup(b, "notEqual", "!=");
     call2_fixup(b, "equal", "==");
 }
+// Rename a builtin call `fn(a, b, …)` → `to(a, b, …)` only when it has a top-level comma (2+ args). Used
+// for GLSL `atan(y,x)` → MSL `atan2(y,x)` while leaving the 1-arg `atan(x)` (same name in MSL) untouched.
+static void rename_call2(char *buf, const char *fn, const char *to) {
+    char tmp[8192];
+    size_t fl = strlen(fn), tl = strlen(to), o = 0;
+    for (size_t i = 0; buf[i] && o < sizeof(tmp) - tl - 2;) {
+        if (!strncmp(buf + i, fn, fl) && buf[i + fl] == '(' && (i == 0 || !is_word(buf[i - 1]))) {
+            size_t j = i + fl + 1;
+            int depth = 1, comma = 0;
+            while (buf[j] && depth) {
+                if (buf[j] == '(') depth++;
+                else if (buf[j] == ')') { depth--; if (!depth) break; }
+                else if (buf[j] == ',' && depth == 1) comma = 1;
+                j++;
+            }
+            if (comma) { memcpy(tmp + o, to, tl); o += tl; i += fl; continue; }
+        }
+        tmp[o++] = buf[i++];
+    }
+    tmp[o] = 0;
+    strcpy(buf, tmp);
+}
+// GLSL-ES builtins whose MSL spelling differs. Missing these makes the whole shader fail to compile, so the
+// program never links and its draws silently VANISH. `mod` has NO MSL builtin (fmod differs on negatives) —
+// it's provided by dd_mod overloads injected at file scope (see translate()).
+static void builtin_fixups(char *b) {
+    wreplace(b, "dFdx", "dfdx");           // MSL derivatives are lowercase
+    wreplace(b, "dFdy", "dfdy");
+    wreplace(b, "inversesqrt", "rsqrt");   // GLSL inversesqrt → MSL rsqrt
+    rename_call2(b, "atan", "atan2");      // GLSL atan(y,x) → MSL atan2 (1-arg atan kept)
+    wreplace(b, "mod", "dd_mod");          // GLSL mod(x,y) = x - y*floor(x/y); MSL has no `mod`
+}
+// float-scalar/vector GLSL mod() replacement, injected at MSL file scope when a shader uses mod().
+static const char *DD_MOD_HELPERS =
+    "template<typename T> inline T dd_mod(T x, T y) { return x - y * floor(x / y); }\n"
+    "inline float2 dd_mod(float2 x, float y) { return x - y * floor(x / y); }\n"
+    "inline float3 dd_mod(float3 x, float y) { return x - y * floor(x / y); }\n"
+    "inline float4 dd_mod(float4 x, float y) { return x - y * floor(x / y); }\n";
 static void local_decl_fixups(char *b) {
     sreplace(b, "float in.", "float ");
     sreplace(b, "float2 in.", "float2 ");
@@ -1108,6 +1164,8 @@ static char *translate(const char *vs_in, const char *fs_in) {
     if (!out) return NULL;
     size_t o = 0;
     o = cat_msl(out, o, TRANSLATE_OUTCAP, "#include <metal_stdlib>\nusing namespace metal;\n");
+    // Inject GLSL mod() helper overloads (MSL has no `mod`) only when a shader actually uses mod(…).
+    if (strstr(vs, "mod(") || strstr(fs, "mod(")) o = cat_msl(out, o, TRANSLATE_OUTCAP, "%s", DD_MOD_HELPERS);
     // Global consts (glmark2's prepended light/material/PI): `const …` → `constant …`, types fixed.
     for (int i = 0; i < nc; i++) {
         char line[256];
@@ -1150,6 +1208,7 @@ static char *translate(const char *vs_in, const char *fs_in) {
     main_body(vs, vb, sizeof vb);
     fix_trunc(vb);
     type_fixups(vb);
+    builtin_fixups(vb);
     sampler_fixups(vb, samps, nsamp);
     for (int i = 0; i < na; i++) {
         char in[40]; sprintf(in, "in.%s", attrs[i].name); wreplace(vb, attrs[i].name, in);
@@ -1171,6 +1230,7 @@ static char *translate(const char *vs_in, const char *fs_in) {
     int frag_uses_coord = strstr(fb, "gl_FragCoord") != NULL;
     fix_trunc(fb);
     type_fixups(fb);
+    builtin_fixups(fb);
     sampler_fixups(fb, samps, nsamp);
     for (int i = 0; i < nv; i++) {
         char in[40]; sprintf(in, "in.%s", vary[i].name); wreplace(fb, vary[i].name, in);
@@ -1194,20 +1254,52 @@ static char *translate(const char *vs_in, const char *fs_in) {
     return out;
 }
 
+// MSL struct member layout (size + alignment, in bytes) for a GLSL uniform type, matching how Metal lays
+// out a `constant Uniforms&` struct. Getting this wrong shifts EVERY uniform after the offending member, so
+// transforms/gradients silently render with corrupt coordinates even though the shader compiles.
+//
+// Key facts (default, non-packed MSL):
+//   * float/int/uint/bool = 4B/4B; vecN follows: vec2=8/8, vec3=16/16 (float3 pads to 16!), vec4=16/16.
+//   * matCxR is C columns of vecR. The COLUMN type sets stride+align: R=2→float2(8/8), R=3→float3(16/16),
+//     R=4→float4(16/16). Matrix size = C*colStride, align = colAlign. So float2x2=16/8, float3x3=48/16
+//     (not 36!), float3x2=24/8, float2x3=32/16, float4x2=32/8, float4x3=64/16, float4x4=64/16.
+// Returns 1 if recognized (sz/al set), 0 otherwise (caller falls back to scalar 4/4).
+static int msl_type_layout(const char *t, int *sz, int *al) {
+    struct { const char *g; int sz, al; } tbl[] = {
+        {"float", 4, 4},  {"int", 4, 4},   {"uint", 4, 4},   {"bool", 4, 4},
+        {"vec2", 8, 8},   {"vec3", 16, 16}, {"vec4", 16, 16},
+        {"ivec2", 8, 8},  {"ivec3", 16, 16}, {"ivec4", 16, 16},
+        {"uvec2", 8, 8},  {"uvec3", 16, 16}, {"uvec4", 16, 16},
+        {"bvec2", 8, 8},  {"bvec3", 16, 16}, {"bvec4", 16, 16},
+        // matrices: matCxR (C cols, R rows). col stride: R=2→8, R=3→16, R=4→16.
+        {"mat2", 16, 8},   {"mat3", 48, 16}, {"mat4", 64, 16},
+        {"mat2x2", 16, 8}, {"mat2x3", 32, 16}, {"mat2x4", 32, 16},
+        {"mat3x2", 24, 8}, {"mat3x3", 48, 16}, {"mat3x4", 48, 16},
+        {"mat4x2", 32, 8}, {"mat4x3", 64, 16}, {"mat4x4", 64, 16},
+    };
+    for (unsigned i = 0; i < sizeof(tbl) / sizeof(tbl[0]); i++) {
+        if (!strcmp(t, tbl[i].g)) { *sz = tbl[i].sz; *al = tbl[i].al; return 1; }
+    }
+    return 0;
+}
 // Compute the uniform-buffer byte layout (name→offset/size) matching Metal's struct alignment, so the
 // bytes the app writes via glUniform* land where the MSL Uniforms struct expects them.
 static int uni_layout(const char *vs, const char *fs, struct uni *out, int max, int *total) {
     struct decl unis[16], samps[4];
     int nu, nsamp;
-    collect_uniforms(vs, fs, unis, &nu, samps, &nsamp); // DATA uniforms only (samplers excluded)
+    // Strip comments FIRST — translate() emits the MSL Uniforms struct from comment-stripped source, so if
+    // we collected uniforms from the raw text a stray "uniform"/"attribute"/"varying" word inside a comment
+    // would invent a phantom member here and shift every real uniform's offset off the MSL struct's layout.
+    char vsbuf[16384], fsbuf[16384];
+    snprintf(vsbuf, sizeof vsbuf, "%s", vs);
+    snprintf(fsbuf, sizeof fsbuf, "%s", fs);
+    strip_comments(vsbuf);
+    strip_comments(fsbuf);
+    collect_uniforms(vsbuf, fsbuf, unis, &nu, samps, &nsamp); // DATA uniforms only (samplers excluded)
     int cur = 0, n = 0;
     for (int i = 0; i < nu && n < max; i++) {
-        int sz, al;
-        if (!strcmp(unis[i].type, "mat4")) { sz = 64; al = 16; }
-        else if (!strcmp(unis[i].type, "vec4")) { sz = 16; al = 16; }
-        else if (!strcmp(unis[i].type, "vec3")) { sz = 16; al = 16; }
-        else if (!strcmp(unis[i].type, "vec2")) { sz = 8; al = 8; }
-        else { sz = 4; al = 4; }
+        int sz = 4, al = 4;
+        msl_type_layout(unis[i].type, &sz, &al); // unknown types default to scalar 4/4
         cur = (cur + al - 1) & ~(al - 1);
         strcpy(out[n].name, unis[i].name);
         out[n].off = cur;
@@ -2717,7 +2809,16 @@ static void uni_write(GLint loc, const void *data, int n) {
         }
     }
 }
-void glUniformMatrix4fv(GLint l, GLsizei n, GLboolean t, const GLfloat *v) { (void)n; (void)t; uni_write(l, v, 64); }
+// Write a GLSL column-major matrix (cols x rows, tightly packed by the client — each column is `rows`
+// contiguous floats) into the uniform block at `loc`, expanding each column to its MSL column stride.
+// MSL packs a 3-row column (float3) into 16 bytes, so mat3/mat2x3/mat4x3 need per-column re-striding;
+// 2-row and 4-row columns are already tight (float2=8, float4=16) and copy in one shot.
+static void uni_write_matrix(GLint loc, const GLfloat *v, int cols, int rows) {
+    int col_stride = (rows == 3) ? 16 : rows * 4; // MSL bytes per column
+    if (col_stride == rows * 4) { uni_write(loc, v, cols * rows * 4); return; } // tight → single copy
+    for (int c = 0; c < cols; c++) uni_write(loc + c * col_stride, v + c * rows, rows * 4);
+}
+void glUniformMatrix4fv(GLint l, GLsizei n, GLboolean t, const GLfloat *v) { (void)n; (void)t; uni_write_matrix(l, v, 4, 4); }
 void glUniform4fv(GLint l, GLsizei n, const GLfloat *v) { (void)n; uni_write(l, v, 16); }
 void glUniform4f(GLint l, GLfloat a, GLfloat b, GLfloat c, GLfloat d) { float v[4] = {a, b, c, d}; uni_write(l, v, 16); }
 void glUniform3fv(GLint l, GLsizei n, const GLfloat *v) { (void)n; uni_write(l, v, 12); }
@@ -3366,8 +3467,8 @@ GLboolean glIsTexture(GLuint t) { return (t && t < MAXTEX && g_tex[t].used) ? 1 
 GLboolean glIsBuffer(GLuint b) { return (b && b < MAXBUF && g_buf[b].used) ? 1 : 0; }
 GLboolean glIsProgram(GLuint p) { return (p && p < MAXPROG && g_prog[p].used) ? 1 : 0; }
 GLboolean glIsShader(GLuint s) { return (s && s < MAXSH && g_sh[s].used) ? 1 : 0; }
-void glUniformMatrix3fv(GLint l, GLsizei n, GLboolean t, const GLfloat *v) { (void)n; (void)t; uni_write(l, v, 36); }
-void glUniformMatrix2fv(GLint l, GLsizei n, GLboolean t, const GLfloat *v) { (void)n; (void)t; uni_write(l, v, 16); }
+void glUniformMatrix3fv(GLint l, GLsizei n, GLboolean t, const GLfloat *v) { (void)n; (void)t; uni_write_matrix(l, v, 3, 3); }
+void glUniformMatrix2fv(GLint l, GLsizei n, GLboolean t, const GLfloat *v) { (void)n; (void)t; uni_write_matrix(l, v, 2, 2); }
 void glUniform2fv(GLint l, GLsizei n, const GLfloat *v) { (void)n; uni_write(l, v, 8); }
 void glUniform2f(GLint l, GLfloat a, GLfloat b) { GLfloat v[2] = {a, b}; uni_write(l, v, 8); }
 void glUniform1fv(GLint l, GLsizei n, const GLfloat *v) { (void)n; uni_write(l, v, 4); }
@@ -3839,12 +3940,14 @@ void glUniform1uiv(GLint l, GLsizei n, const GLuint *v) { (void)n; uni_write(l, 
 void glUniform2uiv(GLint l, GLsizei n, const GLuint *v) { (void)n; uni_write(l, v, 8); }
 void glUniform3uiv(GLint l, GLsizei n, const GLuint *v) { (void)n; uni_write(l, v, 12); }
 void glUniform4uiv(GLint l, GLsizei n, const GLuint *v) { (void)n; uni_write(l, v, 16); }
-void glUniformMatrix2x3fv(GLint l, GLsizei n, GLboolean t, const GLfloat *v) { (void)n; (void)t; uni_write(l, v, 24); }
-void glUniformMatrix3x2fv(GLint l, GLsizei n, GLboolean t, const GLfloat *v) { (void)n; (void)t; uni_write(l, v, 24); }
-void glUniformMatrix2x4fv(GLint l, GLsizei n, GLboolean t, const GLfloat *v) { (void)n; (void)t; uni_write(l, v, 32); }
-void glUniformMatrix4x2fv(GLint l, GLsizei n, GLboolean t, const GLfloat *v) { (void)n; (void)t; uni_write(l, v, 32); }
-void glUniformMatrix3x4fv(GLint l, GLsizei n, GLboolean t, const GLfloat *v) { (void)n; (void)t; uni_write(l, v, 48); }
-void glUniformMatrix4x3fv(GLint l, GLsizei n, GLboolean t, const GLfloat *v) { (void)n; (void)t; uni_write(l, v, 48); }
+// GL glUniformMatrixCxRfv names are C columns × R rows (C first). Route through uni_write_matrix so 3-row
+// variants (2x3, 4x3) get their columns re-strided to MSL's 16-byte float3 columns.
+void glUniformMatrix2x3fv(GLint l, GLsizei n, GLboolean t, const GLfloat *v) { (void)n; (void)t; uni_write_matrix(l, v, 2, 3); }
+void glUniformMatrix3x2fv(GLint l, GLsizei n, GLboolean t, const GLfloat *v) { (void)n; (void)t; uni_write_matrix(l, v, 3, 2); }
+void glUniformMatrix2x4fv(GLint l, GLsizei n, GLboolean t, const GLfloat *v) { (void)n; (void)t; uni_write_matrix(l, v, 2, 4); }
+void glUniformMatrix4x2fv(GLint l, GLsizei n, GLboolean t, const GLfloat *v) { (void)n; (void)t; uni_write_matrix(l, v, 4, 2); }
+void glUniformMatrix3x4fv(GLint l, GLsizei n, GLboolean t, const GLfloat *v) { (void)n; (void)t; uni_write_matrix(l, v, 3, 4); }
+void glUniformMatrix4x3fv(GLint l, GLsizei n, GLboolean t, const GLfloat *v) { (void)n; (void)t; uni_write_matrix(l, v, 4, 3); }
 void glGetUniformuiv(GLuint p, GLint l, GLuint *v) { (void)p; (void)l; if (v) *v = 0; }
 GLint glGetFragDataLocation(GLuint p, const GLchar *nm) { (void)p; (void)nm; return 0; }
 // Uniform blocks (stub: caps report blocks but a first frame uses default-block uniforms via uni_write).
@@ -3985,8 +4088,21 @@ static char *slurp(const char *path) {
     return b;
 }
 int main(int argc, char **argv) {
-    if (argc < 3) { fprintf(stderr, "usage: %s vert.glsl frag.glsl\n", argv[0]); return 2; }
+    if (argc < 3) { fprintf(stderr, "usage: %s vert.glsl frag.glsl [--print-layout]\n", argv[0]); return 2; }
+    int print_layout = 0;
+    for (int i = 3; i < argc; i++) if (!strcmp(argv[i], "--print-layout")) print_layout = 1;
     char *vs = slurp(argv[1]), *fs = slurp(argv[2]);
+    // --print-layout: dump the uniform-block byte layout uni_layout() computes as `LAYOUT name off sz` lines
+    // (+ `TOTAL n`). A host proof (run_uniform_layout_proof.sh) diffs this against offsets the C compiler
+    // computes for an MSL-faithful struct, proving the shim's offsets match Metal's real matrix layout.
+    if (print_layout) {
+        struct uni u[16];
+        int total = 0;
+        int nu = uni_layout(vs, fs, u, 16, &total);
+        for (int i = 0; i < nu; i++) printf("LAYOUT %s %d %d\n", u[i].name, u[i].off, u[i].sz);
+        printf("TOTAL %d\n", total);
+        return 0;
+    }
     char *msl = translate(vs, fs);
     fputs(msl, stdout);
     return 0;

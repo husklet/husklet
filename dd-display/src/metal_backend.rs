@@ -324,6 +324,17 @@ pub struct MetalBackend {
     /// L4: the guest IOSurface id this frame renders into (set by the executor before `replay_stream`).
     /// `submit` uses it to look up the cross-queue tearing fence for async submit. 0 = none.
     pub cur_surface_id: u32,
+    /// Texture ids that are the PRESENTED surface (injected via `set_render_target` — the IOSurface /
+    /// default framebuffer). Everything else a render pass draws into is an OFFSCREEN render target
+    /// (e.g. Chrome's content tiles 512/514, which Chrome GPU-rasterizes page body text into, then
+    /// composites). GL's framebuffer origin is bottom-left; Metal's is top-left, so rendering the same
+    /// guest geometry into an offscreen texture stores it Y-mirrored versus what a later GL-convention
+    /// `texture()` sample expects — the composite then shows page content upside-down while the
+    /// directly-drawn UI (CPU-uploaded atlases, no render-to-texture bounce) stays upright. We compensate
+    /// by Y-flipping the viewport (negative height) for offscreen passes only, so the tile is stored
+    /// bottom-left like GL and samples upright. The presented surface is read back / scanned out top-left
+    /// and is left untouched.
+    surface_ids: HashSet<u32>,
 }
 
 /// Decode an MSL source string from an IR shader payload: word[0] = byte length, the rest packs the UTF-8
@@ -378,6 +389,7 @@ impl MetalBackend {
             lib_compiles: 1, // the builtin BUILTIN_MSL compile just above
             gpu_wait_ns: 0,
             cur_surface_id: 0,
+            surface_ids: HashSet::new(),
         }
     }
 
@@ -517,6 +529,15 @@ impl MetalBackend {
     pub fn set_render_target(&mut self, id: u32, tex: Retained<ProtocolObject<dyn MTLTexture>>) {
         self.textures.insert(id, tex);
         self.texture_descs.remove(&id);
+        // This id is the presented surface (default framebuffer). Passes that target it are scanned out
+        // top-left and must NOT be Y-flipped; only OFFSCREEN render targets are (see `surface_ids`).
+        self.surface_ids.insert(id);
+    }
+
+    /// Test/debug hook: fetch a materialized texture by id (e.g. to read back an offscreen render target
+    /// such as a Chrome content tile after a render pass).
+    pub fn texture(&self, id: u32) -> Option<&ProtocolObject<dyn MTLTexture>> {
+        self.textures.get(&id).map(|t| &**t)
     }
 }
 
@@ -1784,6 +1805,10 @@ impl GpuBackend for MetalBackend {
         let mut cur_prim = MTLPrimitiveType::Triangle;
         // Bound index buffer for glDrawElements → drawIndexedPrimitives (buffer id, byte offset, U16/U32).
         let mut index_buffer: Option<(u32, u64, MTLIndexType)> = None;
+        // Whether the CURRENT render pass draws into an offscreen render target (not the presented
+        // surface): if so, its viewport is Y-flipped (negative height) so the texture is stored
+        // bottom-left (GL convention) and samples upright in the later composite.
+        let mut flip_pass = false;
         for op in &cb.encoder {
             match op {
                 Enc::BeginRenderPass { color, depth } => {
@@ -1821,10 +1846,27 @@ impl GpuBackend for MetalBackend {
                         datt.setClearDepth(da.clear_depth as f64);
                         datt.setStoreAction(MTLStoreAction::DontCare);
                     }
-                    enc = Some(
-                        cmd.renderCommandEncoderWithDescriptor(&pass)
-                            .ok_or(GpuError::Unsupported("encoder"))?,
-                    );
+                    let e = cmd
+                        .renderCommandEncoderWithDescriptor(&pass)
+                        .ok_or(GpuError::Unsupported("encoder"))?;
+                    // Y-flip this pass iff it targets an OFFSCREEN render texture (a content tile, not the
+                    // presented surface). Prime a default full-target flipped viewport up front so passes
+                    // that never emit their own SetViewport are still stored bottom-left; an explicit
+                    // guest SetViewport below overrides it (also flipped).
+                    flip_pass = color
+                        .first()
+                        .is_some_and(|ca| !self.surface_ids.contains(&ca.texture));
+                    if flip_pass {
+                        e.setViewport(MTLViewport {
+                            originX: 0.0,
+                            originY: chh as f64,
+                            width: cw as f64,
+                            height: -(chh as f64),
+                            znear: 0.0,
+                            zfar: 1.0,
+                        });
+                    }
+                    enc = Some(e);
                 }
                 Enc::SetPipeline(p) => {
                     let pl = self.pipelines.get(p).ok_or(GpuError::UnknownId {
@@ -1953,11 +1995,19 @@ impl GpuBackend for MetalBackend {
                     max_depth,
                 } => {
                     if let Some(e) = &enc {
+                        let hh = (*h).max(0.0) as f64;
+                        // Offscreen render target: negative-height viewport (originY at the bottom edge)
+                        // mirrors NDC-y so the texture is stored bottom-left like GL and samples upright.
+                        let (origin_y, height) = if flip_pass {
+                            (*y as f64 + hh, -hh)
+                        } else {
+                            (*y as f64, hh)
+                        };
                         e.setViewport(MTLViewport {
                             originX: *x as f64,
-                            originY: *y as f64,
+                            originY: origin_y,
                             width: (*w).max(0.0) as f64,
-                            height: (*h).max(0.0) as f64,
+                            height,
                             znear: *min_depth as f64,
                             zfar: *max_depth as f64,
                         });
@@ -1965,6 +2015,9 @@ impl GpuBackend for MetalBackend {
                 }
                 Enc::SetScissor { x, y, w, h } => {
                     if let Some(e) = &enc {
+                        // The offscreen Y-flip uses a negative-height viewport, which mirrors content
+                        // in-place within the same window rows — the scissor rect therefore stays as the
+                        // guest emitted it (it still clips the same window region the content occupies).
                         e.setScissorRect(MTLScissorRect {
                             x: *x as _,
                             y: *y as _,

@@ -86,6 +86,19 @@ pub trait Presenter {
     fn surface_scale(&self, _sid: u32) -> f64 {
         1.0
     }
+    /// Integer output scale (`wl_output.scale`) the compositor advertises. Chrome/GTK commit a buffer of
+    /// `logical_size * scale` when this is >1, so on a Retina display returning 2 makes the client render
+    /// a crisp HiDPI buffer instead of a 1x buffer stretched to fill the backing store. Default 1 (the
+    /// headless/PngPresenter path and any SDR display). See weston `weston_output::current_scale` and
+    /// wlroots `wlr_output.scale`; both feed exactly this value into the `scale` event.
+    fn output_scale(&self) -> i32 {
+        1
+    }
+    /// The Wayland client issued `xdg_toplevel.move` for surface `sid` (a user-initiated window drag). A
+    /// windowed presenter should start a native, host-driven move of that window. This is invoked ONLY when
+    /// the client actually requests a move, so it is the precise alternative to making every window blindly
+    /// movable-by-background. Default: no native window to move.
+    fn begin_interactive_move(&self, _sid: u32) {}
 }
 
 /// Writes each committed surface to `<dir>/surface-<sid>.png`, and records the last frame for tests.

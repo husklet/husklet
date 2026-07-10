@@ -23,7 +23,7 @@ use objc2_app_kit::{
     NSApplication, NSApplicationActivationPolicy, NSAutoresizingMaskOptions, NSBackingStoreType,
     NSBitmapImageFileType, NSBitmapImageRep, NSBitmapImageRepPropertyKey, NSDeviceRGBColorSpace,
     NSEvent, NSEventMask, NSEventModifierFlags, NSEventType, NSGraphicsContext, NSImage,
-    NSImageView, NSView, NSWindow, NSWindowStyleMask,
+    NSImageView, NSScreen, NSView, NSWindow, NSWindowStyleMask,
 };
 use objc2_foundation::{
     MainThreadMarker, NSDefaultRunLoopMode, NSDictionary, NSInteger, NSPoint, NSRect, NSSize,
@@ -41,6 +41,21 @@ use std::os::raw::{c_float, c_ushort};
 use std::os::unix::io::RawFd;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::OnceLock;
+
+/// Integer `wl_output.scale` to advertise, derived from the Mac's backing store. HiDPI is opt-in via
+/// `DD_DISPLAY_HIDPI` while the retina present path (CALayer contentsScale) is still being brought up:
+/// the validated Chrome init path reports scale=1, so we don't flip it under everyone by default. When
+/// enabled, we return the main screen's `backingScaleFactor` (2 on Retina), which makes Chrome commit a
+/// correctly-sized HiDPI buffer instead of a 1x buffer stretched over the backing store.
+fn host_output_scale(mtm: MainThreadMarker) -> i32 {
+    if std::env::var_os("DD_DISPLAY_HIDPI").is_none() {
+        return 1;
+    }
+    NSScreen::mainScreen(mtm)
+        .map(|s| s.backingScaleFactor().round() as i32)
+        .unwrap_or(1)
+        .max(1)
+}
 
 /// A live window bound to a guest surface.
 struct Win {
@@ -207,6 +222,16 @@ impl Presenter for CocoaPresenter {
         let view = w.window.contentView()?;
         let b = view.bounds();
         Some((b.size.width as i32, b.size.height as i32))
+    }
+
+    fn output_scale(&self) -> i32 {
+        host_output_scale(self.mtm)
+    }
+
+    fn begin_interactive_move(&self, sid: u32) {
+        if let Some(w) = self.wins.get(&sid) {
+            perform_window_drag(self.mtm, &w.window);
+        }
     }
 }
 
@@ -777,6 +802,27 @@ impl Presenter for MetalPresenter {
     fn surface_scale(&self, sid: u32) -> f64 {
         self.wins.get(&sid).map(|_| 1.0).unwrap_or(1.0)
     }
+
+    fn output_scale(&self) -> i32 {
+        host_output_scale(self.mtm)
+    }
+
+    fn begin_interactive_move(&self, sid: u32) {
+        if let Some(w) = self.wins.get(&sid) {
+            perform_window_drag(self.mtm, &w.window);
+        }
+    }
+}
+
+/// Start a native, host-driven window drag for `window` in response to `xdg_toplevel.move`. AppKit's
+/// `performWindowDragWithEvent:` re-uses the in-flight mouse-down (the physical button is still held, since
+/// the client only issues `move` while dragging) to move the window — the precise, request-gated
+/// alternative to `setMovableByWindowBackground(true)` (which would move the window on ANY background drag).
+fn perform_window_drag(mtm: MainThreadMarker, window: &NSWindow) {
+    let app = NSApplication::sharedApplication(mtm);
+    if let Some(ev) = app.currentEvent() {
+        window.performWindowDragWithEvent(&ev);
+    }
 }
 
 /// Headless-ish proof that the ACTUAL on-screen presenter renders: build a real NSApp + CocoaPresenter,
@@ -1003,13 +1049,18 @@ fn inject_nsevent<P: Presenter>(server: &mut Server<P>, ev: &NSEvent, flip_h: Op
         server.pointer_motion(x, y);
         server.pointer_button(0x111, false);
     } else if ty == NSEventType::ScrollWheel {
+        // Cocoa scroll deltas are content-follows-finger (natural): a positive scrollingDeltaY means the
+        // content should move down, which in Wayland is a NEGATIVE axis value. Negate both to match the
+        // Wayland axis convention (positive = scroll down/right). One NSEvent = one logical scroll, so both
+        // axes are delivered in a single wl_pointer.frame group. `hasPreciseScrollingDeltas` distinguishes a
+        // trackpad (smooth pixel/continuous source) from a stepped mouse wheel.
         let dy = unsafe { ev.scrollingDeltaY() };
         let dx = unsafe { ev.scrollingDeltaX() };
-        if dy != 0.0 {
-            server.pointer_axis(0, -(dy as i32)); // vertical
-        }
-        if dx != 0.0 {
-            server.pointer_axis(1, -(dx as i32)); // horizontal
+        let precise = unsafe { ev.hasPreciseScrollingDeltas() };
+        let vy = -(dy.round() as i32);
+        let vx = -(dx.round() as i32);
+        if vx != 0 || vy != 0 {
+            server.pointer_scroll(vx, vy, precise);
         }
     } else if ty == NSEventType::KeyDown {
         if let Some(code) = kvk_to_evdev(unsafe { ev.keyCode() }) {
@@ -1087,6 +1138,18 @@ fn kvk_to_evdev(kvk: u16) -> Option<u32> {
         49 => 57, // Space
         51 => 14, // Delete → KEY_BACKSPACE
         53 => 1,  // Escape
+        // Punctuation (kVK_ANSI_* → KEY_*): needed so typed symbols reach the client's xkb layer.
+        27 => 12, // Minus       → KEY_MINUS
+        24 => 13, // Equal       → KEY_EQUAL
+        33 => 26, // LeftBracket → KEY_LEFTBRACE
+        30 => 27, // RightBracket→ KEY_RIGHTBRACE
+        41 => 39, // Semicolon   → KEY_SEMICOLON
+        39 => 40, // Quote       → KEY_APOSTROPHE
+        50 => 41, // Grave       → KEY_GRAVE
+        42 => 43, // Backslash   → KEY_BACKSLASH
+        43 => 51, // Comma       → KEY_COMMA
+        47 => 52, // Period      → KEY_DOT
+        44 => 53, // Slash       → KEY_SLASH
         123 => 105,
         124 => 106,
         125 => 108,
@@ -1225,6 +1288,10 @@ fn run_multi<P: Presenter>(
                 clients[idx].set_external_logical_crop(mirrored_crop);
                 let alive = matches!(clients[idx].pump(), Ok(true));
                 clients[idx].set_external_logical_crop(None);
+                // xdg_toplevel.move → start a HOST window drag for exactly the surface Chrome asked to move.
+                if let Some(sid) = clients[idx].take_move_request() {
+                    clients[idx].presenter().begin_interactive_move(sid);
+                }
                 if !alive {
                     eprintln!(
                         "dd-display[{tag}]: client disconnected ({} frame(s))",
