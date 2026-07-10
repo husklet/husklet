@@ -10,8 +10,6 @@ This directory is a working inventory of suspicious behavior, bad architecture, 
 |---|---|---:|---:|---|
 | P1 | daemon/runtime | workspace VPN egress env is dropped before engine launch | High | [daemon-tests-docs.md](daemon-tests-docs.md#workspace-vpn-egress-is-dropped) |
 | P1 | daemon/runtime | published port bind failures do not fail container start | Medium-high | [daemon-tests-docs.md](daemon-tests-docs.md#published-port-bind-failures-do-not-fail-start) |
-| P1 | daemon/compat | inline named volume sources can escape `volumes_dir` | Medium | [daemon-tests-docs.md](daemon-tests-docs.md#inline-volume-sources-can-escape-volumes_dir) |
-| P1 | daemon/runtime | failed start leaves a spent `Live` and later fake success | High | [daemon-tests-docs.md](daemon-tests-docs.md#failed-start-leaves-a-spent-live) |
 | P1 | sentry/compat | untrusted split breaks Linux `EFAULT` compatibility | High | [gpu-display-sentry.md](gpu-display-sentry.md#untrusted-split-breaks-linux-efault-compatibility) |
 | P1 | sentry/ipc | `DDJIT_UNTRUSTED` SCM_RIGHTS + eventfd loses events | High | [completeness-and-env.md](completeness-and-env.md#ddjit_untrusted-scm_rights-eventfd-loses-events) |
 | P1 | syscall/time | periodic `timerfd` ignores earlier first deadline | High | [syscall-compat.md](syscall-compat.md#periodic-timerfd-ignores-earlier-first-deadline) |
@@ -26,7 +24,6 @@ This directory is a working inventory of suspicious behavior, bad architecture, 
 | P1 | syscall/fd | sentry close-on-exec does not clean virtual fds | High | [syscall-compat.md](syscall-compat.md#sentry-close-on-exec-does-not-clean-virtual-fds) |
 | P1 | daemon/cache | build-cache layer replacement is non-atomic | High | [daemon-tests-docs.md](daemon-tests-docs.md#build-cache-layer-replacement-is-non-atomic) |
 | P1 | daemon/cgroup | fractional `--cpus` loses quota precision | High | [daemon-tests-docs.md](daemon-tests-docs.md#fractional---cpus-loses-quota-precision) |
-| P1 | image/tag | `docker tag` aliases do not survive discovery | High | [daemon-tests-docs.md](daemon-tests-docs.md#docker-tag-aliases-do-not-survive-discovery) |
 | P1 | daemon/logs | retained container logs are lost across daemon restart | High | [daemon-tests-docs.md](daemon-tests-docs.md#retained-container-logs-are-lost-across-daemon-restart) |
 | P1 | image/load | `docker load` of same tag rewrites existing container rootfs | High | [daemon-tests-docs.md](daemon-tests-docs.md#docker-load-of-same-tag-rewrites-existing-container-rootfs) |
 | P1 | daemon/create | create accepts image records whose rootfs is missing | High | [daemon-tests-docs.md](daemon-tests-docs.md#create-accepts-image-records-whose-rootfs-is-missing) |
@@ -50,8 +47,6 @@ This directory is a working inventory of suspicious behavior, bad architecture, 
 | P2 | daemon/events | events are live-only and lossy | High | [daemon-tests-docs.md](daemon-tests-docs.md#events-are-live-only-and-lossy) |
 | P2 | daemon/logs | `logs -f` can drop output for slow clients | Medium-high | [daemon-tests-docs.md](daemon-tests-docs.md#logs--f-can-drop-output-for-slow-clients) |
 | P2 | daemon/lifecycle | stop timeout marks exited before reaper confirms death | Medium | [daemon-tests-docs.md](daemon-tests-docs.md#stop-timeout-marks-exited-before-reaper-confirms-death) |
-| P2 | daemon/config | `DDOCKERD_SOCK` startup unlinks configured path | Medium-high | [daemon-tests-docs.md](daemon-tests-docs.md#ddockerd_sock-startup-unlinks-configured-path) |
-| P2 | daemon/events | fast-exit event ordering can emit `die` before `start` | Medium | [daemon-tests-docs.md](daemon-tests-docs.md#fast-exit-event-ordering-can-emit-die-before-start) |
 | P2 | docs/tests | gap inventory and architecture docs are stale/missing | High | [daemon-tests-docs.md](daemon-tests-docs.md#gap-and-architecture-docs-are-not-auditable) |
 | P2 | gpu/compat | dmabuf advertises LINEAR buffers it cannot use | Medium-high | [gpu-display-sentry.md](gpu-display-sentry.md#dmabuf-advertises-linear-buffers-it-cannot-use) |
 | P2 | gpu/compat | Metal render target texture id aliases guest texture id `1` | Medium-high | [gpu-display-sentry.md](gpu-display-sentry.md#metal-render-target-texture-id-can-alias-guest-texture-id-1) |
@@ -84,7 +79,6 @@ This directory is a working inventory of suspicious behavior, bad architecture, 
 | P2 | procfs/tty | `/proc/tty` surface is absent | High | [completeness-and-env.md](completeness-and-env.md#proctty-surface-is-absent) |
 | P2 | launch/config | path-list config still uses delimiter env strings | Medium | [completeness-and-env.md](completeness-and-env.md#typed-launch-path-lists-still-use-delimiter-env-strings) |
 | P2 | rendering/tests | GUI probe sources are outside default matrix | High | [gpu-display-sentry.md](gpu-display-sentry.md#rendering-coverage-gaps-are-silent) |
-| P2 | daemon/stats | stats JSON is internally inconsistent | High | [daemon-tests-docs.md](daemon-tests-docs.md#stats-json-is-internally-inconsistent) |
 | P1 | syscall/fd | inotify/timerfd create without flags still sets close-on-exec | High | [syscall-compat.md](syscall-compat.md#inotify_init10-and-timerfd_create-0-set-close-on-exec) |
 | P1 | syscall/timerfd | `timerfd` CLOCK_REALTIME absolute deadlines are treated as monotonic | High | [syscall-compat.md](syscall-compat.md#timerfd-clock_realtime-absolute-deadlines-are-treated-as-monotonic) |
 | P1 | syscall/wait | `wait4` misses `WCONTINUED` and corrupts final status | High | [syscall-compat.md](syscall-compat.md#wait4-misses-wcontinued-and-corrupts-final-status) |
