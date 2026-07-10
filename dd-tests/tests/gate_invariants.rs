@@ -158,3 +158,44 @@ fn test_ci_matrix_xfail_and_skip_stay_green() {
     let f = gate_failures(&Engine::ALL, &all_available, &cells);
     assert!(f.is_empty(), "xfail/skip alongside passes must stay green, got: {f:?}");
 }
+
+// ---------------------------------------------------------------------------------------------------
+// GUI matrix coverage — every gui_matrix/*.c probe must have a home: either built by the Makefile
+// (in PROBES) or explicitly listed in the documented exclusion table. A probe source that sits in the
+// tree but in neither is a SILENT coverage gap (a rendering regression it would catch goes ungated).
+// ---------------------------------------------------------------------------------------------------
+
+/// Probes intentionally NOT built by the matrix, each with an owner/reason. Keep empty unless a probe
+/// genuinely cannot be gated yet; the point is that every exclusion is a deliberate, documented choice.
+const GUI_MATRIX_EXCLUSIONS: &[(&str, &str)] = &[
+    // ("probe_name", "owner: reason"),
+];
+
+#[test]
+fn test_every_gui_matrix_probe_is_gated_or_documented() {
+    let dir = repo_root().join("dd-tests/guests/gui_matrix");
+    let makefile = std::fs::read_to_string(dir.join("Makefile")).expect("read gui_matrix Makefile");
+    // Collect every token that appears in the Makefile (probe names appear in the *_PROBES lists and
+    // their build rules), so a probe listed anywhere in the matrix counts as gated.
+    let gated: std::collections::HashSet<&str> = makefile.split_whitespace().collect();
+    let excluded: std::collections::HashSet<&str> =
+        GUI_MATRIX_EXCLUSIONS.iter().map(|(n, _)| *n).collect();
+
+    let mut orphans = Vec::new();
+    for entry in std::fs::read_dir(&dir).expect("read gui_matrix dir") {
+        let path = entry.expect("dir entry").path();
+        if path.extension().and_then(|e| e.to_str()) != Some("c") {
+            continue;
+        }
+        let stem = path.file_stem().and_then(|s| s.to_str()).unwrap().to_string();
+        if !gated.contains(stem.as_str()) && !excluded.contains(stem.as_str()) {
+            orphans.push(stem);
+        }
+    }
+    orphans.sort();
+    assert!(
+        orphans.is_empty(),
+        "gui_matrix probe sources are neither built by the Makefile nor in the documented exclusion \
+         table (silent coverage gap) — add them to the matrix or GUI_MATRIX_EXCLUSIONS: {orphans:?}"
+    );
+}

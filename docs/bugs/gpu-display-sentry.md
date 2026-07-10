@@ -97,36 +97,6 @@ Verification:
 
 Submit IR that creates and samples/writes texture id `1` while presenting to an IOSurface and assert it is not aliased with the render target.
 
-## Rendering Coverage Gaps Are Silent
-
-Priority: P2
-Impact: rendering regressions can sit outside default GUI gates
-Confidence: High
-
-Evidence:
-
-- Seven GUI probe sources were present but not included in the GUI matrix Makefile/default runner in the isolated worktree:
-  - `gui_egl_clear_only_swap`
-  - `gui_egl_draw_count_sentinel`
-  - `gui_egl_fifth_sampler`
-  - `gui_egl_r8_alpha_orientation`
-  - `gui_egl_renderbuffer_msaa_resolve`
-  - `retained_frame_partial_load`
-  - `single_channel_texture_probe`
-- Direct GPU replay has one Linux/aarch64 case and it is xfailed: `dd-tests/src/cases/ext/gpu_render_ir.rs:11`.
-
-Proof command:
-
-```sh
-comm -23 \
-  <(find dd-tests/guests/gui_matrix -maxdepth 1 -name '*.c' -printf '%f\n' | sed 's/\.c$//' | sort) \
-  <(sed -n '1,80p' dd-tests/guests/gui_matrix/Makefile | tr ' \t' '\n' | sed 's/\\$//' | rg '^gui_|^chrome_|^single_|^retained_' | sort -u)
-```
-
-Suggested gate:
-
-Add a static test that every `dd-tests/guests/gui_matrix/*.c` probe is either in the matrix or listed in a documented exclusion table with owner and reason.
-
 ## Native Window Close Is Not Propagated
 
 Priority: P2
