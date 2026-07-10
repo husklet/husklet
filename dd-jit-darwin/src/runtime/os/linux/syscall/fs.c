@@ -196,6 +196,7 @@ static void fd_reset_emul(int fd) {
         }
         g_devfull[fd] = 0;
         g_devseed[fd] = 0;
+        unix_bind_clear(fd);
 #ifdef __APPLE__
         if (g_devdri[fd]) dd_gpu_free_fd(fd); // release the render node's IOSurfaces on close
 #endif

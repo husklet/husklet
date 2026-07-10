@@ -388,30 +388,6 @@ native: peer_ns ns_stat=1 ns_readdir_net=1 net_readlink=1
 dd:     peer_ns ns_stat=0 ns_readdir_net=0 net_readlink=0
 ```
 
-### `/proc/net/unix` Ignores Live AF_UNIX Sockets
-
-Priority: P2
-Impact: socket diagnostics miss Unix-domain listeners
-Confidence: High
-
-Verification status: Proven in isolated worktree `/Users/x/dd/dd-worker-BE2-clean-20260710`.
-
-Evidence:
-
-- dd supports AF_UNIX path sockets: `dd-jit-darwin/src/runtime/os/linux/container/netns.c:1841`.
-- `/proc/net/unix` returns only the header: `dd-jit-darwin/src/runtime/os/linux/container/vfs.c:3490`.
-
-Why this is bad:
-
-Software and diagnostics use `/proc/net/unix` to discover Unix-domain sockets. dd can create a live socket but omit it from procfs, causing stale or empty socket inventory.
-
-Observed proof:
-
-```text
-Linux: proc_net_unix has_path=1 ok=1
-dd:    proc_net_unix has_path=0 lines=1 ok=0
-```
-
 ### Bind Mounts Are Missing From Mount Tables
 
 Priority: P1

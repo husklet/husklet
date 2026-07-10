@@ -109,6 +109,16 @@ static uint8_t g_devfull[DD_NFD];
 // macOS rejects them with EPERM. 1 = this fd is such a device, so svc_io swallows its writes as a no-op
 // success -- entropy-seeding probes (libgcrypt, some init scripts) then behave as on Linux.
 static uint8_t g_devseed[DD_NFD];
+// Guest-visible bound AF_UNIX socket names, for /proc/net/unix enumeration (`ss -x`, socket-inventory
+// tools). Recorded on a successful AF_UNIX bind (net.c); a pathname keeps its guest path, an abstract name
+// is stored as "@name". Empty slot = not a bound unix socket. Process-local (one net-namespace per engine).
+static char g_unix_bind[DD_NFD][108];
+static void unix_bind_note(int fd, const char *guestname) {
+    if (fd >= 0 && fd < DD_NFD && guestname) snprintf(g_unix_bind[fd], sizeof g_unix_bind[fd], "%s", guestname);
+}
+static void unix_bind_clear(int fd) {
+    if (fd >= 0 && fd < DD_NFD) g_unix_bind[fd][0] = 0;
+}
 // /dev/dri/renderD128: the synthesized GPU render node (GPU rung 2). 1 = this fd is the render node, so
 // its ioctl routes to the dd GPU allocator. Set only when DD_GPU_IOSURFACE gates the path on.
 static uint8_t g_devdri[DD_NFD];
@@ -3864,6 +3874,15 @@ static int proc_open(const char *rp) {
                      "TCP6: inuse 0\nUDP6: inuse 0\nUDPLITE6: inuse 0\nRAW6: inuse 0\nFRAG6: inuse 0 memory 0\n");
     } else if (!strcmp(rp, "/proc/net/unix")) {
         n = snprintf(buf, sizeof buf, "Num       RefCount Protocol Flags    Type St Inode Path\n");
+        // One row per live guest-bound AF_UNIX socket (socket-inventory tools read this). Columns match the
+        // kernel: a bound listener is Flags 00010000, St 01 (LISTEN); the inode is a stable synthetic id.
+        for (int fd = 0; fd < DD_NFD && n < (int)sizeof buf - 128; fd++) {
+            if (!g_unix_bind[fd][0]) continue;
+            if (fcntl(fd, F_GETFD) == -1) { g_unix_bind[fd][0] = 0; continue; } // closed -> drop
+            n += snprintf(buf + n, sizeof buf - (size_t)n,
+                          "%016x: %08x %08x %08x %04x %02x %5d %s\n", fd, 2u, 0u, 0x10000u, 1u, 1u,
+                          100000 + fd, g_unix_bind[fd]);
+        }
     } else if (!strcmp(rp, "/proc/net/snmp")) {
         // The full protocol-counter table `netstat -s` / `ss -s` parse: paired header+value lines for
         // Ip/Icmp/IcmpMsg/Tcp/Udp/UdpLite. dd runs no real IP stack, so the counters are zero -- but the

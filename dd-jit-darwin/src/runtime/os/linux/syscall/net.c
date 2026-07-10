@@ -540,6 +540,16 @@ static int svc_net(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_
             un.sun_family = AF_UNIX;
             snprintf(un.sun_path, sizeof un.sun_path, "%s", up);
             int r = bind((int)a0, (struct sockaddr *)&un, sizeof un);
+            if (r == 0) { // record the guest-visible abstract name "@<name>" for /proc/net/unix
+                char an[108];
+                int L = (int)a2 - 3; // sun_path[0]==0, name follows; addrlen = 2 (family) + 1 (nul) + name
+                if (L < 0) L = 0;
+                if (L > (int)sizeof an - 2) L = (int)sizeof an - 2;
+                an[0] = '@';
+                memcpy(an + 1, sa + 3, (size_t)L);
+                an[L + 1] = 0;
+                unix_bind_note((int)a0, an);
+            }
             G_RET(c) = r < 0 ? (uint64_t)(-errno) : 0;
             break;
         }
@@ -556,6 +566,7 @@ static int svc_net(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_
             // so the socket inode lands exactly where the guest's stat/chmod/connect resolves -- a plain bind
             // would truncate the long upper path and strand the inode where nothing can find it.
             int r = unix_sock_at((int)a0, host, 0);
+            if (r == 0) unix_bind_note((int)a0, gp); // record the guest path for /proc/net/unix
             G_RET(c) = r < 0 ? (uint64_t)(-errno) : 0;
             break;
         }
@@ -595,6 +606,12 @@ static int svc_net(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_
             socklen_t hl = sa_l2m(sa, (socklen_t)a2, &ss);
             int br = (hl != (socklen_t)-1) ? bind((int)a0, (struct sockaddr *)&ss, hl)
                                            : bind((int)a0, (void *)a1, (socklen_t)a2);
+            // bare-mode AF_UNIX pathname bind (no overlay jail): record the guest path for /proc/net/unix.
+            if (br == 0 && a2 >= 3 && *(uint16_t *)(sa + 0) == AF_UNIX && sa[2]) {
+                char gp[108];
+                snprintf(gp, sizeof gp, "%.*s", (int)sizeof gp - 1, (const char *)(sa + 2));
+                unix_bind_note((int)a0, gp);
+            }
             G_RET(c) = br < 0 ? (uint64_t)(-errno) : 0;
         }
         break;

@@ -36,6 +36,7 @@ pub(super) fn sys_proc() -> Group {
             sy("pf-statfs", "completeness/pf_statfs.c"),
             sy("pf-smaps", "completeness/pf_smaps.c"),
             sy("pf-maps-relro", "completeness/pf_maps_relro.c"),
+            sy("pf-net-unix", "completeness/pf_net_unix.c"),
         ],
     )
 }
