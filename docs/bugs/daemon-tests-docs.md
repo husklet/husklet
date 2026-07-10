@@ -1495,30 +1495,6 @@ CARGO_TARGET_DIR=/Users/x/dd/dd-audit-container-state-20260710-target cargo test
 
 Result: `HostConfig.LogConfig.Type` was `Null`, expected `json-file`.
 
-## Container Update Drops Resource Body
-
-Priority: P1
-Impact: resource updates report success but do not persist
-Confidence: High
-
-Verification status: Proven in isolated worktree `/Users/x/dd/dd-audit-daemon-api-state-lifecycle-src`.
-
-Evidence:
-
-- Update handler ignores the request body and returns success: `dd-daemon/src/containers/inspect/admin.rs:30`.
-
-Why this is bad:
-
-`POST /containers/{id}/update` should apply memory, pids, CPU, and restart policy updates or reject unsupported fields. Returning `200` while leaving state unchanged silently breaks resource-management tools.
-
-Isolated proof:
-
-```sh
-CARGO_TARGET_DIR=/Users/x/dd/dd-audit-daemon-api-state-lifecycle-target cargo test -p dd-daemon audit_ -- --nocapture
-```
-
-Result: update returned `200`, but `Memory` stayed `0`; expected `Memory=67108864`, `PidsLimit=42`, `NanoCpus=1500000000`, and `RestartPolicy=on-failure:3`.
-
 ## DNS And ExtraHosts Options Are Lost
 
 Priority: P1
