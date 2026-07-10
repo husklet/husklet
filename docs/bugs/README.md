@@ -45,7 +45,6 @@ This directory is a working inventory of suspicious behavior, bad architecture, 
 | P1 | daemon/create | create accepts image records whose rootfs is missing | High | [daemon-tests-docs.md](daemon-tests-docs.md#create-accepts-image-records-whose-rootfs-is-missing) |
 | P1 | daemon/create | anonymous volume materialization failures are ignored | High | [daemon-tests-docs.md](daemon-tests-docs.md#anonymous-volume-materialization-failures-are-ignored) |
 | P1 | env/exec | `execve(..., envp=NULL)` leaks default/stale env | High | [completeness-and-env.md](completeness-and-env.md#execve-envpnull-leaks-a-default-or-stale-environment) |
-| P1 | env/exec | guest exec truncates argv at 255 args | High | [completeness-and-env.md](completeness-and-env.md#guest-exec-truncates-argv-at-255-args) |
 | P1 | procfs/memory | `sysinfo(2)` ignores container memory cap | High | [completeness-and-env.md](completeness-and-env.md#sysinfo2-ignores-container-memory-cap) |
 | P1 | display/xdg | xdg configure/ack race allows pre-ack presentation | High | [gpu-display-sentry.md](gpu-display-sentry.md#xdg-configureack-race-allows-pre-ack-presentation) |
 | P1 | display/clipboard | inert data-device objects silently swallow selection | High | [gpu-display-sentry.md](gpu-display-sentry.md#data-device-objects-are-inert) |
@@ -101,7 +100,6 @@ This directory is a working inventory of suspicious behavior, bad architecture, 
 | P1 | procfs/smaps | `/proc/self/smaps` can hang on read | High | [completeness-and-env.md](completeness-and-env.md#procselfsmaps-can-hang-on-read) |
 | P1 | procfs/statfs | `statfs` is wrong for synthetic proc/sys leaves | High | [completeness-and-env.md](completeness-and-env.md#statfs-is-wrong-for-synthetic-procsys-leaves) |
 | P1 | procfs/statfs | `statfs.f_flags` is always zero | High | [completeness-and-env.md](completeness-and-env.md#statfsf_flags-is-always-zero) |
-| P1 | devfs/random | `/dev/urandom` writes fail with `EPERM` | High | [completeness-and-env.md](completeness-and-env.md#devurandom-writes-fail-with-eperm) |
 | P1 | devfs/tty | `/dev/tty` nonblocking read reports EOF instead of `EAGAIN` | High | [completeness-and-env.md](completeness-and-env.md#devtty-nonblocking-read-reports-eof-instead-of-eagain) |
 | P2 | procfs/fd | `/proc/self/fdinfo` is missing | High | [completeness-and-env.md](completeness-and-env.md#procselffdinfo-is-missing) |
 | P2 | procfs/state | futex-blocked processes report running in procfs | High | [completeness-and-env.md](completeness-and-env.md#futex-blocked-processes-report-running-in-procfs) |
