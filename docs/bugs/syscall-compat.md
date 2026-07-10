@@ -467,30 +467,6 @@ Linux: sa_nocldwait sigs=1 wait=-1 errno=10 no_zombie=1 raw=0x0
 dd:    sa_nocldwait sigs=1 wait=38818 errno=0 no_zombie=0 raw=0x1700
 ```
 
-## `clone` Ignores Parent And Child TID Stores
-
-Priority: P2
-Impact: process clone TID synchronization fields are not written
-Confidence: High
-
-Verification status: Proven in isolated worktree `/Users/x/dd/dd-wait-audit-20260710`.
-
-Evidence:
-
-- Process clone handling ignores `CLONE_PARENT_SETTID` and `CLONE_CHILD_SETTID`: `dd-jit-darwin/src/runtime/os/linux/syscall/proc.c:1465`.
-- Clone3 likely has the same gap: `dd-jit-darwin/src/runtime/os/linux/syscall/proc.c:1972`.
-
-Why this is bad:
-
-Linux stores the child pid into the parent and child TID pointers when requested. dd leaves the parent store unchanged and the child store invisible.
-
-Observed proof:
-
-```text
-qemu: clone_tid_parent child=95848 ptid=95848 parent_ok=1 child_ok=1 raw=0x0
-dd:   clone_tid_parent child=38820 ptid=-1 parent_ok=0 child_ok=0 raw=0x2a00
-```
-
 ## `SA_NOCLDSTOP` Still Delivers Stop SIGCHLD
 
 Priority: P2

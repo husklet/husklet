@@ -1532,6 +1532,12 @@ static int svc_proc(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64
             // garbage branch (SIGILL — broke initdb). a1==0 for a plain fork (bash), keeping the inherited SP.
             if ((a0 & 0x100) && a1) G_SP(c) = a1;
             fork_child_hooks(c); // shared child-side engine reset (cache re-alias, caches, kqueues, locks)
+            // CLONE_CHILD_SETTID(0x01000000): store the child's own tid (== its pid for a process clone) into
+            // the child's *ctid (a4). CLONE_CHILD_CLEARTID(0x00200000): remember ctid so thread/process exit
+            // zeroes it and FUTEX_WAKEs a joiner. The old code ignored both, so pthread/runtime handshakes
+            // that read the child tid from these slots saw stale memory.
+            if ((a0 & 0x01000000) && a4) *(int *)a4 = (int)getpid();
+            if (a0 & 0x00200000) c->ctid = a4;
             if (proc_log_on()) {
                 proc_log_prefix("clone_child");
                 fprintf(stderr, " flags=0x%llx child_stack=0x%llx ret=0\n", (unsigned long long)a0,
@@ -1554,6 +1560,9 @@ static int svc_proc(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64
             int pfd = pidfd_make(pid);
             if (pfd >= 0) *(int *)a2 = pfd;
         }
+        // CLONE_PARENT_SETTID(0x00100000): store the child's tid (its pid) into the PARENT's *ptid (a2).
+        // Mutually exclusive with CLONE_PIDFD (which also uses the ptid slot), so it never clobbers a pidfd.
+        if (pid > 0 && (a0 & 0x00100000) && !(a0 & 0x1000) && a2) *(int *)a2 = (int)pid;
         // parent: pid, child: 0
         G_RET(c) = pid < 0 ? (uint64_t)(-errno) : (uint64_t)pid;
         // A fork/vfork that was normalized to clone repurposed the guest's arg registers; put them back so
@@ -2066,6 +2075,10 @@ static int svc_proc(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64
         if (pid == 0) {
             if ((flags & 0x100) && ca[5]) G_SP(c) = ca[5] + ca[6];
             fork_child_hooks(c);
+            // clone_args: child_tid = ca[2]. CLONE_CHILD_SETTID stores the child's tid there; CLONE_CHILD_
+            // CLEARTID remembers it so exit zeroes it + wakes a joiner (mirrors case 220).
+            if ((flags & 0x01000000) && ca[2]) *(int *)ca[2] = (int)getpid();
+            if (flags & 0x00200000) c->ctid = ca[2];
             if (proc_log_on()) {
                 proc_log_prefix("clone3_child");
                 fprintf(stderr, " flags=0x%llx stack=0x%llx stack_size=0x%llx ret=0\n",
@@ -2083,6 +2096,9 @@ static int svc_proc(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64
             int pfd = pidfd_make(pid);
             if (pfd >= 0) *(int *)ca[1] = pfd;
         }
+        // clone_args: parent_tid = ca[3]. CLONE_PARENT_SETTID stores the child's tid (pid) into the PARENT's
+        // parent_tid (a distinct field from pidfd in clone3, so it never conflicts with CLONE_PIDFD).
+        if (pid > 0 && (flags & 0x00100000) && ca[3]) *(int *)ca[3] = (int)pid;
         G_RET(c) = pid < 0 ? (uint64_t)(-errno) : (uint64_t)pid;
         break;
     }
