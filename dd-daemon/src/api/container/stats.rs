@@ -60,7 +60,12 @@ pub(crate) struct ThrottlingData {
 #[derive(Serialize)]
 pub(crate) struct MemoryStats {
     pub usage: u64,
+    /// Peak usage — docker-compat clients read `max_usage`; dd has no historical high-water mark, so it
+    /// mirrors `usage` (a consistent value beats an omitted key strict clients choke on).
+    pub max_usage: u64,
     pub limit: u64,
+    /// Memory-limit-hit counter — always 0 (dd doesn't OOM-throttle), but present for client compat.
+    pub failcnt: u64,
     /// Always the empty object `{}` (dd has no cgroup memory breakdown).
     pub stats: BTreeMap<String, Value>,
 }

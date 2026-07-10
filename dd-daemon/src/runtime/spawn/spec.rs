@@ -11,11 +11,42 @@ pub(super) fn resolve_mount_src(src: &str, volumes_dir: &str, vols: &[Vol]) -> S
     } else if let Some(v) = vols.iter().find(|v| v.name == src) {
         v.mountpoint.clone()
     } else {
-        PathBuf::from(volumes_dir)
-            .join(src)
-            .to_string_lossy()
-            .into_owned()
+        // A named-volume-looking source: resolve under volumes_dir, but NEVER let a crafted name like
+        // `../../etc` escape the volumes root via path-join (a host-path traversal). Lexically normalize
+        // the join and, if it would land outside the root, clamp to a single sanitized segment inside it.
+        let root = PathBuf::from(volumes_dir);
+        let normalized = lexical_normalize(&root.join(src));
+        if normalized.starts_with(&root) {
+            normalized.to_string_lossy().into_owned()
+        } else {
+            root.join(src.replace(['/', '\\'], "_"))
+                .to_string_lossy()
+                .into_owned()
+        }
     }
+}
+
+/// Resolve `.`/`..` path components LEXICALLY (no filesystem access, so it works for not-yet-created
+/// volume dirs): `.` is dropped, `..` pops the previous normal component (never past the root prefix).
+/// Used to detect a volume source that would path-join outside the volumes root.
+fn lexical_normalize(p: &std::path::Path) -> PathBuf {
+    use std::path::Component;
+    let mut out = PathBuf::new();
+    for comp in p.components() {
+        match comp {
+            Component::CurDir => {}
+            Component::ParentDir => {
+                // Pop only a normal segment; never ascend past a root/prefix (keeps escapes detectable).
+                if matches!(out.components().next_back(), Some(Component::Normal(_))) {
+                    out.pop();
+                } else {
+                    out.push("..");
+                }
+            }
+            other => out.push(other.as_os_str()),
+        }
+    }
+    out
 }
 
 /// `--cpus`: NanoCpus → ceil to whole online CPUs (0/unset = unlimited). Mirrors moby's whole-CPU
@@ -82,6 +113,21 @@ mod tests {
 
     #[test]
     fn resolve_mount_src_unknown_name_falls_under_volumes_dir() {
+        assert_eq!(resolve_mount_src("data", "/vols", &[]), "/vols/data");
+    }
+
+    // "Inline Volume Sources Can Escape volumes_dir": a `../..`-laced source must NOT path-join outside
+    // the volumes root — it is clamped to a sanitized single segment inside it.
+    #[test]
+    fn resolve_mount_src_dotdot_source_stays_inside_volumes_dir() {
+        for bad in ["../escaped", "../../etc", "a/../../b"] {
+            let got = resolve_mount_src(bad, "/vols", &[]);
+            assert!(
+                got.starts_with("/vols/") && !lexical_normalize(std::path::Path::new(&got)).starts_with("/etc"),
+                "{bad} must resolve inside /vols, got {got}"
+            );
+        }
+        // A normal name is unaffected.
         assert_eq!(resolve_mount_src("data", "/vols", &[]), "/vols/data");
     }
 

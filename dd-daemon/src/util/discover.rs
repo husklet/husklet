@@ -14,10 +14,59 @@ pub(crate) use dd_images::{ref_name, ref_repo};
 /// detection + env recovery + tag-dedup all happen in `dd_images`; here we only translate the plain
 /// [`dd_images::DiscoveredImage`] (runtime-agnostic arch, raw-JSON healthcheck) into an `Image`.
 pub(crate) fn discover_images(images_dir: &str) -> Vec<Image> {
-    dd_images::discover_images(images_dir)
+    let mut imgs: Vec<Image> = dd_images::discover_images(images_dir)
         .into_iter()
         .map(image_from_discovered)
-        .collect()
+        .collect();
+    // Re-apply persisted `docker tag` aliases: each records `alias -> rootfs`, so we clone the discovered
+    // base image (matched by rootfs) under the alias name. This makes tags survive a daemon restart —
+    // previously they lived only in memory and vanished on rediscovery.
+    for (alias, rootfs) in read_tag_aliases(images_dir) {
+        if imgs.iter().any(|i| i.name == alias) {
+            continue;
+        }
+        if let Some(base) = imgs.iter().find(|i| i.rootfs == rootfs).cloned() {
+            imgs.push(Image { name: alias, ..base });
+        }
+    }
+    imgs
+}
+
+/// The dir holding persisted `docker tag` alias records (`<images_dir>/dd-aliases/*.json`).
+fn tag_aliases_dir(images_dir: &str) -> std::path::PathBuf {
+    std::path::Path::new(images_dir).join("dd-aliases")
+}
+
+/// Persist one `docker tag` alias (`alias` reference -> the shared image `rootfs`) so it survives a daemon
+/// restart. Best-effort — a write failure just means the alias won't survive, matching prior in-memory-only
+/// behavior for the failure case.
+pub(crate) fn persist_tag_alias(images_dir: &str, alias: &str, rootfs: &str) {
+    let dir = tag_aliases_dir(images_dir);
+    let _ = std::fs::create_dir_all(&dir);
+    let file = dir.join(format!("{}.json", crate::util::fake_id(alias)));
+    let _ = std::fs::write(
+        file,
+        serde_json::json!({ "name": alias, "rootfs": rootfs }).to_string(),
+    );
+}
+
+/// Read every persisted tag alias as `(alias, rootfs)` pairs. Missing dir / bad files are skipped.
+fn read_tag_aliases(images_dir: &str) -> Vec<(String, String)> {
+    let mut out = Vec::new();
+    let Ok(rd) = std::fs::read_dir(tag_aliases_dir(images_dir)) else {
+        return out;
+    };
+    for e in rd.flatten() {
+        if let Some(v) = std::fs::read_to_string(e.path())
+            .ok()
+            .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok())
+        {
+            if let (Some(name), Some(rootfs)) = (v["name"].as_str(), v["rootfs"].as_str()) {
+                out.push((name.to_string(), rootfs.to_string()));
+            }
+        }
+    }
+    out
 }
 
 /// Map one runtime-agnostic [`dd_images::DiscoveredImage`] onto the daemon's [`Image`]: its [`dd_images::Arch`]

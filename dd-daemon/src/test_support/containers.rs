@@ -818,3 +818,19 @@ async fn create_rolls_back_and_500s_when_state_cannot_persist() {
     }
     assert!(!saw_create, "no container/create event when the state save failed");
 }
+
+// ---- failed spawn removes the spent Live so a retry re-spawns (not a stale 204 no-op) ---------
+#[tokio::test]
+async fn failed_spawn_removes_spent_live_entry() {
+    let app = test_app();
+    seed_container(&app, "spent0000000", "running").await;
+    let live = crate::model::Live::new();
+    // Simulate what containers_start does: install the Live under the container id, mark it started.
+    app.inner.lock().await.live.insert("spent0000000".into(), live.clone());
+    live.started.store(true, std::sync::atomic::Ordering::SeqCst);
+    let _ = crate::runtime::live_fail(&app, "spent0000000", &live, "boom".into()).await;
+    assert!(
+        !app.inner.lock().await.live.contains_key("spent0000000"),
+        "a failed spawn must drop the spent Live so a second start creates a fresh one"
+    );
+}

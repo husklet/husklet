@@ -37,7 +37,9 @@ pub(crate) async fn containers_start(State(a): State<App>, Path(id): Path<String
     if std::env::var("DD_DEBUG").is_ok() {
         eprintln!("[start] {} cmd={:?}", &c.id[..12], c.cmd);
     }
-    spawn_live(&a, &c, &vols, live).await;
+    // Emit `start` BEFORE spawning: spawn_live launches the reaper on a concurrent task, and a very
+    // short-lived container could otherwise fire `die` from that task before this handler emitted `start`,
+    // giving event consumers an impossible die-before-start ordering. Emitting first guarantees the order.
     crate::events::emit_event(
         &a.events,
         "container",
@@ -45,6 +47,7 @@ pub(crate) async fn containers_start(State(a): State<App>, Path(id): Path<String
         &c.id,
         json!({"name": c.name, "image": c.image}),
     );
+    spawn_live(&a, &c, &vols, live).await;
     StatusCode::NO_CONTENT.into_response()
 }
 

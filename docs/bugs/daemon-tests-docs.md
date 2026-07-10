@@ -70,36 +70,6 @@ CARGO_TARGET_DIR=/Users/x/dd/verify3-target cargo test -p dd-daemon --bin dd-dae
 
 Result: `1 passed; 0 failed`. The test demonstrates state records a forwarder/start path even when the host bind fails in the acceptor.
 
-## Inline Volume Sources Can Escape `volumes_dir`
-
-Priority: P1
-Impact: host path escape through named-volume-looking input
-Confidence: Medium
-
-Verification status: Proven as a compatibility/data-placement bug in isolated worktree `/Users/x/dd/verify3-dd-worktree`.
-
-Evidence:
-
-- Explicit volume creation validates names: `dd-daemon/src/volumes.rs:71`.
-- Create persists raw `HostConfig.Binds` / `Mounts`: `dd-daemon/src/containers/lifecycle/create/mod.rs:136`, `dd-daemon/src/containers/lifecycle/create/mod.rs:259`, `dd-daemon/src/containers/lifecycle/create/mod.rs:312`.
-- Non-absolute mount sources are resolved with `PathBuf::from(volumes_dir).join(src)`: `dd-daemon/src/runtime/spawn/spec.rs:8`.
-
-Why this is bad:
-
-An inline source like `../../some-host-dir:/mnt` can be treated as a named volume but path-join outside `volumes_dir`. Explicit volume creation rejects bad names, but inline bind/mount input appears to bypass that validation.
-
-Verification:
-
-Use raw Docker API input with `Binds: ["../../x:/mnt"]` or `Mounts: [{Type:"volume", Source:"../../x", Target:"/mnt"}]` and inspect the resolved host path.
-
-Isolated proof:
-
-```sh
-CARGO_TARGET_DIR=/Users/x/dd/verify3-target cargo test -p dd-daemon --bin dd-daemon resolve_mount_src_dotdot_source_resolves_outside_volumes_dir -- --nocapture
-```
-
-Result: `1 passed; 0 failed`. The proof uses `../escaped` and shows the resolved path canonicalizes outside the local volume root.
-
 ## Live Network Connect/Disconnect Mutates Daemon State Only
 
 Priority: P2
@@ -155,32 +125,6 @@ CARGO_TARGET_DIR=/Users/x/dd/dd-target-3b cargo test -p dd-daemon deeper_3b -- -
 ```
 
 PoC `USER 1001` case produced image user `""`.
-
-## Failed Start Leaves A Spent `Live`
-
-Priority: P1
-Impact: start API can report success without spawning a process
-Confidence: High
-
-Verification status: Proven in isolated worktree `/Users/x/dd/dd-3b-worktree`.
-
-Evidence:
-
-- Start reuses an existing `Live` entry: `dd-daemon/src/containers/lifecycle/run.rs:23`.
-- Start marks the container running before spawn: `dd-daemon/src/containers/lifecycle/run.rs:29`.
-- Spawn failure records exit state on the `Live` but does not remove the spent entry: `dd-daemon/src/runtime/spawn/live.rs:337`.
-
-Why this is bad:
-
-After one failed start, a second start can return `204` through a stale `Live` path without actually spawning. That creates false running state and confusing logs/events.
-
-Isolated proof:
-
-```sh
-CARGO_TARGET_DIR=/Users/x/dd/dd-target-3b cargo test -p dd-daemon deeper_3b -- --ignored --nocapture
-```
-
-PoC second start returned `204` again after the first failed spawn.
 
 ## Concurrent Pulls Share A Layer Temp File
 
@@ -420,66 +364,6 @@ Create one canonical gap registry with:
 - current dd behavior
 - close condition
 
-## `DDOCKERD_SOCK` Startup Unlinks Configured Path
-
-Priority: P2
-Impact: environment-only daemon config can delete the wrong socket path
-Confidence: Medium-high
-
-Evidence:
-
-- Daemon reads `DDOCKERD_SOCK`: `dd-daemon/src/main.rs:66`.
-- It unconditionally removes that path before binding: `dd-daemon/src/main.rs:71`.
-- Binding occurs later at the configured path: `dd-daemon/src/main.rs:131`.
-
-Why this is bad:
-
-An env-var-only socket override should not blindly unlink arbitrary configured paths. At minimum, startup should verify the path is a stale socket owned by the daemon before removing it.
-
-## Fast-Exit Event Ordering Can Emit `die` Before `start`
-
-Priority: P2
-Impact: event consumers can observe impossible lifecycle order
-Confidence: Medium
-
-Evidence:
-
-- Start emits event state around launch: `dd-daemon/src/containers/lifecycle/run.rs:40`.
-- Reaper/die event emission happens from live lifecycle code: `dd-daemon/src/runtime/spawn/live.rs:202`.
-
-Why this is suspicious:
-
-For very short-lived containers, the reaper path can race the start event path. Event consumers expect `start` before `die`; inverted ordering can corrupt state machines that replay event streams.
-
-Verification:
-
-Run a fast-exiting container repeatedly under event capture and assert each container's event order is create, start, die.
-
-## `docker tag` Aliases Do Not Survive Discovery
-
-Priority: P1
-Impact: image aliases vanish after daemon restart
-Confidence: High
-
-Verification status: Proven in isolated worktree `/Users/x/dd/dd-worker-AG-daemon-image-20260710`.
-
-Evidence:
-
-- Tagging mutates only in-memory image state: `dd-daemon/src/images/tags.rs:37`.
-- Restart discovery rebuilds images from on-disk sidecars: `dd-images/src/image/discovery/mod.rs:63`.
-
-Why this is bad:
-
-Tags are persistent Docker image metadata. If aliases exist only in daemon memory, a restart or rediscovery can drop them, breaking later `run`, `push`, or delete operations that refer to the alias.
-
-Isolated proof:
-
-```sh
-CARGO_TARGET_DIR=/Users/x/dd/dd-worker-AG-daemon-image-20260710/target-ag cargo test -p dd-daemon image_tag_alias_survives_daemon_restart_discovery -- --ignored --nocapture
-```
-
-Result: failed; alias was visible before simulated restart but missing from `discover_images`.
-
 ## Retained Container Logs Are Lost Across Daemon Restart
 
 Priority: P1
@@ -533,31 +417,6 @@ CARGO_TARGET_DIR=/Users/x/dd/dd-worker-BH2-daemon-image-ref-config-state-2026071
 ```
 
 Result: failed; existing container rootfs marker changed from `old` to `new`.
-
-## Stats JSON Is Internally Inconsistent
-
-Priority: P2
-Impact: Docker stats clients see contradictory process and memory data
-Confidence: High
-
-Verification status: Proven in isolated worktree `/Users/x/dd/dd-audit-daemon-events-logs-stats-restart-20260710`.
-
-Evidence:
-
-- Stats building reports pids and process counts from different sources: `dd-daemon/src/containers/inspect/stats.rs:117`, `dd-daemon/src/containers/inspect/stats.rs:127`.
-- Stats DTO memory shape omits compatibility fields: `dd-daemon/src/api/container/stats.rs:60`.
-
-Why this is bad:
-
-`pids_stats.current` and `num_procs` should not contradict, and Docker-compatible memory stats include fields such as `max_usage` and `failcnt`.
-
-Isolated proof:
-
-```sh
-CARGO_TARGET_DIR=/Users/x/dd/dd-audit-daemon-events-logs-stats-restart-target cargo test -p dd-daemon stats_process_count_and_memory_shape_match_docker_clients -- --nocapture
-```
-
-Result: failed first on `num_procs=0` while `pids_stats.current=1`.
 
 ## Health Starting Transition Is Asynchronous
 
