@@ -23,6 +23,13 @@ pub(crate) struct ExecInspect {
     #[serde(rename = "ContainerID")]
     pub container_id: String,
     pub process_config: ExecProcessConfig,
+    // Docker exec inspect also reports the stream-capability + removal + pid fields clients read.
+    pub open_stdin: bool,
+    pub open_stderr: bool,
+    pub open_stdout: bool,
+    pub can_remove: bool,
+    pub detach_keys: String,
+    pub pid: i64,
 }
 
 /// The nested `ProcessConfig` — docker's lowercase keys verbatim (no PascalCase).

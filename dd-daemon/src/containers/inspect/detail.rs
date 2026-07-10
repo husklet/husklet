@@ -88,7 +88,9 @@ pub(crate) async fn containers_inspect(State(a): State<App>, Path(id): Path<Stri
                 paused: c.status == "paused",
                 restarting,
                 oom_killed: false,
-                dead: false,
+                // State.Dead must agree with a `dead` lifecycle status (docker sets both together);
+                // reporting Status="dead" with Dead=false is a self-contradictory inspect document.
+                dead: c.status == "dead",
                 error: String::new(),
                 pid: pid as i64,
                 started_at,

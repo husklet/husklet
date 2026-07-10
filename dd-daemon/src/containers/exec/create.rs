@@ -48,10 +48,19 @@ pub(crate) async fn exec_create(
         return bad_request("No exec command specified");
     }
     let exec_id = new_id(&format!("exec-{full}"));
+    // Docker emits a container `exec_create: <cmd>` event (Actor = the parent container) so event mirrors
+    // track exec lifecycle. The action carries the command, matching docker's shape.
+    crate::events::emit_event(
+        &a.events,
+        "container",
+        &format!("exec_create: {}", cmd.join(" ")),
+        &full,
+        json!({"execID": exec_id, "name": full}),
+    );
     g.execs.insert(
         exec_id.clone(),
         Exec {
-            container_id: full,
+            container_id: full.clone(),
             cmd,
             tty: body.tty.unwrap_or(false),
             started: false,

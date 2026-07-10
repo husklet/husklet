@@ -676,3 +676,98 @@ async fn container_create_honors_endpoint_static_ip_and_aliases() {
     assert!(ep.aliases.contains(&"web".to_string()));
     assert!(ep.aliases.contains(&"api".to_string()));
 }
+
+// ---- docker top on a stopped container is 409 ------------------------------------------------
+#[tokio::test]
+async fn top_on_stopped_container_is_409() {
+    let app = test_app();
+    seed_container(&app, "stopped00000", "exited").await;
+    let resp = crate::containers::containers_top(State(app.clone()), Path("stopped00000".into())).await;
+    assert_eq!(resp.status(), StatusCode::CONFLICT, "top on a stopped container is a conflict");
+    // A running container still returns the synthetic process row (200).
+    seed_container(&app, "running00000", "running").await;
+    let ok = crate::containers::containers_top(State(app.clone()), Path("running00000".into())).await;
+    assert_eq!(ok.status(), StatusCode::OK);
+}
+
+// ---- inspect Dead boolean agrees with a dead status ------------------------------------------
+#[tokio::test]
+async fn inspect_dead_status_sets_dead_boolean() {
+    let app = test_app();
+    seed_container(&app, "deadone00000", "dead").await;
+    let v = to_body_json(
+        crate::containers::containers_inspect(State(app.clone()), Path("deadone00000".into()))
+            .await
+            .into_response(),
+    )
+    .await;
+    assert_eq!(v["State"]["Status"], "dead");
+    assert_eq!(v["State"]["Dead"], true, "State.Dead must agree with a dead status");
+}
+
+// ---- wait on a created container blocks until it exits (no fake StatusCode:0) -----------------
+#[tokio::test]
+async fn wait_on_created_container_blocks_until_exit() {
+    let app = test_app();
+    seed_container(&app, "waitcreated0", "created").await;
+    let waitq: crate::containers::WaitQ = serde_json::from_value(serde_json::json!({})).unwrap();
+    let app2 = app.clone();
+    let handle = tokio::spawn(async move {
+        let resp = crate::containers::containers_wait(State(app2), Path("waitcreated0".into()), Query(waitq)).await;
+        axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap().to_vec()
+    });
+    // It must NOT complete while the container is still `created`.
+    tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+    assert!(!handle.is_finished(), "wait must block a created container, not return immediately");
+    // Now the container exits with code 7 -> wait completes with that code.
+    {
+        let mut g = app.inner.lock().await;
+        let c = g.containers.get_mut("waitcreated0").unwrap();
+        c.status = "exited".into();
+        c.exit_code = 7;
+    }
+    let body = tokio::time::timeout(std::time::Duration::from_secs(2), handle).await
+        .expect("wait completes once exited").unwrap();
+    assert_eq!(String::from_utf8_lossy(&body).trim(), "{\"StatusCode\":7}");
+}
+
+// ---- wait condition=removed does not complete while the container still exists ----------------
+#[tokio::test]
+async fn wait_condition_removed_blocks_until_removed() {
+    let app = test_app();
+    seed_container(&app, "waitremoved0", "exited").await;
+    let waitq: crate::containers::WaitQ =
+        serde_json::from_value(serde_json::json!({"condition":"removed"})).unwrap();
+    let app2 = app.clone();
+    let handle = tokio::spawn(async move {
+        let resp = crate::containers::containers_wait(State(app2), Path("waitremoved0".into()), Query(waitq)).await;
+        axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap().to_vec()
+    });
+    tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+    assert!(!handle.is_finished(), "condition=removed must not complete while the container exists");
+    // Remove it -> wait completes.
+    app.inner.lock().await.containers.remove("waitremoved0");
+    let _ = tokio::time::timeout(std::time::Duration::from_secs(2), handle).await
+        .expect("wait completes once the container is removed");
+}
+
+// ---- failed spawn persists the terminal exit state (survives a daemon restart) ----------------
+// live_fail is the failed-spawn path (no engine needed): it must mark the container exited/127 AND
+// persist that, so a reload doesn't resurrect it as running. Engine-free: we call live_fail directly.
+#[tokio::test]
+async fn failed_spawn_persists_terminal_exit_state() {
+    let app = test_app();
+    seed_container(&app, "failspawn000", "running").await;
+    let live = crate::model::Live::new();
+    let ok = crate::runtime::live_fail(&app, "failspawn000", &live, "boom".into()).await;
+    assert!(!ok, "live_fail returns false (spawn failed)");
+    let g = app.inner.lock().await;
+    let c = g.containers.get("failspawn000").unwrap();
+    assert_eq!(c.status, "exited", "failed spawn marks the container exited");
+    assert_eq!(c.exit_code, 127);
+    // The persisted state file exists and reflects the terminal status (not `running`).
+    let raw = std::fs::read_to_string(&app.state_path).expect("state persisted");
+    let saved: serde_json::Value = serde_json::from_str(&raw).expect("state is valid JSON");
+    let status = saved["containers"][0]["status"].as_str().unwrap_or("");
+    assert_eq!(status, "exited", "terminal state must be durably saved, not left running");
+}

@@ -7,6 +7,14 @@ pub(crate) async fn containers_top(State(a): State<App>, Path(id): Path<String>)
     let Some((_, c)) = resolve_get(&g, &id) else {
         return no_such(&id);
     };
+    // Docker returns a 409 for `top` on a non-running container — a synthetic PID row on a stopped
+    // container makes it look alive to orchestration. Only running/paused containers have a process tree.
+    if c.status != "running" && c.status != "paused" {
+        return conflict(format!(
+            "Container {} is not running",
+            &c.id[..12.min(c.id.len())]
+        ));
+    }
     let cmd = c.cmd.join(" ");
     Json(crate::api::ContainerTop {
         titles: vec![
