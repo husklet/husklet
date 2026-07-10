@@ -1213,30 +1213,6 @@ CARGO_TARGET_DIR=/Users/x/dd/dd-worker-AX-daemon-lifecycle-events-prune-image-20
 
 Result: failed with status `404`.
 
-## Explicit Tag Lookup Falls Back To Another Tag
-
-Priority: P1
-Impact: missing explicit tags can run or inspect the wrong image
-Confidence: High
-
-Verification status: Proven in isolated worktree `/Users/x/dd/dd-worker-AL-daemon-image-20260710`.
-
-Evidence:
-
-- Image lookup filters only by repository and then chooses the best local tag even when the reference had an explicit missing tag: `dd-daemon/src/util/discover.rs:81`.
-
-Why this is bad:
-
-`app:2` should fail if only `app:1` exists. Falling back to another local tag means `run`, `inspect`, `history`, or tag-source lookup can silently use the wrong rootfs and config.
-
-Isolated proof:
-
-```sh
-TMPDIR="$PWD/target/tmp" cargo test -p dd-daemon find_image_rejects_missing_explicit_tag -- --nocapture
-```
-
-Result: failed; `find_image(&[app:1], "app:2")` returned a different local tag instead of `None`.
-
 ## `docker commit` Can Inherit Config From Wrong Repository
 
 Priority: P1

@@ -83,7 +83,14 @@ pub(crate) fn find_image<'a>(images: &'a [Image], reference: &str) -> Option<&'a
     let want = ref_name(reference);
     let want_rt = repo_tag(reference);
     let want_latest = format!("{want}:latest");
-    images
+    // Whether the reference pinned an EXPLICIT tag (a ':' in the last path segment, excluding a `@digest`
+    // and a registry `host:port`). `app:2` should resolve ONLY to `app:2` — never fall back to a sibling
+    // tag like `app:1`. A bare `app` keeps the lenient best-local-tag resolution other flows depend on.
+    let has_explicit_tag = reference
+        .rsplit('/')
+        .next()
+        .is_some_and(|last| last.contains(':') && !last.contains('@'));
+    let best = images
         .iter()
         // Match on the fully-qualified repository (registry+namespace+name), NOT the bare basename, so a
         // bare official `nginx` never resolves to a third-party `linuxserver/nginx`.
@@ -95,7 +102,12 @@ pub(crate) fn find_image<'a>(images: &'a [Image], reference: &str) -> Option<&'a
                 image_score(i),
                 std::cmp::Reverse(i.name.clone()),
             )
-        })
+        });
+    match best {
+        // An explicit tag that isn't present locally is a not-found — do NOT hand back a different tag.
+        Some(i) if has_explicit_tag && repo_tag(&i.name) != want_rt => None,
+        other => other,
+    }
 }
 
 #[cfg(test)]
@@ -161,6 +173,22 @@ mod id_resolution_tests {
             find_image(&both, "library/nginx").unwrap().name,
             "nginx:latest"
         );
+    }
+
+    // "Explicit Tag Lookup Falls Back To Another Tag" (P1): `app:2` must resolve only to `app:2`, never
+    // to a sibling `app:1`; a bare `app` keeps resolving to the best local tag.
+    #[test]
+    fn find_image_rejects_missing_explicit_tag() {
+        let only_v1 = vec![img("app:1")];
+        assert!(
+            find_image(&only_v1, "app:2").is_none(),
+            "explicit app:2 must not fall back to app:1"
+        );
+        // The explicit tag resolves when it IS present.
+        let both = vec![img("app:1"), img("app:2")];
+        assert_eq!(find_image(&both, "app:2").unwrap().name, "app:2");
+        // A bare reference still resolves leniently to a local tag.
+        assert_eq!(find_image(&only_v1, "app").unwrap().name, "app:1");
     }
 }
 
