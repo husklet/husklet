@@ -72,10 +72,11 @@ pub(crate) async fn image_delete(
 ) -> Response {
     let mut g = a.inner.lock().await;
     let force = matches!(q.force.as_deref(), Some("1") | Some("true"));
-    let (want_repo, want_tag) = (ref_name(&name).to_string(), ref_tag(&name));
-    // The single tag entry the reference names (repository AND tag must match). `ref_name`/`ref_tag`
-    // mirror the lenient matching used elsewhere (registry/namespace ignored).
-    let matches = |i: &Image| ref_name(&i.name) == want_repo && ref_tag(&i.name) == want_tag;
+    let (want_repo, want_tag) = (ref_repo(&name), ref_tag(&name));
+    // The single tag entry the reference names (repository AND tag must match). Match on the FULLY-
+    // QUALIFIED repository (`ref_repo`), NOT the bare basename: `rmi nginx` must not delete an unrelated
+    // `linuxserver/nginx:latest` that merely shares the final path segment.
+    let matches = |i: &Image| ref_repo(&i.name) == want_repo && ref_tag(&i.name) == want_tag;
     let Some(target) = g.images.iter().find(|i| matches(i)).cloned() else {
         return no_such_image(&name);
     };
@@ -87,7 +88,7 @@ pub(crate) async fn image_delete(
         if let Some(c) = g
             .containers
             .values()
-            .find(|c| ref_name(&c.image) == want_repo && ref_tag(&c.image) == want_tag)
+            .find(|c| ref_repo(&c.image) == want_repo && ref_tag(&c.image) == want_tag)
         {
             let cid = c.id[..c.id.len().min(12)].to_string();
             return conflict(format!(
@@ -111,7 +112,7 @@ pub(crate) async fn image_delete(
         &a.events,
         "image",
         "delete",
-        &want_repo,
+        ref_name(&name), // event actor keeps the short reference name, as before
         json!({"name": repo_tag(&target.name)}),
     );
     Json(report).into_response()
@@ -197,6 +198,21 @@ mod tests {
             image_id(&img("a:latest", "/store/a")),
             image_id(&img("b:latest", "/store/b")),
             "distinct rootfs content must yield distinct image ids"
+        );
+    }
+
+    // "rmi nginx Removes Unrelated Repositories Sharing Basename" (P1): the rmi match key is the fully-
+    // qualified repository, so `rmi nginx` must not match a same-basename `linuxserver/nginx`.
+    #[test]
+    fn rmi_match_key_is_fully_qualified_repository() {
+        // The closure image_delete uses: fully-qualified repo AND tag must match.
+        let want_repo = ref_repo("nginx");
+        let want_tag = ref_tag("nginx");
+        let matches = |i: &Image| ref_repo(&i.name) == want_repo && ref_tag(&i.name) == want_tag;
+        assert!(matches(&img("nginx:latest", "/store/n")), "bare nginx matches nginx:latest");
+        assert!(
+            !matches(&img("linuxserver/nginx:latest", "/store/ls")),
+            "bare nginx must NOT match linuxserver/nginx"
         );
     }
 }

@@ -666,32 +666,6 @@ CARGO_TARGET_DIR=/Users/x/dd/dd-worker-AA-daemon-image-20260710/target-aa pocs/s
 
 Observed: prune deleted the exited container, but `network inspect` still listed its endpoint and deleting the network returned `403`.
 
-## `rmi nginx` Removes Unrelated Repositories Sharing Basename
-
-Priority: P1
-Impact: image delete can remove unrelated repository tags
-Confidence: High
-
-Verification status: Proven in isolated worktree `/Users/x/dd/dd-worker-AA-daemon-image-20260710`.
-
-Evidence:
-
-- Image tag deletion resolves aliases through basename-style matching: `dd-daemon/src/images/tags.rs:64`.
-- Deletion applies to matching references later in the same module: `dd-daemon/src/images/tags.rs:88`.
-- The basename helper is explicitly risky for repository identity: `dd-images/src/image/config.rs:100`.
-
-Why this is bad:
-
-`nginx:latest` and `linuxserver/nginx:latest` are distinct repositories. Deleting the short library name should not delete unrelated images that happen to share the same basename and tag.
-
-Isolated proof:
-
-```sh
-CARGO_TARGET_DIR=/Users/x/dd/dd-worker-AA-daemon-image-20260710/target-aa pocs/slot-aa/rmi-basename-removes-other-repos.sh
-```
-
-Observed: before delete `['linuxserver/nginx:latest', 'nginx:latest']`; after `DELETE /images/nginx`, no tags remained.
-
 ## Failed Spawn Terminal State Is Not Persisted
 
 Priority: P1
