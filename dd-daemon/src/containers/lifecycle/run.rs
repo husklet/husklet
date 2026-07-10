@@ -31,6 +31,16 @@ pub(crate) async fn containers_start(State(a): State<App>, Path(id): Path<String
             cc.started_at = now_secs();
             cc.started_at_ns = now_nanos();
             cc.manually_stopped = false;
+            // Install the initial `starting` health state SYNCHRONOUSLY as part of the start transition, so
+            // an inspect immediately after start sees `State.Health.Status=starting`. The async health
+            // monitor (spawned in spawn_live) otherwise leaves a timing gap where a poller sees running with
+            // no health object yet, missing the initial health lifecycle.
+            if cc.healthcheck.is_some() {
+                cc.health = Some(crate::model::HealthState {
+                    status: "starting".into(),
+                    ..Default::default()
+                });
+            }
         }
         (c, g.volumes.clone(), live)
     };

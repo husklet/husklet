@@ -834,3 +834,26 @@ async fn failed_spawn_removes_spent_live_entry() {
         "a failed spawn must drop the spent Live so a second start creates a fresh one"
     );
 }
+
+// ---- health `starting` state is installed synchronously at start --------------------------------
+#[tokio::test]
+async fn start_installs_starting_health_state_synchronously() {
+    let app = test_app();
+    seed_container(&app, "healthstart0", "created").await;
+    // Give it a healthcheck (as create would resolve).
+    {
+        let mut g = app.inner.lock().await;
+        let c = g.containers.get_mut("healthstart0").unwrap();
+        c.healthcheck = Some(crate::model::HealthConfig {
+            test: vec!["CMD-SHELL".into(), "true".into()],
+            ..Default::default()
+        });
+    }
+    // start spawns (which fails with no engine and reaps to exited), but the `starting` health object is
+    // installed BEFORE spawn as part of the start transition, so it is present afterward.
+    let _ = crate::containers::containers_start(State(app.clone()), Path("healthstart0".into())).await;
+    let g = app.inner.lock().await;
+    let c = g.containers.get("healthstart0").unwrap();
+    let h = c.health.as_ref().expect("health object installed at start");
+    assert_eq!(h.status, "starting", "health must be visible as starting from the start transition");
+}
