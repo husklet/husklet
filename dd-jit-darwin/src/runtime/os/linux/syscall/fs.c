@@ -2742,33 +2742,31 @@ static int svc_fs(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t
             // /proc/[self|pid]/ns/<name> -> "<name>:[<inode>]" namespace links (nsenter/iproute2 read these;
             // the inode constants are the kernel's initial-namespace values -- stable and plausible).
             if (leaf && !strncmp(leaf, "ns/", 3) && leaf[3]) {
-                static const struct {
-                    const char *nm;
-                    unsigned ino;
-                } NS[] = {{"cgroup", 4026531835u},
-                          {"ipc", 4026531839u},
-                          {"mnt", 4026531841u},
-                          {"net", 4026531840u},
-                          {"pid", 4026531836u},
-                          {"pid_for_children", 4026531836u},
-                          {"time", 4026531834u},
-                          {"time_for_children", 4026531834u},
-                          {"user", 4026531837u},
-                          {"uts", 4026531838u},
-                          {0, 0}};
-
-                int nsdone = 0;
-                for (int i = 0; NS[i].nm; i++)
-                    if (!strcmp(leaf + 3, NS[i].nm)) {
-                        char nsb[64];
-                        int nl = snprintf(nsb, sizeof nsb, "%s:[%u]", NS[i].nm, NS[i].ino);
-                        size_t l = (size_t)nl > bs ? bs : (size_t)nl;
-                        memcpy(buf, nsb, l);
-                        G_RET(c) = (uint64_t)l;
-                        nsdone = 1;
-                        break;
-                    }
-                if (nsdone) break;
+                char nsb[64];
+                int nl = ns_link_target(leaf + 3, nsb, sizeof nsb);
+                if (nl >= 0) {
+                    size_t l = (size_t)nl > bs ? bs : (size_t)nl;
+                    memcpy(buf, nsb, l);
+                    G_RET(c) = (uint64_t)l;
+                    break;
+                }
+            }
+        }
+        // Peer /proc/<pid>/ns/<name>: a container is a single namespace set, so a LIVE peer process's
+        // namespace links readlink to the SAME "<name>:[<inode>]" values as self (lsns/nsenter inspect
+        // live children by peer pid). proc_self_leaf matches only our own pid, so cover foreign pids here.
+        if (p) {
+            int peer = -1, hp = 0;
+            const char *aleaf = proc_any_leaf(gp, &peer);
+            if (aleaf && !strncmp(aleaf, "ns/", 3) && aleaf[3] && proc_pid_member(peer, &hp)) {
+                char nsb[64];
+                int nl = ns_link_target(aleaf + 3, nsb, sizeof nsb);
+                if (nl >= 0) {
+                    size_t l = (size_t)nl > bs ? bs : (size_t)nl;
+                    memcpy(buf, nsb, l);
+                    G_RET(c) = (uint64_t)l;
+                    break;
+                }
             }
         }
         // DRM sysfs symlinks (subsystem/device classification) libdrm's drmGetDevices2 readlinks.

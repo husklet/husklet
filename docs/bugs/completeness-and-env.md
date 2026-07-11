@@ -289,29 +289,14 @@ cargo run -p dd-tests -- -e x86_64 proc-peer-fd-dir
 
 Observed dd: `proc_peer_fd dir=0:2 lstat=0:2 readlink=0:2`; native Linux succeeded.
 
-### Peer `/proc/<pid>/ns` Is Absent
+Status (2026-07-10): BLOCKED — not minimally fixable. Unlike the ns directory (a container shares one
+namespace set, so peer ns links are identical to self — now FIXED), a peer's `fd` directory requires the
+LIVE per-process fd table of ANOTHER dd worker: each guest process is its own macOS process with a private
+fd table, and the cross-process proc registry only publishes comm+argv, not fds. Serving peer `/proc/<pid>/fd`
+would need each worker to publish its full guest-fd→target map (updated on every open/close/dup) and the
+reader to translate host fds back into guest fd numbers/paths — a new cross-process fd-mirroring subsystem,
+not a localized change. Left for a dedicated cross-process-fd pass.
 
-Priority: P2
-Impact: peer namespace diagnostics cannot inspect live children
-Confidence: High
-
-Verification status: Proven in isolated worktree `/Users/x/dd/dd-worker-AR-procfs-sysfs-20260710`.
-
-Evidence:
-
-- Peer procfs only serves selected leaves such as `stat`, `status`, `maps`, `cmdline`, and `comm`: `dd-jit-darwin/src/runtime/os/linux/container/vfs.c:3066`.
-- Namespace readlink uses self-leaf handling that excludes peer pids: `dd-jit-darwin/src/runtime/os/linux/container/vfs.c:1347`, `dd-jit-darwin/src/runtime/os/linux/syscall/fs.c:2591`.
-
-Why this is bad:
-
-`lsns`, `nsenter`, and diagnostics inspect `/proc/<pid>/ns` for peer processes. dd omits the directory and direct namespace links for live child pids.
-
-Observed proof:
-
-```text
-native: peer_ns ns_stat=1 ns_readdir_net=1 net_readlink=1
-dd:     peer_ns ns_stat=0 ns_readdir_net=0 net_readlink=0
-```
 
 ### Futex-Blocked Processes Report Running In Procfs
 
