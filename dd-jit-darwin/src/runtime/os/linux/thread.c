@@ -564,6 +564,15 @@ static __thread int g_my_threg = -1;
 static void thread_wait_publish(pthread_mutex_t *m, pthread_cond_t *cnd);
 static void thread_wait_clear(void);
 
+// Task-state stamping (defined later in container/vfs.c, same translation unit). A guest that parks in a
+// host blocking wait publishes 'S' (interruptible sleep) into the cross-process task-state table, and 'R'
+// on wake, so a peer reading /proc/<pid>/stat (field 3) or /proc/<pid>/status (State:) sees the true state.
+// FUTEX_WAIT is a blocking wait exactly like recv/read/epoll_wait (which already bracket their parks), so
+// the actual pthread_cond_wait park below must be bracketed too -- otherwise a futex-blocked waiter is
+// reported 'R' (running) instead of 'S', hiding blocked threads from monitors and deadlock diagnostics.
+static inline void ts_wait_enter(void);
+static inline void ts_wait_leave(void);
+
 // DDWAKELOG (env-gated): futex WAIT/WAKE tracing for the Chromium cross-thread stall. Logs the uaddr, op,
 // and val with a per-thread id so a thread parked in FUTEX_WAIT whose FUTEX_WAKE never arrives (a lost
 // cross-thread futex wake) is visible. thread.c is included before io.c, so it has its own logger.
@@ -722,6 +731,7 @@ static long futex_lock_pi(struct cpu *c, int *uaddr, int trylock, const struct t
             ret = -EINTR;
             break;
         }
+        ts_wait_enter(); // 'S' while parked in FUTEX_LOCK_PI/PI2 (PI-mutex contention)
         int rc = 0;
         if (ts) {
             struct timespec abs, rel;
@@ -735,6 +745,7 @@ static long futex_lock_pi(struct cpu *c, int *uaddr, int trylock, const struct t
         } else {
             pthread_cond_wait(&b->c, &b->m);
         }
+        ts_wait_leave();
         thread_wait_clear();
         if (cpu_wait_interrupted(c)) {
             ret = -EINTR;
@@ -808,6 +819,7 @@ static long futex_op(struct cpu *c, int *uaddr, int op, int val, const struct ti
         if (cpu_wait_interrupted(c)) {
             ret = -EINTR;
         } else {
+            ts_wait_enter(); // 'S' while parked in FUTEX_WAIT_REQUEUE_PI
             int rc = 0;
             if (ts) {
                 struct timespec abs, rel;
@@ -817,6 +829,7 @@ static long futex_op(struct cpu *c, int *uaddr, int op, int val, const struct ti
             } else {
                 pthread_cond_wait(&b->c, &b->m);
             }
+            ts_wait_leave();
             if (cpu_wait_interrupted(c))
                 ret = -EINTR;
             else if (rc == ETIMEDOUT)
@@ -857,6 +870,7 @@ static long futex_op(struct cpu *c, int *uaddr, int op, int val, const struct ti
                 return -EINTR;
             }
             g_futex_parked++;
+            ts_wait_enter(); // 'S' while parked in FUTEX_WAIT (legacy single-queue mode)
             int rc = 0;
             if (ts) {
                 struct timespec abs, rel;
@@ -866,6 +880,7 @@ static long futex_op(struct cpu *c, int *uaddr, int op, int val, const struct ti
                 rc = pthread_cond_timedwait(&g_futex_c, &g_futex_m, &abs);
             } else
                 pthread_cond_wait(&g_futex_c, &g_futex_m);
+            ts_wait_leave();
             thread_wait_clear();
             g_futex_parked--;
             int intr = cpu_wait_interrupted(c);
@@ -925,6 +940,7 @@ static long futex_op(struct cpu *c, int *uaddr, int op, int val, const struct ti
         // plain FUTEX_WAIT matches any) so FUTEX_WAKE_BITSET can skip a non-overlapping wake.
         fbk_park(b, futex_key(uaddr), op == 9 ? val3 : ~0u);
         futexlog(ts ? "fwait_park" : "fwait_parkINF", uaddr, op, val, (long)G_PC(c));
+        ts_wait_enter(); // 'S' (sleeping) while parked in FUTEX_WAIT; peer /proc/<pid>/stat|status must not show 'R'
         int rc = 0;
         if (ts) {
             struct timespec abs, rel;
@@ -934,6 +950,7 @@ static long futex_op(struct cpu *c, int *uaddr, int op, int val, const struct ti
             rc = pthread_cond_timedwait(&b->c, &b->m, &abs);
         } else
             pthread_cond_wait(&b->c, &b->m);
+        ts_wait_leave();
         thread_wait_clear();
         futexlog("fwait_wake", uaddr, op, rc, 0);
         fbk_unpark(b, futex_key(uaddr));

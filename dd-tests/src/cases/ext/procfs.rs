@@ -93,6 +93,10 @@ fn proc_content() -> Group {
             src("pf-chrome-empty", "ext_procfs/chrome_procswitch.c")
                 .env("DD_PROC_CHROME_MODE", "empty")
                 .out("chrome_procswitch open=1 nonempty=0\n"),
+            // A child parked in futex(FUTEX_WAIT) is interruptible-sleep 'S' on Linux, NOT 'R'. dd stamped
+            // 'R' (macOS SRUN can't express "asleep in a futex") -> blocked threads hidden from monitors and
+            // deadlock diagnostics. Parent reads the child's /proc/<pid>/stat field 3 AND status State:.
+            src("pf-futexstate", "ext_procfs/futexstate.c").out("futexstate ok=1\n"),
             src("pf-cpuinfo", "ext_procfs/cpuinfo.c").out("cpuinfo ok=1\n"),
             src("pf-misc", "ext_procfs/miscfiles.c").out("miscfiles ok=1\n"),
             src("pf-net", "ext_procfs/netfiles.c").out("netfiles ok=1\n"),

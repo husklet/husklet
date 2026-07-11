@@ -152,30 +152,6 @@ reader to translate host fds back into guest fd numbers/paths — a new cross-pr
 not a localized change. Left for a dedicated cross-process-fd pass.
 
 
-### Futex-Blocked Processes Report Running In Procfs
-
-Priority: P2
-Impact: process state diagnostics miss sleeping futex waiters
-Confidence: High
-
-Verification status: Proven in isolated worktree `/Users/x/dd/dd-audit-wait-futex-20260710`.
-
-Evidence:
-
-- `/proc/<pid>/stat` and `/proc/<pid>/status` render process state from synthetic procfs: `dd-jit-darwin/src/runtime/os/linux/container/vfs.c:2183`, `dd-jit-darwin/src/runtime/os/linux/container/vfs.c:2236`.
-- Other blocking syscalls stamp wait state: `dd-jit-darwin/src/runtime/os/linux/syscall/proc.c:1860`.
-- Futex wait does not publish sleeping state: `dd-jit-darwin/src/runtime/os/linux/thread.c:760`.
-
-Why this is bad:
-
-Linux reports a futex-blocked child as sleeping. dd reports `R`, hiding blocked threads from process monitors and deadlock diagnostics.
-
-Observed proof:
-
-```text
-qemu: stat_state=S status_state=S sleeping=1 waited=1 exit_ok=1
-dd:   stat_state=R status_state=R sleeping=0 waited=1 exit_ok=1
-```
 
 ### `/dev/tty` Nonblocking Read Reports EOF Instead Of EAGAIN
 
