@@ -139,6 +139,18 @@ fn ext_ipc() -> Group {
         // futex-shared-key gate covers only a fork-INHERITED memfd; this covers one delivered by SCM_RIGHTS
         // to an unrelated process, mmap'd at an independent VA.
         src("scm-futex", "ext_ipc/ipc_scm_futex.c").out("scm_futex xproc_woke=1\n"),
+        // Chrome child-process Mojo BOOTSTRAP end-to-end (the multi-process dormant-renderer hypothesis):
+        // the browser hands a launched child its platform channel + a shared-memory command buffer by
+        // placing each fd at a fixed number and naming that number on the command line (Chrome's
+        // --mojo-platform-channel-handle=N convention). This gate proves each bootstrap fd survives dd's
+        // fork + IN-PLACE execve AT THE CMDLINE-NAMED NUMBER: the exec'd child receives the browser's
+        // inbound channel message (chan), mmaps the memfd command buffer coherently in the NEW image
+        // (shmem), is released by a cross-process FUTEX_WAKE on a word inside it (futex), while a sibling
+        // FD_CLOEXEC alias is correctly swept by the same execve (decoy_swept -- so survival is by honouring
+        // the cleared cloexec flag, not a no-op sweep). None of the xproc-inbound/zygote/scm-futex gates
+        // carries a memfd across the in-place execve + validates the argv fd-number. See rendering README §3.2.
+        src("bootstrap-handle", "ext_ipc/ipc_bootstrap_handle.c")
+            .out("child bootstrap chan=1 msg=EstablishGpu shmem=1 futex=1 decoy_swept=1\nparent bootstrap child_exit=0\n"),
         src("scm-eventfd", "ext_ipc/ipc_scm_eventfd.c").out("scm_eventfd epoll=1 read=8 val=1 child=0\n"),
         src("scm-eventfd-untrusted", "ext_ipc/ipc_scm_eventfd.c")
             .out("scm_eventfd epoll=1 read=8 val=1 child=0\n")

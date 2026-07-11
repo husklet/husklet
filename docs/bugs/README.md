@@ -38,9 +38,21 @@ below or a broken-oracle artifact (qemu-user lacking a syscall) — see the
   handshake step, or sandboxed-renderer bring-up), or the sync EstablishGpuChannel
   reply. The recurring `Network service crashed, restarting service.` (a clean exit
   on a failed bootstrap the browser reads as a crash) is the same upstream handshake,
-  not a lost wake. Next: pin it from the Chrome side (Mojo VLOGs — drop
-  `--log-level`), serialized against any live session. Full context + how-to-run:
-  [../rendering/README.md](../rendering/README.md).
+  not a lost wake. **The child-process Mojo BOOTSTRAP fd hand-off is ALSO ruled out**
+  (2026-07-10, branch `render/mojo-bootstrap`): the launch handshake places each
+  child's platform channel + shared-memory command buffer at a fixed fd and names the
+  number on the cmdline, and dd's guest `execve()` is an in-place image reload (no host
+  exec) with a hand-rolled close-on-exec sweep — but the new `bootstrap-handle` gate
+  (`ext_ipc/ipc_bootstrap_handle.c`) proves the full shape survives dd's fork +
+  in-place execve on both engines: a memfd command buffer + a SEQPACKET channel dup2'd
+  to fixed numbers, passed as argv strings, are recovered from argv by the exec'd child,
+  which reads the browser's inbound channel message, mmaps the memfd coherently in the
+  NEW image, is woken by a cross-process FUTEX through it, while a sibling FD_CLOEXEC
+  alias is correctly swept (survival by honouring the cleared flag, not a no-op sweep).
+  Emulated fds are host-fd-backed so guest `fcntl(F_SETFD)` and the sweep agree. So both
+  the transport AND the launch-time fd hand-off are exonerated. Next: pin it from the
+  Chrome side (Mojo VLOGs — drop `--log-level`), serialized against any live session.
+  Full context + how-to-run: [../rendering/README.md](../rendering/README.md).
 - **(Resolved on branch render/chrome-content) engine launch drops libobjc
   fork-safety suppression.** Guest fork() is a real host fork() of a
   multithreaded objc-using engine process and guest execve() reloads in-place,

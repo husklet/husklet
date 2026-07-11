@@ -169,8 +169,42 @@ specific sync EstablishGpuChannel reply the renderer blocks on. The recurring
 `Network service crashed, restarting service.` (a clean exit on a failed bootstrap
 the browser reads as a crash) points at the SAME upstream handshake, not the wake.
 
-**Next step**: pin the higher-layer failure from the CHROME side (the engine
-transport is exonerated). Because a live multi-process run is destructive to any
+**ALSO RULED OUT (2026-07-10, branch `render/mojo-bootstrap`): the child-process
+Mojo BOOTSTRAP fd hand-off is NOT the drop.** The next hypothesis after transport
+was the LAUNCH handshake: Chrome hands each child its initial platform channel +
+shared-memory command buffer at launch by placing each fd at a FIXED number and
+naming that number on the child's command line (`--mojo-platform-channel-handle=N`,
+field-trial/shared-memory handles). dd implements guest `fork()` as a real host fork
+and guest `execve()` as an IN-PLACE image reload (`proc.c` case 221, no host exec),
+so a bootstrap fd could in principle be dropped or renumbered across that reload, or
+the recent close-on-exec sweep (`exec_close_cloexec`, sweeps FD_CLOEXEC fds by hand
+since no real exec runs) could close a fd Chrome needs. Audited + gated clean:
+- Engine audit: emulated fds (eventfd/memfd/epoll/timerfd/signalfd) are all
+  **real-host-fd-backed**; guest `fcntl(F_SETFD/F_GETFD)` forwards to the same host
+  fd the sweep inspects (`io.c` case 1/2 → host `fcntl`), so a guest that clears
+  CLOEXEC on a bootstrap fd and the sweep agree — the sweep closes exactly the
+  still-CLOEXEC fds and leaves the cleared ones open at their number.
+- New gate `bootstrap-handle` (`ext_ipc/ipc_bootstrap_handle.c`) reproduces the full
+  bootstrap end-to-end across dd's fork + in-place execve: the browser dup2's a
+  SEQPACKET Mojo channel to fd 7 and a **memfd command buffer** to fd 8 (both
+  non-CLOEXEC), passes those numbers as argv STRINGS, and execs; the exec'd child
+  recovers each fd purely from argv and (1) receives the browser's inbound channel
+  message, (2) MAP_SHARED-mmaps the memfd coherently in the NEW image, (3) is
+  released by a cross-process `FUTEX_WAKE` on a word inside it, while (4) a sibling
+  FD_CLOEXEC alias is correctly swept — proving survival is by honouring the cleared
+  flag, not a no-op sweep. Passes on both Linux engines. None of the
+  xproc-inbound/zygote-inbound/scm-futex gates carried a memfd across the in-place
+  execve or validated the argv fd-number; this closes that gap.
+
+So the bootstrap fd hand-off (fd-number preservation across fork+in-place-execve,
+cmdline-number↔fd agreement, the shared-memory invitation, the close-on-exec sweep)
+is ALSO correct. Both the transport AND the launch-time fd hand-off are now exonerated
+— the wall is purely Chrome-internal Mojo state (a failed node/invitation handshake
+step or the sync EstablishGpuChannel reply the renderer never receives).
+
+**Next step**: pin the higher-layer failure from the CHROME side (both the engine
+transport AND the bootstrap fd hand-off are exonerated). Because a live multi-process
+run is destructive to any
 concurrent Chrome session (serialize — check for running `ddjit`/`chromium` first),
 coordinate with the live session (e.g. `wall7-live`): drop `--log-level` so Mojo
 VLOGs surface, add `--vmodule=node_controller=2,node_channel=2,broker*=2,
