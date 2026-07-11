@@ -180,6 +180,7 @@ static void fd_reset_emul(int fd) {
         g_timerfd[fd] = 0;
         g_tfd_deadline[fd] = 0;
         g_tfd_interval[fd] = 0;
+        g_tfd_first_oneshot[fd] = 0;
         g_memfd_is[fd] = 0;
         g_memfd_seal[fd] = 0;
         g_proc_text_desc[fd][0] = 0;

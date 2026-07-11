@@ -566,6 +566,11 @@ static int g_inotify_owner[DD_NFD];
 // next expiry + the interval (ns). timerfd_settime records them so timerfd_gettime reports it_value/interval.
 static int64_t g_tfd_deadline[DD_NFD];
 static int64_t g_tfd_interval[DD_NFD];
+// A periodic timerfd whose FIRST expiry (it_value) differs from its interval (it_interval) can't be
+// expressed in a single kqueue EVFILT_TIMER (which fires first only after its period). So we arm a
+// ONE-SHOT at the first delay and set this flag; on the first read() drain the timer is re-armed as a
+// recurring periodic at g_tfd_interval. 1 = currently armed one-shot for the distinct first deadline.
+static uint8_t g_tfd_first_oneshot[DD_NFD];
 // The clockid the timerfd was created with (Linux CLOCK_REALTIME=0/MONOTONIC=1/BOOTTIME=7/REALTIME_ALARM=8/
 // ...). A TFD_TIMER_ABSTIME deadline is expressed in THIS clock, so timerfd_settime must convert against it.
 static int g_tfd_clock[DD_NFD];

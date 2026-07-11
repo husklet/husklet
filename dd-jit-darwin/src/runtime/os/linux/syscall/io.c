@@ -189,6 +189,7 @@ static void fd_carry_virt(int newfd, int oldfd) {
         g_timerfd[newfd] = 1;
         g_tfd_deadline[newfd] = g_tfd_deadline[oldfd];
         g_tfd_interval[newfd] = g_tfd_interval[oldfd];
+        g_tfd_first_oneshot[newfd] = g_tfd_first_oneshot[oldfd];
     }
     // inotify: the instance is a (host-shared) kqueue with its watches; carry the routing flag so the dup's
     // read() drains the same event queue. Watches stay owned by the original instance fd -- closing the DUP
@@ -671,6 +672,18 @@ static int svc_io(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t
                     break;
                 }
                 *(uint64_t *)a1 = (uint64_t)kv.data;
+            }
+            // A periodic timerfd whose first expiry (it_value) differed from its interval was armed as a
+            // one-shot for that first tick (event.c case 86). Now that the first tick has been consumed,
+            // re-arm the recurring periodic at the interval so subsequent expiries fire every it_interval.
+            if (g_tfd_first_oneshot[rfd] && g_tfd_interval[rfd] > 0) {
+                struct kevent rkv;
+                EV_SET(&rkv, 1, EVFILT_TIMER, EV_ADD, NOTE_NSECONDS, g_tfd_interval[rfd], NULL);
+                kevent(rfd, &rkv, 1, NULL, 0, NULL);
+                g_tfd_first_oneshot[rfd] = 0;
+                struct timespec tnow;
+                clock_gettime(CLOCK_MONOTONIC, &tnow);
+                g_tfd_deadline[rfd] = (int64_t)tnow.tv_sec * 1000000000LL + tnow.tv_nsec + g_tfd_interval[rfd];
             }
             G_RET(c) = 8;
             break;

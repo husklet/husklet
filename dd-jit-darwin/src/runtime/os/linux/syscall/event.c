@@ -222,8 +222,11 @@ static void kqueue_rebuild_after_fork(void) {
             int64_t delay = g_tfd_deadline[fd] - now_ns;
             if (delay < 0) delay = (iv > 0) ? (iv - ((-delay) % iv)) : 0;
             struct kevent kv;
-            uint16_t flg = EV_ADD | (iv > 0 ? 0 : EV_ONESHOT);
-            int64_t arm = (iv > 0) ? iv : delay;
+            // A periodic timer still pending its distinct first tick (one-shot-first) inherits that pending
+            // one-shot: re-arm one-shot at the remaining first delay; the child's read() then re-arms periodic.
+            int one = (iv <= 0) || g_tfd_first_oneshot[fd];
+            uint16_t flg = EV_ADD | (one ? EV_ONESHOT : 0);
+            int64_t arm = one ? delay : iv;
             if (arm < 0) arm = 0;
             EV_SET(&kv, 1, EVFILT_TIMER, flg, NOTE_NSECONDS, arm, NULL);
             kevent(fd, &kv, 1, NULL, 0, NULL);
@@ -1189,6 +1192,7 @@ static int svc_event(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint6
             if ((int)a0 >= 0 && (int)a0 < DD_NFD) {
                 g_tfd_deadline[(int)a0] = 0;
                 g_tfd_interval[(int)a0] = 0;
+                g_tfd_first_oneshot[(int)a0] = 0;
             }
             G_RET(c) = 0;
             break;
@@ -1220,12 +1224,19 @@ static int svc_event(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint6
             g_tfd_deadline[(int)a0] = now_ns + first_delay;
             g_tfd_interval[(int)a0] = interval_ns;
         }
-        // Arm the kqueue: a periodic timer (it_interval>0) uses a recurring EV_ADD at the interval; a one-shot
-        // uses EV_ONESHOT at the (relative) first delay. kqueue can't express "first at it_value, then every
-        // it_interval" in one entry, so a periodic timer whose first fire differs from its interval fires
-        // first after `interval` -- close enough for the timerfd read-count contract and never hangs.
-        uint16_t fl = EV_ADD | ((iv_s || iv_n) ? 0 : EV_ONESHOT);
-        int64_t arm_ns = (iv_s || iv_n) ? interval_ns : first_delay;
+        // Arm the kqueue. kqueue's EVFILT_TIMER can't express "first at it_value, then every it_interval" in
+        // one entry (a recurring EV_ADD fires FIRST only after a full period). Cases:
+        //   - one-shot (interval==0): EV_ONESHOT at the relative first delay.
+        //   - periodic whose first delay == interval: a plain recurring EV_ADD at the interval (exact, no drift).
+        //   - periodic whose first delay DIFFERS from interval: honor Linux by arming a ONE-SHOT at the first
+        //     delay and flagging it_first_oneshot; the read() drain (io.c) re-arms the recurring periodic at
+        //     the interval once that first tick is consumed. Without this the first expiry was wrongly delayed
+        //     to a full interval (a periodic timerfd with a short it_value + long it_interval never fired early).
+        int periodic = (iv_s || iv_n);
+        int first_distinct = periodic && (first_delay != interval_ns);
+        if ((int)a0 >= 0 && (int)a0 < DD_NFD) g_tfd_first_oneshot[(int)a0] = first_distinct ? 1 : 0;
+        uint16_t fl = EV_ADD | ((periodic && !first_distinct) ? 0 : EV_ONESHOT);
+        int64_t arm_ns = (periodic && !first_distinct) ? interval_ns : first_delay;
         EV_SET(&kv, 1, EVFILT_TIMER, fl, NOTE_NSECONDS, arm_ns, NULL);
         G_RET(c) = kevent((int)a0, &kv, 1, NULL, 0, NULL) < 0 ? (uint64_t)(-errno) : 0;
         break;
