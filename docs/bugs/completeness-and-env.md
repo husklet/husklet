@@ -47,7 +47,6 @@ Known lead:
 
 ## Confirmed Env And Completeness Findings
 
-
 ### Typed Launch Path Lists Still Use Delimiter Env Strings
 
 Priority: P2
@@ -69,17 +68,30 @@ Verification:
 
 Create a bind source path containing `:` or `,` and assert the guest sees the correct mounted content.
 
-Status (2026-07-10): DEFERRED — not minimally safe here. `DDVOL`/`DD_LOWER` are a SHARED contract with
-MULTIPLE raw producers, not just `wire.rs`: the test harness sets `DDVOL` directly (`dd-tests` `.env("DDVOL",
-…)`), the CLI sets it via `--vol` (`linux_x86_64.c:482` `add_vol(argv[…])`), and the builder/bridge can set it
-too. Making the C parser escape-aware would silently corrupt every raw (unescaped) producer; escaping only the
-`wire.rs` side would desync from the raw ones. The parse sites are also already INCONSISTENT across arches —
-`DD_LOWER` is split on `:` in `linux_aarch64.c:573` but on `,` in `linux_x86_64.c:185`, while `wire.rs:72`
-joins lowers with `:` (so a multi-lower typed launch already mis-splits on x86_64, independent of escaping).
-A correct fix must first unify the split delimiter across both arch targets AND update every raw producer to
-escape in lockstep, then runtime-verify volume/lower mounts on BOTH engines (x86_64 needs container images).
-That is too wide to verify safely on this shared engine gate in a minimal pass. `publish` is numeric-only and
-carries no delimiter hazard. Left for a dedicated launch-wire pass; do not escape one side in isolation.
+Status (2026-07-11): BUG 1 FIXED (cross-arch `DD_LOWER` delimiter unified); BUG 2 (escaping) STILL DEFERRED.
+
+FIXED — the latent multi-lower mis-split on x86_64. `DD_LOWER` (singular) was split on `,` in
+`linux_x86_64.c` but on `:` in `linux_aarch64.c`, while its ONLY producer — the typed-launch wire pool
+(`wire.rs` `lowers.join(":")`, forwarded verbatim by `ddjit_configfd.c` `setenv("DD_LOWER", …)`) — joins with
+`:`. So a typed launch (or exec-inheritance) with more than one overlay lower silently mis-parsed on x86_64:
+the whole `:`-joined string was taken as a single lower path and the real layers were dropped. Fix (branch
+`bugfix/launch-delim`): `linux_x86_64.c` now `strtok_r`s `DD_LOWER` on `:`, unified with `linux_aarch64.c` and
+the Rust joiner. Verified the producer chain has no `,`-joined `DD_LOWER` producer (the `,`-joined `DD_LOWERS`
+in `spawn_config.rs`/`jail.c` is the SEPARATE darwin-jail plural var, unaffected). `mac cargo build --release
+-p dd-jit-darwin -p dd-jit` green. NOTE: the dd-tests harness passes lowers as discrete `--lower <path>` CLI
+flags (`spawn_config.rs`), NOT through the `DD_LOWER` env split, so this path is exercised by the daemon
+typed-launch / exec-inheritance flow rather than a harness `.lower()` gate; a runtime gate would need to set
+`.env("DD_LOWER", "/a:/b")` directly against a real rootfs.
+
+STILL DEFERRED — escaping. `DDVOL`/`DD_LOWER` remain a SHARED contract with MULTIPLE raw producers: the test
+harness sets `DDVOL` directly (`dd-tests` `.env("DDVOL", …)`), the CLI sets it via `--vol` (`linux_x86_64.c`
+`add_vol`), and the builder/bridge can set it too. Making the C parser escape-aware would silently corrupt
+every raw (unescaped) producer; escaping only the `wire.rs` side would desync from the raw ones. A path whose
+source contains the delimiter char (`:` or `,`) is still misparsed. A correct escaping fix must update every
+raw producer to escape in lockstep with the parser (a backslash-escape keeps delimiter-free paths byte-
+identical), then runtime-verify volume/lower mounts on BOTH engines (x86_64 needs container images). Left for
+a dedicated escaping pass; do not escape one side in isolation. `publish` is numeric-only and carries no
+delimiter hazard.
 
 
 ## Regression Gate Shape
