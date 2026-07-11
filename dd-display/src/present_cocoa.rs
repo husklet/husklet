@@ -21,9 +21,9 @@ use objc2::runtime::{NSObject, NSObjectProtocol, ProtocolObject};
 use objc2::{declare_class, msg_send_id, mutability, ClassType, DeclaredClass};
 use objc2_app_kit::{
     NSApplication, NSApplicationActivationPolicy, NSAutoresizingMaskOptions, NSBackingStoreType,
-    NSBitmapImageFileType, NSBitmapImageRep, NSBitmapImageRepPropertyKey, NSDeviceRGBColorSpace,
-    NSEvent, NSEventMask, NSEventModifierFlags, NSEventType, NSGraphicsContext, NSImage,
-    NSImageView, NSScreen, NSView, NSWindow, NSWindowDelegate, NSWindowStyleMask,
+    NSBitmapImageFileType, NSBitmapImageRep, NSBitmapImageRepPropertyKey, NSColor,
+    NSDeviceRGBColorSpace, NSEvent, NSEventMask, NSEventModifierFlags, NSEventType, NSGraphicsContext,
+    NSImage, NSImageView, NSScreen, NSView, NSWindow, NSWindowDelegate, NSWindowStyleMask,
 };
 use objc2_foundation::{
     MainThreadMarker, NSDefaultRunLoopMode, NSDictionary, NSInteger, NSPoint, NSRect, NSSize,
@@ -143,6 +143,55 @@ declare_class!(
         }
     }
 );
+
+// ---- First-responder content view ---------------------------------------------------------------
+// The window's content `NSView` is where mouse hit-testing lands and where keyboard focus (first
+// responder) must live. A stock `NSView` returns NO from both `acceptsFirstResponder` and
+// `acceptsFirstMouse:`. The `acceptsFirstMouse:` NO is the direct cause of "pointer MOTION works but
+// CLICKS do nothing": when the click lands on a window that is not the active app's key window, AppKit
+// SWALLOWS that first `mouseDown` to merely activate the app — the `NSEvent` never reaches our
+// `nextEventMatchingMask` drain, so `inject_nsevent` never sees it and no `wl_pointer.button` is sent.
+// Motion needs no activation, so hover (→ `wl_pointer.set_cursor`) kept working while buttons vanished.
+// Returning YES from `acceptsFirstMouse:` makes AppKit DELIVER that click (activate AND dispatch), and
+// YES from `acceptsFirstResponder` lets the view hold keyboard focus so key events route into wl_keyboard.
+// `isOpaque` YES lets AppKit skip compositing anything behind this fully-covered layer-backed view.
+
+declare_class!(
+    struct ContentView;
+
+    unsafe impl ClassType for ContentView {
+        type Super = NSView;
+        type Mutability = mutability::MainThreadOnly;
+        const NAME: &'static str = "DDContentView";
+    }
+
+    impl DeclaredClass for ContentView {}
+
+    unsafe impl ContentView {
+        #[method(acceptsFirstResponder)]
+        fn accepts_first_responder(&self) -> bool {
+            true
+        }
+        // The parameter is the triggering NSEvent; we accept regardless of where/what it is.
+        #[method(acceptsFirstMouse:)]
+        fn accepts_first_mouse(&self, _event: Option<&NSEvent>) -> bool {
+            true
+        }
+        #[method(isOpaque)]
+        fn is_opaque(&self) -> bool {
+            true
+        }
+    }
+);
+
+/// Create the layer-backed content view for a compositor window. Instantiates the `ContentView` subclass so
+/// the first click on an unfocused window is delivered (not swallowed for activation) and keyboard focus can
+/// land on it. Returned as a plain `NSView` (the subclass adds no state callers need).
+fn make_content_view(mtm: MainThreadMarker, frame: NSRect) -> Retained<NSView> {
+    let view: Retained<ContentView> =
+        unsafe { msg_send_id![mtm.alloc::<ContentView>(), initWithFrame: frame] };
+    Retained::into_super(view)
+}
 
 /// Create a compositor content window that can take keyboard focus even when borderless. Mirrors
 /// `NSWindow::initWithContentRect_styleMask_backing_defer` but instantiates the `ContentWindow` subclass so
@@ -618,18 +667,28 @@ fragment float4 fmain(VOut in [[stage_in]], texture2d<float> src [[texture(0)]],
             NSPoint::new(140.0 + sid as f64 * 24.0, 140.0),
             NSSize::new(w as f64, h as f64),
         );
-        let style = if std::env::var_os("DD_DISPLAY_WINDOW_CHROME").is_some() {
+        let borderless = std::env::var_os("DD_DISPLAY_WINDOW_CHROME").is_none();
+        let style = if borderless {
+            NSWindowStyleMask::Borderless
+        } else {
             NSWindowStyleMask::Titled
                 | NSWindowStyleMask::Closable
                 | NSWindowStyleMask::Resizable
                 | NSWindowStyleMask::Miniaturizable
-        } else {
-            NSWindowStyleMask::Borderless
         };
         let window = make_focusable_window(mtm, content, style);
         window.setOpaque(true);
         window.setMovable(false);
         window.setMovableByWindowBackground(false);
+        // Borderless Chrome draws its own client-side chrome; the guest surface fills the whole window and
+        // is opaque. Drop the macOS drop shadow (the "ugly halo/background behind Chrome" the user sees —
+        // a borderless window still gets the system shadow) and clear the window's default gray background
+        // color so nothing dd-side can bleed at the edges/corners behind the content. The titled variant
+        // keeps its normal shadow. (The light-blue titlebar, if any, is Chrome's OWN CSD — not ours.)
+        if borderless {
+            window.setHasShadow(false);
+            unsafe { window.setBackgroundColor(Some(&NSColor::clearColor())) };
+        }
         let t = if title.is_empty() {
             format!("dd surface {sid} (metal)")
         } else {
@@ -656,7 +715,7 @@ fragment float4 fmain(VOut in [[stage_in]], texture2d<float> src [[texture(0)]],
         let point_size = NSSize::new(w as f64, h as f64);
         window.setContentSize(point_size);
         let frame = NSRect::new(NSPoint::new(0.0, 0.0), point_size);
-        let view = unsafe { NSView::initWithFrame(mtm.alloc(), frame) };
+        let view = make_content_view(mtm, frame);
         unsafe {
             view.setAutoresizingMask(
                 NSAutoresizingMaskOptions::NSViewWidthSizable
@@ -666,7 +725,12 @@ fragment float4 fmain(VOut in [[stage_in]], texture2d<float> src [[texture(0)]],
             view.setLayer(Some(&layer));
         }
         window.setContentView(Some(&view));
+        // Make the content view the window's first responder so keyboard events have a home and clicks that
+        // AppKit routes by responder chain reach it; combined with the view's acceptsFirstMouse:YES, the
+        // first click on this (often non-key) borderless window is delivered rather than swallowed.
+        window.setInitialFirstResponder(Some(&view));
         window.makeKeyAndOrderFront(None);
+        let _ = window.makeFirstResponder(Some(&view));
         // Force the new window in front of every space/app and re-assert app foreground, so Core Animation
         // composites this CAMetalLayer at the display rate rather than background-throttling its present
         // (which would pace the frame-callback-driven guest down to ~1 fps). See run_window() for why.

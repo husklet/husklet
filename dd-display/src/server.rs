@@ -4410,6 +4410,29 @@ mod tests {
             .iter()
             .any(|(o, p, _)| *o == 60 && *p == 5);
         assert!(frame_after_button, "button group must be closed by a frame, got {msgs:?}");
+
+        // Now the matching LeftMouseUp (inject_nsevent calls motion then button-release): the client must
+        // receive a button RELEASE (state=0) closed by its own frame, with a serial strictly greater than
+        // the press — the release half of the click. Without it a client sees a stuck-pressed button.
+        h.server.pointer_button(0x110, false);
+        let up = h.drain();
+        let rel_i = up
+            .iter()
+            .position(|(o, p, _)| *o == 60 && *p == 3)
+            .unwrap_or_else(|| panic!("no wl_pointer.button (release), got {up:?}"));
+        let rel_body = &up[rel_i].2;
+        assert_eq!(
+            u32::from_ne_bytes(rel_body[12..16].try_into().unwrap()),
+            0,
+            "button is a release (state=0), got {up:?}"
+        );
+        let rel_serial = u32::from_ne_bytes(rel_body[0..4].try_into().unwrap());
+        assert!(
+            rel_serial > button_serial,
+            "release serial must exceed press serial (press {button_serial} < release {rel_serial}), got {up:?}"
+        );
+        let frame_after_release = up[rel_i + 1..].iter().any(|(o, p, _)| *o == 60 && *p == 5);
+        assert!(frame_after_release, "release group must be closed by a frame, got {up:?}");
     }
 
     // A surface assigned the CURSOR role via wl_pointer.set_cursor (Chrome's pointer image) must NOT be
