@@ -2355,6 +2355,30 @@ static int proc_pid_member(int gp, int *hostout) {
     return kill(host, 0) == 0 && getsid(host) == getsid(0); // registry may lag; accept a live session peer
 }
 
+// The container's namespace magic-link target for <name> ("net" -> "net:[4026531840]"), or -1 if <name>
+// is not a known namespace. A container is a SINGLE namespace set, so self and every peer process share
+// these initial-namespace inode constants (exactly what lsns/nsenter compare across pids). Writes the
+// "<name>:[<inode>]" string into `out` and returns its length.
+static int ns_link_target(const char *name, char *out, size_t cap) {
+    static const struct {
+        const char *nm;
+        unsigned ino;
+    } NS[] = {{"cgroup", 4026531835u},
+              {"ipc", 4026531839u},
+              {"mnt", 4026531841u},
+              {"net", 4026531840u},
+              {"pid", 4026531836u},
+              {"pid_for_children", 4026531836u},
+              {"time", 4026531834u},
+              {"time_for_children", 4026531834u},
+              {"user", 4026531837u},
+              {"uts", 4026531838u},
+              {0, 0}};
+    for (int i = 0; NS[i].nm; i++)
+        if (!strcmp(name, NS[i].nm)) return snprintf(out, cap, "%s:[%u]", NS[i].nm, NS[i].ino);
+    return -1;
+}
+
 // /proc/<pid>/stat for a peer -- the 52-field line with GUEST pid/ppid and REAL rss/cpu/state/starttime.
 static int proc_stat_pid_text(char *b, size_t n, int gp, int host) {
     struct dd_procinfo pi;

@@ -106,6 +106,9 @@ fn dev_sys() -> Group {
             src("pf-mountinfo-bind", "ext_procfs/bindmount.c")
                 .env("DDVOL", "/mnt:/tmp")
                 .out("bindmount ok=1\n"),
+            // lsns/nsenter inspect a live peer's /proc/<pid>/ns: a container shares one namespace set, so
+            // the peer ns links readlink to the same "<name>:[<inode>]" values as self.
+            src("pf-peer-ns", "ext_procfs/peerns.c").out("peer_ns ok=1\n"),
         ],
     )
 }
