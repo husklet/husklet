@@ -43,7 +43,7 @@ Known lead:
 
 - `DD_EGRESS_SOCKS` is set by the builder but dropped by typed launch config, so the engine never sees it in normal typed launch. This is now proven in [daemon-tests-docs.md](daemon-tests-docs.md#workspace-vpn-egress-is-dropped).
 - `DDJIT_SANDBOX` is set by public runtime/builder paths but intentionally avoided by the harness, leaving a public mode with weak coverage.
-- `S3DB_DURABILITY=none|fast|strict` changes `fsync` durability semantics behind a cached runtime env read. It is a real performance/correctness switch and needs explicit tests.
+- `S3DB_DURABILITY=none|fast|strict` changes `fsync` durability semantics behind a cached runtime env read. It is a real performance/correctness switch. PINNED 2026-07-10 by `completeness/s3db-durability-{default,none,fast,strict}` (`dd-tests/guests/completeness/s3db_durability.c`): the default path is oracle-diffed byte-identical to native Linux fsync, and each explicit mode is golden-pinned — coherence holds in every mode, `none` is a genuine no-op (returns success without issuing the real fsync), fast/strict issue the real syscall.
 
 ## Confirmed Env And Completeness Findings
 
@@ -82,24 +82,6 @@ so the trusted cross-fork eventfd counter is fine). The Chrome rendering blocker
 runs in TRUSTED mode and was a different mechanism entirely — a cross-mapping **futex** key bug, now fixed. The
 eventfd loss here rides the sentry's SCM_RIGHTS copyback, not the futex path, and is untouched by that fix.
 
-### `S3DB_DURABILITY` Hidden Fsync Semantics
-
-Priority: P2
-Impact: silent durability/performance tradeoff controlled only by env
-Confidence: High
-
-Evidence:
-
-- The runtime reads and caches `S3DB_DURABILITY=none|fast|strict`: `dd-jit-darwin/src/runtime/os/linux/syscall/helpers.c:467`.
-- `none` returns success without a real sync, while `strict` uses the expensive host full-sync path.
-
-Why this is bad:
-
-This env var changes the correctness contract for `fsync`. `none` is useful for ephemeral workloads, but if inherited accidentally it can make software believe data is durable when it is not. `strict` can also create a large performance cliff.
-
-Suggested gate:
-
-Add a small fsync/fdatasync policy test that verifies each mode is selected only through explicit launch config or documented env setup, and that the mode is visible in test output.
 
 ### Typed Launch Path Lists Still Use Delimiter Env Strings
 
