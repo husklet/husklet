@@ -222,6 +222,7 @@ static void fd_reset_emul(int fd) {
         }
         g_devfull[fd] = 0;
         g_devseed[fd] = 0;
+        g_devtty[fd] = 0;
         unix_bind_clear(fd);
 #ifdef __APPLE__
         if (g_devdri[fd]) dd_gpu_free_fd(fd); // release the render node's IOSurfaces on close
@@ -2240,6 +2241,17 @@ static int svc_fs(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t
                     int d = open(hd, mf);
                     // /dev/full is backed by /dev/zero for reads; flag the fd so its writes fail ENOSPC.
                     if (d >= 0 && d < DD_NFD) g_devfull[d] = !strcmp(rp, "/dev/full");
+                    // /dev/tty (and /dev/console, backed by /dev/null): tty read semantics -- a nonblocking
+                    // empty read is EAGAIN, never EOF (see g_devtty). Flag the fd so svc_io maps 0->EAGAIN.
+                    if (d >= 0 && d < DD_NFD)
+                        g_devtty[d] = (!strcmp(rp, "/dev/tty") || !strcmp(rp, "/dev/console"));
+                    // This dev open uses only the access mode (mf gains O_NONBLOCK below, after this block),
+                    // so propagate the guest's O_NONBLOCK onto the tty fd now -- both so its host reads are
+                    // genuinely nonblocking and so F_GETFL reflects it for the 0->EAGAIN remap in svc_io.
+                    if (d >= 0 && d < DD_NFD && g_devtty[d] && (lf & 0x800)) {
+                        int gf = fcntl(d, F_GETFL);
+                        if (gf >= 0) fcntl(d, F_SETFL, gf | O_NONBLOCK);
+                    }
                     // /dev/urandom + /dev/random accept seed writes on Linux (macOS EPERMs); flag the fd.
                     if (d >= 0 && d < DD_NFD)
                         g_devseed[d] = (!strcmp(rp, "/dev/urandom") || !strcmp(rp, "/dev/random"));

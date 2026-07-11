@@ -128,6 +128,11 @@ fn dev_sys() -> Group {
             // lsns/nsenter inspect a live peer's /proc/<pid>/ns: a container shares one namespace set, so
             // the peer ns links readlink to the same "<name>:[<inode>]" values as self.
             src("pf-peer-ns", "ext_procfs/peerns.c").out("peer_ns ok=1\n"),
+            // A NONBLOCKING read on a controlling terminal with no input is EAGAIN on Linux, never EOF(0).
+            // dd backs /dev/tty (host device) and /dev/console (/dev/null) with something that returns 0 when
+            // empty -> readline/TUI code read the 0 as terminal closure. dd-behavior golden: /dev/console is
+            // the deterministic path (always intercepted); /dev/tty is best-effort (harness lacks a ctty).
+            src("pf-ttynonblock", "ext_procfs/ttynonblock.c").out("ttynonblock ok=1 console=1 tty=-1\n"),
         ],
     )
 }

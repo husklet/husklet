@@ -109,6 +109,12 @@ static uint8_t g_devfull[DD_NFD];
 // macOS rejects them with EPERM. 1 = this fd is such a device, so svc_io swallows its writes as a no-op
 // success -- entropy-seeding probes (libgcrypt, some init scripts) then behave as on Linux.
 static uint8_t g_devseed[DD_NFD];
+// /dev/tty (and the console we back with /dev/null): a controlling terminal NEVER reports EOF because it
+// has no input -- a nonblocking read with nothing pending returns EAGAIN, and a blocking read waits. But dd
+// may back /dev/tty with a host device (or /dev/null for /dev/console) that returns 0 (EOF) when empty, so
+// readline/TUI/event-loop code treats "no input" as terminal closure and tears down. 1 = this fd carries
+// tty read semantics: a 0-byte (EOF) read on a NONBLOCKING such fd is reported as EAGAIN instead (svc_io).
+static uint8_t g_devtty[DD_NFD];
 // Guest-visible bound AF_UNIX socket names, for /proc/net/unix enumeration (`ss -x`, socket-inventory
 // tools). Recorded on a successful AF_UNIX bind (net.c); a pathname keeps its guest path, an abstract name
 // is stored as "@name". Empty slot = not a bound unix socket. Process-local (one net-namespace per engine).

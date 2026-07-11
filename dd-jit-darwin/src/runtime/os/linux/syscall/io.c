@@ -786,6 +786,17 @@ static int svc_io(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t
             r = read(rfd, (void *)a1, (size_t)a2);
         } while (r < 0 && SVC_EINTR_RESTART(c));
         ts_wait_leave();
+        // /dev/tty (or /dev/console) tty semantics: a controlling terminal has no EOF-from-emptiness, so a
+        // NONBLOCKING read that came back with 0 bytes ("no input") must be EAGAIN, never EOF -- otherwise
+        // readline/TUI/event-loop code reads the 0 as terminal closure and tears the terminal down. dd may
+        // back /dev/tty with a host device (or /dev/null for console) that returns 0 when empty; remap it.
+        if (r == 0 && a2 > 0 && rfd >= 0 && rfd < DD_NFD && g_devtty[rfd]) {
+            int fl = fcntl(rfd, F_GETFL);
+            if (fl >= 0 && (fl & O_NONBLOCK)) {
+                r = -1;
+                errno = EAGAIN;
+            }
+        }
         // SEQPACKET/O_DIRECT-pipe EOF over a DGRAM backing: a peer-closed read reports ECONNRESET, but the
         // emulated endpoint must return 0 (EOF) like the Linux original. (See netns.c / case 199 / pipe2.)
         if (r < 0 && errno == ECONNRESET && seq_is(rfd)) r = 0;

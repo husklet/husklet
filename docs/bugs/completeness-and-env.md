@@ -153,30 +153,6 @@ not a localized change. Left for a dedicated cross-process-fd pass.
 
 
 
-### `/dev/tty` Nonblocking Read Reports EOF Instead Of EAGAIN
-
-Priority: P1
-Impact: terminal event loops can treat no input as terminal closure
-Confidence: High
-
-Verification status: Proven in isolated worktree `/Users/x/dd/dd-audit-devfs-procfs-20260710`.
-
-Evidence:
-
-- `/dev/tty` is represented by synthetic devfs: `dd-jit-darwin/src/runtime/os/linux/container/vfs.c:3883`.
-- Read handling returns through Linux fs syscall glue: `dd-jit-darwin/src/runtime/os/linux/syscall/fs.c:2076`.
-
-Why this is bad:
-
-With a controlling tty and no available input, Linux nonblocking reads return `EAGAIN`. dd returns zero bytes and no errno, which is EOF semantics; readline, TUI, and event-loop code can exit or tear down the terminal.
-
-Observed proof:
-
-```text
-Linux/qemu: tty nb_read=-1 errno=11
-dd:         tty nb_read=0 errno=0
-```
-
 ## Regression Gate Shape
 
 Every completeness finding should aim for one of:
