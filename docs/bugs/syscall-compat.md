@@ -2,33 +2,6 @@
 
 This file keeps syscall findings framed around Linux compatibility, fake-success behavior, data loss, probe correctness, hangs, and workload breakage.
 
-## Periodic `timerfd` Ignores Earlier First Deadline
-
-Priority: P1
-Impact: delayed wakeups and latency cliffs
-Confidence: High
-
-Verification status: Proven across aarch64 and x86_64 in isolated worktree `/Users/x/dd/dd-workerA-syscall-audit-20260710`.
-
-Evidence:
-
-- The code computes `first_delay` from `it_value`: `dd-jit-darwin/src/runtime/os/linux/syscall/event.c:919`.
-- Periodic timers are then armed with `interval_ns` instead of the first delay: `dd-jit-darwin/src/runtime/os/linux/syscall/event.c:926`.
-
-Why this is bad:
-
-Linux timerfd supports a first expiration at `it_value` followed by periodic expirations at `it_interval`. dd delays the first fire until the interval when the interval is larger than the initial deadline.
-
-Isolated proof:
-
-```sh
-DDJIT_DIR="$PWD/target-workerA-syscall-audit/release/build/dd-jit-darwin-16122afd27b6bb64/out" \
-  cargo run -q -p dd-tests -- -e aarch64 timerfd-first-interval
-```
-
-Observed: native fires within 20ms (`ready=1 n8=1 exp=1`); dd does not fire within 150ms (`ready=0 n8=0 exp=0`). x86_64 showed the same mismatch.
-
-
 ## aarch64 `AT_PAGESZ` Exposes Host Page Size
 
 Priority: P2
@@ -126,54 +99,6 @@ Observed proof:
 Linux: pagesz=4096 ok=1
 dd:    pagesz=16384 ok=0 einval=1 errno=22
 ```
-
-## Aligned `mprotect` On Unmapped Range Succeeds
-
-Priority: P2
-Impact: memory mapping probes see false success instead of `ENOMEM`
-Confidence: High
-
-Verification status: Proven in isolated worktree `/Users/x/dd/dd-audit-aarch64-runtime-20260710`.
-
-Evidence:
-
-- `mprotect` handler updates bookkeeping and returns success without verifying mapped pages: `dd-jit-darwin/src/runtime/os/linux/syscall/mem.c:652`.
-
-Why this is bad:
-
-Linux returns `ENOMEM` for page-aligned `mprotect` ranges that are not mapped. dd reports success, hiding bad mappings and feature-probe failures.
-
-Observed proof:
-
-```text
-Linux: mprotect_unmapped enomem=1 success=0 errno=12
-dd:    enomem=0 success=1 errno=0
-```
-
-## `kill(0, sig)` Only Signals The Caller
-
-Priority: P1
-Impact: process-group signal delivery silently misses sibling processes
-Confidence: High
-
-Verification status: Proven in isolated worktree `/Users/x/dd/dd-audit-pgrp-signal-20260710`.
-
-Evidence:
-
-- `kill(pid=0)` routes through a caller-only signal path: `dd-jit-darwin/src/runtime/os/linux/syscall/signal.c:92`.
-
-Why this is bad:
-
-Linux `kill(0, sig)` sends to every process in the caller's process group. dd signals only the caller, so job-control shells, process supervisors, and group-shutdown logic can leave child processes running.
-
-Observed proof:
-
-```text
-Linux/qemu: kill_zero ready=1 kill_ok=1 child_got=1
-dd:         kill_zero ready=1 kill_ok=1 child_got=0
-```
-
-Status (2026-07-10): FIXED — `kill(0, sig)` (signal.c case 129) now delivers to the caller's whole process group WITHIN the container, not just the caller. dd forwards `setpgid` to the host so the host process group mirrors the guest's, but the engine shares its host session/process-group with the launcher and sibling engines, so a raw `kill(-getpgrp())` would escape the container. Instead `container_group_kill()` (vfs.c) enumerates this container's process registry (the same per-container `proc_reg_*` boundary the guest-pid namespace uses — see docs/bugs/syscalls-and-security.md "pidfd Host Pid Authority Leak") and signals each MEMBER whose host process-group matches the caller's, plus the caller itself via the in-process self path. `sig == 0` stays a group existence/permission probe (returns success). Regression test: `sc-kill-zero-group` (guests/syscallbug/kill_zero_group.c) — run in container mode and oracle-diffed vs native aarch64, expecting `child_got=1`.
 
 ## Guest PROT_NONE Mappings Remain Directly Readable
 
