@@ -1904,6 +1904,17 @@ impl GpuBackend for MetalBackend {
         // surface): if so, its viewport is Y-flipped (negative height) so the texture is stored
         // bottom-left (GL convention) and samples upright in the later composite.
         let mut flip_pass = false;
+        // Guard against the guest shim's clear-vs-load heuristic false-clearing a REUSED offscreen tile.
+        // The shim decides a pass's load-op from a *global* clear serial (bumped by every glClear on any
+        // FBO); when Chrome renders content into tile T, clears an unrelated tile, then draws MORE into T
+        // in the same frame (e.g. compositing a byline child render pass onto a gradient-header tile), the
+        // serial has advanced, so the shim emits load=Clear on T's second pass — wiping T's real content
+        // before the surface pass ever samples it (the dropped-top-tile bug on gradient/complex pages). An
+        // ACTUAL glClear is carried separately as a ClearRect op, so we can tell the two apart: if an
+        // offscreen target was already rendered earlier in THIS command buffer and has NOT been ClearRect'd
+        // since, a load=Clear is the shim's false positive → force Load to preserve the prior content.
+        let mut rendered_offscreen: std::collections::HashSet<u32> = std::collections::HashSet::new();
+        let mut cleared_since: std::collections::HashSet<u32> = std::collections::HashSet::new();
         for op in &cb.encoder {
             match op {
                 Enc::BeginRenderPass { color, depth } => {
@@ -1917,9 +1928,18 @@ impl GpuBackend for MetalBackend {
                         })?;
                         cw = tex.width() as u32;
                         chh = tex.height() as u32;
+                        // Preserve a reused offscreen tile's content when the shim's global-serial heuristic
+                        // spuriously asked to clear it (see rendered_offscreen note above). Only the first
+                        // color attachment names the tile; a real clear (ClearRect) removes it from the set.
+                        let is_offscreen = !self.surface_ids.contains(&ca.texture);
+                        let force_load = i == 0
+                            && is_offscreen
+                            && ca.load == LoadOp::Clear
+                            && rendered_offscreen.contains(&ca.texture)
+                            && !cleared_since.contains(&ca.texture);
                         let att = unsafe { pass.colorAttachments().objectAtIndexedSubscript(i) };
                         att.setTexture(Some(tex));
-                        att.setLoadAction(if ca.load == LoadOp::Clear {
+                        att.setLoadAction(if ca.load == LoadOp::Clear && !force_load {
                             MTLLoadAction::Clear
                         } else {
                             MTLLoadAction::Load
@@ -1951,6 +1971,15 @@ impl GpuBackend for MetalBackend {
                     flip_pass = color
                         .first()
                         .is_some_and(|ca| !self.surface_ids.contains(&ca.texture));
+                    // Record this offscreen tile as rendered-this-frame and consume any pending clear, so a
+                    // later reuse pass in the same command buffer preserves (loads) its content unless it is
+                    // explicitly ClearRect'd in between.
+                    if let Some(ca) = color.first() {
+                        if !self.surface_ids.contains(&ca.texture) {
+                            rendered_offscreen.insert(ca.texture);
+                            cleared_since.remove(&ca.texture);
+                        }
+                    }
                     if flip_pass {
                         e.setViewport(MTLViewport {
                             originX: 0.0,
@@ -2204,6 +2233,9 @@ impl GpuBackend for MetalBackend {
                     if let Some(e) = enc.take() {
                         e.endEncoding();
                     }
+                    // An explicit clear of this target: a following load=Clear pass on it is genuine (not the
+                    // shim's global-serial false positive), so let it clear rather than being forced to Load.
+                    cleared_since.insert(*texture);
                     let Some(tex) = self.resolve_texture(*texture).cloned() else {
                         continue;
                     };
