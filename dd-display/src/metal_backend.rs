@@ -337,6 +337,15 @@ pub struct MetalBackend {
     /// cells are stored vertically mirrored relative to the sampling convention, so the glyph vertex
     /// texcoords are V-flipped within each quad at draw time (see `mirror_glyph_texcoords`).
     glyph_shaders: HashSet<u32>,
+    /// Per glyph-atlas-texture reflection axis: the atlas packs every glyph of a run into one horizontal
+    /// strip whose rows are stored bottom-up, so un-flipping a cell at atlas-V rows [a,b] means reflecting
+    /// it to [S-b, S-a] where S is the strip's bottom row = the MAX glyph-V used in that atlas. Tracked as
+    /// a running max per atlas texture id: a full-run batch (e.g. the heading, drawn in an early frame)
+    /// establishes S and it persists so later frames' isolated cells (which never reach S on their own)
+    /// reuse it. Reflecting about this shared strip axis is correct whether a run is batched into one draw
+    /// or a cell is drawn as a lone quad — a per-draw extent only coincides with S for full-run batches
+    /// and mislowers isolated glyphs.
+    glyph_strip_vmax: std::cell::RefCell<HashMap<u32, f64>>,
     clear_pipeline: Option<Retained<ProtocolObject<dyn MTLRenderPipelineState>>>,
     // Prof counters (read + reset per frame by the executor when DD_RENDER_PROF is on). `*_compiles`
     // count only ACTUAL Metal compiles (cache misses) — the key steady-state regression guard is that
@@ -409,6 +418,7 @@ impl MetalBackend {
             shader_id_hash: HashMap::new(),
             pipeline_id_hash: HashMap::new(),
             glyph_shaders: HashSet::new(),
+            glyph_strip_vmax: std::cell::RefCell::new(HashMap::new()),
             clear_pipeline: None,
             shader_compiles: 0,
             pipeline_compiles: 0,
@@ -591,15 +601,17 @@ impl MetalBackend {
     /// V-mirror the texcoords of a glyph-atlas draw, in place in the vertex buffer, BEFORE the GPU reads it
     /// (the command buffer executes at commit). Chrome/Skia's alpha glyph atlas is uploaded bottom-up, so
     /// its glyph strip is stored vertically inverted relative to Metal's top-left sampling convention and
-    /// text renders upside-down. The un-flip is a reflection of the WHOLE strip, so reflect every vertex's
-    /// V about the draw's GLOBAL texcoord extent (`gmin+gmax - v`) — this both flips each glyph upright AND
-    /// moves its cell to the mirror-image row where the inverted upload actually placed it. Reflecting each
-    /// quad about its OWN [vmin,vmax] instead (the naive per-cell flip) leaves the sampled cell unmoved: it
-    /// happens to work for glyphs that span the full strip (e.g. a lone heading) but leaves smaller glyphs
-    /// sampling an empty row — the paragraph-text scramble. When every glyph shares one V-band the global
-    /// reflection reduces to the per-cell flip, so uniform-height draws are unaffected. `tc` = (vertex-
-    /// buffer slot, byte offset of the V component in a vertex, stride, read-kind); vertices are 4 per quad
-    /// and the drawn span is `[first_vertex, first_vertex+count)`. Solids/UI on other pipelines are untouched.
+    /// text renders upside-down. A run's glyphs pack into one horizontal strip that spans atlas-V rows
+    /// `[0, S]` (S = the tallest cell's bottom row); because the strip is stored bottom-up, a cell at rows
+    /// `[a,b]` must be reflected to `[S-b, S-a]`, i.e. `v -> S - v`. The reflection axis is thus the STRIP
+    /// height S — a property of the atlas, NOT of any one draw. Chrome batches a full run into one
+    /// DrawIndexed (whose gmax == S, so a per-draw reflection is correct) but also emits isolated cells as
+    /// lone quads (e.g. a `<div>` label drawn straight to the window); for those the draw's own extent is
+    /// the cell's height, far short of S, and reflecting about it mislowers the cell. We therefore reflect
+    /// every glyph draw about the atlas's shared strip axis, tracked as the running max glyph-V for the
+    /// bound atlas texture (`atlas_tex`): a full-run batch establishes S and every later lone cell reuses
+    /// it. `tc` = (vertex-buffer slot, byte offset of the V component in a vertex, stride, read-kind);
+    /// vertices are 4 per quad, drawn span `[first_vertex, first_vertex+count)`. Solids/UI are untouched.
     fn mirror_glyph_texcoords(
         &self,
         buf_id: u32,
@@ -607,6 +619,7 @@ impl MetalBackend {
         tc: (usize, usize, usize, u8),
         first_vertex: u32,
         count: u32,
+        atlas_tex: u32,
     ) {
         let (_slot, v_off, stride, kind) = tc;
         if count < 4 || stride == 0 {
@@ -644,26 +657,31 @@ impl MetalBackend {
         while end + 4 <= last && addr(end + 3) + 4 <= cap {
             end += 4;
         }
-        // Pass 1: the draw's global V extent = the glyph strip's reflection axis.
-        let mut gmin = f64::MAX;
+        // Pass 1: this draw's max glyph-V.
         let mut gmax = f64::MIN;
         let mut v = first_vertex;
         while v < end {
-            let val = read(unsafe { base.add(addr(v)) } as *const u8);
-            gmin = gmin.min(val);
-            gmax = gmax.max(val);
+            gmax = gmax.max(read(unsafe { base.add(addr(v)) } as *const u8));
             v += 1;
         }
-        if gmin > gmax {
+        if gmax < 0.0 {
             return;
         }
-        // Pass 2: reflect every vertex's V about that axis.
-        let sum = gmin + gmax;
+        // The atlas strip axis S = running max glyph-V for this atlas texture. A full-run batch (which
+        // spans the strip, so its gmax == S) raises it; isolated cells then reflect about the same S
+        // rather than their own short extent. Clamp up by this draw so S >= gmax (never a negative V).
+        let axis = {
+            let mut m = self.glyph_strip_vmax.borrow_mut();
+            let s = m.entry(atlas_tex).or_insert(f64::MIN);
+            *s = s.max(gmax);
+            *s
+        };
+        // Pass 2: reflect every vertex's V about the strip axis: a cell at [a,b] -> [S-b, S-a].
         let mut v = first_vertex;
         while v < end {
             let p = unsafe { base.add(addr(v)) };
             let val = read(p as *const u8);
-            write(p, sum - val);
+            write(p, axis - val);
             v += 1;
         }
     }
@@ -2032,6 +2050,9 @@ impl GpuBackend for MetalBackend {
         // draw can rewrite the drawn quads' texcoords in place.
         let mut cur_glyph_tc: Option<(usize, usize, usize, u8)> = None;
         let mut bound_vbufs: HashMap<usize, (u32, u64)> = HashMap::new();
+        // Atlas texture bound at sampler slot 0 by the current bind group — the glyph-atlas identity used
+        // to key its shared strip-reflection axis (see `mirror_glyph_texcoords`).
+        let mut cur_atlas_tex: u32 = 0;
         for op in &cb.encoder {
             match op {
                 Enc::BeginRenderPass { color, depth } => {
@@ -2142,6 +2163,7 @@ impl GpuBackend for MetalBackend {
                                 tc,
                                 *first_vertex,
                                 *vertex_count,
+                                cur_atlas_tex,
                             );
                         }
                     }
@@ -2177,6 +2199,10 @@ impl GpuBackend for MetalBackend {
                                 .collect()
                         })
                         .unwrap_or_default();
+                    // Remember the atlas texture (sampler slot 0) so a glyph draw can key its strip axis.
+                    if let Some((_, _, tex, _)) = plan.iter().find(|(k, i, _, _)| *k == 1 && *i == 0) {
+                        cur_atlas_tex = *tex;
+                    }
                     for (kind, idx, id, off) in plan {
                         let Some(e) = &enc else { continue };
                         unsafe {
@@ -2293,7 +2319,14 @@ impl GpuBackend for MetalBackend {
                                         m
                                     };
                                     let start = (*base_vertex).max(0) as u32;
-                                    self.mirror_glyph_texcoords(vid, voff, tc, start, max_idx + 1);
+                                    self.mirror_glyph_texcoords(
+                                        vid,
+                                        voff,
+                                        tc,
+                                        start,
+                                        max_idx + 1,
+                                        cur_atlas_tex,
+                                    );
                                 }
                             }
                             // Honor base_vertex (added to every fetched index — glDrawElementsBaseVertex)
