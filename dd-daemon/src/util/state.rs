@@ -75,6 +75,18 @@ pub(crate) fn load_state(inner: &mut Inner, path: &str) {
                 c.finished_at = crate::util::now_secs();
             }
         }
+        // Restore the exited container's persisted logs (stdout/stderr are `#[serde(skip)]`, so the state
+        // file carries none) so `docker logs` still returns output after a daemon restart.
+        let logdir = crate::util::dd_home()
+            .join("containers")
+            .join(&c.id)
+            .join("logs");
+        if let Ok(b) = std::fs::read(logdir.join("stdout")) {
+            c.stdout = b;
+        }
+        if let Ok(b) = std::fs::read(logdir.join("stderr")) {
+            c.stderr = b;
+        }
         inner.containers.insert(c.id.clone(), c);
     }
     inner.volumes = p.volumes;
@@ -182,6 +194,33 @@ mod tests {
             assert_eq!(c.exit_code, 255, "{id} takes docker's shutdown exit code");
         }
         let _ = std::fs::remove_file(&path);
+    }
+
+    // "Retained Container Logs Are Lost Across Daemon Restart": an exited container's logs are persisted
+    // to disk on exit and restored on reload, so `docker logs` still returns them after a restart.
+    #[test]
+    fn load_state_restores_persisted_logs_for_exited_container() {
+        let cid = format!("logtest{}", std::process::id());
+        let logdir = crate::util::dd_home().join("containers").join(&cid).join("logs");
+        std::fs::create_dir_all(&logdir).unwrap();
+        std::fs::write(logdir.join("stdout"), b"hello after restart\n").unwrap();
+        std::fs::write(logdir.join("stderr"), b"warn line\n").unwrap();
+
+        let path = tmp("logs");
+        let _ = std::fs::remove_file(&path);
+        let mut src = Inner::default();
+        src.containers.insert(
+            cid.clone(),
+            Container { id: cid.clone(), image: "x".into(), status: "exited".into(), ..Default::default() },
+        );
+        save_state(&src, &path);
+        let mut dst = Inner::default();
+        load_state(&mut dst, &path);
+        let c = dst.containers.get(&cid).unwrap();
+        assert_eq!(c.stdout, b"hello after restart\n", "stdout restored from disk after restart");
+        assert_eq!(c.stderr, b"warn line\n", "stderr restored from disk after restart");
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_dir_all(crate::util::dd_home().join("containers").join(&cid));
     }
 
     // No matching image at all AND no persisted arch -> the safe arm64 default (unchanged for orphans).

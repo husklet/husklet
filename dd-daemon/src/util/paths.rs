@@ -1,6 +1,28 @@
 //! Filesystem-path helpers rooted at the daemon state dir, plus recursive size accounting.
 use super::*;
 
+/// Reject a (file-based) archive whose members would ESCAPE the extraction root — an absolute path
+/// (leading `/`) or a `..` path component. Lists with `tar tf` (no extraction) first. The symlink-follow
+/// half of extraction safety is covered by modern `tar` (it won't extract through an in-archive symlink).
+/// A `tar tf` that fails is left for the real extract to surface. Used by the build-context / `ADD` paths.
+pub(crate) fn tar_members_contained(tar: &std::path::Path) -> Result<(), String> {
+    let out = std::process::Command::new("tar")
+        .arg("tf")
+        .arg(tar)
+        .output()
+        .map_err(|e| e.to_string())?;
+    if !out.status.success() {
+        return Ok(());
+    }
+    for line in String::from_utf8_lossy(&out.stdout).lines() {
+        let m = line.trim_end_matches('/');
+        if m.starts_with('/') || m.split('/').any(|c| c == "..") {
+            return Err(format!("unsafe archive member (path traversal): {line}"));
+        }
+    }
+    Ok(())
+}
+
 /// `~/.dd` (or `./.dd` if `$HOME` is unset) — the default state/volumes root.
 pub(crate) fn dd_home() -> PathBuf {
     std::env::var_os("HOME")
@@ -57,6 +79,33 @@ pub(crate) fn dir_size(p: &std::path::Path) -> i64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // tar_members_contained must reject an archive whose members escape the extraction root (a `..`
+    // component here), and accept a well-formed one.
+    #[test]
+    fn tar_members_contained_rejects_traversal_and_accepts_safe() {
+        let stage = std::env::temp_dir().join(format!("dd_tar_guard_{}", std::process::id()));
+        std::fs::create_dir_all(&stage).unwrap();
+        std::fs::write(stage.join("x"), b"data").unwrap();
+        // A SAFE archive: member "x".
+        let safe = stage.join("safe.tar");
+        assert!(std::process::Command::new("tar")
+            .arg("cf").arg(&safe).arg("-C").arg(&stage).arg("x").status().unwrap().success());
+        assert!(tar_members_contained(&safe).is_ok(), "a normal archive is accepted");
+        // An UNSAFE archive: GNU tar --transform prepends `../` -> member "../x".
+        let evil = stage.join("evil.tar");
+        let made = std::process::Command::new("tar")
+            .arg("cf").arg(&evil).arg("-C").arg(&stage)
+            .arg("--transform").arg("s,^,../,").arg("x").status();
+        if matches!(made, Ok(s) if s.success()) {
+            // Only assert when --transform is supported (GNU tar); skip gracefully on bsdtar.
+            let listed = std::process::Command::new("tar").arg("tf").arg(&evil).output().unwrap();
+            if String::from_utf8_lossy(&listed.stdout).contains("..") {
+                assert!(tar_members_contained(&evil).is_err(), "a `..` member must be rejected");
+            }
+        }
+        let _ = std::fs::remove_dir_all(&stage);
+    }
 
     // A unique scratch dir so parallel test runs don't collide; removed on drop.
     struct Tmp(PathBuf);

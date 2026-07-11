@@ -78,6 +78,12 @@ async fn do_stop(a: &App, id: &str, sig: i32, t: i64) -> Response {
                                      // give the guest up to `t` seconds to exit on its own; the spawn reaper (runtime.rs) flips
                                      // status to "exited" when the process dies, so poll that rather than racing on pid reuse.
         let mut waited = 0i64;
+        // After the stop timeout we SIGKILL, but SIGKILL is asynchronous — the process isn't reaped the
+        // instant we send it. So instead of freeing ports / marking exited RIGHT AWAY (which races the
+        // reaper: rm/restart/port-reuse could act while the process is still tearing down), keep polling
+        // for the reaper's confirmation (status -> exited) for a bounded grace after the kill.
+        let mut killed = false;
+        let hard_cap = t * 1000 + 5000; // +5s to let the reaper confirm death before we proceed regardless
         loop {
             let exited = {
                 let g = a.inner.lock().await;
@@ -87,12 +93,15 @@ async fn do_stop(a: &App, id: &str, sig: i32, t: i64) -> Response {
                     .unwrap_or(true)
             };
             if exited {
-                break;
+                break; // reaper confirmed the process is dead
             }
-            if waited >= t * 1000 {
-                kill_group(pid as i32, libc::SIGKILL);
-                break;
-            } // group SIGKILL, not just the leader
+            if !killed && waited >= t * 1000 {
+                kill_group(pid as i32, libc::SIGKILL); // group SIGKILL, not just the leader
+                killed = true;
+            }
+            if waited >= hard_cap {
+                break; // reaper never confirmed within the grace — proceed rather than hang the request
+            }
             tokio::time::sleep(std::time::Duration::from_millis(100)).await;
             waited += 100;
         }

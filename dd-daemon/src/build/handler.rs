@@ -16,8 +16,14 @@ fn unpack_build_context(body: &[u8], ctx: &std::path::Path, _images_dir: &str) -
     if std::fs::write(&ctar, body).is_err() {
         return Err("cannot write context".into());
     }
+    // Refuse a traversal-laden context (absolute / `..` members) before extracting; `--no-same-owner`
+    // avoids chowning extracted files to arbitrary uids.
+    if let Err(e) = crate::util::tar_members_contained(&ctar) {
+        let _ = std::fs::remove_file(&ctar);
+        return Err(e);
+    }
     let ok = matches!(
-        std::process::Command::new("tar").arg("xf").arg(&ctar).arg("-C").arg(ctx).status(),
+        std::process::Command::new("tar").arg("--no-same-owner").arg("-xf").arg(&ctar).arg("-C").arg(ctx).status(),
         Ok(s) if s.success()
     );
     let _ = std::fs::remove_file(&ctar);
@@ -379,6 +385,12 @@ pub(crate) async fn images_build(
     // image labels accumulated from `LABEL` instructions; inherited from the base at FROM (finding 5),
     // child LABEL overriding matching keys. The `--label` build option is merged on top after the loop.
     let mut labels: HashMap<String, String> = HashMap::new();
+    // Runtime-metadata instructions the builder previously DROPPED: EXPOSE (declared ports), VOLUME
+    // (anon-volume dirs), and HEALTHCHECK. No rootfs effect but belong in the built image's config so
+    // `docker inspect`/run honor them (USER is already tracked above).
+    let mut exposed_ports: Vec<String> = Vec::new();
+    let mut img_volumes: Vec<String> = Vec::new();
+    let mut healthcheck: Option<serde_json::Value> = None;
     // set once the --target stage has been fully built, so the next FROM stops the build.
     let mut target_built = false;
 
@@ -746,25 +758,58 @@ pub(crate) async fn images_build(
                     labels.insert(k, v);
                 }
             }
-            // Persist USER into the image config so inspect/run see it (finding 13).
+            // Persist USER into the image config so inspect/run see it.
             "USER" => user = args.trim().to_string(),
-            // `SHELL ["/bin/bash","-c"]` overrides the shell for later shell-form RUN/CMD/ENTRYPOINT
-            // (finding 9). Ignore a malformed (non-array) SHELL.
+            "EXPOSE" => {
+                // `EXPOSE 8080 443/udp` -> port keys, defaulting the protocol to tcp.
+                for tok in args.split_whitespace() {
+                    let key = if tok.contains('/') {
+                        tok.to_string()
+                    } else {
+                        format!("{tok}/tcp")
+                    };
+                    if !exposed_ports.contains(&key) {
+                        exposed_ports.push(key);
+                    }
+                }
+            }
+            "VOLUME" => {
+                // `VOLUME ["/a","/b"]` (JSON) or `VOLUME /a /b` (shell form).
+                let dirs: Vec<String> = serde_json::from_str::<Vec<String>>(args.trim())
+                    .unwrap_or_else(|_| args.split_whitespace().map(str::to_string).collect());
+                for d in dirs {
+                    if !d.is_empty() && !img_volumes.contains(&d) {
+                        img_volumes.push(d);
+                    }
+                }
+            }
+            "HEALTHCHECK" => {
+                // `HEALTHCHECK NONE` disables; `HEALTHCHECK [opts] CMD <cmd>` sets a shell probe. The CMD
+                // tail becomes a CMD-SHELL test (docker's default for the shell form); options default.
+                let a = args.trim();
+                if a.eq_ignore_ascii_case("NONE") {
+                    healthcheck = None;
+                } else if let Some(pos) = a.to_ascii_uppercase().find("CMD") {
+                    let test = a[pos + 3..].trim().to_string();
+                    healthcheck = Some(serde_json::json!({"Test": ["CMD-SHELL", test]}));
+                }
+            }
+            // `SHELL ["/bin/bash","-c"]` overrides the shell for later shell-form RUN/CMD/ENTRYPOINT.
+            // Ignore a malformed (non-array) SHELL.
             "SHELL" => {
                 let sh = parse_exec_form(&args);
                 if args.trim().starts_with('[') && !sh.is_empty() {
                     shell = sh;
                 }
             }
-            // Store an ONBUILD trigger on the image being built; a child `FROM` this image replays it
-            // (finding 10). The trigger is the instruction text after `ONBUILD`.
+            // Store an ONBUILD trigger on the image being built; a child `FROM` this image replays it.
             "ONBUILD" => {
                 let trig = args.trim();
                 if !trig.is_empty() {
                     onbuild.push(trig.to_string());
                 }
             }
-            _ => {} // EXPOSE/MAINTAINER/VOLUME/HEALTHCHECK — no rootfs/config effect in this builder
+            _ => {} // MAINTAINER/etc — no rootfs or config effect in this builder
         }
 
         // Step executed (a cache miss): record its result as a layer for future rebuilds and advance the
@@ -852,6 +897,7 @@ pub(crate) async fn images_build(
         img_dir.join("dd-image.json"),
         json!({"name": name, "cmd": cmd, "entrypoint": entrypoint, "env": env, "workdir": workdir,
                "labels": labels, "arch": arch.arch(), "os": arch.os(), "user": user,
+               "exposed_ports": exposed_ports, "img_volumes": img_volumes, "healthcheck": healthcheck,
                "onbuild": onbuild, "history": history_json})
         .to_string(),
     )
@@ -890,6 +936,10 @@ pub(crate) async fn images_build(
             env,
             workdir,
             user,
+            exposed_ports,
+            img_volumes,
+            healthcheck: healthcheck
+                .and_then(|v| serde_json::from_value::<crate::model::HealthConfig>(v).ok()),
             labels,
             created: now_secs(),
             history,

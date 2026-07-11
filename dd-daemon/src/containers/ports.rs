@@ -92,24 +92,47 @@ fn plan(c: &Container, bridge: &Option<(String, String)>, netns_key: &str) -> Ve
 /// Start (idempotently) the host→container forwarders for a container. Called from `spawn_live` after the
 /// guest is spawned; a no-op when the container publishes nothing or forwarders are already running (the
 /// restart path re-enters `spawn_live` but the daemon-owned listeners persist).
-pub(crate) fn start(c: &Container, bridge: &Option<(String, String)>, netns_key: &str) {
+pub(crate) async fn start(
+    c: &Container,
+    bridge: &Option<(String, String)>,
+    netns_key: &str,
+) -> Result<(), String> {
     let bindings = plan(c, bridge, netns_key);
     if bindings.is_empty() {
-        return;
+        return Ok(());
     }
     let cid = c.id.clone();
     {
         let reg = registry().lock().unwrap();
         if reg.get(&cid).map_or(false, |v| !v.is_empty()) {
-            return;
+            return Ok(());
         } // already forwarding (restart)
     }
-    let mut handles = Vec::new();
+    // Bind EVERY host listener SYNCHRONOUSLY up front: an occupied host port must FAIL the start with a
+    // port-allocation error (docker's "port is already allocated"), not silently no-op in a background
+    // acceptor task and leave the container reporting running while no dd listener owns the published port.
+    let mut bound = Vec::new();
     for b in bindings {
-        let h = tokio::spawn(acceptor(b, cid.clone()));
+        let addr = format!("{}:{}", b.host_ip, b.host_port);
+        match TcpListener::bind(&addr).await {
+            Ok(l) => bound.push((l, b)),
+            Err(e) => {
+                // Release the listeners already bound for this start (dropping a TcpListener closes it),
+                // then fail — the caller aborts the whole start.
+                return Err(format!(
+                    "driver failed programming external connectivity: Bind for {addr} failed: \
+                     port is already allocated ({e})"
+                ));
+            }
+        }
+    }
+    let mut handles = Vec::new();
+    for (listener, b) in bound {
+        let h = tokio::spawn(accept_loop(listener, b, cid.clone()));
         handles.push(h);
     }
     registry().lock().unwrap().insert(cid, handles);
+    Ok(())
 }
 
 /// Stop + release a container's forwarders (host ports freed). Called from stop/kill/remove and the `--rm`
@@ -121,24 +144,11 @@ pub(crate) fn stop(cid: &str) {
     }
 }
 
-/// Bind the host listener and accept forever, spawning a relay per connection. If the bind fails (port
-/// already taken by another container / a real host service) we log once and exit — matching docker's
-/// "port is already allocated" (the daemon-owned allocator already tried to avoid this for auto-assigned
-/// ports; an explicit collision surfaces here).
-async fn acceptor(b: Binding, cid: String) {
-    let addr = format!("{}:{}", b.host_ip, b.host_port);
-    let listener = match TcpListener::bind(&addr).await {
-        Ok(l) => l,
-        Err(e) => {
-            if std::env::var("DD_DEBUG").is_ok() {
-                eprintln!(
-                    "[ports] {} bind {addr} failed: {e}",
-                    &cid[..cid.len().min(12)]
-                );
-            }
-            return;
-        }
-    };
+/// Accept forever on an ALREADY-BOUND listener, spawning a relay per connection. The bind itself now
+/// happens synchronously in [`start`] so an EADDRINUSE fails the container start rather than being
+/// swallowed here in a background task (docker's "port is already allocated").
+async fn accept_loop(listener: TcpListener, b: Binding, cid: String) {
+    let _ = &cid; // retained for future per-container diagnostics; the loop below owns the listener
     loop {
         let (host_conn, _) = match listener.accept().await {
             Ok(x) => x,
@@ -217,18 +227,21 @@ async fn relay(mut host: TcpStream, mut guest: UnixStream) {
 /// Resolve `(bridge, netns_key)` for a container the way `spawn_cfg`/`spawn_live` do, then start its
 /// forwarders. Convenience used by `spawn_live`. `bridge` must already be resolved by the caller (it holds
 /// the state lock); we only need the netns key, derivable from the container itself.
-pub(crate) fn start_for(c: &Container, bridge: &Option<(String, String)>) {
+pub(crate) async fn start_for(
+    c: &Container,
+    bridge: &Option<(String, String)>,
+) -> Result<(), String> {
     // The darwin container (darwinjail) runs native binaries on the REAL host network stack — a server it
     // binds already listens on the actual host port, so `-p` needs no forwarder. Starting one here would
     // just collide (EADDRINUSE) with the container's own bind. Only Linux guests use the AF_UNIX switch
     // that this forwarder bridges into.
     if c.arch.map_or(false, |g| g.os() == "darwin") {
-        return;
+        return Ok(());
     }
     // Matches `spawn_cfg`: an exec shares the target container's netns via `netns_key`; a normal container
     // uses its own id. The engine truncates to 40, so pass the untruncated key (t40 clips inside `plan`).
     let ns_key = c.netns_key.as_deref().unwrap_or(&c.id).to_string();
-    start(c, bridge, &ns_key);
+    start(c, bridge, &ns_key).await
 }
 
 #[cfg(test)]

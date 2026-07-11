@@ -164,7 +164,12 @@ pub(crate) async fn spawn_live(app: &App, c: &Container, vols: &[Vol], live: Arc
     // nothing, and a no-op for an exec (empty publish). Bound now so `docker port`/`ps`/inspect report a
     // live, deterministic host port and a re-listening server stays reachable. `bridge` is still owned here
     // (spawn_cfg consumes it just below); we only borrow it.
-    crate::containers::ports::start_for(c, &bridge);
+    // Bind the published host ports FIRST; if a host port is already taken, FAIL the start (exit 127 with
+    // a port-allocation message) instead of launching the guest and reporting a running-but-unreachable
+    // container. live_fail marks it exited, persists, and releases any listeners already bound.
+    if let Err(e) = crate::containers::ports::start_for(c, &bridge).await {
+        return live_fail(app, &c.id, &live, format!("dd: {e}")).await;
+    }
     // No launch command means the JIT engine for this guest arch isn't bundled (e.g. a darwin-only build
     // shipped without ddjit-linux_*). Surface a CLEAN error (exit 127, like every other spawn failure) so an
     // interactive `docker run -it` exits with a message instead of hanging forever on a stream that never
@@ -291,6 +296,14 @@ pub(crate) async fn spawn_live(app: &App, c: &Container, vols: &[Vol], live: Arc
                         se.extend_from_slice(data);
                     }
                 }
+                // Persist the finalized per-stream logs to disk so `docker logs` on an exited container
+                // still works AFTER a daemon restart — the in-memory cc.stdout/cc.stderr are `#[serde(skip)]`
+                // and the Live's ordered log is gone on reload, so without this the log body comes back
+                // empty. Written under the per-container dir (reclaimed with the container on `docker rm`).
+                let logdir = dd_home().join("containers").join(&cid).join("logs");
+                let _ = std::fs::create_dir_all(&logdir);
+                let _ = std::fs::write(logdir.join("stdout"), &so);
+                let _ = std::fs::write(logdir.join("stderr"), &se);
                 cc.stdout = so;
                 cc.stderr = se;
             }

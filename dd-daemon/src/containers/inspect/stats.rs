@@ -175,11 +175,15 @@ pub(crate) async fn containers_stats(
 
     // Live stream: re-sample once a second, threading each sample's cpu totals into the next precpu.
     // 3600 samples (~1h) is a safety cap; in practice the client disconnects and the stream is dropped.
+    // The initial `pid` above is NOT reused across samples — it is re-fetched each tick so the stream
+    // follows a restart (new pid) and ENDS when the container exits, never reporting a dead/reused pid.
     let base = std::time::Instant::now();
+    let app = a.clone();
     let body =
         futures_util::stream::unfold((0u64, 0u64, 0u64), move |(idx, pre_total, pre_sys)| {
             let name = name.clone();
             let full = full.clone();
+            let app = app.clone();
             async move {
                 if idx >= 3600 {
                     return None;
@@ -187,8 +191,23 @@ pub(crate) async fn containers_stats(
                 if idx > 0 {
                     tokio::time::sleep(std::time::Duration::from_secs(1)).await;
                 }
+                // Re-read the CURRENT pid + running state: if the container exited or was removed, end the
+                // stream (docker's stats stream stops); otherwise sample the live pid (which tracks a restart).
+                let (cur_pid, running) = {
+                    let g = app.inner.lock().await;
+                    match g.containers.get(&full) {
+                        Some(c) if c.status == "running" || c.status == "paused" => (
+                            g.live.get(&full).and_then(|l| *l.pid.lock().unwrap()),
+                            true,
+                        ),
+                        _ => (None, false),
+                    }
+                };
+                if !running {
+                    return None;
+                }
                 let (v, total, system) =
-                    stats_sample(&name, &full, pid, mem_limit, idx, base, pre_total, pre_sys);
+                    stats_sample(&name, &full, cur_pid, mem_limit, idx, base, pre_total, pre_sys);
                 let mut line = serde_json::to_vec(&v).unwrap_or_default();
                 line.push(b'\n');
                 Some((

@@ -834,3 +834,103 @@ async fn failed_spawn_removes_spent_live_entry() {
         "a failed spawn must drop the spent Live so a second start creates a fresh one"
     );
 }
+
+// ---- health `starting` state is installed synchronously at start --------------------------------
+#[tokio::test]
+async fn start_installs_starting_health_state_synchronously() {
+    let app = test_app();
+    seed_container(&app, "healthstart0", "created").await;
+    // Give it a healthcheck (as create would resolve).
+    {
+        let mut g = app.inner.lock().await;
+        let c = g.containers.get_mut("healthstart0").unwrap();
+        c.healthcheck = Some(crate::model::HealthConfig {
+            test: vec!["CMD-SHELL".into(), "true".into()],
+            ..Default::default()
+        });
+    }
+    // start spawns (which fails with no engine and reaps to exited), but the `starting` health object is
+    // installed BEFORE spawn as part of the start transition, so it is present afterward.
+    let _ = crate::containers::containers_start(State(app.clone()), Path("healthstart0".into())).await;
+    let g = app.inner.lock().await;
+    let c = g.containers.get("healthstart0").unwrap();
+    let h = c.health.as_ref().expect("health object installed at start");
+    assert_eq!(h.status, "starting", "health must be visible as starting from the start transition");
+}
+
+// ---- create rejects an image whose (store-managed) rootfs has disappeared --------------------
+#[tokio::test]
+async fn create_rejects_image_with_missing_store_rootfs() {
+    let app = test_app();
+    // An image whose rootfs is UNDER images_dir but does not exist on disk (store entry vanished).
+    let gone = std::path::Path::new(&app.images_dir).join("gone/rootfs").to_string_lossy().into_owned();
+    {
+        let mut g = app.inner.lock().await;
+        g.images.push(Image { name: "ghost:1".into(), rootfs: gone, ..Default::default() });
+    }
+    let q: crate::containers::CreateQ = serde_json::from_value(serde_json::json!({})).unwrap();
+    let body = create_body(serde_json::json!({"Image":"ghost:1"}));
+    let mut rx = app.events.subscribe();
+    let r = crate::containers::containers_create(State(app.clone()), Query(q), body).await;
+    assert_eq!(r.status(), StatusCode::NOT_FOUND, "create on a missing store rootfs is 404");
+    assert!(app.inner.lock().await.containers.is_empty(), "no container recorded");
+    assert!(rx.try_recv().is_err(), "no create event on the rejected create");
+}
+
+// ---- create fails when the volumes root can't host anonymous volumes -------------------------
+#[tokio::test]
+async fn create_fails_when_anon_volume_root_is_unusable() {
+    let app0 = test_app();
+    // Point the volumes root at a FILE so anon-volume dirs can't be created.
+    let volfile = std::path::Path::new(&app0.images_dir).join("not-a-dir");
+    std::fs::write(&volfile, b"x").unwrap();
+    let app = App { volumes_dir: volfile.to_string_lossy().into_owned(), ..app0 };
+    // An image with an image VOLUME so create must materialize an anon volume.
+    {
+        let mut g = app.inner.lock().await;
+        g.images.push(Image { name: "voly:1".into(), rootfs: "/store/voly-R".into(),
+            img_volumes: vec!["/data".into()], ..Default::default() });
+    }
+    let q: crate::containers::CreateQ = serde_json::from_value(serde_json::json!({})).unwrap();
+    let body = create_body(serde_json::json!({"Image":"voly:1"}));
+    let r = crate::containers::containers_create(State(app.clone()), Query(q), body).await;
+    assert_eq!(r.status(), StatusCode::INTERNAL_SERVER_ERROR, "unusable volumes root fails the create");
+    let g = app.inner.lock().await;
+    assert!(g.containers.is_empty(), "no container recorded");
+    assert!(g.volumes.is_empty(), "no phantom volume recorded");
+}
+
+// ---- a published host-port conflict FAILS the start (no running-but-unreachable container) -----
+#[tokio::test]
+async fn published_port_bind_conflict_fails_start() {
+    let app = test_app();
+    // Occupy a host port so the container's publish of the same port collides at bind time.
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let base = std::env::temp_dir().join(format!("dd-portfail-{}-{}", std::process::id(), port));
+    std::fs::create_dir_all(&base).unwrap();
+    let c = Container {
+        id: "portfail0000".into(),
+        image: "x".into(),
+        rootfs: base.to_string_lossy().into_owned(),
+        arch: Some(ddjit::Guest::LinuxAarch64),
+        publish: format!("127.0.0.1:{port}:80/tcp"),
+        status: "running".into(),
+        ..Default::default()
+    };
+    {
+        let mut g = app.inner.lock().await;
+        g.containers.insert(c.id.clone(), c.clone());
+    }
+    let live = crate::model::Live::new();
+    app.inner.lock().await.live.insert(c.id.clone(), live.clone());
+    let ok = crate::runtime::spawn_live(&app, &c, &[], live).await;
+    assert!(!ok, "start must fail when the published host port is already bound");
+    let g = app.inner.lock().await;
+    let cc = g.containers.get("portfail0000").unwrap();
+    assert_eq!(cc.status, "exited", "a bind conflict leaves the container exited, not running");
+    assert_eq!(cc.exit_code, 127);
+    drop(g);
+    let _ = std::fs::remove_dir_all(&base);
+    drop(listener);
+}

@@ -130,6 +130,28 @@ pub struct LoadedImage {
     pub healthcheck: Option<Value>,
 }
 
+/// Reject an archive whose members would ESCAPE the extraction root — an absolute path (leading `/`) or a
+/// `..` path component. Runs `tar tf` (list, no extraction) first. This is the traversal half of extraction
+/// safety; the symlink-follow half is covered by modern `tar` (GNU ≥1.32 / bsdtar refuse to extract through
+/// an in-archive symlink). A `tar tf` that itself fails is left for the real extract to surface.
+pub(crate) fn tar_members_contained(tar: &Path) -> Result<(), String> {
+    let out = std::process::Command::new("tar")
+        .arg("tf")
+        .arg(tar)
+        .output()
+        .map_err(|e| e.to_string())?;
+    if !out.status.success() {
+        return Ok(());
+    }
+    for line in String::from_utf8_lossy(&out.stdout).lines() {
+        let m = line.trim_end_matches('/');
+        if m.starts_with('/') || m.split('/').any(|c| c == "..") {
+            return Err(format!("unsafe archive member (path traversal): {line}"));
+        }
+    }
+    Ok(())
+}
+
 impl Store {
     /// The store directory for an image `name`. The name is reduced to a SINGLE, injective, path-safe
     /// component via [`encode_store_component`](crate::image::config::encode_store_component) — `/` and `:`
