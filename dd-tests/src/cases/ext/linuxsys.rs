@@ -84,9 +84,13 @@ fn fsx() -> Group {
             // memfd F_ADD_SEALS / F_SEAL_WRITE enforced (a write after F_SEAL_WRITE fails EPERM).
             src("memfd-seal", "ext_linuxsys/memfd_seal.c").oracle(),
             // eventfd/timerfd/memfd emulation must still be active when real fd numbers exceed 1024.
+            // Golden-checked (NOT oracle): the 4th seal digit is pwritev2-vs-F_SEAL_WRITE, and
+            // qemu-x86_64 user-mode returns ENOSYS for pwritev2 (seals=1110), so it can't be the
+            // ground truth. Canonical Linux returns EPERM (verified: native aarch64 kernel prints
+            // seals=1111, matching both dd JITs) — the golden pins dd to real-kernel behaviour.
             src("high-fd-emul", "ext_linuxsys/high_fd_emul.c")
                 .out("highfd base=1 event=1 timer=1 seals=1111\n")
-                .oracle(),
+                .exit(0),
             // tee(2): duplicate pipe->pipe via peek+pushback so the source pipe is left intact.
             src("tee", "ext_linuxsys/tee.c").oracle(),
             // vmsplice(2): gather user memory into a pipe (write end) / scatter it back (read end).
