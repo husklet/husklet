@@ -70,6 +70,10 @@ impl Container {
                 "DD_NETBR" => lc.netbr = v.clone(),
                 "DD_IP" => lc.ip = v.clone(),
                 "DD_FSGEN_FILE" => lc.fsgen_file = v.clone(),
+                // Per-workspace VPN egress (docs/VPN.md): the builder's egress_socks() records the SOCKS5
+                // endpoint here; carry it into the typed launch so the engine's egress redirect actually
+                // arms. It was silently dropped, so a workspace configured with VPN egress ran DIRECT.
+                "DD_EGRESS_SOCKS" => lc.egress_socks = v.clone(),
                 "DD_PUBLISH_DAEMON" => lc.publish_daemon = true,
                 "DD_GPU_IOSURFACE" => lc.gpu_iosurface = true,
                 // "DDJIT_PCACHE" is a bare enable gate; the pcache dir's presence enables it engine-side.
@@ -103,6 +107,7 @@ mod tests {
             .sandbox(true)
             .net_isolate(true)
             .bridge("net123", "10.0.0.5")
+            .egress_socks("127.30.0.1:1080")
             .write_coherence_file("/run/fsgen")
             .persistent_cache("/home/dd/pcache")
             .external_port_forwarder(true)
@@ -147,6 +152,7 @@ mod tests {
         assert_eq!(lc.netbr, "net123"); // DD_NETBR
         assert_eq!(lc.ip, "10.0.0.5"); // DD_IP
         assert_eq!(lc.fsgen_file, "/run/fsgen"); // DD_FSGEN_FILE
+        assert_eq!(lc.egress_socks, "127.30.0.1:1080"); // DD_EGRESS_SOCKS
         assert_eq!(lc.pcache_dir, "/home/dd/pcache"); // DDJIT_PCACHE_DIR
         assert!(lc.gpu_iosurface); // DD_GPU_IOSURFACE
     }
@@ -236,7 +242,37 @@ mod tests {
         assert_eq!(lc.netbr, "");
         assert_eq!(lc.ip, "");
         assert_eq!(lc.fsgen_file, "");
+        assert_eq!(lc.egress_socks, "");
         assert_eq!(lc.pcache_dir, "");
+    }
+
+    // "Workspace VPN Egress Is Dropped" (P1): the builder's egress_socks() records DD_EGRESS_SOCKS, but
+    // launch_config() used to drop it, so a workspace configured with VPN/SOCKS egress launched the engine
+    // with NO egress redirect — the guest's external TCP went DIRECT, defeating the VPN. This locks the
+    // key through to the typed LaunchConfig (the engine setenv's DD_EGRESS_SOCKS back from the wire and
+    // netns.c's egress_socks() arms the redirect). An empty/absent VPN carries nothing (direct, unchanged).
+    #[test]
+    fn launch_config_carries_egress_socks() {
+        let c = Container::builder(Image::from_rootfs("/img").guest(Guest::LinuxAarch64))
+            .cmd(["/bin/true"])
+            .egress_socks("10.8.0.1:1080")
+            .build()
+            .unwrap();
+        // Precondition: the builder really recorded the SOCKS endpoint env pair.
+        assert!(has(&c, "DD_EGRESS_SOCKS", "10.8.0.1:1080"));
+        // The fix: it now reaches the typed launch config instead of being silently dropped.
+        assert_eq!(
+            c.launch_config().egress_socks,
+            "10.8.0.1:1080",
+            "DD_EGRESS_SOCKS must carry through to the typed LaunchConfig so the VPN redirect actually arms"
+        );
+
+        // No VPN configured: egress stays empty (direct host egress, byte-for-byte unchanged).
+        let d = Container::builder(Image::from_rootfs("/img").guest(Guest::LinuxAarch64))
+            .cmd(["/bin/true"])
+            .build()
+            .unwrap();
+        assert_eq!(d.launch_config().egress_socks, "");
     }
 
     #[test]

@@ -2,43 +2,6 @@
 
 This file covers daemon architecture, Docker API mismatches, build/test false greens, and stale documentation.
 
-## Workspace VPN Egress Is Dropped
-
-Priority: P1
-Impact: privacy/security expectation violation; traffic can go direct
-Confidence: High
-
-Verification status: Proven with failing guard tests in isolated worktree `/Users/x/dd/dd-agent4`.
-
-Verification status: Proven in isolated worktree `/Users/x/dd/verify3-dd-worktree`.
-
-Evidence:
-
-- CLI configures egress through the builder: `dd-cli/src/ddjit_launcher.rs:210`.
-- Builder stores `DD_EGRESS_SOCKS`: `dd-jit/src/runtime/container/builder.rs:168`.
-- `Container::launch_config` maps selected env keys to typed launch config and drops unknown keys; `DD_EGRESS_SOCKS` is not mapped: `dd-jit/src/runtime/container/mod.rs:63`.
-- Engine only enables egress redirect from `getenv("DD_EGRESS_SOCKS")`: `dd-jit-darwin/src/runtime/os/linux/container/netns.c:1616`.
-
-Why this is bad:
-
-A workspace can appear to have VPN/SOCKS egress configured while the typed launch path silently drops the env key. Guest external TCP traffic can go direct.
-
-Verification:
-
-Run a workspace with a SOCKS endpoint pointing to a logging proxy, attempt external TCP from the guest, and confirm whether the proxy receives the connection.
-
-Isolated proof:
-
-```sh
-CARGO_TARGET_DIR=/Users/x/dd/verify3-target cargo test -p dd-jit --lib launch_config_drops_egress_socks_even_when_builder_sets_it -- --nocapture
-```
-
-Result: `1 passed; 0 failed`. The test demonstrates that the builder records `DD_EGRESS_SOCKS` but `launch_config` drops it before engine launch.
-
-Coverage gap:
-
-Add a unit/integration check that every builder env key is either mapped to `LaunchConfig` or explicitly rejected.
-
 ## Live Network Connect/Disconnect Mutates Daemon State Only
 
 Priority: P2

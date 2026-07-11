@@ -51,6 +51,8 @@ struct ddjit_config {
 
     uint32_t gpu_iosurface; // bool: opt-in the host-IOSurface GPU path (--gui); render-node synth + DD_IOCTL_GPU_ALLOC
     uint32_t nopcache;      // bool: per-container persistent-cache kill switch (DDJIT_NOPCACHE) — was reserved pad
+    uint32_t egress_off;    // per-workspace VPN egress SOCKS5 endpoint (DD_EGRESS_SOCKS), "host:port"; "" = direct
+    uint32_t reserved0;     // explicit tail pad: keeps the struct 8-aligned with no implicit padding; future use
 };
 
 // `flags` bits for ddjit_spawn(): how the child is placed relative to the caller's session/terminal.

@@ -46,6 +46,9 @@ pub struct LaunchConfig {
     pub ip: String,
     /// shared external-writer generation file for daemon-write coherence (empty = none)
     pub fsgen_file: String,
+    /// per-workspace VPN egress: funnel the guest's genuine external TCP connects through this SOCKS5 proxy
+    /// (`host:port`, the engine's `DD_EGRESS_SOCKS` switch). Empty = direct host egress (unchanged).
+    pub egress_socks: String,
     /// (host_port, container_port) tcp publishes
     pub publish: Vec<(u16, u16)>,
     /// (guest_path, host_dir, read_only)

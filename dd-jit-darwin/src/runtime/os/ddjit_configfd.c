@@ -136,6 +136,11 @@ int ddjit_run_configfd(int fd) {
     if (s[0]) setenv("DD_IP", s, 1);
     s = cfd_str(pool, cfg.pool_len, cfg.fsgen_off);
     if (s[0]) setenv("DD_FSGEN_FILE", s, 1);
+    // Per-workspace VPN egress: the engine's netns.c egress_socks() getenv()s DD_EGRESS_SOCKS to funnel the
+    // guest's genuine external TCP connects through this SOCKS5 proxy. Carried in the typed wire (not the
+    // ambient host env, which the FFI spawn never forwards) — "" leaves it unset so direct egress is unchanged.
+    s = cfd_str(pool, cfg.pool_len, cfg.egress_off);
+    if (s[0]) setenv("DD_EGRESS_SOCKS", s, 1);
 
     // persistent translated-code cache: presence of a dir enables it (DDJIT_PCACHE gate + dir).
     s = cfd_str(pool, cfg.pool_len, cfg.pcache_off);

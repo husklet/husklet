@@ -37,7 +37,9 @@ struct WireHeader {
     fsgen_off: u32,
     argv_off: u32,
     gpu_iosurface: u32,
-    nopcache: u32, // bool: per-container DDJIT_NOPCACHE kill switch (was reserved tail pad)
+    nopcache: u32,   // bool: per-container DDJIT_NOPCACHE kill switch (was reserved tail pad)
+    egress_off: u32, // per-workspace VPN egress SOCKS5 endpoint (DD_EGRESS_SOCKS); "" = direct
+    reserved0: u32,  // explicit tail pad (keeps the struct 8-aligned, no implicit padding); future use
 }
 
 /// Builds the string pool (offset 0 is always a lone NUL so a 0 offset reads as the empty string).
@@ -102,6 +104,7 @@ impl LaunchConfig {
         let netbr_off = pool.add(&self.netbr);
         let ip_off = pool.add(&self.ip);
         let fsgen_off = pool.add(&self.fsgen_file);
+        let egress_off = pool.add(&self.egress_socks);
         // argv: NUL-separated, double-NUL terminated.
         let argv_off = {
             let mut a = Vec::new();
@@ -141,6 +144,8 @@ impl LaunchConfig {
             argv_off,
             gpu_iosurface: self.gpu_iosurface as u32,
             nopcache: self.nopcache as u32,
+            egress_off,
+            reserved0: 0,
         };
         let hbytes = unsafe {
             std::slice::from_raw_parts(
@@ -161,10 +166,13 @@ mod tests {
 
     #[test]
     fn header_layout_is_stable() {
-        // Must match `sizeof(struct ddjit_config)` in ddjit_api.h: 22 u32 payload (8 scalars + 14
-        // offsets) + 1 u64 (mem_max) + 2 u32 explicit `reserved` pad = 112 bytes, 8-aligned, no implicit
-        // padding (both sides use sizeof).
-        assert_eq!(std::mem::size_of::<WireHeader>(), 112);
+        // Must match `sizeof(struct ddjit_config)` in ddjit_api.h: 10 u32 scalars + 15 offsets
+        // (…fsgen_off, egress_off) + gpu_iosurface/nopcache bools + 1 u32 explicit `reserved0` pad =
+        // 28 u32 + 1 u64 (mem_max) = 120 bytes, 8-aligned, no implicit padding (both sides use sizeof).
+        // Grown from 112: egress_off carries the VPN egress SOCKS endpoint (DD_EGRESS_SOCKS); the paired
+        // reserved0 keeps the struct 8-aligned. Rust `to_wire` and the C `ddjit_configfd.c` reader compile
+        // into the SAME dd-jit-darwin artifact, so this is an internal contract with no cross-binary skew.
+        assert_eq!(std::mem::size_of::<WireHeader>(), 120);
         assert_eq!(std::mem::align_of::<WireHeader>(), 8);
     }
 
@@ -218,6 +226,7 @@ mod tests {
             netbr: "br7".into(),
             ip: "10.1.2.3".into(),
             fsgen_file: "/run/fsgen".into(),
+            egress_socks: "127.30.0.1:1080".into(),
             publish: vec![(8080, 80), (5432, 5432)],
             volumes: vec![("/data".into(), "/hostdata".into(), true), ("/cfg".into(), "/hcfg".into(), false)],
             ulimits: vec![("nofile".into(), 1024, 4096)],
@@ -259,6 +268,9 @@ mod tests {
         assert_eq!(read_str(hdr.netbr_off), "br7");
         assert_eq!(read_str(hdr.ip_off), "10.1.2.3");
         assert_eq!(read_str(hdr.fsgen_off), "/run/fsgen");
+        // VPN egress SOCKS endpoint round-trips as its own pool offset (was silently unrepresentable).
+        assert_eq!(read_str(hdr.egress_off), "127.30.0.1:1080");
+        assert_eq!(hdr.reserved0, 0, "the explicit tail pad is always zero");
 
         // Unset string fields (never assigned above) must read as offset 0 == "".
         // (`gpu_iosurface` and `nopcache` default off; neither is a pool offset.)
@@ -269,6 +281,8 @@ mod tests {
         let np = LaunchConfig { nopcache: true, ..Default::default() }.to_wire();
         let nphdr: WireHeader = unsafe { std::ptr::read_unaligned(np.as_ptr() as *const WireHeader) };
         assert_eq!(nphdr.nopcache, 1);
+        // No VPN configured (the default) -> egress_off is 0 == "" -> the engine keeps direct egress.
+        assert_eq!(nphdr.egress_off, 0, "unset egress must read as the empty string (direct egress)");
 
         // argv: NUL-separated args, terminated by an extra NUL (double-NUL after the last arg).
         let astart = hdr.argv_off as usize;
