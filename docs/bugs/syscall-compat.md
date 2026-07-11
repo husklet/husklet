@@ -28,24 +28,6 @@ DDJIT_DIR="$PWD/target-workerA-syscall-audit/release/build/dd-jit-darwin-16122af
 
 Observed: native fires within 20ms (`ready=1 n8=1 exp=1`); dd does not fire within 150ms (`ready=0 n8=0 exp=0`). x86_64 showed the same mismatch.
 
-## Sentry Close-On-Exec Does Not Clean Virtual Fds
-
-Priority: P1
-Impact: fd leaks across guest exec and wrong pipe/resource lifetime
-Confidence: High
-
-Evidence:
-
-- In sentry mode, `execve` stays local in the worker process: `dd-jit-darwin/src/runtime/os/linux/sentry.c:1387`.
-- The sentry fd table tracks real/borrowed fds but has no exec cleanup path at that redirect point.
-
-Why this is bad:
-
-Guest close-on-exec semantics should close marked fds in the post-exec process. Leaving sentry-owned virtual fds alive can keep pipes open, prevent EOF, or leak resources.
-
-Verification:
-
-Run an untrusted-mode probe that sets `FD_CLOEXEC` on a pipe, execs, and verifies the peer observes EOF.
 
 ## aarch64 `AT_PAGESZ` Exposes Host Page Size
 

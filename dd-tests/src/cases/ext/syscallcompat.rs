@@ -55,6 +55,10 @@ pub fn groups() -> Vec<Group> {
             // kill(0, sig) signals the caller's whole process GROUP (parent + child), not just the caller.
             // Container-mode so the guest-pid-namespace group routing engages (see docs/bugs/syscall-compat.md).
             pc("sc-kill-zero-group", "syscallbug/kill_zero_group.c"),
+            // Sentry close-on-exec: under DDJIT_UNTRUSTED the guest's fds are sentry-owned VIRTUAL fds; a
+            // guest execve (worker-local image reload) must still close the FD_CLOEXEC ones so a peer sees
+            // EOF, while plain fds survive. Oracle-diffed vs native (the kernel's own close-on-exec).
+            p("sc-sentry-cloexec-exec", "syscallbug/sentry_cloexec_exec.c").untrusted(),
         ],
     )]
 }

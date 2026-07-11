@@ -130,6 +130,12 @@ static int g_sentry_sandbox = 0; // DDJIT_SANDBOX:   wrap the worker in a deny-d
 // worker process's table (closes its owned real fds) at process exit. Both ride the SAME ring round-trip.
 #define SENTRY_OP_FORK 0xFFFFFFFDu // a[0]=parent wpid, a[1]=child wpid -> clone the parent's virtual->real map
 #define SENTRY_OP_EXIT 0xFFFFFFFCu // R->wpid -> free that worker process's fd table
+#define SENTRY_OP_EXEC 0xFFFFFFFBu // R->wpid -> close+drop every FD_CLOEXEC virtual fd (guest execve sweep)
+
+// The guest passes LINUX flag values, but this engine is a macOS binary whose <fcntl.h> O_CLOEXEC differs
+// (0x1000000 vs Linux 0x80000). Match the guest's own O_CLOEXEC / SOCK_CLOEXEC / EFD_CLOEXEC /
+// EPOLL_CLOEXEC (all == 0x80000 on Linux) when reading a guest syscall's cloexec-request bit.
+#define LX_O_CLOEXEC 0x80000u
 
 // ------------------------------------------------------------------ per-context ring pool
 // THE SCALING FIX. A single SPSC ring is single-producer: but a guest thread is a HOST pthread
@@ -500,6 +506,7 @@ struct sentry_proc {
     pid_t wpid;                       // the owning worker process pid (stamped on every request, R->wpid)
     int real[SENTRY_VFD_MAX];         // virtual fd -> real sentry fd (-1 = unused slot)
     uint8_t borrowed[SENTRY_VFD_MAX]; // 1 = inherited/borrowed real fd (stdio): never close() it on drop
+    uint8_t cloexec[SENTRY_VFD_MAX];  // 1 = FD_CLOEXEC set (O_CLOEXEC open / F_SETFD): swept on guest execve
 };
 static struct sentry_proc g_proc[SENTRY_NPROC];
 static pthread_mutex_t g_fd_lock = PTHREAD_MUTEX_INITIALIZER; // guards g_proc[] (alloc / lookup / map)
@@ -511,6 +518,7 @@ static void proc_init_table(struct sentry_proc *p, pid_t wpid) {
     for (uint32_t i = 0; i < SENTRY_VFD_MAX; i++) {
         p->real[i] = -1;
         p->borrowed[i] = 0;
+        p->cloexec[i] = 0;
     }
     for (int i = 0; i < 3; i++) {
         p->real[i] = i;
@@ -566,6 +574,7 @@ static int vfd_drop(struct sentry_proc *p, int vfd) {
     int rfd = p->borrowed[vfd] ? -1 : p->real[vfd];
     p->real[vfd] = -1;
     p->borrowed[vfd] = 0;
+    p->cloexec[vfd] = 0;
     return rfd;
 }
 
@@ -592,6 +601,7 @@ static void sentry_proc_fork(pid_t parent, pid_t child) {
     if (cp && pp)
         for (uint32_t v = 3; v < SENTRY_VFD_MAX; v++) { // 0/1/2 already mapped borrowed by proc_init_table
             if (pp->real[v] < 0) continue;
+            cp->cloexec[v] = pp->cloexec[v]; // FD_CLOEXEC is inherited across fork (Linux fd semantics)
             if (pp->borrowed[v]) {
                 cp->real[v] = pp->real[v];
                 cp->borrowed[v] = 1;
@@ -622,6 +632,22 @@ static void sentry_proc_release(pid_t wpid) {
             if (p->real[v] >= 0 && !p->borrowed[v]) close(p->real[v]);
         p->inuse = 0;
     }
+    pthread_mutex_unlock(&g_fd_lock);
+}
+
+// guest execve close-on-exec sweep: a guest execve stays local (service_local reloads the image in this
+// worker), so nothing closes the FD_CLOEXEC-marked virtual fds the way a real execve would. Walk the
+// worker's table and close+drop every OWNED cloexec fd (stdio/borrowed is never closed). Fds WITHOUT
+// FD_CLOEXEC survive, exactly as Linux keeps them open across execve.
+static void sentry_proc_exec_sweep(pid_t wpid) {
+    pthread_mutex_lock(&g_fd_lock);
+    struct sentry_proc *p = proc_lookup_locked(wpid);
+    if (p)
+        for (uint32_t v = 0; v < SENTRY_VFD_MAX; v++)
+            if (p->real[v] >= 0 && p->cloexec[v]) {
+                int rfd = vfd_drop(p, (int)v); // clears real/borrowed/cloexec; returns the fd to close (-1 if borrowed)
+                if (rfd >= 0) close(rfd);
+            }
     pthread_mutex_unlock(&g_fd_lock);
 }
 
@@ -759,6 +785,12 @@ static void sentry_service_one(struct sentry_ring *R) {
     // release a worker's table (close its owned real fds) on exit. Neither reconstructs a cpu.
     if (R->rawnr == SENTRY_OP_FORK) {
         sentry_proc_fork((pid_t)R->a[0], (pid_t)R->a[1]);
+        R->ret = 0;
+        R->nserved++;
+        return;
+    }
+    if (R->rawnr == SENTRY_OP_EXEC) {
+        sentry_proc_exec_sweep((pid_t)R->wpid);
         R->ret = 0;
         R->nserved++;
         return;
@@ -1081,6 +1113,7 @@ static void sentry_service_one(struct sentry_ring *R) {
                 if (prev >= 0) close(prev);
                 p->real[newv] = rnew;
                 p->borrowed[newv] = 0;
+                p->cloexec[newv] = (flags & LX_O_CLOEXEC) != 0; // dup3 sets FD_CLOEXEC iff LX_O_CLOEXEC given
                 local_ret = newv;
                 break;
             }
@@ -1189,14 +1222,28 @@ static void sentry_service_one(struct sentry_ring *R) {
             case 242:
             case 19:
             case 23:
-            case 20: // openat/socket/accept*/dup/epoll_create1
+            case 20: // openat/socket/accept*/dup/eventfd2/epoll_create1
                 if (ret >= 0) {
                     int v = vfd_alloc(p, (int)ret, 0);
                     if (v < 0) {
                         close((int)ret);
                         R->ret = -EMFILE;
-                    } else
+                    } else {
+                        // Track the guest's FD_CLOEXEC intent so a later guest execve sweeps this fd. The
+                        // CLOEXEC bit (O_CLOEXEC == SOCK_CLOEXEC == EFD_CLOEXEC == EPOLL_CLOEXEC == 0x80000)
+                        // rides a different arg per syscall; dup(23)/accept(202) never set it.
+                        int cx = 0;
+                        switch (snr) {
+                        case 56: cx = (R->a[2] & LX_O_CLOEXEC) != 0; break;  // openat flags
+                        case 198: cx = (R->a[1] & LX_O_CLOEXEC) != 0; break; // socket type
+                        case 242: cx = (R->a[3] & LX_O_CLOEXEC) != 0; break; // accept4 flags
+                        case 19: cx = (R->a[1] & LX_O_CLOEXEC) != 0; break;  // eventfd2 flags
+                        case 20: cx = (R->a[0] & LX_O_CLOEXEC) != 0; break;  // epoll_create1 flags
+                        default: cx = 0; break;                           // dup(23) / accept(202)
+                        }
+                        p->cloexec[v] = (uint8_t)cx;
                         R->ret = v;
+                    }
                 }
                 break;
             case 25: // fcntl F_DUPFD(0)/F_DUPFD_CLOEXEC(1030): the result is a new real fd -> virtualize it,
@@ -1207,8 +1254,22 @@ static void sentry_service_one(struct sentry_ring *R) {
                     if (v < 0) {
                         close((int)ret);
                         R->ret = -EMFILE;
-                    } else
+                    } else {
+                        p->cloexec[v] = (G_A1(&tmp) == 1030); // F_DUPFD_CLOEXEC sets FD_CLOEXEC on the new fd
                         R->ret = v;
+                    }
+                } else if (G_A1(&tmp) == 2 /* F_SETFD */) {
+                    // Track FD_CLOEXEC on the guest's virtual fd (the real sentry fd's flag is irrelevant to a
+                    // guest execve, which is a local image reload). Serve success without a real-fd flag change.
+                    int v = (int)(int64_t)R->a[0];
+                    if (v >= 0 && (uint32_t)v < SENTRY_VFD_MAX && p->real[v] >= 0) {
+                        p->cloexec[v] = (R->a[2] & 1 /* FD_CLOEXEC */) != 0;
+                        R->ret = 0;
+                    }
+                } else if (G_A1(&tmp) == 1 /* F_GETFD */) {
+                    // Return the guest's tracked FD_CLOEXEC, not the real sentry fd's.
+                    int v = (int)(int64_t)R->a[0];
+                    if (v >= 0 && (uint32_t)v < SENTRY_VFD_MAX && p->real[v] >= 0) R->ret = p->cloexec[v] ? 1 : 0;
                 }
                 break;
             case 59:
@@ -1222,6 +1283,10 @@ static void sentry_service_one(struct sentry_ring *R) {
                         close(r1);
                         R->ret = -EMFILE;
                     } else {
+                        // pipe2(fds,flags): flags=a1; socketpair(dom,type,proto,fds): SOCK_CLOEXEC rides type=a1.
+                        uint8_t cx = (R->a[1] & LX_O_CLOEXEC) != 0;
+                        p->cloexec[v0] = cx;
+                        p->cloexec[v1] = cx;
                         *(int *)(R->buf) = v0;
                         *(int *)(R->buf + 4) = v1;
                     }
@@ -1416,8 +1481,16 @@ static void syscall_route(struct cpu *c) {
     }
     // execve(221) stays LOCAL: service_local reloads the guest image IN THIS PROCESS (it is not a host
     // execve), so the worker keeps its pid, ring lane, control sockets, sentry, and confinement across it.
+    // But because it is NOT a real execve, the kernel never applies FD_CLOEXEC: ask the sentry to close+drop
+    // this worker's cloexec virtual fds first, so a guest that set FD_CLOEXEC before exec sees them gone
+    // (pipe EOF for the peer, no leaked resources) exactly as on Linux. Only on a SUCCESSFUL exec — if the
+    // image load fails (service_local returns with a negated errno in the return reg) the fds must survive.
     if (nr == 221) {
         service_local(c);
+        // execve sets c->redirect on SUCCESS (the tail must not advance PC into the new image); a FAILED
+        // execve (ENOENT/EACCES/…) leaves redirect clear and returns -errno, in which case the fds must
+        // survive. Only on success sweep this worker's cloexec virtual fds sentry-side.
+        if (c->redirect) sentry_ctl_op(SENTRY_OP_EXEC, (uint64_t)(uint32_t)g_worker_pid, 0);
         return;
     }
     // wait4(260): reap the guest's child WORKER processes locally. The sentry is ALSO a child of the owner,
