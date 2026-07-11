@@ -262,33 +262,6 @@ cargo run -q -p dd-tests -- -e x86_64 audit-af-cgroup-mem-fork
 
 Observed dd: `before=0 during=0 delta=0 ge32m=0`. Linux oracle showed a positive child allocation delta above 32 MiB.
 
-### Network-None Hides `eth0` In Readdir But Direct Lookup Exposes It
-
-Priority: P1
-Impact: network isolation probes see contradictory sysfs state
-Confidence: High
-
-Verification status: Proven in isolated worktree `/Users/x/dd/dd-worker-AM-envproc-20260710`.
-
-Evidence:
-
-- Sysfs network directory listing hides `eth0` when isolation is enabled: `dd-jit-darwin/src/runtime/os/linux/container/vfs.c:2595`.
-- Direct synthetic stat still accepts `eth0`: `dd-jit-darwin/src/runtime/os/linux/container/vfs.c:4610`.
-- Direct open/read paths also expose sysfs network files: `dd-jit-darwin/src/runtime/os/linux/syscall/fs.c:1977`.
-
-Why this is bad:
-
-`--network none` should not expose `eth0` through direct sysfs paths if readdir hides it. Tools that probe direct paths can think an interface exists despite isolation.
-
-Isolated proof:
-
-```sh
-cargo run -p dd-tests -- -e aarch64 sysnet-none-direct
-cargo run -p dd-tests -- -e x86_64 sysnet-none-direct
-```
-
-Observed dd: `sysnet_none eth0_list=0 eth0_stat=1:0 eth0_addr=1:0`; expected direct lookups to return `ENOENT`.
-
 ### Peer `/proc/<pid>/fd` Is Advertised But Not Openable
 
 Priority: P2
@@ -338,30 +311,6 @@ Observed proof:
 ```text
 native: peer_ns ns_stat=1 ns_readdir_net=1 net_readlink=1
 dd:     peer_ns ns_stat=0 ns_readdir_net=0 net_readlink=0
-```
-
-### Bind Mounts Are Missing From Mount Tables
-
-Priority: P1
-Impact: mount discovery sees a false namespace
-Confidence: High
-
-Verification status: Proven in isolated worktree `/Users/x/dd/dd-audit-procfs-20260710-130826`.
-
-Evidence:
-
-- Bind volume parsing handles guest mount resolution: `dd-jit-darwin/src/runtime/os/linux/container/vfs.c:716`.
-- `/proc/mounts` and `/proc/self/mountinfo` are generated from synthetic tables: `dd-jit-darwin/src/runtime/os/linux/container/vfs.c:1795`, `dd-jit-darwin/src/runtime/os/linux/container/vfs.c:3192`.
-
-Why this is bad:
-
-If `/mnt` resolves to a bind mount, `/proc/mounts` and `/proc/self/mountinfo` should expose it. Tools such as `findmnt`, `df`, JVM/container mount discovery, and bind-option checks otherwise see the wrong mount namespace.
-
-Observed proof:
-
-```text
-dd:    bind content=1 mounts=0 mountinfo=0
-Linux: bind content=1 mounts=1 mountinfo=1
 ```
 
 ### Futex-Blocked Processes Report Running In Procfs

@@ -1948,6 +1948,27 @@ static int proc_comm_text(char *b, size_t n) {
     return snprintf(b, n, "%s\n", comm);
 }
 
+// Append the container's live bind-mount volumes (`-v`/`--mount`/`--tmpfs`) to a mount table. runc lists
+// every bind as its own mount line; without them findmnt/df/JVM mount discovery see a namespace that omits
+// the guest's binds. `fstab` picks the /proc/mounts (fstab, 6-field) form vs the /proc/self/mountinfo form.
+// Single-file binds (isfile -- e.g. the internal wayland/gpu sockets) are skipped so the table shows only
+// real directory mount points. Continues from byte `off`; returns the new length (never exceeds `cap-1`).
+static size_t mount_binds_append(char *b, size_t cap, size_t off, int fstab) {
+    int nv = __atomic_load_n(&g_nvols, __ATOMIC_ACQUIRE);
+    int id = 100;
+    for (int i = 0; i < nv; i++) {
+        if (g_vols[i].dead || g_vols[i].isfile) continue;
+        if (off + 1 >= cap) break;
+        const char *ro = g_vols[i].ro ? "ro" : "rw";
+        int w = fstab ? snprintf(b + off, cap - off, "/dev/root %s ext4 %s,relatime 0 0\n", g_vols[i].guest, ro)
+                      : snprintf(b + off, cap - off, "%d 23 254:1 / %s %s,relatime - ext4 /dev/root %s\n", id++,
+                                 g_vols[i].guest, ro, ro);
+        if (w < 0 || (size_t)w >= cap - off) break; // truncated -> stop before overflowing
+        off += (size_t)w;
+    }
+    return off;
+}
+
 // /proc/[pid]/mountinfo -- the mounted-filesystem table df/findmnt parse, and which the JVM scans to locate
 // the cgroup mount. The rootfs is a single overlay mount at "/"; the pseudo-filesystems (proc, sysfs, the
 // cgroup2 hierarchy, devtmpfs) round it out so a reader looking up any of these mount points finds a
@@ -1962,15 +1983,17 @@ static int proc_mountinfo_text(char *b, size_t n) {
     //  - /dev/shm is its OWN tmpfs mount with src name "shm" (glibc shm_open/DSM back onto it); size=65536k
     //    is docker's default 64M (the host may enlarge it -- size is a host-variant field).
     //  - cgroup2 leaf is ro with src "cgroup" + nsdelegate (JVM/systemd v2 detection keys on this line).
-    return snprintf(b, n,
-                    "23 0 0:24 / / rw,relatime - overlay overlay rw\n"
-                    "24 23 0:25 / /proc rw,nosuid,nodev,noexec,relatime - proc proc rw\n"
-                    "25 23 0:26 / /dev rw,nosuid - tmpfs tmpfs rw,size=65536k,mode=755\n"
-                    "26 25 0:27 / /dev/pts rw,nosuid,noexec,relatime - devpts devpts rw,gid=5,mode=620,ptmxmode=666\n"
-                    "27 23 0:28 / /sys ro,nosuid,nodev,noexec,relatime - sysfs sysfs ro\n"
-                    "28 27 0:29 / /sys/fs/cgroup ro,nosuid,nodev,noexec,relatime - cgroup2 cgroup rw,nsdelegate\n"
-                    "29 25 0:30 / /dev/mqueue rw,nosuid,nodev,noexec,relatime - mqueue mqueue rw\n"
-                    "30 25 0:31 / /dev/shm rw,nosuid,nodev,noexec,relatime - tmpfs shm rw,size=65536k\n");
+    int len = snprintf(b, n,
+                       "23 0 0:24 / / rw,relatime - overlay overlay rw\n"
+                       "24 23 0:25 / /proc rw,nosuid,nodev,noexec,relatime - proc proc rw\n"
+                       "25 23 0:26 / /dev rw,nosuid - tmpfs tmpfs rw,size=65536k,mode=755\n"
+                       "26 25 0:27 / /dev/pts rw,nosuid,noexec,relatime - devpts devpts rw,gid=5,mode=620,ptmxmode=666\n"
+                       "27 23 0:28 / /sys ro,nosuid,nodev,noexec,relatime - sysfs sysfs ro\n"
+                       "28 27 0:29 / /sys/fs/cgroup ro,nosuid,nodev,noexec,relatime - cgroup2 cgroup rw,nsdelegate\n"
+                       "29 25 0:30 / /dev/mqueue rw,nosuid,nodev,noexec,relatime - mqueue mqueue rw\n"
+                       "30 25 0:31 / /dev/shm rw,nosuid,nodev,noexec,relatime - tmpfs shm rw,size=65536k\n");
+    if (len < 0 || (size_t)len >= n) return len;
+    return (int)mount_binds_append(b, n, (size_t)len, 0);
 }
 
 // ================= REAL /proc process table (top/htop/ps) =====================================
@@ -3566,6 +3589,8 @@ static int proc_open(const char *rp) {
                      "cgroup /sys/fs/cgroup cgroup2 ro,nosuid,nodev,noexec,relatime,nsdelegate 0 0\n"
                      "mqueue /dev/mqueue mqueue rw,nosuid,nodev,noexec,relatime 0 0\n"
                      "shm /dev/shm tmpfs rw,nosuid,nodev,noexec,relatime,size=65536k 0 0\n");
+        if (n > 0 && (size_t)n < sizeof buf)
+            n = (int)mount_binds_append(buf, sizeof buf, (size_t)n, 1);
     } else if (!strcmp(rp, "/proc/uptime")) {
         unsigned long long t[4];
         host_cpu_ticks(t);
@@ -3665,7 +3690,10 @@ static int proc_open(const char *rp) {
     } else if (!strncmp(rp, "/sys/class/net/", 15)) {
         // per-interface attribute files tools stat/read (address, flags, mtu, operstate, type, ...).
         const char *rest = rp + 15;
-        int islo = !strncmp(rest, "lo/", 3), iseth = !strncmp(rest, "eth0/", 5);
+        // --network none: eth0 does not exist, so its attribute files must not be served through the
+        // direct (non-readdir) read path either -- otherwise a tool that reads /sys/class/net/eth0/address
+        // sees an interface that readdir hid.
+        int islo = !strncmp(rest, "lo/", 3), iseth = !net_isolate() && !strncmp(rest, "eth0/", 5);
         const char *file = islo ? rest + 3 : iseth ? rest + 5 : NULL;
         if (file) {
             if (!strcmp(file, "address")) {
@@ -5031,10 +5059,14 @@ static int synth_stat_raw(const char *gp, struct stat *s) {
     // /sys/class/net: the class dir + per-iface dirs are directories; attribute files are regular.
     if (gp && !strncmp(gp, "/sys/class/net", 14)) {
         const char *r = gp + 14;
-        int isdir = (r[0] == 0 || (r[0] == '/' && r[1] == 0) ||                         // /sys/class/net
-                     (r[0] == '/' && (!strcmp(r + 1, "lo") || !strcmp(r + 1, "eth0") || // iface dir
-                                      !strcmp(r + 1, "lo/statistics") ||                // statistics/
-                                      !strcmp(r + 1, "eth0/statistics"))));
+        // --network none: eth0 (and its statistics/ subdir) does not exist -- direct stat must ENOENT to
+        // match the readdir listing, which already omits eth0 under isolation.
+        int eth_ok = !net_isolate();
+        int isdir = (r[0] == 0 || (r[0] == '/' && r[1] == 0) ||                       // /sys/class/net
+                     (r[0] == '/' && (!strcmp(r + 1, "lo") ||                         // iface dir
+                                      (eth_ok && !strcmp(r + 1, "eth0")) ||           // eth0 iface dir
+                                      !strcmp(r + 1, "lo/statistics") ||              // statistics/
+                                      (eth_ok && !strcmp(r + 1, "eth0/statistics")))));
         if (isdir) {
             memset(s, 0, sizeof *s);
             s->st_mode = S_IFDIR | 0555;
