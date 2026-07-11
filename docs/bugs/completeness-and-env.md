@@ -104,6 +104,18 @@ Verification:
 
 Create a bind source path containing `:` or `,` and assert the guest sees the correct mounted content.
 
+Status (2026-07-10): DEFERRED — not minimally safe here. `DDVOL`/`DD_LOWER` are a SHARED contract with
+MULTIPLE raw producers, not just `wire.rs`: the test harness sets `DDVOL` directly (`dd-tests` `.env("DDVOL",
+…)`), the CLI sets it via `--vol` (`linux_x86_64.c:482` `add_vol(argv[…])`), and the builder/bridge can set it
+too. Making the C parser escape-aware would silently corrupt every raw (unescaped) producer; escaping only the
+`wire.rs` side would desync from the raw ones. The parse sites are also already INCONSISTENT across arches —
+`DD_LOWER` is split on `:` in `linux_aarch64.c:573` but on `,` in `linux_x86_64.c:185`, while `wire.rs:72`
+joins lowers with `:` (so a multi-lower typed launch already mis-splits on x86_64, independent of escaping).
+A correct fix must first unify the split delimiter across both arch targets AND update every raw producer to
+escape in lockstep, then runtime-verify volume/lower mounts on BOTH engines (x86_64 needs container images).
+That is too wide to verify safely on this shared engine gate in a minimal pass. `publish` is numeric-only and
+carries no delimiter hazard. Left for a dedicated launch-wire pass; do not escape one side in isolation.
+
 ### Peer `/proc/<pid>/fd` Is Advertised But Not Openable
 
 Priority: P2
