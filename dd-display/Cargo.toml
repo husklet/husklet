@@ -33,7 +33,7 @@ objc2 = "0.5"
 objc2-foundation = { version = "0.2", features = ["NSString", "NSGeometry", "NSData", "NSThread", "NSRunLoop", "NSDate", "NSDictionary"] }
 objc2-app-kit = { version = "0.2", features = [
     "NSApplication", "NSWindow", "NSResponder", "NSView", "NSControl", "NSScreen", "NSColor",
-    "NSImage", "NSImageRep", "NSBitmapImageRep", "NSImageView", "NSGraphics",
+    "NSImage", "NSImageRep", "NSBitmapImageRep", "NSImageView", "NSGraphics", "NSCursor",
     "NSRunningApplication", "NSEvent", "NSGraphicsContext", "objc2-quartz-core",
 ] }
 # Metal present path (hardware-accelerated blit + the shared MTLDevice/queue the dd-gpu backend targets).

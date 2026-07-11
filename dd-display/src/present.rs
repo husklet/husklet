@@ -106,6 +106,10 @@ pub trait Presenter {
     /// the client actually requests a move, so it is the precise alternative to making every window blindly
     /// movable-by-background. Default: no native window to move.
     fn begin_interactive_move(&self, _sid: u32) {}
+    /// The client picked a themed pointer shape via `wp_cursor_shape_device_v1.set_shape`. `shape` is the
+    /// `wp_cursor_shape_device_v1.shape` enum (1=default, 4=pointer, 9=text, 16=grab, …). A windowed
+    /// presenter maps it to the matching host cursor (e.g. `NSCursor`). Default: no native cursor to set.
+    fn set_cursor_shape(&self, _shape: u32) {}
 }
 
 /// Writes each committed surface to `<dir>/surface-<sid>.png`, and records the last frame for tests.

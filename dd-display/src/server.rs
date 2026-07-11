@@ -34,6 +34,10 @@ const G_VIEWPORTER: u32 = 8;
 const G_DATA_DEV_MGR: u32 = 9;
 const G_SURFACE_AUGMENTER: u32 = 10;
 const G_PRESENTATION: u32 = 11;
+// wp_cursor_shape_manager_v1: lets the client name a themed pointer shape (default/pointer/text/grab/…)
+// instead of committing a cursor buffer. Chrome uses it for its cursors when advertised; we map each
+// shape to the matching host NSCursor. See cursor-shape-v1.xml.
+const G_CURSOR_SHAPE: u32 = 12;
 
 // wp_presentation clock domain. The `feedback.presented` timestamp is read back by the CLIENT via its own
 // clock_gettime(), so this must be the value the *guest* (Linux) libc uses for CLOCK_MONOTONIC (== 1),
@@ -201,6 +205,10 @@ enum Obj {
     Pointer,
     Keyboard,
     Touch,
+    // wp_cursor_shape_manager_v1: hands out wp_cursor_shape_device_v1 objects (per wl_pointer/tablet_tool).
+    CursorShapeManager,
+    // wp_cursor_shape_device_v1: `set_shape(serial, shape)` names a themed pointer; we map it to NSCursor.
+    CursorShapeDevice,
     Output,
     // wl_region: an accumulated set of rectangles built by add()/subtract(). Referenced by
     // set_opaque_region / set_input_region; the region object itself is not double-buffered (its rects are
@@ -761,6 +769,8 @@ impl<P: Presenter> Server<P> {
                 Some(Obj::Pointer) => "wl_pointer",
                 Some(Obj::Keyboard) => "wl_keyboard",
                 Some(Obj::Touch) => "wl_touch",
+                Some(Obj::CursorShapeManager) => "wp_cursor_shape_manager_v1",
+                Some(Obj::CursorShapeDevice) => "wp_cursor_shape_device_v1",
                 Some(Obj::Subcompositor) => "wl_subcompositor",
                 Some(Obj::Viewporter) => "wp_viewporter",
                 Some(Obj::DataDeviceManager) => "wl_data_device_manager",
@@ -804,6 +814,8 @@ impl<P: Presenter> Server<P> {
             Some(Obj::XdgPopup { .. }) => self.xdg_popup(m),
             Some(Obj::Seat) => self.wl_seat(m),
             Some(Obj::Pointer) | Some(Obj::Keyboard) | Some(Obj::Touch) => self.wl_input_device(m),
+            Some(Obj::CursorShapeManager) => self.wp_cursor_shape_manager(m),
+            Some(Obj::CursorShapeDevice) => self.wp_cursor_shape_device_v1(m),
             Some(Obj::Subcompositor) => self.wl_subcompositor(m),
             Some(Obj::Viewporter) => self.wp_viewporter(m),
             Some(Obj::DataDeviceManager) => self.wl_data_device_manager(m),
@@ -869,6 +881,9 @@ impl<P: Presenter> Server<P> {
             // `presented` feedback; without it, the BeginFrameSource can stall (the "spinner spins then
             // stops" symptom). We advertise v1 (feedback wire format is identical in v1/v2).
             (G_PRESENTATION, "wp_presentation", 1),
+            // Themed cursors: Chrome sets named shapes (pointer over links, text over editable text) via
+            // this instead of committing a cursor buffer, so we can map them to host NSCursors.
+            (G_CURSOR_SHAPE, "wp_cursor_shape_manager_v1", 1),
         ];
         // zwp_linux_dmabuf_v1 (GPU rung 2) is advertised only when DD_DISPLAY_DMABUF is set — until the
         // cross-process IOSurface handle bridge (mach port) is wired, a toolkit that PREFERS dmabuf could
@@ -943,6 +958,9 @@ impl<P: Presenter> Server<P> {
             }
             G_SURFACE_AUGMENTER => {
                 self.objs.insert(id, Obj::SurfaceAugmenter);
+            }
+            G_CURSOR_SHAPE => {
+                self.objs.insert(id, Obj::CursorShapeManager);
             }
             G_SEAT => {
                 self.objs.insert(id, Obj::Seat);
@@ -2625,6 +2643,37 @@ target_surface={} crop=({},{} {}x{}) backing={}x{} mapped_src=({},{}..{},{}) map
             }
             _ => {}
         }
+    }
+
+    // ---- wp_cursor_shape_manager_v1: destroy(0), get_pointer(1, id, pointer),
+    //      get_tablet_tool_v2(2, id, tablet_tool) ----
+    // Both getters mint a wp_cursor_shape_device_v1 bound to a seat device; we track the device id so its
+    // set_shape can drive the host cursor. The `pointer`/`tablet_tool` argument is the seat device the shape
+    // applies to — we have a single global pointer, so the association needs no per-device state.
+    fn wp_cursor_shape_manager(&mut self, m: Message) {
+        let mut r = m.reader();
+        match m.opcode {
+            1 | 2 => {
+                let id = r.u32();
+                self.objs.insert(id, Obj::CursorShapeDevice);
+            }
+            _ => {} // destroy(0): the object is freed by the client; nothing server-side to release.
+        }
+    }
+
+    // ---- wp_cursor_shape_device_v1: destroy(0), set_shape(1, serial, shape) ----
+    // set_shape names a themed pointer (the `shape` enum). Map it to the host cursor via the presenter. The
+    // serial identifies the enter that gave us pointer focus; we drive a single host pointer, so it is not
+    // needed to disambiguate. An out-of-range shape (0 or > known) is a protocol error in the spec, but we
+    // tolerate it by falling back to the default arrow rather than dropping the client.
+    fn wp_cursor_shape_device_v1(&mut self, m: Message) {
+        if m.opcode != 1 {
+            return;
+        }
+        let mut r = m.reader();
+        let _serial = r.u32();
+        let shape = r.u32();
+        self.present.set_cursor_shape(shape);
     }
 
     // ---- wl_subcompositor: destroy(0), get_subsurface(1, id, surface, parent) ----

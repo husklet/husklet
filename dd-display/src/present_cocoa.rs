@@ -21,7 +21,7 @@ use objc2::runtime::{NSObject, NSObjectProtocol, ProtocolObject};
 use objc2::{declare_class, msg_send_id, mutability, ClassType, DeclaredClass};
 use objc2_app_kit::{
     NSApplication, NSApplicationActivationPolicy, NSAutoresizingMaskOptions, NSBackingStoreType,
-    NSBitmapImageFileType, NSBitmapImageRep, NSBitmapImageRepPropertyKey, NSColor,
+    NSBitmapImageFileType, NSBitmapImageRep, NSBitmapImageRepPropertyKey, NSColor, NSCursor,
     NSDeviceRGBColorSpace, NSEvent, NSEventMask, NSEventModifierFlags, NSEventType, NSGraphicsContext,
     NSImage, NSImageView, NSScreen, NSView, NSWindow, NSWindowDelegate, NSWindowStyleMask,
 };
@@ -216,19 +216,37 @@ fn make_focusable_window(
     window
 }
 
-/// Integer `wl_output.scale` to advertise, derived from the Mac's backing store. HiDPI is opt-in via
-/// `DD_DISPLAY_HIDPI` while the retina present path (CALayer contentsScale) is still being brought up:
-/// the validated Chrome init path reports scale=1, so we don't flip it under everyone by default. When
-/// enabled, we return the main screen's `backingScaleFactor` (2 on Retina), which makes Chrome commit a
-/// correctly-sized HiDPI buffer instead of a 1x buffer stretched over the backing store.
+/// Integer `wl_output.scale` to advertise, derived from the Mac's backing store. Defaults to the main
+/// screen's `backingScaleFactor` (2 on Retina) so Chrome/GTK commit a native-resolution HiDPI buffer that
+/// the Metal present path shows pixel-for-pixel (`contentsScale = backingScaleFactor`, drawable sized in
+/// device pixels, window content sized in points) — crisp text instead of a 1x buffer upscaled over the
+/// backing store. Opt out with `DD_DISPLAY_HIDPI=0` (forces scale 1) to reproduce the legacy 1x path.
 fn host_output_scale(mtm: MainThreadMarker) -> i32 {
-    if std::env::var_os("DD_DISPLAY_HIDPI").is_none() {
+    if hidpi_disabled() {
         return 1;
     }
     NSScreen::mainScreen(mtm)
         .map(|s| s.backingScaleFactor().round() as i32)
         .unwrap_or(1)
         .max(1)
+}
+
+/// `DD_DISPLAY_HIDPI=0`/`off`/`false` disables the retina present path (advertise scale 1, present 1x).
+fn hidpi_disabled() -> bool {
+    matches!(
+        std::env::var("DD_DISPLAY_HIDPI").ok().as_deref(),
+        Some("0") | Some("off") | Some("false") | Some("no")
+    )
+}
+
+/// Device-pixel size of a `w`x`h` logical (point) surface at backing `scale`. The composite texture, the
+/// `CAMetalLayer` drawable, and every readback are sized in these pixels so the retina path is 1:1.
+fn pixel_size(w: u32, h: u32, scale: f64) -> (u32, u32) {
+    let s = scale.max(1.0);
+    (
+        ((w as f64 * s).round() as u32).max(1),
+        ((h as f64 * s).round() as u32).max(1),
+    )
 }
 
 /// A live window bound to a guest surface.
@@ -301,6 +319,8 @@ impl CocoaPresenter {
         let frame = NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(w as f64, h as f64));
         let image_view = unsafe { NSImageView::initWithFrame(mtm.alloc(), frame) };
         window.setContentView(Some(&image_view));
+        // Guest owns the pointer shape (wp_cursor_shape_v1); keep AppKit from resetting it to the arrow.
+        unsafe { window.disableCursorRects() };
         window.makeKeyAndOrderFront(None);
         Win {
             window,
@@ -402,6 +422,10 @@ impl Presenter for CocoaPresenter {
         }
     }
 
+    fn set_cursor_shape(&self, shape: u32) {
+        apply_cursor_shape(shape);
+    }
+
     fn drop_window(&mut self, sid: u32) {
         if let Some(w) = self.wins.remove(&sid) {
             w.window.close(); // orderOut + release: the tiny cursor-image window disappears
@@ -414,9 +438,11 @@ impl Presenter for CocoaPresenter {
 struct MetalWin {
     window: Retained<NSWindow>,
     layer: Retained<CAMetalLayer>,
-    /// Backing pixels per AppKit point for this window. Guest/Wayland coordinates are pixel-space in our
-    /// compositor, while NSEvent locations and NSView bounds are point-space on Retina displays.
+    /// Retina PRESENT scale: device pixels per point (`backingScaleFactor`, 1 when HiDPI is off). The layer
+    /// drawable + composite texture are sized `size * scale` (device pixels); the window content stays
+    /// `size` (points). Input stays point-space (see `surface_scale` → 1.0), matching `locationInWindow`.
     scale: f64,
+    /// Logical surface size in POINTS (what the guest renders as; drives window content size + input flip).
     size: (u32, u32),
     /// Opaque compositor output for the current size. Chrome commits ARGB surfaces and expects the
     /// compositor to blend them over the window background; raw-blitting transparent pixels makes the
@@ -462,6 +488,10 @@ pub struct MetalPresenter {
     dump_every: u32,
     dump_dir: String,
     present_debug: PresentDebugMode,
+    /// Backing pixels per point for the retina present path (`backingScaleFactor`, 1 when HiDPI is off).
+    /// The composite texture + `CAMetalLayer` drawable are sized in device pixels (`logical * present_scale`)
+    /// while the NSWindow content size stays in points, so a HiDPI buffer is shown pixel-for-pixel.
+    present_scale: f64,
 }
 
 impl MetalPresenter {
@@ -475,6 +505,7 @@ impl MetalPresenter {
         let present_debug = Self::present_debug_mode();
         let ctx = MetalCtx::new()?;
         let composite_pipeline = Self::make_composite_pipeline(&ctx)?;
+        let present_scale = host_output_scale(mtm).max(1) as f64;
         Some(MetalPresenter {
             mtm,
             ctx,
@@ -484,6 +515,7 @@ impl MetalPresenter {
             dump_every,
             dump_dir,
             present_debug,
+            present_scale,
         })
     }
 
@@ -661,6 +693,7 @@ fragment float4 fmain(VOut in [[stage_in]], texture2d<float> src [[texture(0)]],
         sid: u32,
         w: u32,
         h: u32,
+        present_scale: f64,
         title: &str,
     ) -> MetalWin {
         let content = NSRect::new(
@@ -704,13 +737,16 @@ fragment float4 fmain(VOut in [[stage_in]], texture2d<float> src [[texture(0)]],
             layer.setFramebufferOnly(false);
             layer.setOpaque(true);
         }
-        // Wayland surface dimensions are already the logical coordinate space we expose to the client.
-        // Do not divide NSWindow points by Retina backing scale: that makes a 532px Chrome surface appear
-        // as a tiny ~266pt window on a 2x display and feeds scaled sizes back into xdg resize.
-        let scale = 1.0;
+        // Retina present path. `w`/`h` are the guest's LOGICAL surface size (points): the NSWindow content
+        // size stays in points, so a 1600x1200-pixel HiDPI buffer shows as an 800x600-point window on a 2x
+        // display. The CAMetalLayer, however, is sized in DEVICE PIXELS — `contentsScale = backingScaleFactor`
+        // and `drawableSize = logical * scale` — so the composited HiDPI buffer is presented pixel-for-pixel
+        // (crisp text) rather than a 1x buffer upscaled by Core Animation. Do NOT feed the pixel size back
+        // into xdg resize: `window_content_size` reads the point-space view bounds, keeping the guest logical.
+        let scale = present_scale.max(1.0);
         layer.setContentsScale(scale);
         unsafe {
-            layer.setDrawableSize(NSSize::new(w as f64, h as f64));
+            layer.setDrawableSize(NSSize::new(w as f64 * scale, h as f64 * scale));
         }
         let point_size = NSSize::new(w as f64, h as f64);
         window.setContentSize(point_size);
@@ -729,6 +765,10 @@ fragment float4 fmain(VOut in [[stage_in]], texture2d<float> src [[texture(0)]],
         // AppKit routes by responder chain reach it; combined with the view's acceptsFirstMouse:YES, the
         // first click on this (often non-key) borderless window is delivered rather than swallowed.
         window.setInitialFirstResponder(Some(&view));
+        // Disable AppKit's automatic cursor-rect management: the guest owns the pointer shape (via
+        // wp_cursor_shape_v1 → apply_cursor_shape), so a shape we set must stick over the content instead of
+        // being reset to the arrow on the next mouse-moved / cursorUpdate.
+        unsafe { window.disableCursorRects() };
         window.makeKeyAndOrderFront(None);
         let _ = window.makeFirstResponder(Some(&view));
         // Force the new window in front of every space/app and re-assert app foreground, so Core Animation
@@ -780,11 +820,12 @@ impl Presenter for MetalPresenter {
         let title = surf.title.clone();
         let sid = surf.sid;
         let ctx = &self.ctx;
+        let present_scale = self.present_scale;
         let created = !self.wins.contains_key(&sid);
         let win = self
             .wins
             .entry(sid)
-            .or_insert_with(|| MetalPresenter::make_window(mtm, ctx, sid, w, h, &title));
+            .or_insert_with(|| MetalPresenter::make_window(mtm, ctx, sid, w, h, present_scale, &title));
         if created {
             MetalPresenter::log_present_debug(
                 self.present_debug,
@@ -798,15 +839,16 @@ impl Presenter for MetalPresenter {
         }
         if win.size != (w, h) {
             unsafe {
-                let scale = 1.0;
+                let scale = present_scale.max(1.0);
                 win.scale = scale;
+                // Content size in points; drawable in device pixels (see make_window).
                 let size = NSSize::new(w as f64, h as f64);
                 win.window.setContentSize(size);
                 if let Some(view) = win.window.contentView() {
                     view.setFrameSize(size);
                 }
                 win.layer.setContentsScale(scale);
-                win.layer.setDrawableSize(NSSize::new(w as f64, h as f64));
+                win.layer.setDrawableSize(NSSize::new(w as f64 * scale, h as f64 * scale));
             }
             win.size = (w, h);
             win.composite_tex = None;
@@ -820,8 +862,11 @@ impl Presenter for MetalPresenter {
                 None,
             );
         }
+        // The composite texture is the presented image: size it in DEVICE PIXELS (logical * present_scale)
+        // to match the drawable, so a HiDPI guest buffer is composited at full resolution and blitted 1:1.
+        let (px_w, px_h) = pixel_size(w, h, win.scale);
         if win.composite_tex.is_none() {
-            win.composite_tex = Some(self.ctx.new_bgra_texture(w, h));
+            win.composite_tex = Some(self.ctx.new_bgra_texture(px_w, px_h));
         }
         let composite = win
             .composite_tex
@@ -928,7 +973,8 @@ impl Presenter for MetalPresenter {
         if self.dump_every > 0 && self.frames % self.dump_every == 0 {
             if let Some(w) = self.wins.get(&sid) {
                 if let Some(tex) = w.last_tex.as_ref() {
-                    let bgra = self.ctx.readback_bgra(tex, w.size.0, w.size.1);
+                    let (pw, ph) = pixel_size(w.size.0, w.size.1, w.scale);
+                    let bgra = self.ctx.readback_bgra(tex, pw, ph);
                     let mut rgba = vec![0u8; bgra.len()];
                     for i in (0..bgra.len()).step_by(4) {
                         rgba[i] = bgra[i + 2];
@@ -936,7 +982,7 @@ impl Presenter for MetalPresenter {
                         rgba[i + 2] = bgra[i];
                         rgba[i + 3] = 0xff;
                     }
-                    let png = dd_term_core::png::encode_rgba(w.size.0, w.size.1, &rgba);
+                    let png = dd_term_core::png::encode_rgba(pw, ph, &rgba);
                     let _ = std::fs::create_dir_all(&self.dump_dir);
                     let path = format!(
                         "{}/live-surface-{sid}-{:04}.png",
@@ -971,7 +1017,7 @@ impl Presenter for MetalPresenter {
             let Some(tex) = w.last_tex.as_ref() else {
                 continue;
             };
-            let (pw, ph) = w.size;
+            let (pw, ph) = pixel_size(w.size.0, w.size.1, w.scale);
             let bgra = self.ctx.readback_bgra(tex, pw, ph);
             // BGRA → RGBA (opaque) for the PNG encoder.
             let mut rgba = vec![0u8; bgra.len()];
@@ -1019,11 +1065,37 @@ impl Presenter for MetalPresenter {
         }
     }
 
+    fn set_cursor_shape(&self, shape: u32) {
+        apply_cursor_shape(shape);
+    }
+
     fn drop_window(&mut self, sid: u32) {
         if let Some(w) = self.wins.remove(&sid) {
             w.window.close(); // orderOut + release: the tiny cursor-image window disappears
         }
     }
+}
+
+/// Map a `wp_cursor_shape_device_v1.shape` enum to the closest `NSCursor` and set it as the host cursor.
+/// Unmapped shapes fall back to the arrow. Called on the main thread (the presenter loop), where AppKit
+/// cursor state lives. The windows disable AppKit cursor rects (see `make_window`) so a shape set here
+/// sticks over the content instead of being reset to the arrow on the next mouse-moved.
+fn apply_cursor_shape(shape: u32) {
+    // wp_cursor_shape_device_v1.shape enum (cursor-shape-v1.xml).
+    let cursor = match shape {
+        4 => NSCursor::pointingHandCursor(),           // pointer (over a link)
+        9 => NSCursor::IBeamCursor(),                  // text
+        10 => NSCursor::IBeamCursorForVerticalLayout(), // vertical_text
+        8 => NSCursor::crosshairCursor(),              // crosshair
+        16 => NSCursor::openHandCursor(),              // grab
+        13 | 17 => NSCursor::closedHandCursor(),        // move / grabbing
+        18 | 25 | 26 | 30 => NSCursor::resizeLeftRightCursor(), // e/w/ew/col resize
+        19 | 22 | 27 | 31 => NSCursor::resizeUpDownCursor(),    // n/s/ns/row resize
+        14 | 15 => NSCursor::operationNotAllowedCursor(),       // no_drop / not_allowed
+        11 | 12 => NSCursor::dragCopyCursor(),          // alias / copy
+        _ => NSCursor::arrowCursor(),                   // default + anything without a good AppKit match
+    };
+    unsafe { cursor.set() };
 }
 
 /// Start a native, host-driven window drag for `window` in response to `xdg_toplevel.move`. AppKit's
