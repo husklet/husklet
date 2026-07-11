@@ -76,6 +76,12 @@ one-line bug. Reproduction is non-deterministic (`woke=46/48`), so a fix needs i
 recvmsg copyback to prove where wakeups are dropped before changing the delivery protocol. Left for a focused
 sentry pass; not a minimal-fix candidate.
 
+DISTINCT from Wall 7 (do not conflate). This is `DDJIT_UNTRUSTED`-only and reproduces solely on **x86_64**
+(`dd-tests -e x86_64 scm-eventfd-dense-untrusted` fails ~2/3 of runs; aarch64 and BOTH trusted engines pass —
+so the trusted cross-fork eventfd counter is fine). The Chrome rendering blocker ("Wall 7", `rendering-engine.md`)
+runs in TRUSTED mode and was a different mechanism entirely — a cross-mapping **futex** key bug, now fixed. The
+eventfd loss here rides the sentry's SCM_RIGHTS copyback, not the futex path, and is untouched by that fix.
+
 ### `DDJIT_SANDBOX` Public Mode Is Intentionally Avoided By Tests
 
 Priority: P2
