@@ -231,7 +231,8 @@ static void svc_fill_rlimit(int resource, uint64_t *o) {
 static int exec_fd_is_engine(int fd) {
     if (fd < 0) return 1;
     if (eventfd_peer_is_engine_fd(fd)) return 1;
-    if (fd == g_root_fd || fd == g_gtimer_kq || fd == g_sigfd_pipe[0] || fd == g_sigfd_pipe[1]) return 1;
+    if (sfd_wr_is(fd)) return 1; // signalfd write ends are engine-private (read ends are ordinary guest fds)
+    if (fd == g_root_fd || fd == g_gtimer_kq) return 1;
     for (int i = 0; i < g_nvols; i++)
         if (fd == g_vols[i].fd) return 1;
     return 0;

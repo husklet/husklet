@@ -172,6 +172,9 @@ static void eventfd_peer_vacate(int fd) {
 // read/write to the virtual handler, so without carrying them the duplicate degraded to a raw pipe/fd.
 static void fd_carry_virt(int newfd, int oldfd) {
     if (newfd < 0 || newfd >= DD_NFD || oldfd < 0 || oldfd >= DD_NFD || newfd == oldfd) return;
+    // Tag both fds as the same open file description so a later close of one (while the other survives) can
+    // find the surviving alias -- e.g. epoll readiness must persist while a dup keeps the watched OFD open.
+    ofd_link_dup(newfd, oldfd);
     // eventfd: share the peer write end + counter slot; bump the slot refcount so closing either alias does
     // not tear the shared object down until the last one closes (see fd_reset_emul / g_eventfd_refs).
     if (g_eventfd_peer[oldfd]) {
@@ -191,8 +194,12 @@ static void fd_carry_virt(int newfd, int oldfd) {
     // read() drains the same event queue. Watches stay owned by the original instance fd -- closing the DUP
     // tears down nothing (no watch is owned by it), and closing the original behaves as before the dup.
     if (oldfd < 1024 && newfd < 1024 && g_inotify[oldfd]) g_inotify[newfd] = 1;
-    // signalfd: a duplicate reads the same shared self-pipe; mark it so the signalfd read/update paths accept it.
-    if (g_sigfd_is[oldfd] || oldfd == g_sigfd_read) g_sigfd_is[newfd] = 1;
+    // signalfd: a duplicate refers to the SAME OFD (shares its self-pipe). Carry the slot mapping and bump the
+    // OFD refcount so the pipe is torn down only when the last alias closes (see fd_reset_emul).
+    if (g_sigfd_slot[oldfd]) {
+        g_sigfd_slot[newfd] = g_sigfd_slot[oldfd];
+        g_sfd[g_sigfd_slot[oldfd] - 1].refs++;
+    }
     // epoll: a duplicate shares the same (host-shared) kqueue. Mark BOTH aliases dup'd so epoll_ctl/wait use
     // the immediate path (interest goes straight to the shared kqueue, visible to both fds); flush any
     // changelist queued before the dup now so already-registered interest is not stranded on the original.
@@ -236,8 +243,10 @@ static void engine_fd_vacate(int newfd) {
     eventfd_peer_vacate(newfd);
     engine_fd_reloc(&g_root_fd, newfd);
     engine_fd_reloc(&g_gtimer_kq, newfd);
-    engine_fd_reloc(&g_sigfd_pipe[0], newfd);
-    engine_fd_reloc(&g_sigfd_pipe[1], newfd);
+    // signalfd write ends are engine-private; a guest dup2/dup3 onto one must relocate it (the read ends are
+    // guest fds and are NOT relocated -- a dup2 onto a signalfd read end legitimately replaces that signalfd).
+    for (int i = 0; i < DD_SFD_MAX; i++)
+        if (g_sfd[i].refs > 0) engine_fd_reloc(&g_sfd[i].wr, newfd);
     for (int i = 0; i < g_nvols; i++)
         engine_fd_reloc(&g_vols[i].fd, newfd);
 }
@@ -245,9 +254,12 @@ static void engine_fd_vacate(int newfd) {
 // Vacate every engine-private fd whose NUMBER falls in [first,last] -- for a guest close_range() that would
 // otherwise close the runtime's descriptors (g_root_fd etc.). Visible to fs.c/rare.c (io.c is #included first).
 static void engine_fd_vacate_range(unsigned first, unsigned last) {
-    int fds[4] = {g_root_fd, g_gtimer_kq, g_sigfd_pipe[0], g_sigfd_pipe[1]};
-    for (int i = 0; i < 4; i++)
+    int fds[2] = {g_root_fd, g_gtimer_kq};
+    for (int i = 0; i < 2; i++)
         if (fds[i] >= 0 && (unsigned)fds[i] >= first && (unsigned)fds[i] <= last) engine_fd_vacate(fds[i]);
+    for (int i = 0; i < DD_SFD_MAX; i++) // signalfd write ends (engine-private)
+        if (g_sfd[i].refs > 0 && g_sfd[i].wr >= 0 && (unsigned)g_sfd[i].wr >= first && (unsigned)g_sfd[i].wr <= last)
+            engine_fd_vacate(g_sfd[i].wr);
     for (int i = 0; i < DD_NFD; i++) {
         int p = g_eventfd_peer[i] - 1;
         if (p >= 0 && (unsigned)p >= first && (unsigned)p <= last) eventfd_peer_vacate(p);
@@ -397,9 +409,9 @@ static int svc_io(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t
             G_RET(c) = r < 0 ? (uint64_t)(int64_t)r : (uint64_t)r;
             break;
         }
-        // signalfd read -> struct signalfd_siginfo. A dup of the signalfd (g_sigfd_is[rfd]) reads the same
-        // shared self-pipe, so accept it too -- otherwise the duplicate fell through to a raw 1-byte pipe read.
-        if (rfd >= 0 && (rfd == g_sigfd_read || (rfd < DD_NFD && g_sigfd_is[rfd]))) {
+        // signalfd read -> struct signalfd_siginfo. Each signalfd OFD has its own self-pipe; the fd number
+        // (original OR a dup, both mapped by g_sigfd_slot) is the read end, so read straight from rfd.
+        if (rfd >= 0 && rfd < DD_NFD && g_sigfd_slot[rfd]) {
             // Linux needs room for at least one struct signalfd_siginfo (128 bytes); a shorter buffer is
             // EINVAL and must NOT consume a pending signal (checked before draining the wake byte).
             if (a2 < 128) {

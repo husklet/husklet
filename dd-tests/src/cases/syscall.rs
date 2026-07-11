@@ -33,6 +33,13 @@ pub(super) fn linuxsys() -> Group {
             // epoll surface: create1/create flag+size validation, EPOLLIN/OUT readiness, oneshot re-arm,
             // and the epoll_ctl EEXIST/ENOENT/EINVAL/EPERM error return values.
             src("epoll-edge", "epoll_edge.c").oracle(),
+            // epoll interest follows the OPEN FILE DESCRIPTION: closing a watched fd whose OFD stays alive via
+            // a dup KEEPS readiness (re-homed onto the surviving alias), returning the original udata.
+            src("epoll-dup-lifetime", "epoll_dup_lifetime.c").oracle(),
+            // a fork child inherits the parent's epoll interest list; the child epoll_waits WITHOUT
+            // re-registering and must still see the inherited registration fire (dd rebuilds an empty kqueue
+            // in the child and re-arms the inherited interest from its per-instance table).
+            src("epoll-fork-inherit", "epoll_fork_inherit.c").oracle(),
             // poll/select/pselect/ppoll signal+timeout corners: the select02 HANG regression (a blocked,
             // dd-hooked signal must NOT restart the full timeout), EINTR on a delivered handler, EFAULT/EINVAL.
             src("pollselect-eintr", "pollselect_eintr.c").oracle(),
@@ -45,6 +52,10 @@ pub(super) fn linuxsys() -> Group {
             // pipe-readable-with-count-0 -> pump busy-spin / lost wakeup). Fails deterministically pre-fix.
             src("pump-wakeup", "pump_wakeup.c").has("pump OK"),
             src("signalfd", "signalfd.c").oracle(), // sigprocmask + signalfd4 read of a raised signal
+            // Two INDEPENDENT signalfds (SIGUSR1 vs SIGUSR2): each has its own mask + delivery queue, so a
+            // raised SIGUSR1 is readable on the USR1 fd only. Regression guard for the old single-shared-pipe
+            // model that aliased distinct signalfds and ORed their masks.
+            src("signalfd-multi", "signalfd_multi.c").oracle(),
             src("inotify", "inotify.c").oracle(),   // inotify watch -> IN_CREATE event read
             src("sendfile", "sendfile.c").oracle(), // sendfile + readv/writev scatter-gather
             src("timerfd", "timerfd.c").oracle(),   // timerfd one-shot expiration

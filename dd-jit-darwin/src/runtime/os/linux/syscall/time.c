@@ -157,10 +157,7 @@ static void *gtimer_loop(void *arg) {
             g_sigcode[signo] = DD_SI_TIMER;
             g_sigval[signo] = sv;
             __atomic_or_fetch(&g_pending, 1ull << signo, __ATOMIC_SEQ_CST);
-            if ((g_sigfd_mask & (1ull << signo)) && g_sigfd_pipe[1] >= 0) {
-                char b = (char)signo;
-                if (write(g_sigfd_pipe[1], &b, 1) < 0) {} // wake signalfd/epoll
-            }
+            sfd_deliver(signo); // wake signalfd/epoll (per-OFD mask)
         }
     }
     return NULL;

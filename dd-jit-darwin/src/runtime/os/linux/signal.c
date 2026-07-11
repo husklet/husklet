@@ -229,19 +229,60 @@ static int sig_m2l(int s) {
 // the awaited signal here; maybe_deliver_signal then delivers it once, ignoring the mask, and the sigframe
 // saves/restores the true post-suspend mask. Cleared as the signal is claimed for delivery.
 static __thread uint64_t g_force_deliver;
-// signalfd self-pipe (write end poked from host_sigh)
-static int g_sigfd_pipe[2] = {-1, -1};
-// its read end (the guest's signalfd)
-static int g_sigfd_read = -1;
-// dup() of a signalfd yields another fd that refers to the SAME signalfd object. dd's model is a single
-// shared self-pipe, so a duplicate is a host dup of g_sigfd_pipe[0] that reads the same pipe -- mark it here
-// so the signalfd read/update paths recognise it (they otherwise only match the original g_sigfd_read).
-static uint8_t g_sigfd_is[DD_NFD];
-// signals routed to the signalfd (1<<signo)
-static volatile uint64_t g_sigfd_mask;
+
+// --- signalfd open-file-description (OFD) pool ---------------------------------------------------------
+// Linux signalfd(2) creates an INDEPENDENT descriptor: each has its own signal mask and its own delivery
+// queue, so a SIGUSR1 signalfd and a SIGUSR2 signalfd never alias each other or broaden each other's masks.
+// dd's old model was a SINGLE shared self-pipe with one ORed mask, which failed exactly that independence.
+// Each signalfd OFD is now one slot here: a self-pipe (read end = the guest's signalfd, write end poked by
+// the host signal handlers) + its own mask + a refcount (a dup(2) shares the OFD, so refs bumps and the
+// pipe is torn down only when the last alias closes). The read end is a normal guest fd; only the write end
+// is engine-private (relocated out of the guest's low fd range at create, protected from the guest's
+// close/exec sweep). `g_sigfd_slot[fdnum]` maps a guest fd NUMBER to its OFD slot (+1); 0 = not a signalfd.
+#define DD_SFD_MAX 64
+struct sfd_ofd {
+    int rd;                 // read end (a guest fd number)
+    int wr;                 // write end (engine-private, poked on signal delivery)
+    volatile uint64_t mask; // signals routed to THIS signalfd (1<<signo)
+    int refs;               // fd aliases referring to this OFD (dup bumps); 0 = free slot
+};
+static struct sfd_ofd g_sfd[DD_SFD_MAX];
+static uint8_t g_sigfd_slot[DD_NFD]; // guest fd number -> OFD slot index + 1 (0 = not a signalfd)
+
+// Allocate a free OFD slot (refs==0). Returns the slot index or -1 if the pool is exhausted.
+static int sfd_alloc(void) {
+    for (int i = 0; i < DD_SFD_MAX; i++)
+        if (g_sfd[i].refs == 0) {
+            g_sfd[i].rd = g_sfd[i].wr = -1;
+            g_sfd[i].mask = 0;
+            g_sfd[i].refs = 1;
+            return i;
+        }
+    return -1;
+}
+
+// Deliver Linux signal `ls` to EVERY signalfd whose mask includes it. Each write is one queued byte encoding
+// the signo, so a realtime signal delivered N times reads back as N siginfo records on each matching fd.
+static void sfd_deliver(int ls) {
+    if (ls < 1 || ls > 63) return;
+    uint64_t bit = 1ull << ls;
+    for (int i = 0; i < DD_SFD_MAX; i++)
+        if (g_sfd[i].refs > 0 && g_sfd[i].wr >= 0 && (g_sfd[i].mask & bit)) {
+            char b = (char)ls;
+            if (write(g_sfd[i].wr, &b, 1) < 0) {}
+        }
+}
+
+// Is host fd `fd` a signalfd write end? (engine-private -- must survive the guest's close/exec sweep.)
+static int sfd_wr_is(int fd) {
+    if (fd < 0) return 0;
+    for (int i = 0; i < DD_SFD_MAX; i++)
+        if (g_sfd[i].refs > 0 && g_sfd[i].wr == fd) return 1;
+    return 0;
+}
 
 // Shared body: mark Linux signal `ls` pending, kick the running thread out of any in-cache loop,
-// and wake a signalfd routed to it.
+// and wake every signalfd routed to it.
 static void host_sig_pend(int ls) {
     __atomic_or_fetch(&g_pending, 1ull << ls, __ATOMIC_SEQ_CST);
     // kick this thread out of any no-syscall in-cache loop so the caught signal is delivered at the
@@ -250,11 +291,7 @@ static void host_sig_pend(int ls) {
     // pthread_getspecific is a plain TLS read; the store is a single aligned word.
     struct cpu *c = (struct cpu *)pthread_getspecific(g_cpu_key);
     if (c) __atomic_store_n(&c->irq, 1, __ATOMIC_SEQ_CST);
-    if ((g_sigfd_mask & (1ull << ls)) && g_sigfd_pipe[1] >= 0) {
-        char b = (char)ls;
-        if (write(g_sigfd_pipe[1], &b, 1) < 0) {}
-        // wake signalfd/epoll
-    }
+    sfd_deliver(ls); // wake signalfd/epoll (per-OFD mask)
 }
 
 static void host_sigh(int sig) {
@@ -431,10 +468,7 @@ static void raise_guest_signal(struct cpu *c, int sig) {
     // blocked: make pending (signalfd / deliver on unblock)
     if (c && (c->sigmask & (1ull << (sig - 1)))) {
         __atomic_or_fetch(&g_pending, 1ull << sig, __ATOMIC_SEQ_CST);
-        if ((g_sigfd_mask & (1ull << sig)) && g_sigfd_pipe[1] >= 0) {
-            char b = (char)sig;
-            if (write(g_sigfd_pipe[1], &b, 1) < 0) {}
-        }
+        sfd_deliver(sig);
         return;
     }
     // SIGCHLD/CONT/URG/WINCH: ignore

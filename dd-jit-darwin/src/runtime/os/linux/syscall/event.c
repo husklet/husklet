@@ -107,6 +107,51 @@ static void ep_mem_clear(int ep) {
     }
 }
 
+// Re-arm one watched fd's kqueue knotes on epoll instance `ep`, from its recorded interest (events+udata).
+// Shared by the fork-child rebuild and the close-with-surviving-dup re-home. `ident` is the fd whose knote
+// is (re)armed on the kqueue; `slot` is the interest-table fd the events/udata come from (they differ only
+// when re-homing a closed fd onto a surviving alias). Returns the armed read/write direction bits.
+static void ep_rearm_from_interest(int ep, int ident, int slot) {
+    uint32_t ev = g_ep_events[slot];
+    uint16_t xf = (uint16_t)((ev & 0x80000000u ? EV_CLEAR : 0) | (ev & 0x40000000u ? EV_ONESHOT : 0));
+    void *ud = (void *)g_ep_udata[slot];
+    struct kevent kv[2];
+    int n = 0;
+    if (ev & 0x1) { // EPOLLIN
+        EV_SET(&kv[n++], ident, EVFILT_READ, EV_ADD | xf, 0, 0, ud);
+    }
+    if (ev & 0x4) { // EPOLLOUT
+        EV_SET(&kv[n++], ident, EVFILT_WRITE, EV_ADD | xf, 0, 0, ud);
+    }
+    for (int i = 0; i < n; i++) {
+        kevent(ep, &kv[i], 1, NULL, 0, NULL);
+        ep_count();
+    }
+}
+
+// A watched fd is being closed. If a dup keeps its OPEN FILE DESCRIPTION alive, Linux keeps the epoll
+// registration (readiness must persist), but the macOS kqueue knote dies with the fd NUMBER. Re-home the
+// registration onto a surviving alias of the same OFD so readiness continues to be reported with the same
+// udata. Called from fd_reset_emul BEFORE the interest table + ofd id are cleared, and before the real
+// close(). No-op unless the closing fd is both watched (g_ep_owner) and has a dup alias (g_ofd_id).
+static void ep_close_rehome(int fd) {
+    if (fd < 0 || fd >= DD_NFD || !g_ep_owner[fd] || !g_ofd_id[fd]) return;
+    int ep = g_ep_owner[fd] - 1;
+    if (ep < 0 || ep >= DD_NFD || !g_epoll[ep] || fcntl(ep, F_GETFD) == -1) return; // epoll instance gone
+    int y = ofd_surviving_alias(fd);
+    if (y < 0 || y >= DD_NFD || y == fd) return; // last OFD reference is closing -> let the knote die
+    if (g_ep_owner[y]) return;                   // the alias is already a watched fd of its own -> don't clobber
+    ep_rearm_from_interest(ep, y, fd);           // arm the surviving alias with the closing fd's events+udata
+    g_ep_owner[y] = ep + 1;
+    g_ep_events[y] = g_ep_events[fd];
+    g_ep_udata[y] = g_ep_udata[fd];
+    g_ep_rd[y] = g_ep_rd[fd];
+    g_ep_wr[y] = g_ep_wr[fd];
+    g_ep_os[y] = g_ep_os[fd];
+    ep_mem_set(ep, y, 1);
+    ep_mem_set(ep, fd, 0);
+}
+
 // Capture g_threaded into the returned token so lock/unlock stay balanced even if a peer thread flips
 // g_threaded (0->1 on its first clone) between the two calls. Single-threaded (token 0) takes no lock.
 static inline int ep_lock(void) {
@@ -218,6 +263,28 @@ static void kqueue_rebuild_after_fork(void) {
     memset(g_ep_os, 0, sizeof g_ep_os);
     // the rebuilt kqueues carry no EVFILT_USER wake knote either -> re-arm lazily on next epoll op
     memset(g_ep_wake_armed, 0, sizeof g_ep_wake_armed);
+    // Linux children INHERIT the parent's epoll interest list. The interest table (fd -> owner+events+udata)
+    // survived the fork via COW, and the watched fds are ordinary inherited descriptors, so re-arm every
+    // recorded registration on its owning (rebuilt, empty) epoll kqueue and restore the armed maps + the
+    // membership we just cleared. A child that epoll_waits WITHOUT re-registering now sees inherited events
+    // (the timerfd/inotify halves are re-armed in the rebuild loop above).
+    for (int fd = 0; fd < DD_NFD; fd++) {
+        if (!g_ep_owner[fd]) continue;
+        int ep = g_ep_owner[fd] - 1;
+        int drop = (ep < 0 || ep >= DD_NFD || !g_epoll[ep] || fcntl(ep, F_GETFD) == -1 || fcntl(fd, F_GETFD) == -1);
+        if (drop) { // owner epoll or watched fd did not survive into the child -> drop the stale entry
+            g_ep_owner[fd] = 0;
+            g_ep_events[fd] = 0;
+            g_ep_udata[fd] = 0;
+            continue;
+        }
+        ep_rearm_from_interest(ep, fd, fd);
+        uint32_t ev = g_ep_events[fd];
+        g_ep_rd[fd] = (ev & 0x1) ? 1 : 0;
+        g_ep_wr[fd] = (ev & 0x4) ? 1 : 0;
+        g_ep_os[fd] = (ev & 0x40000000u) ? 1 : 0;
+        ep_mem_set(ep, fd, 1);
+    }
     // fork() only clones the calling thread: if a peer M held g_ep_mtx (mid epoll_ctl/epoll_wait) at fork
     // time the child inherits it LOCKED with no owner, so its next svc_event ep_lock() deadlocks forever
     // (the go-build compile child hit exactly this after the g_jit_lock fix). The child is single-threaded
@@ -402,6 +469,21 @@ static int svc_event(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint6
                 break;
             } // MOD/DEL an absent fd
             ep_mem_set(ep, fd, op != 2); // commit membership
+        }
+        // Record this registration in the per-instance interest table (fd -> owner + events + udata) so it
+        // survives fork (re-armed on the rebuilt child kqueue) and a watched-fd close whose OFD lives on via a
+        // dup (re-homed onto the surviving alias). DEL drops the entry. Confined to in-range epfd/fd, matching
+        // the readiness path; a couple of fd-indexed stores, so the epoll_ctl hot path is essentially unchanged.
+        if (epfd >= 0 && epfd < DD_NFD && g_epoll[epfd] && fd >= 0 && fd < DD_NFD) {
+            if (op == 2) { // DEL
+                g_ep_owner[fd] = 0;
+                g_ep_events[fd] = 0;
+                g_ep_udata[fd] = 0;
+            } else { // ADD / MOD
+                g_ep_owner[fd] = epfd + 1;
+                g_ep_events[fd] = ev;
+                g_ep_udata[fd] = data;
+            }
         }
         // op: 1=ADD 2=DEL 3=MOD ; EPOLLET=0x80000000 -> EV_CLEAR ; EPOLLONESHOT=0x40000000 -> EV_ONESHOT
         uint16_t xf = (uint16_t)((ev & 0x80000000u ? EV_CLEAR : 0) | (ev & 0x40000000u ? EV_ONESHOT : 0));
@@ -938,37 +1020,53 @@ static int svc_event(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint6
             break;
         }
         // (2) fd == -1 creates a new signalfd; otherwise it must reference an EXISTING signalfd -- EBADF if
-        // it is not an open fd at all, EINVAL if it is open but not our signalfd (dd backs signalfd with a
-        // single shared self-pipe, whose read end is g_sigfd_pipe[0]).
+        // it is not an open fd at all, EINVAL if it is open but not one of our signalfds (each signalfd OFD is
+        // an independent self-pipe in g_sfd[], tracked by fd number in g_sigfd_slot).
+        int sslot = -1;
         if ((int)a0 != -1) {
             if (fcntl((int)a0, F_GETFD) == -1) {
                 G_RET(c) = (uint64_t)(-EBADF);
                 break;
             }
-            // The original signalfd (g_sigfd_pipe[0]) OR any dup of it (g_sigfd_is) updates the SAME object;
-            // rejecting a dup as "not our signalfd" was wrong (Linux accepts a mask update on a dup'd signalfd).
-            if ((int)a0 != g_sigfd_pipe[0] && !((int)a0 >= 0 && (int)a0 < DD_NFD && g_sigfd_is[(int)a0])) {
+            // The signalfd read end OR any dup of it (g_sigfd_slot) updates the SAME OFD; Linux accepts a mask
+            // update on a dup'd signalfd, so resolve the fd number to its pool slot rather than the original.
+            if (!((int)a0 >= 0 && (int)a0 < DD_NFD && g_sigfd_slot[(int)a0])) {
                 G_RET(c) = (uint64_t)(-EINVAL);
                 break;
             }
+            sslot = g_sigfd_slot[(int)a0] - 1;
         }
         // sigset bit (signo-1) -> g_pending bit signo
         uint64_t lm = a1 ? *(uint64_t *)a1 : 0, pm = 0;
         for (int s = 1; s < 64; s++)
             if (lm & (1ull << (s - 1))) pm |= (1ull << s);
-        if (g_sigfd_pipe[0] < 0 && pipe(g_sigfd_pipe) < 0) {
-            G_RET(c) = (uint64_t)(-errno);
-            break;
+        // Create: allocate an INDEPENDENT OFD (its own self-pipe + mask). The read end is the guest's signalfd;
+        // the write end is engine-private (relocated out of the guest's low fd range, poked on delivery).
+        if (sslot < 0) {
+            sslot = sfd_alloc();
+            if (sslot < 0) {
+                G_RET(c) = (uint64_t)(-ENOMEM);
+                break;
+            }
+            int fds[2];
+            if (pipe(fds) < 0) {
+                g_sfd[sslot].refs = 0; // release the slot
+                G_RET(c) = (uint64_t)(-errno);
+                break;
+            }
+            int wr = fcntl(fds[1], F_DUPFD, 1 << 20); // move the write end clear of the guest's low fds
+            if (wr < 0) wr = fcntl(fds[1], F_DUPFD, 64);
+            if (wr >= 0) {
+                close(fds[1]);
+                fds[1] = wr;
+            }
+            g_sfd[sslot].rd = fds[0];
+            g_sfd[sslot].wr = fds[1];
+            if (fds[0] >= 0 && fds[0] < DD_NFD) g_sigfd_slot[fds[0]] = (uint8_t)(sslot + 1);
         }
-        // Linux signalfd(fd != -1, mask): UPDATE replaces the existing mask EXACTLY with the new set -- a
-        // narrowed mask must drop the signals it removed. The old unconditional OR kept previously-enabled
-        // signals active, so an event loop that narrowed its mask still received signals it meant to drop.
-        // A fresh create (fd == -1) still accumulates into the (single shared) signalfd's mask.
-        if ((int)a0 != -1)
-            g_sigfd_mask = pm;
-        else
-            g_sigfd_mask |= pm;
-        g_sigfd_read = g_sigfd_pipe[0];
+        // Linux signalfd(fd != -1, mask): UPDATE replaces this OFD's mask EXACTLY (a narrowed mask drops the
+        // signals it removed). A fresh create sets the new OFD's mask. Masks never cross between OFDs.
+        g_sfd[sslot].mask = pm;
         for (int s = 1; s < 64; s++)
             // make sure the host delivers them
             if ((pm & (1ull << s)) && !sig_is_sync(s)) {
@@ -977,13 +1075,14 @@ static int svc_event(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint6
                 sa.sa_handler = host_sigh;
                 sigaction(sig_l2m(s), &sa, NULL);
             }
+        int srd = g_sfd[sslot].rd;
         // SFD_CLOEXEC
-        if (a3 & 0x80000) fcntl(g_sigfd_pipe[0], F_SETFD, FD_CLOEXEC);
+        if (a3 & 0x80000) fcntl(srd, F_SETFD, FD_CLOEXEC);
         // SFD_NONBLOCK
-        if (a3 & 0x800) fcntl(g_sigfd_pipe[0], F_SETFL, O_NONBLOCK);
+        if (a3 & 0x800) fcntl(srd, F_SETFL, O_NONBLOCK);
         // An UPDATE (fd != -1) returns the SAME fd the caller passed (Linux), including a dup alias; a fresh
-        // create returns the shared pipe read end.
-        G_RET(c) = (int)a0 != -1 ? a0 : (uint64_t)g_sigfd_pipe[0];
+        // create returns this OFD's read end.
+        G_RET(c) = (int)a0 != -1 ? a0 : (uint64_t)srd;
         break;
     }
     case 85: {
