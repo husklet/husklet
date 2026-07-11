@@ -50,8 +50,21 @@ below or a broken-oracle artifact (qemu-user lacking a syscall) — see the
   NEW image, is woken by a cross-process FUTEX through it, while a sibling FD_CLOEXEC
   alias is correctly swept (survival by honouring the cleared flag, not a no-op sweep).
   Emulated fds are host-fd-backed so guest `fcntl(F_SETFD)` and the sweep agree. So both
-  the transport AND the launch-time fd hand-off are exonerated. Next: pin it from the
-  Chrome side (Mojo VLOGs — drop `--log-level`), serialized against any live session.
+  the transport AND the launch-time fd hand-off are exonerated. **Chrome-side root cause
+  now pinned** (2026-07-10, live tracing): with `--log-level=0 --v=1` (the pipeline's
+  default `--log-level=2` HID all child logs — they only *looked* silent), the renderer
+  logs `ChildThreadImpl::EnsureConnected()` ~15-25 s after spawn — Chromium's channel-
+  connect timeout — then self-terminates, before navigation; the browser keeps painting
+  UI with a white content placeholder. The network-service utility child connects and
+  issues URL requests fine in the SAME runs, so it is renderer-channel-specific, not a
+  general Mojo break. Also confirmed: the shared-futex-key fix, though correct
+  (`futex-shared-key` woke=1/1 on the live binary), does NOT unblock multi-process —
+  live tracing saw ZERO futex WAIT/WAKE touch a file-backed MAP_SHARED word across 313+
+  region registrations; multi-process Chrome's cross-process wakeups ride Mojo unix
+  sockets, not shared-memory futexes. Next: correlate an `EnsureConnected`-timing-out
+  renderer pid with its inbound invitation socket message (does the renderer's channel
+  fd ever receive the browser's connect, or does the browser never write it) — the gap
+  is now Chrome-internal renderer channel bring-up, one specific handshake.
   Full context + how-to-run: [../rendering/README.md](../rendering/README.md).
 - **(Resolved on branch render/chrome-content) engine launch drops libobjc
   fork-safety suppression.** Guest fork() is a real host fork() of a
