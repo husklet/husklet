@@ -97,6 +97,10 @@ pub trait Presenter {
     fn output_scale(&self) -> i32 {
         1
     }
+    /// Destroy the native window backing surface `sid`, if one exists. Used when a surface turns out not to
+    /// be a window after all — e.g. it was assigned the cursor role via `wl_pointer.set_cursor` after its
+    /// image was already committed (and thus already shown in a tiny window). Default: nothing to remove.
+    fn drop_window(&mut self, _sid: u32) {}
     /// The Wayland client issued `xdg_toplevel.move` for surface `sid` (a user-initiated window drag). A
     /// windowed presenter should start a native, host-driven move of that window. This is invoked ONLY when
     /// the client actually requests a move, so it is the precise alternative to making every window blindly

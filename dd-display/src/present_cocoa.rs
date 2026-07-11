@@ -111,6 +111,62 @@ fn install_close_delegate(window: &NSWindow, mtm: MainThreadMarker) {
     window.setDelegate(Some(ProtocolObject::from_ref(&*delegate)));
 }
 
+// ---- Focusable content window ------------------------------------------------------------------
+// AppKit ties keyboard focus and much of mouse dispatch to a window's *key*/*main* status. A plain
+// `NSWindow` created with the `Borderless` style mask (the Metal presenter's default, so the guest's own
+// chrome shows through instead of an AppKit title bar) returns NO from `canBecomeKeyWindow`/
+// `canBecomeMainWindow` — so `makeKeyAndOrderFront:` never actually makes it key, the window never takes
+// keyboard focus, and clicks are swallowed as mere activation clicks. That is exactly "input is dead": no
+// key events ever reach us to route into `wl_keyboard`, and pointer handling is degraded. Overriding both
+// to YES makes a borderless content window behave like a normal top-level window for input, which is what
+// a compositor surface must be. (Titled windows already return YES; the override is harmless there.)
+
+declare_class!(
+    struct ContentWindow;
+
+    unsafe impl ClassType for ContentWindow {
+        type Super = NSWindow;
+        type Mutability = mutability::MainThreadOnly;
+        const NAME: &'static str = "DDContentWindow";
+    }
+
+    impl DeclaredClass for ContentWindow {}
+
+    unsafe impl ContentWindow {
+        #[method(canBecomeKeyWindow)]
+        fn can_become_key_window(&self) -> bool {
+            true
+        }
+        #[method(canBecomeMainWindow)]
+        fn can_become_main_window(&self) -> bool {
+            true
+        }
+    }
+);
+
+/// Create a compositor content window that can take keyboard focus even when borderless. Mirrors
+/// `NSWindow::initWithContentRect_styleMask_backing_defer` but instantiates the `ContentWindow` subclass so
+/// `canBecomeKeyWindow`/`canBecomeMainWindow` are YES. Returned as a plain `NSWindow` (the subclass adds no
+/// state the callers need). Also enables mouse-moved delivery so guest hover state tracks the cursor.
+fn make_focusable_window(
+    mtm: MainThreadMarker,
+    content: NSRect,
+    style: NSWindowStyleMask,
+) -> Retained<NSWindow> {
+    let window: Retained<ContentWindow> = unsafe {
+        msg_send_id![
+            mtm.alloc::<ContentWindow>(),
+            initWithContentRect: content,
+            styleMask: style,
+            backing: NSBackingStoreType::NSBackingStoreBuffered,
+            defer: false,
+        ]
+    };
+    let window: Retained<NSWindow> = Retained::into_super(window);
+    window.setAcceptsMouseMovedEvents(true);
+    window
+}
+
 /// Integer `wl_output.scale` to advertise, derived from the Mac's backing store. HiDPI is opt-in via
 /// `DD_DISPLAY_HIDPI` while the retina present path (CALayer contentsScale) is still being brought up:
 /// the validated Chrome init path reports scale=1, so we don't flip it under everyone by default. When
@@ -184,15 +240,7 @@ impl CocoaPresenter {
             | NSWindowStyleMask::Closable
             | NSWindowStyleMask::Resizable
             | NSWindowStyleMask::Miniaturizable;
-        let window = unsafe {
-            NSWindow::initWithContentRect_styleMask_backing_defer(
-                mtm.alloc(),
-                content,
-                style,
-                NSBackingStoreType::NSBackingStoreBuffered,
-                false,
-            )
-        };
+        let window = make_focusable_window(mtm, content, style);
         let t = if title.is_empty() {
             format!("dd surface {sid}")
         } else {
@@ -302,6 +350,12 @@ impl Presenter for CocoaPresenter {
     fn begin_interactive_move(&self, sid: u32) {
         if let Some(w) = self.wins.get(&sid) {
             perform_window_drag(self.mtm, &w.window);
+        }
+    }
+
+    fn drop_window(&mut self, sid: u32) {
+        if let Some(w) = self.wins.remove(&sid) {
+            w.window.close(); // orderOut + release: the tiny cursor-image window disappears
         }
     }
 }
@@ -572,15 +626,7 @@ fragment float4 fmain(VOut in [[stage_in]], texture2d<float> src [[texture(0)]],
         } else {
             NSWindowStyleMask::Borderless
         };
-        let window = unsafe {
-            NSWindow::initWithContentRect_styleMask_backing_defer(
-                mtm.alloc(),
-                content,
-                style,
-                NSBackingStoreType::NSBackingStoreBuffered,
-                false,
-            )
-        };
+        let window = make_focusable_window(mtm, content, style);
         window.setOpaque(true);
         window.setMovable(false);
         window.setMovableByWindowBackground(false);
@@ -883,6 +929,12 @@ impl Presenter for MetalPresenter {
     fn begin_interactive_move(&self, sid: u32) {
         if let Some(w) = self.wins.get(&sid) {
             perform_window_drag(self.mtm, &w.window);
+        }
+    }
+
+    fn drop_window(&mut self, sid: u32) {
+        if let Some(w) = self.wins.remove(&sid) {
+            w.window.close(); // orderOut + release: the tiny cursor-image window disappears
         }
     }
 }

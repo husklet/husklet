@@ -455,6 +455,9 @@ pub struct Server<P: Presenter> {
     /// (libwayland `WL_SERVER_ID_START`); wl_data_offer is the one object the compositor allocates and
     /// announces to the client, so it must draw from this range to avoid colliding with client ids.
     next_server_id: u32,
+    /// Surfaces assigned the CURSOR role via `wl_pointer.set_cursor`. These carry the pointer image and
+    /// must never be presented as a native window (doing so is the "spurious tiny window" bug).
+    cursor_surfaces: std::collections::HashSet<u32>,
 }
 
 /// First id in the server-allocated object namespace (libwayland `WL_SERVER_ID_START`). Client-created
@@ -489,6 +492,7 @@ impl<P: Presenter> Server<P> {
             data_devices: Vec::new(),
             selection: None,
             next_server_id: WL_SERVER_ID_START,
+            cursor_surfaces: std::collections::HashSet::new(),
         }
     }
 
@@ -1339,6 +1343,9 @@ impl<P: Presenter> Server<P> {
             self.ptr_entered = false;
             self.kbd_entered = false;
         }
+        // The id is about to be recycled: clear any cursor-role marking so a later surface reusing this id
+        // is not wrongly suppressed from presenting.
+        self.cursor_surfaces.remove(&sid);
         // Acknowledge the id is free to reuse (the destructor's half of libwayland id recycling).
         self.conn.send(&Message::new(WL_DISPLAY, 1).u32(sid)); // wl_display.delete_id
     }
@@ -1347,8 +1354,22 @@ impl<P: Presenter> Server<P> {
     /// A released input object must stop receiving events and free its id — otherwise later input still
     /// routes to the (possibly reused) id, corrupting the client's protocol stream.
     fn wl_input_device(&mut self, m: Message) {
+        // wl_pointer.set_cursor(serial, surface, hotspot_x, hotspot_y) — opcode 0. The named surface is the
+        // pointer image; give it the CURSOR role so it is never presented as a native window. Chrome commits
+        // the cursor image BEFORE issuing set_cursor, so that surface may ALREADY have been given a tiny
+        // window — drop it here so the spurious window disappears (and stays gone on later cursor commits).
+        if matches!(self.objs.get(&m.object), Some(Obj::Pointer)) && m.opcode == 0 {
+            let mut r = m.reader();
+            let _serial = r.u32();
+            let surface = r.u32();
+            if surface != 0 {
+                self.cursor_surfaces.insert(surface);
+                self.present.drop_window(surface);
+            }
+            return;
+        }
         let is_release = match self.objs.get(&m.object) {
-            // wl_pointer.release is opcode 1 (opcode 0 is set_cursor, a no-op for us).
+            // wl_pointer.release is opcode 1 (opcode 0 is set_cursor, handled above).
             Some(Obj::Pointer) => m.opcode == 1,
             // wl_keyboard.release / wl_touch.release are opcode 0.
             Some(Obj::Keyboard) | Some(Obj::Touch) => m.opcode == 0,
@@ -1464,7 +1485,35 @@ impl<P: Presenter> Server<P> {
             return;
         }
         self.apply_cached_subtree(sid);
+        // A surface that has been assigned the CURSOR role (via wl_pointer.set_cursor) is the mouse-pointer
+        // image, not a window. Presenting it is exactly the "spurious super-small window" bug: Chrome's
+        // ~10x16 cursor surface popped as its own tiny NSWindow beside the real content window. Retire its
+        // buffer/frame bookkeeping (so the client's frame pacing does not stall) but never present it.
+        if self.cursor_surfaces.contains(&sid) {
+            self.retire_unpresented(sid);
+            return;
+        }
         self.present_root(sid);
+    }
+
+    /// Advance frame pacing for a committed surface we deliberately do NOT present (a roleless surface such
+    /// as a cursor image): release its just-committed buffer and fire its frame callbacks, exactly as
+    /// `present_root` would, minus the native-window present. Without this the client would wait forever
+    /// for the wl_buffer.release / wl_callback.done it expects after committing the cursor surface.
+    fn retire_unpresented(&mut self, sid: u32) {
+        let (rel, frames) = match self.objs.get_mut(&sid) {
+            Some(Obj::Surface(s)) => (s.pending_release.take(), std::mem::take(&mut s.pending_frame)),
+            _ => return,
+        };
+        if let Some(bid) = rel {
+            self.conn.send(&Message::new(bid, 0)); // wl_buffer.release
+        }
+        for cb in frames {
+            let t = self.frame_time_ms();
+            self.conn.send(&Message::new(cb, 0).u32(t)); // wl_callback.done
+            self.conn.send(&Message::new(WL_DISPLAY, 1).u32(cb)); // delete_id
+        }
+        self.send_presentation_feedback(sid, false);
     }
 
     /// Walk up the subsurface parent chain to the root (non-subsurface) surface.
@@ -4299,6 +4348,99 @@ mod tests {
         assert!(msgs.iter().any(|(o, op, _)| *o == 61 && *op == 2), "keyboard leave, got {msgs:?}");
         assert_eq!(h.server.focus, Some(20));
         assert!(!h.server.ptr_entered && !h.server.kbd_entered);
+    }
+
+    // A synthetic pointer-down injected into a bound seat with a focused surface must emit, ON THE WIRE
+    // and in order, the full sequence a Wayland client (Chrome/viz) needs to process a click: an initial
+    // wl_pointer.enter (naming the focused surface, with a serial) BEFORE any button, the motion, the
+    // button press (state=1), and a wl_pointer.frame closing the group — with monotonically increasing
+    // serials. Most clients discard button/motion received before enter, so this ordering is the crux of
+    // "clicks reach the app". This is the deterministic wire proof for the live NSEvent→wl_seat path.
+    #[test]
+    fn pointer_down_emits_enter_before_button_with_frame() {
+        let mut h = Harness::new();
+        h.server.seat_ver = 5;
+        h.server.pointer = Some(60);
+        h.server.keyboard = Some(61);
+        // A mapped toplevel surface holds focus (as after get_toplevel → transfer_focus).
+        h.server.objs.insert(10, Obj::Surface(Surface::default()));
+        h.server.focus = Some(10);
+        let _ = h.drain();
+
+        // The exact calls inject_nsevent makes for a LeftMouseDown at surface-local (100,30).
+        h.server.pointer_motion(100, 30);
+        h.server.pointer_button(0x110, true);
+        let msgs = h.drain();
+
+        let idx = |op: u16| msgs.iter().position(|(o, p, _)| *o == 60 && *p == op);
+        let enter_i = idx(0).unwrap_or_else(|| panic!("no wl_pointer.enter, got {msgs:?}"));
+        let motion_i = idx(2).unwrap_or_else(|| panic!("no wl_pointer.motion, got {msgs:?}"));
+        let button_i = idx(3).unwrap_or_else(|| panic!("no wl_pointer.button, got {msgs:?}"));
+        // enter MUST precede motion and button (clients drop input received before enter).
+        assert!(enter_i < motion_i, "enter must precede motion, got {msgs:?}");
+        assert!(motion_i < button_i, "motion must precede button, got {msgs:?}");
+        // enter names the focused surface (arg after the serial).
+        let enter_body = &msgs[enter_i].2;
+        assert_eq!(
+            u32::from_ne_bytes(enter_body[4..8].try_into().unwrap()),
+            10,
+            "enter names the focused surface, got {msgs:?}"
+        );
+        // button carries state=1 (pressed) at arg offset 12 (serial,time,button,state).
+        let button_body = &msgs[button_i].2;
+        assert_eq!(
+            u32::from_ne_bytes(button_body[12..16].try_into().unwrap()),
+            1,
+            "button is a press, got {msgs:?}"
+        );
+        assert_eq!(
+            u32::from_ne_bytes(button_body[8..12].try_into().unwrap()),
+            0x110,
+            "button is BTN_LEFT, got {msgs:?}"
+        );
+        // Serials strictly increase: enter's serial < button's serial.
+        let enter_serial = u32::from_ne_bytes(enter_body[0..4].try_into().unwrap());
+        let button_serial = u32::from_ne_bytes(button_body[0..4].try_into().unwrap());
+        assert!(
+            enter_serial < button_serial,
+            "serials must increase (enter {enter_serial} < button {button_serial}), got {msgs:?}"
+        );
+        // A wl_pointer.frame (v5+) must close the button group AFTER the button, or clients buffer it.
+        let frame_after_button = msgs[button_i + 1..]
+            .iter()
+            .any(|(o, p, _)| *o == 60 && *p == 5);
+        assert!(frame_after_button, "button group must be closed by a frame, got {msgs:?}");
+    }
+
+    // A surface assigned the CURSOR role via wl_pointer.set_cursor (Chrome's pointer image) must NOT be
+    // presented as a native window: presenting it is the "spurious super-small window" bug (a ~10x16 cursor
+    // surface popped as its own tiny NSWindow). Its frame pacing must still advance so the client is not
+    // stalled: the committed buffer is released and the frame callback fires.
+    #[test]
+    fn cursor_surface_commit_is_not_presented_but_advances() {
+        let mut h = Harness::new();
+        let data = vec![0u8; 64];
+        let fd = crate::keymap::anon_fd_with(&data).expect("anon fd");
+        let ptr = unsafe { mmap_ro(fd, data.len()) };
+        h.server.objs.insert(2, Obj::ShmPool { fd, ptr, size: data.len(), buffers: 1, zombie: false });
+        h.server.objs.insert(3, Obj::Buffer { pool: 2, offset: 0, width: 2, height: 2, stride: 8, format: FMT_ARGB8888 });
+        // A pointer + a surface that Chrome dedicates to the cursor image.
+        h.server.objs.insert(60, Obj::Pointer);
+        h.server.objs.insert(10, Obj::Surface(Surface::default()));
+        // wl_pointer.set_cursor(serial, surface=10, hotspot_x, hotspot_y) → surface 10 gets the cursor role.
+        h.req(60, 0, body().u32(1).u32(10).i32(0).i32(0));
+        assert!(h.server.cursor_surfaces.contains(&10), "set_cursor assigns the cursor role");
+        let _ = h.drain();
+        // attach buffer 3, request a frame callback, commit.
+        h.req(10, 1, body().u32(3).i32(0).i32(0)); // attach
+        h.req(10, 3, body().u32(101)); // frame(101)
+        h.req(10, 6, body()); // commit
+        // The presenter was NOT asked to present (a cursor image is not a window).
+        assert_eq!(h.server.presenter().frames, 0, "cursor surface must not be presented as a window");
+        let msgs = h.drain();
+        // Frame pacing still advances: the frame callback completes and the buffer is released.
+        assert!(msgs.iter().any(|(o, op, _)| *o == 101 && *op == 0), "frame callback must fire, got {msgs:?}");
+        assert!(msgs.iter().any(|(o, op, _)| *o == 3 && *op == 0), "buffer must be released, got {msgs:?}");
     }
 
     #[test]
