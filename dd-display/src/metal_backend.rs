@@ -350,15 +350,6 @@ pub struct MetalBackend {
     /// bottom-left like GL and samples upright. The presented surface is read back / scanned out top-left
     /// and is left untouched.
     surface_ids: HashSet<u32>,
-    /// STICKY surface origin across frames: the last frame whose surface pass carried a readable
-    /// `sk_RTAdjust.z` told us the presented surface's origin (`Some(true)` = GL bottom-up, `Some(false)` =
-    /// top-left). The surface origin is a STABLE property of the presented framebuffer, but Chrome fills its
-    /// offscreen content tiles in frames that need NOT contain a surface pass (GPU raster of glyph atlases),
-    /// then SAMPLES them in later frames that do. Deriving the offscreen Y-flip only from the *current*
-    /// frame's surface pass (defaulting to bottom-up when absent) makes tile-fill frames disagree with the
-    /// sample frames — the tiles get stored flipped relative to how they're sampled → scrambled/upside-down
-    /// glyphs. We therefore remember the origin here and reuse it for frames that don't re-state it.
-    surface_bottom_up: Option<bool>,
 }
 
 /// Decode an MSL source string from an IR shader payload: word[0] = byte length, the rest packs the UTF-8
@@ -415,7 +406,6 @@ impl MetalBackend {
             gpu_wait_ns: 0,
             cur_surface_id: 0,
             surface_ids: HashSet::new(),
-            surface_bottom_up: None,
         }
     }
 
@@ -1983,15 +1973,7 @@ impl GpuBackend for MetalBackend {
         // extra tile flip double-mirrors the page body (upside-down content). We therefore derive the flip
         // from the surface pass's projection sign, not from a static "offscreen" rule. Absent a readable
         // surface projection, keep the legacy bottom-up assumption (flip offscreen) for back-compat.
-        // The surface origin is a STABLE property of the presented framebuffer, so remember it across frames
-        // (see `surface_bottom_up`): a frame that only FILLS offscreen glyph tiles (no surface pass, e.g.
-        // Chrome's GPU-raster atlas updates) must use the SAME flip as the frames that SAMPLE those tiles.
-        // Deriving it per-frame (defaulting to bottom-up when a frame has no surface pass) made tile-fill and
-        // tile-sample frames disagree → tiles stored flipped vs sampled → scrambled/upside-down glyphs.
-        if let Some(bottom_up) = self.surface_origin_bottom_up(cb) {
-            self.surface_bottom_up = Some(bottom_up);
-        }
-        let flip_offscreen = self.surface_bottom_up.unwrap_or(true);
+        let flip_offscreen = self.surface_origin_bottom_up(cb).unwrap_or(true);
         // Whether the CURRENT render pass draws into an offscreen render target (not the presented
         // surface) AND this frame's surface origin calls for the offscreen Y-flip (see `flip_offscreen`).
         let mut flip_pass = false;
