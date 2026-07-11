@@ -575,6 +575,13 @@ static int svc_rare(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64
             G_RET(c) = (uint64_t)(-EINVAL);
             break;
         }
+        // RLIMIT_MEMLOCK (container is unprivileged, no CAP_IPC_LOCK): a soft limit of 0 refuses any lock
+        // (can_do_mlock -> EPERM); with MCL_CURRENT, wiring the whole address space past the limit -> ENOMEM.
+        int rl = mlk_rlimit_gate_all();
+        if (rl < 0 && ((f & 1u) || rl == -EPERM)) { // ENOMEM only bites MCL_CURRENT; EPERM bites either
+            G_RET(c) = (uint64_t)(int64_t)rl;
+            break;
+        }
         if (f & 1u) mlk_wire_current();  // MCL_CURRENT: wire every existing mapping resident now
         if (f & 2u) g_mlock_future = 1;  // MCL_FUTURE: wire mappings created from here on (mem.c case 222)
         g_mlock_all = 1;
@@ -869,11 +876,23 @@ static int svc_rare(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64
         G_RET(c) = 0;
         break;
     }
-    // mlock2(addr, len, flags): like mlock (228) -- track the range so /proc reports it locked.
-    case 284:
+    // mlock2(addr, len, flags): like mlock (228) -- track the range so /proc reports it locked. Only
+    // MLOCK_ONFAULT(1) is a valid flag (Linux -> EINVAL otherwise), and RLIMIT_MEMLOCK is honored the same
+    // as mlock (soft limit 0 -> EPERM, exceeding -> ENOMEM; container is unprivileged, no CAP_IPC_LOCK).
+    case 284: {
+        if ((unsigned)a2 & ~1u) {
+            G_RET(c) = (uint64_t)(-EINVAL);
+            break;
+        }
+        int rl = mlk_rlimit_gate(a0, (uint64_t)a1);
+        if (rl < 0) {
+            G_RET(c) = (uint64_t)(int64_t)rl;
+            break;
+        }
         mlk_add(a0, (uint64_t)a1);
         G_RET(c) = 0;
         break;
+    }
     // rt_tgsigqueueinfo(tgid, tid, sig, siginfo): thread-targeted sibling of rt_sigqueueinfo (case 138).
     // Carry si_code + si_value to the guest handler's siginfo, then raise the signal to the guest.
     case 240: {

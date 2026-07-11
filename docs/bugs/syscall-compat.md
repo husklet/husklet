@@ -54,28 +54,6 @@ rootless vfs open-intercept across the emulated guest's process tree. The `F_WRL
 precondition is likewise not enforced (dd cannot enumerate other openers). Single-holder lease
 state is fully consistent; only conflicting-open notification is missing.
 
-## `mlockall` Best-Effort Under `RLIMIT_MEMLOCK` (residual)
-
-Priority: P3
-Impact: a range the host refuses to wire stays pageable while the call still reports success
-Confidence: High
-
-Status: FIXED (with residual) — `mlockall` now wires pages for real. `MCL_CURRENT` host-`mlock`s
-every currently-mapped guest range; `MCL_FUTURE` arms a flag so each subsequent `mmap` (mem.c
-case 222) is wired on creation; `munlockall` unwires them all. macOS has `mlock(2)` (already used
-by `mlock`/case 228), so residency is genuine, not just `/proc` state. Oracle-diffed vs native
-aarch64 (byte-identical): `rc=0 lck_after_pos=1 b_ok=1 ml=0 mu=0 un=0 lck_end=0 data_ok=1`.
-See `dd-jit-darwin/src/runtime/os/linux/syscall/rare.c` (230/231),
-`dd-jit-darwin/src/runtime/os/linux/syscall/mem.c` (case 222 MCL_FUTURE),
-`dd-jit-darwin/src/runtime/os/linux/container/vfs/gmap.c` (`mlk_wire_current`/`mlk_unwire_all`).
-
-Residual:
-
-Wiring is best-effort: a range the host `mlock` declines (e.g. `RLIMIT_MEMLOCK` exhausted) is left
-pageable and the call still returns success, where Linux would fail the whole `mlockall` with
-`ENOMEM`. The wired ranges are real and `/proc` `VmLck:`/`Locked:` reporting is honest; only the
-all-or-nothing failure mode differs.
-
 ## aarch64 4K Subpage `munmap` Returns `EINVAL`
 
 Priority: P2

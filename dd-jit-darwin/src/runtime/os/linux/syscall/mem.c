@@ -653,7 +653,10 @@ static int svc_mem(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_
             // mlockall(MCL_FUTURE): a mapping created while future-locking is armed must be wired resident on
             // creation (Linux mm/mlock.c). Best-effort (a RLIMIT_MEMLOCK refusal leaves it pageable); the
             // mlk_add records it so /proc Locked:/VmLck: reports the range even under g_mlock_all reporting.
-            if (g_mlock_future) {
+            // MCL_FUTURE accounting: only wire+count the new mapping while it stays within RLIMIT_MEMLOCK.
+            // A mapping that would push the locked total over the guest's limit is left pageable/uncounted
+            // (the mmap still succeeds) so the tracked locked bytes never exceed the limit.
+            if (g_mlock_future && mlk_rlimit_gate((uint64_t)r, (uint64_t)a1) == 0) {
                 mlock(r, (size_t)a1 + guard);
                 mlk_add((uint64_t)r, (uint64_t)a1);
             }
@@ -767,7 +770,14 @@ static int svc_mem(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_
     // are NOT wired -- so return -errno instead of swallowing it: a crypto/RT guest that relies on mlock to
     // keep key material out of swap/core dumps must SEE the failure (a fake success left its "locked" pages
     // swappable, and we must never report the range locked when it isn't). len 0 is a Linux success no-op.
-    case 228:
+    case 228: {
+        // Honor the guest's RLIMIT_MEMLOCK first (the container is unprivileged: no CAP_IPC_LOCK) -- soft
+        // limit 0 -> EPERM, exceeding the limit -> ENOMEM, before touching the host wiring.
+        int rl = mlk_rlimit_gate(a0, (uint64_t)a1);
+        if (rl < 0) {
+            G_RET(c) = (uint64_t)(int64_t)rl;
+            break;
+        }
         if (a1 && mlock((void *)a0, (size_t)a1) != 0) {
             G_RET(c) = (uint64_t)(-errno);
             break;
@@ -775,6 +785,7 @@ static int svc_mem(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_
         mlk_add(a0, (uint64_t)a1);
         G_RET(c) = 0;
         break;
+    }
     case 229: // munlock: unwire + drop the tracked range. A host munlock failure is returned as -errno
         // (rather than a false success) so the guest sees Linux's error; len 0 is a success no-op.
         if (a1 && munlock((void *)a0, (size_t)a1) != 0) {

@@ -32,6 +32,11 @@ pub fn groups() -> Vec<Group> {
             p("sc-mem-validate", "syscallbug/mem_validate.c"),
             // unprivileged sched_setscheduler(SCHED_FIFO) -> EPERM.
             p("sc-sched-rt", "syscallbug/sched_rt.c"),
+            // mlock honors RLIMIT_MEMLOCK: soft 0 -> EPERM, exceeding the limit -> ENOMEM, within -> ok.
+            // Arch-neutral fix, so oracle-diffed on BOTH Linux engines (x86_64 native under qemu-user).
+            src("sc-mlock-rlimit", "syscallbug/mlock_rlimit.c")
+                .only(&[Engine::LinuxAarch64, Engine::LinuxX86_64])
+                .oracle(),
             // inotify_rm_watch bad wd -> EINVAL, never closes an unrelated fd.
             p("sc-inotify-rm", "syscallbug/inotify_rm.c"),
             // SIGKILL/SIGSTOP can never be blocked via rt_sigprocmask.

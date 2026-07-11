@@ -171,3 +171,69 @@ static uint64_t mlk_total_locked(void) {
         sum += g_mlk[i].hi - g_mlk[i].lo;
     return sum;
 }
+
+// ---- RLIMIT_MEMLOCK enforcement (LTP mlock05 rlimit half) -----------------------------------------
+// The container runs UNPRIVILEGED (no CAP_IPC_LOCK -- see proc.c sched_setscheduler, which EPERMs RT
+// scheduling for the same reason), so mlock/mlock2/mlockall must honor RLIMIT_MEMLOCK exactly as Linux
+// mm/mlock.c does, rather than only relying on the macOS host mlock (which is bounded by the HOST's limit,
+// not the guest's):
+//   * can_do_mlock(): a soft limit of 0 (unprivileged) refuses the op outright with EPERM.
+//   * mlock/mlock2: (already-locked + newly-locked) bytes over the soft limit -> ENOMEM, nothing wired.
+//   * mlockall(MCL_CURRENT): total mapped bytes over the soft limit -> ENOMEM.
+//   * mmap under MCL_FUTURE: a new mapping that would push locked bytes over the limit is left unwired and
+//     uncounted (the mmap still succeeds), so the tracked locked total never exceeds the limit.
+// The soft limit is the guest's RLIMIT_MEMLOCK (resource 8): a docker --ulimit / guest setrlimit override
+// in g_ulimit[8], else RLIM_INFINITY -- unset means "not enforced", preserving the legacy best-effort path.
+#define DD_RLIMIT_MEMLOCK 8
+
+static uint64_t mlk_memlock_limit(void) {
+    return g_ulimit[DD_RLIMIT_MEMLOCK].set ? g_ulimit[DD_RLIMIT_MEMLOCK].cur : ~0ull;
+}
+
+// Explicitly mlock()'d bytes (sum of the tracked ranges) -- the accounting base for the rlimit check.
+// Distinct from mlk_total_locked(), which reports the WHOLE address space under mlockall for /proc.
+static uint64_t mlk_locked_bytes(void) {
+    uint64_t s = 0;
+    for (int i = 0; i < g_nmlk; i++)
+        s += g_mlk[i].hi - g_mlk[i].lo;
+    return s;
+}
+
+// Page-rounded bytes of [addr,addr+len) NOT already counted as locked (so re-locking an overlapping range
+// does not double-charge, matching Linux's per-page locked_vm accounting).
+static uint64_t mlk_uncounted_bytes(uint64_t addr, uint64_t len) {
+    if (!len) return 0;
+    uint64_t lo = addr & ~(uint64_t)0xfff, hi = (addr + len + 0xfff) & ~(uint64_t)0xfff;
+    if (hi <= lo) return 0;
+    uint64_t already = 0;
+    for (int i = 0; i < g_nmlk; i++) {
+        uint64_t a = g_mlk[i].lo > lo ? g_mlk[i].lo : lo;
+        uint64_t b = g_mlk[i].hi < hi ? g_mlk[i].hi : hi;
+        if (b > a) already += b - a;
+    }
+    return (hi - lo) - already;
+}
+
+// mlock/mlock2 rlimit gate. Returns 0 if the lock may proceed, else -EPERM (soft limit 0) / -ENOMEM
+// (would exceed). RLIM_INFINITY / unset -> always 0 (legacy best-effort, no enforcement).
+static int mlk_rlimit_gate(uint64_t addr, uint64_t len) {
+    uint64_t lim = mlk_memlock_limit();
+    if (lim == ~0ull) return 0;  // unlimited / unset -> not enforced
+    if (lim == 0) return -EPERM; // can_do_mlock(): no locking allowed at all
+    if (!len) return 0;
+    if (mlk_locked_bytes() + mlk_uncounted_bytes(addr, len) > lim) return -ENOMEM;
+    return 0;
+}
+
+// mlockall(MCL_CURRENT) rlimit gate: the whole mapped address space is about to be wired. Returns 0 /
+// -EPERM (soft limit 0) / -ENOMEM (total mapped bytes exceed the soft limit).
+static int mlk_rlimit_gate_all(void) {
+    uint64_t lim = mlk_memlock_limit();
+    if (lim == ~0ull) return 0;
+    if (lim == 0) return -EPERM;
+    uint64_t total = 0;
+    for (int i = 0; i < g_ngmap; i++)
+        total += g_gmap[i].glen;
+    if (total > lim) return -ENOMEM;
+    return 0;
+}
