@@ -713,9 +713,18 @@ static int svc_mem(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_
             // probe would call unmapped) nor physically mapped host-side. Same regression-free idiom the mremap
             // source validation (case 216) uses: a hot mprotect on the guest's own memory hits gmap_contains
             // (no probe cost, no false ENOMEM); only a genuinely unmapped range is rejected.
+            // NON-PIE: the ET_EXEC image is force-mapped HIGH (addr+g_nonpie_bias, __PAGEZERO forbids the low
+            // 4 GB) but the guest still names its image by the LOW link vaddr -- static glibc's RELRO
+            // mprotect(_dl_protect_relro) passes that low address, which is mapped only at the rebased VA. So
+            // a low-range miss must re-check at nonpie_p(a0) before ENOMEM (inert for PIE: nonpie_p == a0).
             if (!gmap_contains(a0, (uint64_t)a1) && !host_range_mapped((uintptr_t)a0, (size_t)a1)) {
-                G_RET(c) = (uint64_t)(-ENOMEM);
-                break;
+                // (open-coded nonpie_p: dispatch.c defines it AFTER this module in the TU)
+                uint64_t reb = (g_nonpie_lo && a0 >= g_nonpie_lo && a0 < g_nonpie_hi) ? a0 + g_nonpie_bias : a0;
+                if (reb == a0 ||
+                    (!gmap_contains(reb, (uint64_t)a1) && !host_range_mapped((uintptr_t)reb, (size_t)a1))) {
+                    G_RET(c) = (uint64_t)(-ENOMEM);
+                    break;
+                }
             }
             uint64_t glo = a0 & ~(uint64_t)0xfff, ghi = (a0 + a1 + 0xfff) & ~(uint64_t)0xfff;
             if ((int)a2 == PROT_NONE)
