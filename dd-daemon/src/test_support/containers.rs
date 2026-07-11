@@ -934,3 +934,35 @@ async fn published_port_bind_conflict_fails_start() {
     let _ = std::fs::remove_dir_all(&base);
     drop(listener);
 }
+
+// ---- logs -f never drops output for a slow consumer (tails the complete retained log) ----------
+#[tokio::test]
+async fn logs_follow_delivers_all_chunks_no_drop() {
+    let app = test_app();
+    seed_container(&app, "logsfollow00", "running").await;
+    let live = crate::model::Live::new();
+    app.inner.lock().await.live.insert("logsfollow00".into(), live.clone());
+    // A producer appends many stdout chunks (far more than any bounded broadcast backlog), then signals
+    // out_done — mirroring a fast guest whose output a slow `logs -f` client would otherwise lag/skip.
+    const N: usize = 500;
+    let producer = {
+        let live = live.clone();
+        tokio::spawn(async move {
+            for i in 0..N {
+                live.log_chunks.lock().await.push((0, 1u8, format!("line{i}\n").into_bytes()));
+                if i % 50 == 0 { tokio::time::sleep(std::time::Duration::from_millis(1)).await; }
+            }
+            let _ = live.out_done.send(true);
+        })
+    };
+    let q: crate::containers::LogsQ =
+        serde_json::from_value(serde_json::json!({"follow":"1","stdout":"1"})).unwrap();
+    let resp = crate::containers::containers_logs(State(app.clone()), Path("logsfollow00".into()), Query(q)).await;
+    let body = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+    let _ = producer.await;
+    // Every produced line must appear exactly once — none skipped.
+    let text = String::from_utf8_lossy(&body);
+    for i in 0..N {
+        assert!(text.contains(&format!("line{i}\n")), "line{i} was dropped from logs -f");
+    }
+}

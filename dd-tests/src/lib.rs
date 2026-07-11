@@ -13,6 +13,7 @@
 //! ])
 //! ```
 
+pub mod bench_gates; // guard helpers for `bin/bench` (BENCH_N / dd-lane / artifact-write gates)
 pub mod cases;
 pub mod diag;
 pub mod scenario; // real-software surface: drive popular images through dd-daemon (Real-oracle vs Dd)

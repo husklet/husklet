@@ -142,10 +142,14 @@ fn ensure_ddjit_dir(repo: &Path) {
 }
 
 fn main() {
-    let n: usize = std::env::var("BENCH_N")
-        .ok()
-        .and_then(|s| s.parse().ok())
-        .unwrap_or(3);
+    // BENCH_N=0 is rejected up front — a zero-repetition run has no samples and the median is a lie.
+    let n: usize = match dd_tests::bench_gates::parse_bench_n(std::env::var("BENCH_N").ok()) {
+        Ok(n) => n,
+        Err(e) => {
+            eprintln!("[bench] FATAL: {e}");
+            std::process::exit(1);
+        }
+    };
     let only: Option<Vec<String>> = std::env::var("BENCH_K").ok().map(|s| {
         s.split(',')
             .map(|x| x.trim().to_string())
@@ -185,11 +189,15 @@ fn main() {
         g_x86.to_string_lossy().into_owned(),
     );
 
-    // Guard: the dd lanes need the built Mach-O engines (run `make jit` first).
+    // Guard: the dd lanes need the built Mach-O engines (run `make jit` first). A missing engine makes
+    // the dd columns blank, so a "passing" bench would be a lie — HARD-fail unless the caller explicitly
+    // opts into a native-only run with BENCH_ALLOW_MISSING_DD=1.
     let have_arm = ddjit::available(Guest::LinuxAarch64);
     let have_x86 = ddjit::available(Guest::LinuxX86_64);
-    if !have_arm || !have_x86 {
-        eprintln!("[bench] WARNING: dd engine(s) not found (arm64={have_arm} x86_64={have_x86}); run `make jit`. dd lanes will be blank.");
+    let allow_missing_dd = std::env::var("BENCH_ALLOW_MISSING_DD").is_ok();
+    if let Err(e) = dd_tests::bench_gates::dd_lanes_verdict(have_arm, have_x86, allow_missing_dd) {
+        eprintln!("[bench] FATAL: {e}");
+        std::process::exit(1);
     }
 
     // Collect four lanes of self-timed medians.
@@ -302,7 +310,12 @@ fn main() {
             cell_ms(qem.ns[i])
         );
     }
-    std::fs::write(&csv_path, &csv).ok();
+    // Report a write failure instead of swallowing it — a silent `.ok()` meant CI believed results were
+    // published that never landed.
+    if let Err(e) = dd_tests::bench_gates::persist_artifact(&csv_path, &csv) {
+        eprintln!("[bench] FATAL: failed to write {}: {e}", csv_path.display());
+        std::process::exit(1);
+    }
 
     let jn = |o: Option<f64>| {
         o.map(|v| format!("{v:.6}"))
@@ -320,7 +333,10 @@ fn main() {
             if row + 1 == order.len() { "" } else { "," });
     }
     json += "  ]\n}\n";
-    std::fs::write(&json_path, &json).ok();
+    if let Err(e) = dd_tests::bench_gates::persist_artifact(&json_path, &json) {
+        eprintln!("[bench] FATAL: failed to write {}: {e}", json_path.display());
+        std::process::exit(1);
+    }
 
     println!("  wrote {}", csv_path.display());
     println!("  wrote {}\n", json_path.display());

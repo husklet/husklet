@@ -70,16 +70,11 @@ pub(crate) async fn containers_logs(
         )
     };
 
-    // For follow we stream new output from the container's `Live.out` broadcast (the same channel
-    // attach/exec fan out from). Subscribe BEFORE snapshotting the buffer so output produced between the
-    // snapshot and the stream start isn't lost -- a chunk straddling that boundary may appear once in
-    // the replay and once live, i.e. dd favors never dropping output over a rare duplicate.
+    // For follow we tail the container's COMPLETE retained `log_chunks` (the unbounded ordered log), NOT
+    // the bounded `Live.out` broadcast: a slow `logs -f` client made the broadcast receiver LAG and skip
+    // chunks (silent live truncation). Polling the retained log from a snapshot index instead never drops
+    // output — the ordered log holds every chunk for the container's life.
     let follow_live = follow && running && live.is_some();
-    let out_sub = if follow_live {
-        live.as_ref().map(|l| l.out.subscribe())
-    } else {
-        None
-    };
     // Follow ends on `out_done` (pumps fully drained), NOT the immediate `exit`, so a fast-exiting
     // guest's final lines aren't lost to the pump race (mirrors the attach/exec hijack writer).
     let exit_sub = live.as_ref().map(|l| l.out_done_rx.clone());
@@ -89,17 +84,18 @@ pub(crate) async fn containers_logs(
     // so stdout/stderr replay interleaved. Once the ordered log is gone (e.g. a daemon restart, where the
     // per-stream persisted buffers are also empty since they aren't serialized) we fall back to an
     // approximate stdout-then-stderr ordering from `cc.stdout`/`cc.stderr`, the best possible then.
-    let chunks: Vec<(i64, u8, Vec<u8>)> = match &live {
+    // `snapshot_len` records how many log_chunks the replay covered, so follow resumes exactly after it.
+    let (chunks, snapshot_len): (Vec<(i64, u8, Vec<u8>)>, usize) = match &live {
         Some(l) => {
             let lc = l.log_chunks.lock().await;
             if !lc.is_empty() {
-                lc.clone()
+                (lc.clone(), lc.len())
             } else {
                 drop(lc);
-                persisted_ordered(persisted_out, persisted_err, start_t, end_t)
+                (persisted_ordered(persisted_out, persisted_err, start_t, end_t), 0)
             }
         }
-        None => persisted_ordered(persisted_out, persisted_err, start_t, end_t),
+        None => (persisted_ordered(persisted_out, persisted_err, start_t, end_t), 0),
     };
 
     // Replay: walk the ordered log. Stream selection and the `--since`/`--until` window are applied
@@ -144,10 +140,11 @@ pub(crate) async fn containers_logs(
         return replay.into_response();
     }
 
-    // Follow: a task emits the replay, then streams each new broadcast chunk until the container exits
-    // (draining any final buffered chunks first) or the client disconnects (the channel send fails).
-    // `until`, when given, also ends the stream once wall-clock passes it.
-    let mut out_rx = out_sub.unwrap();
+    // Follow: a task emits the replay, then tails the retained ordered `log_chunks` from `snapshot_len`
+    // onward — the COMPLETE record, so no chunk is ever skipped for a slow client (the old broadcast path
+    // dropped `Lagged` chunks). Ends when the guest has exited AND all chunks are drained, when the client
+    // disconnects (channel send fails), or when a `--until` bound passes. ~50ms poll latency is invisible.
+    let log_chunks = live.as_ref().unwrap().log_chunks.clone();
     let mut done_rx = exit_sub.unwrap();
     let (tx, rx) = mpsc::channel::<Vec<u8>>(64);
     tokio::spawn(async move {
@@ -155,40 +152,40 @@ pub(crate) async fn containers_logs(
             return;
         }
         let want = |kind: u8| (kind == 1 && want_out) || (kind == 2 && want_err);
+        let mut idx = snapshot_len;
         // If the guest finished AND drained between the snapshot and here, out_done already holds true.
         let mut exited = *done_rx.borrow();
         loop {
-            if exited {
-                // The broadcast Sender stays alive in the live map, so recv() would block forever after
-                // exit; flush whatever is still buffered with try_recv, then end the stream.
-                while let Ok((kind, chunk)) = out_rx.try_recv() {
-                    if want(kind) {
-                        let f = frame_chunk(kind, &chunk, tty, timestamps, now_secs());
-                        if tx.send(f).await.is_err() {
-                            return;
-                        }
+            // Forward every chunk appended since we last looked (the retained log holds them all).
+            let new: Vec<(i64, u8, Vec<u8>)> = {
+                let lc = log_chunks.lock().await;
+                if idx < lc.len() {
+                    lc[idx..].to_vec()
+                } else {
+                    Vec::new()
+                }
+            };
+            for (_, kind, data) in &new {
+                idx += 1;
+                if want(*kind) {
+                    let f = frame_chunk(*kind, data, tty, timestamps, now_secs());
+                    if tx.send(f).await.is_err() {
+                        return;
                     }
                 }
+            }
+            if matches!(until, Some(u) if now_secs() > u) {
                 break;
             }
-            if let Some(u) = until {
-                if now_secs() > u {
-                    break;
-                }
+            if exited {
+                // out_done fired only AFTER the pumps flushed every chunk into log_chunks, and we just
+                // drained them above — nothing more will be appended, so end the stream.
+                break;
             }
             tokio::select! {
                 biased;
-                msg = out_rx.recv() => match msg {
-                    Ok((kind, chunk)) => {
-                        if want(kind) {
-                            let f = frame_chunk(kind, &chunk, tty, timestamps, now_secs());
-                            if tx.send(f).await.is_err() { return; }
-                        }
-                    }
-                    Err(broadcast::error::RecvError::Lagged(_)) => continue,
-                    Err(broadcast::error::RecvError::Closed) => break,
-                },
                 _ = done_rx.changed() => { exited = true; }
+                _ = tokio::time::sleep(std::time::Duration::from_millis(50)) => {}
             }
         }
     });

@@ -125,6 +125,21 @@ fn perf_cmd(ctx: &Ctx, c: &Case, e: Engine) -> Option<(String, (String, Vec<Stri
     Some((guest, cmd))
 }
 
+/// Run one timed-rerun invocation under the `timeout` hang guard and report whether it SUCCEEDED.
+/// Returns `Some(true)` on a clean exit, `Some(false)` on a non-zero exit OR a `timeout` kill (exit 124 —
+/// a hang), and `None` if the guard itself couldn't be spawned. The perf timing loop uses this so a rerun
+/// that starts failing or HANGING is never timed as a fast, healthy run (the old loop discarded status and
+/// had no timeout wrapper, so a regressed/hung invocation could be reported as an acceptable median).
+pub fn run_guarded(prog: &str, args: &[String], secs: u32) -> Option<bool> {
+    let out = Command::new("timeout")
+        .arg(secs.to_string())
+        .arg(prog)
+        .args(args)
+        .output()
+        .ok()?;
+    Some(out.status.success())
+}
+
 /// The native ground-truth command for a guest (mirrors the `Oracle` branch of [`eval`]):
 /// aarch64 runs directly, x86_64 under qemu-user. Program is always `timeout` (hang guard).
 fn oracle_cmd(guest: &str, args: &[String], e: Engine) -> (String, Vec<String>) {
@@ -163,9 +178,16 @@ pub fn run_perf(ctx: &Ctx, c: &Case, e: Engine, n: usize) -> Timed {
             }
         }
     };
+    // Time the JIT invocation n times, but RECHECK success under the hang guard each rerun: a rerun that
+    // fails or hangs must not be reported as a fast, healthy median. A single failed rerun invalidates the
+    // timing (jit_ms -> None) so the perf table can't greenlight a regressed/hung lane.
+    let mut jit_ok = true;
     let jit_ms = median_ms(n, || {
-        let _ = Command::new(&jit.0).args(&jit.1).output();
+        if run_guarded(&jit.0, &jit.1, 25) != Some(true) {
+            jit_ok = false;
+        }
     });
+    let jit_ms = jit_ok.then_some(jit_ms);
     let has_oracle = c.checks.iter().any(|k| matches!(k, Check::Oracle));
     let oracle_ms = has_oracle.then(|| {
         let (op, oa) = oracle_cmd(&guest, &c.args, e);
@@ -175,7 +197,7 @@ pub fn run_perf(ctx: &Ctx, c: &Case, e: Engine, n: usize) -> Timed {
     });
     Timed {
         status,
-        jit_ms: Some(jit_ms),
+        jit_ms,
         oracle_ms,
         has_oracle,
     }

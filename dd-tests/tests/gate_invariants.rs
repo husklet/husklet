@@ -199,3 +199,60 @@ fn test_every_gui_matrix_probe_is_gated_or_documented() {
          table (silent coverage gap) — add them to the matrix or GUI_MATRIX_EXCLUSIONS: {orphans:?}"
     );
 }
+
+// ─── perf/bench gate invariants (the "Perf and Bench Gates Can Lie" finding) ─────────────────────
+// The perf reruns must recheck each timed invocation's SUCCESS under a hang guard, and the bench must
+// reject a zero-repetition run, HARD-fail on missing dd lanes, and report artifact write failures —
+// otherwise CI can pass while measuring nothing / emitting blank dd columns / dropping results.
+
+#[test]
+fn perf_matrix_rechecks_timed_invocation_success() {
+    // A clean command succeeds; a failing command is reported as NOT successful (not silently timed).
+    assert_eq!(dd_tests::run_guarded("true", &[], 5), Some(true), "a clean run is a success");
+    assert_eq!(
+        dd_tests::run_guarded("false", &[], 5),
+        Some(false),
+        "a failing timed rerun must be observed, not discarded"
+    );
+}
+
+#[test]
+fn perf_matrix_hang_guard_wraps_timed_jit_runs() {
+    // A hanging invocation is killed by the timeout guard (exit 124 -> not success) and returns promptly,
+    // so a hung lane can never be timed as a fast, healthy median.
+    let start = std::time::Instant::now();
+    let ok = dd_tests::run_guarded("sleep", &["10".to_string()], 1);
+    assert_eq!(ok, Some(false), "a hang must be caught by the timeout guard, not timed as success");
+    assert!(start.elapsed().as_secs() < 5, "the hang guard must return promptly, not wait out the sleep");
+}
+
+#[test]
+fn bench_rejects_zero_repetitions() {
+    assert!(
+        dd_tests::bench_gates::parse_bench_n(Some("0".to_string())).is_err(),
+        "BENCH_N=0 has no samples and must be rejected, not reach empty-sample median behavior"
+    );
+    assert_eq!(dd_tests::bench_gates::parse_bench_n(Some("4".to_string())).unwrap(), 4);
+}
+
+#[test]
+fn bench_fails_when_dd_lanes_are_missing() {
+    assert!(
+        dd_tests::bench_gates::dd_lanes_verdict(false, true, false).is_err(),
+        "a missing dd engine must HARD-fail the bench (blank dd lanes are a lie), not just warn"
+    );
+    assert!(dd_tests::bench_gates::dd_lanes_verdict(true, true, false).is_ok());
+}
+
+#[test]
+fn bench_persist_reports_write_failures() {
+    // Writing under a path whose parent is a regular file (ENOTDIR) must be reported, not swallowed.
+    let base = std::env::temp_dir().join(format!("dd-benchgate-{}", std::process::id()));
+    std::fs::write(&base, b"x").unwrap();
+    let bad = base.join("bench.csv");
+    assert!(
+        dd_tests::bench_gates::persist_artifact(&bad, "data").is_err(),
+        "a failed artifact write must be reported so CI doesn't think results were published"
+    );
+    let _ = std::fs::remove_file(&base);
+}
