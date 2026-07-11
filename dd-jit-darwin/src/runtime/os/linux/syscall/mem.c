@@ -644,6 +644,13 @@ static int svc_mem(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_
             // object -- skip it. Inert for every private mapping (the fast-path gate stays 0).
             if ((a3 & 0x01) && !(a3 & 0x20) && !off_emul && (int)a4 >= 0)
                 futex_shared_register((uint64_t)r, (uint64_t)a1, (int)a4, (uint64_t)a5);
+            // mlockall(MCL_FUTURE): a mapping created while future-locking is armed must be wired resident on
+            // creation (Linux mm/mlock.c). Best-effort (a RLIMIT_MEMLOCK refusal leaves it pageable); the
+            // mlk_add records it so /proc Locked:/VmLck: reports the range even under g_mlock_all reporting.
+            if (g_mlock_future) {
+                mlock(r, (size_t)a1 + guard);
+                mlk_add((uint64_t)r, (uint64_t)a1);
+            }
             // DONTNEED anon registry: record PRIVATE-ANON ranges (incl. the guard tail); for any other
             // (file-backed/shared) mapping, forget overlapping anon coverage -- a MAP_FIXED file map may
             // now sit where anon used to, and we must never anon-remap over it.

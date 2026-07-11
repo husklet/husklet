@@ -561,23 +561,28 @@ static int svc_rare(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64
         }
         G_RET(c) = 0;
         break;
-    // mlockall/munlockall. MODEL GAP: macOS has no mlockall(2), so we CANNOT actually wire the process's
-    // pages -- the lock STATE is only tracked (g_mlock_all) and reported back via /proc VmLck:/smaps Locked:
-    // (LTP munlockall01). We do NOT fake per-page residency here (unlike mlock(2)/228, macOS mlock does wire
-    // and its failure is now surfaced). But we DO validate `flags` exactly as Linux (mm/mlock.c) so a
-    // malformed call fails as it should instead of a blanket success: flags==0, any unknown bit, or
+    // mlockall/munlockall. macOS has no mlockall(2), but it DOES have mlock(2), so we wire the pages for real
+    // over the guest's tracked mappings instead of only tracking state: MCL_CURRENT host-mlocks every current
+    // guest range (mlk_wire_current); MCL_FUTURE arms g_mlock_future so each fresh mmap (mem.c case 222) is
+    // wired on creation. The lock STATE stays reported via /proc VmLck:/smaps Locked: (g_mlock_all; LTP
+    // munlockall01). `flags` is validated exactly as Linux (mm/mlock.c): flags==0, any unknown bit, or
     // MCL_ONFAULT without MCL_CURRENT|MCL_FUTURE -> EINVAL. (MCL_CURRENT=1 MCL_FUTURE=2 MCL_ONFAULT=4.)
+    // RESIDUAL: a range the host mlock refuses (RLIMIT_MEMLOCK) is left pageable and the call still succeeds
+    // (Linux would ENOMEM) -- best-effort wiring with honest per-range residency; see syscall-compat.md.
     case 230: {
         unsigned f = (unsigned)a0, known = 1u | 2u | 4u;
         if (f == 0 || (f & ~known) || ((f & 4u) && !(f & (1u | 2u)))) {
             G_RET(c) = (uint64_t)(-EINVAL);
             break;
         }
+        if (f & 1u) mlk_wire_current();  // MCL_CURRENT: wire every existing mapping resident now
+        if (f & 2u) g_mlock_future = 1;  // MCL_FUTURE: wire mappings created from here on (mem.c case 222)
         g_mlock_all = 1;
         G_RET(c) = 0;
         break;
     }
     case 231:
+        mlk_unwire_all(); // drop the real host wiring before clearing the tracked state
         mlk_reset();
         G_RET(c) = 0;
         break;

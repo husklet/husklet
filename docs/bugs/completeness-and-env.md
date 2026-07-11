@@ -24,7 +24,7 @@ This is the standing hunt for unhandled subcases, silent corruption, badly handl
 | tests | completeness suite is curated, not exhaustive | hidden subform bugs pass | [jit-and-opcodes.md](jit-and-opcodes.md#opcode-completeness-is-still-curated-not-exhaustive) |
 | sentry/ipc | `DDJIT_UNTRUSTED` SCM_RIGHTS + eventfd loses wakeups (SKIPPED — deep, cross-process) | dense fd passing can drop events or leave child failure | [this file](#ddjit_untrusted-scm_rights-eventfd-loses-events) |
 | auxv/page | aarch64 `AT_PAGESZ` exposes host 16K page size | allocators and page-size probes see non-Linux ABI | [syscall-compat.md](syscall-compat.md#aarch64-at_pagesz-exposes-host-page-size) |
-| fcntl | `F_SETLEASE` / `F_NOTIFY` fake success | callers believe coordination/invalidation was armed | [syscall-compat.md](syscall-compat.md#f_setlease-f_notify-return-success-without-arming-anything) |
+| fcntl | `F_SETLEASE` lease-break signal not delivered (residual; `F_NOTIFY` now kqueue-backed, `F_SETLEASE` state/validation fixed) | a lease holder is not notified of a conflicting open | [syscall-compat.md](syscall-compat.md#f_setlease-lease-break-signal-not-delivered-residual) |
 | exec env | `envp=NULL` leaks defaults/stale env (SKIPPED — default-injection entanglement) | empty-env execs receive unexpected variables | this file |
 | exec env | newline-containing env values split across exec (FIXED 2026-07-10) | silent environment corruption | this file |
 

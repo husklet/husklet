@@ -66,37 +66,60 @@ Verification:
 
 Run the existing `AT_PAGESZ` completeness probe under aarch64 and compare with native Linux/qemu oracle.
 
-## `F_SETLEASE` / `F_NOTIFY` Return Success Without Arming Anything
-
-Priority: P2
-Impact: file coordination and invalidation probes receive fake support
-Confidence: High
-
-Evidence:
-
-- `F_SETLEASE` / `F_NOTIFY` return success while comments state they arm nothing: `dd-jit-darwin/src/runtime/os/linux/syscall/io.c:1185`.
-
-Why this is bad:
-
-Software using leases or dnotify for coordination can believe it has exclusive notifications or invalidation when no such mechanism is active.
-
-Verification:
-
-Add a lease/dnotify probe that arms the feature, mutates the file from a second process, and asserts Linux-visible behavior rather than just syscall return value.
-
-## `mlockall` Tracks State But Does Not Wire Pages
+## `F_SETLEASE` Lease-Break Signal Not Delivered (residual)
 
 Priority: P3
-Impact: realtime and memory-residency probes can overestimate guarantees
+Impact: a lease holder is not notified when another guest process opens the leased file
 Confidence: High
 
-Evidence:
+Status: PARTIAL — `F_NOTIFY` (dnotify) is now fully emulated; `F_SETLEASE` argument
+validation + state tracking is now Linux-consistent; only the cross-process lease *break*
+signal remains unimplemented.
 
-- Runtime comments state `mlockall` cannot wire process pages and only tracks state for `/proc`: `dd-jit-darwin/src/runtime/os/linux/syscall/rare.c:510`.
+What is now implemented (`dd-jit-darwin/src/runtime/os/linux/syscall/io.c`):
 
-Why this is bad:
+- `F_NOTIFY` is backed by a real kqueue `EVFILT_VNODE` watch on the directory fd, drained on
+  a lazily-spawned thread that raises the requested signal (an `F_SETSIG` signal, else the
+  `SIGIO` default) in the guest via the same async path POSIX timers/timerfd use. Oracle-diffed
+  vs native aarch64: `arm=0 got_sigio=1` on both. `DN_MULTISHOT` re-arms; a zero mask removes
+  the watch; the watch is torn down on `close()`.
+- `F_SETSIG` / `F_GETSIG` now round-trip a per-fd signal (they were previously forwarded to the
+  macOS `fcntl`, whose command numbering diverges).
+- `F_SETLEASE` validates exactly like Linux: bad arg → `EINVAL`; non-regular file → `EINVAL`;
+  `F_RDLCK` on a writable fd → `EAGAIN`. The lease type is tracked per fd and round-trips
+  through `F_GETLEASE`. Oracle-diffed vs native aarch64 (byte-identical):
+  `set_wr=0 get1=1 set_un=0 get2=2 set_rd=-1 get3=2 bad_einval=1 pipe_einval=1`.
 
-Programs using `mlockall` for latency control can receive success-like state while pages are still pageable by the host. This is mainly a documented model gap, but it should stay visible because it affects performance-sensitive workloads.
+Residual:
+
+The lease *break* — Linux sends the lease holder a signal (default `SIGIO`) when another process
+opens the file in a conflicting mode, then blocks that opener until the lease is downgraded — is
+NOT delivered. It needs a hook that fires on *another opener* of the same file; macOS offers no
+rootless vfs open-intercept across the emulated guest's process tree. The `F_WRLCK` "sole opener"
+precondition is likewise not enforced (dd cannot enumerate other openers). Single-holder lease
+state is fully consistent; only conflicting-open notification is missing.
+
+## `mlockall` Best-Effort Under `RLIMIT_MEMLOCK` (residual)
+
+Priority: P3
+Impact: a range the host refuses to wire stays pageable while the call still reports success
+Confidence: High
+
+Status: FIXED (with residual) — `mlockall` now wires pages for real. `MCL_CURRENT` host-`mlock`s
+every currently-mapped guest range; `MCL_FUTURE` arms a flag so each subsequent `mmap` (mem.c
+case 222) is wired on creation; `munlockall` unwires them all. macOS has `mlock(2)` (already used
+by `mlock`/case 228), so residency is genuine, not just `/proc` state. Oracle-diffed vs native
+aarch64 (byte-identical): `rc=0 lck_after_pos=1 b_ok=1 ml=0 mu=0 un=0 lck_end=0 data_ok=1`.
+See `dd-jit-darwin/src/runtime/os/linux/syscall/rare.c` (230/231),
+`dd-jit-darwin/src/runtime/os/linux/syscall/mem.c` (case 222 MCL_FUTURE),
+`dd-jit-darwin/src/runtime/os/linux/container/vfs/gmap.c` (`mlk_wire_current`/`mlk_unwire_all`).
+
+Residual:
+
+Wiring is best-effort: a range the host `mlock` declines (e.g. `RLIMIT_MEMLOCK` exhausted) is left
+pageable and the call still returns success, where Linux would fail the whole `mlockall` with
+`ENOMEM`. The wired ranges are real and `/proc` `VmLck:`/`Locked:` reporting is honest; only the
+all-or-nothing failure mode differs.
 
 ## aarch64 4K Subpage `munmap` Returns `EINVAL`
 
@@ -245,26 +268,3 @@ Linux/qemu: exec_noexec outcome=fault sig=11 code=2 addr_delta=0
 dd:         exec_noexec outcome=exec_ok ret=42
 ```
 
-## `renameat2(RENAME_WHITEOUT)` Silently Becomes Plain Rename
-
-Priority: P2
-Impact: overlay-style whiteout operations lose the source whiteout marker
-Confidence: High
-
-Verification status: Proven in isolated worktree `/Users/x/dd/dd-audit-runtime-fs-syscalls-BR-20260710`.
-
-Evidence:
-
-- `RENAME_WHITEOUT` is accepted as a valid flag: `dd-jit-darwin/src/runtime/os/linux/syscall/fs.c:1203`.
-- Only `NOREPLACE` and `EXCHANGE` are translated into host rename flags: `dd-jit-darwin/src/runtime/os/linux/syscall/fs.c:1230`.
-
-Why this is bad:
-
-Linux `RENAME_WHITEOUT` creates a source whiteout while renaming. dd reports success but performs a plain rename, removing the source and losing overlayfs semantics.
-
-Observed proof:
-
-```text
-Linux/qemu: rejected=0 src_exists=1 src_chr=1 dst_exists=1 errno=0
-dd:         rejected=0 src_exists=0 src_chr=0 dst_exists=1 errno=0
-```
