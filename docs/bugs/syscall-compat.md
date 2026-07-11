@@ -47,34 +47,6 @@ Verification:
 
 Run an untrusted-mode probe that sets `FD_CLOEXEC` on a pipe, execs, and verifies the peer observes EOF.
 
-## Seccomp Filter Install Reports Success But Does Not Enforce
-
-Priority: P1
-Impact: feature probes and self-sandboxed software run under false syscall policy
-Confidence: High
-
-Verification status: Proven in isolated worktree `/Users/x/dd/dd-verify-4b`.
-
-Evidence:
-
-- `seccomp()` accepts filter installs as a no-op: `dd-jit-darwin/src/runtime/os/linux/syscall/rare.c:77`.
-- `PR_SET_SECCOMP` also accepts strict/filter modes: `dd-jit-darwin/src/runtime/os/linux/syscall/proc.c:1379`.
-
-Why this is bad:
-
-Software can install a filter, receive success, and then continue executing syscalls that the filter would block on Linux. This is a compatibility and probe-truth problem even when security is not the focus.
-
-Isolated proof:
-
-PoC `seccomp_filter_getpid.c` was added in `/Users/x/dd/dd-verify-4b`. Native Linux aarch64 blocks `getpid` with `EPERM`; dd reports install success and still allows `getpid`.
-
-Observed:
-
-```text
-jit: blocked=0 pid=67906 errno=0
-native: blocked=1 pid=-1 errno=1
-```
-
 ## aarch64 `AT_PAGESZ` Exposes Host Page Size
 
 Priority: P2

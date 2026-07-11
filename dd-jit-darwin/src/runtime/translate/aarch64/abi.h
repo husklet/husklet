@@ -22,6 +22,12 @@
 #define G_A5(c) ((c)->x[5])
 #define G_RET(c) ((c)->x[0])
 
+// seccomp seam: the NATIVE audit arch + the RAW guest syscall number the seccomp cBPF program is run
+// against (os/linux/seccomp.c builds struct seccomp_data). aarch64's ABI numbers are already the native
+// ones, so G_SECCOMP_NR is just x8. AUDIT_ARCH_AARCH64 = EM_AARCH64(183) | __AUDIT_ARCH_64BIT | _LE.
+#define G_SECCOMP_ARCH 0xC00000B7u
+#define G_SECCOMP_NR(c) ((int)(uint32_t)(c)->x[8])
+
 // Engine seam: the shared jit/cache.c hashes the guest PC as (gpc >> G_GPC_HASH_SHIFT). aarch64 PCs are
 // 4-byte aligned, so shifting out the low 2 bits spreads the map. (Pure tuning constant; value 2 is the
 // historical aarch64 hash, so this keeps the aarch64 engine bit-identical.)

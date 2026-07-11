@@ -15,6 +15,12 @@ pub(super) fn sys_misc() -> Group {
             sy("close-range", "completeness/sys_close_range.c"),
             sy("close-range-flags", "completeness/sys_close_range_flags.c"),
             sy("passcred-badfd", "completeness/sys_passcred_badfd.c"),
+            // seccomp(2) BPF-filter enforcement: a deny-getpid ERRNO filter must actually block getpid
+            // (-1/EPERM) while allowing other syscalls. aarch64-only oracle: the qemu-x86_64 oracle does
+            // not implement seccomp (reports ENOSYS), so it cannot diff the x86 engine's real enforcement.
+            src("seccomp-filter", "completeness/sys_seccomp_filter.c")
+                .only(ARM)
+                .oracle(),
         ],
     )
 }

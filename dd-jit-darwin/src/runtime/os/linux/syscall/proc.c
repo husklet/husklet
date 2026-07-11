@@ -1424,11 +1424,16 @@ static int svc_proc(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64
             G_RET(c) = 2;
             break;
         }
-        // PR_SET_SECCOMP(22): direct seccomp(2) is modeled as an accepted no-op in rare.c. Chromium and
-        // crashpad can use the prctl fallback; accept strict/filter modes the same way so sandbox setup
-        // probes do not abort solely because they used this entry point.
+        // PR_SET_SECCOMP(22): the legacy entry point for seccomp, ENFORCED like the seccomp(2) syscall
+        // (rare.c case 277) via os/linux/seccomp.c. arg2 is the SECCOMP_MODE_* (STRICT=1, FILTER=2 -- note
+        // these differ from seccomp(2)'s op numbers); FILTER takes the struct sock_fprog* in arg3 (a2).
         if ((int)a0 == 22) {
-            G_RET(c) = (a1 == 1 || a1 == 2) ? 0 : (uint64_t)(-EINVAL);
+            if (a1 == 1 /*SECCOMP_MODE_STRICT*/)
+                G_RET(c) = (uint64_t)(int64_t)seccomp_set_strict();
+            else if (a1 == 2 /*SECCOMP_MODE_FILTER*/)
+                G_RET(c) = (uint64_t)(int64_t)seccomp_install_filter(a2, 0);
+            else
+                G_RET(c) = (uint64_t)(-EINVAL);
             break;
         }
         // PR_SET_PTRACER (0x59616d61, "Yama"): Chromium/crashpad allows a specific helper pid to ptrace it

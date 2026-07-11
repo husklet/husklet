@@ -74,17 +74,21 @@ static int svc_rare(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64
     case 427: // io_uring_register(2)
         G_RET(c) = (uint64_t)(-ENOSYS);
         break;
-    // seccomp(2). SECURITY MODEL GAP -- READ THIS: we accept the install as a no-op and return success so a
-    // guest that installs its OWN filter proceeds like on Linux (failing with ENOSYS would break glibc/Go/
-    // systemd/OpenSSH/browsers that treat a failed install as fatal). But we DO NOT actually enforce any BPF
-    // filter: every syscall the guest tried to block/trap/kill is STILL fully serviced by this dispatcher.
-    // This is deliberate (there is no macOS primitive to run the classic-BPF program against our emulated
-    // syscall stream) but it means seccomp provides ZERO sandboxing here -- do not rely on it as a security
-    // boundary; the path-jail / uid model is the real boundary. SET_MODE_STRICT is likewise accepted, not
-    // enforced. (A guest's own allow-all filter -- the common self-sandbox probe -- is thus a faithful pass.)
+    // seccomp(2): ENFORCED. We store the guest's classic-BPF program(s) and run a small cBPF interpreter
+    // against a real struct seccomp_data on every syscall (os/linux/seccomp.c, gated in service()), honouring
+    // the program's return action (ALLOW/ERRNO/KILL_PROCESS/KILL_THREAD/TRAP/TRACE/LOG). SET_MODE_STRICT is
+    // likewise enforced (only read/write/exit/rt_sigreturn). Filters are per-thread, stacked, inherited across
+    // fork and preserved across dd's in-process execve -- matching Linux's SECCOMP_FILTER semantics.
     case 277: { // seccomp(op, flags, args)
         unsigned op = (unsigned)a0;
-        G_RET(c) = (op == 0 /*STRICT*/ || op == 1 /*FILTER*/) ? 0 : (uint64_t)(-EINVAL);
+        if (op == DD_SECCOMP_SET_MODE_FILTER) {
+            G_RET(c) = (uint64_t)(int64_t)seccomp_install_filter(a2, (uint32_t)a1);
+        } else if (op == DD_SECCOMP_SET_MODE_STRICT) {
+            // strict takes no flags/args (SECCOMP_SET_MODE_STRICT): both must be zero, else -EINVAL.
+            G_RET(c) = (a1 || a2) ? (uint64_t)(-EINVAL) : (uint64_t)(int64_t)seccomp_set_strict();
+        } else {
+            G_RET(c) = (uint64_t)(-EINVAL);
+        }
         break;
     }
     // ptrace(2): real in-dd tracer/tracee coordination. dd emulates the ptrace relationship
