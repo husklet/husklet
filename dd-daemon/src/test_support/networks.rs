@@ -209,6 +209,77 @@ async fn flow_network_endpoint_refcount_lifecycle() {
     );
 }
 
+// "Live Network Connect/Disconnect Mutates Daemon State Only" (P2): connect/disconnect on a running
+// container used to update ONLY g.networks — the LIVE per-user-network reach-by-name table the in-engine
+// 127.0.0.11 resolver reads per DNS query (/tmp/.ddbr-<netid>/.names, written per spawn) was left stale,
+// so a connected container was unresolvable to running peers and a disconnected one's name kept resolving
+// until the peer restarted. The handlers now refresh that file on connect AND disconnect, applying the
+// change to the live network. This asserts the file reflects the current endpoint set both ways.
+#[tokio::test]
+async fn live_network_connect_disconnect_refreshes_reach_by_name_table() {
+    let app = test_app();
+    seed_container(&app, "web", "running").await;
+    seed_container(&app, "db", "running").await;
+    let r = crate::networks::networks_create(State(app.clone()), net_create_body("appnet")).await;
+    assert_eq!(r.status(), StatusCode::CREATED);
+
+    // The live names file the engine reads per DNS query, keyed by network id (matches spawn/net.rs).
+    let netid = app
+        .inner
+        .lock()
+        .await
+        .networks
+        .iter()
+        .find(|n| n.name == "appnet")
+        .unwrap()
+        .id
+        .clone();
+    let names_path = format!("/tmp/.ddbr-{}/.names", &netid[..netid.len().min(40)]);
+    let _ = std::fs::remove_file(&names_path); // start clean (shared /tmp path)
+
+    // Connect web then db — each connect must (re)write the live table with the CURRENT endpoint set.
+    for c in ["web", "db"] {
+        let r = crate::networks::network_connect(
+            State(app.clone()),
+            Path("appnet".into()),
+            net_attach_body(c),
+        )
+        .await;
+        assert_eq!(r.status(), StatusCode::OK);
+    }
+    let after_connect =
+        std::fs::read_to_string(&names_path).expect("connect must WRITE the live reach-by-name file");
+    assert!(
+        after_connect.contains("web"),
+        "a connected container becomes resolvable to live peers: {after_connect:?}"
+    );
+    assert!(
+        after_connect.contains("db"),
+        "the second connect refreshes the whole endpoint set: {after_connect:?}"
+    );
+
+    // Disconnect db — the live table is rewritten WITHOUT db, so its stale name stops resolving at once.
+    let r = crate::networks::network_disconnect(
+        State(app.clone()),
+        Path("appnet".into()),
+        net_attach_body("db"),
+    )
+    .await;
+    assert_eq!(r.status(), StatusCode::OK);
+    let after_disc = std::fs::read_to_string(&names_path)
+        .expect("disconnect must REWRITE the live reach-by-name file");
+    assert!(
+        after_disc.contains("web"),
+        "the still-attached peer stays resolvable: {after_disc:?}"
+    );
+    assert!(
+        !after_disc.contains("db"),
+        "the disconnected container's stale name is gone for live peers: {after_disc:?}"
+    );
+
+    let _ = std::fs::remove_file(&names_path);
+}
+
 // ---- FLOW 4: duplicate net (409), predefined delete (403), prune selectivity -----------------
 // docker: creating a network name twice is a 409; the predefined bridge/host/none can never be
 // removed (403); `network prune` reclaims ONLY empty user networks — never a predefined one, never

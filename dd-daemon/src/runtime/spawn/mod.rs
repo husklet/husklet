@@ -7,6 +7,7 @@ mod spec;
 mod tmpfs;
 
 pub(crate) use live::*;
+pub(crate) use net::write_net_names;
 pub(crate) use tmpfs::*;
 use spec::*;
 

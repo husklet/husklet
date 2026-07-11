@@ -7,7 +7,7 @@ use super::*;
 /// container launched (its `/etc/hosts` snapshot, seeded once at start, can't see it). The `.40s`
 /// truncation matches the engine's `snprintf` for `DD_NETBR`, so the path byte-matches what the engine
 /// computes. Best-effort: never fail a spawn on an I/O error.
-pub(super) fn write_net_names(netid: &str, endpoints: &HashMap<String, Endpoint>) {
+pub(crate) fn write_net_names(netid: &str, endpoints: &HashMap<String, Endpoint>) {
     let dir = format!("/tmp/.ddbr-{}", &netid[..netid.len().min(40)]);
     let _ = std::fs::create_dir_all(&dir); // the engine also mkdir 0700's this; either creating it is fine
     let mut body = String::new();

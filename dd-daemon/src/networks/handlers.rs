@@ -160,6 +160,9 @@ pub(crate) async fn network_connect(
         .unwrap_or_default();
     join_network(&mut g.networks, &net_name, &cid, &cname);
     save_state(&g, &a.state_path);
+    // Apply the change to the LIVE network, not just daemon bookkeeping: refresh the per-user-network
+    // reach-by-name table so the newly-attached endpoint is resolvable to running peers at once.
+    refresh_live_net_names(&g, &net_name);
     // `network/connect` so event mirrors track endpoint attach (Actor is the network; the attached
     // container id is an attribute, mirroring docker's connect/disconnect events).
     crate::events::emit_event(
@@ -197,6 +200,9 @@ pub(crate) async fn network_disconnect(
         leave_network(n, &cid);
     }
     save_state(&g, &a.state_path);
+    // Apply to the LIVE network: rewrite the per-user-network reach-by-name table so the disconnected
+    // container's now-stale name stops resolving for running peers immediately (not only after a restart).
+    refresh_live_net_names(&g, &net_name);
     crate::events::emit_event(
         &a.events,
         "network",
@@ -205,6 +211,22 @@ pub(crate) async fn network_disconnect(
         json!({"name": net_name, "container": cid}),
     );
     StatusCode::OK.into_response()
+}
+
+/// Re-emit the LIVE reach-by-name table for a user-defined network after a connect/disconnect, so the
+/// change reaches the in-engine 127.0.0.11 resolvers of running peers AT ONCE — the identical file the
+/// spawn path writes per container start (`/tmp/.ddbr-<netid>/.names`, one `ip\tname` line per endpoint;
+/// see runtime/spawn/live.rs and runtime/spawn/net.rs). Without this, `network connect`/`disconnect` on a
+/// running container mutated only daemon state: a connected container stayed unresolvable to live peers,
+/// and a disconnected one's stale name kept resolving, until the peer restarted and re-read its snapshot.
+/// Docker withholds embedded-DNS names on the predefined `bridge`, so predefined networks are skipped
+/// (mirrors spawn). A no-op for an unknown name. Best-effort: a write error never fails the API call.
+fn refresh_live_net_names(g: &Inner, net_name: &str) {
+    if let Some(n) = g.networks.iter().find(|n| n.name == net_name) {
+        if !is_predefined(&n.name) {
+            crate::runtime::write_net_names(&n.id, &n.endpoints);
+        }
+    }
 }
 
 /// `POST /networks/prune` — `docker network prune`. Removes user-defined networks with no attached

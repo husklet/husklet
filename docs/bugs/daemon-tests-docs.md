@@ -2,37 +2,6 @@
 
 This file covers daemon architecture, Docker API mismatches, build/test false greens, and stale documentation.
 
-## Live Network Connect/Disconnect Mutates Daemon State Only
-
-Priority: P2
-Impact: Docker network API reports success before engine observes change
-Confidence: High
-
-Verification status: Proven at handler/state level in isolated worktree `/Users/x/dd/verify3-dd-worktree`.
-
-Evidence:
-
-- Running container receives network bridge/IP at spawn time through env/config: `dd-daemon/src/runtime/spawn/mod.rs:78`.
-- `network_connect` calls `join_network`, saves state, and returns OK: `dd-daemon/src/networks/handlers.rs:131`.
-- `network_disconnect` calls `leave_network`, saves state, and returns OK: `dd-daemon/src/networks/handlers.rs:155`.
-- Live DNS `.names` files are generated during spawn: `dd-daemon/src/runtime/spawn/live.rs:62`.
-
-Why this is bad:
-
-`docker network connect` on a running container can report success while the running JIT remains on its original network until restart. Disconnect can leave stale names visible to live peers.
-
-Verification:
-
-Start two containers, connect one to a user network after start, test peer DNS/TCP before and after restarting the connected container.
-
-Isolated proof:
-
-```sh
-CARGO_TARGET_DIR=/Users/x/dd/verify3-target cargo test -p dd-daemon --bin dd-daemon live_network_connect_disconnect_only_mutates_network_state -- --nocapture
-```
-
-Result: `1 passed; 0 failed`. The test verifies endpoint membership changes while the running `Live` object is unchanged.
-
 ## Fractional `--cpus` Loses Quota Precision
 
 Priority: P1
