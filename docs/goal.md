@@ -64,3 +64,25 @@ guest process
     -> runs on real Metal / CUDA / wgpu
     -> writes results + completion back into the ring / shared buffer
     -> signals the guest (eventfd/futex wake) -> shim returns to the app
+
+
+
+static void proc_set_chrome_role(char **argv, int ac) {
+    const char *type = proc_argv_type(argv, ac);
+    if (type && type[0])
+        setenv("DD_CHROME_TYPE", type, 1);
+    else
+        unsetenv("DD_CHROME_TYPE");
+    const char *utility = proc_argv_utility_subtype(argv, ac);
+    if (utility && utility[0] && strcmp(utility, "-") != 0)
+        setenv("DD_CHROME_UTILITY_SUBTYPE", utility, 1);
+    else
+        unsetenv("DD_CHROME_UTILITY_SUBTYPE");
+}
+
+static void proc_exit_log_suffix(uint64_t code) {
+    const char *type = getenv("DD_CHROME_TYPE");
+    const char *utility = getenv("DD_CHROME_UTILITY_SUBTYPE");
+    fprintf(stderr, " code=%d type=%s utility=%s\n", (int)code, type && type[0] ? type : "-",
+            utility && utility[0] ? utility : "-");
+}
