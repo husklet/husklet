@@ -23,12 +23,23 @@ below or a broken-oracle artifact (qemu-user lacking a syscall) — see the
   Narrowed (diagnostic run `211107`, `DD_FATALSIG_LOG=1`): no guest process
   dies of a fatal signal; the renderer is fully DORMANT — 100% of a 2s sample
   parked (7 threads in guest FUTEX_WAIT, 2 in the epoll/kevent Mojo pumps)
-  while the browser paints 24 fps. The break is inbound event delivery to
-  child guest processes over Mojo's fd transport (socketpair write → peer
-  epoll wake / data-pipe eventfd), or the sync EstablishGpuChannel reply the
-  renderer blocks on at startup. A recurring `Network service crashed,
-  restarting service.` (engine sees no fatal signal) points at the same
-  channel-level gap. Full context + how-to-run:
+  while the browser paints 24 fps. **The engine's cross-process fd transport is
+  now RULED OUT as the drop** (2026-07-10, branch `render/mojo-delivery`): five
+  deterministic micro-gates reproduce every primitive inbound delivery rides on
+  across a REAL process boundary and ALL pass on both Linux engines —
+  `xproc-inbound` (fork+execve child epoll ← parent socketpair+eventfd write),
+  `zygote-inbound` (SCM_RIGHTS→fork renderer-launch delivery), `xproc-prearm`
+  (EPOLLET delivery of data buffered before the child registered its epoll), and
+  `scm-futex` (SCM_RIGHTS-passed memfd cross-process FUTEX wake, the renderer↔GPU
+  command-buffer pattern the older `futex-shared-key` gate did not cover), plus the
+  pre-existing `scm-eventfd*`. So the socketpair/eventfd/epoll/SCM_RIGHTS/shared-
+  futex-key emulation delivers correctly cross-process. The wall is HIGHER in Mojo:
+  the browser not producing the renderer's inbound traffic (a failed node/invitation
+  handshake step, or sandboxed-renderer bring-up), or the sync EstablishGpuChannel
+  reply. The recurring `Network service crashed, restarting service.` (a clean exit
+  on a failed bootstrap the browser reads as a crash) is the same upstream handshake,
+  not a lost wake. Next: pin it from the Chrome side (Mojo VLOGs — drop
+  `--log-level`), serialized against any live session. Full context + how-to-run:
   [../rendering/README.md](../rendering/README.md).
 - **(Resolved on branch render/chrome-content) engine launch drops libobjc
   fork-safety suppression.** Guest fork() is a real host fork() of a

@@ -132,16 +132,51 @@ content area and the test page's text draws (currently upside-down — see below
   death, engine sees no fatal signal) suggests the same inbound-delivery gap
   hits other utility-process Mojo channels too.
 
-**Next step** (narrowed): the break is INBOUND EVENT DELIVERY TO CHILD GUEST
-PROCESSES over Mojo's fd-based transport (unix socketpair write → peer's
-epoll/kevent wake, and Mojo data-pipe eventfd signaling), or the sync-IPC reply
-path the renderer blocks on at startup (EstablishGpuChannel WaitableEvent →
-futex). Futex keying itself is fixed and single-process proves the rest of the
-raster→IR path. Instrument (worktree-only, do NOT commit trace code) the engine's
-cross-process socketpair/eventfd delivery: browser-side `write()` on the Mojo fd →
-which process/fd the engine routes it to → whether the renderer's epoll gets the
-EPOLLIN edge. Chrome-side `--vmodule=...gpu_channel*` produced no output at
-`--log-level=2` (VLOG suppressed); drop `--log-level` for Chrome-side visibility.
+**RULED OUT (2026-07-10, branch `render/mojo-delivery`): the fd-transport inbound
+delivery is NOT the drop.** The leading hypothesis was that dd loses a cross-process
+Mojo wake (a browser `write()`/eventfd-signal on one end failing to wake a child
+parked in `epoll_wait`/`FUTEX_WAIT` on the peer end — the same per-process-state
+class as the old VA-keyed futex bug). Five deterministic micro-gates now reproduce
+every primitive that inbound delivery rides on across a REAL process boundary, and
+ALL pass on both Linux engines (`dd-tests -- xproc-inbound zygote-inbound
+xproc-prearm scm-futex`, plus the pre-existing `scm-eventfd*`):
+
+- `xproc-inbound` — a fork+**execve** child parked in `epoll_wait`; the parent
+  writes a SEQPACKET-socketpair message + signals an eventfd. Both wake the child's
+  epoll and carry the correct payload (msg + eventfd counter). This is the exact
+  browser→renderer direction and the exact fork+exec boundary Chrome uses; the older
+  `scm-eventfd` gate only tested the OPPOSITE direction (parent epolls, child writes).
+- `zygote-inbound` — the renderer LAUNCH path: a channel end + eventfd are handed to
+  a pre-existing zygote via **SCM_RIGHTS**, which `fork()`s the renderer that inherits
+  them; the browser then writes inbound. Delivered correctly to the grandchild.
+- `xproc-prearm` — **EPOLLET** (edge-triggered) delivery of a socket message +
+  eventfd signal the parent buffered BEFORE the child registered its epoll (Chrome
+  routinely sends a child's bootstrap before the child's loop starts). The
+  registration-time readiness prime (`g_ep_prime`, event.c) fires cross-process.
+- `scm-futex` — an **SCM_RIGHTS-passed memfd** (not fork-inherited) mmap'd at an
+  independent VA in a zygote-forked grandchild; a `FUTEX_WAKE` through the browser's
+  own mapping releases the grandchild's `FUTEX_WAIT` (the renderer↔GPU command-buffer
+  wakeup). The `futex-shared-key` gate only covered a fork-inherited memfd.
+
+So the eventfd counter (MAP_SHARED, keyed by counter slot / SCM_RIGHTS meta trailer),
+the SEQPACKET-DGRAM socketpair, epoll/kqueue readiness (incl. the edge-prime), the
+SCM_RIGHTS fd/handle passing, and the shared-object futex key all cross real dd
+process boundaries correctly. **The multi-process content-blank wall is therefore
+NOT the engine's cross-process fd-transport emulation.** It is higher in the Mojo
+stack — the browser never producing the renderer's inbound traffic (a failed node/
+invitation handshake step upstream, or the sandboxed-renderer bring-up), or the
+specific sync EstablishGpuChannel reply the renderer blocks on. The recurring
+`Network service crashed, restarting service.` (a clean exit on a failed bootstrap
+the browser reads as a crash) points at the SAME upstream handshake, not the wake.
+
+**Next step**: pin the higher-layer failure from the CHROME side (the engine
+transport is exonerated). Because a live multi-process run is destructive to any
+concurrent Chrome session (serialize — check for running `ddjit`/`chromium` first),
+coordinate with the live session (e.g. `wall7-live`): drop `--log-level` so Mojo
+VLOGs surface, add `--vmodule=node_controller=2,node_channel=2,broker*=2,
+gpu_channel*=2` to see WHICH bootstrap step the renderer/network-service stall on,
+and confirm whether the browser ever issues the `write()` to the renderer's channel
+fd at all (if it never writes, the gap is Chrome-internal state, not delivery).
 
 ### Shelved: the PRIME/IOSurface engine change
 A cross-process PRIME/IOSurface bridge was implemented (write IOSurface global id into

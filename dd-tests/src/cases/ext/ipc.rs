@@ -115,6 +115,30 @@ fn ext_ipc() -> Group {
             .out("seqpass_full n=5 data=mojo! trunc=0 ctrunc=0 rights=1 fdbyte=R cred=1 credpid=1 child=1\n"),
         src("seqpacket-passcred-ctrunc", "ext_ipc/ipc_seqpacket_passcred_ctrunc.c")
             .out("seqpass_ctrunc n=4 data=tiny trunc=0 ctrunc=0 controllen=32 cmsgs=1 rights=0 fdbyte=- cred=1 credpid=1 child=1\n"),
+        // Wall-7 (multi-process Chrome content) cross-process Mojo-transport gates. The renderer is
+        // launched over Mojo's fd transport and blocks on INBOUND delivery from the browser/GPU; these
+        // isolate every primitive that delivery rides on across a REAL process boundary (not the
+        // cross-thread / same-VA fork cases the older gates cover). All pass — establishing that dd's
+        // cross-process epoll/eventfd/socketpair/SCM_RIGHTS/futex emulation is NOT the content-blank drop
+        // point (see docs/rendering/README.md §3.2). Diffing directions matters: scm-eventfd has the parent
+        // epoll + child write; these add the child-epoll + parent-write (dormant-renderer) direction.
+        //
+        // fork+execve child parked in epoll_wait; parent writes a socketpair message + signals an eventfd.
+        src("xproc-inbound", "ext_ipc/ipc_xproc_inbound.c")
+            .out("child woke sock=1 msg=BeginFrame efd=1 val=7\nparent done child_exit=0\n"),
+        // The renderer LAUNCH path: a channel end + eventfd are handed to a pre-existing zygote via
+        // SCM_RIGHTS, which FORKS the renderer that inherits them; the browser then writes inbound.
+        src("zygote-inbound", "ext_ipc/ipc_zygote_inbound.c")
+            .out("browser got V sock=1 msg=BeginFrame efd=1 val=7\n"),
+        // Edge-triggered (EPOLLET) delivery of data another process buffered BEFORE the child registered
+        // its epoll (the browser sends a bootstrap message before the child's message loop starts) — the
+        // registration-time readiness prime must fire cross-process.
+        src("xproc-prearm", "ext_ipc/ipc_xproc_prearm.c")
+            .out("child prearm n=2 sock=1 msg=Invitation efd=1 val=5\nparent child_exit=0\n"),
+        // SCM_RIGHTS-passed memfd -> cross-process FUTEX wake (renderer<->GPU command-buffer wakeup): the
+        // futex-shared-key gate covers only a fork-INHERITED memfd; this covers one delivered by SCM_RIGHTS
+        // to an unrelated process, mmap'd at an independent VA.
+        src("scm-futex", "ext_ipc/ipc_scm_futex.c").out("scm_futex xproc_woke=1\n"),
         src("scm-eventfd", "ext_ipc/ipc_scm_eventfd.c").out("scm_eventfd epoll=1 read=8 val=1 child=0\n"),
         src("scm-eventfd-untrusted", "ext_ipc/ipc_scm_eventfd.c")
             .out("scm_eventfd epoll=1 read=8 val=1 child=0\n")
