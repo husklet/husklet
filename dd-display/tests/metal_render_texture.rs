@@ -722,3 +722,71 @@ fn offscreen_render_target_is_stored_bottom_left_like_gl() {
     assert_px_near(&tile, 4, 1, black);
     assert_px_near(&tile, 4, 6, red);
 }
+
+// Regression for "Metal Render Target Texture Id Can Alias Guest Texture Id 1" (gpu-display-sentry.md):
+// the executor reserves texture id 1 for the presented surface (set_render_target). A guest that also
+// creates texture id 1 must get its OWN distinct texture, never an alias of the present RT — otherwise its
+// geometry silently corrupts the presented frame. We clear id 1 (present RT) green, then after the guest
+// creates texture id 1, clear id 1 red: the present surface must stay green (untouched) while the guest's
+// distinct texture goes red. Under the old aliasing (create_texture(1) was a no-op) the red clear landed
+// back on the present surface and this test would see red there.
+#[test]
+fn guest_texture_id_1_does_not_alias_present_render_target() {
+    let Some(ctx) = MetalCtx::new() else {
+        eprintln!("skipping present-alias test: no Metal device");
+        return;
+    };
+    let present = ctx.new_bgra_texture(W, H);
+    let mut be = MetalBackend::new(&ctx);
+    be.set_render_target(1, present.clone());
+
+    let clear_pass = |target: u32, color: [f32; 4]| CommandBuffer {
+        encoder: vec![
+            Enc::BeginRenderPass {
+                color: vec![ColorAttachment {
+                    texture: target,
+                    load: LoadOp::Clear,
+                    clear: color,
+                    store: true,
+                }],
+                depth: None,
+            },
+            Enc::EndRenderPass,
+        ],
+        signal: None,
+    };
+
+    // id 1 → present RT (no guest texture yet): clear it green and confirm it landed on the surface.
+    be.submit(&clear_pass(1, [0.0, 1.0, 0.0, 1.0])).unwrap();
+    assert_px_near(&read_bgra(&ctx, &present), 4, 4, [0, 255, 0, 255]);
+
+    // The guest creates its own texture at the reserved id 1 (a protocol violation we must not honor by
+    // aliasing). This must materialize a DISTINCT texture, not silently no-op onto the present RT.
+    be.create_texture(
+        TextureId(1),
+        &TextureDesc {
+            width: W,
+            height: H,
+            depth: 1,
+            mip_levels: 1,
+            sample_count: 1,
+            dim: TextureDim::D2,
+            format: TextureFormat::Bgra8Unorm,
+            usage: texture_usage::SAMPLED | texture_usage::RENDER_TARGET,
+            label: "guest-tex-1".into(),
+        },
+    )
+    .unwrap();
+
+    // id 1 now resolves to the guest's own texture: clear it red.
+    be.submit(&clear_pass(1, [1.0, 0.0, 0.0, 1.0])).unwrap();
+    // The presented surface must be UNTOUCHED — still green. This is the anti-aliasing guarantee.
+    assert_px_near(&read_bgra(&ctx, &present), 4, 4, [0, 255, 0, 255]);
+    // The guest's distinct texture received the red clear.
+    assert_px_near(
+        &read_bgra(&ctx, be.texture(1).expect("guest texture 1 materialized")),
+        4,
+        4,
+        [0, 0, 255, 255],
+    );
+}
