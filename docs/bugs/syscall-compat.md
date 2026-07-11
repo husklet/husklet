@@ -270,6 +270,8 @@ Linux/qemu: kill_zero ready=1 kill_ok=1 child_got=1
 dd:         kill_zero ready=1 kill_ok=1 child_got=0
 ```
 
+Status (2026-07-10): FIXED — `kill(0, sig)` (signal.c case 129) now delivers to the caller's whole process group WITHIN the container, not just the caller. dd forwards `setpgid` to the host so the host process group mirrors the guest's, but the engine shares its host session/process-group with the launcher and sibling engines, so a raw `kill(-getpgrp())` would escape the container. Instead `container_group_kill()` (vfs.c) enumerates this container's process registry (the same per-container `proc_reg_*` boundary the guest-pid namespace uses — see docs/bugs/syscalls-and-security.md "pidfd Host Pid Authority Leak") and signals each MEMBER whose host process-group matches the caller's, plus the caller itself via the in-process self path. `sig == 0` stays a group existence/permission probe (returns success). Regression test: `sc-kill-zero-group` (guests/syscallbug/kill_zero_group.c) — run in container mode and oracle-diffed vs native aarch64, expecting `child_got=1`.
+
 ## Guest PROT_NONE Mappings Remain Directly Readable
 
 Priority: P1

@@ -439,8 +439,13 @@ static int sched_pid_live(int gpid) {
     if (gpid == 0 || gpid == container_pid()) return 0;
     if (gpid == 1 && g_init_hostpid) return 0; // guest init
     if (thread_tid_alive(gpid)) return 0;      // a live guest thread of THIS process (pd->tid)
-    if (kill((pid_t)gpid, 0) == 0) return 0;
-    return (errno == ESRCH) ? -ESRCH : 0; // EPERM etc. -> the task exists, just not signalable
+    // guest-pid namespace: in container mode a pid this container did not create is NOT visible here -> ESRCH.
+    // The old raw kill((pid_t)gpid, 0) probe leaked the existence of (and let sched_* operate on) ARBITRARY
+    // same-user host processes outside the container -- the same host-pid authority leak the kill/pidfd paths
+    // close via container_host_member. A genuine in-container peer is a registry member -> still resolvable.
+    if (g_init_hostpid) return container_host_member(gpid) ? 0 : -ESRCH;
+    if (kill((pid_t)gpid, 0) == 0) return 0; // bare (non-container) mode: historical host-pid probe
+    return (errno == ESRCH) ? -ESRCH : 0;    // EPERM etc. -> the task exists, just not signalable
 }
 
 // Write a host `struct rusage` into the guest's 144-byte Linux `struct rusage` layout: the field offsets
@@ -1563,6 +1568,9 @@ static int svc_proc(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64
         if (pid > 0) { // parent side of a successful fork: count it for /proc/stat processes + pids.current
             atomic_fetch_add(&g_forks_since_boot, 1);
             atomic_fetch_add(&g_pids_cur, 1);
+            proc_reg_mark_child((int)pid); // guest-pid namespace: register the child NOW (parent-side, race-
+                                           // free) so a kill/pidfd membership check can never ESRCH it before
+                                           // it runs its own proc_reg_after_fork publish
         }
         // CLONE_PARENT_SETTID(0x00100000): store the child's tid (its pid) into the PARENT's *ptid (a2).
         // Mutually exclusive with CLONE_PIDFD (which also uses the ptid slot), so it never clobbers a pidfd.
@@ -2001,6 +2009,11 @@ static int svc_proc(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64
             proc_log_prefix("wait4");
             fprintf(stderr, " req=%d opts=0x%x ret=%d status=0x%x errno=0\n", (int)a0, (int)a2, (int)r, st);
         }
+        // guest-pid namespace: a reaped child that TERMINATED (exited or signalled -- not merely stopped
+        // 0x7f / continued 0xffff) leaves the pid table; drop its container-registry record here so a
+        // signal-killed child (which never ran its own exit cleanup) can't leave a stale membership marker
+        // that a recycled host pid could inherit. Use the host pid `r` before the restore remap below.
+        if (r > 0 && (st & 0xff) != 0x7f && st != 0xffff) proc_reg_reap((int)r);
         // checkpoint restore: report the reaped child under the guest pid the checkpoint recorded, and drop
         // its translation once it is reaped so a future host pid can never alias it (no-op on normal launch).
         if (g_pidmap_n && r > 0) {
@@ -2103,6 +2116,7 @@ static int svc_proc(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64
         if (pid > 0) { // parent side of a successful clone3 fork: count it (see case 220)
             atomic_fetch_add(&g_forks_since_boot, 1);
             atomic_fetch_add(&g_pids_cur, 1);
+            proc_reg_mark_child((int)pid); // guest-pid namespace: parent-side registration (see case 220)
         }
         // clone_args: parent_tid = ca[3]. CLONE_PARENT_SETTID stores the child's tid (pid) into the PARENT's
         // parent_tid (a distinct field from pidfd in clone3, so it never conflicts with CLONE_PIDFD).

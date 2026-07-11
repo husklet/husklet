@@ -177,11 +177,34 @@ static int svc_rare(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64
             G_RET(c) = (uint64_t)(int64_t)(-EINVAL);
             break;
         }
-        if (pid <= 0 || (pid != container_pid() && kill(pid, 0) < 0 && errno == ESRCH)) {
+        if (pid <= 0) {
             G_RET(c) = (uint64_t)(int64_t)(-ESRCH);
             break;
         }
-        int fd = pidfd_make(pid); // kqueue EVFILT_PROC/NOTE_EXIT so poll/epoll on it wakes on the target's exit
+        // guest-pid namespace: `pid` is a GUEST pid. Resolve it to a container-local HOST pid and require
+        // that it name a process INSIDE this container -- a non-member is ESRCH, so a guest can no longer
+        // pidfd_open an arbitrary same-user host pid (a sibling engine / the launcher) and then signal it.
+        // Store the resolved HOST pid so pidfd_send_signal / waitid(P_PIDFD) target the right process
+        // (in particular guest pid 1 -> the init's host pid, not host pid 1 = launchd). Bare (non-container)
+        // mode keeps the historical host-pid existence probe.
+        pid_t hpid;
+        if (pid == container_pid()) {
+            hpid = (pid_t)getpid();
+        } else if (g_init_hostpid) {
+            int h;
+            if (!container_gpid_member((int)pid, &h)) {
+                G_RET(c) = (uint64_t)(int64_t)(-ESRCH);
+                break;
+            }
+            hpid = (pid_t)h;
+        } else {
+            if (kill(pid, 0) < 0 && errno == ESRCH) {
+                G_RET(c) = (uint64_t)(int64_t)(-ESRCH);
+                break;
+            }
+            hpid = pid;
+        }
+        int fd = pidfd_make(hpid); // kqueue EVFILT_PROC/NOTE_EXIT so poll/epoll on it wakes on the target's exit
         if (fd < 0) {
             G_RET(c) = (uint64_t)(-errno);
             break;
@@ -205,10 +228,18 @@ static int svc_rare(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64
             break;
         }
         int sig = (int)a1;
-        if (pid == container_pid() || pid <= 0) {
+        // pidfd_open now stores the resolved HOST pid, so self is our own host pid (not container_pid()).
+        if (pid == (int)getpid() || pid <= 0) {
             if (sig != 0) raise_guest_signal(c, sig);
             G_RET(c) = 0;
         } else {
+            // guest-pid namespace: reject a pidfd whose target is no longer a live member of this container
+            // -> ESRCH (matches a real pidfd to an exited/departed process, and closes the same host-pid
+            // authority leak as kill, case 129 -- the pidfd could otherwise deliver to an arbitrary host pid).
+            if (g_init_hostpid && !container_host_member((int)pid)) {
+                G_RET(c) = (uint64_t)(int64_t)(-ESRCH);
+                break;
+            }
             // Cross-process: translate Linux->macOS signo (the target dd engine listens on the macOS number;
             // see kill, case 129). Untranslated, a divergent signal (SIGUSR1/2, SIGURG, ...) is lost.
             G_RET(c) = kill(pid, sig_l2m(sig)) < 0 ? (uint64_t)(-errno) : 0;
@@ -749,6 +780,12 @@ static int svc_rare(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64
                 *(int *)(gi + 24) = status; // si_status
             }
         }
+        // guest-pid namespace: on an ACTUAL reap of a TERMINATED child (not a WNOWAIT peek, not a stop/
+        // continue report), drop its container-registry record -- see wait4 (case 260) -- so a signal-killed
+        // child leaves no stale membership marker a recycled host pid could inherit.
+        if (si.si_pid != 0 && !(lopt & 0x01000000) &&
+            (si.si_code == CLD_EXITED || si.si_code == CLD_KILLED || si.si_code == CLD_DUMPED))
+            proc_reg_reap((int)si.si_pid);
         // Raw waitid(2) fills arg 5 (struct rusage *) when non-NULL (glibc's wrapper passes NULL, but the
         // raw syscall and some runtimes use it). macOS waitid has no rusage variant, so report the reaped
         // child's accounting best-effort from RUSAGE_CHILDREN in the guest's Linux layout -- leaving the

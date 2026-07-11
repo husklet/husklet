@@ -92,12 +92,23 @@ static int svc_signal(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint
         // broadcast (a0 == self, 0, -1) are left untranslated so the self path below still matches.
         if (g_pidmap_n && (int)a0 > 0 && (int)a0 != container_pid()) a0 = (uint64_t)(unsigned)pidmap_to_live((int)a0);
         else if (g_pidmap_n && (int)a0 < -1) a0 = (uint64_t)(int64_t)(-pidmap_to_live(-(int)a0));
-        if ((int)a0 == container_pid() || (int)a0 == 0 || (int)a0 == -1) {
-            // SELF (kill(self,sig)) or the caller's OWN group / broadcast (kill(0)/kill(-1)): deliver via
-            // our own machinery. dd does not put the engine in its own host session/process-group at
-            // startup, so forwarding kill(0)/kill(-1) to the host would escape the "container" and hit the
-            // launcher (bash / the `mac` bridge / sibling engines). Keeping these on the in-process self
-            // path is safe and matches the raise/abort self-signal + own-group-teardown intent.
+        if ((int)a0 == 0) {
+            // kill(0, sig): Linux signals EVERY process in the CALLER's process group. dd shares its host
+            // session/process-group with the launcher + sibling engines, so a raw kill(-getpgrp()) would
+            // escape the "container"; instead deliver to each container-registry MEMBER that shares our host
+            // process group (which mirrors the guest's -- setpgid is forwarded, case 154), plus ourselves via
+            // the in-process self path. The old code only ever signalled the caller, so job-control shells /
+            // supervisors / group-shutdown logic left sibling children of the group running (kill_zero
+            // child_got=0 vs native 1). sig 0 is a group existence/permission probe -> report success only.
+            if ((int)a1 != 0) {
+                if (g_init_hostpid) container_group_kill(getpgrp(), sig_l2m((int)a1), (int)getpid());
+                raise_guest_signal(c, (int)a1);
+            }
+            G_RET(c) = 0;
+        } else if ((int)a0 == container_pid() || (int)a0 == -1) {
+            // SELF (kill(self,sig)) or broadcast (kill(-1)): deliver via our own machinery. Keeping these on
+            // the in-process self path is safe (see the kill(0) note above on not escaping to the launcher)
+            // and matches the raise/abort self-signal intent.
             raise_guest_signal(c, (int)a1);
             G_RET(c) = 0;
         } else if ((int)a0 < -1) {
@@ -126,6 +137,16 @@ static int svc_signal(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint
         // kill()s pid 1 must reach the init's host process, not host pid 1 (launchd).
         {
             pid_t tgt = ((int)a0 == 1 && g_init_hostpid) ? g_init_hostpid : (pid_t)a0;
+            // guest-pid namespace: a container may only signal a process INSIDE itself. Reject a target that
+            // is not a live member of this container's process registry -> ESRCH. This closes the host-pid
+            // authority leak: without it a guest kill(2)/kill(pid,0) could reach an ARBITRARY same-user host
+            // pid -- a sibling engine (another container), the launcher, or any of the dd user's processes.
+            // Legitimate cross-guest-process signalling still works (a real peer IS a registry member). Gated
+            // on container mode (g_init_hostpid); bare (non-container) mode keeps the historical host model.
+            if (g_init_hostpid && !container_host_member((int)tgt)) {
+                G_RET(c) = (uint64_t)(int64_t)(-ESRCH);
+                break;
+            }
             G_RET(c) = kill(tgt, sig_l2m((int)a1)) < 0 ? (uint64_t)(-errno) : 0;
         }
         break;
