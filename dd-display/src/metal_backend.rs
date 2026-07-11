@@ -588,13 +588,18 @@ impl MetalBackend {
         self.resolve_texture(id).map(|t| &**t)
     }
 
-    /// V-mirror the texcoords of each glyph quad in a glyph-atlas draw, in place in the vertex buffer,
-    /// BEFORE the GPU reads it (the command buffer executes at commit). Chrome/Skia's alpha glyph atlas
-    /// stores each glyph cell vertically inverted relative to the sampling convention, so text renders
-    /// upside-down; flipping V within each quad's own texcoord extent (`vmin+vmax - v`) un-mirrors the
-    /// glyph without moving its cell — solids/UI (different pipelines) are untouched. `tc` = (vertex-buffer
-    /// slot, byte offset of the V component in a vertex, stride, read-kind). Vertices are laid out 4 per
-    /// quad; the drawn span is `[first_vertex, first_vertex+count)`.
+    /// V-mirror the texcoords of a glyph-atlas draw, in place in the vertex buffer, BEFORE the GPU reads it
+    /// (the command buffer executes at commit). Chrome/Skia's alpha glyph atlas is uploaded bottom-up, so
+    /// its glyph strip is stored vertically inverted relative to Metal's top-left sampling convention and
+    /// text renders upside-down. The un-flip is a reflection of the WHOLE strip, so reflect every vertex's
+    /// V about the draw's GLOBAL texcoord extent (`gmin+gmax - v`) — this both flips each glyph upright AND
+    /// moves its cell to the mirror-image row where the inverted upload actually placed it. Reflecting each
+    /// quad about its OWN [vmin,vmax] instead (the naive per-cell flip) leaves the sampled cell unmoved: it
+    /// happens to work for glyphs that span the full strip (e.g. a lone heading) but leaves smaller glyphs
+    /// sampling an empty row — the paragraph-text scramble. When every glyph shares one V-band the global
+    /// reflection reduces to the per-cell flip, so uniform-height draws are unaffected. `tc` = (vertex-
+    /// buffer slot, byte offset of the V component in a vertex, stride, read-kind); vertices are 4 per quad
+    /// and the drawn span is `[first_vertex, first_vertex+count)`. Solids/UI on other pipelines are untouched.
     fn mirror_glyph_texcoords(
         &self,
         buf_id: u32,
@@ -634,28 +639,32 @@ impl MetalBackend {
             }
         };
         let last = first_vertex + count;
+        // Clamp the reflected span to complete quads that fit within the buffer.
+        let mut end = first_vertex;
+        while end + 4 <= last && addr(end + 3) + 4 <= cap {
+            end += 4;
+        }
+        // Pass 1: the draw's global V extent = the glyph strip's reflection axis.
+        let mut gmin = f64::MAX;
+        let mut gmax = f64::MIN;
         let mut v = first_vertex;
-        while v + 4 <= last {
-            // Bounds-check the 4-vertex quad's V slots against the buffer.
-            if addr(v + 3) + 4 > cap {
-                break;
-            }
-            let mut vmin = f64::MAX;
-            let mut vmax = f64::MIN;
-            for j in 0..4 {
-                let val = read(unsafe { base.add(addr(v + j)) } as *const u8);
-                vmin = vmin.min(val);
-                vmax = vmax.max(val);
-            }
-            // Reflect each vertex's V about the quad's own [vmin,vmax] extent — flips the glyph within its
-            // atlas cell (un-mirroring the stored coverage) without moving the cell.
-            let sum = vmin + vmax;
-            for j in 0..4 {
-                let p = unsafe { base.add(addr(v + j)) };
-                let val = read(p as *const u8);
-                write(p, sum - val);
-            }
-            v += 4;
+        while v < end {
+            let val = read(unsafe { base.add(addr(v)) } as *const u8);
+            gmin = gmin.min(val);
+            gmax = gmax.max(val);
+            v += 1;
+        }
+        if gmin > gmax {
+            return;
+        }
+        // Pass 2: reflect every vertex's V about that axis.
+        let sum = gmin + gmax;
+        let mut v = first_vertex;
+        while v < end {
+            let p = unsafe { base.add(addr(v)) };
+            let val = read(p as *const u8);
+            write(p, sum - val);
+            v += 1;
         }
     }
 }
