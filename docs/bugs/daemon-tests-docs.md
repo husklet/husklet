@@ -28,34 +28,5 @@ CARGO_TARGET_DIR=/Users/x/dd/dd-slot-e-target cargo test -p dd-daemon fractional
 
 Result: failed as intended; left `1`, right `0`.
 
-## Gap and Architecture Docs Are Not Auditable
-
-Priority: P2
-Impact: xfail rationale and architecture state drift
-Confidence: High
-
-Evidence:
-
-- Source comments reference `docs/GAPS.md`, `docs/SYSCALLS.md`, `docs/IMAGE-MANIFEST.md`, `docs/TESTING.md`, and `docs/CHARTER.md`.
-- These files are absent in the current `docs/` root (`test -e` returned nonzero for each during this audit).
-- `docs/ENGINE_HOLES.md` says default NaN sign and runtime DF are fixed near the top, but later still lists DIVSS/DIVPS NaN sign and DF as open: `docs/ENGINE_HOLES.md:6`, `docs/ENGINE_HOLES.md:410`, `docs/ENGINE_HOLES.md:414`.
-- Current translator code has `emit_dnan_pre/post` and runtime `cpu->df` handling: `dd-jit-darwin/src/runtime/translate/x86_64/translate.c:872`, `dd-jit-darwin/src/runtime/translate/x86_64/translate.c:385`.
-
-Why this is bad:
-
-Fix agents and reviewers cannot reliably tell which gaps are accepted, fixed, stale, or still open. Xfail comments name a missing taxonomy, and current architecture docs contradict source state.
-
-Suggested improvement:
-
-Create one canonical gap registry with:
-
-- stable id
-- owner
-- affected engines
-- severity
-- source evidence
-- test or xfail case
-- expected Linux/Docker behavior
-- current dd behavior
-- close condition
+<!-- Removed "Gap and Architecture Docs Are Not Auditable": a documentation-process/doc-drift item (missing gap-registry docs, stale ENGINE_HOLES.md), not a runtime defect — no code behavior is wrong. -->
 
