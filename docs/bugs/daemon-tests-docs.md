@@ -116,44 +116,6 @@ Verification:
 
 Run a high-output container with a deliberately slow `logs -f` consumer and compare live stream bytes against buffered logs after exit.
 
-## Perf and Bench Gates Can Lie
-
-Priority: P1
-Impact: performance regressions, hangs, and missing dd lanes can be reported as acceptable benchmark output
-Confidence: High
-
-Verification status: Proven with failing guard tests in isolated worktree `/Users/x/dd/dd-agent4`.
-
-Evidence:
-
-- Perf reruns time JIT invocations while discarding status/output: `dd-tests/src/harness/perf.rs:166`.
-- Timed perf reruns lack the normal timeout wrapper: `dd-tests/src/harness/perf.rs:166`.
-- `BENCH_N=0` is accepted, reaching empty-sample median behavior: `dd-tests/src/bin/bench.rs:145`.
-- Missing dd bench lanes only warn and write blank dd columns: `dd-tests/src/bin/bench.rs:188`, `dd-tests/src/bin/bench.rs:219`.
-- Bench artifact write failures are ignored: `dd-tests/src/bin/bench.rs:305`.
-
-Isolated proof:
-
-```sh
-CARGO_TARGET_DIR=/Users/x/dd/dd-agent4-target cargo test -p dd-tests --test gate_invariants -- --nocapture
-```
-
-The guard suite includes failing tests:
-
-- `perf_matrix_rechecks_timed_invocation_success`
-- `perf_matrix_hang_guard_wraps_timed_jit_runs`
-- `bench_rejects_zero_repetitions`
-- `bench_fails_when_dd_lanes_are_missing`
-- `bench_persist_reports_write_failures`
-
-Why this is bad:
-
-CI can pass when an engine lane is unavailable, a matrix is mostly skipped, or a known gap unexpectedly passes but remains marked xfail.
-
-Verification:
-
-Run the cargo-test path with one or more engines unavailable and inspect whether the suite can pass skip-only or xpass-containing results.
-
 ## Gap and Architecture Docs Are Not Auditable
 
 Priority: P2
