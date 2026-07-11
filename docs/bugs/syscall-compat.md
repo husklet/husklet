@@ -200,33 +200,6 @@ needs a per-instance registration table (fd + events + udata) written on every e
 change deferred to avoid destabilising the epoll fast path; most real runtimes re-register post-fork so this
 is rarely hit.
 
-## Forked Child Loses Inherited Inotify Watch And Can Hang
-
-Priority: P1
-Impact: fork children can lose inherited file-watch state and block
-Confidence: High
-
-Verification status: Proven in isolated worktree `/Users/x/dd/dd-worker-BA2-fd-event-20260710`.
-
-Evidence:
-
-- Fork rebuilds epoll/timerfd/inotify kqueues as fresh empty kqueues: `dd-jit-darwin/src/runtime/os/linux/syscall/event.c:151`.
-- Inotify creates a kqueue and applies `IN_NONBLOCK`: `dd-jit-darwin/src/runtime/os/linux/syscall/event.c:567`.
-- Watches are registered on the original kqueue: `dd-jit-darwin/src/runtime/os/linux/syscall/event.c:589`.
-- Read can block if rebuilt fd loses `O_NONBLOCK`: `dd-jit-darwin/src/runtime/os/linux/syscall/io.c:382`.
-
-Why this is bad:
-
-Linux children inherit inotify instances and watches. dd drops the inherited watch and can also lose nonblocking status, so the child blocks in `read()` instead of receiving the event.
-
-Isolated proof:
-
-```sh
-mac bash -lc 'timeout 5 ddjit-linux_aarch64 scratch-BA2/inotify_fork_watch.aarch64'
-```
-
-Linux observed `child_read=32 errno=0 mask=0x100`; dd produced no child result and was killed by timeout.
-
 ## aarch64 4K Subpage `munmap` Returns `EINVAL`
 
 Priority: P2

@@ -183,6 +183,20 @@ static void kqueue_rebuild_after_fork(void) {
             EV_SET(&kv, 1, EVFILT_TIMER, flg, NOTE_NSECONDS, arm, NULL);
             kevent(fd, &kv, 1, NULL, 0, NULL);
         }
+        // inotify: Linux children inherit the instance AND its watches. The watch fds (O_EVTONLY opens) are
+        // ordinary fds that survive the fork, so re-register each one's EVFILT_VNODE on the rebuilt kqueue and
+        // re-apply O_NONBLOCK (the fresh kqueue is blocking by default -> an inherited nonblock read could hang).
+        if (g_inotify[fd]) {
+            if (g_inotify_nb[fd]) fcntl(fd, F_SETFL, O_NONBLOCK);
+            for (int w = 0; w < 1024; w++) {
+                if (g_inotify_owner[w] != fd) continue;
+                if (fcntl(w, F_GETFD) == -1) continue; // the watch fd itself must still be open
+                struct kevent wkv;
+                EV_SET(&wkv, w, EVFILT_VNODE, EV_ADD | EV_CLEAR,
+                       NOTE_WRITE | NOTE_DELETE | NOTE_RENAME | NOTE_ATTRIB | NOTE_EXTEND, 0, (void *)(intptr_t)w);
+                kevent(fd, &wkv, 1, NULL, 0, NULL);
+            }
+        }
         // the fresh instance carries no registrations: drop this epoll fd's inherited (now-invalid) changelist
         // and prime buffer so a later epoll_ctl/epoll_wait re-arms against the new kqueue, not stale state.
         if (g_ep_chg[fd]) {
@@ -644,7 +658,10 @@ static int svc_event(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint6
         }
         int r = kqueue();
         if (r >= 0) {
-            if (r < DD_NFD) g_inotify[r] = 1;
+            if (r < DD_NFD) {
+                g_inotify[r] = 1;
+                g_inotify_nb[r] = (a0 & 0x800) ? 1 : 0; // remember IN_NONBLOCK for the fork-child kqueue rebuild
+            }
             if (a0 & 0x800) fcntl(r, F_SETFL, O_NONBLOCK);
             // macOS kqueue() defaults FD_CLOEXEC SET; Linux inotify_init1(0) leaves it CLEAR. Set it exactly
             // per IN_CLOEXEC (clearing the kqueue default otherwise) so an inotify fd created without the
