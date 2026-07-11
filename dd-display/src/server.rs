@@ -464,6 +464,26 @@ impl<P: Presenter> Server<P> {
         self.pending_move.take()
     }
 
+    /// Send `xdg_toplevel.close` to the client owning `surface` — the host window manager asked to close
+    /// the native window (the AppKit close button). Per xdg-shell this is a REQUEST to the client, which
+    /// then exits or prompts; the compositor must NOT destroy the surface itself. Returns true if a
+    /// toplevel was found and the event was queued. surface → xdg_surface → xdg_toplevel; opcode 1, no args.
+    pub fn send_close_request(&mut self, surface: u32) -> bool {
+        let xdg = match self.objs.get(&surface) {
+            Some(Obj::Surface(s)) => s.xdg_surface,
+            _ => None,
+        };
+        let Some(xdg) = xdg else {
+            return false;
+        };
+        let Some(tl) = self.find_toplevel(xdg) else {
+            return false;
+        };
+        self.conn.send(&Message::new(tl, 1)); // xdg_toplevel.close (event opcode 1)
+        self.conn.flush().ok();
+        true
+    }
+
     /// The presenter this server drives (read-only; used by the headless self-test to assert pixels).
     pub fn presenter(&self) -> &P {
         &self.present
@@ -3709,6 +3729,28 @@ mod tests {
         assert_eq!(h.server.take_move_request(), Some(10));
         // drained: a second take yields nothing.
         assert_eq!(h.server.take_move_request(), None);
+    }
+
+    #[test]
+    fn close_request_emits_xdg_toplevel_close() {
+        // The AppKit close button maps to xdg_toplevel.close (event opcode 1, no args) on the toplevel
+        // bound to the given wl_surface, so the client exits/prompts instead of being silently orphaned.
+        let mut h = Harness::new();
+        let mut surf = Surface::default();
+        surf.xdg_surface = Some(20);
+        h.server.objs.insert(10, Obj::Surface(surf));
+        h.server.objs.insert(20, Obj::XdgSurface { surface: 10 });
+        h.server
+            .objs
+            .insert(30, Obj::XdgToplevel { xdg_surface: 20 });
+        assert!(h.server.send_close_request(10));
+        let msgs = h.drain();
+        assert!(
+            msgs.iter().any(|(o, op, b)| *o == 30 && *op == 1 && b.is_empty()),
+            "expected xdg_toplevel.close(obj=30, op=1, no args), got {msgs:?}"
+        );
+        // An unknown surface (or one with no toplevel) is a no-op, not a panic.
+        assert!(!h.server.send_close_request(999));
     }
 
     #[test]

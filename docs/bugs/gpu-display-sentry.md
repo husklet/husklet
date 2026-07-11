@@ -76,19 +76,4 @@ Verification:
 
 Submit IR that creates and samples/writes texture id `1` while presenting to an IOSurface and assert it is not aliased with the render target.
 
-## Native Window Close Is Not Propagated
-
-Priority: P2
-Impact: window manager close requests do not reach xdg clients
-Confidence: Medium-high
-
-Evidence:
-
-- AppKit event routing handles native events in `dd-display/src/present_cocoa.rs:1269`.
-- The injection path covers input events: `dd-display/src/present_cocoa.rs:976`.
-- `xdg_toplevel` handling currently covers only title-like requests: `dd-display/src/server.rs:1182`.
-
-Why this is bad:
-
-Clicking the native close button should send `xdg_toplevel.close` so the client can exit or prompt. If the close never reaches the Wayland client, windows can become impossible to close cleanly from the host UI.
 
