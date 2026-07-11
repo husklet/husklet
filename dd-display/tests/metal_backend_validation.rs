@@ -95,6 +95,45 @@ mod macos {
         }).unwrap();
         let _ = TextureId(0); // silence unused import in some cfgs
     }
+
+    /// The executor reserves texture id 1 for the presented surface (`set_render_target`). A guest that
+    /// creates a texture with that same id must get its OWN distinct texture, never a silent alias of the
+    /// present render target. Before the fix, `create_texture` for the reserved id was a no-op, so id 1
+    /// stayed the present RT and the guest's texture aliased the presented surface (corrupting output).
+    #[test]
+    fn guest_create_texture_for_reserved_present_id_is_not_swallowed() {
+        use dd_gpu::ir::{texture_usage, TextureDesc, TextureDim, TextureFormat};
+        use objc2_metal::MTLTexture;
+        let Some(ctx) = ctx() else { return };
+        let mut be = MetalBackend::new(&ctx);
+        // Register a 4x4 present target at the reserved id 1; it resolves at that id.
+        let present = ctx.new_bgra_texture(4, 4);
+        be.set_render_target(1, present.clone());
+        assert_eq!(be.texture(1).map(|t| t.width()), Some(4), "present target resolves at reserved id 1");
+
+        // A guest create for the SAME id must materialize a distinct 16x16 texture, not a present-target no-op.
+        be.create_texture(TextureId(1), &TextureDesc {
+            width: 16,
+            height: 16,
+            depth: 1,
+            mip_levels: 1,
+            sample_count: 1,
+            dim: TextureDim::D2,
+            format: TextureFormat::Bgra8Unorm,
+            usage: texture_usage::SAMPLED | texture_usage::RENDER_TARGET,
+            label: String::new(),
+        }).unwrap();
+
+        // id 1 now resolves to the guest's own 16x16 texture (guest wins its own id) — proving the create
+        // was not swallowed as an alias of the 4x4 present RT.
+        assert_eq!(
+            be.texture(1).map(|t| t.width()),
+            Some(16),
+            "guest create_texture(1) must be a distinct texture, not an alias of the present RT"
+        );
+        // The present target itself is untouched in its own namespace.
+        assert_eq!(present.width(), 4);
+    }
 }
 
 #[cfg(not(target_os = "macos"))]

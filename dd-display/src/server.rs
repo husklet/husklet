@@ -212,6 +212,24 @@ enum Obj {
     Subcompositor,
     Viewporter,
     DataDeviceManager,
+    // wl_data_device: the per-seat clipboard/DnD endpoint. The compositor announces the current
+    // selection to it (data_offer + selection events) and routes wl_data_offer.receive back to the
+    // owning source. Tracked so `set_selection` knows which device(s) to notify.
+    DataDevice,
+    // wl_data_source: a client-owned advertiser of clipboard/DnD content. `mimes` accrues from
+    // wl_data_source.offer(mime_type); when this source becomes the selection, those mimes are
+    // replayed to peers as wl_data_offer.offer events.
+    DataSource {
+        mimes: Vec<String>,
+    },
+    // wl_data_offer: a SERVER-allocated proxy for reading the current selection. `source` is the
+    // wl_data_source it mirrors, so wl_data_offer.receive can be forwarded as wl_data_source.send to
+    // the owner's fd. `stale` is set once a newer selection supersedes this offer (its source may be
+    // gone), so a late receive on it is dropped instead of hitting a dangling source.
+    DataOffer {
+        source: u32,
+        stale: bool,
+    },
     // GPU rung 2: zwp_linux_dmabuf_v1 objects.
     LinuxDmabuf,
     DmabufParams {
@@ -427,7 +445,21 @@ pub struct Server<P: Presenter> {
     pending_move: Option<u32>,
     /// Monotonic clock start, for frame-callback timestamps (see `frame_time_ms`).
     start: std::time::Instant,
+    // ---- wl_data_device (clipboard) ----
+    /// wl_data_device object ids created on this connection. `set_selection` notifies each of them.
+    data_devices: Vec<u32>,
+    /// The client's current selection wl_data_source id (from wl_data_device.set_selection), or None
+    /// when the selection is empty. Reads via wl_data_offer.receive are forwarded to this source.
+    selection: Option<u32>,
+    /// Next SERVER-allocated object id. Wayland reserves ids >= 0xff000000 for server-created objects
+    /// (libwayland `WL_SERVER_ID_START`); wl_data_offer is the one object the compositor allocates and
+    /// announces to the client, so it must draw from this range to avoid colliding with client ids.
+    next_server_id: u32,
 }
+
+/// First id in the server-allocated object namespace (libwayland `WL_SERVER_ID_START`). Client-created
+/// ids live below this; anything the compositor mints (e.g. wl_data_offer) lives at or above it.
+const WL_SERVER_ID_START: u32 = 0xff00_0000;
 
 impl<P: Presenter> Server<P> {
     pub fn new(fd: RawFd, present: P) -> Server<P> {
@@ -454,7 +486,18 @@ impl<P: Presenter> Server<P> {
             external_logical_crop: None,
             present_seq: 0,
             pending_move: None,
+            data_devices: Vec::new(),
+            selection: None,
+            next_server_id: WL_SERVER_ID_START,
         }
+    }
+
+    /// Mint the next server-allocated object id (for a compositor-created wl_data_offer). Stays within
+    /// the `0xff000000+` server range so it can never alias a client-created id.
+    fn alloc_server_id(&mut self) -> u32 {
+        let id = self.next_server_id;
+        self.next_server_id = self.next_server_id.wrapping_add(1).max(WL_SERVER_ID_START);
+        id
     }
 
     /// Drain a pending interactive-move request (from `xdg_toplevel.move`), returning the surface id the
@@ -697,6 +740,9 @@ impl<P: Presenter> Server<P> {
                 Some(Obj::Subcompositor) => "wl_subcompositor",
                 Some(Obj::Viewporter) => "wp_viewporter",
                 Some(Obj::DataDeviceManager) => "wl_data_device_manager",
+                Some(Obj::DataDevice) => "wl_data_device",
+                Some(Obj::DataSource { .. }) => "wl_data_source",
+                Some(Obj::DataOffer { .. }) => "wl_data_offer",
                 Some(Obj::Output) => "wl_output",
                 Some(Obj::Region { .. }) => "wl_region",
                 Some(Obj::LinuxDmabuf) => "zwp_linux_dmabuf",
@@ -737,6 +783,9 @@ impl<P: Presenter> Server<P> {
             Some(Obj::Subcompositor) => self.wl_subcompositor(m),
             Some(Obj::Viewporter) => self.wp_viewporter(m),
             Some(Obj::DataDeviceManager) => self.wl_data_device_manager(m),
+            Some(Obj::DataDevice) => self.wl_data_device(m),
+            Some(Obj::DataSource { .. }) => self.wl_data_source(m),
+            Some(Obj::DataOffer { .. }) => self.wl_data_offer(m),
             Some(Obj::LinuxDmabuf) => self.linux_dmabuf(m),
             Some(Obj::DmabufParams { .. }) => self.dmabuf_params(m),
             Some(Obj::SurfaceAugmenter) => self.surface_augmenter(m),
@@ -2717,16 +2766,211 @@ target_surface={} crop=({},{} {}x{}) backing={}x{} mapped_src=({},{}..{},{}) map
     }
 
     // ---- wl_data_device_manager: create_data_source(0, id), get_data_device(1, id, seat) ----
-    // Clipboard/DnD plumbing. chromium binds this unconditionally; with no clipboard activity there are no
-    // required events, so both child objects are inert (we just track the ids).
+    // Clipboard/DnD entry point. chromium binds this unconditionally. The child objects are real: a
+    // data_source advertises clipboard content, a data_device receives the current selection, and
+    // wl_data_offer bridges a reader's fd back to the source (see wl_data_device / wl_data_source /
+    // wl_data_offer below). DnD (start_drag) is accepted but not driven — there is no host drag source.
     fn wl_data_device_manager(&mut self, m: Message) {
+        let mut r = m.reader();
         match m.opcode {
-            0 | 1 => {
-                let mut r = m.reader();
+            // create_data_source(new_id id)
+            0 => {
                 let id = r.u32();
-                self.objs.insert(id, Obj::Other);
+                self.objs.insert(id, Obj::DataSource { mimes: Vec::new() });
+            }
+            // get_data_device(new_id id, object seat)
+            1 => {
+                let id = r.u32();
+                self.objs.insert(id, Obj::DataDevice);
+                if !self.data_devices.contains(&id) {
+                    self.data_devices.push(id);
+                }
+                // A data_device created while a selection already exists must be told about it (weston
+                // sends the current selection to a newly-bound device with focus). Replay so the client
+                // can paste immediately rather than only after the next copy.
+                if self.selection.is_some() {
+                    self.offer_selection_to(id);
+                }
             }
             _ => {}
+        }
+    }
+
+    // ---- wl_data_source: offer(0, mime), destroy(1), set_actions(2, dnd_actions) [v3] ----
+    // A client's advertiser of clipboard/DnD content. `offer` accrues MIME types; the compositor
+    // replays them as wl_data_offer.offer events when this source is the active selection.
+    fn wl_data_source(&mut self, m: Message) {
+        let mut r = m.reader();
+        match m.opcode {
+            // offer(string mime_type): record an advertised MIME type.
+            0 => {
+                let mime = r.string();
+                if let Some(Obj::DataSource { mimes }) = self.objs.get_mut(&m.object) {
+                    if !mime.is_empty() && !mimes.contains(&mime) {
+                        mimes.push(mime);
+                    }
+                }
+            }
+            // destroy(): the client tears down the source. If it was the current selection, clear it so
+            // a subsequent receive can't be forwarded to a dead source.
+            1 => {
+                if self.selection == Some(m.object) {
+                    self.clear_selection();
+                }
+                self.mark_offers_stale_for(m.object);
+                self.objs.remove(&m.object);
+                self.retire_id(m.object);
+            }
+            // set_actions(uint dnd_actions) [v3, DnD-only]: no host drag source, so record nothing.
+            _ => {}
+        }
+    }
+
+    // ---- wl_data_device: start_drag(0), set_selection(1, source, serial), release(2) [v2] ----
+    fn wl_data_device(&mut self, m: Message) {
+        let mut r = m.reader();
+        match m.opcode {
+            // start_drag(object? source, object origin, object? icon, uint serial): DnD is not driven on
+            // this backend (no host drag session), but the source object stays valid so the client can
+            // still cancel/destroy it cleanly. Nothing to emit.
+            0 => {}
+            // set_selection(object? source, uint serial): make `source` the clipboard owner (source==0
+            // clears it), then advertise the new selection to every data_device on this connection.
+            1 => {
+                let source = r.u32();
+                let _serial = r.u32();
+                if source == 0 {
+                    self.clear_selection();
+                    return;
+                }
+                if !matches!(self.objs.get(&source), Some(Obj::DataSource { .. })) {
+                    return; // unknown / wrong-typed source id: ignore rather than fault the client.
+                }
+                // Any offer minted for the previous selection is now superseded; mark it stale so a late
+                // receive on it is dropped (the client is expected to destroy it after the new offer).
+                self.mark_all_offers_stale();
+                self.selection = Some(source);
+                let devices = self.data_devices.clone();
+                for dev in devices {
+                    self.offer_selection_to(dev);
+                }
+            }
+            // release(): destructor (v2). Drop the device; it no longer receives selection events.
+            2 => {
+                self.data_devices.retain(|d| *d != m.object);
+                self.objs.remove(&m.object);
+                self.retire_id(m.object);
+            }
+            _ => {}
+        }
+    }
+
+    // ---- wl_data_offer: accept(0), receive(1, mime, fd), destroy(2), finish(3)[v3], set_actions(4)[v3] ----
+    // A server-allocated proxy for the current selection. `receive` is the payload transfer: the reader
+    // passes a pipe write-fd, which the compositor hands to the owning wl_data_source as `send(mime, fd)`
+    // so the source writes the clipboard bytes into it.
+    fn wl_data_offer(&mut self, m: Message) {
+        let mut r = m.reader();
+        match m.opcode {
+            // accept(uint serial, string? mime_type): DnD accept handshake; no-op for selection reads.
+            0 => {}
+            // receive(string mime_type, fd fd): forward to the source as wl_data_source.send(mime, fd).
+            1 => {
+                let mime = r.string();
+                // The fd rides SCM_RIGHTS ahead of the request body; take it even on the error paths so a
+                // rejected receive doesn't leak the client's pipe end into this process.
+                let fd = self.conn.take_fd();
+                let source = match self.objs.get(&m.object) {
+                    Some(Obj::DataOffer { source, stale: false }) => Some(*source),
+                    _ => None,
+                };
+                // Only honor a live offer whose source is still the current selection.
+                let target = source.filter(|s| self.selection == Some(*s));
+                match (target, fd) {
+                    (Some(src), Some(fd)) => {
+                        // wl_data_source.send(string mime_type, fd fd) — opcode 1. The fd rides the next
+                        // flush via SCM_RIGHTS; the source client writes the bytes and closes its end.
+                        self.conn.queue_fd(fd);
+                        self.conn.send(&Message::new(src, 1).string(&mime));
+                        // Our received copy of the pipe fd has been dup'd to the peer by SCM_RIGHTS on
+                        // flush; libwayland owns its own copy after receive. We keep ours queued until
+                        // flush consumes it (see Conn::flush) and accept the same small per-transfer fd
+                        // retention as send_keymap — the compositor is per-client and short-lived.
+                    }
+                    (_, Some(fd)) => {
+                        // No live source (stale offer, cleared/changed selection): close the reader's fd
+                        // so its read() sees EOF instead of blocking forever.
+                        unsafe {
+                            libc::close(fd);
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            // destroy(): client is done with this offer. Server-allocated id ⇒ no delete_id (that ack is
+            // only for recycling client-range ids); just drop it.
+            2 => {
+                self.objs.remove(&m.object);
+            }
+            // finish(3)/set_actions(4): DnD-only [v3]; nothing to do for a selection offer.
+            _ => {}
+        }
+    }
+
+    /// Advertise the current selection to one data_device: mint a server-side wl_data_offer, announce it
+    /// via `wl_data_device.data_offer(new_id)`, replay the source's MIME types as `wl_data_offer.offer`,
+    /// then hand it over with `wl_data_device.selection(offer)`. No-op when the selection is empty.
+    fn offer_selection_to(&mut self, device: u32) {
+        let Some(source) = self.selection else {
+            return;
+        };
+        let mimes = match self.objs.get(&source) {
+            Some(Obj::DataSource { mimes }) => mimes.clone(),
+            _ => return,
+        };
+        let offer = self.alloc_server_id();
+        self.objs.insert(offer, Obj::DataOffer { source, stale: false });
+        // wl_data_device.data_offer(new_id id) — opcode 0. Introduces the offer object id to the client.
+        self.conn.send(&Message::new(device, 0).u32(offer));
+        // wl_data_offer.offer(string mime_type) — opcode 0. One per advertised type, before selection.
+        for mime in &mimes {
+            self.conn.send(&Message::new(offer, 0).string(mime));
+        }
+        // wl_data_device.selection(object? id) — opcode 5. Hands the offer to the client as the current
+        // clipboard; the client reads it via wl_data_offer.receive.
+        self.conn.send(&Message::new(device, 5).u32(offer));
+    }
+
+    /// Clear the clipboard: forget the source and tell every data_device the selection is now empty
+    /// (`wl_data_device.selection` with a null offer id).
+    fn clear_selection(&mut self) {
+        self.mark_all_offers_stale();
+        self.selection = None;
+        let devices = self.data_devices.clone();
+        for dev in devices {
+            // wl_data_device.selection(null) — opcode 5, object id 0 ⇒ "no selection".
+            self.conn.send(&Message::new(dev, 5).u32(0));
+        }
+    }
+
+    /// Mark every live wl_data_offer stale so a late `receive` on a superseded offer is dropped rather
+    /// than forwarded to a source that may already be gone.
+    fn mark_all_offers_stale(&mut self) {
+        for obj in self.objs.values_mut() {
+            if let Obj::DataOffer { stale, .. } = obj {
+                *stale = true;
+            }
+        }
+    }
+
+    /// Mark offers backed by a specific (now-destroyed) source stale.
+    fn mark_offers_stale_for(&mut self, source: u32) {
+        for obj in self.objs.values_mut() {
+            if let Obj::DataOffer { source: s, stale } = obj {
+                if *s == source {
+                    *stale = true;
+                }
+            }
         }
     }
 
@@ -3586,6 +3830,86 @@ mod tests {
             }
             out
         }
+
+        /// Deliver a request from the client end carrying a single `SCM_RIGHTS` fd (as a real client
+        /// does for wl_data_offer.receive), then let the server harvest + dispatch it via `pump`.
+        fn req_with_fd(&mut self, object: u32, opcode: u16, body: Message, fd: RawFd) {
+            let m = Message { object, opcode, body: body.body };
+            let mut bytes = Vec::new();
+            m.encode(&mut bytes);
+            let mut iov = libc::iovec {
+                iov_base: bytes.as_ptr() as *mut _,
+                iov_len: bytes.len(),
+            };
+            let mut cbuf = vec![0u8; unsafe { libc::CMSG_SPACE(4) } as usize];
+            let mut mh: libc::msghdr = unsafe { std::mem::zeroed() };
+            mh.msg_iov = &mut iov;
+            mh.msg_iovlen = 1;
+            mh.msg_control = cbuf.as_mut_ptr() as *mut _;
+            mh.msg_controllen = cbuf.len() as _;
+            unsafe {
+                let cmsg = libc::CMSG_FIRSTHDR(&mh);
+                (*cmsg).cmsg_level = libc::SOL_SOCKET;
+                (*cmsg).cmsg_type = libc::SCM_RIGHTS;
+                (*cmsg).cmsg_len = libc::CMSG_LEN(4) as _;
+                *(libc::CMSG_DATA(cmsg) as *mut RawFd) = fd;
+                let n = libc::sendmsg(self.peer, &mh, 0);
+                assert!(n > 0, "sendmsg with fd failed");
+            }
+            self.server.pump().expect("server pump");
+        }
+
+        /// Drain the server's outbound stream, collecting messages AND any `SCM_RIGHTS` fds (as a real
+        /// client's recvmsg would). Returns (messages, received_fds).
+        fn drain_with_fds(&mut self) -> (Vec<(u32, u16, Vec<u8>)>, Vec<RawFd>) {
+            self.server.conn.flush().ok();
+            let mut buf = [0u8; 8192];
+            let mut cbuf = [0u8; 256];
+            let mut iov = libc::iovec {
+                iov_base: buf.as_mut_ptr() as *mut _,
+                iov_len: buf.len(),
+            };
+            let mut mh: libc::msghdr = unsafe { std::mem::zeroed() };
+            mh.msg_iov = &mut iov;
+            mh.msg_iovlen = 1;
+            mh.msg_control = cbuf.as_mut_ptr() as *mut _;
+            mh.msg_controllen = cbuf.len() as _;
+            let n = unsafe { libc::recvmsg(self.peer, &mut mh, 0) };
+            let mut msgs = Vec::new();
+            let mut fds = Vec::new();
+            if n <= 0 {
+                return (msgs, fds);
+            }
+            unsafe {
+                let mut cmsg = libc::CMSG_FIRSTHDR(&mh);
+                while !cmsg.is_null() {
+                    if (*cmsg).cmsg_level == libc::SOL_SOCKET
+                        && (*cmsg).cmsg_type == libc::SCM_RIGHTS
+                    {
+                        let data = libc::CMSG_DATA(cmsg) as *const RawFd;
+                        let payload = (*cmsg).cmsg_len as usize - libc::CMSG_LEN(0) as usize;
+                        for i in 0..payload / std::mem::size_of::<RawFd>() {
+                            fds.push(*data.add(i));
+                        }
+                    }
+                    cmsg = libc::CMSG_NXTHDR(&mh, cmsg);
+                }
+            }
+            let bytes = &buf[..n as usize];
+            let mut pos = 0;
+            while pos + 8 <= bytes.len() {
+                let object = u32::from_ne_bytes(bytes[pos..pos + 4].try_into().unwrap());
+                let word = u32::from_ne_bytes(bytes[pos + 4..pos + 8].try_into().unwrap());
+                let size = (word >> 16) as usize;
+                let opcode = (word & 0xffff) as u16;
+                if size < 8 || pos + size > bytes.len() {
+                    break;
+                }
+                msgs.push((object, opcode, bytes[pos + 8..pos + size].to_vec()));
+                pos += size;
+            }
+            (msgs, fds)
+        }
     }
 
     impl Drop for Harness {
@@ -4061,6 +4385,186 @@ mod tests {
     fn keymap_enables_key_repeat() {
         // The keymap must agree with the repeat_info the compositor advertises (repeat enabled).
         assert!(crate::keymap::US_XKB_KEYMAP.contains("interpret.repeat = True"));
+    }
+
+    // ---- wl_data_device (clipboard) ----
+
+    /// The full selection round-trip: a source advertises a MIME type, set_selection announces a
+    /// server-allocated wl_data_offer to the client's data_device, and wl_data_offer.receive pipes the
+    /// reader's fd back to the source as wl_data_source.send so the clipboard bytes actually flow. This is
+    /// the exact path Chrome's ozone clipboard uses; before this the child objects were inert and the whole
+    /// sequence was silently swallowed.
+    #[test]
+    fn data_device_set_selection_offers_and_receive_pipes_fd() {
+        let mut h = Harness::new();
+        h.server.objs.insert(20, Obj::DataDeviceManager);
+        h.server.objs.insert(4, Obj::Seat);
+
+        // create_data_source(31); get_data_device(30, seat=4); source.offer(mime).
+        h.req(20, 0, body().u32(31));
+        h.req(20, 1, body().u32(30).u32(4));
+        h.req(31, 0, body().string("text/plain;charset=utf-8"));
+        let _ = h.drain();
+
+        // set_selection(source=31, serial=1) — must NOT be silently swallowed.
+        h.req(30, 1, body().u32(31).u32(1));
+        let msgs = h.drain();
+
+        // data_device.data_offer(new_id) — the id must come from the server-allocated range.
+        let data_offer = msgs
+            .iter()
+            .find(|(o, op, _)| *o == 30 && *op == 0)
+            .unwrap_or_else(|| panic!("wl_data_device.data_offer expected, got {msgs:?}"));
+        let offer_id = u32::from_ne_bytes(data_offer.2[0..4].try_into().unwrap());
+        assert!(
+            offer_id >= WL_SERVER_ID_START,
+            "offer id must be server-allocated, got {offer_id:#x}"
+        );
+        // wl_data_offer.offer(mime) on the offer object, before the selection event.
+        let offer_mime = msgs
+            .iter()
+            .find(|(o, op, _)| *o == offer_id && *op == 0)
+            .unwrap_or_else(|| panic!("wl_data_offer.offer expected on {offer_id}, got {msgs:?}"));
+        let offer_body = Message { object: 0, opcode: 0, body: offer_mime.2.clone() };
+        let mut mr = offer_body.reader();
+        assert_eq!(mr.string(), "text/plain;charset=utf-8");
+        // wl_data_device.selection(offer) hands the offer over as the current clipboard.
+        let selection = msgs
+            .iter()
+            .find(|(o, op, _)| *o == 30 && *op == 5)
+            .unwrap_or_else(|| panic!("wl_data_device.selection expected, got {msgs:?}"));
+        assert_eq!(
+            u32::from_ne_bytes(selection.2[0..4].try_into().unwrap()),
+            offer_id
+        );
+
+        // ---- offer → receive fd flow ----
+        let mut pipefd = [0 as RawFd; 2];
+        assert_eq!(unsafe { libc::pipe(pipefd.as_mut_ptr()) }, 0);
+        let (read_fd, write_fd) = (pipefd[0], pipefd[1]);
+        // receive(mime, write_fd) on the offer: the reader hands the compositor its pipe write end.
+        h.req_with_fd(offer_id, 1, body().string("text/plain;charset=utf-8"), write_fd);
+        unsafe {
+            libc::close(write_fd);
+        }
+
+        // The source (31) is asked to fulfil the read via wl_data_source.send(mime, fd).
+        let (smsgs, sfds) = h.drain_with_fds();
+        let send = smsgs
+            .iter()
+            .find(|(o, op, _)| *o == 31 && *op == 1)
+            .unwrap_or_else(|| panic!("wl_data_source.send expected on 31, got {smsgs:?}"));
+        let send_body = Message { object: 0, opcode: 0, body: send.2.clone() };
+        let mut sr = send_body.reader();
+        assert_eq!(sr.string(), "text/plain;charset=utf-8");
+        assert_eq!(sfds.len(), 1, "send must carry exactly one fd, got {sfds:?}");
+        // The source writes the clipboard payload into the pipe and closes.
+        let payload = b"dd-clipboard";
+        let w = unsafe { libc::write(sfds[0], payload.as_ptr() as *const _, payload.len()) };
+        assert_eq!(w, payload.len() as isize);
+        unsafe {
+            libc::close(sfds[0]);
+        }
+        // The reader receives exactly those bytes off its pipe — the clipboard actually transferred.
+        let mut got = [0u8; 32];
+        let n = unsafe { libc::read(read_fd, got.as_mut_ptr() as *mut _, got.len()) };
+        assert!(n > 0, "reader should receive clipboard bytes");
+        assert_eq!(&got[..n as usize], payload);
+        unsafe {
+            libc::close(read_fd);
+        }
+    }
+
+    /// A data_device created while a selection already exists is told about it immediately (so a client
+    /// can paste right after binding), and clearing the selection (set_selection with a null source)
+    /// emits selection(null).
+    #[test]
+    fn data_device_replays_and_clears_selection() {
+        let mut h = Harness::new();
+        h.server.objs.insert(20, Obj::DataDeviceManager);
+
+        // A source with a selection set on a first device.
+        h.req(20, 0, body().u32(31)); // create_data_source(31)
+        h.req(20, 1, body().u32(30).u32(0)); // get_data_device(30)
+        h.req(31, 0, body().string("text/plain")); // offer(mime)
+        h.req(30, 1, body().u32(31).u32(1)); // set_selection(31)
+        let _ = h.drain();
+
+        // A second device bound afterwards must be handed the existing selection without a new copy.
+        h.req(20, 1, body().u32(40).u32(0)); // get_data_device(40)
+        let msgs = h.drain();
+        let off = msgs
+            .iter()
+            .find(|(o, op, _)| *o == 40 && *op == 0)
+            .unwrap_or_else(|| panic!("late data_device must get current selection, got {msgs:?}"));
+        let late_offer = u32::from_ne_bytes(off.2[0..4].try_into().unwrap());
+        assert!(msgs
+            .iter()
+            .any(|(o, op, b)| *o == 40
+                && *op == 5
+                && u32::from_ne_bytes(b[0..4].try_into().unwrap()) == late_offer));
+
+        // Clearing the selection (null source) notifies every device with selection(null).
+        h.req(30, 1, body().u32(0).u32(2)); // set_selection(null)
+        let msgs = h.drain();
+        let null_sel: Vec<u32> = msgs
+            .iter()
+            .filter(|(o, op, _)| (*o == 30 || *o == 40) && *op == 5)
+            .map(|(_, _, b)| u32::from_ne_bytes(b[0..4].try_into().unwrap()))
+            .collect();
+        assert!(
+            !null_sel.is_empty() && null_sel.iter().all(|id| *id == 0),
+            "clearing selection must emit selection(null) to all devices, got {null_sel:?} in {msgs:?}"
+        );
+    }
+
+    /// A receive on a stale offer (its selection was superseded) must not forward to the old source; the
+    /// reader's fd is closed so its read sees EOF instead of hanging.
+    #[test]
+    fn data_offer_receive_after_selection_change_does_not_forward() {
+        let mut h = Harness::new();
+        h.server.objs.insert(20, Obj::DataDeviceManager);
+        h.req(20, 1, body().u32(30).u32(0)); // get_data_device(30)
+        h.req(20, 0, body().u32(31)); // create_data_source(31)
+        h.req(31, 0, body().string("text/plain"));
+        h.req(30, 1, body().u32(31).u32(1)); // set_selection(31)
+        let msgs = h.drain();
+        let first_offer = u32::from_ne_bytes(
+            msgs.iter()
+                .find(|(o, op, _)| *o == 30 && *op == 0)
+                .unwrap()
+                .2[0..4]
+                .try_into()
+                .unwrap(),
+        );
+
+        // A new selection supersedes the first offer.
+        h.req(20, 0, body().u32(32)); // create_data_source(32)
+        h.req(32, 0, body().string("text/plain"));
+        h.req(30, 1, body().u32(32).u32(2)); // set_selection(32)
+        let _ = h.drain();
+
+        // receive() on the now-stale first offer: no wl_data_source.send, and our read end hits EOF.
+        let mut pipefd = [0 as RawFd; 2];
+        assert_eq!(unsafe { libc::pipe(pipefd.as_mut_ptr()) }, 0);
+        let (read_fd, write_fd) = (pipefd[0], pipefd[1]);
+        h.req_with_fd(first_offer, 1, body().string("text/plain"), write_fd);
+        unsafe {
+            libc::close(write_fd);
+        }
+        let (smsgs, sfds) = h.drain_with_fds();
+        assert!(
+            !smsgs.iter().any(|(o, op, _)| *o == 31 && *op == 1),
+            "stale offer must not forward to the old source, got {smsgs:?}"
+        );
+        assert!(sfds.is_empty(), "no fd should be forwarded for a stale offer");
+        // Both the compositor's copy and the reader's write_fd are closed ⇒ read returns EOF (0).
+        let mut got = [0u8; 8];
+        let n = unsafe { libc::read(read_fd, got.as_mut_ptr() as *mut _, got.len()) };
+        assert_eq!(n, 0, "stale receive must close the reader's fd (EOF)");
+        unsafe {
+            libc::close(read_fd);
+        }
     }
 }
 

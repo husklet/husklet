@@ -292,6 +292,12 @@ pub struct MetalBackend {
     buffers: HashMap<u32, Retained<ProtocolObject<dyn MTLBuffer>>>,
     textures: HashMap<u32, Retained<ProtocolObject<dyn MTLTexture>>>,
     texture_descs: HashMap<u32, (u32, u32, u32, u32, u32, u32, u32)>,
+    /// Present render targets injected by the executor via `set_render_target` (the IOSurface-backed
+    /// swapchain image). These live in a SEPARATE namespace from guest-created `textures` so the
+    /// executor↔guest protocol's reserved present id (conventionally 1) can never be aliased or clobbered
+    /// by a guest `create_texture` for the same id: a guest texture wins its own id (resolved first), and
+    /// the present target survives untouched in its own map. See `resolve_texture`.
+    present_targets: HashMap<u32, Retained<ProtocolObject<dyn MTLTexture>>>,
     pipelines: HashMap<u32, Pipeline>,
     /// Per-app shader modules: the guest's GLSL, translated to MSL by the shim and shipped as bytes in
     /// the IR `CreateShader`, compiled here to an `MTLLibrary`. Absent → the builtin vertex-color pipeline.
@@ -381,6 +387,7 @@ impl MetalBackend {
             buffers: HashMap::new(),
             textures: HashMap::new(),
             texture_descs: HashMap::new(),
+            present_targets: HashMap::new(),
             pipelines: HashMap::new(),
             shaders: HashMap::new(),
             samplers: HashMap::new(),
@@ -535,18 +542,40 @@ impl MetalBackend {
 
     /// Pre-register a texture id as the executor's render target (the rung-2 IOSurface wrapped as an
     /// MTLTexture). The guest's `BeginRenderPass` color attachment references this id.
+    ///
+    /// The target is stored in the dedicated `present_targets` namespace, NOT in the guest-visible
+    /// `textures` map: a guest that (per protocol should not, but could) `create_texture`s this same id
+    /// then gets its own distinct texture in `textures`, which `resolve_texture` prefers — so the guest's
+    /// stray geometry lands in its own texture and can never clobber or alias the presented surface.
     pub fn set_render_target(&mut self, id: u32, tex: Retained<ProtocolObject<dyn MTLTexture>>) {
-        self.textures.insert(id, tex);
+        self.present_targets.insert(id, tex);
+        // A prior guest texture under this id would shadow the present target (see resolve_texture); drop
+        // it so the freshly-injected present surface is the one that resolves for the executor's own IR.
+        self.textures.remove(&id);
         self.texture_descs.remove(&id);
         // This id is the presented surface (default framebuffer). Passes that target it are scanned out
         // top-left and must NOT be Y-flipped; only OFFSCREEN render targets are (see `surface_ids`).
         self.surface_ids.insert(id);
     }
 
+    /// Resolve a texture id to its materialized MTLTexture. Guest-created `textures` win over the reserved
+    /// `present_targets` namespace, so a guest that creates a texture with the present id addresses its own
+    /// texture (never the presented surface), while the unmodified present id still resolves to the
+    /// injected render target. This is the single lookup every render/sample/copy site funnels through so
+    /// the present-vs-guest namespacing is enforced uniformly.
+    fn resolve_texture(&self, id: u32) -> Option<&Retained<ProtocolObject<dyn MTLTexture>>> {
+        self.textures.get(&id).or_else(|| self.present_targets.get(&id))
+    }
+
+    /// Whether `id` names any materialized texture (guest-created or a present target).
+    fn has_texture(&self, id: u32) -> bool {
+        self.textures.contains_key(&id) || self.present_targets.contains_key(&id)
+    }
+
     /// Test/debug hook: fetch a materialized texture by id (e.g. to read back an offscreen render target
-    /// such as a Chrome content tile after a render pass).
+    /// such as a Chrome content tile, or a present target registered via `set_render_target`).
     pub fn texture(&self, id: u32) -> Option<&ProtocolObject<dyn MTLTexture>> {
-        self.textures.get(&id).map(|t| &**t)
+        self.resolve_texture(id).map(|t| &**t)
     }
 }
 
@@ -731,7 +760,7 @@ pub fn selftest_shim_ir(irfile: &str, out: &str, w: u32, h: u32, target_id: u32)
         }
         if target_id == 1 {
             readback_png(&ctx, &rt, w, h, out);
-        } else if let Some(tex) = be.textures.get(&target_id) {
+        } else if let Some(tex) = be.texture(target_id) {
             if !write_texture_png(tex, out) {
                 eprintln!("selftest-shim-ir: failed to write texture target {target_id}");
                 std::process::exit(1);
@@ -1513,20 +1542,20 @@ impl GpuBackend for MetalBackend {
     }
 
     fn create_texture(&mut self, id: TextureId, desc: &TextureDesc) -> Result<()> {
-        // The render target is injected via set_render_target (the IOSurface). A create for that same id
-        // is a no-op. Otherwise materialize a real texture honoring the guest's format/usage: a SAMPLED
-        // texture (glmark2 texture scene, Chrome UI) is Shared-storage + ShaderRead so we can blit pixels
-        // into it from a staging buffer (CopyBufferToTexture); anything else falls back to a BGRA target.
+        // Materialize a real texture honoring the guest's format/usage: a SAMPLED texture (glmark2 texture
+        // scene, Chrome UI) is Shared-storage + ShaderRead so we can blit pixels into it from a staging
+        // buffer (CopyBufferToTexture); anything else falls back to a BGRA target.
         // NB: unlike the checked software/mock oracle (which rejects a duplicate id), the streaming
         // executor is intentionally *idempotent* on re-create — the guest re-issues the same create for
         // the same id every frame, and the resource + PSO caches key off the descriptor so a same-desc
         // re-create is a no-op rather than a DuplicateId error. Format handling no longer silently
         // reinterprets unknown formats as BGRA (see tex_pixel_format).
+        //
+        // A guest create for the executor's reserved present id is NO LONGER swallowed: present targets
+        // live in their own `present_targets` namespace (see set_render_target), so this materializes a
+        // distinct guest texture that shadows — never aliases — the presented surface.
         let key = texture_desc_key(desc);
         if self.texture_descs.get(&id.0) == Some(&key) && self.textures.contains_key(&id.0) {
-            return Ok(());
-        }
-        if self.textures.contains_key(&id.0) && !self.texture_descs.contains_key(&id.0) {
             return Ok(());
         }
         use dd_gpu::ir::texture_usage;
@@ -1814,7 +1843,7 @@ impl GpuBackend for MetalBackend {
                     });
                 }
                 BindResource::Texture { id: tid } => {
-                    if !self.textures.contains_key(&tid) {
+                    if !self.has_texture(tid) {
                         return Err(GpuError::UnknownId { kind: "texture", id: tid });
                     }
                     binds.push(Bind::Texture {
@@ -1881,7 +1910,7 @@ impl GpuBackend for MetalBackend {
                     let mut cw = 0u32;
                     let mut chh = 0u32;
                     for (i, ca) in color.iter().enumerate() {
-                        let tex = self.textures.get(&ca.texture).ok_or(GpuError::UnknownId {
+                        let tex = self.resolve_texture(ca.texture).ok_or(GpuError::UnknownId {
                             kind: "texture",
                             id: ca.texture,
                         })?;
@@ -2025,7 +2054,7 @@ impl GpuBackend for MetalBackend {
                                     }
                                 }
                                 1 => {
-                                    if let Some(tex) = self.textures.get(&id) {
+                                    if let Some(tex) = self.resolve_texture(id) {
                                         e.setVertexTexture_atIndex(Some(tex), idx as usize);
                                         e.setFragmentTexture_atIndex(Some(tex), idx as usize);
                                     }
@@ -2130,7 +2159,7 @@ impl GpuBackend for MetalBackend {
                 } => {
                     // Upload a staging buffer's pixels into a sampled texture (glTexImage2D path). Runs on a
                     // standalone blit encoder between passes; a render encoder must not be open here.
-                    let (Some(buf), Some(tex)) = (self.buffers.get(src), self.textures.get(dst))
+                    let (Some(buf), Some(tex)) = (self.buffers.get(src), self.resolve_texture(*dst))
                     else {
                         return Err(GpuError::UnknownId { kind: "buffer/texture", id: *src });
                     };
@@ -2174,7 +2203,7 @@ impl GpuBackend for MetalBackend {
                     if let Some(e) = enc.take() {
                         e.endEncoding();
                     }
-                    let Some(tex) = self.textures.get(texture).cloned() else {
+                    let Some(tex) = self.resolve_texture(*texture).cloned() else {
                         continue;
                     };
                     let tw = tex.width() as u32;
@@ -2287,7 +2316,7 @@ impl GpuBackend for MetalBackend {
                     .map(|d| d.as_millis() as u64)
                     .unwrap_or(0);
                 for id in ids {
-                    if let Some(tex) = self.textures.get(&id) {
+                    if let Some(tex) = self.resolve_texture(id) {
                         dump_texture_png(id, tex, &dir, seq);
                     }
                 }
