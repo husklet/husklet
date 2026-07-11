@@ -25,7 +25,7 @@ This is the standing hunt for unhandled subcases, silent corruption, badly handl
 | sentry/ipc | `DDJIT_UNTRUSTED` SCM_RIGHTS + eventfd loses wakeups (SKIPPED — deep, cross-process) | dense fd passing can drop events or leave child failure | [this file](#ddjit_untrusted-scm_rights-eventfd-loses-events) |
 | auxv/page | aarch64 `AT_PAGESZ` exposes host 16K page size | allocators and page-size probes see non-Linux ABI | [syscall-compat.md](syscall-compat.md#aarch64-at_pagesz-exposes-host-page-size) |
 | fcntl | `F_SETLEASE` lease-break signal not delivered (residual; `F_NOTIFY` now kqueue-backed, `F_SETLEASE` state/validation fixed) | a lease holder is not notified of a conflicting open | [syscall-compat.md](syscall-compat.md#f_setlease-lease-break-signal-not-delivered-residual) |
-| exec env | `envp=NULL` leaks defaults/stale env (SKIPPED — default-injection entanglement) | empty-env execs receive unexpected variables | this file |
+| exec env | `envp=NULL` leaks defaults/stale env (FIXED 2026-07-10) | empty-env execs receive unexpected variables | this file |
 | exec env | newline-containing env values split across exec (FIXED 2026-07-10) | silent environment corruption | this file |
 
 ## Env-Var Inventory Targets
@@ -100,42 +100,6 @@ This env var changes the correctness contract for `fsync`. `none` is useful for 
 Suggested gate:
 
 Add a small fsync/fdatasync policy test that verifies each mode is selected only through explicit launch config or documented env setup, and that the mode is visible in test output.
-
-### `execve(..., envp=NULL)` Leaks A Default Or Stale Environment
-
-Priority: P1
-Impact: empty-env execs receive unexpected variables
-Confidence: High
-
-Verification status: Proven in isolated worktree `/Users/x/dd/dd-slot-e`.
-
-Evidence:
-
-- `exec_forward_env` returns immediately for `envp_guest == NULL`: `dd-jit-darwin/src/runtime/os/linux/syscall/proc.c:18`.
-- The exec path calls it before redirecting to the new image: `dd-jit-darwin/src/runtime/os/linux/syscall/proc.c:1632`.
-- `build_stack` then reads `DD_GUEST_ENV` and default env entries: `dd-jit-darwin/src/runtime/os/linux/elf.c:868`.
-
-Why this is bad:
-
-On Linux, `execve(path, argv, NULL)` produces an empty environment. dd leaves the previous/default guest environment intact, so programs launched as empty-env can see variables they should not.
-
-Status (2026-07-10): SKIPPED — entangled with the engine's default-env injection. The observed `envc=4` is
-exactly the `g_guest_env` defaults (`PATH`,`HOME`,`LANG`,`GLIBC_TUNABLES`) that `build_stack` merges
-unconditionally on EVERY launch/exec, not stale container env. Matching native `envc=0` requires suppressing
-those defaults on a guest-initiated exec, but `GLIBC_TUNABLES=glibc.cpu.aarch64_gcs=0` is load-bearing for the
-re-exec'd aarch64 image (disables Guard Control Stack) — dropping it risks crashing real workloads on a shared
-engine gate. A safe fix needs an exec-vs-initial-launch marker plus a decision on which defaults are
-engine-internal necessities vs guest-visible env; deferred. NOTE: this default-injection also perturbs
-non-NULL execs (a minimal `execve(path,argv,["FOO=bar"])` yields `envc=5` on dd vs `1` on native), so the fix
-should address the general case, not just NULL.
-
-Isolated proof:
-
-```sh
-CARGO_TARGET_DIR=/Users/x/dd/dd-slot-e-target cargo run -p dd-tests -- -e aarch64 exec-null-env
-```
-
-Observed: dd prints `envc=4`; native prints `envc=0`.
 
 ### Typed Launch Path Lists Still Use Delimiter Env Strings
 

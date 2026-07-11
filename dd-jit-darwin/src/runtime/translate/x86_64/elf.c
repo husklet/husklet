@@ -445,6 +445,9 @@ static uint64_t build_stack(int argc, char **argv, struct loaded *lm, uint64_t a
     // execve() escape-encodes records (DD_GUEST_ENV_ESC=1) so a value's own newline isn't mistaken for a
     // record separator -- unescape "\\n"->'\n' and "\\\\"->'\\' after splitting. Mirrors os/linux/elf.c.
     int env_escaped = (getenv("DD_GUEST_ENV_ESC") != NULL);
+    // Guest-initiated execve makes its envp authoritative (exec_forward_env sets DD_GUEST_ENV_EXACT): forward
+    // it verbatim and inject NO fallback defaults, so NULL/curated envp matches Linux. Mirrors os/linux/elf.c.
+    int env_exact = (getenv("DD_GUEST_ENV_EXACT") != NULL);
     if (ge) {
         gecopy = strdup(ge);
         char *save = NULL;
@@ -468,7 +471,7 @@ static uint64_t build_stack(int argc, char **argv, struct loaded *lm, uint64_t a
         }
     }
     int guest_envc = envc;
-    for (int i = 0; g_guest_env[i] && envc < 255; i++) {
+    for (int i = 0; !env_exact && g_guest_env[i] && envc < 255; i++) {
         const char *eq = strchr(g_guest_env[i], '=');
         size_t klen = eq ? (size_t)(eq - g_guest_env[i]) + 1 : 0;
         int dup = 0;

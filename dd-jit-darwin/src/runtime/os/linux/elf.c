@@ -941,6 +941,11 @@ static uint64_t build_stack(int argc, char **argv, struct loaded *lm, uint64_t a
     // record separator -- unescape "\\n"->'\n' and "\\\\"->'\\' after splitting. The daemon-launch path sets
     // DD_GUEST_ENV plain (no marker) and is left byte-for-byte unchanged.
     int env_escaped = (getenv("DD_GUEST_ENV_ESC") != NULL);
+    // A guest-initiated execve makes its envp AUTHORITATIVE (proc.c exec_forward_env sets this): forward
+    // EXACTLY what the guest passed and inject NONE of the engine's fallback defaults below, so an empty
+    // envp yields an empty environment and a curated envp is passed verbatim -- byte-exact with Linux. The
+    // INITIAL container launch never sets this (the daemon's DD_GUEST_ENV path), so defaults still fill gaps.
+    int env_exact = (getenv("DD_GUEST_ENV_EXACT") != NULL);
     if (ge) {
         gecopy = strdup(ge);
         char *save = NULL;
@@ -964,7 +969,7 @@ static uint64_t build_stack(int argc, char **argv, struct loaded *lm, uint64_t a
         }
     }
     int guest_envc = envc; // [0..guest_envc) came from the container; the rest are defaults
-    for (int i = 0; g_guest_env[i] && envc < 255; i++) {
+    for (int i = 0; !env_exact && g_guest_env[i] && envc < 255; i++) {
         // Skip a default whose KEY the container already set: a duplicate "PATH=" would otherwise appear
         // in envp, and shells (bash) honor the LAST occurrence -> the default would shadow the image PATH
         // (this is what made `gosu` unresolvable in the postgres entrypoint). Match on the "KEY=" prefix.

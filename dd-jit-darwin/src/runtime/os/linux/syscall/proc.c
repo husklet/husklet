@@ -12,11 +12,24 @@
 
 // execve env forwarding: serialize the guest's envp array into DD_GUEST_ENV (the "K=V\nK=V..." string
 // build_stack reads when laying out the new process stack), so the guest's actual environment crosses the
-// re-exec. A NULL envp means the guest passed none -> leave DD_GUEST_ENV (the container defaults) intact.
-// Each pointer may be a low non-PIE address, so rebase the array base and every element with nonpie_p(),
-// exactly as the argv loop does. setenv() copies the buffer, so it survives the address-space teardown.
+// re-exec. A guest-initiated exec makes the guest's envp AUTHORITATIVE (like Linux): whatever the guest
+// passes -- including an EMPTY set for envp==NULL -- is EXACTLY what the new program sees. We mark it with
+// DD_GUEST_ENV_EXACT so build_stack injects NONE of the engine's fallback defaults (PATH/HOME/LANG/
+// GLIBC_TUNABLES). Those defaults are only appropriate on the INITIAL container launch (the daemon never
+// sets DD_GUEST_ENV_EXACT); a guest execve that curates its env -- or clears it -- must match Linux, where
+// `execve(path, argv, NULL)` yields an empty environment and `execve(path,argv,["FOO=bar"])` yields exactly
+// one entry. Each pointer may be a low non-PIE address, so rebase the array base and every element with
+// nonpie_p(), exactly as the argv loop does. setenv() copies the buffer, so it survives the teardown.
 static void exec_forward_env(uint64_t envp_guest) {
-    if (!envp_guest) return;
+    if (!envp_guest) {
+        // Linux: NULL envp -> the new program runs with an EMPTY environment. Publish an empty, authoritative
+        // env (do NOT leak the container's stale/default DD_GUEST_ENV) and flag it EXACT so build_stack adds
+        // no defaults -> the guest sees envc==0, byte-exact with the native oracle.
+        setenv("DD_GUEST_ENV", "", 1);
+        setenv("DD_GUEST_ENV_ESC", "1", 1);
+        setenv("DD_GUEST_ENV_EXACT", "1", 1);
+        return;
+    }
     uint64_t *ev = (uint64_t *)nonpie_p(envp_guest);
     size_t cap = 4096, len = 0;
     char *buf = malloc(cap);
@@ -53,7 +66,8 @@ static void exec_forward_env(uint64_t envp_guest) {
         buf[len] = 0;
     }
     setenv("DD_GUEST_ENV", buf, 1);
-    setenv("DD_GUEST_ENV_ESC", "1", 1); // tell build_stack the records are escape-encoded
+    setenv("DD_GUEST_ENV_ESC", "1", 1);   // tell build_stack the records are escape-encoded
+    setenv("DD_GUEST_ENV_EXACT", "1", 1); // guest-initiated exec: this env is authoritative, inject no defaults
     free(buf);
 }
 

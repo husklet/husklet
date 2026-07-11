@@ -19,6 +19,7 @@ pub(super) fn sys_proc() -> Group {
             sy("set-tid-address", "completeness/sys_set_tid_address.c"),
             sy("unshare-setns", "completeness/sys_unshare_setns.c"),
             sy("exec-newline-env", "completeness/exec_newline_env.c"),
+            sy("exec-null-env", "completeness/exec_null_env.c"),
             // procfs fidelity: metadata must agree with the syscalls reporting the same facts.
             sy("pf-status-meta", "completeness/pf_status_meta.c"),
             sy("pf-proc-files", "completeness/pf_proc_files.c"),
