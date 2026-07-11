@@ -12,7 +12,6 @@ This directory is a working inventory of suspicious behavior, bad architecture, 
 | P1 | sentry/compat | untrusted split breaks Linux `EFAULT` compatibility | High | [gpu-display-sentry.md](gpu-display-sentry.md#untrusted-split-breaks-linux-efault-compatibility) |
 | P1 | sentry/ipc | `DDJIT_UNTRUSTED` SCM_RIGHTS + eventfd loses events | High | [completeness-and-env.md](completeness-and-env.md#ddjit_untrusted-scm_rights-eventfd-loses-events) |
 | P1 | syscall/time | periodic `timerfd` ignores earlier first deadline | High | [syscall-compat.md](syscall-compat.md#periodic-timerfd-ignores-earlier-first-deadline) |
-| P1 | syscall/fd | sentry close-on-exec does not clean virtual fds | High | [syscall-compat.md](syscall-compat.md#sentry-close-on-exec-does-not-clean-virtual-fds) |
 | P1 | daemon/cgroup | fractional `--cpus` loses quota precision | High | [daemon-tests-docs.md](daemon-tests-docs.md#fractional---cpus-loses-quota-precision) |
 | P1 | env/exec | `execve(..., envp=NULL)` leaks default/stale env | High | [completeness-and-env.md](completeness-and-env.md#execve-envpnull-leaks-a-default-or-stale-environment) |
 | P2 | syscall/compat | aarch64 `AT_PAGESZ` exposes host page size | High | [syscall-compat.md](syscall-compat.md#aarch64-at_pagesz-exposes-host-page-size) |
@@ -23,9 +22,6 @@ This directory is a working inventory of suspicious behavior, bad architecture, 
 | P2 | env/runtime | `DDJIT_SANDBOX` public mode is intentionally avoided by tests | High | [completeness-and-env.md](completeness-and-env.md#ddjit_sandbox-public-mode-is-intentionally-avoided-by-tests) |
 | P2 | env/durability | `S3DB_DURABILITY` silently changes fsync semantics | High | [completeness-and-env.md](completeness-and-env.md#s3db_durability-hidden-fsync-semantics) |
 | P2 | procfs/env | hidden proc switches change peer procfs | Medium | [completeness-and-env.md](completeness-and-env.md#hidden-proc-switches-change-peer-procfs) |
-| P1 | cgroup/accounting | cgroup membership omits forked children | High | [completeness-and-env.md](completeness-and-env.md#cgroup-membership-omits-forked-children) |
-| P1 | cgroup/limits | `DD_PIDS_MAX` is not enforced for forked processes | High | [completeness-and-env.md](completeness-and-env.md#dd_pids_max-is-not-enforced-for-forked-processes) |
-| P1 | cgroup/accounting | cgroup memory usage is process-local | High | [completeness-and-env.md](completeness-and-env.md#cgroup-memory-usage-is-process-local) |
 | P2 | procfs/ns | peer `/proc/<pid>/ns` is absent | High | [completeness-and-env.md](completeness-and-env.md#peer-procns-is-absent) |
 | P1 | devfs/tty | `/dev/tty` nonblocking read reports EOF instead of `EAGAIN` | High | [completeness-and-env.md](completeness-and-env.md#devtty-nonblocking-read-reports-eof-instead-of-eagain) |
 | P2 | procfs/state | futex-blocked processes report running in procfs | High | [completeness-and-env.md](completeness-and-env.md#futex-blocked-processes-report-running-in-procfs) |
