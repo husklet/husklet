@@ -669,9 +669,6 @@ static int sentry_cmsg_translate_out(struct sentry_proc *p, uint8_t *ctl, size_t
                 int *slot = (int *)(ctl + o + 16u + i * sizeof(int));
                 int rfd = vfd_real(p, *slot);
                 if (rfd < 0) return -1; // not this guest's fd -> reject the whole sendmsg
-                if (cmsg_debug_on())
-                    fprintf(stderr, "[DDSENTRYFD] pid=%d send wpid=%d vfd=%d rfd=%d\n", getpid(), (int)p->wpid,
-                            *slot, rfd);
                 *slot = rfd;
             }
         }
@@ -696,15 +693,9 @@ static void sentry_cmsg_translate_in(struct sentry_proc *p, uint8_t *ctl, size_t
                 int *slot = (int *)(ctl + o + 16u + i * sizeof(int));
                 int v = vfd_alloc(p, *slot, 0);
                 if (v < 0) {
-                    if (cmsg_debug_on())
-                        fprintf(stderr, "[DDSENTRYFD] pid=%d recv wpid=%d rfd=%d vfd=-1\n", getpid(), (int)p->wpid,
-                                *slot);
                     close(*slot);
                     *slot = -1;
                 } else {
-                    if (cmsg_debug_on())
-                        fprintf(stderr, "[DDSENTRYFD] pid=%d recv wpid=%d rfd=%d vfd=%d\n", getpid(), (int)p->wpid,
-                                *slot, v);
                     *slot = v;
                 }
             }

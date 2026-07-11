@@ -128,7 +128,6 @@ static int svc_rare(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64
                 memfd_reg_set_fd(fd, g_memfd_seal[fd]);
             }
         }
-        fdtrace_log("memfd_create", fd, (long)a1, 0);
         G_RET(c) = fd < 0 ? (uint64_t)(-errno) : (uint64_t)fd;
         break;
     }
@@ -141,10 +140,6 @@ static int svc_rare(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64
     case 436: {
         unsigned first = (unsigned)a0, last = (unsigned)a1;
         int flags = (int)a2;
-        if (drm_dbg()) {
-            fprintf(stderr, "[DRMSYNTH] close_range pid=%d first=%u last=%u flags=%#x\n", getpid(), first, last,
-                    flags);
-        }
         // Linux rejects unknown flag bits with EINVAL (only CLOSE_RANGE_UNSHARE=2 and CLOSE_RANGE_CLOEXEC=4
         // are defined). Validate before touching any fd so an invalid contract never closes/cloexecs fds.
         if (flags & ~(int)(2 | 4)) {

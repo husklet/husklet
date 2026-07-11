@@ -35,7 +35,6 @@ static int write_all(int fd, const uint8_t *p, size_t n) {
 
 pid_t ddjit_spawn(const char *engine_path, const uint8_t *config, size_t config_len,
                   int in_fd, int out_fd, int err_fd, uint32_t flags) {
-    int dbg = getenv("DD_SPAWN_DEBUG") != NULL;
     char cfgpath[1024];
     char cfgdir[1024];
     snprintf(cfgdir, sizeof cfgdir, "%s", engine_path);
@@ -53,10 +52,6 @@ pid_t ddjit_spawn(const char *engine_path, const uint8_t *config, size_t config_
         errno = saved;
         return -1;
     }
-    if (dbg)
-        fprintf(stderr, "[DDSPAWN] engine=%s config_len=%zu configfile=%s io=%d,%d,%d flags=0x%x\n",
-                engine_path, config_len, cfgpath, in_fd, out_fd, err_fd, flags);
-
     pid_t pid = fork();
     if (pid < 0) {
         int e = errno;

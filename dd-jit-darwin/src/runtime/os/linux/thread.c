@@ -573,33 +573,6 @@ static void thread_wait_clear(void);
 static inline void ts_wait_enter(void);
 static inline void ts_wait_leave(void);
 
-// DDWAKELOG (env-gated): futex WAIT/WAKE tracing for the Chromium cross-thread stall. Logs the uaddr, op,
-// and val with a per-thread id so a thread parked in FUTEX_WAIT whose FUTEX_WAKE never arrives (a lost
-// cross-thread futex wake) is visible. thread.c is included before io.c, so it has its own logger.
-static int g_flog = -1;
-
-static int futexlog_role_match(void) {
-    const char *want = getenv("DDWAKE_ROLE");
-    if (!want || !want[0]) return 1;
-    const char *got = getenv("DD_CHROME_TYPE");
-    return got && strcmp(got, want) == 0;
-}
-
-static void futexlog(const char *ev, const void *uaddr, int op, int val, long extra) {
-    if (g_flog < 0) {
-        int saved = errno; // access() sets errno when the sentinel is absent -- MUST be errno-transparent
-        g_flog = (getenv("DDWAKELOG") != NULL || access("/tmp/ddwakelog", F_OK) == 0) ? 1 : 0; // (this runs
-        errno = saved; // in the futex hot path; a leaked ENOENT would corrupt a syscall's reported errno).
-    }
-    if (!g_flog || !futexlog_role_match()) return;
-    struct timespec _t;
-    clock_gettime(CLOCK_MONOTONIC, &_t);
-    __uint64_t tid = 0;
-    pthread_threadid_np(NULL, &tid);
-    fprintf(stderr, "[DDWAKE] t=%ld.%03ld pid=%d tid=%lu %s uaddr=%p op=%d val=%d x=%ld\n", (long)_t.tv_sec,
-            _t.tv_nsec / 1000000, getpid(), (unsigned long)tid, ev, uaddr, op, val, extra);
-}
-
 // Wake up to `n` waiters parked on uaddr's W5C bucket and report the number actually woken (capped at n).
 // Factored out of the FUTEX_WAKE path so FUTEX_WAKE_OP wakes through the SAME buckets -- its wakes must
 // reach real WAIT-parked waiters (in this process or, across a shared page, a forked peer). Mirrors the
@@ -939,7 +912,6 @@ static long futex_op(struct cpu *c, int *uaddr, int op, int val, const struct ti
         // bucket, so a cross-fork waker sees it. Carry the wait bitset (op 9 = FUTEX_WAIT_BITSET's val3;
         // plain FUTEX_WAIT matches any) so FUTEX_WAKE_BITSET can skip a non-overlapping wake.
         fbk_park(b, futex_key(uaddr), op == 9 ? val3 : ~0u);
-        futexlog(ts ? "fwait_park" : "fwait_parkINF", uaddr, op, val, (long)G_PC(c));
         ts_wait_enter(); // 'S' (sleeping) while parked in FUTEX_WAIT; peer /proc/<pid>/stat|status must not show 'R'
         int rc = 0;
         if (ts) {
@@ -952,7 +924,6 @@ static long futex_op(struct cpu *c, int *uaddr, int op, int val, const struct ti
             pthread_cond_wait(&b->c, &b->m);
         ts_wait_leave();
         thread_wait_clear();
-        futexlog("fwait_wake", uaddr, op, rc, 0);
         fbk_unpark(b, futex_key(uaddr));
         int intr = cpu_wait_interrupted(c);
         // fetch_sub returns the PREVIOUS value; == 1 means the bucket just fully drained -> a stale
@@ -981,7 +952,6 @@ static long futex_op(struct cpu *c, int *uaddr, int op, int val, const struct ti
         // count. (Returning `val` broke LTP tst_checkpoint_wake's `waked += WAKE(INT_MAX)` -> fork04.)
         // FUTEX_WAKE_BITSET (op 10) wakes only waiters whose bitset overlaps val3; the others match any.
         int woke = futex_wake_bucket(uaddr, val, op == 10 ? val3 : ~0u);
-        futexlog("fwake", uaddr, op, val, (long)woke);
         return woke;
     }
     if (op == 5) { // FUTEX_WAKE_OP: atomically mutate *uaddr2, wake uaddr waiters, conditionally uaddr2's.
@@ -994,7 +964,6 @@ static long futex_op(struct cpu *c, int *uaddr, int op, int val, const struct ti
         if (rc < 0) return rc; // -EFAULT (bad uaddr2) / -ENOSYS (unknown op|cmp): report to the guest as-is
         int woke = futex_wake_bucket(uaddr, val, ~0u);
         if (do_wake2) woke += futex_wake_bucket(uaddr2, nr_wake2, ~0u);
-        futexlog("fwakeop", uaddr, op, val, (long)woke);
         return woke;
     }
     // A genuinely undefined command (the removed FUTEX_FD=2, or any value >= 14 that names no futex op) is

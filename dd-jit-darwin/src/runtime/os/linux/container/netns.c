@@ -249,50 +249,6 @@ static int cmsg_read_eventfd_marker(int fd, struct dd_cmsg_eventfd_meta *m) {
     return m->magic == DD_CMSG_EVENTFD_MAGIC;
 }
 
-static int cmsg_debug_on(void) {
-    static int on = -1;
-    if (on < 0) {
-        int saved = errno;
-        on = (getenv("DDNETLOG") != NULL || access("/tmp/DDNETLOG", F_OK) == 0) ? 1 : 0;
-        errno = saved;
-    }
-    return on;
-}
-
-static void cmsg_log_fd(const char *phase, int ordinal, int fd) {
-    if (!cmsg_debug_on()) return;
-    int saved = errno;
-    struct stat st;
-    memset(&st, 0, sizeof st);
-    int ferr = fstat(fd, &st) == 0 ? 0 : errno;
-    off_t off = lseek(fd, 0, SEEK_CUR);
-    unsigned char b[16] = {0};
-    ssize_t pn = pread(fd, b, sizeof b, 0);
-    const char *kind = "other";
-    if (!ferr) {
-        if (S_ISREG(st.st_mode))
-            kind = "reg";
-        else if (S_ISFIFO(st.st_mode))
-            kind = "fifo";
-        else if (S_ISSOCK(st.st_mode))
-            kind = "sock";
-        else if (S_ISCHR(st.st_mode))
-            kind = "chr";
-        else if (S_ISDIR(st.st_mode))
-            kind = "dir";
-    }
-    char path[256] = "-";
-#ifdef F_GETPATH
-    if (fd >= 0) (void)fcntl(fd, F_GETPATH, path);
-#endif
-    const char *desc = (fd >= 0 && fd < DD_NFD && g_proc_text_desc[fd][0]) ? g_proc_text_desc[fd] : "-";
-    fprintf(stderr,
-            "[DDCMSGFD] pid=%d %s ord=%d fd=%d kind=%s ferr=%d size=%lld off=%lld pread=%lld desc=%s "
-            "path=%s p16=%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x\n",
-            getpid(), phase, ordinal, fd, kind, ferr, (long long)st.st_size, (long long)off, (long long)pn, desc,
-            path, b[0], b[1], b[2], b[3], b[4], b[5], b[6], b[7], b[8], b[9], b[10], b[11], b[12], b[13], b[14], b[15]);
-    errno = saved;
-}
 
 static int cmsg_import_eventfd_trailer(int *fds, int nfds) {
     if (!fds || nfds <= 2) return nfds;
@@ -388,7 +344,6 @@ static ssize_t cmsg_l2m(const uint8_t *g, size_t glen, uint8_t *h, size_t cap, i
                 return -1;
             }
             for (int i = 0; i < nfds; i++) {
-                cmsg_log_fd("send", i, fds[i]);
                 combo[combo_n++] = fds[i];
             }
             for (int i = 0; i < nfds; i++) {
@@ -458,7 +413,6 @@ static ssize_t cmsg_m2l(const struct msghdr *mh, uint8_t *g, size_t cap, size_t 
             int visible = cmsg_import_eventfd_trailer(fds, nfds);
             for (int i = 0; i < visible; i++) {
                 cmsg_note_recv_sock_fd(fds[i]);
-                cmsg_log_fd("recv", i, fds[i]);
             }
             dlen = (size_t)visible * sizeof(int);
         }
@@ -1906,16 +1860,6 @@ static int nl_is(int fd) {
     return fd >= 0 && fd < DD_NFD && g_nl_peer[fd];
 }
 
-static int nl_force_eagain(void) {
-    static int on = -1;
-    if (on < 0) {
-        int saved = errno;
-        on = access("/tmp/ddnl_eagain", F_OK) == 0;
-        errno = saved;
-    }
-    return on;
-}
-
 // close a netlink fd's peer (called from fd_reset_emul on the guest close). Idempotent.
 static void nl_close(int fd) {
     if (fd >= 0 && fd < DD_NFD && g_nl_peer[fd]) {
@@ -2125,9 +2069,8 @@ static size_t nl_scatter(const uint8_t *src, size_t n, struct iovec *iov, int io
 static int64_t nl_recv(int fd, struct iovec *iov, int iovn, int gflags, int *msgflags) {
     uint8_t hb[8192]; // dumps are <=4096 (see nl_emit_dump's out[]); big enough to peek the full length
     ssize_t truelen;
-    int force_eagain = nl_force_eagain();
-    int hpeek = MSG_PEEK | (((gflags & 0x40 /* Linux MSG_DONTWAIT */) || force_eagain) ? MSG_DONTWAIT : 0);
-    int hread = ((gflags & 0x40 /* Linux MSG_DONTWAIT */) || force_eagain) ? MSG_DONTWAIT : 0;
+    int hpeek = MSG_PEEK | ((gflags & 0x40 /* Linux MSG_DONTWAIT */) ? MSG_DONTWAIT : 0);
+    int hread = (gflags & 0x40 /* Linux MSG_DONTWAIT */) ? MSG_DONTWAIT : 0;
     do {
         truelen = recv(fd, hb, sizeof hb, hpeek);
     } while (truelen < 0 && errno == EINTR);

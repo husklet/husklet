@@ -19,102 +19,6 @@ static int dgram_addr_peek(int fd, int wantaddr, size_t totlen) {
     return ty == SOCK_DGRAM || ty == SOCK_RAW;
 }
 
-// DDNETLOG (env-gated, inert without the var so the gate is unaffected): decisive send/recv tracing for the
-// Chromium Mojo bootstrap wall. Logs at the RETURN of sendto/recvfrom/sendmsg/recvmsg the pid, fd, direction,
-// requested length, retval, #SCM_RIGHTS fds carried, the SCM_CREDENTIALS ucred.pid delivered to this side,
-// and the first 8 payload bytes -- enough to tell a lost data message from an undelivered fd from a wrong/
-// colliding ucred pid (suspect A) from a delivered-but-inert final message (true higher-level deadlock).
-static int g_netlog = -1;
-static int netlog_on(void) {
-    // File-gate as well as env: chromium sanitizes child-process env across its re-exec, so an env-only
-    // gate is lost per guest process. A /tmp/DDNETLOG file survives (checked once, cached per process).
-    if (g_netlog < 0) {
-        int saved = errno; // access() sets errno when the sentinel is absent -- preserve the caller's errno
-        g_netlog = (getenv("DDNETLOG") != NULL || getenv("DDNET_ROLE") != NULL || getenv("DDNET_FD") != NULL ||
-                    getenv("DDNET_TRACE_FILE") != NULL || access("/tmp/DDNETLOG", F_OK) == 0)
-                       ? 1
-                       : 0; // (this runs
-        errno = saved; // AFTER a send/recv in the hot path; a leaked ENOENT would corrupt its reported errno).
-    }
-    return g_netlog;
-}
-
-static int netlog_role_match(void) {
-    const char *want = getenv("DDNET_ROLE");
-    if (!want || !want[0]) want = getenv("DDWAKE_ROLE");
-    if (!want || !want[0]) return 1;
-    const char *got = getenv("DD_CHROME_TYPE");
-    return got && strcmp(got, want) == 0;
-}
-
-static int netlog_fd_match(int fd) {
-    const char *want = getenv("DDNET_FD");
-    if (!want || !want[0]) return 1;
-    char *end = NULL;
-    long v = strtol(want, &end, 10);
-    return end && *end == '\0' && fd == (int)v;
-}
-
-static int netlog_trace_fd(void) {
-    static int trace_fd = -2;
-    if (trace_fd == -2) {
-        const char *path = getenv("DDNET_TRACE_FILE");
-        trace_fd = (path && path[0]) ? open(path, O_CREAT | O_WRONLY | O_APPEND, 0644) : -1;
-    }
-    return trace_fd;
-}
-
-// Count SCM_RIGHTS fds in a host-layout msghdr control buffer (post-recvmsg, or pre-sendmsg from hctl).
-static int cmsg_count_fds(const struct msghdr *m) {
-    int n = 0;
-    if (!m || !m->msg_control || !m->msg_controllen) return 0;
-    for (struct cmsghdr *c = CMSG_FIRSTHDR((struct msghdr *)m); c; c = CMSG_NXTHDR((struct msghdr *)m, c))
-        if (c->cmsg_level == SOL_SOCKET && c->cmsg_type == SCM_RIGHTS && c->cmsg_len >= CMSG_LEN(0))
-            n += (int)((c->cmsg_len - CMSG_LEN(0)) / sizeof(int));
-    return n;
-}
-
-static void netlog(const char *dir, int fd, ssize_t reqlen, ssize_t ret, int scmfds, int credpid,
-                   const void *payload, size_t plen) {
-    if (!netlog_on()) return;
-    if (!netlog_role_match() || !netlog_fd_match(fd)) return;
-    int trace_fd = netlog_trace_fd();
-    unsigned char b[8] = {0};
-    size_t n = plen < 8 ? plen : 8;
-    if (payload && ret > 0 && n) memcpy(b, payload, n < (size_t)ret ? n : (size_t)ret);
-    struct timespec _ts;
-    clock_gettime(CLOCK_MONOTONIC, &_ts);
-    if (trace_fd >= 0) {
-        dprintf(trace_fd,
-                "[DDNETLOG] t=%ld.%03ld pid=%d tid=%lu fd=%d %s req=%ld ret=%ld scmfds=%d credpid=%d p8=%02x%02x%02x%02x%02x%02x%02x%02x\n",
-                (long)_ts.tv_sec, _ts.tv_nsec / 1000000, getpid(), wake_tid(), fd, dir, (long)reqlen, (long)ret,
-                scmfds, credpid, b[0], b[1], b[2], b[3], b[4], b[5], b[6], b[7]);
-        return;
-    }
-    fprintf(stderr, "[DDNETLOG] t=%ld.%03ld pid=%d tid=%lu fd=%d %s req=%ld ret=%ld scmfds=%d credpid=%d p8=%02x%02x%02x%02x%02x%02x%02x%02x\n",
-            (long)_ts.tv_sec, _ts.tv_nsec / 1000000, getpid(), wake_tid(), fd, dir, (long)reqlen, (long)ret, scmfds, credpid,
-            b[0], b[1], b[2], b[3], b[4], b[5], b[6], b[7]);
-}
-
-static void netlog_socketpair(int lty, int hty, int r, const int sv[2]) {
-    if (!netlog_on() || !netlog_role_match()) return;
-    if (getenv("DDNET_FD") != NULL) return;
-    int out = netlog_trace_fd();
-    if (out < 0) out = STDERR_FILENO;
-    dprintf(out, "[DDNETLOG] pid=%d socketpair lty=%d hty=%d ret=%d sv=[%d,%d]%s\n", getpid(), lty, hty, r,
-            r == 0 ? sv[0] : -1, r == 0 ? sv[1] : -1, lty == SOCK_SEQPACKET ? " SEQPACKET" : "");
-}
-
-static int seqerrlog_on(void) {
-    static int on = -1;
-    if (on < 0) {
-        int saved = errno;
-        on = (getenv("DDSEQERRLOG") != NULL || access("/tmp/DDSEQERRLOG", F_OK) == 0) ? 1 : 0;
-        errno = saved;
-    }
-    return on;
-}
-
 // IPPROTO_IPV6 optname: Linux -> macOS. CRITICAL: like IPPROTO_TCP, these numbers diverge, so a raw
 // pass-through silently sets the WRONG option. The load-bearing case is IPV6_V6ONLY (Linux 26 -> macOS 27):
 // leaving it untranslated hits macOS's optname 26 (unrelated) instead, so a wildcard `::` bind stays
@@ -345,7 +249,6 @@ static int svc_net(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_
                 g_dns_sock[r] = 0;
             }
         }
-        fdtrace_log("socket", r, (long)a0, (long)ty);
         G_RET(c) = r < 0 ? (uint64_t)(-errno) : (uint64_t)r;
         break;
     }
@@ -433,11 +336,6 @@ static int svc_net(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_
                 if (sv[0] >= 0 && sv[0] < DD_NFD) g_sock_seqpacket[sv[0]] = 1;
                 if (sv[1] >= 0 && sv[1] < DD_NFD) g_sock_seqpacket[sv[1]] = 1;
             }
-        }
-        netlog_socketpair(lty, hty, r, sv);
-        if (r == 0) {
-            fdtrace_log("socketpair", sv[0], sv[1], (long)a1);
-            fdtrace_log("socketpair", sv[1], sv[0], (long)a1);
         }
         G_RET(c) = r < 0 ? (uint64_t)(-errno) : 0;
         break;
@@ -850,9 +748,6 @@ static int svc_net(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_
             char gp[200], host[1024];
             unix_path_copy(sa, (socklen_t)a2, gp, sizeof gp);
             const char *hp = atpath(-100, gp, host, sizeof host, 0); // guest path -> topmost layer's host path
-            // DDWAKELOG: pin the wayland socket's guest fd number so the epoll/poll readiness trace can be
-            // correlated to it (the cross-boundary unix socket dd-display writes the sync `done` to).
-            if (wakelog_on() && strstr(gp, "wayland")) wakelog("wl_connect", (int)a0, (long)0, (long)0);
             // dial via unix_sock_at (matches the bind side): fchdir-shortens paths past sun_path[104] so a
             // long upper socket path is reached exactly, not truncated to some other (nonexistent) inode.
             int r;
@@ -1044,7 +939,6 @@ static int svc_net(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_
             r = sendto((int)a0, (void *)a1, (size_t)a2, msgflags_l2m((int)a3), dst, dl);
         } while (r < 0 && SVC_EINTR_RESTART(c));
         if (r >= 0) seq_mark_wrote((int)a0); // genuine writer: may inject peer-EOF on its close (see netns.c)
-        netlog("send", (int)a0, (ssize_t)a2, r < 0 ? -errno : r, 0, -1, (void *)a1, (size_t)a2);
         G_RET(c) = r < 0 ? (uint64_t)(-errno) : (uint64_t)r;
         break;
     }
@@ -1084,7 +978,6 @@ static int svc_net(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_
             } else if (a5)
                 *(socklen_t *)a5 = (socklen_t)ll;
         }
-        netlog("recv", (int)a0, (ssize_t)a2, r < 0 ? -errno : r, 0, -1, (void *)a1, (size_t)a2);
         G_RET(c) = r < 0 ? (uint64_t)(-errno) : (uint64_t)r;
         break;
     }
@@ -1188,7 +1081,6 @@ static int svc_net(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_
             if (a3 && a4 && *(socklen_t *)a4 >= 12) {
                 pid_t ppid = 0;
                 socklen_t pl = sizeof ppid;
-                int src = 0; // DDNETLOG: 0=LOCAL_PEERPID real, 1=g_sock_peer_pid synthetic/resolved, 2=container_pid, 3=init->1
                 if (getsockopt((int)a0, SOL_LOCAL, LOCAL_PEERPID, &ppid, &pl) < 0 || ppid <= 0 || ppid == getpid()) {
                     // macOS reports the socketpair CREATOR's pid on both ends -> a fork parent (the browser)
                     // reads its OWN pid here for every child. Report the end's peer pid we resolved (the REAL
@@ -1196,14 +1088,9 @@ static int svc_net(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_
                     // g_sock_peer_pid / seq_reassign_peer); else this guest's own pid.
                     int sp = ((int)a0 >= 0 && (int)a0 < DD_NFD) ? g_sock_peer_pid[(int)a0] : 0;
                     ppid = sp ? sp : container_pid();
-                    src = sp ? 1 : 2;
                 } else if (g_init_hostpid && ppid == g_init_hostpid) {
                     ppid = 1; // peer is the container init -> guest pid 1
-                    src = 3;
                 }
-                if (netlog_on())
-                    fprintf(stderr, "[DDNETLOG] pid=%d fd=%d SO_PEERCRED peerpid=%d src=%s\n", getpid(), (int)a0,
-                            (int)ppid, src == 0 ? "LOCAL_PEERPID-real" : src == 1 ? "g_sock_peer_pid" : src == 2 ? "container_pid" : "init->1");
                 uint32_t *u = (uint32_t *)a3;
                 u[0] = (uint32_t)ppid;   // pid (resolved above)
                 // NOTE: peer uid/gid are reported as this container's identity, NOT the peer's real guest
@@ -1390,10 +1277,7 @@ static int svc_net(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_
             }
         }
         ssize_t r;
-        int log_credpid = -1; // ucred.pid synthesized for this recvmsg (DDNETLOG); -1 = none
         do {
-            if (nr == 212 && ipclog_fd_match((int)a0))
-                ipclog_io("recvmsg_enter", (int)a0, (long)mh.msg_iovlen, -999, NULL, 0);
             r = (nr == 211) ? (ud_route ? (ssize_t)unix_dgram_sendmsg_at((int)a0, ud_host, &mh, msgflags_l2m((int)a2))
                                         : sendmsg((int)a0, &mh, msgflags_l2m((int)a2)))
                             : recvmsg((int)a0, &mh, msgflags_l2m((int)a2));
@@ -1435,7 +1319,6 @@ static int svc_net(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_
                     ppid = sp ? sp : container_pid();
                 } else if (g_init_hostpid && ppid == g_init_hostpid)
                     ppid = 1;
-                log_credpid = ppid;
                 size_t ln2 = cmsg_add_cred(gc, 0, gcl, ppid, cuid(), cgid());
                 if (ln2 == 0)
                     cred_trunc = 1; // no room for the Linux-mandated credentials record
@@ -1448,43 +1331,9 @@ static int svc_net(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_
             if (!cmsg_trunc && gc && gcl) host_mflags &= ~0x20; // host-side sideband expansion compressed cleanly
             int mfl = msgflags_m2l(host_mflags);
             if (cred_trunc || (cmsg_trunc && !passcred_active)) mfl |= 0x8; // MSG_CTRUNC
-            if (seqerrlog_on() && seq_is((int)a0) && (mfl & (0x20 | 0x8))) {
-                size_t tot = 0;
-                struct iovec *giov = (struct iovec *)*(uint64_t *)(g + 16);
-                size_t gcnt = *(uint64_t *)(g + 24);
-                for (size_t i = 0; giov && i < gcnt; i++)
-                    tot += giov[i].iov_len;
-                dprintf(STDERR_FILENO,
-                        "[DDSEQERR] pid=%d tid=%lu fd=%d ret=%ld req=%zu gcl=%zu ln=%zu host_flags=0x%x linux_flags=0x%x cmsg_trunc=%d passcred=%d credpid=%d hctrl=%u\n",
-                        getpid(), wake_tid(), (int)a0, (long)r, tot, gcl, ln, host_mflags, mfl, cmsg_trunc,
-                        ((int)a0 >= 0 && (int)a0 < DD_NFD) ? g_sock_passcred[(int)a0] : 0, log_credpid,
-                        (unsigned)mh.msg_controllen);
-            }
             if (((int)a2 & 0x40000000) && gc && ln) cmsg_lx_set_cloexec_fds(gc, ln); // MSG_CMSG_CLOEXEC
             *(uint64_t *)(g + 40) = ln;
             *(uint32_t *)(g + 48) = (uint32_t)mfl;
-        }
-        if (netlog_on()) {
-            struct iovec *giov = (struct iovec *)*(uint64_t *)(g + 16);
-            size_t gcnt = *(uint64_t *)(g + 24), tot = 0;
-            for (size_t i = 0; giov && i < gcnt; i++)
-                tot += giov[i].iov_len;
-            void *pay = (giov && gcnt) ? giov[0].iov_base : NULL;
-            netlog(nr == 211 ? "sendmsg" : "recvmsg", (int)a0, (ssize_t)tot, r < 0 ? -errno : r,
-                   cmsg_count_fds(&mh), log_credpid, pay, pay ? giov[0].iov_len : 0);
-        }
-        if (ipclog_fd_match((int)a0)) {
-            struct iovec *giov = (struct iovec *)*(uint64_t *)(g + 16);
-            size_t gcnt = *(uint64_t *)(g + 24), tot = 0;
-            for (size_t i = 0; giov && i < gcnt; i++) tot += giov[i].iov_len;
-            void *pay = (giov && gcnt) ? giov[0].iov_base : NULL;
-            ipclog_io(nr == 211 ? "sendmsg" : "recvmsg", (int)a0, (long)tot, r < 0 ? -errno : r, pay,
-                      pay ? giov[0].iov_len : 0);
-            if (r >= 0 && cmsg_count_fds(&mh)) {
-                dprintf(STDERR_FILENO, "[DDIPC] pid=%d fd=%d op=%s cmsg_fds=%d controllen=%u flags=0x%x\n",
-                        getpid(), (int)a0, nr == 211 ? "sendmsg" : "recvmsg", cmsg_count_fds(&mh),
-                        (unsigned)mh.msg_controllen, (unsigned)mh.msg_flags);
-            }
         }
         if (hctl != hstack) free(hctl);
         G_RET(c) = r < 0 ? (uint64_t)(-errno) : (uint64_t)r;

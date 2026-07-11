@@ -121,11 +121,7 @@ int ddjit_run_configfd(int fd) {
     s = cfd_str(pool, cfg.pool_len, cfg.netns_off);
     if (s[0]) setenv("DD_NETNS", s, 1);
     s = cfd_str(pool, cfg.pool_len, cfg.volumes_off);
-    if (s[0]) {
-        if (getenv("DD_VOL_DEBUG") && (strstr(s, "wayland-0") || strstr(s, "dd-gpu-0")))
-            fprintf(stderr, "[DDVOLCFG] %s\n", s);
-        setenv("DDVOL", s, 1);
-    }
+    if (s[0]) setenv("DDVOL", s, 1);
     s = cfd_str(pool, cfg.pool_len, cfg.cwd_off);
     if (s[0]) setenv("DD_CWD", s, 1);
     s = cfd_str(pool, cfg.pool_len, cfg.guest_env_off);

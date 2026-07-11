@@ -751,11 +751,7 @@ static void vol_mkmountpoint(const char *guest, int isfile) {
 }
 
 static void add_vol(const char *spec) { // "[ro:]guestpath:hostdir" -> a confined bind-mount volume
-    int dbg_sock = getenv("DD_VOL_DEBUG") && spec && (strstr(spec, "wayland-0") || strstr(spec, "dd-gpu-0"));
-    if (g_nvols >= 32) {
-        if (dbg_sock) fprintf(stderr, "[DDVOLADD] drop full spec=%s\n", spec);
-        return;
-    }
+    if (g_nvols >= 32) return;
     // Optional read-only marker. A guest path always begins with '/', so a leading "ro:"/"rw:" token is
     // unambiguous; absent (the legacy `guest:host` form) it defaults to read-write -> byte-identical.
     int ro = 0;
@@ -768,10 +764,7 @@ static void add_vol(const char *spec) { // "[ro:]guestpath:hostdir" -> a confine
     char tmp[4096];
     snprintf(tmp, sizeof tmp, "%s", spec);
     char *col = strchr(tmp, ':');
-    if (!col || tmp[0] != '/') {
-        if (dbg_sock) fprintf(stderr, "[DDVOLADD] drop parse spec=%s\n", spec);
-        return;
-    }
+    if (!col || tmp[0] != '/') return;
     *col = 0;
     struct vol *v = &g_vols[g_nvols];
     v->ro = ro;
@@ -779,10 +772,7 @@ static void add_vol(const char *spec) { // "[ro:]guestpath:hostdir" -> a confine
     v->glen = strlen(v->guest);
     while (v->glen > 1 && v->guest[v->glen - 1] == '/')
         v->guest[--v->glen] = 0;
-    if (!realpath(col + 1, v->hcanon)) {
-        if (dbg_sock) fprintf(stderr, "[DDVOLADD] drop realpath guest=%s host=%s errno=%d\n", tmp, col + 1, errno);
-        return;
-    }
+    if (!realpath(col + 1, v->hcanon)) return;
     v->hlen = strlen(v->hcanon);
     struct stat hst;
     if (stat(v->hcanon, &hst) == 0 && !S_ISDIR(hst.st_mode)) {
@@ -796,25 +786,16 @@ static void add_vol(const char *spec) { // "[ro:]guestpath:hostdir" -> a confine
         char par[1024];
         snprintf(par, sizeof par, "%s", v->hcanon);
         char *sl = strrchr(par, '/');
-        if (!sl) {
-            if (dbg_sock) fprintf(stderr, "[DDVOLADD] drop parent guest=%s host=%s\n", v->guest, v->hcanon);
-            return;
-        }
+        if (!sl) return;
         if (sl == par)
             par[1] = 0; // file directly under "/" -> parent is "/"
         else
             *sl = 0;
-        if ((v->fd = open(par, O_RDONLY | O_DIRECTORY)) < 0) {
-            if (dbg_sock) fprintf(stderr, "[DDVOLADD] drop open-parent guest=%s host=%s parent=%s errno=%d\n", v->guest, v->hcanon, par, errno);
-            return;
-        }
-    } else if ((v->fd = open(v->hcanon, O_RDONLY | O_DIRECTORY)) < 0) {
-        if (dbg_sock) fprintf(stderr, "[DDVOLADD] drop open-dir guest=%s host=%s errno=%d\n", v->guest, v->hcanon, errno);
+        if ((v->fd = open(par, O_RDONLY | O_DIRECTORY)) < 0) return;
+    } else if ((v->fd = open(v->hcanon, O_RDONLY | O_DIRECTORY)) < 0)
         return;
-    }
     v->fd = engine_fd_hoist(v->fd); // keep this engine dir-fd out of the guest's low fd range
     g_nvols++;
-    if (dbg_sock) fprintf(stderr, "[DDVOLADD] ok guest=%s host=%s isfile=%d n=%d\n", v->guest, v->hcanon, v->isfile, g_nvols);
     vol_mkmountpoint(v->guest, v->isfile);
 }
 
@@ -1230,16 +1211,6 @@ static int proc_text_fd_tagged(const char *buf, int n, const char *desc) {
     int fd = proc_text_fd(buf, n);
     if (fd >= 0 && fd < DD_NFD && desc) {
         snprintf(g_proc_text_desc[fd], sizeof g_proc_text_desc[fd], "%s", desc);
-        int saved = errno;
-        int dbg = getenv("DD_PROC_DEBUG") || getenv("DDNETLOG") || access("/tmp/DDNETLOG", F_OK) == 0;
-        errno = saved;
-        if (dbg)
-            fprintf(stderr, "[DDPROCFILE] pid=%d fd=%d desc=%s size=%d p16=%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x\n",
-                    getpid(), fd, desc, n, (unsigned char)buf[0], (unsigned char)buf[1], (unsigned char)buf[2],
-                    (unsigned char)buf[3], (unsigned char)buf[4], (unsigned char)buf[5], (unsigned char)buf[6],
-                    (unsigned char)buf[7], (unsigned char)buf[8], (unsigned char)buf[9], (unsigned char)buf[10],
-                    (unsigned char)buf[11], (unsigned char)buf[12], (unsigned char)buf[13], (unsigned char)buf[14],
-                    (unsigned char)buf[15]);
     }
     return fd;
 }
@@ -1358,25 +1329,6 @@ static void proc_comm(char *out, size_t n) {
     base = base ? base + 1 : p;
     if (!base[0]) base = "init";
     snprintf(out, n, "%.15s", base);
-}
-
-static int proc_chromium_memory_monitor_hidden(const char *leaf) {
-    if (strcmp(leaf, "status") && strcmp(leaf, "statm")) return 0;
-    const char *hide = getenv("DD_HIDE_CHROME_PROCFILES");
-    if (!hide || !hide[0]) return 0;
-    if (!strcmp(hide, "status")) return !strcmp(leaf, "status");
-    if (!strcmp(hide, "statm")) return !strcmp(leaf, "statm");
-    char comm[16];
-    proc_comm(comm, sizeof comm);
-    if (!strcmp(comm, "chromium") || !strcmp(comm, "chrome") || !strcmp(comm, "google-chrome")) {
-        if (getenv("DD_PROC_DEBUG"))
-            fprintf(stderr, "[DDPROC] hiding chromium memory monitor peer %s\n", leaf);
-        return 1;
-    }
-    int hidden = g_exe_path && strstr(g_exe_path, "chrom");
-    if (hidden && getenv("DD_PROC_DEBUG"))
-        fprintf(stderr, "[DDPROC] hiding chromium memory monitor peer %s\n", leaf);
-    return hidden;
 }
 
 // If `rp` addresses THIS process -- "/proc/self/<leaf>" or "/proc/<our-pid>/<leaf>" (host pid, container
@@ -2849,36 +2801,6 @@ static int proc_statm_pid_text(char *b, size_t n, int host) { // a peer -- REAL 
     return proc_statm_common(b, n, rss_pg + overhead_pg, rss_pg);
 }
 
-static int proc_peer_diag_text(char *b, size_t n, const char *mode, const char *leaf, int gp) {
-    if (!mode || !mode[0] || (strcmp(leaf, "status") && strcmp(leaf, "statm"))) return -1;
-    if (!strcmp(mode, "empty") || (!strcmp(mode, "empty-status") && !strcmp(leaf, "status")) ||
-        (!strcmp(mode, "empty-statm") && !strcmp(leaf, "statm")))
-        return 0;
-    if (!strcmp(mode, "invalid"))
-        return snprintf(b, n, "x\n");
-    if (!strcmp(mode, "zero-mem")) {
-        if (!strcmp(leaf, "statm")) return proc_statm_common(b, n, 0, 0);
-        return snprintf(
-            b, n,
-            "Name:\tchromium\nState:\tS (sleeping)\nTgid:\t%d\nPid:\t%d\nPPid:\t1\nTracerPid:\t0\n"
-            "Uid:\t0\t0\t0\t0\nGid:\t0\t0\t0\t0\nVmSize:\t       0 kB\nVmRSS:\t       0 kB\nThreads:\t1\n",
-            gp, gp);
-    }
-    if (!strcmp(mode, "linux-min") || !strcmp(mode, "minimal")) {
-        if (!strcmp(leaf, "statm")) return proc_statm_common(b, n, 32768, 8192);
-        return snprintf(
-            b, n,
-            "Name:\tchromium\nUmask:\t0022\nState:\tS (sleeping)\nTgid:\t%d\nPid:\t%d\nPPid:\t1\n"
-            "TracerPid:\t0\nUid:\t0\t0\t0\t0\nGid:\t0\t0\t0\t0\nFDSize:\t256\n"
-            "VmPeak:\t  131072 kB\nVmSize:\t  131072 kB\nVmHWM:\t   32768 kB\nVmRSS:\t   32768 kB\n"
-            "VmData:\t   32768 kB\nVmStk:\t     132 kB\nVmExe:\t     512 kB\nVmLib:\t    2048 kB\n"
-            "Threads:\t1\nSigQ:\t0/31000\nSigPnd:\t0000000000000000\nSigBlk:\t0000000000000000\n"
-            "SigIgn:\t0000000000000000\nSigCgt:\t0000000000000000\nNoNewPrivs:\t0\nSeccomp:\t2\n",
-            gp, gp);
-    }
-    return -1;
-}
-
 // Register a materialized proc temp dir (fd + host temp path for reaping) AND tag the fd's GUEST /proc
 // path in g_fdpath. The tag is the key trick: a RELATIVE openat/readlink against this dir fd (htop uses
 // openat(pid_dirfd,"stat"/"task"/...) exclusively) then resolves via abs_guest back to the /proc path,
@@ -2999,12 +2921,6 @@ static int proc_task_tid_visible(int pid, int tid) {
     return tid == pid; // Peer thread registry is not cross-process yet.
 }
 
-static int proc_hide_peer_task_for_diag(int pid) {
-    const char *mode = getenv("DD_PROC_CHROME_MODE");
-    if (!mode || strcmp(mode, "no-peer-task")) return 0;
-    return pid != (int)getpid() && pid != container_pid() && pid != 1;
-}
-
 // If `rp` is a /proc/<pid> DIRECTORY path (the pid dir, its task/ dir, or a task/<tid>/ dir) for a live
 // container pid, materialize it and return the fd. Returns -1 on error, or -2 if `rp` is not such a
 // directory (a per-pid FILE like stat/status -> the caller falls through to proc_open). fs.c calls this.
@@ -3026,14 +2942,11 @@ static int proc_dir_try_open(const char *rp) {
     if (rest[0] == 0 || (rest[0] == '/' && rest[1] == 0)) {
         char gpath[32];
         snprintf(gpath, sizeof gpath, "/proc/%d", pid);
-        return proc_leaf_dir_open(gpath, !proc_hide_peer_task_for_diag(pid));
+        return proc_leaf_dir_open(gpath, 1);
     }
-    if (!strncmp(rest, "/task", 5) && (rest[5] == 0 || (rest[5] == '/' && rest[6] == 0))) {
-        if (proc_hide_peer_task_for_diag(pid)) return -2;
+    if (!strncmp(rest, "/task", 5) && (rest[5] == 0 || (rest[5] == '/' && rest[6] == 0)))
         return proc_task_dir_open(pid);
-    }
     if (!strncmp(rest, "/task/", 6)) {
-        if (proc_hide_peer_task_for_diag(pid)) return -2;
         const char *t = rest + 6;
         int j = 0;
         while (t[j] >= '0' && t[j] <= '9')
@@ -3652,8 +3565,6 @@ static int netns_tcp_emit(char *out, size_t cap, int v6);
 static int proc_open(const char *rp) {
     char buf[8192];
     int n = -1;
-    int dbg_oom = (getenv("DD_PROC_DEBUG") || getenv("DD_DRM_DEBUG")) && rp && strstr(rp, "oom_score");
-    if (dbg_oom) fprintf(stderr, "[DDPROC] proc_open rp=%s\n", rp);
     // Per-thread files mirror the main process for a single-threaded proc: fold
     // /proc/<pid>/task/<tid>/<leaf> -> /proc/<pid>/<leaf> so htop's per-thread reads are served.
     char taskbuf[4200];
@@ -3775,26 +3686,12 @@ static int proc_open(const char *rp) {
         if (fl && gp2 > 0) {
             int host;
             int is_oom_leaf = !strcmp(fl, "oom_score_adj") || !strcmp(fl, "oom_adj") || !strcmp(fl, "oom_score");
-            const char *hide_proc = getenv("DD_HIDE_CHROME_PROCFILES");
-            if (hide_proc && ((!strcmp(hide_proc, "status") && !strcmp(fl, "status")) ||
-                              (!strcmp(hide_proc, "statm") && !strcmp(fl, "statm")) ||
-                              (strcmp(hide_proc, "status") && strcmp(hide_proc, "statm") &&
-                               (!strcmp(fl, "status") || !strcmp(fl, "statm")))))
-                return -2;
-            if (proc_chromium_memory_monitor_hidden(fl)) return -2;
             if (proc_pid_member(gp2, &host) || (is_oom_leaf && (host = (gp2 == 1 && g_init_hostpid) ? g_init_hostpid : gp2) > 0 &&
                                                 !(kill(host, 0) != 0 && errno == ESRCH))) {
-                if (dbg_oom) fprintf(stderr, "[DDPROC] peer gp=%d host=%d fl=%s member/live\n", gp2, host, fl);
                 // Peer /proc/<pid>/fd: a listable dir of symlinks built from the peer's libproc fd list, so
                 // each entry readlinks to the fd's target. (Opening a peer fd link stays deferred -- needs
                 // cross-process fd passing; see proc_fd_dir_pid_open.)
                 if (!strcmp(fl, "fd")) return proc_fd_dir_pid_open(host);
-                const char *diag_mode = getenv("DD_PROC_CHROME_MODE");
-                if ((n = proc_peer_diag_text(buf, sizeof buf, diag_mode, fl, gp2)) >= 0) {
-                    char desc[64];
-                    snprintf(desc, sizeof desc, "pid:%d:%s:%s", gp2, fl, diag_mode);
-                    return proc_text_fd_tagged(buf, n, desc);
-                }
                 if (!strcmp(fl, "stat"))
                     n = proc_stat_pid_text(buf, sizeof buf, gp2, host);
                 else if (!strcmp(fl, "status"))
@@ -3814,8 +3711,6 @@ static int proc_open(const char *rp) {
                     snprintf(desc, sizeof desc, "pid:%d:%s", gp2, fl);
                     return proc_text_fd_tagged(buf, n, desc);
                 }
-            } else if (dbg_oom) {
-                fprintf(stderr, "[DDPROC] peer gp=%d fl=%s not-member errno=%d\n", gp2, fl, errno);
             }
         }
     }
@@ -5065,17 +4960,6 @@ static void container_populate_machine_id(void) {
 // dir in the writable upper (container_populate_dev) so opendir/readdir just work through the overlay.
 #define DD_DRM_MAJOR 226
 
-static int drm_dbg(void) {
-    static int v = -1;
-    if (v < 0) v = getenv("DD_DRM_DEBUG") != NULL;
-    return v;
-}
-static void drm_trace(const char *op, const char *path, int hit) {
-    if (drm_dbg() && path &&
-        (!strncmp(path, "/dev/dri", 8) || !strncmp(path, "/sys/dev/char", 13) || !strncmp(path, "/sys/class/drm", 14)))
-        fprintf(stderr, "[DRMSYNTH] %-9s %-6s %s\n", op, hit ? "HIT" : "miss", path);
-}
-
 // Map a /dev/dri child name to its DRM minor. 1 (+ *minor) on hit, 0 on miss.
 static int drm_dev_minor(const char *name, int *minor) {
     if (!strcmp(name, "renderD128")) { *minor = 128; return 1; }
@@ -5392,8 +5276,7 @@ static int synth_stat_raw(const char *gp, struct stat *s) {
         s->st_nlink = 2;
         return 1;
     }
-    if (drm_synth_stat(gp, s)) { drm_trace("stat", gp, 1); return 1; } // /dev/dri + DRM sysfs (DD_GPU_IOSURFACE)
-    if (drm_dbg()) drm_trace("stat", gp, 0); // trace DRM-prefix misses for gap-finding
+    if (drm_synth_stat(gp, s)) return 1; // /dev/dri + DRM sysfs (DD_GPU_IOSURFACE)
     // The controlling terminal, named /dev/pts/0 in the container: fstat the real pty slave so it reports as
     // a character device with the correct rdev. ttyname(3) reads /proc/self/fd/0 -> "/dev/pts/0", then
     // stat()s it and checks S_ISCHR + rdev == fstat(0).rdev; this makes that check pass so `tty` prints
@@ -5567,8 +5450,6 @@ static int synth_stat_raw(const char *gp, struct stat *s) {
                         if (*t < '0' || *t > '9') istid = 0; // task/<tid> only (not task/<tid>/<leaf>)
                 }
                 if (istaskdir || istid) {
-                    if (proc_hide_peer_task_for_diag(pid))
-                        return 0;
                     // For OUR OWN process, reflect the REAL live-thread set: /proc/self/task st_nlink must be
                     // 2 + live-thread-count, and /proc/self/task/<tid> must ENOENT once that thread has
                     // joined/exited. Chromium's sandbox (thread_helpers.cc) fstatat-watches /proc/self/task/<tid>

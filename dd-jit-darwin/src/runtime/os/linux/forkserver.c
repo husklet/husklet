@@ -313,13 +313,6 @@ static void ddjitd_runner(int conn, int *fds, int nfd, int argc, char **argv, ch
         FSRV_WARM_CHDIR_ROOTFS();
         const char *icwd = getenv("DD_CWD"); // docker -w from the CLIENT's env
         if (icwd && icwd[0]) confine(icwd, g_cwd, sizeof g_cwd);
-        if (getenv("DDJITD_DIAG")) {
-            FILE *df = fopen("/tmp/ddjitd-worker.log", "a");
-            if (df) {
-                fprintf(df, "runner pid=%d WARM %s\n", (int)getpid(), argv[0]);
-                fclose(df);
-            }
-        }
         _exit(run_loaded(argc, argv, &g_wmain, g_wjump, g_wat_base));
     }
     // Cold: no matching prewarm. Pay a full per-launch load + translate in the runner (still no
@@ -331,13 +324,6 @@ static void ddjitd_runner(int conn, int *fds, int nfd, int argc, char **argv, ch
     // clobbered bytes), and the pcache fixed-VA image base (PC_IMG_BASE) is already occupied by the
     // prewarm image. DDJIT_NOPCACHE is the engine's own kill-switch and always wins inside dd_run.
     if (g_warm_ready) setenv("DDJIT_NOPCACHE", "1", 1);
-    if (getenv("DDJITD_DIAG")) {
-        FILE *df = fopen("/tmp/ddjitd-worker.log", "a");
-        if (df) {
-            fprintf(df, "runner pid=%d COLD %s\n", (int)getpid(), argv[0]);
-            fclose(df);
-        }
-    }
     _exit(dd_run(g_srv_rootfs[0] ? g_srv_rootfs : NULL, argc, argv));
 }
 

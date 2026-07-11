@@ -377,22 +377,6 @@ static struct rcent {
 
 // g_res_epoch is defined up with the FS-metadata cache (the metadata caches' negative-entry gating
 // references it too); it is shared by these path-string caches and the metadata caches alike.
-// DDCACHELOG (env var OR /tmp/dd_cachelog sentinel; inert by default -> gate-neutral): observe whether the
-// path caches are live. Prints the res_enabled/oc_enabled verdict once, plus the FIRST store into rc_/oc_,
-// so an A/B (kill switch armed vs not) is directly visible in the engine's stderr -- the tooling the kill
-// switch exists for. Same seam-proof sentinel pattern as wakelog_on()/netlog_on() (io.c/net.c): the curated
-// --configfd env hides an ambient DDCACHELOG from getenv(), so the host file /tmp/dd_cachelog is the reliable
-// arm (access() runs against the HOST fs, not the guest jail). Cached once; zero output/overhead unarmed.
-static int cachelog_on(void) {
-    static int on = -1;
-    if (on < 0) {
-        int saved = errno; // access() sets errno=ENOENT when the sentinel is absent -- MUST NOT leak
-        on = (getenv("DDCACHELOG") != NULL || access("/tmp/dd_cachelog", F_OK) == 0) ? 1 : 0;
-        errno = saved;
-    }
-    return on;
-}
-
 // kill switch (read once): DD_NOPATHCACHE=1 -> exact baseline resolution, no memoization. This gates
 // the rc_/ud_/udv_/dc_ path caches (and, via oc_enabled below, the oc_ open-resolution cache too).
 static int res_enabled(void) {
@@ -404,16 +388,13 @@ static int res_enabled(void) {
         // "mac bridge drops env" seam) -- without the sentinel the kill switch was silently inert.
         // access() runs in engine context against the HOST fs (not the guest jail), so
         // `touch /tmp/dd_nopathcache` mac-side arms it. Cached once; inert (caches ON) when neither is
-        // present -> gate-neutral. Same discipline as wakelog_on()/netlog_on() (io.c/net.c).
+        // present -> gate-neutral.
         int saved = errno; // access() sets errno=ENOENT when the sentinel is absent -- MUST NOT leak
         const char *e = getenv("DD_NOPATHCACHE");
         int envset = (e && e[0] == '1');
         int fileset = access("/tmp/dd_nopathcache", F_OK) == 0;
         errno = saved;
         on = (envset || fileset) ? 0 : 1;
-        if (cachelog_on())
-            fprintf(stderr, "[DDCACHELOG] rc/ud/udv/dc path caches %s (DD_NOPATHCACHE env=%d file=%d)\n",
-                    on ? "ENABLED" : "DISABLED", envset, fileset);
     }
     return on;
 }
@@ -596,10 +577,6 @@ static int dc_lookup(const char *key, char *canon, size_t n, int *nmiss) {
 
 static void dc_store(const char *key, const char *canon, int nmiss) {
     if (!res_enabled() || !key || !key[0] || !canon || nmiss < 0 || nmiss > 0xffff) return;
-    if (cachelog_on()) { // positive control: proves the dentry/climb cache DOES populate when the switch is OFF
-        static int once = 0;
-        if (!once) { once = 1; fprintf(stderr, "[DDCACHELOG] dc_store first: %s -> %s (nmiss=%d)\n", key, canon, nmiss); }
-    }
     size_t cl = strlen(canon);
     if (strlen(key) >= DC_KEYMAX || cl >= DC_KEYMAX) return; // over-length: bypass, re-resolved safely
     CLK;
@@ -671,10 +648,6 @@ static int rc_lookup(const char *g, char *out, size_t n) {
 
 static void rc_store(const char *g, const char *host) {
     if (!res_enabled() || !g || g[0] != '/' || !host) return;
-    if (cachelog_on()) { // positive control: proves the cache DOES populate when the switch is OFF
-        static int once = 0;
-        if (!once) { once = 1; fprintf(stderr, "[DDCACHELOG] rc_store first: %s -> %s\n", g, host); }
-    }
     // over-length paths simply bypass the cache (fixed-size slot) -> re-resolved every time, safely.
     size_t hl = strlen(host);
     if (strlen(g) >= sizeof(((struct rcent *)0)->guest) || hl >= sizeof(((struct rcent *)0)->host)) return;
@@ -731,9 +704,6 @@ static int oc_enabled(void) {
         int fileset = access("/tmp/dd_noopencache", F_OK) == 0;
         errno = saved;
         on = (envset || fileset || !res_enabled()) ? 0 : 1;
-        if (cachelog_on())
-            fprintf(stderr, "[DDCACHELOG] oc open-resolution cache %s (W4_NOOPENCACHE env=%d file=%d master=%d)\n",
-                    on ? "ENABLED" : "DISABLED", envset, fileset, res_enabled());
     }
     return on;
 }
@@ -759,10 +729,6 @@ static int oc_lookup(const char *g, char *out, size_t n) {
 
 static void oc_store(const char *g, const char *host) {
     if (!oc_enabled() || !g || g[0] != '/' || !host) return;
-    if (cachelog_on()) { // positive control: proves the open-cache DOES populate when the switch is OFF
-        static int once = 0;
-        if (!once) { once = 1; fprintf(stderr, "[DDCACHELOG] oc_store first: %s -> %s\n", g, host); }
-    }
     // over-length paths simply bypass the cache (fixed-size slot) -> re-walked every time, safely.
     size_t hl = strlen(host);
     if (strlen(g) >= sizeof(((struct ocent *)0)->guest) || hl >= sizeof(((struct ocent *)0)->host)) return;

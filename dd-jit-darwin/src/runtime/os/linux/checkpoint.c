@@ -867,8 +867,6 @@ static void ckpt_restore_proc_run(const char *base, int gpid) {
     proc_reg_publish(g_exe_path, 1, pubargv);
 
     ckpt_fork_children(base, gpid); // re-fork our own children before we resume (so a wait finds them)
-    if (getenv("DDJIT_CKPT_DEBUG"))
-        fprintf(stderr, "[restore] proc %d resuming at pc=%llx\n", gpid, (unsigned long long)c.pc);
     run_guest(&c);
     _exit(c.exit_code);
 }
@@ -911,9 +909,6 @@ static int ckpt_restore_tree(const char *rootfs, const char *dir) {
     ckpt_fork_children(dir, 1); // rebuild the tree BEFORE init runs (empty block map -> no stale translation)
     if (g_ckpt_fg_gpid == 1) ckpt_claim_tty_fg(); // the init itself was foreground (idle prompt)
 
-    if (getenv("DDJIT_CKPT_DEBUG"))
-        fprintf(stderr, "[restore] init resuming at pc=%llx (%llu process(es))\n", (unsigned long long)c.pc,
-                (unsigned long long)man.n_procs);
     run_guest(&c);
     return c.exit_code;
 }

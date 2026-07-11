@@ -574,12 +574,9 @@ static int svc_fs(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t
             (rq == 0xc0406400 || rq == 0xc0106c0c || rq == 0x400c6d0d || rq == 0xc02064b2 ||
              rq == 0xc01064b3 || rq == 0xc00464b4 || rq == 0x40086409 || rq == 0xc00c642d)) {
             int64_t rr = drm_synth_ioctl(fd, rq, arg);
-            if (drm_dbg()) fprintf(stderr, "[DRMSYNTH] ioctl fd=%d rq=%#lx -> %lld\n", fd, rq, (long long)rr);
             G_RET(c) = (uint64_t)rr;
             break;
         }
-        if (gpu_iosurface_on() && fd >= 0 && fd < DD_NFD && g_devdri[fd] && drm_dbg())
-            fprintf(stderr, "[DRMSYNTH] ioctl fd=%d rq=%#lx unhandled\n", fd, rq);
         // macOS pty MASTERS reject every termios/winsize ioctl with ENOTTY -- unlike Linux, where the master
         // accepts them and they act on the shared line discipline (apt/dpkg's StartPtyMagic does TIOCSWINSZ +
         // tcsetattr(TCSANOW) on the master; that ENOTTY is apt's "Setting TIOCSWINSZ for master fd N failed"
@@ -2037,8 +2034,6 @@ static int svc_fs(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t
             // makes htop's relative openat(pid_dirfd, "stat"/"task"/...) re-enter the /proc synthesis.
             while (rp && rp[0] == '/' && rp[1] == '/')
                 rp++;
-            if ((getenv("DD_PROC_DEBUG") || getenv("DD_DRM_DEBUG")) && rp && strstr(rp, "oom_score"))
-                fprintf(stderr, "[DDPROC] openat dirfd=%d path=%s flags=0x%lx\n", (int)a0, rp, (unsigned long)lf);
             // A bare "/proc/self" (or thread-self) opened as a DIRECTORY (`cd /proc/self`, then relative
             // reads) follows the magic symlink to the numeric pid dir -- rewrite it so the /proc/<pid>
             // materialization below (proc_dir_try_open) serves it and tags the fd's guest path.
@@ -2205,7 +2200,6 @@ static int svc_fs(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t
                 // synthesize /dev/dri/{renderD128,card0} as a placeholder fd tagged as a render node; its
                 // DD_IOCTL_GPU_ALLOC / DRM ioctls (fs.c case 29) service the IOSurface + version/cap probes.
                 if (!strncmp(rp, "/dev/dri/", 9) && drm_dev_minor(rp + 9, &drm_minor)) {
-                    drm_trace("open", rp, 1);
                     int d = open("/dev/null", O_RDWR); // backing is irrelevant; the ioctl carries the payload
                     if (d >= 0 && d < DD_NFD) g_devdri[d] = (uint8_t)(drm_minor + 1); // minor+1 (fstat fixup)
                     if (d >= 0 && (lf & 0x80000)) fcntl(d, F_SETFD, FD_CLOEXEC); // honor O_CLOEXEC
@@ -2217,7 +2211,6 @@ static int svc_fs(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t
                 if (!strncmp(rp, "/sys/dev/char/226:", 18) || !strncmp(rp, "/sys/class/drm", 14)) {
                     int dd = drm_dir_open(rp);
                     if (dd != -2) {
-                        drm_trace("opendir", rp, dd >= 0);
                         if (dd >= 0 && (lf & 0x80000)) fcntl(dd, F_SETFD, FD_CLOEXEC);
                         if (dd >= 0 && dd < 1024) g_opath[dd] = is_opath;
                         G_RET(c) = dd < 0 ? (uint64_t)(-errno) : (uint64_t)dd;
@@ -2226,12 +2219,10 @@ static int svc_fs(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t
                     char cb[256];
                     int cn = drm_synth_content(rp, cb, sizeof cb);
                     if (cn >= 0) {
-                        drm_trace("open", rp, 1);
                         int d = synth_str_fd(cb);
                         G_RET(c) = d < 0 ? (uint64_t)(-errno) : (uint64_t)d;
                         break;
                     }
-                    drm_trace("open", rp, 0);
                 }
             }
             // device nodes -> host devices (rootfs has no real /dev)
@@ -2512,36 +2503,13 @@ static int svc_fs(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t
     }
     case 57: {
         int cf = (int)a0;
-        int was_dri = (cf >= 0 && cf < DD_NFD && g_devdri[cf]);
-        int pre_fl = fcntl(cf, F_GETFD);
-        int pre_errno = errno;
-        char pre_path[192];
-        pre_path[0] = 0;
-        if (cf >= 0 && cf < DD_NFD && g_fdpath[cf][0]) snprintf(pre_path, sizeof pre_path, "%s", g_fdpath[cf]);
         engine_fd_vacate(cf); // guest close must not clobber an engine-private fd (g_root_fd etc.) on this number
         // Drop every dd-side emulation-table entry for this fd (eventfd peer/timerfd/overlay-dir/socket/epoll/
         // flock/pidfd/memf/getdents caches/path) BEFORE the real close, so a reused number can't be misrouted.
         // SEQPACKET/O_DIRECT-pipe EOF is injected here (inside fd_reset_emul's seq_send_eof) while this end is
         // still open, so a blocked peer recv wakes and returns 0. Shared with the execve CLOEXEC sweep.
-        if (seq_is(cf)) {
-            seqlog("close_seq_pre", cf, g_sock_seq_wrote[cf], g_sock_peer_pid[cf]);
-            if (seqerrlog_on()) {
-                fprintf(stderr,
-                        "[DDSEQERR] pid=%d close_seq_pre fd=%d wrote=%u peerpid=%d pair=%d passcred=%u\n",
-                        getpid(), cf, cf < DD_NFD ? g_sock_seq_wrote[cf] : 0,
-                        cf < DD_NFD ? g_sock_peer_pid[cf] : 0, cf < DD_NFD ? g_sock_pair_peer[cf] : 0,
-                        cf < DD_NFD ? g_sock_passcred[cf] : 0);
-            }
-        }
         fd_reset_emul(cf);
         int r = close(cf);
-        if (seqlog_on()) seqlog("close", cf, r, r < 0 ? errno : 0);
-        if (drm_dbg() && (was_dri || r < 0 || fdtrace_fd(cf))) {
-            const char *p = pre_path[0] ? pre_path : "-";
-            fprintf(stderr, "[DRMSYNTH] close pid=%d fd=%d%s path=%s pre_getfd=%d pre_errno=%d -> %d errno=%d\n",
-                    getpid(), cf, was_dri ? " dri" : "", p, pre_fl, pre_fl < 0 ? pre_errno : 0, r,
-                    r < 0 ? errno : 0);
-        }
         G_RET(c) = r < 0 ? (uint64_t)(-errno) : 0;
         break;
         // close: -errno on fail
@@ -2835,7 +2803,6 @@ static int svc_fs(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t
             (!strncmp(gp, "/sys/dev/char/226:", 18) || !strncmp(gp, "/sys/class/drm", 14))) {
             int dl = drm_synth_readlink(gp, buf, bs);
             if (dl >= 0) {
-                drm_trace("readlink", gp, 1);
                 G_RET(c) = (uint64_t)dl;
                 break;
             }
