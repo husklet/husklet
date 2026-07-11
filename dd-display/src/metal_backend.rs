@@ -913,7 +913,7 @@ pub fn selftest_msl(path: &str) -> ! {
             std::process::exit(0);
         }
         Err(e) => {
-            eprintln!("selftest-msl: {path} FAILED:\n{e:?}");
+            eprintln!("selftest-msl: {path} FAILED:\n{}", e.localizedDescription());
             std::process::exit(1);
         }
     }

@@ -798,6 +798,7 @@ static void wreplace(char *buf, const char *from, const char *to) {
     tmp[o] = 0;
     strcpy(buf, tmp);
 }
+static void sreplace(char *buf, const char *from, const char *to); // defined below; used for mat3x2( ctor
 static void type_fixups(char *b) {
     wreplace(b, "lowp", "");
     wreplace(b, "mediump", "");
@@ -812,6 +813,13 @@ static void type_fixups(char *b) {
     wreplace(b, "uvec3", "uint3");
     wreplace(b, "uvec4", "uint4");
     // Non-square forms first (word-boundary replace already protects mat3 inside mat3x2, but list all).
+    // GLSL's `mat3x2(m3)` truncating constructor has NO MSL equivalent — MSL forbids building a matrix
+    // from a larger one, so `float3x2(float3x3)` fails to compile and the whole (gradient) shader falls
+    // back to the builtin → a black, mispositioned block. Route the CONSTRUCTOR call to a dd_mat3x2()
+    // helper (injected at file scope) that extracts the upper-left 3×2 block; bare `mat3x2` type
+    // declarations still map to `float3x2` via the wreplace below (dd_mat3x2 is protected — the leading
+    // `_` is a word char, so the word-boundary wreplace won't rewrite the `mat3x2` inside it).
+    sreplace(b, "mat3x2(", "dd_mat3x2(");
     wreplace(b, "mat2x2", "float2x2");
     wreplace(b, "mat2x3", "float2x3");
     wreplace(b, "mat2x4", "float2x4");
@@ -918,6 +926,13 @@ static const char *DD_MOD_HELPERS =
     "inline float2 dd_mod(float2 x, float y) { return x - y * floor(x / y); }\n"
     "inline float3 dd_mod(float3 x, float y) { return x - y * floor(x / y); }\n"
     "inline float4 dd_mod(float4 x, float y) { return x - y * floor(x / y); }\n";
+// GLSL `mat3x2(m3)` truncating-matrix constructor → MSL has none. Provide it: extract the upper-left
+// 3×2 block (cols 0..2, rows x/y). The float2×3 column form is passed through unchanged. Skia emits
+// `mat3x2(gradientMatrix) * vec3(coord, 1.0)` for linear-gradient/coord transforms; without this the
+// shader fails to compile and the draw falls back to the builtin (black, mispositioned).
+static const char *DD_MAT3X2_HELPER =
+    "inline float3x2 dd_mat3x2(float3x3 m) { return float3x2(m[0].xy, m[1].xy, m[2].xy); }\n"
+    "inline float3x2 dd_mat3x2(float2 a, float2 b, float2 c) { return float3x2(a, b, c); }\n";
 static void local_decl_fixups(char *b) {
     sreplace(b, "float in.", "float ");
     sreplace(b, "float2 in.", "float2 ");
@@ -1166,6 +1181,7 @@ static char *translate(const char *vs_in, const char *fs_in) {
     o = cat_msl(out, o, TRANSLATE_OUTCAP, "#include <metal_stdlib>\nusing namespace metal;\n");
     // Inject GLSL mod() helper overloads (MSL has no `mod`) only when a shader actually uses mod(…).
     if (strstr(vs, "mod(") || strstr(fs, "mod(")) o = cat_msl(out, o, TRANSLATE_OUTCAP, "%s", DD_MOD_HELPERS);
+    if (strstr(vs, "mat3x2(") || strstr(fs, "mat3x2(")) o = cat_msl(out, o, TRANSLATE_OUTCAP, "%s", DD_MAT3X2_HELPER);
     // Global consts (glmark2's prepended light/material/PI): `const …` → `constant …`, types fixed.
     for (int i = 0; i < nc; i++) {
         char line[256];
