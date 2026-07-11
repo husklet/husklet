@@ -148,15 +148,6 @@ CARGO_TARGET_DIR=/Users/x/dd/dd-slot-e-target cargo run -p dd-tests -- -e aarch6
 
 Observed: dd prints `envc=4`; native prints `envc=0`.
 
-### Newline-Containing Env Values Split Across Exec — FIXED (2026-07-10)
-
-Fixed on branch bugfix/completeness-env-v2. `exec_forward_env` now escape-encodes each record
-(`'\\'`->`"\\\\"`, `'\n'`->`"\\n"`) and sets `DD_GUEST_ENV_ESC=1`; both `build_stack` implementations
-(`os/linux/elf.c` for aarch64 and `translate/x86_64/elf.c` for x86_64) unescape when the marker is present,
-so a value's own newline never masquerades as a record separator. The daemon-launch path (plain
-`DD_GUEST_ENV`, no marker) is byte-for-byte unchanged. Test: `comp-sys-proc/exec-newline-env`
-(`exec_newline_env.c`) — passes on both engines (`value_ok=1 split_entry=0`, matching native).
-
 ### Typed Launch Path Lists Still Use Delimiter Env Strings
 
 Priority: P2

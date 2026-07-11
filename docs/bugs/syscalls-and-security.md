@@ -40,14 +40,3 @@ The source comment is explicit that this is deliberate. It should remain visible
 Verification:
 
 Install a deny filter for a harmless syscall such as `getpid` and then call it. Linux should block according to filter action; dd is expected to allow it.
-
-## Fixed (2026-07-10, branch bugfix/completeness-env-v2)
-
-Each fix is minimal at the cited source and guarded by a scoped completeness guest that oracle-diffs dd vs native (aarch64) / qemu (x86_64), passing on both engines.
-
-- `unshare`/`setns` blanket fake-success — `unshare(unknown flags)` now returns `EINVAL`, `setns(-1, …)` returns `EBADF` (`syscall/proc.c` cases 97/268). Test: `comp-sys-proc/unshare-setns` (`sys_unshare_setns.c`).
-- `close_range` unknown flags — bits outside `CLOSE_RANGE_UNSHARE|CLOSE_RANGE_CLOEXEC` now return `EINVAL` before any fd is touched (`syscall/rare.c` case 436). Test: `comp-sys-misc/close-range-flags` (`sys_close_range_flags.c`).
-- pidfd flags fidelity — `pidfd_open` rejects flags outside `PIDFD_NONBLOCK`; `pidfd_send_signal` rejects bits outside `PIDFD_SIGNAL_{THREAD,THREAD_GROUP,PROCESS_GROUP}` (kernel ≥6.9) with `EINVAL`, validated before delivery (`syscall/rare.c` cases 434/424). Test: `comp-sys-signal/pidfd-flags` (`sys_pidfd_flags.c`). (Host-pid authority remains open — see above.)
-- pidfd registry capacity — `pidfd_register` now signals table-full and `pidfd_make` fails the open with `EMFILE` (closing the minted fd) instead of returning a real fd that later can't be resolved (`syscall/dispatch.c`). Test: `comp-sys-signal/pidfd-cap` (`sys_pidfd_cap.c`) — every successful `pidfd_open` stays resolvable; overflow fails cleanly.
-- `SO_PASSCRED`/`SO_PEERCRED` fd/type validation — both now validate the fd via `SO_TYPE` first, so a closed fd is `EBADF` and a non-socket is `ENOTSOCK` (`syscall/net.c` cases 208/209). Test: `comp-sys-misc/passcred-badfd` (`sys_passcred_badfd.c`).
-- `getresuid`/`getresgid` NULL output pointers — a NULL/unwritable pointer now faults `EFAULT`, writing none (`syscall/proc.c` cases 148/150). Test: `comp-sys-cred/getresuid-null` (`sys_getresuid_null.c`).
