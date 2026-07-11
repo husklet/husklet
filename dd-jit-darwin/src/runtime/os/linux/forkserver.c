@@ -307,6 +307,9 @@ static void ddjitd_runner(int conn, int *fds, int nfd, int argc, char **argv, ch
         FSRV_SET_LOADBASE(g_wmain.base);
         // per-request container identity: THIS process is the container init, not the server.
         if (g_srv_rootfs[0]) g_init_hostpid = getpid();
+        // Re-anchor cross-process cgroup accounting to a FRESH slot table for THIS warm container: the
+        // worker inherited the SERVER's table on fork, but each launch is its own container (state.c).
+        if (g_srv_rootfs[0]) acct_container_reset();
         FSRV_WARM_CHDIR_ROOTFS();
         const char *icwd = getenv("DD_CWD"); // docker -w from the CLIENT's env
         if (icwd && icwd[0]) confine(icwd, g_cwd, sizeof g_cwd);

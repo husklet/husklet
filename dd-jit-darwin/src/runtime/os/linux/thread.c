@@ -1333,6 +1333,7 @@ static void *thread_trampoline(void *p) {
     run_guest(child);
     // cgroup pids: task ended
     atomic_fetch_sub(&g_pids_cur, 1);
+    acct_publish_tasks(); // update this process's container-wide task-count contribution
     // robust mutexes this thread still holds -> mark OWNER_DIED + wake a waiter (before the join wakeup)
     futex_robust_exit(child);
     // pthread_join waits on this
@@ -1344,8 +1345,9 @@ static void *thread_trampoline(void *p) {
 // Spawn a guest thread sharing this address space. stack_top is the initial sp.
 static int spawn_thread(struct cpu *parent, uint64_t flags, uint64_t stack_top, uint64_t tls, uint64_t ptid,
                         uint64_t ctid) {
-    // cgroup pids.max
-    if (g_pids_max && atomic_load(&g_pids_cur) >= g_pids_max) return -EAGAIN;
+    // cgroup pids.max -- gated on the CONTAINER-WIDE task count (all engine processes), not just this
+    // process's threads, so the limit is one shared budget across the whole process tree.
+    if (g_pids_max && acct_pids_total() >= g_pids_max) return -EAGAIN;
     struct cpu *child = malloc(sizeof *child);
     // ENOMEM
     if (!child) return -12;
@@ -1381,6 +1383,7 @@ static int spawn_thread(struct cpu *parent, uint64_t flags, uint64_t stack_top, 
     }
     // cgroup pids: task created
     atomic_fetch_add(&g_pids_cur, 1);
+    acct_publish_tasks(); // update this process's container-wide task-count contribution
     pthread_detach(th);
     return tid;
 }

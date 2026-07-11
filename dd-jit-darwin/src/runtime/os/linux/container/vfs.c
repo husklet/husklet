@@ -2326,6 +2326,79 @@ static int proc_reg_count(void) {
     return n ? n : 1;
 }
 
+// /sys/fs/cgroup/cgroup.procs (and cgroup.threads) membership: the container is ONE cgroup, so this must
+// list EVERY guest process -- the init AND every forked child -- not just container_pid(). The process
+// registry already tracks that set cross-process (each engine process, incl. every fork child, publishes
+// a file named by its host pid; see proc_reg_publish/after_fork), so enumerate it and map each host pid
+// to its guest pid (init_hostpid -> 1). `with_threads` additionally appends THIS process's extra guest
+// thread tids for cgroup.threads (a peer's threads aren't enumerable from here, so it lists their main
+// task -- exactly like /proc/<pid>/task for a peer). Self is always included (the registry may lag our
+// own just-published entry). Returns the byte length written.
+static int cgroup_procs_text(char *buf, size_t n, int with_threads) {
+    char dir[80];
+    proc_reg_key(dir, sizeof dir);
+    int o = 0, me = (int)getpid(), have_self = 0;
+    DIR *d = opendir(dir);
+    if (d) {
+        struct dirent *e;
+        while ((e = readdir(d)) && (size_t)o < n - 16) {
+            if (e->d_name[0] < '0' || e->d_name[0] > '9') continue;
+            int host = atoi(e->d_name);
+            if (host <= 0) continue;
+            if (host != me && kill(host, 0) != 0 && errno == ESRCH) continue; // stale registry entry
+            if (host == me) have_self = 1;
+            int gp = (g_init_hostpid && host == g_init_hostpid) ? 1 : host;
+            o += snprintf(buf + o, n - (size_t)o, "%d\n", gp);
+        }
+        closedir(d);
+    }
+    if (!have_self && (size_t)o < n - 16)
+        o += snprintf(buf + o, n - (size_t)o, "%d\n", container_pid());
+    if (with_threads && (size_t)o < n - 16) {
+        int tids[256];
+        int self_gp = container_pid();
+        int nt = thread_tid_list(tids, 256, me);
+        for (int i = 0; i < nt && (size_t)o < n - 16; i++)
+            if (tids[i] != me && tids[i] != self_gp) // the main thread was already listed as our pid
+                o += snprintf(buf + o, n - (size_t)o, "%d\n", tids[i]);
+    }
+    if (o == 0) o = snprintf(buf, n, "%d\n", container_pid());
+    return o;
+}
+
+// /sys/fs/cgroup/memory.current aggregate across the whole container. Under a memory.max cap the
+// per-process anon CHARGE is tracked (bounded, matches enforcement) -> sum the shared accounting slots.
+// With no cap the charge model is inert, so fall back to the REAL resident size of every live container
+// process (libproc) -- what a native cgroup reports, and what makes a forked child's allocation visible
+// to a parent reading memory.current. Cross-process either way (was a single engine process's local value).
+static unsigned long long cgroup_mem_current(void) {
+    if (g_mem_max) return acct_mem_total();
+    char dir[80];
+    proc_reg_key(dir, sizeof dir);
+    DIR *d = opendir(dir);
+    unsigned long long total = 0;
+    int me = (int)getpid(), saw_self = 0;
+    if (d) {
+        struct dirent *e;
+        while ((e = readdir(d))) {
+            if (e->d_name[0] < '0' || e->d_name[0] > '9') continue;
+            int host = atoi(e->d_name);
+            if (host <= 0) continue;
+            if (host == me) {
+                total += self_rss_bytes();
+                saw_self = 1;
+                continue;
+            }
+            if (kill(host, 0) != 0 && errno == ESRCH) continue; // stale registry entry
+            struct dd_procinfo pi;
+            if (dd_get_procinfo(host, &pi)) total += pi.rss;
+        }
+        closedir(d);
+    }
+    if (!saw_self) total += self_rss_bytes(); // registry may lag our own publish
+    return total;
+}
+
 // Parse "/proc/<digits>/<leaf>" for ANY pid (unlike proc_self_leaf, which matches only our own). Returns
 // the <leaf> and fills *pid, or NULL.
 static const char *proc_any_leaf(const char *rp, int *pid) {
@@ -3860,16 +3933,16 @@ static int proc_open(const char *rp) {
         else
             n = snprintf(buf, sizeof buf, "max\n");
     } else if (!strcmp(rp, "/sys/fs/cgroup/memory.current")) {
-        n = snprintf(buf, sizeof buf, "%llu\n", (unsigned long long)atomic_load(&g_mem_charged));
+        n = snprintf(buf, sizeof buf, "%llu\n", cgroup_mem_current()); // container-wide (all engine procs)
     } else if (!strcmp(rp, "/sys/fs/cgroup/pids.max")) {
         if (g_pids_max)
             n = snprintf(buf, sizeof buf, "%d\n", g_pids_max);
         else
             n = snprintf(buf, sizeof buf, "max\n");
     } else if (!strcmp(rp, "/sys/fs/cgroup/pids.current")) {
-        n = snprintf(buf, sizeof buf, "%d\n", atomic_load(&g_pids_cur));
+        n = snprintf(buf, sizeof buf, "%d\n", acct_pids_total()); // container-wide task count (all engine procs)
     } else if (!strcmp(rp, "/sys/fs/cgroup/pids.peak")) {
-        n = snprintf(buf, sizeof buf, "%d\n", atomic_load(&g_pids_cur)); // no historical peak tracked -> live
+        n = snprintf(buf, sizeof buf, "%d\n", acct_pids_total()); // no historical peak tracked -> live
     } else if (!strcmp(rp, "/sys/fs/cgroup/pids.events") || !strcmp(rp, "/sys/fs/cgroup/pids.events.local")) {
         n = snprintf(buf, sizeof buf, "max 0\n"); // pids limit never hit (structural)
     } else if (!strcmp(rp, "/sys/fs/cgroup/cpuset.cpus.effective") ||
@@ -3907,11 +3980,13 @@ static int proc_open(const char *rp) {
         buf[0] = 0; // a leaf cgroup delegates nothing downward -> empty (matches runc)
     } else if (!strcmp(rp, "/sys/fs/cgroup/cgroup.type")) {
         n = snprintf(buf, sizeof buf, "domain\n");
-    } else if (!strcmp(rp, "/sys/fs/cgroup/cgroup.procs") || !strcmp(rp, "/sys/fs/cgroup/cgroup.threads")) {
-        // The pids/tids in this cgroup. The container is one cgroup, so this is the guest task set; report
-        // the introspectable init pid (guest sees itself as 1). A reader (systemd, cgexec) just needs a
-        // valid, present pid list -- the exact membership is host-variant.
-        n = snprintf(buf, sizeof buf, "%d\n", container_pid());
+    } else if (!strcmp(rp, "/sys/fs/cgroup/cgroup.procs")) {
+        // The processes in this cgroup. The container is ONE cgroup, so this is EVERY guest process (init +
+        // every forked child), enumerated from the cross-process registry -- not just container_pid().
+        n = cgroup_procs_text(buf, sizeof buf, 0);
+    } else if (!strcmp(rp, "/sys/fs/cgroup/cgroup.threads")) {
+        // Every task (thread) in the cgroup: the per-process registry set plus THIS process's extra threads.
+        n = cgroup_procs_text(buf, sizeof buf, 1);
     } else if (!strcmp(rp, "/sys/fs/cgroup/cgroup.events")) {
         n = snprintf(buf, sizeof buf, "populated 1\nfrozen 0\n");
     } else if (!strcmp(rp, "/sys/fs/cgroup/cgroup.max.depth") || !strcmp(rp, "/sys/fs/cgroup/cgroup.max.descendants")) {
@@ -3936,7 +4011,7 @@ static int proc_open(const char *rp) {
     } else if (!strcmp(rp, "/sys/fs/cgroup/memory.swap.high")) {
         n = snprintf(buf, sizeof buf, "max\n");
     } else if (!strcmp(rp, "/sys/fs/cgroup/memory.peak")) {
-        n = snprintf(buf, sizeof buf, "%llu\n", (unsigned long long)atomic_load(&g_mem_charged));
+        n = snprintf(buf, sizeof buf, "%llu\n", cgroup_mem_current()); // container-wide (no historical peak)
     } else if (!strcmp(rp, "/sys/fs/cgroup/memory.stat")) {
         // The per-type breakdown. The JVM's CgroupSubsystemController reads this for "file" (page cache) to
         // refine its container-memory estimate; the exact byte figures are host-variant, so we present the

@@ -184,6 +184,7 @@ static int svc_mem(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_
                 atomic_fetch_sub(&g_mem_charged, delta > cur ? cur : delta);
             }
             brk_cur = a0;
+            acct_publish_mem(); // publish the new charge into this process's cross-process memory slot
         }
         G_RET(c) = brk_cur;
         break;
@@ -273,6 +274,7 @@ static int svc_mem(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_
             // uncharge (clamp >=0)
             uint64_t cur = atomic_load(&g_mem_charged), d = (uint64_t)a1;
             atomic_fetch_sub(&g_mem_charged, d > cur ? cur : d);
+            acct_publish_mem(); // publish the reduced charge into this process's cross-process memory slot
         }
         // stale-translation: the guest may re-map DIFFERENT code at this now-free VA -> drop any cached block
         // translations for the unmapped range so the dispatcher re-translates the new bytes (JITs/trampolines).
@@ -457,6 +459,7 @@ static int svc_mem(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_
                 G_RET(c) = (uint64_t)(-ENOMEM);
                 break;
             }
+            acct_publish_mem(); // publish the new charge into this process's cross-process memory slot
         }
         // glibc's vectorized string ops over-read up to 16 bytes past a buffer's logical end; on Darwin
         // that hits an unmapped page -> SIGBUS. Map a 64KB guard tail on non-fixed anon maps so the
@@ -631,7 +634,10 @@ static int svc_mem(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_
             }
         }
         // refund
-        if (r == MAP_FAILED && charge) atomic_fetch_sub(&g_mem_charged, (uint64_t)a1);
+        if (r == MAP_FAILED && charge) {
+            atomic_fetch_sub(&g_mem_charged, (uint64_t)a1);
+            acct_publish_mem(); // publish the refunded charge into this process's cross-process slot
+        }
         if (r != MAP_FAILED) {
             gmap_add((uint64_t)r, (uint64_t)a1 + guard); // track for execve() teardown
             gmap_set_glen((uint64_t)r, (uint64_t)a1);    // /proc maps report the guest length (sans guard)

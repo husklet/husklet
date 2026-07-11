@@ -550,6 +550,9 @@ static int g_engine_inited;
 static void container_init(const char *rootfs) {
     // PID ns: only containers (rootfs) get PID 1
     if (rootfs) g_init_hostpid = getpid();
+    // cross-engine-process cgroup accounting: a FRESH shared slot table for THIS container init, inherited
+    // by every guest fork (see state.c). Per-container so sibling forkserver workers never share a total.
+    if (rootfs) acct_container_reset();
     {
         const char *h = getenv("DD_HOSTNAME");
         // ddockerd -> jit config

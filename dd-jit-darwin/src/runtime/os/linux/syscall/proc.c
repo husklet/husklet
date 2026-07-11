@@ -356,6 +356,7 @@ static void fork_child_hooks(struct cpu *c) {
     ts_after_fork();        // drop the inherited task-state slot cache so the child re-claims its own
     poslk_after_fork();     // re-cache pid; child inherits NONE of the parent's fcntl record locks
     proc_reg_after_fork();  // publish the fork child in /proc and stop it inheriting the parent's registry path
+    acct_after_fork();      // claim this child's OWN cgroup accounting slot (new host pid, one task)
     wipefork_apply_child(); // MADV_WIPEONFORK: zero-fill the ranges the guest marked wipe-on-fork
     mlk_reset();            // mlock(2): memory locks are NOT inherited across fork -> child starts unlocked
     if (fp) t[4] = now_ns();
@@ -660,6 +661,7 @@ static int svc_proc(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64
         PCACHE_SAVE_HOOK; // opt8: persist the translated arena before the one-shot _exit (DDJIT_PCACHE only)
 #endif
         futex_robust_exit(c); // robust mutexes still held by the calling thread -> OWNER_DIED + wake waiters
+        acct_proc_leave();    // release this process's cgroup accounting slot (_exit bypasses atexit)
         proc_reg_unlink();    // drop our /proc process-table entry (_exit bypasses the atexit handler)
         poslk_on_exit();      // release this process's in-engine fcntl advisory locks
         sysv_on_exit();       // apply SEM_UNDO + GC this container's SysV objects (_exit skips atexit)
@@ -1528,6 +1530,13 @@ static int svc_proc(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64
             G_RET(c) = (uint64_t)spawn_thread(c, a0, a1, a3, a2, a4);
             break;
         }
+        // cgroup pids.max also gates a FORKED PROCESS: a forked child is a new container task, so a fork
+        // past the limit must fail EAGAIN exactly as clone(CLONE_THREAD) does (the container-wide count is
+        // one shared budget across the process tree). Previously only in-process threads were gated.
+        if (g_pids_max && acct_pids_total() >= g_pids_max) {
+            G_RET(c) = (uint64_t)(int64_t)(-EAGAIN);
+            break;
+        }
         // fork/vfork: COW copy; child continues. Flush RAM-backed scratch into the real (shared) fds so
         // parent and child see one coherent file via the inherited description, exactly as POSIX requires
         // (the heap-resident buffers would otherwise COW-diverge while the fd stays shared).
@@ -1573,10 +1582,10 @@ static int svc_proc(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64
         }
         if (pid > 0) { // parent side of a successful fork: count it for /proc/stat processes + pids.current
             atomic_fetch_add(&g_forks_since_boot, 1);
-            atomic_fetch_add(&g_pids_cur, 1);
             proc_reg_mark_child((int)pid); // guest-pid namespace: register the child NOW (parent-side, race-
                                            // free) so a kill/pidfd membership check can never ESRCH it before
                                            // it runs its own proc_reg_after_fork publish
+            acct_child_born((int)pid); // register the child's OWN task slot (container-wide pids.current)
         }
         // CLONE_PARENT_SETTID(0x00100000): store the child's tid (its pid) into the PARENT's *ptid (a2).
         // Mutually exclusive with CLONE_PIDFD (which also uses the ptid slot), so it never clobbers a pidfd.
@@ -2090,6 +2099,11 @@ static int svc_proc(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64
             G_RET(c) = (uint64_t)spawn_thread(c, flags, ca[5] + ca[6], ca[7], ca[3], ca[2]);
             break;
         }
+        // cgroup pids.max gates a clone3 forked PROCESS too (see case 220): fork past the limit -> EAGAIN.
+        if (g_pids_max && acct_pids_total() >= g_pids_max) {
+            G_RET(c) = (uint64_t)(int64_t)(-EAGAIN);
+            break;
+        }
         sigexit_init(); // shared signal-death relay must exist in the parent before fork (see case 220)
         pid_t pid = fork();
         // child: the same shared engine reset as the clone/fork site above (cache re-alias / §B shadow /
@@ -2121,8 +2135,8 @@ static int svc_proc(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64
         }
         if (pid > 0) { // parent side of a successful clone3 fork: count it (see case 220)
             atomic_fetch_add(&g_forks_since_boot, 1);
-            atomic_fetch_add(&g_pids_cur, 1);
             proc_reg_mark_child((int)pid); // guest-pid namespace: parent-side registration (see case 220)
+            acct_child_born((int)pid); // register the child's OWN task slot (container-wide pids.current)
         }
         // clone_args: parent_tid = ca[3]. CLONE_PARENT_SETTID stores the child's tid (pid) into the PARENT's
         // parent_tid (a distinct field from pidfd in clone3, so it never conflicts with CLONE_PIDFD).

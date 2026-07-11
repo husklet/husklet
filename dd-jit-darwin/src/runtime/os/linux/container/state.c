@@ -73,6 +73,174 @@ static _Atomic unsigned long long g_forks_since_boot = 0;
 // PID ns: host pid of the container init -> guest sees it as PID 1
 static int g_init_hostpid = 0;
 
+// ===================== cross-engine-process cgroup accounting (pids + memory) =====================
+// A container's guest processes are SEPARATE host processes (a guest fork() is a real host fork()), so
+// the tasks and memory a cgroup must aggregate are spread across DIFFERENT engine processes. The
+// process-local g_pids_cur / g_mem_charged therefore under-report: a parent could not see a forked
+// child's tasks/memory in cgroup.procs / pids.current / memory.current, and pids.max was enforced only
+// for in-process threads (spawn_thread), never for a forked process. FIX: a small MAP_SHARED|MAP_ANON
+// slot table, created FRESH when a process becomes a container init (container_init / the forkserver
+// warm re-anchor) and inherited by every guest fork of that init -- COW keeps ONE physical page across
+// fork, exactly like the futex bucket table (thread.c). Each engine process owns one slot keyed by its
+// host pid, in which it publishes its live guest-task count + charged bytes; the cgroup files SUM the
+// LIVE slots (a slot whose pid is dead is skipped and reclaimed), so the totals are container-wide AND
+// self-healing across a crash -- no fragile running counter to leak on SIGKILL. A fresh segment per
+// container-init isolates sibling forkserver workers (each is its own container).
+#define DD_ACCT_SLOTS 1024
+struct dd_acct_slot {
+    _Atomic int pid;                // host pid owning this slot (0 = free)
+    _Atomic int tasks;              // this process's live guest-task (thread) count
+    _Atomic unsigned long long mem; // this process's charged anon bytes (memory.current aggregate)
+};
+static struct dd_acct_slot *g_acct;      // shared slot table (NULL if unavailable -> local fallback)
+static struct dd_acct_slot *g_acct_self; // this process's own slot (re-found after fork)
+static void acct_proc_leave(void);       // (defined below; atexit'd from acct_container_reset)
+// g_mem_charged INHERITED at fork: a child COW-inherits the parent's charge, so its memory.current
+// contribution must be only what IT allocates AFTER the fork -- else the parent's charge is counted twice
+// (once in each slot). init's baseline is 0. This process's slot mem = g_mem_charged - g_mem_base.
+static _Atomic unsigned long long g_mem_base = 0;
+
+static unsigned long long acct_self_mem(void) {
+    unsigned long long c = atomic_load(&g_mem_charged), b = atomic_load(&g_mem_base);
+    return c > b ? c - b : 0;
+}
+
+// True if host pid `p` is a live process (self needs no syscall). errno-preserving so it is safe to call
+// from the fork/clone gate without perturbing the caller's syscall-boundary errno.
+static int acct_pid_live(int p) {
+    if (p <= 0) return 0;
+    if (p == (int)getpid()) return 1;
+    int se = errno;
+    int r = (kill(p, 0) == 0 || errno != ESRCH);
+    errno = se;
+    return r;
+}
+
+// Claim (or find) THIS process's slot: reuse one already tagged with our pid, else grab a free/dead one.
+static void acct_claim_self(void) {
+    if (!g_acct) {
+        g_acct_self = NULL;
+        return;
+    }
+    int me = (int)getpid();
+    for (int i = 0; i < DD_ACCT_SLOTS && !g_acct_self; i++)
+        if (atomic_load(&g_acct[i].pid) == me) g_acct_self = &g_acct[i];
+    for (int i = 0; i < DD_ACCT_SLOTS && !g_acct_self; i++) {
+        int p = atomic_load(&g_acct[i].pid);
+        if (p != 0 && acct_pid_live(p)) continue; // a live peer holds this slot
+        int exp = p;
+        if (atomic_compare_exchange_strong(&g_acct[i].pid, &exp, me)) g_acct_self = &g_acct[i];
+    }
+    if (g_acct_self) {
+        atomic_store(&g_acct_self->tasks, atomic_load(&g_pids_cur));
+        atomic_store(&g_acct_self->mem, acct_self_mem());
+    }
+}
+
+// (Re)create the shared accounting table for a NEW container init and claim this process's slot. Called
+// from container_init (normal launch + cold forkserver) and the forkserver warm re-anchor point.
+static void acct_container_reset(void) {
+    size_t sz = sizeof(struct dd_acct_slot) * DD_ACCT_SLOTS;
+    void *m = mmap(NULL, sz, PROT_READ | PROT_WRITE, MAP_SHARED | MAP_ANON, -1, 0);
+    g_acct = (m == MAP_FAILED) ? NULL : (struct dd_acct_slot *)m; // kernel zero-fills -> all slots free
+    g_acct_self = NULL;
+    acct_claim_self();
+    static int reg = 0; // free our slot on a normal exit (fork children inherit this atexit registration)
+    if (!reg) {
+        atexit(acct_proc_leave);
+        reg = 1;
+    }
+}
+
+// A forked child is a NEW host process: it kept only the calling thread (one task) and needs its OWN
+// slot (its pid differs from the parent's). Called from the fork child path (fork_child_hooks).
+static void acct_after_fork(void) {
+    atomic_store(&g_pids_cur, 1);                        // fork() clones only the calling thread -> one task now
+    atomic_store(&g_mem_base, atomic_load(&g_mem_charged)); // charge inherited COW -> child counts only NEW allocs
+    g_acct_self = NULL;                                 // the inherited pointer is the PARENT's slot; re-find ours
+    acct_claim_self();
+}
+
+// The parent pre-registers a just-forked child's slot so pids.current/memory reflect it immediately
+// (no race waiting for the child to schedule); the child later re-adopts this same slot in
+// acct_after_fork (same pid -> reused).
+static void acct_child_born(int childpid) {
+    if (!g_acct || childpid <= 0) return;
+    for (int i = 0; i < DD_ACCT_SLOTS; i++)
+        if (atomic_load(&g_acct[i].pid) == childpid) return; // child already self-registered
+    for (int i = 0; i < DD_ACCT_SLOTS; i++) {
+        int p = atomic_load(&g_acct[i].pid);
+        if (p != 0 && acct_pid_live(p)) continue;
+        int exp = p;
+        if (atomic_compare_exchange_strong(&g_acct[i].pid, &exp, childpid)) {
+            atomic_store(&g_acct[i].tasks, 1);
+            atomic_store(&g_acct[i].mem, 0);
+            return;
+        }
+    }
+}
+
+// Publish this process's live task count / charged bytes into its slot (cheap; call after g_pids_cur or
+// g_mem_charged changes). No-op when this process has no slot (bare mode / table full -> local fallback).
+static inline void acct_publish_tasks(void) {
+    if (g_acct_self) atomic_store_explicit(&g_acct_self->tasks, atomic_load(&g_pids_cur), memory_order_relaxed);
+}
+
+static inline void acct_publish_mem(void) {
+    if (g_acct_self) atomic_store_explicit(&g_acct_self->mem, acct_self_mem(), memory_order_relaxed);
+}
+
+// Release this process's slot on exit (idempotent). A crash that skips this leaves a stale slot the
+// liveness check reclaims, so this is best-effort cleanliness, not a correctness requirement.
+static void acct_proc_leave(void) {
+    if (g_acct_self) {
+        atomic_store(&g_acct_self->pid, 0);
+        g_acct_self = NULL;
+    }
+}
+
+// Container-wide live guest-task count = sum over every live slot's task count (dead slots skipped +
+// reclaimed). Drives pids.current AND the pids.max fork/clone gate. Falls back to the process-local
+// count when the shared table is unavailable.
+static int acct_pids_total(void) {
+    if (!g_acct) {
+        int l = atomic_load(&g_pids_cur);
+        return l > 0 ? l : 1;
+    }
+    int me = (int)getpid(), total = 0;
+    for (int i = 0; i < DD_ACCT_SLOTS; i++) {
+        int p = atomic_load(&g_acct[i].pid);
+        if (p == 0) continue;
+        if (p != me && !acct_pid_live(p)) { // a dead engine's slot -> reclaim it
+            int exp = p;
+            atomic_compare_exchange_strong(&g_acct[i].pid, &exp, 0);
+            continue;
+        }
+        int t = atomic_load(&g_acct[i].tasks);
+        total += t > 0 ? t : 1;
+    }
+    return total > 0 ? total : 1;
+}
+
+// Container-wide charged memory (bytes) = sum over every live slot (self read live for freshness). The
+// cross-process memory.current under a memory.max cap (the charge model is only maintained under a cap).
+static unsigned long long acct_mem_total(void) {
+    if (!g_acct) return acct_self_mem();
+    int me = (int)getpid();
+    unsigned long long total = 0;
+    for (int i = 0; i < DD_ACCT_SLOTS; i++) {
+        int p = atomic_load(&g_acct[i].pid);
+        if (p == 0) continue;
+        if (p != me && !acct_pid_live(p)) {
+            int exp = p;
+            atomic_compare_exchange_strong(&g_acct[i].pid, &exp, 0);
+            continue;
+        }
+        total += (p == me) ? acct_self_mem() : atomic_load(&g_acct[i].mem);
+    }
+    return total;
+}
+
 // ---- checkpoint/restore deterministic address placement (armed only when checkpoint/restore is in use) ----
 // A same-ISA JIT keeps guest VA == host VA, so a restore MAP_FIXEDs every guest region back to its exact
 // address. But macOS ASLR places kernel-chosen guest mmaps (heap, stack, anon/file maps) at LOW addresses

@@ -106,6 +106,9 @@ static void container_init(const char *rootfs) {
     // returned the real host pid, and bash's setpgid(0,1)/tcsetpgrp targeted host pid 1 (launchd) -> the
     // foreground command got SIGTTOU/SIGTTIN-stopped ("[N]+ Stopped  ls") instead of running.
     if (rootfs) g_init_hostpid = getpid();
+    // cross-engine-process cgroup accounting: a FRESH shared slot table for THIS container init, inherited
+    // by every guest fork (see state.c). Per-container so sibling forkserver workers never share a total.
+    if (rootfs) acct_container_reset();
     container_read_resource_env(); // docker --cpus / --read-only / --ulimit (DD_CPUS/DD_ROOTFS_RO/DD_ULIMITS)
     // #353: the daemon's DEFAULT launch path is the typed --configfd bridge, which hands the container
     // model to the engine as DD_* ENV (ddjit_configfd.c), NOT as the --hostname/--mem-max/--pids-max CLI
