@@ -187,6 +187,24 @@ static void fd_carry_virt(int newfd, int oldfd) {
         g_tfd_deadline[newfd] = g_tfd_deadline[oldfd];
         g_tfd_interval[newfd] = g_tfd_interval[oldfd];
     }
+    // inotify: the instance is a (host-shared) kqueue with its watches; carry the routing flag so the dup's
+    // read() drains the same event queue. Watches stay owned by the original instance fd -- closing the DUP
+    // tears down nothing (no watch is owned by it), and closing the original behaves as before the dup.
+    if (oldfd < 1024 && newfd < 1024 && g_inotify[oldfd]) g_inotify[newfd] = 1;
+    // signalfd: a duplicate reads the same shared self-pipe; mark it so the signalfd read/update paths accept it.
+    if (g_sigfd_is[oldfd] || oldfd == g_sigfd_read) g_sigfd_is[newfd] = 1;
+    // epoll: a duplicate shares the same (host-shared) kqueue. Mark BOTH aliases dup'd so epoll_ctl/wait use
+    // the immediate path (interest goes straight to the shared kqueue, visible to both fds); flush any
+    // changelist queued before the dup now so already-registered interest is not stranded on the original.
+    if (g_epoll[oldfd]) {
+        g_epoll[newfd] = 1;
+        g_ep_dupd[oldfd] = 1;
+        g_ep_dupd[newfd] = 1;
+        if (g_ep_chgn[oldfd] > 0) {
+            kevent(oldfd, g_ep_chg[oldfd], g_ep_chgn[oldfd], NULL, 0, NULL);
+            g_ep_chgn[oldfd] = 0;
+        }
+    }
 }
 
 // Guest O_DIRECT differs per arch (aarch64/asm-generic = 0x10000, x86-64 = 0x4000); derive it from the
@@ -379,8 +397,9 @@ static int svc_io(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t
             G_RET(c) = r < 0 ? (uint64_t)(int64_t)r : (uint64_t)r;
             break;
         }
-        // signalfd read -> struct signalfd_siginfo
-        if (rfd >= 0 && rfd == g_sigfd_read) {
+        // signalfd read -> struct signalfd_siginfo. A dup of the signalfd (g_sigfd_is[rfd]) reads the same
+        // shared self-pipe, so accept it too -- otherwise the duplicate fell through to a raw 1-byte pipe read.
+        if (rfd >= 0 && (rfd == g_sigfd_read || (rfd < DD_NFD && g_sigfd_is[rfd]))) {
             // Linux needs room for at least one struct signalfd_siginfo (128 bytes); a shorter buffer is
             // EINVAL and must NOT consume a pending signal (checked before draining the wake byte).
             if (a2 < 128) {

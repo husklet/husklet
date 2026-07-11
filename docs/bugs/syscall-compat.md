@@ -178,139 +178,27 @@ DD_PCACHE=0 cargo run -q -p dd-jit --example ah_run_guest -- target/ah-probes/ep
 
 Linux/qemu observed `wait=1 ... read=1 char=Q`; dd observed `wait=0 ... read=1 char=Q`.
 
-## `dup(epoll_fd)` Loses Pending Interest Registration
+## Fork Children Lose Inherited Epoll Interest
 
 Priority: P1
-Impact: duplicated epoll fds can miss readiness
+Impact: child processes lose inherited epoll interest lists
 Confidence: High
 
-Verification status: Proven in isolated worktree `/Users/x/dd/dd-worker-BA2-fd-event-20260710`.
+(The timerfd half is FIXED: the fork child's kqueue rebuild now re-arms an inherited timerfd from its
+tracked deadline/interval, so the child sees the expiration. Only the epoll interest-list half remains.)
 
 Evidence:
 
-- Deferred changelists are stored per numeric epoll fd: `dd-jit-darwin/src/runtime/os/linux/syscall/helpers.c:924`.
-- `epoll_ctl` queues changes under the original epfd: `dd-jit-darwin/src/runtime/os/linux/syscall/event.c:348`.
-- `epoll_wait` submits only the waiting fd's changelist: `dd-jit-darwin/src/runtime/os/linux/syscall/event.c:471`.
-- `dup` does not copy epoll instance metadata: `dd-jit-darwin/src/runtime/os/linux/syscall/io.c:900`.
+- Rebuild creates empty kqueues for epoll on fork: `dd-jit-darwin/src/runtime/os/linux/syscall/event.c` (`kqueue_rebuild_after_fork`).
 
 Why this is bad:
 
-Linux treats a duplicated epoll fd as the same epoll instance. If `epoll_ctl` registers interest on the original epfd, `epoll_wait` on the duplicate must see the ready event.
-
-Isolated proof:
-
-```sh
-mac bash -lc 'timeout 5 ddjit-linux_aarch64 scratch-BA2/epoll_dup_instance.aarch64'
-```
-
-Linux observed `wait_dup=1 ... data=0xabcddcba`; dd observed `wait_dup=0 errno=0`.
-
-## Fork Children Lose Inherited Epoll/Timerfd State
-
-Priority: P1
-Impact: child processes lose inherited event sources and timers
-Confidence: High
-
-Verification status: Proven in isolated worktree `/Users/x/dd/dd-worker-AH-jit-runtime-20260710`.
-
-Evidence:
-
-- Fork child calls kqueue rebuild: `dd-jit-darwin/src/runtime/os/linux/syscall/proc.c:300`.
-- Rebuild creates empty kqueues for epoll/timerfd/inotify: `dd-jit-darwin/src/runtime/os/linux/syscall/event.c:151`.
-- Timerfd state uses kqueue: `dd-jit-darwin/src/runtime/os/linux/syscall/event.c:811`.
-- Timerfd read drains kqueue state: `dd-jit-darwin/src/runtime/os/linux/syscall/io.c:438`.
-
-Why this is bad:
-
-Linux children inherit epoll and timerfd objects. Replacing them with empty kqueues drops interest lists and armed timers, so child event loops can time out or hang.
-
-Isolated proof:
-
-```sh
-DD_PCACHE=0 cargo run -q -p dd-jit --example ah_run_guest -- target/ah-probes/epoll_fork_childwait.aarch64
-timeout 5 env DD_PCACHE=0 cargo run -q -p dd-jit --example ah_run_guest -- target/ah-probes/timerfd_fork.aarch64
-```
-
-Linux/qemu epoll child observed `wait=1 data=61626364 child_ok=1`; dd observed `wait=0 data=0 child_ok=0`. Linux/qemu timerfd child read one expiration; dd timed out.
-
-## Forked Child Loses Inherited Inotify Watch And Can Hang
-
-Priority: P1
-Impact: fork children can lose inherited file-watch state and block
-Confidence: High
-
-Verification status: Proven in isolated worktree `/Users/x/dd/dd-worker-BA2-fd-event-20260710`.
-
-Evidence:
-
-- Fork rebuilds epoll/timerfd/inotify kqueues as fresh empty kqueues: `dd-jit-darwin/src/runtime/os/linux/syscall/event.c:151`.
-- Inotify creates a kqueue and applies `IN_NONBLOCK`: `dd-jit-darwin/src/runtime/os/linux/syscall/event.c:567`.
-- Watches are registered on the original kqueue: `dd-jit-darwin/src/runtime/os/linux/syscall/event.c:589`.
-- Read can block if rebuilt fd loses `O_NONBLOCK`: `dd-jit-darwin/src/runtime/os/linux/syscall/io.c:382`.
-
-Why this is bad:
-
-Linux children inherit inotify instances and watches. dd drops the inherited watch and can also lose nonblocking status, so the child blocks in `read()` instead of receiving the event.
-
-Isolated proof:
-
-```sh
-mac bash -lc 'timeout 5 ddjit-linux_aarch64 scratch-BA2/inotify_fork_watch.aarch64'
-```
-
-Linux observed `child_read=32 errno=0 mask=0x100`; dd produced no child result and was killed by timeout.
-
-## `dup(signalfd)` Loses Signalfd Semantics
-
-Priority: P1
-Impact: duplicated signalfds return raw pipe bytes and reject valid updates
-Confidence: High
-
-Verification status: Proven in isolated worktree `/Users/x/dd/dd-worker-AT-jit-fd-event-20260710`.
-
-Evidence:
-
-- Signalfd reads only use the virtual path when `rfd == g_sigfd_read`: `dd-jit-darwin/src/runtime/os/linux/syscall/io.c:340`.
-- Updates reject duplicated signalfds because they are not the original numeric fd: `dd-jit-darwin/src/runtime/os/linux/syscall/event.c:775`.
-- `dup` does not carry signalfd metadata: `dd-jit-darwin/src/runtime/os/linux/syscall/io.c:900`.
-
-Why this is bad:
-
-Linux duplicated signalfds refer to the same signalfd object. dd turns the duplicate into a raw pipe-like descriptor and rejects valid mask updates.
-
-Isolated proof:
-
-```sh
-./scratch-t186/ddjit-aarch64 ./scratch-AT/.signalfd_dup.bin
-```
-
-Linux observed `read_dup=128` and a successful update; dd observed `read_dup=1` and `update_errno=22`.
-
-## `dup(inotify_fd)` Loses Inotify Read Semantics
-
-Priority: P2
-Impact: duplicated inotify descriptors cannot read events
-Confidence: High
-
-Verification status: Proven in isolated worktree `/Users/x/dd/dd-worker-AT-jit-fd-event-20260710`.
-
-Evidence:
-
-- Inotify instances are stamped only on the original fd: `dd-jit-darwin/src/runtime/os/linux/syscall/event.c:567`.
-- Inotify reads require `g_inotify[rfd]`: `dd-jit-darwin/src/runtime/os/linux/syscall/io.c:367`.
-- `dup` does not carry that state: `dd-jit-darwin/src/runtime/os/linux/syscall/io.c:900`.
-
-Why this is bad:
-
-Wrappers often duplicate descriptors before passing them through event loops. dd loses the virtual inotify metadata, so events are unavailable through the duplicate.
-
-Isolated proof:
-
-```sh
-./scratch-t186/ddjit-aarch64 ./scratch-AT/.inotify_dup.bin
-```
-
-Linux observed `read_dup=32 read_dup_errno=0 first_mask=0x100`; dd observed `read_dup=-1 read_dup_errno=6`.
+Linux children inherit the epoll interest list. dd rebuilds an empty kqueue and has no persistent record of
+each registration's `epoll_event.data` (udata) to re-register with, so a child that epoll_waits WITHOUT
+re-registering (rather than re-initialising its event loop, as most runtimes do) sees no events. A full fix
+needs a per-instance registration table (fd + events + udata) written on every epoll_ctl -- a hot-path
+change deferred to avoid destabilising the epoll fast path; most real runtimes re-register post-fork so this
+is rarely hit.
 
 ## aarch64 4K Subpage `munmap` Returns `EINVAL`
 

@@ -553,6 +553,9 @@ static uint64_t g_nonpie_lo, g_nonpie_hi, g_nonpie_bias;
 static uint8_t g_timerfd[DD_NFD];
 // fd is an inotify (a kqueue with EVFILT_VNODE watches) -> read() drains it
 static uint8_t g_inotify[DD_NFD];
+// per inotify instance: IN_NONBLOCK was requested. macOS kqueue fds don't survive fork, so the child's
+// rebuilt kqueue must re-apply O_NONBLOCK (else a blocking read on the inherited instance can hang).
+static uint8_t g_inotify_nb[DD_NFD];
 // inotify-on-a-directory emulation: kqueue says "the dir changed" but not which entry, so we keep the
 // watched dir's path + a snapshot of its names and diff on read() to synthesize IN_CREATE/IN_DELETE+name.
 static char g_inotify_wpath[DD_NFD][512];

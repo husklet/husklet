@@ -233,6 +233,10 @@ static __thread uint64_t g_force_deliver;
 static int g_sigfd_pipe[2] = {-1, -1};
 // its read end (the guest's signalfd)
 static int g_sigfd_read = -1;
+// dup() of a signalfd yields another fd that refers to the SAME signalfd object. dd's model is a single
+// shared self-pipe, so a duplicate is a host dup of g_sigfd_pipe[0] that reads the same pipe -- mark it here
+// so the signalfd read/update paths recognise it (they otherwise only match the original g_sigfd_read).
+static uint8_t g_sigfd_is[DD_NFD];
 // signals routed to the signalfd (1<<signo)
 static volatile uint64_t g_sigfd_mask;
 

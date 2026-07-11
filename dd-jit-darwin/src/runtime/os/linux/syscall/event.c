@@ -166,6 +166,37 @@ static void kqueue_rebuild_after_fork(void) {
             dup2(kq, fd);
             close(kq);
         }
+        // timerfd: Linux children INHERIT the armed timer. The deadline/interval survive the fork (COW BSS),
+        // so re-arm the EVFILT_TIMER on the fresh kqueue from them (converting the absolute monotonic
+        // deadline back to a relative first delay), rather than leaving the child's timer disarmed.
+        if (g_timerfd[fd] && g_tfd_deadline[fd] > 0) {
+            struct timespec now;
+            clock_gettime(CLOCK_MONOTONIC, &now);
+            int64_t now_ns = (int64_t)now.tv_sec * 1000000000LL + now.tv_nsec;
+            int64_t iv = g_tfd_interval[fd];
+            int64_t delay = g_tfd_deadline[fd] - now_ns;
+            if (delay < 0) delay = (iv > 0) ? (iv - ((-delay) % iv)) : 0;
+            struct kevent kv;
+            uint16_t flg = EV_ADD | (iv > 0 ? 0 : EV_ONESHOT);
+            int64_t arm = (iv > 0) ? iv : delay;
+            if (arm < 0) arm = 0;
+            EV_SET(&kv, 1, EVFILT_TIMER, flg, NOTE_NSECONDS, arm, NULL);
+            kevent(fd, &kv, 1, NULL, 0, NULL);
+        }
+        // inotify: Linux children inherit the instance AND its watches. The watch fds (O_EVTONLY opens) are
+        // ordinary fds that survive the fork, so re-register each one's EVFILT_VNODE on the rebuilt kqueue and
+        // re-apply O_NONBLOCK (the fresh kqueue is blocking by default -> an inherited nonblock read could hang).
+        if (g_inotify[fd]) {
+            if (g_inotify_nb[fd]) fcntl(fd, F_SETFL, O_NONBLOCK);
+            for (int w = 0; w < 1024; w++) {
+                if (g_inotify_owner[w] != fd) continue;
+                if (fcntl(w, F_GETFD) == -1) continue; // the watch fd itself must still be open
+                struct kevent wkv;
+                EV_SET(&wkv, w, EVFILT_VNODE, EV_ADD | EV_CLEAR,
+                       NOTE_WRITE | NOTE_DELETE | NOTE_RENAME | NOTE_ATTRIB | NOTE_EXTEND, 0, (void *)(intptr_t)w);
+                kevent(fd, &wkv, 1, NULL, 0, NULL);
+            }
+        }
         // the fresh instance carries no registrations: drop this epoll fd's inherited (now-invalid) changelist
         // and prime buffer so a later epoll_ctl/epoll_wait re-arms against the new kqueue, not stale state.
         if (g_ep_chg[fd]) {
@@ -376,8 +407,9 @@ static int svc_event(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint6
         uint16_t xf = (uint16_t)((ev & 0x80000000u ? EV_CLEAR : 0) | (ev & 0x40000000u ? EV_ONESHOT : 0));
         int want_rd = (op != 2) && (ev & 0x1); // EPOLLIN
         int want_wr = (op != 2) && (ev & 0x4); // EPOLLOUT
-        if (epopt_on() && (int)a0 >= 0 && (int)a0 < DD_NFD && fd >= 0 && fd < DD_NFD) {
-            // W3E fast path: track armed filters, defer the change to the next epoll_wait kevent().
+        if (epopt_on() && (int)a0 >= 0 && (int)a0 < DD_NFD && !g_ep_dupd[(int)a0] && fd >= 0 && fd < DD_NFD) {
+            // W3E fast path: track armed filters, defer the change to the next epoll_wait kevent(). A dup'd
+            // instance is excluded (g_ep_dupd) so its interest is submitted immediately to the shared kqueue.
             int ep = (int)a0;
             int lk = ep_lock();
             if (want_rd) {
@@ -459,7 +491,9 @@ static int svc_event(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint6
         struct kevent kv[256];
         uint8_t *out = (uint8_t *)a1;
         int ep = (int)a0;
-        int opt = epopt_on() && ep >= 0 && ep < DD_NFD;
+        // A dup'd instance opts out of the deferred-changelist machinery (its interest was submitted straight
+        // to the shared kqueue), so it just blocks on the kqueue like the immediate path.
+        int opt = epopt_on() && ep >= 0 && ep < DD_NFD && !g_ep_dupd[ep];
         int32_t tmo = (int32_t)a3; // guest timeout ms: <0 = infinite (must NEVER return 0), 0 = poll, >0 = finite
         if (wakelog_on() && tmo < 0) wakelog("epw_enter", ep, (long)tmo, (long)maxev);
         // regression fix: a cross-thread epoll_ctl fires the internal EVFILT_USER wake knote, which
@@ -624,7 +658,10 @@ static int svc_event(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint6
         }
         int r = kqueue();
         if (r >= 0) {
-            if (r < DD_NFD) g_inotify[r] = 1;
+            if (r < DD_NFD) {
+                g_inotify[r] = 1;
+                g_inotify_nb[r] = (a0 & 0x800) ? 1 : 0; // remember IN_NONBLOCK for the fork-child kqueue rebuild
+            }
             if (a0 & 0x800) fcntl(r, F_SETFL, O_NONBLOCK);
             // macOS kqueue() defaults FD_CLOEXEC SET; Linux inotify_init1(0) leaves it CLEAR. Set it exactly
             // per IN_CLOEXEC (clearing the kqueue default otherwise) so an inotify fd created without the
@@ -908,7 +945,9 @@ static int svc_event(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint6
                 G_RET(c) = (uint64_t)(-EBADF);
                 break;
             }
-            if ((int)a0 != g_sigfd_pipe[0]) {
+            // The original signalfd (g_sigfd_pipe[0]) OR any dup of it (g_sigfd_is) updates the SAME object;
+            // rejecting a dup as "not our signalfd" was wrong (Linux accepts a mask update on a dup'd signalfd).
+            if ((int)a0 != g_sigfd_pipe[0] && !((int)a0 >= 0 && (int)a0 < DD_NFD && g_sigfd_is[(int)a0])) {
                 G_RET(c) = (uint64_t)(-EINVAL);
                 break;
             }
@@ -942,7 +981,9 @@ static int svc_event(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint6
         if (a3 & 0x80000) fcntl(g_sigfd_pipe[0], F_SETFD, FD_CLOEXEC);
         // SFD_NONBLOCK
         if (a3 & 0x800) fcntl(g_sigfd_pipe[0], F_SETFL, O_NONBLOCK);
-        G_RET(c) = (uint64_t)g_sigfd_pipe[0];
+        // An UPDATE (fd != -1) returns the SAME fd the caller passed (Linux), including a dup alias; a fresh
+        // create returns the shared pipe read end.
+        G_RET(c) = (int)a0 != -1 ? a0 : (uint64_t)g_sigfd_pipe[0];
         break;
     }
     case 85: {
