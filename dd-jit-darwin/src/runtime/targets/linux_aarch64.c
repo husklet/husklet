@@ -608,20 +608,22 @@ static void container_init(const char *rootfs) {
         if (g_uid < 0) g_uid = 0;
         // container default: run as root (0); unless DD_UID/--uid set
         if (g_gid < 0) g_gid = 0;
-        // bind-mount volumes: "[ro:]guestpath:hostdir,..." -- delegate to add_vol() (the shared vfs.c
-        // parser) so the optional `ro:` read-only marker is handled in ONE place for both engines.
-        const char *vspec = getenv("DDVOL");
-        if (vspec) {
-            char tmp[4096];
-            snprintf(tmp, sizeof tmp, "%s", vspec);
-            char *sv = NULL;
-            for (char *t = strtok_r(tmp, ",", &sv); t; t = strtok_r(NULL, ",", &sv))
-                add_vol(t);
-        }
         // docker -w / initial working directory: start the guest in DD_CWD (must be reachable inside the
         // container -- typically a bind-mounted volume). confine() normalizes + clamps it to the rootfs.
         const char *icwd = getenv("DD_CWD");
         if (icwd && icwd[0]) confine(icwd, g_cwd, sizeof g_cwd);
+    }
+    // bind-mount volumes: "[ro:]guestpath:hostdir,..." -- delegate to add_vol() (the shared vfs.c parser)
+    // so the optional `ro:` read-only marker is handled in ONE place for both engines. Ingested regardless
+    // of whether a rootfs is set (matching linux_x86_64.c): add_vol opens the HOST dir directly and the
+    // registration is what surfaces the bind in /proc/self/mountinfo + /proc/mounts.
+    const char *vspec = getenv("DDVOL");
+    if (vspec && vspec[0]) {
+        char tmp[4096];
+        snprintf(tmp, sizeof tmp, "%s", vspec);
+        char *sv = NULL;
+        for (char *t = strtok_r(tmp, ",", &sv); t; t = strtok_r(NULL, ",", &sv))
+            add_vol(t);
     }
     // derive the run user's supplementary group set from the image rootfs (runc additionalGids), after
     // g_uid/g_gid + the overlay lowers are resolved, so getgroups(2) and /proc/self/status Groups: report it.
