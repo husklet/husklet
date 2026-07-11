@@ -820,7 +820,34 @@ impl Presenter for MetalPresenter {
                 None,
             );
         }
-        let Some(drawable) = (unsafe { win.layer.nextDrawable() }) else {
+        if win.composite_tex.is_none() {
+            win.composite_tex = Some(self.ctx.new_bgra_texture(w, h));
+        }
+        let composite = win
+            .composite_tex
+            .as_ref()
+            .expect("composite texture")
+            .clone();
+        // A drawable to show on the visible window, IF dd-display is the FOREGROUND app. When it is not, Core
+        // Animation throttles drawable vending to this layer and `nextDrawable` BLOCKS the single-threaded
+        // present loop ~1s per frame (then returns nil) -- which stalls buffer releases, wl frame callbacks
+        // AND the GPU executor, freezing the frame-callback-paced guest for seconds while backgrounded (the
+        // "renders in bursts then stalls / takes an hour to propagate" bug). So we only ask for a drawable
+        // while active; when inactive we skip the visible blit. The compositor pass below still renders into
+        // our OWN `composite_tex` (no drawable needed), so the guest keeps producing frames at full rate, wl
+        // frame pacing keeps advancing, and `last_tex` stays current for SIGUSR1 readback -- the on-screen
+        // window catches up the instant it is refocused. Withholding the frame (the old `return false` on a
+        // nil drawable) is what coupled the guest to CA's background throttle.
+        let app_active = unsafe { NSApplication::sharedApplication(mtm).isActive() };
+        let drawable = if app_active {
+            unsafe { win.layer.nextDrawable() }
+        } else {
+            None
+        };
+        let drawable_texture_size = drawable
+            .as_ref()
+            .map(|d| unsafe { (d.texture().width() as u64, d.texture().height() as u64) });
+        if drawable.is_none() {
             MetalPresenter::log_present_debug(
                 self.present_debug,
                 "no-drawable",
@@ -830,21 +857,12 @@ impl Presenter for MetalPresenter {
                 win,
                 None,
             );
-            return false;
-        };
-        let dst = unsafe { drawable.texture() };
-        let drawable_texture_size = Some((dst.width() as u64, dst.height() as u64));
-        if win.composite_tex.is_none() {
-            win.composite_tex = Some(self.ctx.new_bgra_texture(w, h));
         }
-        let composite = win
-            .composite_tex
-            .as_ref()
-            .expect("composite texture")
-            .clone();
-        // Blit + present in one command buffer. L4: if the source is a guest IOSurface the executor renders
-        // into asynchronously, guard the blit with the cross-queue tearing fence (wait for render-complete,
-        // signal blit-complete) so a partly-rendered surface is never presented.
+        // Composite (always) + blit into the drawable (only when one was vended), in one command buffer. L4:
+        // if the source is a guest IOSurface the executor renders into asynchronously, guard the read with the
+        // cross-queue tearing fence (wait for render-complete, signal read-complete) so a partly-rendered
+        // surface is never sampled. The signal MUST be paired with the wait even when there is no drawable, or
+        // the executor deadlocks awaiting a completion that never comes.
         let fence = match surf.iosurface_id {
             Some(id) if crate::metal::async_on() => crate::metal::fence_begin_present(id),
             _ => None,
@@ -880,13 +898,18 @@ impl Presenter for MetalPresenter {
             enc.drawPrimitives_vertexStart_vertexCount(MTLPrimitiveType::Triangle, 0, 3);
         }
         enc.endEncoding();
-        let blit = cmd.blitCommandEncoder().expect("blit");
-        unsafe { blit.copyFromTexture_toTexture(&composite, &dst) };
-        blit.endEncoding();
+        if let Some(drawable) = &drawable {
+            let dst = unsafe { drawable.texture() };
+            let blit = cmd.blitCommandEncoder().expect("blit");
+            unsafe { blit.copyFromTexture_toTexture(&composite, &dst) };
+            blit.endEncoding();
+        }
         if let Some((_r, present_ev, gen)) = &fence {
             cmd.encodeSignalEvent_value(present_ev, *gen);
         }
-        cmd.presentDrawable(objc2::runtime::ProtocolObject::from_ref(&*drawable));
+        if let Some(drawable) = &drawable {
+            cmd.presentDrawable(objc2::runtime::ProtocolObject::from_ref(&**drawable));
+        }
         cmd.commit();
         win.last_tex = Some(composite); // keep opaque compositor output for SIGUSR1 readback
 
