@@ -231,11 +231,142 @@ static void engine_fd_reloc(int *slot, int newfd) {
     if (hi >= 0) *slot = hi;
 }
 
+// ---- F_SETLEASE lease registry + F_NOTIFY (dnotify) directory-change monitor --------------------
+// macOS has neither file leases nor dnotify, so a bare success armed nothing. We emulate as far as the host
+// allows:
+//   * F_SETLEASE/F_GETLEASE: validate arguments exactly like Linux (fcntl setlease) and track the lease
+//     type per fd so F_GETLEASE round-trips what F_SETLEASE set. RESIDUAL: the lease-BREAK signal on a
+//     conflicting cross-process open is NOT delivered -- macOS gives no rootless hook to intercept another
+//     opener of the same file. Documented in syscall-compat.md.
+//   * F_NOTIFY: backed by a real kqueue EVFILT_VNODE watch on the directory fd, drained on a lazily-spawned
+//     thread that raises the requested signal (F_SETSIG signal, else the SIGIO default) in the guest -- the
+//     same async delivery path POSIX timers/timerfd use (g_pending + the signalfd wake). One-shot by
+//     default; re-armed each event only when DN_MULTISHOT is set.
+#define DN_SIG_DEFAULT 29 // Linux SIGIO
+#define DN_MULTISHOT 0x80000000u
+#define DN_VALID (1u | 2u | 4u | 8u | 16u | 32u | DN_MULTISHOT) // ACCESS/MODIFY/CREATE/DELETE/RENAME/ATTRIB
+
+static int8_t g_lease[DD_NFD];   // 0 = no lease; else lease type + 1 (F_RDLCK 0->1, F_WRLCK 1->2, F_UNLCK 2->3)
+static uint8_t g_fsig[DD_NFD];   // per-fd F_SETSIG signal (0 = default); consulted by O_ASYNC + dnotify
+static uint32_t g_dn_mask[DD_NFD]; // per-fd active dnotify mask (0 = no watch)
+static uint8_t g_dn_sig[DD_NFD];   // signal captured for this fd's dnotify watch at arm time
+
+static int g_dn_kq = -1;
+static pthread_t g_dn_thr;
+static int g_dn_thr_up;
+static pthread_mutex_t g_dn_lk = PTHREAD_MUTEX_INITIALIZER;
+
+// dnotify drain thread: block on the watch kqueue and, per vnode event, raise the armed signal in the guest.
+static void *dn_loop(void *arg) {
+    (void)arg;
+    for (;;) {
+        struct kevent ev;
+        int n = kevent(g_dn_kq, NULL, 0, &ev, 1, NULL);
+        if (n < 0) {
+            if (errno == EINTR) continue;
+            break; // kq closed -> thread exits
+        }
+        if (n == 0) continue;
+        int fd = (int)ev.ident;
+        if (fd < 0 || fd >= DD_NFD) continue;
+        pthread_mutex_lock(&g_dn_lk);
+        uint32_t mask = g_dn_mask[fd];
+        int sig = g_dn_sig[fd] ? g_dn_sig[fd] : DN_SIG_DEFAULT;
+        if (mask && !(mask & DN_MULTISHOT)) { // one-shot: consume the watch (Linux re-arm is explicit)
+            struct kevent del;
+            EV_SET(&del, fd, EVFILT_VNODE, EV_DELETE, 0, 0, NULL);
+            kevent(g_dn_kq, &del, 1, NULL, 0, NULL);
+            g_dn_mask[fd] = 0;
+        }
+        pthread_mutex_unlock(&g_dn_lk);
+        if (!mask) continue; // raced a removal
+        if (sig >= 1 && sig <= 64) {
+            g_sigcode[sig] = 0x80; // SI_KERNEL (generic async source; dnotify carries no user siginfo)
+            __atomic_or_fetch(&g_pending, 1ull << sig, __ATOMIC_SEQ_CST);
+            if ((g_sigfd_mask & (1ull << sig)) && g_sigfd_pipe[1] >= 0) {
+                char b = (char)sig;
+                if (write(g_sigfd_pipe[1], &b, 1) < 0) {} // wake a signalfd/epoll waiter
+            }
+        }
+    }
+    return NULL;
+}
+
+// per-process timers/dnotify are NOT inherited across fork(): a forked child's inherited kqueue + drain
+// thread are dead, so reset the dnotify table so the child re-arms cleanly on its own first F_NOTIFY.
+static void dn_atfork_child(void) {
+    g_dn_kq = -1;
+    g_dn_thr_up = 0;
+    memset(g_dn_mask, 0, sizeof g_dn_mask);
+    pthread_mutex_init(&g_dn_lk, NULL);
+}
+
+// Lazily bring up the shared watch kqueue + drain thread. Caller holds g_dn_lk. Returns 0 / -errno.
+static int dn_init(void) {
+    static int reg = 0;
+    if (!reg) {
+        pthread_atfork(NULL, NULL, dn_atfork_child);
+        reg = 1;
+    }
+    if (g_dn_kq < 0) {
+        g_dn_kq = kqueue();
+        if (g_dn_kq < 0) return -errno;
+        fcntl(g_dn_kq, F_SETFD, FD_CLOEXEC);
+    }
+    if (!g_dn_thr_up) {
+        if (pthread_create(&g_dn_thr, NULL, dn_loop, NULL) != 0) return -EAGAIN;
+        g_dn_thr_up = 1;
+    }
+    return 0;
+}
+
+// fcntl(fd, F_NOTIFY, mask): arm/replace/remove a dnotify watch on the (directory) fd. mask 0 removes it.
+static int dnotify_apply(int fd, uint32_t mask, int sig) {
+    if (fd < 0 || fd >= DD_NFD) return -EBADF;
+    if (mask & ~DN_VALID) return -EINVAL;
+    pthread_mutex_lock(&g_dn_lk);
+    int rc = 0;
+    if (mask == 0) { // remove the watch
+        if (g_dn_mask[fd]) {
+            struct kevent del;
+            EV_SET(&del, fd, EVFILT_VNODE, EV_DELETE, 0, 0, NULL);
+            kevent(g_dn_kq, &del, 1, NULL, 0, NULL);
+            g_dn_mask[fd] = 0;
+        }
+        pthread_mutex_unlock(&g_dn_lk);
+        return 0;
+    }
+    rc = dn_init();
+    if (rc < 0) {
+        pthread_mutex_unlock(&g_dn_lk);
+        return rc;
+    }
+    // Translate the requested DN_* bits into the kqueue vnode fflags (the closest macOS equivalents).
+    unsigned fflags = 0;
+    if (mask & (2u | 32u)) fflags |= NOTE_WRITE | NOTE_EXTEND | NOTE_ATTRIB; // DN_MODIFY/DN_ATTRIB
+    if (mask & (4u | 8u)) fflags |= NOTE_WRITE | NOTE_LINK;                  // DN_CREATE/DN_DELETE (dir entry)
+    if (mask & 16u) fflags |= NOTE_RENAME | NOTE_WRITE;                      // DN_RENAME
+    if (mask & 1u) fflags |= NOTE_ATTRIB;                                    // DN_ACCESS (atime) -- best effort
+    if (!fflags) fflags = NOTE_WRITE | NOTE_DELETE | NOTE_RENAME | NOTE_ATTRIB | NOTE_EXTEND | NOTE_LINK;
+    struct kevent kv;
+    EV_SET(&kv, fd, EVFILT_VNODE, EV_ADD | EV_CLEAR, fflags, 0, (void *)(intptr_t)fd);
+    if (kevent(g_dn_kq, &kv, 1, NULL, 0, NULL) < 0) {
+        rc = -errno;
+        pthread_mutex_unlock(&g_dn_lk);
+        return rc;
+    }
+    g_dn_mask[fd] = mask;
+    g_dn_sig[fd] = (uint8_t)(sig > 0 ? sig : 0);
+    pthread_mutex_unlock(&g_dn_lk);
+    return 0;
+}
+
 static void engine_fd_vacate(int newfd) {
     if (newfd < 0) return;
     eventfd_peer_vacate(newfd);
     engine_fd_reloc(&g_root_fd, newfd);
     engine_fd_reloc(&g_gtimer_kq, newfd);
+    engine_fd_reloc(&g_dn_kq, newfd);
     engine_fd_reloc(&g_sigfd_pipe[0], newfd);
     engine_fd_reloc(&g_sigfd_pipe[1], newfd);
     for (int i = 0; i < g_nvols; i++)
@@ -245,8 +376,8 @@ static void engine_fd_vacate(int newfd) {
 // Vacate every engine-private fd whose NUMBER falls in [first,last] -- for a guest close_range() that would
 // otherwise close the runtime's descriptors (g_root_fd etc.). Visible to fs.c/rare.c (io.c is #included first).
 static void engine_fd_vacate_range(unsigned first, unsigned last) {
-    int fds[4] = {g_root_fd, g_gtimer_kq, g_sigfd_pipe[0], g_sigfd_pipe[1]};
-    for (int i = 0; i < 4; i++)
+    int fds[5] = {g_root_fd, g_gtimer_kq, g_dn_kq, g_sigfd_pipe[0], g_sigfd_pipe[1]};
+    for (int i = 0; i < 5; i++)
         if (fds[i] >= 0 && (unsigned)fds[i] >= first && (unsigned)fds[i] <= last) engine_fd_vacate(fds[i]);
     for (int i = 0; i < DD_NFD; i++) {
         int p = g_eventfd_peer[i] - 1;
@@ -1280,15 +1411,82 @@ static int svc_io(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t
             }
             G_RET(c) = (uint64_t)(unsigned)g_memfd_seal[fd];
             break;
-        } else if (lcmd == 1025) { // F_GETLEASE: dd holds no lease on any fd -> F_UNLCK(2), NOT 0(=F_RDLCK).
-            // Returning 0 fabricated a held READ lease, so a guest that checks for an existing lease before
-            // acquiring one (or reports it) saw a phantom lease it never took.
-            G_RET(c) = 2; // F_UNLCK
+        } else if (lcmd == 1025) { // F_GETLEASE: report the tracked lease for this fd (F_UNLCK if none).
+            // Returning a fixed value fabricated/erased lease state; consult g_lease so F_GETLEASE round-trips
+            // whatever F_SETLEASE last set on this fd. Encoding: g_lease[fd] = type+1, 0 = no lease -> F_UNLCK(2).
+            int fd = (int)a0;
+            if (fd < 0 || fcntl(fd, F_GETFD) < 0) {
+                G_RET(c) = (uint64_t)(int64_t)(-EBADF);
+                break;
+            }
+            int held = (fd < DD_NFD && g_lease[fd]) ? g_lease[fd] - 1 : 2; // stored type, else F_UNLCK
+            G_RET(c) = (uint64_t)(unsigned)held;
             break;
-        } else if (lcmd == 1024 || lcmd == 1026) {
+        } else if (lcmd == 1024) { // F_SETLEASE(fd, F_RDLCK|F_WRLCK|F_UNLCK)
+            int fd = (int)a0, arg = (int)a2;
+            if (fd < 0 || fcntl(fd, F_GETFD) < 0) {
+                G_RET(c) = (uint64_t)(int64_t)(-EBADF);
+                break;
+            }
+            if (arg != 0 && arg != 1 && arg != 2) { // not F_RDLCK/F_WRLCK/F_UNLCK -> EINVAL (Linux)
+                G_RET(c) = (uint64_t)(int64_t)(-EINVAL);
+                break;
+            }
+            struct stat lst;
+            if (fstat(fd, &lst) < 0) {
+                G_RET(c) = (uint64_t)(int64_t)(-EBADF);
+                break;
+            }
+            if (!S_ISREG(lst.st_mode)) { // leases are only for regular files (Linux: EINVAL)
+                G_RET(c) = (uint64_t)(int64_t)(-EINVAL);
+                break;
+            }
+            // A read lease (F_RDLCK) may only be taken on a descriptor NOT open for writing -- Linux
+            // generic_add_lease returns EAGAIN when the inode has a writer, and the requesting fd itself
+            // counts (an O_RDWR/O_WRONLY fd -> EAGAIN). This single-fd check matches the kernel exactly for
+            // the common case. A write lease (F_WRLCK) requires the fd be the SOLE opener; dd cannot
+            // enumerate other openers across guest processes, so it is tracked but its BREAK on a conflicting
+            // open is never delivered (see syscall-compat.md). Both states round-trip through F_GETLEASE.
+            if (arg == 0) { // F_RDLCK
+                int fl = fcntl(fd, F_GETFL);
+                if (fl >= 0 && (fl & O_ACCMODE) != O_RDONLY) {
+                    G_RET(c) = (uint64_t)(int64_t)(-EAGAIN);
+                    break;
+                }
+            }
+            if (fd < DD_NFD) g_lease[fd] = (arg == 2) ? 0 : (int8_t)(arg + 1); // F_UNLCK clears
             G_RET(c) = 0;
             break;
-            // F_SETLEASE / F_NOTIFY: no-op (dnotify arms nothing; a lease is never actually granted)
+        } else if (lcmd == 1026) { // F_NOTIFY(fd, DN_* mask): arm a real kqueue directory-change watch.
+            int fd = (int)a0;
+            if (fd < 0 || fcntl(fd, F_GETFD) < 0) {
+                G_RET(c) = (uint64_t)(int64_t)(-EBADF);
+                break;
+            }
+            int sig = (fd < DD_NFD && g_fsig[fd]) ? g_fsig[fd] : 0; // F_SETSIG override, else default SIGIO
+            G_RET(c) = (uint64_t)(int64_t)dnotify_apply(fd, (uint32_t)a2, sig);
+            break;
+        } else if (lcmd == 10) { // F_SETSIG(fd, signo): record the signal for O_ASYNC/dnotify on this fd.
+            int fd = (int)a0, sig = (int)a2;
+            if (fd < 0 || fcntl(fd, F_GETFD) < 0) {
+                G_RET(c) = (uint64_t)(int64_t)(-EBADF);
+                break;
+            }
+            if (sig < 0 || sig > 64) { // 0 restores the SIGIO default; anything above the signal range is EINVAL
+                G_RET(c) = (uint64_t)(int64_t)(-EINVAL);
+                break;
+            }
+            if (fd < DD_NFD) g_fsig[fd] = (uint8_t)sig;
+            G_RET(c) = 0;
+            break;
+        } else if (lcmd == 11) { // F_GETSIG(fd): the signal set by F_SETSIG (0 = default SIGIO).
+            int fd = (int)a0;
+            if (fd < 0 || fcntl(fd, F_GETFD) < 0) {
+                G_RET(c) = (uint64_t)(int64_t)(-EBADF);
+                break;
+            }
+            G_RET(c) = (uint64_t)(unsigned)((fd < DD_NFD) ? g_fsig[fd] : 0);
+            break;
         }
         // A command this kernel does not recognize is EINVAL (Linux do_fcntl default), NOT forwarded to
         // macOS -- whose fcntl cmd numbering DIVERGES, so a stray Linux cmd# would mean a different op there.

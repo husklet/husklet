@@ -634,6 +634,13 @@ static int svc_mem(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_
         if (r != MAP_FAILED) {
             gmap_add((uint64_t)r, (uint64_t)a1 + guard); // track for execve() teardown
             gmap_set_glen((uint64_t)r, (uint64_t)a1);    // /proc maps report the guest length (sans guard)
+            // mlockall(MCL_FUTURE): a mapping created while future-locking is armed must be wired resident on
+            // creation (Linux mm/mlock.c). Best-effort (a RLIMIT_MEMLOCK refusal leaves it pageable); the
+            // mlk_add records it so /proc Locked:/VmLck: reports the range even under g_mlock_all reporting.
+            if (g_mlock_future) {
+                mlock(r, (size_t)a1 + guard);
+                mlk_add((uint64_t)r, (uint64_t)a1);
+            }
             // DONTNEED anon registry: record PRIVATE-ANON ranges (incl. the guard tail); for any other
             // (file-backed/shared) mapping, forget overlapping anon coverage -- a MAP_FIXED file map may
             // now sit where anon used to, and we must never anon-remap over it.

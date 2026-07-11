@@ -70,7 +70,8 @@ static struct {
 } g_mlk[MLK_N];
 
 static int g_nmlk;
-static int g_mlock_all; // mlockall(MCL_CURRENT|MCL_FUTURE) set; munlockall clears it + every range
+static int g_mlock_all;    // mlockall(MCL_CURRENT|MCL_FUTURE) set; munlockall clears it + every range
+static int g_mlock_future; // MCL_FUTURE armed: a fresh mmap (mem.c case 222) is wired resident on creation
 
 // Remove [addr,addr+len) from the locked set, splitting any straddled range (mirrors pn_del).
 static void mlk_del(uint64_t addr, uint64_t len) {
@@ -116,7 +117,31 @@ static void mlk_add(uint64_t addr, uint64_t len) {
 static void mlk_reset(void) {
     g_nmlk = 0;
     g_mlock_all = 0;
+    g_mlock_future = 0;
 } // execve replaces the address space
+
+// mlockall(MCL_CURRENT): actually WIRE every currently-mapped guest range resident via the host mlock(2)
+// (macOS has mlock, same as mlock(2)/case 228 uses). Best-effort: a range the host refuses (RLIMIT_MEMLOCK
+// exhausted) is left pageable rather than aborting the whole call -- Linux would ENOMEM, but dd keeps the
+// call succeeding with honest /proc state (the wired ranges are real; see the residual note in
+// syscall-compat.md). Returns the number of ranges the host declined (0 = fully wired).
+static int mlk_wire_current(void) {
+    int failed = 0;
+    for (int i = 0; i < g_ngmap; i++) {
+        if (!g_gmap[i].addr || !g_gmap[i].len) continue;
+        if (mlock((void *)g_gmap[i].addr, (size_t)g_gmap[i].len) != 0) failed++;
+    }
+    return failed;
+}
+
+// munlockall(): drop the host wiring on every tracked guest range (mirrors mlk_wire_current). Failures are
+// ignored -- an unwired/never-wired range simply stays unwired.
+static void mlk_unwire_all(void) {
+    for (int i = 0; i < g_ngmap; i++) {
+        if (!g_gmap[i].addr || !g_gmap[i].len) continue;
+        munlock((void *)g_gmap[i].addr, (size_t)g_gmap[i].len);
+    }
+}
 
 // Locked bytes within [lo,hi) -- for a single /proc/.../smaps region's "Locked:" field.
 static uint64_t mlk_region_locked(uint64_t lo, uint64_t hi) {

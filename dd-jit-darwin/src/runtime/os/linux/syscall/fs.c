@@ -188,6 +188,9 @@ static void fd_reset_emul(int fd) {
         g_pipesz[fd] = 0;     // drop this fd's emulated F_SETPIPE_SZ so a reused number reports the default
         g_fd_cport[fd] = 0;   // drop the captured container port so getpeername on a reused fd isn't misrouted
         inotify_fd_reset(fd); // instance/watch teardown -- g_inotify[fd] used to stay stamped (stale routing)
+        if (g_dn_mask[fd]) dnotify_apply(fd, 0, 0); // remove this fd's dnotify (F_NOTIFY) watch before it closes
+        g_lease[fd] = 0;      // release the F_SETLEASE lease this fd held (POSIX: lease dropped on close)
+        g_fsig[fd] = 0;       // drop the fd's F_SETSIG signal so a reused number reports the SIGIO default
         g_sigfd_is[fd] = 0;   // drop any signalfd-dup alias marking on this fd number
         if (g_fd_pushback[fd]) {
             free(g_fd_pushback[fd]);
@@ -1309,6 +1312,10 @@ static int svc_fs(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t
                 char sgp[4200];
                 abs_guest((int)a0, (const char *)a1, sgp, sizeof sgp);
                 if (overlay_lower_has(sgp)) overlay_whiteout(sgp);
+                // RENAME_WHITEOUT: Linux additionally leaves a whiteout char device (0,0) at the source.
+                // Record it so lstat(src) reports that char device (synth_stat_raw); overlay_whiteout above
+                // already dropped the union `.wh.` marker when a lower entry needed masking.
+                if (nr == 276 && ((int)a4 & 4)) whiteout_note(sgp);
             }
             G_RET(c) = r < 0 ? (uint64_t)(-(int64_t)e) : 0;
             break;
@@ -1316,7 +1323,15 @@ static int svc_fs(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t
         char ob[4200], nb[4200];
         const char *op = atpath((int)a0, (const char *)a1, ob, sizeof ob, 0);
         const char *np = atpath((int)a2, (const char *)a3, nb, sizeof nb, 0);
-        G_RET(c) = renameatx_np(ATFD(a0), op, ATFD(a2), np, rxflags) < 0 ? (uint64_t)(-errno) : 0;
+        int rr = renameatx_np(ATFD(a0), op, ATFD(a2), np, rxflags);
+        // RENAME_WHITEOUT (non-overlay): record the source as a whiteout char device (0,0) so lstat(src)
+        // reports it, matching Linux -- macOS cannot mknod a real device node rootless.
+        if (rr == 0 && nr == 276 && ((int)a4 & 4)) {
+            char sgp[4200];
+            abs_guest((int)a0, (const char *)a1, sgp, sizeof sgp);
+            whiteout_note(sgp);
+        }
+        G_RET(c) = rr < 0 ? (uint64_t)(-errno) : 0;
         break;
     }
     // mount(source,target,fstype,flags,data): implement bind/tmpfs/remount,ro against dd's vfs (svc_mount);

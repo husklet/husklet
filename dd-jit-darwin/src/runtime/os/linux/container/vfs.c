@@ -4955,8 +4955,66 @@ static int64_t drm_synth_ioctl(int fd, unsigned long rq, void *arg) {
     return -ENOTTY;
 }
 
+// ---- renameat2(RENAME_WHITEOUT) whiteout markers -------------------------------------------------
+// Linux renameat2(...,RENAME_WHITEOUT) renames src->dst AND leaves a whiteout at the source: a character
+// device with rdev 0,0 (the same on-disk token overlayfs uses to mask a lower entry). macOS cannot mknod a
+// device node rootless, so dd records the source GUEST path here and the stat layer (synth_stat_raw)
+// fabricates the S_IFCHR/0,0 whiteout inode for it -- so lstat(src) reports a char device exactly like
+// Linux (the finding's observable). The marker is self-cleaning: whiteout_present() re-checks the backing
+// file and forgets the entry once a real file exists at the path again (create-over / a later rename onto
+// it), so a stale whiteout can never mask a real inode. In overlay mode the caller ALSO drops the `.wh.`
+// union marker (overlay_whiteout) so a lower entry the source used to shadow stays hidden.
+#define WHITEOUT_N 256
+static char g_whiteout[WHITEOUT_N][4200];
+static int g_nwhiteout;
+
+static int whiteout_slot(const char *gp) {
+    for (int i = 0; i < g_nwhiteout; i++)
+        if (!strcmp(g_whiteout[i], gp)) return i;
+    return -1;
+}
+
+static void whiteout_forget(const char *gp) {
+    if (!gp) return;
+    int i = whiteout_slot(gp);
+    if (i < 0) return;
+    if (i != g_nwhiteout - 1) memcpy(g_whiteout[i], g_whiteout[g_nwhiteout - 1], sizeof g_whiteout[0]);
+    g_nwhiteout--;
+}
+
+static void whiteout_note(const char *gp) {
+    if (!gp || !gp[0]) return;
+    if (whiteout_slot(gp) >= 0) return;
+    if (g_nwhiteout >= WHITEOUT_N) return; // registry full -> best-effort (rare; whiteouts are transient)
+    snprintf(g_whiteout[g_nwhiteout], sizeof g_whiteout[0], "%s", gp);
+    g_nwhiteout++;
+}
+
+// Is `gp` a live whiteout marker (no real backing file)? Self-cleans: if a real inode now occupies the
+// path, the whiteout was consumed -> forget it and report "not a whiteout" so the real file wins.
+static int whiteout_present(const char *gp) {
+    if (!g_nwhiteout || !gp) return 0;
+    if (whiteout_slot(gp) < 0) return 0;
+    char hb[4300];
+    const char *hp = xresolve_overlay(gp, hb, sizeof hb);
+    struct stat st;
+    if (hp && lstat(hp, &st) == 0) { // a real file reappeared here -> the whiteout is stale
+        whiteout_forget(gp);
+        return 0;
+    }
+    return 1;
+}
+
 static int synth_stat_raw(const char *gp, struct stat *s) {
     if (!gp) return 0; // NULL (bad) guest path: not a synthetic node; let the caller's host stat EFAULT
+    // A renameat2(RENAME_WHITEOUT) source: report the Linux whiteout inode (char device, rdev 0,0, mode 0).
+    if (whiteout_present(gp)) {
+        memset(s, 0, sizeof *s);
+        s->st_mode = S_IFCHR; // whiteout char device, permission bits 0 (as overlayfs/Linux create it)
+        s->st_rdev = 0;       // makedev(0,0)
+        s->st_nlink = 1;
+        return 1;
+    }
     // Synthetic non-pid directories (/proc/net, /proc/[self|pid]/ns, /sys/fs/cgroup, /sys/class/block,
     // /sys/block, cpuN/topology): a tool that stats the dir before opening it must see it as present.
     if (synth_misc_dir_is(gp)) {
