@@ -81,8 +81,8 @@ pub fn launch_ex(ws: &Workspace, cols: u16, rows: u16, restore: bool, cwd: Optio
     // (Metal/IOSurface/NSString on the GPU path), and a guest execve() reloads the image IN-PLACE (no
     // host exec), so libobjc's initialize-fork-safety poison survives into every guest process. If a
     // guest fork races another thread's +initialize, the child later aborts on its first Foundation use
-    // (objc_initializeAfterForkError) — e.g. Chrome dies right after gl_shim surface_up. The engine's
-    // process model requires the suppression; guarantee it here instead of relying on the launcher's
+    // (objc_initializeAfterForkError) — e.g. a multiprocess Wayland client dies right after gl_shim
+    // surface_up. The engine's process model requires the suppression; guarantee it here instead of relying on the launcher's
     // environment. libobjc reads it once at the engine's exec (ffi.c passes our environ). An explicit
     // caller-provided value (e.g. NO, to debug fork hygiene) is honored.
     if std::env::var_os("OBJC_DISABLE_INITIALIZE_FORK_SAFETY").is_none() {
@@ -105,15 +105,15 @@ pub fn launch_ex(ws: &Workspace, cols: u16, rows: u16, restore: bool, cwd: Optio
         // GUI reliability: a fresh `--gui` launch resets the persistent pcache first. The persistent
         // translated-code cache bakes host-arena-relative absolute addresses that are only valid when the
         // engine re-secures the SAME fixed arena base it was written at. A large C++/PIE Wayland binary
-        // (glmark2, Chrome) that was cached in a PRIOR session can be re-loaded in a later session at a
-        // MISMATCHED base (the fixed VA is occupied → NULL-hint fallback) → stale absolutes → an
+        // (e.g. glmark2 or a browser engine) that was cached in a PRIOR session can be re-loaded in a later
+        // session at a MISMATCHED base (the fixed VA is occupied → NULL-hint fallback) → stale absolutes → an
         // intermittent SIGSEGV (exit 139) or garbage reads during EGL/config init, BEFORE any draw. This is
         // the "rendered one session, exit-139'd the next with no code change" flakiness. Building the cache
         // cold at the current session's base (then reusing it in-session, where the base stays available) is
         // 100% reliable and costs only a one-time re-translation at startup (negligible for an interactive
         // GUI app). A `restore` keeps the cache (its MAP_FIXED placement needs it) — this only fires on a
-        // fresh gui launch.
-        let keep_gui_pcache = std::env::var("CHROME_KEEP_STATE").ok().as_deref() == Some("1");
+        // fresh gui launch. Opt out of the wipe (keep the persistent cache) with `DD_GUI_KEEP_PCACHE=1`.
+        let keep_gui_pcache = std::env::var("DD_GUI_KEEP_PCACHE").ok().as_deref() == Some("1");
         if ws.gui && !keep_gui_pcache {
             let _ = std::fs::remove_dir_all(&pcache_dir);
             let _ = std::fs::create_dir_all(&pcache_dir);
@@ -186,22 +186,12 @@ pub fn launch_ex(ws: &Workspace, cols: u16, rows: u16, restore: bool, cwd: Optio
     for (k, v) in &ws.env {
         env.push(format!("{k}={v}"));
     }
-    // Chrome rendering diagnostics used by the bounded GUI harness. These are intentionally opt-in host
-    // variables so ordinary workspace launches keep their configured environment byte-for-byte.
-    for k in [
-        "CHROME_SW",
-        "CHROME_DEBUG",
-        "CHROME_EXTRA_FLAGS",
-        "CHROME_KEEP_STATE",
-        "CHROME_PROFILE_DIR",
-        "CHROME_TIMEOUT",
-        "WAYLAND_DEBUG",
-        "DD_SHIM_DEBUG",
-        "DD_SHADER_DUMP_DIR",
-        "DD_TEXTURE_DUMP_DIR",
-        "DD_HIDE_CHROME_PROCFILES",
-        "DD_PROC_CHROME_MODE",
-    ] {
+    // Generic Wayland/GL rendering diagnostics for a `--gui` workspace: opt-in HOST env knobs forwarded
+    // into the guest only when set, so an ordinary launch keeps its configured environment byte-for-byte.
+    // They are consumed by the injected GL shim (libEGL/libGLESv2) and libwayland — no application is
+    // special-cased; any Wayland client honors them. App-specific launch tuning (flags, profile dirs,
+    // timeouts) belongs in the workspace's own configured env, never hard-coded here.
+    for k in ["WAYLAND_DEBUG", "DD_SHIM_DEBUG", "DD_SHADER_DUMP_DIR", "DD_TEXTURE_DUMP_DIR"] {
         if let Ok(v) = std::env::var(k) {
             env.push(format!("{k}={v}"));
         }

@@ -444,7 +444,7 @@ struct MetalWin {
     scale: f64,
     /// Logical surface size in POINTS (what the guest renders as; drives window content size + input flip).
     size: (u32, u32),
-    /// Opaque compositor output for the current size. Chrome commits ARGB surfaces and expects the
+    /// Opaque compositor output for the current size. Wayland clients commit ARGB surfaces and expect the
     /// compositor to blend them over the window background; raw-blitting transparent pixels makes the
     /// native window show black margins.
     composite_tex: Option<Retained<ProtocolObject<dyn MTLTexture>>>,
@@ -700,7 +700,7 @@ fragment float4 fmain(VOut in [[stage_in]], texture2d<float> src [[texture(0)]],
             NSPoint::new(140.0 + sid as f64 * 24.0, 140.0),
             NSSize::new(w as f64, h as f64),
         );
-        let borderless = std::env::var_os("DD_DISPLAY_WINDOW_CHROME").is_none();
+        let borderless = std::env::var_os("DD_DISPLAY_WINDOW_DECORATIONS").is_none();
         let style = if borderless {
             NSWindowStyleMask::Borderless
         } else {
@@ -713,11 +713,13 @@ fragment float4 fmain(VOut in [[stage_in]], texture2d<float> src [[texture(0)]],
         window.setOpaque(true);
         window.setMovable(false);
         window.setMovableByWindowBackground(false);
-        // Borderless Chrome draws its own client-side chrome; the guest surface fills the whole window and
-        // is opaque. Drop the macOS drop shadow (the "ugly halo/background behind Chrome" the user sees —
-        // a borderless window still gets the system shadow) and clear the window's default gray background
-        // color so nothing dd-side can bleed at the edges/corners behind the content. The titled variant
-        // keeps its normal shadow. (The light-blue titlebar, if any, is Chrome's OWN CSD — not ours.)
+        // A client drawing its own client-side decorations (CSD) — the common Wayland case — fills the whole
+        // window with an opaque surface. Drop the macOS drop shadow (a borderless window still gets the
+        // system shadow, which otherwise shows as an "ugly halo/background" around the content) and clear
+        // the window's default gray background color so nothing dd-side can bleed at the edges/corners behind
+        // the content. Setting DD_DISPLAY_WINDOW_DECORATIONS opts into a titled AppKit window (server-side
+        // decorations) for clients that expect them. Any titlebar the content itself paints is the client's
+        // OWN CSD — not ours.
         if borderless {
             window.setHasShadow(false);
             unsafe { window.setBackgroundColor(Some(&NSColor::clearColor())) };
@@ -1572,7 +1574,7 @@ fn run_multi<P: Presenter>(
                 clients[idx].set_external_logical_crop(mirrored_crop);
                 let alive = matches!(clients[idx].pump(), Ok(true));
                 clients[idx].set_external_logical_crop(None);
-                // xdg_toplevel.move → start a HOST window drag for exactly the surface Chrome asked to move.
+                // xdg_toplevel.move → start a HOST window drag for exactly the surface the client asked to move.
                 if let Some(sid) = clients[idx].take_move_request() {
                     clients[idx].presenter().begin_interactive_move(sid);
                 }
