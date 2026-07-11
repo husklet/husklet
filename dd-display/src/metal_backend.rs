@@ -577,6 +577,71 @@ impl MetalBackend {
     pub fn texture(&self, id: u32) -> Option<&ProtocolObject<dyn MTLTexture>> {
         self.resolve_texture(id).map(|t| &**t)
     }
+
+    /// Read the Y-scale sign of the projection uniform (`sk_RTAdjust.z`) that the frame uses for its
+    /// PRESENTED-surface pass, i.e. discover the guest's *output surface origin* for this frame.
+    ///
+    /// Chrome/Skia emit a `sk_RTAdjust` = (2/w, tx, ±2/h, ty) at the head of the pass's uniform block:
+    /// the vertex stage computes `ndc.y = pos.y * sk_RTAdjust.z + sk_RTAdjust.w`. The SIGN of `.z` encodes
+    /// the target's origin convention — `+2/h` is GL bottom-left (ndc.y grows with pixel-y), `-2/h` is
+    /// top-left (Chrome pre-flips its default framebuffer when the platform surface is top-left, as
+    /// Metal/IOSurface is). Returns `Some(true)` when the surface pass is bottom-up (`.z > 0`), `Some(false)`
+    /// when it is top-left (`.z < 0`), and `None` when no surface pass / no readable projection is found.
+    ///
+    /// This replaces the earlier *static* "offscreen ⇒ Y-flip" rule (which mislowered captures whose surface
+    /// was already top-left): the offscreen tile flip is only correct when the surface itself is bottom-up
+    /// (then the whole graph is GL-convention and the tiles must be stored GL bottom-up to sample upright);
+    /// when the surface is top-left the guest's render→sample roundtrip is already self-consistent and any
+    /// extra tile flip double-mirrors the content (the observed upside-down page body). See `submit`.
+    fn surface_origin_bottom_up(&self, cb: &CommandBuffer) -> Option<bool> {
+        let mut in_surface_pass = false;
+        for op in &cb.encoder {
+            match op {
+                Enc::BeginRenderPass { color, .. } => {
+                    in_surface_pass = color
+                        .first()
+                        .is_some_and(|ca| self.surface_ids.contains(&ca.texture));
+                }
+                Enc::EndRenderPass => in_surface_pass = false,
+                Enc::SetBindGroup { group, .. } if in_surface_pass => {
+                    let Some(binds) = self.bind_groups.get(group) else {
+                        continue;
+                    };
+                    for b in binds {
+                        let Bind::Buffer { index, buffer, offset } = b else {
+                            continue;
+                        };
+                        // The projection block is the uniform at [[buffer(1)]] (the shim/Chrome convention);
+                        // sk_RTAdjust.z is its 3rd float (byte offset 8).
+                        if *index != 1 {
+                            continue;
+                        }
+                        let Some(buf) = self.buffers.get(buffer) else {
+                            continue;
+                        };
+                        let base = *offset as usize + 8;
+                        if base + 4 > buf.length() {
+                            continue;
+                        }
+                        let mut bytes = [0u8; 4];
+                        unsafe {
+                            std::ptr::copy_nonoverlapping(
+                                (buf.contents().as_ptr() as *const u8).add(base),
+                                bytes.as_mut_ptr(),
+                                4,
+                            );
+                        }
+                        let z = f32::from_le_bytes(bytes);
+                        if z != 0.0 {
+                            return Some(z > 0.0);
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+        None
+    }
 }
 
 /// `dd-display selftest-shader <out.png>`: prove the per-app SHADER path — the same one the GL shim
@@ -1899,9 +1964,18 @@ impl GpuBackend for MetalBackend {
         let mut cur_prim = MTLPrimitiveType::Triangle;
         // Bound index buffer for glDrawElements → drawIndexedPrimitives (buffer id, byte offset, U16/U32).
         let mut index_buffer: Option<(u32, u64, MTLIndexType)> = None;
+        // Orientation: whether OFFSCREEN render-to-texture passes in this frame need a Y-flip. The flip
+        // reconciles GL's bottom-left FBO origin with Metal's top-left storage — but it is only correct when
+        // the frame's PRESENTED surface is itself GL bottom-up (`sk_RTAdjust.z > 0`): then the whole render
+        // graph is one GL-convention space and the tiles must be stored bottom-up to sample upright. When
+        // the guest already targets a TOP-LEFT surface (Chrome pre-flips its default framebuffer for the
+        // Metal/IOSurface origin → surface `.z < 0`), its render→sample roundtrip is self-consistent and an
+        // extra tile flip double-mirrors the page body (upside-down content). We therefore derive the flip
+        // from the surface pass's projection sign, not from a static "offscreen" rule. Absent a readable
+        // surface projection, keep the legacy bottom-up assumption (flip offscreen) for back-compat.
+        let flip_offscreen = self.surface_origin_bottom_up(cb).unwrap_or(true);
         // Whether the CURRENT render pass draws into an offscreen render target (not the presented
-        // surface): if so, its viewport is Y-flipped (negative height) so the texture is stored
-        // bottom-left (GL convention) and samples upright in the later composite.
+        // surface) AND this frame's surface origin calls for the offscreen Y-flip (see `flip_offscreen`).
         let mut flip_pass = false;
         for op in &cb.encoder {
             match op {
@@ -1944,12 +2018,15 @@ impl GpuBackend for MetalBackend {
                         .renderCommandEncoderWithDescriptor(&pass)
                         .ok_or(GpuError::Unsupported("encoder"))?;
                     // Y-flip this pass iff it targets an OFFSCREEN render texture (a content tile, not the
-                    // presented surface). Prime a default full-target flipped viewport up front so passes
-                    // that never emit their own SetViewport are still stored bottom-left; an explicit
-                    // guest SetViewport below overrides it (also flipped).
-                    flip_pass = color
-                        .first()
-                        .is_some_and(|ca| !self.surface_ids.contains(&ca.texture));
+                    // presented surface) AND the frame's surface origin requires it (`flip_offscreen`, derived
+                    // from the surface pass's projection sign — see the `flip_offscreen` binding above).
+                    // Prime a default full-target flipped viewport up front so passes that never emit their
+                    // own SetViewport are still stored bottom-left; an explicit guest SetViewport below
+                    // overrides it (also flipped).
+                    flip_pass = flip_offscreen
+                        && color
+                            .first()
+                            .is_some_and(|ca| !self.surface_ids.contains(&ca.texture));
                     if flip_pass {
                         e.setViewport(MTLViewport {
                             originX: 0.0,

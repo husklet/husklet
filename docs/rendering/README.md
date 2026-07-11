@@ -39,10 +39,12 @@ release build clean):
 - **Content orientation fix** (`metal_backend.rs`): Chrome GPU-rasters page body into
   OFFSCREEN tile textures (bottom-left GL) that Metal stores top-left → content
   upside-down; UI glyphs come from CPU-uploaded atlases (never render targets) →
-  upright. Fix: track render-pass target ids; negative-height (Y-flip) viewport for
-  passes whose target is an offscreen texture; surface passes untouched. Supersedes
-  the old `DD_CONTENT_GLYPH_VFLIP` heuristic. Validated by IR replay (before/after
-  in `target-chrome-codex/renderdiff/`).
+  upright. The fix is now **projection-derived, not a static offscreen rule** (see
+  §3.1): `metal_backend::surface_origin_bottom_up` reads the frame's presented-surface
+  pass `sk_RTAdjust.z` sign; the offscreen tile Y-flip is applied ONLY when the surface
+  is itself GL bottom-up. Supersedes the old `DD_CONTENT_GLYPH_VFLIP` heuristic AND the
+  intermediate always-flip-offscreen heuristic. Validated by IR replay (before/after
+  in `target-chrome-codex/renderdiff/` and `target-chrome-codex/display-compositing/`).
 - **GL→Metal translation** (`gl_shim.c`): mat3 uniform byte-layout fix (was 4B, MSL
   needs 48B → corrupted every uniform after a mat3), comment-stripping in the uniform
   layout pass, matrix column re-striding, mat2/non-square matrix + GLSL builtin fixups.
@@ -78,14 +80,35 @@ content area and the test page's text draws (currently upside-down — see below
   fork() was called` right after `gl_shim: surface_up`, exit 137). Some harness
   branches dropped the var (the macOS BSD-`script` fallback). `ddcli workspace launch`
   now guarantees it (dd-cli/src/ddjit_launcher.rs).
-- **Known residual: content is Y-flipped in the live composite.** The offscreen-tile
-  Y-flip in `metal_backend.rs` renders the OLD capture (`chrome-stream-ir-000.ir`)
-  upright but the NEW captures flipped — replaying the same new IR through both main's
-  and the integrated branch's backend flips identically, so Chrome chose a different
-  composite transform in these runs. The static "flip offscreen passes" heuristic is
-  insufficient; orientation must be derived per-pass from the emitted
-  projection/viewport transform. Tracked by the orientation workstream
-  (`render-integrated`).
+- **RESOLVED (2026-07-10, branch `render/display-compositing`): content orientation is
+  now derived from the surface projection.** The static "flip every offscreen pass"
+  heuristic rendered the OLD capture (`chrome-stream-ir-000.ir`) upright but NEW captures
+  upside-down, because Chrome chose a different *output-surface origin* in the newer runs.
+  Root cause (proven by decoding `single-process-content.ir`): the offscreen tile passes
+  carry `sk_RTAdjust.z = +2/h` (GL bottom-up) while the presented-surface/composite pass
+  carries `sk_RTAdjust.z = -2/h` (TOP-LEFT — Chrome pre-flips its default framebuffer for
+  the Metal/IOSurface origin). When the surface is already top-left, the guest's
+  render→sample tile roundtrip is self-consistent and the extra offscreen flip
+  double-mirrors the page body. Fix: `metal_backend::surface_origin_bottom_up(cb)` reads
+  the surface pass's `sk_RTAdjust.z` sign per frame; `submit` applies the offscreen tile
+  Y-flip ONLY when the surface is bottom-up (`.z > 0`). For a top-left surface (Chrome
+  today) offscreen passes are replayed faithfully → page content is upright.
+  - Deterministic proof: replay `single-process-content.ir` (23 MB, the preserved
+    single-process content capture; `Begin target=512/514` + page-bg clear `#e9eef7`)
+    through the real `MetalBackend`:
+    `dd-display selftest-shim-ir target-chrome-codex/single-process-content.ir out.png 512 384 1`.
+    Before/after PNGs: `target-chrome-codex/display-compositing/{before,after}-content.png`
+    — before shows the page text upside-down/mirrored, after shows it upright.
+  - Regression pin: `golden_image_regression.rs` gains a `single-process-content` case
+    (512×384) whose golden is the upright output; the 4 pre-existing synthetic goldens
+    (incl. the both-axes-asymmetric orientation pin and the offscreen-FBO composite, whose
+    surface is GL bottom-up and therefore still flips) remain **bit-exact** (maxΔ=0), so
+    the change is a provable no-op for them. Run `./run_golden.sh`.
+  - Scope note: the "white `ClearRect{texture:1}` placeholder wins over content" symptom
+    is NOT reproduced by `single-process-content.ir` (it contains zero `ClearRect` and the
+    compositor composites its content correctly once oriented). Per §3.2, that symptom is
+    the MULTI-process content-ABSENCE wall — the content raster never reaches the IR, so
+    only the placeholder is present to composite. It is not a compositor ordering bug.
 
 ## 3.2 The remaining blocker: MULTI-process web content is blank
 
