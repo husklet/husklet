@@ -934,6 +934,48 @@ static uint8_t g_ep_dupd[DD_NFD];
 static unsigned long long g_ep_kevent_calls; // PROF: kevent() syscalls issued by the epoll path
 static int g_epprof = -1;
 
+// ---- per-instance epoll interest table (fd -> owning instance + events + udata) --------------------
+// Linux keeps an interest list per epoll instance and ties each registration to the underlying OPEN FILE
+// DESCRIPTION, not the fd number. dd emulates epoll with a macOS kqueue whose knotes are keyed by fd
+// number and vanish when that fd number closes -- so two OFD-semantics that dd previously got wrong:
+//   (1) a fork child inherits the parent's interest list, but macOS does NOT inherit kqueue()s, so the
+//       rebuilt child kqueue was EMPTY (a child that epoll_waits without re-registering saw nothing);
+//   (2) closing a watched fd whose OFD stays alive via a dup should KEEP the registration (readiness
+//       persists), but the kqueue knote died with the fd number.
+// The table below records, per WATCHED fd, its owning epoll instance + the registered events + udata, so
+// the fork child can re-arm every inherited registration on its rebuilt kqueue, and a close-with-surviving
+// -dup can re-home the knote onto the surviving alias. Like the g_ep_rd/wr armed maps this is a SINGLE
+// owner per watched fd (dd already assumes a fd is watched by at most one epoll instance); the writes are
+// a couple of fd-indexed stores on the epoll_ctl path, so the hot path cost matches the existing armed map.
+static int g_ep_owner[DD_NFD];    // watched fd -> owning epoll instance fd + 1 (0 = not watched)
+static uint32_t g_ep_events[DD_NFD]; // watched fd -> the epoll events mask registered (EPOLLIN/OUT/ET/ONESHOT)
+static uint64_t g_ep_udata[DD_NFD];  // watched fd -> the epoll_event.data registered for it
+
+// ---- open-file-description identity for fd-number aliases (dup) -------------------------------------
+// dd shares the host descriptor table with the guest, so two guest fds that refer to the same OFD are two
+// host fds dup'd from each other. There is no portable "same OFD?" query, so track it ourselves: every
+// dup(2)/dup2/dup3/F_DUPFD tags both fds with a shared group id (see fd_carry_virt). close() clears the id.
+// Used by the epoll close path to find a surviving alias of a just-closed watched fd (finding: epoll
+// readiness must persist while a dup keeps the OFD open).
+static uint32_t g_ofd_id[DD_NFD]; // 0 = no known alias; else a group id shared by every dup of this OFD
+static uint32_t g_ofd_next = 1;
+
+// Assign (or propagate) a shared OFD group id from oldfd to newfd on dup.
+static void ofd_link_dup(int newfd, int oldfd) {
+    if (oldfd < 0 || oldfd >= DD_NFD || newfd < 0 || newfd >= DD_NFD || oldfd == newfd) return;
+    if (!g_ofd_id[oldfd]) g_ofd_id[oldfd] = g_ofd_next++;
+    g_ofd_id[newfd] = g_ofd_id[oldfd];
+}
+
+// Find an OPEN guest fd (other than `fd`) that shares fd's OFD group id, or -1 if none survives.
+static int ofd_surviving_alias(int fd) {
+    if (fd < 0 || fd >= DD_NFD || !g_ofd_id[fd]) return -1;
+    uint32_t id = g_ofd_id[fd];
+    for (int i = 0; i < DD_NFD; i++)
+        if (i != fd && g_ofd_id[i] == id && fcntl(i, F_GETFD) != -1) return i;
+    return -1;
+}
+
 static int epopt_on(void) {
     if (g_epopt < 0) {
         const char *e = getenv("NOEPOLLOPT");
@@ -985,8 +1027,24 @@ static void ep_fd_reset(int fd) {
         g_ep_chg[fd] = NULL;
     } // if fd was an epoll fd, drop its pending changelist
     g_ep_chgn[fd] = g_ep_chgcap[fd] = 0;
+    // Closing an epoll INSTANCE removes every registration it held (Linux). Drop the interest ownership of
+    // each fd it watched so a reused epoll fd number can't inherit stale registrations / mis-rehome later.
+    if (g_epoll[fd]) {
+        for (int w = 0; w < DD_NFD; w++)
+            if (g_ep_owner[w] == fd + 1) {
+                g_ep_owner[w] = 0;
+                g_ep_events[w] = 0;
+                g_ep_udata[w] = 0;
+            }
+    }
     g_epoll[fd] = 0;    // a reused fd number is no longer an epoll instance
     g_ep_dupd[fd] = 0;  // ...nor a dup alias of one
+    // drop this fd's own interest-table entry + OFD group id (any surviving-dup re-home already ran in
+    // ep_close_rehome). A reused fd number must start with no owner/events/udata and no stale alias link.
+    g_ep_owner[fd] = 0;
+    g_ep_events[fd] = 0;
+    g_ep_udata[fd] = 0;
+    g_ofd_id[fd] = 0;
 }
 
 // close() hook for the inotify family (event.c cases 26/27/28). dd emulates inotify with a kqueue: the

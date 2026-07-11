@@ -188,7 +188,18 @@ static void fd_reset_emul(int fd) {
         g_pipesz[fd] = 0;     // drop this fd's emulated F_SETPIPE_SZ so a reused number reports the default
         g_fd_cport[fd] = 0;   // drop the captured container port so getpeername on a reused fd isn't misrouted
         inotify_fd_reset(fd); // instance/watch teardown -- g_inotify[fd] used to stay stamped (stale routing)
-        g_sigfd_is[fd] = 0;   // drop any signalfd-dup alias marking on this fd number
+        // signalfd: this fd was one alias of a signalfd OFD. Drop it and, when it was the LAST alias, tear the
+        // OFD down (close the engine-private write end; the read end is closed by the caller's close(2)).
+        if (g_sigfd_slot[fd]) {
+            int sslot = g_sigfd_slot[fd] - 1;
+            g_sigfd_slot[fd] = 0;
+            if (--g_sfd[sslot].refs <= 0) {
+                if (g_sfd[sslot].wr >= 0) close(g_sfd[sslot].wr);
+                g_sfd[sslot].wr = g_sfd[sslot].rd = -1;
+                g_sfd[sslot].mask = 0;
+                g_sfd[sslot].refs = 0;
+            }
+        }
         if (g_fd_pushback[fd]) {
             free(g_fd_pushback[fd]);
             g_fd_pushback[fd] = NULL;
@@ -235,6 +246,7 @@ static void fd_reset_emul(int fd) {
         nl_close(fd); // tear down a netlink socket's socketpair peer
         // (eventfd counter/cslot/sema teardown is handled refcounted in the g_eventfd_peer block above so a
         // surviving dup keeps the shared counter; do NOT unconditionally zero the shared slot here.)
+        ep_close_rehome(fd); // if this watched fd's OFD survives via a dup, re-home its epoll knote (before reset)
         ep_fd_reset(fd);
         flock_on_close(fd);
         poslk_on_close(fd); // POSIX drops all this process's fcntl record locks when any fd closes
