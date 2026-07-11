@@ -255,6 +255,7 @@ static int svc_mem(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_
             // (PROT_NONE coverage was already dropped above via gna_clear over the guest-logical range.)
             gmap_split_unmap(u_lo, u_hi);
             anon_split_unmap(u_lo, u_hi);
+            futex_shared_unmap(u_lo, u_hi); // drop/trim shared-futex-key coverage for the released range
             wipefork_del(u_lo, u_hi - u_lo); // a wipe-on-fork range that was unmapped no longer applies
             mlk_del(u_lo, u_hi - u_lo);      // an unmapped range is implicitly unlocked (mlock -> VmLck)
             // The host pages [u_lo,u_hi) are now genuinely released, so a guest access there must fault
@@ -634,6 +635,15 @@ static int svc_mem(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_
         if (r != MAP_FAILED) {
             gmap_add((uint64_t)r, (uint64_t)a1 + guard); // track for execve() teardown
             gmap_set_glen((uint64_t)r, (uint64_t)a1);    // /proc maps report the guest length (sans guard)
+            // Shared-futex key (thread.c): a file-backed MAP_SHARED region (memfd/shm, mapped independently
+            // by each peer at its own VA) must key its futex words by the shared object identity, not the VA,
+            // so a cross-process/cross-mapping FUTEX_WAKE reaches a FUTEX_WAIT (Wall 7). Record its VA range
+            // -> (dev,ino,offset). MAP_SHARED=0x01 (incl. MAP_SHARED_VALIDATE=0x03); anon (a3&0x20) has no
+            // fd/inode and, when shared, is only ever fork-inherited at a COMMON VA (the VA key already works
+            // there), so it is excluded. off_emul (a private-anon offset-fixup copy) is not the real shared
+            // object -- skip it. Inert for every private mapping (the fast-path gate stays 0).
+            if ((a3 & 0x01) && !(a3 & 0x20) && !off_emul && (int)a4 >= 0)
+                futex_shared_register((uint64_t)r, (uint64_t)a1, (int)a4, (uint64_t)a5);
             // DONTNEED anon registry: record PRIVATE-ANON ranges (incl. the guard tail); for any other
             // (file-backed/shared) mapping, forget overlapping anon coverage -- a MAP_FIXED file map may
             // now sit where anon used to, and we must never anon-remap over it.

@@ -59,6 +59,11 @@ fn processx_linux() -> Group {
         // A FUTEX_WAKE in one process must wake a FUTEX_WAIT in another on the same shared physical
         // page (both directions), plus WAIT-timeout=ETIMEDOUT and WAKE(N) of N cross-process waiters.
         src("futex-xproc", "ext_proc/futex_xproc.c").oracle(),
+        // cross-MAPPING futex: one MAP_SHARED page reached at two DIFFERENT virtual addresses (the Chrome
+        // renderer<->GPU-service command-buffer split). A FUTEX_WAKE through mapping B must release a
+        // FUTEX_WAIT parked through mapping A -- Linux keys the futex by the shared inode+offset, not the
+        // VA. dd hashed the bucket on host VA, so the two mappings missed each other and the wake was lost.
+        src("futex-shared-key", "ext_proc/futex_shared_key.c").oracle(),
         // a child killed by a fatal-default signal with no faithful fatal host mapping (SIGPOLL/
         // SIGSTKFLT map to host signals that default-ignore, SIGPWR maps to a different signo) must reach
         // the parent's wait4 as WIFSIGNALED/WTERMSIG=signo, not WIFEXITED(128+signo). Plus a real exit(157)

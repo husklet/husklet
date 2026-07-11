@@ -167,8 +167,120 @@ __attribute__((constructor)) static void futex_table_ctor(void) {
     futex_table_init();
 }
 
+// ===================== shared-memory futex key (Linux "shared" futex semantics) =================
+// dd hashes a futex bucket by the WORD's host virtual address. That is exactly Linux's PRIVATE futex key
+// (mm + address) and is correct for anon/private words -- including a fork-inherited MAP_SHARED page, which
+// lands at the SAME VA in parent and child. But a file-backed MAP_SHARED object (memfd, shm) is mapped
+// INDEPENDENTLY by each peer: Chrome's renderer and GPU-service map the command-buffer shmem at DIFFERENT
+// addresses, so the SAME physical futex word has a different VA in each. Linux keys such a word by the
+// SHARED object identity (inode + page offset), so a FUTEX_WAKE through one mapping reaches a FUTEX_WAIT
+// parked through another. dd's VA-only key put the two in different buckets and LOST the wake -- the
+// documented "Wall 7": the renderer's command-buffer flush never woke the GPU service, so page content was
+// never rasterized. (A fork-inherited anon MAP_SHARED page keeps the VA key: same VA in both processes.)
+//
+// Fix: record every file-backed MAP_SHARED region {host VA range -> (st_dev, st_ino, file offset)} at mmap
+// time (mem.c), and canonicalise a futex word in such a region to a stable token derived from that
+// identity. futex_key() returns this token for a shared word and the plain VA otherwise, and is used BOTH
+// for the bucket hash AND for the per-address parked-waiter slot (fbk_park/unpark/match/parked), so a
+// waiter and a cross-mapping waker agree on the bucket AND the slot. A token that happens to collide with a
+// real VA (or another shared word) only causes a spurious wake -- the guest re-checks its word and re-waits
+// -- never a missed one. The registry is process-private (each process maps its own VAs to the same global
+// (dev,ino,off), so keys still match across processes); a zero-entry fast path keeps non-shared futexes
+// (every private/anon word, the overwhelming majority) byte-identical and lock-free.
+#define FSHKEY_MAX 4096
+static struct {
+    uint64_t lo, hi;   // host VA range [lo, hi) of this mapping
+    uint64_t dev, ino; // backing object identity (fstat)
+    uint64_t foff;     // file offset mapped at `lo`
+} g_shkey[FSHKEY_MAX];
+static int g_shkey_n;
+static _Atomic int g_nshkey; // 0 => futex_key is identity (lock-free fast path, no registry scan)
+static pthread_mutex_t g_shkey_m = PTHREAD_MUTEX_INITIALIZER;
+
+// Canonical futex key for uaddr: a shared-object token for a file-backed MAP_SHARED word, else the VA.
+static uintptr_t futex_key(const void *uaddr) {
+    if (atomic_load_explicit(&g_nshkey, memory_order_acquire) == 0) return (uintptr_t)uaddr;
+    uint64_t v = (uint64_t)(uintptr_t)uaddr;
+    uintptr_t key = (uintptr_t)uaddr;
+    pthread_mutex_lock(&g_shkey_m);
+    for (int i = 0; i < g_shkey_n; i++) {
+        if (v >= g_shkey[i].lo && v < g_shkey[i].hi) {
+            uint64_t off = g_shkey[i].foff + (v - g_shkey[i].lo);
+            uint64_t h = (g_shkey[i].ino + 0x9E3779B97F4A7C15ull) * 1099511628211ull;
+            h ^= (g_shkey[i].dev + 0x100000001B3ull) * 2654435761ull;
+            h ^= off * 0xD6E8FEB86659FD93ull;
+            h ^= h >> 29;
+            key = (uintptr_t)(h | 1); // never 0 (0 is the free-slot sentinel in fbk_park)
+            break;
+        }
+    }
+    pthread_mutex_unlock(&g_shkey_m);
+    return key;
+}
+
+// Record a file-backed MAP_SHARED mapping so its futex words canonicalise to the shared object identity.
+// Called from mem.c after a successful mmap; a no-op (fast-path gate stays 0) until the first such map.
+static void futex_shared_register(uint64_t base, uint64_t len, int fd, uint64_t foff) {
+    struct stat st;
+    if (len == 0 || fstat(fd, &st) != 0) return;
+    pthread_mutex_lock(&g_shkey_m);
+    for (int i = 0; i < g_shkey_n;) { // drop any stale entry fully covered by this range (a remap)
+        if (g_shkey[i].lo >= base && g_shkey[i].hi <= base + len)
+            g_shkey[i] = g_shkey[--g_shkey_n];
+        else
+            i++;
+    }
+    if (g_shkey_n < FSHKEY_MAX) {
+        g_shkey[g_shkey_n].lo = base;
+        g_shkey[g_shkey_n].hi = base + len;
+        g_shkey[g_shkey_n].dev = (uint64_t)st.st_dev;
+        g_shkey[g_shkey_n].ino = (uint64_t)st.st_ino;
+        g_shkey[g_shkey_n].foff = foff;
+        g_shkey_n++;
+    }
+    atomic_store_explicit(&g_nshkey, g_shkey_n, memory_order_release);
+    pthread_mutex_unlock(&g_shkey_m);
+}
+
+// Trim/drop shared-key entries against a host range [ustart,uend) that munmap actually released (mirrors
+// anon_split_unmap). A surviving head keeps its identity; a surviving tail advances foff for the raised base.
+static void futex_shared_unmap(uint64_t ustart, uint64_t uend) {
+    if (atomic_load_explicit(&g_nshkey, memory_order_acquire) == 0) return;
+    pthread_mutex_lock(&g_shkey_m);
+    for (int i = 0; i < g_shkey_n;) {
+        uint64_t base = g_shkey[i].lo, end = g_shkey[i].hi;
+        if (ustart >= end || uend <= base) {
+            i++;
+            continue;
+        }
+        int keep_head = base < ustart, keep_tail = uend < end;
+        uint64_t dev = g_shkey[i].dev, ino = g_shkey[i].ino, foff = g_shkey[i].foff;
+        if (!keep_head && !keep_tail) {
+            g_shkey[i] = g_shkey[--g_shkey_n];
+            continue;
+        }
+        if (keep_head) {
+            g_shkey[i].hi = ustart; // lo/foff unchanged; trim to the surviving head
+        } else {                    // keep_tail only: base rises -> advance foff
+            g_shkey[i].foff = foff + (uend - base);
+            g_shkey[i].lo = uend;
+        }
+        if (keep_head && keep_tail && g_shkey_n < FSHKEY_MAX) { // middle unmap -> tail becomes a 2nd entry
+            g_shkey[g_shkey_n].lo = uend;
+            g_shkey[g_shkey_n].hi = end;
+            g_shkey[g_shkey_n].dev = dev;
+            g_shkey[g_shkey_n].ino = ino;
+            g_shkey[g_shkey_n].foff = foff + (uend - base);
+            g_shkey_n++;
+        }
+        i++;
+    }
+    atomic_store_explicit(&g_nshkey, g_shkey_n, memory_order_release);
+    pthread_mutex_unlock(&g_shkey_m);
+}
+
 static inline struct futex_bucket *fbk_of(const void *uaddr) {
-    uint32_t h = (uint32_t)(((uintptr_t)uaddr >> 2) * 2654435761u) & (FUTEX_NBUCKET - 1);
+    uint32_t h = (uint32_t)((futex_key(uaddr) >> 2) * 2654435761u) & (FUTEX_NBUCKET - 1);
     return &g_fbk[h];
 }
 
@@ -496,11 +608,11 @@ static int futex_wake_bucket(const int *uaddr, int n, uint32_t match) {
     pthread_mutex_lock(&b->m);
     // FUTEX_WAKE_BITSET only wakes waiters whose bitset overlaps `match`; a plain FUTEX_WAKE passes ~0u.
     // If no parked waiter on this address can match, wake nobody (Linux does not disturb them).
-    if (!fbk_match(b, (uintptr_t)uaddr, match)) {
+    if (!fbk_match(b, futex_key(uaddr), match)) {
         pthread_mutex_unlock(&b->m);
         return 0;
     }
-    int woke = fbk_parked(b, (uintptr_t)uaddr);
+    int woke = fbk_parked(b, futex_key(uaddr));
     if (woke > n) woke = n;
     pthread_cond_broadcast(&b->c); // waiters re-check their own word; spurious wakes are legal
     pthread_mutex_unlock(&b->m);
@@ -576,7 +688,7 @@ static long futex_lock_pi(struct cpu *c, int *uaddr, int trylock, const struct t
         uint32_t v = (uint32_t)expect;
         uint32_t owner = v & DD_FUTEX_TID_MASK;
         if (owner == 0) { // free (owner slot 0; FUTEX_OWNER_DIED may still be set on a robust mutex)
-            int others = fbk_parked(b, (uintptr_t)uaddr) - (parked ? 1 : 0); // waiters left behind
+            int others = fbk_parked(b, futex_key(uaddr)) - (parked ? 1 : 0); // waiters left behind
             int nv = (int)((uint32_t)mytid | (others > 0 ? DD_FUTEX_WAITERS : 0));
             // Acquire atomically vs a racing userspace fast-path locker (cmpxchg 0->tid): if the word moved
             // underfoot, retry from the re-read instead of clobbering the new owner (double-ownership bug).
@@ -601,7 +713,7 @@ static long futex_lock_pi(struct cpu *c, int *uaddr, int trylock, const struct t
             continue;
         if (!parked) {
             atomic_fetch_add_explicit(&b->waiters, 1, memory_order_relaxed);
-            fbk_park(b, (uintptr_t)uaddr, ~0u); // PI-mutex waiter: matches any wake bitset
+            fbk_park(b, futex_key(uaddr), ~0u); // PI-mutex waiter: matches any wake bitset
             parked = 1;
         }
         thread_wait_publish(&b->m, &b->c);
@@ -635,7 +747,7 @@ static long futex_lock_pi(struct cpu *c, int *uaddr, int trylock, const struct t
         // otherwise loop and re-read the word (the releaser cleared the owner; race for ownership under b->m)
     }
     if (parked) {
-        fbk_unpark(b, (uintptr_t)uaddr);
+        fbk_unpark(b, futex_key(uaddr));
         if (atomic_fetch_sub_explicit(&b->waiters, 1, memory_order_relaxed) == 1) b->imprecise = 0;
     }
     pthread_mutex_unlock(&b->m);
@@ -656,7 +768,7 @@ static long futex_unlock_pi(struct cpu *c, int *uaddr) {
         pthread_mutex_unlock(&b->m);
         return -EPERM; // not the owner -- Linux rejects an UNLOCK_PI from a non-owner
     }
-    int waiters = fbk_parked(b, (uintptr_t)uaddr);
+    int waiters = fbk_parked(b, futex_key(uaddr));
     __atomic_store_n(uaddr, (int)(waiters > 0 ? DD_FUTEX_WAITERS : 0), __ATOMIC_SEQ_CST);
     if (waiters > 0) pthread_cond_broadcast(&b->c);
     pthread_mutex_unlock(&b->m);
@@ -690,7 +802,7 @@ static long futex_op(struct cpu *c, int *uaddr, int op, int val, const struct ti
             return -EAGAIN;
         }
         atomic_fetch_add_explicit(&b->waiters, 1, memory_order_relaxed);
-        fbk_park(b, (uintptr_t)uaddr, ~0u); // PI-mutex waiter: matches any wake bitset
+        fbk_park(b, futex_key(uaddr), ~0u); // PI-mutex waiter: matches any wake bitset
         thread_wait_publish(&b->m, &b->c);
         long ret = 0;
         if (cpu_wait_interrupted(c)) {
@@ -711,7 +823,7 @@ static long futex_op(struct cpu *c, int *uaddr, int op, int val, const struct ti
                 ret = -ETIMEDOUT;
         }
         thread_wait_clear();
-        fbk_unpark(b, (uintptr_t)uaddr);
+        fbk_unpark(b, futex_key(uaddr));
         if (atomic_fetch_sub_explicit(&b->waiters, 1, memory_order_relaxed) == 1) b->imprecise = 0;
         pthread_mutex_unlock(&b->m);
         if (ret < 0) return ret;                   // on error the caller does NOT own uaddr2 (kernel-exact)
@@ -811,7 +923,7 @@ static long futex_op(struct cpu *c, int *uaddr, int op, int val, const struct ti
         // process or, across a shared page, another) can report the true woken count. Kept in the SHARED
         // bucket, so a cross-fork waker sees it. Carry the wait bitset (op 9 = FUTEX_WAIT_BITSET's val3;
         // plain FUTEX_WAIT matches any) so FUTEX_WAKE_BITSET can skip a non-overlapping wake.
-        fbk_park(b, (uintptr_t)uaddr, op == 9 ? val3 : ~0u);
+        fbk_park(b, futex_key(uaddr), op == 9 ? val3 : ~0u);
         futexlog(ts ? "fwait_park" : "fwait_parkINF", uaddr, op, val, (long)G_PC(c));
         int rc = 0;
         if (ts) {
@@ -824,7 +936,7 @@ static long futex_op(struct cpu *c, int *uaddr, int op, int val, const struct ti
             pthread_cond_wait(&b->c, &b->m);
         thread_wait_clear();
         futexlog("fwait_wake", uaddr, op, rc, 0);
-        fbk_unpark(b, (uintptr_t)uaddr);
+        fbk_unpark(b, futex_key(uaddr));
         int intr = cpu_wait_interrupted(c);
         // fetch_sub returns the PREVIOUS value; == 1 means the bucket just fully drained -> a stale
         // `imprecise` flag (set by a past slot overflow) can be cleared so exact counting resumes.
@@ -934,6 +1046,10 @@ static void thread_after_fork(void) {
     pthread_mutex_init(&g_threg_m, NULL); // thread registry (tkill/tgkill lookup, thread_register)
     pthread_mutex_init(&g_futex_m, NULL); // legacy global futex lock (NOFUTEXQ path)
     pthread_cond_init(&g_futex_c, NULL);
+    // Shared-futex-key registry lock: a private (process-shared? no -- plain) mutex that a dead peer could
+    // have held across the guest fork; the child inherits the VA->object-identity entries (its mappings are
+    // the parent's, at the same VAs) but must reset the lock, exactly as the futex/threg locks above.
+    pthread_mutex_init(&g_shkey_m, NULL);
     // fork() clones ONLY the calling thread, but the tid->thread registry still lists every PARENT thread.
     // Those phantom entries never unregister (no thread backs them in the child), so they (1) poison
     // tgkill/tkill routing -- thread_target_signal matches a phantom by tid (or pid 1 for the main thread)
