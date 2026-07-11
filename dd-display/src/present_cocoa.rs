@@ -17,13 +17,13 @@ use crate::present::{Presenter, SurfaceBuffer};
 use crate::server::{ExternalLogicalCrop, Server};
 use objc2::rc::Retained;
 use objc2::runtime::AnyObject;
-use objc2::runtime::ProtocolObject;
-use objc2::ClassType;
+use objc2::runtime::{NSObject, NSObjectProtocol, ProtocolObject};
+use objc2::{declare_class, msg_send_id, mutability, ClassType, DeclaredClass};
 use objc2_app_kit::{
     NSApplication, NSApplicationActivationPolicy, NSAutoresizingMaskOptions, NSBackingStoreType,
     NSBitmapImageFileType, NSBitmapImageRep, NSBitmapImageRepPropertyKey, NSDeviceRGBColorSpace,
     NSEvent, NSEventMask, NSEventModifierFlags, NSEventType, NSGraphicsContext, NSImage,
-    NSImageView, NSScreen, NSView, NSWindow, NSWindowStyleMask,
+    NSImageView, NSScreen, NSView, NSWindow, NSWindowDelegate, NSWindowStyleMask,
 };
 use objc2_foundation::{
     MainThreadMarker, NSDefaultRunLoopMode, NSDictionary, NSInteger, NSPoint, NSRect, NSSize,
@@ -36,11 +36,80 @@ use objc2_metal::{
     MTLRenderPipelineState, MTLStoreAction, MTLTexture,
 };
 use objc2_quartz_core::{CAMetalDrawable, CAMetalLayer};
+use std::cell::RefCell;
 use std::collections::HashMap;
 use std::os::raw::{c_float, c_ushort};
 use std::os::unix::io::RawFd;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::OnceLock;
+use std::sync::{Mutex, OnceLock};
+
+// ---- Native window-close → xdg_toplevel.close ---------------------------------------------------
+// AppKit's title-bar close button (or Cmd-W) fires `windowShouldClose:` on the window's delegate. Without
+// a delegate the window would just orderOut, silently dropping the guest client's toplevel while it keeps
+// running (its Wayland surface stays "mapped" but the host window is gone). Instead we install a shared
+// delegate that REFUSES the AppKit close (returns NO — the guest owns the surface lifecycle) and queues the
+// window pointer; the live presenter loop translates each queued window to its owning surface and sends
+// `xdg_toplevel.close`, so the client (Chrome, a GTK app, …) exits or prompts exactly as on real Wayland.
+
+/// Window pointers (`*const NSWindow as usize`) whose native close button was clicked, awaiting
+/// translation to `xdg_toplevel.close` by the presenter loop. Main-thread only in practice; a Mutex keeps
+/// it trivially sound.
+fn pending_window_closes() -> &'static Mutex<Vec<usize>> {
+    static Q: OnceLock<Mutex<Vec<usize>>> = OnceLock::new();
+    Q.get_or_init(|| Mutex::new(Vec::new()))
+}
+
+declare_class!(
+    struct WindowCloseDelegate;
+
+    unsafe impl ClassType for WindowCloseDelegate {
+        type Super = NSObject;
+        type Mutability = mutability::MainThreadOnly;
+        const NAME: &'static str = "DDWindowCloseDelegate";
+    }
+
+    impl DeclaredClass for WindowCloseDelegate {}
+
+    unsafe impl NSObjectProtocol for WindowCloseDelegate {}
+
+    unsafe impl NSWindowDelegate for WindowCloseDelegate {
+        // Return NO so AppKit does NOT destroy the native window: the guest client decides whether to close
+        // in response to xdg_toplevel.close. We just record which window was asked to close.
+        #[method(windowShouldClose:)]
+        fn window_should_close(&self, sender: &NSWindow) -> bool {
+            let wp = sender as *const NSWindow as usize;
+            if let Ok(mut q) = pending_window_closes().lock() {
+                if !q.contains(&wp) {
+                    q.push(wp);
+                }
+            }
+            false
+        }
+    }
+);
+
+/// The process-wide close delegate (created lazily on the main thread, kept alive for the process so the
+/// window's weak `delegate` pointer never dangles). Every window shares one — it holds no per-window state.
+fn window_close_delegate(mtm: MainThreadMarker) -> Retained<WindowCloseDelegate> {
+    thread_local! {
+        static DELEGATE: RefCell<Option<Retained<WindowCloseDelegate>>> = const { RefCell::new(None) };
+    }
+    DELEGATE.with(|d| {
+        d.borrow_mut()
+            .get_or_insert_with(|| {
+                let this = mtm.alloc::<WindowCloseDelegate>();
+                unsafe { msg_send_id![this, init] }
+            })
+            .clone()
+    })
+}
+
+/// Install the shared close delegate on a freshly created window so its native close button routes to
+/// `xdg_toplevel.close` instead of silently orphaning the guest surface.
+fn install_close_delegate(window: &NSWindow, mtm: MainThreadMarker) {
+    let delegate = window_close_delegate(mtm);
+    window.setDelegate(Some(ProtocolObject::from_ref(&*delegate)));
+}
 
 /// Integer `wl_output.scale` to advertise, derived from the Mac's backing store. HiDPI is opt-in via
 /// `DD_DISPLAY_HIDPI` while the retina present path (CALayer contentsScale) is still being brought up:
@@ -130,6 +199,7 @@ impl CocoaPresenter {
             title.to_string()
         };
         window.setTitle(&NSString::from_str(&t));
+        install_close_delegate(&window, mtm);
 
         let frame = NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(w as f64, h as f64));
         let image_view = unsafe { NSImageView::initWithFrame(mtm.alloc(), frame) };
@@ -520,6 +590,7 @@ fragment float4 fmain(VOut in [[stage_in]], texture2d<float> src [[texture(0)]],
             title.to_string()
         };
         window.setTitle(&NSString::from_str(&t));
+        install_close_delegate(&window, mtm);
 
         let layer = unsafe { CAMetalLayer::new() };
         unsafe {
@@ -1340,6 +1411,22 @@ fn run_multi<P: Presenter>(
                     unsafe { app.sendEvent(&ev) };
                 }
                 None => break,
+            }
+        }
+        // Native close button → xdg_toplevel.close. The delegate refused AppKit's close and queued the
+        // window pointer; translate each to its owning client+surface and ask the guest to close. The
+        // window stays up until the client tears down its surface (or exits), matching Wayland semantics.
+        let closes: Vec<usize> = pending_window_closes()
+            .lock()
+            .map(|mut q| std::mem::take(&mut *q))
+            .unwrap_or_default();
+        for wp in closes {
+            let ptr = wp as *const std::ffi::c_void;
+            for c in clients.iter_mut() {
+                if let Some(sid) = c.presenter().window_ptr_to_sid(ptr) {
+                    c.send_close_request(sid);
+                    break;
+                }
             }
         }
     }
