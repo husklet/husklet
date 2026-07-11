@@ -1915,6 +1915,10 @@ impl GpuBackend for MetalBackend {
         // since, a load=Clear is the shim's false positive → force Load to preserve the prior content.
         let mut rendered_offscreen: std::collections::HashSet<u32> = std::collections::HashSet::new();
         let mut cleared_since: std::collections::HashSet<u32> = std::collections::HashSet::new();
+        // Height of the CURRENT render pass's color target — the offscreen Y-flip mirrors a viewport/scissor
+        // across the FULL tile height, not just within a sub-band, so a partial sub-viewport (e.g. a CSS
+        // opacity/clip child render pass) lands and clips consistently with full-tile passes.
+        let mut cur_target_h: u32 = 0;
         for op in &cb.encoder {
             match op {
                 Enc::BeginRenderPass { color, depth } => {
@@ -1971,6 +1975,7 @@ impl GpuBackend for MetalBackend {
                     flip_pass = color
                         .first()
                         .is_some_and(|ca| !self.surface_ids.contains(&ca.texture));
+                    cur_target_h = chh;
                     // Record this offscreen tile as rendered-this-frame and consume any pending clear, so a
                     // later reuse pass in the same command buffer preserves (loads) its content unless it is
                     // explicitly ClearRect'd in between.
@@ -2120,10 +2125,13 @@ impl GpuBackend for MetalBackend {
                 } => {
                     if let Some(e) = &enc {
                         let hh = (*h).max(0.0) as f64;
-                        // Offscreen render target: negative-height viewport (originY at the bottom edge)
-                        // mirrors NDC-y so the texture is stored bottom-left like GL and samples upright.
+                        // Offscreen render target: negative-height viewport mirrors NDC-y so the texture is
+                        // stored bottom-left like GL and samples upright. The mirror is across the FULL tile
+                        // height (originY = H - y), not the sub-viewport band (y + h) — those coincide only
+                        // for a full-tile viewport; a partial sub-viewport (a CSS opacity/clip child render
+                        // pass) must flip about the tile so its content lands where the flipped scissor clips.
                         let (origin_y, height) = if flip_pass {
-                            (*y as f64 + hh, -hh)
+                            (cur_target_h as f64 - *y as f64, -hh)
                         } else {
                             (*y as f64, hh)
                         };
@@ -2139,12 +2147,18 @@ impl GpuBackend for MetalBackend {
                 }
                 Enc::SetScissor { x, y, w, h } => {
                     if let Some(e) = &enc {
-                        // The offscreen Y-flip uses a negative-height viewport, which mirrors content
-                        // in-place within the same window rows — the scissor rect therefore stays as the
-                        // guest emitted it (it still clips the same window region the content occupies).
+                        // The offscreen Y-flip mirrors content across the full tile height (see SetViewport),
+                        // so the scissor must mirror to match: a guest rect [y, y+h) clips the flipped rows
+                        // [H-(y+h), H-y). For a full-tile scissor this is a no-op (H-(0+H)=0); for a partial
+                        // scissor (opacity/clip child pass) it keeps the clip aligned with the flipped content.
+                        let sy = if flip_pass {
+                            cur_target_h.saturating_sub(*y + *h)
+                        } else {
+                            *y
+                        };
                         e.setScissorRect(MTLScissorRect {
                             x: *x as _,
-                            y: *y as _,
+                            y: sy as _,
                             width: *w as _,
                             height: *h as _,
                         });
