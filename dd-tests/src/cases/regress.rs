@@ -59,8 +59,11 @@ pub(super) fn regress() -> Group {
         // CGO_ENABLED setting; os/linux/signal.c drops the delivery) -- equivalent to GODEBUG=asyncpreemptoff=1,
         // so cooperative preemption keeps the program correct. Without the fix this crashes (rc=139/138); with
         // it, it completes. Prebuilt aarch64-only (no local Go cross-compiler); Go GC can't be qemu-oracled, so
-        // the total is a GOLDEN cross-checked byte-exact vs native arm64 Go. Source: guests/arm/go_cgo_stackgrow.go
-        // built `CGO_ENABLED=1 go build -ldflags='-linkmode external -extldflags -static'`.
+        // the total is a GOLDEN cross-checked byte-exact vs native arm64 Go. Binary + source are COMMITTED
+        // IN-REPO at dd-tests/guests/arm/ (go_cgo_stackgrow_arm / .go) so the case is self-contained — the
+        // historical <repo-parent>/poc sidecar dir is machine-local and absent from fresh checkouts/worktrees
+        // (provision::resolve tries in-repo first, then the poc walk). Rebuild on linux/arm64:
+        // `CGO_ENABLED=1 go build -trimpath -ldflags='-s -w -linkmode external -extldflags -static'`.
         fixture("go-cgo-sigurg", &[(Engine::LinuxAarch64, "guests/arm/go_cgo_stackgrow_arm")])
             .has("OK stackgrow total= 2016"),
         // STACK-OVERFLOW GUARD: a guest that recurses off the bottom of its stack must hit the

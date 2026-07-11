@@ -104,16 +104,34 @@ pub(crate) fn provision(ctx: &Ctx, c: &Case, e: Engine) -> Result<Option<String>
     }
 }
 
+/// Resolve a prebuilt-fixture path. Absolute paths pass through. A relative path (e.g.
+/// `guests/arm/go_cgo_stackgrow_arm`) is tried IN-REPO first — `dd-tests/<p>`, so a fixture committed
+/// next to the compiled-guest sources is found from any checkout, including a `.claude/worktrees/*`
+/// worktree — then against a `poc/` sidecar dir walking UP from the repo root (the historical layout,
+/// `<repo-parent>/poc/<p>`; the ancestor walk makes it work from a worktree too, whose parent is
+/// `.claude/worktrees/`, not the dir that holds `poc/`). If nothing exists, fall back to the historical
+/// `<repo-parent>/poc/<p>` so the runner's error still names the conventional location.
 fn resolve(ctx: &Ctx, p: &str) -> String {
     if p.starts_with('/') {
-        p.into()
-    } else {
-        ctx.repo
-            .parent()
-            .unwrap()
-            .join("poc")
-            .join(p)
-            .to_string_lossy()
-            .into_owned()
+        return p.into();
     }
+    let in_repo = ctx.repo.join("dd-tests").join(p);
+    if in_repo.is_file() {
+        return in_repo.to_string_lossy().into_owned();
+    }
+    let mut dir = Some(ctx.repo.as_path());
+    while let Some(d) = dir {
+        let cand = d.join("poc").join(p);
+        if cand.is_file() {
+            return cand.to_string_lossy().into_owned();
+        }
+        dir = d.parent();
+    }
+    ctx.repo
+        .parent()
+        .unwrap()
+        .join("poc")
+        .join(p)
+        .to_string_lossy()
+        .into_owned()
 }
