@@ -77,6 +77,17 @@ pub fn launch_ex(ws: &Workspace, cols: u16, rows: u16, restore: bool, cwd: Optio
     // Arm checkpoint/restore for the engine this process spawns (ffi.c execve()s with our environ). Each
     // `ddcli workspace launch` is its own process, so these process-global vars never race across workspaces.
     std::env::set_var("DDJIT_CHECKPOINT_DIR", &ckpt_dir);
+    // The engine implements guest fork() as a real host fork() of a multithreaded, objc-using process
+    // (Metal/IOSurface/NSString on the GPU path), and a guest execve() reloads the image IN-PLACE (no
+    // host exec), so libobjc's initialize-fork-safety poison survives into every guest process. If a
+    // guest fork races another thread's +initialize, the child later aborts on its first Foundation use
+    // (objc_initializeAfterForkError) — e.g. Chrome dies right after gl_shim surface_up. The engine's
+    // process model requires the suppression; guarantee it here instead of relying on the launcher's
+    // environment. libobjc reads it once at the engine's exec (ffi.c passes our environ). An explicit
+    // caller-provided value (e.g. NO, to debug fork hygiene) is honored.
+    if std::env::var_os("OBJC_DISABLE_INITIALIZE_FORK_SAFETY").is_none() {
+        std::env::set_var("OBJC_DISABLE_INITIALIZE_FORK_SAFETY", "YES");
+    }
     if restore && ckpt_dir.join("MANIFEST").exists() {
         std::env::set_var("DDJIT_RESTORE_DIR", &ckpt_dir);
     } else {
