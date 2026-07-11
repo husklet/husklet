@@ -264,7 +264,7 @@ pub struct CocoaPresenter {
 }
 
 impl CocoaPresenter {
-    fn new(mtm: MainThreadMarker) -> CocoaPresenter {
+    pub fn new(mtm: MainThreadMarker) -> CocoaPresenter {
         CocoaPresenter {
             mtm,
             wins: HashMap::new(),

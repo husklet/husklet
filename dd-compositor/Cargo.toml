@@ -1,0 +1,41 @@
+[package]
+name = "dd-compositor"
+version = "0.1.0"
+edition = "2021"
+description = "dd-compositor — a Smithay-native Wayland compositor for the dd host renderer. It replaces the hand-written dd-display protocol machine (dd-display/src/server.rs) with Smithay's maintained wayland_frontend state cores, while reusing dd-display's platform present/input seam (the Presenter trait + the Cocoa/Metal window backend). Gated behind DD_DISPLAY_SMITHAY=1; the legacy server.rs path is untouched when the flag is unset."
+license = "MIT"
+autobins = false
+
+# NOT in the workspace default-members (see the root Cargo.toml): the bare `cargo build` and
+# `cargo build -p dd-display` on the Linux dev host never pull smithay in, so the headless core
+# build stays green and offline. Build this crate explicitly on the macOS host with the smithay deps.
+
+[[bin]]
+name = "dd-compositor"
+path = "src/main.rs"
+
+[lib]
+name = "dd_compositor"
+path = "src/lib.rs"
+
+[dependencies]
+# The proven feasibility-spike configuration: Smithay's platform-agnostic protocol/state layer only.
+# `default-features = false` drops the entire Linux backend stack (drm/gbm/egl/libinput/udev/session);
+# we opt back in ONLY `wayland_frontend`. Transitively needs the system libxkbcommon at link+run time
+# (see this crate's module docs). Verified to compile + run + accept a client on aarch64-apple-darwin.
+smithay = { version = "0.7", default-features = false, features = ["wayland_frontend"] }
+
+# Reuse dd-display's platform seam: the `Presenter` trait + `SurfaceBuffer`, the Cocoa/Metal window
+# backend (present_cocoa/metal), and the XKB keymap. dd-display does NOT depend on dd-compositor, so
+# there is no cycle and the legacy path is unaffected.
+dd-display = { path = "../dd-display" }
+libc = "0.2"
+
+# The native present/input loop reuses the objc2 stack already locked in the workspace (via dd-gui /
+# dd-display), so this fetches nothing new on the mac.
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "0.5"
+objc2-foundation = { version = "0.2", features = ["NSString", "NSGeometry", "NSThread", "NSRunLoop", "NSDate"] }
+objc2-app-kit = { version = "0.2", features = [
+    "NSApplication", "NSWindow", "NSResponder", "NSView", "NSScreen", "NSEvent",
+] }

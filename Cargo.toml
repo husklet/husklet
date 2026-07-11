@@ -1,10 +1,14 @@
 # dd — VM-less Linux container runtime on macOS. Cargo workspace.
 [workspace]
 resolver = "2"
-members = ["dd-jit", "dd-jit-darwin", "dd-images", "dd-daemon", "dd-client", "dd-tests", "dd-cli", "dd-gui", "dd-term-core", "dd-gpu", "dd-display"]
+members = ["dd-jit", "dd-jit-darwin", "dd-images", "dd-daemon", "dd-client", "dd-tests", "dd-cli", "dd-gui", "dd-term-core", "dd-gpu", "dd-display", "dd-compositor"]
 # dd-gui pulls in GTK4/libadwaita (pkg-config), which isn't present on the Linux dev host.
 # Keep it out of the default set so a bare `cargo build` works everywhere; build it
 # explicitly with `cargo build -p dd-gui` (or `make app`) on the macOS host.
+# dd-compositor pulls in smithay (needs the system libxkbcommon at link/run time) and is macOS-first;
+# it is likewise kept out of default-members so the Linux headless `cargo build -p dd-display` core
+# build never compiles smithay and stays offline. Build it explicitly on the mac:
+#   RUSTFLAGS="-L native=<libxkbcommon>/lib" cargo build --release -p dd-compositor
 default-members = ["dd-jit", "dd-jit-darwin", "dd-images", "dd-daemon", "dd-client", "dd-tests", "dd-cli", "dd-term-core", "dd-gpu", "dd-display"]
 
 [profile.release]

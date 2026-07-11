@@ -14,6 +14,13 @@ use dd_display::server::Server;
 use std::os::unix::io::RawFd;
 
 fn main() {
+    // Flag-gated Smithay-native compositor path. When `DD_DISPLAY_SMITHAY=1`, replace the hand-written
+    // protocol machine below with the Smithay-based `dd-compositor` binary (same CLI + socket), execing
+    // it in place so the daemon's launch semantics are preserved. When the flag is unset, everything
+    // below runs unchanged — the legacy `server.rs` path is the untouched default, and this crate never
+    // links smithay (keeping the Linux headless `cargo build -p dd-display` core build green + offline).
+    maybe_exec_smithay();
+
     let mut args = std::env::args().skip(1);
     let mut socket: Option<String> = None;
     let mut png_dir: Option<String> = None;
@@ -390,4 +397,40 @@ fn set_nonblock(fd: RawFd) {
         let fl = libc::fcntl(fd, libc::F_GETFL);
         libc::fcntl(fd, libc::F_SETFL, fl | libc::O_NONBLOCK);
     }
+}
+
+/// If `DD_DISPLAY_SMITHAY=1`, exec the `dd-compositor` binary (the Smithay-native path) in place of
+/// this process, forwarding all CLI args. `dd-compositor` is expected next to this executable (both
+/// land in the same `dd.app` bundle / `target/<profile>` dir). If it cannot be found or exec fails,
+/// we log and fall through to the legacy `server.rs` path so the display never silently dies. This is
+/// an exec, not a link dependency, so `dd-display` itself never pulls in smithay/libxkbcommon.
+fn maybe_exec_smithay() {
+    match std::env::var("DD_DISPLAY_SMITHAY").as_deref() {
+        Ok("1") | Ok("true") | Ok("on") => {}
+        _ => return,
+    }
+    use std::os::unix::process::CommandExt;
+    let self_exe = match std::env::current_exe() {
+        Ok(p) => p,
+        Err(e) => {
+            eprintln!("dd-display: DD_DISPLAY_SMITHAY set but current_exe failed: {e}; using legacy path");
+            return;
+        }
+    };
+    let bin = self_exe
+        .parent()
+        .map(|d| d.join("dd-compositor"))
+        .unwrap_or_else(|| std::path::PathBuf::from("dd-compositor"));
+    if !bin.exists() {
+        eprintln!(
+            "dd-display: DD_DISPLAY_SMITHAY set but {} not found; using legacy path",
+            bin.display()
+        );
+        return;
+    }
+    eprintln!("dd-display: DD_DISPLAY_SMITHAY=1 -> exec {}", bin.display());
+    let err = std::process::Command::new(&bin)
+        .args(std::env::args_os().skip(1))
+        .exec(); // only returns on failure
+    eprintln!("dd-display: exec {} failed: {err}; using legacy path", bin.display());
 }
