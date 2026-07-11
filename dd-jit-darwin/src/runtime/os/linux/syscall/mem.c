@@ -698,11 +698,20 @@ static int svc_mem(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_
         // registry tracks the guest's INTENT (reserve PROT_NONE -> commit RW) so buffer checks EFAULT.
         if (a1) {
             // Linux mm/mprotect.c rejects a start not aligned to the (guest) page size with EINVAL BEFORE
-            // touching anything, so a bad-alignment probe must not read as success. (The "unmapped range ->
-            // ENOMEM" check is NOT emulated here: dd force-maps a persistent host cage and does not track
-            // loader/stack VMAs, so there is no faithful, regression-free "is this range mapped" oracle.)
+            // touching anything, so a bad-alignment probe must not read as success.
             if (a0 & (uint64_t)(guest_pagesz() - 1)) {
                 G_RET(c) = (uint64_t)(-EINVAL);
+                break;
+            }
+            // Linux mm/mprotect.c then walks the VMAs and returns ENOMEM if the range has a hole (any page
+            // not backed by a mapping) -- an mprotect of a page-aligned but unmapped range must NOT read as a
+            // fake success. Reject a range that is neither a tracked guest mapping (gmap -- covers ELF image /
+            // stack / brk / anon+file mmap, INCLUDING a guest PROT_NONE reservation, which the host_range_mapped
+            // probe would call unmapped) nor physically mapped host-side. Same regression-free idiom the mremap
+            // source validation (case 216) uses: a hot mprotect on the guest's own memory hits gmap_contains
+            // (no probe cost, no false ENOMEM); only a genuinely unmapped range is rejected.
+            if (!gmap_contains(a0, (uint64_t)a1) && !host_range_mapped((uintptr_t)a0, (size_t)a1)) {
+                G_RET(c) = (uint64_t)(-ENOMEM);
                 break;
             }
             uint64_t glo = a0 & ~(uint64_t)0xfff, ghi = (a0 + a1 + 0xfff) & ~(uint64_t)0xfff;

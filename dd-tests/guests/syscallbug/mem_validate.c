@@ -22,5 +22,12 @@ int main(void) {
     // madvise with an unaligned start -> EINVAL.
     long r4 = syscall(SYS_madvise, (long)(m + 1), (long)(pg - 1), 0 /*MADV_NORMAL*/);
     printf("madvise_unaligned_errno=%d\n", r4 == -1 ? errno : 0);
+
+    // mprotect on a page-ALIGNED but UNMAPPED range -> ENOMEM (Linux mm/mprotect.c walks the VMAs and
+    // faults a hole). Map a page then unmap it so the address is aligned and provably not mapped.
+    char *u = mmap(0, pg, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    munmap(u, pg);
+    long r5 = syscall(SYS_mprotect, (long)u, (long)pg, PROT_READ);
+    printf("mprotect_unmapped_errno=%d\n", r5 == -1 ? errno : 0); // ENOMEM(12) on Linux
     return 0;
 }
