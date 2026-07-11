@@ -8,24 +8,46 @@ below or a broken-oracle artifact (qemu-user lacking a syscall) — see the
 
 ## Rendering (the active goal: Chrome renders web content on screen)
 
-- **Wall 7 — cross-process command-buffer content lost. ENGINE FIX LANDED,
-  LIVE VALIDATION PENDING.** dd keyed futexes by host VA; a file-backed
-  MAP_SHARED word (Chrome's renderer↔GPU command buffer) maps at different VAs
-  per process, so the wake landed in the wrong bucket and was dropped. Fixed:
-  shared futex words are canonicalized to (st_dev, st_ino, offset); regression
-  gate `futex-shared-key` passes (was woke=0/0, now 1/1). Still to do: run
-  live multi-process Chrome (`CHROME_TIMEOUT>=180`) on the macOS Metal
-  pipeline and confirm the content signature in a fresh `freshir-*.ir`
-  (offscreen tile `Begin target=512/514` + page-bg clear `[0.914,0.933,0.969]`)
-  / the oracle page on screen. If content is still blank, instrument the next
-  wakeup channel (Mojo data-pipe) the same way. Full context:
+- **Wall 7 — MULTI-process command-buffer content still lost (futex fix landed
+  and live-validated; it was necessary but NOT sufficient).** The shared-futex
+  key fix (`bc9aa532`: file-backed MAP_SHARED words canonicalized to
+  (st_dev, st_ino, offset); gate `futex-shared-key` 2/2) is confirmed live:
+  **single-process Chrome now renders web content on the Metal path** (runs
+  `chromium-run-gpu_retry_205503`/`205931`, content signature
+  `Begin target=512/514` + page-bg clear `[0.914,0.933,0.969]` in the teed IR,
+  page text visible in the frame PNGs). **Multi-process is still blank**: two
+  independent post-fix runs (`202521`: 6589 frames, `210317`: 4221 frames)
+  show zero content signature — only `Begin target=1` UI passes + the white
+  `ClearRect{texture:1}` placeholder. UI stays live, so the GPU service's own
+  channel works; specifically the renderer's raster stream never arrives.
+  Narrowed (diagnostic run `211107`, `DD_FATALSIG_LOG=1`): no guest process
+  dies of a fatal signal; the renderer is fully DORMANT — 100% of a 2s sample
+  parked (7 threads in guest FUTEX_WAIT, 2 in the epoll/kevent Mojo pumps)
+  while the browser paints 24 fps. The break is inbound event delivery to
+  child guest processes over Mojo's fd transport (socketpair write → peer
+  epoll wake / data-pipe eventfd), or the sync EstablishGpuChannel reply the
+  renderer blocks on at startup. A recurring `Network service crashed,
+  restarting service.` (engine sees no fatal signal) points at the same
+  channel-level gap. Full context + how-to-run:
   [../rendering/README.md](../rendering/README.md).
-- **Single-process first-commit idle-stall.** `--single-process` Chrome (which
-  DID render content Jul-9) parks in FUTEX_WAIT before the first wl_surface
-  commit. Likely the same shared-futex-key mechanism (two mappings of the same
-  memfd word in one process — the fixed `two_map` case). RETEST on the fixed
-  engine before treating as a separate bug; if still stalled, per-tid backtrace
-  at the stall.
+- **(Resolved on branch render/chrome-content) engine launch drops libobjc
+  fork-safety suppression.** Guest fork() is a real host fork() of a
+  multithreaded objc-using engine process and guest execve() reloads in-place,
+  so without `OBJC_DISABLE_INITIALIZE_FORK_SAFETY=YES` in the engine's exec env
+  a guest fork racing another thread's `+initialize` aborts the child on first
+  Foundation use (live signature: Chrome exits 137 right after
+  `gl_shim: surface_up` with the `+[NSPlaceholderString initialize]` message;
+  this — not FUTEX_WAIT — was killing the post-fix single-process runs
+  launched from macOS, whose BSD-`script` harness branch dropped the var).
+  Fix: `ddcli workspace launch` guarantees the var
+  (dd-cli/src/ddjit_launcher.rs).
+- **Content orientation is per-capture variable.** The offscreen-pass Y-flip
+  heuristic renders the old `chrome-stream-ir-000.ir` upright but the new
+  single-process captures upside-down (identical through main's and the
+  integrated branch's backend, so it is Chrome choosing a different composite
+  transform, not a dd-display regression). Orientation must be derived from
+  the pass's projection/viewport transform, not a static offscreen rule —
+  orientation workstream (`render-integrated`).
 
 ## Engine — W^X / page-permission cluster (approach explicitly halted)
 
