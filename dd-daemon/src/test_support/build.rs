@@ -34,7 +34,15 @@ fn context_tar(files: &[(&str, &str)]) -> Vec<u8> {
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_nanos())
         .unwrap_or(0);
-    let dir = std::env::temp_dir().join(format!("dd-buildctx-{}-{}", std::process::id(), nanos));
+    // A per-call sequence so two concurrent build tests in the SAME process (identical pid, and
+    // possibly identical coarse `nanos`) never collide on the staging dir + `_ctx.tar`.
+    let seq = {
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static SEQ: AtomicU64 = AtomicU64::new(0);
+        SEQ.fetch_add(1, Ordering::Relaxed)
+    };
+    let dir =
+        std::env::temp_dir().join(format!("dd-buildctx-{}-{}-{}", std::process::id(), nanos, seq));
     std::fs::create_dir_all(&dir).unwrap();
     let mut names: Vec<String> = Vec::new();
     for (rel, contents) in files {
