@@ -2808,6 +2808,27 @@ static int svc_fs(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t
                     break;
                 }
             }
+            // Peer /proc/<pid>/fd/<N> -> the fd's target (symlink-target view), read from the peer's libproc
+            // fd table (its fds live in another dd worker process; procfd_num rejected the foreign pid above).
+            // A closed/absent peer fd -> ENOENT. Opening the link stays deferred (needs cross-process fd
+            // passing). proc_self_leaf matched only our own pid, so cover foreign pids here.
+            if (aleaf && !strncmp(aleaf, "fd/", 3) && aleaf[3] && proc_pid_member(peer, &hp)) {
+                int isnum = 1;
+                for (const char *t = aleaf + 3; *t; t++)
+                    if (*t < '0' || *t > '9') isnum = 0;
+                if (isnum) {
+                    char tgt[4200];
+                    int tl = proc_fd_link_pid(hp, atoi(aleaf + 3), tgt, sizeof tgt);
+                    if (tl < 0) {
+                        G_RET(c) = (uint64_t)(-ENOENT);
+                        break;
+                    }
+                    size_t l = (size_t)tl > bs ? bs : (size_t)tl;
+                    memcpy(buf, tgt, l);
+                    G_RET(c) = (uint64_t)l;
+                    break;
+                }
+            }
         }
         // DRM sysfs symlinks (subsystem/device classification) libdrm's drmGetDevices2 readlinks.
         if (p && gpu_iosurface_on() &&

@@ -116,42 +116,6 @@ escape in lockstep, then runtime-verify volume/lower mounts on BOTH engines (x86
 That is too wide to verify safely on this shared engine gate in a minimal pass. `publish` is numeric-only and
 carries no delimiter hazard. Left for a dedicated launch-wire pass; do not escape one side in isolation.
 
-### Peer `/proc/<pid>/fd` Is Advertised But Not Openable
-
-Priority: P2
-Impact: peer process fd inspection is inconsistent
-Confidence: High
-
-Verification status: Proven in isolated worktree `/Users/x/dd/dd-worker-AM-envproc-20260710`.
-
-Evidence:
-
-- Per-pid directory materialization includes an `fd` placeholder: `dd-jit-darwin/src/runtime/os/linux/container/vfs.c:2400`.
-- Proc directory open handling only serves pid/task directories: `dd-jit-darwin/src/runtime/os/linux/container/vfs.c:2472`.
-- Peer proc open supports a limited set of files, excluding `fd`: `dd-jit-darwin/src/runtime/os/linux/container/vfs.c:3066`.
-
-Why this is bad:
-
-Tools inspecting peer processes expect `/proc/<pid>/fd` to be listable and direct fd links to be available subject to permissions. dd advertises enough structure to suggest support but then returns `ENOENT`.
-
-Isolated proof:
-
-```sh
-cargo run -p dd-tests -- -e aarch64 proc-peer-fd-dir
-cargo run -p dd-tests -- -e x86_64 proc-peer-fd-dir
-```
-
-Observed dd: `proc_peer_fd dir=0:2 lstat=0:2 readlink=0:2`; native Linux succeeded.
-
-Status (2026-07-10): BLOCKED — not minimally fixable. Unlike the ns directory (a container shares one
-namespace set, so peer ns links are identical to self — now FIXED), a peer's `fd` directory requires the
-LIVE per-process fd table of ANOTHER dd worker: each guest process is its own macOS process with a private
-fd table, and the cross-process proc registry only publishes comm+argv, not fds. Serving peer `/proc/<pid>/fd`
-would need each worker to publish its full guest-fd→target map (updated on every open/close/dup) and the
-reader to translate host fds back into guest fd numbers/paths — a new cross-process fd-mirroring subsystem,
-not a localized change. Left for a dedicated cross-process-fd pass.
-
-
 
 ## Regression Gate Shape
 

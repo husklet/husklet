@@ -128,6 +128,11 @@ fn dev_sys() -> Group {
             // lsns/nsenter inspect a live peer's /proc/<pid>/ns: a container shares one namespace set, so
             // the peer ns links readlink to the same "<name>:[<inode>]" values as self.
             src("pf-peer-ns", "ext_procfs/peerns.c").out("peer_ns ok=1\n"),
+            // A peer's /proc/<pid>/fd was advertised (listed as a dir entry) but its contents ENOENTed --
+            // each guest process has a private fd table in its own macOS process and the proc registry
+            // published only comm+argv. Now the peer fd table is read from the host kernel (libproc) and the
+            // listing + per-fd readlink (symlink-target view) are served; opening a peer fd stays deferred.
+            src("pf-peer-fd", "ext_procfs/peerfd.c").out("peerfd ok=1 dir=1 lstat=1 readlink=1\n"),
             // A NONBLOCKING read on a controlling terminal with no input is EAGAIN on Linux, never EOF(0).
             // dd backs /dev/tty (host device) and /dev/console (/dev/null) with something that returns 0 when
             // empty -> readline/TUI code read the 0 as terminal closure. dd-behavior golden: /dev/console is

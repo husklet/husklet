@@ -2259,6 +2259,142 @@ static int dd_get_procinfo(int pid, struct dd_procinfo *pi) {
     return 1;
 }
 
+// Rebase a host vnode path into the container's guest namespace (strip the rootfs prefix), in place.
+static void proc_fd_rebase(char *tgt) {
+    if (g_rootfs && !strncmp(tgt, g_rootfs_canon, g_rootfs_canon_len)) {
+        const char *g = tgt + g_rootfs_canon_len;
+        if (!g[0]) g = "/";
+        memmove(tgt, g, strlen(g) + 1);
+    }
+}
+
+// The /proc/<pid>/fd/<fd> readlink target for a PEER container process (host pid `host`), the SYMLINK-TARGET
+// view. A guest process is its own macOS process with a PRIVATE fd table, so the peer's fds aren't in our
+// own table (procfd_num rejects a foreign pid) -- read them from the host kernel via libproc: a VNODE fd's
+// path from PROC_PIDFDVNODEPATHINFO (rebased out of the rootfs), a pipe/socket/anon fd as the Linux-style
+// "pipe:[..]"/"socket:[..]"/"anon_inode:[..]" name. Returns the byte length written to `out`, or -1 if the
+// peer or fd is not resolvable (-> ENOENT). Guest fd numbers == host fd numbers, the same 1:1 mapping the
+// self /proc/self/fd view relies on.
+static int proc_fd_link_pid(int host, int fd, char *out, size_t n) {
+    if (host <= 0 || fd < 0) return -1;
+    struct vnode_fdinfowithpath vi;
+    if (proc_pidfdinfo(host, fd, PROC_PIDFDVNODEPATHINFO, &vi, sizeof vi) == (int)sizeof vi && vi.pvip.vip_path[0]) {
+        char tgt[4200];
+        snprintf(tgt, sizeof tgt, "%s", vi.pvip.vip_path);
+        proc_fd_rebase(tgt);
+        size_t l = strlen(tgt);
+        if (l > n) l = n;
+        memcpy(out, tgt, l);
+        return (int)l;
+    }
+    // Non-vnode fd (pipe/socket/eventfd/...): confirm it is actually OPEN in the peer via the fd list, then
+    // synthesize the Linux-style name; a closed/absent fd -> -1 (ENOENT), never a stale link.
+    int cap = proc_pidinfo(host, PROC_PIDLISTFDS, 0, NULL, 0);
+    if (cap <= 0) return -1;
+    struct proc_fdinfo *fds = malloc((size_t)cap);
+    if (!fds) return -1;
+    int got = proc_pidinfo(host, PROC_PIDLISTFDS, 0, fds, cap);
+    int nfd = got > 0 ? got / (int)sizeof(struct proc_fdinfo) : 0;
+    int type = -1;
+    for (int i = 0; i < nfd; i++)
+        if (fds[i].proc_fd == fd) {
+            type = (int)fds[i].proc_fdtype;
+            break;
+        }
+    free(fds);
+    if (type < 0) return -1; // fd not open in the peer
+    const char *k = type == PROX_FDTYPE_SOCKET ? "socket" : type == PROX_FDTYPE_PIPE ? "pipe" : "anon_inode";
+    char syn[64];
+    int sl = snprintf(syn, sizeof syn, "%s:[%d]", k, fd);
+    if ((size_t)sl > n) sl = (int)n;
+    memcpy(out, syn, (size_t)sl);
+    return sl;
+}
+
+// Is `fd` currently OPEN in the PEER process `host`? (For peer /proc/<pid>/fd/<N> lstat/stat: a live fd is a
+// symlink, a closed one ENOENTs.) Returns 1 if open, 0 otherwise.
+static int proc_fd_pid_open_one(int host, int fd) {
+    if (host <= 0 || fd < 0) return 0;
+    int cap = proc_pidinfo(host, PROC_PIDLISTFDS, 0, NULL, 0);
+    if (cap <= 0) return 0;
+    struct proc_fdinfo *fds = malloc((size_t)cap);
+    if (!fds) return 0;
+    int got = proc_pidinfo(host, PROC_PIDLISTFDS, 0, fds, cap);
+    int nfd = got > 0 ? got / (int)sizeof(struct proc_fdinfo) : 0;
+    int open_ = 0;
+    for (int i = 0; i < nfd; i++)
+        if (fds[i].proc_fd == fd) {
+            open_ = 1;
+            break;
+        }
+    free(fds);
+    return open_;
+}
+
+// Build a temp dir of "N -> target" symlinks for a PEER container process's open fds (host pid `host`), so
+// a peer /proc/<pid>/fd is listable (getdents) and each entry readlinks to the fd's target -- the same
+// symlink-dir mechanism proc_fd_dir_open() uses for self, but populated from the peer's libproc fd list
+// instead of our own host fd table. Self is delegated to proc_fd_dir_open (exact host table). Returns the
+// dir fd, or -1. NOTE: this is the LISTING + readlink view only; actually OPENING a peer fd (using
+// /proc/<pid>/fd/N as a working descriptor) needs the owner to hand the real fd across processes
+// (SCM_RIGHTS-level fd passing) -- deferred; open of a peer fd link still ENOENTs.
+static int proc_fd_dir_pid_open(int host) {
+    if (host == (int)getpid()) return proc_fd_dir_open(); // self: exact host fd table + pty/anon fixups
+    static int registered = 0;
+    if (!registered) {
+        atexit(procfd_dirs_atexit);
+        registered = 1;
+    }
+    procfd_dirs_reap(0);
+    int cap = proc_pidinfo(host, PROC_PIDLISTFDS, 0, NULL, 0);
+    if (cap <= 0) return -1;
+    struct proc_fdinfo *fds = malloc((size_t)cap);
+    if (!fds) return -1;
+    int got = proc_pidinfo(host, PROC_PIDLISTFDS, 0, fds, cap);
+    int nfd = got > 0 ? got / (int)sizeof(struct proc_fdinfo) : 0;
+    char tmpl[] = "/tmp/.ddpfddirXXXXXX";
+    if (!mkdtemp(tmpl)) {
+        free(fds);
+        return -1;
+    }
+    for (int i = 0; i < nfd; i++) {
+        int fd = fds[i].proc_fd;
+        char tgt[4200];
+        int have = 0;
+        if (fds[i].proc_fdtype == PROX_FDTYPE_VNODE) {
+            struct vnode_fdinfowithpath vi;
+            if (proc_pidfdinfo(host, fd, PROC_PIDFDVNODEPATHINFO, &vi, sizeof vi) == (int)sizeof vi &&
+                vi.pvip.vip_path[0]) {
+                snprintf(tgt, sizeof tgt, "%s", vi.pvip.vip_path);
+                proc_fd_rebase(tgt);
+                have = tgt[0] != 0;
+            }
+        }
+        if (!have) {
+            const char *k = fds[i].proc_fdtype == PROX_FDTYPE_SOCKET
+                                ? "socket"
+                                : fds[i].proc_fdtype == PROX_FDTYPE_PIPE ? "pipe" : "anon_inode";
+            snprintf(tgt, sizeof tgt, "%s:[%d]", k, fd);
+        }
+        char link[80];
+        snprintf(link, sizeof link, "%s/%d", tmpl, fd);
+        if (symlink(tgt, link) != 0) {}
+    }
+    free(fds);
+    int d = open(tmpl, O_RDONLY | O_DIRECTORY);
+    if (d < 0) {
+        procfd_dir_rm(tmpl);
+        return -1;
+    }
+    for (int i = 0; i < 64; i++)
+        if (!g_procfd_dirs[i].path[0]) {
+            g_procfd_dirs[i].fd = d;
+            snprintf(g_procfd_dirs[i].path, sizeof g_procfd_dirs[i].path, "%s", tmpl);
+            break;
+        }
+    return d;
+}
+
 // Resident footprint (bytes) for OUR OWN pid's VmRSS / statm-resident / stat-rss. The guest's tracked anon
 // charge (g_mem_charged) is 0 for a process that has only faulted its static image, but a real Linux process
 // ALWAYS has a non-zero VmRSS -- top/htop/ps would otherwise show this process at RES=0, a dd-only divergence
@@ -3649,6 +3785,10 @@ static int proc_open(const char *rp) {
             if (proc_pid_member(gp2, &host) || (is_oom_leaf && (host = (gp2 == 1 && g_init_hostpid) ? g_init_hostpid : gp2) > 0 &&
                                                 !(kill(host, 0) != 0 && errno == ESRCH))) {
                 if (dbg_oom) fprintf(stderr, "[DDPROC] peer gp=%d host=%d fl=%s member/live\n", gp2, host, fl);
+                // Peer /proc/<pid>/fd: a listable dir of symlinks built from the peer's libproc fd list, so
+                // each entry readlinks to the fd's target. (Opening a peer fd link stays deferred -- needs
+                // cross-process fd passing; see proc_fd_dir_pid_open.)
+                if (!strcmp(fl, "fd")) return proc_fd_dir_pid_open(host);
                 const char *diag_mode = getenv("DD_PROC_CHROME_MODE");
                 if ((n = proc_peer_diag_text(buf, sizeof buf, diag_mode, fl, gp2)) >= 0) {
                     char desc[64];
@@ -5497,6 +5637,34 @@ static int synth_stat_raw(const char *gp, struct stat *s) {
                 s->st_nlink = 1;
                 s->st_size = 64; // Linux reports a fixed 64 for /proc/<pid>/fd/N links
                 return 1;
+            }
+        }
+    }
+    // Peer /proc/<pid>/fd (a directory) and /proc/<pid>/fd/<N> (a symlink to the peer fd's target) -- answer
+    // stat directly (a live peer fd from its libproc table) so lstat/stat see the right type WITHOUT
+    // proc_open() materializing a temp dir as a side effect. proc_self_leaf matched only our own pid above.
+    {
+        int peer = -1, hp = 0;
+        const char *aleaf = proc_any_leaf(gp, &peer);
+        if (aleaf && proc_pid_member(peer, &hp)) {
+            if (!strcmp(aleaf, "fd")) {
+                memset(s, 0, sizeof *s);
+                s->st_mode = S_IFDIR | 0555;
+                s->st_nlink = 2;
+                return 1;
+            }
+            if (!strncmp(aleaf, "fd/", 3) && aleaf[3]) {
+                int isnum = 1;
+                for (const char *t = aleaf + 3; *t; t++)
+                    if (*t < '0' || *t > '9') isnum = 0;
+                if (isnum) {
+                    if (!proc_fd_pid_open_one(hp, atoi(aleaf + 3))) return 0; // closed/absent -> ENOENT
+                    memset(s, 0, sizeof *s);
+                    s->st_mode = S_IFLNK | 0777;
+                    s->st_nlink = 1;
+                    s->st_size = 64;
+                    return 1;
+                }
             }
         }
     }
