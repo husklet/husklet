@@ -9,8 +9,7 @@ pub(super) fn sys_time() -> Group {
             sy("clock-variants", "completeness/sys_clock_variants.c"), // PROCESS/THREAD CPUTIME, BOOTTIME, RAW
             sy("timer-create", "completeness/sys_timer_create.c"),
             sy("itimer", "completeness/sys_itimer.c"),
-            // GAP adjtimex/clock_adjtime: read-only (modes=0) query returns an error under the engine.
-            sy("adjtimex", "completeness/sys_adjtimex.c"),
+            sy("adjtimex", "completeness/sys_adjtimex.c"), // read-only (modes=0) query — oracle-identical to native
         ],
     )
 }

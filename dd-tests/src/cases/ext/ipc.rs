@@ -70,9 +70,9 @@ fn ext_ipc() -> Group {
         port("poslk-xproc", "ext_ipc/ipc_poslk_xproc.c")
             .out("poslk final=400 noloss=1 getlk=1 indep=1\n")
             .only(&[Engine::LinuxAarch64, Engine::LinuxX86_64]),
-        // lockf() POSIX record-lock conflicts aren't enforced across processes under the JIT (child's
-        // F_TLOCK succeeds while the parent holds the lock) — flock() above works, macOS works. xfail
-        // Linux; see GAPS "ext-lockf-fork".
+        // lockf() POSIX record-lock conflicts ARE enforced across processes (the child's F_TLOCK is
+        // refused while the parent holds the lock, then acquired after release) — golden-identical on
+        // both Linux engines and macOS.
         port("lockf-fork", "ext_ipc/ipc_lockf.c").out("lockf blocked=1 acquired=1\n"),
         // ---- SysV IPC errno/edge fidelity (LTP msgget/semget/shmget + *ctl) — diffed vs native ----
         // IPC_EXCL EEXIST on re-create, ENOENT for a missing key w/o IPC_CREAT, shm data+IPC_STAT size,
@@ -97,10 +97,11 @@ fn ext_ipc() -> Group {
         // POSIX mq priority ordering. macOS has no mqueue kernel object, so dd emulates a named
         // in-process priority queue (rare.c) — byte-exact vs native here; errno edges in `mq-edge` above.
         src("mq", "ext_ipc/ipc_mq.c").oracle(),
-        // eventfd counters aren't shared across fork under the JIT (child's writes don't reach the
-        // parent's object → reads 0; native reads 100). xfail Linux; see GAPS "ext-eventfd-fork".
+        // eventfd counters ARE shared across fork (the child's writes reach the parent's object, so the
+        // parent reads the accumulated count) — oracle-identical to native on both Linux engines.
         src("eventfd", "ext_ipc/ipc_eventfd.c").oracle(),
-        // socketpair(AF_UNIX, SOCK_SEQPACKET) returns -1 under the JIT → empty. xfail Linux; GAPS "ext-seqpacket".
+        // socketpair(AF_UNIX, SOCK_SEQPACKET) round-trips message-boundary datagrams — oracle-identical
+        // to native on both Linux engines.
         src("seqpacket", "ext_ipc/ipc_seqpacket.c").oracle(),
         // SEQPACKET Mojo-IPC fidelity (chromium NodeChannel): no premature EOF when the parent drops the
         // child's fork-inherited pair end while keeping its own; SCM_RIGHTS fd passing over SEQPACKET; and

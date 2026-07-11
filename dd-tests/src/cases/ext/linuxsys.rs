@@ -187,7 +187,7 @@ fn miscx() -> Group {
             src("io-uring", "ext_linuxsys/io_uring.c")
                 .oracle()
                 .xfail(&[Engine::LinuxAarch64]),
-            // membarrier(2) MEMBARRIER_CMD_QUERY returns -1 (unimplemented). GAPS `lsys-membarrier`.
+            // membarrier(2) MEMBARRIER_CMD_QUERY enumerates the supported command mask — oracle-identical to native.
             src("membarrier", "ext_linuxsys/membarrier.c").oracle(),
             // personality(2) get/set round-trips (query 0xffffffff; ADDR_NO_RANDOMIZE sticks).
             src("personality", "ext_linuxsys/personality.c").oracle(),

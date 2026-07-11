@@ -78,6 +78,21 @@ fn proc_content() -> Group {
             // live rss via libproc; only self read 0). Asserts all three are non-zero (fails on the pre-fix engine).
             src("pf-selfrss", "ext_procfs/selfrss.c").out("selfrss ok=1\n"),
             src("pf-procstate", "ext_procfs/procstate.c").out("procstate ok=1\n"), // cross-proc R/S state
+            // CONTRACT for the Chrome peer-procfs env switches (vfs.c proc_open peer branch). Chrome polls a
+            // peer's /proc/<pid>/status+statm for its memory monitor; these switches let the launcher shape or
+            // hide that. Each case pins ONE switch's observable procfs effect so the behavior is tested, not
+            // hidden. Golden-checked (dd-only env, no native form). See docs/proc-chrome-switches.md.
+            //   default: the peer status file opens and carries a non-empty body.
+            src("pf-chrome-default", "ext_procfs/chrome_procswitch.c")
+                .out("chrome_procswitch open=1 nonempty=1\n"),
+            //   DD_HIDE_CHROME_PROCFILES=1: peer status/statm are hidden -> open fails ENOENT.
+            src("pf-chrome-hide", "ext_procfs/chrome_procswitch.c")
+                .env("DD_HIDE_CHROME_PROCFILES", "1")
+                .out("chrome_procswitch open=0 nonempty=0\n"),
+            //   DD_PROC_CHROME_MODE=empty: peer status/statm open but return an EMPTY (0-byte) body.
+            src("pf-chrome-empty", "ext_procfs/chrome_procswitch.c")
+                .env("DD_PROC_CHROME_MODE", "empty")
+                .out("chrome_procswitch open=1 nonempty=0\n"),
             src("pf-cpuinfo", "ext_procfs/cpuinfo.c").out("cpuinfo ok=1\n"),
             src("pf-misc", "ext_procfs/miscfiles.c").out("miscfiles ok=1\n"),
             src("pf-net", "ext_procfs/netfiles.c").out("netfiles ok=1\n"),

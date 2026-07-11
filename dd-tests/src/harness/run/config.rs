@@ -17,9 +17,13 @@ pub(crate) fn build_cfg(c: &Case, e: Engine, rootfs_str: &str) -> ddjit::SpawnCo
     cfg.ulimits = c.ulimits.clone();
     // Untrusted-guest SENTRY split: bake DDJIT_UNTRUSTED=1 into the engine's launch env (via SpawnConfig's
     // `env`, which serializes into the `exec env …` prefix of the launch script — so it survives the `mac`
-    // bridge that drops ambient env). DDJIT_SANDBOX is left unset on purpose (ring/forwarding, not Seatbelt).
-    if c.untrusted {
+    // bridge that drops ambient env). `.sandbox()` additionally arms DDJIT_SANDBOX=1 for the PUBLIC sandbox
+    // mode (Seatbelt worker confinement on macOS) — the exact combo the public `.sandbox(true)` builder emits.
+    if c.untrusted || c.sandbox {
         cfg.env.push(("DDJIT_UNTRUSTED".into(), "1".into()));
+    }
+    if c.sandbox {
+        cfg.env.push(("DDJIT_SANDBOX".into(), "1".into()));
     }
     for (k, v) in &c.env {
         cfg.env.push((k.clone(), v.clone()));

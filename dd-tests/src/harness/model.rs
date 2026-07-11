@@ -95,9 +95,17 @@ pub struct Case {
     pub xfail: Vec<Engine>,
     /// Run the guest with the untrusted-guest SENTRY split enabled (sets `DDJIT_UNTRUSTED=1` in the
     /// engine's env so fs/net/proc syscalls route through the forked sentry over the SPSC ring). OFF by
-    /// default → the existing matrix is byte-identical. `DDJIT_SANDBOX` is intentionally NOT set: this
-    /// validates the ring marshaling/forwarding, not the (macOS) Seatbelt confinement.
+    /// default → the existing matrix is byte-identical. Sets ONLY `DDJIT_UNTRUSTED` (the ring
+    /// marshaling/forwarding); the stronger `DDJIT_SANDBOX` public mode is driven by `.sandbox()` below.
     pub untrusted: bool,
+    /// Run the guest under the PUBLIC sandbox mode (`docker run --security-opt sandbox`, i.e.
+    /// `Container::builder().sandbox(true)`): sets BOTH `DDJIT_UNTRUSTED=1` and `DDJIT_SANDBOX=1` in the
+    /// engine's env, exactly as the public builder emits. On macOS this additionally confines the JIT
+    /// worker under the deny-default Seatbelt profile (sentry.c `worker_sandbox`); on Linux the Seatbelt
+    /// step is a no-op, so the case pins that the public-mode env combo launches and a fully-forwarded
+    /// guest still produces the trusted golden. OFF by default. Implies untrusted (sandbox is only sound
+    /// once fs/net/proc are forwarded).
+    pub sandbox: bool,
     /// docker `--cpus` online-CPU cap (0 = unset). Threads to SpawnConfig.cpus -> DD_CPUS.
     pub cpus: u32,
     /// docker `--read-only` rootfs. Threads to SpawnConfig.read_only -> DD_ROOTFS_RO.
@@ -144,6 +152,7 @@ fn base(name: &'static str, bin: Bin) -> Case {
         engines,
         xfail: vec![],
         untrusted: false,
+        sandbox: false,
         cpus: 0,
         read_only: false,
         ulimits: vec![],
@@ -272,6 +281,14 @@ impl Case {
     /// baseline. Linux-engine only in effect (the sentry is Linux-only); the env is inert on darwin.
     pub fn untrusted(mut self) -> Self {
         self.untrusted = true;
+        self
+    }
+    /// Enable the PUBLIC sandbox mode for this case (`DDJIT_UNTRUSTED=1` + `DDJIT_SANDBOX=1`, the exact
+    /// env combo `Container::builder().sandbox(true)` / `docker run --security-opt sandbox` emit). Drives
+    /// the sentry split AND the (macOS) Seatbelt worker confinement, so the public mode is no longer
+    /// avoided by the matrix. Re-run a fully-forwarded guest under it and assert the trusted golden.
+    pub fn sandbox(mut self) -> Self {
+        self.sandbox = true;
         self
     }
 }

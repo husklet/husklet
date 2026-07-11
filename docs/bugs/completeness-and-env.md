@@ -82,23 +82,6 @@ so the trusted cross-fork eventfd counter is fine). The Chrome rendering blocker
 runs in TRUSTED mode and was a different mechanism entirely — a cross-mapping **futex** key bug, now fixed. The
 eventfd loss here rides the sentry's SCM_RIGHTS copyback, not the futex path, and is untouched by that fix.
 
-### `DDJIT_SANDBOX` Public Mode Is Intentionally Avoided By Tests
-
-Priority: P2
-Impact: public runtime mode can drift without matrix coverage
-Confidence: High
-
-Evidence:
-
-- Public `.sandbox(true)` sets `DDJIT_UNTRUSTED` and `DDJIT_SANDBOX`: `dd-jit/src/runtime/container/builder.rs:148`.
-- Runtime defaults can also inject sandbox behavior: `dd-jit/src/runtime/runtime.rs:60`.
-- The test harness deliberately sets only `DDJIT_UNTRUSTED`: `dd-tests/src/harness/run/config.rs:18`.
-- Sentry comments say the stronger sandbox is only sound once syscall forwarding is complete: `dd-jit-darwin/src/runtime/os/linux/sentry.c:436`.
-
-Why this is bad:
-
-Users can enable a mode that the main matrix avoids. Bugs that only appear when both sentry and sandbox behavior are enabled will not be caught by normal tests.
-
 ### `S3DB_DURABILITY` Hidden Fsync Semantics
 
 Priority: P2
@@ -175,21 +158,6 @@ Verification:
 
 Create a bind source path containing `:` or `,` and assert the guest sees the correct mounted content.
 
-### Hidden Proc Switches Change Peer Procfs
-
-Priority: P2
-Impact: environment-only behavior can hide process files from peers
-Confidence: Medium
-
-Evidence:
-
-- `DD_HIDE_CHROME_PROCFILES` changes procfs visibility behavior: `dd-jit-darwin/src/runtime/os/linux/container/vfs.c:3075`.
-- `DD_PROC_CHROME_MODE` changes Chrome-specific procfs handling: `dd-jit-darwin/src/runtime/os/linux/container/vfs.c:3085`.
-
-Why this is bad:
-
-These switches alter procfs compatibility without an obvious typed launch contract or documented test gate. They can make process discovery and diagnostics differ between otherwise identical runs based only on inherited environment.
-
 ### Peer `/proc/<pid>/fd` Is Advertised But Not Openable
 
 Priority: P2
@@ -250,20 +218,6 @@ Observed proof:
 qemu: stat_state=S status_state=S sleeping=1 waited=1 exit_ok=1
 dd:   stat_state=R status_state=R sleeping=0 waited=1 exit_ok=1
 ```
-
-### Stale Passing Xfail Comments
-
-Priority: P3
-Impact: wrong triage and unnecessary avoidance of working paths
-Confidence: Medium-high
-
-Observed in isolated `/Users/x/dd/dd-verify-4b`:
-
-Targeted filters for `seqpacket`, `lockf-fork`, `mincore`, `membarrier`, `close-range`, `adjtimex`, `openat2`, and `bitchurn` now passed even though some comments still imply open gaps.
-
-Why this is bad:
-
-Stale xfail or gap comments hide real regressions and waste agent time. Passing cases should either move to normal coverage or keep an explicit reason for remaining quarantined.
 
 ### `/dev/tty` Nonblocking Read Reports EOF Instead Of EAGAIN
 

@@ -164,6 +164,7 @@ impl SpawnConfig {
                 "DDCACHELOG",
                 "DD_NOPATHCACHE",
                 "DD_HIDE_CHROME_PROCFILES",
+                "DD_PROC_CHROME_MODE",
                 "W4_NOOPENCACHE",
                 "DDDBG_GPRDUMP",
                 "DDDBG_NOCHAIN",

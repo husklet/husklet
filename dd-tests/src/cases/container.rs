@@ -65,12 +65,18 @@ pub(super) fn sandbox() -> Group {
             // Each guest is registered TWICE against the SAME golden line: once on the trusted path (baseline)
             // and once with `.untrusted()` (DDJIT_UNTRUSTED=1) so every fs/net syscall is marshaled to the
             // forked sentry over the SPSC ring and the copied-back bytes must reproduce the baseline exactly.
-            // This is the matrix's ONLY DDJIT_UNTRUSTED coverage. DDJIT_SANDBOX stays off (ring, not Seatbelt).
+            // `.untrusted()` covers DDJIT_UNTRUSTED (ring only); `.sandbox()` covers the PUBLIC sandbox mode
+            // (DDJIT_UNTRUSTED + DDJIT_SANDBOX, the exact combo `docker run --security-opt sandbox` emits) so
+            // the public mode is no longer avoided by the matrix — on macOS it drives the deny-default Seatbelt
+            // worker confinement, on Linux it pins the combined env still reproduces the trusted golden.
             // fs round-trip: openat/write/lseek/read/pread64/fstat/getdents64/close all cross the ring.
             src("sentry-fs", "sentry_fs.c").out("sentry_fs sum=32640 size=256 found=1\n"),
             src("sentry-fs-untrusted", "sentry_fs.c")
                 .out("sentry_fs sum=32640 size=256 found=1\n")
                 .untrusted(),
+            src("sentry-fs-sandbox", "sentry_fs.c")
+                .out("sentry_fs sum=32640 size=256 found=1\n")
+                .sandbox(),
             // socket family: socket/bind/getsockname/sendto/recvfrom on a sentry-owned UDP loopback socket.
             src("sentry-net", "sentry_net.c").out("sentry_net echo=datagram-echo-42 len=16\n"),
             src("sentry-net-untrusted", "sentry_net.c")
@@ -85,6 +91,11 @@ pub(super) fn sandbox() -> Group {
             src("sentry-fork-untrusted", "sentry_fork.c")
                 .out("sentry_fork child_exit=7 readback=ok sum=32640\n")
                 .untrusted(),
+            // fork lane under the PUBLIC sandbox mode: the child worker is re-confined under Seatbelt after
+            // the fork (macOS), so this guards that lane-reclaim + reap survive the confined worker path too.
+            src("sentry-fork-sandbox", "sentry_fork.c")
+                .out("sentry_fork child_exit=7 readback=ok sum=32640\n")
+                .sandbox(),
         ],
     )
 }

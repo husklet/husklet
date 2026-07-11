@@ -7,8 +7,7 @@ pub(super) fn sys_file() -> Group {
     group(
         "comp-sys-file",
         vec![
-            // GAP openat2: engine opens a fd (ok=1) but the read returns \0 not the file's byte — openat2
-            // doesn't honor the open_how flags / opens the wrong backing fd. (jit byte=\0 vs native byte=Z)
+            // openat2(2) via open_how opens the backing fd and reads the file's byte back — oracle-identical to native.
             sy("openat2", "completeness/sys_openat2.c"),
             sy("statx", "completeness/sys_statx.c"),
             sy("faccessat2", "completeness/sys_faccessat2.c"),
@@ -17,8 +16,7 @@ pub(super) fn sys_file() -> Group {
             sy("utimensat", "completeness/sys_utimensat.c"),
             sy("copy_file_range", "completeness/sys_copy_file_range.c"),
             sy("fallocate", "completeness/sys_fallocate.c"),
-            // GAP name_to_handle_at: engine returns an error (ok=0) where real Linux succeeds (ok=1).
-            sy("name_to_handle_at", "completeness/sys_name_to_handle_at.c"),
+            sy("name_to_handle_at", "completeness/sys_name_to_handle_at.c"), // handle round-trip — oracle-identical to native
             sy("truncate", "completeness/sys_truncate.c"),
             sy("fsops", "completeness/sys_fsops.c"), // linkat/symlinkat/mkdirat/unlinkat
         ],
