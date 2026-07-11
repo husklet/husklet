@@ -2378,6 +2378,97 @@ static int ns_link_target(const char *name, char *out, size_t cap) {
         if (!strcmp(name, NS[i].nm)) return snprintf(out, cap, "%s:[%u]", NS[i].nm, NS[i].ino);
     return -1;
 }
+// ================= guest-pid namespace (kill/pidfd host-authority containment) =================
+// dd runs every guest process as a real host (macOS) process, and historically used the host pid 1:1 as
+// the guest pid. That let a guest kill(2)/pidfd_send_signal an ARBITRARY same-user HOST pid -- a sibling
+// engine (another container), the launcher, or any of the dd user's processes -- because the target was
+// resolved straight to the host with no namespace boundary. The per-container process REGISTRY (proc_reg_*,
+// keyed by DD_NETNS/DD_HOSTNAME so every engine process of ONE container agrees and two containers never
+// collide) is that boundary: a host pid belongs to this container iff it published a `<dir>/<hostpid>`
+// record. The signal syscalls resolve the guest target to a host pid and then require membership here,
+// turning "any host pid" into "only a process inside THIS container" (a non-member -> ESRCH), exactly like
+// a real PID namespace. A member that is a genuine peer stays reachable, so legitimate cross-guest-process
+// signalling (the case rare.c pidfd + kill(-pgid) rely on) is preserved.
+
+// STRICT host-pid membership for the security boundary (kill/pidfd reject). Unlike proc_pid_member (which
+// tolerates registry lag with a permissive same-session fallback for /proc DISPLAY -- too loose here, since
+// sibling engines share our host session), this demands a published registry record AND a live process, so
+// a pid outside the container, or a stale marker whose pid is gone, is NOT a member. Self and the container
+// init are always members. Every fork publishes the child's marker in the PARENT before it returns (see
+// proc_reg_mark_child), so a just-forked descendant is a member the instant its pid exists (no fork race).
+static int container_host_member(int h) {
+    if (h <= 0) return 0;
+    if (h == (int)getpid() || (g_init_hostpid && h == g_init_hostpid)) return 1;
+    char dir[80], path[128];
+    proc_reg_key(dir, sizeof dir);
+    snprintf(path, sizeof path, "%s/%d", dir, h);
+    if (access(path, F_OK) != 0) return 0;       // no record in THIS container's registry -> not a member
+    return !(kill(h, 0) != 0 && errno == ESRCH); // reject a stale marker whose process is already gone
+}
+
+// Resolve a GUEST pid to its container-local host pid and require membership. gp==1 -> the init. Returns 1
+// and fills *hostout when gp names a process inside this container; 0 (leaving *hostout resolved) otherwise.
+static int container_gpid_member(int gp, int *hostout) __attribute__((unused));
+static int container_gpid_member(int gp, int *hostout) {
+    int host = (gp == 1 && g_init_hostpid) ? g_init_hostpid : gp;
+    if (hostout) *hostout = host;
+    return container_host_member(host);
+}
+
+// Publish a fresh child's membership marker from the PARENT, synchronously at fork, so the child is a
+// registry member before the parent can return and signal it (the child's own proc_reg_after_fork later
+// replaces this empty marker with its full comm/argv via an atomic rename). Cheap (one create); only in
+// container mode. Closes the fork-window race where a strict membership check would wrongly ESRCH a
+// legitimate just-forked descendant that had not yet run its own publish.
+static void proc_reg_mark_child(int hostpid) {
+    if (!g_init_hostpid || hostpid <= 0) return;
+    char dir[80], path[144];
+    proc_reg_key(dir, sizeof dir);
+    mkdir(dir, 0777);
+    snprintf(path, sizeof path, "%s/%d", dir, hostpid);
+    int fd = open(path, O_WRONLY | O_CREAT | O_EXCL, 0644); // EXCL: never clobber the child's real record
+    if (fd >= 0) close(fd);
+}
+
+// Drop a reaped child's registry records from the PARENT at wait4/waitid time. A child that exits cleanly
+// unlinks its own record, but one killed by a signal (SIGKILL) never runs that cleanup -- and a host pid
+// cannot be reused until it is reaped, so removing the marker exactly at reap keeps a recycled pid from
+// inheriting stale in-container membership. Idempotent (unlink of an absent path is a no-op).
+static void proc_reg_reap(int hostpid) {
+    if (!g_init_hostpid || hostpid <= 0) return;
+    char dir[80], path[144];
+    proc_reg_key(dir, sizeof dir);
+    snprintf(path, sizeof path, "%s/%d", dir, hostpid);
+    unlink(path);
+    snprintf(path, sizeof path, "%s/x%d", dir, hostpid);
+    unlink(path);
+}
+
+// kill(0,sig) / own-process-group delivery, contained to this engine's container. Linux kill(0,sig) signals
+// every process in the CALLER's process group; dd forwards setpgid to the host so the host process group
+// MIRRORS the guest's, but the engine shares its host group/session with the launcher + sibling engines --
+// so a raw kill(-getpgrp()) would escape the container. Instead enumerate the container registry and signal
+// each MEMBER whose host process-group == want_hpgid, skipping self (the caller delivers to itself via
+// raise_guest_signal). `msig` is the already-macOS-translated signo. Returns the number of peers signalled.
+static int container_group_kill(int want_hpgid, int msig, int self_hpid) {
+    char dir[80];
+    proc_reg_key(dir, sizeof dir);
+    DIR *d = opendir(dir);
+    if (!d) return 0;
+    int n = 0;
+    struct dirent *e;
+    while ((e = readdir(d))) {
+        if (e->d_name[0] < '0' || e->d_name[0] > '9') continue; // pid records only (skip the x<pid> exe recs)
+        int h = atoi(e->d_name);
+        if (h <= 0 || h == self_hpid) continue;
+        struct dd_procinfo pi;
+        if (!dd_get_procinfo(h, &pi)) continue;   // dead/unknown host pid -> skip
+        if (pi.pgid_host != want_hpgid) continue; // not in the caller's process group
+        if (kill(h, msig) == 0) n++;
+    }
+    closedir(d);
+    return n;
+}
 
 // /proc/<pid>/stat for a peer -- the 52-field line with GUEST pid/ppid and REAL rss/cpu/state/starttime.
 static int proc_stat_pid_text(char *b, size_t n, int gp, int host) {

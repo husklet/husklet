@@ -13,6 +13,13 @@ fn p(name: &'static str, file: &'static str) -> Case {
     src(name, file).only(&[Engine::LinuxAarch64]).oracle()
 }
 
+/// Like `p`, but runs the compiled guest INSIDE a container rootfs (alpine) so the guest-pid namespace is
+/// active (g_init_hostpid set) -- required for the container-scoped signal routing (kill(0) group delivery)
+/// to engage. Still oracle-diffed vs native aarch64 (where kill(0) signals the process group unconditionally).
+fn pc(name: &'static str, file: &'static str) -> Case {
+    src(name, file).rootfs("alpine").only(&[Engine::LinuxAarch64]).oracle()
+}
+
 pub fn groups() -> Vec<Group> {
     vec![group(
         "bug-syscall-compat",
@@ -45,6 +52,9 @@ pub fn groups() -> Vec<Group> {
             p("sc-sigaltstack-validate", "syscallbug/sigaltstack_validate.c"),
             // rt_sigprocmask invalid how / wrong sigsetsize -> EINVAL.
             p("sc-sigprocmask-validate", "syscallbug/sigprocmask_validate.c"),
+            // kill(0, sig) signals the caller's whole process GROUP (parent + child), not just the caller.
+            // Container-mode so the guest-pid-namespace group routing engages (see docs/bugs/syscall-compat.md).
+            pc("sc-kill-zero-group", "syscallbug/kill_zero_group.c"),
         ],
     )]
 }
