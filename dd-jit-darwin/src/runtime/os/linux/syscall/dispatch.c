@@ -23,6 +23,10 @@ int g_rwx_guest;
 #include <stdlib.h>
 #include <sys/times.h> // times(2): CPU accounting (struct tms is layout-compatible with Linux)
 #include <sys/mount.h> // host struct statfs -> translated to the Linux statfs layout
+// seccomp: the classic-BPF interpreter + per-thread filter storage + the service() entry gate. Included
+// here (before the fs/proc/rare family includes below) so proc.c's PR_SET_SECCOMP and rare.c's seccomp(2)
+// handlers can call seccomp_install_filter/seccomp_set_strict, and so service() can call seccomp_gate.
+#include "../seccomp.c"
 // macOS renamex_np/renameatx_np flags (Linux renameat2 flags map onto these)
 #ifndef RENAME_SWAP
 #define RENAME_SWAP 0x00000002 // atomic swap  <- Linux RENAME_EXCHANGE(2)
@@ -528,6 +532,18 @@ static void service(struct cpu *c) {
     // EVERY exit path below, so the ptrace/untrusted routes must not early-return past the clear.
     g_in_service = 1;
     uint64_t _rnr = g_systrace ? G_NR(c) : 0; // JTS: capture nr to pair the return log below
+    // seccomp gate: run the guest's installed cBPF filter(s) / STRICT policy against this syscall BEFORE it
+    // is routed anywhere. On an intercepted syscall (ERRNO/TRAP/TRACE/KILL/strict-violation) the result is
+    // already set in G_RET / a signal is queued / the process is killed, so we must NOT service it. Inert
+    // (one predicted-not-taken load) until a guest installs a filter. Runs on the RAW guest register state,
+    // before x86 legacy-syscall normalization, so the filter sees the number/args the guest actually issued.
+    if (__builtin_expect(seccomp_gate(c) != 0, 0)) {
+        if (g_systrace)
+            fprintf(stderr, "[ret pid=%d] %llu -> %lld (seccomp)\n", (int)getpid(), (unsigned long long)_rnr,
+                    (long long)(int64_t)G_RET(c));
+        g_in_service = 0;
+        return;
+    }
     if (__builtin_expect(g_untrusted, 0)) {
         syscall_route(c); // untrusted: route via sentry
     } else if (__builtin_expect(g_pt != NULL && __atomic_load_n(&g_pt->nactive, __ATOMIC_RELAXED) != 0, 0)) {

@@ -15,6 +15,13 @@
 #define G_A5(c) ((c)->r[9])                // r9
 #define G_RET(c) ((c)->r[0])               // rax
 
+// seccomp seam: the NATIVE audit arch + the RAW guest syscall number the seccomp cBPF program is run
+// against (os/linux/seccomp.c). The filter expects the x86-64 syscall number (rax), NOT dd's canonical
+// mapping -- a guest's own filter is written against its ISA's numbers. AUDIT_ARCH_X86_64 = EM_X86_64(62)
+// | __AUDIT_ARCH_64BIT | _LE = 0xC000003E.
+#define G_SECCOMP_ARCH 0xC000003Eu
+#define G_SECCOMP_NR(c) ((int)(uint32_t)(c)->r[0])
+
 // Engine seam: the shared jit/cache.c hashes the guest PC as (gpc >> G_GPC_HASH_SHIFT). x86 PCs are
 // byte-granular, so do not shift (>>0) -- matches the original frontend/x86_64/cache.c hash.
 #define G_GPC_HASH_SHIFT 0

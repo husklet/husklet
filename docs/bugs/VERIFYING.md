@@ -39,7 +39,6 @@ This file tracks ongoing verification work. It should stay short and operational
 | `docker top` on stopped container | isolated `deeper_3b` PoC; expected `409`, got `200` | Proven |
 | Wayland queued fd drop leak | isolated `drop_closes_queued_received_fds` in `/Users/x/dd/dd-verifier6b`; fd remains open after `Conn` drop | Proven |
 | untrusted SCM_RIGHTS + eventfd | isolated run in `/Users/x/dd/dd-verify-4b`; observed `woke=46 read=46 sum=1081 child=4` instead of `48/48/1176/0` | Proven |
-| seccomp no-op compatibility | isolated `seccomp_filter_getpid.c`; dd allows `getpid` after successful deny-filter install | Proven |
 | syscall event/mm edge cases | isolated `/Users/x/dd/dd-workerA-syscall-audit-20260710`; epoll maxevents, inotify flags, timerfd first deadline, mprotect alignment all mismatch native on both arches | Proven |
 | daemon storage/API consistency | isolated `/Users/x/dd/dd-workerC-daemon-storage-20260710`; image alias IDs, non-atomic cache replacement, unnamed volume reuse all fail PoCs | Proven |
 | archive cache/overlay behavior | isolated `/Users/x/dd/dd-verify-5b`; symlink target digest, hardlink topology digest, ADD tar extraction, cp GET merged overlay all fail PoCs | Proven |
