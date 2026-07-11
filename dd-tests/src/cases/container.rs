@@ -115,7 +115,11 @@ pub(super) fn darwin() -> Group {
     )
 }
 
-/// x86-64 guest — prebuilt glibc fixtures through the jit86 engine.
+/// x86-64 guest — prebuilt fixtures through the jit86 engine. The binaries are COMMITTED at
+/// dd-tests/guests/x86/ next to their sources + build.sh (they pin binary flavors the on-the-fly
+/// `src()` builds can't: nolibc raw-syscall _start guests, static-PIE vs static non-PIE glibc
+/// startups, static non-PIE Go). They historically lived in a machine-local `<repo-parent>/poc/`
+/// sidecar that vanished with that machine — in-repo they run from any fresh checkout or worktree.
 pub(super) fn x86() -> Group {
     group(
         "x86",
@@ -141,12 +145,12 @@ pub(super) fn x86() -> Group {
                 "go-static-goro",
                 &[(Engine::LinuxX86_64, "guests/x86/go_goro_x86")],
             )
-            .has("goro tot= 202063750"),
+            .has("goro tot= 16119975488"),
             fixture(
                 "go-static-heapgc",
                 &[(Engine::LinuxX86_64, "guests/x86/go_heapgc_x86")],
             )
-            .has("OK heapgc total= 8228000"),
+            .has("OK heapgc total= 9922162"),
             // CPUID feature-flag completeness. Executes real CPUID and asserts every feature dd's
             // translator implements is ADVERTISED (SSE2/SSE4.2/POPCNT/AES/PCLMUL/BMI/SHA/ERMS/FSRM/NX/RDTSCP/LM
             // + the GenuineIntel vendor + "dd JIT x86-64 processor" brand) while AVX/AVX2/AVX512/FMA/XSAVE stay
