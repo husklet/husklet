@@ -1869,6 +1869,17 @@ impl<P: Presenter> Server<P> {
         // then force alpha where the client declared the surface fully opaque.
         let (bw, bh, bgra) = self.apply_transform(sid, width, height, bgra);
         let (width, height, mut bgra) = self.apply_viewport(sid, bw, bh, bgra)?;
+        // XRGB8888 has no alpha channel — the fourth byte is undefined per the wl_shm spec (the "X").
+        // A CPU raster client (e.g. Chrome under `--disable-gpu` software compositing, committing web
+        // content straight into wl_shm) leaves it 0. The presenter's composite shader blends the
+        // surface src-over-white using this alpha, so an undefined 0 would wash opaque content to white.
+        // Force it opaque, matching `SurfaceBuffer::to_rgba`. (The GL/IOSurface content path always
+        // carried valid premultiplied alpha, so this never bit the dmabuf tile path.)
+        if format == FMT_XRGB8888 {
+            for px in bgra.chunks_exact_mut(4) {
+                px[3] = 0xff;
+            }
+        }
         self.force_opaque(sid, width, height, &mut bgra);
         Some(SurfaceBuffer {
             sid,
@@ -3602,6 +3613,43 @@ mod tests {
         }
         let sb = server.extract(7, 3, "t").expect("extracted");
         assert!(sb.bgra.chunks_exact(4).all(|p| p[3] == 0x00), "alpha preserved");
+        teardown(server, sv);
+    }
+
+    // ---- XRGB8888 (no alpha channel) extracts opaque even without a declared opaque region ----
+    // A CPU-raster client (Chrome under `--disable-gpu` software compositing → wl_shm) commits web
+    // content as XRGB8888 whose 4th byte is undefined (0). The presenter's composite shader blends
+    // src-over-white by that alpha, so an unforced 0 would wash the window white. The format's "X"
+    // guarantees opacity regardless of the opaque region.
+    #[test]
+    fn xrgb_extracts_opaque_without_opaque_region() {
+        let (mut server, sv) = test_server();
+        // 2x2 XRGB buffer, alpha byte 0 everywhere (undefined "X").
+        let data = vec![10u8, 20, 30, 0, 11, 21, 31, 0, 12, 22, 32, 0, 13, 23, 33, 0];
+        let fd = crate::keymap::anon_fd_with(&data).expect("anon fd");
+        let ptr = unsafe { mmap_ro(fd, data.len()) };
+        server.objs.insert(
+            2,
+            Obj::ShmPool { fd, ptr, size: data.len(), buffers: 1, zombie: false },
+        );
+        server.objs.insert(
+            3,
+            Obj::Buffer { pool: 2, offset: 0, width: 2, height: 2, stride: 8, format: FMT_XRGB8888 },
+        );
+        // No opaque_region declared — force_opaque would leave alpha untouched; the XRGB rule must not.
+        server.objs.insert(7, Obj::Surface(Surface::default()));
+        let sb = server.extract(7, 3, "t").expect("extracted");
+        assert_eq!(sb.format, FMT_XRGB8888);
+        assert!(sb.bgra.chunks_exact(4).all(|p| p[3] == 0xff), "XRGB forced opaque");
+        // Color bytes are preserved (only alpha is rewritten).
+        assert_eq!(&sb.bgra[0..3], &[10, 20, 30]);
+
+        // An ARGB buffer with the same bytes and no opaque region keeps its (transparent) alpha.
+        if let Some(Obj::Buffer { format, .. }) = server.objs.get_mut(&3) {
+            *format = FMT_ARGB8888;
+        }
+        let sb = server.extract(7, 3, "t").expect("extracted");
+        assert!(sb.bgra.chunks_exact(4).all(|p| p[3] == 0x00), "ARGB alpha preserved");
         teardown(server, sv);
     }
 
