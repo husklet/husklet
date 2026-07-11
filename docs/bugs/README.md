@@ -21,7 +21,6 @@ This directory is a working inventory of suspicious behavior, bad architecture, 
 | P2 | syscall/compat | aarch64 `AT_PAGESZ` exposes host page size | High | [syscall-compat.md](syscall-compat.md#aarch64-at_pagesz-exposes-host-page-size) |
 | P2 | syscall/compat | `F_SETLEASE` / `F_NOTIFY` fake support | High | [syscall-compat.md](syscall-compat.md#f_setlease-f_notify-return-success-without-arming-anything) |
 | P2 | daemon/runtime | live network connect/disconnect mutates daemon state only | High | [daemon-tests-docs.md](daemon-tests-docs.md#live-network-connectdisconnect-mutates-daemon-state-only) |
-| P2 | daemon/logs | `logs -f` can drop output for slow clients | Medium-high | [daemon-tests-docs.md](daemon-tests-docs.md#logs--f-can-drop-output-for-slow-clients) |
 | P2 | docs/tests | gap inventory and architecture docs are stale/missing | High | [daemon-tests-docs.md](daemon-tests-docs.md#gap-and-architecture-docs-are-not-auditable) |
 | P2 | gpu/compat | Metal render target texture id aliases guest texture id `1` | Medium-high | [gpu-display-sentry.md](gpu-display-sentry.md#metal-render-target-texture-id-can-alias-guest-texture-id-1) |
 | P2 | display/window | native window close is not propagated | Medium-high | [gpu-display-sentry.md](gpu-display-sentry.md#native-window-close-is-not-propagated) |
