@@ -23,7 +23,8 @@ use objc2_app_kit::{
     NSApplication, NSApplicationActivationPolicy, NSAutoresizingMaskOptions, NSBackingStoreType,
     NSBitmapImageFileType, NSBitmapImageRep, NSBitmapImageRepPropertyKey, NSColor, NSCursor,
     NSDeviceRGBColorSpace, NSEvent, NSEventMask, NSEventModifierFlags, NSEventType, NSGraphicsContext,
-    NSImage, NSImageView, NSScreen, NSView, NSWindow, NSWindowDelegate, NSWindowStyleMask,
+    NSImage, NSImageView, NSScreen, NSView, NSWindow, NSWindowDelegate, NSWindowOcclusionState,
+    NSWindowStyleMask,
 };
 use objc2_foundation::{
     MainThreadMarker, NSDefaultRunLoopMode, NSDictionary, NSInteger, NSPoint, NSRect, NSSize,
@@ -738,6 +739,15 @@ fragment float4 fmain(VOut in [[stage_in]], texture2d<float> src [[texture(0)]],
             layer.setPixelFormat(MTLPixelFormat::BGRA8Unorm);
             layer.setFramebufferOnly(false);
             layer.setOpaque(true);
+            // Never let `nextDrawable` hang the single-threaded present/input loop. The present() gate below
+            // already withholds the request whenever this window is not on-screen (background OR occluded —
+            // the states in which Core Animation throttles drawable vending to ~1/s). `allowsNextDrawableTimeout`
+            // (default true, set explicitly here) is the belt-and-suspenders safety net: even if a drawable is
+            // momentarily unavailable while visible, acquisition returns nil after a bounded wait instead of
+            // blocking forever. `maximumDrawableCount(3)` (the max) maximises the odds a drawable is ready so a
+            // visible present rarely waits past one vblank.
+            layer.setAllowsNextDrawableTimeout(true);
+            layer.setMaximumDrawableCount(3);
         }
         // Retina present path. `w`/`h` are the guest's LOGICAL surface size (points): the NSWindow content
         // size stays in points, so a 1600x1200-pixel HiDPI buffer shows as an 800x600-point window on a 2x
@@ -885,8 +895,20 @@ impl Presenter for MetalPresenter {
         // frame pacing keeps advancing, and `last_tex` stays current for SIGUSR1 readback -- the on-screen
         // window catches up the instant it is refocused. Withholding the frame (the old `return false` on a
         // nil drawable) is what coupled the guest to CA's background throttle.
+        // Ask for a drawable ONLY when this window is genuinely on-screen: the app is frontmost AND this
+        // specific window is not occluded. Core Animation throttles drawable vending for a background OR an
+        // occluded layer, so `nextDrawable` would block this single-threaded present/input loop for up to a
+        // second per frame (then return nil) — the erratic multi-second input lag, since a stalled present used
+        // to gate the whole loop. `isActive()` alone missed the active-but-occluded case (dd-display frontmost
+        // but this surface hidden behind another window), so we additionally require occlusionState=Visible.
+        // When we withhold the drawable we still composite offscreen (below): the guest keeps producing frames,
+        // frame pacing keeps advancing, and the window catches up the instant it is refocused/revealed.
         let app_active = unsafe { NSApplication::sharedApplication(mtm).isActive() };
-        let drawable = if app_active {
+        let window_visible = win
+            .window
+            .occlusionState()
+            .contains(NSWindowOcclusionState::Visible);
+        let drawable = if app_active && window_visible {
             unsafe { win.layer.nextDrawable() }
         } else {
             None
@@ -1536,7 +1558,51 @@ fn run_multi<P: Presenter>(
                 revents: 0,
             });
         }
+        // Short poll (half a frame): it only sleeps the loop waiting on client sockets. Mac NSEvents are
+        // delivered to AppKit's queue out-of-band (not through these fds), so we drain them every turn
+        // regardless of `n`; the short timeout bounds how long a click/keystroke waits before that drain.
         let n = unsafe { libc::poll(pfds.as_mut_ptr(), pfds.len() as _, 8) };
+        // INPUT FIRST — decouple input from present pacing. Drain + inject the Mac's NSEvents (and honour
+        // native window-close requests) at the TOP of every turn, BEFORE any client pump/present. `pump()`
+        // runs commit → present_root → present() → nextDrawable synchronously, so servicing input after it
+        // (the old ordering) meant every keystroke/click sat behind a possibly-stalled present — the reported
+        // erratic multi-second input lag. Each injected pointer/key event flushes to the client socket
+        // immediately (Server::pointer_* / key() flush), so input propagates without waiting for the next pump.
+        {
+            loop {
+                let ev = unsafe {
+                    app.nextEventMatchingMask_untilDate_inMode_dequeue(
+                        NSEventMask::Any,
+                        None,
+                        NSDefaultRunLoopMode,
+                        true,
+                    )
+                };
+                match ev {
+                    Some(ev) => {
+                        route_input(&mut clients, &ev);
+                        unsafe { app.sendEvent(&ev) };
+                    }
+                    None => break,
+                }
+            }
+            // Native close button → xdg_toplevel.close. The delegate refused AppKit's close and queued the
+            // window pointer; translate each to its owning client+surface and ask the guest to close. The
+            // window stays up until the client tears down its surface (or exits), matching Wayland semantics.
+            let closes: Vec<usize> = pending_window_closes()
+                .lock()
+                .map(|mut q| std::mem::take(&mut *q))
+                .unwrap_or_default();
+            for wp in closes {
+                let ptr = wp as *const std::ffi::c_void;
+                for c in clients.iter_mut() {
+                    if let Some(sid) = c.presenter().window_ptr_to_sid(ptr) {
+                        c.send_close_request(sid);
+                        break;
+                    }
+                }
+            }
+        }
         if n > 0 {
             let ready_fds: Vec<RawFd> = pfds[1..]
                 .iter()
@@ -1605,40 +1671,6 @@ fn run_multi<P: Presenter>(
             if let Some(sid) = c.focused_surface() {
                 if let Some((w, h)) = c.presenter().window_content_size(sid) {
                     c.maybe_resize(w, h);
-                }
-            }
-        }
-        // Drain AppKit events; route input to the owning client, then let AppKit handle chrome.
-        loop {
-            let ev = unsafe {
-                app.nextEventMatchingMask_untilDate_inMode_dequeue(
-                    NSEventMask::Any,
-                    None,
-                    NSDefaultRunLoopMode,
-                    true,
-                )
-            };
-            match ev {
-                Some(ev) => {
-                    route_input(&mut clients, &ev);
-                    unsafe { app.sendEvent(&ev) };
-                }
-                None => break,
-            }
-        }
-        // Native close button → xdg_toplevel.close. The delegate refused AppKit's close and queued the
-        // window pointer; translate each to its owning client+surface and ask the guest to close. The
-        // window stays up until the client tears down its surface (or exits), matching Wayland semantics.
-        let closes: Vec<usize> = pending_window_closes()
-            .lock()
-            .map(|mut q| std::mem::take(&mut *q))
-            .unwrap_or_default();
-        for wp in closes {
-            let ptr = wp as *const std::ffi::c_void;
-            for c in clients.iter_mut() {
-                if let Some(sid) = c.presenter().window_ptr_to_sid(ptr) {
-                    c.send_close_request(sid);
-                    break;
                 }
             }
         }
