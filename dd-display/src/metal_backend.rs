@@ -283,10 +283,6 @@ struct Pipeline {
     state: Retained<ProtocolObject<dyn MTLRenderPipelineState>>,
     primitive: MTLPrimitiveType,
     depth: bool, // pipeline was built with a depth attachment → bind the depth-stencil state
-    /// Set when this is a glyph-atlas pipeline whose per-quad texcoords must be V-mirrored per cell:
-    /// (vertex-buffer slot index, byte offset of the texcoord V component within the vertex, stride,
-    /// component read-kind: 0=f32, 1=u8, 2=u16, 4=u32).
-    glyph_tc: Option<(usize, usize, usize, u8)>,
 }
 
 pub struct MetalBackend {
@@ -332,20 +328,6 @@ pub struct MetalBackend {
     >,
     shader_id_hash: HashMap<u32, u64>, // shader id → MSL hash currently installed
     pipeline_id_hash: HashMap<u32, u64>, // pipeline id → desc hash currently installed
-    /// Shader module ids whose MSL is Chrome/Skia's glyph-atlas coverage shader (identified by its
-    /// `uAtlasSizeInv` uniform). Text draws using such a pipeline sample an alpha atlas whose glyph
-    /// cells are stored vertically mirrored relative to the sampling convention, so the glyph vertex
-    /// texcoords are V-flipped within each quad at draw time (see `mirror_glyph_texcoords`).
-    glyph_shaders: HashSet<u32>,
-    /// Per glyph-atlas-texture reflection axis: the atlas packs every glyph of a run into one horizontal
-    /// strip whose rows are stored bottom-up, so un-flipping a cell at atlas-V rows [a,b] means reflecting
-    /// it to [S-b, S-a] where S is the strip's bottom row = the MAX glyph-V used in that atlas. Tracked as
-    /// a running max per atlas texture id: a full-run batch (e.g. the heading, drawn in an early frame)
-    /// establishes S and it persists so later frames' isolated cells (which never reach S on their own)
-    /// reuse it. Reflecting about this shared strip axis is correct whether a run is batched into one draw
-    /// or a cell is drawn as a lone quad — a per-draw extent only coincides with S for full-run batches
-    /// and mislowers isolated glyphs.
-    glyph_strip_vmax: std::cell::RefCell<HashMap<u32, f64>>,
     clear_pipeline: Option<Retained<ProtocolObject<dyn MTLRenderPipelineState>>>,
     // Prof counters (read + reset per frame by the executor when DD_RENDER_PROF is on). `*_compiles`
     // count only ACTUAL Metal compiles (cache misses) — the key steady-state regression guard is that
@@ -417,8 +399,6 @@ impl MetalBackend {
             pipeline_cache: HashMap::new(),
             shader_id_hash: HashMap::new(),
             pipeline_id_hash: HashMap::new(),
-            glyph_shaders: HashSet::new(),
-            glyph_strip_vmax: std::cell::RefCell::new(HashMap::new()),
             clear_pipeline: None,
             shader_compiles: 0,
             pipeline_compiles: 0,
@@ -598,93 +578,6 @@ impl MetalBackend {
         self.resolve_texture(id).map(|t| &**t)
     }
 
-    /// V-mirror the texcoords of a glyph-atlas draw, in place in the vertex buffer, BEFORE the GPU reads it
-    /// (the command buffer executes at commit). Chrome/Skia's alpha glyph atlas is uploaded bottom-up, so
-    /// its glyph strip is stored vertically inverted relative to Metal's top-left sampling convention and
-    /// text renders upside-down. A run's glyphs pack into one horizontal strip that spans atlas-V rows
-    /// `[0, S]` (S = the tallest cell's bottom row); because the strip is stored bottom-up, a cell at rows
-    /// `[a,b]` must be reflected to `[S-b, S-a]`, i.e. `v -> S - v`. The reflection axis is thus the STRIP
-    /// height S — a property of the atlas, NOT of any one draw. Chrome batches a full run into one
-    /// DrawIndexed (whose gmax == S, so a per-draw reflection is correct) but also emits isolated cells as
-    /// lone quads (e.g. a `<div>` label drawn straight to the window); for those the draw's own extent is
-    /// the cell's height, far short of S, and reflecting about it mislowers the cell. We therefore reflect
-    /// every glyph draw about the atlas's shared strip axis, tracked as the running max glyph-V for the
-    /// bound atlas texture (`atlas_tex`): a full-run batch establishes S and every later lone cell reuses
-    /// it. `tc` = (vertex-buffer slot, byte offset of the V component in a vertex, stride, read-kind);
-    /// vertices are 4 per quad, drawn span `[first_vertex, first_vertex+count)`. Solids/UI are untouched.
-    fn mirror_glyph_texcoords(
-        &self,
-        buf_id: u32,
-        buf_off: u64,
-        tc: (usize, usize, usize, u8),
-        first_vertex: u32,
-        count: u32,
-        atlas_tex: u32,
-    ) {
-        let (_slot, v_off, stride, kind) = tc;
-        if count < 4 || stride == 0 {
-            return;
-        }
-        let Some(buf) = self.buffers.get(&buf_id) else {
-            return;
-        };
-        let base = buf.contents().as_ptr() as *mut u8;
-        let cap = buf.length();
-        // Byte address of vertex v's V component.
-        let addr = |v: u32| buf_off as usize + v as usize * stride + v_off;
-        // Read/write the V value as its native type, mirroring in that domain.
-        let read = |p: *const u8| -> f64 {
-            unsafe {
-                match kind {
-                    0 => (*(p as *const f32)) as f64,
-                    1 => (*p) as f64,
-                    2 => (*(p as *const u16)) as f64,
-                    _ => (*(p as *const u32)) as f64,
-                }
-            }
-        };
-        let write = |p: *mut u8, val: f64| unsafe {
-            match kind {
-                0 => *(p as *mut f32) = val as f32,
-                1 => *p = val as u8,
-                2 => *(p as *mut u16) = val as u16,
-                _ => *(p as *mut u32) = val as u32,
-            }
-        };
-        let last = first_vertex + count;
-        // Clamp the reflected span to complete quads that fit within the buffer.
-        let mut end = first_vertex;
-        while end + 4 <= last && addr(end + 3) + 4 <= cap {
-            end += 4;
-        }
-        // Pass 1: this draw's max glyph-V.
-        let mut gmax = f64::MIN;
-        let mut v = first_vertex;
-        while v < end {
-            gmax = gmax.max(read(unsafe { base.add(addr(v)) } as *const u8));
-            v += 1;
-        }
-        if gmax < 0.0 {
-            return;
-        }
-        // The atlas strip axis S = running max glyph-V for this atlas texture. A full-run batch (which
-        // spans the strip, so its gmax == S) raises it; isolated cells then reflect about the same S
-        // rather than their own short extent. Clamp up by this draw so S >= gmax (never a negative V).
-        let axis = {
-            let mut m = self.glyph_strip_vmax.borrow_mut();
-            let s = m.entry(atlas_tex).or_insert(f64::MIN);
-            *s = s.max(gmax);
-            *s
-        };
-        // Pass 2: reflect every vertex's V about the strip axis: a cell at [a,b] -> [S-b, S-a].
-        let mut v = first_vertex;
-        while v < end {
-            let p = unsafe { base.add(addr(v)) };
-            let val = read(p as *const u8);
-            write(p, axis - val);
-            v += 1;
-        }
-    }
 }
 
 /// `dd-display selftest-shader <out.png>`: prove the per-app SHADER path — the same one the GL shim
@@ -1735,13 +1628,6 @@ impl GpuBackend for MetalBackend {
         // The guest's GLSL, translated to MSL by the shim, arrives packed as bytes. Compile it to a
         // library; if the payload isn't MSL (empty/real SPIR-V), leave it unset → builtin pipeline.
         if let Some(src) = msl_from_words(spirv) {
-            // Track Chrome/Skia's glyph-atlas coverage shader by its `uAtlasSizeInv` uniform so its
-            // draw pipelines can V-mirror glyph texcoords per cell (the atlas stores cells mirrored).
-            if src.contains("_uuAtlasSizeInv_S0") {
-                self.glyph_shaders.insert(id.0);
-            } else {
-                self.glyph_shaders.remove(&id.0);
-            }
             let key = hash_bytes(src.as_bytes());
             // L3: identical MSL already installed for this id → nothing to compile (steady state).
             if self.shader_id_hash.get(&id.0) == Some(&key)
@@ -1810,32 +1696,7 @@ impl GpuBackend for MetalBackend {
         // L3: content-key the PSO. Identical descriptor already installed for this id → done; otherwise a
         // cache hit clones the compiled state (no PSO link). Only a genuine miss reaches the compile below.
         let key = self.hash_pipeline_key(desc);
-        // Glyph pipeline? If the vertex module is Skia's atlas-coverage shader AND this layout carries the
-        // texcoord attribute (shader location 2, a 2-component UShort), record where its V component lives
-        // so draws can mirror each glyph quad's texcoords in place.
-        let glyph_tc = if self.glyph_shaders.contains(&desc.vertex.module) {
-            desc.vertex_buffers.iter().enumerate().find_map(|(li, l)| {
-                l.attrs.iter().find(|a| a.location == 2).map(|a| {
-                    // Component read-kind + size by the shim's format encoding (see metal_vertex_format).
-                    let (kind, size): (u8, usize) = match (a.format >> 8) & 0xff {
-                        1 | 2 => (1, 1), // (U)Char
-                        3 | 4 => (2, 2), // (U)Short
-                        5 | 6 => (4, 4), // (U)Int
-                        _ => (0, 4),     // Float
-                    };
-                    // The V component is the 2nd of the 2-component texcoord: one component past X.
-                    (li, a.offset as usize + size, l.stride as usize, kind)
-                })
-            })
-        } else {
-            None
-        };
         if self.pipeline_id_hash.get(&id.0) == Some(&key) && self.pipelines.contains_key(&id.0) {
-            // Same descriptor already installed, but glyph_tc lives on the Pipeline entry — refresh it in
-            // case an earlier same-id pipeline lacked the texcoord layout variant.
-            if let Some(p) = self.pipelines.get_mut(&id.0) {
-                p.glyph_tc = glyph_tc;
-            }
             return Ok(());
         }
         if let Some((state, primitive, depth)) = self.pipeline_cache.get(&key) {
@@ -1846,7 +1707,6 @@ impl GpuBackend for MetalBackend {
                     state,
                     primitive,
                     depth,
-                    glyph_tc,
                 },
             );
             self.pipeline_id_hash.insert(id.0, key);
@@ -1958,7 +1818,6 @@ impl GpuBackend for MetalBackend {
                 state,
                 primitive,
                 depth,
-                glyph_tc,
             },
         );
         Ok(())
@@ -2045,14 +1904,6 @@ impl GpuBackend for MetalBackend {
         // surface): if so, its viewport is Y-flipped (negative height) so the texture is stored
         // bottom-left (GL convention) and samples upright in the later composite.
         let mut flip_pass = false;
-        // Glyph-atlas texcoord V-mirror state: the current pipeline's texcoord layout (slot, V byte
-        // offset, stride) when it is a glyph pipeline, plus the vertex buffer bound at each slot so a
-        // draw can rewrite the drawn quads' texcoords in place.
-        let mut cur_glyph_tc: Option<(usize, usize, usize, u8)> = None;
-        let mut bound_vbufs: HashMap<usize, (u32, u64)> = HashMap::new();
-        // Atlas texture bound at sampler slot 0 by the current bind group — the glyph-atlas identity used
-        // to key its shared strip-reflection axis (see `mirror_glyph_texcoords`).
-        let mut cur_atlas_tex: u32 = 0;
         for op in &cb.encoder {
             match op {
                 Enc::BeginRenderPass { color, depth } => {
@@ -2119,7 +1970,6 @@ impl GpuBackend for MetalBackend {
                     })?;
                     cur_prim = pl.primitive;
                     let pd = pl.depth;
-                    cur_glyph_tc = pl.glyph_tc;
                     if let Some(e) = &enc {
                         e.setRenderPipelineState(&pl.state);
                         if pd {
@@ -2136,7 +1986,6 @@ impl GpuBackend for MetalBackend {
                         kind: "buffer",
                         id: *buffer,
                     })?;
-                    bound_vbufs.insert(*slot as usize, (*buffer, *offset));
                     if let Some(e) = &enc {
                         // Bind at VBUF_BASE + slot to match the vertex descriptor's buffer indices (keeps
                         // guest vertex buffers clear of the uniform block at [[buffer(1)]]).
@@ -2155,18 +2004,6 @@ impl GpuBackend for MetalBackend {
                     first_vertex,
                     ..
                 } => {
-                    if let Some(tc) = cur_glyph_tc {
-                        if let Some((bid, boff)) = bound_vbufs.get(&tc.0).copied() {
-                            self.mirror_glyph_texcoords(
-                                bid,
-                                boff,
-                                tc,
-                                *first_vertex,
-                                *vertex_count,
-                                cur_atlas_tex,
-                            );
-                        }
-                    }
                     if let Some(e) = &enc {
                         unsafe {
                             e.drawPrimitives_vertexStart_vertexCount_instanceCount(
@@ -2199,10 +2036,6 @@ impl GpuBackend for MetalBackend {
                                 .collect()
                         })
                         .unwrap_or_default();
-                    // Remember the atlas texture (sampler slot 0) so a glyph draw can key its strip axis.
-                    if let Some((_, _, tex, _)) = plan.iter().find(|(k, i, _, _)| *k == 1 && *i == 0) {
-                        cur_atlas_tex = *tex;
-                    }
                     for (kind, idx, id, off) in plan {
                         let Some(e) = &enc else { continue };
                         unsafe {
@@ -2299,36 +2132,6 @@ impl GpuBackend for MetalBackend {
                         if let Some(ibuf) = self.buffers.get(&bid) {
                             let esz = if it == MTLIndexType::UInt16 { 2u64 } else { 4 };
                             let off = base_off + *first_index as u64 * esz;
-                            // Glyph pipeline: mirror each quad's texcoord V before the GPU reads the vertex
-                            // buffer. Derive the drawn vertex span from the index range (max index + 1).
-                            if let Some(tc) = cur_glyph_tc {
-                                if let Some((vid, voff)) = bound_vbufs.get(&tc.0).copied() {
-                                    let max_idx = unsafe {
-                                        let ip = (ibuf.contents().as_ptr() as *const u8).add(off as usize);
-                                        let mut m = 0u32;
-                                        for k in 0..*index_count as usize {
-                                            let v = if it == MTLIndexType::UInt16 {
-                                                (*(ip.add(k * 2) as *const u16)) as u32
-                                            } else {
-                                                *(ip.add(k * 4) as *const u32)
-                                            };
-                                            if v > m {
-                                                m = v;
-                                            }
-                                        }
-                                        m
-                                    };
-                                    let start = (*base_vertex).max(0) as u32;
-                                    self.mirror_glyph_texcoords(
-                                        vid,
-                                        voff,
-                                        tc,
-                                        start,
-                                        max_idx + 1,
-                                        cur_atlas_tex,
-                                    );
-                                }
-                            }
                             // Honor base_vertex (added to every fetched index — glDrawElementsBaseVertex)
                             // and first_instance via the full drawIndexedPrimitives variant.
                             unsafe {
