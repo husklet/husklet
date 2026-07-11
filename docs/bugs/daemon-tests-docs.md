@@ -96,26 +96,6 @@ CARGO_TARGET_DIR=/Users/x/dd/dd-slot-e-target cargo test -p dd-daemon fractional
 
 Result: failed as intended; left `1`, right `0`.
 
-## `logs -f` Can Drop Output For Slow Clients
-
-Priority: P2
-Impact: silent live log truncation
-Confidence: Medium-high
-
-Evidence:
-
-- Live output uses a bounded broadcast channel: `dd-daemon/src/model/state.rs:33`.
-- Follow mode relays through a bounded mpsc channel: `dd-daemon/src/containers/inspect/logs.rs:152`.
-- Lagged broadcast receive is skipped with `continue`: `dd-daemon/src/containers/inspect/logs.rs:188`.
-
-Why this is bad:
-
-If a client or response channel backpressures while a container produces output quickly, the follow task can lag and skip chunks. Non-follow logs may still have buffered data, but the live `logs -f` stream loses it.
-
-Verification:
-
-Run a high-output container with a deliberately slow `logs -f` consumer and compare live stream bytes against buffered logs after exit.
-
 ## Gap and Architecture Docs Are Not Auditable
 
 Priority: P2
