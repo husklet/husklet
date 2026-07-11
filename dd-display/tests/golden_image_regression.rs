@@ -770,12 +770,6 @@ fn registry() -> Vec<Case> {
         // target-chrome-codex/chrome-stream-ir-000.ir + a golden, and (when it lands) the Weston oracle
         // screenshot at oracle/chrome-weston.png. Skipped cleanly until the .ir is present.
         Case { name: "chrome-stream-ir-000", w: 1280, h: 720, build: None, oracle: Some("chrome-weston.png") },
-        // Real single-process Chrome content capture (preserved). Renders the page body (light-blue
-        // `#e9eef7` background + badge + red/blue text) into offscreen tiles 512/514, then composites them
-        // into the presented surface. Its surface pass is TOP-LEFT (`sk_RTAdjust.z < 0`), so the offscreen
-        // tiles must NOT be Y-flipped — this pins the orientation fix (upright content, not upside-down).
-        // The .ir is large and lives out-of-tree (gitignored) like the other captures; skipped until present.
-        Case { name: "single-process-content", w: 512, h: 384, build: None, oracle: None },
     ]
 }
 
