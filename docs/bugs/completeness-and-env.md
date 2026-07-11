@@ -47,41 +47,6 @@ Known lead:
 
 ## Confirmed Env And Completeness Findings
 
-### `DDJIT_UNTRUSTED` SCM_RIGHTS + Eventfd Loses Events
-
-Priority: P1
-Impact: IPC race and lost wakeups under sentry/untrusted mode
-Confidence: High
-
-Evidence:
-
-- Existing test case is registered in `dd-tests/src/cases/ext/ipc.rs:121`.
-- SCM_RIGHTS translation runs in the sentry fd path: `dd-jit-darwin/src/runtime/os/linux/sentry.c:628`.
-- Recvmsg copyback notes that SCM_RIGHTS fds remain sentry fds in the guest control payload: `dd-jit-darwin/src/runtime/os/linux/sentry.c:1876`.
-
-Observed isolated result from `/Users/x/dd/dd-verify-4b`:
-
-```text
-expected: woke=48 read=48 sum=1176 child=0
-observed: woke=46 read=46 sum=1081 child=4
-```
-
-Why this is bad:
-
-Dense fd passing plus eventfd wakeups should be deterministic. Lost events mean IPC workloads can hang, under-count work, or propagate child failures only intermittently in untrusted mode.
-
-Status (2026-07-10): SKIPPED for now — deep. The loss is in the sentry SCM_RIGHTS fd-translation + eventfd
-copyback path across processes (`sentry.c:628`/`:1876`), a cross-process delivery race rather than a local
-one-line bug. Reproduction is non-deterministic (`woke=46/48`), so a fix needs instrumenting the sentry
-recvmsg copyback to prove where wakeups are dropped before changing the delivery protocol. Left for a focused
-sentry pass; not a minimal-fix candidate.
-
-DISTINCT from Wall 7 (do not conflate). This is `DDJIT_UNTRUSTED`-only and reproduces solely on **x86_64**
-(`dd-tests -e x86_64 scm-eventfd-dense-untrusted` fails ~2/3 of runs; aarch64 and BOTH trusted engines pass —
-so the trusted cross-fork eventfd counter is fine). The Chrome rendering blocker ("Wall 7", `rendering-engine.md`)
-runs in TRUSTED mode and was a different mechanism entirely — a cross-mapping **futex** key bug, now fixed. The
-eventfd loss here rides the sentry's SCM_RIGHTS copyback, not the futex path, and is untouched by that fix.
-
 
 ### Typed Launch Path Lists Still Use Delimiter Env Strings
 

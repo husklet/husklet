@@ -90,7 +90,17 @@ int main(void) {
             char b = 'R';
             if (write(ready[1], &b, 1) != 1) _exit(3);
             int seen[NFD] = {0};
-            for (int loops = 0; loops < 8 && r.woke < NFD; loops++) {
+            // Drain until every fd has woken, bounded by a generous iteration cap and a per-wait timeout.
+            // A native/trusted run delivers all NFD readable eventfds in one or two big epoll_wait batches,
+            // so a handful of loops sufficed. Under the untrusted sentry split EVERY syscall (the writer's
+            // eventfd write() and this reader's read()) is a synchronous ring round-trip to the sentry, so
+            // producer and consumer run lock-step at ~1 event per epoll_wait -- the batch never piles up and
+            // the old 8-iteration cap abandoned the drain with ~40 eventfds still pending-but-readable (NOT
+            // lost: their counters and readable edges survived the SCM_RIGHTS transfer intact). Loop up to
+            // NFD*4 times so the reader can drain the trickle to completion. A GENUINELY lost wake is still
+            // caught: once the writer is done and nothing new is readable, epoll_wait hits its 2000ms budget
+            // and returns 0, breaking the loop below with woke < NFD -> a failing verdict.
+            for (int loops = 0; loops < NFD * 4 && r.woke < NFD; loops++) {
                 struct epoll_event evs[NFD];
                 int n = epoll_wait(ep, evs, NFD, 2000);
                 if (n <= 0) break;
