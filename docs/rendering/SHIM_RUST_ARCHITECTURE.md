@@ -167,13 +167,20 @@ reaches pixel parity. The path:
    `full_frame_clear` (43 bytes), `full_frame_textured_triangle` (1316 bytes), and
    `full_frame_multi_draw_replay` (clear + 2 blended draws → gl_shim.c's replay path, **2592 bytes,
    byte-for-byte**). **IR parity is closed for real workloads.**
-8. **Remaining — deployed-path display plumbing:** the wayland/dma-buf surface handshake + `wl_commit`
-   in `eglSwapBuffers` (only the IR-submit half is wired; `DD_IR_DUMP` and the parity gates don't need
-   it, but an on-screen run does).
-9. **Cutover (proposed — not flipped):** the `~/.dd/gui/<arch>/lib` deploy builds dd-shim-gl's cdylib as
-   `libEGL.so.1` + the `libGLESv2.so.2`/`libwayland-egl.so.1` DT_NEEDED stubs, selected by
-   `DD_SHIM_IMPL=rust` so a validation run swaps to the Rust libs while the default stays gl_shim.c's.
-   Flip the default only after a live glmark2/Chrome pixel-check.
+8. **Deployed display plumbing (done).** `src/wayland.rs` is a byte-for-byte port of gl_shim.c's
+   hand-rolled wayland/dma-buf client: the registry handshake (`connect_and_handshake`), the per-frame
+   dma-buf `commit` (with the `SCM_RIGHTS` fd pass), and frame-callback pacing. `eglCreateWindowSurface`
+   now does the `renderD128` `DD_IOCTL_GPU_ALLOC` (`dd_shim_common::transport::renderd::alloc`) + the
+   wayland handshake; `eglSwapBuffers` commits the rendered IOSurface/dma-buf to the compositor after
+   the IR submit. The `wl_egl_window_*` libwayland-egl entry points (glmark2/Chrome's window path) are
+   exported, with the `dd_wl_egl_window` magic-struct parse. (All gated so `DD_IR_DUMP`/host-tool mode
+   stays pure — the parity gates are unaffected.)
+9. **Cutover selector (done — default NOT flipped).** `dd-shim-gl/deploy.sh` installs the driver into
+   `~/.dd/gui/<arch>/lib` gated by `DD_SHIM_IMPL`: unset/≠`rust` is a no-op (the C shim stays);
+   `DD_SHIM_IMPL=rust` builds the cdylib and installs it as `libEGL.so.1` + thin `DT_NEEDED→libEGL.so.1`
+   stubs `libGLESv2.so.2`/`libwayland-egl.so.1`. **Validated end-to-end:** an app compiled against the
+   *deployed Rust stubs* (via `wl_egl_window_create`, the glmark2 link path) emits IR byte-identical to
+   gl_shim.c. Flip the default only after a live glmark2/Chrome pixel-check → gl_shim.c retirement.
 
 ## GLES-still-works evidence (this increment)
 

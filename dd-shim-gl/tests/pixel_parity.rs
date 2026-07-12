@@ -225,6 +225,91 @@ fn full_frame_multi_draw_replay_is_byte_identical() {
     }
 }
 
+/// The wl_egl_window path glmark2/Chrome use: `wl_egl_window_create` (our libwayland-egl) → the magic
+/// window struct → `eglCreateWindowSurface`. Compiled against both shims; IR must be byte-identical.
+#[test]
+fn full_frame_wl_egl_window_is_byte_identical() {
+    let dir = std::env::temp_dir().join(format!("dd-shim-wl-{}", std::process::id()));
+    let _ = std::fs::create_dir_all(&dir);
+    let gl_shim_so = match build_gl_shim_so(&dir) {
+        Some(s) => s,
+        None => {
+            eprintln!("[parity] SKIP wl_egl_window: gl_shim.c toolchain unavailable");
+            return;
+        }
+    };
+    let rust_so = match dd_shim_gl_so() {
+        Some(s) => s,
+        None => {
+            eprintln!("[parity] SKIP wl_egl_window: dd-shim-gl cdylib not found");
+            return;
+        }
+    };
+    let c_ir = match run_workload_against(&gl_shim_so, WL_EGL_WORKLOAD, "wl-c") {
+        Some(b) => b,
+        None => return,
+    };
+    let rust_ir = match run_workload_against(&rust_so, WL_EGL_WORKLOAD, "wl-rust") {
+        Some(b) => b,
+        None => return,
+    };
+    let _ = std::fs::remove_dir_all(&dir);
+    match diff_ir(&c_ir, &rust_ir) {
+        Ok(()) => eprintln!("[parity] PASS wl_egl_window: byte-identical ({} bytes)", c_ir.len()),
+        Err(e) => panic!("wl_egl_window parity FAILED:\n{e}"),
+    }
+}
+
+// glmark2's window path: wl_egl_window_create → eglCreateWindowSurface → clear + textured-less draw.
+const WL_EGL_WORKLOAD: &str = r#"
+extern void* wl_egl_window_create(void*, int, int);
+extern void* eglGetDisplay(void*);
+extern unsigned eglInitialize(void*, int*, int*);
+extern unsigned eglChooseConfig(void*, const int*, void**, int, int*);
+extern void* eglCreateContext(void*, void*, void*, const int*);
+extern void* eglCreateWindowSurface(void*, void*, void*, const int*);
+extern unsigned eglMakeCurrent(void*, void*, void*, void*);
+extern unsigned eglSwapBuffers(void*, void*);
+extern unsigned glCreateShader(unsigned);
+extern void glShaderSource(unsigned, int, const char* const*, const int*);
+extern void glCompileShader(unsigned);
+extern unsigned glCreateProgram(void);
+extern void glAttachShader(unsigned, unsigned);
+extern void glLinkProgram(unsigned);
+extern void glUseProgram(unsigned);
+extern void glGenBuffers(int, unsigned*);
+extern void glBindBuffer(unsigned, unsigned);
+extern void glBufferData(unsigned, long, const void*, unsigned);
+extern int glGetAttribLocation(unsigned, const char*);
+extern void glEnableVertexAttribArray(unsigned);
+extern void glVertexAttribPointer(unsigned, int, unsigned, unsigned char, int, const void*);
+extern int glGetUniformLocation(unsigned, const char*);
+extern void glUniformMatrix4fv(int, int, unsigned char, const float*);
+extern void glClearColor(float, float, float, float);
+extern void glClear(unsigned);
+extern void glDrawArrays(unsigned, int, int);
+static const char* VS = "attribute vec2 aPos;uniform mat4 uMVP;void main(){gl_Position=uMVP*vec4(aPos,0.0,1.0);}\n";
+static const char* FS = "precision mediump float;void main(){gl_FragColor=vec4(1.0,0.5,0.0,1.0);}\n";
+int main(void) {
+    void* win = wl_egl_window_create(0, 300, 200);
+    void* d = eglGetDisplay(0); eglInitialize(d, 0, 0);
+    int ca[] = { 0x3038 }; void* cfg; int n; eglChooseConfig(d, ca, &cfg, 1, &n);
+    int cta[] = { 0x3098, 2, 0x3038 }; void* ctx = eglCreateContext(d, cfg, 0, cta);
+    void* s = eglCreateWindowSurface(d, cfg, win, 0); eglMakeCurrent(d, s, s, ctx);
+    unsigned vs = glCreateShader(0x8B31); glShaderSource(vs, 1, &VS, 0); glCompileShader(vs);
+    unsigned fs = glCreateShader(0x8B30); glShaderSource(fs, 1, &FS, 0); glCompileShader(fs);
+    unsigned p = glCreateProgram(); glAttachShader(p, vs); glAttachShader(p, fs); glLinkProgram(p); glUseProgram(p);
+    float v[] = { 0,0, 1,0, 0,1 }; unsigned b; glGenBuffers(1, &b); glBindBuffer(0x8892, b);
+    glBufferData(0x8892, (long)sizeof(v), v, 0x88E4);
+    int a = glGetAttribLocation(p, "aPos"); glEnableVertexAttribArray((unsigned)a);
+    glVertexAttribPointer((unsigned)a, 2, 0x1406, 0, 8, (void*)0);
+    float m[16] = { 1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1 };
+    int u = glGetUniformLocation(p, "uMVP"); glUniformMatrix4fv(u, 1, 0, m);
+    glClearColor(0.1f, 0.1f, 0.1f, 1.0f); glClear(0x4000); glDrawArrays(0x0004, 0, 3);
+    eglSwapBuffers(d, s); return 0;
+}
+"#;
+
 const CLEAR_WORKLOAD: &str = r#"
 extern void* eglGetDisplay(void*);
 extern unsigned eglInitialize(void*, int*, int*);

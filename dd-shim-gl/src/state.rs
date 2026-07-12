@@ -190,13 +190,23 @@ impl Default for DrawCall {
 }
 
 /// The presented default framebuffer / window surface (gl_shim.c `g_surf` + geometry). `id` is the
-/// engine surface/IOSurface id the frame renders into (1 in DD_IR_DUMP/host-tool mode).
+/// engine surface/IOSurface id the frame renders into (1 in DD_IR_DUMP/host-tool mode); `stride`/`fd`
+/// come from the renderD128 alloc and drive the wayland dma-buf commit. The `logical_*`/`geom_*`/
+/// `attach_*` fields are the compositor-facing geometry resolved at bring-up.
 #[derive(Clone, Copy, Default)]
 pub struct Surface {
     pub have: bool,
     pub id: u32,
     pub width: u32,
     pub height: u32,
+    pub stride: u32,
+    pub fd: i32,
+    pub logical_w: i32,
+    pub logical_h: i32,
+    pub geom_x: i32,
+    pub geom_y: i32,
+    pub attach_x: i32,
+    pub attach_y: i32,
 }
 
 impl Default for Vao {
@@ -263,6 +273,11 @@ pub struct GlState {
     pub draw_indexed: bool,
     pub index_type: u32,
     pub index_offset: usize,
+    // pending window geometry (from eglCreateWindowSurface / wl_egl_window), resolved at surface_up.
+    pub pending_logical_w: i32,
+    pub pending_logical_h: i32,
+    pub pending_attach_x: i32,
+    pub pending_attach_y: i32,
 }
 
 pub const MAXDRAWS: usize = 512;
@@ -316,6 +331,10 @@ impl Default for GlState {
             draw_indexed: false,
             index_type: 0,
             index_offset: 0,
+            pending_logical_w: 0,
+            pending_logical_h: 0,
+            pending_attach_x: 0,
+            pending_attach_y: 0,
         }
     }
 }
@@ -595,19 +614,62 @@ impl GlState {
         (slot_vbo, attr_slot, slot_stride)
     }
 
-    /// Bring up the presented surface (gl_shim.c `surface_up`). In DD_IR_DUMP/host-tool mode the engine
-    /// surface id is simply 1 (no renderD128/wayland). Sets default viewport/scissor to the full
-    /// surface if unset.
+    /// Resolve the compositor-facing geometry (logical size + centering offset) from the pending
+    /// window size and env overrides (gl_shim.c `resolve_surface_geometry`).
+    fn resolve_geometry(&self, bw: u32, bh: u32) -> (i32, i32, i32, i32) {
+        let (mut lw, mut lh, mut source) = (self.pending_logical_w, self.pending_logical_h, 1);
+        if lw <= 0 || lh <= 0 || lw > bw as i32 || lh > bh as i32 {
+            lw = bw as i32;
+            lh = bh as i32;
+            source = 0;
+        }
+        // env override (DD_SHIM_LOGICAL_SIZE / CHROME_WINDOW_SIZE), only when logical == backing.
+        if lw == bw as i32 && lh == bh as i32 {
+            if let Some((fw, fh)) = env_logical_size() {
+                if fw > 0 && fh > 0 && fw <= bw as i32 && fh <= bh as i32 {
+                    lw = fw;
+                    lh = fh;
+                    source = 2;
+                }
+            }
+        }
+        let (mut gx, mut gy) = (0, 0);
+        if source == 2 && lw < bw as i32 {
+            gx = (bw as i32 - lw) / 2;
+        }
+        if source == 2 && lh < bh as i32 {
+            gy = (bh as i32 - lh) / 2;
+        }
+        (lw, lh, gx, gy)
+    }
+
+    /// Bring up the presented surface (gl_shim.c `surface_up`). Sets the surface dimensions + resolved
+    /// geometry and default viewport/scissor. The renderD128 alloc + wayland handshake (deployed path)
+    /// and the DD_IR_DUMP id=1 shortcut are driven by `eglCreateWindowSurface`.
     pub fn surface_up(&mut self, w: u32, h: u32) {
         self.default_surface_valid = false;
         self.default_full_clear_since_swap = false;
+        let (lw, lh, gx, gy) = self.resolve_geometry(w, h);
         if self.viewport[2] <= 0 || self.viewport[3] <= 0 {
             self.viewport = [0, 0, w as i32, h as i32];
         }
         if self.scissor[2] <= 0 || self.scissor[3] <= 0 {
             self.scissor = [0, 0, w as i32, h as i32];
         }
-        self.surf = Surface { have: true, id: 1, width: w, height: h };
+        self.surf = Surface {
+            have: true,
+            id: 1,
+            width: w,
+            height: h,
+            stride: 0,
+            fd: -1,
+            logical_w: lw,
+            logical_h: lh,
+            geom_x: gx,
+            geom_y: gy,
+            attach_x: self.pending_attach_x,
+            attach_y: self.pending_attach_y,
+        };
     }
 
     /// Bytes-per-pixel of an upload format (gl_shim.c `tex_bpp`).
@@ -735,4 +797,25 @@ pub fn egl() -> MutexGuard<'static, EglState> {
 /// Whether the shim advertises ES3 (env `DD_SHIM_ES3`), matching gl_shim.c `shim_es3()`.
 pub fn shim_es3() -> bool {
     std::env::var_os("DD_SHIM_ES3").is_some()
+}
+
+/// Parse a `WxH` / `W,H` size (gl_shim.c `parse_size_pair`): both in (0, 8192].
+fn parse_size_pair(s: &str) -> Option<(i32, i32)> {
+    let sep = s.find([',', 'x', 'X'])?;
+    let w: i64 = s[..sep].parse().ok()?;
+    let h: i64 = s[sep + 1..].trim().parse().ok()?;
+    if w > 0 && h > 0 && w <= 8192 && h <= 8192 {
+        Some((w as i32, h as i32))
+    } else {
+        None
+    }
+}
+
+/// The logical window size from env (gl_shim.c `env_logical_size`): `DD_SHIM_LOGICAL_SIZE`, else
+/// `CHROME_WINDOW_SIZE`.
+fn env_logical_size() -> Option<(i32, i32)> {
+    std::env::var("DD_SHIM_LOGICAL_SIZE")
+        .ok()
+        .and_then(|s| parse_size_pair(&s))
+        .or_else(|| std::env::var("CHROME_WINDOW_SIZE").ok().and_then(|s| parse_size_pair(&s)))
 }

@@ -723,7 +723,7 @@ mod tests {
     fn clear_only_frame_is_byte_identical_to_c_shim() {
         // A full-window clear at 640x480 with color (0.1,0.2,0.3,1.0).
         let mut s = GlState::default();
-        s.surf = crate::state::Surface { have: true, id: 1, width: 640, height: 480 };
+        s.surf = crate::state::Surface { have: true, id: 1, width: 640, height: 480, ..Default::default() };
         s.clear = [0.1, 0.2, 0.3, 1.0];
         // glClear(COLOR) with no scissor → full-target clear rect (as gl_shim.c records it).
         s.record_clear_call(0, 0, 640, 480);

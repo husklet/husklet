@@ -324,27 +324,142 @@ pub extern "C" fn eglWaitNative(_engine: i32) -> u32 {
 // window surface bring-up + present (the frame boundary)
 // ===================================================================================================
 
-/// Parse the app's native window handle to a backing `(width, height)`. Ports gl_shim.c's stock-app
-/// heuristics (es2*/ANGLE two-int + Mesa `wl_egl_window` word shapes). The `dd_wl_egl_window` magic
-/// struct (our own libwayland-egl, used by glmark2/Chrome) lands with the wayland-egl client port.
+/// Our own `libwayland-egl` window handle (mirrors gl_shim.c `struct dd_wl_egl_window`). The first
+/// field is Mesa-ABI-compatible (`intptr_t version`) so a stray Mesa struct is still parseable.
+const DD_WL_EGL_MAGIC: isize = 0x0064_6477_6c65_676c; // "ddwlegl"
+#[repr(C)]
+pub struct DdWlEglWindow {
+    version: isize,
+    width: i32,
+    height: i32,
+    dx: i32,
+    dy: i32,
+    attached_width: i32,
+    attached_height: i32,
+    driver_private: *mut c_void,
+    resize_cb: *mut c_void,
+    destroy_cb: *mut c_void,
+    surface: *mut c_void,
+}
+
+/// Parse the app's native window handle to a backing `(width, height)`. Handles our
+/// `dd_wl_egl_window` magic struct (glmark2/Chrome via our libwayland-egl) plus gl_shim.c's stock-app
+/// heuristics (es2*/ANGLE two-int + Mesa `wl_egl_window` word shapes).
 unsafe fn parse_native_window(w: *const c_void) -> (u32, u32) {
     let (mut ww, mut hh) = (256i32, 256i32);
     if !w.is_null() {
-        let p = w as *const i32;
-        let g = |i: isize| *p.offset(i);
-        if g(0) > 0 && g(0) <= 16 && g(2) > 16 && g(2) <= 8192 && g(3) > 16 && g(3) <= 8192 {
-            ww = g(2);
-            hh = g(3);
-        } else if g(0) > 0 && g(0) <= 16 && g(1) > 16 && g(1) <= 8192 {
-            ww = g(1);
-            hh = g(2);
+        let version = *(w as *const isize);
+        if version == DD_WL_EGL_MAGIC {
+            let win = &*(w as *const DdWlEglWindow);
+            ww = win.width;
+            hh = win.height;
+            if win.attached_width > 0 && win.attached_height > 0 && win.attached_width <= 8192 && win.attached_height <= 8192 {
+                ww = ww.max(win.attached_width);
+                hh = hh.max(win.attached_height);
+            }
         } else {
-            ww = g(0);
-            hh = g(1);
+            let p = w as *const i32;
+            let g = |i: isize| *p.offset(i);
+            if g(0) > 0 && g(0) <= 16 && g(2) > 16 && g(2) <= 8192 && g(3) > 16 && g(3) <= 8192 {
+                ww = g(2);
+                hh = g(3);
+            } else if g(0) > 0 && g(0) <= 16 && g(1) > 16 && g(1) <= 8192 {
+                ww = g(1);
+                hh = g(2);
+            } else {
+                ww = g(0);
+                hh = g(1);
+            }
         }
     }
     let big = |v: i32| v > 0 && v <= 8192;
     (if big(ww) { ww as u32 } else { 256 }, if big(hh) { hh as u32 } else { 256 })
+}
+
+// ---- libwayland-egl surface (our own; glmark2/Chrome call these) ----
+#[no_mangle]
+pub extern "C" fn wl_egl_window_create(surface: *mut c_void, width: i32, height: i32) -> *mut DdWlEglWindow {
+    if width <= 0 || height <= 0 {
+        return core::ptr::null_mut();
+    }
+    let w = Box::into_raw(Box::new(DdWlEglWindow {
+        version: DD_WL_EGL_MAGIC,
+        width,
+        height,
+        dx: 0,
+        dy: 0,
+        attached_width: 0,
+        attached_height: 0,
+        driver_private: core::ptr::null_mut(),
+        resize_cb: core::ptr::null_mut(),
+        destroy_cb: core::ptr::null_mut(),
+        surface,
+    }));
+    let mut s = gl();
+    s.pending_logical_w = width;
+    s.pending_logical_h = height;
+    s.pending_attach_x = 0;
+    s.pending_attach_y = 0;
+    w
+}
+
+#[no_mangle]
+pub extern "C" fn wl_egl_window_resize(w: *mut DdWlEglWindow, width: i32, height: i32, dx: i32, dy: i32) {
+    if w.is_null() {
+        return;
+    }
+    let win = unsafe { &mut *w };
+    win.width = width;
+    win.height = height;
+    win.dx = dx;
+    win.dy = dy;
+    let mut s = gl();
+    s.pending_logical_w = width;
+    s.pending_logical_h = height;
+    s.pending_attach_x = dx;
+    s.pending_attach_y = dy;
+}
+
+#[no_mangle]
+pub extern "C" fn wl_egl_window_get_attached_size(w: *mut DdWlEglWindow, width: *mut i32, height: *mut i32) {
+    if w.is_null() {
+        return;
+    }
+    let win = unsafe { &*w };
+    unsafe {
+        if !width.is_null() {
+            *width = if win.attached_width != 0 { win.attached_width } else { win.width };
+        }
+        if !height.is_null() {
+            *height = if win.attached_height != 0 { win.attached_height } else { win.height };
+        }
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn wl_egl_window_destroy(w: *mut DdWlEglWindow) {
+    if !w.is_null() {
+        unsafe { drop(Box::from_raw(w)) };
+    }
+}
+
+/// The process-global wayland session (deployed present path). None in DD_IR_DUMP/host-tool mode.
+fn wayland_session() -> &'static Mutex<Option<crate::wayland::Wayland>> {
+    static W: OnceLock<Mutex<Option<crate::wayland::Wayland>>> = OnceLock::new();
+    W.get_or_init(|| Mutex::new(None))
+}
+
+fn surface_geometry(s: &Surface) -> crate::wayland::Geometry {
+    crate::wayland::Geometry {
+        backing_w: s.width,
+        backing_h: s.height,
+        logical_w: s.logical_w,
+        logical_h: s.logical_h,
+        geom_x: s.geom_x,
+        geom_y: s.geom_y,
+        attach_x: s.attach_x,
+        attach_y: s.attach_y,
+    }
 }
 
 /// `eglCreateWindowSurface` — bring up the presented default framebuffer from the native window size.
@@ -353,12 +468,32 @@ unsafe fn parse_native_window(w: *const c_void) -> (u32, u32) {
 #[no_mangle]
 pub extern "C" fn eglCreateWindowSurface(_dpy: *mut c_void, _config: *mut c_void, win: *mut c_void, _attribs: *const i32) -> *mut c_void {
     let (w, h) = unsafe { parse_native_window(win) };
-    {
-        let mut e = egl();
-        e.surface_logical_w = w as i32;
-        e.surface_logical_h = h as i32;
+    let geom = {
+        let mut s = gl();
+        // stock two-int windows set no pending logical size — default it to the backing size.
+        if s.pending_logical_w <= 0 {
+            s.pending_logical_w = w as i32;
+            s.pending_logical_h = h as i32;
+        }
+        s.surface_up(w, h);
+        egl().surface_logical_w = s.surf.logical_w;
+        egl().surface_logical_h = s.surf.logical_h;
+        surface_geometry(&s.surf)
+    };
+    // Deployed path (not host-tool DD_IR_DUMP): register the GPU buffer + bring up the wayland surface.
+    if std::env::var_os("DD_IR_DUMP").is_none() {
+        if let Ok(a) = dd_shim_common::transport::renderd::alloc(w, h, 0) {
+            let mut s = gl();
+            s.surf.id = a.id;
+            s.surf.stride = a.stride;
+            s.surf.fd = a.fd;
+            s.surf.width = a.width;
+            s.surf.height = a.height;
+        }
+        if let Some(wl) = crate::wayland::Wayland::connect_and_handshake(&geom) {
+            *wayland_session().lock().unwrap_or_else(|e| e.into_inner()) = Some(wl);
+        }
     }
-    gl().surface_up(w, h);
     1 as *mut c_void
 }
 
@@ -383,8 +518,19 @@ fn present_frame(surf: &Surface, ir: &[u8]) {
         let _ = std::fs::write(path, ir);
         return;
     }
-    let ts = dd_shim_common::transport::Surface { id: surf.id, width: surf.width, height: surf.height, stride: surf.width * 4, fd: -1 };
+    // Submit the frame to the host GPU-exec service...
+    let ts = dd_shim_common::transport::Surface {
+        id: surf.id,
+        width: surf.width,
+        height: surf.height,
+        stride: if surf.stride != 0 { surf.stride } else { surf.width * 4 },
+        fd: surf.fd,
+    };
     let _ = exec_conn().lock().unwrap_or_else(|e| e.into_inner()).submit(&ts, ir);
+    // ...then commit the rendered dma-buf/IOSurface to the compositor (dd-display).
+    if let Some(wl) = wayland_session().lock().unwrap_or_else(|e| e.into_inner()).as_mut() {
+        wl.commit(surf, &surface_geometry(surf));
+    }
 }
 
 /// `eglSwapBuffers` — the frame boundary: lower the recorded draw-list to IR and present it, then reset
