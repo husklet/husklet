@@ -1,7 +1,7 @@
 # dd — VM-less Linux container runtime on macOS. Cargo workspace.
 [workspace]
 resolver = "2"
-members = ["dd-jit", "dd-jit-darwin", "dd-images", "dd-daemon", "dd-client", "dd-tests", "dd-cli", "dd-gui", "dd-term-core", "dd-gpu", "dd-display", "dd-compositor", "dd-gpu-wgpu", "dd-shim-common", "dd-shim-gl"]
+members = ["dd-jit", "dd-jit-darwin", "dd-images", "dd-daemon", "dd-client", "dd-tests", "dd-cli", "dd-gui", "dd-term-core", "dd-gpu", "dd-display", "dd-compositor", "dd-gpu-wgpu", "dd-shim-common", "dd-shim-gl", "dd-shim-cuda"]
 # dd-gui pulls in GTK4/libadwaita (pkg-config), which isn't present on the Linux dev host.
 # Keep it out of the default set so a bare `cargo build` works everywhere; build it
 # explicitly with `cargo build -p dd-gui` (or `make app`) on the macOS host.
@@ -15,6 +15,9 @@ members = ["dd-jit", "dd-jit-darwin", "dd-images", "dd-daemon", "dd-client", "dd
 # libEGL.so.1/libGLESv2.so.2). They build for the host too (aarch64 host == aarch64 guest) but are kept
 # out of default-members so the engine gate's `cargo build` surface is unchanged; test with
 # `cargo test -p dd-shim-common` and build the guest .so with `cargo build -p dd-shim-gl --release`.
+# dd-shim-cuda is the third guest GPU shim (CUDA Driver API -> libcuda.so.1); same rationale, likewise
+# out of default-members. Test with `cargo test -p dd-shim-cuda`, build the guest .so with
+# `cargo build -p dd-shim-cuda --release`.
 default-members = ["dd-jit", "dd-jit-darwin", "dd-images", "dd-daemon", "dd-client", "dd-tests", "dd-cli", "dd-term-core", "dd-gpu", "dd-display"]
 
 [profile.release]

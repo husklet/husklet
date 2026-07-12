@@ -650,6 +650,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "dd-shim-cuda"
+version = "0.1.0"
+dependencies = [
+ "dd-gpu",
+ "dd-shim-common",
+]
+
+[[package]]
 name = "dd-shim-gl"
 version = "0.1.0"
 dependencies = [

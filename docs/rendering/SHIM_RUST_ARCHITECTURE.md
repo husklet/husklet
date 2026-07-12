@@ -18,7 +18,7 @@ dd-gpu              host-side: the IR (ir::Cmd), wire codec, GpuBackend trait, M
         │              owns the host-exec transport, completion wake, and GPU-memory registration
         ├── dd-shim-gl    GLES2/EGL front-end (cdylib) → libEGL.so.1 / libGLESv2.so.2
         ├── dd-shim-vk    (future) Vulkan ICD (cdylib) → libvulkan_dd.so / an ICD manifest
-        └── dd-shim-cuda  (future) CUDA/NVML driver (cdylib) → libcuda.so.1 / libnvidia-ml.so.1
+        └── dd-shim-cuda  (scaffold) CUDA Driver API driver (cdylib) → libcuda.so.1
 ```
 
 `dd-shim-common` is the only-place-the-wire-lives layer lifted out of `gl_shim.c`:
@@ -113,6 +113,68 @@ Both are sibling cdylib crates on `dd-shim-common`:
 3. Encode work as `dd_gpu::ir::Cmd`s (the IR is already WebGPU/Vulkan-family with SPIR-V as the shader
    ABI, so a Vulkan front-end maps closely) and ship them through `dd_shim_common::transport` — the
    same channel, ack protocol, and memory registration `dd-shim-gl` uses. No transport is re-invented.
+
+## `dd-shim-cuda` — the CUDA Driver API scaffold (increment 1)
+
+The third library exists as a **package skeleton** built exactly like `dd-shim-gl` increment 1: a
+registry-generated C-ABI surface over `dd-shim-common`, with a handful of real entry points and a
+spec-faithful stubbed long tail. It is **not** a functional CUDA driver — there is no host PTX/compute
+backend yet (that is the future work below). It is the "proper structure for the third library".
+
+- **Crate.** `dd-shim-cuda` (`crate-type = ["cdylib","rlib"]`), out of `default-members` like the other
+  shims, so the engine gate's `cargo build` surface is unchanged. It depends on `dd-shim-common` (the
+  transport + re-exported IR) and, directly, on `dd-gpu` for the CUDA→IR mapping (`cuda::CudaContext`)
+  and the PTX front-end (`ptx::compile`) — the same `dd-gpu` path `dd-shim-common` uses, so the IR
+  types are identical. The cdylib bakes `SONAME libcuda.so.1` (the CUDA Driver API drop-in name,
+  matching `dd-gpu/cuda/build.sh`).
+- **Surface-completeness, code-generated.** `registry/cuda_driver.manifest` lists every entry point
+  (name, return type, params); it is **extracted from dd's own clean-room `dd-gpu/cuda/cuda_shim.c`**
+  driver-API surface by `registry/extract_cuda_manifest.py` (the CUDA analogue of the Khronos-XML
+  extractor — the CUDA API has no registry XML, so an open, clean-room C source of `cu*` definitions is
+  the seed; "No NVIDIA source is used"). The manifest is committed (no header, no network). `build.rs`
+  maps each C type to its Rust C-ABI type (opaque handles/`CUdeviceptr`/int-enums/struct-pointers
+  handled generally; an unknown *base* scalar panics — a fail-loud ABI generator) and emits a
+  `#[no_mangle] extern "C"` function for every entry point **not** in `IMPLEMENTED`. The result is the
+  full **132-entry `cu*` surface** (init/device/context/module/memory/stream/event/launch/occupancy/
+  pointer-attribute families, with the versioned `_v2`/`_v3` names), not a hand-picked few. The census
+  constants (`CUDA_DRIVER_ENTRYPOINTS`, `GENERATED_STUBS`) back a completeness test.
+- **The CUDA→IR mapping (real, and shared).** The compute model is mapped onto the existing dd-gpu IR
+  by reusing `dd_gpu::cuda::CudaContext` — the host-authored translation is **not** redefined in the
+  guest. `src/driver.rs` wires the exported entry points to it:
+  `cuMemAlloc_v2`→`Cmd::CreateBuffer`, `cuMemFree_v2`→`Cmd::DestroyBuffer`,
+  `cuMemcpyHtoD_v2`→`Cmd::WriteBuffer`, `cuModuleLoadData`→a parsed PTX module (module = PTX-as-shader),
+  `cuModuleGetFunction`→an entry-point handle, and `cuLaunchKernel`→the compute path
+  (`CreateShader`(kernel descriptor) + `CreateComputePipeline` + a flat kernel-parameter buffer +
+  `CreateBindGroup` + a `Submit` of `BeginComputePass`/`SetPipeline`/`SetBindGroup`/`Dispatch`/
+  `EndComputePass`). To interpret CUDA's untyped `void** kernelParams`, `cuLaunchKernel` runs the shared
+  `ptx::compile` purely to recover each parameter's width + pointer-ness, then packs pointer args as
+  `CUdeviceptr` device addresses and scalars by width — the exact `CudaContext::launch` ABI. Streams /
+  synchronize are the ordering/flush seam (`cuCtxSynchronize`/`cuStreamSynchronize` flush the frame).
+  Accumulated IR is encoded with the SAME `ir::encode_stream` the host decodes; an anti-drift test
+  (`launch_path_encodes_the_shared_ir_contract`) drives the real exported entry points through
+  alloc→H2D→module→launch and decodes the bytes with the host's own `dd_gpu::ir` decoder.
+- **What is real vs stub.** 26 entry points are hand-written: the **bring-up** set returns real, sane
+  values (`cuInit`, `cuDriverGetVersion`→12.2, `cuDeviceGetCount`/`cuDeviceGet`/`cuDeviceGetName`/
+  `cuDeviceGetAttribute`/`cuDeviceComputeCapability`/`cuDeviceGetUuid`/`cuDeviceTotalMem_v2` from
+  `CudaDeviceDesc::apple_default`, `cuCtxCreate_v2`/`cuCtxDestroy_v2`/`cuCtxSetCurrent`/…); the
+  **IR-wired** set is the memory + module + launch mapping above. The remaining ~106 are generated
+  spec-faithful stubs: correct ABI so an app links and runs, a `DD_SHIM_DEBUG`-gated "unimplemented
+  entry point" trace, and a benign `CUDA_SUCCESS` return — the shrinking long tail, ported
+  incrementally without the exported surface ever changing.
+- **The deferred seam — a host PTX/compute backend (future work).** Two things need a host backend that
+  actually *executes* the emitted compute IR and holds device memory: `cuMemcpyDtoH_v2` device→host
+  **readback** (today a traced, zero-filling no-op) and real dispatch execution. On a Metal host the
+  kernel path is `PTX → SPIR-V → MSL → AIR` (research-grade — see `docs/ideas/CUDA_ON_METAL.md §5`); the
+  headless oracle is `dd-gpu`'s `ptx.rs` PTX→kernel-IR interpreter on the `SoftwareBackend`. Wiring one
+  of those under `dd-shim-common`'s transport (a compute-oriented exec service, since compute has no
+  present surface) is the next increment. Until then the scaffold encodes correct IR and drops it when
+  no `$DD_GPU_EXEC` host is configured.
+- **Validation (scaffold-level, this increment).** `cargo build -p dd-shim-cuda --release` produces a
+  valid aarch64 ELF with `SONAME libcuda.so.1` exporting exactly the 132 generated `cu*` symbols (no
+  duplicates; `.dynsym` matches the manifest byte-for-byte). A plain C `dlopen` (`tests/smoke.c`)
+  resolves and drives the bring-up path (`cuInit`/`cuDriverGetVersion`→12.2/`cuDeviceGetCount`→1/
+  `cuDeviceGet`/`cuDeviceGetName`/`cuCtxCreate_v2`). The anti-drift + completeness unit tests pass. A
+  default `cargo build` does not compile the crate, and `dd-gpu`'s 70 tests stay green.
 
 ## Retiring `gl_shim.c` (the incremental cutover)
 
