@@ -45,6 +45,7 @@ pub mod reg;
 pub mod state;
 pub mod stub;
 pub mod types;
+pub mod wl_present;
 pub mod wsi;
 
 // Bring every hand-written `#[no_mangle]` entry point into crate-root scope so the generated
