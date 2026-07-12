@@ -135,6 +135,25 @@ fn ext_ipc() -> Group {
         // registration-time readiness prime must fire cross-process.
         src("xproc-prearm", "ext_ipc/ipc_xproc_prearm.c")
             .out("child prearm n=2 sock=1 msg=Invitation efd=1 val=5\nparent child_exit=0\n"),
+        // SUSTAINED edge-triggered inbound: the xproc-inbound/prearm gates above deliver a SINGLE message;
+        // these stream thousands of large (>2KB, invitation-sized) SEQPACKET messages, each planted in the
+        // child pump's drain->re-arm window (child drains to EAGAIN, signals "drained", parent immediately
+        // sends the next), so a readiness edge lost between drain and re-block -- the exact renderer-pump
+        // lost-wakeup hypothesis -- parks the child and the in-guest watchdog fails it. EPOLLET (EV_CLEAR)
+        // and EPOLLONESHOT (EV_ONESHOT + MOD re-arm) are distinct dd kqueue paths, so both are covered.
+        port("pump-xproc-et", "ext_ipc/ipc_pump_xproc_et.c")
+            .out("child stream got=4000/4000 ok=1\nparent done sent=4000 child_exit=0\n")
+            .only(&[Engine::LinuxAarch64, Engine::LinuxX86_64]),
+        port("pump-xproc-oneshot", "ext_ipc/ipc_pump_xproc_oneshot.c")
+            .out("child oneshot got=4000/4000 ok=1\nparent done sent=4000 child_exit=0\n")
+            .only(&[Engine::LinuxAarch64, Engine::LinuxX86_64]),
+        // In-process renderer park-state shape: an EPOLLET IO pump (SEQPACKET + ScheduleWork eventfd)
+        // dispatches each inbound message to one of several worker threads parked in FUTEX_WAIT (condvar),
+        // coupling the epoll-readiness wakeup to the pump->worker FUTEX handoff none of the above gates
+        // combine. A missed wakeup on any leg stalls the pipeline; the watchdog makes that a hard fail.
+        port("pump-worker-dispatch", "ext_ipc/ipc_pump_worker_dispatch.c")
+            .out("renderer rounds=30000 done=30000 ok=1\n")
+            .only(&[Engine::LinuxAarch64, Engine::LinuxX86_64]),
         // SCM_RIGHTS-passed memfd -> cross-process FUTEX wake (renderer<->GPU command-buffer wakeup): the
         // futex-shared-key gate covers only a fork-INHERITED memfd; this covers one delivered by SCM_RIGHTS
         // to an unrelated process, mmap'd at an independent VA.
