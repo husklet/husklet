@@ -107,6 +107,43 @@ impl GpuIntegration {
     }
 }
 
+/// Whether the accelerated-display shim is *authoritative* for a drop-in shared object and may bind it
+/// over the guest's multiarch lib dir. The shim owns the GPU/GL render stack (EGL/GLES/GL/GBM/Vulkan/CUDA,
+/// including the GLVND dispatchers and ANGLE's `libEGL`/`libGLESv2` sonames), the Wayland client transport
+/// it speaks to dd-display with (`libwayland-*`), and dd's own shim cores. Every other `*.so` in the
+/// drop-in dir belongs to the guest distro and MUST NOT be shadowed — above all `libX11`/`libxcb` (GTK/Qt
+/// X11 backends) and the base C/C++ runtime (`libstdc++`, `libz`, `libc`, …). Binding a stub over the
+/// guest's real copy is the "shim library shadowing" bug (docs/goal.md): the app then loads a crippled
+/// library and used to need an `LD_PRELOAD` workaround. Restricting the bind set to what the shim actually
+/// provides makes the guest resolve its own libraries with no hack — the shim libs the guest lacks
+/// (EGL/GLES/GBM/Vulkan/CUDA/dd-shim) are exactly the ones matched here, while shared base deps
+/// (libX11/libffi/libstdc++/…) that any GUI image already ships are left to the distro.
+fn shim_owns_lib(file_name: &str) -> bool {
+    // The soname "stem": everything before the first ".so" (`libEGL.so.1` -> `libegl`).
+    let stem = file_name.split(".so").next().unwrap_or(file_name).to_ascii_lowercase();
+    // Families with a distinctive prefix that never collides with an unrelated distro soname.
+    const OWNED_PREFIXES: &[&str] = &[
+        "libegl",      // libEGL, libEGL_mesa, ANGLE's libEGL
+        "libgles",     // libGLESv1_CM, libGLESv2
+        "libvulkan",   // Vulkan loader + dd/lavapipe ICD
+        "libvklayer",  // Vulkan layers
+        "libcuda",     // CUDA driver shim (libcuda, libcudart)
+        "libwayland-", // wayland-egl platform + client/cursor transport to dd-display
+        "libdd",       // dd's own shim cores (libdd*, libddshim)
+    ];
+    if OWNED_PREFIXES.iter().any(|p| stem.starts_with(p)) {
+        return true;
+    }
+    // GL-family sonames matched EXACTLY — a bare `libgl` prefix would wrongly capture distro libs such as
+    // `libglib-2.0`, so enumerate the real GL/GLVND/GBM stems instead.
+    const OWNED_EXACT: &[&str] = &["libgl", "libglu", "libglx", "libgldispatch", "libopengl", "libglapi", "libgbm"];
+    if OWNED_EXACT.contains(&stem.as_str()) {
+        return true;
+    }
+    // dd shim cores whose name doesn't start with `libdd` (e.g. `gl_shim` / `*_shim` builds).
+    stem.contains("shim")
+}
+
 impl DeviceProvider for GpuIntegration {
     fn device_request(&self, guest_env: &[String]) -> DeviceRequest {
         let mut req = DeviceRequest::default();
@@ -123,16 +160,21 @@ impl DeviceProvider for GpuIntegration {
             // The dd-gpu IR executor socket the guest streams GPU commands to.
             req.mounts.push(DeviceMount::rw(d.gpu_exec_sock.clone(), "/run/user/0/dd-gpu-0"));
             req.env.push("DD_GPU_EXEC=/run/user/0/dd-gpu-0".to_string());
-            // Mount-not-bake the client runtime libs (libwayland-client + friends): any *.so* in the drop-in
-            // dir is bound into the guest multiarch lib dir, and that dir is prepended to LD_LIBRARY_PATH so
-            // a bare image works. When the dir is present we always advertise the lib dir on the path (even
-            // if empty), matching the launcher's original behavior.
+            // Mount-not-bake the shim's OWN runtime libs (the GPU/GL render stack + the Wayland client
+            // transport it speaks to dd-display with): each such *.so* in the drop-in dir is bound over the
+            // guest multiarch lib dir, and that dir is prepended to LD_LIBRARY_PATH so a bare image works.
+            // We bind ONLY the libraries the shim is authoritative for (`shim_owns_lib`) — never unrelated
+            // distro libraries that happen to share the drop-in dir. Binding a stub `libX11.so.6` over the
+            // guest's real one is the "shim library shadowing" bug: GTK/Qt X11 apps then load a crippled
+            // libX11 (previously papered over with an `LD_PRELOAD`). Filtering here lets the guest resolve
+            // its own libX11/libstdc++/libz with no workaround. When the dir is present we always advertise
+            // the lib dir on the path (even if nothing matched), matching the launcher's original behavior.
             if !d.lib_dir.is_empty() {
                 if let Ok(rd) = std::fs::read_dir(&d.lib_dir) {
                     for ent in rd.flatten() {
                         let name = ent.file_name();
                         let name = name.to_string_lossy();
-                        if name.contains(".so") {
+                        if name.contains(".so") && shim_owns_lib(&name) {
                             req.mounts.push(DeviceMount::ro(
                                 ent.path().to_string_lossy().into_owned(),
                                 format!("{libdir}/{name}"),
@@ -311,6 +353,88 @@ mod tests {
         let env = vec!["LD_LIBRARY_PATH=/a".to_string(), "LD_LIBRARY_PATH=/b".to_string()];
         let req = g.device_request(&env);
         assert!(req.env.contains(&"LD_LIBRARY_PATH=/usr/lib/x86_64-linux-gnu:/b".to_string()));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn shim_owns_only_render_stack_never_distro_libs() {
+        // The shim is authoritative for the GPU/GL/Vulkan/Wayland render stack + dd's own cores…
+        for owned in [
+            "libEGL.so.1",
+            "libEGL_mesa.so.0",
+            "libGLESv2.so.2",
+            "libGLESv1_CM.so.1",
+            "libGL.so.1",
+            "libGLdispatch.so.0",
+            "libOpenGL.so.0",
+            "libglapi.so.0",
+            "libgbm.so.1",
+            "libvulkan.so.1",
+            "libvulkan_dd.so",
+            "libcuda.so.1",
+            "libwayland-egl.so.1",
+            "libwayland-client.so.0",
+            "libwayland-cursor.so.0",
+            "libddshim.so",
+            "libgl_shim.so",
+        ] {
+            assert!(shim_owns_lib(owned), "{owned} should be shim-owned");
+        }
+        // …and MUST NOT claim ownership of any unrelated distro library sharing the drop-in dir. libX11 is
+        // the headline case (the shadowing that broke GTK/Qt X11 backends); the rest guard the general trap.
+        for distro in [
+            "libX11.so.6",
+            "libX11-xcb.so.1",
+            "libxcb.so.1",
+            "libXext.so.6",
+            "libstdc++.so.6",
+            "libgcc_s.so.1",
+            "libz.so.1",
+            "libc.so.6",
+            "libm.so.6",
+            "libffi.so.8",
+            "libglib-2.0.so.0", // the greedy-`libgl`-prefix trap
+            "libgio-2.0.so.0",
+        ] {
+            assert!(!shim_owns_lib(distro), "{distro} must be left to the distro, not shadowed");
+        }
+    }
+
+    #[test]
+    fn display_binds_render_libs_but_not_shadowing_distro_libs() {
+        // End-to-end through device_request: a drop-in dir holding BOTH shim render libs and distro libs
+        // (as a mis-assembled `~/.dd/gui/<arch>/lib` would) binds only the render libs; the distro libX11 &
+        // friends are never mounted, so the guest resolves its own real ones with no LD_PRELOAD.
+        let dir = std::env::temp_dir().join(format!("ddgpu-shadow-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        for f in [
+            "libEGL.so.1",
+            "libGLESv2.so.2",
+            "libwayland-egl.so.1",
+            "libX11.so.6",    // the stub that must be skipped
+            "libstdc++.so.6", // distro runtime, must be skipped
+            "libz.so.1",      // distro base lib, must be skipped
+            "notalib.txt",    // non-.so, ignored
+        ] {
+            std::fs::write(dir.join(f), b"").unwrap();
+        }
+        let g = GpuIntegration::new(GuestArch::Aarch64).with_display(DisplayIntegration {
+            wayland_sock: "/w".into(),
+            gpu_exec_sock: "/e".into(),
+            lib_dir: dir.to_string_lossy().into_owned(),
+            bin_dir: String::new(),
+        });
+        let req = g.device_request(&[]);
+        let bound: Vec<&str> = req.mounts.iter().map(|m| m.container.as_str()).collect();
+        // The three render libs are bound over the guest multiarch dir…
+        assert!(bound.contains(&"/usr/lib/aarch64-linux-gnu/libEGL.so.1"));
+        assert!(bound.contains(&"/usr/lib/aarch64-linux-gnu/libGLESv2.so.2"));
+        assert!(bound.contains(&"/usr/lib/aarch64-linux-gnu/libwayland-egl.so.1"));
+        // …and NOTHING shadows the guest's real libX11 / libstdc++ / libz.
+        assert!(
+            !bound.iter().any(|p| p.contains("libX11") || p.contains("libstdc++") || p.contains("libz.so")),
+            "distro libs must not be shadowed, got {bound:?}"
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
