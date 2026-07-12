@@ -25,6 +25,14 @@ struct Client {
     pointer_id: u32,
     /// Serial from the last `wl_pointer.enter` (opcode 0) — echoed back in `set_shape`.
     enter_serial: Option<u32>,
+    /// The client's `xdg_surface` id, so `drain` can capture the configure serial for the ack handshake.
+    xdg_id: u32,
+    /// The client's `xdg_toplevel` id, so `drain` can decode `configure(w,h,states)`.
+    toplevel_id: u32,
+    /// Serial from the last `xdg_surface.configure` (opcode 0) — echoed back in `ack_configure`.
+    last_xdg_configure_serial: Option<u32>,
+    /// Decoded `(width, height, states)` from the last `xdg_toplevel.configure` (opcode 0).
+    last_toplevel_configure: Option<(i32, i32, Vec<u32>)>,
     /// Every event seen as `(object, opcode)`, so tests can assert e.g. a `presented` (feedback opcode 1).
     events: Vec<(u32, u16)>,
 }
@@ -37,6 +45,10 @@ impl Client {
             globals: Default::default(),
             pointer_id: 0,
             enter_serial: None,
+            xdg_id: 0,
+            toplevel_id: 0,
+            last_xdg_configure_serial: None,
+            last_toplevel_configure: None,
             events: Vec::new(),
         }
     }
@@ -67,6 +79,20 @@ impl Client {
             } else if self.pointer_id != 0 && m.object == self.pointer_id && m.opcode == 0 {
                 // wl_pointer.enter(serial, surface, x, y): first arg is the serial.
                 self.enter_serial = Some(m.reader().u32());
+            } else if self.xdg_id != 0 && m.object == self.xdg_id && m.opcode == 0 {
+                // xdg_surface.configure(serial): the serial the client must echo in ack_configure.
+                self.last_xdg_configure_serial = Some(m.reader().u32());
+            } else if self.toplevel_id != 0 && m.object == self.toplevel_id && m.opcode == 0 {
+                // xdg_toplevel.configure(width, height, states[]): the compositor's size + state hint.
+                let mut r = m.reader();
+                let w = r.i32();
+                let h = r.i32();
+                let states = r
+                    .array()
+                    .chunks_exact(4)
+                    .map(|c| u32::from_ne_bytes([c[0], c[1], c[2], c[3]]))
+                    .collect();
+                self.last_toplevel_configure = Some((w, h, states));
             }
         }
     }
@@ -181,9 +207,27 @@ fn globals_advertise_frame_presents_feedback_and_cursor_shape_wire() {
     c.conn.send(&Message::new(wm, 2).u32(xdg).u32(surface)); // get_xdg_surface
     let toplevel = c.alloc();
     c.conn.send(&Message::new(xdg, 1).u32(toplevel)); // get_toplevel
+    c.xdg_id = xdg;
+    c.toplevel_id = toplevel;
     c.conn.send(&Message::new(surface, 6)); // commit (no buffer)
     pump!();
-    c.conn.send(&Message::new(xdg, 4).u32(1)); // ack_configure(serial=1)
+
+    // The xdg-shell configure handshake: mapping the toplevel MUST produce a paired
+    // xdg_toplevel.configure(w,h,states) + xdg_surface.configure(serial). Assert both arrived, that the
+    // initial configure carries the floating size (1000x700) with the Activated state (4), and that the
+    // client can ack the serial the compositor actually chose (not a hardcoded 1).
+    assert!(c.saw(toplevel, 0), "expected xdg_toplevel.configure; saw {:?}", c.events);
+    assert!(c.saw(xdg, 0), "expected xdg_surface.configure; saw {:?}", c.events);
+    let (cw, ch, cstates) = c
+        .last_toplevel_configure
+        .clone()
+        .expect("initial xdg_toplevel.configure not decoded");
+    assert_eq!((cw, ch), (1000, 700), "initial configure size");
+    assert!(cstates.contains(&4), "initial configure should carry Activated (4); got {cstates:?}");
+    let init_serial = c
+        .last_xdg_configure_serial
+        .expect("initial xdg_surface.configure serial not captured");
+    c.conn.send(&Message::new(xdg, 4).u32(init_serial)); // ack_configure(serial)
 
     // Back a 4x3 XRGB buffer with a portable anonymous shm fd (memfd on Linux, shm/tmpfile on macOS),
     // prefilled with a recognizable BGRA pattern. Reuses dd-display's `keymap::anon_fd_with`.
@@ -255,6 +299,45 @@ fn globals_advertise_frame_presents_feedback_and_cursor_shape_wire() {
         *last_shape.lock().unwrap(),
         Some(4),
         "set_shape(pointer=4) should reach the Presenter as wp_cursor_shape enum 4"
+    );
+
+    // (3) Window management: a host-driven window resize reconfigures the focused toplevel. Drive
+    // `resize_focused` (what the macOS loop's `maybe_resize_focused` calls when the user drags the
+    // window edge) and assert the client receives a fresh configure carrying the new size + Activated,
+    // then completes the ack handshake with the compositor's new serial.
+    c.last_toplevel_configure = None;
+    state.resize_focused(1280, 720);
+    display.flush_clients().unwrap();
+    c.drain();
+    let (rw, rh, rstates) = c
+        .last_toplevel_configure
+        .clone()
+        .expect("resize did not produce an xdg_toplevel.configure");
+    assert_eq!((rw, rh), (1280, 720), "resize_focused should configure the requested size");
+    assert!(rstates.contains(&4), "resize configure should carry Activated (4); got {rstates:?}");
+    let rserial = c
+        .last_xdg_configure_serial
+        .expect("resize xdg_surface.configure serial not captured");
+    c.conn.send(&Message::new(xdg, 4).u32(rserial)); // ack_configure(resize serial)
+    pump!();
+
+    // (4) min/max-size clamping: the client sets a max size (double-buffered — applied on the next
+    // commit), after which a larger host resize is clamped down to it, honouring set_max_size.
+    c.conn.send(&Message::new(toplevel, 7).i32(900).i32(600)); // xdg_toplevel.set_max_size(900,600)
+    c.conn.send(&Message::new(surface, 6)); // commit → apply cached max_size
+    pump!();
+    c.last_toplevel_configure = None;
+    state.resize_focused(2000, 2000);
+    display.flush_clients().unwrap();
+    c.drain();
+    let (mw, mh, _) = c
+        .last_toplevel_configure
+        .clone()
+        .expect("clamped resize did not produce a configure");
+    assert_eq!(
+        (mw, mh),
+        (900, 600),
+        "resize beyond set_max_size(900,600) should clamp to the max"
     );
 }
 

@@ -196,12 +196,18 @@ mod macos {
             // on the legacy path (dd-display: "service NSEvents before pump"). Present is non-blocking
             // (the Metal path never blocks on nextDrawable), so a slow frame cannot stall the pointer.
             drain_appkit(&app, &mut data);
+            // A host-driven NSWindow resize (user dragged the window edge) reflows the focused client:
+            // observe the live AppKit content size and, on a change, send xdg_toplevel.configure so the
+            // guest repaints at the new size. Debounced inside maybe_resize_focused (mirrors the legacy
+            // dd-display live loop's Server::maybe_resize). Cheap when nothing changed.
+            data.state.maybe_resize_focused();
             let _ = data.display.flush_clients();
             // Short timeout so we loop back to drain input promptly even when no client fd is readable.
             event_loop
                 .dispatch(Some(std::time::Duration::from_millis(8)), &mut data)
                 .expect("dispatch");
             drain_appkit(&app, &mut data);
+            data.state.maybe_resize_focused();
             let _ = data.display.flush_clients();
         }
     }
