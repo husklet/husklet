@@ -34,6 +34,11 @@ pub fn index_buffer_cmds(id: u32, data: &[u8]) -> [Cmd; 2] {
     buffer_to_cmds(id, buffer_usage::INDEX, data)
 }
 
+/// A uniform buffer's upload (`buffer_usage::UNIFORM`).
+pub fn uniform_buffer_cmds(id: u32, data: &[u8]) -> [Cmd; 2] {
+    buffer_to_cmds(id, buffer_usage::UNIFORM, data)
+}
+
 /// gl_shim.c sampler min-filter code: Linear (1) for LINEAR / LINEAR_MIPMAP_*, else Nearest (0).
 fn min_filter(gl: u32) -> Filter {
     match gl {

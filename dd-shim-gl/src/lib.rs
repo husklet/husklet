@@ -28,6 +28,7 @@ pub mod glconst;
 pub mod lower;
 pub mod state;
 pub mod stub;
+pub mod translate;
 pub mod wireenc;
 
 // The generated C-ABI export surface (every GLES2/EGL entry point not in `IMPLEMENTED`).

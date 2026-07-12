@@ -33,11 +33,27 @@ pub struct Program {
     pub linked: bool,
     pub ubuf: [u8; UBUF_BYTES], // uniform-block bytes (written by glUniform*)
     pub samp_units: [i32; 4],   // sampler uniform index -> GL texture unit (glUniform1i)
+    // populated at glLinkProgram by the GLSL→MSL translator:
+    pub msl: Option<String>,                    // combined MSL source (→ CreateShader)
+    pub unis: Vec<crate::translate::Uni>,       // uniform-block layout (name→offset/size)
+    pub ubuf_size: i32,                         // MSL Uniforms struct size (16-aligned)
+    pub samp_names: Vec<String>,                // sampler uniform names, declaration order
 }
 
 impl Default for Program {
     fn default() -> Self {
-        Program { used: false, vs: 0, fs: 0, linked: false, ubuf: [0; UBUF_BYTES], samp_units: [0; 4] }
+        Program {
+            used: false,
+            vs: 0,
+            fs: 0,
+            linked: false,
+            ubuf: [0; UBUF_BYTES],
+            samp_units: [0; 4],
+            msl: None,
+            unis: Vec::new(),
+            ubuf_size: 0,
+            samp_names: Vec::new(),
+        }
     }
 }
 

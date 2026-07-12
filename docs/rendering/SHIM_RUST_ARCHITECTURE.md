@@ -142,21 +142,32 @@ reaches pixel parity. The path:
    `DD_IR_DUMP` in host-tool/parity mode, or `dd_shim_common::transport::ExecConn` in the deployed
    path; the wayland/dma-buf commit is the remaining display plumbing). The **clear-path frame is
    byte-identical to gl_shim.c**; the shader-bearing draw path is the remaining work (below).
-4. **Pixel/IR-parity harness — LIVE (`tests/pixel_parity.rs`).** The compare engine decodes both shims'
-   IR and pinpoints the diverging `Cmd`. `full_frame_clear_is_byte_identical_to_gl_shim_c`
-   **compiles + runs the real `gl_shim.c`** (its `DD_IR_DUMP` host-tool mode) for a 640×480 clear frame
-   and asserts the bytes equal dd-shim-gl's lowering — **green: 43 bytes, byte-identical**. Draw frames
-   skip until the translator lands, then go live with no harness change. This green is the cutover gate.
-5. **Remaining for full glmark2/es2* parity:** the GLSL-ES→MSL translator (gl_shim.c's ~600-line
-   `translate()` + helpers, verifiable byte-for-byte against its `-DDD_TR_TOOL` `gl_tr` tool) feeding
-   `CreateShader`, plus the draw-time pipeline / bind-group / render-pass emission (the `replay` +
-   single-draw assembly in gl_shim.c `eglSwapBuffers`, constructed as `dd_gpu::ir::Cmd`/`Enc` values —
-   the same byte-equivalent pattern already used for resources and clears). `glGetUniformLocation`/
-   `glGetAttribLocation` wire to the uniform-layout parser that lands with the translator.
-6. **Cutover** when the full-frame diff of a textured triangle / glmark2 frame is clean: build
-   dd-shim-gl's cdylib as the injected `libEGL.so.1` / `libGLESv2.so.2` **behind a flag first**, then
-   (after live glmark2/Chrome validation) flip the default injection and delete `gl_shim.c` (its
-   `DD_TR_TOOL` translator regression moves to the Rust translator).
+4. **GLSL-ES → MSL translator (done — byte-verified).** `src/translate.rs` is a byte-for-byte port of
+   gl_shim.c's `translate()` + ~20 helpers (strip-comments, collect decls, main-body extract,
+   word-boundary/plain replace, type/builtin/relational/local-decl fixups, `fix_trunc`, sampler
+   rewrites, `mod`/`mat3x2` helper injection, and the `uni_layout` uniform-block byte layout).
+   `glLinkProgram` runs it → `CreateShader` MSL; `glGetUniformLocation`/`glGetAttribLocation` resolve
+   against the layout + declaration order. Verified GREEN against gl_shim.c's own `-DDD_TR_TOOL gl_tr`
+   over the whole `shader_translate/*.glsl` corpus (`tests/translate_parity.rs`).
+5. **Draw-time emission (done — single-draw path).** `src/frame.rs` `build_single_draw_frame` lowers a
+   non-clear draw to the exact `dd_gpu::ir::Cmd`/`Enc` sequence gl_shim.c's non-replay `eglSwapBuffers`
+   emits: VBO/index/texture/uniform resources, `CreateShader` + `CreateRenderPipeline` (vertex layout,
+   blend/depth, topology), `CreateBindGroup`, and the render pass (Begin/SetPipeline/Viewport/Scissor/
+   SetBindGroup/SetVertexBuffer/Draw/End) with the Y-flipped viewport/scissor.
+6. **Pixel/IR-parity harness — LIVE, flagship gate GREEN (`tests/pixel_parity.rs`).** The flagship
+   `full_frame_textured_triangle_is_byte_identical` compiles the SAME GLES workload (shader compile +
+   VBO + 2×2 texture + mat4 uniform + sampler + `glDrawArrays`) against **both** shims' `.so` (gl_shim.c's
+   `libEGL.so.1` and dd-shim-gl's cdylib), runs each with `DD_IR_DUMP`, and asserts the IR is identical
+   — **GREEN: 1316 bytes, byte-for-byte**. The clear frame is likewise byte-identical (43 bytes).
+7. **Remaining:** (a) the **replay path** (multi-draw / clear+draw frames — gl_shim.c's per-draw
+   `20+d`/`30+d`/`40+d` ids + segmented render passes) for full glmark2/Chrome coverage, same
+   byte-equivalent `Cmd`/`Enc` pattern; (b) the **deployed-path display plumbing** — the wayland/dma-buf
+   surface handshake + `wl_commit` in `eglSwapBuffers` (only the IR-submit half is wired; `DD_IR_DUMP`
+   and the parity gate don't need it).
+8. **Cutover (proposed — not flipped):** the `~/.dd/gui/<arch>/lib` deploy builds dd-shim-gl's cdylib as
+   `libEGL.so.1` + the `libGLESv2.so.2`/`libwayland-egl.so.1` DT_NEEDED stubs, selected by
+   `DD_SHIM_IMPL=rust` so a validation run swaps to the Rust libs while the default stays gl_shim.c's.
+   Flip the default only after a live glmark2/Chrome pixel-check.
 
 ## GLES-still-works evidence (this increment)
 

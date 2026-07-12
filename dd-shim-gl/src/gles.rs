@@ -592,6 +592,11 @@ unsafe fn cstr_len(p: *const c_char) -> usize {
     n
 }
 
+unsafe fn cstr_str(p: *const c_char) -> String {
+    let bytes = core::slice::from_raw_parts(p as *const u8, cstr_len(p));
+    String::from_utf8_lossy(bytes).into_owned()
+}
+
 #[no_mangle]
 pub extern "C" fn glCompileShader(_sh: u32) {}
 
@@ -662,15 +667,28 @@ pub extern "C" fn glAttachShader(prog: u32, sh: u32) {
 #[no_mangle]
 pub extern "C" fn glDetachShader(_prog: u32, _sh: u32) {}
 
-/// `glLinkProgram` — mark the program linked. The GLSL→shader-IR translation (and the uniform-block
-/// layout that gives uniforms their locations) lands with the shader-translation increment; until
-/// then linkage is tracked but no MSL/SPIR-V is produced.
+/// `glLinkProgram` — translate the attached GLSL-ES vertex+fragment sources to combined MSL and compute
+/// the uniform-block layout + sampler set (gl_shim.c `glLinkProgram` → `translate` + `uni_layout` +
+/// `collect_uniforms`). The MSL feeds `CreateShader`; the layout gives uniforms their locations.
 #[no_mangle]
 pub extern "C" fn glLinkProgram(prog: u32) {
     let mut s = gl();
-    if (prog as usize) < MAXPROG && s.prog[prog as usize].used {
-        let (vs, fs) = (s.prog[prog as usize].vs, s.prog[prog as usize].fs);
-        s.prog[prog as usize].linked = vs != 0 && fs != 0;
+    if (prog as usize) >= MAXPROG || !s.prog[prog as usize].used {
+        return;
+    }
+    let (vs, fs) = (s.prog[prog as usize].vs, s.prog[prog as usize].fs);
+    let vsrc = if (vs as usize) < MAXSH { s.sh[vs as usize].src.clone() } else { None };
+    let fsrc = if (fs as usize) < MAXSH { s.sh[fs as usize].src.clone() } else { None };
+    let p = &mut s.prog[prog as usize];
+    p.linked = vs != 0 && fs != 0;
+    if let (Some(v), Some(f)) = (vsrc, fsrc) {
+        p.msl = Some(crate::translate::translate(&v, &f));
+        let (unis, total) = crate::translate::uni_layout(&v, &f);
+        p.unis = unis;
+        p.ubuf_size = total;
+        p.samp_names = crate::translate::program_samplers(&v, &f);
+        p.samp_units = [0; 4];
+        p.ubuf = [0; crate::state::UBUF_BYTES];
     }
 }
 
@@ -714,17 +732,52 @@ pub extern "C" fn glIsProgram(prog: u32) -> u8 {
     (prog != 0 && (prog as usize) < MAXPROG && s.prog[prog as usize].used) as u8
 }
 
-/// `glGetUniformLocation` — returns -1 (not found) until the uniform-block layout parser lands with the
-/// shader-translation increment. gl_shim.c derives the location as a byte offset from that parse.
+/// `glGetUniformLocation` — a data uniform's location is its byte offset in the uniform block; a
+/// sampler uniform's is the sentinel `100000 + index` (gl_shim.c). -1 if not found.
 #[no_mangle]
-pub extern "C" fn glGetUniformLocation(_prog: u32, _name: *const c_char) -> i32 {
+pub extern "C" fn glGetUniformLocation(prog: u32, name: *const c_char) -> i32 {
+    if name.is_null() || (prog as usize) >= MAXPROG {
+        return -1;
+    }
+    let want = unsafe { cstr_str(name) };
+    let s = gl();
+    let p = &s.prog[prog as usize];
+    if !p.used {
+        return -1;
+    }
+    for u in &p.unis {
+        if u.name == want {
+            return u.off; // location == byte offset
+        }
+    }
+    for (i, sn) in p.samp_names.iter().enumerate() {
+        if *sn == want {
+            return 100000 + i as i32;
+        }
+    }
     -1
 }
 
-/// `glGetAttribLocation` — returns -1 (not found) until the GLSL attribute collector lands with the
-/// shader-translation increment.
+/// `glGetAttribLocation` — the attribute's declaration-order index in the vertex shader (matches the
+/// `[[attribute(L)]]` numbering the translator emits), gl_shim.c `glGetAttribLocation`.
 #[no_mangle]
-pub extern "C" fn glGetAttribLocation(_prog: u32, _name: *const c_char) -> i32 {
+pub extern "C" fn glGetAttribLocation(prog: u32, name: *const c_char) -> i32 {
+    if name.is_null() || (prog as usize) >= MAXPROG {
+        return -1;
+    }
+    let want = unsafe { cstr_str(name) };
+    let s = gl();
+    let p = &s.prog[prog as usize];
+    if !p.used || p.vs == 0 || (p.vs as usize) >= MAXSH {
+        return -1;
+    }
+    if let Some(src) = &s.sh[p.vs as usize].src {
+        for (i, a) in crate::translate::collect_vertex_attrs(src).iter().enumerate() {
+            if a.name == want {
+                return i as i32;
+            }
+        }
+    }
     -1
 }
 
@@ -797,8 +850,17 @@ pub extern "C" fn glUniform4fv(loc: i32, _count: i32, v: *const f32) {
 }
 #[no_mangle]
 pub extern "C" fn glUniform1i(loc: i32, a: i32) {
-    // gl_shim.c uses loc in [100000,100004) as a sampler-unit sentinel; those locations only exist once
-    // the layout parser lands, so here glUniform1i is a plain int store.
+    // loc in [100000,100004) is a sampler-uniform sentinel (from glGetUniformLocation): it records the
+    // GL texture unit this sampler samples, not a uniform-block write (gl_shim.c glUniform1i).
+    if (100000..100004).contains(&loc) {
+        let si = (loc - 100000) as usize;
+        let mut s = gl();
+        let cp = s.cur_prog as usize;
+        if cp < MAXPROG && s.prog[cp].used && si < s.prog[cp].samp_names.len() {
+            s.prog[cp].samp_units[si] = a;
+        }
+        return;
+    }
     uni_write(loc, &a.to_le_bytes());
 }
 #[no_mangle]
