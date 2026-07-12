@@ -61,6 +61,7 @@ use smithay::{
     wayland::{
         compositor::{CompositorClientState, CompositorState},
         cursor_shape::CursorShapeManagerState,
+        dmabuf::DmabufState,
         output::OutputManagerState,
         presentation::PresentationState,
         selection::data_device::DataDeviceState,
@@ -110,6 +111,9 @@ pub struct DdState {
     pub presentation: PresentationState,
     pub cursor_shape: CursorShapeManagerState,
     pub data_device: DataDeviceState,
+    /// `zwp_linux_dmabuf_v1` delegate. Holds the dmabuf global that lets GPU clients (GLES/Vulkan)
+    /// present via a dd IOSurface-backed buffer — see [`handlers::dmabuf`].
+    pub dmabuf_state: DmabufState,
     pub seat: Seat<Self>,
     pub keyboard: KeyboardHandle<Self>,
     pub pointer: PointerHandle<Self>,
@@ -190,6 +194,9 @@ impl DdState {
         // guest↔guest transfer; the compositor bridges the selection to the host clipboard via the
         // `Presenter` clipboard hooks (see handlers/seat.rs).
         let data_device = DataDeviceState::new::<Self>(&dh);
+        // zwp_linux_dmabuf_v1: advertise the GPU present path so GLES/Vulkan/GPU-composited clients
+        // can attach IOSurface-backed buffers (glmark2, es2tri, GPU browsers). See handlers/dmabuf.rs.
+        let dmabuf_state = handlers::dmabuf::new_dmabuf_state(&dh);
 
         let mut seat_state = SeatState::<Self>::new();
         let mut seat = seat_state.new_wl_seat(&dh, "dd-seat-0"); // wl_seat v5
@@ -230,6 +237,7 @@ impl DdState {
             presentation,
             cursor_shape,
             data_device,
+            dmabuf_state,
             seat,
             keyboard,
             pointer,

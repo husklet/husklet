@@ -10,6 +10,7 @@
 //! globals the compositor dispatches — the Smithay-generated equivalent of server.rs's 4900 lines.
 
 pub mod compositor;
+pub mod dmabuf;
 pub mod output;
 pub mod seat;
 pub mod xdg;
@@ -17,12 +18,14 @@ pub mod xdg;
 use crate::DdState;
 
 use smithay::{
-    delegate_compositor, delegate_cursor_shape, delegate_data_device, delegate_output,
-    delegate_presentation, delegate_seat, delegate_shm, delegate_viewporter, delegate_xdg_shell,
+    delegate_compositor, delegate_cursor_shape, delegate_data_device, delegate_dmabuf,
+    delegate_output, delegate_presentation, delegate_seat, delegate_shm, delegate_viewporter,
+    delegate_xdg_shell,
 };
 
 delegate_compositor!(DdState); // wl_compositor + wl_subcompositor
 delegate_shm!(DdState);
+delegate_dmabuf!(DdState); // zwp_linux_dmabuf_v1 (GPU present path → dd IOSurface, zero-copy)
 delegate_xdg_shell!(DdState);
 delegate_seat!(DdState);
 delegate_output!(DdState);

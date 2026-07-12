@@ -332,6 +332,12 @@ impl DdState {
         dst: Option<Size<i32, smithay::utils::Logical>>,
         src: Option<(f64, f64, f64, f64)>,
     ) -> Option<SurfaceBuffer> {
+        // GPU present path: a dmabuf-backed buffer carries a dd IOSurface id (no CPU pixels). Resolve
+        // it to a zero-copy IOSurface `SurfaceBuffer` and skip the shm repack. A non-dmabuf buffer
+        // returns `None` here and falls through to the `wl_shm` copy below.
+        if let Some(sb) = self.dmabuf_surface_buffer(sid, buffer, buffer_scale, dst, src) {
+            return Some(sb);
+        }
         let title = self.titles.get(&sid).cloned().unwrap_or_else(|| "dd".into());
         let res = with_buffer_contents(buffer, |ptr, _len, data| {
             let w = data.width;
@@ -361,21 +367,7 @@ impl DdState {
         // sample rect in the backing texture, so a client that renders into an oversized target and
         // crops via the viewport (Chrome's fractional-scale path) presents only the requested region.
         // `dst` (or, absent it, the buffer pixels / buffer_scale) is the on-screen logical size.
-        let (log_w, log_h, uv_rect) = match (dst, src) {
-            (Some(sz), src) if sz.w > 0 && sz.h > 0 => {
-                (sz.w, sz.h, uv_from_src(src, tex_w, tex_h, buffer_scale))
-            }
-            (None, Some((_, _, sw, sh))) if sw > 0.0 && sh > 0.0 => (
-                (sw.round() as i32).max(1),
-                (sh.round() as i32).max(1),
-                uv_from_src(src, tex_w, tex_h, buffer_scale),
-            ),
-            _ => (
-                (tex_w / buffer_scale).max(1),
-                (tex_h / buffer_scale).max(1),
-                [0.0, 0.0, 1.0, 1.0],
-            ),
-        };
+        let (log_w, log_h, uv_rect) = logical_size_and_uv(dst, src, tex_w, tex_h, buffer_scale);
 
         Some(SurfaceBuffer {
             sid,
@@ -391,6 +383,35 @@ impl DdState {
             gpu_render: false,
             uv_rect,
         })
+    }
+}
+
+/// Resolve a surface's on-screen logical size and its normalized backing-texture sample rect from
+/// the `wp_viewport` destination (`dst`) / source (`src`) and the buffer's pixel size (`tex_w/h`) at
+/// `buffer_scale`. Shared by the `wl_shm` repack and the dmabuf/IOSurface path so both honour the
+/// viewport identically: a viewport `dst` sets the logical size; else a `src` crop's size; else the
+/// buffer pixels divided by `buffer_scale` (HiDPI). The `uv_rect` crops to the `src` rectangle.
+pub(crate) fn logical_size_and_uv(
+    dst: Option<Size<i32, smithay::utils::Logical>>,
+    src: Option<(f64, f64, f64, f64)>,
+    tex_w: i32,
+    tex_h: i32,
+    buffer_scale: i32,
+) -> (i32, i32, [f32; 4]) {
+    match (dst, src) {
+        (Some(sz), src) if sz.w > 0 && sz.h > 0 => {
+            (sz.w, sz.h, uv_from_src(src, tex_w, tex_h, buffer_scale))
+        }
+        (None, Some((_, _, sw, sh))) if sw > 0.0 && sh > 0.0 => (
+            (sw.round() as i32).max(1),
+            (sh.round() as i32).max(1),
+            uv_from_src(src, tex_w, tex_h, buffer_scale),
+        ),
+        _ => (
+            (tex_w / buffer_scale.max(1)).max(1),
+            (tex_h / buffer_scale.max(1)).max(1),
+            [0.0, 0.0, 1.0, 1.0],
+        ),
     }
 }
 

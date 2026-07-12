@@ -1,0 +1,156 @@
+//! `zwp_linux_dmabuf_v1` — the GPU present path for the Smithay compositor.
+//!
+//! ## Why dmabuf means "resolve a dd IOSurface" on this boundary
+//! dd runs Linux guests on a macOS host. A guest GPU client (glmark2, es2tri, a GPU-composited
+//! browser) renders through dd's GPU stack, which executes the guest's GL/GLES/Vulkan commands on
+//! the host Metal device INTO a host `IOSurface`. It never makes a real Linux PRIME/`dma-buf`
+//! export — there is no kernel dma-buf to import. What the guest hands the compositor as a
+//! "dmabuf" is really a *reference to that host IOSurface*, carried in the dmabuf's DRM format
+//! MODIFIER: `modifier_lo` is the IOSurface id and `modifier_hi`'s low 16 bits are a dd magic tag
+//! (bit 16 = "the host GPU should also RENDER into this surface" — rung 3). This is the exact
+//! contract the legacy hand-written `dd-display/src/server.rs` uses; this module is its Smithay
+//! equivalent, so a guest built for the legacy path presents unchanged on `DD_DISPLAY_SMITHAY=1`.
+//!
+//! ## The bridge
+//! 1. We advertise `zwp_linux_dmabuf_v1` (Smithay's [`DmabufState`], v4/v5 with feedback) exporting
+//!    ARGB8888/XRGB8888 with the dd IOSurface modifier + `LINEAR`, and the synthetic render-node
+//!    `main_device` (226:128) so a client's ozone/EGL GPU probe resolves the same node the engine
+//!    synthesizes. Chrome needs the feedback path; glmark2/es2tri use the plain v3 modifier list
+//!    Smithay derives from the same formats.
+//! 2. On import ([`DmabufHandler::dmabuf_imported`]) we decode the IOSurface id from the modifier
+//!    and accept the buffer; a buffer with no dd tag (a real LINEAR allocation we cannot back on
+//!    macOS) is rejected so the client falls back to `wl_shm`.
+//! 3. On commit, [`DdState::dmabuf_surface_buffer`] turns the committed dmabuf `wl_buffer` into a
+//!    [`SurfaceBuffer`] carrying only `iosurface_id` (no CPU pixels). The reused `Presenter`
+//!    (`MetalPresenter`/`CocoaPresenter`) resolves that id to the host IOSurface via the GPU mach
+//!    bridge and composites it zero-copy — identical to the legacy GL path.
+//!
+//! ## Buffer release / fencing
+//! We do NOT release buffers by hand. Smithay's compositor core already sends `wl_buffer.release`
+//! when a surface attaches a *new* buffer over an old one (release-on-next-attach) and on surface
+//! destroy — the correct double-buffering signal a mesa/EGL swapchain waits on to recycle a buffer.
+//! GPU serialization is the `Presenter`'s job: `blit_fenced_ex` fences the IOSurface read against
+//! the guest's next write by IOSurface id, so a recycled surface never tears. This matches the shm
+//! path (which also relies on Smithay's automatic release) — we add no release logic that could
+//! double-release and trip a protocol error.
+
+use dd_display::present::SurfaceBuffer;
+
+use smithay::{
+    backend::allocator::{dmabuf::Dmabuf, Buffer as _, Format, Fourcc, Modifier},
+    reexports::wayland_server::{protocol::wl_buffer::WlBuffer, DisplayHandle},
+    utils::{Logical, Size},
+    wayland::dmabuf::{get_dmabuf, DmabufGlobal, DmabufHandler, DmabufState, ImportNotifier},
+};
+
+use crate::{handlers::compositor::logical_size_and_uv, DdState};
+
+/// dd-private dmabuf modifier layout (shared with `dd-display/src/server.rs`): `modifier_lo` = the
+/// host IOSurface id; `modifier_hi & 0xffff` = this magic tag identifying a dd IOSurface-backed
+/// buffer; `modifier_hi & DD_DMABUF_RENDER_BIT` = the guest asked the host GPU to render into it.
+pub(crate) const DD_DMABUF_MOD_MAGIC: u32 = 0x6464;
+pub(crate) const DD_DMABUF_RENDER_BIT: u32 = 0x1_0000;
+
+/// Decode a DRM format modifier into `(iosurface_id, gpu_render)` when it carries the dd IOSurface
+/// tag, else `None` (a modifier we cannot back — e.g. a genuine `LINEAR` allocation).
+pub(crate) fn dd_iosurface_from_modifier(modifier: u64) -> Option<(u32, bool)> {
+    let hi = (modifier >> 32) as u32;
+    let lo = modifier as u32;
+    if hi & 0xffff == DD_DMABUF_MOD_MAGIC {
+        Some((lo, hi & DD_DMABUF_RENDER_BIT != 0))
+    } else {
+        None
+    }
+}
+
+impl DmabufHandler for DdState {
+    fn dmabuf_state(&mut self) -> &mut DmabufState {
+        &mut self.dmabuf_state
+    }
+
+    /// A client finished a `zwp_linux_buffer_params_v1` create/create_immed. Accept the buffer iff
+    /// its modifier carries a dd IOSurface id (which we resolve zero-copy at present time); reject
+    /// anything else so the client renders via `wl_shm` instead. `successful` binds the [`Dmabuf`]
+    /// as the `wl_buffer`'s user-data, so [`get_dmabuf`] recovers it on commit — no side table.
+    fn dmabuf_imported(&mut self, _global: &DmabufGlobal, dmabuf: Dmabuf, notifier: ImportNotifier) {
+        let modifier: u64 = dmabuf.format().modifier.into();
+        match dd_iosurface_from_modifier(modifier) {
+            Some(_) => {
+                let _ = notifier.successful::<DdState>();
+            }
+            None => notifier.failed(),
+        }
+    }
+}
+
+impl DdState {
+    /// Build a [`SurfaceBuffer`] from a committed dmabuf `wl_buffer`: no CPU pixels, just the host
+    /// IOSurface id decoded from the modifier plus the viewport-resolved logical size / sample rect.
+    /// The `Presenter` wraps the IOSurface as an `MTLTexture` and composites it zero-copy. Returns
+    /// `None` for a non-dmabuf buffer (the caller falls through to the `wl_shm` path) or a dmabuf
+    /// whose modifier lacks the dd tag (should not occur — such imports are rejected).
+    pub(crate) fn dmabuf_surface_buffer(
+        &self,
+        sid: u32,
+        buffer: &WlBuffer,
+        buffer_scale: i32,
+        dst: Option<Size<i32, Logical>>,
+        src: Option<(f64, f64, f64, f64)>,
+    ) -> Option<SurfaceBuffer> {
+        let dmabuf = get_dmabuf(buffer).ok()?;
+        let modifier: u64 = dmabuf.format().modifier.into();
+        let (iosurface_id, gpu_render) = dd_iosurface_from_modifier(modifier)?;
+        let tex_w = dmabuf.width() as i32;
+        let tex_h = dmabuf.height() as i32;
+        if tex_w <= 0 || tex_h <= 0 {
+            return None;
+        }
+        // dd-display convention: format == 1 ⇒ opaque (XRGB); 0 ⇒ honour alpha (ARGB / anything else).
+        let format = match dmabuf.format().code {
+            Fourcc::Xrgb8888 => 1u32,
+            _ => 0u32,
+        };
+        let (width, height, uv_rect) = logical_size_and_uv(dst, src, tex_w, tex_h, buffer_scale);
+        let title = self.titles.get(&sid).cloned().unwrap_or_else(|| "dd".into());
+        Some(SurfaceBuffer {
+            sid,
+            width,
+            height,
+            texture_width: tex_w,
+            texture_height: tex_h,
+            stride: tex_w * 4,
+            format,
+            bgra: Vec::new(),
+            title,
+            iosurface_id: Some(iosurface_id),
+            gpu_render,
+            uv_rect,
+        })
+    }
+}
+
+/// Stand up the `zwp_linux_dmabuf_v1` global (version 3) and return the [`DmabufState`] delegate.
+/// Called once from [`DdState::new`]. It advertises ARGB/XRGB8888 with the dd IOSurface modifier (the
+/// accelerated path a guest GPU client tags its buffer with) plus `LINEAR` — the format+modifier list
+/// GLES clients (glmark2/es2tri) read to choose the accelerated buffer path.
+///
+/// We deliberately use the v3 global rather than v4/v5 dmabuf-feedback: Smithay builds the feedback
+/// format-table in a `shm_open`ed file named `smithay-dmabuffeedback-format-table` (35 bytes), which
+/// exceeds macOS's `PSHMNAMLEN` (31) and fails with `ENAMETOOLONG` — the compositor runs on macOS.
+/// The v3 modifier list is sufficient for GLES clients; wiring v4 feedback (needed for a Chromium
+/// ozone render-node probe, as the legacy `server.rs` path does) is a follow-up gated on that upstream
+/// limitation.
+pub(crate) fn new_dmabuf_state(dh: &DisplayHandle) -> DmabufState {
+    let mut state = DmabufState::new();
+    let magic = Modifier::from((DD_DMABUF_MOD_MAGIC as u64) << 32);
+    let formats = [
+        Format { code: Fourcc::Argb8888, modifier: magic },
+        Format { code: Fourcc::Xrgb8888, modifier: magic },
+        Format { code: Fourcc::Argb8888, modifier: Modifier::Linear },
+        Format { code: Fourcc::Xrgb8888, modifier: Modifier::Linear },
+    ];
+    // The returned DmabufGlobal is only a handle; the global lives inside `state`, so dropping it
+    // does not remove the global.
+    let _global = state.create_global::<DdState>(dh, formats);
+    state
+}
