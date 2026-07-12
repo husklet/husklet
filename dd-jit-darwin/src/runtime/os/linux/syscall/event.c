@@ -79,24 +79,45 @@ static pthread_mutex_t g_ep_mtx = PTHREAD_MUTEX_INITIALIZER;
 // those (plus EINVAL for adding the epoll fd to itself and EPERM for a regular file / directory). Only
 // dd-tracked epoll fds (< DD_NFD, g_epoll set) get this surface -- a dup'd/large epfd keeps the existing
 // best-effort immediate path, so correct software's readiness path is byte-unchanged.
+// A guest that shares ONE epoll instance across threads (Go's netpoller, node's worker pool) issues
+// concurrent epoll_ctl from different threads, so the membership bitmap is touched cross-thread: the byte
+// RMW and the lazy alloc are therefore ATOMIC. A plain `byte |= bit` / `byte &= ~bit` is a read-modify-write
+// that loses a concurrent update to a DIFFERENT bit in the SAME byte (fds 8k..8k+7 share one byte) -- e.g. a
+// waiter's DEL(fd X) clear racing a peer's ADD(fd Z) set would resurrect X's stale membership bit, so when
+// fd X's number is later reused a fresh EPOLL_CTL_ADD wrongly returns EEXIST (Linux never does: its
+// epoll_ctl is internally serialized and close() auto-removes). Atomic OR/AND on the byte + a CAS-installed
+// bitmap close that race without a lock (the single-threaded path is unchanged: uncontended atomics).
 static uint8_t *g_ep_member[DD_NFD];
 
 static int ep_mem_test(int ep, int fd) {
-    if (ep < 0 || ep >= DD_NFD || fd < 0 || fd >= DD_NFD || !g_ep_member[ep]) return 0;
-    return (g_ep_member[ep][fd >> 3] >> (fd & 7)) & 1;
+    if (ep < 0 || ep >= DD_NFD || fd < 0 || fd >= DD_NFD) return 0;
+    uint8_t *m = __atomic_load_n(&g_ep_member[ep], __ATOMIC_ACQUIRE);
+    if (!m) return 0;
+    return (__atomic_load_n(&m[fd >> 3], __ATOMIC_SEQ_CST) >> (fd & 7)) & 1;
 }
 
 static void ep_mem_set(int ep, int fd, int on) {
     if (ep < 0 || ep >= DD_NFD || fd < 0 || fd >= DD_NFD) return;
-    if (!g_ep_member[ep]) {
+    uint8_t *m = __atomic_load_n(&g_ep_member[ep], __ATOMIC_ACQUIRE);
+    if (!m) {
         if (!on) return;
-        g_ep_member[ep] = calloc(1024 / 8, 1);
-        if (!g_ep_member[ep]) return;
+        uint8_t *nm = calloc(1024 / 8, 1);
+        if (!nm) return;
+        uint8_t *expect = NULL;
+        // publish atomically; if a peer installed one first, adopt theirs and free ours (the bit RMW below
+        // then lands on the single winning array, so no membership bit is stranded on a discarded buffer).
+        if (__atomic_compare_exchange_n(&g_ep_member[ep], &expect, nm, 0, __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE))
+            m = nm;
+        else {
+            free(nm);
+            m = expect;
+        }
     }
+    uint8_t bit = (uint8_t)(1u << (fd & 7));
     if (on)
-        g_ep_member[ep][fd >> 3] |= (uint8_t)(1u << (fd & 7));
+        __atomic_fetch_or(&m[fd >> 3], bit, __ATOMIC_SEQ_CST);
     else
-        g_ep_member[ep][fd >> 3] &= (uint8_t)~(1u << (fd & 7));
+        __atomic_fetch_and(&m[fd >> 3], (uint8_t)~bit, __ATOMIC_SEQ_CST);
 }
 
 static void ep_mem_clear(int ep) {

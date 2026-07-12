@@ -154,6 +154,20 @@ fn ext_ipc() -> Group {
         port("pump-worker-dispatch", "ext_ipc/ipc_pump_worker_dispatch.c")
             .out("renderer rounds=30000 done=30000 ok=1\n")
             .only(&[Engine::LinuxAarch64, Engine::LinuxX86_64]),
+        // WRITE-readiness (EPOLLOUT|EPOLLET) drain->re-arm on a SOCK_STREAM socketpair — the Mojo
+        // PlatformChannel (SOCK_STREAM) write-watch path none of the EPOLLIN pump gates cover. A lost
+        // writable edge parks the sender with a half-written message (the browser->renderer channel write
+        // that never lands); the watchdog makes that a hard fail.
+        port("pump-epollout-rearm", "ext_ipc/ipc_pump_epollout_rearm.c")
+            .out("epollout_rearm sent=67108864 recv=67108864 ok=1\n")
+            .only(&[Engine::LinuxAarch64, Engine::LinuxX86_64]),
+        // SHARED epoll instance across threads: a waiter blocks in epoll_wait while other threads
+        // epoll_ctl-ADD already-ready fds — the exact cross-thread registration-edge case dd's W3E fast
+        // path (ep_flush + EVFILT_USER NOTE_TRIGGER wake + g_ep_prime) serves and no other gate covers.
+        // A lost cross-thread wake parks the waiter with a ready fd pending; the watchdog hard-fails it.
+        port("epoll-shared-xthread", "ext_ipc/ipc_epoll_shared_xthread.c")
+            .out("epoll_shared_xthread registered=32000 delivered=32000 ok=1\n")
+            .only(&[Engine::LinuxAarch64, Engine::LinuxX86_64]),
         // SCM_RIGHTS-passed memfd -> cross-process FUTEX wake (renderer<->GPU command-buffer wakeup): the
         // futex-shared-key gate covers only a fork-INHERITED memfd; this covers one delivered by SCM_RIGHTS
         // to an unrelated process, mmap'd at an independent VA.
