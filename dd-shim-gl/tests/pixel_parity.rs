@@ -260,6 +260,95 @@ fn full_frame_wl_egl_window_is_byte_identical() {
     }
 }
 
+/// Exercises the newly-ported uniform setters — a mat3 uniform (16-byte MSL column re-stride) + an
+/// ivec2 — which real apps (glmark2 normal matrices, GTK) use. A stub would drop them; here the full IR
+/// (incl. the uniform buffer bytes) must be byte-identical to gl_shim.c.
+#[test]
+fn full_frame_mat3_uniform_is_byte_identical() {
+    let dir = std::env::temp_dir().join(format!("dd-shim-u3-{}", std::process::id()));
+    let _ = std::fs::create_dir_all(&dir);
+    let gl_shim_so = match build_gl_shim_so(&dir) {
+        Some(s) => s,
+        None => {
+            eprintln!("[parity] SKIP mat3-uniform: gl_shim.c toolchain unavailable");
+            return;
+        }
+    };
+    let rust_so = match dd_shim_gl_so() {
+        Some(s) => s,
+        None => return,
+    };
+    let c_ir = match run_workload_against(&gl_shim_so, MAT3_UNIFORM_WORKLOAD, "u3-c") {
+        Some(b) => b,
+        None => return,
+    };
+    let rust_ir = match run_workload_against(&rust_so, MAT3_UNIFORM_WORKLOAD, "u3-rust") {
+        Some(b) => b,
+        None => return,
+    };
+    let _ = std::fs::remove_dir_all(&dir);
+    match diff_ir(&c_ir, &rust_ir) {
+        Ok(()) => eprintln!("[parity] PASS mat3-uniform: byte-identical ({} bytes)", c_ir.len()),
+        Err(e) => panic!("mat3-uniform parity FAILED:\n{e}"),
+    }
+}
+
+const MAT3_UNIFORM_WORKLOAD: &str = r#"
+extern void* eglGetDisplay(void*);
+extern unsigned eglInitialize(void*, int*, int*);
+extern unsigned eglChooseConfig(void*, const int*, void**, int, int*);
+extern void* eglCreateContext(void*, void*, void*, const int*);
+extern void* eglCreateWindowSurface(void*, void*, void*, const int*);
+extern unsigned eglMakeCurrent(void*, void*, void*, void*);
+extern unsigned eglSwapBuffers(void*, void*);
+extern unsigned glCreateShader(unsigned);
+extern void glShaderSource(unsigned, int, const char* const*, const int*);
+extern void glCompileShader(unsigned);
+extern unsigned glCreateProgram(void);
+extern void glAttachShader(unsigned, unsigned);
+extern void glLinkProgram(unsigned);
+extern void glUseProgram(unsigned);
+extern void glGenBuffers(int, unsigned*);
+extern void glBindBuffer(unsigned, unsigned);
+extern void glBufferData(unsigned, long, const void*, unsigned);
+extern int glGetAttribLocation(unsigned, const char*);
+extern void glEnableVertexAttribArray(unsigned);
+extern void glVertexAttribPointer(unsigned, int, unsigned, unsigned char, int, const void*);
+extern int glGetUniformLocation(unsigned, const char*);
+extern void glUniformMatrix3fv(int, int, unsigned char, const float*);
+extern void glUniform2iv(int, int, const int*);
+extern void glDrawArrays(unsigned, int, int);
+static const char* VS =
+  "attribute vec2 aPos;\n"
+  "uniform mat3 uNormal;\n"
+  "uniform ivec2 uSel;\n"
+  "varying vec2 vN;\n"
+  "void main(){ vN = (uNormal * vec3(aPos, 1.0)).xy + vec2(uSel); gl_Position = vec4(aPos, 0.0, 1.0); }\n";
+static const char* FS =
+  "precision mediump float;\n"
+  "varying vec2 vN;\n"
+  "void main(){ gl_FragColor = vec4(vN, 0.0, 1.0); }\n";
+int main(void) {
+    void* d = eglGetDisplay(0); eglInitialize(d, 0, 0);
+    int ca[] = { 0x3038 }; void* cfg; int n; eglChooseConfig(d, ca, &cfg, 1, &n);
+    int cta[] = { 0x3098, 2, 0x3038 }; void* ctx = eglCreateContext(d, cfg, 0, cta);
+    int win[2] = { 128, 128 }; void* s = eglCreateWindowSurface(d, cfg, win, 0); eglMakeCurrent(d, s, s, ctx);
+    unsigned vs = glCreateShader(0x8B31); glShaderSource(vs, 1, &VS, 0); glCompileShader(vs);
+    unsigned fs = glCreateShader(0x8B30); glShaderSource(fs, 1, &FS, 0); glCompileShader(fs);
+    unsigned p = glCreateProgram(); glAttachShader(p, vs); glAttachShader(p, fs); glLinkProgram(p); glUseProgram(p);
+    float v[] = { 0,0, 1,0, 0,1 }; unsigned b; glGenBuffers(1, &b); glBindBuffer(0x8892, b);
+    glBufferData(0x8892, (long)sizeof(v), v, 0x88E4);
+    int a = glGetAttribLocation(p, "aPos"); glEnableVertexAttribArray((unsigned)a);
+    glVertexAttribPointer((unsigned)a, 2, 0x1406, 0, 8, (void*)0);
+    float m3[9] = { 1,0,0, 0,1,0, 0,0,1 };
+    glUniformMatrix3fv(glGetUniformLocation(p, "uNormal"), 1, 0, m3);
+    int sel[2] = { 3, 7 };
+    glUniform2iv(glGetUniformLocation(p, "uSel"), 1, sel);
+    glDrawArrays(0x0004, 0, 3);
+    eglSwapBuffers(d, s); return 0;
+}
+"#;
+
 // glmark2's window path: wl_egl_window_create → eglCreateWindowSurface → clear + textured-less draw.
 const WL_EGL_WORKLOAD: &str = r#"
 extern void* wl_egl_window_create(void*, int, int);

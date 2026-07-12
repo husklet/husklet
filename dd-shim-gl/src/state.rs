@@ -224,6 +224,7 @@ pub struct GlState {
     pub attr: [Attr; MAXATTR],
     pub vao: Vec<Vao>,
     pub cur_vao: u32,
+    pub vao_seq: u32,
 
     pub tex_unit: [u32; 8], // texture bound per active unit (GL_TEXTURE_2D)
     pub active_unit: usize,
@@ -292,6 +293,7 @@ impl Default for GlState {
             attr: [Attr::default(); MAXATTR],
             vao: vec![Vao::default(); MAXVAO],
             cur_vao: 0,
+            vao_seq: 1,
             tex_unit: [0; 8],
             active_unit: 0,
             unpack_alignment: 4,
@@ -348,6 +350,33 @@ impl GlState {
             self.vao[v].used = true;
             self.vao[v].attrs = self.attr;
             self.vao[v].elem_buf = self.elem_buf;
+        }
+    }
+
+    /// Allocate a VAO id from the monotonic cursor (gl_shim.c `glGenVertexArrays` + `g_vao_seq`).
+    pub fn gen_vao(&mut self) -> u32 {
+        for id in self.vao_seq..MAXVAO as u32 {
+            if !self.vao[id as usize].used {
+                self.vao[id as usize] = Vao { used: true, ..Default::default() };
+                self.vao_seq = id + 1;
+                return id;
+            }
+        }
+        0
+    }
+
+    /// Load a VAO's attribute array + element buffer into the live state (gl_shim.c `vao_load`).
+    pub fn vao_load(&mut self, vao: u32) {
+        let v = vao as usize;
+        if v < MAXVAO && self.vao[v].used {
+            self.attr = self.vao[v].attrs;
+            self.elem_buf = self.vao[v].elem_buf;
+        } else {
+            self.attr = [Attr::default(); MAXATTR];
+            self.elem_buf = 0;
+            if v < MAXVAO {
+                self.vao[v].used = true;
+            }
         }
     }
 

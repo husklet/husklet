@@ -863,12 +863,119 @@ pub extern "C" fn glUniform1i(loc: i32, a: i32) {
     }
     uni_write(loc, &a.to_le_bytes());
 }
-#[no_mangle]
-pub extern "C" fn glUniformMatrix4fv(loc: i32, _count: i32, _transpose: u8, v: *const f32) {
-    if !v.is_null() {
-        uni_write(loc, &f_bytes(unsafe { core::slice::from_raw_parts(v, 16) }));
+fn i_bytes(vals: &[i32]) -> Vec<u8> {
+    vals.iter().flat_map(|v| v.to_le_bytes()).collect()
+}
+fn u_bytes(vals: &[u32]) -> Vec<u8> {
+    vals.iter().flat_map(|v| v.to_le_bytes()).collect()
+}
+
+/// Write a column-major matrix into the uniform block, re-striding 3-row columns to MSL's 16-byte
+/// stride (gl_shim.c `uni_write_matrix`): `float3` columns pad to 16, all others are tight.
+fn uni_write_matrix(loc: i32, v: &[f32], cols: usize, rows: usize) {
+    let col_stride = if rows == 3 { 16 } else { rows * 4 };
+    if col_stride == rows * 4 {
+        uni_write(loc, &f_bytes(&v[..cols * rows]));
+        return;
+    }
+    for c in 0..cols {
+        uni_write(loc + (c * col_stride) as i32, &f_bytes(&v[c * rows..c * rows + rows]));
     }
 }
+
+macro_rules! uniform_vec {
+    ($name:ident, $n:literal, f32, $bytes:path) => {
+        #[no_mangle]
+        pub extern "C" fn $name(loc: i32, count: i32, v: *const f32) {
+            if !v.is_null() && count > 0 {
+                uni_write(loc, &$bytes(unsafe { core::slice::from_raw_parts(v, $n) }));
+            }
+        }
+    };
+    ($name:ident, $n:literal, i32, $bytes:path) => {
+        #[no_mangle]
+        pub extern "C" fn $name(loc: i32, count: i32, v: *const i32) {
+            if !v.is_null() && count > 0 {
+                uni_write(loc, &$bytes(unsafe { core::slice::from_raw_parts(v, $n) }));
+            }
+        }
+    };
+    ($name:ident, $n:literal, u32, $bytes:path) => {
+        #[no_mangle]
+        pub extern "C" fn $name(loc: i32, count: i32, v: *const u32) {
+            if !v.is_null() && count > 0 {
+                uni_write(loc, &$bytes(unsafe { core::slice::from_raw_parts(v, $n) }));
+            }
+        }
+    };
+}
+macro_rules! uniform_matrix {
+    ($name:ident, $cols:literal, $rows:literal) => {
+        #[no_mangle]
+        pub extern "C" fn $name(loc: i32, count: i32, _transpose: u8, v: *const f32) {
+            if !v.is_null() && count > 0 {
+                uni_write_matrix(loc, unsafe { core::slice::from_raw_parts(v, $cols * $rows) }, $cols, $rows);
+            }
+        }
+    };
+}
+
+#[no_mangle]
+pub extern "C" fn glUniformMatrix4fv(loc: i32, count: i32, _transpose: u8, v: *const f32) {
+    if !v.is_null() && count > 0 {
+        uni_write_matrix(loc, unsafe { core::slice::from_raw_parts(v, 16) }, 4, 4);
+    }
+}
+
+// Integer scalar/vector uniforms (gl_shim.c: uni_write of the raw int bytes).
+#[no_mangle]
+pub extern "C" fn glUniform2i(loc: i32, a: i32, b: i32) {
+    uni_write(loc, &i_bytes(&[a, b]));
+}
+#[no_mangle]
+pub extern "C" fn glUniform3i(loc: i32, a: i32, b: i32, c: i32) {
+    uni_write(loc, &i_bytes(&[a, b, c]));
+}
+#[no_mangle]
+pub extern "C" fn glUniform4i(loc: i32, a: i32, b: i32, c: i32, d: i32) {
+    uni_write(loc, &i_bytes(&[a, b, c, d]));
+}
+uniform_vec!(glUniform1iv, 1, i32, i_bytes);
+uniform_vec!(glUniform2iv, 2, i32, i_bytes);
+uniform_vec!(glUniform3iv, 3, i32, i_bytes);
+uniform_vec!(glUniform4iv, 4, i32, i_bytes);
+
+// Unsigned-integer uniforms (GLES3; same byte layout).
+#[no_mangle]
+pub extern "C" fn glUniform1ui(loc: i32, a: u32) {
+    uni_write(loc, &u_bytes(&[a]));
+}
+#[no_mangle]
+pub extern "C" fn glUniform2ui(loc: i32, a: u32, b: u32) {
+    uni_write(loc, &u_bytes(&[a, b]));
+}
+#[no_mangle]
+pub extern "C" fn glUniform3ui(loc: i32, a: u32, b: u32, c: u32) {
+    uni_write(loc, &u_bytes(&[a, b, c]));
+}
+#[no_mangle]
+pub extern "C" fn glUniform4ui(loc: i32, a: u32, b: u32, c: u32, d: u32) {
+    uni_write(loc, &u_bytes(&[a, b, c, d]));
+}
+uniform_vec!(glUniform1uiv, 1, u32, u_bytes);
+uniform_vec!(glUniform2uiv, 2, u32, u_bytes);
+uniform_vec!(glUniform3uiv, 3, u32, u_bytes);
+uniform_vec!(glUniform4uiv, 4, u32, u_bytes);
+
+// Matrix uniforms (gl_shim.c uni_write_matrix — mat3 columns re-stride to 16 bytes).
+uniform_matrix!(glUniformMatrix2fv, 2, 2);
+uniform_matrix!(glUniformMatrix3fv, 3, 3);
+uniform_matrix!(glUniformMatrix2x3fv, 2, 3);
+uniform_matrix!(glUniformMatrix3x2fv, 3, 2);
+uniform_matrix!(glUniformMatrix2x4fv, 2, 4);
+uniform_matrix!(glUniformMatrix4x2fv, 4, 2);
+uniform_matrix!(glUniformMatrix3x4fv, 3, 4);
+uniform_matrix!(glUniformMatrix4x3fv, 4, 3);
 
 // ===================================================================================================
 // vertex attributes
@@ -956,6 +1063,70 @@ pub extern "C" fn glDrawElements(mode: u32, count: i32, typ: u32, indices: *cons
     s.attr_snap = s.attr;
     s.have_draw_snap = true;
     s.record_draw_call(mode, 0, count, true, typ, indices as usize);
+}
+
+// Instanced draws collapse to a single instance (gl_shim.c drops the instance count and delegates).
+#[no_mangle]
+pub extern "C" fn glDrawArraysInstanced(mode: u32, first: i32, count: i32, _instances: i32) {
+    glDrawArrays(mode, first, count);
+}
+#[no_mangle]
+pub extern "C" fn glDrawElementsInstanced(mode: u32, count: i32, typ: u32, indices: *const c_void, _instances: i32) {
+    glDrawElements(mode, count, typ, indices);
+}
+
+/// `glCheckFramebufferStatus` — the shim's offscreen FBOs are always complete (gl_shim.c returns
+/// GL_FRAMEBUFFER_COMPLETE). A stubbed `0` would abort every app's FBO setup, so this is load-bearing.
+#[no_mangle]
+pub extern "C" fn glCheckFramebufferStatus(_target: u32) -> u32 {
+    0x8CD5 // GL_FRAMEBUFFER_COMPLETE
+}
+
+// ===================================================================================================
+// vertex array objects (VAOs) — capture/restore the attribute array + element buffer per object
+// ===================================================================================================
+
+#[no_mangle]
+pub extern "C" fn glGenVertexArrays(n: i32, out: *mut u32) {
+    if out.is_null() || n < 0 {
+        return;
+    }
+    let mut s = gl();
+    for k in 0..n as usize {
+        let id = s.gen_vao();
+        unsafe { *out.add(k) = id };
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn glBindVertexArray(vao: u32) {
+    let mut s = gl();
+    s.vao_store_current();
+    if (vao as usize) >= crate::state::MAXVAO {
+        return;
+    }
+    s.cur_vao = vao;
+    s.vao_load(vao);
+}
+
+#[no_mangle]
+pub extern "C" fn glDeleteVertexArrays(n: i32, ids: *const u32) {
+    if ids.is_null() || n < 0 {
+        return;
+    }
+    let mut s = gl();
+    for k in 0..n as usize {
+        let id = unsafe { *ids.add(k) } as usize;
+        if id != 0 && id < crate::state::MAXVAO && s.vao[id].used {
+            s.vao[id].used = false;
+        }
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn glIsVertexArray(vao: u32) -> u8 {
+    let s = gl();
+    ((vao as usize) < crate::state::MAXVAO && s.vao[vao as usize].used) as u8
 }
 
 #[cfg(test)]
