@@ -58,14 +58,64 @@ static const char *cfd_str(const char *pool, uint32_t pool_len, uint32_t off) {
 // exit code, or a nonzero code on any read/validation failure. Single-shot per process.
 int ddjit_run_configfd(int fd) {
     struct ddjit_config cfg;
-    if (cfd_read_full(fd, &cfg, sizeof cfg) != 0) {
+    memset(&cfg, 0, sizeof cfg);
+
+    // Phase 1 — the FROZEN 16-byte prefix: magic@0, pool_len@4, header_len@8, abi@12. Those offsets never
+    // move, so a writer (ddcli) and reader (engine) built from different commits still agree on where the
+    // size + ABI live. This is the skew guard: instead of trusting our own sizeof for the header (which
+    // silently over/under-reads when the writer's struct differs → the old cryptic "short read of N pool
+    // bytes"), we learn the writer's exact header size and validate the ABI first.
+    uint8_t prefix[16];
+    if (cfd_read_full(fd, prefix, sizeof prefix) != 0) {
         fprintf(stderr, "dd: --configfd: short read of config header\n");
         return 78;
     }
-    if (cfg.magic != DDJIT_CONFIG_MAGIC) {
-        fprintf(stderr, "dd: --configfd: bad magic 0x%08x (want 0x%08x)\n", cfg.magic, DDJIT_CONFIG_MAGIC);
+    uint32_t magic, pool_len, header_len, abi;
+    memcpy(&magic, prefix + 0, 4);
+    memcpy(&pool_len, prefix + 4, 4);
+    memcpy(&header_len, prefix + 8, 4);
+    memcpy(&abi, prefix + 12, 4);
+    if (magic != DDJIT_CONFIG_MAGIC) {
+        fprintf(stderr, "dd: --configfd: bad magic 0x%08x (want 0x%08x)\n", magic, DDJIT_CONFIG_MAGIC);
         return 78;
     }
+    if (abi != DDJIT_CONFIG_ABI || header_len < sizeof prefix || header_len > 4096) {
+        // A real layout/ABI mismatch (not a survivable tail-append). This is the exact failure that used to
+        // masquerade as a pool short-read: the engine and ddcli were built from different commits. Say so.
+        fprintf(stderr,
+                "dd: --configfd: incompatible config ABI (writer abi=%u header_len=%u; reader abi=%u sizeof=%zu). "
+                "The engine and launcher were built from different commits — rebuild both from the same tree and "
+                "point DDJIT_DIR at that engine.\n",
+                abi, header_len, DDJIT_CONFIG_ABI, sizeof cfg);
+        return 78;
+    }
+
+    // Phase 2 — copy the prefix in, then consume EXACTLY the writer's header. Tolerate a size skew that is a
+    // pure tail-append: read min(rest, our remaining struct) into cfg (any field the writer lacks stays 0 =
+    // "unset"), and DISCARD any trailing header bytes a newer writer added so the pool starts at the right
+    // offset. header_len makes this boundary explicit — no guessing from sizeof.
+    memcpy(&cfg, prefix, sizeof prefix);
+    uint32_t rest = header_len - (uint32_t)sizeof prefix;
+    uint32_t into = 0;
+    if (sizeof cfg > sizeof prefix) {
+        uint32_t room = (uint32_t)(sizeof cfg - sizeof prefix);
+        into = rest < room ? rest : room;
+        if (into && cfd_read_full(fd, (uint8_t *)&cfg + sizeof prefix, into) != 0) {
+            fprintf(stderr, "dd: --configfd: short read of config header\n");
+            return 78;
+        }
+    }
+    for (uint32_t discard = rest - into; discard;) {
+        uint8_t sink[256];
+        uint32_t n = discard < sizeof sink ? discard : (uint32_t)sizeof sink;
+        if (cfd_read_full(fd, sink, n) != 0) {
+            fprintf(stderr, "dd: --configfd: short read of config header\n");
+            return 78;
+        }
+        discard -= n;
+    }
+    // cfg is now fully populated (cfg.pool_len == pool_len); the code below decodes it exactly as before.
+
     char *pool = NULL;
     if (cfg.pool_len) {
         pool = (char *)malloc(cfg.pool_len);

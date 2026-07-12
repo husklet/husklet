@@ -15,14 +15,29 @@
 #include <sys/types.h>
 
 #define DDJIT_CONFIG_MAGIC 0x44434647u /* 'DCFG' */
+// ABI generation for the header field LAYOUT/MEANING. Bump this ONLY when an existing field changes
+// type or meaning (never for a pure tail-append — those are absorbed by `header_len` below). The engine
+// (reader) rejects a mismatched `abi` loudly instead of silently mis-parsing.
+#define DDJIT_CONFIG_ABI 1u
 
 // The fixed header of the wire buffer. Every `*_off` is a byte offset into the string pool that
 // immediately follows this header (`buf = <ddjit_config header><pool[pool_len]>`); 0 means "unset"
 // (offset 0 of the pool is always a lone NUL so 0 reads as the empty string). Strings are NUL-
 // terminated; list fields reuse the same delimiters the engine already parses (see the field notes).
+//
+// SKEW SAFETY: `magic`(@0), `pool_len`(@4), `header_len`(@8), `abi`(@12) are a FROZEN 16-byte prefix —
+// those four offsets never move. The engine reads that prefix first, so even a writer (ddcli) and reader
+// (engine) built from DIFFERENT commits agree on where the size + ABI live. `header_len` = the exact
+// `sizeof(struct ddjit_config)` the WRITER used, making the header/pool boundary explicit: the reader
+// consumes exactly `header_len` header bytes (zero-filling any tail fields it lacks, discarding any the
+// writer added) before the pool. This is what turns a build mismatch into either a transparent success
+// (pure tail-append) or a crisp ABI error — NOT the old cryptic "short read of N pool bytes" that looked
+// like a child-spawn race.
 struct ddjit_config {
-    uint32_t magic;      // DDJIT_CONFIG_MAGIC (version/sanity)
-    uint32_t pool_len;   // bytes of string pool trailing this header
+    uint32_t magic;      // @0 DDJIT_CONFIG_MAGIC (frozen offset)
+    uint32_t pool_len;   // @4 bytes of string pool trailing this header (frozen offset)
+    uint32_t header_len; // @8 sizeof(struct ddjit_config) the writer used (frozen offset) — pool boundary
+    uint32_t abi;        // @12 DDJIT_CONFIG_ABI the writer used (frozen offset) — reader rejects a mismatch
 
     uint64_t mem_max;    // cgroup memory.max bytes (0 = unlimited)
     uint32_t pids_max;   // pids.max (0 = unlimited)
@@ -52,7 +67,9 @@ struct ddjit_config {
     uint32_t gpu_iosurface; // bool: opt-in the host-IOSurface GPU path (--gui); render-node synth + DD_IOCTL_GPU_ALLOC
     uint32_t nopcache;      // bool: per-container persistent-cache kill switch (DDJIT_NOPCACHE) — was reserved pad
     uint32_t egress_off;    // per-workspace VPN egress SOCKS5 endpoint (DD_EGRESS_SOCKS), "host:port"; "" = direct
-    uint32_t reserved0;     // explicit tail pad: keeps the struct 8-aligned with no implicit padding; future use
+    uint32_t reserved0;     // explicit tail pad: keeps the struct 8-aligned (sizeof == 128), no implicit padding.
+                            // Future fields append HERE (before/replacing this pad): header_len makes tail
+                            // growth skew-safe, so no ABI bump is needed for a pure append.
 };
 
 // `flags` bits for ddjit_spawn(): how the child is placed relative to the caller's session/terminal.

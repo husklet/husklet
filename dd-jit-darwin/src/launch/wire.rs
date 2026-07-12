@@ -5,14 +5,25 @@
 use super::LaunchConfig;
 
 pub(super) const DDJIT_CONFIG_MAGIC: u32 = 0x4443_4647; // 'DCFG'
+// ABI generation of the header field layout/meaning — mirrors DDJIT_CONFIG_ABI in ddjit_api.h. Bump ONLY
+// when an existing field changes type/meaning (a pure tail-append is skew-absorbed by `header_len`).
+pub(super) const DDJIT_CONFIG_ABI: u32 = 1;
 
 // Mirrors `struct ddjit_config` in ddjit_api.h EXACTLY (field order + types) so `#[repr(C)]` produces
-// the same 112-byte header the engine reads. Every `*_off` is a byte offset into the string pool that
+// the same 128-byte header the engine reads. Every `*_off` is a byte offset into the string pool that
 // trails this header; 0 = unset (pool[0] is a lone NUL, so 0 reads as "").
+//
+// `magic`(@0), `pool_len`(@4), `header_len`(@8), `abi`(@12) are a FROZEN 16-byte prefix (offsets never
+// move): the engine reads that prefix first and learns the writer's exact header size + ABI, so a
+// writer/reader built from different commits agree on the header/pool boundary instead of silently
+// mis-slicing (which surfaced as a bogus "short read of N pool bytes"). `header_len` = size_of this
+// struct; tail-appends stay skew-safe and need no ABI bump.
 #[repr(C)]
 struct WireHeader {
     magic: u32,
     pool_len: u32,
+    header_len: u32,
+    abi: u32,
     mem_max: u64,
     pids_max: u32,
     cpus: u32,
@@ -119,6 +130,8 @@ impl LaunchConfig {
         let header = WireHeader {
             magic: DDJIT_CONFIG_MAGIC,
             pool_len: pool.0.len() as u32,
+            header_len: std::mem::size_of::<WireHeader>() as u32,
+            abi: DDJIT_CONFIG_ABI,
             mem_max: self.mem_max,
             pids_max: self.pids_max,
             cpus: self.cpus,
@@ -166,14 +179,31 @@ mod tests {
 
     #[test]
     fn header_layout_is_stable() {
-        // Must match `sizeof(struct ddjit_config)` in ddjit_api.h: 10 u32 scalars + 15 offsets
-        // (…fsgen_off, egress_off) + gpu_iosurface/nopcache bools + 1 u32 explicit `reserved0` pad =
-        // 28 u32 + 1 u64 (mem_max) = 120 bytes, 8-aligned, no implicit padding (both sides use sizeof).
-        // Grown from 112: egress_off carries the VPN egress SOCKS endpoint (DD_EGRESS_SOCKS); the paired
-        // reserved0 keeps the struct 8-aligned. Rust `to_wire` and the C `ddjit_configfd.c` reader compile
-        // into the SAME dd-jit-darwin artifact, so this is an internal contract with no cross-binary skew.
-        assert_eq!(std::mem::size_of::<WireHeader>(), 120);
+        // Must match `sizeof(struct ddjit_config)` in ddjit_api.h: the frozen 16-byte prefix (magic,
+        // pool_len, header_len, abi) + 1 u64 (mem_max) + 8 more u32 scalars + 15 offsets (…fsgen_off,
+        // egress_off) + gpu_iosurface/nopcache bools + 1 u32 explicit `reserved0` pad = 128 bytes,
+        // 8-aligned, no implicit padding. Grown from 120: header_len/abi form the skew-safe prefix that
+        // makes the header/pool boundary explicit (so a writer/reader built from different commits no
+        // longer mis-slice into a bogus pool short-read).
+        assert_eq!(std::mem::size_of::<WireHeader>(), 128);
         assert_eq!(std::mem::align_of::<WireHeader>(), 8);
+    }
+
+    #[test]
+    fn frozen_prefix_offsets_never_move() {
+        // The engine reads magic@0, pool_len@4, header_len@8, abi@12 BEFORE it trusts any later field,
+        // so these four offsets are a permanent cross-commit contract. Lock them byte-for-byte.
+        let wire = LaunchConfig { rootfs: "/img".into(), argv: vec!["/bin/sh".into()], ..Default::default() }.to_wire();
+        assert_eq!(&wire[0..4], &DDJIT_CONFIG_MAGIC.to_ne_bytes(), "magic@0");
+        // pool_len@4 = total bytes trailing the header
+        let pool_len = u32::from_ne_bytes(wire[4..8].try_into().unwrap());
+        assert_eq!(pool_len as usize, wire.len() - std::mem::size_of::<WireHeader>(), "pool_len@4");
+        // header_len@8 = the writer's exact sizeof, i.e. the header/pool boundary
+        let header_len = u32::from_ne_bytes(wire[8..12].try_into().unwrap());
+        assert_eq!(header_len as usize, std::mem::size_of::<WireHeader>(), "header_len@8");
+        // abi@12 = the layout generation the reader validates
+        let abi = u32::from_ne_bytes(wire[12..16].try_into().unwrap());
+        assert_eq!(abi, DDJIT_CONFIG_ABI, "abi@12");
     }
 
     #[test]
