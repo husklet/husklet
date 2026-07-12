@@ -30,6 +30,11 @@ pub(super) fn linuxsys() -> Group {
         "linuxsys",
         vec![
             src("epoll", "epoll.c").oracle(), // epoll_create1/ctl/wait readiness loop
+            // a WATCHED fd whose number exceeds 1024 (Chromium registers hundreds of fds) must still get
+            // correct readiness delivery + EEXIST/ENOENT membership -- the per-instance membership bitmap
+            // spans the full guarded fd range, not just the first 1024 (a narrower bitmap OOBs and strands
+            // the fd's readiness = the load-dependent renderer node-connect stall).
+            src("epoll-highfd", "epoll_highfd.c").oracle(),
             // epoll surface: create1/create flag+size validation, EPOLLIN/OUT readiness, oneshot re-arm,
             // and the epoll_ctl EEXIST/ENOENT/EINVAL/EPERM error return values.
             src("epoll-edge", "epoll_edge.c").oracle(),

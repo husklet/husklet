@@ -73,7 +73,12 @@ static void ep_prime_if_ready(int ep, int fd, int16_t filt, void *udata) {
 static uint8_t g_ep_wake_armed[DD_NFD];          // per epoll fd: EVFILT_USER wake knote installed on its kqueue
 static pthread_mutex_t g_ep_mtx = PTHREAD_MUTEX_INITIALIZER;
 
-// per-epoll-instance registered-fd membership (lazily allocated 1024-bit bitmap indexed by the
+// per-epoll-instance registered-fd membership (lazily allocated DD_NFD-bit bitmap indexed by the
+// watched fd -- the bitmap must span the SAME index range as the fd < DD_NFD guard on ep_mem_test/
+// ep_mem_set and the sibling [DD_NFD] interest tables; a Chromium renderer registers hundreds of fds,
+// so the watched-fd number routinely exceeds 1024 and any narrower bitmap would be indexed out of
+// bounds -- a heap overflow whose corrupted/garbage membership bit spuriously returns EEXIST and drops
+// the real registration, stranding that fd's readiness (the load-dependent renderer node-connect stall).
 // watched fd). kqueue silently accepts an EV_ADD of an already-armed filter and an EV_DELETE of an
 // absent one, but Linux epoll_ctl returns EEXIST / ENOENT respectively, so track membership to serve
 // those (plus EINVAL for adding the epoll fd to itself and EPERM for a regular file / directory). Only
@@ -101,7 +106,7 @@ static void ep_mem_set(int ep, int fd, int on) {
     uint8_t *m = __atomic_load_n(&g_ep_member[ep], __ATOMIC_ACQUIRE);
     if (!m) {
         if (!on) return;
-        uint8_t *nm = calloc(1024 / 8, 1);
+        uint8_t *nm = calloc(DD_NFD / 8, 1);
         if (!nm) return;
         uint8_t *expect = NULL;
         // publish atomically; if a peer installed one first, adopt theirs and free ours (the bit RMW below
