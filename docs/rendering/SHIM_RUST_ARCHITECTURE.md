@@ -313,7 +313,7 @@ extern commands skipped) + the 3 `vk_icd*` hooks = **696 exported symbols**, no 
 `libvk_dd.so.1`. The census constants (`VK_ENTRYPOINTS`, `GENERATED_STUBS`, `DISPATCH_NAMES`) back the
 `surface_is_complete_and_large` test.
 
-**Real vs. stub (this increment).** 21 hand-written bring-up bodies: the 2 proc-addr resolvers;
+**Real vs. stub (increment 1; extended in increment 2 below).** 21 hand-written bring-up bodies: the 2 proc-addr resolvers;
 `vkEnumerateInstanceVersion` + instance/device extension/layer enumeration; `vkCreateInstance` /
 `vkDestroyInstance`; `vkEnumeratePhysicalDevices`; `vkGetPhysicalDeviceProperties`/`Features`/
 `MemoryProperties`/`QueueFamilyProperties`/`FormatProperties`; `vkCreateDevice`/`vkDestroyDevice`/
@@ -348,6 +348,50 @@ The committed `icd.json` uses `"library_path": "./libvk_dd.so"` (relative to the
 loader spec) with `"api_version": "1.3.0"` (≥ 1.1 so the loader loads the library and calls our
 `vkEnumerateInstanceVersion`). Deployment places `libvk_dd.so` next to the manifest and points
 `VK_ICD_FILENAMES`/`VK_DRIVER_FILES` at it.
+
+### Increment 2 — functional execution (Vulkan → IR → real Metal)
+
+Increment 2 makes the driver **functional**: the exported `vk*` API now translates a real workload into
+a `dd_gpu::ir` stream that executes on the host SPIR-V→Metal seam (`dd-gpu-wgpu`, proven in
+`spirv_compute.rs`/`spirv_triangle.rs`). **82 of the 693 entry points now have real bodies** (up from
+21); the other 611 remain spec-faithful `DD_SHIM_DEBUG`-traced stubs. Each functional body is
+**port-cited from MoltenVK** (the canonical Vulkan-over-Metal driver):
+
+- **Memory** (`src/memory.rs`, from `MVKBuffer`/`MVKDeviceMemory`/`MVKImage`): `vkCreateBuffer`
+  → `Cmd::CreateBuffer`; `vkAllocateMemory`/`vkBindBufferMemory`/`vkMapMemory`/`vkUnmapMemory` model
+  host-visible|coherent unified memory as a staging `Vec<u8>` that flushes to the bound buffer as an IR
+  `WriteBuffer` on unmap; a `COLOR_ATTACHMENT` `VkImage` is a host-owned render target (its IR texture
+  id is referenced but the shim never emits `CreateTexture`, matching the render-target flip-scratch
+  contract in the backend).
+- **Shaders/pipelines** (`src/pipeline.rs`, from `MVKShaderModule`/`MVKPipeline`): `vkCreateShaderModule`
+  forwards the SPIR-V **verbatim** into `Cmd::CreateShader` (zero translation); `vkCreateComputePipelines`
+  → `CreateComputePipeline`, `vkCreateGraphicsPipelines` → `CreateRenderPipeline` (vertex-input stride +
+  attributes → `VertexLayout`, `VkFormat`→vertex-format code, input-assembly topology, color target);
+  `vkCreateRenderPass`/`vkCreateFramebuffer` fold the attachment load/clear/store.
+- **Descriptors** (`src/descriptor.rs`, from `MVKDescriptorSet`): layout/pool/allocate/update record the
+  `(set,binding) → buffer` table, materialized as `Cmd::CreateBindGroup` at `vkCmdBindDescriptorSets`.
+- **Commands + submit** (`src/command.rs`, from `MVKCmdDispatch`/`MVKCmdDraw`/`MVKCmdRenderPass`/
+  `MVKQueue`): `vkCmdDispatch` → a `BeginComputePass`/`SetPipeline`/`SetBindGroup`/`Dispatch`/
+  `EndComputePass` block; `vkCmdBeginRenderPass`/`vkCmdDraw`/`vkCmdEndRenderPass` → the IR render pass +
+  `Draw`; `vkCmdBindVertexBuffers`/`vkCmdCopyBuffer`; `vkQueueSubmit` wraps the recorded encoder in
+  `Cmd::Submit`. `src/reg.rs` is the recording registry (Vulkan handle → IR id maps + the `ir_log`).
+
+**End-to-end validation on REAL Metal** (`dd-gpu-wgpu/tests/vk_compute.rs` + `vk_triangle.rs`, run via
+the mac bridge), driving ONLY the exported `vk*` API — an app creates instance/device/buffers/shaders/
+pipelines/descriptors, records `vkCmd*`, and `vkQueueSubmit`s; the test (playing the host exec service,
+as `$DD_GPU_EXEC` does in production) drains the shim-produced IR and replays it on the `WgpuBackend`:
+
+- **Compute** — a SPIR-V `c[i]=a[i]+b[i]` vecadd (GLSL 450 → SPIR-V via naga, glslang's step): 9 IR
+  commands, runs on the live Metal GPU, `c == a+b` (spot `c[3]=513.5`). PASS.
+- **Triangle** — a SPIR-V vertex+fragment pipeline: 6 IR commands, rasterizes a green triangle,
+  `center(32,32)=[0,255,0,255]` over the gray clear, 722 green pixels. PASS.
+
+To keep the Linux guest `cargo build -p dd-shim-vk` offline-buildable, dd-shim-vk keeps its tiny
+always-cached dep set (`dd-shim-common`/`dd-gpu`/`ash`); the Metal validations live in `dd-gpu-wgpu`
+(which dev-depends on dd-shim-vk under its existing macOS-only target block, next to the `spirv_*`
+seam they replay). The `-Wl,-soname` cdylib link-arg is Linux-gated (macOS `ld` rejects it; the ICD
+only ships on the guest, and the macOS build exists solely to run the validations). The default build,
+`dd-gpu`'s tests, and `dd-shim-gl`/`-cuda`/`-cudart` are all unaffected.
 
 ## Retiring `gl_shim.c` (the incremental cutover)
 
