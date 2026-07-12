@@ -1313,17 +1313,30 @@ pub fn run_executor(sock_path: String) {
 /// `DD_GPU_BACKEND=wgpu` host executor. Renders each guest frame's IR through `dd_gpu_wgpu::WgpuBackend`
 /// straight into the guest's zero-copy IOSurface, which the compositor's `blit_fenced` then reads unchanged.
 ///
-/// Device sharing (the zero-copy contract, proven by dd-gpu-wgpu's `iosurface_interop` example): wgpu owns
-/// its Metal device; we extract its raw `MTLDevice` (`raw_mtl_device`), wrap the guest IOSurface as an
-/// `MTLTexture` on THAT device (so producer and consumer share one device), and bridge it back into a
-/// `wgpu::Texture` (`wrap_iosurface_texture`) — the render lands in the IOSurface's pages with no copy or
-/// readback. Each connection gets its own `WgpuBackend` (fresh device), isolating guest id namespaces, the
-/// same way the Metal path builds one `MetalBackend` per connection.
+/// Device sharing (the zero-copy AND tear-free contract): the wgpu `Device`/`Queue` are built OVER dd's
+/// process-shared `MTLDevice` (`crate::metal::shared_device()`) via wgpu-hal `device_from_raw`/
+/// `queue_from_raw` (`WgpuBackend::from_shared_mtl_device`). Because the wgpu render queue and the
+/// compositor's blit queue now live on that ONE device, they synchronize with the SAME cross-queue
+/// `MTLEvent`s the bespoke Metal replay uses — no extra copy, no readback, and no blocking poll.
 ///
-/// Note vs. the Metal path: the compositor blit is currently UNFENCED here (wgpu exposes no cross-queue
-/// `MTLEvent` seam), so we `poll_wait` for GPU completion before acking the guest — correct, if less
-/// pipelined than the Metal path's async cross-queue fence. Wiring an `MTLSharedEvent` through wgpu-hal is
-/// the follow-up for full parity.
+/// Tear-free async present (parity with the Metal path's `render_ev`→`present_ev` handoff): per frame we
+/// `fence_begin_render(surface_id)` to reserve this render's generation, encode `encodeWaitForEvent`
+/// (present_ev ≥ gen−1) on the wgpu render queue BEFORE the render (so it never overwrites a surface the
+/// compositor still reads), and `encodeSignalEvent`(render_ev = gen) on that SAME queue AFTER the render (so
+/// the compositor's `blit_fenced`, which WAITs on render_ev, never samples a half-rendered surface). Both
+/// are separate command buffers committed around wgpu's own render submit on the one render queue: Metal
+/// serializes command buffers committed to a single queue, so wait → render → signal execute in order — the
+/// exact ordering the Metal path gets by encoding the wait/signal INTO the render command buffer. The guest
+/// is then acked immediately (no `poll_wait`), so it builds frame N+1 while N renders. Fences are keyed by
+/// IOSurface id, so multiple guest surfaces on one connection are each fenced independently.
+///
+/// The fence is on ONLY under `crate::metal::async_on()` (default). `DD_RENDER_NOASYNC=1` restores the old
+/// synchronous baseline: no fence, `poll_wait` for GPU completion before the ack.
+///
+/// Each connection gets its own `WgpuBackend`, isolating guest id namespaces, the same way the Metal path
+/// builds one `MetalBackend` per connection. (Live tear-freeness is only observable on a real display; this
+/// mirrors the Metal path's proven cross-queue `MTLEvent` fence, validated headless by the golden replay's
+/// pixel identity — the fence changes ordering, not pixels.)
 fn run_executor_wgpu(sock_path: String) {
     use std::io::{Read, Write};
     use std::os::unix::net::{UnixListener, UnixStream};
@@ -1337,38 +1350,49 @@ fn run_executor_wgpu(sock_path: String) {
     };
     eprintln!("dd-gpu executor[wgpu]: listening on {sock_path}");
 
+    // Reserved present-target id the guest streams its final color attachment as (see the Metal path's
+    // `set_render_target(1, ...)`); the executor re-points it at the current frame's IOSurface each frame.
+    const WGPU_PRESENT_ID: u32 = 1;
+
     fn handle(s: &mut UnixStream) -> std::io::Result<()> {
-        // One wgpu backend (its own Metal device) per connection — isolates guest id namespaces.
-        let mut be = match dd_gpu_wgpu::WgpuBackend::new() {
+        // Build the wgpu backend OVER dd's process-shared MTLDevice, so the wgpu render queue and the
+        // compositor's blit queue share one device and can be fenced with the SAME cross-queue MTLEvents
+        // (the tear-free contract — see the fn doc). One backend per connection isolates guest id namespaces.
+        let Some(shared) = crate::metal::shared_device() else {
+            eprintln!("dd-gpu executor[wgpu]: no shared Metal device");
+            return Ok(());
+        };
+        let dev_ptr = Retained::as_ptr(&shared) as *mut std::ffi::c_void;
+        let mut be = match unsafe { dd_gpu_wgpu::WgpuBackend::from_shared_mtl_device(dev_ptr) } {
             Ok(b) => b,
             Err(e) => {
-                eprintln!("dd-gpu executor[wgpu]: no wgpu Metal device: {e:?}");
+                eprintln!("dd-gpu executor[wgpu]: wgpu over shared MTLDevice failed: {e:?}");
                 return Ok(());
             }
         };
-        // Wrap the guest IOSurface on wgpu's OWN device: retain wgpu's raw MTLDevice and build a MetalCtx
-        // around it (`texture_from_iosurface` uses only the device; a throwaway queue satisfies the ctor).
-        let raw_dev = be.raw_mtl_device();
-        if raw_dev.is_null() {
-            eprintln!("dd-gpu executor[wgpu]: null MTLDevice from wgpu");
-            return Ok(());
-        }
-        let device: Retained<ProtocolObject<dyn MTLDevice>> =
-            match unsafe { Retained::retain(raw_dev as *mut ProtocolObject<dyn MTLDevice>) } {
-                Some(d) => d,
+        // objc2 handle on the EXACT MTLCommandQueue wgpu submits render on — the queue we encode the
+        // cross-queue fence's wait/signal on (Metal orders command buffers committed to one queue).
+        let raw_q = be.raw_mtl_queue();
+        let render_queue: Retained<ProtocolObject<dyn MTLCommandQueue>> =
+            match unsafe { Retained::retain(raw_q as *mut ProtocolObject<dyn MTLCommandQueue>) } {
+                Some(q) => q,
                 None => {
-                    eprintln!("dd-gpu executor[wgpu]: retain MTLDevice failed");
+                    eprintln!("dd-gpu executor[wgpu]: null wgpu render queue");
                     return Ok(());
                 }
             };
-        let Some(queue) = device.newCommandQueue() else {
+        // Wrap the guest IOSurface as an MTLTexture on the SAME shared device wgpu now runs on (so the
+        // wgpu-hal wrap is valid). `texture_from_iosurface` uses only the device; a throwaway queue satisfies
+        // the ctor.
+        let Some(ctx_queue) = shared.newCommandQueue() else {
             eprintln!("dd-gpu executor[wgpu]: newCommandQueue failed");
             return Ok(());
         };
-        let ctx = MetalCtx::from_device(device, queue);
+        let ctx = MetalCtx::from_device(shared.clone(), ctx_queue);
 
-        // rt cache: guest IOSurface id -> retained MTLTexture on wgpu's device. The Retained keeps the
+        // rt cache: guest IOSurface id -> retained MTLTexture on the shared device. The Retained keeps the
         // IOSurface's backing alive across frames; the wgpu wrap is (cheaply) re-derived from it per frame.
+        // Keyed per surface id so multiple guest surfaces on one connection each stay resolved.
         let mut rt_cache: HashMap<u32, Retained<ProtocolObject<dyn MTLTexture>>> = HashMap::new();
         loop {
             let mut hdr = [0u8; 16];
@@ -1400,10 +1424,12 @@ fn run_executor_wgpu(sock_path: String) {
                     rt_cache.insert(id, tex);
                 }
                 let tex = rt_cache.get(&id).unwrap();
-                // Bridge the IOSurface-backed MTLTexture into a wgpu texture and register it as present
-                // target 1 (the reserved present id the guest streams as its final color attachment).
+                // Bridge the IOSurface-backed MTLTexture into a wgpu texture and register it as the reserved
+                // present target (the guest streams its final color attachment as this id). Re-pointed per
+                // frame at the current surface; the wgpu wrap cache keys by the raw MTLTexture pointer, so a
+                // different surface id resolves to its own persistent wrap.
                 be.wrap_iosurface_texture(
-                    1,
+                    WGPU_PRESENT_ID,
                     Retained::as_ptr(tex) as *mut std::ffi::c_void,
                     w,
                     h,
@@ -1411,9 +1437,39 @@ fn run_executor_wgpu(sock_path: String) {
                 );
             }
 
+            // Tear-free async present: reserve this surface's render generation and make the wgpu render
+            // WAIT for the compositor's previous blit (present_ev >= gen-1) before it starts — encoded on the
+            // render queue BEFORE wgpu's own render submit, so single-queue ordering gates the render. Fence
+            // is keyed by IOSurface `id`, so distinct guest surfaces are fenced independently.
+            let fence = if crate::metal::async_on() {
+                crate::metal::fence_begin_render(id)
+            } else {
+                None
+            };
+            if let Some((_render_ev, present_ev, _gen, wait_present)) = &fence {
+                if let Some(cmd) = render_queue.commandBuffer() {
+                    cmd.encodeWaitForEvent_value(present_ev, *wait_present);
+                    cmd.commit();
+                }
+            }
+
             let rendered = match dd_gpu::replay::replay_stream(&mut be, &bytes) {
                 Ok(_) => {
-                    be.poll_wait(); // unfenced compositor blit reads a finished IOSurface, not a torn one
+                    match &fence {
+                        // Async (default), parity with the Metal path: SIGNAL render-complete for this gen on
+                        // the render queue (after wgpu's render command buffers, ordered by the single queue).
+                        // The compositor's `blit_fenced` WAITs on this same MTLEvent, so it never samples a
+                        // torn surface — and we ack immediately (no poll), overlapping the guest's next frame.
+                        Some((render_ev, _present_ev, gen, _wait)) => {
+                            if let Some(cmd) = render_queue.commandBuffer() {
+                                cmd.encodeSignalEvent_value(render_ev, *gen);
+                                cmd.commit();
+                            }
+                        }
+                        // NOASYNC baseline (DD_RENDER_NOASYNC): no fence — block on GPU completion before the
+                        // ack so the unfenced compositor blit reads a finished IOSurface, not a torn one.
+                        None => be.poll_wait(),
+                    }
                     if exec_debug() {
                         // L3 cache regression guard: after warmup a steady-state frame must report
                         // (shader=0, pipeline=0, bind_group=0) — i.e. it compiles/allocates nothing.

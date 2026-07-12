@@ -397,6 +397,13 @@ pub struct WgpuBackend {
     /// re-registering the same surface as the present target each frame reuses the hal texture instead of
     /// rebuilding it (`texture_from_hal` per frame).
     iosurface_wraps: HashMap<usize, wgpu::Texture>,
+    /// Raw `*mut MTLCommandQueue` the wgpu render work is submitted on, as a `usize` (a raw ptr isn't
+    /// `Send`; used only on the executor thread that built the backend). Non-zero ONLY for a backend built
+    /// via [`WgpuBackend::from_shared_mtl_device`] — the live tear-free present path encodes the cross-queue
+    /// `MTLEvent` render/present fence on THIS exact queue so its wait/signal serialize (Metal orders
+    /// command buffers committed to one queue) against wgpu's render command buffers. `0` = own-device
+    /// backend (offscreen `new()`), which has no shared compositor queue to fence against.
+    present_queue_raw: usize,
 
     // Prof counters — count only ACTUAL host work (cache misses). The steady-state regression guard is that
     // they read 0 after warmup. Read + reset by the executor when its debug/prof output is enabled.
@@ -498,10 +505,88 @@ impl WgpuBackend {
             bind_group_cache: HashMap::new(),
             res_epoch: 0,
             iosurface_wraps: HashMap::new(),
+            present_queue_raw: 0,
             shader_compiles: 0,
             pipeline_compiles: 0,
             bind_group_builds: 0,
         }
+    }
+
+    /// Build a wgpu backend whose `Device`/`Queue` run OVER an existing, externally-owned `MTLDevice` —
+    /// dd-display's process-shared device (`crate::metal::shared_device()` on the dd side). This is what
+    /// makes the live present path tear-free WITHOUT a blocking poll: because the wgpu render queue and
+    /// dd-display's compositor blit queue then live on the SAME `MTLDevice`, one `MTLEvent` fences
+    /// render→blit across the two queues (the executor signals render-complete, the compositor's
+    /// `blit_fenced` waits on it), exactly mirroring the bespoke Metal replay's `render_ev`→`present_ev`
+    /// handoff. An own-device backend ([`WgpuBackend::new`]) can't do this: `MTLEvent`s are device-scoped,
+    /// so a fence is only meaningful when producer and consumer share the device object.
+    ///
+    /// This is the inverse of the `iosurface_interop` example (which extracts wgpu's OWN raw `MTLDevice`);
+    /// here we inject dd's device INTO wgpu via wgpu-hal `device_from_raw` + `queue_from_raw`, wrapped back
+    /// into a `wgpu::Device`/`Queue` through `Adapter::create_device_from_hal`.
+    ///
+    /// # Safety
+    /// `raw_device` must be a valid, live `MTLDevice` (an objc2 `ProtocolObject<dyn MTLDevice>` pointer).
+    pub unsafe fn from_shared_mtl_device(raw_device: *mut std::ffi::c_void) -> Result<Self> {
+        use metal::foreign_types::{ForeignType as _, ForeignTypeRef as _};
+        if raw_device.is_null() {
+            return Err(GpuError::Unsupported("null MTLDevice"));
+        }
+        // metal-rs view of the shared device (`to_owned` = retain +1 → an owned handle wgpu-hal releases on
+        // drop; dd-display keeps its own ref, so the device outlives both).
+        let metal_device: metal::Device = metal::DeviceRef::from_ptr(raw_device.cast()).to_owned();
+        // The single command queue the wgpu render work runs on. We keep its raw pointer (below) so the
+        // executor can encode the cross-queue fence's wait/signal on the SAME queue wgpu submits render on.
+        let raw_queue: metal::CommandQueue = metal_device.new_command_queue();
+        let present_queue_raw = raw_queue.as_ptr() as usize;
+
+        let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
+            backends: wgpu::Backends::METAL,
+            ..Default::default()
+        });
+        // A normal adapter over the system-default GPU. On Apple Silicon this IS the same GPU as
+        // `raw_device`, so its reported limits/features are valid for the device we actually run on. Its
+        // device object is NOT used for submission — the `OpenDevice` below binds the wgpu `Device` to
+        // `raw_device` itself (wgpu-core's `Device::new` uses the supplied hal device, the adapter only for
+        // capability/limit queries).
+        let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
+            power_preference: wgpu::PowerPreference::HighPerformance,
+            force_fallback_adapter: false,
+            compatible_surface: None,
+        }))
+        .ok_or(GpuError::Unsupported("no Metal adapter"))?;
+
+        let features = wgpu::Features::empty();
+        let hal_device = wgpu_hal::metal::Device::device_from_raw(metal_device, features);
+        // timestamp_period 1.0 = Apple Silicon (matches wgpu-hal's own `Adapter::open`); we don't use GPU
+        // timestamps, so the exact value is immaterial.
+        let hal_queue = wgpu_hal::metal::Queue::queue_from_raw(raw_queue, 1.0);
+        let open = wgpu_hal::OpenDevice { device: hal_device, queue: hal_queue };
+        let (device, queue) = adapter
+            .create_device_from_hal::<wgpu_hal::api::Metal>(
+                open,
+                &wgpu::DeviceDescriptor {
+                    label: Some("dd-gpu-wgpu-shared"),
+                    required_features: features,
+                    required_limits: wgpu::Limits::default(),
+                    memory_hints: wgpu::MemoryHints::Performance,
+                },
+                None,
+            )
+            .map_err(|_| GpuError::Unsupported("create_device_from_hal"))?;
+
+        let mut be = Self::from_shared(device, queue);
+        be.present_queue_raw = present_queue_raw;
+        Ok(be)
+    }
+
+    /// Raw `*mut MTLCommandQueue` the wgpu render work is submitted on — the queue [`run_executor_wgpu`]
+    /// encodes the cross-queue tearing fence on. Non-null ONLY for a [`from_shared_mtl_device`] backend
+    /// (null for the offscreen own-device `new()` path, which has no compositor queue to fence against).
+    ///
+    /// [`from_shared_mtl_device`]: WgpuBackend::from_shared_mtl_device
+    pub fn raw_mtl_queue(&self) -> *mut std::ffi::c_void {
+        self.present_queue_raw as *mut std::ffi::c_void
     }
 
     fn make_clear_pipeline(
