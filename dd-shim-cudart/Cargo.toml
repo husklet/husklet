@@ -1,0 +1,43 @@
+# dd-shim-cudart — the guest CUDA RUNTIME API front-end, as a first-class PRODUCT crate.
+#
+# cudart is the UPPER edge a CUDA app (or a framework like PyTorch) actually links against
+# (`-lcudart`). It is THIN over the driver for the stateful surface (malloc / memcpy / memset /
+# streams / events / device query) and owns the compiler-emitted registration glue
+# (__cudaRegisterFatBinary/Function/Var + the <<<grid,block>>> call-config stack), a cudart-side
+# thread-local last-error cell, and the CUresult -> cudaError_t map. This is the exact analogue of
+# dd's C oracle `dd-gpu/cuda/cudart_shim.c` (layered on `cuda_shim.c`).
+#
+# Rather than re-derive the compute mapping, this crate LAYERS ON `dd-shim-cuda` (the Rust CUDA
+# Driver-API shim) — the same way the C cudart shim `DT_NEEDED`s libcuda — so every runtime call
+# forwards to the driver shim's real `cu*` bodies, which lower to the shared `dd-gpu` IR and EXECUTE
+# it in-process on the embedded `SoftwareBackend` (CPU PTX interpreter). A runtime vector-add thus
+# runs end-to-end with NO GPU, reading back numerically-correct results — identical to `cudart_shim.c`.
+#
+# Deployed as `libcudart.so.1`. The exported `cuda*`/`__cuda*` SURFACE is code-generated from a
+# committed manifest (see `build.rs` + `registry/`, extracted from `cudart_shim.c`). Out of the
+# workspace default-members (a guest shim, cross-compiled), same as dd-shim-cuda/-gl.
+[package]
+name = "dd-shim-cudart"
+version = "0.1.0"
+edition = "2021"
+description = "Guest CUDA Runtime API shim producing libcudart.so.1: manifest-generated cuda*/__cuda* surface layered on dd-shim-cuda's driver bodies + shared dd-gpu IR execution."
+license = "MIT"
+
+[lib]
+name = "dd_shim_cudart"
+# cdylib = the deployed libcudart.so.1; rlib so tests / other Rust can link it.
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+# Transport + shared IR re-export (the anti-drift contract): a shim encodes with the SAME
+# `dd_gpu::ir::Cmd` the host decodes with `Cmd::decode`.
+dd-shim-common = { path = "../dd-shim-common" }
+# The CUDA->dd-gpu-IR translation (`cuda::CudaContext`) + PTX front-end (`ptx::compile`) + the embedded
+# CPU executor (`software::SoftwareBackend`, driven via `replay::replay_stream`). dd-shim-cudart is a
+# PEER of dd-shim-cuda over the SAME dd-gpu core (the runtime API maps to the same IR — reuse, don't
+# redefine), NOT a static consumer of dd-shim-cuda's cdylib: that keeps libcudart.so.1's SONAME + export
+# surface clean, exactly as the C cudart shim is its own .so DT_NEEDEDing libcuda at runtime.
+dd-gpu = { path = "../dd-gpu" }
+# NB: an injected shim must never unwind a Rust panic across the C-ABI boundary into a C caller.
+# `extern "C"` functions abort-on-unwind by default (Rust >= 1.81), so a panic aborts rather than
+# corrupting the C caller; no per-crate `panic = "abort"` is needed.

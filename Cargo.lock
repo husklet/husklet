@@ -658,6 +658,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "dd-shim-cudart"
+version = "0.1.0"
+dependencies = [
+ "dd-gpu",
+ "dd-shim-common",
+]
+
+[[package]]
 name = "dd-shim-gl"
 version = "0.1.0"
 dependencies = [

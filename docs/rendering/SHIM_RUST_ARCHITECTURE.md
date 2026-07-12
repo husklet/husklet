@@ -16,9 +16,10 @@ shared Rust type both sides compile against.
 dd-gpu              host-side: the IR (ir::Cmd), wire codec, GpuBackend trait, Metal/software executors
   └── dd-shim-common   guest-side foundation (rlib): re-exports dd-gpu's IR as the shared contract +
         │              owns the host-exec transport, completion wake, and GPU-memory registration
-        ├── dd-shim-gl    GLES2/EGL front-end (cdylib) → libEGL.so.1 / libGLESv2.so.2
-        ├── dd-shim-vk    (future) Vulkan ICD (cdylib) → libvulkan_dd.so / an ICD manifest
-        └── dd-shim-cuda  (scaffold) CUDA Driver API driver (cdylib) → libcuda.so.1
+        ├── dd-shim-gl     GLES2/EGL front-end (cdylib) → libEGL.so.1 / libGLESv2.so.2
+        ├── dd-shim-vk     (future) Vulkan ICD (cdylib) → libvulkan_dd.so / an ICD manifest
+        ├── dd-shim-cuda   CUDA Driver API driver (cdylib) → libcuda.so.1
+        └── dd-shim-cudart CUDA Runtime API library (cdylib) → libcudart.so.1 (peer over dd-gpu)
 ```
 
 `dd-shim-common` is the only-place-the-wire-lives layer lifted out of `gl_shim.c`:
@@ -190,6 +191,75 @@ parity with `dd-gpu/cuda/cuda_shim.c`, and the compute core executes PTX end-to-
   end-to-end vector-add through the exported API, a memset→DtoD→DtoH + `cuMemGetInfo`/`AddressRange`
   functional check, context management (push/pop/limits/primary-ctx), and function/occupancy/event
   queries. A default `cargo build` does not compile the crate, and `dd-gpu`'s 70 tests stay green.
+
+## `dd-shim-cudart` — the CUDA Runtime API library
+
+Real CUDA apps and frameworks (PyTorch, TensorFlow) link the **Runtime** API (`libcudart`, the
+`cuda*` / `__cuda*` surface), not the driver. `dd-shim-cudart` is the fourth library, built exactly
+like the others — a registry-generated C-ABI surface over `dd-shim-common` — and deployed as
+`libcudart.so.1`. It is **surface-complete**: every one of its **49** entry points has a real
+hand-written body at parity with dd's C oracle `dd-gpu/cuda/cudart_shim.c`; `GENERATED_STUBS == 0`.
+
+- **Crate + topology.** `dd-shim-cudart` (`crate-type = ["cdylib","rlib"]`), out of `default-members`
+  like the other shims. The C oracle layers cudart on libcuda via a runtime `DT_NEEDED`; the Rust crate
+  instead is a **PEER of `dd-shim-cuda` over the same `dd-gpu` core** — it depends on `dd-shim-common` +
+  `dd-gpu` (the CUDA→IR mapping `cuda::CudaContext`, the PTX front-end `ptx::compile`, and the embedded
+  `software::SoftwareBackend` executor), NOT on `dd-shim-cuda`. That keeps `libcudart.so.1`'s SONAME and
+  export table clean (static-linking the `dd-shim-cuda` rlib would leak all 132 `cu*` symbols into
+  libcudart's `.dynsym` and drag in that crate's `-cdylib-link-arg` SONAME). The runtime maps to the
+  same IR — reuse, don't redefine.
+- **Surface-completeness, code-generated.** `registry/cudart.manifest` is the extracted base surface of
+  `cudart_shim.c` (37 entry points, via `registry/extract_cudart_manifest.py` — the runtime analogue of
+  the driver extractor, matching the several runtime return types `cudaError_t`/`const char*`/`void`/
+  `void**`/`unsigned int`) plus a hand-curated tail of the standard driver-backed runtime surface
+  (`cudaMallocManaged`, `cudaMallocHost`/`cudaHostAlloc`/`cudaFreeHost`, `cudaHostGetDevicePointer`,
+  `cudaDeviceReset`, `cudaThreadSynchronize`, `cudaStreamWaitEvent`/`cudaStreamQuery`, `cudaEventQuery`,
+  `cudaFuncGetAttributes`, `cudaDeviceGetPCIBusId` — 12 more) so the shipped library is genuinely
+  complete, not a minimal subset. `build.rs` maps each C type to its Rust C-ABI type and emits a stub
+  for anything not in `IMPLEMENTED`; the whole surface is implemented, so it emits none. The census
+  (`CUDART_ENTRYPOINTS`) backs a completeness test.
+- **What cudart owns (vs the driver).** The `CUresult → cudaError_t` map (`result::map_err`, byte-for-
+  byte `cudart_shim.c`'s switch — cudart returns a *different* enum), a **thread-local last-error cell**
+  (`cudaGetLastError`/`PeekAtLastError` drain/peek it), the **nvcc registration glue**
+  (`__cudaRegisterFatBinary/Function/Var` + `__cuda{Push,Pop}CallConfiguration`, a thread-local
+  `<<<grid,block,shmem,stream>>>` stack), and a clean-room Rust port of the **fatbin → PTX walker**
+  (`src/fatbin.rs`, a faithful port of `dd-gpu/cuda/fatbin.h`: extracts the first uncompressed PTX entry
+  from the `__fatBinC_Wrapper_t` container; SASS-only / compressed / malformed → `None` →
+  `cudaErrorInvalidKernelImage`, never a crash).
+- **Real vs stub — fully ported, driver-parity bodies.** `src/state.rs` owns the shared compute core
+  (`CudaContext` + `FrameBuilder` + embedded `SoftwareBackend`, with `flush()` = `replay_stream` into
+  the backend), exactly as `dd-shim-cuda`'s `state.rs`. `src/runtime.rs` wires the surface to it:
+
+  | Family | Entry points | Backing (parity with `cudart_shim.c`) |
+  | --- | --- | --- |
+  | device | `cudaGetDeviceCount`, `cuda{Set,Get}Device`, `cudaGetDeviceProperties[_v2]`, `cudaDeviceSynchronize`, `cudaDeviceReset`, `cudaThreadSynchronize`, `cudaDeviceGetPCIBusId` | one simulated device; `cudaDeviceProp` filled from `CudaDeviceDesc` + modeled constants; current-device TLS |
+  | error / version | `cudaGet{Last,PeekAt}Error`, `cudaGetError{Name,String}`, `cuda{Driver,Runtime}GetVersion` | thread-local last-error cell; string tables + 12.2 versions |
+  | memory | `cudaMalloc`, `cudaMallocManaged`, `cudaFree`, `cudaMallocHost`/`cudaHostAlloc`/`cudaFreeHost`, `cudaHostGetDevicePointer`, `cudaMemGetInfo` | alloc → IR `CreateBuffer` (+ alloc registry for `MemGetInfo`); host allocs return real host memory |
+  | copy / fill | `cudaMemcpy[Async]` (H2D/D2H/D2D/H2H/Default), `cudaMemset[Async]` | H2D/fill → `WriteBuffer`; D2H → backend readback; D2D → readback-then-write; bad kind → `InvalidMemcpyDirection` |
+  | stream / event | `cudaStreamCreate[WithFlags]`, `cudaStream{Destroy,Synchronize,WaitEvent,Query}`, `cudaEvent{Create[WithFlags],Destroy,Record,Synchronize,Query,ElapsedTime}` | synchronous-executor tokens; events timestamp with the monotonic clock so `ElapsedTime` is truthful |
+  | launch + attrs | `cudaLaunchKernel`, `cudaFuncGetAttributes` | host-stub → registered fatbin → walk→PTX→`module_load` → `module_get_function` → `CudaContext::launch` (compute pipeline + dispatch); `FuncGetAttributes` = modeled defaults |
+  | nvcc glue | `__cudaRegisterFatBinary[End]`, `__cudaUnregisterFatBinary`, `__cudaRegisterFunction`, `__cudaRegisterVar`, `__cuda{Push,Pop}CallConfiguration` | fatbin/function registries + the `<<<>>>` call-config stack |
+
+  Two items are honest modeled-value bodies rather than device queries (the dd-gpu model does not track
+  them): `cudaFuncGetAttributes` returns the driver-parity constants (maxThreadsPerBlock 1024, numRegs
+  32, …), and `__cudaRegisterVar` is a no-op (dd's PTX model parses kernel entries, not `.global`
+  variables) — matching the oracle. `cudaDeviceGetAttribute` is intentionally **not** shipped: its
+  `cudaDeviceAttr` enum numbering differs from the driver's `CUdevice_attribute`, so a clean forward is
+  not possible and a subtly-wrong body would be worse than its absence (the oracle omits it too).
+- **Execution is real, in-process.** cudart lowers to the same IR and executes it on the embedded
+  `SoftwareBackend`, so a runtime vecadd through the full nvcc path (register fatbin → `cudaMalloc` →
+  `cudaMemcpy` H2D → `__cudaPushCallConfiguration` → host stub → `cudaLaunchKernel` → `cudaMemcpy` D2H)
+  reads back numerically-correct `c[i] = a[i] + b[i]` with no GPU. On a real host the same bytes ship
+  over `$DD_GPU_EXEC` to the host Metal executor.
+- **Validation.** `cargo build -p dd-shim-cudart --release` produces a valid aarch64 ELF with
+  `SONAME libcudart.so.1` exporting **exactly** the 49 `cuda*`/`__cuda*` symbols (no duplicates, no
+  foreign `cu*` — `--exclude-libs`-free because it does not static-link the driver). Unit tests cover
+  the completeness census (49 real, 0 stubs), a tier-0 device+memory round-trip with last-error
+  behavior, an anti-drift round-trip (`cudaMalloc`/`cudaMemcpy` H2D IR → the host `dd_gpu::ir` decoder),
+  the end-to-end fatbin vecadd, clean rejection of a SASS-only fatbin + an unregistered host function,
+  and stream/event queries. A plain C `tests/compute.c` `dlopen`s the deployed `libcudart.so.1` and
+  drives the full runtime vecadd (proving the ABI + fatbin path). A default `cargo build` does not
+  compile the crate, `dd-gpu`'s 70 tests and `dd-shim-cuda`'s stay green, and `dd-shim-gl` is untouched.
 
 ## Retiring `gl_shim.c` (the incremental cutover)
 
