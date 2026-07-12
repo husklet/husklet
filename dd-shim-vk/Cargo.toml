@@ -44,3 +44,8 @@ ash = { version = "0.38", default-features = false }
 # NB: an injected ICD must never unwind a Rust panic across the C-ABI boundary into the loader.
 # `extern "C"` functions abort-on-unwind by default (Rust >= 1.81), so a panic aborts rather than
 # corrupting the loader; no per-crate `panic = "abort"` is needed.
+#
+# The end-to-end Vulkan-on-real-Metal validations live in `dd-gpu-wgpu/tests/vk_compute.rs` +
+# `vk_triangle.rs` (next to the `spirv_*` host seam they replay on), NOT here — so this crate keeps a
+# tiny, always-cached dependency set (dd-shim-common + dd-gpu + ash) and `cargo build -p dd-shim-vk`
+# stays offline-buildable on the Linux guest host. dd-gpu-wgpu dev-depends on this crate to drive them.

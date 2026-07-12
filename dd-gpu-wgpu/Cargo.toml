@@ -47,6 +47,12 @@ pollster = "0.4"
 objc2 = "0.5"
 objc2-foundation = { version = "0.2", features = ["NSString", "NSDictionary", "NSValue"] }
 objc2-metal = { version = "0.2", features = ["MTLDevice", "MTLTexture", "MTLPixelFormat", "MTLResource", "MTLTypes"] }
+# The guest Vulkan ICD (dd-shim-vk) + ash, so `tests/vk_compute.rs` / `tests/vk_triangle.rs` can drive
+# the exported `vk*` API and replay the produced dd-gpu IR on this crate's WgpuBackend (real Metal) —
+# the Vulkan analogue of `spirv_compute.rs`/`spirv_triangle.rs`. dev-dep only (no lib impact); both are
+# already in Cargo.lock, and dd-shim-vk's own deps (dd-shim-common/dd-gpu/ash) are all cached.
+dd-shim-vk = { path = "../dd-shim-vk" }
+ash = { version = "0.38", default-features = false }
 
 [[example]]
 name = "verify_ir"

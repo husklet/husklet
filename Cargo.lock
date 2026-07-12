@@ -591,7 +591,9 @@ dependencies = [
 name = "dd-gpu-wgpu"
 version = "0.1.0"
 dependencies = [
+ "ash",
  "dd-gpu",
+ "dd-shim-vk",
  "metal",
  "naga",
  "objc2",

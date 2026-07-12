@@ -17,6 +17,21 @@ pub type VkCommandBuffer = *mut c_void;
 
 // ---- non-dispatchable handles (opaque u64) -------------------------------------------------------
 pub type VkCommandPool = u64;
+pub type VkBuffer = u64;
+pub type VkDeviceMemory = u64;
+pub type VkImage = u64;
+pub type VkImageView = u64;
+pub type VkShaderModule = u64;
+pub type VkPipeline = u64;
+pub type VkPipelineLayout = u64;
+pub type VkRenderPass = u64;
+pub type VkFramebuffer = u64;
+pub type VkDescriptorSetLayout = u64;
+pub type VkDescriptorPool = u64;
+pub type VkDescriptorSet = u64;
+pub type VkFence = u64;
+pub type VkSemaphore = u64;
+pub type VkSampler = u64;
 
 // ---- scalars -------------------------------------------------------------------------------------
 pub type VkResult = i32;

@@ -32,20 +32,29 @@
 // IR type is dd-gpu's, not a local copy.
 pub use dd_shim_common as common;
 
+pub mod command;
+pub mod descriptor;
 pub mod device;
 pub mod handle;
 pub mod icd;
 pub mod instance;
 pub mod ir_seam;
+pub mod memory;
+pub mod pipeline;
+pub mod reg;
 pub mod state;
 pub mod stub;
 pub mod types;
 
 // Bring every hand-written `#[no_mangle]` entry point into crate-root scope so the generated
 // DISPATCH table (below) can reference the whole surface — implemented + stub — by bare name.
+pub use command::*;
+pub use descriptor::*;
 pub use device::*;
 pub use icd::*;
 pub use instance::*;
+pub use memory::*;
+pub use pipeline::*;
 
 // The generated C-ABI export surface (every `vk*` entry point not in `IMPLEMENTED`) + the name→address
 // DISPATCH table the loader-facing proc-addr resolvers scan.

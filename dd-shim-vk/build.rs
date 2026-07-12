@@ -28,7 +28,13 @@ fn main() {
     let manifest = PathBuf::from(env("CARGO_MANIFEST_DIR")).join("registry/vk_commands.manifest");
     println!("cargo:rerun-if-changed={}", manifest.display());
     println!("cargo:rerun-if-changed=build.rs");
-    println!("cargo:rustc-cdylib-link-arg=-Wl,-soname,libvk_dd.so.1");
+    // The soname is the deployed Linux guest ICD name. `-Wl,-soname` is a GNU-ld flag; macOS `ld`
+    // rejects it (it uses `-install_name`). The ICD only ships on the guest (Linux), and the macOS
+    // build exists solely for the on-Metal validation tests (which link the rlib), so only emit the
+    // soname link-arg on Linux — otherwise the cdylib fails to link on the test host.
+    if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("linux") {
+        println!("cargo:rustc-cdylib-link-arg=-Wl,-soname,libvk_dd.so.1");
+    }
 
     let text = std::fs::read_to_string(&manifest)
         .unwrap_or_else(|e| panic!("read {}: {e}", manifest.display()));
@@ -270,4 +276,69 @@ const IMPLEMENTED: &[&str] = &[
     "vkDestroyCommandPool",
     "vkAllocateCommandBuffers",
     "vkFreeCommandBuffers",
+    // ---- increment 2: functional execution path (Vulkan -> dd-gpu IR -> host Metal seam) ----
+    // memory + buffers + images (memory.rs)
+    "vkCreateBuffer",
+    "vkDestroyBuffer",
+    "vkGetBufferMemoryRequirements",
+    "vkGetImageMemoryRequirements",
+    "vkAllocateMemory",
+    "vkFreeMemory",
+    "vkBindBufferMemory",
+    "vkMapMemory",
+    "vkUnmapMemory",
+    "vkFlushMappedMemoryRanges",
+    "vkInvalidateMappedMemoryRanges",
+    "vkCreateImage",
+    "vkDestroyImage",
+    "vkBindImageMemory",
+    "vkCreateImageView",
+    "vkDestroyImageView",
+    // shaders + pipelines + render pass (pipeline.rs)
+    "vkCreateShaderModule",
+    "vkDestroyShaderModule",
+    "vkCreatePipelineLayout",
+    "vkDestroyPipelineLayout",
+    "vkCreateComputePipelines",
+    "vkCreateGraphicsPipelines",
+    "vkDestroyPipeline",
+    "vkCreateRenderPass",
+    "vkDestroyRenderPass",
+    "vkCreateFramebuffer",
+    "vkDestroyFramebuffer",
+    // descriptors (descriptor.rs)
+    "vkCreateDescriptorSetLayout",
+    "vkDestroyDescriptorSetLayout",
+    "vkCreateDescriptorPool",
+    "vkDestroyDescriptorPool",
+    "vkAllocateDescriptorSets",
+    "vkFreeDescriptorSets",
+    "vkUpdateDescriptorSets",
+    // command buffers + submit + sync (command.rs)
+    "vkBeginCommandBuffer",
+    "vkEndCommandBuffer",
+    "vkResetCommandBuffer",
+    "vkResetCommandPool",
+    "vkCmdBindPipeline",
+    "vkCmdBindDescriptorSets",
+    "vkCmdBindVertexBuffers",
+    "vkCmdBindIndexBuffer",
+    "vkCmdSetViewport",
+    "vkCmdSetScissor",
+    "vkCmdDispatch",
+    "vkCmdBeginRenderPass",
+    "vkCmdEndRenderPass",
+    "vkCmdDraw",
+    "vkCmdDrawIndexed",
+    "vkCmdCopyBuffer",
+    "vkQueueSubmit",
+    "vkQueueWaitIdle",
+    "vkDeviceWaitIdle",
+    "vkCreateFence",
+    "vkDestroyFence",
+    "vkWaitForFences",
+    "vkResetFences",
+    "vkGetFenceStatus",
+    "vkCreateSemaphore",
+    "vkDestroySemaphore",
 ];
