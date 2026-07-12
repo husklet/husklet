@@ -774,6 +774,11 @@ static int engine_global_init(void) {
     // Arm the SIGUSR1 checkpoint control handler when DDJIT_CHECKPOINT_DIR is set (harmless no-op otherwise).
     // Runs in every process (init + forked children) so the whole tree is checkpointable.
     ckpt_control_init();
+    // Host-IOSurface GPU bridge (--gui): force its one-time ObjC/CoreFoundation/Foundation/IOSurface class
+    // inits to completion HERE, single-threaded and BEFORE any guest thread/fork, so a lazy +initialize can
+    // never be mid-flight when Chrome forks its zygote/broker (which would abort the child via libobjc's
+    // fork-safety guard -> chromium EXIT=137). Gated on DD_GPU_IOSURFACE; a no-op for every other workload.
+    dd_gpu_prewarm_fork_safety();
     g_engine_inited = 1;
     return 0;
 }

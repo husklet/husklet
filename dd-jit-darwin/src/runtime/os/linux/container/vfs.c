@@ -4772,6 +4772,66 @@ static int64_t dd_gpu_alloc(int owner_fd, void *arg) {
     return 0;
 }
 
+// Fork-safety prewarm for the host-IOSurface GPU bridge. Called ONCE from engine_global_init(), on the
+// single engine startup thread, BEFORE the guest's first instruction runs (hence before any guest thread
+// exists and before Chrome's mandatory zygote/broker fork()). Gated on DD_GPU_IOSURFACE, so inert for
+// every non-GUI workload / the test gate.
+//
+// Why this is needed: the bridge's CoreFoundation/IOSurface/mach calls (CFDictionary/CFNumber build,
+// IOSurfaceCreate, IOSurfaceCreateMachPort, bootstrap_look_up) lazily run one-time ObjC class
+// +initialize's the FIRST time the guest allocates a surface (DD_IOCTL_GPU_ALLOC / DRM CREATE_DUMB). That
+// first alloc is serviced on whatever host thread runs the guest ioctl, and can land WHILE another host
+// thread is mid guest-fork() (libc fork() in os/linux/syscall/proc.c, which runs libobjc's pthread_atfork
+// handlers). If an ObjC +initialize is in progress at fork() — e.g. +[NSPlaceholderString initialize],
+// pulled in transitively via IOSurface->Foundation — libobjc's initialize-fork-safety guard aborts the
+// child (objc_initializeAfterForkError) -> chromium EXIT=137, 0 frames. The race is load-sensitive: on a
+// quiet host the init finishes before the fork; under load it's mid-flight at the fork. Forcing every
+// lazy init to COMPLETION here, before any guest thread/fork exists, closes the race STRUCTURALLY and
+// deterministically, independent of host load (and independent of whether OBJC_DISABLE_INITIALIZE_FORK_-
+// SAFETY reached this process's libobjc at load time).
+static void dd_gpu_prewarm_fork_safety(void) {
+#ifdef __APPLE__
+    if (!gpu_iosurface_on()) return;
+    // Create a throwaway 1x1 BGRA IOSurface exactly the way dd_gpu_surface() does, so the SAME CF/IOSurface
+    // /Foundation lazy inits the first guest alloc triggers happen now instead.
+    CFMutableDictionaryRef props =
+        CFDictionaryCreateMutable(NULL, 0, &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
+    if (!props) return;
+    int32_t one = 1, bpe = 4, stride = 16, pf = 0x42475241 /* 'BGRA' */;
+    CFNumberRef n;
+#define PW(key, val)                                       \
+    n = CFNumberCreate(NULL, kCFNumberSInt32Type, &(val)); \
+    CFDictionarySetValue(props, key, n);                   \
+    CFRelease(n)
+    PW(kIOSurfaceWidth, one);
+    PW(kIOSurfaceHeight, one);
+    PW(kIOSurfaceBytesPerElement, bpe);
+    PW(kIOSurfaceBytesPerRow, stride);
+    PW(kIOSurfacePixelFormat, pf);
+    PW(kIOSurfaceIsGlobal, one);
+#undef PW
+    IOSurfaceRef surf = IOSurfaceCreate(props);
+    CFRelease(props);
+    if (!surf) return;
+    // Exercise the accessors AND the mach-port announce path (IOSurfaceCreateMachPort + bootstrap_look_up)
+    // that dd_gpu_send_port() uses, so THEIR one-time inits are warmed too — done directly here (not via
+    // dd_gpu_send_port) so it is independent of whether dd-display's mach service is already registered.
+    (void)IOSurfaceGetID(surf);
+    IOSurfaceLock(surf, 0, NULL);
+    (void)IOSurfaceGetBaseAddress(surf);
+    IOSurfaceUnlock(surf, 0, NULL);
+    (void)IOSurfaceGetBytesPerRow(surf);
+    mach_port_t port = IOSurfaceCreateMachPort(surf);
+    if (port != MACH_PORT_NULL) mach_port_deallocate(mach_task_self(), port);
+    mach_port_t server = MACH_PORT_NULL;
+    const char *bridge = getenv("DD_GPU_BRIDGE_NAME");
+    if (!bridge || !*bridge) bridge = "com.dd.display.gpu";
+    if (bootstrap_look_up(bootstrap_port, (char *)bridge, &server) == KERN_SUCCESS && server != MACH_PORT_NULL)
+        mach_port_deallocate(mach_task_self(), server);
+    CFRelease(surf); // drop the throwaway surface; nothing else references it
+#endif
+}
+
 // Populate the container's /dev at start-up. dd flattens the image into one rootfs (no per-container
 // devtmpfs) and the OCI unpacker strips every `dev/*` node (unprivileged mknod fails on macOS), so the
 // rootfs /dev is empty. Docker mounts a fresh /dev with these standard entries; we materialize the ones

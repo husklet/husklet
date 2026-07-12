@@ -20,6 +20,39 @@
 
 extern char **environ;
 
+// Build the environment for the spawned engine, GUARANTEEING OBJC_DISABLE_INITIALIZE_FORK_SAFETY is set.
+//
+// The engine implements a guest fork() as a real host fork() of a multithreaded process that touches
+// ObjC/CoreFoundation/Foundation/IOSurface on the host-GPU (--gui) path. libobjc's initialize-fork-safety
+// guard aborts a fork child if an ObjC +initialize was in progress at fork() — unless libobjc read
+// OBJC_DISABLE_INITIALIZE_FORK_SAFETY=YES. libobjc reads it EXACTLY ONCE, at the engine's dyld load, from
+// the environ we hand execve(). Rather than rely on each caller (the Rust launcher, the daemon, tests)
+// remembering to put it in the environment, guarantee it for EVERY spawn here, at the one execve() that
+// starts an engine. The primary, load-independent fix is the engine's own startup prewarm
+// (vfs.c dd_gpu_prewarm_fork_safety, which forces those +initialize's to completion before any guest
+// thread/fork); this is defense-in-depth.
+//
+// Built as a private envp copy so we neither mutate this host process's environ (other host threads may be
+// reading it) nor call the non-async-signal-safe setenv() in the fork child. An explicit caller-provided
+// value (YES, or NO to debug fork hygiene) is left untouched. Returns `environ` unchanged when the var is
+// already present, else a malloc'd array (leaked intentionally — the process either execs, replacing the
+// image, or _exit()s). NULL is never returned; on allocation failure we fall back to `environ`.
+static char **ddjit_child_env(void) {
+    static const char *KEY = "OBJC_DISABLE_INITIALIZE_FORK_SAFETY=";
+    size_t keylen = strlen(KEY);
+    size_t n = 0;
+    for (char **e = environ; *e; e++) {
+        if (strncmp(*e, KEY, keylen) == 0) return environ; // caller already set it (any value) -> honor it
+        n++;
+    }
+    char **copy = (char **)malloc((n + 2) * sizeof(char *));
+    if (!copy) return environ; // OOM: the prewarm still closes the race; don't fail the spawn over this
+    for (size_t i = 0; i < n; i++) copy[i] = environ[i];
+    copy[n] = (char *)"OBJC_DISABLE_INITIALIZE_FORK_SAFETY=YES";
+    copy[n + 1] = NULL;
+    return copy;
+}
+
 static int write_all(int fd, const uint8_t *p, size_t n) {
     while (n) {
         ssize_t w = write(fd, p, n);
@@ -52,6 +85,9 @@ pid_t ddjit_spawn(const char *engine_path, const uint8_t *config, size_t config_
         errno = saved;
         return -1;
     }
+    // Build the engine's environ (with OBJC_DISABLE_INITIALIZE_FORK_SAFETY guaranteed) BEFORE fork, so the
+    // child only has to execve() with it — no malloc/setenv in the async-signal-only fork child.
+    char **child_env = ddjit_child_env();
     pid_t pid = fork();
     if (pid < 0) {
         int e = errno;
@@ -79,7 +115,7 @@ pid_t ddjit_spawn(const char *engine_path, const uint8_t *config, size_t config_
         if (err_fd >= 0 && err_fd != 2) dup2(err_fd, 2);
 
         char *const argv[] = {(char *)engine_path, (char *)"--configfile", cfgpath, NULL};
-        execve(engine_path, argv, environ);
+        execve(engine_path, argv, child_env);
         _exit(127); // exec failed
     }
 

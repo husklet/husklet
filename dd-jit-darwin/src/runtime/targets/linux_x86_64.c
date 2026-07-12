@@ -299,6 +299,11 @@ static int engine_global_init(void) {
     // ptrace tracer/tracee coordination arena -- mmap the shared region ONCE here, BEFORE any guest
     // fork, so every descendant guest process inherits the same physical pages. Inert until a guest ptraces.
     ptrace_arena_init();
+    // Host-IOSurface GPU bridge (--gui): force its one-time ObjC/CoreFoundation/Foundation/IOSurface class
+    // inits to completion HERE, single-threaded and BEFORE any guest thread/fork, so a lazy +initialize can
+    // never be mid-flight when a guest forks (which would abort the child via libobjc's fork-safety guard).
+    // Gated on DD_GPU_IOSURFACE; a no-op for every other workload. Mirrors targets/linux_aarch64.c.
+    dd_gpu_prewarm_fork_safety();
     g_engine_inited = 1;
     return 0;
 }
