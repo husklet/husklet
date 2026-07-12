@@ -1034,9 +1034,15 @@ pub extern "C" fn glClear(mask: u32) {
             s.record_clear_call(sx, sy, sw, sh);
         } else {
             s.clear_serial += 1;
-            s.default_full_clear_since_swap = true; // draw_fbo == 0 (default) in the ported subset
-            s.record_clear_call(sx, sy, sw, sh);
+            // A full clear of the DEFAULT framebuffer records a ClearRect; a full clear of a bound FBO
+            // does not (its clear is baked into the offscreen texture's CPU data below) — gl_shim.c.
+            if s.draw_fbo == 0 {
+                s.default_full_clear_since_swap = true;
+                s.record_clear_call(sx, sy, sw, sh);
+            }
         }
+        let c = s.clear;
+        s.clear_bound_color_texture(c);
     }
 }
 
@@ -1127,6 +1133,410 @@ pub extern "C" fn glDeleteVertexArrays(n: i32, ids: *const u32) {
 pub extern "C" fn glIsVertexArray(vao: u32) -> u8 {
     let s = gl();
     ((vao as usize) < crate::state::MAXVAO && s.vao[vao as usize].used) as u8
+}
+
+// ===================================================================================================
+// framebuffer + renderbuffer objects (offscreen render targets) — a draw's render target is the bound
+// draw-FBO's color texture (see state::draw_fbo_target, resolved in record_draw_call/record_clear_call).
+// ===================================================================================================
+
+use crate::state::{Fbo, Rbo, MAXFBO, MAXRBO};
+
+#[no_mangle]
+pub extern "C" fn glGenFramebuffers(n: i32, out: *mut u32) {
+    if out.is_null() || n < 0 {
+        return;
+    }
+    let mut s = gl();
+    for k in 0..n as usize {
+        let mut id = 0u32;
+        for i in 1..MAXFBO {
+            if !s.fbo[i].used {
+                s.fbo[i] = Fbo { used: true, ..Default::default() };
+                id = i as u32;
+                break;
+            }
+        }
+        unsafe { *out.add(k) = id };
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn glBindFramebuffer(target: u32, fbo: u32) {
+    let mut s = gl();
+    if fbo != 0 && (fbo as usize) < MAXFBO {
+        s.fbo[fbo as usize].used = true;
+    }
+    match target {
+        GL_FRAMEBUFFER => {
+            s.draw_fbo = fbo;
+            s.read_fbo = fbo;
+        }
+        GL_DRAW_FRAMEBUFFER => s.draw_fbo = fbo,
+        GL_READ_FRAMEBUFFER => s.read_fbo = fbo,
+        _ => {}
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn glDeleteFramebuffers(n: i32, ids: *const u32) {
+    if ids.is_null() || n < 0 {
+        return;
+    }
+    let mut s = gl();
+    for k in 0..n as usize {
+        let id = unsafe { *ids.add(k) };
+        if (id as usize) < MAXFBO {
+            s.fbo[id as usize] = Fbo::default();
+            if s.draw_fbo == id {
+                s.draw_fbo = 0;
+            }
+            if s.read_fbo == id {
+                s.read_fbo = 0;
+            }
+        }
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn glIsFramebuffer(fbo: u32) -> u8 {
+    let s = gl();
+    (fbo > 0 && (fbo as usize) < MAXFBO && s.fbo[fbo as usize].used) as u8
+}
+
+#[no_mangle]
+pub extern "C" fn glFramebufferTexture2D(target: u32, attachment: u32, textarget: u32, tex: u32, level: i32) {
+    let mut s = gl();
+    let f = if target == GL_READ_FRAMEBUFFER { s.read_fbo } else { s.draw_fbo };
+    if (target == GL_FRAMEBUFFER || target == GL_DRAW_FRAMEBUFFER || target == GL_READ_FRAMEBUFFER)
+        && attachment == GL_COLOR_ATTACHMENT0
+        && textarget == GL_TEXTURE_2D
+        && level == 0
+        && f > 0
+        && (f as usize) < MAXFBO
+    {
+        let fb = &mut s.fbo[f as usize];
+        fb.used = true;
+        fb.color_tex = tex;
+        fb.color_rbo = 0;
+        fb.color_level = 0;
+        fb.color_layer = 0;
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn glFramebufferTextureLayer(target: u32, attachment: u32, tex: u32, level: i32, layer: i32) {
+    let mut s = gl();
+    let f = if target == GL_READ_FRAMEBUFFER { s.read_fbo } else { s.draw_fbo };
+    if (target == GL_FRAMEBUFFER || target == GL_DRAW_FRAMEBUFFER || target == GL_READ_FRAMEBUFFER)
+        && attachment == GL_COLOR_ATTACHMENT0
+        && level == 0
+        && f > 0
+        && (f as usize) < MAXFBO
+    {
+        let fb = &mut s.fbo[f as usize];
+        fb.used = true;
+        fb.color_tex = tex;
+        fb.color_rbo = 0;
+        fb.color_level = 0;
+        fb.color_layer = layer;
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn glFramebufferRenderbuffer(target: u32, attachment: u32, rbtarget: u32, rbo: u32) {
+    let mut s = gl();
+    let f = if target == GL_READ_FRAMEBUFFER { s.read_fbo } else { s.draw_fbo };
+    if (target == GL_FRAMEBUFFER || target == GL_DRAW_FRAMEBUFFER || target == GL_READ_FRAMEBUFFER)
+        && attachment == GL_COLOR_ATTACHMENT0
+        && rbtarget == GL_RENDERBUFFER
+        && f > 0
+        && (f as usize) < MAXFBO
+    {
+        let fb = &mut s.fbo[f as usize];
+        fb.used = true;
+        fb.color_tex = 0;
+        fb.color_rbo = rbo;
+        fb.color_level = 0;
+        fb.color_layer = 0;
+    }
+}
+
+fn rbo_component_bits(ifmt: u32) -> (i32, i32, i32, i32, i32, i32) {
+    // returns (r,g,b,a,depth,stencil)
+    match ifmt {
+        0x81A5 | 0x81A6 | 0x81A7 => (0, 0, 0, 0, 24, 0), // DEPTH_COMPONENT16/24/32
+        0x8D48 => (0, 0, 0, 0, 0, 8),                    // STENCIL_INDEX8
+        0x88F0 => (0, 0, 0, 0, 24, 8),                   // DEPTH24_STENCIL8
+        _ => (8, 8, 8, 8, 0, 0),
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn glGetFramebufferAttachmentParameteriv(target: u32, att: u32, pname: u32, v: *mut i32) {
+    if v.is_null() {
+        return;
+    }
+    let s = gl();
+    let f = if target == GL_READ_FRAMEBUFFER { s.read_fbo } else { s.draw_fbo };
+    let mut out = 0i32;
+    if f == 0 {
+        out = match pname {
+            GL_FB_ATTACHMENT_OBJECT_TYPE => GL_FRAMEBUFFER_DEFAULT,
+            GL_FB_ATTACHMENT_OBJECT_NAME => 0,
+            GL_FB_ATTACHMENT_RED_SIZE..=GL_FB_ATTACHMENT_ALPHA_SIZE => {
+                if att == GL_COLOR_ATTACHMENT0 {
+                    8
+                } else {
+                    0
+                }
+            }
+            GL_FB_ATTACHMENT_DEPTH_SIZE => {
+                if att == GL_DEPTH_ATTACHMENT {
+                    24
+                } else {
+                    0
+                }
+            }
+            GL_FB_ATTACHMENT_STENCIL_SIZE => {
+                if att == GL_STENCIL_ATTACHMENT {
+                    8
+                } else {
+                    0
+                }
+            }
+            _ => 0,
+        };
+    } else if (f as usize) < MAXFBO && s.fbo[f as usize].used && att == GL_COLOR_ATTACHMENT0 {
+        let fb = &s.fbo[f as usize];
+        out = match pname {
+            GL_FB_ATTACHMENT_OBJECT_TYPE => {
+                if fb.color_tex != 0 {
+                    GL_TEXTURE_OBJ
+                } else if fb.color_rbo != 0 {
+                    GL_RENDERBUFFER as i32
+                } else {
+                    0
+                }
+            }
+            GL_FB_ATTACHMENT_OBJECT_NAME => (if fb.color_tex != 0 { fb.color_tex } else { fb.color_rbo }) as i32,
+            GL_FB_ATTACHMENT_TEXTURE_LEVEL => {
+                if fb.color_tex != 0 {
+                    fb.color_level
+                } else {
+                    0
+                }
+            }
+            GL_FB_ATTACHMENT_TEXTURE_CUBE_MAP_FACE => 0,
+            GL_FB_ATTACHMENT_TEXTURE_LAYER => {
+                if fb.color_tex != 0 {
+                    fb.color_layer
+                } else {
+                    0
+                }
+            }
+            GL_FB_ATTACHMENT_RED_SIZE..=GL_FB_ATTACHMENT_STENCIL_SIZE => {
+                let (r, g, b, a, d, st) = if fb.color_rbo != 0 && (fb.color_rbo as usize) < MAXRBO && s.rbo[fb.color_rbo as usize].used {
+                    rbo_component_bits(s.rbo[fb.color_rbo as usize].ifmt)
+                } else {
+                    (8, 8, 8, 8, 0, 0)
+                };
+                match pname {
+                    GL_FB_ATTACHMENT_RED_SIZE => r,
+                    GL_FB_ATTACHMENT_GREEN_SIZE => g,
+                    GL_FB_ATTACHMENT_BLUE_SIZE => b,
+                    GL_FB_ATTACHMENT_ALPHA_SIZE => a,
+                    GL_FB_ATTACHMENT_DEPTH_SIZE => d,
+                    _ => st,
+                }
+            }
+            _ => 0,
+        };
+    }
+    unsafe { *v = out };
+}
+
+#[no_mangle]
+pub extern "C" fn glGenRenderbuffers(n: i32, out: *mut u32) {
+    if out.is_null() || n < 0 {
+        return;
+    }
+    let mut s = gl();
+    for k in 0..n as usize {
+        let mut id = 0u32;
+        for i in 1..MAXRBO {
+            if !s.rbo[i].used {
+                let g = s.rbo[i].gen;
+                s.rbo[i] = Rbo { used: true, gen: g + 1, ..Default::default() };
+                id = i as u32;
+                break;
+            }
+        }
+        unsafe { *out.add(k) = id };
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn glBindRenderbuffer(target: u32, rbo: u32) {
+    if target != GL_RENDERBUFFER {
+        return;
+    }
+    let mut s = gl();
+    s.rbo_bound = rbo;
+    if rbo > 0 && (rbo as usize) < MAXRBO {
+        s.rbo[rbo as usize].used = true;
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn glDeleteRenderbuffers(n: i32, ids: *const u32) {
+    if ids.is_null() || n < 0 {
+        return;
+    }
+    let mut s = gl();
+    for k in 0..n as usize {
+        let id = unsafe { *ids.add(k) };
+        if (id as usize) < MAXRBO {
+            s.rbo[id as usize] = Rbo::default();
+            if s.rbo_bound == id {
+                s.rbo_bound = 0;
+            }
+            for f in 1..MAXFBO {
+                if s.fbo[f].color_rbo == id {
+                    s.fbo[f].color_rbo = 0;
+                }
+            }
+        }
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn glIsRenderbuffer(rbo: u32) -> u8 {
+    let s = gl();
+    (rbo > 0 && (rbo as usize) < MAXRBO && s.rbo[rbo as usize].used) as u8
+}
+
+fn rbo_storage(ifmt: u32, w: i32, h: i32, samples: i32) {
+    let mut s = gl();
+    let r = s.rbo_bound as usize;
+    if s.rbo_bound > 0 && r < MAXRBO {
+        let gen = s.rbo[r].gen;
+        s.rbo[r] = Rbo { used: true, w, h, ifmt, samples, gen: gen + 1 };
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn glRenderbufferStorage(target: u32, ifmt: u32, w: i32, h: i32) {
+    if target == GL_RENDERBUFFER {
+        rbo_storage(ifmt, w, h, 0);
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn glRenderbufferStorageMultisample(target: u32, samples: i32, ifmt: u32, w: i32, h: i32) {
+    if target == GL_RENDERBUFFER {
+        rbo_storage(ifmt, w, h, samples);
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn glGetRenderbufferParameteriv(target: u32, pname: u32, v: *mut i32) {
+    if v.is_null() {
+        return;
+    }
+    let s = gl();
+    let mut out = 0i32;
+    let rb = s.rbo_bound as usize;
+    if target == GL_RENDERBUFFER && rb < MAXRBO && s.rbo[rb].used {
+        let r = &s.rbo[rb];
+        let (red, green, blue, alpha, depth, stencil) = rbo_component_bits(r.ifmt);
+        out = match pname {
+            GL_RB_WIDTH => r.w,
+            GL_RB_HEIGHT => r.h,
+            GL_RB_INTERNAL_FORMAT => r.ifmt as i32,
+            GL_RB_RED_SIZE => red,
+            GL_RB_GREEN_SIZE => green,
+            GL_RB_BLUE_SIZE => blue,
+            GL_RB_ALPHA_SIZE => alpha,
+            GL_RB_DEPTH_SIZE => depth,
+            GL_RB_STENCIL_SIZE => stencil,
+            GL_RB_SAMPLES => r.samples,
+            _ => 0,
+        };
+    }
+    unsafe { *v = out };
+}
+
+/// `glBlitFramebuffer` — CPU-side textured rect blit between the read/draw FBOs' color textures
+/// (gl_shim.c). Only GL_COLOR_BUFFER_BIT is handled; the filter is ignored (nearest).
+#[no_mangle]
+#[allow(clippy::too_many_arguments)]
+pub extern "C" fn glBlitFramebuffer(sx0: i32, sy0: i32, sx1: i32, sy1: i32, dx0: i32, dy0: i32, dx1: i32, dy1: i32, mask: u32, _filter: u32) {
+    if mask & GL_COLOR_BUFFER_BIT == 0 {
+        return;
+    }
+    let mut s = gl();
+    let src = s.fbo_color_texture(s.read_fbo);
+    let dst = s.fbo_color_texture(s.draw_fbo);
+    if src == 0 || dst == 0 || src == dst {
+        return;
+    }
+    s.copy_texture_rect(src, dst, sx0, sy0, sx1, sy1, dx0, dy0, dx1, dy1);
+}
+
+/// `glReadPixels` — CPU-side readback of the read-FBO's color texture (gl_shim.c). Zero-fills first,
+/// then copies from the texture's uploaded RGBA8 data (only for GL_UNSIGNED_BYTE).
+#[no_mangle]
+#[allow(clippy::too_many_arguments)]
+pub extern "C" fn glReadPixels(x: i32, y: i32, w: i32, h: i32, fmt: u32, typ: u32, dst: *mut c_void) {
+    if dst.is_null() || w <= 0 || h <= 0 {
+        return;
+    }
+    let bpp = crate::state::GlState::tex_bpp(fmt);
+    let out = unsafe { core::slice::from_raw_parts_mut(dst as *mut u8, (w as usize) * (h as usize) * bpp) };
+    out.fill(0);
+    if typ != GL_UNSIGNED_BYTE {
+        return;
+    }
+    let s = gl();
+    let src_id = s.fbo_color_texture(s.read_fbo);
+    if src_id == 0 {
+        return;
+    }
+    let src = &s.tex[src_id as usize];
+    for yy in 0..h {
+        let sy = y + yy;
+        for xx in 0..w {
+            let sx = x + xx;
+            if sx < 0 || sx >= src.w || sy < 0 || sy >= src.h {
+                continue;
+            }
+            let sp = (sy as usize * src.w as usize + sx as usize) * 4;
+            let dp = (yy as usize * w as usize + xx as usize) * bpp;
+            let sc = &src.data[sp..sp + 4];
+            match fmt {
+                GL_RGBA => out[dp..dp + 4].copy_from_slice(sc),
+                GL_BGRA_EXT => {
+                    out[dp] = sc[2];
+                    out[dp + 1] = sc[1];
+                    out[dp + 2] = sc[0];
+                    out[dp + 3] = sc[3];
+                }
+                GL_RGB => out[dp..dp + 3].copy_from_slice(&sc[..3]),
+                _ => out[dp] = sc[0],
+            }
+        }
+    }
+}
+
+/// `glClearBufferfv` — clears the bound color texture's CPU data (gl_shim.c: `GL_COLOR`, drawbuffer 0).
+#[no_mangle]
+pub extern "C" fn glClearBufferfv(buffer: u32, drawbuffer: i32, value: *const f32) {
+    if buffer == GL_COLOR && drawbuffer == 0 && !value.is_null() {
+        let color = unsafe { core::slice::from_raw_parts(value, 4) };
+        let mut s = gl();
+        s.clear_bound_color_texture([color[0], color[1], color[2], color[3]]);
+    }
 }
 
 #[cfg(test)]

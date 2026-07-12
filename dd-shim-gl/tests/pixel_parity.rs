@@ -260,6 +260,129 @@ fn full_frame_wl_egl_window_is_byte_identical() {
     }
 }
 
+/// THE OFFSCREEN-FBO GATE: the render-to-texture pattern (bind FBO + attach texture + draw offscreen,
+/// then draw that texture to the default framebuffer) that glmark2/GTK4/Chrome-ANGLE use. Exercises the
+/// per-draw target_tex segmentation (offscreen Rgba8 pass + default Bgra8 pass). Compiled against BOTH
+/// shims; the full multi-pass IR must be byte-identical. This closes real-app IR parity.
+#[test]
+fn full_frame_fbo_render_to_texture_is_byte_identical() {
+    let dir = std::env::temp_dir().join(format!("dd-shim-fbo-{}", std::process::id()));
+    let _ = std::fs::create_dir_all(&dir);
+    let gl_shim_so = match build_gl_shim_so(&dir) {
+        Some(s) => s,
+        None => {
+            eprintln!("[parity] SKIP fbo: gl_shim.c toolchain unavailable");
+            return;
+        }
+    };
+    let rust_so = match dd_shim_gl_so() {
+        Some(s) => s,
+        None => return,
+    };
+    let c_ir = match run_workload_against(&gl_shim_so, FBO_WORKLOAD, "fbo-c") {
+        Some(b) => b,
+        None => return,
+    };
+    let rust_ir = match run_workload_against(&rust_so, FBO_WORKLOAD, "fbo-rust") {
+        Some(b) => b,
+        None => return,
+    };
+    let _ = std::fs::remove_dir_all(&dir);
+    match diff_ir(&c_ir, &rust_ir) {
+        Ok(()) => eprintln!("[parity] PASS fbo render-to-texture: byte-identical ({} bytes)", c_ir.len()),
+        Err(e) => panic!("fbo parity FAILED:\n{e}"),
+    }
+}
+
+const FBO_WORKLOAD: &str = r#"
+extern void* eglGetDisplay(void*);
+extern unsigned eglInitialize(void*, int*, int*);
+extern unsigned eglChooseConfig(void*, const int*, void**, int, int*);
+extern void* eglCreateContext(void*, void*, void*, const int*);
+extern void* eglCreateWindowSurface(void*, void*, void*, const int*);
+extern unsigned eglMakeCurrent(void*, void*, void*, void*);
+extern unsigned eglSwapBuffers(void*, void*);
+extern unsigned glCreateShader(unsigned);
+extern void glShaderSource(unsigned, int, const char* const*, const int*);
+extern void glCompileShader(unsigned);
+extern unsigned glCreateProgram(void);
+extern void glAttachShader(unsigned, unsigned);
+extern void glLinkProgram(unsigned);
+extern void glUseProgram(unsigned);
+extern void glGenBuffers(int, unsigned*);
+extern void glBindBuffer(unsigned, unsigned);
+extern void glBufferData(unsigned, long, const void*, unsigned);
+extern int glGetAttribLocation(unsigned, const char*);
+extern void glEnableVertexAttribArray(unsigned);
+extern void glVertexAttribPointer(unsigned, int, unsigned, unsigned char, int, const void*);
+extern void glGenTextures(int, unsigned*);
+extern void glActiveTexture(unsigned);
+extern void glBindTexture(unsigned, unsigned);
+extern void glTexImage2D(unsigned, int, int, int, int, int, unsigned, unsigned, const void*);
+extern void glTexParameteri(unsigned, unsigned, int);
+extern int glGetUniformLocation(unsigned, const char*);
+extern void glUniform1i(int, int);
+extern void glGenFramebuffers(int, unsigned*);
+extern void glBindFramebuffer(unsigned, unsigned);
+extern void glFramebufferTexture2D(unsigned, unsigned, unsigned, unsigned, int);
+extern unsigned glCheckFramebufferStatus(unsigned);
+extern void glViewport(int, int, int, int);
+extern void glClearColor(float, float, float, float);
+extern void glClear(unsigned);
+extern void glDrawArrays(unsigned, int, int);
+static const char* VS = "attribute vec2 aPos;attribute vec2 aTex;varying vec2 vTex;void main(){vTex=aTex;gl_Position=vec4(aPos,0.0,1.0);}\n";
+static const char* FS_SOLID = "precision mediump float;void main(){gl_FragColor=vec4(0.2,0.7,0.9,1.0);}\n";
+static const char* FS_TEX = "precision mediump float;uniform sampler2D uT;varying vec2 vTex;void main(){gl_FragColor=texture2D(uT,vTex);}\n";
+int main(void) {
+    void* d = eglGetDisplay(0); eglInitialize(d, 0, 0);
+    int ca[] = { 0x3038 }; void* cfg; int n; eglChooseConfig(d, ca, &cfg, 1, &n);
+    int cta[] = { 0x3098, 2, 0x3038 }; void* ctx = eglCreateContext(d, cfg, 0, cta);
+    int win[2] = { 256, 256 }; void* s = eglCreateWindowSurface(d, cfg, win, 0); eglMakeCurrent(d, s, s, ctx);
+
+    /* two programs: solid (offscreen), textured (present) */
+    unsigned vs = glCreateShader(0x8B31); glShaderSource(vs, 1, &VS, 0); glCompileShader(vs);
+    unsigned fs1 = glCreateShader(0x8B30); glShaderSource(fs1, 1, &FS_SOLID, 0); glCompileShader(fs1);
+    unsigned prog1 = glCreateProgram(); glAttachShader(prog1, vs); glAttachShader(prog1, fs1); glLinkProgram(prog1);
+    unsigned vs2 = glCreateShader(0x8B31); glShaderSource(vs2, 1, &VS, 0); glCompileShader(vs2);
+    unsigned fs2 = glCreateShader(0x8B30); glShaderSource(fs2, 1, &FS_TEX, 0); glCompileShader(fs2);
+    unsigned prog2 = glCreateProgram(); glAttachShader(prog2, vs2); glAttachShader(prog2, fs2); glLinkProgram(prog2);
+
+    float v[] = { 0,0, 0,0,  1,0, 1,0,  0,1, 0,1 };
+    unsigned vbo; glGenBuffers(1, &vbo); glBindBuffer(0x8892, vbo); glBufferData(0x8892, (long)sizeof(v), v, 0x88E4);
+
+    /* offscreen color texture (128x128) + FBO */
+    unsigned ctex; glGenTextures(1, &ctex); glActiveTexture(0x84C0); glBindTexture(0x0DE1, ctex);
+    glTexImage2D(0x0DE1, 0, 0x1908, 128, 128, 0, 0x1908, 0x1401, 0);
+    glTexParameteri(0x0DE1, 0x2801, 0x2601);
+    unsigned fbo; glGenFramebuffers(1, &fbo); glBindFramebuffer(0x8D40, fbo);
+    glFramebufferTexture2D(0x8D40, 0x8CE0, 0x0DE1, ctex, 0);
+    if (glCheckFramebufferStatus(0x8D40) != 0x8CD5) return 3;
+
+    /* pass 1: render solid into the offscreen FBO */
+    glViewport(0, 0, 128, 128);
+    glUseProgram(prog1);
+    int a1 = glGetAttribLocation(prog1, "aPos"); glEnableVertexAttribArray((unsigned)a1);
+    glVertexAttribPointer((unsigned)a1, 2, 0x1406, 0, 16, (void*)0);
+    glClearColor(0.0f, 0.0f, 0.0f, 1.0f); glClear(0x4000);
+    glDrawArrays(0x0004, 0, 3);
+
+    /* pass 2: bind default FB, sample the offscreen texture */
+    glBindFramebuffer(0x8D40, 0);
+    glViewport(0, 0, 256, 256);
+    glUseProgram(prog2);
+    int a2 = glGetAttribLocation(prog2, "aPos"); glEnableVertexAttribArray((unsigned)a2);
+    glVertexAttribPointer((unsigned)a2, 2, 0x1406, 0, 16, (void*)0);
+    int a2t = glGetAttribLocation(prog2, "aTex"); glEnableVertexAttribArray((unsigned)a2t);
+    glVertexAttribPointer((unsigned)a2t, 2, 0x1406, 0, 16, (void*)8);
+    glActiveTexture(0x84C0); glBindTexture(0x0DE1, ctex);
+    glUniform1i(glGetUniformLocation(prog2, "uT"), 0);
+    glClearColor(0.1f, 0.1f, 0.1f, 1.0f); glClear(0x4000);
+    glDrawArrays(0x0004, 0, 3);
+    eglSwapBuffers(d, s);
+    return 0;
+}
+"#;
+
 /// Exercises the newly-ported uniform setters — a mat3 uniform (16-byte MSL column re-stride) + an
 /// ivec2 — which real apps (glmark2 normal matrices, GTK) use. A stub would drop them; here the full IR
 /// (incl. the uniform buffer bytes) must be byte-identical to gl_shim.c.

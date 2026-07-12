@@ -120,6 +120,42 @@ pub const GL_MAJOR_VERSION: u32 = 0x821B;
 pub const GL_MINOR_VERSION: u32 = 0x821C;
 pub const GL_NUM_EXTENSIONS: u32 = 0x821D;
 
+// framebuffer / renderbuffer objects
+pub const GL_FRAMEBUFFER: u32 = 0x8D40;
+pub const GL_RENDERBUFFER: u32 = 0x8D41;
+pub const GL_READ_FRAMEBUFFER: u32 = 0x8CA8;
+pub const GL_DRAW_FRAMEBUFFER: u32 = 0x8CA9;
+pub const GL_COLOR_ATTACHMENT0: u32 = 0x8CE0;
+pub const GL_DEPTH_ATTACHMENT: u32 = 0x8D00;
+pub const GL_STENCIL_ATTACHMENT: u32 = 0x8D20;
+pub const GL_FRAMEBUFFER_COMPLETE: u32 = 0x8CD5;
+pub const GL_FRAMEBUFFER_DEFAULT: i32 = 0x8218;
+pub const GL_TEXTURE_OBJ: i32 = 0x1702; // GL_TEXTURE (attachment object type)
+pub const GL_COLOR: u32 = 0x1800; // glClearBufferfv buffer
+// glGetFramebufferAttachmentParameteriv pnames
+pub const GL_FB_ATTACHMENT_OBJECT_TYPE: u32 = 0x8CD0;
+pub const GL_FB_ATTACHMENT_OBJECT_NAME: u32 = 0x8CD1;
+pub const GL_FB_ATTACHMENT_TEXTURE_LEVEL: u32 = 0x8CD2;
+pub const GL_FB_ATTACHMENT_TEXTURE_CUBE_MAP_FACE: u32 = 0x8CD3;
+pub const GL_FB_ATTACHMENT_TEXTURE_LAYER: u32 = 0x8CD4;
+pub const GL_FB_ATTACHMENT_RED_SIZE: u32 = 0x8212;
+pub const GL_FB_ATTACHMENT_GREEN_SIZE: u32 = 0x8213;
+pub const GL_FB_ATTACHMENT_BLUE_SIZE: u32 = 0x8214;
+pub const GL_FB_ATTACHMENT_ALPHA_SIZE: u32 = 0x8215;
+pub const GL_FB_ATTACHMENT_DEPTH_SIZE: u32 = 0x8216;
+pub const GL_FB_ATTACHMENT_STENCIL_SIZE: u32 = 0x8217;
+// glGetRenderbufferParameteriv pnames
+pub const GL_RB_WIDTH: u32 = 0x8D42;
+pub const GL_RB_HEIGHT: u32 = 0x8D43;
+pub const GL_RB_INTERNAL_FORMAT: u32 = 0x8D44;
+pub const GL_RB_RED_SIZE: u32 = 0x8D50;
+pub const GL_RB_GREEN_SIZE: u32 = 0x8D51;
+pub const GL_RB_BLUE_SIZE: u32 = 0x8D52;
+pub const GL_RB_ALPHA_SIZE: u32 = 0x8D53;
+pub const GL_RB_DEPTH_SIZE: u32 = 0x8D54;
+pub const GL_RB_STENCIL_SIZE: u32 = 0x8D55;
+pub const GL_RB_SAMPLES: u32 = 0x8CAB;
+
 // ---- EGL ----
 pub const EGL_FALSE: u32 = 0;
 pub const EGL_TRUE: u32 = 1;

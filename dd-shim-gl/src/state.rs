@@ -16,7 +16,30 @@ pub const MAXBUF: usize = 64;
 pub const MAXATTR: usize = 16;
 pub const MAXTEX: usize = 32;
 pub const MAXVAO: usize = 128;
+pub const MAXFBO: usize = 64;
+pub const MAXRBO: usize = 64;
 pub const UBUF_BYTES: usize = 512;
+
+/// A framebuffer object's color attachment (gl_shim.c `struct fbo`).
+#[derive(Clone, Copy, Default)]
+pub struct Fbo {
+    pub used: bool,
+    pub color_tex: u32,
+    pub color_rbo: u32,
+    pub color_level: i32,
+    pub color_layer: i32,
+}
+
+/// A renderbuffer object (gl_shim.c `struct rbo`).
+#[derive(Clone, Copy, Default)]
+pub struct Rbo {
+    pub used: bool,
+    pub w: i32,
+    pub h: i32,
+    pub samples: i32,
+    pub ifmt: u32,
+    pub gen: u64,
+}
 
 #[derive(Clone, Default)]
 pub struct Shader {
@@ -239,6 +262,8 @@ pub struct GlState {
     pub draw_fbo: u32,
     pub read_fbo: u32,
     pub rbo_bound: u32,
+    pub fbo: Vec<Fbo>,
+    pub rbo: Vec<Rbo>,
 
     pub depth: bool,
     pub blend: bool,
@@ -306,6 +331,8 @@ impl Default for GlState {
             draw_fbo: 0,
             read_fbo: 0,
             rbo_bound: 0,
+            fbo: vec![Fbo::default(); MAXFBO],
+            rbo: vec![Rbo::default(); MAXRBO],
             depth: false,
             blend: false,
             cull: false,
@@ -451,12 +478,102 @@ impl GlState {
         }
     }
 
+    /// The render target of the bound draw FBO: its color texture, or 0 for the default window surface
+    /// (gl_shim.c: `draw_fbo>0 && fbo[draw_fbo].used ? fbo.color_tex : 0`).
+    pub fn draw_fbo_target(&self) -> u32 {
+        let f = self.draw_fbo as usize;
+        if self.draw_fbo > 0 && f < MAXFBO && self.fbo[f].used {
+            self.fbo[f].color_tex
+        } else {
+            0
+        }
+    }
+
+    /// An FBO's color texture *with data* (gl_shim.c `fbo_color_texture`) — for readback/blit.
+    pub fn fbo_color_texture(&self, fbo: u32) -> u32 {
+        let f = fbo as usize;
+        if fbo == 0 || f >= MAXFBO || !self.fbo[f].used {
+            return 0;
+        }
+        let tex = self.fbo[f].color_tex as usize;
+        if tex >= MAXTEX || !self.tex[tex].used || self.tex[tex].data.is_empty() {
+            return 0;
+        }
+        self.fbo[f].color_tex
+    }
+
+    /// CPU-side clear of the bound FBO's color texture over the scissor rect (gl_shim.c
+    /// `clear_bound_color_texture`) — keeps the texture's uploaded data (and thus its IR staging) in
+    /// sync with `glClear` when an offscreen FBO is bound. No-op for the default framebuffer.
+    pub fn clear_bound_color_texture(&mut self, color: [f32; 4]) {
+        let f = self.draw_fbo as usize;
+        if !(self.draw_fbo > 0 && f < MAXFBO && self.fbo[f].used) {
+            return;
+        }
+        let t = self.fbo[f].color_tex as usize;
+        if t >= MAXTEX || !self.tex[t].used || self.tex[t].data.is_empty() {
+            return;
+        }
+        let px = |v: f32| (v.clamp(0.0, 1.0) * 255.0 + 0.5) as u8;
+        let (r, g, b, a) = (px(color[0]), px(color[1]), px(color[2]), px(color[3]));
+        let (x, y, w, h, _) = self.clear_scissor_rect();
+        let tw = self.tex[t].w as usize;
+        let data = &mut self.tex[t].data;
+        for yy in y..y + h {
+            for xx in x..x + w {
+                let di = (yy as usize * tw + xx as usize) * 4;
+                if di + 4 <= data.len() {
+                    data[di] = r;
+                    data[di + 1] = g;
+                    data[di + 2] = b;
+                    data[di + 3] = a;
+                }
+            }
+        }
+        self.tex[t].gen += 1;
+    }
+
+    /// CPU-side textured rect blit (gl_shim.c `copy_texture_rect`) — for `glBlitFramebuffer`.
+    pub fn copy_texture_rect(&mut self, src_id: u32, dst_id: u32, sx0: i32, sy0: i32, sx1: i32, sy1: i32, dx0: i32, dy0: i32, dx1: i32, dy1: i32) {
+        let (si, dic) = (src_id as usize, dst_id as usize);
+        if si >= MAXTEX || dic >= MAXTEX || !self.tex[si].used || !self.tex[dic].used || self.tex[si].data.is_empty() || self.tex[dic].data.is_empty() {
+            return;
+        }
+        let (dw, dh) = (dx1 - dx0, dy1 - dy0);
+        if dw == 0 || dh == 0 || sx0 == sx1 || sy0 == sy1 {
+            return;
+        }
+        let (adw, adh) = (dw.abs(), dh.abs());
+        let (sw, sh) = (self.tex[si].w, self.tex[si].h);
+        let (dtw, dth) = (self.tex[dic].w, self.tex[dic].h);
+        let clampi = |v: i32, lo: i32, hi: i32| v.clamp(lo, hi);
+        for j in 0..adh {
+            let dy = dy0 + if dh < 0 { -j } else { j };
+            if dy < 0 || dy >= dth {
+                continue;
+            }
+            let sy = clampi(sy0 + ((j as i64 * (sy1 - sy0) as i64) / adh as i64) as i32, 0, sh - 1);
+            for i in 0..adw {
+                let dx = dx0 + if dw < 0 { -i } else { i };
+                if dx < 0 || dx >= dtw {
+                    continue;
+                }
+                let sx = clampi(sx0 + ((i as i64 * (sx1 - sx0) as i64) / adw as i64) as i32, 0, sw - 1);
+                let sp = (sy as usize * sw as usize + sx as usize) * 4;
+                let dp = (dy as usize * dtw as usize + dx as usize) * 4;
+                let (a, b) = (self.tex[si].data[sp..sp + 4].to_vec(), dp);
+                self.tex[dic].data[b..b + 4].copy_from_slice(&a);
+            }
+        }
+        self.tex[dic].gen += 1;
+    }
+
     /// Resolve the clear rectangle honoring GL_SCISSOR_TEST (gl_shim.c `clear_scissor_rect`); returns
     /// `(x, y, w, h, scissored)` where `scissored` is true iff the scissor actually sub-rects the
     /// full target (a Metal load-clear is full-target, so a real sub-rect must become a ClearRect).
     pub fn clear_scissor_rect(&self) -> (i32, i32, i32, i32, bool) {
-        // draw_fbo is 0 in the ported subset (no FBO binding) → default surface target.
-        let (tw, th) = (self.draw_target_w(0), self.draw_target_h(0));
+        let target = self.draw_fbo_target();
+        let (tw, th) = (self.draw_target_w(target), self.draw_target_h(target));
         let (mut x, mut y, mut w, mut h) = (0, 0, tw, th);
         if self.scissor_enabled && self.scissor[2] > 0 && self.scissor[3] > 0 {
             x = self.scissor[0];
@@ -495,9 +612,10 @@ impl GlState {
         if self.draws.len() >= MAXDRAWS {
             return;
         }
+        let target_tex = self.draw_fbo_target();
         self.draws.push(DrawCall {
             is_clear: true,
-            target_tex: 0, // default framebuffer (no FBO tracking yet)
+            target_tex,
             clear_rect: [x, y, w, h],
             clear: self.clear,
             clear_serial: self.clear_serial,
@@ -547,6 +665,7 @@ impl GlState {
         } else {
             None
         };
+        let target_tex = self.draw_fbo_target();
         self.draws.push(DrawCall {
             is_clear: false,
             mode,
@@ -557,7 +676,7 @@ impl GlState {
             index_offset: indices,
             prog: self.cur_prog,
             elem_buf: self.elem_buf,
-            target_tex: 0, // default framebuffer (no FBO tracking yet)
+            target_tex,
             clear_rect: [0; 4],
             attrs: self.attr,
             tex_units: self.tex_unit,

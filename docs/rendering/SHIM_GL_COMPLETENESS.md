@@ -37,22 +37,28 @@ Entry points real apps (glmark2 / GTK4 / Chrome / Qt) call that were stubs and w
 New parity test `full_frame_mat3_uniform_is_byte_identical` (mat3 + ivec2 uniforms) locks in the
 uniform-buffer bytes byte-for-byte.
 
+## Offscreen framebuffers — DONE (real-app IR parity closed)
+
+The full FBO/renderbuffer subsystem is ported byte-for-byte: `glGen/Bind/Delete/IsFramebuffer`,
+`glFramebufferTexture2D`/`glFramebufferTextureLayer`/`glFramebufferRenderbuffer`,
+`glCheckFramebufferStatus`, `glGetFramebufferAttachmentParameteriv`, the renderbuffers
+(`glGen/Bind/Delete/IsRenderbuffer`, `glRenderbufferStorage{,Multisample}`,
+`glGetRenderbufferParameteriv`), plus `glBlitFramebuffer` and `glReadPixels` (CPU-side texture blit /
+readback) and `glClearBufferfv`. `record_draw_call`/`record_clear_call`/`clear_scissor_rect` now
+resolve a draw's `target_tex` from the bound draw-FBO's color attachment (`state::draw_fbo_target`), so
+the replay lowering's per-draw `target_tex` segmentation + `color_target_format` (offscreen Rgba8 vs
+surface Bgra8) drive the offscreen pass. `glClear` of a bound FBO bakes into the offscreen texture's CPU
+data (no ClearRect), exactly as gl_shim.c. **Parity gate `full_frame_fbo_render_to_texture` (render to
+an offscreen FBO then sample it to the default framebuffer — the render-to-texture pattern glmark2 /
+GTK4 GskGLRenderer / Chrome-ANGLE use) is byte-identical, 67472 bytes.** This is the last real-app IR
+parity gap; **full real-app IR parity is closed.**
+
 ## (b) Real bodies still needed (scoped, not yet ported)
 
 These do meaningful work in gl_shim.c; the stub is at spec (correct ABI, benign) but not at render
 parity. Ordered by app impact:
 
-1. **Offscreen framebuffers (the big one)** — `glBindFramebuffer`, `glGenFramebuffers`,
-   `glFramebufferTexture2D`, `glFramebufferRenderbuffer`, `glFramebufferTextureLayer`,
-   `glDeleteFramebuffers`, `glIsFramebuffer`, `glCheckFramebufferStatus` (done) + renderbuffers
-   (`glBind/Gen/Delete/RenderbufferStorage{,Multisample}`), `glBlitFramebuffer`, `glReadBuffer`,
-   `glDrawBuffers`, `glInvalidateFramebuffer`. gl_shim.c tracks `g_fbo`/`g_rbo` and routes a draw's
-   `target_tex` to an offscreen texture; the replay lowering *already* handles per-draw `target_tex`
-   segmentation and `color_target_format` (offscreen Rgba8 vs surface Bgra8) — the missing piece is the
-   FBO **binding/attachment state** so `glClear`/draws target the attached texture instead of the
-   default surface. **This is what GTK4's GskGLRenderer and glmark2's FBO scenes need.** Bounded (the IR
-   side exists); estimate a focused increment mirroring gl_shim.c's `g_fbo`/`fbo_color_texture`.
-2. **Texture storage / 3D / compressed** — `glTexStorage2D`/`3D`, `glTexImage3D`/`glTexSubImage3D`,
+1. **Texture storage / 3D / compressed** — `glTexStorage2D`/`3D`, `glTexImage3D`/`glTexSubImage3D`,
    `glCompressedTexImage2D`/`…`. gl_shim.c allocates RGBA8 storage; `glTexStorage2D` is used by GTK4 /
    Chrome for immutable textures.
 3. **Pixel readback** — `glReadPixels`. gl_shim.c reads back the CPU-side texture; readback is
