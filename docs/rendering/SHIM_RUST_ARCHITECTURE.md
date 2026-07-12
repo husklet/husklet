@@ -393,6 +393,39 @@ seam they replay). The `-Wl,-soname` cdylib link-arg is Linux-gated (macOS `ld` 
 only ships on the guest, and the macOS build exists solely to run the validations). The default build,
 `dd-gpu`'s tests, and `dd-shim-gl`/`-cuda`/`-cudart` are all unaffected.
 
+### Increment 3 — WSI + present (the windowed-app path toward live vkcube)
+
+Increment 3 adds the WSI surface so a **windowed** Vulkan app (vkcube) can render through dd-shim-vk.
+**94 of 693 entry points are real now** (up from 82). Port-cited from MoltenVK (`MVKSurface.mm`,
+`MVKSwapchain.mm`) and mirroring dd-shim-gl's present half (`src/wayland.rs` / `gl_shim.c`):
+
+- **`VK_KHR_surface` + `VK_KHR_wayland_surface`** (`src/wsi.rs`): `vkCreateWaylandSurfaceKHR` (stores the
+  app's `wl_display`/`wl_surface`), `vkGetPhysicalDeviceWaylandPresentationSupportKHR`,
+  `vkGetPhysicalDeviceSurfaceSupportKHR`/`Capabilities`/`Formats`/`PresentModes` (B8G8R8A8_UNORM,
+  FIFO), `vkDestroySurfaceKHR`.
+- **`VK_KHR_swapchain`**: `vkCreateSwapchainKHR` allocates each presentable image as a `renderd`
+  IOSurface/dma-buf (`transport::renderd::alloc` — the rung-2 buffer the host Metal executor renders
+  into; an offscreen fallback is used off-guest / in tests); `vkGetSwapchainImagesKHR`,
+  `vkAcquireNextImageKHR` (round-robin), `vkQueuePresentKHR` terminates the frame with
+  `Cmd::Present{ surface, texture }` and ships the render IR to the host GPU-exec over
+  `transport::ExecConn` (the `[surface.id,w,h,len][ir]` protocol `eglSwapBuffers` uses).
+- Both extensions are advertised in `vkEnumerateInstance`/`DeviceExtensionProperties` so the loader and
+  app find them. The graphics-pipeline color-target format now derives from the render pass attachment
+  (so a Bgra8 swapchain validates on Metal).
+
+**Validated on REAL Metal** (`dd-gpu-wgpu/tests/vk_present.rs`), driving ONLY the exported WSI API:
+`vkCreateWaylandSurfaceKHR` → `vkCreateSwapchainKHR` → `vkGetSwapchainImagesKHR` →
+`vkAcquireNextImageKHR` → render a triangle into the acquired presentable image → `vkQueuePresentKHR` —
+the presented swapchain image reads back the correct frame (center `BGRA=[0,255,0,255]`, 722 green px).
+
+**Remaining for a LIVE vkcube-on-dd-display render:** the present's host-forward half (render IR →
+Metal → the swapchain IOSurface) is wired and Metal-validated; the outstanding piece is the
+**foreign-connection wayland commit** — attaching that IOSurface dma-buf to *vkcube's own*
+`wl_surface`/`wl_display` (the app owns the connection, so this needs libwayland `wl_proxy` +
+`zwp_linux_dmabuf_v1` marshalling on the app's connection, unlike dd-shim-gl which drives its own
+socket) — plus standing up the full live stack (engine + dd-display GPU-exec + the `vkself` workspace
+with this ICD deployed). That is the next step to the headline milestone.
+
 ## Retiring `gl_shim.c` (the incremental cutover)
 
 GLES must keep rendering the entire time, so `gl_shim.c` stays the deployed driver until `dd-shim-gl`
