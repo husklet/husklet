@@ -9,7 +9,6 @@
 //! Runs headlessly on Linux (libxkbcommon present) and on macOS.
 
 use dd_compositor::{ClientState, DdState};
-use dd_display::present::PngPresenter;
 use dd_display::wire::{Conn, Message};
 use smithay::reexports::wayland_server::Display;
 use std::os::unix::io::RawFd;
@@ -21,6 +20,13 @@ struct Client {
     conn: Conn,
     next_id: u32,
     globals: std::collections::HashMap<String, (u32, u32)>,
+    /// The client's `wl_pointer` id, so `drain` can capture the `enter` serial (needed to satisfy the
+    /// serial check on `wp_cursor_shape_device_v1.set_shape`). 0 = no pointer bound yet.
+    pointer_id: u32,
+    /// Serial from the last `wl_pointer.enter` (opcode 0) — echoed back in `set_shape`.
+    enter_serial: Option<u32>,
+    /// Every event seen as `(object, opcode)`, so tests can assert e.g. a `presented` (feedback opcode 1).
+    events: Vec<(u32, u16)>,
 }
 
 impl Client {
@@ -29,6 +35,9 @@ impl Client {
             conn: Conn::new(fd),
             next_id: 2,
             globals: Default::default(),
+            pointer_id: 0,
+            enter_serial: None,
+            events: Vec::new(),
         }
     }
     fn alloc(&mut self) -> u32 {
@@ -47,6 +56,7 @@ impl Client {
             }
         }
         while let Some(m) = self.conn.next_message() {
+            self.events.push((m.object, m.opcode));
             // wl_registry.global(name, iface, version): registry is id 2 in this tiny client.
             if m.opcode == 0 && m.object == 2 {
                 let mut r = m.reader();
@@ -54,8 +64,14 @@ impl Client {
                 let iface = r.string();
                 let ver = r.u32();
                 self.globals.insert(iface, (name, ver));
+            } else if self.pointer_id != 0 && m.object == self.pointer_id && m.opcode == 0 {
+                // wl_pointer.enter(serial, surface, x, y): first arg is the serial.
+                self.enter_serial = Some(m.reader().u32());
             }
         }
+    }
+    fn saw(&self, object: u32, opcode: u16) -> bool {
+        self.events.contains(&(object, opcode))
     }
 }
 
@@ -74,12 +90,22 @@ fn socketpair_nonblocking() -> (RawFd, RawFd) {
     (sv[0], sv[1])
 }
 
+// NOTE: this is intentionally ONE test driving ONE `Display`/client. `wayland-server`'s `Display` +
+// client machinery keeps process-global state, so two client-carrying `Display`s in the same test
+// binary interfere (the second's socket is torn down mid-handshake). Each concern below passes in
+// isolation; folding them into a single connection keeps the whole proof deterministic.
 #[test]
-fn client_connects_globals_advertise_and_a_frame_presents() {
+fn globals_advertise_frame_presents_feedback_and_cursor_shape_wire() {
     let mut display: Display<DdState> = Display::new().unwrap();
     let mut dh = display.handle();
-    let dir = std::env::temp_dir().join("dd-compositor-roundtrip");
-    let mut state = DdState::new(dh.clone(), Box::new(PngPresenter::new(&dir)));
+    let last_shape = Arc::new(Mutex::new(None));
+    let mut state = DdState::new(
+        dh.clone(),
+        Box::new(RecordingPresenter {
+            frames: 0,
+            last_shape: last_shape.clone(),
+        }),
+    );
 
     let (client_fd, server_fd) = socketpair_nonblocking();
     dh.insert_client(
@@ -96,6 +122,7 @@ fn client_connects_globals_advertise_and_a_frame_presents() {
             c.flush();
             display.dispatch_clients(&mut state).unwrap();
             display.flush_clients().unwrap();
+            c.drain();
         }};
     }
 
@@ -103,7 +130,6 @@ fn client_connects_globals_advertise_and_a_frame_presents() {
     let reg = c.alloc();
     c.conn.send(&Message::new(WL_DISPLAY, 1).u32(reg));
     pump!();
-    c.drain();
 
     for iface in [
         "wl_compositor",
@@ -114,6 +140,7 @@ fn client_connects_globals_advertise_and_a_frame_presents() {
         "wl_output",
         "wp_viewporter",
         "wp_presentation",
+        "wp_cursor_shape_manager_v1",
     ] {
         assert!(
             c.globals.contains_key(iface),
@@ -137,6 +164,15 @@ fn client_connects_globals_advertise_and_a_frame_presents() {
     let comp = bind(&mut c, "wl_compositor", 4);
     let shm = bind(&mut c, "wl_shm", 1);
     let wm = bind(&mut c, "xdg_wm_base", 1);
+    let seat = bind(&mut c, "wl_seat", 5);
+    let presentation = bind(&mut c, "wp_presentation", 1);
+    let cursor_mgr = bind(&mut c, "wp_cursor_shape_manager_v1", 1);
+
+    // wl_seat.get_pointer(0): track the id so drain captures the wl_pointer.enter serial (needed to
+    // satisfy the serial check on wp_cursor_shape_device_v1.set_shape).
+    let pointer = c.alloc();
+    c.conn.send(&Message::new(seat, 0).u32(pointer));
+    c.pointer_id = pointer;
 
     // surface + xdg toplevel + initial commit → configure.
     let surface = c.alloc();
@@ -179,15 +215,68 @@ fn client_connects_globals_advertise_and_a_frame_presents() {
             .i32(stride)
             .u32(1), // wl_shm format XRGB8888 == 1
     );
+    // Request wp_presentation feedback for the NEXT content update (the commit below); Chrome/viz waits
+    // on this to keep its frame clock ticking.
+    let feedback = c.alloc();
+    c.conn
+        .send(&Message::new(presentation, 1).u32(surface).u32(feedback)); // wp_presentation.feedback
     c.conn.send(&Message::new(surface, 1).u32(buffer).i32(0).i32(0)); // attach
     c.conn.send(&Message::new(surface, 2).i32(0).i32(0).i32(w).i32(h)); // damage
-    c.conn.send(&Message::new(surface, 6)); // commit → present
+    c.conn.send(&Message::new(surface, 6)); // commit → present + feedback answered
     pump!();
 
     assert!(
         state.presenter.frame_count() >= 1,
         "the committed frame did not reach the presenter"
     );
+    // (1) wp_presentation feedback: a successful present must answer with `presented` (opcode 1).
+    assert!(
+        c.saw(feedback, 1),
+        "expected wp_presentation_feedback.presented (opcode 1) on {feedback}; saw {:?}",
+        c.events
+    );
+
+    // (2) wp_cursor_shape wiring: give the pointer focus (in-process) so set_shape's serial check
+    // passes, read the enter serial, then drive set_shape(pointer=4) and assert the Presenter received
+    // the correctly-mapped wp_cursor_shape enum number (NOT the CursorIcon discriminant).
+    state.pointer_motion(2.0, 2.0);
+    display.flush_clients().unwrap();
+    c.drain();
+    let serial = c
+        .enter_serial
+        .expect("wl_pointer.enter should have delivered a serial");
+    let device = c.alloc();
+    c.conn
+        .send(&Message::new(cursor_mgr, 1).u32(device).u32(pointer)); // manager.get_pointer(device, pointer)
+    c.conn.send(&Message::new(device, 1).u32(serial).u32(4)); // device.set_shape(serial, pointer=4)
+    pump!();
+
+    assert_eq!(
+        *last_shape.lock().unwrap(),
+        Some(4),
+        "set_shape(pointer=4) should reach the Presenter as wp_cursor_shape enum 4"
+    );
+}
+
+/// A `Presenter` that records the last `set_cursor_shape` (so the cursor-shape wiring can be asserted)
+/// and always reports a successful present (so `wp_presentation` feedback resolves to `presented`).
+struct RecordingPresenter {
+    frames: u32,
+    /// Shared with the test: the last `wp_cursor_shape_device_v1.shape` value the compositor mapped.
+    last_shape: Arc<Mutex<Option<u32>>>,
+}
+impl dd_display::present::Presenter for RecordingPresenter {
+    fn present(&mut self, _surf: &dd_display::present::SurfaceBuffer) -> bool {
+        self.frames += 1;
+        true
+    }
+    fn frame_count(&self) -> u32 {
+        self.frames
+    }
+    fn set_cursor_shape(&self, shape: u32) {
+        *self.last_shape.lock().unwrap() = Some(shape);
+    }
 }
 
 use std::os::unix::io::FromRawFd;
+use std::sync::Mutex;

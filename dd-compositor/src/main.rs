@@ -191,6 +191,13 @@ mod macos {
         let (mut event_loop, mut data) = build_loop(socket, presenter);
         eprintln!("dd-compositor[cocoa]: entering calloop (metal={metal})");
         loop {
+            // CRITICAL: service AppKit input BEFORE the calloop dispatch (which runs commit→present).
+            // Input must never be gated behind a present — this is the same latency lesson being fixed
+            // on the legacy path (dd-display: "service NSEvents before pump"). Present is non-blocking
+            // (the Metal path never blocks on nextDrawable), so a slow frame cannot stall the pointer.
+            drain_appkit(&app, &mut data);
+            let _ = data.display.flush_clients();
+            // Short timeout so we loop back to drain input promptly even when no client fd is readable.
             event_loop
                 .dispatch(Some(std::time::Duration::from_millis(8)), &mut data)
                 .expect("dispatch");
@@ -202,18 +209,21 @@ mod macos {
     /// Drain queued AppKit events: route input into the Smithay seat, then forward to AppKit so window
     /// chrome stays responsive.
     fn drain_appkit(app: &Retained<NSApplication>, data: &mut LoopData) {
-        // Flip Cocoa's bottom-left pointer coords into top-left surface space using the focused
-        // surface's committed height.
-        let flip_h = data
-            .state
-            .focus
-            .as_ref()
-            .map(|s| {
-                use smithay::reexports::wayland_server::Resource;
-                s.id().protocol_id()
-            })
+        // Resolve the focused surface's on-screen size + input scale so Cocoa's bottom-left point coords
+        // map into the client's top-left surface space. `surface_size` is the window size in POINTS and
+        // `surface_scale` is device-pixels-per-point for the input path (1.0 for the point-space present,
+        // matching the legacy dd-display live loop); threading both keeps clicks landing correctly on a
+        // 2x Retina backing store instead of assuming a fixed 1.0 scale.
+        let sid = data.state.focus.as_ref().map(|s| {
+            use smithay::reexports::wayland_server::Resource;
+            s.id().protocol_id()
+        });
+        let flip_h = sid
             .and_then(|sid| data.state.presenter.surface_size(sid))
             .map(|(_, h)| h);
+        let scale = sid
+            .map(|sid| data.state.presenter.surface_scale(sid))
+            .unwrap_or(1.0);
 
         loop {
             let ev = unsafe {
@@ -226,7 +236,7 @@ mod macos {
             };
             match ev {
                 Some(ev) => {
-                    inject(&mut data.state, &ev, flip_h);
+                    inject(&mut data.state, &ev, flip_h, scale);
                     unsafe { app.sendEvent(&ev) };
                 }
                 None => break,
@@ -234,43 +244,52 @@ mod macos {
         }
     }
 
-    fn flip_point(p: NSPoint, flip_h: Option<i32>) -> (f64, f64) {
-        let x = p.x.max(0.0);
+    /// Flip Cocoa's bottom-left `locationInWindow` (points) into top-left surface space, scaling points
+    /// into the surface's input coordinate space. `flip_h` and the scaled Y share the same (point) domain
+    /// when `scale == 1.0`; a >1 scale keeps X/Y consistent for a device-pixel input path. Mirrors
+    /// dd-display's `present_cocoa::flip_point`.
+    fn flip_point(p: NSPoint, flip_h: Option<i32>, scale: f64) -> (f64, f64) {
+        let scale = scale.max(1.0);
+        let x = (p.x * scale).max(0.0);
+        let py = p.y * scale;
         let y = match flip_h {
-            Some(h) if h > 0 => ((h as f64) - p.y).clamp(0.0, (h - 1) as f64),
-            _ => p.y.max(0.0),
+            Some(h) if h > 0 => {
+                let hp = (h as f64) * scale;
+                (hp - py).clamp(0.0, hp - 1.0)
+            }
+            _ => py.max(0.0),
         };
         (x, y)
     }
 
     /// Translate an `NSEvent` into `wl_seat` input on the Smithay compositor. Keyboard uses the
     /// `kVK_*`→evdev subset below; the guest's own xkbcommon (fed Smithay's keymap) resolves the sym.
-    fn inject(state: &mut crate::DdState, ev: &NSEvent, flip_h: Option<i32>) {
+    fn inject(state: &mut crate::DdState, ev: &NSEvent, flip_h: Option<i32>, scale: f64) {
         let ty = unsafe { ev.r#type() };
         match ty {
             NSEventType::MouseMoved
             | NSEventType::LeftMouseDragged
             | NSEventType::RightMouseDragged => {
-                let (x, y) = flip_point(unsafe { ev.locationInWindow() }, flip_h);
+                let (x, y) = flip_point(unsafe { ev.locationInWindow() }, flip_h, scale);
                 state.pointer_motion(x, y);
             }
             NSEventType::LeftMouseDown => {
-                let (x, y) = flip_point(unsafe { ev.locationInWindow() }, flip_h);
+                let (x, y) = flip_point(unsafe { ev.locationInWindow() }, flip_h, scale);
                 state.pointer_motion(x, y);
                 state.pointer_button(0x110, true);
             }
             NSEventType::LeftMouseUp => {
-                let (x, y) = flip_point(unsafe { ev.locationInWindow() }, flip_h);
+                let (x, y) = flip_point(unsafe { ev.locationInWindow() }, flip_h, scale);
                 state.pointer_motion(x, y);
                 state.pointer_button(0x110, false);
             }
             NSEventType::RightMouseDown => {
-                let (x, y) = flip_point(unsafe { ev.locationInWindow() }, flip_h);
+                let (x, y) = flip_point(unsafe { ev.locationInWindow() }, flip_h, scale);
                 state.pointer_motion(x, y);
                 state.pointer_button(0x111, true);
             }
             NSEventType::RightMouseUp => {
-                let (x, y) = flip_point(unsafe { ev.locationInWindow() }, flip_h);
+                let (x, y) = flip_point(unsafe { ev.locationInWindow() }, flip_h, scale);
                 state.pointer_motion(x, y);
                 state.pointer_button(0x111, false);
             }

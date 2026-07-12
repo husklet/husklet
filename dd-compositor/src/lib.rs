@@ -26,17 +26,17 @@
 //! link it). No guest/user install is ever required.
 
 use std::collections::HashMap;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use dd_display::present::{Presenter, SurfaceBuffer};
 
 use smithay::{
-    delegate_compositor, delegate_output, delegate_presentation, delegate_seat, delegate_shm,
-    delegate_viewporter, delegate_xdg_shell,
+    delegate_compositor, delegate_cursor_shape, delegate_output, delegate_presentation,
+    delegate_seat, delegate_shm, delegate_viewporter, delegate_xdg_shell,
     input::{
         keyboard::{FilterResult, KeyboardHandle, Keycode},
         pointer::{
-            AxisFrame, ButtonEvent, CursorImageStatus, MotionEvent, PointerHandle,
+            AxisFrame, ButtonEvent, CursorIcon, CursorImageStatus, MotionEvent, PointerHandle,
         },
         Seat, SeatHandler, SeatState,
     },
@@ -56,15 +56,26 @@ use smithay::{
             with_states, BufferAssignment, CompositorClientState, CompositorHandler,
             CompositorState, SurfaceAttributes,
         },
+        cursor_shape::CursorShapeManagerState,
         output::{OutputHandler, OutputManagerState},
-        presentation::PresentationState,
+        presentation::{PresentationFeedbackCachedState, PresentationState, Refresh},
         shell::xdg::{
             PopupSurface, PositionerState, ToplevelSurface, XdgShellHandler, XdgShellState,
         },
         shm::{with_buffer_contents, ShmHandler, ShmState},
+        tablet_manager::TabletSeatHandler,
         viewporter::{ViewportCachedState, ViewporterState},
     },
 };
+
+/// `wp_presentation` clock domain reported to the client. The `feedback.presented` timestamp is read
+/// back by the GUEST via its own `clock_gettime()`, so this must be the value Linux libc uses for
+/// `CLOCK_MONOTONIC` (== 1), NOT the host macOS libc value (== 6). Mirrors `server.rs`'s
+/// `CLOCK_MONOTONIC_LINUX`; weston reports its `compositor->presentation_clock` the same way.
+const CLOCK_MONOTONIC_LINUX: u32 = 1;
+
+/// The single mode we advertise on `wl_output` (mHz). Also drives the `presented.refresh` interval.
+const OUTPUT_REFRESH_MHZ: i64 = 60_000;
 
 /// Per-client data Smithay hands back on every request. `CompositorClientState` is mandatory.
 #[derive(Default)]
@@ -89,6 +100,7 @@ pub struct DdState {
     pub output_manager: OutputManagerState,
     pub viewporter: ViewporterState,
     pub presentation: PresentationState,
+    pub cursor_shape: CursorShapeManagerState,
     pub seat: Seat<Self>,
     pub keyboard: KeyboardHandle<Self>,
     pub pointer: PointerHandle<Self>,
@@ -104,6 +116,9 @@ pub struct DdState {
     pub titles: HashMap<u32, String>,
     /// Last pointer location in logical/point space (Cocoa delivers point-space coords).
     pub ptr_loc: (f64, f64),
+    /// `wp_presentation` MSC / vblank counter, bumped once per presented frame (mirrors `server.rs`'s
+    /// `present_seq`). Chrome/viz feeds the sequence into its BeginFrame vsync estimator.
+    present_seq: u64,
     start: Instant,
 }
 
@@ -118,8 +133,11 @@ impl DdState {
         let shm = ShmState::new::<Self>(&dh, Vec::new());
         let xdg_shell = XdgShellState::new::<Self>(&dh); // xdg_wm_base + xdg_surface/toplevel/popup
         let viewporter = ViewporterState::new::<Self>(&dh); // wp_viewporter
-        // wp_presentation: clk_id = CLOCK_MONOTONIC (1) so the guest's clock domain matches.
-        let presentation = PresentationState::new::<Self>(&dh, libc::CLOCK_MONOTONIC as u32);
+        // wp_presentation: advertise the GUEST's CLOCK_MONOTONIC id (Linux == 1), NOT the host macOS
+        // libc value, so the client interprets our `presented` timestamps in its own clock domain.
+        let presentation = PresentationState::new::<Self>(&dh, CLOCK_MONOTONIC_LINUX);
+        // wp_cursor_shape_manager_v1: themed cursor requests → CursorImageStatus::Named → NSCursor.
+        let cursor_shape = CursorShapeManagerState::new::<Self>(&dh);
 
         let mut seat_state = SeatState::<Self>::new();
         let mut seat = seat_state.new_wl_seat(&dh, "dd-seat-0"); // wl_seat v5
@@ -158,6 +176,7 @@ impl DdState {
             output_manager,
             viewporter,
             presentation,
+            cursor_shape,
             seat,
             keyboard,
             pointer,
@@ -166,6 +185,7 @@ impl DdState {
             focus: None,
             titles: HashMap::new(),
             ptr_loc: (0.0, 0.0),
+            present_seq: 0,
             start: Instant::now(),
         }
     }
@@ -175,14 +195,15 @@ impl DdState {
     }
 
     /// The commit → present path: pull the committed `wl_shm` buffer, repack it tight-BGRA into a
-    /// [`SurfaceBuffer`], hand it to the Presenter (which opens/updates the NSWindow on macOS), then
-    /// fire the surface's frame callbacks so the client keeps drawing. This is the exact seam
+    /// [`SurfaceBuffer`], hand it to the Presenter (which opens/updates the NSWindow on macOS), fire
+    /// the surface's frame callbacks so the client keeps drawing, and answer any `wp_presentation`
+    /// feedback so Chrome/viz's BeginFrameSource keeps its frame clock ticking. This is the exact seam
     /// `server.rs` drives; the difference is Smithay decoded the wire for us.
     fn present_surface(&mut self, surface: &WlSurface) {
         let sid = surface.id().protocol_id();
 
-        // Snapshot the committed state. The two cached-state guards must not overlap, so scope each.
-        let (buffer, buffer_scale, callbacks, dst) = with_states(surface, |states| {
+        // Snapshot the committed state. The three cached-state guards must not overlap, so scope each.
+        let (buffer, buffer_scale, callbacks, dst, src, feedback) = with_states(surface, |states| {
             let (buffer, scale, callbacks) = {
                 let mut attrs = states.cached_state.get::<SurfaceAttributes>();
                 let cur = attrs.current();
@@ -193,31 +214,85 @@ impl DdState {
                 let callbacks: Vec<_> = std::mem::take(&mut cur.frame_callbacks);
                 (buffer, cur.buffer_scale.max(1), callbacks)
             };
-            let dst = {
+            let (dst, src) = {
                 let mut vp = states.cached_state.get::<ViewportCachedState>();
-                vp.current().size()
+                let cur = vp.current();
+                // wp_viewport source: a crop rectangle in post-buffer-scale (logical) surface coords.
+                let src = cur.src.map(|r| (r.loc.x, r.loc.y, r.size.w, r.size.h));
+                (cur.size(), src)
             };
-            (buffer, scale, callbacks, dst)
+            // wp_presentation_feedback callbacks committed for THIS content update (see the crate's
+            // presentation module docs — drain current() before presenting, answer after).
+            let feedback = std::mem::take(
+                &mut states
+                    .cached_state
+                    .get::<PresentationFeedbackCachedState>()
+                    .current()
+                    .callbacks,
+            );
+            (buffer, scale, callbacks, dst, src, feedback)
         });
 
         let Some(buffer) = buffer else {
-            // No new buffer this commit (e.g. the initial role commit) — still ack frame callbacks.
+            // No new buffer this commit (e.g. the initial role commit) — still ack frame callbacks and
+            // discard the feedback (there is no content update to time).
             let t = self.now_ms();
             for cb in callbacks {
                 cb.done(t);
             }
+            for fb in feedback {
+                fb.discarded();
+            }
             return;
         };
 
-        if let Some(surf) = self.build_surface_buffer(sid, &buffer, buffer_scale, dst) {
-            let presented = self.presenter.present(&surf);
-            let _ = presented; // frame pacing (wp_presentation feedback) is a follow-up increment.
-        }
+        // Present is non-blocking (the Metal path never blocks on nextDrawable — see present_cocoa); a
+        // failed present (false) must NOT advance frame pacing, exactly as `server.rs` gates it.
+        let did_present = match self.build_surface_buffer(sid, &buffer, buffer_scale, dst, src) {
+            Some(surf) => self.presenter.present(&surf),
+            None => false,
+        };
 
         // Frame callbacks: without these the client stops after one frame.
         let t = self.now_ms();
         for cb in callbacks {
             cb.done(t);
+        }
+
+        // Answer presentation feedback. Presented ⇒ sync_output + presented(monotonic ts, refresh, MSC,
+        // vsync); otherwise discarded. The frame is on-screen by the time `present` returns (the analogue
+        // of weston answering on the KMS pageflip-complete event).
+        self.send_presentation_feedback(feedback, did_present);
+    }
+
+    /// Answer every `wp_presentation_feedback` for a just-processed commit, mirroring `server.rs`'s
+    /// `send_presentation_feedback` on the Smithay callback objects.
+    fn send_presentation_feedback(
+        &mut self,
+        feedback: Vec<smithay::wayland::presentation::PresentationFeedbackCallback>,
+        did_present: bool,
+    ) {
+        if feedback.is_empty() {
+            return;
+        }
+        if !did_present {
+            for fb in feedback {
+                fb.discarded();
+            }
+            return;
+        }
+        self.present_seq = self.present_seq.wrapping_add(1);
+        let seq = self.present_seq;
+        let time = monotonic_now();
+        let refresh = Refresh::fixed(output_refresh());
+        for fb in feedback {
+            fb.presented(
+                &self.output,
+                time,
+                refresh,
+                seq,
+                wp_presentation_feedback::Kind::Vsync,
+            );
         }
     }
 
@@ -230,6 +305,7 @@ impl DdState {
         buffer: &WlBuffer,
         buffer_scale: i32,
         dst: Option<Size<i32, smithay::utils::Logical>>,
+        src: Option<(f64, f64, f64, f64)>,
     ) -> Option<SurfaceBuffer> {
         let title = self.titles.get(&sid).cloned().unwrap_or_else(|| "dd".into());
         let res = with_buffer_contents(buffer, |ptr, _len, data| {
@@ -256,9 +332,22 @@ impl DdState {
         .ok()?;
         let (tex_w, tex_h, fmt, bgra) = res;
 
-        let (log_w, log_h) = match dst {
-            Some(sz) if sz.w > 0 && sz.h > 0 => (sz.w, sz.h),
-            _ => ((tex_w / buffer_scale).max(1), (tex_h / buffer_scale).max(1)),
+        // wp_viewport source rectangle (given in post-buffer-scale/logical coords) → a normalized
+        // sample rect in the backing texture, so a client that renders into an oversized target and
+        // crops via the viewport (Chrome's fractional-scale path) presents only the requested region.
+        // `dst` (or, absent it, the buffer pixels / buffer_scale) is the on-screen logical size.
+        let (log_w, log_h, uv_rect) = match (dst, src) {
+            (Some(sz), src) if sz.w > 0 && sz.h > 0 => (sz.w, sz.h, uv_from_src(src, tex_w, tex_h, buffer_scale)),
+            (None, Some((_, _, sw, sh))) if sw > 0.0 && sh > 0.0 => (
+                (sw.round() as i32).max(1),
+                (sh.round() as i32).max(1),
+                uv_from_src(src, tex_w, tex_h, buffer_scale),
+            ),
+            _ => (
+                (tex_w / buffer_scale).max(1),
+                (tex_h / buffer_scale).max(1),
+                [0.0, 0.0, 1.0, 1.0],
+            ),
         };
 
         Some(SurfaceBuffer {
@@ -273,7 +362,7 @@ impl DdState {
             title,
             iosurface_id: None,
             gpu_render: false,
-            uv_rect: [0.0, 0.0, 1.0, 1.0],
+            uv_rect,
         })
     }
 
@@ -453,15 +542,21 @@ impl SeatHandler for DdState {
         &mut self.seat_state
     }
     fn cursor_image(&mut self, _seat: &Seat<Self>, image: CursorImageStatus) {
-        // Map the requested cursor to a host NSCursor via the reused Presenter seam. The themed
-        // wp_cursor_shape path is deferred (needs TabletSeatHandler), but a surface/named request here
-        // still drives the native cursor.
+        // Map the requested themed cursor to a host NSCursor via the reused Presenter seam. Smithay hands
+        // us a `CursorIcon` (from wp_cursor_shape_device_v1.set_shape, or a client's own set_cursor); the
+        // Presenter expects the `wp_cursor_shape_device_v1.shape` enum number, so translate — the
+        // `CursorIcon` enum has NO stable discriminant, so `icon as u32` would pick the wrong cursor.
         if let CursorImageStatus::Named(icon) = image {
-            self.presenter.set_cursor_shape(icon as u32);
+            self.presenter.set_cursor_shape(cursor_icon_to_wp_shape(icon));
         }
     }
     fn focus_changed(&mut self, _seat: &Seat<Self>, _focused: Option<&WlSurface>) {}
 }
+
+/// `wp_cursor_shape_manager_v1` routes a tablet tool's themed cursor here. We drive a single pointer
+/// seat (no tablet), so the default (ignore) behaviour is correct — but the impl is required so
+/// `delegate_cursor_shape!` can dispatch the shared manager global.
+impl TabletSeatHandler for DdState {}
 
 delegate_compositor!(DdState); // wl_compositor + wl_subcompositor
 delegate_shm!(DdState);
@@ -470,6 +565,89 @@ delegate_seat!(DdState);
 delegate_output!(DdState);
 delegate_viewporter!(DdState);
 delegate_presentation!(DdState);
+delegate_cursor_shape!(DdState); // wp_cursor_shape_manager_v1 + wp_cursor_shape_device_v1
+
+/// Map Smithay's `CursorIcon` to the `wp_cursor_shape_device_v1.shape` enum number the Presenter
+/// (`apply_cursor_shape` → `NSCursor`) understands. This is the inverse of Smithay's internal
+/// `shape_to_cursor_icon`; `CursorIcon` is a plain fieldless enum with no `#[repr]`, so it must be
+/// matched explicitly rather than cast. Unmapped icons fall back to `default` (1 = arrow).
+fn cursor_icon_to_wp_shape(icon: CursorIcon) -> u32 {
+    match icon {
+        CursorIcon::Default => 1,
+        CursorIcon::ContextMenu => 2,
+        CursorIcon::Help => 3,
+        CursorIcon::Pointer => 4,
+        CursorIcon::Progress => 5,
+        CursorIcon::Wait => 6,
+        CursorIcon::Cell => 7,
+        CursorIcon::Crosshair => 8,
+        CursorIcon::Text => 9,
+        CursorIcon::VerticalText => 10,
+        CursorIcon::Alias => 11,
+        CursorIcon::Copy => 12,
+        CursorIcon::Move => 13,
+        CursorIcon::NoDrop => 14,
+        CursorIcon::NotAllowed => 15,
+        CursorIcon::Grab => 16,
+        CursorIcon::Grabbing => 17,
+        CursorIcon::EResize => 18,
+        CursorIcon::NResize => 19,
+        CursorIcon::NeResize => 20,
+        CursorIcon::NwResize => 21,
+        CursorIcon::SResize => 22,
+        CursorIcon::SeResize => 23,
+        CursorIcon::SwResize => 24,
+        CursorIcon::WResize => 25,
+        CursorIcon::EwResize => 26,
+        CursorIcon::NsResize => 27,
+        CursorIcon::NeswResize => 28,
+        CursorIcon::NwseResize => 29,
+        CursorIcon::ColResize => 30,
+        CursorIcon::RowResize => 31,
+        CursorIcon::AllScroll => 32,
+        CursorIcon::ZoomIn => 33,
+        CursorIcon::ZoomOut => 34,
+        _ => 1,
+    }
+}
+
+/// Normalize a `wp_viewport` source rectangle `(x, y, w, h)` — given in post-buffer-scale/logical
+/// coords — into a `[u0, v0, u1, v1]` sample rect over the backing texture (buffer pixels). Returns the
+/// full texture when there is no source crop or the texture has no area.
+fn uv_from_src(src: Option<(f64, f64, f64, f64)>, tex_w: i32, tex_h: i32, buffer_scale: i32) -> [f32; 4] {
+    match src {
+        Some((x, y, w, h)) if tex_w > 0 && tex_h > 0 && w > 0.0 && h > 0.0 => {
+            let s = buffer_scale.max(1) as f64;
+            let (tw, th) = (tex_w as f64, tex_h as f64);
+            let u0 = ((x * s) / tw).clamp(0.0, 1.0) as f32;
+            let v0 = ((y * s) / th).clamp(0.0, 1.0) as f32;
+            let u1 = (((x + w) * s) / tw).clamp(0.0, 1.0) as f32;
+            let v1 = (((y + h) * s) / th).clamp(0.0, 1.0) as f32;
+            [u0, v0, u1, v1]
+        }
+        _ => [0.0, 0.0, 1.0, 1.0],
+    }
+}
+
+/// Host `CLOCK_MONOTONIC` as a `Duration` (the `wp_presentation.presented` timestamp). dd runs the guest
+/// clock in the host's monotonic domain, so this is the value the guest reads back — mirrors
+/// `server.rs`'s `monotonic_now`.
+fn monotonic_now() -> Duration {
+    let mut ts: libc::timespec = unsafe { std::mem::zeroed() };
+    unsafe {
+        libc::clock_gettime(libc::CLOCK_MONOTONIC, &mut ts);
+    }
+    Duration::new(ts.tv_sec as u64, (ts.tv_nsec as u32) % 1_000_000_000)
+}
+
+/// The output refresh interval (time until the next vblank) derived from the advertised mode. 60000 mHz
+/// ⇒ ~16.667 ms; clients add multiples of it to predict future vblanks.
+fn output_refresh() -> Duration {
+    if OUTPUT_REFRESH_MHZ <= 0 {
+        return Duration::ZERO;
+    }
+    Duration::from_nanos((1_000_000_000_000u64 / OUTPUT_REFRESH_MHZ as u64) as u64)
+}
 
 // Silence an unused-import warning when the presentation feedback type is only referenced in docs.
 #[allow(unused_imports)]
