@@ -66,9 +66,10 @@ mod tests {
         );
         // Every entry point is either hand-implemented or a generated stub.
         assert_eq!(GENERATED_STUBS + IMPLEMENTED_COUNT, TOTAL_ENTRYPOINTS);
-        // The 32 hand-written bring-up + IR-wiring + stream/event entry points (build.rs IMPLEMENTED).
-        assert_eq!(IMPLEMENTED_COUNT, 32, "hand-written entry-point count drifted from build.rs");
-        assert!(GENERATED_STUBS > 0, "expected a generated long tail");
+        // The whole 132-entry surface now has real hand-written bodies at parity with the C oracle —
+        // the long tail is fully ported, so there are no generated stubs left.
+        assert_eq!(IMPLEMENTED_COUNT, 132, "hand-written entry-point count drifted from build.rs");
+        assert_eq!(GENERATED_STUBS, 0, "the generated long tail should be fully ported to real bodies");
     }
 
     // Count of hand-written entry points (kept in sync with build.rs IMPLEMENTED via the census).
@@ -253,5 +254,255 @@ mod tests {
             driver::cuMemcpyDtoH_v2(junk.as_mut_ptr() as *mut c_void, 0xdead_0000, 4),
             result::CUDA_ERROR_INVALID_VALUE
         );
+    }
+
+    /// FUNCTIONAL: `cuMemsetD32` fills a device buffer, `cuMemcpyDtoD` copies it to another, and both
+    /// read back correctly through `cuMemcpyDtoH` — the fill/copy families execute end-to-end on the
+    /// embedded backend, and `cuMemGetInfo` reports sane VRAM. Drives only the exported `cu*` API.
+    #[test]
+    fn memset_dtod_and_meminfo_through_the_shim() {
+        use core::ffi::c_void;
+        let _serial = serial();
+        state::reset();
+        let n = 256usize;
+        let sz = n * 4;
+
+        assert_eq!(driver::cuInit(0), result::CUDA_SUCCESS);
+        let mut ctx: *mut c_void = core::ptr::null_mut();
+        assert_eq!(driver::cuCtxCreate_v2(&mut ctx, 0, 0), result::CUDA_SUCCESS);
+
+        let (mut a, mut b) = (0u64, 0u64);
+        assert_eq!(driver::cuMemAlloc_v2(&mut a, sz), result::CUDA_SUCCESS);
+        assert_eq!(driver::cuMemAlloc_v2(&mut b, sz), result::CUDA_SUCCESS);
+
+        // cuMemsetD32(a, 0xDEADBEEF, n) then DtoH -> every word is the fill value.
+        assert_eq!(driver::cuMemsetD32_v2(a, 0xDEAD_BEEF, n), result::CUDA_SUCCESS);
+        let mut out = vec![0u8; sz];
+        assert_eq!(
+            driver::cuMemcpyDtoH_v2(out.as_mut_ptr() as *mut c_void, a, sz),
+            result::CUDA_SUCCESS
+        );
+        for i in 0..n {
+            let w = u32::from_le_bytes(out[i * 4..i * 4 + 4].try_into().unwrap());
+            assert_eq!(w, 0xDEAD_BEEF, "cuMemsetD32 word {i}");
+        }
+
+        // cuMemcpyDtoD(b <- a) then DtoH b -> same fill.
+        assert_eq!(driver::cuMemcpyDtoD_v2(b, a, sz), result::CUDA_SUCCESS);
+        let mut out2 = vec![0u8; sz];
+        assert_eq!(
+            driver::cuMemcpyDtoH_v2(out2.as_mut_ptr() as *mut c_void, b, sz),
+            result::CUDA_SUCCESS
+        );
+        assert_eq!(out, out2, "cuMemcpyDtoD must reproduce the source bytes");
+
+        // cuMemsetD8(a, 0x00, n*4) clears it.
+        assert_eq!(driver::cuMemsetD8_v2(a, 0, sz), result::CUDA_SUCCESS);
+        let mut cleared = vec![0xFFu8; sz];
+        assert_eq!(
+            driver::cuMemcpyDtoH_v2(cleared.as_mut_ptr() as *mut c_void, a, sz),
+            result::CUDA_SUCCESS
+        );
+        assert!(cleared.iter().all(|&x| x == 0), "cuMemsetD8(0) must zero the buffer");
+
+        // cuMemGetInfo: total is the advertised VRAM (8 GiB default), free < total after allocations.
+        let (mut free, mut total) = (0usize, 0usize);
+        assert_eq!(driver::cuMemGetInfo_v2(&mut free, &mut total), result::CUDA_SUCCESS);
+        assert_eq!(total, 8usize << 30);
+        assert!(free < total && free == total - 2 * sz, "free should reflect outstanding bytes");
+
+        // cuMemGetAddressRange resolves the base+size of an interior pointer.
+        let (mut base, mut range) = (0u64, 0usize);
+        assert_eq!(
+            driver::cuMemGetAddressRange_v2(&mut base, &mut range, a + 16),
+            result::CUDA_SUCCESS
+        );
+        assert_eq!(base, a);
+        assert_eq!(range, sz);
+
+        // Dangling memset / DtoD pointers are clean CUDA_ERROR_INVALID_VALUE.
+        assert_eq!(driver::cuMemsetD32_v2(0xdead_0000, 0, 1), result::CUDA_ERROR_INVALID_VALUE);
+        assert_eq!(
+            driver::cuMemcpyDtoD_v2(0xdead_0000, a, 4),
+            result::CUDA_ERROR_INVALID_VALUE
+        );
+    }
+
+    /// Context management parity: push/pop stack, api version, limits (get/set + out-of-range),
+    /// and primary-context ref-counting — mirrors `dd-gpu/cuda/cuda_shim.c`.
+    #[test]
+    fn context_management_matches_the_oracle() {
+        use core::ffi::c_void;
+        let _serial = serial();
+        state::reset();
+        assert_eq!(driver::cuInit(0), result::CUDA_SUCCESS);
+
+        let (mut c1, mut c2): (*mut c_void, *mut c_void) =
+            (core::ptr::null_mut(), core::ptr::null_mut());
+        assert_eq!(driver::cuCtxCreate_v2(&mut c1, 0, 0), result::CUDA_SUCCESS);
+        assert_eq!(driver::cuCtxCreate_v2(&mut c2, 0, 0), result::CUDA_SUCCESS);
+        // c2 is current after the second create; push c1 makes it current, pop restores c2.
+        assert_eq!(driver::cuCtxPushCurrent_v2(c1), result::CUDA_SUCCESS);
+        let mut cur: *mut c_void = core::ptr::null_mut();
+        assert_eq!(driver::cuCtxGetCurrent(&mut cur), result::CUDA_SUCCESS);
+        assert_eq!(cur, c1);
+        let mut popped: *mut c_void = core::ptr::null_mut();
+        assert_eq!(driver::cuCtxPopCurrent_v2(&mut popped), result::CUDA_SUCCESS);
+        assert_eq!(popped, c1);
+        assert_eq!(driver::cuCtxGetCurrent(&mut cur), result::CUDA_SUCCESS);
+        assert_eq!(cur, c2);
+
+        // api version == 3020.
+        let mut ver = 0u32;
+        assert_eq!(driver::cuCtxGetApiVersion(c2, &mut ver), result::CUDA_SUCCESS);
+        assert_eq!(ver, 3020);
+
+        // limits: default stack size 1024, set/get roundtrip, out-of-range -> UNSUPPORTED_LIMIT.
+        let mut lim = 0usize;
+        assert_eq!(driver::cuCtxGetLimit(&mut lim, 0), result::CUDA_SUCCESS); // CU_LIMIT_STACK_SIZE
+        assert_eq!(lim, 1024);
+        assert_eq!(driver::cuCtxSetLimit(0, 4096), result::CUDA_SUCCESS);
+        assert_eq!(driver::cuCtxGetLimit(&mut lim, 0), result::CUDA_SUCCESS);
+        assert_eq!(lim, 4096);
+        assert_eq!(driver::cuCtxGetLimit(&mut lim, 99), result::CUDA_ERROR_UNSUPPORTED_LIMIT);
+
+        // flags roundtrip on the current context.
+        assert_eq!(driver::cuCtxSetFlags(0x5), result::CUDA_SUCCESS);
+        let mut fl = 0u32;
+        assert_eq!(driver::cuCtxGetFlags(&mut fl), result::CUDA_SUCCESS);
+        assert_eq!(fl, 0x5);
+
+        // peer access on a single device is the spec-correct error, not a fake success.
+        assert_eq!(driver::cuCtxEnablePeerAccess(c1, 0), result::CUDA_ERROR_PEER_ACCESS_UNSUPPORTED);
+        assert_eq!(driver::cuCtxDisablePeerAccess(c1), result::CUDA_ERROR_PEER_ACCESS_NOT_ENABLED);
+
+        // primary context ref-counting.
+        let (mut p1, mut p2): (*mut c_void, *mut c_void) =
+            (core::ptr::null_mut(), core::ptr::null_mut());
+        assert_eq!(driver::cuDevicePrimaryCtxRetain(&mut p1, 0), result::CUDA_SUCCESS);
+        assert_eq!(driver::cuDevicePrimaryCtxRetain(&mut p2, 0), result::CUDA_SUCCESS);
+        assert_eq!(p1, p2, "primary context is a singleton");
+        let (mut pflags, mut active) = (0u32, 0i32);
+        assert_eq!(
+            driver::cuDevicePrimaryCtxGetState(0, &mut pflags, &mut active),
+            result::CUDA_SUCCESS
+        );
+        assert_eq!(active, 1);
+        assert_eq!(driver::cuDevicePrimaryCtxRelease_v2(0), result::CUDA_SUCCESS);
+        assert_eq!(driver::cuDevicePrimaryCtxRelease_v2(0), result::CUDA_SUCCESS);
+        assert_eq!(
+            driver::cuDevicePrimaryCtxGetState(0, &mut pflags, &mut active),
+            result::CUDA_SUCCESS
+        );
+        assert_eq!(active, 0, "refcount back to zero deactivates the primary context");
+    }
+
+    /// Function + occupancy + event queries: after resolving `vecadd`, `cuFuncGetName`/`GetModule`/
+    /// `GetAttribute` answer, occupancy is computed from the SM limits, and `cuEventElapsedTime`
+    /// returns a non-negative duration between two recorded events.
+    #[test]
+    fn function_occupancy_and_event_queries() {
+        use core::ffi::c_void;
+        let _serial = serial();
+        state::reset();
+        assert_eq!(driver::cuInit(0), result::CUDA_SUCCESS);
+        let mut ctx: *mut c_void = core::ptr::null_mut();
+        assert_eq!(driver::cuCtxCreate_v2(&mut ctx, 0, 0), result::CUDA_SUCCESS);
+
+        let ptx = std::ffi::CString::new(dd_gpu::ptx::VECADD_PTX).unwrap();
+        let mut module: *mut c_void = core::ptr::null_mut();
+        assert_eq!(
+            driver::cuModuleLoadData(&mut module, ptx.as_ptr() as *const c_void),
+            result::CUDA_SUCCESS
+        );
+        let fname = std::ffi::CString::new("vecadd").unwrap();
+        let mut func: *mut c_void = core::ptr::null_mut();
+        assert_eq!(
+            driver::cuModuleGetFunction(&mut func, module, fname.as_ptr()),
+            result::CUDA_SUCCESS
+        );
+
+        // cuFuncGetName returns the interned entry name.
+        let mut namep: *const core::ffi::c_char = core::ptr::null();
+        assert_eq!(driver::cuFuncGetName(&mut namep, func), result::CUDA_SUCCESS);
+        let got = unsafe { std::ffi::CStr::from_ptr(namep) }.to_str().unwrap();
+        assert_eq!(got, "vecadd");
+
+        // cuFuncGetModule returns the owning module handle.
+        let mut m2: *mut c_void = core::ptr::null_mut();
+        assert_eq!(driver::cuFuncGetModule(&mut m2, func), result::CUDA_SUCCESS);
+        assert_eq!(m2, module);
+
+        // cuFuncGetAttribute: NUM_REGS == 32; SetAttribute(MAX_DYNAMIC_SHARED) then GetAttribute reads back.
+        let mut regs = 0i32;
+        assert_eq!(
+            driver::cuFuncGetAttribute(&mut regs, result::CU_FUNC_ATTRIBUTE_NUM_REGS, func),
+            result::CUDA_SUCCESS
+        );
+        assert_eq!(regs, 32);
+        assert_eq!(
+            driver::cuFuncSetAttribute(
+                func,
+                result::CU_FUNC_ATTRIBUTE_MAX_DYNAMIC_SHARED_SIZE_BYTES,
+                8192
+            ),
+            result::CUDA_SUCCESS
+        );
+        let mut dynsh = 0i32;
+        assert_eq!(
+            driver::cuFuncGetAttribute(
+                &mut dynsh,
+                result::CU_FUNC_ATTRIBUTE_MAX_DYNAMIC_SHARED_SIZE_BYTES,
+                func
+            ),
+            result::CUDA_SUCCESS
+        );
+        assert_eq!(dynsh, 8192);
+
+        // occupancy: 2048 / 256 = 8 resident blocks.
+        let mut blocks = 0i32;
+        assert_eq!(
+            driver::cuOccupancyMaxActiveBlocksPerMultiprocessor(&mut blocks, func, 256, 0),
+            result::CUDA_SUCCESS
+        );
+        assert_eq!(blocks, 8);
+
+        // events: record two, elapsed time is finite and non-negative.
+        let (mut e1, mut e2): (*mut c_void, *mut c_void) =
+            (core::ptr::null_mut(), core::ptr::null_mut());
+        assert_eq!(driver::cuEventCreate(&mut e1, 0), result::CUDA_SUCCESS);
+        assert_eq!(driver::cuEventCreate(&mut e2, 0), result::CUDA_SUCCESS);
+        assert_eq!(driver::cuEventQuery(e1), result::CUDA_ERROR_NOT_READY); // unrecorded
+        assert_eq!(driver::cuEventRecord(e1, core::ptr::null_mut()), result::CUDA_SUCCESS);
+        assert_eq!(driver::cuEventRecord(e2, core::ptr::null_mut()), result::CUDA_SUCCESS);
+        assert_eq!(driver::cuEventQuery(e1), result::CUDA_SUCCESS); // recorded -> ready
+        let mut ms = -1.0f32;
+        assert_eq!(driver::cuEventElapsedTime(&mut ms, e1, e2), result::CUDA_SUCCESS);
+        assert!(ms >= 0.0 && ms.is_finite(), "elapsed time must be a finite non-negative ms: {ms}");
+    }
+
+    /// Anti-drift: the new IR-emitting fill/copy entry points (`cuMemsetD32`, `cuMemcpyDtoD`) encode
+    /// with the SAME shared contract the host decodes — decode the accumulated bytes with the host's
+    /// own `dd_gpu::ir` decoder and confirm the expected `WriteBuffer`s appear.
+    #[test]
+    fn memset_dtod_encode_the_shared_ir_contract() {
+        use core::ffi::c_void;
+        use dd_gpu::ir::{decode_stream, Cmd};
+        let _serial = serial();
+        state::reset();
+        assert_eq!(driver::cuInit(0), result::CUDA_SUCCESS);
+        let mut ctx: *mut c_void = core::ptr::null_mut();
+        assert_eq!(driver::cuCtxCreate_v2(&mut ctx, 0, 0), result::CUDA_SUCCESS);
+        let (mut a, mut b) = (0u64, 0u64);
+        assert_eq!(driver::cuMemAlloc_v2(&mut a, 64), result::CUDA_SUCCESS);
+        assert_eq!(driver::cuMemAlloc_v2(&mut b, 64), result::CUDA_SUCCESS);
+        assert_eq!(driver::cuMemsetD32_v2(a, 7, 16), result::CUDA_SUCCESS);
+
+        let bytes = state::with(|s| s.frame.finish());
+        let cmds = decode_stream(&bytes).expect("host decoder must accept shim-encoded memset IR");
+        // Two CreateBuffer (a,b) and a WriteBuffer (the memset fill).
+        assert!(cmds.iter().filter(|c| matches!(c, Cmd::CreateBuffer(..))).count() >= 2);
+        let write_fills = cmds.iter().any(|c| matches!(c, Cmd::WriteBuffer { data, .. } if data.len() == 64));
+        assert!(write_fills, "cuMemsetD32 must emit a WriteBuffer of the expanded fill");
     }
 }

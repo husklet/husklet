@@ -116,10 +116,11 @@ Both are sibling cdylib crates on `dd-shim-common`:
 
 ## `dd-shim-cuda` — the CUDA Driver API scaffold (increment 1)
 
-The third library exists as a **package skeleton** built exactly like `dd-shim-gl` increment 1: a
-registry-generated C-ABI surface over `dd-shim-common`, with a handful of real entry points and a
-spec-faithful stubbed long tail. It is **not** a functional CUDA driver — there is no host PTX/compute
-backend yet (that is the future work below). It is the "proper structure for the third library".
+The third library is built exactly like `dd-shim-gl`: a registry-generated C-ABI surface over
+`dd-shim-common`. It began as a scaffold (a handful of real entry points + a stubbed long tail) but is
+now **surface-complete** — every one of the 132 `cu*` entry points has a real hand-written body at
+parity with `dd-gpu/cuda/cuda_shim.c`, and the compute core executes PTX end-to-end on an embedded
+`dd-gpu` software backend (no GPU). It is a functional, drop-in `libcuda.so.1` for dd's modeled subset.
 
 - **Crate.** `dd-shim-cuda` (`crate-type = ["cdylib","rlib"]`), out of `default-members` like the other
   shims, so the engine gate's `cargo build` surface is unchanged. It depends on `dd-shim-common` (the
@@ -153,28 +154,42 @@ backend yet (that is the future work below). It is the "proper structure for the
   Accumulated IR is encoded with the SAME `ir::encode_stream` the host decodes; an anti-drift test
   (`launch_path_encodes_the_shared_ir_contract`) drives the real exported entry points through
   alloc→H2D→module→launch and decodes the bytes with the host's own `dd_gpu::ir` decoder.
-- **What is real vs stub.** 26 entry points are hand-written: the **bring-up** set returns real, sane
-  values (`cuInit`, `cuDriverGetVersion`→12.2, `cuDeviceGetCount`/`cuDeviceGet`/`cuDeviceGetName`/
-  `cuDeviceGetAttribute`/`cuDeviceComputeCapability`/`cuDeviceGetUuid`/`cuDeviceTotalMem_v2` from
-  `CudaDeviceDesc::apple_default`, `cuCtxCreate_v2`/`cuCtxDestroy_v2`/`cuCtxSetCurrent`/…); the
-  **IR-wired** set is the memory + module + launch mapping above. The remaining ~106 are generated
-  spec-faithful stubs: correct ABI so an app links and runs, a `DD_SHIM_DEBUG`-gated "unimplemented
-  entry point" trace, and a benign `CUDA_SUCCESS` return — the shrinking long tail, ported
-  incrementally without the exported surface ever changing.
-- **The deferred seam — a host PTX/compute backend (future work).** Two things need a host backend that
-  actually *executes* the emitted compute IR and holds device memory: `cuMemcpyDtoH_v2` device→host
-  **readback** (today a traced, zero-filling no-op) and real dispatch execution. On a Metal host the
-  kernel path is `PTX → SPIR-V → MSL → AIR` (research-grade — see `docs/ideas/CUDA_ON_METAL.md §5`); the
-  headless oracle is `dd-gpu`'s `ptx.rs` PTX→kernel-IR interpreter on the `SoftwareBackend`. Wiring one
-  of those under `dd-shim-common`'s transport (a compute-oriented exec service, since compute has no
-  present surface) is the next increment. Until then the scaffold encodes correct IR and drops it when
-  no `$DD_GPU_EXEC` host is configured.
-- **Validation (scaffold-level, this increment).** `cargo build -p dd-shim-cuda --release` produces a
-  valid aarch64 ELF with `SONAME libcuda.so.1` exporting exactly the 132 generated `cu*` symbols (no
-  duplicates; `.dynsym` matches the manifest byte-for-byte). A plain C `dlopen` (`tests/smoke.c`)
-  resolves and drives the bring-up path (`cuInit`/`cuDriverGetVersion`→12.2/`cuDeviceGetCount`→1/
-  `cuDeviceGet`/`cuDeviceGetName`/`cuCtxCreate_v2`). The anti-drift + completeness unit tests pass. A
-  default `cargo build` does not compile the crate, and `dd-gpu`'s 70 tests stay green.
+- **What is real vs stub — the long tail is now fully ported.** All **132** entry points have real
+  hand-written bodies in `src/driver.rs` at parity with `dd-gpu/cuda/cuda_shim.c` (the parity oracle);
+  `GENERATED_STUBS == 0`. The families, and how each is backed:
+
+  | Family | Entry points | Backing (parity with `cuda_shim.c`) |
+  | --- | --- | --- |
+  | init / version / errors | `cuInit`, `cuDriverGetVersion`, `cuGetError{String,Name}` | real values; 12.2 driver version |
+  | device presence | `cuDeviceGet*`, `cuDeviceGetAttribute` (full switch), `cuDeviceComputeCapability`, `cuDeviceTotalMem_v2`, `cuDeviceGetProperties`, `cuDeviceGetUuid[_v2]`, `cuDeviceGetPCIBusId`, `cuDeviceGetByPCIBusId`, `cuDeviceCanAccessPeer` | `CudaDeviceDesc::apple_default` + oracle-matched attribute table; `cuDeviceGetLuid`→`NOT_SUPPORTED` |
+  | context | `cuCtxCreate_v2/v3`, `cuCtxDestroy_v2`, `cuCtx{Push,Pop}Current_v2`, `cuCtx{Set,Get}Current`, `cuCtxGetDevice`, `cuCtxSynchronize`, `cuCtxGetApiVersion`, `cuCtx{Get,Set}{Flags,Limit,CacheConfig,SharedMemConfig}`, `cuCtxGetId`, `cuCtxGetStreamPriorityRange`, `cuCtxResetPersistingL2Cache`, `cuCtx{Enable,Disable}PeerAccess` | current-ctx + push/pop stack + per-ctx flags + a limits table; peer access → the spec-correct `PEER_ACCESS_*` errors |
+  | primary context | `cuDevicePrimaryCtx{Retain,Release_v2,Reset_v2,GetState,SetFlags_v2}` | ref-counted singleton primary context |
+  | memory | `cuMemAlloc_v2`, `cuMemAllocManaged`, `cuMemAllocPitch_v2`, `cuMemFree_v2`, `cuMemAllocHost_v2`/`cuMemHostAlloc`/`cuMemFreeHost`, `cuMemHostRegister_v2`/`cuMemHostUnregister`, `cuMemHostGetDevicePointer_v2`, `cuMemHostGetFlags`, `cuMemGetInfo_v2`, `cuMemGetAddressRange_v2`, `cuMem{Alloc,Free}Async`, `cuMemPrefetchAsync`, `cuMemAdvise` | device allocs → IR `CreateBuffer`; a registry (base/size/kind) backs GetInfo/AddressRange/pointer-attrs; host allocs return real host memory |
+  | copy / fill | `cuMemcpy[Async]`, `cuMemcpyDtoD[Async]_v2`, `cuMemcpyHtoD[Async]_v2`, `cuMemcpyDtoH[Async]_v2`, `cuMemcpyPeer[Async]`, `cuMemsetD{8,16,32}[_v2,Async]` | H2D/fill → `WriteBuffer`; D2H → backend readback; D2D → readback-then-write — all execute on the embedded backend |
+  | module / function | `cuModuleLoad[Data,DataEx,FatBinary]`, `cuModuleUnload`, `cuModuleGetFunction`, `cuModuleGetGlobal_v2`, `cuModuleGet{Tex,Surf}Ref`, `cuModuleGetLoadingMode`, `cuFuncGet{Attribute,Module,Name}`, `cuFuncSet{Attribute,CacheConfig,SharedMemConfig}` | PTX parsed into modules/entries; globals/tex/surf → `NOT_FOUND` (PTX-entry-only model) |
+  | launch | `cuLaunchKernel`, `cuLaunchKernelEx`, `cuLaunchCooperativeKernel`, `cuLaunchHostFunc` | compute pipeline + dispatch via `CudaContext::launch`; host-func runs inline |
+  | occupancy | `cuOccupancyMaxActiveBlocksPerMultiprocessor[WithFlags]`, `cuOccupancyMaxPotentialBlockSize[WithFlags]`, `cuOccupancyAvailableDynamicSMemPerBlock` | computed from the modeled SM limits |
+  | pointer attrs | `cuPointerGet{Attribute,Attributes}`, `cuPointerSetAttribute` | answered from the allocation registry |
+  | stream / event | `cuStreamCreate[WithPriority]`, `cuStreamDestroy_v2`, `cuStream{Synchronize,Query,WaitEvent,AddCallback,GetFlags,GetPriority,GetCtx,GetId,AttachMemAsync,IsCapturing}`, `cuThreadExchangeStreamCaptureMode`, `cuEvent{Create,Record[WithFlags],Query,Synchronize,Destroy_v2,ElapsedTime}` | synchronous-executor tokens with per-stream flags/priority; events timestamp with the monotonic clock so `cuEventElapsedTime` is truthful; callbacks fire inline |
+  | proc table / profiler | `cuGetProcAddress[_v2]`, `cuProfiler{Initialize,Start,Stop}` | `cuGetProcAddress` resolves the object's own `cu*` exports via `dlsym(RTLD_DEFAULT)` with the base→`_v2` alias map |
+
+  The handful that cannot be served by the dd-gpu model return the **spec-correct error** the oracle
+  returns (`NOT_SUPPORTED` / `NOT_FOUND` / `PEER_ACCESS_*`), never a fake success. The one partial-parity
+  item is **fatbin/cubin** input: `cuModuleLoad*` treat the image as PTX text (the oracle's `fatbin.h`
+  extraction and its ELF→`INVALID_IMAGE` guard have no Rust port yet), so a real fatbin container is not
+  unpacked — plain PTX loads fully.
+- **Execution is real, in-process.** The accumulated IR is executed on an embedded `dd_gpu::software`
+  `SoftwareBackend` (the same PTX interpreter the oracle mirrors), so alloc / H2D / launch / **DtoH
+  readback** / memset / DtoD run end-to-end with numerically correct results and no GPU. On a real host
+  the same bytes ship over `$DD_GPU_EXEC` to the host Metal executor (`PTX → SPIR-V → MSL → AIR`,
+  research-grade — see `docs/ideas/CUDA_ON_METAL.md §5`).
+- **Validation.** `cargo build -p dd-shim-cuda --release` produces a valid aarch64 ELF with
+  `SONAME libcuda.so.1` exporting exactly the 132 `cu*` symbols (no duplicates; `.dynsym` matches the
+  manifest byte-for-byte). The unit tests cover the completeness census (132 real, 0 stubs), two
+  anti-drift round-trips (launch and memset/DtoD encode → the host `dd_gpu::ir` decoder), an
+  end-to-end vector-add through the exported API, a memset→DtoD→DtoH + `cuMemGetInfo`/`AddressRange`
+  functional check, context management (push/pop/limits/primary-ctx), and function/occupancy/event
+  queries. A default `cargo build` does not compile the crate, and `dd-gpu`'s 70 tests stay green.
 
 ## Retiring `gl_shim.c` (the incremental cutover)
 
