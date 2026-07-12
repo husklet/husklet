@@ -1787,6 +1787,7 @@ impl<P: Presenter> Server<P> {
                 iosurface_id: Some(*iosurface_id),
                 gpu_render: *gpu_render,
                 uv_rect: map.uv_rect,
+                damage: None,
             });
         }
         if let Some(Obj::SolidColorBuffer {
@@ -1818,6 +1819,7 @@ impl<P: Presenter> Server<P> {
                 iosurface_id: None,
                 gpu_render: false,
                 uv_rect: [0.0, 0.0, 1.0, 1.0],
+                damage: None,
             });
         }
         let (pool, offset, width, height, stride, format) = match self.objs.get(&bid) {
@@ -1894,6 +1896,7 @@ impl<P: Presenter> Server<P> {
             iosurface_id: None,
             gpu_render: false,
             uv_rect: [0.0, 0.0, 1.0, 1.0],
+            damage: None,
         })
     }
 

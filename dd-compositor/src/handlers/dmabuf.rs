@@ -125,6 +125,9 @@ impl DdState {
             iosurface_id: Some(iosurface_id),
             gpu_render,
             uv_rect,
+            // Zero-copy IOSurface: the host texture is shared, not re-uploaded, so partial-damage upload
+            // does not apply here.
+            damage: None,
         })
     }
 }

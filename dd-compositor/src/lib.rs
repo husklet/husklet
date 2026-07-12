@@ -38,7 +38,7 @@
 //! `dd.app/Contents/Frameworks` and link with `-rpath @executable_path/../Frameworks` (or statically
 //! link it). No guest/user install is ever required.
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::time::Instant;
 
 use dd_display::present::Presenter;
@@ -180,6 +180,18 @@ pub struct DdState {
     /// last one here and re-read it whenever the root window re-composites (mirrors `server.rs`'s
     /// per-surface `current_buffer`). Also lets a popup/child commit re-present its ROOT toplevel.
     pub(crate) buffers: HashMap<u32, WlBuffer>,
+    /// Per-surface repacked tight-BGRA texture cache (`sid` → last uploaded pixels), the CPU half of
+    /// damage tracking. Instead of re-repacking a surface's WHOLE `wl_shm` buffer on every commit, a
+    /// commit with `wl_surface.damage`/`damage_buffer` copies only the changed rows into this persistent
+    /// buffer; a re-composite of an unchanged child reuses it without re-reading `wl_shm` at all. The
+    /// cache always holds the complete, correct frame, so the composited output is identical to the
+    /// full-upload path (see [`handlers::compositor::RepackCache`]).
+    pub(crate) repacks: HashMap<u32, handlers::compositor::RepackCache>,
+    /// Surfaces whose pixels changed (new buffer or damage) since their window tree was last presented.
+    /// A commit whose entire presented tree is clean skips the expensive present/upload but still fires
+    /// the committing surface's `wl_surface.frame` callbacks, so a client that committed only to obtain a
+    /// frame callback never stalls. Cleared for the whole tree when it is presented.
+    pub(crate) dirty: HashSet<u32>,
     /// The active `xdg_popup` grab chain (outer→inner). A popup created with `xdg_popup.grab` is dismissed
     /// (with `popup_done`) together with its whole submenu chain when the user clicks outside it; the
     /// input/present loop drives that via [`DdState::dismiss_popup_grabs`]. Tooltips (mapped without a
@@ -336,6 +348,8 @@ impl DdState {
             ptr_loc: (0.0, 0.0),
             recent_serials: VecDeque::new(),
             buffers: HashMap::new(),
+            repacks: HashMap::new(),
+            dirty: HashSet::new(),
             popup_grabs: Vec::new(),
             last_cfg: None,
             present_seq: 0,

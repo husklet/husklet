@@ -31,6 +31,14 @@ pub struct SurfaceBuffer {
     pub gpu_render: bool,
     /// Normalized source rectangle in the backing texture, `(u0, v0, u1, v1)`.
     pub uv_rect: [f32; 4],
+    /// The region of the backing texture this commit actually changed, as `(x, y, w, h)` in backing
+    /// texture pixels. `None` means the whole texture is new (a fresh buffer, a resize, or the first
+    /// upload) and must be uploaded in full. When `Some`, everything outside the rectangle is byte-for-
+    /// byte identical to the previously presented frame, so a presenter MAY upload only that sub-region
+    /// to its Metal/IOSurface texture (`wl_surface.damage`/`damage_buffer` honoured). This is a pure
+    /// upload hint: `bgra` always holds the complete, correct frame, so a presenter that ignores
+    /// `damage` (e.g. `PngPresenter`) stays pixel-identical to the full-upload path.
+    pub damage: Option<(i32, i32, i32, i32)>,
 }
 
 impl SurfaceBuffer {

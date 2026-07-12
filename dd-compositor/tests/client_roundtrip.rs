@@ -257,6 +257,7 @@ fn globals_advertise_frame_presents_feedback_and_cursor_shape_wire() {
     let last_raise = Arc::new(Mutex::new(None));
     let last_cursor_buffer = Arc::new(Mutex::new(None));
     let cursor_hidden = Arc::new(Mutex::new(None));
+    let last_damage = Arc::new(Mutex::new(None));
     let mut state = DdState::new(
         dh.clone(),
         Box::new(RecordingPresenter {
@@ -269,6 +270,7 @@ fn globals_advertise_frame_presents_feedback_and_cursor_shape_wire() {
             last_raise: last_raise.clone(),
             last_cursor_buffer: last_cursor_buffer.clone(),
             cursor_hidden: cursor_hidden.clone(),
+            last_damage: last_damage.clone(),
         }),
     );
 
@@ -436,6 +438,46 @@ fn globals_advertise_frame_presents_feedback_and_cursor_shape_wire() {
         c.saw(feedback, 1),
         "expected wp_presentation_feedback.presented (opcode 1) on {feedback}; saw {:?}",
         c.events
+    );
+
+    // (1b) Damage tracking + skip-redundant-present. The first commit above uploaded the whole 4x3
+    // texture (a fresh buffer ⇒ full damage). Now exercise the two perf paths:
+    //
+    //  (a) A commit carrying NO new buffer and NO damage — a client committing only to obtain a
+    //      wl_surface.frame callback — must NOT present a redundant frame, yet MUST still fire that frame
+    //      callback so the client is never stalled waiting to draw again.
+    let frames_after_first = state.presenter.frame_count();
+    let fcb = c.alloc();
+    c.conn.send(&Message::new(surface, 3).u32(fcb)); // wl_surface.frame(callback)
+    c.conn.send(&Message::new(surface, 6)); // commit (no attach, no damage)
+    pump!();
+    assert_eq!(
+        state.presenter.frame_count(),
+        frames_after_first,
+        "a no-damage, no-buffer commit must not present a redundant frame"
+    );
+    assert!(
+        c.saw(fcb, 0),
+        "a frame-callback-only commit must still fire wl_surface.frame.done (opcode 0); saw {:?}",
+        c.events
+    );
+
+    //  (b) A commit that re-attaches a buffer and damages only a sub-region MUST present, and the
+    //      presented SurfaceBuffer must carry that region as a partial upload hint (a single middle row
+    //      here) rather than the whole texture — proving damage reaches the Presenter seam.
+    *last_damage.lock().unwrap() = None;
+    c.conn.send(&Message::new(surface, 1).u32(buffer).i32(0).i32(0)); // attach (reuse buffer)
+    c.conn.send(&Message::new(surface, 2).i32(0).i32(1).i32(w).i32(1)); // damage(x=0,y=1,w,h=1)
+    c.conn.send(&Message::new(surface, 6)); // commit → present
+    pump!();
+    assert!(
+        state.presenter.frame_count() > frames_after_first,
+        "a damaged commit must present"
+    );
+    assert_eq!(
+        *last_damage.lock().unwrap(),
+        Some(Some((0, 1, w, 1))),
+        "a single-surface damaged commit should upload only the damaged row band, not the whole texture"
     );
 
     // (2) wp_cursor_shape wiring: give the pointer focus (in-process) so set_shape's serial check
@@ -961,10 +1003,14 @@ struct RecordingPresenter {
     last_cursor_buffer: Arc<Mutex<Option<(Vec<u8>, i32, i32, i32, i32)>>>,
     /// The last `set_cursor_hidden` value (pointer hide/show for `set_cursor(null)` and pointer lock).
     cursor_hidden: Arc<Mutex<Option<bool>>>,
+    /// The `SurfaceBuffer::damage` upload hint of the last presented frame — so the damage-tracking path
+    /// can assert a small-damage commit presents only the changed region, not the whole texture.
+    last_damage: Arc<Mutex<Option<Option<(i32, i32, i32, i32)>>>>,
 }
 impl dd_display::present::Presenter for RecordingPresenter {
-    fn present(&mut self, _surf: &dd_display::present::SurfaceBuffer) -> bool {
+    fn present(&mut self, surf: &dd_display::present::SurfaceBuffer) -> bool {
         self.frames += 1;
+        *self.last_damage.lock().unwrap() = Some(surf.damage);
         true
     }
     fn frame_count(&self) -> u32 {

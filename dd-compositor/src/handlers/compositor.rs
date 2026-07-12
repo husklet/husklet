@@ -23,7 +23,7 @@ use smithay::{
         buffer::BufferHandler,
         compositor::{
             get_children, get_parent, is_sync_subsurface, with_states, BufferAssignment,
-            CompositorClientState, CompositorHandler, CompositorState, SubsurfaceCachedState,
+            CompositorClientState, CompositorHandler, CompositorState, Damage, SubsurfaceCachedState,
             SurfaceAttributes,
         },
         presentation::{PresentationFeedbackCachedState, Refresh},
@@ -71,12 +71,22 @@ impl DdState {
     /// parent within the same transaction). Every other commit (toplevel, popup, or a *desynchronized*
     /// subsurface) presents the composited window root.
     pub(crate) fn on_commit(&mut self, surface: &WlSurface) {
-        self.remember_buffer(surface);
+        // Ingest this commit's buffer + damage into the per-surface repack cache and mark the surface
+        // dirty if its pixels changed. This is the CPU half of damage tracking: only the damaged rows of
+        // a re-attached buffer are copied, instead of repacking the whole buffer on every commit.
+        self.ingest_buffer(surface);
 
         // A custom cursor surface (`wl_pointer.set_cursor`) is NOT a window: turn its just-committed buffer
         // into the host cursor (handlers::seat) instead of presenting it as a tiny window. Handles animated /
         // updated cursors (each re-commit refreshes the host cursor).
         if self.is_cursor_surface(surface) {
+            // A cursor is turned into a host cursor, never presented as a window, so it must not linger in
+            // the dirty set or the repack cache — a stale cursor sid there would force the skip-present
+            // fast-path to scan the tree on every unrelated commit. Its buffer stays in `self.buffers`
+            // (that is where `update_cursor_surface` reads it from).
+            let sid = surface_id(surface);
+            self.dirty.remove(&sid);
+            self.repacks.remove(&sid);
             self.update_cursor_surface(surface);
             return;
         }
@@ -91,29 +101,195 @@ impl DdState {
         let Some(root) = self.window_root(surface) else {
             return;
         };
+
+        // Skip a redundant present: if NOTHING in the presented tree changed since it was last shown, the
+        // composited frame is byte-for-byte what is already on screen — re-compositing and re-uploading it
+        // is pure waste. Skip the present, but STILL fire the tree's `wl_surface.frame` callbacks: a client
+        // that committed only to obtain a frame callback must not stall. Pacing the whole tree (not just
+        // the committed surface) matches the full-present path's callback breadth, so no surface's callback
+        // is ever left pending. No needed repaint is dropped — any changed surface anywhere in the tree
+        // (this one, a sibling, or a sync subsurface that committed into this atomic parent commit) leaves
+        // the tree dirty and forces the present below instead. Presentation feedback is `discarded` because
+        // no new content reached the screen this cycle.
+        if !self.tree_dirty(&root) {
+            self.pace_tree(&root, false);
+            return;
+        }
         self.present_render_root(&root);
     }
 
-    /// Record (or clear) the surface's latest committed `wl_shm` buffer. A bufferless commit leaves the
-    /// previous buffer in place (the on-screen content persists); an explicit detach removes it.
-    fn remember_buffer(&mut self, surface: &WlSurface) {
+    /// Ingest a commit's buffer + damage, keeping the per-surface tight-BGRA repack cache in sync with the
+    /// latest committed content and marking the surface dirty iff its pixels changed. Returns whether the
+    /// surface changed (a genuinely new buffer, an explicit detach, or damage against the current buffer);
+    /// a commit that changed nothing — e.g. one made only to request a frame callback — returns `false` so
+    /// the present can be skipped.
+    ///
+    /// Smithay's `SurfaceAttributes` are cumulative, not per-commit: `current().buffer` PERSISTS across
+    /// commits (its `merge_into` only overwrites it on a fresh attach, so it reads `Some(NewBuffer)` on
+    /// every commit once a buffer is attached) and `current().damage` only ever ACCUMULATES. So a genuinely
+    /// new buffer is detected by object identity against the last one we stored, and the damage is DRAINED
+    /// here (like the frame callbacks are drained when pacing) so it reflects only this commit.
+    fn ingest_buffer(&mut self, surface: &WlSurface) -> bool {
         let sid = surface_id(surface);
-        let assignment = with_states(surface, |states| {
+        let (buffer, removed, damage, scale, surface_safe) = with_states(surface, |states| {
             let mut attrs = states.cached_state.get::<SurfaceAttributes>();
-            match &attrs.current().buffer {
-                Some(BufferAssignment::NewBuffer(b)) => Some(Some(b.clone())),
-                Some(BufferAssignment::Removed) => Some(None),
-                None => None,
+            let cur = attrs.current();
+            // Read the persistent buffer assignment WITHOUT clearing it — Smithay uses `current().buffer`
+            // for its own `wl_buffer.release` bookkeeping on the next attach, so clearing it would leak the
+            // release and stall a multi-buffered client.
+            let (buffer, removed) = match &cur.buffer {
+                Some(BufferAssignment::NewBuffer(b)) => (Some(b.clone()), false),
+                Some(BufferAssignment::Removed) => (None, true),
+                None => (None, false),
+            };
+            // Drain the accumulated damage (Smithay only extends it; the compositor is expected to consume
+            // it, exactly as `pace_surface` drains the frame callbacks). `Damage` is not `Clone`, so lift
+            // each rect to a plain `(y, h, surface_space)` we own — only the vertical extent drives the
+            // row-band copy, and the flag records surface-space (`wl_surface.damage`, needs `* scale`) vs
+            // buffer-space (`damage_buffer`, already in buffer pixels) damage.
+            let damage: Vec<(i32, i32, bool)> = std::mem::take(&mut cur.damage)
+                .iter()
+                .map(|d| match d {
+                    Damage::Buffer(r) => (r.loc.y, r.size.h, false),
+                    Damage::Surface(r) => (r.loc.y, r.size.h, true),
+                })
+                .collect();
+            let scale = cur.buffer_scale.max(1);
+            let transform_normal = cur.buffer_transform
+                == smithay::reexports::wayland_server::protocol::wl_output::Transform::Normal;
+            // Surface-space damage maps to buffer rows by a plain `* buffer_scale` ONLY when there is no
+            // buffer transform and no `wp_viewport` source crop; otherwise the mapping is non-linear and we
+            // fall back to a full repack (see `damage_to_rows`).
+            let mut vp = states.cached_state.get::<ViewportCachedState>();
+            let has_src = vp.current().src.is_some();
+            (buffer, removed, damage, scale, transform_normal && !has_src)
+        });
+
+        if removed {
+            // Explicit detach. Only a change the first time (the assignment persists, so later commits keep
+            // reporting `Removed` — treat those as no-ops).
+            let had = self.buffers.remove(&sid).is_some();
+            self.repacks.remove(&sid);
+            if had {
+                self.dirty.insert(sid);
+            }
+            return had;
+        }
+        match buffer {
+            Some(b) => {
+                // A genuinely new buffer object, or damage against the current one, is a real content
+                // change; the same buffer re-committed with no damage (e.g. a frame-callback-only commit)
+                // is not.
+                let new_buffer = self.buffers.get(&sid) != Some(&b);
+                let changed = new_buffer || !damage.is_empty();
+                self.buffers.insert(sid, b.clone());
+                if changed {
+                    self.repack_shm(sid, &b, &damage, scale, surface_safe);
+                    self.dirty.insert(sid);
+                }
+                changed
+            }
+            // No buffer has ever been attached (bufferless pre-map commit) — nothing to present, and
+            // damage against a non-existent buffer changes nothing visible.
+            None => false,
+        }
+    }
+
+    /// Repack a committed `wl_shm` buffer into the surface's tight-BGRA cache, honouring damage. When the
+    /// cache already holds the previous frame at the same size/format and this commit carries a mappable
+    /// damage region, only the changed rows are copied — the rest of the cache already equals the new
+    /// buffer, since a client guarantees the undamaged region is unchanged from the previously committed
+    /// buffer. A first upload, a resize, a format change, or unmappable damage repacks the whole buffer. A
+    /// dmabuf/IOSurface buffer has no CPU pixels (`with_buffer_contents` fails) and drops any stale cache;
+    /// it presents zero-copy through [`Self::dmabuf_surface_buffer`].
+    fn repack_shm(
+        &mut self,
+        sid: u32,
+        buffer: &WlBuffer,
+        damage: &[(i32, i32, bool)],
+        scale: i32,
+        surface_safe: bool,
+    ) {
+        let repacks = &mut self.repacks;
+        let res = with_buffer_contents(buffer, |ptr, len, data| {
+            let w = data.width;
+            let h = data.height;
+            let stride = data.stride;
+            let src_off = data.offset;
+            let fmt = match data.format {
+                wl_shm::Format::Xrgb8888 => 1u32, // opaque (dd-display convention: format==1 ⇒ XRGB)
+                _ => 0u32,                        // ARGB8888 (and anything else): honour alpha
+            };
+            // ROBUSTNESS (defense-in-depth, preserved from the pre-restructure `build_surface_buffer`):
+            // width/height/stride/offset are client-controlled. Reject degenerate or malformed geometry,
+            // and — crucially — never read past the actual mapping. Smithay's shm handler validates a
+            // buffer fits its pool, but this guards a hostile or buggy client: without it a bad
+            // stride/offset/height would `ptr.offset()` out of bounds (crash / info-leak) and an oversized
+            // `w`/`h` would overflow the `tight * h` allocation. A rejected buffer drops any stale cache so
+            // nothing garbage is presented. This one check (highest byte read = src_off + (h-1)*stride +
+            // w*4) covers BOTH copy paths below: the partial path only ever reads a sub-band of rows
+            // `[0, h)`, so the full-height bound bounds it too.
+            let tight = match w.checked_mul(4).map(|t| t as usize) {
+                Some(t) if w > 0 && h > 0 && stride >= w * 4 && src_off >= 0 => t,
+                _ => {
+                    repacks.remove(&sid);
+                    return;
+                }
+            };
+            let last_row_start = src_off as usize + (h as usize - 1) * stride as usize;
+            match last_row_start.checked_add(tight) {
+                Some(max_read) if max_read <= len => {}
+                _ => {
+                    repacks.remove(&sid);
+                    return;
+                }
+            }
+            // Reuse (and partially update) the cache only if it describes the same backing texture.
+            let reusable = matches!(
+                repacks.get(&sid),
+                Some(c) if c.tex_w == w && c.tex_h == h && c.format == fmt
+                    && c.bgra.len() == tight * h as usize
+            );
+            let rows = if reusable {
+                damage_to_rows(damage, scale, h, surface_safe)
+            } else {
+                None
+            };
+            match rows {
+                // Partial: copy ONLY the damaged rows into the existing cache (the win — the rest already
+                // matches this buffer). Full-width rows keep the copy contiguous and always correct.
+                Some((y0, y1)) => {
+                    let cache = repacks.get_mut(&sid).unwrap();
+                    for row in y0..y1 {
+                        let src =
+                            unsafe { ptr.offset(src_off as isize + row as isize * stride as isize) };
+                        let dstart = row as usize * tight;
+                        unsafe {
+                            std::ptr::copy_nonoverlapping(src, cache.bgra[dstart..].as_mut_ptr(), tight);
+                        }
+                    }
+                    cache.damage = Some((0, y0, w, y1 - y0));
+                }
+                // Full repack (first upload / resize / format change / unmappable damage).
+                None => {
+                    let mut bgra = vec![0u8; tight * h as usize];
+                    for row in 0..h as isize {
+                        let src = unsafe { ptr.offset(src_off as isize + row * stride as isize) };
+                        let dstart = row as usize * tight;
+                        unsafe {
+                            std::ptr::copy_nonoverlapping(src, bgra[dstart..].as_mut_ptr(), tight);
+                        }
+                    }
+                    repacks.insert(
+                        sid,
+                        RepackCache { bgra, tex_w: w, tex_h: h, format: fmt, damage: None },
+                    );
+                }
             }
         });
-        match assignment {
-            Some(Some(b)) => {
-                self.buffers.insert(sid, b);
-            }
-            Some(None) => {
-                self.buffers.remove(&sid);
-            }
-            None => {}
+        if res.is_err() {
+            // Not a `wl_shm` buffer (e.g. a dmabuf) — no CPU pixels to cache.
+            self.repacks.remove(&sid);
         }
     }
 
@@ -146,8 +322,20 @@ impl DdState {
         let did_present = match self.snapshot_surface(root) {
             Some(mut base) => {
                 if base.iosurface_id.is_none() && !base.bgra.is_empty() {
+                    let popups = self.collect_popups_for_root(root);
+                    // The partial-damage upload hint on `base` describes only the ROOT's own changed
+                    // region. Once subsurfaces or popups are blended in, their changed pixels lie outside
+                    // that rect, so the composited frame must be uploaded in full — widen the hint to the
+                    // whole texture. (The CPU repack of each surface was still incremental; only the GPU
+                    // upload hint is widened, and correctness is preserved either way since `bgra` is the
+                    // complete composite.)
+                    let has_overlays =
+                        !popups.is_empty() || get_children(root).into_iter().any(|c| &c != root);
+                    if has_overlays {
+                        base.damage = None;
+                    }
                     self.blend_subtree(&mut base, root, 0, 0);
-                    for (popup, ox, oy) in self.collect_popups_for_root(root) {
+                    for (popup, ox, oy) in popups {
                         if let Some(psb) = self.snapshot_surface(&popup) {
                             blend(&mut base, &psb, ox, oy);
                         }
@@ -158,8 +346,41 @@ impl DdState {
             }
             None => false,
         };
+        // The tree reached the screen — every surface in it is now clean. On a FAILED present we keep the
+        // dirty flags so the next commit retries the repaint rather than skipping it.
+        if did_present {
+            self.clear_tree_dirty(root);
+        }
         self.pace_tree(root, did_present);
         did_present
+    }
+
+    /// Whether any surface in `root`'s presented tree (root + subsurface descendants + popups + their
+    /// descendants) has changed since the tree was last presented. Drives the skip-redundant-present
+    /// decision in [`Self::on_commit`].
+    fn tree_dirty(&self, root: &WlSurface) -> bool {
+        if self.dirty.is_empty() {
+            return false;
+        }
+        let mut surfaces = Vec::new();
+        self.collect_tree_surfaces(root, &mut surfaces);
+        for (popup, _, _) in self.collect_popups_for_root(root) {
+            self.collect_tree_surfaces(&popup, &mut surfaces);
+        }
+        surfaces.iter().any(|s| self.dirty.contains(&surface_id(s)))
+    }
+
+    /// Clear the dirty flag for every surface in `root`'s presented tree (called after a successful
+    /// present — the whole tree is now on screen).
+    fn clear_tree_dirty(&mut self, root: &WlSurface) {
+        let mut surfaces = Vec::new();
+        self.collect_tree_surfaces(root, &mut surfaces);
+        for (popup, _, _) in self.collect_popups_for_root(root) {
+            self.collect_tree_surfaces(&popup, &mut surfaces);
+        }
+        for s in surfaces {
+            self.dirty.remove(&surface_id(&s));
+        }
     }
 
     /// Blend every mapped subsurface descendant of `surface` into `base`, bottom→top (the z-order Smithay
@@ -234,7 +455,7 @@ impl DdState {
     /// buffer yet.
     fn snapshot_surface(&self, surface: &WlSurface) -> Option<SurfaceBuffer> {
         let sid = surface_id(surface);
-        let buffer = self.buffers.get(&sid)?.clone();
+        let buffer = self.buffers.get(&sid)?;
         let (buffer_scale, dst, src) = with_states(surface, |states| {
             let scale = states
                 .cached_state
@@ -247,7 +468,33 @@ impl DdState {
             let src = cur.src.map(|r| (r.loc.x, r.loc.y, r.size.w, r.size.h));
             (scale, cur.size(), src)
         });
-        self.build_surface_buffer(sid, &buffer, buffer_scale, dst, src)
+        // GPU present path: a dmabuf-backed buffer carries a dd IOSurface id (no CPU pixels). Resolve it
+        // to a zero-copy IOSurface `SurfaceBuffer` and skip the shm cache.
+        if let Some(sb) = self.dmabuf_surface_buffer(sid, buffer, buffer_scale, dst, src) {
+            return Some(sb);
+        }
+        // `wl_shm` path: build from the tight-BGRA cache, repacked (whole buffer or only the damaged rows)
+        // at commit time in `repack_shm`. The `wp_viewport` destination/source resolve the logical size
+        // and the normalized sample rect exactly as the full-upload path did.
+        let cache = self.repacks.get(&sid)?;
+        let title = self.titles.get(&sid).cloned().unwrap_or_else(|| "dd".into());
+        let (log_w, log_h, uv_rect) =
+            logical_size_and_uv(dst, src, cache.tex_w, cache.tex_h, buffer_scale);
+        Some(SurfaceBuffer {
+            sid,
+            width: log_w,
+            height: log_h,
+            texture_width: cache.tex_w,
+            texture_height: cache.tex_h,
+            stride: cache.tex_w * 4,
+            format: cache.format,
+            bgra: cache.bgra.clone(),
+            title,
+            iosurface_id: None,
+            gpu_render: false,
+            uv_rect,
+            damage: cache.damage,
+        })
     }
 
     /// Advance frame pacing for every surface in the presented window tree (root + subsurface descendants +
@@ -262,29 +509,37 @@ impl DdState {
             self.collect_tree_surfaces(&popup, &mut surfaces);
         }
         for s in surfaces {
-            let (callbacks, feedback) = with_states(&s, |states| {
-                let callbacks: Vec<_> = std::mem::take(
-                    &mut states
-                        .cached_state
-                        .get::<SurfaceAttributes>()
-                        .current()
-                        .frame_callbacks,
-                );
-                let feedback = std::mem::take(
-                    &mut states
-                        .cached_state
-                        .get::<PresentationFeedbackCachedState>()
-                        .current()
-                        .callbacks,
-                );
-                (callbacks, feedback)
-            });
-            let t = self.now_ms();
-            for cb in callbacks {
-                cb.done(t);
-            }
-            self.send_presentation_feedback(feedback, did_present);
+            self.pace_surface(&s, did_present);
         }
+    }
+
+    /// Drain and fire ONE surface's `wl_surface.frame` callbacks and answer its `wp_presentation`
+    /// feedback (`presented` on success, `discarded` otherwise). Draining is idempotent — a surface with
+    /// no queued callback fires nothing. Split out of [`Self::pace_tree`] so the skip-present path can
+    /// pace the committed surface (firing its frame callback so it never stalls) without re-compositing.
+    fn pace_surface(&mut self, surface: &WlSurface, did_present: bool) {
+        let (callbacks, feedback) = with_states(surface, |states| {
+            let callbacks: Vec<_> = std::mem::take(
+                &mut states
+                    .cached_state
+                    .get::<SurfaceAttributes>()
+                    .current()
+                    .frame_callbacks,
+            );
+            let feedback = std::mem::take(
+                &mut states
+                    .cached_state
+                    .get::<PresentationFeedbackCachedState>()
+                    .current()
+                    .callbacks,
+            );
+            (callbacks, feedback)
+        });
+        let t = self.now_ms();
+        for cb in callbacks {
+            cb.done(t);
+        }
+        self.send_presentation_feedback(feedback, did_present);
     }
 
     /// `surface` and every subsurface descendant, depth-first.
@@ -329,90 +584,62 @@ impl DdState {
         }
     }
 
-    /// Repack a committed `wl_shm` buffer into dd-display's tight-BGRA [`SurfaceBuffer`]. The backing
-    /// texture is the full buffer; the logical size is the `wp_viewport` destination if set, else the
-    /// buffer pixels divided by `wl_surface.buffer_scale` (so a HiDPI 2x buffer maps to logical units).
-    fn build_surface_buffer(
-        &self,
-        sid: u32,
-        buffer: &WlBuffer,
-        buffer_scale: i32,
-        dst: Option<Size<i32, smithay::utils::Logical>>,
-        src: Option<(f64, f64, f64, f64)>,
-    ) -> Option<SurfaceBuffer> {
-        // GPU present path: a dmabuf-backed buffer carries a dd IOSurface id (no CPU pixels). Resolve
-        // it to a zero-copy IOSurface `SurfaceBuffer` and skip the shm repack. A non-dmabuf buffer
-        // returns `None` here and falls through to the `wl_shm` copy below.
-        if let Some(sb) = self.dmabuf_surface_buffer(sid, buffer, buffer_scale, dst, src) {
-            return Some(sb);
-        }
-        let title = self.titles.get(&sid).cloned().unwrap_or_else(|| "dd".into());
-        let res = with_buffer_contents(buffer, |ptr, len, data| {
-            let w = data.width;
-            let h = data.height;
-            let stride = data.stride;
-            let src_off = data.offset;
-            let fmt = match data.format {
-                wl_shm::Format::Xrgb8888 => 1u32, // opaque (dd-display convention: format==1 ⇒ XRGB)
-                _ => 0u32,                        // ARGB8888 (and anything else): honour alpha
-            };
-            // ROBUSTNESS: width/height/stride/offset are client-controlled. Reject degenerate or
-            // malformed geometry, and — crucially — never read past the actual mapping. Smithay's shm
-            // handler validates a buffer fits its pool, but this is defense-in-depth against a hostile or
-            // buggy client: without it a bad stride/offset/height would `ptr.offset()` out of bounds (a
-            // crash or info-leak) and an oversized `w`/`h` would overflow the `tight * h` allocation.
-            let tight = match (w.checked_mul(4)).map(|t| t as usize) {
-                Some(t) if w > 0 && h > 0 && stride >= w * 4 && src_off >= 0 => t,
-                _ => return (0i32, 0i32, fmt, Vec::new()),
-            };
-            let rows = h as usize;
-            // Highest byte the copy reads = src_off + (h-1)*stride + w*4. Must lie within the mapping.
-            let last_row_start = src_off as usize + (rows - 1) * stride as usize;
-            let max_read = match last_row_start.checked_add(tight) {
-                Some(m) => m,
-                None => return (0i32, 0i32, fmt, Vec::new()),
-            };
-            if max_read > len {
-                return (0i32, 0i32, fmt, Vec::new());
-            }
-            // Tight BGRA copy of the backing texture, honouring the pool offset + row stride.
-            let mut bgra = vec![0u8; tight * rows];
-            for row in 0..h as isize {
-                let src = unsafe { ptr.offset(src_off as isize + row * stride as isize) };
-                let dstart = row as usize * tight;
-                unsafe {
-                    std::ptr::copy_nonoverlapping(src, bgra[dstart..].as_mut_ptr(), tight);
-                }
-            }
-            (w, h, fmt, bgra)
-        })
-        .ok()?;
-        let (tex_w, tex_h, fmt, bgra) = res;
-        // A rejected (malformed) buffer yields an empty copy — do not present garbage or a zero-size window.
-        if tex_w <= 0 || tex_h <= 0 || bgra.is_empty() {
-            return None;
-        }
+}
 
-        // wp_viewport source rectangle (given in post-buffer-scale/logical coords) → a normalized
-        // sample rect in the backing texture, so a client that renders into an oversized target and
-        // crops via the viewport (Chrome's fractional-scale path) presents only the requested region.
-        // `dst` (or, absent it, the buffer pixels / buffer_scale) is the on-screen logical size.
-        let (log_w, log_h, uv_rect) = logical_size_and_uv(dst, src, tex_w, tex_h, buffer_scale);
+/// Per-surface repacked tight-BGRA texture — the CPU cache behind damage tracking (see
+/// [`DdState::repacks`]). Holds the surface's last committed content so a damaged commit copies only its
+/// changed rows into it (instead of repacking the whole `wl_shm` buffer) and a re-composite of an
+/// unchanged surface reuses the pixels without re-reading `wl_shm`. The cache always holds the complete,
+/// current frame, so the composited output is byte-for-byte identical to the full-upload path.
+pub(crate) struct RepackCache {
+    /// Tight BGRA, `tex_w * tex_h * 4` bytes.
+    pub(crate) bgra: Vec<u8>,
+    pub(crate) tex_w: i32,
+    pub(crate) tex_h: i32,
+    /// dd-display format convention: 1 ⇒ opaque XRGB, 0 ⇒ honour alpha (ARGB / anything else).
+    pub(crate) format: u32,
+    /// The backing-texture region the latest commit changed, `(x, y, w, h)`, or `None` when the whole
+    /// texture was (re)uploaded. Copied onto the presented [`SurfaceBuffer::damage`] upload hint.
+    pub(crate) damage: Option<(i32, i32, i32, i32)>,
+}
 
-        Some(SurfaceBuffer {
-            sid,
-            width: log_w,
-            height: log_h,
-            texture_width: tex_w,
-            texture_height: tex_h,
-            stride: tex_w * 4,
-            format: fmt,
-            bgra,
-            title,
-            iosurface_id: None,
-            gpu_render: false,
-            uv_rect,
-        })
+/// The bounding row band `[y0, y1)` (in buffer/texture pixels) covered by `damage`, or `None` when there
+/// is no damage OR it cannot be safely mapped to buffer rows — in which case the caller repacks/uploads
+/// the whole buffer. Buffer-space damage (`wl_surface.damage_buffer`) is already in buffer pixels and is
+/// always mappable; surface-space damage (`wl_surface.damage`) maps by `* scale` only when `surface_safe`
+/// (no buffer transform, no `wp_viewport` source crop — see `ingest_buffer`). A degenerate (empty) band
+/// also returns `None`, conservatively forcing a full repack. Only the Y extent is used: the copy stays a
+/// contiguous full-width row band, which is always correct (undamaged columns in a damaged row equal the
+/// new buffer's pixels there anyway).
+fn damage_to_rows(
+    damage: &[(i32, i32, bool)],
+    scale: i32,
+    h: i32,
+    surface_safe: bool,
+) -> Option<(i32, i32)> {
+    if damage.is_empty() {
+        return None;
+    }
+    let mut y0 = i32::MAX;
+    let mut y1 = i32::MIN;
+    for &(ry, rh, surface_space) in damage {
+        let (ry, rh) = if surface_space {
+            if !surface_safe {
+                return None;
+            }
+            (ry.saturating_mul(scale), rh.saturating_mul(scale))
+        } else {
+            (ry, rh)
+        };
+        y0 = y0.min(ry);
+        y1 = y1.max(ry.saturating_add(rh));
+    }
+    let y0 = y0.clamp(0, h);
+    let y1 = y1.clamp(0, h);
+    if y0 >= y1 {
+        None
+    } else {
+        Some((y0, y1))
     }
 }
 
