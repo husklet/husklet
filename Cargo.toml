@@ -1,7 +1,7 @@
 # dd — VM-less Linux container runtime on macOS. Cargo workspace.
 [workspace]
 resolver = "2"
-members = ["dd-jit", "dd-jit-darwin", "dd-images", "dd-daemon", "dd-client", "dd-tests", "dd-cli", "dd-gui", "dd-term-core", "dd-gpu", "dd-display", "dd-compositor", "dd-gpu-wgpu", "dd-shim-common", "dd-shim-gl", "dd-shim-cuda", "dd-shim-cudart"]
+members = ["dd-jit", "dd-jit-darwin", "dd-images", "dd-daemon", "dd-client", "dd-tests", "dd-cli", "dd-gui", "dd-term-core", "dd-gpu", "dd-display", "dd-compositor", "dd-gpu-wgpu", "dd-shim-common", "dd-shim-gl", "dd-shim-cuda", "dd-shim-cudart", "dd-shim-vk"]
 # dd-gui pulls in GTK4/libadwaita (pkg-config), which isn't present on the Linux dev host.
 # Keep it out of the default set so a bare `cargo build` works everywhere; build it
 # explicitly with `cargo build -p dd-gui` (or `make app`) on the macOS host.
@@ -21,7 +21,11 @@ members = ["dd-jit", "dd-jit-darwin", "dd-images", "dd-daemon", "dd-client", "dd
 # dd-shim-cudart is the fourth guest GPU shim (CUDA Runtime API -> libcudart.so.1, layered on
 # dd-shim-cuda); same rationale, likewise out of default-members. Test with `cargo test -p
 # dd-shim-cudart`, build the guest .so with `cargo build -p dd-shim-cudart --release`.
-default-members = ["dd-jit", "dd-jit-darwin", "dd-images", "dd-daemon", "dd-client", "dd-tests", "dd-cli", "dd-term-core", "dd-gpu", "dd-display"]
+# dd-shim-vk is the fifth guest GPU driver (a Vulkan ICD -> libvk_dd.so, discovered by the standard
+# Vulkan loader via icd.json); same rationale, likewise out of default-members. Test with `cargo test
+# -p dd-shim-vk`, build the guest .so with `cargo build -p dd-shim-vk --release`, and enumerate it
+# through a real loader with `VK_ICD_FILENAMES=<...>/icd.json vulkaninfo` (see dd-shim-vk/icd.json).
+default-members =["dd-jit", "dd-jit-darwin", "dd-images", "dd-daemon", "dd-client", "dd-tests", "dd-cli", "dd-term-core", "dd-gpu", "dd-display"]
 
 [profile.release]
 opt-level = 2

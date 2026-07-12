@@ -673,6 +673,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "dd-shim-vk"
+version = "0.1.0"
+dependencies = [
+ "ash",
+ "dd-gpu",
+ "dd-shim-common",
+]
+
+[[package]]
 name = "dd-term-core"
 version = "0.1.0"
 dependencies = [

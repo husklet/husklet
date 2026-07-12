@@ -17,7 +17,7 @@ dd-gpu              host-side: the IR (ir::Cmd), wire codec, GpuBackend trait, M
   └── dd-shim-common   guest-side foundation (rlib): re-exports dd-gpu's IR as the shared contract +
         │              owns the host-exec transport, completion wake, and GPU-memory registration
         ├── dd-shim-gl     GLES2/EGL front-end (cdylib) → libEGL.so.1 / libGLESv2.so.2
-        ├── dd-shim-vk     (future) Vulkan ICD (cdylib) → libvulkan_dd.so / an ICD manifest
+        ├── dd-shim-vk     Vulkan ICD (cdylib) → libvk_dd.so + icd.json (loader-discovered driver)
         ├── dd-shim-cuda   CUDA Driver API driver (cdylib) → libcuda.so.1
         └── dd-shim-cudart CUDA Runtime API library (cdylib) → libcudart.so.1 (peer over dd-gpu)
 ```
@@ -260,6 +260,94 @@ hand-written body at parity with dd's C oracle `dd-gpu/cuda/cudart_shim.c`; `GEN
   and stream/event queries. A plain C `tests/compute.c` `dlopen`s the deployed `libcudart.so.1` and
   drives the full runtime vecadd (proving the ABI + fatbin path). A default `cargo build` does not
   compile the crate, `dd-gpu`'s 70 tests and `dd-shim-cuda`'s stay green, and `dd-shim-gl` is untouched.
+
+## `dd-shim-vk` — the Vulkan ICD (increment 1, foundation)
+
+The fifth library is a **Vulkan Installable Client Driver (ICD)**: the shared object the standard
+Vulkan **loader** (`libvulkan`) discovers via an `icd.json` manifest and drives as a real Vulkan
+driver. Unlike the GL/CUDA shims (which an app `dlopen`s directly by soname), a Vulkan app links
+`libvulkan`, and the loader — not the app — loads our `.so`, negotiates a private loader↔ICD
+interface, and routes every `vk*` call to us. This increment establishes the ICD interface + the full
+`vk.xml`-generated surface + the bring-up entry points + the Vulkan→IR seam; real command execution is
+a later increment (the host SPIR-V→Metal seam it targets is already proven in `dd-gpu-wgpu`).
+
+**Everything is ported from the authoritative open-source references, not invented:**
+
+- **The loader↔ICD interface** (`src/icd.rs`, `src/handle.rs`) — ported from the Khronos
+  **Vulkan-Loader** (`docs/LoaderDriverInterface.md` + `include/vulkan/vk_icd.h`) and **MoltenVK**
+  (`MoltenVK/Vulkan/vulkan.mm`, `GPUObjects/MVKVulkanAPIObject.h`). Three exported ICD entry points:
+  `vk_icdNegotiateLoaderICDInterfaceVersion` (agree on interface version ≤ 5, exactly as MoltenVK
+  does), `vk_icdGetInstanceProcAddr` (resolve the whole `vk*` surface; special-case the two ICD hooks
+  then defer to `vkGetInstanceProcAddr`), and `vk_icdGetPhysicalDeviceProcAddr` (version-4 physical-
+  device disambiguation).
+- **Why the prior attempt failed with `VK_ERROR_INCOMPATIBLE_DRIVER`, and the fix.** The loader rejects
+  a driver (its devices never enumerate) if any of: it can't find `vk_icdGetInstanceProcAddr`;
+  negotiation returns `VK_ERROR_INCOMPATIBLE_DRIVER` or a version the loader dropped; **or a
+  dispatchable object handed back lacks the loader-magic slot**. That last one is the classic trap:
+  per `vk_icd.h`, every dispatchable object (`VkInstance`/`VkPhysicalDevice`/`VkDevice`/`VkQueue`/
+  `VkCommandBuffer`) must be a pointer to a struct whose **first pointer-sized word** the loader owns
+  — the ICD stamps it with `ICD_LOADER_MAGIC` (`0x01CDC0DE`) at creation and never reads it back (the
+  loader overwrites it with its dispatch-table pointer). `handle::Dispatchable<T>` is that layout
+  (`#[repr(C)]`, `loader_data: usize` in field 0), mirroring MoltenVK's `MVKDispatchableObjectICDRef`.
+  We satisfy all three requirements; the loader accepts us and `vulkaninfo` enumerates the device.
+- **The object model + reported device** (`src/instance.rs`, `src/device.rs`, `src/state.rs`) — ported
+  from MoltenVK's `MVKInstance`/`MVKPhysicalDevice`/`MVKDevice`/`MVKQueue`/`MVKCommandPool` and its
+  Apple-silicon reporting: `"dd Metal (Vulkan)"`, Apple vendor id `0x106b` (`kAppleVendorId`),
+  `INTEGRATED_GPU`, **unified memory** (one `DEVICE_LOCAL` heap; one `DEVICE_LOCAL|HOST_VISIBLE|
+  HOST_COHERENT` type), one graphics+compute+transfer queue family.
+- **The type/ABI surface** — the Khronos **`ash`** bindings (`ash::vk`, `default-features = false`, types
+  only) give the bring-up entry points spec-exact `#[repr(C)]` struct layouts (`VkPhysicalDeviceProperties`
+  + `Limits`, `VkInstanceCreateInfo`, …) so what a real loader/app reads back is byte-correct — no
+  hand-transcribing ~100-field structs.
+
+**Surface-completeness, code-generated** (same pattern as GL/CUDA). `registry/extract_vk_manifest.py`
+parses the Khronos **`vk.xml`** with ElementTree into a committed `registry/vk_commands.manifest`:
+`T<TAB>type<TAB>kind` records classify by-value types (dispatchable handle → pointer, non-dispatchable
+→ `u64`, enum → `i32`, `VkFlags` → `u32`, …) and `C<TAB>name<TAB>ret<TAB>params` records are the
+commands, aliases resolved and `api="vulkansc"`-only variants filtered out. `build.rs` reads it, lowers
+each C type to its Rust C-ABI type (every pointer → a `c_void` pointer — a pointer is a pointer;
+fail-loud on an unclassified by-value base), and emits a `#[no_mangle] extern "C"` stub for every
+command **not** in its `IMPLEMENTED` set plus a `dispatch_addr(name)` resolver over the whole surface.
+Result: **693 `vk*` entry points** (full core + extensions; only 4 Windows/NVIDIA-SciBuf platform-
+extern commands skipped) + the 3 `vk_icd*` hooks = **696 exported symbols**, no duplicates, soname
+`libvk_dd.so.1`. The census constants (`VK_ENTRYPOINTS`, `GENERATED_STUBS`, `DISPATCH_NAMES`) back the
+`surface_is_complete_and_large` test.
+
+**Real vs. stub (this increment).** 21 hand-written bring-up bodies: the 2 proc-addr resolvers;
+`vkEnumerateInstanceVersion` + instance/device extension/layer enumeration; `vkCreateInstance` /
+`vkDestroyInstance`; `vkEnumeratePhysicalDevices`; `vkGetPhysicalDeviceProperties`/`Features`/
+`MemoryProperties`/`QueueFamilyProperties`/`FormatProperties`; `vkCreateDevice`/`vkDestroyDevice`/
+`vkGetDeviceQueue`; `vkCreateCommandPool`/`vkDestroyCommandPool`/`vkAllocateCommandBuffers`/
+`vkFreeCommandBuffers`. The other 672 are spec-faithful `DD_SHIM_DEBUG`-traced default stubs
+(`VK_SUCCESS`), ported to real bodies incrementally — the shrinking long tail, exactly like the
+siblings.
+
+**The Vulkan→IR seam** (`src/ir_seam.rs`) sketches the mapping onto the shared `dd_gpu::ir` (re-exported
+by `dd-shim-common`) and round-trips what it encodes. The keystone: a `VkShaderModule` **is** SPIR-V,
+and the IR's shader ABI is **also** SPIR-V (`Cmd::CreateShader{ spirv }`, lowered host-side to MSL by
+naga in `dd-gpu-wgpu`), so Vulkan shaders forward with **zero translation** — the thinnest possible
+guest seam. `VkDeviceMemory`+`VkBuffer` → `CreateBuffer`, `VkImage` → `CreateTexture`, compute
+`VkPipeline` → `CreateComputePipeline`, `vkCmdDispatch` → `Enc::Dispatch`, `vkQueueSubmit` → `Submit`,
+`VkFence` → `CreateFence`/`WaitFence`. The `vk_compute_seam_encodes_the_shared_ir_contract` test
+encodes a representative compute stream with the guest producer and decodes it with the host's own
+`dd_gpu::ir` decoder (same bytes, same code path — guest and host cannot drift), mirroring
+`dd-shim-gl`'s and `dd-shim-cuda`'s anti-drift gates.
+
+**Validation.** The crate builds a valid aarch64 ELF (soname `libvk_dd.so.1`, 696 exports, no
+duplicate symbols). A plain C `tests/smoke.c` `dlopen`s it and drives the ICD exactly as the loader
+would (negotiate → `vk_icdGetInstanceProcAddr` → `vkCreateInstance` → `vkEnumeratePhysicalDevices` →
+`vkGetPhysicalDeviceProperties`), reading back `"dd Metal (Vulkan)"`. And — the real test — the
+**standard Vulkan loader** (`libvulkan`), with `VK_ICD_FILENAMES` pinned at our `icd.json` alone, makes
+`vulkaninfo` **enumerate the dd device with no `VK_ERROR_INCOMPATIBLE_DRIVER`**: `GPU0 … deviceName =
+dd Metal (Vulkan)`, `apiVersion 1.3.0`, `vendorID 0x106b`, `INTEGRATED_GPU`, the queue family
+(GRAPHICS|COMPUTE|TRANSFER), and the unified-memory heap/type. A default `cargo build` does not compile
+the crate (out of `default-members`), `dd-gpu`'s tests stay green, and `dd-shim-gl`/`-cuda`/`-cudart`
+are untouched.
+
+The committed `icd.json` uses `"library_path": "./libvk_dd.so"` (relative to the manifest, per the
+loader spec) with `"api_version": "1.3.0"` (≥ 1.1 so the loader loads the library and calls our
+`vkEnumerateInstanceVersion`). Deployment places `libvk_dd.so` next to the manifest and points
+`VK_ICD_FILENAMES`/`VK_DRIVER_FILES` at it.
 
 ## Retiring `gl_shim.c` (the incremental cutover)
 
