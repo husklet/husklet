@@ -494,6 +494,9 @@ impl DdState {
             gpu_render: false,
             uv_rect,
             damage: cache.damage,
+            // Popups are composited into their parent toplevel's frame here (see `present_render_root`),
+            // not opened as native popup windows, so no positioner-resolved placement is carried.
+            popup: None,
         })
     }
 

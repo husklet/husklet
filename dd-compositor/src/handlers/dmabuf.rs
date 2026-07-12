@@ -128,6 +128,9 @@ impl DdState {
             // Zero-copy IOSurface: the host texture is shared, not re-uploaded, so partial-damage upload
             // does not apply here.
             damage: None,
+            // The compositor composites popups into their parent's frame (see `present_render_root`),
+            // rather than opening a native popup window, so no per-surface popup placement is emitted.
+            popup: None,
         })
     }
 }

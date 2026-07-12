@@ -1,5 +1,12 @@
 # Surface Checklist — the Wayland surface a working Chromium exercises over dd-display
 
+> **Note (2026-07-12): partially superseded.** The gap rows below marked `zwp_linux_dmabuf_v1` and
+> `wl_data_device_manager` as absent from `dd-compositor` — both are now IMPLEMENTED there (see
+> `dd-compositor/src/lib.rs` + `handlers/dmabuf.rs`, `handlers/seat.rs`). For the current, verified
+> legacy-vs-Smithay matrix and the default-flip readiness assessment, see
+> [`SMITHAY_DEFAULT_READINESS.md`](./SMITHAY_DEFAULT_READINESS.md). The remaining real dmabuf gap is
+> **v4 feedback** (Chromium GPU render-node probe), not the global itself.
+
 This is the "complete surface" spec: every Wayland global, object, and request a real Chromium
 client drives over the dd host compositor, cross-referenced against what the Smithay-native
 `dd-compositor` (the `DD_DISPLAY_SMITHAY=1` path) implements today. It is the gap list that drives
