@@ -429,43 +429,61 @@ static void emit_ibranch(int rn) {
 // The guard is an exact 64-bit equality on the real computed target, so it is BIT-EXACT: a misspeculation
 // can never land wrong -- it falls into the normal IBTC. Lspec_tgt starts 0 (no real target is 0), so the
 // direct chain is unreachable until the dispatcher fills it via sdc_fill (ic_site tagged with bit0=1).
+//
+// SCRATCH: x16 = guard scratch, x17 = shared-hash (Lhash) fallback scratch. Under the x16/x17 steal
+// (g_steal1617, the aarch64 default) both host regs are ENGINE-PRIVATE at this block-boundary indirect
+// edge -- the exact invariant emit_ibranch_steal / emit_hash_tail already exploit -- so use them DIRECTLY
+// with NO memory spill. AArch64 has NO architectural red zone, so the old unconditional stash below the
+// guest SP (`stur x16,[sp,#-16]`) only happened to work when the page under SP was mapped+writable; a
+// STABLE JT-dispatch `br` reached with a shallow guest SP (same shape as the pixman NEON self-loop that
+// crashed emit_t2_counter, 6d38d96c) faults on that store -- EXC_BAD_ACCESS. Mirroring that fix, the
+// steal path never writes below SP. The HIT direct chain lands on the regs-live `body` (sdc_fill), so no
+// restore is needed on either path; the Lhash fallback's IBTC hit lands on `body` (steal, bind=body) with
+// x16/x17 engine-private, so it too needs no restore. The legacy NOSTEAL1617 path keeps the [sp,#-16/-24]
+// stash: there x16/x17 hold GUEST values, and that stash location is the IBTC indirect-entry (body_ind)
+// ABI -- the Lhash hit lands on body-8, which reloads the guest x16/x17 from exactly those two slots.
 static void emit_vdbe_sdc(int rn) {
     g_vt_inline++;
     // Stash ONLY x16 for the guard; x17 is stashed inside the fallback (Lhash) where the shared hash
-    // needs it. The threaded HIT path thus touches just one red-zone slot.
-    e_stur(16, 31, -16);
+    // needs it. The threaded HIT path thus touches just one red-zone slot. (Legacy NOSTEAL1617 only --
+    // on the steal path x16/x17 are engine-private and never stashed below SP.)
+    if (!g_steal1617) e_stur(16, 31, -16);
     // --- SDC speculative direct chain (replaces the per-site monomorphic IC) ---
     uint32_t *p_ldrt = (uint32_t *)g_cp;
     emit32(0);                                         // ldr x16, Lspec_tgt
     emit32(0xCB000000u | (rn << 16) | (16 << 5) | 16); // sub x16,x16,xRn
     uint32_t *p_cbslow = (uint32_t *)g_cp;
     emit32(0); // cbnz x16, Lhash
-    // HIT (x16==0, dead+stashed; x17 untouched/live)
-    if (g_vt_hitcount) {     // diagnostic: count guard hits (perturbs timing) -- x16 is free here
-        e_stur(17, 31, -24); // borrow x17 as the 2nd scratch
+    // HIT (x16==0, dead; x17 untouched/live -- and, on legacy, x16 stashed)
+    if (g_vt_hitcount) {                       // diagnostic: count guard hits (perturbs timing) -- x16 free
+        if (!g_steal1617) e_stur(17, 31, -24); // borrow x17 as the 2nd scratch (legacy)
         e_adrp_add(16, (uint64_t)&g_vt_hit);
         e_ldr(17, 16, 0);
         e_addi(17, 17, 1);
         e_str(17, 16, 0);
-        e_ldur(17, 31, -24); // restore x17
+        if (!g_steal1617) e_ldur(17, 31, -24); // restore x17 (legacy)
     }
-    e_ldur(16, 31, -16); // restore x16
+    if (!g_steal1617) e_ldur(16, 31, -16); // restore x16 (legacy)
     uint32_t *p_bdir = (uint32_t *)g_cp;
     emit32(0x14000000u); // b Lspec_body (offset 0 until sdc_fill patches it; guard keeps it unreachable)
     // --- Lhash: shared-hash IBTC (byte-identical to emit_ibranch's general path) ---
     uint32_t *Lhash = (uint32_t *)g_cp;
-    e_stur(17, 31, -24);                  // stash x17 (the shared hash + miss path need the pair)
-    emit32(0xD3424400u | (rn << 5) | 16); // ubfx x16,xRn,#2,#16  (IBTC_N=64Ki)
+    if (!g_steal1617) e_stur(17, 31, -24); // stash x17 (legacy; shared hash + miss path need the pair)
+    emit32(0xD3424400u | (rn << 5) | 16);  // ubfx x16,xRn,#2,#16  (IBTC_N=64Ki)
     emit_ibtcptr(17);
     emit32(0x8B000000u | (16 << 16) | (4 << 10) | (17 << 5) | 16); // add x16,x17,x16,lsl#4
     e_ldp(17, 16, 16, 0);                                          // x17=slot.target, x16=slot.body
     emit32(0xCB000000u | (rn << 16) | (17 << 5) | 17);             // sub x17,x17,xRn
     uint32_t *p_cbnz = (uint32_t *)g_cp;
     emit32(0); // cbnz x17, Lmiss
-    e_br(16);  // hit -> body_ind
+    e_br(16);  // hit -> body (steal) / body_ind (legacy, restores the guest x16/x17 pair)
     uint32_t *miss = (uint32_t *)g_cp;
-    e_ldur(16, 31, -16);
-    e_ldur(17, 31, -24);
+    if (!g_steal1617) {
+        // legacy: x16/x17 are NON-stolen guest regs here, so emit_spill would store the clobbered
+        // probe values -> reload the guest x16/x17 from their [sp,#-16/-24] stash first.
+        e_ldur(16, 31, -16);
+        e_ldur(17, 31, -24);
+    }
     emit_spill();
     e_ldr(9, 0, rn * 8);
     e_str(9, 0, OFF_PC);
