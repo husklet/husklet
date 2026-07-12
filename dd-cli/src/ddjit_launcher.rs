@@ -286,6 +286,48 @@ pub fn launch_ex(ws: &Workspace, cols: u16, rows: u16, restore: bool, cwd: Optio
             bin_dir: if host_gui_bin.is_dir() { host_gui_bin.to_string_lossy().into_owned() } else { String::new() },
             overlay_lib_dir: overlay_multiarch.to_string_lossy().into_owned(),
         });
+        // Fork-safe IOSurface pool pre-seed for a NO-ARGUMENT `--gui` launch. Chrome's GPU/render process
+        // is a host fork()-WITHOUT-exec child that can NEITHER create an IOSurface nor receive one over a
+        // mach port — it can only reuse surfaces the non-forked ROOT engine pre-created, marked
+        // VM_INHERIT_SHARE, BEFORE the fork. The engine seeds that pool in `dd_gpu_prewarm_fork_safety`
+        // (vfs.c) from `DD_GPU_POOL="WxH[,WxH…]"` read from ITS OWN process env — and ffi.c forwards our
+        // `environ` to the engine's execve (the very same channel as the `DDJIT_CHECKPOINT_DIR` /
+        // `OBJC_DISABLE_INITIALIZE_FORK_SAFETY` vars set above). On a plain launch nothing exports it, so
+        // the forked GPU child MISSes every size and cold Chrome renders 0 frames on an idle Mac. Derive
+        // the geometry here and export it so a true no-arg launch pre-seeds automatically. An explicit
+        // caller-provided `DD_GPU_POOL` (e.g. the validation harness) is honored untouched.
+        if std::env::var_os("DD_GPU_POOL").is_none() {
+            // The size the guest's Chrome launcher passes to `--window-size`: our process env first (a
+            // harness/user `CHROME_WINDOW_SIZE=W,H`), else the workspace's configured value. The guest
+            // `ddrun` script defaults to 512x384 when unset, so we match that default below. The wire form
+            // is "W,H"; the pool wants "WxH". `x`-separated input is accepted too, for convenience.
+            fn parse_wh(s: &str) -> Option<(u32, u32)> {
+                let (a, b) = s.trim().split_once(|c| c == ',' || c == 'x')?;
+                let w: u32 = a.trim().parse().ok()?;
+                let h: u32 = b.trim().parse().ok()?;
+                if w == 0 || h == 0 || w > 16384 || h > 16384 { None } else { Some((w, h)) }
+            }
+            let configured = std::env::var("CHROME_WINDOW_SIZE")
+                .ok()
+                .or_else(|| ws.env.iter().find(|(k, _)| k == "CHROME_WINDOW_SIZE").map(|(_, v)| v.clone()));
+            let mut sizes: Vec<(u32, u32)> = Vec::new();
+            if let Some((w, h)) = configured.as_deref().and_then(parse_wh) {
+                sizes.push((w, h));
+            }
+            // The guest default (`${CHROME_WINDOW_SIZE:-512,384}`) plus a compact set of common desktop
+            // sizes. The GPU child inherits the pool ONLY at fork time, so any size it may later scan out
+            // on a window RESIZE must be pre-seeded NOW (a surface the root creates AFTER the child forked
+            // is not in that child's address space). This covers a resize to a typical target; an arbitrary
+            // drag to an unseeded size is the documented limitation (needs a root-services-child bridge).
+            // `DD_GPU_POOL_N` (engine side, default 6) bounds how many per size.
+            for (w, h) in [(512u32, 384u32), (800, 600), (1280, 720)] {
+                if !sizes.contains(&(w, h)) {
+                    sizes.push((w, h));
+                }
+            }
+            let pool = sizes.iter().map(|(w, h)| format!("{w}x{h}")).collect::<Vec<_>>().join(",");
+            std::env::set_var("DD_GPU_POOL", pool);
+        }
     }
     if let Some(cuda) = &ws.cuda {
         // Host-side artifacts follow the same drop-in pattern as the injected `docker` CLI:
