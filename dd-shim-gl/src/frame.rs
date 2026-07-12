@@ -352,22 +352,366 @@ fn build_single_draw_frame(s: &GlState) -> Option<Vec<u8>> {
     Some(encode_stream(&cmds))
 }
 
+/// The program a draw renders with: its own linked program, else the currently-bound one (gl_shim.c
+/// `dpr` fallback to `pr`).
+fn dpr_idx(s: &GlState, d: &DrawCall) -> usize {
+    if (d.prog as usize) < s.prog.len() && s.prog[d.prog as usize].used {
+        d.prog as usize
+    } else {
+        s.cur_prog as usize
+    }
+}
+
+/// Build the per-draw pipeline's vertex layouts (gl_shim.c replay pipeline emission).
+fn replay_vertex_layouts(s: &GlState, d: &DrawCall, dpr: &crate::state::Program) -> Vec<VertexLayout> {
+    let dvdecl = dpr
+        .vs_src_from(s)
+        .map(|src| collect_vertex_attrs(&src))
+        .unwrap_or_default();
+    let dnd = dvdecl.len();
+    let mut dvcount = dnd;
+    for i in 0..MAXATTR {
+        if d.attrs[i].enabled && i + 1 > dvcount {
+            dvcount = i + 1;
+        }
+    }
+    let (_dslot_vbo, dattr_slot, dslot_stride) = s.draw_vbo_slots(d);
+    let dnslot = dslot_stride.len();
+    let nvb = dnslot.max(1);
+    let mut vbs = Vec::with_capacity(nvb);
+    for sl in 0..nvb {
+        let mut attrs = Vec::new();
+        for l in 0..dvcount.min(MAXATTR) {
+            let ls = if dattr_slot[l] >= 0 { dattr_slot[l] } else { 0 };
+            if ls as usize != sl {
+                continue;
+            }
+            let (fmt, off) = if d.attrs[l].enabled && dattr_slot[l] >= 0 {
+                let a = &d.attrs[l];
+                (vertex_format_wire(a.kind, a.size, a.normalized, a.integer), a.offset as u32)
+            } else {
+                let t = if l < dnd { dvdecl[l].ty.as_str() } else { "vec4" };
+                (decl_format_wire(t), 0)
+            };
+            attrs.push(VertexAttr { location: l as u32, format: fmt, offset: off });
+        }
+        let stride = if sl < dnslot { dslot_stride[sl] } else { 16 };
+        vbs.push(VertexLayout { stride, step_mode: 0, attrs });
+    }
+    vbs
+}
+
+/// Lower a multi-draw / clear+draw frame (gl_shim.c's `replay` branch): per-draw resource ids
+/// (`20+d`/`30+d`/`40+d`/`1000+d`/`2000+`/`10000+`), render-pass segmentation by target + clear serial,
+/// and load/clear semantics between draws — field-for-field byte-equivalent to gl_shim.c.
+fn build_replay_frame(s: &GlState) -> Option<Vec<u8>> {
+    let draws = &s.draws;
+    let pr = s.prog.get(s.cur_prog as usize)?;
+    if pr.msl.is_none() {
+        return None; // no shader yet (uncovered frame shape)
+    }
+
+    // ---- texture list: sampler-bound textures (deduped) then render-target textures ----
+    let mut texlist: Vec<u32> = Vec::new();
+    for d in draws.iter().filter(|d| !d.is_clear) {
+        let dpr = &s.prog[dpr_idx(s, d)];
+        for i in 0..dpr.samp_names.len().min(4) {
+            let unit = if (0..8).contains(&d.samp_units[i]) { d.samp_units[i] as usize } else { i };
+            let tu = d.tex_units[unit];
+            if (tu as usize) < MAXTEX && s.tex[tu as usize].used && !s.tex[tu as usize].data.is_empty() && !texlist.contains(&tu) {
+                texlist.push(tu);
+            }
+        }
+    }
+    for d in draws {
+        let tu = d.target_tex;
+        if tu != 0 && (tu as usize) < MAXTEX && s.tex[tu as usize].used && !s.tex[tu as usize].data.is_empty() && !texlist.contains(&tu) {
+            texlist.push(tu);
+        }
+    }
+
+    // ---- frame-level VBO/IBO fallback lists ----
+    let mut frame_vbo: Vec<u32> = Vec::new();
+    let mut frame_ibo: Vec<u32> = Vec::new();
+    for d in draws.iter().filter(|d| !d.is_clear) {
+        for i in 0..MAXATTR {
+            let a = &d.attrs[i];
+            let b = a.buffer as usize;
+            if a.enabled && a.buffer != 0 && b < MAXBUF && s.buf[b].used && !s.buf[b].data.is_empty() && !frame_vbo.contains(&a.buffer) {
+                frame_vbo.push(a.buffer);
+            }
+        }
+        if d.indexed {
+            let b = d.elem_buf as usize;
+            if d.elem_buf > 0 && b < MAXBUF && s.buf[b].used && !s.buf[b].data.is_empty() && !frame_ibo.contains(&d.elem_buf) {
+                frame_ibo.push(d.elem_buf);
+            }
+        }
+    }
+
+    let has_u = draws.iter().filter(|d| !d.is_clear).any(|d| !s.prog[dpr_idx(s, d)].unis.is_empty());
+    let has_bg = has_u || !texlist.is_empty();
+
+    let mut cmds: Vec<Cmd> = Vec::new();
+
+    // 1. VBOs: per-draw snapshots (2000+), then frame fallback (200+).
+    for (d_i, d) in draws.iter().enumerate() {
+        if d.is_clear {
+            continue;
+        }
+        let (dslot_vbo, _as, _st) = s.draw_vbo_slots(d);
+        for (sl, &src) in dslot_vbo.iter().enumerate() {
+            if let Some(si) = GlState::draw_vbo_snapshot_index(d, src) {
+                let data = &d.snap_vbo[si].data;
+                cmds.extend(vertex_buffer_cmds(crate::wireenc::replay_vbo_ir_id(d_i as u32, sl as u32), data));
+            }
+        }
+    }
+    for (k, &b) in frame_vbo.iter().enumerate() {
+        cmds.extend(vertex_buffer_cmds(200 + k as u32, &s.buf[b as usize].data));
+    }
+    // 1b. index buffers: per-draw snapshots (10000+), then frame fallback (300+).
+    for (d_i, d) in draws.iter().enumerate() {
+        if d.is_clear || !d.indexed {
+            continue;
+        }
+        if let Some(ibo) = &d.snap_ibo {
+            if !ibo.data.is_empty() {
+                cmds.extend(index_buffer_cmds(crate::wireenc::replay_ibo_ir_id(d_i as u32), &ibo.data));
+            }
+        }
+    }
+    for (k, &b) in frame_ibo.iter().enumerate() {
+        cmds.extend(index_buffer_cmds(300 + k as u32, &s.buf[b as usize].data));
+    }
+    // 1c. textures.
+    let mut tex_upload = vec![false; texlist.len()];
+    for (k, &t) in texlist.iter().enumerate() {
+        let tex = &s.tex[t as usize];
+        cmds.push(create_texture_cmd(t, tex));
+        cmds.push(create_sampler_cmd(t, tex));
+        cmds.extend(texture_staging_cmds(t, tex));
+        tex_upload[k] = true; // fresh frame → uploaded
+    }
+    // 2. per-draw shader (20+d) + pipeline (30+d).
+    for (d_i, d) in draws.iter().enumerate() {
+        if d.is_clear {
+            continue;
+        }
+        let dpr = &s.prog[dpr_idx(s, d)];
+        let msl = match &dpr.msl {
+            Some(m) => m,
+            None => continue,
+        };
+        cmds.push(Cmd::CreateShader { id: 20 + d_i as u32, spirv: msl_words(msl) });
+        let vbs = replay_vertex_layouts(s, d, dpr);
+        let blend = if d.blend {
+            Some(BlendState {
+                src_color: blend_factor_wire(d.blend_src_rgb),
+                dst_color: blend_factor_wire(d.blend_dst_rgb),
+                op_color: blend_op_wire(d.blend_eq_rgb),
+                src_alpha: blend_factor_wire(d.blend_src_alpha),
+                dst_alpha: blend_factor_wire(d.blend_dst_alpha),
+                op_alpha: blend_op_wire(d.blend_eq_alpha),
+            })
+        } else {
+            None
+        };
+        let fmt = TextureFormat::from_u32(crate::wireenc::color_target_format(d.target_tex)).unwrap();
+        let depth = if s.depth {
+            Some(DepthState { format: TextureFormat::Depth32Float, depth_write: true, depth_compare: 0 })
+        } else {
+            None
+        };
+        let topology = if d.mode == crate::glconst::GL_TRIANGLE_STRIP { Topology::TriangleStrip } else { Topology::TriangleList };
+        cmds.push(Cmd::CreateRenderPipeline(
+            30 + d_i as u32,
+            RenderPipelineDesc {
+                vertex: ShaderRef { module: 20 + d_i as u32, entry: "vmain".into() },
+                fragment: Some(ShaderRef { module: 20 + d_i as u32, entry: "fmain".into() }),
+                vertex_buffers: vbs,
+                color_targets: vec![ColorTargetState { format: fmt, blend, write_mask: 0xf }],
+                depth,
+                topology,
+                cull: 0,
+                front_face: 0,
+                label: String::new(),
+            },
+        ));
+    }
+    // 2b. per-draw uniform buffers (1000+d).
+    if has_u {
+        for (d_i, d) in draws.iter().enumerate() {
+            if d.is_clear {
+                continue;
+            }
+            let dpr = &s.prog[dpr_idx(s, d)];
+            if dpr.unis.is_empty() {
+                continue;
+            }
+            cmds.extend(crate::lower::uniform_buffer_cmds(1000 + d_i as u32, &d.ubuf[..dpr.ubuf_size as usize]));
+        }
+    }
+    // per-draw bind groups (40+d).
+    if has_bg {
+        for (d_i, d) in draws.iter().enumerate() {
+            if d.is_clear {
+                continue;
+            }
+            let dpr = &s.prog[dpr_idx(s, d)];
+            let mut dtex: Vec<usize> = Vec::new();
+            for i in 0..dpr.samp_names.len().min(4) {
+                let unit = if (0..8).contains(&d.samp_units[i]) { d.samp_units[i] as usize } else { i };
+                let bound = d.tex_units[unit];
+                if let Some(ti) = texlist.iter().position(|&x| x == bound) {
+                    dtex.push(ti);
+                }
+            }
+            let draw_has_u = !dpr.unis.is_empty();
+            let mut entries = Vec::new();
+            if draw_has_u {
+                entries.push(dd_shim_common::ir::BindEntry {
+                    binding: 1,
+                    resource: dd_shim_common::ir::BindResource::Buffer { id: 1000 + d_i as u32, offset: 0, size: dpr.ubuf_size as u64 },
+                });
+            }
+            for (k, &ti) in dtex.iter().enumerate() {
+                let gltex = texlist[ti];
+                entries.push(dd_shim_common::ir::BindEntry { binding: k as u32, resource: dd_shim_common::ir::BindResource::Texture { id: tex_ir_id(gltex) } });
+                entries.push(dd_shim_common::ir::BindEntry { binding: k as u32, resource: dd_shim_common::ir::BindResource::Sampler { id: crate::wireenc::sampler_ir_id(gltex) } });
+            }
+            cmds.push(Cmd::CreateBindGroup(40 + d_i as u32, dd_shim_common::ir::BindGroupDesc { set: 0, entries }));
+        }
+    }
+
+    // 3. Submit: copies + segmented passes.
+    let mut ops: Vec<Enc> = Vec::new();
+    for (k, &t) in texlist.iter().enumerate() {
+        if !tex_upload[k] {
+            continue;
+        }
+        let tex = &s.tex[t as usize];
+        ops.push(Enc::CopyBufferToTexture {
+            src: crate::wireenc::stage_ir_id(t),
+            src_offset: 0,
+            bytes_per_row: tex.w as u32 * 4,
+            dst: tex_ir_id(t),
+            mip: 0,
+            width: tex.w as u32,
+            height: tex.h as u32,
+        });
+    }
+    let mut seen_default = false;
+    let mut seen_tex = vec![false; MAXTEX];
+    let mut clear_default: i32 = -1;
+    let mut clear_tex = vec![-1i32; MAXTEX];
+    let norm_target = |t: u32| -> u32 {
+        if t != 0 && (t as usize) < MAXTEX && s.tex[t as usize].used {
+            t
+        } else {
+            0
+        }
+    };
+    let mut d_i = 0usize;
+    while d_i < draws.len() {
+        let d = &draws[d_i];
+        if d.is_clear {
+            ops.push(emit_clear_rect(s, d));
+            d_i += 1;
+            continue;
+        }
+        let target = norm_target(d.target_tex);
+        let seg_clear = d.clear_serial;
+        let seen = if target != 0 { seen_tex[target as usize] } else { seen_default };
+        let last_clear = if target != 0 { clear_tex[target as usize] } else { clear_default };
+        let mut load = seen && seg_clear == last_clear;
+        if target == 0 && !seen && s.default_surface_valid && !s.default_full_clear_since_swap {
+            load = true;
+        }
+        if target != 0 {
+            seen_tex[target as usize] = true;
+            clear_tex[target as usize] = seg_clear;
+        } else {
+            seen_default = true;
+            clear_default = seg_clear;
+        }
+        let (tw, th) = (s.draw_target_w(target), s.draw_target_h(target));
+        ops.push(Enc::BeginRenderPass {
+            color: vec![ColorAttachment {
+                texture: if target != 0 { tex_ir_id(target) } else { 1 },
+                load: if load { LoadOp::Load } else { LoadOp::Clear },
+                clear: d.clear,
+                store: true,
+            }],
+            depth: if s.depth {
+                Some(DepthAttachment { texture: 2, load: LoadOp::Clear, clear_depth: 1.0 })
+            } else {
+                None
+            },
+        });
+        // draw segment: all consecutive draws with the same target + clear serial
+        while d_i < draws.len() {
+            let d = &draws[d_i];
+            if d.is_clear || norm_target(d.target_tex) != target || d.clear_serial != seg_clear {
+                break;
+            }
+            ops.push(Enc::SetPipeline(30 + d_i as u32));
+            ops.push(emit_viewport(s, d.viewport, th));
+            ops.push(emit_scissor(s, d.scissor_enabled, d.scissor, tw, th));
+            if has_bg {
+                ops.push(Enc::SetBindGroup { index: 0, group: 40 + d_i as u32 });
+            }
+            let (dslot_vbo, _as, _st) = s.draw_vbo_slots(d);
+            for (sl, &src) in dslot_vbo.iter().enumerate() {
+                let buffer = if GlState::draw_vbo_snapshot_index(d, src).is_some() {
+                    crate::wireenc::replay_vbo_ir_id(d_i as u32, sl as u32)
+                } else {
+                    200 + frame_vbo.iter().position(|&x| x == src).unwrap_or(0) as u32
+                };
+                ops.push(Enc::SetVertexBuffer { slot: sl as u32, buffer, offset: 0 });
+            }
+            if d.indexed {
+                let ifmt = if d.index_type == crate::glconst::GL_UNSIGNED_INT { IndexFormat::U32 } else { IndexFormat::U16 };
+                let buffer = if d.snap_ibo.is_some() {
+                    crate::wireenc::replay_ibo_ir_id(d_i as u32)
+                } else {
+                    300 + frame_ibo.iter().position(|&x| x == d.elem_buf).unwrap_or(0) as u32
+                };
+                ops.push(Enc::SetIndexBuffer { buffer, offset: d.index_offset as u64, format: ifmt });
+                ops.push(Enc::DrawIndexed { index_count: d.count as u32, instance_count: 1, first_index: 0, base_vertex: 0, first_instance: 0 });
+            } else {
+                ops.push(Enc::Draw { vertex_count: d.count as u32, instance_count: 1, first_vertex: d.first as u32, first_instance: 0 });
+            }
+            d_i += 1;
+        }
+        ops.push(Enc::EndRenderPass);
+    }
+
+    cmds.push(Cmd::Submit(CommandBuffer { encoder: ops, signal: None }));
+    Some(encode_stream(&cmds))
+}
+
 /// Assemble the frame's IR byte-stream. Handles a **clear-only** frame (all clears → `Submit([ClearRect
-/// …])`) and a **single-draw** frame (one non-clear draw on the default framebuffer). Multi-draw /
-/// clear+draw frames use gl_shim.c's `replay` path (not yet ported) and return `None`.
+/// …])`), a **single-draw** frame (one non-clear draw), and a **multi-draw / clear+draw** frame (the
+/// `replay` path) — each byte-equivalent to gl_shim.c's `eglSwapBuffers`.
 pub fn build_frame_ir(s: &GlState) -> Option<Vec<u8>> {
     if !s.surf.have || s.draws.is_empty() {
         return None;
     }
-    if s.draws.iter().all(|d| d.is_clear) {
-        let ops: Vec<Enc> = s.draws.iter().map(|d| emit_clear_rect(s, d)).collect();
-        return Some(encode_stream(&[Cmd::Submit(CommandBuffer { encoder: ops, signal: None })]));
+    // gl_shim.c: replay_draws = ndraws>1 || (ndraws==1 && draws[0].is_clear).
+    let replay = s.draws.len() > 1 || (s.draws.len() == 1 && s.draws[0].is_clear);
+    if replay {
+        if s.draws.iter().all(|d| d.is_clear) {
+            let ops: Vec<Enc> = s.draws.iter().map(|d| emit_clear_rect(s, d)).collect();
+            return Some(encode_stream(&[Cmd::Submit(CommandBuffer { encoder: ops, signal: None })]));
+        }
+        return build_replay_frame(s);
     }
-    // Single non-clear draw on the default framebuffer → gl_shim.c's non-replay path.
-    if s.draws.len() == 1 && !s.draws[0].is_clear && s.draw_mode >= 0 {
+    // Single non-clear draw → gl_shim.c's non-replay path.
+    if s.draw_mode >= 0 {
         return build_single_draw_frame(s);
     }
-    None // multi-draw / clear+draw → replay path (next)
+    None
 }
 
 #[cfg(test)]

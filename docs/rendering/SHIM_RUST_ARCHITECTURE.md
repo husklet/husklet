@@ -154,17 +154,23 @@ reaches pixel parity. The path:
    emits: VBO/index/texture/uniform resources, `CreateShader` + `CreateRenderPipeline` (vertex layout,
    blend/depth, topology), `CreateBindGroup`, and the render pass (Begin/SetPipeline/Viewport/Scissor/
    SetBindGroup/SetVertexBuffer/Draw/End) with the Y-flipped viewport/scissor.
-6. **Pixel/IR-parity harness — LIVE, flagship gate GREEN (`tests/pixel_parity.rs`).** The flagship
-   `full_frame_textured_triangle_is_byte_identical` compiles the SAME GLES workload (shader compile +
-   VBO + 2×2 texture + mat4 uniform + sampler + `glDrawArrays`) against **both** shims' `.so` (gl_shim.c's
-   `libEGL.so.1` and dd-shim-gl's cdylib), runs each with `DD_IR_DUMP`, and asserts the IR is identical
-   — **GREEN: 1316 bytes, byte-for-byte**. The clear frame is likewise byte-identical (43 bytes).
-7. **Remaining:** (a) the **replay path** (multi-draw / clear+draw frames — gl_shim.c's per-draw
-   `20+d`/`30+d`/`40+d` ids + segmented render passes) for full glmark2/Chrome coverage, same
-   byte-equivalent `Cmd`/`Enc` pattern; (b) the **deployed-path display plumbing** — the wayland/dma-buf
-   surface handshake + `wl_commit` in `eglSwapBuffers` (only the IR-submit half is wired; `DD_IR_DUMP`
-   and the parity gate don't need it).
-8. **Cutover (proposed — not flipped):** the `~/.dd/gui/<arch>/lib` deploy builds dd-shim-gl's cdylib as
+6. **Replay path (done — real-workload parity).** `src/frame.rs` `build_replay_frame` lowers a
+   multi-draw / clear+draw frame exactly as gl_shim.c's `replay` branch: per-draw resource ids
+   (`20+d`/`30+d`/`40+d`/`1000+d`, VBO snapshots `2000+`, index `10000+`, frame fallbacks `200+`/`300+`),
+   render-pass **segmentation** by target + clear serial, and the load-vs-clear semantics between draws.
+   `record_draw_call` now snapshots each draw's VBOs/IBO (`DrawCall::snap_vbo/snap_ibo`) as gl_shim.c
+   does. `build_frame_ir` dispatches clear-only / single-draw / replay per gl_shim.c's `replay_draws`
+   rule.
+7. **Pixel/IR-parity harness — LIVE, all gates GREEN (`tests/pixel_parity.rs`).** Three black-box tests
+   compile the SAME GLES workload against **both** shims' `.so` (gl_shim.c's `libEGL.so.1` +
+   dd-shim-gl's cdylib), run each with `DD_IR_DUMP`, and assert identical IR:
+   `full_frame_clear` (43 bytes), `full_frame_textured_triangle` (1316 bytes), and
+   `full_frame_multi_draw_replay` (clear + 2 blended draws → gl_shim.c's replay path, **2592 bytes,
+   byte-for-byte**). **IR parity is closed for real workloads.**
+8. **Remaining — deployed-path display plumbing:** the wayland/dma-buf surface handshake + `wl_commit`
+   in `eglSwapBuffers` (only the IR-submit half is wired; `DD_IR_DUMP` and the parity gates don't need
+   it, but an on-screen run does).
+9. **Cutover (proposed — not flipped):** the `~/.dd/gui/<arch>/lib` deploy builds dd-shim-gl's cdylib as
    `libEGL.so.1` + the `libGLESv2.so.2`/`libwayland-egl.so.1` DT_NEEDED stubs, selected by
    `DD_SHIM_IMPL=rust` so a validation run swaps to the Rust libs while the default stays gl_shim.c's.
    Flip the default only after a live glmark2/Chrome pixel-check.

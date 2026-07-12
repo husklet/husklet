@@ -57,6 +57,17 @@ impl Default for Program {
     }
 }
 
+impl Program {
+    /// This program's vertex-shader GLSL source (for the declared-attribute layout), if attached.
+    pub fn vs_src_from(&self, s: &GlState) -> Option<String> {
+        if self.vs != 0 && (self.vs as usize) < MAXSH {
+            s.sh[self.vs as usize].src.clone()
+        } else {
+            None
+        }
+    }
+}
+
 #[derive(Clone, Default)]
 pub struct Buffer {
     pub used: bool,
@@ -97,6 +108,15 @@ pub struct Vao {
     pub elem_buf: u32,
 }
 
+/// A draw-time snapshot of one source vertex/index buffer (gl_shim.c `snap_vbo_*`/`snap_ibo_*`): apps
+/// may disable attribs / mutate buffers before swap, so the replay path renders from these copies.
+#[derive(Clone)]
+pub struct BufSnap {
+    pub src: u32,
+    pub gen: u64,
+    pub data: Vec<u8>,
+}
+
 /// One recorded draw or clear, snapshotting the state that produces its IR at swap (gl_shim.c
 /// `struct draw_call`). Only the fields the ported paths consume are carried.
 #[derive(Clone)]
@@ -128,6 +148,9 @@ pub struct DrawCall {
     pub clear: [f32; 4],
     pub clear_serial: i32,
     pub ubuf: [u8; UBUF_BYTES],
+    /// Draw-time VBO snapshots (deduped by source buffer id), and the index buffer snapshot.
+    pub snap_vbo: Vec<BufSnap>,
+    pub snap_ibo: Option<BufSnap>,
 }
 
 impl Default for DrawCall {
@@ -160,6 +183,8 @@ impl Default for DrawCall {
             clear: [0.0; 4],
             clear_serial: 0,
             ubuf: [0; UBUF_BYTES],
+            snap_vbo: Vec::new(),
+            snap_ibo: None,
         }
     }
 }
@@ -449,6 +474,31 @@ impl GlState {
         } else {
             self.ubuf
         };
+        // Snapshot the buffers this draw renders from (gl_shim.c snapshot_draw_buffers), deduped by src.
+        let mut snap_vbo: Vec<BufSnap> = Vec::new();
+        for a in self.attr.iter() {
+            if !a.enabled {
+                continue;
+            }
+            let src = a.buffer as usize;
+            if a.buffer == 0 || src >= MAXBUF || !self.buf[src].used || self.buf[src].data.is_empty() {
+                continue;
+            }
+            if snap_vbo.iter().any(|s| s.src == a.buffer) || snap_vbo.len() >= MAXATTR {
+                continue;
+            }
+            snap_vbo.push(BufSnap { src: a.buffer, gen: self.buf[src].gen, data: self.buf[src].data.clone() });
+        }
+        let snap_ibo = if indexed && self.elem_buf > 0 && (self.elem_buf as usize) < MAXBUF {
+            let eb = self.elem_buf as usize;
+            if self.buf[eb].used && !self.buf[eb].data.is_empty() {
+                Some(BufSnap { src: self.elem_buf, gen: self.buf[eb].gen, data: self.buf[eb].data.clone() })
+            } else {
+                None
+            }
+        } else {
+            None
+        };
         self.draws.push(DrawCall {
             is_clear: false,
             mode,
@@ -460,6 +510,7 @@ impl GlState {
             prog: self.cur_prog,
             elem_buf: self.elem_buf,
             target_tex: 0, // default framebuffer (no FBO tracking yet)
+            clear_rect: [0; 4],
             attrs: self.attr,
             tex_units: self.tex_unit,
             samp_units,
@@ -476,8 +527,72 @@ impl GlState {
             clear: self.clear,
             clear_serial: self.clear_serial,
             ubuf,
-            ..Default::default()
+            snap_vbo,
+            snap_ibo,
         });
+    }
+
+    /// Element size in bytes of a vertex-attribute component type (gl_shim.c `attr_elem_size`).
+    pub fn attr_elem_size(kind: u32) -> usize {
+        match kind {
+            GL_FLOAT | GL_UNSIGNED_INT | GL_INT => 4,
+            GL_UNSIGNED_SHORT | GL_SHORT => 2,
+            _ => 1,
+        }
+    }
+
+    /// Index into a draw's VBO snapshots for source buffer `src`, or None (gl_shim.c
+    /// `draw_vbo_snapshot_index`).
+    pub fn draw_vbo_snapshot_index(d: &DrawCall, src: u32) -> Option<usize> {
+        if src == 0 {
+            return None;
+        }
+        d.snap_vbo.iter().position(|s| s.src == src && !s.data.is_empty())
+    }
+
+    /// Group a draw's enabled attributes by source VBO into slots (gl_shim.c `draw_vbo_slots`).
+    /// Returns `(slot_vbo, attr_slot, slot_stride)`. A buffer with neither a snapshot nor a live copy
+    /// is skipped; an all-empty stride defaults to 16.
+    pub fn draw_vbo_slots(&self, d: &DrawCall) -> (Vec<u32>, [i32; MAXATTR], Vec<u32>) {
+        let mut slot_vbo: Vec<u32> = Vec::new();
+        let mut attr_slot = [-1i32; MAXATTR];
+        for i in 0..MAXATTR {
+            let a = &d.attrs[i];
+            if !a.enabled || a.buffer == 0 {
+                continue;
+            }
+            let b = a.buffer as usize;
+            let has_live = b < MAXBUF && self.buf[b].used && !self.buf[b].data.is_empty();
+            if Self::draw_vbo_snapshot_index(d, a.buffer).is_none() && !has_live {
+                continue;
+            }
+            let sl = slot_vbo.iter().position(|&x| x == a.buffer).unwrap_or_else(|| {
+                slot_vbo.push(a.buffer);
+                slot_vbo.len() - 1
+            });
+            attr_slot[i] = sl as i32;
+        }
+        let mut slot_stride = vec![0u32; slot_vbo.len()];
+        for i in 0..MAXATTR {
+            let sl = attr_slot[i];
+            if sl < 0 {
+                continue;
+            }
+            let a = &d.attrs[i];
+            let mut st = a.stride as u32;
+            if st == 0 {
+                st = a.size as u32 * Self::attr_elem_size(a.kind) as u32;
+            }
+            if st > slot_stride[sl as usize] {
+                slot_stride[sl as usize] = st;
+            }
+        }
+        for st in slot_stride.iter_mut() {
+            if *st == 0 {
+                *st = 16;
+            }
+        }
+        (slot_vbo, attr_slot, slot_stride)
     }
 
     /// Bring up the presented surface (gl_shim.c `surface_up`). In DD_IR_DUMP/host-tool mode the engine

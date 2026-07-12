@@ -189,6 +189,42 @@ fn full_frame_textured_triangle_is_byte_identical() {
     }
 }
 
+/// THE REAL-WORKLOAD GATE: a glmark2-es2-ish frame — clear + TWO textured draws with rotating uniform
+/// state — takes gl_shim.c's `replay` path (per-draw ids + segmented render pass). Compiled against
+/// BOTH shims; the full multi-draw IR must be byte-identical. This green closes IR parity for real apps.
+#[test]
+fn full_frame_multi_draw_replay_is_byte_identical() {
+    let dir = std::env::temp_dir().join(format!("dd-shim-md-{}", std::process::id()));
+    let _ = std::fs::create_dir_all(&dir);
+    let gl_shim_so = match build_gl_shim_so(&dir) {
+        Some(s) => s,
+        None => {
+            eprintln!("[parity] SKIP multi-draw: gl_shim.c toolchain unavailable");
+            return;
+        }
+    };
+    let rust_so = match dd_shim_gl_so() {
+        Some(s) => s,
+        None => {
+            eprintln!("[parity] SKIP multi-draw: dd-shim-gl cdylib not found");
+            return;
+        }
+    };
+    let c_ir = match run_workload_against(&gl_shim_so, MULTI_DRAW_WORKLOAD, "md-c") {
+        Some(b) => b,
+        None => return,
+    };
+    let rust_ir = match run_workload_against(&rust_so, MULTI_DRAW_WORKLOAD, "md-rust") {
+        Some(b) => b,
+        None => return,
+    };
+    let _ = std::fs::remove_dir_all(&dir);
+    match diff_ir(&c_ir, &rust_ir) {
+        Ok(()) => eprintln!("[parity] PASS multi-draw replay: dd-shim-gl IR byte-identical to gl_shim.c ({} bytes)", c_ir.len()),
+        Err(e) => panic!("multi-draw replay parity FAILED:\n{e}"),
+    }
+}
+
 const CLEAR_WORKLOAD: &str = r#"
 extern void* eglGetDisplay(void*);
 extern unsigned eglInitialize(void*, int*, int*);
@@ -317,6 +353,107 @@ int main(void) {
     int uTex = glGetUniformLocation(prog, "uTex");
     glUniform1i(uTex, 0);
 
+    glDrawArrays(0x0004, 0, 3);
+    eglSwapBuffers(d, s);
+    return 0;
+}
+"#;
+
+// A clear + two textured draws with rotating uniform state → gl_shim.c's replay path.
+const MULTI_DRAW_WORKLOAD: &str = r#"
+extern void* eglGetDisplay(void*);
+extern unsigned eglInitialize(void*, int*, int*);
+extern unsigned eglChooseConfig(void*, const int*, void**, int, int*);
+extern void* eglCreateContext(void*, void*, void*, const int*);
+extern void* eglCreateWindowSurface(void*, void*, void*, const int*);
+extern unsigned eglMakeCurrent(void*, void*, void*, void*);
+extern unsigned eglSwapBuffers(void*, void*);
+extern unsigned glCreateShader(unsigned);
+extern void glShaderSource(unsigned, int, const char* const*, const int*);
+extern void glCompileShader(unsigned);
+extern unsigned glCreateProgram(void);
+extern void glAttachShader(unsigned, unsigned);
+extern void glLinkProgram(unsigned);
+extern void glUseProgram(unsigned);
+extern void glGenBuffers(int, unsigned*);
+extern void glBindBuffer(unsigned, unsigned);
+extern void glBufferData(unsigned, long, const void*, unsigned);
+extern int glGetAttribLocation(unsigned, const char*);
+extern void glEnableVertexAttribArray(unsigned);
+extern void glVertexAttribPointer(unsigned, int, unsigned, unsigned char, int, const void*);
+extern void glGenTextures(int, unsigned*);
+extern void glActiveTexture(unsigned);
+extern void glBindTexture(unsigned, unsigned);
+extern void glTexImage2D(unsigned, int, int, int, int, int, unsigned, unsigned, const void*);
+extern void glTexParameteri(unsigned, unsigned, int);
+extern int glGetUniformLocation(unsigned, const char*);
+extern void glUniformMatrix4fv(int, int, unsigned char, const float*);
+extern void glUniform1i(int, int);
+extern void glClearColor(float, float, float, float);
+extern void glClear(unsigned);
+extern void glEnable(unsigned);
+extern void glBlendFunc(unsigned, unsigned);
+extern void glDrawArrays(unsigned, int, int);
+
+static const char* VS =
+  "attribute vec2 aPos;\n"
+  "attribute vec2 aTex;\n"
+  "uniform mat4 uMVP;\n"
+  "varying vec2 vTex;\n"
+  "void main(){ gl_Position = uMVP * vec4(aPos, 0.0, 1.0); vTex = aTex; }\n";
+static const char* FS =
+  "precision mediump float;\n"
+  "uniform sampler2D uTex;\n"
+  "varying vec2 vTex;\n"
+  "void main(){ gl_FragColor = texture2D(uTex, vTex); }\n";
+
+int main(void) {
+    void* d = eglGetDisplay(0);
+    eglInitialize(d, 0, 0);
+    int cfgattr[] = { 0x3038 };
+    void* cfg; int n;
+    eglChooseConfig(d, cfgattr, &cfg, 1, &n);
+    int ctxattr[] = { 0x3098, 2, 0x3038 };
+    void* ctx = eglCreateContext(d, cfg, 0, ctxattr);
+    int win[2] = { 320, 240 };
+    void* s = eglCreateWindowSurface(d, cfg, win, 0);
+    eglMakeCurrent(d, s, s, ctx);
+
+    unsigned vs = glCreateShader(0x8B31); glShaderSource(vs, 1, &VS, 0); glCompileShader(vs);
+    unsigned fs = glCreateShader(0x8B30); glShaderSource(fs, 1, &FS, 0); glCompileShader(fs);
+    unsigned prog = glCreateProgram();
+    glAttachShader(prog, vs); glAttachShader(prog, fs); glLinkProgram(prog); glUseProgram(prog);
+
+    float verts[] = { 0,0, 0,0,  1,0, 1,0,  0,1, 0,1 };
+    unsigned vbo; glGenBuffers(1, &vbo);
+    glBindBuffer(0x8892, vbo);
+    glBufferData(0x8892, (long)sizeof(verts), verts, 0x88E4);
+    int aPos = glGetAttribLocation(prog, "aPos");
+    int aTex = glGetAttribLocation(prog, "aTex");
+    glEnableVertexAttribArray((unsigned)aPos);
+    glVertexAttribPointer((unsigned)aPos, 2, 0x1406, 0, 16, (const void*)0);
+    glEnableVertexAttribArray((unsigned)aTex);
+    glVertexAttribPointer((unsigned)aTex, 2, 0x1406, 0, 16, (const void*)8);
+
+    unsigned char pix[16] = { 255,0,0,255, 0,255,0,255, 0,0,255,255, 255,255,0,255 };
+    unsigned tex; glGenTextures(1, &tex);
+    glActiveTexture(0x84C0); glBindTexture(0x0DE1, tex);
+    glTexImage2D(0x0DE1, 0, 0x1908, 2, 2, 0, 0x1908, 0x1401, pix);
+    glTexParameteri(0x0DE1, 0x2801, 0x2601);
+    int uMVP = glGetUniformLocation(prog, "uMVP");
+    int uTex = glGetUniformLocation(prog, "uTex");
+    glUniform1i(uTex, 0);
+
+    /* frame: clear + two draws with different transforms */
+    glEnable(0x0BE2);            /* GL_BLEND */
+    glBlendFunc(0x0302, 0x0303); /* SRC_ALPHA, ONE_MINUS_SRC_ALPHA */
+    glClearColor(0.2f, 0.2f, 0.2f, 1.0f);
+    glClear(0x4000);
+    float mvp1[16] = { 1,0,0,0, 0,1,0,0, 0,0,1,0,  0.0f,0,0,1 };
+    glUniformMatrix4fv(uMVP, 1, 0, mvp1);
+    glDrawArrays(0x0004, 0, 3);
+    float mvp2[16] = { 1,0,0,0, 0,1,0,0, 0,0,1,0, -0.5f,0,0,1 };
+    glUniformMatrix4fv(uMVP, 1, 0, mvp2);
     glDrawArrays(0x0004, 0, 3);
     eglSwapBuffers(d, s);
     return 0;
