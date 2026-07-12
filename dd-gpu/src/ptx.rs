@@ -85,6 +85,81 @@ pub const VECADD_PTX: &str = r#"
     }
 "#;
 
+/// Canonical block-level **reduction** PTX for `block_reduce(const int* in, int* out, int n)`:
+/// each thread block sums up to `blockDim.x` elements of `in` into shared memory, does a `bar.sync`
+/// tree reduction, and thread 0 `atomicAdd`s the block partial into `*out`. It exercises the whole
+/// shared-memory + barrier + atomic subset in one kernel and is the reduction oracle test. Hand-written
+/// (like [`VECADD_PTX`]) so the exact addressing forms stay within the modeled subset. Launch with
+/// `block = (256,1,1)` and shared size 1024 bytes (declared `.shared` below).
+pub const REDUCE_PTX: &str = r#"
+    .version 7.5
+    .target sm_86
+    .address_size 64
+
+    .visible .entry block_reduce(
+        .param .u64 block_reduce_param_0,
+        .param .u64 block_reduce_param_1,
+        .param .u32 block_reduce_param_2
+    )
+    {
+        .reg .pred  %p<4>;
+        .reg .b32   %r<20>;
+        .reg .b64   %rd<8>;
+        .shared .align 4 .b8 sdata[1024];
+
+        ld.param.u64  %rd1, [block_reduce_param_0];
+        ld.param.u64  %rd2, [block_reduce_param_1];
+        ld.param.u32  %r2,  [block_reduce_param_2];
+
+        mov.u32       %r3, %ntid.x;
+        mov.u32       %r4, %ctaid.x;
+        mov.u32       %r5, %tid.x;
+        mad.lo.s32    %r6, %r4, %r3, %r5;      // i = blockIdx*blockDim + tid
+
+        mul.lo.s32    %r8, %r5, 4;             // tid*4
+        mov.u32       %r9, sdata;              // shared base offset
+        add.s32       %r10, %r9, %r8;          // &sdata[tid]
+
+        setp.ge.s32   %p1, %r6, %r2;
+        @%p1 bra      $LOAD_ZERO;
+        cvta.to.global.u64 %rd3, %rd1;
+        mul.wide.s32  %rd4, %r6, 4;
+        add.s64       %rd5, %rd3, %rd4;
+        ld.global.u32 %r11, [%rd5];            // input[i]
+        bra           $HAVE_VAL;
+    $LOAD_ZERO:
+        mov.u32       %r11, 0;
+    $HAVE_VAL:
+        st.shared.u32 [%r10], %r11;
+        bar.sync      0;
+
+        shr.u32       %r12, %r3, 1;            // s = blockDim >> 1
+    $LOOP:
+        setp.eq.s32   %p2, %r12, 0;
+        @%p2 bra      $DONE;
+        setp.ge.u32   %p3, %r5, %r12;          // tid >= s ?
+        @%p3 bra      $SKIP;
+        mul.lo.s32    %r13, %r12, 4;           // s*4
+        add.s32       %r14, %r10, %r13;        // &sdata[tid+s]
+        ld.shared.u32 %r15, [%r10];
+        ld.shared.u32 %r16, [%r14];
+        add.s32       %r17, %r15, %r16;
+        st.shared.u32 [%r10], %r17;
+    $SKIP:
+        bar.sync      0;
+        shr.u32       %r12, %r12, 1;           // s >>= 1
+        bra           $LOOP;
+    $DONE:
+        setp.ne.s32   %p4, %r5, 0;
+        @%p4 bra      $END;
+        ld.shared.u32 %r18, [%r10];            // sdata[0]  (tid==0 → %r10 == base)
+        cvta.to.global.u64 %rd6, %rd2;
+        atom.global.add.u32 %r19, [%rd6], %r18;
+    $END:
+        ret;
+    }
+"#;
+
 // ===================================================================================================
 // compiled kernel IR
 // ===================================================================================================
@@ -142,6 +217,25 @@ pub enum Inst {
     Bra { target: u32, pred: Option<(u16, bool)> },
     LdGlobal { d: u16, addr: u16, off: i64, ty: u8 },
     StGlobal { addr: u16, off: i64, src: Op, ty: u8 },
+    /// `ld.shared` — read a 32-bit word from workgroup shared memory. `base`+`off` is the byte offset
+    /// into the block's shared-memory array (see [`KernelProgram::shared_bytes`]).
+    LdShared { d: u16, base: Op, off: i64, ty: u8 },
+    /// `st.shared` — write a 32-bit word to workgroup shared memory.
+    StShared { base: Op, off: i64, src: Op, ty: u8 },
+    /// `atom.global.<op>` / `red.global.<op>` — atomic read-modify-write on a pointer region. `d` is the
+    /// (optional) old-value destination; `cmp` is the compare operand (used only for `ATOM_CAS`).
+    AtomGlobal { d: Option<u16>, addr: u16, off: i64, op: u8, cmp: Op, val: Op, unsigned: bool },
+    /// `atom.shared.<op>` / `red.shared.<op>` — atomic read-modify-write on workgroup shared memory.
+    AtomShared { d: Option<u16>, base: Op, off: i64, op: u8, cmp: Op, val: Op, unsigned: bool },
+    /// Logical/arithmetic shift. `dir` is `SHIFT_*`; `unsigned` selects logical (`shr.u*`) vs arithmetic
+    /// (`shr.s*`) right shift. Left shift ignores `unsigned`.
+    Shift { d: u16, a: Op, b: Op, dir: u8, unsigned: bool },
+    /// Bitwise `and`/`or`/`xor` (`op` is `BIT_*`).
+    BitOp { d: u16, a: Op, b: Op, op: u8 },
+    /// `bar.sync` — a workgroup execution+memory barrier (real, not a no-op: shared-memory kernels rely
+    /// on it). The interpreter rendezvouses the block here; the WGSL back-end lowers it via
+    /// `workgroupBarrier()`.
+    Bar,
     FAdd { d: u16, a: Op, b: Op },
     FSub { d: u16, a: Op, b: Op },
     FMul { d: u16, a: Op, b: Op },
@@ -180,6 +274,25 @@ pub const CVT_S64_FROM_S32: u8 = 1;
 pub const CVT_S32_FROM_F32: u8 = 2;
 pub const CVT_IDENTITY: u8 = 3;
 
+// atomic ops (see [`Inst::AtomGlobal`] / [`Inst::AtomShared`]). All operate on 32-bit words.
+pub const ATOM_ADD: u8 = 0;
+pub const ATOM_MIN: u8 = 1;
+pub const ATOM_MAX: u8 = 2;
+pub const ATOM_AND: u8 = 3;
+pub const ATOM_OR: u8 = 4;
+pub const ATOM_XOR: u8 = 5;
+pub const ATOM_EXCH: u8 = 6;
+pub const ATOM_CAS: u8 = 7;
+
+// bitwise-shift directions (see [`Inst::Shift`]).
+pub const SHIFT_LEFT: u8 = 0;
+pub const SHIFT_RIGHT: u8 = 1;
+
+// bitwise binary ops (see [`Inst::BitOp`]).
+pub const BIT_AND: u8 = 0;
+pub const BIT_OR: u8 = 1;
+pub const BIT_XOR: u8 = 2;
+
 /// A compiled kernel: the entry name, threadgroup (block) dims baked in as the WebGPU-style
 /// `local_size`, the parameter layout, and the instruction list over `reg_count` registers.
 #[derive(Clone, PartialEq, Debug)]
@@ -191,6 +304,10 @@ pub struct KernelProgram {
     pub param_bytes: u32,
     /// Number of pointer regions (storage bindings 1..=num_regions).
     pub num_regions: u32,
+    /// Total workgroup shared-memory size in bytes (from the kernel's `.shared` declarations), rounded
+    /// up to a 4-byte word. `0` for kernels that use no shared memory. The WGSL back-end sizes a
+    /// `var<workgroup>` array from this; the interpreter allocates a per-block byte array.
+    pub shared_bytes: u32,
     pub reg_count: u16,
     pub insts: Vec<Inst>,
 }
@@ -268,6 +385,7 @@ struct RawFn {
     insts: Vec<Inst>,
     reg_count: u16,
     ld_param: Vec<(u16, u16)>, // (dst reg, param ordinal) — taint seeds
+    shared_bytes: u32,         // total .shared bytes declared in this entry (word-rounded)
 }
 
 /// Compile a single `.entry <entry>` from PTX `source` into a [`KernelProgram`] with block dims `block`.
@@ -321,7 +439,9 @@ pub fn compile(source: &str, entry: &str, block: [u32; 3]) -> Result<KernelProgr
                 let t = [taint_of(&taint, a), taint_of(&taint, b)];
                 carry(&mut taint, *d, &t);
             }
-            Inst::LdGlobal { addr, .. } | Inst::StGlobal { addr, .. } => {
+            Inst::LdGlobal { addr, .. }
+            | Inst::StGlobal { addr, .. }
+            | Inst::AtomGlobal { addr, .. } => {
                 if let Some(p) = taint[*addr as usize] {
                     param_is_ptr[p as usize] = true; // direct global access marks a pointer param
                 }
@@ -354,6 +474,7 @@ pub fn compile(source: &str, entry: &str, block: [u32; 3]) -> Result<KernelProgr
         params: out_params,
         param_bytes: offset,
         num_regions: region,
+        shared_bytes: raw.shared_bytes,
         reg_count: raw.reg_count,
         insts: raw.insts,
     })
@@ -500,19 +621,49 @@ impl Interner {
     }
 }
 
+/// Strip PTX comments: `//` line comments and `/* … */` block comments (as nvcc-emitted PTX carries).
+/// Replaces each comment with a single space so token boundaries are preserved.
+fn strip_comments(src: &str) -> String {
+    let b = src.as_bytes();
+    let mut out = String::with_capacity(src.len());
+    let mut i = 0;
+    while i < b.len() {
+        if b[i] == b'/' && i + 1 < b.len() && b[i + 1] == b'/' {
+            while i < b.len() && b[i] != b'\n' {
+                i += 1;
+            }
+        } else if b[i] == b'/' && i + 1 < b.len() && b[i + 1] == b'*' {
+            i += 2;
+            while i + 1 < b.len() && !(b[i] == b'*' && b[i + 1] == b'/') {
+                i += 1;
+            }
+            i += 2;
+            out.push(' ');
+        } else {
+            out.push(b[i] as char);
+            i += 1;
+        }
+    }
+    out
+}
+
 fn parse_body(
     body: &str,
     params: &[(String, u32)],
     interner: &mut Interner,
 ) -> Result<RawFn> {
-    // statement split: newlines→spaces, then split on ';'. Labels (`X:`) carry no ';' and get folded
-    // onto the following statement; we peel leading `label:` tokens off.
-    let flat = body.replace('\n', " ").replace('\r', " ");
+    // statement split: strip comments, newlines→spaces, then split on ';'. Labels (`X:`) carry no ';'
+    // and get folded onto the following statement; we peel leading `label:` tokens off.
+    let flat = strip_comments(body).replace('\n', " ").replace('\r', " ");
     let raw_stmts: Vec<&str> = flat.split(';').collect();
 
     // First pass: collect (label_defs, instructions_as_text) so we can resolve labels → indices.
+    // Along the way, resolve `.shared` variable declarations to (name → byte offset) with a running,
+    // naturally-aligned shared-memory cursor — the block's shared array layout.
     let mut labels: std::collections::HashMap<String, u32> = std::collections::HashMap::new();
     let mut stmts: Vec<String> = Vec::new();
+    let mut shared_syms: std::collections::HashMap<String, u32> = std::collections::HashMap::new();
+    let mut shared_cursor: u32 = 0;
     for stmt in raw_stmts {
         let mut s = stmt.trim().to_string();
         if s.is_empty() {
@@ -535,12 +686,18 @@ fn parse_body(
         if s.is_empty() {
             continue;
         }
-        // skip directives inside the body (e.g. `.reg .b32 %r<6>`, `.loc ...`).
+        // `.shared` state-space declaration → reserve space + record the symbol's base offset.
+        if s.starts_with(".shared") {
+            parse_shared_decl(&s, &mut shared_syms, &mut shared_cursor)?;
+            continue;
+        }
+        // skip other directives inside the body (e.g. `.reg .b32 %r<6>`, `.loc ...`).
         if s.starts_with('.') {
             continue;
         }
         stmts.push(s);
     }
+    let shared_bytes = align_up(shared_cursor, 4);
 
     let param_idx: std::collections::HashMap<&str, u16> = params
         .iter()
@@ -551,7 +708,7 @@ fn parse_body(
     let mut insts = Vec::with_capacity(stmts.len());
     let mut ld_param = Vec::new();
     for s in &stmts {
-        let inst = parse_inst(s, &param_idx, &labels, interner)?;
+        let inst = parse_inst(s, &param_idx, &labels, &shared_syms, interner)?;
         if let Inst::LdParam { d, param } = inst {
             ld_param.push((d, param));
         }
@@ -562,13 +719,58 @@ fn parse_body(
         insts,
         reg_count: interner.count(),
         ld_param,
+        shared_bytes,
     })
+}
+
+/// Parse a `.shared` variable declaration, reserving space in the block shared array and recording the
+/// symbol's base byte offset. Handles both `.shared .align A .b8 name[bytes];` (nvcc's canonical form)
+/// and typed arrays/scalars `.shared .TYPE name[count];` / `.shared .TYPE name;`. Dynamic `extern`
+/// shared (`.shared .align A .b8 name[]`, sized by `cuLaunchKernel`'s `sharedMemBytes`) is rejected —
+/// out of the statically-sized subset this lowering models.
+fn parse_shared_decl(
+    s: &str,
+    syms: &mut std::collections::HashMap<String, u32>,
+    cursor: &mut u32,
+) -> Result<()> {
+    let toks: Vec<&str> = s.split_whitespace().collect();
+    // find the element type (`.b8`, `.u32`, `.f32`, …) and the trailing `name[count]` / `name` token.
+    let ty = toks
+        .iter()
+        .skip(1)
+        .find(|t| t.starts_with('.') && *t != &".align" && *t != &".shared")
+        .copied();
+    let name_tok = *toks.last().ok_or_else(|| err(format!("bad .shared decl: `{s}`")))?;
+    let elem = ty.map(type_width).transpose()?.unwrap_or(1);
+    // split `name[count]`
+    let (name, count) = if let Some(lb) = name_tok.find('[') {
+        let name = &name_tok[..lb];
+        let inner = name_tok[lb + 1..].trim_end_matches([']', ';']).trim();
+        if inner.is_empty() {
+            return Err(err(format!("dynamic (extern) .shared unsupported: `{s}`")));
+        }
+        let count: u32 = parse_imm_i(inner)
+            .map_err(|_| err(format!("bad .shared array size: `{s}`")))? as u32;
+        (name, count)
+    } else {
+        (name_tok.trim_end_matches(';'), 1u32)
+    };
+    let name: String = name.chars().take_while(|c| c.is_alphanumeric() || *c == '_' || *c == '$').collect();
+    if name.is_empty() {
+        return Err(err(format!(".shared decl missing name: `{s}`")));
+    }
+    // natural-align the symbol to its element width, then reserve elem*count bytes.
+    *cursor = align_up(*cursor, elem);
+    syms.insert(name, *cursor);
+    *cursor += elem.saturating_mul(count.max(1));
+    Ok(())
 }
 
 fn parse_inst(
     stmt: &str,
     params: &std::collections::HashMap<&str, u16>,
     labels: &std::collections::HashMap<String, u32>,
+    shared_syms: &std::collections::HashMap<String, u32>,
     interner: &mut Interner,
 ) -> Result<Inst> {
     // optional predicate guard: `@%p1` or `@!%p1`
@@ -604,7 +806,8 @@ fn parse_inst(
 
     let inst = match base {
         "ret" => Inst::Ret,
-        "bar" => Inst::Nop, // bar.sync — no shared memory in this oracle
+        "bar" | "barrier" => Inst::Bar, // bar.sync / barrier.sync — workgroup rendezvous
+        "membar" | "fence" => Inst::Nop, // memory fence — the barrier already orders shared memory
         "bra" => {
             need!(1);
             let target = *labels
@@ -620,6 +823,10 @@ fn parse_inst(
                 Inst::MovSReg { d, sreg: sr }
             } else if is_reg(src) {
                 Inst::MovReg { d, s: reg(interner, src) }
+            } else if let Some(&off) = shared_syms.get(src.trim()) {
+                // `mov.u32 %r, sdata` — the address of a shared variable is its byte offset in the
+                // block shared array (a plain integer the shared ld/st then indexes).
+                Inst::MovImmI { d, imm: off as u64 }
             } else if has("f32") {
                 Inst::MovImmF { d, bits: parse_imm_f(src)? }
             } else {
@@ -638,18 +845,26 @@ fn parse_inst(
             } else if has("global") {
                 let (addr, off) = parse_mem(&ops[1], interner)?;
                 Inst::LdGlobal { d, addr, off, ty: gtype(opcode)? }
+            } else if has("shared") {
+                let (base, off) = parse_shared_mem(&ops[1], shared_syms, interner)?;
+                Inst::LdShared { d, base, off, ty: gtype(opcode)? }
             } else {
                 return Err(err(format!("unsupported ld space: `{stmt}`")));
             }
         }
         "st" => {
             need!(2);
-            if !has("global") {
+            if has("global") {
+                let (addr, off) = parse_mem(&ops[0], interner)?;
+                let src = parse_op(&ops[1], interner, has("f32"))?;
+                Inst::StGlobal { addr, off, src, ty: gtype(opcode)? }
+            } else if has("shared") {
+                let (base, off) = parse_shared_mem(&ops[0], shared_syms, interner)?;
+                let src = parse_op(&ops[1], interner, has("f32"))?;
+                Inst::StShared { base, off, src, ty: gtype(opcode)? }
+            } else {
                 return Err(err(format!("unsupported st space: `{stmt}`")));
             }
-            let (addr, off) = parse_mem(&ops[0], interner)?;
-            let src = parse_op(&ops[1], interner, has("f32"))?;
-            Inst::StGlobal { addr, off, src, ty: gtype(opcode)? }
         }
         "cvta" => {
             need!(2);
@@ -762,9 +977,124 @@ fn parse_inst(
             };
             Inst::Cvt { d, s, kind }
         }
+        "shl" | "shr" => {
+            need!(3);
+            let d = reg(interner, &ops[0]);
+            Inst::Shift {
+                d,
+                a: parse_op(&ops[1], interner, false)?,
+                b: parse_op(&ops[2], interner, false)?,
+                dir: if base == "shl" { SHIFT_LEFT } else { SHIFT_RIGHT },
+                unsigned: has("u32") || has("u64") || has("u16") || has("b32") || has("b64") || has("b16"),
+            }
+        }
+        "and" | "or" | "xor" => {
+            need!(3);
+            let d = reg(interner, &ops[0]);
+            let op = match base {
+                "and" => BIT_AND,
+                "or" => BIT_OR,
+                _ => BIT_XOR,
+            };
+            Inst::BitOp {
+                d,
+                a: parse_op(&ops[1], interner, false)?,
+                b: parse_op(&ops[2], interner, false)?,
+                op,
+            }
+        }
+        // `atom.<space>.<op>[.type] [d,] [addr], val [, cas_cmp]` and the destination-less `red.*` form.
+        "atom" | "red" => {
+            let has_dest = base == "atom";
+            let op = atom_op(opcode)?;
+            let unsigned = has("u32") || has("u64") || has("u16") || has("b32") || has("b64");
+            if opcode.contains("f32") || opcode.contains("f64") {
+                return Err(err(format!("floating-point atomics unsupported (WGSL has no f32 atomics): `{stmt}`")));
+            }
+            // operand shape: atom → [d, addr, val (, cmp_for_cas... actually val,newval)]; red → [addr, val].
+            // CUDA CAS is `atom.cas d, [addr], compare, swap` → operands: d, addr, compare, swap.
+            let mut i = 0;
+            let d = if has_dest {
+                let r = reg(interner, &ops[i]);
+                i += 1;
+                Some(r)
+            } else {
+                None
+            };
+            need!(i + 2);
+            let addr_tok = &ops[i];
+            i += 1;
+            let (cmp, val) = if op == ATOM_CAS {
+                need!(i + 2);
+                let cmp = parse_op(&ops[i], interner, false)?;
+                let val = parse_op(&ops[i + 1], interner, false)?;
+                (cmp, val)
+            } else {
+                (Op::ImmI(0), parse_op(&ops[i], interner, false)?)
+            };
+            if has("shared") {
+                let (b, off) = parse_shared_mem(addr_tok, shared_syms, interner)?;
+                Inst::AtomShared { d, base: b, off, op, cmp, val, unsigned }
+            } else if has("global") || !has("shared") {
+                let (addr, off) = parse_mem(addr_tok, interner)?;
+                Inst::AtomGlobal { d, addr, off, op, cmp, val, unsigned }
+            } else {
+                return Err(err(format!("unsupported atom space: `{stmt}`")));
+            }
+        }
         other => return Err(err(format!("unsupported opcode `{other}`: `{stmt}`"))),
     };
     Ok(inst)
+}
+
+/// Map an `atom.*`/`red.*` opcode to an `ATOM_*` code.
+fn atom_op(opcode: &str) -> Result<u8> {
+    let m = |x: &str| opcode.split('.').any(|t| t == x);
+    Ok(if m("add") || m("inc") {
+        ATOM_ADD
+    } else if m("min") {
+        ATOM_MIN
+    } else if m("max") {
+        ATOM_MAX
+    } else if m("and") {
+        ATOM_AND
+    } else if m("or") {
+        ATOM_OR
+    } else if m("xor") {
+        ATOM_XOR
+    } else if m("exch") {
+        ATOM_EXCH
+    } else if m("cas") {
+        ATOM_CAS
+    } else {
+        return Err(err(format!("unsupported atomic op: `{opcode}`")));
+    })
+}
+
+/// Parse a shared-memory address operand `[base(+off)]` where `base` is either a register or a `.shared`
+/// symbol name (resolved to its byte offset). Returns `(base_op, byte_off)`; the effective shared offset
+/// is `eval(base_op) + byte_off`.
+fn parse_shared_mem(
+    tok: &str,
+    shared_syms: &std::collections::HashMap<String, u32>,
+    interner: &mut Interner,
+) -> Result<(Op, i64)> {
+    let inner = tok.trim().trim_start_matches('[').trim_end_matches(']').trim();
+    // split an optional +/- displacement (not part of a register name).
+    let (base_tok, off) = if let Some(pos) = inner.find(['+', '-']) {
+        let (b, o) = inner.split_at(pos);
+        (b.trim(), parse_imm_i(o.trim())?)
+    } else {
+        (inner, 0)
+    };
+    if is_reg(base_tok) {
+        Ok((Op::Reg(interner.get(strip_reg(base_tok))), off))
+    } else if let Some(&sym) = shared_syms.get(base_tok) {
+        Ok((Op::ImmI(sym as i64), off))
+    } else {
+        // a bare numeric base offset into shared memory.
+        Ok((Op::ImmI(parse_imm_i(base_tok)?), off))
+    }
 }
 
 // ---- small parser helpers ----
@@ -919,16 +1249,27 @@ pub fn execute(
 ) -> Result<()> {
     let [bx, by, bz] = prog.block;
     let (gx, gy, gz) = grid;
+    // Kernels with shared memory or barriers need cooperative, block-scoped execution (a per-thread
+    // run-to-completion would not model shared-memory hand-offs across `bar.sync`). Elementwise kernels
+    // keep the original run-each-thread-independently path (unchanged behavior).
+    let coop = prog.shared_bytes > 0 || prog.insts.iter().any(|i| matches!(i, Inst::Bar));
     for cz in 0..gz.max(1) {
         for cy in 0..gy.max(1) {
             for cx in 0..gx.max(1) {
+                if coop {
+                    run_block(prog, param_blob, regions, &[bx, by, bz], [cx, cy, cz], [gx, gy, gz])?;
+                    continue;
+                }
                 for tz in 0..bz.max(1) {
                     for ty in 0..by.max(1) {
                         for tx in 0..bx.max(1) {
                             let sr = [
                                 tx, ty, tz, bx, by, bz, cx, cy, cz, gx.max(1), gy.max(1), gz.max(1),
                             ];
-                            run_thread(prog, param_blob, regions, &sr)?;
+                            let mut regs = vec![Val::I(0); prog.reg_count as usize];
+                            let mut pc = 0usize;
+                            let mut shared: Vec<u8> = Vec::new();
+                            run_until(prog, param_blob, regions, &mut shared, &mut regs, &mut pc, &sr)?;
                         }
                     }
                 }
@@ -938,18 +1279,90 @@ pub fn execute(
     Ok(())
 }
 
-fn run_thread(
+/// Where a thread paused: at a `bar.sync` (rendezvous) or a `ret` (retired).
+enum Stop {
+    Ret,
+    Barrier,
+}
+
+/// Cooperatively execute one thread block (CTA), correctly modeling `bar.sync`: every live thread runs
+/// forward to its next barrier (or `ret`); only once all live threads have arrived does the block advance
+/// past the barrier. All threads share one `shared` byte array (workgroup memory). This is the CPU oracle
+/// for shared-memory + barrier + atomic kernels.
+fn run_block(
     prog: &KernelProgram,
     param_blob: &[u8],
     regions: &mut [Vec<u8>],
-    sr: &[u32; 12],
+    block: &[u32; 3],
+    cta: [u32; 3],
+    grid: [u32; 3],
 ) -> Result<()> {
-    let mut regs = vec![Val::I(0); prog.reg_count as usize];
-    let mut pc = 0usize;
+    let [bx, by, bz] = *block;
+    let [gx, gy, gz] = grid;
+    let mut shared = vec![0u8; prog.shared_bytes as usize];
+    // Per-thread continuation state.
+    struct T {
+        regs: Vec<Val>,
+        pc: usize,
+        done: bool,
+        sr: [u32; 12],
+    }
+    let mut threads: Vec<T> = Vec::new();
+    for tz in 0..bz.max(1) {
+        for ty in 0..by.max(1) {
+            for tx in 0..bx.max(1) {
+                threads.push(T {
+                    regs: vec![Val::I(0); prog.reg_count as usize],
+                    pc: 0,
+                    done: false,
+                    sr: [
+                        tx, ty, tz, bx, by, bz, cta[0], cta[1], cta[2], gx.max(1), gy.max(1), gz.max(1),
+                    ],
+                });
+            }
+        }
+    }
+    // Phase loop: run every live thread to its next sync point; repeat until all have retired. A phase
+    // count cap guards against a barrier only some threads reach (a malformed kernel) looping forever.
+    let phase_cap = prog.insts.len() as u64 * 64 + 1024;
+    let mut phases = 0u64;
+    loop {
+        let mut all_done = true;
+        for t in &mut threads {
+            if t.done {
+                continue;
+            }
+            match run_until(prog, param_blob, regions, &mut shared, &mut t.regs, &mut t.pc, &t.sr)? {
+                Stop::Ret => t.done = true,
+                Stop::Barrier => {} // parked just past the barrier; resumes next phase
+            }
+            if !t.done {
+                all_done = false;
+            }
+        }
+        if all_done {
+            return Ok(());
+        }
+        phases += 1;
+        if phases > phase_cap {
+            return Err(err("kernel block exceeded barrier-phase cap (barrier not reached by all threads?)"));
+        }
+    }
+}
+
+fn run_until(
+    prog: &KernelProgram,
+    param_blob: &[u8],
+    regions: &mut [Vec<u8>],
+    shared: &mut Vec<u8>,
+    regs: &mut Vec<Val>,
+    pc: &mut usize,
+    sr: &[u32; 12],
+) -> Result<Stop> {
     let mut steps = 0u64;
     let step_cap = 1_000_000u64;
 
-    let eval = |regs: &Vec<Val>, op: &Op| -> Val {
+    let eval = |regs: &[Val], op: &Op| -> Val {
         match op {
             Op::Reg(r) => regs[*r as usize],
             Op::ImmI(i) => Val::I(*i as u64),
@@ -957,13 +1370,17 @@ fn run_thread(
         }
     };
 
-    while pc < prog.insts.len() {
+    while *pc < prog.insts.len() {
         steps += 1;
         if steps > step_cap {
             return Err(err("kernel exceeded step cap (suspected infinite loop)"));
         }
-        match &prog.insts[pc] {
-            Inst::Ret => return Ok(()),
+        match &prog.insts[*pc] {
+            Inst::Ret => return Ok(Stop::Ret),
+            Inst::Bar => {
+                *pc += 1;
+                return Ok(Stop::Barrier);
+            }
             Inst::Nop => {}
             Inst::MovImmI { d, imm } => regs[*d as usize] = Val::I(*imm),
             Inst::MovImmF { d, bits } => regs[*d as usize] = Val::F(f32::from_bits(*bits)),
@@ -979,15 +1396,15 @@ fn run_thread(
             }
             Inst::Cvta { d, s } => regs[*d as usize] = regs[*s as usize],
             Inst::IAdd { d, a, b, wide } => {
-                let (va, vb) = (eval(&regs, a), eval(&regs, b));
+                let (va, vb) = (eval(regs, a), eval(regs, b));
                 regs[*d as usize] = ptr_int_add(va, vb, *wide, 1);
             }
             Inst::ISub { d, a, b, wide } => {
-                let (va, vb) = (eval(&regs, a), eval(&regs, b));
+                let (va, vb) = (eval(regs, a), eval(regs, b));
                 regs[*d as usize] = ptr_int_add(va, vb, *wide, -1);
             }
             Inst::IMul { d, a, b, wide, unsigned } => {
-                let (va, vb) = (eval(&regs, a).as_u64(), eval(&regs, b).as_u64());
+                let (va, vb) = (eval(regs, a).as_u64(), eval(regs, b).as_u64());
                 regs[*d as usize] = if *wide {
                     if *unsigned {
                         // mul.wide.u32: zero-extend both 32-bit operands to 64-bit.
@@ -1002,15 +1419,15 @@ fn run_thread(
                 };
             }
             Inst::IMad { d, a, b, c } => {
-                let va = eval(&regs, a).as_i64() as i32;
-                let vb = eval(&regs, b).as_i64() as i32;
-                let vc = eval(&regs, c).as_i64() as i32;
+                let va = eval(regs, a).as_i64() as i32;
+                let vb = eval(regs, b).as_i64() as i32;
+                let vc = eval(regs, c).as_i64() as i32;
                 regs[*d as usize] = Val::I(va.wrapping_mul(vb).wrapping_add(vc) as u32 as u64);
             }
             Inst::Setp { d, a, b, cmp, unsigned } => {
                 let r = if *unsigned {
-                    let va = eval(&regs, a).as_u64() as u32;
-                    let vb = eval(&regs, b).as_u64() as u32;
+                    let va = eval(regs, a).as_u64() as u32;
+                    let vb = eval(regs, b).as_u64() as u32;
                     match *cmp {
                         CMP_EQ => va == vb,
                         CMP_NE => va != vb,
@@ -1020,8 +1437,8 @@ fn run_thread(
                         _ => va >= vb, // CMP_GE
                     }
                 } else {
-                    let va = eval(&regs, a).as_u64() as i32;
-                    let vb = eval(&regs, b).as_u64() as i32;
+                    let va = eval(regs, a).as_u64() as i32;
+                    let vb = eval(regs, b).as_u64() as i32;
                     match *cmp {
                         CMP_EQ => va == vb,
                         CMP_NE => va != vb,
@@ -1046,7 +1463,7 @@ fn run_thread(
                     }
                 };
                 if take {
-                    pc = *target as usize;
+                    *pc = *target as usize;
                     continue;
                 }
             }
@@ -1073,7 +1490,7 @@ fn run_thread(
                     return Err(GpuError::OutOfBounds);
                 }
                 let at = eff as usize;
-                let v = eval(&regs, src);
+                let v = eval(regs, src);
                 let mem = regions
                     .get_mut(region as usize)
                     .ok_or_else(|| err("st.global: unbound region"))?;
@@ -1084,20 +1501,20 @@ fn run_thread(
                 }
             }
             Inst::FAdd { d, a, b } => {
-                regs[*d as usize] = Val::F(eval(&regs, a).as_f32() + eval(&regs, b).as_f32())
+                regs[*d as usize] = Val::F(eval(regs, a).as_f32() + eval(regs, b).as_f32())
             }
             Inst::FSub { d, a, b } => {
-                regs[*d as usize] = Val::F(eval(&regs, a).as_f32() - eval(&regs, b).as_f32())
+                regs[*d as usize] = Val::F(eval(regs, a).as_f32() - eval(regs, b).as_f32())
             }
             Inst::FMul { d, a, b } => {
-                regs[*d as usize] = Val::F(eval(&regs, a).as_f32() * eval(&regs, b).as_f32())
+                regs[*d as usize] = Val::F(eval(regs, a).as_f32() * eval(regs, b).as_f32())
             }
             Inst::FFma { d, a, b, c } => {
-                let (fa, fb, fc) = (eval(&regs, a).as_f32(), eval(&regs, b).as_f32(), eval(&regs, c).as_f32());
+                let (fa, fb, fc) = (eval(regs, a).as_f32(), eval(regs, b).as_f32(), eval(regs, c).as_f32());
                 regs[*d as usize] = Val::F(fa.mul_add(fb, fc));
             }
             Inst::Cvt { d, s, kind } => {
-                let v = eval(&regs, s);
+                let v = eval(regs, s);
                 regs[*d as usize] = match *kind {
                     CVT_F32_FROM_S32 => Val::F(v.as_u64() as i32 as f32),
                     CVT_S64_FROM_S32 => Val::I(v.as_u64() as i32 as i64 as u64),
@@ -1105,10 +1522,120 @@ fn run_thread(
                     _ => v,
                 };
             }
+            Inst::Shift { d, a, b, dir, unsigned } => {
+                let va = eval(regs, a).as_u64() as u32;
+                let sh = (eval(regs, b).as_u64() as u32) & 31; // shift amount mod 32 (PTX/HW semantics)
+                let r = match *dir {
+                    SHIFT_LEFT => va.wrapping_shl(sh),
+                    _ if *unsigned => va.wrapping_shr(sh),
+                    _ => (va as i32).wrapping_shr(sh) as u32, // arithmetic right shift
+                };
+                regs[*d as usize] = Val::I(r as u64);
+            }
+            Inst::BitOp { d, a, b, op } => {
+                let va = eval(regs, a).as_u64() as u32;
+                let vb = eval(regs, b).as_u64() as u32;
+                let r = match *op {
+                    BIT_AND => va & vb,
+                    BIT_OR => va | vb,
+                    _ => va ^ vb,
+                };
+                regs[*d as usize] = Val::I(r as u64);
+            }
+            Inst::LdShared { d, base, off, ty } => {
+                let at = shared_addr(eval(regs, base), *off)?;
+                regs[*d as usize] = match *ty {
+                    gty::F32 => Val::F(f32::from_bits(read_scalar(shared, at, 4)? as u32)),
+                    gty::U32 => Val::I(read_scalar(shared, at, 4)?),
+                    _ => Val::I(read_scalar(shared, at, 8)?),
+                };
+            }
+            Inst::StShared { base, off, src, ty } => {
+                let at = shared_addr(eval(regs, base), *off)?;
+                let v = eval(regs, src);
+                match *ty {
+                    gty::F32 => write_scalar(shared, at, 4, v.as_f32().to_bits() as u64)?,
+                    gty::U32 => write_scalar(shared, at, 4, v.as_u64())?,
+                    _ => write_scalar(shared, at, 8, v.as_u64())?,
+                }
+            }
+            Inst::AtomGlobal { d, addr, off, op, cmp, val, unsigned } => {
+                let (region, base) = ptr_target(regs[*addr as usize])?;
+                let eff = base.wrapping_add(*off);
+                if eff < 0 {
+                    return Err(GpuError::OutOfBounds);
+                }
+                let at = eff as usize;
+                let cmpv = eval(regs, cmp).as_u64() as u32;
+                let valv = eval(regs, val).as_u64() as u32;
+                let mem = regions
+                    .get_mut(region as usize)
+                    .ok_or_else(|| err("atom.global: unbound region"))?;
+                let old = atomic_rmw(mem, at, *op, cmpv, valv, *unsigned)?;
+                if let Some(dr) = d {
+                    regs[*dr as usize] = Val::I(old as u64);
+                }
+            }
+            Inst::AtomShared { d, base, off, op, cmp, val, unsigned } => {
+                let at = shared_addr(eval(regs, base), *off)?;
+                let cmpv = eval(regs, cmp).as_u64() as u32;
+                let valv = eval(regs, val).as_u64() as u32;
+                let old = atomic_rmw(shared, at, *op, cmpv, valv, *unsigned)?;
+                if let Some(dr) = d {
+                    regs[*dr as usize] = Val::I(old as u64);
+                }
+            }
         }
-        pc += 1;
+        *pc += 1;
     }
-    Ok(())
+    Ok(Stop::Ret)
+}
+
+/// Resolve a shared-memory byte address from a base value + constant displacement, rejecting negatives.
+fn shared_addr(base: Val, off: i64) -> Result<usize> {
+    let eff = (base.as_i64()).wrapping_add(off);
+    if eff < 0 {
+        return Err(GpuError::OutOfBounds);
+    }
+    Ok(eff as usize)
+}
+
+/// Perform a 32-bit atomic read-modify-write on `mem` at byte offset `at`, returning the OLD value.
+/// The CPU oracle is single-threaded within a barrier phase, so the read-modify-write is trivially
+/// serialized (matching the total order a real atomic imposes).
+fn atomic_rmw(mem: &mut [u8], at: usize, op: u8, cmp: u32, val: u32, unsigned: bool) -> Result<u32> {
+    let old = read_scalar(mem, at, 4)? as u32;
+    let new = match op {
+        ATOM_ADD => old.wrapping_add(val),
+        ATOM_MIN => {
+            if unsigned {
+                old.min(val)
+            } else {
+                (old as i32).min(val as i32) as u32
+            }
+        }
+        ATOM_MAX => {
+            if unsigned {
+                old.max(val)
+            } else {
+                (old as i32).max(val as i32) as u32
+            }
+        }
+        ATOM_AND => old & val,
+        ATOM_OR => old | val,
+        ATOM_XOR => old ^ val,
+        ATOM_EXCH => val,
+        ATOM_CAS => {
+            if old == cmp {
+                val
+            } else {
+                old
+            }
+        }
+        _ => return Err(err("unknown atomic op")),
+    };
+    write_scalar(mem, at, 4, new as u64)?;
+    Ok(old)
 }
 
 fn ptr_int_add(a: Val, b: Val, wide: bool, sign: i64) -> Val {
@@ -1215,21 +1742,52 @@ fn region_analysis(prog: &KernelProgram) -> Vec<Option<u32>> {
                 reg[*d as usize] = of(&reg, a).or_else(|| of(&reg, b)).or_else(|| of(&reg, c));
             }
             Inst::IMul { d, a, b, .. } => reg[*d as usize] = of(&reg, a).or_else(|| of(&reg, b)),
-            // Every other opcode produces a plain value (a load result, a scalar, a predicate).
+            // Every other value-producing opcode yields a plain (non-pointer) value.
             Inst::MovImmI { d, .. }
             | Inst::MovImmF { d, .. }
             | Inst::MovSReg { d, .. }
             | Inst::LdGlobal { d, .. }
+            | Inst::LdShared { d, .. }
             | Inst::Setp { d, .. }
+            | Inst::Shift { d, .. }
+            | Inst::BitOp { d, .. }
             | Inst::FAdd { d, .. }
             | Inst::FSub { d, .. }
             | Inst::FMul { d, .. }
             | Inst::FFma { d, .. }
             | Inst::Cvt { d, .. } => reg[*d as usize] = None,
-            Inst::StGlobal { .. } | Inst::Bra { .. } | Inst::Ret | Inst::Nop => {}
+            Inst::AtomGlobal { d, .. } | Inst::AtomShared { d, .. } => {
+                if let Some(dr) = d {
+                    reg[*dr as usize] = None;
+                }
+            }
+            Inst::StGlobal { .. }
+            | Inst::StShared { .. }
+            | Inst::Bra { .. }
+            | Inst::Bar
+            | Inst::Ret
+            | Inst::Nop => {}
         }
     }
     reg
+}
+
+/// Which pointer regions are accessed atomically anywhere in the kernel → those storage buffers must be
+/// typed `array<atomic<u32>>` in WGSL (and ALL their accesses, including plain `ld/st.global`, routed
+/// through `atomicLoad`/`atomicStore`). A region touched by BOTH a plain and an atomic access is legal
+/// here because we always route through the atomic accessors when the region is atomic.
+fn atomic_regions(prog: &KernelProgram) -> Result<Vec<bool>> {
+    let region = region_analysis(prog);
+    let mut atomic = vec![false; prog.num_regions as usize];
+    for inst in &prog.insts {
+        if let Inst::AtomGlobal { addr, .. } = inst {
+            let r = region[*addr as usize].ok_or_else(|| {
+                err("wgsl lowering: atomic through a value with no static pointer region")
+            })?;
+            atomic[r as usize] = true;
+        }
+    }
+    Ok(atomic)
 }
 
 /// A special-register id → the WGSL builtin/constant expression that yields its value.
@@ -1284,23 +1842,47 @@ pub fn kernel_to_wgsl(prog: &KernelProgram) -> Result<String> {
             err("wgsl lowering: global access through a value with no static pointer region")
         })
     };
+    // Regions accessed atomically must be typed `array<atomic<u32>>`; all their accesses (incl. plain
+    // ld/st.global) route through atomicLoad/atomicStore. Shared memory is likewise atomic-typed iff any
+    // `atom.shared` touches it. Barriers force the cooperative (over-synchronizing) loop form.
+    let atomic = atomic_regions(prog)?;
+    let shared_atomic = prog.insts.iter().any(|i| matches!(i, Inst::AtomShared { .. }));
+    let coop = prog.insts.iter().any(|i| matches!(i, Inst::Bar));
+
+    // shared-memory index expression `(base + off) / elem` (byte offset → word index).
+    let shared_idx = |base: &Op, off: i64, elem: u32| format!("(({} + {}u) / {elem}u)", op_u32(base), off as u32);
 
     let mut s = String::new();
     // --- resource bindings (params + one storage buffer per pointer region) ---
     s.push_str("@group(0) @binding(0) var<storage, read> params: array<u32>;\n");
     for r in 0..prog.num_regions {
+        let elem_ty = if atomic[r as usize] { "atomic<u32>" } else { "u32" };
         s.push_str(&format!(
-            "@group(0) @binding({}) var<storage, read_write> region{r}: array<u32>;\n",
+            "@group(0) @binding({}) var<storage, read_write> region{r}: array<{elem_ty}>;\n",
             r + 1
         ));
+    }
+    // --- workgroup shared memory (a `.shared` byte array, viewed as 32-bit words) ---
+    if prog.shared_bytes > 0 {
+        let words = (prog.shared_bytes / 4).max(1);
+        let elem_ty = if shared_atomic { "atomic<u32>" } else { "u32" };
+        s.push_str(&format!("var<workgroup> shmem: array<{elem_ty}, {words}>;\n"));
+    }
+    // --- cooperative-loop bookkeeping: a workgroup counter of retired threads (see the loop below) ---
+    if coop {
+        s.push_str("var<workgroup> dd_retired_count: atomic<u32>;\n");
     }
     s.push('\n');
 
     // --- entry point signature (block dims baked as the workgroup size) ---
     let [bx, by, bz] = prog.block;
+    let total_threads = bx.max(1) * by.max(1) * bz.max(1);
     s.push_str(&format!("@compute @workgroup_size({}, {}, {})\n", bx.max(1), by.max(1), bz.max(1)));
     s.push_str(&format!("fn {}(\n", prog.entry));
     s.push_str("    @builtin(local_invocation_id) lid: vec3<u32>,\n");
+    if coop {
+        s.push_str("    @builtin(local_invocation_index) lidx: u32,\n");
+    }
     s.push_str("    @builtin(workgroup_id) wid: vec3<u32>,\n");
     s.push_str("    @builtin(num_workgroups) nwg: vec3<u32>,\n");
     s.push_str(") {\n");
@@ -1310,22 +1892,50 @@ pub fn kernel_to_wgsl(prog: &KernelProgram) -> Result<String> {
         s.push_str(&format!("    var r{r}: u32 = 0u;\n"));
     }
 
-    // --- pc-dispatch loop: makes unstructured `bra` WGSL-legal (structured control flow only) ---
-    // Termination sets `pc = -1`; the loop-top guard is the only real loop `break`. (A `break` inside a
-    // WGSL `switch` case exits the *switch*, not the loop — so `ret`/end must signal via `pc` instead.)
-    s.push_str("    var pc: i32 = 0;\n");
-    s.push_str("    loop {\n");
-    s.push_str("        if (pc < 0) { break; }\n");
-    s.push_str("        switch pc {\n");
+    // === control flow ===
+    // Both forms are a `pc`-dispatch `loop { switch pc { case k: … } }` — the general lowering of
+    // unstructured PTX `bra` into WGSL's structured control flow (no relooper).
+    //
+    // The COOPERATIVE form (kernels with `bar.sync`) additionally executes ONE `workgroupBarrier()`
+    // UNCONDITIONALLY at the bottom of every loop iteration. Because that barrier is outside all `pc`-
+    // dependent control flow it is trivially uniform (naga-legal), and because every thread runs the loop
+    // in iteration-lockstep it is reached by the whole workgroup each pass — an over-approximation of the
+    // program's real `bar.sync` points (which is always safe: extra synchronization can never introduce a
+    // race). A thread that hits `ret` increments `dd_retired_count` and idles (its `switch` is skipped)
+    // but keeps hitting the barrier, so no thread is ever left waiting on a retired peer; the whole block
+    // breaks together the iteration the last thread retires. A real `bar.sync` is thus a plain pc-advance.
+    if coop {
+        s.push_str("    if (lidx == 0u) { atomicStore(&dd_retired_count, 0u); }\n");
+        s.push_str("    workgroupBarrier();\n");
+        s.push_str("    var pc: i32 = 0;\n");
+        s.push_str("    var dd_retired: bool = false;\n");
+        s.push_str("    loop {\n");
+        s.push_str("        if (!dd_retired) {\n");
+        s.push_str("            switch pc {\n");
+    } else {
+        // Termination sets `pc = -1`; the loop-top guard is the only real loop `break`.
+        s.push_str("    var pc: i32 = 0;\n");
+        s.push_str("    loop {\n");
+        s.push_str("        if (pc < 0) { break; }\n");
+        s.push_str("        switch pc {\n");
+    }
+    let indent = if coop { "                " } else { "            " };
+    // The statement a `ret` (or falling off the end) lowers to.
+    let retire = if coop {
+        "atomicAdd(&dd_retired_count, 1u); dd_retired = true; pc = -1;"
+    } else {
+        "pc = -1;"
+    };
     for (k, inst) in prog.insts.iter().enumerate() {
         let mut body = String::new();
         let mut branched = false; // instruction sets pc itself (no fallthrough advance)
         match inst {
             Inst::Ret => {
-                body.push_str("pc = -1;");
+                body.push_str(retire);
                 branched = true;
             }
             Inst::Nop => {}
+            Inst::Bar => {} // real sync is the unconditional per-iteration barrier below; just advance pc
             Inst::MovImmI { d, imm } => body.push_str(&format!("r{d} = {}u;", *imm as u32)),
             Inst::MovImmF { d, bits } => body.push_str(&format!("r{d} = {bits}u;")),
             Inst::MovReg { d, s: src } => body.push_str(&format!("r{d} = r{src};")),
@@ -1352,6 +1962,23 @@ pub fn kernel_to_wgsl(prog: &KernelProgram) -> Result<String> {
             }
             Inst::IMad { d, a, b, c } => {
                 body.push_str(&format!("r{d} = {} * {} + {};", op_u32(a), op_u32(b), op_u32(c)))
+            }
+            Inst::Shift { d, a, b, dir, unsigned } => {
+                let sh = format!("({} & 31u)", op_u32(b));
+                let e = match *dir {
+                    SHIFT_LEFT => format!("{} << {sh}", op_u32(a)),
+                    _ if *unsigned => format!("{} >> {sh}", op_u32(a)),
+                    _ => format!("bitcast<u32>({} >> {sh})", op_i32(a)), // arithmetic right shift
+                };
+                body.push_str(&format!("r{d} = {e};"));
+            }
+            Inst::BitOp { d, a, b, op } => {
+                let sym = match *op {
+                    BIT_AND => "&",
+                    BIT_OR => "|",
+                    _ => "^",
+                };
+                body.push_str(&format!("r{d} = {} {sym} {};", op_u32(a), op_u32(b)));
             }
             Inst::Setp { d, a, b, cmp, unsigned } => {
                 let sym = match *cmp {
@@ -1382,19 +2009,54 @@ pub fn kernel_to_wgsl(prog: &KernelProgram) -> Result<String> {
             Inst::LdGlobal { d, addr, off, ty } => {
                 let r = region_of(*addr)?;
                 let elem = gty_elem_bytes(*ty)?;
-                body.push_str(&format!(
-                    "r{d} = region{r}[(r{addr} + {}u) / {elem}u];",
-                    *off as u32
-                ));
+                let idx = format!("(r{addr} + {}u) / {elem}u", *off as u32);
+                if atomic[r as usize] {
+                    body.push_str(&format!("r{d} = atomicLoad(&region{r}[{idx}]);"));
+                } else {
+                    body.push_str(&format!("r{d} = region{r}[{idx}];"));
+                }
             }
             Inst::StGlobal { addr, off, src, ty } => {
                 let r = region_of(*addr)?;
                 let elem = gty_elem_bytes(*ty)?;
-                body.push_str(&format!(
-                    "region{r}[(r{addr} + {}u) / {elem}u] = {};",
-                    *off as u32,
-                    op_u32(src)
-                ));
+                let idx = format!("(r{addr} + {}u) / {elem}u", *off as u32);
+                if atomic[r as usize] {
+                    body.push_str(&format!("atomicStore(&region{r}[{idx}], {});", op_u32(src)));
+                } else {
+                    body.push_str(&format!("region{r}[{idx}] = {};", op_u32(src)));
+                }
+            }
+            Inst::LdShared { d, base, off, ty } => {
+                let elem = gty_elem_bytes(*ty)?;
+                let idx = shared_idx(base, *off, elem);
+                if shared_atomic {
+                    body.push_str(&format!("r{d} = atomicLoad(&shmem[{idx}]);"));
+                } else {
+                    body.push_str(&format!("r{d} = shmem[{idx}];"));
+                }
+            }
+            Inst::StShared { base, off, src, ty } => {
+                let elem = gty_elem_bytes(*ty)?;
+                let idx = shared_idx(base, *off, elem);
+                if shared_atomic {
+                    body.push_str(&format!("atomicStore(&shmem[{idx}], {});", op_u32(src)));
+                } else {
+                    body.push_str(&format!("shmem[{idx}] = {};", op_u32(src)));
+                }
+            }
+            Inst::AtomGlobal { d, addr, off, op, cmp, val, unsigned } => {
+                let r = region_of(*addr)?;
+                let idx = format!("(r{addr} + {}u) / 4u", *off as u32);
+                let ptr = format!("&region{r}[{idx}]");
+                emit_atomic(&mut body, &ptr, *op, cmp, val, *d, *unsigned)?;
+            }
+            Inst::AtomShared { d, base, off, op, cmp, val, unsigned } => {
+                if !shared_atomic {
+                    return Err(err("wgsl lowering: atom.shared requires an atomic shared array"));
+                }
+                let idx = shared_idx(base, *off, 4);
+                let ptr = format!("&shmem[{idx}]");
+                emit_atomic(&mut body, &ptr, *op, cmp, val, *d, *unsigned)?;
             }
             Inst::FAdd { d, a, b } => {
                 body.push_str(&format!("r{d} = bitcast<u32>({} + {});", op_f32(a), op_f32(b)))
@@ -1424,12 +2086,68 @@ pub fn kernel_to_wgsl(prog: &KernelProgram) -> Result<String> {
         if !branched {
             body.push_str(&format!(" pc = {};", k + 1));
         }
-        s.push_str(&format!("            case {k}: {{ {body} }}\n"));
+        s.push_str(&format!("{indent}case {k}: {{ {body} }}\n"));
     }
-    // Fell off the end (or a branch past the last case) → signal termination; the loop-top guard breaks.
-    s.push_str("            default: { pc = -1; }\n");
-    s.push_str("        }\n    }\n}\n");
+    // Fell off the end (or a branch past the last case) → retire this thread.
+    s.push_str(&format!("{indent}default: {{ {retire} }}\n"));
+    if coop {
+        s.push_str("            }\n"); // close switch
+        s.push_str("        }\n"); // close `if (!dd_retired)`
+        s.push_str("        workgroupBarrier();\n");
+        s.push_str(&format!("        if (atomicLoad(&dd_retired_count) == {total_threads}u) {{ break; }}\n"));
+        s.push_str("    }\n}\n"); // close loop + fn
+    } else {
+        s.push_str("        }\n    }\n}\n"); // close switch + loop + fn
+    }
     Ok(s)
+}
+
+/// Emit a WGSL atomic read-modify-write on `ptr` (`&region…[…]` / `&shmem[…]`, an `atomic<u32>`),
+/// optionally capturing the old value into `r{d}`. `CAS` is emulated with a strong compare-exchange
+/// loop (WGSL's `atomicCompareExchangeWeak` may fail spuriously). Signed `min`/`max` are rejected — the
+/// atomic word is unsigned-typed, so only the unsigned variants have correct semantics.
+fn emit_atomic(
+    body: &mut String,
+    ptr: &str,
+    op: u8,
+    cmp: &Op,
+    val: &Op,
+    d: Option<u16>,
+    unsigned: bool,
+) -> Result<()> {
+    let dst = |body: &mut String, expr: &str| match d {
+        Some(dr) => body.push_str(&format!("r{dr} = {expr};")),
+        None => body.push_str(&format!("{expr};")), // `red.*` form: discard the old value
+    };
+    match op {
+        ATOM_ADD => dst(body, &format!("atomicAdd({ptr}, {})", op_u32(val))),
+        ATOM_AND => dst(body, &format!("atomicAnd({ptr}, {})", op_u32(val))),
+        ATOM_OR => dst(body, &format!("atomicOr({ptr}, {})", op_u32(val))),
+        ATOM_XOR => dst(body, &format!("atomicXor({ptr}, {})", op_u32(val))),
+        ATOM_EXCH => dst(body, &format!("atomicExchange({ptr}, {})", op_u32(val))),
+        ATOM_MIN if unsigned => dst(body, &format!("atomicMin({ptr}, {})", op_u32(val))),
+        ATOM_MAX if unsigned => dst(body, &format!("atomicMax({ptr}, {})", op_u32(val))),
+        ATOM_MIN | ATOM_MAX => {
+            return Err(err("wgsl lowering: signed atomic min/max unsupported (atomic word is u32)"))
+        }
+        ATOM_CAS => {
+            // Strong CAS via a weak-CAS retry loop: retry only on a spurious failure (old == compare but
+            // not exchanged). Either way `res.old_value` is the true prior value.
+            let (c, v) = (op_u32(cmp), op_u32(val));
+            match d {
+                Some(dr) => body.push_str(&format!(
+                    "loop {{ let res = atomicCompareExchangeWeak({ptr}, {c}, {v}); \
+                     if (res.exchanged || res.old_value != {c}) {{ r{dr} = res.old_value; break; }} }}"
+                )),
+                None => body.push_str(&format!(
+                    "loop {{ let res = atomicCompareExchangeWeak({ptr}, {c}, {v}); \
+                     if (res.exchanged || res.old_value != {c}) {{ break; }} }}"
+                )),
+            }
+        }
+        _ => return Err(err("wgsl lowering: unknown atomic op")),
+    }
+    Ok(())
 }
 
 // ===================================================================================================
@@ -1473,8 +2191,8 @@ mod tests {
     fn rejects_malformed_ptx() {
         // unknown entry
         assert!(matches!(compile(VECADD_PTX, "nope", [1, 1, 1]), Err(GpuError::Ptx(_))));
-        // unsupported opcode
-        let bad = ".entry k(.param .u32 x) { atom.global.add.u32 %r1, [%rd1], 1; ret; }";
+        // unsupported opcode (warp shuffle is outside the shared-mem/atomics/barrier subset)
+        let bad = ".entry k(.param .u32 x) { shfl.sync.down.b32 %r1, %r2, 1, 31, -1; ret; }";
         assert!(matches!(compile(bad, "k", [1, 1, 1]), Err(GpuError::Ptx(_))));
         // unterminated body
         let bad2 = ".entry k(.param .u32 x) { ret;";
@@ -1649,5 +2367,151 @@ mod tests {
             let c = f32::from_le_bytes(regions[2][i * 4..i * 4 + 4].try_into().unwrap());
             assert_eq!(c, a[i] + b[i]);
         }
+    }
+
+    #[test]
+    fn compiles_reduction_with_shared_bar_atom() {
+        // The reduction kernel declares 1024 bytes of shared memory and lowers `bar.sync` + the global
+        // `atomicAdd` to the new IR forms.
+        let prog = compile(REDUCE_PTX, "block_reduce", [256, 1, 1]).unwrap();
+        assert_eq!(prog.shared_bytes, 1024);
+        assert!(prog.insts.iter().any(|i| matches!(i, Inst::Bar)));
+        assert!(prog.insts.iter().any(|i| matches!(i, Inst::StShared { .. })));
+        assert!(prog.insts.iter().any(|i| matches!(i, Inst::LdShared { .. })));
+        assert!(prog.insts.iter().any(|i| matches!(i, Inst::AtomGlobal { op, .. } if *op == ATOM_ADD)));
+        assert!(prog.insts.iter().any(|i| matches!(i, Inst::Shift { .. })));
+        // `in` (region 0) is plain; `out` (region 1) is atomic-only.
+        let atomic = atomic_regions(&prog).unwrap();
+        assert_eq!(atomic, vec![false, true]);
+    }
+
+    /// CPU-oracle reduction: sum `data` over the grid the same way the GPU would, returning `*out`.
+    fn oracle_reduce(data: &[i32], block: u32) -> i32 {
+        let n = data.len() as u32;
+        let prog = compile(REDUCE_PTX, "block_reduce", [block, 1, 1]).unwrap();
+        let in_bytes: Vec<u8> = data.iter().flat_map(|x| x.to_le_bytes()).collect();
+        let mut regions = vec![in_bytes, vec![0u8; 4]]; // region0=in, region1=out (single accumulator)
+        let mut blob = vec![0u8; prog.param_bytes as usize];
+        // param 2 (n) is the only scalar; find its offset.
+        let off = prog.params[2].offset as usize;
+        blob[off..off + 4].copy_from_slice(&n.to_le_bytes());
+        let grid = (n.div_ceil(block), 1, 1);
+        execute(&prog, &blob, &mut regions, grid).unwrap();
+        i32::from_le_bytes(regions[1][..4].try_into().unwrap())
+    }
+
+    #[test]
+    fn interpreter_runs_reduction_via_shared_and_barriers() {
+        // A block-level tree reduction with shared memory + bar.sync + a final global atomicAdd, summed
+        // across multiple blocks, must equal the plain arithmetic sum. This is the cooperative-execution
+        // oracle: a naive run-each-thread-to-completion would mis-order the shared-memory hand-offs.
+        for &n in &[1usize, 5, 256, 257, 1000, 2048] {
+            let data: Vec<i32> = (0..n as i32).map(|i| (i % 17) - 8).collect();
+            let want: i32 = data.iter().sum();
+            let got = oracle_reduce(&data, 256);
+            assert_eq!(got, want, "reduction sum mismatch at n={n}");
+        }
+    }
+
+    #[test]
+    fn reduction_lowers_to_wgsl_with_shared_barrier_atomic() {
+        let prog = compile(REDUCE_PTX, "block_reduce", [256, 1, 1]).unwrap();
+        let wgsl = kernel_to_wgsl(&prog).unwrap();
+        // shared memory → a workgroup array of 256 words; the barrier scheme + atomic accumulator appear.
+        assert!(wgsl.contains("var<workgroup> shmem: array<u32, 256>;"), "{wgsl}");
+        assert!(wgsl.contains("workgroupBarrier();"), "{wgsl}");
+        assert!(wgsl.contains("shmem["), "shared access: {wgsl}");
+        // region1 (out) is atomic-typed and hit by atomicAdd; region0 (in) stays a plain u32 buffer.
+        assert!(wgsl.contains("region1: array<atomic<u32>>;"), "{wgsl}");
+        assert!(wgsl.contains("region0: array<u32>;"), "{wgsl}");
+        assert!(wgsl.contains("atomicAdd(&region1["), "{wgsl}");
+        // the cooperative retire-counter bookkeeping is present.
+        assert!(wgsl.contains("dd_retired_count"), "{wgsl}");
+        assert!(wgsl.contains("local_invocation_index"), "{wgsl}");
+    }
+
+    #[test]
+    fn elementwise_wgsl_unchanged_by_shared_support() {
+        // A kernel with no barrier keeps the simple (non-cooperative) loop: no workgroup barrier, no
+        // shared array, no retire-counter — the elementwise path is byte-for-byte as before.
+        let prog = compile(VECADD_PTX, "vecadd", [256, 1, 1]).unwrap();
+        let wgsl = kernel_to_wgsl(&prog).unwrap();
+        assert!(!wgsl.contains("workgroupBarrier"), "elementwise must not synchronize: {wgsl}");
+        assert!(!wgsl.contains("var<workgroup>"), "elementwise has no shared memory: {wgsl}");
+        assert!(!wgsl.contains("dd_retired_count"), "elementwise has no coop bookkeeping: {wgsl}");
+        assert!(wgsl.contains("if (pc < 0) { break; }"), "keeps the simple loop guard: {wgsl}");
+    }
+
+    #[test]
+    fn global_atomic_add_accumulates() {
+        // A standalone global atomicAdd kernel: every thread adds its own `tid+1` into a single
+        // accumulator; the result must be the triangular number sum(1..=N).
+        let ptx = r#"
+            .entry accum(.param .u64 p) {
+                .reg .b32 %r<5>;
+                .reg .b64 %rd<3>;
+                ld.param.u64 %rd1, [p];
+                cvta.to.global.u64 %rd2, %rd1;
+                mov.u32 %r1, %tid.x;
+                add.s32 %r2, %r1, 1;
+                atom.global.add.u32 %r3, [%rd2], %r2;
+                ret;
+            }
+        "#;
+        let block = 64u32;
+        let prog = compile(ptx, "accum", [block, 1, 1]).unwrap();
+        assert_eq!(atomic_regions(&prog).unwrap(), vec![true]);
+        let mut regions = vec![vec![0u8; 4]];
+        let blob = vec![0u8; prog.param_bytes as usize];
+        execute(&prog, &blob, &mut regions, (1, 1, 1)).unwrap();
+        let got = u32::from_le_bytes(regions[0][..4].try_into().unwrap());
+        assert_eq!(got, (block * (block + 1)) / 2);
+        // it also lowers to WGSL cleanly (atomic region typing).
+        assert!(kernel_to_wgsl(&prog).is_ok());
+    }
+
+    #[test]
+    fn shared_copy_kernel_roundtrips() {
+        // st.shared → bar.sync → ld.shared: thread `tid` writes `tid*3` to sdata[tid], barrier, then
+        // reads sdata[blockDim-1-tid] and stores it to out[tid] (a reversal that only works if the
+        // whole block's shared writes are visible after the barrier).
+        let ptx = r#"
+            .entry shcopy(.param .u64 p) {
+                .reg .pred %p<2>;
+                .reg .b32 %r<12>;
+                .reg .b64 %rd<6>;
+                .shared .align 4 .b8 sdata[32];
+                ld.param.u64 %rd1, [p];
+                mov.u32 %r1, %tid.x;
+                mov.u32 %r2, %ntid.x;
+                mul.lo.s32 %r3, %r1, 4;
+                mov.u32 %r4, sdata;
+                add.s32 %r5, %r4, %r3;
+                mul.lo.s32 %r6, %r1, 3;
+                st.shared.u32 [%r5], %r6;
+                bar.sync 0;
+                sub.s32 %r7, %r2, 1;
+                sub.s32 %r8, %r7, %r1;
+                mul.lo.s32 %r9, %r8, 4;
+                add.s32 %r10, %r4, %r9;
+                ld.shared.u32 %r11, [%r10];
+                cvta.to.global.u64 %rd2, %rd1;
+                mul.wide.u32 %rd3, %r1, 4;
+                add.s64 %rd4, %rd2, %rd3;
+                st.global.u32 [%rd4], %r11;
+                ret;
+            }
+        "#;
+        let block = 8u32;
+        let prog = compile(ptx, "shcopy", [block, 1, 1]).unwrap();
+        assert_eq!(prog.shared_bytes, 32);
+        let mut regions = vec![vec![0u8; (block * 4) as usize]];
+        let blob = vec![0u8; prog.param_bytes as usize];
+        execute(&prog, &blob, &mut regions, (1, 1, 1)).unwrap();
+        for tid in 0..block {
+            let got = u32::from_le_bytes(regions[0][(tid * 4) as usize..(tid * 4 + 4) as usize].try_into().unwrap());
+            assert_eq!(got, (block - 1 - tid) * 3, "reversal at tid={tid}");
+        }
+        assert!(kernel_to_wgsl(&prog).is_ok());
     }
 }
