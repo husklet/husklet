@@ -37,6 +37,12 @@ fn memx() -> Group {
             // relocate-to-exact-addr + its FIXED-without-MAYMOVE / mis-aligned EINVAL guards. Byte-exact vs
             // native on both Linux arches (fixes: mem.c mremap MREMAP_FIXED + msync flag EINVAL).
             src("mmerr", "ext_mm/mmerr.c").oracle(),
+            // NEON multi-vector structure store (ST1/LD1 {v0-v3},[Xn],#imm, post-indexed) streamed into a
+            // HIGH-address MAP_SHARED memfd buffer inside a hot call/loop shape (drives block chaining, the
+            // tier-2 self-loop fold, and the block-prologue/back-edge red-zone spill) -- the pixman-NEON-
+            // into-wl_shm blit shape. Guards that the multi-vector structure store translation + host-SP
+            // handling across those transitions stay byte-exact. Diffed vs native aarch64 oracle.
+            src("neonshm", "neonshm.c").oracle().only(&[Engine::LinuxAarch64]),
         ],
     )
 }
