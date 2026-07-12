@@ -68,8 +68,9 @@ pub struct DsetRec {
     pub buffers: HashMap<u32, (u64, u64, u64)>,
 }
 
-/// A render pass: the single color attachment's load/clear/store (the subset the bring-up needs).
+/// A render pass: the single color attachment's format + load/clear/store (the subset bring-up needs).
 pub struct RenderPassRec {
+    pub color_format: TextureFormat,
     pub color_load_clear: bool,
     pub clear: [f32; 4],
     pub color_store: bool,
@@ -79,6 +80,32 @@ pub struct FramebufferRec {
     pub width: u32,
     pub height: u32,
     pub color_view: Option<u64>,
+}
+
+/// A `VkSurfaceKHR` (wayland): the app-owned `wl_display`/`wl_surface` pointers it wraps (kept as
+/// `usize` so the state stays `Send`; the present path speaks wayland on the app's connection).
+pub struct SurfaceRec {
+    pub wl_display: usize,
+    pub wl_surface: usize,
+}
+
+/// One presentable swapchain image: its `VkImage` handle + IR texture id, and the host-forward
+/// present surface (the `renderd` IOSurface/dma-buf the host Metal executor renders into; `fd == -1`
+/// in the offscreen fallback used off-guest / in tests).
+pub struct SwapImage {
+    pub image: u64,
+    pub ir_id: u32,
+    pub surface: dd_shim_common::transport::Surface,
+}
+
+/// A `VkSwapchainKHR`: its presentable images + geometry + the round-robin acquire cursor.
+pub struct SwapchainRec {
+    pub surface: u64,
+    pub width: u32,
+    pub height: u32,
+    pub format: TextureFormat,
+    pub images: Vec<SwapImage>,
+    pub next: usize,
 }
 
 /// Command-buffer recording state.
@@ -110,6 +137,12 @@ pub struct VkState {
     pub framebuffers: HashMap<u64, FramebufferRec>,
     pub cmdbufs: HashMap<usize, CmdBufRec>,
     pub fences: HashMap<u64, u32>, // fence handle -> IR fence id
+    pub surfaces: HashMap<u64, SurfaceRec>,
+    pub swapchains: HashMap<u64, SwapchainRec>,
+    /// Lazily-opened host GPU-exec channel (only when `$DD_GPU_EXEC` is set — the live guest path).
+    pub exec: Option<dd_shim_common::transport::ExecConn>,
+    /// Cursor into `ir_log` up to which frames have been shipped to the host at `vkQueuePresentKHR`.
+    pub present_flushed: usize,
 }
 
 impl VkState {

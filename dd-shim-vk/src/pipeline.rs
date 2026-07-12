@@ -240,6 +240,13 @@ pub extern "C" fn vkCreateGraphicsPipelines(
             .map(|ia| topology(ia.topology))
             .unwrap_or(Topology::TriangleList);
 
+        // Color target format must match the render pass's attachment (Metal/wgpu validate this).
+        let color_format = s
+            .render_passes
+            .get(&info.render_pass.as_raw())
+            .map(|r| r.color_format)
+            .unwrap_or(TextureFormat::Rgba8Unorm);
+
         let ir_id = s.alloc_ir();
         let handle = s.alloc_handle();
         s.record(Cmd::CreateRenderPipeline(
@@ -249,7 +256,7 @@ pub extern "C" fn vkCreateGraphicsPipelines(
                 fragment,
                 vertex_buffers,
                 color_targets: vec![ColorTargetState {
-                    format: TextureFormat::Rgba8Unorm,
+                    format: color_format,
                     blend: None,
                     write_mask: 0xf,
                 }],
@@ -294,21 +301,23 @@ pub extern "C" fn vkCreateRenderPass(
     else {
         return VK_ERROR_INITIALIZATION_FAILED;
     };
-    // Fold attachment 0 (the color attachment) load/store into the record.
-    let (load_clear, store) = if ci.attachment_count > 0 && !ci.p_attachments.is_null() {
+    // Fold attachment 0 (the color attachment) format + load/store into the record.
+    let (fmt, load_clear, store) = if ci.attachment_count > 0 && !ci.p_attachments.is_null() {
         let a0 = unsafe { &*ci.p_attachments };
         (
+            crate::memory::tex_format(a0.format),
             a0.load_op == vk::AttachmentLoadOp::CLEAR,
             a0.store_op == vk::AttachmentStoreOp::STORE,
         )
     } else {
-        (true, true)
+        (TextureFormat::Rgba8Unorm, true, true)
     };
     let mut s = reg::lock();
     let handle = s.alloc_handle();
     s.render_passes.insert(
         handle,
         RenderPassRec {
+            color_format: fmt,
             color_load_clear: load_clear,
             clear: [0.0; 4],
             color_store: store,

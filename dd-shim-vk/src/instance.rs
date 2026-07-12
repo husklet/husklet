@@ -53,14 +53,32 @@ pub extern "C" fn vkEnumerateInstanceVersion(p_api_version: *mut u32) -> VkResul
     VK_SUCCESS
 }
 
-/// Instance extensions the ICD implements natively: none this increment (WSI/surface is loader-side).
+/// Build a `VkExtensionProperties` from a name + spec version.
+fn ext_prop(name: &str, spec: u32) -> vk::ExtensionProperties {
+    let mut p = vk::ExtensionProperties {
+        spec_version: spec,
+        ..Default::default()
+    };
+    for (dst, &b) in p.extension_name.iter_mut().zip(name.as_bytes().iter()) {
+        *dst = b as core::ffi::c_char;
+    }
+    p
+}
+
+/// Instance-level extensions the ICD implements: the WSI surface + wayland-surface (so a windowed
+/// Vulkan app / the loader discover and enable them). Ports the `VK_KHR_surface`/`VK_KHR_wayland_surface`
+/// advertisement MoltenVK/Mesa expose; the entry points live in `crate::wsi`.
 #[no_mangle]
 pub extern "C" fn vkEnumerateInstanceExtensionProperties(
     _p_layer_name: *const c_char,
     p_count: *mut u32,
     p_props: *mut vk::ExtensionProperties,
 ) -> VkResult {
-    unsafe { write_enumeration::<vk::ExtensionProperties>(&[], p_count, p_props) }
+    let exts = [
+        ext_prop("VK_KHR_surface", 25),
+        ext_prop("VK_KHR_wayland_surface", 6),
+    ];
+    unsafe { write_enumeration(&exts, p_count, p_props) }
 }
 
 /// The ICD exposes no layers (layers are discovered from layer manifests, never the driver).
@@ -195,7 +213,7 @@ pub extern "C" fn vkGetPhysicalDeviceFormatProperties(
 
 // ---- device-level enumeration (physical-device scoped) -------------------------------------------
 
-/// Device extensions the ICD implements natively: none this increment.
+/// Device extensions the ICD implements: `VK_KHR_swapchain` (present), so a windowed app finds it.
 #[no_mangle]
 pub extern "C" fn vkEnumerateDeviceExtensionProperties(
     _physical_device: VkPhysicalDevice,
@@ -203,7 +221,8 @@ pub extern "C" fn vkEnumerateDeviceExtensionProperties(
     p_count: *mut u32,
     p_props: *mut vk::ExtensionProperties,
 ) -> VkResult {
-    unsafe { write_enumeration::<vk::ExtensionProperties>(&[], p_count, p_props) }
+    let exts = [ext_prop("VK_KHR_swapchain", 70)];
+    unsafe { write_enumeration(&exts, p_count, p_props) }
 }
 
 /// Deprecated device-layer enumeration — always empty (spec: return instance layers or none).

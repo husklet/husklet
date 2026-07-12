@@ -341,4 +341,17 @@ const IMPLEMENTED: &[&str] = &[
     "vkGetFenceStatus",
     "vkCreateSemaphore",
     "vkDestroySemaphore",
+    // ---- increment 3: WSI + present (wsi.rs) — the vkcube-through-dd-shim-vk path ----
+    "vkCreateWaylandSurfaceKHR",
+    "vkDestroySurfaceKHR",
+    "vkGetPhysicalDeviceWaylandPresentationSupportKHR",
+    "vkGetPhysicalDeviceSurfaceSupportKHR",
+    "vkGetPhysicalDeviceSurfaceCapabilitiesKHR",
+    "vkGetPhysicalDeviceSurfaceFormatsKHR",
+    "vkGetPhysicalDeviceSurfacePresentModesKHR",
+    "vkCreateSwapchainKHR",
+    "vkDestroySwapchainKHR",
+    "vkGetSwapchainImagesKHR",
+    "vkAcquireNextImageKHR",
+    "vkQueuePresentKHR",
 ];

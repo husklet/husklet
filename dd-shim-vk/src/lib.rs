@@ -45,6 +45,7 @@ pub mod reg;
 pub mod state;
 pub mod stub;
 pub mod types;
+pub mod wsi;
 
 // Bring every hand-written `#[no_mangle]` entry point into crate-root scope so the generated
 // DISPATCH table (below) can reference the whole surface — implemented + stub — by bare name.
@@ -55,6 +56,7 @@ pub use icd::*;
 pub use instance::*;
 pub use memory::*;
 pub use pipeline::*;
+pub use wsi::*;
 
 // The generated C-ABI export surface (every `vk*` entry point not in `IMPLEMENTED`) + the name→address
 // DISPATCH table the loader-facing proc-addr resolvers scan.

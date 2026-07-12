@@ -273,6 +273,7 @@ pub extern "C" fn vkCmdBeginRenderPass(
     let mut s = reg::lock();
     // Resolve the color attachment IR texture id + framebuffer dims.
     let rp: Option<RenderPassRec> = s.render_passes.get(&bi.render_pass.as_raw()).map(|r| RenderPassRec {
+        color_format: r.color_format,
         color_load_clear: r.color_load_clear,
         clear: r.clear,
         color_store: r.color_store,
