@@ -27,5 +27,16 @@ members = ["dd-jit", "dd-jit-darwin", "dd-images", "dd-daemon", "dd-client", "dd
 # through a real loader with `VK_ICD_FILENAMES=<...>/icd.json vulkaninfo` (see dd-shim-vk/icd.json).
 default-members =["dd-jit", "dd-jit-darwin", "dd-images", "dd-daemon", "dd-client", "dd-tests", "dd-cli", "dd-term-core", "dd-gpu", "dd-display"]
 
+# Offline-vendored smithay 0.7.0 with a single macOS-only fix: its `zwp_linux_dmabuf` v4-feedback
+# format-table is backed by a POSIX shm object whose name (`smithay-dmabuffeedback-format-table` +
+# random suffix, ~43 bytes) exceeds macOS `PSHMNAMLEN` (31) and fails `shm_open` with ENAMETOOLONG,
+# so the v4 global could not stand up on the macOS host and `dd-compositor` fell back to advertising
+# `zwp_linux_dmabuf` v3 only (no feedback → no accelerated-Chromium render-node probe). The vendored
+# copy shortens that shm object name in `src/utils/sealed_file.rs`; nothing else is changed. smithay is
+# only a dependency of the macOS-only `dd-compositor` (kept out of default-members), so this patch is a
+# no-op for the Linux headless build — resolution reads the manifest but never compiles smithay there.
+[patch.crates-io]
+smithay = { path = "third_party/smithay-0.7.0" }
+
 [profile.release]
 opt-level = 2

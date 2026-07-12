@@ -4,12 +4,26 @@ Status: **audit 2026-07-12; low-risk gaps closed 2026-07-12.** Can `DD_DISPLAY_S
 Smithay-native `dd-compositor`) and `DD_GPU_BACKEND=wgpu` (the wgpu host GPU executor) become the DEFAULT,
 keeping the working legacy Chrome/GTK render as a fallback?
 
-**Verdict: not yet — but the protocol surface is a superset of the legacy path and all unit/integration
-tests pass, and the low-risk pre-flip gaps are now closed.** Remaining blockers: (1) `zwp_linux_dmabuf`
-**v4 feedback** for the accelerated Chromium GPU path, and (5) no live Chrome/GTK-on-Smithay validation
-has been run — both are the coordinated/maintainer-decision steps and are NOT done here.
+**Verdict: not yet — but the protocol surface is now a strict superset of the legacy path and all
+unit/integration tests pass, and the low-risk pre-flip gaps are now closed.** Remaining blocker: (5) no
+live Chrome/GTK-on-Smithay validation has been run — the coordinated/maintainer-decision step, NOT done
+here. **`zwp_linux_dmabuf` v4 feedback (Gap 1) is now closed** (see below): the compositor advertises the
+feedback-carrying global on macOS, so it no longer trails legacy on any global.
 
 **Closed by this pass (all low-risk, defaults unchanged):**
+- **Gap 1 — `zwp_linux_dmabuf` v4 feedback.** `dd-compositor` now advertises the **feedback-carrying
+  global** (Smithay's version-5 dmabuf global, which serves the v4 `get_default_feedback` path Chromium's
+  ozone/GPU needs) with `main_device == makedev(226,128)`, matching the legacy `server.rs` feedback. The
+  macOS blocker was that Smithay backs the feedback format-table with a `shm_open`ed object named
+  `smithay-dmabuffeedback-format-table` (+ random suffix, ~43 bytes) that overflows macOS `PSHMNAMLEN`
+  (31) → `ENAMETOOLONG`; fixed by an **offline-vendored smithay 0.7.0** patch that shortens that object
+  name in `src/utils/sealed_file.rs` (nothing else changed; wired via `[patch.crates-io]` in the root
+  `Cargo.toml`, path `third_party/smithay-0.7.0`). v3-and-lower binders still get the same ARGB/XRGB8888
+  modifier list from the feedback's main tranche (GLES clients unaffected), and if the format-table ever
+  fails to build the compositor logs and falls back to the v3 global. Entirely behind `DD_DISPLAY_SMITHAY`
+  (that flag is what execs this compositor); the legacy default path is byte-for-byte unchanged. Covered
+  by a new unit test (`build_default_feedback` succeeds — no PSHMNAMLEN failure) and integration test
+  (`dmabuf_v4_feedback` — the global advertises version >= 4).
 - **Gap 3 — build gate.** `make mac-crates` now builds `dd-display`/`dd-gpu-wgpu`/`dd-compositor` and
   runs the compositor + wgpu tests on the macOS toolchain (libxkbcommon from the nix dev shell),
   documented as the post-merge check in `docs/AGENTS.md`. Verified green on current `main`.
@@ -73,7 +87,7 @@ advertises it and legacy does not.
 | `xdg_output` (logical geometry/name) | **no** | **yes** (superset) | multi-output-ready (`add_output`) |
 | `wp_viewporter` (src crop / dst size) | yes | **yes** | shared `logical_size_and_uv` for shm + dmabuf |
 | `wp_presentation` (feedback, MSC) | yes | **yes** | Linux `CLOCK_MONOTONIC`(1); presented/discarded per commit |
-| `zwp_linux_dmabuf` (GPU/IOSurface present) | **v4 + feedback** (`DD_DISPLAY_DMABUF`) | **v3 only** | dd IOSurface-modifier bridge present; **v4 feedback missing** — see Gap 1 |
+| `zwp_linux_dmabuf` (GPU/IOSurface present) | **v4 + feedback** (`DD_DISPLAY_DMABUF`) | **v4/v5 + feedback** | dd IOSurface-modifier bridge; feedback `main_device == makedev(226,128)` matches legacy — Gap 1 **CLOSED** (offline-vendored smithay `PSHMNAMLEN` fix) |
 | `wl_data_device` (clipboard + DnD) | yes | **yes** | Smithay-driven guest↔guest + host `NSPasteboard` bridge both ways |
 | `zwp_primary_selection_v1` (middle-click) | **no** | **yes** (superset) | |
 | `wp_fractional_scale_v1` (non-integer HiDPI) | **no** | **yes** (superset) | `DD_DISPLAY_FRACTIONAL_SCALE` override |
@@ -86,8 +100,9 @@ advertises it and legacy does not.
 | `surface_augmenter` (ChromeOS exo) | off by default (`DD_DISPLAY_AUGMENTER`) | n/a | not needed (stock Weston never advertises it) |
 
 **Bottom line:** for the **software (`wl_shm`) render** — the path that today renders Chrome/GTK4 UI
-live on legacy — `dd-compositor` is a strict **superset** of legacy. The only global where legacy is
-ahead is `zwp_linux_dmabuf` **v4 feedback**, which gates the *accelerated* Chromium GPU bring-up.
+live on legacy — `dd-compositor` is a strict **superset** of legacy. With Gap 1 closed
+(`zwp_linux_dmabuf` v4 feedback now advertised), the compositor no longer trails legacy on *any*
+global; the remaining gate is the coordinated live validation (Gap 5).
 
 ---
 
@@ -97,10 +112,16 @@ Built + tested via the `mac` bridge with
 `RUSTFLAGS="-L native=<nix libxkbcommon>/lib"`, `DYLD_LIBRARY_PATH=<same>/lib`, isolated
 `CARGO_TARGET_DIR`.
 
-- `cargo build -p dd-compositor` — **green** (only pre-existing `dd-display` warnings).
-- `cargo test -p dd-compositor` — **5/5 pass**:
+- `cargo build -p dd-compositor` — **green** (only pre-existing `dd-display` warnings + benign
+  vendored-smithay warnings).
+- `cargo test -p dd-compositor` — **8/8 pass**:
+  - `handlers::dmabuf::tests::dmabuf_feedback_format_table_builds_under_pshmnamlen` (Gap 1 — the v4
+    feedback format-table builds on macOS with no PSHMNAMLEN/ENXIO failure)
   - `client_roundtrip::globals_advertise_frame_presents_feedback_and_cursor_shape_wire`
   - `dmabuf_present::dmabuf_global_and_iosurface_commit_presents`
+  - `dmabuf_v4_feedback::dmabuf_global_advertises_v4_feedback` (Gap 1 — the global advertises version
+    >= 4)
+  - `popup_placement` (Gap 2)
   - `robustness::compositor_survives_stress_disconnect_and_bogus_requests`
   - `scale_outputs::fractional_scale_xdg_output_single_pixel_and_multi_output`
   - `text_input::text_input_focus_enable_and_commit_string_roundtrip`
@@ -124,15 +145,29 @@ change silently broke the un-gated compositor.
 
 ## 4. Gaps blocking a safe default flip (ordered)
 
-1. **`zwp_linux_dmabuf` v4 feedback (accelerated Chromium).** `dd-compositor` advertises the v3 global
-   only. Chromium's ozone/GPU derives its DRM render-node path from the dmabuf-feedback `main_device`
-   via `get_default_feedback` (legacy `server.rs` implements this at ~line 2500). Without it,
-   GPU-composited Chrome cannot bring up its accelerated path on Smithay and falls back to `wl_shm`.
-   The compositor deliberately used v3 because Smithay's v4 feedback builds its format table in a
-   `shm_open`ed file named `smithay-dmabuffeedback-format-table` (35 chars) that exceeds macOS
-   `PSHMNAMLEN` (31) → `ENAMETOOLONG`. **Fixing this is NOT low-risk** (upstream Smithay behaviour /
-   a shim of the format-table path) and is left for the coordinated GPU step. GLES clients
-   (glmark2/es2tri) that read only the v3 modifier list are unaffected.
+1. ~~**`zwp_linux_dmabuf` v4 feedback (accelerated Chromium).**~~ **CLOSED.** `dd-compositor` now
+   advertises the feedback-carrying global (Smithay's version-5 dmabuf global, which serves the v4
+   `get_default_feedback` path). Chromium's ozone/GPU derives its DRM render-node path from the
+   dmabuf-feedback `main_device` (legacy `server.rs::send_dmabuf_feedback` at ~line 2510); the
+   compositor's feedback advertises the same `main_device == makedev(226,128)` and the same
+   ARGB/XRGB8888 formats, so a GPU-composited Chrome can bring up its accelerated path instead of
+   falling back to `wl_shm`. The macOS blocker — Smithay backs the feedback format-table with a
+   `shm_open`ed object named `smithay-dmabuffeedback-format-table` (+ random suffix, ~43 bytes) that
+   exceeds `PSHMNAMLEN` (31) → `ENAMETOOLONG`, and even once the name fits, that non-Linux
+   `SealedFile` path used `write()` on a macOS POSIX-shm object (which is `ftruncate`+`mmap`-only →
+   `ENXIO`) — is fixed by an **offline-vendored smithay 0.7.0** patch (`third_party/smithay-0.7.0/`,
+   wired via `[patch.crates-io]` in the root `Cargo.toml`) that shortens the object name AND populates
+   it via `ftruncate`+`mmap` in `src/utils/sealed_file.rs` (the only file changed). The wiring lives
+   in `dd-compositor/src/handlers/dmabuf.rs::new_dmabuf_state` (feedback via
+   `DmabufFeedbackBuilder`/`create_global_with_default_feedback`, with a v3 fallback if the format
+   table ever fails to build). All of this is behind `DD_DISPLAY_SMITHAY` (that flag execs the
+   compositor); legacy is untouched. GLES clients (glmark2/es2tri) still read the same modifier list
+   from the feedback's main tranche. Covered by a unit test (`build_default_feedback` builds without a
+   PSHMNAMLEN/ENXIO failure) and an integration test (`dmabuf_v4_feedback` asserts the global
+   advertises version >= 4). **Note for the live GPU step:** Smithay's `feedback.main_device` is
+   serialized as the host `libc::dev_t` (4 bytes on macOS) whereas legacy sends an 8-byte Linux
+   `dev_t`; if a guest Chromium is byte-width-sensitive when parsing `main_device`, that is the one
+   remaining fidelity detail to confirm during the coordinated live validation.
 
 2. **Popups clip to the parent frame (default) — native-window path landed behind a flag.** By default
    `dd-compositor` still CPU-composites popups into the toplevel's frame and clips them to the parent
@@ -183,7 +218,9 @@ only, both paths).
    path needs none of Gap 1.
 3. Decide Gap 2: enable `DD_DISPLAY_POPUP_WINDOWS` (native popup windows — now implemented) or accept
    clipping, based on what the live menus show; if enabling, fold the flag into the default flip.
-4. For the accelerated path, resolve Gap 1 (dmabuf v4 feedback) and validate GPU-composited Chrome; keep
+4. For the accelerated path, Gap 1 (dmabuf v4 feedback) is now **advertised + served** on macOS —
+   validate GPU-composited Chrome actually resolves its render node against the feedback `main_device`
+   (confirm the host-vs-Linux `dev_t` byte-width note in Gap 1 is a non-issue), and keep
    `DD_GPU_BACKEND=wgpu` behind its own flip until the wgpu executor has a device-level test or a live
    run.
 5. Flip the default in `maybe_exec_smithay()` (compositor default; `DD_DISPLAY_SMITHAY=0` = legacy
@@ -211,6 +248,23 @@ bespoke Metal replay. Both are single-env, no rebuild.
   and a `DD_DISPLAY_POPUP_WINDOWS`-gated native-popup-window present path; `snapshot_surface` now carries
   `SurfaceBuffer::popup`. New test `dd-compositor/tests/popup_placement.rs`. Default behaviour unchanged.
 
-Explicitly NOT done (out of low-risk scope, per the task): flipping any default
-(`DD_DISPLAY_SMITHAY`/`DD_GPU_BACKEND`/`DD_DISPLAY_POPUP_WINDOWS`); `zwp_linux_dmabuf` v4 feedback (Gap 1);
-any live Chrome/GTK-on-Smithay run (Gap 5).
+### Gap 1 close-out pass (`zwp_linux_dmabuf` v4 feedback)
+- **`dd-compositor/src/handlers/dmabuf.rs`:** `new_dmabuf_state` now builds a `DmabufFeedback`
+  (`DmabufFeedbackBuilder::new(makedev(226,128), <ARGB/XRGB8888 + dd-modifier/LINEAR>)`) and creates the
+  global via `create_global_with_default_feedback` (Smithay version-5 global → serves v4 feedback), with
+  a logged fallback to the v3 `create_global` if the format table can't be built. New unit test
+  `dmabuf_feedback_format_table_builds_under_pshmnamlen`.
+- **`dd-compositor/tests/dmabuf_v4_feedback.rs`** (new): asserts the advertised `zwp_linux_dmabuf_v1`
+  global is version >= 4.
+- **Offline-vendored smithay 0.7.0** (`third_party/smithay-0.7.0/`, referenced by `[patch.crates-io]` in
+  the root `Cargo.toml`): a single-file change to `src/utils/sealed_file.rs` (the non-Linux
+  `SealedFile::with_data`) so the `shm_open` object name fits macOS `PSHMNAMLEN` (31) AND is populated
+  via `ftruncate`+`mmap` instead of `write()` (macOS POSIX shm is mmap-only). Copied from the local
+  cargo registry cache — no fetch. The patch is a no-op for the Linux headless build (smithay is only a
+  `dd-compositor` dep, kept out of default-members). Verified: `cargo build` (Linux default-members)
+  green offline; `make mac-crates` equivalent (build + `dd-compositor`/`dd-gpu-wgpu` tests) green on the
+  macOS host.
+
+Explicitly NOT done (out of scope, per the task): flipping any default
+(`DD_DISPLAY_SMITHAY`/`DD_GPU_BACKEND`/`DD_DISPLAY_POPUP_WINDOWS`); any live Chrome/GTK-on-Smithay run
+(Gap 5).

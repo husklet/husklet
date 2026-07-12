@@ -40,7 +40,10 @@ use smithay::{
     backend::allocator::{dmabuf::Dmabuf, Buffer as _, Format, Fourcc, Modifier},
     reexports::wayland_server::{protocol::wl_buffer::WlBuffer, DisplayHandle},
     utils::{Logical, Size},
-    wayland::dmabuf::{get_dmabuf, DmabufGlobal, DmabufHandler, DmabufState, ImportNotifier},
+    wayland::dmabuf::{
+        get_dmabuf, DmabufFeedback, DmabufFeedbackBuilder, DmabufGlobal, DmabufHandler, DmabufState,
+        ImportNotifier,
+    },
 };
 
 use crate::{handlers::compositor::logical_size_and_uv, DdState};
@@ -135,28 +138,84 @@ impl DdState {
     }
 }
 
-/// Stand up the `zwp_linux_dmabuf_v1` global (version 3) and return the [`DmabufState`] delegate.
-/// Called once from [`DdState::new`]. It advertises ARGB/XRGB8888 with the dd IOSurface modifier (the
-/// accelerated path a guest GPU client tags its buffer with) plus `LINEAR` — the format+modifier list
-/// GLES clients (glmark2/es2tri) read to choose the accelerated buffer path.
-///
-/// We deliberately use the v3 global rather than v4/v5 dmabuf-feedback: Smithay builds the feedback
-/// format-table in a `shm_open`ed file named `smithay-dmabuffeedback-format-table` (35 bytes), which
-/// exceeds macOS's `PSHMNAMLEN` (31) and fails with `ENAMETOOLONG` — the compositor runs on macOS.
-/// The v3 modifier list is sufficient for GLES clients; wiring v4 feedback (needed for a Chromium
-/// ozone render-node probe, as the legacy `server.rs` path does) is a follow-up gated on that upstream
-/// limitation.
-pub(crate) fn new_dmabuf_state(dh: &DisplayHandle) -> DmabufState {
-    let mut state = DmabufState::new();
+/// The synthetic DRM render node the dd engine presents to a guest: `/dev/dri/renderD128`, whose
+/// `st_rdev` is `makedev(226, 128) == (226 << 8) | 128`. A guest GPU client (Chromium's ozone/GPU)
+/// reads the dmabuf-feedback `main_device`, `stat`s that node, and takes its accelerated render path
+/// only when the two match — so the feedback must advertise exactly this dev_t (identical to the
+/// legacy `dd-display/src/server.rs::send_dmabuf_feedback` value).
+const DD_MAIN_DEVICE: libc::dev_t = ((226 as libc::dev_t) << 8) | 128;
+
+/// The ARGB/XRGB8888 format+modifier list the dmabuf global advertises: the dd IOSurface modifier (the
+/// accelerated path a guest GPU client tags its buffer with) plus `LINEAR`. GLES clients
+/// (glmark2/es2tri) read this list off the v3 modifier events; v4+ clients read the same set from the
+/// feedback format-table's main tranche.
+fn dd_dmabuf_formats() -> [Format; 4] {
     let magic = Modifier::from((DD_DMABUF_MOD_MAGIC as u64) << 32);
-    let formats = [
+    [
         Format { code: Fourcc::Argb8888, modifier: magic },
         Format { code: Fourcc::Xrgb8888, modifier: magic },
         Format { code: Fourcc::Argb8888, modifier: Modifier::Linear },
         Format { code: Fourcc::Xrgb8888, modifier: Modifier::Linear },
-    ];
-    // The returned DmabufGlobal is only a handle; the global lives inside `state`, so dropping it
-    // does not remove the global.
-    let _global = state.create_global::<DdState>(dh, formats);
+    ]
+}
+
+/// Build the default [`DmabufFeedback`] for the v4/v5 global: a single main tranche of
+/// [`dd_dmabuf_formats`] targeting [`DD_MAIN_DEVICE`]. Returns `Err` if the format-table backing file
+/// cannot be created — on macOS this is the `PSHMNAMLEN` failure the offline-vendored smithay patch
+/// fixes (`third_party/smithay-0.7.0/src/utils/sealed_file.rs`); the caller falls back to a v3 global.
+pub(crate) fn build_default_feedback() -> std::io::Result<DmabufFeedback> {
+    DmabufFeedbackBuilder::new(DD_MAIN_DEVICE, dd_dmabuf_formats()).build()
+}
+
+/// Stand up the `zwp_linux_dmabuf_v1` global and return the [`DmabufState`] delegate. Called once from
+/// [`DdState::new`] (only under `DD_DISPLAY_SMITHAY=1`, since that flag is what execs this compositor,
+/// so the whole path — v3 or v4 — is already behind it; the legacy `server.rs` default is untouched).
+///
+/// Preferred: a **version 5** global carrying a default dmabuf-**feedback** (which serves the v4
+/// feedback protocol Chromium's ozone/GPU needs to resolve its DRM render node via `main_device` —
+/// mirroring `dd-display/src/server.rs::send_dmabuf_feedback`). v3-and-lower binders still receive the
+/// same ARGB/XRGB8888 `modifier` events from the feedback's main tranche, so GLES clients
+/// (glmark2/es2tri) are unaffected.
+///
+/// Fallback: if the feedback format-table cannot be built (its `shm_open`ed backing file — on macOS
+/// this used to overflow `PSHMNAMLEN`, now fixed in the vendored smithay), we log and fall back to the
+/// v3 global so the compositor still comes up with the modifier list. Success/failure is observable via
+/// the advertised global version (5 with feedback, 3 without).
+pub(crate) fn new_dmabuf_state(dh: &DisplayHandle) -> DmabufState {
+    let mut state = DmabufState::new();
+    match build_default_feedback() {
+        Ok(feedback) => {
+            // The returned DmabufGlobal is only a handle; the global (and a clone of the feedback) live
+            // inside `state`, so dropping it does not remove the global.
+            let _global = state.create_global_with_default_feedback::<DdState>(dh, &feedback);
+        }
+        Err(e) => {
+            eprintln!(
+                "dd-compositor: zwp_linux_dmabuf v4 feedback format-table could not be created \
+                 ({e}); falling back to the v3 modifier-list global (no accelerated-Chromium \
+                 render-node feedback)"
+            );
+            let _global = state.create_global::<DdState>(dh, dd_dmabuf_formats());
+        }
+    }
     state
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The v4/v5 dmabuf-feedback format-table must build on the host without a `PSHMNAMLEN`/
+    /// `ENAMETOOLONG` failure — the macOS limitation the vendored smithay patch (shortening the
+    /// `shm_open` object name in `sealed_file.rs`) exists to fix. If this fails on macOS, the
+    /// compositor silently regresses to advertising `zwp_linux_dmabuf` v3 only.
+    #[test]
+    fn dmabuf_feedback_format_table_builds_under_pshmnamlen() {
+        let feedback = build_default_feedback();
+        assert!(
+            feedback.is_ok(),
+            "dmabuf-feedback format-table SealedFile failed to build (macOS PSHMNAMLEN regression?): {:?}",
+            feedback.err()
+        );
+    }
 }
