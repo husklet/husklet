@@ -1,15 +1,28 @@
 # Smithay + wgpu default-readiness
 
-Status: **audit, 2026-07-12.** Can `DD_DISPLAY_SMITHAY=1` (the Smithay-native `dd-compositor`) and
-`DD_GPU_BACKEND=wgpu` (the wgpu host GPU executor) become the DEFAULT, keeping the working legacy
-Chrome/GTK render as a fallback?
+Status: **audit 2026-07-12; low-risk gaps closed 2026-07-12.** Can `DD_DISPLAY_SMITHAY=1` (the
+Smithay-native `dd-compositor`) and `DD_GPU_BACKEND=wgpu` (the wgpu host GPU executor) become the DEFAULT,
+keeping the working legacy Chrome/GTK render as a fallback?
 
 **Verdict: not yet — but the protocol surface is a superset of the legacy path and all unit/integration
-tests pass.** The blockers are (1) `zwp_linux_dmabuf` **v4 feedback** for the accelerated Chromium GPU
-path, (2) popups composited-into-parent (clipped) vs. legacy native popup windows, (3) neither crate is
-in any build gate — `dd-compositor` was in fact **broken on `main`** (fixed here), (4) `libxkbcommon`
-is not bundled into `dd.app`, (5) no live Chrome/GTK-on-Smithay validation has been run. Items 1, 3, 4,
-5 gate a safe flip; 2 is a visible-quality regression to close or accept.
+tests pass, and the low-risk pre-flip gaps are now closed.** Remaining blockers: (1) `zwp_linux_dmabuf`
+**v4 feedback** for the accelerated Chromium GPU path, and (5) no live Chrome/GTK-on-Smithay validation
+has been run — both are the coordinated/maintainer-decision steps and are NOT done here.
+
+**Closed by this pass (all low-risk, defaults unchanged):**
+- **Gap 3 — build gate.** `make mac-crates` now builds `dd-display`/`dd-gpu-wgpu`/`dd-compositor` and
+  runs the compositor + wgpu tests on the macOS toolchain (libxkbcommon from the nix dev shell),
+  documented as the post-merge check in `docs/AGENTS.md`. Verified green on current `main`.
+- **Gap 4 — libxkbcommon bundling.** `nix/flake.nix` now provides `libxkbcommon` (exported as
+  `DD_LIBXKBCOMMON`) and `dd-gui/package/bundle.sh` builds + ships `dd-display`/`dd-compositor` in
+  `Contents/Resources` and relocates `libxkbcommon` into `Contents/Frameworks` (via `dylibbundler`, with
+  `@executable_path/../Frameworks` install names) so an end-user `dd.app` can launch the compositor.
+- **Gap 2 — popup clipping (geometry + gated native-window path).** `dd-compositor` now resolves an
+  `xdg_popup`'s placement (`popup_placement`) and, under `DD_DISPLAY_POPUP_WINDOWS=1`, presents each popup
+  as its own native window at the positioner anchor (`SurfaceBuffer::popup`, consumed by the shared
+  `present_cocoa` presenter that already opens the child NSWindow) instead of clipping it into the parent
+  frame. Covered by a new `dd-compositor` test. Left behind the flag pending the live menu validation;
+  the default (composite-into-parent) is byte-for-byte unchanged.
 
 This document is a source-read + unit-test + build audit. No live Chrome/GTK session was run (that is
 the coordinated validation step, driven separately).
@@ -50,7 +63,7 @@ advertises it and legacy does not.
 | `wl_shm` (CPU raster) | yes | **yes** (ARGB/XRGB8888) | commit→repack→present, damage-tracked |
 | Subsurfaces (sync/desync, nesting) | yes | **yes** | CPU over-composite into the toplevel frame (`present_render_root`/`blend_subtree`) |
 | `xdg_wm_base` toplevel (configure/ack, min/max, maximize/fullscreen/minimize, close) | yes | **yes** | |
-| `xdg_wm_base` popups (positioner, constrain flip/slide, grab, reposition v3) | yes | **yes** | **but** popups are composited into the parent frame and **clipped to parent bounds** — legacy opens a native popup window at the anchor (`SurfaceBuffer::popup`). See Gap 2. |
+| `xdg_wm_base` popups (positioner, constrain flip/slide, grab, reposition v3) | yes | **yes** | default composites popups into the parent frame (clipped); `DD_DISPLAY_POPUP_WINDOWS=1` opens them as native popup windows at the anchor (`SurfaceBuffer::popup`), matching legacy. See Gap 2. |
 | `xdg_toplevel.move` / `.resize` interactive grabs | yes | **yes** | serial-validated against recent input; drives native NSWindow move/resize via `Presenter` |
 | `wl_seat` keyboard (XKB) + pointer | yes | **yes** (v5) | libxkbcommon keymap; full kVK→evdev map + modifier/CapsLock bridge |
 | `wl_touch` | declared, no device | declared (`TouchFocus`), no device | parity — neither wires a real touch device |
@@ -121,25 +134,34 @@ change silently broke the un-gated compositor.
    a shim of the format-table path) and is left for the coordinated GPU step. GLES clients
    (glmark2/es2tri) that read only the v3 modifier list are unaffected.
 
-2. **Popups clip to the parent frame.** `dd-compositor` CPU-composites popups (and subsurfaces) into
-   the toplevel's frame and clips them to the parent bounds (`blend()` documents this). Legacy opens a
-   native popup window at the positioner anchor via `SurfaceBuffer::popup`/`PopupPlacement`. A menu or
-   dropdown that extends past the window edge will be **clipped** on Smithay. Close it by having the
-   compositor emit `SurfaceBuffer::popup` for `xdg_popup` roots (the platform seam already supports it),
-   or accept it as a known limitation for the first flip. Medium effort; not required for correctness of
-   in-window menus.
+2. **Popups clip to the parent frame (default) — native-window path landed behind a flag.** By default
+   `dd-compositor` still CPU-composites popups into the toplevel's frame and clips them to the parent
+   bounds (`blend()`). **Closed for readiness:** the compositor now resolves each `xdg_popup`'s placement
+   (`compositor.rs::popup_placement`: direct parent surface + positioner geometry origin, mirroring
+   `server.rs::popup_placement`) and, under `DD_DISPLAY_POPUP_WINDOWS=1`, makes a popup its **own present
+   root** (`present_root`) carrying `SurfaceBuffer::popup` — which the **shared** `present_cocoa`
+   presenter already turns into a child NSWindow at the anchor (create) and `popup_destroyed` already
+   tears down (`drop_window`). So the platform wiring needs no new code; only the compositor's present
+   routing changed, gated off by default (so the validated composite path is byte-for-byte unchanged) and
+   proven by `dd-compositor/tests/popup_placement.rs`. **Remaining:** run the live Chrome/GTK menus on the
+   flag, then flip `DD_DISPLAY_POPUP_WINDOWS` to default-on (or fold it into the `DD_DISPLAY_SMITHAY`
+   flip). Not required for correctness of in-window menus.
 
-3. **Neither crate is in a build gate.** `dd-compositor` and `dd-gpu-wgpu` appear in **no** Makefile /
-   nix / CI target (`grep` is empty), which is how #3's break landed. **Before flipping**, add at least
-   a mac `cargo build -p dd-compositor -p dd-gpu-wgpu` (+ `cargo test`) to the release/gate flow so the
-   default path cannot silently rot.
+3. ~~**Neither crate is in a build gate.**~~ **CLOSED.** `make mac-crates` builds
+   `dd-display`/`dd-gpu-wgpu`/`dd-compositor` and runs the `dd-compositor` + `dd-gpu-wgpu` tests on the
+   macOS toolchain (libxkbcommon from the nix dev shell via `DD_LIBXKBCOMMON`), documented in
+   `docs/AGENTS.md` as the post-merge check for cross-cutting type changes. Verified green on current
+   `main`. A non-macOS host no-ops the target with a note.
 
-4. **`libxkbcommon` is not bundled into `dd.app`.** Smithay links it unconditionally at
-   link+run time; there is no `libxkbcommon` reference in `Makefile`/`nix`. An end-user `dd.app` running
-   the compositor by default would fail to launch. Bundle `libxkbcommon.dylib` in
-   `dd.app/Contents/Frameworks` with `-rpath @executable_path/../Frameworks` (or static-link) as part of
-   the flip. Until then the exec-fallback (§1) would silently route everyone back to legacy — masking the
-   flip.
+4. ~~**`libxkbcommon` is not bundled into `dd.app`.**~~ **CLOSED.** `nix/flake.nix` adds `libxkbcommon`
+   to the dev-shell `buildInputs` and exports `DD_LIBXKBCOMMON`. `dd-gui/package/bundle.sh` builds
+   `dd-display` + `dd-compositor` (with `RUSTFLAGS=-L native=$DD_LIBXKBCOMMON/lib`), ships them in
+   `Contents/Resources` next to the daemon, and adds them to the `dylibbundler` relocation so
+   `libxkbcommon` (and any other non-system dep) lands in `Contents/Frameworks` with an
+   `@executable_path/../Frameworks` install name — which resolves from a Resources/ binary. Guarded: if
+   `DD_LIBXKBCOMMON` is absent (older dev shell) the compositor is skipped and `DD_DISPLAY_SMITHAY` falls
+   back to legacy, so the bundle stays shippable. (Not runnable in this Linux-VM audit env; the wiring is
+   committed where the packaging lives and the underlying build was verified via `make mac-crates`.)
 
 5. **No live Chrome/GTK-on-Smithay validation.** All green results here are unit/integration
    (`PngPresenter`, headless). The live NSWindow present/input loop (`main.rs::macos`), the
@@ -153,12 +175,14 @@ only, both paths).
 
 ## 5. Safe flip plan (for the later coordinated step — NOT done here)
 
-1. Land the build gate (Gap 3) and `libxkbcommon` bundling (Gap 4) FIRST, so the compositor is actually
-   built, shipped, and launchable before it becomes default.
+1. ~~Land the build gate (Gap 3) and `libxkbcommon` bundling (Gap 4) FIRST~~ — **DONE** (`make
+   mac-crates`; `nix/flake.nix` + `bundle.sh`). The compositor is now built by the gate and shipped +
+   launchable by the bundler.
 2. Run live Chrome + GTK4 on `DD_DISPLAY_SMITHAY=1` (software `wl_shm` path) and confirm UI parity
    (sharpness, input latency, cursor shape, menus, clipboard) against the legacy baseline. The `wl_shm`
    path needs none of Gap 1.
-3. Decide Gap 2 (emit native popup placement, or accept clipping) based on what the live menus show.
+3. Decide Gap 2: enable `DD_DISPLAY_POPUP_WINDOWS` (native popup windows — now implemented) or accept
+   clipping, based on what the live menus show; if enabling, fold the flag into the default flip.
 4. For the accelerated path, resolve Gap 1 (dmabuf v4 feedback) and validate GPU-composited Chrome; keep
    `DD_GPU_BACKEND=wgpu` behind its own flip until the wgpu executor has a device-level test or a live
    run.
@@ -171,11 +195,22 @@ bespoke Metal replay. Both are single-env, no rebuild.
 
 ---
 
-## 6. Changes made by this audit (low-risk only)
+## 6. Changes made
 
+### Audit pass (2026-07-12, source-read)
 - Fixed the `dd-compositor` build break on `main`: added `popup: None` to the `SurfaceBuffer`
-  constructions in `dd-compositor/src/handlers/dmabuf.rs` and `handlers/compositor.rs` (see §3). No
-  behaviour change — the compositor's popup-into-parent model does not use native popup placement.
+  constructions in `dd-compositor/src/handlers/dmabuf.rs` and `handlers/compositor.rs` (see §3).
 
-Explicitly NOT done (out of low-risk scope, per the task): flipping either default; dmabuf v4 feedback;
-native popup windows; the build-gate/bundling wiring; any live Chrome/GTK run.
+### Low-risk gap-closing pass (2026-07-12)
+- **Gap 3 (build gate):** `Makefile` `mac-crates` target + `docs/AGENTS.md` post-merge-check docs.
+  Verified green on current `main` via the macOS toolchain.
+- **Gap 4 (libxkbcommon bundling):** `nix/flake.nix` adds `pkgs.libxkbcommon` + `DD_LIBXKBCOMMON`;
+  `dd-gui/package/bundle.sh` builds/ships `dd-display` + `dd-compositor` and relocates `libxkbcommon`
+  into `Contents/Frameworks`.
+- **Gap 2 (popups):** `dd-compositor/src/handlers/compositor.rs` gains `popup_placement`, `present_root`,
+  and a `DD_DISPLAY_POPUP_WINDOWS`-gated native-popup-window present path; `snapshot_surface` now carries
+  `SurfaceBuffer::popup`. New test `dd-compositor/tests/popup_placement.rs`. Default behaviour unchanged.
+
+Explicitly NOT done (out of low-risk scope, per the task): flipping any default
+(`DD_DISPLAY_SMITHAY`/`DD_GPU_BACKEND`/`DD_DISPLAY_POPUP_WINDOWS`); `zwp_linux_dmabuf` v4 feedback (Gap 1);
+any live Chrome/GTK-on-Smithay run (Gap 5).

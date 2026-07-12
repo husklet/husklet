@@ -65,6 +65,32 @@ done
 djf="$(find "$ROOT/target/release/build" -name "darwinjail.dylib" -type f 2>/dev/null | head -1)"
 if [ -n "$djf" ]; then cp "$djf" "$RES/darwinjail.dylib"; log "  + darwinjail.dylib"; else log "  ! darwinjail.dylib not built (skipping)"; fi
 
+# dd-display + dd-compositor — the host Wayland renderer for `--gui` workspaces. dd-display is the legacy
+# compositor; with DD_DISPLAY_SMITHAY=1 it execs the sibling dd-compositor (Smithay-native). Both resolve
+# each other and their dylibs via @executable_path, so they ship in Resources next to the daemon.
+# dd-compositor links the system libxkbcommon at link+run time (its Smithay keymap seat); the nix dev
+# shell provides it via $DD_LIBXKBCOMMON, and dylibbundler (step 4) relocates it into Contents/Frameworks
+# with an @executable_path/../Frameworks install name so the compositor loads it on the user's machine.
+# Guarded: if $DD_LIBXKBCOMMON is absent (older dev shell) the compositor is skipped and DD_DISPLAY_SMITHAY
+# transparently falls back to the legacy path — the bundle stays shippable either way.
+COMPOSITOR_XARGS=()
+if [ -n "${DD_LIBXKBCOMMON:-}" ]; then
+  log "building dd-display + dd-compositor (smithay renderer; libxkbcommon from nix)"
+  if ( cd "$ROOT" && RUSTFLAGS="-L native=$DD_LIBXKBCOMMON/lib ${RUSTFLAGS:-}" \
+         cargo build --release -p dd-display -p dd-compositor ); then
+    for b in dd-display dd-compositor; do
+      if [ -f "$ROOT/target/release/$b" ]; then
+        cp "$ROOT/target/release/$b" "$RES/$b"; log "  + $b"
+        COMPOSITOR_XARGS+=( -x "$RES/$b" )   # relocate its dylib graph (incl. libxkbcommon) in step 4
+      fi
+    done
+  else
+    log "  ! dd-compositor build failed — shipping without the Smithay renderer (legacy path still works)"
+  fi
+else
+  log "  ! DD_LIBXKBCOMMON unset — skipping dd-compositor (Smithay renderer absent; DD_DISPLAY_SMITHAY falls back to legacy)"
+fi
+
 # 3. Stage gdk-pixbuf loaders (png from gdk-pixbuf, svg from librsvg) with a RELATIVE cache.
 #    They live under Resources/ (NOT Frameworks/) so Frameworks stays a flat set of dylibs —
 #    codesign refuses to seal a bundle whose Frameworks holds bare non-code directories. Their
@@ -82,9 +108,14 @@ shopt -s nullglob
 LOADER_SOS=( "$DEST_LOADERS"/*.so )
 shopt -u nullglob
 
-# 4. Relocate the dylib graph: dd-app + each loader .so -> Contents/Frameworks.
+# 4. Relocate the dylib graph: dd-app + each loader .so (+ dd-display/dd-compositor when built) ->
+#    Contents/Frameworks. Adding the compositor binaries here pulls libxkbcommon (and any other non-system
+#    dylib the Smithay renderer links) into Frameworks with @executable_path/../Frameworks install names,
+#    which — for a binary in Resources/ — resolves to Contents/Frameworks. That is what lets an end-user
+#    dd.app launch the compositor (readiness Gap 4).
 log "relocating dylibs (dylibbundler)"
 XARGS=( -x "$MACOS/dd-app" )
+[ ${#COMPOSITOR_XARGS[@]} -gt 0 ] && XARGS+=( "${COMPOSITOR_XARGS[@]}" )
 for so in "${LOADER_SOS[@]}"; do XARGS+=( -x "$so" ); done
 dylibbundler -of -cd -b -d "$FW" -p '@executable_path/../Frameworks' "${XARGS[@]}" >/dev/null
 
@@ -175,6 +206,8 @@ for b in dd-daemon ddjit-linux_aarch64 ddjit-linux_x86_64 ddjit-darwin_aarch64; 
   [ -f "$RES/$b" ] && codesign -s "$SIGN_ID" $SIGN_FLAGS -f --entitlements "$ENT" "$RES/$b" >/dev/null 2>&1 || true
 done
 [ -f "$RES/darwinjail.dylib" ] && codesign -s "$SIGN_ID" $SIGN_FLAGS -f "$RES/darwinjail.dylib" >/dev/null 2>&1 || true
+# dd-display / dd-compositor (the Wayland renderer) — no JIT, so no entitlement, signed like the CLI.
+for b in dd-display dd-compositor; do [ -f "$RES/$b" ] && codesign -s "$SIGN_ID" $SIGN_FLAGS -f "$RES/$b" >/dev/null 2>&1 || true; done
 for cli in dd ddcli; do [ -f "$RES/$cli" ] && codesign -s "$SIGN_ID" $SIGN_FLAGS -f "$RES/$cli" >/dev/null 2>&1 || true; done
 codesign -s "$SIGN_ID" $SIGN_FLAGS -f "$MACOS/dd-app" >/dev/null 2>&1 || true
 codesign -s "$SIGN_ID" $SIGN_FLAGS -f "$APP" >/dev/null 2>&1 || true   # outermost signed last

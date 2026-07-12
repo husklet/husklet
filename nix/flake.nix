@@ -47,7 +47,10 @@
           pkgs.macdylibbundler     # provides `dylibbundler` — relocate the dylib graph
           pkgs.create-dmg          # build the .dmg
         ];
-        buildInputs = [ pkgs.gtk4 pkgs.librsvg pkgs.vte-gtk4 ];
+        # libxkbcommon: the Smithay-native `dd-compositor` links it at build+run time (its keymap seat).
+        # Provided here so the mac-crates build gate (`make mac-crates`) and the .app bundling can find it
+        # (RUSTFLAGS `-L native=$DD_LIBXKBCOMMON/lib` + relocation into Contents/Frameworks).
+        buildInputs = [ pkgs.gtk4 pkgs.librsvg pkgs.vte-gtk4 pkgs.libxkbcommon ];
 
         # Exported so tools/bundle.sh can find the runtime data to stage (no extra nix calls).
         DD_GTK4 = pkgs.gtk4;
@@ -56,6 +59,7 @@
         DD_ADWAITA_ICONS = pkgs.adwaita-icon-theme;
         DD_HICOLOR_ICONS = pkgs.hicolor-icon-theme;
         DD_GSETTINGS_SCHEMAS = pkgs.gsettings-desktop-schemas;
+        DD_LIBXKBCOMMON = pkgs.libxkbcommon;
       };
     };
 }

@@ -1,5 +1,5 @@
 # dd workspace.
-.PHONY: all jit fmt fmt-check test test-ci perf test-docker test-docker-full test-compose test-docker-net test-macos test-realsw test-smoke scenarios scenarios-real scenarios-long scenarios-count scenarios-clean coverage bench clean app dmg install uninstall mac-image mac-push
+.PHONY: all jit fmt fmt-check test test-ci mac-crates perf test-docker test-docker-full test-compose test-docker-net test-macos test-realsw test-smoke scenarios scenarios-real scenarios-long scenarios-count scenarios-clean coverage bench clean app dmg install uninstall mac-image mac-push
 # Version is the git tag (v0.2.0 -> 0.2.0); falls back to 0.0.0-dev with no tags. CI passes it too.
 TAG := $(shell git describe --tags --abbrev=0 2>/dev/null | sed 's/^v//')
 VERSION ?= $(or $(TAG),0.0.0-dev)
@@ -12,6 +12,13 @@ test: jit       ## run the engine × case matrix (grouped report); FILTER=name E
 	cargo run -q -p dd-tests -- $(if $(ENGINE),-e $(ENGINE)) $(FILTER)
 test-ci: jit    ## the cargo-test path (one matrix test; for CI)
 	cargo test -p dd-tests
+mac-crates:     ## POST-MERGE GATE (macOS): build+test the mac-only Wayland-renderer crates (dd-display/dd-gpu-wgpu/dd-compositor). They are NOT in workspace default-members, so a plain `cargo build` never compiles them — run this after any merge that touches shared types they use (present.rs SurfaceBuffer, the GPU IR, …) so a cross-cutting change can't silently break the Smithay/wgpu path. Needs macOS + the nix dev shell (provides libxkbcommon).
+	@[ "$$(uname)" = "Darwin" ] || { echo "mac-crates: macOS-only (dd-compositor links libxkbcommon + the Cocoa/Metal present path) — skipping on $$(uname). Maintainer: run via the mac bridge."; exit 0; }
+	$(NIX_DEV) bash -euc '\
+	  X="$$DD_LIBXKBCOMMON"; [ -n "$$X" ] || { echo "mac-crates: DD_LIBXKBCOMMON not exported by the dev shell — update nix/flake.nix"; exit 1; }; \
+	  export RUSTFLAGS="-L native=$$X/lib $${RUSTFLAGS:-}" DYLD_LIBRARY_PATH="$$X/lib:$${DYLD_LIBRARY_PATH:-}"; \
+	  cargo build -p dd-display -p dd-gpu-wgpu -p dd-compositor; \
+	  cargo test  -p dd-compositor -p dd-gpu-wgpu'
 perf: jit       ## same matrix + an oracle-vs-JIT slowdown table & summary (PERF_N=median runs; writes target/dd-tests/perf.{csv,json}); FILTER/ENGINE narrow
 	PERF=1 cargo run -q -p dd-tests -- $(if $(ENGINE),-e $(ENGINE)) $(FILTER)
 test-docker: jit ## end-to-end Docker-CLI scenarios against dd-daemon (run/logs/stop/kill/volumes/networks)

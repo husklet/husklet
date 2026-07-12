@@ -8,7 +8,7 @@
 
 use std::time::Duration;
 
-use dd_display::present::SurfaceBuffer;
+use dd_display::present::{PopupPlacement, SurfaceBuffer};
 
 use smithay::{
     reexports::{
@@ -98,7 +98,17 @@ impl DdState {
             return;
         }
 
-        let Some(root) = self.window_root(surface) else {
+        // The tree to present for this commit. By default a popup composites into its owning toplevel's
+        // frame (`window_root` climbs popup parents to the toplevel). With native popup windows enabled
+        // (`DD_DISPLAY_POPUP_WINDOWS`), a popup is instead its OWN present root — presented as a separate
+        // native window at the positioner anchor (parity with the legacy `server.rs`/`present_cocoa` path),
+        // so a menu/dropdown that extends past the toplevel edge is not clipped. See `present_root`.
+        let root = if popup_windows_enabled() {
+            self.present_root(surface)
+        } else {
+            self.window_root(surface)
+        };
+        let Some(root) = root else {
             return;
         };
 
@@ -312,6 +322,37 @@ impl DdState {
         Some(cur)
     }
 
+    /// The present root for `surface` when native popup windows are enabled (`DD_DISPLAY_POPUP_WINDOWS`):
+    /// the nearest ancestor that is NOT a subsurface — a popup (its own native window) or the owning
+    /// toplevel. Unlike [`Self::window_root`], this STOPS at a popup instead of climbing through it to the
+    /// toplevel, so a popup (and its own subsurface children) presents as a standalone window at the
+    /// positioner anchor rather than compositing into — and being clipped by — the toplevel's frame.
+    pub(crate) fn present_root(&self, surface: &WlSurface) -> Option<WlSurface> {
+        let mut cur = surface.clone();
+        // Bounded to defend against a pathological cycle in the parent links.
+        for _ in 0..256 {
+            match get_parent(&cur) {
+                Some(p) => cur = p, // subsurface → its parent surface
+                // Not a subsurface: a popup or a toplevel. Either is a present root of its own.
+                None => return Some(cur),
+            }
+        }
+        Some(cur)
+    }
+
+    /// Resolve where a popup's native window should open: the DIRECT parent surface it is anchored to plus
+    /// the positioner-resolved `(x, y)` offset from that parent's window-geometry top-left. Mirrors the
+    /// legacy `server.rs::popup_placement` exactly (direct parent + this popup's own geometry origin), so
+    /// the shared `present_cocoa` presenter — which places the popup window at parent-content-top-left +
+    /// (x, y) and attaches it as a child window — opens the menu AT the anchoring widget. Nested popups
+    /// (submenu chains) compose correctly because each popup's parent is itself a placed window. Returns
+    /// `None` for toplevels and any surface with no popup role.
+    pub(crate) fn popup_placement(&self, surface: &WlSurface) -> Option<PopupPlacement> {
+        let (x, y, _, _) = self.popup_geometry(surface)?;
+        let parent = self.popup_parent(surface)?;
+        Some(PopupPlacement { parent_sid: surface_id(&parent), x, y })
+    }
+
     /// Present `root` (a toplevel `wl_surface`) with its full surface tree composited in: the root's own
     /// buffer as the base, every mapped subsurface descendant blended at its parent-relative offset, then
     /// every popup anchored anywhere in this window (menus/dropdowns/tooltips) blended at its resolved
@@ -409,6 +450,12 @@ impl DdState {
     /// the popup chain's per-popup geometry origins), ordered parents-before-children so a submenu blends on
     /// top of the menu that spawned it.
     fn collect_popups_for_root(&self, root: &WlSurface) -> Vec<(WlSurface, i32, i32)> {
+        // With native popup windows enabled, popups are NOT composited into the toplevel frame — each
+        // presents as its own window (see `present_root`) — so the toplevel's composite/pace tree carries
+        // no popups.
+        if popup_windows_enabled() {
+            return Vec::new();
+        }
         let mut out: Vec<(WlSurface, i32, i32, usize)> = Vec::new();
         for popup in self.xdg_shell.popup_surfaces() {
             if !popup.alive() {
@@ -494,9 +541,12 @@ impl DdState {
             gpu_render: false,
             uv_rect,
             damage: cache.damage,
-            // Popups are composited into their parent toplevel's frame here (see `present_render_root`),
-            // not opened as native popup windows, so no positioner-resolved placement is carried.
-            popup: None,
+            // If this surface is an `xdg_popup`, carry its positioner-resolved placement so a windowed
+            // presenter can open it as a native popup window at the anchor. This is inert on the default
+            // composite-into-parent path (a popup's `SurfaceBuffer` is only blended, which ignores the
+            // field, and a toplevel present root is never a popup so this is `None`); it becomes live when
+            // `DD_DISPLAY_POPUP_WINDOWS` makes a popup its own present root (see `present_root`).
+            popup: self.popup_placement(surface),
         })
     }
 
@@ -749,6 +799,19 @@ fn blend(base: &mut SurfaceBuffer, top: &SurfaceBuffer, x_logical: i32, y_logica
             }
         }
     }
+}
+
+/// Whether native popup windows are enabled (`DD_DISPLAY_POPUP_WINDOWS=1|true|on`). When set, an
+/// `xdg_popup` presents as its own native window at the positioner anchor (via `SurfaceBuffer::popup`,
+/// which the shared `present_cocoa` presenter turns into a child NSWindow) instead of compositing into —
+/// and being clipped by — the owning toplevel's frame. Off (default) preserves the composite-into-parent
+/// behaviour, which is byte-for-byte identical to the pre-existing path. Gated until the live
+/// Chrome/GTK-on-Smithay menu validation runs (see docs/rendering/SMITHAY_DEFAULT_READINESS.md, Gap 2).
+pub(crate) fn popup_windows_enabled() -> bool {
+    matches!(
+        std::env::var("DD_DISPLAY_POPUP_WINDOWS").as_deref(),
+        Ok("1") | Ok("true") | Ok("on")
+    )
 }
 
 /// Host `CLOCK_MONOTONIC` as a `Duration` (the `wp_presentation.presented` timestamp). dd runs the guest
