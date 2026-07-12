@@ -28,6 +28,12 @@ pub const GL_INT: u32 = 0x1404;
 pub const GL_UNSIGNED_INT: u32 = 0x1405;
 pub const GL_FLOAT: u32 = 0x1406;
 
+// primitive topology + clear mask
+pub const GL_TRIANGLES: u32 = 0x0004;
+pub const GL_TRIANGLE_STRIP: u32 = 0x0005;
+pub const GL_COLOR_BUFFER_BIT: u32 = 0x4000;
+pub const GL_DEPTH_BUFFER_BIT: u32 = 0x0100;
+
 // caps toggled by glEnable/glDisable/glIsEnabled
 pub const GL_DEPTH_TEST: u32 = 0x0B71;
 pub const GL_BLEND: u32 = 0x0BE2;

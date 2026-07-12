@@ -81,6 +81,83 @@ pub struct Vao {
     pub elem_buf: u32,
 }
 
+/// One recorded draw or clear, snapshotting the state that produces its IR at swap (gl_shim.c
+/// `struct draw_call`). Only the fields the ported paths consume are carried.
+#[derive(Clone)]
+pub struct DrawCall {
+    pub is_clear: bool,
+    pub mode: u32,
+    pub first: i32,
+    pub count: i32,
+    pub indexed: bool,
+    pub index_type: u32,
+    pub index_offset: usize,
+    pub prog: u32,
+    pub elem_buf: u32,
+    pub target_tex: u32, // 0 = default window surface, else the GL texture on the draw FBO color0
+    pub clear_rect: [i32; 4],
+    pub attrs: [Attr; MAXATTR],
+    pub tex_units: [u32; 8],
+    pub samp_units: [i32; 4],
+    pub viewport: [i32; 4],
+    pub scissor_enabled: bool,
+    pub scissor: [i32; 4],
+    pub blend: bool,
+    pub blend_src_rgb: u32,
+    pub blend_dst_rgb: u32,
+    pub blend_src_alpha: u32,
+    pub blend_dst_alpha: u32,
+    pub blend_eq_rgb: u32,
+    pub blend_eq_alpha: u32,
+    pub clear: [f32; 4],
+    pub clear_serial: i32,
+    pub ubuf: [u8; UBUF_BYTES],
+}
+
+impl Default for DrawCall {
+    fn default() -> Self {
+        DrawCall {
+            is_clear: false,
+            mode: 0,
+            first: 0,
+            count: 0,
+            indexed: false,
+            index_type: 0,
+            index_offset: 0,
+            prog: 0,
+            elem_buf: 0,
+            target_tex: 0,
+            clear_rect: [0; 4],
+            attrs: [Attr::default(); MAXATTR],
+            tex_units: [0; 8],
+            samp_units: [0; 4],
+            viewport: [0; 4],
+            scissor_enabled: false,
+            scissor: [0; 4],
+            blend: false,
+            blend_src_rgb: 0,
+            blend_dst_rgb: 0,
+            blend_src_alpha: 0,
+            blend_dst_alpha: 0,
+            blend_eq_rgb: 0,
+            blend_eq_alpha: 0,
+            clear: [0.0; 4],
+            clear_serial: 0,
+            ubuf: [0; UBUF_BYTES],
+        }
+    }
+}
+
+/// The presented default framebuffer / window surface (gl_shim.c `g_surf` + geometry). `id` is the
+/// engine surface/IOSurface id the frame renders into (1 in DD_IR_DUMP/host-tool mode).
+#[derive(Clone, Copy, Default)]
+pub struct Surface {
+    pub have: bool,
+    pub id: u32,
+    pub width: u32,
+    pub height: u32,
+}
+
 impl Default for Vao {
     fn default() -> Self {
         Vao { used: false, attrs: [Attr::default(); MAXATTR], elem_buf: 0 }
@@ -128,7 +205,26 @@ pub struct GlState {
     pub scissor: [i32; 4],
 
     pub ubuf: [u8; UBUF_BYTES], // current uniform-block bytes
+
+    // ---- draw-list + present state (the frame the swap path lowers to IR) ----
+    pub draws: Vec<DrawCall>,
+    pub surf: Surface,
+    pub default_surface_valid: bool,
+    pub default_full_clear_since_swap: bool,
+    /// Draw-time snapshot of the attribute array (apps disable attribs before swapping; the swap uses
+    /// the snapshot — gl_shim.c `g_attr_snap`).
+    pub attr_snap: [Attr; MAXATTR],
+    pub have_draw_snap: bool,
+    // last glDrawArrays/Elements of the frame (single-draw path).
+    pub draw_mode: i32,
+    pub draw_first: i32,
+    pub draw_count: i32,
+    pub draw_indexed: bool,
+    pub index_type: u32,
+    pub index_offset: usize,
 }
+
+pub const MAXDRAWS: usize = 512;
 
 impl Default for GlState {
     fn default() -> Self {
@@ -167,6 +263,18 @@ impl Default for GlState {
             scissor_enabled: false,
             scissor: [0; 4],
             ubuf: [0; UBUF_BYTES],
+            draws: Vec::new(),
+            surf: Surface::default(),
+            default_surface_valid: false,
+            default_full_clear_since_swap: false,
+            attr_snap: [Attr::default(); MAXATTR],
+            have_draw_snap: false,
+            draw_mode: -1,
+            draw_first: 0,
+            draw_count: 0,
+            draw_indexed: false,
+            index_type: 0,
+            index_offset: 0,
         }
     }
 }
@@ -233,6 +341,142 @@ impl GlState {
     /// The active texture-unit's bound GL_TEXTURE_2D object (the target of TexImage2D/TexParameter).
     pub fn bound_tex(&self) -> u32 {
         self.tex_unit[self.active_unit]
+    }
+
+    /// Render-target width for a draw target: the texture's width if `tex` is a live texture, else the
+    /// default window surface width (gl_shim.c `draw_target_w`). NOTE: offscreen FBO targets are not
+    /// yet ported (no `glBindFramebuffer`), so `draw_fbo` stays 0 and draws hit the default surface —
+    /// the es2*/glmark2 default-framebuffer case. Chrome's offscreen-FBO path lands later.
+    pub fn draw_target_w(&self, tex: u32) -> i32 {
+        if tex != 0 && (tex as usize) < MAXTEX && self.tex[tex as usize].used {
+            self.tex[tex as usize].w
+        } else {
+            self.surf.width as i32
+        }
+    }
+    pub fn draw_target_h(&self, tex: u32) -> i32 {
+        if tex != 0 && (tex as usize) < MAXTEX && self.tex[tex as usize].used {
+            self.tex[tex as usize].h
+        } else {
+            self.surf.height as i32
+        }
+    }
+
+    /// Resolve the clear rectangle honoring GL_SCISSOR_TEST (gl_shim.c `clear_scissor_rect`); returns
+    /// `(x, y, w, h, scissored)` where `scissored` is true iff the scissor actually sub-rects the
+    /// full target (a Metal load-clear is full-target, so a real sub-rect must become a ClearRect).
+    pub fn clear_scissor_rect(&self) -> (i32, i32, i32, i32, bool) {
+        // draw_fbo is 0 in the ported subset (no FBO binding) → default surface target.
+        let (tw, th) = (self.draw_target_w(0), self.draw_target_h(0));
+        let (mut x, mut y, mut w, mut h) = (0, 0, tw, th);
+        if self.scissor_enabled && self.scissor[2] > 0 && self.scissor[3] > 0 {
+            x = self.scissor[0];
+            y = self.scissor[1];
+            w = self.scissor[2];
+            h = self.scissor[3];
+        }
+        if x < 0 {
+            w += x;
+            x = 0;
+        }
+        if y < 0 {
+            h += y;
+            y = 0;
+        }
+        if x > tw {
+            x = tw;
+        }
+        if y > th {
+            y = th;
+        }
+        if x + w > tw {
+            w = tw - x;
+        }
+        if y + h > th {
+            h = th - y;
+        }
+        w = w.max(0);
+        h = h.max(0);
+        let scissored = self.scissor_enabled && (x != 0 || y != 0 || w != tw || h != th);
+        (x, y, w, h, scissored)
+    }
+
+    /// Record a clear into the frame draw-list (gl_shim.c `record_clear_call`).
+    pub fn record_clear_call(&mut self, x: i32, y: i32, w: i32, h: i32) {
+        if self.draws.len() >= MAXDRAWS {
+            return;
+        }
+        self.draws.push(DrawCall {
+            is_clear: true,
+            target_tex: 0, // default framebuffer (no FBO tracking yet)
+            clear_rect: [x, y, w, h],
+            clear: self.clear,
+            clear_serial: self.clear_serial,
+            ..Default::default()
+        });
+    }
+
+    /// Record a draw into the frame draw-list, snapshotting the state it renders with (gl_shim.c
+    /// `record_draw_call`). Vertex-buffer snapshots (the replay path) are omitted — the single-draw
+    /// path reads live buffers at swap.
+    pub fn record_draw_call(&mut self, mode: u32, first: i32, count: i32, indexed: bool, index_type: u32, indices: usize) {
+        if self.draws.len() >= MAXDRAWS {
+            return;
+        }
+        let samp_units = if (self.cur_prog as usize) < MAXPROG && self.prog[self.cur_prog as usize].used {
+            self.prog[self.cur_prog as usize].samp_units
+        } else {
+            [0; 4]
+        };
+        let ubuf = if (self.cur_prog as usize) < MAXPROG && self.prog[self.cur_prog as usize].used {
+            self.prog[self.cur_prog as usize].ubuf
+        } else {
+            self.ubuf
+        };
+        self.draws.push(DrawCall {
+            is_clear: false,
+            mode,
+            first,
+            count,
+            indexed,
+            index_type,
+            index_offset: indices,
+            prog: self.cur_prog,
+            elem_buf: self.elem_buf,
+            target_tex: 0, // default framebuffer (no FBO tracking yet)
+            attrs: self.attr,
+            tex_units: self.tex_unit,
+            samp_units,
+            viewport: self.viewport,
+            scissor_enabled: self.scissor_enabled,
+            scissor: self.scissor,
+            blend: self.blend,
+            blend_src_rgb: self.blend_src_rgb,
+            blend_dst_rgb: self.blend_dst_rgb,
+            blend_src_alpha: self.blend_src_alpha,
+            blend_dst_alpha: self.blend_dst_alpha,
+            blend_eq_rgb: self.blend_eq_rgb,
+            blend_eq_alpha: self.blend_eq_alpha,
+            clear: self.clear,
+            clear_serial: self.clear_serial,
+            ubuf,
+            ..Default::default()
+        });
+    }
+
+    /// Bring up the presented surface (gl_shim.c `surface_up`). In DD_IR_DUMP/host-tool mode the engine
+    /// surface id is simply 1 (no renderD128/wayland). Sets default viewport/scissor to the full
+    /// surface if unset.
+    pub fn surface_up(&mut self, w: u32, h: u32) {
+        self.default_surface_valid = false;
+        self.default_full_clear_since_swap = false;
+        if self.viewport[2] <= 0 || self.viewport[3] <= 0 {
+            self.viewport = [0, 0, w as i32, h as i32];
+        }
+        if self.scissor[2] <= 0 || self.scissor[3] <= 0 {
+            self.scissor = [0, 0, w as i32, h as i32];
+        }
+        self.surf = Surface { have: true, id: 1, width: w, height: h };
     }
 
     /// Bytes-per-pixel of an upload format (gl_shim.c `tex_bpp`).

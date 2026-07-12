@@ -135,13 +135,27 @@ reaches pixel parity. The path:
    `glDrawElements` recording, the GLSL-ES→(SPIR-V/MSL) translator (so `glGetUniformLocation`/
    `glGetAttribLocation` report "not found" for now), the residency cache, `eglCreateWindowSurface` +
    the wayland/dma-buf commit, and `eglSwapBuffers` (lower state → `Cmd` stream → `ExecConn::submit`).
-3. **Pixel/IR-parity harness (scaffold in place).** `tests/pixel_parity.rs` diffs the dd-gpu IR the two
-   shims emit (byte-identical IR ⇒ identical pixels through the same host backend, and it pinpoints the
-   diverging `Cmd`). The compare engine is implemented + self-tested and already runs live against the
-   resource lowering; the full-frame comparison skips until `eglSwapBuffers` lands, at which point its
-   stream drops into `dd_shim_gl_frame_ir` with no harness changes.
-4. **Cutover** when a byte/pixel diff of glmark2 + the `gui_egl_*` matrix is clean: deploy `dd-shim-gl`
-   as `libEGL.so.1`, move the `es2*`/`gui_egl_*` test clients onto it, and delete `gl_shim.c` (the
+3. **Present path — draw recording + surface bring-up + swap boundary (in progress).**
+   `glClear`/`glDrawArrays`/`glDrawElements` now record into the frame draw-list (`src/state.rs`
+   `DrawCall`), `eglCreateWindowSurface` brings up the presented surface, and `eglSwapBuffers`
+   (`src/egl.rs` + `src/frame.rs`) lowers the draw-list to the dd-gpu IR and presents it (via
+   `DD_IR_DUMP` in host-tool/parity mode, or `dd_shim_common::transport::ExecConn` in the deployed
+   path; the wayland/dma-buf commit is the remaining display plumbing). The **clear-path frame is
+   byte-identical to gl_shim.c**; the shader-bearing draw path is the remaining work (below).
+4. **Pixel/IR-parity harness — LIVE (`tests/pixel_parity.rs`).** The compare engine decodes both shims'
+   IR and pinpoints the diverging `Cmd`. `full_frame_clear_is_byte_identical_to_gl_shim_c`
+   **compiles + runs the real `gl_shim.c`** (its `DD_IR_DUMP` host-tool mode) for a 640×480 clear frame
+   and asserts the bytes equal dd-shim-gl's lowering — **green: 43 bytes, byte-identical**. Draw frames
+   skip until the translator lands, then go live with no harness change. This green is the cutover gate.
+5. **Remaining for full glmark2/es2* parity:** the GLSL-ES→MSL translator (gl_shim.c's ~600-line
+   `translate()` + helpers, verifiable byte-for-byte against its `-DDD_TR_TOOL` `gl_tr` tool) feeding
+   `CreateShader`, plus the draw-time pipeline / bind-group / render-pass emission (the `replay` +
+   single-draw assembly in gl_shim.c `eglSwapBuffers`, constructed as `dd_gpu::ir::Cmd`/`Enc` values —
+   the same byte-equivalent pattern already used for resources and clears). `glGetUniformLocation`/
+   `glGetAttribLocation` wire to the uniform-layout parser that lands with the translator.
+6. **Cutover** when the full-frame diff of a textured triangle / glmark2 frame is clean: build
+   dd-shim-gl's cdylib as the injected `libEGL.so.1` / `libGLESv2.so.2` **behind a flag first**, then
+   (after live glmark2/Chrome validation) flip the default injection and delete `gl_shim.c` (its
    `DD_TR_TOOL` translator regression moves to the Rust translator).
 
 ## GLES-still-works evidence (this increment)

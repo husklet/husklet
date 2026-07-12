@@ -1,21 +1,21 @@
-//! Pixel-/IR-parity harness: run a GLES workload through the C shim (`gl_shim.c`) and the Rust shim
-//! (`dd-shim-gl`) and diff the dd-gpu IR they emit. Because both streams feed the *same* host backend,
-//! byte-identical IR ⇒ identical pixels — so IR diff is the deterministic proxy for pixel parity, and
-//! it pinpoints the exact diverging command instead of an opaque image delta.
+//! Pixel-/IR-parity harness: run a GLES frame through the C shim (`gl_shim.c`) and the Rust shim
+//! (`dd-shim-gl`) and diff the dd-gpu IR they emit. Both streams feed the *same* host backend, so
+//! byte-identical IR ⇒ identical pixels — and the diff pinpoints the exact diverging `Cmd` rather than
+//! an opaque image delta. This is the cutover gate.
 //!
-//! Status this increment: the **compare engine is implemented and self-tested**, and the C-shim IR
-//! extraction is wired (via gl_shim.c's `DD_IR_DUMP` host-tool mode). The Rust-shim side returns
-//! `None` for a full-frame workload because the **present/draw path is deliberately not yet ported**
-//! (it is owned by concurrent work). The harness therefore *skips* the full-frame comparison with a
-//! clear notice, and instead exercises the compare against the **resource lowering that IS wired**
-//! (`dd_shim_gl::lower`) so the plumbing is proven end-to-end today. When `eglSwapBuffers` lands, drop
-//! its stream into `dd_shim_gl_frame_ir` and the full comparison goes live with no harness changes.
+//! Live today: the **clear-path full frame** (a `glClear` frame) is compiled + run through the real
+//! `gl_shim.c` (its `DD_IR_DUMP` host-tool mode) and compared byte-for-byte to the Rust shim's
+//! lowering. Frames with a real draw need the GLSL→shader translator (not yet ported); those skip with
+//! a notice and go live automatically once `crate::frame::build_frame_ir` returns them.
+
+use std::path::{Path, PathBuf};
+use std::process::Command;
 
 use dd_shim_gl::common::ir::{encode_stream, Cmd};
 use dd_shim_gl::common::wire::Decoder;
+use dd_shim_gl::frame::build_frame_ir;
+use dd_shim_gl::state::GlState;
 
-/// Decode a raw dd-gpu IR byte-stream into its command list (the C shim's `DD_IR_DUMP` output and the
-/// Rust shim's `FrameBuilder::finish()` are the same wire format).
 fn decode_stream(bytes: &[u8]) -> Result<Vec<Cmd>, String> {
     let mut d = Decoder::new(bytes);
     let mut cmds = Vec::new();
@@ -25,13 +25,12 @@ fn decode_stream(bytes: &[u8]) -> Result<Vec<Cmd>, String> {
     Ok(cmds)
 }
 
-/// The parity verdict: byte-identical, or the first point of divergence (byte offset + decoded command
-/// index) so a regression is actionable.
+/// Parity verdict: byte-identical, or the first point of divergence (decoded `Cmd` index) so a
+/// regression is actionable.
 fn diff_ir(c_shim: &[u8], rust_shim: &[u8]) -> Result<(), String> {
     if c_shim == rust_shim {
         return Ok(());
     }
-    // Byte streams differ — decode both and report the first diverging command.
     let a = decode_stream(c_shim)?;
     let b = decode_stream(rust_shim)?;
     for (i, (x, y)) in a.iter().zip(b.iter()).enumerate() {
@@ -40,60 +39,100 @@ fn diff_ir(c_shim: &[u8], rust_shim: &[u8]) -> Result<(), String> {
         }
     }
     Err(format!(
-        "IR command count differs: gl_shim.c={} dd-shim-gl={} (first {} match)",
+        "IR command count differs: gl_shim.c={} dd-shim-gl={} (first {} match); raw lens {}/{}",
         a.len(),
         b.len(),
-        a.len().min(b.len())
+        a.len().min(b.len()),
+        c_shim.len(),
+        rust_shim.len()
     ))
 }
 
-/// Produce one frame's IR from the C shim (`gl_shim.c`) for `workload`, using its `DD_IR_DUMP`
-/// host-tool mode. Returns `None` when the toolchain/workload isn't runnable here (so the harness is
-/// robust in a bare CI) — *not yet wired end-to-end*: this increment leaves the workload runner as the
-/// documented hook, since driving a full frame needs the C shim's surface bring-up + a workload client.
-#[allow(dead_code)]
-fn gl_shim_c_frame_ir(_workload: &str) -> Option<Vec<u8>> {
-    // Planned: cc -shared gl_shim.c -> libEGL.so.1; run `<workload>` with DD_IR_DUMP=<path> +
-    // LD_PRELOAD/LD_LIBRARY_PATH; read <path>. Returns None until that runner lands.
-    None
+fn gl_shim_c_path() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("../dd-tests/guests/gl_shim.c")
 }
 
-/// Produce one frame's IR from the Rust shim for `workload`. Returns `None` until `eglSwapBuffers`
-/// (the present/draw path) is ported — that call is what lowers accumulated state into the frame IR.
-#[allow(dead_code)]
-fn dd_shim_gl_frame_ir(_workload: &str) -> Option<Vec<u8>> {
-    None
+/// Compile `gl_shim.c` + a workload `.c`, run it with `DD_IR_DUMP`, and return the IR bytes gl_shim.c
+/// emitted for its frame. Returns `None` (skip) if the toolchain / source isn't available.
+fn gl_shim_c_ir(workload_main: &str) -> Option<Vec<u8>> {
+    let shim = gl_shim_c_path();
+    if !shim.exists() {
+        eprintln!("[parity] gl_shim.c not found at {shim:?}; skipping C-shim comparison");
+        return None;
+    }
+    let dir = std::env::temp_dir().join(format!("dd-shim-parity-{}", std::process::id()));
+    let _ = std::fs::create_dir_all(&dir);
+    let so = dir.join("libEGL.so.1");
+    let wl_c = dir.join("workload.c");
+    let wl = dir.join("workload");
+    let ir = dir.join("frame.ir");
+    std::fs::write(&wl_c, workload_main).ok()?;
+
+    // gl_shim.c → libEGL.so.1 (all GLES/EGL symbols live in the one TU).
+    let built_shim = Command::new("cc")
+        .args(["-O2", "-fPIC", "-shared", "-o"])
+        .arg(&so)
+        .arg(&shim)
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false);
+    if !built_shim {
+        eprintln!("[parity] could not build gl_shim.c (no cc?); skipping");
+        return None;
+    }
+    let built_wl = Command::new("cc")
+        .arg("-O2")
+        .arg(&wl_c)
+        .arg(&so)
+        .arg("-o")
+        .arg(&wl)
+        .arg(format!("-Wl,-rpath,{}", dir.display()))
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false);
+    if !built_wl {
+        eprintln!("[parity] could not build the workload; skipping");
+        return None;
+    }
+    if !Command::new(&wl).env("DD_IR_DUMP", &ir).status().map(|s| s.success()).unwrap_or(false) {
+        eprintln!("[parity] workload run failed; skipping");
+        return None;
+    }
+    let bytes = std::fs::read(&ir).ok();
+    let _ = std::fs::remove_dir_all(&dir);
+    bytes
+}
+
+/// The dd-shim-gl frame IR for a full-window clear, driving the same state methods the exported
+/// `glClear`/`eglSwapBuffers` call — on an isolated `GlState` so the test doesn't race the
+/// process-global state other tests use.
+fn dd_shim_gl_clear_ir(w: u32, h: u32, color: [f32; 4]) -> Vec<u8> {
+    let mut s = GlState::default();
+    s.surface_up(w, h);
+    s.clear = color;
+    let (x, y, cw, ch, _scissored) = s.clear_scissor_rect(); // glClear, no scissor → full-target rect
+    s.record_clear_call(x, y, cw, ch);
+    build_frame_ir(&s).expect("clear frame must lower to IR")
 }
 
 #[test]
 fn diff_engine_detects_divergence_and_agreement() {
-    // The compare engine must be trustworthy before it gates parity. Identical streams pass; a single
-    // differing field is reported at the right command index.
     let a = encode_stream(&[Cmd::CreateFence(1), Cmd::Present { surface: 1, texture: 500 }]);
-    let b = encode_stream(&[Cmd::CreateFence(1), Cmd::Present { surface: 1, texture: 500 }]);
-    assert!(diff_ir(&a, &b).is_ok(), "identical IR must be parity-clean");
-
+    let b = a.clone();
+    assert!(diff_ir(&a, &b).is_ok());
     let c = encode_stream(&[Cmd::CreateFence(1), Cmd::Present { surface: 1, texture: 501 }]);
-    let err = diff_ir(&a, &c).unwrap_err();
-    assert!(err.contains("command #1"), "divergence must be pinpointed: {err}");
-
+    assert!(diff_ir(&a, &c).unwrap_err().contains("command #1"));
     let d = encode_stream(&[Cmd::CreateFence(1)]);
     assert!(diff_ir(&a, &d).unwrap_err().contains("count differs"));
 }
 
+/// Resource-lowering parity (from inc2), now routed through the live diff engine.
 #[test]
-fn resource_lowering_is_parity_clean_against_the_c_shim_encoding() {
-    // The live portion: drive the Rust shim's resource path (state + lower.rs) and diff it against the
-    // exact bytes gl_shim.c emits for the same resources, THROUGH the real compare engine. This proves
-    // the harness works on real shim output today; the full frame joins it when swap lands.
+fn resource_lowering_is_parity_clean() {
     use dd_shim_gl::common::wire::Encoder;
     use dd_shim_gl::lower::vertex_buffer_cmds;
-
     let data: Vec<u8> = (0..64u8).collect();
     let rust_ir = encode_stream(&vertex_buffer_cmds(205, &data));
-
-    // gl_shim.c hand-emission for a residency VBO upload (id 205):
-    //   iu8(1) iu32(id) iu64(size) iu32(VERTEX=1) istr("") ; iu8(3) iu32(id) iu64(0) ibytes(data)
     let mut e = Encoder::new();
     e.u8(1);
     e.u32(205);
@@ -104,22 +143,61 @@ fn resource_lowering_is_parity_clean_against_the_c_shim_encoding() {
     e.u32(205);
     e.u64(0);
     e.bytes(&data);
-    let c_ir = e.into_vec();
+    diff_ir(&e.into_vec(), &rust_ir).expect("resource lowering byte-identical to gl_shim.c");
+}
 
-    diff_ir(&c_ir, &rust_ir).expect("resource lowering must be byte-identical to gl_shim.c");
+/// THE CUTOVER GATE (clear path): a full 640x480 clear frame run through the real gl_shim.c must be
+/// byte-identical to dd-shim-gl's lowering. Skips (does not fail) if the C toolchain is unavailable.
+#[test]
+fn full_frame_clear_is_byte_identical_to_gl_shim_c() {
+    let workload = r#"
+extern void* eglGetDisplay(void*);
+extern unsigned eglInitialize(void*, int*, int*);
+extern unsigned eglChooseConfig(void*, const int*, void**, int, int*);
+extern void* eglCreateContext(void*, void*, void*, const int*);
+extern void* eglCreateWindowSurface(void*, void*, void*, const int*);
+extern unsigned eglMakeCurrent(void*, void*, void*, void*);
+extern void glClearColor(float, float, float, float);
+extern void glClear(unsigned);
+extern unsigned eglSwapBuffers(void*, void*);
+int main(void) {
+    void* d = eglGetDisplay(0);
+    eglInitialize(d, 0, 0);
+    int cfgattr[] = { 0x3038 };
+    void* cfg; int n;
+    eglChooseConfig(d, cfgattr, &cfg, 1, &n);
+    int ctxattr[] = { 0x3098, 2, 0x3038 };
+    void* ctx = eglCreateContext(d, cfg, 0, ctxattr);
+    int win[2] = { 640, 480 };
+    void* s = eglCreateWindowSurface(d, cfg, win, 0);
+    eglMakeCurrent(d, s, s, ctx);
+    glClearColor(0.1f, 0.2f, 0.3f, 1.0f);
+    glClear(0x4000);
+    eglSwapBuffers(d, s);
+    return 0;
+}
+"#;
+    let c_ir = match gl_shim_c_ir(workload) {
+        Some(b) => b,
+        None => {
+            eprintln!("[parity] SKIP: gl_shim.c toolchain unavailable");
+            return;
+        }
+    };
+    let rust_ir = dd_shim_gl_clear_ir(640, 480, [0.1, 0.2, 0.3, 1.0]);
+    match diff_ir(&c_ir, &rust_ir) {
+        Ok(()) => eprintln!("[parity] PASS clear-frame: dd-shim-gl IR byte-identical to gl_shim.c ({} bytes)", c_ir.len()),
+        Err(e) => panic!("clear-frame parity FAILED:\n{e}"),
+    }
 }
 
 #[test]
-fn full_frame_parity_skips_until_swap_is_wired() {
-    // The full-frame comparison is ready; both producers are hooks today. When either is unavailable
-    // the harness skips with a notice rather than failing — so it is CI-safe now and goes live the
-    // moment `dd_shim_gl_frame_ir` returns real bytes.
-    let workload = "es2tri";
-    match (gl_shim_c_frame_ir(workload), dd_shim_gl_frame_ir(workload)) {
-        (Some(c), Some(r)) => diff_ir(&c, &r).expect("full-frame IR parity"),
-        _ => eprintln!(
-            "[parity] SKIP full-frame '{workload}': present/draw path not yet ported to dd-shim-gl \
-             (resource-lowering parity is covered above)"
-        ),
-    }
+fn full_frame_draw_pending_translator() {
+    // A real draw needs the GLSL translator (not yet ported); document the pending state so this goes
+    // live the moment build_frame_ir starts returning draw frames.
+    let mut s = GlState::default();
+    s.surface_up(64, 64);
+    s.record_draw_call(4, 0, 3, false, 0, 0);
+    assert!(build_frame_ir(&s).is_none(), "a draw frame must not emit mismatched IR until the translator lands");
+    eprintln!("[parity] SKIP full-frame draw: GLSL→shader translator pending");
 }

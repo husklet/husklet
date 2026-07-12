@@ -8,9 +8,10 @@
 //! `eglSwapBuffers` (IR emit + commit) remain generated stubs, owned by the present/draw work.
 
 use core::ffi::{c_char, c_void};
+use std::sync::{Mutex, OnceLock};
 
 use crate::glconst::*;
-use crate::state::{egl, shim_es3};
+use crate::state::{egl, gl, shim_es3, Surface};
 
 /// Static, nul-terminated string → `*const c_char` (stable for the process lifetime).
 macro_rules! cstr {
@@ -316,5 +317,105 @@ pub extern "C" fn eglWaitGL() -> u32 {
 
 #[no_mangle]
 pub extern "C" fn eglWaitNative(_engine: i32) -> u32 {
+    EGL_TRUE
+}
+
+// ===================================================================================================
+// window surface bring-up + present (the frame boundary)
+// ===================================================================================================
+
+/// Parse the app's native window handle to a backing `(width, height)`. Ports gl_shim.c's stock-app
+/// heuristics (es2*/ANGLE two-int + Mesa `wl_egl_window` word shapes). The `dd_wl_egl_window` magic
+/// struct (our own libwayland-egl, used by glmark2/Chrome) lands with the wayland-egl client port.
+unsafe fn parse_native_window(w: *const c_void) -> (u32, u32) {
+    let (mut ww, mut hh) = (256i32, 256i32);
+    if !w.is_null() {
+        let p = w as *const i32;
+        let g = |i: isize| *p.offset(i);
+        if g(0) > 0 && g(0) <= 16 && g(2) > 16 && g(2) <= 8192 && g(3) > 16 && g(3) <= 8192 {
+            ww = g(2);
+            hh = g(3);
+        } else if g(0) > 0 && g(0) <= 16 && g(1) > 16 && g(1) <= 8192 {
+            ww = g(1);
+            hh = g(2);
+        } else {
+            ww = g(0);
+            hh = g(1);
+        }
+    }
+    let big = |v: i32| v > 0 && v <= 8192;
+    (if big(ww) { ww as u32 } else { 256 }, if big(hh) { hh as u32 } else { 256 })
+}
+
+/// `eglCreateWindowSurface` — bring up the presented default framebuffer from the native window size.
+/// In DD_IR_DUMP/host-tool mode this only records the surface (id 1); the renderD128 IOSurface
+/// registration + wayland handshake are the deployed-path plumbing (see `present_frame`).
+#[no_mangle]
+pub extern "C" fn eglCreateWindowSurface(_dpy: *mut c_void, _config: *mut c_void, win: *mut c_void, _attribs: *const i32) -> *mut c_void {
+    let (w, h) = unsafe { parse_native_window(win) };
+    {
+        let mut e = egl();
+        e.surface_logical_w = w as i32;
+        e.surface_logical_h = h as i32;
+    }
+    gl().surface_up(w, h);
+    1 as *mut c_void
+}
+
+/// `eglCreatePbufferSurface` — an inert 1x1 offscreen surface (ANGLE's bootstrap). Swap is a no-op on
+/// it because `eglSwapBuffers` only acts once a window surface is up.
+#[no_mangle]
+pub extern "C" fn eglCreatePbufferSurface(_dpy: *mut c_void, _config: *mut c_void, _attribs: *const i32) -> *mut c_void {
+    1 as *mut c_void
+}
+
+fn exec_conn() -> &'static Mutex<dd_shim_common::transport::ExecConn> {
+    static C: OnceLock<Mutex<dd_shim_common::transport::ExecConn>> = OnceLock::new();
+    C.get_or_init(|| Mutex::new(dd_shim_common::transport::ExecConn::from_env()))
+}
+
+/// Present a frame's IR. `DD_IR_DUMP` (host-tool / parity-harness mode) writes the raw byte-stream to
+/// the file so it can be diffed against gl_shim.c's dump. Otherwise it is submitted to the host
+/// GPU-exec service over the shared transport. (The wayland/dma-buf commit that shows the rendered
+/// IOSurface on screen is the remaining display-side plumbing, tracked separately from IR parity.)
+fn present_frame(surf: &Surface, ir: &[u8]) {
+    if let Some(path) = std::env::var_os("DD_IR_DUMP") {
+        let _ = std::fs::write(path, ir);
+        return;
+    }
+    let ts = dd_shim_common::transport::Surface { id: surf.id, width: surf.width, height: surf.height, stride: surf.width * 4, fd: -1 };
+    let _ = exec_conn().lock().unwrap_or_else(|e| e.into_inner()).submit(&ts, ir);
+}
+
+/// `eglSwapBuffers` — the frame boundary: lower the recorded draw-list to IR and present it, then reset
+/// per-frame state (gl_shim.c tail). Returns EGL_FALSE if no surface is up. Frames that need the GLSL
+/// translator (a real draw) produce no IR yet and are a no-op present until that path lands.
+#[no_mangle]
+pub extern "C" fn eglSwapBuffers(_dpy: *mut c_void, _surface: *mut c_void) -> u32 {
+    let (ir, surf) = {
+        let mut s = gl();
+        if !s.surf.have {
+            return EGL_FALSE;
+        }
+        if s.have_draw_snap {
+            s.attr = s.attr_snap; // apps disable attribs before swap — use the draw-time snapshot
+        }
+        let ir = crate::frame::build_frame_ir(&s);
+        let surf = s.surf;
+        let touched_default = s.draws.iter().any(|d| d.target_tex == 0);
+        // reset per-frame draw state
+        s.draws.clear();
+        s.draw_mode = -1;
+        s.have_draw_snap = false;
+        s.draw_indexed = false;
+        if touched_default {
+            s.default_surface_valid = true;
+        }
+        s.default_full_clear_since_swap = false;
+        (ir, surf)
+    };
+    if let Some(bytes) = ir {
+        present_frame(&surf, &bytes);
+    }
     EGL_TRUE
 }

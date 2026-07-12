@@ -848,6 +848,54 @@ pub extern "C" fn glDisableVertexAttribArray(index: u32) {
     }
 }
 
+// ===================================================================================================
+// draw recording — glClear / glDrawArrays / glDrawElements accumulate the frame draw-list; the IR is
+// lowered from it at eglSwapBuffers (see crate::frame).
+// ===================================================================================================
+
+/// `glClear` — record a clear into the frame draw-list, honoring GL_SCISSOR_TEST (a scissored clear
+/// becomes a sub-rect ClearRect; a full clear bumps the serial and marks the default surface). Faithful
+/// to gl_shim.c for the default framebuffer (FBO targets land with the offscreen path).
+#[no_mangle]
+pub extern "C" fn glClear(mask: u32) {
+    let mut s = gl();
+    let (sx, sy, sw, sh, scissored) = s.clear_scissor_rect();
+    if mask & GL_COLOR_BUFFER_BIT != 0 {
+        if scissored {
+            s.record_clear_call(sx, sy, sw, sh);
+        } else {
+            s.clear_serial += 1;
+            s.default_full_clear_since_swap = true; // draw_fbo == 0 (default) in the ported subset
+            s.record_clear_call(sx, sy, sw, sh);
+        }
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn glDrawArrays(mode: u32, first: i32, count: i32) {
+    let mut s = gl();
+    s.draw_mode = mode as i32;
+    s.draw_first = first;
+    s.draw_count = count;
+    s.draw_indexed = false;
+    s.attr_snap = s.attr;
+    s.have_draw_snap = true;
+    s.record_draw_call(mode, first, count, false, 0, 0);
+}
+
+#[no_mangle]
+pub extern "C" fn glDrawElements(mode: u32, count: i32, typ: u32, indices: *const c_void) {
+    let mut s = gl();
+    s.draw_mode = mode as i32;
+    s.draw_count = count;
+    s.draw_indexed = true;
+    s.index_type = typ;
+    s.index_offset = indices as usize;
+    s.attr_snap = s.attr;
+    s.have_draw_snap = true;
+    s.record_draw_call(mode, 0, count, true, typ, indices as usize);
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

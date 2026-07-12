@@ -223,6 +223,10 @@ const IMPLEMENTED: &[&str] = &[
     "eglWaitClient",
     "eglWaitGL",
     "eglWaitNative",
+    // present / surface bring-up (frame boundary; clear-path IR is byte-identical to gl_shim.c)
+    "eglCreateWindowSurface",
+    "eglCreatePbufferSurface",
+    "eglSwapBuffers",
     // ---- GLES: error/string ----
     "glGetError",
     "glGetString",
@@ -316,4 +320,8 @@ const IMPLEMENTED: &[&str] = &[
     "glVertexAttribPointer",
     "glEnableVertexAttribArray",
     "glDisableVertexAttribArray",
+    // ---- GLES: draw recording (frame draw-list; IR lowered at eglSwapBuffers) ----
+    "glClear",
+    "glDrawArrays",
+    "glDrawElements",
 ];

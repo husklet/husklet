@@ -22,6 +22,7 @@
 pub use dd_shim_common as common;
 
 pub mod egl;
+pub mod frame;
 pub mod gles;
 pub mod glconst;
 pub mod lower;
