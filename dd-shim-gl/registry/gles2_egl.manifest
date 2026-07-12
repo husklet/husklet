@@ -1,0 +1,409 @@
+# dd-shim-gl GLES2 + EGL entry-point manifest — the surface-complete symbol set libGLESv2.so.2 and
+# libEGL.so.1 must export. GENERATED from the Khronos API registry (gl.xml / egl.xml) by
+# `registry/extract_from_khronos.py`; do NOT hand-edit. Regenerate when bumping the API level.
+#
+# Rows: <LIB>\t<name>\t<return-type>\t<paramType|paramName;...>
+#   LIB = GL  -> GLES2 (gl.xml feature api="gles2", GL_ES_VERSION_2_0..3_2)
+#   LIB = EGL -> EGL   (egl.xml feature api="egl",  EGL_VERSION_1_0..1_5)
+GL	glActiveShaderProgram	void	GLuint|pipeline;GLuint|program
+GL	glActiveTexture	void	GLenum|texture
+GL	glAttachShader	void	GLuint|program;GLuint|shader
+GL	glBeginQuery	void	GLenum|target;GLuint|id
+GL	glBeginTransformFeedback	void	GLenum|primitiveMode
+GL	glBindAttribLocation	void	GLuint|program;GLuint|index;const GLchar *|name
+GL	glBindBuffer	void	GLenum|target;GLuint|buffer
+GL	glBindBufferBase	void	GLenum|target;GLuint|index;GLuint|buffer
+GL	glBindBufferRange	void	GLenum|target;GLuint|index;GLuint|buffer;GLintptr|offset;GLsizeiptr|size
+GL	glBindFramebuffer	void	GLenum|target;GLuint|framebuffer
+GL	glBindImageTexture	void	GLuint|unit;GLuint|texture;GLint|level;GLboolean|layered;GLint|layer;GLenum|access;GLenum|format
+GL	glBindProgramPipeline	void	GLuint|pipeline
+GL	glBindRenderbuffer	void	GLenum|target;GLuint|renderbuffer
+GL	glBindSampler	void	GLuint|unit;GLuint|sampler
+GL	glBindTexture	void	GLenum|target;GLuint|texture
+GL	glBindTransformFeedback	void	GLenum|target;GLuint|id
+GL	glBindVertexArray	void	GLuint|array
+GL	glBindVertexBuffer	void	GLuint|bindingindex;GLuint|buffer;GLintptr|offset;GLsizei|stride
+GL	glBlendBarrier	void	
+GL	glBlendColor	void	GLfloat|red;GLfloat|green;GLfloat|blue;GLfloat|alpha
+GL	glBlendEquation	void	GLenum|mode
+GL	glBlendEquationSeparate	void	GLenum|modeRGB;GLenum|modeAlpha
+GL	glBlendEquationSeparatei	void	GLuint|buf;GLenum|modeRGB;GLenum|modeAlpha
+GL	glBlendEquationi	void	GLuint|buf;GLenum|mode
+GL	glBlendFunc	void	GLenum|sfactor;GLenum|dfactor
+GL	glBlendFuncSeparate	void	GLenum|sfactorRGB;GLenum|dfactorRGB;GLenum|sfactorAlpha;GLenum|dfactorAlpha
+GL	glBlendFuncSeparatei	void	GLuint|buf;GLenum|srcRGB;GLenum|dstRGB;GLenum|srcAlpha;GLenum|dstAlpha
+GL	glBlendFunci	void	GLuint|buf;GLenum|src;GLenum|dst
+GL	glBlitFramebuffer	void	GLint|srcX0;GLint|srcY0;GLint|srcX1;GLint|srcY1;GLint|dstX0;GLint|dstY0;GLint|dstX1;GLint|dstY1;GLbitfield|mask;GLenum|filter
+GL	glBufferData	void	GLenum|target;GLsizeiptr|size;const void *|data;GLenum|usage
+GL	glBufferSubData	void	GLenum|target;GLintptr|offset;GLsizeiptr|size;const void *|data
+GL	glCheckFramebufferStatus	GLenum	GLenum|target
+GL	glClear	void	GLbitfield|mask
+GL	glClearBufferfi	void	GLenum|buffer;GLint|drawbuffer;GLfloat|depth;GLint|stencil
+GL	glClearBufferfv	void	GLenum|buffer;GLint|drawbuffer;const GLfloat *|value
+GL	glClearBufferiv	void	GLenum|buffer;GLint|drawbuffer;const GLint *|value
+GL	glClearBufferuiv	void	GLenum|buffer;GLint|drawbuffer;const GLuint *|value
+GL	glClearColor	void	GLfloat|red;GLfloat|green;GLfloat|blue;GLfloat|alpha
+GL	glClearDepthf	void	GLfloat|d
+GL	glClearStencil	void	GLint|s
+GL	glClientWaitSync	GLenum	GLsync|sync;GLbitfield|flags;GLuint64|timeout
+GL	glColorMask	void	GLboolean|red;GLboolean|green;GLboolean|blue;GLboolean|alpha
+GL	glColorMaski	void	GLuint|index;GLboolean|r;GLboolean|g;GLboolean|b;GLboolean|a
+GL	glCompileShader	void	GLuint|shader
+GL	glCompressedTexImage2D	void	GLenum|target;GLint|level;GLenum|internalformat;GLsizei|width;GLsizei|height;GLint|border;GLsizei|imageSize;const void *|data
+GL	glCompressedTexImage3D	void	GLenum|target;GLint|level;GLenum|internalformat;GLsizei|width;GLsizei|height;GLsizei|depth;GLint|border;GLsizei|imageSize;const void *|data
+GL	glCompressedTexSubImage2D	void	GLenum|target;GLint|level;GLint|xoffset;GLint|yoffset;GLsizei|width;GLsizei|height;GLenum|format;GLsizei|imageSize;const void *|data
+GL	glCompressedTexSubImage3D	void	GLenum|target;GLint|level;GLint|xoffset;GLint|yoffset;GLint|zoffset;GLsizei|width;GLsizei|height;GLsizei|depth;GLenum|format;GLsizei|imageSize;const void *|data
+GL	glCopyBufferSubData	void	GLenum|readTarget;GLenum|writeTarget;GLintptr|readOffset;GLintptr|writeOffset;GLsizeiptr|size
+GL	glCopyImageSubData	void	GLuint|srcName;GLenum|srcTarget;GLint|srcLevel;GLint|srcX;GLint|srcY;GLint|srcZ;GLuint|dstName;GLenum|dstTarget;GLint|dstLevel;GLint|dstX;GLint|dstY;GLint|dstZ;GLsizei|srcWidth;GLsizei|srcHeight;GLsizei|srcDepth
+GL	glCopyTexImage2D	void	GLenum|target;GLint|level;GLenum|internalformat;GLint|x;GLint|y;GLsizei|width;GLsizei|height;GLint|border
+GL	glCopyTexSubImage2D	void	GLenum|target;GLint|level;GLint|xoffset;GLint|yoffset;GLint|x;GLint|y;GLsizei|width;GLsizei|height
+GL	glCopyTexSubImage3D	void	GLenum|target;GLint|level;GLint|xoffset;GLint|yoffset;GLint|zoffset;GLint|x;GLint|y;GLsizei|width;GLsizei|height
+GL	glCreateProgram	GLuint	
+GL	glCreateShader	GLuint	GLenum|type
+GL	glCreateShaderProgramv	GLuint	GLenum|type;GLsizei|count;const GLchar *const*|strings
+GL	glCullFace	void	GLenum|mode
+GL	glDebugMessageCallback	void	GLDEBUGPROC|callback;const void *|userParam
+GL	glDebugMessageControl	void	GLenum|source;GLenum|type;GLenum|severity;GLsizei|count;const GLuint *|ids;GLboolean|enabled
+GL	glDebugMessageInsert	void	GLenum|source;GLenum|type;GLuint|id;GLenum|severity;GLsizei|length;const GLchar *|buf
+GL	glDeleteBuffers	void	GLsizei|n;const GLuint *|buffers
+GL	glDeleteFramebuffers	void	GLsizei|n;const GLuint *|framebuffers
+GL	glDeleteProgram	void	GLuint|program
+GL	glDeleteProgramPipelines	void	GLsizei|n;const GLuint *|pipelines
+GL	glDeleteQueries	void	GLsizei|n;const GLuint *|ids
+GL	glDeleteRenderbuffers	void	GLsizei|n;const GLuint *|renderbuffers
+GL	glDeleteSamplers	void	GLsizei|count;const GLuint *|samplers
+GL	glDeleteShader	void	GLuint|shader
+GL	glDeleteSync	void	GLsync|sync
+GL	glDeleteTextures	void	GLsizei|n;const GLuint *|textures
+GL	glDeleteTransformFeedbacks	void	GLsizei|n;const GLuint *|ids
+GL	glDeleteVertexArrays	void	GLsizei|n;const GLuint *|arrays
+GL	glDepthFunc	void	GLenum|func
+GL	glDepthMask	void	GLboolean|flag
+GL	glDepthRangef	void	GLfloat|n;GLfloat|f
+GL	glDetachShader	void	GLuint|program;GLuint|shader
+GL	glDisable	void	GLenum|cap
+GL	glDisableVertexAttribArray	void	GLuint|index
+GL	glDisablei	void	GLenum|target;GLuint|index
+GL	glDispatchCompute	void	GLuint|num_groups_x;GLuint|num_groups_y;GLuint|num_groups_z
+GL	glDispatchComputeIndirect	void	GLintptr|indirect
+GL	glDrawArrays	void	GLenum|mode;GLint|first;GLsizei|count
+GL	glDrawArraysIndirect	void	GLenum|mode;const void *|indirect
+GL	glDrawArraysInstanced	void	GLenum|mode;GLint|first;GLsizei|count;GLsizei|instancecount
+GL	glDrawBuffers	void	GLsizei|n;const GLenum *|bufs
+GL	glDrawElements	void	GLenum|mode;GLsizei|count;GLenum|type;const void *|indices
+GL	glDrawElementsBaseVertex	void	GLenum|mode;GLsizei|count;GLenum|type;const void *|indices;GLint|basevertex
+GL	glDrawElementsIndirect	void	GLenum|mode;GLenum|type;const void *|indirect
+GL	glDrawElementsInstanced	void	GLenum|mode;GLsizei|count;GLenum|type;const void *|indices;GLsizei|instancecount
+GL	glDrawElementsInstancedBaseVertex	void	GLenum|mode;GLsizei|count;GLenum|type;const void *|indices;GLsizei|instancecount;GLint|basevertex
+GL	glDrawRangeElements	void	GLenum|mode;GLuint|start;GLuint|end;GLsizei|count;GLenum|type;const void *|indices
+GL	glDrawRangeElementsBaseVertex	void	GLenum|mode;GLuint|start;GLuint|end;GLsizei|count;GLenum|type;const void *|indices;GLint|basevertex
+GL	glEnable	void	GLenum|cap
+GL	glEnableVertexAttribArray	void	GLuint|index
+GL	glEnablei	void	GLenum|target;GLuint|index
+GL	glEndQuery	void	GLenum|target
+GL	glEndTransformFeedback	void	
+GL	glFenceSync	GLsync	GLenum|condition;GLbitfield|flags
+GL	glFinish	void	
+GL	glFlush	void	
+GL	glFlushMappedBufferRange	void	GLenum|target;GLintptr|offset;GLsizeiptr|length
+GL	glFramebufferParameteri	void	GLenum|target;GLenum|pname;GLint|param
+GL	glFramebufferRenderbuffer	void	GLenum|target;GLenum|attachment;GLenum|renderbuffertarget;GLuint|renderbuffer
+GL	glFramebufferTexture	void	GLenum|target;GLenum|attachment;GLuint|texture;GLint|level
+GL	glFramebufferTexture2D	void	GLenum|target;GLenum|attachment;GLenum|textarget;GLuint|texture;GLint|level
+GL	glFramebufferTextureLayer	void	GLenum|target;GLenum|attachment;GLuint|texture;GLint|level;GLint|layer
+GL	glFrontFace	void	GLenum|mode
+GL	glGenBuffers	void	GLsizei|n;GLuint *|buffers
+GL	glGenFramebuffers	void	GLsizei|n;GLuint *|framebuffers
+GL	glGenProgramPipelines	void	GLsizei|n;GLuint *|pipelines
+GL	glGenQueries	void	GLsizei|n;GLuint *|ids
+GL	glGenRenderbuffers	void	GLsizei|n;GLuint *|renderbuffers
+GL	glGenSamplers	void	GLsizei|count;GLuint *|samplers
+GL	glGenTextures	void	GLsizei|n;GLuint *|textures
+GL	glGenTransformFeedbacks	void	GLsizei|n;GLuint *|ids
+GL	glGenVertexArrays	void	GLsizei|n;GLuint *|arrays
+GL	glGenerateMipmap	void	GLenum|target
+GL	glGetActiveAttrib	void	GLuint|program;GLuint|index;GLsizei|bufSize;GLsizei *|length;GLint *|size;GLenum *|type;GLchar *|name
+GL	glGetActiveUniform	void	GLuint|program;GLuint|index;GLsizei|bufSize;GLsizei *|length;GLint *|size;GLenum *|type;GLchar *|name
+GL	glGetActiveUniformBlockName	void	GLuint|program;GLuint|uniformBlockIndex;GLsizei|bufSize;GLsizei *|length;GLchar *|uniformBlockName
+GL	glGetActiveUniformBlockiv	void	GLuint|program;GLuint|uniformBlockIndex;GLenum|pname;GLint *|params
+GL	glGetActiveUniformsiv	void	GLuint|program;GLsizei|uniformCount;const GLuint *|uniformIndices;GLenum|pname;GLint *|params
+GL	glGetAttachedShaders	void	GLuint|program;GLsizei|maxCount;GLsizei *|count;GLuint *|shaders
+GL	glGetAttribLocation	GLint	GLuint|program;const GLchar *|name
+GL	glGetBooleani_v	void	GLenum|target;GLuint|index;GLboolean *|data
+GL	glGetBooleanv	void	GLenum|pname;GLboolean *|data
+GL	glGetBufferParameteri64v	void	GLenum|target;GLenum|pname;GLint64 *|params
+GL	glGetBufferParameteriv	void	GLenum|target;GLenum|pname;GLint *|params
+GL	glGetBufferPointerv	void	GLenum|target;GLenum|pname;void **|params
+GL	glGetDebugMessageLog	GLuint	GLuint|count;GLsizei|bufSize;GLenum *|sources;GLenum *|types;GLuint *|ids;GLenum *|severities;GLsizei *|lengths;GLchar *|messageLog
+GL	glGetError	GLenum	
+GL	glGetFloatv	void	GLenum|pname;GLfloat *|data
+GL	glGetFragDataLocation	GLint	GLuint|program;const GLchar *|name
+GL	glGetFramebufferAttachmentParameteriv	void	GLenum|target;GLenum|attachment;GLenum|pname;GLint *|params
+GL	glGetFramebufferParameteriv	void	GLenum|target;GLenum|pname;GLint *|params
+GL	glGetGraphicsResetStatus	GLenum	
+GL	glGetInteger64i_v	void	GLenum|target;GLuint|index;GLint64 *|data
+GL	glGetInteger64v	void	GLenum|pname;GLint64 *|data
+GL	glGetIntegeri_v	void	GLenum|target;GLuint|index;GLint *|data
+GL	glGetIntegerv	void	GLenum|pname;GLint *|data
+GL	glGetInternalformativ	void	GLenum|target;GLenum|internalformat;GLenum|pname;GLsizei|bufSize;GLint *|params
+GL	glGetMultisamplefv	void	GLenum|pname;GLuint|index;GLfloat *|val
+GL	glGetObjectLabel	void	GLenum|identifier;GLuint|name;GLsizei|bufSize;GLsizei *|length;GLchar *|label
+GL	glGetObjectPtrLabel	void	const void *|ptr;GLsizei|bufSize;GLsizei *|length;GLchar *|label
+GL	glGetPointerv	void	GLenum|pname;void **|params
+GL	glGetProgramBinary	void	GLuint|program;GLsizei|bufSize;GLsizei *|length;GLenum *|binaryFormat;void *|binary
+GL	glGetProgramInfoLog	void	GLuint|program;GLsizei|bufSize;GLsizei *|length;GLchar *|infoLog
+GL	glGetProgramInterfaceiv	void	GLuint|program;GLenum|programInterface;GLenum|pname;GLint *|params
+GL	glGetProgramPipelineInfoLog	void	GLuint|pipeline;GLsizei|bufSize;GLsizei *|length;GLchar *|infoLog
+GL	glGetProgramPipelineiv	void	GLuint|pipeline;GLenum|pname;GLint *|params
+GL	glGetProgramResourceIndex	GLuint	GLuint|program;GLenum|programInterface;const GLchar *|name
+GL	glGetProgramResourceLocation	GLint	GLuint|program;GLenum|programInterface;const GLchar *|name
+GL	glGetProgramResourceName	void	GLuint|program;GLenum|programInterface;GLuint|index;GLsizei|bufSize;GLsizei *|length;GLchar *|name
+GL	glGetProgramResourceiv	void	GLuint|program;GLenum|programInterface;GLuint|index;GLsizei|propCount;const GLenum *|props;GLsizei|bufSize;GLsizei *|length;GLint *|params
+GL	glGetProgramiv	void	GLuint|program;GLenum|pname;GLint *|params
+GL	glGetQueryObjectuiv	void	GLuint|id;GLenum|pname;GLuint *|params
+GL	glGetQueryiv	void	GLenum|target;GLenum|pname;GLint *|params
+GL	glGetRenderbufferParameteriv	void	GLenum|target;GLenum|pname;GLint *|params
+GL	glGetSamplerParameterIiv	void	GLuint|sampler;GLenum|pname;GLint *|params
+GL	glGetSamplerParameterIuiv	void	GLuint|sampler;GLenum|pname;GLuint *|params
+GL	glGetSamplerParameterfv	void	GLuint|sampler;GLenum|pname;GLfloat *|params
+GL	glGetSamplerParameteriv	void	GLuint|sampler;GLenum|pname;GLint *|params
+GL	glGetShaderInfoLog	void	GLuint|shader;GLsizei|bufSize;GLsizei *|length;GLchar *|infoLog
+GL	glGetShaderPrecisionFormat	void	GLenum|shadertype;GLenum|precisiontype;GLint *|range;GLint *|precision
+GL	glGetShaderSource	void	GLuint|shader;GLsizei|bufSize;GLsizei *|length;GLchar *|source
+GL	glGetShaderiv	void	GLuint|shader;GLenum|pname;GLint *|params
+GL	glGetString	const GLubyte *	GLenum|name
+GL	glGetStringi	const GLubyte *	GLenum|name;GLuint|index
+GL	glGetSynciv	void	GLsync|sync;GLenum|pname;GLsizei|bufSize;GLsizei *|length;GLint *|values
+GL	glGetTexLevelParameterfv	void	GLenum|target;GLint|level;GLenum|pname;GLfloat *|params
+GL	glGetTexLevelParameteriv	void	GLenum|target;GLint|level;GLenum|pname;GLint *|params
+GL	glGetTexParameterIiv	void	GLenum|target;GLenum|pname;GLint *|params
+GL	glGetTexParameterIuiv	void	GLenum|target;GLenum|pname;GLuint *|params
+GL	glGetTexParameterfv	void	GLenum|target;GLenum|pname;GLfloat *|params
+GL	glGetTexParameteriv	void	GLenum|target;GLenum|pname;GLint *|params
+GL	glGetTransformFeedbackVarying	void	GLuint|program;GLuint|index;GLsizei|bufSize;GLsizei *|length;GLsizei *|size;GLenum *|type;GLchar *|name
+GL	glGetUniformBlockIndex	GLuint	GLuint|program;const GLchar *|uniformBlockName
+GL	glGetUniformIndices	void	GLuint|program;GLsizei|uniformCount;const GLchar *const*|uniformNames;GLuint *|uniformIndices
+GL	glGetUniformLocation	GLint	GLuint|program;const GLchar *|name
+GL	glGetUniformfv	void	GLuint|program;GLint|location;GLfloat *|params
+GL	glGetUniformiv	void	GLuint|program;GLint|location;GLint *|params
+GL	glGetUniformuiv	void	GLuint|program;GLint|location;GLuint *|params
+GL	glGetVertexAttribIiv	void	GLuint|index;GLenum|pname;GLint *|params
+GL	glGetVertexAttribIuiv	void	GLuint|index;GLenum|pname;GLuint *|params
+GL	glGetVertexAttribPointerv	void	GLuint|index;GLenum|pname;void **|pointer
+GL	glGetVertexAttribfv	void	GLuint|index;GLenum|pname;GLfloat *|params
+GL	glGetVertexAttribiv	void	GLuint|index;GLenum|pname;GLint *|params
+GL	glGetnUniformfv	void	GLuint|program;GLint|location;GLsizei|bufSize;GLfloat *|params
+GL	glGetnUniformiv	void	GLuint|program;GLint|location;GLsizei|bufSize;GLint *|params
+GL	glGetnUniformuiv	void	GLuint|program;GLint|location;GLsizei|bufSize;GLuint *|params
+GL	glHint	void	GLenum|target;GLenum|mode
+GL	glInvalidateFramebuffer	void	GLenum|target;GLsizei|numAttachments;const GLenum *|attachments
+GL	glInvalidateSubFramebuffer	void	GLenum|target;GLsizei|numAttachments;const GLenum *|attachments;GLint|x;GLint|y;GLsizei|width;GLsizei|height
+GL	glIsBuffer	GLboolean	GLuint|buffer
+GL	glIsEnabled	GLboolean	GLenum|cap
+GL	glIsEnabledi	GLboolean	GLenum|target;GLuint|index
+GL	glIsFramebuffer	GLboolean	GLuint|framebuffer
+GL	glIsProgram	GLboolean	GLuint|program
+GL	glIsProgramPipeline	GLboolean	GLuint|pipeline
+GL	glIsQuery	GLboolean	GLuint|id
+GL	glIsRenderbuffer	GLboolean	GLuint|renderbuffer
+GL	glIsSampler	GLboolean	GLuint|sampler
+GL	glIsShader	GLboolean	GLuint|shader
+GL	glIsSync	GLboolean	GLsync|sync
+GL	glIsTexture	GLboolean	GLuint|texture
+GL	glIsTransformFeedback	GLboolean	GLuint|id
+GL	glIsVertexArray	GLboolean	GLuint|array
+GL	glLineWidth	void	GLfloat|width
+GL	glLinkProgram	void	GLuint|program
+GL	glMapBufferRange	void *	GLenum|target;GLintptr|offset;GLsizeiptr|length;GLbitfield|access
+GL	glMemoryBarrier	void	GLbitfield|barriers
+GL	glMemoryBarrierByRegion	void	GLbitfield|barriers
+GL	glMinSampleShading	void	GLfloat|value
+GL	glObjectLabel	void	GLenum|identifier;GLuint|name;GLsizei|length;const GLchar *|label
+GL	glObjectPtrLabel	void	const void *|ptr;GLsizei|length;const GLchar *|label
+GL	glPatchParameteri	void	GLenum|pname;GLint|value
+GL	glPauseTransformFeedback	void	
+GL	glPixelStorei	void	GLenum|pname;GLint|param
+GL	glPolygonOffset	void	GLfloat|factor;GLfloat|units
+GL	glPopDebugGroup	void	
+GL	glPrimitiveBoundingBox	void	GLfloat|minX;GLfloat|minY;GLfloat|minZ;GLfloat|minW;GLfloat|maxX;GLfloat|maxY;GLfloat|maxZ;GLfloat|maxW
+GL	glProgramBinary	void	GLuint|program;GLenum|binaryFormat;const void *|binary;GLsizei|length
+GL	glProgramParameteri	void	GLuint|program;GLenum|pname;GLint|value
+GL	glProgramUniform1f	void	GLuint|program;GLint|location;GLfloat|v0
+GL	glProgramUniform1fv	void	GLuint|program;GLint|location;GLsizei|count;const GLfloat *|value
+GL	glProgramUniform1i	void	GLuint|program;GLint|location;GLint|v0
+GL	glProgramUniform1iv	void	GLuint|program;GLint|location;GLsizei|count;const GLint *|value
+GL	glProgramUniform1ui	void	GLuint|program;GLint|location;GLuint|v0
+GL	glProgramUniform1uiv	void	GLuint|program;GLint|location;GLsizei|count;const GLuint *|value
+GL	glProgramUniform2f	void	GLuint|program;GLint|location;GLfloat|v0;GLfloat|v1
+GL	glProgramUniform2fv	void	GLuint|program;GLint|location;GLsizei|count;const GLfloat *|value
+GL	glProgramUniform2i	void	GLuint|program;GLint|location;GLint|v0;GLint|v1
+GL	glProgramUniform2iv	void	GLuint|program;GLint|location;GLsizei|count;const GLint *|value
+GL	glProgramUniform2ui	void	GLuint|program;GLint|location;GLuint|v0;GLuint|v1
+GL	glProgramUniform2uiv	void	GLuint|program;GLint|location;GLsizei|count;const GLuint *|value
+GL	glProgramUniform3f	void	GLuint|program;GLint|location;GLfloat|v0;GLfloat|v1;GLfloat|v2
+GL	glProgramUniform3fv	void	GLuint|program;GLint|location;GLsizei|count;const GLfloat *|value
+GL	glProgramUniform3i	void	GLuint|program;GLint|location;GLint|v0;GLint|v1;GLint|v2
+GL	glProgramUniform3iv	void	GLuint|program;GLint|location;GLsizei|count;const GLint *|value
+GL	glProgramUniform3ui	void	GLuint|program;GLint|location;GLuint|v0;GLuint|v1;GLuint|v2
+GL	glProgramUniform3uiv	void	GLuint|program;GLint|location;GLsizei|count;const GLuint *|value
+GL	glProgramUniform4f	void	GLuint|program;GLint|location;GLfloat|v0;GLfloat|v1;GLfloat|v2;GLfloat|v3
+GL	glProgramUniform4fv	void	GLuint|program;GLint|location;GLsizei|count;const GLfloat *|value
+GL	glProgramUniform4i	void	GLuint|program;GLint|location;GLint|v0;GLint|v1;GLint|v2;GLint|v3
+GL	glProgramUniform4iv	void	GLuint|program;GLint|location;GLsizei|count;const GLint *|value
+GL	glProgramUniform4ui	void	GLuint|program;GLint|location;GLuint|v0;GLuint|v1;GLuint|v2;GLuint|v3
+GL	glProgramUniform4uiv	void	GLuint|program;GLint|location;GLsizei|count;const GLuint *|value
+GL	glProgramUniformMatrix2fv	void	GLuint|program;GLint|location;GLsizei|count;GLboolean|transpose;const GLfloat *|value
+GL	glProgramUniformMatrix2x3fv	void	GLuint|program;GLint|location;GLsizei|count;GLboolean|transpose;const GLfloat *|value
+GL	glProgramUniformMatrix2x4fv	void	GLuint|program;GLint|location;GLsizei|count;GLboolean|transpose;const GLfloat *|value
+GL	glProgramUniformMatrix3fv	void	GLuint|program;GLint|location;GLsizei|count;GLboolean|transpose;const GLfloat *|value
+GL	glProgramUniformMatrix3x2fv	void	GLuint|program;GLint|location;GLsizei|count;GLboolean|transpose;const GLfloat *|value
+GL	glProgramUniformMatrix3x4fv	void	GLuint|program;GLint|location;GLsizei|count;GLboolean|transpose;const GLfloat *|value
+GL	glProgramUniformMatrix4fv	void	GLuint|program;GLint|location;GLsizei|count;GLboolean|transpose;const GLfloat *|value
+GL	glProgramUniformMatrix4x2fv	void	GLuint|program;GLint|location;GLsizei|count;GLboolean|transpose;const GLfloat *|value
+GL	glProgramUniformMatrix4x3fv	void	GLuint|program;GLint|location;GLsizei|count;GLboolean|transpose;const GLfloat *|value
+GL	glPushDebugGroup	void	GLenum|source;GLuint|id;GLsizei|length;const GLchar *|message
+GL	glReadBuffer	void	GLenum|src
+GL	glReadPixels	void	GLint|x;GLint|y;GLsizei|width;GLsizei|height;GLenum|format;GLenum|type;void *|pixels
+GL	glReadnPixels	void	GLint|x;GLint|y;GLsizei|width;GLsizei|height;GLenum|format;GLenum|type;GLsizei|bufSize;void *|data
+GL	glReleaseShaderCompiler	void	
+GL	glRenderbufferStorage	void	GLenum|target;GLenum|internalformat;GLsizei|width;GLsizei|height
+GL	glRenderbufferStorageMultisample	void	GLenum|target;GLsizei|samples;GLenum|internalformat;GLsizei|width;GLsizei|height
+GL	glResumeTransformFeedback	void	
+GL	glSampleCoverage	void	GLfloat|value;GLboolean|invert
+GL	glSampleMaski	void	GLuint|maskNumber;GLbitfield|mask
+GL	glSamplerParameterIiv	void	GLuint|sampler;GLenum|pname;const GLint *|param
+GL	glSamplerParameterIuiv	void	GLuint|sampler;GLenum|pname;const GLuint *|param
+GL	glSamplerParameterf	void	GLuint|sampler;GLenum|pname;GLfloat|param
+GL	glSamplerParameterfv	void	GLuint|sampler;GLenum|pname;const GLfloat *|param
+GL	glSamplerParameteri	void	GLuint|sampler;GLenum|pname;GLint|param
+GL	glSamplerParameteriv	void	GLuint|sampler;GLenum|pname;const GLint *|param
+GL	glScissor	void	GLint|x;GLint|y;GLsizei|width;GLsizei|height
+GL	glShaderBinary	void	GLsizei|count;const GLuint *|shaders;GLenum|binaryformat;const void *|binary;GLsizei|length
+GL	glShaderSource	void	GLuint|shader;GLsizei|count;const GLchar *const*|string;const GLint *|length
+GL	glStencilFunc	void	GLenum|func;GLint|ref;GLuint|mask
+GL	glStencilFuncSeparate	void	GLenum|face;GLenum|func;GLint|ref;GLuint|mask
+GL	glStencilMask	void	GLuint|mask
+GL	glStencilMaskSeparate	void	GLenum|face;GLuint|mask
+GL	glStencilOp	void	GLenum|fail;GLenum|zfail;GLenum|zpass
+GL	glStencilOpSeparate	void	GLenum|face;GLenum|sfail;GLenum|dpfail;GLenum|dppass
+GL	glTexBuffer	void	GLenum|target;GLenum|internalformat;GLuint|buffer
+GL	glTexBufferRange	void	GLenum|target;GLenum|internalformat;GLuint|buffer;GLintptr|offset;GLsizeiptr|size
+GL	glTexImage2D	void	GLenum|target;GLint|level;GLint|internalformat;GLsizei|width;GLsizei|height;GLint|border;GLenum|format;GLenum|type;const void *|pixels
+GL	glTexImage3D	void	GLenum|target;GLint|level;GLint|internalformat;GLsizei|width;GLsizei|height;GLsizei|depth;GLint|border;GLenum|format;GLenum|type;const void *|pixels
+GL	glTexParameterIiv	void	GLenum|target;GLenum|pname;const GLint *|params
+GL	glTexParameterIuiv	void	GLenum|target;GLenum|pname;const GLuint *|params
+GL	glTexParameterf	void	GLenum|target;GLenum|pname;GLfloat|param
+GL	glTexParameterfv	void	GLenum|target;GLenum|pname;const GLfloat *|params
+GL	glTexParameteri	void	GLenum|target;GLenum|pname;GLint|param
+GL	glTexParameteriv	void	GLenum|target;GLenum|pname;const GLint *|params
+GL	glTexStorage2D	void	GLenum|target;GLsizei|levels;GLenum|internalformat;GLsizei|width;GLsizei|height
+GL	glTexStorage2DMultisample	void	GLenum|target;GLsizei|samples;GLenum|internalformat;GLsizei|width;GLsizei|height;GLboolean|fixedsamplelocations
+GL	glTexStorage3D	void	GLenum|target;GLsizei|levels;GLenum|internalformat;GLsizei|width;GLsizei|height;GLsizei|depth
+GL	glTexStorage3DMultisample	void	GLenum|target;GLsizei|samples;GLenum|internalformat;GLsizei|width;GLsizei|height;GLsizei|depth;GLboolean|fixedsamplelocations
+GL	glTexSubImage2D	void	GLenum|target;GLint|level;GLint|xoffset;GLint|yoffset;GLsizei|width;GLsizei|height;GLenum|format;GLenum|type;const void *|pixels
+GL	glTexSubImage3D	void	GLenum|target;GLint|level;GLint|xoffset;GLint|yoffset;GLint|zoffset;GLsizei|width;GLsizei|height;GLsizei|depth;GLenum|format;GLenum|type;const void *|pixels
+GL	glTransformFeedbackVaryings	void	GLuint|program;GLsizei|count;const GLchar *const*|varyings;GLenum|bufferMode
+GL	glUniform1f	void	GLint|location;GLfloat|v0
+GL	glUniform1fv	void	GLint|location;GLsizei|count;const GLfloat *|value
+GL	glUniform1i	void	GLint|location;GLint|v0
+GL	glUniform1iv	void	GLint|location;GLsizei|count;const GLint *|value
+GL	glUniform1ui	void	GLint|location;GLuint|v0
+GL	glUniform1uiv	void	GLint|location;GLsizei|count;const GLuint *|value
+GL	glUniform2f	void	GLint|location;GLfloat|v0;GLfloat|v1
+GL	glUniform2fv	void	GLint|location;GLsizei|count;const GLfloat *|value
+GL	glUniform2i	void	GLint|location;GLint|v0;GLint|v1
+GL	glUniform2iv	void	GLint|location;GLsizei|count;const GLint *|value
+GL	glUniform2ui	void	GLint|location;GLuint|v0;GLuint|v1
+GL	glUniform2uiv	void	GLint|location;GLsizei|count;const GLuint *|value
+GL	glUniform3f	void	GLint|location;GLfloat|v0;GLfloat|v1;GLfloat|v2
+GL	glUniform3fv	void	GLint|location;GLsizei|count;const GLfloat *|value
+GL	glUniform3i	void	GLint|location;GLint|v0;GLint|v1;GLint|v2
+GL	glUniform3iv	void	GLint|location;GLsizei|count;const GLint *|value
+GL	glUniform3ui	void	GLint|location;GLuint|v0;GLuint|v1;GLuint|v2
+GL	glUniform3uiv	void	GLint|location;GLsizei|count;const GLuint *|value
+GL	glUniform4f	void	GLint|location;GLfloat|v0;GLfloat|v1;GLfloat|v2;GLfloat|v3
+GL	glUniform4fv	void	GLint|location;GLsizei|count;const GLfloat *|value
+GL	glUniform4i	void	GLint|location;GLint|v0;GLint|v1;GLint|v2;GLint|v3
+GL	glUniform4iv	void	GLint|location;GLsizei|count;const GLint *|value
+GL	glUniform4ui	void	GLint|location;GLuint|v0;GLuint|v1;GLuint|v2;GLuint|v3
+GL	glUniform4uiv	void	GLint|location;GLsizei|count;const GLuint *|value
+GL	glUniformBlockBinding	void	GLuint|program;GLuint|uniformBlockIndex;GLuint|uniformBlockBinding
+GL	glUniformMatrix2fv	void	GLint|location;GLsizei|count;GLboolean|transpose;const GLfloat *|value
+GL	glUniformMatrix2x3fv	void	GLint|location;GLsizei|count;GLboolean|transpose;const GLfloat *|value
+GL	glUniformMatrix2x4fv	void	GLint|location;GLsizei|count;GLboolean|transpose;const GLfloat *|value
+GL	glUniformMatrix3fv	void	GLint|location;GLsizei|count;GLboolean|transpose;const GLfloat *|value
+GL	glUniformMatrix3x2fv	void	GLint|location;GLsizei|count;GLboolean|transpose;const GLfloat *|value
+GL	glUniformMatrix3x4fv	void	GLint|location;GLsizei|count;GLboolean|transpose;const GLfloat *|value
+GL	glUniformMatrix4fv	void	GLint|location;GLsizei|count;GLboolean|transpose;const GLfloat *|value
+GL	glUniformMatrix4x2fv	void	GLint|location;GLsizei|count;GLboolean|transpose;const GLfloat *|value
+GL	glUniformMatrix4x3fv	void	GLint|location;GLsizei|count;GLboolean|transpose;const GLfloat *|value
+GL	glUnmapBuffer	GLboolean	GLenum|target
+GL	glUseProgram	void	GLuint|program
+GL	glUseProgramStages	void	GLuint|pipeline;GLbitfield|stages;GLuint|program
+GL	glValidateProgram	void	GLuint|program
+GL	glValidateProgramPipeline	void	GLuint|pipeline
+GL	glVertexAttrib1f	void	GLuint|index;GLfloat|x
+GL	glVertexAttrib1fv	void	GLuint|index;const GLfloat *|v
+GL	glVertexAttrib2f	void	GLuint|index;GLfloat|x;GLfloat|y
+GL	glVertexAttrib2fv	void	GLuint|index;const GLfloat *|v
+GL	glVertexAttrib3f	void	GLuint|index;GLfloat|x;GLfloat|y;GLfloat|z
+GL	glVertexAttrib3fv	void	GLuint|index;const GLfloat *|v
+GL	glVertexAttrib4f	void	GLuint|index;GLfloat|x;GLfloat|y;GLfloat|z;GLfloat|w
+GL	glVertexAttrib4fv	void	GLuint|index;const GLfloat *|v
+GL	glVertexAttribBinding	void	GLuint|attribindex;GLuint|bindingindex
+GL	glVertexAttribDivisor	void	GLuint|index;GLuint|divisor
+GL	glVertexAttribFormat	void	GLuint|attribindex;GLint|size;GLenum|type;GLboolean|normalized;GLuint|relativeoffset
+GL	glVertexAttribI4i	void	GLuint|index;GLint|x;GLint|y;GLint|z;GLint|w
+GL	glVertexAttribI4iv	void	GLuint|index;const GLint *|v
+GL	glVertexAttribI4ui	void	GLuint|index;GLuint|x;GLuint|y;GLuint|z;GLuint|w
+GL	glVertexAttribI4uiv	void	GLuint|index;const GLuint *|v
+GL	glVertexAttribIFormat	void	GLuint|attribindex;GLint|size;GLenum|type;GLuint|relativeoffset
+GL	glVertexAttribIPointer	void	GLuint|index;GLint|size;GLenum|type;GLsizei|stride;const void *|pointer
+GL	glVertexAttribPointer	void	GLuint|index;GLint|size;GLenum|type;GLboolean|normalized;GLsizei|stride;const void *|pointer
+GL	glVertexBindingDivisor	void	GLuint|bindingindex;GLuint|divisor
+GL	glViewport	void	GLint|x;GLint|y;GLsizei|width;GLsizei|height
+GL	glWaitSync	void	GLsync|sync;GLbitfield|flags;GLuint64|timeout
+EGL	eglBindAPI	EGLBoolean	EGLenum|api
+EGL	eglBindTexImage	EGLBoolean	EGLDisplay|dpy;EGLSurface|surface;EGLint|buffer
+EGL	eglChooseConfig	EGLBoolean	EGLDisplay|dpy;const EGLint *|attrib_list;EGLConfig *|configs;EGLint|config_size;EGLint *|num_config
+EGL	eglClientWaitSync	EGLint	EGLDisplay|dpy;EGLSync|sync;EGLint|flags;EGLTime|timeout
+EGL	eglCopyBuffers	EGLBoolean	EGLDisplay|dpy;EGLSurface|surface;EGLNativePixmapType|target
+EGL	eglCreateContext	EGLContext	EGLDisplay|dpy;EGLConfig|config;EGLContext|share_context;const EGLint *|attrib_list
+EGL	eglCreateImage	EGLImage	EGLDisplay|dpy;EGLContext|ctx;EGLenum|target;EGLClientBuffer|buffer;const EGLAttrib *|attrib_list
+EGL	eglCreatePbufferFromClientBuffer	EGLSurface	EGLDisplay|dpy;EGLenum|buftype;EGLClientBuffer|buffer;EGLConfig|config;const EGLint *|attrib_list
+EGL	eglCreatePbufferSurface	EGLSurface	EGLDisplay|dpy;EGLConfig|config;const EGLint *|attrib_list
+EGL	eglCreatePixmapSurface	EGLSurface	EGLDisplay|dpy;EGLConfig|config;EGLNativePixmapType|pixmap;const EGLint *|attrib_list
+EGL	eglCreatePlatformPixmapSurface	EGLSurface	EGLDisplay|dpy;EGLConfig|config;void *|native_pixmap;const EGLAttrib *|attrib_list
+EGL	eglCreatePlatformWindowSurface	EGLSurface	EGLDisplay|dpy;EGLConfig|config;void *|native_window;const EGLAttrib *|attrib_list
+EGL	eglCreateSync	EGLSync	EGLDisplay|dpy;EGLenum|type;const EGLAttrib *|attrib_list
+EGL	eglCreateWindowSurface	EGLSurface	EGLDisplay|dpy;EGLConfig|config;EGLNativeWindowType|win;const EGLint *|attrib_list
+EGL	eglDestroyContext	EGLBoolean	EGLDisplay|dpy;EGLContext|ctx
+EGL	eglDestroyImage	EGLBoolean	EGLDisplay|dpy;EGLImage|image
+EGL	eglDestroySurface	EGLBoolean	EGLDisplay|dpy;EGLSurface|surface
+EGL	eglDestroySync	EGLBoolean	EGLDisplay|dpy;EGLSync|sync
+EGL	eglGetConfigAttrib	EGLBoolean	EGLDisplay|dpy;EGLConfig|config;EGLint|attribute;EGLint *|value
+EGL	eglGetConfigs	EGLBoolean	EGLDisplay|dpy;EGLConfig *|configs;EGLint|config_size;EGLint *|num_config
+EGL	eglGetCurrentContext	EGLContext	
+EGL	eglGetCurrentDisplay	EGLDisplay	
+EGL	eglGetCurrentSurface	EGLSurface	EGLint|readdraw
+EGL	eglGetDisplay	EGLDisplay	EGLNativeDisplayType|display_id
+EGL	eglGetError	EGLint	
+EGL	eglGetPlatformDisplay	EGLDisplay	EGLenum|platform;void *|native_display;const EGLAttrib *|attrib_list
+EGL	eglGetProcAddress	__eglMustCastToProperFunctionPointerType	const char *|procname
+EGL	eglGetSyncAttrib	EGLBoolean	EGLDisplay|dpy;EGLSync|sync;EGLint|attribute;EGLAttrib *|value
+EGL	eglInitialize	EGLBoolean	EGLDisplay|dpy;EGLint *|major;EGLint *|minor
+EGL	eglMakeCurrent	EGLBoolean	EGLDisplay|dpy;EGLSurface|draw;EGLSurface|read;EGLContext|ctx
+EGL	eglQueryAPI	EGLenum	
+EGL	eglQueryContext	EGLBoolean	EGLDisplay|dpy;EGLContext|ctx;EGLint|attribute;EGLint *|value
+EGL	eglQueryString	const char *	EGLDisplay|dpy;EGLint|name
+EGL	eglQuerySurface	EGLBoolean	EGLDisplay|dpy;EGLSurface|surface;EGLint|attribute;EGLint *|value
+EGL	eglReleaseTexImage	EGLBoolean	EGLDisplay|dpy;EGLSurface|surface;EGLint|buffer
+EGL	eglReleaseThread	EGLBoolean	
+EGL	eglSurfaceAttrib	EGLBoolean	EGLDisplay|dpy;EGLSurface|surface;EGLint|attribute;EGLint|value
+EGL	eglSwapBuffers	EGLBoolean	EGLDisplay|dpy;EGLSurface|surface
+EGL	eglSwapInterval	EGLBoolean	EGLDisplay|dpy;EGLint|interval
+EGL	eglTerminate	EGLBoolean	EGLDisplay|dpy
+EGL	eglWaitClient	EGLBoolean	
+EGL	eglWaitGL	EGLBoolean	
+EGL	eglWaitNative	EGLBoolean	EGLint|engine
+EGL	eglWaitSync	EGLBoolean	EGLDisplay|dpy;EGLSync|sync;EGLint|flags

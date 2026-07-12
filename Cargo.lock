@@ -643,6 +643,20 @@ name = "dd-jit-darwin"
 version = "0.4.0"
 
 [[package]]
+name = "dd-shim-common"
+version = "0.1.0"
+dependencies = [
+ "dd-gpu",
+]
+
+[[package]]
+name = "dd-shim-gl"
+version = "0.1.0"
+dependencies = [
+ "dd-shim-common",
+]
+
+[[package]]
 name = "dd-term-core"
 version = "0.1.0"
 dependencies = [
