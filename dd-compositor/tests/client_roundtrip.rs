@@ -25,6 +25,8 @@ struct Client {
     pointer_id: u32,
     /// Serial from the last `wl_pointer.enter` (opcode 0) — echoed back in `set_shape`.
     enter_serial: Option<u32>,
+    /// Serial from the last `wl_pointer.button` (opcode 3) — a valid grab serial for move/resize.
+    button_serial: Option<u32>,
     /// The client's `xdg_surface` id, so `drain` can capture the configure serial for the ack handshake.
     xdg_id: u32,
     /// The client's `xdg_toplevel` id, so `drain` can decode `configure(w,h,states)`.
@@ -33,6 +35,17 @@ struct Client {
     last_xdg_configure_serial: Option<u32>,
     /// Decoded `(width, height, states)` from the last `xdg_toplevel.configure` (opcode 0).
     last_toplevel_configure: Option<(i32, i32, Vec<u32>)>,
+    /// Every `xdg_toplevel.configure` state array seen, so a test can assert a transient state (e.g.
+    /// `Resizing`) appeared even after a later configure cleared it.
+    toplevel_configure_states: Vec<Vec<u32>>,
+    /// The client's `zxdg_toplevel_decoration_v1` id, so `drain` can decode `configure(mode)`. 0 = none.
+    deco_id: u32,
+    /// The mode (1=client_side, 2=server_side) from the last decoration `configure` (opcode 0).
+    last_deco_mode: Option<u32>,
+    /// The client's `xdg_activation_token_v1` id, so `drain` can decode `done(token)`. 0 = none.
+    act_token_id: u32,
+    /// The token string from `xdg_activation_token_v1.done` (opcode 0).
+    act_token: Option<String>,
     /// The client's `xdg_popup` id, so `drain` can decode `configure(x,y,w,h)` (opcode 0).
     popup_id: u32,
     /// The popup's `xdg_surface` id, so `drain` can capture its configure serial for the ack handshake.
@@ -67,10 +80,16 @@ impl Client {
             globals: Default::default(),
             pointer_id: 0,
             enter_serial: None,
+            button_serial: None,
             xdg_id: 0,
             toplevel_id: 0,
             last_xdg_configure_serial: None,
             last_toplevel_configure: None,
+            toplevel_configure_states: Vec::new(),
+            deco_id: 0,
+            last_deco_mode: None,
+            act_token_id: 0,
+            act_token: None,
             popup_id: 0,
             popup_xdg_id: 0,
             last_popup_configure: None,
@@ -112,6 +131,15 @@ impl Client {
             } else if self.pointer_id != 0 && m.object == self.pointer_id && m.opcode == 0 {
                 // wl_pointer.enter(serial, surface, x, y): first arg is the serial.
                 self.enter_serial = Some(m.reader().u32());
+            } else if self.pointer_id != 0 && m.object == self.pointer_id && m.opcode == 3 {
+                // wl_pointer.button(serial, time, button, state): first arg is the grab serial.
+                self.button_serial = Some(m.reader().u32());
+            } else if self.deco_id != 0 && m.object == self.deco_id && m.opcode == 0 {
+                // zxdg_toplevel_decoration_v1.configure(mode): the negotiated decoration mode.
+                self.last_deco_mode = Some(m.reader().u32());
+            } else if self.act_token_id != 0 && m.object == self.act_token_id && m.opcode == 0 {
+                // xdg_activation_token_v1.done(token): the minted activation token string.
+                self.act_token = Some(m.reader().string());
             } else if self.xdg_id != 0 && m.object == self.xdg_id && m.opcode == 0 {
                 // xdg_surface.configure(serial): the serial the client must echo in ack_configure.
                 self.last_xdg_configure_serial = Some(m.reader().u32());
@@ -120,11 +148,12 @@ impl Client {
                 let mut r = m.reader();
                 let w = r.i32();
                 let h = r.i32();
-                let states = r
+                let states: Vec<u32> = r
                     .array()
                     .chunks_exact(4)
                     .map(|c| u32::from_ne_bytes([c[0], c[1], c[2], c[3]]))
                     .collect();
+                self.toplevel_configure_states.push(states.clone());
                 self.last_toplevel_configure = Some((w, h, states));
             } else if self.popup_id != 0 && m.object == self.popup_id && m.opcode == 0 {
                 // xdg_popup.configure(x, y, w, h): the placement the positioner resolved to.
@@ -197,6 +226,9 @@ fn globals_advertise_frame_presents_feedback_and_cursor_shape_wire() {
     let last_shape = Arc::new(Mutex::new(None));
     let host = Arc::new(Mutex::new(None));
     let set_host = Arc::new(Mutex::new(None));
+    let last_move = Arc::new(Mutex::new(None));
+    let last_resize = Arc::new(Mutex::new(None));
+    let last_raise = Arc::new(Mutex::new(None));
     let mut state = DdState::new(
         dh.clone(),
         Box::new(RecordingPresenter {
@@ -204,6 +236,9 @@ fn globals_advertise_frame_presents_feedback_and_cursor_shape_wire() {
             last_shape: last_shape.clone(),
             host: host.clone(),
             set_host: set_host.clone(),
+            last_move: last_move.clone(),
+            last_resize: last_resize.clone(),
+            last_raise: last_raise.clone(),
         }),
     );
 
@@ -242,6 +277,8 @@ fn globals_advertise_frame_presents_feedback_and_cursor_shape_wire() {
         "wp_presentation",
         "wp_cursor_shape_manager_v1",
         "wl_data_device_manager",
+        "zxdg_decoration_manager_v1",
+        "xdg_activation_v1",
     ] {
         assert!(
             c.globals.contains_key(iface),
@@ -628,6 +665,111 @@ fn globals_advertise_frame_presents_feedback_and_cursor_shape_wire() {
         Some(&[copy_mime.to_string()][..]),
         "a guest copy should queue its mime types for export to the host clipboard"
     );
+
+    // (9) Window-management UX: server-side-decoration negotiation, interactive move/resize grabs (serial
+    // validated against a real input event), and xdg-activation focus/raise. This is what GTK/Qt/SDL need
+    // to be usable windows.
+
+    // Focus the pointer on the toplevel and press the left button so the client captures a REAL grab serial
+    // (the implicit pointer-button grab). The compositor recorded this serial via note_input_serial, so a
+    // move/resize echoing it validates; a bogus serial does not.
+    state.pointer_motion(10.0, 10.0);
+    state.pointer_button(0x110, true); // BTN_LEFT down
+    display.flush_clients().unwrap();
+    c.drain();
+    let grab_serial = c
+        .button_serial
+        .expect("a button press should deliver a wl_pointer.button grab serial");
+
+    // (9a) zxdg_decoration_manager_v1. Enable the native-title-bar policy so BOTH modes are reachable and
+    // distinguishable (otherwise the borderless-host policy always answers CSD, and Smithay never re-sends
+    // an unchanged mode, so a set_mode round-trip would be unobservable). With SSD available: new_decoration
+    // defaults to server_side; set_mode(client_side) is honoured as CSD; set_mode(server_side) as SSD.
+    std::env::set_var("DD_DISPLAY_WINDOW_DECORATIONS", "1");
+    let deco_mgr = bind(&mut c, "zxdg_decoration_manager_v1", 1);
+    let deco = c.alloc();
+    c.conn
+        .send(&Message::new(deco_mgr, 1).u32(deco).u32(toplevel)); // get_toplevel_decoration(id, toplevel)
+    c.deco_id = deco;
+    pump!();
+    assert_eq!(
+        c.last_deco_mode,
+        Some(2),
+        "new_decoration should default to server_side when a native title bar is available"
+    );
+    c.last_deco_mode = None;
+    c.conn.send(&Message::new(deco, 1).u32(1)); // set_mode(client_side = 1)
+    pump!();
+    assert_eq!(c.last_deco_mode, Some(1), "set_mode(client_side) should be honoured as CSD");
+    c.last_deco_mode = None;
+    c.conn.send(&Message::new(deco, 1).u32(2)); // set_mode(server_side = 2)
+    pump!();
+    assert_eq!(
+        c.last_deco_mode,
+        Some(2),
+        "set_mode(server_side) should be honoured as SSD when a native title bar exists"
+    );
+
+    // (9b) xdg_toplevel.move: a valid grab serial reaches begin_interactive_move for the toplevel's surface.
+    *last_move.lock().unwrap() = None;
+    c.conn.send(&Message::new(toplevel, 5).u32(seat).u32(grab_serial)); // move(seat, serial)
+    pump!();
+    assert_eq!(
+        *last_move.lock().unwrap(),
+        Some(surface),
+        "a serial-valid move grab should reach begin_interactive_move for the surface"
+    );
+    // A spoofed/stale serial must be rejected (no native drag started).
+    *last_move.lock().unwrap() = None;
+    c.conn
+        .send(&Message::new(toplevel, 5).u32(seat).u32(0xDEAD_BEEF)); // move with a bogus serial
+    pump!();
+    assert_eq!(
+        *last_move.lock().unwrap(),
+        None,
+        "a move grab with an unrecognised serial must be ignored"
+    );
+
+    // (9c) xdg_toplevel.resize(bottom_right): reaches begin_interactive_resize with the edge bitmask (10),
+    // and the client first receives a configure carrying the Resizing (3) state.
+    c.toplevel_configure_states.clear();
+    *last_resize.lock().unwrap() = None;
+    c.conn
+        .send(&Message::new(toplevel, 6).u32(seat).u32(grab_serial).u32(10)); // resize(seat, serial, bottom_right=10)
+    pump!();
+    assert_eq!(
+        *last_resize.lock().unwrap(),
+        Some((surface, 10)),
+        "a resize grab should reach begin_interactive_resize with the bottom_right edge bitmask"
+    );
+    assert!(
+        c.toplevel_configure_states.iter().any(|s| s.contains(&3)),
+        "an interactive resize should send a configure carrying the Resizing (3) state; saw {:?}",
+        c.toplevel_configure_states
+    );
+
+    // (9d) xdg_activation_v1: mint a token (set_serial/set_surface/commit → done) then activate(token,
+    // surface). The compositor focuses + raises the target window, so raise_window reaches the Presenter.
+    let act = bind(&mut c, "xdg_activation_v1", 1);
+    let token = c.alloc();
+    c.conn.send(&Message::new(act, 1).u32(token)); // get_activation_token(id)
+    c.act_token_id = token;
+    c.conn.send(&Message::new(token, 0).u32(grab_serial).u32(seat)); // set_serial(serial, seat)
+    c.conn.send(&Message::new(token, 2).u32(surface)); // set_surface(surface)
+    c.conn.send(&Message::new(token, 3)); // commit
+    pump!();
+    let tok = c
+        .act_token
+        .clone()
+        .expect("token commit should reply with xdg_activation_token_v1.done(token)");
+    *last_raise.lock().unwrap() = None;
+    c.conn.send(&Message::new(act, 2).string(&tok).u32(surface)); // activate(token, surface)
+    pump!();
+    assert_eq!(
+        *last_raise.lock().unwrap(),
+        Some(surface),
+        "activating a surface should raise its window via the Presenter"
+    );
 }
 
 /// A `Presenter` that records the last `set_cursor_shape` (so the cursor-shape wiring can be asserted)
@@ -642,6 +784,12 @@ struct RecordingPresenter {
     host: Arc<Mutex<Option<(String, Vec<u8>, u64)>>>,
     /// Captures the last `clipboard_set_host(mime, bytes)` — the guest→host copy the compositor exported.
     set_host: Arc<Mutex<Option<(String, Vec<u8>)>>>,
+    /// The sid of the last `begin_interactive_move` (xdg_toplevel.move grab reaching the Presenter).
+    last_move: Arc<Mutex<Option<u32>>>,
+    /// The `(sid, edges)` of the last `begin_interactive_resize` (xdg_toplevel.resize grab).
+    last_resize: Arc<Mutex<Option<(u32, u32)>>>,
+    /// The sid of the last `raise_window` (an xdg_activation activation reaching the Presenter).
+    last_raise: Arc<Mutex<Option<u32>>>,
 }
 impl dd_display::present::Presenter for RecordingPresenter {
     fn present(&mut self, _surf: &dd_display::present::SurfaceBuffer) -> bool {
@@ -671,6 +819,15 @@ impl dd_display::present::Presenter for RecordingPresenter {
     }
     fn clipboard_host_generation(&self) -> u64 {
         self.host.lock().unwrap().as_ref().map(|(_, _, g)| *g).unwrap_or(0)
+    }
+    fn begin_interactive_move(&self, sid: u32) {
+        *self.last_move.lock().unwrap() = Some(sid);
+    }
+    fn begin_interactive_resize(&self, sid: u32, edges: u32) {
+        *self.last_resize.lock().unwrap() = Some((sid, edges));
+    }
+    fn raise_window(&self, sid: u32) {
+        *self.last_raise.lock().unwrap() = Some(sid);
     }
 }
 

@@ -37,7 +37,7 @@
 //! `dd.app/Contents/Frameworks` and link with `-rpath @executable_path/../Frameworks` (or statically
 //! link it). No guest/user install is ever required.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::time::Instant;
 
 use dd_display::present::Presenter;
@@ -57,7 +57,7 @@ use smithay::{
             DisplayHandle, Resource,
         },
     },
-    utils::{Size, SERIAL_COUNTER},
+    utils::{Serial, Size, SERIAL_COUNTER},
     wayland::{
         compositor::{CompositorClientState, CompositorState},
         cursor_shape::CursorShapeManagerState,
@@ -65,9 +65,10 @@ use smithay::{
         output::OutputManagerState,
         presentation::PresentationState,
         selection::data_device::DataDeviceState,
-        shell::xdg::{PopupSurface, XdgShellState},
+        shell::xdg::{decoration::XdgDecorationState, PopupSurface, XdgShellState},
         shm::ShmState,
         viewporter::ViewporterState,
+        xdg_activation::XdgActivationState,
     },
 };
 
@@ -105,6 +106,10 @@ pub struct DdState {
     pub compositor: CompositorState,
     pub shm: ShmState,
     pub xdg_shell: XdgShellState,
+    /// `zxdg_decoration_manager_v1`: server-side-vs-client-side decoration negotiation (see handlers/xdg.rs).
+    pub xdg_decoration: XdgDecorationState,
+    /// `xdg_activation_v1`: focus/raise-on-request via activation tokens (see handlers/xdg.rs).
+    pub xdg_activation: XdgActivationState,
     pub seat_state: SeatState<Self>,
     pub output_manager: OutputManagerState,
     pub viewporter: ViewporterState,
@@ -129,6 +134,12 @@ pub struct DdState {
     pub titles: HashMap<u32, String>,
     /// Last pointer location in logical/point space (Cocoa delivers point-space coords).
     pub ptr_loc: (f64, f64),
+    /// Recent input-event serials the compositor issued (pointer button / key presses), newest last,
+    /// bounded. An `xdg_toplevel.move`/`resize` grab must echo the serial of the input event that began
+    /// it (the implicit pointer-button grab), so [`DdState::is_recent_input_serial`] validates the
+    /// request against this window — rejecting a client that tries to start a drag without a real user
+    /// gesture. The seat input path records each press via [`DdState::note_input_serial`].
+    pub(crate) recent_serials: VecDeque<Serial>,
 
     /// Last committed `wl_shm` buffer per surface (`sid` → buffer). A subsurface or popup that redraws
     /// only occasionally does not re-attach a buffer every parent frame, yet its pixels must persist in
@@ -184,6 +195,13 @@ impl DdState {
                 WmCapabilities::WindowMenu,
             ],
         );
+        // zxdg_decoration_manager_v1: lets a client (Qt/GTK) negotiate server-side vs client-side window
+        // decorations. Our policy honours the client's request within what the host window can render and
+        // defaults to the native macOS titlebar seam (DD_DISPLAY_WINDOW_DECORATIONS) — see handlers/xdg.rs.
+        let xdg_decoration = XdgDecorationState::new::<Self>(&dh);
+        // xdg_activation_v1: an app can present an activation token to ask the compositor to focus/raise a
+        // toplevel (e.g. a launcher activating the window it spawned, or a background tab raising itself).
+        let xdg_activation = XdgActivationState::new::<Self>(&dh);
         let viewporter = ViewporterState::new::<Self>(&dh); // wp_viewporter
         // wp_presentation: advertise the GUEST's CLOCK_MONOTONIC id (Linux == 1), NOT the host macOS
         // libc value, so the client interprets our `presented` timestamps in its own clock domain.
@@ -231,6 +249,8 @@ impl DdState {
             compositor,
             shm,
             xdg_shell,
+            xdg_decoration,
+            xdg_activation,
             seat_state,
             output_manager,
             viewporter,
@@ -246,6 +266,7 @@ impl DdState {
             focus: None,
             titles: HashMap::new(),
             ptr_loc: (0.0, 0.0),
+            recent_serials: VecDeque::new(),
             buffers: HashMap::new(),
             popup_grabs: Vec::new(),
             last_cfg: None,
@@ -260,6 +281,24 @@ impl DdState {
     /// Milliseconds since construction, the timestamp domain for `wl_callback.done` / input events.
     pub(crate) fn now_ms(&self) -> u32 {
         self.start.elapsed().as_millis() as u32
+    }
+
+    /// Record an input-event serial the seat just issued (a pointer button or key press), so a later
+    /// `xdg_toplevel.move`/`resize` (or any serial-gated grab) can be validated as backed by a real user
+    /// gesture. Bounded so the window can't grow without limit under sustained input.
+    pub(crate) fn note_input_serial(&mut self, serial: Serial) {
+        const MAX: usize = 64;
+        if self.recent_serials.len() >= MAX {
+            self.recent_serials.pop_front();
+        }
+        self.recent_serials.push_back(serial);
+    }
+
+    /// Whether `serial` matches a recently issued input event — the guard on interactive move/resize grabs.
+    /// A client MUST echo the serial of the pointer-button press that began the drag; anything else (a
+    /// spoofed or stale serial) is rejected, so a window can't yank itself around without user input.
+    pub(crate) fn is_recent_input_serial(&self, serial: Serial) -> bool {
+        self.recent_serials.contains(&serial)
     }
 
     /// The output's logical size (device mode divided by the integer scale) — the bounds a maximized or

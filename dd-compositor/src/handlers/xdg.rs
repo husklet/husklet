@@ -15,15 +15,22 @@
 
 use smithay::{
     reexports::{
-        wayland_protocols::xdg::shell::server::xdg_toplevel::{self, State as XdgState},
+        wayland_protocols::xdg::{
+            decoration::zv1::server::zxdg_toplevel_decoration_v1::Mode as DecorationMode,
+            shell::server::xdg_toplevel::{self, State as XdgState},
+        },
         wayland_server::protocol::{wl_output::WlOutput, wl_seat::WlSeat, wl_surface::WlSurface},
     },
     utils::{Logical, Point, Rectangle, Serial, Size},
     wayland::{
         compositor::with_states,
         shell::xdg::{
+            decoration::XdgDecorationHandler,
             Configure, PopupSurface, PositionerState, SurfaceCachedState, ToplevelSurface,
             XdgPopupSurfaceData, XdgShellHandler, XdgShellState, XdgToplevelSurfaceData,
+        },
+        xdg_activation::{
+            XdgActivationHandler, XdgActivationState, XdgActivationToken, XdgActivationTokenData,
         },
     },
 };
@@ -61,24 +68,34 @@ impl XdgShellHandler for DdState {
     fn app_id_changed(&mut self, _surface: ToplevelSurface) {}
 
     /// `xdg_toplevel.move(seat, serial)`: the client asks the compositor to start a user-driven window
-    /// drag. Turn it into a HOST NSWindow drag via the Presenter — invoked ONLY on an explicit request
-    /// (the request-gated alternative to blanket movable-by-background).
-    fn move_request(&mut self, surface: ToplevelSurface, _seat: WlSeat, _serial: Serial) {
+    /// drag. Validate `serial` against a recent input event (the implicit pointer-button grab that begins
+    /// the drag) so a window can't move itself without a real gesture, then turn it into a HOST NSWindow
+    /// drag via the Presenter — the request-gated alternative to blanket movable-by-background.
+    fn move_request(&mut self, surface: ToplevelSurface, _seat: WlSeat, serial: Serial) {
+        if !self.is_recent_input_serial(serial) {
+            return; // stale/spoofed serial: ignore (the xdg-shell "may be ignored" path).
+        }
         self.presenter
             .begin_interactive_move(surface_id(surface.wl_surface()));
     }
 
-    /// `xdg_toplevel.resize(seat, serial, edges)`: enter an interactive resize. Mark the toplevel
-    /// `Resizing` (+ `Activated`) and re-send its current size so the client knows a resize is in
-    /// progress; subsequent host window-edge drags reflow it via [`DdState::maybe_resize_focused`], and
-    /// [`DdState::end_interactive_resize`] clears the state when the drag ends.
+    /// `xdg_toplevel.resize(seat, serial, edges)`: begin an interactive edge/corner resize. Validate the
+    /// grab serial, mark the toplevel `Resizing` (+ `Activated`) and configure so the client knows a resize
+    /// is in progress, then drive a HOST NSWindow resize anchored on the grabbed edge via the Presenter
+    /// ([`Presenter::begin_interactive_resize`], which blocks for the gesture on the windowed backend). When
+    /// the gesture ends, [`DdState::finish_interactive_resize`] clears `Resizing` and reconfigures at the
+    /// final on-screen size (the platform loop's [`DdState::maybe_resize_focused`] also reflows live-edge
+    /// drags that go through the native title bar instead).
     fn resize_request(
         &mut self,
         surface: ToplevelSurface,
         _seat: WlSeat,
-        _serial: Serial,
-        _edges: xdg_toplevel::ResizeEdge,
+        serial: Serial,
+        edges: xdg_toplevel::ResizeEdge,
     ) {
+        if !self.is_recent_input_serial(serial) {
+            return; // stale/spoofed serial: ignore.
+        }
         let (w, h) = self.toplevel_hint_size(&surface);
         surface.with_pending_state(|s| {
             s.size = Some((w, h).into());
@@ -86,6 +103,12 @@ impl XdgShellHandler for DdState {
             s.states.set(XdgState::Activated);
         });
         surface.send_configure();
+        // Run the host-side resize (blocks for the drag on Cocoa; a no-op on the headless presenter), then
+        // leave resize mode at the final size. `edges` IS the resize_edge bitmask (top=1/bottom=2/left=4/
+        // right=8, corner = OR of two), so the Presenter can anchor the opposite edge.
+        self.presenter
+            .begin_interactive_resize(surface_id(surface.wl_surface()), u32::from(edges));
+        self.finish_interactive_resize(&surface);
     }
 
     /// `set_maximized`: MUST answer with a configure carrying `Maximized` so the client repaints at the
@@ -222,6 +245,76 @@ impl XdgShellHandler for DdState {
     }
 }
 
+// ---- zxdg_decoration_manager_v1: server-side vs client-side decoration negotiation -------------------
+//
+// Toolkits split on decorations: Chrome and GTK draw their own client-side decorations (CSD — the app
+// paints its title bar into the surface), while many Qt/GTK apps ask the compositor for server-side
+// decorations (SSD). Our host window is borderless by default (the guest's CSD fills it), and opts into a
+// native macOS title bar only when DD_DISPLAY_WINDOW_DECORATIONS is set (the `present_cocoa` seam). So our
+// policy honours the client's requested mode WHERE THE HOST WINDOW CAN RENDER IT: CSD is always granted
+// (the borderless window shows the client's own decorations); SSD is granted only when the native title
+// bar exists, otherwise we answer CSD (a truthful mode the client can actually draw) rather than promising
+// server decorations we won't paint. This is exactly what a client needs to avoid a double title bar.
+impl XdgDecorationHandler for DdState {
+    /// The client created a decoration object without stating a preference yet: answer with our default
+    /// (SSD when the native title bar is enabled, else CSD).
+    fn new_decoration(&mut self, toplevel: ToplevelSurface) {
+        self.configure_decoration(&toplevel, None);
+    }
+
+    /// The client asked for a specific mode (`set_mode`): honour it within what the host window can render.
+    fn request_mode(&mut self, toplevel: ToplevelSurface, mode: DecorationMode) {
+        self.configure_decoration(&toplevel, Some(mode));
+    }
+
+    /// The client dropped its preference (`unset_mode`): fall back to our default.
+    fn unset_mode(&mut self, toplevel: ToplevelSurface) {
+        self.configure_decoration(&toplevel, None);
+    }
+}
+
+// ---- xdg_activation_v1: focus/raise on request ------------------------------------------------------
+//
+// A client presents an activation token (minted by another surface, carrying the input serial + seat that
+// justified it) and asks for a toplevel to be activated. Compositors may refuse tokens without a recent
+// serial to defeat focus-stealing; our single-window-per-surface host has no cross-app focus-steal risk and
+// no notion of "deny focus", so we honour every activation by focusing + raising the target window — which
+// is what a launcher-spawned window, or an app raising its own window, expects.
+impl XdgActivationHandler for DdState {
+    fn activation_state(&mut self) -> &mut XdgActivationState {
+        &mut self.xdg_activation
+    }
+
+    fn request_activation(
+        &mut self,
+        _token: XdgActivationToken,
+        _token_data: XdgActivationTokenData,
+        surface: WlSurface,
+    ) {
+        self.activate_surface(surface);
+    }
+}
+
+impl DdState {
+    /// Resolve `requested` against what the host window can actually render and send the decoration
+    /// `configure(mode)` (Smithay emits it from `send_configure` when `decoration_mode` changes). See the
+    /// policy note above the [`XdgDecorationHandler`] impl.
+    fn configure_decoration(&mut self, toplevel: &ToplevelSurface, requested: Option<DecorationMode>) {
+        let ssd_available = std::env::var_os("DD_DISPLAY_WINDOW_DECORATIONS").is_some();
+        let mode = match requested {
+            Some(DecorationMode::ClientSide) => DecorationMode::ClientSide,
+            Some(DecorationMode::ServerSide) if ssd_available => DecorationMode::ServerSide,
+            // SSD requested but no native title bar to draw, or no explicit preference: use our default.
+            _ if ssd_available => DecorationMode::ServerSide,
+            _ => DecorationMode::ClientSide,
+        };
+        toplevel.with_pending_state(|s| {
+            s.decoration_mode = Some(mode);
+        });
+        toplevel.send_configure();
+    }
+}
+
 impl DdState {
     /// The host window backing the focused toplevel was resized by the user: reconfigure the focused
     /// toplevel to the live content size so the client repaints at the new size. Debounced — the first
@@ -285,6 +378,41 @@ impl DdState {
             s.states.set(XdgState::Activated);
         });
         toplevel.send_configure();
+    }
+
+    /// Finish a client-initiated interactive resize (the counterpart to [`Self::resize_request`]): clear
+    /// `Resizing` and reconfigure `toplevel` at the final on-screen content size, clamped to its
+    /// `set_min_size`/`set_max_size`. Because [`Presenter::begin_interactive_resize`] owns the pointer for
+    /// the whole drag on the windowed backend (the platform loop is paused, so `maybe_resize_focused` does
+    /// not run mid-gesture), this is where the guest is told the window's new size once the drag ends.
+    pub(crate) fn finish_interactive_resize(&mut self, toplevel: &ToplevelSurface) {
+        let (w, h) = self.toplevel_hint_size(toplevel);
+        let (min, max) = toplevel_min_max(toplevel);
+        let w = clamp_axis(w, min.0, max.0);
+        let h = clamp_axis(h, min.1, max.1);
+        toplevel.with_pending_state(|s| {
+            s.states.unset(XdgState::Resizing);
+            s.states.set(XdgState::Activated);
+            s.size = Some((w, h).into());
+        });
+        toplevel.send_configure();
+        // Adopt the size so the loop's debounced `maybe_resize_focused` doesn't emit a duplicate configure.
+        self.last_cfg = Some((w, h));
+    }
+
+    /// Focus and raise the toplevel backing `surface` — the effect of an `xdg_activation_v1` activation
+    /// request (or any compositor-driven "bring this window to the front"). Raises the host NSWindow via the
+    /// Presenter, takes keyboard focus (which also moves the clipboard/data-device focus), and re-sends an
+    /// `Activated` configure so the client repaints as focused.
+    pub(crate) fn activate_surface(&mut self, surface: WlSurface) {
+        self.presenter.raise_window(surface_id(&surface));
+        if let Some(toplevel) = self.toplevel_for_surface(&surface) {
+            toplevel.with_pending_state(|s| {
+                s.states.set(XdgState::Activated);
+            });
+            toplevel.send_configure();
+        }
+        self.focus_surface(surface);
     }
 
     /// Ask the client owning `surface` to close (`xdg_toplevel.close`). The host window-manager close

@@ -106,6 +106,16 @@ pub trait Presenter {
     /// the client actually requests a move, so it is the precise alternative to making every window blindly
     /// movable-by-background. Default: no native window to move.
     fn begin_interactive_move(&self, _sid: u32) {}
+    /// The Wayland client issued `xdg_toplevel.resize` for surface `sid` (a user-initiated window edge/corner
+    /// drag). `edges` is the `xdg_toplevel.resize_edge` bitmask (top=1, bottom=2, left=4, right=8; a corner is
+    /// the OR of two, e.g. bottom_right=10). A windowed presenter should start a native, host-driven resize of
+    /// that window, anchoring the opposite edge so the requested edge/corner tracks the pointer. Invoked ONLY
+    /// on an explicit client request. Default: no native window to resize.
+    fn begin_interactive_resize(&self, _sid: u32, _edges: u32) {}
+    /// The client asked (via `xdg_activation_v1`) to have surface `sid` focused/raised — e.g. a launcher
+    /// activating the window it spawned, or an app raising itself. A windowed presenter should bring that
+    /// window to the front (and, if appropriate, make it key). Default: no native window to raise.
+    fn raise_window(&self, _sid: u32) {}
     /// The client picked a themed pointer shape via `wp_cursor_shape_device_v1.set_shape`. `shape` is the
     /// `wp_cursor_shape_device_v1.shape` enum (1=default, 4=pointer, 9=text, 16=grab, …). A windowed
     /// presenter maps it to the matching host cursor (e.g. `NSCursor`). Default: no native cursor to set.

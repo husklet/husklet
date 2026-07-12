@@ -27,8 +27,8 @@ use objc2_app_kit::{
     NSWindowDelegate, NSWindowOcclusionState, NSWindowStyleMask,
 };
 use objc2_foundation::{
-    MainThreadMarker, NSData, NSDefaultRunLoopMode, NSDictionary, NSInteger, NSPoint, NSRect, NSSize,
-    NSString, NSTimeInterval,
+    MainThreadMarker, NSData, NSDate, NSDefaultRunLoopMode, NSDictionary, NSInteger, NSPoint, NSRect,
+    NSSize, NSString, NSTimeInterval,
 };
 use objc2_metal::{
     MTLBlitCommandEncoder, MTLClearColor, MTLCommandBuffer, MTLCommandEncoder, MTLCommandQueue,
@@ -420,6 +420,18 @@ impl Presenter for CocoaPresenter {
     fn begin_interactive_move(&self, sid: u32) {
         if let Some(w) = self.wins.get(&sid) {
             perform_window_drag(self.mtm, &w.window);
+        }
+    }
+
+    fn begin_interactive_resize(&self, sid: u32, edges: u32) {
+        if let Some(w) = self.wins.get(&sid) {
+            perform_window_resize(self.mtm, &w.window, edges);
+        }
+    }
+
+    fn raise_window(&self, sid: u32) {
+        if let Some(w) = self.wins.get(&sid) {
+            w.window.makeKeyAndOrderFront(None);
         }
     }
 
@@ -1102,6 +1114,18 @@ impl Presenter for MetalPresenter {
         }
     }
 
+    fn begin_interactive_resize(&self, sid: u32, edges: u32) {
+        if let Some(w) = self.wins.get(&sid) {
+            perform_window_resize(self.mtm, &w.window, edges);
+        }
+    }
+
+    fn raise_window(&self, sid: u32) {
+        if let Some(w) = self.wins.get(&sid) {
+            w.window.makeKeyAndOrderFront(None);
+        }
+    }
+
     fn set_cursor_shape(&self, shape: u32) {
         apply_cursor_shape(shape);
     }
@@ -1229,6 +1253,71 @@ fn perform_window_drag(mtm: MainThreadMarker, window: &NSWindow) {
     let app = NSApplication::sharedApplication(mtm);
     if let Some(ev) = app.currentEvent() {
         window.performWindowDragWithEvent(&ev);
+    }
+}
+
+/// Start a native, host-driven window resize for `window` in response to `xdg_toplevel.resize`. AppKit has
+/// no public "begin resize with event" analogue to `performWindowDragWithEvent:`, so we run a bounded modal
+/// tracking loop (the same primitive AppKit uses internally): while the mouse button the client is dragging
+/// stays down, each `LeftMouseDragged` recomputes the window frame from the pointer delta, anchoring the
+/// edge OPPOSITE the grabbed one so the requested edge — or a corner (two bits) — tracks the pointer; the
+/// loop ends on `LeftMouseUp`. This is the request-gated counterpart to `perform_window_drag`, and holding
+/// the pointer here for the gesture's duration is the correct Wayland semantics (the compositor owns the
+/// pointer during an interactive resize, so the guest expects configures, not further button events).
+///
+/// `edges` is the `xdg_toplevel.resize_edge` bitmask: top=1, bottom=2, left=4, right=8 (corner = OR of two).
+/// AppKit's coordinate space is bottom-left origin with +y upward, which the top/bottom arithmetic honours
+/// (dragging the visual TOP edge upward grows height with the bottom fixed; the visual BOTTOM edge moves the
+/// origin). The window size is floored so it can't collapse; the guest clamps further via `set_min_size`
+/// once the post-resize `window_content_size` reflow (the loop's `maybe_resize`) sends the new configure.
+fn perform_window_resize(mtm: MainThreadMarker, window: &NSWindow, edges: u32) {
+    let grab_top = edges & 1 != 0;
+    let grab_bottom = edges & 2 != 0;
+    let grab_left = edges & 4 != 0;
+    let grab_right = edges & 8 != 0;
+    if !(grab_top || grab_bottom || grab_left || grab_right) {
+        return; // resize_edge "none": there is no edge to track.
+    }
+    let app = NSApplication::sharedApplication(mtm);
+    let start_mouse = unsafe { NSEvent::mouseLocation() }; // screen coords, +y up
+    let start = window.frame();
+    const MIN: f64 = 80.0;
+    let mask = NSEventMask::LeftMouseDragged.union(NSEventMask::LeftMouseUp);
+    let until = unsafe { NSDate::distantFuture() };
+    loop {
+        let ev = unsafe {
+            app.nextEventMatchingMask_untilDate_inMode_dequeue(
+                mask,
+                Some(&until),
+                NSDefaultRunLoopMode,
+                true,
+            )
+        };
+        let Some(ev) = ev else { break };
+        if unsafe { ev.r#type() } == NSEventType::LeftMouseUp {
+            break;
+        }
+        let now = unsafe { NSEvent::mouseLocation() };
+        let dx = now.x - start_mouse.x;
+        let dy = now.y - start_mouse.y;
+        let mut f = start;
+        if grab_right {
+            f.size.width = (start.size.width + dx).max(MIN);
+        }
+        if grab_left {
+            let w = (start.size.width - dx).max(MIN);
+            f.origin.x = start.origin.x + (start.size.width - w); // keep the right edge anchored
+            f.size.width = w;
+        }
+        if grab_top {
+            f.size.height = (start.size.height + dy).max(MIN); // bottom anchored, top follows +y
+        }
+        if grab_bottom {
+            let h = (start.size.height - dy).max(MIN);
+            f.origin.y = start.origin.y + (start.size.height - h); // keep the top edge anchored
+            f.size.height = h;
+        }
+        window.setFrame_display(f, true);
     }
 }
 

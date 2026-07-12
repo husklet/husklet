@@ -79,6 +79,11 @@ impl DdState {
         use smithay::backend::input::ButtonState;
         let ptr = self.pointer.clone();
         let serial = SERIAL_COUNTER.next_serial();
+        // A button press is the start of an implicit pointer grab: record its serial so a subsequent
+        // xdg_toplevel.move/resize carrying it validates as a real user gesture (handlers/xdg.rs).
+        if pressed {
+            self.note_input_serial(serial);
+        }
         let time = self.now_ms();
         ptr.button(
             self,
@@ -128,6 +133,10 @@ impl DdState {
         use smithay::backend::input::KeyState;
         let kbd = self.keyboard.clone();
         let serial = SERIAL_COUNTER.next_serial();
+        // A key press is also a valid grab-initiating input event (a keyboard-driven move/resize).
+        if pressed {
+            self.note_input_serial(serial);
+        }
         let time = self.now_ms();
         let keycode = Keycode::new(evdev + 8);
         kbd.input::<(), _>(

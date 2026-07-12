@@ -20,13 +20,15 @@ use crate::DdState;
 use smithay::{
     delegate_compositor, delegate_cursor_shape, delegate_data_device, delegate_dmabuf,
     delegate_output, delegate_presentation, delegate_seat, delegate_shm, delegate_viewporter,
-    delegate_xdg_shell,
+    delegate_xdg_activation, delegate_xdg_decoration, delegate_xdg_shell,
 };
 
 delegate_compositor!(DdState); // wl_compositor + wl_subcompositor
 delegate_shm!(DdState);
 delegate_dmabuf!(DdState); // zwp_linux_dmabuf_v1 (GPU present path → dd IOSurface, zero-copy)
 delegate_xdg_shell!(DdState);
+delegate_xdg_decoration!(DdState); // zxdg_decoration_manager_v1 + zxdg_toplevel_decoration_v1 (SSD/CSD)
+delegate_xdg_activation!(DdState); // xdg_activation_v1 + xdg_activation_token_v1 (focus/raise on request)
 delegate_seat!(DdState);
 delegate_output!(DdState);
 delegate_viewporter!(DdState);
