@@ -1158,4 +1158,54 @@ mod wgpu_suite {
         }
         assert!(failures.is_empty(), "wgpu-vs-Metal golden diffs: {failures:?} (see target-chrome-codex/diff-wgpu/)");
     }
+
+    /// L3 pipeline cache: the GL shim re-emits `CreateRenderPipeline` under the same id every frame. Prove
+    /// that after the first (compiling) call, an identical descriptor — whether re-emitted under the SAME id
+    /// (id-hash short-circuit) or a DIFFERENT id (content-cache hit) — compiles NOTHING, while a genuinely
+    /// different descriptor still compiles. This is the steady-state win; combined with the golden suite's
+    /// maxΔ=0 it establishes both halves of the claim (fewer compiles, unchanged pixels — a cache hit hands
+    /// back the very same compiled pipeline object, so output is identical by construction).
+    #[test]
+    fn wgpu_pipeline_cache_steady_state() {
+        use dd_gpu::backend::GpuBackend as _;
+        use dd_gpu::id::PipelineId;
+        use dd_gpu::ir::{ColorTargetState, RenderPipelineDesc, ShaderRef, Topology};
+
+        let mut be = match WgpuBackend::new() {
+            Ok(b) => b,
+            Err(_) => {
+                eprintln!("SKIP wgpu_pipeline_cache_steady_state: no wgpu Metal device");
+                return;
+            }
+        };
+        let desc = |mask: u32| RenderPipelineDesc {
+            vertex: ShaderRef { module: 20, entry: "vs".into() }, // module 20 not created ⇒ builtin Flat
+            fragment: Some(ShaderRef { module: 20, entry: "fs".into() }),
+            vertex_buffers: vec![],
+            color_targets: vec![ColorTargetState { format: TextureFormat::Rgba8Unorm, blend: None, write_mask: mask }],
+            depth: None,
+            topology: Topology::TriangleList,
+            cull: 0,
+            front_face: 0,
+            label: "cache-probe".into(),
+        };
+
+        be.create_render_pipeline(PipelineId(30), &desc(0xf)).unwrap();
+        let (_, cold, _) = be.take_prof();
+        assert_eq!(cold, 1, "first pipeline create should compile exactly once");
+
+        // Same id, same descriptor (the every-frame re-emit) → id-hash short-circuit, zero compiles.
+        be.create_render_pipeline(PipelineId(30), &desc(0xf)).unwrap();
+        assert_eq!(be.take_prof().1, 0, "re-emit of identical pipeline must not recompile");
+
+        // Different id, same content → content-cache hit, zero compiles.
+        be.create_render_pipeline(PipelineId(31), &desc(0xf)).unwrap();
+        assert_eq!(be.take_prof().1, 0, "identical content under a new id must hit the content cache");
+
+        // Genuinely different descriptor → miss, one compile (proves the key discriminates).
+        be.create_render_pipeline(PipelineId(30), &desc(0x7)).unwrap();
+        assert_eq!(be.take_prof().1, 1, "a changed descriptor must recompile");
+
+        println!("wgpu_pipeline_cache_steady_state: OK (steady-state pipeline compiles = 0)");
+    }
 }

@@ -12,6 +12,7 @@
 //! textured-glyph golden cases through wgpu while the guest is migrated to forward SPIR-V/GLSL.
 
 use std::collections::HashMap;
+use std::hash::{Hash, Hasher};
 use std::num::NonZeroU64;
 
 use dd_gpu::backend::{Capabilities, GpuBackend, PresentKind, PresentToken};
@@ -20,6 +21,14 @@ use dd_gpu::ir::*;
 use dd_gpu::{GpuError, Result};
 
 use wgpu::util::DeviceExt as _;
+
+/// Content hash of a byte slice via the std default hasher — content-keys the L3 shader/pipeline caches
+/// (mirrors `metal_backend::hash_bytes`).
+fn hash_bytes(b: &[u8]) -> u64 {
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    b.hash(&mut h);
+    h.finish()
+}
 
 // ---------------------------------------------------------------------------------------------------
 // builtin shaders (WGSL) — used when the guest shipped MSL-as-bytes (not naga-translatable). They mirror
@@ -290,9 +299,33 @@ enum PipeKind {
     App,
 }
 
+impl PipeKind {
+    fn tag(self) -> u8 {
+        match self {
+            PipeKind::Flat => 0,
+            PipeKind::Tex => 1,
+            PipeKind::App => 2,
+        }
+    }
+}
+
+#[derive(Clone)]
 struct RenderPipe {
     pipeline: wgpu::RenderPipeline,
     kind: PipeKind,
+}
+
+/// Cache key for a materialized `wgpu::BindGroup` (L3 steady-state cache). A cached group holds `Arc`
+/// handles to the exact wgpu resources it was built from, so the key must change whenever any of them
+/// could have been replaced: `epoch` bumps on every buffer/texture/sampler create/destroy and on any
+/// bind-group descriptor change, guaranteeing a stale group is never reused. `kind`/`set` disambiguate the
+/// same bind-group id used against different pipeline layouts within one frame.
+#[derive(Clone, PartialEq, Eq, Hash)]
+struct BindGroupKey {
+    id: u32,
+    set: u32,
+    kind: u8,
+    epoch: u64,
 }
 
 /// The wgpu executor. Constructed either on its own offscreen Metal device ([`WgpuBackend::new`]) or over
@@ -334,6 +367,42 @@ pub struct WgpuBackend {
     fences: HashMap<u32, u64>,
     /// Ids that are the presented surface (top-left, not offscreen). Injected via `set_render_target`.
     surface_ids: std::collections::HashSet<u32>,
+
+    // ---- L3 content-keyed caches (parity with metal_backend's shader_lib_cache / pipeline_cache) ----
+    // The GL shim re-emits CreateShader + CreateRenderPipeline EVERY frame with byte-identical content, so
+    // without these the two heaviest host calls (naga SPIR-V→WGSL translation + `create_render_pipeline`
+    // shader compile/link) run every frame even though the backend persists. Keying by content hash makes
+    // them cache hits after warmup → zero translations/compiles per steady-state frame; a genuine content
+    // change (same id, new bytes) misses the cache and correctly rebuilds.
+    /// naga-translated modules keyed by SPIR-V content hash (shared across ids that ship the same bytes).
+    shader_content_cache: HashMap<u64, wgpu::ShaderModule>,
+    /// Content hashes whose translation failed / was non-SPIR-V — a hit skips retrying naga and falls back
+    /// to the builtin WGSL pipeline (the guest is mid-migration to the SPIR-V ABI).
+    failed_shader_cache: std::collections::HashSet<u64>,
+    /// Shader id → content hash currently installed (folded into the pipeline key so a recompiled shader
+    /// under the same id forces a pipeline rebuild even when the descriptor bytes are unchanged).
+    shader_id_hash: HashMap<u32, u64>,
+    /// Compiled render pipelines keyed by descriptor content hash (`hash_render_pipeline_key`).
+    render_pipeline_cache: HashMap<u64, RenderPipe>,
+    /// Compiled compute pipelines keyed by descriptor content hash.
+    compute_pipeline_cache: HashMap<u64, wgpu::ComputePipeline>,
+    /// Pipeline id → descriptor hash currently installed (skip re-install when the guest re-emits identical).
+    pipeline_id_hash: HashMap<u32, u64>,
+    /// Materialized bind groups reused across submits (see [`BindGroupKey`]).
+    bind_group_cache: HashMap<BindGroupKey, wgpu::BindGroup>,
+    /// Monotonic resource generation; bumped on any buffer/texture/sampler create/destroy and bind-group
+    /// descriptor change. Part of every [`BindGroupKey`] so a cached group can't outlive its resources.
+    res_epoch: u64,
+    /// Live present-path IOSurface wrap cache: raw `MTLTexture` pointer → wrapped `wgpu::Texture`, so
+    /// re-registering the same surface as the present target each frame reuses the hal texture instead of
+    /// rebuilding it (`texture_from_hal` per frame).
+    iosurface_wraps: HashMap<usize, wgpu::Texture>,
+
+    // Prof counters — count only ACTUAL host work (cache misses). The steady-state regression guard is that
+    // they read 0 after warmup. Read + reset by the executor when its debug/prof output is enabled.
+    pub shader_compiles: u32,
+    pub pipeline_compiles: u32,
+    pub bind_group_builds: u32,
 }
 
 impl WgpuBackend {
@@ -420,6 +489,18 @@ impl WgpuBackend {
             last_submission: None,
             fences: HashMap::new(),
             surface_ids: std::collections::HashSet::new(),
+            shader_content_cache: HashMap::new(),
+            failed_shader_cache: std::collections::HashSet::new(),
+            shader_id_hash: HashMap::new(),
+            render_pipeline_cache: HashMap::new(),
+            compute_pipeline_cache: HashMap::new(),
+            pipeline_id_hash: HashMap::new(),
+            bind_group_cache: HashMap::new(),
+            res_epoch: 0,
+            iosurface_wraps: HashMap::new(),
+            shader_compiles: 0,
+            pipeline_compiles: 0,
+            bind_group_builds: 0,
         }
     }
 
@@ -605,6 +686,86 @@ impl WgpuBackend {
         }))
     }
 
+    /// Advance the resource generation (invalidates bind groups keyed to the old epoch). Called on every
+    /// buffer/texture/sampler create/destroy and bind-group descriptor change. Bounds the bind-group cache:
+    /// if a guest churns resources every frame the cache would otherwise accumulate dead entries, so once it
+    /// grows past a cap we drop the superseded generations (steady state keeps one epoch and never trips it).
+    fn bump_epoch(&mut self) {
+        self.res_epoch = self.res_epoch.wrapping_add(1);
+        if self.bind_group_cache.len() > 4096 {
+            let cur = self.res_epoch;
+            self.bind_group_cache.retain(|k, _| k.epoch == cur);
+        }
+    }
+
+    /// Read and reset the per-frame prof counters (host cache misses since the last call). The executor
+    /// calls this once per replayed frame; a steady-state frame reads `(0, 0, 0)`.
+    pub fn take_prof(&mut self) -> (u32, u32, u32) {
+        let out = (self.shader_compiles, self.pipeline_compiles, self.bind_group_builds);
+        self.shader_compiles = 0;
+        self.pipeline_compiles = 0;
+        self.bind_group_builds = 0;
+        out
+    }
+
+    /// Content hash of a render-pipeline descriptor for the L3 PSO cache. Folds in the installed
+    /// shader-content hash of each referenced module so a recompiled shader (same id, new bytes) forces a
+    /// pipeline rebuild even when the descriptor bytes are unchanged (mirrors
+    /// `metal_backend::hash_pipeline_key`).
+    fn hash_render_pipeline_key(&self, desc: &RenderPipelineDesc) -> u64 {
+        let mut h = std::collections::hash_map::DefaultHasher::new();
+        desc.vertex.module.hash(&mut h);
+        desc.vertex.entry.hash(&mut h);
+        self.shader_id_hash.get(&desc.vertex.module).copied().unwrap_or(0).hash(&mut h);
+        match &desc.fragment {
+            Some(f) => {
+                1u8.hash(&mut h);
+                f.module.hash(&mut h);
+                f.entry.hash(&mut h);
+                self.shader_id_hash.get(&f.module).copied().unwrap_or(0).hash(&mut h);
+            }
+            None => 0u8.hash(&mut h),
+        }
+        for l in &desc.vertex_buffers {
+            l.stride.hash(&mut h);
+            l.step_mode.hash(&mut h);
+            for a in &l.attrs {
+                a.location.hash(&mut h);
+                a.format.hash(&mut h);
+                a.offset.hash(&mut h);
+            }
+        }
+        for c in &desc.color_targets {
+            c.format.to_u32().hash(&mut h);
+            c.write_mask.hash(&mut h);
+            match &c.blend {
+                Some(b) => {
+                    1u8.hash(&mut h);
+                    b.src_color.hash(&mut h);
+                    b.dst_color.hash(&mut h);
+                    b.op_color.hash(&mut h);
+                    b.src_alpha.hash(&mut h);
+                    b.dst_alpha.hash(&mut h);
+                    b.op_alpha.hash(&mut h);
+                }
+                None => 0u8.hash(&mut h),
+            }
+        }
+        match &desc.depth {
+            Some(dp) => {
+                1u8.hash(&mut h);
+                dp.format.to_u32().hash(&mut h);
+                dp.depth_write.hash(&mut h);
+                dp.depth_compare.hash(&mut h);
+            }
+            None => 0u8.hash(&mut h),
+        }
+        desc.topology.to_u32().hash(&mut h);
+        desc.cull.hash(&mut h);
+        desc.front_face.hash(&mut h);
+        h.finish()
+    }
+
     /// Ensure a clear + flip pipeline exists for render-target `format` (materialized lazily for formats
     /// beyond the RGBA8/BGRA8 prebuilt in `from_shared`). Called from the `submit` pre-scan so the hot
     /// recording path only ever reads the maps.
@@ -727,8 +888,39 @@ impl WgpuBackend {
         h: u32,
         format: TextureFormat,
     ) {
-        use metal::foreign_types::ForeignTypeRef as _;
         let wf = tex_format(format);
+        // The compositor caches one MTLTexture per guest IOSurface id for the whole connection, so the raw
+        // pointer is stable across frames for a given surface. Reuse the wgpu wrap (an `Arc`-backed handle)
+        // instead of rebuilding it via `texture_from_hal` each present — the live path re-registers the
+        // present target every frame. A new pointer (surface resized / re-cached) rebuilds and evicts.
+        let cache_key = raw_tex as usize;
+        let wgpu_tex = if let Some(t) = self.iosurface_wraps.get(&cache_key) {
+            if t.width() == w && t.height() == h && t.format() == wf {
+                t.clone()
+            } else {
+                self.iosurface_wraps.remove(&cache_key);
+                self.build_iosurface_wrap(cache_key, raw_tex, wf, w, h)
+            }
+        } else {
+            self.build_iosurface_wrap(cache_key, raw_tex, wf, w, h)
+        };
+        self.set_render_target(id, wgpu_tex, format);
+    }
+
+    /// Wrap a raw `MTLTexture` as a `wgpu::Texture` via wgpu-hal and memoize it under `cache_key` (the raw
+    /// pointer). Split out of [`wrap_iosurface_texture`] so the per-frame path can hit the cache.
+    ///
+    /// # Safety
+    /// `raw_tex` must be a valid, live `MTLTexture` of `wf`/size created on this device.
+    unsafe fn build_iosurface_wrap(
+        &mut self,
+        cache_key: usize,
+        raw_tex: *mut std::ffi::c_void,
+        wf: wgpu::TextureFormat,
+        w: u32,
+        h: u32,
+    ) -> wgpu::Texture {
+        use metal::foreign_types::ForeignTypeRef as _;
         // Borrow the raw id, then `to_owned` (retain +1) so wgpu-hal owns an independent handle it releases
         // on drop — exactly the objc2 <-> metal-rs seam from examples/iosurface_interop.rs.
         let mtl_texture: metal::Texture = metal::TextureRef::from_ptr(raw_tex.cast()).to_owned();
@@ -756,7 +948,8 @@ impl WgpuBackend {
                 view_formats: &[],
             },
         );
-        self.set_render_target(id, wgpu_tex, format);
+        self.iosurface_wraps.insert(cache_key, wgpu_tex.clone());
+        wgpu_tex
     }
 
     /// Block until all submitted GPU work has completed. The live present path polls this before acking the
@@ -813,11 +1006,14 @@ impl GpuBackend for WgpuBackend {
             mapped_at_creation: false,
         });
         self.buffers.insert(id.0, buffer);
+        self.bump_epoch();
         Ok(())
     }
 
     fn destroy_buffer(&mut self, id: BufferId) -> Result<()> {
-        self.buffers.remove(&id.0).ok_or(GpuError::UnknownId { kind: "buffer", id: id.0 }).map(|_| ())
+        let r = self.buffers.remove(&id.0).ok_or(GpuError::UnknownId { kind: "buffer", id: id.0 }).map(|_| ());
+        self.bump_epoch();
+        r
     }
 
     fn write_buffer(&mut self, id: BufferId, offset: u64, data: &[u8]) -> Result<()> {
@@ -868,11 +1064,14 @@ impl GpuBackend for WgpuBackend {
             id.0,
             TexEntry { texture, view, format: desc.format, width: desc.width.max(1), height: desc.height.max(1) },
         );
+        self.bump_epoch();
         Ok(())
     }
 
     fn destroy_texture(&mut self, id: TextureId) -> Result<()> {
-        self.textures.remove(&id.0).ok_or(GpuError::UnknownId { kind: "texture", id: id.0 }).map(|_| ())
+        let r = self.textures.remove(&id.0).ok_or(GpuError::UnknownId { kind: "texture", id: id.0 }).map(|_| ());
+        self.bump_epoch();
+        r
     }
 
     fn read_texture(&mut self, id: TextureId, out: &mut [u8]) -> Result<()> {
@@ -892,30 +1091,56 @@ impl GpuBackend for WgpuBackend {
             ..Default::default()
         });
         self.samplers.insert(id.0, sampler);
+        self.bump_epoch();
         Ok(())
     }
 
     fn destroy_sampler(&mut self, id: SamplerId) -> Result<()> {
         self.samplers.remove(&id.0);
+        self.bump_epoch();
         Ok(())
     }
 
     fn create_shader(&mut self, id: ShaderId, spirv: &[u32]) -> Result<()> {
+        // L3 content-key: the shim re-emits identical SPIR-V under the same id every frame. Hash the bytes
+        // and skip all work when this id already has this content installed; otherwise consult the shared
+        // content cache before paying for a naga translation.
+        let key = hash_bytes(bytemuck_u32_bytes(spirv));
+        if self.shader_id_hash.get(&id.0) == Some(&key) {
+            return Ok(()); // identical content already installed under this id — nothing to do
+        }
+        self.shader_id_hash.insert(id.0, key);
+
+        // Cached translated module for this content → reuse (no naga, no compile).
+        if let Some(module) = self.shader_content_cache.get(&key) {
+            self.shaders.insert(id.0, module.clone());
+            return Ok(());
+        }
+        // Cached failure → fall back to the builtin WGSL pipeline without retrying naga.
+        if self.failed_shader_cache.contains(&key) {
+            self.shaders.remove(&id.0);
+            return Ok(());
+        }
+
         match crate::shader::spirv_to_wgsl(spirv) {
             Ok(Some(wgsl)) => {
                 let module = self.device.create_shader_module(wgpu::ShaderModuleDescriptor {
                     label: Some("dd-app-shader"),
                     source: wgpu::ShaderSource::Wgsl(wgsl.into()),
                 });
+                self.shader_content_cache.insert(key, module.clone());
                 self.shaders.insert(id.0, module);
+                self.shader_compiles += 1;
             }
             // Not SPIR-V (legacy MSL-as-bytes / opaque): drop any prior module so pipelines fall back to
             // the builtin WGSL. Not an error — the guest is mid-migration to the SPIR-V ABI.
             Ok(None) => {
+                self.failed_shader_cache.insert(key);
                 self.shaders.remove(&id.0);
             }
             Err(e) => {
                 eprintln!("dd-gpu-wgpu: shader {} translation failed: {e}", id.0);
+                self.failed_shader_cache.insert(key);
                 self.shaders.remove(&id.0);
             }
         }
@@ -924,10 +1149,27 @@ impl GpuBackend for WgpuBackend {
 
     fn destroy_shader(&mut self, id: ShaderId) -> Result<()> {
         self.shaders.remove(&id.0);
+        // Forget the installed-content marker so a later create under this id re-installs (the shared
+        // content cache keeps the compiled module for reuse; only the id→hash association is cleared).
+        self.shader_id_hash.remove(&id.0);
         Ok(())
     }
 
     fn create_render_pipeline(&mut self, id: PipelineId, desc: &RenderPipelineDesc) -> Result<()> {
+        // L3 content-key: the shim re-emits an identical pipeline descriptor under the same id every frame.
+        // Skip entirely when this id already has this descriptor installed; otherwise reuse a compiled
+        // pipeline from the content cache before paying for `create_render_pipeline` (shader compile/link).
+        let key = self.hash_render_pipeline_key(desc);
+        if self.pipeline_id_hash.get(&id.0) == Some(&key) {
+            return Ok(());
+        }
+        if let Some(rp) = self.render_pipeline_cache.get(&key) {
+            self.render_pipelines.insert(id.0, rp.clone());
+            self.pipeline_id_hash.insert(id.0, key);
+            return Ok(());
+        }
+        self.pipeline_compiles += 1;
+
         // App pipeline iff the guest shipped a naga-translatable vertex module.
         let app = self.shaders.contains_key(&desc.vertex.module);
         let kind = if app {
@@ -1064,11 +1306,29 @@ impl GpuBackend for WgpuBackend {
             multiview: None,
             cache: None,
         });
-        self.render_pipelines.insert(id.0, RenderPipe { pipeline, kind });
+        let rp = RenderPipe { pipeline, kind };
+        self.render_pipeline_cache.insert(key, rp.clone());
+        self.render_pipelines.insert(id.0, rp);
+        self.pipeline_id_hash.insert(id.0, key);
         Ok(())
     }
 
     fn create_compute_pipeline(&mut self, id: PipelineId, desc: &ComputePipelineDesc) -> Result<()> {
+        // L3 content-key (compute): fold the module id + its installed shader-content hash + entry point.
+        let mut h = std::collections::hash_map::DefaultHasher::new();
+        desc.compute.module.hash(&mut h);
+        desc.compute.entry.hash(&mut h);
+        self.shader_id_hash.get(&desc.compute.module).copied().unwrap_or(0).hash(&mut h);
+        let key = h.finish();
+        if self.pipeline_id_hash.get(&id.0) == Some(&key) {
+            return Ok(());
+        }
+        if let Some(p) = self.compute_pipeline_cache.get(&key) {
+            self.compute_pipelines.insert(id.0, p.clone());
+            self.pipeline_id_hash.insert(id.0, key);
+            return Ok(());
+        }
+        self.pipeline_compiles += 1;
         let module = self
             .shaders
             .get(&desc.compute.module)
@@ -1081,13 +1341,17 @@ impl GpuBackend for WgpuBackend {
             compilation_options: Default::default(),
             cache: None,
         });
+        self.compute_pipeline_cache.insert(key, pipeline.clone());
         self.compute_pipelines.insert(id.0, pipeline);
+        self.pipeline_id_hash.insert(id.0, key);
         Ok(())
     }
 
     fn destroy_pipeline(&mut self, id: PipelineId) -> Result<()> {
         self.render_pipelines.remove(&id.0);
         self.compute_pipelines.remove(&id.0);
+        // Clear the installed-content marker so a later create under this id re-installs from the cache.
+        self.pipeline_id_hash.remove(&id.0);
         Ok(())
     }
 
@@ -1095,11 +1359,14 @@ impl GpuBackend for WgpuBackend {
         // Deferred: a wgpu bind group needs a concrete layout, which comes from the pipeline it is used
         // with. Store the descriptor and materialize it at draw time against the bound pipeline's layout.
         self.bind_groups.insert(id.0, desc.clone());
+        // A new descriptor under this id invalidates any materialized group keyed by the old epoch.
+        self.bump_epoch();
         Ok(())
     }
 
     fn destroy_bind_group(&mut self, id: BindGroupId) -> Result<()> {
         self.bind_groups.remove(&id.0);
+        self.bump_epoch();
         Ok(())
     }
 
@@ -1164,16 +1431,44 @@ impl GpuBackend for WgpuBackend {
                 Enc::SetPipeline(p) => cur_pipe = Some(*p),
                 Enc::SetBindGroup { group, .. } => {
                     let pid = cur_pipe.ok_or(GpuError::Invalid("SetBindGroup before SetPipeline"))?;
-                    let rp = self
-                        .render_pipelines
-                        .get(&pid)
-                        .ok_or(GpuError::UnknownId { kind: "pipeline", id: pid })?;
-                    let desc = self
-                        .bind_groups
-                        .get(group)
-                        .ok_or(GpuError::UnknownId { kind: "bind_group", id: *group })?;
-                    let layout = rp.pipeline.get_bind_group_layout(desc.set);
-                    let bg = self.build_bind_group(&layout, rp.kind, desc)?;
+                    // Resolve everything into owned locals so the immutable borrows of `self` end before the
+                    // cache mutation below.
+                    let (kind, layout, desc, cacheable, key) = {
+                        let rp = self
+                            .render_pipelines
+                            .get(&pid)
+                            .ok_or(GpuError::UnknownId { kind: "pipeline", id: pid })?;
+                        let desc = self
+                            .bind_groups
+                            .get(group)
+                            .ok_or(GpuError::UnknownId { kind: "bind_group", id: *group })?;
+                        let layout = rp.pipeline.get_bind_group_layout(desc.set);
+                        // Never cache a group that binds the presented surface: the executor re-registers the
+                        // present target (a fresh view) every frame, so a cached group would hold a stale one.
+                        let cacheable = !desc.entries.iter().any(|e| {
+                            matches!(&e.resource, BindResource::Texture { id } if self.surface_ids.contains(id))
+                        });
+                        let key = BindGroupKey {
+                            id: *group,
+                            set: desc.set,
+                            kind: rp.kind.tag(),
+                            epoch: self.res_epoch,
+                        };
+                        (rp.kind, layout, desc.clone(), cacheable, key)
+                    };
+                    let bg = if cacheable {
+                        if let Some(cached) = self.bind_group_cache.get(&key) {
+                            cached.clone()
+                        } else {
+                            let bg = self.build_bind_group(&layout, kind, &desc)?;
+                            self.bind_group_cache.insert(key, bg.clone());
+                            self.bind_group_builds += 1;
+                            bg
+                        }
+                    } else {
+                        self.bind_group_builds += 1;
+                        self.build_bind_group(&layout, kind, &desc)?
+                    };
                     built.insert(k, bg);
                 }
                 Enc::ClearRect { color, texture, .. } => {
@@ -1538,4 +1833,9 @@ impl GpuBackend for WgpuBackend {
 /// Reinterpret a `[f32;4]` clear color as bytes for a uniform upload (no bytemuck dependency).
 fn bytemuck_color(c: &[f32; 4]) -> &[u8] {
     unsafe { std::slice::from_raw_parts(c.as_ptr() as *const u8, 16) }
+}
+
+/// Reinterpret a SPIR-V `&[u32]` word slice as its underlying bytes for content hashing.
+fn bytemuck_u32_bytes(w: &[u32]) -> &[u8] {
+    unsafe { std::slice::from_raw_parts(w.as_ptr() as *const u8, std::mem::size_of_val(w)) }
 }

@@ -1415,7 +1415,13 @@ fn run_executor_wgpu(sock_path: String) {
                 Ok(_) => {
                     be.poll_wait(); // unfenced compositor blit reads a finished IOSurface, not a torn one
                     if exec_debug() {
-                        eprintln!("dd-gpu executor[wgpu]: replayed {len} IR bytes into IOSurface {id}");
+                        // L3 cache regression guard: after warmup a steady-state frame must report
+                        // (shader=0, pipeline=0, bind_group=0) — i.e. it compiles/allocates nothing.
+                        let (sh, pl, bg) = be.take_prof();
+                        eprintln!(
+                            "dd-gpu executor[wgpu]: replayed {len} IR bytes into IOSurface {id} \
+                             (compiles shader={sh} pipeline={pl} bind_group={bg})"
+                        );
                     }
                     true
                 }
