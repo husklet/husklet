@@ -122,13 +122,25 @@ reaches pixel parity. The path:
 1. **Foundation (done).** `dd-shim-common` (shared IR + transport, tested) and `dd-shim-gl` (complete
    registry-generated surface + query entry points, building the correct `.so`). `gl_shim.c` untouched
    → GLES unaffected.
-2. **Port the rendering state machine** into `dd-shim-gl`, entry point by entry point, moving names
-   from generated stubs into `IMPLEMENTED`: buffer/texture/shader objects, the GLSL-ES→(SPIR-V/MSL)
-   translator, `glVertexAttribPointer`/draw recording, the residency cache, `eglCreateWindowSurface` +
+2. **State machine (done — 112 entry points).** The GLES/EGL object + scalar state was ported into
+   `dd-shim-gl` (`src/state.rs`, `src/gles.rs`, `src/egl.rs`), moving 105 names from generated stubs
+   into `IMPLEMENTED`: buffers, textures (with the RGBA8 unpack-aware upload), shader/program objects,
+   uniform-block storage, vertex-attrib/VAO state, blend/depth/cull/scissor/viewport scalar state and
+   all the `glGet*`/`glIs*` queries, plus the EGL config/context/surface query + lifecycle
+   (`eglChooseConfig`/`eglGetConfigAttrib`/`eglCreateContext`/`eglMakeCurrent`/`eglQuerySurface`/…).
+   Like `gl_shim.c`, these accumulate state and emit no IR. The GL→wire enum/id maps
+   (`src/wireenc.rs`) and the present-independent **resource lowering** (`src/lower.rs`:
+   buffer/texture/sampler → `Cmd`) are ported and proven **byte-identical** to `gl_shim.c`'s emission.
+   Still stubbed on purpose (owned by concurrent present-path work): `glClear`/`glDrawArrays`/
+   `glDrawElements` recording, the GLSL-ES→(SPIR-V/MSL) translator (so `glGetUniformLocation`/
+   `glGetAttribLocation` report "not found" for now), the residency cache, `eglCreateWindowSurface` +
    the wayland/dma-buf commit, and `eglSwapBuffers` (lower state → `Cmd` stream → `ExecConn::submit`).
-   After each step, deploy behind an env flag and pixel-compare a `gui_egl_*` probe / glmark2 frame to
-   the `gl_shim.c` output.
-3. **Cutover** when a byte/pixel diff of glmark2 + the `gui_egl_*` matrix is clean: deploy `dd-shim-gl`
+3. **Pixel/IR-parity harness (scaffold in place).** `tests/pixel_parity.rs` diffs the dd-gpu IR the two
+   shims emit (byte-identical IR ⇒ identical pixels through the same host backend, and it pinpoints the
+   diverging `Cmd`). The compare engine is implemented + self-tested and already runs live against the
+   resource lowering; the full-frame comparison skips until `eglSwapBuffers` lands, at which point its
+   stream drops into `dd_shim_gl_frame_ir` with no harness changes.
+4. **Cutover** when a byte/pixel diff of glmark2 + the `gui_egl_*` matrix is clean: deploy `dd-shim-gl`
    as `libEGL.so.1`, move the `es2*`/`gui_egl_*` test clients onto it, and delete `gl_shim.c` (the
    `DD_TR_TOOL` translator regression moves to the Rust translator).
 

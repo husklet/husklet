@@ -23,7 +23,11 @@ pub use dd_shim_common as common;
 
 pub mod egl;
 pub mod gles;
+pub mod glconst;
+pub mod lower;
+pub mod state;
 pub mod stub;
+pub mod wireenc;
 
 // The generated C-ABI export surface (every GLES2/EGL entry point not in `IMPLEMENTED`).
 include!(concat!(env!("OUT_DIR"), "/generated_entrypoints.rs"));

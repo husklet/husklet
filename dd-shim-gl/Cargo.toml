@@ -19,7 +19,9 @@ license = "MIT"
 
 [lib]
 name = "dd_shim_gl"
-crate-type = ["cdylib"]
+# cdylib = the deployed libEGL.so.1; rlib so the parity harness (tests/) and other Rust can link it.
+# The rlib is a build-time-only artifact; the deployed .so is unaffected.
+crate-type = ["cdylib", "rlib"]
 
 [dependencies]
 dd-shim-common = { path = "../dd-shim-common" }
