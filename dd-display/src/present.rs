@@ -39,6 +39,21 @@ pub struct SurfaceBuffer {
     /// upload hint: `bgra` always holds the complete, correct frame, so a presenter that ignores
     /// `damage` (e.g. `PngPresenter`) stays pixel-identical to the full-upload path.
     pub damage: Option<(i32, i32, i32, i32)>,
+    /// If this surface is an `xdg_popup`, where to place its native window: the parent surface it is
+    /// anchored to plus the positioner-resolved `(x, y)` offset from the parent's window-geometry top-left
+    /// (logical points, y-down). A windowed presenter opens the popup's window at
+    /// parent-content-top-left + (x, y) so a menu/combobox dropdown appears AT the widget instead of at a
+    /// default cascade position. `None` for toplevels and any surface with no positioner.
+    pub popup: Option<PopupPlacement>,
+}
+
+/// Placement for an `xdg_popup`'s native window: which parent surface it hangs off and the
+/// positioner-resolved offset from that parent's window-geometry top-left (logical points, y-down).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PopupPlacement {
+    pub parent_sid: u32,
+    pub x: i32,
+    pub y: i32,
 }
 
 impl SurfaceBuffer {

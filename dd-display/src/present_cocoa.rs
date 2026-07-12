@@ -24,7 +24,7 @@ use objc2_app_kit::{
     NSBitmapImageFileType, NSBitmapImageRep, NSBitmapImageRepPropertyKey, NSColor, NSCursor,
     NSDeviceRGBColorSpace, NSEvent, NSEventMask, NSEventModifierFlags, NSEventType, NSGraphicsContext,
     NSImage, NSImageView, NSPasteboard, NSPasteboardTypeString, NSScreen, NSView, NSWindow,
-    NSWindowDelegate, NSWindowOcclusionState, NSWindowStyleMask,
+    NSWindowDelegate, NSWindowOcclusionState, NSWindowOrderingMode, NSWindowStyleMask,
 };
 use objc2_foundation::{
     MainThreadMarker, NSData, NSDate, NSDefaultRunLoopMode, NSDictionary, NSInteger, NSPoint, NSRect,
@@ -727,6 +727,10 @@ fragment float4 fmain(VOut in [[stage_in]], texture2d<float> src [[texture(0)]],
         h: u32,
         present_scale: f64,
         title: &str,
+        // For an xdg_popup: the screen point (Cocoa bottom-left origin, y-up) where the window's TOP-LEFT
+        // must land — parent-content-top-left + positioner offset — so a menu/combobox opens at its widget
+        // instead of the default cascade. `None` for toplevels (cascade position stands).
+        popup_top_left: Option<NSPoint>,
     ) -> MetalWin {
         let content = NSRect::new(
             NSPoint::new(140.0 + sid as f64 * 24.0, 140.0),
@@ -808,12 +812,29 @@ fragment float4 fmain(VOut in [[stage_in]], texture2d<float> src [[texture(0)]],
         // AppKit routes by responder chain reach it; combined with the view's acceptsFirstMouse:YES, the
         // first click on this (often non-key) borderless window is delivered rather than swallowed.
         window.setInitialFirstResponder(Some(&view));
+        // A popup (menu/combobox dropdown) is placed at its anchoring widget: position the window's
+        // top-left at the parent-relative screen point resolved from the xdg positioner. Done before the
+        // order-front below so the window appears directly at the widget with no visible cascade jump.
+        if let Some(tl) = popup_top_left {
+            window.setFrameTopLeftPoint(tl);
+        }
         // Disable AppKit's automatic cursor-rect management: the guest owns the pointer shape (via
         // wp_cursor_shape_v1 → apply_cursor_shape), so a shape we set must stick over the content instead of
         // being reset to the arrow on the next mouse-moved / cursorUpdate.
         unsafe { window.disableCursorRects() };
         window.makeKeyAndOrderFront(None);
         let _ = window.makeFirstResponder(Some(&view));
+        if std::env::var_os("DD_DISPLAY_INPUT_DEBUG").is_some_and(|v| !v.is_empty() && v != "0") {
+            let f = window.frame();
+            eprintln!(
+                "dd-display[window]: created sid={sid} size={w}x{h} popup={} frame=(x={:.0} y={:.0} w={:.0} h={:.0})",
+                popup_top_left.is_some(),
+                f.origin.x,
+                f.origin.y,
+                f.size.width,
+                f.size.height
+            );
+        }
         // Force the new window in front of every space/app and re-assert app foreground, so Core Animation
         // composites this CAMetalLayer at the display rate rather than background-throttling its present
         // (which would pace the frame-callback-driven guest down to ~1 fps). See run_window() for why.
@@ -865,11 +886,37 @@ impl Presenter for MetalPresenter {
         let ctx = &self.ctx;
         let present_scale = self.present_scale;
         let created = !self.wins.contains_key(&sid);
-        let win = self
-            .wins
-            .entry(sid)
-            .or_insert_with(|| MetalPresenter::make_window(mtm, ctx, sid, w, h, present_scale, &title));
+        // Popup placement (computed before the entry-borrow, since it reads the parent window). The
+        // positioner offset (surf.popup.x/y) is relative to the parent's window-geometry top-left, which
+        // is exactly the parent NSWindow's content top-left; convert to a screen point (Cocoa y-up).
+        let popup_top_left: Option<NSPoint> = surf.popup.and_then(|pp| {
+            let parent = self.wins.get(&pp.parent_sid)?;
+            let f = parent.window.frame();
+            let parent_tl = NSPoint::new(f.origin.x, f.origin.y + f.size.height);
+            Some(NSPoint::new(
+                parent_tl.x + pp.x as f64,
+                parent_tl.y - pp.y as f64,
+            ))
+        });
+        let parent_window: Option<Retained<NSWindow>> = surf
+            .popup
+            .and_then(|pp| self.wins.get(&pp.parent_sid).map(|w| w.window.clone()));
+        let win = self.wins.entry(sid).or_insert_with(|| {
+            MetalPresenter::make_window(mtm, ctx, sid, w, h, present_scale, &title, popup_top_left)
+        });
         if created {
+            // Attach the popup as a child of its parent so it rides above the parent and moves with it.
+            if let Some(parent) = &parent_window {
+                unsafe { parent.addChildWindow_ordered(&win.window, NSWindowOrderingMode::NSWindowAbove) };
+                if let (Some(pp), Some(tl)) = (surf.popup, popup_top_left) {
+                    if std::env::var_os("DD_DISPLAY_INPUT_DEBUG").is_some_and(|v| !v.is_empty() && v != "0") {
+                        eprintln!(
+                            "dd-display[popup]: placed sid={sid} parent_sid={} offset=({},{}) window_top_left=({:.0},{:.0})",
+                            pp.parent_sid, pp.x, pp.y, tl.x, tl.y
+                        );
+                    }
+                }
+            }
             MetalPresenter::log_present_debug(
                 self.present_debug,
                 "create",

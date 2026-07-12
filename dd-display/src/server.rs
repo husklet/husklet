@@ -6,7 +6,7 @@
 //! Interface/opcode numbers are the stable Wayland wire opcodes (ordered as in the protocol XML). See
 //! `docs/ideas/RENDERING_PLAN.md` §1/§4.
 
-use crate::present::{Presenter, SurfaceBuffer};
+use crate::present::{PopupPlacement, Presenter, SurfaceBuffer};
 use crate::wire::{Conn, Message};
 use std::collections::HashMap;
 use std::os::unix::io::RawFd;
@@ -191,9 +191,12 @@ enum Obj {
     // xdg_positioner: accrues placement rules; consumed by get_popup to derive the popup geometry.
     XdgPositioner(XdgPositioner),
     // xdg_popup: a menu/dropdown surface. `x,y,w,h` is the geometry computed from its positioner,
-    // sent back to the client in the xdg_popup.configure that completes the initial handshake.
+    // sent back to the client in the xdg_popup.configure that completes the initial handshake. `parent`
+    // is the parent xdg_surface the popup is anchored to (positioner (x,y) is relative to the parent's
+    // window-geometry top-left) — threaded to the presenter so the popup window opens at the widget.
     XdgPopup {
         xdg_surface: u32,
+        parent: u32,
         x: i32,
         y: i32,
         w: i32,
@@ -1634,6 +1637,9 @@ impl<P: Presenter> Server<P> {
         let mut present_attempted = false;
         if let Some(bid) = root_bid {
             if let Some(mut sb) = self.extract(root, bid, &title) {
+                // Thread popup placement so the presenter opens a menu/combobox dropdown at its anchoring
+                // widget (parent-content-top-left + positioner offset) instead of a default cascade.
+                sb.popup = self.popup_placement(root);
                 if sb.iosurface_id.is_none() && !sb.bgra.is_empty() {
                     for (csid, ox, oy) in self.collect_composite_children(root) {
                         let cbid = match self.objs.get(&csid) {
@@ -1700,9 +1706,33 @@ impl<P: Presenter> Server<P> {
                 y: py,
                 w,
                 h,
+                ..
             } if *x == xdg_surface => Some((*id, *px, *py, *w, *h)),
             _ => None,
         })
+    }
+
+    /// If `sid`'s surface carries an `xdg_popup` role, resolve where its native window should open:
+    /// the parent wl_surface plus the positioner offset from the parent's window-geometry top-left. The
+    /// live presenter uses this to place the popup window at the anchoring widget rather than a default
+    /// cascade position. Returns `None` for toplevels / surfaces with no popup role.
+    fn popup_placement(&self, sid: u32) -> Option<PopupPlacement> {
+        let xdg = match self.objs.get(&sid) {
+            Some(Obj::Surface(s)) => s.xdg_surface?,
+            _ => return None,
+        };
+        let (parent_xdg, x, y) = self.objs.values().find_map(|o| match o {
+            Obj::XdgPopup {
+                xdg_surface,
+                parent,
+                x,
+                y,
+                ..
+            } if *xdg_surface == xdg => Some((*parent, *x, *y)),
+            _ => None,
+        })?;
+        let parent_sid = self.wl_surface_of_xdg(parent_xdg)?;
+        Some(PopupPlacement { parent_sid, x, y })
     }
 
     fn buffer_logical_size(&self, surface: &Surface, bid: u32) -> Option<(i32, i32)> {
@@ -1788,6 +1818,7 @@ impl<P: Presenter> Server<P> {
                 gpu_render: *gpu_render,
                 uv_rect: map.uv_rect,
                 damage: None,
+                popup: None,
             });
         }
         if let Some(Obj::SolidColorBuffer {
@@ -1820,6 +1851,7 @@ impl<P: Presenter> Server<P> {
                 gpu_render: false,
                 uv_rect: [0.0, 0.0, 1.0, 1.0],
                 damage: None,
+                popup: None,
             });
         }
         let (pool, offset, width, height, stride, format) = match self.objs.get(&bid) {
@@ -1897,6 +1929,7 @@ impl<P: Presenter> Server<P> {
             gpu_render: false,
             uv_rect: [0.0, 0.0, 1.0, 1.0],
             damage: None,
+            popup: None,
         })
     }
 
@@ -2221,7 +2254,7 @@ target_surface={} crop=({},{} {}x{}) backing={}x{} mapped_src=({},{}..{},{}) map
                 // get_popup(id, parent: xdg_surface?, positioner). Resolve the positioner NOW into a fixed
                 // (x,y,w,h) geometry; the initial commit will replay it as xdg_popup.configure.
                 let id = r.u32();
-                let _parent = r.u32();
+                let parent = r.u32();
                 let positioner = r.u32();
                 let (x, y, w, h) = match self.objs.get(&positioner) {
                     Some(Obj::XdgPositioner(p)) => p.geometry(),
@@ -2231,6 +2264,7 @@ target_surface={} crop=({},{} {}x{}) backing={}x{} mapped_src=({},{}..{},{}) map
                     id,
                     Obj::XdgPopup {
                         xdg_surface: m.object,
+                        parent,
                         x,
                         y,
                         w,
@@ -3208,8 +3242,42 @@ target_surface={} crop=({},{} {}x{}) backing={}x{} mapped_src=({},{}..{},{}) map
         self.kbd_entered = true;
     }
 
-    /// Absolute pointer motion in surface-local integer pixels.
+    /// The focused surface's window-geometry origin (`xdg_surface.set_window_geometry` x,y minus the
+    /// buffer attach offset), i.e. how far the on-screen (geometry-cropped) content is inset from the
+    /// wl_surface's top-left. Clients like GTK render CSD shadow margins around the visible window and set
+    /// the geometry to the inner rect; the compositor crops the presented buffer to that rect (see
+    /// `surface_mapping`), so the native window shows content starting at (gx,gy) in surface space. The
+    /// host derives pointer coordinates from that cropped window (content-local), but `wl_pointer.motion`
+    /// must be FULL-surface-local — so this origin is added back. Zero when the client sets no geometry.
+    fn focused_geometry_origin(&self) -> (i32, i32) {
+        let Some(sid) = self.focus else {
+            return (0, 0);
+        };
+        let Some(Obj::Surface(s)) = self.objs.get(&sid) else {
+            return (0, 0);
+        };
+        match s.window_geometry {
+            Some((gx, gy, gw, gh)) if gw > 0 && gh > 0 => {
+                ((gx - s.attach_x).max(0), (gy - s.attach_y).max(0))
+            }
+            _ => (0, 0),
+        }
+    }
+
+    /// Absolute pointer motion in surface-local integer pixels. `x`/`y` arrive content-local (relative to
+    /// the on-screen, geometry-cropped window); the focused surface's window-geometry origin is added so
+    /// the coordinate the client receives is full-surface-local (see `focused_geometry_origin`).
     pub fn pointer_motion(&mut self, x: i32, y: i32) {
+        let (ox, oy) = self.focused_geometry_origin();
+        if std::env::var_os("DD_DISPLAY_INPUT_DEBUG").is_some_and(|v| !v.is_empty() && v != "0") {
+            eprintln!(
+                "dd-display[input]: pointer_motion content=({x},{y}) geometry_origin=({ox},{oy}) surface_local=({},{}) focus={:?}",
+                x + ox,
+                y + oy,
+                self.focus
+            );
+        }
+        let (x, y) = (x + ox, y + oy);
         self.last_ptr = (x, y);
         self.ensure_pointer_enter();
         let Some(ptr) = self.pointer else { return };
@@ -4185,6 +4253,100 @@ mod tests {
         assert!(
             msgs.iter().any(|(o, op, _)| *o == 20 && *op == 0),
             "expected xdg_surface.configure, got {msgs:?}"
+        );
+    }
+
+    // ---- BUG 1: pointer_motion offsets content-local coords by the focused surface's window-geometry
+    // origin, so the coordinate the client receives is FULL-surface-local. A GTK/CSD client renders a
+    // shadow margin around the visible window and sets its window geometry to the inner rect; the
+    // compositor crops the presented buffer to that rect, so on-screen clicks are content-local (relative
+    // to the cropped window) and must have (gx,gy) added back. Without this a click lands off-target by
+    // exactly the shadow margin (the ~10px-x/~20px-y bug). ----
+    #[test]
+    fn pointer_motion_adds_window_geometry_origin() {
+        let mut h = Harness::new();
+        h.server.seat_ver = 5;
+        h.server.pointer = Some(60);
+        // Focused toplevel with a CSD shadow margin: window geometry inset (gx=12, gy=23) into a larger
+        // surface. attach_x/attach_y are 0 (the buffer is committed at the surface origin).
+        let mut surf = Surface::default();
+        surf.window_geometry = Some((12, 23, 400, 300));
+        h.server.objs.insert(10, Obj::Surface(surf));
+        h.server.focus = Some(10);
+        let _ = h.drain();
+
+        // A click landing at content-local (100, 30) (relative to the on-screen cropped window).
+        h.server.pointer_motion(100, 30);
+        let msgs = h.drain();
+        let motion = msgs
+            .iter()
+            .find(|(o, op, _)| *o == 60 && *op == 2)
+            .unwrap_or_else(|| panic!("no wl_pointer.motion, got {msgs:?}"));
+        // motion body: time(u32), x(wl_fixed 24.8), y(wl_fixed 24.8). Decode surface-local integer coords.
+        let b = &motion.2;
+        let x = i32::from_ne_bytes(b[4..8].try_into().unwrap()) / 256;
+        let y = i32::from_ne_bytes(b[8..12].try_into().unwrap()) / 256;
+        assert_eq!(
+            (x, y),
+            (112, 53),
+            "content (100,30) + geometry origin (12,23) must be full-surface-local (112,53), got ({x},{y})"
+        );
+
+        // Control: with NO window geometry the coordinate passes through unchanged.
+        if let Some(Obj::Surface(s)) = h.server.objs.get_mut(&10) {
+            s.window_geometry = None;
+        }
+        h.server.pointer_motion(100, 30);
+        let msgs = h.drain();
+        let motion = msgs
+            .iter()
+            .find(|(o, op, _)| *o == 60 && *op == 2)
+            .unwrap_or_else(|| panic!("no wl_pointer.motion, got {msgs:?}"));
+        let b = &motion.2;
+        let x = i32::from_ne_bytes(b[4..8].try_into().unwrap()) / 256;
+        let y = i32::from_ne_bytes(b[8..12].try_into().unwrap()) / 256;
+        assert_eq!((x, y), (100, 30), "no geometry ⇒ passthrough, got ({x},{y})");
+    }
+
+    // ---- BUG 2: popup_placement resolves an xdg_popup's parent surface and the positioner (x,y) offset
+    // relative to that parent's window-geometry top-left, which the presenter turns into the popup window's
+    // screen position (parent-content-top-left + offset). Without it the popup opened at a default cascade
+    // (bottom of screen) instead of at its anchoring widget. ----
+    #[test]
+    fn popup_placement_resolves_parent_and_positioner_offset() {
+        let mut h = Harness::new();
+        h.server.objs.insert(5, Obj::XdgWmBase);
+        // Parent (10) and popup (11) wl_surfaces.
+        h.server.objs.insert(10, Obj::Surface(Surface::default()));
+        h.server.objs.insert(11, Obj::Surface(Surface::default()));
+        // Positioner(40): size 120x80, anchor rect (10,20,100,40), anchor bottom_left, gravity bottom_right,
+        // offset (3,7). geometry() ⇒ anchor point (10, 20+40)=(10,60); gravity bottom_right ⇒ no shift;
+        // + offset ⇒ (13, 67).
+        h.req(5, 1, body().u32(40)); // create_positioner
+        h.req(40, 1, body().i32(120).i32(80)); // set_size
+        h.req(40, 2, body().i32(10).i32(20).i32(100).i32(40)); // set_anchor_rect
+        h.req(40, 3, body().u32(6)); // set_anchor bottom_left
+        h.req(40, 4, body().u32(8)); // set_gravity bottom_right
+        h.req(40, 6, body().i32(3).i32(7)); // set_offset
+        // xdg_surfaces for parent (20→surface 10) and popup (21→surface 11).
+        h.req(5, 2, body().u32(20).u32(10)); // get_xdg_surface parent
+        h.req(5, 2, body().u32(21).u32(11)); // get_xdg_surface popup
+        // get_popup(id=31, parent=xdg_surface 20, positioner=40) on the popup's xdg_surface (21).
+        h.req(21, 2, body().u32(31).u32(20).u32(40));
+
+        let placement = h
+            .server
+            .popup_placement(11)
+            .expect("popup surface 11 must resolve a placement");
+        assert_eq!(
+            placement,
+            PopupPlacement { parent_sid: 10, x: 13, y: 67 },
+            "popup anchored to parent surface 10 at positioner offset (13,67), got {placement:?}"
+        );
+        // A plain toplevel surface (no popup role) resolves nothing.
+        assert!(
+            h.server.popup_placement(10).is_none(),
+            "the parent toplevel is not a popup"
         );
     }
 
