@@ -1151,6 +1151,288 @@ fn write_scalar(mem: &mut [u8], at: usize, width: usize, val: u64) -> Result<()>
 }
 
 // ===================================================================================================
+// WGSL back-end — lower a compiled KernelProgram to a WGSL compute shader (the REAL-GPU path)
+// ===================================================================================================
+//
+// The software interpreter above is the CPU oracle. For the real Metal GPU we lower the SAME
+// [`KernelProgram`] to a WGSL compute entry point that `dd-gpu-wgpu` hands to naga → wgpu → MSL. This
+// keeps ONE PTX front-end (`compile`) feeding both backends; only the code-gen tail differs (CPU
+// interpret vs. WGSL emit), exactly the `software.rs` / `metal.rs` seam the module header describes.
+//
+// ## Shape of the emitted shader (matches the launch ABI in `cuda.rs`)
+// * `@group(0) @binding(0) var<storage, read> params: array<u32>;` — the flat kernel-parameter blob;
+//   a scalar param at byte `off` is `params[off/4]`.
+// * `@group(0) @binding(r+1) var<storage, read_write> region{r}: array<u32>;` — one storage buffer per
+//   pointer parameter (region `r`), addressed as raw 32-bit words; f32 travels as its bit pattern.
+// * `@workgroup_size(bx,by,bz)` baked from the launch block; `%tid`→`local_invocation_id`,
+//   `%ntid`→the constant block dims, `%ctaid`→`workgroup_id`, `%nctaid`→`num_workgroups`.
+//
+// Registers become function-scope `var r{n}: u32` (all 32-bit; f32 via `bitcast`, pointers as their
+// byte-offset within a region — mirroring `Val::P.off`). Unstructured PTX control flow (`bra`) is made
+// WGSL-legal by a `pc`-dispatch `loop { switch pc { case k: {…} } }`, so an arbitrary forward/back
+// branch is just `pc = target;`. This is the general translation of the register machine; no relooper.
+//
+// ## Which region a `ld/st.global` touches
+// The storage binding must be statically known (WGSL can't index across bindings), so we run the same
+// pointer-taint the interpreter does, but per register: a register carries `Some(region)` iff it holds
+// a device address, propagated through `ld.param`(ptr) / `cvta` / `mov` / pointer±int. A global access
+// through a register with no region is rejected (the flat-unified-VA case Metal can't model).
+
+/// Byte width a `gty` global access reads/writes.
+fn gty_elem_bytes(ty: u8) -> Result<u32> {
+    match ty {
+        gty::F32 | gty::U32 => Ok(4),
+        // 64-bit global access can't be expressed over an `array<u32>` word view without a two-word
+        // split; outside the elementwise slice this lowering targets, so reject it honestly.
+        gty::U64 => Err(err("wgsl lowering: 64-bit global load/store unsupported (elementwise subset)")),
+        other => Err(err(format!("wgsl lowering: unknown global type {other}"))),
+    }
+}
+
+/// Static per-register pointer-region analysis: `out[r] == Some(region)` iff register `r` holds a
+/// device address into that pointer-parameter region at its most recent definition. Forward, last-write-
+/// wins — correct for the straight-line-with-forward-guard subset this lowering accepts.
+fn region_analysis(prog: &KernelProgram) -> Vec<Option<u32>> {
+    let mut reg: Vec<Option<u32>> = vec![None; prog.reg_count as usize];
+    let of = |reg: &Vec<Option<u32>>, op: &Op| -> Option<u32> {
+        match op {
+            Op::Reg(r) => reg[*r as usize],
+            _ => None,
+        }
+    };
+    for inst in &prog.insts {
+        match inst {
+            Inst::LdParam { d, param } => {
+                let p = &prog.params[*param as usize];
+                reg[*d as usize] = if p.is_ptr { Some(p.region) } else { None };
+            }
+            Inst::MovReg { d, s } => reg[*d as usize] = reg[*s as usize],
+            Inst::Cvta { d, s } => reg[*d as usize] = reg[*s as usize],
+            Inst::IAdd { d, a, b, .. } | Inst::ISub { d, a, b, .. } => {
+                reg[*d as usize] = of(&reg, a).or_else(|| of(&reg, b));
+            }
+            Inst::IMad { d, a, b, c } => {
+                reg[*d as usize] = of(&reg, a).or_else(|| of(&reg, b)).or_else(|| of(&reg, c));
+            }
+            Inst::IMul { d, a, b, .. } => reg[*d as usize] = of(&reg, a).or_else(|| of(&reg, b)),
+            // Every other opcode produces a plain value (a load result, a scalar, a predicate).
+            Inst::MovImmI { d, .. }
+            | Inst::MovImmF { d, .. }
+            | Inst::MovSReg { d, .. }
+            | Inst::LdGlobal { d, .. }
+            | Inst::Setp { d, .. }
+            | Inst::FAdd { d, .. }
+            | Inst::FSub { d, .. }
+            | Inst::FMul { d, .. }
+            | Inst::FFma { d, .. }
+            | Inst::Cvt { d, .. } => reg[*d as usize] = None,
+            Inst::StGlobal { .. } | Inst::Bra { .. } | Inst::Ret | Inst::Nop => {}
+        }
+    }
+    reg
+}
+
+/// A special-register id → the WGSL builtin/constant expression that yields its value.
+fn sreg_expr(sreg: u8, block: [u32; 3]) -> String {
+    match sreg {
+        SR_TID_X => "lid.x".into(),
+        SR_TID_Y => "lid.y".into(),
+        SR_TID_Z => "lid.z".into(),
+        SR_NTID_X => format!("{}u", block[0]),
+        SR_NTID_Y => format!("{}u", block[1]),
+        SR_NTID_Z => format!("{}u", block[2]),
+        SR_CTAID_X => "wid.x".into(),
+        SR_CTAID_Y => "wid.y".into(),
+        SR_CTAID_Z => "wid.z".into(),
+        SR_NCTAID_X => "nwg.x".into(),
+        SR_NCTAID_Y => "nwg.y".into(),
+        _ => "nwg.z".into(), // SR_NCTAID_Z
+    }
+}
+
+fn op_u32(op: &Op) -> String {
+    match op {
+        Op::Reg(r) => format!("r{r}"),
+        Op::ImmI(i) => format!("{}u", *i as u32),
+        Op::ImmF(b) => format!("{b}u"),
+    }
+}
+fn op_i32(op: &Op) -> String {
+    match op {
+        Op::Reg(r) => format!("bitcast<i32>(r{r})"),
+        Op::ImmI(i) => format!("i32({})", *i as i32),
+        Op::ImmF(b) => format!("bitcast<i32>({b}u)"),
+    }
+}
+fn op_f32(op: &Op) -> String {
+    match op {
+        Op::Reg(r) => format!("bitcast<f32>(r{r})"),
+        Op::ImmF(b) => format!("bitcast<f32>({b}u)"),
+        Op::ImmI(i) => format!("f32({i})"),
+    }
+}
+
+/// Lower a compiled [`KernelProgram`] to a WGSL compute shader whose entry point is `prog.entry`. The
+/// emitted module is what `dd-gpu-wgpu` compiles to a real `wgpu::ComputePipeline` (naga WGSL→MSL). See
+/// the section header for the ABI and control-flow model. Returns [`GpuError::Ptx`] for any instruction
+/// outside the elementwise subset this lowering supports (e.g. a 64-bit global access, or a global
+/// access through a register with no statically-known region).
+pub fn kernel_to_wgsl(prog: &KernelProgram) -> Result<String> {
+    let region = region_analysis(prog);
+    let region_of = |addr: u16| -> Result<u32> {
+        region[addr as usize].ok_or_else(|| {
+            err("wgsl lowering: global access through a value with no static pointer region")
+        })
+    };
+
+    let mut s = String::new();
+    // --- resource bindings (params + one storage buffer per pointer region) ---
+    s.push_str("@group(0) @binding(0) var<storage, read> params: array<u32>;\n");
+    for r in 0..prog.num_regions {
+        s.push_str(&format!(
+            "@group(0) @binding({}) var<storage, read_write> region{r}: array<u32>;\n",
+            r + 1
+        ));
+    }
+    s.push('\n');
+
+    // --- entry point signature (block dims baked as the workgroup size) ---
+    let [bx, by, bz] = prog.block;
+    s.push_str(&format!("@compute @workgroup_size({}, {}, {})\n", bx.max(1), by.max(1), bz.max(1)));
+    s.push_str(&format!("fn {}(\n", prog.entry));
+    s.push_str("    @builtin(local_invocation_id) lid: vec3<u32>,\n");
+    s.push_str("    @builtin(workgroup_id) wid: vec3<u32>,\n");
+    s.push_str("    @builtin(num_workgroups) nwg: vec3<u32>,\n");
+    s.push_str(") {\n");
+
+    // --- register file (all u32; f32 via bitcast, pointers as their region byte-offset) ---
+    for r in 0..prog.reg_count {
+        s.push_str(&format!("    var r{r}: u32 = 0u;\n"));
+    }
+
+    // --- pc-dispatch loop: makes unstructured `bra` WGSL-legal (structured control flow only) ---
+    // Termination sets `pc = -1`; the loop-top guard is the only real loop `break`. (A `break` inside a
+    // WGSL `switch` case exits the *switch*, not the loop — so `ret`/end must signal via `pc` instead.)
+    s.push_str("    var pc: i32 = 0;\n");
+    s.push_str("    loop {\n");
+    s.push_str("        if (pc < 0) { break; }\n");
+    s.push_str("        switch pc {\n");
+    for (k, inst) in prog.insts.iter().enumerate() {
+        let mut body = String::new();
+        let mut branched = false; // instruction sets pc itself (no fallthrough advance)
+        match inst {
+            Inst::Ret => {
+                body.push_str("pc = -1;");
+                branched = true;
+            }
+            Inst::Nop => {}
+            Inst::MovImmI { d, imm } => body.push_str(&format!("r{d} = {}u;", *imm as u32)),
+            Inst::MovImmF { d, bits } => body.push_str(&format!("r{d} = {bits}u;")),
+            Inst::MovReg { d, s: src } => body.push_str(&format!("r{d} = r{src};")),
+            Inst::MovSReg { d, sreg } => {
+                body.push_str(&format!("r{d} = {};", sreg_expr(*sreg, prog.block)))
+            }
+            Inst::LdParam { d, param } => {
+                let p = &prog.params[*param as usize];
+                if p.is_ptr {
+                    body.push_str(&format!("r{d} = 0u;"));
+                } else {
+                    body.push_str(&format!("r{d} = params[{}u];", p.offset / 4));
+                }
+            }
+            Inst::Cvta { d, s: src } => body.push_str(&format!("r{d} = r{src};")),
+            Inst::IAdd { d, a, b, .. } => {
+                body.push_str(&format!("r{d} = {} + {};", op_u32(a), op_u32(b)))
+            }
+            Inst::ISub { d, a, b, .. } => {
+                body.push_str(&format!("r{d} = {} - {};", op_u32(a), op_u32(b)))
+            }
+            Inst::IMul { d, a, b, .. } => {
+                body.push_str(&format!("r{d} = {} * {};", op_u32(a), op_u32(b)))
+            }
+            Inst::IMad { d, a, b, c } => {
+                body.push_str(&format!("r{d} = {} * {} + {};", op_u32(a), op_u32(b), op_u32(c)))
+            }
+            Inst::Setp { d, a, b, cmp, unsigned } => {
+                let sym = match *cmp {
+                    CMP_EQ => "==",
+                    CMP_NE => "!=",
+                    CMP_LT => "<",
+                    CMP_LE => "<=",
+                    CMP_GT => ">",
+                    _ => ">=", // CMP_GE
+                };
+                let cond = if *unsigned {
+                    format!("{} {sym} {}", op_u32(a), op_u32(b))
+                } else {
+                    format!("{} {sym} {}", op_i32(a), op_i32(b))
+                };
+                body.push_str(&format!("r{d} = select(0u, 1u, {cond});"));
+            }
+            Inst::Bra { target, pred } => {
+                match pred {
+                    None => body.push_str(&format!("pc = {target};")),
+                    Some((p, neg)) => {
+                        let cond = if *neg { format!("r{p} == 0u") } else { format!("r{p} != 0u") };
+                        body.push_str(&format!("if ({cond}) {{ pc = {target}; }} else {{ pc = {}; }}", k + 1));
+                    }
+                }
+                branched = true;
+            }
+            Inst::LdGlobal { d, addr, off, ty } => {
+                let r = region_of(*addr)?;
+                let elem = gty_elem_bytes(*ty)?;
+                body.push_str(&format!(
+                    "r{d} = region{r}[(r{addr} + {}u) / {elem}u];",
+                    *off as u32
+                ));
+            }
+            Inst::StGlobal { addr, off, src, ty } => {
+                let r = region_of(*addr)?;
+                let elem = gty_elem_bytes(*ty)?;
+                body.push_str(&format!(
+                    "region{r}[(r{addr} + {}u) / {elem}u] = {};",
+                    *off as u32,
+                    op_u32(src)
+                ));
+            }
+            Inst::FAdd { d, a, b } => {
+                body.push_str(&format!("r{d} = bitcast<u32>({} + {});", op_f32(a), op_f32(b)))
+            }
+            Inst::FSub { d, a, b } => {
+                body.push_str(&format!("r{d} = bitcast<u32>({} - {});", op_f32(a), op_f32(b)))
+            }
+            Inst::FMul { d, a, b } => {
+                body.push_str(&format!("r{d} = bitcast<u32>({} * {});", op_f32(a), op_f32(b)))
+            }
+            Inst::FFma { d, a, b, c } => body.push_str(&format!(
+                "r{d} = bitcast<u32>(fma({}, {}, {}));",
+                op_f32(a),
+                op_f32(b),
+                op_f32(c)
+            )),
+            Inst::Cvt { d, s: src, kind } => {
+                let e = match *kind {
+                    CVT_F32_FROM_S32 => format!("bitcast<u32>(f32({}))", op_i32(src)),
+                    CVT_S64_FROM_S32 => op_u32(src),
+                    CVT_S32_FROM_F32 => format!("bitcast<u32>(i32({}))", op_f32(src)),
+                    _ => op_u32(src),
+                };
+                body.push_str(&format!("r{d} = {e};"));
+            }
+        }
+        if !branched {
+            body.push_str(&format!(" pc = {};", k + 1));
+        }
+        s.push_str(&format!("            case {k}: {{ {body} }}\n"));
+    }
+    // Fell off the end (or a branch past the last case) → signal termination; the loop-top guard breaks.
+    s.push_str("            default: { pc = -1; }\n");
+    s.push_str("        }\n    }\n}\n");
+    Ok(s)
+}
+
+// ===================================================================================================
 // tests — parser round-trips + malformed rejection (headless, no GPU)
 // ===================================================================================================
 #[cfg(test)]
@@ -1308,6 +1590,45 @@ mod tests {
         let mut regions = vec![vec![0u8; 64]];
         let r = execute(&prog, &blob, &mut regions, (1, 1, 1));
         assert!(matches!(r, Err(GpuError::OutOfBounds)));
+    }
+
+    #[test]
+    fn vecadd_lowers_to_wgsl_compute() {
+        // The WGSL back-end emits a compute entry point with the launch ABI: params at binding 0, one
+        // storage buffer per pointer region (a,b,c → region0/1/2 at bindings 1/2/3), the block dims as
+        // the workgroup size, and the pc-dispatch loop that makes the `if (i>=n) return;` bra legal.
+        let prog = compile(VECADD_PTX, "vecadd", [256, 1, 1]).unwrap();
+        let wgsl = kernel_to_wgsl(&prog).unwrap();
+        assert!(wgsl.contains("@compute @workgroup_size(256, 1, 1)"), "{wgsl}");
+        assert!(wgsl.contains("fn vecadd("), "{wgsl}");
+        assert!(wgsl.contains("var<storage, read> params: array<u32>;"), "{wgsl}");
+        assert!(wgsl.contains("@binding(1) var<storage, read_write> region0: array<u32>;"), "{wgsl}");
+        assert!(wgsl.contains("@binding(3) var<storage, read_write> region2: array<u32>;"), "{wgsl}");
+        // the store lands in region2 (c), the load reads region0/region1 (a/b), and the index is a global
+        // thread id built from ctaid*ntid+tid → workgroup_id / num / local builtins are referenced.
+        assert!(wgsl.contains("region2[") && wgsl.contains("= r"), "store into c: {wgsl}");
+        assert!(wgsl.contains("lid.x") && wgsl.contains("wid.x"), "uses SIMT builtins: {wgsl}");
+        assert!(wgsl.contains("loop {") && wgsl.contains("switch pc {"), "pc-dispatch: {wgsl}");
+        // the scalar bound `n` (param 3, byte offset 24) is read from the param blob at word 6.
+        assert!(wgsl.contains("params[6u]"), "reads n from params: {wgsl}");
+    }
+
+    #[test]
+    fn wgsl_rejects_64bit_global_access() {
+        // A 64-bit global store can't be expressed over the `array<u32>` word view without a two-word
+        // split, so it's outside this lowering's elementwise subset — a typed rejection, not a bad emit.
+        let ptx = r#"
+            .entry st64(.param .u64 p) {
+                ld.param.u64 %rd1, [p];
+                cvta.to.global.u64 %rd2, %rd1;
+                mov.u32 %r1, 7;
+                cvt.s64.s32 %rd3, %r1;
+                st.global.u64 [%rd2], %rd3;
+                ret;
+            }
+        "#;
+        let prog = compile(ptx, "st64", [1, 1, 1]).unwrap();
+        assert!(matches!(kernel_to_wgsl(&prog), Err(GpuError::Ptx(_))));
     }
 
     #[test]

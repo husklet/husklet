@@ -1207,6 +1207,25 @@ impl GpuBackend for WgpuBackend {
             return Ok(());
         }
 
+        // CUDA compute path: the `spirv` field may carry a dd-GPU **kernel descriptor** (forwarded PTX +
+        // launch config, magic `KERNEL_MAGIC`) instead of SPIR-V — the per-backend shader ABI seam. Compile
+        // the PTX to the shared kernel IR and lower it to a WGSL compute entry point, so the existing
+        // `create_compute_pipeline` + dispatch path runs the kernel on the real Metal GPU (PTX → WGSL →
+        // naga → MSL). This reuses dd-gpu's single, tested PTX front-end; only the code-gen tail is WGSL.
+        if let Some(desc) = dd_gpu::ptx::KernelDescriptor::from_words(spirv) {
+            let desc = desc?;
+            let prog = dd_gpu::ptx::compile(&desc.ptx, &desc.entry, desc.block)?;
+            let wgsl = dd_gpu::ptx::kernel_to_wgsl(&prog)?;
+            let module = self.device.create_shader_module(wgpu::ShaderModuleDescriptor {
+                label: Some("dd-cuda-kernel"),
+                source: wgpu::ShaderSource::Wgsl(wgsl.into()),
+            });
+            self.shader_content_cache.insert(key, module.clone());
+            self.shaders.insert(id.0, module);
+            self.shader_compiles += 1;
+            return Ok(());
+        }
+
         match crate::shader::spirv_to_wgsl(spirv) {
             Ok(Some(wgsl)) => {
                 let module = self.device.create_shader_module(wgpu::ShaderModuleDescriptor {
@@ -1517,29 +1536,35 @@ impl GpuBackend for WgpuBackend {
                 Enc::SetBindGroup { group, .. } => {
                     let pid = cur_pipe.ok_or(GpuError::Invalid("SetBindGroup before SetPipeline"))?;
                     // Resolve everything into owned locals so the immutable borrows of `self` end before the
-                    // cache mutation below.
+                    // cache mutation below. The bound pipeline is either a render pipeline (builtin/app kinds,
+                    // layout borrowed from it) or a COMPUTE pipeline (a CUDA kernel; bindings used verbatim
+                    // like an app pipeline, layout from the compute pipeline's own auto layout).
                     let (kind, layout, desc, cacheable, key) = {
-                        let rp = self
-                            .render_pipelines
-                            .get(&pid)
-                            .ok_or(GpuError::UnknownId { kind: "pipeline", id: pid })?;
                         let desc = self
                             .bind_groups
                             .get(group)
                             .ok_or(GpuError::UnknownId { kind: "bind_group", id: *group })?;
-                        let layout = rp.pipeline.get_bind_group_layout(desc.set);
                         // Never cache a group that binds the presented surface: the executor re-registers the
                         // present target (a fresh view) every frame, so a cached group would hold a stale one.
                         let cacheable = !desc.entries.iter().any(|e| {
                             matches!(&e.resource, BindResource::Texture { id } if self.surface_ids.contains(id))
                         });
+                        let (kind, layout, kind_tag) = if let Some(rp) = self.render_pipelines.get(&pid) {
+                            (rp.kind, rp.pipeline.get_bind_group_layout(desc.set), rp.kind.tag())
+                        } else if let Some(cp) = self.compute_pipelines.get(&pid) {
+                            // Distinct kind tag (3) so a compute group can't collide with a render one sharing
+                            // the same group id + epoch in the cache.
+                            (PipeKind::App, cp.get_bind_group_layout(desc.set), 3u8)
+                        } else {
+                            return Err(GpuError::UnknownId { kind: "pipeline", id: pid });
+                        };
                         let key = BindGroupKey {
                             id: *group,
                             set: desc.set,
-                            kind: rp.kind.tag(),
+                            kind: kind_tag,
                             epoch: self.res_epoch,
                         };
-                        (rp.kind, layout, desc.clone(), cacheable, key)
+                        (kind, layout, desc.clone(), cacheable, key)
                     };
                     let bg = if cacheable {
                         if let Some(cached) = self.bind_group_cache.get(&key) {
