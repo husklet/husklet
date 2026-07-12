@@ -570,6 +570,7 @@ name = "dd-display"
 version = "0.1.0"
 dependencies = [
  "dd-gpu",
+ "dd-gpu-wgpu",
  "dd-term-core",
  "libc",
  "objc2",

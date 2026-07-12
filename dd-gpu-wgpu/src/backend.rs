@@ -76,6 +76,28 @@ fn vs(@builtin(vertex_index) vi: u32) -> @builtin(position) vec4<f32> {
 fn fs() -> @location(0) vec4<f32> { return c.color; }
 "#;
 
+// Fullscreen-triangle VERTICAL flip: samples `src` with V inverted, so it converts a top-left-origin
+// render into the bottom-left (GL-convention) storage the bespoke Metal replay produces via a negative-
+// height viewport. wgpu forbids negative viewport heights, so offscreen render-target passes (a Chrome
+// content tile, an FBO) render upright into a scratch texture and are flipped into the real target by a
+// draw with this pipeline. uv.y = (clip.y+1)/2 maps screen-top (clip.y=+1) to the source BOTTOM row.
+const FLIP_WGSL: &str = r#"
+@group(0) @binding(0) var src: texture_2d<f32>;
+@group(0) @binding(1) var samp: sampler;
+struct VOut { @builtin(position) pos: vec4<f32>, @location(0) uv: vec2<f32> };
+@vertex
+fn vs(@builtin(vertex_index) vi: u32) -> VOut {
+    var p = array<vec2<f32>, 3>(vec2<f32>(-1.0, -3.0), vec2<f32>(-1.0, 1.0), vec2<f32>(3.0, 1.0));
+    var o: VOut;
+    let cp = p[vi];
+    o.pos = vec4<f32>(cp, 0.0, 1.0);
+    o.uv = vec2<f32>((cp.x + 1.0) * 0.5, (cp.y + 1.0) * 0.5);
+    return o;
+}
+@fragment
+fn fs(i: VOut) -> @location(0) vec4<f32> { return textureSample(src, samp, i.uv); }
+"#;
+
 // ---------------------------------------------------------------------------------------------------
 // enum / bit mapping helpers (IR -> wgpu)
 // ---------------------------------------------------------------------------------------------------
@@ -294,7 +316,18 @@ pub struct WgpuBackend {
     // builtin modules (compiled once)
     flat_module: wgpu::ShaderModule,
     tex_module: wgpu::ShaderModule,
-    clear_pipeline: wgpu::RenderPipeline,
+    /// Scissored-clear (`ClearRect`) pipelines, one per render-target format. The attachment format must
+    /// match the pipeline's color target, so a BGRA IOSurface present surface needs its own variant (the
+    /// original hardcoded `Rgba8Unorm` pipeline errored on a BGRA target). Keyed by wgpu format.
+    clear_pipelines: HashMap<wgpu::TextureFormat, wgpu::RenderPipeline>,
+    /// Vertical-flip pipelines (offscreen Y-flip), one per render-target format (same format-match rule).
+    flip_pipelines: HashMap<wgpu::TextureFormat, wgpu::RenderPipeline>,
+    /// Shared modules for lazily building extra clear/flip format variants on demand.
+    clear_module: wgpu::ShaderModule,
+    flip_module: wgpu::ShaderModule,
+    flip_sampler: wgpu::Sampler,
+    /// Per offscreen-target scratch textures the flip renders through (reused across frames by target id).
+    flip_scratch: HashMap<u32, TexEntry>,
 
     /// Fence values reached, and the submission index that will reach them. `wait_fence` polls to Wait.
     last_submission: Option<wgpu::SubmissionIndex>,
@@ -346,31 +379,25 @@ impl WgpuBackend {
             label: Some("dd-clear"),
             source: wgpu::ShaderSource::Wgsl(CLEAR_WGSL.into()),
         });
-        let clear_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("dd-clear-pipe"),
-            layout: None,
-            vertex: wgpu::VertexState {
-                module: &clear_module,
-                entry_point: Some("vs"),
-                compilation_options: Default::default(),
-                buffers: &[],
-            },
-            fragment: Some(wgpu::FragmentState {
-                module: &clear_module,
-                entry_point: Some("fs"),
-                compilation_options: Default::default(),
-                targets: &[Some(wgpu::ColorTargetState {
-                    format: wgpu::TextureFormat::Rgba8Unorm,
-                    blend: None,
-                    write_mask: wgpu::ColorWrites::ALL,
-                })],
-            }),
-            primitive: wgpu::PrimitiveState::default(),
-            depth_stencil: None,
-            multisample: wgpu::MultisampleState::default(),
-            multiview: None,
-            cache: None,
+        let flip_module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("dd-flip"),
+            source: wgpu::ShaderSource::Wgsl(FLIP_WGSL.into()),
         });
+        let flip_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+            label: Some("dd-flip-samp"),
+            mag_filter: wgpu::FilterMode::Nearest,
+            min_filter: wgpu::FilterMode::Nearest,
+            ..Default::default()
+        });
+        // Prebuild the two render-target formats that actually occur (RGBA8 offscreen/goldens, BGRA8
+        // IOSurface present surface); rarer formats are materialized lazily in `clear_pipeline_for` /
+        // `flip_pipeline_for`.
+        let mut clear_pipelines = HashMap::new();
+        let mut flip_pipelines = HashMap::new();
+        for f in [wgpu::TextureFormat::Rgba8Unorm, wgpu::TextureFormat::Bgra8Unorm] {
+            clear_pipelines.insert(f, Self::make_clear_pipeline(&device, &clear_module, f));
+            flip_pipelines.insert(f, Self::make_flip_pipeline(&device, &flip_module, f));
+        }
         Self {
             device,
             queue,
@@ -384,11 +411,80 @@ impl WgpuBackend {
             bind_groups: HashMap::new(),
             flat_module,
             tex_module,
-            clear_pipeline,
+            clear_pipelines,
+            flip_pipelines,
+            clear_module,
+            flip_module,
+            flip_sampler,
+            flip_scratch: HashMap::new(),
             last_submission: None,
             fences: HashMap::new(),
             surface_ids: std::collections::HashSet::new(),
         }
+    }
+
+    fn make_clear_pipeline(
+        device: &wgpu::Device,
+        module: &wgpu::ShaderModule,
+        format: wgpu::TextureFormat,
+    ) -> wgpu::RenderPipeline {
+        device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("dd-clear-pipe"),
+            layout: None,
+            vertex: wgpu::VertexState {
+                module,
+                entry_point: Some("vs"),
+                compilation_options: Default::default(),
+                buffers: &[],
+            },
+            fragment: Some(wgpu::FragmentState {
+                module,
+                entry_point: Some("fs"),
+                compilation_options: Default::default(),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format,
+                    blend: None,
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+            }),
+            primitive: wgpu::PrimitiveState::default(),
+            depth_stencil: None,
+            multisample: wgpu::MultisampleState::default(),
+            multiview: None,
+            cache: None,
+        })
+    }
+
+    fn make_flip_pipeline(
+        device: &wgpu::Device,
+        module: &wgpu::ShaderModule,
+        format: wgpu::TextureFormat,
+    ) -> wgpu::RenderPipeline {
+        device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("dd-flip-pipe"),
+            layout: None,
+            vertex: wgpu::VertexState {
+                module,
+                entry_point: Some("vs"),
+                compilation_options: Default::default(),
+                buffers: &[],
+            },
+            fragment: Some(wgpu::FragmentState {
+                module,
+                entry_point: Some("fs"),
+                compilation_options: Default::default(),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format,
+                    blend: None,
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+            }),
+            primitive: wgpu::PrimitiveState::default(),
+            depth_stencil: None,
+            multisample: wgpu::MultisampleState::default(),
+            multiview: None,
+            cache: None,
+        })
     }
 
     /// Access the underlying device/queue (for interop / test harnesses building wgpu textures).
@@ -507,6 +603,186 @@ impl WgpuBackend {
             layout,
             entries: &entries,
         }))
+    }
+
+    /// Ensure a clear + flip pipeline exists for render-target `format` (materialized lazily for formats
+    /// beyond the RGBA8/BGRA8 prebuilt in `from_shared`). Called from the `submit` pre-scan so the hot
+    /// recording path only ever reads the maps.
+    fn ensure_pipelines_for(&mut self, format: TextureFormat) {
+        let wf = tex_format(format);
+        if is_depth(format) {
+            return;
+        }
+        if !self.clear_pipelines.contains_key(&wf) {
+            let p = Self::make_clear_pipeline(&self.device, &self.clear_module, wf);
+            self.clear_pipelines.insert(wf, p);
+        }
+        if !self.flip_pipelines.contains_key(&wf) {
+            let p = Self::make_flip_pipeline(&self.device, &self.flip_module, wf);
+            self.flip_pipelines.insert(wf, p);
+        }
+    }
+
+    fn clear_pipeline_for(&self, format: TextureFormat) -> &wgpu::RenderPipeline {
+        let wf = tex_format(format);
+        self.clear_pipelines
+            .get(&wf)
+            .unwrap_or_else(|| &self.clear_pipelines[&wgpu::TextureFormat::Rgba8Unorm])
+    }
+
+    fn flip_pipeline_for(&self, format: TextureFormat) -> &wgpu::RenderPipeline {
+        let wf = tex_format(format);
+        self.flip_pipelines
+            .get(&wf)
+            .unwrap_or_else(|| &self.flip_pipelines[&wgpu::TextureFormat::Rgba8Unorm])
+    }
+
+    /// Ensure a scratch render texture for offscreen target `id` (matching size/format). Offscreen passes
+    /// render upright into this scratch, then a flip draw copies it into the real target Y-mirrored (see
+    /// `encode_flip`) — wgpu's stand-in for the Metal replay's negative-height viewport trick.
+    fn ensure_flip_scratch(&mut self, id: u32, w: u32, h: u32, format: TextureFormat) {
+        let stale = match self.flip_scratch.get(&id) {
+            Some(t) => t.width != w || t.height != h || t.format != format,
+            None => true,
+        };
+        if !stale {
+            return;
+        }
+        let texture = self.device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("dd-flip-scratch"),
+            size: wgpu::Extent3d { width: w.max(1), height: h.max(1), depth_or_array_layers: 1 },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: tex_format(format),
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT
+                | wgpu::TextureUsages::TEXTURE_BINDING
+                | wgpu::TextureUsages::COPY_SRC
+                | wgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
+        });
+        let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+        self.flip_scratch.insert(id, TexEntry { texture, view, format, width: w, height: h });
+    }
+
+    /// Encode a full-target vertical-flip draw: sample `src` (V-inverted) into `dst`. Both must be the
+    /// same size/format. Used to convert an upright offscreen render into GL-convention storage and back.
+    fn encode_flip(&self, enc: &mut wgpu::CommandEncoder, src: &TexEntry, dst: &TexEntry) {
+        let pipeline = self.flip_pipeline_for(dst.format);
+        let layout = pipeline.get_bind_group_layout(0);
+        let bg = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("dd-flip-bg"),
+            layout: &layout,
+            entries: &[
+                wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(&src.view) },
+                wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::Sampler(&self.flip_sampler) },
+            ],
+        });
+        let mut rp = enc.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some("dd-flip-pass"),
+            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                view: &dst.view,
+                resolve_target: None,
+                ops: wgpu::Operations { load: wgpu::LoadOp::Load, store: wgpu::StoreOp::Store },
+            })],
+            depth_stencil_attachment: None,
+            timestamp_writes: None,
+            occlusion_query_set: None,
+        });
+        rp.set_pipeline(pipeline);
+        rp.set_bind_group(0, &bg, &[]);
+        rp.draw(0..3, 0..1);
+    }
+
+    // ---------------------------------------------------------------------------------------------------
+    // Live present-path interop (zero-copy IOSurface). The recipe is proven in
+    // examples/iosurface_interop.rs; these methods make it callable from dd-display's executor without
+    // dd-display depending on wgpu-hal/metal directly.
+    // ---------------------------------------------------------------------------------------------------
+
+    /// The raw `*mut MTLDevice` (objc2 `ProtocolObject<dyn MTLDevice>` pointer) underlying this backend's
+    /// `wgpu::Device`. dd-display retains it and wraps the guest IOSurface as an `MTLTexture` on the SAME
+    /// device, so the wgpu render and the compositor blit share one device — no cross-device copy.
+    pub fn raw_mtl_device(&self) -> *mut std::ffi::c_void {
+        use metal::foreign_types::ForeignType as _;
+        unsafe {
+            self.device.as_hal::<wgpu_hal::api::Metal, _, _>(|hal| {
+                hal.map(|h| h.raw_device().lock().as_ptr() as *mut std::ffi::c_void)
+                    .unwrap_or(std::ptr::null_mut())
+            })
+        }
+    }
+
+    /// Bridge an IOSurface-backed `MTLTexture` (raw objc2 `*mut` created on `raw_mtl_device()`) into a
+    /// `wgpu::Texture` and register it as executor render target `id`. `raw_tex` must stay retained by the
+    /// caller for as long as this target is used (the IOSurface's pages are its storage).
+    ///
+    /// # Safety
+    /// `raw_tex` must be a valid, live `MTLTexture` of the given `format`/size created on this device.
+    pub unsafe fn wrap_iosurface_texture(
+        &mut self,
+        id: u32,
+        raw_tex: *mut std::ffi::c_void,
+        w: u32,
+        h: u32,
+        format: TextureFormat,
+    ) {
+        use metal::foreign_types::ForeignTypeRef as _;
+        let wf = tex_format(format);
+        // Borrow the raw id, then `to_owned` (retain +1) so wgpu-hal owns an independent handle it releases
+        // on drop — exactly the objc2 <-> metal-rs seam from examples/iosurface_interop.rs.
+        let mtl_texture: metal::Texture = metal::TextureRef::from_ptr(raw_tex.cast()).to_owned();
+        let hal_texture = wgpu_hal::metal::Device::texture_from_raw(
+            mtl_texture,
+            wf,
+            metal::MTLTextureType::D2,
+            1,
+            1,
+            wgpu_hal::CopyExtent { width: w, height: h, depth: 1 },
+        );
+        let wgpu_tex = self.device.create_texture_from_hal::<wgpu_hal::api::Metal>(
+            hal_texture,
+            &wgpu::TextureDescriptor {
+                label: Some("dd-iosurface-target"),
+                size: wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: wf,
+                usage: wgpu::TextureUsages::RENDER_ATTACHMENT
+                    | wgpu::TextureUsages::TEXTURE_BINDING
+                    | wgpu::TextureUsages::COPY_SRC
+                    | wgpu::TextureUsages::COPY_DST,
+                view_formats: &[],
+            },
+        );
+        self.set_render_target(id, wgpu_tex, format);
+    }
+
+    /// Block until all submitted GPU work has completed. The live present path polls this before acking the
+    /// guest frame so the compositor's (unfenced) blit reads a fully-rendered IOSurface.
+    pub fn poll_wait(&self) {
+        let _ = self.device.poll(wgpu::Maintain::Wait);
+    }
+
+    /// Create a wgpu-owned render target of `format` and register it as executor target `id` (present
+    /// surface). Convenience for host-side harnesses (the golden replay) that verify against `read_target`
+    /// without themselves depending on wgpu — mirrors the IOSurface target the live path registers.
+    pub fn create_render_target(&mut self, id: u32, w: u32, h: u32, format: TextureFormat) {
+        let texture = self.device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("dd-render-target"),
+            size: wgpu::Extent3d { width: w.max(1), height: h.max(1), depth_or_array_layers: 1 },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: tex_format(format),
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT
+                | wgpu::TextureUsages::TEXTURE_BINDING
+                | wgpu::TextureUsages::COPY_SRC
+                | wgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
+        });
+        self.set_render_target(id, texture, format);
     }
 }
 
@@ -847,6 +1123,36 @@ impl GpuBackend for WgpuBackend {
     fn submit(&mut self, cb: &CommandBuffer) -> Result<()> {
         let ops = &cb.encoder;
 
+        // --- pass 0 (mut): materialize any per-format clear/flip pipelines and offscreen flip scratch
+        // textures this command buffer needs, so the borrow-only recording passes below never mutate self.
+        let mut scratch_needed: Vec<(u32, u32, u32, TextureFormat)> = Vec::new();
+        let mut clear_fmts: Vec<TextureFormat> = Vec::new();
+        for op in ops.iter() {
+            match op {
+                Enc::BeginRenderPass { color, .. } => {
+                    for c in color {
+                        let t = self.resolve_tex(c.texture)?;
+                        let (fmt, w, h) = (t.format, t.width, t.height);
+                        clear_fmts.push(fmt);
+                        // Offscreen (not the presented surface) → needs a Y-flip scratch.
+                        if !self.surface_ids.contains(&c.texture) {
+                            scratch_needed.push((c.texture, w, h, fmt));
+                        }
+                    }
+                }
+                Enc::ClearRect { texture, .. } => {
+                    clear_fmts.push(self.resolve_tex(*texture)?.format);
+                }
+                _ => {}
+            }
+        }
+        for f in clear_fmts {
+            self.ensure_pipelines_for(f);
+        }
+        for (id, w, h, f) in scratch_needed {
+            self.ensure_flip_scratch(id, w, h, f);
+        }
+
         // --- pass 1: pre-build every bind group referenced by a SetBindGroup, keyed by op index, using
         // the pipeline current at that point. Done before opening any pass so the owned BindGroups outlive
         // the render pass that borrows them (and so we never mutate self during a pass). ---
@@ -870,14 +1176,17 @@ impl GpuBackend for WgpuBackend {
                     let bg = self.build_bind_group(&layout, rp.kind, desc)?;
                     built.insert(k, bg);
                 }
-                Enc::ClearRect { color, .. } => {
-                    // Uniform + bind group for the scissored clear draw.
+                Enc::ClearRect { color, texture, .. } => {
+                    // Uniform + bind group for the scissored clear draw. The bind-group layout is identical
+                    // across clear-pipeline format variants (same shader), so any pipeline's layout works;
+                    // use the target's own so the same format is exercised end to end.
                     let buf = self.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
                         label: Some("dd-clear-color"),
                         contents: bytemuck_color(color),
                         usage: wgpu::BufferUsages::UNIFORM,
                     });
-                    let layout = self.clear_pipeline.get_bind_group_layout(0);
+                    let fmt = self.resolve_tex(*texture)?.format;
+                    let layout = self.clear_pipeline_for(fmt).get_bind_group_layout(0);
                     let bg = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
                         label: None,
                         layout: &layout,
@@ -901,13 +1210,31 @@ impl GpuBackend for WgpuBackend {
         while i < ops.len() {
             match &ops[i] {
                 Enc::BeginRenderPass { color, depth } => {
-                    // Resolve attachment views up front.
-                    let color_views: Vec<(&TexEntry, &ColorAttachment)> = color
-                        .iter()
-                        .map(|c| self.resolve_tex(c.texture).map(|t| (t, c)))
-                        .collect::<Result<_>>()?;
+                    // Resolve attachment views up front. Offscreen targets (not the presented surface) are
+                    // rendered into their flip scratch and Y-mirrored into the real target after the pass
+                    // (`post_flips`); a LoadOp::Load offscreen pass first mirrors the target INTO the scratch
+                    // so the load sees the existing content in scratch (upright) space.
+                    let mut color_views: Vec<&TexEntry> = Vec::with_capacity(color.len());
+                    let mut post_flips: Vec<u32> = Vec::new();
+                    for c in color.iter() {
+                        let target = self.resolve_tex(c.texture)?;
+                        if self.surface_ids.contains(&c.texture) {
+                            color_views.push(target);
+                        } else {
+                            let scratch = self
+                                .flip_scratch
+                                .get(&c.texture)
+                                .ok_or(GpuError::UnknownId { kind: "flip-scratch", id: c.texture })?;
+                            if matches!(c.load, LoadOp::Load) {
+                                self.encode_flip(&mut enc, target, scratch);
+                            }
+                            color_views.push(scratch);
+                            post_flips.push(c.texture);
+                        }
+                    }
                     let color_attachments: Vec<Option<wgpu::RenderPassColorAttachment>> = color_views
                         .iter()
+                        .zip(color.iter())
                         .map(|(t, c)| {
                             Some(wgpu::RenderPassColorAttachment {
                                 view: &t.view,
@@ -1015,9 +1342,20 @@ impl GpuBackend for WgpuBackend {
                     }
                     // i now points at EndRenderPass (or end); drop the pass, advance past End.
                     drop(rp);
+                    // Y-mirror each offscreen scratch into its real target (GL-convention storage), so a
+                    // later `texture()` sample of it lands upright — matching the Metal replay's flip.
+                    for id in post_flips {
+                        let scratch = self
+                            .flip_scratch
+                            .get(&id)
+                            .ok_or(GpuError::UnknownId { kind: "flip-scratch", id })?;
+                        let target = self.resolve_tex(id)?;
+                        self.encode_flip(&mut enc, scratch, target);
+                    }
                 }
                 Enc::ClearRect { texture, x, y, w, h, .. } => {
                     let t = self.resolve_tex(*texture)?;
+                    let clear_pipe = self.clear_pipeline_for(t.format);
                     let (_buf, bg) = clear_uniforms.get(&i).expect("clear uniform prebuilt");
                     let mut rp = enc.begin_render_pass(&wgpu::RenderPassDescriptor {
                         label: Some("dd-clear-rect"),
@@ -1032,7 +1370,7 @@ impl GpuBackend for WgpuBackend {
                     });
                     if *w > 0 && *h > 0 {
                         rp.set_scissor_rect(*x, *y, *w, *h);
-                        rp.set_pipeline(&self.clear_pipeline);
+                        rp.set_pipeline(clear_pipe);
                         rp.set_bind_group(0, bg, &[]);
                         rp.draw(0..3, 0..1);
                     }

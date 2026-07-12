@@ -1031,3 +1031,131 @@ mod metal_suite {
         }
     }
 }
+
+/// wgpu-backend golden parity: replay the SAME captured IR through `dd_gpu_wgpu::WgpuBackend` and diff the
+/// readback against the Metal-produced golden PNGs (`golden/<name>.png`). This is the metal-vs-wgpu pixel
+/// comparison the wgpu present-path wiring is validated by — run after the Metal `golden_suite` has seeded
+/// goldens (DD_UPDATE_GOLDENS=1). Reuses the same `registry()`/`cases` builders, `png_decode`, and diff.
+#[cfg(target_os = "macos")]
+mod wgpu_suite {
+    use super::{codex_root, png_decode, registry};
+    use dd_gpu::ir::TextureFormat;
+    use dd_gpu_wgpu::WgpuBackend;
+
+    fn render_ir(ir: &[u8], w: u32, h: u32) -> Option<Vec<u8>> {
+        let mut be = WgpuBackend::new().ok()?;
+        be.create_render_target(1, w, h, TextureFormat::Rgba8Unorm);
+        if let Err(e) = dd_gpu::replay::replay_stream(&mut be, ir) {
+            panic!("wgpu replay error: {e}");
+        }
+        be.read_target(1).ok()
+    }
+
+    fn diff(a: &[u8], b: &[u8], tol: u8) -> (u32, u64, u64, Vec<u8>) {
+        let total = (a.len() / 4) as u64;
+        let (mut maxd, mut differing) = (0u32, 0u64);
+        let mut img = vec![0u8; a.len()];
+        for i in 0..total as usize {
+            let mut pm = 0u32;
+            for c in 0..4 {
+                pm = pm.max((a[i * 4 + c] as i32 - b[i * 4 + c] as i32).unsigned_abs());
+            }
+            maxd = maxd.max(pm);
+            if pm > tol as u32 {
+                differing += 1;
+                img[i * 4..i * 4 + 4].copy_from_slice(&[255, 0, 0, 255]);
+            } else {
+                let v = (pm * 8).min(255) as u8;
+                img[i * 4..i * 4 + 4].copy_from_slice(&[v, v, v, 255]);
+            }
+        }
+        (maxd, differing, total, img)
+    }
+
+    fn env_u8(key: &str, default: u8) -> u8 {
+        std::env::var(key).ok().and_then(|v| v.parse().ok()).unwrap_or(default)
+    }
+    fn env_f64(key: &str, default: f64) -> f64 {
+        std::env::var(key).ok().and_then(|v| v.parse().ok()).unwrap_or(default)
+    }
+
+    #[test]
+    fn wgpu_golden_suite() {
+        if WgpuBackend::new().is_err() {
+            eprintln!("SKIP wgpu_golden_suite: no wgpu Metal device");
+            return;
+        }
+        let root = codex_root();
+        let golden_dir = root.join("golden");
+        let rendered_dir = root.join("rendered-wgpu");
+        let diff_dir = root.join("diff-wgpu");
+        for d in [&rendered_dir, &diff_dir] {
+            std::fs::create_dir_all(d).unwrap();
+        }
+        let tol = env_u8("DD_GOLDEN_TOL", 4);
+        let max_pct = env_f64("DD_GOLDEN_MAXPCT", 0.0);
+        // The wgpu path is a distinct rasterizer; sub-pixel edges of rotated/offscreen quads can differ
+        // from Metal by a texel. Allow a looser default just for wgpu-vs-Metal parity unless overridden.
+        let wgpu_max_pct = env_f64("DD_WGPU_MAXPCT", max_pct.max(0.02));
+
+        let mut failures = Vec::new();
+        let mut skipped = Vec::new();
+        println!("\n=== wgpu_golden_suite (tol={tol}, wgpu_max_pct={wgpu_max_pct}) ===");
+        for c in registry() {
+            let Some(build) = c.build else { continue };
+            let ir = build(c.w, c.h);
+            let rgba = match render_ir(&ir, c.w, c.h) {
+                Some(r) => r,
+                None => {
+                    println!("  SKIP  {:<24} (no wgpu device)", c.name);
+                    continue;
+                }
+            };
+            std::fs::write(
+                rendered_dir.join(format!("{}.png", c.name)),
+                dd_term_core::png::encode_rgba(c.w, c.h, &rgba),
+            )
+            .unwrap();
+
+            let golden_path = golden_dir.join(format!("{}.png", c.name));
+            if !golden_path.exists() {
+                println!("  SKIP  {:<24} (no Metal golden; run golden_suite --update first)", c.name);
+                skipped.push(c.name);
+                continue;
+            }
+            match png_decode::decode(&std::fs::read(&golden_path).unwrap()) {
+                Ok((gw, gh, golden)) if (gw, gh) == (c.w, c.h) => {
+                    let (maxd, differing, total, img) = diff(&rgba, &golden, tol);
+                    let pct = if total == 0 { 0.0 } else { differing as f64 / total as f64 };
+                    let pass = pct <= wgpu_max_pct;
+                    println!(
+                        "  {}  {:<24} maxΔ={maxd} differing={differing}/{total} ({:.4}%)",
+                        if pass { "PASS" } else { "FAIL" },
+                        c.name,
+                        pct * 100.0
+                    );
+                    if !pass {
+                        std::fs::write(
+                            diff_dir.join(format!("{}.png", c.name)),
+                            dd_term_core::png::encode_rgba(c.w, c.h, &img),
+                        )
+                        .unwrap();
+                        failures.push(c.name);
+                    }
+                }
+                Ok((gw, gh, _)) => {
+                    println!("  FAIL  {:<24} golden is {gw}x{gh}, rendered {}x{}", c.name, c.w, c.h);
+                    failures.push(c.name);
+                }
+                Err(e) => {
+                    println!("  FAIL  {:<24} golden decode error: {e}", c.name);
+                    failures.push(c.name);
+                }
+            }
+        }
+        if !skipped.is_empty() {
+            eprintln!("wgpu_golden_suite: {} case(s) skipped (no golden yet): {skipped:?}", skipped.len());
+        }
+        assert!(failures.is_empty(), "wgpu-vs-Metal golden diffs: {failures:?} (see target-chrome-codex/diff-wgpu/)");
+    }
+}

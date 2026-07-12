@@ -27,19 +27,23 @@ dd-gpu = { path = "../dd-gpu" }
 
 # The real executor stack — macOS/Metal only (see header). Versions pinned to what the feasibility spike
 # proved (wgpu 24.0.5 / naga 24 / pollster 0.4); wgpu's API churns across majors, so pin the major.
+# wgpu-hal + metal are the raw-handle seam the LIVE present path rests on: the backend bridges an
+# IOSurface-backed MTLTexture (created by dd-display on wgpu's own device) into a `wgpu::Texture` via
+# `wgpu_hal::metal::Device::texture_from_raw` + `Device::create_texture_from_hal`, and hands its raw
+# `MTLDevice` back out (`as_hal`) so dd-display can wrap the guest IOSurface on the SAME device — the
+# zero-copy contract proven by examples/iosurface_interop.rs, now wired into `backend`. Versions MUST
+# match wgpu's own wgpu-hal/metal so the `A::Texture` handle types are identical.
 [target.'cfg(target_os = "macos")'.dependencies]
 wgpu = { version = "24", default-features = false, features = ["metal", "wgsl"] }
+wgpu-hal = { version = "24", default-features = false, features = ["metal"] }
+metal = "0.31"
 naga = { version = "24", features = ["glsl-in", "spv-in", "wgsl-in", "wgsl-out", "msl-out", "spv-out"] }
 pollster = "0.4"
 
-# macOS-only dev deps for the zero-copy IOSurface interop proof (examples/iosurface_interop.rs). All are
-# already in Cargo.lock at these exact versions (no new fetch): wgpu-hal 24.0.4 is the raw-handle seam
-# wgpu 24 wraps (`create_texture_from_hal`/`as_hal`), metal 0.31 is the metal-rs type it speaks, and the
-# objc2* stack is the same one dd-display's Metal/IOSurface bridge uses. Versions MUST match wgpu's own
-# wgpu-hal/metal so the `A::Texture` handle types are identical. Nothing here affects the crate's lib.
+# macOS-only dev deps for the zero-copy IOSurface interop proof (examples/iosurface_interop.rs): the
+# objc2* stack is the same one dd-display's Metal/IOSurface bridge uses (wgpu-hal + metal are now real
+# deps above). All are already in Cargo.lock at these exact versions (no new fetch).
 [target.'cfg(target_os = "macos")'.dev-dependencies]
-wgpu-hal = { version = "24", default-features = false, features = ["metal"] }
-metal = "0.31"
 objc2 = "0.5"
 objc2-foundation = { version = "0.2", features = ["NSString", "NSDictionary", "NSValue"] }
 objc2-metal = { version = "0.2", features = ["MTLDevice", "MTLTexture", "MTLPixelFormat", "MTLResource", "MTLTypes"] }

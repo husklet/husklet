@@ -25,6 +25,10 @@ dd-term-core = { path = "../dd-term-core" }
 # GPU rung 3: the forwarded command IR + GpuBackend trait the Metal executor implements (pure-Rust, no
 # new transitive deps). dd-display → dd-gpu only (no cycle; dd-gpu never depends on dd-display).
 dd-gpu = { path = "../dd-gpu" }
+# Flag-gated (`DD_GPU_BACKEND=wgpu`) alternate executor. On the Linux dev host this crate is an EMPTY lib
+# (all wgpu/naga/metal deps are macOS-gated inside it), so this adds no compiled deps here; on macOS it
+# provides `WgpuBackend` + the IOSurface interop the wgpu present path in `metal_backend` calls.
+dd-gpu-wgpu = { path = "../dd-gpu-wgpu" }
 
 # Native presenter: one NSWindow + CALayer per guest surface, blitting the committed wl_shm buffer.
 # objc2* are ALREADY in Cargo.lock (used by dd-gui), so this fetches nothing new on the mac.

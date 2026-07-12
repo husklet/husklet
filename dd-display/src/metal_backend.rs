@@ -1198,6 +1198,12 @@ pub fn selftest_indexed(out: &str) -> ! {
 /// on the host GPU. Frame = `[u32 iosurface_id][u32 w][u32 h][u32 stream_len][stream bytes]`; we reply one
 /// ack byte when the replay completes (so the guest commits only after the frame is rendered).
 pub fn run_executor(sock_path: String) {
+    // Flag-gated (`DD_GPU_BACKEND=wgpu`) alternate host executor: render guest IR through wgpu into the
+    // SAME zero-copy IOSurface the compositor blits. Default stays this bespoke Metal replay so main is
+    // green. See `run_executor_wgpu`.
+    if dd_gpu_wgpu::selected() {
+        return run_executor_wgpu(sock_path);
+    }
     use std::io::{Read, Write};
     use std::os::unix::net::{UnixListener, UnixStream};
     let _ = std::fs::remove_file(&sock_path);
@@ -1297,6 +1303,136 @@ pub fn run_executor(sock_path: String) {
             Ok(mut s) => {
                 if let Err(e) = handle(&ctx, &mut s) {
                     eprintln!("dd-gpu executor: conn error: {e}");
+                }
+            }
+            Err(_) => continue,
+        }
+    }
+}
+
+/// `DD_GPU_BACKEND=wgpu` host executor. Renders each guest frame's IR through `dd_gpu_wgpu::WgpuBackend`
+/// straight into the guest's zero-copy IOSurface, which the compositor's `blit_fenced` then reads unchanged.
+///
+/// Device sharing (the zero-copy contract, proven by dd-gpu-wgpu's `iosurface_interop` example): wgpu owns
+/// its Metal device; we extract its raw `MTLDevice` (`raw_mtl_device`), wrap the guest IOSurface as an
+/// `MTLTexture` on THAT device (so producer and consumer share one device), and bridge it back into a
+/// `wgpu::Texture` (`wrap_iosurface_texture`) — the render lands in the IOSurface's pages with no copy or
+/// readback. Each connection gets its own `WgpuBackend` (fresh device), isolating guest id namespaces, the
+/// same way the Metal path builds one `MetalBackend` per connection.
+///
+/// Note vs. the Metal path: the compositor blit is currently UNFENCED here (wgpu exposes no cross-queue
+/// `MTLEvent` seam), so we `poll_wait` for GPU completion before acking the guest — correct, if less
+/// pipelined than the Metal path's async cross-queue fence. Wiring an `MTLSharedEvent` through wgpu-hal is
+/// the follow-up for full parity.
+fn run_executor_wgpu(sock_path: String) {
+    use std::io::{Read, Write};
+    use std::os::unix::net::{UnixListener, UnixStream};
+    let _ = std::fs::remove_file(&sock_path);
+    let listener = match UnixListener::bind(&sock_path) {
+        Ok(l) => l,
+        Err(e) => {
+            eprintln!("dd-gpu executor[wgpu]: bind {sock_path}: {e}");
+            return;
+        }
+    };
+    eprintln!("dd-gpu executor[wgpu]: listening on {sock_path}");
+
+    fn handle(s: &mut UnixStream) -> std::io::Result<()> {
+        // One wgpu backend (its own Metal device) per connection — isolates guest id namespaces.
+        let mut be = match dd_gpu_wgpu::WgpuBackend::new() {
+            Ok(b) => b,
+            Err(e) => {
+                eprintln!("dd-gpu executor[wgpu]: no wgpu Metal device: {e:?}");
+                return Ok(());
+            }
+        };
+        // Wrap the guest IOSurface on wgpu's OWN device: retain wgpu's raw MTLDevice and build a MetalCtx
+        // around it (`texture_from_iosurface` uses only the device; a throwaway queue satisfies the ctor).
+        let raw_dev = be.raw_mtl_device();
+        if raw_dev.is_null() {
+            eprintln!("dd-gpu executor[wgpu]: null MTLDevice from wgpu");
+            return Ok(());
+        }
+        let device: Retained<ProtocolObject<dyn MTLDevice>> =
+            match unsafe { Retained::retain(raw_dev as *mut ProtocolObject<dyn MTLDevice>) } {
+                Some(d) => d,
+                None => {
+                    eprintln!("dd-gpu executor[wgpu]: retain MTLDevice failed");
+                    return Ok(());
+                }
+            };
+        let Some(queue) = device.newCommandQueue() else {
+            eprintln!("dd-gpu executor[wgpu]: newCommandQueue failed");
+            return Ok(());
+        };
+        let ctx = MetalCtx::from_device(device, queue);
+
+        // rt cache: guest IOSurface id -> retained MTLTexture on wgpu's device. The Retained keeps the
+        // IOSurface's backing alive across frames; the wgpu wrap is (cheaply) re-derived from it per frame.
+        let mut rt_cache: HashMap<u32, Retained<ProtocolObject<dyn MTLTexture>>> = HashMap::new();
+        loop {
+            let mut hdr = [0u8; 16];
+            match s.read_exact(&mut hdr) {
+                Ok(()) => {}
+                Err(e) if e.kind() == std::io::ErrorKind::UnexpectedEof => return Ok(()),
+                Err(e) => return Err(e),
+            }
+            let id = u32::from_le_bytes(hdr[0..4].try_into().unwrap());
+            let w = u32::from_le_bytes(hdr[4..8].try_into().unwrap());
+            let h = u32::from_le_bytes(hdr[8..12].try_into().unwrap());
+            let len = u32::from_le_bytes(hdr[12..16].try_into().unwrap()) as usize;
+            if len > 64 * 1024 * 1024 {
+                return Ok(());
+            }
+            let mut bytes = vec![0u8; len];
+            s.read_exact(&mut bytes)?;
+
+            unsafe {
+                if !rt_cache.contains_key(&id) {
+                    let surf = crate::metal::resolve_iosurface(id);
+                    if surf.is_null() {
+                        eprintln!("dd-gpu executor[wgpu]: IOSurface id {id} not found");
+                        let _ = s.write_all(&[0]);
+                        continue;
+                    }
+                    let tex = ctx.texture_from_iosurface(surf, w, h);
+                    crate::metal::cfrelease(surf); // the MTLTexture retains the surface's backing
+                    rt_cache.insert(id, tex);
+                }
+                let tex = rt_cache.get(&id).unwrap();
+                // Bridge the IOSurface-backed MTLTexture into a wgpu texture and register it as present
+                // target 1 (the reserved present id the guest streams as its final color attachment).
+                be.wrap_iosurface_texture(
+                    1,
+                    Retained::as_ptr(tex) as *mut std::ffi::c_void,
+                    w,
+                    h,
+                    dd_gpu::ir::TextureFormat::Bgra8Unorm,
+                );
+            }
+
+            let rendered = match dd_gpu::replay::replay_stream(&mut be, &bytes) {
+                Ok(_) => {
+                    be.poll_wait(); // unfenced compositor blit reads a finished IOSurface, not a torn one
+                    if exec_debug() {
+                        eprintln!("dd-gpu executor[wgpu]: replayed {len} IR bytes into IOSurface {id}");
+                    }
+                    true
+                }
+                Err(e) => {
+                    eprintln!("dd-gpu executor[wgpu]: replay error: {e}");
+                    false
+                }
+            };
+            s.write_all(&[rendered as u8])?;
+        }
+    }
+
+    for conn in listener.incoming() {
+        match conn {
+            Ok(mut s) => {
+                if let Err(e) = handle(&mut s) {
+                    eprintln!("dd-gpu executor[wgpu]: conn error: {e}");
                 }
             }
             Err(_) => continue,
