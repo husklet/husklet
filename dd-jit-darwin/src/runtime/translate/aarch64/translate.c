@@ -794,29 +794,52 @@ static uint32_t recode_cond(uint32_t in, int64_t d) {
 // W4E tier-2: emit the in-cache back-edge hotness counter for a hot-candidate self-loop. Runs on the
 // TAKEN (loop) edge in tier-1. Flag-free (sub-imm + cbnz never touch NZCV, so the guest's condition
 // flags are preserved across the back-edge -- mandatory for bit-exactness when the loop body does not
-// itself re-set the tested flags). x9/x10 are spilled to the [sp,#-16/-24] red zone (never live across a
-// block boundary, same convention as emit_spill/IBTC). Counts DOWN from g_t2thresh; on reaching zero it
-// exits R_TIER2 so the dispatcher promotes the block, after which this stub is dead.
+// itself re-set the tested flags). Counts DOWN from g_t2thresh; on reaching zero it exits R_TIER2 so the
+// dispatcher promotes the block, after which this stub is dead.
+//
+// SCRATCH: two host regs for the counter pointer + value. Under the x16/x17 steal (g_steal1617, the
+// aarch64 default) those two host regs are ENGINE-PRIVATE at this block-boundary back-edge -- the exact
+// invariant emit_irq_check already relies on to poll cpu->irq with no guest-reg stash -- so use them
+// DIRECTLY with no memory spill. The legacy (NOSTEAL1617) path has no free host reg here, so it falls
+// back to stashing x9/x10 in the [sp,#-16/-24] slots.
+//
+// Why the steal path must NOT use the [sp,#-N] slots: AArch64 has NO architectural red zone, so a store
+// below the guest SP is only safe if that memory happens to be mapped+writable. A hot pixman NEON fill
+// self-loop (`st1 {v0-v3},[x2],#32; subs; b.ge`) reaches this counter with the guest SP shallow on its
+// stack; the page just under SP is an untouched anon page that faults on write (EXC_BAD_ACCESS), so the
+// old unconditional `stur x9,[sp,#-16]` here crashed GTK4's software/pixman render. The engine already
+// established this principle elsewhere -- emit_fold_mem / emit_mangled_x18 spill to cpu->mscratch rather
+// than a [sp,#-N] slot precisely because a below-SP slot is not a safe scratch -- and this brings the
+// tier-2 counter in line. (The counter never runs concurrently with a fold, and x9/x10 stay LIVE in
+// their host regs on the steal path, so the R_TIER2 exit's emit_spill captures the correct guest values.)
 static void emit_t2_counter(int slot, uint64_t start, void *body) {
-    e_stur(9, 31, -16);
-    e_stur(10, 31, -24);
-    // x9 = &g_t2cnt[slot] (plain RW data; adrp+add reaches it)
-    emit_t2cntptr(9, slot); // recorded &g_t2cnt[slot] bake (fixed 4-insn + reloc when g_pcache)
-    e_ldr(10, 9, 0);
+    int rp = g_steal1617 ? 16 : 9;  // counter-pointer scratch
+    int rv = g_steal1617 ? 17 : 10; // counter-value scratch
+    if (!g_steal1617) {
+        e_stur(9, 31, -16);
+        e_stur(10, 31, -24);
+    }
+    // rp = &g_t2cnt[slot] (plain RW data; adrp+add reaches it)
+    emit_t2cntptr(rp, slot); // recorded &g_t2cnt[slot] bake (fixed 4-insn + reloc when g_pcache)
+    e_ldr(rv, rp, 0);
     // --count (sub immediate: flag-free)
-    e_subi(10, 10, 1);
-    e_str(10, 9, 0);
+    e_subi(rv, rv, 1);
+    e_str(rv, rp, 0);
     uint32_t *p_cbnz = (uint32_t *)g_cp;
-    // cbnz x10, Lcont (still counting -> keep looping; flag-free)
+    // cbnz rv, Lcont (still counting -> keep looping; flag-free)
     emit32(0);
-    // reached 0 -> restore scratch + exit to the dispatcher to promote (pc = loop start)
-    e_ldur(9, 31, -16);
-    e_ldur(10, 31, -24);
+    // reached 0 -> restore scratch (legacy) + exit to the dispatcher to promote (pc = loop start)
+    if (!g_steal1617) {
+        e_ldur(9, 31, -16);
+        e_ldur(10, 31, -24);
+    }
     emit_exit_const(start, R_TIER2);
     uint8_t *Lcont = g_cp;
-    *p_cbnz = 0xB5000000u | (((uint32_t)(((uint8_t *)Lcont - (uint8_t *)p_cbnz) / 4) & 0x7FFFF) << 5) | 10;
-    e_ldur(9, 31, -16);
-    e_ldur(10, 31, -24);
+    *p_cbnz = 0xB5000000u | (((uint32_t)(((uint8_t *)Lcont - (uint8_t *)p_cbnz) / 4) & 0x7FFFF) << 5) | (unsigned)rv;
+    if (!g_steal1617) {
+        e_ldur(9, 31, -16);
+        e_ldur(10, 31, -24);
+    }
     // b body  (the loop back-edge, in-cache)
     int64_t d = ((uint8_t *)body - (uint8_t *)g_cp) / 4;
     emit32(0x14000000u | ((uint32_t)d & 0x3FFFFFFu));
