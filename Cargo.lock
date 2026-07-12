@@ -591,9 +591,14 @@ name = "dd-gpu-wgpu"
 version = "0.1.0"
 dependencies = [
  "dd-gpu",
+ "metal",
  "naga",
+ "objc2",
+ "objc2-foundation",
+ "objc2-metal",
  "pollster",
  "wgpu",
+ "wgpu-hal",
 ]
 
 [[package]]

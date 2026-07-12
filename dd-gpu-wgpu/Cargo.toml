@@ -32,6 +32,22 @@ wgpu = { version = "24", default-features = false, features = ["metal", "wgsl"] 
 naga = { version = "24", features = ["glsl-in", "spv-in", "wgsl-in", "wgsl-out", "msl-out", "spv-out"] }
 pollster = "0.4"
 
+# macOS-only dev deps for the zero-copy IOSurface interop proof (examples/iosurface_interop.rs). All are
+# already in Cargo.lock at these exact versions (no new fetch): wgpu-hal 24.0.4 is the raw-handle seam
+# wgpu 24 wraps (`create_texture_from_hal`/`as_hal`), metal 0.31 is the metal-rs type it speaks, and the
+# objc2* stack is the same one dd-display's Metal/IOSurface bridge uses. Versions MUST match wgpu's own
+# wgpu-hal/metal so the `A::Texture` handle types are identical. Nothing here affects the crate's lib.
+[target.'cfg(target_os = "macos")'.dev-dependencies]
+wgpu-hal = { version = "24", default-features = false, features = ["metal"] }
+metal = "0.31"
+objc2 = "0.5"
+objc2-foundation = { version = "0.2", features = ["NSString", "NSDictionary", "NSValue"] }
+objc2-metal = { version = "0.2", features = ["MTLDevice", "MTLTexture", "MTLPixelFormat", "MTLResource", "MTLTypes"] }
+
 [[example]]
 name = "verify_ir"
 path = "examples/verify_ir.rs"
+
+[[example]]
+name = "iosurface_interop"
+path = "examples/iosurface_interop.rs"
