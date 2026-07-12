@@ -482,33 +482,47 @@ static void emit_fold_advsimd_struct(uint32_t in) {
     e_ldr(T2, CPUREG, M + 48);
 }
 
-// For instructions that WRITE x18 via a special path (adr/ldr-literal/mrs): save x0,x1 to
-// the red zone, x1 := cpu. The case then computes a value into x0 and stores it to
-// cpu->x[18]; x18_epilog restores x0,x1.
+// For instructions that WRITE a stolen reg via a special path (adr/adrp/ldr-literal/mrs): save x0,x1
+// to cpu->mscratch, x1 := cpu. The case then computes a value into x0 and stores it to cpu->x[stolen];
+// x18_epilog restores x0,x1. Reached ONLY when stealfast is off (NOSTEALFAST=1, or NOSTEAL1617=1 -- the
+// steal fast-path materializes stolen writes through engine-private x16/x17 with no spill), so on the
+// strict default engine (g_steal1617 && stealfast) this helper is never emitted.
+//
+// Spill target is cpu->mscratch[0..1], NOT the guest [sp,#-N] "red zone": AArch64 has NO architectural
+// red zone, so a store below the guest SP faults whenever the page under SP is unmapped (a shallow guest
+// stack) -- the exact crash class 6d38d96c/7de3a17a closed for the steal path. x16/x17 are NOT free here
+// (NOSTEAL1617 keeps them as guest values), so this mirrors the mscratch spill in emit_mangled_x18 /
+// emit_fold_mem. x28 (CPUREG) = cpu is the whole-block invariant (prologue `mov x28,x0`; guest x28 is
+// stolen), so it reaches mscratch on every path. Slots [0..1] are free during the bracket: this helper
+// wraps a SINGLE special-write whose body only touches cpu->x[stolen] + guest memory -- never mscratch,
+// never a nested mangle/fold -- so it cannot alias the saved x0/x1.
 static void x18_prolog(void) {
-    e_stur(0, 31, -16);
-    e_stur(1, 31, -24);
+    e_str(0, CPUREG, (int)OFF_MSCRATCH);
+    e_str(1, CPUREG, (int)OFF_MSCRATCH + 8);
     e_load_cpu(1);
 }
 
 static void x18_epilog(void) {
-    e_ldur(1, 31, -24);
-    e_ldur(0, 31, -16);
+    e_ldr(1, CPUREG, (int)OFF_MSCRATCH + 8);
+    e_ldr(0, CPUREG, (int)OFF_MSCRATCH);
 }
 
 // A3 §B instrumentation (PROF=1 only): bump a 64-bit global counter from emitted code. Self-contained:
-// spills x9/x10 to the [sp,#-16/-24] red zone (same convention as emit_t2_counter / the IBTC), so it is
-// independent of whatever scratch the surrounding shadow push/ret is juggling. Gated on g_prof, so the
+// stashes x9/x10 in cpu->mscratch[0..1] (NOT the [sp,#-N] red zone -- AArch64 has none, and this runs at
+// a §B shadow push/ret point that can be reached with a shallow guest SP, so a below-SP store would fault
+// exactly as the pixman self-loop did in 6d38d96c). mscratch[0..1] is free at all three call sites: the
+// shadow-push call precedes that helper's own mscratch spill, and both shadow-ret calls follow its
+// x0..x3 restore. x28 (CPUREG) = cpu holds for the whole block on every path. Gated on g_prof, so the
 // non-PROF codegen is byte-identical to baseline (zero steady-state cost).
 static void emit_prof_bump(void *ctr) {
-    e_stur(9, 31, -16);
-    e_stur(10, 31, -24);
+    e_str(9, CPUREG, (int)OFF_MSCRATCH);
+    e_str(10, CPUREG, (int)OFF_MSCRATCH + 8);
     e_adrp_add(9, (uint64_t)ctr); // x9 = &counter (plain RW data; adrp+add reaches it)
     e_ldr(10, 9, 0);
     e_addi(10, 10, 1);
     e_str(10, 9, 0);
-    e_ldur(9, 31, -16);
-    e_ldur(10, 31, -24);
+    e_ldr(9, CPUREG, (int)OFF_MSCRATCH);
+    e_ldr(10, CPUREG, (int)OFF_MSCRATCH + 8);
 }
 
 // §B: store a constant to cpu->x[30] (the stolen guest link reg). x28=cpu.
@@ -1694,10 +1708,13 @@ static void *translate_block(uint64_t gpc) {
             } else if (stealfast_on()) {
                 e_str(n, CPUREG, OFF_TLS);
             } else {
-                e_stur(t, 31, -16);
+                // NOSTEALFAST/NOSTEAL1617 only: park scratch `t` in cpu->mscratch[0] (x28=cpu holds), NOT
+                // [sp,#-16] -- a below-SP store faults on a shallow guest stack (the 6d38d96c crash class).
+                // t (15/16) != n (non-stolen) and != CPUREG, so no operand is clobbered.
+                e_str(t, CPUREG, (int)OFF_MSCRATCH);
                 e_load_cpu(t);
                 e_str(n, t, OFF_TLS);
-                e_ldur(t, 31, -16);
+                e_ldr(t, CPUREG, (int)OFF_MSCRATCH);
             }
             gpc += 4;
             continue;
