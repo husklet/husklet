@@ -53,7 +53,7 @@ use smithay::{
         wayland_protocols::xdg::shell::server::xdg_toplevel::WmCapabilities,
         wayland_server::{
             backend::{ClientData, ClientId, DisconnectReason},
-            protocol::wl_surface::WlSurface,
+            protocol::{wl_buffer::WlBuffer, wl_surface::WlSurface},
             DisplayHandle, Resource,
         },
     },
@@ -63,7 +63,7 @@ use smithay::{
         cursor_shape::CursorShapeManagerState,
         output::OutputManagerState,
         presentation::PresentationState,
-        shell::xdg::XdgShellState,
+        shell::xdg::{PopupSurface, XdgShellState},
         shm::ShmState,
         viewporter::ViewporterState,
     },
@@ -123,6 +123,18 @@ pub struct DdState {
     pub titles: HashMap<u32, String>,
     /// Last pointer location in logical/point space (Cocoa delivers point-space coords).
     pub ptr_loc: (f64, f64),
+
+    /// Last committed `wl_shm` buffer per surface (`sid` → buffer). A subsurface or popup that redraws
+    /// only occasionally does not re-attach a buffer every parent frame, yet its pixels must persist in
+    /// the composited window; Smithay clears `current().buffer` on a bufferless commit, so we hold the
+    /// last one here and re-read it whenever the root window re-composites (mirrors `server.rs`'s
+    /// per-surface `current_buffer`). Also lets a popup/child commit re-present its ROOT toplevel.
+    pub(crate) buffers: HashMap<u32, WlBuffer>,
+    /// The active `xdg_popup` grab chain (outer→inner). A popup created with `xdg_popup.grab` is dismissed
+    /// (with `popup_done`) together with its whole submenu chain when the user clicks outside it; the
+    /// input/present loop drives that via [`DdState::dismiss_popup_grabs`]. Tooltips (mapped without a
+    /// grab) are NOT listed here, so they are not torn down on an outside click.
+    pub(crate) popup_grabs: Vec<PopupSurface>,
     /// Last on-screen window size we sent an `xdg_toplevel.configure` for, so a host-driven window
     /// resize is debounced to one configure per distinct size (mirrors `server.rs`'s `last_cfg`).
     pub(crate) last_cfg: Option<(i32, i32)>,
@@ -205,6 +217,8 @@ impl DdState {
             focus: None,
             titles: HashMap::new(),
             ptr_loc: (0.0, 0.0),
+            buffers: HashMap::new(),
+            popup_grabs: Vec::new(),
             last_cfg: None,
             present_seq: 0,
             start: Instant::now(),

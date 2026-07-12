@@ -18,12 +18,12 @@ use smithay::{
         wayland_protocols::xdg::shell::server::xdg_toplevel::{self, State as XdgState},
         wayland_server::protocol::{wl_output::WlOutput, wl_seat::WlSeat, wl_surface::WlSurface},
     },
-    utils::Serial,
+    utils::{Logical, Point, Rectangle, Serial, Size},
     wayland::{
         compositor::with_states,
         shell::xdg::{
             Configure, PopupSurface, PositionerState, SurfaceCachedState, ToplevelSurface,
-            XdgShellHandler, XdgShellState, XdgToplevelSurfaceData,
+            XdgPopupSurfaceData, XdgShellHandler, XdgShellState, XdgToplevelSurfaceData,
         },
     },
 };
@@ -152,14 +152,73 @@ impl XdgShellHandler for DdState {
         }
     }
 
-    fn new_popup(&mut self, _surface: PopupSurface, _positioner: PositionerState) {}
-    fn grab(&mut self, _surface: PopupSurface, _seat: WlSeat, _serial: Serial) {}
+    /// A popup (menu / dropdown / combobox list / tooltip / context menu) was created via
+    /// `xdg_surface.get_popup(parent, positioner)`. Resolve the positioner to a concrete geometry
+    /// (anchor rect → anchor point → gravity → offset, then flip/slide/resize constraint adjustment
+    /// against the output area) and complete the initial handshake: `xdg_popup.configure(x,y,w,h)`
+    /// paired with `xdg_surface.configure(serial)`. Without this the client never maps the popup, so
+    /// Chrome's menus/dropdowns/tooltips stay invisible or paint stale. Nested popups (submenu chains)
+    /// take exactly this same path — each is its own `xdg_popup` whose positioner anchor rect is
+    /// relative to its PARENT popup's window geometry, so nothing here is special-cased for depth.
+    fn new_popup(&mut self, surface: PopupSurface, positioner: PositionerState) {
+        let geometry = self.constrain_popup(&positioner);
+        surface.with_pending_state(|state| {
+            state.positioner = positioner;
+            state.geometry = geometry;
+        });
+        // The initial configure MUST be sent before the client attaches a buffer (xdg-shell mandates the
+        // configure/ack handshake); Smithay allocates the serial and pairs the xdg_surface.configure.
+        let _ = surface.send_configure();
+    }
+
+    /// `xdg_popup.grab(seat, serial)`: the client takes an explicit popup grab (Chrome does this for menus
+    /// and context menus, but NOT for tooltips). Record the grab so that a click outside the popup chain
+    /// dismisses the whole chain via [`DdState::dismiss_popup_grabs`] — the input path calls that. The
+    /// grab stack is ordered outer→inner, so a submenu opened under an existing grab extends the chain.
+    fn grab(&mut self, surface: PopupSurface, _seat: WlSeat, _serial: Serial) {
+        if !self
+            .popup_grabs
+            .iter()
+            .any(|p| p.wl_surface() == surface.wl_surface())
+        {
+            self.popup_grabs.push(surface);
+        }
+    }
+
+    /// `xdg_popup.reposition(positioner, token)` (xdg-shell v3): the client wants the already-mapped popup
+    /// moved to a new placement (e.g. a menu re-anchoring as the pointer walks a menu bar). Recompute the
+    /// geometry from the NEW positioner and answer with `xdg_popup.repositioned(token)` + a fresh
+    /// configure/ack, so the client repaints at the new location. The `token` round-trips so the client can
+    /// correlate the reposition it asked for.
     fn reposition_request(
         &mut self,
-        _surface: PopupSurface,
-        _positioner: PositionerState,
-        _token: u32,
+        surface: PopupSurface,
+        positioner: PositionerState,
+        token: u32,
     ) {
+        let geometry = self.constrain_popup(&positioner);
+        surface.with_pending_state(|state| {
+            state.positioner = positioner;
+            state.geometry = geometry;
+        });
+        // Answer with xdg_popup.repositioned(token) + a fresh configure/ack. The popup's *current*
+        // geometry only advances once the client acks and re-commits, so the re-present happens on that
+        // commit (via on_commit), not here — presenting now would draw the popup at its old position.
+        surface.send_repositioned(token);
+    }
+
+    /// A popup was destroyed (the client tore the menu/tooltip down, or a grab dismissal was honoured).
+    /// Forget its buffer + grab bookkeeping, drop any native window the presenter opened for it, and
+    /// re-present the owning toplevel so the menu visibly disappears.
+    fn popup_destroyed(&mut self, surface: PopupSurface) {
+        let sid = surface_id(surface.wl_surface());
+        self.buffers.remove(&sid);
+        self.presenter.drop_window(sid);
+        self.popup_grabs
+            .retain(|p| p.wl_surface() != surface.wl_surface());
+        if let Some(root) = self.window_root(surface.wl_surface()) {
+            self.present_render_root(&root);
+        }
     }
 }
 
@@ -242,6 +301,54 @@ impl DdState {
         if let Some(focus) = self.focus.clone() {
             self.request_close(&focus);
         }
+    }
+
+    /// Resolve an `xdg_positioner` to the popup's on-screen geometry (relative to its parent's window
+    /// geometry). Smithay's [`PositionerState::get_geometry`] applies the anchor/gravity/offset placement;
+    /// [`PositionerState::get_unconstrained_geometry`] additionally honours `constraint_adjustment`
+    /// (flip → slide → resize) so a menu anchored near the output edge flips/slides back on-screen instead
+    /// of being clipped. The constraint target is the output logical area (the parent typically fills or
+    /// nearly fills it), which is the common Chrome case.
+    pub(crate) fn constrain_popup(&self, positioner: &PositionerState) -> Rectangle<i32, Logical> {
+        let (ow, oh) = self.output_logical_size();
+        let target = Rectangle::new(Point::from((0, 0)), Size::from((ow.max(1), oh.max(1))));
+        // PositionerState is Copy; get_unconstrained_geometry consumes it.
+        (*positioner).get_unconstrained_geometry(target)
+    }
+
+    /// Dismiss the whole active popup grab chain: send `xdg_popup.popup_done` from the innermost popup
+    /// outward (so a submenu closes before its parent menu), then clear the grab stack. The macOS input
+    /// loop calls this when a click lands outside the grabbing popup chain (the click-outside-dismisses
+    /// semantics of an explicit popup grab). Returns how many popups were dismissed.
+    pub fn dismiss_popup_grabs(&mut self) -> usize {
+        let chain: Vec<PopupSurface> = std::mem::take(&mut self.popup_grabs);
+        let n = chain.len();
+        for popup in chain.into_iter().rev() {
+            popup.send_popup_done();
+        }
+        n
+    }
+
+    /// The popup's parent `wl_surface`, if `surface` carries the `xdg_popup` role. The parent is another
+    /// popup (a submenu chain) or the owning toplevel.
+    pub(crate) fn popup_parent(&self, surface: &WlSurface) -> Option<WlSurface> {
+        with_states(surface, |states| {
+            states
+                .data_map
+                .get::<XdgPopupSurfaceData>()
+                .and_then(|d| d.lock().unwrap().parent.clone())
+        })
+    }
+
+    /// The popup's current (last-committed) geometry `(x, y, w, h)`, relative to its parent's window
+    /// geometry origin — the placement its positioner resolved to. `None` if `surface` is not a popup.
+    pub(crate) fn popup_geometry(&self, surface: &WlSurface) -> Option<(i32, i32, i32, i32)> {
+        with_states(surface, |states| {
+            states.data_map.get::<XdgPopupSurfaceData>().map(|d| {
+                let g = d.lock().unwrap().current.geometry;
+                (g.loc.x, g.loc.y, g.size.w, g.size.h)
+            })
+        })
     }
 
     /// The `ToplevelSurface` whose backing `wl_surface` is `surface`, if any.

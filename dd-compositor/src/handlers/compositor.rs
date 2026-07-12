@@ -22,8 +22,9 @@ use smithay::{
     wayland::{
         buffer::BufferHandler,
         compositor::{
-            with_states, BufferAssignment, CompositorClientState, CompositorHandler,
-            CompositorState, SurfaceAttributes,
+            get_children, get_parent, is_sync_subsurface, with_states, BufferAssignment,
+            CompositorClientState, CompositorHandler, CompositorState, SubsurfaceCachedState,
+            SurfaceAttributes,
         },
         presentation::{PresentationFeedbackCachedState, Refresh},
         shm::{with_buffer_contents, ShmHandler, ShmState},
@@ -41,7 +42,7 @@ impl CompositorHandler for DdState {
         &client.get_data::<ClientState>().unwrap().compositor
     }
     fn commit(&mut self, surface: &WlSurface) {
-        self.present_surface(surface);
+        self.on_commit(surface);
     }
 }
 
@@ -56,74 +57,237 @@ impl ShmHandler for DdState {
 }
 
 impl DdState {
-    /// The commit → present path: pull the committed `wl_shm` buffer, repack it tight-BGRA into a
-    /// [`SurfaceBuffer`], hand it to the Presenter (which opens/updates the NSWindow on macOS), fire
-    /// the surface's frame callbacks so the client keeps drawing, and answer any `wp_presentation`
-    /// feedback so Chrome/viz's BeginFrameSource keeps its frame clock ticking.
-    pub(crate) fn present_surface(&mut self, surface: &WlSurface) {
+    /// The commit → present path. Smithay has already applied the surface's double-buffered state (and, on
+    /// a parent commit, its synchronized subsurface children's cached state) before calling this. We:
+    ///   1. remember the surface's latest `wl_shm` buffer, so a later re-composite can redraw a
+    ///      subsurface/popup that did not re-attach a buffer this frame;
+    ///   2. present the WINDOW ROOT (the toplevel that owns this surface's subsurface/popup tree),
+    ///      compositing every mapped subsurface child and every popup at its parent-relative offset;
+    ///   3. advance frame pacing for the whole presented tree (frame callbacks + `wp_presentation`
+    ///      feedback), so Chrome/viz's BeginFrameSource keeps ticking.
+    ///
+    /// A *synchronized* subsurface commit does not present on its own — its state is applied atomically
+    /// with the parent, so we defer to the parent's commit (Smithay invokes this handler again for the
+    /// parent within the same transaction). Every other commit (toplevel, popup, or a *desynchronized*
+    /// subsurface) presents the composited window root.
+    pub(crate) fn on_commit(&mut self, surface: &WlSurface) {
+        self.remember_buffer(surface);
+
+        // A synchronized subsurface is presented as part of its parent's atomic commit; do not present now
+        // (its buffer is already remembered above and its frame callbacks are drained when the root
+        // presents). Presenting here would show a half-applied tree.
+        if is_sync_subsurface(surface) {
+            return;
+        }
+
+        let Some(root) = self.window_root(surface) else {
+            return;
+        };
+        self.present_render_root(&root);
+    }
+
+    /// Record (or clear) the surface's latest committed `wl_shm` buffer. A bufferless commit leaves the
+    /// previous buffer in place (the on-screen content persists); an explicit detach removes it.
+    fn remember_buffer(&mut self, surface: &WlSurface) {
         let sid = surface_id(surface);
-
-        // Snapshot the committed state. The three cached-state guards must not overlap, so scope each.
-        let (buffer, buffer_scale, callbacks, dst, src, feedback) = with_states(surface, |states| {
-            let (buffer, scale, callbacks) = {
-                let mut attrs = states.cached_state.get::<SurfaceAttributes>();
-                let cur = attrs.current();
-                let buffer = match &cur.buffer {
-                    Some(BufferAssignment::NewBuffer(b)) => Some(b.clone()),
-                    _ => None,
-                };
-                let callbacks: Vec<_> = std::mem::take(&mut cur.frame_callbacks);
-                (buffer, cur.buffer_scale.max(1), callbacks)
-            };
-            let (dst, src) = {
-                let mut vp = states.cached_state.get::<ViewportCachedState>();
-                let cur = vp.current();
-                // wp_viewport source: a crop rectangle in post-buffer-scale (logical) surface coords.
-                let src = cur.src.map(|r| (r.loc.x, r.loc.y, r.size.w, r.size.h));
-                (cur.size(), src)
-            };
-            // wp_presentation_feedback callbacks committed for THIS content update: drain current()
-            // before presenting, answer after.
-            let feedback = std::mem::take(
-                &mut states
-                    .cached_state
-                    .get::<PresentationFeedbackCachedState>()
-                    .current()
-                    .callbacks,
-            );
-            (buffer, scale, callbacks, dst, src, feedback)
+        let assignment = with_states(surface, |states| {
+            let mut attrs = states.cached_state.get::<SurfaceAttributes>();
+            match &attrs.current().buffer {
+                Some(BufferAssignment::NewBuffer(b)) => Some(Some(b.clone())),
+                Some(BufferAssignment::Removed) => Some(None),
+                None => None,
+            }
         });
+        match assignment {
+            Some(Some(b)) => {
+                self.buffers.insert(sid, b);
+            }
+            Some(None) => {
+                self.buffers.remove(&sid);
+            }
+            None => {}
+        }
+    }
 
-        let Some(buffer) = buffer else {
-            // No new buffer this commit (e.g. the initial role commit) — still ack frame callbacks and
-            // discard the feedback (there is no content update to time).
+    /// The toplevel that owns `surface`'s composite tree: walk up subsurface parents, then popup parents,
+    /// to the surface that is neither a subsurface nor a popup. That surface is the window presented to the
+    /// screen; every subsurface/popup in its tree composites into its frame at a parent-relative offset.
+    pub(crate) fn window_root(&self, surface: &WlSurface) -> Option<WlSurface> {
+        let mut cur = surface.clone();
+        // Bounded to defend against a pathological cycle in the parent links.
+        for _ in 0..256 {
+            if let Some(p) = get_parent(&cur) {
+                cur = p; // subsurface → its parent surface
+                continue;
+            }
+            match self.popup_parent(&cur) {
+                Some(p) => cur = p, // popup → its parent (another popup, or the toplevel)
+                None => return Some(cur),
+            }
+        }
+        Some(cur)
+    }
+
+    /// Present `root` (a toplevel `wl_surface`) with its full surface tree composited in: the root's own
+    /// buffer as the base, every mapped subsurface descendant blended at its parent-relative offset, then
+    /// every popup anchored anywhere in this window (menus/dropdowns/tooltips) blended at its resolved
+    /// screen offset — plus each popup's own subsurface descendants. CPU-side over-composite (the same
+    /// model `server.rs` uses); a GPU/IOSurface root is presented as a single zero-copy texture and its
+    /// children are not blended (documented limitation). Returns whether the frame reached the screen.
+    pub(crate) fn present_render_root(&mut self, root: &WlSurface) -> bool {
+        let did_present = match self.snapshot_surface(root) {
+            Some(mut base) => {
+                if base.iosurface_id.is_none() && !base.bgra.is_empty() {
+                    self.blend_subtree(&mut base, root, 0, 0);
+                    for (popup, ox, oy) in self.collect_popups_for_root(root) {
+                        if let Some(psb) = self.snapshot_surface(&popup) {
+                            blend(&mut base, &psb, ox, oy);
+                        }
+                        self.blend_subtree(&mut base, &popup, ox, oy);
+                    }
+                }
+                self.presenter.present(&base)
+            }
+            None => false,
+        };
+        self.pace_tree(root, did_present);
+        did_present
+    }
+
+    /// Blend every mapped subsurface descendant of `surface` into `base`, bottom→top (the z-order Smithay
+    /// keeps in `get_children`), each at its accumulated parent-relative offset `(base_x, base_y)` plus its
+    /// own `set_position`.
+    fn blend_subtree(&self, base: &mut SurfaceBuffer, surface: &WlSurface, base_x: i32, base_y: i32) {
+        for child in get_children(surface) {
+            // A wl_surface is its own root in `get_children`; skip the self-entry Smithay includes.
+            if &child == surface {
+                continue;
+            }
+            let (cx, cy) = with_states(&child, |states| {
+                let mut sub = states.cached_state.get::<SubsurfaceCachedState>();
+                let loc = sub.current().location;
+                (loc.x, loc.y)
+            });
+            let (ax, ay) = (base_x + cx, base_y + cy);
+            if let Some(csb) = self.snapshot_surface(&child) {
+                blend(base, &csb, ax, ay);
+            }
+            self.blend_subtree(base, &child, ax, ay);
+        }
+    }
+
+    /// Every popup that ultimately belongs to `root`, each with its screen offset within `root` (the sum of
+    /// the popup chain's per-popup geometry origins), ordered parents-before-children so a submenu blends on
+    /// top of the menu that spawned it.
+    fn collect_popups_for_root(&self, root: &WlSurface) -> Vec<(WlSurface, i32, i32)> {
+        let mut out: Vec<(WlSurface, i32, i32, usize)> = Vec::new();
+        for popup in self.xdg_shell.popup_surfaces() {
+            if !popup.alive() {
+                continue;
+            }
+            if let Some((tl, x, y, depth)) = self.popup_offset_to_toplevel(popup.wl_surface()) {
+                if &tl == root {
+                    out.push((popup.wl_surface().clone(), x, y, depth));
+                }
+            }
+        }
+        out.sort_by_key(|(_, _, _, depth)| *depth);
+        out.into_iter().map(|(s, x, y, _)| (s, x, y)).collect()
+    }
+
+    /// Walk a popup's parent chain to the owning toplevel, summing each popup's geometry origin. Returns
+    /// `(toplevel, x, y, depth)` where `(x, y)` is the popup's top-left relative to the toplevel and
+    /// `depth` is the number of popups traversed (1 = anchored directly on the toplevel). Popup geometry is
+    /// relative to the parent's window-geometry origin; the parent toplevel's own window-geometry offset is
+    /// treated as zero (matching `server.rs`).
+    fn popup_offset_to_toplevel(&self, popup: &WlSurface) -> Option<(WlSurface, i32, i32, usize)> {
+        let mut cur = popup.clone();
+        let (mut x, mut y, mut depth) = (0i32, 0i32, 0usize);
+        for _ in 0..256 {
+            let (gx, gy, _, _) = self.popup_geometry(&cur)?;
+            let parent = self.popup_parent(&cur)?;
+            x += gx;
+            y += gy;
+            depth += 1;
+            if self.popup_parent(&parent).is_some() {
+                cur = parent; // parent is itself a popup — keep climbing the submenu chain
+                continue;
+            }
+            // Parent is not a popup: resolve it to its window root (handles a popup anchored on a
+            // subsurface) and stop.
+            return self.window_root(&parent).map(|tl| (tl, x, y, depth));
+        }
+        None
+    }
+
+    /// Build a [`SurfaceBuffer`] from a surface's last remembered `wl_shm` buffer and its current
+    /// viewport, WITHOUT touching frame callbacks/feedback (that is [`pace_tree`]'s job). Used to read the
+    /// pixels of the root and of every composited child/popup each present. `None` if the surface has no
+    /// buffer yet.
+    fn snapshot_surface(&self, surface: &WlSurface) -> Option<SurfaceBuffer> {
+        let sid = surface_id(surface);
+        let buffer = self.buffers.get(&sid)?.clone();
+        let (buffer_scale, dst, src) = with_states(surface, |states| {
+            let scale = states
+                .cached_state
+                .get::<SurfaceAttributes>()
+                .current()
+                .buffer_scale
+                .max(1);
+            let mut vp = states.cached_state.get::<ViewportCachedState>();
+            let cur = vp.current();
+            let src = cur.src.map(|r| (r.loc.x, r.loc.y, r.size.w, r.size.h));
+            (scale, cur.size(), src)
+        });
+        self.build_surface_buffer(sid, &buffer, buffer_scale, dst, src)
+    }
+
+    /// Advance frame pacing for every surface in the presented window tree (root + subsurface descendants +
+    /// popups + their descendants): drain and fire each surface's `wl_surface.frame` callbacks and answer
+    /// its `wp_presentation` feedback. On a failed present the feedback is `discarded`. Draining is
+    /// idempotent — a surface with no queued callback fires nothing — so re-presenting a tree that only
+    /// partly changed does not double-fire.
+    fn pace_tree(&mut self, root: &WlSurface, did_present: bool) {
+        let mut surfaces = Vec::new();
+        self.collect_tree_surfaces(root, &mut surfaces);
+        for (popup, _, _) in self.collect_popups_for_root(root) {
+            self.collect_tree_surfaces(&popup, &mut surfaces);
+        }
+        for s in surfaces {
+            let (callbacks, feedback) = with_states(&s, |states| {
+                let callbacks: Vec<_> = std::mem::take(
+                    &mut states
+                        .cached_state
+                        .get::<SurfaceAttributes>()
+                        .current()
+                        .frame_callbacks,
+                );
+                let feedback = std::mem::take(
+                    &mut states
+                        .cached_state
+                        .get::<PresentationFeedbackCachedState>()
+                        .current()
+                        .callbacks,
+                );
+                (callbacks, feedback)
+            });
             let t = self.now_ms();
             for cb in callbacks {
                 cb.done(t);
             }
-            for fb in feedback {
-                fb.discarded();
-            }
-            return;
-        };
-
-        // Present is non-blocking (the Metal path never blocks on nextDrawable — see present_cocoa); a
-        // failed present (false) must NOT advance frame pacing, exactly as `server.rs` gates it.
-        let did_present = match self.build_surface_buffer(sid, &buffer, buffer_scale, dst, src) {
-            Some(surf) => self.presenter.present(&surf),
-            None => false,
-        };
-
-        // Frame callbacks: without these the client stops after one frame.
-        let t = self.now_ms();
-        for cb in callbacks {
-            cb.done(t);
+            self.send_presentation_feedback(feedback, did_present);
         }
+    }
 
-        // Answer presentation feedback. Presented ⇒ sync_output + presented(monotonic ts, refresh, MSC,
-        // vsync); otherwise discarded. The frame is on-screen by the time `present` returns (the analogue
-        // of weston answering on the KMS pageflip-complete event).
-        self.send_presentation_feedback(feedback, did_present);
+    /// `surface` and every subsurface descendant, depth-first.
+    fn collect_tree_surfaces(&self, surface: &WlSurface, out: &mut Vec<WlSurface>) {
+        out.push(surface.clone());
+        for child in get_children(surface) {
+            if &child == surface {
+                continue;
+            }
+            self.collect_tree_surfaces(&child, out);
+        }
     }
 
     /// Answer every `wp_presentation_feedback` for a just-processed commit, mirroring `server.rs`'s
@@ -245,6 +409,64 @@ fn uv_from_src(src: Option<(f64, f64, f64, f64)>, tex_w: i32, tex_h: i32, buffer
             [u0, v0, u1, v1]
         }
         _ => [0.0, 0.0, 1.0, 1.0],
+    }
+}
+
+/// Alpha-composite `top` over `base` at the logical offset `(x_logical, y_logical)` (relative to the
+/// base surface's origin). Both buffers hold tight BGRA backing-texture pixels; the offset is scaled by
+/// the base's backing scale so a HiDPI window blends its children at the right device position. `top` is
+/// clipped to the base bounds (a menu extending past the window edge is cropped — a documented limitation
+/// of compositing popups into the parent frame rather than into their own native windows). An XRGB `top`
+/// (`format == 1`) is treated as fully opaque; an ARGB `top` is straight-alpha blended.
+fn blend(base: &mut SurfaceBuffer, top: &SurfaceBuffer, x_logical: i32, y_logical: i32) {
+    let (bw, bh) = (base.texture_width, base.texture_height);
+    let (tw, th) = (top.texture_width, top.texture_height);
+    if bw <= 0 || bh <= 0 || tw <= 0 || th <= 0 {
+        return;
+    }
+    let base_stride = (bw * 4) as usize;
+    let top_stride = (tw * 4) as usize;
+    if base.bgra.len() < base_stride * bh as usize || top.bgra.len() < top_stride * th as usize {
+        return;
+    }
+    // Backing-store scale of the base texture relative to its logical size; child offsets are logical.
+    let s = if base.width > 0 {
+        (bw as f64 / base.width as f64).round().max(1.0) as i32
+    } else {
+        1
+    };
+    let (ox, oy) = (x_logical * s, y_logical * s);
+    let top_opaque = top.format == 1;
+    for ty in 0..th {
+        let by = oy + ty;
+        if by < 0 || by >= bh {
+            continue;
+        }
+        for tx in 0..tw {
+            let bx = ox + tx;
+            if bx < 0 || bx >= bw {
+                continue;
+            }
+            let ti = ty as usize * top_stride + tx as usize * 4;
+            let bi = by as usize * base_stride + bx as usize * 4;
+            let a = if top_opaque { 255u32 } else { top.bgra[ti + 3] as u32 };
+            if a == 0 {
+                continue;
+            }
+            if a == 255 {
+                base.bgra[bi] = top.bgra[ti];
+                base.bgra[bi + 1] = top.bgra[ti + 1];
+                base.bgra[bi + 2] = top.bgra[ti + 2];
+                base.bgra[bi + 3] = 255;
+            } else {
+                let ia = 255 - a;
+                for c in 0..3 {
+                    base.bgra[bi + c] =
+                        ((top.bgra[ti + c] as u32 * a + base.bgra[bi + c] as u32 * ia) / 255) as u8;
+                }
+                base.bgra[bi + 3] = (a + base.bgra[bi + 3] as u32 * ia / 255).min(255) as u8;
+            }
+        }
     }
 }
 

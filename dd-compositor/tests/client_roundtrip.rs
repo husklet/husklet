@@ -33,6 +33,14 @@ struct Client {
     last_xdg_configure_serial: Option<u32>,
     /// Decoded `(width, height, states)` from the last `xdg_toplevel.configure` (opcode 0).
     last_toplevel_configure: Option<(i32, i32, Vec<u32>)>,
+    /// The client's `xdg_popup` id, so `drain` can decode `configure(x,y,w,h)` (opcode 0).
+    popup_id: u32,
+    /// The popup's `xdg_surface` id, so `drain` can capture its configure serial for the ack handshake.
+    popup_xdg_id: u32,
+    /// Decoded `(x, y, w, h)` from the last `xdg_popup.configure` (opcode 0) — the positioner placement.
+    last_popup_configure: Option<(i32, i32, i32, i32)>,
+    /// Serial from the last `xdg_surface.configure` (opcode 0) on the popup's xdg_surface.
+    last_popup_xdg_serial: Option<u32>,
     /// Every event seen as `(object, opcode)`, so tests can assert e.g. a `presented` (feedback opcode 1).
     events: Vec<(u32, u16)>,
 }
@@ -49,6 +57,10 @@ impl Client {
             toplevel_id: 0,
             last_xdg_configure_serial: None,
             last_toplevel_configure: None,
+            popup_id: 0,
+            popup_xdg_id: 0,
+            last_popup_configure: None,
+            last_popup_xdg_serial: None,
             events: Vec::new(),
         }
     }
@@ -93,6 +105,17 @@ impl Client {
                     .map(|c| u32::from_ne_bytes([c[0], c[1], c[2], c[3]]))
                     .collect();
                 self.last_toplevel_configure = Some((w, h, states));
+            } else if self.popup_id != 0 && m.object == self.popup_id && m.opcode == 0 {
+                // xdg_popup.configure(x, y, w, h): the placement the positioner resolved to.
+                let mut r = m.reader();
+                let x = r.i32();
+                let y = r.i32();
+                let w = r.i32();
+                let h = r.i32();
+                self.last_popup_configure = Some((x, y, w, h));
+            } else if self.popup_xdg_id != 0 && m.object == self.popup_xdg_id && m.opcode == 0 {
+                // The popup's xdg_surface.configure(serial) — echoed back in ack_configure.
+                self.last_popup_xdg_serial = Some(m.reader().u32());
             }
         }
     }
@@ -338,6 +361,123 @@ fn globals_advertise_frame_presents_feedback_and_cursor_shape_wire() {
         (mw, mh),
         (900, 600),
         "resize beyond set_max_size(900,600) should clamp to the max"
+    );
+
+    // (5) xdg_popup round-trip: map → configure → present → reposition → grab → dismiss. This is the
+    // Chrome menu/dropdown/tooltip path. Bind xdg_wm_base at v3 so xdg_popup.reposition + the
+    // xdg_popup.repositioned event are available.
+    let wm3 = bind(&mut c, "xdg_wm_base", 3);
+
+    // Positioner: a 120x80 popup anchored at the bottom-left corner of a 200x24 anchor rectangle placed at
+    // (10,30) in the parent's window geometry, growing toward the bottom-right. With no constraint kicking
+    // in (the popup fits the output), this resolves to geometry (10, 54, 120, 80): anchor point =
+    // (10, 30+24), bottom_right gravity subtracts nothing.
+    let pos = c.alloc();
+    c.conn.send(&Message::new(wm3, 1).u32(pos)); // create_positioner
+    c.conn.send(&Message::new(pos, 1).i32(120).i32(80)); // set_size(w,h)
+    c.conn
+        .send(&Message::new(pos, 2).i32(10).i32(30).i32(200).i32(24)); // set_anchor_rect(x,y,w,h)
+    c.conn.send(&Message::new(pos, 3).u32(6)); // set_anchor(bottom_left = 6)
+    c.conn.send(&Message::new(pos, 4).u32(8)); // set_gravity(bottom_right = 8)
+
+    // Popup surface + its xdg_surface + get_popup(parent = the toplevel's xdg_surface, positioner).
+    let psurface = c.alloc();
+    c.conn.send(&Message::new(comp, 0).u32(psurface)); // create_surface
+    let pxdg = c.alloc();
+    c.conn.send(&Message::new(wm3, 2).u32(pxdg).u32(psurface)); // get_xdg_surface
+    let popup = c.alloc();
+    c.conn
+        .send(&Message::new(pxdg, 2).u32(popup).u32(xdg).u32(pos)); // xdg_surface.get_popup(id, parent, positioner)
+    c.popup_id = popup;
+    c.popup_xdg_id = pxdg;
+    pump!();
+
+    // The initial handshake: xdg_popup.configure(x,y,w,h) paired with the popup's xdg_surface.configure.
+    assert!(c.saw(popup, 0), "expected xdg_popup.configure; saw {:?}", c.events);
+    assert!(c.saw(pxdg, 0), "expected popup xdg_surface.configure; saw {:?}", c.events);
+    assert_eq!(
+        c.last_popup_configure,
+        Some((10, 54, 120, 80)),
+        "positioner should resolve to (10,54,120,80)"
+    );
+    let pserial = c
+        .last_popup_xdg_serial
+        .expect("popup xdg_surface.configure serial not captured");
+    c.conn.send(&Message::new(pxdg, 4).u32(pserial)); // ack_configure(serial)
+
+    // Back the popup with a small buffer and commit → it composites into the owning toplevel window (the
+    // present path re-presents the toplevel with the popup blended at its offset).
+    let frames_before_popup = state.presenter.frame_count();
+    let (pw, ph): (i32, i32) = (8, 8);
+    let ppixels = vec![0x90u8; (pw * ph * 4) as usize];
+    let pmfd = dd_display::keymap::anon_fd_with(&ppixels).expect("popup anon shm fd");
+    let ppool = c.alloc();
+    c.conn
+        .send(&Message::new(shm, 0).u32(ppool).u32(ppixels.len() as u32)); // create_pool
+    c.conn.queue_fd(pmfd);
+    pump!();
+    unsafe { libc::close(pmfd) };
+    let pbuffer = c.alloc();
+    c.conn.send(
+        &Message::new(ppool, 0)
+            .u32(pbuffer)
+            .i32(0)
+            .i32(pw)
+            .i32(ph)
+            .i32(pw * 4)
+            .u32(1),
+    ); // create_buffer (XRGB8888)
+    c.conn.send(&Message::new(psurface, 1).u32(pbuffer).i32(0).i32(0)); // attach
+    c.conn.send(&Message::new(psurface, 6)); // commit
+    pump!();
+    assert!(
+        state.presenter.frame_count() > frames_before_popup,
+        "committing the popup buffer should re-present the composited toplevel"
+    );
+
+    // reposition (v3): move the popup to a new anchor rect at (50,60). The compositor answers with
+    // xdg_popup.repositioned(token) (opcode 2) followed by a fresh configure at (50,84,120,80).
+    let pos2 = c.alloc();
+    c.conn.send(&Message::new(wm3, 1).u32(pos2)); // create_positioner
+    c.conn.send(&Message::new(pos2, 1).i32(120).i32(80)); // set_size
+    c.conn
+        .send(&Message::new(pos2, 2).i32(50).i32(60).i32(200).i32(24)); // set_anchor_rect
+    c.conn.send(&Message::new(pos2, 3).u32(6)); // set_anchor(bottom_left)
+    c.conn.send(&Message::new(pos2, 4).u32(8)); // set_gravity(bottom_right)
+    c.last_popup_configure = None;
+    c.conn.send(&Message::new(popup, 2).u32(pos2).u32(77)); // xdg_popup.reposition(positioner, token=77)
+    pump!();
+    assert!(
+        c.saw(popup, 2),
+        "expected xdg_popup.repositioned (opcode 2); saw {:?}",
+        c.events
+    );
+    assert_eq!(
+        c.last_popup_configure,
+        Some((50, 84, 120, 80)),
+        "reposition should re-place the popup to (50,84,120,80)"
+    );
+    let pserial2 = c
+        .last_popup_xdg_serial
+        .expect("reposition xdg_surface.configure serial not captured");
+    c.conn.send(&Message::new(pxdg, 4).u32(pserial2)); // ack the reposition configure
+
+    // grab(seat, serial): an explicit popup grab (the compositor tracks it so a click-outside dismisses
+    // the whole chain). Reuse the pointer-enter serial captured earlier.
+    let gserial = c.enter_serial.expect("need an input serial for the popup grab");
+    c.conn.send(&Message::new(popup, 1).u32(seat).u32(gserial)); // xdg_popup.grab(seat, serial)
+    pump!();
+
+    // Dismissal: the input loop calls dismiss_popup_grabs() on a click outside the grab. The client MUST
+    // receive xdg_popup.popup_done (opcode 1) so the menu closes.
+    let dismissed = state.dismiss_popup_grabs();
+    display.flush_clients().unwrap();
+    c.drain();
+    assert_eq!(dismissed, 1, "the grabbing popup should be dismissed");
+    assert!(
+        c.saw(popup, 1),
+        "expected xdg_popup.popup_done (opcode 1) on dismissal; saw {:?}",
+        c.events
     );
 }
 
