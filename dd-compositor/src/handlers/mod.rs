@@ -14,6 +14,7 @@ pub mod dmabuf;
 pub mod output;
 pub mod scale;
 pub mod seat;
+pub mod text_input;
 pub mod xdg;
 
 use crate::DdState;

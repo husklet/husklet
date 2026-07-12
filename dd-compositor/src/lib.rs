@@ -151,6 +151,12 @@ pub struct DdState {
     /// [`DdState::add_output`]. Empty in the single-output default — the state is not hard-wired to one.
     pub extra_outputs: Vec<Output>,
 
+    /// `zwp_text_input_v3` — text-input for editors/address-bars/forms + the host IME (marked-text)
+    /// bridge. The compositor IS the input method here (dd has no separate IME client), so it owns the
+    /// text-input instances directly; see [`handlers::text_input`]. Text-input focus follows the keyboard
+    /// focus via [`DdState::set_text_input_focus`].
+    pub(crate) text_input: handlers::text_input::TextInputState,
+
     /// The reused platform present half (`CocoaPresenter`/`MetalPresenter` on macOS, `PngPresenter`
     /// headless). Keyed internally by surface id — the same `u32` sid model as `server.rs`.
     pub presenter: Box<dyn Presenter>,
@@ -267,6 +273,9 @@ impl DdState {
         let fractional_scale = FractionalScaleManagerState::new::<Self>(&dh);
         // wp_single_pixel_buffer_v1: the 1×1 solid-color buffer fast path (backgrounds/solid surfaces).
         let single_pixel_buffer = SinglePixelBufferState::new::<Self>(&dh);
+        // zwp_text_input_manager_v3: text-input for editors/forms + the host IME (marked-text) bridge.
+        // Advertised here; the compositor owns the text-input instances directly (see handlers/text_input.rs).
+        let text_input = handlers::text_input::TextInputState::new(&dh);
 
         let mut seat_state = SeatState::<Self>::new();
         let mut seat = seat_state.new_wl_seat(&dh, "dd-seat-0"); // wl_seat v5
@@ -320,6 +329,7 @@ impl DdState {
             pointer,
             output,
             extra_outputs: Vec::new(),
+            text_input,
             presenter,
             focus: None,
             titles: HashMap::new(),
@@ -384,6 +394,9 @@ impl DdState {
         use smithay::wayland::selection::data_device::set_data_device_focus;
         use smithay::wayland::selection::primary_selection::set_primary_focus;
         self.focus = Some(surface.clone());
+        // Text-input focus follows keyboard focus (zwp_text_input_v3): the newly focused surface's
+        // text-input instances get `enter`, the previously focused ones `leave`.
+        self.set_text_input_focus(Some(surface.clone()));
         let client = surface.client();
         let kbd = self.keyboard.clone();
         let serial = SERIAL_COUNTER.next_serial();

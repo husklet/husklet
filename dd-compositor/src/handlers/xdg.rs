@@ -172,6 +172,8 @@ impl XdgShellHandler for DdState {
         if self.focus.as_ref() == Some(surface.wl_surface()) {
             self.focus = None;
             self.last_cfg = None;
+            // Text-input focus tracks keyboard focus: the focused text field is gone, so send `leave`.
+            self.set_text_input_focus(None);
         }
     }
 

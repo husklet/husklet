@@ -121,9 +121,13 @@ fn build_loop(
         .insert_source(
             Generic::new(display_fd, Interest::READ, CalloopMode::Level),
             |_, _, data: &mut LoopData| {
-                data.display
-                    .dispatch_clients(&mut data.state)
-                    .expect("dispatch clients");
+                // ROBUSTNESS: a client protocol error is handled by wayland-server internally (that one
+                // client is disconnected); dispatch_clients only returns Err on a catastrophic backend
+                // fault. Either way, NEVER panic here — the whole compositor (and every other guest window)
+                // must survive one misbehaving client. Log and keep dispatching.
+                if let Err(e) = data.display.dispatch_clients(&mut data.state) {
+                    eprintln!("dd-compositor: dispatch_clients error (continuing): {e}");
+                }
                 Ok(PostAction::Continue)
             },
         )
@@ -136,9 +140,11 @@ fn run_headless(socket: &str, presenter: Box<dyn Presenter>) -> ! {
     let (mut event_loop, mut data) = build_loop(socket, presenter);
     eprintln!("dd-compositor: entering calloop (headless)");
     loop {
-        event_loop
-            .dispatch(Some(std::time::Duration::from_millis(16)), &mut data)
-            .expect("dispatch");
+        // ROBUSTNESS: a calloop dispatch error must not abort the compositor. Client-triggered faults are
+        // absorbed inside the source callbacks (which never panic); log any loop-level error and continue.
+        if let Err(e) = event_loop.dispatch(Some(std::time::Duration::from_millis(16)), &mut data) {
+            eprintln!("dd-compositor: event loop dispatch error (continuing): {e}");
+        }
         let _ = data.display.flush_clients();
     }
 }
@@ -205,9 +211,11 @@ mod macos {
             data.state.maybe_resize_focused();
             let _ = data.display.flush_clients();
             // Short timeout so we loop back to drain input promptly even when no client fd is readable.
-            event_loop
-                .dispatch(Some(std::time::Duration::from_millis(8)), &mut data)
-                .expect("dispatch");
+            // ROBUSTNESS: never panic on a dispatch error — one bad client (or a transient loop fault)
+            // must not take down the compositor and every other guest window. Log and keep running.
+            if let Err(e) = event_loop.dispatch(Some(std::time::Duration::from_millis(8)), &mut data) {
+                eprintln!("dd-compositor: event loop dispatch error (continuing): {e}");
+            }
             drain_appkit(&app, &mut data);
             data.state.maybe_resize_focused();
             // Bridge the clipboard both ways once per iteration: mirror any host-clipboard change into a

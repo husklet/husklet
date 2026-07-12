@@ -276,12 +276,20 @@ impl DdState {
         });
         // Repack the shm buffer into tight BGRA (honouring the pool offset + row stride), then hand it to
         // the Presenter as a bitmap cursor. Small (cursor-sized) copy — no fast-path needed.
-        let read = with_buffer_contents(&buffer, |ptr, _len, data| {
+        let read = with_buffer_contents(&buffer, |ptr, len, data| {
             let (w, h, stride, off) = (data.width, data.height, data.stride, data.offset);
-            if w <= 0 || h <= 0 {
-                return (w, h, Vec::new());
+            // ROBUSTNESS: cursor buffer geometry is client-controlled. Reject degenerate/malformed dims
+            // and never read past the mapping (a bad stride/offset/height would otherwise `ptr.offset()`
+            // out of bounds). Same defense-in-depth as the window-buffer repack in handlers/compositor.rs.
+            if w <= 0 || h <= 0 || stride < w * 4 || off < 0 {
+                return (0i32, 0i32, Vec::new());
             }
             let tight = (w * 4) as usize;
+            let last_row_start = off as usize + (h as usize - 1) * stride as usize;
+            match last_row_start.checked_add(tight) {
+                Some(max_read) if max_read <= len => {}
+                _ => return (0i32, 0i32, Vec::new()),
+            }
             let mut bgra = vec![0u8; tight * h as usize];
             for row in 0..h as isize {
                 let src = unsafe { ptr.offset(off as isize + row * stride as isize) };

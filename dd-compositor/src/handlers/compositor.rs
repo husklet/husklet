@@ -347,7 +347,7 @@ impl DdState {
             return Some(sb);
         }
         let title = self.titles.get(&sid).cloned().unwrap_or_else(|| "dd".into());
-        let res = with_buffer_contents(buffer, |ptr, _len, data| {
+        let res = with_buffer_contents(buffer, |ptr, len, data| {
             let w = data.width;
             let h = data.height;
             let stride = data.stride;
@@ -356,9 +356,27 @@ impl DdState {
                 wl_shm::Format::Xrgb8888 => 1u32, // opaque (dd-display convention: format==1 ⇒ XRGB)
                 _ => 0u32,                        // ARGB8888 (and anything else): honour alpha
             };
+            // ROBUSTNESS: width/height/stride/offset are client-controlled. Reject degenerate or
+            // malformed geometry, and — crucially — never read past the actual mapping. Smithay's shm
+            // handler validates a buffer fits its pool, but this is defense-in-depth against a hostile or
+            // buggy client: without it a bad stride/offset/height would `ptr.offset()` out of bounds (a
+            // crash or info-leak) and an oversized `w`/`h` would overflow the `tight * h` allocation.
+            let tight = match (w.checked_mul(4)).map(|t| t as usize) {
+                Some(t) if w > 0 && h > 0 && stride >= w * 4 && src_off >= 0 => t,
+                _ => return (0i32, 0i32, fmt, Vec::new()),
+            };
+            let rows = h as usize;
+            // Highest byte the copy reads = src_off + (h-1)*stride + w*4. Must lie within the mapping.
+            let last_row_start = src_off as usize + (rows - 1) * stride as usize;
+            let max_read = match last_row_start.checked_add(tight) {
+                Some(m) => m,
+                None => return (0i32, 0i32, fmt, Vec::new()),
+            };
+            if max_read > len {
+                return (0i32, 0i32, fmt, Vec::new());
+            }
             // Tight BGRA copy of the backing texture, honouring the pool offset + row stride.
-            let tight = (w * 4) as usize;
-            let mut bgra = vec![0u8; tight * h as usize];
+            let mut bgra = vec![0u8; tight * rows];
             for row in 0..h as isize {
                 let src = unsafe { ptr.offset(src_off as isize + row * stride as isize) };
                 let dstart = row as usize * tight;
@@ -370,6 +388,10 @@ impl DdState {
         })
         .ok()?;
         let (tex_w, tex_h, fmt, bgra) = res;
+        // A rejected (malformed) buffer yields an empty copy — do not present garbage or a zero-size window.
+        if tex_w <= 0 || tex_h <= 0 || bgra.is_empty() {
+            return None;
+        }
 
         // wp_viewport source rectangle (given in post-buffer-scale/logical coords) → a normalized
         // sample rect in the backing texture, so a client that renders into an oversized target and
