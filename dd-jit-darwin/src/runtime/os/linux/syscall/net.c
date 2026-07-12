@@ -337,6 +337,11 @@ static int svc_net(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_
                 if (sv[1] >= 0 && sv[1] < DD_NFD) g_sock_seqpacket[sv[1]] = 1;
             }
         }
+        if (r == 0 && (int)a0 == AF_UNIX)
+            w7_trace("socketpair AF_UNIX ty=%s fds=[%d,%d] peer_pid=[%d,%d]",
+                     lty == SOCK_STREAM ? "STREAM" : lty == SOCK_SEQPACKET ? "SEQPACKET" : "DGRAM", sv[0], sv[1],
+                     (sv[0] >= 0 && sv[0] < DD_NFD) ? g_sock_peer_pid[sv[0]] : 0,
+                     (sv[1] >= 0 && sv[1] < DD_NFD) ? g_sock_peer_pid[sv[1]] : 0);
         G_RET(c) = r < 0 ? (uint64_t)(-errno) : 0;
         break;
     }
@@ -1284,6 +1289,10 @@ static int svc_net(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_
         } while (r < 0 && SVC_EINTR_RESTART(c));
         if (nr == 211) cmsg_tmpfds_close();
         if (nr == 211 && r >= 0) seq_mark_wrote((int)a0); // genuine writer: may inject peer-EOF on its close
+        if (nr == 211 && w7_on() && (int)a0 >= 0 && (int)a0 < DD_NFD && g_sock_fam[(int)a0] == AF_UNIX)
+            w7_trace("sendmsg fd=%d ret=%ld ctl_l=%u%s%s peer_pid=%d", (int)a0, (long)r, (unsigned)(gc ? gcl : 0),
+                     (gc && gcl) ? " SCM" : "", (r < 0) ? " ERR" : "",
+                     ((int)a0 < DD_NFD) ? g_sock_peer_pid[(int)a0] : 0);
         if (r > 0 && peekaddr) r = 0; // guest supplied no data room; only the source address was wanted
         // SEQPACKET-as-DGRAM EOF: coerce a peer-closed recvmsg's ECONNRESET to 0 (EOF). (See case 199.)
         if (nr == 212 && r < 0 && errno == ECONNRESET && seq_is((int)a0)) r = 0;
@@ -1334,7 +1343,14 @@ static int svc_net(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_
             if (((int)a2 & 0x40000000) && gc && ln) cmsg_lx_set_cloexec_fds(gc, ln); // MSG_CMSG_CLOEXEC
             *(uint64_t *)(g + 40) = ln;
             *(uint32_t *)(g + 48) = (uint32_t)mfl;
+            if (w7_on() && (int)a0 >= 0 && (int)a0 < DD_NFD && g_sock_fam[(int)a0] == AF_UNIX)
+                w7_trace("recvmsg fd=%d ret=%ld ctl_l=%zu%s%s%s peer_pid=%d", (int)a0, (long)r, ln,
+                         passcred_active ? " CRED" : "", (mfl & 0x8) ? " CTRUNC" : "",
+                         (mh.msg_controllen > 0) ? " HOSTSCM" : "", g_sock_peer_pid[(int)a0]);
         }
+        if (nr == 212 && r <= 0 && w7_on() && (int)a0 >= 0 && (int)a0 < DD_NFD && g_sock_fam[(int)a0] == AF_UNIX)
+            w7_trace("recvmsg fd=%d ret=%ld%s (no-data)", (int)a0, (long)r,
+                     (r < 0) ? (errno == EAGAIN ? " EAGAIN" : " ERR") : " EOF");
         if (hctl != hstack) free(hctl);
         G_RET(c) = r < 0 ? (uint64_t)(-errno) : (uint64_t)r;
         break;

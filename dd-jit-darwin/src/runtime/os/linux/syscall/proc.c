@@ -1431,6 +1431,7 @@ static int svc_proc(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64
             // garbage branch (SIGILL — broke initdb). a1==0 for a plain fork (bash), keeping the inherited SP.
             if ((a0 & 0x100) && a1) G_SP(c) = a1;
             fork_child_hooks(c); // shared child-side engine reset (cache re-alias, caches, kqueues, locks)
+            if (w7_on()) w7_trace("clone-child flags=0x%llx (fresh host pid)", (unsigned long long)a0);
             // CLONE_CHILD_SETTID(0x01000000): store the child's own tid (== its pid for a process clone) into
             // the child's *ctid (a4). CLONE_CHILD_CLEARTID(0x00200000): remember ctid so thread/process exit
             // zeroes it and FUTEX_WAKEs a joiner. The old code ignored both, so pthread/runtime handshakes
@@ -1576,6 +1577,12 @@ static int svc_proc(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64
             ac++;
         }
         argv[ac] = NULL;
+        if (w7_on()) {
+            const char *ty = "none";
+            for (int i = 0; i < ac; i++)
+                if (argv[i] && !strncmp(argv[i], "--type=", 7)) ty = argv[i] + 7;
+            w7_trace("execve type=%s argc=%d argv0=%s", ty, ac, (ac > 0 && argv[0]) ? argv[0] : "");
+        }
         // Forward the guest's ACTUAL environment across the exec: build_stack rebuilds the new process env
         // from DD_GUEST_ENV, so serialize envp (a2) into it NOW while guest memory is still mapped. A guest
         // that set/modified env vars (FOO=bar, a tweaked PATH) thus sees them survive; a NULL envp keeps the

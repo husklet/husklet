@@ -105,6 +105,36 @@ static void pt_wait_disarm(int armed, const struct sigaction *saved);
 // the dup2/dup3-overwrite path in io.c can shed the destination fd's tables before dup2 reuses the number.
 static void fd_reset_emul(int fd);
 
+// ==================== Wall 7 renderer-stall instrumentation (flag-gated) =========================
+// Guarded by env DD_WALL7_TRACE=1. When unset this is a single cached-int compare per call site, so
+// the whole facility is inert for the normal test matrix. When set it emits one-line, pid-tagged
+// traces to stderr for the exact primitives the multi-process-Chrome renderer's Mojo bring-up rides
+// on: AF_UNIX socketpair/eventfd creation, epoll_ctl registration, epoll_wait block/wake on those
+// fds, and sendmsg/recvmsg with SCM control (fd-passing + synthesized SO_PASSCRED credentials) on
+// the primary node channel. Children inherit the launcher's stderr, so a forked renderer's trace
+// interleaves with the browser's; correlate by the pid= tag (execve/clone are traced too). The goal
+// is to NAME the fd/message/wake the dormant renderer IO thread waits on but never receives.
+#include <stdarg.h>
+static int g_w7_trace = -1;
+static inline int w7_on(void) {
+    if (__builtin_expect(g_w7_trace < 0, 0)) g_w7_trace = getenv("DD_WALL7_TRACE") ? 1 : 0;
+    return g_w7_trace;
+}
+__attribute__((format(printf, 1, 2))) static void w7_trace(const char *fmt, ...) {
+    if (!w7_on()) return;
+    char buf[640];
+    int n = snprintf(buf, sizeof buf, "[w7 pid=%d] ", (int)getpid());
+    if (n < 0) n = 0;
+    if (n > (int)sizeof buf - 2) n = (int)sizeof buf - 2;
+    va_list ap;
+    va_start(ap, fmt);
+    int m = vsnprintf(buf + n, sizeof buf - (size_t)n, fmt, ap);
+    va_end(ap);
+    if (m > 0) n += (m < (int)sizeof buf - n) ? m : (int)sizeof buf - n - 1;
+    if (n < 1 || buf[n - 1] != '\n') buf[n++] = '\n';
+    (void)!write(2, buf, (size_t)n);
+}
+
 #include "helpers.c"
 #include "sysv.c"
 #include "mem.c"
