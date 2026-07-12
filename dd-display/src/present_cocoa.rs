@@ -23,11 +23,11 @@ use objc2_app_kit::{
     NSApplication, NSApplicationActivationPolicy, NSAutoresizingMaskOptions, NSBackingStoreType,
     NSBitmapImageFileType, NSBitmapImageRep, NSBitmapImageRepPropertyKey, NSColor, NSCursor,
     NSDeviceRGBColorSpace, NSEvent, NSEventMask, NSEventModifierFlags, NSEventType, NSGraphicsContext,
-    NSImage, NSImageView, NSScreen, NSView, NSWindow, NSWindowDelegate, NSWindowOcclusionState,
-    NSWindowStyleMask,
+    NSImage, NSImageView, NSPasteboard, NSPasteboardTypeString, NSScreen, NSView, NSWindow,
+    NSWindowDelegate, NSWindowOcclusionState, NSWindowStyleMask,
 };
 use objc2_foundation::{
-    MainThreadMarker, NSDefaultRunLoopMode, NSDictionary, NSInteger, NSPoint, NSRect, NSSize,
+    MainThreadMarker, NSData, NSDefaultRunLoopMode, NSDictionary, NSInteger, NSPoint, NSRect, NSSize,
     NSString, NSTimeInterval,
 };
 use objc2_metal::{
@@ -425,6 +425,19 @@ impl Presenter for CocoaPresenter {
 
     fn set_cursor_shape(&self, shape: u32) {
         apply_cursor_shape(shape);
+    }
+
+    fn clipboard_set_host(&self, mime: &str, bytes: &[u8]) {
+        host_clipboard_set(mime, bytes);
+    }
+    fn clipboard_host_mimes(&self) -> Vec<String> {
+        host_clipboard_mimes()
+    }
+    fn clipboard_host_read(&self, mime: &str) -> Option<Vec<u8>> {
+        host_clipboard_read(mime)
+    }
+    fn clipboard_host_generation(&self) -> u64 {
+        host_clipboard_generation()
     }
 
     fn drop_window(&mut self, sid: u32) {
@@ -1093,6 +1106,19 @@ impl Presenter for MetalPresenter {
         apply_cursor_shape(shape);
     }
 
+    fn clipboard_set_host(&self, mime: &str, bytes: &[u8]) {
+        host_clipboard_set(mime, bytes);
+    }
+    fn clipboard_host_mimes(&self) -> Vec<String> {
+        host_clipboard_mimes()
+    }
+    fn clipboard_host_read(&self, mime: &str) -> Option<Vec<u8>> {
+        host_clipboard_read(mime)
+    }
+    fn clipboard_host_generation(&self) -> u64 {
+        host_clipboard_generation()
+    }
+
     fn drop_window(&mut self, sid: u32) {
         if let Some(w) = self.wins.remove(&sid) {
             w.window.close(); // orderOut + release: the tiny cursor-image window disappears
@@ -1120,6 +1146,79 @@ fn apply_cursor_shape(shape: u32) {
         _ => NSCursor::arrowCursor(),                   // default + anything without a good AppKit match
     };
     unsafe { cursor.set() };
+}
+
+// ===================================== host clipboard (NSPasteboard) ==================================
+//
+// The native half of the `wl_data_device` selection bridge (see dd-compositor handlers/seat.rs). These
+// free functions back the `Presenter::clipboard_*` hooks so copy/paste crosses the guest↔host boundary
+// and the container feels like a native app: a guest copy lands on the macOS clipboard, and the macOS
+// clipboard is offered to the guest for paste. Text is the flavour that matters for "native feel", so we
+// bridge it through `NSPasteboardTypeString` (UTF-8); the compositor advertises the several text mimes a
+// Wayland client might ask for, all served from that one host string.
+
+/// Wayland text-selection mime types, all satisfied by the host `NSPasteboardTypeString`. A guest asking
+/// for any of these when pasting reads the host clipboard string; a guest copy under any of these is
+/// written to the host as a string.
+const TEXT_MIMES: &[&str] = &[
+    "text/plain;charset=utf-8",
+    "text/plain",
+    "UTF8_STRING",
+    "STRING",
+    "TEXT",
+];
+
+fn is_text_mime(mime: &str) -> bool {
+    mime.starts_with("text/") || TEXT_MIMES.contains(&mime)
+}
+
+/// Guest copy → host clipboard. Text is written as an `NSString`; any other flavour is written as raw
+/// data under a pasteboard type named after the mime (so a host app that understands it can still read it).
+pub(crate) fn host_clipboard_set(mime: &str, bytes: &[u8]) {
+    let pb = unsafe { NSPasteboard::generalPasteboard() };
+    unsafe {
+        pb.clearContents();
+        if is_text_mime(mime) {
+            if let Ok(s) = std::str::from_utf8(bytes) {
+                pb.setString_forType(&NSString::from_str(s), NSPasteboardTypeString);
+                return;
+            }
+        }
+        let data = NSData::with_bytes(bytes);
+        let ty = NSString::from_str(mime);
+        pb.setData_forType(Some(&data), &ty);
+    }
+}
+
+/// The mime types the host clipboard offers to guests (paste). When the host holds text, advertise the
+/// full set of text flavours a Wayland client might request. Empty when the host clipboard has no text.
+pub(crate) fn host_clipboard_mimes() -> Vec<String> {
+    let pb = unsafe { NSPasteboard::generalPasteboard() };
+    if unsafe { pb.stringForType(NSPasteboardTypeString) }.is_some() {
+        return TEXT_MIMES.iter().map(|s| s.to_string()).collect();
+    }
+    Vec::new()
+}
+
+/// Host clipboard → guest paste. For a text mime, return the host string's UTF-8 bytes; otherwise return
+/// the raw data stored under a matching pasteboard type, if any.
+pub(crate) fn host_clipboard_read(mime: &str) -> Option<Vec<u8>> {
+    let pb = unsafe { NSPasteboard::generalPasteboard() };
+    unsafe {
+        if is_text_mime(mime) {
+            let s = pb.stringForType(NSPasteboardTypeString)?;
+            return Some(s.to_string().into_bytes());
+        }
+        let data = pb.dataForType(&NSString::from_str(mime))?;
+        Some(data.bytes().to_vec())
+    }
+}
+
+/// The host clipboard change token (`NSPasteboard.changeCount`) — bumps on every host copy, so the
+/// compositor re-offers the new host selection to guests only when it actually changed.
+pub(crate) fn host_clipboard_generation() -> u64 {
+    let pb = unsafe { NSPasteboard::generalPasteboard() };
+    unsafe { pb.changeCount() }.max(0) as u64
 }
 
 /// Start a native, host-driven window drag for `window` in response to `xdg_toplevel.move`. AppKit's

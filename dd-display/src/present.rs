@@ -110,6 +110,33 @@ pub trait Presenter {
     /// `wp_cursor_shape_device_v1.shape` enum (1=default, 4=pointer, 9=text, 16=grab, …). A windowed
     /// presenter maps it to the matching host cursor (e.g. `NSCursor`). Default: no native cursor to set.
     fn set_cursor_shape(&self, _shape: u32) {}
+
+    // ---- Host clipboard bridge (wl_data_device selection ⇄ host pasteboard) ----
+    // These four hooks are the platform seam for bridging the guest's Wayland clipboard to the host's
+    // native clipboard (macOS `NSPasteboard`), added the same way `set_cursor_shape` was: a default-no-op
+    // on the trait, implemented only by the windowed (Cocoa) presenter, so the Smithay compositor core
+    // stays free of any Cocoa. The headless `PngPresenter`/test presenters keep the defaults, so the whole
+    // data-device path is exercised in-process without a host clipboard.
+
+    /// A guest set the Wayland selection (copy). `bytes` is the guest source's payload for `mime`, already
+    /// read by the compositor; push it onto the host clipboard so a host app can paste it. Default: drop.
+    fn clipboard_set_host(&self, _mime: &str, _bytes: &[u8]) {}
+    /// The mime types the host clipboard currently offers, so the compositor can advertise a host→guest
+    /// selection (`wl_data_offer.offer` per type). Default: none (no host clipboard).
+    fn clipboard_host_mimes(&self) -> Vec<String> {
+        Vec::new()
+    }
+    /// Read the host clipboard payload for `mime` (guest paste). Returns the raw bytes the compositor
+    /// writes into the reader's `wl_data_offer.receive` fd. Default: nothing on the host clipboard.
+    fn clipboard_host_read(&self, _mime: &str) -> Option<Vec<u8>> {
+        None
+    }
+    /// A change token for the host clipboard (macOS `NSPasteboard.changeCount`). It bumps whenever the host
+    /// clipboard changes, so the compositor loop can re-offer the new host selection to guests without
+    /// polling contents every frame. `0` means there is no host clipboard. Default: `0`.
+    fn clipboard_host_generation(&self) -> u64 {
+        0
+    }
 }
 
 /// Writes each committed surface to `<dir>/surface-<sid>.png`, and records the last frame for tests.

@@ -17,8 +17,8 @@ pub mod xdg;
 use crate::DdState;
 
 use smithay::{
-    delegate_compositor, delegate_cursor_shape, delegate_output, delegate_presentation,
-    delegate_seat, delegate_shm, delegate_viewporter, delegate_xdg_shell,
+    delegate_compositor, delegate_cursor_shape, delegate_data_device, delegate_output,
+    delegate_presentation, delegate_seat, delegate_shm, delegate_viewporter, delegate_xdg_shell,
 };
 
 delegate_compositor!(DdState); // wl_compositor + wl_subcompositor
@@ -29,3 +29,4 @@ delegate_output!(DdState);
 delegate_viewporter!(DdState);
 delegate_presentation!(DdState);
 delegate_cursor_shape!(DdState); // wp_cursor_shape_manager_v1 + wp_cursor_shape_device_v1
+delegate_data_device!(DdState); // wl_data_device_manager + wl_data_device/source/offer (clipboard + DnD)

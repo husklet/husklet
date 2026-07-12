@@ -41,6 +41,20 @@ struct Client {
     last_popup_configure: Option<(i32, i32, i32, i32)>,
     /// Serial from the last `xdg_surface.configure` (opcode 0) on the popup's xdg_surface.
     last_popup_xdg_serial: Option<u32>,
+    /// The client's `wl_keyboard` id, so `drain` can decode `enter`/`modifiers`. 0 = not bound.
+    keyboard_id: u32,
+    /// Serial from the last `wl_keyboard.enter` (opcode 1) — a valid serial for `set_selection`.
+    kbd_enter_serial: Option<u32>,
+    /// Decoded `(depressed, latched, locked, group)` from the last `wl_keyboard.modifiers` (opcode 4).
+    last_modifiers: Option<(u32, u32, u32, u32)>,
+    /// The client's `wl_data_device` id, so `drain` can decode `data_offer`/`selection`. 0 = not bound.
+    data_device_id: u32,
+    /// The server-allocated `wl_data_offer` id from the last `wl_data_device.data_offer` (opcode 0).
+    last_data_offer: Option<u32>,
+    /// Whether a `wl_data_device.selection` (opcode 5) pointed at `last_data_offer` (vs. cleared to null).
+    selection_offer: Option<u32>,
+    /// Mime types the last `wl_data_offer` announced via `wl_data_offer.offer` (opcode 0).
+    offer_mimes: Vec<String>,
     /// Every event seen as `(object, opcode)`, so tests can assert e.g. a `presented` (feedback opcode 1).
     events: Vec<(u32, u16)>,
 }
@@ -61,6 +75,13 @@ impl Client {
             popup_xdg_id: 0,
             last_popup_configure: None,
             last_popup_xdg_serial: None,
+            keyboard_id: 0,
+            kbd_enter_serial: None,
+            last_modifiers: None,
+            data_device_id: 0,
+            last_data_offer: None,
+            selection_offer: None,
+            offer_mimes: Vec::new(),
             events: Vec::new(),
         }
     }
@@ -116,6 +137,32 @@ impl Client {
             } else if self.popup_xdg_id != 0 && m.object == self.popup_xdg_id && m.opcode == 0 {
                 // The popup's xdg_surface.configure(serial) — echoed back in ack_configure.
                 self.last_popup_xdg_serial = Some(m.reader().u32());
+            } else if self.keyboard_id != 0 && m.object == self.keyboard_id {
+                match m.opcode {
+                    // wl_keyboard.enter(serial, surface, keys[]): capture the serial for set_selection.
+                    1 => self.kbd_enter_serial = Some(m.reader().u32()),
+                    // wl_keyboard.modifiers(serial, depressed, latched, locked, group).
+                    4 => {
+                        let mut r = m.reader();
+                        let _serial = r.u32();
+                        self.last_modifiers = Some((r.u32(), r.u32(), r.u32(), r.u32()));
+                    }
+                    _ => {}
+                }
+            } else if self.data_device_id != 0 && m.object == self.data_device_id {
+                match m.opcode {
+                    // wl_data_device.data_offer(new_id): the server-allocated offer proxy id.
+                    0 => self.last_data_offer = Some(m.reader().u32()),
+                    // wl_data_device.selection(object? id): the current selection offer (0 == cleared).
+                    5 => {
+                        let id = m.reader().u32();
+                        self.selection_offer = if id == 0 { None } else { Some(id) };
+                    }
+                    _ => {}
+                }
+            } else if self.last_data_offer == Some(m.object) && m.opcode == 0 {
+                // wl_data_offer.offer(mime_type): a mime the current selection offers.
+                self.offer_mimes.push(m.reader().string());
             }
         }
     }
@@ -148,11 +195,15 @@ fn globals_advertise_frame_presents_feedback_and_cursor_shape_wire() {
     let mut display: Display<DdState> = Display::new().unwrap();
     let mut dh = display.handle();
     let last_shape = Arc::new(Mutex::new(None));
+    let host = Arc::new(Mutex::new(None));
+    let set_host = Arc::new(Mutex::new(None));
     let mut state = DdState::new(
         dh.clone(),
         Box::new(RecordingPresenter {
             frames: 0,
             last_shape: last_shape.clone(),
+            host: host.clone(),
+            set_host: set_host.clone(),
         }),
     );
 
@@ -190,6 +241,7 @@ fn globals_advertise_frame_presents_feedback_and_cursor_shape_wire() {
         "wp_viewporter",
         "wp_presentation",
         "wp_cursor_shape_manager_v1",
+        "wl_data_device_manager",
     ] {
         assert!(
             c.globals.contains_key(iface),
@@ -216,12 +268,25 @@ fn globals_advertise_frame_presents_feedback_and_cursor_shape_wire() {
     let seat = bind(&mut c, "wl_seat", 5);
     let presentation = bind(&mut c, "wp_presentation", 1);
     let cursor_mgr = bind(&mut c, "wp_cursor_shape_manager_v1", 1);
+    let ddm = bind(&mut c, "wl_data_device_manager", 3);
 
     // wl_seat.get_pointer(0): track the id so drain captures the wl_pointer.enter serial (needed to
     // satisfy the serial check on wp_cursor_shape_device_v1.set_shape).
     let pointer = c.alloc();
     c.conn.send(&Message::new(seat, 0).u32(pointer));
     c.pointer_id = pointer;
+
+    // wl_seat.get_keyboard(1): bound BEFORE the toplevel maps so focus delivers keymap+enter to it, then
+    // wl_keyboard.modifiers when the host modifier state changes.
+    let keyboard = c.alloc();
+    c.conn.send(&Message::new(seat, 1).u32(keyboard));
+    c.keyboard_id = keyboard;
+
+    // wl_data_device_manager.get_data_device(1, id, seat): the per-seat clipboard/DnD endpoint. Bound
+    // before focus so it becomes the focused client's data device (set_data_device_focus follows kbd focus).
+    let data_device = c.alloc();
+    c.conn.send(&Message::new(ddm, 1).u32(data_device).u32(seat));
+    c.data_device_id = data_device;
 
     // surface + xdg toplevel + initial commit → configure.
     let surface = c.alloc();
@@ -479,14 +544,104 @@ fn globals_advertise_frame_presents_feedback_and_cursor_shape_wire() {
         "expected xdg_popup.popup_done (opcode 1) on dismissal; saw {:?}",
         c.events
     );
+
+    // (6) Keyboard modifiers: the toplevel has keyboard focus (from mapping), so the wl_keyboard bound
+    // above received keymap + enter. Driving the host modifier state (Shift) must emit a
+    // wl_keyboard.modifiers whose `depressed` mask carries the Shift bit — this is the FlagsChanged path
+    // the macOS loop feeds via `update_modifiers`.
+    assert!(c.saw(keyboard, 1), "wl_keyboard.enter expected on focus; saw {:?}", c.events);
+    c.last_modifiers = None;
+    state.update_modifiers(0b0_0001); // Shift down
+    display.flush_clients().unwrap();
+    c.drain();
+    let (dep, _lat, _lock, _grp) = c
+        .last_modifiers
+        .expect("update_modifiers should emit wl_keyboard.modifiers");
+    assert!(dep & 0x1 != 0, "Shift should set the depressed Shift bit; got depressed={dep:#x}");
+    // Releasing all modifiers clears the depressed mask.
+    c.last_modifiers = None;
+    state.update_modifiers(0);
+    display.flush_clients().unwrap();
+    c.drain();
+    assert_eq!(
+        c.last_modifiers.map(|m| m.0),
+        Some(0),
+        "clearing modifiers should zero the depressed mask"
+    );
+
+    // (7) Clipboard host→guest (paste): the host clipboard changes, so `offer_host_clipboard` advertises it
+    // to the focused guest as a compositor selection (data_offer + offer(mime) + selection). A guest paste
+    // (wl_data_offer.receive) is then answered from the host clipboard bytes via `send_selection` — proven
+    // end to end by round-tripping the payload back through a pipe.
+    let mime = "text/plain;charset=utf-8";
+    *host.lock().unwrap() = Some((mime.to_string(), b"hello-from-host".to_vec(), 1));
+    c.last_data_offer = None;
+    c.offer_mimes.clear();
+    state.offer_host_clipboard();
+    display.flush_clients().unwrap();
+    c.drain();
+    let offer = c
+        .last_data_offer
+        .expect("host clipboard should have produced a wl_data_device.data_offer");
+    assert!(
+        c.offer_mimes.iter().any(|m| m == mime),
+        "the host selection should offer {mime}; got {:?}",
+        c.offer_mimes
+    );
+    assert_eq!(
+        c.selection_offer,
+        Some(offer),
+        "wl_data_device.selection should point at the host offer"
+    );
+    // Paste: hand the compositor a pipe write-end via wl_data_offer.receive(mime, fd); read it back.
+    let mut pfds = [0i32; 2];
+    assert_eq!(unsafe { libc::pipe(pfds.as_mut_ptr()) }, 0);
+    let (rd, wr) = (pfds[0], pfds[1]);
+    c.conn.send(&Message::new(offer, 1).string(mime)); // wl_data_offer.receive(mime, fd)
+    c.conn.queue_fd(wr);
+    pump!();
+    unsafe { libc::close(wr) }; // drop our write end so the read sees EOF after the compositor's bytes
+    let mut buf = [0u8; 64];
+    let n = unsafe { libc::read(rd, buf.as_mut_ptr() as *mut _, buf.len()) };
+    unsafe { libc::close(rd) };
+    assert!(n > 0, "paste read returned {n}");
+    assert_eq!(
+        &buf[..n as usize],
+        b"hello-from-host",
+        "the guest paste should read the host clipboard bytes back"
+    );
+
+    // (8) Clipboard guest→host (copy): the focused guest sets its own selection from a wl_data_source. The
+    // compositor's `new_selection` captures the offered mime types for export to the host clipboard (the
+    // runtime loop then reads the source and calls `clipboard_set_host`).
+    assert!(state.pending_host_copy().is_none(), "no export should be pending yet");
+    let source = c.alloc();
+    c.conn.send(&Message::new(ddm, 0).u32(source)); // create_data_source(id)
+    let copy_mime = "text/plain";
+    c.conn.send(&Message::new(source, 0).string(copy_mime)); // wl_data_source.offer(mime)
+    let sel_serial = c.kbd_enter_serial.expect("need a keyboard enter serial for set_selection");
+    c.conn
+        .send(&Message::new(data_device, 1).u32(source).u32(sel_serial)); // set_selection(source, serial)
+    pump!();
+    assert_eq!(
+        state.pending_host_copy(),
+        Some(&[copy_mime.to_string()][..]),
+        "a guest copy should queue its mime types for export to the host clipboard"
+    );
 }
 
 /// A `Presenter` that records the last `set_cursor_shape` (so the cursor-shape wiring can be asserted)
-/// and always reports a successful present (so `wp_presentation` feedback resolves to `presented`).
+/// and always reports a successful present (so `wp_presentation` feedback resolves to `presented`). It
+/// also stands in for the host clipboard (`NSPasteboard`): `host` holds the host clipboard payload the
+/// paste path serves, and `set_host` captures the guest→host copy the compositor exports.
 struct RecordingPresenter {
     frames: u32,
     /// Shared with the test: the last `wp_cursor_shape_device_v1.shape` value the compositor mapped.
     last_shape: Arc<Mutex<Option<u32>>>,
+    /// The simulated host clipboard: `(mime, bytes, generation)`. `generation` == the host `changeCount`.
+    host: Arc<Mutex<Option<(String, Vec<u8>, u64)>>>,
+    /// Captures the last `clipboard_set_host(mime, bytes)` — the guest→host copy the compositor exported.
+    set_host: Arc<Mutex<Option<(String, Vec<u8>)>>>,
 }
 impl dd_display::present::Presenter for RecordingPresenter {
     fn present(&mut self, _surf: &dd_display::present::SurfaceBuffer) -> bool {
@@ -498,6 +653,24 @@ impl dd_display::present::Presenter for RecordingPresenter {
     }
     fn set_cursor_shape(&self, shape: u32) {
         *self.last_shape.lock().unwrap() = Some(shape);
+    }
+    fn clipboard_set_host(&self, mime: &str, bytes: &[u8]) {
+        *self.set_host.lock().unwrap() = Some((mime.to_string(), bytes.to_vec()));
+    }
+    fn clipboard_host_mimes(&self) -> Vec<String> {
+        match &*self.host.lock().unwrap() {
+            Some((mime, _, _)) => vec![mime.clone()],
+            None => Vec::new(),
+        }
+    }
+    fn clipboard_host_read(&self, mime: &str) -> Option<Vec<u8>> {
+        match &*self.host.lock().unwrap() {
+            Some((m, bytes, _)) if m == mime => Some(bytes.clone()),
+            _ => None,
+        }
+    }
+    fn clipboard_host_generation(&self) -> u64 {
+        self.host.lock().unwrap().as_ref().map(|(_, _, g)| *g).unwrap_or(0)
     }
 }
 

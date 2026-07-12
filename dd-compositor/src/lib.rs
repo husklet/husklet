@@ -63,6 +63,7 @@ use smithay::{
         cursor_shape::CursorShapeManagerState,
         output::OutputManagerState,
         presentation::PresentationState,
+        selection::data_device::DataDeviceState,
         shell::xdg::{PopupSurface, XdgShellState},
         shm::ShmState,
         viewporter::ViewporterState,
@@ -108,6 +109,7 @@ pub struct DdState {
     pub viewporter: ViewporterState,
     pub presentation: PresentationState,
     pub cursor_shape: CursorShapeManagerState,
+    pub data_device: DataDeviceState,
     pub seat: Seat<Self>,
     pub keyboard: KeyboardHandle<Self>,
     pub pointer: PointerHandle<Self>,
@@ -142,6 +144,20 @@ pub struct DdState {
     /// `present_seq`). Chrome/viz feeds the sequence into its BeginFrame vsync estimator.
     pub(crate) present_seq: u64,
     pub(crate) start: Instant,
+
+    // ---- input + clipboard follow-ups (handlers/seat.rs) ----
+    /// Last device-independent modifier bitmask applied from the host (bit0 Shift, bit1 Ctrl, bit2 Alt,
+    /// bit3 Super/Cmd, bit4 CapsLock). `update_modifiers` diffs against this so a macOS `FlagsChanged`
+    /// turns into the matching modifier-key press/release through the XKB state.
+    pub(crate) mod_mask: u32,
+    /// The host clipboard generation (`Presenter::clipboard_host_generation`) we last mirrored into a
+    /// guest-facing selection, so the runtime re-offers the host clipboard only when it actually changed
+    /// (and never ping-pongs our own guest→host push back to the guest).
+    pub(crate) host_clip_gen: u64,
+    /// Mime types a guest just offered on its selection (a copy) that still need exporting to the host
+    /// clipboard. Drained by the runtime loop, which reads the guest source and calls
+    /// `Presenter::clipboard_set_host`. `None` when there is nothing pending.
+    pub(crate) pending_host_copy: Option<Vec<String>>,
 }
 
 impl DdState {
@@ -170,6 +186,10 @@ impl DdState {
         let presentation = PresentationState::new::<Self>(&dh, CLOCK_MONOTONIC_LINUX);
         // wp_cursor_shape_manager_v1: themed cursor requests → CursorImageStatus::Named → NSCursor.
         let cursor_shape = CursorShapeManagerState::new::<Self>(&dh);
+        // wl_data_device_manager v3: clipboard (selection) + drag-and-drop. Smithay drives the whole
+        // guest↔guest transfer; the compositor bridges the selection to the host clipboard via the
+        // `Presenter` clipboard hooks (see handlers/seat.rs).
+        let data_device = DataDeviceState::new::<Self>(&dh);
 
         let mut seat_state = SeatState::<Self>::new();
         let mut seat = seat_state.new_wl_seat(&dh, "dd-seat-0"); // wl_seat v5
@@ -209,6 +229,7 @@ impl DdState {
             viewporter,
             presentation,
             cursor_shape,
+            data_device,
             seat,
             keyboard,
             pointer,
@@ -222,6 +243,9 @@ impl DdState {
             last_cfg: None,
             present_seq: 0,
             start: Instant::now(),
+            mod_mask: 0,
+            host_clip_gen: 0,
+            pending_host_copy: None,
         }
     }
 
@@ -240,12 +264,19 @@ impl DdState {
         }
     }
 
-    /// Make `surface` the keyboard focus (called when a toplevel maps).
+    /// Make `surface` the keyboard focus (called when a toplevel maps). Keyboard focus drives the data
+    /// device too: the clipboard/selection follows keyboard focus (weston/wlroots do the same), so the
+    /// focused client is the one that receives `wl_data_device.selection` offers and may set the selection.
     pub(crate) fn focus_surface(&mut self, surface: WlSurface) {
+        use smithay::wayland::selection::data_device::set_data_device_focus;
         self.focus = Some(surface.clone());
+        let client = surface.client();
         let kbd = self.keyboard.clone();
         let serial = SERIAL_COUNTER.next_serial();
         kbd.set_focus(self, Some(surface), serial);
+        let dh = self.dh.clone();
+        let seat = self.seat.clone();
+        set_data_device_focus(&dh, &seat, client);
     }
 }
 

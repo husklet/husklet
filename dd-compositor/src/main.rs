@@ -154,6 +154,8 @@ fn set_nonblock(fd: RawFd) {
 
 #[cfg(target_os = "macos")]
 mod macos {
+    use std::os::fd::{FromRawFd, OwnedFd};
+
     use super::{build_loop, LoopData};
     use dd_display::present::Presenter;
     use dd_display::present_cocoa::{CocoaPresenter, MetalPresenter};
@@ -208,7 +210,70 @@ mod macos {
                 .expect("dispatch");
             drain_appkit(&app, &mut data);
             data.state.maybe_resize_focused();
+            // Bridge the clipboard both ways once per iteration: mirror any host-clipboard change into a
+            // guest-facing selection (paste), and export any guest copy to the host clipboard.
+            data.state.offer_host_clipboard();
+            pump_guest_copy(&mut data);
             let _ = data.display.flush_clients();
+        }
+    }
+
+    /// Guest → host clipboard export. When a guest sets its selection (a copy), `SelectionHandler::
+    /// new_selection` queues the offered mime types on `DdState::pending_host_copy`; here we read the guest
+    /// source's bytes through a pipe and push them onto the host clipboard via `Presenter::clipboard_set_host`.
+    ///
+    /// The guest source writes asynchronously (it lives in another process and only writes once dispatched),
+    /// so we drive a few bounded dispatch+read passes on a non-blocking pipe rather than blocking the loop.
+    /// Chrome/GTK answer promptly; if a pass reads nothing the next copy simply retries.
+    fn pump_guest_copy(data: &mut LoopData) {
+        use smithay::wayland::selection::data_device::request_data_device_client_selection;
+
+        let Some(mimes) = data.state.take_pending_host_copy() else {
+            return;
+        };
+        if mimes.is_empty() {
+            return;
+        }
+        // Prefer a UTF-8 text flavour (what a host paste target most wants); fall back to the first offered.
+        let mime = mimes
+            .iter()
+            .find(|m| m.starts_with("text/plain") || m.contains("utf-8") || m.contains("UTF8"))
+            .or_else(|| mimes.first())
+            .cloned()
+            .unwrap();
+
+        let mut fds = [0i32; 2];
+        if unsafe { libc::pipe(fds.as_mut_ptr()) } != 0 {
+            return;
+        }
+        let (rd, wr) = (fds[0], fds[1]);
+        super::set_nonblock(rd);
+        let owned_wr = unsafe { OwnedFd::from_raw_fd(wr) };
+        // Hands `wr` to the guest source as wl_data_source.send(mime, wr); our copy is dropped here.
+        if request_data_device_client_selection(&data.state.seat, mime.clone(), owned_wr).is_err() {
+            unsafe { libc::close(rd) };
+            return;
+        }
+
+        let mut bytes = Vec::new();
+        let mut buf = [0u8; 4096];
+        for _ in 0..8 {
+            let _ = data.display.dispatch_clients(&mut data.state);
+            let _ = data.display.flush_clients();
+            let n = unsafe { libc::read(rd, buf.as_mut_ptr() as *mut _, buf.len()) };
+            if n > 0 {
+                bytes.extend_from_slice(&buf[..n as usize]);
+            } else if n == 0 {
+                break; // writer closed → EOF, transfer complete.
+            }
+        }
+        unsafe { libc::close(rd) };
+
+        if !bytes.is_empty() {
+            data.state.presenter.clipboard_set_host(&mime, &bytes);
+            // Adopt the resulting host generation as already-mirrored so `offer_host_clipboard` does not
+            // bounce our own push back to the guest as a new selection.
+            data.state.mark_host_clipboard_synced();
         }
     }
 
@@ -311,30 +376,118 @@ mod macos {
                 }
             }
             NSEventType::KeyDown => {
+                // Keep the modifier state fresh even when a chord's flag change coalesced into the key
+                // event without a standalone FlagsChanged (AppKit can do this), then deliver the key.
+                state.update_modifiers(mods_mask(ev));
                 if let Some(code) = kvk_to_evdev(unsafe { ev.keyCode() }) {
                     state.key(code, true);
                 }
             }
             NSEventType::KeyUp => {
+                state.update_modifiers(mods_mask(ev));
                 if let Some(code) = kvk_to_evdev(unsafe { ev.keyCode() }) {
                     state.key(code, false);
                 }
             }
+            NSEventType::FlagsChanged => {
+                // Shift/Ctrl/Alt/Cmd/CapsLock changed: mirror the whole modifier level into the seat's XKB
+                // state so shortcuts and cased typing work. `update_modifiers` diffs and emits
+                // wl_keyboard.modifiers (see handlers/seat.rs).
+                state.update_modifiers(mods_mask(ev));
+            }
             _ => {}
         }
-        let _ = NSEventModifierFlags::NSEventModifierFlagShift; // reserved for the modifiers follow-up.
     }
 
-    /// macOS virtual keycode (`kVK_*`) → Linux evdev `KEY_*` (alphanumerics + common keys). A subset
-    /// for the first increment; the full table is a follow-up (dd-display carries the larger map).
+    /// Collapse an `NSEvent`'s modifier flags into the device-independent bitmask
+    /// `DdState::update_modifiers` expects (bit0 Shift, bit1 Ctrl, bit2 Alt, bit3 Super/Cmd, bit4 CapsLock).
+    fn mods_mask(ev: &NSEvent) -> u32 {
+        let f = unsafe { ev.modifierFlags() };
+        let mut mask = 0u32;
+        if f.contains(NSEventModifierFlags::NSEventModifierFlagShift) {
+            mask |= 0b0_0001;
+        }
+        if f.contains(NSEventModifierFlags::NSEventModifierFlagControl) {
+            mask |= 0b0_0010;
+        }
+        if f.contains(NSEventModifierFlags::NSEventModifierFlagOption) {
+            mask |= 0b0_0100;
+        }
+        if f.contains(NSEventModifierFlags::NSEventModifierFlagCommand) {
+            mask |= 0b0_1000;
+        }
+        if f.contains(NSEventModifierFlags::NSEventModifierFlagCapsLock) {
+            mask |= 0b1_0000;
+        }
+        mask
+    }
+
+    /// macOS virtual keycode (`kVK_*`, Carbon HIToolbox) → Linux evdev `KEY_*`. Ported and completed from
+    /// `dd-display`'s legacy map: alphanumerics, punctuation, the editing/navigation cluster, F1–F12, and
+    /// the numeric keypad. The guest's own xkbcommon (fed the seat's keymap) turns the evdev code into a
+    /// keysym, so this only has to be the physical-key correspondence. Modifier keys arrive as
+    /// `FlagsChanged` (see `mods_mask`/`update_modifiers`), so they are intentionally absent here.
     fn kvk_to_evdev(kvk: u16) -> Option<u32> {
         Some(match kvk {
+            // ---- letters (kVK_ANSI_A … Z) ----
             0 => 30, 1 => 31, 2 => 32, 3 => 33, 4 => 35, 5 => 34, 6 => 44, 7 => 45, 8 => 46,
             9 => 47, 11 => 48, 12 => 16, 13 => 17, 14 => 18, 15 => 19, 16 => 21, 17 => 20,
             31 => 24, 32 => 22, 34 => 23, 35 => 25, 37 => 38, 38 => 36, 40 => 37, 45 => 49,
-            46 => 50, 18 => 2, 19 => 3, 20 => 4, 21 => 5, 22 => 7, 23 => 6, 25 => 10, 26 => 8,
-            28 => 9, 29 => 11, 36 => 28, 48 => 15, 49 => 57, 51 => 14, 53 => 1,
-            123 => 105, 124 => 106, 125 => 108, 126 => 103,
+            46 => 50,
+            // ---- number row (kVK_ANSI_1 … 0) ----
+            18 => 2, 19 => 3, 20 => 4, 21 => 5, 22 => 7, 23 => 6, 25 => 10, 26 => 8,
+            28 => 9, 29 => 11,
+            // ---- whitespace / editing ----
+            36 => 28,  // Return       → KEY_ENTER
+            48 => 15,  // Tab          → KEY_TAB
+            49 => 57,  // Space        → KEY_SPACE
+            51 => 14,  // Delete       → KEY_BACKSPACE
+            53 => 1,   // Escape       → KEY_ESC
+            // ---- punctuation (kVK_ANSI_* → KEY_*) ----
+            27 => 12,  // Minus        → KEY_MINUS
+            24 => 13,  // Equal        → KEY_EQUAL
+            33 => 26,  // LeftBracket  → KEY_LEFTBRACE
+            30 => 27,  // RightBracket → KEY_RIGHTBRACE
+            41 => 39,  // Semicolon    → KEY_SEMICOLON
+            39 => 40,  // Quote        → KEY_APOSTROPHE
+            50 => 41,  // Grave        → KEY_GRAVE
+            42 => 43,  // Backslash    → KEY_BACKSLASH
+            43 => 51,  // Comma        → KEY_COMMA
+            47 => 52,  // Period       → KEY_DOT
+            44 => 53,  // Slash        → KEY_SLASH
+            // ---- navigation / editing cluster ----
+            123 => 105, // LeftArrow   → KEY_LEFT
+            124 => 106, // RightArrow  → KEY_RIGHT
+            125 => 108, // DownArrow   → KEY_DOWN
+            126 => 103, // UpArrow     → KEY_UP
+            115 => 102, // Home        → KEY_HOME
+            119 => 107, // End         → KEY_END
+            116 => 104, // PageUp      → KEY_PAGEUP
+            121 => 109, // PageDown    → KEY_PAGEDOWN
+            117 => 111, // ForwardDelete → KEY_DELETE
+            114 => 110, // Help/Insert → KEY_INSERT
+            // ---- function row F1–F12 ----
+            122 => 59, 120 => 60, 99 => 61, 118 => 62, 96 => 63, 97 => 64, 98 => 65, 100 => 66,
+            101 => 67, 109 => 68, 103 => 87, 111 => 88,
+            // ---- numeric keypad (kVK_ANSI_Keypad*) ----
+            82 => 82,  // Keypad0 → KEY_KP0
+            83 => 79,  // Keypad1 → KEY_KP1
+            84 => 80,  // Keypad2 → KEY_KP2
+            85 => 81,  // Keypad3 → KEY_KP3
+            86 => 75,  // Keypad4 → KEY_KP4
+            87 => 76,  // Keypad5 → KEY_KP5
+            88 => 77,  // Keypad6 → KEY_KP6
+            89 => 71,  // Keypad7 → KEY_KP7
+            91 => 72,  // Keypad8 → KEY_KP8
+            92 => 73,  // Keypad9 → KEY_KP9
+            65 => 83,  // KeypadDecimal  → KEY_KPDOT
+            67 => 55,  // KeypadMultiply → KEY_KPASTERISK
+            69 => 78,  // KeypadPlus     → KEY_KPPLUS
+            71 => 69,  // KeypadClear    → KEY_NUMLOCK
+            75 => 98,  // KeypadDivide   → KEY_KPSLASH
+            76 => 96,  // KeypadEnter    → KEY_KPENTER
+            78 => 74,  // KeypadMinus    → KEY_KPMINUS
+            81 => 117, // KeypadEquals   → KEY_KPEQUAL
             _ => return None,
         })
     }
