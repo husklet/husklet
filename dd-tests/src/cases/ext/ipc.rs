@@ -57,6 +57,17 @@ fn ext_ipc() -> Group {
         port("posix-sem-named", "ext_ipc/ipc_posix_sem_named.c").out("posix_sem_named c=5\n"),
         // ---- fd passing / unix dgram ----
         port("scm-rights", "ext_ipc/ipc_scm_rights.c").out("scm_rights data=passed-fd-content\n"),
+        // WALL 7 micro-gate — Chrome's renderer-launch bootstrap OFFLINE: a socketpair end passed to an
+        // EXECVE'd child at a FIXED fd number (Chrome's --mojo-platform-channel-handle=<fd>), then the child
+        // arms epoll (EPOLLIN, level AND edge) on that EXEC-INHERITED fd and blocks. execve is the untested
+        // permutation vs zygote-inbound (fork-inherit) / scm-recv-epoll (SCM_RIGHTS): exec resets state, so
+        // the fd must survive at its number with FD_CLOEXEC clear and the epoll arm must deliver the parent's
+        // later "invitation" write as a CROSS-PROCESS wake. Two rounds (re-arm) + reverse direction via the
+        // parent's own epoll. A lost exec-inherited-fd wake (the Wall 7 hypothesis) times the child out ->
+        // child!=0/pong=0 -> FAIL. Linux engines only (epoll has no portable POSIX form).
+        port("exec-fd-epoll", "ext_ipc/ipc_exec_fd_epoll.c")
+            .out("execfd mode=lt child=0 pong=1\nexecfd mode=et child=0 pong=1\n")
+            .only(&[Engine::LinuxAarch64, Engine::LinuxX86_64]),
         port("sockpair-dgram", "ext_ipc/ipc_sockpair_dgram.c").out("sockpair_dgram lens=242\n"),
         // ---- fd offset sharing ----
         port("dup-offset", "ext_ipc/ipc_dup_offset.c").out("dup_offset a=012 b=345\n"),
