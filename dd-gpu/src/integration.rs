@@ -50,6 +50,11 @@ pub struct DisplayIntegration {
     pub lib_dir: String,
     /// Host dir of demo/test binary drop-ins (each bound into `/usr/local/bin/`). Empty = none.
     pub bin_dir: String,
+    /// Host path of the workspace overlay UPPER's copy of the guest multiarch lib dir (e.g.
+    /// `<upper>/usr/lib/aarch64-linux-gnu`). When set, [`device_request`](GpuIntegration::device_request)
+    /// self-heals the overlay by pruning stale 0-byte injection stubs left there (see
+    /// [`prune_shadowing_stubs`]). Empty = skip pruning (headless/tests, or a non-overlay launch).
+    pub overlay_lib_dir: String,
 }
 
 /// The simulated-CUDA-device integration: inject dd's NVML shim (+ the real `nvidia-smi`) so unmodified
@@ -144,6 +149,74 @@ fn shim_owns_lib(file_name: &str) -> bool {
     stem.contains("shim")
 }
 
+/// Self-heal a workspace overlay that still carries stale **injection stubs**, so the "shim library
+/// shadowing" failure class (docs/goal.md) can't recur from legacy overlay state.
+///
+/// dd injects the render stack by bind-mounting shim libs into the guest multiarch dir and PREPENDING
+/// that dir to `LD_LIBRARY_PATH`. A pre-`5e8c10ee` "inject every `*.so`" build could leave, in the
+/// workspace overlay UPPER, a full set of ZERO-BYTE bind-mount-target stubs (`libz.so.1`, `libffi.so.8`,
+/// `libstdc++.so.6`, …). Once the inject set shrank to only what [`shim_owns_lib`] covers, those stubs
+/// stopped being covered by a real mount — yet, being first on `LD_LIBRARY_PATH`, an empty file there
+/// SHADOWS the guest's real lib, so the loader hits a 0-byte file and returns `ENOEXEC`
+/// ("Exec format error", cascading to EXIT=127). This prunes such orphans from the overlay upper so the
+/// guest resolves its OWN base libs again, with no re-injection and no `LD_PRELOAD` hack.
+///
+/// Safe by construction — a candidate is pruned ONLY when it is:
+///   * inside `overlay_lib_dir` (the workspace overlay upper's multiarch dir) — never the shared image
+///     rootfs, which this function is never handed;
+///   * a REGULAR file (never a dir or a symlink — `symlink_metadata` doesn't follow links out of the
+///     upper) of size EXACTLY 0 (a real shared object is never 0 bytes, so this can only be a stub);
+///   * a shared-object name (`*.so*`);
+///   * NOT a soname we bind a real lib over this run (`bound_this_run`) — that one is already covered.
+///
+/// Returns the pruned sonames (sorted), for logging and tests.
+fn prune_shadowing_stubs(
+    overlay_lib_dir: &str,
+    bound_this_run: &std::collections::BTreeSet<String>,
+) -> Vec<String> {
+    let mut pruned = Vec::new();
+    let rd = match std::fs::read_dir(overlay_lib_dir) {
+        Ok(rd) => rd,
+        // No overlay multiarch dir yet (fresh workspace) or unreadable => nothing to heal.
+        Err(_) => return pruned,
+    };
+    for ent in rd.flatten() {
+        let name = ent.file_name();
+        let name = name.to_string_lossy();
+        if !name.contains(".so") {
+            continue;
+        }
+        // A real lib we're binding over this run is already covered — leave the stub alone.
+        if bound_this_run.contains(name.as_ref()) {
+            continue;
+        }
+        let path = ent.path();
+        let meta = match std::fs::symlink_metadata(&path) {
+            Ok(m) => m,
+            Err(_) => continue,
+        };
+        // ONLY a regular, zero-byte file: the exact, self-evidently-broken shape of a leftover stub.
+        if !meta.file_type().is_file() || meta.len() != 0 {
+            continue;
+        }
+        match std::fs::remove_file(&path) {
+            Ok(()) => {
+                eprintln!(
+                    "[dd-gpu] pruned stale 0-byte inject stub {} from the workspace overlay upper \
+                     (an empty file first on LD_LIBRARY_PATH shadowed the guest's real lib -> ENOEXEC)",
+                    path.display()
+                );
+                pruned.push(name.into_owned());
+            }
+            Err(e) => {
+                eprintln!("[dd-gpu] could not prune stale inject stub {}: {e}", path.display());
+            }
+        }
+    }
+    pruned.sort();
+    pruned
+}
+
 impl DeviceProvider for GpuIntegration {
     fn device_request(&self, guest_env: &[String]) -> DeviceRequest {
         let mut req = DeviceRequest::default();
@@ -169,12 +242,16 @@ impl DeviceProvider for GpuIntegration {
             // libX11 (previously papered over with an `LD_PRELOAD`). Filtering here lets the guest resolve
             // its own libX11/libstdc++/libz with no workaround. When the dir is present we always advertise
             // the lib dir on the path (even if nothing matched), matching the launcher's original behavior.
+            // Track the sonames we bind a real render lib over this run, so the overlay stub-prune below
+            // never disturbs one we're already covering.
+            let mut bound: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
             if !d.lib_dir.is_empty() {
                 if let Ok(rd) = std::fs::read_dir(&d.lib_dir) {
                     for ent in rd.flatten() {
                         let name = ent.file_name();
                         let name = name.to_string_lossy();
                         if name.contains(".so") && shim_owns_lib(&name) {
+                            bound.insert(name.clone().into_owned());
                             req.mounts.push(DeviceMount::ro(
                                 ent.path().to_string_lossy().into_owned(),
                                 format!("{libdir}/{name}"),
@@ -191,6 +268,13 @@ impl DeviceProvider for GpuIntegration {
                     _ => libdir.to_string(),
                 };
                 req.env.push(format!("LD_LIBRARY_PATH={ldp}"));
+            }
+            // Durable self-heal: prune stale 0-byte injection stubs a legacy overlay may still carry in
+            // the guest multiarch dir (empty files there shadow the guest's real libs on LD_LIBRARY_PATH
+            // -> ENOEXEC). Runs every launch so no manual overlay repair is ever needed; a no-op once the
+            // overlay is clean. Empty `overlay_lib_dir` (headless/tests) => skipped.
+            if !d.overlay_lib_dir.is_empty() {
+                prune_shadowing_stubs(&d.overlay_lib_dir, &bound);
             }
             // Mount-not-bake any GUI demo/test binaries into /usr/local/bin so a bare image can run a real
             // Wayland client.
@@ -254,6 +338,7 @@ mod tests {
             gpu_exec_sock: "/host/run/dd-gpu.sock".into(),
             lib_dir: String::new(),
             bin_dir: String::new(),
+            overlay_lib_dir: String::new(),
         });
         let req = g.device_request(&[]);
         assert!(req.render_node);
@@ -349,6 +434,7 @@ mod tests {
             gpu_exec_sock: "/e".into(),
             lib_dir: dir.to_string_lossy().into_owned(),
             bin_dir: String::new(),
+            overlay_lib_dir: String::new(),
         });
         let env = vec!["LD_LIBRARY_PATH=/a".to_string(), "LD_LIBRARY_PATH=/b".to_string()];
         let req = g.device_request(&env);
@@ -423,6 +509,7 @@ mod tests {
             gpu_exec_sock: "/e".into(),
             lib_dir: dir.to_string_lossy().into_owned(),
             bin_dir: String::new(),
+            overlay_lib_dir: String::new(),
         });
         let req = g.device_request(&[]);
         let bound: Vec<&str> = req.mounts.iter().map(|m| m.container.as_str()).collect();
@@ -436,5 +523,76 @@ mod tests {
             "distro libs must not be shadowed, got {bound:?}"
         );
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn device_request_prunes_stale_zero_byte_overlay_stubs_only() {
+        // End-to-end through device_request, reproducing the cold-Chrome ENOEXEC failure class: a legacy
+        // workspace overlay UPPER whose multiarch dir still holds pre-5e8c10ee 0-byte inject stubs
+        // (libz/libffi/libstdc++, and even a 0-byte libEGL) alongside the guest's OWN real base libs.
+        // dd binds the render stack from a separate drop-in dir and, this run, must prune the orphaned
+        // 0-byte stubs from the overlay so the guest resolves its real base libs — while leaving the real
+        // (non-empty) distro libs, non-.so files, and any stub it actually covers with a bind untouched.
+        let base = std::env::temp_dir().join(format!("ddgpu-prune-{}", std::process::id()));
+        let dropin = base.join("dropin"); // host ~/.dd/gui/<arch>/lib
+        let overlay = base.join("overlay"); // workspace overlay upper's /usr/lib/<arch>
+        std::fs::create_dir_all(&dropin).unwrap();
+        std::fs::create_dir_all(&overlay).unwrap();
+
+        // Real render shim to inject (non-empty content).
+        std::fs::write(dropin.join("libEGL.so.1"), b"\x7fELF-real-egl").unwrap();
+        std::fs::write(dropin.join("libGLESv2.so.2"), b"\x7fELF-real-gles").unwrap();
+
+        // The overlay upper as a legacy image would leave it:
+        //   0-byte inject stubs that MUST be pruned (they shadow the guest's real libs -> ENOEXEC)…
+        for stub in ["libz.so.1", "libffi.so.8", "libstdc++.so.6", "libgcc_s.so.1"] {
+            std::fs::write(overlay.join(stub), b"").unwrap();
+        }
+        // …a 0-byte stub for a soname we DO bind a real lib over this run: harmless (covered), left as-is…
+        std::fs::write(overlay.join("libEGL.so.1"), b"").unwrap();
+        // …a REAL (non-empty) distro lib the guest legitimately shipped: MUST be untouched…
+        std::fs::write(overlay.join("libX11.so.6"), b"\x7fELF-real-x11").unwrap();
+        // …and a non-.so 0-byte file: not an inject target, MUST be untouched.
+        std::fs::write(overlay.join("keep.conf"), b"").unwrap();
+
+        let g = GpuIntegration::new(GuestArch::Aarch64).with_display(DisplayIntegration {
+            wayland_sock: "/w".into(),
+            gpu_exec_sock: "/e".into(),
+            lib_dir: dropin.to_string_lossy().into_owned(),
+            bin_dir: String::new(),
+            overlay_lib_dir: overlay.to_string_lossy().into_owned(),
+        });
+        let req = g.device_request(&[]);
+
+        // The render shims are injected over the guest multiarch dir…
+        let bound: Vec<&str> = req.mounts.iter().map(|m| m.container.as_str()).collect();
+        assert!(bound.contains(&"/usr/lib/aarch64-linux-gnu/libEGL.so.1"), "libEGL must be injected: {bound:?}");
+        assert!(bound.contains(&"/usr/lib/aarch64-linux-gnu/libGLESv2.so.2"), "libGLESv2 must be injected: {bound:?}");
+
+        // …the orphaned 0-byte stubs are GONE from the overlay (guest now resolves its own base libs)…
+        for pruned in ["libz.so.1", "libffi.so.8", "libstdc++.so.6", "libgcc_s.so.1"] {
+            assert!(!overlay.join(pruned).exists(), "stale 0-byte stub {pruned} must be pruned");
+        }
+        // …the real distro lib survives (never pruned — a real lib is never 0 bytes)…
+        assert!(overlay.join("libX11.so.6").exists(), "real distro libX11 must be untouched");
+        let x11 = std::fs::read(overlay.join("libX11.so.6")).unwrap();
+        assert_eq!(x11, b"\x7fELF-real-x11", "real distro libX11 content must be intact");
+        // …the 0-byte stub for a bound soname is left alone (the bind already covers it)…
+        assert!(overlay.join("libEGL.so.1").exists(), "a bound soname's stub must not be pruned (it's covered)");
+        // …and the non-.so 0-byte file is untouched.
+        assert!(overlay.join("keep.conf").exists(), "non-.so file must be untouched");
+
+        // Direct-unit assertion on the helper's return value: exactly the four orphans, sorted.
+        let mut bound_set = std::collections::BTreeSet::new();
+        bound_set.insert("libEGL.so.1".to_string());
+        bound_set.insert("libGLESv2.so.2".to_string());
+        // Re-seed the overlay to re-run the helper in isolation.
+        for stub in ["libz.so.1", "libffi.so.8", "libstdc++.so.6", "libgcc_s.so.1"] {
+            std::fs::write(overlay.join(stub), b"").unwrap();
+        }
+        let pruned = prune_shadowing_stubs(&overlay.to_string_lossy(), &bound_set);
+        assert_eq!(pruned, vec!["libffi.so.8", "libgcc_s.so.1", "libstdc++.so.6", "libz.so.1"]);
+
+        let _ = std::fs::remove_dir_all(&base);
     }
 }

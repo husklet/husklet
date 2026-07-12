@@ -272,6 +272,11 @@ pub fn launch_ex(ws: &Workspace, cols: u16, rows: u16, restore: bool, cwd: Optio
         };
         let host_gui_lib = paths::dd_root().join("gui").join(gui_arch).join("lib");
         let host_gui_bin = paths::dd_root().join("gui").join(gui_arch).join("bin");
+        // The workspace overlay UPPER's copy of the guest multiarch lib dir, so the provider can self-heal
+        // legacy overlays by pruning stale 0-byte inject stubs it left there (empty files first on
+        // LD_LIBRARY_PATH shadow the guest's real base libs -> ENOEXEC / cold-Chrome EXIT=127). Always
+        // passed (the dir may not exist yet on a fresh workspace — the provider's read_dir no-ops then).
+        let overlay_multiarch = upper_pb.join("usr").join("lib").join(format!("{gui_arch}-linux-gnu"));
         gpu = gpu.with_display(dd_gpu::integration::DisplayIntegration {
             wayland_sock: host_sock,
             gpu_exec_sock: host_gpu_sock,
@@ -279,6 +284,7 @@ pub fn launch_ex(ws: &Workspace, cols: u16, rows: u16, restore: bool, cwd: Optio
             // drop-ins → the provider binds nothing and adds no LD_LIBRARY_PATH for that slot).
             lib_dir: if host_gui_lib.is_dir() { host_gui_lib.to_string_lossy().into_owned() } else { String::new() },
             bin_dir: if host_gui_bin.is_dir() { host_gui_bin.to_string_lossy().into_owned() } else { String::new() },
+            overlay_lib_dir: overlay_multiarch.to_string_lossy().into_owned(),
         });
     }
     if let Some(cuda) = &ws.cuda {
