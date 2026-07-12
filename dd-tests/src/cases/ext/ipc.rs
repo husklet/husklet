@@ -172,6 +172,18 @@ fn ext_ipc() -> Group {
         // futex-shared-key gate covers only a fork-INHERITED memfd; this covers one delivered by SCM_RIGHTS
         // to an unrelated process, mmap'd at an independent VA.
         src("scm-futex", "ext_ipc/ipc_scm_futex.c").out("scm_futex xproc_woke=1\n"),
+        // SCM_RIGHTS-RECEIVED socket armed on the CHILD's OWN epoll, woken by a cross-process write to
+        // the parent's retained peer end — the exact Mojo AcceptBrokerClient/AcceptInvitee step (a
+        // node-channel control message carries an out-of-band platform socket handle; the child
+        // recvmsg's it and installs the RECEIVED fd on its kqueue/epoll, then parks). The untested
+        // permutation: scm-eventfd epolls a fd the PARENT created (an eventfd); zygote-inbound epolls a
+        // FORK-INHERITED socket (recvmsg then fork, so kqueue arming rides fork, not the recvmsg fd);
+        // scm-futex delivers an SCM_RIGHTS memfd but waits on FUTEX. Here the SAME process recvmsg's AND
+        // epoll-arms the socket, so a failure to arm the host kqueue EVFILT_READ on a fd installed by the
+        // recvmsg SCM_RIGHTS path (net.c → cmsg_m2l) parks the child forever; a watchdog makes that a
+        // hard fail. ROUNDS repeats drain→re-block so a readiness edge lost on RE-ARM is also caught.
+        src("scm-recv-epoll", "ext_ipc/ipc_scm_recv_epoll.c")
+            .out("child recv-epoll rounds=64/64 ok=1\nparent done sent=64 child_exit=0\n"),
         // Chrome child-process Mojo BOOTSTRAP end-to-end (the multi-process dormant-renderer hypothesis):
         // the browser hands a launched child its platform channel + a shared-memory command buffer by
         // placing each fd at a fixed number and naming that number on the command line (Chrome's
