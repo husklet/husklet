@@ -242,4 +242,11 @@ const IMPLEMENTED: &[&str] = &[
     "cuModuleGetFunction",
     "cuLaunchKernel",
     "cuStreamSynchronize",
+    // ---- IR-wired: stream + event lifecycle (synchronization tokens) ----
+    "cuStreamCreate",
+    "cuStreamDestroy_v2",
+    "cuEventCreate",
+    "cuEventRecord",
+    "cuEventSynchronize",
+    "cuEventDestroy_v2",
 ];

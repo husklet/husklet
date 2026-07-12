@@ -11,7 +11,10 @@
 use core::ffi::c_void;
 use std::sync::{Mutex, OnceLock};
 
-use dd_gpu::cuda::{CudaContext, CudaDeviceDesc, Function};
+use dd_gpu::backend::GpuBackend;
+use dd_gpu::cuda::{CudaContext, CudaDeviceDesc, DevicePtr, Function};
+use dd_gpu::replay::replay_stream;
+use dd_gpu::software::SoftwareBackend;
 use dd_shim_common::transport::{ExecConn, FrameBuilder, Surface};
 
 /// Everything the shim tracks between `cu*` calls.
@@ -22,12 +25,24 @@ pub struct CudaState {
     pub ctx: CudaContext,
     /// The dd-gpu IR accumulated for the current stream; flushed on synchronize.
     pub frame: FrameBuilder,
+    /// The embedded host executor: a real CPU backend that runs the accumulated IR — including the
+    /// compute `Dispatch` (the PTX kernel interpreter in `dd_gpu::ptx`) — and holds the resulting
+    /// device-buffer bytes for `cuMemcpyDtoH` readback. This is the in-process analog of
+    /// `dd-gpu/cuda/cuda_shim.c`'s embedded interpreter (the parity oracle): it makes the shim
+    /// FUNCTIONAL end-to-end on this host with no GPU. On a real Apple-silicon host the same IR is
+    /// shipped over `$DD_GPU_EXEC` to the host Metal executor instead (see docs).
+    pub backend: SoftwareBackend,
     /// `CUfunction` handle table: an opaque handle is `index + 1` (never null).
     functions: Vec<Function>,
     /// `CUcontext` token allocator (opaque, non-null). One simulated device, so contexts are tokens.
     pub next_ctx: usize,
     /// The current context token (`0` = none).
     pub current_ctx: usize,
+    /// `CUstream` token allocator (opaque, non-null). The executor is synchronous, so a stream is just
+    /// a scheduling token; ordering is preserved by the single accumulated frame.
+    pub next_stream: usize,
+    /// `CUevent` token allocator (opaque, non-null). Events record/synchronize by flushing.
+    pub next_event: usize,
     /// Lazily-opened transport to the host GPU-exec service (only used when `$DD_GPU_EXEC` is set).
     conn: Option<ExecConn>,
 }
@@ -44,9 +59,12 @@ impl CudaState {
             inited: false,
             ctx: CudaContext::new(CudaDeviceDesc::apple_default(vram)),
             frame: FrameBuilder::new(),
+            backend: SoftwareBackend::new(),
             functions: Vec::new(),
             next_ctx: 1,
             current_ctx: 0,
+            next_stream: 1,
+            next_event: 1,
             conn: None,
         }
     }
@@ -66,15 +84,28 @@ impl CudaState {
         self.functions.get(idx - 1).copied()
     }
 
-    /// Flush accumulated IR: encode it with the shared contract and, when `$DD_GPU_EXEC` is set, ship
-    /// it through the transport (best-effort — a *host compute backend* that executes the dispatch is
-    /// future work; see docs). Then clear the frame. With no host configured this just traces + drops.
+    /// Flush accumulated IR at a synchronization point: encode it with the shared contract, then
+    /// EXECUTE it on the embedded software backend — buffers, uploads, and the compute `Dispatch`
+    /// (which runs the PTX kernel on the CPU interpreter) all take effect, mutating the device buffers
+    /// held in [`backend`](CudaState::backend). The buffer bytes persist across flushes (they are only
+    /// dropped on `cuMemFree`), so a later `cuMemcpyDtoH` reads the real, kernel-produced results.
+    ///
+    /// When `$DD_GPU_EXEC` is set the SAME bytes are also shipped to the host GPU-exec service (the
+    /// real Apple-silicon deployment path; best-effort). Then the frame is cleared.
     pub fn flush(&mut self) {
         if self.frame.is_empty() {
             return;
         }
         let bytes = self.frame.finish();
         let ncmds = self.frame.cmds().len();
+        // Execute in-process: replay the frame into the CPU backend. The decoder + executor are the
+        // host's own `dd_gpu` code (no second implementation), so what runs here is byte-for-byte what
+        // a host executor would run — the anti-drift guarantee, now covering execution, not just shape.
+        if let Err(e) = replay_stream(&mut self.backend, &bytes) {
+            if std::env::var_os("DD_SHIM_DEBUG").is_some() {
+                eprintln!("[dd-shim-cuda] flush: embedded backend replay error ({ncmds} cmds): {e}");
+            }
+        }
         if std::env::var_os("DD_GPU_EXEC").is_some() {
             let conn = self.conn.get_or_insert_with(ExecConn::from_env);
             // Compute has no present surface; a synthetic zero surface carries the IR-length header.
@@ -82,12 +113,25 @@ impl CudaState {
             let _ = conn.submit(&surf, &bytes);
         } else if std::env::var_os("DD_SHIM_DEBUG").is_some() {
             eprintln!(
-                "[dd-shim-cuda] flush: {} IR bytes ({ncmds} cmds), no $DD_GPU_EXEC host — dropping \
-                 (the compute executor is future work)",
-                bytes.len()
+                "[dd-shim-cuda] flush: executed {} IR bytes ({ncmds} cmds) on the embedded software \
+                 backend (dispatches so far: {})",
+                bytes.len(),
+                self.backend.dispatches
             );
         }
         self.frame.clear();
+    }
+
+    /// The `cuMemcpyDtoH` engine: flush pending work so any launched kernel has actually run, then read
+    /// `out.len()` bytes of device memory starting at device pointer `src` out of the backend into
+    /// `out`. Returns `false` for a dangling device pointer or an out-of-range read (→
+    /// `CUDA_ERROR_INVALID_VALUE`). This is the readback the scaffold deferred — now real.
+    pub fn read_device(&mut self, src: DevicePtr, out: &mut [u8]) -> bool {
+        self.flush();
+        let Some((buf, off)) = self.ctx.resolve(src) else {
+            return false;
+        };
+        self.backend.read_buffer(buf, off, out).is_ok()
     }
 }
 

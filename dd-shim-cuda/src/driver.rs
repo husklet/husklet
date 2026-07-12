@@ -336,17 +336,22 @@ pub extern "C" fn cuMemcpyHtoD_v2(dst: u64, src: *const c_void, n: usize) -> i32
 
 #[no_mangle]
 pub extern "C" fn cuMemcpyDtoH_v2(dst: *mut c_void, src: u64, n: usize) -> i32 {
-    let _ = src;
     if dst.is_null() && n > 0 {
         return CUDA_ERROR_INVALID_VALUE;
     }
-    // Device->host readback needs a HOST COMPUTE BACKEND that actually executed the dispatch and holds
-    // the resulting buffer bytes. That backend is future work (see docs), so in the scaffold we flush
-    // any pending work and zero-fill the destination — a spec-faithful, safe no-op with a clear TODO.
-    state::with(|s| s.flush());
-    unsafe { core::ptr::write_bytes(dst as *mut u8, 0, n) };
-    crate::stub::hit("cuMemcpyDtoH_v2 (device readback needs the host compute backend — zero-filled)");
-    CUDA_SUCCESS
+    if n == 0 {
+        return CUDA_SUCCESS;
+    }
+    // Real device->host readback: flush pending work so any launched kernel has executed on the
+    // embedded backend, then copy the resulting device-buffer bytes into `dst`. This is the readback
+    // the scaffold deferred — the shim is now functional end-to-end (see state::read_device).
+    let out = unsafe { core::slice::from_raw_parts_mut(dst as *mut u8, n) };
+    let ok = state::with(|s| s.read_device(DevicePtr(src), out));
+    if ok {
+        CUDA_SUCCESS
+    } else {
+        CUDA_ERROR_INVALID_VALUE
+    }
 }
 
 // ==================================================================================================
@@ -482,5 +487,82 @@ pub extern "C" fn cuStreamSynchronize(s: *mut c_void) -> i32 {
         return CUDA_ERROR_NOT_INITIALIZED;
     }
     state::with(|st| st.flush());
+    CUDA_SUCCESS
+}
+
+// ==================================================================================================
+// IR-wired: stream + event lifecycle (synchronization tokens; the executor is synchronous)
+// ==================================================================================================
+
+#[no_mangle]
+pub extern "C" fn cuStreamCreate(pstream: *mut *mut c_void, flags: u32) -> i32 {
+    let _ = flags;
+    if !inited() {
+        return CUDA_ERROR_NOT_INITIALIZED;
+    }
+    if pstream.is_null() {
+        return CUDA_ERROR_INVALID_VALUE;
+    }
+    // The executor completes each submit synchronously and ordering is preserved by the single
+    // accumulated frame, so a stream is a non-null scheduling token (no per-stream queue needed).
+    let token = state::with(|s| {
+        let t = s.next_stream;
+        s.next_stream += 1;
+        t
+    });
+    unsafe { *pstream = token as *mut c_void };
+    CUDA_SUCCESS
+}
+
+#[no_mangle]
+pub extern "C" fn cuStreamDestroy_v2(stream: *mut c_void) -> i32 {
+    // Flush any work outstanding on the stream (a destroy implies completion), then drop the token.
+    let _ = stream;
+    state::with(|s| s.flush());
+    CUDA_SUCCESS
+}
+
+#[no_mangle]
+pub extern "C" fn cuEventCreate(pevent: *mut *mut c_void, flags: u32) -> i32 {
+    let _ = flags;
+    if !inited() {
+        return CUDA_ERROR_NOT_INITIALIZED;
+    }
+    if pevent.is_null() {
+        return CUDA_ERROR_INVALID_VALUE;
+    }
+    let token = state::with(|s| {
+        let t = s.next_event;
+        s.next_event += 1;
+        t
+    });
+    unsafe { *pevent = token as *mut c_void };
+    CUDA_SUCCESS
+}
+
+#[no_mangle]
+pub extern "C" fn cuEventRecord(event: *mut c_void, stream: *mut c_void) -> i32 {
+    let _ = stream;
+    if event.is_null() {
+        return CUDA_ERROR_INVALID_HANDLE;
+    }
+    // Recording an event marks a point in the stream; with a synchronous executor the correct place to
+    // land the preceding work is here, so flush.
+    state::with(|s| s.flush());
+    CUDA_SUCCESS
+}
+
+#[no_mangle]
+pub extern "C" fn cuEventSynchronize(event: *mut c_void) -> i32 {
+    if event.is_null() {
+        return CUDA_ERROR_INVALID_HANDLE;
+    }
+    state::with(|s| s.flush());
+    CUDA_SUCCESS
+}
+
+#[no_mangle]
+pub extern "C" fn cuEventDestroy_v2(event: *mut c_void) -> i32 {
+    let _ = event;
     CUDA_SUCCESS
 }

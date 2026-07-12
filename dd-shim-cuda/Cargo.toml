@@ -6,11 +6,13 @@
 # shim, and the compute path (alloc / H2D / PTX module / launch) lowers to a dd-gpu IR stream through
 # `dd-shim-common`'s transport — the SAME IR the host decodes.
 #
-# This is the increment-1 PACKAGE SKELETON (mirrors dd-shim-gl inc1), NOT a functional CUDA driver:
-# there is no host PTX/compute backend wired yet (that is future work — see
-# docs/rendering/SHIM_RUST_ARCHITECTURE.md). The exported `cu*` SURFACE is code-generated from a
-# committed manifest (see `build.rs` + `registry/`); a handful of bring-up + IR-wiring entry points
-# have real bodies, the long tail are spec-faithful correct-ABI traced stubs.
+# The compute execution core is FUNCTIONAL: alloc / H2D / PTX module / launch / DtoH readback + stream
+# & event sync execute end-to-end in-process on an embedded dd-gpu SoftwareBackend (the CPU PTX
+# interpreter — the same executor dd-gpu's oracle and dd-gpu/cuda/cuda_shim.c use), so a real vecadd
+# kernel runs and reads back correct results with no GPU. On a real host the same IR ships over
+# $DD_GPU_EXEC to the host Metal executor. The exported `cu*` SURFACE is code-generated from a committed
+# manifest (see `build.rs` + `registry/`); the bring-up + IR-wiring entry points have real bodies, the
+# long tail are spec-faithful correct-ABI traced stubs. See docs/rendering/SHIM_RUST_ARCHITECTURE.md.
 [package]
 name = "dd-shim-cuda"
 version = "0.1.0"
