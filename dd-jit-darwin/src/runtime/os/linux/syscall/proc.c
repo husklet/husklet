@@ -250,6 +250,8 @@ static void fork_child_hooks(struct cpu *c) {
     acct_after_fork();      // claim this child's OWN cgroup accounting slot (new host pid, one task)
     wipefork_apply_child(); // MADV_WIPEONFORK: zero-fill the ranges the guest marked wipe-on-fork
     mlk_reset();            // mlock(2): memory locks are NOT inherited across fork -> child starts unlocked
+    dd_gpu_after_fork();    // GPU rung 2: this child can no longer create/map an IOSurface (fork-unsafe) —
+                            // it may only reuse the pre-fork, VM_INHERIT_SHARE'd IOSurface pool it inherited
     if (fp) t[4] = now_ns();
 #ifdef DD_HAS_MACH_EXC
     // The CRASHDBG Mach exception port + its receiver thread do NOT survive fork, so a crash in the
