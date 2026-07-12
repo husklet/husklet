@@ -25,7 +25,8 @@
 //!   - [`handlers::xdg`] — `xdg_shell` window management (configure/ack handshake, maximize/fullscreen,
 //!     move/resize, min/max size, host-window-resize reflow).
 //!   - [`handlers::seat`] — `wl_seat` input injection + `wp_cursor_shape` mapping.
-//!   - [`handlers::output`] — `wl_output`.
+//!   - [`handlers::output`] — `wl_output` / `xdg_output` + multi-output registration.
+//!   - [`handlers::scale`] — `wp_fractional_scale_v1` preferred-scale policy (non-integer HiDPI).
 //! Because Rust privacy grants descendant modules access to a parent module's private items, those
 //! submodules read/write `DdState`'s private fields directly — no accessor churn.
 //!
@@ -62,6 +63,7 @@ use smithay::{
         compositor::{CompositorClientState, CompositorState},
         cursor_shape::CursorShapeManagerState,
         dmabuf::DmabufState,
+        fractional_scale::FractionalScaleManagerState,
         output::OutputManagerState,
         pointer_constraints::PointerConstraintsState,
         presentation::PresentationState,
@@ -69,6 +71,7 @@ use smithay::{
         selection::{data_device::DataDeviceState, primary_selection::PrimarySelectionState},
         shell::xdg::{decoration::XdgDecorationState, PopupSurface, XdgShellState},
         shm::ShmState,
+        single_pixel_buffer::SinglePixelBufferState,
         viewporter::ViewporterState,
         xdg_activation::XdgActivationState,
     },
@@ -132,10 +135,21 @@ pub struct DdState {
     /// is created per surface+pointer and activated by [`DdState::new_constraint`]; the injection path
     /// freezes the absolute pointer while a lock is active and clamps motion to a confine region.
     pub pointer_constraints: PointerConstraintsState,
+    /// `wp_fractional_scale_manager_v1` — lets GTK/Qt/Chrome learn the non-integer buffer scale to render
+    /// at (1.5×, 1.25×) for correct crisp output on scaled Retina modes; paired with `wp_viewporter`.
+    /// Advertised here; the per-surface `preferred_scale` is pushed from [`handlers::scale`].
+    pub fractional_scale: FractionalScaleManagerState,
+    /// `wp_single_pixel_buffer_v1` — the 1×1 solid-color buffer optimization (backgrounds/solid surfaces).
+    /// Smithay decodes the RGBA and stores it on the `wl_buffer`; the commit path reads it back.
+    pub single_pixel_buffer: SinglePixelBufferState,
     pub seat: Seat<Self>,
     pub keyboard: KeyboardHandle<Self>,
     pub pointer: PointerHandle<Self>,
     pub output: Output,
+    /// Additional outputs beyond the primary `output` (multi-monitor guests). Each has its own
+    /// `wl_output` + `zxdg_output_v1` advertised by the shared [`OutputManagerState`]; registered via
+    /// [`DdState::add_output`]. Empty in the single-output default — the state is not hard-wired to one.
+    pub extra_outputs: Vec<Output>,
 
     /// The reused platform present half (`CocoaPresenter`/`MetalPresenter` on macOS, `PngPresenter`
     /// headless). Keyed internally by surface id — the same `u32` sid model as `server.rs`.
@@ -247,6 +261,12 @@ impl DdState {
         let relative_pointer = RelativePointerManagerState::new::<Self>(&dh);
         // zwp_pointer_constraints_v1: pointer lock/confine for FPS mouselook and drawing apps.
         let pointer_constraints = PointerConstraintsState::new::<Self>(&dh);
+        // wp_fractional_scale_manager_v1: advertise the fractional-scale global so toolkits can request a
+        // non-integer buffer scale (1.5×/1.25×) for scaled Retina modes. The per-surface preferred_scale is
+        // sent from handlers/scale.rs; combined with wp_viewporter for a correct composited result.
+        let fractional_scale = FractionalScaleManagerState::new::<Self>(&dh);
+        // wp_single_pixel_buffer_v1: the 1×1 solid-color buffer fast path (backgrounds/solid surfaces).
+        let single_pixel_buffer = SinglePixelBufferState::new::<Self>(&dh);
 
         let mut seat_state = SeatState::<Self>::new();
         let mut seat = seat_state.new_wl_seat(&dh, "dd-seat-0"); // wl_seat v5
@@ -293,10 +313,13 @@ impl DdState {
             primary_selection,
             relative_pointer,
             pointer_constraints,
+            fractional_scale,
+            single_pixel_buffer,
             seat,
             keyboard,
             pointer,
             output,
+            extra_outputs: Vec::new(),
             presenter,
             focus: None,
             titles: HashMap::new(),
