@@ -120,6 +120,29 @@ pub trait Presenter {
     /// `wp_cursor_shape_device_v1.shape` enum (1=default, 4=pointer, 9=text, 16=grab, …). A windowed
     /// presenter maps it to the matching host cursor (e.g. `NSCursor`). Default: no native cursor to set.
     fn set_cursor_shape(&self, _shape: u32) {}
+    /// The client committed a CUSTOM cursor image via `wl_pointer.set_cursor` (surface + buffer + hotspot):
+    /// a CSS `cursor: url(...)`, a custom app cursor, a game's crosshair — anything `wp_cursor_shape`'s named
+    /// set cannot express. `bgra` is the cursor buffer's tight BGRA pixels (`width`×`height`, one row every
+    /// `width*4` bytes, little-endian ARGB8888 memory order B,G,R,A); `(hotspot_x, hotspot_y)` is the click
+    /// point IN THOSE PIXELS. A windowed presenter turns it into a host cursor (`NSCursor` from an `NSImage`).
+    /// The compositor calls this in place of `set_cursor_shape` for the duration of the custom cursor, and
+    /// re-calls it whenever the client re-commits the cursor surface (animated/updated cursors). Default: no
+    /// native cursor to set. Mirrors `set_cursor_shape`, keeping the Smithay core free of any Cocoa.
+    fn set_cursor_buffer(
+        &self,
+        _bgra: &[u8],
+        _width: i32,
+        _height: i32,
+        _hotspot_x: i32,
+        _hotspot_y: i32,
+    ) {
+    }
+    /// Hide or show the host pointer. Driven by `wl_pointer.set_cursor` with a null surface
+    /// (`CursorImageStatus::Hidden` — a client that draws its own cursor or wants none), and by
+    /// `zwp_pointer_constraints` pointer LOCK (an FPS/3D app hides the system cursor while it reads relative
+    /// motion). Idempotent: a windowed presenter must not stack hide/show so a single show reveals the
+    /// cursor regardless of how many hides preceded it. Default: no native cursor to toggle.
+    fn set_cursor_hidden(&self, _hidden: bool) {}
 
     // ---- Host clipboard bridge (wl_data_device selection ⇄ host pasteboard) ----
     // These four hooks are the platform seam for bridging the guest's Wayland clipboard to the host's

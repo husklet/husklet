@@ -68,6 +68,14 @@ struct Client {
     selection_offer: Option<u32>,
     /// Mime types the last `wl_data_offer` announced via `wl_data_offer.offer` (opcode 0).
     offer_mimes: Vec<String>,
+    /// The client's `zwp_primary_selection_device_v1` id, so `drain` can decode its `data_offer`/`selection`.
+    primary_device_id: u32,
+    /// The server-allocated `zwp_primary_selection_offer_v1` id from the last primary `data_offer` (opcode 0).
+    last_primary_offer: Option<u32>,
+    /// Whether the last primary `selection` (opcode 1) pointed at an offer (vs. cleared to null).
+    primary_selection_offer: Option<u32>,
+    /// Mime types the last primary offer announced via `zwp_primary_selection_offer_v1.offer` (opcode 0).
+    primary_offer_mimes: Vec<String>,
     /// Every event seen as `(object, opcode)`, so tests can assert e.g. a `presented` (feedback opcode 1).
     events: Vec<(u32, u16)>,
 }
@@ -101,6 +109,10 @@ impl Client {
             last_data_offer: None,
             selection_offer: None,
             offer_mimes: Vec::new(),
+            primary_device_id: 0,
+            last_primary_offer: None,
+            primary_selection_offer: None,
+            primary_offer_mimes: Vec::new(),
             events: Vec::new(),
         }
     }
@@ -192,6 +204,20 @@ impl Client {
             } else if self.last_data_offer == Some(m.object) && m.opcode == 0 {
                 // wl_data_offer.offer(mime_type): a mime the current selection offers.
                 self.offer_mimes.push(m.reader().string());
+            } else if self.primary_device_id != 0 && m.object == self.primary_device_id {
+                match m.opcode {
+                    // zwp_primary_selection_device_v1.data_offer(new_id): the server-allocated offer proxy.
+                    0 => self.last_primary_offer = Some(m.reader().u32()),
+                    // zwp_primary_selection_device_v1.selection(object? id): current primary selection.
+                    1 => {
+                        let id = m.reader().u32();
+                        self.primary_selection_offer = if id == 0 { None } else { Some(id) };
+                    }
+                    _ => {}
+                }
+            } else if self.last_primary_offer == Some(m.object) && m.opcode == 0 {
+                // zwp_primary_selection_offer_v1.offer(mime_type): a mime the primary selection offers.
+                self.primary_offer_mimes.push(m.reader().string());
             }
         }
     }
@@ -229,6 +255,8 @@ fn globals_advertise_frame_presents_feedback_and_cursor_shape_wire() {
     let last_move = Arc::new(Mutex::new(None));
     let last_resize = Arc::new(Mutex::new(None));
     let last_raise = Arc::new(Mutex::new(None));
+    let last_cursor_buffer = Arc::new(Mutex::new(None));
+    let cursor_hidden = Arc::new(Mutex::new(None));
     let mut state = DdState::new(
         dh.clone(),
         Box::new(RecordingPresenter {
@@ -239,6 +267,8 @@ fn globals_advertise_frame_presents_feedback_and_cursor_shape_wire() {
             last_move: last_move.clone(),
             last_resize: last_resize.clone(),
             last_raise: last_raise.clone(),
+            last_cursor_buffer: last_cursor_buffer.clone(),
+            cursor_hidden: cursor_hidden.clone(),
         }),
     );
 
@@ -279,6 +309,9 @@ fn globals_advertise_frame_presents_feedback_and_cursor_shape_wire() {
         "wl_data_device_manager",
         "zxdg_decoration_manager_v1",
         "xdg_activation_v1",
+        "zwp_primary_selection_device_manager_v1",
+        "zwp_relative_pointer_manager_v1",
+        "zwp_pointer_constraints_v1",
     ] {
         assert!(
             c.globals.contains_key(iface),
@@ -770,6 +803,139 @@ fn globals_advertise_frame_presents_feedback_and_cursor_shape_wire() {
         Some(surface),
         "activating a surface should raise its window via the Presenter"
     );
+
+    // (10) zwp_primary_selection_v1 (X11-style middle-click paste): the focused guest sets the PRIMARY
+    // selection from its own source. Smithay offers it back to the focused primary device (data_offer +
+    // offer(mime) + selection) — proving the guest↔guest wiring and that the primary selection follows
+    // keyboard focus (set_primary_focus in focus_surface).
+    let psm = bind(&mut c, "zwp_primary_selection_device_manager_v1", 1);
+    let pdevice = c.alloc();
+    c.conn.send(&Message::new(psm, 1).u32(pdevice).u32(seat)); // get_device(id, seat)
+    c.primary_device_id = pdevice;
+    pump!();
+    let psource = c.alloc();
+    c.conn.send(&Message::new(psm, 0).u32(psource)); // create_source(id)
+    let pmime = "text/plain;charset=utf-8";
+    c.conn.send(&Message::new(psource, 0).string(pmime)); // primary source.offer(mime)
+    let pser = c.kbd_enter_serial.expect("need a serial for primary set_selection");
+    c.last_primary_offer = None;
+    c.primary_offer_mimes.clear();
+    c.conn.send(&Message::new(pdevice, 0).u32(psource).u32(pser)); // device.set_selection(source, serial)
+    pump!();
+    let poffer = c
+        .last_primary_offer
+        .expect("setting the primary selection should offer it back to the focused primary device");
+    assert!(
+        c.primary_offer_mimes.iter().any(|m| m == pmime),
+        "the primary offer should carry {pmime}; got {:?}",
+        c.primary_offer_mimes
+    );
+    assert_eq!(
+        c.primary_selection_offer,
+        Some(poffer),
+        "zwp_primary_selection_device_v1.selection should point at the primary offer"
+    );
+
+    // (10) zwp_relative_pointer_v1 (game/3D relative motion): bind the manager, get a relative pointer for
+    // our wl_pointer, then feed a host delta and assert the client receives a relative_motion (opcode 0).
+    let rpm = bind(&mut c, "zwp_relative_pointer_manager_v1", 1);
+    let relptr = c.alloc();
+    c.conn.send(&Message::new(rpm, 1).u32(relptr).u32(pointer)); // get_relative_pointer(id, pointer)
+    pump!();
+    state.relative_motion(5.0, -3.0);
+    display.flush_clients().unwrap();
+    c.drain();
+    assert!(
+        c.saw(relptr, 0),
+        "expected zwp_relative_pointer_v1.relative_motion (opcode 0); saw {:?}",
+        c.events
+    );
+
+    // (11) zwp_pointer_constraints_v1 (pointer lock — FPS mouselook): lock the pointer to the focused
+    // surface. The compositor activates the lock (the surface holds focus), so the client receives
+    // `locked` (opcode 0), `pointer_locked()` reports true, the host cursor is hidden, and absolute motion
+    // is frozen while relative deltas keep flowing.
+    *cursor_hidden.lock().unwrap() = None;
+    let pcm = bind(&mut c, "zwp_pointer_constraints_v1", 1);
+    let lock = c.alloc();
+    // lock_pointer(id, surface, pointer, region=null, lifetime=persistent(2)).
+    c.conn
+        .send(&Message::new(pcm, 1).u32(lock).u32(surface).u32(pointer).u32(0).u32(2));
+    pump!();
+    assert!(
+        c.saw(lock, 0),
+        "an active lock should send zwp_locked_pointer_v1.locked (opcode 0); saw {:?}",
+        c.events
+    );
+    assert!(state.pointer_locked(), "the pointer should report locked");
+    assert_eq!(
+        *cursor_hidden.lock().unwrap(),
+        Some(true),
+        "an active pointer lock should hide the host cursor"
+    );
+    // Absolute motion is frozen while locked (dropped); the relative stream still delivers.
+    state.pointer_motion(999.0, 999.0);
+    state.relative_motion(2.0, 2.0);
+    display.flush_clients().unwrap();
+    c.drain();
+    // Release the lock so the following custom-cursor case starts from a visible pointer.
+    c.conn.send(&Message::new(lock, 0)); // zwp_locked_pointer_v1.destroy
+    pump!();
+    assert!(!state.pointer_locked(), "destroying the lock should release it");
+
+    // (12) wl_pointer.set_cursor client BITMAP cursor (CSS `cursor: url(...)`, a game crosshair, a custom
+    // app cursor): the client assigns a cursor surface with a hotspot, then commits a buffer to it. The
+    // compositor turns the committed pixels into a host cursor via the new Presenter hook — and MUST NOT
+    // present the cursor surface as a window.
+    let cur = c.alloc();
+    c.conn.send(&Message::new(comp, 0).u32(cur)); // create_surface
+    let cser = c.enter_serial.expect("need a pointer enter serial for set_cursor");
+    // wl_pointer.set_cursor(serial, surface, hotspot_x, hotspot_y) — opcode 0.
+    c.conn
+        .send(&Message::new(pointer, 0).u32(cser).u32(cur).i32(2).i32(3));
+    pump!();
+    // Back the cursor with a 4x4 ARGB buffer (alpha honoured so cursor edges stay transparent).
+    let (cw, ch): (i32, i32) = (4, 4);
+    let csize = (cw * ch * 4) as usize;
+    let cpixels = vec![0x77u8; csize];
+    let cmfd = dd_display::keymap::anon_fd_with(&cpixels).expect("cursor anon shm fd");
+    let cpool = c.alloc();
+    c.conn.send(&Message::new(shm, 0).u32(cpool).u32(csize as u32)); // create_pool
+    c.conn.queue_fd(cmfd);
+    pump!();
+    unsafe { libc::close(cmfd) };
+    let cbuf = c.alloc();
+    c.conn.send(
+        &Message::new(cpool, 0)
+            .u32(cbuf)
+            .i32(0)
+            .i32(cw)
+            .i32(ch)
+            .i32(cw * 4)
+            .u32(0), // wl_shm format ARGB8888 == 0
+    );
+    c.conn.send(&Message::new(cur, 1).u32(cbuf).i32(0).i32(0)); // attach
+    c.conn.send(&Message::new(cur, 6)); // commit → build the host cursor (NOT a window)
+    let frames_before_cursor = state.presenter.frame_count();
+    pump!();
+    let pushed = last_cursor_buffer
+        .lock()
+        .unwrap()
+        .clone()
+        .expect("a custom cursor surface commit should push a bitmap cursor to the Presenter");
+    let (cbytes, bw, bh, bhx, bhy) = pushed;
+    assert_eq!((bw, bh), (cw, ch), "cursor bitmap size should match the committed buffer");
+    assert_eq!(
+        (bhx, bhy),
+        (2, 3),
+        "the set_cursor hotspot should be forwarded (buffer_scale 1)"
+    );
+    assert_eq!(cbytes.len(), csize, "the cursor bitmap should carry the full BGRA buffer");
+    assert_eq!(
+        state.presenter.frame_count(),
+        frames_before_cursor,
+        "a cursor surface must NOT be presented as a window"
+    );
 }
 
 /// A `Presenter` that records the last `set_cursor_shape` (so the cursor-shape wiring can be asserted)
@@ -790,6 +956,11 @@ struct RecordingPresenter {
     last_resize: Arc<Mutex<Option<(u32, u32)>>>,
     /// The sid of the last `raise_window` (an xdg_activation activation reaching the Presenter).
     last_raise: Arc<Mutex<Option<u32>>>,
+    /// The last custom bitmap cursor the compositor pushed: `(bytes, width, height, hotspot_x, hotspot_y)`
+    /// from `set_cursor_buffer` — so the `wl_pointer.set_cursor` client-bitmap path can be asserted.
+    last_cursor_buffer: Arc<Mutex<Option<(Vec<u8>, i32, i32, i32, i32)>>>,
+    /// The last `set_cursor_hidden` value (pointer hide/show for `set_cursor(null)` and pointer lock).
+    cursor_hidden: Arc<Mutex<Option<bool>>>,
 }
 impl dd_display::present::Presenter for RecordingPresenter {
     fn present(&mut self, _surf: &dd_display::present::SurfaceBuffer) -> bool {
@@ -801,6 +972,12 @@ impl dd_display::present::Presenter for RecordingPresenter {
     }
     fn set_cursor_shape(&self, shape: u32) {
         *self.last_shape.lock().unwrap() = Some(shape);
+    }
+    fn set_cursor_buffer(&self, bgra: &[u8], w: i32, h: i32, hx: i32, hy: i32) {
+        *self.last_cursor_buffer.lock().unwrap() = Some((bgra.to_vec(), w, h, hx, hy));
+    }
+    fn set_cursor_hidden(&self, hidden: bool) {
+        *self.cursor_hidden.lock().unwrap() = Some(hidden);
     }
     fn clipboard_set_host(&self, mime: &str, bytes: &[u8]) {
         *self.set_host.lock().unwrap() = Some((mime.to_string(), bytes.to_vec()));

@@ -9,24 +9,33 @@ use std::os::unix::io::OwnedFd;
 use smithay::{
     input::{
         keyboard::{FilterResult, Keycode},
-        pointer::{AxisFrame, ButtonEvent, CursorIcon, CursorImageStatus, MotionEvent},
+        pointer::{
+            AxisFrame, ButtonEvent, CursorIcon, CursorImageStatus, CursorImageSurfaceData,
+            MotionEvent, PointerHandle, RelativeMotionEvent,
+        },
         Seat, SeatHandler, SeatState,
     },
     reexports::wayland_server::protocol::wl_surface::WlSurface,
     utils::SERIAL_COUNTER,
     wayland::{
+        compositor::{with_states, SurfaceAttributes},
+        pointer_constraints::{
+            with_pointer_constraint, PointerConstraint, PointerConstraintsHandler,
+        },
         selection::{
             data_device::{
                 set_data_device_selection, ClientDndGrabHandler, DataDeviceHandler, DataDeviceState,
                 ServerDndGrabHandler,
             },
+            primary_selection::{PrimarySelectionHandler, PrimarySelectionState},
             SelectionHandler, SelectionSource, SelectionTarget,
         },
+        shm::with_buffer_contents,
         tablet_manager::TabletSeatHandler,
     },
 };
 
-use crate::DdState;
+use crate::{surface_id, DdState};
 
 impl SeatHandler for DdState {
     type KeyboardFocus = WlSurface;
@@ -37,15 +46,38 @@ impl SeatHandler for DdState {
         &mut self.seat_state
     }
     fn cursor_image(&mut self, _seat: &Seat<Self>, image: CursorImageStatus) {
-        // Map the requested themed cursor to a host NSCursor via the reused Presenter seam. Smithay hands
-        // us a `CursorIcon` (from wp_cursor_shape_device_v1.set_shape, or a client's own set_cursor); the
-        // Presenter expects the `wp_cursor_shape_device_v1.shape` enum number, so translate — the
-        // `CursorIcon` enum has NO stable discriminant, so `icon as u32` would pick the wrong cursor.
-        if let CursorImageStatus::Named(icon) = image {
-            self.presenter.set_cursor_shape(cursor_icon_to_wp_shape(icon));
+        // `wl_pointer.set_cursor` routes here (as does `wp_cursor_shape_device_v1.set_shape`). Three cases:
+        match image {
+            // A THEMED cursor: map the `CursorIcon` to the host NSCursor via the reused Presenter seam. The
+            // Presenter expects the `wp_cursor_shape_device_v1.shape` enum number, so translate — `CursorIcon`
+            // has NO stable discriminant, so `icon as u32` would pick the wrong cursor.
+            CursorImageStatus::Named(icon) => {
+                self.cursor_surface = None;
+                self.presenter.set_cursor_hidden(false);
+                self.presenter.set_cursor_shape(cursor_icon_to_wp_shape(icon));
+            }
+            // A CUSTOM bitmap cursor (CSS `cursor: url(...)`, a game crosshair, a custom app cursor): the
+            // client committed (or will commit) a buffer to this surface. It is NOT a window — turn its
+            // pixels into a host cursor. If it was already shown as a tiny window (its image committed before
+            // it was assigned the cursor role), remove that window first; then build the cursor from its
+            // current buffer (or, if none yet, on its next commit — see `on_commit` → `update_cursor_surface`).
+            CursorImageStatus::Surface(surface) => {
+                self.presenter.drop_window(surface_id(&surface));
+                self.cursor_surface = Some(surface.clone());
+                self.update_cursor_surface(&surface);
+            }
+            // The client wants NO pointer (it draws its own, or hides it): hide the host cursor.
+            CursorImageStatus::Hidden => {
+                self.cursor_surface = None;
+                self.presenter.set_cursor_hidden(true);
+            }
         }
     }
-    fn focus_changed(&mut self, _seat: &Seat<Self>, _focused: Option<&WlSurface>) {}
+    fn focus_changed(&mut self, _seat: &Seat<Self>, _focused: Option<&WlSurface>) {
+        // A pointer constraint deactivates when its surface loses pointer focus (Smithay sends the
+        // unlocked/unconfined event itself). Re-show the cursor if we had hidden it for an active lock.
+        self.sync_lock_cursor();
+    }
 }
 
 /// `wp_cursor_shape_manager_v1` routes a tablet tool's themed cursor here. We drive a single pointer
@@ -55,8 +87,14 @@ impl TabletSeatHandler for DdState {}
 
 impl DdState {
     /// Absolute pointer motion in logical/point space (top-left origin). Focuses the pointer on the
-    /// currently focused toplevel surface.
+    /// currently focused toplevel surface. Honours an active `zwp_pointer_constraints` constraint on the
+    /// focused surface: a pointer LOCK freezes the absolute position (the motion is dropped — games read
+    /// relative deltas instead, via [`Self::relative_motion`]); a CONFINE clamps the pointer to the region.
     pub fn pointer_motion(&mut self, x: f64, y: f64) {
+        let (x, y) = match self.constrain_motion(x, y) {
+            Some(p) => p,
+            None => return, // locked: the absolute pointer stays put
+        };
         self.ptr_loc = (x, y);
         let ptr = self.pointer.clone();
         let focus = self.focus.clone().map(|s| (s, (0.0, 0.0).into()));
@@ -125,6 +163,148 @@ impl DdState {
         }
         ptr.axis(self, frame);
         ptr.frame(self);
+    }
+
+    // ---- relative pointer + pointer constraints (games / 3D / FPS mouselook) ---------------------------
+
+    /// Feed a host relative pointer delta (raw mouse movement in points; the macOS loop reads
+    /// `NSEvent.deltaX/deltaY`). Always emits a `zwp_relative_pointer_v1.relative_motion` to the focused
+    /// surface — the unaccelerated stream a game/3D app reads for mouselook. When the pointer is NOT locked
+    /// the absolute pointer also advances by the delta (ordinary motion, clamped by any confine region);
+    /// when a lock is active the absolute pointer stays frozen and only this relative event is delivered.
+    pub fn relative_motion(&mut self, dx: f64, dy: f64) {
+        let ptr = self.pointer.clone();
+        let focus = self.focus.clone().map(|s| (s, (0.0, 0.0).into()));
+        let utime = self.now_us();
+        // dd has no host pointer-acceleration curve of its own, so accelerated == unaccelerated delta.
+        ptr.relative_motion(
+            self,
+            focus,
+            &RelativeMotionEvent {
+                delta: (dx, dy).into(),
+                delta_unaccel: (dx, dy).into(),
+                utime,
+            },
+        );
+        ptr.frame(self);
+        if !self.pointer_locked() {
+            let (x, y) = self.ptr_loc;
+            self.pointer_motion(x + dx, y + dy);
+        }
+        self.sync_lock_cursor();
+    }
+
+    /// Whether the focused surface currently holds an ACTIVE pointer LOCK (`zwp_locked_pointer_v1`). While a
+    /// lock is active the absolute pointer is frozen and clients read motion only through
+    /// [`Self::relative_motion`]. The macOS loop polls this to decide whether to feed relative deltas.
+    pub fn pointer_locked(&self) -> bool {
+        let Some(focus) = self.focus.clone() else {
+            return false;
+        };
+        let ptr = self.pointer.clone();
+        with_pointer_constraint(&focus, &ptr, |c| {
+            matches!(c, Some(c) if c.is_active() && matches!(&*c, PointerConstraint::Locked(_)))
+        })
+    }
+
+    /// Resolve a proposed absolute pointer location against the focused surface's pointer constraint.
+    /// Returns the location to actually move to, or `None` when the pointer is LOCKED (frozen — the caller
+    /// drops the motion). An active CONFINE rejects a location outside its region by pinning to the last
+    /// in-region location; an unconstrained (or inactive) pointer passes the location through unchanged.
+    fn constrain_motion(&self, x: f64, y: f64) -> Option<(f64, f64)> {
+        let Some(focus) = self.focus.clone() else {
+            return Some((x, y));
+        };
+        let ptr = self.pointer.clone();
+        with_pointer_constraint(&focus, &ptr, |c| {
+            let Some(c) = c else { return Some((x, y)) };
+            if !c.is_active() {
+                return Some((x, y));
+            }
+            match &*c {
+                PointerConstraint::Locked(_) => None,
+                PointerConstraint::Confined(_) => match c.region() {
+                    // Region is in surface-local logical coords; our pointer is focused at (0,0) offset, so
+                    // ptr_loc IS surface-local. Reject a move that leaves the region (stay where we were).
+                    Some(region) if !region.contains((x.round() as i32, y.round() as i32)) => {
+                        Some(self.ptr_loc)
+                    }
+                    _ => Some((x, y)),
+                },
+            }
+        })
+    }
+
+    /// Keep the host cursor's visibility in step with the pointer-lock state: hide the system cursor while a
+    /// lock is active (FPS mouselook), and re-show exactly that cursor when the lock releases or focus
+    /// leaves. Only toggles what it hid (via `cursor_hidden_by_lock`), so it never clobbers a cursor a
+    /// client hid deliberately with `set_cursor(null)`.
+    pub(crate) fn sync_lock_cursor(&mut self) {
+        let locked = self.pointer_locked();
+        if locked && !self.cursor_hidden_by_lock {
+            self.cursor_hidden_by_lock = true;
+            self.presenter.set_cursor_hidden(true);
+        } else if !locked && self.cursor_hidden_by_lock {
+            self.cursor_hidden_by_lock = false;
+            self.presenter.set_cursor_hidden(false);
+        }
+    }
+
+    /// Build (or refresh) the host cursor from a custom cursor surface's committed `wl_shm` buffer. Called
+    /// from `cursor_image` (when the surface is assigned the cursor role) and from the commit path (when the
+    /// cursor surface re-commits — animated/updated cursors). The hotspot lives in the surface's
+    /// `CursorImageSurfaceData` (logical coords); it is scaled to buffer pixels for the Presenter, which
+    /// wraps the pixels in an `NSCursor`. No committed buffer yet ⇒ nothing to do (built on first commit).
+    pub(crate) fn update_cursor_surface(&mut self, surface: &WlSurface) {
+        let sid = surface_id(surface);
+        let Some(buffer) = self.buffers.get(&sid).cloned() else {
+            return;
+        };
+        let (hotspot, scale) = with_states(surface, |states| {
+            let hotspot = states
+                .data_map
+                .get::<CursorImageSurfaceData>()
+                .map(|m| m.lock().unwrap().hotspot)
+                .unwrap_or_default();
+            let scale = states
+                .cached_state
+                .get::<SurfaceAttributes>()
+                .current()
+                .buffer_scale
+                .max(1);
+            (hotspot, scale)
+        });
+        // Repack the shm buffer into tight BGRA (honouring the pool offset + row stride), then hand it to
+        // the Presenter as a bitmap cursor. Small (cursor-sized) copy — no fast-path needed.
+        let read = with_buffer_contents(&buffer, |ptr, _len, data| {
+            let (w, h, stride, off) = (data.width, data.height, data.stride, data.offset);
+            if w <= 0 || h <= 0 {
+                return (w, h, Vec::new());
+            }
+            let tight = (w * 4) as usize;
+            let mut bgra = vec![0u8; tight * h as usize];
+            for row in 0..h as isize {
+                let src = unsafe { ptr.offset(off as isize + row * stride as isize) };
+                let dstart = row as usize * tight;
+                unsafe {
+                    std::ptr::copy_nonoverlapping(src, bgra[dstart..].as_mut_ptr(), tight);
+                }
+            }
+            (w, h, bgra)
+        });
+        if let Ok((w, h, bgra)) = read {
+            if !bgra.is_empty() {
+                self.presenter.set_cursor_hidden(false);
+                self.presenter
+                    .set_cursor_buffer(&bgra, w, h, hotspot.x * scale, hotspot.y * scale);
+            }
+        }
+    }
+
+    /// Whether `surface` is the client's current custom cursor surface. The commit path consults this to
+    /// route a cursor-surface commit to [`Self::update_cursor_surface`] instead of presenting it as a window.
+    pub(crate) fn is_cursor_surface(&self, surface: &WlSurface) -> bool {
+        self.cursor_surface.as_ref() == Some(surface)
     }
 
     /// Keyboard key (raw evdev keycode; we add the +8 XKB offset here). The focused client's own
@@ -249,8 +429,11 @@ impl SelectionHandler for DdState {
         source: Option<SelectionSource>,
         _seat: Seat<Self>,
     ) {
+        // Only the clipboard is bridged to the host `NSPasteboard`. The PRIMARY selection
+        // (`zwp_primary_selection_v1`) is wired guest↔guest only — Smithay routes a reader straight to the
+        // source client — so a `Primary` set needs no host export and is ignored here.
         if ty != SelectionTarget::Clipboard {
-            return; // no primary-selection global is advertised; ignore anything but the clipboard.
+            return;
         }
         if let Some(src) = source {
             self.pending_host_copy = Some(src.mime_types());
@@ -282,6 +465,54 @@ impl SelectionHandler for DdState {
 impl DataDeviceHandler for DdState {
     fn data_device_state(&self) -> &DataDeviceState {
         &self.data_device
+    }
+}
+
+// ---- zwp_primary_selection_v1: X11-style primary (middle-click) selection ----------------------------
+//
+// The primary selection is the "select-to-copy, middle-click-to-paste" buffer terminals and GTK/Qt apps
+// expect. Smithay drives the whole guest↔guest transfer through the SAME `SelectionHandler` as the
+// clipboard (a `Primary` target on `new_selection`/`send_selection`), and routes a reader straight to the
+// owning client, so the handler is a one-liner state getter; the compositor only follows keyboard focus
+// with it (see `DdState::focus_surface` → `set_primary_focus`). No host-clipboard bridge (kept optional).
+
+impl PrimarySelectionHandler for DdState {
+    fn primary_selection_state(&self) -> &PrimarySelectionState {
+        &self.primary_selection
+    }
+}
+
+// ---- zwp_pointer_constraints_v1: pointer lock / confine (games / 3D / FPS mouselook) -----------------
+//
+// A client (a game, a 3D viewport, a drawing app) creates a lock or confine constraint on its surface +
+// this seat's pointer. The compositor decides WHEN to activate; our policy is to activate as soon as the
+// constrained surface holds focus (games request the lock right after their window is focused). Once a
+// lock is active the injection path freezes the absolute pointer and the macOS loop feeds relative deltas
+// through `relative_motion`; a confine clamps absolute motion to the region (see `constrain_motion`).
+
+impl PointerConstraintsHandler for DdState {
+    fn new_constraint(&mut self, surface: &WlSurface, pointer: &PointerHandle<Self>) {
+        // Activate immediately if the constrained surface currently holds focus; otherwise leave it pending
+        // (Smithay activates nothing on its own — the compositor owns the policy).
+        if self.focus.as_ref() == Some(surface) {
+            with_pointer_constraint(surface, pointer, |c| {
+                if let Some(c) = c {
+                    c.activate();
+                }
+            });
+            // Hide the system cursor for an active LOCK (FPS mouselook); a confine keeps the cursor visible.
+            self.sync_lock_cursor();
+        }
+    }
+
+    fn cursor_position_hint(
+        &mut self,
+        _surface: &WlSurface,
+        _pointer: &PointerHandle<Self>,
+        _location: smithay::utils::Point<f64, smithay::utils::Logical>,
+    ) {
+        // A locked client tells us where it is drawing its own cursor, for the moment the lock releases. We
+        // render no guest cursor surface during a lock (the host cursor is hidden), so nothing to place.
     }
 }
 

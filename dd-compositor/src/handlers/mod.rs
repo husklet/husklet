@@ -19,7 +19,8 @@ use crate::DdState;
 
 use smithay::{
     delegate_compositor, delegate_cursor_shape, delegate_data_device, delegate_dmabuf,
-    delegate_output, delegate_presentation, delegate_seat, delegate_shm, delegate_viewporter,
+    delegate_output, delegate_pointer_constraints, delegate_presentation, delegate_primary_selection,
+    delegate_relative_pointer, delegate_seat, delegate_shm, delegate_viewporter,
     delegate_xdg_activation, delegate_xdg_decoration, delegate_xdg_shell,
 };
 
@@ -35,3 +36,6 @@ delegate_viewporter!(DdState);
 delegate_presentation!(DdState);
 delegate_cursor_shape!(DdState); // wp_cursor_shape_manager_v1 + wp_cursor_shape_device_v1
 delegate_data_device!(DdState); // wl_data_device_manager + wl_data_device/source/offer (clipboard + DnD)
+delegate_primary_selection!(DdState); // zwp_primary_selection_v1 (X11-style middle-click paste)
+delegate_relative_pointer!(DdState); // zwp_relative_pointer_v1 (game/3D relative motion)
+delegate_pointer_constraints!(DdState); // zwp_pointer_constraints_v1 (pointer lock/confine)

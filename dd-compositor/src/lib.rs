@@ -63,8 +63,10 @@ use smithay::{
         cursor_shape::CursorShapeManagerState,
         dmabuf::DmabufState,
         output::OutputManagerState,
+        pointer_constraints::PointerConstraintsState,
         presentation::PresentationState,
-        selection::data_device::DataDeviceState,
+        relative_pointer::RelativePointerManagerState,
+        selection::{data_device::DataDeviceState, primary_selection::PrimarySelectionState},
         shell::xdg::{decoration::XdgDecorationState, PopupSurface, XdgShellState},
         shm::ShmState,
         viewporter::ViewporterState,
@@ -119,6 +121,17 @@ pub struct DdState {
     /// `zwp_linux_dmabuf_v1` delegate. Holds the dmabuf global that lets GPU clients (GLES/Vulkan)
     /// present via a dd IOSurface-backed buffer — see [`handlers::dmabuf`].
     pub dmabuf_state: DmabufState,
+    /// `zwp_primary_selection_v1` — the X11-style primary/middle-click-paste selection (terminals, GTK/Qt
+    /// apps). Guest↔guest transfer is driven entirely by Smithay through the shared [`SelectionHandler`];
+    /// the compositor only follows keyboard focus with it (see [`DdState::focus_surface`]).
+    pub primary_selection: PrimarySelectionState,
+    /// `zwp_relative_pointer_v1` — unaccelerated relative motion deltas for games/3D (FPS mouselook). The
+    /// global is advertised here; deltas are emitted through the pointer via [`DdState::relative_motion`].
+    pub relative_pointer: RelativePointerManagerState,
+    /// `zwp_pointer_constraints_v1` — pointer LOCK / CONFINE (FPS mouselook, drawing apps). The constraint
+    /// is created per surface+pointer and activated by [`DdState::new_constraint`]; the injection path
+    /// freezes the absolute pointer while a lock is active and clamps motion to a confine region.
+    pub pointer_constraints: PointerConstraintsState,
     pub seat: Seat<Self>,
     pub keyboard: KeyboardHandle<Self>,
     pub pointer: PointerHandle<Self>,
@@ -173,6 +186,16 @@ pub struct DdState {
     /// clipboard. Drained by the runtime loop, which reads the guest source and calls
     /// `Presenter::clipboard_set_host`. `None` when there is nothing pending.
     pub(crate) pending_host_copy: Option<Vec<String>>,
+
+    /// The surface a client set as its custom pointer image via `wl_pointer.set_cursor` (the surface with
+    /// the `cursor_image` role), if any. Its committed buffer is turned into a host cursor (see
+    /// `handlers::seat`) instead of being presented as a window; tracked so a later cursor re-commit updates
+    /// the host cursor and so clearing it (a named/hidden cursor, or a different surface) is detectable.
+    pub(crate) cursor_surface: Option<WlSurface>,
+    /// Whether the system pointer is currently hidden BECAUSE a `zwp_pointer_constraints` lock is active
+    /// (FPS mouselook). Tracked so the compositor un-hides exactly the cursor it hid when the lock releases
+    /// or focus leaves — without clobbering a cursor a client hid deliberately (`set_cursor(null)`).
+    pub(crate) cursor_hidden_by_lock: bool,
 }
 
 impl DdState {
@@ -215,6 +238,15 @@ impl DdState {
         // zwp_linux_dmabuf_v1: advertise the GPU present path so GLES/Vulkan/GPU-composited clients
         // can attach IOSurface-backed buffers (glmark2, es2tri, GPU browsers). See handlers/dmabuf.rs.
         let dmabuf_state = handlers::dmabuf::new_dmabuf_state(&dh);
+        // zwp_primary_selection_device_manager_v1: X11-style primary (middle-click) selection. Smithay drives
+        // the guest↔guest transfer through the same SelectionHandler as the clipboard; the compositor follows
+        // keyboard focus with it (see focus_surface). Terminals/toolkits (GTK/Qt) rely on it.
+        let primary_selection = PrimarySelectionState::new::<Self>(&dh);
+        // zwp_relative_pointer_manager_v1: unaccelerated relative motion for games/3D. Deltas are delivered
+        // through the existing pointer (see relative_motion); this only advertises the manager global.
+        let relative_pointer = RelativePointerManagerState::new::<Self>(&dh);
+        // zwp_pointer_constraints_v1: pointer lock/confine for FPS mouselook and drawing apps.
+        let pointer_constraints = PointerConstraintsState::new::<Self>(&dh);
 
         let mut seat_state = SeatState::<Self>::new();
         let mut seat = seat_state.new_wl_seat(&dh, "dd-seat-0"); // wl_seat v5
@@ -258,6 +290,9 @@ impl DdState {
             cursor_shape,
             data_device,
             dmabuf_state,
+            primary_selection,
+            relative_pointer,
+            pointer_constraints,
             seat,
             keyboard,
             pointer,
@@ -275,6 +310,8 @@ impl DdState {
             mod_mask: 0,
             host_clip_gen: 0,
             pending_host_copy: None,
+            cursor_surface: None,
+            cursor_hidden_by_lock: false,
         }
     }
 
@@ -301,6 +338,12 @@ impl DdState {
         self.recent_serials.contains(&serial)
     }
 
+    /// Microseconds since construction, the timestamp domain `zwp_relative_pointer_v1.relative_motion`
+    /// carries (`utime`, split hi/lo by Smithay). Same monotonic clock as [`Self::now_ms`].
+    pub(crate) fn now_us(&self) -> u64 {
+        self.start.elapsed().as_micros() as u64
+    }
+
     /// The output's logical size (device mode divided by the integer scale) — the bounds a maximized or
     /// fullscreen toplevel is configured to, and the `configure_bounds` hint a floating toplevel gets.
     pub(crate) fn output_logical_size(&self) -> (i32, i32) {
@@ -316,6 +359,7 @@ impl DdState {
     /// focused client is the one that receives `wl_data_device.selection` offers and may set the selection.
     pub(crate) fn focus_surface(&mut self, surface: WlSurface) {
         use smithay::wayland::selection::data_device::set_data_device_focus;
+        use smithay::wayland::selection::primary_selection::set_primary_focus;
         self.focus = Some(surface.clone());
         let client = surface.client();
         let kbd = self.keyboard.clone();
@@ -323,7 +367,10 @@ impl DdState {
         kbd.set_focus(self, Some(surface), serial);
         let dh = self.dh.clone();
         let seat = self.seat.clone();
-        set_data_device_focus(&dh, &seat, client);
+        set_data_device_focus(&dh, &seat, client.clone());
+        // The primary (middle-click) selection follows keyboard focus exactly as the clipboard does, so the
+        // focused client is the one offered the current primary selection and allowed to set it.
+        set_primary_focus(&dh, &seat, client);
     }
 }
 

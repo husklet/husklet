@@ -73,6 +73,14 @@ impl DdState {
     pub(crate) fn on_commit(&mut self, surface: &WlSurface) {
         self.remember_buffer(surface);
 
+        // A custom cursor surface (`wl_pointer.set_cursor`) is NOT a window: turn its just-committed buffer
+        // into the host cursor (handlers::seat) instead of presenting it as a tiny window. Handles animated /
+        // updated cursors (each re-commit refreshes the host cursor).
+        if self.is_cursor_surface(surface) {
+            self.update_cursor_surface(surface);
+            return;
+        }
+
         // A synchronized subsurface is presented as part of its parent's atomic commit; do not present now
         // (its buffer is already remembered above and its frame callbacks are drained when the root
         // presents). Presenting here would show a half-applied tree.

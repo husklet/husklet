@@ -438,6 +438,12 @@ impl Presenter for CocoaPresenter {
     fn set_cursor_shape(&self, shape: u32) {
         apply_cursor_shape(shape);
     }
+    fn set_cursor_buffer(&self, bgra: &[u8], w: i32, h: i32, hx: i32, hy: i32) {
+        apply_cursor_buffer(self.mtm, bgra, w, h, hx, hy);
+    }
+    fn set_cursor_hidden(&self, hidden: bool) {
+        apply_cursor_hidden(hidden);
+    }
 
     fn clipboard_set_host(&self, mime: &str, bytes: &[u8]) {
         host_clipboard_set(mime, bytes);
@@ -1129,6 +1135,12 @@ impl Presenter for MetalPresenter {
     fn set_cursor_shape(&self, shape: u32) {
         apply_cursor_shape(shape);
     }
+    fn set_cursor_buffer(&self, bgra: &[u8], w: i32, h: i32, hx: i32, hy: i32) {
+        apply_cursor_buffer(self.mtm, bgra, w, h, hx, hy);
+    }
+    fn set_cursor_hidden(&self, hidden: bool) {
+        apply_cursor_hidden(hidden);
+    }
 
     fn clipboard_set_host(&self, mime: &str, bytes: &[u8]) {
         host_clipboard_set(mime, bytes);
@@ -1170,6 +1182,76 @@ fn apply_cursor_shape(shape: u32) {
         _ => NSCursor::arrowCursor(),                   // default + anything without a good AppKit match
     };
     unsafe { cursor.set() };
+}
+
+/// Turn a client-committed cursor buffer (`wl_pointer.set_cursor` with a custom surface+buffer) into a host
+/// `NSCursor` and set it — the bitmap-cursor counterpart to `apply_cursor_shape`, for cursors the named
+/// `wp_cursor_shape` set cannot express (CSS `cursor: url(...)`, a game crosshair, a custom app cursor).
+/// `bgra` is the cursor's tight BGRA pixels (B,G,R,A memory order); `(hx,hy)` is the hotspot in those
+/// pixels. Mirrors `present()`'s blit: build a self-owned `NSBitmapImageRep` (swap B/R to the RGBA the
+/// `NSDeviceRGBColorSpace` rep wants), wrap it in an `NSImage`, and make an `NSCursor` with the hotspot.
+/// Runs on the main thread (the presenter loop) where AppKit cursor state lives; the windows disable AppKit
+/// cursor rects (see `make_window`) so the cursor set here sticks over the content.
+fn apply_cursor_buffer(_mtm: MainThreadMarker, bgra: &[u8], w: i32, h: i32, hx: i32, hy: i32) {
+    if w <= 0 || h <= 0 || bgra.len() < (w as usize) * (h as usize) * 4 {
+        return; // malformed cursor buffer — leave the current cursor untouched
+    }
+    // Swap B/R into a tight RGBA image (cursor buffers are little-endian ARGB8888 == B,G,R,A in memory).
+    let mut rgba = vec![0u8; (w as usize) * (h as usize) * 4];
+    for i in (0..rgba.len()).step_by(4) {
+        rgba[i] = bgra[i + 2]; // R
+        rgba[i + 1] = bgra[i + 1]; // G
+        rgba[i + 2] = bgra[i]; // B
+        rgba[i + 3] = bgra[i + 3]; // A (cursors are ARGB — honour the alpha so edges stay transparent)
+    }
+    let rep: Retained<NSBitmapImageRep> = unsafe {
+        let mut plane: *mut u8 = std::ptr::null_mut();
+        let rep = NSBitmapImageRep::initWithBitmapDataPlanes_pixelsWide_pixelsHigh_bitsPerSample_samplesPerPixel_hasAlpha_isPlanar_colorSpaceName_bytesPerRow_bitsPerPixel(
+            NSBitmapImageRep::alloc(),
+            &mut plane,
+            w as isize,
+            h as isize,
+            8,     // bits per sample
+            4,     // samples per pixel (RGBA)
+            true,  // has alpha
+            false, // not planar
+            NSDeviceRGBColorSpace,
+            (w * 4) as isize, // bytes per row
+            32,               // bits per pixel
+        )
+        .expect("cursor NSBitmapImageRep init failed");
+        let dst = rep.bitmapData();
+        if !dst.is_null() {
+            std::ptr::copy_nonoverlapping(rgba.as_ptr(), dst, rgba.len());
+        }
+        rep
+    };
+    let image = unsafe { NSImage::initWithSize(NSImage::alloc(), NSSize::new(w as f64, h as f64)) };
+    unsafe { image.addRepresentation(&rep) };
+    // NSCursor's hotSpot is in the image's coordinate system with the origin at the top-left — the same
+    // top-down pixel space the buffer rows are in — so the buffer hotspot maps 1:1 (clamped into bounds).
+    let hotspot = NSPoint::new(hx.clamp(0, w) as f64, hy.clamp(0, h) as f64);
+    let cursor = NSCursor::initWithImage_hotSpot(NSCursor::alloc(), &image, hotspot);
+    apply_cursor_hidden(false); // a custom cursor implies the pointer is visible again
+    unsafe { cursor.set() };
+}
+
+/// Hide or show the host pointer, backing `Presenter::set_cursor_hidden` (a `wl_pointer.set_cursor(null)`
+/// or a pointer LOCK). AppKit's `NSCursor.hide/unhide` are COUNTED — unbalanced calls leave the cursor
+/// stuck — so track a single hidden bit and only cross into AppKit on an actual transition, making the hook
+/// idempotent (a lone show always reveals the cursor). Main-thread only in practice.
+fn apply_cursor_hidden(hidden: bool) {
+    static HIDDEN: AtomicBool = AtomicBool::new(false);
+    if HIDDEN.swap(hidden, Ordering::SeqCst) == hidden {
+        return; // already in the requested state — do not double-hide/double-show
+    }
+    unsafe {
+        if hidden {
+            NSCursor::hide();
+        } else {
+            NSCursor::unhide();
+        }
+    }
 }
 
 // ===================================== host clipboard (NSPasteboard) ==================================
