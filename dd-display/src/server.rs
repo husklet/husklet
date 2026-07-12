@@ -147,6 +147,21 @@ pub struct ExternalLogicalCrop {
 
 /// What each live object id refers to. The compositor only needs to remember enough per object to route
 /// the next request and, for buffers/pools/surfaces, to reconstruct pixels on commit.
+/// Real byte length of an open fd (fstat st_size). Used to clamp a wl_shm pool's usable extent to what the
+/// guest actually ftruncated the backing fd to, so a read never runs off the end of the file into an
+/// unbacked (SIGBUS-on-access) 16 KB host page. Returns `usize::MAX` when fstat fails (unknown length →
+/// don't clamp, preserving the pre-guard behaviour); a genuinely empty file yields 0 (reject all reads).
+fn fd_byte_len(fd: RawFd) -> usize {
+    unsafe {
+        let mut st: libc::stat = std::mem::zeroed();
+        if libc::fstat(fd, &mut st) == 0 {
+            st.st_size.max(0) as usize
+        } else {
+            usize::MAX
+        }
+    }
+}
+
 enum Obj {
     Registry,
     Compositor,
@@ -158,6 +173,15 @@ enum Obj {
         fd: RawFd,
         ptr: *mut u8,
         size: usize,
+        // The backing fd's real byte length (fstat) at map/resize time. The guest declares the pool `size`
+        // independently of how many bytes it actually ftruncated the fd to; a well-formed client makes them
+        // equal (wayland-shm's os_create_anonymous_file ftruncates to exactly the pool size), but a lying or
+        // racing client can declare a `size` larger than the fd. macOS mmaps whole 16 KB host pages, and a
+        // read that lands in a page WHOLLY past the fd's EOF takes a SIGBUS — which dd-display does not catch,
+        // so the whole compositor would die. libwayland guards this with wl_shm_buffer_begin_access + a SIGBUS
+        // handler; we instead clamp the per-buffer bounds check (see `extract`) to this real length so an
+        // out-of-backing buffer is refused rather than read. Equal to `size` for every well-formed client.
+        safe_len: usize,
         // Live wl_buffer children. The mapping is torn down only when the pool is destroyed AND no buffer
         // still references it — the spec keeps buffers valid after `wl_shm_pool.destroy` ("The mmapped
         // memory will be released when all buffers … are gone"), mirroring wl_shm.c's shm_pool_unref
@@ -1087,12 +1111,14 @@ impl<P: Presenter> Server<P> {
             };
             if ptr != libc::MAP_FAILED {
                 // Keep `fd` open for the pool's lifetime (needed by resize; closed in `release_pool_ref`).
+                let safe_len = fd_byte_len(fd);
                 self.objs.insert(
                     id,
                     Obj::ShmPool {
                         fd,
                         ptr: ptr as *mut u8,
                         size,
+                        safe_len,
                         buffers: 0,
                         zombie: false,
                     },
@@ -1171,9 +1197,11 @@ impl<P: Presenter> Server<P> {
                     return; // keep the old (smaller) mapping usable.
                 }
                 unsafe { libc::munmap(old_ptr as *mut libc::c_void, old_size.max(1)) };
-                if let Some(Obj::ShmPool { ptr, size, .. }) = self.objs.get_mut(&m.object) {
+                let safe = fd_byte_len(fd);
+                if let Some(Obj::ShmPool { ptr, size, safe_len, .. }) = self.objs.get_mut(&m.object) {
                     *ptr = np as *mut u8;
                     *size = new_size;
+                    *safe_len = safe;
                 }
             }
             _ => {}
@@ -1866,7 +1894,11 @@ impl<P: Presenter> Server<P> {
             _ => return None,
         };
         let (ptr, size) = match self.objs.get(&pool) {
-            Some(Obj::ShmPool { ptr, size, .. }) => (*ptr, *size),
+            // Clamp the pool's usable extent to the fd's real backing length. A read past the fd's EOF lands
+            // in a whole 16 KB host page macOS never backed -> unhandled SIGBUS kills the compositor. For a
+            // well-formed client `safe_len == size` (wayland-shm ftruncates the fd to exactly the pool size),
+            // so this is a no-op; a lying/short-fd client's buffer is refused below instead of crashing us.
+            Some(Obj::ShmPool { ptr, size, safe_len, .. }) => (*ptr, (*size).min(*safe_len)),
             _ => return None,
         };
         if width <= 0 || height <= 0 || stride <= 0 || offset < 0 {
@@ -3665,7 +3697,7 @@ mod tests {
         let ptr = unsafe { mmap_ro(fd, data.len()) };
         server.objs.insert(
             2,
-            Obj::ShmPool { fd, ptr, size: data.len(), buffers: 1, zombie: false },
+            Obj::ShmPool { fd, ptr, size: data.len(), safe_len: data.len(), buffers: 1, zombie: false },
         );
         server.objs.insert(
             3,
@@ -3701,7 +3733,7 @@ mod tests {
         let ptr = unsafe { mmap_ro(fd, data.len()) };
         server.objs.insert(
             2,
-            Obj::ShmPool { fd, ptr, size: data.len(), buffers: 1, zombie: false },
+            Obj::ShmPool { fd, ptr, size: data.len(), safe_len: data.len(), buffers: 1, zombie: false },
         );
         server.objs.insert(
             3,
@@ -3724,6 +3756,47 @@ mod tests {
         teardown(server, sv);
     }
 
+    // ---- shm pool whose declared `size` exceeds the fd's real backing must refuse an out-of-backing
+    // buffer, not read past EOF. A read that lands in a 16 KB host page wholly past the fd's EOF takes an
+    // uncatchable SIGBUS that kills the whole compositor (macOS has no per-read shm access guard); the
+    // per-pool `safe_len` clamp (fstat length at map time) turns that crash into a rejected buffer. This is
+    // the host-side memfd-mapping hardening for the wl_shm path (libwayland's wl_shm_buffer_begin_access). ----
+    #[test]
+    fn shm_buffer_past_fd_backing_is_refused_not_read() {
+        let (mut server, sv) = test_server();
+        // fd really holds only 8 bytes, but the pool DECLARES a large size (a lying/short-fd client). A
+        // 2x2 ARGB buffer needs offset0 + (2-1)*8 + 8 = 16 bytes — beyond the 8-byte backing.
+        let data = vec![1u8, 2, 3, 4, 5, 6, 7, 8];
+        let fd = crate::keymap::anon_fd_with(&data).expect("anon fd");
+        let ptr = unsafe { mmap_ro(fd, 64) }; // map the declared size; only [0,8) is real backing
+        server.objs.insert(
+            2,
+            Obj::ShmPool { fd, ptr, size: 64, safe_len: data.len(), buffers: 1, zombie: false },
+        );
+        server.objs.insert(
+            3,
+            Obj::Buffer { pool: 2, offset: 0, width: 2, height: 2, stride: 8, format: FMT_ARGB8888 },
+        );
+        server.objs.insert(7, Obj::Surface(Surface::default()));
+        // Needs 16 bytes but only 8 are backed → clamp (min(size,safe_len)=8) refuses it instead of reading
+        // past the fd's EOF.
+        assert!(server.extract(7, 3, "t").is_none(), "out-of-backing buffer must be refused");
+
+        // Control: a well-formed pool (safe_len == size == the fd's real 8-byte backing) with a 1x2 buffer
+        // that needs exactly 0 + (2-1)*4 + 4 = 8 bytes extracts fine — the clamp is a no-op here.
+        if let Some(Obj::ShmPool { safe_len, size, .. }) = server.objs.get_mut(&2) {
+            *safe_len = 8;
+            *size = 8;
+        }
+        if let Some(Obj::Buffer { width, height, stride, .. }) = server.objs.get_mut(&3) {
+            *width = 1;
+            *height = 2;
+            *stride = 4;
+        }
+        assert!(server.extract(7, 3, "t").is_some(), "in-backing buffer must extract");
+        teardown(server, sv);
+    }
+
     // ---- wl_shm_pool.resize: a buffer in the grown region extracts only after resize ----
     #[test]
     fn shm_pool_resize_grows_mapping() {
@@ -3734,7 +3807,7 @@ mod tests {
         let ptr = unsafe { mmap_ro(fd, 16) };
         server.objs.insert(
             2,
-            Obj::ShmPool { fd, ptr, size: 16, buffers: 0, zombie: false },
+            Obj::ShmPool { fd, ptr, size: 16, safe_len: full.len(), buffers: 0, zombie: false },
         );
         // create_buffer(4x4) via the real handler so refcount is exercised.
         server.wl_shm_pool(
@@ -3759,7 +3832,7 @@ mod tests {
         let ptr = unsafe { mmap_ro(fd, data.len()) };
         server.objs.insert(
             2,
-            Obj::ShmPool { fd, ptr, size: data.len(), buffers: 0, zombie: false },
+            Obj::ShmPool { fd, ptr, size: data.len(), safe_len: data.len(), buffers: 0, zombie: false },
         );
         server.wl_shm_pool(
             Message::new(2, 0).u32(3).i32(0).i32(2).i32(2).i32(8).u32(FMT_ARGB8888),
@@ -4458,7 +4531,7 @@ mod tests {
         let data = vec![0u8; 4096];
         let fd = crate::keymap::anon_fd_with(&data).expect("anon fd");
         let ptr = unsafe { mmap_ro(fd, data.len()) };
-        server.objs.insert(2, Obj::ShmPool { fd, ptr, size: data.len(), buffers: 1, zombie: false });
+        server.objs.insert(2, Obj::ShmPool { fd, ptr, size: data.len(), safe_len: data.len(), buffers: 1, zombie: false });
         server.objs.insert(3, Obj::Buffer { pool: 2, offset, width: w, height: h, stride, format });
         server.objs.insert(7, Obj::Surface(Surface::default()));
     }
@@ -4707,7 +4780,7 @@ mod tests {
         let data = vec![0u8; 64];
         let fd = crate::keymap::anon_fd_with(&data).expect("anon fd");
         let ptr = unsafe { mmap_ro(fd, data.len()) };
-        h.server.objs.insert(2, Obj::ShmPool { fd, ptr, size: data.len(), buffers: 1, zombie: false });
+        h.server.objs.insert(2, Obj::ShmPool { fd, ptr, size: data.len(), safe_len: data.len(), buffers: 1, zombie: false });
         h.server.objs.insert(3, Obj::Buffer { pool: 2, offset: 0, width: 2, height: 2, stride: 8, format: FMT_ARGB8888 });
         // A pointer + a surface that Chrome dedicates to the cursor image.
         h.server.objs.insert(60, Obj::Pointer);
@@ -4735,7 +4808,7 @@ mod tests {
         let data = vec![0u8; 64];
         let fd = crate::keymap::anon_fd_with(&data).expect("anon fd");
         let ptr = unsafe { mmap_ro(fd, data.len()) };
-        h.server.objs.insert(2, Obj::ShmPool { fd, ptr, size: data.len(), buffers: 1, zombie: false });
+        h.server.objs.insert(2, Obj::ShmPool { fd, ptr, size: data.len(), safe_len: data.len(), buffers: 1, zombie: false });
         h.server.objs.insert(3, Obj::Buffer { pool: 2, offset: 0, width: 2, height: 2, stride: 8, format: FMT_ARGB8888 });
         // xdg surface that has been configured but not yet acked.
         let mut s = Surface::default();
@@ -4777,7 +4850,7 @@ mod tests {
         let data = vec![0u8; 64];
         let fd = crate::keymap::anon_fd_with(&data).expect("anon fd");
         let ptr = unsafe { mmap_ro(fd, data.len()) };
-        server.objs.insert(2, Obj::ShmPool { fd, ptr, size: data.len(), buffers: 1, zombie: false });
+        server.objs.insert(2, Obj::ShmPool { fd, ptr, size: data.len(), safe_len: data.len(), buffers: 1, zombie: false });
         server.objs.insert(3, Obj::Buffer { pool: 2, offset: 0, width: 2, height: 2, stride: 8, format: FMT_ARGB8888 });
         let mut s = Surface::default();
         s.current_buffer = Some(3);
@@ -4827,7 +4900,7 @@ mod tests {
         for pid in [2u32, 4u32] {
             let fd = crate::keymap::anon_fd_with(&data).expect("anon fd");
             let ptr = unsafe { mmap_ro(fd, data.len()) };
-            server.objs.insert(pid, Obj::ShmPool { fd, ptr, size: data.len(), buffers: 1, zombie: false });
+            server.objs.insert(pid, Obj::ShmPool { fd, ptr, size: data.len(), safe_len: data.len(), buffers: 1, zombie: false });
         }
         let released = server.release_all_pools();
         assert_eq!(released, 2, "both leaked pools released on disconnect");
