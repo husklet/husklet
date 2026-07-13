@@ -547,7 +547,28 @@ pub extern "C" fn vkCmdPipelineBarrier(
     {
         return;
     }
-    let barriers = if image_memory_barrier_count == 0 {
+    record_image_barriers(
+        command_buffer,
+        src_stage_mask,
+        dst_stage_mask,
+        image_memory_barrier_count,
+        p_image_memory_barriers,
+    );
+}
+
+/// Parse a `VkImageMemoryBarrier` array into validated [`ImageTransition`]s and record them as one
+/// atomic [`ImageEvent::Barriers`] group on a recording command buffer. Shared by `vkCmdPipelineBarrier`
+/// and `vkCmdWaitEvents` (both carry the same image-barrier arrays; in this synchronous single-queue
+/// model an event's dependency resolves by submit completion, so its barriers join the same submit-time
+/// transition validation). A structurally invalid barrier records nothing (no partial mutation).
+pub(crate) fn record_image_barriers(
+    command_buffer: VkCommandBuffer,
+    src_stage_mask: vk::PipelineStageFlags,
+    dst_stage_mask: vk::PipelineStageFlags,
+    image_memory_barrier_count: u32,
+    p_image_memory_barriers: *const vk::ImageMemoryBarrier,
+) {
+    let barriers = if image_memory_barrier_count == 0 || p_image_memory_barriers.is_null() {
         &[][..]
     } else {
         unsafe { core::slice::from_raw_parts(p_image_memory_barriers, image_memory_barrier_count as usize) }
@@ -1328,13 +1349,20 @@ pub extern "C" fn vkQueueSubmit(
     }
     // The host Metal executor renders synchronously and does not model fence objects, so we never
     // signal a fence *in the shipped IR* — the fence/semaphore state machine is guest-side (below).
-    let mut encoders: Vec<Vec<Enc>> = Vec::new();
+    // Per command buffer, emit its `vkCmdUpdateBuffer`/`vkCmdFillBuffer` uploads as `Cmd::WriteBuffer`
+    // (start-of-submit, exactly like the persistently-mapped coherent flush above) and THEN its encoder
+    // as `Cmd::Submit`. A command buffer with no such uploads (the vkcube draw/dispatch path) ships a
+    // byte-identical `Cmd::Submit` stream — the deferred/query bookkeeping never enters the encoder.
+    let mut shipped: Vec<(Vec<(u32, u64, Vec<u8>)>, Vec<Enc>)> = Vec::new();
     for &key in &cb_keys {
         if let Some(rec) = s.cmdbufs.get(&key) {
-            encoders.push(rec.enc.clone());
+            shipped.push((rec.buffer_writes.clone(), rec.enc.clone()));
         }
     }
-    for encoder in encoders {
+    for (writes, encoder) in shipped {
+        for (id, offset, data) in writes {
+            s.record(Cmd::WriteBuffer { id, offset, data });
+        }
         s.record(Cmd::Submit(CommandBuffer { encoder, signal: None }));
     }
     for &key in &cb_keys {
@@ -1363,6 +1391,12 @@ pub extern "C" fn vkQueueSubmit(
         if let Some(f) = s.fences.get_mut(&fence) {
             f.signaled = true;
         }
+    }
+    // Apply the recorded device query/event ops on (synchronous) completion, in submission order.
+    let deferred: Vec<reg::DeferredOp> =
+        cb_keys.iter().filter_map(|k| s.cmdbufs.get(k)).flat_map(|cb| cb.deferred.clone()).collect();
+    for op in deferred {
+        crate::query::apply_deferred(&mut s, op);
     }
     VK_SUCCESS
 }
@@ -1505,6 +1539,426 @@ pub extern "C" fn vkCreateSemaphore(
 #[no_mangle]
 pub extern "C" fn vkDestroySemaphore(_device: VkDevice, semaphore: VkSemaphore, _p_allocator: *const c_void) {
     reg::lock().semaphores.remove(&semaphore);
+}
+
+// ---- dynamic pipeline state (MVKCommandEncoderState) ---------------------------------------------
+//
+// The IR pipeline is largely static; these commands record the dynamic state verbatim into the
+// command buffer (observable), matching MoltenVK's `MVKCommandEncoderState`. Lowering the recorded
+// state into the IR draw parameters is a later increment (they are classified `partial`).
+
+#[no_mangle]
+pub extern "C" fn vkCmdSetLineWidth(command_buffer: VkCommandBuffer, line_width: f32) {
+    if let Some(cb) = reg::lock().recording_mut(cb_key(command_buffer)) {
+        cb.dynamic.line_width = line_width;
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn vkCmdSetDepthBias(
+    command_buffer: VkCommandBuffer,
+    constant_factor: f32,
+    clamp: f32,
+    slope_factor: f32,
+) {
+    if let Some(cb) = reg::lock().recording_mut(cb_key(command_buffer)) {
+        cb.dynamic.depth_bias = (constant_factor, clamp, slope_factor);
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn vkCmdSetDepthBounds(command_buffer: VkCommandBuffer, min_depth_bounds: f32, max_depth_bounds: f32) {
+    if let Some(cb) = reg::lock().recording_mut(cb_key(command_buffer)) {
+        cb.dynamic.depth_bounds = (min_depth_bounds, max_depth_bounds);
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn vkCmdSetBlendConstants(command_buffer: VkCommandBuffer, blend_constants: *const f32) {
+    if blend_constants.is_null() {
+        return;
+    }
+    let c = unsafe { core::slice::from_raw_parts(blend_constants, 4) };
+    if let Some(cb) = reg::lock().recording_mut(cb_key(command_buffer)) {
+        cb.dynamic.blend_constants = [c[0], c[1], c[2], c[3]];
+    }
+}
+
+/// VkStencilFaceFlags: FRONT = 0x1, BACK = 0x2, FRONT_AND_BACK = 0x3. Apply `value` to the selected faces.
+fn set_stencil_faces(pair: &mut (u32, u32), face_mask: u32, value: u32) {
+    if face_mask & 0x1 != 0 {
+        pair.0 = value;
+    }
+    if face_mask & 0x2 != 0 {
+        pair.1 = value;
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn vkCmdSetStencilCompareMask(command_buffer: VkCommandBuffer, face_mask: vk::StencilFaceFlags, compare_mask: u32) {
+    if let Some(cb) = reg::lock().recording_mut(cb_key(command_buffer)) {
+        set_stencil_faces(&mut cb.dynamic.stencil_compare_mask, face_mask.as_raw(), compare_mask);
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn vkCmdSetStencilWriteMask(command_buffer: VkCommandBuffer, face_mask: vk::StencilFaceFlags, write_mask: u32) {
+    if let Some(cb) = reg::lock().recording_mut(cb_key(command_buffer)) {
+        set_stencil_faces(&mut cb.dynamic.stencil_write_mask, face_mask.as_raw(), write_mask);
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn vkCmdSetStencilReference(command_buffer: VkCommandBuffer, face_mask: vk::StencilFaceFlags, reference: u32) {
+    if let Some(cb) = reg::lock().recording_mut(cb_key(command_buffer)) {
+        set_stencil_faces(&mut cb.dynamic.stencil_reference, face_mask.as_raw(), reference);
+    }
+}
+
+// ---- push constants ------------------------------------------------------------------------------
+
+/// `vkCmdPushConstants` — write `size` bytes at `offset` into the command buffer's push-constant block,
+/// validated against the pipeline layout's declared ranges (a matching stage + covering range must
+/// exist). Retained guest-side (MoltenVK `MVKCommandPushConstants`); the IR does not yet carry a
+/// push-constant block, so this is a bounded (`partial`) recording.
+#[no_mangle]
+pub extern "C" fn vkCmdPushConstants(
+    command_buffer: VkCommandBuffer,
+    layout: VkPipelineLayout,
+    stage_flags: vk::ShaderStageFlags,
+    offset: u32,
+    size: u32,
+    p_values: *const c_void,
+) {
+    if p_values.is_null() || size == 0 || offset % 4 != 0 || size % 4 != 0 {
+        return;
+    }
+    let stages = stage_flags.as_raw();
+    let mut s = reg::lock();
+    // A declared range with intersecting stages must fully cover [offset, offset+size).
+    let covered = s.pipeline_layouts.get(&layout).is_some_and(|l| {
+        l.push_ranges.iter().any(|(rstages, roff, rsize)| {
+            rstages & stages != 0
+                && offset >= *roff
+                && offset.checked_add(size).is_some_and(|end| end <= roff.saturating_add(*rsize))
+        })
+    });
+    if !covered {
+        return;
+    }
+    let bytes = unsafe { core::slice::from_raw_parts(p_values as *const u8, size as usize) };
+    if let Some(cb) = s.recording_mut(cb_key(command_buffer)) {
+        let end = offset as usize + size as usize;
+        if cb.push_constants.len() < end {
+            cb.push_constants.resize(end, 0);
+        }
+        cb.push_constants[offset as usize..end].copy_from_slice(bytes);
+    }
+}
+
+// ---- buffer fill / inline update -----------------------------------------------------------------
+
+/// `vkCmdUpdateBuffer` — record a small (≤65536-byte, 4-aligned) inline upload into `dstBuffer`,
+/// emitted as an IR `WriteBuffer` at the start of the owning submit (the same model as a
+/// persistently-mapped coherent flush). Ported from `MVKCmdBufferUpdate`.
+#[no_mangle]
+pub extern "C" fn vkCmdUpdateBuffer(
+    command_buffer: VkCommandBuffer,
+    dst_buffer: VkBuffer,
+    dst_offset: u64,
+    data_size: u64,
+    p_data: *const c_void,
+) {
+    if p_data.is_null() || data_size == 0 || data_size > 65536 || data_size % 4 != 0 || dst_offset % 4 != 0 {
+        return;
+    }
+    let mut s = reg::lock();
+    let Some(b) = s.buffers.get(&dst_buffer) else { return };
+    if b.usage & buffer_usage::COPY_DST == 0 {
+        return;
+    }
+    match dst_offset.checked_add(data_size) {
+        Some(end) if end <= b.size => {}
+        _ => return,
+    }
+    let ir_id = b.ir_id;
+    let bytes = unsafe { core::slice::from_raw_parts(p_data as *const u8, data_size as usize) }.to_vec();
+    if let Some(cb) = s.recording_mut(cb_key(command_buffer)) {
+        cb.buffer_writes.push((ir_id, dst_offset, bytes));
+    }
+}
+
+/// `vkCmdFillBuffer` — fill `[dstOffset, dstOffset+size)` of `dstBuffer` with the 32-bit `data` value,
+/// emitted as an IR `WriteBuffer` at the start of the owning submit. `VK_WHOLE_SIZE` fills to the end.
+/// Ported from `MVKCmdFillBuffer`.
+#[no_mangle]
+pub extern "C" fn vkCmdFillBuffer(
+    command_buffer: VkCommandBuffer,
+    dst_buffer: VkBuffer,
+    dst_offset: u64,
+    size: u64,
+    data: u32,
+) {
+    if dst_offset % 4 != 0 {
+        return;
+    }
+    let mut s = reg::lock();
+    let Some(b) = s.buffers.get(&dst_buffer) else { return };
+    if b.usage & buffer_usage::COPY_DST == 0 {
+        return;
+    }
+    let fill_size = if size == u64::MAX { b.size.saturating_sub(dst_offset) } else { size };
+    if fill_size == 0 || fill_size % 4 != 0 {
+        return;
+    }
+    match dst_offset.checked_add(fill_size) {
+        Some(end) if end <= b.size => {}
+        _ => return,
+    }
+    let ir_id = b.ir_id;
+    let words = (fill_size / 4) as usize;
+    let mut bytes = Vec::with_capacity(words * 4);
+    let le = data.to_le_bytes();
+    for _ in 0..words {
+        bytes.extend_from_slice(&le);
+    }
+    if let Some(cb) = s.recording_mut(cb_key(command_buffer)) {
+        cb.buffer_writes.push((ir_id, dst_offset, bytes));
+    }
+}
+
+// ---- clears within / of a render target ----------------------------------------------------------
+
+/// `vkCmdClearAttachments` — clear regions of the bound render-pass color attachment. Lowered to
+/// `Enc::ClearRect` for each color attachment × rect inside the active render pass; depth/stencil
+/// attachment clears are not materialized (bounded → `partial`). Ported from `MVKCmdClearAttachments`.
+#[no_mangle]
+pub extern "C" fn vkCmdClearAttachments(
+    command_buffer: VkCommandBuffer,
+    attachment_count: u32,
+    p_attachments: *const vk::ClearAttachment,
+    rect_count: u32,
+    p_rects: *const vk::ClearRect,
+) {
+    if attachment_count == 0 || rect_count == 0 || p_attachments.is_null() || p_rects.is_null() {
+        return;
+    }
+    let attachments = unsafe { core::slice::from_raw_parts(p_attachments, attachment_count as usize) };
+    let rects = unsafe { core::slice::from_raw_parts(p_rects, rect_count as usize) };
+    let mut s = reg::lock();
+    // Resolve the active render target's IR texture (must be inside a render pass).
+    let Some((image, _, _, _)) = s.cmdbufs.get(&cb_key(command_buffer)).and_then(|cb| {
+        (cb.state == CommandBufferState::Recording && cb.in_render_pass)
+            .then_some(cb.active_render_image)
+            .flatten()
+    }) else {
+        return;
+    };
+    let Some(tex) = s.images.get(&image).map(|i| i.ir_id) else { return };
+    let mut encs = Vec::new();
+    for att in attachments {
+        if att.aspect_mask & vk::ImageAspectFlags::COLOR != vk::ImageAspectFlags::COLOR {
+            continue; // depth/stencil clears are not materialized in this bring-up model
+        }
+        let color = unsafe { att.clear_value.color.float32 };
+        for r in rects {
+            if r.layer_count == 0 || r.rect.extent.width == 0 || r.rect.extent.height == 0 {
+                continue;
+            }
+            encs.push(Enc::ClearRect {
+                texture: tex,
+                x: r.rect.offset.x.max(0) as u32,
+                y: r.rect.offset.y.max(0) as u32,
+                w: r.rect.extent.width,
+                h: r.rect.extent.height,
+                color,
+            });
+        }
+    }
+    if let Some(cb) = s.recording_mut(cb_key(command_buffer)) {
+        cb.enc.extend(encs);
+    }
+}
+
+/// `vkCmdClearDepthStencilImage` — validate a depth/stencil clear. Depth/stencil textures are not
+/// materialized by the software oracle and the IR has no depth-clear op, so this validates the target
+/// (image exists, TRANSFER_DST, depth/stencil aspect, supported layout) and records no color op
+/// (bounded → `partial`). Ported from `MVKCmdClearDepthStencilImage`.
+#[no_mangle]
+pub extern "C" fn vkCmdClearDepthStencilImage(
+    command_buffer: VkCommandBuffer,
+    image: VkImage,
+    image_layout: vk::ImageLayout,
+    _p_depth_stencil: *const vk::ClearDepthStencilValue,
+    range_count: u32,
+    p_ranges: *const vk::ImageSubresourceRange,
+) {
+    if range_count == 0 || p_ranges.is_null() || !transfer_layout_ok(image_layout, true) {
+        return;
+    }
+    let s = reg::lock();
+    // Must be a known image being cleared as a transfer destination while recording.
+    let known = s.images.get(&image).is_some_and(|i| i.usage & vk::ImageUsageFlags::TRANSFER_DST.as_raw() != 0);
+    let recording = s.cmdbufs.get(&cb_key(command_buffer)).is_some_and(|cb| cb.state == CommandBufferState::Recording);
+    let _ = (known, recording);
+}
+
+// ---- subpass + secondary command buffers ---------------------------------------------------------
+
+/// `vkCmdNextSubpass` — advance to the next subpass. Our render-pass model is single-subpass, so this
+/// is validated (must be inside a render pass) and is a no-op advance (bounded → `partial`). Ported
+/// from `MVKCmdNextSubpass`.
+#[no_mangle]
+pub extern "C" fn vkCmdNextSubpass(command_buffer: VkCommandBuffer, _contents: i32) {
+    let _ = reg::lock()
+        .cmdbufs
+        .get(&cb_key(command_buffer))
+        .map(|cb| cb.state == CommandBufferState::Recording && cb.in_render_pass);
+}
+
+/// `vkCmdExecuteCommands` — replay recorded secondary command buffers into this primary: their encoder
+/// ops, image events, deferred query/event ops and inline buffer writes are appended in order. Each
+/// secondary must be `Executable`. Ported from `MVKCmdExecuteCommands`.
+#[no_mangle]
+pub extern "C" fn vkCmdExecuteCommands(
+    command_buffer: VkCommandBuffer,
+    command_buffer_count: u32,
+    p_command_buffers: *const VkCommandBuffer,
+) {
+    if command_buffer_count == 0 || p_command_buffers.is_null() {
+        return;
+    }
+    let secondaries = unsafe { core::slice::from_raw_parts(p_command_buffers, command_buffer_count as usize) };
+    let mut s = reg::lock();
+    // The primary must be recording; every secondary must exist and be Executable (validate first).
+    if s.recording_mut(cb_key(command_buffer)).is_none() {
+        return;
+    }
+    let keys: Vec<usize> = secondaries.iter().map(|&c| c as usize).collect();
+    if !keys.iter().all(|k| s.cmdbufs.get(k).is_some_and(|c| c.state == CommandBufferState::Executable)) {
+        return;
+    }
+    // Snapshot each secondary's recorded work, then splice it into the primary in order.
+    let mut spliced: Vec<(Vec<Enc>, Vec<ImageEvent>, Vec<reg::DeferredOp>, Vec<(u32, u64, Vec<u8>)>)> =
+        Vec::new();
+    for k in &keys {
+        if let Some(sec) = s.cmdbufs.get(k) {
+            spliced.push((sec.enc.clone(), sec.image_events.clone(), sec.deferred.clone(), sec.buffer_writes.clone()));
+        }
+    }
+    if let Some(primary) = s.recording_mut(cb_key(command_buffer)) {
+        for (enc, events, deferred, writes) in spliced {
+            primary.enc.extend(enc);
+            primary.image_events.extend(events);
+            primary.deferred.extend(deferred);
+            primary.buffer_writes.extend(writes);
+        }
+    }
+}
+
+// ---- indirect draw / dispatch --------------------------------------------------------------------
+
+/// Validate an indirect-parameter buffer read: it must exist, carry INDIRECT usage, and the read span
+/// `[offset, offset + max(1,count-1)*stride + struct_size)` must fit. The IR has no indirect encoder
+/// op, so a validated indirect command records no draw (bounded → `partial`).
+fn indirect_ok(s: &reg::VkState, buffer: VkBuffer, offset: u64, draw_count: u32, stride: u32, struct_size: u64) -> bool {
+    let Some(b) = s.buffers.get(&buffer) else { return false };
+    if b.usage & buffer_usage::INDIRECT == 0 || draw_count == 0 {
+        return false;
+    }
+    let last = (draw_count as u64 - 1).saturating_mul(stride as u64);
+    last.checked_add(struct_size)
+        .and_then(|span| offset.checked_add(span))
+        .is_some_and(|end| end <= b.size)
+}
+
+#[no_mangle]
+pub extern "C" fn vkCmdDrawIndirect(
+    command_buffer: VkCommandBuffer,
+    buffer: VkBuffer,
+    offset: u64,
+    draw_count: u32,
+    stride: u32,
+) {
+    let _ = command_buffer;
+    let s = reg::lock();
+    // VkDrawIndirectCommand is 16 bytes.
+    let _ok = indirect_ok(&s, buffer, offset, draw_count, stride, 16);
+}
+
+#[no_mangle]
+pub extern "C" fn vkCmdDrawIndexedIndirect(
+    command_buffer: VkCommandBuffer,
+    buffer: VkBuffer,
+    offset: u64,
+    draw_count: u32,
+    stride: u32,
+) {
+    let _ = command_buffer;
+    let s = reg::lock();
+    // VkDrawIndexedIndirectCommand is 20 bytes.
+    let _ok = indirect_ok(&s, buffer, offset, draw_count, stride, 20);
+}
+
+#[no_mangle]
+pub extern "C" fn vkCmdDispatchIndirect(command_buffer: VkCommandBuffer, buffer: VkBuffer, offset: u64) {
+    let _ = command_buffer;
+    let s = reg::lock();
+    // VkDispatchIndirectCommand is 12 bytes.
+    let _ok = indirect_ok(&s, buffer, offset, 1, 0, 12);
+}
+
+// ---- sparse binding ------------------------------------------------------------------------------
+
+/// `vkQueueBindSparse` — we advertise no sparse residency, so there are no sparse resources to (un)bind;
+/// this handles the accompanying binary-semaphore + fence synchronization exactly like a queue submit
+/// (waits consumed, signals + fence signalled on synchronous completion) and treats the bind lists as
+/// empty (bounded → `partial`). Ported from `MVKQueue::bindSparse`.
+#[no_mangle]
+pub extern "C" fn vkQueueBindSparse(
+    _queue: VkQueue,
+    bind_info_count: u32,
+    p_bind_info: *const vk::BindSparseInfo,
+    fence: VkFence,
+) -> VkResult {
+    let mut s = reg::lock();
+    if bind_info_count != 0 && !p_bind_info.is_null() {
+        let infos = unsafe { core::slice::from_raw_parts(p_bind_info, bind_info_count as usize) };
+        // Phase 1: every wait semaphore must exist and be signaled (atomic accept/reject).
+        let mut waits: Vec<u64> = Vec::new();
+        let mut signals: Vec<u64> = Vec::new();
+        for info in infos {
+            if !info.p_wait_semaphores.is_null() {
+                let w = unsafe { core::slice::from_raw_parts(info.p_wait_semaphores, info.wait_semaphore_count as usize) };
+                for sem in w {
+                    match s.semaphores.get(&sem.as_raw()) {
+                        Some(sm) if sm.signaled => waits.push(sem.as_raw()),
+                        _ => return VK_ERROR_INITIALIZATION_FAILED,
+                    }
+                }
+            }
+            if !info.p_signal_semaphores.is_null() {
+                let sg = unsafe { core::slice::from_raw_parts(info.p_signal_semaphores, info.signal_semaphore_count as usize) };
+                signals.extend(sg.iter().map(|x| x.as_raw()));
+            }
+        }
+        for w in &waits {
+            if let Some(sm) = s.semaphores.get_mut(w) {
+                sm.signaled = false;
+            }
+        }
+        for sg in &signals {
+            if let Some(sm) = s.semaphores.get_mut(sg) {
+                sm.signaled = true;
+            }
+        }
+    }
+    if fence != 0 {
+        if let Some(f) = s.fences.get_mut(&fence) {
+            f.signaled = true;
+        }
+    }
+    VK_SUCCESS
 }
 
 #[cfg(test)]

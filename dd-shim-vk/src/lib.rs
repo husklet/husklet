@@ -42,12 +42,14 @@ pub mod capability;
 pub mod command;
 pub mod descriptor;
 pub mod device;
+pub mod event;
 pub mod handle;
 pub mod icd;
 pub mod instance;
 pub mod ir_seam;
 pub mod memory;
 pub mod pipeline;
+pub mod query;
 pub mod reg;
 pub mod state;
 pub mod stub;
@@ -60,10 +62,12 @@ pub mod wsi;
 pub use command::*;
 pub use descriptor::*;
 pub use device::*;
+pub use event::*;
 pub use icd::*;
 pub use instance::*;
 pub use memory::*;
 pub use pipeline::*;
+pub use query::*;
 pub use wsi::*;
 
 // The generated C-ABI export surface (every `vk*` entry point not in `IMPLEMENTED`) + the name→address
@@ -179,22 +183,23 @@ mod tests {
     /// stub call (`vkCreateSampler`, a core:1.0 command) and an unadvertised-extension stub.
     #[test]
     fn stub_returns_truthful_error_and_inits_output() {
-        // vkCreateSampler is a stub (not in IMPLEMENTED): must null pSampler and return FEATURE_NOT_PRESENT.
-        let mut sampler: u64 = 0xdead_beef; // poison; the stub must overwrite it with VK_NULL_HANDLE (0)
-        let r = vkCreateSampler(
+        // vkCreateSamplerYcbcrConversion is a still-unimplemented core:1.1 stub (the whole 1.0 core is
+        // now bodied): it must null its output handle and return FEATURE_NOT_PRESENT (unimplemented core).
+        let mut ycbcr: u64 = 0xdead_beef; // poison; the stub must overwrite it with VK_NULL_HANDLE (0)
+        let r = vkCreateSamplerYcbcrConversion(
             core::ptr::null_mut(),
             core::ptr::null(),
             core::ptr::null(),
-            &mut sampler as *mut u64 as *mut core::ffi::c_void,
+            &mut ycbcr as *mut u64 as *mut core::ffi::c_void,
         );
         assert_eq!(r, types::VK_ERROR_FEATURE_NOT_PRESENT, "core stub must fail, not succeed");
-        assert_eq!(sampler, 0, "stub must initialize the output handle to VK_NULL_HANDLE");
+        assert_eq!(ycbcr, 0, "stub must initialize the output handle to VK_NULL_HANDLE");
         // A command from an unadvertised extension reports EXTENSION_NOT_PRESENT.
         let r2 = vkBindBufferMemory2KHR(core::ptr::null_mut(), 0, core::ptr::null());
         assert_eq!(r2, types::VK_ERROR_EXTENSION_NOT_PRESENT);
         // And the inventory records exactly those errors for those commands.
         let rec = |n: &str| CAPABILITIES.iter().find(|e| e.name == n).unwrap();
-        assert_eq!(rec("vkCreateSampler").vk_error, types::VK_ERROR_FEATURE_NOT_PRESENT);
+        assert_eq!(rec("vkCreateSamplerYcbcrConversion").vk_error, types::VK_ERROR_FEATURE_NOT_PRESENT);
         assert_eq!(rec("vkBindBufferMemory2KHR").vk_error, types::VK_ERROR_EXTENSION_NOT_PRESENT);
     }
 
@@ -276,13 +281,14 @@ mod tests {
     fn strict_mode_trips_abort_on_stub() {
         stub::STRICT_TRIPPED.with(|c| c.set(false));
         std::env::set_var("DD_SHIM_STRICT", "1");
-        // Any generated stub call must trip the strict abort.
-        let mut ev: u64 = 0;
-        let _ = vkCreateEvent(
+        // Any generated stub call must trip the strict abort (vkCreateSamplerYcbcrConversion is a
+        // still-unimplemented core:1.1 stub — vkCreateEvent is now a real body).
+        let mut ycbcr: u64 = 0;
+        let _ = vkCreateSamplerYcbcrConversion(
             core::ptr::null_mut(),
             core::ptr::null(),
             core::ptr::null(),
-            &mut ev as *mut u64 as *mut core::ffi::c_void,
+            &mut ycbcr as *mut u64 as *mut core::ffi::c_void,
         );
         std::env::remove_var("DD_SHIM_STRICT");
         assert!(
@@ -302,17 +308,16 @@ mod tests {
         assert_eq!(core10.len(), CORE_1_0_TOTAL);
         assert_eq!(implemented, CORE_1_0_IMPLEMENTED);
         assert!(CORE_1_0_IMPLEMENTED <= CORE_1_0_TOTAL);
-        // The 1.0 core is genuinely a large mandatory set (not a hand-picked few) and is partially bodied
-        // — the census must not silently claim 0 or 100% while stubs remain.
+        // The 1.0 core is genuinely a large mandatory set (not a hand-picked few) and is now FULLY
+        // bodied: every mandatory core:1.0 command has a real (full or partial) implementation — zero
+        // generated stubs remain. This is the closed state of
+        // `vk_advertised_core_has_real_implementations_for_every_mandatory_command`.
         assert!(CORE_1_0_TOTAL >= 130, "Vulkan 1.0 core census too small: {CORE_1_0_TOTAL}");
-        assert!(CORE_1_0_IMPLEMENTED < CORE_1_0_TOTAL, "1.0 core still has stubs; must not claim complete");
-        // Every core:1.0 stub still fails truthfully (FEATURE_NOT_PRESENT, never success).
-        for e in core10.iter().filter(|e| e.cap == Cap::Stub) {
-            assert!(
-                e.vk_error == 0 || e.vk_error == types::VK_ERROR_FEATURE_NOT_PRESENT,
-                "{}: core:1.0 stub must fail truthfully",
-                e.name
-            );
-        }
+        assert_eq!(
+            CORE_1_0_IMPLEMENTED, CORE_1_0_TOTAL,
+            "every mandatory Vulkan 1.0 core command must have a real body (0 stubs)"
+        );
+        let core10_stubs = core10.iter().filter(|e| e.cap == Cap::Stub).count();
+        assert_eq!(core10_stubs, 0, "no mandatory core:1.0 command may remain a generated stub");
     }
 }

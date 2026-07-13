@@ -134,6 +134,25 @@ pub extern "C" fn vkDestroyDescriptorPool(
     s.dsets.retain(|_, d| d.pool != descriptor_pool);
 }
 
+/// `vkResetDescriptorPool` — free every set allocated from the pool and return its capacity, without
+/// destroying the pool (spec §14.2.3). Ported from `MVKDescriptorPool::reset`.
+#[no_mangle]
+pub extern "C" fn vkResetDescriptorPool(
+    _device: VkDevice,
+    descriptor_pool: VkDescriptorPool,
+    _flags: u32,
+) -> VkResult {
+    let mut s = reg::lock();
+    if !s.descriptor_pools.contains_key(&descriptor_pool) {
+        return VK_ERROR_INITIALIZATION_FAILED;
+    }
+    s.dsets.retain(|_, d| d.pool != descriptor_pool);
+    if let Some(p) = s.descriptor_pools.get_mut(&descriptor_pool) {
+        p.allocated = 0;
+    }
+    VK_SUCCESS
+}
+
 // ---- descriptor sets -----------------------------------------------------------------------------
 
 #[no_mangle]

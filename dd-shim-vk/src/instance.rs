@@ -367,6 +367,79 @@ pub extern "C" fn vkEnumerateDeviceLayerProperties(
     unsafe { write_enumeration::<vk::LayerProperties>(&[], p_count, p_props) }
 }
 
+/// A color format the render/transfer path materializes (matches `crate::memory::vkCreateImage`).
+fn image_format_supported(format: vk::Format) -> bool {
+    matches!(
+        format,
+        vk::Format::R8G8B8A8_UNORM
+            | vk::Format::R8G8B8A8_SRGB
+            | vk::Format::B8G8R8A8_UNORM
+            | vk::Format::B8G8R8A8_SRGB
+    )
+}
+
+/// `vkGetPhysicalDeviceImageFormatProperties` — the creation limits for a `(format, type, tiling,
+/// usage, flags)` combination, or `VK_ERROR_FORMAT_NOT_SUPPORTED` when the combination is not
+/// creatable (spec §12.3). Reports the supported 2D color subset with the device limits; anything else
+/// (3D, unsupported format, cube/alias flags) is truthfully unsupported. Ported from
+/// `MVKPhysicalDevice::getImageFormatProperties`.
+#[no_mangle]
+pub extern "C" fn vkGetPhysicalDeviceImageFormatProperties(
+    _physical_device: VkPhysicalDevice,
+    format: vk::Format,
+    image_type: vk::ImageType,
+    tiling: vk::ImageTiling,
+    _usage: vk::ImageUsageFlags,
+    _flags: vk::ImageCreateFlags,
+    p_image_format_properties: *mut vk::ImageFormatProperties,
+) -> VkResult {
+    // VK_ERROR_FORMAT_NOT_SUPPORTED = -11.
+    const VK_ERROR_FORMAT_NOT_SUPPORTED: VkResult = -11;
+    let Some(out) = (unsafe { p_image_format_properties.as_mut() }) else {
+        return VK_ERROR_INITIALIZATION_FAILED;
+    };
+    if !image_format_supported(format)
+        || image_type != vk::ImageType::TYPE_2D
+        || tiling != vk::ImageTiling::OPTIMAL
+    {
+        return VK_ERROR_FORMAT_NOT_SUPPORTED;
+    }
+    let limits = state::physical_device_properties().limits;
+    *out = vk::ImageFormatProperties {
+        max_extent: vk::Extent3D {
+            width: limits.max_image_dimension2_d,
+            height: limits.max_image_dimension2_d,
+            depth: 1,
+        },
+        max_mip_levels: 1 + (limits.max_image_dimension2_d as f32).log2() as u32,
+        max_array_layers: limits.max_image_array_layers,
+        // Single- and 4x-multisample color (the resolve path materializes 4x).
+        sample_counts: vk::SampleCountFlags::TYPE_1 | vk::SampleCountFlags::TYPE_4,
+        max_resource_size: 1u64 << 31,
+    };
+    VK_SUCCESS
+}
+
+/// `vkGetPhysicalDeviceSparseImageFormatProperties` — we advertise no sparse residency, so no format
+/// has sparse properties: report a count of zero (spec-valid). Ported from the no-sparse path in
+/// `MVKPhysicalDevice::getSparseImageFormatProperties`.
+#[no_mangle]
+#[allow(clippy::too_many_arguments)]
+pub extern "C" fn vkGetPhysicalDeviceSparseImageFormatProperties(
+    _physical_device: VkPhysicalDevice,
+    _format: vk::Format,
+    _image_type: vk::ImageType,
+    _samples: vk::SampleCountFlags,
+    _usage: vk::ImageUsageFlags,
+    _tiling: vk::ImageTiling,
+    p_property_count: *mut u32,
+    _p_properties: *mut c_void,
+) {
+    if let Some(count) = unsafe { p_property_count.as_mut() } {
+        *count = 0;
+    }
+}
+
 // Silence an unused-type lint if these aliases aren't otherwise named.
 const _: Option<&Device> = None;
 const _: Option<&Queue> = None;

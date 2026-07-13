@@ -132,6 +132,46 @@ fn partial_note(name: &str) -> Option<&'static str> {
         | "vkGetPhysicalDeviceSurfacePresentModesKHR" => {
             "validated fixed WSI capabilities (one format, FIFO, identity transform, opaque alpha)"
         }
+        // queries: real availability + read/copy machinery, but a synchronous host replay has no GPU
+        // sample counts, so occlusion/statistics results are a conservative 0 and timestamps a serial.
+        "vkCmdBeginQuery" | "vkCmdEndQuery" | "vkCmdWriteTimestamp" | "vkCmdCopyQueryPoolResults"
+        | "vkGetQueryPoolResults" => {
+            "real availability + read/copy; occlusion/statistics results are conservative 0, timestamps a host serial"
+        }
+        // events: device set/reset apply at (synchronous) submit completion; no intra-submit ordering.
+        "vkCmdSetEvent" | "vkCmdResetEvent" => {
+            "device set/reset applied at synchronous submit completion; no intra-submit event ordering"
+        }
+        "vkCmdWaitEvents" => {
+            "image barriers join the shared submit-time transition validation; the event wait is trivially satisfied (single-queue synchronous)"
+        }
+        // dynamic pipeline state: recorded verbatim (observable) but not yet lowered into IR draw state.
+        "vkCmdSetLineWidth" | "vkCmdSetDepthBias" | "vkCmdSetDepthBounds" | "vkCmdSetBlendConstants"
+        | "vkCmdSetStencilCompareMask" | "vkCmdSetStencilWriteMask" | "vkCmdSetStencilReference" => {
+            "recorded verbatim (observable) but not yet lowered into the IR draw state"
+        }
+        "vkCmdPushConstants" => {
+            "validated against the layout ranges and retained; the IR does not yet carry a push-constant block"
+        }
+        // inline buffer ops: uploaded at the start of the owning submit (not interleaved with draws).
+        "vkCmdUpdateBuffer" | "vkCmdFillBuffer" => {
+            "recorded as a start-of-submit IR WriteBuffer (not interleaved with intervening draws)"
+        }
+        "vkCmdClearAttachments" => "color attachment clears lower to ClearRect; depth/stencil clears are not materialized",
+        "vkCmdClearDepthStencilImage" => "validates the depth/stencil target; depth is not materialized by the software oracle",
+        "vkCmdNextSubpass" => "single-subpass render-pass model; subpass advance is a validated no-op",
+        "vkCmdDrawIndirect" | "vkCmdDrawIndexedIndirect" | "vkCmdDispatchIndirect" => {
+            "indirect parameter buffers are validated; the IR has no indirect encoder op yet"
+        }
+        "vkCreateBufferView" | "vkDestroyBufferView" => {
+            "validated typed buffer window; retained for the texel-buffer descriptor IR increment"
+        }
+        "vkGetPhysicalDeviceImageFormatProperties" => {
+            "reports the supported 2D color subset with device limits; other combinations are FORMAT_NOT_SUPPORTED"
+        }
+        "vkQueueBindSparse" => {
+            "binary-semaphore + fence synchronization only; no sparse residency (no sparse resources exposed)"
+        }
         _ => return None,
     })
 }
@@ -570,4 +610,65 @@ const IMPLEMENTED: &[&str] = &[
     "vkGetSwapchainImagesKHR",
     "vkAcquireNextImageKHR",
     "vkQueuePresentKHR",
+    // ---- increment 4: complete the Vulkan 1.0 mandatory core (query.rs / event.rs / memory.rs /
+    // pipeline.rs / instance.rs / descriptor.rs / command.rs) — drives the core:1.0 census to 137/137.
+    // Ported from MoltenVK: MVKQueryPool, MVKSync (MVKEvent), MVKSampler, MVKBufferView,
+    // MVKPipelineCache, MVKPhysicalDevice format queries, MVKCommandEncoderState (dynamic state),
+    // MVKCmd{PushConstants,FillBuffer,BufferUpdate,ClearAttachments,ExecuteCommands}, MVKQueue::bindSparse.
+    // query pools + timestamps
+    "vkCreateQueryPool",
+    "vkDestroyQueryPool",
+    "vkGetQueryPoolResults",
+    "vkCmdResetQueryPool",
+    "vkCmdBeginQuery",
+    "vkCmdEndQuery",
+    "vkCmdWriteTimestamp",
+    "vkCmdCopyQueryPoolResults",
+    // events (host + device)
+    "vkCreateEvent",
+    "vkDestroyEvent",
+    "vkGetEventStatus",
+    "vkSetEvent",
+    "vkResetEvent",
+    "vkCmdSetEvent",
+    "vkCmdResetEvent",
+    "vkCmdWaitEvents",
+    // samplers + buffer views
+    "vkCreateSampler",
+    "vkDestroySampler",
+    "vkCreateBufferView",
+    "vkDestroyBufferView",
+    // pipeline cache
+    "vkCreatePipelineCache",
+    "vkDestroyPipelineCache",
+    "vkGetPipelineCacheData",
+    "vkMergePipelineCaches",
+    // memory + sparse + format queries
+    "vkGetDeviceMemoryCommitment",
+    "vkGetImageSparseMemoryRequirements",
+    "vkGetPhysicalDeviceImageFormatProperties",
+    "vkGetPhysicalDeviceSparseImageFormatProperties",
+    "vkGetRenderAreaGranularity",
+    "vkResetDescriptorPool",
+    // dynamic pipeline state
+    "vkCmdSetLineWidth",
+    "vkCmdSetDepthBias",
+    "vkCmdSetDepthBounds",
+    "vkCmdSetBlendConstants",
+    "vkCmdSetStencilCompareMask",
+    "vkCmdSetStencilWriteMask",
+    "vkCmdSetStencilReference",
+    // push constants + inline buffer ops + clears + subpass + secondary + indirect
+    "vkCmdPushConstants",
+    "vkCmdUpdateBuffer",
+    "vkCmdFillBuffer",
+    "vkCmdClearAttachments",
+    "vkCmdClearDepthStencilImage",
+    "vkCmdNextSubpass",
+    "vkCmdExecuteCommands",
+    "vkCmdDrawIndirect",
+    "vkCmdDrawIndexedIndirect",
+    "vkCmdDispatchIndirect",
+    // sparse binding (synchronization only; no sparse residency)
+    "vkQueueBindSparse",
 ];

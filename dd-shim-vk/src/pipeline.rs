@@ -773,6 +773,148 @@ pub extern "C" fn vkDestroyFramebuffer(_device: VkDevice, framebuffer: VkFramebu
     reg::lock().framebuffers.remove(&framebuffer);
 }
 
+// ---- render area granularity ---------------------------------------------------------------------
+
+/// `vkGetRenderAreaGranularity` — the optimal render-area alignment for a render pass. Our render
+/// targets impose no tile alignment (a texel-granular color target), so the granularity is `(1, 1)`,
+/// which is always spec-valid (any render area is a multiple of 1). Ported from
+/// `MVKRenderPass::getRenderAreaGranularity` (MoltenVK reports `{1,1}` for the non-tiled path).
+#[no_mangle]
+pub extern "C" fn vkGetRenderAreaGranularity(
+    _device: VkDevice,
+    _render_pass: VkRenderPass,
+    p_granularity: *mut vk::Extent2D,
+) {
+    if let Some(out) = unsafe { p_granularity.as_mut() } {
+        *out = vk::Extent2D { width: 1, height: 1 };
+    }
+}
+
+// ---- pipeline cache ------------------------------------------------------------------------------
+
+/// The 32-byte `VkPipelineCacheHeaderVersionOne` header (spec §10.3). A valid, round-trippable header
+/// so `vkGetPipelineCacheData` returns something a loader/app accepts and can re-feed to
+/// `vkCreatePipelineCache`. Ported from `MVKPipelineCache::writeData` header layout.
+fn pipeline_cache_header() -> Vec<u8> {
+    let mut h = Vec::with_capacity(32);
+    h.extend_from_slice(&32u32.to_le_bytes()); // headerSize
+    h.extend_from_slice(&1u32.to_le_bytes()); // headerVersion = ONE
+    h.extend_from_slice(&crate::state::APPLE_VENDOR_ID.to_le_bytes()); // vendorID
+    h.extend_from_slice(&0xdd_00_0001u32.to_le_bytes()); // deviceID (matches physical_device_properties)
+    h.extend_from_slice(b"ddMetalVulkan\0\0\0"); // pipelineCacheUUID[16]
+    h.truncate(32);
+    while h.len() < 32 {
+        h.push(0);
+    }
+    h
+}
+
+/// `vkCreatePipelineCache` — an opaque serializable cache. We seed it with the spec header plus any
+/// `pInitialData` the app supplies (round-tripped from a previous `vkGetPipelineCacheData`). Ported
+/// from `MVKPipelineCache` (`MVKPipeline.mm`).
+#[no_mangle]
+pub extern "C" fn vkCreatePipelineCache(
+    _device: VkDevice,
+    p_create_info: *const vk::PipelineCacheCreateInfo,
+    _p_allocator: *const c_void,
+    p_pipeline_cache: *mut VkPipelineCache,
+) -> VkResult {
+    let Some(out) = (unsafe { p_pipeline_cache.as_mut() }) else {
+        return VK_ERROR_INITIALIZATION_FAILED;
+    };
+    let mut data = pipeline_cache_header();
+    if let Some(ci) = unsafe { p_create_info.as_ref() } {
+        if ci.initial_data_size > 0 && !ci.p_initial_data.is_null() {
+            let init = unsafe {
+                core::slice::from_raw_parts(ci.p_initial_data as *const u8, ci.initial_data_size)
+            };
+            // Retain the app's serialized payload beyond our header (opaque to us; observable on read-back).
+            if init.len() > 32 {
+                data.extend_from_slice(&init[32..]);
+            }
+        }
+    }
+    let mut s = reg::lock();
+    let handle = s.alloc_handle();
+    s.pipeline_caches.insert(handle, reg::PipelineCacheRec { data });
+    *out = handle;
+    VK_SUCCESS
+}
+
+#[no_mangle]
+pub extern "C" fn vkDestroyPipelineCache(
+    _device: VkDevice,
+    pipeline_cache: VkPipelineCache,
+    _p_allocator: *const c_void,
+) {
+    reg::lock().pipeline_caches.remove(&pipeline_cache);
+}
+
+/// `vkGetPipelineCacheData` — the two-call `(pDataSize, pData)` idiom (spec §10.3): report the size, or
+/// copy up to `*pDataSize` bytes and return `VK_INCOMPLETE` if the buffer was too small.
+#[no_mangle]
+pub extern "C" fn vkGetPipelineCacheData(
+    _device: VkDevice,
+    pipeline_cache: VkPipelineCache,
+    p_data_size: *mut usize,
+    p_data: *mut c_void,
+) -> VkResult {
+    let Some(size_out) = (unsafe { p_data_size.as_mut() }) else {
+        return VK_ERROR_INITIALIZATION_FAILED;
+    };
+    let s = reg::lock();
+    let Some(cache) = s.pipeline_caches.get(&pipeline_cache) else {
+        return VK_ERROR_INITIALIZATION_FAILED;
+    };
+    if p_data.is_null() {
+        *size_out = cache.data.len();
+        return VK_SUCCESS;
+    }
+    let n = (*size_out).min(cache.data.len());
+    unsafe { core::ptr::copy_nonoverlapping(cache.data.as_ptr(), p_data as *mut u8, n) };
+    *size_out = n;
+    if n < cache.data.len() {
+        VK_INCOMPLETE
+    } else {
+        VK_SUCCESS
+    }
+}
+
+/// `vkMergePipelineCaches` — merge the source caches into `dstCache`. We append each source's payload
+/// (beyond the shared header) so the merge is observable through a subsequent `vkGetPipelineCacheData`.
+/// Ported from `MVKPipelineCache::mergePipelineCaches`.
+#[no_mangle]
+pub extern "C" fn vkMergePipelineCaches(
+    _device: VkDevice,
+    dst_cache: VkPipelineCache,
+    src_cache_count: u32,
+    p_src_caches: *const VkPipelineCache,
+) -> VkResult {
+    if p_src_caches.is_null() {
+        return VK_SUCCESS;
+    }
+    let srcs = unsafe { core::slice::from_raw_parts(p_src_caches, src_cache_count as usize) };
+    let mut s = reg::lock();
+    if !s.pipeline_caches.contains_key(&dst_cache) {
+        return VK_ERROR_INITIALIZATION_FAILED;
+    }
+    let mut appended: Vec<u8> = Vec::new();
+    for &src in srcs {
+        if src == dst_cache {
+            continue;
+        }
+        if let Some(c) = s.pipeline_caches.get(&src) {
+            if c.data.len() > 32 {
+                appended.extend_from_slice(&c.data[32..]);
+            }
+        }
+    }
+    if let Some(dst) = s.pipeline_caches.get_mut(&dst_cache) {
+        dst.data.extend_from_slice(&appended);
+    }
+    VK_SUCCESS
+}
+
 #[cfg(test)]
 mod shader_validation_tests {
     use super::*;

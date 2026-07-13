@@ -32,6 +32,10 @@ pub type VkDescriptorSet = u64;
 pub type VkFence = u64;
 pub type VkSemaphore = u64;
 pub type VkSampler = u64;
+pub type VkEvent = u64;
+pub type VkQueryPool = u64;
+pub type VkBufferView = u64;
+pub type VkPipelineCache = u64;
 
 // ---- scalars -------------------------------------------------------------------------------------
 pub type VkResult = i32;

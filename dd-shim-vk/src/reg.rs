@@ -333,6 +333,54 @@ pub struct CmdBufRec {
     pub pipeline_set_in_pass: bool,
     pub image_events: Vec<ImageEvent>,
     pub active_render_image: Option<(u64, ImageSubresourceRange, i32, i32)>,
+    /// Device query/event ops (`vkCmdBeginQuery`/`EndQuery`/`ResetQueryPool`/`WriteTimestamp`,
+    /// `vkCmdSetEvent`/`ResetEvent`) applied to the global state at submit completion (synchronous replay).
+    pub deferred: Vec<DeferredOp>,
+    /// `vkCmdUpdateBuffer` / `vkCmdFillBuffer` payloads, emitted as `Cmd::WriteBuffer` immediately before
+    /// this command buffer's `Cmd::Submit` (the same start-of-submit upload model as persistently-mapped
+    /// coherent memory): `(ir buffer id, dst offset, bytes)`.
+    pub buffer_writes: Vec<(u32, u64, Vec<u8>)>,
+    /// The active occlusion/pipeline-statistics query `(pool, query)` opened by `vkCmdBeginQuery`, if any
+    /// (a command buffer may have at most one active query of a given type at a time — spec §17.4).
+    pub active_query: Option<(u64, u32)>,
+    /// Recorded dynamic pipeline state (`vkCmdSetLineWidth`/`SetDepthBias`/… — MoltenVK's
+    /// `MVKCommandEncoderState`). Observable guest-side; the IR draw state does not yet consume it.
+    pub dynamic: DynamicState,
+    /// Recorded push-constant bytes (`vkCmdPushConstants`), written at each range's offset. Retained
+    /// (validated against the pipeline layout ranges); the IR does not yet carry a push-constant block.
+    pub push_constants: Vec<u8>,
+}
+
+/// The subset of dynamic pipeline state the `vkCmdSet*` commands record (MoltenVK `MVKCommandEncoderState`).
+/// Captured verbatim so recording is observable; lowering into the IR draw state is a later increment.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct DynamicState {
+    pub line_width: f32,
+    /// `(constantFactor, clamp, slopeFactor)`.
+    pub depth_bias: (f32, f32, f32),
+    /// `(minDepthBounds, maxDepthBounds)`.
+    pub depth_bounds: (f32, f32),
+    pub blend_constants: [f32; 4],
+    /// `(front, back)` stencil compare masks.
+    pub stencil_compare_mask: (u32, u32),
+    /// `(front, back)` stencil write masks.
+    pub stencil_write_mask: (u32, u32),
+    /// `(front, back)` stencil reference values.
+    pub stencil_reference: (u32, u32),
+}
+
+impl Default for DynamicState {
+    fn default() -> Self {
+        DynamicState {
+            line_width: 1.0,
+            depth_bias: (0.0, 0.0, 0.0),
+            depth_bounds: (0.0, 1.0),
+            blend_constants: [0.0; 4],
+            stencil_compare_mask: (u32::MAX, u32::MAX),
+            stencil_write_mask: (u32::MAX, u32::MAX),
+            stencil_reference: (0, 0),
+        }
+    }
 }
 
 impl CmdBufRec {
@@ -352,6 +400,11 @@ impl CmdBufRec {
         self.pipeline_set_in_pass = false;
         self.image_events.clear();
         self.active_render_image = None;
+        self.deferred.clear();
+        self.buffer_writes.clear();
+        self.active_query = None;
+        self.dynamic = DynamicState::default();
+        self.push_constants.clear();
     }
 }
 
@@ -370,6 +423,84 @@ pub struct FenceRec {
 #[derive(Default)]
 pub struct SemaphoreRec {
     pub signaled: bool,
+}
+
+/// A `VkEvent` (MoltenVK `MVKEvent`): a guest-side boolean the host and device set/reset/poll. Created
+/// unsignaled. Host ops (`vkSetEvent`/`vkResetEvent`/`vkGetEventStatus`) mutate/read it directly;
+/// device ops (`vkCmdSetEvent`/`vkCmdResetEvent`) are recorded and applied at submit completion (our
+/// host replay is synchronous, so a device-set event is observably signaled once the submit returns).
+#[derive(Default)]
+pub struct EventRec {
+    pub signaled: bool,
+}
+
+/// A `VkSampler` (MoltenVK `MVKSampler`): lowered to a dd-gpu IR sampler (`Cmd::CreateSampler`). The
+/// filter/address state is translated at creation; the handle carries the IR id for descriptor lowering.
+pub struct SamplerRec {
+    pub ir_id: u32,
+}
+
+/// A `VkBufferView` (MoltenVK `MVKBufferView`): a typed window `[offset, offset+range)` onto a buffer,
+/// used by texel-buffer descriptors. Retained (validated) for the texel-descriptor IR increment.
+#[derive(Clone, Copy)]
+pub struct BufferViewRec {
+    pub buffer: u64,
+    pub format: i32,
+    pub offset: u64,
+    pub range: u64,
+}
+
+/// One `[first, first+count)` result slot of a query. `available` gates `vkGetQueryPoolResults`
+/// (unavailable → `VK_NOT_READY` unless `WAIT`); `value` is the (bounded) synchronous result.
+#[derive(Clone, Copy, Default)]
+pub struct QueryResult {
+    pub available: bool,
+    pub value: u64,
+}
+
+/// A `VkQueryPool` (MoltenVK `MVKQueryPool` / `MVKTimestampQueryPool` / `MVKOcclusionQueryPool`): a
+/// fixed array of typed query slots. Occlusion/pipeline-statistics results are a bounded synchronous
+/// model (no real GPU sample counts); timestamps are a host-monotonic serial.
+pub struct QueryPoolRec {
+    pub query_type: i32, // VkQueryType: 0 = OCCLUSION, 1 = PIPELINE_STATISTICS, 2 = TIMESTAMP
+    pub count: u32,
+    pub results: Vec<QueryResult>,
+}
+
+/// A `VkPipelineCache` (MoltenVK `MVKPipelineCache`): an opaque serializable blob. We model it as an
+/// owned byte buffer with the spec-defined `VkPipelineCacheHeaderVersionOne` header so
+/// `vkGetPipelineCacheData` round-trips and `vkMergePipelineCaches` is observable.
+#[derive(Default)]
+pub struct PipelineCacheRec {
+    pub data: Vec<u8>,
+}
+
+/// A device-side query/event/buffer-write op recorded into a command buffer and applied at
+/// `vkQueueSubmit` completion (our host replay is synchronous). Kept out of the `Vec<Enc>` encoder so
+/// the shipped `Cmd::Submit` byte stream for an existing draw/dispatch input is unchanged.
+#[derive(Clone, Debug)]
+pub enum DeferredOp {
+    /// `vkCmdResetQueryPool` — clear `[first, first+count)` to unavailable/zero.
+    QueryReset { pool: u64, first: u32, count: u32 },
+    /// `vkCmdEndQuery` (occlusion / pipeline-statistics) — mark the slot available with a bounded value.
+    QueryEnd { pool: u64, query: u32, value: u64 },
+    /// `vkCmdWriteTimestamp` — mark the slot available with a host-monotonic timestamp serial.
+    QueryTimestamp { pool: u64, query: u32 },
+    /// `vkCmdSetEvent` / `vkCmdResetEvent` — set/clear an event on completion.
+    Event { event: u64, set: bool },
+    /// `vkCmdCopyQueryPoolResults` — on completion write the pool's `[first, first+count)` results into
+    /// the destination buffer (IR `WriteBuffer`) with the requested element size, stride and flags.
+    CopyResults {
+        pool: u64,
+        first: u32,
+        count: u32,
+        dst_ir: u32,
+        dst_offset: u64,
+        dst_size: u64,
+        stride: u64,
+        wide: bool,        // VK_QUERY_RESULT_64_BIT
+        with_availability: bool, // VK_QUERY_RESULT_WITH_AVAILABILITY_BIT
+    },
 }
 
 // ---- the global state ----------------------------------------------------------------------------
@@ -394,6 +525,11 @@ pub struct VkState {
     pub cmdbufs: HashMap<usize, CmdBufRec>,
     pub fences: HashMap<u64, FenceRec>, // fence handle -> guest-side fence state
     pub semaphores: HashMap<u64, SemaphoreRec>, // binary semaphore handle -> signaled state
+    pub events: HashMap<u64, EventRec>, // event handle -> guest-side signaled state
+    pub samplers: HashMap<u64, SamplerRec>, // sampler handle -> IR sampler id
+    pub buffer_views: HashMap<u64, BufferViewRec>, // buffer-view handle -> typed buffer window
+    pub query_pools: HashMap<u64, QueryPoolRec>, // query-pool handle -> typed slot array
+    pub pipeline_caches: HashMap<u64, PipelineCacheRec>, // pipeline-cache handle -> serialized blob
     pub surfaces: HashMap<u64, SurfaceRec>,
     pub swapchains: HashMap<u64, SwapchainRec>,
     /// Lazily-opened host GPU-exec channel (only when `$DD_GPU_EXEC` is set — the live guest path).

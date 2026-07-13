@@ -595,3 +595,140 @@ pub extern "C" fn vkCreateImageView(
 pub extern "C" fn vkDestroyImageView(_device: VkDevice, view: VkImageView, _p_allocator: *const c_void) {
     reg::lock().image_views.remove(&view);
 }
+
+// ---- samplers ------------------------------------------------------------------------------------
+
+/// VkFilter → dd-gpu IR `Filter` (NEAREST=0, LINEAR=1).
+fn ir_filter(f: vk::Filter) -> dd_shim_common::ir::Filter {
+    use dd_shim_common::ir::Filter;
+    if f == vk::Filter::LINEAR { Filter::Linear } else { Filter::Nearest }
+}
+/// VkSamplerMipmapMode → dd-gpu IR `Filter`.
+fn ir_mip_filter(m: vk::SamplerMipmapMode) -> dd_shim_common::ir::Filter {
+    use dd_shim_common::ir::Filter;
+    if m == vk::SamplerMipmapMode::LINEAR { Filter::Linear } else { Filter::Nearest }
+}
+/// VkSamplerAddressMode → dd-gpu IR `AddressMode` (the three modes the IR carries; CLAMP_TO_BORDER and
+/// MIRROR_CLAMP_TO_EDGE fold to their nearest supported neighbour — a bounded translation).
+fn ir_address(a: vk::SamplerAddressMode) -> dd_shim_common::ir::AddressMode {
+    use dd_shim_common::ir::AddressMode;
+    match a {
+        vk::SamplerAddressMode::REPEAT => AddressMode::Repeat,
+        vk::SamplerAddressMode::MIRRORED_REPEAT | vk::SamplerAddressMode::MIRROR_CLAMP_TO_EDGE => {
+            AddressMode::MirrorRepeat
+        }
+        _ => AddressMode::ClampToEdge, // CLAMP_TO_EDGE, CLAMP_TO_BORDER
+    }
+}
+
+/// `vkCreateSampler` — translate the filter/address state into a dd-gpu IR sampler (`Cmd::CreateSampler`).
+/// Ported from `MVKSampler` (`MVKImage.mm`), which builds an `MTLSamplerDescriptor` from the same fields.
+#[no_mangle]
+pub extern "C" fn vkCreateSampler(
+    _device: VkDevice,
+    p_create_info: *const vk::SamplerCreateInfo,
+    _p_allocator: *const c_void,
+    p_sampler: *mut VkSampler,
+) -> VkResult {
+    let (Some(ci), Some(out)) = (unsafe { p_create_info.as_ref() }, unsafe { p_sampler.as_mut() })
+    else {
+        return VK_ERROR_INITIALIZATION_FAILED;
+    };
+    let desc = dd_shim_common::ir::SamplerDesc {
+        min_filter: ir_filter(ci.min_filter),
+        mag_filter: ir_filter(ci.mag_filter),
+        mip_filter: ir_mip_filter(ci.mipmap_mode),
+        address_u: ir_address(ci.address_mode_u),
+        address_v: ir_address(ci.address_mode_v),
+        address_w: ir_address(ci.address_mode_w),
+    };
+    let mut s = reg::lock();
+    let ir_id = s.alloc_ir();
+    let handle = s.alloc_handle();
+    s.record(dd_shim_common::ir::Cmd::CreateSampler(ir_id, desc));
+    s.samplers.insert(handle, reg::SamplerRec { ir_id });
+    *out = handle;
+    VK_SUCCESS
+}
+
+#[no_mangle]
+pub extern "C" fn vkDestroySampler(_device: VkDevice, sampler: VkSampler, _p_allocator: *const c_void) {
+    let mut s = reg::lock();
+    if let Some(rec) = s.samplers.remove(&sampler) {
+        s.record(dd_shim_common::ir::Cmd::DestroySampler(rec.ir_id));
+    }
+}
+
+// ---- buffer views (typed texel-buffer windows) ---------------------------------------------------
+
+/// `vkCreateBufferView` — a typed window `[offset, offset+range)` onto a buffer (MoltenVK `MVKBufferView`).
+/// Validated (buffer exists, range fits, non-empty) and retained for the texel-buffer descriptor IR
+/// increment. `VK_WHOLE_SIZE` maps from `offset` to the end of the buffer.
+#[no_mangle]
+pub extern "C" fn vkCreateBufferView(
+    _device: VkDevice,
+    p_create_info: *const vk::BufferViewCreateInfo,
+    _p_allocator: *const c_void,
+    p_view: *mut VkBufferView,
+) -> VkResult {
+    let (Some(ci), Some(out)) = (unsafe { p_create_info.as_ref() }, unsafe { p_view.as_mut() })
+    else {
+        return VK_ERROR_INITIALIZATION_FAILED;
+    };
+    let mut s = reg::lock();
+    let buffer = ci.buffer.as_raw();
+    let Some(b) = s.buffers.get(&buffer) else {
+        return VK_ERROR_INITIALIZATION_FAILED;
+    };
+    let range = if ci.range == VK_WHOLE_SIZE {
+        b.size.saturating_sub(ci.offset)
+    } else {
+        ci.range
+    };
+    if range == 0 || ci.offset.checked_add(range).is_none_or(|end| end > b.size) {
+        return VK_ERROR_INITIALIZATION_FAILED;
+    }
+    let handle = s.alloc_handle();
+    s.buffer_views.insert(
+        handle,
+        reg::BufferViewRec { buffer, format: ci.format.as_raw(), offset: ci.offset, range },
+    );
+    *out = handle;
+    VK_SUCCESS
+}
+
+#[no_mangle]
+pub extern "C" fn vkDestroyBufferView(_device: VkDevice, view: VkBufferView, _p_allocator: *const c_void) {
+    reg::lock().buffer_views.remove(&view);
+}
+
+// ---- memory queries ------------------------------------------------------------------------------
+
+/// `vkGetDeviceMemoryCommitment` — bytes currently committed for a `LAZILY_ALLOCATED` allocation. We
+/// expose no lazily-allocated memory type, so every allocation is fully resident: report its whole size.
+#[no_mangle]
+pub extern "C" fn vkGetDeviceMemoryCommitment(
+    _device: VkDevice,
+    memory: VkDeviceMemory,
+    p_committed_memory_in_bytes: *mut u64,
+) {
+    let committed = reg::lock().memories.get(&memory).map(|m| m.size).unwrap_or(0);
+    if let Some(out) = unsafe { p_committed_memory_in_bytes.as_mut() } {
+        *out = committed;
+    }
+}
+
+/// `vkGetImageSparseMemoryRequirements` — we do not support sparse residency, so an image has no sparse
+/// memory requirements: report a count of zero (spec-valid for a non-sparse image). Ported from the
+/// no-sparse path in `MVKImage::getSparseImageMemoryRequirements`.
+#[no_mangle]
+pub extern "C" fn vkGetImageSparseMemoryRequirements(
+    _device: VkDevice,
+    _image: VkImage,
+    p_sparse_memory_requirement_count: *mut u32,
+    _p_sparse_memory_requirements: *mut c_void,
+) {
+    if let Some(count) = unsafe { p_sparse_memory_requirement_count.as_mut() } {
+        *count = 0;
+    }
+}
