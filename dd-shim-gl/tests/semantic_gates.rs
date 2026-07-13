@@ -7,6 +7,75 @@ use core::ffi::c_void;
 use dd_shim_gl::glconst::*;
 use dd_shim_gl::{egl, gles};
 
+fn linked_test_program() -> u32 {
+    fn compile(kind: u32, source: &str) -> u32 {
+        let shader = gles::glCreateShader(kind);
+        let source = std::ffi::CString::new(source).unwrap();
+        let ptr = source.as_ptr();
+        gles::glShaderSource(shader, 1, &ptr, core::ptr::null());
+        gles::glCompileShader(shader);
+        shader
+    }
+    let vertex = compile(GL_VERTEX_SHADER, "attribute vec2 p; void main(){ gl_Position=vec4(p,0.0,1.0); }");
+    let fragment = compile(GL_FRAGMENT_SHADER, "precision mediump float; void main(){ gl_FragColor=vec4(1.0); }");
+    let program = gles::glCreateProgram();
+    gles::glAttachShader(program, vertex);
+    gles::glAttachShader(program, fragment);
+    gles::glLinkProgram(program);
+    program
+}
+
+#[test]
+fn draw_validation_rejects_inputs_before_recording() {
+    while gles::glGetError() != GL_NO_ERROR {}
+    gles::glBindFramebuffer(GL_FRAMEBUFFER, 0);
+
+    gles::glDrawArrays(0xFFFF, 0, 3);
+    assert_eq!(gles::glGetError(), GL_INVALID_ENUM);
+    gles::glDrawArrays(GL_TRIANGLES, -1, 3);
+    assert_eq!(gles::glGetError(), GL_INVALID_VALUE);
+    gles::glDrawArrays(GL_TRIANGLES, 0, 3);
+    assert_eq!(gles::glGetError(), GL_INVALID_OPERATION, "draw without linked current program succeeded");
+
+    let program = linked_test_program();
+    gles::glUseProgram(program);
+    let mut vbo = 0;
+    gles::glGenBuffers(1, &mut vbo);
+    gles::glBindBuffer(GL_ARRAY_BUFFER, vbo);
+    let vertices = [0.0f32; 6];
+    gles::glBufferData(
+        GL_ARRAY_BUFFER,
+        std::mem::size_of_val(&vertices) as isize,
+        vertices.as_ptr().cast(),
+        0x88E4,
+    );
+    gles::glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 0, core::ptr::null());
+    gles::glEnableVertexAttribArray(0);
+    gles::glDrawArrays(GL_TRIANGLES, 0, 4);
+    assert_eq!(gles::glGetError(), GL_INVALID_OPERATION, "vertex range beyond the buffer succeeded");
+    gles::glDrawArrays(GL_TRIANGLES, 0, 3);
+    assert_eq!(gles::glGetError(), GL_NO_ERROR, "valid array draw was rejected");
+
+    let mut ibo = 0;
+    gles::glGenBuffers(1, &mut ibo);
+    gles::glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, ibo);
+    let indices = [0u16, 1, 2];
+    gles::glBufferData(
+        GL_ELEMENT_ARRAY_BUFFER,
+        std::mem::size_of_val(&indices) as isize,
+        indices.as_ptr().cast(),
+        0x88E4,
+    );
+    gles::glDrawElements(GL_TRIANGLES, 3, GL_FLOAT, core::ptr::null());
+    assert_eq!(gles::glGetError(), GL_INVALID_ENUM);
+    gles::glDrawElements(GL_TRIANGLES, 3, GL_UNSIGNED_SHORT, 1usize as *const core::ffi::c_void);
+    assert_eq!(gles::glGetError(), GL_INVALID_OPERATION, "misaligned index offset succeeded");
+    gles::glDrawElements(GL_TRIANGLES, 4, GL_UNSIGNED_SHORT, core::ptr::null());
+    assert_eq!(gles::glGetError(), GL_INVALID_OPERATION, "index range beyond the buffer succeeded");
+    gles::glDrawElements(GL_TRIANGLES, 3, GL_UNSIGNED_SHORT, core::ptr::null());
+    assert_eq!(gles::glGetError(), GL_NO_ERROR, "valid indexed draw was rejected");
+}
+
 #[test]
 fn framebuffer_completeness_tracks_color_attachment_and_blocks_draws() {
     while gles::glGetError() != GL_NO_ERROR {}

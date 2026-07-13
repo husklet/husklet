@@ -1546,6 +1546,66 @@ pub extern "C" fn glDisableVertexAttribArray(index: u32) {
 // lowered from it at eglSwapBuffers (see crate::frame).
 // ===================================================================================================
 
+fn draw_error(s: &crate::state::GlState, mode: u32, first: i32, count: i32, indexed: Option<(u32, usize)>) -> Option<u32> {
+    if !matches!(mode, 0x0000..=0x0006) {
+        return Some(GL_INVALID_ENUM);
+    }
+    if first < 0 || count < 0 {
+        return Some(GL_INVALID_VALUE);
+    }
+    let index_size = match indexed {
+        Some((GL_UNSIGNED_BYTE, _)) => 1usize,
+        Some((GL_UNSIGNED_SHORT, _)) => 2,
+        Some((GL_UNSIGNED_INT, _)) => 4,
+        Some(_) => return Some(GL_INVALID_ENUM),
+        None => 0,
+    };
+    if s.framebuffer_status(s.draw_fbo) != GL_FRAMEBUFFER_COMPLETE {
+        return Some(GL_INVALID_FRAMEBUFFER_OPERATION);
+    }
+    let p = s.cur_prog as usize;
+    if s.cur_prog == 0 || p >= MAXPROG || !s.prog[p].used || !s.prog[p].link_ok {
+        return Some(GL_INVALID_OPERATION);
+    }
+    let mut last = if count == 0 { first as usize } else { (first as usize).saturating_add(count as usize - 1) };
+    if let Some((kind, offset)) = indexed {
+        let b = s.elem_buf as usize;
+        let end = (count as usize).checked_mul(index_size).and_then(|n| offset.checked_add(n));
+        if offset % index_size != 0 || b == 0 || b >= MAXBUF || !s.buf[b].used || end.is_none_or(|n| n > s.buf[b].data.len()) {
+            return Some(GL_INVALID_OPERATION);
+        }
+        last = s.buf[b].data[offset..end.unwrap()]
+            .chunks_exact(index_size)
+            .map(|raw| match kind {
+                GL_UNSIGNED_BYTE => raw[0] as usize,
+                GL_UNSIGNED_SHORT => u16::from_le_bytes([raw[0], raw[1]]) as usize,
+                GL_UNSIGNED_INT => u32::from_le_bytes([raw[0], raw[1], raw[2], raw[3]]) as usize,
+                _ => unreachable!(),
+            })
+            .max()
+            .unwrap_or(0);
+    }
+    for attr in s.attr.iter().filter(|a| a.enabled) {
+        let bytes = match attr.kind {
+            GL_BYTE | GL_UNSIGNED_BYTE => 1usize,
+            GL_SHORT | GL_UNSIGNED_SHORT => 2,
+            GL_INT | GL_UNSIGNED_INT | GL_FLOAT => 4,
+            _ => return Some(GL_INVALID_ENUM),
+        };
+        if !(1..=4).contains(&attr.size) || attr.stride < 0 {
+            return Some(GL_INVALID_VALUE);
+        }
+        let elem = (attr.size as usize).checked_mul(bytes);
+        let stride = if attr.stride == 0 { elem } else { Some(attr.stride as usize) };
+        let end = elem.and_then(|e| stride.and_then(|st| last.checked_mul(st)).and_then(|off| attr.offset.checked_add(off)).and_then(|off| off.checked_add(e)));
+        let b = attr.buffer as usize;
+        if b == 0 || b >= MAXBUF || !s.buf[b].used || end.is_none_or(|n| n > s.buf[b].data.len()) {
+            return Some(GL_INVALID_OPERATION);
+        }
+    }
+    None
+}
+
 /// `glClear` — record a clear into the frame draw-list, honoring GL_SCISSOR_TEST (a scissored clear
 /// becomes a sub-rect ClearRect; a full clear bumps the serial and marks the default surface). Faithful
 /// to gl_shim.c for the default framebuffer (FBO targets land with the offscreen path).
@@ -1579,12 +1639,13 @@ pub extern "C" fn glClear(mask: u32) {
 #[no_mangle]
 pub extern "C" fn glDrawArrays(mode: u32, first: i32, count: i32) {
     let mut s = gl();
-    if s.framebuffer_status(s.draw_fbo) != GL_FRAMEBUFFER_COMPLETE {
+    if let Some(error) = draw_error(&s, mode, first, count, None) {
         if s.error == GL_NO_ERROR {
-            s.error = GL_INVALID_FRAMEBUFFER_OPERATION;
+            s.error = error;
         }
         return;
     }
+    if count == 0 { return; }
     s.draw_mode = mode as i32;
     s.draw_first = first;
     s.draw_count = count;
@@ -1597,12 +1658,13 @@ pub extern "C" fn glDrawArrays(mode: u32, first: i32, count: i32) {
 #[no_mangle]
 pub extern "C" fn glDrawElements(mode: u32, count: i32, typ: u32, indices: *const c_void) {
     let mut s = gl();
-    if s.framebuffer_status(s.draw_fbo) != GL_FRAMEBUFFER_COMPLETE {
+    if let Some(error) = draw_error(&s, mode, 0, count, Some((typ, indices as usize))) {
         if s.error == GL_NO_ERROR {
-            s.error = GL_INVALID_FRAMEBUFFER_OPERATION;
+            s.error = error;
         }
         return;
     }
+    if count == 0 { return; }
     s.draw_mode = mode as i32;
     s.draw_count = count;
     s.draw_indexed = true;

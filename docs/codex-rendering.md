@@ -164,13 +164,11 @@ Specific correctness gaps:
   complete. This closes the unconditional-complete and silent-draw contradiction for the implemented color-only
   path. Depth/stencil attachments, dimension/sample matching across multiple attachments, layered/cube targets,
   generation-tagged attachment references, `GL_FRAMEBUFFER_UNSUPPORTED`, and completeness guards on read/blit remain.
-- Draw entry points mutate snapshot state and enqueue work without validating primitive mode, negative first/count,
-  index type/alignment/range, linked current program, framebuffer completeness, enabled attribute sources or mapped
-  buffers. Instanced draws discard the instance count. Add one side-effect-free `validate_draw` that resolves the
-  complete immutable draw snapshot with checked buffer ranges and program/FBO compatibility; only append it after all
-  validation succeeds. Preserve true instance/base-vertex/base-instance fields in IR and reject unsupported forms
-  rather than collapsing them. `gles_draw_calls_validate_all_inputs_before_snapshot_or_recording` pins error enums
-  and validate-before-snapshot ordering.
+- Core array/index draws now run one side-effect-free validator before snapshot or recording. It validates primitive
+  mode, negative first/count, index type/alignment/range, linked current program, color-FBO completeness, and every
+  enabled attribute's type/shape/stride/source range with checked arithmetic. Invalid draws report the appropriate GL
+  error without replacing the pending first error. Remaining work is mapped-buffer state, backend-derived limits,
+  restart/base-vertex forms, and preserving rather than collapsing instance/base-instance counts in IR.
 - `glReadPixels` constructs and zero-fills the caller slice before validating type or framebuffer, so an invalid call
   corrupts output while reporting no error. It ignores all pack state and uses unchecked width×height×bpp arithmetic;
   default-framebuffer readback is not a synchronized backend read. Validate format/type/dimensions/FBO and calculate
@@ -1089,7 +1087,7 @@ pixels, and fails against the broken behavior. Do not add tests that read implem
 | `gles_shader_program_attachment_detach_and_delete_pending_are_consistent` | missing | shader attachments and deferred deletion are not modeled | Strong attachment sets, delete-pending ownership and query tests |
 | `gles_pixel_store_and_texture_upload_validation_is_atomic_and_checked` | contradictory | invalid pixel-store/upload state uses unchecked arithmetic and mutates textures | Checked format/layout table, immutable mip storage and negative corpus |
 | `gles_framebuffer_completeness_reflects_attachment_state_and_blocks_draws` | partial | color-only FBOs compute missing/undefined attachment status and block clear/draw; broader attachment vocabulary and read/blit guards remain | Depth/stencil/layer/sample compatibility plus read/blit negative matrix |
-| `gles_draw_calls_validate_all_inputs_before_snapshot_or_recording` | contradictory | invalid draw modes/counts/state are snapshotted and recorded silently | Atomic draw validator plus buffer/program/FBO negative corpus |
+| `gles_draw_calls_validate_all_inputs_before_snapshot_or_recording` | partial | core array/index draws validate program, FBO, enabled vertex ranges and index source atomically | Mapped state, negotiated limits and faithful instanced/base-vertex IR fields |
 | `gles_readpixels_validates_pack_layout_and_preserves_output_on_error` | contradictory | invalid readback zero-fills output and ignores pack layout | Checked pack-state readback after completion synchronization |
 | `gles_sync_objects_track_real_submission_completion_and_wait_results` | missing | sync APIs have no objects or cross-process completion serial | Context serials, typed acknowledgements and timeout/lifetime parity tests |
 | `gles_query_objects_track_targets_availability_and_asynchronous_results` | missing | query names have no target lifecycle, readiness or backend result | Typed queries, resolve serials and negotiated backend query types |
