@@ -169,6 +169,57 @@ byte-parity gates still byte-identical):
 These wayland-client changes are the guest present transport, not the frame IR (the IR gates run in
 `DD_IR_DUMP` mode with no compositor connection), so the 8 byte-parity gates are byte-identical.
 
+## GLES command-validation ledger (audit §11) — draw/resource state closures
+
+These pass extended the five GLES command-validation rows of the §11 rendering ledger. Every change is
+guest-side validation / object state (no `Cmd`/`Enc` is emitted on any of these paths), so the 8
+byte-parity gates in `pixel_parity.rs` stay byte-identical; each row is proven by an in-crate mirror
+test in `tests/semantic_gates.rs`. Capability census counts are unchanged (these entry points were
+already classified — the change is behavioral truthfulness, not surface).
+
+- **`gles_pixel_store_and_texture_upload_validation_is_atomic_and_checked`** — `glCompressedTexImage2D`
+  / `glCompressedTexImage3D` and their `…SubImage…` forms were empty no-ops (silent success on any
+  input). They now validate atomically at gl_shim.c parity: an unsupported target or non-compressed
+  internalformat is `GL_INVALID_ENUM`; a bad level/border, negative dims, or an `imageSize` that is not
+  the tightly-packed `ceil(w/4)*ceil(h/4)*depth*block` byte count for the ETC2/EAC format is
+  `GL_INVALID_VALUE`; no live texture, an immutable texture, or an out-of-bounds / non-4-block-aligned
+  sub-region is `GL_INVALID_OPERATION`. The bound texture is left untouched on any rejection. The
+  payload stays undecoded (the shim has no ETC decoder — the honest residual is GPU-side block decode),
+  exactly like gl_shim.c, so no IR is produced. Mirror: `compressed_texture_upload_is_atomically_validated`.
+- **`gles_framebuffer_completeness_reflects_attachment_state_and_blocks_draws`** — framebuffer
+  completeness only tracked the color attachment. `Fbo` now carries depth/stencil renderbuffer
+  attachments; `glFramebufferRenderbuffer` accepts `GL_DEPTH_ATTACHMENT` / `GL_STENCIL_ATTACHMENT` /
+  `GL_DEPTH_STENCIL_ATTACHMENT` (the combined form attaches both aspects) and `glDeleteRenderbuffers`
+  detaches them. `framebuffer_status` verifies each depth/stencil renderbuffer's format actually
+  supplies the required aspect (else `INCOMPLETE_ATTACHMENT`) and that every present attachment shares
+  dimensions (else `INCOMPLETE_DIMENSIONS`); an incomplete FBO still blocks draws/clears. `glBlitFramebuffer`
+  now guards both the read and draw framebuffers' completeness (`INVALID_FRAMEBUFFER_OPERATION`). The
+  color-only path is byte-identical (the `full_frame_fbo_render_to_texture` gate is unaffected). Mirror:
+  `framebuffer_depth_stencil_completeness_and_read_blit_guards`.
+- **`gles_draw_calls_validate_all_inputs_before_snapshot_or_recording`** — a draw that sources vertices
+  or indices from a currently-mapped buffer is now rejected (`GL_INVALID_OPERATION`) before any snapshot
+  or record, via a per-buffer `mapped` flag set by `glMapBufferRange` and cleared by `glUnmapBuffer`; a
+  rejected draw submits nothing. The negotiated `GL_MAX_VERTEX_ATTRIBS` (16) limit is enforced —
+  `glVertexAttrib[I]Pointer` and `gl{Enable,Disable}VertexAttribArray` raise `GL_INVALID_VALUE` for an
+  out-of-range index instead of silently ignoring it. Mirror:
+  `draw_validation_rejects_mapped_buffers_and_over_limit_attribs`. **Residual:** faithful instanced /
+  base-vertex IR emission still needs host-side dd-gpu IR `instance_count`/`base_vertex` fields (today
+  instanced draws collapse to one instance, matching gl_shim.c).
+- **`gles_readpixels_validates_pack_layout_and_preserves_output_on_error`** — `glReadPixels` raised
+  `GL_INVALID_OPERATION` whenever the read framebuffer had no CPU-backed color texture, which is the
+  DEFAULT framebuffer case. That diverged from gl_shim.c, whose readback zero-fills the destination and
+  returns no error for the default FB (the shim keeps no default-color plane). The default FB now yields
+  zeros through the same pack-layout / PBO-size / client-pointer contract as the FBO path. Mirror:
+  `readpixels_default_framebuffer_reads_zeros_without_error`.
+- **`gles_sync_objects_track_real_submission_completion_and_wait_results`** — sync completion previously
+  only advanced through a local `glFinish`. `eglSwapBuffers` now calls `note_frame_presented()` after a
+  successful `present_frame`, the real cross-process boundary: the transport `submit` returns only on the
+  host's `ACK_OK` (the `DD_IR_DUMP` host-tool path is a synchronous successful write). A fence created
+  during a frame is therefore signaled by an actual host acknowledgement, not a local flush;
+  `glClientWaitSync`/`glGetSynciv` reflect it. Mirror:
+  `sync_completion_advances_on_real_frame_submission_ack`. **Residual:** asynchronous (non-blocking)
+  backend ACK parity still needs a live executor to exercise beyond the synchronous submit+ack path.
+
 ## Truthful-failure & debugging controls
 
 - **Default (lenient):** stubs raise the GL/EGL error and initialize outputs, then return; execution
