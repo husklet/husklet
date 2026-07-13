@@ -432,6 +432,63 @@ impl SoftwareBackend {
                 let d = self.buffer_with_usage(*dst, buffer_usage::COPY_DST, "copy dst lacks COPY_DST")?;
                 check_len(d.data.len(), *dst_offset, dst_span)?;
             }
+            Enc::CopyTextureToTexture { src, src_sub, src_origin, dst, dst_sub, dst_origin, extent } => {
+                Self::check_copy_subresource(src_sub, src_origin, extent.depth)?;
+                Self::check_copy_subresource(dst_sub, dst_origin, extent.depth)?;
+                let s = self.texture_with_usage(*src, texture_usage::COPY_SRC, "copy src lacks COPY_SRC")?;
+                let d = self.texture_with_usage(*dst, texture_usage::COPY_DST, "copy dst lacks COPY_DST")?;
+                // A texture→texture copy moves raw texels: the two formats must agree on texel size, else
+                // the byte copy is meaningless (Vulkan requires size-compatible formats for vkCmdCopyImage).
+                if Self::texel_bytes(s.desc.format)? != Self::texel_bytes(d.desc.format)? {
+                    return Err(GpuError::Invalid("texture copy between incompatible texel sizes"));
+                }
+                check_region_in_texture(s, src_origin, extent)?;
+                check_region_in_texture(d, dst_origin, extent)?;
+            }
+            Enc::BlitTexture {
+                src,
+                src_sub,
+                src_origin,
+                src_extent,
+                dst,
+                dst_sub,
+                dst_origin,
+                dst_extent,
+                ..
+            } => {
+                Self::check_copy_subresource(src_sub, src_origin, src_extent.depth)?;
+                Self::check_copy_subresource(dst_sub, dst_origin, dst_extent.depth)?;
+                if src_extent.width == 0 || src_extent.height == 0 || dst_extent.width == 0 || dst_extent.height == 0 {
+                    return Err(GpuError::Invalid("blit with a zero-sized region"));
+                }
+                let s = self.texture_with_usage(*src, texture_usage::COPY_SRC, "blit src lacks COPY_SRC")?;
+                let d = self.texture_with_usage(*dst, texture_usage::COPY_DST, "blit dst lacks COPY_DST")?;
+                // A blit resamples per-texel; the oracle only handles equal-texel-size color formats.
+                if Self::texel_bytes(s.desc.format)? != Self::texel_bytes(d.desc.format)? {
+                    return Err(GpuError::Invalid("blit between incompatible texel sizes"));
+                }
+                check_region_in_texture(s, src_origin, src_extent)?;
+                check_region_in_texture(d, dst_origin, dst_extent)?;
+            }
+        }
+        Ok(())
+    }
+
+    /// The software oracle materializes only 2D, single-layer, level-0 color textures, so a copy/blit
+    /// subresource that names a non-zero mip/layer, a non-color aspect, or a 3D depth slice is rejected as
+    /// `Unsupported` rather than silently aliasing level 0 (mirrors the `CopyBufferToTexture` mip guard).
+    fn check_copy_subresource(sub: &TextureSubresource, origin: &Origin3d, depth: u32) -> Result<()> {
+        if sub.mip != 0 {
+            return Err(GpuError::Unsupported("software: non-zero mip texture copy"));
+        }
+        if sub.layer != 0 {
+            return Err(GpuError::Unsupported("software: array-layer texture copy"));
+        }
+        if sub.aspect != TextureAspect::All {
+            return Err(GpuError::Unsupported("software: non-color aspect texture copy"));
+        }
+        if origin.z != 0 || depth > 1 {
+            return Err(GpuError::Unsupported("software: 3D/depth-slice texture copy"));
         }
         Ok(())
     }
@@ -567,6 +624,58 @@ fn texture_copy_layout(t: &Texture, width: u32, height: u32, bytes_per_row: u32)
             .ok_or(GpuError::OutOfBounds)?
     };
     Ok((row_bytes, tight, span))
+}
+
+/// Bounds-check that `[origin, origin+extent)` lies fully within a texture's level-0 plane (wrapping-safe).
+fn check_region_in_texture(t: &Texture, origin: &Origin3d, extent: &Extent3d) -> Result<()> {
+    let x_end = origin.x.checked_add(extent.width).ok_or(GpuError::OutOfBounds)?;
+    let y_end = origin.y.checked_add(extent.height).ok_or(GpuError::OutOfBounds)?;
+    if x_end > t.desc.width || y_end > t.desc.height {
+        return Err(GpuError::OutOfBounds);
+    }
+    Ok(())
+}
+
+/// Fetch one texel (`bpt` bytes) from a tight-packed level-0 plane at `(x, y)`.
+fn texel_at(pixels: &[u8], tex_w: usize, x: usize, y: usize, bpt: usize) -> &[u8] {
+    let off = (y * tex_w + x) * bpt;
+    &pixels[off..off + bpt]
+}
+
+/// Bilinearly sample a tight-packed color plane at fractional `(fx, fy)` (in absolute texel space),
+/// clamping neighbors to `[lo, hi]` in each axis — the oracle's `Filter::Linear` blit path.
+fn sample_bilinear(
+    pixels: &[u8],
+    tex_w: usize,
+    bpt: usize,
+    fx: f32,
+    fy: f32,
+    x_lo: usize,
+    x_hi: usize,
+    y_lo: usize,
+    y_hi: usize,
+) -> Vec<u8> {
+    // Clamp the sample point to the texel-center range so a coordinate left of the first center (or right
+    // of the last) resolves to the edge texel with zero fractional weight (clamp-to-edge, like a real GPU).
+    let gx = (fx - 0.5).clamp(x_lo as f32, x_hi as f32);
+    let gy = (fy - 0.5).clamp(y_lo as f32, y_hi as f32);
+    let x0 = gx.floor() as usize;
+    let y0 = gy.floor() as usize;
+    let x1 = (x0 + 1).min(x_hi);
+    let y1 = (y0 + 1).min(y_hi);
+    let tx = gx - x0 as f32;
+    let ty = gy - y0 as f32;
+    let p00 = texel_at(pixels, tex_w, x0, y0, bpt);
+    let p10 = texel_at(pixels, tex_w, x1, y0, bpt);
+    let p01 = texel_at(pixels, tex_w, x0, y1, bpt);
+    let p11 = texel_at(pixels, tex_w, x1, y1, bpt);
+    let mut out = Vec::with_capacity(bpt);
+    for c in 0..bpt {
+        let top = p00[c] as f32 * (1.0 - tx) + p10[c] as f32 * tx;
+        let bot = p01[c] as f32 * (1.0 - tx) + p11[c] as f32 * tx;
+        out.push((top * (1.0 - ty) + bot * ty + 0.5) as u8);
+    }
+    out
 }
 
 impl GpuBackend for SoftwareBackend {
@@ -852,6 +961,73 @@ impl GpuBackend for SoftwareBackend {
                         let dstart = base + row * dst_stride;
                         d.data[dstart..dstart + row_bytes]
                             .copy_from_slice(&rows_data[row * row_bytes..row * row_bytes + row_bytes]);
+                    }
+                }
+                Enc::CopyTextureToTexture { src, src_origin, dst, dst_origin, extent, .. } => {
+                    // Move `extent` texels from src's level-0 plane into dst's, row by row. Validation
+                    // already proved equal texel size and in-bounds regions.
+                    let (sw, bpt) = {
+                        let t = self.textures.get(*src)?;
+                        (t.desc.width as usize, Self::texel_bytes(t.desc.format)?)
+                    };
+                    let ew = extent.width as usize;
+                    let eh = extent.height as usize;
+                    let row_bytes = ew * bpt;
+                    let block: Vec<u8> = {
+                        let t = self.textures.get(*src)?;
+                        let mut out = Vec::with_capacity(row_bytes * eh);
+                        for row in 0..eh {
+                            let sy = src_origin.y as usize + row;
+                            let sx = src_origin.x as usize;
+                            let start = (sy * sw + sx) * bpt;
+                            out.extend_from_slice(&t.pixels[start..start + row_bytes]);
+                        }
+                        out
+                    };
+                    let dw = self.textures.get(*dst)?.desc.width as usize;
+                    let t = self.textures.get_mut(*dst)?;
+                    for row in 0..eh {
+                        let dy = dst_origin.y as usize + row;
+                        let dx = dst_origin.x as usize;
+                        let dstart = (dy * dw + dx) * bpt;
+                        t.pixels[dstart..dstart + row_bytes]
+                            .copy_from_slice(&block[row * row_bytes..(row + 1) * row_bytes]);
+                    }
+                }
+                Enc::BlitTexture { src, src_origin, src_extent, dst, dst_origin, dst_extent, filter, .. } => {
+                    // Resample src's [src_origin, src_extent) region into dst's [dst_origin, dst_extent)
+                    // region — nearest or bilinear. Clone the source plane so a blit-to-self is well-defined.
+                    let (sw, bpt) = {
+                        let t = self.textures.get(*src)?;
+                        (t.desc.width as usize, Self::texel_bytes(t.desc.format)?)
+                    };
+                    let src_pixels = self.textures.get(*src)?.pixels.clone();
+                    let (sox, soy) = (src_origin.x as usize, src_origin.y as usize);
+                    let (sew, seh) = (src_extent.width as usize, src_extent.height as usize);
+                    let (dew, deh) = (dst_extent.width as usize, dst_extent.height as usize);
+                    let dw = self.textures.get(*dst)?.desc.width as usize;
+                    let t = self.textures.get_mut(*dst)?;
+                    for dy in 0..deh {
+                        // Map the dst texel center back into the src region (absolute texel space).
+                        let fy = soy as f32 + (dy as f32 + 0.5) * seh as f32 / deh as f32;
+                        for dx in 0..dew {
+                            let fx = sox as f32 + (dx as f32 + 0.5) * sew as f32 / dew as f32;
+                            let texel = match filter {
+                                Filter::Nearest => {
+                                    let sx = (fx as usize).clamp(sox, sox + sew - 1);
+                                    let sy = (fy as usize).clamp(soy, soy + seh - 1);
+                                    texel_at(&src_pixels, sw, sx, sy, bpt).to_vec()
+                                }
+                                Filter::Linear => sample_bilinear(
+                                    &src_pixels, sw, bpt, fx, fy,
+                                    sox, sox + sew - 1, soy, soy + seh - 1,
+                                ),
+                            };
+                            let ddx = dst_origin.x as usize + dx;
+                            let ddy = dst_origin.y as usize + dy;
+                            let off = (ddy * dw + ddx) * bpt;
+                            t.pixels[off..off + bpt].copy_from_slice(&texel);
+                        }
                     }
                 }
                 _ => {}

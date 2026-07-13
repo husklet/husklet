@@ -24,8 +24,8 @@ fn exec_debug() -> bool {
 }
 use dd_gpu::id::{BindGroupId, BufferId, PipelineId, SamplerId, ShaderId, TextureId};
 use dd_gpu::ir::{
-    BindGroupDesc, BindResource, BufferDesc, CommandBuffer, ComputePipelineDesc, Enc, IndexFormat,
-    LoadOp, RenderPipelineDesc, SamplerDesc, TextureDesc, Topology,
+    BindGroupDesc, BindResource, BufferDesc, CommandBuffer, ComputePipelineDesc, Enc, Filter,
+    IndexFormat, LoadOp, RenderPipelineDesc, SamplerDesc, TextureDesc, Topology,
 };
 use dd_gpu::{GpuError, Result};
 use objc2::rc::Retained;
@@ -45,6 +45,12 @@ use objc2_metal::{
 };
 use std::collections::{HashMap, HashSet};
 use std::hash::{Hash, Hasher};
+
+/// Whether the texel span `[origin, origin+size)` fits within a texture dimension `dim` (wrapping-safe).
+/// Used to reject out-of-bounds texture copy/blit regions from untrusted IR before Metal reads/writes OOB.
+fn region_in_bounds(origin: u32, size: u32, dim: u32) -> bool {
+    origin.checked_add(size).is_some_and(|end| end <= dim)
+}
 
 /// FNV-ish content hash of a byte slice via the std default hasher (used to content-key shader/PSO caches).
 fn hash_bytes(b: &[u8]) -> u64 {
@@ -280,6 +286,19 @@ vertex VOut vcmain(VIn in [[stage_in]]) { VOut o; o.pos = float4(in.pos, 0.0, 1.
 fragment float4 fcmain(VOut in [[stage_in]]) { return in.color; }
 "#;
 
+/// Textured-quad shader for the scaled-blit path (`Enc::BlitTexture` with differing extents). The quad's
+/// per-vertex UVs address the source region; the render pass's viewport restricts output to the dest region.
+const BLIT_MSL: &str = r#"
+#include <metal_stdlib>
+using namespace metal;
+struct VIn { float2 p [[attribute(0)]]; float2 uv [[attribute(1)]]; };
+struct VOut { float4 position [[position]]; float2 uv; };
+vertex VOut blit_v(VIn in [[stage_in]]) { VOut o; o.position = float4(in.p, 0.0, 1.0); o.uv = in.uv; return o; }
+fragment float4 blit_f(VOut in [[stage_in]], texture2d<float> src [[texture(0)]], sampler s [[sampler(0)]]) {
+    return src.sample(s, in.uv);
+}
+"#;
+
 struct Pipeline {
     state: Retained<ProtocolObject<dyn MTLRenderPipelineState>>,
     primitive: MTLPrimitiveType,
@@ -338,6 +357,15 @@ pub struct MetalBackend {
     shader_id_hash: HashMap<u32, u64>, // shader id → MSL hash currently installed
     pipeline_id_hash: HashMap<u32, u64>, // pipeline id → desc hash currently installed
     clear_pipeline: Option<Retained<ProtocolObject<dyn MTLRenderPipelineState>>>,
+    // Scaled-blit (`Enc::BlitTexture` when src/dst extents differ) resources: a textured-quad library
+    // compiled on demand, one render-pipeline per destination pixel format (the color-attachment format
+    // must match the target), and a nearest/linear ClampToEdge sampler. Mirrors `MVKCmdBlitImage`, which
+    // likewise renders a filtered quad when it cannot express the scale with a plain `MTLBlitCommandEncoder`
+    // copy. An exact-size blit takes the cheap blit-copy path and needs none of these.
+    blit_lib: Option<Retained<ProtocolObject<dyn MTLLibrary>>>,
+    blit_pipelines: HashMap<usize, Retained<ProtocolObject<dyn MTLRenderPipelineState>>>,
+    blit_sampler_nearest: Option<Retained<ProtocolObject<dyn MTLSamplerState>>>,
+    blit_sampler_linear: Option<Retained<ProtocolObject<dyn MTLSamplerState>>>,
     // Prof counters (read + reset per frame by the executor when DD_RENDER_PROF is on). `*_compiles`
     // count only ACTUAL Metal compiles (cache misses) — the key steady-state regression guard is that
     // they read 0 after warmup.
@@ -412,6 +440,10 @@ impl MetalBackend {
             shader_id_hash: HashMap::new(),
             pipeline_id_hash: HashMap::new(),
             clear_pipeline: None,
+            blit_lib: None,
+            blit_pipelines: HashMap::new(),
+            blit_sampler_nearest: None,
+            blit_sampler_linear: None,
             shader_compiles: 0,
             pipeline_compiles: 0,
             lib_compiles: 1, // the builtin BUILTIN_MSL compile just above
@@ -460,6 +492,92 @@ impl MetalBackend {
         self.pipeline_compiles += 1;
         self.clear_pipeline = Some(state.clone());
         Ok(state)
+    }
+
+    /// A textured-quad pipeline for the scaled-blit path, one per destination pixel format (the pipeline's
+    /// color-attachment format must match the target). Compiled from `BLIT_MSL` on first use and cached.
+    fn blit_pipeline(
+        &mut self,
+        pf: MTLPixelFormat,
+    ) -> Result<Retained<ProtocolObject<dyn MTLRenderPipelineState>>> {
+        if let Some(p) = self.blit_pipelines.get(&pf.0) {
+            return Ok(p.clone());
+        }
+        if self.blit_lib.is_none() {
+            let lib = self
+                .device
+                .newLibraryWithSource_options_error(&NSString::from_str(BLIT_MSL), None)
+                .map_err(|_| GpuError::Unsupported("blit MSL compile"))?;
+            self.lib_compiles += 1;
+            self.blit_lib = Some(lib);
+        }
+        let lib = self.blit_lib.as_ref().unwrap();
+        let vfn = lib
+            .newFunctionWithName(&NSString::from_str("blit_v"))
+            .ok_or(GpuError::Unsupported("blit vertex fn"))?;
+        let ffn = lib
+            .newFunctionWithName(&NSString::from_str("blit_f"))
+            .ok_or(GpuError::Unsupported("blit fragment fn"))?;
+        let pdesc = MTLRenderPipelineDescriptor::new();
+        pdesc.setVertexFunction(Some(&vfn));
+        pdesc.setFragmentFunction(Some(&ffn));
+        unsafe {
+            let ca = pdesc.colorAttachments().objectAtIndexedSubscript(0);
+            ca.setPixelFormat(pf);
+            // pos.xy (float2) + uv (float2), tightly packed at VBUF_BASE (clear of the resource indices).
+            let vd = MTLVertexDescriptor::vertexDescriptor();
+            let a0 = vd.attributes().objectAtIndexedSubscript(0);
+            a0.setFormat(MTLVertexFormat::Float2);
+            a0.setOffset(0);
+            a0.setBufferIndex(VBUF_BASE);
+            let a1 = vd.attributes().objectAtIndexedSubscript(1);
+            a1.setFormat(MTLVertexFormat::Float2);
+            a1.setOffset(8);
+            a1.setBufferIndex(VBUF_BASE);
+            vd.layouts().objectAtIndexedSubscript(VBUF_BASE).setStride(16);
+            pdesc.setVertexDescriptor(Some(&vd));
+        }
+        let state = self
+            .device
+            .newRenderPipelineStateWithDescriptor_error(&pdesc)
+            .map_err(|_| GpuError::Unsupported("blit pipeline compile"))?;
+        self.pipeline_compiles += 1;
+        self.blit_pipelines.insert(pf.0, state.clone());
+        Ok(state)
+    }
+
+    /// A ClampToEdge nearest/linear sampler for the scaled-blit fragment shader (built once each).
+    fn blit_sampler(&mut self, filter: Filter) -> Result<Retained<ProtocolObject<dyn MTLSamplerState>>> {
+        match filter {
+            Filter::Nearest => {
+                if let Some(s) = &self.blit_sampler_nearest {
+                    return Ok(s.clone());
+                }
+            }
+            Filter::Linear => {
+                if let Some(s) = &self.blit_sampler_linear {
+                    return Ok(s.clone());
+                }
+            }
+        }
+        let sd = MTLSamplerDescriptor::new();
+        let mm = match filter {
+            Filter::Nearest => MTLSamplerMinMagFilter::Nearest,
+            Filter::Linear => MTLSamplerMinMagFilter::Linear,
+        };
+        sd.setMinFilter(mm);
+        sd.setMagFilter(mm);
+        sd.setSAddressMode(MTLSamplerAddressMode::ClampToEdge);
+        sd.setTAddressMode(MTLSamplerAddressMode::ClampToEdge);
+        let s = self
+            .device
+            .newSamplerStateWithDescriptor(&sd)
+            .ok_or(GpuError::Unsupported("blit sampler"))?;
+        match filter {
+            Filter::Nearest => self.blit_sampler_nearest = Some(s.clone()),
+            Filter::Linear => self.blit_sampler_linear = Some(s.clone()),
+        }
+        Ok(s)
     }
 
     /// Content hash of a render-pipeline descriptor for the L3 PSO cache. Folds in the *installed*
@@ -2827,6 +2945,174 @@ impl GpuBackend for MetalBackend {
                             );
                         }
                         blit.endEncoding();
+                    }
+                }
+                Enc::CopyTextureToTexture {
+                    src,
+                    src_sub,
+                    src_origin,
+                    dst,
+                    dst_sub,
+                    dst_origin,
+                    extent,
+                } => {
+                    // Exact-size texture→texture copy via a standalone blit encoder (glCopyImageSubData /
+                    // VkCmdCopyImage). Close any open render/compute encoder first.
+                    if let Some(e) = enc.take() {
+                        e.endEncoding();
+                    }
+                    if let Some(ce) = compute_enc.take() {
+                        unsafe {
+                            let _: () = msg_send![&*ce, endEncoding];
+                        }
+                    }
+                    let Some(stex) = self.resolve_texture(*src).cloned() else {
+                        return Err(GpuError::UnknownId { kind: "texture", id: *src });
+                    };
+                    let Some(dtex) = self.resolve_texture(*dst).cloned() else {
+                        return Err(GpuError::UnknownId { kind: "texture", id: *dst });
+                    };
+                    // Untrusted IR: both regions must be in-bounds, else Metal reads/writes OOB. Wrapping-safe.
+                    if !region_in_bounds(src_origin.x, extent.width, stex.width() as u32)
+                        || !region_in_bounds(src_origin.y, extent.height, stex.height() as u32)
+                        || !region_in_bounds(dst_origin.x, extent.width, dtex.width() as u32)
+                        || !region_in_bounds(dst_origin.y, extent.height, dtex.height() as u32)
+                    {
+                        return Err(GpuError::OutOfBounds);
+                    }
+                    if let Some(blit) = cmd.blitCommandEncoder() {
+                        unsafe {
+                            blit.copyFromTexture_sourceSlice_sourceLevel_sourceOrigin_sourceSize_toTexture_destinationSlice_destinationLevel_destinationOrigin(
+                                &stex,
+                                src_sub.layer as usize,
+                                src_sub.mip as usize,
+                                MTLOrigin { x: src_origin.x as usize, y: src_origin.y as usize, z: src_origin.z as usize },
+                                MTLSize { width: extent.width as usize, height: extent.height as usize, depth: extent.depth.max(1) as usize },
+                                &dtex,
+                                dst_sub.layer as usize,
+                                dst_sub.mip as usize,
+                                MTLOrigin { x: dst_origin.x as usize, y: dst_origin.y as usize, z: dst_origin.z as usize },
+                            );
+                        }
+                        blit.endEncoding();
+                    }
+                }
+                Enc::BlitTexture {
+                    src,
+                    src_sub,
+                    src_origin,
+                    src_extent,
+                    dst,
+                    dst_sub,
+                    dst_origin,
+                    dst_extent,
+                    filter,
+                } => {
+                    // Scaled/filtered texture→texture blit (glBlitFramebuffer / VkCmdBlitImage). Close any
+                    // open encoder first — this runs on its own blit or render encoder.
+                    if let Some(e) = enc.take() {
+                        e.endEncoding();
+                    }
+                    if let Some(ce) = compute_enc.take() {
+                        unsafe {
+                            let _: () = msg_send![&*ce, endEncoding];
+                        }
+                    }
+                    let Some(stex) = self.resolve_texture(*src).cloned() else {
+                        return Err(GpuError::UnknownId { kind: "texture", id: *src });
+                    };
+                    let Some(dtex) = self.resolve_texture(*dst).cloned() else {
+                        return Err(GpuError::UnknownId { kind: "texture", id: *dst });
+                    };
+                    let (sw, sh) = (stex.width() as u32, stex.height() as u32);
+                    let (dw, dh) = (dtex.width() as u32, dtex.height() as u32);
+                    if !region_in_bounds(src_origin.x, src_extent.width, sw)
+                        || !region_in_bounds(src_origin.y, src_extent.height, sh)
+                        || !region_in_bounds(dst_origin.x, dst_extent.width, dw)
+                        || !region_in_bounds(dst_origin.y, dst_extent.height, dh)
+                    {
+                        return Err(GpuError::OutOfBounds);
+                    }
+                    if src_extent == dst_extent {
+                        // No scaling → an exact blit copy is bit-accurate and cheapest (filter is a no-op).
+                        if let Some(blit) = cmd.blitCommandEncoder() {
+                            unsafe {
+                                blit.copyFromTexture_sourceSlice_sourceLevel_sourceOrigin_sourceSize_toTexture_destinationSlice_destinationLevel_destinationOrigin(
+                                    &stex,
+                                    src_sub.layer as usize,
+                                    src_sub.mip as usize,
+                                    MTLOrigin { x: src_origin.x as usize, y: src_origin.y as usize, z: src_origin.z as usize },
+                                    MTLSize { width: src_extent.width as usize, height: src_extent.height as usize, depth: src_extent.depth.max(1) as usize },
+                                    &dtex,
+                                    dst_sub.layer as usize,
+                                    dst_sub.mip as usize,
+                                    MTLOrigin { x: dst_origin.x as usize, y: dst_origin.y as usize, z: dst_origin.z as usize },
+                                );
+                            }
+                            blit.endEncoding();
+                        }
+                    } else {
+                        // Scaling → render a filtered textured quad into the dest region (MVKCmdBlitImage's
+                        // fallback). The viewport clips output to [dst_origin, dst_extent); the per-vertex UVs
+                        // address the normalized [src_origin, src_extent) source region (top-left origin, so
+                        // no Y-flip — this is an explicit op, not the offscreen-orientation heuristic).
+                        let state = self.blit_pipeline(dtex.pixelFormat())?;
+                        let smp = self.blit_sampler(*filter)?;
+                        let su0 = src_origin.x as f32 / sw as f32;
+                        let sv0 = src_origin.y as f32 / sh as f32;
+                        let su1 = (src_origin.x + src_extent.width) as f32 / sw as f32;
+                        let sv1 = (src_origin.y + src_extent.height) as f32 / sh as f32;
+                        // Two triangles covering NDC [-1,1]; the viewport restricts them to the dest region.
+                        let verts: [f32; 24] = [
+                            -1.0, 1.0, su0, sv0, // top-left
+                            -1.0, -1.0, su0, sv1, // bottom-left
+                            1.0, 1.0, su1, sv0, // top-right
+                            1.0, 1.0, su1, sv0, // top-right
+                            -1.0, -1.0, su0, sv1, // bottom-left
+                            1.0, -1.0, su1, sv1, // bottom-right
+                        ];
+                        let pass = unsafe { MTLRenderPassDescriptor::renderPassDescriptor() };
+                        unsafe {
+                            let att = pass.colorAttachments().objectAtIndexedSubscript(0);
+                            att.setTexture(Some(&dtex));
+                            att.setLoadAction(MTLLoadAction::Load);
+                            att.setStoreAction(MTLStoreAction::Store);
+                        }
+                        let e = cmd
+                            .renderCommandEncoderWithDescriptor(&pass)
+                            .ok_or(GpuError::Unsupported("blit encoder"))?;
+                        e.setRenderPipelineState(&state);
+                        e.setViewport(MTLViewport {
+                            originX: dst_origin.x as f64,
+                            originY: dst_origin.y as f64,
+                            width: dst_extent.width as f64,
+                            height: dst_extent.height as f64,
+                            znear: 0.0,
+                            zfar: 1.0,
+                        });
+                        e.setScissorRect(MTLScissorRect {
+                            x: dst_origin.x as usize,
+                            y: dst_origin.y as usize,
+                            width: dst_extent.width as usize,
+                            height: dst_extent.height as usize,
+                        });
+                        let nbytes = std::mem::size_of_val(&verts);
+                        let vbuf = self
+                            .device
+                            .newBufferWithLength_options(nbytes, MTLResourceOptions::MTLResourceStorageModeShared)
+                            .ok_or(GpuError::Unsupported("blit vertex buffer"))?;
+                        unsafe {
+                            std::ptr::copy_nonoverlapping(
+                                verts.as_ptr() as *const u8,
+                                vbuf.contents().as_ptr() as *mut u8,
+                                nbytes,
+                            );
+                            e.setVertexBuffer_offset_atIndex(Some(&vbuf), 0, VBUF_BASE);
+                            e.setFragmentTexture_atIndex(Some(&stex), 0);
+                            e.setFragmentSamplerState_atIndex(Some(&smp), 0);
+                            e.drawPrimitives_vertexStart_vertexCount(MTLPrimitiveType::Triangle, 0, 6);
+                        }
+                        e.endEncoding();
                     }
                 }
             }

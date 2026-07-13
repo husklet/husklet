@@ -562,3 +562,185 @@ fn stale_bind_group_after_buffer_id_reuse_is_rejected() {
     ]);
     assert_eq!(be.submit(&cb), Err(GpuError::UnknownId { kind: "buffer", id: 2 }));
 }
+
+// ------------------------------------------------------------------------------------------------
+// texture-to-texture copy + blit + subresource views (Phase-3 slice)
+// ------------------------------------------------------------------------------------------------
+
+fn sub0() -> TextureSubresource {
+    TextureSubresource::base()
+}
+
+/// Build a backend and upload `pattern` (tight RGBA rows) into a `w`x`h` COPY_SRC|COPY_DST texture `id`.
+fn seed_texture(be: &mut SoftwareBackend, id: u32, w: u32, h: u32, pattern: &[u8]) {
+    be.create_texture(TextureId(id), &tex(w, h, TextureFormat::Rgba8Unorm, texture_usage::COPY_SRC | texture_usage::COPY_DST)).unwrap();
+    let stage = 900 + id; // staging buffer id
+    be.create_buffer(BufferId(stage), &buf(pattern.len() as u64, buffer_usage::COPY_SRC)).unwrap();
+    be.write_buffer(BufferId(stage), 0, pattern).unwrap();
+    be.submit(&CommandBuffer {
+        encoder: vec![Enc::CopyBufferToTexture { src: stage, src_offset: 0, bytes_per_row: 0, dst: id, mip: 0, width: w, height: h }],
+        signal: None,
+    }).unwrap();
+}
+
+#[test]
+fn copy_texture_to_texture_moves_the_requested_region() {
+    let mut be = SoftwareBackend::new();
+    // src 4x4 where texel (x,y) = [x, y, 0, 255].
+    let mut src = Vec::new();
+    for y in 0..4u8 {
+        for x in 0..4u8 {
+            src.extend_from_slice(&[x, y, 0, 255]);
+        }
+    }
+    seed_texture(&mut be, 1, 4, 4, &src);
+    be.create_texture(TextureId(2), &tex(4, 4, TextureFormat::Rgba8Unorm, texture_usage::COPY_SRC | texture_usage::COPY_DST)).unwrap();
+    // Copy the 2x2 block anchored at src (1,1) into dst (0,0).
+    be.submit(&CommandBuffer {
+        encoder: vec![Enc::CopyTextureToTexture {
+            src: 1, src_sub: sub0(), src_origin: Origin3d { x: 1, y: 1, z: 0 },
+            dst: 2, dst_sub: sub0(), dst_origin: Origin3d::default(),
+            extent: Extent3d { width: 2, height: 2, depth: 1 },
+        }],
+        signal: None,
+    }).unwrap();
+    let mut out = [0u8; 64];
+    be.read_texture(TextureId(2), &mut out).unwrap();
+    let px = |x: usize, y: usize| { let o = (y * 4 + x) * 4; [out[o], out[o + 1], out[o + 2], out[o + 3]] };
+    assert_eq!(px(0, 0), [1, 1, 0, 255]);
+    assert_eq!(px(1, 0), [2, 1, 0, 255]);
+    assert_eq!(px(0, 1), [1, 2, 0, 255]);
+    assert_eq!(px(1, 1), [2, 2, 0, 255]);
+    // Untouched dst texels stay zero.
+    assert_eq!(px(3, 3), [0, 0, 0, 0]);
+}
+
+#[test]
+fn blit_nearest_scales_up_by_block_replication() {
+    let mut be = SoftwareBackend::new();
+    // 2x2 src: red, green / blue, white.
+    let src: [u8; 16] = [255, 0, 0, 255, 0, 255, 0, 255, 0, 0, 255, 255, 255, 255, 255, 255];
+    seed_texture(&mut be, 1, 2, 2, &src);
+    be.create_texture(TextureId(2), &tex(4, 4, TextureFormat::Rgba8Unorm, texture_usage::COPY_SRC | texture_usage::COPY_DST)).unwrap();
+    be.submit(&CommandBuffer {
+        encoder: vec![Enc::BlitTexture {
+            src: 1, src_sub: sub0(), src_origin: Origin3d::default(), src_extent: Extent3d { width: 2, height: 2, depth: 1 },
+            dst: 2, dst_sub: sub0(), dst_origin: Origin3d::default(), dst_extent: Extent3d { width: 4, height: 4, depth: 1 },
+            filter: Filter::Nearest,
+        }],
+        signal: None,
+    }).unwrap();
+    let mut out = [0u8; 64];
+    be.read_texture(TextureId(2), &mut out).unwrap();
+    let px = |x: usize, y: usize| { let o = (y * 4 + x) * 4; [out[o], out[o + 1], out[o + 2], out[o + 3]] };
+    // Each src texel replicated into a 2x2 block.
+    assert_eq!(px(0, 0), [255, 0, 0, 255]);
+    assert_eq!(px(1, 1), [255, 0, 0, 255]);
+    assert_eq!(px(2, 0), [0, 255, 0, 255]);
+    assert_eq!(px(0, 2), [0, 0, 255, 255]);
+    assert_eq!(px(3, 3), [255, 255, 255, 255]);
+}
+
+#[test]
+fn blit_linear_interpolates_between_source_texels() {
+    let mut be = SoftwareBackend::new();
+    // 2x1 src: black then white.
+    let src: [u8; 8] = [0, 0, 0, 255, 255, 255, 255, 255];
+    seed_texture(&mut be, 1, 2, 1, &src);
+    be.create_texture(TextureId(2), &tex(4, 1, TextureFormat::Rgba8Unorm, texture_usage::COPY_SRC | texture_usage::COPY_DST)).unwrap();
+    be.submit(&CommandBuffer {
+        encoder: vec![Enc::BlitTexture {
+            src: 1, src_sub: sub0(), src_origin: Origin3d::default(), src_extent: Extent3d { width: 2, height: 1, depth: 1 },
+            dst: 2, dst_sub: sub0(), dst_origin: Origin3d::default(), dst_extent: Extent3d { width: 4, height: 1, depth: 1 },
+            filter: Filter::Linear,
+        }],
+        signal: None,
+    }).unwrap();
+    let mut out = [0u8; 16];
+    be.read_texture(TextureId(2), &mut out).unwrap();
+    let r = |x: usize| out[x * 4]; // red channel is enough (grayscale ramp)
+    // Ramp must be monotonically non-decreasing left→right and interior pixels strictly between endpoints.
+    assert!(r(0) <= r(1) && r(1) <= r(2) && r(2) <= r(3), "not monotonic: {:?}", [r(0), r(1), r(2), r(3)]);
+    assert!(r(1) > 0 && r(1) < 255, "interior pixel not interpolated: {}", r(1));
+}
+
+#[test]
+fn copy_texture_to_texture_region_out_of_bounds_is_rejected_not_ub() {
+    let mut be = SoftwareBackend::new();
+    be.create_texture(TextureId(1), &tex(4, 4, TextureFormat::Rgba8Unorm, texture_usage::COPY_SRC)).unwrap();
+    be.create_texture(TextureId(2), &tex(4, 4, TextureFormat::Rgba8Unorm, texture_usage::COPY_DST)).unwrap();
+    // extent 4x4 anchored at (2,2) runs off the src edge.
+    let cb = CommandBuffer {
+        encoder: vec![Enc::CopyTextureToTexture {
+            src: 1, src_sub: sub0(), src_origin: Origin3d { x: 2, y: 2, z: 0 },
+            dst: 2, dst_sub: sub0(), dst_origin: Origin3d::default(),
+            extent: Extent3d { width: 4, height: 4, depth: 1 },
+        }],
+        signal: None,
+    };
+    assert_eq!(be.submit(&cb), Err(GpuError::OutOfBounds));
+}
+
+#[test]
+fn copy_texture_to_texture_wrapping_origin_is_out_of_bounds_not_panic() {
+    let mut be = SoftwareBackend::new();
+    be.create_texture(TextureId(1), &tex(4, 4, TextureFormat::Rgba8Unorm, texture_usage::COPY_SRC)).unwrap();
+    be.create_texture(TextureId(2), &tex(4, 4, TextureFormat::Rgba8Unorm, texture_usage::COPY_DST)).unwrap();
+    let cb = CommandBuffer {
+        encoder: vec![Enc::CopyTextureToTexture {
+            src: 1, src_sub: sub0(), src_origin: Origin3d { x: u32::MAX, y: 0, z: 0 },
+            dst: 2, dst_sub: sub0(), dst_origin: Origin3d::default(),
+            extent: Extent3d { width: 2, height: 2, depth: 1 },
+        }],
+        signal: None,
+    };
+    assert_eq!(be.submit(&cb), Err(GpuError::OutOfBounds));
+}
+
+#[test]
+fn copy_texture_to_texture_missing_copy_usage_is_rejected() {
+    let mut be = SoftwareBackend::new();
+    be.create_texture(TextureId(1), &tex(4, 4, TextureFormat::Rgba8Unorm, texture_usage::SAMPLED)).unwrap(); // no COPY_SRC
+    be.create_texture(TextureId(2), &tex(4, 4, TextureFormat::Rgba8Unorm, texture_usage::COPY_DST)).unwrap();
+    let cb = CommandBuffer {
+        encoder: vec![Enc::CopyTextureToTexture {
+            src: 1, src_sub: sub0(), src_origin: Origin3d::default(),
+            dst: 2, dst_sub: sub0(), dst_origin: Origin3d::default(),
+            extent: Extent3d { width: 2, height: 2, depth: 1 },
+        }],
+        signal: None,
+    };
+    assert!(matches!(be.submit(&cb), Err(GpuError::Invalid(_))));
+}
+
+#[test]
+fn copy_texture_to_texture_incompatible_texel_size_is_rejected() {
+    let mut be = SoftwareBackend::new();
+    be.create_texture(TextureId(1), &tex(4, 4, TextureFormat::Rgba8Unorm, texture_usage::COPY_SRC)).unwrap(); // 4 bpp
+    be.create_texture(TextureId(2), &tex(4, 4, TextureFormat::R8Unorm, texture_usage::COPY_DST)).unwrap(); // 1 bpp
+    let cb = CommandBuffer {
+        encoder: vec![Enc::CopyTextureToTexture {
+            src: 1, src_sub: sub0(), src_origin: Origin3d::default(),
+            dst: 2, dst_sub: sub0(), dst_origin: Origin3d::default(),
+            extent: Extent3d { width: 2, height: 2, depth: 1 },
+        }],
+        signal: None,
+    };
+    assert!(matches!(be.submit(&cb), Err(GpuError::Invalid(_))));
+}
+
+#[test]
+fn copy_texture_to_texture_nonzero_mip_subresource_is_rejected() {
+    let mut be = SoftwareBackend::new();
+    be.create_texture(TextureId(1), &tex(4, 4, TextureFormat::Rgba8Unorm, texture_usage::COPY_SRC)).unwrap();
+    be.create_texture(TextureId(2), &tex(4, 4, TextureFormat::Rgba8Unorm, texture_usage::COPY_DST)).unwrap();
+    let cb = CommandBuffer {
+        encoder: vec![Enc::CopyTextureToTexture {
+            src: 1, src_sub: TextureSubresource { mip: 1, layer: 0, aspect: TextureAspect::All }, src_origin: Origin3d::default(),
+            dst: 2, dst_sub: sub0(), dst_origin: Origin3d::default(),
+            extent: Extent3d { width: 2, height: 2, depth: 1 },
+        }],
+        signal: None,
+    };
+    assert!(matches!(be.submit(&cb), Err(GpuError::Unsupported(_))));
+}

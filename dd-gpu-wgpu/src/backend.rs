@@ -107,6 +107,30 @@ fn vs(@builtin(vertex_index) vi: u32) -> VOut {
 fn fs(i: VOut) -> @location(0) vec4<f32> { return textureSample(src, samp, i.uv); }
 "#;
 
+// Scaled-blit: sample the normalized [src_origin, src_extent) region of `src` (carried in `region` as
+// su0,sv0,su_span,sv_span) into the dest region. The render pass's viewport restricts output to the dest
+// region; `local.y` flips because clip-space Y is up while texture V is down (top-left origin), so the dest
+// top samples the src region's top — a straight (non-inverting) blit, matching the Metal executor + oracle.
+const BLIT_WGSL: &str = r#"
+struct Region { r: vec4<f32> };
+@group(0) @binding(0) var<uniform> region: Region;
+@group(0) @binding(1) var src: texture_2d<f32>;
+@group(0) @binding(2) var samp: sampler;
+struct VOut { @builtin(position) pos: vec4<f32>, @location(0) uv: vec2<f32> };
+@vertex
+fn vs(@builtin(vertex_index) vi: u32) -> VOut {
+    var p = array<vec2<f32>, 3>(vec2<f32>(-1.0, -3.0), vec2<f32>(-1.0, 1.0), vec2<f32>(3.0, 1.0));
+    var o: VOut;
+    let cp = p[vi];
+    o.pos = vec4<f32>(cp, 0.0, 1.0);
+    let local = vec2<f32>((cp.x + 1.0) * 0.5, 1.0 - (cp.y + 1.0) * 0.5);
+    o.uv = region.r.xy + local * region.r.zw;
+    return o;
+}
+@fragment
+fn fs(i: VOut) -> @location(0) vec4<f32> { return textureSample(src, samp, i.uv); }
+"#;
+
 // ---------------------------------------------------------------------------------------------------
 // enum / bit mapping helpers (IR -> wgpu)
 // ---------------------------------------------------------------------------------------------------
@@ -130,6 +154,19 @@ fn tex_format(f: TextureFormat) -> wgpu::TextureFormat {
 
 fn is_depth(f: TextureFormat) -> bool {
     matches!(f, TextureFormat::Depth32Float | TextureFormat::Depth24PlusStencil8)
+}
+
+fn tex_aspect(a: TextureAspect) -> wgpu::TextureAspect {
+    match a {
+        TextureAspect::All => wgpu::TextureAspect::All,
+        TextureAspect::DepthOnly => wgpu::TextureAspect::DepthOnly,
+        TextureAspect::StencilOnly => wgpu::TextureAspect::StencilOnly,
+    }
+}
+
+/// Fold a subresource array `layer` into a wgpu `Origin3d` (wgpu addresses a 2D array layer via `origin.z`).
+fn tex_origin(o: &Origin3d, layer: u32) -> wgpu::Origin3d {
+    wgpu::Origin3d { x: o.x, y: o.y, z: o.z + layer }
 }
 
 fn buffer_usages(bits: u32) -> wgpu::BufferUsages {
@@ -359,6 +396,14 @@ pub struct WgpuBackend {
     clear_module: wgpu::ShaderModule,
     flip_module: wgpu::ShaderModule,
     flip_sampler: wgpu::Sampler,
+    /// Scaled-blit (`Enc::BlitTexture` with differing extents) resources: a textured-quad module, one
+    /// render-pipeline per destination format (color-target format must match), and a nearest/linear
+    /// ClampToEdge sampler. wgpu has no blit primitive, so a scale is a filtered sampled draw into the
+    /// dest region — the same fallback `MVKCmdBlitImage` uses. An exact-size blit takes `copy_texture_to_texture`.
+    blit_module: wgpu::ShaderModule,
+    blit_pipelines: HashMap<wgpu::TextureFormat, wgpu::RenderPipeline>,
+    blit_sampler_nearest: wgpu::Sampler,
+    blit_sampler_linear: wgpu::Sampler,
     /// Per offscreen-target scratch textures the flip renders through (reused across frames by target id).
     flip_scratch: HashMap<u32, TexEntry>,
 
@@ -465,6 +510,26 @@ impl WgpuBackend {
             min_filter: wgpu::FilterMode::Nearest,
             ..Default::default()
         });
+        let blit_module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("dd-blit"),
+            source: wgpu::ShaderSource::Wgsl(BLIT_WGSL.into()),
+        });
+        let blit_sampler_nearest = device.create_sampler(&wgpu::SamplerDescriptor {
+            label: Some("dd-blit-samp-nearest"),
+            address_mode_u: wgpu::AddressMode::ClampToEdge,
+            address_mode_v: wgpu::AddressMode::ClampToEdge,
+            mag_filter: wgpu::FilterMode::Nearest,
+            min_filter: wgpu::FilterMode::Nearest,
+            ..Default::default()
+        });
+        let blit_sampler_linear = device.create_sampler(&wgpu::SamplerDescriptor {
+            label: Some("dd-blit-samp-linear"),
+            address_mode_u: wgpu::AddressMode::ClampToEdge,
+            address_mode_v: wgpu::AddressMode::ClampToEdge,
+            mag_filter: wgpu::FilterMode::Linear,
+            min_filter: wgpu::FilterMode::Linear,
+            ..Default::default()
+        });
         // Prebuild the two render-target formats that actually occur (RGBA8 offscreen/goldens, BGRA8
         // IOSurface present surface); rarer formats are materialized lazily in `clear_pipeline_for` /
         // `flip_pipeline_for`.
@@ -492,6 +557,10 @@ impl WgpuBackend {
             clear_module,
             flip_module,
             flip_sampler,
+            blit_module,
+            blit_pipelines: HashMap::new(),
+            blit_sampler_nearest,
+            blit_sampler_linear,
             flip_scratch: HashMap::new(),
             last_submission: None,
             fences: HashMap::new(),
@@ -651,6 +720,54 @@ impl WgpuBackend {
             multiview: None,
             cache: None,
         })
+    }
+
+    /// A textured-quad pipeline for the scaled-blit path, one per destination format (auto layout: group 0
+    /// = uniform region / src texture / sampler). Mirrors `make_clear_pipeline`.
+    fn make_blit_pipeline(
+        device: &wgpu::Device,
+        module: &wgpu::ShaderModule,
+        format: wgpu::TextureFormat,
+    ) -> wgpu::RenderPipeline {
+        device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("dd-blit-pipe"),
+            layout: None,
+            vertex: wgpu::VertexState {
+                module,
+                entry_point: Some("vs"),
+                compilation_options: Default::default(),
+                buffers: &[],
+            },
+            fragment: Some(wgpu::FragmentState {
+                module,
+                entry_point: Some("fs"),
+                compilation_options: Default::default(),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format,
+                    blend: None,
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+            }),
+            primitive: wgpu::PrimitiveState::default(),
+            depth_stencil: None,
+            multisample: wgpu::MultisampleState::default(),
+            multiview: None,
+            cache: None,
+        })
+    }
+
+    fn blit_pipeline_for(&self, format: TextureFormat) -> &wgpu::RenderPipeline {
+        let wf = tex_format(format);
+        self.blit_pipelines
+            .get(&wf)
+            .unwrap_or_else(|| &self.blit_pipelines[&wgpu::TextureFormat::Rgba8Unorm])
+    }
+
+    fn blit_sampler(&self, filter: Filter) -> &wgpu::Sampler {
+        match filter {
+            Filter::Nearest => &self.blit_sampler_nearest,
+            Filter::Linear => &self.blit_sampler_linear,
+        }
     }
 
     /// Access the underlying device/queue (for interop / test harnesses building wgpu textures).
@@ -867,6 +984,16 @@ impl WgpuBackend {
             let p = Self::make_flip_pipeline(&self.device, &self.flip_module, wf);
             self.flip_pipelines.insert(wf, p);
         }
+    }
+
+    /// Ensure a scaled-blit pipeline exists for destination `format` (materialized lazily like clear/flip).
+    fn ensure_blit_pipeline_for(&mut self, format: TextureFormat) {
+        let wf = tex_format(format);
+        if is_depth(format) || self.blit_pipelines.contains_key(&wf) {
+            return;
+        }
+        let p = Self::make_blit_pipeline(&self.device, &self.blit_module, wf);
+        self.blit_pipelines.insert(wf, p);
     }
 
     fn clear_pipeline_for(&self, format: TextureFormat) -> &wgpu::RenderPipeline {
@@ -1498,6 +1625,7 @@ impl GpuBackend for WgpuBackend {
         // textures this command buffer needs, so the borrow-only recording passes below never mutate self.
         let mut scratch_needed: Vec<(u32, u32, u32, TextureFormat)> = Vec::new();
         let mut clear_fmts: Vec<TextureFormat> = Vec::new();
+        let mut blit_fmts: Vec<TextureFormat> = Vec::new();
         for op in ops.iter() {
             match op {
                 Enc::BeginRenderPass { color, .. } => {
@@ -1514,11 +1642,18 @@ impl GpuBackend for WgpuBackend {
                 Enc::ClearRect { texture, .. } => {
                     clear_fmts.push(self.resolve_tex(*texture)?.format);
                 }
+                Enc::BlitTexture { dst, src_extent, dst_extent, .. } if src_extent != dst_extent => {
+                    // A scaled blit renders into the dest via a per-format textured-quad pipeline.
+                    blit_fmts.push(self.resolve_tex(*dst)?.format);
+                }
                 _ => {}
             }
         }
         for f in clear_fmts {
             self.ensure_pipelines_for(f);
+        }
+        for f in blit_fmts {
+            self.ensure_blit_pipeline_for(f);
         }
         for (id, w, h, f) in scratch_needed {
             self.ensure_flip_scratch(id, w, h, f);
@@ -1529,6 +1664,8 @@ impl GpuBackend for WgpuBackend {
         // the render pass that borrows them (and so we never mutate self during a pass). ---
         let mut built: HashMap<usize, wgpu::BindGroup> = HashMap::new();
         let mut clear_uniforms: HashMap<usize, (wgpu::Buffer, wgpu::BindGroup)> = HashMap::new();
+        // Scaled-blit uniform (src-region mapping) + bind group (region/src/sampler), keyed by op index.
+        let mut blit_binds: HashMap<usize, (wgpu::Buffer, wgpu::BindGroup)> = HashMap::new();
         let mut cur_pipe: Option<u32> = None;
         for (k, op) in ops.iter().enumerate() {
             match op {
@@ -1601,6 +1738,37 @@ impl GpuBackend for WgpuBackend {
                         }],
                     });
                     clear_uniforms.insert(k, (buf, bg));
+                }
+                Enc::BlitTexture { src, src_origin, src_extent, dst, dst_extent, filter, .. }
+                    if src_extent != dst_extent =>
+                {
+                    // Build the region uniform + bind group for a scaled blit. Resolve into owned locals so
+                    // the immutable `self` borrows end before the device (mut-free here, but mirrors clear).
+                    let (sw, sh) = { let t = self.resolve_tex(*src)?; (t.width as f32, t.height as f32) };
+                    let region: [f32; 4] = [
+                        src_origin.x as f32 / sw,
+                        src_origin.y as f32 / sh,
+                        src_extent.width as f32 / sw,
+                        src_extent.height as f32 / sh,
+                    ];
+                    let buf = self.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                        label: Some("dd-blit-region"),
+                        contents: bytemuck_f32x4(&region),
+                        usage: wgpu::BufferUsages::UNIFORM,
+                    });
+                    let dst_fmt = self.resolve_tex(*dst)?.format;
+                    let src_view = &self.resolve_tex(*src)?.view;
+                    let layout = self.blit_pipeline_for(dst_fmt).get_bind_group_layout(0);
+                    let bg = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                        label: Some("dd-blit-bg"),
+                        layout: &layout,
+                        entries: &[
+                            wgpu::BindGroupEntry { binding: 0, resource: buf.as_entire_binding() },
+                            wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(src_view) },
+                            wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::Sampler(self.blit_sampler(*filter)) },
+                        ],
+                    });
+                    blit_binds.insert(k, (buf, bg));
                 }
                 _ => {}
             }
@@ -1892,6 +2060,85 @@ impl GpuBackend for WgpuBackend {
                         keep_alive.push(staging);
                     }
                 }
+                Enc::CopyTextureToTexture { src, src_sub, src_origin, dst, dst_sub, dst_origin, extent } => {
+                    let s = self.resolve_tex(*src)?;
+                    let d = self.resolve_tex(*dst)?;
+                    enc.copy_texture_to_texture(
+                        wgpu::TexelCopyTextureInfo {
+                            texture: &s.texture,
+                            mip_level: src_sub.mip,
+                            origin: tex_origin(src_origin, src_sub.layer),
+                            aspect: tex_aspect(src_sub.aspect),
+                        },
+                        wgpu::TexelCopyTextureInfo {
+                            texture: &d.texture,
+                            mip_level: dst_sub.mip,
+                            origin: tex_origin(dst_origin, dst_sub.layer),
+                            aspect: tex_aspect(dst_sub.aspect),
+                        },
+                        wgpu::Extent3d {
+                            width: extent.width,
+                            height: extent.height,
+                            depth_or_array_layers: extent.depth.max(1),
+                        },
+                    );
+                }
+                Enc::BlitTexture { src, src_sub, src_origin, src_extent, dst, dst_sub, dst_origin, dst_extent, .. } => {
+                    if src_extent == dst_extent {
+                        // No scaling → an exact copy is bit-accurate and cheapest (filter is a no-op).
+                        let s = self.resolve_tex(*src)?;
+                        let d = self.resolve_tex(*dst)?;
+                        enc.copy_texture_to_texture(
+                            wgpu::TexelCopyTextureInfo {
+                                texture: &s.texture,
+                                mip_level: src_sub.mip,
+                                origin: tex_origin(src_origin, src_sub.layer),
+                                aspect: tex_aspect(src_sub.aspect),
+                            },
+                            wgpu::TexelCopyTextureInfo {
+                                texture: &d.texture,
+                                mip_level: dst_sub.mip,
+                                origin: tex_origin(dst_origin, dst_sub.layer),
+                                aspect: tex_aspect(dst_sub.aspect),
+                            },
+                            wgpu::Extent3d {
+                                width: src_extent.width,
+                                height: src_extent.height,
+                                depth_or_array_layers: src_extent.depth.max(1),
+                            },
+                        );
+                    } else {
+                        // Scaling → render a filtered textured quad into the dest region. The viewport clips
+                        // output to [dst_origin, dst_extent); the prebuilt bind group carries the src-region UV.
+                        let dst_fmt = self.resolve_tex(*dst)?.format;
+                        let target = self.resolve_tex(*dst)?;
+                        let pipeline = self.blit_pipeline_for(dst_fmt);
+                        let (_buf, bg) = blit_binds.get(&i).expect("blit bind prebuilt");
+                        let mut rp = enc.begin_render_pass(&wgpu::RenderPassDescriptor {
+                            label: Some("dd-blit-pass"),
+                            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                                view: &target.view,
+                                resolve_target: None,
+                                ops: wgpu::Operations { load: wgpu::LoadOp::Load, store: wgpu::StoreOp::Store },
+                            })],
+                            depth_stencil_attachment: None,
+                            timestamp_writes: None,
+                            occlusion_query_set: None,
+                        });
+                        rp.set_viewport(
+                            dst_origin.x as f32,
+                            dst_origin.y as f32,
+                            dst_extent.width as f32,
+                            dst_extent.height as f32,
+                            0.0,
+                            1.0,
+                        );
+                        rp.set_scissor_rect(dst_origin.x, dst_origin.y, dst_extent.width, dst_extent.height);
+                        rp.set_pipeline(pipeline);
+                        rp.set_bind_group(0, bg, &[]);
+                        rp.draw(0..3, 0..1);
+                    }
+                }
                 Enc::BeginComputePass => {
                     let mut cp = enc.begin_compute_pass(&wgpu::ComputePassDescriptor {
                         label: Some("dd-compute"),
@@ -1943,6 +2190,11 @@ impl GpuBackend for WgpuBackend {
 /// Reinterpret a `[f32;4]` clear color as bytes for a uniform upload (no bytemuck dependency).
 fn bytemuck_color(c: &[f32; 4]) -> &[u8] {
     unsafe { std::slice::from_raw_parts(c.as_ptr() as *const u8, 16) }
+}
+
+/// Reinterpret a `[f32;4]` (the scaled-blit src-region mapping) as bytes for a uniform upload.
+fn bytemuck_f32x4(v: &[f32; 4]) -> &[u8] {
+    unsafe { std::slice::from_raw_parts(v.as_ptr() as *const u8, 16) }
 }
 
 /// Reinterpret a SPIR-V `&[u32]` word slice as its underlying bytes for content hashing.

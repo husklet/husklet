@@ -84,6 +84,13 @@ u32_enum!(
 );
 
 u32_enum!(
+    /// Which plane of a texture a copy/blit or subresource selector addresses. Mirrors wgpu's
+    /// `TextureAspect` and the `VkImageAspectFlags` (color/depth/stencil) MoltenVK threads through
+    /// `MVKCmdCopyImage`/`MVKCmdBlitImage`. The software oracle only materializes color (`All`).
+    TextureAspect { All = 0, DepthOnly = 1, StencilOnly = 2 } "TextureAspect"
+);
+
+u32_enum!(
     /// Sampler address (wrap) mode.
     AddressMode { ClampToEdge = 0, Repeat = 1, MirrorRepeat = 2 } "AddressMode"
 );
@@ -253,6 +260,44 @@ pub struct SurfaceDesc {
 }
 
 // ---------------------------------------------------------------------------------------------------
+// texture subresources / regions (texture-to-texture copy + blit)
+// ---------------------------------------------------------------------------------------------------
+
+/// A texture subresource selector — dd's first-class "texture view / subresource" concept: the
+/// (mip level, array layer, aspect) a copy/blit reads or writes. Mirrors wgpu's
+/// `TexelCopyTextureInfo { mip_level, origin.z (array layer), aspect }` and the `VkImageSubresourceLayers`
+/// (`mipLevel` / `baseArrayLayer` / `aspectMask`) MoltenVK maps in `MVKCmdCopyImage`/`MVKCmdBlitImage`.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct TextureSubresource {
+    pub mip: u32,
+    pub layer: u32,
+    pub aspect: TextureAspect,
+}
+
+impl TextureSubresource {
+    /// The base subresource: mip 0, layer 0, whole (color) aspect — the common case shims lower to.
+    pub fn base() -> Self {
+        TextureSubresource { mip: 0, layer: 0, aspect: TextureAspect::All }
+    }
+}
+
+/// A 3D texel origin within a texture subresource (`x`/`y` in-plane; `z` = depth slice for a 3D texture).
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub struct Origin3d {
+    pub x: u32,
+    pub y: u32,
+    pub z: u32,
+}
+
+/// A 3D copy/blit extent in texels.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct Extent3d {
+    pub width: u32,
+    pub height: u32,
+    pub depth: u32,
+}
+
+// ---------------------------------------------------------------------------------------------------
 // encoder-level (command-buffer) ops
 // ---------------------------------------------------------------------------------------------------
 
@@ -361,6 +406,34 @@ pub enum Enc {
         dst_offset: u64,
         bytes_per_row: u32,
     },
+    /// Exact-size texture→texture copy (no scaling): `extent` texels move from `src`'s
+    /// `src_sub`/`src_origin` to `dst`'s `dst_sub`/`dst_origin`. Formats must be copy-compatible (equal
+    /// bytes-per-texel). Mirrors Metal's `copyFromTexture:…toTexture:…` blit and `VkCmdCopyImage`
+    /// (`MVKCmdCopyImage`). Wire tag 18 (added at [`WIRE_VERSION`] 2).
+    CopyTextureToTexture {
+        src: u32,
+        src_sub: TextureSubresource,
+        src_origin: Origin3d,
+        dst: u32,
+        dst_sub: TextureSubresource,
+        dst_origin: Origin3d,
+        extent: Extent3d,
+    },
+    /// Scaled/filtered texture→texture blit: the `src_extent` region of `src` is resampled with `filter`
+    /// into the `dst_extent` region of `dst` (the scale is `dst_extent / src_extent`; equal extents = a
+    /// straight copy). Mirrors `VkCmdBlitImage` (`MVKCmdBlitImage`, which renders a filtered quad when the
+    /// extents differ) and a wgpu render-pass sampled draw. Wire tag 19 (added at [`WIRE_VERSION`] 2).
+    BlitTexture {
+        src: u32,
+        src_sub: TextureSubresource,
+        src_origin: Origin3d,
+        src_extent: Extent3d,
+        dst: u32,
+        dst_sub: TextureSubresource,
+        dst_origin: Origin3d,
+        dst_extent: Extent3d,
+        filter: Filter,
+    },
 }
 
 /// A recorded command buffer, optionally signalling a fence to `value` on completion.
@@ -400,6 +473,16 @@ pub enum Cmd {
     WaitFence { id: u32, value: u64 },
     Present { surface: u32, texture: u32 },
 }
+
+/// dd-GPU IR wire-format version. Bump this whenever a new `Cmd`/`Enc` tag or descriptor field is added
+/// so a negotiated handshake can reject a stale guest/backend pair before it interprets a tag it predates
+/// (the connection preamble in §3 of `docs/codex-rendering.md`). Until that handshake lands, the decoder's
+/// hard `BadTag` rejection of any unknown tag is the standing guarantee that a v1 backend can never
+/// silently misread a v2 tag: it errors the frame rather than aliasing it onto an older meaning.
+///
+/// - v1: the original command/encoder set (tags ≤ 21 / etags ≤ 17).
+/// - v2: adds texture subresources + `CopyTextureToTexture` (etag 18) and `BlitTexture` (etag 19).
+pub const WIRE_VERSION: u32 = 2;
 
 // tag constants (stable wire) --------------------------------------------------------------------
 pub(crate) mod tag {
@@ -444,6 +527,9 @@ mod etag {
     pub const COPY_T2B: u8 = 15;
     pub const SET_SCISSOR: u8 = 16;
     pub const CLEAR_RECT: u8 = 17;
+    // v2 (WIRE_VERSION 2): texture-to-texture copy + scaled blit. A v1 decoder rejects these as BadTag.
+    pub const COPY_T2T: u8 = 18;
+    pub const BLIT_TEXTURE: u8 = 19;
 }
 
 // ---------------------------------------------------------------------------------------------------
@@ -698,6 +784,37 @@ fn dec_bind_group(d: &mut Decoder) -> Result<BindGroupDesc> {
 // codec: encoder ops
 // ---------------------------------------------------------------------------------------------------
 
+fn enc_subresource(e: &mut Encoder, s: &TextureSubresource) {
+    e.u32(s.mip);
+    e.u32(s.layer);
+    e.u32(s.aspect.to_u32());
+}
+fn dec_subresource(d: &mut Decoder) -> Result<TextureSubresource> {
+    Ok(TextureSubresource {
+        mip: d.u32()?,
+        layer: d.u32()?,
+        aspect: TextureAspect::from_u32(d.u32()?)?,
+    })
+}
+
+fn enc_origin(e: &mut Encoder, o: &Origin3d) {
+    e.u32(o.x);
+    e.u32(o.y);
+    e.u32(o.z);
+}
+fn dec_origin(d: &mut Decoder) -> Result<Origin3d> {
+    Ok(Origin3d { x: d.u32()?, y: d.u32()?, z: d.u32()? })
+}
+
+fn enc_extent(e: &mut Encoder, x: &Extent3d) {
+    e.u32(x.width);
+    e.u32(x.height);
+    e.u32(x.depth);
+}
+fn dec_extent(d: &mut Decoder) -> Result<Extent3d> {
+    Ok(Extent3d { width: d.u32()?, height: d.u32()?, depth: d.u32()? })
+}
+
 fn enc_enc(e: &mut Encoder, op: &Enc) {
     match op {
         Enc::BeginRenderPass { color, depth } => {
@@ -818,6 +935,38 @@ fn enc_enc(e: &mut Encoder, op: &Enc) {
             e.u64(*dst_offset);
             e.u32(*bytes_per_row);
         }
+        Enc::CopyTextureToTexture { src, src_sub, src_origin, dst, dst_sub, dst_origin, extent } => {
+            e.u8(etag::COPY_T2T);
+            e.u32(*src);
+            enc_subresource(e, src_sub);
+            enc_origin(e, src_origin);
+            e.u32(*dst);
+            enc_subresource(e, dst_sub);
+            enc_origin(e, dst_origin);
+            enc_extent(e, extent);
+        }
+        Enc::BlitTexture {
+            src,
+            src_sub,
+            src_origin,
+            src_extent,
+            dst,
+            dst_sub,
+            dst_origin,
+            dst_extent,
+            filter,
+        } => {
+            e.u8(etag::BLIT_TEXTURE);
+            e.u32(*src);
+            enc_subresource(e, src_sub);
+            enc_origin(e, src_origin);
+            enc_extent(e, src_extent);
+            e.u32(*dst);
+            enc_subresource(e, dst_sub);
+            enc_origin(e, dst_origin);
+            enc_extent(e, dst_extent);
+            e.u32(filter.to_u32());
+        }
     }
 }
 
@@ -924,6 +1073,26 @@ fn dec_enc(d: &mut Decoder) -> Result<Enc> {
             dst: d.u32()?,
             dst_offset: d.u64()?,
             bytes_per_row: d.u32()?,
+        },
+        etag::COPY_T2T => Enc::CopyTextureToTexture {
+            src: d.u32()?,
+            src_sub: dec_subresource(d)?,
+            src_origin: dec_origin(d)?,
+            dst: d.u32()?,
+            dst_sub: dec_subresource(d)?,
+            dst_origin: dec_origin(d)?,
+            extent: dec_extent(d)?,
+        },
+        etag::BLIT_TEXTURE => Enc::BlitTexture {
+            src: d.u32()?,
+            src_sub: dec_subresource(d)?,
+            src_origin: dec_origin(d)?,
+            src_extent: dec_extent(d)?,
+            dst: d.u32()?,
+            dst_sub: dec_subresource(d)?,
+            dst_origin: dec_origin(d)?,
+            dst_extent: dec_extent(d)?,
+            filter: Filter::from_u32(d.u32()?)?,
         },
         t => return Err(GpuError::BadTag(t as u32)),
     })
