@@ -247,13 +247,15 @@ Important gaps and incorrect simplifications:
   timeouts with preserved outputs and unsignaled fences, acquire-before-present, synchronous release/reacquire,
   replacement retirement, completion of an old acquired image and surface loss. True asynchronous present-engine
   completion and resize generations remain outside this synchronous lifecycle slice.
-- Queue present is false-success. Invalid swapchains/image indices are skipped, wait semaphores are ignored,
-  `pResults` is never populated, the global IR cursor advances before submission, executor and Wayland failures are
-  logged but discarded, and the function always returns `VK_SUCCESS`. Prepare one immutable submission per presented
-  image, validate and wait first, submit transactionally, update per-swapchain result/state, and advance the IR cursor
-  only after acceptance. Map lost executor/device to `VK_ERROR_DEVICE_LOST`, dead Wayland surface to
-  `VK_ERROR_SURFACE_LOST_KHR`, resize/generation mismatch to `VK_ERROR_OUT_OF_DATE_KHR`, and a still-usable mismatch
-  to `VK_SUBOPTIMAL_KHR`. `vk_present_reports_failures_without_consuming_unsent_frame_state` prevents regression.
+- Queue present now validates every wait semaphore, swapchain, image index and acquired ownership before delivery;
+  invalid batches do not mutate state. Executor rejection/loss maps to `VK_ERROR_DEVICE_LOST`, Wayland commit failure
+  maps to `VK_ERROR_SURFACE_LOST_KHR`, and every path populates `pResults`. Wait semaphores, the global IR cursor and
+  image ownership commit only after the complete synchronous delivery batch succeeds, so a failed single-swapchain
+  frame can be retried unchanged. The Rust ABI fault regression
+  `present_failures_preserve_ir_ownership_and_waits_until_transactional_commit` covers executor and surface faults,
+  retry, result arrays and invalid-wait atomicity. The current one-byte executor acknowledgement cannot roll back a
+  frame already accepted before a later surface in a multi-swapchain batch fails; a versioned batch protocol is still
+  required for external all-or-nothing delivery. Resize generations and `VK_SUBOPTIMAL_KHR` also remain unmodeled.
 - Memory types, coherence, alignment, image layout transitions, subresources, mip levels, array layers,
   multisampling, and format capabilities are far narrower than Vulkan's model. Returning success where the IR or
   backend cannot represent the operation is wrong.
@@ -1075,7 +1077,7 @@ pixels, and fails against the broken behavior. Do not add tests that read implem
 | `vk_advertised_core_has_real_implementations_for_every_mandatory_command` | partial | truthful Vulkan 1.0 still has 55/137 mandatory generated failures/stubs | Implement all advertised core semantics and pass CTS subset |
 | `vk_wsi_validates_surface_handles_and_swapchain_create_info` | implemented | Shared capability validation rejects stale surfaces and incompatible swapchain requests atomically | Rust ABI negative create/query matrix green; retain as regression |
 | `vk_swapchain_tracks_image_ownership_timeouts_and_retirement` | implemented | Explicit image/swapchain states enforce ownership, timeout results, acquire sync, retirement and loss | Rust ABI multi-frame lifecycle regression green; retain as regression |
-| `vk_present_reports_failures_without_consuming_unsent_frame_state` | contradictory | present skips invalid input, consumes IR and discards delivery failures | Transactional submit with `pResults` and Vulkan error mapping |
+| `vk_present_reports_failures_without_consuming_unsent_frame_state` | implemented | Present validates atomically, maps delivery errors, fills `pResults`, and commits waits/IR/ownership only on success | Rust ABI delivery-fault/retry regression green; retain as regression |
 | `vk_image_layout_barriers_track_subresources_and_queue_ownership` | missing | images and barrier APIs have no layout/access/ownership state | Per-subresource transition model plus hazard/ownership tests |
 | `vk_transfer_commands_preserve_every_region_subresource_and_layout` | partial | shared IR/backends have subresource copy+blit, but Vulkan lowering and remaining region/resolve fields are absent | Shim lowering plus buffer/image/resolve/clear validation matrix |
 | `vk_shader_modules_validate_spirv_entries_specialization_and_interfaces` | missing | malformed SPIR-V and incompatible interfaces are forwarded unchecked | Validated/reflected module records and negative pipeline corpus |

@@ -50,6 +50,8 @@ pub const VK_ERROR_OUT_OF_HOST_MEMORY: VkResult = -1;
 /// An allocation or binding could not be satisfied from device memory (spec: `-2`).
 pub const VK_ERROR_OUT_OF_DEVICE_MEMORY: VkResult = -2;
 pub const VK_ERROR_INITIALIZATION_FAILED: VkResult = -3;
+/// The synchronous executor connection was lost or rejected submitted work.
+pub const VK_ERROR_DEVICE_LOST: VkResult = -4;
 /// `vkMapMemory` could not map the requested range — bad range / already mapped / not host-visible (`-5`).
 pub const VK_ERROR_MEMORY_MAP_FAILED: VkResult = -5;
 /// The truthful failure a generated stub returns for a command from an extension the ICD does not

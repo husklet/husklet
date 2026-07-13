@@ -391,86 +391,131 @@ pub extern "C" fn vkQueuePresentKHR(_queue: VkQueue, p_present_info: *const vk::
     let Some(pi) = (unsafe { p_present_info.as_ref() }) else {
         return VK_ERROR_INITIALIZATION_FAILED;
     };
-    if pi.p_swapchains.is_null() || pi.p_image_indices.is_null() {
+    if pi.swapchain_count == 0 {
+        return VK_SUCCESS;
+    }
+    if pi.p_swapchains.is_null()
+        || pi.p_image_indices.is_null()
+        || (pi.wait_semaphore_count != 0 && pi.p_wait_semaphores.is_null())
+    {
         return VK_ERROR_INITIALIZATION_FAILED;
     }
     let swaps = unsafe { core::slice::from_raw_parts(pi.p_swapchains, pi.swapchain_count as usize) };
     let idxs = unsafe { core::slice::from_raw_parts(pi.p_image_indices, pi.swapchain_count as usize) };
+    let waits = if pi.wait_semaphore_count == 0 {
+        &[]
+    } else {
+        unsafe { core::slice::from_raw_parts(pi.p_wait_semaphores, pi.wait_semaphore_count as usize) }
+    };
+
+    let write_results = |result: VkResult| {
+        if !pi.p_results.is_null() {
+            let results = unsafe { core::slice::from_raw_parts_mut(pi.p_results, pi.swapchain_count as usize) };
+            results.fill(vk::Result::from_raw(result));
+        }
+    };
 
     let mut s = reg::lock();
-    // Validate the complete ownership batch before changing any image state. Delivery errors are a
-    // separate transactional-present concern, but invalid ownership must never partially present.
+    // Validate the complete batch before delivery or mutation. A binary semaphore may be consumed
+    // only once, and all waits must already be signaled in this synchronous execution model.
+    let mut wait_handles = std::collections::HashSet::with_capacity(waits.len());
+    for wait in waits {
+        let handle = wait.as_raw();
+        if !wait_handles.insert(handle) || !s.semaphores.get(&handle).is_some_and(|sem| sem.signaled) {
+            write_results(VK_ERROR_INITIALIZATION_FAILED);
+            return VK_ERROR_INITIALIZATION_FAILED;
+        }
+    }
     let mut ownerships = std::collections::HashSet::with_capacity(swaps.len());
+    let mut prepared = Vec::with_capacity(swaps.len());
     for (sc_handle, &img_idx) in swaps.iter().zip(idxs.iter()) {
         let sc_handle = sc_handle.as_raw();
         if !ownerships.insert((sc_handle, img_idx)) {
+            write_results(VK_ERROR_INITIALIZATION_FAILED);
             return VK_ERROR_INITIALIZATION_FAILED;
         }
         let Some(sc) = s.swapchains.get(&sc_handle) else {
+            write_results(VK_ERROR_INITIALIZATION_FAILED);
             return VK_ERROR_INITIALIZATION_FAILED;
         };
         if sc.state == SwapchainState::Lost {
+            write_results(VK_ERROR_SURFACE_LOST_KHR);
             return VK_ERROR_SURFACE_LOST_KHR;
         }
         let Some(img) = sc.images.get(img_idx as usize) else {
+            write_results(VK_ERROR_INITIALIZATION_FAILED);
             return VK_ERROR_INITIALIZATION_FAILED;
         };
         if img.state != SwapImageState::Acquired {
+            write_results(VK_ERROR_INITIALIZATION_FAILED);
             return VK_ERROR_INITIALIZATION_FAILED;
         }
+        let Some(surface_rec) = s.surfaces.get(&sc.surface) else {
+            write_results(VK_ERROR_SURFACE_LOST_KHR);
+            return VK_ERROR_SURFACE_LOST_KHR;
+        };
+        prepared.push((sc_handle, img_idx as usize, img.surface, surface_rec.wl_display, surface_rec.wl_surface));
     }
-    for (sc_handle, &img_idx) in swaps.iter().zip(idxs.iter()) {
-        let sc_handle = sc_handle.as_raw();
-        let sc = &mut s.swapchains.get_mut(&sc_handle).expect("validated swapchain");
-        sc.images[img_idx as usize].state = SwapImageState::Presenting;
-        let img = &sc.images[img_idx as usize];
-        let (surface, tex, sc_surface) = (img.surface, img.ir_id, sc.surface);
-        let _ = tex;
-        // No explicit Cmd::Present: the render pass already targets texture id 1, which the host
-        // executor re-points at THIS frame's IOSurface (via the ExecConn header's surface.id), so the
-        // render lands directly in the presented IOSurface. (dd-display's Metal executor returns
-        // "backend does not support present" for a Cmd::Present — the GL shim likewise omits it.)
-        // Ship the frame's IR (everything recorded since the last present) to the host executor, which
-        // renders it on Metal INTO the surface.id IOSurface.
-        let from = s.present_flushed;
-        let frame = s.ir_log[from..].to_vec();
-        s.present_flushed = s.ir_log.len();
-        // Always ship to the host executor via ExecConn::from_env (defaults to the standard
-        // $DD_GPU_EXEC / /run/user/0/dd-gpu-0 socket). Off-guest the connect fails harmlessly.
-        {
-            let bytes = encode_stream(&frame);
-            let conn = s.exec.get_or_insert_with(transport::ExecConn::from_env);
-            match conn.submit(&surface, &bytes) {
-                Ok(()) if std::env::var_os("DD_SHIM_DEBUG").is_some() => {
-                    eprintln!("[dd-shim-vk] vkQueuePresentKHR: exec submit OK ({} bytes) surface.id={}", bytes.len(), surface.id);
-                }
-                Err(e) if std::env::var_os("DD_SHIM_DEBUG").is_some() => {
-                    eprintln!("[dd-shim-vk] vkQueuePresentKHR: exec submit FAILED: {e}");
-                }
-                _ => {}
-            }
+
+    let frame_end = s.ir_log.len();
+    let bytes = encode_stream(&s.ir_log[s.present_flushed..frame_end]);
+    for &(_, _, surface, display, wl_surface) in &prepared {
+        let result = deliver_present(&mut s, &surface, &bytes, display, wl_surface);
+        if result != VK_SUCCESS {
+            write_results(result);
+            return result;
         }
-        let dbg = std::env::var_os("DD_SHIM_DEBUG").is_some();
-        if dbg {
-            eprintln!("[dd-shim-vk] vkQueuePresentKHR: surface.id={} tex={} frame_ir={} cmds", surface.id, tex, frame.len());
-        }
-        // App-side rendezvous: commit the host-rendered IOSurface dma-buf to the app's own wl_surface
-        // (dd-display keys the IOSurface off modifier_hi=0x6464 / modifier_lo=surface.id). This is what
-        // lands the frame on vkcube's window. Off-guest (no wl display / dma-buf fd) it no-ops.
-        // DD_VK_NO_WL_PRESENT disables it (diagnostic isolation of the wayland-marshal path).
-        if std::env::var_os("DD_VK_NO_WL_PRESENT").is_none() {
-            if let Some(rec) = s.surfaces.get(&sc_surface) {
-                let committed = crate::wl_present::present(rec.wl_display, rec.wl_surface, &surface);
-                if dbg {
-                    eprintln!("[dd-shim-vk] vkQueuePresentKHR: wayland commit -> {committed}");
-                }
-            }
-        }
-        s.swapchains.get_mut(&sc_handle).expect("validated swapchain").images[img_idx as usize].state =
-            SwapImageState::Available;
     }
+
+    // Transactional commit: only successful delivery consumes waits, advances the IR cursor and
+    // returns image ownership to the presentation engine.
+    for wait in wait_handles {
+        s.semaphores.get_mut(&wait).expect("validated wait semaphore").signaled = false;
+    }
+    for &(swapchain, index, _, _, _) in &prepared {
+        let image = &mut s.swapchains.get_mut(&swapchain).expect("validated swapchain").images[index];
+        image.state = SwapImageState::Presenting;
+        image.state = SwapImageState::Available;
+    }
+    s.present_flushed = frame_end;
+    write_results(VK_SUCCESS);
     VK_SUCCESS
 }
+
+fn deliver_present(
+    state: &mut reg::VkState,
+    surface: &Surface,
+    bytes: &[u8],
+    display: usize,
+    wl_surface: usize,
+) -> VkResult {
+    #[cfg(test)]
+    {
+        let _ = (state, surface, bytes, display, wl_surface);
+        match TEST_DELIVERY.load(std::sync::atomic::Ordering::SeqCst) {
+            1 => return VK_ERROR_DEVICE_LOST,
+            2 => return VK_ERROR_SURFACE_LOST_KHR,
+            _ => return VK_SUCCESS,
+        }
+    }
+
+    #[cfg(not(test))]
+    {
+        let conn = state.exec.get_or_insert_with(transport::ExecConn::from_env);
+        if conn.submit(surface, bytes).is_err() {
+            return VK_ERROR_DEVICE_LOST;
+        }
+        if std::env::var_os("DD_VK_NO_WL_PRESENT").is_none()
+            && !crate::wl_present::present(display, wl_surface, surface)
+        {
+            return VK_ERROR_SURFACE_LOST_KHR;
+        }
+        VK_SUCCESS
+    }
+}
+
+#[cfg(test)]
+static TEST_DELIVERY: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(0);
 
 /// The two-call enumeration idiom (shared with instance.rs's copy but local to avoid a cross-module
 /// pub); writes up to `*pCount` items, returns `VK_INCOMPLETE` if truncated.
@@ -495,6 +540,8 @@ unsafe fn write_enum<T: Copy>(items: &[T], p_count: *mut u32, p_data: *mut T) ->
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    static PRESENT_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
     fn create_surface(display: usize, window: usize) -> u64 {
         let ci = vk::WaylandSurfaceCreateInfoKHR::default()
@@ -682,6 +729,8 @@ mod tests {
 
     #[test]
     fn swapchain_tracks_image_ownership_timeouts_and_retirement() {
+        let _present_guard = PRESENT_TEST_LOCK.lock().unwrap_or_else(|error| error.into_inner());
+        TEST_DELIVERY.store(0, std::sync::atomic::Ordering::SeqCst);
         let surface = create_surface(0x5510, 0x6620);
         let swapchain = create_swapchain(&valid_swapchain_ci(surface));
         let fence0 = create_fence();
@@ -792,5 +841,114 @@ mod tests {
             crate::command::vkDestroyFence(core::ptr::null_mut(), fence, core::ptr::null());
         }
         crate::command::vkDestroySemaphore(core::ptr::null_mut(), acquire_semaphore, core::ptr::null());
+    }
+
+    #[test]
+    fn present_failures_preserve_ir_ownership_and_waits_until_transactional_commit() {
+        let _present_guard = PRESENT_TEST_LOCK.lock().unwrap_or_else(|error| error.into_inner());
+        let surface = create_surface(0x7710, 0x8820);
+        let swapchain = create_swapchain(&valid_swapchain_ci(surface));
+        let acquire = create_semaphore();
+        let mut image = u32::MAX;
+        assert_eq!(
+            vkAcquireNextImageKHR(core::ptr::null_mut(), swapchain, 0, acquire, 0, &mut image),
+            VK_SUCCESS
+        );
+        reg::lock().record(dd_shim_common::ir::Cmd::DestroyBuffer(0x1234));
+        let initial_cursor = reg::lock().present_flushed;
+
+        let swaps = [vk::SwapchainKHR::from_raw(swapchain)];
+        let indices = [image];
+        let waits = [vk::Semaphore::from_raw(acquire)];
+        let mut results = [vk::Result::SUCCESS];
+        let info = vk::PresentInfoKHR {
+            wait_semaphore_count: waits.len() as u32,
+            p_wait_semaphores: waits.as_ptr(),
+            swapchain_count: swaps.len() as u32,
+            p_swapchains: swaps.as_ptr(),
+            p_image_indices: indices.as_ptr(),
+            p_results: results.as_mut_ptr(),
+            ..Default::default()
+        };
+
+        TEST_DELIVERY.store(1, std::sync::atomic::Ordering::SeqCst);
+        assert_eq!(vkQueuePresentKHR(core::ptr::null_mut(), &info), VK_ERROR_DEVICE_LOST);
+        assert_eq!(results[0].as_raw(), VK_ERROR_DEVICE_LOST);
+        assert_eq!(reg::lock().present_flushed, initial_cursor, "transport failure must preserve IR");
+
+        // The exact same acquired image and binary wait can be retried: both ownership and the
+        // semaphore remained untouched by the failed delivery.
+        TEST_DELIVERY.store(0, std::sync::atomic::Ordering::SeqCst);
+        results[0] = vk::Result::ERROR_UNKNOWN;
+        assert_eq!(vkQueuePresentKHR(core::ptr::null_mut(), &info), VK_SUCCESS);
+        assert_eq!(results[0], vk::Result::SUCCESS);
+        let state = reg::lock();
+        assert_eq!(state.present_flushed, state.ir_log.len());
+        drop(state);
+
+        let surface_wait = create_semaphore();
+        let mut next_image = u32::MAX;
+        assert_eq!(
+            vkAcquireNextImageKHR(core::ptr::null_mut(), swapchain, 0, surface_wait, 0, &mut next_image),
+            VK_SUCCESS
+        );
+        let next_indices = [next_image];
+        let next_waits = [vk::Semaphore::from_raw(surface_wait)];
+        let mut next_results = [vk::Result::SUCCESS];
+        let next_info = vk::PresentInfoKHR {
+            wait_semaphore_count: next_waits.len() as u32,
+            p_wait_semaphores: next_waits.as_ptr(),
+            swapchain_count: swaps.len() as u32,
+            p_swapchains: swaps.as_ptr(),
+            p_image_indices: next_indices.as_ptr(),
+            p_results: next_results.as_mut_ptr(),
+            ..Default::default()
+        };
+        TEST_DELIVERY.store(2, std::sync::atomic::Ordering::SeqCst);
+        assert_eq!(vkQueuePresentKHR(core::ptr::null_mut(), &next_info), VK_ERROR_SURFACE_LOST_KHR);
+        assert_eq!(next_results[0].as_raw(), VK_ERROR_SURFACE_LOST_KHR);
+        TEST_DELIVERY.store(0, std::sync::atomic::Ordering::SeqCst);
+        assert_eq!(vkQueuePresentKHR(core::ptr::null_mut(), &next_info), VK_SUCCESS);
+
+        // A bad wait rejects the whole batch and reports the same per-swapchain result without
+        // consuming ownership. The image remains presentable with its valid acquire semaphore.
+        let final_wait = create_semaphore();
+        let mut final_image = u32::MAX;
+        assert_eq!(
+            vkAcquireNextImageKHR(core::ptr::null_mut(), swapchain, 0, final_wait, 0, &mut final_image),
+            VK_SUCCESS
+        );
+        let final_indices = [final_image];
+        let bad_waits = [vk::Semaphore::from_raw(0xdead_beef)];
+        let mut final_results = [vk::Result::SUCCESS];
+        let bad_info = vk::PresentInfoKHR {
+            wait_semaphore_count: bad_waits.len() as u32,
+            p_wait_semaphores: bad_waits.as_ptr(),
+            swapchain_count: swaps.len() as u32,
+            p_swapchains: swaps.as_ptr(),
+            p_image_indices: final_indices.as_ptr(),
+            p_results: final_results.as_mut_ptr(),
+            ..Default::default()
+        };
+        assert_eq!(vkQueuePresentKHR(core::ptr::null_mut(), &bad_info), VK_ERROR_INITIALIZATION_FAILED);
+        assert_eq!(final_results[0].as_raw(), VK_ERROR_INITIALIZATION_FAILED);
+        let good_waits = [vk::Semaphore::from_raw(final_wait)];
+        let good_info = vk::PresentInfoKHR {
+            wait_semaphore_count: good_waits.len() as u32,
+            p_wait_semaphores: good_waits.as_ptr(),
+            swapchain_count: swaps.len() as u32,
+            p_swapchains: swaps.as_ptr(),
+            p_image_indices: final_indices.as_ptr(),
+            p_results: final_results.as_mut_ptr(),
+            ..Default::default()
+        };
+        assert_eq!(vkQueuePresentKHR(core::ptr::null_mut(), &good_info), VK_SUCCESS);
+
+        TEST_DELIVERY.store(0, std::sync::atomic::Ordering::SeqCst);
+        vkDestroySwapchainKHR(core::ptr::null_mut(), swapchain, core::ptr::null());
+        vkDestroySurfaceKHR(core::ptr::null_mut(), surface, core::ptr::null());
+        for semaphore in [acquire, surface_wait, final_wait] {
+            crate::command::vkDestroySemaphore(core::ptr::null_mut(), semaphore, core::ptr::null());
+        }
     }
 }

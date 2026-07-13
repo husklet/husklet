@@ -110,7 +110,7 @@ fn partial_note(name: &str) -> Option<&'static str> {
         "vkAcquireNextImageKHR" => {
             "owned-image acquire with timeout/retirement; synchronous completion model"
         }
-        "vkQueuePresentKHR" => "synchronous present; no per-image present-result array / SUBOPTIMAL",
+        "vkQueuePresentKHR" => "transactional synchronous present with pResults; no resize/SUBOPTIMAL",
         "vkGetPhysicalDeviceSurfaceCapabilitiesKHR"
         | "vkGetPhysicalDeviceSurfaceFormatsKHR"
         | "vkGetPhysicalDeviceSurfacePresentModesKHR" => {
