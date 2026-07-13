@@ -586,6 +586,98 @@ mod tests {
         vkDestroyImage(core::ptr::null_mut(), d24, core::ptr::null());
     }
 
+    /// The full wgpu-hal-style device-creation query sequence succeeds end-to-end against our ICD:
+    /// instance(1.1) -> enumerate device -> properties2(+Maintenance3) -> features2(+Vulkan12/13) ->
+    /// queue families -> memory -> device extensions -> createDevice(feature chain) -> getDeviceQueue.
+    /// This is the in-process form of "how far a wgpu device-create gets": all the way to a live queue.
+    #[test]
+    fn wgpu_style_device_creation_walkthrough_succeeds() {
+        let _g = reg::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        use ash::vk;
+        // 1. Instance at Vulkan 1.1 (wgpu-hal's minimum).
+        let app = vk::ApplicationInfo::default().api_version(vk::make_api_version(0, 1, 1, 0));
+        let ici = vk::InstanceCreateInfo::default().application_info(&app);
+        let mut instance: types::VkInstance = core::ptr::null_mut();
+        assert_eq!(vkCreateInstance(&ici, core::ptr::null(), &mut instance), types::VK_SUCCESS);
+        assert!(!instance.is_null());
+
+        // 2. Enumerate the physical device.
+        let mut n = 0u32;
+        assert_eq!(vkEnumeratePhysicalDevices(instance, &mut n, core::ptr::null_mut()), types::VK_SUCCESS);
+        assert_eq!(n, 1);
+        let mut phys: types::VkPhysicalDevice = core::ptr::null_mut();
+        assert_eq!(vkEnumeratePhysicalDevices(instance, &mut n, &mut phys), types::VK_SUCCESS);
+
+        // 3. properties2 + Maintenance3: apiVersion 1.1, a non-zero descriptor-set ceiling + real limits.
+        let mut m3 = vk::PhysicalDeviceMaintenance3Properties::default();
+        let (api_minor, max_per_stage) = {
+            let mut props2 = vk::PhysicalDeviceProperties2::default().push_next(&mut m3);
+            vkGetPhysicalDeviceProperties2(phys, &mut props2);
+            (ash::vk::api_version_minor(props2.properties.api_version), props2.properties.limits.max_per_stage_resources)
+        };
+        assert_eq!(api_minor, 1);
+        assert!(m3.max_per_set_descriptors > 0, "wgpu needs a non-zero maxPerSetDescriptors");
+        assert!(max_per_stage >= 128, "real limits, not zero");
+
+        // 4. features2 + Vulkan12/13: the features wgpu enables must be reported TRUE.
+        let mut f12 = vk::PhysicalDeviceVulkan12Features::default();
+        let mut f13 = vk::PhysicalDeviceVulkan13Features::default();
+        {
+            let mut feats2 = vk::PhysicalDeviceFeatures2::default().push_next(&mut f12).push_next(&mut f13);
+            vkGetPhysicalDeviceFeatures2(phys, &mut feats2);
+        }
+        assert_eq!(f12.timeline_semaphore, vk::TRUE);
+        assert_eq!(f12.buffer_device_address, vk::TRUE);
+        assert_eq!(f13.dynamic_rendering, vk::TRUE);
+        assert_eq!(f13.synchronization2, vk::TRUE);
+
+        // 5. Queue families: a graphics+compute queue.
+        let mut qn = 0u32;
+        vkGetPhysicalDeviceQueueFamilyProperties(phys, &mut qn, core::ptr::null_mut());
+        assert!(qn >= 1);
+        let mut qprops = vec![vk::QueueFamilyProperties::default(); qn as usize];
+        vkGetPhysicalDeviceQueueFamilyProperties(phys, &mut qn, qprops.as_mut_ptr());
+        assert!(qprops[0].queue_flags.contains(vk::QueueFlags::GRAPHICS | vk::QueueFlags::COMPUTE));
+
+        // 6. Memory: a device-local + host-visible type.
+        let mut mem = vk::PhysicalDeviceMemoryProperties::default();
+        vkGetPhysicalDeviceMemoryProperties(phys, &mut mem);
+        assert!(mem.memory_type_count >= 1);
+        assert!(mem.memory_types[0].property_flags.contains(vk::MemoryPropertyFlags::DEVICE_LOCAL | vk::MemoryPropertyFlags::HOST_VISIBLE));
+
+        // 7. Device extensions: the set wgpu-hal looks for.
+        let mut en = 0u32;
+        vkEnumerateDeviceExtensionProperties(phys, core::ptr::null(), &mut en, core::ptr::null_mut());
+        let mut exts = vec![vk::ExtensionProperties::default(); en as usize];
+        vkEnumerateDeviceExtensionProperties(phys, core::ptr::null(), &mut en, exts.as_mut_ptr());
+        let names: Vec<String> = exts.iter().map(|e| {
+            let b: Vec<u8> = e.extension_name.iter().take_while(|&&c| c != 0).map(|&c| c as u8).collect();
+            String::from_utf8_lossy(&b).into_owned()
+        }).collect();
+        for want in ["VK_KHR_swapchain", "VK_KHR_timeline_semaphore", "VK_KHR_dynamic_rendering", "VK_KHR_buffer_device_address"] {
+            assert!(names.iter().any(|n| n == want), "device extension {want} not advertised");
+        }
+
+        // 8. Create the device with a features2 chain (wgpu enables the detected features via pNext), and
+        //    a graphics+compute queue.
+        let prio = [1.0f32];
+        let qci = vk::DeviceQueueCreateInfo::default().queue_family_index(0).queue_priorities(&prio);
+        let qcis = [qci];
+        let mut enable12 = vk::PhysicalDeviceVulkan12Features::default().timeline_semaphore(true).buffer_device_address(true);
+        let dci = vk::DeviceCreateInfo::default().queue_create_infos(&qcis).push_next(&mut enable12);
+        let mut device: types::VkDevice = core::ptr::null_mut();
+        assert_eq!(vkCreateDevice(phys, &dci, core::ptr::null(), &mut device), types::VK_SUCCESS, "device creation must succeed");
+        assert!(!device.is_null());
+
+        // 9. Retrieve the queue.
+        let mut queue: types::VkQueue = core::ptr::null_mut();
+        vkGetDeviceQueue(device, 0, 0, &mut queue);
+        assert!(!queue.is_null(), "a live queue — device creation reached the end");
+
+        vkDestroyDevice(device, core::ptr::null());
+        vkDestroyInstance(instance, core::ptr::null());
+    }
+
     /// Blocker 3: format properties are per-format — a color format advertises COLOR_ATTACHMENT (not
     /// DEPTH_STENCIL), a depth format advertises DEPTH_STENCIL_ATTACHMENT (not COLOR).
     #[test]
