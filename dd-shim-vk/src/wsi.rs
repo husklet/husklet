@@ -17,7 +17,7 @@
 //! swapchain falls back to plain offscreen images — the render path still exercises + the Metal
 //! validation replays it via the backend. The live guest path uses the real IOSurface + `$DD_GPU_EXEC`.
 
-use crate::reg::{self, ImageRec, SurfaceRec, SwapImage, SwapchainRec};
+use crate::reg::{self, ImageRec, SurfaceRec, SwapImage, SwapImageState, SwapchainRec, SwapchainState};
 use crate::types::*;
 use ash::vk;
 use ash::vk::Handle;
@@ -94,7 +94,11 @@ pub extern "C" fn vkCreateWaylandSurfaceKHR(
 
 #[no_mangle]
 pub extern "C" fn vkDestroySurfaceKHR(_instance: VkInstance, surface: u64, _p_allocator: *const c_void) {
-    reg::lock().surfaces.remove(&surface);
+    let mut s = reg::lock();
+    s.surfaces.remove(&surface);
+    for swapchain in s.swapchains.values_mut().filter(|swapchain| swapchain.surface == surface) {
+        swapchain.state = SwapchainState::Lost;
+    }
 }
 
 /// Wayland presentation is always supported on our single queue family.
@@ -197,8 +201,14 @@ pub extern "C" fn vkCreateSwapchainKHR(
     let count_ok = ci.min_image_count >= caps.min_image_count
         && (caps.max_image_count == 0 || ci.min_image_count <= caps.max_image_count);
     let usage_ok = !ci.image_usage.is_empty() && caps.supported_usage_flags.contains(ci.image_usage);
-    let old_ok = ci.old_swapchain.is_null()
-        || s.swapchains.get(&ci.old_swapchain.as_raw()).is_some_and(|old| old.surface == surface);
+    let active = s
+        .swapchains
+        .iter()
+        .find_map(|(&handle, swapchain)| {
+            (swapchain.surface == surface && swapchain.state == SwapchainState::Active).then_some(handle)
+        });
+    let old = (!ci.old_swapchain.is_null()).then_some(ci.old_swapchain.as_raw());
+    let old_ok = old == active;
     if !count_ok
         || !extent_ok
         || !ci.flags.is_empty()
@@ -254,7 +264,7 @@ pub extern "C" fn vkCreateSwapchainKHR(
                 fd: -1,
             },
         };
-        images.push(SwapImage { image: handle, ir_id, surface });
+        images.push(SwapImage { image: handle, ir_id, surface, state: SwapImageState::Available });
     }
     if std::env::var_os("DD_SHIM_DEBUG").is_some() {
         let ids: Vec<u32> = images.iter().map(|i| i.surface.id).collect();
@@ -271,8 +281,12 @@ pub extern "C" fn vkCreateSwapchainKHR(
             format,
             images,
             next: 0,
+            state: SwapchainState::Active,
         },
     );
+    if let Some(old) = old {
+        s.swapchains.get_mut(&old).expect("validated old swapchain").state = SwapchainState::Retired;
+    }
     *out = handle;
     VK_SUCCESS
 }
@@ -303,28 +317,70 @@ pub extern "C" fn vkGetSwapchainImagesKHR(
     unsafe { write_enum(&handles, p_count, p_images) }
 }
 
-/// Round-robin the next presentable image. Present is synchronous downstream, so the acquire
-/// semaphore/fence are treated as already signaled (returned by the bring-up sync stubs).
+/// Acquire ownership of an available presentable image. The transport completes presentation
+/// synchronously, so availability changes only at acquire/present API boundaries.
 #[no_mangle]
 pub extern "C" fn vkAcquireNextImageKHR(
     _device: VkDevice,
     swapchain: u64,
-    _timeout: u64,
-    _semaphore: VkSemaphore,
-    _fence: VkFence,
+    timeout: u64,
+    semaphore: VkSemaphore,
+    fence: VkFence,
     p_image_index: *mut u32,
 ) -> VkResult {
     crate::reg::trace("vkAcquireNextImageKHR");
-    let mut s = reg::lock();
-    let Some(sc) = s.swapchains.get_mut(&swapchain) else {
+    let Some(out) = (unsafe { p_image_index.as_mut() }) else {
         return VK_ERROR_INITIALIZATION_FAILED;
     };
-    let idx = sc.next % sc.images.len().max(1);
-    sc.next = idx + 1;
-    if let Some(out) = unsafe { p_image_index.as_mut() } {
-        *out = idx as u32;
+    let started = std::time::Instant::now();
+    loop {
+        let mut s = reg::lock();
+        let Some(sc) = s.swapchains.get(&swapchain) else {
+            return VK_ERROR_INITIALIZATION_FAILED;
+        };
+        match sc.state {
+            SwapchainState::Retired => return VK_ERROR_OUT_OF_DATE_KHR,
+            SwapchainState::Lost => return VK_ERROR_SURFACE_LOST_KHR,
+            SwapchainState::Active => {}
+        }
+        if semaphore == 0 && fence == 0 {
+            return VK_ERROR_INITIALIZATION_FAILED;
+        }
+        if semaphore != 0 && !s.semaphores.get(&semaphore).is_some_and(|sync| !sync.signaled) {
+            return VK_ERROR_INITIALIZATION_FAILED;
+        }
+        if fence != 0 && !s.fences.get(&fence).is_some_and(|sync| !sync.signaled) {
+            return VK_ERROR_INITIALIZATION_FAILED;
+        }
+        let (next, len) = {
+            let sc = &s.swapchains[&swapchain];
+            (sc.next, sc.images.len())
+        };
+        let available = (0..len).map(|offset| (next + offset) % len).find(|&index| {
+            s.swapchains[&swapchain].images[index].state == SwapImageState::Available
+        });
+        if let Some(index) = available {
+            let sc = s.swapchains.get_mut(&swapchain).expect("validated swapchain");
+            sc.images[index].state = SwapImageState::Acquired;
+            sc.next = (index + 1) % len;
+            if semaphore != 0 {
+                s.semaphores.get_mut(&semaphore).expect("validated semaphore").signaled = true;
+            }
+            if fence != 0 {
+                s.fences.get_mut(&fence).expect("validated fence").signaled = true;
+            }
+            *out = index as u32;
+            return VK_SUCCESS;
+        }
+        drop(s);
+        if timeout == 0 {
+            return VK_NOT_READY;
+        }
+        if timeout != u64::MAX && started.elapsed().as_nanos() >= timeout as u128 {
+            return VK_TIMEOUT;
+        }
+        std::thread::yield_now();
     }
-    VK_SUCCESS
 }
 
 /// Present the acquired image: terminate the frame's IR with `Cmd::Present{ surface, texture }` and
@@ -342,9 +398,32 @@ pub extern "C" fn vkQueuePresentKHR(_queue: VkQueue, p_present_info: *const vk::
     let idxs = unsafe { core::slice::from_raw_parts(pi.p_image_indices, pi.swapchain_count as usize) };
 
     let mut s = reg::lock();
+    // Validate the complete ownership batch before changing any image state. Delivery errors are a
+    // separate transactional-present concern, but invalid ownership must never partially present.
+    let mut ownerships = std::collections::HashSet::with_capacity(swaps.len());
     for (sc_handle, &img_idx) in swaps.iter().zip(idxs.iter()) {
-        let Some(sc) = s.swapchains.get(&sc_handle.as_raw()) else { continue };
-        let Some(img) = sc.images.get(img_idx as usize) else { continue };
+        let sc_handle = sc_handle.as_raw();
+        if !ownerships.insert((sc_handle, img_idx)) {
+            return VK_ERROR_INITIALIZATION_FAILED;
+        }
+        let Some(sc) = s.swapchains.get(&sc_handle) else {
+            return VK_ERROR_INITIALIZATION_FAILED;
+        };
+        if sc.state == SwapchainState::Lost {
+            return VK_ERROR_SURFACE_LOST_KHR;
+        }
+        let Some(img) = sc.images.get(img_idx as usize) else {
+            return VK_ERROR_INITIALIZATION_FAILED;
+        };
+        if img.state != SwapImageState::Acquired {
+            return VK_ERROR_INITIALIZATION_FAILED;
+        }
+    }
+    for (sc_handle, &img_idx) in swaps.iter().zip(idxs.iter()) {
+        let sc_handle = sc_handle.as_raw();
+        let sc = &mut s.swapchains.get_mut(&sc_handle).expect("validated swapchain");
+        sc.images[img_idx as usize].state = SwapImageState::Presenting;
+        let img = &sc.images[img_idx as usize];
         let (surface, tex, sc_surface) = (img.surface, img.ir_id, sc.surface);
         let _ = tex;
         // No explicit Cmd::Present: the render pass already targets texture id 1, which the host
@@ -387,6 +466,8 @@ pub extern "C" fn vkQueuePresentKHR(_queue: VkQueue, p_present_info: *const vk::
                 }
             }
         }
+        s.swapchains.get_mut(&sc_handle).expect("validated swapchain").images[img_idx as usize].state =
+            SwapImageState::Available;
     }
     VK_SUCCESS
 }
@@ -440,6 +521,46 @@ mod tests {
             .pre_transform(vk::SurfaceTransformFlagsKHR::IDENTITY)
             .composite_alpha(vk::CompositeAlphaFlagsKHR::OPAQUE)
             .present_mode(vk::PresentModeKHR::FIFO)
+    }
+
+    fn create_swapchain(ci: &vk::SwapchainCreateInfoKHR<'_>) -> u64 {
+        let mut swapchain = 0;
+        assert_eq!(
+            vkCreateSwapchainKHR(core::ptr::null_mut(), ci, core::ptr::null(), &mut swapchain),
+            VK_SUCCESS
+        );
+        swapchain
+    }
+
+    fn create_fence() -> VkFence {
+        let ci = vk::FenceCreateInfo::default();
+        let mut fence = 0;
+        assert_eq!(
+            crate::command::vkCreateFence(core::ptr::null_mut(), &ci, core::ptr::null(), &mut fence),
+            VK_SUCCESS
+        );
+        fence
+    }
+
+    fn create_semaphore() -> VkSemaphore {
+        let mut semaphore = 0;
+        assert_eq!(
+            crate::command::vkCreateSemaphore(
+                core::ptr::null_mut(),
+                core::ptr::null(),
+                core::ptr::null(),
+                &mut semaphore,
+            ),
+            VK_SUCCESS
+        );
+        semaphore
+    }
+
+    fn present(swapchain: u64, index: u32) -> VkResult {
+        let swapchains = [vk::SwapchainKHR::from_raw(swapchain)];
+        let indices = [index];
+        let info = vk::PresentInfoKHR::default().swapchains(&swapchains).image_indices(&indices);
+        vkQueuePresentKHR(core::ptr::null_mut(), &info)
     }
 
     #[test]
@@ -557,5 +678,119 @@ mod tests {
         );
         assert_eq!(stale_out, 0xface);
         vkDestroySurfaceKHR(core::ptr::null_mut(), other_surface, core::ptr::null());
+    }
+
+    #[test]
+    fn swapchain_tracks_image_ownership_timeouts_and_retirement() {
+        let surface = create_surface(0x5510, 0x6620);
+        let swapchain = create_swapchain(&valid_swapchain_ci(surface));
+        let fence0 = create_fence();
+        let fence1 = create_fence();
+
+        let mut image0 = u32::MAX;
+        assert_eq!(
+            vkAcquireNextImageKHR(core::ptr::null_mut(), swapchain, 0, 0, fence0, &mut image0),
+            VK_SUCCESS
+        );
+        assert_eq!(crate::command::vkGetFenceStatus(core::ptr::null_mut(), fence0), VK_SUCCESS);
+        let mut image1 = u32::MAX;
+        assert_eq!(
+            vkAcquireNextImageKHR(core::ptr::null_mut(), swapchain, 0, 0, fence1, &mut image1),
+            VK_SUCCESS
+        );
+        assert_ne!(image0, image1, "an acquired image cannot be acquired twice");
+
+        let timeout_fence = create_fence();
+        let mut unavailable = 0xdead_beef;
+        assert_eq!(
+            vkAcquireNextImageKHR(core::ptr::null_mut(), swapchain, 0, 0, timeout_fence, &mut unavailable),
+            VK_NOT_READY
+        );
+        assert_eq!(unavailable, 0xdead_beef, "NOT_READY must preserve pImageIndex");
+        assert_eq!(crate::command::vkGetFenceStatus(core::ptr::null_mut(), timeout_fence), VK_NOT_READY);
+        assert_eq!(
+            vkAcquireNextImageKHR(core::ptr::null_mut(), swapchain, 1, 0, timeout_fence, &mut unavailable),
+            VK_TIMEOUT
+        );
+        assert_eq!(unavailable, 0xdead_beef, "TIMEOUT must preserve pImageIndex");
+        assert_eq!(crate::command::vkGetFenceStatus(core::ptr::null_mut(), timeout_fence), VK_NOT_READY);
+
+        let duplicate_swaps = [
+            vk::SwapchainKHR::from_raw(swapchain),
+            vk::SwapchainKHR::from_raw(swapchain),
+        ];
+        let duplicate_indices = [image0, image0];
+        let duplicate_present =
+            vk::PresentInfoKHR::default().swapchains(&duplicate_swaps).image_indices(&duplicate_indices);
+        assert_eq!(
+            vkQueuePresentKHR(core::ptr::null_mut(), &duplicate_present),
+            VK_ERROR_INITIALIZATION_FAILED
+        );
+        assert_eq!(present(swapchain, image0), VK_SUCCESS, "rejected batch must preserve ownership");
+        assert_eq!(
+            present(swapchain, image0),
+            VK_ERROR_INITIALIZATION_FAILED,
+            "presentation requires ownership from a successful acquire"
+        );
+
+        // Replacing an active swapchain retires it for acquisition but preserves ownership of an
+        // image acquired before retirement so that image can complete presentation.
+        let replacement_ci = vk::SwapchainCreateInfoKHR {
+            old_swapchain: vk::SwapchainKHR::from_raw(swapchain),
+            ..valid_swapchain_ci(surface)
+        };
+        let replacement = create_swapchain(&replacement_ci);
+        let mut retired_out = 0xcafe_babe;
+        assert_eq!(
+            vkAcquireNextImageKHR(core::ptr::null_mut(), swapchain, 0, 0, timeout_fence, &mut retired_out),
+            VK_ERROR_OUT_OF_DATE_KHR
+        );
+        assert_eq!(retired_out, 0xcafe_babe);
+        assert_eq!(present(swapchain, image1), VK_SUCCESS);
+
+        let replacement_fence = create_fence();
+        let acquire_semaphore = create_semaphore();
+        let mut replacement_image = u32::MAX;
+        assert_eq!(
+            vkAcquireNextImageKHR(
+                core::ptr::null_mut(),
+                replacement,
+                0,
+                acquire_semaphore,
+                replacement_fence,
+                &mut replacement_image,
+            ),
+            VK_SUCCESS
+        );
+        let semaphore_handle = vk::Semaphore::from_raw(acquire_semaphore);
+        let submit = vk::SubmitInfo {
+            wait_semaphore_count: 1,
+            p_wait_semaphores: &semaphore_handle,
+            ..Default::default()
+        };
+        assert_eq!(
+            crate::command::vkQueueSubmit(core::ptr::null_mut(), 1, &submit, 0),
+            VK_SUCCESS,
+            "successful acquire must signal its binary semaphore"
+        );
+        assert_eq!(
+            crate::command::vkQueueSubmit(core::ptr::null_mut(), 1, &submit, 0),
+            VK_ERROR_INITIALIZATION_FAILED,
+            "a binary acquire semaphore is consumed by one wait"
+        );
+        vkDestroySurfaceKHR(core::ptr::null_mut(), surface, core::ptr::null());
+        let mut lost_out = 0x1234_5678;
+        assert_eq!(
+            vkAcquireNextImageKHR(core::ptr::null_mut(), replacement, 0, 0, timeout_fence, &mut lost_out),
+            VK_ERROR_SURFACE_LOST_KHR
+        );
+        assert_eq!(lost_out, 0x1234_5678);
+
+        vkDestroySwapchainKHR(core::ptr::null_mut(), swapchain, core::ptr::null());
+        vkDestroySwapchainKHR(core::ptr::null_mut(), replacement, core::ptr::null());
+        for fence in [fence0, fence1, timeout_fence, replacement_fence] {
+            crate::command::vkDestroyFence(core::ptr::null_mut(), fence, core::ptr::null());
+        }
+        crate::command::vkDestroySemaphore(core::ptr::null_mut(), acquire_semaphore, core::ptr::null());
     }
 }

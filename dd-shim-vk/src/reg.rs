@@ -168,9 +168,24 @@ pub struct SwapImage {
     pub image: u64,
     pub ir_id: u32,
     pub surface: dd_shim_common::transport::Surface,
+    pub state: SwapImageState,
 }
 
-/// A `VkSwapchainKHR`: its presentable images + geometry + the round-robin acquire cursor.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SwapImageState {
+    Available,
+    Acquired,
+    Presenting,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SwapchainState {
+    Active,
+    Retired,
+    Lost,
+}
+
+/// A `VkSwapchainKHR`: its presentable images, geometry, ownership cursor and lifecycle.
 pub struct SwapchainRec {
     pub surface: u64,
     pub width: u32,
@@ -178,6 +193,7 @@ pub struct SwapchainRec {
     pub format: TextureFormat,
     pub images: Vec<SwapImage>,
     pub next: usize,
+    pub state: SwapchainState,
 }
 
 /// The Vulkan command-buffer lifecycle state (spec §6 "Command Buffer Lifecycle"). Ported from

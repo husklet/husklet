@@ -225,9 +225,12 @@ Important gaps and incorrect simplifications:
   descriptor extensions, and nearly all extension functionality.
 - Extension and feature enumeration must be the allow-list of semantics actually supported. Resolving every
   registry command while advertising a narrower coherent device is preferable to falsely advertising support.
-- Swapchain acquisition is round-robin and downstream presentation is treated synchronously. Acquire fences and
-  semaphores are treated as already signaled. This does not implement Vulkan ordering, timeout, image ownership,
-  out-of-date/suboptimal results, or multiple frames in flight.
+- Swapchain acquisition now owns only available images and atomically signals valid guest-side acquire fences or
+  semaphores. Exhaustion distinguishes zero-timeout `VK_NOT_READY` from finite `VK_TIMEOUT`, presentation requires
+  prior acquisition and synchronously releases ownership, replacement retires the old swapchain for new acquisition
+  while allowing its already-acquired images to finish, and surface destruction marks dependent swapchains lost.
+  This is still the synchronous transport model: it does not prove asynchronous display-engine completion, present
+  wait-semaphore ordering, resize generations or `SUBOPTIMAL` behavior.
 - Queue/fence/semaphore handling is a bring-up model, not a spec-grade dependency graph. Binary and timeline
   semaphore semantics, stage masks, multiple queues, and host visibility rules need real state transitions.
 - WSI reports fixed capabilities (one format, FIFO, identity transform, opaque alpha). Resize, surface loss,
@@ -240,12 +243,12 @@ Important gaps and incorrect simplifications:
   Rust ABI regression `wsi_validates_surface_handles_and_swapchain_create_info_atomically` pins the negative matrix
   and output/state atomicity. Resize generations, surface loss propagation into existing swapchains and actual
   `oldSwapchain` retirement remain part of the lifecycle row below.
-- Swapchain images have no lifecycle state—only a round-robin cursor. Acquire ignores timeout and always returns an
-  image, does not prove availability or signal the supplied semaphore/fence, and present does not require prior
-  acquisition. Model `Available -> Acquired -> Presenting -> Available`, plus swapchain `Active/Retired/Lost`; wait
-  on a condition variable/timeline until timeout, signal Vulkan sync objects only after ownership transfers, and
-  retire `oldSwapchain` without invalidating images already acquired from it.
-  `vk_swapchain_tracks_image_ownership_timeouts_and_retirement` fixes the required state vocabulary and transitions.
+- Swapchain images implement `Available -> Acquired -> Presenting -> Available`, and swapchains implement
+  `Active/Retired/Lost`. The Rust ABI regression
+  `swapchain_tracks_image_ownership_timeouts_and_retirement` covers two images in flight, exhausted zero/finite
+  timeouts with preserved outputs and unsignaled fences, acquire-before-present, synchronous release/reacquire,
+  replacement retirement, completion of an old acquired image and surface loss. True asynchronous present-engine
+  completion and resize generations remain outside this synchronous lifecycle slice.
 - Queue present is false-success. Invalid swapchains/image indices are skipped, wait semaphores are ignored,
   `pResults` is never populated, the global IR cursor advances before submission, executor and Wayland failures are
   logged but discarded, and the function always returns `VK_SUCCESS`. Prepare one immutable submission per presented
@@ -1075,7 +1078,7 @@ pixels, and fails against the broken behavior. Do not add tests that read implem
 | `vk_abi_manifest_contains_every_core_command_in_the_pinned_registry` | missing | ABI registry is 19 Vulkan 1.4 core commands behind pinned Khronos XML | Regenerate ABI/types, review signatures, normal + loader census green |
 | `vk_advertised_core_has_real_implementations_for_every_mandatory_command` | partial | truthful Vulkan 1.0 still has 55/137 mandatory generated failures/stubs | Implement all advertised core semantics and pass CTS subset |
 | `vk_wsi_validates_surface_handles_and_swapchain_create_info` | implemented | Shared capability validation rejects stale surfaces and incompatible swapchain requests atomically | Rust ABI negative create/query matrix green; retain as regression |
-| `vk_swapchain_tracks_image_ownership_timeouts_and_retirement` | missing | acquisition is stateless round-robin with ignored sync/timeout | Explicit image/swapchain state machine and multi-frame tests |
+| `vk_swapchain_tracks_image_ownership_timeouts_and_retirement` | implemented | Explicit image/swapchain states enforce ownership, timeout results, acquire sync, retirement and loss | Rust ABI multi-frame lifecycle regression green; retain as regression |
 | `vk_present_reports_failures_without_consuming_unsent_frame_state` | contradictory | present skips invalid input, consumes IR and discards delivery failures | Transactional submit with `pResults` and Vulkan error mapping |
 | `vk_image_layout_barriers_track_subresources_and_queue_ownership` | missing | images and barrier APIs have no layout/access/ownership state | Per-subresource transition model plus hazard/ownership tests |
 | `vk_transfer_commands_preserve_every_region_subresource_and_layout` | partial | shared IR/backends have subresource copy+blit, but Vulkan lowering and remaining region/resolve fields are absent | Shim lowering plus buffer/image/resolve/clear validation matrix |

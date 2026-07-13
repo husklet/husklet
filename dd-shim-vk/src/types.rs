@@ -68,3 +68,5 @@ pub const VK_ERROR_UNKNOWN: VkResult = -13;
 pub const VK_ERROR_SURFACE_LOST_KHR: VkResult = -1000000000;
 /// The supplied native window is already owned by another Vulkan surface.
 pub const VK_ERROR_NATIVE_WINDOW_IN_USE_KHR: VkResult = -1000000001;
+/// A swapchain can no longer acquire images because it has been replaced or resized.
+pub const VK_ERROR_OUT_OF_DATE_KHR: VkResult = -1000001004;

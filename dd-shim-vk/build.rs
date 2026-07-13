@@ -108,7 +108,7 @@ fn partial_note(name: &str) -> Option<&'static str> {
         // WSI: the fixed FIFO / round-robin bring-up swapchain
         "vkCreateSwapchainKHR" => "validated FIFO / one-format / identity swapchain; no oldSwapchain retirement",
         "vkAcquireNextImageKHR" => {
-            "round-robin acquire; acquire fence/semaphore treated as signaled; no timeout/OUT_OF_DATE"
+            "owned-image acquire with timeout/retirement; synchronous completion model"
         }
         "vkQueuePresentKHR" => "synchronous present; no per-image present-result array / SUBOPTIMAL",
         "vkGetPhysicalDeviceSurfaceCapabilitiesKHR"
