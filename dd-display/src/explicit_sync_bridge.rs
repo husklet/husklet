@@ -23,49 +23,65 @@ use std::io;
 use std::os::unix::io::{AsRawFd, BorrowedFd, FromRawFd, OwnedFd, RawFd};
 
 /// A release fence the compositor signals when its GPU work on a buffer completes. Backed by an
-/// `eventfd`: it starts unsignalled (not readable) and becomes readable once [`signal`](Self::signal) is
-/// called, exactly like a `dma_fence` sync_file. The owned fd is handed to the client via
+/// a `pipe`: the read end starts unsignalled (not readable) and becomes readable once
+/// [`signal`](Self::signal) writes a byte into the write end, exactly like a `dma_fence` sync_file. A
+/// pipe (rather than a Linux-only `eventfd`) keeps the primitive portable to the macOS host where the
+/// Metal presenter signals it. The read end is the owned fd handed to the client via
 /// `zwp_linux_buffer_release_v1.fenced_release`.
 pub struct CompletionFence {
-    fd: OwnedFd,
+    /// Read end — poll-readable, handed to the client as the release fence.
+    read: OwnedFd,
+    /// Write end — signalled (one byte written) on GPU completion.
+    write: OwnedFd,
 }
 
 impl CompletionFence {
     /// Create an unsignalled completion fence.
     pub fn new() -> io::Result<Self> {
-        // EFD_CLOEXEC | EFD_NONBLOCK: a poll-readable, non-blocking counter fd.
-        let fd = unsafe { libc::eventfd(0, libc::EFD_CLOEXEC | libc::EFD_NONBLOCK) };
-        if fd < 0 {
+        let mut fds = [0i32; 2];
+        // `pipe(2)` is portable (Linux + macOS); set CLOEXEC | NONBLOCK explicitly since portable `pipe`
+        // has no flags argument.
+        if unsafe { libc::pipe(fds.as_mut_ptr()) } != 0 {
             return Err(io::Error::last_os_error());
         }
-        Ok(Self { fd: unsafe { OwnedFd::from_raw_fd(fd) } })
+        for &fd in &fds {
+            unsafe {
+                libc::fcntl(fd, libc::F_SETFD, libc::FD_CLOEXEC);
+                let fl = libc::fcntl(fd, libc::F_GETFL);
+                libc::fcntl(fd, libc::F_SETFL, fl | libc::O_NONBLOCK);
+            }
+        }
+        Ok(Self {
+            read: unsafe { OwnedFd::from_raw_fd(fds[0]) },
+            write: unsafe { OwnedFd::from_raw_fd(fds[1]) },
+        })
     }
 
-    /// Signal the fence (GPU work complete). Idempotent enough for the contract: the eventfd counter is
-    /// incremented, leaving the fd permanently readable. Called from the Metal command buffer's
-    /// completion handler on macOS.
+    /// Signal the fence (GPU work complete): write one byte into the pipe so the read end becomes
+    /// permanently readable. Called from the Metal command buffer's completion handler on macOS.
     pub fn signal(&self) -> io::Result<()> {
-        let v: u64 = 1;
-        let n = unsafe { libc::write(self.fd.as_raw_fd(), &v as *const u64 as *const libc::c_void, 8) };
-        if n != 8 {
+        let b: u8 = 1;
+        let n = unsafe { libc::write(self.write.as_raw_fd(), &b as *const u8 as *const libc::c_void, 1) };
+        if n != 1 {
             return Err(io::Error::last_os_error());
         }
         Ok(())
     }
 
-    /// Whether the fence has been signalled (readable), without consuming it.
+    /// Whether the fence has been signalled (read end readable), without consuming it.
     pub fn is_signalled(&self) -> bool {
-        poll_readable(self.fd.as_raw_fd(), 0).unwrap_or(false)
+        poll_readable(self.read.as_raw_fd(), 0).unwrap_or(false)
     }
 
-    /// Borrow the underlying fd (e.g. to hand to the release event).
+    /// Borrow the read-end fd (e.g. to hand to the release event).
     pub fn as_fd(&self) -> BorrowedFd<'_> {
-        self.fd.as_fd_compat()
+        self.read.as_fd_compat()
     }
 
-    /// Consume the fence into its owned fd (to move into the `fenced_release` event).
+    /// Consume the fence into its read-end owned fd (to move into the `fenced_release` event). The write
+    /// end is dropped; the already-written signal byte keeps the read end readable.
     pub fn into_owned_fd(self) -> OwnedFd {
-        self.fd
+        self.read
     }
 }
 
@@ -150,13 +166,15 @@ mod tests {
 
     #[test]
     fn acquire_waiter_blocks_until_the_fence_signals() {
-        // An eventfd standing in for a guest acquire sync_file.
-        let fd = unsafe { libc::eventfd(0, libc::EFD_CLOEXEC | libc::EFD_NONBLOCK) };
-        assert!(fd >= 0);
-        let owned = unsafe { OwnedFd::from_raw_fd(fd) };
-        assert!(!AcquireWaiter::new(owned.as_fd()).wait(0).unwrap(), "unsignalled acquire fence is not ready");
-        let v: u64 = 1;
-        assert_eq!(unsafe { libc::write(owned.as_raw_fd(), &v as *const u64 as *const libc::c_void, 8) }, 8);
-        assert!(AcquireWaiter::new(owned.as_fd()).wait(200).unwrap(), "acquire wait returns once signalled");
+        // A portable pipe standing in for a guest acquire sync_file (the read end becomes readable when
+        // the write end is signalled).
+        let mut fds = [0i32; 2];
+        assert_eq!(unsafe { libc::pipe(fds.as_mut_ptr()) }, 0);
+        let read = unsafe { OwnedFd::from_raw_fd(fds[0]) };
+        let write = unsafe { OwnedFd::from_raw_fd(fds[1]) };
+        assert!(!AcquireWaiter::new(read.as_fd()).wait(0).unwrap(), "unsignalled acquire fence is not ready");
+        let b: u8 = 1;
+        assert_eq!(unsafe { libc::write(write.as_raw_fd(), &b as *const u8 as *const libc::c_void, 1) }, 1);
+        assert!(AcquireWaiter::new(read.as_fd()).wait(200).unwrap(), "acquire wait returns once signalled");
     }
 }
