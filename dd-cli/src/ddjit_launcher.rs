@@ -37,6 +37,41 @@ fn want_arch(arch: Arch) -> dd_images::Arch {
     }
 }
 
+/// True if the guest rootfs is a **musl** distro (Alpine, `alpine-chrome`, …), detected by its dynamic
+/// loader `/lib/ld-musl-<arch>.so.1`. glibc guests (Ubuntu/Debian — GTK/Qt images) ship
+/// `ld-linux-<arch>.so.1` instead and have no musl loader. Used to inject the ABI-matching render-stack
+/// shim variant: a musl `libwayland-egl.so.1`/`libEGL.so.1` shadowing a glibc guest's real lib fails the
+/// loader with `libc.musl-<arch>.so.1: cannot open shared object file` (and the reverse for a glibc shim
+/// in a musl guest). The loader lives in the base image rootfs (never the writable overlay upper), so the
+/// base rootfs is the correct thing to probe.
+fn guest_is_musl(rootfs: &str, arch: Arch) -> bool {
+    let ld = match arch {
+        Arch::Amd64 => "ld-musl-x86_64.so.1",
+        _ => "ld-musl-aarch64.so.1",
+    };
+    std::path::Path::new(rootfs).join("lib").join(ld).exists()
+}
+
+/// Select the GUI render-stack shim drop-in dir whose libc ABI matches the guest. `gui_root`
+/// (`~/.dd/gui/<arch>`) holds per-libc variant dirs — `lib.glibc` for glibc guests, `lib.musl` /
+/// `lib.musl-chrome` for musl guests — plus a legacy shared `lib` a concurrent launch may have swapped to
+/// the wrong libc. Prefer the variant matching the guest; fall back to the shared `lib` only when no
+/// matching variant exists (a fresh/minimal install), preserving the pre-variant behavior.
+fn select_gui_lib_dir(gui_root: &std::path::Path, rootfs: &str, arch: Arch) -> std::path::PathBuf {
+    let candidates: &[&str] = if guest_is_musl(rootfs, arch) {
+        &["lib.musl", "lib.musl-chrome"]
+    } else {
+        &["lib.glibc"]
+    };
+    for c in candidates {
+        let d = gui_root.join(c);
+        if d.is_dir() {
+            return d;
+        }
+    }
+    gui_root.join("lib")
+}
+
 /// Split `image` into `(repository, tag)`, defaulting the tag to `latest`.
 fn split_ref(image: &str) -> (String, String) {
     // Only split on a ':' AFTER the last '/', so a registry host:port isn't mistaken for a tag.
@@ -155,7 +190,9 @@ pub fn launch_ex(ws: &Workspace, cols: u16, rows: u16, restore: bool, cwd: Optio
     // Build the container: the persistent upper overlays the image rootfs; a FORCED-interactive login
     // shell (bash if present, else sh) with a real controlling PTY; a private loopback keyed by the
     // workspace. `-i` forces the prompt even though our parent `sh -c` is non-interactive.
-    let image = dd_jit::Image::overlay(upper, [rootfs]).guest(guest);
+    // Clone the rootfs path into the image (the original is still needed below to detect the guest's
+    // libc for ABI-matching render-shim injection).
+    let image = dd_jit::Image::overlay(upper, [rootfs.clone()]).guest(guest);
     // Pick the shell WITHOUT redirecting the final exec's stderr: interactive bash decides it's
     // interactive from isatty(stderr) AND writes its prompt (PS1) to stderr, so a `2>/dev/null` would
     // silently make it non-interactive with a hidden prompt (looks hung).
@@ -270,8 +307,25 @@ pub fn launch_ex(ws: &Workspace, cols: u16, rows: u16, restore: bool, cwd: Optio
             Arch::Amd64 => "x86_64",
             _ => "aarch64",
         };
-        let host_gui_lib = paths::dd_root().join("gui").join(gui_arch).join("lib");
-        let host_gui_bin = paths::dd_root().join("gui").join(gui_arch).join("bin");
+        let gui_root = paths::dd_root().join("gui").join(gui_arch);
+        // Inject the render-stack shim variant whose libc ABI MATCHES the guest. The gui root holds
+        // per-libc variants (`lib.glibc` for glibc guests like Ubuntu/GTK; `lib.musl` / `lib.musl-chrome`
+        // for musl guests like Alpine/Chrome) alongside a legacy shared `lib` dir. A concurrent launch of
+        // the OTHER libc may have swapped that shared `lib` to its variant, so a fixed `lib` INTERMITTENTLY
+        // injects a mismatched-libc `libwayland-egl.so.1`/`libEGL.so.1` that shadows the guest's real lib →
+        // `libc.musl-<arch>.so.1: cannot open shared object file` (or the glibc mirror). Selecting the
+        // ABI-matching variant here makes every guest deterministically get shims it can actually load,
+        // independent of any other running workspace. (`bin` demo drop-ins are libc-agnostic run-directly
+        // binaries, not shadowing libs, so they stay a single dir.)
+        let host_gui_lib = select_gui_lib_dir(&gui_root, &rootfs, ws.arch);
+        let host_gui_bin = gui_root.join("bin");
+        if host_gui_lib.is_dir() {
+            eprintln!(
+                "[dd] gui render-stack shims: {} (guest libc = {})",
+                host_gui_lib.display(),
+                if guest_is_musl(&rootfs, ws.arch) { "musl" } else { "glibc" }
+            );
+        }
         // The workspace overlay UPPER's copy of the guest multiarch lib dir, so the provider can self-heal
         // legacy overlays by pruning stale 0-byte inject stubs it left there (empty files first on
         // LD_LIBRARY_PATH shadow the guest's real base libs -> ENOEXEC / cold-Chrome EXIT=127). Always
@@ -528,5 +582,53 @@ impl Drop for DdJitPty {
                 libc::killpg(self.pid, libc::SIGHUP);
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn guest_libc_detected_from_loader() {
+        let base = std::env::temp_dir().join(format!("ddjit-libc-{}", std::process::id()));
+        let glibc = base.join("glibc-root");
+        std::fs::create_dir_all(glibc.join("lib")).unwrap();
+        std::fs::write(glibc.join("lib").join("ld-linux-aarch64.so.1"), b"x").unwrap();
+        let musl = base.join("musl-root");
+        std::fs::create_dir_all(musl.join("lib")).unwrap();
+        std::fs::write(musl.join("lib").join("ld-musl-aarch64.so.1"), b"x").unwrap();
+
+        assert!(!guest_is_musl(glibc.to_str().unwrap(), Arch::Arm64), "glibc rootfs must not be musl");
+        assert!(guest_is_musl(musl.to_str().unwrap(), Arch::Arm64), "musl rootfs must be detected");
+
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn selects_abi_matching_gui_lib_variant() {
+        let base = std::env::temp_dir().join(format!("ddjit-guilib-{}", std::process::id()));
+        let gui = base.join("gui");
+        for v in ["lib", "lib.glibc", "lib.musl-chrome"] {
+            std::fs::create_dir_all(gui.join(v)).unwrap();
+        }
+        let glibc = base.join("glibc-root");
+        std::fs::create_dir_all(glibc.join("lib")).unwrap();
+        std::fs::write(glibc.join("lib").join("ld-linux-aarch64.so.1"), b"x").unwrap();
+        let musl = base.join("musl-root");
+        std::fs::create_dir_all(musl.join("lib")).unwrap();
+        std::fs::write(musl.join("lib").join("ld-musl-aarch64.so.1"), b"x").unwrap();
+
+        // A glibc guest gets the glibc shim variant; a musl guest gets the musl variant — deterministically,
+        // regardless of what the shared `lib` dir currently holds.
+        assert_eq!(select_gui_lib_dir(&gui, glibc.to_str().unwrap(), Arch::Arm64), gui.join("lib.glibc"));
+        assert_eq!(select_gui_lib_dir(&gui, musl.to_str().unwrap(), Arch::Arm64), gui.join("lib.musl-chrome"));
+
+        // No matching variant present -> fall back to the shared `lib` (pre-variant behavior preserved).
+        let bare = base.join("bare-gui");
+        std::fs::create_dir_all(bare.join("lib")).unwrap();
+        assert_eq!(select_gui_lib_dir(&bare, glibc.to_str().unwrap(), Arch::Arm64), bare.join("lib"));
+
+        let _ = std::fs::remove_dir_all(&base);
     }
 }

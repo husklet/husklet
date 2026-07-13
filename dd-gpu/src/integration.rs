@@ -161,13 +161,23 @@ fn shim_owns_lib(file_name: &str) -> bool {
 /// ("Exec format error", cascading to EXIT=127). This prunes such orphans from the overlay upper so the
 /// guest resolves its OWN base libs again, with no re-injection and no `LD_PRELOAD` hack.
 ///
+/// It also heals a second, ABI-level variant of the same class: a stale render-stack shim left in the
+/// overlay upper by a PRIOR launch of a DIFFERENT-libc guest (a musl `libwayland-egl.so.1` from a Chrome
+/// session shadowing a later GTK/glibc guest, → `libc.musl-<arch>.so.1: cannot open shared object file`).
+/// Such a shim is a dd inject artifact (the guest's real base libs live in the image rootfs, never the
+/// writable upper), so if we are NOT binding it this run it can only shadow the guest's real lib and is
+/// pruned regardless of size. The launcher now injects the ABI-matching variant, so this is defense in
+/// depth against overlays dirtied before that fix.
+///
 /// Safe by construction — a candidate is pruned ONLY when it is:
 ///   * inside `overlay_lib_dir` (the workspace overlay upper's multiarch dir) — never the shared image
 ///     rootfs, which this function is never handed;
 ///   * a REGULAR file (never a dir or a symlink — `symlink_metadata` doesn't follow links out of the
-///     upper) of size EXACTLY 0 (a real shared object is never 0 bytes, so this can only be a stub);
+///     upper);
 ///   * a shared-object name (`*.so*`);
-///   * NOT a soname we bind a real lib over this run (`bound_this_run`) — that one is already covered.
+///   * NOT a soname we bind a real lib over this run (`bound_this_run`) — that one is already covered; and
+///   * EITHER exactly 0 bytes (a leftover bind-mount-target stub of any soname) OR a render-stack shim we
+///     own ([`shim_owns_lib`]) that we are not binding this run (a stale mismatched-ABI inject).
 ///
 /// Returns the pruned sonames (sorted), for logging and tests.
 fn prune_shadowing_stubs(
@@ -195,15 +205,35 @@ fn prune_shadowing_stubs(
             Ok(m) => m,
             Err(_) => continue,
         };
-        // ONLY a regular, zero-byte file: the exact, self-evidently-broken shape of a leftover stub.
-        if !meta.file_type().is_file() || meta.len() != 0 {
+        // Only a REGULAR file in the upper (never a dir or a symlink out of the upper).
+        if !meta.file_type().is_file() {
             continue;
         }
+        // Two orphan shapes shadow the guest's real lib (first on LD_LIBRARY_PATH) and must be pruned:
+        //   * a ZERO-BYTE stub of ANY soname — a leftover bind-mount target from the pre-`5e8c10ee`
+        //     "inject every .so" era; the loader hits an empty file -> ENOEXEC (EXIT=127).
+        //   * a render-stack shim we OWN ([`shim_owns_lib`]) that we are NOT binding this run — a stale
+        //     inject from a PRIOR launch of a DIFFERENT-libc guest, e.g. a musl `libwayland-egl.so.1`
+        //     left by a Chrome (musl) session now shadowing a GTK (glibc) guest, which fails the loader
+        //     with `libc.musl-<arch>.so.1: cannot open shared object file`. A shim-owned lib in the
+        //     overlay UPPER is always a dd inject artifact — the guest's real base libs live in the image
+        //     rootfs, never the writable upper — so removing an unbound one only lets the guest resolve
+        //     its own lib. (Any shim we DO inject this run is in `bound_this_run` and skipped above; its
+        //     RO bind-mount covers the path regardless.)
+        let is_zero_stub = meta.len() == 0;
+        let is_stale_shim = shim_owns_lib(&name);
+        if !is_zero_stub && !is_stale_shim {
+            continue;
+        }
+        let reason = if is_zero_stub {
+            "an empty file first on LD_LIBRARY_PATH shadowed the guest's real lib -> ENOEXEC"
+        } else {
+            "a stale mismatched-ABI render shim first on LD_LIBRARY_PATH shadowed the guest's real lib -> wrong-libc load failure"
+        };
         match std::fs::remove_file(&path) {
             Ok(()) => {
                 eprintln!(
-                    "[dd-gpu] pruned stale 0-byte inject stub {} from the workspace overlay upper \
-                     (an empty file first on LD_LIBRARY_PATH shadowed the guest's real lib -> ENOEXEC)",
+                    "[dd-gpu] pruned stale inject stub {} from the workspace overlay upper ({reason})",
                     path.display()
                 );
                 pruned.push(name.into_owned());
@@ -592,6 +622,38 @@ mod tests {
         }
         let pruned = prune_shadowing_stubs(&overlay.to_string_lossy(), &bound_set);
         assert_eq!(pruned, vec!["libffi.so.8", "libgcc_s.so.1", "libstdc++.so.6", "libz.so.1"]);
+
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn prune_removes_stale_mismatched_abi_render_shim() {
+        // The GTK-after-Chrome failure: a PRIOR musl launch left a REAL (non-empty) musl
+        // `libwayland-egl.so.1` in the overlay upper; this glibc run does NOT bind that soname (say the
+        // glibc variant lacks it, or it simply isn't in the drop-in), so the stale musl shim would shadow
+        // the guest's real glibc libwayland-egl on LD_LIBRARY_PATH -> `libc.musl-…: cannot open`. A
+        // shim-owned lib in the UPPER we aren't binding this run must be pruned regardless of size.
+        let base = std::env::temp_dir().join(format!("ddgpu-abiprune-{}", std::process::id()));
+        let overlay = base.join("overlay");
+        std::fs::create_dir_all(&overlay).unwrap();
+
+        // A real (non-empty) stale musl render shim we are NOT binding this run -> must be pruned.
+        std::fs::write(overlay.join("libwayland-egl.so.1"), b"\x7fELF-stale-musl-wl-egl").unwrap();
+        // A render shim we ARE binding this run -> covered by the mount, left as-is even if non-empty.
+        std::fs::write(overlay.join("libEGL.so.1"), b"\x7fELF-old-egl").unwrap();
+        // A real distro lib the shim does NOT own -> never pruned, whatever its size.
+        std::fs::write(overlay.join("libX11.so.6"), b"\x7fELF-real-x11").unwrap();
+        // A 0-byte non-shim stub -> still pruned (the original behavior).
+        std::fs::write(overlay.join("libffi.so.8"), b"").unwrap();
+
+        let mut bound = std::collections::BTreeSet::new();
+        bound.insert("libEGL.so.1".to_string());
+        let pruned = prune_shadowing_stubs(&overlay.to_string_lossy(), &bound);
+
+        assert_eq!(pruned, vec!["libffi.so.8", "libwayland-egl.so.1"], "prune the stale mismatched shim + 0-byte stub only");
+        assert!(!overlay.join("libwayland-egl.so.1").exists(), "stale mismatched-ABI render shim must be pruned");
+        assert!(overlay.join("libEGL.so.1").exists(), "a shim bound this run must NOT be pruned (mount covers it)");
+        assert!(overlay.join("libX11.so.6").exists(), "a non-shim distro lib must never be pruned");
 
         let _ = std::fs::remove_dir_all(&base);
     }
