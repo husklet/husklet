@@ -781,6 +781,14 @@ impl DdState {
             .expect("live surface was not registered")
     }
 
+    /// Fallible [`Self::surface_id`] for destruction callbacks. When a client destroys a surface with a
+    /// role, wayland-server tears down the role object AND the `wl_surface` in one cleanup pass; the
+    /// `wl_surface`'s own `destroyed` (which unregisters the id) may run BEFORE the role's destroy handler.
+    /// A role-destroy handler must therefore tolerate an already-unregistered surface rather than panic.
+    pub(crate) fn surface_id_opt(&self, surface: &WlSurface) -> Option<u32> {
+        self.surface_ids.get(&surface.id()).copied()
+    }
+
     /// Reclaim every dd-owned resource associated with a surface. This is deliberately idempotent:
     /// role teardown and `wl_surface.destroy` can arrive through different protocol paths.
     pub(crate) fn teardown_surface(&mut self, surface: &WlSurface) {

@@ -22,16 +22,20 @@ use dd_display::wire::{Conn, Message};
 use smithay::reexports::wayland_server::Display;
 use std::collections::HashMap;
 use std::os::unix::io::{FromRawFd, RawFd};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 const WL_DISPLAY: u32 = 1;
 
 struct CountingPresenter {
     frames: u32,
+    /// The HOST surface id of the last presented frame (the compositor keys per-surface state by this
+    /// monotonic id, not by the client's protocol object id), so the test can address state accessors.
+    last_sid: Arc<Mutex<Option<u32>>>,
 }
 impl Presenter for CountingPresenter {
-    fn present(&mut self, _surf: &SurfaceBuffer) -> Result<PresentOutcome, PresentError> {
+    fn present(&mut self, surf: &SurfaceBuffer) -> Result<PresentOutcome, PresentError> {
         self.frames += 1;
+        *self.last_sid.lock().unwrap() = Some(surf.sid);
         Ok(PresentOutcome::Delivered { serial: self.frames as u64, timing: None })
     }
     fn frame_count(&self) -> u32 {
@@ -119,7 +123,8 @@ fn socketpair_nonblocking() -> (RawFd, RawFd) {
 fn modern_protocols_bind_and_roundtrip() {
     let mut display: Display<DdState> = Display::new().unwrap();
     let mut dh = display.handle();
-    let mut state = DdState::new(dh.clone(), Box::new(CountingPresenter { frames: 0 }));
+    let last_sid = Arc::new(Mutex::new(None));
+    let mut state = DdState::new(dh.clone(), Box::new(CountingPresenter { frames: 0, last_sid: last_sid.clone() }));
 
     let (client_fd, server_fd) = socketpair_nonblocking();
     dh.insert_client(
@@ -182,6 +187,26 @@ fn modern_protocols_bind_and_roundtrip() {
     c.conn.send(&Message::new(xdg, 1).u32(toplevel)); // get_toplevel
     c.conn.send(&Message::new(surface, 6)); // commit → maps → focus
     pump!();
+
+    // Give the toplevel committed content (an 8×8 shm buffer). A pointer can only take focus over a
+    // surface with real bounds, so without this the gesture below has no focused surface to reach.
+    let shm = bind(&mut c, "wl_shm", 1);
+    let (bw, bh) = (8i32, 8i32);
+    let stride = bw * 4;
+    let bsize = (stride * bh) as usize;
+    let bfd = dd_display::keymap::anon_fd_with(&vec![0u8; bsize]).expect("anon shm fd");
+    let pool = c.alloc();
+    c.conn.send(&Message::new(shm, 0).u32(pool).u32(bsize as u32)); // create_pool
+    c.conn.queue_fd(bfd);
+    let buffer = c.alloc();
+    c.conn.send(&Message::new(pool, 0).u32(buffer).i32(0).i32(bw).i32(bh).i32(stride).u32(1)); // create_buffer
+    c.conn.send(&Message::new(surface, 1).u32(buffer).i32(0).i32(0)); // attach
+    c.conn.send(&Message::new(surface, 6)); // commit → content
+    pump!();
+    unsafe { libc::close(bfd) };
+    // The compositor keys per-surface state by a monotonic HOST id (not the client's protocol object id);
+    // capture the toplevel's host id from its present so the content-type accessor below addresses it.
+    let surface_sid = last_sid.lock().unwrap().expect("the toplevel's frame reached the presenter");
 
     // ---------------------------------------------------------------------------------------------
     // (1) zwp_pointer_gestures_v1: bind, create a swipe gesture for our pointer, give the pointer focus,
@@ -248,7 +273,7 @@ fn modern_protocols_bind_and_roundtrip() {
     // ---------------------------------------------------------------------------------------------
     // (4) wp_content_type_manager_v1: bind, attach a content-type object to the surface, set it to
     // `video` (2), commit → the host stores the committed hint per surface.
-    assert_eq!(state.content_type(surface), None, "no content type set yet");
+    assert_eq!(state.content_type(surface_sid), None, "no content type set yet");
     let ct_mgr = bind(&mut c, "wp_content_type_manager_v1", 1);
     let ct = c.alloc();
     c.conn.send(&Message::new(ct_mgr, 1).u32(ct).u32(surface)); // get_surface_content_type(id, surface)
@@ -256,7 +281,7 @@ fn modern_protocols_bind_and_roundtrip() {
     c.conn.send(&Message::new(surface, 6)); // commit → applies the double-buffered content type
     pump!();
     assert_eq!(
-        state.content_type(surface),
+        state.content_type(surface_sid),
         Some(2),
         "the committed wp_content_type (video=2) should be stored by the host"
     );

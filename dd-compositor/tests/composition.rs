@@ -244,7 +244,16 @@ fn cpu_composition_premultiplied_blend_and_buffer_transform_are_correct() {
     c.conn.send(&Message::new(parent, 6)); // commit parent → composite
     pump!();
 
-    let shot = shots.lock().unwrap().get(&parent).cloned().expect("parent presented");
+    // The presenter records each frame under the compositor's HOST surface id (a monotonic,
+    // client-independent id — not the client's protocol object id), so locate the parent's composited
+    // frame by its unique backing dimensions rather than by the client-local `parent` id.
+    let shot = shots
+        .lock()
+        .unwrap()
+        .values()
+        .find(|s| (s.tex_w, s.tex_h) == (pw, ph))
+        .cloned()
+        .expect("parent presented");
     assert_eq!((shot.tex_w, shot.tex_h), (pw, ph), "parent backing size");
     // Pixel (0,0) is under the child: correct premultiplied "over".
     let (b, g, r) = (shot.bgra[0], shot.bgra[1], shot.bgra[2]);
@@ -283,7 +292,15 @@ fn cpu_composition_premultiplied_blend_and_buffer_transform_are_correct() {
     c.conn.send(&Message::new(tsurf, 6)); // commit → present
     pump!();
 
-    let tshot = shots.lock().unwrap().get(&tsurf).cloned().expect("transform surface presented");
+    // Same host-id vs client-id distinction: find the transformed surface's frame by its presented
+    // 1×2 geometry (90° swap of the 2×1 buffer).
+    let tshot = shots
+        .lock()
+        .unwrap()
+        .values()
+        .find(|s| (s.tex_w, s.tex_h) == (1, 2))
+        .cloned()
+        .expect("transform surface presented");
     assert_eq!(
         (tshot.tex_w, tshot.tex_h),
         (1, 2),

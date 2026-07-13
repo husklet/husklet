@@ -190,9 +190,12 @@ impl XdgShellHandler for DdState {
     fn ack_configure(&mut self, _surface: WlSurface, _configure: Configure) {}
 
     fn toplevel_destroyed(&mut self, surface: ToplevelSurface) {
-        let sid = self.surface_id(surface.wl_surface());
-        self.titles.remove(&sid);
-        self.drop_surface_window(sid);
+        // The `wl_surface` may already have been unregistered by its own destroy (see `surface_id_opt`),
+        // in which case `teardown_surface` has already reclaimed this sid's title/window state.
+        if let Some(sid) = self.surface_id_opt(surface.wl_surface()) {
+            self.titles.remove(&sid);
+            self.drop_surface_window(sid);
+        }
         if self.focus.as_ref() == Some(surface.wl_surface()) {
             self.focus = None;
             self.last_cfg = None;
@@ -260,9 +263,11 @@ impl XdgShellHandler for DdState {
     /// Forget its buffer + grab bookkeeping, drop any native window the presenter opened for it, and
     /// re-present the owning toplevel so the menu visibly disappears.
     fn popup_destroyed(&mut self, surface: PopupSurface) {
-        let sid = self.surface_id(surface.wl_surface());
-        self.buffers.remove(&sid);
-        self.drop_surface_window(sid);
+        // Tolerate an already-unregistered `wl_surface` (its own destroy may precede this role-destroy).
+        if let Some(sid) = self.surface_id_opt(surface.wl_surface()) {
+            self.buffers.remove(&sid);
+            self.drop_surface_window(sid);
+        }
         self.popup_grabs
             .retain(|p| p.wl_surface() != surface.wl_surface());
         if let Some(root) = self.window_root(surface.wl_surface()) {

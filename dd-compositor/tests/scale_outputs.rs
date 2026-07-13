@@ -389,12 +389,31 @@ fn fractional_scale_xdg_output_single_pixel_and_multi_output() {
     assert!(state.is_headless());
     assert_eq!(state.surface_output_name(1), None);
     assert_eq!(state.surface_output_name(3), None);
+    // Flush + drain the leave events the final withdrawal emitted BEFORE clearing, so they are not
+    // mistaken for recovery events below.
+    display.flush_clients().unwrap();
+    c.drain();
 
+    // Recover from headless with a new output. The compositor records each surface's membership on dd-2
+    // and enters them into dd-2's surface set immediately; but `wl_surface.enter` can only be delivered
+    // against a wl_output the CLIENT has bound, and dd-2's global was just advertised. A correct client
+    // binds the newly-advertised output — and Smithay's wl_output bind handler then replays `enter` for
+    // every surface already on dd-2 (exactly one per surface). Track the fresh advertisement in isolation
+    // (global names may be reused after dd-0/dd-1 were withdrawn).
     c.events.clear();
+    c.wl_output_names.clear();
     state.add_output("dd-2", "replacement", (1600, 900), 2, (0, 0));
     display.flush_clients().unwrap();
     c.drain();
     assert!(!state.is_headless());
+    assert_eq!(c.wl_output_names.len(), 1, "exactly one new wl_output (dd-2) is advertised on recovery");
+    let dd2_name = c.wl_output_names[0];
+    let dd2 = c.alloc();
+    c.conn.send(&Message::new(2, 0).u32(dd2_name).string("wl_output").u32(4).u32(dd2));
+    c.conn.flush().unwrap();
+    display.dispatch_clients(&mut state).unwrap();
+    display.flush_clients().unwrap();
+    c.drain();
     for (sid, object) in [(1, surface), (2, child), (3, independent)] {
         assert_eq!(state.surface_output_name(sid).as_deref(), Some("dd-2"));
         assert_eq!(

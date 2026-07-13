@@ -32,12 +32,18 @@ struct RecordingPresenter {
     /// Captures `(sid, popup)` of the last presented frame whose `popup` placement is `Some` — i.e. a
     /// popup presented as its own window rather than composited into a toplevel.
     last_popup: LastPopup,
+    /// The HOST surface id of the last presented frame with NO popup placement — the toplevel. Lets the
+    /// test assert the popup's placement anchors to its parent toplevel by host id (the compositor keys
+    /// presentation by a monotonic host id, not by the client-local protocol object id).
+    last_toplevel: Arc<Mutex<Option<u32>>>,
 }
 impl Presenter for RecordingPresenter {
     fn present(&mut self, surf: &SurfaceBuffer) -> Result<PresentOutcome, PresentError> {
         self.frames += 1;
         if surf.popup.is_some() {
             *self.last_popup.lock().unwrap() = Some((surf.sid, surf.popup));
+        } else {
+            *self.last_toplevel.lock().unwrap() = Some(surf.sid);
         }
         Ok(PresentOutcome::Delivered {
             serial: self.frames as u64,
@@ -122,9 +128,10 @@ fn popup_presents_as_own_window_at_positioner_anchor() {
     let mut display: Display<DdState> = Display::new().unwrap();
     let mut dh = display.handle();
     let last_popup: LastPopup = Arc::new(Mutex::new(None));
+    let last_toplevel: Arc<Mutex<Option<u32>>> = Arc::new(Mutex::new(None));
     let mut state = DdState::new(
         dh.clone(),
-        Box::new(RecordingPresenter { frames: 0, last_popup: last_popup.clone() }),
+        Box::new(RecordingPresenter { frames: 0, last_popup: last_popup.clone(), last_toplevel: last_toplevel.clone() }),
     );
 
     let (client_fd, server_fd) = socketpair_nonblocking();
@@ -257,10 +264,17 @@ fn popup_presents_as_own_window_at_positioner_anchor() {
         .unwrap()
         .clone()
         .expect("the popup's committed frame should have been presented as its own window");
-    assert_eq!(sid, psurface, "the presented popup window should be keyed by the popup's surface id");
+    let toplevel_sid = last_toplevel
+        .lock()
+        .unwrap()
+        .expect("the toplevel should have been presented as its own frame");
     let placement = placement.expect("the popup SurfaceBuffer must carry a PopupPlacement");
+    // The popup is presented as its OWN window (a distinct host id from its parent) that anchors to its
+    // direct parent surface — the toplevel. Both ids are the compositor's monotonic HOST surface ids
+    // (not the client's protocol object ids `psurface`/`surface`).
+    assert_ne!(sid, toplevel_sid, "the popup is its own window, keyed by its own host surface id");
     assert_eq!(
-        placement.parent_sid, surface,
+        placement.parent_sid, toplevel_sid,
         "the popup should anchor to its direct parent surface (the toplevel)"
     );
     assert_eq!(

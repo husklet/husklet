@@ -258,6 +258,7 @@ fn globals_advertise_frame_presents_feedback_and_cursor_shape_wire() {
     let last_cursor_buffer = Arc::new(Mutex::new(None));
     let cursor_hidden = Arc::new(Mutex::new(None));
     let last_damage = Arc::new(Mutex::new(None));
+    let last_present_sid = Arc::new(Mutex::new(None));
     let mut state = DdState::new(
         dh.clone(),
         Box::new(RecordingPresenter {
@@ -271,6 +272,7 @@ fn globals_advertise_frame_presents_feedback_and_cursor_shape_wire() {
             last_cursor_buffer: last_cursor_buffer.clone(),
             cursor_hidden: cursor_hidden.clone(),
             last_damage: last_damage.clone(),
+            last_present_sid: last_present_sid.clone(),
         }),
     );
 
@@ -433,6 +435,13 @@ fn globals_advertise_frame_presents_feedback_and_cursor_shape_wire() {
         state.presenter.frame_count() >= 1,
         "the committed frame did not reach the presenter"
     );
+    // The compositor keys presentation and the move/resize/raise Presenter hooks by a monotonic HOST
+    // surface id, not the client's protocol object id. Capture the toplevel's host id from its present so
+    // the window-management assertions below compare against the real id.
+    let toplevel_sid = last_present_sid
+        .lock()
+        .unwrap()
+        .expect("the toplevel's committed frame reached the presenter");
     // (1) wp_presentation feedback: a successful present must answer with `presented` (opcode 1).
     assert!(
         c.saw(feedback, 1),
@@ -748,7 +757,9 @@ fn globals_advertise_frame_presents_feedback_and_cursor_shape_wire() {
     // Focus the pointer on the toplevel and press the left button so the client captures a REAL grab serial
     // (the implicit pointer-button grab). The compositor recorded this serial via note_input_serial, so a
     // move/resize echoing it validates; a bogus serial does not.
-    state.pointer_motion(10.0, 10.0);
+    // Move the pointer INSIDE the toplevel's committed surface (the 4×3 buffer above) so it takes pointer
+    // focus — a pointer outside every window has no focus and (correctly) receives no button event.
+    state.pointer_motion(2.0, 1.0);
     state.pointer_button(0x110, true); // BTN_LEFT down
     display.flush_clients().unwrap();
     c.drain();
@@ -791,7 +802,7 @@ fn globals_advertise_frame_presents_feedback_and_cursor_shape_wire() {
     pump!();
     assert_eq!(
         *last_move.lock().unwrap(),
-        Some(surface),
+        Some(toplevel_sid),
         "a serial-valid move grab should reach begin_interactive_move for the surface"
     );
     // A spoofed/stale serial must be rejected (no native drag started).
@@ -814,7 +825,7 @@ fn globals_advertise_frame_presents_feedback_and_cursor_shape_wire() {
     pump!();
     assert_eq!(
         *last_resize.lock().unwrap(),
-        Some((surface, 10)),
+        Some((toplevel_sid, 10)),
         "a resize grab should reach begin_interactive_resize with the bottom_right edge bitmask"
     );
     assert!(
@@ -842,7 +853,7 @@ fn globals_advertise_frame_presents_feedback_and_cursor_shape_wire() {
     pump!();
     assert_eq!(
         *last_raise.lock().unwrap(),
-        Some(surface),
+        Some(toplevel_sid),
         "activating a surface should raise its window via the Presenter"
     );
 
@@ -1006,6 +1017,10 @@ struct RecordingPresenter {
     /// The `SurfaceBuffer::damage` upload hint of the last presented frame — so the damage-tracking path
     /// can assert a small-damage commit presents only the changed region, not the whole texture.
     last_damage: Arc<Mutex<Option<Option<(i32, i32, i32, i32)>>>>,
+    /// The compositor HOST surface id of the last presented frame — lets the test learn a surface's host
+    /// id (presentation and the move/resize/raise Presenter hooks are all keyed by it, NOT by the client's
+    /// protocol object id).
+    last_present_sid: Arc<Mutex<Option<u32>>>,
 }
 impl dd_display::present::Presenter for RecordingPresenter {
     fn present(
@@ -1014,6 +1029,7 @@ impl dd_display::present::Presenter for RecordingPresenter {
     ) -> Result<dd_display::present::PresentOutcome, dd_display::present::PresentError> {
         self.frames += 1;
         *self.last_damage.lock().unwrap() = Some(surf.damage);
+        *self.last_present_sid.lock().unwrap() = Some(surf.sid);
         Ok(dd_display::present::PresentOutcome::Delivered {
             serial: self.frames as u64,
             timing: None,
