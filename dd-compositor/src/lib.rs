@@ -326,6 +326,9 @@ pub struct DdState {
     /// clients (wait acquire before sampling, signal release after GPU completion). See
     /// [`handlers::explicit_sync`].
     pub(crate) explicit_sync: handlers::explicit_sync::ExplicitSyncState,
+    /// `wp_color_manager_v1` — per-surface color descriptions + output color profile + gamma-correct
+    /// linear-light conversion to the target output. See [`handlers::color`].
+    pub(crate) color: handlers::color::ColorManagementState,
 
     pub seat: Seat<Self>,
     pub keyboard: KeyboardHandle<Self>,
@@ -625,6 +628,7 @@ impl DdState {
         // wp_content_type_manager_v1: per-surface photo/video/game hint; stored on commit (handlers::content_type).
         let content_type = ContentTypeState::new::<Self>(&dh);
         let explicit_sync = handlers::explicit_sync::ExplicitSyncState::new(&dh);
+        let color = handlers::color::ColorManagementState::new(&dh);
         // zxdg_exporter_v2 + zxdg_importer_v2: cross-client toplevel parenting; Smithay issues real handles.
         let xdg_foreign = XdgForeignState::new::<Self>(&dh);
         // zwp_keyboard_shortcuts_inhibit_manager_v1: forward all keys; dd honours it (handlers::keyboard_shortcuts_inhibit).
@@ -690,6 +694,7 @@ impl DdState {
             idle_inhibitors: HashSet::new(),
             content_types: HashMap::new(),
             explicit_sync,
+            color,
             seat,
             keyboard,
             pointer,
