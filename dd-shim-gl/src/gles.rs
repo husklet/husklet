@@ -50,6 +50,17 @@ pub fn texture_generation(id: u32) -> Option<u64> {
     let s=gl(); s.tex.get(id as usize).filter(|t|t.used).map(|t|t.gen)
 }
 
+/// Test-only: reset the calling thread's GL share-group to pristine ES defaults. The in-crate
+/// behavioral gates run serialized (a shared mutex), but they all operate on the process-global
+/// default share-group; without a reset, residual state from one test (a bound FBO/PBO, non-default
+/// pixel-store parameters, a pending error flag) leaks into the next and causes order-dependent
+/// failures under normal parallel `cargo test`. Resetting at each gate's entry makes them
+/// deterministic without requiring `--test-threads=1`. It touches only GL object/state, not the EGL
+/// display/context/surface registries, so context lifetime gates are unaffected.
+pub fn reset_gl_state_for_tests() {
+    *gl() = crate::state::GlState::default();
+}
+
 #[no_mangle]
 pub extern "C" fn glGetError() -> u32 {
     crate::state::take_gl_error()
@@ -3102,8 +3113,11 @@ mod tests {
         glGenBuffers(3, ids.as_mut_ptr());
         assert!(ids.iter().all(|&i| i >= 1));
         assert_ne!(ids[0], ids[1]);
-        assert_eq!(glIsBuffer(ids[0]), 1);
+        // Names are lazily instantiated: glGenBuffers only RESERVES a name; the object comes into
+        // existence on first bind (matches gl_shim.c and the `generated_names_bind_lazily` gate).
+        assert_eq!(glIsBuffer(ids[0]), 0, "generation must only reserve a buffer name");
         glBindBuffer(GL_ARRAY_BUFFER, ids[0]);
+        assert_eq!(glIsBuffer(ids[0]), 1, "first bind must instantiate the buffer");
         let data = [1u8, 2, 3, 4];
         glBufferData(GL_ARRAY_BUFFER, data.len() as isize, data.as_ptr() as *const c_void, 0x88E4);
         {

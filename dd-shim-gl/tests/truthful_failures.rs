@@ -22,8 +22,9 @@ fn stub_raises_error_and_initializes_outputs() {
 
     // --- partial getter: zeroes its output, raises NO error (spec-default degraded query) ---
     let mut params: i32 = 0x5555_5555u32 as i32;
-    // glGetActiveUniformBlockiv(program, uniformBlockIndex, pname, params*)
-    dd_shim_gl::glGetActiveUniformBlockiv(1, 0, 0, &mut params as *mut i32);
+    // glGetProgramInterfaceiv(program, programInterface, pname, params*) — a generated `partial`
+    // introspection query (returns the spec default, initializes its output, raises no error).
+    dd_shim_gl::glGetProgramInterfaceiv(1, 0x92E1 /* GL_UNIFORM_BLOCK */, 0, &mut params as *mut i32);
     assert_eq!(params, 0, "partial getter must initialize its output to 0");
     assert_eq!(glGetError(), GL_NO_ERROR, "a partial no-op must not raise a GL error");
 
@@ -46,9 +47,15 @@ fn stub_raises_error_and_initializes_outputs() {
     let _ = glGetError();
 
     // --- "not found" query: returns the correct sentinel (not a false slot-0 hit), no error ---
+    // glGetProgramResourceIndex is a generated `partial` whose not-found answer is GL_INVALID_INDEX
+    // (returning 0 would be a false "found at slot 0").
     let cname = b"Blk\0";
-    let idx = dd_shim_gl::glGetUniformBlockIndex(1, cname.as_ptr() as *const core::ffi::c_char);
-    assert_eq!(idx, GL_INVALID_INDEX, "unknown uniform block must return GL_INVALID_INDEX, not 0");
+    let idx = dd_shim_gl::glGetProgramResourceIndex(
+        1,
+        0x92E1, /* GL_UNIFORM_BLOCK */
+        cname.as_ptr() as *const core::ffi::c_char,
+    );
+    assert_eq!(idx, GL_INVALID_INDEX, "unknown program resource must return GL_INVALID_INDEX, not 0");
     assert_eq!(glGetError(), GL_NO_ERROR);
 
     // --- EGL stub: returns EGL_NO_* handle and raises an EGL error ---

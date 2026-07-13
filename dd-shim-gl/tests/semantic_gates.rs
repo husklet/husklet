@@ -9,7 +9,11 @@ use dd_shim_gl::{egl, gles};
 
 fn serial_guard() -> std::sync::MutexGuard<'static, ()> {
     static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
-    LOCK.lock().unwrap_or_else(|e| e.into_inner())
+    let g = LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    // Reset the shared default GL share-group while holding the serialization lock, so residual state
+    // from a prior (serialized) test can never leak in and cause order-dependent parallel failures.
+    gles::reset_gl_state_for_tests();
+    g
 }
 
 #[test]

@@ -12,7 +12,10 @@ use dd_shim_gl::glconst::*;
 
 fn serial_guard() -> std::sync::MutexGuard<'static, ()> {
     static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
-    LOCK.lock().unwrap_or_else(|e| e.into_inner())
+    let g = LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    // Reset the shared default GL share-group under the lock (see semantic_gates.rs) for determinism.
+    gles::reset_gl_state_for_tests();
+    g
 }
 
 fn drain() {
