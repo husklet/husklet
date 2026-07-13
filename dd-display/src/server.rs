@@ -1660,6 +1660,9 @@ impl<P: Presenter> Server<P> {
             Some(Obj::Surface(s)) => (s.current_buffer, s.title.clone()),
             _ => return,
         };
+        if dbg_on() {
+            self.debug_dump_tree(root);
+        }
 
         let mut did_present = false;
         // Whether a buffer was actually handed to the presenter this commit. If one was but the present
@@ -1729,6 +1732,44 @@ impl<P: Presenter> Server<P> {
                 self.conn.send(&Message::new(WL_DISPLAY, 1).u32(cb)); // delete_id
             }
             self.send_presentation_feedback(s, did_present);
+        }
+    }
+
+    /// DD_DISPLAY_DEBUG: enumerate the surface subtree being presented (root + every composite subsurface),
+    /// each with its committed buffer's KIND (dmabuf/IOSurface vs shm vs solid) and size + offset. This
+    /// localizes the multi-proc content-white wall: if Chrome's rendered page arrives as a subsurface under
+    /// an IOSurface toplevel, present_root's CPU-blend (gated on a non-IOSurface root) drops it here.
+    fn debug_dump_tree(&self, root: u32) {
+        let btype = |bid: Option<u32>| -> String {
+            match bid.and_then(|b| self.objs.get(&b)) {
+                Some(Obj::DmaBuffer { width, height, iosurface_id, .. }) => {
+                    format!("dmabuf/IOSurface#{iosurface_id} {width}x{height}")
+                }
+                Some(Obj::SolidColorBuffer { width, height, .. }) => format!("solid {width}x{height}"),
+                Some(Obj::Buffer { width, height, .. }) => format!("shm {width}x{height}"),
+                _ if bid.is_none() => "NONE".to_string(),
+                _ => "other".to_string(),
+            }
+        };
+        let root_bid = match self.objs.get(&root) {
+            Some(Obj::Surface(s)) => s.current_buffer,
+            _ => None,
+        };
+        let children = self.collect_composite_children(root);
+        let root_title = match self.objs.get(&root) {
+            Some(Obj::Surface(s)) => s.title.clone(),
+            _ => String::new(),
+        };
+        eprintln!(
+            "[dd-display/tree] present root sid={root} buf=[{}] title={:?} children={}",
+            btype(root_bid), root_title, children.len()
+        );
+        for (csid, ox, oy) in &children {
+            let cbid = match self.objs.get(csid) {
+                Some(Obj::Surface(s)) => s.current_buffer,
+                _ => None,
+            };
+            eprintln!("[dd-display/tree]   child sid={csid} off=({ox},{oy}) buf=[{}]", btype(cbid));
         }
     }
 

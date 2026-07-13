@@ -152,7 +152,8 @@ pub fn start_gpu_bridge() -> bool {
         if let Some(old) = replaced {
             unsafe { cfrelease(old as IOSurfaceRef) };
         }
-        eprintln!("dd-display: GPU bridge cached IOSurface id={id} gen={generation}");
+        let (w, h) = unsafe { (IOSurfaceGetWidth(surf), IOSurfaceGetHeight(surf)) };
+        eprintln!("dd-display: GPU bridge cached IOSurface id={id} gen={generation} size={w}x{h}");
     });
     true
 }
