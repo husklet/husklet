@@ -179,6 +179,7 @@ impl DdState {
             // The compositor composites popups into their parent's frame (see `present_render_root`),
             // rather than opening a native popup window, so no per-surface popup placement is emitted.
             popup: None,
+            overlays: Vec::new(),
         })
     }
 }

@@ -1056,6 +1056,16 @@ impl Presenter for MetalPresenter {
             );
             enc.drawPrimitives_vertexStart_vertexCount(MTLPrimitiveType::Triangle, 0, 3);
         }
+        // MIXED shm/IOSurface tree (GPU root): `surf.overlays` carries each `wl_shm` subsurface/popup the
+        // compositor could not composite on the CPU (the IOSurface base has no CPU pixels — see
+        // dd-compositor `present_tree`). Compositing them here — upload each `GpuCompositeNode::buffer`,
+        // draw it as an alpha-blended positioned quad over `composite` at its device offset — is the
+        // remaining mac-device step (needs a blend-enabled pipeline + per-overlay quad; validated on the
+        // mac bridge, not offline). Until then a GPU root presents its base texture (unchanged from before;
+        // the children now REACH the presenter instead of being dropped in the compositor).
+        for _node in &surf.overlays {
+            // TODO(mac): upload _node.buffer + draw an alpha-blended quad at (_node.x, _node.y).
+        }
         enc.endEncoding();
         if let Some(drawable) = &drawable {
             let dst = unsafe { drawable.texture() };

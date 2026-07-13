@@ -1856,6 +1856,7 @@ impl<P: Presenter> Server<P> {
                 uv_rect: map.uv_rect,
                 damage: None,
                 popup: None,
+                overlays: Vec::new(),
             });
         }
         if let Some(Obj::SolidColorBuffer {
@@ -1889,6 +1890,7 @@ impl<P: Presenter> Server<P> {
                 uv_rect: [0.0, 0.0, 1.0, 1.0],
                 damage: None,
                 popup: None,
+                overlays: Vec::new(),
             });
         }
         let (pool, offset, width, height, stride, format) = match self.objs.get(&bid) {
@@ -1971,6 +1973,7 @@ impl<P: Presenter> Server<P> {
             uv_rect: [0.0, 0.0, 1.0, 1.0],
             damage: None,
             popup: None,
+            overlays: Vec::new(),
         })
     }
 

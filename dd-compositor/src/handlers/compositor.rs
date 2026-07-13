@@ -8,13 +8,16 @@
 
 use std::time::Duration;
 
-use dd_display::present::{PopupPlacement, SurfaceBuffer};
+use dd_display::present::{GpuCompositeNode, PopupPlacement, SurfaceBuffer};
 
 use smithay::{
     reexports::{
         wayland_protocols::wp::presentation_time::server::wp_presentation_feedback,
         wayland_server::{
-            protocol::{wl_buffer::WlBuffer, wl_callback::WlCallback, wl_shm, wl_surface::WlSurface},
+            protocol::{
+                wl_buffer::WlBuffer, wl_callback::WlCallback, wl_output::Transform, wl_shm,
+                wl_surface::WlSurface,
+            },
             Client,
         },
     },
@@ -392,29 +395,8 @@ impl DdState {
     /// model `server.rs` uses); a GPU/IOSurface root is presented as a single zero-copy texture and its
     /// children are not blended (documented limitation). Returns whether the frame reached the screen.
     pub(crate) fn present_render_root(&mut self, root: &WlSurface) -> bool {
-        let pacing = match self.snapshot_surface(root) {
-            Some(mut base) => {
-                if base.iosurface_id.is_none() && !base.bgra.is_empty() {
-                    let popups = self.collect_popups_for_root(root);
-                    // The partial-damage upload hint on `base` describes only the ROOT's own changed
-                    // region. Once subsurfaces or popups are blended in, their changed pixels lie outside
-                    // that rect, so the composited frame must be uploaded in full — widen the hint to the
-                    // whole texture. (The CPU repack of each surface was still incremental; only the GPU
-                    // upload hint is widened, and correctness is preserved either way since `bgra` is the
-                    // complete composite.)
-                    let has_overlays =
-                        !popups.is_empty() || get_children(root).into_iter().any(|c| &c != root);
-                    if has_overlays {
-                        base.damage = None;
-                    }
-                    self.blend_subtree(&mut base, root, 0, 0);
-                    for (popup, ox, oy) in popups {
-                        if let Some(psb) = self.snapshot_surface(&popup) {
-                            blend(&mut base, &psb, ox, oy);
-                        }
-                        self.blend_subtree(&mut base, &popup, ox, oy);
-                    }
-                }
+        let pacing = match self.present_tree(root) {
+            Some(base) => {
                 // Map the presenter's structured outcome onto frame pacing. Only a visibly Delivered
                 // frame advances callbacks/feedback; an Offscreen present or a real output/device error
                 // (both previously hidden behind a `false`) is a FAILED present — pacing is retained.
@@ -446,6 +428,81 @@ impl DdState {
         }
         self.pace_tree(root, pacing);
         did_present
+    }
+
+    /// Compose the full window tree rooted at `root` into a single present-ready [`SurfaceBuffer`],
+    /// handling BOTH a CPU (`wl_shm`) root and a GPU (IOSurface) root — the mixed shm/IOSurface case that
+    /// previously dropped every child of a GPU window (only the root texture was presented):
+    ///   - **CPU root:** over-composite every subsurface descendant and every popup (and their
+    ///     descendants) into the root's `bgra` on the CPU, as before. The root's partial-damage upload
+    ///     hint is widened to the whole texture when overlays exist, since composited children fall
+    ///     outside the root's own damage rect.
+    ///   - **GPU root:** the IOSurface pixels are not CPU-addressable, so instead of losing the children
+    ///     we gather each `wl_shm` subsurface/popup as a [`GpuCompositeNode`] into `base.overlays`; the
+    ///     presenter composites them over the resolved IOSurface base. A shm subsurface + a popup over a
+    ///     GPU (accelerated Chrome/glmark) root now both reach the screen.
+    /// Returns `None` when the root has no committed buffer.
+    fn present_tree(&mut self, root: &WlSurface) -> Option<SurfaceBuffer> {
+        let mut base = self.snapshot_surface(root)?;
+        let popups = self.collect_popups_for_root(root);
+        let has_overlays =
+            !popups.is_empty() || get_children(root).into_iter().any(|c| &c != root);
+        if base.iosurface_id.is_some() {
+            // GPU root: carry the CPU overlay layers for the presenter (root + popup subsurface trees).
+            let mut overlays: Vec<GpuCompositeNode> = Vec::new();
+            self.collect_overlay_nodes(root, 0, 0, &mut overlays);
+            for (popup, ox, oy) in popups {
+                if let Some(psb) = self.snapshot_surface(&popup) {
+                    overlays.push(GpuCompositeNode { buffer: psb, x: ox, y: oy });
+                }
+                self.collect_overlay_nodes(&popup, ox, oy, &mut overlays);
+            }
+            base.overlays = overlays;
+        } else if !base.bgra.is_empty() {
+            // CPU root: over-composite the whole tree into the base now.
+            if has_overlays {
+                base.damage = None;
+            }
+            self.blend_subtree(&mut base, root, 0, 0);
+            for (popup, ox, oy) in popups {
+                if let Some(psb) = self.snapshot_surface(&popup) {
+                    blend(&mut base, &psb, ox, oy);
+                }
+                self.blend_subtree(&mut base, &popup, ox, oy);
+            }
+        }
+        Some(base)
+    }
+
+    /// Collect every mapped subsurface descendant of `surface` as a [`GpuCompositeNode`] overlay layer
+    /// (snapshot + accumulated device-relative offset), bottom→top — the GPU-root analogue of
+    /// [`Self::blend_subtree`], which does the same walk but composites into a CPU base instead of
+    /// emitting layers. Only `wl_shm` children can be an overlay (an IOSurface child is skipped: nested
+    /// zero-copy GPU subsurfaces are a separate, unimplemented case).
+    fn collect_overlay_nodes(
+        &self,
+        surface: &WlSurface,
+        base_x: i32,
+        base_y: i32,
+        out: &mut Vec<GpuCompositeNode>,
+    ) {
+        for child in get_children(surface) {
+            if &child == surface {
+                continue;
+            }
+            let (cx, cy) = with_states(&child, |states| {
+                let mut sub = states.cached_state.get::<SubsurfaceCachedState>();
+                let loc = sub.current().location;
+                (loc.x, loc.y)
+            });
+            let (ax, ay) = (base_x + cx, base_y + cy);
+            if let Some(csb) = self.snapshot_surface(&child) {
+                if csb.iosurface_id.is_none() {
+                    out.push(GpuCompositeNode { buffer: csb, x: ax, y: ay });
+                }
+            }
+            self.collect_overlay_nodes(&child, ax, ay, out);
+        }
     }
 
     /// Whether any surface in `root`'s presented tree (root + subsurface descendants + popups + their
@@ -555,17 +612,18 @@ impl DdState {
     fn snapshot_surface(&self, surface: &WlSurface) -> Option<SurfaceBuffer> {
         let sid = surface_id(surface);
         let buffer = self.buffers.get(&sid)?;
-        let (buffer_scale, dst, src) = with_states(surface, |states| {
-            let scale = states
-                .cached_state
-                .get::<SurfaceAttributes>()
-                .current()
-                .buffer_scale
-                .max(1);
+        let (buffer_scale, dst, src, buffer_transform) = with_states(surface, |states| {
+            let mut attrs = states.cached_state.get::<SurfaceAttributes>();
+            let cur_attrs = attrs.current();
+            let scale = cur_attrs.buffer_scale.max(1);
+            // `wl_surface.set_buffer_transform`: the buffer's contents are stored rotated/flipped and must
+            // be un-transformed to present upright. Read it here and apply it below (see
+            // `apply_buffer_transform`); Normal is the overwhelming common case and stays a passthrough.
+            let buffer_transform = cur_attrs.buffer_transform;
             let mut vp = states.cached_state.get::<ViewportCachedState>();
             let cur = vp.current();
             let src = cur.src.map(|r| (r.loc.x, r.loc.y, r.size.w, r.size.h));
-            (scale, cur.size(), src)
+            (scale, cur.size(), src, buffer_transform)
         });
         // GPU present path: a dmabuf-backed buffer carries a dd IOSurface id (no CPU pixels). Resolve it
         // to a zero-copy IOSurface `SurfaceBuffer` and skip the shm cache.
@@ -573,32 +631,36 @@ impl DdState {
             return Some(sb);
         }
         // `wl_shm` path: build from the tight-BGRA cache, repacked (whole buffer or only the damaged rows)
-        // at commit time in `repack_shm`. The `wp_viewport` destination/source resolve the logical size
-        // and the normalized sample rect exactly as the full-upload path did.
+        // at commit time in `repack_shm`. Apply the committed `wl_surface.buffer_transform` to the cached
+        // pixels FIRST — producing an upright texture (`uw`×`uh`, with w/h swapped for 90°/270°) — so the
+        // `wp_viewport` source crop, logical size, and damage are all resolved in upright surface space.
         let cache = self.repacks.get(&sid)?;
         let title = self.titles.get(&sid).cloned().unwrap_or_else(|| "dd".into());
-        let (log_w, log_h, uv_rect) =
-            logical_size_and_uv(dst, src, cache.tex_w, cache.tex_h, buffer_scale);
+        let (bgra, uw, uh) =
+            apply_buffer_transform(&cache.bgra, cache.tex_w, cache.tex_h, buffer_transform);
+        let damage = transform_damage(cache.damage, cache.tex_w, cache.tex_h, buffer_transform);
+        let (log_w, log_h, uv_rect) = logical_size_and_uv(dst, src, uw, uh, buffer_scale);
         Some(SurfaceBuffer {
             sid,
             width: log_w,
             height: log_h,
-            texture_width: cache.tex_w,
-            texture_height: cache.tex_h,
-            stride: cache.tex_w * 4,
+            texture_width: uw,
+            texture_height: uh,
+            stride: uw * 4,
             format: cache.format,
-            bgra: cache.bgra.clone(),
+            bgra,
             title,
             iosurface_id: None,
             gpu_render: false,
             uv_rect,
-            damage: cache.damage,
+            damage,
             // If this surface is an `xdg_popup`, carry its positioner-resolved placement so a windowed
             // presenter can open it as a native popup window at the anchor. This is inert on the default
             // composite-into-parent path (a popup's `SurfaceBuffer` is only blended, which ignores the
             // field, and a toplevel present root is never a popup so this is `None`); it becomes live when
             // `DD_DISPLAY_POPUP_WINDOWS` makes a popup its own present root (see `present_root`).
             popup: self.popup_placement(surface),
+            overlays: Vec::new(),
         })
     }
 
@@ -796,6 +858,103 @@ fn damage_to_rows(
 /// `buffer_scale`. Shared by the `wl_shm` repack and the dmabuf/IOSurface path so both honour the
 /// viewport identically: a viewport `dst` sets the logical size; else a `src` crop's size; else the
 /// buffer pixels divided by `buffer_scale` (HiDPI). The `uv_rect` crops to the `src` rectangle.
+/// Apply a committed `wl_surface.buffer_transform` to tight-BGRA buffer pixels, producing the UPRIGHT
+/// texture the presenter shows. Returns `(pixels, out_w, out_h)`; width/height are swapped for the 90°/
+/// 270° variants (and their flips). `Normal` is a passthrough (just clones, as the untransformed path
+/// did). The mapping follows the Wayland `wl_output.transform` convention (weston `weston_transformed_
+/// coord`): for each output pixel `(ox, oy)` in the upright image we sample the buffer pixel it came from.
+fn apply_buffer_transform(src: &[u8], bw: i32, bh: i32, transform: Transform) -> (Vec<u8>, i32, i32) {
+    if matches!(transform, Transform::Normal) || bw <= 0 || bh <= 0 {
+        return (src.to_vec(), bw, bh);
+    }
+    // Output (upright) dimensions: 90°/270° (and their flips) swap width and height.
+    let (ow, oh) = match transform {
+        Transform::_90 | Transform::_270 | Transform::Flipped90 | Transform::Flipped270 => (bh, bw),
+        _ => (bw, bh),
+    };
+    let sstride = (bw * 4) as usize;
+    let dstride = (ow * 4) as usize;
+    if src.len() < sstride * bh as usize {
+        return (src.to_vec(), bw, bh);
+    }
+    let mut out = vec![0u8; dstride * oh as usize];
+    for oy in 0..oh {
+        for ox in 0..ow {
+            // Output pixel (ox,oy) → source buffer pixel (sx,sy). `ow`/`oh` are the upright (surface-space)
+            // dimensions; the reflections subtract 1 for 0-indexed pixels.
+            let (sx, sy) = match transform {
+                Transform::Flipped => (ow - 1 - ox, oy),
+                Transform::_180 => (ow - 1 - ox, oh - 1 - oy),
+                Transform::Flipped180 => (ox, oh - 1 - oy),
+                Transform::_90 => (oh - 1 - oy, ox),
+                Transform::Flipped90 => (oh - 1 - oy, ow - 1 - ox),
+                Transform::_270 => (oy, ow - 1 - ox),
+                Transform::Flipped270 => (oy, ox),
+                // Normal handled above; any future variant falls back to identity.
+                _ => (ox, oy),
+            };
+            if sx < 0 || sx >= bw || sy < 0 || sy >= bh {
+                continue;
+            }
+            let si = sy as usize * sstride + sx as usize * 4;
+            let di = oy as usize * dstride + ox as usize * 4;
+            out[di..di + 4].copy_from_slice(&src[si..si + 4]);
+        }
+    }
+    (out, ow, oh)
+}
+
+/// Map a damage rectangle from BUFFER-texture coordinates into the UPRIGHT (post-`buffer_transform`)
+/// texture coordinates the presented `SurfaceBuffer` uses, so a partial-upload damage hint stays valid
+/// after the transform. `Normal` passes through unchanged; for other transforms the rectangle's four
+/// corners are mapped and the bounding box returned (a superset is always a safe upload hint, and `bgra`
+/// carries the complete frame regardless). `None` in ⇒ `None` out (full upload).
+fn transform_damage(
+    damage: Option<(i32, i32, i32, i32)>,
+    bw: i32,
+    bh: i32,
+    transform: Transform,
+) -> Option<(i32, i32, i32, i32)> {
+    let (x, y, w, h) = damage?;
+    if matches!(transform, Transform::Normal) || w <= 0 || h <= 0 {
+        return damage;
+    }
+    // Buffer→output point map (inverse of `apply_buffer_transform`'s sampling), with output size (ow,oh).
+    let (ow, oh) = match transform {
+        Transform::_90 | Transform::_270 | Transform::Flipped90 | Transform::Flipped270 => (bh, bw),
+        _ => (bw, bh),
+    };
+    let map = |bx: i32, by: i32| -> (i32, i32) {
+        match transform {
+            Transform::Flipped => (bw - 1 - bx, by),
+            Transform::_180 => (bw - 1 - bx, bh - 1 - by),
+            Transform::Flipped180 => (bx, bh - 1 - by),
+            Transform::_90 => (by, bw - 1 - bx),
+            Transform::Flipped90 => (bh - 1 - by, bw - 1 - bx),
+            Transform::_270 => (bh - 1 - by, bx),
+            Transform::Flipped270 => (by, bx),
+            _ => (bx, by),
+        }
+    };
+    let corners = [(x, y), (x + w - 1, y), (x, y + h - 1), (x + w - 1, y + h - 1)];
+    let mut minx = i32::MAX;
+    let mut miny = i32::MAX;
+    let mut maxx = i32::MIN;
+    let mut maxy = i32::MIN;
+    for (bx, by) in corners {
+        let (px, py) = map(bx, by);
+        minx = minx.min(px);
+        miny = miny.min(py);
+        maxx = maxx.max(px);
+        maxy = maxy.max(py);
+    }
+    let minx = minx.clamp(0, ow - 1);
+    let miny = miny.clamp(0, oh - 1);
+    let maxx = maxx.clamp(0, ow - 1);
+    let maxy = maxy.clamp(0, oh - 1);
+    Some((minx, miny, maxx - minx + 1, maxy - miny + 1))
+}
+
 pub(crate) fn logical_size_and_uv(
     dst: Option<Size<i32, smithay::utils::Logical>>,
     src: Option<(f64, f64, f64, f64)>,
@@ -839,15 +998,25 @@ fn uv_from_src(src: Option<(f64, f64, f64, f64)>, tex_w: i32, tex_h: i32, buffer
 }
 
 /// Alpha-composite `top` over `base` at the logical offset `(x_logical, y_logical)` (relative to the
-/// base surface's origin). Both buffers hold tight BGRA backing-texture pixels; the offset is scaled by
-/// the base's backing scale so a HiDPI window blends its children at the right device position. `top` is
-/// clipped to the base bounds (a menu extending past the window edge is cropped — a documented limitation
-/// of compositing popups into the parent frame rather than into their own native windows). An XRGB `top`
-/// (`format == 1`) is treated as fully opaque; an ARGB `top` is straight-alpha blended.
+/// base surface's origin). `base` holds tight BGRA backing-texture pixels; `top` is drawn at its LOGICAL
+/// destination size (`top.width` × `top.height`, scaled to the base's device pixels) — NOT its raw
+/// backing dimensions — and SAMPLED through its `wp_viewport` source crop (`top.uv_rect`, a normalized
+/// rect over `top`'s backing texture). So a child that scales a small buffer up, or crops a sub-region of
+/// a larger one via `wp_viewport`, composites at the correct on-screen size instead of 1:1 backing
+/// pixels. `top` is clipped to the base bounds (a menu past the window edge is cropped — a documented
+/// limitation of compositing popups into the parent frame rather than their own native windows).
+///
+/// Color math is correct premultiplied source-over. Wayland ARGB8888 buffers carry PREMULTIPLIED alpha
+/// (color channels already multiplied by their own alpha), so the Porter-Duff "over" is
+/// `dst = src + dst·(1-a)` — the source is NOT multiplied by `a` again (doing so double-applies the
+/// alpha and darkens semi-transparent children). An XRGB `top` (`format == 1`) is fully opaque.
 fn blend(base: &mut SurfaceBuffer, top: &SurfaceBuffer, x_logical: i32, y_logical: i32) {
     let (bw, bh) = (base.texture_width, base.texture_height);
     let (tw, th) = (top.texture_width, top.texture_height);
-    if bw <= 0 || bh <= 0 || tw <= 0 || th <= 0 {
+    // Destination extent in the top's own LOGICAL space (its on-screen size after `wp_viewport` dst-size
+    // / buffer-scale) — what `top.width`/`top.height` carry — NOT the backing texture size.
+    let (dw, dh) = (top.width, top.height);
+    if bw <= 0 || bh <= 0 || tw <= 0 || th <= 0 || dw <= 0 || dh <= 0 {
         return;
     }
     let base_stride = (bw * 4) as usize;
@@ -855,25 +1024,40 @@ fn blend(base: &mut SurfaceBuffer, top: &SurfaceBuffer, x_logical: i32, y_logica
     if base.bgra.len() < base_stride * bh as usize || top.bgra.len() < top_stride * th as usize {
         return;
     }
-    // Backing-store scale of the base texture relative to its logical size; child offsets are logical.
+    // Backing-store scale of the base texture relative to its logical size; child offsets + sizes are
+    // logical, so the child occupies `dw*s × dh*s` device pixels at `(x_logical*s, y_logical*s)`.
     let s = if base.width > 0 {
-        (bw as f64 / base.width as f64).round().max(1.0) as i32
+        (bw as f64 / base.width as f64).round().max(1.0)
     } else {
-        1
+        1.0
     };
-    let (ox, oy) = (x_logical * s, y_logical * s);
+    let ddw = ((dw as f64) * s).round().max(1.0) as i32;
+    let ddh = ((dh as f64) * s).round().max(1.0) as i32;
+    let (ox, oy) = ((x_logical as f64 * s).round() as i32, (y_logical as f64 * s).round() as i32);
+    // Source sample window over the top's backing texture, from its `wp_viewport` source crop
+    // (`top.uv_rect` is normalized `[u0,v0,u1,v1]`; the full texture when there is no crop).
+    let [u0, v0, u1, v1] = top.uv_rect;
+    let (su0, sv0) = (u0 as f64 * tw as f64, v0 as f64 * th as f64);
+    let (sw, sh) = ((u1 - u0) as f64 * tw as f64, (v1 - v0) as f64 * th as f64);
     let top_opaque = top.format == 1;
-    for ty in 0..th {
-        let by = oy + ty;
+    for dy in 0..ddh {
+        let by = oy + dy;
         if by < 0 || by >= bh {
             continue;
         }
-        for tx in 0..tw {
-            let bx = ox + tx;
+        // Map this device destination row to a source texel row through the viewport crop.
+        let fy = if ddh > 1 { dy as f64 / ddh as f64 } else { 0.0 };
+        let sy = (sv0 + fy * sh).floor() as i32;
+        let sy = sy.clamp(0, th - 1);
+        for dx in 0..ddw {
+            let bx = ox + dx;
             if bx < 0 || bx >= bw {
                 continue;
             }
-            let ti = ty as usize * top_stride + tx as usize * 4;
+            let fx = if ddw > 1 { dx as f64 / ddw as f64 } else { 0.0 };
+            let sx = (su0 + fx * sw).floor() as i32;
+            let sx = sx.clamp(0, tw - 1);
+            let ti = sy as usize * top_stride + sx as usize * 4;
             let bi = by as usize * base_stride + bx as usize * 4;
             let a = if top_opaque { 255u32 } else { top.bgra[ti + 3] as u32 };
             if a == 0 {
@@ -885,10 +1069,12 @@ fn blend(base: &mut SurfaceBuffer, top: &SurfaceBuffer, x_logical: i32, y_logica
                 base.bgra[bi + 2] = top.bgra[ti + 2];
                 base.bgra[bi + 3] = 255;
             } else {
+                // Premultiplied "over": the source channels are ALREADY multiplied by `a`, so add them
+                // directly to the attenuated destination — do not multiply the source by `a` again.
                 let ia = 255 - a;
                 for c in 0..3 {
-                    base.bgra[bi + c] =
-                        ((top.bgra[ti + c] as u32 * a + base.bgra[bi + c] as u32 * ia) / 255) as u8;
+                    let src_pm = top.bgra[ti + c] as u32;
+                    base.bgra[bi + c] = (src_pm + base.bgra[bi + c] as u32 * ia / 255).min(255) as u8;
                 }
                 base.bgra[bi + 3] = (a + base.bgra[bi + 3] as u32 * ia / 255).min(255) as u8;
             }

@@ -84,6 +84,26 @@ fixed (that fd is what crashed GTK).
   re-checked live at present time via `PresentError::Device`). Proven by the three tracked
   `rendering_wayland` gates (all pass) plus the full dd-compositor (9/9) and dd-display (56/56, incl.
   `failed_present_holds_buffer_release_and_frame_callbacks`) suites. Behind `DD_DISPLAY_SMITHAY`.
+- **Composition correctness: mixed shm/IOSurface trees, buffer transforms, premultiplied blend**
+  (codex-rendering §11 rows `compositor_gpu_roots_include_subsurfaces_and_popups`,
+  `compositor_applies_all_buffer_transforms_to_geometry_sampling_and_damage`,
+  `compositor_child_blend_honors_viewport_scaling_and_premultiplied_argb`). One render-pass slice fixing
+  how the compositor composes pixels: (1) a GPU (IOSurface) root no longer BYPASSES child/popup
+  composition — `present_tree` walks the subsurface + popup tree and, for a GPU root whose pixels are not
+  CPU-addressable, carries each `wl_shm` child as a `GpuCompositeNode` in `SurfaceBuffer::overlays` for
+  the presenter (a CPU root still over-composites into `bgra` as before). (2) `wl_surface.buffer_transform`
+  is now fully applied: `apply_buffer_transform` maps all eight variants (normal/90/180/270 + flips) into
+  upright pixels + swapped geometry, and `transform_damage` maps the damage rect into the presented
+  texture. (3) `blend` honors `wp_viewport` source crop (`top.uv_rect`) and scales to the logical
+  destination (`top.width`/`top.height`), and does CORRECT premultiplied source-over (`dst = src +
+  dst·(1-a)`) instead of the old double-multiply (`src·a + …`) that darkened semi-transparent children.
+  Proven by the three tracked `rendering_wayland` gates (all pass) plus a new CPU pixel test
+  (`dd-compositor/tests/composition.rs`: premultiplied green-over-red gives G≈128 not the buggy ≈64, and a
+  90° transform swaps a 2×1 buffer to an upright 1×2 with the texels correctly rotated). The Metal
+  presenter carries `overlays` but its per-overlay draw (blend-enabled positioned quad over the IOSurface)
+  is the remaining mac-device step — neutral vs. before (children previously dropped in the compositor;
+  now they reach the presenter). Full dd-compositor 10 integration binaries + dd-display 56 lib tests
+  green. Behind `DD_DISPLAY_SMITHAY`.
 
 This document is a source-read + unit-test + build audit. No live Chrome/GTK session was run (that is
 the coordinated validation step, driven separately).

@@ -45,6 +45,23 @@ pub struct SurfaceBuffer {
     /// parent-content-top-left + (x, y) so a menu/combobox dropdown appears AT the widget instead of at a
     /// default cascade position. `None` for toplevels and any surface with no positioner.
     pub popup: Option<PopupPlacement>,
+    /// Overlay layers to composite ON TOP of this surface, bottom-to-top, when this surface is a GPU
+    /// (IOSurface) root whose pixels are not CPU-addressable. A CPU (`wl_shm`) root pre-composites its
+    /// subsurfaces/popups into `bgra` and leaves this empty; a GPU root instead carries each subsurface
+    /// and popup here as a [`GpuCompositeNode`] (a `wl_shm` layer + its device-pixel offset) so the
+    /// presenter draws the mixed shm/IOSurface tree — the IOSurface base plus each overlay on top —
+    /// instead of losing the child surfaces. See `dd-compositor`'s `present_tree`.
+    pub overlays: Vec<GpuCompositeNode>,
+}
+
+/// One overlay layer in a mixed shm/IOSurface present tree: a composited child surface (`buffer`, a
+/// `wl_shm` [`SurfaceBuffer`] with `iosurface_id == None`) and its offset within the window root, in the
+/// root's backing-texture (device) pixels. Emitted only for GPU roots (see [`SurfaceBuffer::overlays`]);
+/// the presenter uploads `buffer` and alpha-composites it at `(x, y)` over the resolved IOSurface base.
+pub struct GpuCompositeNode {
+    pub buffer: SurfaceBuffer,
+    pub x: i32,
+    pub y: i32,
 }
 
 /// Placement for an `xdg_popup`'s native window: which parent surface it hangs off and the
