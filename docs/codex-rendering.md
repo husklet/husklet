@@ -236,12 +236,13 @@ Important gaps and incorrect simplifications:
 - WSI reports fixed capabilities (one format, FIFO, identity transform, opaque alpha). Resize, surface loss,
   current extent, swapchain replacement (`oldSwapchain`), present result arrays, and multi-window lifetimes need
   validation.
-- WSI handle/create validation is largely absent. Surface-support/capability/format/mode queries ignore the supplied
-  surface and succeed for stale handles. Swapchain creation silently clamps zero extent, accepts image counts above
-  the advertised maximum, and ignores format/color space, usage, array layers, sharing mode, transform, composite
-  alpha, present mode and `oldSwapchain`. Centralize capability derivation in a `SurfaceCapabilities` value used by
-  both queries and creation; validate every requested field and referenced object before allocation, preserving the
-  output handle on failure. `vk_wsi_validates_surface_handles_and_swapchain_create_info` pins that identity.
+- WSI surface/create validation now uses one capability profile for queries and swapchain creation. Surface queries
+  reject stale handles without mutating outputs, queue-family support is truthful, duplicate Wayland native windows
+  fail, and swapchain creation validates image count, extent, format/color space, usage, layers, sharing mode,
+  transform, composite alpha, present mode and live same-surface `oldSwapchain` before allocating. The behavioral
+  Rust ABI regression `wsi_validates_surface_handles_and_swapchain_create_info_atomically` pins the negative matrix
+  and output/state atomicity. Resize generations, surface loss propagation into existing swapchains and actual
+  `oldSwapchain` retirement remain part of the lifecycle row below.
 - Swapchain images have no lifecycle state—only a round-robin cursor. Acquire ignores timeout and always returns an
   image, does not prove availability or signal the supplied semaphore/fence, and present does not require prior
   acquisition. Model `Available -> Acquired -> Presenting -> Available`, plus swapchain `Active/Retired/Lost`; wait
@@ -1076,7 +1077,7 @@ pixels, and fails against the broken behavior. Do not add tests that read implem
 |---|---|---|---|
 | `vk_abi_manifest_contains_every_core_command_in_the_pinned_registry` | missing | ABI registry is 19 Vulkan 1.4 core commands behind pinned Khronos XML | Regenerate ABI/types, review signatures, normal + loader census green |
 | `vk_advertised_core_has_real_implementations_for_every_mandatory_command` | partial | truthful Vulkan 1.0 still has 55/137 mandatory generated failures/stubs | Implement all advertised core semantics and pass CTS subset |
-| `vk_wsi_validates_surface_handles_and_swapchain_create_info` | contradictory | WSI accepts stale surfaces and incompatible swapchain requests | Shared capability validator plus negative create/query matrix |
+| `vk_wsi_validates_surface_handles_and_swapchain_create_info` | implemented | Shared capability validation rejects stale surfaces and incompatible swapchain requests atomically | Rust ABI negative create/query matrix green; retain as regression |
 | `vk_swapchain_tracks_image_ownership_timeouts_and_retirement` | missing | acquisition is stateless round-robin with ignored sync/timeout | Explicit image/swapchain state machine and multi-frame tests |
 | `vk_present_reports_failures_without_consuming_unsent_frame_state` | contradictory | present skips invalid input, consumes IR and discards delivery failures | Transactional submit with `pResults` and Vulkan error mapping |
 | `vk_image_layout_barriers_track_subresources_and_queue_ownership` | missing | images and barrier APIs have no layout/access/ownership state | Per-subresource transition model plus hazard/ownership tests |

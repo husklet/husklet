@@ -106,7 +106,7 @@ fn partial_note(name: &str) -> Option<&'static str> {
             "fences modeled as already-signaled (synchronous host replay); no real timeout/unsignaled state"
         }
         // WSI: the fixed FIFO / round-robin bring-up swapchain
-        "vkCreateSwapchainKHR" => "fixed FIFO / one-format / identity swapchain; no oldSwapchain reuse",
+        "vkCreateSwapchainKHR" => "validated FIFO / one-format / identity swapchain; no oldSwapchain retirement",
         "vkAcquireNextImageKHR" => {
             "round-robin acquire; acquire fence/semaphore treated as signaled; no timeout/OUT_OF_DATE"
         }
@@ -114,7 +114,7 @@ fn partial_note(name: &str) -> Option<&'static str> {
         "vkGetPhysicalDeviceSurfaceCapabilitiesKHR"
         | "vkGetPhysicalDeviceSurfaceFormatsKHR"
         | "vkGetPhysicalDeviceSurfacePresentModesKHR" => {
-            "fixed WSI capabilities (one format, FIFO, identity transform, opaque alpha)"
+            "validated fixed WSI capabilities (one format, FIFO, identity transform, opaque alpha)"
         }
         _ => return None,
     })

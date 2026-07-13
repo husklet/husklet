@@ -22,11 +22,40 @@ use crate::types::*;
 use ash::vk;
 use ash::vk::Handle;
 use core::ffi::c_void;
-use dd_shim_common::ir::{Cmd, encode_stream};
+use dd_shim_common::ir::encode_stream;
 use dd_shim_common::transport::{self, Surface, DRM_FMT_XRGB8888};
 
 fn tex_format_of(f: vk::Format) -> dd_shim_common::ir::TextureFormat {
     crate::memory::tex_format(f)
+}
+
+const SURFACE_FORMAT: vk::SurfaceFormatKHR = vk::SurfaceFormatKHR {
+    format: vk::Format::B8G8R8A8_UNORM,
+    color_space: vk::ColorSpaceKHR::SRGB_NONLINEAR,
+};
+const SURFACE_USAGE: vk::ImageUsageFlags = vk::ImageUsageFlags::from_raw(
+    vk::ImageUsageFlags::COLOR_ATTACHMENT.as_raw()
+        | vk::ImageUsageFlags::TRANSFER_SRC.as_raw()
+        | vk::ImageUsageFlags::TRANSFER_DST.as_raw(),
+);
+
+fn surface_capabilities() -> vk::SurfaceCapabilitiesKHR {
+    vk::SurfaceCapabilitiesKHR {
+        min_image_count: 2,
+        max_image_count: 3,
+        current_extent: vk::Extent2D { width: u32::MAX, height: u32::MAX },
+        min_image_extent: vk::Extent2D { width: 1, height: 1 },
+        max_image_extent: vk::Extent2D { width: 16384, height: 16384 },
+        max_image_array_layers: 1,
+        supported_transforms: vk::SurfaceTransformFlagsKHR::IDENTITY,
+        current_transform: vk::SurfaceTransformFlagsKHR::IDENTITY,
+        supported_composite_alpha: vk::CompositeAlphaFlagsKHR::OPAQUE,
+        supported_usage_flags: SURFACE_USAGE,
+    }
+}
+
+fn valid_surface(state: &reg::VkState, surface: u64) -> bool {
+    surface != 0 && state.surfaces.contains_key(&surface)
 }
 
 // ---- VK_KHR_surface + VK_KHR_wayland_surface -----------------------------------------------------
@@ -42,7 +71,15 @@ pub extern "C" fn vkCreateWaylandSurfaceKHR(
     else {
         return VK_ERROR_INITIALIZATION_FAILED;
     };
+    if ci.display.is_null() || ci.surface.is_null() {
+        return VK_ERROR_INITIALIZATION_FAILED;
+    }
     let mut s = reg::lock();
+    if s.surfaces.values().any(|surface| {
+        surface.wl_display == ci.display as usize && surface.wl_surface == ci.surface as usize
+    }) {
+        return VK_ERROR_NATIVE_WINDOW_IN_USE_KHR;
+    }
     let handle = s.alloc_handle();
     s.surfaces.insert(
         handle,
@@ -73,40 +110,34 @@ pub extern "C" fn vkGetPhysicalDeviceWaylandPresentationSupportKHR(
 #[no_mangle]
 pub extern "C" fn vkGetPhysicalDeviceSurfaceSupportKHR(
     _physical_device: VkPhysicalDevice,
-    _queue_family_index: u32,
-    _surface: u64,
+    queue_family_index: u32,
+    surface: u64,
     p_supported: *mut VkBool32,
 ) -> VkResult {
-    if let Some(out) = unsafe { p_supported.as_mut() } {
-        *out = vk::TRUE;
+    let Some(out) = (unsafe { p_supported.as_mut() }) else {
+        return VK_ERROR_INITIALIZATION_FAILED;
+    };
+    let s = reg::lock();
+    if !valid_surface(&s, surface) {
+        return VK_ERROR_SURFACE_LOST_KHR;
     }
+    *out = if queue_family_index == 0 { vk::TRUE } else { vk::FALSE };
     VK_SUCCESS
 }
 
 #[no_mangle]
 pub extern "C" fn vkGetPhysicalDeviceSurfaceCapabilitiesKHR(
     _physical_device: VkPhysicalDevice,
-    _surface: u64,
+    surface: u64,
     p_caps: *mut vk::SurfaceCapabilitiesKHR,
 ) -> VkResult {
-    if let Some(out) = unsafe { p_caps.as_mut() } {
-        *out = vk::SurfaceCapabilitiesKHR {
-            min_image_count: 2,
-            max_image_count: 3,
-            // 0xFFFFFFFF == "extent is defined by the swapchain" (the app picks it) — matches the
-            // undefined-current-extent case MoltenVK reports for an unsized layer.
-            current_extent: vk::Extent2D { width: 0xFFFF_FFFF, height: 0xFFFF_FFFF },
-            min_image_extent: vk::Extent2D { width: 1, height: 1 },
-            max_image_extent: vk::Extent2D { width: 16384, height: 16384 },
-            max_image_array_layers: 1,
-            supported_transforms: vk::SurfaceTransformFlagsKHR::IDENTITY,
-            current_transform: vk::SurfaceTransformFlagsKHR::IDENTITY,
-            supported_composite_alpha: vk::CompositeAlphaFlagsKHR::OPAQUE,
-            supported_usage_flags: vk::ImageUsageFlags::COLOR_ATTACHMENT
-                | vk::ImageUsageFlags::TRANSFER_SRC
-                | vk::ImageUsageFlags::TRANSFER_DST,
-        };
+    let Some(out) = (unsafe { p_caps.as_mut() }) else {
+        return VK_ERROR_INITIALIZATION_FAILED;
+    };
+    if !valid_surface(&reg::lock(), surface) {
+        return VK_ERROR_SURFACE_LOST_KHR;
     }
+    *out = surface_capabilities();
     VK_SUCCESS
 }
 
@@ -115,24 +146,27 @@ pub extern "C" fn vkGetPhysicalDeviceSurfaceCapabilitiesKHR(
 #[no_mangle]
 pub extern "C" fn vkGetPhysicalDeviceSurfaceFormatsKHR(
     _physical_device: VkPhysicalDevice,
-    _surface: u64,
+    surface: u64,
     p_count: *mut u32,
     p_formats: *mut vk::SurfaceFormatKHR,
 ) -> VkResult {
-    let formats = [vk::SurfaceFormatKHR {
-        format: vk::Format::B8G8R8A8_UNORM,
-        color_space: vk::ColorSpaceKHR::SRGB_NONLINEAR,
-    }];
+    if !valid_surface(&reg::lock(), surface) {
+        return VK_ERROR_SURFACE_LOST_KHR;
+    }
+    let formats = [SURFACE_FORMAT];
     unsafe { write_enum(&formats, p_count, p_formats) }
 }
 
 #[no_mangle]
 pub extern "C" fn vkGetPhysicalDeviceSurfacePresentModesKHR(
     _physical_device: VkPhysicalDevice,
-    _surface: u64,
+    surface: u64,
     p_count: *mut u32,
     p_modes: *mut vk::PresentModeKHR,
 ) -> VkResult {
+    if !valid_surface(&reg::lock(), surface) {
+        return VK_ERROR_SURFACE_LOST_KHR;
+    }
     let modes = [vk::PresentModeKHR::FIFO];
     unsafe { write_enum(&modes, p_count, p_modes) }
 }
@@ -150,12 +184,42 @@ pub extern "C" fn vkCreateSwapchainKHR(
     else {
         return VK_ERROR_INITIALIZATION_FAILED;
     };
-    let width = ci.image_extent.width.max(1);
-    let height = ci.image_extent.height.max(1);
-    let format = tex_format_of(ci.image_format);
-    let count = ci.min_image_count.max(2) as usize;
-
     let mut s = reg::lock();
+    let surface = ci.surface.as_raw();
+    if !valid_surface(&s, surface) {
+        return VK_ERROR_SURFACE_LOST_KHR;
+    }
+    let caps = surface_capabilities();
+    let extent_ok = ci.image_extent.width >= caps.min_image_extent.width
+        && ci.image_extent.width <= caps.max_image_extent.width
+        && ci.image_extent.height >= caps.min_image_extent.height
+        && ci.image_extent.height <= caps.max_image_extent.height;
+    let count_ok = ci.min_image_count >= caps.min_image_count
+        && (caps.max_image_count == 0 || ci.min_image_count <= caps.max_image_count);
+    let usage_ok = !ci.image_usage.is_empty() && caps.supported_usage_flags.contains(ci.image_usage);
+    let old_ok = ci.old_swapchain.is_null()
+        || s.swapchains.get(&ci.old_swapchain.as_raw()).is_some_and(|old| old.surface == surface);
+    if !count_ok
+        || !extent_ok
+        || !ci.flags.is_empty()
+        || ci.image_format != SURFACE_FORMAT.format
+        || ci.image_color_space != SURFACE_FORMAT.color_space
+        || ci.image_array_layers != 1
+        || !usage_ok
+        || ci.image_sharing_mode != vk::SharingMode::EXCLUSIVE
+        || ci.queue_family_index_count != 0
+        || !ci.p_queue_family_indices.is_null()
+        || ci.pre_transform != caps.current_transform
+        || ci.composite_alpha != vk::CompositeAlphaFlagsKHR::OPAQUE
+        || ci.present_mode != vk::PresentModeKHR::FIFO
+        || !old_ok
+    {
+        return VK_ERROR_INITIALIZATION_FAILED;
+    }
+    let width = ci.image_extent.width;
+    let height = ci.image_extent.height;
+    let format = tex_format_of(ci.image_format);
+    let count = ci.min_image_count as usize;
     let mut images = Vec::with_capacity(count);
     for _ in 0..count {
         // Every presentable image renders into the executor's RESERVED present-target texture id (1):
@@ -215,7 +279,12 @@ pub extern "C" fn vkCreateSwapchainKHR(
 
 #[no_mangle]
 pub extern "C" fn vkDestroySwapchainKHR(_device: VkDevice, swapchain: u64, _p_allocator: *const c_void) {
-    reg::lock().swapchains.remove(&swapchain);
+    let mut s = reg::lock();
+    if let Some(sc) = s.swapchains.remove(&swapchain) {
+        for image in sc.images {
+            s.images.remove(&image.image);
+        }
+    }
 }
 
 #[no_mangle]
@@ -339,5 +408,154 @@ unsafe fn write_enum<T: Copy>(items: &[T], p_count: *mut u32, p_data: *mut T) ->
         VK_INCOMPLETE
     } else {
         VK_SUCCESS
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn create_surface(display: usize, window: usize) -> u64 {
+        let ci = vk::WaylandSurfaceCreateInfoKHR::default()
+            .display(display as *mut c_void)
+            .surface(window as *mut c_void);
+        let mut surface = 0;
+        assert_eq!(
+            vkCreateWaylandSurfaceKHR(core::ptr::null_mut(), &ci, core::ptr::null(), &mut surface),
+            VK_SUCCESS
+        );
+        surface
+    }
+
+    fn valid_swapchain_ci(surface: u64) -> vk::SwapchainCreateInfoKHR<'static> {
+        vk::SwapchainCreateInfoKHR::default()
+            .surface(vk::SurfaceKHR::from_raw(surface))
+            .min_image_count(2)
+            .image_format(SURFACE_FORMAT.format)
+            .image_color_space(SURFACE_FORMAT.color_space)
+            .image_extent(vk::Extent2D { width: 640, height: 480 })
+            .image_array_layers(1)
+            .image_usage(vk::ImageUsageFlags::COLOR_ATTACHMENT)
+            .image_sharing_mode(vk::SharingMode::EXCLUSIVE)
+            .pre_transform(vk::SurfaceTransformFlagsKHR::IDENTITY)
+            .composite_alpha(vk::CompositeAlphaFlagsKHR::OPAQUE)
+            .present_mode(vk::PresentModeKHR::FIFO)
+    }
+
+    #[test]
+    fn wsi_validates_surface_handles_and_swapchain_create_info_atomically() {
+        let surface = create_surface(0x1110, 0x2220);
+
+        // The same native Wayland window cannot be wrapped twice, and a failed creation preserves
+        // the caller's output just like every other negative path in this test.
+        let duplicate = vk::WaylandSurfaceCreateInfoKHR::default()
+            .display(0x1110usize as *mut c_void)
+            .surface(0x2220usize as *mut c_void);
+        let mut duplicate_out = 0xfeed_u64;
+        assert_eq!(
+            vkCreateWaylandSurfaceKHR(
+                core::ptr::null_mut(),
+                &duplicate,
+                core::ptr::null(),
+                &mut duplicate_out,
+            ),
+            VK_ERROR_NATIVE_WINDOW_IN_USE_KHR
+        );
+        assert_eq!(duplicate_out, 0xfeed);
+
+        let mut supported = 99;
+        assert_eq!(
+            vkGetPhysicalDeviceSurfaceSupportKHR(core::ptr::null_mut(), 1, surface, &mut supported),
+            VK_SUCCESS
+        );
+        assert_eq!(supported, vk::FALSE, "only queue family zero is advertised");
+
+        let reject = |ci: &vk::SwapchainCreateInfoKHR<'_>| {
+            let initial_swapchains = reg::lock().swapchains.len();
+            let mut out = 0xfeed_u64;
+            assert_eq!(
+                vkCreateSwapchainKHR(core::ptr::null_mut(), ci, core::ptr::null(), &mut out),
+                VK_ERROR_INITIALIZATION_FAILED
+            );
+            assert_eq!(out, 0xfeed, "failure must preserve pSwapchain");
+            assert_eq!(reg::lock().swapchains.len(), initial_swapchains, "failure must not allocate");
+        };
+
+        let base = valid_swapchain_ci(surface);
+        reject(&vk::SwapchainCreateInfoKHR { min_image_count: 1, ..base });
+        reject(&vk::SwapchainCreateInfoKHR { min_image_count: 4, ..base });
+        reject(&vk::SwapchainCreateInfoKHR {
+            image_extent: vk::Extent2D { width: 0, height: 480 },
+            ..base
+        });
+        reject(&vk::SwapchainCreateInfoKHR {
+            image_format: vk::Format::R8G8B8A8_UNORM,
+            ..base
+        });
+        reject(&vk::SwapchainCreateInfoKHR {
+            image_color_space: vk::ColorSpaceKHR::DISPLAY_P3_NONLINEAR_EXT,
+            ..base
+        });
+        reject(&vk::SwapchainCreateInfoKHR { image_array_layers: 2, ..base });
+        reject(&vk::SwapchainCreateInfoKHR { image_usage: vk::ImageUsageFlags::STORAGE, ..base });
+        reject(&vk::SwapchainCreateInfoKHR {
+            image_sharing_mode: vk::SharingMode::CONCURRENT,
+            ..base
+        });
+        reject(&vk::SwapchainCreateInfoKHR {
+            pre_transform: vk::SurfaceTransformFlagsKHR::ROTATE_90,
+            ..base
+        });
+        reject(&vk::SwapchainCreateInfoKHR {
+            composite_alpha: vk::CompositeAlphaFlagsKHR::PRE_MULTIPLIED,
+            ..base
+        });
+        reject(&vk::SwapchainCreateInfoKHR { present_mode: vk::PresentModeKHR::IMMEDIATE, ..base });
+
+        let mut swapchain = 0;
+        assert_eq!(
+            vkCreateSwapchainKHR(core::ptr::null_mut(), &base, core::ptr::null(), &mut swapchain),
+            VK_SUCCESS
+        );
+        assert_ne!(swapchain, 0);
+        let image_handles = reg::lock().swapchains[&swapchain]
+            .images
+            .iter()
+            .map(|image| image.image)
+            .collect::<Vec<_>>();
+
+        // oldSwapchain is accepted only when it is a live swapchain for this surface.
+        let other_surface = create_surface(0x3330, 0x4440);
+        let wrong_old = vk::SwapchainCreateInfoKHR {
+            old_swapchain: vk::SwapchainKHR::from_raw(swapchain),
+            ..valid_swapchain_ci(other_surface)
+        };
+        reject(&wrong_old);
+
+        vkDestroySwapchainKHR(core::ptr::null_mut(), swapchain, core::ptr::null());
+        let state = reg::lock();
+        assert!(image_handles.iter().all(|image| !state.images.contains_key(image)));
+        drop(state);
+
+        vkDestroySurfaceKHR(core::ptr::null_mut(), surface, core::ptr::null());
+        let mut caps = vk::SurfaceCapabilitiesKHR { min_image_count: 77, ..Default::default() };
+        assert_eq!(
+            vkGetPhysicalDeviceSurfaceCapabilitiesKHR(core::ptr::null_mut(), surface, &mut caps),
+            VK_ERROR_SURFACE_LOST_KHR
+        );
+        assert_eq!(caps.min_image_count, 77, "stale-handle query must preserve output");
+        let mut count = 91;
+        assert_eq!(
+            vkGetPhysicalDeviceSurfaceFormatsKHR(core::ptr::null_mut(), surface, &mut count, core::ptr::null_mut()),
+            VK_ERROR_SURFACE_LOST_KHR
+        );
+        assert_eq!(count, 91, "stale-handle enumeration must preserve count");
+        let mut stale_out = 0xface_u64;
+        assert_eq!(
+            vkCreateSwapchainKHR(core::ptr::null_mut(), &base, core::ptr::null(), &mut stale_out),
+            VK_ERROR_SURFACE_LOST_KHR
+        );
+        assert_eq!(stale_out, 0xface);
+        vkDestroySurfaceKHR(core::ptr::null_mut(), other_surface, core::ptr::null());
     }
 }

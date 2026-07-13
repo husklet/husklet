@@ -64,3 +64,7 @@ pub const VK_ERROR_OUT_OF_POOL_MEMORY: VkResult = -1000069000;
 /// Used to reject a graphics pipeline whose shader stages/render pass are invalid rather than
 /// substituting a default (zero) module.
 pub const VK_ERROR_UNKNOWN: VkResult = -13;
+/// The referenced presentation surface no longer exists (`VK_KHR_surface`).
+pub const VK_ERROR_SURFACE_LOST_KHR: VkResult = -1000000000;
+/// The supplied native window is already owned by another Vulkan surface.
+pub const VK_ERROR_NATIVE_WINDOW_IN_USE_KHR: VkResult = -1000000001;
