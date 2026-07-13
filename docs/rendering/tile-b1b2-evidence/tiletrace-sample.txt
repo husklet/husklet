@@ -1,0 +1,3 @@
+[tiletrace] pid=42232 frame=1 replay=1 ndraws=22 draws=18 clears=4 offscreen_fbo_passes=0 sampled_with_data=18 sampled_EMPTY=0 sampled_unbound=0 max_data=512x256 max_empty=0x0
+[tiletrace] pid=42232 frame=956 replay=1 ndraws=11 draws=9 clears=2 offscreen_fbo_passes=0 sampled_with_data=9 sampled_EMPTY=0 sampled_unbound=0 max_data=512x256 max_empty=0x0
+[shim] record_clear #8 target_tex=0 rect=16,32 480x270 color=1,1,1,1
