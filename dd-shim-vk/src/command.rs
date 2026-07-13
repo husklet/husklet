@@ -435,11 +435,10 @@ pub extern "C" fn vkQueueSubmit(
     }
     let submits = unsafe { core::slice::from_raw_parts(p_submits, submit_count as usize) };
     let mut s = reg::lock();
-    let signal = if fence != 0 {
-        s.fences.get(&fence).copied().map(|fid| (fid, 1u64))
-    } else {
-        None
-    };
+    // Present replay is synchronous on the host, and the Metal executor does not model fence objects,
+    // so we never signal a fence in the shipped IR (the guest fence/wait is a no-op below).
+    let signal: Option<(u32, u64)> = None;
+    let _ = fence;
     // Collect the recorded encoders first (immutable borrow), then record the Submit commands.
     let mut encoders: Vec<Vec<Enc>> = Vec::new();
     for sub in submits {
@@ -491,7 +490,8 @@ pub extern "C" fn vkCreateFence(
     let mut s = reg::lock();
     let ir_id = s.alloc_ir();
     let handle = s.alloc_handle();
-    s.record(Cmd::CreateFence(ir_id));
+    // The host Metal executor renders synchronously and doesn't model fences, so we DON'T emit
+    // Cmd::CreateFence (it rejects it); the fence handle is tracked guest-side for the sync stubs.
     s.fences.insert(handle, ir_id);
     *out = handle;
     VK_SUCCESS
@@ -499,10 +499,7 @@ pub extern "C" fn vkCreateFence(
 
 #[no_mangle]
 pub extern "C" fn vkDestroyFence(_device: VkDevice, fence: VkFence, _p_allocator: *const c_void) {
-    let mut s = reg::lock();
-    if let Some(ir) = s.fences.remove(&fence) {
-        s.record(Cmd::DestroyFence(ir));
-    }
+    reg::lock().fences.remove(&fence);
 }
 
 #[no_mangle]
@@ -513,15 +510,8 @@ pub extern "C" fn vkWaitForFences(
     _wait_all: u32,
     _timeout: u64,
 ) -> VkResult {
-    if !p_fences.is_null() {
-        let mut s = reg::lock();
-        for i in 0..fence_count as usize {
-            let h = unsafe { *p_fences.add(i) };
-            if let Some(ir) = s.fences.get(&h).copied() {
-                s.record(Cmd::WaitFence { id: ir, value: 1 });
-            }
-        }
-    }
+    // Host render is synchronous, so all fences are already signaled (no WaitFence in the IR).
+    let _ = (fence_count, p_fences);
     VK_SUCCESS
 }
 

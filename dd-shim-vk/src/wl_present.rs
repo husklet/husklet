@@ -314,9 +314,11 @@ pub fn present(display: usize, surface: usize, surf: &Surface) -> bool {
         return false;
     };
     let ver = unsafe { (w.proxy_get_version)(dmabuf) };
+    let nullp = core::ptr::null::<c_void>();
     unsafe {
-        // params = zwp_linux_dmabuf_v1.create_params()
-        let params = (w.marshal_flags)(dmabuf, DMABUF_CREATE_PARAMS, params_iface(), ver, 0);
+        // params = zwp_linux_dmabuf_v1.create_params()  — the 'n' new-id takes a NULL va_list
+        // placeholder (as libwayland's generated stubs pass), else every following arg shifts by one.
+        let params = (w.marshal_flags)(dmabuf, DMABUF_CREATE_PARAMS, params_iface(), ver, 0, nullp);
         if params.is_null() {
             return false;
         }
@@ -334,13 +336,15 @@ pub fn present(display: usize, surface: usize, surf: &Surface) -> bool {
             DD_DMABUF_MOD_MAGIC,
             surf.id,
         );
-        // buffer = params.create_immed(width, height, DRM_FORMAT_XRGB8888, flags=0)
+        // buffer = params.create_immed(width, height, DRM_FORMAT_XRGB8888, flags=0) — NULL placeholder
+        // for the wl_buffer 'n' new-id, then the i,i,u,u args.
         let buffer = (w.marshal_flags)(
             params,
             PARAMS_CREATE_IMMED,
             w.wl_buffer_interface,
             ver,
             0,
+            nullp,
             surf.width as c_int,
             surf.height as c_int,
             DRM_FMT_XRGB8888,
@@ -360,7 +364,8 @@ pub fn present(display: usize, surface: usize, surf: &Surface) -> bool {
             surf.width as c_int,
             surf.height as c_int,
         );
-        let _cb = (w.marshal_flags)(wl_surface, SURFACE_FRAME, w.wl_callback_interface, sver, 0);
+        // frame(callback) — NULL placeholder for the wl_callback 'n' new-id.
+        let _cb = (w.marshal_flags)(wl_surface, SURFACE_FRAME, w.wl_callback_interface, sver, 0, nullp);
         (w.marshal_flags)(wl_surface, SURFACE_COMMIT, core::ptr::null(), sver, 0);
         // Release the per-frame protocol objects (the compositor already holds the dma-buf import).
         (w.marshal_flags)(params, PARAMS_DESTROY, core::ptr::null(), ver, WL_MARSHAL_FLAG_DESTROY);
