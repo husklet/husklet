@@ -37,7 +37,7 @@ impl DdState {
     /// fractional scale (equal to the integer `wl_output.scale` when that is all we have), overridable to
     /// a true non-integer (1.5, 1.25, …) via [`FRACTIONAL_SCALE_ENV`]. Always clamped to ≥ 1.0 so a
     /// bogus value can never ask a client for a zero/negative buffer.
-    pub(crate) fn output_fractional_scale(&self) -> f64 {
+    pub(crate) fn surface_fractional_scale(&self, surface: &WlSurface) -> f64 {
         if let Ok(raw) = std::env::var(FRACTIONAL_SCALE_ENV) {
             if let Ok(v) = raw.trim().parse::<f64>() {
                 if v.is_finite() && v >= 1.0 {
@@ -45,14 +45,19 @@ impl DdState {
                 }
             }
         }
-        self.output.current_scale().fractional_scale().max(1.0)
+        self.surface_outputs
+            .get(&self.surface_id(surface))
+            .unwrap_or(&self.output)
+            .current_scale()
+            .fractional_scale()
+            .max(1.0)
     }
 
     /// Push the current preferred fractional scale onto `surface`'s fractional-scale object (if it has
     /// one). Called when a surface first opts in and whenever the output scale changes, so a live
     /// re-scale (window dragged to a differently-scaled output, HiDPI toggled) re-notifies the client.
     pub(crate) fn send_preferred_fractional_scale(&self, surface: &WlSurface) {
-        let scale = self.output_fractional_scale();
+        let scale = self.surface_fractional_scale(surface);
         with_states(surface, |states| {
             with_fractional_scale(states, |fractional| {
                 // set_preferred_scale is idempotent (only re-sends on change) and encodes the 120ths.

@@ -135,8 +135,20 @@ impl XdgShellHandler for DdState {
     }
 
     /// `set_fullscreen(output)`: configure to the output size with `Fullscreen` set.
-    fn fullscreen_request(&mut self, surface: ToplevelSurface, _output: Option<WlOutput>) {
-        let size = self.output_logical_size();
+    fn fullscreen_request(&mut self, surface: ToplevelSurface, output: Option<WlOutput>) {
+        if let Some(resource) = output {
+            if let Some(target) = std::iter::once(&self.output)
+                .chain(self.extra_outputs.iter())
+                .find(|candidate| candidate.owns(&resource))
+                .cloned()
+            {
+                let sid = self.surface_id(surface.wl_surface());
+                self.route_surface_to_output(sid, &target.name());
+            }
+        }
+        let selected = self.selected_output(surface.wl_surface());
+        let scale = selected.current_scale().integer_scale().max(1);
+        let size = selected.current_mode().map(|mode| (mode.size.w / scale, mode.size.h / scale)).unwrap_or_else(|| self.output_logical_size());
         surface.with_pending_state(|s| {
             s.size = Some(size.into());
             s.states.set(XdgState::Fullscreen);

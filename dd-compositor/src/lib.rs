@@ -217,6 +217,8 @@ pub struct DdState {
     /// `wl_output` + `zxdg_output_v1` advertised by the shared [`OutputManagerState`]; registered via
     /// [`DdState::add_output`]. Empty in the single-output default — the state is not hard-wired to one.
     pub extra_outputs: Vec<Output>,
+    /// Selected output for each live surface/root. New surfaces start on the primary output.
+    pub(crate) surface_outputs: HashMap<u32, Output>,
 
     /// `zwp_text_input_v3` — text-input for editors/address-bars/forms + the host IME (marked-text)
     /// bridge. The compositor IS the input method here (dd has no separate IME client), so it owns the
@@ -524,6 +526,7 @@ impl DdState {
             pointer,
             output,
             extra_outputs: Vec::new(),
+            surface_outputs: HashMap::new(),
             text_input,
             presenter,
             focus: None,
@@ -585,6 +588,8 @@ impl DdState {
         self.surface_ids.insert(object, sid);
         self.surface_owners.insert(sid, owner);
         self.surface_resources.insert(sid, surface.clone());
+        self.surface_outputs.insert(sid, self.output.clone());
+        self.output.enter(surface);
     }
 
     /// Return the compositor-global, generation-safe id assigned in `new_surface`.
@@ -604,6 +609,9 @@ impl DdState {
         self.release_surface_resources(sid);
         self.retire_buffer_use(sid);
         self.surface_resources.remove(&sid);
+        if let Some(output) = self.surface_outputs.remove(&sid) {
+            output.leave(surface);
+        }
         self.buffers.remove(&sid);
         self.repacks.remove(&sid);
         self.dirty.remove(&sid);

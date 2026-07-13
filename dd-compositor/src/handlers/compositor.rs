@@ -485,11 +485,12 @@ impl DdState {
                 // frame advances callbacks/feedback; an Offscreen present or a real output/device error
                 // (both previously hidden behind a `false`) is a FAILED present — pacing is retained.
                 let sid = base.sid;
+                let target_output = self.selected_output(root);
                 self.presenter_windows.insert(sid);
-                match self.presenter.present(&base) {
+                match self.presenter.present_on_output(&base, &target_output.name()) {
                     Ok(dd_display::present::PresentOutcome::Delivered { serial, timing }) => {
                         evidence = timing.map(|timing| PresentedFrame::from_timing(
-                            self.output.clone(),
+                            target_output,
                             serial,
                             timing,
                         ));

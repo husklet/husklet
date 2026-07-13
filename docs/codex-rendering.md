@@ -525,17 +525,14 @@ terminal transition, not an arbitrary timeout that fabricates success. Test fail
 sequences with multiple feedback objects and confirm exact-once protocol destruction.
 `compositor_retains_presentation_feedback_across_retryable_failure_only` pins the split.
 
-Multi-output advertisement currently exceeds the compositor's operational model. `add_output` creates additional
-`wl_output`/xdg-output globals and logical geometry, but no surface-output membership exists and no code emits
-`wl_surface.enter`/`leave`. Fractional scale always reads primary `self.output`; `xdg_toplevel.set_fullscreen(output)`
-discards its requested output; window placement and presentation carry no output identity. Toolkits therefore see
-monitors they can enumerate but cannot reliably place, fullscreen, scale, or color/present a surface on. Introduce
-`SurfaceOutputState { entered: set<OutputId>, primary: OutputId }`, update it atomically when host-window geometry
-crosses output rectangles, and emit exact enter/leave deltas. Choose primary by greatest intersection (then stable
-nearest/tie-break), derive integer/fractional scale and refresh from it, send preferred-scale/configure before asking
-for a replacement buffer, and carry `target_output` through `SurfaceBuffer`/Presenter. Honour an authorized live
-fullscreen output and fall back deterministically if it disappears. A Rust two-output geometry state-machine test
-plus a C Wayland guest must verify event ordering, scale changes, requested fullscreen and independent windows.
+Multi-output advertisement now has explicit per-surface selected-output state. New surfaces enter the primary output;
+`route_surface_to_output` transactionally enters the replacement, updates preferred fractional scale and routing,
+then leaves the old output. Fullscreen honours an owned `wl_output`, derives logical size from that output's mode and
+scale, and subsequent presenter delivery plus `wp_presentation` feedback use the same selected output. Presenter ABI
+extension is default-compatible with Cocoa while output-aware presenters may route by stable output name. Surface
+teardown emits leave and clears membership. Automatic greatest-intersection selection from live host-window geometry
+and a full two-window Wayland event journey remain unimplemented, while output removal/fallback remains the separate
+hotplug row below.
 `compositor_routes_each_surface_through_its_actual_output_membership` pins the required coupling.
 
 Output hotplug is also one-way: extras can be added and retained forever but never removed, their globals cannot be
@@ -1104,7 +1101,7 @@ pixels, and fails against the broken behavior. Do not add tests that read implem
 | `compositor_enforces_per_client_render_resource_budgets` | partial | surfaces, callbacks, CPU repacks and mapped shm-pool bytes have checked per-client/global charge/refund; fd counts, imports, presenter objects and executor allocations remain uncharged | Extend owner tokens to remaining domains and add multi-domain isolation/rollback stress |
 | `compositor_releases_buffers_only_after_the_last_cpu_or_gpu_use` | partial | generation-tagged uses give shm copy-complete exact-once release and retain zero-copy across failure; Metal has no actual GPU-completion token | Add presenter completion tokens and out-of-order zero-copy retirement tests |
 | `compositor_retains_presentation_feedback_across_retryable_failure_only` | contradictory | failed present retains callbacks for retry but immediately discards its feedback | Typed retry class with coupled callback/feedback/resource terminal policy |
-| `compositor_routes_each_surface_through_its_actual_output_membership` | contradictory | outputs are advertised but surfaces have no enter/leave, selected scale, fullscreen target, or present route | Per-surface membership state and two-output event/render journey |
+| `compositor_routes_each_surface_through_its_actual_output_membership` | partial | per-surface membership emits enter/leave and selects scale, fullscreen size, presenter route and feedback output transactionally | Add host-geometry intersection selection and two-independent-window Wayland event journey |
 | `compositor_output_hotplug_migrates_surfaces_and_reconfigures_scale` | missing | extra outputs are append-only globals with no surface migration | Transactional removal, fallback placement, scale/configure and pending-frame tests |
 | `software_backend_applies_srgb_transfer_functions_around_filtering_and_blending` | contradictory | sRGB formats are sampled/blended as encoded bytes in software | Linear-light transfer helpers and format-specific golden pixel tests |
 | `cocoa_presenter_reports_actual_drawable_presentation_time_and_refresh` | missing | Metal returns Delivered with no drawable completion timestamp or target refresh | Presented-handler serial/timing plumbing plus live macOS ordering test |

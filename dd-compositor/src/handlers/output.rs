@@ -22,6 +22,35 @@ use crate::{DdState, OUTPUT_REFRESH_MHZ};
 impl OutputHandler for DdState {}
 
 impl DdState {
+    pub(crate) fn selected_output(&self, surface: &smithay::reexports::wayland_server::protocol::wl_surface::WlSurface) -> Output {
+        self.surface_outputs
+            .get(&self.surface_id(surface))
+            .cloned()
+            .unwrap_or_else(|| self.output.clone())
+    }
+
+    /// Transactionally move a surface tree to an advertised output: enter the replacement before
+    /// leaving the old output, update preferred scale, then make subsequent presentation use it.
+    pub fn route_surface_to_output(&mut self, sid: u32, output_name: &str) -> bool {
+        let Some(surface) = self.surface_resources.get(&sid).cloned() else { return false; };
+        let Some(next) = std::iter::once(&self.output)
+            .chain(self.extra_outputs.iter())
+            .find(|output| output.name() == output_name)
+            .cloned() else { return false; };
+        let old = self.selected_output(&surface);
+        if old == next { return true; }
+        next.enter(&surface);
+        self.surface_outputs.insert(sid, next);
+        self.send_preferred_fractional_scale(&surface);
+        old.leave(&surface);
+        self.dirty.insert(sid);
+        true
+    }
+
+    pub fn surface_output_name(&self, sid: u32) -> Option<String> {
+        self.surface_outputs.get(&sid).map(Output::name)
+    }
+
     /// Register an ADDITIONAL output global (beyond the primary `dd-0`) at a logical `position`, with its
     /// own name/description, device `mode` (px), and integer `scale`. The new output's `wl_output` +
     /// `zxdg_output_v1` are advertised immediately by the shared [`OutputManagerState`]; the returned (and

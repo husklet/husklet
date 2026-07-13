@@ -340,4 +340,14 @@ fn fractional_scale_xdg_output_single_pixel_and_multi_output() {
         "dd-1",
         "the extra output should be named dd-1"
     );
+
+    // Move this independent root from dd-0 to dd-1. Membership changes are ordered enter(new) then
+    // leave(old), and every later presenter/feedback lookup reads this same selected output.
+    c.events.clear();
+    assert!(state.route_surface_to_output(1, "dd-1"));
+    display.flush_clients().unwrap();
+    c.drain();
+    assert_eq!(state.surface_output_name(1).as_deref(), Some("dd-1"));
+    assert!(c.saw(surface, 0), "route must emit wl_surface.enter for dd-1");
+    assert!(c.saw(surface, 1), "route must emit wl_surface.leave for dd-0");
 }

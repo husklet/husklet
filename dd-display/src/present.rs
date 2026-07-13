@@ -180,6 +180,14 @@ pub trait Presenter {
     /// `presented` feedback; an `Offscreen`/`Err` present must NOT advance pacing (the client would think
     /// its frame shipped and recycle a buffer the compositor still needs to retry).
     fn present(&mut self, surf: &SurfaceBuffer) -> Result<PresentOutcome, PresentError>;
+    /// Present on the named host output. Existing single-output presenters remain compatible.
+    fn present_on_output(
+        &mut self,
+        surf: &SurfaceBuffer,
+        _output_name: &str,
+    ) -> Result<PresentOutcome, PresentError> {
+        self.present(surf)
+    }
     /// Apply compositor-requested visibility to a native window. Headless presenters keep the default.
     fn set_surface_visibility(&mut self, _sid: u32, _visibility: SurfaceVisibility) {}
     /// Return host-observed visibility when available. Cocoa may override this once live occlusion
