@@ -210,6 +210,38 @@ fn compressed_texture_upload_is_atomically_validated() {
     gles::glDeleteTextures(1, &tex);
 }
 
+// ---- gles_readpixels_validates_pack_layout_and_preserves_output_on_error (default-FB readback) ---
+
+#[test]
+fn readpixels_default_framebuffer_reads_zeros_without_error() {
+    let _serial = serial_guard();
+    while gles::glGetError() != GL_NO_ERROR {}
+    gles::glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    // The default framebuffer is complete but the shim keeps no CPU default-color plane, so a readback
+    // returns zeros (gl_shim.c parity) rather than raising GL_INVALID_OPERATION as it used to.
+    let mut out = [0xABu8; 16];
+    gles::glReadPixels(0, 0, 2, 2, GL_RGBA, GL_UNSIGNED_BYTE, out.as_mut_ptr().cast());
+    assert_eq!(gles::glGetError(), GL_NO_ERROR, "default-FB readback must not error");
+    assert_eq!(out, [0u8; 16], "default-FB readback must zero-fill the client buffer");
+
+    // The same default-FB readback into a bound pack buffer (PBO) writes zeros over its prior contents.
+    let mut pbo = 0;
+    gles::glGenBuffers(1, &mut pbo);
+    gles::glBindBuffer(GL_PIXEL_PACK_BUFFER, pbo);
+    let init = [0x77u8; 16];
+    gles::glBufferData(GL_PIXEL_PACK_BUFFER, 16, init.as_ptr().cast(), 0x88E4);
+    gles::glReadPixels(0, 0, 2, 2, GL_RGBA, GL_UNSIGNED_BYTE, core::ptr::null_mut());
+    assert_eq!(gles::glGetError(), GL_NO_ERROR);
+    let mapped = gles::glMapBufferRange(GL_PIXEL_PACK_BUFFER, 0, 16, 0) as *const u8;
+    assert_eq!(
+        unsafe { core::slice::from_raw_parts(mapped, 16) },
+        &[0u8; 16],
+        "default-FB PBO readback must be zeros"
+    );
+    gles::glBindBuffer(GL_PIXEL_PACK_BUFFER, 0);
+    gles::glDeleteBuffers(1, &pbo);
+}
+
 fn linked_test_program() -> u32 {
     fn compile(kind: u32, source: &str) -> u32 {
         let shader = gles::glCreateShader(kind);

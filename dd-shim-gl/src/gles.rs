@@ -2269,10 +2269,15 @@ pub extern "C" fn glReadPixels(x: i32, y: i32, w: i32, h: i32, fmt: u32, typ: u3
     if s.framebuffer_status(s.read_fbo) != GL_FRAMEBUFFER_COMPLETE { fail(&mut s, GL_INVALID_FRAMEBUFFER_OPERATION); return; }
     if w == 0 || h == 0 { return; }
     let src_id = s.fbo_color_texture(s.read_fbo);
-    if src_id == 0 { fail(&mut s, GL_INVALID_OPERATION); return; }
-    let src = &s.tex[src_id as usize];
-    if x < 0 || y < 0 || x.checked_add(w).is_none_or(|v| v > src.w) || y.checked_add(h).is_none_or(|v| v > src.h) {
-        fail(&mut s, GL_INVALID_VALUE); return;
+    // A COMPLETE read framebuffer with no CPU-backed color texture is the DEFAULT framebuffer (the shim
+    // keeps no default-color plane). Like gl_shim.c, readback then yields zeros rather than an error, so
+    // `src_id == 0` is not a failure here — the pixel-copy loop below simply leaves the packed output
+    // zero. Only a real color-texture source (`src_id != 0`) has bounds to validate the region against.
+    if src_id != 0 {
+        let src = &s.tex[src_id as usize];
+        if x < 0 || y < 0 || x.checked_add(w).is_none_or(|v| v > src.w) || y.checked_add(h).is_none_or(|v| v > src.h) {
+            fail(&mut s, GL_INVALID_VALUE); return;
+        }
     }
     let row_pixels = if s.pack_row_length == 0 { w } else { s.pack_row_length };
     if row_pixels < w { fail(&mut s, GL_INVALID_VALUE); return; }
@@ -2292,24 +2297,28 @@ pub extern "C" fn glReadPixels(x: i32, y: i32, w: i32, h: i32, fmt: u32, typ: u3
     drop(s);
     glFinish();
     let mut s = gl();
-    let src = &s.tex[src_id as usize];
     let tight_row = w as usize * bpp;
     let mut packed = vec![0u8; h as usize * tight_row];
-    for yy in 0..h {
-        for xx in 0..w {
-            let sp = ((y + yy) as usize * src.w as usize + (x + xx) as usize) * 4;
-            let dp = yy as usize * tight_row + xx as usize * bpp;
-            let sc = &src.data[sp..sp + 4];
-            match fmt {
-                GL_RGBA => packed[dp..dp + 4].copy_from_slice(sc),
-                GL_BGRA_EXT => {
-                    packed[dp] = sc[2];
-                    packed[dp + 1] = sc[1];
-                    packed[dp + 2] = sc[0];
-                    packed[dp + 3] = sc[3];
+    // Default framebuffer (`src_id == 0`) → leave `packed` all zeros (gl_shim.c parity). Otherwise copy
+    // and convert the read-FBO's color-texture rect into the tightly-packed staging buffer.
+    if src_id != 0 {
+        let src = &s.tex[src_id as usize];
+        for yy in 0..h {
+            for xx in 0..w {
+                let sp = ((y + yy) as usize * src.w as usize + (x + xx) as usize) * 4;
+                let dp = yy as usize * tight_row + xx as usize * bpp;
+                let sc = &src.data[sp..sp + 4];
+                match fmt {
+                    GL_RGBA => packed[dp..dp + 4].copy_from_slice(sc),
+                    GL_BGRA_EXT => {
+                        packed[dp] = sc[2];
+                        packed[dp + 1] = sc[1];
+                        packed[dp + 2] = sc[0];
+                        packed[dp + 3] = sc[3];
+                    }
+                    GL_RGB => packed[dp..dp + 3].copy_from_slice(&sc[..3]),
+                    _ => unreachable!(),
                 }
-                GL_RGB => packed[dp..dp + 3].copy_from_slice(&sc[..3]),
-                _ => unreachable!(),
             }
         }
     }
