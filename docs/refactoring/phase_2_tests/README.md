@@ -21,12 +21,17 @@ dd-tests
   tests/             tests of the helper package itself only
 ```
 
-`dd-tests` may depend on `dd-jit` to offer an engine harness. Product crates should use it as a
-`dev-dependency`; `dd-tests` must not depend on `dd-daemon`, GPU shims, display, or GUI products.
+`dd-tests` must not depend on any workspace product crate. Keeping its current `dd-jit` dependency would
+create a cycle when `dd-jit-darwin` dev-depends on the helper (`dd-tests → dd-jit → dd-jit-darwin →
+dd-tests`). Instead it exposes product-neutral command, fixture, lane and result traits; owning crates
+provide adapters as dev-only code. Product crates may use `dd-tests` as a `dev-dependency`.
 
 The current-tree evidence is in [`research/current-test-inventory.md`](research/current-test-inventory.md).
 The file-level destination is in [`ownership-matrix.md`](ownership-matrix.md). The migration order and
-required gates are in [`migration-plan.md`](migration-plan.md).
+required gates are in [`migration-plan.md`](migration-plan.md). Cargo/fixture/runner constraints are in
+[`dependency-and-runner-design.md`](dependency-and-runner-design.md).
+Per-package behavioral authority is defined in [`crate-test-contracts.md`](crate-test-contracts.md), and
+root orchestration is specified in [`ci-composition.md`](ci-composition.md).
 
 ## Ownership rules
 

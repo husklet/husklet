@@ -3,6 +3,9 @@
 Status: research complete enough to begin reviewed cleanup batches; no cleanup is authorized by this
 index. All detailed evidence and manifests are carried in [`research/`](research/README.md).
 
+The current-tree action classification is maintained in [`disposition-ledger.md`](disposition-ledger.md).
+Implementation batches and proof gates are in [`execution-plan.md`](execution-plan.md).
+
 ## Exit condition
 
 Phase 1 is complete when accepted candidates have been either removed, converted into an implementation

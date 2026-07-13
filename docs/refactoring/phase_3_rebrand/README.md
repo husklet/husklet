@@ -10,6 +10,13 @@ capability, packaging and test surfaces. See the
 before execution and treat the current tree—not recorded counts or line numbers—as authoritative.
 
 Remaining choices and proposed defaults are tracked in [`decisions.md`](decisions.md).
+The execution-grade surface classification is in [`contract-map.md`](contract-map.md), the ordered
+lockstep plan is in [`atomic-waves.md`](atomic-waves.md), and intentional leftovers are governed by
+[`exclusions-and-residue.md`](exclusions-and-residue.md).
+Supported launch and diagnostic variables are mapped semantically in
+[`environment-contracts.md`](environment-contracts.md); this prevents blind `DD_*` → `HL_*` collision.
+Durable state, archives, xattrs, caches, launchd and external identifiers are covered by
+[`persisted-data-plan.md`](persisted-data-plan.md).
 
 ## Proposed naming contract
 

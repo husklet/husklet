@@ -9,10 +9,10 @@ files, not executed cases; phase implementation must generate executable case co
 `dd-tests` currently owns:
 
 - one generic engine harness and one aggregate engine runner;
-- 57 Rust case/registry modules under `src/cases`;
-- 51 scenario catalog modules under `src/scenarios` plus daemon boot/drive infrastructure;
-- 689 guest/fixture files under `guests` at inventory time;
-- nine top-level Rust integration-test files;
+- 55 Rust case/registry files under `src/cases`;
+- 56 scenario catalog files under `src/scenarios` plus daemon boot/drive infrastructure;
+- 948 guest/fixture files under `guests` at inventory time (source, scripts and checked-in executables);
+- eight top-level Rust integration-test files;
 - LTP compatibility scripts/config/baseline;
 - daemon-oriented shell scenarios;
 - a benchmark runner and 16 C benchmark fixtures slated for removal.

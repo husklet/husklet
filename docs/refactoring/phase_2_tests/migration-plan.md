@@ -9,10 +9,11 @@ replacements exist.
 
 ## Step 1 — make `dd-tests` a helper API
 
-Expose stable helper modules for guest compilation, engine discovery, temporary rootfs creation, command
-timeouts, native differential execution, lane selection and structured results. Remove product registries
-from its public API. Add tests that deliberately provoke compiler absence, missing engine, timeout, crash,
-bad expected output and zero selected lanes.
+First remove the helper crate's product dependency: expose stable product-neutral modules for supplied
+compiler commands, temporary roots, command timeouts, native differential execution, lane selection and
+structured results. Engine discovery belongs to a `dd-jit-darwin` adapter, not the helper. Remove product
+registries from its public API. Add tests that deliberately provoke compiler absence, missing supplied
+command, timeout, crash, bad expected output and zero selected lanes.
 
 ## Step 2 — move the JIT corpus
 
