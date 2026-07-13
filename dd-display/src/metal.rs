@@ -179,6 +179,12 @@ pub fn iosurface_metadata(id: u32) -> Option<crate::present::IOSurfaceMetadata> 
     let height = unsafe { IOSurfaceGetHeight(surface) };
     let bytes_per_row = unsafe { IOSurfaceGetBytesPerRow(surface) };
     let pixel_format = unsafe { IOSurfaceGetPixelFormat(surface) };
+    // `resolve_iosurface` hands back a +1-retained surface (a `CFRetain` on the cache path or a
+    // Create-rule reference from `IOSurfaceLookup`); balance it now that the metadata is read.
+    // Omitting this leaked one reference on the cached surface per metadata query — and the
+    // compositor queries metadata for every accelerated dmabuf frame, so the leak grew unboundedly.
+    // The generation comes from the id→generation table, not the surface, so releasing here is safe.
+    unsafe { cfrelease(surface) };
     Some(crate::present::IOSurfaceMetadata {
         width: width.try_into().ok()?,
         height: height.try_into().ok()?,
@@ -921,4 +927,53 @@ pub fn selftest_metal(out: &str) -> ! {
     }
     eprintln!("selftest-metal: no frame");
     std::process::exit(1);
+}
+
+#[cfg(test)]
+mod iosurface_ref_tests {
+    use super::*;
+
+    extern "C" {
+        fn CFGetRetainCount(cf: *const c_void) -> isize;
+    }
+
+    // C31: `iosurface_metadata` reads a `+1`-retained surface from `resolve_iosurface` and must
+    // release it. This exercises the mach-bridge cache path (the `CFRetain` branch) so no window
+    // server / Metal device is required — only the IOSurface framework, which creates a plain kernel
+    // object headlessly. Before the fix each query leaked one reference; here we assert the surface's
+    // CFGetRetainCount returns to its baseline after a burst of metadata queries.
+    #[test]
+    fn iosurface_metadata_does_not_leak_a_reference() {
+        // Own a host IOSurface (+1). `create_iosurface` needs no display server.
+        let s = unsafe { create_iosurface(8, 8) };
+        assert!(!s.is_null(), "IOSurfaceCreate returned null (headless framework unavailable)");
+
+        // Register it in the GPU-bridge cache under a test id, mirroring what the mach-recv thread
+        // does: the map holds its own owning +1 reference.
+        let id = 0x7f10_0001u32;
+        unsafe { CFRetain(s as *const c_void) };
+        gpu_map().lock().unwrap().insert(id, s as usize);
+        gpu_generations().lock().unwrap().insert(id, 1);
+
+        let baseline = unsafe { CFGetRetainCount(s as *const c_void) };
+        for _ in 0..64 {
+            let md = iosurface_metadata(id).expect("metadata for cached surface");
+            assert_eq!(md.width, 8);
+            assert_eq!(md.height, 8);
+            assert_eq!(md.generation, 1);
+        }
+        let after = unsafe { CFGetRetainCount(s as *const c_void) };
+        assert_eq!(
+            after, baseline,
+            "iosurface_metadata leaked {} reference(s) over 64 queries",
+            after - baseline
+        );
+
+        // Cleanup: drop the cache's owning ref, then our own.
+        if let Some(p) = gpu_map().lock().unwrap().remove(&id) {
+            unsafe { cfrelease(p as IOSurfaceRef) };
+        }
+        gpu_generations().lock().unwrap().remove(&id);
+        unsafe { cfrelease(s) };
+    }
 }
