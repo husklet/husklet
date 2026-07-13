@@ -45,6 +45,7 @@ pub struct Rbo {
 #[derive(Clone, Default)]
 pub struct Shader {
     pub used: bool,
+    pub delete_pending: bool,
     pub kind: u32, // GL_VERTEX_SHADER / GL_FRAGMENT_SHADER
     pub src: Option<String>,
     /// Truthful GLSL compile outcome (`glGetShaderiv(GL_COMPILE_STATUS)`): false until a successful
@@ -56,6 +57,7 @@ pub struct Shader {
 #[derive(Clone)]
 pub struct Program {
     pub used: bool,
+    pub delete_pending: bool,
     pub vs: u32,
     pub fs: u32,
     pub linked: bool,
@@ -76,6 +78,7 @@ impl Default for Program {
     fn default() -> Self {
         Program {
             used: false,
+            delete_pending: false,
             vs: 0,
             fs: 0,
             linked: false,
@@ -104,6 +107,8 @@ impl Program {
 
 #[derive(Clone, Default)]
 pub struct Buffer {
+    /// `glGenBuffers` reserves a name; the object comes into existence on first bind.
+    pub reserved: bool,
     pub used: bool,
     pub data: Vec<u8>,
     pub usage: u32,
@@ -112,6 +117,8 @@ pub struct Buffer {
 
 #[derive(Clone, Default)]
 pub struct Texture {
+    /// `glGenTextures` reserves a name; the object comes into existence on first bind.
+    pub reserved: bool,
     pub used: bool,
     pub w: i32,
     pub h: i32,
@@ -436,20 +443,20 @@ impl GlState {
     }
 
     pub fn gen_buffer(&mut self) -> u32 {
-        let id = Self::alloc_slot(|i| self.buf[i].used, MAXBUF);
+        let id = Self::alloc_slot(|i| self.buf[i].reserved || self.buf[i].used, MAXBUF);
         if id != 0 {
             let b = &mut self.buf[id as usize];
-            *b = Buffer { used: true, gen: b.gen + 1, ..Default::default() };
+            *b = Buffer { reserved: true, gen: b.gen + 1, ..Default::default() };
         }
         id
     }
 
     pub fn gen_texture(&mut self) -> u32 {
-        let id = Self::alloc_slot(|i| self.tex[i].used, MAXTEX);
+        let id = Self::alloc_slot(|i| self.tex[i].reserved || self.tex[i].used, MAXTEX);
         if id != 0 {
             let g = self.tex[id as usize].gen;
             self.tex[id as usize] = Texture {
-                used: true,
+                reserved: true,
                 minf: GL_LINEAR,
                 magf: GL_LINEAR,
                 ws: GL_REPEAT,

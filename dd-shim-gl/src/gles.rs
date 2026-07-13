@@ -383,16 +383,40 @@ pub extern "C" fn glGenBuffers(n: i32, out: *mut u32) {
 
 #[no_mangle]
 pub extern "C" fn glDeleteBuffers(n: i32, ids: *const u32) {
-    if ids.is_null() || n < 0 {
+    if n < 0 {
+        crate::state::set_gl_error(GL_INVALID_VALUE);
+        return;
+    }
+    if ids.is_null() {
         return;
     }
     let mut s = gl();
     for k in 0..n as usize {
         let id = unsafe { *ids.add(k) } as usize;
-        if id != 0 && id < MAXBUF && s.buf[id].used {
-            s.buf[id].used = false;
-            s.buf[id].data.clear();
-            s.buf[id].gen += 1;
+        if id != 0 && id < MAXBUF && (s.buf[id].reserved || s.buf[id].used) {
+            let generation = s.buf[id].gen + 1;
+            s.buf[id] = crate::state::Buffer { gen: generation, ..Default::default() };
+            if s.arr_buf as usize == id {
+                s.arr_buf = 0;
+            }
+            if s.elem_buf as usize == id {
+                s.elem_buf = 0;
+            }
+            for attr in &mut s.attr {
+                if attr.buffer as usize == id {
+                    attr.buffer = 0;
+                }
+            }
+            for vao in &mut s.vao {
+                if vao.elem_buf as usize == id {
+                    vao.elem_buf = 0;
+                }
+                for attr in &mut vao.attrs {
+                    if attr.buffer as usize == id {
+                        attr.buffer = 0;
+                    }
+                }
+            }
         }
     }
 }
@@ -405,6 +429,16 @@ pub extern "C" fn glBindBuffer(target: u32, buffer: u32) {
         return;
     }
     let mut s = gl();
+    if buffer as usize >= MAXBUF
+        || (buffer != 0 && !s.buf[buffer as usize].reserved && !s.buf[buffer as usize].used)
+    {
+        crate::state::set_gl_error(GL_INVALID_OPERATION);
+        return;
+    }
+    if buffer != 0 && !s.buf[buffer as usize].used {
+        s.buf[buffer as usize].reserved = false;
+        s.buf[buffer as usize].used = true;
+    }
     if target == GL_ARRAY_BUFFER {
         s.arr_buf = buffer;
     } else {
@@ -573,16 +607,29 @@ pub extern "C" fn glGenTextures(n: i32, out: *mut u32) {
 
 #[no_mangle]
 pub extern "C" fn glDeleteTextures(n: i32, ids: *const u32) {
-    if ids.is_null() || n < 0 {
+    if n < 0 {
+        crate::state::set_gl_error(GL_INVALID_VALUE);
+        return;
+    }
+    if ids.is_null() {
         return;
     }
     let mut s = gl();
     for k in 0..n as usize {
         let id = unsafe { *ids.add(k) } as usize;
-        if id != 0 && id < MAXTEX && s.tex[id].used {
-            s.tex[id].used = false;
-            s.tex[id].data.clear();
-            s.tex[id].gen += 1;
+        if id != 0 && id < MAXTEX && (s.tex[id].reserved || s.tex[id].used) {
+            let generation = s.tex[id].gen + 1;
+            s.tex[id] = crate::state::Texture { gen: generation, ..Default::default() };
+            for bound in &mut s.tex_unit {
+                if *bound as usize == id {
+                    *bound = 0;
+                }
+            }
+            for fbo in &mut s.fbo {
+                if fbo.color_tex as usize == id {
+                    fbo.color_tex = 0;
+                }
+            }
         }
     }
 }
@@ -596,8 +643,25 @@ pub extern "C" fn glActiveTexture(unit: u32) {
 }
 
 #[no_mangle]
-pub extern "C" fn glBindTexture(_target: u32, t: u32) {
+pub extern "C" fn glBindTexture(target: u32, t: u32) {
+    if target != GL_TEXTURE_2D {
+        crate::state::set_gl_error(GL_INVALID_ENUM);
+        return;
+    }
     let mut s = gl();
+    if t as usize >= MAXTEX || (t != 0 && !s.tex[t as usize].reserved && !s.tex[t as usize].used) {
+        crate::state::set_gl_error(GL_INVALID_OPERATION);
+        return;
+    }
+    if t != 0 && !s.tex[t as usize].used {
+        let tex = &mut s.tex[t as usize];
+        tex.reserved = false;
+        tex.used = true;
+        tex.minf = GL_LINEAR;
+        tex.magf = GL_LINEAR;
+        tex.ws = GL_REPEAT;
+        tex.wt = GL_REPEAT;
+    }
     let u = s.active_unit;
     if u < 8 {
         s.tex_unit[u] = t;
@@ -948,6 +1012,12 @@ pub extern "C" fn glGetShaderiv(sh: u32, pname: u32, v: *mut i32) {
             // Reported length includes the NUL terminator (0 when there is no diagnostic).
             let n = if live { s.sh[sh as usize].info_log.len() } else { 0 };
             *v = if n == 0 { 0 } else { (n + 1) as i32 };
+        } else if pname == GL_DELETE_STATUS {
+        *v = if live && s.sh[sh as usize].delete_pending {
+            GL_TRUE as i32
+        } else {
+            GL_FALSE as i32
+        };
         } else {
             *v = 0;
         }
@@ -986,7 +1056,12 @@ unsafe fn copy_info_log(log: &str, buf_size: i32, length: *mut i32, info_log: *m
 pub extern "C" fn glDeleteShader(sh: u32) {
     let mut s = gl();
     if (sh as usize) < MAXSH && s.sh[sh as usize].used {
-        s.sh[sh as usize] = Default::default();
+        let attached = s.prog.iter().any(|p| p.used && (p.vs == sh || p.fs == sh));
+        if attached {
+            s.sh[sh as usize].delete_pending = true;
+        } else {
+            s.sh[sh as usize] = Default::default();
+        }
     }
 }
 
@@ -1004,18 +1079,42 @@ pub extern "C" fn glCreateProgram() -> u32 {
 #[no_mangle]
 pub extern "C" fn glAttachShader(prog: u32, sh: u32) {
     let mut s = gl();
-    if (prog as usize) >= MAXPROG || !s.prog[prog as usize].used || (sh as usize) >= MAXSH {
+    if (prog as usize) >= MAXPROG || !s.prog[prog as usize].used || (sh as usize) >= MAXSH || !s.sh[sh as usize].used {
+        crate::state::set_gl_error(GL_INVALID_VALUE);
         return;
     }
-    if s.sh[sh as usize].kind == GL_VERTEX_SHADER {
+    if s.prog[prog as usize].vs == sh || s.prog[prog as usize].fs == sh {
+        crate::state::set_gl_error(GL_INVALID_OPERATION);
+    } else if s.sh[sh as usize].kind == GL_VERTEX_SHADER {
+        if s.prog[prog as usize].vs != 0 {
+            crate::state::set_gl_error(GL_INVALID_OPERATION);
+            return;
+        }
         s.prog[prog as usize].vs = sh;
     } else {
+        if s.prog[prog as usize].fs != 0 {
+            crate::state::set_gl_error(GL_INVALID_OPERATION);
+            return;
+        }
         s.prog[prog as usize].fs = sh;
     }
 }
 
 #[no_mangle]
-pub extern "C" fn glDetachShader(_prog: u32, _sh: u32) {}
+pub extern "C" fn glDetachShader(prog: u32, sh: u32) {
+    let mut s = gl();
+    if prog as usize >= MAXPROG || !s.prog[prog as usize].used || sh as usize >= MAXSH || !s.sh[sh as usize].used {
+        crate::state::set_gl_error(GL_INVALID_VALUE);
+        return;
+    }
+    let p = &mut s.prog[prog as usize];
+    if p.vs == sh { p.vs = 0; } else if p.fs == sh { p.fs = 0; } else {
+        crate::state::set_gl_error(GL_INVALID_OPERATION);
+        return;
+    }
+    let still_attached = s.prog.iter().any(|p| p.used && (p.vs == sh || p.fs == sh));
+    if !still_attached && s.sh[sh as usize].delete_pending { s.sh[sh as usize] = Default::default(); }
+}
 
 /// `glLinkProgram` — translate the attached GLSL-ES vertex+fragment sources to combined MSL and compute
 /// the uniform-block layout + sampler set (gl_shim.c `glLinkProgram` → `translate` + `uni_layout` +
@@ -1059,7 +1158,22 @@ pub extern "C" fn glLinkProgram(prog: u32) {
 
 #[no_mangle]
 pub extern "C" fn glUseProgram(prog: u32) {
-    gl().cur_prog = prog;
+    let mut s = gl();
+    if prog as usize >= MAXPROG || (prog != 0 && !s.prog[prog as usize].used) {
+        crate::state::set_gl_error(GL_INVALID_VALUE);
+        return;
+    }
+    let old = s.cur_prog;
+    s.cur_prog = prog;
+    if old != 0 && old != prog && s.prog[old as usize].delete_pending {
+        let (vs, fs) = (s.prog[old as usize].vs, s.prog[old as usize].fs);
+        s.prog[old as usize] = Default::default();
+        for sh in [vs, fs] {
+            if sh != 0 && s.sh[sh as usize].delete_pending && !s.prog.iter().any(|p| p.used && (p.vs == sh || p.fs == sh)) {
+                s.sh[sh as usize] = Default::default();
+            }
+        }
+    }
 }
 
 #[no_mangle]
@@ -1072,6 +1186,10 @@ pub extern "C" fn glGetProgramiv(prog: u32, pname: u32, v: *mut i32) {
         } else if pname == GL_INFO_LOG_LENGTH {
             let n = if live { s.prog[prog as usize].info_log.len() } else { 0 };
             set_i32(v, if n == 0 { 0 } else { (n + 1) as i32 });
+        } else if pname == GL_DELETE_STATUS {
+            set_i32(v, if live && s.prog[prog as usize].delete_pending { GL_TRUE as i32 } else { GL_FALSE as i32 });
+        } else if pname == GL_ATTACHED_SHADERS {
+            set_i32(v, if live { (s.prog[prog as usize].vs != 0) as i32 + (s.prog[prog as usize].fs != 0) as i32 } else { 0 });
         } else {
             set_i32(v, 0);
         }
@@ -1094,7 +1212,17 @@ pub extern "C" fn glGetProgramInfoLog(prog: u32, buf_size: i32, length: *mut i32
 pub extern "C" fn glDeleteProgram(prog: u32) {
     let mut s = gl();
     if (prog as usize) < MAXPROG && s.prog[prog as usize].used {
-        s.prog[prog as usize] = Default::default();
+        if s.cur_prog == prog {
+            s.prog[prog as usize].delete_pending = true;
+        } else {
+            let (vs, fs) = (s.prog[prog as usize].vs, s.prog[prog as usize].fs);
+            s.prog[prog as usize] = Default::default();
+            for sh in [vs, fs] {
+                if sh != 0 && s.sh[sh as usize].delete_pending && !s.prog.iter().any(|p| p.used && (p.vs == sh || p.fs == sh)) {
+                    s.sh[sh as usize] = Default::default();
+                }
+            }
+        }
     }
 }
 

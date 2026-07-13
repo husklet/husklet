@@ -22,6 +22,8 @@ pub const GL_COMPILE_STATUS: u32 = 0x8B81;
 pub const GL_LINK_STATUS: u32 = 0x8B82;
 pub const GL_INFO_LOG_LENGTH: u32 = 0x8B84;
 pub const GL_SHADER_SOURCE_LENGTH: u32 = 0x8B88;
+pub const GL_DELETE_STATUS: u32 = 0x8B80;
+pub const GL_ATTACHED_SHADERS: u32 = 0x8B85;
 
 // buffer targets
 pub const GL_ARRAY_BUFFER: u32 = 0x8892;

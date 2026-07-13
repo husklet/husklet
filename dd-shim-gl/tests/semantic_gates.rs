@@ -7,6 +7,75 @@ use core::ffi::c_void;
 use dd_shim_gl::glconst::*;
 use dd_shim_gl::{egl, gles};
 
+#[test]
+fn generated_names_bind_lazily_and_deletion_detaches_every_binding() {
+    while gles::glGetError() != GL_NO_ERROR {}
+    let mut buffer = 0;
+    gles::glGenBuffers(1, &mut buffer);
+    assert_ne!(buffer, 0);
+    assert_eq!(gles::glIsBuffer(buffer), GL_FALSE, "generation must only reserve a buffer name");
+    gles::glBindBuffer(GL_ARRAY_BUFFER, buffer);
+    assert_eq!(gles::glIsBuffer(buffer), GL_TRUE, "first bind must instantiate the buffer");
+    let mut binding = -1;
+    gles::glGetIntegerv(GL_ARRAY_BUFFER_BINDING, &mut binding);
+    assert_eq!(binding as u32, buffer);
+    gles::glDeleteBuffers(1, &buffer);
+    assert_eq!(gles::glIsBuffer(buffer), GL_FALSE);
+    gles::glGetIntegerv(GL_ARRAY_BUFFER_BINDING, &mut binding);
+    assert_eq!(binding, 0, "deleting a bound buffer must detach it");
+
+    let mut texture = 0;
+    gles::glGenTextures(1, &mut texture);
+    assert_ne!(texture, 0);
+    assert_eq!(gles::glIsTexture(texture), GL_FALSE, "generation must only reserve a texture name");
+    gles::glBindTexture(GL_TEXTURE_2D, texture);
+    assert_eq!(gles::glIsTexture(texture), GL_TRUE, "first bind must instantiate the texture");
+    gles::glGetIntegerv(GL_TEXTURE_BINDING_2D, &mut binding);
+    assert_eq!(binding as u32, texture);
+    gles::glDeleteTextures(1, &texture);
+    assert_eq!(gles::glIsTexture(texture), GL_FALSE);
+    gles::glGetIntegerv(GL_TEXTURE_BINDING_2D, &mut binding);
+    assert_eq!(binding, 0, "deleting a bound texture must detach it");
+
+    let mut untouched = 0x1357_2468;
+    gles::glGenBuffers(-1, &mut untouched);
+    assert_eq!(untouched, 0x1357_2468, "invalid generation mutated output");
+    assert_eq!(gles::glGetError(), GL_INVALID_VALUE);
+    gles::glDeleteTextures(-1, &texture);
+    assert_eq!(gles::glGetError(), GL_INVALID_VALUE);
+}
+
+#[test]
+fn shader_program_detach_and_delete_pending_follow_reference_lifetimes() {
+    while gles::glGetError() != GL_NO_ERROR {}
+    let vertex = gles::glCreateShader(GL_VERTEX_SHADER);
+    let fragment = gles::glCreateShader(GL_FRAGMENT_SHADER);
+    let program = gles::glCreateProgram();
+    gles::glAttachShader(program, vertex);
+    gles::glAttachShader(program, fragment);
+    let mut attached = -1;
+    gles::glGetProgramiv(program, GL_ATTACHED_SHADERS, &mut attached);
+    assert_eq!(attached, 2);
+
+    gles::glDeleteShader(vertex);
+    assert_eq!(gles::glIsShader(vertex), GL_TRUE, "attached delete-pending shader was reclaimed early");
+    let mut pending = 0;
+    gles::glGetShaderiv(vertex, GL_DELETE_STATUS, &mut pending);
+    assert_eq!(pending, GL_TRUE as i32);
+    gles::glDetachShader(program, vertex);
+    assert_eq!(gles::glIsShader(vertex), GL_FALSE, "detached delete-pending shader was not reclaimed");
+    gles::glGetProgramiv(program, GL_ATTACHED_SHADERS, &mut attached);
+    assert_eq!(attached, 1);
+
+    gles::glUseProgram(program);
+    gles::glDeleteProgram(program);
+    assert_eq!(gles::glIsProgram(program), GL_TRUE, "current delete-pending program was reclaimed early");
+    gles::glGetProgramiv(program, GL_DELETE_STATUS, &mut pending);
+    assert_eq!(pending, GL_TRUE as i32);
+    gles::glUseProgram(0);
+    assert_eq!(gles::glIsProgram(program), GL_FALSE, "unbound delete-pending program was not reclaimed");
+}
+
 // ---- gles_shader_compile_link_status_and_logs_are_truthful -------------------------------------
 
 #[test]
