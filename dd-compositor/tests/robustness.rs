@@ -19,7 +19,7 @@ use dd_display::wire::{Conn, Message};
 use smithay::reexports::wayland_server::Display;
 use std::collections::HashMap;
 use std::os::unix::io::{FromRawFd, RawFd};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 const WL_DISPLAY: u32 = 1;
 
@@ -33,6 +33,23 @@ impl Presenter for CountingPresenter {
     }
     fn frame_count(&self) -> u32 {
         self.frames
+    }
+}
+
+#[derive(Default)]
+struct LifecycleLog {
+    presented: Vec<u32>,
+    dropped: Vec<u32>,
+}
+
+struct LifecyclePresenter(Arc<Mutex<LifecycleLog>>);
+impl Presenter for LifecyclePresenter {
+    fn present(&mut self, surf: &SurfaceBuffer) -> Result<PresentOutcome, PresentError> {
+        self.0.lock().unwrap().presented.push(surf.sid);
+        Ok(PresentOutcome::Delivered { serial: 1, timing: None })
+    }
+    fn drop_window(&mut self, sid: u32) {
+        self.0.lock().unwrap().dropped.push(sid);
     }
 }
 
@@ -93,6 +110,112 @@ fn socketpair_nonblocking() -> (RawFd, RawFd) {
         }
     }
     (sv[0], sv[1])
+}
+#[test]
+fn compositor_surface_identity_is_client_owned_generational_and_teardown_is_exact_once() {
+    let mut display: Display<DdState> = Display::new().unwrap();
+    let dh = display.handle();
+    let log = Arc::new(Mutex::new(LifecycleLog::default()));
+    let mut state = DdState::new(dh.clone(), Box::new(LifecyclePresenter(log.clone())));
+
+    let connect = |display: &mut Display<DdState>| -> Cli {
+        let (client_fd, server_fd) = socketpair_nonblocking();
+        display
+            .handle()
+            .insert_client(
+                unsafe { std::os::unix::net::UnixStream::from_raw_fd(server_fd) },
+                Arc::new(ClientState::default()),
+            )
+            .unwrap();
+        Cli::new(client_fd)
+    };
+    macro_rules! dispatch {
+        () => {{
+            let _ = display.dispatch_clients(&mut state);
+            let _ = display.flush_clients();
+        }};
+    }
+    fn bind_core(c: &mut Cli, display: &mut Display<DdState>, state: &mut DdState) -> (u32, u32, u32) {
+        let reg = c.alloc();
+        c.conn.send(&Message::new(WL_DISPLAY, 1).u32(reg));
+        c.conn.flush().unwrap();
+        let _ = display.dispatch_clients(state);
+        let _ = display.flush_clients();
+        c.drain();
+        let comp = c.bind("wl_compositor", 4);
+        let shm = c.bind("wl_shm", 1);
+        let wm = c.bind("xdg_wm_base", 1);
+        c.conn.flush().unwrap();
+        let _ = display.dispatch_clients(state);
+        let _ = display.flush_clients();
+        c.drain();
+        (comp, shm, wm)
+    }
+    fn map(c: &mut Cli, comp: u32, wm: u32) -> (u32, u32, u32) {
+        let surface = c.alloc();
+        c.conn.send(&Message::new(comp, 0).u32(surface));
+        let xdg = c.alloc();
+        c.conn.send(&Message::new(wm, 2).u32(xdg).u32(surface));
+        let top = c.alloc();
+        c.conn.send(&Message::new(xdg, 1).u32(top));
+        c.conn.send(&Message::new(surface, 6));
+        c.conn.flush().unwrap();
+        (surface, xdg, top)
+    }
+
+    let mut a = connect(&mut display);
+    let (ac, ash, awm) = bind_core(&mut a, &mut display, &mut state);
+    let (asurf, axdg, atop) = map(&mut a, ac, awm);
+    dispatch!();
+    commit_buffer(&mut a, ash, asurf, 4, 4);
+    dispatch!();
+
+    let mut b = connect(&mut display);
+    let (bc, bsh, bwm) = bind_core(&mut b, &mut display, &mut state);
+    let (bsurf, _bxdg, _btop) = map(&mut b, bc, bwm);
+    assert_eq!(
+        asurf, bsurf,
+        "fixture must exercise equal client-local protocol ids"
+    );
+    dispatch!();
+    commit_buffer(&mut b, bsh, bsurf, 4, 4);
+    dispatch!();
+
+    let ids = log.lock().unwrap().presented.clone();
+    assert!(ids.len() >= 2);
+    assert_ne!(
+        ids[0], ids[1],
+        "equal protocol ids from different clients must not alias"
+    );
+    let a_host = ids[0];
+    let b_host = ids[1];
+
+    a.conn.send(&Message::new(atop, 0));
+    a.conn.send(&Message::new(axdg, 0));
+    a.conn.send(&Message::new(asurf, 0));
+    a.conn.flush().unwrap();
+    dispatch!();
+    dispatch!();
+    let dropped = log.lock().unwrap().dropped.clone();
+    assert_eq!(
+        dropped.iter().filter(|&&sid| sid == a_host).count(),
+        1,
+        "role and surface teardown must collapse to one presenter reclamation"
+    );
+    assert!(
+        !dropped.contains(&b_host),
+        "destroying one client must not reclaim another client's surface"
+    );
+
+    drop(b);
+    dispatch!();
+    dispatch!();
+    let dropped = log.lock().unwrap().dropped.clone();
+    assert_eq!(
+        dropped.iter().filter(|&&sid| sid == b_host).count(),
+        1,
+        "disconnect teardown must reclaim the surviving surface exactly once"
+    );
 }
 
 /// Create a fresh XRGB shm buffer of `w`x`h`, attach it to `surface`, and commit — the ordinary

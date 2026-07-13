@@ -35,7 +35,7 @@ use smithay::{
     },
 };
 
-use crate::{surface_id, DdState};
+use crate::DdState;
 
 impl SeatHandler for DdState {
     type KeyboardFocus = WlSurface;
@@ -62,7 +62,8 @@ impl SeatHandler for DdState {
             // it was assigned the cursor role), remove that window first; then build the cursor from its
             // current buffer (or, if none yet, on its next commit — see `on_commit` → `update_cursor_surface`).
             CursorImageStatus::Surface(surface) => {
-                self.presenter.drop_window(surface_id(&surface));
+                let sid = self.surface_id(&surface);
+                self.drop_surface_window(sid);
                 self.cursor_surface = Some(surface.clone());
                 self.update_cursor_surface(&surface);
             }
@@ -256,7 +257,7 @@ impl DdState {
     /// `CursorImageSurfaceData` (logical coords); it is scaled to buffer pixels for the Presenter, which
     /// wraps the pixels in an `NSCursor`. No committed buffer yet ⇒ nothing to do (built on first commit).
     pub(crate) fn update_cursor_surface(&mut self, surface: &WlSurface) {
-        let sid = surface_id(surface);
+        let sid = self.surface_id(surface);
         let Some(buffer) = self.buffers.get(&sid).cloned() else {
             return;
         };

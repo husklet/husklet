@@ -12,20 +12,20 @@
 use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
 use smithay::wayland::idle_inhibit::IdleInhibitHandler;
 
-use crate::{surface_id, DdState};
+use crate::DdState;
 
 impl IdleInhibitHandler for DdState {
     /// A client created a `zwp_idle_inhibitor_v1` for `surface`: record that the session should not idle
     /// while this surface is up. (dd defers the actual power assertion to the host; the intent is the
     /// compositor-side contract.)
     fn inhibit(&mut self, surface: WlSurface) {
-        self.idle_inhibitors.insert(surface_id(&surface));
+        self.idle_inhibitors.insert(self.surface_id(&surface));
     }
 
     /// The client destroyed its inhibitor (Smithay calls this on `zwp_idle_inhibitor_v1.destroy`): drop
     /// the recorded intent for that surface.
     fn uninhibit(&mut self, surface: WlSurface) {
-        self.idle_inhibitors.remove(&surface_id(&surface));
+        self.idle_inhibitors.remove(&self.surface_id(&surface));
     }
 }
 

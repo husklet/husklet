@@ -35,7 +35,7 @@ use smithay::{
     },
 };
 
-use crate::{surface_id, ClientState, DdState, OUTPUT_REFRESH_MHZ};
+use crate::{ClientState, DdState, OUTPUT_REFRESH_MHZ};
 
 /// How a presented tree should advance its per-surface frame pacing, derived from what actually
 /// happened to the frame. Replaces the old `did_present: bool` that conflated "nothing to present"
@@ -69,8 +69,14 @@ impl CompositorHandler for DdState {
     fn client_compositor_state<'a>(&self, client: &'a Client) -> &'a CompositorClientState {
         &client.get_data::<ClientState>().unwrap().compositor
     }
+    fn new_surface(&mut self, surface: &WlSurface) {
+        self.register_surface(surface);
+    }
     fn commit(&mut self, surface: &WlSurface) {
         self.on_commit(surface);
+    }
+    fn destroyed(&mut self, surface: &WlSurface) {
+        self.teardown_surface(surface);
     }
 }
 
@@ -116,7 +122,7 @@ impl DdState {
             // the dirty set or the repack cache — a stale cursor sid there would force the skip-present
             // fast-path to scan the tree on every unrelated commit. Its buffer stays in `self.buffers`
             // (that is where `update_cursor_surface` reads it from).
-            let sid = surface_id(surface);
+            let sid = self.surface_id(surface);
             self.dirty.remove(&sid);
             self.repacks.remove(&sid);
             self.update_cursor_surface(surface);
@@ -175,7 +181,7 @@ impl DdState {
     /// new buffer is detected by object identity against the last one we stored, and the damage is DRAINED
     /// here (like the frame callbacks are drained when pacing) so it reflects only this commit.
     fn ingest_buffer(&mut self, surface: &WlSurface) -> bool {
-        let sid = surface_id(surface);
+        let sid = self.surface_id(surface);
         let (buffer, removed, damage, scale, surface_safe) = with_states(surface, |states| {
             let mut attrs = states.cached_state.get::<SurfaceAttributes>();
             let cur = attrs.current();
@@ -385,7 +391,7 @@ impl DdState {
     pub(crate) fn popup_placement(&self, surface: &WlSurface) -> Option<PopupPlacement> {
         let (x, y, _, _) = self.popup_geometry(surface)?;
         let parent = self.popup_parent(surface)?;
-        Some(PopupPlacement { parent_sid: surface_id(&parent), x, y })
+        Some(PopupPlacement { parent_sid: self.surface_id(&parent), x, y })
     }
 
     /// Present `root` (a toplevel `wl_surface`) with its full surface tree composited in: the root's own
@@ -401,6 +407,7 @@ impl DdState {
                 // frame advances callbacks/feedback; an Offscreen present or a real output/device error
                 // (both previously hidden behind a `false`) is a FAILED present — pacing is retained.
                 let sid = base.sid;
+                self.presenter_windows.insert(sid);
                 match self.presenter.present(&base) {
                     Ok(dd_display::present::PresentOutcome::Delivered { .. }) => {
                         FramePacing::Presented
@@ -517,7 +524,7 @@ impl DdState {
         for (popup, _, _) in self.collect_popups_for_root(root) {
             self.collect_tree_surfaces(&popup, &mut surfaces);
         }
-        surfaces.iter().any(|s| self.dirty.contains(&surface_id(s)))
+        surfaces.iter().any(|s| self.dirty.contains(&self.surface_id(s)))
     }
 
     /// Clear the dirty flag for every surface in `root`'s presented tree (called after a successful
@@ -529,7 +536,7 @@ impl DdState {
             self.collect_tree_surfaces(&popup, &mut surfaces);
         }
         for s in surfaces {
-            self.dirty.remove(&surface_id(&s));
+            self.dirty.remove(&self.surface_id(&s));
         }
     }
 
@@ -610,7 +617,7 @@ impl DdState {
     /// pixels of the root and of every composited child/popup each present. `None` if the surface has no
     /// buffer yet.
     fn snapshot_surface(&self, surface: &WlSurface) -> Option<SurfaceBuffer> {
-        let sid = surface_id(surface);
+        let sid = self.surface_id(surface);
         let buffer = self.buffers.get(&sid)?;
         let (buffer_scale, dst, src, buffer_transform) = with_states(surface, |states| {
             let mut attrs = states.cached_state.get::<SurfaceAttributes>();
@@ -702,7 +709,7 @@ impl DdState {
             );
             (callbacks, feedback)
         });
-        let sid = surface_id(surface);
+        let sid = self.surface_id(surface);
         let t = self.now_ms();
         // A frame callback tells the client "your frame is on screen, draw the next one". Fire it only
         // when the surface's content actually reached (or still stands on) the screen — a fresh Present

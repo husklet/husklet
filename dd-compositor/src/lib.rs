@@ -53,7 +53,7 @@ use smithay::{
     reexports::{
         wayland_protocols::xdg::shell::server::xdg_toplevel::WmCapabilities,
         wayland_server::{
-            backend::{ClientData, ClientId, DisconnectReason},
+            backend::{ClientData, ClientId, DisconnectReason, ObjectId},
             protocol::{wl_buffer::WlBuffer, wl_callback::WlCallback, wl_surface::WlSurface},
             DisplayHandle, Resource,
         },
@@ -266,6 +266,13 @@ pub struct DdState {
     /// of that surface; bounded (see `MAX_RETAINED_CALLBACKS`) so a permanently-dead presenter cannot grow
     /// the queue without limit. See `handlers::compositor::{pace_surface, retain_frame_callbacks}`.
     pub(crate) retained_callbacks: HashMap<u32, VecDeque<WlCallback>>,
+
+    /// Collision-free host identity for every live `wl_surface`. Wayland protocol ids are local to a
+    /// client and may be reused after destroy; `ObjectId` includes both ownership and object generation.
+    /// The monotonically allocated host id is what the existing Presenter ABI consumes.
+    surface_ids: HashMap<ObjectId, u32>,
+    next_surface_id: u32,
+    presenter_windows: HashSet<u32>,
 }
 
 impl DdState {
@@ -423,6 +430,61 @@ impl DdState {
             cursor_surface: None,
             cursor_hidden_by_lock: false,
             retained_callbacks: HashMap::new(),
+            surface_ids: HashMap::new(),
+            next_surface_id: 1,
+            presenter_windows: HashSet::new(),
+        }
+    }
+
+    pub(crate) fn register_surface(&mut self, surface: &WlSurface) {
+        let object = surface.id();
+        if self.surface_ids.contains_key(&object) {
+            return;
+        }
+        let sid = self.next_surface_id;
+        self.next_surface_id = self
+            .next_surface_id
+            .checked_add(1)
+            .expect("surface id space exhausted");
+        self.surface_ids.insert(object, sid);
+    }
+
+    /// Return the compositor-global, generation-safe id assigned in `new_surface`.
+    pub(crate) fn surface_id(&self, surface: &WlSurface) -> u32 {
+        *self
+            .surface_ids
+            .get(&surface.id())
+            .expect("live surface was not registered")
+    }
+
+    /// Reclaim every dd-owned resource associated with a surface. This is deliberately idempotent:
+    /// role teardown and `wl_surface.destroy` can arrive through different protocol paths.
+    pub(crate) fn teardown_surface(&mut self, surface: &WlSurface) {
+        let Some(sid) = self.surface_ids.remove(&surface.id()) else {
+            return;
+        };
+        self.buffers.remove(&sid);
+        self.repacks.remove(&sid);
+        self.dirty.remove(&sid);
+        self.titles.remove(&sid);
+        self.retained_callbacks.remove(&sid);
+        self.idle_inhibitors.remove(&sid);
+        self.content_types.remove(&sid);
+        self.popup_grabs.retain(|p| p.wl_surface() != surface);
+        if self.focus.as_ref() == Some(surface) {
+            self.focus = None;
+            self.last_cfg = None;
+            self.set_text_input_focus(None);
+        }
+        if self.cursor_surface.as_ref() == Some(surface) {
+            self.cursor_surface = None;
+        }
+        self.drop_surface_window(sid);
+    }
+
+    pub(crate) fn drop_surface_window(&mut self, sid: u32) {
+        if self.presenter_windows.remove(&sid) {
+            self.presenter.drop_window(sid);
         }
     }
 
@@ -486,9 +548,4 @@ impl DdState {
         // focused client is the one offered the current primary selection and allowed to set it.
         set_primary_focus(&dh, &seat, client);
     }
-}
-
-/// The `wl_surface` id (`u32` protocol id) — the sid the Presenter keys windows by.
-pub(crate) fn surface_id(surface: &WlSurface) -> u32 {
-    surface.id().protocol_id()
 }

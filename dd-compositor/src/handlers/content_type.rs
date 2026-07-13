@@ -15,7 +15,7 @@ use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
 use smithay::wayland::compositor::with_states;
 use smithay::wayland::content_type::ContentTypeSurfaceCachedState;
 
-use crate::{surface_id, DdState};
+use crate::DdState;
 
 /// Map Smithay's `wp_content_type_v1::Type` to its wire enum value (none=0, photo=1, video=2, game=3).
 fn content_type_value(t: Type) -> u32 {
@@ -37,7 +37,7 @@ impl DdState {
             let mut guard = states.cached_state.get::<ContentTypeSurfaceCachedState>();
             content_type_value(*guard.current().content_type())
         });
-        let sid = surface_id(surface);
+        let sid = self.surface_id(surface);
         if value == 0 {
             self.content_types.remove(&sid);
         } else {

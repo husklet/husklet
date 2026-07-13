@@ -35,7 +35,7 @@ use smithay::{
     },
 };
 
-use crate::{surface_id, DdState, INITIAL_TOPLEVEL_SIZE};
+use crate::{DdState, INITIAL_TOPLEVEL_SIZE};
 
 impl XdgShellHandler for DdState {
     fn xdg_shell_state(&mut self) -> &mut XdgShellState {
@@ -58,7 +58,7 @@ impl XdgShellHandler for DdState {
     /// `set_title`: Smithay has already stored it in the role attributes; mirror it into `titles` so the
     /// Presenter can label the NSWindow (server.rs kept the same surface→title map).
     fn title_changed(&mut self, surface: ToplevelSurface) {
-        let sid = surface_id(surface.wl_surface());
+        let sid = self.surface_id(surface.wl_surface());
         let title = toplevel_title(&surface).unwrap_or_default();
         self.titles.insert(sid, title);
     }
@@ -76,7 +76,7 @@ impl XdgShellHandler for DdState {
             return; // stale/spoofed serial: ignore (the xdg-shell "may be ignored" path).
         }
         self.presenter
-            .begin_interactive_move(surface_id(surface.wl_surface()));
+            .begin_interactive_move(self.surface_id(surface.wl_surface()));
     }
 
     /// `xdg_toplevel.resize(seat, serial, edges)`: begin an interactive edge/corner resize. Validate the
@@ -107,7 +107,7 @@ impl XdgShellHandler for DdState {
         // leave resize mode at the final size. `edges` IS the resize_edge bitmask (top=1/bottom=2/left=4/
         // right=8, corner = OR of two), so the Presenter can anchor the opposite edge.
         self.presenter
-            .begin_interactive_resize(surface_id(surface.wl_surface()), u32::from(edges));
+            .begin_interactive_resize(self.surface_id(surface.wl_surface()), u32::from(edges));
         self.finish_interactive_resize(&surface);
     }
 
@@ -166,9 +166,9 @@ impl XdgShellHandler for DdState {
     fn ack_configure(&mut self, _surface: WlSurface, _configure: Configure) {}
 
     fn toplevel_destroyed(&mut self, surface: ToplevelSurface) {
-        let sid = surface_id(surface.wl_surface());
+        let sid = self.surface_id(surface.wl_surface());
         self.titles.remove(&sid);
-        self.presenter.drop_window(sid);
+        self.drop_surface_window(sid);
         if self.focus.as_ref() == Some(surface.wl_surface()) {
             self.focus = None;
             self.last_cfg = None;
@@ -236,9 +236,9 @@ impl XdgShellHandler for DdState {
     /// Forget its buffer + grab bookkeeping, drop any native window the presenter opened for it, and
     /// re-present the owning toplevel so the menu visibly disappears.
     fn popup_destroyed(&mut self, surface: PopupSurface) {
-        let sid = surface_id(surface.wl_surface());
+        let sid = self.surface_id(surface.wl_surface());
         self.buffers.remove(&sid);
-        self.presenter.drop_window(sid);
+        self.drop_surface_window(sid);
         self.popup_grabs
             .retain(|p| p.wl_surface() != surface.wl_surface());
         if let Some(root) = self.window_root(surface.wl_surface()) {
@@ -326,7 +326,7 @@ impl DdState {
         let Some(focus) = self.focus.clone() else {
             return;
         };
-        let sid = surface_id(&focus);
+        let sid = self.surface_id(&focus);
         let Some((w, h)) = self.presenter.window_content_size(sid) else {
             return;
         };
@@ -407,7 +407,7 @@ impl DdState {
     /// Presenter, takes keyboard focus (which also moves the clipboard/data-device focus), and re-sends an
     /// `Activated` configure so the client repaints as focused.
     pub(crate) fn activate_surface(&mut self, surface: WlSurface) {
-        self.presenter.raise_window(surface_id(&surface));
+        self.presenter.raise_window(self.surface_id(&surface));
         if let Some(toplevel) = self.toplevel_for_surface(&surface) {
             toplevel.with_pending_state(|s| {
                 s.states.set(XdgState::Activated);
@@ -494,7 +494,7 @@ impl DdState {
     /// Presenter knows it, else the toplevel's last acked size, else the floating default. This keeps a
     /// maximize→unmaximize round-trip from collapsing the window to `(0,0)`.
     fn toplevel_hint_size(&self, surface: &ToplevelSurface) -> (i32, i32) {
-        let sid = surface_id(surface.wl_surface());
+        let sid = self.surface_id(surface.wl_surface());
         if let Some((w, h)) = self.presenter.window_content_size(sid) {
             if w > 0 && h > 0 {
                 return (w, h);
