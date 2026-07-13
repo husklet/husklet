@@ -52,8 +52,51 @@ pub fn replay(be: &mut dyn GpuBackend, cmds: &[Cmd]) -> Result<Vec<PresentToken>
     Ok(presents)
 }
 
+/// Validate that the ENTIRE wire stream decodes before it is applied — the atomic-frame guarantee. Walks
+/// every command with the real decoders (so a non-finite float, unknown tag, truncated body, or bad enum
+/// anywhere in the frame is caught) WITHOUT calling the backend, so a malformed command late in a frame
+/// can never leave earlier commands' mutations behind. The `WriteBuffer` zero-copy benefit is preserved:
+/// its bulk payload is length-checked and skipped here (no `to_vec`), and the apply pass below still hands
+/// the backend a borrowed slice.
+fn validate_stream(bytes: &[u8]) -> Result<()> {
+    let mut d = Decoder::new(bytes);
+    let mut idx = 0usize;
+    while !d.is_empty() {
+        let pos = d.pos();
+        let tag = d.peek_u8();
+        let step = if d.peek_u8() == Some(crate::ir::tag::WRITE_BUFFER) {
+            // Validate the WriteBuffer header + payload length, then SKIP the payload bytes (no copy).
+            (|| -> Result<()> {
+                let _ = d.u8()?; // tag
+                let _id = d.u32()?;
+                let _offset = d.u64()?;
+                let len = d.u32()? as usize;
+                if len > d.remaining() {
+                    return Err(GpuError::ShortBuffer);
+                }
+                let _ = d.raw_bytes(len)?; // borrowed view; discarded — zero allocation
+                Ok(())
+            })()
+        } else {
+            Cmd::decode(&mut d).map(|_| ())
+        };
+        step.map_err(|e| {
+            GpuError::Decode(format!(
+                "replay validation command {idx} at byte {pos}/{} tag {:?} remaining {}: {e}",
+                d.len(),
+                tag,
+                d.remaining()
+            ))
+        })?;
+        idx += 1;
+    }
+    Ok(())
+}
+
 /// Decode a wire stream (as produced by [`crate::ir::encode_stream`]) and replay it.
 pub fn replay_stream(be: &mut dyn GpuBackend, bytes: &[u8]) -> Result<Vec<PresentToken>> {
+    // Atomic frame: reject a malformed frame in full before touching the backend (validate-before-execute).
+    validate_stream(bytes)?;
     let mut d = Decoder::new(bytes);
     let mut presents = Vec::new();
     let mut idx = 0usize;

@@ -979,7 +979,12 @@ fn dec_enc(d: &mut Decoder) -> Result<Enc> {
             for _ in 0..n {
                 let texture = d.u32()?;
                 let load = LoadOp::from_u32(d.u32()?)?;
-                let clear = [d.f32()?, d.f32()?, d.f32()?, d.f32()?];
+                let clear = [
+                    d.f32_finite("color attachment clear r")?,
+                    d.f32_finite("color attachment clear g")?,
+                    d.f32_finite("color attachment clear b")?,
+                    d.f32_finite("color attachment clear a")?,
+                ];
                 let store = d.bool()?;
                 color.push(ColorAttachment { texture, load, clear, store });
             }
@@ -987,7 +992,7 @@ fn dec_enc(d: &mut Decoder) -> Result<Enc> {
                 Some(DepthAttachment {
                     texture: d.u32()?,
                     load: LoadOp::from_u32(d.u32()?)?,
-                    clear_depth: d.f32()?,
+                    clear_depth: d.f32_finite("depth attachment clear")?,
                 })
             } else {
                 None
@@ -1008,12 +1013,12 @@ fn dec_enc(d: &mut Decoder) -> Result<Enc> {
             format: IndexFormat::from_u32(d.u32()?)?,
         },
         etag::SET_VIEWPORT => Enc::SetViewport {
-            x: d.f32()?,
-            y: d.f32()?,
-            w: d.f32()?,
-            h: d.f32()?,
-            min_depth: d.f32()?,
-            max_depth: d.f32()?,
+            x: d.f32_finite("viewport x")?,
+            y: d.f32_finite("viewport y")?,
+            w: d.f32_finite("viewport w")?,
+            h: d.f32_finite("viewport h")?,
+            min_depth: d.f32_finite("viewport min_depth")?,
+            max_depth: d.f32_finite("viewport max_depth")?,
         },
         etag::SET_SCISSOR => Enc::SetScissor {
             x: d.u32()?,
@@ -1027,7 +1032,12 @@ fn dec_enc(d: &mut Decoder) -> Result<Enc> {
             y: d.u32()?,
             w: d.u32()?,
             h: d.u32()?,
-            color: [d.f32()?, d.f32()?, d.f32()?, d.f32()?],
+            color: [
+                d.f32_finite("clear-rect r")?,
+                d.f32_finite("clear-rect g")?,
+                d.f32_finite("clear-rect b")?,
+                d.f32_finite("clear-rect a")?,
+            ],
         },
         etag::DRAW => Enc::Draw {
             vertex_count: d.u32()?,

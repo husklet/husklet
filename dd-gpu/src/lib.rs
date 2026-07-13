@@ -83,6 +83,10 @@ pub enum GpuError {
     Unsupported(&'static str),
     /// A copy/write/read fell outside the resource's bounds.
     OutOfBounds,
+    /// A render-state float (viewport/scissor coordinate, clear color, depth) decoded as non-finite
+    /// (NaN or ±∞) at the wire boundary — a malformed/hostile payload rejected before it can poison a
+    /// backend's viewport/clear/transform. The `&'static str` names the offending field.
+    NonFinite(&'static str),
     /// A descriptor/command field was structurally invalid (zero size, contradictory range,
     /// unsupported dimensionality, missing required usage bit, etc.) — a validation rejection
     /// distinct from a plain bounds violation.
@@ -106,6 +110,7 @@ impl std::fmt::Display for GpuError {
             GpuError::UnknownId { kind, id } => write!(f, "unknown/freed {kind} id {id}"),
             GpuError::Unsupported(op) => write!(f, "backend does not support {op}"),
             GpuError::OutOfBounds => write!(f, "access out of bounds"),
+            GpuError::NonFinite(field) => write!(f, "non-finite float in render state: {field}"),
             GpuError::Invalid(m) => write!(f, "invalid argument: {m}"),
             GpuError::Ptx(m) => write!(f, "ptx: {m}"),
             GpuError::Decode(m) => write!(f, "decode: {m}"),

@@ -32,6 +32,7 @@ pub use dd_gpu::{GpuError, Result};
 pub mod transport;
 
 /// The dd-gpu wire/protocol version the guest and host must agree on. Re-exported for shims that want
-/// to stamp it into a handshake; it tracks `dd_gpu::ir` because that is literally the code both sides
-/// run.
-pub const IR_WIRE_VERSION: u32 = 1;
+/// to stamp it into a handshake; it is DEFINED AS `dd_gpu::ir::WIRE_VERSION` so it cannot drift from the
+/// code both sides actually run (it was a hand-copied `1` that fell behind when the IR reached v2 with the
+/// texture-copy/blit tags; binding it to the source of truth prevents that class of skew).
+pub const IR_WIRE_VERSION: u32 = dd_gpu::ir::WIRE_VERSION;

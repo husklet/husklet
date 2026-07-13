@@ -12,6 +12,17 @@ use crate::ir;
 
 /// Default host GPU-exec socket path (overridable via `$DD_GPU_EXEC`); matches gl_shim.c.
 pub const DEFAULT_EXEC_SOCK: &str = "/run/user/0/dd-gpu-0";
+
+/// Per-frame execution-response bytes the host executor writes after replaying a submit (see
+/// `dd-display`'s `run_executor`, which writes `[rendered as u8]`). This is v1 of the exec response
+/// protocol: a single status byte. `ACK_OK` means the frame replayed and its render is committed; any
+/// other value — notably `ACK_FAIL` — means the host rejected or failed the frame and the guest must NOT
+/// treat it as presented. A later revision can widen this to a typed response (status + error detail +
+/// residency signal) negotiated against [`crate::IR_WIRE_VERSION`]; keeping the contract explicit here is
+/// what lets the guest reject a failure instead of committing a stale/partly-rendered frame.
+pub const ACK_OK: u8 = 1;
+/// The host executor's documented failure acknowledgement (replay error / missing surface).
+pub const ACK_FAIL: u8 = 0;
 /// Guest render node the `DD_IOCTL_GPU_ALLOC` ioctl targets.
 pub const RENDER_NODE: &str = "/dev/dri/renderD128";
 
@@ -153,16 +164,27 @@ impl ExecConn {
 
         let mut last_err = None;
         for _ in 0..2 {
-            let r = (|| -> std::io::Result<()> {
+            // The closure yields the host's ack byte on success. A transport (I/O) error is retried on a
+            // fresh connection; a NACK is NOT — the host received the frame and reported failure, so the
+            // connection is healthy and re-sending would double-submit.
+            let r = (|| -> std::io::Result<u8> {
                 let s = self.ensure()?;
                 s.write_all(&hdr)?;
                 s.write_all(ir)?;
                 let mut ack = [0u8; 1];
                 s.read_exact(&mut ack)?;
-                Ok(())
+                Ok(ack[0])
             })();
             match r {
-                Ok(()) => return Ok(()),
+                Ok(ACK_OK) => return Ok(()),
+                // The executor NACKed this frame (replay failed / surface missing). Surface it as an error
+                // rather than letting the guest commit a stale or partly-rendered frame as if it presented.
+                Ok(nack) => {
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::Other,
+                        format!("host executor NACKed frame (ack={nack})"),
+                    ));
+                }
                 Err(e) => {
                     self.sock = None; // reconnect on next attempt
                     last_err = Some(e);
@@ -315,5 +337,38 @@ mod tests {
         assert_eq!(body, ir_clone);
         assert_eq!(conn.connects(), 1);
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn exec_conn_rejects_a_failure_ack() {
+        // Mirrors the tracked gate `executor_transport_rejects_a_failed_frame_acknowledgement`: a host that
+        // reads the frame and replies ACK_FAIL (0) must make submit() return Err, not be treated as a
+        // successful present.
+        let dir = std::env::temp_dir().join(format!("dd-shim-nack-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let sock = dir.join("nack.sock");
+        let _ = std::fs::remove_file(&sock);
+        let listener = UnixListener::bind(&sock).unwrap();
+        let server = std::thread::spawn(move || {
+            let (mut c, _) = listener.accept().unwrap();
+            let mut hdr = [0u8; 16];
+            c.read_exact(&mut hdr).unwrap();
+            let len = u32::from_le_bytes(hdr[12..16].try_into().unwrap()) as usize;
+            let mut body = vec![0u8; len];
+            c.read_exact(&mut body).unwrap();
+            c.write_all(&[super::ACK_FAIL]).unwrap(); // documented failure ack
+        });
+        let mut conn = ExecConn::new(sock.to_string_lossy().into_owned());
+        let surf = Surface { id: 7, width: 16, height: 9, stride: 64, fd: -1 };
+        let result = conn.submit(&surf, &[1, 2, 3, 4]);
+        server.join().unwrap();
+        assert!(result.is_err(), "ExecConn treated ACK_FAIL as success");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn ir_wire_version_tracks_dd_gpu() {
+        // IR_WIRE_VERSION is bound to the source of truth so guest/host can't disagree on the tag set.
+        assert_eq!(crate::IR_WIRE_VERSION, dd_gpu::ir::WIRE_VERSION);
     }
 }

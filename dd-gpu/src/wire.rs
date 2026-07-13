@@ -138,6 +138,19 @@ impl<'a> Decoder<'a> {
     pub fn f32(&mut self) -> Result<f32> {
         Ok(f32::from_bits(self.u32()?))
     }
+    /// Decode an `f32` that the IR contract requires to be **finite** — a viewport/scissor coordinate, a
+    /// clear color/depth, any render-state value that indexes into pixels or a transform. A NaN or ±∞
+    /// there is a malformed (buggy or hostile) payload; reject it at the wire boundary with a typed error
+    /// so it can never reach a backend and poison a viewport/clear/matrix. `field` names the site for the
+    /// diagnostic. Non-render-state floats (there are none in the current IR) would use plain [`f32`].
+    pub fn f32_finite(&mut self, field: &'static str) -> Result<f32> {
+        let v = self.f32()?;
+        if v.is_finite() {
+            Ok(v)
+        } else {
+            Err(GpuError::NonFinite(field))
+        }
+    }
     /// Decode a canonical boolean: only `0` and `1` are valid. A non-canonical byte (e.g. `2`) is a
     /// malformed payload and errors rather than being normalized to `true`, so producer bugs surface.
     pub fn bool(&mut self) -> Result<bool> {
