@@ -144,6 +144,13 @@ pub const GL_NUM_EXTENSIONS: u32 = 0x821D;
 pub const GL_SYNC_STATUS: u32 = 0x9114;
 pub const GL_SIGNALED: i32 = 0x9119;
 pub const GL_ALREADY_SIGNALED: u32 = 0x911A;
+pub const GL_TIMEOUT_EXPIRED: u32 = 0x911B;
+pub const GL_CONDITION_SATISFIED: u32 = 0x911C;
+pub const GL_WAIT_FAILED: u32 = 0x911D;
+pub const GL_SYNC_GPU_COMMANDS_COMPLETE: u32 = 0x9117;
+pub const GL_UNSIGNALED: i32 = 0x9118;
+pub const GL_SYNC_FLUSH_COMMANDS_BIT: u32 = 0x0001;
+pub const GL_TIMEOUT_IGNORED: u64 = u64::MAX;
 pub const GL_NUM_SAMPLE_COUNTS: u32 = 0x9380;
 
 // framebuffer / renderbuffer objects

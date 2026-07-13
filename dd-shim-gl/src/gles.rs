@@ -2575,29 +2575,41 @@ pub extern "C" fn glGetTransformFeedbackVarying(_program: u32, _index: u32, buf_
     }
 }
 
-// ---- fence sync objects (oracle reports immediately-signaled so Chrome's fences never block) ----
+fn syncs() -> &'static std::sync::Mutex<std::collections::HashMap<usize,u64>> {
+    static S: std::sync::OnceLock<std::sync::Mutex<std::collections::HashMap<usize,u64>>>=std::sync::OnceLock::new();
+    S.get_or_init(||std::sync::Mutex::new(std::collections::HashMap::new()))
+}
+static SYNC_SEQ: std::sync::atomic::AtomicUsize=std::sync::atomic::AtomicUsize::new(1);
 #[no_mangle]
-pub extern "C" fn glFenceSync(_condition: u32, _flags: u32) -> *mut c_void {
-    1 as *mut c_void
+pub extern "C" fn glFenceSync(condition: u32, flags: u32) -> *mut c_void {
+    if condition!=GL_SYNC_GPU_COMMANDS_COMPLETE||flags!=0{crate::state::set_gl_error(if condition!=GL_SYNC_GPU_COMMANDS_COMPLETE{GL_INVALID_ENUM}else{GL_INVALID_VALUE});return core::ptr::null_mut()}
+    glFlush(); let serial=SUBMIT_SERIAL.load(std::sync::atomic::Ordering::SeqCst); let id=SYNC_SEQ.fetch_add(1,std::sync::atomic::Ordering::SeqCst);
+    syncs().lock().unwrap().insert(id,serial); id as *mut c_void
 }
 #[no_mangle]
-pub extern "C" fn glDeleteSync(_sync: *mut c_void) {}
+pub extern "C" fn glDeleteSync(sync: *mut c_void) {if syncs().lock().unwrap().remove(&(sync as usize)).is_none(){crate::state::set_gl_error(GL_INVALID_VALUE)}}
 #[no_mangle]
 pub extern "C" fn glIsSync(sync: *mut c_void) -> u8 {
-    (!sync.is_null()) as u8
+    syncs().lock().unwrap().contains_key(&(sync as usize)) as u8
 }
 #[no_mangle]
-pub extern "C" fn glClientWaitSync(_sync: *mut c_void, _flags: u32, _timeout: u64) -> u32 {
-    GL_ALREADY_SIGNALED
+pub extern "C" fn glClientWaitSync(sync: *mut c_void, flags: u32, timeout: u64) -> u32 {
+    if flags & !GL_SYNC_FLUSH_COMMANDS_BIT!=0{crate::state::set_gl_error(GL_INVALID_VALUE);return GL_WAIT_FAILED}
+    let Some(serial)=syncs().lock().unwrap().get(&(sync as usize)).copied() else{crate::state::set_gl_error(GL_INVALID_VALUE);return GL_WAIT_FAILED};
+    if COMPLETE_SERIAL.load(std::sync::atomic::Ordering::SeqCst)>=serial{return GL_ALREADY_SIGNALED}
+    if flags&GL_SYNC_FLUSH_COMMANDS_BIT!=0||timeout==GL_TIMEOUT_IGNORED{glFinish();return GL_CONDITION_SATISFIED}
+    GL_TIMEOUT_EXPIRED
 }
 #[no_mangle]
-pub extern "C" fn glWaitSync(_sync: *mut c_void, _flags: u32, _timeout: u64) {}
+pub extern "C" fn glWaitSync(sync: *mut c_void, flags: u32, timeout: u64) {if flags!=0||timeout!=GL_TIMEOUT_IGNORED||!syncs().lock().unwrap().contains_key(&(sync as usize)){crate::state::set_gl_error(GL_INVALID_VALUE)}}
 #[no_mangle]
-pub extern "C" fn glGetSynciv(_sync: *mut c_void, pname: u32, _buf_size: i32, length: *mut i32, values: *mut i32) {
+pub extern "C" fn glGetSynciv(sync: *mut c_void, pname: u32, buf_size: i32, length: *mut i32, values: *mut i32) {
+    let serial=syncs().lock().unwrap().get(&(sync as usize)).copied();
+    if serial.is_none()||pname!=GL_SYNC_STATUS||buf_size<1{crate::state::set_gl_error(if pname!=GL_SYNC_STATUS{GL_INVALID_ENUM}else{GL_INVALID_VALUE});return}
     unsafe {
         set_i32(length, 1);
         if !values.is_null() {
-            *values = if pname == GL_SYNC_STATUS { GL_SIGNALED } else { 0 };
+            *values = if COMPLETE_SERIAL.load(std::sync::atomic::Ordering::SeqCst)>=serial.unwrap(){GL_SIGNALED}else{GL_UNSIGNALED};
         }
     }
 }

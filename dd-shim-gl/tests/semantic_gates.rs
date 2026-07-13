@@ -8,6 +8,19 @@ use dd_shim_gl::glconst::*;
 use dd_shim_gl::{egl, gles};
 
 #[test]
+fn sync_objects_track_submission_completion_and_stale_handles() {
+    while gles::glGetError()!=GL_NO_ERROR{}
+    let sync=gles::glFenceSync(GL_SYNC_GPU_COMMANDS_COMPLETE,0); assert!(!sync.is_null()); assert_eq!(gles::glIsSync(sync),GL_TRUE);
+    let mut status=-1;let mut len=0;gles::glGetSynciv(sync,GL_SYNC_STATUS,1,&mut len,&mut status);assert_eq!(status,GL_UNSIGNALED);
+    assert_eq!(gles::glClientWaitSync(sync,0,0),GL_TIMEOUT_EXPIRED);
+    assert_eq!(gles::glClientWaitSync(sync,GL_SYNC_FLUSH_COMMANDS_BIT,1),GL_CONDITION_SATISFIED);
+    assert_eq!(gles::glClientWaitSync(sync,0,0),GL_ALREADY_SIGNALED);
+    gles::glDeleteSync(sync);assert_eq!(gles::glIsSync(sync),GL_FALSE);
+    let mut sentinel=0x1234;gles::glGetSynciv(sync,GL_SYNC_STATUS,1,&mut len,&mut sentinel);assert_eq!(sentinel,0x1234);assert_eq!(gles::glGetError(),GL_INVALID_VALUE);
+    assert_eq!(gles::glClientWaitSync(sync,0,0),GL_WAIT_FAILED);assert_eq!(gles::glGetError(),GL_INVALID_VALUE);
+}
+
+#[test]
 fn texture_upload_validation_is_atomic_and_honors_padded_rows() {
     while gles::glGetError() != GL_NO_ERROR {}
     let mut tex=0; gles::glGenTextures(1,&mut tex); gles::glBindTexture(GL_TEXTURE_2D,tex);
