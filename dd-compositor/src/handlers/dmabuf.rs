@@ -13,7 +13,7 @@
 //!
 //! ## The bridge
 //! 1. We advertise `zwp_linux_dmabuf_v1` (Smithay's [`DmabufState`], v4/v5 with feedback) exporting
-//!    ARGB8888/XRGB8888 with the dd IOSurface modifier + `LINEAR`, and the synthetic render-node
+//!    ARGB8888/XRGB8888 with the dd IOSurface modifier, and the synthetic render-node
 //!    `main_device` (226:128) so a client's ozone/EGL GPU probe resolves the same node the engine
 //!    synthesizes. Chrome needs the feedback path; glmark2/es2tri use the plain v3 modifier list
 //!    Smithay derives from the same formats.
@@ -39,8 +39,8 @@ use smithay::{
     reexports::wayland_server::{protocol::wl_buffer::WlBuffer, DisplayHandle},
     utils::{Logical, Size},
     wayland::dmabuf::{
-        get_dmabuf, DmabufFeedback, DmabufFeedbackBuilder, DmabufGlobal, DmabufHandler, DmabufState,
-        ImportNotifier,
+        get_dmabuf, DmabufDeviceId, DmabufFeedback, DmabufFeedbackBuilder, DmabufGlobal,
+        DmabufHandler, DmabufState, ImportNotifier,
     },
 };
 
@@ -187,19 +187,17 @@ impl DdState {
 /// reads the dmabuf-feedback `main_device`, `stat`s that node, and takes its accelerated render path
 /// only when the two match — so the feedback must advertise exactly this dev_t (identical to the
 /// legacy `dd-display/src/server.rs::send_dmabuf_feedback` value).
-const DD_MAIN_DEVICE: libc::dev_t = ((226 as libc::dev_t) << 8) | 128;
+const DD_MAIN_DEVICE: DmabufDeviceId = DmabufDeviceId::from_linux_dev_t((226u64 << 8) | 128);
 
-/// The ARGB/XRGB8888 format+modifier list the dmabuf global advertises: the dd IOSurface modifier (the
-/// accelerated path a guest GPU client tags its buffer with) plus `LINEAR`. GLES clients
+/// The exact ARGB/XRGB8888 format+modifier pairs the importer can accept. Genuine Linux `LINEAR`
+/// dma-bufs are intentionally absent because the macOS importer only resolves dd IOSurface references. GLES clients
 /// (glmark2/es2tri) read this list off the v3 modifier events; v4+ clients read the same set from the
 /// feedback format-table's main tranche.
-fn dd_dmabuf_formats() -> [Format; 4] {
+fn dd_dmabuf_formats() -> [Format; 2] {
     let magic = Modifier::from((DD_DMABUF_MOD_MAGIC as u64) << 32);
     [
         Format { code: Fourcc::Argb8888, modifier: magic },
         Format { code: Fourcc::Xrgb8888, modifier: magic },
-        Format { code: Fourcc::Argb8888, modifier: Modifier::Linear },
-        Format { code: Fourcc::Xrgb8888, modifier: Modifier::Linear },
     ]
 }
 
@@ -227,15 +225,9 @@ pub(crate) fn build_default_feedback() -> std::io::Result<DmabufFeedback> {
 /// the advertised global version (5 with feedback, 3 without).
 pub(crate) fn new_dmabuf_state(dh: &DisplayHandle) -> DmabufState {
     let mut state = DmabufState::new();
-    // Parity with the legacy `server.rs` default: the `zwp_linux_dmabuf_v1` global is advertised only
-    // when `DD_DISPLAY_DMABUF` is set (`server.rs` ~line 918: `dmabuf_on = env::var("DD_DISPLAY_DMABUF")`).
-    // A `wl_shm` software client (GTK4/cairo, Chrome's raster path) that sees the v4 *feedback* global
-    // eagerly binds it and `mmap`s the feedback format-table fd; that fd is a macOS POSIX-shm object
-    // routed to the Linux guest through the engine's SCM_RIGHTS bridge, and the guest's `mmap` of it
-    // returns `MAP_FAILED` → the client dereferences `-1` and SIGSEGVs *before its first frame*
-    // (observed: gtk4-demo crashes at guest-PC in the dmabuf-feedback path; legacy — no dmabuf global —
-    // renders the identical guest fine). So the default (software) path must NOT advertise dmabuf, exactly
-    // like legacy. Behind `DD_DISPLAY_DMABUF` the v4 feedback global is created for the accelerated path.
+    // The table is now guest-mappable and byte-correct, but the private modifier still embeds a dynamic
+    // IOSurface id while Wayland feedback describes exact stable format/modifier pairs. Keep the global
+    // opt-in until allocation identity moves to validated fd metadata or a versioned private channel.
     if std::env::var("DD_DISPLAY_DMABUF").is_err() {
         return state;
     }

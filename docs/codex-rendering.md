@@ -471,7 +471,7 @@ Full GUI compatibility requires all of these layers simultaneously:
 | Window management | xdg toplevels/popups, configure/ack, states, move/resize, activation, decorations, parent/child and transient rules | Broad Smithay coverage, but native popup path is gated; live menus, modal/transient stacking, resize storms, minimize/fullscreen and multi-window focus are not proven together |
 | Surface composition | synchronized/desynchronized subsurfaces, nested trees, viewport crop/scale, fractional scale, buffer transforms, regions, frame callbacks | Implemented slices exist; arbitrary nesting, reparent/destruction races, transform combinations, occlusion and callback pacing need protocol and pixel tests |
 | GPU APIs | truthful EGL/GLES and Vulkan implementations with no success stubs in advertised profiles | GL has 236 stubs; Vulkan has 599; desktop OpenGL/GLX is absent; shader and synchronization contracts are incomplete |
-| GPU presentation | dmabuf feedback/import, IOSurface identity, explicit synchronization, resize/recreate, multiple frames in flight | Smithay executor startup landed but is live-unverified; dmabuf is gated after a guest format-table mmap crash; socket readiness, explicit sync and robust swapchain lifecycle are missing |
+| GPU presentation | dmabuf feedback/import, IOSurface identity, explicit synchronization, resize/recreate, multiple frames in flight | Smithay executor startup and opt-in guest-mappable feedback are implemented but live GPU presentation remains unverified; stable allocation identity, explicit sync and robust swapchain lifecycle are missing |
 | Input | complete keymap, modifiers/repeat, pointer buttons/axis/gestures, cursor surfaces/shapes, grabs/constraints, relative motion, touch/tablet | Keyboard/pointer and several extensions exist; key translation is explicitly a ported subset, touch has no real device, tablet/gesture protocols and broad shortcut/dead-key/layout testing are absent |
 | Text/IME | text-input v3 focus, preedit/commit/delete-surrounding, content type, cursor rectangles, host IME | Protocol implementation exists; multilingual composition, candidate UI positioning, surrounding-text edits, focus transfer and toolkit matrix need live proof |
 | Clipboard/DnD | data device, primary selection, MIME negotiation, streaming, drag icons/actions, host bridge | Text clipboard paths exist; arbitrary MIME/binary payloads, large transfers, cancellation, DnD actions/icons and sandboxed producer death need completion |
@@ -625,13 +625,13 @@ after-buffer ordering, multiple commits, rejected fences and disconnect; a C gue
 delayed acquire signals and verify no tearing/deadlock plus exact release ordering.
 `compositor_explicit_sync_waits_acquire_before_sampling_and_releases_after_gpu_completion` pins the full boundary.
 
-Dmabuf feedback and import currently disagree. `dd_dmabuf_formats` advertises ARGB/XRGB with `LINEAR`, but
-`dmabuf_imported` rejects every modifier without the dd magic tag. The advertised magic modifier has low id bits zero,
+Dmabuf feedback and import now share the narrow ARGB/XRGB dd-tagged pair list; rejected `LINEAR` pairs are no longer
+advertised and zero IOSurface ids fail import validation. The advertised magic modifier has low id bits zero,
 while validation rejects IOSurface id zero and real buffers encode a dynamic IOSurface id into those modifier bits.
 A DRM modifier is a stable layout identifier selected from advertised pairs, not a per-allocation object handle;
 overloading it this way prevents a standards client from choosing exactly the advertised value and makes feedback
 untruthful. Build feedback and import from one `DmabufImportCaps` table and mechanically test the full pair matrix.
-Remove `LINEAR` until actual Linux dma-buf fd import exists. Move dynamic host allocation identity into a validated
+Keep `LINEAR` absent until actual Linux dma-buf fd import exists. Move dynamic host allocation identity into a validated
 fd-backed bridge object or an explicitly versioned private protocol/metadata channel, while keeping the modifier a
 stable advertised layout. Never advertise the private pair to clients that cannot create that bridge.
 `dmabuf_feedback_advertises_only_pairs_that_the_importer_can_accept` pins negotiation closure.
@@ -717,10 +717,9 @@ unused protocols speculatively creates more conformance liability.
 The former `rendering_wayland.rs` file attempted to turn this inventory into gates by searching implementation text;
 it has been removed. Each item below needs a behavioral Wayland client/server harness before it is called a test:
 
-- **Linux device-id fidelity:** `DD_MAIN_DEVICE` is still `libc::dev_t`, which is a host type and can be 32-bit on
-  macOS while dmabuf feedback's Linux client contract expects the Linux device value representation. Introduce a
-  `LinuxDevT(u64)` newtype with explicit Linux `makedev` packing and bytes, and patch/wrap Smithay's feedback
-  serialization so the host ABI never chooses wire width. Add a real guest parser assertion for major 226/minor 128.
+- **Linux device-id fidelity:** feedback now uses an explicit Linux `u64` newtype and little-endian eight-byte
+  serialization independent of macOS `libc::dev_t`; the Rust wire regression and C guest parser both assert synthetic
+  render node 226:128. The remaining evidence gap is running both across the macOS host/guest fd bridge.
 - **Modern native-Wayland breadth (completed slice):** commit `47d5dab8` composes pointer gestures, tablet, idle
   inhibit, content type, keyboard-shortcuts inhibit and xdg-foreign as state/delegate/policy slices with a 307-line
   protocol test. `modern_gui_protocol_groups_are_composed_from_vendored_smithay` is now a normal green gate. Other
@@ -1088,7 +1087,7 @@ pixels, and fails against the broken behavior. Do not add tests that read implem
 | `vk_shader_modules_validate_spirv_entries_specialization_and_interfaces` | missing | malformed SPIR-V and incompatible interfaces are forwarded unchecked | Validated/reflected module records and negative pipeline corpus |
 | `vk_robust_buffer_access_is_advertised_only_with_zeroing_and_bounds_guarantees` | contradictory | robustBufferAccess is true without complete zero/discard bounds semantics | Disable now or prove every access path across all executors |
 | `opt_in_gles3_has_real_implementations_for_every_mandatory_command` | partial | opt-in GLES3 has 112/246 mandatory stubs | Complete mandatory ES3 groups and relevant CTS |
-| `dmabuf_feedback_serializes_an_explicit_linux_u64_device_id` | partial | host `libc::dev_t` determines Linux feedback bytes | Explicit Linux newtype plus real guest parse test |
+| `dmabuf_feedback_serializes_an_explicit_linux_u64_device_id` | partial | explicit Linux-u64 LE serialization and real-wire Rust/C mmap parsers are implemented; the macOS/guest runtime gates have not yet run on this host | Run the Rust recvmsg+mmap regression and C guest probe through the macOS compositor/engine, then retain both green |
 | `x11_only_gui_apps_have_an_xwayland_bridge` | missing | no XWayland/XWM/GLX compatibility path | Supervised XWayland journey with input/clipboard/rendering |
 | `gles_generated_names_binding_and_deletion_follow_object_lifetimes` | contradictory | generated names are prematurely live and deletion leaves stale bindings | Reserved/live generations with lazy bind and complete detachment tests |
 | `gles_shader_program_attachment_detach_and_delete_pending_are_consistent` | missing | shader attachments and deferred deletion are not modeled | Strong attachment sets, delete-pending ownership and query tests |
@@ -1117,7 +1116,7 @@ pixels, and fails against the broken behavior. Do not add tests that read implem
 | `compositor_minimize_and_occlusion_control_native_visibility_and_frame_pacing` | contradictory | set_minimized is an empty handler and hidden/occluded presentation is unmodeled | Visibility state, presenter hide/occlusion hooks, reveal and pacing journey |
 | `compositor_presentation_feedback_uses_one_backend_evidence_record_per_output_frame` | contradictory | presenter timing/serial are discarded and MSC/60Hz/vsync are invented per surface | Shared per-output delivered-frame evidence across the paced tree |
 | `compositor_explicit_sync_waits_acquire_before_sampling_and_releases_after_gpu_completion` | missing | internal MTLEvent ordering is not a Wayland acquire/release fence contract | Explicit-sync/syncobj state plus Linux-fence↔MTLSharedEvent bridge journey |
-| `dmabuf_feedback_advertises_only_pairs_that_the_importer_can_accept` | contradictory | feedback advertises rejected LINEAR and id-zero private modifier pairs | Shared import-capability table and stable layout/identity separation |
+| `dmabuf_feedback_advertises_only_pairs_that_the_importer_can_accept` | partial | feedback now exposes only dd-tagged ARGB/XRGB pairs and rejects malformed/zero ids, but real IOSurface allocation generation and backing metadata are not represented | Share allocation-generation metadata with the importer and run positive/negative GPU-backed guest probes |
 | `compositor_validates_dmabuf_planes_flags_and_backing_metadata_before_success` | contradictory | import ignores plane layout, flags and real IOSurface metadata | Checked per-format plane rules plus allocation-generation metadata validation |
 | `smithay_shm_pool_validation_prevents_oversized_mapping_truncation_and_sigbus_escape` | partial | SIGBUS guard exists, but fd extent, invalid resize and checked bounds remain unsafe | fstat/caps/checked mapping plus isolated truncation-race regression |
 <!-- rendering-gap-ledger:end -->

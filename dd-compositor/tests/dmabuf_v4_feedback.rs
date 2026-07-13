@@ -9,9 +9,8 @@
 //! smithay fix (`third_party/smithay-0.7.0/src/utils/sealed_file.rs` shortens that object name), the
 //! feedback format-table now builds and `new_dmabuf_state` creates the feedback-carrying global.
 //!
-//! This test connects an in-process client, enumerates the registry, and asserts the advertised
-//! `zwp_linux_dmabuf_v1` version is >= 4. If the format-table build regressed (PSHMNAMLEN), the
-//! compositor's fallback advertises v3 and this assertion fails — the exact regression signal.
+//! This test connects a real wire client, binds feedback, receives its SCM_RIGHTS format-table fd,
+//! mmaps/parses it, and verifies the explicit 8-byte Linux device id and truthful modifier pairs.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -51,9 +50,6 @@ fn socketpair_nonblocking() -> (i32, i32) {
 
 #[test]
 fn dmabuf_global_advertises_v4_feedback() {
-    // The dmabuf global is advertised only under `DD_DISPLAY_DMABUF` (parity with legacy `server.rs`;
-    // the default software path must not advertise it — a `wl_shm` client mmap'ing the feedback
-    // format-table fd through the engine's macOS-shm→guest bridge SIGSEGVs). Opt in for this test.
     std::env::set_var("DD_DISPLAY_DMABUF", "1");
     let mut display: Display<DdState> = Display::new().unwrap();
     let mut dh = display.handle();
@@ -82,18 +78,18 @@ fn dmabuf_global_advertises_v4_feedback() {
             _ => {}
         }
     }
-    let mut globals: HashMap<String, u32> = HashMap::new();
+    let mut globals: HashMap<String, (u32, u32)> = HashMap::new();
     while let Some(m) = conn.next_message() {
         if m.object == registry && m.opcode == 0 {
             let mut r = m.reader();
-            let _name = r.u32();
+            let name = r.u32();
             let iface = r.string();
             let ver = r.u32();
-            globals.insert(iface, ver);
+            globals.insert(iface, (name, ver));
         }
     }
 
-    let ver = globals.get("zwp_linux_dmabuf_v1").copied().unwrap_or_else(|| {
+    let (name, ver) = globals.get("zwp_linux_dmabuf_v1").copied().unwrap_or_else(|| {
         panic!(
             "zwp_linux_dmabuf_v1 not advertised; globals = {:?}",
             globals.keys().collect::<Vec<_>>()
@@ -104,5 +100,83 @@ fn dmabuf_global_advertises_v4_feedback() {
         "zwp_linux_dmabuf_v1 must advertise version >= 4 (feedback) for the accelerated Chromium \
          path; got v{ver}. A v3 advertisement means the feedback format-table failed to build \
          (macOS PSHMNAMLEN regression?)."
+    );
+
+    // Bind v4 and request default feedback.
+    let dmabuf = 3u32;
+    let feedback = 4u32;
+    conn.send(
+        &Message::new(registry, 0)
+            .u32(name)
+            .string("zwp_linux_dmabuf_v1")
+            .u32(4)
+            .u32(dmabuf),
+    );
+    conn.send(&Message::new(dmabuf, 2).u32(feedback));
+    conn.flush().unwrap();
+    display.dispatch_clients(&mut state).unwrap();
+    display.flush_clients().unwrap();
+    loop {
+        match conn.fill().unwrap() {
+            0 | -1 => break,
+            _ => {}
+        }
+    }
+
+    let mut table_fd = None;
+    let mut table_size = None;
+    let mut main_device = None;
+    while let Some(m) = conn.next_message() {
+        if m.object != feedback {
+            continue;
+        }
+        match m.opcode {
+            1 => {
+                table_size = Some(m.reader().u32() as usize);
+                table_fd = conn.take_fd();
+            }
+            2 => main_device = Some(m.reader().array()),
+            _ => {}
+        }
+    }
+
+    let device = main_device.expect("feedback.main_device missing");
+    assert_eq!(device.len(), 8, "Linux dev_t feedback must always be u64");
+    assert_eq!(u64::from_le_bytes(device.try_into().unwrap()), (226u64 << 8) | 128);
+
+    let fd = table_fd.expect("feedback.format_table SCM_RIGHTS fd missing");
+    let size = table_size.expect("feedback.format_table size missing");
+    assert!(size >= 16 && size % 16 == 0);
+    let ptr = unsafe {
+        libc::mmap(
+            std::ptr::null_mut(),
+            size,
+            libc::PROT_READ,
+            libc::MAP_PRIVATE,
+            fd,
+            0,
+        )
+    };
+    assert_ne!(ptr, libc::MAP_FAILED, "format-table fd must be guest-mappable");
+    let bytes = unsafe { std::slice::from_raw_parts(ptr.cast::<u8>(), size) };
+    let entries: Vec<(u32, u64)> = bytes
+        .chunks_exact(16)
+        .map(|entry| {
+            (
+                u32::from_le_bytes(entry[0..4].try_into().unwrap()),
+                u64::from_le_bytes(entry[8..16].try_into().unwrap()),
+            )
+        })
+        .collect();
+    unsafe {
+        libc::munmap(ptr, size);
+        libc::close(fd);
+    }
+    let modifier = 0x6464u64 << 32;
+    assert!(entries.contains(&(0x3432_5241, modifier)));
+    assert!(entries.contains(&(0x3432_5258, modifier)));
+    assert!(
+        entries.iter().all(|(_, advertised)| *advertised == modifier),
+        "feedback must not advertise LINEAR or other pairs rejected by the importer: {entries:?}"
     );
 }

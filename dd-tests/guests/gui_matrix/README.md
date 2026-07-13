@@ -28,6 +28,8 @@ Run an individual probe or subset by passing names to the runner:
 
 ```sh
 ./run_gui_matrix.sh gui_xdg_ack gui_egl_textured_quad
+# Start the compositor with DD_DISPLAY_DMABUF=1, then:
+./run_gui_matrix.sh gui_dmabuf_feedback_guest
 GUI_MATRIX_TIMEOUT=10 ./run_gui_matrix.sh gui_dmabuf_frame gui_egl_resize_lifecycle
 DD_SHIM_ES3=1 ./run_gui_matrix.sh gui_egl_blit_framebuffer gui_egl_compositor_stress
 DD_SHIM_ES3=1 ./run_gui_matrix.sh gui_egl_texture_upload_formats
@@ -47,6 +49,7 @@ Probe intent:
 - `gui_frame_nil`: requests `wl_surface.frame` on an unbuffered xdg surface after ack. dd-display should not fire a callback without an attached buffer; if it does, frame pacing semantics are too eager.
 - `gui_shm_frame`: creates a `wl_shm` buffer, attach/damage/frame/commit, and waits for `wl_buffer.release` plus `wl_callback.done`. This proves the software first-frame path.
 - `gui_dmabuf_frame`: allocates a dd synthetic render-node buffer through `/dev/dri/renderD128`, fills it from the guest CPU mapping, attaches it through `zwp_linux_dmabuf_v1`, and waits for release plus frame done. This proves the accelerated presentation path without EGL or Chrome.
+- `gui_dmabuf_feedback_guest`: binds linux-dmabuf v4 over the real guest socket, receives and mmaps the SCM_RIGHTS format table, parses its pairs, and verifies the explicit 64-bit Linux `main_device`. It needs no GPU allocation; failure means feedback itself is unsafe or untruthful.
 - `gui_egl_window_swap`: performs the xdg handshake, creates a `wl_egl_window`, then drives `eglCreateWindowSurface`/`eglMakeCurrent`/`eglSwapBuffers` through the mounted EGL/GLES shim.
 - `gui_egl_textured_quad`: performs the xdg/EGL window path, uploads an RGBA checker texture, creates VBO/EBO buffers, and draws an indexed textured quad across multiple swaps. This exercises shader translation, texture upload, buffer residency, indexed draw, and swap-to-dmabuf presentation before running Chrome.
 - `gui_egl_resize_lifecycle`: creates an EGL window surface, swaps once, resizes the `wl_egl_window`, recreates the EGL surface at the resized dimensions, swaps again, then destroys and creates a second surface. This isolates resize bookkeeping and surface teardown/recreation from textured rendering.

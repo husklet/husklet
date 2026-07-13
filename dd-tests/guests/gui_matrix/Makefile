@@ -4,6 +4,7 @@ LDFLAGS ?=
 EGL_LIBS ?= -lwayland-egl -lEGL -lGLESv2
 
 RAW_PROBES := gui_xdg_ack gui_frame_nil gui_shm_frame gui_dmabuf_frame
+DMABUF_FEEDBACK_PROBES := gui_dmabuf_feedback_guest
 EGL_PROBES := gui_egl_window_swap gui_egl_surfaceless gui_egl_textured_quad gui_egl_resize_lifecycle \
 	gui_egl_fbo_texture_sample gui_egl_copytex_sample gui_egl_premul_blend gui_egl_scissored_quad \
 	gui_egl_vertex_formats gui_egl_vao_state gui_egl_dynamic_buffer_reuse chrome_coverage_path \
@@ -19,7 +20,7 @@ EGL_ES3_PROBES := gui_egl_blit_framebuffer gui_egl_compositor_stress gui_egl_tex
 EGL_RENDER_PROBES := gui_egl_clear_only_swap gui_egl_draw_count_sentinel gui_egl_fifth_sampler \
 	gui_egl_r8_alpha_orientation gui_egl_renderbuffer_msaa_resolve retained_frame_partial_load \
 	single_channel_texture_probe
-PROBES := $(RAW_PROBES) $(EGL_PROBES) $(EGL_ES3_PROBES) $(EGL_RENDER_PROBES)
+PROBES := $(RAW_PROBES) $(DMABUF_FEEDBACK_PROBES) $(EGL_PROBES) $(EGL_ES3_PROBES) $(EGL_RENDER_PROBES)
 
 .PHONY: all raw egl egl-es3 egl-render clean
 

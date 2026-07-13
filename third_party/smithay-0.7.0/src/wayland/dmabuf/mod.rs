@@ -224,9 +224,25 @@ use crate::{
 
 use super::{buffer::BufferHandler, compositor};
 
+/// Linux `dev_t` carried by linux-dmabuf feedback. This wire field is always an explicit 64-bit
+/// Linux value; using the host's `libc::dev_t` truncates it on macOS.
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+pub struct DmabufDeviceId(u64);
+
+impl DmabufDeviceId {
+    /// Construct an id from the Linux kernel's 64-bit `dev_t` value.
+    pub const fn from_linux_dev_t(value: u64) -> Self {
+        Self(value)
+    }
+
+    fn to_wire_bytes(self) -> [u8; 8] {
+        self.0.to_le_bytes()
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 struct DmabufFeedbackTranche {
-    target_device: libc::dev_t,
+    target_device: DmabufDeviceId,
     flags: zwp_linux_dmabuf_feedback_v1::TrancheFlags,
     indices: IndexSet<usize>,
 }
@@ -239,7 +255,7 @@ struct DmabufFeedbackFormatTable {
 
 #[derive(Debug)]
 struct DmabufFeedbackInner {
-    main_device: libc::dev_t,
+    main_device: DmabufDeviceId,
     format_table: DmabufFeedbackFormatTable,
     tranches: Vec<DmabufFeedbackTranche>,
 }
@@ -256,7 +272,7 @@ impl PartialEq for DmabufFeedbackInner {
 /// Builder for [`DmabufFeedback`]
 #[derive(Debug, Clone)]
 pub struct DmabufFeedbackBuilder {
-    main_device: libc::dev_t,
+    main_device: DmabufDeviceId,
     main_tranche: DmabufFeedbackTranche,
     formats: IndexSet<Format>,
     preferred_tranches: Vec<DmabufFeedbackTranche>,
@@ -312,7 +328,7 @@ impl DmabufFeedbackBuilder {
     ///
     /// Preference tranches can be added with [`DmabufFeedbackBuilder::add_preference_tranche`]
     /// and the main tranche will be put after all preference tranches
-    pub fn new(main_device: libc::dev_t, formats: impl IntoIterator<Item = Format>) -> Self {
+    pub fn new(main_device: DmabufDeviceId, formats: impl IntoIterator<Item = Format>) -> Self {
         let feedback_formats: IndexSet<Format> = formats.into_iter().collect();
         let format_indices: IndexSet<usize> = (0..feedback_formats.len()).collect();
         let main_tranche = DmabufFeedbackTranche {
@@ -340,7 +356,7 @@ impl DmabufFeedbackBuilder {
     /// with the same target device and flags this tranche will be skipped.
     pub fn add_preference_tranche(
         mut self,
-        target_device: libc::dev_t,
+        target_device: DmabufDeviceId,
         flags: Option<zwp_linux_dmabuf_feedback_v1::TrancheFlags>,
         formats: impl IntoIterator<Item = Format>,
     ) -> Self {
@@ -447,14 +463,14 @@ impl PartialEq for DmabufFeedback {
 impl DmabufFeedback {
     /// Send this feedback to the provided [`ZwpLinuxDmabufFeedbackV1`](zwp_linux_dmabuf_feedback_v1::ZwpLinuxDmabufFeedbackV1)
     pub fn send(&self, feedback: &zwp_linux_dmabuf_feedback_v1::ZwpLinuxDmabufFeedbackV1) {
-        feedback.main_device(self.0.main_device.to_ne_bytes().to_vec());
+        feedback.main_device(self.0.main_device.to_wire_bytes().to_vec());
         feedback.format_table(
             self.0.format_table.file.as_fd(),
             self.0.format_table.file.size() as u32,
         );
 
         for tranche in self.0.tranches.iter() {
-            feedback.tranche_target_device(tranche.target_device.to_ne_bytes().to_vec());
+            feedback.tranche_target_device(tranche.target_device.to_wire_bytes().to_vec());
             feedback.tranche_flags(tranche.flags);
             feedback.tranche_formats(
                 tranche
