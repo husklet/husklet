@@ -209,9 +209,9 @@ enum Bind {
 
 /// Map a dd-gpu `TextureFormat` to the Metal pixel format the backend can materialize as a sampled/render
 /// texture (color formats only; depth is handled separately).
-fn tex_pixel_format(f: dd_gpu::ir::TextureFormat) -> MTLPixelFormat {
+fn tex_pixel_format(f: dd_gpu::ir::TextureFormat) -> Result<MTLPixelFormat> {
     use dd_gpu::ir::TextureFormat as F;
-    match f {
+    Ok(match f {
         F::Rgba8Unorm => MTLPixelFormat::RGBA8Unorm,
         F::Rgba8Srgb => MTLPixelFormat::RGBA8Unorm_sRGB,
         F::Bgra8Unorm => MTLPixelFormat::BGRA8Unorm,
@@ -223,10 +223,15 @@ fn tex_pixel_format(f: dd_gpu::ir::TextureFormat) -> MTLPixelFormat {
         F::Rgba16Float => MTLPixelFormat::RGBA16Float,
         F::Rgba32Float => MTLPixelFormat::RGBA32Float,
         F::R32Float => MTLPixelFormat::R32Float,
-        // Depth formats are not color textures (handled via the depth attachment path); default the
-        // color slot to BGRA8.
-        F::Depth32Float | F::Depth24PlusStencil8 => MTLPixelFormat::BGRA8Unorm,
-    }
+        // Depth/stencil formats are NOT color textures: the color slot has no exact depth pixel
+        // format, and silently reinterpreting them as BGRA8 (the old fallback) changed the pixel
+        // semantics (channel layout/bit depth) and hid guest bugs. Depth attachments are materialized
+        // on the dedicated depth path (`depth_texture`, Depth32Float); reject a depth format here so an
+        // unsupported color mapping is a clean typed error rather than a silent cross-format remap.
+        F::Depth32Float | F::Depth24PlusStencil8 => {
+            return Err(GpuError::Invalid("depth format has no exact Metal color pixel format"))
+        }
+    })
 }
 
 fn texture_desc_key(desc: &TextureDesc) -> (u32, u32, u32, u32, u32, u32, u32) {
@@ -2254,7 +2259,7 @@ impl GpuBackend for MetalBackend {
         let sampled = desc.usage & texture_usage::SAMPLED != 0;
         let d = unsafe {
             MTLTextureDescriptor::texture2DDescriptorWithPixelFormat_width_height_mipmapped(
-                tex_pixel_format(desc.format),
+                tex_pixel_format(desc.format)?,
                 desc.width.max(1) as usize,
                 desc.height.max(1) as usize,
                 false,
@@ -2468,11 +2473,10 @@ impl GpuBackend for MetalBackend {
         pdesc.setFragmentFunction(Some(&ffn));
         unsafe {
             let ca = pdesc.colorAttachments().objectAtIndexedSubscript(0);
-            let color_format = desc
-                .color_targets
-                .first()
-                .map(|target| tex_pixel_format(target.format))
-                .unwrap_or(MTLPixelFormat::BGRA8Unorm);
+            let color_format = match desc.color_targets.first() {
+                Some(target) => tex_pixel_format(target.format)?,
+                None => MTLPixelFormat::BGRA8Unorm,
+            };
             ca.setPixelFormat(color_format);
             if let Some(target) = desc.color_targets.first() {
                 ca.setWriteMask(metal_write_mask(target.write_mask));
@@ -3687,5 +3691,35 @@ impl GpuBackend for MetalBackend {
             }
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod format_map_tests {
+    use super::tex_pixel_format;
+    use dd_gpu::ir::TextureFormat as F;
+    use objc2_metal::MTLPixelFormat;
+
+    // C30: every advertised color TextureFormat must map to its EXACT Metal pixel format, and a
+    // format that is genuinely not a color format (depth/stencil) must be a clean typed error — NOT
+    // get silently reinterpreted as BGRA8 (the old cross-format fallback that changed channel
+    // order/bit depth and hid guest bugs). This test is headless (pure mapping, no Metal device).
+    #[test]
+    fn color_formats_map_exactly_and_depth_is_rejected() {
+        // BGRA must stay BGRA — the fallback would have collapsed non-RGBA semantics.
+        assert!(tex_pixel_format(F::Bgra8Unorm).unwrap() == MTLPixelFormat::BGRA8Unorm);
+        assert!(tex_pixel_format(F::Bgra8Unorm).unwrap() != MTLPixelFormat::RGBA8Unorm);
+        assert!(tex_pixel_format(F::Bgra8Srgb).unwrap() == MTLPixelFormat::BGRA8Unorm_sRGB);
+        assert!(tex_pixel_format(F::Rgba8Unorm).unwrap() == MTLPixelFormat::RGBA8Unorm);
+        assert!(tex_pixel_format(F::Rgba8Srgb).unwrap() == MTLPixelFormat::RGBA8Unorm_sRGB);
+        assert!(tex_pixel_format(F::R8Unorm).unwrap() == MTLPixelFormat::R8Unorm);
+        assert!(tex_pixel_format(F::Rg8Unorm).unwrap() == MTLPixelFormat::RG8Unorm);
+        // Float formats keep their true width/layout, not a BGRA8 reinterpretation.
+        assert!(tex_pixel_format(F::Rgba16Float).unwrap() == MTLPixelFormat::RGBA16Float);
+        assert!(tex_pixel_format(F::Rgba32Float).unwrap() == MTLPixelFormat::RGBA32Float);
+        assert!(tex_pixel_format(F::R32Float).unwrap() == MTLPixelFormat::R32Float);
+        // Depth/stencil is not a color format: the old code returned MTLPixelFormat::BGRA8Unorm here.
+        assert!(tex_pixel_format(F::Depth32Float).is_err());
+        assert!(tex_pixel_format(F::Depth24PlusStencil8).is_err());
     }
 }
