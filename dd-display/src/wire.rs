@@ -409,6 +409,14 @@ mod tests {
     }
 
     #[test]
+    // Linux-only: macOS AF_UNIX enqueues an `SCM_RIGHTS` control message (the passed fd) even when the
+    // stream send buffer is completely full — `sendmsg` with ancillary data does not return EAGAIN under
+    // stream backpressure the way it does on Linux. So the "would-block WITH a queued fd" scenario this
+    // test constructs cannot occur on macOS (the fd always gets through). The production `flush` logic is
+    // platform-agnostic and the would-block path is still covered on macOS by the bytes-only companion
+    // test `flush_preserves_pending_message_after_would_block`; only fd preservation under backpressure is
+    // Linux-specific.
+    #[cfg(not(target_os = "macos"))]
     fn flush_preserves_pending_fd_after_would_block() {
         let (tx, rx) = nonblocking_pair();
         let mut conn = Conn::new(tx);
