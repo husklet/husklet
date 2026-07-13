@@ -20,13 +20,12 @@ macro_rules! cstr {
     };
 }
 
-/// `eglGetError` — last EGL error for the calling thread, cleared on read (gl_shim.c semantics).
+/// `eglGetError` — the calling thread's EGL error with first-error retention, cleared on read. The
+/// first error since the last query is kept (a later error does not overwrite it); reading resets it to
+/// EGL_SUCCESS. Per-thread, so one thread's error never leaks into another's.
 #[no_mangle]
 pub extern "C" fn eglGetError() -> i32 {
-    let mut e = egl();
-    let err = e.error;
-    e.error = EGL_SUCCESS;
-    err
+    crate::state::egl_take_error()
 }
 
 /// `eglQueryString` — vendor/version/APIs/extensions. Mirrors gl_shim.c, including the split client- vs
@@ -184,13 +183,14 @@ pub extern "C" fn eglGetConfigAttrib(_dpy: *mut c_void, _config: *mut c_void, at
 // ===================================================================================================
 
 /// `eglCreateContext` — validates the requested client version against the shim's max (ES3 iff
-/// `DD_SHIM_ES3`), records it, and returns a context handle. On too-high a request it sets
-/// EGL_BAD_MATCH and returns EGL_NO_CONTEXT (null), exactly as gl_shim.c.
+/// `DD_SHIM_ES3`) and returns a UNIQUE context handle. If `share` is a live context, the new context
+/// JOINS that context's share group (shared GL object namespace); otherwise it gets an independent
+/// group. On too-high a version request it sets EGL_BAD_MATCH and returns EGL_NO_CONTEXT (null).
 #[no_mangle]
 pub extern "C" fn eglCreateContext(
     _dpy: *mut c_void,
     _config: *mut c_void,
-    _share: *mut c_void,
+    share: *mut c_void,
     attrib_list: *const i32,
 ) -> *mut c_void {
     let (mut req_major, mut req_minor) = (1i32, 0i32);
@@ -213,39 +213,47 @@ pub extern "C" fn eglCreateContext(
     let max_major = if shim_es3() { 3 } else { 2 };
     let max_minor = 0;
     if req_major > max_major || (req_major == max_major && req_minor > max_minor) {
-        egl().error = EGL_BAD_MATCH;
+        crate::state::egl_set_error(EGL_BAD_MATCH);
         return core::ptr::null_mut(); // EGL_NO_CONTEXT
     }
-    {
-        let mut e = egl();
-        e.ctx_major = req_major;
-        e.ctx_minor = req_minor;
+    crate::state::egl_create_context(share, req_major, req_minor)
+}
+
+/// `eglDestroyContext` — free a live context handle (its share group is retained for sibling contexts).
+/// An unknown handle sets EGL_BAD_CONTEXT.
+#[no_mangle]
+pub extern "C" fn eglDestroyContext(_dpy: *mut c_void, ctx: *mut c_void) -> u32 {
+    if crate::state::egl_destroy_context(ctx) {
+        EGL_TRUE
+    } else {
+        crate::state::egl_set_error(EGL_BAD_CONTEXT);
+        EGL_FALSE
     }
-    1 as *mut c_void
 }
 
+/// `eglMakeCurrent` — bind `ctx` as the CALLING THREAD's current context (per-thread current, so
+/// distinct threads may be current on distinct contexts concurrently). A null context unbinds. An
+/// unknown context sets EGL_BAD_CONTEXT and fails.
 #[no_mangle]
-pub extern "C" fn eglDestroyContext(_dpy: *mut c_void, _ctx: *mut c_void) -> u32 {
-    EGL_TRUE
+pub extern "C" fn eglMakeCurrent(_dpy: *mut c_void, _draw: *mut c_void, _read: *mut c_void, ctx: *mut c_void) -> u32 {
+    if crate::state::egl_make_current(ctx) {
+        EGL_TRUE
+    } else {
+        crate::state::egl_set_error(EGL_BAD_CONTEXT);
+        EGL_FALSE
+    }
 }
 
-/// `eglMakeCurrent` — single implicit context; always succeeds (no per-surface bring-up here).
+/// `eglQueryContext` — client type/version of the given context handle.
 #[no_mangle]
-pub extern "C" fn eglMakeCurrent(_dpy: *mut c_void, _draw: *mut c_void, _read: *mut c_void, _ctx: *mut c_void) -> u32 {
-    EGL_TRUE
-}
-
-/// `eglQueryContext` — client type/version of the (single) context.
-#[no_mangle]
-pub extern "C" fn eglQueryContext(_dpy: *mut c_void, _ctx: *mut c_void, attribute: i32, value: *mut i32) -> u32 {
+pub extern "C" fn eglQueryContext(_dpy: *mut c_void, ctx: *mut c_void, attribute: i32, value: *mut i32) -> u32 {
     if value.is_null() {
         return EGL_FALSE;
     }
-    let e = egl();
     let v = match attribute {
         EGL_CONTEXT_CLIENT_TYPE => EGL_OPENGL_ES_API as i32,
-        EGL_CONTEXT_CLIENT_VERSION => e.ctx_major,
-        EGL_CONTEXT_MINOR_VERSION_KHR => e.ctx_minor,
+        EGL_CONTEXT_CLIENT_VERSION => crate::state::egl_ctx_major(ctx),
+        EGL_CONTEXT_MINOR_VERSION_KHR => crate::state::egl_ctx_minor(ctx),
         _ => 0,
     };
     unsafe { *value = v };
@@ -300,17 +308,28 @@ pub extern "C" fn eglSwapInterval(_dpy: *mut c_void, _interval: i32) -> u32 {
 
 #[no_mangle]
 pub extern "C" fn eglGetCurrentSurface(_readdraw: i32) -> *mut c_void {
-    1 as *mut c_void
+    // A surface is meaningful only while a context is current on this thread.
+    if crate::state::egl_current_context().is_null() {
+        core::ptr::null_mut()
+    } else {
+        1 as *mut c_void
+    }
 }
 
+/// `eglGetCurrentDisplay` — the display bound to THIS thread's current context (EGL_NO_DISPLAY if none).
 #[no_mangle]
 pub extern "C" fn eglGetCurrentDisplay() -> *mut c_void {
-    1 as *mut c_void
+    if crate::state::egl_current_context().is_null() {
+        core::ptr::null_mut() // EGL_NO_DISPLAY
+    } else {
+        1 as *mut c_void
+    }
 }
 
+/// `eglGetCurrentContext` — THIS thread's current context handle (EGL_NO_CONTEXT if none).
 #[no_mangle]
 pub extern "C" fn eglGetCurrentContext() -> *mut c_void {
-    1 as *mut c_void
+    crate::state::egl_current_context()
 }
 
 #[no_mangle]

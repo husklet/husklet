@@ -106,11 +106,10 @@ pub fn fail_gl(err: u32) {
     crate::state::set_gl_error(err);
 }
 
-/// Set the EGL error for a stub. EGL semantics: `eglGetError` reports the last EGL call's status, so
-/// this overwrites unconditionally.
+/// Set the EGL error for a stub (per-thread, first-error retention; see `state::egl_set_error`).
 #[inline]
 pub fn fail_egl(err: i32) {
-    crate::state::egl().error = err;
+    crate::state::egl_set_error(err);
 }
 
 fn strict_abort(name: &'static str) -> ! {
@@ -120,10 +119,8 @@ fn strict_abort(name: &'static str) -> ! {
         std::process::abort();
     }
     let recent: Vec<&str> = history().lock().map(|h| h.iter().copied().collect()).unwrap_or_default();
-    let (major, minor) = {
-        let e = crate::state::egl();
-        (e.ctx_major, e.ctx_minor)
-    };
+    let ctx = crate::state::egl_current_context();
+    let (major, minor) = (crate::state::egl_ctx_major(ctx), crate::state::egl_ctx_minor(ctx));
     eprintln!("========================================================================");
     eprintln!("[dd-shim-gl] DD_SHIM_STRICT: aborting on unsupported entry point");
     eprintln!("  command : {name}");

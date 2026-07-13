@@ -6,6 +6,7 @@
 //! Storage mirrors gl_shim.c exactly (fixed slot tables, ids == slot index from 1, same defaults, same
 //! `gen` dirty-counters) so the eventual IR lowering is byte-equivalent.
 
+use core::ffi::c_void;
 use std::sync::{Mutex, MutexGuard, OnceLock};
 
 use crate::glconst::*;
@@ -936,24 +937,175 @@ impl GlState {
     }
 }
 
-/// The small EGL-side state (context version + last error). Kept separate from `GlState`.
+/// The small EGL-side state that is genuinely process-global (the single implicit window surface's
+/// logical size). Per-context version + per-thread error/current live in the context model below.
 pub struct EglState {
-    pub error: i32,
-    pub ctx_major: i32,
-    pub ctx_minor: i32,
     pub surface_logical_w: i32,
     pub surface_logical_h: i32,
 }
 
 impl Default for EglState {
     fn default() -> Self {
-        EglState { error: EGL_SUCCESS, ctx_major: 2, ctx_minor: 0, surface_logical_w: 0, surface_logical_h: 0 }
+        EglState { surface_logical_w: 0, surface_logical_h: 0 }
     }
 }
 
-fn gl_cell() -> &'static Mutex<GlState> {
+// ===================================================================================================
+// Typed EGL context / share-group model (audit §9.3)
+//
+// `eglCreateContext` returns a UNIQUE handle (the address of a heap `EglCtx`). Each context references a
+// *share group* — a `GlState` (the GL object namespace + bindings) shared by every context created with
+// that group as `share_context`. Unrelated contexts get independent groups, so their objects never
+// alias. The CURRENT context is per-thread (`CURRENT_CTX`), so two threads can be current on different
+// contexts concurrently; `gl()` resolves to the calling thread's context's group.
+//
+// To keep every `gl()` caller returning a `'static` guard, each group's `Mutex<GlState>` is leaked
+// (groups are few and live for the process). The very first standalone context reuses the process
+// DEFAULT group, so a single-context app (and the byte-parity harness) behaves exactly as before.
+// ===================================================================================================
+
+/// One EGL context: a unique handle whose object namespace is its `group`.
+pub struct EglCtx {
+    pub group: &'static Mutex<GlState>,
+    pub major: i32,
+    pub minor: i32,
+}
+
+struct Registry {
+    live: std::collections::HashSet<usize>,
+    default_claimed: bool,
+}
+
+fn registry() -> &'static Mutex<Registry> {
+    static R: OnceLock<Mutex<Registry>> = OnceLock::new();
+    R.get_or_init(|| Mutex::new(Registry { live: std::collections::HashSet::new(), default_claimed: false }))
+}
+
+/// The process DEFAULT share group — the single global `GlState` the shim used before the context
+/// model, reused by the first standalone context and by any `gl()` call made with no current context
+/// (existing unit tests, the resource lowering path).
+fn default_group() -> &'static Mutex<GlState> {
     static S: OnceLock<Mutex<GlState>> = OnceLock::new();
     S.get_or_init(|| Mutex::new(GlState::default()))
+}
+
+fn new_group() -> &'static Mutex<GlState> {
+    Box::leak(Box::new(Mutex::new(GlState::default())))
+}
+
+thread_local! {
+    /// The calling thread's current `EglCtx` (null == EGL_NO_CONTEXT).
+    static CURRENT_CTX: std::cell::Cell<*mut EglCtx> = const { std::cell::Cell::new(core::ptr::null_mut()) };
+    /// The calling thread's EGL error (first-error retention, cleared on `eglGetError`).
+    static EGL_ERROR: std::cell::Cell<i32> = const { std::cell::Cell::new(0x3000 /* EGL_SUCCESS */) };
+}
+
+/// The share group backing GL calls on this thread: the current context's group, or the default group
+/// when no context is current.
+fn current_group() -> &'static Mutex<GlState> {
+    let c = CURRENT_CTX.with(|c| c.get());
+    if c.is_null() {
+        default_group()
+    } else {
+        unsafe { (*c).group }
+    }
+}
+
+/// Create a context. `share` (if a live context handle) joins that context's share group; otherwise a
+/// fresh group is allocated — except the very first standalone context, which reuses the default group.
+pub fn egl_create_context(share: *mut c_void, major: i32, minor: i32) -> *mut c_void {
+    let mut reg = registry().lock().unwrap_or_else(|e| e.into_inner());
+    let group: &'static Mutex<GlState> = if !share.is_null() && reg.live.contains(&(share as usize)) {
+        unsafe { (*(share as *mut EglCtx)).group }
+    } else if !reg.default_claimed {
+        reg.default_claimed = true;
+        default_group()
+    } else {
+        new_group()
+    };
+    let ctx = Box::into_raw(Box::new(EglCtx { group, major, minor }));
+    reg.live.insert(ctx as usize);
+    ctx as *mut c_void
+}
+
+/// Whether `ctx` is a live context handle.
+pub fn egl_ctx_is_live(ctx: *mut c_void) -> bool {
+    registry().lock().unwrap_or_else(|e| e.into_inner()).live.contains(&(ctx as usize))
+}
+
+/// Set the calling thread's current context (null == unbind). Returns false only for a non-live,
+/// non-null handle.
+pub fn egl_make_current(ctx: *mut c_void) -> bool {
+    if ctx.is_null() {
+        CURRENT_CTX.with(|c| c.set(core::ptr::null_mut()));
+        return true;
+    }
+    if !egl_ctx_is_live(ctx) {
+        return false;
+    }
+    CURRENT_CTX.with(|c| c.set(ctx as *mut EglCtx));
+    true
+}
+
+/// The calling thread's current context handle (null == EGL_NO_CONTEXT).
+pub fn egl_current_context() -> *mut c_void {
+    CURRENT_CTX.with(|c| c.get()) as *mut c_void
+}
+
+/// Client major version of a context handle (or the current context if `ctx` is null), defaulting to 2.
+pub fn egl_ctx_major(ctx: *mut c_void) -> i32 {
+    let h = if ctx.is_null() { egl_current_context() } else { ctx };
+    if !h.is_null() && egl_ctx_is_live(h) {
+        unsafe { (*(h as *mut EglCtx)).major }
+    } else {
+        2
+    }
+}
+
+/// Client minor version of a context handle (or the current context if `ctx` is null), defaulting to 0.
+pub fn egl_ctx_minor(ctx: *mut c_void) -> i32 {
+    let h = if ctx.is_null() { egl_current_context() } else { ctx };
+    if !h.is_null() && egl_ctx_is_live(h) {
+        unsafe { (*(h as *mut EglCtx)).minor }
+    } else {
+        0
+    }
+}
+
+/// Destroy a context: drop it from the live set (unbinding this thread if it was current) and free it.
+/// The share group is intentionally retained (leaked) since sibling contexts may still reference it.
+pub fn egl_destroy_context(ctx: *mut c_void) -> bool {
+    if ctx.is_null() {
+        return false;
+    }
+    let removed = registry().lock().unwrap_or_else(|e| e.into_inner()).live.remove(&(ctx as usize));
+    if !removed {
+        return false;
+    }
+    if egl_current_context() == ctx {
+        CURRENT_CTX.with(|c| c.set(core::ptr::null_mut()));
+    }
+    unsafe { drop(Box::from_raw(ctx as *mut EglCtx)) };
+    true
+}
+
+/// Raise the calling thread's EGL error, honoring first-error retention (the first error since the last
+/// `eglGetError` is kept; later ones are dropped until the flag is read).
+pub fn egl_set_error(err: i32) {
+    EGL_ERROR.with(|c| {
+        if c.get() == EGL_SUCCESS {
+            c.set(err);
+        }
+    });
+}
+
+/// Read-and-clear the calling thread's EGL error (`eglGetError`).
+pub fn egl_take_error() -> i32 {
+    EGL_ERROR.with(|c| {
+        let e = c.get();
+        c.set(EGL_SUCCESS);
+        e
+    })
 }
 
 fn egl_cell() -> &'static Mutex<EglState> {
@@ -961,10 +1113,10 @@ fn egl_cell() -> &'static Mutex<EglState> {
     S.get_or_init(|| Mutex::new(EglState::default()))
 }
 
-/// Lock the global GL state. GLES is single-context/single-threaded per app; a poisoned lock (only
-/// possible after a panic, which aborts at the FFI boundary anyway) is unreachable in practice.
+/// Lock the calling thread's current GL share-group state (see [`current_group`]). A poisoned lock
+/// (only possible after a panic, which aborts at the FFI boundary anyway) is unreachable in practice.
 pub fn gl() -> MutexGuard<'static, GlState> {
-    gl_cell().lock().unwrap_or_else(|e| e.into_inner())
+    current_group().lock().unwrap_or_else(|e| e.into_inner())
 }
 
 pub fn egl() -> MutexGuard<'static, EglState> {

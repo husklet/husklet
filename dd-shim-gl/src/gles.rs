@@ -43,7 +43,7 @@ pub extern "C" fn glGetError() -> u32 {
 /// (only accepted under `DD_SHIM_ES3`) advertises the ES3 identity strings.
 #[no_mangle]
 pub extern "C" fn glGetString(name: u32) -> *const u8 {
-    let es3 = crate::state::egl().ctx_major >= 3;
+    let es3 = crate::state::egl_ctx_major(core::ptr::null_mut()) >= 3;
     let s: *const c_char = match name {
         0x1F02 => {
             if es3 {
@@ -91,6 +91,12 @@ pub extern "C" fn glClearColor(r: f32, g: f32, b: f32, a: f32) {
 
 #[no_mangle]
 pub extern "C" fn glViewport(x: i32, y: i32, w: i32, h: i32) {
+    // GL_INVALID_VALUE on negative dimensions; the previous viewport is left UNMODIFIED (no state
+    // mutation on a rejected call).
+    if w < 0 || h < 0 {
+        crate::state::set_gl_error(GL_INVALID_VALUE);
+        return;
+    }
     gl().viewport = [x, y, w, h];
 }
 
@@ -107,7 +113,11 @@ pub extern "C" fn glEnable(cap: u32) {
         GL_BLEND => s.blend = true,
         GL_CULL_FACE => s.cull = true,
         GL_SCISSOR_TEST => s.scissor_enabled = true,
-        _ => {}
+        // An unknown capability is GL_INVALID_ENUM and must NOT alias a real enable bit.
+        _ => {
+            drop(s);
+            crate::state::set_gl_error(GL_INVALID_ENUM);
+        }
     }
 }
 
@@ -119,7 +129,10 @@ pub extern "C" fn glDisable(cap: u32) {
         GL_BLEND => s.blend = false,
         GL_CULL_FACE => s.cull = false,
         GL_SCISSOR_TEST => s.scissor_enabled = false,
-        _ => {}
+        _ => {
+            drop(s);
+            crate::state::set_gl_error(GL_INVALID_ENUM);
+        }
     }
 }
 
@@ -254,7 +267,8 @@ pub extern "C" fn glGetIntegerv(pname: u32, v: *mut i32) {
         return;
     }
     let s = gl();
-    let e = crate::state::egl();
+    let ctx_major = crate::state::egl_ctx_major(core::ptr::null_mut());
+    let ctx_minor = crate::state::egl_ctx_minor(core::ptr::null_mut());
     unsafe {
         match pname {
             GL_MAX_TEXTURE_SIZE | GL_MAX_CUBE_MAP_TEXTURE_SIZE | GL_MAX_RENDERBUFFER_SIZE => *v = 4096,
@@ -273,8 +287,8 @@ pub extern "C" fn glGetIntegerv(pname: u32, v: *mut i32) {
             GL_DRAW_FRAMEBUFFER_BINDING => *v = s.draw_fbo as i32,
             GL_READ_FRAMEBUFFER_BINDING => *v = s.read_fbo as i32,
             GL_MAX_SAMPLES_ES3 => *v = 4,
-            GL_MAJOR_VERSION => *v = e.ctx_major,
-            GL_MINOR_VERSION => *v = e.ctx_minor,
+            GL_MAJOR_VERSION => *v = ctx_major,
+            GL_MINOR_VERSION => *v = ctx_minor,
             GL_NUM_EXTENSIONS => *v = crate::ADVERTISED_GL_EXTENSION_COUNT as i32, // from the inventory
             GL_DEPTH_BITS => *v = 24,
             GL_STENCIL_BITS => *v = 8,
@@ -324,7 +338,12 @@ pub extern "C" fn glGetBooleanv(_pname: u32, v: *mut u8) {
 
 #[no_mangle]
 pub extern "C" fn glGenBuffers(n: i32, out: *mut u32) {
-    if out.is_null() || n < 0 {
+    // A negative count is GL_INVALID_VALUE; the output must be left untouched (no sentinel write).
+    if n < 0 {
+        crate::state::set_gl_error(GL_INVALID_VALUE);
+        return;
+    }
+    if out.is_null() {
         return;
     }
     let mut s = gl();
@@ -352,10 +371,15 @@ pub extern "C" fn glDeleteBuffers(n: i32, ids: *const u32) {
 
 #[no_mangle]
 pub extern "C" fn glBindBuffer(target: u32, buffer: u32) {
+    // An invalid target is GL_INVALID_ENUM and must neither bind the object nor mutate any binding.
+    if target != GL_ARRAY_BUFFER && target != GL_ELEMENT_ARRAY_BUFFER {
+        crate::state::set_gl_error(GL_INVALID_ENUM);
+        return;
+    }
     let mut s = gl();
     if target == GL_ARRAY_BUFFER {
         s.arr_buf = buffer;
-    } else if target == GL_ELEMENT_ARRAY_BUFFER {
+    } else {
         s.elem_buf = buffer;
         s.vao_store_current();
     }
@@ -1011,11 +1035,15 @@ fn uni_write(loc: i32, data: &[u8]) {
         return;
     }
     let mut s = gl();
-    s.ubuf[loc..loc + n].copy_from_slice(data);
+    // glUniform* with no program in use is GL_INVALID_OPERATION and performs no write.
     let cp = s.cur_prog as usize;
-    if cp < MAXPROG && s.prog[cp].used {
-        s.prog[cp].ubuf[loc..loc + n].copy_from_slice(data);
+    if s.cur_prog == 0 || cp >= MAXPROG || !s.prog[cp].used {
+        drop(s);
+        crate::state::set_gl_error(GL_INVALID_OPERATION);
+        return;
     }
+    s.ubuf[loc..loc + n].copy_from_slice(data);
+    s.prog[cp].ubuf[loc..loc + n].copy_from_slice(data);
 }
 
 fn f_bytes(vals: &[f32]) -> Vec<u8> {

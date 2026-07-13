@@ -42,6 +42,35 @@ the oracle, breaking apps that query `glGetError` after these): UBO binding (`gl
 params (`glBindSampler`/`glSamplerParameter*`), query/transform-feedback begin/end/bind, and
 `glProgramBinary`/`glShaderBinary`.
 
+## Object / context model & error lifecycle (audit §9.3)
+
+The GL/EGL object model is a typed share-group design rather than one process-global mutex + a sentinel
+context handle. This turns two RED conformance probes green (both pass unmodified against the built
+`libEGL.so.1`):
+
+- **`gui_egl_error_lifecycle`** — `glGetError` retains the FIRST error since the last read (a later
+  error does not overwrite it), clears to `GL_NO_ERROR` on read, and an invalid call sets the error
+  WITHOUT mutating GL state. Covered: `glViewport` negative dims → `GL_INVALID_VALUE` (viewport
+  unchanged), `glEnable`/`glDisable` unknown cap → `GL_INVALID_ENUM`, `glBindBuffer` bad target →
+  `GL_INVALID_ENUM` (binding unchanged), `glGenBuffers(-1)` → `GL_INVALID_VALUE` (output untouched),
+  `glUniform*` with no current program → `GL_INVALID_OPERATION`. `eglGetError` has the same per-thread
+  first-error retention + clear-on-read.
+- **`gui_egl_sharegroup_threads`** — `eglCreateContext` returns a UNIQUE handle per context; a
+  `share_context` joins a **ShareGroup** whose GL objects (textures/buffers/programs/shaders) are shared
+  across its member contexts; unrelated contexts are ISOLATED (an object in one group is invisible in
+  another, even at the same numeric name); cross-context deletion works within a group; `eglMakeCurrent`
+  binds the CALLING THREAD's current context (per-thread, so two threads can be current on two contexts
+  at once), and `eglGetCurrentContext`/`eglGetCurrentDisplay` report per-thread state (EGL_NO_CONTEXT /
+  EGL_NO_DISPLAY when unbound).
+
+Model (`state.rs`): each `EglCtx` handle references a `&'static Mutex<GlState>` share group; the current
+context is a thread-local; `gl()` resolves to the calling thread's context group (the process default
+group when no context is current — so single-context apps and the byte-parity harness are unchanged).
+The draw/resource IR lowering reads that `GlState` exactly as before, so **all byte-parity gates stay
+byte-identical** (this is guest-side object-model state; the IR is untouched). The affected entry points
+were already `full`; this pass makes their object/error/context semantics correct, so counts are
+unchanged.
+
 ## Truthful-failure & debugging controls
 
 - **Default (lenient):** stubs raise the GL/EGL error and initialize outputs, then return; execution
