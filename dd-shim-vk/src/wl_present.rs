@@ -43,10 +43,6 @@ struct WlInterface {
 unsafe impl Sync for WlInterface {}
 unsafe impl Sync for WlMessage {}
 
-// SAFETY of the static tables: all pointer fields are to `'static` C strings / other static tables.
-struct StaticPtr<T>(*const T);
-unsafe impl<T> Sync for StaticPtr<T> {}
-
 const WL_MARSHAL_FLAG_DESTROY: u32 = 1;
 
 // Opcodes (from the wayland / linux-dmabuf protocol).
