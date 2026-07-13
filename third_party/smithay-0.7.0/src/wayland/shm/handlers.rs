@@ -49,8 +49,8 @@ where
     D: Dispatch<WlShm, ()> + Dispatch<WlShmPool, ShmPoolUserData> + ShmHandler + 'static,
 {
     fn request(
-        _state: &mut D,
-        _client: &wayland_server::Client,
+        state: &mut D,
+        client: &wayland_server::Client,
         shm: &WlShm,
         request: wl_shm::Request,
         _data: &(),
@@ -70,7 +70,12 @@ where
             return;
         }
 
-        let mmap_pool = match Pool::new(fd, NonZeroUsize::try_from(size as usize).unwrap()) {
+        let size = size as usize;
+        let Some(quota) = state.new_shm_pool_quota(&client.id(), size) else {
+            shm.post_error(Error::InvalidFd, "wl_shm_pool exceeds render budget");
+            return;
+        };
+        let mmap_pool = match Pool::new(fd, NonZeroUsize::new(size).unwrap(), quota) {
             Ok(p) => p,
             Err(fd) => {
                 shm.post_error(
@@ -125,24 +130,28 @@ where
                 format,
             } => {
                 // Validate client parameters
+                let bpp = wl_bytes_per_pixel(format);
+                let checked_end = || -> Option<usize> {
+                    let offset = usize::try_from(offset).ok()?;
+                    let width = usize::try_from(width).ok()?;
+                    let height = usize::try_from(height).ok()?;
+                    let stride = usize::try_from(stride).ok()?;
+                    let bpp = usize::try_from(bpp).ok()?;
+                    if width == 0 || height == 0 || bpp == 0 {
+                        return None;
+                    }
+                    let row_bytes = width.checked_mul(bpp)?;
+                    if stride < row_bytes {
+                        return None;
+                    }
+                    offset.checked_add((height - 1).checked_mul(stride)?)?.checked_add(row_bytes)
+                };
                 let message = if offset < 0 {
                     Some("offset must not be negative".to_string())
                 } else if width <= 0 || height <= 0 {
                     Some(format!("invalid width or height ({}x{})", width, height))
-                } else if stride.checked_div(wl_bytes_per_pixel(format)).unwrap_or(0) < width {
-                    // stride is in bytes...
-                    Some(format!(
-                        "width must not be larger than stride (width {}, stride {})",
-                        width,
-                        stride.checked_div(wl_bytes_per_pixel(format)).unwrap_or(0)
-                    ))
-                } else if (i32::MAX / stride) < height {
-                    Some(format!(
-                        "height is too large for stride (max {})",
-                        i32::MAX / stride
-                    ))
-                } else if offset > arc_pool.size() as i32 - (stride * height) {
-                    Some("offset is too large".to_string())
+                } else if checked_end().is_none_or(|end| end > arc_pool.size()) {
+                    Some("buffer geometry exceeds wl_shm_pool bounds".to_string())
                 } else {
                     None
                 };
@@ -190,12 +199,21 @@ where
             Request::Resize { size } => {
                 if size <= 0 {
                     pool.post_error(wl_shm::Error::InvalidFd, "invalid wl_shm_pool size");
+                    return;
                 }
 
                 if let Err(err) = arc_pool.resize(NonZeroUsize::try_from(size as usize).unwrap()) {
                     match err {
                         ResizeError::InvalidSize => {
                             pool.post_error(wl_shm::Error::InvalidFd, "cannot shrink wl_shm_pool");
+                        }
+
+                        ResizeError::BackingTooSmall => {
+                            pool.post_error(wl_shm::Error::InvalidFd, "fd backing is smaller than requested pool");
+                        }
+
+                        ResizeError::BudgetExceeded => {
+                            pool.post_error(wl_shm::Error::InvalidFd, "wl_shm_pool exceeds render budget");
                         }
 
                         ResizeError::MremapFailed => {

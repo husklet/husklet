@@ -127,6 +127,36 @@ fn socketpair_nonblocking() -> (RawFd, RawFd) {
     }
     (sv[0], sv[1])
 }
+
+#[test]
+fn shm_truncation_sigbus_is_contained_in_an_isolated_child() {
+    use std::ffi::CString;
+    use std::num::NonZeroUsize;
+    use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
+
+    let name = CString::new("dd-shm-sigbus-child").unwrap();
+    let raw = unsafe { libc::memfd_create(name.as_ptr(), 0) };
+    assert!(raw >= 0);
+    assert_eq!(unsafe { libc::ftruncate(raw, 4096) }, 0);
+    let fd = unsafe { OwnedFd::from_raw_fd(raw) };
+    let child_fd = fd.try_clone().unwrap();
+    let pid = unsafe { libc::fork() };
+    assert!(pid >= 0);
+    if pid == 0 {
+        let child_owned = unsafe { OwnedFd::from_raw_fd(child_fd.as_raw_fd()) };
+        let contained = smithay::wayland::shm::truncate_and_probe_pool(
+            child_owned,
+            NonZeroUsize::new(4096).unwrap(),
+        );
+        unsafe { libc::_exit(if contained { 0 } else { 3 }) };
+    }
+    drop(child_fd);
+    drop(fd);
+    let mut status = 0;
+    assert_eq!(unsafe { libc::waitpid(pid, &mut status, 0) }, pid);
+    assert!(libc::WIFEXITED(status));
+    assert_eq!(libc::WEXITSTATUS(status), 0);
+}
 #[test]
 fn compositor_surface_identity_is_client_owned_generational_and_teardown_is_exact_once() {
     let mut display: Display<DdState> = Display::new().unwrap();
@@ -482,6 +512,36 @@ fn compositor_survives_stress_disconnect_and_bogus_requests() {
     assert!(
         state.presenter.frame_count() > before,
         "client A must still present after an oversized-buffer client was rejected"
+    );
+
+    // ---- (5) A pool may not claim more bytes than its real fd backing. The old path mmap'd the
+    // declared extent and deferred the resulting SIGBUS to first access.
+    {
+        let mut f = connect(&mut display);
+        let freg = f.alloc();
+        f.conn.send(&Message::new(WL_DISPLAY, 1).u32(freg));
+        f.conn.flush().unwrap();
+        dispatch!();
+        f.drain();
+        let fshm = f.bind("wl_shm", 1);
+        f.conn.flush().unwrap();
+        dispatch!();
+        f.drain();
+        let mfd = dd_display::keymap::anon_fd_with(&[0u8; 15]).expect("16-byte fd");
+        let pool = f.alloc();
+        f.conn.send(&Message::new(fshm, 0).u32(pool).u32(4096));
+        f.conn.queue_fd(mfd);
+        f.conn.flush().unwrap();
+        unsafe { libc::close(mfd) };
+        dispatch!();
+    }
+    dispatch!();
+    let before = state.presenter.frame_count();
+    commit_buffer(&mut a, shm, a_surface, 8, 6);
+    dispatch!();
+    assert!(
+        state.presenter.frame_count() > before,
+        "undersized shm backing must disconnect only its owner"
     );
     let _ = a_top;
 }

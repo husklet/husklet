@@ -90,6 +90,14 @@ impl ShmHandler for DdState {
     fn shm_state(&self) -> &ShmState {
         &self.shm
     }
+
+    fn new_shm_pool_quota(
+        &mut self,
+        client: &smithay::reexports::wayland_server::backend::ClientId,
+        size: usize,
+    ) -> Option<Box<dyn smithay::wayland::shm::ShmPoolQuota>> {
+        self.reserve_shm_pool(client, size)
+    }
 }
 
 impl DdState {

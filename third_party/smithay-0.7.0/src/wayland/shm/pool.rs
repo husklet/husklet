@@ -4,7 +4,7 @@ use std::{
     cell::Cell,
     mem,
     num::NonZeroUsize,
-    os::unix::io::{AsFd, BorrowedFd, OwnedFd},
+    os::unix::io::{AsFd, AsRawFd, BorrowedFd, OwnedFd},
     ptr,
     sync::{
         mpsc::{channel, Sender},
@@ -45,15 +45,26 @@ thread_local!(static SIGBUS_GUARD: Cell<(*const MemMap, bool)> = const { Cell::n
 
 static OLD_SIGBUS_HANDLER: OnceLock<libc::sigaction> = OnceLock::new();
 
-#[derive(Debug)]
 pub struct Pool {
     inner: Option<InnerPool>,
 }
 
-#[derive(Debug)]
+impl std::fmt::Debug for Pool {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Pool").field("size", &self.size()).finish_non_exhaustive()
+    }
+}
+
 struct InnerPool {
     map: RwLock<MemMap>,
     fd: OwnedFd,
+    quota: Option<Box<dyn ShmPoolQuota>>,
+}
+
+/// Owner-bound accounting token retained for the lifetime of a mapped shm pool.
+pub trait ShmPoolQuota: Send + Sync {
+    /// Transactionally replace this pool's charged byte count.
+    fn resize(&self, new_size: usize) -> bool;
 }
 
 // SAFETY: The memmap is owned by the pool and content is only accessible via a reference.
@@ -63,12 +74,21 @@ unsafe impl Sync for InnerPool {}
 
 pub enum ResizeError {
     InvalidSize,
+    BackingTooSmall,
+    BudgetExceeded,
     MremapFailed,
 }
 
 impl InnerPool {
     #[instrument(level = "trace", skip_all, name = "wayland_shm")]
-    pub fn new(fd: OwnedFd, size: NonZeroUsize) -> Result<InnerPool, OwnedFd> {
+    pub fn new(
+        fd: OwnedFd,
+        size: NonZeroUsize,
+        quota: Box<dyn ShmPoolQuota>,
+    ) -> Result<InnerPool, OwnedFd> {
+        if !fd_supports_mapping(fd.as_fd(), size.into()) {
+            return Err(fd);
+        }
         let memmap = match MemMap::new(fd.as_fd(), size) {
             Ok(memmap) => memmap,
             Err(_) => {
@@ -79,6 +99,7 @@ impl InnerPool {
         Ok(InnerPool {
             map: RwLock::new(memmap),
             fd,
+            quota: Some(quota),
         })
     }
 
@@ -89,9 +110,19 @@ impl InnerPool {
         if oldsize > usize::from(newsize) {
             return Err(ResizeError::InvalidSize);
         }
+        if oldsize == usize::from(newsize) {
+            return Ok(());
+        }
+        if !fd_supports_mapping(self.fd.as_fd(), newsize.into()) {
+            return Err(ResizeError::BackingTooSmall);
+        }
+        if !self.quota.as_ref().unwrap().resize(newsize.into()) {
+            return Err(ResizeError::BudgetExceeded);
+        }
 
         trace!(fd = ?self.fd, oldsize = oldsize, newsize = ?newsize, "Resizing shm pool");
         guard.remap(self.fd.as_fd(), newsize).map_err(|()| {
+            let _ = self.quota.as_ref().unwrap().resize(oldsize);
             debug!(fd = ?self.fd, oldsize = oldsize, newsize = ?newsize, "SHM pool resize failed");
             ResizeError::MremapFailed
         })
@@ -173,8 +204,12 @@ impl InnerPool {
 }
 
 impl Pool {
-    pub fn new(fd: OwnedFd, size: NonZeroUsize) -> Result<Self, OwnedFd> {
-        InnerPool::new(fd, size).map(|p| Self { inner: Some(p) })
+    pub fn new(
+        fd: OwnedFd,
+        size: NonZeroUsize,
+        quota: Box<dyn ShmPoolQuota>,
+    ) -> Result<Self, OwnedFd> {
+        InnerPool::new(fd, size, quota).map(|p| Self { inner: Some(p) })
     }
 
     pub fn resize(&self, newsize: NonZeroUsize) -> Result<(), ResizeError> {
@@ -196,7 +231,10 @@ impl Pool {
 
 impl Drop for Pool {
     fn drop(&mut self) {
-        let _ = DROP_THIS.send(self.inner.take().unwrap());
+        let mut inner = self.inner.take().unwrap();
+        // Refund synchronously; only the potentially slow unmap/fd close goes to the worker.
+        drop(inner.quota.take());
+        let _ = DROP_THIS.send(inner);
     }
 }
 
@@ -218,23 +256,14 @@ impl MemMap {
         if self.ptr.is_null() {
             return Err(());
         }
-        // memunmap cannot fail, as we are unmapping a pre-existing map
-        let _ = unsafe { unmap(self.ptr, self.size) };
-        // remap the fd with the new size
-        match unsafe { map(fd, newsize) } {
-            Ok(ptr) => {
-                // update the parameters
-                self.ptr = ptr;
-                self.size = usize::from(newsize);
-                Ok(())
-            }
-            Err(()) => {
-                // set ourselves in an empty state
-                self.ptr = ptr::null_mut();
-                self.size = 0;
-                Err(())
-            }
-        }
+        // Map first, then swap: failure leaves the old valid mapping untouched.
+        let new_ptr = unsafe { map(fd, newsize) }?;
+        let old_ptr = self.ptr;
+        let old_size = self.size;
+        self.ptr = new_ptr;
+        self.size = usize::from(newsize);
+        let _ = unsafe { unmap(old_ptr, old_size) };
+        Ok(())
     }
 
     fn size(&self) -> usize {
@@ -248,6 +277,19 @@ impl MemMap {
     fn nullify(&self) -> Result<(), ()> {
         unsafe { nullify_map(self.ptr, self.size) }
     }
+}
+
+fn fd_supports_mapping(fd: BorrowedFd<'_>, size: usize) -> bool {
+    let mut stat = mem::MaybeUninit::<libc::stat>::zeroed();
+    if unsafe { libc::fstat(fd.as_raw_fd(), stat.as_mut_ptr()) } != 0 {
+        return false;
+    }
+    let stat = unsafe { stat.assume_init() };
+    if stat.st_size < 0 || (stat.st_size as u64) < size as u64 {
+        return false;
+    }
+    let flags = unsafe { libc::fcntl(fd.as_raw_fd(), libc::F_GETFL) };
+    flags >= 0 && (flags & libc::O_ACCMODE) != libc::O_RDONLY
 }
 
 impl Drop for MemMap {
@@ -367,4 +409,58 @@ unsafe fn siginfo_si_addr(info: *mut libc::siginfo_t) -> *mut libc::c_void {
 #[cfg(not(any(target_os = "linux", target_os = "android")))]
 unsafe fn siginfo_si_addr(info: *mut libc::siginfo_t) -> *mut libc::c_void {
     unsafe { (*info).si_addr as _ }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::{ffi::CString, os::fd::FromRawFd};
+
+    struct Unlimited;
+    impl ShmPoolQuota for Unlimited {
+        fn resize(&self, _new_size: usize) -> bool {
+            true
+        }
+    }
+
+    fn memfd(size: usize) -> OwnedFd {
+        let name = CString::new("smithay-shm-pool-test").unwrap();
+        let raw = unsafe { libc::memfd_create(name.as_ptr(), 0) };
+        assert!(raw >= 0);
+        assert_eq!(unsafe { libc::ftruncate(raw, size as libc::off_t) }, 0);
+        unsafe { OwnedFd::from_raw_fd(raw) }
+    }
+
+    #[test]
+    fn pool_rejects_short_backing_and_failed_resize_preserves_mapping() {
+        assert!(Pool::new(memfd(16), NonZeroUsize::new(32).unwrap(), Box::new(Unlimited)).is_err());
+        let pool = Pool::new(memfd(64), NonZeroUsize::new(32).unwrap(), Box::new(Unlimited)).unwrap();
+        assert!(matches!(pool.resize(NonZeroUsize::new(16).unwrap()), Err(ResizeError::InvalidSize)));
+        assert_eq!(pool.size(), 32);
+        assert!(matches!(pool.resize(NonZeroUsize::new(128).unwrap()), Err(ResizeError::BackingTooSmall)));
+        assert_eq!(pool.size(), 32);
+        assert!(pool.with_data(|ptr, len| unsafe { (*ptr, len) }).is_ok());
+    }
+
+    #[test]
+    fn truncation_sigbus_is_contained_in_an_isolated_child() {
+        let fd = memfd(4096);
+        let child_fd = fd.try_clone().unwrap();
+        let pid = unsafe { libc::fork() };
+        assert!(pid >= 0);
+        if pid == 0 {
+            let pool = Pool::new(child_fd, NonZeroUsize::new(4096).unwrap(), Box::new(Unlimited)).unwrap();
+            let raw = pool.inner.as_ref().unwrap().fd.as_raw_fd();
+            if unsafe { libc::ftruncate(raw, 0) } != 0 {
+                unsafe { libc::_exit(2) };
+            }
+            let result = pool.with_data(|ptr, len| unsafe { std::ptr::read_volatile(ptr.add(len - 1)) });
+            unsafe { libc::_exit(if result.is_err() { 0 } else { 3 }) };
+        }
+        drop(fd);
+        let mut status = 0;
+        assert_eq!(unsafe { libc::waitpid(pid, &mut status, 0) }, pid);
+        assert!(libc::WIFEXITED(status));
+        assert_eq!(libc::WEXITSTATUS(status), 0);
+    }
 }

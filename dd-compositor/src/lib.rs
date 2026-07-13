@@ -39,6 +39,7 @@
 //! link it). No guest/user install is ever required.
 
 use std::collections::{HashMap, HashSet, VecDeque};
+use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
 use dd_display::present::Presenter;
@@ -116,6 +117,8 @@ pub struct RenderLimits {
     pub retained_callbacks_global: usize,
     pub cpu_cache_bytes_per_client: usize,
     pub cpu_cache_bytes_global: usize,
+    pub shm_pool_bytes_per_client: usize,
+    pub shm_pool_bytes_global: usize,
 }
 
 impl Default for RenderLimits {
@@ -127,6 +130,8 @@ impl Default for RenderLimits {
             retained_callbacks_global: 32768,
             cpu_cache_bytes_per_client: 256 * 1024 * 1024,
             cpu_cache_bytes_global: 1024 * 1024 * 1024,
+            shm_pool_bytes_per_client: 256 * 1024 * 1024,
+            shm_pool_bytes_global: 1024 * 1024 * 1024,
         }
     }
 }
@@ -308,9 +313,59 @@ pub struct DdState {
     render_usage: HashMap<ClientId, RenderUsage>,
     global_render_usage: RenderUsage,
     render_limits: RenderLimits,
+    shm_budget: Arc<Mutex<ShmBudgetLedger>>,
     surface_buffer_uses: HashMap<u32, BufferUse>,
     retired_zero_copy_uses: Vec<BufferUse>,
     next_buffer_use_generation: u64,
+}
+
+#[derive(Default)]
+struct ShmBudgetLedger {
+    per_client: HashMap<ClientId, usize>,
+    global: usize,
+}
+
+struct DdShmPoolQuota {
+    ledger: Arc<Mutex<ShmBudgetLedger>>,
+    owner: ClientId,
+    size: Mutex<usize>,
+    per_client_limit: usize,
+    global_limit: usize,
+}
+
+impl smithay::wayland::shm::ShmPoolQuota for DdShmPoolQuota {
+    fn resize(&self, new_size: usize) -> bool {
+        let mut size = self.size.lock().unwrap();
+        let mut ledger = self.ledger.lock().unwrap();
+        let current_client = ledger.per_client.get(&self.owner).copied().unwrap_or(0);
+        let Some(next_client) = current_client.checked_sub(*size).and_then(|n| n.checked_add(new_size)) else {
+            return false;
+        };
+        let Some(next_global) = ledger.global.checked_sub(*size).and_then(|n| n.checked_add(new_size)) else {
+            return false;
+        };
+        if next_client > self.per_client_limit || next_global > self.global_limit {
+            return false;
+        }
+        ledger.per_client.insert(self.owner.clone(), next_client);
+        ledger.global = next_global;
+        *size = new_size;
+        true
+    }
+}
+
+impl Drop for DdShmPoolQuota {
+    fn drop(&mut self) {
+        let size = *self.size.lock().unwrap();
+        let mut ledger = self.ledger.lock().unwrap();
+        if let Some(client) = ledger.per_client.get_mut(&self.owner) {
+            *client = client.checked_sub(size).expect("shm client budget underflow");
+            if *client == 0 {
+                ledger.per_client.remove(&self.owner);
+            }
+        }
+        ledger.global = ledger.global.checked_sub(size).expect("shm global budget underflow");
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -497,6 +552,7 @@ impl DdState {
             render_usage: HashMap::new(),
             global_render_usage: RenderUsage::default(),
             render_limits,
+            shm_budget: Arc::new(Mutex::new(ShmBudgetLedger::default())),
             surface_buffer_uses: HashMap::new(),
             retired_zero_copy_uses: Vec::new(),
             next_buffer_use_generation: 1,
@@ -772,6 +828,32 @@ impl DdState {
             self.global_render_usage.retained_callbacks,
             self.global_render_usage.cpu_cache_bytes,
         )
+    }
+
+    pub(crate) fn reserve_shm_pool(
+        &self,
+        owner: &ClientId,
+        size: usize,
+    ) -> Option<Box<dyn smithay::wayland::shm::ShmPoolQuota>> {
+        let mut ledger = self.shm_budget.lock().unwrap();
+        let client = ledger.per_client.get(owner).copied().unwrap_or(0);
+        let next_client = client.checked_add(size)?;
+        let next_global = ledger.global.checked_add(size)?;
+        if next_client > self.render_limits.shm_pool_bytes_per_client
+            || next_global > self.render_limits.shm_pool_bytes_global
+        {
+            return None;
+        }
+        ledger.per_client.insert(owner.clone(), next_client);
+        ledger.global = next_global;
+        drop(ledger);
+        Some(Box::new(DdShmPoolQuota {
+            ledger: self.shm_budget.clone(),
+            owner: owner.clone(),
+            size: Mutex::new(size),
+            per_client_limit: self.render_limits.shm_pool_bytes_per_client,
+            global_limit: self.render_limits.shm_pool_bytes_global,
+        }))
     }
 
     /// Milliseconds since construction, the timestamp domain for `wl_callback.done` / input events.

@@ -648,19 +648,15 @@ modifier carries no generation/token. Move identity into authenticated fd metada
 params/create_immed cases for duplicate/reordered planes and stale-generation reuse.
 `compositor_validates_dmabuf_planes_flags_and_backing_metadata_before_success` remains partial on that boundary.
 
-The Smithay shm path has meaningful SIGBUS protection already: mapped accesses install a scoped handler and convert
-a fault in the active pool into `InvalidFd`, so this is not a wholly missing feature. The surrounding validation still
-needs hardening. `wl_shm_pool.resize(size <= 0)` posts an error but does not return before converting/remapping; pool
-creation/remap trusts the declared extent without first comparing `fstat(st_size)`; buffer bounds cast pool `usize`
-to `i32` and use hand-ordered signed products. Validate fd type/access mode and real length before mmap, cap size via
-the per-client budget, return immediately after every protocol error, and express offset + (height−1)×stride + row
-bytes solely with checked `usize` conversions/arithmetic. Resize must be grow-only, reserve budget and verify backing
-growth before atomically replacing the mapping; failure leaves the old mapping valid. Seals are useful evidence but
-must not be required from portable clients, and truncation can still race, so retain the SIGBUS guard. Add ordinary
-Rust boundary tests plus a process-isolated stress child that repeatedly truncates/grows an fd during copies and
-proves only the offending client dies/errs while another animates. Never run a deliberate SIGBUS race in-process with
-the main test harness. `smithay_shm_pool_validation_prevents_oversized_mapping_truncation_and_sigbus_escape` pins the
-validation and containment layers without discarding existing vendored protection.
+The Smithay shm path now validates writable fd backing extent with `fstat` before create and resize, charges mapped
+bytes to owner-bound per-client/global tokens, and calculates buffer last-byte bounds solely with checked `usize`
+arithmetic. Resize is grow-only and transactional: backing and budget are verified first, the replacement is mapped
+before the old mapping is removed, and failure rolls the reservation back without mutating the live pool. Invalid
+sizes return immediately. The scoped SIGBUS guard remains for the unavoidable truncate-after-check race, with an
+isolated fork child forcing that fault; the ordinary Wayland robustness journey proves an undersized pool disconnects
+only its owner while another client keeps presenting. The remaining evidence step is running these linked compositor
+tests on the macOS gate and broadening the child to sustained truncate/grow contention.
+`smithay_shm_pool_validation_prevents_oversized_mapping_truncation_and_sigbus_escape` remains partial until that run.
 
 Smithay teardown is incomplete. `CompositorHandler::destroyed` is not implemented, `BufferHandler::buffer_destroyed`
 does nothing, and `ClientData::disconnected` is empty. Role-specific popup cleanup removes only one buffer entry;
@@ -1105,7 +1101,7 @@ pixels, and fails against the broken behavior. Do not add tests that read implem
 | `executor_accounts_cumulative_residency_and_object_counts_per_connection` | missing | unlimited individually legal GPU resources can exhaust a connection/process | Per-connection and global charge/refund budgets with disconnect stress |
 | `compositor_surface_teardown_reclaims_cpu_gpu_window_and_fence_state` | partial | Smithay surface and disconnect destruction now share idempotent CPU/cache/callback/window cleanup; client-owned executor resources and in-flight GPU fences still need ownership teardown | Add executor-owner reclamation and completion-fence retirement to the existing disconnect journey |
 | `compositor_surface_keys_include_client_identity_and_generation` | implemented | live surfaces use Wayland `ObjectId` (client + generation) to allocate monotonic presenter/cache ids; an ordinary two-client protocol test deliberately collides local ids and proves isolation | Keep `compositor_surface_identity_is_client_owned_generational_and_teardown_is_exact_once` green |
-| `compositor_enforces_per_client_render_resource_budgets` | partial | checked per-client/global surface, retained-callback and CPU repack-cache accounting now reserves and refunds by owner; shm mappings/fds, imports, presenter objects and executor allocations remain uncharged | Extend owner tokens to remaining domains and add multi-domain isolation/rollback stress |
+| `compositor_enforces_per_client_render_resource_budgets` | partial | surfaces, callbacks, CPU repacks and mapped shm-pool bytes have checked per-client/global charge/refund; fd counts, imports, presenter objects and executor allocations remain uncharged | Extend owner tokens to remaining domains and add multi-domain isolation/rollback stress |
 | `compositor_releases_buffers_only_after_the_last_cpu_or_gpu_use` | partial | generation-tagged uses give shm copy-complete exact-once release and retain zero-copy across failure; Metal has no actual GPU-completion token | Add presenter completion tokens and out-of-order zero-copy retirement tests |
 | `compositor_retains_presentation_feedback_across_retryable_failure_only` | contradictory | failed present retains callbacks for retry but immediately discards its feedback | Typed retry class with coupled callback/feedback/resource terminal policy |
 | `compositor_routes_each_surface_through_its_actual_output_membership` | contradictory | outputs are advertised but surfaces have no enter/leave, selected scale, fullscreen target, or present route | Per-surface membership state and two-output event/render journey |
@@ -1119,5 +1115,5 @@ pixels, and fails against the broken behavior. Do not add tests that read implem
 | `compositor_explicit_sync_waits_acquire_before_sampling_and_releases_after_gpu_completion` | missing | internal MTLEvent ordering is not a Wayland acquire/release fence contract | Explicit-sync/syncobj state plus Linux-fence↔MTLSharedEvent bridge journey |
 | `dmabuf_feedback_advertises_only_pairs_that_the_importer_can_accept` | partial | feedback now exposes only dd-tagged ARGB/XRGB pairs and rejects malformed/zero ids, but real IOSurface allocation generation and backing metadata are not represented | Share allocation-generation metadata with the importer and run positive/negative GPU-backed guest probes |
 | `compositor_validates_dmabuf_planes_flags_and_backing_metadata_before_success` | partial | shared caps enforce single-plane layout/flags/checked fd extent and exact live IOSurface width/height/row bytes/BGRA format; allocation generation is unavailable | Authenticate allocation generation and add stale-id C protocol regression |
-| `smithay_shm_pool_validation_prevents_oversized_mapping_truncation_and_sigbus_escape` | partial | SIGBUS guard exists, but fd extent, invalid resize and checked bounds remain unsafe | fstat/caps/checked mapping plus isolated truncation-race regression |
+| `smithay_shm_pool_validation_prevents_oversized_mapping_truncation_and_sigbus_escape` | partial | fstat/access checks, mapped-byte quotas, checked bounds and transactional grow are implemented with an isolated SIGBUS child; linked runtime gates remain unrun here | Run compositor/mac gates and extend sustained truncate/grow isolation stress |
 <!-- rendering-gap-ledger:end -->

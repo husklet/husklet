@@ -120,6 +120,21 @@ use crate::{
 };
 
 use self::pool::Pool;
+pub use self::pool::ShmPoolQuota;
+
+/// Process-isolated regression helper for exercising the retained SIGBUS containment path.
+#[doc(hidden)]
+pub fn truncate_and_probe_pool(fd: std::os::fd::OwnedFd, size: std::num::NonZeroUsize) -> bool {
+    let raw = std::os::fd::AsRawFd::as_raw_fd(&fd);
+    let quota = Box::new(UnlimitedShmPoolQuota) as Box<dyn ShmPoolQuota>;
+    let Ok(pool) = Pool::new(fd, size, quota) else {
+        return false;
+    };
+    if unsafe { libc::ftruncate(raw, 0) } != 0 {
+        return false;
+    }
+    pool.with_data(|ptr, len| unsafe { std::ptr::read_volatile(ptr.add(len - 1)) }).is_err()
+}
 
 use super::buffer::BufferHandler;
 
@@ -184,6 +199,22 @@ impl ShmState {
 pub trait ShmHandler {
     /// Return the Shm global state
     fn shm_state(&self) -> &ShmState;
+
+    /// Reserve a client's initial mapped-pool bytes. Returning `None` rejects creation.
+    fn new_shm_pool_quota(
+        &mut self,
+        _client: &wayland_server::backend::ClientId,
+        _size: usize,
+    ) -> Option<Box<dyn ShmPoolQuota>> {
+        Some(Box::new(UnlimitedShmPoolQuota))
+    }
+}
+
+struct UnlimitedShmPoolQuota;
+impl ShmPoolQuota for UnlimitedShmPoolQuota {
+    fn resize(&self, _new_size: usize) -> bool {
+        true
+    }
 }
 
 /// Error that can occur when accessing an SHM buffer
