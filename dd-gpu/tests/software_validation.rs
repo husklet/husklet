@@ -79,11 +79,16 @@ fn zero_mip_texture_is_rejected() {
 }
 
 #[test]
-fn multisample_texture_is_rejected_not_downleveled() {
+fn multisample_texture_materializes_distinct_sample_storage() {
     let mut be = SoftwareBackend::new();
     let mut d = tex(4, 4, TextureFormat::Rgba8Unorm, texture_usage::RENDER_TARGET);
     d.sample_count = 4;
-    assert!(matches!(be.create_texture(TextureId(1), &d), Err(GpuError::Unsupported(_))));
+    be.create_texture(TextureId(1), &d).unwrap();
+    let samples = vec![0x5a; 4 * 4 * 4 * 4];
+    be.write_texture_samples(TextureId(1), &samples).unwrap();
+    let mut out = vec![0; samples.len()];
+    be.read_texture(TextureId(1), &mut out).unwrap();
+    assert_eq!(out, samples);
 }
 
 #[test]

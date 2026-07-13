@@ -104,6 +104,17 @@ impl SoftwareBackend {
         }
     }
 
+    /// Seed raw per-sample texels for resolve conformance tests and software-oracle callers. Data is
+    /// texel-major, then sample-major, then channel-major.
+    pub fn write_texture_samples(&mut self, id: TextureId, data: &[u8]) -> Result<()> {
+        let texture = self.textures.get_mut(id.0)?;
+        if texture.pixels.len() != data.len() {
+            return Err(GpuError::OutOfBounds);
+        }
+        texture.pixels.copy_from_slice(data);
+        Ok(())
+    }
+
     fn texel_bytes(fmt: TextureFormat) -> Result<usize> {
         fmt.bytes_per_texel()
             .ok_or(GpuError::Unsupported("software: non-color texture format"))
@@ -470,6 +481,20 @@ impl SoftwareBackend {
                 check_region_in_texture(s, src_origin, src_extent)?;
                 check_region_in_texture(d, dst_origin, dst_extent)?;
             }
+            Enc::ResolveTexture { src, src_sub, src_origin, dst, dst_sub, dst_origin, extent } => {
+                Self::check_copy_subresource(src_sub, src_origin, extent.depth)?;
+                Self::check_copy_subresource(dst_sub, dst_origin, extent.depth)?;
+                let s = self.texture_with_usage(*src, texture_usage::COPY_SRC, "resolve src lacks COPY_SRC")?;
+                let d = self.texture_with_usage(*dst, texture_usage::COPY_DST, "resolve dst lacks COPY_DST")?;
+                if s.desc.sample_count <= 1 || d.desc.sample_count != 1 {
+                    return Err(GpuError::Invalid("resolve sample counts"));
+                }
+                if s.desc.format != d.desc.format {
+                    return Err(GpuError::Invalid("resolve formats differ"));
+                }
+                check_region_in_texture(s, src_origin, extent)?;
+                check_region_in_texture(d, dst_origin, extent)?;
+            }
         }
         Ok(())
     }
@@ -758,13 +783,14 @@ impl GpuBackend for SoftwareBackend {
         if desc.mip_levels == 0 {
             return Err(GpuError::Invalid("texture mip_levels must be >= 1"));
         }
-        if desc.sample_count != 1 {
-            return Err(GpuError::Unsupported("software: multisample textures"));
+        if !matches!(desc.sample_count, 1 | 2 | 4 | 8) {
+            return Err(GpuError::Unsupported("software: unsupported sample count"));
         }
         let bpt = Self::texel_bytes(desc.format)?;
         let n = bpt
             .checked_mul(desc.width as usize)
             .and_then(|v| v.checked_mul(desc.height as usize))
+            .and_then(|v| v.checked_mul(desc.sample_count as usize))
             .ok_or(GpuError::OutOfBounds)?;
         self.textures.insert(id.0, Texture { desc: desc.clone(), pixels: vec![0u8; n] })
     }
@@ -1067,6 +1093,28 @@ impl GpuBackend for SoftwareBackend {
                             let ddy = dst_origin.y as usize + dy;
                             let off = (ddy * dw + ddx) * bpt;
                             t.pixels[off..off + bpt].copy_from_slice(&texel);
+                        }
+                    }
+                }
+                Enc::ResolveTexture { src, src_origin, dst, dst_origin, extent, .. } => {
+                    let (sw, samples, bpt, source) = {
+                        let t = self.textures.get(*src)?;
+                        (t.desc.width as usize, t.desc.sample_count as usize,
+                         Self::texel_bytes(t.desc.format)?, t.pixels.clone())
+                    };
+                    let dw = self.textures.get(*dst)?.desc.width as usize;
+                    let t = self.textures.get_mut(*dst)?;
+                    for y in 0..extent.height as usize {
+                        for x in 0..extent.width as usize {
+                            let sp = ((src_origin.y as usize + y) * sw + src_origin.x as usize + x)
+                                * samples * bpt;
+                            let dp = ((dst_origin.y as usize + y) * dw + dst_origin.x as usize + x) * bpt;
+                            for channel in 0..bpt {
+                                let sum: u32 = (0..samples)
+                                    .map(|sample| source[sp + sample * bpt + channel] as u32)
+                                    .sum();
+                                t.pixels[dp + channel] = (sum / samples as u32) as u8;
+                            }
                         }
                     }
                 }

@@ -434,6 +434,17 @@ pub enum Enc {
         dst_extent: Extent3d,
         filter: Filter,
     },
+    /// Resolve a multisampled color region into a single-sampled texture. Unlike copy/blit this
+    /// averages distinguishable samples and therefore has its own negotiated operation.
+    ResolveTexture {
+        src: u32,
+        src_sub: TextureSubresource,
+        src_origin: Origin3d,
+        dst: u32,
+        dst_sub: TextureSubresource,
+        dst_origin: Origin3d,
+        extent: Extent3d,
+    },
 }
 
 impl Enc {
@@ -459,6 +470,7 @@ impl Enc {
             Self::CopyTextureToBuffer { .. } => etag::COPY_T2B,
             Self::CopyTextureToTexture { .. } => etag::COPY_T2T,
             Self::BlitTexture { .. } => etag::BLIT_TEXTURE,
+            Self::ResolveTexture { .. } => etag::RESOLVE_TEXTURE,
         }
     }
 }
@@ -536,7 +548,8 @@ pub enum Cmd {
 /// - v1: the original command/encoder set (tags ≤ 21 / etags ≤ 17).
 /// - v2: adds texture subresources + `CopyTextureToTexture` (etag 18) and `BlitTexture` (etag 19).
 /// - v3: makes every shader payload's origin explicit; strict SPIR-V may not fall back to built-ins.
-pub const WIRE_VERSION: u32 = 3;
+/// - v4: adds a distinct multisample resolve operation (etag 20).
+pub const WIRE_VERSION: u32 = 4;
 
 // tag constants (stable wire) --------------------------------------------------------------------
 pub(crate) mod tag {
@@ -586,6 +599,7 @@ pub mod etag {
     // v2 (WIRE_VERSION 2): texture-to-texture copy + scaled blit. A v1 decoder rejects these as BadTag.
     pub const COPY_T2T: u8 = 18;
     pub const BLIT_TEXTURE: u8 = 19;
+    pub const RESOLVE_TEXTURE: u8 = 20;
 }
 
 // ---------------------------------------------------------------------------------------------------
@@ -1023,6 +1037,16 @@ fn enc_enc(e: &mut Encoder, op: &Enc) {
             enc_extent(e, dst_extent);
             e.u32(filter.to_u32());
         }
+        Enc::ResolveTexture { src, src_sub, src_origin, dst, dst_sub, dst_origin, extent } => {
+            e.u8(etag::RESOLVE_TEXTURE);
+            e.u32(*src);
+            enc_subresource(e, src_sub);
+            enc_origin(e, src_origin);
+            e.u32(*dst);
+            enc_subresource(e, dst_sub);
+            enc_origin(e, dst_origin);
+            enc_extent(e, extent);
+        }
     }
 }
 
@@ -1159,6 +1183,15 @@ fn dec_enc(d: &mut Decoder) -> Result<Enc> {
             dst_origin: dec_origin(d)?,
             dst_extent: dec_extent(d)?,
             filter: Filter::from_u32(d.u32()?)?,
+        },
+        etag::RESOLVE_TEXTURE => Enc::ResolveTexture {
+            src: d.u32()?,
+            src_sub: dec_subresource(d)?,
+            src_origin: dec_origin(d)?,
+            dst: d.u32()?,
+            dst_sub: dec_subresource(d)?,
+            dst_origin: dec_origin(d)?,
+            extent: dec_extent(d)?,
         },
         t => return Err(GpuError::BadTag(t as u32)),
     })

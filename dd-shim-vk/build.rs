@@ -103,7 +103,7 @@ fn partial_note(name: &str) -> Option<&'static str> {
         "vkCmdCopyBufferToImage" | "vkCmdCopyImageToBuffer" => {
             "2D color/base-layer regions with exact buffer offsets and row pitch; no 3D or multilayer"
         }
-        "vkCmdCopyImage" | "vkCmdBlitImage" => {
+        "vkCmdCopyImage" | "vkCmdBlitImage" | "vkCmdResolveImage" => {
             "2D uncompressed color regions; blits reject reversed coordinates and aliasing"
         }
         "vkCmdClearColorImage" => "base color subresource only; no mip/layer range clear lowering",
@@ -544,6 +544,7 @@ const IMPLEMENTED: &[&str] = &[
     "vkCmdCopyImageToBuffer",
     "vkCmdCopyImage",
     "vkCmdBlitImage",
+    "vkCmdResolveImage",
     "vkCmdClearColorImage",
     "vkCmdPipelineBarrier",
     "vkQueueSubmit",

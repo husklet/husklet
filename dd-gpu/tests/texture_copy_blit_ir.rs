@@ -41,8 +41,8 @@ fn submit_frame(ops: Vec<Enc>) -> Vec<u8> {
 }
 
 #[test]
-fn wire_version_includes_typed_shader_payloads_after_v2_copy_ops() {
-    assert_eq!(WIRE_VERSION, 3, "typed shader payload origins add the third wire version");
+fn wire_version_includes_resolve_after_typed_shader_payloads() {
+    assert_eq!(WIRE_VERSION, 4, "distinct multisample resolve adds the fourth wire version");
 }
 
 #[test]
@@ -85,14 +85,14 @@ fn bogus_texture_aspect_enum_is_a_typed_error_not_ub() {
 }
 
 #[test]
-fn stale_v1_decoder_rejects_the_new_etags_as_bad_tag() {
-    // A hand-built Submit whose single op carries an etag one past the v2 set (20) must be rejected — the
+fn decoder_rejects_an_etag_past_the_v4_set() {
+    // A hand-built Submit whose single op carries an etag one past the v4 set must be rejected — the
     // standing guarantee that a decoder never silently reinterprets a tag it predates.
     let mut e = Encoder::new();
     e.u8(19); // SUBMIT
     e.u32(1); // one op
-    e.u8(20); // unknown etag
-    assert!(matches!(decode_stream(&e.into_vec()), Err(GpuError::Decode(msg)) if msg.contains("bad command/encoder tag 20")));
+    e.u8(21); // unknown etag
+    assert!(matches!(decode_stream(&e.into_vec()), Err(GpuError::Decode(msg)) if msg.contains("bad command/encoder tag 21")));
 }
 
 #[test]

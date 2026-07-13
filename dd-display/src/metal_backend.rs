@@ -1857,7 +1857,7 @@ impl GpuBackend for MetalBackend {
             // advertises no PresentKind here (the executor owns the surface handoff).
             present_kinds: vec![],
             wire_version: dd_gpu::ir::WIRE_VERSION,
-            command_bits: dd_gpu::backend::command_bits(dd_gpu::backend::ALL_COMMANDS),
+            command_bits: dd_gpu::backend::command_bits(dd_gpu::backend::HARDWARE_COMMANDS),
             // Metal consumes MSL (the shim's GLSL→MSL / compute kernels); SPIR-V/PTX route to wgpu.
             shader_payloads: dd_gpu::backend::shader_payload::MSL,
             // Guest-creatable textures are the color formats; depth is an attachment-internal texture.

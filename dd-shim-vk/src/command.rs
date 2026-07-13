@@ -1008,6 +1008,58 @@ pub extern "C" fn vkCmdBlitImage(
 }
 
 #[no_mangle]
+pub extern "C" fn vkCmdResolveImage(
+    command_buffer: VkCommandBuffer,
+    src_image: VkImage,
+    src_image_layout: vk::ImageLayout,
+    dst_image: VkImage,
+    dst_image_layout: vk::ImageLayout,
+    region_count: u32,
+    p_regions: *const vk::ImageResolve,
+) {
+    if region_count == 0 || p_regions.is_null()
+        || !transfer_layout_ok(src_image_layout, false)
+        || !transfer_layout_ok(dst_image_layout, true)
+    {
+        return;
+    }
+    let regions = unsafe { core::slice::from_raw_parts(p_regions, region_count as usize) };
+    let mut s = reg::lock();
+    let (Some(src), Some(dst)) = (s.images.get(&src_image), s.images.get(&dst_image)) else { return };
+    if src_image == dst_image || src.format != dst.format || src.sample_count <= 1 || dst.sample_count != 1
+        || src.usage & vk::ImageUsageFlags::TRANSFER_SRC.as_raw() == 0
+        || dst.usage & vk::ImageUsageFlags::TRANSFER_DST.as_raw() == 0
+    {
+        return;
+    }
+    let mut encs = Vec::with_capacity(regions.len());
+    let mut events = Vec::with_capacity(regions.len() * 2);
+    for region in regions {
+        let Some((src_range, src_sub, src_origin, extent)) =
+            checked_region(src, region.src_subresource, region.src_offset, region.extent) else { return };
+        let Some((dst_range, dst_sub, dst_origin, dst_extent)) =
+            checked_region(dst, region.dst_subresource, region.dst_offset, region.extent) else { return };
+        if extent != dst_extent { return; }
+        encs.push(Enc::ResolveTexture {
+            src: src.ir_id, src_sub, src_origin,
+            dst: dst.ir_id, dst_sub, dst_origin, extent,
+        });
+        events.push(ImageEvent::TransferUse {
+            image: src_image, range: src_range, required_layout: src_image_layout.as_raw(),
+            access: vk::AccessFlags::TRANSFER_READ.as_raw(),
+        });
+        events.push(ImageEvent::TransferUse {
+            image: dst_image, range: dst_range, required_layout: dst_image_layout.as_raw(),
+            access: vk::AccessFlags::TRANSFER_WRITE.as_raw(),
+        });
+    }
+    if let Some(cb) = s.recording_mut(cb_key(command_buffer)) {
+        cb.enc.extend(encs);
+        cb.image_events.extend(events);
+    }
+}
+
+#[no_mangle]
 pub extern "C" fn vkCmdClearColorImage(
     command_buffer: VkCommandBuffer,
     image: VkImage,
@@ -1482,6 +1534,67 @@ mod layout_tests {
             VK_SUCCESS
         );
         image
+    }
+
+    fn create_image_samples(samples: vk::SampleCountFlags) -> VkImage {
+        let ci = vk::ImageCreateInfo::default()
+            .image_type(vk::ImageType::TYPE_2D)
+            .format(vk::Format::R8G8B8A8_UNORM)
+            .extent(vk::Extent3D { width: 8, height: 8, depth: 1 })
+            .mip_levels(1)
+            .array_layers(1)
+            .samples(samples)
+            .tiling(vk::ImageTiling::OPTIMAL)
+            .usage(vk::ImageUsageFlags::TRANSFER_SRC | vk::ImageUsageFlags::TRANSFER_DST)
+            .initial_layout(vk::ImageLayout::UNDEFINED);
+        let mut image = 0;
+        assert_eq!(
+            crate::memory::vkCreateImage(core::ptr::null_mut(), &ci, core::ptr::null(), &mut image),
+            VK_SUCCESS
+        );
+        image
+    }
+
+    #[test]
+    fn resolve_is_distinct_and_invalid_region_batch_does_not_mutate_recording() {
+        let _guard = TEST_LOCK.lock().unwrap_or_else(|error| error.into_inner());
+        let src = create_image_samples(vk::SampleCountFlags::TYPE_4);
+        let dst = create_image_samples(vk::SampleCountFlags::TYPE_1);
+        let cb = 0x1212usize as VkCommandBuffer;
+        begin(cb);
+        let layers = vk::ImageSubresourceLayers {
+            aspect_mask: vk::ImageAspectFlags::COLOR,
+            mip_level: 0,
+            base_array_layer: 0,
+            layer_count: 1,
+        };
+        let good = vk::ImageResolve {
+            src_subresource: layers,
+            src_offset: vk::Offset3D { x: 1, y: 2, z: 0 },
+            dst_subresource: layers,
+            dst_offset: vk::Offset3D { x: 3, y: 4, z: 0 },
+            extent: vk::Extent3D { width: 2, height: 2, depth: 1 },
+        };
+        vkCmdResolveImage(
+            cb, src, vk::ImageLayout::TRANSFER_SRC_OPTIMAL,
+            dst, vk::ImageLayout::TRANSFER_DST_OPTIMAL, 1, &good,
+        );
+        let key = cb as usize;
+        let before = reg::lock().cmdbufs[&key].enc.clone();
+        assert!(matches!(before.last(), Some(Enc::ResolveTexture {
+            src_origin: Origin3d { x: 1, y: 2, z: 0 },
+            dst_origin: Origin3d { x: 3, y: 4, z: 0 },
+            extent: Extent3d { width: 2, height: 2, depth: 1 }, ..
+        })));
+
+        let mut bad = good;
+        bad.src_subresource.layer_count = 2;
+        let batch = [good, bad];
+        vkCmdResolveImage(
+            cb, src, vk::ImageLayout::TRANSFER_SRC_OPTIMAL,
+            dst, vk::ImageLayout::TRANSFER_DST_OPTIMAL, 2, batch.as_ptr(),
+        );
+        assert_eq!(reg::lock().cmdbufs[&key].enc, before, "invalid batch appended no partial resolve");
     }
 
     fn begin(cb: VkCommandBuffer) {

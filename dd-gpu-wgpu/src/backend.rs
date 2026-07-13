@@ -1197,7 +1197,7 @@ impl WgpuBackend {
 
 impl GpuBackend for WgpuBackend {
     fn capabilities(&self) -> Capabilities {
-        use dd_gpu::backend::{command_bits, format_bits, shader_payload, ALL_COMMANDS, COLOR_FORMATS};
+        use dd_gpu::backend::{command_bits, format_bits, shader_payload, HARDWARE_COMMANDS, COLOR_FORMATS};
         let limits = self.device.limits();
         Capabilities {
             name: "dd-gpu-wgpu (Metal)".into(),
@@ -1212,7 +1212,7 @@ impl GpuBackend for WgpuBackend {
             // valid token + completion ordering), the handshake advertises NO present kind.
             present_kinds: vec![],
             wire_version: dd_gpu::ir::WIRE_VERSION,
-            command_bits: command_bits(ALL_COMMANDS),
+            command_bits: command_bits(HARDWARE_COMMANDS),
             // naga translates SPIR-V and GLSL to WGSL, and PTX→WGSL for CUDA; WGSL is native. MSL is NOT
             // consumable (naga can't ingest it) — that payload routes to the bespoke Metal backend.
             shader_payloads: shader_payload::SPIRV | shader_payload::GLSL | shader_payload::WGSL | shader_payload::PTX,
