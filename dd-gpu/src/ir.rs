@@ -1365,17 +1365,28 @@ impl Cmd {
             tag::DESTROY_TEXTURE => Cmd::DestroyTexture(d.u32()?),
             tag::CREATE_SAMPLER => Cmd::CreateSampler(d.u32()?, dec_sampler_desc(d)?),
             tag::DESTROY_SAMPLER => Cmd::DestroySampler(d.u32()?),
-            tag::CREATE_SHADER => Cmd::CreateShader {
-                id: d.u32()?,
+            tag::CREATE_SHADER => {
                 // WIRE COMPAT (see `enc`): the pinned guest engine speaks the v2 CreateShader layout with
                 // no ShaderPayloadKind byte, so we must NOT consume one here — doing so reads the payload's
                 // first word-count byte as the kind and rejects the shader as BadTag (237/52...), which is
-                // exactly the regression that left Chrome white. The guest's shim delivers GLSL already
-                // translated to MSL (packed as words), i.e. the `LegacyMsl` payload the Metal executor
-                // compiles; default to it so create_shader() takes the MSL-compile path, not strict SPIR-V.
-                kind: ShaderPayloadKind::LegacyMsl,
-                spirv: d.words()?,
-            },
+                // exactly the regression that left Chrome white. Instead we recover the kind losslessly by
+                // inspecting the payload's leading word (the wire carries no kind byte, but each real kind
+                // is self-identifying):
+                //   * SPIR-V magic 0x07230203  → SpirV     (dd-shim-vk's translated Vulkan modules)
+                //   * KERNEL_MAGIC 0xDD6B_0001 → PtxKernel (CUDA→dd-GPU kernel descriptor, ptx::to_words)
+                //   * anything else            → LegacyMsl (the GL shim delivers GLSL already translated
+                //                                            to MSL words — the Metal-compile path)
+                // MSL text words never collide with these magics (both decode to non-ASCII byte runs), so
+                // the inference is unambiguous for every payload that actually crosses the ring.
+                let id = d.u32()?;
+                let spirv = d.words()?;
+                let kind = match spirv.first().copied() {
+                    Some(0x0723_0203) => ShaderPayloadKind::SpirV,
+                    Some(w) if w == crate::ptx::KERNEL_MAGIC => ShaderPayloadKind::PtxKernel,
+                    _ => ShaderPayloadKind::LegacyMsl,
+                };
+                Cmd::CreateShader { id, kind, spirv }
+            }
             tag::DESTROY_SHADER => Cmd::DestroyShader(d.u32()?),
             tag::CREATE_RENDER_PIPELINE => Cmd::CreateRenderPipeline(d.u32()?, dec_render_pipeline(d)?),
             tag::CREATE_COMPUTE_PIPELINE => {
