@@ -21,3 +21,6 @@ target-*/
 .shatmp/
 .wt-*/
 dd-tests/compliance/ltp/out/
+
+# Reference implementations (local-only, cloned to study upstream APIs)
+reference/
