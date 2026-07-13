@@ -1687,6 +1687,8 @@ impl<P: Presenter> Server<P> {
                 did_present = match self.present.present(&sb) {
                     Ok(crate::present::PresentOutcome::Delivered { .. }) => true,
                     Ok(crate::present::PresentOutcome::Offscreen) => false,
+                    Ok(crate::present::PresentOutcome::RetryableFailure) => false,
+                    Ok(crate::present::PresentOutcome::TerminalFailure) => false,
                     Err(e) => {
                         eprintln!("dd-display: present failed for sid {}: {e}", sb.sid);
                         false

@@ -122,6 +122,10 @@ pub enum PresentOutcome {
     /// was NOT visibly presented this cycle. Not an error — but the client's frame did not reach the
     /// screen, so the compositor must not advance that surface's frame pacing as if it had.
     Offscreen,
+    /// Delivery failed transiently; retain the frame and all pacing evidence for retry.
+    RetryableFailure,
+    /// Delivery cannot succeed without a new frame/device; terminate this pacing attempt.
+    TerminalFailure,
 }
 
 /// An output/device/filesystem error from a presenter — the failures the old `bool` return hid. Carried

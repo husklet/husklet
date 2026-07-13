@@ -45,14 +45,14 @@ use crate::{BufferUseKind, ClientState, DdState};
 ///   - [`FramePacing::Skipped`]: the tree was clean (a no-damage / frame-callback-only commit); the
 ///     previously delivered frame still stands → fire frame callbacks (the client may draw again) but
 ///     `discard` the feedback (no NEW content was shown this cycle).
-///   - [`FramePacing::Failed`]: the present was attempted but did not reach the screen (the presenter
-///     returned `Offscreen` or an error) → RETAIN the frame callbacks (the client must not be told its
-///     frame shipped and recycle a buffer we still need to retry) and `discard` the feedback.
-#[derive(Clone, Copy, PartialEq)]
+///   - retryable failure retains callbacks and feedback together; terminal failure destroys callbacks,
+///     discards feedback and retires the frame resources without fabricating delivery.
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) enum FramePacing {
     Presented,
     Skipped,
-    Failed,
+    RetryableFailure,
+    TerminalFailure,
 }
 
 struct PresentedFrame {
@@ -254,7 +254,7 @@ impl DdState {
         ) {
             // Keep the latest repacked content dirty for a single reveal repaint. Failed pacing
             // withholds/bounds frame callbacks and discards feedback because no frame was displayed.
-            self.pace_tree(&root, FramePacing::Failed, None);
+            self.pace_tree(&root, FramePacing::RetryableFailure, None);
             return;
         }
 
@@ -532,7 +532,7 @@ impl DdState {
     /// children are not blended (documented limitation). Returns whether the frame reached the screen.
     pub(crate) fn present_render_root(&mut self, root: &WlSurface) -> bool {
         if self.headless {
-            self.pace_tree(root, FramePacing::Failed, None);
+            self.pace_tree(root, FramePacing::RetryableFailure, None);
             return false;
         }
         let mut evidence = None;
@@ -558,20 +558,25 @@ impl DdState {
                             "dd-compositor: present sid {sid} rendered offscreen but not delivered; \
                              retaining frame for retry"
                         );
-                        FramePacing::Failed
+                        FramePacing::RetryableFailure
                     }
+                    Ok(dd_display::present::PresentOutcome::RetryableFailure) => FramePacing::RetryableFailure,
+                    Ok(dd_display::present::PresentOutcome::TerminalFailure) => FramePacing::TerminalFailure,
                     Err(e) => {
                         eprintln!("dd-compositor: present sid {sid} failed: {e}");
-                        FramePacing::Failed
+                        FramePacing::TerminalFailure
                     }
                 }
             }
-            None => FramePacing::Failed,
+            None => FramePacing::TerminalFailure,
         };
         let did_present = pacing == FramePacing::Presented;
         // The tree reached the screen — every surface in it is now clean. On a FAILED present we keep the
         // dirty flags so the next commit retries the repaint rather than skipping it.
         if did_present {
+            self.complete_tree_buffer_uses(root);
+            self.clear_tree_dirty(root);
+        } else if pacing == FramePacing::TerminalFailure {
             self.complete_tree_buffer_uses(root);
             self.clear_tree_dirty(root);
         }
@@ -926,8 +931,7 @@ impl DdState {
         // or a clean Skip. On a FAILED present the client's frame did NOT ship, so its callbacks are
         // RETAINED (re-fired on the next accepted present) instead of completed; completing them here
         // would let the client recycle a buffer the compositor still needs to retry.
-        let did_present = pacing != FramePacing::Failed;
-        if did_present {
+        if matches!(pacing, FramePacing::Presented | FramePacing::Skipped) {
             // Fire any callbacks retained from a prior failed present of this surface, then this cycle's.
             for cb in self.take_retained_callbacks(sid) {
                 cb.done(t);
@@ -935,12 +939,46 @@ impl DdState {
             for cb in callbacks {
                 cb.done(t);
             }
-        } else {
+        } else if pacing == FramePacing::RetryableFailure {
             self.retain_frame_callbacks(sid, callbacks);
+        } else {
+            // Terminal: destroy retained and current callbacks without `done`.
+            drop(self.take_retained_callbacks(sid));
+            drop(callbacks);
         }
-        // Presentation feedback is `presented` ONLY for a real new delivery; a Skip or a Failed present
-        // both `discard` it (no new content reached the screen this cycle).
-        self.send_presentation_feedback(feedback, evidence);
+        match pacing {
+            FramePacing::RetryableFailure => self.retain_presentation_feedback(sid, feedback),
+            FramePacing::Presented => {
+                let mut all = self.take_retained_feedback(sid);
+                all.extend(feedback);
+                self.send_presentation_feedback(all, evidence);
+            }
+            FramePacing::Skipped | FramePacing::TerminalFailure => {
+                let mut all = self.take_retained_feedback(sid);
+                all.extend(feedback);
+                self.send_presentation_feedback(all, None);
+            }
+        }
+    }
+
+    fn retain_presentation_feedback(
+        &mut self,
+        sid: u32,
+        feedback: Vec<smithay::wayland::presentation::PresentationFeedbackCallback>,
+    ) {
+        let q = self.retained_feedback.entry(sid).or_default();
+        q.extend(feedback);
+        while q.len() > MAX_RETAINED_CALLBACKS {
+            if let Some(oldest) = q.pop_front() { oldest.discarded(); }
+        }
+    }
+
+    fn take_retained_feedback(
+        &mut self,
+        sid: u32,
+    ) -> Vec<smithay::wayland::presentation::PresentationFeedbackCallback> {
+        self.retained_feedback.remove(&sid)
+            .map(|q| q.into_iter().collect()).unwrap_or_default()
     }
 
     /// Retain a surface's `wl_surface.frame` callbacks across a FAILED present so they can be fired on the
@@ -1417,5 +1455,12 @@ mod presentation_evidence_tests {
         assert!(logical_region_accepts(Some(&region), 2.0, 2.0));
         assert!(!logical_region_accepts(Some(&region), 7.0, 7.0));
         assert!(!logical_region_accepts(Some(&RegionAttributes::default()), 1.0, 1.0));
+    }
+
+    #[test]
+    fn presentation_failure_state_machine_distinguishes_retry_from_terminal() {
+        assert_ne!(FramePacing::RetryableFailure, FramePacing::TerminalFailure);
+        assert!(matches!(FramePacing::RetryableFailure, FramePacing::RetryableFailure));
+        assert!(matches!(FramePacing::TerminalFailure, FramePacing::TerminalFailure));
     }
 }

@@ -304,6 +304,7 @@ pub struct DdState {
     /// of that surface; bounded (see `MAX_RETAINED_CALLBACKS`) so a permanently-dead presenter cannot grow
     /// the queue without limit. See `handlers::compositor::{pace_surface, retain_frame_callbacks}`.
     pub(crate) retained_callbacks: HashMap<u32, VecDeque<WlCallback>>,
+    pub(crate) retained_feedback: HashMap<u32, VecDeque<smithay::wayland::presentation::PresentationFeedbackCallback>>,
 
     /// Collision-free host identity for every live `wl_surface`. Wayland protocol ids are local to a
     /// client and may be reused after destroy; `ObjectId` includes both ownership and object generation.
@@ -550,6 +551,7 @@ impl DdState {
             cursor_surface: None,
             cursor_hidden_by_lock: false,
             retained_callbacks: HashMap::new(),
+            retained_feedback: HashMap::new(),
             surface_ids: HashMap::new(),
             next_surface_id: 1,
             presenter_windows: HashSet::new(),
@@ -622,6 +624,9 @@ impl DdState {
         self.visibility.remove(&sid);
         self.titles.remove(&sid);
         self.retained_callbacks.remove(&sid);
+        if let Some(feedback) = self.retained_feedback.remove(&sid) {
+            for callback in feedback { callback.discarded(); }
+        }
         self.idle_inhibitors.remove(&sid);
         self.content_types.remove(&sid);
         self.popup_grabs.retain(|p| p.wl_surface() != surface);
