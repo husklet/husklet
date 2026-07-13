@@ -15,7 +15,13 @@
 //!
 //! The Metal side (bridging the fence into an `MTLSharedEvent` wait/signal on the real host) lives in
 //! `dd_display::explicit_sync_bridge` and is mac-gated; this Linux test exercises the protocol + the
-//! CPU pollable-fd wait. Runs headlessly on Linux (libxkbcommon present) and macOS.
+//! CPU pollable-fd wait.
+//!
+//! Linux-only: the acquire-fence stand-in is a Linux `eventfd` (a self-readable-after-write pollable fd
+//! with no portable single-fd equivalent). The compositor's explicit-sync protocol serves Linux guests
+//! and its logic is transport/fd-shaped; the mac present path is separate. Gated to Linux so the crate's
+//! macOS build compiles this integration test out.
+#![cfg(target_os = "linux")]
 
 use dd_compositor::handlers::explicit_sync::wait_acquire_fence;
 use dd_compositor::{ClientState, DdState};

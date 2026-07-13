@@ -128,6 +128,10 @@ fn socketpair_nonblocking() -> (RawFd, RawFd) {
     (sv[0], sv[1])
 }
 
+// Linux-only: exercises `memfd_create` + `ftruncate`-shrink SIGBUS containment, a Linux kernel behavior
+// (macOS has no memfd and different mmap-past-EOF fault semantics). The compositor's shm SIGBUS guard is
+// the same code path on both; this test drives the Linux primitive directly.
+#[cfg(target_os = "linux")]
 #[test]
 fn shm_truncation_sigbus_is_contained_in_an_isolated_child() {
     use std::ffi::CString;
