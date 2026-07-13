@@ -519,6 +519,47 @@ impl GlState {
         }
     }
 
+    /// Compute completeness for the color-only framebuffer subset this shim can render. The default
+    /// framebuffer is managed by EGL and is complete here. User FBOs require one defined, live,
+    /// color-renderable texture or renderbuffer attachment.
+    pub fn framebuffer_status(&self, fbo: u32) -> u32 {
+        if fbo == 0 {
+            return GL_FRAMEBUFFER_COMPLETE;
+        }
+        let f = fbo as usize;
+        if f >= MAXFBO || !self.fbo[f].used {
+            return GL_FRAMEBUFFER_INCOMPLETE_MISSING_ATTACHMENT;
+        }
+        let fb = &self.fbo[f];
+        if fb.color_tex != 0 {
+            let t = fb.color_tex as usize;
+            if t < MAXTEX
+                && self.tex[t].used
+                && fb.color_level == 0
+                && self.tex[t].w > 0
+                && self.tex[t].h > 0
+            {
+                GL_FRAMEBUFFER_COMPLETE
+            } else {
+                GL_FRAMEBUFFER_INCOMPLETE_ATTACHMENT
+            }
+        } else if fb.color_rbo != 0 {
+            let r = fb.color_rbo as usize;
+            let color_renderable = r < MAXRBO
+                && self.rbo[r].used
+                && self.rbo[r].w > 0
+                && self.rbo[r].h > 0
+                && !matches!(self.rbo[r].ifmt, 0x81A5 | 0x81A6 | 0x81A7 | 0x8D48 | 0x88F0);
+            if color_renderable {
+                GL_FRAMEBUFFER_COMPLETE
+            } else {
+                GL_FRAMEBUFFER_INCOMPLETE_ATTACHMENT
+            }
+        } else {
+            GL_FRAMEBUFFER_INCOMPLETE_MISSING_ATTACHMENT
+        }
+    }
+
     /// An FBO's color texture *with data* (gl_shim.c `fbo_color_texture`) — for readback/blit.
     pub fn fbo_color_texture(&self, fbo: u32) -> u32 {
         let f = fbo as usize;

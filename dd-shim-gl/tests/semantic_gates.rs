@@ -8,6 +8,61 @@ use dd_shim_gl::glconst::*;
 use dd_shim_gl::{egl, gles};
 
 #[test]
+fn framebuffer_completeness_tracks_color_attachment_and_blocks_draws() {
+    while gles::glGetError() != GL_NO_ERROR {}
+
+    let mut fbo = 0;
+    gles::glGenFramebuffers(1, &mut fbo);
+    gles::glBindFramebuffer(GL_FRAMEBUFFER, fbo);
+    assert_eq!(
+        gles::glCheckFramebufferStatus(GL_FRAMEBUFFER),
+        GL_FRAMEBUFFER_INCOMPLETE_MISSING_ATTACHMENT
+    );
+
+    // An incomplete FBO must reject before draw snapshot/recording side effects.
+    gles::glDrawArrays(GL_TRIANGLES, 0, 3);
+    assert_eq!(gles::glGetError(), GL_INVALID_FRAMEBUFFER_OPERATION);
+    gles::glClear(GL_COLOR_BUFFER_BIT);
+    assert_eq!(gles::glGetError(), GL_INVALID_FRAMEBUFFER_OPERATION);
+
+    let mut texture = 0;
+    gles::glGenTextures(1, &mut texture);
+    gles::glBindTexture(GL_TEXTURE_2D, texture);
+    gles::glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, texture, 0);
+    assert_eq!(
+        gles::glCheckFramebufferStatus(GL_FRAMEBUFFER),
+        GL_FRAMEBUFFER_INCOMPLETE_ATTACHMENT,
+        "a live texture without storage is not a complete attachment"
+    );
+
+    gles::glTexImage2D(
+        GL_TEXTURE_2D,
+        0,
+        GL_RGBA as i32,
+        8,
+        4,
+        0,
+        GL_RGBA,
+        GL_UNSIGNED_BYTE,
+        core::ptr::null(),
+    );
+    assert_eq!(gles::glCheckFramebufferStatus(GL_FRAMEBUFFER), GL_FRAMEBUFFER_COMPLETE);
+
+    // Deleting the attachment detaches it from the framebuffer and restores missing-attachment status.
+    gles::glDeleteTextures(1, &texture);
+    assert_eq!(
+        gles::glCheckFramebufferStatus(GL_FRAMEBUFFER),
+        GL_FRAMEBUFFER_INCOMPLETE_MISSING_ATTACHMENT
+    );
+
+    assert_eq!(gles::glCheckFramebufferStatus(0xDEAD), 0);
+    assert_eq!(gles::glGetError(), GL_INVALID_ENUM);
+    gles::glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    assert_eq!(gles::glCheckFramebufferStatus(GL_FRAMEBUFFER), GL_FRAMEBUFFER_COMPLETE);
+    gles::glDeleteFramebuffers(1, &fbo);
+}
+
+#[test]
 fn generated_names_bind_lazily_and_deletion_detaches_every_binding() {
     while gles::glGetError() != GL_NO_ERROR {}
     let mut buffer = 0;

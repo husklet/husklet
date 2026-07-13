@@ -1552,6 +1552,12 @@ pub extern "C" fn glDisableVertexAttribArray(index: u32) {
 #[no_mangle]
 pub extern "C" fn glClear(mask: u32) {
     let mut s = gl();
+    if s.framebuffer_status(s.draw_fbo) != GL_FRAMEBUFFER_COMPLETE {
+        if s.error == GL_NO_ERROR {
+            s.error = GL_INVALID_FRAMEBUFFER_OPERATION;
+        }
+        return;
+    }
     let (sx, sy, sw, sh, scissored) = s.clear_scissor_rect();
     if mask & GL_COLOR_BUFFER_BIT != 0 {
         if scissored {
@@ -1573,6 +1579,12 @@ pub extern "C" fn glClear(mask: u32) {
 #[no_mangle]
 pub extern "C" fn glDrawArrays(mode: u32, first: i32, count: i32) {
     let mut s = gl();
+    if s.framebuffer_status(s.draw_fbo) != GL_FRAMEBUFFER_COMPLETE {
+        if s.error == GL_NO_ERROR {
+            s.error = GL_INVALID_FRAMEBUFFER_OPERATION;
+        }
+        return;
+    }
     s.draw_mode = mode as i32;
     s.draw_first = first;
     s.draw_count = count;
@@ -1585,6 +1597,12 @@ pub extern "C" fn glDrawArrays(mode: u32, first: i32, count: i32) {
 #[no_mangle]
 pub extern "C" fn glDrawElements(mode: u32, count: i32, typ: u32, indices: *const c_void) {
     let mut s = gl();
+    if s.framebuffer_status(s.draw_fbo) != GL_FRAMEBUFFER_COMPLETE {
+        if s.error == GL_NO_ERROR {
+            s.error = GL_INVALID_FRAMEBUFFER_OPERATION;
+        }
+        return;
+    }
     s.draw_mode = mode as i32;
     s.draw_count = count;
     s.draw_indexed = true;
@@ -1611,11 +1629,19 @@ pub extern "C" fn glDrawElementsInstanced(mode: u32, count: i32, typ: u32, indic
     glDrawElements(mode, count, typ, indices);
 }
 
-/// `glCheckFramebufferStatus` — the shim's offscreen FBOs are always complete (gl_shim.c returns
-/// GL_FRAMEBUFFER_COMPLETE). A stubbed `0` would abort every app's FBO setup, so this is load-bearing.
 #[no_mangle]
-pub extern "C" fn glCheckFramebufferStatus(_target: u32) -> u32 {
-    0x8CD5 // GL_FRAMEBUFFER_COMPLETE
+pub extern "C" fn glCheckFramebufferStatus(target: u32) -> u32 {
+    let s = gl();
+    let fbo = match target {
+        GL_FRAMEBUFFER | GL_DRAW_FRAMEBUFFER => s.draw_fbo,
+        GL_READ_FRAMEBUFFER => s.read_fbo,
+        _ => {
+            drop(s);
+            crate::state::set_gl_error(GL_INVALID_ENUM);
+            return 0;
+        }
+    };
+    s.framebuffer_status(fbo)
 }
 
 // ===================================================================================================
@@ -1738,20 +1764,35 @@ pub extern "C" fn glIsFramebuffer(fbo: u32) -> u8 {
 pub extern "C" fn glFramebufferTexture2D(target: u32, attachment: u32, textarget: u32, tex: u32, level: i32) {
     let mut s = gl();
     let f = if target == GL_READ_FRAMEBUFFER { s.read_fbo } else { s.draw_fbo };
-    if (target == GL_FRAMEBUFFER || target == GL_DRAW_FRAMEBUFFER || target == GL_READ_FRAMEBUFFER)
-        && attachment == GL_COLOR_ATTACHMENT0
-        && textarget == GL_TEXTURE_2D
-        && level == 0
-        && f > 0
-        && (f as usize) < MAXFBO
-    {
-        let fb = &mut s.fbo[f as usize];
-        fb.used = true;
-        fb.color_tex = tex;
-        fb.color_rbo = 0;
-        fb.color_level = 0;
-        fb.color_layer = 0;
+    if target != GL_FRAMEBUFFER && target != GL_DRAW_FRAMEBUFFER && target != GL_READ_FRAMEBUFFER {
+        if s.error == GL_NO_ERROR {
+            s.error = GL_INVALID_ENUM;
+        }
+        return;
     }
+    if attachment != GL_COLOR_ATTACHMENT0 || textarget != GL_TEXTURE_2D || level != 0 {
+        if s.error == GL_NO_ERROR {
+            s.error = GL_INVALID_VALUE;
+        }
+        return;
+    }
+    if f == 0 || f as usize >= MAXFBO {
+        if s.error == GL_NO_ERROR {
+            s.error = GL_INVALID_OPERATION;
+        }
+        return;
+    }
+    if tex != 0 && (tex as usize >= MAXTEX || !s.tex[tex as usize].used) {
+        if s.error == GL_NO_ERROR {
+            s.error = GL_INVALID_OPERATION;
+        }
+        return;
+    }
+    let fb = &mut s.fbo[f as usize];
+    fb.color_tex = tex;
+    fb.color_rbo = 0;
+    fb.color_level = level;
+    fb.color_layer = 0;
 }
 
 #[no_mangle]
@@ -1777,19 +1818,35 @@ pub extern "C" fn glFramebufferTextureLayer(target: u32, attachment: u32, tex: u
 pub extern "C" fn glFramebufferRenderbuffer(target: u32, attachment: u32, rbtarget: u32, rbo: u32) {
     let mut s = gl();
     let f = if target == GL_READ_FRAMEBUFFER { s.read_fbo } else { s.draw_fbo };
-    if (target == GL_FRAMEBUFFER || target == GL_DRAW_FRAMEBUFFER || target == GL_READ_FRAMEBUFFER)
-        && attachment == GL_COLOR_ATTACHMENT0
-        && rbtarget == GL_RENDERBUFFER
-        && f > 0
-        && (f as usize) < MAXFBO
-    {
-        let fb = &mut s.fbo[f as usize];
-        fb.used = true;
-        fb.color_tex = 0;
-        fb.color_rbo = rbo;
-        fb.color_level = 0;
-        fb.color_layer = 0;
+    if target != GL_FRAMEBUFFER && target != GL_DRAW_FRAMEBUFFER && target != GL_READ_FRAMEBUFFER {
+        if s.error == GL_NO_ERROR {
+            s.error = GL_INVALID_ENUM;
+        }
+        return;
     }
+    if attachment != GL_COLOR_ATTACHMENT0 || rbtarget != GL_RENDERBUFFER {
+        if s.error == GL_NO_ERROR {
+            s.error = GL_INVALID_ENUM;
+        }
+        return;
+    }
+    if f == 0 || f as usize >= MAXFBO {
+        if s.error == GL_NO_ERROR {
+            s.error = GL_INVALID_OPERATION;
+        }
+        return;
+    }
+    if rbo != 0 && (rbo as usize >= MAXRBO || !s.rbo[rbo as usize].used) {
+        if s.error == GL_NO_ERROR {
+            s.error = GL_INVALID_OPERATION;
+        }
+        return;
+    }
+    let fb = &mut s.fbo[f as usize];
+    fb.color_tex = 0;
+    fb.color_rbo = rbo;
+    fb.color_level = 0;
+    fb.color_layer = 0;
 }
 
 fn rbo_component_bits(ifmt: u32) -> (i32, i32, i32, i32, i32, i32) {

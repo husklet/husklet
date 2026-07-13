@@ -159,14 +159,11 @@ Specific correctness gaps:
   checked add/multiply/align before allocating, reading client memory or mutating the texture. Store every mip/layer
   plus immutable flag/level count and enforce completeness/filter rules. `gles_pixel_store_and_texture_upload_validation_is_atomic_and_checked`
   pins invalid pixel store, safe arithmetic and immutable state.
-- `glCheckFramebufferStatus` unconditionally returns complete. Attach calls accept missing/wrong-type/undefined
-  objects, track only color attachment zero, and discard most mip/layer state; depth/stencil attachment sizes, formats
-  and samples do not participate. Consequently draw, clear, read and blit can silently no-op or touch unrelated state
-  instead of raising `GL_INVALID_FRAMEBUFFER_OPERATION`. Store typed attachment references with generation, target,
-  level/layer and renderability; calculate status from existence, definition, dimensions, samples, layeredness and
-  supported combinations, invalidating a cached result whenever an attachment/storage changes. All framebuffer-using
-  calls must consult it before mutation. `gles_framebuffer_completeness_reflects_attachment_state_and_blocks_draws`
-  begins with the mandatory missing-attachment result and pins the remaining status/error vocabulary.
+- User framebuffers now report missing and incomplete color attachments, accept only live typed texture/renderbuffer
+  names, and block clear/draw atomically with `GL_INVALID_FRAMEBUFFER_OPERATION`. The default framebuffer remains
+  complete. This closes the unconditional-complete and silent-draw contradiction for the implemented color-only
+  path. Depth/stencil attachments, dimension/sample matching across multiple attachments, layered/cube targets,
+  generation-tagged attachment references, `GL_FRAMEBUFFER_UNSUPPORTED`, and completeness guards on read/blit remain.
 - Draw entry points mutate snapshot state and enqueue work without validating primitive mode, negative first/count,
   index type/alignment/range, linked current program, framebuffer completeness, enabled attribute sources or mapped
   buffers. Instanced draws discard the instance count. Add one side-effect-free `validate_draw` that resolves the
@@ -1090,7 +1087,7 @@ pixels, and fails against the broken behavior. Do not add tests that read implem
 | `gles_generated_names_binding_and_deletion_follow_object_lifetimes` | contradictory | generated names are prematurely live and deletion leaves stale bindings | Reserved/live generations with lazy bind and complete detachment tests |
 | `gles_shader_program_attachment_detach_and_delete_pending_are_consistent` | missing | shader attachments and deferred deletion are not modeled | Strong attachment sets, delete-pending ownership and query tests |
 | `gles_pixel_store_and_texture_upload_validation_is_atomic_and_checked` | contradictory | invalid pixel-store/upload state uses unchecked arithmetic and mutates textures | Checked format/layout table, immutable mip storage and negative corpus |
-| `gles_framebuffer_completeness_reflects_attachment_state_and_blocks_draws` | contradictory | every framebuffer reports complete regardless of attachment state | Typed attachments, computed status and incomplete-operation errors |
+| `gles_framebuffer_completeness_reflects_attachment_state_and_blocks_draws` | partial | color-only FBOs compute missing/undefined attachment status and block clear/draw; broader attachment vocabulary and read/blit guards remain | Depth/stencil/layer/sample compatibility plus read/blit negative matrix |
 | `gles_draw_calls_validate_all_inputs_before_snapshot_or_recording` | contradictory | invalid draw modes/counts/state are snapshotted and recorded silently | Atomic draw validator plus buffer/program/FBO negative corpus |
 | `gles_readpixels_validates_pack_layout_and_preserves_output_on_error` | contradictory | invalid readback zero-fills output and ignores pack layout | Checked pack-state readback after completion synchronization |
 | `gles_sync_objects_track_real_submission_completion_and_wait_results` | missing | sync APIs have no objects or cross-process completion serial | Context serials, typed acknowledgements and timeout/lifetime parity tests |
