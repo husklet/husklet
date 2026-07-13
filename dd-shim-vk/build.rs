@@ -20,12 +20,109 @@
 //! Also sets the shared-object soname to `libvk_dd.so.1` (the ICD library the icd.json `library_path`
 //! names).
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fmt::Write as _;
 use std::path::PathBuf;
 
+// VkResult error values (stable Vulkan ABI, from vk.xml) a truthful stub returns instead of a false
+// `VK_SUCCESS`. Kept in lock-step with `src/types.rs`; the crate's inventory test cross-checks them.
+const VK_ERROR_EXTENSION_NOT_PRESENT: i32 = -7;
+const VK_ERROR_FEATURE_NOT_PRESENT: i32 = -8;
+
+/// The union of instance + device extensions the ICD advertises (mirrors `crate::capability`'s
+/// `ADVERTISED_*_EXTENSIONS`). A `VkResult` stub whose command comes from an extension NOT in this set
+/// returns `VK_ERROR_EXTENSION_NOT_PRESENT` (the extension is genuinely absent); a core command, or a
+/// still-unimplemented command from an advertised extension, returns `VK_ERROR_FEATURE_NOT_PRESENT`.
+fn advertised_extensions() -> HashSet<&'static str> {
+    [
+        "VK_KHR_surface",
+        "VK_KHR_wayland_surface",
+        "VK_KHR_get_physical_device_properties2",
+        "VK_KHR_swapchain",
+    ]
+    .into_iter()
+    .collect()
+}
+
+/// The `VkResult` error a `VkResult`-returning stub returns, from its origin + the advertised set.
+fn stub_vk_error(origin: &str, advertised: &HashSet<&str>) -> i32 {
+    match origin.strip_prefix("ext:") {
+        Some(ext) if advertised.contains(ext) => VK_ERROR_FEATURE_NOT_PRESENT,
+        Some(_) => VK_ERROR_EXTENSION_NOT_PRESENT, // unadvertised (or "(unlisted)") extension
+        None => VK_ERROR_FEATURE_NOT_PRESENT,      // core:X.Y
+    }
+}
+
+/// Load the `vk.xml`-derived origin sidecar (`registry/vk_command_origins.manifest`): command name →
+/// `"core:1.0"`..`"core:1.3"` / `"ext:VK_..."`. A command absent from the sidecar (a platform/vulkansc
+/// command with no plain-`vulkan` origin) defaults to `"ext:(unlisted)"` — truthfully "not present".
+fn load_origins(dir: &str) -> HashMap<String, String> {
+    let path = PathBuf::from(dir).join("registry/vk_command_origins.manifest");
+    println!("cargo:rerun-if-changed={}", path.display());
+    let text = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {}: {e}", path.display()));
+    let mut m = HashMap::new();
+    for line in text.lines() {
+        let line = line.trim_end();
+        if !line.starts_with("O\t") {
+            continue;
+        }
+        let mut f = line.split('\t');
+        f.next();
+        let name = f.next().unwrap_or("");
+        let origin = f.next().unwrap_or("");
+        if !name.is_empty() {
+            m.insert(name.to_string(), origin.to_string());
+        }
+    }
+    m
+}
+
+/// Bring-up bodies whose behaviour is bounded (Phase-0 `partial`, per audit §2.2) → the supported-domain
+/// note. Any `IMPLEMENTED` command NOT listed here is classified `full`. Everything not `IMPLEMENTED`
+/// is a `stub`.
+fn partial_note(name: &str) -> Option<&'static str> {
+    Some(match name {
+        // physical-device queries: a valid answer over a bounded value domain
+        "vkGetPhysicalDeviceProperties" | "vkGetPhysicalDeviceProperties2" => {
+            "limits/props are a plausible Metal-class subset; the long tail defaults to zero"
+        }
+        "vkGetPhysicalDeviceFeatures" | "vkGetPhysicalDeviceFeatures2" => {
+            "reports a conservative feature subset, not the full device feature set"
+        }
+        "vkGetPhysicalDeviceFormatProperties" | "vkGetPhysicalDeviceFormatProperties2" => {
+            "broad fixed feature flags, not per-format-measured capabilities"
+        }
+        // memory: the single unified HOST_VISIBLE|COHERENT staging model
+        "vkAllocateMemory" | "vkMapMemory" => {
+            "single unified HOST_VISIBLE|COHERENT memory type modeled as a staging Vec<u8>"
+        }
+        "vkCreateImage" => "COLOR_ATTACHMENT render-target subset; general images/tiling not modeled",
+        // submit + synchronization: the bring-up dependency model
+        "vkQueueSubmit" => "records + ships IR; ignores wait/signal semaphores beyond the bring-up model",
+        "vkCreateSemaphore" | "vkDestroySemaphore" => {
+            "binary semaphore handle only; no timeline or wait/signal state machine"
+        }
+        "vkWaitForFences" | "vkGetFenceStatus" | "vkResetFences" => {
+            "fences modeled as already-signaled (synchronous host replay); no real timeout/unsignaled state"
+        }
+        // WSI: the fixed FIFO / round-robin bring-up swapchain
+        "vkCreateSwapchainKHR" => "fixed FIFO / one-format / identity swapchain; no oldSwapchain reuse",
+        "vkAcquireNextImageKHR" => {
+            "round-robin acquire; acquire fence/semaphore treated as signaled; no timeout/OUT_OF_DATE"
+        }
+        "vkQueuePresentKHR" => "synchronous present; no per-image present-result array / SUBOPTIMAL",
+        "vkGetPhysicalDeviceSurfaceCapabilitiesKHR"
+        | "vkGetPhysicalDeviceSurfaceFormatsKHR"
+        | "vkGetPhysicalDeviceSurfacePresentModesKHR" => {
+            "fixed WSI capabilities (one format, FIFO, identity transform, opaque alpha)"
+        }
+        _ => return None,
+    })
+}
+
 fn main() {
-    let manifest = PathBuf::from(env("CARGO_MANIFEST_DIR")).join("registry/vk_commands.manifest");
+    let dir = env("CARGO_MANIFEST_DIR");
+    let manifest = PathBuf::from(&dir).join("registry/vk_commands.manifest");
     println!("cargo:rerun-if-changed={}", manifest.display());
     println!("cargo:rerun-if-changed=build.rs");
     // The soname is the deployed Linux guest ICD name. `-Wl,-soname` is a GNU-ld flag; macOS `ld`
@@ -58,6 +155,11 @@ fn main() {
     out.push_str("// @generated by build.rs from registry/vk_commands.manifest — DO NOT EDIT.\n");
     out.push_str("// (crate-level `#![allow(non_snake_case, ...)]` lives in src/lib.rs.)\n\n");
 
+    let origins = load_origins(&dir);
+    let advertised = advertised_extensions();
+    // One inventory row per exported command: (name, cap-level, vk_error, origin, note).
+    let mut inventory: Vec<(String, &'static str, i32, String, &'static str)> = Vec::new();
+
     let mut cmds = 0usize;
     let mut stubs = 0usize;
     let mut dispatch = String::new();
@@ -79,6 +181,7 @@ fn main() {
             panic!("manifest line {}: empty name: {line:?}", lineno + 1);
         }
         cmds += 1;
+        let origin = origins.get(name).cloned().unwrap_or_else(|| "ext:(unlisted)".to_string());
         // Every exported entry point — hand-written or generated — is resolvable at crate root by its
         // bare name (implemented ones via `pub use` in lib.rs), so the dispatch resolver references
         // them uniformly. The fn-item→address cast (`as *const () as usize`) must run at RUNTIME (a
@@ -87,16 +190,33 @@ fn main() {
         writeln!(dispatch, "        \"{name}\" => Some({name} as *const () as usize),").unwrap();
         writeln!(names, "    \"{name}\",").unwrap();
         if IMPLEMENTED.contains(&name) {
-            continue; // hand-written in src/; a generated stub would collide.
+            // hand-written in src/; a generated stub would collide. Full unless the bring-up body is
+            // bounded (audit §2.2), in which case it is `partial` with a supported-domain note.
+            let (level, note) = match partial_note(name) {
+                Some(n) => ("Partial", n),
+                None => ("Full", ""),
+            };
+            inventory.push((name.to_string(), level, 0, origin, note));
+            continue;
         }
         stubs += 1;
-        emit_stub(&mut out, name, ret, params, &kinds);
+        // Truthful failure: a `VkResult` stub returns the API-defined error (never `VK_SUCCESS`); every
+        // other return is the truthful zero/`VK_FALSE`/NULL. The error is recorded in the inventory.
+        let vk_error = if ret.trim() == "VkResult" {
+            stub_vk_error(&origin, &advertised)
+        } else {
+            0
+        };
+        emit_stub(&mut out, name, ret, params, &kinds, vk_error);
+        inventory.push((name.to_string(), "Stub", vk_error, origin, ""));
     }
 
     writeln!(out, "\n/// Total Vulkan entry points in the manifest (the full vk.xml surface).").unwrap();
     writeln!(out, "pub const VK_ENTRYPOINTS: usize = {cmds};").unwrap();
     writeln!(out, "/// Entry points emitted as default stubs (not yet hand-implemented).").unwrap();
     writeln!(out, "pub const GENERATED_STUBS: usize = {stubs};").unwrap();
+
+    emit_capabilities(&mut out, &inventory);
 
     // The name→address resolver `vk_icdGetInstanceProcAddr` / `vkGetInstanceProcAddr` scan. A match
     // over the whole exported `vk*` surface; the address cast runs at call time (see above).
@@ -111,10 +231,12 @@ fn main() {
     std::fs::write(&out_path, out).unwrap();
 }
 
-fn emit_stub(out: &mut String, name: &str, ret: &str, params: &str, kinds: &HashMap<String, String>) {
+fn emit_stub(out: &mut String, name: &str, ret: &str, params: &str, kinds: &HashMap<String, String>, vk_error: i32) {
     let mut sig = String::new();
     let mut argnames: Vec<String> = Vec::new();
+    let mut last_out: Option<String> = None; // last param IF it is a single `*mut` output pointer
     if !params.is_empty() {
+        let n = params.split(';').count();
         for (i, p) in params.split(';').enumerate() {
             let (ty, pname) = p.split_once('|').unwrap_or_else(|| panic!("bad param {p:?} in {name}"));
             let rty = map_type(ty.trim(), name, kinds);
@@ -128,20 +250,84 @@ fn emit_stub(out: &mut String, name: &str, ret: &str, params: &str, kinds: &Hash
                 sig.push_str(", ");
             }
             write!(sig, "{pn}: {rty}").unwrap();
+            // A `vkCreate*`/`vkAllocate*` command's final parameter is its output handle (or handle
+            // array) — a single, non-const `*mut` pointer to ≥8-byte handle storage. Record it so the
+            // stub can null it (VK_NULL_HANDLE) before returning the error: truthful failure must
+            // initialize the output, never leave a caller reading an uninitialized handle.
+            if i + 1 == n && rty.starts_with("*mut ") && !rty.starts_with("*mut *mut") {
+                last_out = Some(pn.clone());
+            }
             argnames.push(pn);
         }
     }
     let rmap = map_ret(ret.trim(), name, kinds);
     let arrow = rmap.as_ref().map(|r| format!(" -> {r}")).unwrap_or_default();
     let touch: String = argnames.iter().map(|a| format!("let _ = {a}; ")).collect();
+    // For a create/allocate VkResult stub, null the output handle before failing.
+    let init_out = match (&rmap, &last_out) {
+        (Some(_), Some(outp)) if ret.trim() == "VkResult" && (name.starts_with("vkCreate") || name.starts_with("vkAllocate")) => {
+            format!("unsafe {{ if !{outp}.is_null() {{ *({outp} as *mut u64) = 0; }} }} ")
+        }
+        _ => String::new(),
+    };
     let body = match &rmap {
         None => format!("{touch}crate::stub::hit(\"{name}\");"),
         Some(r) => {
-            let dflt = default_for(r);
-            format!("{touch}crate::stub::hit(\"{name}\"); {dflt}")
+            // A `VkResult` stub returns the API-defined error (never `VK_SUCCESS`); any other return is
+            // the truthful zero/`VK_FALSE`/NULL default.
+            let retval = if ret.trim() == "VkResult" {
+                vk_error.to_string()
+            } else {
+                default_for(r).to_string()
+            };
+            format!("{touch}{init_out}crate::stub::hit(\"{name}\"); {retval}")
         }
     };
     writeln!(out, "#[no_mangle]\npub extern \"C\" fn {name}({sig}){arrow} {{ {body} }}\n").unwrap();
+}
+
+/// Emit the generated capability inventory (`CAPABILITIES` + `CAP_FULL`/`CAP_PARTIAL`/`CAP_STUB`) and
+/// the Vulkan-1.0 mandatory-core census (`CORE_1_0_*`). This is Phase 0's machine-checkable "no command
+/// advertised without a full/partial/stub record" deliverable.
+fn emit_capabilities(out: &mut String, inventory: &[(String, &'static str, i32, String, &'static str)]) {
+    let mut full = 0usize;
+    let mut partial = 0usize;
+    let mut stub = 0usize;
+    let (mut core10_total, mut core10_impl) = (0usize, 0usize);
+    writeln!(out, "\n/// The generated capability inventory — one record per exported `vk*` entry point:").unwrap();
+    writeln!(out, "/// full/partial/stub, the `VkResult` each stub returns, and its core-version/extension origin.").unwrap();
+    writeln!(out, "pub static CAPABILITIES: &[crate::capability::Entry] = &[").unwrap();
+    for (name, level, err, origin, note) in inventory {
+        match *level {
+            "Full" => full += 1,
+            "Partial" => partial += 1,
+            "Stub" => stub += 1,
+            other => panic!("bad capability level {other:?} for {name}"),
+        }
+        if origin == "core:1.0" {
+            core10_total += 1;
+            if *level != "Stub" {
+                core10_impl += 1;
+            }
+        }
+        let note_esc = note.replace('\\', "\\\\").replace('"', "\\\"");
+        writeln!(
+            out,
+            "    crate::capability::Entry {{ name: {name:?}, cap: crate::capability::Cap::{level}, vk_error: {err}, origin: {origin:?}, note: \"{note_esc}\" }},"
+        )
+        .unwrap();
+    }
+    writeln!(out, "];").unwrap();
+    writeln!(out, "/// Count of `full` entry points (real body, complete for the bring-up model).").unwrap();
+    writeln!(out, "pub const CAP_FULL: usize = {full};").unwrap();
+    writeln!(out, "/// Count of `partial` (bounded-domain) entry points.").unwrap();
+    writeln!(out, "pub const CAP_PARTIAL: usize = {partial};").unwrap();
+    writeln!(out, "/// Count of `stub` entry points (each returns a truthful non-success value).").unwrap();
+    writeln!(out, "pub const CAP_STUB: usize = {stub};").unwrap();
+    writeln!(out, "/// Vulkan-1.0 mandatory-core census: total core:1.0 commands in the exported surface.").unwrap();
+    writeln!(out, "pub const CORE_1_0_TOTAL: usize = {core10_total};").unwrap();
+    writeln!(out, "/// Vulkan-1.0 mandatory-core census: how many have a real (full/partial) body.").unwrap();
+    writeln!(out, "pub const CORE_1_0_IMPLEMENTED: usize = {core10_impl};").unwrap();
 }
 
 /// C return type -> Rust type (None == `void`/unit). Most Vulkan entry points return `VkResult`

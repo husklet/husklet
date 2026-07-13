@@ -364,9 +364,10 @@ extern commands skipped) + the 3 `vk_icd*` hooks = **696 exported symbols**, no 
 `vkDestroyInstance`; `vkEnumeratePhysicalDevices`; `vkGetPhysicalDeviceProperties`/`Features`/
 `MemoryProperties`/`QueueFamilyProperties`/`FormatProperties`; `vkCreateDevice`/`vkDestroyDevice`/
 `vkGetDeviceQueue`; `vkCreateCommandPool`/`vkDestroyCommandPool`/`vkAllocateCommandBuffers`/
-`vkFreeCommandBuffers`. The other 672 are spec-faithful `DD_SHIM_DEBUG`-traced default stubs
-(`VK_SUCCESS`), ported to real bodies incrementally — the shrinking long tail, exactly like the
-siblings.
+`vkFreeCommandBuffers`. The rest are `DD_SHIM_DEBUG`-traced default stubs, ported to real bodies
+incrementally — the shrinking long tail, exactly like the siblings. **(Since Phase 0 — see the
+"Phase 0" section below — those stubs fail *truthfully* with the API-defined error rather than
+returning `VK_SUCCESS`.)**
 
 **The Vulkan→IR seam** (`src/ir_seam.rs`) sketches the mapping onto the shared `dd_gpu::ir` (re-exported
 by `dd-shim-common`) and round-trips what it encodes. The keystone: a `VkShaderModule` **is** SPIR-V,
@@ -385,14 +386,17 @@ would (negotiate → `vk_icdGetInstanceProcAddr` → `vkCreateInstance` → `vkE
 `vkGetPhysicalDeviceProperties`), reading back `"dd Metal (Vulkan)"`. And — the real test — the
 **standard Vulkan loader** (`libvulkan`), with `VK_ICD_FILENAMES` pinned at our `icd.json` alone, makes
 `vulkaninfo` **enumerate the dd device with no `VK_ERROR_INCOMPATIBLE_DRIVER`**: `GPU0 … deviceName =
-dd Metal (Vulkan)`, `apiVersion 1.3.0`, `vendorID 0x106b`, `INTEGRATED_GPU`, the queue family
-(GRAPHICS|COMPUTE|TRANSFER), and the unified-memory heap/type. A default `cargo build` does not compile
+dd Metal (Vulkan)`, `apiVersion 1.0.0` (Phase 0 — truthfully capped, see below), `vendorID 0x106b`,
+`INTEGRATED_GPU`, the queue family (GRAPHICS|COMPUTE|TRANSFER), and the unified-memory heap/type. A
+default `cargo build` does not compile
 the crate (out of `default-members`), `dd-gpu`'s tests stay green, and `dd-shim-gl`/`-cuda`/`-cudart`
 are untouched.
 
 The committed `icd.json` uses `"library_path": "./libvk_dd.so"` (relative to the manifest, per the
-loader spec) with `"api_version": "1.3.0"` (≥ 1.1 so the loader loads the library and calls our
-`vkEnumerateInstanceVersion`). Deployment places `libvk_dd.so` next to the manifest and points
+loader spec) with `"api_version": "1.0.0"` (Phase 0 — truthful; the loader then treats us as a 1.0 ICD
+and, per `Vulkan-Loader loader.c` `terminator_CreateInstance`, substitutes the app's requested
+apiVersion down to 1.0 before calling our `vkCreateInstance`, so a `vulkaninfo` that requests 1.3 still
+enumerates our device). Deployment places `libvk_dd.so` next to the manifest and points
 `VK_ICD_FILENAMES`/`VK_DRIVER_FILES` at it.
 
 ### Increment 2 — functional execution (Vulkan → IR → real Metal)
@@ -471,6 +475,79 @@ Metal → the swapchain IOSurface) is wired and Metal-validated; the outstanding
 `zwp_linux_dmabuf_v1` marshalling on the app's connection, unlike dd-shim-gl which drives its own
 socket) — plus standing up the full live stack (engine + dd-display GPU-exec + the `vkself` workspace
 with this ICD deployed). That is the next step to the headline milestone.
+
+### Phase 0 — make the Vulkan surface truthful (advertise only what is backed)
+
+An exported symbol that returns `VK_SUCCESS` without doing the work is a *false* success: it can leave
+output handles unwritten, let invalid state advance, and move the crash far from the unsupported call.
+Phase 0 (`docs/codex-rendering.md` §6, §2.2, §5.1) makes the Vulkan surface honest — the same
+principle already applied to GL and CUDA. Nothing about the ABI surface changes (still 696 exports);
+what changes is that a stub now **fails truthfully**, the ICD advertises only Vulkan 1.0, and every
+command carries a machine-checkable capability record.
+
+- **Truthful failure stubs (`build.rs` + `src/stub.rs`).** A generated `VkResult` stub returns the
+  API-defined error instead of `VK_SUCCESS`: `VK_ERROR_EXTENSION_NOT_PRESENT` when the command comes
+  from an extension the ICD does not advertise, `VK_ERROR_FEATURE_NOT_PRESENT` for an unimplemented
+  core command (or a still-unimplemented command of an advertised extension). A `vkCreate*`/
+  `vkAllocate*` stub also nulls its output handle (`VK_NULL_HANDLE`) before failing, so a caller never
+  reads uninitialized handle storage. A `void` stub is a no-op, a `VkBool32` stub returns `VK_FALSE`,
+  a pointer stub returns NULL — all truthful. Which error each stub returns is derived from the
+  command's origin (see the inventory below).
+
+- **Advertise Vulkan 1.0 and reject newer (`src/state.rs`, `src/instance.rs`, `icd.json`).**
+  `DD_API_VERSION` is now `VK_API_VERSION_1_0`; `vkEnumerateInstanceVersion` and the physical-device
+  `apiVersion` both report 1.0.x, `icd.json` says `"1.0.0"`, and the reported `conformanceVersion` is
+  1.0.0 (we make no CTS claim). `vkCreateInstance` now refuses **any** apiVersion newer than 1.0
+  (variant/major/minor, patch ignored per spec) with `VK_ERROR_INCOMPATIBLE_DRIVER` — the prior gate
+  rejected only `major > 1`, so a 1.4 request slipped through and was accepted. 1.1+ promoted-core
+  semantics (bind_memory2, dynamic rendering, timeline semaphores, the `...2` device queries, …) are
+  still stubs, so advertising 1.1/1.2/1.3 would let an app select a version whose calls do nothing.
+  (`vkcube` requests 1.0, and the real loader substitutes a 1.0 ICD's apiVersion down to 1.0, so both
+  keep working.)
+
+- **Truthful extension enumeration (allow-list).** `vkEnumerateInstanceExtensionProperties` advertises
+  exactly `VK_KHR_surface` + `VK_KHR_wayland_surface` + `VK_KHR_get_physical_device_properties2` (the
+  `...2` physical-device queries this ICD implements), and `vkEnumerateDeviceExtensionProperties`
+  exactly `VK_KHR_swapchain` — the WSI stack + what is actually backed, not everything `vk.xml` lists.
+  These are pinned to `capability::ADVERTISED_{INSTANCE,DEVICE}_EXTENSIONS` and gated by a test.
+
+- **Generated capability inventory (`src/capability.rs` + `build.rs` + `registry/`).** A companion
+  extractor `registry/extract_vk_origins.py` reads `vk.xml` into a committed provenance sidecar
+  `registry/vk_command_origins.manifest` (command → `core:1.0`..`core:1.3` or `ext:VK_...`) — this
+  never affects the ABI surface (that stays pinned by `vk_commands.manifest`). `build.rs` joins it with
+  the `IMPLEMENTED` set and a `partial` override table to emit `capability::CAPABILITIES`: one record
+  per exported command tagging it `full` / `partial` / `stub`, the exact `VkResult` each stub returns,
+  and its core-version/extension origin. Compile-time counts (`CAP_FULL` / `CAP_PARTIAL` / `CAP_STUB`,
+  the Vulkan-1.0 census `CORE_1_0_TOTAL` / `CORE_1_0_IMPLEMENTED`) and a crate test enforce that **every
+  exported command has a record** and **no stub advertises a false `VK_SUCCESS`**. Runtime debug output
+  and this document draw from the same census, so advertised vs. truthful cannot drift.
+
+  Current census (HEAD): **693 commands = 79 `full` + 21 `partial` + 593 `stub`**. Of the **215**
+  cumulative core commands (137 core:1.0, 28 core:1.1, 13 core:1.2, 37 core:1.3), the advertised
+  **Vulkan-1.0 mandatory core is 137 commands, 82 of them bodied** (55 remain stubs, each failing with
+  `VK_ERROR_FEATURE_NOT_PRESENT`). The 21 `partial` bodies are the bring-up simplifications the audit
+  flags (fixed-FIFO/round-robin swapchain, already-signaled fences, binary-only semaphores, the single
+  unified memory type, the Metal-class limit/feature subset) — each carries a supported-domain note.
+
+- **`DD_SHIM_STRICT=1` (`src/stub.rs`).** Every stub call funnels through `stub::hit`, which records a
+  recent-call history ring, once-logs the name under `DD_SHIM_DEBUG`, and — under `DD_SHIM_STRICT=1` —
+  prints command + object + recent history and aborts at the **first** unsupported call, so an
+  exploratory app run stops exactly where dd cannot honestly act instead of silently mis-executing.
+  (Under `cfg(test)` the abort sets a thread-local flag instead of killing the process, so it is
+  assertable.) Same machinery as dd-shim-cuda / dd-shim-gl.
+
+- **Tests (`src/lib.rs`).** Eight Phase-0 gates: the inventory covers every exported command and the
+  counts partition the surface; no stub advertises false success; a real stub call
+  (`vkCreateSampler`) returns `VK_ERROR_FEATURE_NOT_PRESENT` *and* nulls its output while an
+  unadvertised-extension stub returns `VK_ERROR_EXTENSION_NOT_PRESENT`; the ICD advertises 1.0
+  consistently; a 1.4 / 1.1 / 2.0 `vkCreateInstance` is refused with `VK_ERROR_INCOMPATIBLE_DRIVER`
+  while 1.0 (and a 1.0.x patch) succeed; extension enumeration equals the allow-list; `DD_SHIM_STRICT`
+  trips the abort; and the generated Vulkan-1.0 mandatory-core census is self-consistent.
+
+**Exit gate (Phase 0, Vulkan):** no advertised Vulkan command is a default stub returning success; the
+ICD advertises 1.0 truthfully; a newer request is rejected. **Met.** The next steps are Phase 1
+(build extension/feature/format/limit responses from one device profile) and Phase 5 (grow the
+1.0 mandatory core from 82/137 toward complete vertical slices).
 
 ## Retiring `gl_shim.c` (the incremental cutover)
 

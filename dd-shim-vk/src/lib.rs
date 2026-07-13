@@ -17,12 +17,18 @@
 //! * **Type/ABI surface** — the Khronos **`ash`** bindings (`ash::vk`) for spec-exact `#[repr(C)]`
 //!   struct layouts, and the Khronos **`vk.xml`** registry for the full entry-point list.
 //!
-//! ## Coverage
+//! ## Coverage (truthful — Phase 0)
 //! The exported `vk*` *surface* is code-generated from `vk.xml` (`build.rs` + `registry/`) — the full
 //! core + extension command set (693 commands). Entry points in [`build::IMPLEMENTED`](../build.rs)
-//! have real hand-written bodies; the rest are generated spec-faithful default stubs (correct ABI,
-//! `VK_SUCCESS` return, `DD_SHIM_DEBUG`-traced), ported to real bodies incrementally — the shrinking
-//! long tail. The [`ir_seam`] module sketches the Vulkan→IR mapping and round-trips what it encodes.
+//! have real hand-written bodies; the rest are generated **truthful-failure** stubs (correct ABI, a
+//! `DD_SHIM_DEBUG` trace, and — crucially — the API-defined error, never a false `VK_SUCCESS`): a
+//! `VkResult` stub returns `VK_ERROR_FEATURE_NOT_PRESENT` (unimplemented core) or
+//! `VK_ERROR_EXTENSION_NOT_PRESENT` (command from an unadvertised extension) and nulls its output
+//! handle; a `void`/`VkBool32`/pointer stub returns the truthful no-op/`VK_FALSE`/NULL. Every command
+//! carries a [`capability`] inventory record (full/partial/stub + the error + core-version/extension
+//! origin). The ICD advertises **Vulkan 1.0** and rejects a newer request with
+//! `VK_ERROR_INCOMPATIBLE_DRIVER`. `DD_SHIM_STRICT=1` aborts at the first stub call. The [`ir_seam`]
+//! module sketches the Vulkan→IR mapping and round-trips what it encodes.
 
 // The generated + hand-written entry-point surface uses the Vulkan C names verbatim (vkCreateInstance,
 // PFN_vkVoidFunction, …) — those are the ABI identifiers, so the Rust casing lints don't apply.
@@ -32,6 +38,7 @@
 // IR type is dd-gpu's, not a local copy.
 pub use dd_shim_common as common;
 
+pub mod capability;
 pub mod command;
 pub mod descriptor;
 pub mod device;
@@ -100,6 +107,211 @@ mod tests {
             assert!(
                 DISPATCH_NAMES.contains(&name) && dispatch_addr(name).is_some(),
                 "dispatch resolver missing bring-up entry point {name}"
+            );
+        }
+    }
+
+    // ---- Phase 0: the generated capability inventory ---------------------------------------------
+
+    /// The census must classify EVERY exported command (nothing advertised without a full/partial/stub
+    /// record) and the counts must be internally consistent.
+    #[test]
+    fn capability_inventory_covers_every_exported_command() {
+        use capability::Cap;
+        assert_eq!(
+            CAPABILITIES.len(),
+            TOTAL_ENTRYPOINTS,
+            "inventory must have one record per exported vk* command"
+        );
+        // One-to-one with the dispatch census (no orphan record, no unadvertised command).
+        let inv: std::collections::HashSet<&str> =
+            CAPABILITIES.iter().map(|e| e.name).collect();
+        for name in DISPATCH_NAMES {
+            assert!(inv.contains(name), "exported command {name} has no capability record");
+        }
+        assert_eq!(inv.len(), DISPATCH_NAMES.len(), "duplicate/extra capability records");
+        // Level counts partition the whole surface, and stubs == the generated long tail.
+        let (mut full, mut partial, mut stub) = (0usize, 0usize, 0usize);
+        for e in CAPABILITIES {
+            match e.cap {
+                Cap::Full => full += 1,
+                Cap::Partial => partial += 1,
+                Cap::Stub => stub += 1,
+            }
+        }
+        assert_eq!((full, partial, stub), (CAP_FULL, CAP_PARTIAL, CAP_STUB));
+        assert_eq!(full + partial + stub, TOTAL_ENTRYPOINTS);
+        assert_eq!(stub, GENERATED_STUBS, "every generated stub must carry a `Stub` record");
+        assert_eq!(full + partial, TOTAL_ENTRYPOINTS - GENERATED_STUBS);
+    }
+
+    /// No `stub` record may claim a false `VK_SUCCESS`, and each origin must be a recognized
+    /// core-version or extension token. A `full`/`partial` entry must carry no error.
+    #[test]
+    fn no_stub_advertises_false_success() {
+        use capability::Cap;
+        for e in CAPABILITIES {
+            let ok_origin = e.origin.starts_with("core:") || e.origin.starts_with("ext:");
+            assert!(ok_origin, "{}: unrecognized origin {:?}", e.name, e.origin);
+            match e.cap {
+                Cap::Stub => {
+                    // A VkResult stub returns FEATURE/EXTENSION_NOT_PRESENT; a non-VkResult stub records
+                    // 0 (void/VK_FALSE/NULL). Never VK_SUCCESS with a VkResult — that is the false
+                    // success Phase 0 forbids. `vk_error` is either 0 (non-VkResult) or a defined error.
+                    assert!(
+                        e.vk_error == 0
+                            || e.vk_error == types::VK_ERROR_FEATURE_NOT_PRESENT
+                            || e.vk_error == types::VK_ERROR_EXTENSION_NOT_PRESENT,
+                        "{}: stub error {} is not a truthful default",
+                        e.name,
+                        e.vk_error
+                    );
+                }
+                Cap::Full | Cap::Partial => {
+                    assert_eq!(e.vk_error, 0, "{}: an implemented entry must not preset an error", e.name);
+                }
+            }
+        }
+    }
+
+    /// A generated `VkResult` stub must return the API-defined error (never `VK_SUCCESS`) AND initialize
+    /// its output handle — the exact false-success trap Phase 0 removes. Proven against a real exported
+    /// stub call (`vkCreateSampler`, a core:1.0 command) and an unadvertised-extension stub.
+    #[test]
+    fn stub_returns_truthful_error_and_inits_output() {
+        // vkCreateSampler is a stub (not in IMPLEMENTED): must null pSampler and return FEATURE_NOT_PRESENT.
+        let mut sampler: u64 = 0xdead_beef; // poison; the stub must overwrite it with VK_NULL_HANDLE (0)
+        let r = vkCreateSampler(
+            core::ptr::null_mut(),
+            core::ptr::null(),
+            core::ptr::null(),
+            &mut sampler as *mut u64 as *mut core::ffi::c_void,
+        );
+        assert_eq!(r, types::VK_ERROR_FEATURE_NOT_PRESENT, "core stub must fail, not succeed");
+        assert_eq!(sampler, 0, "stub must initialize the output handle to VK_NULL_HANDLE");
+        // A command from an unadvertised extension reports EXTENSION_NOT_PRESENT.
+        let r2 = vkBindBufferMemory2KHR(core::ptr::null_mut(), 0, core::ptr::null());
+        assert_eq!(r2, types::VK_ERROR_EXTENSION_NOT_PRESENT);
+        // And the inventory records exactly those errors for those commands.
+        let rec = |n: &str| CAPABILITIES.iter().find(|e| e.name == n).unwrap();
+        assert_eq!(rec("vkCreateSampler").vk_error, types::VK_ERROR_FEATURE_NOT_PRESENT);
+        assert_eq!(rec("vkBindBufferMemory2KHR").vk_error, types::VK_ERROR_EXTENSION_NOT_PRESENT);
+    }
+
+    // ---- Phase 0: truthful version advertisement -------------------------------------------------
+
+    /// The ICD advertises Vulkan **1.0**, consistently across `vkEnumerateInstanceVersion`, the
+    /// physical-device `apiVersion`, and the capability profile constant.
+    #[test]
+    fn advertises_vulkan_1_0() {
+        assert_eq!(capability::ADVERTISED_API_VERSION, (1, 0));
+        assert_eq!(ash::vk::api_version_major(state::DD_API_VERSION), 1);
+        assert_eq!(ash::vk::api_version_minor(state::DD_API_VERSION), 0);
+        let mut v: u32 = 0xffff_ffff;
+        assert_eq!(vkEnumerateInstanceVersion(&mut v), types::VK_SUCCESS);
+        assert_eq!(ash::vk::api_version_major(v), 1);
+        assert_eq!(ash::vk::api_version_minor(v), 0);
+        // The physical-device properties report the same version.
+        let props = state::physical_device_properties();
+        assert_eq!(props.api_version, state::DD_API_VERSION);
+    }
+
+    /// A vkCreateInstance requesting a version NEWER than advertised (1.4, 2.0) must be refused with
+    /// `VK_ERROR_INCOMPATIBLE_DRIVER`; a 1.0 request (vkcube's) must succeed. This is the gap
+    /// gui_vk_capability_truth pins: the prior gate rejected only major>1, so 1.4 slipped through.
+    #[test]
+    fn rejects_api_version_newer_than_advertised() {
+        use ash::vk;
+        let create = |api: u32| -> (types::VkResult, types::VkInstance) {
+            let app = vk::ApplicationInfo { api_version: api, ..Default::default() };
+            let ci = vk::InstanceCreateInfo { p_application_info: &app, ..Default::default() };
+            let mut inst: types::VkInstance = core::ptr::null_mut();
+            let r = vkCreateInstance(&ci, core::ptr::null(), &mut inst);
+            (r, inst)
+        };
+        // 1.4 and 2.0 are newer than the advertised 1.0 → refused.
+        assert_eq!(create(vk::make_api_version(0, 1, 4, 0)).0, types::VK_ERROR_INCOMPATIBLE_DRIVER);
+        assert_eq!(create(vk::make_api_version(0, 1, 1, 0)).0, types::VK_ERROR_INCOMPATIBLE_DRIVER);
+        assert_eq!(create(vk::make_api_version(0, 2, 0, 0)).0, types::VK_ERROR_INCOMPATIBLE_DRIVER);
+        // 1.0 (and a 1.0.x patch, and apiVersion 0 == "1.0 default") are honored.
+        let (r0, inst0) = create(vk::make_api_version(0, 1, 0, 0));
+        assert_eq!(r0, types::VK_SUCCESS, "a 1.0 request must be accepted (vkcube path)");
+        assert!(!inst0.is_null());
+        vkDestroyInstance(inst0, core::ptr::null());
+        let (rp, instp) = create(vk::make_api_version(0, 1, 0, 42));
+        assert_eq!(rp, types::VK_SUCCESS, "patch differences are always compatible");
+        vkDestroyInstance(instp, core::ptr::null());
+    }
+
+    // ---- Phase 0: truthful extension enumeration + strict mode -----------------------------------
+
+    /// The advertised extension allow-lists must equal what the enumeration entry points return — the
+    /// shim advertises only what it implements, not everything vk.xml lists.
+    #[test]
+    fn extension_enumeration_matches_allow_list() {
+        unsafe fn names(f: impl Fn(*mut u32, *mut ash::vk::ExtensionProperties) -> types::VkResult) -> Vec<String> {
+            let mut n: u32 = 0;
+            assert_eq!(f(&mut n, core::ptr::null_mut()), types::VK_SUCCESS);
+            let mut props = vec![ash::vk::ExtensionProperties::default(); n as usize];
+            assert_eq!(f(&mut n, props.as_mut_ptr()), types::VK_SUCCESS);
+            props
+                .iter()
+                .map(|p| {
+                    let bytes: Vec<u8> = p.extension_name.iter().take_while(|&&c| c != 0).map(|&c| c as u8).collect();
+                    String::from_utf8_lossy(&bytes).into_owned()
+                })
+                .collect()
+        }
+        let inst = unsafe { names(|c, p| vkEnumerateInstanceExtensionProperties(core::ptr::null(), c, p)) };
+        assert_eq!(inst, capability::ADVERTISED_INSTANCE_EXTENSIONS);
+        let dev = unsafe {
+            names(|c, p| vkEnumerateDeviceExtensionProperties(core::ptr::null_mut(), core::ptr::null(), c, p))
+        };
+        assert_eq!(dev, capability::ADVERTISED_DEVICE_EXTENSIONS);
+    }
+
+    /// `DD_SHIM_STRICT=1`: the shim aborts at the first stub call. Under `cfg(test)` the strict path
+    /// records that it *would* have aborted (instead of killing the test process) so it is assertable.
+    #[test]
+    fn strict_mode_trips_abort_on_stub() {
+        stub::STRICT_TRIPPED.with(|c| c.set(false));
+        std::env::set_var("DD_SHIM_STRICT", "1");
+        // Any generated stub call must trip the strict abort.
+        let mut ev: u64 = 0;
+        let _ = vkCreateEvent(
+            core::ptr::null_mut(),
+            core::ptr::null(),
+            core::ptr::null(),
+            &mut ev as *mut u64 as *mut core::ffi::c_void,
+        );
+        std::env::remove_var("DD_SHIM_STRICT");
+        assert!(
+            stub::STRICT_TRIPPED.with(|c| c.get()),
+            "DD_SHIM_STRICT=1 must trip the abort at the first stub call"
+        );
+    }
+
+    /// The generated Vulkan-1.0 mandatory-core census: the exported surface carries the full 1.0 core,
+    /// and the census reports exactly how much of it has a real body (the honest completeness number).
+    #[test]
+    fn vulkan_1_0_mandatory_core_census() {
+        use capability::Cap;
+        // Recompute from the inventory and cross-check the generated constants.
+        let core10: Vec<_> = CAPABILITIES.iter().filter(|e| e.origin == "core:1.0").collect();
+        let implemented = core10.iter().filter(|e| e.cap != Cap::Stub).count();
+        assert_eq!(core10.len(), CORE_1_0_TOTAL);
+        assert_eq!(implemented, CORE_1_0_IMPLEMENTED);
+        assert!(CORE_1_0_IMPLEMENTED <= CORE_1_0_TOTAL);
+        // The 1.0 core is genuinely a large mandatory set (not a hand-picked few) and is partially bodied
+        // — the census must not silently claim 0 or 100% while stubs remain.
+        assert!(CORE_1_0_TOTAL >= 130, "Vulkan 1.0 core census too small: {CORE_1_0_TOTAL}");
+        assert!(CORE_1_0_IMPLEMENTED < CORE_1_0_TOTAL, "1.0 core still has stubs; must not claim complete");
+        // Every core:1.0 stub still fails truthfully (FEATURE_NOT_PRESENT, never success).
+        for e in core10.iter().filter(|e| e.cap == Cap::Stub) {
+            assert!(
+                e.vk_error == 0 || e.vk_error == types::VK_ERROR_FEATURE_NOT_PRESENT,
+                "{}: core:1.0 stub must fail truthfully",
+                e.name
             );
         }
     }

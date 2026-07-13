@@ -44,4 +44,9 @@ pub const VK_SUCCESS: VkResult = 0;
 pub const VK_INCOMPLETE: VkResult = 5;
 pub const VK_ERROR_OUT_OF_HOST_MEMORY: VkResult = -1;
 pub const VK_ERROR_INITIALIZATION_FAILED: VkResult = -3;
+/// The truthful failure a generated stub returns for a command from an extension the ICD does not
+/// advertise (Phase-0 truthfulness; see `build.rs` + `crate::capability`).
+pub const VK_ERROR_EXTENSION_NOT_PRESENT: VkResult = -7;
+/// The truthful failure a generated stub returns for an unimplemented core command.
+pub const VK_ERROR_FEATURE_NOT_PRESENT: VkResult = -8;
 pub const VK_ERROR_INCOMPATIBLE_DRIVER: VkResult = -9;

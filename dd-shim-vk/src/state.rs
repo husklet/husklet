@@ -47,8 +47,13 @@ pub struct CommandPool {
 
 // ---- the reported device -------------------------------------------------------------------------
 
-/// The Vulkan API version we advertise (device + `vkEnumerateInstanceVersion`). 1.3.0.
-pub const DD_API_VERSION: u32 = vk::API_VERSION_1_3;
+/// The Vulkan API version we advertise (device + `vkEnumerateInstanceVersion`). **Vulkan 1.0.0.**
+/// Phase-0 truthfulness (`docs/codex-rendering.md` §2.2, §5.1, gui_vk_capability_truth): advertise only
+/// the version whose mandatory core is actually backed. 1.1+ promoted-core semantics (bind_memory2,
+/// dynamic rendering, timeline semaphores, the `...2` device queries, …) are still generated stubs, so
+/// advertising 1.1/1.2/1.3 would let an app select a version whose calls do nothing. Raise this only
+/// when the promoted core for the next version passes. A newer app request → `VK_ERROR_INCOMPATIBLE_DRIVER`.
+pub const DD_API_VERSION: u32 = vk::API_VERSION_1_0;
 /// Apple's PCI vendor id, as MoltenVK reports (`kAppleVendorId` in MVKDevice.mm).
 pub const APPLE_VENDOR_ID: u32 = 0x106b;
 /// `driverVersion` — dd's own driver revision (packed like an api version), increment 1.

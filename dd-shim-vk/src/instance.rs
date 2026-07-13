@@ -65,9 +65,12 @@ fn ext_prop(name: &str, spec: u32) -> vk::ExtensionProperties {
     p
 }
 
-/// Instance-level extensions the ICD implements: the WSI surface + wayland-surface (so a windowed
-/// Vulkan app / the loader discover and enable them). Ports the `VK_KHR_surface`/`VK_KHR_wayland_surface`
-/// advertisement MoltenVK/Mesa expose; the entry points live in `crate::wsi`.
+/// Instance-level extensions the ICD implements — the **allow-list of what is actually backed**, not
+/// everything `vk.xml` lists (Phase-0 truthful enumeration, audit §2.2): the WSI surface +
+/// wayland-surface, and `VK_KHR_get_physical_device_properties2` (the `...2` physical-device queries in
+/// this file). Under the advertised 1.0 profile these are the extensions that carry those entry points.
+/// Must stay in lock-step with `crate::capability::ADVERTISED_INSTANCE_EXTENSIONS`. Ports the
+/// advertisement MoltenVK/Mesa expose; the entry points live here + in `crate::wsi`.
 #[no_mangle]
 pub extern "C" fn vkEnumerateInstanceExtensionProperties(
     _p_layer_name: *const c_char,
@@ -77,6 +80,7 @@ pub extern "C" fn vkEnumerateInstanceExtensionProperties(
     let exts = [
         ext_prop("VK_KHR_surface", 25),
         ext_prop("VK_KHR_wayland_surface", 6),
+        ext_prop("VK_KHR_get_physical_device_properties2", 2),
     ];
     unsafe { write_enumeration(&exts, p_count, p_props) }
 }
@@ -103,9 +107,12 @@ pub extern "C" fn vkCreateInstance(
         return VK_ERROR_INITIALIZATION_FAILED;
     };
     let requested = unsafe { requested_api_version(p_create_info) };
-    // Loader-interface v5: the loader validates apiVersion, but we still refuse a variant/major we
-    // cannot honor (defensive; matches the spec table in LoaderDriverInterface.md).
-    if vk::api_version_major(requested) > 1 {
+    // Phase-0 truthful version gate (gui_vk_capability_truth, audit §2.2). An app requesting an
+    // apiVersion NEWER than we advertise (`DD_API_VERSION` == 1.0) must be refused with
+    // `VK_ERROR_INCOMPATIBLE_DRIVER` — not just a greater *major* (which let a 1.4 request slip
+    // through), but any greater variant/major/minor. Patch is ignored per spec (patch differences are
+    // always compatible), so compare the version word with the low 12 patch bits masked off.
+    if (requested >> 12) > (state::DD_API_VERSION >> 12) {
         return VK_ERROR_INCOMPATIBLE_DRIVER;
     }
 
@@ -262,9 +269,10 @@ pub extern "C" fn vkGetPhysicalDeviceProperties2(
                 d.driver_id = vk::DriverId::MESA_LLVMPIPE; // a valid enum; dd has no registered id
                 write_cstr(&mut d.driver_name, "dd");
                 write_cstr(&mut d.driver_info, "dd Metal (Vulkan) 0.1");
+                // Consistent with the advertised 1.0 profile (we make no CTS-conformance claim).
                 d.conformance_version = vk::ConformanceVersion {
                     major: 1,
-                    minor: 3,
+                    minor: 0,
                     subminor: 0,
                     patch: 0,
                 };
