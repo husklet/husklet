@@ -123,6 +123,8 @@ pub struct Texture {
     pub w: i32,
     pub h: i32,
     pub data: Vec<u8>, // RGBA8, converted from the app's upload format
+    pub immutable: bool,
+    pub levels: i32,
     pub minf: u32,
     pub magf: u32,
     pub ws: u32,

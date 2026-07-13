@@ -279,14 +279,15 @@ pub extern "C" fn glGenerateMipmap(_target: u32) {}
 pub extern "C" fn glPixelStorei(pname: u32, v: i32) {
     let mut s = gl();
     match pname {
-        GL_UNPACK_ALIGNMENT => s.unpack_alignment = if v > 0 { v } else { 1 },
-        GL_UNPACK_ROW_LENGTH => s.unpack_row_length = v,
-        GL_UNPACK_SKIP_ROWS => s.unpack_skip_rows = v,
-        GL_UNPACK_SKIP_PIXELS => s.unpack_skip_pixels = v,
+        GL_UNPACK_ALIGNMENT if matches!(v, 1 | 2 | 4 | 8) => s.unpack_alignment = v,
+        GL_UNPACK_ROW_LENGTH if v >= 0 => s.unpack_row_length = v,
+        GL_UNPACK_SKIP_ROWS if v >= 0 => s.unpack_skip_rows = v,
+        GL_UNPACK_SKIP_PIXELS if v >= 0 => s.unpack_skip_pixels = v,
         GL_PACK_ALIGNMENT if matches!(v, 1 | 2 | 4 | 8) => s.pack_alignment = v,
         GL_PACK_ROW_LENGTH if v >= 0 => s.pack_row_length = v,
         GL_PACK_SKIP_ROWS if v >= 0 => s.pack_skip_rows = v,
         GL_PACK_SKIP_PIXELS if v >= 0 => s.pack_skip_pixels = v,
+        GL_UNPACK_ALIGNMENT | GL_UNPACK_ROW_LENGTH | GL_UNPACK_SKIP_ROWS | GL_UNPACK_SKIP_PIXELS |
         GL_PACK_ALIGNMENT | GL_PACK_ROW_LENGTH | GL_PACK_SKIP_ROWS | GL_PACK_SKIP_PIXELS => {
             if s.error == GL_NO_ERROR { s.error = GL_INVALID_VALUE; }
         }
@@ -693,51 +694,61 @@ pub extern "C" fn glBindTexture(target: u32, t: u32) {
 #[no_mangle]
 #[allow(clippy::too_many_arguments)]
 pub extern "C" fn glTexImage2D(
-    _target: u32,
+    target: u32,
     level: i32,
-    _ifmt: i32,
+    ifmt: i32,
     w: i32,
     h: i32,
-    _border: i32,
+    border: i32,
     fmt: u32,
-    _typ: u32,
+    typ: u32,
     pixels: *const c_void,
 ) {
     let mut s = gl();
     let t = s.bound_tex();
-    if level != 0 || (t as usize) >= MAXTEX || t == 0 || !s.tex[t as usize].used || w <= 0 || h <= 0 {
-        return;
+    let bad = |s: &mut crate::state::GlState, e| if s.error == GL_NO_ERROR { s.error = e };
+    if target != GL_TEXTURE_2D || !matches!(fmt, GL_RGB | GL_RGBA | GL_BGRA_EXT) || typ != GL_UNSIGNED_BYTE { bad(&mut s, GL_INVALID_ENUM); return; }
+    if level != 0 || border != 0 || w < 0 || h < 0 || !matches!(ifmt as u32, GL_RGB | GL_RGBA) { bad(&mut s, GL_INVALID_VALUE); return; }
+    if t == 0 || t as usize >= MAXTEX || !s.tex[t as usize].used { bad(&mut s, GL_INVALID_OPERATION); return; }
+    if s.tex[t as usize].immutable { bad(&mut s, GL_INVALID_OPERATION); return; }
+    let bpp = if fmt == GL_RGB { 3usize } else { 4 };
+    let rp = if s.unpack_row_length == 0 { w } else { s.unpack_row_length };
+    if rp < w { bad(&mut s, GL_INVALID_VALUE); return; }
+    let stride = (rp as usize).checked_mul(bpp).and_then(|n| n.checked_add(s.unpack_alignment as usize - 1)).map(|n| n & !(s.unpack_alignment as usize - 1));
+    let start = stride.and_then(|st| (s.unpack_skip_rows as usize).checked_mul(st)).and_then(|n| (s.unpack_skip_pixels as usize).checked_mul(bpp).and_then(|p| n.checked_add(p)));
+    let rgba_len = (w as usize).checked_mul(h as usize).and_then(|n| n.checked_mul(4));
+    let need = start.and_then(|st| stride.and_then(|rs| (h.saturating_sub(1) as usize).checked_mul(rs)).and_then(|n| n.checked_add(w as usize * bpp)).and_then(|n| st.checked_add(n)));
+    let (stride, start, rgba_len, need) = match (stride,start,rgba_len,need) { (Some(a),Some(b),Some(c),Some(d)) => (a,b,c,d), _ => { bad(&mut s, GL_INVALID_VALUE); return; } };
+    let mut rgba = vec![0u8; rgba_len];
+    if !pixels.is_null() {
+        let src = unsafe { core::slice::from_raw_parts(pixels as *const u8, need) };
+        for y in 0..h as usize { for x in 0..w as usize {
+            let sp = start + y * stride + x * bpp; let dp = (y * w as usize + x) * 4;
+            match fmt { GL_RGB => { rgba[dp..dp+3].copy_from_slice(&src[sp..sp+3]); rgba[dp+3]=255; }, GL_RGBA => rgba[dp..dp+4].copy_from_slice(&src[sp..sp+4]), _ => { rgba[dp]=src[sp+2]; rgba[dp+1]=src[sp+1]; rgba[dp+2]=src[sp]; rgba[dp+3]=src[sp+3]; } }
+        }}
     }
-    let size = (w as usize) * (h as usize) * 4;
-    {
-        let tex = &mut s.tex[t as usize];
-        tex.w = w;
-        tex.h = h;
-        tex.data = vec![0u8; size];
-        tex.gen += 1;
-    }
-    let src = unsafe { pixels_slice(pixels, w, h, fmt, &s) };
-    s.tex_store_pixels(t, 0, 0, w, h, fmt, src.as_deref());
+    let tex = &mut s.tex[t as usize]; tex.w=w; tex.h=h; tex.data=rgba; tex.gen+=1;
 }
 
 #[no_mangle]
 #[allow(clippy::too_many_arguments)]
 pub extern "C" fn glTexSubImage2D(
-    _target: u32,
+    target: u32,
     level: i32,
     xo: i32,
     yo: i32,
     w: i32,
     h: i32,
     fmt: u32,
-    _typ: u32,
+    typ: u32,
     pixels: *const c_void,
 ) {
     let mut s = gl();
     let t = s.bound_tex();
-    if level != 0 || (t as usize) >= MAXTEX || t == 0 || !s.tex[t as usize].used {
-        return;
-    }
+    if target != GL_TEXTURE_2D || !matches!(fmt, GL_RGB | GL_RGBA | GL_BGRA_EXT) || typ != GL_UNSIGNED_BYTE { if s.error==GL_NO_ERROR{s.error=GL_INVALID_ENUM}; return; }
+    if level != 0 || w < 0 || h < 0 || xo < 0 || yo < 0 || t==0 || t as usize>=MAXTEX || !s.tex[t as usize].used || xo.checked_add(w).is_none_or(|v|v>s.tex[t as usize].w) || yo.checked_add(h).is_none_or(|v|v>s.tex[t as usize].h) { if s.error==GL_NO_ERROR{s.error=GL_INVALID_VALUE}; return; }
+    let bpp=if fmt==GL_RGB{3usize}else{4}; let rp=if s.unpack_row_length==0{w}else{s.unpack_row_length};
+    if rp<w || (rp as usize).checked_mul(bpp).and_then(|n|n.checked_add(s.unpack_alignment as usize-1)).is_none(){if s.error==GL_NO_ERROR{s.error=GL_INVALID_VALUE};return;}
     let src = unsafe { pixels_slice(pixels, w, h, fmt, &s) };
     s.tex_store_pixels(t, xo, yo, w, h, fmt, src.as_deref());
     s.tex[t as usize].gen += 1;
@@ -746,15 +757,17 @@ pub extern "C" fn glTexSubImage2D(
 /// `glTexStorage2D` — immutable-storage allocation. gl_shim.c mirrors glTexImage2D's RGBA8 alloc so a
 /// later glTexSubImage2D has a target; format/levels are not otherwise backed.
 #[no_mangle]
-pub extern "C" fn glTexStorage2D(target: u32, _levels: i32, _ifmt: u32, w: i32, h: i32) {
+pub extern "C" fn glTexStorage2D(target: u32, levels: i32, ifmt: u32, w: i32, h: i32) {
     let mut s = gl();
     let t = s.bound_tex();
-    if target == GL_TEXTURE_2D && (t as usize) < MAXTEX && t != 0 && s.tex[t as usize].used && w > 0 && h > 0 {
-        let size = (w as usize) * (h as usize) * 4;
+    if target == GL_TEXTURE_2D && (t as usize) < MAXTEX && t != 0 && s.tex[t as usize].used && !s.tex[t as usize].immutable && levels > 0 && matches!(ifmt, GL_RGB | GL_RGBA) && w > 0 && h > 0 {
+        let Some(size)=(w as usize).checked_mul(h as usize).and_then(|n|n.checked_mul(4)) else { if s.error==GL_NO_ERROR{s.error=GL_INVALID_VALUE}; return; };
         let tex = &mut s.tex[t as usize];
         tex.w = w;
         tex.h = h;
         tex.data = vec![0u8; size];
+        tex.immutable = true;
+        tex.levels = levels;
         tex.gen += 1;
     }
 }
@@ -815,7 +828,8 @@ pub extern "C" fn glCopyTexImage2D(target: u32, level: i32, _ifmt: u32, x: i32, 
     let mut s = gl();
     let dst = s.bound_tex();
     let src = s.fbo_color_texture(s.read_fbo);
-    if src == 0 || !s.tex_alloc_rgba(dst, w, h) {
+    if src == 0 || dst==0 || s.tex.get(dst as usize).is_none_or(|t|!t.used||t.immutable) || w<0||h<0||x<0||y<0||x.checked_add(w).is_none_or(|v|v>s.tex[src as usize].w)||y.checked_add(h).is_none_or(|v|v>s.tex[src as usize].h) || !s.tex_alloc_rgba(dst, w, h) {
+        if s.error==GL_NO_ERROR{s.error=GL_INVALID_VALUE};
         return;
     }
     s.copy_texture_rect(src, dst, x, y, x + w, y + h, 0, 0, w, h);
@@ -831,7 +845,8 @@ pub extern "C" fn glCopyTexSubImage2D(target: u32, level: i32, xo: i32, yo: i32,
     let mut s = gl();
     let dst = s.bound_tex();
     let src = s.fbo_color_texture(s.read_fbo);
-    if src == 0 || !s.tex.get(dst as usize).map(|t| t.used && !t.data.is_empty()).unwrap_or(false) {
+    if src == 0 || !s.tex.get(dst as usize).map(|t| t.used && !t.data.is_empty()).unwrap_or(false) || x<0||y<0||xo<0||yo<0||x.checked_add(w).is_none_or(|v|v>s.tex[src as usize].w)||y.checked_add(h).is_none_or(|v|v>s.tex[src as usize].h)||xo.checked_add(w).is_none_or(|v|v>s.tex[dst as usize].w)||yo.checked_add(h).is_none_or(|v|v>s.tex[dst as usize].h) {
+        if s.error==GL_NO_ERROR{s.error=GL_INVALID_VALUE};
         return;
     }
     s.copy_texture_rect(src, dst, x, y, x + w, y + h, xo, yo, xo + w, yo + h);
