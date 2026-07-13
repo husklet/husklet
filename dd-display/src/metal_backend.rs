@@ -24,12 +24,13 @@ fn exec_debug() -> bool {
 }
 use dd_gpu::id::{BindGroupId, BufferId, PipelineId, SamplerId, ShaderId, TextureId};
 use dd_gpu::ir::{
-    BindGroupDesc, BindResource, BufferDesc, CommandBuffer, Enc, IndexFormat, LoadOp,
-    RenderPipelineDesc, SamplerDesc, TextureDesc, Topology,
+    BindGroupDesc, BindResource, BufferDesc, CommandBuffer, ComputePipelineDesc, Enc, IndexFormat,
+    LoadOp, RenderPipelineDesc, SamplerDesc, TextureDesc, Topology,
 };
 use dd_gpu::{GpuError, Result};
 use objc2::rc::Retained;
-use objc2::runtime::ProtocolObject;
+use objc2::runtime::{AnyObject, ProtocolObject};
+use objc2::{msg_send, msg_send_id};
 use objc2_foundation::NSString;
 use objc2_metal::{
     MTLBlendFactor, MTLBlendOperation, MTLBlitCommandEncoder, MTLBuffer, MTLClearColor,
@@ -299,6 +300,14 @@ pub struct MetalBackend {
     /// the present target survives untouched in its own map. See `resolve_texture`.
     present_targets: HashMap<u32, Retained<ProtocolObject<dyn MTLTexture>>>,
     pipelines: HashMap<u32, Pipeline>,
+    /// Compute pipeline states (`MTLComputePipelineState`, stored type-erased as `AnyObject` because the
+    /// objc2-metal `MTLComputePipeline` feature is not enabled in this crate — we drive the compute
+    /// encoder through `msg_send!`, the same raw-selector path `metal.rs` uses for the IOSurface texture
+    /// ctor). Only kernels whose module compiled to MSL live here; a SPIR-V/PTX compute module is rejected
+    /// with the wgpu routing error in `create_compute_pipeline` (this executor cannot transpile those).
+    compute_pipelines: HashMap<u32, Retained<AnyObject>>,
+    compute_pipeline_cache: HashMap<u64, Retained<AnyObject>>,
+    compute_pipeline_id_hash: HashMap<u32, u64>,
     /// Per-app shader modules: the guest's GLSL, translated to MSL by the shim and shipped as bytes in
     /// the IR `CreateShader`, compiled here to an `MTLLibrary`. Absent → the builtin vertex-color pipeline.
     shaders: HashMap<u32, Retained<ProtocolObject<dyn MTLLibrary>>>,
@@ -389,6 +398,9 @@ impl MetalBackend {
             texture_descs: HashMap::new(),
             present_targets: HashMap::new(),
             pipelines: HashMap::new(),
+            compute_pipelines: HashMap::new(),
+            compute_pipeline_cache: HashMap::new(),
+            compute_pipeline_id_hash: HashMap::new(),
             shaders: HashMap::new(),
             samplers: HashMap::new(),
             bind_groups: HashMap::new(),
@@ -1697,7 +1709,12 @@ impl GpuBackend for MetalBackend {
         Capabilities {
             name: "dd-metal".into(),
             unified_memory: true,
-            supports_compute: false,
+            // The bespoke Metal executor now drives a real `MTLComputeCommandEncoder` (see
+            // `create_compute_pipeline` + the compute-pass arm of `submit`), so compute IR runs here — but
+            // only for kernels shipped as MSL (the Metal-native ABI, mirroring the render path's GLSL→MSL).
+            // A SPIR-V/PTX compute module can't be transpiled in-process and is explicitly routed to
+            // `DD_GPU_BACKEND=wgpu` (which lowers SPIR-V/PTX→WGSL via naga).
+            supports_compute: true,
             supports_graphics: true,
             max_texture_2d: 16384,
             present_kinds: vec![],
@@ -1736,6 +1753,28 @@ impl GpuBackend for MetalBackend {
         unsafe {
             let base = buf.contents().as_ptr() as *mut u8;
             std::ptr::copy_nonoverlapping(data.as_ptr(), base.add(offset as usize), data.len());
+        }
+        Ok(())
+    }
+
+    /// Read device memory back to the host (CUDA `cudaMemcpyDtoH`; the compute-result readback that proves
+    /// a dispatch ran — e.g. `c == a + b`). Buffers are `StorageModeShared` (unified memory), so their
+    /// `contents()` pointer is CPU-visible directly; the caller must have ensured GPU completion first (the
+    /// `submit` compute path blocks on `waitUntilCompleted` before returning, so a dispatch's writes are
+    /// visible here). Bounds-checked against the buffer length — untrusted IR must not read past it.
+    fn read_buffer(&mut self, id: BufferId, offset: u64, out: &mut [u8]) -> Result<()> {
+        let buf = self.buffers.get(&id.0).ok_or(GpuError::UnknownId {
+            kind: "buffer",
+            id: id.0,
+        })?;
+        let cap = buf.length();
+        let end = (offset as usize).checked_add(out.len());
+        if end.map_or(true, |e| e > cap) {
+            return Err(GpuError::OutOfBounds);
+        }
+        unsafe {
+            let base = buf.contents().as_ptr() as *const u8;
+            std::ptr::copy_nonoverlapping(base.add(offset as usize), out.as_mut_ptr(), out.len());
         }
         Ok(())
     }
@@ -2021,6 +2060,68 @@ impl GpuBackend for MetalBackend {
         Ok(())
     }
 
+    fn create_compute_pipeline(
+        &mut self,
+        id: PipelineId,
+        desc: &ComputePipelineDesc,
+    ) -> Result<()> {
+        // Content-key the compute PSO (module id + entry + installed MSL hash) so the guest's per-frame
+        // re-create is a cache hit after warmup, not a recompile — parity with the render PSO cache (L3).
+        let mut h = std::collections::hash_map::DefaultHasher::new();
+        desc.compute.module.hash(&mut h);
+        desc.compute.entry.hash(&mut h);
+        self.shader_id_hash
+            .get(&desc.compute.module)
+            .copied()
+            .unwrap_or(0)
+            .hash(&mut h);
+        let key = h.finish();
+        if self.compute_pipeline_id_hash.get(&id.0) == Some(&key)
+            && self.compute_pipelines.contains_key(&id.0)
+        {
+            return Ok(());
+        }
+        if let Some(p) = self.compute_pipeline_cache.get(&key) {
+            self.compute_pipelines.insert(id.0, p.clone());
+            self.compute_pipeline_id_hash.insert(id.0, key);
+            return Ok(());
+        }
+        // EXPLICIT ROUTING CONTRACT: Metal can only run a compute kernel it has MSL for. The guest's
+        // compute module must have compiled to an MTLLibrary in `create_shader` (MSL bytes — the
+        // Metal-native ABI, exactly as the render path consumes the GL shim's GLSL→MSL). A SPIR-V (Vulkan)
+        // or PTX (CUDA) compute module never populates `self.shaders` (this executor has no in-process
+        // SPIR-V/PTX→MSL transpiler), so this is the deliberate routing point: reject with an actionable
+        // error steering compute to the wgpu executor, which lowers SPIR-V/PTX→WGSL via naga. No silent
+        // success — the replay fails and the executor acks failure.
+        let lib = self.shaders.get(&desc.compute.module).ok_or(GpuError::Unsupported(
+            "compute kernel is not MSL (SPIR-V/PTX): run compute with DD_GPU_BACKEND=wgpu",
+        ))?;
+        let func = lib
+            .newFunctionWithName(&NSString::from_str(&desc.compute.entry))
+            .ok_or(GpuError::Unsupported("compute entry point not found"))?;
+        // `newComputePipelineStateWithFunction:error:` is not bound by objc2-metal 0.2 in this crate's
+        // feature set (no `MTLComputePipeline` feature), so raw-send it — the same pattern `metal.rs`
+        // uses for `newTextureWithDescriptor:iosurface:plane:`. It is a `new`-family (+1) method, so
+        // `Retained::from_raw` takes ownership without an extra retain; a nil result means compile failure
+        // (the `NSError` out-param, left opaque, describes it).
+        let mut err: *mut AnyObject = std::ptr::null_mut();
+        let pso_ptr: *mut AnyObject = unsafe {
+            msg_send![&*self.device, newComputePipelineStateWithFunction: &*func, error: &mut err]
+        };
+        let Some(pso) = (unsafe { Retained::from_raw(pso_ptr) }) else {
+            eprintln!(
+                "dd-metal: compute pipeline compile failed for module {} entry {}",
+                desc.compute.module, desc.compute.entry
+            );
+            return Err(GpuError::Unsupported("compute pipeline compile"));
+        };
+        self.pipeline_compiles += 1;
+        self.compute_pipeline_cache.insert(key, pso.clone());
+        self.compute_pipeline_id_hash.insert(id.0, key);
+        self.compute_pipelines.insert(id.0, pso);
+        Ok(())
+    }
+
     fn create_bind_group(&mut self, id: BindGroupId, desc: &BindGroupDesc) -> Result<()> {
         // `binding` is the MSL resource index used in both stages: a uniform block at `[[buffer(1)]]`, a
         // sampled texture at `[[texture(n)]]`, a sampler at `[[sampler(n)]]`. Record all three kinds.
@@ -2071,9 +2172,12 @@ impl GpuBackend for MetalBackend {
 
     fn destroy_pipeline(&mut self, id: PipelineId) -> Result<()> {
         // Match the checked backends' cleanup: releasing a pipeline drops the id's installed state
-        // (the cached compiled PSO is keyed by content hash and shared, so it is left intact).
+        // (the cached compiled PSO is keyed by content hash and shared, so it is left intact). One id can
+        // name either a render or a compute pipeline, so clear both maps.
         self.pipelines.remove(&id.0);
         self.pipeline_id_hash.remove(&id.0);
+        self.compute_pipelines.remove(&id.0);
+        self.compute_pipeline_id_hash.remove(&id.0);
         Ok(())
     }
 
@@ -2095,6 +2199,16 @@ impl GpuBackend for MetalBackend {
             cmd.encodeWaitForEvent_value(present_ev, *wait_present);
         }
         let mut enc: Option<Retained<ProtocolObject<dyn MTLRenderCommandEncoder>>> = None;
+        // Compute pass: an `MTLComputeCommandEncoder` (type-erased — see `compute_pipelines`), mutually
+        // exclusive with the render encoder on one command buffer. `had_compute` forces a GPU wait before
+        // `submit` returns so a following `read_buffer` sees the dispatch's writes (compute has no present
+        // fence to order it).
+        let mut compute_enc: Option<Retained<AnyObject>> = None;
+        // Whether a compute pipeline has been bound on the CURRENT compute pass. `dispatchThreadgroups`
+        // on an encoder with no pipeline state is Metal UB (crashes), so a `Dispatch` before `SetPipeline`
+        // must be rejected as a malformed stream, not encoded.
+        let mut compute_pipeline_set = false;
+        let mut had_compute = false;
         let mut cur_prim = MTLPrimitiveType::Triangle;
         // Bound index buffer for glDrawElements → drawIndexedPrimitives (buffer id, byte offset, U16/U32).
         let mut index_buffer: Option<(u32, u64, MTLIndexType)> = None;
@@ -2196,16 +2310,38 @@ impl GpuBackend for MetalBackend {
                     enc = Some(e);
                 }
                 Enc::SetPipeline(p) => {
-                    let pl = self.pipelines.get(p).ok_or(GpuError::UnknownId {
-                        kind: "pipeline",
-                        id: *p,
-                    })?;
-                    cur_prim = pl.primitive;
-                    let pd = pl.depth;
-                    if let Some(e) = &enc {
-                        e.setRenderPipelineState(&pl.state);
-                        if pd {
-                            e.setDepthStencilState(Some(&self.depth_state));
+                    if compute_enc.is_some() {
+                        // Inside a compute pass, `SetPipeline` selects a compute PSO. A missing id ends the
+                        // open encoder before erroring (Metal asserts on release-without-endEncoding).
+                        if !self.compute_pipelines.contains_key(p) {
+                            if let Some(ce) = compute_enc.take() {
+                                unsafe {
+                                    let _: () = msg_send![&*ce, endEncoding];
+                                }
+                            }
+                            return Err(GpuError::UnknownId {
+                                kind: "pipeline",
+                                id: *p,
+                            });
+                        }
+                        let ce = compute_enc.as_ref().unwrap();
+                        let pso = self.compute_pipelines.get(p).unwrap();
+                        unsafe {
+                            let _: () = msg_send![&**ce, setComputePipelineState: &**pso];
+                        }
+                        compute_pipeline_set = true;
+                    } else {
+                        let pl = self.pipelines.get(p).ok_or(GpuError::UnknownId {
+                            kind: "pipeline",
+                            id: *p,
+                        })?;
+                        cur_prim = pl.primitive;
+                        let pd = pl.depth;
+                        if let Some(e) = &enc {
+                            e.setRenderPipelineState(&pl.state);
+                            if pd {
+                                e.setDepthStencilState(Some(&self.depth_state));
+                            }
                         }
                     }
                 }
@@ -2268,34 +2404,62 @@ impl GpuBackend for MetalBackend {
                                 .collect()
                         })
                         .unwrap_or_default();
-                    for (kind, idx, id, off) in plan {
-                        let Some(e) = &enc else { continue };
-                        unsafe {
-                            match kind {
-                                0 => {
-                                    if let Some(buf) = self.buffers.get(&id) {
-                                        e.setVertexBuffer_offset_atIndex(
-                                            Some(buf),
-                                            off as usize,
-                                            idx as usize,
-                                        );
-                                        e.setFragmentBuffer_offset_atIndex(
-                                            Some(buf),
-                                            off as usize,
-                                            idx as usize,
-                                        );
+                    if let Some(ce) = &compute_enc {
+                        // Compute pass: bind each resource at its index on the compute encoder — storage/
+                        // uniform buffers at `[[buffer(i)]]`, sampled textures at `[[texture(i)]]`, samplers
+                        // at `[[sampler(i)]]`. (Raw-sent: `MTLComputeCommandEncoder` is not bound in this
+                        // crate's objc2-metal feature set.)
+                        for (kind, idx, id, off) in plan {
+                            unsafe {
+                                match kind {
+                                    0 => {
+                                        if let Some(buf) = self.buffers.get(&id) {
+                                            let _: () = msg_send![&**ce, setBuffer: &**buf, offset: off as usize, atIndex: idx as usize];
+                                        }
+                                    }
+                                    1 => {
+                                        if let Some(tex) = self.resolve_texture(id) {
+                                            let _: () = msg_send![&**ce, setTexture: &**tex, atIndex: idx as usize];
+                                        }
+                                    }
+                                    _ => {
+                                        if let Some(s) = self.samplers.get(&id) {
+                                            let _: () = msg_send![&**ce, setSamplerState: &**s, atIndex: idx as usize];
+                                        }
                                     }
                                 }
-                                1 => {
-                                    if let Some(tex) = self.resolve_texture(id) {
-                                        e.setVertexTexture_atIndex(Some(tex), idx as usize);
-                                        e.setFragmentTexture_atIndex(Some(tex), idx as usize);
+                            }
+                        }
+                    } else {
+                        for (kind, idx, id, off) in plan {
+                            let Some(e) = &enc else { continue };
+                            unsafe {
+                                match kind {
+                                    0 => {
+                                        if let Some(buf) = self.buffers.get(&id) {
+                                            e.setVertexBuffer_offset_atIndex(
+                                                Some(buf),
+                                                off as usize,
+                                                idx as usize,
+                                            );
+                                            e.setFragmentBuffer_offset_atIndex(
+                                                Some(buf),
+                                                off as usize,
+                                                idx as usize,
+                                            );
+                                        }
                                     }
-                                }
-                                _ => {
-                                    if let Some(s) = self.samplers.get(&id) {
-                                        e.setVertexSamplerState_atIndex(Some(s), idx as usize);
-                                        e.setFragmentSamplerState_atIndex(Some(s), idx as usize);
+                                    1 => {
+                                        if let Some(tex) = self.resolve_texture(id) {
+                                            e.setVertexTexture_atIndex(Some(tex), idx as usize);
+                                            e.setFragmentTexture_atIndex(Some(tex), idx as usize);
+                                        }
+                                    }
+                                    _ => {
+                                        if let Some(s) = self.samplers.get(&id) {
+                                            e.setVertexSamplerState_atIndex(Some(s), idx as usize);
+                                            e.setFragmentSamplerState_atIndex(Some(s), idx as usize);
+                                        }
                                     }
                                 }
                             }
@@ -2508,23 +2672,172 @@ impl GpuBackend for MetalBackend {
                         e.endEncoding();
                     }
                 }
-                // Compute-pass markers carry no GPU work in this render-only slice — tolerated as no-ops.
-                Enc::BeginComputePass | Enc::EndComputePass => {}
-                // A supported IR command the render executor cannot perform (compute dispatch, buffer→buffer
-                // or texture→buffer copy) must NOT be silently dropped — that would let the guest believe
-                // work happened. Surface it as an error so the executor acks failure.
-                Enc::Dispatch { .. }
-                | Enc::CopyBufferToBuffer { .. }
-                | Enc::CopyTextureToBuffer { .. } => {
+                Enc::BeginComputePass => {
+                    // A compute pass runs on its own encoder; render and compute encoders are mutually
+                    // exclusive on one command buffer, so close any open render encoder first.
                     if let Some(e) = enc.take() {
                         e.endEncoding();
                     }
-                    return Err(GpuError::Unsupported("metal replay: command not implemented"));
+                    let ce: Option<Retained<AnyObject>> =
+                        unsafe { msg_send_id![&*cmd, computeCommandEncoder] };
+                    if ce.is_none() {
+                        return Err(GpuError::Unsupported("computeCommandEncoder"));
+                    }
+                    compute_enc = ce;
+                    compute_pipeline_set = false;
+                    had_compute = true;
+                }
+                Enc::EndComputePass => {
+                    if let Some(ce) = compute_enc.take() {
+                        unsafe {
+                            let _: () = msg_send![&*ce, endEncoding];
+                        }
+                    }
+                }
+                Enc::Dispatch { x, y, z } => {
+                    // Real Metal compute: encode a threadgroup dispatch. CONTRACT: `Dispatch{x,y,z}` launches
+                    // x*y*z threadgroups of ONE thread each, so `thread_position_in_grid` equals the grid
+                    // coordinate — one kernel invocation per grid point (a global-id kernel, e.g. vecadd over
+                    // N elements via `Dispatch{N,1,1}`). This makes NO assumption about a per-group (local)
+                    // size, which the shared IR's `ComputePipelineDesc` does not carry; threadgroup-
+                    // cooperative kernels (shared memory / barriers) need that IR field and until then route
+                    // to wgpu. A Dispatch outside a compute pass is a malformed stream → error (no silent
+                    // drop) so the executor acks failure.
+                    if compute_enc.is_none() {
+                        return Err(GpuError::Unsupported("Dispatch outside a compute pass"));
+                    }
+                    // A dispatch with no pipeline bound is Metal UB — reject the malformed stream, but end
+                    // the open encoder first (Metal asserts if an encoder is released without endEncoding).
+                    if !compute_pipeline_set {
+                        if let Some(ce) = compute_enc.take() {
+                            unsafe {
+                                let _: () = msg_send![&*ce, endEncoding];
+                            }
+                        }
+                        return Err(GpuError::Unsupported("Dispatch without a compute pipeline"));
+                    }
+                    let ce = compute_enc.as_ref().unwrap();
+                    let grid = MTLSize {
+                        width: (*x).max(1) as usize,
+                        height: (*y).max(1) as usize,
+                        depth: (*z).max(1) as usize,
+                    };
+                    let one = MTLSize {
+                        width: 1,
+                        height: 1,
+                        depth: 1,
+                    };
+                    unsafe {
+                        let _: () = msg_send![&**ce, dispatchThreadgroups: grid, threadsPerThreadgroup: one];
+                    }
+                }
+                Enc::CopyBufferToBuffer {
+                    src,
+                    src_offset,
+                    dst,
+                    dst_offset,
+                    size,
+                } => {
+                    // Pure device→device blit (no compute). Close any open encoder first.
+                    if let Some(e) = enc.take() {
+                        e.endEncoding();
+                    }
+                    if let Some(ce) = compute_enc.take() {
+                        unsafe {
+                            let _: () = msg_send![&*ce, endEncoding];
+                        }
+                    }
+                    let (Some(sbuf), Some(dbuf)) = (self.buffers.get(src), self.buffers.get(dst))
+                    else {
+                        return Err(GpuError::UnknownId {
+                            kind: "buffer",
+                            id: *src,
+                        });
+                    };
+                    // Untrusted IR: both ranges must be in-bounds, else Metal reads/writes OOB.
+                    let s_end = (*src_offset).checked_add(*size);
+                    let d_end = (*dst_offset).checked_add(*size);
+                    if s_end.map_or(true, |e| e as usize > sbuf.length())
+                        || d_end.map_or(true, |e| e as usize > dbuf.length())
+                    {
+                        return Err(GpuError::OutOfBounds);
+                    }
+                    if let Some(blit) = cmd.blitCommandEncoder() {
+                        unsafe {
+                            blit.copyFromBuffer_sourceOffset_toBuffer_destinationOffset_size(
+                                sbuf,
+                                *src_offset as usize,
+                                dbuf,
+                                *dst_offset as usize,
+                                *size as usize,
+                            );
+                        }
+                        blit.endEncoding();
+                    }
+                }
+                Enc::CopyTextureToBuffer {
+                    src,
+                    mip,
+                    width,
+                    height,
+                    dst,
+                    dst_offset,
+                    bytes_per_row,
+                } => {
+                    // Texture→buffer readback via a blit (glReadPixels / compute-result copy). Close any open
+                    // encoder first (blit is standalone).
+                    if let Some(e) = enc.take() {
+                        e.endEncoding();
+                    }
+                    if let Some(ce) = compute_enc.take() {
+                        unsafe {
+                            let _: () = msg_send![&*ce, endEncoding];
+                        }
+                    }
+                    let Some(tex) = self.resolve_texture(*src).cloned() else {
+                        return Err(GpuError::UnknownId {
+                            kind: "texture",
+                            id: *src,
+                        });
+                    };
+                    let Some(dbuf) = self.buffers.get(dst) else {
+                        return Err(GpuError::UnknownId {
+                            kind: "buffer",
+                            id: *dst,
+                        });
+                    };
+                    let need = (*bytes_per_row as usize)
+                        .checked_mul(*height as usize)
+                        .and_then(|n| n.checked_add(*dst_offset as usize));
+                    if need.map_or(true, |n| n > dbuf.length()) {
+                        return Err(GpuError::OutOfBounds);
+                    }
+                    if let Some(blit) = cmd.blitCommandEncoder() {
+                        unsafe {
+                            blit.copyFromTexture_sourceSlice_sourceLevel_sourceOrigin_sourceSize_toBuffer_destinationOffset_destinationBytesPerRow_destinationBytesPerImage(
+                                &tex,
+                                0,
+                                *mip as usize,
+                                MTLOrigin { x: 0, y: 0, z: 0 },
+                                MTLSize { width: *width as usize, height: *height as usize, depth: 1 },
+                                dbuf,
+                                *dst_offset as usize,
+                                *bytes_per_row as usize,
+                                (*bytes_per_row as usize) * (*height as usize),
+                            );
+                        }
+                        blit.endEncoding();
+                    }
                 }
             }
         }
         if let Some(e) = enc.take() {
             e.endEncoding();
+        }
+        if let Some(ce) = compute_enc.take() {
+            unsafe {
+                let _: () = msg_send![&*ce, endEncoding];
+            }
         }
         let dump_ids = std::env::var("DD_GPU_DUMP_TEXTURES").ok().map(|s| {
             s.split(',')
@@ -2538,7 +2851,9 @@ impl GpuBackend for MetalBackend {
             cmd.commit();
             // Async: DO NOT wait for GPU completion — ack immediately (in run_executor) so the guest builds
             // the next frame while this one renders. The event fence, not a CPU stall, guarantees ordering.
-            if dump_ids.as_ref().is_some_and(|ids| !ids.is_empty()) {
+            // EXCEPTION: a compute submit must complete before we return, so a following `read_buffer` sees
+            // the dispatch's writes (compute has no present fence to order the readback against).
+            if had_compute || dump_ids.as_ref().is_some_and(|ids| !ids.is_empty()) {
                 let t = std::time::Instant::now();
                 unsafe { cmd.waitUntilCompleted() };
                 self.gpu_wait_ns = t.elapsed().as_nanos() as u64;

@@ -58,16 +58,138 @@ mod macos {
     }
 
     #[test]
-    fn dispatch_in_render_executor_is_unsupported_error() {
+    fn dispatch_without_a_compute_pipeline_is_an_error() {
         let Some(ctx) = ctx() else { return };
         let mut be = MetalBackend::new(&ctx);
-        // The render-only executor must not silently drop a compute dispatch — it must error so the
-        // executor acks failure.
+        // A dispatch with no compute pipeline bound is a malformed stream — it must error (not silently
+        // no-op), so the executor acks failure. (The Metal executor now HAS a compute path — see the
+        // positive vecadd test below — so the failure here is the missing pipeline, not "compute
+        // unsupported".)
         let r = be.submit(&CommandBuffer {
             encoder: vec![Enc::BeginComputePass, Enc::Dispatch { x: 1, y: 1, z: 1 }, Enc::EndComputePass],
             signal: None,
         });
         assert!(matches!(r, Err(GpuError::Unsupported(_))), "dispatch must error, got {r:?}");
+    }
+
+    #[test]
+    fn compute_pipeline_with_non_msl_shader_routes_to_wgpu() {
+        use dd_gpu::id::ShaderId;
+        use dd_gpu::ir::{ComputePipelineDesc, ShaderRef};
+        let Some(ctx) = ctx() else { return };
+        let mut be = MetalBackend::new(&ctx);
+        // A SPIR-V/PTX compute module can't be transpiled in-process by the bespoke Metal executor. Its
+        // `create_shader` leaves no MSL library, so `create_compute_pipeline` must reject with the EXPLICIT
+        // routing error — a documented decision (steer compute to DD_GPU_BACKEND=wgpu), never a silent stub.
+        // Real SPIR-V words (magic 0x07230203) — decidedly not the MSL-bytes packing the shim uses.
+        be.create_shader(ShaderId(20), &[0x0723_0203, 0, 0, 0, 0]).unwrap();
+        let r = be.create_compute_pipeline(
+            PipelineId(30),
+            &ComputePipelineDesc { compute: ShaderRef { module: 20, entry: "main".into() }, label: String::new() },
+        );
+        match r {
+            Err(GpuError::Unsupported(msg)) => assert!(
+                msg.contains("wgpu"),
+                "compute-routing error must name the wgpu backend, got {msg:?}"
+            ),
+            other => panic!("non-MSL compute pipeline must return the wgpu-routing error, got {other:?}"),
+        }
+    }
+
+    /// Numeric proof of REAL compute on the DEFAULT (bespoke Metal) executor: an MSL `vecadd` kernel over
+    /// N elements dispatched through `MTLComputeCommandEncoder`, with `read_buffer` readback proving
+    /// `c[i] == a[i] + b[i]`. This closes the audit's Phase-3 gap "compute needs a deliberate Metal
+    /// implementation" for the Metal-native (MSL) shader ABI — the same ABI the render path consumes.
+    #[test]
+    fn msl_compute_vecadd_reads_back_sum_on_metal() {
+        use dd_gpu::id::ShaderId;
+        use dd_gpu::ir::{ComputePipelineDesc, ShaderRef};
+        let Some(ctx) = ctx() else { return };
+        let mut be = MetalBackend::new(&ctx);
+
+        const N: usize = 256;
+        // Contract: Dispatch{N,1,1} launches N single-thread threadgroups, so `thread_position_in_grid.x`
+        // is the global element index. The kernel guards against N to stay safe if N isn't a grid multiple.
+        const MSL: &str = "#include <metal_stdlib>\nusing namespace metal;\nkernel void vecadd(device const float* a [[buffer(0)]], device const float* b [[buffer(1)]], device float* c [[buffer(2)]], uint gid [[thread_position_in_grid]]) { if (gid < 256u) { c[gid] = a[gid] + b[gid]; } }\n";
+
+        // pack MSL into IR shader words (word[0]=len, rest = bytes 4/word LE) — the shim/msl_from_words ABI.
+        let words = {
+            let mut w = vec![MSL.len() as u32];
+            let bytes = MSL.as_bytes();
+            let mut i = 0;
+            while i < bytes.len() {
+                let mut word = [0u8; 4];
+                for k in 0..4 { if i + k < bytes.len() { word[k] = bytes[i + k]; } }
+                w.push(u32::from_le_bytes(word));
+                i += 4;
+            }
+            w
+        };
+
+        let mut a = vec![0u8; N * 4];
+        let mut b = vec![0u8; N * 4];
+        for i in 0..N {
+            a[i * 4..i * 4 + 4].copy_from_slice(&(i as f32).to_le_bytes());
+            b[i * 4..i * 4 + 4].copy_from_slice(&((2 * i) as f32).to_le_bytes());
+        }
+        let sz = (N * 4) as u64;
+        be.create_buffer(BufferId(1), &BufferDesc { size: sz, usage: buffer_usage::STORAGE, label: String::new() }).unwrap();
+        be.create_buffer(BufferId(2), &BufferDesc { size: sz, usage: buffer_usage::STORAGE, label: String::new() }).unwrap();
+        be.create_buffer(BufferId(3), &BufferDesc { size: sz, usage: buffer_usage::STORAGE, label: String::new() }).unwrap();
+        be.write_buffer(BufferId(1), 0, &a).unwrap();
+        be.write_buffer(BufferId(2), 0, &b).unwrap();
+        be.create_shader(ShaderId(20), &words).unwrap();
+        be.create_compute_pipeline(
+            PipelineId(30),
+            &ComputePipelineDesc { compute: ShaderRef { module: 20, entry: "vecadd".into() }, label: String::new() },
+        ).expect("MSL compute pipeline must build on Metal");
+        be.create_bind_group(BindGroupId(40), &BindGroupDesc {
+            set: 0,
+            entries: vec![
+                BindEntry { binding: 0, resource: BindResource::Buffer { id: 1, offset: 0, size: sz } },
+                BindEntry { binding: 1, resource: BindResource::Buffer { id: 2, offset: 0, size: sz } },
+                BindEntry { binding: 2, resource: BindResource::Buffer { id: 3, offset: 0, size: sz } },
+            ],
+        }).unwrap();
+
+        be.submit(&CommandBuffer {
+            encoder: vec![
+                Enc::BeginComputePass,
+                Enc::SetPipeline(30),
+                Enc::SetBindGroup { index: 0, group: 40 },
+                Enc::Dispatch { x: N as u32, y: 1, z: 1 },
+                Enc::EndComputePass,
+            ],
+            signal: None,
+        }).expect("compute submit");
+
+        let mut c = vec![0u8; N * 4];
+        be.read_buffer(BufferId(3), 0, &mut c).expect("read_buffer c");
+        for i in 0..N {
+            let got = f32::from_le_bytes(c[i * 4..i * 4 + 4].try_into().unwrap());
+            let want = i as f32 + (2 * i) as f32;
+            assert_eq!(got, want, "c[{i}] = {got}, want {want} (a+b)");
+        }
+        eprintln!("msl_compute_vecadd: c == a + b for all {N} elements (real Metal MTLComputeCommandEncoder)");
+    }
+
+    #[test]
+    fn copy_buffer_to_buffer_and_readback_on_metal() {
+        let Some(ctx) = ctx() else { return };
+        let mut be = MetalBackend::new(&ctx);
+        let src: Vec<u8> = (0..64u8).collect();
+        be.create_buffer(BufferId(1), &BufferDesc { size: 64, usage: buffer_usage::COPY_SRC, label: String::new() }).unwrap();
+        be.create_buffer(BufferId(2), &BufferDesc { size: 64, usage: buffer_usage::COPY_DST, label: String::new() }).unwrap();
+        be.write_buffer(BufferId(1), 0, &src).unwrap();
+        be.submit(&CommandBuffer {
+            encoder: vec![Enc::CopyBufferToBuffer { src: 1, src_offset: 0, dst: 2, dst_offset: 0, size: 64 }],
+            signal: None,
+        }).expect("b2b copy");
+        let mut out = vec![0u8; 64];
+        be.read_buffer(BufferId(2), 0, &mut out).unwrap();
+        assert_eq!(out, src, "CopyBufferToBuffer must reproduce the source bytes");
+        // read_buffer bounds are enforced (untrusted IR).
+        assert_eq!(be.read_buffer(BufferId(2), 40, &mut [0u8; 40]), Err(GpuError::OutOfBounds));
     }
 
     #[test]
