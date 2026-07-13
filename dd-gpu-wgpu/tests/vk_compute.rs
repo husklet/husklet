@@ -186,7 +186,7 @@ fn vk_vecadd_runs_on_real_metal() {
     assert_eq!(ddvk::vkAllocateCommandBuffers(dev, &cb_ai, &mut cb), 0);
 
     let begin = vk::CommandBufferBeginInfo::default();
-    assert_eq!(ddvk::vkBeginCommandBuffer(cb, (&begin as *const _) as *const c_void), 0);
+    assert_eq!(ddvk::vkBeginCommandBuffer(cb, (&begin as *const _) as *const vk::CommandBufferBeginInfo), 0);
     ddvk::vkCmdBindPipeline(cb, vk::PipelineBindPoint::COMPUTE.as_raw(), pipeline);
     let sets = [dset];
     ddvk::vkCmdBindDescriptorSets(

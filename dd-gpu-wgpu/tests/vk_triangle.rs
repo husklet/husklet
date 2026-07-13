@@ -217,7 +217,7 @@ fn vk_triangle_renders_on_real_metal() {
     let cb_ai = vk::CommandBufferAllocateInfo::default().command_pool(vk::CommandPool::from_raw(pool)).command_buffer_count(1);
     let mut cb: *mut c_void = core::ptr::null_mut();
     assert_eq!(ddvk::vkAllocateCommandBuffers(dev, &cb_ai, &mut cb), 0);
-    assert_eq!(ddvk::vkBeginCommandBuffer(cb, (&vk::CommandBufferBeginInfo::default() as *const _) as *const c_void), 0);
+    assert_eq!(ddvk::vkBeginCommandBuffer(cb, (&vk::CommandBufferBeginInfo::default() as *const _) as *const vk::CommandBufferBeginInfo), 0);
 
     let clear = [vk::ClearValue { color: vk::ClearColorValue { float32: [0.1, 0.1, 0.1, 1.0] } }];
     let rp_begin = vk::RenderPassBeginInfo::default()

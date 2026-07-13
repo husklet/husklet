@@ -171,7 +171,7 @@ fn vk_swapchain_present_renders_on_real_metal() {
     let cb_ai = vk::CommandBufferAllocateInfo::default().command_pool(vk::CommandPool::from_raw(pool)).command_buffer_count(1);
     let mut cb: *mut c_void = core::ptr::null_mut();
     ddvk::vkAllocateCommandBuffers(dev, &cb_ai, &mut cb);
-    ddvk::vkBeginCommandBuffer(cb, (&vk::CommandBufferBeginInfo::default() as *const _) as *const c_void);
+    ddvk::vkBeginCommandBuffer(cb, (&vk::CommandBufferBeginInfo::default() as *const _) as *const vk::CommandBufferBeginInfo);
     let clear = [vk::ClearValue { color: vk::ClearColorValue { float32: [0.1, 0.1, 0.1, 1.0] } }];
     let rpb = vk::RenderPassBeginInfo::default()
         .render_pass(vk::RenderPass::from_raw(rp))
