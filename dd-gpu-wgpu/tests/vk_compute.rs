@@ -106,7 +106,7 @@ fn vk_vecadd_runs_on_real_metal() {
     count = 1;
     assert_eq!(ddvk::vkEnumeratePhysicalDevices(inst, &mut count, &mut phys), 0);
     let mut dev: *mut c_void = core::ptr::null_mut();
-    assert_eq!(ddvk::vkCreateDevice(phys, core::ptr::null(), core::ptr::null(), &mut dev), 0);
+    assert_eq!(ddvk::vkCreateDevice(phys, &vk::DeviceCreateInfo::default() as *const _, core::ptr::null(), &mut dev), 0);
     let mut queue: *mut c_void = core::ptr::null_mut();
     ddvk::vkGetDeviceQueue(dev, 0, 0, &mut queue);
     let pool_ci = vk::CommandPoolCreateInfo::default();

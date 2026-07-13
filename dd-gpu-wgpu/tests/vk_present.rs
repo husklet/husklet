@@ -57,7 +57,7 @@ fn vk_swapchain_present_renders_on_real_metal() {
     let mut phys: *mut c_void = core::ptr::null_mut();
     ddvk::vkEnumeratePhysicalDevices(inst, &mut n, &mut phys);
     let mut dev: *mut c_void = core::ptr::null_mut();
-    ddvk::vkCreateDevice(phys, core::ptr::null(), core::ptr::null(), &mut dev);
+    ddvk::vkCreateDevice(phys, &vk::DeviceCreateInfo::default() as *const _, core::ptr::null(), &mut dev);
     let mut queue: *mut c_void = core::ptr::null_mut();
     ddvk::vkGetDeviceQueue(dev, 0, 0, &mut queue);
     let mut pool = 0u64;
