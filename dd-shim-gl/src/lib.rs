@@ -28,6 +28,7 @@ pub mod glconst;
 pub mod lower;
 pub mod state;
 pub mod stub;
+pub mod tiletrace;
 pub mod translate;
 pub mod wayland;
 pub mod wireenc;
