@@ -5822,10 +5822,4 @@ static int synth_stat_raw(const char *gp, struct stat *s) {
     return 1;
 }
 
-// -> Linux struct stat buffer
-static int synth_stat(const char *gp, uint8_t *out) {
-    struct stat s;
-    if (!synth_stat_raw(gp, &s)) return 0;
-    fill_linux_stat(out, &s, NULL, -1); // synth /proc /sys file: no host backing -> no guest-chown xattr
-    return 1;
-}
+// (synth_stat wrapper removed: dead — all callers use synth_stat_raw directly)

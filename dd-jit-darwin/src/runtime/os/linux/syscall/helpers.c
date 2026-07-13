@@ -506,21 +506,6 @@ static uint64_t s3db_sync_fd(int fd) {
     }
 }
 
-// SysV IPC: namespace a key by the container (DD_NETNS) so two containers don't collide on the same key
-// -- the per-IPC-ns isolation. IPC_PRIVATE stays private; --network host shares the host IPC.
-static key_t ipc_ns_key(key_t k) {
-    if (k == IPC_PRIVATE) return k;
-    const char *ns = getenv("DD_NETNS");
-    if (!ns || !ns[0]) return k;
-    uint32_t salt = 2166136261u;
-    for (const char *p = ns; *p; p++) {
-        salt ^= (uint8_t)*p;
-        salt = salt * 16777619u;
-    }
-    key_t hk = (key_t)((uint32_t)k ^ (salt & 0x7fffffffu));
-    return hk == IPC_PRIVATE ? hk + 1 : hk;
-}
-
 // list a directory's entries (minus . / ..) as a newline-joined, NUL-terminated malloc'd string (for the
 // inotify-on-a-directory diff). NULL on error.
 static char *dir_snapshot(const char *path) {

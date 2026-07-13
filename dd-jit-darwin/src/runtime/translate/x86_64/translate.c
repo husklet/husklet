@@ -2499,7 +2499,7 @@ static void *translate_block(uint64_t gpc) {
             // F2=scalar-double, none=packed-single. reg/rm fields index xmm directly.
             {
                 mark_vdirty(); // SSE lowering writes guest xmm (v0..v15) -> mark cpu->V dirty
-                int handled = 1, mem;
+                int handled = 1;
                 int vd = I.reg, vm = I.rm_reg;
                 if (op == 0x6E) { // movd/movq xmm, r/m  (66)
                     if (I.is_mem) {

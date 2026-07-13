@@ -209,17 +209,6 @@ static void txln_put(uint64_t l) {
     // then over-approximate it as present (conservative drop), never miss it. Keeps the hot path O(cap).
 }
 
-static int txln_has(uint64_t addr) { // is the 64B line at addr the source of any live translation?
-    uint64_t l = addr >> 6;
-    uint32_t h = (uint32_t)(l * 2654435761u) & (TXLN_N - 1);
-    for (uint32_t i = 0; i < TXLN_PROBE_CAP; i++) { // bounded probe: see TXLN_PROBE_CAP
-        uint32_t j = (h + i) & (TXLN_N - 1);
-        if (g_txln[j] == l) return 1;
-        if (g_txln[j] == 0) return 0;
-    }
-    return 1; // cap exhausted (saturated cluster) -> conservative: assume present
-}
-
 static void txln_clear(void) {
     memset(g_txln, 0, sizeof g_txln);
     memset(g_txlh, 0, sizeof g_txlh); // keep the content-hash array in lockstep with the line set
@@ -801,10 +790,6 @@ static void add_pend3(uint32_t *slot, uint64_t target, int is_bl, int fwd) {
 
 static void add_pend2(uint32_t *slot, uint64_t target, int is_bl) {
     add_pend3(slot, target, is_bl, 0);
-}
-
-static void add_pend(uint32_t *slot, uint64_t target) {
-    add_pend3(slot, target, 0, 0);
 }
 
 static void patch_links_to(uint64_t gpc, void *body) {
