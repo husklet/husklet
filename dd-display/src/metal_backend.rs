@@ -1640,6 +1640,36 @@ pub fn run_executor(sock_path: String) {
             }
             let mut bytes = vec![0u8; len];
             s.read_exact(&mut bytes)?;
+            if std::env::var_os("DD_GPU_TRACE_IR").is_some() {
+                if let Ok(cmds) = dd_gpu::ir::decode_stream(&bytes) {
+                    let mut summary: Vec<String> = Vec::new();
+                    for c in &cmds {
+                        use dd_gpu::ir::Cmd::*;
+                        match c {
+                            WriteBuffer { id, offset, data } => {
+                                let g = |o: usize| -> Vec<f32> {
+                                    data[o..].chunks_exact(4).take(4)
+                                        .map(|b| f32::from_le_bytes([b[0], b[1], b[2], b[3]])).collect()
+                                };
+                                summary.push(format!(
+                                    "WriteBuffer({id},len={},mvp={:?},pos0={:?})",
+                                    data.len(), g(0), if data.len() >= 80 { g(64) } else { vec![] }
+                                ));
+                            }
+                            Submit(cb) => {
+                                let encs: Vec<String> =
+                                    cb.encoder.iter().map(|e| format!("{e:?}").chars().take(55).collect()).collect();
+                                summary.push(format!("Submit[\n    {}\n  ]", encs.join("\n    ")));
+                            }
+                            other => {
+                                let s = format!("{other:?}");
+                                summary.push(s.chars().take(70).collect());
+                            }
+                        }
+                    }
+                    eprintln!("[ir surf={id} {} cmds]\n  {}", cmds.len(), summary.join("\n  "));
+                }
+            }
             let t_rx = std::time::Instant::now();
             unsafe {
                 if !rt_cache.contains_key(&id) {

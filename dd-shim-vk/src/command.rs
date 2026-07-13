@@ -451,6 +451,12 @@ pub extern "C" fn vkCmdDraw(
             cb.enc.push(Enc::SetPipeline(p));
             cb.pipeline_set_in_pass = true;
         }
+        // Bind the descriptor sets recorded for this draw (graphics parity with vkCmdDispatch): a set's
+        // UBO/texture/sampler bindings sit in `pending_bind_groups` until a draw/dispatch flushes them.
+        // Without this the vertex/fragment shaders read unbound resources (a textured cube renders blank).
+        for (index, group) in cb.pending_bind_groups.clone() {
+            cb.enc.push(Enc::SetBindGroup { index, group });
+        }
         cb.enc.push(Enc::Draw {
             vertex_count,
             instance_count,
@@ -473,6 +479,10 @@ pub extern "C" fn vkCmdDrawIndexed(
         if let (false, Some(p)) = (cb.pipeline_set_in_pass, cb.bound_pipeline) {
             cb.enc.push(Enc::SetPipeline(p));
             cb.pipeline_set_in_pass = true;
+        }
+        // Flush recorded descriptor sets before the draw (see vkCmdDraw).
+        for (index, group) in cb.pending_bind_groups.clone() {
+            cb.enc.push(Enc::SetBindGroup { index, group });
         }
         cb.enc.push(Enc::DrawIndexed {
             index_count,
