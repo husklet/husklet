@@ -41,7 +41,8 @@ use objc2_metal::{
     MTLResourceOptions, MTLSamplerAddressMode, MTLSamplerDescriptor, MTLSamplerMinMagFilter,
     MTLSamplerMipFilter,
     MTLSamplerState, MTLScissorRect, MTLSize, MTLStorageMode, MTLStoreAction, MTLTexture,
-    MTLTextureDescriptor, MTLTextureUsage, MTLVertexDescriptor, MTLVertexFormat, MTLViewport,
+    MTLTextureDescriptor, MTLTextureType, MTLTextureUsage, MTLVertexDescriptor, MTLVertexFormat,
+    MTLViewport,
 };
 use std::collections::{HashMap, HashSet};
 use std::hash::{Hash, Hasher};
@@ -299,6 +300,48 @@ fragment float4 blit_f(VOut in [[stage_in]], texture2d<float> src [[texture(0)]]
 }
 "#;
 
+/// Multisample-resolve shader (`Enc::ResolveTexture`). A fullscreen triangle (from `vertex_id`, no vertex
+/// buffer) drives a fragment that reads every sample of a `texture2d_ms` source and averages them. `off`
+/// carries `src_origin - dst_origin`, so the fragment at dest pixel `position` reads source texel
+/// `position + off`. The render pass's viewport/scissor clip output to the dest region; other dest texels
+/// keep their loaded contents. The arithmetic mean matches `VkCmdResolveImage` VK_RESOLVE_MODE_AVERAGE and
+/// the software oracle — the general fallback `MVKCmdResolveImage` uses (Metal's fixed-function attachment
+/// resolve cannot express a standalone-texture / offset resolve).
+const RESOLVE_MSL: &str = r#"
+#include <metal_stdlib>
+using namespace metal;
+struct RVOut { float4 position [[position]]; };
+vertex RVOut resolve_v(uint vid [[vertex_id]]) {
+    float2 p[3] = { float2(-1.0, -3.0), float2(-1.0, 1.0), float2(3.0, 1.0) };
+    RVOut o; o.position = float4(p[vid], 0.0, 1.0); return o;
+}
+fragment float4 resolve_f(RVOut in [[stage_in]],
+                          texture2d_ms<float> src [[texture(0)]],
+                          constant int2& off [[buffer(0)]]) {
+    uint n = src.get_num_samples();
+    int2 sc = int2(int(in.position.x), int(in.position.y)) + off;
+    float4 acc = float4(0.0);
+    for (uint s = 0u; s < n; s++) { acc += src.read(uint2(sc), s); }
+    return acc / float(max(n, 1u));
+}
+"#;
+
+/// Test/interop seed for a multisampled texture: render every texel so sample `s` holds `c[s]`. Reading
+/// `[[sample_id]]` forces per-sample shading, so each of the target's samples is written independently —
+/// the only portable way to place known, distinct per-sample data into a hardware MS texture (which cannot
+/// be a copy destination). Used by the resolve conformance test to seed the exact same per-sample values
+/// the software oracle's `write_texture_samples` uses.
+const SEED_MSL: &str = r#"
+#include <metal_stdlib>
+using namespace metal;
+struct SVOut { float4 position [[position]]; };
+vertex SVOut seed_v(uint vid [[vertex_id]]) {
+    float2 p[3] = { float2(-1.0, -3.0), float2(-1.0, 1.0), float2(3.0, 1.0) };
+    SVOut o; o.position = float4(p[vid], 0.0, 1.0); return o;
+}
+fragment float4 seed_f(uint sid [[sample_id]], constant float4* c [[buffer(0)]]) { return c[sid]; }
+"#;
+
 struct Pipeline {
     state: Retained<ProtocolObject<dyn MTLRenderPipelineState>>,
     primitive: MTLPrimitiveType,
@@ -364,6 +407,10 @@ pub struct MetalBackend {
     // copy. An exact-size blit takes the cheap blit-copy path and needs none of these.
     blit_lib: Option<Retained<ProtocolObject<dyn MTLLibrary>>>,
     blit_pipelines: HashMap<usize, Retained<ProtocolObject<dyn MTLRenderPipelineState>>>,
+    /// Multisample-resolve (`Enc::ResolveTexture`) resources: the averaging library + one single-sampled
+    /// render pipeline per destination pixel format (the color-attachment format must match).
+    resolve_lib: Option<Retained<ProtocolObject<dyn MTLLibrary>>>,
+    resolve_pipelines: HashMap<usize, Retained<ProtocolObject<dyn MTLRenderPipelineState>>>,
     blit_sampler_nearest: Option<Retained<ProtocolObject<dyn MTLSamplerState>>>,
     blit_sampler_linear: Option<Retained<ProtocolObject<dyn MTLSamplerState>>>,
     // Prof counters (read + reset per frame by the executor when DD_RENDER_PROF is on). `*_compiles`
@@ -442,6 +489,8 @@ impl MetalBackend {
             clear_pipeline: None,
             blit_lib: None,
             blit_pipelines: HashMap::new(),
+            resolve_lib: None,
+            resolve_pipelines: HashMap::new(),
             blit_sampler_nearest: None,
             blit_sampler_linear: None,
             shader_compiles: 0,
@@ -544,6 +593,104 @@ impl MetalBackend {
         self.pipeline_compiles += 1;
         self.blit_pipelines.insert(pf.0, state.clone());
         Ok(state)
+    }
+
+    /// A single-sampled resolve pipeline that averages a `texture2d_ms` source into a `pf` color target
+    /// (see `RESOLVE_MSL`). No vertex descriptor — the vertex shader emits a fullscreen triangle from
+    /// `vertex_id`. One pipeline per dest format handles any source sample count (`get_num_samples`).
+    fn resolve_pipeline(
+        &mut self,
+        pf: MTLPixelFormat,
+    ) -> Result<Retained<ProtocolObject<dyn MTLRenderPipelineState>>> {
+        if let Some(p) = self.resolve_pipelines.get(&pf.0) {
+            return Ok(p.clone());
+        }
+        if self.resolve_lib.is_none() {
+            let lib = self
+                .device
+                .newLibraryWithSource_options_error(&NSString::from_str(RESOLVE_MSL), None)
+                .map_err(|_| GpuError::Unsupported("resolve MSL compile"))?;
+            self.lib_compiles += 1;
+            self.resolve_lib = Some(lib);
+        }
+        let lib = self.resolve_lib.as_ref().unwrap();
+        let vfn = lib
+            .newFunctionWithName(&NSString::from_str("resolve_v"))
+            .ok_or(GpuError::Unsupported("resolve vertex fn"))?;
+        let ffn = lib
+            .newFunctionWithName(&NSString::from_str("resolve_f"))
+            .ok_or(GpuError::Unsupported("resolve fragment fn"))?;
+        let pdesc = MTLRenderPipelineDescriptor::new();
+        pdesc.setVertexFunction(Some(&vfn));
+        pdesc.setFragmentFunction(Some(&ffn));
+        unsafe {
+            pdesc.colorAttachments().objectAtIndexedSubscript(0).setPixelFormat(pf);
+        }
+        let state = self
+            .device
+            .newRenderPipelineStateWithDescriptor_error(&pdesc)
+            .map_err(|_| GpuError::Unsupported("resolve pipeline compile"))?;
+        self.pipeline_compiles += 1;
+        self.resolve_pipelines.insert(pf.0, state.clone());
+        Ok(state)
+    }
+
+    /// Test/interop: seed a multisampled texture so every texel's sample `s` holds `samples[s]` (RGBA in
+    /// 0..1). The only portable way to place known, distinct per-sample data into a hardware MS texture (a
+    /// MS texture cannot be a copy destination): render a fullscreen pass with per-sample shading
+    /// (`SEED_MSL`, `[[sample_id]]`). Used to seed the resolve conformance test with the SAME per-sample
+    /// values the software oracle's `write_texture_samples` uses, enabling a direct resolved-pixel parity
+    /// check.
+    pub fn seed_multisample_uniform(&mut self, id: u32, samples: &[[f32; 4]]) -> Result<()> {
+        let tex = self.resolve_texture(id).cloned().ok_or(GpuError::UnknownId { kind: "texture", id })?;
+        let sc = tex.sampleCount();
+        if sc <= 1 {
+            return Err(GpuError::Unsupported("seed_multisample_uniform: not multisampled"));
+        }
+        let lib = self
+            .device
+            .newLibraryWithSource_options_error(&NSString::from_str(SEED_MSL), None)
+            .map_err(|_| GpuError::Unsupported("seed MSL compile"))?;
+        let vfn = lib.newFunctionWithName(&NSString::from_str("seed_v")).ok_or(GpuError::Unsupported("seed vfn"))?;
+        let ffn = lib.newFunctionWithName(&NSString::from_str("seed_f")).ok_or(GpuError::Unsupported("seed ffn"))?;
+        let pdesc = MTLRenderPipelineDescriptor::new();
+        pdesc.setVertexFunction(Some(&vfn));
+        pdesc.setFragmentFunction(Some(&ffn));
+        pdesc.setSampleCount(sc);
+        unsafe { pdesc.colorAttachments().objectAtIndexedSubscript(0).setPixelFormat(tex.pixelFormat()) };
+        let state = self
+            .device
+            .newRenderPipelineStateWithDescriptor_error(&pdesc)
+            .map_err(|_| GpuError::Unsupported("seed pipeline compile"))?;
+        let mut u = [0f32; 32]; // array<float4, 8>
+        for (i, c) in samples.iter().take(8).enumerate() {
+            u[i * 4..i * 4 + 4].copy_from_slice(c);
+        }
+        let ubuf = self
+            .device
+            .newBufferWithLength_options(128, MTLResourceOptions::MTLResourceStorageModeShared)
+            .ok_or(GpuError::Unsupported("seed uniform buffer"))?;
+        let cmd = self.queue.commandBuffer().ok_or(GpuError::Unsupported("seed cmd buffer"))?;
+        let pass = unsafe { MTLRenderPassDescriptor::renderPassDescriptor() };
+        unsafe {
+            std::ptr::copy_nonoverlapping(u.as_ptr() as *const u8, ubuf.contents().as_ptr() as *mut u8, 128);
+            let att = pass.colorAttachments().objectAtIndexedSubscript(0);
+            att.setTexture(Some(&tex));
+            att.setLoadAction(MTLLoadAction::Clear);
+            att.setStoreAction(MTLStoreAction::Store); // store all samples (not resolve)
+        }
+        let e = cmd
+            .renderCommandEncoderWithDescriptor(&pass)
+            .ok_or(GpuError::Unsupported("seed encoder"))?;
+        e.setRenderPipelineState(&state);
+        unsafe {
+            e.setFragmentBuffer_offset_atIndex(Some(&ubuf), 0, 0);
+            e.drawPrimitives_vertexStart_vertexCount(MTLPrimitiveType::Triangle, 0, 3);
+        }
+        e.endEncoding();
+        cmd.commit();
+        unsafe { cmd.waitUntilCompleted() };
+        Ok(())
     }
 
     /// A ClampToEdge nearest/linear sampler for the scaled-blit fragment shader (built once each).
@@ -1353,6 +1500,10 @@ pub fn run_executor(sock_path: String) {
         return;
     };
     eprintln!("dd-gpu executor: listening on {sock_path}");
+    // Process-wide residency ceiling shared across connections (cloned per connection into its
+    // ExecutorBudget). Mirrors `run_executor_wgpu`; a prior refactor added the `handle` parameter + call
+    // but omitted this definition here, which failed to compile.
+    let global_budget = dd_gpu::limits::GlobalBudget::new(2 << 30, 262_144);
     // L2 + L7.1: one connection now carries the surface's WHOLE lifetime (frame = header+stream, ack as
     // before). `handle` builds ONE `MetalBackend` per connection and drives every frame through it, so the
     // builtin-MSL compile, the depth-stencil state, and — crucially — all resource + shader + PSO caches
@@ -1965,6 +2116,16 @@ impl GpuBackend for MetalBackend {
         }
         d.setUsage(usage);
         d.setStorageMode(MTLStorageMode::Shared);
+        // A multisampled texture is a Private, non-mipmapped 2D-multisample render target that is also
+        // ShaderRead (so it can be the `texture2d_ms` source of the resolve averaging pass). Metal forbids
+        // Shared storage for MS textures, so override the descriptor built above.
+        let samples = desc.sample_count.max(1);
+        if samples > 1 {
+            d.setTextureType(MTLTextureType::MTLTextureType2DMultisample);
+            unsafe { d.setSampleCount(samples as usize) };
+            d.setUsage(MTLTextureUsage::RenderTarget | MTLTextureUsage::ShaderRead);
+            d.setStorageMode(MTLStorageMode::Private);
+        }
         let tex = self
             .device
             .newTextureWithDescriptor(&d)
@@ -3214,6 +3375,76 @@ impl GpuBackend for MetalBackend {
                         }
                         e.endEncoding();
                     }
+                }
+                Enc::ResolveTexture { src, src_origin, dst, dst_origin, extent, .. } => {
+                    // Average the MS source's samples into the dest region: a single-sampled fullscreen
+                    // pass reads `texture2d_ms` and writes the mean (RESOLVE_MSL). Close any open encoder;
+                    // this runs on its own render encoder.
+                    if let Some(e) = enc.take() {
+                        e.endEncoding();
+                    }
+                    if let Some(ce) = compute_enc.take() {
+                        unsafe {
+                            let _: () = msg_send![&*ce, endEncoding];
+                        }
+                    }
+                    let Some(stex) = self.resolve_texture(*src).cloned() else {
+                        return Err(GpuError::UnknownId { kind: "texture", id: *src });
+                    };
+                    let Some(dtex) = self.resolve_texture(*dst).cloned() else {
+                        return Err(GpuError::UnknownId { kind: "texture", id: *dst });
+                    };
+                    let (sw, sh) = (stex.width() as u32, stex.height() as u32);
+                    let (dw, dh) = (dtex.width() as u32, dtex.height() as u32);
+                    if !region_in_bounds(src_origin.x, extent.width, sw)
+                        || !region_in_bounds(src_origin.y, extent.height, sh)
+                        || !region_in_bounds(dst_origin.x, extent.width, dw)
+                        || !region_in_bounds(dst_origin.y, extent.height, dh)
+                    {
+                        return Err(GpuError::OutOfBounds);
+                    }
+                    let state = self.resolve_pipeline(dtex.pixelFormat())?;
+                    // off = src_origin - dst_origin (a fragment at dest pixel p reads src texel p + off).
+                    let off: [i32; 2] = [
+                        src_origin.x as i32 - dst_origin.x as i32,
+                        src_origin.y as i32 - dst_origin.y as i32,
+                    ];
+                    let obuf = self
+                        .device
+                        .newBufferWithLength_options(8, MTLResourceOptions::MTLResourceStorageModeShared)
+                        .ok_or(GpuError::Unsupported("resolve offset buffer"))?;
+                    let pass = unsafe { MTLRenderPassDescriptor::renderPassDescriptor() };
+                    unsafe {
+                        std::ptr::copy_nonoverlapping(off.as_ptr() as *const u8, obuf.contents().as_ptr() as *mut u8, 8);
+                        let att = pass.colorAttachments().objectAtIndexedSubscript(0);
+                        att.setTexture(Some(&dtex));
+                        att.setLoadAction(MTLLoadAction::Load);
+                        att.setStoreAction(MTLStoreAction::Store);
+                    }
+                    let e = cmd
+                        .renderCommandEncoderWithDescriptor(&pass)
+                        .ok_or(GpuError::Unsupported("resolve encoder"))?;
+                    e.setRenderPipelineState(&state);
+                    e.setViewport(MTLViewport {
+                        originX: dst_origin.x as f64,
+                        originY: dst_origin.y as f64,
+                        width: extent.width as f64,
+                        height: extent.height as f64,
+                        znear: 0.0,
+                        zfar: 1.0,
+                    });
+                    e.setScissorRect(MTLScissorRect {
+                        x: dst_origin.x as usize,
+                        y: dst_origin.y as usize,
+                        width: extent.width as usize,
+                        height: extent.height as usize,
+                    });
+                    unsafe {
+                        e.setFragmentTexture_atIndex(Some(&stex), 0);
+                        e.setFragmentBuffer_offset_atIndex(Some(&obuf), 0, 0);
+                        e.drawPrimitives_vertexStart_vertexCount(MTLPrimitiveType::Triangle, 0, 3);
+                    }
+                    e.endEncoding();
                 }
             }
         }

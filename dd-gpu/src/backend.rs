@@ -106,13 +106,16 @@ pub const ALL_COMMANDS: &[u8] = &[
     etag::RESOLVE_TEXTURE,
 ];
 
-/// Commands implemented by both hardware executors. Resolve is advertised only by the software
-/// oracle until Metal and wgpu implement genuine multisample averaging.
+/// Commands implemented by both hardware executors. Now identical to [`ALL_COMMANDS`]: both the Metal
+/// backend (`dd-display::metal_backend`) and the wgpu backend (`dd-gpu-wgpu`) implement genuine
+/// multisample resolve (`RESOLVE_TEXTURE`) — a per-sample averaging pass into the dest region, proven by
+/// their resolve conformance tests (`metal_resolve` / `texture_resolve`) against the software oracle.
 pub const HARDWARE_COMMANDS: &[u8] = &[
     etag::BEGIN_RENDER_PASS, etag::END_RENDER_PASS, etag::SET_PIPELINE, etag::SET_BIND_GROUP,
     etag::SET_VERTEX_BUFFER, etag::SET_INDEX_BUFFER, etag::SET_VIEWPORT, etag::SET_SCISSOR,
     etag::CLEAR_RECT, etag::DRAW, etag::DRAW_INDEXED, etag::BEGIN_COMPUTE_PASS, etag::END_COMPUTE_PASS,
     etag::DISPATCH, etag::COPY_B2B, etag::COPY_B2T, etag::COPY_T2B, etag::COPY_T2T, etag::BLIT_TEXTURE,
+    etag::RESOLVE_TEXTURE,
 ];
 
 /// Present-kind bitset used by the serialized handshake (a `Vec<PresentKind>` is not wire-friendly).
