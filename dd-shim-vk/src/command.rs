@@ -14,7 +14,9 @@
 //!     and commits. Our `vkQueueSubmit` wraps each recorded encoder in `Cmd::Submit(CommandBuffer{ .. })`
 //!     and appends it to the IR log the host executor replays.
 
-use crate::reg::{self, CommandBufferState, RenderPassRec};
+use crate::reg::{
+    self, CommandBufferState, ImageEvent, ImageSubresourceRange, ImageTransition, RenderPassRec,
+};
 use crate::types::*;
 use ash::vk;
 use ash::vk::Handle;
@@ -352,6 +354,9 @@ pub extern "C" fn vkCmdBeginRenderPass(
         color_load_clear: r.color_load_clear,
         clear: r.clear,
         color_store: r.color_store,
+        initial_layout: r.initial_layout,
+        subpass_layout: r.subpass_layout,
+        final_layout: r.final_layout,
     }) else {
         return;
     };
@@ -361,9 +366,9 @@ pub extern "C" fn vkCmdBeginRenderPass(
         return;
     };
     // The framebuffer's color attachment must resolve to a real image-view → image → IR texture.
-    let Some(tex) = color_view
-        .and_then(|v| s.image_views.get(&v).map(|iv| iv.image))
-        .and_then(|img| s.images.get(&img).map(|im| im.ir_id))
+    let Some((image, range, tex)) = color_view
+        .and_then(|v| s.image_views.get(&v).copied())
+        .and_then(|iv| s.images.get(&iv.image).map(|im| (iv.image, iv.range, im.ir_id)))
     else {
         return;
     };
@@ -380,6 +385,13 @@ pub extern "C" fn vkCmdBeginRenderPass(
     let store = rp.color_store;
 
     if let Some(cb) = s.recording_mut(cb_key(command_buffer)) {
+        cb.image_events.push(ImageEvent::RenderBegin {
+            image,
+            range,
+            initial_layout: rp.initial_layout,
+            subpass_layout: rp.subpass_layout,
+        });
+        cb.active_render_image = Some((image, range, rp.subpass_layout, rp.final_layout));
         cb.enc.push(Enc::BeginRenderPass {
             color: vec![ColorAttachment {
                 texture: tex,
@@ -413,6 +425,14 @@ pub extern "C" fn vkCmdBeginRenderPass(
 #[no_mangle]
 pub extern "C" fn vkCmdEndRenderPass(command_buffer: VkCommandBuffer) {
     if let Some(cb) = reg::lock().recording_mut(cb_key(command_buffer)) {
+        if let Some((image, range, subpass_layout, final_layout)) = cb.active_render_image.take() {
+            cb.image_events.push(ImageEvent::RenderEnd {
+                image,
+                range,
+                subpass_layout,
+                final_layout,
+            });
+        }
         cb.enc.push(Enc::EndRenderPass);
         cb.in_render_pass = false;
     }
@@ -466,6 +486,115 @@ pub extern "C" fn vkCmdDrawIndexed(
 
 // ---- transfer ------------------------------------------------------------------------------------
 
+fn supported_layout(layout: vk::ImageLayout, allow_undefined: bool) -> bool {
+    (allow_undefined && layout == vk::ImageLayout::UNDEFINED)
+        || matches!(
+            layout,
+            vk::ImageLayout::GENERAL
+                | vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL
+                | vk::ImageLayout::TRANSFER_SRC_OPTIMAL
+                | vk::ImageLayout::TRANSFER_DST_OPTIMAL
+                | vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL
+                | vk::ImageLayout::PRESENT_SRC_KHR
+        )
+}
+
+fn resolve_range(image: &reg::ImageRec, raw: vk::ImageSubresourceRange) -> Option<ImageSubresourceRange> {
+    let level_count = if raw.level_count == vk::REMAINING_MIP_LEVELS {
+        image.mip_levels.checked_sub(raw.base_mip_level)?
+    } else {
+        raw.level_count
+    };
+    let layer_count = if raw.layer_count == vk::REMAINING_ARRAY_LAYERS {
+        image.array_layers.checked_sub(raw.base_array_layer)?
+    } else {
+        raw.layer_count
+    };
+    let range = ImageSubresourceRange {
+        aspect_mask: raw.aspect_mask.as_raw(),
+        base_mip_level: raw.base_mip_level,
+        level_count,
+        base_array_layer: raw.base_array_layer,
+        layer_count,
+    };
+    (range.aspect_mask == image.aspect_mask
+        && level_count != 0
+        && layer_count != 0
+        && raw.base_mip_level.checked_add(level_count).is_some_and(|end| end <= image.mip_levels)
+        && raw.base_array_layer.checked_add(layer_count).is_some_and(|end| end <= image.array_layers))
+    .then_some(range)
+}
+
+/// Record legacy image barriers as Vulkan state transitions. Metal supplies ordered execution for
+/// this synchronous single-queue slice; the state transitions themselves are validated and applied
+/// atomically at queue submission, not while command buffers are merely recorded.
+#[no_mangle]
+pub extern "C" fn vkCmdPipelineBarrier(
+    command_buffer: VkCommandBuffer,
+    src_stage_mask: vk::PipelineStageFlags,
+    dst_stage_mask: vk::PipelineStageFlags,
+    _dependency_flags: vk::DependencyFlags,
+    memory_barrier_count: u32,
+    p_memory_barriers: *const vk::MemoryBarrier,
+    buffer_memory_barrier_count: u32,
+    p_buffer_memory_barriers: *const vk::BufferMemoryBarrier,
+    image_memory_barrier_count: u32,
+    p_image_memory_barriers: *const vk::ImageMemoryBarrier,
+) {
+    if (memory_barrier_count != 0 && p_memory_barriers.is_null())
+        || (buffer_memory_barrier_count != 0 && p_buffer_memory_barriers.is_null())
+        || (image_memory_barrier_count != 0 && p_image_memory_barriers.is_null())
+    {
+        return;
+    }
+    let barriers = if image_memory_barrier_count == 0 {
+        &[][..]
+    } else {
+        unsafe { core::slice::from_raw_parts(p_image_memory_barriers, image_memory_barrier_count as usize) }
+    };
+    let mut s = reg::lock();
+    let key = cb_key(command_buffer);
+    if !s.cmdbufs.get(&key).is_some_and(|cb| cb.state == CommandBufferState::Recording && !cb.in_render_pass) {
+        return;
+    }
+    let mut transitions = Vec::with_capacity(barriers.len());
+    for barrier in barriers {
+        let Some(image) = s.images.get(&barrier.image.as_raw()) else {
+            return;
+        };
+        let Some(range) = resolve_range(image, barrier.subresource_range) else {
+            return;
+        };
+        if !supported_layout(barrier.old_layout, true) || !supported_layout(barrier.new_layout, false) {
+            return;
+        }
+        let ignored = vk::QUEUE_FAMILY_IGNORED;
+        let queue_ok = (barrier.src_queue_family_index == ignored
+            && barrier.dst_queue_family_index == ignored)
+            || (barrier.src_queue_family_index == 0 && barrier.dst_queue_family_index == 0);
+        if !queue_ok {
+            return;
+        }
+        transitions.push(ImageTransition {
+            image: barrier.image.as_raw(),
+            range,
+            old_layout: barrier.old_layout.as_raw(),
+            new_layout: barrier.new_layout.as_raw(),
+            src_access: barrier.src_access_mask.as_raw(),
+            dst_access: barrier.dst_access_mask.as_raw(),
+            src_stage: src_stage_mask.as_raw(),
+            dst_stage: dst_stage_mask.as_raw(),
+            src_queue_family: barrier.src_queue_family_index,
+            dst_queue_family: barrier.dst_queue_family_index,
+        });
+    }
+    if !transitions.is_empty() {
+        s.cmdbufs.get_mut(&key).expect("validated recording command buffer").image_events.push(
+            ImageEvent::Barriers(transitions),
+        );
+    }
+}
+
 #[no_mangle]
 pub extern "C" fn vkCmdCopyBuffer(
     command_buffer: VkCommandBuffer,
@@ -501,6 +630,100 @@ pub extern "C" fn vkCmdCopyBuffer(
 }
 
 // ---- submit + sync -------------------------------------------------------------------------------
+
+fn for_each_subresource_mut(
+    image: &mut reg::ImageRec,
+    range: ImageSubresourceRange,
+    mut visit: impl FnMut(&mut reg::ImageSubresourceState) -> bool,
+) -> bool {
+    for mip in range.base_mip_level..range.base_mip_level + range.level_count {
+        for layer in range.base_array_layer..range.base_array_layer + range.layer_count {
+            let Some(state) = image.subresources.get_mut(&(range.aspect_mask, mip, layer)) else {
+                return false;
+            };
+            if !visit(state) {
+                return false;
+            }
+        }
+    }
+    true
+}
+
+fn validate_image_events(
+    images: &mut std::collections::HashMap<u64, reg::ImageRec>,
+    events: &[ImageEvent],
+) -> bool {
+    for event in events {
+        match event {
+            ImageEvent::Barriers(barriers) => {
+                // Each vkCmdPipelineBarrier call is one atomic transition group. Apply to a scratch
+                // copy first so a mismatch in its tail cannot partially mutate its head.
+                let mut trial = images.clone();
+                for barrier in barriers {
+                    let Some(image) = trial.get_mut(&barrier.image) else {
+                        return false;
+                    };
+                    let old_undefined = barrier.old_layout == vk::ImageLayout::UNDEFINED.as_raw();
+                    let explicit_ownership = barrier.src_queue_family != vk::QUEUE_FAMILY_IGNORED;
+                    if !for_each_subresource_mut(image, barrier.range, |state| {
+                        if (!old_undefined && state.layout != barrier.old_layout)
+                            || (explicit_ownership && state.owner_queue_family != barrier.src_queue_family)
+                        {
+                            return false;
+                        }
+                        state.layout = barrier.new_layout;
+                        state.last_access = barrier.dst_access;
+                        state.last_stage = barrier.dst_stage;
+                        if explicit_ownership {
+                            state.owner_queue_family = barrier.dst_queue_family;
+                        }
+                        true
+                    }) {
+                        return false;
+                    }
+                }
+                *images = trial;
+            }
+            ImageEvent::RenderBegin { image, range, initial_layout, subpass_layout } => {
+                if *subpass_layout != vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL.as_raw()
+                    && *subpass_layout != vk::ImageLayout::GENERAL.as_raw()
+                {
+                    return false;
+                }
+                let Some(image) = images.get_mut(image) else {
+                    return false;
+                };
+                let initial_undefined = *initial_layout == vk::ImageLayout::UNDEFINED.as_raw();
+                if !for_each_subresource_mut(image, *range, |state| {
+                    if !initial_undefined && state.layout != *initial_layout {
+                        return false;
+                    }
+                    state.layout = *subpass_layout;
+                    state.last_access = vk::AccessFlags::COLOR_ATTACHMENT_WRITE.as_raw();
+                    state.last_stage = vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT.as_raw();
+                    true
+                }) {
+                    return false;
+                }
+            }
+            ImageEvent::RenderEnd { image, range, subpass_layout, final_layout } => {
+                let Some(image) = images.get_mut(image) else {
+                    return false;
+                };
+                if !for_each_subresource_mut(image, *range, |state| {
+                    if state.layout != *subpass_layout {
+                        return false;
+                    }
+                    state.layout = *final_layout;
+                    true
+                }) {
+                    return false;
+                }
+            }
+        }
+    }
+    true
+}
 
 /// `vkQueueSubmit` — the real submission state machine, ported from `MVKQueue::submit` +
 /// `MVKQueueCommandBufferSubmission` (`GPUObjects/MVKQueue.mm`):
@@ -574,6 +797,19 @@ pub extern "C" fn vkQueueSubmit(
         }
     }
 
+    // Validate layout transitions and render attachment uses in command-buffer submission order on
+    // a scratch image table. Recording alone never mutates global image state, and a rejected batch
+    // leaves every command buffer executable and every subresource unchanged.
+    let mut submitted_images = s.images.clone();
+    for &key in &cb_keys {
+        let Some(cb) = s.cmdbufs.get(&key) else {
+            return VK_ERROR_INITIALIZATION_FAILED;
+        };
+        if !validate_image_events(&mut submitted_images, &cb.image_events) {
+            return VK_ERROR_INITIALIZATION_FAILED;
+        }
+    }
+
     // ---- phase 2: consume waits, ship the IR, move buffers Pending ----
     for w in &wait_sems {
         if let Some(sm) = s.semaphores.get_mut(w) {
@@ -583,6 +819,11 @@ pub extern "C" fn vkQueueSubmit(
     // Flush persistently-mapped HOST_COHERENT buffers (vkcube writes its rotating MVP UBO every frame
     // without unmapping) so the host sees this frame's uniform data before the draw replays.
     s.flush_mapped();
+    for (handle, submitted) in submitted_images {
+        if let Some(image) = s.images.get_mut(&handle) {
+            image.subresources = submitted.subresources;
+        }
+    }
     // The host Metal executor renders synchronously and does not model fence objects, so we never
     // signal a fence *in the shipped IR* — the fence/semaphore state machine is guest-side (below).
     let mut encoders: Vec<Vec<Enc>> = Vec::new();
@@ -762,4 +1003,298 @@ pub extern "C" fn vkCreateSemaphore(
 #[no_mangle]
 pub extern "C" fn vkDestroySemaphore(_device: VkDevice, semaphore: VkSemaphore, _p_allocator: *const c_void) {
     reg::lock().semaphores.remove(&semaphore);
+}
+
+#[cfg(test)]
+mod layout_tests {
+    use super::*;
+
+    fn create_image() -> VkImage {
+        let ci = vk::ImageCreateInfo::default()
+            .image_type(vk::ImageType::TYPE_2D)
+            .format(vk::Format::R8G8B8A8_UNORM)
+            .extent(vk::Extent3D { width: 8, height: 8, depth: 1 })
+            .mip_levels(2)
+            .array_layers(2)
+            .samples(vk::SampleCountFlags::TYPE_1)
+            .tiling(vk::ImageTiling::OPTIMAL)
+            .usage(vk::ImageUsageFlags::COLOR_ATTACHMENT | vk::ImageUsageFlags::TRANSFER_DST)
+            .initial_layout(vk::ImageLayout::UNDEFINED);
+        let mut image = 0;
+        assert_eq!(
+            crate::memory::vkCreateImage(core::ptr::null_mut(), &ci, core::ptr::null(), &mut image),
+            VK_SUCCESS
+        );
+        image
+    }
+
+    fn begin(cb: VkCommandBuffer) {
+        let info = vk::CommandBufferBeginInfo::default();
+        assert_eq!(vkBeginCommandBuffer(cb, &info), VK_SUCCESS);
+    }
+
+    fn submit(cb: VkCommandBuffer) -> VkResult {
+        let command = vk::CommandBuffer::from_raw(cb as usize as u64);
+        let info = vk::SubmitInfo {
+            command_buffer_count: 1,
+            p_command_buffers: &command,
+            ..Default::default()
+        };
+        vkQueueSubmit(core::ptr::null_mut(), 1, &info, 0)
+    }
+
+    fn barrier(
+        cb: VkCommandBuffer,
+        image: VkImage,
+        old: vk::ImageLayout,
+        new: vk::ImageLayout,
+        base_mip: u32,
+        level_count: u32,
+        base_layer: u32,
+        layer_count: u32,
+    ) {
+        let b = vk::ImageMemoryBarrier::default()
+            .src_access_mask(vk::AccessFlags::TRANSFER_WRITE)
+            .dst_access_mask(vk::AccessFlags::COLOR_ATTACHMENT_WRITE)
+            .old_layout(old)
+            .new_layout(new)
+            .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+            .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+            .image(vk::Image::from_raw(image))
+            .subresource_range(vk::ImageSubresourceRange {
+                aspect_mask: vk::ImageAspectFlags::COLOR,
+                base_mip_level: base_mip,
+                level_count,
+                base_array_layer: base_layer,
+                layer_count,
+            });
+        vkCmdPipelineBarrier(
+            cb,
+            vk::PipelineStageFlags::TRANSFER,
+            vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT,
+            vk::DependencyFlags::empty(),
+            0,
+            core::ptr::null(),
+            0,
+            core::ptr::null(),
+            1,
+            &b,
+        );
+    }
+
+    fn layout(image: VkImage, mip: u32, layer: u32) -> i32 {
+        reg::lock().images[&image].subresources[&(vk::ImageAspectFlags::COLOR.as_raw(), mip, layer)].layout
+    }
+
+    fn create_render_objects(image: VkImage, initial: vk::ImageLayout) -> (VkImageView, VkRenderPass, VkFramebuffer) {
+        let view_ci = vk::ImageViewCreateInfo::default()
+            .image(vk::Image::from_raw(image))
+            .view_type(vk::ImageViewType::TYPE_2D)
+            .format(vk::Format::R8G8B8A8_UNORM)
+            .subresource_range(vk::ImageSubresourceRange {
+                aspect_mask: vk::ImageAspectFlags::COLOR,
+                base_mip_level: 0,
+                level_count: 1,
+                base_array_layer: 0,
+                layer_count: 1,
+            });
+        let mut view = 0;
+        assert_eq!(
+            crate::memory::vkCreateImageView(core::ptr::null_mut(), &view_ci, core::ptr::null(), &mut view),
+            VK_SUCCESS
+        );
+        let attachment = vk::AttachmentDescription::default()
+            .format(vk::Format::R8G8B8A8_UNORM)
+            .samples(vk::SampleCountFlags::TYPE_1)
+            .load_op(vk::AttachmentLoadOp::LOAD)
+            .store_op(vk::AttachmentStoreOp::STORE)
+            .initial_layout(initial)
+            .final_layout(vk::ImageLayout::GENERAL);
+        let color_ref = vk::AttachmentReference {
+            attachment: 0,
+            layout: vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL,
+        };
+        let subpass = vk::SubpassDescription::default()
+            .pipeline_bind_point(vk::PipelineBindPoint::GRAPHICS)
+            .color_attachments(core::slice::from_ref(&color_ref));
+        let rp_ci = vk::RenderPassCreateInfo::default()
+            .attachments(core::slice::from_ref(&attachment))
+            .subpasses(core::slice::from_ref(&subpass));
+        let mut render_pass = 0;
+        assert_eq!(
+            crate::pipeline::vkCreateRenderPass(core::ptr::null_mut(), &rp_ci, core::ptr::null(), &mut render_pass),
+            VK_SUCCESS
+        );
+        let attachment_view = vk::ImageView::from_raw(view);
+        let fb_ci = vk::FramebufferCreateInfo::default()
+            .render_pass(vk::RenderPass::from_raw(render_pass))
+            .attachments(core::slice::from_ref(&attachment_view))
+            .width(8)
+            .height(8)
+            .layers(1);
+        let mut framebuffer = 0;
+        assert_eq!(
+            crate::pipeline::vkCreateFramebuffer(core::ptr::null_mut(), &fb_ci, core::ptr::null(), &mut framebuffer),
+            VK_SUCCESS
+        );
+        (view, render_pass, framebuffer)
+    }
+
+    #[test]
+    fn image_layout_barriers_track_subresources_and_apply_atomically_at_submit() {
+        let image = create_image();
+        let cb = 0x1010usize as VkCommandBuffer;
+        begin(cb);
+        barrier(
+            cb,
+            image,
+            vk::ImageLayout::UNDEFINED,
+            vk::ImageLayout::TRANSFER_DST_OPTIMAL,
+            0,
+            1,
+            0,
+            1,
+        );
+        assert_eq!(layout(image, 0, 0), vk::ImageLayout::UNDEFINED.as_raw(), "recording must not apply state");
+        assert_eq!(vkEndCommandBuffer(cb), VK_SUCCESS);
+        assert_eq!(submit(cb), VK_SUCCESS);
+        assert_eq!(layout(image, 0, 0), vk::ImageLayout::TRANSFER_DST_OPTIMAL.as_raw());
+        assert_eq!(layout(image, 1, 0), vk::ImageLayout::UNDEFINED.as_raw());
+        assert_eq!(layout(image, 0, 1), vk::ImageLayout::UNDEFINED.as_raw());
+        let state = reg::lock().images[&image].subresources
+            [&(vk::ImageAspectFlags::COLOR.as_raw(), 0, 0)];
+        assert_eq!(state.last_access, vk::AccessFlags::COLOR_ATTACHMENT_WRITE.as_raw());
+        assert_eq!(state.last_stage, vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT.as_raw());
+        assert_eq!(state.owner_queue_family, 0);
+
+        // A stale oldLayout fails at submit and leaves both image and executable command buffer intact.
+        begin(cb);
+        barrier(
+            cb,
+            image,
+            vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
+            vk::ImageLayout::GENERAL,
+            0,
+            1,
+            0,
+            1,
+        );
+        assert_eq!(vkEndCommandBuffer(cb), VK_SUCCESS);
+        assert_eq!(submit(cb), VK_ERROR_INITIALIZATION_FAILED);
+        assert_eq!(layout(image, 0, 0), vk::ImageLayout::TRANSFER_DST_OPTIMAL.as_raw());
+        assert_eq!(reg::lock().cmdbufs[&(cb as usize)].state, CommandBufferState::Executable);
+
+        // One bad tail transition rolls back the valid head of the same barrier call.
+        begin(cb);
+        let first = vk::ImageMemoryBarrier::default()
+            .old_layout(vk::ImageLayout::TRANSFER_DST_OPTIMAL)
+            .new_layout(vk::ImageLayout::GENERAL)
+            .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+            .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+            .image(vk::Image::from_raw(image))
+            .subresource_range(vk::ImageSubresourceRange {
+                aspect_mask: vk::ImageAspectFlags::COLOR,
+                base_mip_level: 0,
+                level_count: 1,
+                base_array_layer: 0,
+                layer_count: 1,
+            });
+        let second = vk::ImageMemoryBarrier {
+            old_layout: vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
+            new_layout: vk::ImageLayout::GENERAL,
+            subresource_range: vk::ImageSubresourceRange {
+                aspect_mask: vk::ImageAspectFlags::COLOR,
+                base_mip_level: 1,
+                level_count: 1,
+                base_array_layer: 0,
+                layer_count: 1,
+            },
+            ..first
+        };
+        let barriers = [first, second];
+        vkCmdPipelineBarrier(
+            cb,
+            vk::PipelineStageFlags::TRANSFER,
+            vk::PipelineStageFlags::ALL_COMMANDS,
+            vk::DependencyFlags::empty(),
+            0,
+            core::ptr::null(),
+            0,
+            core::ptr::null(),
+            2,
+            barriers.as_ptr(),
+        );
+        assert_eq!(vkEndCommandBuffer(cb), VK_SUCCESS);
+        assert_eq!(submit(cb), VK_ERROR_INITIALIZATION_FAILED);
+        assert_eq!(layout(image, 0, 0), vk::ImageLayout::TRANSFER_DST_OPTIMAL.as_raw());
+
+        // A structurally invalid range records nothing; a following valid barrier in the same command
+        // buffer still submits, proving the invalid call did not poison or partially mutate recording.
+        begin(cb);
+        barrier(
+            cb,
+            image,
+            vk::ImageLayout::TRANSFER_DST_OPTIMAL,
+            vk::ImageLayout::GENERAL,
+            99,
+            1,
+            0,
+            1,
+        );
+        barrier(
+            cb,
+            image,
+            vk::ImageLayout::TRANSFER_DST_OPTIMAL,
+            vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL,
+            0,
+            1,
+            0,
+            1,
+        );
+        assert_eq!(vkEndCommandBuffer(cb), VK_SUCCESS);
+        assert_eq!(submit(cb), VK_SUCCESS);
+        assert_eq!(layout(image, 0, 0), vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL.as_raw());
+
+        // Render-pass implicit transitions participate in the same submit-time validation. A stale
+        // declared initial layout rejects the pass without changing the attachment; the matching
+        // declaration then transitions COLOR_ATTACHMENT_OPTIMAL -> GENERAL on successful completion.
+        let (bad_view, bad_rp, bad_fb) =
+            create_render_objects(image, vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL);
+        begin(cb);
+        let begin_info = vk::RenderPassBeginInfo::default()
+            .render_pass(vk::RenderPass::from_raw(bad_rp))
+            .framebuffer(vk::Framebuffer::from_raw(bad_fb))
+            .render_area(vk::Rect2D {
+                offset: vk::Offset2D { x: 0, y: 0 },
+                extent: vk::Extent2D { width: 8, height: 8 },
+            });
+        vkCmdBeginRenderPass(cb, &begin_info, vk::SubpassContents::INLINE.as_raw());
+        vkCmdEndRenderPass(cb);
+        assert_eq!(vkEndCommandBuffer(cb), VK_SUCCESS);
+        assert_eq!(submit(cb), VK_ERROR_INITIALIZATION_FAILED);
+        assert_eq!(layout(image, 0, 0), vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL.as_raw());
+        crate::pipeline::vkDestroyFramebuffer(core::ptr::null_mut(), bad_fb, core::ptr::null());
+        crate::pipeline::vkDestroyRenderPass(core::ptr::null_mut(), bad_rp, core::ptr::null());
+        crate::memory::vkDestroyImageView(core::ptr::null_mut(), bad_view, core::ptr::null());
+
+        let (view, render_pass, framebuffer) =
+            create_render_objects(image, vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL);
+        begin(cb);
+        let begin_info = vk::RenderPassBeginInfo::default()
+            .render_pass(vk::RenderPass::from_raw(render_pass))
+            .framebuffer(vk::Framebuffer::from_raw(framebuffer))
+            .render_area(vk::Rect2D {
+                offset: vk::Offset2D { x: 0, y: 0 },
+                extent: vk::Extent2D { width: 8, height: 8 },
+            });
+        vkCmdBeginRenderPass(cb, &begin_info, vk::SubpassContents::INLINE.as_raw());
+        vkCmdEndRenderPass(cb);
+        assert_eq!(vkEndCommandBuffer(cb), VK_SUCCESS);
+        assert_eq!(submit(cb), VK_SUCCESS);
+        assert_eq!(layout(image, 0, 0), vk::ImageLayout::GENERAL.as_raw());
+        crate::pipeline::vkDestroyFramebuffer(core::ptr::null_mut(), framebuffer, core::ptr::null());
+        crate::pipeline::vkDestroyRenderPass(core::ptr::null_mut(), render_pass, core::ptr::null());
+        crate::memory::vkDestroyImageView(core::ptr::null_mut(), view, core::ptr::null());
+        crate::memory::vkDestroyImage(core::ptr::null_mut(), image, core::ptr::null());
+    }
 }

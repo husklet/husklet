@@ -281,14 +281,16 @@ Important gaps and incorrect simplifications:
   render pass no longer fabricates missing objects. The compatibility gate is green. Remaining breadth includes full
   SPIR-V interface reflection, multiple subpasses/dependencies, input/resolve attachments, multiview, derivative/
   library pipelines, dynamic rendering and every unsupported fixed-function state—each must reject until implemented.
-- Images retain only width, height, format and a render-target bit. Initial/current layout, aspects, mip/layer count,
-  samples, tiling, usage, queue ownership and bound memory are absent. Both legacy and synchronization2 pipeline
-  barriers are generated no-ops, so access masks and ownership transfers never constrain execution. Introduce a
-  per-subresource state table keyed by aspect/mip/layer with layout, last access/stage, owner queue and initialization;
-  record validated transition intents in command buffers, then apply them in submission order. Reject old-layout or
-  ownership mismatches, enforce legal layout/usage combinations, and lower hazards to the backend's explicit barrier
-  model (or ordered encoder/pass boundaries where Metal supplies the guarantee). Keep swapchain present transitions
-  in the same model. `vk_image_layout_barriers_track_subresources_and_queue_ownership` pins the state and both APIs.
+- Legacy `vkCmdPipelineBarrier` now records color-image transition groups against validated mip/layer/aspect ranges.
+  Images retain per-subresource layout, last access/stage and queue-family owner; recording does not mutate them, and
+  queue submission simulates the complete command-buffer batch before atomically committing. Stale `oldLayout`, bad
+  ranges and incompatible render-pass initial/subpass layouts reject without partial image or command-buffer state.
+  Render-pass implicit begin/end transitions use the same model. The Rust ABI regression
+  `image_layout_barriers_track_subresources_and_apply_atomically_at_submit` covers deferred application, independent
+  mip/layer state, grouped rollback, stale-layout rejection, invalid-range recording preservation and render-use
+  compatibility. This remains partial: only color aspects and the single queue family are supported; explicit
+  cross-family ownership, synchronization2, depth/stencil/plane aspects, usage legality, swapchain-present transitions
+  and concrete Metal/wgpu hazard lowering are not implemented.
 - Commit `aba9a0f4` lands a meaningful Phase-3 shared-IR/backend slice: `TextureSubresource` (mip/layer/aspect),
   `Origin3d`, `Extent3d`, exact texture-to-texture copy and filtered blit, with software, wgpu and Metal validation
   tests. Do not remove that implemented progress from the audit. The Vulkan shim still exposes only buffer-to-buffer
@@ -1081,7 +1083,7 @@ pixels, and fails against the broken behavior. Do not add tests that read implem
 | `vk_wsi_validates_surface_handles_and_swapchain_create_info` | implemented | Shared capability validation rejects stale surfaces and incompatible swapchain requests atomically | Rust ABI negative create/query matrix green; retain as regression |
 | `vk_swapchain_tracks_image_ownership_timeouts_and_retirement` | implemented | Explicit image/swapchain states enforce ownership, timeout results, acquire sync, retirement and loss | Rust ABI multi-frame lifecycle regression green; retain as regression |
 | `vk_present_reports_failures_without_consuming_unsent_frame_state` | implemented | Present validates atomically, maps delivery errors, fills `pResults`, and commits waits/IR/ownership only on success | Rust ABI delivery-fault/retry regression green; retain as regression |
-| `vk_image_layout_barriers_track_subresources_and_queue_ownership` | missing | images and barrier APIs have no layout/access/ownership state | Per-subresource transition model plus hazard/ownership tests |
+| `vk_image_layout_barriers_track_subresources_and_queue_ownership` | partial | Legacy color-image barriers and render uses have atomic per-mip/layer state on the single queue; sync2, cross-queue and backend hazards remain | Extend the green Rust ABI lifecycle gate across aspects/queues and both backend barrier models |
 | `vk_transfer_commands_preserve_every_region_subresource_and_layout` | partial | shared IR/backends have subresource copy+blit, but Vulkan lowering and remaining region/resolve fields are absent | Shim lowering plus buffer/image/resolve/clear validation matrix |
 | `vk_shader_modules_validate_spirv_entries_specialization_and_interfaces` | missing | malformed SPIR-V and incompatible interfaces are forwarded unchecked | Validated/reflected module records and negative pipeline corpus |
 | `vk_robust_buffer_access_is_advertised_only_with_zeroing_and_bounds_guarantees` | contradictory | robustBufferAccess is true without complete zero/discard bounds semantics | Disable now or prove every access path across all executors |

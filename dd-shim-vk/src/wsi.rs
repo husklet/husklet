@@ -17,7 +17,10 @@
 //! swapchain falls back to plain offscreen images — the render path still exercises + the Metal
 //! validation replays it via the backend. The live guest path uses the real IOSurface + `$DD_GPU_EXEC`.
 
-use crate::reg::{self, ImageRec, SurfaceRec, SwapImage, SwapImageState, SwapchainRec, SwapchainState};
+use crate::reg::{
+    self, ImageRec, ImageSubresourceState, SurfaceRec, SwapImage, SwapImageState, SwapchainRec,
+    SwapchainState,
+};
 use crate::types::*;
 use ash::vk;
 use ash::vk::Handle;
@@ -249,6 +252,20 @@ pub extern "C" fn vkCreateSwapchainKHR(
                 height,
                 format,
                 is_render_target: true,
+                mip_levels: 1,
+                array_layers: 1,
+                aspect_mask: vk::ImageAspectFlags::COLOR.as_raw(),
+                subresources: [(
+                    (vk::ImageAspectFlags::COLOR.as_raw(), 0, 0),
+                    ImageSubresourceState {
+                        layout: vk::ImageLayout::UNDEFINED.as_raw(),
+                        last_access: 0,
+                        last_stage: vk::PipelineStageFlags::TOP_OF_PIPE.as_raw(),
+                        owner_queue_family: 0,
+                    },
+                )]
+                .into_iter()
+                .collect(),
                 bound_mem: None, // presentable images are host-owned; app never vkBindImageMemory's them
             },
         );

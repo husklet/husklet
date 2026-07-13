@@ -332,15 +332,34 @@ pub extern "C" fn vkCreateRenderPass(
         return VK_ERROR_INITIALIZATION_FAILED;
     };
     // Fold attachment 0 (the color attachment) format + load/store into the record.
-    let (fmt, load_clear, store) = if ci.attachment_count > 0 && !ci.p_attachments.is_null() {
+    let (fmt, load_clear, store, initial_layout, final_layout) =
+        if ci.attachment_count > 0 && !ci.p_attachments.is_null() {
         let a0 = unsafe { &*ci.p_attachments };
         (
             crate::memory::tex_format(a0.format),
             a0.load_op == vk::AttachmentLoadOp::CLEAR,
             a0.store_op == vk::AttachmentStoreOp::STORE,
+            a0.initial_layout.as_raw(),
+            a0.final_layout.as_raw(),
         )
     } else {
-        (TextureFormat::Rgba8Unorm, true, true)
+        (
+            TextureFormat::Rgba8Unorm,
+            true,
+            true,
+            vk::ImageLayout::UNDEFINED.as_raw(),
+            vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL.as_raw(),
+        )
+    };
+    let subpass_layout = if ci.subpass_count > 0 && !ci.p_subpasses.is_null() {
+        let subpass = unsafe { &*ci.p_subpasses };
+        if subpass.color_attachment_count > 0 && !subpass.p_color_attachments.is_null() {
+            unsafe { (*subpass.p_color_attachments).layout.as_raw() }
+        } else {
+            vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL.as_raw()
+        }
+    } else {
+        vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL.as_raw()
     };
     let mut s = reg::lock();
     let handle = s.alloc_handle();
@@ -351,6 +370,9 @@ pub extern "C" fn vkCreateRenderPass(
             color_load_clear: load_clear,
             clear: [0.0; 4],
             color_store: store,
+            initial_layout,
+            subpass_layout,
+            final_layout,
         },
     );
     *out = handle;

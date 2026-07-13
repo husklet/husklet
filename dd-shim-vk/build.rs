@@ -97,6 +97,9 @@ fn partial_note(name: &str) -> Option<&'static str> {
             "single unified HOST_VISIBLE|COHERENT memory type modeled as a staging Vec<u8>"
         }
         "vkCreateImage" => "COLOR_ATTACHMENT render-target subset; general images/tiling not modeled",
+        "vkCmdPipelineBarrier" => {
+            "legacy color-image subresource layouts on one queue; no sync2 or backend hazard lowering"
+        }
         // submit + synchronization: the bring-up dependency model
         "vkQueueSubmit" => "records + ships IR; ignores wait/signal semaphores beyond the bring-up model",
         "vkCreateSemaphore" | "vkDestroySemaphore" => {
@@ -106,7 +109,7 @@ fn partial_note(name: &str) -> Option<&'static str> {
             "fences modeled as already-signaled (synchronous host replay); no real timeout/unsignaled state"
         }
         // WSI: the fixed FIFO / round-robin bring-up swapchain
-        "vkCreateSwapchainKHR" => "validated FIFO / one-format / identity swapchain; no oldSwapchain retirement",
+        "vkCreateSwapchainKHR" => "validated FIFO / one-format / identity swapchain with retirement",
         "vkAcquireNextImageKHR" => {
             "owned-image acquire with timeout/retirement; synchronous completion model"
         }
@@ -524,6 +527,7 @@ const IMPLEMENTED: &[&str] = &[
     "vkCmdDraw",
     "vkCmdDrawIndexed",
     "vkCmdCopyBuffer",
+    "vkCmdPipelineBarrier",
     "vkQueueSubmit",
     "vkQueueWaitIdle",
     "vkDeviceWaitIdle",

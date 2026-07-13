@@ -67,19 +67,74 @@ pub struct PipelineRec {
     pub kind: PipeKind,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ImageSubresourceState {
+    pub layout: i32,
+    pub last_access: u32,
+    pub last_stage: u32,
+    pub owner_queue_family: u32,
+}
+
+#[derive(Clone, Debug)]
 pub struct ImageRec {
     pub ir_id: u32,
     pub width: u32,
     pub height: u32,
     pub format: TextureFormat,
     pub is_render_target: bool,
+    pub mip_levels: u32,
+    pub array_layers: u32,
+    pub aspect_mask: u32,
+    pub subresources: HashMap<(u32, u32, u32), ImageSubresourceState>,
     /// The `VkDeviceMemory` this image is bound to (`vkBindImageMemory`), or `None` if unbound. Image
     /// binding is NOT a no-op: it validates and records ownership (MoltenVK `MVKImage::bindDeviceMemory`).
     pub bound_mem: Option<u64>,
 }
 
+#[derive(Clone, Copy)]
 pub struct ImageViewRec {
     pub image: u64,
+    pub range: ImageSubresourceRange,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct ImageSubresourceRange {
+    pub aspect_mask: u32,
+    pub base_mip_level: u32,
+    pub level_count: u32,
+    pub base_array_layer: u32,
+    pub layer_count: u32,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct ImageTransition {
+    pub image: u64,
+    pub range: ImageSubresourceRange,
+    pub old_layout: i32,
+    pub new_layout: i32,
+    pub src_access: u32,
+    pub dst_access: u32,
+    pub src_stage: u32,
+    pub dst_stage: u32,
+    pub src_queue_family: u32,
+    pub dst_queue_family: u32,
+}
+
+#[derive(Clone, Debug)]
+pub enum ImageEvent {
+    Barriers(Vec<ImageTransition>),
+    RenderBegin {
+        image: u64,
+        range: ImageSubresourceRange,
+        initial_layout: i32,
+        subpass_layout: i32,
+    },
+    RenderEnd {
+        image: u64,
+        range: ImageSubresourceRange,
+        subpass_layout: i32,
+        final_layout: i32,
+    },
 }
 
 /// One immutable binding of a `VkDescriptorSetLayout` (MoltenVK `MVKDescriptorSetLayout` binding
@@ -146,6 +201,9 @@ pub struct RenderPassRec {
     pub color_load_clear: bool,
     pub clear: [f32; 4],
     pub color_store: bool,
+    pub initial_layout: i32,
+    pub subpass_layout: i32,
+    pub final_layout: i32,
 }
 
 pub struct FramebufferRec {
@@ -234,6 +292,8 @@ pub struct CmdBufRec {
     pub pending_bind_groups: Vec<(u32, u32)>, // (set index, bind-group IR id)
     pub in_render_pass: bool,
     pub pipeline_set_in_pass: bool,
+    pub image_events: Vec<ImageEvent>,
+    pub active_render_image: Option<(u64, ImageSubresourceRange, i32, i32)>,
 }
 
 impl CmdBufRec {
@@ -251,6 +311,8 @@ impl CmdBufRec {
         self.pending_bind_groups.clear();
         self.in_render_pass = false;
         self.pipeline_set_in_pass = false;
+        self.image_events.clear();
+        self.active_render_image = None;
     }
 }
 

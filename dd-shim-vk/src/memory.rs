@@ -13,7 +13,9 @@
 //!     its IR texture id and let the host register the target — the shim never emits `CreateTexture`
 //!     for an attachment (matching the render-target flip-scratch contract in dd-gpu-wgpu).
 
-use crate::reg::{self, BufferRec, ImageRec, ImageViewRec, MemRec};
+use crate::reg::{
+    self, BufferRec, ImageRec, ImageSubresourceRange, ImageSubresourceState, ImageViewRec, MemRec,
+};
 use crate::types::*;
 use ash::vk;
 use ash::vk::Handle; // `.as_raw()` on handle newtypes (VkImage/VkImageView -> u64)
@@ -378,6 +380,21 @@ pub extern "C" fn vkCreateImage(
     let ir_id = s.alloc_ir();
     let handle = s.alloc_handle();
     let is_rt = ci.usage.contains(vk::ImageUsageFlags::COLOR_ATTACHMENT);
+    let mip_levels = ci.mip_levels.max(1);
+    let array_layers = ci.array_layers.max(1);
+    let aspect_mask = vk::ImageAspectFlags::COLOR.as_raw();
+    let initial = ImageSubresourceState {
+        layout: ci.initial_layout.as_raw(),
+        last_access: 0,
+        last_stage: vk::PipelineStageFlags::TOP_OF_PIPE.as_raw(),
+        owner_queue_family: 0,
+    };
+    let mut subresources = std::collections::HashMap::new();
+    for mip in 0..mip_levels {
+        for layer in 0..array_layers {
+            subresources.insert((aspect_mask, mip, layer), initial);
+        }
+    }
     s.images.insert(
         handle,
         ImageRec {
@@ -386,6 +403,10 @@ pub extern "C" fn vkCreateImage(
             height: ci.extent.height,
             format: tex_format(ci.format),
             is_render_target: is_rt,
+            mip_levels,
+            array_layers,
+            aspect_mask,
+            subresources,
             bound_mem: None,
         },
     );
@@ -473,11 +494,41 @@ pub extern "C" fn vkCreateImageView(
         return VK_ERROR_INITIALIZATION_FAILED;
     };
     let mut s = reg::lock();
+    let Some(image) = s.images.get(&ci.image.as_raw()) else {
+        return VK_ERROR_INITIALIZATION_FAILED;
+    };
+    let raw = ci.subresource_range;
+    let level_count = if raw.level_count == vk::REMAINING_MIP_LEVELS {
+        image.mip_levels.saturating_sub(raw.base_mip_level)
+    } else {
+        raw.level_count
+    };
+    let layer_count = if raw.layer_count == vk::REMAINING_ARRAY_LAYERS {
+        image.array_layers.saturating_sub(raw.base_array_layer)
+    } else {
+        raw.layer_count
+    };
+    let range = ImageSubresourceRange {
+        aspect_mask: raw.aspect_mask.as_raw(),
+        base_mip_level: raw.base_mip_level,
+        level_count,
+        base_array_layer: raw.base_array_layer,
+        layer_count,
+    };
+    if range.aspect_mask != image.aspect_mask
+        || range.level_count == 0
+        || range.layer_count == 0
+        || range.base_mip_level.checked_add(range.level_count).is_none_or(|end| end > image.mip_levels)
+        || range.base_array_layer.checked_add(range.layer_count).is_none_or(|end| end > image.array_layers)
+    {
+        return VK_ERROR_INITIALIZATION_FAILED;
+    }
     let handle = s.alloc_handle();
     s.image_views.insert(
         handle,
         ImageViewRec {
             image: ci.image.as_raw(),
+            range,
         },
     );
     *out = handle;
