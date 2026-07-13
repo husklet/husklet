@@ -5,7 +5,7 @@
 //! /sys, most of /dev) have no portable shape -> `src` (both Linux engines, run bare so the synth fires via
 //! proc_open/synth_stat). permbits is a real chmod/stat round-trip -> `port` (all three engines).
 #![allow(unused_imports)]
-use dd_tests::{fixture, group, in_rootfs, port, src, Case, Engine, Group};
+use crate::support::{fixture, group, in_rootfs, port, src, Case, Engine, Group};
 
 pub fn groups() -> Vec<Group> {
     vec![proc_content(), dev_sys(), perms(), supp_groups()]

@@ -17,11 +17,15 @@
 //! Median-of-N (BENCH_N, default 3; one warm-up discarded per lane so we measure steady state).
 //! Output: a table sorted by dd-x86 slowdown desc, plus `target/dd-tests/bench.{csv,json}`.
 //!
-//!   make bench            # or: cargo run -q -p dd-tests --release --bin bench
+//!   make bench            # or: cargo run -q -p dd-jit-darwin --release --example bench
 //!   BENCH_N=5 make bench  # more repetitions
 //!   BENCH_K=alu,fp make bench   # restrict to some kernels
 //!
 //! This is a SEPARATE target: it does not touch `make test` or the `make perf` table.
+
+// The product-neutral gate/bench guard helpers, included crate-locally (was the `dd-tests` dev-dep).
+#[path = "../tests/support/mod.rs"]
+mod support;
 
 use ddjit::{Guest, SpawnConfig};
 use std::path::{Path, PathBuf};
@@ -143,7 +147,7 @@ fn ensure_ddjit_dir(repo: &Path) {
 
 fn main() {
     // BENCH_N=0 is rejected up front — a zero-repetition run has no samples and the median is a lie.
-    let n: usize = match dd_tests::bench_gates::parse_bench_n(std::env::var("BENCH_N").ok()) {
+    let n: usize = match crate::support::bench_gates::parse_bench_n(std::env::var("BENCH_N").ok()) {
         Ok(n) => n,
         Err(e) => {
             eprintln!("[bench] FATAL: {e}");
@@ -162,7 +166,7 @@ fn main() {
         .filter(|k| only.as_ref().map_or(true, |o| o.iter().any(|x| x == k)))
         .collect();
 
-    let manifest = PathBuf::from(env!("CARGO_MANIFEST_DIR")); // <repo>/dd-tests
+    let manifest = PathBuf::from(env!("CARGO_MANIFEST_DIR")); // <repo>/dd-jit-darwin
     let repo = manifest.parent().unwrap().to_path_buf(); // <repo> (under the /Users/x/dd shared tree)
     ensure_ddjit_dir(&repo);
 
@@ -196,7 +200,7 @@ fn main() {
     let have_arm = ddjit::available(Guest::LinuxAarch64);
     let have_x86 = ddjit::available(Guest::LinuxX86_64);
     let allow_missing_dd = std::env::var("BENCH_ALLOW_MISSING_DD").is_ok();
-    if let Err(e) = dd_tests::bench_gates::dd_lanes_verdict(have_arm, have_x86, allow_missing_dd) {
+    if let Err(e) = crate::support::bench_gates::dd_lanes_verdict(have_arm, have_x86, allow_missing_dd) {
         eprintln!("[bench] FATAL: {e}");
         std::process::exit(1);
     }
@@ -313,7 +317,7 @@ fn main() {
     }
     // Report a write failure instead of swallowing it — a silent `.ok()` meant CI believed results were
     // published that never landed.
-    if let Err(e) = dd_tests::bench_gates::persist_artifact(&csv_path, &csv) {
+    if let Err(e) = crate::support::bench_gates::persist_artifact(&csv_path, &csv) {
         eprintln!("[bench] FATAL: failed to write {}: {e}", csv_path.display());
         std::process::exit(1);
     }
@@ -334,7 +338,7 @@ fn main() {
             if row + 1 == order.len() { "" } else { "," });
     }
     json += "  ]\n}\n";
-    if let Err(e) = dd_tests::bench_gates::persist_artifact(&json_path, &json) {
+    if let Err(e) = crate::support::bench_gates::persist_artifact(&json_path, &json) {
         eprintln!("[bench] FATAL: failed to write {}: {e}", json_path.display());
         std::process::exit(1);
     }

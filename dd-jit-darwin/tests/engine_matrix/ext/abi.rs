@@ -1,6 +1,6 @@
 //! abi — basics expansion (in-process JIT matrix). Owner: abi agent. Edit ONLY this file.
 //! Builders: src(name,file).oracle()/.exit()/.out()/.has(); port(name,file) for cross-engine golden.
-//! Keep this module compiling at all times (`cargo build -p dd-tests`).
+//! Keep this module compiling at all times (`cargo build -p dd-jit-darwin`).
 //!
 //! These groups stress the JIT's codegen/ABI corners — the instruction-translation surface that must be
 //! byte-exact: integer overflow/wrapping, 64-bit & 128-bit mul/div/mod, all float/double ops + rounding
@@ -12,7 +12,7 @@
 //! automatically. long double / HFA / struct-by-value legitimately differ BETWEEN arches, which is fine:
 //! the oracle compares JIT-vs-native within one arch, never across.
 #![allow(unused_imports)]
-use dd_tests::{fixture, group, in_rootfs, port, src, Case, Engine, Group};
+use crate::support::{fixture, group, in_rootfs, port, src, Case, Engine, Group};
 
 fn s(name: &'static str, file: &'static str) -> Case {
     src(name, file).oracle()

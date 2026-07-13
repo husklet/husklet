@@ -1,12 +1,12 @@
 //! processx — process-creation/lifecycle coverage. Owner: processx-coverage agent. Edit ONLY this file.
 //! Builders: src(name,file).oracle()/.exit()/.out()/.has(); port(name,file) for cross-engine golden.
-//! Keep this module compiling at all times (`cargo build -p dd-tests`).
+//! Keep this module compiling at all times (`cargo build -p dd-jit-darwin`).
 //!
 //! Beyond ext/posix's fork/wait/exec: posix_spawn (with file actions + re-exec of self), vfork, waitid
 //! siginfo (CLD_EXITED/CLD_KILLED), and getrusage accounting — portable golden verdicts. Plus the
 //! Linux-only prlimit, clone3, and direct futex, diffed against a native oracle.
 #![allow(unused_imports)]
-use dd_tests::{fixture, group, in_rootfs, port, src, src_nopie, Case, Engine, Group};
+use crate::support::{fixture, group, in_rootfs, port, src, src_nopie, Case, Engine, Group};
 
 const LIN: &[Engine] = &[Engine::LinuxAarch64, Engine::LinuxX86_64];
 

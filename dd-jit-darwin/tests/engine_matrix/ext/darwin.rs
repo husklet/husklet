@@ -1,5 +1,5 @@
 //! darwin — basics expansion (in-process JIT matrix). Owner: darwin agent. Edit ONLY this file.
-//! Keep this module compiling at all times (`cargo build -p dd-tests`).
+//! Keep this module compiling at all times (`cargo build -p dd-jit-darwin`).
 //!
 //! macOS-native breadth for the jitdarwin engine: BSD/Mach APIs with NO Linux equivalent (kqueue,
 //! sysctl, mach_*, GCD/dispatch, libproc, getattrlist, copyfile) plus Mach-O/AArch64-ABI corners the
@@ -9,7 +9,7 @@
 //! syscall-ABI Mach-O via `_start`. The existing `darwin()` group in cases/mod.rs covers hello/adrp/
 //! kqueue/sysctl basics; this module ADDS breadth and does not duplicate them.
 #![allow(unused_imports)]
-use dd_tests::{darwin_libc, darwin_src, fixture, group, in_rootfs, port, src, Case, Engine, Group};
+use crate::support::{darwin_libc, darwin_src, fixture, group, in_rootfs, port, src, Case, Engine, Group};
 
 pub fn groups() -> Vec<Group> {
     vec![

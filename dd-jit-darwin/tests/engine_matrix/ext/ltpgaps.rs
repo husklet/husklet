@@ -4,7 +4,7 @@
 //! Covers dup/dup2/dup3/fcntl flag semantics, link/lstat, socket error paths (incl. the connect EFAULT
 //! crash), and prctl/nanosleep/sched_getaffinity/read error paths.
 
-use dd_tests::{group, src, Group};
+use crate::support::{group, src, Group};
 
 pub fn groups() -> Vec<Group> {
     vec![group(

@@ -2,7 +2,7 @@
 //! These cases require a GUI/GPU-enabled dd launch with `/dev/dri/renderD128`
 //! and `DD_GPU_EXEC` wired to the host executor socket.
 
-use dd_tests::{group, src, Engine, Group};
+use crate::support::{group, src, Engine, Group};
 
 pub fn groups() -> Vec<Group> {
     vec![group(

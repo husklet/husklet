@@ -10,7 +10,7 @@
 //! Overlay-mode coverage (copy-up relocation, whiteouts, opaque dirs) comes from the daemon scenarios
 //! (utilities/overlay-metadata + filesystem/dentry-storm-overlay), which run both guest arches.
 #![allow(unused_imports)]
-use dd_tests::{group, src, Case, Engine, Group};
+use crate::support::{group, src, Case, Engine, Group};
 
 const LIN: &[Engine] = &[Engine::LinuxAarch64, Engine::LinuxX86_64];
 

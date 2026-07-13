@@ -23,6 +23,7 @@
 
 mod arch;
 mod daemon;
+mod diag; // failed-run -> actionable JIT bug report (was the diag helper from the dissolved dd-tests crate)
 mod drive;
 mod model;
 

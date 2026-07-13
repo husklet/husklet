@@ -12,7 +12,7 @@
 //!    /proc/kcore has no darwin analogue; the darwin container's confinement is the darwinjail sandbox,
 //!    covered by the read-only case above).
 #![allow(unused_imports)]
-use dd_tests::{group, in_rootfs, port, src, Case, Engine, Group};
+use crate::support::{group, in_rootfs, port, src, Case, Engine, Group};
 
 pub fn groups() -> Vec<Group> {
     vec![resources(), rootfs_ro(), proc_masking()]

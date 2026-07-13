@@ -1,6 +1,6 @@
 //! Syscall surface — portable POSIX, Linux-specific syscalls, and obscure edge corners.
 
-use dd_tests::{group, port, src, Engine, Group};
+use crate::support::{group, port, src, Engine, Group};
 
 /// Portable POSIX syscalls — the event/IO/IPC surface a real daemon leans on, expressed in pure POSIX
 /// so it runs (and must agree) on Linux AND macOS. Golden-checked.

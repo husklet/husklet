@@ -1,12 +1,12 @@
 //! timex — clock/time-syscall coverage. Owner: timex-coverage agent. Edit ONLY this file.
 //! Builders: src(name,file).oracle()/.exit()/.out()/.has(); port(name,file) for cross-engine golden.
-//! Keep this module compiling at all times (`cargo build -p dd-tests`).
+//! Keep this module compiling at all times (`cargo build -p dd-jit-darwin`).
 //!
 //! Beyond ext/posix's clockid/nanosleep: clock_getres across the four standard clocks, gettimeofday
 //! cross-checked against clock_gettime, and relative clock_nanosleep — portable golden verdicts. Plus
 //! the Linux-only clock ids (BOOTTIME/MONOTONIC_RAW/COARSE) diffed against a native oracle.
 #![allow(unused_imports)]
-use dd_tests::{fixture, group, in_rootfs, port, src, Case, Engine, Group};
+use crate::support::{fixture, group, in_rootfs, port, src, Case, Engine, Group};
 
 pub fn groups() -> Vec<Group> {
     vec![timex()]

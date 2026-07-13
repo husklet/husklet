@@ -1,6 +1,6 @@
 //! net — basics expansion (in-process JIT matrix). Owner: net agent. Edit ONLY this file.
 //! Builders: src(name,file).oracle()/.exit()/.out()/.has(); port(name,file) for cross-engine golden.
-//! Keep this module compiling at all times (`cargo build -p dd-tests`).
+//! Keep this module compiling at all times (`cargo build -p dd-jit-darwin`).
 //!
 //! Breadth over the sockets surface a real networked service leans on, loopback-only and deterministic:
 //! TCP (multi-client echo, half-close/shutdown, bulk streamed transfer), UDP (connected send/recv),
@@ -13,7 +13,7 @@
 //! acid test that a postgres/redis-shaped service behaves the same. Linux-only extensions (accept4,
 //! SO_PEERCRED) are `src(...)` diffed against the native oracle.
 #![allow(unused_imports)]
-use dd_tests::{fixture, group, in_rootfs, port, src, Case, Engine, Group};
+use crate::support::{fixture, group, in_rootfs, port, src, Case, Engine, Group};
 
 pub fn groups() -> Vec<Group> {
     vec![ext_net()]

@@ -7,9 +7,12 @@
 //!   cargo run -p dd-jit-darwin --example matrix -- -e x86_64    # only the x86-64 engine
 //!   cargo run -p dd-jit-darwin --example matrix -- --list       # list groups + cases without running
 
-use dd_tests::{run, run_perf, Ctx, Engine, Status};
+use crate::support::{run, run_perf, Ctx, Engine, Status};
 use std::time::Instant;
 
+// The product-neutral engine-test harness, included crate-locally (was the `dd-tests` dev-dep).
+#[path = "../tests/support/mod.rs"]
+mod support;
 // Share the ONE Rust case registry with tests/suite.rs (no second catalog).
 #[path = "../tests/engine_matrix/mod.rs"]
 mod cases;
@@ -46,7 +49,7 @@ fn main() {
             "-e" | "--engine" => engine_filter = it.next().and_then(|s| parse_engine(s)),
             "--list" => list = true,
             "-h" | "--help" => {
-                eprintln!("usage: dd-tests [--engine aarch64|x86_64] [--list] [name-filter]");
+                eprintln!("usage: matrix [--engine aarch64|x86_64] [--list] [name-filter]");
                 return;
             }
             other => name_filter = Some(other.to_string()),

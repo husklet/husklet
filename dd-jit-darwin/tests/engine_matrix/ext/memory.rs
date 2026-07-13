@@ -6,7 +6,7 @@
 //! mc_ stat cache, execve teardown) need external host-RSS sampling — see tools/memwatch + docs/MEMORY.md.
 //! Owner: memory lane. A `bounded=0` / fail here = a real leak → xfail + GAPS row, don't fix the engine.
 #![allow(unused_imports)]
-use dd_tests::{group, port, src, Group};
+use crate::support::{group, port, src, Group};
 
 pub fn groups() -> Vec<Group> {
     vec![group(

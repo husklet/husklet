@@ -15,7 +15,7 @@
 //!     OR an UNIMPL (crash/diag) diverges from the oracle and is caught.
 //!
 //! All guests live under guests/completeness/<name>.c and share guests/completeness/compat.h.
-use dd_tests::{group, src, Case, Engine, Group};
+use crate::support::{group, src, Case, Engine, Group};
 
 // ---- SYSCALL COMPLETENESS ----
 mod sys_cred;

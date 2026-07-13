@@ -1,6 +1,6 @@
 //! threads — basics expansion (in-process JIT matrix). Owner: threads agent. Edit ONLY this file.
 //! Builders: src(name,file).oracle()/.exit()/.out()/.has(); port(name,file) for cross-engine golden.
-//! Keep this module compiling at all times (`cargo build -p dd-tests`).
+//! Keep this module compiling at all times (`cargo build -p dd-jit-darwin`).
 //!
 //! Breadth over the POSIX threading surface a real daemon/runtime leans on: pthread create/join/detach,
 //! all mutex kinds (recursive/errorcheck/trylock), condvars (signal/broadcast/timedwait), rwlocks,
@@ -13,7 +13,7 @@
 //! macOS's libc lacks (pthread_barrier, pthread_spin_*, unnamed sem_init) are Linux-only `src(...)`
 //! diffed against the native oracle.
 #![allow(unused_imports)]
-use dd_tests::{fixture, group, in_rootfs, port, src, Case, Engine, Group};
+use crate::support::{fixture, group, in_rootfs, port, src, Case, Engine, Group};
 
 pub fn groups() -> Vec<Group> {
     vec![ext_threads()]

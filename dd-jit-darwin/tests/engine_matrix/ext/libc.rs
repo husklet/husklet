@@ -1,6 +1,6 @@
 //! libc — basics breadth expansion (in-process JIT matrix). Owner: libc agent. Edit ONLY this file.
 //! Builders: src(name,file).oracle()/.exit()/.out()/.has(); port(name,file) for cross-engine golden.
-//! Keep this module compiling at all times (`cargo build -p dd-tests`).
+//! Keep this module compiling at all times (`cargo build -p dd-jit-darwin`).
 //!
 //! Strategy: verdict-style guests (every field must be `1`) are `port(...)` so they run on all three
 //! engines (Linux x2 + macOS) with a deterministic golden line. Raw-format dumps whose exact rendering
@@ -8,7 +8,7 @@
 //! strftime locale names) are `src(...).oracle()` so they only run on the two Linux engines and are
 //! diffed byte-for-byte against a native glibc run — that auto-catches any JIT divergence.
 #![allow(unused_imports)]
-use dd_tests::{fixture, group, in_rootfs, port, src, Case, Engine, Group};
+use crate::support::{fixture, group, in_rootfs, port, src, Case, Engine, Group};
 
 pub fn groups() -> Vec<Group> {
     vec![

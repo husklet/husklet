@@ -1,5 +1,5 @@
 //! scratchx — scratch / distroless image loader-exec guard. Owner: scratch-exec agent. Edit ONLY
-//! this file. Keep it compiling (`cargo build -p dd-tests`).
+//! this file. Keep it compiling (`cargo build -p dd-jit-darwin`).
 //!
 //! A FROM-scratch / distroless / Go-microservice image is just a single static binary in an otherwise
 //! EMPTY rootfs — no shell, no interpreter (a static binary has no PT_INTERP), no libc on disk, nothing
@@ -13,7 +13,7 @@
 //! byte, exactly as the native oracle would. (Verified end-to-end: the real nats:latest static Go binary
 //! runs `nats-server --version` byte-exact vs the OrbStack docker oracle under this same loader path.)
 
-use dd_tests::{group, src, Engine, Group};
+use crate::support::{group, src, Engine, Group};
 
 pub fn groups() -> Vec<Group> {
     vec![group(

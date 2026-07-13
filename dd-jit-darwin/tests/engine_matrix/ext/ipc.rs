@@ -1,6 +1,6 @@
 //! ipc — basics expansion (in-process JIT matrix). Owner: ipc agent. Edit ONLY this file.
 //! Builders: src(name,file).oracle()/.exit()/.out()/.has(); port(name,file) for cross-engine golden.
-//! Keep this module compiling at all times (`cargo build -p dd-tests`).
+//! Keep this module compiling at all times (`cargo build -p dd-jit-darwin`).
 //!
 //! Breadth over inter-process communication: anonymous pipes (sum/poll/EOF/EPIPE), FIFOs (non-blocking
 //! open, multi-writer, two-way request/response), System V IPC (shm with IPC_STAT + RDONLY attach, a
@@ -11,7 +11,7 @@
 //! `port(...)` cases prove the IPC behaviour is byte-identical emulated-on-Linux and native-on-macOS.
 //! A few Linux-only mechanisms (POSIX mq, eventfd, SOCK_SEQPACKET) are `src(...)` diffed vs the oracle.
 #![allow(unused_imports)]
-use dd_tests::{fixture, group, in_rootfs, port, src, Case, Engine, Group};
+use crate::support::{fixture, group, in_rootfs, port, src, Case, Engine, Group};
 
 pub fn groups() -> Vec<Group> {
     vec![ext_ipc()]

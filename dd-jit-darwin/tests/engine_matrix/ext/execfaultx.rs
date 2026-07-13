@@ -1,5 +1,5 @@
 //! execfaultx — fork->execve child fault delivery + CRASHDBG Mach exception-port delivery.
-//! Owner: fork/exec-fault agent. Edit ONLY this file. Keep it compiling (`cargo build -p dd-tests`).
+//! Owner: fork/exec-fault agent. Edit ONLY this file. Keep it compiling (`cargo build -p dd-jit-darwin`).
 //!
 //! A compiler DRIVER (gcc/clang) forks and execve's sub-processes (cc1/as/ld/collect2); those exec'd
 //! CHILDREN take guest CPU faults -- some HANDLED via a registered SIGSEGV handler (cc1's fatal-signal
@@ -19,7 +19,7 @@
 //!   On x86-64 CRASHDBG the same fault is served by the POSIX diag_crash handler (runs on the faulting
 //!   thread) -- a companion check that the guest handler is delivered on both engines.
 
-use dd_tests::{group, src, Engine, Group};
+use crate::support::{group, src, Engine, Group};
 
 pub fn groups() -> Vec<Group> {
     vec![group(

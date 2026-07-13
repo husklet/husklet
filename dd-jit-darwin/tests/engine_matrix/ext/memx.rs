@@ -1,11 +1,11 @@
 //! memx — virtual-memory syscall coverage. Owner: memx-coverage agent. Edit ONLY this file.
 //! Builders: src(name,file).oracle()/.exit()/.out()/.has(); port(name,file) for cross-engine golden.
-//! Keep this module compiling at all times (`cargo build -p dd-tests`).
+//! Keep this module compiling at all times (`cargo build -p dd-jit-darwin`).
 //!
 //! The mmap/mprotect surface beyond ext/posix's anon+file basics: MAP_FIXED replacement, page locking
 //! (mlock/mlockall), and the Linux-only mremap grow/move + mincore residency (diffed vs native oracle).
 #![allow(unused_imports)]
-use dd_tests::{fixture, group, in_rootfs, port, src, Case, Engine, Group};
+use crate::support::{fixture, group, in_rootfs, port, src, Case, Engine, Group};
 
 pub fn groups() -> Vec<Group> {
     vec![memx()]

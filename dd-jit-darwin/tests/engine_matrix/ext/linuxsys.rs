@@ -1,13 +1,13 @@
 //! linuxsys — basics expansion (in-process JIT matrix). Owner: linuxsys agent. Edit ONLY this file.
 //! Builders: src(name,file).oracle()/.exit()/.out()/.has(); port(name,file) for cross-engine golden.
-//! Keep this module compiling at all times (`cargo build -p dd-tests`).
+//! Keep this module compiling at all times (`cargo build -p dd-jit-darwin`).
 //!
 //! Linux-only syscalls with no portable POSIX form (epoll/eventfd/timerfd/signalfd/inotify/memfd/
 //! splice family/pidfd/sched/io_uring/…). On the macOS-hosted runtime these are EMULATED (kqueue/pipe),
 //! so each is diffed against a NATIVE-Linux oracle: a divergence here is an emulation gap (xfail-tracked
 //! + a GAPS row), which is exactly the high-value signal for the engine builders.
 #![allow(unused_imports)]
-use dd_tests::{fixture, group, in_rootfs, port, src, Case, Engine, Group};
+use crate::support::{fixture, group, in_rootfs, port, src, Case, Engine, Group};
 
 pub fn groups() -> Vec<Group> {
     vec![

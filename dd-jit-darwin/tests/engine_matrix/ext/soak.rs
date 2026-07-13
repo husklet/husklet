@@ -1,5 +1,5 @@
 //! soak — basics expansion (in-process JIT matrix). Owner: soak agent. Edit ONLY this file.
-//! Keep this module compiling at all times (`cargo build -p dd-tests`).
+//! Keep this module compiling at all times (`cargo build -p dd-jit-darwin`).
 //!
 //! LONG / endurance tier (heavy class). Each guest runs for a sustained stretch (tens of millions of
 //! iterations, or thousands of OS-resource cycles) and is built so it can ONLY fail through the JIT's
@@ -13,7 +13,7 @@
 //! 25s timeout. Golden values were computed natively and cross-checked aarch64 vs x86-64 (qemu) so the
 //! `.out(...)` strings are arch-independent.
 #![allow(unused_imports)]
-use dd_tests::{darwin_libc, darwin_src, fixture, group, in_rootfs, port, src, Case, Engine, Group};
+use crate::support::{darwin_libc, darwin_src, fixture, group, in_rootfs, port, src, Case, Engine, Group};
 
 pub fn groups() -> Vec<Group> {
     vec![soakext()]

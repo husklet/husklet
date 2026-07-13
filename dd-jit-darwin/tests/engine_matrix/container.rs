@@ -1,6 +1,6 @@
 //! Container behaviour, sandbox containment, and x86-64 / macOS guest fixtures.
 
-use dd_tests::{darwin_libc, darwin_src, fixture, group, in_rootfs, src, Engine, Group};
+use crate::support::{darwin_libc, darwin_src, fixture, group, in_rootfs, src, Engine, Group};
 
 use super::sh;
 
@@ -116,7 +116,7 @@ pub(super) fn darwin() -> Group {
 }
 
 /// x86-64 guest — prebuilt fixtures through the jit86 engine. The binaries are COMMITTED at
-/// dd-tests/guests/x86/ next to their sources + build.sh (they pin binary flavors the on-the-fly
+/// dd-jit-darwin/testdata/guests/x86/ next to their sources + build.sh (they pin binary flavors the on-the-fly
 /// `src()` builds can't: nolibc raw-syscall _start guests, static-PIE vs static non-PIE glibc
 /// startups, static non-PIE Go). They historically lived in a machine-local `<repo-parent>/poc/`
 /// sidecar that vanished with that machine — in-repo they run from any fresh checkout or worktree.

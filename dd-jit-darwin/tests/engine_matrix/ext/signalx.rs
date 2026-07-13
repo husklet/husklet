@@ -1,12 +1,12 @@
 //! signalx — signal-delivery/control coverage. Owner: signalx-coverage agent. Edit ONLY this file.
 //! Builders: src(name,file).oracle()/.exit()/.out()/.has(); port(name,file) for cross-engine golden.
-//! Keep this module compiling at all times (`cargo build -p dd-tests`).
+//! Keep this module compiling at all times (`cargo build -p dd-jit-darwin`).
 //!
 //! The signal surface beyond ext/posix's sigmask/killraise: alternate signal stacks (SA_ONSTACK),
 //! SA_RESTART auto-restart vs EINTR, interval timers (setitimer/alarm), pause(), synchronous sigwait,
 //! and SA_SIGINFO sender identification — all portable golden verdicts. Plus Linux-only tgkill (oracle).
 #![allow(unused_imports)]
-use dd_tests::{fixture, group, in_rootfs, port, src, Case, Engine, Group};
+use crate::support::{fixture, group, in_rootfs, port, src, Case, Engine, Group};
 
 pub fn groups() -> Vec<Group> {
     vec![signalx()]

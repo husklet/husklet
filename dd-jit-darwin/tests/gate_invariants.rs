@@ -3,9 +3,13 @@
 //! no gate at all (it hides the very regressions it exists to catch). These tests assert the gates FAIL
 //! loudly on the bad conditions.
 
-use dd_tests::{gate_failures, Cell, Engine, Status};
+use crate::support::{gate_failures, Cell, Engine, Status};
 use std::path::PathBuf;
 use std::process::Command;
+
+// The product-neutral engine-test harness, included crate-locally (was the `dd-tests` dev-dep).
+#[path = "support/mod.rs"]
+mod support;
 
 fn repo_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -90,7 +94,7 @@ fn coverage_dynamic_fails_when_required_engines_are_missing() {
 
 // ---------------------------------------------------------------------------------------------------
 // test-ci matrix gate — "`test-ci` Can Pass a Dark or Stale Matrix" (P0 false-green).
-// `make test-ci` (= cargo test -p dd-tests) shares `gate_failures`, which must reject XPASS, dark
+// `make test-ci` (= cargo test -p dd-jit-darwin) shares `gate_failures`, which must reject XPASS, dark
 // (unbuilt) engine lanes, and a matrix that passed nothing.
 // ---------------------------------------------------------------------------------------------------
 
@@ -208,9 +212,9 @@ fn test_every_gui_matrix_probe_is_gated_or_documented() {
 #[test]
 fn perf_matrix_rechecks_timed_invocation_success() {
     // A clean command succeeds; a failing command is reported as NOT successful (not silently timed).
-    assert_eq!(dd_tests::run_guarded("true", &[], 5), Some(true), "a clean run is a success");
+    assert_eq!(crate::support::run_guarded("true", &[], 5), Some(true), "a clean run is a success");
     assert_eq!(
-        dd_tests::run_guarded("false", &[], 5),
+        crate::support::run_guarded("false", &[], 5),
         Some(false),
         "a failing timed rerun must be observed, not discarded"
     );
@@ -221,7 +225,7 @@ fn perf_matrix_hang_guard_wraps_timed_jit_runs() {
     // A hanging invocation is killed by the timeout guard (exit 124 -> not success) and returns promptly,
     // so a hung lane can never be timed as a fast, healthy median.
     let start = std::time::Instant::now();
-    let ok = dd_tests::run_guarded("sleep", &["10".to_string()], 1);
+    let ok = crate::support::run_guarded("sleep", &["10".to_string()], 1);
     assert_eq!(ok, Some(false), "a hang must be caught by the timeout guard, not timed as success");
     assert!(start.elapsed().as_secs() < 5, "the hang guard must return promptly, not wait out the sleep");
 }
@@ -229,19 +233,19 @@ fn perf_matrix_hang_guard_wraps_timed_jit_runs() {
 #[test]
 fn bench_rejects_zero_repetitions() {
     assert!(
-        dd_tests::bench_gates::parse_bench_n(Some("0".to_string())).is_err(),
+        crate::support::bench_gates::parse_bench_n(Some("0".to_string())).is_err(),
         "BENCH_N=0 has no samples and must be rejected, not reach empty-sample median behavior"
     );
-    assert_eq!(dd_tests::bench_gates::parse_bench_n(Some("4".to_string())).unwrap(), 4);
+    assert_eq!(crate::support::bench_gates::parse_bench_n(Some("4".to_string())).unwrap(), 4);
 }
 
 #[test]
 fn bench_fails_when_dd_lanes_are_missing() {
     assert!(
-        dd_tests::bench_gates::dd_lanes_verdict(false, true, false).is_err(),
+        crate::support::bench_gates::dd_lanes_verdict(false, true, false).is_err(),
         "a missing dd engine must HARD-fail the bench (blank dd lanes are a lie), not just warn"
     );
-    assert!(dd_tests::bench_gates::dd_lanes_verdict(true, true, false).is_ok());
+    assert!(crate::support::bench_gates::dd_lanes_verdict(true, true, false).is_ok());
 }
 
 #[test]
@@ -251,7 +255,7 @@ fn bench_persist_reports_write_failures() {
     std::fs::write(&base, b"x").unwrap();
     let bad = base.join("bench.csv");
     assert!(
-        dd_tests::bench_gates::persist_artifact(&bad, "data").is_err(),
+        crate::support::bench_gates::persist_artifact(&bad, "data").is_err(),
         "a failed artifact write must be reported so CI doesn't think results were published"
     );
     let _ = std::fs::remove_file(&base);

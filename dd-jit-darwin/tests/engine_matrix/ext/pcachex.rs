@@ -9,14 +9,14 @@
 //!   * fork + execve of the same binary (selfexec / the go-build storm + in-process exec reload),
 //!   * plain single-process cold/warm (hello shape, via the compute in both guests).
 //! The full multi-invocation lifecycle (cold->warm identity, concurrent same-key processes, stale-binary
-//! invalidation, kill-switch, corrupt-file rejection) lives in `dd-tests/tests/pcache.rs`.
+//! invalidation, kill-switch, corrupt-file rejection) lives in `dd-jit-darwin/tests/pcache.rs`.
 //!
 //! Cache keys include the engine build id, so parallel worktrees / rebuilds never share entries; the
 //! fixed dir only makes REPEATED runs of one build warm. DDJIT_NOPCACHE=1 in the ambient env would
 //! disable the engine's cache, but the per-case env here is baked into the launch script and the `mac`
 //! bridge drops ambient env, so these cases always exercise the cache path as written.
 #![allow(unused_imports)]
-use dd_tests::{darwin_libc, darwin_src, fixture, group, in_rootfs, port, src, Case, Engine, Group};
+use crate::support::{darwin_libc, darwin_src, fixture, group, in_rootfs, port, src, Case, Engine, Group};
 
 pub fn groups() -> Vec<Group> {
     vec![pcachex()]

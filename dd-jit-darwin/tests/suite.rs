@@ -3,13 +3,18 @@
 //! --example matrix`.
 //!
 //! This is the CI matrix gate, so it must apply the same false-green guards the runner does (see
-//! [`dd_tests::gate_failures`]): XPASS fails, a dark/unbuilt engine lane fails, and a matrix that ran
+//! [`crate::support::gate_failures`]): XPASS fails, a dark/unbuilt engine lane fails, and a matrix that ran
 //! nothing fails. Previously it only asserted `failures.is_empty()` over Fail cells, so a build that
 //! dropped an engine — or a fully-skipped matrix — reported "0 failed" while testing nothing.
 //!
 //! The case registry moved here with the engine (ownership-matrix Step 2); the harness model
-//! (`Ctx`/`Engine`/`run`/`gate_failures`) is the product-neutral `dd_tests` dev-dependency.
-use dd_tests::{gate_failures, run, Cell, Ctx, Engine};
+//! (`Ctx`/`Engine`/`run`/`gate_failures`) is the crate-local `support` test-support module (formerly
+//! the `dd-tests` dev-dependency, now dissolved into this crate).
+use crate::support::{gate_failures, run, Cell, Ctx, Engine};
+
+// The product-neutral engine-test harness, included crate-locally (was the `dd-tests` dev-dep).
+#[path = "support/mod.rs"]
+mod support;
 
 #[path = "engine_matrix/mod.rs"]
 mod cases;

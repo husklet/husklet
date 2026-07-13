@@ -1,7 +1,7 @@
 //! gui — EGL/Wayland GL-shim probes. These are fixture-style because they link dynamically against
-//! the GUI/EGL shim stack built by `dd-tests/guests/gui_matrix/Makefile`.
+//! the GUI/EGL shim stack built by `dd-jit-darwin/testdata/guests/gui_matrix/Makefile`.
 
-use dd_tests::{fixture, group, Engine, Group};
+use crate::support::{fixture, group, Engine, Group};
 
 pub fn groups() -> Vec<Group> {
     vec![group(

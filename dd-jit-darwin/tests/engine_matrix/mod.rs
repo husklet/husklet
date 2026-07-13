@@ -8,7 +8,7 @@
 //!
 //! The case-builder functions are grouped into per-category sibling modules; `all()` aggregates them.
 
-use dd_tests::{in_rootfs, Case, Group};
+use crate::support::{in_rootfs, Case, Group};
 
 pub mod ext; // per-category basics expansion (one file per agent, appended below)
 

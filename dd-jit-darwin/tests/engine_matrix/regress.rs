@@ -1,6 +1,6 @@
 //! Regression guards for shipped correctness bugs.
 
-use dd_tests::{fixture, group, port, src, src_nopie, Engine, Group};
+use crate::support::{fixture, group, port, src, src_nopie, Engine, Group};
 
 /// Regression guards for shipped correctness bugs. Portable, golden-checked.
 /// - lseek/offset: — apt-get update BADSIG. gpg's keyring_get_keyblock lseek(fd,found.offset,SEEK_SET)s
@@ -60,7 +60,7 @@ pub(super) fn regress() -> Group {
         // so cooperative preemption keeps the program correct. Without the fix this crashes (rc=139/138); with
         // it, it completes. Prebuilt aarch64-only (no local Go cross-compiler); Go GC can't be qemu-oracled, so
         // the total is a GOLDEN cross-checked byte-exact vs native arm64 Go. Binary + source are COMMITTED
-        // IN-REPO at dd-tests/guests/arm/ (go_cgo_stackgrow_arm / .go) so the case is self-contained — the
+        // IN-REPO at dd-jit-darwin/testdata/guests/arm/ (go_cgo_stackgrow_arm / .go) so the case is self-contained — the
         // historical <repo-parent>/poc sidecar dir is machine-local and absent from fresh checkouts/worktrees
         // (provision::resolve tries in-repo first, then the poc walk). Rebuild on linux/arm64:
         // `CGO_ENABLED=1 go build -trimpath -ldflags='-s -w -linkmode external -extldflags -static'`.

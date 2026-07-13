@@ -1,6 +1,6 @@
 //! Processes, threads, signals, and IPC & fd plumbing.
 
-use dd_tests::{group, port, src, src_nopie, Engine, Group};
+use crate::support::{group, port, src, src_nopie, Engine, Group};
 
 /// Threads — mutex/condvar producer-consumer, 64-way contention, and thread-local storage. Portable
 /// across engines (Linux x2 + macOS), golden-checked. Proves the threading model is sound everywhere.

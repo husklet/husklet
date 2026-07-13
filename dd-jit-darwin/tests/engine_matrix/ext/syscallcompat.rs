@@ -6,7 +6,7 @@
 //! native Linux errno IS the expected value -- a fake-success regression diverges and fails. aarch64
 //! only (native gcc + native oracle), which is the reliable path in this harness.
 #![allow(unused_imports)]
-use dd_tests::{group, src, Case, Engine, Group};
+use crate::support::{group, src, Case, Engine, Group};
 
 /// aarch64-only syscall regression probe, oracle-diffed vs native.
 fn p(name: &'static str, file: &'static str) -> Case {

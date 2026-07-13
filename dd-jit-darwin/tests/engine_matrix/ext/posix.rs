@@ -1,6 +1,6 @@
 //! posix — basics expansion (in-process JIT matrix). Owner: posix agent. Edit ONLY this file.
 //! Builders: src(name,file).oracle()/.exit()/.out()/.has(); port(name,file) for cross-engine golden.
-//! Keep this module compiling at all times (`cargo build -p dd-tests`).
+//! Keep this module compiling at all times (`cargo build -p dd-jit-darwin`).
 //!
 //! Two groups:
 //!  - `posixext`  PORTABLE POSIX (port): one source compiled for Linux x2 + darwin, golden-checked so
@@ -9,7 +9,7 @@
 //!  - `posixlin`  Linux-form syscalls (statx/sendfile/dup3/pipe2/ppoll/getdents64/uname) that have no
 //!    portable shape — Linux-engine only, diffed against a native oracle.
 #![allow(unused_imports)]
-use dd_tests::{fixture, group, in_rootfs, port, src, Case, Engine, Group};
+use crate::support::{fixture, group, in_rootfs, port, src, Case, Engine, Group};
 
 pub fn groups() -> Vec<Group> {
     vec![portable(), linuxform()]

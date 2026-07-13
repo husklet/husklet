@@ -2,7 +2,7 @@
 //! many builders work without collision (mirrors src/scenarios/). The base groups stay in cases/mod.rs;
 //! these add breadth. `cases::all()` appends `ext::all()`. Each file keeps itself compiling.
 
-use dd_tests::Group;
+use crate::support::Group;
 
 pub mod abi; // codegen / ABI: int/float/simd/varargs/recursion/jumptable/fnptr/struct-abi
 pub mod completeness; // syscall-table + x86-64/aarch64 opcode COMPLETENESS probes (no images)

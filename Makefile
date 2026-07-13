@@ -54,9 +54,9 @@ scenarios-prune: ## DISK reclaim: drop UNUSED images from the mac docker ORACLE 
 	  mac docker image prune -af </dev/null 2>&1 | tail -1; \
 	  echo "oracle disk AFTER:"; mac docker system df </dev/null 2>&1 | head -2
 coverage: jit  ## report unimplemented syscalls/opcodes (static switch-diff + dynamic corpus run); MODE=static|dynamic|all
-	bash dd-tests/tools/coverage.sh $(or $(MODE),all)
+	bash dd-jit-darwin/tools/coverage.sh $(or $(MODE),all)
 bench: jit      ## TRUE DBT overhead: self-timed compute kernels (startup EXCLUDED) — native-arm64 vs dd-arm64/dd-x86/qemu-x86; BENCH_N=median (3), BENCH_K=alu,fp to narrow; writes target/dd-tests/bench.{csv,json}
-	cargo run -q -p dd-tests --release --bin bench
+	cargo run -q -p dd-jit-darwin --release --example bench
 # The decomposed C engine lives under dd-jit-darwin/src/runtime/{engine,translate,host,include,os,targets}
 # (os/ covers both os/linux and os/darwin). Uses dd-jit-darwin/.clang-format.
 RUNTIME_C = $(shell find dd-jit-darwin/src/runtime/engine dd-jit-darwin/src/runtime/translate dd-jit-darwin/src/runtime/host dd-jit-darwin/src/runtime/include dd-jit-darwin/src/runtime/os dd-jit-darwin/src/runtime/targets \( -name '*.c' -o -name '*.h' \))

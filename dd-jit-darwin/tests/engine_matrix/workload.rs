@@ -1,6 +1,6 @@
 //! Heavy / soak workloads, real toolchains (gcc), real software, and busybox applets.
 
-use dd_tests::{group, in_rootfs, port, src, Engine, Group};
+use crate::support::{group, in_rootfs, port, src, Engine, Group};
 
 use super::sh;
 

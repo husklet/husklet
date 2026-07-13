@@ -1,5 +1,5 @@
 //! forkx — fork-path stress (preserved-arena fork). Owner: fork-cost agent. Edit ONLY this file.
-//! Keep this module compiling at all times (`cargo build -p dd-tests`).
+//! Keep this module compiling at all times (`cargo build -p dd-jit-darwin`).
 //!
 //! The change makes a fork child KEEP the parent's dual-mapped code cache (RX re-remapped from the
 //! child's COW pages at the same VA) instead of rebuilding it, so the specific hazards are: a stale alias
@@ -10,7 +10,7 @@
 //! re-remap) -- and golden-checks one deterministic checksum over every child's exit code. Runs on both
 //! Linux engines (golden cross-checked native aarch64 vs qemu-x86_64: identical).
 
-use dd_tests::{group, src, Group};
+use crate::support::{group, src, Group};
 
 pub fn groups() -> Vec<Group> {
     vec![group(

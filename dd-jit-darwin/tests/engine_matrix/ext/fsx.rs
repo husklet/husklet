@@ -1,13 +1,13 @@
 //! fsx — extended filesystem-syscall coverage. Owner: fsx-coverage agent. Edit ONLY this file.
 //! Builders: src(name,file).oracle()/.exit()/.out()/.has(); port(name,file) for cross-engine golden.
-//! Keep this module compiling at all times (`cargo build -p dd-tests`).
+//! Keep this module compiling at all times (`cargo build -p dd-jit-darwin`).
 //!
 //! Fills gaps left by ext/posix: the dirfd-relative *at() family (fchmodat/fchownat/faccessat/linkat/
 //! symlinkat/renameat/mkdirat/mkfifoat), extended attributes (portable via an __APPLE__ branch), and
 //! the Linux-only file corners posix_fadvise/close_range/O_PATH which have no portable POSIX shape and
 //! are diffed against a native oracle.
 #![allow(unused_imports)]
-use dd_tests::{fixture, group, in_rootfs, port, src, Case, Engine, Group};
+use crate::support::{fixture, group, in_rootfs, port, src, Case, Engine, Group};
 
 pub fn groups() -> Vec<Group> {
     vec![fsx_portable(), fsx_xattr_edge(), fsx_linux()]

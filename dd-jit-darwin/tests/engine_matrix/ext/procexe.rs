@@ -8,7 +8,7 @@
 //! /proc/self/exe is the absolute CANONICAL binary path. darwin is excluded: there is no /proc surface
 //! in the macOS container (BSD guests use KERN_PROCARGS2 — see guests/darwin/bsd_procpath.c).
 #![allow(unused_imports)]
-use dd_tests::{fixture, group, in_rootfs, port, src, Case, Engine, Group};
+use crate::support::{fixture, group, in_rootfs, port, src, Case, Engine, Group};
 
 pub fn groups() -> Vec<Group> {
     vec![procexe()]

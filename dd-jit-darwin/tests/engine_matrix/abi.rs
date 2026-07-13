@@ -1,6 +1,6 @@
 //! Core ABI / codegen, libc breadth & C-runtime behaviour, and a heavy timing microbench.
 
-use dd_tests::{group, port, src, Engine, Group};
+use crate::support::{group, port, src, Engine, Group};
 
 /// Core ABI / codegen — compiled guests, diffed against a native oracle.
 pub(super) fn compat() -> Group {

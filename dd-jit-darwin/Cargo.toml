@@ -12,14 +12,15 @@ path = "src/lib.rs"
 
 [dependencies]
 
-# dev-only. The engine × case matrix (ownership-matrix Step 2) lives in this crate's tests/examples.
-# `dd-jit` (imported as `ddjit`) is this crate's DOWNSTREAM host-neutral API — it normally-depends on
-# dd-jit-darwin. Depending back on it is legal ONLY because Cargo permits a dependency cycle through
-# dev-dependencies: the cycle dd-jit ↔ dd-jit-darwin is dev-only and never enters a shipped build.
-# `dd-tests` is the product-neutral harness helper the moved cases/runner/tests are written against.
+# dev-only. The engine × case matrix (ownership-matrix Step 2) plus the product-neutral engine-test
+# harness (formerly the `dd-tests` crate, now dissolved into `tests/support/**`) live in this crate's
+# tests/examples. `dd-jit` (imported as `ddjit`) is this crate's DOWNSTREAM host-neutral API — it
+# normally-depends on dd-jit-darwin. Depending back on it is legal ONLY because Cargo permits a
+# dependency cycle through dev-dependencies: the cycle dd-jit ↔ dd-jit-darwin is dev-only and never
+# enters a shipped build. The harness's `ddjit::{Guest,available,SpawnConfig}` coupling resolves through
+# this same dev-dep.
 [dev-dependencies]
 ddjit = { path = "../dd-jit", package = "dd-jit" }
-dd-tests = { path = "../dd-tests" }
 
 # The developer runner for the engine × case matrix (grouped/colored/filterable output). It shares the
 # one Rust case registry in tests/engine_matrix via #[path]; `cargo test -p dd-jit-darwin` (tests/suite.rs)

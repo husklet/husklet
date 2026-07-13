@@ -647,6 +647,9 @@ dependencies = [
 [[package]]
 name = "dd-jit-darwin"
 version = "0.4.0"
+dependencies = [
+ "dd-jit",
+]
 
 [[package]]
 name = "dd-shim-common"
@@ -693,13 +696,6 @@ version = "0.1.0"
 dependencies = [
  "bitflags 2.13.0",
  "libc",
-]
-
-[[package]]
-name = "dd-tests"
-version = "0.4.0"
-dependencies = [
- "dd-jit",
 ]
 
 [[package]]

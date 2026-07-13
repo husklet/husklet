@@ -2,7 +2,7 @@
 //! Owner: clitools-coverage agent. Edit ONLY this file. These exercise the container path (rootfs jail,
 //! fork/exec of real binaries) end-to-end and are golden-checked. aarch64 (the container rootfs arch).
 #![allow(unused_imports)]
-use dd_tests::{fixture, group, in_rootfs, port, src, Case, Engine, Group};
+use crate::support::{fixture, group, in_rootfs, port, src, Case, Engine, Group};
 
 pub fn groups() -> Vec<Group> {
     vec![clitools()]

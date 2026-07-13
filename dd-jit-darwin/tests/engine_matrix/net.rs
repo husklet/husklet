@@ -1,6 +1,6 @@
 //! Networking — sockets over loopback (TCP/UDP/UNIX), client+server across a fork.
 
-use dd_tests::{group, port, Group};
+use crate::support::{group, port, Group};
 
 /// Networking — sockets over loopback (TCP/UDP/UNIX), client+server across a fork. PORTABLE: the one
 /// POSIX source runs on every engine (Linux x2 + macOS), golden-checked so the behaviour must be

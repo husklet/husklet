@@ -4,7 +4,7 @@
 //! synth fires exactly as under `docker run`; verdicts are golden constants derived from the real docker
 //! (runc) oracle, so a stub / wrong-magic / wrong-geometry synth fails.
 #![allow(unused_imports)]
-use dd_tests::{fixture, group, in_rootfs, port, src, Case, Engine, Group};
+use crate::support::{fixture, group, in_rootfs, port, src, Case, Engine, Group};
 
 const LIN: &[Engine] = &[Engine::LinuxAarch64, Engine::LinuxX86_64];
 

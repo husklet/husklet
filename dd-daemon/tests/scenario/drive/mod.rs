@@ -251,7 +251,7 @@ pub fn run_one(d: &Daemon, s: &Scenario, t: Target, cfg: &Cfg) -> Status {
         (Some(m), xf) => {
             // Self-explaining failure: scrape the container output + daemon-log tail for engine signals
             // (missing syscall / UNIMPL opcode / crash / loader) and attach a one-line diagnosis.
-            let diag = dd_tests::diag::diagnose(m, code, &out, &d.log_tail(25));
+            let diag = super::diag::diagnose(m, code, &out, &d.log_tail(25));
             if xf {
                 Status::Xfail(diag.summary())
             } else {

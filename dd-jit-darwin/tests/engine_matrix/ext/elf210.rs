@@ -14,7 +14,7 @@
 //! qemu-x86_64 oracle: proof the fallback path loads + runs the image correctly. x86_64-only (the arm64 lane
 //! already had this fallback). Keep this module compiling at all times.
 #![allow(unused_imports)]
-use dd_tests::{group, src, Case, Engine, Group};
+use crate::support::{group, src, Case, Engine, Group};
 
 pub fn groups() -> Vec<Group> {
     vec![elf210()]
