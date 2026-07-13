@@ -140,6 +140,9 @@ impl Client {
 // One test, one Display/client (wayland-server keeps process-global state; see client_roundtrip.rs).
 #[test]
 fn dmabuf_global_and_iosurface_commit_presents() {
+    // The dmabuf global is advertised only under `DD_DISPLAY_DMABUF` (parity with legacy `server.rs`;
+    // the default software path must not advertise it — see handlers/dmabuf.rs::new_dmabuf_state).
+    std::env::set_var("DD_DISPLAY_DMABUF", "1");
     let mut display: Display<DdState> = Display::new().unwrap();
     let mut dh = display.handle();
     let last = Arc::new(Mutex::new(None));

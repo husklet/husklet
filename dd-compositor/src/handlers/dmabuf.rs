@@ -183,6 +183,18 @@ pub(crate) fn build_default_feedback() -> std::io::Result<DmabufFeedback> {
 /// the advertised global version (5 with feedback, 3 without).
 pub(crate) fn new_dmabuf_state(dh: &DisplayHandle) -> DmabufState {
     let mut state = DmabufState::new();
+    // Parity with the legacy `server.rs` default: the `zwp_linux_dmabuf_v1` global is advertised only
+    // when `DD_DISPLAY_DMABUF` is set (`server.rs` ~line 918: `dmabuf_on = env::var("DD_DISPLAY_DMABUF")`).
+    // A `wl_shm` software client (GTK4/cairo, Chrome's raster path) that sees the v4 *feedback* global
+    // eagerly binds it and `mmap`s the feedback format-table fd; that fd is a macOS POSIX-shm object
+    // routed to the Linux guest through the engine's SCM_RIGHTS bridge, and the guest's `mmap` of it
+    // returns `MAP_FAILED` → the client dereferences `-1` and SIGSEGVs *before its first frame*
+    // (observed: gtk4-demo crashes at guest-PC in the dmabuf-feedback path; legacy — no dmabuf global —
+    // renders the identical guest fine). So the default (software) path must NOT advertise dmabuf, exactly
+    // like legacy. Behind `DD_DISPLAY_DMABUF` the v4 feedback global is created for the accelerated path.
+    if std::env::var("DD_DISPLAY_DMABUF").is_err() {
+        return state;
+    }
     match build_default_feedback() {
         Ok(feedback) => {
             // The returned DmabufGlobal is only a handle; the global (and a clone of the feedback) live

@@ -51,6 +51,10 @@ fn socketpair_nonblocking() -> (i32, i32) {
 
 #[test]
 fn dmabuf_global_advertises_v4_feedback() {
+    // The dmabuf global is advertised only under `DD_DISPLAY_DMABUF` (parity with legacy `server.rs`;
+    // the default software path must not advertise it — a `wl_shm` client mmap'ing the feedback
+    // format-table fd through the engine's macOS-shm→guest bridge SIGSEGVs). Opt in for this test.
+    std::env::set_var("DD_DISPLAY_DMABUF", "1");
     let mut display: Display<DdState> = Display::new().unwrap();
     let mut dh = display.handle();
     let mut state = DdState::new(dh.clone(), Box::new(NullPresenter));
