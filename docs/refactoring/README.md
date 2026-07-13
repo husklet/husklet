@@ -6,11 +6,14 @@ not authorize code, test, package, path, or brand changes by itself.
 1. [`phase_1_audit/`](phase_1_audit/) — reduce dead weight and record what must be retained.
 2. [`phase_2_tests/`](phase_2_tests/) — move behavioral ownership to the crate that owns the behavior.
 3. [`phase_3_rebrand/`](phase_3_rebrand/) — rename the product to **husklet** after test ownership is stable.
+4. [`phase_4_rendering/`](phase_4_rendering/) — close residual API, executor, compositor, presentation and
+   application rendering gaps with behavioral evidence.
 
 The phases are ordered. Phase 2 must not be mixed with the rebrand: otherwise a failing test move cannot
 be distinguished from a renamed package, binary, environment variable, or persisted path. Phase 3 starts
 only after every moved test runs from its destination and the old aggregate target is empty of product
-behavior.
+behavior. Phase 4 is a correctness backlog rather than another rename dependency; its evidence can be
+collected while earlier structural phases are prepared.
 
 ## Non-negotiable rules
 

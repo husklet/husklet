@@ -36,7 +36,7 @@
 #   target for a lib it actually mounts), so this is a one-time repair of legacy overlay state.
 #
 #   NOTE for a fully-glibc alternative: build a stock glibc Chromium rootfs and register it as a
-#   first-class dd image + workspace exactly like docs/rendering/gtk4-workspace-repro.sh (debian
+#   first-class dd image + workspace exactly like phase_4_rendering/reproduction/gtk4-workspace-repro.sh (debian
 #   `chromium` / a pinned Chromium deve over ubuntu:24.04, interpreter /lib/ld-linux-aarch64.so.1),
 #   pairing it with the glibc render shims in ~/.dd/gui/aarch64/lib.glibc.  That path needs the
 #   apt/deb download to succeed on the dev host; the musl repair above needs no network at all.

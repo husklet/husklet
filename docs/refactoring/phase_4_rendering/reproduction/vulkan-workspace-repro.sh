@@ -13,7 +13,7 @@
 # WHY THIS PROVES THE MILESTONE
 #   lavapipe (Mesa's llvmpipe Vulkan driver) renders the vkcube frame entirely on the CPU into a
 #   wl_shm shared-memory buffer, then presents it over Wayland to dd-display — the SAME software
-#   present lane GTK4-cairo uses (docs/rendering/gtk4-workspace-repro.sh). No dd GPU/Vulkan ICD is in
+#   present lane GTK4-cairo uses (phase_4_rendering/reproduction/gtk4-workspace-repro.sh). No dd GPU/Vulkan ICD is in
 #   the guest; this is independent of the dd-shim-vk HOST path. It proves the guest Vulkan
 #   environment (loader + ICD wiring) and the wl_shm present path work for a real Vulkan app.
 #

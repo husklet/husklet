@@ -2,8 +2,8 @@
 
 Status: current consolidated backlog, 2026-07-12.
 
-Rendering and Chrome status live in [`codex-rendering.md`](codex-rendering.md) and
-[`rendering/CHROME-FIX-PLAN.md`](rendering/CHROME-FIX-PLAN.md). This file covers the JIT engine,
+Rendering and Chrome status live in [`refactoring/phase_4_rendering/backlog.md`](refactoring/phase_4_rendering/backlog.md) and
+[`refactoring/phase_4_rendering/chrome-fix-plan.md`](refactoring/phase_4_rendering/chrome-fix-plan.md). This file covers the JIT engine,
 Linux-compatibility layer, launch wire, and daemon only.
 
 ## Open engine gaps
