@@ -613,6 +613,14 @@ pub fn take_ir() -> Vec<Cmd> {
     ir
 }
 
+/// Crate-wide test serialization lock. The `vk*` bodies funnel through one process-global [`VkState`]
+/// (`ir_log`, per-object maps), so tests that mutate or assert on it must not run concurrently — in
+/// particular the WSI present test asserts `present_flushed == ir_log.len()`, which any concurrent
+/// `vkQueueSubmit`/`vkCreateShaderModule` would break. All ir-log-mutating test modules take this one
+/// lock (the previous per-module locks did not serialize across modules).
+#[cfg(test)]
+pub static TEST_SERIAL: Mutex<()> = Mutex::new(());
+
 /// Reset ALL recording state (tests run serially against this process-global).
 pub fn reset() {
     *lock() = VkState::default();

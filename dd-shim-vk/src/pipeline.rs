@@ -1121,6 +1121,7 @@ mod shader_validation_tests {
 
     #[test]
     fn spirv_modules_entries_specialization_and_interfaces_validate_before_ir_mutation() {
+        let _guard = reg::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
         let malformed = [0x0723_0203, 0x0001_0000, 0, 8, 0, (4 << 16) | 17, 1];
         let mut output = 0xfeed_u64;
         assert_eq!(create_module(&malformed, &mut output), VK_ERROR_UNKNOWN);
@@ -1316,6 +1317,7 @@ mod shader_validation_tests {
     /// interface mismatch and must be rejected; declaring SAMPLED_IMAGE is accepted.
     #[test]
     fn spirv_descriptor_type_must_match_the_set_layout() {
+        let _guard = reg::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
         fn image_module() -> Vec<u32> {
             let mut w = vec![0x0723_0203u32, 0x0001_0000, 0, 32, 0];
             inst(17, &[1], &mut w); // OpCapability Shader

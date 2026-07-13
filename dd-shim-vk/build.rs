@@ -97,8 +97,10 @@ fn partial_note(name: &str) -> Option<&'static str> {
             "single unified HOST_VISIBLE|COHERENT memory type modeled as a staging Vec<u8>"
         }
         "vkCreateImage" => "COLOR_ATTACHMENT render-target subset; general images/tiling not modeled",
-        "vkCmdPipelineBarrier" => {
-            "legacy color-image subresource layouts on one queue; no sync2 or backend hazard lowering"
+        "vkCmdPipelineBarrier" | "vkCmdPipelineBarrier2" => {
+            "color-image per-mip/layer subresource layouts + single-family ownership, tracked and applied \
+             atomically at submit (legacy + sync2 share the model); depth/stencil aspects and backend \
+             hazard lowering are not yet modeled"
         }
         "vkCmdCopyBufferToImage" | "vkCmdCopyImageToBuffer" => {
             "2D color/base-layer regions with exact buffer offsets and row pitch; no 3D or multilayer"
@@ -673,4 +675,6 @@ const IMPLEMENTED: &[&str] = &[
     "vkCmdDispatchIndirect",
     // sparse binding (synchronization only; no sparse residency)
     "vkQueueBindSparse",
+    // synchronization2 image barriers (core 1.3) share the legacy submit-time subresource/ownership model
+    "vkCmdPipelineBarrier2",
 ];

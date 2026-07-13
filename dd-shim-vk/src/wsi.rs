@@ -560,7 +560,9 @@ unsafe fn write_enum<T: Copy>(items: &[T], p_count: *mut u32, p_data: *mut T) ->
 mod tests {
     use super::*;
 
-    static PRESENT_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    // Shared crate-wide test lock: the WSI present test asserts `present_flushed == ir_log.len()`, which
+    // any concurrent ir_log writer (command/pipeline tests) would break — so all serialize on one lock.
+    use crate::reg::TEST_SERIAL as PRESENT_TEST_LOCK;
 
     fn create_surface(display: usize, window: usize) -> u64 {
         let ci = vk::WaylandSurfaceCreateInfoKHR::default()

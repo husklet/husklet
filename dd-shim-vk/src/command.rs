@@ -573,47 +573,131 @@ pub(crate) fn record_image_barriers(
     } else {
         unsafe { core::slice::from_raw_parts(p_image_memory_barriers, image_memory_barrier_count as usize) }
     };
+    // Legacy (Vulkan 1.0) form: the stage masks are per-`vkCmdPipelineBarrier`, shared by every barrier.
+    let inputs: Vec<BarrierInput> = barriers
+        .iter()
+        .map(|b| BarrierInput {
+            image: b.image.as_raw(),
+            old_layout: b.old_layout,
+            new_layout: b.new_layout,
+            src_access: b.src_access_mask.as_raw(),
+            dst_access: b.dst_access_mask.as_raw(),
+            src_stage: src_stage_mask.as_raw(),
+            dst_stage: dst_stage_mask.as_raw(),
+            src_qf: b.src_queue_family_index,
+            dst_qf: b.dst_queue_family_index,
+            range: b.subresource_range,
+        })
+        .collect();
+    commit_barriers(command_buffer, &inputs);
+}
+
+/// One resolved image barrier, common to the legacy (`VkImageMemoryBarrier` + shared stage masks) and
+/// synchronization2 (`VkImageMemoryBarrier2` with per-barrier 64-bit stage/access masks) forms.
+struct BarrierInput {
+    image: u64,
+    old_layout: vk::ImageLayout,
+    new_layout: vk::ImageLayout,
+    src_access: u32,
+    dst_access: u32,
+    src_stage: u32,
+    dst_stage: u32,
+    src_qf: u32,
+    dst_qf: u32,
+    range: vk::ImageSubresourceRange,
+}
+
+/// Validate a set of resolved image barriers and record them as one atomic [`ImageEvent::Barriers`]
+/// group on a recording command buffer (outside a render pass). Any structurally invalid barrier
+/// (unknown image, out-of-range subresource, unsupported layout, or a cross-family transfer to a
+/// non-existent queue family) records nothing — no partial mutation. Shared by the legacy and sync2
+/// barrier entry points and `vkCmdWaitEvents`, so both track per-mip/layer subresource state and
+/// queue ownership through the same submit-time validation.
+fn commit_barriers(command_buffer: VkCommandBuffer, inputs: &[BarrierInput]) {
     let mut s = reg::lock();
     let key = cb_key(command_buffer);
     if !s.cmdbufs.get(&key).is_some_and(|cb| cb.state == CommandBufferState::Recording && !cb.in_render_pass) {
         return;
     }
-    let mut transitions = Vec::with_capacity(barriers.len());
-    for barrier in barriers {
-        let Some(image) = s.images.get(&barrier.image.as_raw()) else {
+    let mut transitions = Vec::with_capacity(inputs.len());
+    for b in inputs {
+        let Some(image) = s.images.get(&b.image) else {
             return;
         };
-        let Some(range) = resolve_range(image, barrier.subresource_range) else {
+        let Some(range) = resolve_range(image, b.range) else {
             return;
         };
-        if !supported_layout(barrier.old_layout, true) || !supported_layout(barrier.new_layout, false) {
+        if !supported_layout(b.old_layout, true) || !supported_layout(b.new_layout, false) {
             return;
         }
         let ignored = vk::QUEUE_FAMILY_IGNORED;
-        let queue_ok = (barrier.src_queue_family_index == ignored
-            && barrier.dst_queue_family_index == ignored)
-            || (barrier.src_queue_family_index == 0 && barrier.dst_queue_family_index == 0);
+        // Our device exposes one queue family (index 0): a transfer is valid only when both are IGNORED
+        // (no ownership transfer) or both name the sole family 0 (explicit ownership, tracked at submit).
+        let queue_ok = (b.src_qf == ignored && b.dst_qf == ignored) || (b.src_qf == 0 && b.dst_qf == 0);
         if !queue_ok {
             return;
         }
         transitions.push(ImageTransition {
-            image: barrier.image.as_raw(),
+            image: b.image,
             range,
-            old_layout: barrier.old_layout.as_raw(),
-            new_layout: barrier.new_layout.as_raw(),
-            src_access: barrier.src_access_mask.as_raw(),
-            dst_access: barrier.dst_access_mask.as_raw(),
-            src_stage: src_stage_mask.as_raw(),
-            dst_stage: dst_stage_mask.as_raw(),
-            src_queue_family: barrier.src_queue_family_index,
-            dst_queue_family: barrier.dst_queue_family_index,
+            old_layout: b.old_layout.as_raw(),
+            new_layout: b.new_layout.as_raw(),
+            src_access: b.src_access,
+            dst_access: b.dst_access,
+            src_stage: b.src_stage,
+            dst_stage: b.dst_stage,
+            src_queue_family: b.src_qf,
+            dst_queue_family: b.dst_qf,
         });
     }
     if !transitions.is_empty() {
-        s.cmdbufs.get_mut(&key).expect("validated recording command buffer").image_events.push(
-            ImageEvent::Barriers(transitions),
-        );
+        s.cmdbufs
+            .get_mut(&key)
+            .expect("validated recording command buffer")
+            .image_events
+            .push(ImageEvent::Barriers(transitions));
     }
+}
+
+/// `vkCmdPipelineBarrier2` (synchronization2 / core 1.3) — the `VkDependencyInfo` form: each
+/// `VkImageMemoryBarrier2` carries its own 64-bit `srcStageMask`/`dstStageMask`/`src|dstAccessMask`
+/// inline (rather than the single per-call stage masks of the legacy form). We lower its image
+/// barriers through the SAME validated submit-time subresource/ownership model as the legacy path
+/// (the low 32 bits of the sync2 masks carry the legacy-compatible stage/access bits the tracker
+/// records). Ported from `MVKCmdPipelineBarrier` (which unifies the 1.0 and sync2 barrier encodings).
+#[no_mangle]
+pub extern "C" fn vkCmdPipelineBarrier2(
+    command_buffer: VkCommandBuffer,
+    p_dependency_info: *const vk::DependencyInfo,
+) {
+    let Some(dep) = (unsafe { p_dependency_info.as_ref() }) else {
+        return;
+    };
+    let barriers = if dep.image_memory_barrier_count == 0 || dep.p_image_memory_barriers.is_null() {
+        &[][..]
+    } else {
+        unsafe {
+            core::slice::from_raw_parts(dep.p_image_memory_barriers, dep.image_memory_barrier_count as usize)
+        }
+    };
+    let inputs: Vec<BarrierInput> = barriers
+        .iter()
+        .map(|b| BarrierInput {
+            image: b.image.as_raw(),
+            old_layout: b.old_layout,
+            new_layout: b.new_layout,
+            // sync2 masks are 64-bit; the low 32 bits carry the legacy-compatible access/stage bits the
+            // subresource tracker records (it keys on layout + ownership, identical across both forms).
+            src_access: b.src_access_mask.as_raw() as u32,
+            dst_access: b.dst_access_mask.as_raw() as u32,
+            src_stage: b.src_stage_mask.as_raw() as u32,
+            dst_stage: b.dst_stage_mask.as_raw() as u32,
+            src_qf: b.src_queue_family_index,
+            dst_qf: b.dst_queue_family_index,
+            range: b.subresource_range,
+        })
+        .collect();
+    commit_barriers(command_buffer, &inputs);
 }
 
 #[no_mangle]
@@ -1965,7 +2049,7 @@ pub extern "C" fn vkQueueBindSparse(
 mod layout_tests {
     use super::*;
 
-    static TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    use crate::reg::TEST_SERIAL as TEST_LOCK; // shared crate-wide test lock (serializes ir_log writers)
 
     fn create_image() -> VkImage {
         let ci = vk::ImageCreateInfo::default()
@@ -2319,6 +2403,65 @@ mod layout_tests {
         crate::pipeline::vkDestroyFramebuffer(core::ptr::null_mut(), framebuffer, core::ptr::null());
         crate::pipeline::vkDestroyRenderPass(core::ptr::null_mut(), render_pass, core::ptr::null());
         crate::memory::vkDestroyImageView(core::ptr::null_mut(), view, core::ptr::null());
+        crate::memory::vkDestroyImage(core::ptr::null_mut(), image, core::ptr::null());
+    }
+
+    #[test]
+    fn sync2_pipeline_barrier2_tracks_subresources_and_ownership_like_the_legacy_form() {
+        let _guard = TEST_LOCK.lock().unwrap_or_else(|error| error.into_inner());
+        let image = create_image(); // 2 mips x 2 layers, UNDEFINED
+        let cb = 0x3131usize as VkCommandBuffer;
+
+        // A sync2 barrier on mip 1 / layer 1 only: 64-bit stage+access masks carried inline per barrier.
+        let barrier2 = |old: vk::ImageLayout, new: vk::ImageLayout, src_qf: u32, dst_qf: u32| {
+            let b = vk::ImageMemoryBarrier2::default()
+                .src_stage_mask(vk::PipelineStageFlags2::TRANSFER)
+                .src_access_mask(vk::AccessFlags2::TRANSFER_WRITE)
+                .dst_stage_mask(vk::PipelineStageFlags2::COLOR_ATTACHMENT_OUTPUT)
+                .dst_access_mask(vk::AccessFlags2::COLOR_ATTACHMENT_WRITE)
+                .old_layout(old)
+                .new_layout(new)
+                .src_queue_family_index(src_qf)
+                .dst_queue_family_index(dst_qf)
+                .image(vk::Image::from_raw(image))
+                .subresource_range(vk::ImageSubresourceRange {
+                    aspect_mask: vk::ImageAspectFlags::COLOR,
+                    base_mip_level: 1,
+                    level_count: 1,
+                    base_array_layer: 1,
+                    layer_count: 1,
+                });
+            let barriers = [b];
+            let dep = vk::DependencyInfo::default().image_memory_barriers(&barriers);
+            begin(cb);
+            vkCmdPipelineBarrier2(cb, &dep);
+            assert_eq!(vkEndCommandBuffer(cb), VK_SUCCESS);
+            submit(cb)
+        };
+
+        // Recording alone must not mutate global state; the transition applies only at submit, and only
+        // to the addressed subresource (mip 1 / layer 1), leaving the others UNDEFINED.
+        assert_eq!(
+            barrier2(vk::ImageLayout::UNDEFINED, vk::ImageLayout::TRANSFER_DST_OPTIMAL, vk::QUEUE_FAMILY_IGNORED, vk::QUEUE_FAMILY_IGNORED),
+            VK_SUCCESS
+        );
+        assert_eq!(layout(image, 1, 1), vk::ImageLayout::TRANSFER_DST_OPTIMAL.as_raw());
+        assert_eq!(layout(image, 0, 0), vk::ImageLayout::UNDEFINED.as_raw());
+        assert_eq!(layout(image, 1, 0), vk::ImageLayout::UNDEFINED.as_raw());
+
+        // Explicit single-family (0 -> 0) ownership transfer is accepted and tracked; a stale oldLayout
+        // is rejected atomically at submit without changing the subresource.
+        assert_eq!(
+            barrier2(vk::ImageLayout::TRANSFER_DST_OPTIMAL, vk::ImageLayout::GENERAL, 0, 0),
+            VK_SUCCESS
+        );
+        assert_eq!(layout(image, 1, 1), vk::ImageLayout::GENERAL.as_raw());
+        assert_eq!(
+            barrier2(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL, vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL, vk::QUEUE_FAMILY_IGNORED, vk::QUEUE_FAMILY_IGNORED),
+            VK_ERROR_INITIALIZATION_FAILED
+        );
+        assert_eq!(layout(image, 1, 1), vk::ImageLayout::GENERAL.as_raw(), "rejected sync2 barrier left state intact");
+
         crate::memory::vkDestroyImage(core::ptr::null_mut(), image, core::ptr::null());
     }
 
