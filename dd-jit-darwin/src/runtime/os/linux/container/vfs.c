@@ -154,13 +154,28 @@ static int g_eventfd_cslot[DD_NFD];
 
 static void eventfd_count_init(void) {
     if (g_eventfd_count) return;
-    size_t sz = sizeof(uint64_t) * 1024;
+    // One slot per POSSIBLE fd number: eventfd_counter_slot() indexes this by the fd number (or a
+    // SCM_RIGHTS-imported eventfd's sender-fd slot), and Chrome opens FAR more than 1024 fds — a 1024-slot
+    // array is a cross-process out-of-bounds write for any eventfd whose fd number exceeds it (silent
+    // counter corruption / heap clobber past the mapped page). Size it to the whole fd space.
+    size_t sz = sizeof(uint64_t) * DD_NFD;
     void *mem = mmap(NULL, sz, PROT_READ | PROT_WRITE, MAP_SHARED | MAP_ANON, -1, 0);
     if (mem == MAP_FAILED) // cross-process counters degrade, but in-process eventfd still works
         mem = mmap(NULL, sz, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON, -1, 0);
     if (mem == MAP_FAILED) abort();
     g_eventfd_count = (uint64_t *)mem;
 }
+
+// Guest-requested O_NONBLOCK for an eventfd. The backing pipe's read end is kept PERMANENTLY O_NONBLOCK at
+// the host level so dd's internal counter/pipe drains never toggle the fd's flags — an eventfd is shared
+// across processes (fork / SCM_RIGHTS) as one open file description, so a transient host O_NONBLOCK flip in
+// one process's drain is observed by a concurrent reader in ANOTHER process (g_eventfd_lock is process-
+// private and cannot serialize it), which then wrongly takes the nonblocking path and returns a spurious
+// EAGAIN on a BLOCKING eventfd (Chrome's renderer↔gpu-process command-buffer / ScheduleWork wake fd). The
+// guest's REAL blocking/non-blocking intent lives here instead; the read path consults it and blocks via
+// poll() when the guest asked to block. Propagated on dup + SCM_RIGHTS import alongside the peer/slot.
+static uint8_t g_eventfd_gnb[DD_NFD];
+static int eventfd_guest_nb(int fd) { return (fd >= 0 && fd < DD_NFD) ? g_eventfd_gnb[fd] : 0; }
 
 __attribute__((constructor)) static void eventfd_count_ctor(void) {
     eventfd_count_init();

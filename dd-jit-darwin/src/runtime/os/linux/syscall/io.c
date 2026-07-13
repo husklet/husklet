@@ -38,6 +38,7 @@ static void fd_carry_virt(int newfd, int oldfd) {
         g_eventfd_peer[newfd] = g_eventfd_peer[oldfd];
         g_eventfd_cslot[newfd] = g_eventfd_cslot[oldfd];
         g_eventfd_sema[newfd] = g_eventfd_sema[oldfd];
+        g_eventfd_gnb[newfd] = g_eventfd_gnb[oldfd]; // carry the guest blocking/non-blocking intent
         g_eventfd_refs[eventfd_counter_slot(oldfd)]++;
     }
     // timerfd: the timer is armed on the (host-shared) kqueue, so the dup drains the same expirations; carry
@@ -566,23 +567,24 @@ static int svc_io(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t
             // re-take the lock and re-check.
             pthread_mutex_lock(&g_eventfd_lock);
             while (g_eventfd_count[eslot] == 0) {
-                if (fcntl(rfd, F_GETFL) & O_NONBLOCK) {
-                    // If the backing pipe ever gets out of sync (readable while the logical eventfd counter is
-                    // zero), a nonblocking eventfd reader must not leave that stale byte behind: epoll would
-                    // report the fd ready forever while every read returns EAGAIN. Drain under the eventfd lock
-                    // so a concurrent writer cannot lose its fresh wake byte.
-                    int fl = fcntl(rfd, F_GETFL);
-                    if (fl >= 0 && !(fl & O_NONBLOCK)) fcntl(rfd, F_SETFL, fl | O_NONBLOCK);
+                if (eventfd_guest_nb(rfd)) {
+                    // Guest asked for non-blocking. The read end is ALWAYS host-O_NONBLOCK now, so no flag
+                    // toggle is needed (the toggle used to race a cross-process reader — the spurious-EAGAIN
+                    // bug). Drain any stale readiness byte so a level-triggered epoll won't report the fd
+                    // ready-forever, then return EAGAIN.
                     char stale[64];
                     while (read(rfd, stale, sizeof stale) > 0) {}
-                    if (fl >= 0 && !(fl & O_NONBLOCK)) fcntl(rfd, F_SETFL, fl);
                     pthread_mutex_unlock(&g_eventfd_lock);
                     G_RET(c) = (uint64_t)(-EAGAIN);
                     goto eventfd_read_done;
                 }
+                // Guest wants to block. The read end is O_NONBLOCK (a raw read would EAGAIN, not wait), so
+                // wait for a writer's 0->positive edge with poll(), then consume one readiness byte.
                 pthread_mutex_unlock(&g_eventfd_lock);
+                struct pollfd pf = {.fd = rfd, .events = POLLIN, .revents = 0};
+                poll(&pf, 1, -1); // block until a writer signals 0->positive
                 char b;
-                if (read(rfd, &b, 1) < 0) {} // block until a writer signals 0->positive
+                if (read(rfd, &b, 1) < 0) {} // consume one readiness byte (non-blocking; EAGAIN is fine)
                 pthread_mutex_lock(&g_eventfd_lock);
             }
             uint64_t v;
@@ -594,12 +596,10 @@ static int svc_io(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t
                 v = g_eventfd_count[eslot];
                 g_eventfd_count[eslot] = 0;
             }
-            // re-sync the pipe to "counter > 0": drain it, then re-signal one byte if still positive
-            int fl = fcntl(rfd, F_GETFL);
-            fcntl(rfd, F_SETFL, fl | O_NONBLOCK);
+            // re-sync the pipe to "counter > 0": drain it, then re-signal one byte if still positive. The
+            // read end is permanently O_NONBLOCK, so drain directly with no flag toggle (no cross-process race).
             char buf[64];
             while (read(rfd, buf, sizeof buf) > 0) {}
-            fcntl(rfd, F_SETFL, fl);
             if (g_eventfd_count[eslot] > 0) {
                 char b = 1;
                 if (write(g_eventfd_peer[rfd] - 1, &b, 1) < 0) {}
@@ -727,11 +727,11 @@ static int svc_io(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t
             // never re-fires and a blocked epoll_wait hangs forever. Drain the pipe to exactly one fresh byte
             // so each write produces a new readable edge, bounded even when the reader never keeps up.
             if (add > 0) {
-                int fl = fcntl(wfd, F_GETFL);
-                if (fl >= 0 && !(fl & O_NONBLOCK)) fcntl(wfd, F_SETFL, fl | O_NONBLOCK);
+                // The read end is permanently O_NONBLOCK, so drain to exactly one fresh byte with no flag
+                // toggle. The old toggle mutated the cross-process-shared fd flags and a concurrent reader in
+                // another process observed the transient O_NONBLOCK -> spurious EAGAIN (the Chrome wake bug).
                 char buf[64];
                 while (read(wfd, buf, sizeof buf) > 0) {}
-                if (fl >= 0 && !(fl & O_NONBLOCK)) fcntl(wfd, F_SETFL, fl);
                 char b = 1;
                 if (write(g_eventfd_peer[wfd] - 1, &b, 1) < 0) {}
             }
@@ -1112,6 +1112,11 @@ static int svc_io(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t
             if (r & 0x4) lf |= 0x800;
             // APPEND/NONBLOCK/ASYNC
             if (r & 0x40) lf |= 0x2000;
+            // eventfd: the host read end is kept permanently O_NONBLOCK internally, so report the guest's
+            // OWN blocking/non-blocking intent (g_eventfd_gnb), not the host flag. See vfs.c g_eventfd_gnb.
+            if ((int)a0 >= 0 && (int)a0 < DD_NFD && g_eventfd_peer[(int)a0]) {
+                lf = eventfd_guest_nb((int)a0) ? (lf | 0x800) : (lf & ~0x800);
+            }
             int proc_text_for_log = ((int)a0 >= 0 && (int)a0 < DD_NFD && g_proc_text_ro[(int)a0]) ||
                                     (have_fgetpath && proc_text_host_path(fgetpath_buf));
             if (getenv("DD_FATALSIG_LOG") && proc_text_for_log) {
@@ -1134,6 +1139,13 @@ static int svc_io(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t
             if (la & 0x800) mf |= 0x4;
             // APPEND/NONBLOCK/ASYNC
             if (la & 0x2000) mf |= 0x40;
+            // eventfd: record the guest's blocking/non-blocking intent in the shadow and NEVER clear the
+            // host read end's O_NONBLOCK (the internal drains rely on it; clearing it would let a drain
+            // block). Other flag changes still apply to the host fd. See vfs.c g_eventfd_gnb.
+            if ((int)a0 >= 0 && (int)a0 < DD_NFD && g_eventfd_peer[(int)a0]) {
+                g_eventfd_gnb[(int)a0] = (la & 0x800) != 0;
+                mf |= 0x4; // keep host O_NONBLOCK on regardless of the guest's request
+            }
             int r = fcntl((int)a0, F_SETFL, mf);
             G_RET(c) = r < 0 ? (uint64_t)(-errno) : 0;
             break;

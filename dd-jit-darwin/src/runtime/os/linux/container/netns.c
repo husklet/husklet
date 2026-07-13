@@ -196,6 +196,7 @@ struct dd_cmsg_eventfd_meta {
     uint32_t ordinal;
     uint32_t slot;
     uint32_t sema;
+    uint32_t nb; // guest EFD_NONBLOCK intent (g_eventfd_gnb) — the host fd is always O_NONBLOCK internally
 };
 
 static __thread int g_cmsg_tmpfds[1024];
@@ -298,6 +299,13 @@ static int cmsg_import_eventfd_trailer(int *fds, int nfds) {
             g_eventfd_peer[pub] = h + 1;
             g_eventfd_cslot[pub] = (int)m->slot + 1;
             g_eventfd_sema[pub] = (uint8_t)(m->sema != 0);
+            g_eventfd_gnb[pub] = (uint8_t)(m->nb != 0); // carry the guest blocking/non-blocking intent
+            // The imported read end must be host-O_NONBLOCK too (internal drains rely on it); the sender set
+            // the write-side, but ensure the received public fd is non-blocking regardless of its origin.
+            {
+                int fl = fcntl(pub, F_GETFL);
+                if (fl >= 0 && !(fl & O_NONBLOCK)) fcntl(pub, F_SETFL, fl | O_NONBLOCK);
+            }
         } else {
             close(h);
         }
@@ -363,6 +371,7 @@ static ssize_t cmsg_l2m(const uint8_t *g, size_t glen, uint8_t *h, size_t cap, i
                     .ordinal = (uint32_t)i,
                     .slot = (uint32_t)eventfd_counter_slot(fd),
                     .sema = (uint32_t)(g_eventfd_sema[fd] != 0),
+                    .nb = (uint32_t)(g_eventfd_gnb[fd] != 0),
                 };
                 int marker = cmsg_eventfd_marker(&m);
                 if (marker < 0) {

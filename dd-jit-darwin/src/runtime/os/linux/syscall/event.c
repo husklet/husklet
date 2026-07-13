@@ -386,15 +386,17 @@ static int svc_event(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint6
             fcntl(peer, F_SETFD, FD_CLOEXEC);
             // EFD_CLOEXEC
         }
-        if (a1 & 0x800) {
-            fcntl(fds[0], F_SETFL, O_NONBLOCK);
-            // EFD_NONBLOCK
-        }
+        // Keep the read end PERMANENTLY O_NONBLOCK at the host level so the counter/pipe drains in io.c
+        // never toggle the (cross-process-shared) fd flags. The guest's real EFD_NONBLOCK intent is tracked
+        // in g_eventfd_gnb and honoured by the read path (poll() when the guest wants to block). See the
+        // g_eventfd_gnb note in vfs.c.
+        fcntl(fds[0], F_SETFL, O_NONBLOCK);
         // writes to the eventfd go to fds[1]; the counter + sema-flag live alongside.
         if (fds[0] >= 0 && fds[0] < DD_NFD) {
             g_eventfd_peer[fds[0]] = peer + 1;
             g_eventfd_cslot[fds[0]] = fds[0] + 1;
             g_eventfd_sema[fds[0]] = (a1 & 1) != 0; // EFD_SEMAPHORE
+            g_eventfd_gnb[fds[0]] = (a1 & 0x800) != 0; // EFD_NONBLOCK -> guest wants non-blocking reads
             g_eventfd_count[fds[0]] = a0;           // initval
             g_eventfd_refs[fds[0]] = 1;             // one alias (this fd); dup() bumps it (fd_carry_virt)
             if (a0 > 0) {

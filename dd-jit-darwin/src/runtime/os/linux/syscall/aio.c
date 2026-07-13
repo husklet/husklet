@@ -120,11 +120,10 @@ static void aio_eventfd_kick(int fd) {
     // across the bump + drain + re-signal so an AIO completion never races the guest's read()/write().
     pthread_mutex_lock(&g_eventfd_lock);
     g_eventfd_count[eslot] += 1;
-    int fl = fcntl(fd, F_GETFL);
-    if (fl >= 0 && !(fl & O_NONBLOCK)) fcntl(fd, F_SETFL, fl | O_NONBLOCK);
+    // The read end is permanently O_NONBLOCK, so drain to one fresh byte with no flag toggle (the old
+    // toggle mutated the cross-process-shared fd flags — see io.c / vfs.c g_eventfd_gnb).
     char buf[64];
     while (read(fd, buf, sizeof buf) > 0) {}
-    if (fl >= 0 && !(fl & O_NONBLOCK)) fcntl(fd, F_SETFL, fl);
     char b = 1;
     if (write(g_eventfd_peer[fd] - 1, &b, 1) < 0) {}
     pthread_mutex_unlock(&g_eventfd_lock);

@@ -212,6 +212,40 @@ fn ext_ipc() -> Group {
         port("pump-primary-channel", "ext_ipc/ipc_pump_primary_channel.c")
             .out("child primary-pump rounds=12000/12000 ok=1\nparent primary-pump sent=12000 child_exit=0\n")
             .only(&[Engine::LinuxAarch64, Engine::LinuxX86_64]),
+        // Chrome OOP-raster GPU command-buffer TRANSPORT — the multi-proc content-white wall (executor trace:
+        // 1913/1913 frames composite the present surface, off_draws=0; the renderer's raster never reaches the
+        // gpu-process RasterDecoder). Models the renderer→gpu command buffer NO other gate combines: two memfds
+        // (a small partial-host-page STATE region holding put/get offsets + a larger transfer-buffer RING),
+        // BOTH created by the child, transferred by SCM_RIGHTS, mmap'd MAP_SHARED by both, then driven as a
+        // producer/consumer ring under ring-wrap and a >1024-fd interest set, with an eventfd AsyncFlush wake.
+        // The consumer verifies every command's magic+seq+payload is coherent (cross-process MAP_SHARED memfd
+        // coherence — the transfer buffer) and advances get; a lost wake or a stale put-offset (STATE partial-
+        // page incoherence) is caught by the watchdog (exit 7, sub-classified). SharedImage allocation (a pure
+        // Mojo message) works today, so if THIS reproduces, the wall is the shared-memory command ring, not a
+        // wakeup. FIX LOCUS on failure: mem.c MAP_SHARED memfd / 16 KB-vs-4 KB partial-page coherence, or
+        // event.c eventfd cross-process wake. Passing => the transport is correct; the live wall is Chromium-
+        // internal command-buffer scheduling. Linux engines only.
+        port("cmdbuf-ring", "ext_ipc/ipc_cmdbuf_ring.c")
+            .out("cmdbuf_ring ok cmds=200000 wraps=390 child_exit=0 spurious_eagain=0\n")
+            .only(&[Engine::LinuxAarch64, Engine::LinuxX86_64]),
+        // Cross-process eventfd COUNTER semantics: a blocking eventfd created flags=0, then fork()'d; the
+        // child writes value 5, the parent blocking-reads. eventfd is a SHARED kernel object — the parent
+        // must read exactly 5 (the child's write), not a process-local counter. Models Chrome's Mojo
+        // ScheduleWork / command-buffer flush eventfd shared renderer↔gpu-process.
+        port("efd-xproc", "ext_ipc/ipc_efd_xproc.c")
+            .out("efd_xproc r=8 got=5 errno=0 child=0\n")
+            .only(&[Engine::LinuxAarch64, Engine::LinuxX86_64]),
+        // Same, but the eventfd is transferred to the child by SCM_RIGHTS (Chrome's Mojo path), and the child
+        // WRITES the shared counter through the RECEIVED fd while the parent reads through the original.
+        port("efd-scm", "ext_ipc/ipc_efd_scm.c")
+            .out("efd_scm r=8 got=5 errno=0 child=0\n")
+            .only(&[Engine::LinuxAarch64, Engine::LinuxX86_64]),
+        // Same SCM_RIGHTS eventfd, but the process first opens >1024 fds (Chrome's high-fd regime) so the
+        // eventfd lands at a fd number ABOVE 1024. The engine's cross-process shared eventfd counter array
+        // is only 1024 slots wide, indexed by fd number — a high-fd eventfd falls off the shared counter.
+        port("efd-scm-hifd", "ext_ipc/ipc_efd_scm_hifd.c")
+            .out("efd_scm r=8 got=5 errno=0 child=0\n")
+            .only(&[Engine::LinuxAarch64, Engine::LinuxX86_64]),
         // Chrome child-process Mojo BOOTSTRAP end-to-end (the multi-process dormant-renderer hypothesis):
         // the browser hands a launched child its platform channel + a shared-memory command buffer by
         // placing each fd at a fixed number and naming that number on the command line (Chrome's
