@@ -8,6 +8,8 @@ not authorize code, test, package, path, or brand changes by itself.
 3. [`phase_3_rebrand/`](phase_3_rebrand/) — rename the product to **husklet** after test ownership is stable.
 4. [`phase_4_rendering/`](phase_4_rendering/) — close residual API, executor, compositor, presentation and
    application rendering gaps with behavioral evidence.
+5. [`phase_5_engine/`](phase_5_engine/) — extract the Linux execution engine into portable C libraries,
+   a versioned host-services seam, and a narrow Rust binding crate.
 
 The phases are ordered. Phase 2 must not be mixed with the rebrand: otherwise a failing test move cannot
 be distinguished from a renamed package, binary, environment variable, or persisted path. Phase 3 starts
