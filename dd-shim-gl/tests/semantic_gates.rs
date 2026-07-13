@@ -48,6 +48,55 @@ fn sync_objects_track_submission_completion_and_stale_handles() {
     assert_eq!(gles::glClientWaitSync(sync,0,0),GL_WAIT_FAILED);assert_eq!(gles::glGetError(),GL_INVALID_VALUE);
 }
 
+// ---- gles_sync_objects_track_real_submission_completion_and_wait_results (frame-ack coupling) ----
+
+#[test]
+fn sync_completion_advances_on_real_frame_submission_ack() {
+    let _serial = serial_guard();
+    // Host-tool mode: present_frame writes the IR and returns Ok (a synchronous stand-in for the
+    // transport's ACK_OK), so the completion boundary is exercised without a live executor socket.
+    std::env::set_var("DD_IR_DUMP", std::env::temp_dir().join("dd-sync-present-mirror.ir"));
+    while gles::glGetError() != GL_NO_ERROR {}
+    let display = egl::eglGetDisplay(core::ptr::null_mut());
+    assert_eq!(egl::eglInitialize(display, core::ptr::null_mut(), core::ptr::null_mut()), EGL_TRUE);
+    // Present on the DEFAULT share group (no context made current — like the flush/finish gate), so the
+    // group `eglCreateWindowSurface` brought the surface up on is the same one `glClear`/`eglSwapBuffers`
+    // operate on. (A separately-current context can land in a fresh share group whose surf isn't "up".)
+    let surface = egl::eglCreateWindowSurface(display, 1usize as *mut c_void, core::ptr::null_mut(), core::ptr::null());
+    assert!(!surface.is_null());
+    let _ = egl::eglGetError();
+
+    // A fence created now captures the current submission serial and is UNSIGNALED: no frame carrying
+    // its work has been submitted+acked yet. A zero-timeout, no-flush wait must report timeout (it must
+    // NOT locally force-complete).
+    let sync = gles::glFenceSync(GL_SYNC_GPU_COMMANDS_COMPLETE, 0);
+    assert!(!sync.is_null());
+    let mut status = -1;
+    let mut len = 0;
+    gles::glGetSynciv(sync, GL_SYNC_STATUS, 1, &mut len, &mut status);
+    assert_eq!(status, GL_UNSIGNALED, "fence signaled before any frame was submitted");
+    assert_eq!(
+        gles::glClientWaitSync(sync, 0, 0),
+        GL_TIMEOUT_EXPIRED,
+        "a no-flush zero-timeout wait must not locally complete an un-acked fence"
+    );
+
+    // Record a frame and present it. The successful submit+ack (present_frame -> Ok) advances the REAL
+    // completion serial past the fence — so it is now signaled WITHOUT any glFinish flush.
+    gles::glClear(GL_COLOR_BUFFER_BIT);
+    assert_eq!(egl::eglSwapBuffers(display, surface), EGL_TRUE);
+    gles::glGetSynciv(sync, GL_SYNC_STATUS, 1, &mut len, &mut status);
+    assert_eq!(status, GL_SIGNALED, "a frame ack must complete an earlier fence");
+    assert_eq!(
+        gles::glClientWaitSync(sync, 0, 0),
+        GL_ALREADY_SIGNALED,
+        "fence must report already-signaled after the frame ack, with no flush"
+    );
+
+    gles::glDeleteSync(sync);
+    egl::eglDestroySurface(display, surface);
+}
+
 #[test]
 fn texture_upload_validation_is_atomic_and_honors_padded_rows() {
     let _serial = serial_guard();
@@ -430,7 +479,6 @@ fn framebuffer_completeness_tracks_color_attachment_and_blocks_draws() {
     gles::glDeleteFramebuffers(1, &fbo);
 }
 
-#[test]
 // ---- gles_framebuffer_completeness_reflects_attachment_state_and_blocks_draws (depth/stencil) ----
 
 #[test]

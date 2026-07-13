@@ -323,6 +323,25 @@ pub fn submission_serials() -> (u64, u64) {
     use std::sync::atomic::Ordering;
     (SUBMIT_SERIAL.load(Ordering::SeqCst), COMPLETE_SERIAL.load(Ordering::SeqCst))
 }
+
+/// A frame was submitted to the host GPU-exec service AND acknowledged as complete — the real
+/// cross-process boundary. The transport's `submit` returns only on `ACK_OK` (the host replayed and
+/// committed the render; the host-tool / `DD_IR_DUMP` path is a synchronous successful write), so on
+/// return the frame is genuinely accepted+completed. Advance the submission serial for the frame and
+/// catch completion up to it, so every fence/sync (`glFenceSync`) created during the frame is now
+/// signaled by an ACTUAL host acknowledgement rather than a local `glFinish`. Called by `eglSwapBuffers`
+/// after a successful present. Never rewinds completion (monotonic max).
+pub fn note_frame_presented() {
+    use std::sync::atomic::Ordering;
+    let submitted = SUBMIT_SERIAL.fetch_add(1, Ordering::SeqCst) + 1;
+    let mut done = COMPLETE_SERIAL.load(Ordering::SeqCst);
+    while done < submitted {
+        match COMPLETE_SERIAL.compare_exchange(done, submitted, Ordering::SeqCst, Ordering::SeqCst) {
+            Ok(_) => break,
+            Err(cur) => done = cur,
+        }
+    }
+}
 #[no_mangle]
 pub extern "C" fn glGenerateMipmap(_target: u32) {}
 

@@ -791,6 +791,11 @@ pub extern "C" fn eglSwapBuffers(_dpy: *mut c_void, surface: *mut c_void) -> u32
             crate::state::egl_set_error(EGL_CONTEXT_LOST);
             return EGL_FALSE;
         }
+        // The host accepted AND acknowledged the frame (the transport `submit` returns only on
+        // ACK_OK; the IR-dump path is a synchronous successful write), so this is the real
+        // cross-process completion boundary: advance the sync completion serial. A fence created
+        // earlier in the frame is now signaled by an actual host ack, not a local glFinish.
+        crate::gles::note_frame_presented();
     }
     // Delivery succeeded (or there was no IR to send): now reset per-frame draw state.
     {
