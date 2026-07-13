@@ -337,6 +337,93 @@ fn framebuffer_completeness_tracks_color_attachment_and_blocks_draws() {
 }
 
 #[test]
+// ---- gles_framebuffer_completeness_reflects_attachment_state_and_blocks_draws (depth/stencil) ----
+
+#[test]
+fn framebuffer_depth_stencil_completeness_and_read_blit_guards() {
+    let _serial = serial_guard();
+    while gles::glGetError() != GL_NO_ERROR {}
+    const RGBA8: u32 = 0x8058;
+    const DEPTH_COMPONENT16: u32 = 0x81A5;
+    const DEPTH24_STENCIL8: u32 = 0x88F0;
+    const DEPTH_STENCIL_ATTACHMENT: u32 = 0x821A;
+
+    // A complete 8x4 color-texture FBO (unchanged color-only behavior).
+    let mut fbo = 0;
+    gles::glGenFramebuffers(1, &mut fbo);
+    gles::glBindFramebuffer(GL_FRAMEBUFFER, fbo);
+    let mut tex = 0;
+    gles::glGenTextures(1, &mut tex);
+    gles::glBindTexture(GL_TEXTURE_2D, tex);
+    gles::glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA as i32, 8, 4, 0, GL_RGBA, GL_UNSIGNED_BYTE, core::ptr::null());
+    gles::glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, tex, 0);
+    assert_eq!(gles::glCheckFramebufferStatus(GL_FRAMEBUFFER), GL_FRAMEBUFFER_COMPLETE);
+
+    // A matching 8x4 depth renderbuffer keeps it complete.
+    let mut depth = 0;
+    gles::glGenRenderbuffers(1, &mut depth);
+    gles::glBindRenderbuffer(GL_RENDERBUFFER, depth);
+    gles::glRenderbufferStorage(GL_RENDERBUFFER, DEPTH_COMPONENT16, 8, 4);
+    gles::glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_RENDERBUFFER, depth);
+    assert_eq!(gles::glGetError(), GL_NO_ERROR, "attaching a depth renderbuffer must be accepted");
+    assert_eq!(gles::glCheckFramebufferStatus(GL_FRAMEBUFFER), GL_FRAMEBUFFER_COMPLETE);
+
+    // A dimension mismatch (depth rbo resized to 16x4) makes the FBO incomplete.
+    gles::glRenderbufferStorage(GL_RENDERBUFFER, DEPTH_COMPONENT16, 16, 4);
+    assert_eq!(
+        gles::glCheckFramebufferStatus(GL_FRAMEBUFFER),
+        GL_FRAMEBUFFER_INCOMPLETE_DIMENSIONS,
+        "mismatched depth/color dimensions must be incomplete"
+    );
+    // An incomplete draw FBO blocks draws and clears (attachment-state reflected).
+    gles::glDrawArrays(GL_TRIANGLES, 0, 3);
+    assert_eq!(gles::glGetError(), GL_INVALID_FRAMEBUFFER_OPERATION);
+    // Restore a matching depth size → complete again.
+    gles::glRenderbufferStorage(GL_RENDERBUFFER, DEPTH_COMPONENT16, 8, 4);
+    assert_eq!(gles::glCheckFramebufferStatus(GL_FRAMEBUFFER), GL_FRAMEBUFFER_COMPLETE);
+
+    // A stencil attachment whose format has no stencil aspect (a depth-only rbo) is incomplete.
+    gles::glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_STENCIL_ATTACHMENT, GL_RENDERBUFFER, depth);
+    assert_eq!(
+        gles::glCheckFramebufferStatus(GL_FRAMEBUFFER),
+        GL_FRAMEBUFFER_INCOMPLETE_ATTACHMENT,
+        "a depth-only rbo cannot satisfy a stencil attachment"
+    );
+    // Detach the bad stencil; a combined DEPTH24_STENCIL8 rbo satisfies both aspects at once.
+    gles::glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_STENCIL_ATTACHMENT, GL_RENDERBUFFER, 0);
+    gles::glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_RENDERBUFFER, 0);
+    let mut ds = 0;
+    gles::glGenRenderbuffers(1, &mut ds);
+    gles::glBindRenderbuffer(GL_RENDERBUFFER, ds);
+    gles::glRenderbufferStorage(GL_RENDERBUFFER, DEPTH24_STENCIL8, 8, 4);
+    gles::glFramebufferRenderbuffer(GL_FRAMEBUFFER, DEPTH_STENCIL_ATTACHMENT, GL_RENDERBUFFER, ds);
+    assert_eq!(gles::glCheckFramebufferStatus(GL_FRAMEBUFFER), GL_FRAMEBUFFER_COMPLETE);
+    // Deleting the depth-stencil renderbuffer detaches it → back to color-only complete.
+    gles::glDeleteRenderbuffers(1, &ds);
+    assert_eq!(gles::glCheckFramebufferStatus(GL_FRAMEBUFFER), GL_FRAMEBUFFER_COMPLETE);
+
+    // Read/blit guard: an incomplete READ framebuffer blocks glBlitFramebuffer (source guard).
+    let mut incomplete = 0;
+    gles::glGenFramebuffers(1, &mut incomplete);
+    gles::glBindFramebuffer(GL_READ_FRAMEBUFFER, incomplete); // no attachment → incomplete
+    gles::glBindFramebuffer(GL_DRAW_FRAMEBUFFER, fbo); // complete
+    while gles::glGetError() != GL_NO_ERROR {}
+    gles::glBlitFramebuffer(0, 0, 8, 4, 0, 0, 8, 4, GL_COLOR_BUFFER_BIT, GL_NEAREST);
+    assert_eq!(
+        gles::glGetError(),
+        GL_INVALID_FRAMEBUFFER_OPERATION,
+        "blit from an incomplete read framebuffer must be rejected"
+    );
+    let _ = RGBA8;
+
+    gles::glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    gles::glDeleteFramebuffers(1, &fbo);
+    gles::glDeleteFramebuffers(1, &incomplete);
+    gles::glDeleteTextures(1, &tex);
+    gles::glDeleteRenderbuffers(1, &depth);
+}
+
+#[test]
 fn generated_names_bind_lazily_and_deletion_detaches_every_binding() {
     let _serial = serial_guard();
     while gles::glGetError() != GL_NO_ERROR {}

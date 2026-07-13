@@ -29,6 +29,10 @@ pub struct Fbo {
     pub color_rbo: u32,
     pub color_level: i32,
     pub color_layer: i32,
+    /// Depth / stencil renderbuffer attachments (0 = none). A combined `GL_DEPTH_STENCIL_ATTACHMENT`
+    /// sets BOTH to the same renderbuffer. Used for framebuffer-completeness of depth/stencil buffers.
+    pub depth_rbo: u32,
+    pub stencil_rbo: u32,
 }
 
 /// A renderbuffer object (gl_shim.c `struct rbo`).
@@ -669,17 +673,14 @@ impl GlState {
             return GL_FRAMEBUFFER_INCOMPLETE_MISSING_ATTACHMENT;
         }
         let fb = &self.fbo[f];
-        if fb.color_tex != 0 {
+        // --- color attachment: unchanged behavior (byte-parity), but also yields the reference
+        //     dimensions the depth/stencil attachments must agree with. ---
+        let color_dims: Option<(i32, i32)> = if fb.color_tex != 0 {
             let t = fb.color_tex as usize;
-            if t < MAXTEX
-                && self.tex[t].used
-                && fb.color_level == 0
-                && self.tex[t].w > 0
-                && self.tex[t].h > 0
-            {
-                GL_FRAMEBUFFER_COMPLETE
+            if t < MAXTEX && self.tex[t].used && fb.color_level == 0 && self.tex[t].w > 0 && self.tex[t].h > 0 {
+                Some((self.tex[t].w, self.tex[t].h))
             } else {
-                GL_FRAMEBUFFER_INCOMPLETE_ATTACHMENT
+                return GL_FRAMEBUFFER_INCOMPLETE_ATTACHMENT;
             }
         } else if fb.color_rbo != 0 {
             let r = fb.color_rbo as usize;
@@ -689,13 +690,52 @@ impl GlState {
                 && self.rbo[r].h > 0
                 && !matches!(self.rbo[r].ifmt, 0x81A5 | 0x81A6 | 0x81A7 | 0x8D48 | 0x88F0);
             if color_renderable {
-                GL_FRAMEBUFFER_COMPLETE
+                Some((self.rbo[r].w, self.rbo[r].h))
             } else {
-                GL_FRAMEBUFFER_INCOMPLETE_ATTACHMENT
+                return GL_FRAMEBUFFER_INCOMPLETE_ATTACHMENT;
             }
         } else {
-            GL_FRAMEBUFFER_INCOMPLETE_MISSING_ATTACHMENT
+            None
+        };
+
+        // --- depth / stencil attachments: each present one must be a live renderbuffer whose format
+        //     actually supplies the required aspect, else the attachment is incomplete. ---
+        let ds_dims = |rbo: u32, need_depth: bool, need_stencil: bool| -> Result<Option<(i32, i32)>, ()> {
+            if rbo == 0 {
+                return Ok(None);
+            }
+            let r = rbo as usize;
+            if r >= MAXRBO || !self.rbo[r].used || self.rbo[r].w <= 0 || self.rbo[r].h <= 0 {
+                return Err(());
+            }
+            let ifmt = self.rbo[r].ifmt;
+            let has_depth = matches!(ifmt, 0x81A5 | 0x81A6 | 0x81A7 | 0x88F0 | 0x8CAC | 0x8CAD);
+            let has_stencil = matches!(ifmt, 0x8D48 | 0x88F0 | 0x8CAD);
+            if (need_depth && !has_depth) || (need_stencil && !has_stencil) {
+                return Err(());
+            }
+            Ok(Some((self.rbo[r].w, self.rbo[r].h)))
+        };
+        let depth_dims = match ds_dims(fb.depth_rbo, true, false) {
+            Ok(d) => d,
+            Err(()) => return GL_FRAMEBUFFER_INCOMPLETE_ATTACHMENT,
+        };
+        let stencil_dims = match ds_dims(fb.stencil_rbo, false, true) {
+            Ok(d) => d,
+            Err(()) => return GL_FRAMEBUFFER_INCOMPLETE_ATTACHMENT,
+        };
+
+        // At least one attachment must exist.
+        let dims = [color_dims, depth_dims, stencil_dims];
+        if dims.iter().all(|d| d.is_none()) {
+            return GL_FRAMEBUFFER_INCOMPLETE_MISSING_ATTACHMENT;
         }
+        // Every present attachment must share the same dimensions (ES2 completeness rule).
+        let first = dims.iter().flatten().next().copied();
+        if dims.iter().flatten().any(|&d| Some(d) != first) {
+            return GL_FRAMEBUFFER_INCOMPLETE_DIMENSIONS;
+        }
+        GL_FRAMEBUFFER_COMPLETE
     }
 
     /// An FBO's color texture *with data* (gl_shim.c `fbo_color_texture`) — for readback/blit.

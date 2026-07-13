@@ -1963,7 +1963,9 @@ pub extern "C" fn glFramebufferRenderbuffer(target: u32, attachment: u32, rbtarg
         }
         return;
     }
-    if attachment != GL_COLOR_ATTACHMENT0 || rbtarget != GL_RENDERBUFFER {
+    if !matches!(attachment, GL_COLOR_ATTACHMENT0 | GL_DEPTH_ATTACHMENT | GL_STENCIL_ATTACHMENT | GL_DEPTH_STENCIL_ATTACHMENT)
+        || rbtarget != GL_RENDERBUFFER
+    {
         if s.error == GL_NO_ERROR {
             s.error = GL_INVALID_ENUM;
         }
@@ -1982,10 +1984,22 @@ pub extern "C" fn glFramebufferRenderbuffer(target: u32, attachment: u32, rbtarg
         return;
     }
     let fb = &mut s.fbo[f as usize];
-    fb.color_tex = 0;
-    fb.color_rbo = rbo;
-    fb.color_level = 0;
-    fb.color_layer = 0;
+    match attachment {
+        GL_COLOR_ATTACHMENT0 => {
+            fb.color_tex = 0;
+            fb.color_rbo = rbo;
+            fb.color_level = 0;
+            fb.color_layer = 0;
+        }
+        GL_DEPTH_ATTACHMENT => fb.depth_rbo = rbo,
+        GL_STENCIL_ATTACHMENT => fb.stencil_rbo = rbo,
+        // A combined depth-stencil renderbuffer attaches to both aspects (ES3 §9.2.2).
+        GL_DEPTH_STENCIL_ATTACHMENT => {
+            fb.depth_rbo = rbo;
+            fb.stencil_rbo = rbo;
+        }
+        _ => unreachable!(),
+    }
 }
 
 fn rbo_component_bits(ifmt: u32) -> (i32, i32, i32, i32, i32, i32) {
@@ -2131,6 +2145,12 @@ pub extern "C" fn glDeleteRenderbuffers(n: i32, ids: *const u32) {
                 if s.fbo[f].color_rbo == id {
                     s.fbo[f].color_rbo = 0;
                 }
+                if s.fbo[f].depth_rbo == id {
+                    s.fbo[f].depth_rbo = 0;
+                }
+                if s.fbo[f].stencil_rbo == id {
+                    s.fbo[f].stencil_rbo = 0;
+                }
             }
         }
     }
@@ -2202,6 +2222,15 @@ pub extern "C" fn glBlitFramebuffer(sx0: i32, sy0: i32, sx1: i32, sy1: i32, dx0:
         return;
     }
     let mut s = gl();
+    // Read/blit source and target guard: both the read and draw framebuffers must be complete before a
+    // blit reads from one and writes the other (a conforming driver raises here rather than sampling an
+    // incomplete attachment).
+    if s.framebuffer_status(s.read_fbo) != GL_FRAMEBUFFER_COMPLETE || s.framebuffer_status(s.draw_fbo) != GL_FRAMEBUFFER_COMPLETE {
+        if s.error == GL_NO_ERROR {
+            s.error = GL_INVALID_FRAMEBUFFER_OPERATION;
+        }
+        return;
+    }
     let src = s.fbo_color_texture(s.read_fbo);
     let dst = s.fbo_color_texture(s.draw_fbo);
     if src == 0 || dst == 0 || src == dst {
