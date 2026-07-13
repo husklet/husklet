@@ -642,6 +642,19 @@ fn texel_at(pixels: &[u8], tex_w: usize, x: usize, y: usize, bpt: usize) -> &[u8
     &pixels[off..off + bpt]
 }
 
+fn srgb_decode(v: u8) -> f32 {
+    let x = v as f32 / 255.0;
+    if x <= 0.04045 { x / 12.92 } else { ((x + 0.055) / 1.055).powf(2.4) }
+}
+fn srgb_encode(v: f32) -> u8 {
+    let x = v.clamp(0.0, 1.0);
+    let y = if x <= 0.0031308 { x * 12.92 } else { 1.055 * x.powf(1.0 / 2.4) - 0.055 };
+    (y * 255.0 + 0.5) as u8
+}
+fn is_srgb(f: TextureFormat) -> bool {
+    matches!(f, TextureFormat::Rgba8Srgb | TextureFormat::Bgra8Srgb)
+}
+
 /// Bilinearly sample a tight-packed color plane at fractional `(fx, fy)` (in absolute texel space),
 /// clamping neighbors to `[lo, hi]` in each axis — the oracle's `Filter::Linear` blit path.
 fn sample_bilinear(
@@ -654,6 +667,7 @@ fn sample_bilinear(
     x_hi: usize,
     y_lo: usize,
     y_hi: usize,
+    format: TextureFormat,
 ) -> Vec<u8> {
     // Clamp the sample point to the texel-center range so a coordinate left of the first center (or right
     // of the last) resolves to the edge texel with zero fractional weight (clamp-to-edge, like a real GPU).
@@ -671,9 +685,11 @@ fn sample_bilinear(
     let p11 = texel_at(pixels, tex_w, x1, y1, bpt);
     let mut out = Vec::with_capacity(bpt);
     for c in 0..bpt {
-        let top = p00[c] as f32 * (1.0 - tx) + p10[c] as f32 * tx;
-        let bot = p01[c] as f32 * (1.0 - tx) + p11[c] as f32 * tx;
-        out.push((top * (1.0 - ty) + bot * ty + 0.5) as u8);
+        let cv = |v: u8| if c < 3 && is_srgb(format) { srgb_decode(v) } else { v as f32 / 255.0 };
+        let top = cv(p00[c]) * (1.0 - tx) + cv(p10[c]) * tx;
+        let bot = cv(p01[c]) * (1.0 - tx) + cv(p11[c]) * tx;
+        let v = top * (1.0 - ty) + bot * ty;
+        out.push(if c < 3 && is_srgb(format) { srgb_encode(v) } else { (v * 255.0 + 0.5) as u8 });
     }
     out
 }
@@ -1020,9 +1036,9 @@ impl GpuBackend for SoftwareBackend {
                 Enc::BlitTexture { src, src_origin, src_extent, dst, dst_origin, dst_extent, filter, .. } => {
                     // Resample src's [src_origin, src_extent) region into dst's [dst_origin, dst_extent)
                     // region — nearest or bilinear. Clone the source plane so a blit-to-self is well-defined.
-                    let (sw, bpt) = {
+                    let (sw, bpt, src_fmt) = {
                         let t = self.textures.get(*src)?;
-                        (t.desc.width as usize, Self::texel_bytes(t.desc.format)?)
+                        (t.desc.width as usize, Self::texel_bytes(t.desc.format)?,t.desc.format)
                     };
                     let src_pixels = self.textures.get(*src)?.pixels.clone();
                     let (sox, soy) = (src_origin.x as usize, src_origin.y as usize);
@@ -1044,6 +1060,7 @@ impl GpuBackend for SoftwareBackend {
                                 Filter::Linear => sample_bilinear(
                                     &src_pixels, sw, bpt, fx, fy,
                                     sox, sox + sew - 1, soy, soy + seh - 1,
+                                    src_fmt,
                                 ),
                             };
                             let ddx = dst_origin.x as usize + dx;
@@ -1082,5 +1099,20 @@ impl GpuBackend for SoftwareBackend {
             height: t.desc.height,
             format_ok,
         })
+    }
+}
+
+#[cfg(test)]
+mod srgb_tests {
+    use super::*;
+    #[test]
+    fn bilinear_filtering_is_linear_light_and_alpha_is_linear() {
+        let p = [0, 0, 0, 0, 255, 255, 255, 255];
+        assert_eq!(sample_bilinear(&p, 2, 4, 1.0, 0.5, 0, 1, 0, 0, TextureFormat::Rgba8Srgb), [188, 188, 188, 128]);
+    }
+    #[test]
+    fn unorm_math_and_raw_copies_remain_byte_domain() {
+        let p = [0, 0, 0, 0, 255, 255, 255, 255];
+        assert_eq!(sample_bilinear(&p, 2, 4, 1.0, 0.5, 0, 1, 0, 0, TextureFormat::Rgba8Unorm), [128, 128, 128, 128]);
     }
 }

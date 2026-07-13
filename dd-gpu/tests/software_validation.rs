@@ -616,6 +616,26 @@ fn copy_texture_to_texture_moves_the_requested_region() {
 }
 
 #[test]
+fn srgb_copy_texture_to_texture_is_bit_preserving() {
+    let mut be = SoftwareBackend::new();
+    let bytes = [3u8, 17, 129, 211, 250, 99, 40, 7];
+    for id in [1, 2] {
+        be.create_texture(TextureId(id), &tex(2, 1, TextureFormat::Rgba8Srgb, texture_usage::COPY_SRC | texture_usage::COPY_DST)).unwrap();
+    }
+    be.create_buffer(BufferId(9), &buf(8, buffer_usage::COPY_SRC)).unwrap();
+    be.write_buffer(BufferId(9), 0, &bytes).unwrap();
+    be.submit(&CommandBuffer {
+        encoder: vec![
+            Enc::CopyBufferToTexture { src: 9, src_offset: 0, bytes_per_row: 0, dst: 1, mip: 0, width: 2, height: 1 },
+            Enc::CopyTextureToTexture { src: 1, src_sub: sub0(), src_origin: Origin3d::default(), dst: 2, dst_sub: sub0(), dst_origin: Origin3d::default(), extent: Extent3d { width: 2, height: 1, depth: 1 } },
+        ], signal: None,
+    }).unwrap();
+    let mut out = [0u8; 8];
+    be.read_texture(TextureId(2), &mut out).unwrap();
+    assert_eq!(out, bytes);
+}
+
+#[test]
 fn blit_nearest_scales_up_by_block_replication() {
     let mut be = SoftwareBackend::new();
     // 2x2 src: red, green / blue, white.
