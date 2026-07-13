@@ -39,6 +39,9 @@ fn advertised_extensions() -> HashSet<&'static str> {
         "VK_KHR_wayland_surface",
         "VK_KHR_get_physical_device_properties2",
         "VK_KHR_swapchain",
+        "VK_KHR_timeline_semaphore",
+        "VK_KHR_dynamic_rendering",
+        "VK_KHR_buffer_device_address",
     ]
     .into_iter()
     .collect()
@@ -191,6 +194,20 @@ fn partial_note(name: &str) -> Option<&'static str> {
         }
         "vkGetPhysicalDeviceImageFormatProperties2" => {
             "the ...2 wrapper over the bounded 1.0 query: supported 2D color subset, else FORMAT_NOT_SUPPORTED"
+        }
+        // Modern extensions (ext.rs) — bounded domains:
+        "vkWaitSemaphores" | "vkWaitSemaphoresKHR" => {
+            "timeline waits are satisfied synchronously or report VK_TIMEOUT; no real blocking wait"
+        }
+        "vkCmdBeginRendering" | "vkCmdBeginRenderingKHR" | "vkCmdEndRendering" | "vkCmdEndRenderingKHR" => {
+            "dynamic rendering lowers one color attachment to the shared BeginRenderPass IR; no depth/multiview/multi-attachment"
+        }
+        "vkGetBufferDeviceAddress" | "vkGetBufferDeviceAddressKHR" | "vkGetBufferDeviceAddressEXT" => {
+            "a stable unique synthetic address per buffer; a shader cannot yet dereference it (no mapped GPU VA)"
+        }
+        "vkGetBufferOpaqueCaptureAddress" | "vkGetBufferOpaqueCaptureAddressKHR"
+        | "vkGetDeviceMemoryOpaqueCaptureAddress" | "vkGetDeviceMemoryOpaqueCaptureAddressKHR" => {
+            "no capture/replay support: opaque capture addresses are 0"
         }
         _ => return None,
     })
@@ -724,4 +741,27 @@ const IMPLEMENTED: &[&str] = &[
     "vkGetPhysicalDeviceExternalSemaphoreProperties",
     "vkGetPhysicalDeviceImageFormatProperties2",
     "vkGetPhysicalDeviceSparseImageFormatProperties2",
+    // ---- increment 6: modern extensions wgpu/Zed need (ext.rs). Ported from MoltenVK:
+    // MVKTimelineSemaphore, MVKCmd{Begin,End}Rendering, MVKBuffer::getDeviceAddress. Each exposes its
+    // promoted-core name + KHR/EXT alias (the alias delegates to the core body).
+    // VK_KHR_timeline_semaphore
+    "vkGetSemaphoreCounterValue",
+    "vkGetSemaphoreCounterValueKHR",
+    "vkSignalSemaphore",
+    "vkSignalSemaphoreKHR",
+    "vkWaitSemaphores",
+    "vkWaitSemaphoresKHR",
+    // VK_KHR_dynamic_rendering
+    "vkCmdBeginRendering",
+    "vkCmdBeginRenderingKHR",
+    "vkCmdEndRendering",
+    "vkCmdEndRenderingKHR",
+    // VK_KHR_buffer_device_address
+    "vkGetBufferDeviceAddress",
+    "vkGetBufferDeviceAddressKHR",
+    "vkGetBufferDeviceAddressEXT",
+    "vkGetBufferOpaqueCaptureAddress",
+    "vkGetBufferOpaqueCaptureAddressKHR",
+    "vkGetDeviceMemoryOpaqueCaptureAddress",
+    "vkGetDeviceMemoryOpaqueCaptureAddressKHR",
 ];

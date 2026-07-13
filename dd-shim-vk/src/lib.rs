@@ -43,6 +43,7 @@ pub mod command;
 pub mod descriptor;
 pub mod device;
 pub mod event;
+pub mod ext;
 pub mod handle;
 pub mod icd;
 pub mod instance;
@@ -63,6 +64,7 @@ pub use command::*;
 pub use descriptor::*;
 pub use device::*;
 pub use event::*;
+pub use ext::*;
 pub use icd::*;
 pub use instance::*;
 pub use memory::*;
@@ -419,5 +421,114 @@ mod tests {
         assert_eq!(b, buffer);
         assert_eq!(off, 0);
         assert_eq!(range, 256, "WHOLE_SIZE resolves to the buffer size");
+    }
+
+    // ---- modern extensions (VK_KHR_timeline_semaphore / dynamic_rendering / buffer_device_address) ----
+
+    /// The three wgpu/Zed extensions are advertised (allow-list) AND their commands are non-stub.
+    #[test]
+    fn advertises_modern_wgpu_extensions() {
+        for e in ["VK_KHR_timeline_semaphore", "VK_KHR_dynamic_rendering", "VK_KHR_buffer_device_address"] {
+            assert!(capability::ADVERTISED_DEVICE_EXTENSIONS.contains(&e), "{e} not advertised");
+        }
+        for n in ["vkWaitSemaphores", "vkWaitSemaphoresKHR", "vkCmdBeginRendering", "vkGetBufferDeviceAddress", "vkGetSemaphoreCounterValueKHR"] {
+            assert!(dispatch_addr(n).is_some(), "{n} not resolvable");
+            assert!(CAPABILITIES.iter().find(|c| c.name == n).unwrap().implemented(), "{n} still a stub");
+        }
+    }
+
+    /// Timeline semaphore: create (initial value), host-signal, poll the counter, and wait (satisfied vs
+    /// timeout). Builds on the semaphore state machine.
+    #[test]
+    fn timeline_semaphore_signal_wait_and_counter() {
+        let _g = reg::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        use ash::vk;
+        use ash::vk::Handle;
+        let mut type_info = vk::SemaphoreTypeCreateInfo::default().semaphore_type(vk::SemaphoreType::TIMELINE).initial_value(5);
+        let ci = vk::SemaphoreCreateInfo::default().push_next(&mut type_info);
+        let mut sem = 0u64;
+        assert_eq!(
+            vkCreateSemaphore(core::ptr::null_mut(), &ci as *const _ as *const core::ffi::c_void, core::ptr::null(), &mut sem),
+            types::VK_SUCCESS
+        );
+        let mut v = 0u64;
+        assert_eq!(vkGetSemaphoreCounterValue(core::ptr::null_mut(), sem, &mut v), types::VK_SUCCESS);
+        assert_eq!(v, 5, "counter starts at the initial value");
+        let si = vk::SemaphoreSignalInfo::default().semaphore(vk::Semaphore::from_raw(sem)).value(10);
+        assert_eq!(vkSignalSemaphore(core::ptr::null_mut(), &si), types::VK_SUCCESS);
+        assert_eq!(vkGetSemaphoreCounterValue(core::ptr::null_mut(), sem, &mut v), types::VK_SUCCESS);
+        assert_eq!(v, 10, "host signal advanced the counter");
+        let sems = [vk::Semaphore::from_raw(sem)];
+        let ok = [10u64];
+        let wi = vk::SemaphoreWaitInfo::default().semaphores(&sems).values(&ok);
+        assert_eq!(vkWaitSemaphores(core::ptr::null_mut(), &wi, 0), types::VK_SUCCESS, "reached value waits succeed");
+        let hi = [11u64];
+        let wi2 = vk::SemaphoreWaitInfo::default().semaphores(&sems).values(&hi);
+        assert_eq!(vkWaitSemaphores(core::ptr::null_mut(), &wi2, 0), types::VK_TIMEOUT, "unmet value times out");
+        vkDestroySemaphore(core::ptr::null_mut(), sem, core::ptr::null());
+    }
+
+    /// Buffer device address: non-zero, unique per buffer, and stable across calls.
+    #[test]
+    fn buffer_device_address_is_stable_and_unique() {
+        let _g = reg::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        use ash::vk;
+        use ash::vk::Handle;
+        let bci = vk::BufferCreateInfo::default().size(64).usage(vk::BufferUsageFlags::STORAGE_BUFFER | vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS);
+        let (mut b1, mut b2) = (0u64, 0u64);
+        assert_eq!(vkCreateBuffer(core::ptr::null_mut(), &bci, core::ptr::null(), &mut b1), types::VK_SUCCESS);
+        assert_eq!(vkCreateBuffer(core::ptr::null_mut(), &bci, core::ptr::null(), &mut b2), types::VK_SUCCESS);
+        let addr = |b: u64| {
+            let info = vk::BufferDeviceAddressInfo::default().buffer(vk::Buffer::from_raw(b));
+            vkGetBufferDeviceAddress(core::ptr::null_mut(), &info)
+        };
+        let (a1, a2) = (addr(b1), addr(b2));
+        assert_ne!(a1, 0);
+        assert_ne!(a2, 0);
+        assert_ne!(a1, a2, "distinct buffers get distinct addresses");
+        assert_eq!(a1, addr(b1), "address is stable across calls");
+        vkDestroyBuffer(core::ptr::null_mut(), b1, core::ptr::null());
+        vkDestroyBuffer(core::ptr::null_mut(), b2, core::ptr::null());
+    }
+
+    /// Dynamic rendering: `vkCmdBeginRendering` lowers a color attachment to the shared `BeginRenderPass`
+    /// IR (same executor path as a classic render pass), and `vkCmdEndRendering` closes it.
+    #[test]
+    fn dynamic_rendering_lowers_to_begin_render_pass() {
+        let _g = reg::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        use ash::vk;
+        use ash::vk::Handle;
+        let ici = vk::ImageCreateInfo::default()
+            .image_type(vk::ImageType::TYPE_2D).format(vk::Format::R8G8B8A8_UNORM)
+            .extent(vk::Extent3D { width: 8, height: 8, depth: 1 }).mip_levels(1).array_layers(1)
+            .samples(vk::SampleCountFlags::TYPE_1).usage(vk::ImageUsageFlags::COLOR_ATTACHMENT)
+            .initial_layout(vk::ImageLayout::UNDEFINED);
+        let mut img = 0u64;
+        assert_eq!(vkCreateImage(core::ptr::null_mut(), &ici, core::ptr::null(), &mut img), types::VK_SUCCESS);
+        let vci = vk::ImageViewCreateInfo::default()
+            .image(vk::Image::from_raw(img)).view_type(vk::ImageViewType::TYPE_2D).format(vk::Format::R8G8B8A8_UNORM)
+            .subresource_range(vk::ImageSubresourceRange { aspect_mask: vk::ImageAspectFlags::COLOR, base_mip_level: 0, level_count: 1, base_array_layer: 0, layer_count: 1 });
+        let mut view = 0u64;
+        assert_eq!(vkCreateImageView(core::ptr::null_mut(), &vci, core::ptr::null(), &mut view), types::VK_SUCCESS);
+
+        let cb = 0x7777usize as types::VkCommandBuffer;
+        let bi = vk::CommandBufferBeginInfo::default();
+        assert_eq!(vkBeginCommandBuffer(cb, &bi), types::VK_SUCCESS);
+        let att = vk::RenderingAttachmentInfo::default()
+            .image_view(vk::ImageView::from_raw(view)).image_layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL)
+            .load_op(vk::AttachmentLoadOp::CLEAR).store_op(vk::AttachmentStoreOp::STORE);
+        let atts = [att];
+        let ri = vk::RenderingInfo::default()
+            .render_area(vk::Rect2D { offset: vk::Offset2D { x: 0, y: 0 }, extent: vk::Extent2D { width: 8, height: 8 } })
+            .layer_count(1).color_attachments(&atts);
+        vkCmdBeginRendering(cb, &ri);
+        vkCmdEndRendering(cb);
+
+        let enc = reg::lock().cmdbufs[&(cb as usize)].enc.clone();
+        assert!(enc.iter().any(|e| matches!(e, common::ir::Enc::BeginRenderPass { .. })), "dynamic rendering opened a render pass");
+        assert!(enc.iter().any(|e| matches!(e, common::ir::Enc::EndRenderPass)), "dynamic rendering closed the render pass");
+        vkResetCommandBuffer(cb, 0);
+        vkDestroyImageView(core::ptr::null_mut(), view, core::ptr::null());
+        vkDestroyImage(core::ptr::null_mut(), img, core::ptr::null());
     }
 }

@@ -1364,16 +1364,21 @@ pub extern "C" fn vkQueueSubmit(
     // ---- phase 1: validate the whole batch before any mutation (atomic accept/reject) ----
     let mut cb_keys: Vec<usize> = Vec::new();
     let mut wait_sems: Vec<u64> = Vec::new();
-    let mut signal_sems: Vec<u64> = Vec::new();
+    let mut signal_sems: Vec<(u64, u64)> = Vec::new(); // (semaphore handle, timeline value; 0 = binary)
     for sub in submits {
-        // Wait semaphores must all exist and be signaled (else the batch cannot proceed).
+        // Wait semaphores must all exist and be satisfied: a binary semaphore must be signaled; a timeline
+        // semaphore's counter must already have reached the wait value (VK_KHR_timeline_semaphore — the
+        // signaling submit/host-signal ran earlier in this synchronous model).
         if !sub.p_wait_semaphores.is_null() {
             let waits = unsafe {
                 core::slice::from_raw_parts(sub.p_wait_semaphores, sub.wait_semaphore_count as usize)
             };
-            for &w in waits {
+            let wait_values = crate::ext::timeline_wait_values(sub.p_next as *const core::ffi::c_void);
+            for (i, &w) in waits.iter().enumerate() {
+                let need = wait_values.get(i).copied().unwrap_or(0);
                 match s.semaphores.get(&w.as_raw()) {
-                    Some(sm) if sm.signaled => wait_sems.push(w.as_raw()),
+                    Some(sm) if sm.timeline && sm.counter >= need => {}
+                    Some(sm) if !sm.timeline && sm.signaled => wait_sems.push(w.as_raw()),
                     _ => return VK_ERROR_INITIALIZATION_FAILED,
                 }
             }
@@ -1382,8 +1387,12 @@ pub extern "C" fn vkQueueSubmit(
             let sigs = unsafe {
                 core::slice::from_raw_parts(sub.p_signal_semaphores, sub.signal_semaphore_count as usize)
             };
-            for &sg in sigs {
-                signal_sems.push(sg.as_raw());
+            // VK_KHR_timeline_semaphore: a `VkTimelineSemaphoreSubmitInfo` in the submit's pNext carries the
+            // per-signal-semaphore counter values (aligned with pSignalSemaphores). Binary semaphores have
+            // no value (recorded as 0 and applied as `signaled = true`).
+            let values = crate::ext::timeline_signal_values(sub.p_next as *const core::ffi::c_void);
+            for (i, &sg) in sigs.iter().enumerate() {
+                signal_sems.push((sg.as_raw(), values.get(i).copied().unwrap_or(0)));
             }
         }
         if sub.p_command_buffers.is_null() {
@@ -1466,9 +1475,13 @@ pub extern "C" fn vkQueueSubmit(
             };
         }
     }
-    for sg in &signal_sems {
+    for (sg, value) in &signal_sems {
         if let Some(sm) = s.semaphores.get_mut(sg) {
-            sm.signaled = true;
+            if sm.timeline {
+                sm.counter = sm.counter.max(*value); // timeline signal advances the counter monotonically
+            } else {
+                sm.signaled = true;
+            }
         }
     }
     if fence != 0 {
@@ -1606,16 +1619,23 @@ pub extern "C" fn vkGetFenceStatus(_device: VkDevice, fence: VkFence) -> VkResul
 #[no_mangle]
 pub extern "C" fn vkCreateSemaphore(
     _device: VkDevice,
-    _p_create_info: *const c_void,
+    p_create_info: *const c_void,
     _p_allocator: *const c_void,
     p_semaphore: *mut VkSemaphore,
 ) -> VkResult {
     let Some(out) = (unsafe { p_semaphore.as_mut() }) else {
         return VK_ERROR_INITIALIZATION_FAILED;
     };
+    // VK_KHR_timeline_semaphore: a `VkSemaphoreTypeCreateInfo` in the pNext chain selects a timeline
+    // semaphore + its initial counter value (else a binary semaphore). Ported from `MVKSemaphore` /
+    // `MVKTimelineSemaphore`'s type dispatch.
+    let (timeline, initial) = crate::ext::parse_semaphore_type(p_create_info);
     let mut s = reg::lock();
     let handle = s.alloc_handle();
-    s.semaphores.insert(handle, reg::SemaphoreRec::default());
+    s.semaphores.insert(
+        handle,
+        reg::SemaphoreRec { signaled: false, timeline, counter: if timeline { initial } else { 0 } },
+    );
     *out = handle;
     VK_SUCCESS
 }

@@ -346,7 +346,9 @@ pub extern "C" fn vkGetPhysicalDeviceFormatProperties2(
 
 // ---- device-level enumeration (physical-device scoped) -------------------------------------------
 
-/// Device extensions the ICD implements: `VK_KHR_swapchain` (present), so a windowed app finds it.
+/// Device extensions the ICD implements: `VK_KHR_swapchain` (present) plus the modern wgpu/Zed set —
+/// timeline semaphores, dynamic rendering, buffer device address (see `crate::ext`). Must stay in
+/// lock-step with `crate::capability::ADVERTISED_DEVICE_EXTENSIONS`.
 #[no_mangle]
 pub extern "C" fn vkEnumerateDeviceExtensionProperties(
     _physical_device: VkPhysicalDevice,
@@ -354,7 +356,12 @@ pub extern "C" fn vkEnumerateDeviceExtensionProperties(
     p_count: *mut u32,
     p_props: *mut vk::ExtensionProperties,
 ) -> VkResult {
-    let exts = [ext_prop("VK_KHR_swapchain", 70)];
+    let exts = [
+        ext_prop("VK_KHR_swapchain", 70),
+        ext_prop("VK_KHR_timeline_semaphore", 2),
+        ext_prop("VK_KHR_dynamic_rendering", 1),
+        ext_prop("VK_KHR_buffer_device_address", 1),
+    ];
     unsafe { write_enumeration(&exts, p_count, p_props) }
 }
 

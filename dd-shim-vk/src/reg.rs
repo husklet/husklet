@@ -428,6 +428,12 @@ pub struct FenceRec {
 #[derive(Default)]
 pub struct SemaphoreRec {
     pub signaled: bool,
+    /// `VK_SEMAPHORE_TYPE_TIMELINE` (VK_KHR_timeline_semaphore): a monotonically increasing counter the
+    /// host reads (`vkGetSemaphoreCounterValue`), waits on (`vkWaitSemaphores`), and signals
+    /// (`vkSignalSemaphore` / a queue submit's `VkTimelineSemaphoreSubmitInfo` values).
+    pub timeline: bool,
+    /// The timeline counter value (0 for a binary semaphore).
+    pub counter: u64,
 }
 
 /// A `VkEvent` (MoltenVK `MVKEvent`): a guest-side boolean the host and device set/reset/poll. Created

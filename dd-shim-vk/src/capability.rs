@@ -70,7 +70,14 @@ pub const ADVERTISED_INSTANCE_EXTENSIONS: &[&str] =
 
 /// The device extensions the ICD advertises (must equal what `vkEnumerateDeviceExtensionProperties`
 /// returns).
-pub const ADVERTISED_DEVICE_EXTENSIONS: &[&str] = &["VK_KHR_swapchain"];
+pub const ADVERTISED_DEVICE_EXTENSIONS: &[&str] = &[
+    "VK_KHR_swapchain",
+    // Modern extensions wgpu-on-Vulkan / Zed require — advertised only because really implemented
+    // (see `crate::ext`): timeline semaphores, dynamic rendering, buffer device address.
+    "VK_KHR_timeline_semaphore",
+    "VK_KHR_dynamic_rendering",
+    "VK_KHR_buffer_device_address",
+];
 
 // The generated inventory (`CAPABILITIES`, `CAP_FULL`, `CAP_PARTIAL`, `CAP_STUB`, and the
 // Vulkan-1.0 mandatory-core census `CORE_1_0_*`) is emitted by build.rs and `include!`d at the crate
