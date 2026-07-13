@@ -189,6 +189,34 @@ impl Default for QueryObj {
     }
 }
 
+/// An ES3 transform-feedback object (`glGenTransformFeedbacks`/`glBindTransformFeedback`). The default
+/// object (name 0) always exists; named objects are created on first bind. `active`/`paused` model the
+/// begin/end/pause/resume state machine.
+#[derive(Clone, Copy, Default)]
+pub struct TransformFeedbackObj {
+    pub active: bool,
+    pub paused: bool,
+}
+
+/// One indexed buffer binding point (`glBindBufferBase`/`glBindBufferRange` for `GL_UNIFORM_BUFFER` /
+/// `GL_TRANSFORM_FEEDBACK_BUFFER`). `size == 0` means "the whole buffer" (the glBindBufferBase form).
+#[derive(Clone, Copy, Default)]
+pub struct IndexedBinding {
+    pub buffer: u32,
+    pub offset: isize,
+    pub size: isize,
+}
+
+/// One uniform block of a program (`glGetUniformBlockIndex` assigns the index; `glUniformBlockBinding`
+/// sets the binding). Without GLSL uniform-block reflection the shim assigns block indices lazily and
+/// stably per queried name — a real, self-consistent index namespace, defaulting each block's binding
+/// to 0 as the spec requires.
+#[derive(Clone, Default)]
+pub struct UniformBlock {
+    pub name: String,
+    pub binding: u32,
+}
+
 #[derive(Clone, Copy, Default)]
 pub struct Attr {
     pub enabled: bool,
@@ -345,6 +373,18 @@ pub struct GlState {
     pub query_reserved: std::collections::HashSet<u32>,
     pub queries: std::collections::HashMap<u32, QueryObj>,
     pub active_query: std::collections::HashMap<u32, u32>,
+    /// Transform-feedback objects. `tfs` always holds the default object (key 0). `tf_reserved` holds
+    /// names from `glGenTransformFeedbacks` not yet bound; `tf_bound` is the currently bound object.
+    pub tf_reserved: std::collections::HashSet<u32>,
+    pub tfs: std::collections::HashMap<u32, TransformFeedbackObj>,
+    pub tf_bound: u32,
+    /// Indexed buffer binding points, keyed by binding index, for the two ES3 indexed targets.
+    pub ubo_bindings: std::collections::HashMap<u32, IndexedBinding>,
+    pub tfbo_bindings: std::collections::HashMap<u32, IndexedBinding>,
+    /// Per-program uniform-block table (position = block index) and transform-feedback varying capture
+    /// list + buffer mode, keyed by program name.
+    pub prog_uniform_blocks: std::collections::HashMap<u32, Vec<UniformBlock>>,
+    pub prog_tf_varyings: std::collections::HashMap<u32, (Vec<String>, u32)>,
 
     pub tex_unit: [u32; 8], // texture bound per active unit (GL_TEXTURE_2D)
     pub active_unit: usize,
@@ -431,6 +471,17 @@ impl Default for GlState {
             query_reserved: std::collections::HashSet::new(),
             queries: std::collections::HashMap::new(),
             active_query: std::collections::HashMap::new(),
+            tf_reserved: std::collections::HashSet::new(),
+            tfs: {
+                let mut m = std::collections::HashMap::new();
+                m.insert(0u32, TransformFeedbackObj::default()); // the default TF object always exists
+                m
+            },
+            tf_bound: 0,
+            ubo_bindings: std::collections::HashMap::new(),
+            tfbo_bindings: std::collections::HashMap::new(),
+            prog_uniform_blocks: std::collections::HashMap::new(),
+            prog_tf_varyings: std::collections::HashMap::new(),
             tex_unit: [0; 8],
             active_unit: 0,
             unpack_alignment: 4,

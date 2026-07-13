@@ -1,14 +1,36 @@
-//! In-tree mirror gates for the two ES3 object families this increment gives real bodies:
+//! In-tree mirror gates for the ES3 object families this cluster gives real bodies:
 //!   - `gles_query_objects_track_targets_availability_and_asynchronous_results` (ledger: was "missing")
-//!   - the sampler-object slice of `opt_in_gles3_has_real_implementations_for_every_mandatory_command`
+//!   - sampler / transform-feedback / uniform-block-binding slices of
+//!     `opt_in_gles3_has_real_implementations_for_every_mandatory_command`
 //!
 //! These were previously no-ops that always returned 0. The assertions below exercise the observable
 //! object semantics through the public GLES entry points (typed targets, name validation, per-object
-//! parameter storage, availability tied to submission completion) so a regression to the old no-op
-//! bodies fails the crate's own `cargo test -p dd-shim-gl`.
+//! parameter storage, availability tied to submission completion, indexed binding state) so a
+//! regression to the old no-op bodies fails the crate's own `cargo test -p dd-shim-gl`.
+
+use core::ffi::c_char;
 
 use dd_shim_gl::gles;
 use dd_shim_gl::glconst::*;
+
+/// A minimally-linked program (enough for the object families below to treat it as a program object).
+fn linked_program() -> u32 {
+    fn compile(kind: u32, source: &str) -> u32 {
+        let shader = gles::glCreateShader(kind);
+        let src = std::ffi::CString::new(source).unwrap();
+        let ptr = src.as_ptr();
+        gles::glShaderSource(shader, 1, &ptr, core::ptr::null());
+        gles::glCompileShader(shader);
+        shader
+    }
+    let vs = compile(GL_VERTEX_SHADER, "attribute vec2 p; void main(){ gl_Position=vec4(p,0.0,1.0); }");
+    let fs = compile(GL_FRAGMENT_SHADER, "precision mediump float; void main(){ gl_FragColor=vec4(1.0); }");
+    let program = gles::glCreateProgram();
+    gles::glAttachShader(program, vs);
+    gles::glAttachShader(program, fs);
+    gles::glLinkProgram(program);
+    program
+}
 
 fn serial_guard() -> std::sync::MutexGuard<'static, ()> {
     static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
@@ -177,4 +199,162 @@ fn query_objects_track_typed_targets_and_availability() {
     drain();
     gles::glDeleteQueries(-1, &q);
     assert_eq!(gles::glGetError(), GL_INVALID_VALUE);
+}
+
+#[test]
+fn transform_feedback_objects_track_typed_lifecycle_and_varyings() {
+    let _serial = serial_guard();
+    drain();
+
+    // The default object (name 0) is bound and idle; 0 is not itself a transform-feedback object.
+    assert_eq!(gles::transform_feedback_state(), (0, false, false));
+    assert_eq!(gles::glIsTransformFeedback(0), GL_FALSE);
+
+    // Generation reserves a name (not yet an object); binding instantiates it.
+    let mut tf = 0u32;
+    gles::glGenTransformFeedbacks(1, &mut tf);
+    assert_ne!(tf, 0);
+    assert_eq!(gles::glIsTransformFeedback(tf), GL_FALSE, "generation only reserves a name");
+    gles::glBindTransformFeedback(0x1234, tf);
+    assert_eq!(gles::glGetError(), GL_INVALID_ENUM, "bad bind target must be rejected");
+    gles::glBindTransformFeedback(GL_TRANSFORM_FEEDBACK, tf);
+    assert_eq!(gles::glGetError(), GL_NO_ERROR);
+    assert_eq!(gles::glIsTransformFeedback(tf), GL_TRUE, "first bind must instantiate the object");
+    assert_eq!(gles::transform_feedback_state(), (tf, false, false));
+
+    // begin/end/pause/resume state machine.
+    gles::glBeginTransformFeedback(0x1234);
+    assert_eq!(gles::glGetError(), GL_INVALID_ENUM, "bad primitive mode must be rejected");
+    gles::glBeginTransformFeedback(GL_TRIANGLES);
+    assert_eq!(gles::glGetError(), GL_NO_ERROR);
+    assert_eq!(gles::transform_feedback_state(), (tf, true, false));
+    gles::glBeginTransformFeedback(GL_TRIANGLES);
+    assert_eq!(gles::glGetError(), GL_INVALID_OPERATION, "nested begin must fail");
+
+    // Cannot rebind while active and not paused.
+    let mut tf2 = 0u32;
+    gles::glGenTransformFeedbacks(1, &mut tf2);
+    gles::glBindTransformFeedback(GL_TRANSFORM_FEEDBACK, tf2);
+    assert_eq!(gles::glGetError(), GL_INVALID_OPERATION, "rebind while active must fail");
+
+    gles::glPauseTransformFeedback();
+    assert_eq!(gles::transform_feedback_state(), (tf, true, true));
+    gles::glPauseTransformFeedback();
+    assert_eq!(gles::glGetError(), GL_INVALID_OPERATION, "double pause must fail");
+    gles::glResumeTransformFeedback();
+    assert_eq!(gles::transform_feedback_state(), (tf, true, false));
+    gles::glResumeTransformFeedback();
+    assert_eq!(gles::glGetError(), GL_INVALID_OPERATION, "resume while running must fail");
+
+    // Deleting an active object is an error; ending first allows deletion + reverts to the default.
+    gles::glDeleteTransformFeedbacks(1, &tf);
+    assert_eq!(gles::glGetError(), GL_INVALID_OPERATION, "delete of active TF must fail");
+    gles::glEndTransformFeedback();
+    assert_eq!(gles::transform_feedback_state(), (tf, false, false));
+    gles::glEndTransformFeedback();
+    assert_eq!(gles::glGetError(), GL_INVALID_OPERATION, "end while inactive must fail");
+    gles::glDeleteTransformFeedbacks(1, &tf);
+    assert_eq!(gles::glIsTransformFeedback(tf), GL_FALSE, "deleted TF is still an object");
+    assert_eq!(gles::transform_feedback_state().0, 0, "deleting the bound TF reverts to the default");
+    // Default cannot be deleted; a negative count is INVALID_VALUE.
+    drain();
+    let zero = 0u32;
+    gles::glDeleteTransformFeedbacks(1, &zero);
+    assert_eq!(gles::glGetError(), GL_NO_ERROR, "deleting the default TF must be silently ignored");
+    gles::glDeleteTransformFeedbacks(-1, &zero);
+    assert_eq!(gles::glGetError(), GL_INVALID_VALUE);
+    gles::glDeleteTransformFeedbacks(1, &tf2);
+
+    // Varying capture list round-trips through glGetTransformFeedbackVarying.
+    let program = linked_program();
+    let vpos = std::ffi::CString::new("vPos").unwrap();
+    let vnorm = std::ffi::CString::new("vNorm").unwrap();
+    let names = [vpos.as_ptr(), vnorm.as_ptr()];
+    gles::glTransformFeedbackVaryings(program, 2, names.as_ptr(), 0x1234);
+    assert_eq!(gles::glGetError(), GL_INVALID_ENUM, "bad buffer mode must be rejected");
+    gles::glTransformFeedbackVaryings(program, 2, names.as_ptr(), GL_INTERLEAVED_ATTRIBS);
+    assert_eq!(gles::glGetError(), GL_NO_ERROR);
+    let mut buf = [0 as c_char; 16];
+    let (mut len, mut size, mut typ) = (-1i32, -1i32, 0u32);
+    gles::glGetTransformFeedbackVarying(program, 0, 16, &mut len, &mut size, &mut typ, buf.as_mut_ptr());
+    let got = unsafe { std::ffi::CStr::from_ptr(buf.as_ptr()) }.to_str().unwrap();
+    assert_eq!(got, "vPos", "captured varying name must round-trip");
+    assert_eq!((len, size, typ), (4, 1, GL_FLOAT_VEC4));
+    gles::glGetTransformFeedbackVarying(program, 1, 16, &mut len, &mut size, &mut typ, buf.as_mut_ptr());
+    let got = unsafe { std::ffi::CStr::from_ptr(buf.as_ptr()) }.to_str().unwrap();
+    assert_eq!(got, "vNorm");
+    // Out-of-range index is INVALID_VALUE with outputs zeroed.
+    len = -1;
+    gles::glGetTransformFeedbackVarying(program, 2, 16, &mut len, &mut size, &mut typ, buf.as_mut_ptr());
+    assert_eq!(gles::glGetError(), GL_INVALID_VALUE);
+    assert_eq!(len, 0);
+}
+
+#[test]
+fn uniform_block_binding_and_indexed_buffer_bindings_are_real() {
+    let _serial = serial_guard();
+    drain();
+    let program = linked_program();
+
+    // Block indices are assigned lazily and stably per queried name (default binding 0).
+    let blk = std::ffi::CString::new("Blk").unwrap();
+    let blk2 = std::ffi::CString::new("Blk2").unwrap();
+    let i0 = gles::glGetUniformBlockIndex(program, blk.as_ptr());
+    let i1 = gles::glGetUniformBlockIndex(program, blk2.as_ptr());
+    assert_eq!(i0, 0);
+    assert_eq!(i1, 1);
+    assert_eq!(gles::glGetUniformBlockIndex(program, blk.as_ptr()), 0, "block index must be stable");
+    // An unknown program has no block namespace.
+    assert_eq!(gles::glGetUniformBlockIndex(4242, blk.as_ptr()), GL_INVALID_INDEX);
+
+    // The block name round-trips, and the default binding is 0.
+    let mut name = [0 as c_char; 16];
+    let mut nlen = -1;
+    gles::glGetActiveUniformBlockName(program, 0, 16, &mut nlen, name.as_mut_ptr());
+    let got = unsafe { std::ffi::CStr::from_ptr(name.as_ptr()) }.to_str().unwrap();
+    assert_eq!(got, "Blk");
+    assert_eq!(nlen, 3);
+    let mut binding = -1;
+    gles::glGetActiveUniformBlockiv(program, 0, GL_UNIFORM_BLOCK_BINDING, &mut binding);
+    assert_eq!(binding, 0, "default uniform-block binding is 0");
+
+    // glUniformBlockBinding sets it; the getter reflects the change.
+    gles::glUniformBlockBinding(program, 0, 3);
+    assert_eq!(gles::glGetError(), GL_NO_ERROR);
+    gles::glGetActiveUniformBlockiv(program, 0, GL_UNIFORM_BLOCK_BINDING, &mut binding);
+    assert_eq!(binding, 3, "uniform-block binding did not persist");
+    // NAME_LENGTH is real; an out-of-range block index is INVALID_VALUE.
+    let mut name_len = -1;
+    gles::glGetActiveUniformBlockiv(program, 0, GL_UNIFORM_BLOCK_NAME_LENGTH, &mut name_len);
+    assert_eq!(name_len, 4);
+    let mut sentinel = 0x77;
+    gles::glGetActiveUniformBlockiv(program, 99, GL_UNIFORM_BLOCK_BINDING, &mut sentinel);
+    assert_eq!(gles::glGetError(), GL_INVALID_VALUE);
+    assert_eq!(sentinel, 0x77, "out-of-range block query mutated output");
+
+    // Indexed buffer binding points (glBindBufferBase / glBindBufferRange). The binding point records
+    // the buffer name directly — no generic bind of the ES3-only UNIFORM_BUFFER target is required.
+    let mut buf = 0u32;
+    gles::glGenBuffers(1, &mut buf);
+    drain();
+    gles::glBindBufferBase(GL_UNIFORM_BUFFER, 2, buf);
+    assert_eq!(gles::glGetError(), GL_NO_ERROR);
+    assert_eq!(gles::indexed_buffer_binding(GL_UNIFORM_BUFFER, 2), Some((buf, 0, 0)));
+    gles::glBindBufferRange(GL_UNIFORM_BUFFER, 3, buf, 16, 64);
+    assert_eq!(gles::indexed_buffer_binding(GL_UNIFORM_BUFFER, 3), Some((buf, 16, 64)));
+    // Binding buffer 0 clears the index.
+    gles::glBindBufferBase(GL_UNIFORM_BUFFER, 2, 0);
+    assert_eq!(gles::indexed_buffer_binding(GL_UNIFORM_BUFFER, 2), None);
+
+    // Validation: bad target, out-of-range index, and a bad range are rejected.
+    gles::glBindBufferBase(0x1234, 0, buf);
+    assert_eq!(gles::glGetError(), GL_INVALID_ENUM);
+    gles::glBindBufferBase(GL_UNIFORM_BUFFER, 99, buf);
+    assert_eq!(gles::glGetError(), GL_INVALID_VALUE);
+    gles::glBindBufferRange(GL_UNIFORM_BUFFER, 0, buf, -1, 64);
+    assert_eq!(gles::glGetError(), GL_INVALID_VALUE);
+    // The transform-feedback indexed target is independent of the uniform-buffer one.
+    gles::glBindBufferBase(GL_TRANSFORM_FEEDBACK_BUFFER, 1, buf);
+    assert_eq!(gles::indexed_buffer_binding(GL_TRANSFORM_FEEDBACK_BUFFER, 1), Some((buf, 0, 0)));
+    assert_eq!(gles::indexed_buffer_binding(GL_UNIFORM_BUFFER, 1), None);
 }

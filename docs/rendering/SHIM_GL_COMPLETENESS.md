@@ -49,14 +49,13 @@ the oracle, breaking apps that query `glGetError` after these): UBO binding (`gl
 params (`glBindSampler`/`glSamplerParameter*`), query/transform-feedback begin/end/bind, and
 `glProgramBinary`/`glShaderBinary`.
 
-## ES3 query & sampler objects — real object lifecycle (this pass)
+## ES3 object families — real object lifecycle (query / sampler / transform-feedback / UBO binding)
 
-Two `full`-classified ES3 object families whose bodies were previously no-ops (mirroring gl_shim.c's
+Four `full`-classified ES3 object families whose bodies were previously no-ops (mirroring gl_shim.c's
 own no-ops: begin/end/param did nothing, and every getter returned 0) now carry **real client-side
-object state**. Both are IR-free — no `Cmd`/`Enc` is emitted for samplers or queries — so the 8
-byte-parity gates and the frame IR are byte-identical; the change is purely observable object semantics
-through the public API (mirrored by `tests/es3_objects.rs`). Counts are unchanged (these were already
-`full`).
+object state**. All are IR-free — no `Cmd`/`Enc` is emitted for any of them — so the 8 byte-parity
+gates and the frame IR are byte-identical; the change is purely observable object semantics through the
+public API (mirrored by `tests/es3_objects.rs`). Counts are unchanged (these were already `full`).
 
 - **Sampler objects** (`glGenSamplers`/`glBindSampler`/`glSamplerParameter{i,f,iv,fv}`/
   `glGetSamplerParameter{iv,fv}`/`glDeleteSamplers`/`glIsSampler`): each object stores the full ES 3.0
@@ -76,6 +75,28 @@ through the public API (mirrored by `tests/es3_objects.rs`). Counts are unchange
   `GL_QUERY_RESULT` blocks for completion first. The counted result itself is a **truthful 0** (the
   executor has no occlusion/primitive counter yet) rather than a fabricated value — the honest residual
   for this row is the backend counter, not the lifecycle.
+- **Transform-feedback objects** (`glGenTransformFeedbacks`/`glBindTransformFeedback`/
+  `glBeginTransformFeedback`/`glEndTransformFeedback`/`glPause…`/`glResume…`/
+  `glDeleteTransformFeedbacks`/`glIsTransformFeedback`/`glTransformFeedbackVaryings`/
+  `glGetTransformFeedbackVarying`): a real begin/end/pause/resume state machine on the bound object (the
+  default object, name 0, always exists and cannot be deleted); names reserve lazily then instantiate on
+  first bind; the bind target must be `GL_TRANSFORM_FEEDBACK`; rebinding while active-and-not-paused,
+  nested begin, pause/resume out of order, end while inactive, and deleting an active object are all
+  `GL_INVALID_OPERATION`; a bad primitive mode / bad target is `GL_INVALID_ENUM`. The
+  `glTransformFeedbackVaryings` capture list (names + interleaved/separate buffer mode) is stored per
+  program and the varying **names round-trip** through `glGetTransformFeedbackVarying` (size/type are a
+  truthful best-effort single-vec4, since the shim has no GLSL varying reflection).
+- **Uniform-block binding** (`glGetUniformBlockIndex`/`glUniformBlockBinding`/
+  `glGetActiveUniformBlock{iv,Name}`/`glBindBufferBase`/`glBindBufferRange`): `glGetUniformBlockIndex`
+  assigns a **stable per-program block-index namespace** lazily per queried name (no GLSL uniform-block
+  reflection exists, so indices are assigned on first query — real and self-consistent, each block's
+  binding defaulting to 0); `glUniformBlockBinding` sets the binding, observable through
+  `glGetActiveUniformBlockiv(GL_UNIFORM_BLOCK_BINDING)`; the block name round-trips through
+  `glGetActiveUniformBlockName`; and `glBindBufferBase`/`glBindBufferRange` record real per-index
+  binding points (buffer + offset + size) for the `GL_UNIFORM_BUFFER` and `GL_TRANSFORM_FEEDBACK_BUFFER`
+  indexed targets, with target/index/range validation. The indexed points are observed in the gate via
+  a test accessor (`indexed_buffer_binding`) because the public indexed query `glGetIntegeri_v` is still
+  a `partial`.
 
 ## Object / context model & error lifecycle (audit §9.3)
 

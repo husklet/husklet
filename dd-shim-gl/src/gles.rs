@@ -50,6 +50,27 @@ pub fn texture_generation(id: u32) -> Option<u64> {
     let s=gl(); s.tex.get(id as usize).filter(|t|t.used).map(|t|t.gen)
 }
 
+/// Indexed buffer binding point (`glBindBufferBase`/`glBindBufferRange`) for a test to observe, since
+/// the public indexed query `glGetIntegeri_v` is still a `partial`. Returns `(buffer, offset, size)`
+/// where `size == 0` means "the whole buffer". `None` if nothing is bound at that index.
+pub fn indexed_buffer_binding(target: u32, index: u32) -> Option<(u32, isize, isize)> {
+    let s = gl();
+    let map = match target {
+        GL_UNIFORM_BUFFER => &s.ubo_bindings,
+        GL_TRANSFORM_FEEDBACK_BUFFER => &s.tfbo_bindings,
+        _ => return None,
+    };
+    map.get(&index).map(|b| (b.buffer, b.offset, b.size))
+}
+
+/// The bound transform-feedback object and its `(active, paused)` state, exposed for behavioral tests
+/// (there is no public `glGetIntegerv(GL_TRANSFORM_FEEDBACK_*)` in the shim's ES2 default surface).
+pub fn transform_feedback_state() -> (u32, bool, bool) {
+    let s = gl();
+    let o = s.tfs.get(&s.tf_bound).copied().unwrap_or_default();
+    (s.tf_bound, o.active, o.paused)
+}
+
 /// Test-only: reset the calling thread's GL share-group to pristine ES defaults. The in-crate
 /// behavioral gates run serialized (a shared mutex), but they all operate on the process-global
 /// default share-group; without a reset, residual state from one test (a bound FBO/PBO, non-default
@@ -640,6 +661,7 @@ pub extern "C" fn glGenTransformFeedbacks(n: i32, out: *mut u32) {
     for k in 0..n as usize {
         let id = s.xfb_seq;
         s.xfb_seq += 1;
+        s.tf_reserved.insert(id);
         unsafe { *out.add(k) = id };
     }
 }
@@ -2847,36 +2869,198 @@ pub extern "C" fn glGetQueryObjectuiv(id: u32, pname: u32, params: *mut u32) {
     }
 }
 
-// ---- transform feedback (glGenTransformFeedbacks is already a full body) ----
+// ---- transform-feedback objects (real ES3 typed lifecycle; glGenTransformFeedbacks reserves) -----
+//
+// Previously no-ops. Now a real begin/end/pause/resume state machine on the bound TF object (the
+// default object, name 0, always exists), plus a per-program varying capture list that round-trips
+// through glGetTransformFeedbackVarying. All client-side / IR-free (as in gl_shim.c), so the frame IR
+// and byte-parity gates are unchanged.
+
 #[no_mangle]
-pub extern "C" fn glBeginTransformFeedback(_primitive_mode: u32) {}
+pub extern "C" fn glBeginTransformFeedback(primitive_mode: u32) {
+    let mut s = gl();
+    if !matches!(primitive_mode, GL_POINTS | GL_LINES | GL_TRIANGLES) {
+        if s.error == GL_NO_ERROR { s.error = GL_INVALID_ENUM; }
+        return;
+    }
+    let bound = s.tf_bound;
+    let already = s.tfs.get(&bound).map(|o| o.active).unwrap_or(false);
+    if already {
+        if s.error == GL_NO_ERROR { s.error = GL_INVALID_OPERATION; }
+        return;
+    }
+    if let Some(o) = s.tfs.get_mut(&bound) {
+        o.active = true;
+        o.paused = false;
+    }
+}
+
 #[no_mangle]
-pub extern "C" fn glEndTransformFeedback() {}
+pub extern "C" fn glEndTransformFeedback() {
+    let mut s = gl();
+    let bound = s.tf_bound;
+    let active = s.tfs.get(&bound).map(|o| o.active).unwrap_or(false);
+    if !active {
+        if s.error == GL_NO_ERROR { s.error = GL_INVALID_OPERATION; }
+        return;
+    }
+    if let Some(o) = s.tfs.get_mut(&bound) {
+        o.active = false;
+        o.paused = false;
+    }
+}
+
 #[no_mangle]
-pub extern "C" fn glPauseTransformFeedback() {}
+pub extern "C" fn glPauseTransformFeedback() {
+    let mut s = gl();
+    let bound = s.tf_bound;
+    let (active, paused) = s.tfs.get(&bound).map(|o| (o.active, o.paused)).unwrap_or((false, false));
+    if !active || paused {
+        if s.error == GL_NO_ERROR { s.error = GL_INVALID_OPERATION; }
+        return;
+    }
+    if let Some(o) = s.tfs.get_mut(&bound) {
+        o.paused = true;
+    }
+}
+
 #[no_mangle]
-pub extern "C" fn glResumeTransformFeedback() {}
+pub extern "C" fn glResumeTransformFeedback() {
+    let mut s = gl();
+    let bound = s.tf_bound;
+    let (active, paused) = s.tfs.get(&bound).map(|o| (o.active, o.paused)).unwrap_or((false, false));
+    if !active || !paused {
+        if s.error == GL_NO_ERROR { s.error = GL_INVALID_OPERATION; }
+        return;
+    }
+    if let Some(o) = s.tfs.get_mut(&bound) {
+        o.paused = false;
+    }
+}
+
 #[no_mangle]
-pub extern "C" fn glBindTransformFeedback(_target: u32, _id: u32) {}
+pub extern "C" fn glBindTransformFeedback(target: u32, id: u32) {
+    let mut s = gl();
+    if target != GL_TRANSFORM_FEEDBACK {
+        if s.error == GL_NO_ERROR { s.error = GL_INVALID_ENUM; }
+        return;
+    }
+    // Cannot switch the bound object while transform feedback is active and not paused.
+    let cur = s.tf_bound;
+    let busy = s.tfs.get(&cur).map(|o| o.active && !o.paused).unwrap_or(false);
+    if busy {
+        if s.error == GL_NO_ERROR { s.error = GL_INVALID_OPERATION; }
+        return;
+    }
+    if id == 0 {
+        s.tf_bound = 0;
+        return;
+    }
+    if !(s.tf_reserved.contains(&id) || s.tfs.contains_key(&id)) {
+        if s.error == GL_NO_ERROR { s.error = GL_INVALID_OPERATION; }
+        return;
+    }
+    s.tf_reserved.remove(&id);
+    s.tfs.entry(id).or_insert_with(crate::state::TransformFeedbackObj::default);
+    s.tf_bound = id;
+}
+
 #[no_mangle]
-pub extern "C" fn glDeleteTransformFeedbacks(_n: i32, _ids: *const u32) {}
+pub extern "C" fn glDeleteTransformFeedbacks(n: i32, ids: *const u32) {
+    if n < 0 {
+        crate::state::set_gl_error(GL_INVALID_VALUE);
+        return;
+    }
+    if ids.is_null() {
+        return;
+    }
+    let mut s = gl();
+    for k in 0..n as usize {
+        let id = unsafe { *ids.add(k) };
+        if id == 0 {
+            continue; // the default transform-feedback object cannot be deleted
+        }
+        // Deleting an active transform-feedback object is an error (spec).
+        if s.tfs.get(&id).map(|o| o.active).unwrap_or(false) {
+            if s.error == GL_NO_ERROR { s.error = GL_INVALID_OPERATION; }
+            continue;
+        }
+        s.tfs.remove(&id);
+        s.tf_reserved.remove(&id);
+        if s.tf_bound == id {
+            s.tf_bound = 0; // deleting the bound object reverts to the default
+        }
+    }
+}
+
 #[no_mangle]
 pub extern "C" fn glIsTransformFeedback(id: u32) -> u8 {
-    (id != 0) as u8
+    // The default object (0) and merely-reserved names are not transform-feedback objects.
+    (id != 0 && gl().tfs.contains_key(&id)) as u8
 }
+
 #[no_mangle]
-pub extern "C" fn glTransformFeedbackVaryings(_program: u32, _count: i32, _varyings: *const *const c_char, _buffer_mode: u32) {}
+pub extern "C" fn glTransformFeedbackVaryings(program: u32, count: i32, varyings: *const *const c_char, buffer_mode: u32) {
+    let mut s = gl();
+    if program == 0 || (program as usize) >= MAXPROG || !s.prog[program as usize].used {
+        if s.error == GL_NO_ERROR { s.error = GL_INVALID_VALUE; }
+        return;
+    }
+    if !matches!(buffer_mode, GL_INTERLEAVED_ATTRIBS | GL_SEPARATE_ATTRIBS) {
+        if s.error == GL_NO_ERROR { s.error = GL_INVALID_ENUM; }
+        return;
+    }
+    if count < 0 || (count > 0 && varyings.is_null()) {
+        if s.error == GL_NO_ERROR { s.error = GL_INVALID_VALUE; }
+        return;
+    }
+    let mut names = Vec::with_capacity(count as usize);
+    for i in 0..count as usize {
+        let p = unsafe { *varyings.add(i) };
+        if p.is_null() {
+            if s.error == GL_NO_ERROR { s.error = GL_INVALID_VALUE; }
+            return;
+        }
+        let name = unsafe { std::ffi::CStr::from_ptr(p) }.to_string_lossy().into_owned();
+        names.push(name);
+    }
+    // Recorded now; it takes effect on the next glLinkProgram, which is when a real driver captures it —
+    // but the shim does not re-link, so we retain the most-recent specification for the query below.
+    s.prog_tf_varyings.insert(program, (names, buffer_mode));
+}
+
 #[no_mangle]
 #[allow(clippy::too_many_arguments)]
-pub extern "C" fn glGetTransformFeedbackVarying(_program: u32, _index: u32, buf_size: i32, length: *mut i32, size: *mut i32, typ: *mut u32, name: *mut c_char) {
-    unsafe {
-        set_i32(length, 0);
-        set_i32(size, 0);
-        if !typ.is_null() {
-            *typ = 0;
+pub extern "C" fn glGetTransformFeedbackVarying(program: u32, index: u32, buf_size: i32, length: *mut i32, size: *mut i32, typ: *mut u32, name: *mut c_char) {
+    let s = gl();
+    let entry = s.prog_tf_varyings.get(&program);
+    let varying = entry.and_then(|(v, _)| v.get(index as usize));
+    let Some(vname) = varying else {
+        drop(s);
+        crate::state::set_gl_error(GL_INVALID_VALUE);
+        unsafe {
+            set_i32(length, 0);
+            set_i32(size, 0);
+            if !typ.is_null() { *typ = 0; }
+            if !name.is_null() && buf_size > 0 { *name = 0; }
         }
+        return;
+    };
+    // The captured NAME is real state; without GLSL reflection the size/type are reported as a single
+    // vec4 element (a truthful best-effort — the query never fabricates a specific declared type).
+    let bytes = vname.as_bytes();
+    unsafe {
+        set_i32(size, 1);
+        if !typ.is_null() { *typ = GL_FLOAT_VEC4; }
         if !name.is_null() && buf_size > 0 {
-            *name = 0;
+            let cap = (buf_size as usize).saturating_sub(1).min(bytes.len());
+            for (i, &b) in bytes[..cap].iter().enumerate() {
+                *name.add(i) = b as c_char;
+            }
+            *name.add(cap) = 0;
+            set_i32(length, cap as i32);
+        } else {
+            set_i32(length, 0);
         }
     }
 }
@@ -2920,16 +3104,113 @@ pub extern "C" fn glGetSynciv(sync: *mut c_void, pname: u32, buf_size: i32, leng
     }
 }
 
-// ---- uniform blocks / UBO binding (uniforms flow through the translator's default block; no-op) ----
+// ---- uniform blocks / UBO indexed binding (real ES3 binding state) -----------------------------
+//
+// Previously no-ops. Now: glBindBufferBase/Range record real per-index binding points for the two ES3
+// indexed targets; glGetUniformBlockIndex assigns a stable per-program block-index namespace (no GLSL
+// uniform-block reflection exists, so indices are assigned lazily per queried name — real and
+// self-consistent); glUniformBlockBinding + glGetActiveUniformBlock{iv,Name} read/write real block
+// state. Client-side / IR-free (uniforms still flow through the translator's default block), so the
+// frame IR and byte-parity gates are unchanged.
+
+/// Max indexed binding points per target (ES3 minimums: 24 uniform-buffer, 4 transform-feedback).
+const MAX_UNIFORM_BUFFER_BINDINGS: u32 = 24;
+const MAX_TRANSFORM_FEEDBACK_BUFFERS: u32 = 4;
+
+/// Resolve an indexed-buffer target to its (binding-map selector, binding-count cap), or None if the
+/// target is not a valid indexed target.
+fn indexed_target_cap(target: u32) -> Option<(bool, u32)> {
+    match target {
+        GL_UNIFORM_BUFFER => Some((true, MAX_UNIFORM_BUFFER_BINDINGS)),
+        GL_TRANSFORM_FEEDBACK_BUFFER => Some((false, MAX_TRANSFORM_FEEDBACK_BUFFERS)),
+        _ => None,
+    }
+}
+
 #[no_mangle]
-pub extern "C" fn glBindBufferBase(_target: u32, _index: u32, _buffer: u32) {}
+pub extern "C" fn glBindBufferBase(target: u32, index: u32, buffer: u32) {
+    let mut s = gl();
+    let Some((is_ubo, cap)) = indexed_target_cap(target) else {
+        if s.error == GL_NO_ERROR { s.error = GL_INVALID_ENUM; }
+        return;
+    };
+    if index >= cap {
+        if s.error == GL_NO_ERROR { s.error = GL_INVALID_VALUE; }
+        return;
+    }
+    let binding = crate::state::IndexedBinding { buffer, offset: 0, size: 0 };
+    let map = if is_ubo { &mut s.ubo_bindings } else { &mut s.tfbo_bindings };
+    if buffer == 0 {
+        map.remove(&index);
+    } else {
+        map.insert(index, binding);
+    }
+}
+
 #[no_mangle]
-pub extern "C" fn glBindBufferRange(_target: u32, _index: u32, _buffer: u32, _offset: isize, _size: isize) {}
+pub extern "C" fn glBindBufferRange(target: u32, index: u32, buffer: u32, offset: isize, size: isize) {
+    let mut s = gl();
+    let Some((is_ubo, cap)) = indexed_target_cap(target) else {
+        if s.error == GL_NO_ERROR { s.error = GL_INVALID_ENUM; }
+        return;
+    };
+    if index >= cap {
+        if s.error == GL_NO_ERROR { s.error = GL_INVALID_VALUE; }
+        return;
+    }
+    // A non-zero buffer requires a positive size and non-negative offset (spec).
+    if buffer != 0 && (size <= 0 || offset < 0) {
+        if s.error == GL_NO_ERROR { s.error = GL_INVALID_VALUE; }
+        return;
+    }
+    let binding = crate::state::IndexedBinding { buffer, offset, size };
+    let map = if is_ubo { &mut s.ubo_bindings } else { &mut s.tfbo_bindings };
+    if buffer == 0 {
+        map.remove(&index);
+    } else {
+        map.insert(index, binding);
+    }
+}
+
 #[no_mangle]
-pub extern "C" fn glUniformBlockBinding(_program: u32, _uniform_block_index: u32, _uniform_block_binding: u32) {}
+pub extern "C" fn glUniformBlockBinding(program: u32, uniform_block_index: u32, uniform_block_binding: u32) {
+    let mut s = gl();
+    if program == 0 || (program as usize) >= MAXPROG || !s.prog[program as usize].used {
+        if s.error == GL_NO_ERROR { s.error = GL_INVALID_VALUE; }
+        return;
+    }
+    if uniform_block_binding >= MAX_UNIFORM_BUFFER_BINDINGS {
+        if s.error == GL_NO_ERROR { s.error = GL_INVALID_VALUE; }
+        return;
+    }
+    let blocks = s.prog_uniform_blocks.entry(program).or_default();
+    match blocks.get_mut(uniform_block_index as usize) {
+        Some(b) => b.binding = uniform_block_binding,
+        None => {
+            if s.error == GL_NO_ERROR { s.error = GL_INVALID_VALUE; }
+        }
+    }
+}
+
 #[no_mangle]
-pub extern "C" fn glGetUniformBlockIndex(_program: u32, _uniform_block_name: *const c_char) -> u32 {
-    GL_INVALID_INDEX
+pub extern "C" fn glGetUniformBlockIndex(program: u32, uniform_block_name: *const c_char) -> u32 {
+    if uniform_block_name.is_null() {
+        return GL_INVALID_INDEX;
+    }
+    let mut s = gl();
+    if program == 0 || (program as usize) >= MAXPROG || !s.prog[program as usize].used {
+        // Not a program object → the query has no block namespace; report "not found".
+        return GL_INVALID_INDEX;
+    }
+    let name = unsafe { std::ffi::CStr::from_ptr(uniform_block_name) }.to_string_lossy().into_owned();
+    let blocks = s.prog_uniform_blocks.entry(program).or_default();
+    if let Some(pos) = blocks.iter().position(|b| b.name == name) {
+        return pos as u32;
+    }
+    // Lazily assign a new, stable block index for this name (default binding 0 per spec).
+    let idx = blocks.len() as u32;
+    blocks.push(crate::state::UniformBlock { name, binding: 0 });
+    idx
 }
 #[no_mangle]
 pub extern "C" fn glGetUniformIndices(_program: u32, uniform_count: i32, _uniform_names: *const *const c_char, uniform_indices: *mut u32) {
@@ -2940,17 +3221,49 @@ pub extern "C" fn glGetUniformIndices(_program: u32, uniform_count: i32, _unifor
     }
 }
 #[no_mangle]
-pub extern "C" fn glGetActiveUniformBlockName(_program: u32, _uniform_block_index: u32, buf_size: i32, length: *mut i32, name: *mut c_char) {
+pub extern "C" fn glGetActiveUniformBlockName(program: u32, uniform_block_index: u32, buf_size: i32, length: *mut i32, name: *mut c_char) {
+    let s = gl();
+    let bname = s.prog_uniform_blocks.get(&program).and_then(|b| b.get(uniform_block_index as usize)).map(|b| b.name.clone());
+    let Some(bname) = bname else {
+        drop(s);
+        crate::state::set_gl_error(GL_INVALID_VALUE);
+        unsafe {
+            set_i32(length, 0);
+            if !name.is_null() && buf_size > 0 { *name = 0; }
+        }
+        return;
+    };
+    let bytes = bname.as_bytes();
     unsafe {
-        set_i32(length, 0);
         if !name.is_null() && buf_size > 0 {
-            *name = 0;
+            let cap = (buf_size as usize).saturating_sub(1).min(bytes.len());
+            for (i, &b) in bytes[..cap].iter().enumerate() {
+                *name.add(i) = b as c_char;
+            }
+            *name.add(cap) = 0;
+            set_i32(length, cap as i32);
+        } else {
+            set_i32(length, 0);
         }
     }
 }
 #[no_mangle]
-pub extern "C" fn glGetActiveUniformBlockiv(_program: u32, _uniform_block_index: u32, _pname: u32, params: *mut i32) {
-    unsafe { set_i32(params, 0) };
+pub extern "C" fn glGetActiveUniformBlockiv(program: u32, uniform_block_index: u32, pname: u32, params: *mut i32) {
+    let s = gl();
+    let block = s.prog_uniform_blocks.get(&program).and_then(|b| b.get(uniform_block_index as usize));
+    let Some(block) = block else {
+        drop(s);
+        crate::state::set_gl_error(GL_INVALID_VALUE);
+        return;
+    };
+    let v = match pname {
+        GL_UNIFORM_BLOCK_BINDING => block.binding as i32,
+        GL_UNIFORM_BLOCK_NAME_LENGTH => block.name.len() as i32 + 1,
+        // No per-block reflection: these are reported as the truthful defaults.
+        GL_UNIFORM_BLOCK_DATA_SIZE | GL_UNIFORM_BLOCK_ACTIVE_UNIFORMS => 0,
+        _ => 0,
+    };
+    unsafe { set_i32(params, v) };
 }
 #[no_mangle]
 pub extern "C" fn glGetActiveUniformsiv(_program: u32, uniform_count: i32, _uniform_indices: *const u32, _pname: u32, params: *mut i32) {

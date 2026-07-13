@@ -95,6 +95,21 @@ pub const GL_GEQUAL: u32 = 0x0206;
 pub const GL_ALWAYS: u32 = 0x0207;
 pub const GL_NONE: u32 = 0;
 
+// ES3 transform-feedback objects + indexed buffer bindings + uniform blocks
+pub const GL_POINTS: u32 = 0x0000;
+pub const GL_LINES: u32 = 0x0001;
+pub const GL_FLOAT_VEC4: u32 = 0x8B52;
+pub const GL_UNIFORM_BUFFER: u32 = 0x8A11;
+pub const GL_TRANSFORM_FEEDBACK_BUFFER: u32 = 0x8C8E;
+pub const GL_TRANSFORM_FEEDBACK: u32 = 0x8E22;
+pub const GL_INTERLEAVED_ATTRIBS: u32 = 0x8C8C;
+pub const GL_SEPARATE_ATTRIBS: u32 = 0x8C8D;
+pub const GL_ACTIVE_UNIFORM_BLOCKS: u32 = 0x8A36;
+pub const GL_UNIFORM_BLOCK_BINDING: u32 = 0x8A3F;
+pub const GL_UNIFORM_BLOCK_DATA_SIZE: u32 = 0x8A40;
+pub const GL_UNIFORM_BLOCK_NAME_LENGTH: u32 = 0x8A41;
+pub const GL_UNIFORM_BLOCK_ACTIVE_UNIFORMS: u32 = 0x8A42;
+
 // ES3 occlusion / transform-feedback query objects
 pub const GL_ANY_SAMPLES_PASSED: u32 = 0x8C2F;
 pub const GL_ANY_SAMPLES_PASSED_CONSERVATIVE: u32 = 0x8D6A;
