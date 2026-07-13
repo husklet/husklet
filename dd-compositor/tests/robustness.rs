@@ -13,7 +13,7 @@
 //! The persistent client `A` is verified to still commit→present after each abuse, which is the real
 //! invariant: one bad guest never wedges the compositor or its neighbours.
 
-use dd_compositor::{ClientState, DdState};
+use dd_compositor::{ClientState, DdState, RenderLimits};
 use dd_display::present::{PresentError, PresentOutcome, Presenter, SurfaceBuffer};
 use dd_display::wire::{Conn, Message};
 use smithay::reexports::wayland_server::Display;
@@ -116,7 +116,11 @@ fn compositor_surface_identity_is_client_owned_generational_and_teardown_is_exac
     let mut display: Display<DdState> = Display::new().unwrap();
     let dh = display.handle();
     let log = Arc::new(Mutex::new(LifecycleLog::default()));
-    let mut state = DdState::new(dh.clone(), Box::new(LifecyclePresenter(log.clone())));
+    let mut state = DdState::new_with_render_limits(
+        dh.clone(),
+        Box::new(LifecyclePresenter(log.clone())),
+        RenderLimits { surfaces_per_client: 1, ..RenderLimits::default() },
+    );
 
     let connect = |display: &mut Display<DdState>| -> Cli {
         let (client_fd, server_fd) = socketpair_nonblocking();
@@ -189,6 +193,7 @@ fn compositor_surface_identity_is_client_owned_generational_and_teardown_is_exac
     );
     let a_host = ids[0];
     let b_host = ids[1];
+    assert_eq!(state.render_usage_totals(), (2, 0, 128));
 
     a.conn.send(&Message::new(atop, 0));
     a.conn.send(&Message::new(axdg, 0));
@@ -206,7 +211,15 @@ fn compositor_surface_identity_is_client_owned_generational_and_teardown_is_exac
         !dropped.contains(&b_host),
         "destroying one client must not reclaim another client's surface"
     );
+    assert_eq!(state.render_usage_totals(), (1, 0, 64));
 
+    // B exceeds its own surface quota. Only B is disconnected; its first surface is refunded and A's
+    // already-completed teardown remains untouched.
+    let excess = b.alloc();
+    b.conn.send(&Message::new(bc, 0).u32(excess));
+    b.conn.flush().unwrap();
+    dispatch!();
+    dispatch!();
     drop(b);
     dispatch!();
     dispatch!();
@@ -215,6 +228,11 @@ fn compositor_surface_identity_is_client_owned_generational_and_teardown_is_exac
         dropped.iter().filter(|&&sid| sid == b_host).count(),
         1,
         "disconnect teardown must reclaim the surviving surface exactly once"
+    );
+    assert_eq!(
+        state.render_usage_totals(),
+        (0, 0, 0),
+        "disconnect must refund every surface and CPU-cache charge"
     );
 }
 

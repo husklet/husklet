@@ -53,7 +53,7 @@ use smithay::{
     reexports::{
         wayland_protocols::xdg::shell::server::xdg_toplevel::WmCapabilities,
         wayland_server::{
-            backend::{ClientData, ClientId, DisconnectReason, ObjectId},
+            backend::{protocol::ProtocolError, ClientData, ClientId, DisconnectReason, ObjectId},
             protocol::{wl_buffer::WlBuffer, wl_callback::WlCallback, wl_surface::WlSurface},
             DisplayHandle, Resource,
         },
@@ -106,6 +106,36 @@ const INITIAL_TOPLEVEL_SIZE: (i32, i32) = (1000, 700);
 #[derive(Default)]
 pub struct ClientState {
     pub compositor: CompositorClientState,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct RenderLimits {
+    pub surfaces_per_client: usize,
+    pub surfaces_global: usize,
+    pub retained_callbacks_per_client: usize,
+    pub retained_callbacks_global: usize,
+    pub cpu_cache_bytes_per_client: usize,
+    pub cpu_cache_bytes_global: usize,
+}
+
+impl Default for RenderLimits {
+    fn default() -> Self {
+        Self {
+            surfaces_per_client: 1024,
+            surfaces_global: 8192,
+            retained_callbacks_per_client: 4096,
+            retained_callbacks_global: 32768,
+            cpu_cache_bytes_per_client: 256 * 1024 * 1024,
+            cpu_cache_bytes_global: 1024 * 1024 * 1024,
+        }
+    }
+}
+
+#[derive(Default)]
+struct RenderUsage {
+    surfaces: usize,
+    retained_callbacks: usize,
+    cpu_cache_bytes: usize,
 }
 impl ClientData for ClientState {
     fn initialized(&self, _client_id: ClientId) {}
@@ -273,6 +303,11 @@ pub struct DdState {
     surface_ids: HashMap<ObjectId, u32>,
     next_surface_id: u32,
     presenter_windows: HashSet<u32>,
+    surface_owners: HashMap<u32, ClientId>,
+    surface_resources: HashMap<u32, WlSurface>,
+    render_usage: HashMap<ClientId, RenderUsage>,
+    global_render_usage: RenderUsage,
+    render_limits: RenderLimits,
 }
 
 impl DdState {
@@ -280,6 +315,14 @@ impl DdState {
     /// a Retina backing store advertises `wl_output.scale = 2` (HiDPI), matching `dd-display`'s
     /// `present_cocoa` HiDPI advert.
     pub fn new(dh: DisplayHandle, presenter: Box<dyn Presenter>) -> DdState {
+        Self::new_with_render_limits(dh, presenter, RenderLimits::default())
+    }
+
+    pub fn new_with_render_limits(
+        dh: DisplayHandle,
+        presenter: Box<dyn Presenter>,
+        render_limits: RenderLimits,
+    ) -> DdState {
         let compositor = CompositorState::new::<Self>(&dh); // wl_compositor v5 + wl_subcompositor
         // wl_shm: Argb8888/Xrgb8888 are always advertised by Smithay.
         let shm = ShmState::new::<Self>(&dh, Vec::new());
@@ -433,6 +476,11 @@ impl DdState {
             surface_ids: HashMap::new(),
             next_surface_id: 1,
             presenter_windows: HashSet::new(),
+            surface_owners: HashMap::new(),
+            surface_resources: HashMap::new(),
+            render_usage: HashMap::new(),
+            global_render_usage: RenderUsage::default(),
+            render_limits,
         }
     }
 
@@ -441,12 +489,28 @@ impl DdState {
         if self.surface_ids.contains_key(&object) {
             return;
         }
+        let client = surface.client().expect("wl_surface has no owning client");
+        let owner = client.id();
+        if !self.reserve_surface(&owner) {
+            client.kill(
+                &self.dh,
+                ProtocolError {
+                    code: 2,
+                    object_id: 1,
+                    object_interface: "wl_display".into(),
+                    message: "compositor per-client/global surface budget exhausted".into(),
+                },
+            );
+            return;
+        }
         let sid = self.next_surface_id;
         self.next_surface_id = self
             .next_surface_id
             .checked_add(1)
             .expect("surface id space exhausted");
         self.surface_ids.insert(object, sid);
+        self.surface_owners.insert(sid, owner);
+        self.surface_resources.insert(sid, surface.clone());
     }
 
     /// Return the compositor-global, generation-safe id assigned in `new_surface`.
@@ -463,6 +527,8 @@ impl DdState {
         let Some(sid) = self.surface_ids.remove(&surface.id()) else {
             return;
         };
+        self.release_surface_resources(sid);
+        self.surface_resources.remove(&sid);
         self.buffers.remove(&sid);
         self.repacks.remove(&sid);
         self.dirty.remove(&sid);
@@ -486,6 +552,158 @@ impl DdState {
         if self.presenter_windows.remove(&sid) {
             self.presenter.drop_window(sid);
         }
+    }
+
+    fn reserve_surface(&mut self, owner: &ClientId) -> bool {
+        let usage = self.render_usage.entry(owner.clone()).or_default();
+        if usage.surfaces >= self.render_limits.surfaces_per_client
+            || self.global_render_usage.surfaces >= self.render_limits.surfaces_global
+        {
+            return false;
+        }
+        usage.surfaces += 1;
+        self.global_render_usage.surfaces += 1;
+        true
+    }
+
+    fn release_surface_resources(&mut self, sid: u32) {
+        let Some(owner) = self.surface_owners.remove(&sid) else {
+            return;
+        };
+        let cache_bytes = self.repacks.get(&sid).map_or(0, |cache| cache.bgra.len());
+        let callbacks = self.retained_callbacks.get(&sid).map_or(0, VecDeque::len);
+        let empty = if let Some(usage) = self.render_usage.get_mut(&owner) {
+            usage.surfaces = usage.surfaces.checked_sub(1).expect("surface charge underflow");
+            usage.cpu_cache_bytes = usage
+                .cpu_cache_bytes
+                .checked_sub(cache_bytes)
+                .expect("CPU cache charge underflow");
+            usage.retained_callbacks = usage
+                .retained_callbacks
+                .checked_sub(callbacks)
+                .expect("callback charge underflow");
+            usage.surfaces == 0 && usage.cpu_cache_bytes == 0 && usage.retained_callbacks == 0
+        } else {
+            false
+        };
+        if empty {
+            self.render_usage.remove(&owner);
+        }
+        self.global_render_usage.surfaces = self
+            .global_render_usage
+            .surfaces
+            .checked_sub(1)
+            .expect("global surface charge underflow");
+        self.global_render_usage.cpu_cache_bytes =
+            self.global_render_usage.cpu_cache_bytes.checked_sub(cache_bytes).expect("global CPU cache charge underflow");
+        self.global_render_usage.retained_callbacks = self
+            .global_render_usage
+            .retained_callbacks
+            .checked_sub(callbacks)
+            .expect("global callback charge underflow");
+    }
+
+    pub(crate) fn replace_cache_charge(&mut self, sid: u32, old: usize, new: usize) -> bool {
+        let Some(owner) = self.surface_owners.get(&sid).cloned() else {
+            return false;
+        };
+        let usage = self
+            .render_usage
+            .get_mut(&owner)
+            .expect("surface owner has no budget");
+        let client_next = usage
+            .cpu_cache_bytes
+            .checked_sub(old)
+            .and_then(|n| n.checked_add(new));
+        let global_next = self
+            .global_render_usage
+            .cpu_cache_bytes
+            .checked_sub(old)
+            .and_then(|n| n.checked_add(new));
+        let (Some(client_next), Some(global_next)) = (client_next, global_next) else {
+            return false;
+        };
+        if client_next > self.render_limits.cpu_cache_bytes_per_client
+            || global_next > self.render_limits.cpu_cache_bytes_global
+        {
+            return false;
+        }
+        usage.cpu_cache_bytes = client_next;
+        self.global_render_usage.cpu_cache_bytes = global_next;
+        true
+    }
+
+    pub(crate) fn remove_repack_cache(&mut self, sid: u32) {
+        let old = self.repacks.get(&sid).map_or(0, |cache| cache.bgra.len());
+        if old != 0 {
+            let _ = self.replace_cache_charge(sid, old, 0);
+        }
+        self.repacks.remove(&sid);
+    }
+
+    pub(crate) fn reject_budget_exhaustion(&self, sid: u32, domain: &str) {
+        let Some(surface) = self.surface_resources.get(&sid) else {
+            return;
+        };
+        let Some(client) = surface.client() else {
+            return;
+        };
+        client.kill(
+            &self.dh,
+            ProtocolError {
+                code: 2,
+                object_id: 1,
+                object_interface: "wl_display".into(),
+                message: format!("compositor {domain} budget exhausted"),
+            },
+        );
+    }
+
+    pub(crate) fn reserve_callback(&mut self, sid: u32) -> bool {
+        let Some(owner) = self.surface_owners.get(&sid).cloned() else {
+            return false;
+        };
+        let usage = self
+            .render_usage
+            .get_mut(&owner)
+            .expect("surface owner has no budget");
+        if usage.retained_callbacks >= self.render_limits.retained_callbacks_per_client
+            || self.global_render_usage.retained_callbacks
+                >= self.render_limits.retained_callbacks_global
+        {
+            return false;
+        }
+        usage.retained_callbacks += 1;
+        self.global_render_usage.retained_callbacks += 1;
+        true
+    }
+
+    pub(crate) fn release_callbacks(&mut self, sid: u32, count: usize) {
+        let Some(owner) = self.surface_owners.get(&sid) else {
+            return;
+        };
+        if let Some(usage) = self.render_usage.get_mut(owner) {
+            usage.retained_callbacks = usage
+                .retained_callbacks
+                .checked_sub(count)
+                .expect("callback charge underflow");
+        }
+        self.global_render_usage.retained_callbacks = self
+            .global_render_usage
+            .retained_callbacks
+            .checked_sub(count)
+            .expect("global callback charge underflow");
+    }
+
+    /// Test/diagnostic snapshot of compositor-owned resources. This intentionally reports totals only;
+    /// ownership identities remain private.
+    #[doc(hidden)]
+    pub fn render_usage_totals(&self) -> (usize, usize, usize) {
+        (
+            self.global_render_usage.surfaces,
+            self.global_render_usage.retained_callbacks,
+            self.global_render_usage.cpu_cache_bytes,
+        )
     }
 
     /// Milliseconds since construction, the timestamp domain for `wl_callback.done` / input events.

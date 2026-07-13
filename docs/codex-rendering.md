@@ -680,16 +680,14 @@ same protocol object ids, commit different colored buffers, destroy/recreate one
 callbacks and caches remain independent. `compositor_surface_keys_include_client_identity_and_generation` prevents
 the bare-id representation from returning.
 
-There is also no per-client rendering budget. Smithay validates individual shm objects, but dd places no cumulative
-bound on surface count, mapped shm bytes, persistent `RepackCache::bgra` bytes, dmabuf/IOSurface imports, queued frame
-callbacks or native presenter windows. One client can exhaust host RAM, fds or GPU objects and take down unrelated
-clients. Store `ClientRenderBudget` in `ClientState` (atomic/interior-mutability is required because disconnect data
-is shared), with checked reserve-before-allocation and idempotent release tokens owned by each resource. Configure
-hard defaults and optional session overrides; reject before allocating with the protocol-appropriate no-memory/error
-path, never by silently dropping another client's state. Disconnect must release the whole account, and global caps
-must sit above per-client caps to handle many-client attacks. Rust unit tests should exercise overflow, rollback and
-double-release; a C Wayland stress guest should prove one abusive client is disconnected while a second keeps
-animating. `compositor_enforces_per_client_render_resource_budgets` pins the required accounting domains.
+The compositor now has checked per-client and process-wide accounting for live surfaces, retained frame callbacks and
+persistent `RepackCache::bgra` bytes. Surface creation reserves before registering and posts a no-memory protocol
+failure to only the abusive client; cache replacement computes the complete post-replacement charge before allocating;
+callback delivery, cache removal, surface destruction and disconnect refund the exact owner account idempotently. The
+two-client protocol journey uses a one-surface limit and proves quota teardown does not reclaim the neighbour. This is
+not the whole resource boundary yet: mapped Smithay shm-pool bytes/fds, dmabuf/IOSurface imports, native presenter
+objects and executor GPU allocations still need charge tokens, allocation-failure rollback and isolation stress.
+`compositor_enforces_per_client_render_resource_budgets` remains partial until those domains are owned.
 
 Commit `06e002e7` also lands the shared eight-value buffer-transform mapping through geometry/UV/damage and fixes
 viewport destination sampling plus premultiplied ARGB source-over (XRGB remains opaque). Both former red gates are
@@ -1102,7 +1100,7 @@ pixels, and fails against the broken behavior. Do not add tests that read implem
 | `executor_accounts_cumulative_residency_and_object_counts_per_connection` | missing | unlimited individually legal GPU resources can exhaust a connection/process | Per-connection and global charge/refund budgets with disconnect stress |
 | `compositor_surface_teardown_reclaims_cpu_gpu_window_and_fence_state` | partial | Smithay surface and disconnect destruction now share idempotent CPU/cache/callback/window cleanup; client-owned executor resources and in-flight GPU fences still need ownership teardown | Add executor-owner reclamation and completion-fence retirement to the existing disconnect journey |
 | `compositor_surface_keys_include_client_identity_and_generation` | implemented | live surfaces use Wayland `ObjectId` (client + generation) to allocate monotonic presenter/cache ids; an ordinary two-client protocol test deliberately collides local ids and proves isolation | Keep `compositor_surface_identity_is_client_owned_generational_and_teardown_is_exact_once` green |
-| `compositor_enforces_per_client_render_resource_budgets` | missing | clients have unbounded surfaces, shm/cache bytes, imports and callbacks | Checked per-client/global accounting with isolation stress test |
+| `compositor_enforces_per_client_render_resource_budgets` | partial | checked per-client/global surface, retained-callback and CPU repack-cache accounting now reserves and refunds by owner; shm mappings/fds, imports, presenter objects and executor allocations remain uncharged | Extend owner tokens to remaining domains and add multi-domain isolation/rollback stress |
 | `compositor_releases_buffers_only_after_the_last_cpu_or_gpu_use` | missing | buffer release is not explicitly coupled to shm copy or zero-copy GPU completion | Per-buffer use records and exact-once release completion tests |
 | `compositor_retains_presentation_feedback_across_retryable_failure_only` | contradictory | failed present retains callbacks for retry but immediately discards its feedback | Typed retry class with coupled callback/feedback/resource terminal policy |
 | `compositor_routes_each_surface_through_its_actual_output_membership` | contradictory | outputs are advertised but surfaces have no enter/leave, selected scale, fullscreen target, or present route | Per-surface membership state and two-output event/render journey |

@@ -124,7 +124,7 @@ impl DdState {
             // (that is where `update_cursor_surface` reads it from).
             let sid = self.surface_id(surface);
             self.dirty.remove(&sid);
-            self.repacks.remove(&sid);
+            self.remove_repack_cache(sid);
             self.update_cursor_surface(surface);
             return;
         }
@@ -220,7 +220,7 @@ impl DdState {
             // Explicit detach. Only a change the first time (the assignment persists, so later commits keep
             // reporting `Removed` — treat those as no-ops).
             let had = self.buffers.remove(&sid).is_some();
-            self.repacks.remove(&sid);
+            self.remove_repack_cache(sid);
             if had {
                 self.dirty.insert(sid);
             }
@@ -261,7 +261,6 @@ impl DdState {
         scale: i32,
         surface_safe: bool,
     ) {
-        let repacks = &mut self.repacks;
         let res = with_buffer_contents(buffer, |ptr, len, data| {
             let w = data.width;
             let h = data.height;
@@ -283,7 +282,7 @@ impl DdState {
             let tight = match w.checked_mul(4).map(|t| t as usize) {
                 Some(t) if w > 0 && h > 0 && stride >= w * 4 && src_off >= 0 => t,
                 _ => {
-                    repacks.remove(&sid);
+                    self.remove_repack_cache(sid);
                     return;
                 }
             };
@@ -291,13 +290,13 @@ impl DdState {
             match last_row_start.checked_add(tight) {
                 Some(max_read) if max_read <= len => {}
                 _ => {
-                    repacks.remove(&sid);
+                    self.remove_repack_cache(sid);
                     return;
                 }
             }
             // Reuse (and partially update) the cache only if it describes the same backing texture.
             let reusable = matches!(
-                repacks.get(&sid),
+                self.repacks.get(&sid),
                 Some(c) if c.tex_w == w && c.tex_h == h && c.format == fmt
                     && c.bgra.len() == tight * h as usize
             );
@@ -310,7 +309,7 @@ impl DdState {
                 // Partial: copy ONLY the damaged rows into the existing cache (the win — the rest already
                 // matches this buffer). Full-width rows keep the copy contiguous and always correct.
                 Some((y0, y1)) => {
-                    let cache = repacks.get_mut(&sid).unwrap();
+                    let cache = self.repacks.get_mut(&sid).unwrap();
                     for row in y0..y1 {
                         let src =
                             unsafe { ptr.offset(src_off as isize + row as isize * stride as isize) };
@@ -323,7 +322,21 @@ impl DdState {
                 }
                 // Full repack (first upload / resize / format change / unmappable damage).
                 None => {
-                    let mut bgra = vec![0u8; tight * h as usize];
+                    let Some(new_len) = tight.checked_mul(h as usize) else {
+                        return;
+                    };
+                    let old_len = self.repacks.get(&sid).map_or(0, |c| c.bgra.len());
+                    if !self.replace_cache_charge(sid, old_len, new_len) {
+                        self.reject_budget_exhaustion(sid, "CPU repack cache");
+                        return;
+                    }
+                    let mut bgra = Vec::new();
+                    if bgra.try_reserve_exact(new_len).is_err() {
+                        let _ = self.replace_cache_charge(sid, new_len, old_len);
+                        self.reject_budget_exhaustion(sid, "CPU repack cache allocation");
+                        return;
+                    }
+                    bgra.resize(new_len, 0);
                     for row in 0..h as isize {
                         let src = unsafe { ptr.offset(src_off as isize + row * stride as isize) };
                         let dstart = row as usize * tight;
@@ -331,7 +344,7 @@ impl DdState {
                             std::ptr::copy_nonoverlapping(src, bgra[dstart..].as_mut_ptr(), tight);
                         }
                     }
-                    repacks.insert(
+                    self.repacks.insert(
                         sid,
                         RepackCache { bgra, tex_w: w, tex_h: h, format: fmt, damage: None },
                     );
@@ -340,7 +353,7 @@ impl DdState {
         });
         if res.is_err() {
             // Not a `wl_shm` buffer (e.g. a dmabuf) — no CPU pixels to cache.
-            self.repacks.remove(&sid);
+            self.remove_repack_cache(sid);
         }
     }
 
@@ -741,11 +754,21 @@ impl DdState {
         if callbacks.is_empty() {
             return;
         }
-        let q = self.retained_callbacks.entry(sid).or_default();
         for cb in callbacks {
+            if !self.reserve_callback(sid) {
+                self.reject_budget_exhaustion(sid, "retained callback");
+                break;
+            }
+            let q = self.retained_callbacks.entry(sid).or_default();
             q.push_back(cb);
-            while q.len() > MAX_RETAINED_CALLBACKS {
+            let dropped = if q.len() > MAX_RETAINED_CALLBACKS {
                 q.pop_front(); // terminal policy: drop the oldest undeliverable callback
+                true
+            } else {
+                false
+            };
+            if dropped {
+                self.release_callbacks(sid, 1);
             }
         }
     }
@@ -753,10 +776,13 @@ impl DdState {
     /// Take (and clear) the callbacks retained for `sid` across earlier failed presents — fired by the
     /// next accepted present.
     fn take_retained_callbacks(&mut self, sid: u32) -> Vec<WlCallback> {
-        self.retained_callbacks
+        let callbacks: Vec<_> = self
+            .retained_callbacks
             .remove(&sid)
             .map(|q| q.into_iter().collect())
-            .unwrap_or_default()
+            .unwrap_or_default();
+        self.release_callbacks(sid, callbacks.len());
+        callbacks
     }
 
     /// `surface` and every subsurface descendant, depth-first.
