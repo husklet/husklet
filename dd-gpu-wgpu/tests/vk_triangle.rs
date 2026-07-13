@@ -120,7 +120,15 @@ fn vk_triangle_renders_on_real_metal() {
     let view_ci = vk::ImageViewCreateInfo::default()
         .image(vk::Image::from_raw(image))
         .view_type(vk::ImageViewType::TYPE_2D)
-        .format(vk::Format::R8G8B8A8_UNORM);
+        .format(vk::Format::R8G8B8A8_UNORM)
+        // The shim validates the view's subresource range against the image (color aspect, ≥1 level/layer).
+        .subresource_range(vk::ImageSubresourceRange {
+            aspect_mask: vk::ImageAspectFlags::COLOR,
+            base_mip_level: 0,
+            level_count: 1,
+            base_array_layer: 0,
+            layer_count: 1,
+        });
     let mut view: u64 = 0;
     assert_eq!(ddvk::vkCreateImageView(dev, &view_ci, core::ptr::null(), &mut view), 0);
 

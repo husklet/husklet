@@ -83,6 +83,10 @@ fn vk_swapchain_present_renders_on_real_metal() {
         .image_extent(vk::Extent2D { width: W, height: H })
         .image_array_layers(1)
         .image_usage(vk::ImageUsageFlags::COLOR_ATTACHMENT)
+        // The shim validates the swapchain against the reported surface capabilities: identity transform
+        // and opaque composite alpha are the only supported values.
+        .pre_transform(vk::SurfaceTransformFlagsKHR::IDENTITY)
+        .composite_alpha(vk::CompositeAlphaFlagsKHR::OPAQUE)
         .present_mode(vk::PresentModeKHR::FIFO);
     let mut swapchain = 0u64;
     assert_eq!(ddvk::vkCreateSwapchainKHR(dev, &sc_ci, core::ptr::null(), &mut swapchain), 0);

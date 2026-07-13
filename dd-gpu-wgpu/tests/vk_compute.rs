@@ -129,10 +129,26 @@ fn vk_vecadd_runs_on_real_metal() {
     let mut shader: u64 = 0;
     assert_eq!(ddvk::vkCreateShaderModule(dev, &sm_ci, core::ptr::null(), &mut shader), 0);
 
-    let layout_ci = vk::PipelineLayoutCreateInfo::default();
+    // --- descriptor set layout: the shader declares set 0, storage-buffer bindings 0/1/2 (a/b/c). The
+    //     shim reflects the SPIR-V and requires the pipeline layout to cover exactly these. ---
+    let dsl_bindings = [
+        vk::DescriptorSetLayoutBinding::default().binding(0).descriptor_type(vk::DescriptorType::STORAGE_BUFFER).descriptor_count(1).stage_flags(vk::ShaderStageFlags::COMPUTE),
+        vk::DescriptorSetLayoutBinding::default().binding(1).descriptor_type(vk::DescriptorType::STORAGE_BUFFER).descriptor_count(1).stage_flags(vk::ShaderStageFlags::COMPUTE),
+        vk::DescriptorSetLayoutBinding::default().binding(2).descriptor_type(vk::DescriptorType::STORAGE_BUFFER).descriptor_count(1).stage_flags(vk::ShaderStageFlags::COMPUTE),
+    ];
+    let dsl_ci = vk::DescriptorSetLayoutCreateInfo::default().bindings(&dsl_bindings);
+    let mut dsl: u64 = 0;
+    assert_eq!(
+        ddvk::vkCreateDescriptorSetLayout(dev, &dsl_ci as *const _, core::ptr::null(), &mut dsl),
+        0
+    );
+
+    // --- pipeline layout referencing that descriptor set layout ---
+    let pl_set_layouts = [vk::DescriptorSetLayout::from_raw(dsl)];
+    let layout_ci = vk::PipelineLayoutCreateInfo::default().set_layouts(&pl_set_layouts);
     let mut layout: u64 = 0;
     assert_eq!(
-        ddvk::vkCreatePipelineLayout(dev, (&layout_ci as *const _) as *const vk::PipelineLayoutCreateInfo, core::ptr::null(), &mut layout),
+        ddvk::vkCreatePipelineLayout(dev, &layout_ci as *const _, core::ptr::null(), &mut layout),
         0
     );
 
@@ -149,13 +165,7 @@ fn vk_vecadd_runs_on_real_metal() {
         0
     );
 
-    // --- descriptor set: bindings 0/1/2 -> a/b/c ---
-    let dsl_ci = vk::DescriptorSetLayoutCreateInfo::default();
-    let mut dsl: u64 = 0;
-    assert_eq!(
-        ddvk::vkCreateDescriptorSetLayout(dev, (&dsl_ci as *const _) as *const vk::DescriptorSetLayoutCreateInfo, core::ptr::null(), &mut dsl),
-        0
-    );
+    // --- descriptor pool + set: bindings 0/1/2 -> a/b/c ---
     let dp_ci = vk::DescriptorPoolCreateInfo::default();
     let mut pool_d: u64 = 0;
     assert_eq!(
