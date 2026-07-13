@@ -576,16 +576,23 @@ pub extern "C" fn glMapBufferRange(target: u32, offset: isize, length: isize, _a
     if s.buf[b].data.len() < need {
         s.buf[b].data.resize(need, 0);
     }
+    s.buf[b].mapped = true;
     unsafe { s.buf[b].data.as_mut_ptr().add(offset as usize) as *mut c_void }
 }
 
-/// `glUnmapBuffer` — mark the bound buffer dirty (gl_shim.c bumps `gen`, returns GL_TRUE).
+/// `glUnmapBuffer` — mark the bound buffer dirty (gl_shim.c bumps `gen`, returns GL_TRUE) and clear the
+/// mapped flag so a subsequent draw may again source from it.
 #[no_mangle]
 pub extern "C" fn glUnmapBuffer(target: u32) -> u8 {
     let mut s = gl();
-    let b = if target == GL_ELEMENT_ARRAY_BUFFER { s.elem_buf } else { s.arr_buf } as usize;
+    let b = match target {
+        GL_ELEMENT_ARRAY_BUFFER => s.elem_buf,
+        GL_PIXEL_PACK_BUFFER => s.pack_buf,
+        _ => s.arr_buf,
+    } as usize;
     if b < MAXBUF && s.buf[b].used {
         s.buf[b].gen += 1;
+        s.buf[b].mapped = false;
     }
     GL_TRUE
 }
@@ -1564,7 +1571,9 @@ uniform_matrix!(glUniformMatrix4x3fv, 4, 3);
 
 #[no_mangle]
 pub extern "C" fn glVertexAttribPointer(index: u32, size: i32, kind: u32, normalized: u8, stride: i32, ptr: *const c_void) {
+    // Negotiated limit: an attribute index at or beyond GL_MAX_VERTEX_ATTRIBS (16) is out of range.
     if (index as usize) >= MAXATTR {
+        crate::state::set_gl_error(GL_INVALID_VALUE);
         return;
     }
     let mut s = gl();
@@ -1585,6 +1594,7 @@ pub extern "C" fn glVertexAttribPointer(index: u32, size: i32, kind: u32, normal
 #[no_mangle]
 pub extern "C" fn glVertexAttribIPointer(index: u32, size: i32, kind: u32, stride: i32, ptr: *const c_void) {
     if (index as usize) >= MAXATTR {
+        crate::state::set_gl_error(GL_INVALID_VALUE);
         return;
     }
     let mut s = gl();
@@ -1602,16 +1612,22 @@ pub extern "C" fn glVertexAttribIPointer(index: u32, size: i32, kind: u32, strid
 
 #[no_mangle]
 pub extern "C" fn glEnableVertexAttribArray(index: u32) {
-    if (index as usize) < MAXATTR {
-        let mut s = gl();
-        s.attr[index as usize].enabled = true;
-        s.vao_store_current();
+    if (index as usize) >= MAXATTR {
+        crate::state::set_gl_error(GL_INVALID_VALUE);
+        return;
     }
+    let mut s = gl();
+    s.attr[index as usize].enabled = true;
+    s.vao_store_current();
 }
 
 #[no_mangle]
 pub extern "C" fn glDisableVertexAttribArray(index: u32) {
-    if (index as usize) < MAXATTR {
+    if (index as usize) >= MAXATTR {
+        crate::state::set_gl_error(GL_INVALID_VALUE);
+        return;
+    }
+    {
         let mut s = gl();
         s.attr[index as usize].enabled = false;
         s.vao_store_current();
@@ -1648,7 +1664,8 @@ fn draw_error(s: &crate::state::GlState, mode: u32, first: i32, count: i32, inde
     if let Some((kind, offset)) = indexed {
         let b = s.elem_buf as usize;
         let end = (count as usize).checked_mul(index_size).and_then(|n| offset.checked_add(n));
-        if offset % index_size != 0 || b == 0 || b >= MAXBUF || !s.buf[b].used || end.is_none_or(|n| n > s.buf[b].data.len()) {
+        // A draw cannot source indices from a buffer that is currently mapped (client owns storage).
+        if offset % index_size != 0 || b == 0 || b >= MAXBUF || !s.buf[b].used || s.buf[b].mapped || end.is_none_or(|n| n > s.buf[b].data.len()) {
             return Some(GL_INVALID_OPERATION);
         }
         last = s.buf[b].data[offset..end.unwrap()]
@@ -1676,7 +1693,8 @@ fn draw_error(s: &crate::state::GlState, mode: u32, first: i32, count: i32, inde
         let stride = if attr.stride == 0 { elem } else { Some(attr.stride as usize) };
         let end = elem.and_then(|e| stride.and_then(|st| last.checked_mul(st)).and_then(|off| attr.offset.checked_add(off)).and_then(|off| off.checked_add(e)));
         let b = attr.buffer as usize;
-        if b == 0 || b >= MAXBUF || !s.buf[b].used || end.is_none_or(|n| n > s.buf[b].data.len()) {
+        // A draw cannot source vertices from a buffer that is currently mapped (client owns storage).
+        if b == 0 || b >= MAXBUF || !s.buf[b].used || s.buf[b].mapped || end.is_none_or(|n| n > s.buf[b].data.len()) {
             return Some(GL_INVALID_OPERATION);
         }
     }

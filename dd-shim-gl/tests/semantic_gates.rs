@@ -280,6 +280,68 @@ fn draw_validation_rejects_inputs_before_recording() {
     assert_eq!(gles::glGetError(), GL_NO_ERROR, "valid indexed draw was rejected");
 }
 
+// ---- gles_draw_calls_validate_all_inputs_before_snapshot_or_recording (mapped + limits) ---------
+
+#[test]
+fn draw_validation_rejects_mapped_buffers_and_over_limit_attribs() {
+    let _serial = serial_guard();
+    while gles::glGetError() != GL_NO_ERROR {}
+    gles::glBindFramebuffer(GL_FRAMEBUFFER, 0);
+
+    // Negotiated limit: an attribute index at/beyond GL_MAX_VERTEX_ATTRIBS (16) is out of range.
+    gles::glVertexAttribPointer(16, 2, GL_FLOAT, GL_FALSE, 0, core::ptr::null());
+    assert_eq!(gles::glGetError(), GL_INVALID_VALUE, "over-limit attrib index must be rejected");
+    gles::glEnableVertexAttribArray(99);
+    assert_eq!(gles::glGetError(), GL_INVALID_VALUE, "over-limit enable must be rejected");
+    // Index 15 (the last legal slot) is accepted.
+    gles::glVertexAttribPointer(15, 2, GL_FLOAT, GL_FALSE, 0, core::ptr::null());
+    assert_eq!(gles::glGetError(), GL_NO_ERROR, "the last legal attrib index was rejected");
+
+    // Set up a valid array draw, then map its VBO and prove the draw is refused while mapped.
+    let program = linked_test_program();
+    gles::glUseProgram(program);
+    let mut vbo = 0;
+    gles::glGenBuffers(1, &mut vbo);
+    gles::glBindBuffer(GL_ARRAY_BUFFER, vbo);
+    let vertices = [0.0f32; 6];
+    gles::glBufferData(GL_ARRAY_BUFFER, std::mem::size_of_val(&vertices) as isize, vertices.as_ptr().cast(), 0x88E4);
+    gles::glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 0, core::ptr::null());
+    gles::glEnableVertexAttribArray(0);
+    // Baseline: the draw is valid.
+    gles::glDrawArrays(GL_TRIANGLES, 0, 3);
+    assert_eq!(gles::glGetError(), GL_NO_ERROR, "valid array draw was rejected");
+    let serial_before = gles::submission_serials();
+
+    // Map the vertex buffer: a draw sourcing from it is now GL_INVALID_OPERATION and records nothing.
+    let mapped = gles::glMapBufferRange(GL_ARRAY_BUFFER, 0, std::mem::size_of_val(&vertices) as isize, 0x0002);
+    assert!(!mapped.is_null());
+    gles::glDrawArrays(GL_TRIANGLES, 0, 3);
+    assert_eq!(gles::glGetError(), GL_INVALID_OPERATION, "draw from a mapped vertex buffer must be rejected");
+    assert_eq!(gles::submission_serials(), serial_before, "a rejected draw must not record/submit");
+
+    // After unmapping, the same draw is valid again.
+    assert_eq!(gles::glUnmapBuffer(GL_ARRAY_BUFFER), GL_TRUE);
+    gles::glDrawArrays(GL_TRIANGLES, 0, 3);
+    assert_eq!(gles::glGetError(), GL_NO_ERROR, "draw after unmap was rejected");
+
+    // Indexed draw from a mapped element buffer is likewise rejected.
+    let mut ibo = 0;
+    gles::glGenBuffers(1, &mut ibo);
+    gles::glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, ibo);
+    let indices = [0u16, 1, 2];
+    gles::glBufferData(GL_ELEMENT_ARRAY_BUFFER, std::mem::size_of_val(&indices) as isize, indices.as_ptr().cast(), 0x88E4);
+    gles::glDrawElements(GL_TRIANGLES, 3, GL_UNSIGNED_SHORT, core::ptr::null());
+    assert_eq!(gles::glGetError(), GL_NO_ERROR, "valid indexed draw was rejected");
+    let em = gles::glMapBufferRange(GL_ELEMENT_ARRAY_BUFFER, 0, std::mem::size_of_val(&indices) as isize, 0x0002);
+    assert!(!em.is_null());
+    gles::glDrawElements(GL_TRIANGLES, 3, GL_UNSIGNED_SHORT, core::ptr::null());
+    assert_eq!(gles::glGetError(), GL_INVALID_OPERATION, "indexed draw from a mapped element buffer must be rejected");
+    assert_eq!(gles::glUnmapBuffer(GL_ELEMENT_ARRAY_BUFFER), GL_TRUE);
+
+    gles::glDeleteBuffers(1, &vbo);
+    gles::glDeleteBuffers(1, &ibo);
+}
+
 #[test]
 fn framebuffer_completeness_tracks_color_attachment_and_blocks_draws() {
     let _serial = serial_guard();

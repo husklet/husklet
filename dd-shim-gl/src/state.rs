@@ -117,6 +117,9 @@ pub struct Buffer {
     pub data: Vec<u8>,
     pub usage: u32,
     pub gen: u64, // bumped on every content mutation → dirty key for the swap-time upload skip
+    /// True between `glMapBufferRange` and `glUnmapBuffer`. A draw that sources vertices or indices
+    /// from a currently-mapped buffer is `GL_INVALID_OPERATION` (the client still owns the storage).
+    pub mapped: bool,
 }
 
 #[derive(Clone, Default)]
