@@ -442,6 +442,16 @@ pub struct DdState {
     /// set only records which windows came from the X11 bridge (for policy/diagnostics).
     x11_windows: HashSet<u32>,
     surface_owners: HashMap<u32, ClientId>,
+    /// Clients that have ever held keyboard focus — a proxy for "this client bound `wl_seat` and can
+    /// consume input" used by the split-client input router (`handlers::input_routing`). Chrome's browser
+    /// connection owns the seat + focus while a SEPARATE gpu/shim connection owns the visible IOSurface
+    /// window; an event on the gpu window is forwarded to the browser client. See
+    /// [`DdState::surface_can_receive_input`].
+    seat_input_clients: HashSet<ClientId>,
+    /// Server-wide temporary logical crop mirrored from the input (browser) connection onto the visible
+    /// (gpu/shim) connection so its IOSurface is cropped to the browser window's region at present time.
+    /// Set by [`DdState::set_external_logical_crop`]; applied in `snapshot_surface`.
+    external_logical_crop: Option<handlers::input_routing::ExternalLogicalCrop>,
     /// Client charged a presenter-object (native window) budget unit for surface `sid`, so the charge can
     /// be refunded on `drop_window` even after the surface's protocol object / owner record is gone.
     presenter_object_charges: HashMap<u32, ClientId>,
@@ -741,6 +751,8 @@ impl DdState {
             surface_owners: HashMap::new(),
             presenter_object_charges: HashMap::new(),
             x11_windows: HashSet::new(),
+            seat_input_clients: HashSet::new(),
+            external_logical_crop: None,
             surface_resources: HashMap::new(),
             render_usage: HashMap::new(),
             global_render_usage: RenderUsage::default(),
@@ -945,6 +957,7 @@ impl DdState {
         for sid in sids {
             self.fence_drop(sid);
         }
+        self.seat_input_clients.remove(client);
         // Any in-flight zero-copy use whose owner is this client but whose surface record is already gone.
         let mut i = 0;
         while i < self.inflight_zero_copy.len() {
@@ -1385,6 +1398,11 @@ impl DdState {
         use smithay::wayland::selection::data_device::set_data_device_focus;
         use smithay::wayland::selection::primary_selection::set_primary_focus;
         self.focus = Some(surface.clone());
+        // Record the focused surface's client as input-capable (the split-client router uses this to tell
+        // Chrome's browser/input connection from its gpu/shim connection).
+        if let Some(client) = surface.client() {
+            self.seat_input_clients.insert(client.id());
+        }
         // Text-input focus follows keyboard focus (zwp_text_input_v3): the newly focused surface's
         // text-input instances get `enter`, the previously focused ones `leave`.
         self.set_text_input_focus(Some(surface.clone()));
@@ -2097,5 +2115,199 @@ mod xwayland_window_model_tests {
         assert!(dropped.lock().unwrap().contains(&1), "withdraw drops the native presenter window");
         assert!(state.focus.is_none(), "withdraw clears focus the X11 window held");
         assert!(!state.is_x11_window(1), "withdraw clears the X11-window record");
+    }
+}
+
+#[cfg(test)]
+mod input_routing_tests {
+    //! In-process proof of the multi-window + Chrome split-client input router
+    //! (`handlers::input_routing`). Two clients on one Display: A = the "browser" connection (owns the seat
+    //! + an xdg toplevel with window geometry → input-capable), B = the "gpu/shim" connection (commits the
+    //! visible surface but never holds focus → NOT input-capable). Proves the routing DECISION and the
+    //! geometry-mirror state machine without a live macOS multi-window app (the AppKit `window_ptr_to_sid`
+    //! → route → deliver wiring in `main.rs` is macOS-only and validated live).
+
+    use super::*;
+    use crate::handlers::input_routing::{ExternalLogicalCrop, PointerRoute};
+    use dd_display::present::{PresentError, PresentOutcome, Presenter, SurfaceBuffer};
+    use dd_display::wire::{Conn, Message};
+    use smithay::reexports::wayland_server::Display;
+    use std::os::unix::io::{FromRawFd, RawFd};
+
+    struct P;
+    impl Presenter for P {
+        fn present(&mut self, _s: &SurfaceBuffer) -> Result<PresentOutcome, PresentError> {
+            Ok(PresentOutcome::Delivered { serial: 1, timing: None })
+        }
+    }
+
+    fn sp() -> (RawFd, RawFd) {
+        let mut sv = [0i32; 2];
+        assert_eq!(unsafe { libc::socketpair(libc::AF_UNIX, libc::SOCK_STREAM, 0, sv.as_mut_ptr()) }, 0);
+        for fd in sv {
+            unsafe {
+                let fl = libc::fcntl(fd, libc::F_GETFL);
+                libc::fcntl(fd, libc::F_SETFL, fl | libc::O_NONBLOCK);
+            }
+        }
+        (sv[0], sv[1])
+    }
+
+    struct Cli {
+        conn: Conn,
+        next: u32,
+        globals: HashMap<String, u32>,
+    }
+    impl Cli {
+        fn new(fd: RawFd) -> Cli {
+            Cli { conn: Conn::new(fd), next: 2, globals: HashMap::new() }
+        }
+        fn alloc(&mut self) -> u32 {
+            let i = self.next;
+            self.next += 1;
+            i
+        }
+        fn drain(&mut self) -> Vec<(u32, u16, Vec<u8>)> {
+            loop {
+                match self.conn.fill() {
+                    Ok(0) | Ok(-1) | Err(_) => break,
+                    _ => {}
+                }
+            }
+            let mut out = Vec::new();
+            while let Some(m) = self.conn.next_message() {
+                if m.object == 2 && m.opcode == 0 {
+                    let mut r = m.reader();
+                    let name = r.u32();
+                    let iface = r.string();
+                    let _ = r.u32();
+                    self.globals.entry(iface).or_insert(name);
+                }
+                out.push((m.object, m.opcode, m.body.to_vec()));
+            }
+            out
+        }
+        fn bind(&mut self, iface: &str, ver: u32) -> u32 {
+            let id = self.alloc();
+            let name = self.globals[iface];
+            self.conn.send(&Message::new(2, 0).u32(name).string(iface).u32(ver).u32(id));
+            id
+        }
+    }
+
+    #[test]
+    fn split_client_routing_and_geometry_mirror() {
+        let display: Display<DdState> = Display::new().unwrap();
+        let mut dh = display.handle();
+        let mut display = display;
+        let mut state = DdState::new(dh.clone(), Box::new(P));
+
+        let (acf, asf) = sp();
+        dh.insert_client(unsafe { std::os::unix::net::UnixStream::from_raw_fd(asf) }, Arc::new(ClientState::default())).unwrap();
+        let (bcf, bsf) = sp();
+        dh.insert_client(unsafe { std::os::unix::net::UnixStream::from_raw_fd(bsf) }, Arc::new(ClientState::default())).unwrap();
+        let mut a = Cli::new(acf);
+        let mut b = Cli::new(bcf);
+
+        macro_rules! pump {
+            () => {{
+                a.conn.flush().unwrap();
+                b.conn.flush().unwrap();
+                display.dispatch_clients(&mut state).unwrap();
+                display.flush_clients().unwrap();
+                a.drain();
+                b.drain();
+            }};
+        }
+
+        // Registry for both.
+        let ra = a.alloc();
+        a.conn.send(&Message::new(1, 1).u32(ra));
+        let rb = b.alloc();
+        b.conn.send(&Message::new(1, 1).u32(rb));
+        pump!();
+
+        // Client A = browser/input connection: wl_compositor + xdg_wm_base, map a toplevel with window
+        // geometry. Mapping takes keyboard focus → A becomes input-capable. (sid 1)
+        let acomp = a.bind("wl_compositor", 4);
+        let awm = a.bind("xdg_wm_base", 1);
+        pump!();
+        let asurf = a.alloc();
+        a.conn.send(&Message::new(acomp, 0).u32(asurf));
+        let axdg = a.alloc();
+        a.conn.send(&Message::new(awm, 2).u32(axdg).u32(asurf)); // get_xdg_surface
+        let atop = a.alloc();
+        a.conn.send(&Message::new(axdg, 1).u32(atop)); // get_toplevel
+        a.conn.send(&Message::new(axdg, 3).i32(0).i32(0).i32(800).i32(600)); // set_window_geometry
+        a.conn.send(&Message::new(asurf, 6)); // commit → maps → focus
+        pump!();
+
+        // Client B = gpu/shim connection: just a wl_compositor surface with a committed buffer, never
+        // focused → NOT input-capable. (sid 2)
+        let bcomp = b.bind("wl_compositor", 4);
+        let bshm = b.bind("wl_shm", 1);
+        pump!();
+        let bsurf = b.alloc();
+        b.conn.send(&Message::new(bcomp, 0).u32(bsurf));
+        let (w, h) = (1000i32, 1000i32);
+        let stride = w * 4;
+        let size = (stride * h) as usize;
+        let fd = dd_display::keymap::anon_fd_with(&vec![0u8; size]).unwrap();
+        let pool = b.alloc();
+        b.conn.send(&Message::new(bshm, 0).u32(pool).u32(size as u32));
+        b.conn.queue_fd(fd);
+        let bbuf = b.alloc();
+        b.conn.send(&Message::new(pool, 0).u32(bbuf).i32(0).i32(w).i32(h).i32(stride).u32(1));
+        b.conn.send(&Message::new(bsurf, 1).u32(bbuf).i32(0).i32(0));
+        b.conn.send(&Message::new(bsurf, 6));
+        pump!();
+        unsafe { libc::close(fd) };
+
+        // A (host sid 1) is input-capable; B (host sid 2) is not.
+        assert!(state.surface_can_receive_input(1), "browser connection can receive input");
+        assert!(!state.surface_can_receive_input(2), "gpu/shim connection cannot receive input");
+
+        // Routing: a click on A's window delivers to A; a click on B's (visible) window FORWARDS to A.
+        assert_eq!(state.route_window_input(1), PointerRoute::Target { sid: 1 });
+        assert_eq!(
+            state.route_window_input(2),
+            PointerRoute::Forward { target_sid: 1, via_sid: 2 },
+            "a click on the gpu window forwards to the browser toplevel"
+        );
+
+        // A's focused logical geometry comes from its xdg window geometry.
+        let geo = state.focused_logical_geometry(1).expect("A has geometry");
+        assert_eq!((geo.w, geo.h, geo.source), (800, 600, "xdg_window_geometry"));
+
+        // Geometry mirror is gated on the env knob (parity with legacy DD_DISPLAY_MIRROR_INPUT_GEOMETRY).
+        assert_eq!(state.mirrored_input_crop(2), None, "mirror off by default");
+        std::env::set_var("DD_DISPLAY_MIRROR_INPUT_GEOMETRY", "1");
+        assert_eq!(
+            state.mirrored_input_crop(2),
+            Some(ExternalLogicalCrop { source_sid: 1, x: 0, y: 0, w: 800, h: 600, source: "xdg_window_geometry" }),
+            "the browser geometry mirrors onto the gpu surface"
+        );
+        // The mirror never crops the input surface itself.
+        assert_eq!(state.mirrored_input_crop(1), None);
+        std::env::remove_var("DD_DISPLAY_MIRROR_INPUT_GEOMETRY");
+
+        // apply_external_crop narrows the visible (gpu) surface's presented region to the mirrored window.
+        state.set_external_logical_crop(Some(ExternalLogicalCrop { source_sid: 1, x: 0, y: 0, w: 800, h: 600, source: "xdg_window_geometry" }));
+        let mut sb = SurfaceBuffer {
+            sid: 2, width: 1000, height: 1000, texture_width: 1000, texture_height: 1000, stride: 4000,
+            format: 1, bgra: Vec::new(), title: "gpu".into(), iosurface_id: Some(9), gpu_render: false,
+            uv_rect: [0.0, 0.0, 1.0, 1.0], damage: None, popup: None, overlays: Vec::new(),
+        };
+        state.apply_external_crop(&mut sb, 2);
+        assert_eq!((sb.width, sb.height), (800, 600), "gpu surface cropped to the browser window size");
+        assert_eq!(sb.uv_rect, [0.0, 0.0, 0.8, 0.6], "backing sample rect narrowed to the crop");
+        // The crop is not applied to the input surface (sid 1).
+        let mut sb1 = SurfaceBuffer {
+            sid: 1, width: 800, height: 600, texture_width: 800, texture_height: 600, stride: 3200,
+            format: 1, bgra: Vec::new(), title: "browser".into(), iosurface_id: None, gpu_render: false,
+            uv_rect: [0.0, 0.0, 1.0, 1.0], damage: None, popup: None, overlays: Vec::new(),
+        };
+        state.apply_external_crop(&mut sb1, 1);
+        assert_eq!((sb1.width, sb1.height), (800, 600), "input surface is never cropped");
     }
 }

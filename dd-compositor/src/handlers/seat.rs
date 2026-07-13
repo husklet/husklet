@@ -116,6 +116,24 @@ impl DdState {
         ptr.frame(self);
     }
 
+    /// Deliver an absolute pointer motion to the current keyboard-focused surface DIRECTLY, bypassing the
+    /// buffer hit-test. The split-client router uses this to forward input from a gpu/shim window to the
+    /// browser connection's toplevel — which owns the seat but commits no visible buffer of its own to
+    /// hit-test against — so the browser still receives motion at the mirrored coordinates.
+    pub fn pointer_motion_forced(&mut self, x: f64, y: f64) {
+        let (x, y) = match self.constrain_motion(x, y) {
+            Some(p) => p,
+            None => return,
+        };
+        self.ptr_loc = (x, y);
+        let ptr = self.pointer.clone();
+        let focus = self.focus.clone().map(|s| (s, (0.0, 0.0).into()));
+        let serial = SERIAL_COUNTER.next_serial();
+        let time = self.now_ms();
+        ptr.motion(self, focus, &MotionEvent { location: (x, y).into(), serial, time });
+        ptr.frame(self);
+    }
+
     /// Pointer button (evdev code, e.g. `BTN_LEFT = 0x110`).
     pub fn pointer_button(&mut self, button: u32, pressed: bool) {
         use smithay::backend::input::ButtonState;

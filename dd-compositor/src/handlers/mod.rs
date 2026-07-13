@@ -26,6 +26,7 @@ pub mod explicit_sync;
 pub mod idle_inhibit;
 pub mod keyboard_shortcuts_inhibit;
 pub mod pointer_gestures;
+pub mod input_routing;
 pub mod tablet;
 pub mod xdg_foreign;
 

@@ -356,23 +356,6 @@ mod macos {
     /// Drain queued AppKit events: route input into the Smithay seat, then forward to AppKit so window
     /// chrome stays responsive.
     fn drain_appkit(app: &Retained<NSApplication>, data: &mut LoopData) {
-        // Resolve the focused surface's on-screen size + input scale so Cocoa's bottom-left point coords
-        // map into the client's top-left surface space. `surface_size` is the window size in POINTS and
-        // `surface_scale` is device-pixels-per-point for the input path (1.0 for the point-space present,
-        // matching the legacy dd-display live loop); threading both keeps clicks landing correctly on a
-        // 2x Retina backing store instead of assuming a fixed 1.0 scale.
-        // The presenter is keyed by the compositor's monotonic HOST surface id, not the client-local
-        // `wl_surface` protocol object id, so resolve the focused surface's host sid to look up its
-        // on-screen size + input scale (see `DdState::focused_surface_sid`). Using the protocol id here
-        // silently missed the lookup and left pointer Y un-flipped on the focused window.
-        let sid = data.state.focused_surface_sid();
-        let flip_h = sid
-            .and_then(|sid| data.state.presenter.surface_size(sid))
-            .map(|(_, h)| h);
-        let scale = sid
-            .map(|sid| data.state.presenter.surface_scale(sid))
-            .unwrap_or(1.0);
-
         loop {
             let ev = unsafe {
                 app.nextEventMatchingMask_untilDate_inMode_dequeue(
@@ -384,12 +367,69 @@ mod macos {
             };
             match ev {
                 Some(ev) => {
-                    inject(&mut data.state, &ev, flip_h, scale);
+                    route_and_inject(&mut data.state, &ev);
                     unsafe { app.sendEvent(&ev) };
                 }
                 None => break,
             }
         }
+    }
+
+    /// Route one `NSEvent` to the correct surface. A pointer event carries the `NSWindow*` it targeted;
+    /// the presenter maps it to a host sid (`window_ptr_to_sid`) and `DdState::route_window_input` decides
+    /// whether to deliver to that window (multi-window: focus it first so a click on window B lands on B)
+    /// or FORWARD to another client's input surface (Chrome split-client: the clicked gpu/shim window can't
+    /// consume input, so the browser connection's toplevel gets it — using the clicked window's on-screen
+    /// size for the coordinate flip — and the browser geometry is mirrored onto the gpu surface for the
+    /// next present). Keyboard / window-less events go to the current keyboard focus. Flip/scale come from
+    /// the VISIBLE (clicked) window, keyed by the HOST sid the presenter uses.
+    fn route_and_inject(state: &mut crate::DdState, ev: &NSEvent) {
+        use dd_compositor::handlers::input_routing::PointerRoute;
+        let ty = unsafe { ev.r#type() };
+        let is_pointer = matches!(
+            ty,
+            NSEventType::MouseMoved
+                | NSEventType::LeftMouseDragged
+                | NSEventType::RightMouseDragged
+                | NSEventType::LeftMouseDown
+                | NSEventType::LeftMouseUp
+                | NSEventType::RightMouseDown
+                | NSEventType::RightMouseUp
+                | NSEventType::ScrollWheel
+        );
+        if is_pointer {
+            let mtm = MainThreadMarker::new().expect("route_and_inject on main thread");
+            if let Some(win) = unsafe { ev.window(mtm) } {
+                let wp = Retained::as_ptr(&win) as *const std::ffi::c_void;
+                if let Some(clicked) = state.presenter.window_ptr_to_sid(wp) {
+                    match state.route_window_input(clicked) {
+                        PointerRoute::Target { sid } => {
+                            state.focus_window_by_sid(sid);
+                            let (flip_h, scale) = flip_for(state, sid);
+                            inject(state, ev, flip_h, scale, false);
+                        }
+                        PointerRoute::Forward { target_sid, via_sid } => {
+                            state.focus_window_by_sid(target_sid);
+                            state.refresh_input_geometry_mirror(via_sid);
+                            let (flip_h, scale) = flip_for(state, via_sid);
+                            inject(state, ev, flip_h, scale, true);
+                        }
+                        PointerRoute::Drop => {}
+                    }
+                    return;
+                }
+            }
+        }
+        // Keyboard, or a pointer event whose window we do not own: deliver to the current focus.
+        let sid = state.focused_surface_sid();
+        let (flip_h, scale) = sid.map(|s| flip_for(state, s)).unwrap_or((None, 1.0));
+        inject(state, ev, flip_h, scale, false);
+    }
+
+    /// `(flip_h, scale)` for a visible window's host `sid`: its on-screen height (for the bottom-left →
+    /// top-left flip) and device-pixels-per-point input scale.
+    fn flip_for(state: &crate::DdState, sid: u32) -> (Option<i32>, f64) {
+        (state.presenter.surface_size(sid).map(|(_, h)| h), state.presenter.surface_scale(sid))
     }
 
     /// Flip Cocoa's bottom-left `locationInWindow` (points) into top-left surface space, scaling points
@@ -412,33 +452,42 @@ mod macos {
 
     /// Translate an `NSEvent` into `wl_seat` input on the Smithay compositor. Keyboard uses the
     /// `kVK_*`→evdev subset below; the guest's own xkbcommon (fed Smithay's keymap) resolves the sym.
-    fn inject(state: &mut crate::DdState, ev: &NSEvent, flip_h: Option<i32>, scale: f64) {
+    fn inject(state: &mut crate::DdState, ev: &NSEvent, flip_h: Option<i32>, scale: f64, forced: bool) {
+        // `forced` = deliver pointer motion straight to the current focus (the split-client forward path,
+        // where the target browser toplevel commits no visible buffer to hit-test); otherwise hit-test.
+        let motion = |state: &mut crate::DdState, x: f64, y: f64| {
+            if forced {
+                state.pointer_motion_forced(x, y);
+            } else {
+                state.pointer_motion(x, y);
+            }
+        };
         let ty = unsafe { ev.r#type() };
         match ty {
             NSEventType::MouseMoved
             | NSEventType::LeftMouseDragged
             | NSEventType::RightMouseDragged => {
                 let (x, y) = flip_point(unsafe { ev.locationInWindow() }, flip_h, scale);
-                state.pointer_motion(x, y);
+                motion(state, x, y);
             }
             NSEventType::LeftMouseDown => {
                 let (x, y) = flip_point(unsafe { ev.locationInWindow() }, flip_h, scale);
-                state.pointer_motion(x, y);
+                motion(state, x, y);
                 state.pointer_button(0x110, true);
             }
             NSEventType::LeftMouseUp => {
                 let (x, y) = flip_point(unsafe { ev.locationInWindow() }, flip_h, scale);
-                state.pointer_motion(x, y);
+                motion(state, x, y);
                 state.pointer_button(0x110, false);
             }
             NSEventType::RightMouseDown => {
                 let (x, y) = flip_point(unsafe { ev.locationInWindow() }, flip_h, scale);
-                state.pointer_motion(x, y);
+                motion(state, x, y);
                 state.pointer_button(0x111, true);
             }
             NSEventType::RightMouseUp => {
                 let (x, y) = flip_point(unsafe { ev.locationInWindow() }, flip_h, scale);
-                state.pointer_motion(x, y);
+                motion(state, x, y);
                 state.pointer_button(0x111, false);
             }
             NSEventType::ScrollWheel => {

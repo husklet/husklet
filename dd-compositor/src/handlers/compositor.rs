@@ -760,6 +760,20 @@ impl DdState {
         self.x11_windows.contains(&sid)
     }
 
+    /// Make the window backing host surface `sid` the keyboard/input focus (transfer focus to the window
+    /// the user clicked). Used by the multi-window input router so a click on window B lands on B, not on
+    /// whatever last held focus. Returns whether `sid` names a live surface.
+    #[doc(hidden)]
+    pub fn focus_window_by_sid(&mut self, sid: u32) -> bool {
+        let Some(surface) = self.surface_resources.get(&sid).cloned() else {
+            return false;
+        };
+        if self.focus.as_ref() != Some(&surface) {
+            self.focus_surface(surface);
+        }
+        true
+    }
+
     /// Host surface id of the currently keyboard-focused surface, if any. The macOS present/input loop
     /// uses this to look up the focused window's size + input scale in the presenter — which is keyed by
     /// the monotonic HOST sid, NOT the client-local `wl_surface` protocol object id — so pointer
@@ -1106,7 +1120,10 @@ impl DdState {
         });
         // GPU present path: a dmabuf-backed buffer carries a dd IOSurface id (no CPU pixels). Resolve it
         // to a zero-copy IOSurface `SurfaceBuffer` and skip the shm cache.
-        if let Some(sb) = self.dmabuf_surface_buffer(sid, buffer, buffer_scale, dst, src) {
+        if let Some(mut sb) = self.dmabuf_surface_buffer(sid, buffer, buffer_scale, dst, src) {
+            // Split-client mirror: crop the visible IOSurface to the browser window region (no-op unless
+            // DD_DISPLAY_MIRROR_INPUT_GEOMETRY set a crop for this gpu/shim surface).
+            self.apply_external_crop(&mut sb, sid);
             return Some(sb);
         }
         // `wl_shm` path: build from the tight-BGRA cache, repacked (whole buffer or only the damaged rows)
@@ -1119,7 +1136,7 @@ impl DdState {
             apply_buffer_transform(&cache.bgra, cache.tex_w, cache.tex_h, buffer_transform);
         let damage = transform_damage(cache.damage, cache.tex_w, cache.tex_h, buffer_transform);
         let (log_w, log_h, uv_rect) = logical_size_and_uv(dst, src, uw, uh, buffer_scale);
-        Some(SurfaceBuffer {
+        let mut sb = SurfaceBuffer {
             sid,
             width: log_w,
             height: log_h,
@@ -1140,7 +1157,9 @@ impl DdState {
             // `DD_DISPLAY_POPUP_WINDOWS` makes a popup its own present root (see `present_root`).
             popup: self.popup_placement(surface),
             overlays: Vec::new(),
-        })
+        };
+        self.apply_external_crop(&mut sb, sid);
+        Some(sb)
     }
 
     /// Advance frame pacing for every surface in the presented window tree (root + subsurface descendants +
