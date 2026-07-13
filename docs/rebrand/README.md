@@ -1,7 +1,12 @@
-# dd → husklet rebrand — MAP INDEX (gather-only, NOT executed)
+# dd → husklet rebrand — detailed inventory (gather-only, NOT executed)
 
-Status: **inventory complete, nothing renamed.** These docs record every `dd`-branded
-surface and its proposed target. Execution is a separate, explicit step.
+The canonical phase plan, current caveats, atomic groups and gates are in
+[`docs/refactoring/phase_3_rebrand/`](../refactoring/phase_3_rebrand/README.md). The detailed inventories
+now live in that phase's [`research/`](../refactoring/phase_3_rebrand/research/) directory. Counts and line
+numbers were gathered before several compositor/shim changes; re-run them before executing any rename.
+
+Status: **historical inventory retained, refresh required, nothing renamed.** Execution is a separate,
+explicit step.
 
 ## Decided scheme (from the user)
 - **Env vars — ALL → `HL_`**: `DD_*`→`HL_*`, `DDJIT_*`→`HL_*`, and the bare internal control
@@ -14,11 +19,11 @@ surface and its proposed target. Execution is a separate, explicit step.
 - **User-facing brand strings** → `husklet`; short prefixes → `hl`/`HL`.
 
 ## The three inventory docs
-1. [`dd-jit-inventory.md`](dd-jit-inventory.md) — **dd-jit + dd-jit-darwin** (public API + engine).
+1. [`dd-jit-inventory.md`](../refactoring/phase_3_rebrand/research/dd-jit-inventory.md) — **dd-jit + dd-jit-darwin** (public API + engine).
    131 env vars · ~40 C fns + ~14 structs · ABI/FFI seam · xattr keys · artifacts.
-2. [`dd-cli-daemon-inventory.md`](dd-cli-daemon-inventory.md) — **dd-cli/daemon/client/images**.
+2. [`dd-cli-daemon-inventory.md`](../refactoring/phase_3_rebrand/research/dd-cli-daemon-inventory.md) — **dd-cli/daemon/client/images**.
    13 env vars · 4 symbols + ~30 crate-refs · 4 pkgs/3 libs/2 bins · the cross-crate setters.
-3. [`dd-gpu-frontend-inventory.md`](dd-gpu-frontend-inventory.md) — **dd-gpu/display/term-core/gui/tests + root**.
+3. [`dd-gpu-frontend-inventory.md`](../refactoring/phase_3_rebrand/research/dd-gpu-frontend-inventory.md) — **dd-gpu/display/term-core/gui/tests + root**.
    ~60 env vars · ~30 symbols · 5 pkgs/4 libs/4 bins · 3 wire magics · 4 `com.dd.*` · Cargo/Makefile/nix/website.
 
 (Env-var counts overlap across docs — many `DD_*` are set in one crate and read in the engine.)

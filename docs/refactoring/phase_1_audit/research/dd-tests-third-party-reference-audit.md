@@ -29,7 +29,7 @@ The benchmark island is separable from correctness testing and is the clearest m
 - `dd-tests/src/bin/bench.rs`, `dd-tests/src/bench_gates.rs`, and all 16 files under `dd-tests/guests/bench/`.
 - Consumers are confined to `make bench`, the auto-discovered Cargo binary, `dd_tests::bench_gates`, and benchmark-only assertions in `dd-tests/tests/gate_invariants.rs`.
 - Removal must be atomic with the `Makefile` target, `dd-tests/src/lib.rs` export, benchmark-only invariant tests, and stale rebrand references. It must not remove the separate correctness matrix's optional `PERF` mode.
-- `docs/rebrand/dd-gpu-frontend-inventory.md` still names `bench.rs`, `BENCH_N`, `BENCH_K`, output columns, and the auto binary. Those entries become stale with removal.
+- `docs/refactoring/phase_3_rebrand/research/dd-gpu-frontend-inventory.md` still names `bench.rs`, `BENCH_N`, `BENCH_K`, output columns, and the auto binary. Those entries become stale with removal.
 
 ## Verify before removal
 

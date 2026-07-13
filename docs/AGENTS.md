@@ -27,23 +27,22 @@ build and test on a Mac.
 - **Engine resolution.** The daemon finds its JIT engines (`ddjit-*`) via `$DDJIT_DIR` → the path baked
   at build time → `/Applications/dd.app/Contents/Resources`. When running against a fresh build, pin
   `DDJIT_DIR` to that build's out-dir or you silently exercise the stale installed engine.
-- **`build.rs` and the C engine.** The engine's `#include`d `.c` files are not all tracked by
-  `rerun-if-changed`, so after editing engine C, force a rebuild (`cargo clean -p dd-jit-darwin --release`)
-  or you ship a stale engine. `make app` already does this.
+- **`build.rs` and the C engine.** The build script recursively emits `rerun-if-changed` directives for
+  the engine source trees. Packaging still forces a clean `dd-jit-darwin` release rebuild as an additional
+  freshness guard; do not infer that ordinary source edits require a manual clean.
 
 ## 4. The mac-crates post-merge gate (cross-cutting type changes)
 
-Three crates are **not** in the workspace `default-members` and so are **never compiled by a plain
+Two renderer crates are **not** in the workspace `default-members` and so are **never compiled by a plain
 `cargo build`**:
 
-- `dd-display` — the host Wayland renderer (legacy `server.rs` compositor + the Cocoa/Metal present path).
 - `dd-compositor` — the Smithay-native compositor (behind `DD_DISPLAY_SMITHAY=1`); links `libxkbcommon`.
 - `dd-gpu-wgpu` — the wgpu host GPU executor (behind `DD_GPU_BACKEND=wgpu`).
 
-They are excluded so the headless Linux dev build stays green and offline (Smithay pulls in
-`libxkbcommon`; the Cocoa/Metal path is macOS-only). The cost of that exclusion: **a change to a shared
-type these crates depend on — e.g. a new field on `dd-display`'s `present::SurfaceBuffer`, or the GPU IR —
-compiles clean under `cargo build` yet breaks the un-gated crates.** This has bitten twice.
+`dd-display` is a default member and its platform-neutral core is compiled by a plain workspace build;
+its Cocoa/Metal modules remain target-gated. Smithay and wgpu are excluded so the headless Linux dev build
+stays green and offline. The cost of that exclusion: **a change to a shared presenter type or the GPU IR
+can compile clean under `cargo build` yet break the excluded crates.**
 
 **After any merge that touches shared types used by the renderer crates, run:**
 
