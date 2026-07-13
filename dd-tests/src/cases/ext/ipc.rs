@@ -195,6 +195,23 @@ fn ext_ipc() -> Group {
         // hard fail. ROUNDS repeats drain→re-block so a readiness edge lost on RE-ARM is also caught.
         src("scm-recv-epoll", "ext_ipc/ipc_scm_recv_epoll.c")
             .out("child recv-epoll rounds=64/64 ok=1\nparent done sent=64 child_exit=0\n"),
+        // Renderer Mojo PRIMARY-CHANNEL bring-up under base::MessagePumpEpoll — the load/timing permutation
+        // NO passing gate combines (the multi-process dormant-renderer wall; see CHROME-TILE-B1-B2-RESOLVED).
+        // A fork+execve child recvmsg's an SCM_RIGHTS-RECEIVED SOCK_STREAM (the primary channel) AFTER exec
+        // and arms it LEVEL-triggered (EPOLLIN, no EPOLLET — dd must synthesize level re-report; every extra
+        // byte needs a fresh readiness report, a path the EPOLLET pump/recv gates never touch) on a shared
+        // epoll ALSO carrying >=1024 idle watched fds (high-fd interest set) while a churn thread hammers
+        // concurrent epoll_ctl ADD/DEL on that same live instance. Each decoded message is handed IO->main
+        // over a cross-thread WaitableEvent (eventfd) to a SECOND MessagePumpEpoll, and the browser writes
+        // each message after a VARIABLE delay so it lands both while the pump is parked and inside the
+        // drain/re-block window. scm-recv-epoll covers received+exec but EPOLLET/1-fd/single-thread/fixed
+        // delay; epoll-shared-xthread covers concurrent ctl but no received socket/exec/handoff;
+        // pump-worker-dispatch couples pump->FUTEX but in-process EPOLLET. A lost level re-report / lost
+        // cross-thread wake on ANY leg parks a pump with work pending = the dormant renderer; the in-guest
+        // watchdog turns that into exit 7 (never a hang). Linux engines only (epoll).
+        port("pump-primary-channel", "ext_ipc/ipc_pump_primary_channel.c")
+            .out("child primary-pump rounds=12000/12000 ok=1\nparent primary-pump sent=12000 child_exit=0\n")
+            .only(&[Engine::LinuxAarch64, Engine::LinuxX86_64]),
         // Chrome child-process Mojo BOOTSTRAP end-to-end (the multi-process dormant-renderer hypothesis):
         // the browser hands a launched child its platform channel + a shared-memory command buffer by
         // placing each fd at a fixed number and naming that number on the command line (Chrome's
