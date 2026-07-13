@@ -721,6 +721,7 @@ pub fn selftest_shader(out: &str) -> ! {
         eprintln!("selftest-shader: no Metal device");
         std::process::exit(1);
     };
+    let global_budget = dd_gpu::limits::GlobalBudget::new(2 << 30, 262_144);
     const MSL: &str = "#include <metal_stdlib>\nusing namespace metal;\nstruct VIn { float2 p [[attribute(0)]]; float4 c [[attribute(1)]]; };\nstruct VOut { float4 position [[position]]; float4 c [[user(v0)]]; };\nvertex VOut vmain(VIn in [[stage_in]]) { VOut o; o.position = float4(in.p, 0.0, 1.0); o.c = in.c; return o; }\nfragment float4 fmain(VOut in [[stage_in]]) { return float4(in.c.rgb * 0.5 + 0.5, 1.0); }\n";
     // Pack MSL bytes into words: word[0]=len, rest = bytes 4/word (matches msl_from_words / the shim).
     let mut words = vec![MSL.len() as u32];
@@ -1357,8 +1358,14 @@ pub fn run_executor(sock_path: String) {
     // builtin-MSL compile, the depth-stencil state, and — crucially — all resource + shader + PSO caches
     // (L3) survive across frames instead of being thrown away each frame. Re-resolving the guest IOSurface
     // is cached by id (the guest reuses one surface), so a steady frame does zero Metal object creation.
-    fn handle(ctx: &MetalCtx, s: &mut UnixStream) -> std::io::Result<()> {
+    fn handle(
+        ctx: &MetalCtx,
+        s: &mut UnixStream,
+        global_budget: dd_gpu::limits::GlobalBudget,
+    ) -> std::io::Result<()> {
         let mut be = MetalBackend::new(ctx);
+        let limits = dd_gpu::limits::ReplayLimits::from_capabilities(be.capabilities());
+        let mut budget = dd_gpu::limits::ExecutorBudget::new(limits, global_budget);
         // rt cache: guest IOSurface id → (retained surface, wrapped MTLTexture). The IOSurface-backed
         // texture is a live view of the surface's pages, so it stays valid across frames — wrap once.
         let mut rt_cache: HashMap<u32, Retained<ProtocolObject<dyn MTLTexture>>> = HashMap::new();
@@ -1400,7 +1407,7 @@ pub fn run_executor(sock_path: String) {
             // The ack tells the guest whether the frame actually replayed. A replay error must ack
             // failure (0), not success — otherwise the guest commits a stale/partly-rendered frame
             // believing it rendered.
-            let rendered = match dd_gpu::replay::replay_stream(&mut be, &bytes) {
+            let rendered = match dd_gpu::replay::replay_stream_limited(&mut be, &bytes, &mut budget) {
                 Ok(_) => {
                     if exec_debug() {
                         eprintln!("dd-gpu executor: replayed {len} IR bytes into IOSurface {id}");
@@ -1434,7 +1441,7 @@ pub fn run_executor(sock_path: String) {
     for conn in listener.incoming() {
         match conn {
             Ok(mut s) => {
-                if let Err(e) = handle(&ctx, &mut s) {
+                if let Err(e) = handle(&ctx, &mut s, global_budget.clone()) {
                     eprintln!("dd-gpu executor: conn error: {e}");
                 }
             }
@@ -1482,12 +1489,16 @@ fn run_executor_wgpu(sock_path: String) {
         }
     };
     eprintln!("dd-gpu executor[wgpu]: listening on {sock_path}");
+    let global_budget = dd_gpu::limits::GlobalBudget::new(2 << 30, 262_144);
 
     // Reserved present-target id the guest streams its final color attachment as (see the Metal path's
     // `set_render_target(1, ...)`); the executor re-points it at the current frame's IOSurface each frame.
     const WGPU_PRESENT_ID: u32 = 1;
 
-    fn handle(s: &mut UnixStream) -> std::io::Result<()> {
+    fn handle(
+        s: &mut UnixStream,
+        global_budget: dd_gpu::limits::GlobalBudget,
+    ) -> std::io::Result<()> {
         // Build the wgpu backend OVER dd's process-shared MTLDevice, so the wgpu render queue and the
         // compositor's blit queue share one device and can be fenced with the SAME cross-queue MTLEvents
         // (the tear-free contract — see the fn doc). One backend per connection isolates guest id namespaces.
@@ -1503,6 +1514,8 @@ fn run_executor_wgpu(sock_path: String) {
                 return Ok(());
             }
         };
+        let limits = dd_gpu::limits::ReplayLimits::from_capabilities(be.capabilities());
+        let mut budget = dd_gpu::limits::ExecutorBudget::new(limits, global_budget);
         // objc2 handle on the EXACT MTLCommandQueue wgpu submits render on — the queue we encode the
         // cross-queue fence's wait/signal on (Metal orders command buffers committed to one queue).
         let raw_q = be.raw_mtl_queue();
@@ -1586,7 +1599,7 @@ fn run_executor_wgpu(sock_path: String) {
                 }
             }
 
-            let rendered = match dd_gpu::replay::replay_stream(&mut be, &bytes) {
+            let rendered = match dd_gpu::replay::replay_stream_limited(&mut be, &bytes, &mut budget) {
                 Ok(_) => {
                     match &fence {
                         // Async (default), parity with the Metal path: SIGNAL render-complete for this gen on
@@ -1626,7 +1639,7 @@ fn run_executor_wgpu(sock_path: String) {
     for conn in listener.incoming() {
         match conn {
             Ok(mut s) => {
-                if let Err(e) = handle(&mut s) {
+                if let Err(e) = handle(&mut s, global_budget.clone()) {
                     eprintln!("dd-gpu executor[wgpu]: conn error: {e}");
                 }
             }

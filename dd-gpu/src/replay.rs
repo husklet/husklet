@@ -149,3 +149,20 @@ pub fn replay_stream(be: &mut dyn GpuBackend, bytes: &[u8]) -> Result<Vec<Presen
     }
     Ok(presents)
 }
+
+/// Replay through negotiated per-object limits and transactional aggregate accounting. The frame-byte
+/// limit is checked before decoding; all remaining charges are preflighted before the backend sees the
+/// first command, so a resource-limit rejection cannot partially mutate backend state.
+pub fn replay_stream_limited(
+    be: &mut dyn GpuBackend,
+    bytes: &[u8],
+    budget: &mut crate::limits::ExecutorBudget,
+) -> Result<Vec<PresentToken>> {
+    if bytes.len() as u64 > budget.max_frame_bytes() {
+        return Err(GpuError::ResourceLimit("frame bytes"));
+    }
+    validate_stream(bytes)?;
+    let cmds = crate::ir::decode_stream(bytes)?;
+    budget.preflight(bytes.len(), &cmds)?;
+    replay_stream(be, bytes)
+}

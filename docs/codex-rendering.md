@@ -403,24 +403,22 @@ frame before applying any command while retaining borrowed `WriteBuffer` payload
 rejects NaN and infinity. The green Rust gates preserve both guarantees. Semantic range validation remains: require
 nonnegative bounded viewport sizes, an ordered API-valid depth range, and checked rectangle/copy arithmetic.
 
-Commit `a8ccefaa` adds the versioned capability preamble and the socket reader caps a frame at the advertised 64 MiB,
-but the remaining negotiated limits are descriptive. Replay receives no `Capabilities`; `CreateBuffer` can exceed
-`max_buffer_bytes`, textures can exceed dimensions/byte footprint, and bind-group limits are not centrally checked
-before software/Metal/wgpu allocate. Introduce `ReplayLimits` derived from the negotiated intersection and validate
-the entire already-decoded frame against it during the atomic prepass. Use shared checked descriptor validators for
-all backends and a typed `ResourceLimit` error; use fallible reservations before host allocation and leave state
-unchanged on failure. Test exact limit, limit+1, arithmetic overflow, huge mip/sample footprints, and ensure a rejected
-frame produces NACK without backend mutation. `executor_enforces_every_negotiated_limit_before_decoding_or_allocating`
-pins that negotiation must control execution rather than merely document it.
+`ReplayLimits` now derives from the executor's negotiated capabilities and gates Metal/wgpu replay. Frame bytes are
+rejected before decode; the atomic prepass checks buffer size, texture dimensions and checked mip/layer/sample byte
+footprint, texture format, shader payload kind, bind-group index and every encoder-command bit before backend mutation.
+Failures use typed `ResourceLimit` errors. Exact-boundary, limit+1 and arithmetic-overflow Rust tests are green. This
+row remains partial because several backend-specific limits (for example actual compiled-shader/PSO cache expansion
+and device alignment requirements) are conservatively charged rather than negotiated as first-class capability
+fields.
 
-Per-object maxima are insufficient against many legal objects. Each executor connection needs an
-`ExecutorResourceBudget` charging buffer/texture bytes (including mips/layers/samples/alignment), shader source/
-compiled artifacts, pipelines/bind groups and object counts before creation, with exact refund on destroy and whole-
-generation teardown on disconnect. Put a global process/device budget above connection budgets so many clients cannot
-collectively exhaust Metal/wgpu. Cache sharing must charge retained ownership consistently and eviction must respect
-in-flight references. Add create-to-limit/destroy/recreate and abrupt-disconnect Rust tests, plus concurrent clients
-where one is rejected while another continues rendering. `executor_accounts_cumulative_residency_and_object_counts_per_connection`
-pins aggregate residency separately from compositor-side surface/shm quotas.
+`ExecutorBudget` now transactionally charges per-connection and shared process totals before replay for buffers,
+checked texture footprints, samplers, shader source, pipelines and bind groups, with object-count limits. Destroy
+refunds the exact live id and dropping a connection refunds its whole account; a second connection rejected by the
+global cap cannot mutate the accepted owner's account, and can allocate after that owner disconnects. The reconnect
+journal remains separately bounded at 64 MiB and becomes typed loss at overflow. This row remains partial: compiled
+shader/PSO cache growth, surfaces/fences, external allocations and cross-process journal memory are not yet charged to
+the same global device owner, and the executor currently handles socket connections serially rather than exercising
+the isolation test with concurrent live Metal clients.
 
 ## 4. Compositor and presentation gaps
 
@@ -1096,8 +1094,8 @@ pixels, and fails against the broken behavior. Do not add tests that read implem
 | `egl_query_context_rejects_destroyed_handles_without_mutating_output` | contradictory | context query accepts destroyed handles and fabricates values | Live-handle validation, preserved outputs and `EGL_BAD_CONTEXT` |
 | `vulkan_shader_translation_failure_never_falls_back_to_builtin_rendering` | contradictory | Metal/wgpu silently replace failed Vulkan shaders with builtins | Tagged shader payloads and propagated compile/link failure |
 | `executor_reconnect_replays_complete_residency_or_reports_api_loss` | partial | shared transport replays a bounded ACKed residency journal once per new connection generation; capability changes or replay-budget overflow become typed GL/Vulkan loss | Add an external live executor-kill journey that checks recovered pixels plus bounded fd/cache growth; durable cross-process replay remains intentionally unsupported |
-| `executor_enforces_every_negotiated_limit_before_decoding_or_allocating` | contradictory | handshake limits other than frame bytes do not constrain replay/backend allocation | Shared ReplayLimits validation and fallible exact-boundary tests |
-| `executor_accounts_cumulative_residency_and_object_counts_per_connection` | missing | unlimited individually legal GPU resources can exhaust a connection/process | Per-connection and global charge/refund budgets with disconnect stress |
+| `executor_enforces_every_negotiated_limit_before_decoding_or_allocating` | partial | shared `ReplayLimits` rejects frame bytes before decode and validates negotiated buffer/texture/format/shader/bind-group/command limits before replay | Negotiate backend-specific alignment and compiled-cache limits instead of conservative fixed charges |
+| `executor_accounts_cumulative_residency_and_object_counts_per_connection` | partial | transactional connection/global budgets charge core resource ids and refund on destroy/disconnect; reconnect history has a separate hard cap | Charge compiled caches, surfaces/fences, external allocations and cross-process journal ownership; add concurrent live Metal-client stress |
 | `compositor_surface_teardown_reclaims_cpu_gpu_window_and_fence_state` | partial | Smithay surface and disconnect destruction now share idempotent CPU/cache/callback/window cleanup; client-owned executor resources and in-flight GPU fences still need ownership teardown | Add executor-owner reclamation and completion-fence retirement to the existing disconnect journey |
 | `compositor_surface_keys_include_client_identity_and_generation` | implemented | live surfaces use Wayland `ObjectId` (client + generation) to allocate monotonic presenter/cache ids; an ordinary two-client protocol test deliberately collides local ids and proves isolation | Keep `compositor_surface_identity_is_client_owned_generational_and_teardown_is_exact_once` green |
 | `compositor_enforces_per_client_render_resource_budgets` | partial | surfaces, callbacks, CPU repacks and mapped shm-pool bytes have checked per-client/global charge/refund; fd counts, imports, presenter objects and executor allocations remain uncharged | Extend owner tokens to remaining domains and add multi-domain isolation/rollback stress |

@@ -40,6 +40,7 @@ pub mod backend;
 pub mod cuda;
 pub mod id;
 pub mod ir;
+pub mod limits;
 pub mod mock;
 pub mod ptx;
 pub mod replay;
@@ -91,6 +92,8 @@ pub enum GpuError {
     /// unsupported dimensionality, missing required usage bit, etc.) — a validation rejection
     /// distinct from a plain bounds violation.
     Invalid(&'static str),
+    /// A negotiated per-object or aggregate executor resource limit was exceeded.
+    ResourceLimit(&'static str),
     /// Malformed or unsupported PTX while compiling a kernel to dd-GPU kernel IR.
     Ptx(String),
     /// Higher-level decode context wrapped around a low-level wire error.
@@ -112,6 +115,7 @@ impl std::fmt::Display for GpuError {
             GpuError::OutOfBounds => write!(f, "access out of bounds"),
             GpuError::NonFinite(field) => write!(f, "non-finite float in render state: {field}"),
             GpuError::Invalid(m) => write!(f, "invalid argument: {m}"),
+            GpuError::ResourceLimit(m) => write!(f, "executor resource limit: {m}"),
             GpuError::Ptx(m) => write!(f, "ptx: {m}"),
             GpuError::Decode(m) => write!(f, "decode: {m}"),
         }

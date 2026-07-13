@@ -436,6 +436,33 @@ pub enum Enc {
     },
 }
 
+impl Enc {
+    /// Stable negotiated wire tag for this encoder operation.
+    pub fn wire_tag(&self) -> u8 {
+        match self {
+            Self::BeginRenderPass { .. } => etag::BEGIN_RENDER_PASS,
+            Self::EndRenderPass => etag::END_RENDER_PASS,
+            Self::SetPipeline(_) => etag::SET_PIPELINE,
+            Self::SetBindGroup { .. } => etag::SET_BIND_GROUP,
+            Self::SetVertexBuffer { .. } => etag::SET_VERTEX_BUFFER,
+            Self::SetIndexBuffer { .. } => etag::SET_INDEX_BUFFER,
+            Self::SetViewport { .. } => etag::SET_VIEWPORT,
+            Self::SetScissor { .. } => etag::SET_SCISSOR,
+            Self::ClearRect { .. } => etag::CLEAR_RECT,
+            Self::Draw { .. } => etag::DRAW,
+            Self::DrawIndexed { .. } => etag::DRAW_INDEXED,
+            Self::BeginComputePass => etag::BEGIN_COMPUTE_PASS,
+            Self::EndComputePass => etag::END_COMPUTE_PASS,
+            Self::Dispatch { .. } => etag::DISPATCH,
+            Self::CopyBufferToBuffer { .. } => etag::COPY_B2B,
+            Self::CopyBufferToTexture { .. } => etag::COPY_B2T,
+            Self::CopyTextureToBuffer { .. } => etag::COPY_T2B,
+            Self::CopyTextureToTexture { .. } => etag::COPY_T2T,
+            Self::BlitTexture { .. } => etag::BLIT_TEXTURE,
+        }
+    }
+}
+
 /// A recorded command buffer, optionally signalling a fence to `value` on completion.
 #[derive(Clone, PartialEq, Debug, Default)]
 pub struct CommandBuffer {
