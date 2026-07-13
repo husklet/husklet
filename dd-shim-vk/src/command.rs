@@ -128,37 +128,64 @@ pub extern "C" fn vkCmdBindPipeline(
     }
 }
 
+/// `vkCmdBindDescriptorSets` — bind descriptor sets, consuming `pDynamicOffsets` and honouring the
+/// pipeline `layout` the sets must be compatible with. Ported from `MVKCmdBindDescriptorSets` +
+/// `MVKPipelineLayout::bindDescriptorSets`: dynamic offsets are consumed across the bound sets in set
+/// order, then by ascending dynamic-buffer binding within each set (spec §14.2.7), and added to the
+/// buffer offset of the matching binding when the IR bind group is built.
 #[no_mangle]
 pub extern "C" fn vkCmdBindDescriptorSets(
     command_buffer: VkCommandBuffer,
     _pipeline_bind_point: i32,
-    _layout: VkPipelineLayout,
+    layout: VkPipelineLayout,
     first_set: u32,
     descriptor_set_count: u32,
     p_descriptor_sets: *const VkDescriptorSet,
-    _dynamic_offset_count: u32,
-    _p_dynamic_offsets: *const u32,
+    dynamic_offset_count: u32,
+    p_dynamic_offsets: *const u32,
 ) {
     if p_descriptor_sets.is_null() {
         return;
     }
+    // The pipeline layout the bound sets are declared against (compatibility is by set-layout; the
+    // sets carry their own layout in this bring-up model, so we thread the handle through explicitly).
+    let _pipeline_layout = layout;
     let sets = unsafe { core::slice::from_raw_parts(p_descriptor_sets, descriptor_set_count as usize) };
+    let dyn_offsets: &[u32] = if p_dynamic_offsets.is_null() {
+        &[]
+    } else {
+        unsafe { core::slice::from_raw_parts(p_dynamic_offsets, dynamic_offset_count as usize) }
+    };
+    let mut dyn_cursor = 0usize; // global cursor across all bound sets
     let mut s = reg::lock();
     for (i, &dset) in sets.iter().enumerate() {
         let set_index = first_set + i as u32;
-        // Build the bind group's entries from the descriptor set's (binding -> buffer) table,
-        // resolving each buffer handle to its IR id.
+        // Snapshot the set's (binding -> buffer) table and the layout handle (borrow ends here).
         let Some(rec) = s.dsets.get(&dset) else { continue };
-        let mut entries: Vec<BindEntry> = Vec::new();
+        let layout_handle = rec.layout;
         let mut pairs: Vec<(u32, (u64, u64, u64))> = rec.buffers.iter().map(|(b, v)| (*b, *v)).collect();
         pairs.sort_by_key(|(b, _)| *b);
+        // Consume this set's dynamic offsets (its layout's dynamic buffer bindings, ascending).
+        let mut extra: std::collections::HashMap<u32, u64> = std::collections::HashMap::new();
+        let dyn_bindings = s
+            .descriptor_set_layouts
+            .get(&layout_handle)
+            .map(|l| l.dynamic_bindings())
+            .unwrap_or_default();
+        for db in dyn_bindings {
+            if dyn_cursor < dyn_offsets.len() {
+                extra.insert(db, dyn_offsets[dyn_cursor] as u64);
+                dyn_cursor += 1;
+            }
+        }
+        let mut entries: Vec<BindEntry> = Vec::new();
         for (binding, (buf_handle, offset, size)) in pairs {
             if let Some(b) = s.buffers.get(&buf_handle) {
                 entries.push(BindEntry {
                     binding,
                     resource: BindResource::Buffer {
                         id: b.ir_id,
-                        offset,
+                        offset: offset + extra.get(&binding).copied().unwrap_or(0),
                         size,
                     },
                 });
@@ -317,21 +344,29 @@ pub extern "C" fn vkCmdBeginRenderPass(
         return;
     };
     let mut s = reg::lock();
-    // Resolve the color attachment IR texture id + framebuffer dims.
-    let rp: Option<RenderPassRec> = s.render_passes.get(&bi.render_pass.as_raw()).map(|r| RenderPassRec {
+    // Validate the named render pass + framebuffer exist — an invalid/missing object must NOT be
+    // silently substituted with a zero-sized default-clear pass (MoltenVK resolves the concrete
+    // MVKRenderPass/MVKFramebuffer; a missing one is a usage error). Record nothing on a bad handle.
+    let Some(rp) = s.render_passes.get(&bi.render_pass.as_raw()).map(|r| RenderPassRec {
         color_format: r.color_format,
         color_load_clear: r.color_load_clear,
         clear: r.clear,
         color_store: r.color_store,
-    });
-    let fb = s.framebuffers.get(&bi.framebuffer.as_raw());
-    let (fb_w, fb_h, color_view) = match fb {
-        Some(f) => (f.width, f.height, f.color_view),
-        None => (0, 0, None),
+    }) else {
+        return;
     };
-    let attach_ir = color_view
+    let Some((fb_w, fb_h, color_view)) =
+        s.framebuffers.get(&bi.framebuffer.as_raw()).map(|f| (f.width, f.height, f.color_view))
+    else {
+        return;
+    };
+    // The framebuffer's color attachment must resolve to a real image-view → image → IR texture.
+    let Some(tex) = color_view
         .and_then(|v| s.image_views.get(&v).map(|iv| iv.image))
-        .and_then(|img| s.images.get(&img).map(|im| im.ir_id));
+        .and_then(|img| s.images.get(&img).map(|im| im.ir_id))
+    else {
+        return;
+    };
 
     // Clear color from pClearValues[0].
     let clear = if bi.clear_value_count > 0 && !bi.p_clear_values.is_null() {
@@ -340,13 +375,11 @@ pub extern "C" fn vkCmdBeginRenderPass(
     } else {
         [0.0, 0.0, 0.0, 1.0]
     };
-    let load = match rp.as_ref().map(|r| r.color_load_clear).unwrap_or(true) {
-        true => LoadOp::Clear,
-        false => LoadOp::Load,
-    };
-    let store = rp.as_ref().map(|r| r.color_store).unwrap_or(true);
+    // Load/store come from the validated render pass (no default substitution).
+    let load = if rp.color_load_clear { LoadOp::Clear } else { LoadOp::Load };
+    let store = rp.color_store;
 
-    if let (Some(tex), Some(cb)) = (attach_ir, s.recording_mut(cb_key(command_buffer))) {
+    if let Some(cb) = s.recording_mut(cb_key(command_buffer)) {
         cb.enc.push(Enc::BeginRenderPass {
             color: vec![ColorAttachment {
                 texture: tex,

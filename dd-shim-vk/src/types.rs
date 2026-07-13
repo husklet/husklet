@@ -58,3 +58,9 @@ pub const VK_ERROR_EXTENSION_NOT_PRESENT: VkResult = -7;
 /// The truthful failure a generated stub returns for an unimplemented core command.
 pub const VK_ERROR_FEATURE_NOT_PRESENT: VkResult = -8;
 pub const VK_ERROR_INCOMPATIBLE_DRIVER: VkResult = -9;
+/// A descriptor pool has no room for the requested sets (spec: `-1000069000`).
+pub const VK_ERROR_OUT_OF_POOL_MEMORY: VkResult = -1000069000;
+/// A pipeline/object could not be created for a reason without a more specific code (spec: `-13`).
+/// Used to reject a graphics pipeline whose shader stages/render pass are invalid rather than
+/// substituting a default (zero) module.
+pub const VK_ERROR_UNKNOWN: VkResult = -13;

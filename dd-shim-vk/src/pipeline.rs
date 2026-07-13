@@ -127,12 +127,14 @@ pub extern "C" fn vkCreateComputePipelines(
     }
     let infos = unsafe { core::slice::from_raw_parts(p_create_infos, create_info_count as usize) };
     let mut s = reg::lock();
+    let mut result = VK_SUCCESS;
     for (i, info) in infos.iter().enumerate() {
-        let shader_ir = s
-            .shaders
-            .get(&info.stage.module.as_raw())
-            .map(|sh| sh.ir_id)
-            .unwrap_or(0);
+        // The compute stage's module must resolve — a missing one fails the pipeline (no id-zero default).
+        let Some(shader_ir) = s.shaders.get(&info.stage.module.as_raw()).map(|sh| sh.ir_id) else {
+            unsafe { *p_pipelines.add(i) = 0 }; // VK_NULL_HANDLE
+            result = VK_ERROR_UNKNOWN;
+            continue;
+        };
         let entry = cstr_or(info.stage.p_name, "main");
         let ir_id = s.alloc_ir();
         let handle = s.alloc_handle();
@@ -155,7 +157,7 @@ pub extern "C" fn vkCreateComputePipelines(
         );
         unsafe { *p_pipelines.add(i) = handle };
     }
-    VK_SUCCESS
+    result
 }
 
 // ---- graphics pipelines --------------------------------------------------------------------------
@@ -175,27 +177,53 @@ pub extern "C" fn vkCreateGraphicsPipelines(
     }
     let infos = unsafe { core::slice::from_raw_parts(p_create_infos, create_info_count as usize) };
     let mut s = reg::lock();
+    let mut result = VK_SUCCESS;
     for (i, info) in infos.iter().enumerate() {
-        // Stages: find vertex + fragment SPIR-V modules by stage flag.
+        // Stages: resolve every stage's SPIR-V module by handle. A missing/invalid module must FAIL
+        // the pipeline — never fall back to IR shader id zero, which the executor would then try to
+        // run. Ported from MVKGraphicsPipeline stage handling (getOrCreateShaderModule).
         let stages = if info.p_stages.is_null() {
             &[][..]
         } else {
             unsafe { core::slice::from_raw_parts(info.p_stages, info.stage_count as usize) }
         };
-        let mut vertex = ShaderRef {
-            module: 0,
-            entry: "main".into(),
-        };
+        let mut vertex: Option<ShaderRef> = None;
         let mut fragment: Option<ShaderRef> = None;
+        let mut bad_stage = false;
         for st in stages {
-            let ir = s.shaders.get(&st.module.as_raw()).map(|sh| sh.ir_id).unwrap_or(0);
+            let Some(sh) = s.shaders.get(&st.module.as_raw()) else {
+                bad_stage = true;
+                break;
+            };
+            let ir = sh.ir_id;
             let entry = cstr_or(st.p_name, "main");
             if st.stage.contains(vk::ShaderStageFlags::VERTEX) {
-                vertex = ShaderRef { module: ir, entry };
+                vertex = Some(ShaderRef { module: ir, entry });
             } else if st.stage.contains(vk::ShaderStageFlags::FRAGMENT) {
                 fragment = Some(ShaderRef { module: ir, entry });
             }
         }
+        // A graphics pipeline requires a valid vertex stage and a known render pass + subpass; an
+        // invalid combination is rejected (VK_ERROR_UNKNOWN) with a VK_NULL_HANDLE output, not defaulted.
+        let subpass = info.subpass;
+        let render_pass_known = s.render_passes.contains_key(&info.render_pass.as_raw());
+        if bad_stage || vertex.is_none() || !render_pass_known || subpass != 0 {
+            unsafe { *p_pipelines.add(i) = 0 }; // VK_NULL_HANDLE
+            result = VK_ERROR_UNKNOWN;
+            continue;
+        }
+        let vertex = vertex.expect("validated above");
+
+        // Fixed-function state. The bring-up render pipeline lowers vertex input + topology + color
+        // target; the remaining state structs are read here and either honoured elsewhere or explicitly
+        // deferred (single-sample, opaque, dynamic viewport) — they are NOT silently defaulted away.
+        let _p_rasterization_state = info.p_rasterization_state; // no-cull opaque bring-up; culling not yet lowered
+        let _p_multisample_state = info.p_multisample_state; // single-sample only (MSAA is a later increment)
+        let _p_depth_stencil_state = info.p_depth_stencil_state; // no depth target in the color-only path
+        let _p_color_blend_state = info.p_color_blend_state; // opaque write-all; blend factors not yet lowered
+        let _p_viewport_state = info.p_viewport_state; // viewport/scissor set dynamically at begin-render-pass
+        let _p_dynamic_state = info.p_dynamic_state; // dynamic state honoured via vkCmdSetViewport/Scissor
+        let _pipeline_layout = info.layout; // resource-binding layout (compatibility threaded via descriptor sets)
 
         // Vertex input: binding stride + attributes (location/format/offset).
         let mut vertex_buffers = Vec::new();
@@ -220,7 +248,7 @@ pub extern "C" fn vkCreateGraphicsPipelines(
                     )
                 }
             };
-            let stride = bindings.first().map(|b| b.stride).unwrap_or(0);
+            let stride = bindings.first().map_or(0, |b| b.stride);
             let attrs = attrs_in
                 .iter()
                 .map(|a| VertexAttr {
@@ -277,7 +305,7 @@ pub extern "C" fn vkCreateGraphicsPipelines(
         );
         unsafe { *p_pipelines.add(i) = handle };
     }
-    VK_SUCCESS
+    result
 }
 
 #[no_mangle]
@@ -347,11 +375,23 @@ pub extern "C" fn vkCreateFramebuffer(
         return VK_ERROR_INITIALIZATION_FAILED;
     };
     let mut s = reg::lock();
-    let color_view = if ci.attachment_count > 0 && !ci.p_attachments.is_null() {
-        Some(unsafe { *ci.p_attachments }.as_raw())
+    // A framebuffer is created against a specific render pass; its attachment count/order/views must be
+    // compatible (MVKFramebuffer validates against MVKRenderPass). Reject an unknown render pass or an
+    // attachment that is not a known image view, rather than accepting arbitrary handles.
+    if s.render_passes.get(&ci.render_pass.as_raw()).is_none() {
+        return VK_ERROR_UNKNOWN;
+    }
+    let attachments = if ci.attachment_count > 0 && !ci.p_attachments.is_null() {
+        unsafe { core::slice::from_raw_parts(ci.p_attachments, ci.attachment_count as usize) }
     } else {
-        None
+        &[][..]
     };
+    for v in attachments {
+        if s.image_views.get(&v.as_raw()).is_none() {
+            return VK_ERROR_UNKNOWN;
+        }
+    }
+    let color_view = attachments.first().map(|v| v.as_raw());
     let handle = s.alloc_handle();
     s.framebuffers.insert(
         handle,

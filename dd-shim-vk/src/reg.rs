@@ -82,11 +82,62 @@ pub struct ImageViewRec {
     pub image: u64,
 }
 
-/// A descriptor set: `set` number + `binding -> (buffer handle, offset, range)` from
-/// `vkUpdateDescriptorSets`. Resolved to an IR bind group at `vkCmdBindDescriptorSets`.
+/// One immutable binding of a `VkDescriptorSetLayout` (MoltenVK `MVKDescriptorSetLayout` binding
+/// record): the typed per-binding descriptor description a set is allocated + validated against.
+pub struct DescriptorLayoutBinding {
+    pub binding: u32,
+    pub descriptor_type: i32, // VkDescriptorType
+    pub descriptor_count: u32, // array size (0 disables the binding)
+    pub stage_flags: u32, // VkShaderStageFlags
+    pub immutable_samplers: Vec<u64>, // VkSampler handles baked into the layout, if any
+}
+
+/// A `VkDescriptorSetLayout` (MoltenVK `MVKDescriptorSetLayout`): its immutable binding table.
+pub struct DescriptorSetLayoutRec {
+    pub bindings: Vec<DescriptorLayoutBinding>,
+}
+
+impl DescriptorSetLayoutRec {
+    /// The bindings that are dynamic buffers (UNIFORM/STORAGE_BUFFER_DYNAMIC), in ascending binding
+    /// order — the order `vkCmdBindDescriptorSets`'s `pDynamicOffsets` are consumed in.
+    pub fn dynamic_bindings(&self) -> Vec<u32> {
+        // VkDescriptorType: 8 = UNIFORM_BUFFER_DYNAMIC, 9 = STORAGE_BUFFER_DYNAMIC.
+        let mut v: Vec<u32> = self
+            .bindings
+            .iter()
+            .filter(|b| b.descriptor_type == 8 || b.descriptor_type == 9)
+            .map(|b| b.binding)
+            .collect();
+        v.sort_unstable();
+        v
+    }
+}
+
+/// A `VkDescriptorPool` (MoltenVK `MVKDescriptorPool`): its capacity, free policy and live set count.
+pub struct DescriptorPoolRec {
+    /// `VkDescriptorPoolCreateInfo::maxSets`. `0` means the app declared no positive limit (the ash
+    /// `default()` used by the bring-up tests) — we don't fabricate one, so allocation is not quota-capped.
+    pub max_sets: u32,
+    /// Sets currently allocated from this pool (checked against `max_sets`).
+    pub allocated: u32,
+    /// `VK_DESCRIPTOR_POOL_CREATE_FREE_DESCRIPTOR_SET_BIT`: whether `vkFreeDescriptorSets` may return
+    /// individual sets (else free is a no-op per the spec).
+    pub free_descriptor_set: bool,
+}
+
+/// A descriptor set: the layout + owning pool it was allocated with, and the `binding -> (buffer,
+/// offset, range)` table `vkUpdateDescriptorSets` writes. Resolved to an IR bind group at
+/// `vkCmdBindDescriptorSets` (dynamic offsets applied there). Image/sampler/texel writes are retained
+/// (`image_writes`/`texel_writes`) so nothing is silently dropped; their IR lowering is a later increment.
 pub struct DsetRec {
     pub set: u32,
+    pub layout: u64,
+    pub pool: u64,
     pub buffers: HashMap<u32, (u64, u64, u64)>,
+    /// binding -> [(imageView, sampler, imageLayout)] image/sampler descriptor writes (retained).
+    pub image_writes: HashMap<u32, Vec<(u64, u64, i32)>>,
+    /// binding -> [bufferView] texel-buffer descriptor writes (retained).
+    pub texel_writes: HashMap<u32, Vec<u64>>,
 }
 
 /// A render pass: the single color attachment's format + load/clear/store (the subset bring-up needs).
@@ -218,6 +269,8 @@ pub struct VkState {
     pub images: HashMap<u64, ImageRec>,
     pub image_views: HashMap<u64, ImageViewRec>,
     pub dsets: HashMap<u64, DsetRec>,
+    pub descriptor_set_layouts: HashMap<u64, DescriptorSetLayoutRec>,
+    pub descriptor_pools: HashMap<u64, DescriptorPoolRec>,
     pub render_passes: HashMap<u64, RenderPassRec>,
     pub framebuffers: HashMap<u64, FramebufferRec>,
     pub cmdbufs: HashMap<usize, CmdBufRec>,
