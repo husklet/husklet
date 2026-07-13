@@ -31,6 +31,25 @@ macro_rules! cstr {
 /// pure real-body workload this stays `GL_NO_ERROR` (gl_shim.c parity). The generated truthful-failure
 /// stubs (`crate::stub::fail_gl`) DO raise here, so an app that calls an unsupported entry point sees a
 /// deterministic, API-correct error instead of a silent false success.
+fn checked_unpack_rgba(s: &crate::state::GlState, w: i32, h: i32, fmt: u32, pixels: *const c_void) -> Result<Vec<u8>, u32> {
+    let bpp=if fmt==GL_RGB{3usize}else{4}; let rp=if s.unpack_row_length==0{w}else{s.unpack_row_length};
+    if w<0||h<0||rp<w{return Err(GL_INVALID_VALUE)}
+    let stride=(rp as usize).checked_mul(bpp).and_then(|n|n.checked_add(s.unpack_alignment as usize-1)).map(|n|n&!(s.unpack_alignment as usize-1)).ok_or(GL_INVALID_VALUE)?;
+    let start=(s.unpack_skip_rows as usize).checked_mul(stride).and_then(|n|(s.unpack_skip_pixels as usize).checked_mul(bpp).and_then(|p|n.checked_add(p))).ok_or(GL_INVALID_VALUE)?;
+    let tight=(w as usize).checked_mul(bpp).ok_or(GL_INVALID_VALUE)?;
+    let need=(h.saturating_sub(1) as usize).checked_mul(stride).and_then(|n|n.checked_add(tight)).and_then(|n|start.checked_add(n)).ok_or(GL_INVALID_VALUE)?;
+    let mut rgba=vec![0u8;(w as usize).checked_mul(h as usize).and_then(|n|n.checked_mul(4)).ok_or(GL_INVALID_VALUE)?];
+    if pixels.is_null(){return Ok(rgba)}
+    let src=unsafe{core::slice::from_raw_parts(pixels as *const u8,need)};
+    for y in 0..h as usize{for x in 0..w as usize{let sp=start+y*stride+x*bpp;let dp=(y*w as usize+x)*4;match fmt{GL_RGB=>{rgba[dp..dp+3].copy_from_slice(&src[sp..sp+3]);rgba[dp+3]=255},GL_RGBA=>rgba[dp..dp+4].copy_from_slice(&src[sp..sp+4]),GL_BGRA_EXT=>{rgba[dp]=src[sp+2];rgba[dp+1]=src[sp+1];rgba[dp+2]=src[sp];rgba[dp+3]=src[sp+3]},_=>return Err(GL_INVALID_ENUM)}}}
+    Ok(rgba)
+}
+
+/// Current texture content generation, exposed for behavioral atomicity regressions.
+pub fn texture_generation(id: u32) -> Option<u64> {
+    let s=gl(); s.tex.get(id as usize).filter(|t|t.used).map(|t|t.gen)
+}
+
 #[no_mangle]
 pub extern "C" fn glGetError() -> u32 {
     crate::state::take_gl_error()
@@ -711,22 +730,7 @@ pub extern "C" fn glTexImage2D(
     if level != 0 || border != 0 || w < 0 || h < 0 || !matches!(ifmt as u32, GL_RGB | GL_RGBA) { bad(&mut s, GL_INVALID_VALUE); return; }
     if t == 0 || t as usize >= MAXTEX || !s.tex[t as usize].used { bad(&mut s, GL_INVALID_OPERATION); return; }
     if s.tex[t as usize].immutable { bad(&mut s, GL_INVALID_OPERATION); return; }
-    let bpp = if fmt == GL_RGB { 3usize } else { 4 };
-    let rp = if s.unpack_row_length == 0 { w } else { s.unpack_row_length };
-    if rp < w { bad(&mut s, GL_INVALID_VALUE); return; }
-    let stride = (rp as usize).checked_mul(bpp).and_then(|n| n.checked_add(s.unpack_alignment as usize - 1)).map(|n| n & !(s.unpack_alignment as usize - 1));
-    let start = stride.and_then(|st| (s.unpack_skip_rows as usize).checked_mul(st)).and_then(|n| (s.unpack_skip_pixels as usize).checked_mul(bpp).and_then(|p| n.checked_add(p)));
-    let rgba_len = (w as usize).checked_mul(h as usize).and_then(|n| n.checked_mul(4));
-    let need = start.and_then(|st| stride.and_then(|rs| (h.saturating_sub(1) as usize).checked_mul(rs)).and_then(|n| n.checked_add(w as usize * bpp)).and_then(|n| st.checked_add(n)));
-    let (stride, start, rgba_len, need) = match (stride,start,rgba_len,need) { (Some(a),Some(b),Some(c),Some(d)) => (a,b,c,d), _ => { bad(&mut s, GL_INVALID_VALUE); return; } };
-    let mut rgba = vec![0u8; rgba_len];
-    if !pixels.is_null() {
-        let src = unsafe { core::slice::from_raw_parts(pixels as *const u8, need) };
-        for y in 0..h as usize { for x in 0..w as usize {
-            let sp = start + y * stride + x * bpp; let dp = (y * w as usize + x) * 4;
-            match fmt { GL_RGB => { rgba[dp..dp+3].copy_from_slice(&src[sp..sp+3]); rgba[dp+3]=255; }, GL_RGBA => rgba[dp..dp+4].copy_from_slice(&src[sp..sp+4]), _ => { rgba[dp]=src[sp+2]; rgba[dp+1]=src[sp+1]; rgba[dp+2]=src[sp]; rgba[dp+3]=src[sp+3]; } }
-        }}
-    }
+    let rgba=match checked_unpack_rgba(&s,w,h,fmt,pixels){Ok(v)=>v,Err(e)=>{bad(&mut s,e);return}};
     let tex = &mut s.tex[t as usize]; tex.w=w; tex.h=h; tex.data=rgba; tex.gen+=1;
 }
 
@@ -747,13 +751,7 @@ pub extern "C" fn glTexSubImage2D(
     let t = s.bound_tex();
     if target != GL_TEXTURE_2D || !matches!(fmt, GL_RGB | GL_RGBA | GL_BGRA_EXT) || typ != GL_UNSIGNED_BYTE { if s.error==GL_NO_ERROR{s.error=GL_INVALID_ENUM}; return; }
     if level != 0 || w < 0 || h < 0 || xo < 0 || yo < 0 || t==0 || t as usize>=MAXTEX || !s.tex[t as usize].used || xo.checked_add(w).is_none_or(|v|v>s.tex[t as usize].w) || yo.checked_add(h).is_none_or(|v|v>s.tex[t as usize].h) { if s.error==GL_NO_ERROR{s.error=GL_INVALID_VALUE}; return; }
-    let bpp=if fmt==GL_RGB{3usize}else{4}; let rp=if s.unpack_row_length==0{w}else{s.unpack_row_length};
-    let stride=(rp as usize).checked_mul(bpp).and_then(|n|n.checked_add(s.unpack_alignment as usize-1)).map(|n|n&!(s.unpack_alignment as usize-1));
-    let start=stride.and_then(|st|(s.unpack_skip_rows as usize).checked_mul(st)).and_then(|n|(s.unpack_skip_pixels as usize).checked_mul(bpp).and_then(|p|n.checked_add(p)));
-    let need=start.and_then(|st|stride.and_then(|rs|(h.saturating_sub(1) as usize).checked_mul(rs)).and_then(|n|(w as usize).checked_mul(bpp).and_then(|p|n.checked_add(p))).and_then(|n|st.checked_add(n)));
-    let (stride,start,need)=match(stride,start,need){(Some(a),Some(b),Some(c)) if rp>=w=>(a,b,c),_=>{if s.error==GL_NO_ERROR{s.error=GL_INVALID_VALUE};return;}};
-    let mut rgba=vec![0u8;(w as usize).checked_mul(h as usize).and_then(|n|n.checked_mul(4)).unwrap_or(0)];
-    if !pixels.is_null(){let src=unsafe{core::slice::from_raw_parts(pixels as *const u8,need)};for yy in 0..h as usize{for xx in 0..w as usize{let sp=start+yy*stride+xx*bpp;let dp=(yy*w as usize+xx)*4;match fmt{GL_RGB=>{rgba[dp..dp+3].copy_from_slice(&src[sp..sp+3]);rgba[dp+3]=255},GL_RGBA=>rgba[dp..dp+4].copy_from_slice(&src[sp..sp+4]),_=>{rgba[dp]=src[sp+2];rgba[dp+1]=src[sp+1];rgba[dp+2]=src[sp];rgba[dp+3]=src[sp+3]}}}}}
+    let rgba=match checked_unpack_rgba(&s,w,h,fmt,pixels){Ok(v)=>v,Err(e)=>{if s.error==GL_NO_ERROR{s.error=e};return}};
     for yy in 0..h as usize{let dp=((yo as usize+yy)*s.tex[t as usize].w as usize+xo as usize)*4;let sp=yy*w as usize*4;s.tex[t as usize].data[dp..dp+w as usize*4].copy_from_slice(&rgba[sp..sp+w as usize*4]);}
     s.tex[t as usize].gen += 1;
 }

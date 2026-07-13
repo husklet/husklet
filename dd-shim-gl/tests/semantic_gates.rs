@@ -22,6 +22,12 @@ fn texture_upload_validation_is_atomic_and_honors_padded_rows() {
     gles::glPixelStorei(GL_PACK_ALIGNMENT,1); gles::glPixelStorei(GL_PACK_ROW_LENGTH,0);
     let mut out=[0u8;16]; gles::glReadPixels(0,0,2,2,GL_RGBA,GL_UNSIGNED_BYTE,out.as_mut_ptr().cast());
     assert_eq!(out,[1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16]);
+    let generation_before=gles::texture_generation(tex);
+    gles::glTexImage2D(GL_TEXTURE_2D,0,GL_RGBA as i32,i32::MAX,i32::MAX,0,GL_RGBA,GL_UNSIGNED_BYTE,bad.as_ptr().cast());
+    assert_eq!(gles::glGetError(),GL_INVALID_VALUE,"overflowing upload was accepted");
+    let mut unchanged=[0u8;16]; gles::glReadPixels(0,0,2,2,GL_RGBA,GL_UNSIGNED_BYTE,unchanged.as_mut_ptr().cast());
+    assert_eq!(unchanged,out,"overflowing upload mutated texture storage");
+    assert_eq!(gles::texture_generation(tex),generation_before,"overflowing upload advanced texture generation");
     gles::glTexStorage2D(GL_TEXTURE_2D,1,GL_RGBA,2,2);
     assert_eq!(gles::glGetError(),GL_NO_ERROR);
     gles::glTexImage2D(GL_TEXTURE_2D,0,GL_RGBA as i32,1,1,0,GL_RGBA,GL_UNSIGNED_BYTE,bad.as_ptr().cast());
