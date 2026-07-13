@@ -60,6 +60,15 @@ full cleans. Verify by touching a nested included C file and observing the engin
 warning with the narrower rule for any genuinely untracked non-C/H generator input. This is documentation cleanup
 with no compatibility risk and can improve developer iteration speed.
 
+### Stale default-member statement
+
+The same guide says `dd-display`, `dd-compositor`, and `dd-gpu-wgpu` are all excluded from workspace
+`default-members`. Current root `Cargo.toml` includes `dd-display` in `default-members`; only the compositor, wgpu
+backend, GUI, and shim-specific products remain outside that list. This mismatch can cause reviewers to assume display
+code is never checked by a plain workspace build. Update the table directly from the manifest and keep the macOS gate
+warning only for paths actually excluded or cfg-empty on the current host. Documentation-only change, zero runtime
+risk.
+
 ## Dependency and target observations
 
 - `dd-gpu`'s `runtime` feature is live: `dd-cli` enables it and `dd-gpu/src/lib.rs` gates the integration seam.
