@@ -28,6 +28,7 @@
 // The shared IR + transport foundation (re-exported so readers see the IR type is dd-gpu's).
 pub use dd_shim_common as common;
 
+pub mod capability;
 pub mod fatbin;
 pub mod result;
 pub mod runtime;
@@ -343,5 +344,128 @@ mod tests {
         assert_eq!(runtime::cudaEventDestroy(e0), CUDA_SUCCESS);
         assert_eq!(runtime::cudaEventDestroy(e1), CUDA_SUCCESS);
         assert_eq!(runtime::cudaStreamDestroy(s), CUDA_SUCCESS);
+    }
+
+    /// A kernel using an instruction outside dd's modeled PTX subset (`shfl.sync`, a warp intrinsic).
+    /// It parses as a valid entry (so the fatbin walk + module load succeed) but cannot be executed.
+    const UNSUPPORTED_PTX: &str = r#"
+        .version 7.5
+        .target sm_86
+        .address_size 64
+        .visible .entry unsup(
+            .param .u64 unsup_param_0,
+            .param .u32 unsup_param_1
+        )
+        {
+            .reg .b32 %r<6>;
+            .reg .b64 %rd<3>;
+            ld.param.u64 %rd1, [unsup_param_0];
+            ld.param.u32 %r2, [unsup_param_1];
+            mov.u32 %r3, %tid.x;
+            shfl.sync.down.b32 %r4, %r3, 1, 31, -1;
+            ret;
+        }
+    "#;
+
+    /// Register an unsupported-kernel fatbin via the nvcc glue; returns (host_stub, handle). The
+    /// host-stub key is unique per call (the process-global func registry accumulates across tests, so a
+    /// reused key would collide with an earlier now-unregistered entry).
+    fn register_unsupported() -> (*const c_void, *mut *mut c_void) {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        static KEY: AtomicUsize = AtomicUsize::new(0xBADC0DE0);
+        let fatbin = build_fatbin(UNSUPPORTED_PTX);
+        // Leak the fatbin bytes so the raw pointer registered stays valid for the process lifetime
+        // (the registry stores it as a `usize`); a real nvcc fatbin has static storage duration too.
+        let leaked = Box::leak(fatbin.into_boxed_slice());
+        let handle = runtime::__cudaRegisterFatBinary(leaked.as_ptr() as *mut c_void);
+        let host_stub = KEY.fetch_add(1, Ordering::Relaxed) as *const c_void;
+        let dev_name = std::ffi::CString::new("unsup").unwrap();
+        runtime::__cudaRegisterFunction(
+            handle, host_stub as *const core::ffi::c_char, core::ptr::null_mut(), dev_name.as_ptr(),
+            -1, core::ptr::null_mut(), core::ptr::null_mut(), core::ptr::null_mut(),
+            core::ptr::null_mut(), core::ptr::null_mut(),
+        );
+        runtime::__cudaRegisterFatBinaryEnd(handle);
+        (host_stub, handle)
+    }
+
+    /// TRUTHFUL FAILURE: a runtime launch of a kernel outside the modeled PTX subset returns the accurate
+    /// `cudaErrorNotSupported` — not the old false `cudaSuccess` no-op. Phase-0 exit gate for cudart.
+    #[test]
+    fn unsupported_ptx_launch_returns_error_not_success() {
+        let _g = serial();
+        let (host_stub, handle) = register_unsupported();
+        let one = Dim3 { x: 1, y: 1, z: 1 };
+        let mut noargs: [*mut c_void; 1] = [core::ptr::null_mut()];
+        let r = runtime::cudaLaunchKernel(host_stub, one, one, noargs.as_mut_ptr(), 0, core::ptr::null_mut());
+        assert_eq!(
+            r,
+            result::CUDA_ERROR_NOT_SUPPORTED_RT,
+            "an unsupported PTX kernel must fail truthfully, not report success"
+        );
+        // sticky last error reflects it too.
+        assert_eq!(runtime::cudaGetLastError(), result::CUDA_ERROR_NOT_SUPPORTED_RT);
+        runtime::__cudaUnregisterFatBinary(handle);
+    }
+
+    /// DD_SHIM_STRICT=1: cudart aborts at the first unsupported CUDA call. Under `cfg(test)` the strict
+    /// path records that it would abort (a thread-local trip flag) rather than killing the test process.
+    #[test]
+    fn strict_mode_trips_abort_on_unsupported_launch() {
+        let _g = serial();
+        stub::STRICT_TRIPPED.with(|c| c.set(false));
+        std::env::set_var("DD_SHIM_STRICT", "1");
+        let (host_stub, handle) = register_unsupported();
+        let one = Dim3 { x: 1, y: 1, z: 1 };
+        let mut noargs: [*mut c_void; 1] = [core::ptr::null_mut()];
+        let r = runtime::cudaLaunchKernel(host_stub, one, one, noargs.as_mut_ptr(), 0, core::ptr::null_mut());
+        std::env::remove_var("DD_SHIM_STRICT");
+        assert_eq!(r, result::CUDA_ERROR_NOT_SUPPORTED_RT);
+        assert!(
+            stub::STRICT_TRIPPED.with(|c| c.get()),
+            "DD_SHIM_STRICT=1 must trip the abort at the first unsupported call"
+        );
+        let report = stub::strict_report("cudaLaunchKernel", "kernel `unsup`");
+        assert!(report.contains("cudaLaunchKernel"));
+        assert!(report.contains("history"));
+        let _ = runtime::cudaGetLastError();
+        runtime::__cudaUnregisterFatBinary(handle);
+    }
+
+    /// The generated capability inventory covers every runtime entry point, its counts reconcile, every
+    /// `unsupported` entry carries a real error, and the known classifications are as documented.
+    #[test]
+    fn capability_inventory_is_complete_and_truthful() {
+        assert_eq!(CAPABILITIES.len(), TOTAL_ENTRYPOINTS);
+        assert_eq!(CAP_FULL + CAP_PARTIAL + CAP_UNSUPPORTED, TOTAL_ENTRYPOINTS);
+        for e in CAPABILITIES {
+            match e.cap {
+                capability::Cap::Unsupported => {
+                    assert_ne!(e.cuda_error, result::CUDA_SUCCESS_RT, "unsupported `{}` must carry an error", e.name);
+                    assert!(!e.note.is_empty());
+                }
+                capability::Cap::Partial => assert!(!e.note.is_empty(), "partial `{}` needs a domain note", e.name),
+                capability::Cap::Full => {}
+            }
+        }
+        let find = |n: &str| CAPABILITIES.iter().find(|e| e.name == n).unwrap_or_else(|| panic!("missing {n}"));
+        assert_eq!(find("cudaMalloc").cap, capability::Cap::Full);
+        assert_eq!(find("cudaLaunchKernel").cap, capability::Cap::Partial);
+        assert_eq!(find("cudaLaunchKernel").cuda_error, result::CUDA_ERROR_NOT_SUPPORTED_RT);
+        assert_eq!(find("__cudaRegisterVar").cap, capability::Cap::Partial);
+    }
+
+    /// ACCURATE ADVERTISEMENT: `cudaRuntimeGetVersion` / `cudaDriverGetVersion` report exactly the
+    /// inventory's single-source-of-truth version.
+    #[test]
+    fn advertised_version_matches_the_inventory() {
+        assert_eq!(result::RUNTIME_VERSION, capability::SUPPORTED_RUNTIME_VERSION);
+        assert_eq!(result::DRIVER_VERSION, capability::SUPPORTED_RUNTIME_VERSION);
+        let mut v = 0i32;
+        assert_eq!(runtime::cudaRuntimeGetVersion(&mut v), CUDA_SUCCESS);
+        assert_eq!(v, capability::SUPPORTED_RUNTIME_VERSION);
+        let mut dv = 0i32;
+        assert_eq!(runtime::cudaDriverGetVersion(&mut dv), CUDA_SUCCESS);
+        assert_eq!(dv, capability::SUPPORTED_RUNTIME_VERSION);
     }
 }

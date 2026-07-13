@@ -192,6 +192,52 @@ parity with `dd-gpu/cuda/cuda_shim.c`, and the compute core executes PTX end-to-
   functional check, context management (push/pop/limits/primary-ctx), and function/occupancy/event
   queries. A default `cargo build` does not compile the crate, and `dd-gpu`'s 70 tests stay green.
 
+### Phase 0 — CUDA capability inventory + truthful failures
+
+Symbol count is not the acceptance criterion (`docs/codex-rendering.md` §2.3): a body that returns
+`CUDA_SUCCESS` for an operation the IR/PTX executor cannot represent is a *lie* — it leaves output
+handles unwritten and moves the failure away from its cause. Phase 0 makes CUDA **truthful**:
+
+- **Generated capability inventory.** `build.rs` emits `capability::CAPABILITIES` — one record per
+  exported entry point tagging it `full` / `partial` / `unsupported`, with the exact CUDA error each
+  unsupported (or out-of-supported-domain `partial`) path returns and a supported-domain note. The
+  crate test `capability_inventory_is_complete_and_truthful` asserts the inventory covers every
+  manifest entry, its counts reconcile with the total surface, and every `unsupported` entry carries a
+  real (nonzero) CUDA error. **Driver census (132): full 105, partial 21, unsupported 6.** **Runtime
+  census (49): full 44, partial 5, unsupported 0.** (Counts are asserted, not hand-maintained; regenerate
+  by reading `CAP_FULL`/`CAP_PARTIAL`/`CAP_UNSUPPORTED`.)
+  - *Unsupported (driver, always a defined error):* `cuCtxEnablePeerAccess`→`PEER_ACCESS_UNSUPPORTED`,
+    `cuCtxDisablePeerAccess`→`PEER_ACCESS_NOT_ENABLED`, `cuDeviceGetLuid`→`NOT_SUPPORTED`,
+    `cuModuleGetGlobal_v2`/`cuModuleGetTexRef`/`cuModuleGetSurfRef`→`NOT_FOUND` (no `.global`/texture/
+    surface in the PTX-entry-only model).
+  - *Partial (bounded supported domain):* the launch family (`cuLaunchKernel`, `cuLaunchKernelEx`,
+    `cuLaunchCooperativeKernel`; runtime `cudaLaunchKernel`) executes **only the modeled PTX subset**
+    (`dd_gpu::ptx`: no warp intrinsics/`shfl`/`vote`, f64, textures/surfaces, inline `asm`, dynamic
+    parallelism); module-load treats the image as PTX text (SASS/compressed fatbin not unpacked);
+    stream wait/query, prefetch/advise, peer copy, capture query, `cudaFuncGetAttributes`,
+    `__cudaRegisterVar` degrade within the synchronous single-device / unified-memory model.
+- **Truthful launch failures.** A kernel outside the modeled PTX subset used to return `CUDA_SUCCESS`
+  as a "traced no-op" that never wrote the output buffer. It now returns the accurate error —
+  `CUDA_ERROR_NOT_SUPPORTED` for an unsupported instruction/feature, `CUDA_ERROR_INVALID_PTX` for
+  malformed PTX (`cudaErrorNotSupported`/`cudaErrorInvalidPtx` in the runtime; a SASS-only fatbin is
+  `cudaErrorInvalidKernelImage`). Classified from `dd_gpu::ptx`'s read-only `Display` text ("outside
+  the subset" rejections are phrased with "unsupported"). Proven by
+  `unsupported_ptx_launch_returns_error_not_success` in both crates.
+- **`DD_SHIM_STRICT=1`.** Aborts the process at the *first* unsupported CUDA call, printing the command,
+  the object/context detail (function/entry/context + the executor's reason), and a recent-call history
+  ring (module-load → get-function → launch). Validated in-process (`cfg(test)` records the abort
+  decision as a trip flag; the shipped library calls `std::process::abort()`). A once-per-name
+  `DD_SHIM_DEBUG` trace stays for exploratory runs.
+- **Accurate advertisement.** `cuDriverGetVersion` / `cudaRuntimeGetVersion` / `cudaDriverGetVersion`
+  and the advertised compute capability (sm_86) report exactly the inventory's single-source-of-truth
+  `capability::SUPPORTED_{DRIVER,RUNTIME}_VERSION` / `SUPPORTED_COMPUTE_CAPABILITY` (CUDA 12.2 ABI);
+  `advertised_version_matches_the_inventory` asserts the identity so the library never advertises a
+  version the modeled surface does not back. The 12.2/sm_86 numbers are the ABI a CUDA app compiles
+  against; the *executed* capability is the bounded PTX subset the `partial` launch records enumerate.
+
+**Phase-0 exit gate for CUDA: no unsupported CUDA call silently reports success** — enforced by the
+truthful-failure tests, the inventory census, and the strict-mode gate.
+
 ## `dd-shim-cudart` — the CUDA Runtime API library
 
 Real CUDA apps and frameworks (PyTorch, TensorFlow) link the **Runtime** API (`libcudart`, the

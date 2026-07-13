@@ -33,6 +33,7 @@
 // IR type is dd-gpu's, not a local copy.
 pub use dd_shim_common as common;
 
+pub mod capability;
 pub mod driver;
 pub mod result;
 pub mod state;
@@ -504,5 +505,164 @@ mod tests {
         assert!(cmds.iter().filter(|c| matches!(c, Cmd::CreateBuffer(..))).count() >= 2);
         let write_fills = cmds.iter().any(|c| matches!(c, Cmd::WriteBuffer { data, .. } if data.len() == 64));
         assert!(write_fills, "cuMemsetD32 must emit a WriteBuffer of the expanded fill");
+    }
+
+    /// A kernel using an instruction outside dd's modeled PTX subset (`shfl.sync`, a warp intrinsic).
+    /// It parses as a valid entry (so module load + get-function succeed) but cannot be executed. Used
+    /// by the truthful-failure and strict-mode tests.
+    const UNSUPPORTED_PTX: &str = r#"
+        .version 7.5
+        .target sm_86
+        .address_size 64
+        .visible .entry unsup(
+            .param .u64 unsup_param_0,
+            .param .u32 unsup_param_1
+        )
+        {
+            .reg .b32 %r<6>;
+            .reg .b64 %rd<3>;
+            ld.param.u64 %rd1, [unsup_param_0];
+            ld.param.u32 %r2, [unsup_param_1];
+            mov.u32 %r3, %tid.x;
+            shfl.sync.down.b32 %r4, %r3, 1, 31, -1;
+            ret;
+        }
+    "#;
+
+    /// Drive the shim to `cuModuleGetFunction` for the unsupported kernel; returns the function handle.
+    fn load_unsupported_fn() -> *mut core::ffi::c_void {
+        use core::ffi::c_void;
+        assert_eq!(driver::cuInit(0), result::CUDA_SUCCESS);
+        let mut ctx: *mut c_void = core::ptr::null_mut();
+        assert_eq!(driver::cuCtxCreate_v2(&mut ctx, 0, 0), result::CUDA_SUCCESS);
+        let ptx = std::ffi::CString::new(UNSUPPORTED_PTX).unwrap();
+        let mut module: *mut c_void = core::ptr::null_mut();
+        assert_eq!(
+            driver::cuModuleLoadData(&mut module, ptx.as_ptr() as *const c_void),
+            result::CUDA_SUCCESS
+        );
+        let fname = std::ffi::CString::new("unsup").unwrap();
+        let mut func: *mut c_void = core::ptr::null_mut();
+        assert_eq!(
+            driver::cuModuleGetFunction(&mut func, module, fname.as_ptr()),
+            result::CUDA_SUCCESS,
+            "the unsupported kernel is still a valid entry: module load + get-function succeed"
+        );
+        assert!(!func.is_null());
+        func
+    }
+
+    /// TRUTHFUL FAILURE: a launch of a kernel outside the modeled PTX subset must return the accurate
+    /// CUDA error (`CUDA_ERROR_NOT_SUPPORTED`) — NOT the old false `CUDA_SUCCESS` no-op that left the
+    /// output buffer unwritten. The Phase-0 exit gate for CUDA: no unsupported call silently succeeds.
+    #[test]
+    fn unsupported_ptx_launch_returns_error_not_success() {
+        let _serial = serial();
+        state::reset();
+        let func = load_unsupported_fn();
+        let r = driver::cuLaunchKernel(
+            func, 1, 1, 1, 1, 1, 1, 0, core::ptr::null_mut(),
+            core::ptr::null_mut(), core::ptr::null_mut(),
+        );
+        assert_eq!(
+            r,
+            result::CUDA_ERROR_NOT_SUPPORTED,
+            "an unsupported PTX kernel must fail truthfully, not report success"
+        );
+        // cuLaunchKernelEx / cuLaunchCooperativeKernel route through the same path → same truthful error.
+        let coop = driver::cuLaunchCooperativeKernel(
+            func, 1, 1, 1, 1, 1, 1, 0, core::ptr::null_mut(), core::ptr::null_mut(),
+        );
+        assert_eq!(coop, result::CUDA_ERROR_NOT_SUPPORTED);
+    }
+
+    /// DD_SHIM_STRICT=1: the shim aborts at the first unsupported CUDA call. Under `cfg(test)` the strict
+    /// path records that it *would* have aborted (a thread-local trip flag) instead of killing the test
+    /// process, so the abort decision and its report are assertable.
+    #[test]
+    fn strict_mode_trips_abort_on_unsupported_launch() {
+        let _serial = serial();
+        state::reset();
+        stub::STRICT_TRIPPED.with(|c| c.set(false));
+        std::env::set_var("DD_SHIM_STRICT", "1");
+        let func = load_unsupported_fn();
+        let r = driver::cuLaunchKernel(
+            func, 2, 1, 1, 64, 1, 1, 0, core::ptr::null_mut(),
+            core::ptr::null_mut(), core::ptr::null_mut(),
+        );
+        std::env::remove_var("DD_SHIM_STRICT");
+        assert_eq!(r, result::CUDA_ERROR_NOT_SUPPORTED);
+        assert!(
+            stub::STRICT_TRIPPED.with(|c| c.get()),
+            "DD_SHIM_STRICT=1 must trip the abort at the first unsupported call"
+        );
+        // The report carries the command, the object/context detail, and the recent-call history.
+        let report = stub::strict_report("cuLaunchKernel", "entry `unsup`");
+        assert!(report.contains("cuLaunchKernel"), "report names the command");
+        assert!(report.contains("history"), "report includes recent-call history");
+        assert!(report.contains("unsup"), "history shows the lead-up (module load / get-function / launch)");
+    }
+
+    /// The generated capability inventory covers every exported entry point, its counts reconcile with
+    /// the total surface, every `unsupported` entry carries a real (nonzero) CUDA error, and the known
+    /// classifications + exact error codes are as documented.
+    #[test]
+    fn capability_inventory_is_complete_and_truthful() {
+        assert_eq!(
+            CAPABILITIES.len(),
+            TOTAL_ENTRYPOINTS,
+            "inventory must have one record per exported entry point"
+        );
+        assert_eq!(CAP_FULL + CAP_PARTIAL + CAP_UNSUPPORTED, TOTAL_ENTRYPOINTS);
+        for e in CAPABILITIES {
+            match e.cap {
+                capability::Cap::Unsupported => {
+                    assert_ne!(
+                        e.cuda_error, result::CUDA_SUCCESS,
+                        "unsupported `{}` must return a real CUDA error, not success", e.name
+                    );
+                    assert!(!e.note.is_empty(), "unsupported `{}` needs a reason note", e.name);
+                }
+                capability::Cap::Partial => {
+                    assert!(!e.note.is_empty(), "partial `{}` needs a supported-domain note", e.name)
+                }
+                capability::Cap::Full => {}
+            }
+        }
+        let find = |n: &str| CAPABILITIES.iter().find(|e| e.name == n).unwrap_or_else(|| panic!("missing {n}"));
+        assert_eq!(find("cuInit").cap, capability::Cap::Full);
+        assert_eq!(find("cuLaunchKernel").cap, capability::Cap::Partial);
+        assert_eq!(find("cuLaunchKernel").cuda_error, result::CUDA_ERROR_NOT_SUPPORTED);
+        assert_eq!(find("cuCtxEnablePeerAccess").cap, capability::Cap::Unsupported);
+        assert_eq!(
+            find("cuCtxEnablePeerAccess").cuda_error,
+            result::CUDA_ERROR_PEER_ACCESS_UNSUPPORTED
+        );
+        assert_eq!(find("cuModuleGetTexRef").cuda_error, result::CUDA_ERROR_NOT_FOUND);
+        assert_eq!(find("cuDeviceGetLuid").cuda_error, result::CUDA_ERROR_NOT_SUPPORTED);
+    }
+
+    /// ACCURATE ADVERTISEMENT: `cuDriverGetVersion` and the advertised compute capability report exactly
+    /// the inventory's single-source-of-truth values — the library never advertises a CUDA version /
+    /// capability the modeled surface does not back.
+    #[test]
+    fn advertised_version_matches_the_inventory() {
+        let _serial = serial();
+        state::reset();
+        assert_eq!(result::DRIVER_VERSION, capability::SUPPORTED_DRIVER_VERSION);
+        let mut v = 0i32;
+        assert_eq!(driver::cuDriverGetVersion(&mut v), result::CUDA_SUCCESS);
+        assert_eq!(v, capability::SUPPORTED_DRIVER_VERSION, "cuDriverGetVersion must match the inventory");
+        assert_eq!(driver::cuInit(0), result::CUDA_SUCCESS);
+        let (mut maj, mut min) = (0i32, 0i32);
+        assert_eq!(
+            driver::cuDeviceComputeCapability(&mut maj, &mut min, 0),
+            result::CUDA_SUCCESS
+        );
+        assert_eq!(
+            (maj as u32, min as u32),
+            capability::SUPPORTED_COMPUTE_CAPABILITY,
+            "advertised compute capability must match the inventory (sm_86, the PTX target)"
+        );
     }
 }

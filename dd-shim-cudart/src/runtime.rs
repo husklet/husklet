@@ -814,6 +814,11 @@ pub extern "C" fn cudaLaunchKernel(
         return state::rec(CUDA_ERROR_INVALID_DEVICE_FUNCTION);
     };
 
+    crate::stub::note(format!(
+        "cudaLaunchKernel(kernel=`{name}`, grid=({},{},{}), block=({},{},{}))",
+        gridDim.x, gridDim.y, gridDim.z, blockDim.x, blockDim.y, blockDim.z
+    ));
+
     // Lazily load the module (walk fatbin -> PTX -> module_load).
     let (module, load_res) = ensure_module_loaded(fat);
     if load_res != CUDA_SUCCESS_RT {
@@ -835,8 +840,21 @@ pub extern "C" fn cudaLaunchKernel(
         };
         let prog = match ptx::compile(&ptx_src, &entry, block) {
             Ok(p) => p,
-            // A kernel outside the modeled subset: no IR emitted (traced no-op), reported as success.
-            Err(_) => return CUDA_SUCCESS_RT,
+            // A kernel outside the modeled PTX subset CANNOT be executed. Instead of the old false
+            // `cudaSuccess` no-op (which left the output buffer unwritten and moved the failure
+            // elsewhere), return the accurate runtime error: `cudaErrorNotSupported` for an unsupported
+            // instruction/feature, `cudaErrorInvalidPtx` for malformed PTX (the executor's `Display`
+            // text phrases every "outside the subset" rejection with "unsupported" — ptx.rs is the
+            // read-only reference, so we classify from its message).
+            Err(e) => {
+                let code = if e.to_string().contains("unsupported") {
+                    CUDA_ERROR_NOT_SUPPORTED_RT
+                } else {
+                    CUDA_ERROR_INVALID_PTX_RT
+                };
+                crate::stub::unsupported("cudaLaunchKernel", &format!("kernel `{name}`: {e}"));
+                return code;
+            }
         };
         // CUDA calling convention: each `args` slot points at the argument's value.
         let mut kargs: Vec<KernelArg> = Vec::with_capacity(prog.params.len());

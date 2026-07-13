@@ -37,6 +37,20 @@ unsafe fn cstr(p: *const c_char) -> Option<String> {
     Some(std::ffi::CStr::from_ptr(p).to_string_lossy().into_owned())
 }
 
+/// Map a PTX front-end failure ([`dd_gpu::ptx::compile`] → [`dd_gpu::GpuError::Ptx`]) to the accurate
+/// `CUresult`. A kernel that uses an instruction / space / type *outside dd's modeled subset* is
+/// `CUDA_ERROR_NOT_SUPPORTED` (the executor genuinely cannot run it); a genuinely malformed / truncated
+/// PTX image is `CUDA_ERROR_INVALID_PTX` (a JIT compilation failure), matching a real driver. The
+/// front-end phrases every "outside the subset" rejection with the word "unsupported", so that is the
+/// discriminator (ptx.rs is the read-only executor reference — we classify from its `Display` text).
+fn ptx_error_code(e: &dd_gpu::GpuError) -> i32 {
+    if e.to_string().contains("unsupported") {
+        CUDA_ERROR_NOT_SUPPORTED
+    } else {
+        CUDA_ERROR_INVALID_PTX
+    }
+}
+
 // ==================================================================================================
 // bring-up: init + driver version + error strings
 // ==================================================================================================
@@ -410,6 +424,7 @@ pub extern "C" fn cuModuleLoadData(module: *mut *mut c_void, image: *const c_voi
         None => return CUDA_ERROR_INVALID_IMAGE,
     };
     let id = state::with(|s| s.ctx.module_load(&ptx_src));
+    crate::stub::note(format!("cuModuleLoadData(module={id})"));
     unsafe { *module = id as usize as *mut c_void };
     CUDA_SUCCESS
 }
@@ -435,6 +450,7 @@ pub extern "C" fn cuModuleGetFunction(
     });
     match handle {
         Some(h) => {
+            crate::stub::note(format!("cuModuleGetFunction(`{name}`)"));
             unsafe { *f = h };
             CUDA_SUCCESS
         }
@@ -477,16 +493,24 @@ pub extern "C" fn cuLaunchKernel(
         return CUDA_ERROR_INVALID_HANDLE;
     };
 
+    crate::stub::note(format!("cuLaunchKernel(entry=`{entry}`, grid=({gx},{gy},{gz}), block=({bx},{by},{bz}))"));
+
     // Use the shared PTX front-end purely to learn each parameter's width + pointer-ness, so we can
     // interpret the untyped `void** kernelParams` (CUDA's calling convention: each slot points at the
-    // argument's value). Kernels outside the modeled subset are a traced no-op (long tail).
+    // argument's value). A kernel outside the modeled PTX subset (warp intrinsics, f64, textures, inline
+    // asm, …) CANNOT be executed, so — instead of the old false `CUDA_SUCCESS` no-op that left the output
+    // buffer unwritten — return the accurate CUDA error. `cuLaunchKernel` has no output parameters to
+    // initialize; the caller's device buffers are simply left untouched, exactly as a real launch failure.
     let prog = match ptx::compile(&ptx_src, &entry, block) {
         Ok(p) => p,
-        Err(_) => {
-            crate::stub::hit(
-                "cuLaunchKernel (PTX outside the modeled subset — traced, no IR emitted)",
+        Err(e) => {
+            let cur = state::with(|s| s.current_ctx);
+            let code = ptx_error_code(&e);
+            crate::stub::unsupported(
+                "cuLaunchKernel",
+                &format!("entry `{entry}` (ctx={cur}): {e}"),
             );
-            return CUDA_SUCCESS;
+            return code;
         }
     };
 

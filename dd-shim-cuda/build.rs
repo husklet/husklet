@@ -34,6 +34,7 @@ fn main() {
 
     let mut cu = 0usize;
     let mut stubs = 0usize;
+    let mut names: Vec<String> = Vec::new();
     for (lineno, line) in text.lines().enumerate() {
         let line = line.trim_end();
         if line.is_empty() || line.starts_with('#') {
@@ -51,6 +52,7 @@ fn main() {
             "CU" => cu += 1,
             other => panic!("manifest line {}: unknown lib {other:?}", lineno + 1),
         }
+        names.push(name.to_string());
         if IMPLEMENTED.contains(&name) {
             continue; // hand-written in src/; a generated stub would collide.
         }
@@ -64,8 +66,105 @@ fn main() {
     writeln!(out, "/// Entry points emitted as default stubs (not yet hand-implemented).").unwrap();
     writeln!(out, "pub const GENERATED_STUBS: usize = {stubs};").unwrap();
 
+    emit_capabilities(&mut out, &names);
+
     let out_path = PathBuf::from(env("OUT_DIR")).join("generated_entrypoints.rs");
     std::fs::write(&out_path, out).unwrap();
+}
+
+// ==================================================================================================
+// capability inventory codegen (Phase 0 — make completeness measurable)
+// ==================================================================================================
+
+// CUresult numeric values (stable CUDA ABI) referenced by the capability classification below. Kept in
+// lock-step with `src/result.rs`; the crate's inventory test cross-checks each against `result::`.
+const CUDA_ERROR_INVALID_IMAGE: i32 = 200;
+const CUDA_ERROR_NOT_FOUND: i32 = 500;
+const CUDA_ERROR_PEER_ACCESS_UNSUPPORTED: i32 = 217;
+const CUDA_ERROR_PEER_ACCESS_NOT_ENABLED: i32 = 705;
+const CUDA_ERROR_NOT_SUPPORTED: i32 = 801;
+
+/// Classify one entry point → (Cap level, error-returned-when-unsupported, note). Unlisted names are
+/// `full`. `partial` = works within a bounded supported domain (the note names it); `unsupported` =
+/// always returns the given defined CUDA error because the feature is not modeled. This table is the
+/// authoritative capability record Phase 0 requires for every advertised command.
+fn capability(name: &str) -> (&'static str, i32, &'static str) {
+    match name {
+        // ---- unsupported: always return a defined CUDA error (feature not modeled) ----
+        "cuCtxEnablePeerAccess" => ("Unsupported", CUDA_ERROR_PEER_ACCESS_UNSUPPORTED, "single simulated device: no peers"),
+        "cuCtxDisablePeerAccess" => ("Unsupported", CUDA_ERROR_PEER_ACCESS_NOT_ENABLED, "single simulated device: no peers"),
+        "cuDeviceGetLuid" => ("Unsupported", CUDA_ERROR_NOT_SUPPORTED, "LUID is Windows/TCC-only; not modeled"),
+        "cuModuleGetGlobal_v2" => ("Unsupported", CUDA_ERROR_NOT_FOUND, "PTX model parses kernel entries only, not .global variables"),
+        "cuModuleGetTexRef" => ("Unsupported", CUDA_ERROR_NOT_FOUND, "no texture references in the PTX model"),
+        "cuModuleGetSurfRef" => ("Unsupported", CUDA_ERROR_NOT_FOUND, "no surface references in the PTX model"),
+
+        // ---- partial: kernel launch is only the modeled PTX subset ----
+        "cuLaunchKernel" | "cuLaunchKernelEx" | "cuLaunchCooperativeKernel" => (
+            "Partial",
+            CUDA_ERROR_NOT_SUPPORTED,
+            "executes only the modeled PTX subset (no warp intrinsics/f64/textures/inline-asm); \
+             CUDA_ERROR_NOT_SUPPORTED otherwise, CUDA_ERROR_INVALID_PTX for malformed PTX",
+        ),
+
+        // ---- partial: module load accepts PTX text; a binary fatbin/SASS container is not unpacked ----
+        "cuModuleLoad" | "cuModuleLoadData" | "cuModuleLoadDataEx" | "cuModuleLoadFatBinary" => (
+            "Partial",
+            CUDA_ERROR_INVALID_IMAGE,
+            "image is treated as PTX text; SASS/compressed fatbin containers are not unpacked \
+             (later cuModuleGetFunction returns CUDA_ERROR_NOT_FOUND)",
+        ),
+
+        // ---- partial: function attributes are modeled defaults, not per-kernel measured ----
+        "cuFuncGetAttribute" => ("Partial", 0, "modeled defaults; per-kernel register/shared pressure not tracked"),
+        "cuFuncSetAttribute" => ("Partial", 0, "only MAX_DYNAMIC_SHARED_SIZE_BYTES is retained; others validated no-op"),
+        "cuFuncSetCacheConfig" | "cuFuncSetSharedMemConfig" => ("Partial", 0, "cache/shared config is a no-op on the modeled device"),
+
+        // ---- partial: synchronous single-queue executor (ordering is trivially satisfied) ----
+        "cuStreamWaitEvent" => ("Partial", 0, "synchronous executor: the awaited work has already completed"),
+        "cuStreamQuery" => ("Partial", 0, "synchronous executor: always ready"),
+        "cuStreamAttachMemAsync" => ("Partial", 0, "no-op: unified memory needs no per-stream attach"),
+        "cuStreamIsCapturing" => ("Partial", 0, "graph capture unsupported: always CU_STREAM_CAPTURE_STATUS_NONE"),
+        "cuThreadExchangeStreamCaptureMode" => ("Partial", 0, "graph capture unsupported: mode left unchanged"),
+
+        // ---- partial: single-device / unified-memory degenerate forms ----
+        "cuMemcpyPeer" | "cuMemcpyPeerAsync" => ("Partial", 0, "single device: peer copy degrades to device-to-device"),
+        "cuMemPrefetchAsync" | "cuMemAdvise" => ("Partial", 0, "unified memory: prefetch/advise is a valid no-op"),
+        "cuPointerSetAttribute" => ("Partial", 0, "attribute set is accepted as a no-op"),
+
+        // ---- everything else: full for the modeled single-device / synchronous model ----
+        _ => ("Full", 0, ""),
+    }
+}
+
+fn emit_capabilities(out: &mut String, names: &[String]) {
+    let mut full = 0usize;
+    let mut partial = 0usize;
+    let mut unsupported = 0usize;
+    writeln!(out, "\n/// The generated capability inventory — one record per exported `cu*` entry point.").unwrap();
+    writeln!(out, "/// Full/partial/unsupported classification + the CUresult each unsupported path returns.").unwrap();
+    writeln!(out, "pub static CAPABILITIES: &[crate::capability::Entry] = &[").unwrap();
+    for name in names {
+        let (level, err, note) = capability(name);
+        match level {
+            "Full" => full += 1,
+            "Partial" => partial += 1,
+            "Unsupported" => unsupported += 1,
+            other => panic!("bad capability level {other:?} for {name}"),
+        }
+        let note_esc = note.replace('\\', "\\\\").replace('"', "\\\"");
+        writeln!(
+            out,
+            "    crate::capability::Entry {{ name: {name:?}, cap: crate::capability::Cap::{level}, cuda_error: {err}, note: \"{note_esc}\" }},"
+        )
+        .unwrap();
+    }
+    writeln!(out, "];").unwrap();
+    writeln!(out, "/// Count of `full` entry points in the capability inventory.").unwrap();
+    writeln!(out, "pub const CAP_FULL: usize = {full};").unwrap();
+    writeln!(out, "/// Count of `partial` (bounded-domain) entry points.").unwrap();
+    writeln!(out, "pub const CAP_PARTIAL: usize = {partial};").unwrap();
+    writeln!(out, "/// Count of `unsupported` entry points (each returns a defined CUDA error).").unwrap();
+    writeln!(out, "pub const CAP_UNSUPPORTED: usize = {unsupported};").unwrap();
 }
 
 fn emit_stub(out: &mut String, name: &str, ret: &str, params: &str) {

@@ -41,6 +41,7 @@ fn main() {
 
     let mut rt = 0usize;
     let mut stubs = 0usize;
+    let mut names: Vec<String> = Vec::new();
     for (lineno, line) in text.lines().enumerate() {
         let line = line.trim_end();
         if line.is_empty() || line.starts_with('#') {
@@ -58,6 +59,7 @@ fn main() {
             "RT" => rt += 1,
             other => panic!("manifest line {}: unknown lib {other:?}", lineno + 1),
         }
+        names.push(name.to_string());
         if IMPLEMENTED.contains(&name) {
             continue; // hand-written in src/; a generated stub would collide.
         }
@@ -71,8 +73,74 @@ fn main() {
     writeln!(out, "/// Entry points emitted as default stubs (not yet hand-implemented).").unwrap();
     writeln!(out, "pub const GENERATED_STUBS: usize = {stubs};").unwrap();
 
+    emit_capabilities(&mut out, &names);
+
     let out_path = PathBuf::from(env("OUT_DIR")).join("generated_entrypoints.rs");
     std::fs::write(&out_path, out).unwrap();
+}
+
+// ==================================================================================================
+// capability inventory codegen (Phase 0 — make completeness measurable)
+// ==================================================================================================
+
+// cudaError_t numeric values (stable CUDA ABI) referenced by the classification below; the crate's
+// inventory test cross-checks each against `result::`.
+const CUDA_ERROR_NOT_SUPPORTED_RT: i32 = 801;
+
+/// Classify one runtime entry point → (Cap level, error-returned-when-unsupported, note). Unlisted names
+/// are `full`. `partial` = works within a bounded supported domain (the note names it); `unsupported` =
+/// always returns the given defined `cudaError_t`. The authoritative capability record Phase 0 requires.
+fn capability(name: &str) -> (&'static str, i32, &'static str) {
+    match name {
+        // ---- partial: kernel launch is only the modeled PTX subset ----
+        "cudaLaunchKernel" => (
+            "Partial",
+            CUDA_ERROR_NOT_SUPPORTED_RT,
+            "executes only the modeled PTX subset (no warp intrinsics/f64/textures/inline-asm); \
+             cudaErrorNotSupported otherwise, cudaErrorInvalidPtx for malformed PTX, \
+             cudaErrorInvalidKernelImage for a SASS-only fatbin",
+        ),
+        // ---- partial: function attributes are modeled defaults, not per-kernel measured ----
+        "cudaFuncGetAttributes" => ("Partial", 0, "modeled defaults; per-kernel register/shared pressure not tracked"),
+        // ---- partial: synchronous single-queue executor ----
+        "cudaStreamWaitEvent" => ("Partial", 0, "synchronous executor: the awaited work has already completed"),
+        "cudaStreamQuery" => ("Partial", 0, "synchronous executor: always ready"),
+        // ---- partial: nvcc registration glue for a feature not modeled ----
+        "__cudaRegisterVar" => ("Partial", 0, "PTX model parses kernel entries only: __device__ globals are not bound"),
+        // ---- everything else: full for the modeled single-device / synchronous model ----
+        _ => ("Full", 0, ""),
+    }
+}
+
+fn emit_capabilities(out: &mut String, names: &[String]) {
+    let mut full = 0usize;
+    let mut partial = 0usize;
+    let mut unsupported = 0usize;
+    writeln!(out, "\n/// The generated capability inventory — one record per exported runtime entry point.").unwrap();
+    writeln!(out, "/// Full/partial/unsupported classification + the cudaError_t each unsupported path returns.").unwrap();
+    writeln!(out, "pub static CAPABILITIES: &[crate::capability::Entry] = &[").unwrap();
+    for name in names {
+        let (level, err, note) = capability(name);
+        match level {
+            "Full" => full += 1,
+            "Partial" => partial += 1,
+            "Unsupported" => unsupported += 1,
+            other => panic!("bad capability level {other:?} for {name}"),
+        }
+        let note_esc = note.replace('\\', "\\\\").replace('"', "\\\"");
+        writeln!(
+            out,
+            "    crate::capability::Entry {{ name: {name:?}, cap: crate::capability::Cap::{level}, cuda_error: {err}, note: \"{note_esc}\" }},"
+        )
+        .unwrap();
+    }
+    writeln!(out, "];").unwrap();
+    writeln!(out, "/// Count of `full` entry points in the capability inventory.").unwrap();
+    writeln!(out, "pub const CAP_FULL: usize = {full};").unwrap();
+    writeln!(out, "/// Count of `partial` (bounded-domain) entry points.").unwrap();
+    writeln!(out, "pub const CAP_PARTIAL: usize = {partial};").unwrap();
+    writeln!(out, "/// Count of `unsupported` entry points (each returns a defined cudaError_t).").unwrap();
+    writeln!(out, "pub const CAP_UNSUPPORTED: usize = {unsupported};").unwrap();
 }
 
 fn emit_stub(out: &mut String, name: &str, ret: &str, params: &str) {
