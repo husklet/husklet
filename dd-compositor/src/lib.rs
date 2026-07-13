@@ -437,6 +437,10 @@ pub struct DdState {
     surface_ids: HashMap<ObjectId, u32>,
     next_surface_id: u32,
     presenter_windows: HashSet<u32>,
+    /// Host sids of surfaces adopted as X11 (XWayland) windows — see [`DdState::adopt_x11_window`]. An
+    /// X11 window's `wl_surface` presents through the same commit→present path as a native toplevel; this
+    /// set only records which windows came from the X11 bridge (for policy/diagnostics).
+    x11_windows: HashSet<u32>,
     surface_owners: HashMap<u32, ClientId>,
     /// Client charged a presenter-object (native window) budget unit for surface `sid`, so the charge can
     /// be refunded on `drop_window` even after the surface's protocol object / owner record is gone.
@@ -460,6 +464,13 @@ pub struct DdState {
     /// Shared sink the per-client [`ClientState::disconnected`] callback pushes disconnected client ids
     /// into; drained by [`DdState::drain_client_disconnects`].
     client_disconnects: Arc<Mutex<Vec<ClientId>>>,
+
+    /// XWayland bridge state (Xwayland server handle, `wl_surface`↔X11 shell global, and the running X11
+    /// window manager), present only when built with `--features xwayland` and started at runtime under
+    /// DD_XWAYLAND. `None` until [`handlers::xwayland::DdState::start_xwayland`] runs. See
+    /// `handlers/xwayland.rs`.
+    #[cfg(feature = "xwayland")]
+    pub(crate) xwayland: Option<handlers::xwayland::XwaylandState>,
 }
 
 /// The in-flight GPU synchronization a zero-copy surface owns while its host-executor render/present is
@@ -729,6 +740,7 @@ impl DdState {
             presenter_windows: HashSet::new(),
             surface_owners: HashMap::new(),
             presenter_object_charges: HashMap::new(),
+            x11_windows: HashSet::new(),
             surface_resources: HashMap::new(),
             render_usage: HashMap::new(),
             global_render_usage: RenderUsage::default(),
@@ -739,6 +751,8 @@ impl DdState {
             next_buffer_use_generation: 1,
             surface_fences: HashMap::new(),
             client_disconnects: Arc::new(Mutex::new(Vec::new())),
+            #[cfg(feature = "xwayland")]
+            xwayland: None,
         }
     }
 
@@ -810,6 +824,7 @@ impl DdState {
         self.dirty.remove(&sid);
         self.visibility.remove(&sid);
         self.fullscreen_surfaces.remove(&sid);
+        self.x11_windows.remove(&sid);
         self.titles.remove(&sid);
         self.retained_callbacks.remove(&sid);
         if let Some(feedback) = self.retained_feedback.remove(&sid) {
@@ -1958,5 +1973,129 @@ mod region_occlusion_and_pacing_tests {
         // Host reveal restores visibility.
         assert!(h.state.note_host_window_visibility(1, false, false));
         assert!(h.state.root_is_visible(&root), "host reveal restores visibility");
+    }
+}
+
+#[cfg(test)]
+mod xwayland_window_model_tests {
+    //! In-process proof of the XWayland bridge's feature-independent core (`adopt_x11_window` /
+    //! `withdraw_x11_window`): a roleless `wl_surface` — exactly what Xwayland creates for an X11 window —
+    //! adopted into the window model presents through the SAME commit→present path as an `xdg_toplevel`,
+    //! carries the X11 title, takes keyboard focus, and is recorded as an X11 window; withdraw drops the
+    //! native presenter window and clears focus. Runs offline with no live Xwayland (the `XwmHandler` that
+    //! drives these calls is thin glue behind `--features xwayland`, unbuildable on this egress-blocked
+    //! host — see `handlers/xwayland.rs`).
+
+    use super::*;
+    use dd_display::present::{PresentError, PresentOutcome, Presenter, SurfaceBuffer};
+    use dd_display::wire::{Conn, Message};
+    use smithay::reexports::wayland_server::Display;
+    use std::os::unix::io::{FromRawFd, RawFd};
+
+    struct XP {
+        frames: u32,
+        last: Arc<Mutex<Option<(u32, String)>>>,
+        dropped: Arc<Mutex<Vec<u32>>>,
+    }
+    impl Presenter for XP {
+        fn present(&mut self, surf: &SurfaceBuffer) -> Result<PresentOutcome, PresentError> {
+            self.frames += 1;
+            *self.last.lock().unwrap() = Some((surf.sid, surf.title.clone()));
+            Ok(PresentOutcome::Delivered { serial: self.frames as u64, timing: None })
+        }
+        fn frame_count(&self) -> u32 {
+            self.frames
+        }
+        fn drop_window(&mut self, sid: u32) {
+            self.dropped.lock().unwrap().push(sid);
+        }
+    }
+
+    fn socketpair() -> (RawFd, RawFd) {
+        let mut sv = [0i32; 2];
+        assert_eq!(unsafe { libc::socketpair(libc::AF_UNIX, libc::SOCK_STREAM, 0, sv.as_mut_ptr()) }, 0);
+        for fd in sv {
+            unsafe {
+                let fl = libc::fcntl(fd, libc::F_GETFL);
+                libc::fcntl(fd, libc::F_SETFL, fl | libc::O_NONBLOCK);
+            }
+        }
+        (sv[0], sv[1])
+    }
+
+    #[test]
+    #[allow(unused_assignments)]
+    fn adopted_x11_window_presents_focuses_and_withdraws() {
+        let display: Display<DdState> = Display::new().unwrap();
+        let mut dh = display.handle();
+        let mut display = display;
+        let last = Arc::new(Mutex::new(None));
+        let dropped = Arc::new(Mutex::new(Vec::new()));
+        let mut state = DdState::new(dh.clone(), Box::new(XP { frames: 0, last: last.clone(), dropped: dropped.clone() }));
+        let (cfd, sfd) = socketpair();
+        dh.insert_client(unsafe { std::os::unix::net::UnixStream::from_raw_fd(sfd) }, Arc::new(ClientState::default())).unwrap();
+        let mut conn = Conn::new(cfd);
+        let mut globals: HashMap<String, u32> = HashMap::new();
+        let mut next = 2u32;
+        macro_rules! alloc { () => {{ let i = next; next += 1; i }}; }
+        macro_rules! pump {
+            () => {{
+                conn.flush().unwrap();
+                display.dispatch_clients(&mut state).unwrap();
+                display.flush_clients().unwrap();
+                loop { match conn.fill() { Ok(0) | Ok(-1) | Err(_) => break, _ => {} } }
+                while let Some(m) = conn.next_message() {
+                    if m.object == 2 && m.opcode == 0 {
+                        let mut r = m.reader();
+                        let name = r.u32(); let iface = r.string(); let _ = r.u32();
+                        globals.entry(iface).or_insert(name);
+                    }
+                }
+            }};
+        }
+        let reg = alloc!();
+        conn.send(&Message::new(1, 1).u32(reg));
+        pump!();
+        let comp = alloc!();
+        conn.send(&Message::new(2, 0).u32(globals["wl_compositor"]).string("wl_compositor").u32(4).u32(comp));
+        let shm = alloc!();
+        conn.send(&Message::new(2, 0).u32(globals["wl_shm"]).string("wl_shm").u32(1).u32(shm));
+        pump!();
+
+        // Xwayland creates a plain (roleless) wl_surface for the X11 window and attaches the window pixmap.
+        let surf = alloc!();
+        conn.send(&Message::new(comp, 0).u32(surf)); // create_surface -> host sid 1
+        let (w, h) = (16i32, 16i32);
+        let stride = w * 4;
+        let size = (stride * h) as usize;
+        let fd = dd_display::keymap::anon_fd_with(&vec![0x50u8; size]).unwrap();
+        let pool = alloc!();
+        conn.send(&Message::new(shm, 0).u32(pool).u32(size as u32));
+        conn.queue_fd(fd);
+        let buffer = alloc!();
+        conn.send(&Message::new(pool, 0).u32(buffer).i32(0).i32(w).i32(h).i32(stride).u32(1));
+        conn.send(&Message::new(surf, 1).u32(buffer).i32(0).i32(0)); // attach
+        conn.send(&Message::new(surf, 6)); // commit → ingested
+        pump!();
+        unsafe { libc::close(fd) };
+
+        let wl = state.surface_resources.get(&1).cloned().expect("X11 wl_surface registered");
+        assert!(!state.is_x11_window(1), "not yet adopted");
+
+        // The XwmHandler's map_window_request does exactly this: adopt the X11 window with its title.
+        state.adopt_x11_window(&wl, "xterm — user@host".to_string());
+
+        // It presented through the ordinary path, carrying the X11 title, and took keyboard focus.
+        let (sid, title) = last.lock().unwrap().clone().expect("adopted X11 window presented");
+        assert_eq!(sid, 1, "the X11 window's own host surface presented");
+        assert_eq!(title, "xterm — user@host", "the X11 window presents with its X11 title");
+        assert!(state.is_x11_window(1), "surface is recorded as an X11 window");
+        assert_eq!(state.focus.as_ref(), Some(&wl), "the mapped X11 window took keyboard focus");
+
+        // Withdraw (X11 unmap/destroy): the native presenter window is dropped and focus cleared.
+        state.withdraw_x11_window(&wl);
+        assert!(dropped.lock().unwrap().contains(&1), "withdraw drops the native presenter window");
+        assert!(state.focus.is_none(), "withdraw clears focus the X11 window held");
+        assert!(!state.is_x11_window(1), "withdraw clears the X11-window record");
     }
 }

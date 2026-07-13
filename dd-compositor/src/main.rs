@@ -143,6 +143,24 @@ fn build_loop(
         )
         .expect("insert display source");
 
+    // XWayland bridge activation (opt-in, behind `--features xwayland` AND the DD_XWAYLAND runtime flag;
+    // the whole binary is already behind DD_DISPLAY_SMITHAY). `DdState::start_xwayland` (handlers/xwayland.rs)
+    // composes Smithay's Xwayland server + X11 window manager so X11-only guest apps present + get input
+    // through the SAME path as native toplevels. RUNTIME wiring note: `X11Wm::start_wm` inserts the X11
+    // socket source into the calloop with the `XwmHandler` type as its data — here that is `DdState`, but
+    // THIS loop dispatches `LoopData`, so fully activating the X11 event source requires unifying the
+    // calloop data type with `DdState` (a mechanical main.rs refactor done when the feature is enabled on a
+    // host that can build it — the `x11rb` deps are unfetchable on the offline dev host; see Cargo.toml).
+    #[cfg(feature = "xwayland")]
+    if std::env::var("DD_XWAYLAND").is_ok() {
+        eprintln!(
+            "dd-compositor: DD_XWAYLAND set — XWayland bridge is composed (handlers::xwayland::start_xwayland); \
+             its X11 window manager, present/input adoption, and clipboard callbacks are implemented. Runtime \
+             activation of the X11 event source is pending the calloop-data unification noted above."
+        );
+        let _ = &state; // activation point: state.start_xwayland(event_loop.handle()) once unified.
+    }
+
     (event_loop, LoopData { state, display })
 }
 

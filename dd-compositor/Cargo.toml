@@ -10,6 +10,28 @@ autobins = false
 # `cargo build -p dd-display` on the Linux dev host never pull smithay in, so the headless core
 # build stays green and offline. Build this crate explicitly on the macOS host with the smithay deps.
 
+# XWAYLAND BRIDGE (opt-in, OFF by default).
+#
+# `src/handlers/xwayland.rs` composes Smithay's XWayland support (Xwayland server management + X11 window
+# manager) so X11-only guest apps present + get input/clipboard through the SAME path as native Wayland
+# toplevels. It is gated behind `#[cfg(feature = "xwayland")]` and is NOT compiled by default.
+#
+# Why it is not a declared cargo feature here: Smithay's `xwayland` feature pulls in `x11rb`, `x11rb-
+# protocol`, `encoding_rs`, `gethostname`, etc., which are NOT in the offline cargo cache and cannot be
+# fetched on this egress-blocked dev host (crates.io is TLS-intercepted). Merely DECLARING
+# `xwayland = ["smithay/xwayland"]` forces cargo to add those crates to Cargo.lock, which needs the index
+# and so breaks the offline default build (and the headless Linux test suite). Keeping it out of
+# `[features]` leaves the default resolution untouched and the suite green + offline.
+#
+# TO ENABLE on a host with the deps available (egress open, or a populated cache — e.g. the macOS build
+# host):
+#   1. add `"xwayland"` to the `smithay` `features` list in `[dependencies]` below;
+#   2. add a `[features]` section with `xwayland = ["smithay/xwayland"]`;
+#   3. build with `--features xwayland`.
+# The bridge is additionally gated at RUNTIME behind DD_XWAYLAND (only reachable under DD_DISPLAY_SMITHAY).
+[lints.rust]
+unexpected_cfgs = { level = "allow", check-cfg = ['cfg(feature, values("xwayland"))'] }
+
 [[bin]]
 name = "dd-compositor"
 path = "src/main.rs"

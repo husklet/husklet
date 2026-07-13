@@ -29,6 +29,11 @@ pub mod pointer_gestures;
 pub mod tablet;
 pub mod xdg_foreign;
 
+// XWayland bridge (X11-only guest apps). Opt-in, OFF by default — see `Cargo.toml` and `xwayland.rs` for
+// why it is not a declared cargo feature on the offline dev host (its `x11rb` deps are unfetchable).
+#[cfg(feature = "xwayland")]
+pub mod xwayland;
+
 use crate::DdState;
 
 use smithay::{

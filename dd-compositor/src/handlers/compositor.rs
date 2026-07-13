@@ -711,6 +711,55 @@ impl DdState {
         self.set_surface_visibility_by_sid(sid, visibility)
     }
 
+    /// Adopt an X11 (XWayland) window into the compositor's native window model — the feature-independent
+    /// core the `XwmHandler` drives (see `handlers/xwayland.rs`), also exercised directly by the in-process
+    /// test so it needs no live Xwayland. Xwayland is itself a Wayland client, so the X11 window's backing
+    /// `wl_surface` is ALREADY registered (via `new_surface`); here we label it with the X11 title, record
+    /// it as an X11 window, and give it keyboard focus. Its buffer commits then present through the exact
+    /// SAME commit→present path as a native `xdg_toplevel` (a roleless surface is its own `window_root`, so
+    /// `present_render_root` shows it as its own window), and pointer/keyboard input reaches it through the
+    /// ordinary seat hit-testing on that surface — so an X11 app renders and gets input with no special
+    /// present/input path.
+    // Called by the feature-gated `XwmHandler` (handlers/xwayland.rs) and the in-process test; unused in a
+    // plain non-test build with the feature off.
+    #[cfg_attr(not(feature = "xwayland"), allow(dead_code))]
+    pub(crate) fn adopt_x11_window(&mut self, surface: &WlSurface, title: String) {
+        let sid = self.surface_id(surface);
+        self.titles.insert(sid, title);
+        self.x11_windows.insert(sid);
+        self.visibility.remove(&sid);
+        self.focus_surface(surface.clone());
+        // If the window already has committed content (Xwayland often maps after the first attach), present
+        // it now so it appears immediately rather than only on its next commit.
+        if self.buffers.contains_key(&sid) && !self.headless {
+            let root = self.window_root(surface).unwrap_or_else(|| surface.clone());
+            self.dirty.insert(sid);
+            self.present_render_root(&root);
+        }
+    }
+
+    /// Withdraw a previously adopted X11 window (an X11 unmap or destroy): drop its native presenter window
+    /// and clear focus if it held it. A `wl_surface` destroy additionally runs the full `teardown_surface`.
+    #[cfg_attr(not(feature = "xwayland"), allow(dead_code))]
+    pub(crate) fn withdraw_x11_window(&mut self, surface: &WlSurface) {
+        let Some(sid) = self.surface_id_opt(surface) else {
+            return;
+        };
+        self.x11_windows.remove(&sid);
+        self.drop_surface_window(sid);
+        if self.focus.as_ref() == Some(surface) {
+            self.focus = None;
+            self.last_cfg = None;
+            self.set_text_input_focus(None);
+        }
+    }
+
+    /// Whether surface `sid` was adopted from the X11 (XWayland) bridge.
+    #[doc(hidden)]
+    pub fn is_x11_window(&self, sid: u32) -> bool {
+        self.x11_windows.contains(&sid)
+    }
+
     /// Move every zero-copy surface in the presented tree from its live buffer-use slot to the in-flight
     /// queue, tagged with the delivery `serial` its GPU/present work was submitted under. The buffer is
     /// retained until the presenter reports `serial` complete.
