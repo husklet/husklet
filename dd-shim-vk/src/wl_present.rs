@@ -223,6 +223,9 @@ extern "C" fn on_global(
         return;
     }
     let ifc = unsafe { core::ffi::CStr::from_ptr(interface) };
+    if std::env::var_os("DD_SHIM_DEBUG").is_some() {
+        eprintln!("[dd-shim-vk] wl global: name={name} iface={:?} v{version}", ifc);
+    }
     if ifc.to_bytes() != b"zwp_linux_dmabuf_v1" {
         return;
     }
@@ -263,14 +266,21 @@ fn ensure_dmabuf(w: &Wl, display: *mut c_void) -> Option<*mut c_void> {
             0,
             core::ptr::null::<c_void>(),
         );
+        let dbg = std::env::var_os("DD_SHIM_DEBUG").is_some();
         if registry.is_null() {
+            if dbg {
+                eprintln!("[dd-shim-vk] ensure_dmabuf: get_registry returned NULL");
+            }
             return None;
         }
         // listener = { global, global_remove }
         static LISTENER: OnceLock<[usize; 2]> = OnceLock::new();
         let l = LISTENER.get_or_init(|| [on_global as usize, on_global_remove as usize]);
-        (w.proxy_add_listener)(registry, l.as_ptr() as *mut *mut c_void, core::ptr::null_mut());
-        (w.display_roundtrip)(display); // deliver the globals + our bind
+        let added = (w.proxy_add_listener)(registry, l.as_ptr() as *mut *mut c_void, core::ptr::null_mut());
+        let rt = (w.display_roundtrip)(display); // deliver the globals + our bind
+        if dbg {
+            eprintln!("[dd-shim-vk] ensure_dmabuf: add_listener={added} roundtrip={rt} bound={}", DMABUF_PROXY.get().is_some());
+        }
     }
     DMABUF_PROXY.get().map(|p| *p as *mut c_void)
 }
