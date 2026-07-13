@@ -39,9 +39,9 @@ fn stub_raises_error_and_initializes_outputs() {
     // Error flag is read-and-cleared.
     assert_eq!(glGetError(), GL_NO_ERROR);
 
-    // --- stub with a pointer return: returns null AND raises the error ---
-    let sync = dd_shim_gl::glFenceSync(0x9117 /* GL_SYNC_GPU_COMMANDS_COMPLETE */, 0);
-    assert!(sync.is_null(), "an unsupported sync create must return null, not a fake handle");
+    // --- stub with a handle return: returns 0 AND raises the error ---
+    let prog = dd_shim_gl::glCreateShaderProgramv(0x8B31 /* GL_VERTEX_SHADER */, 1, core::ptr::null());
+    assert_eq!(prog, 0, "an unsupported program-pipeline create must return 0, not a fake name");
     assert_eq!(glGetError(), GL_INVALID_OPERATION);
     let _ = glGetError();
 

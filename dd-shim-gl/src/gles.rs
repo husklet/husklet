@@ -2157,6 +2157,315 @@ pub extern "C" fn glShaderBinary(_count: i32, _shaders: *const u32, _binaryforma
 #[no_mangle]
 pub extern "C" fn glValidateProgram(_program: u32) {}
 
+// ===================================================================================================
+// GLES3 mandatory-command completeness — real bodies ported at gl_shim.c byte-parity (the oracle).
+//
+// The DD_SHIM_ES3 opt-in advertises an ES 3.0 context; these are its remaining mandatory entry points.
+// Every one is IR-free — a query returning the oracle's default, an object-name lifecycle op, or a
+// spec-legitimate no-op the executor doesn't back (UBO binding, transform feedback, sync, sampler
+// objects, MRT clears, instanced divisor, compressed/3D-copy texture) — so the frame IR (and the
+// byte-parity gates) are unchanged. They are ported here (rather than left as generated stubs) so the
+// advertised ES3 mandatory surface has a real hand-written body for every command.
+// ===================================================================================================
+
+// ---- sampler objects (glGenSamplers is already a full body) ----
+#[no_mangle]
+pub extern "C" fn glBindSampler(_unit: u32, _sampler: u32) {}
+#[no_mangle]
+pub extern "C" fn glDeleteSamplers(_n: i32, _samplers: *const u32) {}
+#[no_mangle]
+pub extern "C" fn glIsSampler(sampler: u32) -> u8 {
+    (sampler != 0) as u8
+}
+#[no_mangle]
+pub extern "C" fn glSamplerParameteri(_sampler: u32, _pname: u32, _param: i32) {}
+#[no_mangle]
+pub extern "C" fn glSamplerParameterf(_sampler: u32, _pname: u32, _param: f32) {}
+#[no_mangle]
+pub extern "C" fn glSamplerParameteriv(_sampler: u32, _pname: u32, _param: *const i32) {}
+#[no_mangle]
+pub extern "C" fn glSamplerParameterfv(_sampler: u32, _pname: u32, _param: *const f32) {}
+#[no_mangle]
+pub extern "C" fn glGetSamplerParameteriv(_sampler: u32, _pname: u32, params: *mut i32) {
+    unsafe { set_i32(params, 0) };
+}
+#[no_mangle]
+pub extern "C" fn glGetSamplerParameterfv(_sampler: u32, _pname: u32, params: *mut f32) {
+    unsafe {
+        if !params.is_null() {
+            *params = 0.0;
+        }
+    }
+}
+
+// ---- occlusion query objects (glGenQueries is already a full body) ----
+#[no_mangle]
+pub extern "C" fn glBeginQuery(_target: u32, _id: u32) {}
+#[no_mangle]
+pub extern "C" fn glEndQuery(_target: u32) {}
+#[no_mangle]
+pub extern "C" fn glDeleteQueries(_n: i32, _ids: *const u32) {}
+#[no_mangle]
+pub extern "C" fn glIsQuery(id: u32) -> u8 {
+    (id != 0) as u8
+}
+#[no_mangle]
+pub extern "C" fn glGetQueryiv(_target: u32, _pname: u32, params: *mut i32) {
+    unsafe { set_i32(params, 0) };
+}
+#[no_mangle]
+pub extern "C" fn glGetQueryObjectuiv(_id: u32, _pname: u32, params: *mut u32) {
+    unsafe {
+        if !params.is_null() {
+            *params = 0;
+        }
+    }
+}
+
+// ---- transform feedback (glGenTransformFeedbacks is already a full body) ----
+#[no_mangle]
+pub extern "C" fn glBeginTransformFeedback(_primitive_mode: u32) {}
+#[no_mangle]
+pub extern "C" fn glEndTransformFeedback() {}
+#[no_mangle]
+pub extern "C" fn glPauseTransformFeedback() {}
+#[no_mangle]
+pub extern "C" fn glResumeTransformFeedback() {}
+#[no_mangle]
+pub extern "C" fn glBindTransformFeedback(_target: u32, _id: u32) {}
+#[no_mangle]
+pub extern "C" fn glDeleteTransformFeedbacks(_n: i32, _ids: *const u32) {}
+#[no_mangle]
+pub extern "C" fn glIsTransformFeedback(id: u32) -> u8 {
+    (id != 0) as u8
+}
+#[no_mangle]
+pub extern "C" fn glTransformFeedbackVaryings(_program: u32, _count: i32, _varyings: *const *const c_char, _buffer_mode: u32) {}
+#[no_mangle]
+#[allow(clippy::too_many_arguments)]
+pub extern "C" fn glGetTransformFeedbackVarying(_program: u32, _index: u32, buf_size: i32, length: *mut i32, size: *mut i32, typ: *mut u32, name: *mut c_char) {
+    unsafe {
+        set_i32(length, 0);
+        set_i32(size, 0);
+        if !typ.is_null() {
+            *typ = 0;
+        }
+        if !name.is_null() && buf_size > 0 {
+            *name = 0;
+        }
+    }
+}
+
+// ---- fence sync objects (oracle reports immediately-signaled so Chrome's fences never block) ----
+#[no_mangle]
+pub extern "C" fn glFenceSync(_condition: u32, _flags: u32) -> *mut c_void {
+    1 as *mut c_void
+}
+#[no_mangle]
+pub extern "C" fn glDeleteSync(_sync: *mut c_void) {}
+#[no_mangle]
+pub extern "C" fn glIsSync(sync: *mut c_void) -> u8 {
+    (!sync.is_null()) as u8
+}
+#[no_mangle]
+pub extern "C" fn glClientWaitSync(_sync: *mut c_void, _flags: u32, _timeout: u64) -> u32 {
+    GL_ALREADY_SIGNALED
+}
+#[no_mangle]
+pub extern "C" fn glWaitSync(_sync: *mut c_void, _flags: u32, _timeout: u64) {}
+#[no_mangle]
+pub extern "C" fn glGetSynciv(_sync: *mut c_void, pname: u32, _buf_size: i32, length: *mut i32, values: *mut i32) {
+    unsafe {
+        set_i32(length, 1);
+        if !values.is_null() {
+            *values = if pname == GL_SYNC_STATUS { GL_SIGNALED } else { 0 };
+        }
+    }
+}
+
+// ---- uniform blocks / UBO binding (uniforms flow through the translator's default block; no-op) ----
+#[no_mangle]
+pub extern "C" fn glBindBufferBase(_target: u32, _index: u32, _buffer: u32) {}
+#[no_mangle]
+pub extern "C" fn glBindBufferRange(_target: u32, _index: u32, _buffer: u32, _offset: isize, _size: isize) {}
+#[no_mangle]
+pub extern "C" fn glUniformBlockBinding(_program: u32, _uniform_block_index: u32, _uniform_block_binding: u32) {}
+#[no_mangle]
+pub extern "C" fn glGetUniformBlockIndex(_program: u32, _uniform_block_name: *const c_char) -> u32 {
+    GL_INVALID_INDEX
+}
+#[no_mangle]
+pub extern "C" fn glGetUniformIndices(_program: u32, uniform_count: i32, _uniform_names: *const *const c_char, uniform_indices: *mut u32) {
+    if !uniform_indices.is_null() {
+        for i in 0..uniform_count.max(0) as usize {
+            unsafe { *uniform_indices.add(i) = GL_INVALID_INDEX };
+        }
+    }
+}
+#[no_mangle]
+pub extern "C" fn glGetActiveUniformBlockName(_program: u32, _uniform_block_index: u32, buf_size: i32, length: *mut i32, name: *mut c_char) {
+    unsafe {
+        set_i32(length, 0);
+        if !name.is_null() && buf_size > 0 {
+            *name = 0;
+        }
+    }
+}
+#[no_mangle]
+pub extern "C" fn glGetActiveUniformBlockiv(_program: u32, _uniform_block_index: u32, _pname: u32, params: *mut i32) {
+    unsafe { set_i32(params, 0) };
+}
+#[no_mangle]
+pub extern "C" fn glGetActiveUniformsiv(_program: u32, uniform_count: i32, _uniform_indices: *const u32, _pname: u32, params: *mut i32) {
+    if !params.is_null() {
+        for i in 0..uniform_count.max(0) as usize {
+            unsafe { *params.add(i) = 0 };
+        }
+    }
+}
+
+// ---- buffer (mapping flush + 64-bit / pointer queries) ----
+#[no_mangle]
+pub extern "C" fn glFlushMappedBufferRange(_target: u32, _offset: isize, _length: isize) {}
+#[no_mangle]
+pub extern "C" fn glGetBufferParameteri64v(_target: u32, _pname: u32, params: *mut i64) {
+    unsafe {
+        if !params.is_null() {
+            *params = 0;
+        }
+    }
+}
+#[no_mangle]
+pub extern "C" fn glGetBufferPointerv(_target: u32, _pname: u32, params: *mut *mut c_void) {
+    unsafe {
+        if !params.is_null() {
+            *params = core::ptr::null_mut();
+        }
+    }
+}
+
+// ---- draw buffers / read buffer / integer + depth-stencil clears (single color target; no-op) ----
+#[no_mangle]
+pub extern "C" fn glDrawBuffers(_n: i32, _bufs: *const u32) {}
+#[no_mangle]
+pub extern "C" fn glReadBuffer(_src: u32) {}
+#[no_mangle]
+pub extern "C" fn glClearBufferiv(_buffer: u32, _drawbuffer: i32, _value: *const i32) {}
+#[no_mangle]
+pub extern "C" fn glClearBufferuiv(_buffer: u32, _drawbuffer: i32, _value: *const u32) {}
+#[no_mangle]
+pub extern "C" fn glClearBufferfi(_buffer: u32, _drawbuffer: i32, _depth: f32, _stencil: i32) {}
+
+// ---- instancing divisor + integer vertex attributes ----
+#[no_mangle]
+pub extern "C" fn glVertexAttribDivisor(_index: u32, _divisor: u32) {}
+#[no_mangle]
+pub extern "C" fn glVertexAttribI4i(_index: u32, _x: i32, _y: i32, _z: i32, _w: i32) {}
+#[no_mangle]
+pub extern "C" fn glVertexAttribI4ui(_index: u32, _x: u32, _y: u32, _z: u32, _w: u32) {}
+#[no_mangle]
+pub extern "C" fn glVertexAttribI4iv(_index: u32, _v: *const i32) {}
+#[no_mangle]
+pub extern "C" fn glVertexAttribI4uiv(_index: u32, _v: *const u32) {}
+#[no_mangle]
+pub extern "C" fn glGetVertexAttribIiv(_index: u32, _pname: u32, params: *mut i32) {
+    unsafe { set_i32(params, 0) };
+}
+#[no_mangle]
+pub extern "C" fn glGetVertexAttribIuiv(_index: u32, _pname: u32, params: *mut u32) {
+    unsafe {
+        if !params.is_null() {
+            *params = 0;
+        }
+    }
+}
+
+// ---- compressed / 3D-copy texture (not decoded by the executor; no-op, as gl_shim.c) ----
+#[no_mangle]
+#[allow(clippy::too_many_arguments)]
+pub extern "C" fn glCompressedTexImage3D(_target: u32, _level: i32, _internalformat: u32, _width: i32, _height: i32, _depth: i32, _border: i32, _image_size: i32, _data: *const c_void) {}
+#[no_mangle]
+#[allow(clippy::too_many_arguments)]
+pub extern "C" fn glCompressedTexSubImage3D(_target: u32, _level: i32, _xoffset: i32, _yoffset: i32, _zoffset: i32, _width: i32, _height: i32, _depth: i32, _format: u32, _image_size: i32, _data: *const c_void) {}
+#[no_mangle]
+#[allow(clippy::too_many_arguments)]
+pub extern "C" fn glCopyTexSubImage3D(_target: u32, _level: i32, _xoffset: i32, _yoffset: i32, _zoffset: i32, _x: i32, _y: i32, _width: i32, _height: i32) {}
+
+// ---- framebuffer invalidate (advisory hint; no-op) ----
+#[no_mangle]
+pub extern "C" fn glInvalidateFramebuffer(_target: u32, _num_attachments: i32, _attachments: *const u32) {}
+#[no_mangle]
+#[allow(clippy::too_many_arguments)]
+pub extern "C" fn glInvalidateSubFramebuffer(_target: u32, _num_attachments: i32, _attachments: *const u32, _x: i32, _y: i32, _width: i32, _height: i32) {}
+
+// ---- 64-bit / indexed integer state queries (reuse glGetIntegerv for the scalar value) ----
+#[no_mangle]
+pub extern "C" fn glGetInteger64v(pname: u32, data: *mut i64) {
+    if data.is_null() {
+        return;
+    }
+    let mut t = 0i32;
+    glGetIntegerv(pname, &mut t);
+    unsafe { *data = t as i64 };
+}
+#[no_mangle]
+pub extern "C" fn glGetIntegeri_v(target: u32, _index: u32, data: *mut i32) {
+    if !data.is_null() {
+        glGetIntegerv(target, data);
+    }
+}
+#[no_mangle]
+pub extern "C" fn glGetInteger64i_v(target: u32, _index: u32, data: *mut i64) {
+    if data.is_null() {
+        return;
+    }
+    let mut t = 0i32;
+    glGetIntegerv(target, &mut t);
+    unsafe { *data = t as i64 };
+}
+#[no_mangle]
+pub extern "C" fn glGetInternalformativ(_target: u32, _internalformat: u32, pname: u32, buf_size: i32, params: *mut i32) {
+    if params.is_null() || buf_size <= 0 {
+        return;
+    }
+    unsafe {
+        *params = match pname {
+            GL_NUM_SAMPLE_COUNTS => 1,
+            GL_SAMPLES => 4,
+            _ => 0,
+        };
+    }
+}
+
+// ---- program binary (no binary formats advertised → force the source-compile path) ----
+#[no_mangle]
+pub extern "C" fn glGetProgramBinary(_program: u32, _buf_size: i32, length: *mut i32, binary_format: *mut u32, _binary: *mut c_void) {
+    unsafe {
+        set_i32(length, 0);
+        if !binary_format.is_null() {
+            *binary_format = 0;
+        }
+    }
+}
+#[no_mangle]
+pub extern "C" fn glProgramBinary(_program: u32, _binary_format: u32, _binary: *const c_void, _length: i32) {}
+#[no_mangle]
+pub extern "C" fn glProgramParameteri(_program: u32, _pname: u32, _value: i32) {}
+
+// ---- misc ES3 introspection ----
+#[no_mangle]
+pub extern "C" fn glGetFragDataLocation(_program: u32, _name: *const c_char) -> i32 {
+    0
+}
+#[no_mangle]
+pub extern "C" fn glGetUniformuiv(_program: u32, _location: i32, params: *mut u32) {
+    unsafe {
+        if !params.is_null() {
+            *params = 0;
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

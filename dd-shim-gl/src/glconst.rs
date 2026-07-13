@@ -132,6 +132,11 @@ pub const GL_SCISSOR_BOX: u32 = 0x0C10;
 pub const GL_MAJOR_VERSION: u32 = 0x821B;
 pub const GL_MINOR_VERSION: u32 = 0x821C;
 pub const GL_NUM_EXTENSIONS: u32 = 0x821D;
+// ES3 sync objects + internalformat queries (glGetSynciv / glClientWaitSync / glGetInternalformativ)
+pub const GL_SYNC_STATUS: u32 = 0x9114;
+pub const GL_SIGNALED: i32 = 0x9119;
+pub const GL_ALREADY_SIGNALED: u32 = 0x911A;
+pub const GL_NUM_SAMPLE_COUNTS: u32 = 0x9380;
 
 // framebuffer / renderbuffer objects
 pub const GL_FRAMEBUFFER: u32 = 0x8D40;
