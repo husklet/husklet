@@ -127,7 +127,11 @@ int main(void) {
     uint64_t dev; memcpy(&dev, device, 8);
     if (dev != ((226ull << 8) | 128)) return 8;
     uint8_t *table = mmap(NULL, table_size, PROT_READ, MAP_PRIVATE, table_fd, 0);
-    if (table == MAP_FAILED) return 9;
+    if (table == MAP_FAILED) {
+        fprintf(stderr, "gui_dmabuf_feedback_guest: mmap(size=%u, fd=%d) failed: %s (errno=%d)\n",
+                table_size, table_fd, strerror(errno), errno);
+        return 9;
+    }
     int ar = 0, xr = 0, truthful = 1;
     for (uint32_t off = 0; off < table_size; off += 16) {
         uint32_t format; uint64_t modifier;

@@ -53,91 +53,55 @@ impl SealedFile {
     /// Create a `[SealedFile]` with the given binary data.
     #[cfg(not(any(target_os = "linux", target_os = "freebsd", target_os = "android")))]
     pub fn with_data(name: &CStr, data: &[u8]) -> Result<Self, std::io::Error> {
-        use rand::{distr::Alphanumeric, Rng};
-        use rustix::{
-            io::Errno,
-            shm::{self, Mode},
-        };
+        use std::os::unix::io::FromRawFd;
 
-        let mut rng = rand::rng();
-
-        // dd patch (offline-vendored smithay 0.7.0) — two macOS-specific fixes so this non-Linux path
-        // (which upstream only ever exercised on FreeBSD, and FreeBSD takes the memfd branch above)
-        // actually works on the macOS host `dd-compositor` runs on:
+        // dd patch (offline-vendored smithay 0.7.0) — macOS SealedFile backing.
         //
-        // (1) NAME LENGTH. macOS caps POSIX shared-memory object names at `PSHMNAMLEN` (31) bytes — XNU
-        //     `pshm_open` rejects a longer name with `ENAMETOOLONG`. Smithay's callers pass descriptive
-        //     names such as `smithay-dmabuffeedback-format-table` (35 bytes); appending "-" + 7 random
-        //     chars pushes that to ~43 bytes and every `shm_open` fails, so the `zwp_linux_dmabuf` v4
-        //     feedback global cannot stand up. Keep the object name inside the limit: a portable leading
-        //     slash + a truncated descriptive prefix + "-" + 7 random chars, capped at 30 bytes.
+        // Upstream backs this non-Linux path with a POSIX `shm_open` object (FreeBSD takes the memfd
+        // branch above, so macOS is the only consumer). That fd is NOT usable the way the Wayland
+        // protocols that carry a SealedFile require: a client maps the payload with
+        // `mmap(.., PROT_READ, MAP_PRIVATE, fd, 0)` — the keymap and the `zwp_linux_dmabuf` v4 feedback
+        // format-table are both mapped `MAP_PRIVATE` — and **macOS rejects `MAP_PRIVATE` on a POSIX shm
+        // descriptor with `EINVAL`**. The `gui_dmabuf_feedback_guest` bridge probe proves it end to end:
+        // the SCM_RIGHTS fd, the table size, and the 8-byte Linux dev_t all arrive intact, then the
+        // client's `mmap` fails with errno 22, so no real guest can read the advertised format table.
         //
-        // (2) POPULATION. A macOS POSIX shm object is `ftruncate`+`mmap` only — it has size 0 until
-        //     `ftruncate` and does NOT support `write()`/`read()` (a bare `write_all` fails with ENXIO,
-        //     "Device not configured"). Size it with `ftruncate` and copy the data through a temporary
-        //     writable `mmap` (the exact portable trick `dd-display`'s keymap `anon_fd_with` already uses
-        //     on macOS), then hand back the read-only re-opened fd.
-        //
-        // The name is `shm_unlink`ed right after creation, so it is only briefly visible.
-        // (`AsRawFd` for the writable fd is already imported at module scope.)
-        const PSHM_MAX: usize = 30; // one byte under macOS PSHMNAMLEN (31)
-        const SUFFIX_LEN: usize = 1 /* '-' */ + 7 /* random */;
-        let base = name.to_bytes();
-        let keep = base.len().min(PSHM_MAX.saturating_sub(1 /* leading '/' */ + SUFFIX_LEN));
+        // A regular file fd DOES support cross-process `MAP_PRIVATE PROT_READ`. Back the sealed file
+        // with an unlinked temp file: create it read-write, write the payload (regular files support
+        // `write()`, unlike a macOS shm object), then hand clients a re-opened `O_RDONLY` fd and unlink
+        // the path. The seal still holds — the fd is read-only so a client cannot write the shared
+        // bytes, and its `MAP_PRIVATE` mapping is copy-on-write — while the fd is now actually mappable.
+        let _ = name;
+        let dir = std::env::var_os("TMPDIR")
+            .map(|s| s.to_string_lossy().into_owned())
+            .unwrap_or_else(|| "/tmp".into());
+        let mut templ: Vec<u8> =
+            format!("{}/smithay-sealed-XXXXXX", dir.trim_end_matches('/')).into_bytes();
+        templ.push(0); // NUL terminator that mkstemp overwrites the X's within, in place
 
-        // `memfd_create` isn't available. Instead, try `shm_open` with a randomized name, and
-        // loop a couple times if it exists.
-        let mut n = 0;
-        let (shm_name, fd_rdwr) = loop {
-            let mut shm_name = Vec::with_capacity(PSHM_MAX);
-            shm_name.push(b'/');
-            shm_name.extend_from_slice(&base[..keep]);
-            shm_name.push(b'-');
-            shm_name.extend((0..7).map(|_| rng.sample(Alphanumeric)));
-            let fd = shm::open(
-                shm_name.as_slice(),
-                shm::OFlags::RDWR | shm::OFlags::CREATE | shm::OFlags::EXCL,
-                Mode::RWXU,
-            );
-            if !matches!(fd, Err(Errno::EXIST)) || n > 3 {
-                break (shm_name, fd?);
-            }
-            n += 1;
-        };
-
-        // Size the object, then copy `data` in through a writable mmap (macOS shm has no `write()`).
-        let raw = fd_rdwr.as_raw_fd();
-        if unsafe { libc::ftruncate(raw, data.len() as libc::off_t) } != 0 {
+        let fd_rdwr = unsafe { libc::mkstemp(templ.as_mut_ptr() as *mut libc::c_char) };
+        if fd_rdwr < 0 {
             return Err(std::io::Error::last_os_error());
         }
-        if !data.is_empty() {
-            unsafe {
-                let ptr = libc::mmap(
-                    std::ptr::null_mut(),
-                    data.len(),
-                    libc::PROT_READ | libc::PROT_WRITE,
-                    libc::MAP_SHARED,
-                    raw,
-                    0,
-                );
-                if ptr == libc::MAP_FAILED {
-                    return Err(std::io::Error::last_os_error());
-                }
-                std::ptr::copy_nonoverlapping(data.as_ptr(), ptr as *mut u8, data.len());
-                libc::munmap(ptr, data.len());
-            }
+        // `templ` now holds the concrete NUL-terminated path. Populate through the read-write fd, then
+        // close it (the path still exists until we unlink below).
+        {
+            let mut file_rdwr = unsafe { File::from_raw_fd(fd_rdwr) };
+            file_rdwr.write_all(data)?;
+            file_rdwr.flush()?;
         }
 
-        // Sealing isn't available, so re-open read-only (the view handed to clients), then unlink the
-        // name. The object persists via the open fds; the writable `fd_rdwr` is dropped on return.
-        let fd_rdonly = shm::open(shm_name.as_slice(), shm::OFlags::RDONLY, Mode::empty())?;
-        let file_rdonly = File::from(fd_rdonly);
-
-        // Unlink so another process can't open shm file.
-        let _ = shm::unlink(shm_name.as_slice());
+        // Re-open read-only (the handle handed to clients), then unlink the name. The inode persists via
+        // the open fd; the read-only fd cannot be used to write the shared bytes (the seal).
+        let path = templ.as_ptr() as *const libc::c_char;
+        let fd_rdonly = unsafe { libc::open(path, libc::O_RDONLY) };
+        unsafe { libc::unlink(path) };
+        if fd_rdonly < 0 {
+            return Err(std::io::Error::last_os_error());
+        }
 
         Ok(Self {
-            file: file_rdonly,
+            file: unsafe { File::from_raw_fd(fd_rdonly) },
             size: data.len(),
         })
     }
