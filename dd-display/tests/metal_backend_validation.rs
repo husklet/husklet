@@ -82,7 +82,7 @@ mod macos {
         // `create_shader` leaves no MSL library, so `create_compute_pipeline` must reject with the EXPLICIT
         // routing error — a documented decision (steer compute to DD_GPU_BACKEND=wgpu), never a silent stub.
         // Real SPIR-V words (magic 0x07230203) — decidedly not the MSL-bytes packing the shim uses.
-        be.create_shader(ShaderId(20), dd_gpu::ir::ShaderPayloadKind::SpirV, &[0x0723_0203, 0, 0, 0, 0]).unwrap();
+        be.create_shader(ShaderId(20), dd_gpu::ir::ShaderPayloadKind::LegacyMsl, &[0x0723_0203, 0, 0, 0, 0]).unwrap();
         let r = be.create_compute_pipeline(
             PipelineId(30),
             &ComputePipelineDesc { compute: ShaderRef { module: 20, entry: "main".into() }, label: String::new() },
