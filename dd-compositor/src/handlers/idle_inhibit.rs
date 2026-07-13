@@ -33,6 +33,11 @@ impl DdState {
     /// Whether any surface currently holds an idle inhibitor — the host reads this to decide whether to
     /// keep the display awake. Proven by the roundtrip test (false → true on create → false on destroy).
     pub fn idle_inhibited(&self) -> bool {
-        !self.idle_inhibitors.is_empty()
+        self.idle_inhibitors.iter().any(|sid| {
+            self.surface_resources
+                .get(sid)
+                .and_then(|surface| self.window_root(surface))
+                .is_some_and(|root| self.root_is_visible(&root))
+        })
     }
 }

@@ -580,16 +580,16 @@ input); use opaque regions only for occlusion/damage optimization, never to chan
 negative child offsets, transformed/scaled regions and region destruction after commit.
 `compositor_honors_input_and_opaque_regions_through_surface_transforms` pins both consumers.
 
-Visibility is also not modeled. `xdg_toplevel.set_minimized` is an empty handler, so the native window remains shown;
-there is no mapped/minimized/occluded state and commits continue expensive presentation as if visible. Add
-`SurfaceVisibility { Unmapped, Visible, Occluded, Minimized }` owned by the toplevel/native window. Presenter hooks
-must hide/minimize and report host occlusion/reveal. Hidden commits update retained content and union bounded damage
-but do not claim `wp_presentation.presented`; frame callbacks may be withheld or deliberately throttled according to
-one documented policy, never emitted at full refresh as fabricated visibility. Reveal forces one full correct frame,
-then completes eligible callbacks/feedback with its real delivery. Popups and child visibility inherit the root;
-focus/input/idle-inhibit must leave minimized roots. Test minimize→many commits→restore, host occlusion, popup teardown,
-buffer release and bounded callback/damage storage. `compositor_minimize_and_occlusion_control_native_visibility_and_frame_pacing`
-prevents protocol acknowledgement from being confused with window-manager behavior.
+Visibility now has compositor-owned `Visible`, `Occluded`, and `Minimized` states plus presenter set/query hooks.
+`xdg_toplevel.set_minimized` transitions the render root, dismisses popup grabs, clears keyboard/text-input focus and
+suspends idle inhibition. Hidden commits still ingest the latest buffer and bounded damage but never call `present` or
+claim `wp_presentation.presented`; they use the existing bounded retry queue for frame callbacks and discard feedback
+whose delivery cannot be proven. A host reveal by surface id forces one presentation of the latest dirty tree and
+therefore completes eligible retained callbacks only after real delivery. Rust state-policy coverage pins visible vs
+minimized/occluded scheduling. The Cocoa presenter interface is extended coherently, but live AppKit minimize and
+occlusion notifications are not connected yet, so native show/hide and the full protocol→host→reveal journey remain
+partial. `compositor_minimize_and_occlusion_control_native_visibility_and_frame_pacing` prevents protocol
+acknowledgement from being confused with window-manager behavior.
 
 Presentation feedback now preserves the presenter's delivered-frame evidence at the compositor boundary. A delivery
 with backend timing constructs one immutable `PresentedFrame { output, serial/msc, time, refresh, flags }`, and
@@ -1110,7 +1110,7 @@ pixels, and fails against the broken behavior. Do not add tests that read implem
 | `cocoa_presenter_reports_actual_drawable_presentation_time_and_refresh` | missing | Metal returns Delivered with no drawable completion timestamp or target refresh | Presented-handler serial/timing plumbing plus live macOS ordering test |
 | `compositor_negotiates_surface_color_and_converts_to_the_target_output_profile` | missing | surface/presenter path carries no color description, output profile, or HDR policy | Color protocol plus linear composition and ICC/HDR output conversion fixtures |
 | `compositor_honors_input_and_opaque_regions_through_surface_transforms` | missing | decoded surface regions do not affect hit-testing, clipping, or occlusion | Shared transformed-region algebra with shaped-surface input/pixel tests |
-| `compositor_minimize_and_occlusion_control_native_visibility_and_frame_pacing` | contradictory | set_minimized is an empty handler and hidden/occluded presentation is unmodeled | Visibility state, presenter hide/occlusion hooks, reveal and pacing journey |
+| `compositor_minimize_and_occlusion_control_native_visibility_and_frame_pacing` | partial | compositor state suppresses hidden presentation, bounds callback retry, discards unproven feedback, clears focus/popups/idle inhibition and repaints latest content on host reveal; Cocoa hooks lack live AppKit notification wiring | Implement native minimize/show and occlusion callbacks, then run protocol→host→reveal macOS journey |
 | `compositor_presentation_feedback_uses_one_backend_evidence_record_per_output_frame` | implemented | one immutable backend serial/timing/refresh/vsync record is shared across the paced tree; missing timing is discarded without invented evidence | Keep Cocoa completion and surface-output routing as their separate ledger rows |
 | `compositor_explicit_sync_waits_acquire_before_sampling_and_releases_after_gpu_completion` | missing | internal MTLEvent ordering is not a Wayland acquire/release fence contract | Explicit-sync/syncobj state plus Linux-fence↔MTLSharedEvent bridge journey |
 | `dmabuf_feedback_advertises_only_pairs_that_the_importer_can_accept` | partial | feedback now exposes only dd-tagged ARGB/XRGB pairs and rejects malformed/zero ids, but real IOSurface allocation generation and backing metadata are not represented | Share allocation-generation metadata with the importer and run positive/negative GPU-backed guest probes |

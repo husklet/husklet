@@ -88,6 +88,14 @@ pub struct PresentTiming {
     pub vsync: bool,
 }
 
+/// Host visibility of a native toplevel. Hidden states must not be reported as presented.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum SurfaceVisibility {
+    Visible,
+    Occluded,
+    Minimized,
+}
+
 /// Metadata read from a live host IOSurface allocation before accepting a guest import.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct IOSurfaceMetadata {
@@ -172,6 +180,13 @@ pub trait Presenter {
     /// `presented` feedback; an `Offscreen`/`Err` present must NOT advance pacing (the client would think
     /// its frame shipped and recycle a buffer the compositor still needs to retry).
     fn present(&mut self, surf: &SurfaceBuffer) -> Result<PresentOutcome, PresentError>;
+    /// Apply compositor-requested visibility to a native window. Headless presenters keep the default.
+    fn set_surface_visibility(&mut self, _sid: u32, _visibility: SurfaceVisibility) {}
+    /// Return host-observed visibility when available. Cocoa may override this once live occlusion
+    /// notifications are connected; `None` leaves compositor-owned state authoritative.
+    fn surface_visibility(&self, _sid: u32) -> Option<SurfaceVisibility> {
+        None
+    }
     /// Resolve and describe a live IOSurface allocation. `None` means the id is stale, unavailable, or
     /// this presenter cannot authenticate IOSurface-backed imports.
     fn iosurface_metadata(&self, _id: u32) -> Option<IOSurfaceMetadata> {

@@ -259,6 +259,8 @@ pub struct DdState {
     /// the committing surface's `wl_surface.frame` callbacks, so a client that committed only to obtain a
     /// frame callback never stalls. Cleared for the whole tree when it is presented.
     pub(crate) dirty: HashSet<u32>,
+    /// Toplevel visibility keyed by render-root sid. Absence means visible.
+    pub(crate) visibility: HashMap<u32, dd_display::present::SurfaceVisibility>,
     /// The active `xdg_popup` grab chain (outer→inner). A popup created with `xdg_popup.grab` is dismissed
     /// (with `popup_done`) together with its whole submenu chain when the user clicks outside it; the
     /// input/present loop drives that via [`DdState::dismiss_popup_grabs`]. Tooltips (mapped without a
@@ -531,6 +533,7 @@ impl DdState {
             buffers: HashMap::new(),
             repacks: HashMap::new(),
             dirty: HashSet::new(),
+            visibility: HashMap::new(),
             popup_grabs: Vec::new(),
             last_cfg: None,
             start: Instant::now(),
@@ -604,6 +607,7 @@ impl DdState {
         self.buffers.remove(&sid);
         self.repacks.remove(&sid);
         self.dirty.remove(&sid);
+        self.visibility.remove(&sid);
         self.titles.remove(&sid);
         self.retained_callbacks.remove(&sid);
         self.idle_inhibitors.remove(&sid);

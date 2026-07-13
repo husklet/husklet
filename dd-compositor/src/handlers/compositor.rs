@@ -192,6 +192,19 @@ impl DdState {
             return;
         };
 
+        if !visibility_allows_present(
+            self.visibility
+                .get(&self.surface_id(&root))
+                .copied()
+                .or_else(|| self.presenter.surface_visibility(self.surface_id(&root)))
+                .unwrap_or(dd_display::present::SurfaceVisibility::Visible),
+        ) {
+            // Keep the latest repacked content dirty for a single reveal repaint. Failed pacing
+            // withholds/bounds frame callbacks and discards feedback because no frame was displayed.
+            self.pace_tree(&root, FramePacing::Failed, None);
+            return;
+        }
+
         // Skip a redundant present: if NOTHING in the presented tree changed since it was last shown, the
         // composited frame is byte-for-byte what is already on screen — re-compositing and re-uploading it
         // is pure waste. Skip the present, but STILL fire the tree's `wl_surface.frame` callbacks: a client
@@ -506,6 +519,52 @@ impl DdState {
         }
         self.pace_tree(root, pacing, evidence.as_ref());
         did_present
+    }
+
+    pub(crate) fn root_is_visible(&self, root: &WlSurface) -> bool {
+        let sid = self.surface_id(root);
+        visibility_allows_present(self.visibility
+            .get(&sid)
+            .copied()
+            .or_else(|| self.presenter.surface_visibility(sid))
+            .unwrap_or(dd_display::present::SurfaceVisibility::Visible))
+    }
+
+    /// Apply client or host visibility. Reveal presents the latest retained content exactly once.
+    pub fn set_surface_visibility(
+        &mut self,
+        surface: &WlSurface,
+        visibility: dd_display::present::SurfaceVisibility,
+    ) {
+        let root = self.window_root(surface).unwrap_or_else(|| surface.clone());
+        let sid = self.surface_id(&root);
+        let was_visible = self.root_is_visible(&root);
+        self.visibility.insert(sid, visibility);
+        self.presenter.set_surface_visibility(sid, visibility);
+        let is_visible = visibility == dd_display::present::SurfaceVisibility::Visible;
+        if !is_visible {
+            self.dismiss_popup_grabs();
+            if self.focus.as_ref().is_some_and(|focus| self.window_root(focus).as_ref() == Some(&root)) {
+                self.focus = None;
+                self.last_cfg = None;
+                self.set_text_input_focus(None);
+            }
+        } else if !was_visible && self.tree_dirty(&root) {
+            self.present_render_root(&root);
+        }
+    }
+
+    /// Host-facing visibility entry point for native window notifications.
+    pub fn set_surface_visibility_by_sid(
+        &mut self,
+        sid: u32,
+        visibility: dd_display::present::SurfaceVisibility,
+    ) -> bool {
+        let Some(surface) = self.surface_resources.get(&sid).cloned() else {
+            return false;
+        };
+        self.set_surface_visibility(&surface, visibility);
+        true
     }
 
     fn complete_tree_buffer_uses(&mut self, root: &WlSurface) {
@@ -905,6 +964,10 @@ impl DdState {
 
 }
 
+fn visibility_allows_present(visibility: dd_display::present::SurfaceVisibility) -> bool {
+    visibility == dd_display::present::SurfaceVisibility::Visible
+}
+
 /// Per-surface repacked tight-BGRA texture — the CPU cache behind damage tracking (see
 /// [`DdState::repacks`]). Holds the surface's last committed content so a damaged commit copies only its
 /// changed rows into it (instead of repacking the whole `wl_shm` buffer) and a re-composite of an
@@ -1264,5 +1327,13 @@ mod presentation_evidence_tests {
         assert_eq!(left.refresh, Refresh::fixed(Duration::from_nanos(16_666_667)));
         assert_eq!(right.refresh, Refresh::Unknown);
         assert_eq!(right.flags, wp_presentation_feedback::Kind::empty());
+    }
+
+    #[test]
+    fn minimized_and_occluded_roots_do_not_schedule_present_until_reveal() {
+        use dd_display::present::SurfaceVisibility::{Minimized, Occluded, Visible};
+        assert!(visibility_allows_present(Visible));
+        assert!(!visibility_allows_present(Minimized));
+        assert!(!visibility_allows_present(Occluded));
     }
 }

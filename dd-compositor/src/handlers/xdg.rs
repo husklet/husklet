@@ -156,9 +156,14 @@ impl XdgShellHandler for DdState {
         surface.send_configure();
     }
 
-    /// `set_minimized`: no configure is owed (the surface simply stops being shown). We have no
-    /// off-screen window model, so this is accepted as a no-op, matching server.rs.
-    fn minimize_request(&mut self, _surface: ToplevelSurface) {}
+    /// `set_minimized`: no configure is owed. Stop native presentation and suppress focus/input until
+    /// the host restores the window through `set_surface_visibility`.
+    fn minimize_request(&mut self, surface: ToplevelSurface) {
+        self.set_surface_visibility(
+            surface.wl_surface(),
+            dd_display::present::SurfaceVisibility::Minimized,
+        );
+    }
 
     /// A client acknowledged a configure serial. Smithay has already validated the serial and advanced
     /// `current_state()`; there is no extra bookkeeping the present path needs (commit presents the
