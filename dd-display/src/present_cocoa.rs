@@ -217,13 +217,17 @@ fn make_focusable_window(
     window
 }
 
-/// Integer `wl_output.scale` to advertise, derived from the Mac's backing store. Defaults to the main
-/// screen's `backingScaleFactor` (2 on Retina) so Chrome/GTK commit a native-resolution HiDPI buffer that
-/// the Metal present path shows pixel-for-pixel (`contentsScale = backingScaleFactor`, drawable sized in
-/// device pixels, window content sized in points) — crisp text instead of a 1x buffer upscaled over the
-/// backing store. Opt out with `DD_DISPLAY_HIDPI=0` (forces scale 1) to reproduce the legacy 1x path.
+/// Integer `wl_output.scale` to advertise, derived from the Mac's backing store. Retina HiDPI (advertising
+/// `backingScaleFactor`, 2 on a Retina display) is now OPT-IN via `DD_DISPLAY_HIDPI=1`; the default is
+/// scale 1. Advertising scale 2 makes the guest commit a `logical * 2` buffer (e.g. 1024x768 for a 512x384
+/// window), and the guest's GPU allocator (`DD_IOCTL_GPU_ALLOC` in the GL shim) FAILS that larger surface —
+/// `gl_shim: alloc failed` → `eglSwapBuffers failed` → Chrome's GL context is "marked as lost" and it never
+/// renders. The headless `--png` present path (which never overrode this, so advertised scale 1) is exactly
+/// why it renders perfectly at 512x384. Until the guest allocator handles the HiDPI size, the on-screen
+/// present path advertises the same scale the `--png` path proved works (1). Set `DD_DISPLAY_HIDPI=1` to
+/// re-enable the crisp Retina buffer once the allocator supports it.
 fn host_output_scale(mtm: MainThreadMarker) -> i32 {
-    if hidpi_disabled() {
+    if !hidpi_enabled() {
         return 1;
     }
     NSScreen::mainScreen(mtm)
@@ -232,11 +236,12 @@ fn host_output_scale(mtm: MainThreadMarker) -> i32 {
         .max(1)
 }
 
-/// `DD_DISPLAY_HIDPI=0`/`off`/`false` disables the retina present path (advertise scale 1, present 1x).
-fn hidpi_disabled() -> bool {
+/// Retina HiDPI present is OPT-IN: `DD_DISPLAY_HIDPI=1`/`on`/`true`/`yes` advertises `backingScaleFactor`
+/// (present 2x); anything else (including unset) advertises scale 1 (present 1x — the proven Chrome path).
+fn hidpi_enabled() -> bool {
     matches!(
         std::env::var("DD_DISPLAY_HIDPI").ok().as_deref(),
-        Some("0") | Some("off") | Some("false") | Some("no")
+        Some("1") | Some("on") | Some("true") | Some("yes")
     )
 }
 
@@ -489,6 +494,12 @@ struct MetalWin {
     /// The most recently composited texture. Kept so `SIGUSR1` can read it back to a PNG — the on-screen
     /// `CAMetalLayer` drawable itself isn't readable after present.
     last_tex: Option<Retained<ProtocolObject<dyn MTLTexture>>>,
+    /// True when `composite_tex` holds a frame that was composited but NOT yet blitted to an on-screen
+    /// drawable (the window was not visible / no drawable was vended at `present()` time). A STATIC guest
+    /// (e.g. a finished page) emits no further commits, so without re-presenting this the window would stay
+    /// blank forever even after it becomes visible. `refresh_onscreen()` (driven every loop turn) flushes it
+    /// to the drawable once the window is visible, then clears the flag.
+    onscreen_dirty: bool,
     debug_last: Option<PresentDebugSnapshot>,
     debug_present_seen: u32,
 }
@@ -854,6 +865,7 @@ fragment float4 fmain(VOut in [[stage_in]], texture2d<float> src [[texture(0)]],
             size: (w, h),
             composite_tex: None,
             last_tex: None,
+            onscreen_dirty: false,
             debug_last: None,
             debug_present_seen: 0,
         }
@@ -993,12 +1005,21 @@ impl Presenter for MetalPresenter {
         // but this surface hidden behind another window), so we additionally require occlusionState=Visible.
         // When we withhold the drawable we still composite offscreen (below): the guest keeps producing frames,
         // frame pacing keeps advancing, and the window catches up the instant it is refocused/revealed.
+        // Ask for a drawable whenever the window is genuinely on-screen: either dd-display is frontmost, OR
+        // this specific window is visible (not occluded/minimised). The earlier `app_active && window_visible`
+        // AND-gate withheld the drawable whenever dd-display was NOT the frontmost app — i.e. any time the
+        // user looks at the guest window while another app holds focus — so the on-screen `CAMetalLayer`
+        // never received the composited frame and the window stayed blank/white even though `present()` ran
+        // and composited correctly offscreen. Requiring only that the window be visible (or the app active)
+        // paints it in exactly that common case. Core Animation still throttles a truly backgrounded/occluded
+        // layer, but `allowsNextDrawableTimeout(true)` + `maximumDrawableCount(3)` bound the wait (nextDrawable
+        // returns nil rather than blocking the loop), and when the window is not visible we withhold below.
         let app_active = unsafe { NSApplication::sharedApplication(mtm).isActive() };
         let window_visible = win
             .window
             .occlusionState()
             .contains(NSWindowOcclusionState::Visible);
-        let drawable = if app_active && window_visible {
+        let drawable = if app_active || window_visible {
             unsafe { win.layer.nextDrawable() }
         } else {
             None
@@ -1088,6 +1109,10 @@ impl Presenter for MetalPresenter {
             unsafe { cmd.waitUntilCompleted() };
         }
         win.last_tex = Some(composite); // keep opaque compositor output for SIGUSR1 readback
+        // If no drawable was vended (window not visible yet at commit time), this composited frame is NOT on
+        // screen. Mark it so `refresh_onscreen()` flushes it once the window becomes visible — otherwise a
+        // static guest that emits no further commits would leave the window blank forever.
+        win.onscreen_dirty = drawable.is_none();
         let serial = self.frames as u64 + 1;
         let refresh_hz = win
             .window
@@ -1151,6 +1176,41 @@ impl Presenter for MetalPresenter {
 
     fn frame_count(&self) -> u32 {
         self.frames
+    }
+
+    fn refresh_onscreen(&mut self) {
+        let mtm = self.mtm;
+        let app_active = unsafe { NSApplication::sharedApplication(mtm).isActive() };
+        // Borrow the shared context and the windows disjointly.
+        let ctx = &self.ctx;
+        for win in self.wins.values_mut() {
+            if !win.onscreen_dirty {
+                continue; // already on screen (or nothing composited yet)
+            }
+            let window_visible = win
+                .window
+                .occlusionState()
+                .contains(NSWindowOcclusionState::Visible);
+            if !(app_active || window_visible) {
+                continue; // still not on screen — keep the frame pending until it is
+            }
+            let Some(tex) = win.composite_tex.clone() else {
+                continue;
+            };
+            let Some(drawable) = (unsafe { win.layer.nextDrawable() }) else {
+                continue; // momentarily unavailable (bounded by allowsNextDrawableTimeout); retry next turn
+            };
+            let dst = unsafe { drawable.texture() };
+            let cmd = ctx.queue.commandBuffer().expect("commandBuffer");
+            let blit = cmd.blitCommandEncoder().expect("blit");
+            // `composite_tex` is our own opaque, fully-rendered output — no IOSurface tearing fence needed
+            // (the guest is not rendering into it), so a plain blit safely re-presents the last frame.
+            unsafe { blit.copyFromTexture_toTexture(&tex, &dst) };
+            blit.endEncoding();
+            cmd.presentDrawable(objc2::runtime::ProtocolObject::from_ref(&*drawable));
+            cmd.commit();
+            win.onscreen_dirty = false;
+        }
     }
 
     fn surface_size(&self, sid: u32) -> Option<(i32, i32)> {
@@ -1575,6 +1635,17 @@ pub fn selftest_cocoa(out: &str) -> ! {
 /// proper `CFRunLoopSource` marrying the two loops is M2 (see RENDERING_PLAN.md §4). `metal` selects the
 /// hardware-accelerated `CAMetalLayer` present path over the `NSImageView` copy-blit.
 pub fn run(lfd: RawFd, socket: String, metal: bool) -> ! {
+    // The accelerated (Metal) path serves GPU/multi-connection apps like Chrome, which (a) stream their
+    // rendered frames as guest IOSurfaces through the dd-gpu IR executor, and (b) commit those surfaces over
+    // a SECOND wayland connection opened by the GL shim. The legacy single-client loop below never starts
+    // the executor and accepts only ONE connection, so Chrome's GL never gets serviced (context marked as
+    // lost) and its committed surfaces are never presented (0 frames). The first-class `--window` live loop
+    // already does exactly the right thing — start the executor, accept many clients, and composite each
+    // guest IOSurface into a live NSWindow via the shared MTLDevice — so route the accelerated Cocoa window
+    // through it. Only the CPU `NSImageView` fallback (`--no-metal`) keeps the single-client legacy path.
+    if metal {
+        return run_window(lfd, socket, metal);
+    }
     let mtm = MainThreadMarker::new().expect("dd-display must run on the main thread");
     let app = NSApplication::sharedApplication(mtm);
     app.setActivationPolicy(NSApplicationActivationPolicy::Regular);
@@ -2027,6 +2098,12 @@ fn run_multi<P: Presenter>(
             }
         }
         service_dump(&mut clients);
+        // Flush any composited-but-not-shown frame to the screen now that the window may have become
+        // visible. Without this a STATIC guest (a finished page that stops committing) whose first frames
+        // were composited while its window was still appearing would leave the window blank forever.
+        for c in clients.iter_mut() {
+            c.presenter_mut().refresh_onscreen();
+        }
         // User window resize → xdg_toplevel.configure (debounced per client).
         for c in clients.iter_mut() {
             if !c.can_receive_input() {

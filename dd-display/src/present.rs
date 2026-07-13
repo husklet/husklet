@@ -314,6 +314,12 @@ pub trait Presenter {
     fn output_scale(&self) -> i32 {
         1
     }
+    /// Flush the most-recently composited frame of each on-screen window to its drawable, even when the
+    /// guest emitted no new commit this turn. A live windowed presenter withholds the drawable while its
+    /// window is still appearing (not yet visible); a STATIC guest (a finished page) then never commits
+    /// again, so that composited frame would never reach the screen. The live loop calls this every turn so
+    /// the window paints as soon as it becomes visible. Default: no on-screen surface to refresh.
+    fn refresh_onscreen(&mut self) {}
     /// Destroy the native window backing surface `sid`, if one exists. Used when a surface turns out not to
     /// be a window after all — e.g. it was assigned the cursor role via `wl_pointer.set_cursor` after its
     /// image was already committed (and thus already shown in a tiny window). Default: nothing to remove.
