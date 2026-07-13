@@ -35,7 +35,7 @@ use smithay::{
     },
 };
 
-use crate::{BufferUseKind, ClientState, DdState, OUTPUT_REFRESH_MHZ};
+use crate::{BufferUseKind, ClientState, DdState};
 
 /// How a presented tree should advance its per-surface frame pacing, derived from what actually
 /// happened to the frame. Replaces the old `did_present: bool` that conflated "nothing to present"
@@ -53,6 +53,38 @@ pub(crate) enum FramePacing {
     Presented,
     Skipped,
     Failed,
+}
+
+struct PresentedFrame {
+    output: smithay::output::Output,
+    serial: u64,
+    time: Duration,
+    refresh: Refresh,
+    flags: wp_presentation_feedback::Kind,
+}
+
+impl PresentedFrame {
+    fn from_timing(
+        output: smithay::output::Output,
+        serial: u64,
+        timing: dd_display::present::PresentTiming,
+    ) -> Self {
+        Self {
+            output,
+            serial,
+            time: Duration::from_nanos(timing.present_ns),
+            refresh: if timing.refresh_ns == 0 {
+                Refresh::Unknown
+            } else {
+                Refresh::fixed(Duration::from_nanos(timing.refresh_ns))
+            },
+            flags: if timing.vsync {
+                wp_presentation_feedback::Kind::Vsync
+            } else {
+                wp_presentation_feedback::Kind::empty()
+            },
+        }
+    }
 }
 
 /// Bounded terminal policy for callbacks retained across failed presents: a permanently-dead presenter
@@ -173,7 +205,7 @@ impl DdState {
             // Nothing changed: the previously presented frame still stands. Fire frame callbacks (so a
             // frame-callback-only commit never stalls) but discard feedback — this is a Skip, not a
             // failed present.
-            self.pace_tree(&root, FramePacing::Skipped);
+            self.pace_tree(&root, FramePacing::Skipped, None);
             return;
         }
         self.present_render_root(&root);
@@ -433,6 +465,7 @@ impl DdState {
     /// model `server.rs` uses); a GPU/IOSurface root is presented as a single zero-copy texture and its
     /// children are not blended (documented limitation). Returns whether the frame reached the screen.
     pub(crate) fn present_render_root(&mut self, root: &WlSurface) -> bool {
+        let mut evidence = None;
         let pacing = match self.present_tree(root) {
             Some(base) => {
                 // Map the presenter's structured outcome onto frame pacing. Only a visibly Delivered
@@ -441,7 +474,12 @@ impl DdState {
                 let sid = base.sid;
                 self.presenter_windows.insert(sid);
                 match self.presenter.present(&base) {
-                    Ok(dd_display::present::PresentOutcome::Delivered { .. }) => {
+                    Ok(dd_display::present::PresentOutcome::Delivered { serial, timing }) => {
+                        evidence = timing.map(|timing| PresentedFrame::from_timing(
+                            self.output.clone(),
+                            serial,
+                            timing,
+                        ));
                         FramePacing::Presented
                     }
                     Ok(dd_display::present::PresentOutcome::Offscreen) => {
@@ -466,7 +504,7 @@ impl DdState {
             self.complete_tree_buffer_uses(root);
             self.clear_tree_dirty(root);
         }
-        self.pace_tree(root, pacing);
+        self.pace_tree(root, pacing, evidence.as_ref());
         did_present
     }
 
@@ -721,14 +759,19 @@ impl DdState {
     /// its `wp_presentation` feedback. On a failed present the feedback is `discarded`. Draining is
     /// idempotent — a surface with no queued callback fires nothing — so re-presenting a tree that only
     /// partly changed does not double-fire.
-    fn pace_tree(&mut self, root: &WlSurface, pacing: FramePacing) {
+    fn pace_tree(
+        &mut self,
+        root: &WlSurface,
+        pacing: FramePacing,
+        evidence: Option<&PresentedFrame>,
+    ) {
         let mut surfaces = Vec::new();
         self.collect_tree_surfaces(root, &mut surfaces);
         for (popup, _, _) in self.collect_popups_for_root(root) {
             self.collect_tree_surfaces(&popup, &mut surfaces);
         }
         for s in surfaces {
-            self.pace_surface(&s, pacing);
+            self.pace_surface(&s, pacing, evidence);
         }
     }
 
@@ -736,7 +779,12 @@ impl DdState {
     /// feedback (`presented` on success, `discarded` otherwise). Draining is idempotent — a surface with
     /// no queued callback fires nothing. Split out of [`Self::pace_tree`] so the skip-present path can
     /// pace the committed surface (firing its frame callback so it never stalls) without re-compositing.
-    fn pace_surface(&mut self, surface: &WlSurface, pacing: FramePacing) {
+    fn pace_surface(
+        &mut self,
+        surface: &WlSurface,
+        pacing: FramePacing,
+        evidence: Option<&PresentedFrame>,
+    ) {
         let (callbacks, feedback) = with_states(surface, |states| {
             let callbacks: Vec<_> = std::mem::take(
                 &mut states
@@ -775,7 +823,7 @@ impl DdState {
         }
         // Presentation feedback is `presented` ONLY for a real new delivery; a Skip or a Failed present
         // both `discard` it (no new content reached the screen this cycle).
-        self.send_presentation_feedback(feedback, pacing == FramePacing::Presented);
+        self.send_presentation_feedback(feedback, evidence);
     }
 
     /// Retain a surface's `wl_surface.frame` callbacks across a FAILED present so they can be fired on the
@@ -833,28 +881,24 @@ impl DdState {
     fn send_presentation_feedback(
         &mut self,
         feedback: Vec<smithay::wayland::presentation::PresentationFeedbackCallback>,
-        did_present: bool,
+        evidence: Option<&PresentedFrame>,
     ) {
         if feedback.is_empty() {
             return;
         }
-        if !did_present {
+        let Some(frame) = evidence else {
             for fb in feedback {
                 fb.discarded();
             }
             return;
-        }
-        self.present_seq = self.present_seq.wrapping_add(1);
-        let seq = self.present_seq;
-        let time = monotonic_now();
-        let refresh = Refresh::fixed(output_refresh());
+        };
         for fb in feedback {
             fb.presented(
-                &self.output,
-                time,
-                refresh,
-                seq,
-                wp_presentation_feedback::Kind::Vsync,
+                &frame.output,
+                frame.time,
+                frame.refresh,
+                frame.serial,
+                frame.flags,
             );
         }
     }
@@ -1160,22 +1204,65 @@ pub(crate) fn popup_windows_enabled() -> bool {
     )
 }
 
-/// Host `CLOCK_MONOTONIC` as a `Duration` (the `wp_presentation.presented` timestamp). dd runs the guest
-/// clock in the host's monotonic domain, so this is the value the guest reads back — mirrors
-/// `server.rs`'s `monotonic_now`.
-fn monotonic_now() -> Duration {
-    let mut ts: libc::timespec = unsafe { std::mem::zeroed() };
-    unsafe {
-        libc::clock_gettime(libc::CLOCK_MONOTONIC, &mut ts);
-    }
-    Duration::new(ts.tv_sec as u64, (ts.tv_nsec as u32) % 1_000_000_000)
-}
+#[cfg(test)]
+mod presentation_evidence_tests {
+    use super::*;
+    use dd_display::present::PresentTiming;
+    use smithay::output::{Output, PhysicalProperties, Subpixel};
 
-/// The output refresh interval (time until the next vblank) derived from the advertised mode. 60000 mHz
-/// ⇒ ~16.667 ms; clients add multiples of it to predict future vblanks.
-fn output_refresh() -> Duration {
-    if OUTPUT_REFRESH_MHZ <= 0 {
-        return Duration::ZERO;
+    fn output(name: &str) -> Output {
+        Output::new(
+            name.into(),
+            PhysicalProperties {
+                size: (600, 340).into(),
+                subpixel: Subpixel::Unknown,
+                make: "dd".into(),
+                model: "test".into(),
+            },
+        )
     }
-    Duration::from_nanos(1_000_000_000_000u64 / OUTPUT_REFRESH_MHZ as u64)
+
+    #[test]
+    fn two_surfaces_share_exactly_one_delivered_frame_record() {
+        let frame = PresentedFrame::from_timing(
+            output("left"),
+            77,
+            PresentTiming {
+                present_ns: 5_000_000_123,
+                refresh_ns: 8_333_333,
+                vsync: true,
+            },
+        );
+
+        // pace_tree passes this one immutable record by reference to every surface in the tree.
+        let parent = Some(&frame);
+        let child = Some(&frame);
+        assert!(std::ptr::eq(parent.unwrap(), child.unwrap()));
+        assert_eq!(frame.serial, 77);
+        assert_eq!(frame.time, Duration::new(5, 123));
+        assert_eq!(frame.refresh, Refresh::fixed(Duration::from_nanos(8_333_333)));
+        assert_eq!(frame.flags, wp_presentation_feedback::Kind::Vsync);
+    }
+
+    #[test]
+    fn output_frames_keep_independent_backend_timing_and_do_not_invent_vsync() {
+        let left = PresentedFrame::from_timing(
+            output("left"),
+            11,
+            PresentTiming { present_ns: 10, refresh_ns: 16_666_667, vsync: true },
+        );
+        let right = PresentedFrame::from_timing(
+            output("right"),
+            29,
+            PresentTiming { present_ns: 20, refresh_ns: 0, vsync: false },
+        );
+
+        assert_eq!(left.output.name(), "left");
+        assert_eq!(right.output.name(), "right");
+        assert_eq!(left.serial, 11);
+        assert_eq!(right.serial, 29);
+        assert_eq!(left.refresh, Refresh::fixed(Duration::from_nanos(16_666_667)));
+        assert_eq!(right.refresh, Refresh::Unknown);
+        assert_eq!(right.flags, wp_presentation_feedback::Kind::empty());
+    }
 }

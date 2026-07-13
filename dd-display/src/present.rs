@@ -84,6 +84,8 @@ pub struct PresentTiming {
     pub present_ns: u64,
     /// Output refresh interval in nanoseconds (`0` = unknown / variable).
     pub refresh_ns: u64,
+    /// Whether the backend observed a vertical-blank synchronized presentation.
+    pub vsync: bool,
 }
 
 /// Metadata read from a live host IOSurface allocation before accepting a guest import.

@@ -591,17 +591,14 @@ focus/input/idle-inhibit must leave minimized roots. Test minimize→many commit
 buffer release and bounded callback/damage storage. `compositor_minimize_and_occlusion_control_native_visibility_and_frame_pacing`
 prevents protocol acknowledgement from being confused with window-manager behavior.
 
-Presentation feedback has a richer backend contract but discards it at the compositor boundary. Cocoa/other
-presenters return `Delivered { serial, timing }`; `present_render_root` matches only `{ .. }`, then each surface's
-feedback path independently increments `present_seq`, samples a new host timestamp, reports primary `self.output`,
-hard-codes the advertised 60 Hz interval and asserts `Vsync`. A root plus two children from one composite can thus
-receive different MSC values for the same output frame, and variable-refresh/non-vsync/off-output delivery is
-fabricated. Construct one immutable `PresentedFrame { output, serial/msc, time, refresh, flags }` when the presenter
-delivers. Prefer verified backend hardware timing; when unavailable, mark timing/flags conservatively rather than
-claiming scanout properties. Pass the same record through `pace_tree` to all feedback objects participating in that
-composite, increment a per-output MSC exactly once, and keep frame-callback milliseconds in the same monotonic domain.
-Validate timestamp normalization/overflow and guest clock-domain mapping explicitly. Test a three-surface tree,
-two outputs with different refresh, missing timing, variable refresh, skipped and failed frames.
+Presentation feedback now preserves the presenter's delivered-frame evidence at the compositor boundary. A delivery
+with backend timing constructs one immutable `PresentedFrame { output, serial/msc, time, refresh, flags }`, and
+`pace_tree` shares that exact record across every surface participating in the composite. The compositor no longer
+increments MSC per surface or invents a host timestamp, 60 Hz refresh, or `Vsync`; zero refresh remains unknown and
+non-vsync remains unflagged. Delivery without backend timing is conservatively discarded rather than reported as a
+fabricated presentation, while failed/offscreen paths retain their existing retry/discard policy. Rust behavioral
+tests cover record identity across two surfaces and independent evidence for two outputs. Production routing still
+uses the root's selected output, and Cocoa still returns `timing: None` until drawable-completion evidence lands.
 `compositor_presentation_feedback_uses_one_backend_evidence_record_per_output_frame` pins the evidence boundary.
 
 The macOS producer of that evidence is unfinished too. Metal returns `Delivered { timing: None }` after command/
@@ -1114,7 +1111,7 @@ pixels, and fails against the broken behavior. Do not add tests that read implem
 | `compositor_negotiates_surface_color_and_converts_to_the_target_output_profile` | missing | surface/presenter path carries no color description, output profile, or HDR policy | Color protocol plus linear composition and ICC/HDR output conversion fixtures |
 | `compositor_honors_input_and_opaque_regions_through_surface_transforms` | missing | decoded surface regions do not affect hit-testing, clipping, or occlusion | Shared transformed-region algebra with shaped-surface input/pixel tests |
 | `compositor_minimize_and_occlusion_control_native_visibility_and_frame_pacing` | contradictory | set_minimized is an empty handler and hidden/occluded presentation is unmodeled | Visibility state, presenter hide/occlusion hooks, reveal and pacing journey |
-| `compositor_presentation_feedback_uses_one_backend_evidence_record_per_output_frame` | contradictory | presenter timing/serial are discarded and MSC/60Hz/vsync are invented per surface | Shared per-output delivered-frame evidence across the paced tree |
+| `compositor_presentation_feedback_uses_one_backend_evidence_record_per_output_frame` | implemented | one immutable backend serial/timing/refresh/vsync record is shared across the paced tree; missing timing is discarded without invented evidence | Keep Cocoa completion and surface-output routing as their separate ledger rows |
 | `compositor_explicit_sync_waits_acquire_before_sampling_and_releases_after_gpu_completion` | missing | internal MTLEvent ordering is not a Wayland acquire/release fence contract | Explicit-sync/syncobj state plus Linux-fence↔MTLSharedEvent bridge journey |
 | `dmabuf_feedback_advertises_only_pairs_that_the_importer_can_accept` | partial | feedback now exposes only dd-tagged ARGB/XRGB pairs and rejects malformed/zero ids, but real IOSurface allocation generation and backing metadata are not represented | Share allocation-generation metadata with the importer and run positive/negative GPU-backed guest probes |
 | `compositor_validates_dmabuf_planes_flags_and_backing_metadata_before_success` | partial | shared caps enforce single-plane layout/flags/checked fd extent and exact live IOSurface width/height/row bytes/BGRA format; allocation generation is unavailable | Authenticate allocation generation and add stale-id C protocol regression |

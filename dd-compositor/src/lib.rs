@@ -267,9 +267,6 @@ pub struct DdState {
     /// Last on-screen window size we sent an `xdg_toplevel.configure` for, so a host-driven window
     /// resize is debounced to one configure per distinct size (mirrors `server.rs`'s `last_cfg`).
     pub(crate) last_cfg: Option<(i32, i32)>,
-    /// `wp_presentation` MSC / vblank counter, bumped once per presented frame (mirrors `server.rs`'s
-    /// `present_seq`). Chrome/viz feeds the sequence into its BeginFrame vsync estimator.
-    pub(crate) present_seq: u64,
     pub(crate) start: Instant,
 
     // ---- input + clipboard follow-ups (handlers/seat.rs) ----
@@ -536,7 +533,6 @@ impl DdState {
             dirty: HashSet::new(),
             popup_grabs: Vec::new(),
             last_cfg: None,
-            present_seq: 0,
             start: Instant::now(),
             mod_mask: 0,
             host_clip_gen: 0,

@@ -3,7 +3,7 @@
 //! submodule adds its trait impl(s) plus any `DdState` helper methods that belong to that protocol.
 //!
 //! Rust privacy note: these are descendant modules of the crate root, so they can read/write
-//! `DdState`'s private fields (`present_seq`, `start`, `last_cfg`, …) directly.
+//! `DdState`'s private fields (`start`, `last_cfg`, …) directly.
 //!
 //! The `delegate_*!` macros below live here (not in a submodule) because each expands to the full
 //! `Dispatch`/`GlobalDispatch` impls for `DdState`, and keeping them together documents exactly which
