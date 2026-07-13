@@ -35,8 +35,9 @@ extern char **environ;
 // Built as a private envp copy so we neither mutate this host process's environ (other host threads may be
 // reading it) nor call the non-async-signal-safe setenv() in the fork child. An explicit caller-provided
 // value (YES, or NO to debug fork hygiene) is left untouched. Returns `environ` unchanged when the var is
-// already present, else a malloc'd array (leaked intentionally — the process either execs, replacing the
-// image, or _exit()s). NULL is never returned; on allocation failure we fall back to `environ`.
+// already present, else a malloc'd array the caller frees in the PARENT after fork (the forked child
+// inherits a COW copy for execve; only the pointer array is owned, its strings are borrowed from
+// `environ` + one static literal). NULL is never returned; on allocation failure we fall back to `environ`.
 static char **ddjit_child_env(void) {
     static const char *KEY = "OBJC_DISABLE_INITIALIZE_FORK_SAFETY=";
     size_t keylen = strlen(KEY);
@@ -88,10 +89,12 @@ pid_t ddjit_spawn(const char *engine_path, const uint8_t *config, size_t config_
     // Build the engine's environ (with OBJC_DISABLE_INITIALIZE_FORK_SAFETY guaranteed) BEFORE fork, so the
     // child only has to execve() with it — no malloc/setenv in the async-signal-only fork child.
     char **child_env = ddjit_child_env();
+    int env_owned = (child_env != environ); // ddjit_child_env malloc'd it -> the parent must free it
     pid_t pid = fork();
     if (pid < 0) {
         int e = errno;
         unlink(cfgpath);
+        if (env_owned) free(child_env); // parent-only: reclaim the array the child never inherited
         errno = e;
         return -1;
     }
@@ -119,5 +122,9 @@ pid_t ddjit_spawn(const char *engine_path, const uint8_t *config, size_t config_
         _exit(127); // exec failed
     }
 
+    // PARENT: the child has its own COW copy of the array for execve, so free our copy (never in the
+    // child, where free() is not async-signal-safe). Fixes a one-array-per-launch leak in a long-lived
+    // parent (daemon) whenever OBJC_DISABLE_INITIALIZE_FORK_SAFETY was not already in the environment.
+    if (env_owned) free(child_env);
     return pid;
 }
