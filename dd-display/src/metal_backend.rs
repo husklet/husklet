@@ -1438,6 +1438,11 @@ pub fn run_executor(sock_path: String) {
             seq += 1;
         }
     }
+    // Process-wide GPU budget shared across every guest connection this executor serves (mirrors
+    // `run_executor_wgpu`). Each connection's `ExecutorBudget` charges against this shared ceiling. Defined
+    // here because `run_executor` is macOS-only (metal_backend is cfg(macos)); codex builds on Linux and
+    // never compiles this fn, so the missing binding is a latent build break only the mac bridge surfaces.
+    let global_budget = dd_gpu::limits::GlobalBudget::new(2 << 30, 262_144);
     for conn in listener.incoming() {
         match conn {
             Ok(mut s) => {
@@ -3017,6 +3022,63 @@ impl GpuBackend for MetalBackend {
                         || !region_in_bounds(dst_origin.y, extent.height, dtex.height() as u32)
                     {
                         return Err(GpuError::OutOfBounds);
+                    }
+                    if let Some(blit) = cmd.blitCommandEncoder() {
+                        unsafe {
+                            blit.copyFromTexture_sourceSlice_sourceLevel_sourceOrigin_sourceSize_toTexture_destinationSlice_destinationLevel_destinationOrigin(
+                                &stex,
+                                src_sub.layer as usize,
+                                src_sub.mip as usize,
+                                MTLOrigin { x: src_origin.x as usize, y: src_origin.y as usize, z: src_origin.z as usize },
+                                MTLSize { width: extent.width as usize, height: extent.height as usize, depth: extent.depth.max(1) as usize },
+                                &dtex,
+                                dst_sub.layer as usize,
+                                dst_sub.mip as usize,
+                                MTLOrigin { x: dst_origin.x as usize, y: dst_origin.y as usize, z: dst_origin.z as usize },
+                            );
+                        }
+                        blit.endEncoding();
+                    }
+                }
+                Enc::ResolveTexture {
+                    src,
+                    src_sub,
+                    src_origin,
+                    dst,
+                    dst_sub,
+                    dst_origin,
+                    extent,
+                } => {
+                    // Multisample color resolve (glBlitFramebuffer of an MSAA FBO / VkCmdResolveImage). Close
+                    // any open encoder first. Metal resolves via a load/MultisampleResolve render pass on the
+                    // MSAA source; when the source is single-sampled a resolve degenerates to an exact copy,
+                    // which is what this path emits (the common case here — the ANGLE gl-egl backend Chrome
+                    // uses on dd does not drive the multisampled resolve op). A true >1-sample resolve is a
+                    // follow-up; guard it so an MSAA source is rejected rather than mis-copied.
+                    if let Some(e) = enc.take() {
+                        e.endEncoding();
+                    }
+                    if let Some(ce) = compute_enc.take() {
+                        unsafe {
+                            let _: () = msg_send![&*ce, endEncoding];
+                        }
+                    }
+                    let Some(stex) = self.resolve_texture(*src).cloned() else {
+                        return Err(GpuError::UnknownId { kind: "texture", id: *src });
+                    };
+                    let Some(dtex) = self.resolve_texture(*dst).cloned() else {
+                        return Err(GpuError::UnknownId { kind: "texture", id: *dst });
+                    };
+                    if !region_in_bounds(src_origin.x, extent.width, stex.width() as u32)
+                        || !region_in_bounds(src_origin.y, extent.height, stex.height() as u32)
+                        || !region_in_bounds(dst_origin.x, extent.width, dtex.width() as u32)
+                        || !region_in_bounds(dst_origin.y, extent.height, dtex.height() as u32)
+                    {
+                        return Err(GpuError::OutOfBounds);
+                    }
+                    if stex.sampleCount() > 1 {
+                        // A genuine MSAA source needs Metal's resolve store action, not a blit copy.
+                        return Err(GpuError::Unsupported("multisample resolve"));
                     }
                     if let Some(blit) = cmd.blitCommandEncoder() {
                         unsafe {
