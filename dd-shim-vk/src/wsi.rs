@@ -158,7 +158,12 @@ pub extern "C" fn vkCreateSwapchainKHR(
     let mut s = reg::lock();
     let mut images = Vec::with_capacity(count);
     for _ in 0..count {
-        let ir_id = s.alloc_ir();
+        // Every presentable image renders into the executor's RESERVED present-target texture id (1):
+        // dd-display's Metal executor re-points texture id 1 at the current frame's IOSurface each
+        // frame (`set_render_target(1, ...)` keyed by the ExecConn header's surface.id). Using a
+        // per-image id instead makes the executor reject it ("unknown/freed texture id"). See
+        // dd-display/src/metal_backend.rs run_executor.
+        let ir_id = crate::reg::PRESENT_IR_ID;
         let handle = s.alloc_handle();
         // A presentable image is a host-owned render target (its IR texture id is referenced by the
         // app's render pass; the shim emits no CreateTexture — matching the render-target contract).

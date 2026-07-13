@@ -18,6 +18,12 @@ use dd_shim_common::ir::*;
 use std::collections::HashMap;
 use std::sync::{Mutex, MutexGuard, OnceLock};
 
+/// The reserved IR texture id the host executor uses for the presented surface (dd-display's Metal
+/// executor `set_render_target(1, <current IOSurface>)` per frame). Every swapchain image's render
+/// pass targets this id so the render lands in the IOSurface. IR texture ids and buffer ids are
+/// separate namespaces host-side, so this never collides with a buffer id 1.
+pub const PRESENT_IR_ID: u32 = 1;
+
 // ---- per-resource records ------------------------------------------------------------------------
 
 pub struct BufferRec {
