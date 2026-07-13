@@ -66,6 +66,15 @@ static uint64_t pcache_env_nz(const char *n) { // "any non-0 value" gate (NOLAZY
     const char *s = getenv(n);
     return (s && strcmp(s, "0")) ? 1 : 0;
 }
+// "first char present and not '0'" gate: matches the exact truthiness several codegen sites use
+// (`s && *s && *s != '0'`) -- e.g. NOFASTSYS/NOSIGINLINE (emit.c), NOXBLOCKFLAGS/NOXALUFLAGELIDE
+// (trace.c), NOPFAFELIM (translate.c), NOREP (repstr.c). Distinct from pcache_env_nz, which treats
+// "" as set and "01" as set; those sites treat "" and any '0'-prefixed value as UNSET, so a cache-id
+// built with this predicate flips at exactly the same values the emitter changes bytes at.
+static uint64_t pcache_env_fcnz(const char *n) {
+    const char *s = getenv(n);
+    return (s && *s && *s != '0') ? 1 : 0;
+}
 static uint64_t pcache_codegen_mode_bits(void) {
     uint64_t b = 0;
     if (g_fwdskip) b |= 1ull << 8; // IRQSLIM block-entry layout (kept at bit 8 for continuity)
@@ -78,6 +87,32 @@ static uint64_t pcache_codegen_mode_bits(void) {
     if (getenv("NOEAOPT")) b |= 1ull << 15;
     if (getenv("NOGUESTFOLD")) b |= 1ull << 16;
     if (getenv("NOIRQCHECK")) b |= 1ull << 17;
+    // ---- C16 audit gap-close: 13 A/B flags that CHANGE the emitted x86 bytes but were NOT keyed. ----
+    // Each owns a NEW, UNIQUE bit in the 18..30 range (disjoint from the version int in bits 0..2 and
+    // from the 8..17 flags above). The predicate below mirrors, char-for-char, the SAME getenv truthiness
+    // the corresponding x86 emitter reads -- presence (`!= NULL`) or "first char non-'0'" (pcache_env_fcnz)
+    // -- so two runs that would emit different bytes always get different cache-ids. Reading getenv here
+    // (not the codegen's lazily-cached `-1` statics, which may be uninitialized this early and live in
+    // other translation units) is the file's own established doctrine (see the header comment) and is
+    // exact because every one of those statics is a pure deterministic function of exactly this getenv.
+    if (getenv("DDJIT_NOSLIMSYS")) b |= 1ull << 18;      // emit.c: `getenv?0:1` (presence) -> spill layout
+    if (pcache_env_fcnz("DDJIT_NOFASTSYS")) b |= 1ull << 19;  // emit.c s1_calibrate: fast-syscall inline arms
+    if (pcache_env_fcnz("DDJIT_NOSIGINLINE")) b |= 1ull << 20; // emit.c: W4F signal-inline arms
+    if (getenv("NOTIER2X")) b |= 1ull << 21;             // engine_glue/linux_x86_64: presence -> tier-2 codegen
+    if (getenv("NOFLAGELIDE")) b |= 1ull << 22;          // master flag-elide gate (shift/xblock/loop): presence
+    if (getenv("NOSHIFTFLAGELIDE")) b |= 1ull << 23;     // shift.c: presence -> shift flag synthesis elision
+    if (pcache_env_fcnz("NOXBLOCKFLAGS")) b |= 1ull << 24;   // trace.c xblkflags_on: block-scan NZCV elision
+    if (pcache_env_fcnz("NOXALUFLAGELIDE")) b |= 1ull << 25; // trace.c xblkalu_elide_on: ALU dead-flag elision
+    if (pcache_env_fcnz("NOPFAFELIM")) b |= 1ull << 26;     // translate.c pfaf_elim_on: PF/AF substrate elim
+    if (getenv("NOX87OPT")) b |= 1ull << 27;             // x87.c x87opt_on: presence (`==NULL`) -> x87 shadow-top opt
+    if (getenv("NOXFPDNAN")) b |= 1ull << 28;            // translate.c g_fpdnan: presence (`==NULL`) -> SSE dNaN path
+    if (pcache_env_fcnz("NOREP")) b |= 1ull << 29;       // repstr.c norep_disabled: rep movs/stos fast path
+    if (getenv("IBTC1WAY")) b |= 1ull << 30;             // engine_glue g_ibtc1way: presence -> IBTC probe codegen
+    // SAFETY: pcache_codegen_mode_bits() is consulted ONLY when the persistent pcache is ACTIVE
+    // (DDJIT_PCACHE=1, DEFAULT-OFF). With it off, no cache is loaded or stored, so these bits are never
+    // read -> BYTE-IDENTICAL default behavior. With it on, adding bits only makes cache-ids MORE distinct:
+    // worst case is an extra cache miss + in-memory recompile (safe), never a wrong load. This change can
+    // only FIX the stale-warm-load bug (a warm arena built under a flag reloaded without it), never add one.
     return b;
 }
 #define PC_VERSION_EFF (PC_VERSION | pcache_codegen_mode_bits())
