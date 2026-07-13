@@ -57,9 +57,6 @@ extern "C" {
     fn IOSurfaceGetWidth(s: IOSurfaceRef) -> usize;
     fn IOSurfaceGetHeight(s: IOSurfaceRef) -> usize;
     fn IOSurfaceLookup(id: u32) -> IOSurfaceRef; // resolve a global IOSurface id (the engine's alloc id)
-    fn IOSurfaceGetWidth(buffer: IOSurfaceRef) -> usize;
-    fn IOSurfaceGetHeight(buffer: IOSurfaceRef) -> usize;
-    fn IOSurfaceGetBytesPerRow(buffer: IOSurfaceRef) -> usize;
     fn IOSurfaceGetPixelFormat(buffer: IOSurfaceRef) -> u32;
     fn CFRelease(cf: *const c_void);
 }
