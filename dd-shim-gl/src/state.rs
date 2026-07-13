@@ -240,6 +240,9 @@ impl Default for Vao {
 
 /// The whole GL context state (single implicit context, as in gl_shim.c).
 pub struct GlState {
+    /// The GL error flag (`glGetError`). Holds the *first* error since the last query (GL semantics);
+    /// [`set_gl_error`] never overwrites a pending error, and `glGetError` reads-and-clears it.
+    pub error: u32,
     pub sh: Vec<Shader>,
     pub prog: Vec<Program>,
     pub buf: Vec<Buffer>,
@@ -311,6 +314,7 @@ pub const MAXDRAWS: usize = 512;
 impl Default for GlState {
     fn default() -> Self {
         GlState {
+            error: GL_NO_ERROR,
             sh: vec![Shader::default(); MAXSH],
             prog: vec![Program::default(); MAXPROG],
             buf: vec![Buffer::default(); MAXBUF],
@@ -940,6 +944,24 @@ pub fn gl() -> MutexGuard<'static, GlState> {
 
 pub fn egl() -> MutexGuard<'static, EglState> {
     egl_cell().lock().unwrap_or_else(|e| e.into_inner())
+}
+
+/// Raise the GL error flag, honoring GL semantics: the flag records the *first* error since the last
+/// `glGetError`; a subsequent error is dropped until the flag is read and cleared. Used by
+/// `glGetError` and by the generated truthful-failure stubs (`crate::stub::fail_gl`).
+pub fn set_gl_error(err: u32) {
+    let mut s = gl();
+    if s.error == GL_NO_ERROR {
+        s.error = err;
+    }
+}
+
+/// Read-and-clear the GL error flag (`glGetError`).
+pub fn take_gl_error() -> u32 {
+    let mut s = gl();
+    let e = s.error;
+    s.error = GL_NO_ERROR;
+    e
 }
 
 /// Whether the shim advertises ES3 (env `DD_SHIM_ES3`), matching gl_shim.c `shim_es3()`.

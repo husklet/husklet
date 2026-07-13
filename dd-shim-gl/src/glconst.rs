@@ -5,6 +5,13 @@
 
 // glGetError / booleans
 pub const GL_NO_ERROR: u32 = 0;
+pub const GL_INVALID_ENUM: u32 = 0x0500;
+pub const GL_INVALID_VALUE: u32 = 0x0501;
+pub const GL_INVALID_OPERATION: u32 = 0x0502;
+pub const GL_INVALID_FRAMEBUFFER_OPERATION: u32 = 0x0506;
+pub const GL_OUT_OF_MEMORY: u32 = 0x0505;
+/// Returned by index queries (glGetUniformBlockIndex / glGetProgramResourceIndex) for "not found".
+pub const GL_INVALID_INDEX: u32 = 0xFFFF_FFFF;
 pub const GL_FALSE: u8 = 0;
 pub const GL_TRUE: u8 = 1;
 
@@ -161,7 +168,19 @@ pub const EGL_FALSE: u32 = 0;
 pub const EGL_TRUE: u32 = 1;
 pub const EGL_NONE: i32 = 0x3038;
 pub const EGL_SUCCESS: i32 = 0x3000;
+pub const EGL_NOT_INITIALIZED: i32 = 0x3001;
+pub const EGL_BAD_ACCESS: i32 = 0x3002;
+pub const EGL_BAD_ALLOC: i32 = 0x3003;
+pub const EGL_BAD_ATTRIBUTE: i32 = 0x3004;
+pub const EGL_BAD_CONFIG: i32 = 0x3005;
+pub const EGL_BAD_CONTEXT: i32 = 0x3006;
+pub const EGL_BAD_CURRENT_SURFACE: i32 = 0x3007;
+pub const EGL_BAD_DISPLAY: i32 = 0x3008;
 pub const EGL_BAD_MATCH: i32 = 0x3009;
+pub const EGL_BAD_NATIVE_PIXMAP: i32 = 0x300A;
+pub const EGL_BAD_NATIVE_WINDOW: i32 = 0x300B;
+pub const EGL_BAD_PARAMETER: i32 = 0x300C;
+pub const EGL_BAD_SURFACE: i32 = 0x300D;
 pub const EGL_WIDTH: i32 = 0x3057;
 pub const EGL_HEIGHT: i32 = 0x3056;
 

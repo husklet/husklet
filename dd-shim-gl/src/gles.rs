@@ -27,14 +27,20 @@ macro_rules! cstr {
 // error + strings
 // ===================================================================================================
 
-/// `glGetError` — no error on the covered paths (gl_shim.c returns GL_NO_ERROR unconditionally).
+/// `glGetError` — read-and-clear the GL error flag. Covered (hand-written) paths never raise, so on a
+/// pure real-body workload this stays `GL_NO_ERROR` (gl_shim.c parity). The generated truthful-failure
+/// stubs (`crate::stub::fail_gl`) DO raise here, so an app that calls an unsupported entry point sees a
+/// deterministic, API-correct error instead of a silent false success.
 #[no_mangle]
 pub extern "C" fn glGetError() -> u32 {
-    GL_NO_ERROR
+    crate::state::take_gl_error()
 }
 
-/// `glGetString` — identity strings. The version/GLSL strings track the created context version
-/// (gl_shim.c keys them on `g_ctx_major`).
+/// `glGetString` — identity strings. Version/GLSL/extension strings come from the generated capability
+/// inventory ([`crate::ADVERTISED_GL_VERSION`], …), so the shim advertises the LOWEST coherent GLES
+/// profile its real bodies actually back — it does NOT claim ES 3.x just because the ES3 symbols exist
+/// (they are truthful-failure stubs). ES3 remains an explicit opt-in: a context created with major>=3
+/// (only accepted under `DD_SHIM_ES3`) advertises the ES3 identity strings.
 #[no_mangle]
 pub extern "C" fn glGetString(name: u32) -> *const u8 {
     let es3 = crate::state::egl().ctx_major >= 3;
@@ -43,7 +49,7 @@ pub extern "C" fn glGetString(name: u32) -> *const u8 {
             if es3 {
                 cstr!("OpenGL ES 3.0 dd-shim")
             } else {
-                cstr!("OpenGL ES 2.0 dd-shim")
+                crate::ADVERTISED_GL_VERSION.as_ptr() as *const c_char
             }
         }
         0x1F00 => cstr!("dd"),       // GL_VENDOR
@@ -52,10 +58,10 @@ pub extern "C" fn glGetString(name: u32) -> *const u8 {
             if es3 {
                 cstr!("OpenGL ES GLSL ES 3.00")
             } else {
-                cstr!("OpenGL ES GLSL ES 1.00")
+                crate::ADVERTISED_GLSL_VERSION.as_ptr() as *const c_char
             }
         }
-        0x1F03 => cstr!("GL_OES_element_index_uint GL_OES_texture_npot"), // GL_EXTENSIONS
+        0x1F03 => crate::ADVERTISED_GL_EXTENSIONS.as_ptr() as *const c_char, // GL_EXTENSIONS
         _ => cstr!(""),
     };
     s as *const u8
@@ -256,7 +262,7 @@ pub extern "C" fn glGetIntegerv(pname: u32, v: *mut i32) {
             GL_MAX_SAMPLES_ES3 => *v = 4,
             GL_MAJOR_VERSION => *v = e.ctx_major,
             GL_MINOR_VERSION => *v = e.ctx_minor,
-            GL_NUM_EXTENSIONS => *v = 2, // matches the two-extension GL_EXTENSIONS string
+            GL_NUM_EXTENSIONS => *v = crate::ADVERTISED_GL_EXTENSION_COUNT as i32, // from the inventory
             GL_DEPTH_BITS => *v = 24,
             GL_STENCIL_BITS => *v = 8,
             GL_RED_BITS => *v = 8,

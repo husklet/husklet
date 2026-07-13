@@ -47,10 +47,50 @@ mod tests {
         // The registry-driven surface must be the full GLES2+EGL set, not a hand-picked few.
         assert!(GLES2_ENTRYPOINTS >= 140, "GLES2 surface too small: {GLES2_ENTRYPOINTS}");
         assert!(EGL_ENTRYPOINTS >= 40, "EGL surface too small: {EGL_ENTRYPOINTS}");
-        // Every entry point is either hand-implemented or a generated stub.
-        assert_eq!(GENERATED_STUBS + IMPLEMENTED_COUNT, TOTAL_ENTRYPOINTS);
+        // Census identity: every entry point is either a hand-written body or a generated one.
+        assert_eq!(GENERATED_STUBS + CAP_FULL, TOTAL_ENTRYPOINTS);
+        // The three capability levels partition the whole exported surface.
+        assert_eq!(CAP_FULL + CAP_PARTIAL + CAP_STUB, TOTAL_ENTRYPOINTS);
     }
 
-    // Count of hand-written entry points (kept in sync with build.rs IMPLEMENTED via the census).
-    const IMPLEMENTED_COUNT: usize = TOTAL_ENTRYPOINTS - GENERATED_STUBS;
+    /// The completeness gate (Phase 0 exit): the generated inventory names EVERY exported call, exactly
+    /// once, with a definite full/partial/stub capability level — so no symbol can be advertised without
+    /// a capability record.
+    #[test]
+    fn inventory_covers_every_exported_symbol() {
+        assert_eq!(
+            CAPABILITIES.len(),
+            TOTAL_ENTRYPOINTS,
+            "inventory must have one record per exported entry point"
+        );
+        // No duplicate records.
+        let mut names: Vec<&str> = CAPABILITIES.iter().map(|c| c.name).collect();
+        names.sort_unstable();
+        let n = names.len();
+        names.dedup();
+        assert_eq!(names.len(), n, "duplicate capability records");
+
+        // Level counts match the census constants, and each level's invariants hold.
+        let (mut full, mut partial, mut stub) = (0, 0, 0);
+        for c in CAPABILITIES {
+            match c.level {
+                CapLevel::Full => {
+                    full += 1;
+                    // A `full` symbol must have a real hand-written body -> no gl_error to raise.
+                    assert_eq!(c.gl_error, 0, "{} is full but carries an error", c.name);
+                    assert!(!c.since.is_empty(), "{} is full but has no `since`", c.name);
+                }
+                CapLevel::Partial => {
+                    partial += 1;
+                    assert_eq!(c.gl_error, 0, "{} is a partial no-op but carries an error", c.name);
+                }
+                CapLevel::Stub => {
+                    stub += 1;
+                    // A `stub` MUST raise an API-correct error (never a silent success).
+                    assert_ne!(c.gl_error, 0, "{} is a stub but raises no error", c.name);
+                }
+            }
+        }
+        assert_eq!((full, partial, stub), (CAP_FULL, CAP_PARTIAL, CAP_STUB));
+    }
 }
