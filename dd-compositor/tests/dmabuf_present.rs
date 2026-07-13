@@ -16,7 +16,7 @@
 use std::sync::{Arc, Mutex};
 
 use dd_compositor::{ClientState, DdState};
-use dd_display::present::{Presenter, SurfaceBuffer};
+use dd_display::present::{PresentError, PresentOutcome, Presenter, SurfaceBuffer};
 use dd_display::wire::{Conn, Message};
 use smithay::reexports::wayland_server::Display;
 
@@ -48,7 +48,7 @@ struct RecordingPresenter {
     last: Arc<Mutex<Option<Presented>>>,
 }
 impl Presenter for RecordingPresenter {
-    fn present(&mut self, surf: &SurfaceBuffer) -> bool {
+    fn present(&mut self, surf: &SurfaceBuffer) -> Result<PresentOutcome, PresentError> {
         self.frames += 1;
         *self.last.lock().unwrap() = Some(Presented {
             iosurface_id: surf.iosurface_id,
@@ -58,7 +58,10 @@ impl Presenter for RecordingPresenter {
             format: surf.format,
             gpu_render: surf.gpu_render,
         });
-        true
+        Ok(PresentOutcome::Delivered {
+            serial: self.frames as u64,
+            timing: None,
+        })
     }
     fn frame_count(&self) -> u32 {
         self.frames
@@ -143,6 +146,10 @@ fn dmabuf_global_and_iosurface_commit_presents() {
     // The dmabuf global is advertised only under `DD_DISPLAY_DMABUF` (parity with legacy `server.rs`;
     // the default software path must not advertise it — see handlers/dmabuf.rs::new_dmabuf_state).
     std::env::set_var("DD_DISPLAY_DMABUF", "1");
+    // Accelerated import now REQUIRES a healthy host executor (dmabuf.rs's readiness gate rejects a
+    // dd-tagged dmabuf when none is running, so the client can't render into a surface nothing presents).
+    // This test simulates that healthy environment; without it the import would be correctly rejected.
+    dd_compositor::gpu::set_executor_health(true);
     let mut display: Display<DdState> = Display::new().unwrap();
     let mut dh = display.handle();
     let last = Arc::new(Mutex::new(None));

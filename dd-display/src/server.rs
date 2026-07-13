@@ -1682,7 +1682,16 @@ impl<P: Presenter> Server<P> {
                     }
                 }
                 present_attempted = true;
-                did_present = self.present.present(&sb);
+                // Only a visibly Delivered frame advances pacing; an Offscreen present or a real
+                // output/device error (previously swallowed by a `false`/`true` bool) does not.
+                did_present = match self.present.present(&sb) {
+                    Ok(crate::present::PresentOutcome::Delivered { .. }) => true,
+                    Ok(crate::present::PresentOutcome::Offscreen) => false,
+                    Err(e) => {
+                        eprintln!("dd-display: present failed for sid {}: {e}", sb.sid);
+                        false
+                    }
+                };
             }
         }
         // Advance frame pacing (release buffers + fire frame callbacks) unless a present was attempted
@@ -4832,8 +4841,14 @@ mod tests {
 
     struct FailPresenter;
     impl Presenter for FailPresenter {
-        fn present(&mut self, _surf: &SurfaceBuffer) -> bool {
-            false // simulate an IOSurface/drawable acquisition failure
+        fn present(
+            &mut self,
+            _surf: &SurfaceBuffer,
+        ) -> Result<crate::present::PresentOutcome, crate::present::PresentError> {
+            // simulate an IOSurface/drawable acquisition failure
+            Err(crate::present::PresentError::Device(
+                "simulated acquisition failure".into(),
+            ))
         }
     }
 

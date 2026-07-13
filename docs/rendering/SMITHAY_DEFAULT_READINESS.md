@@ -65,6 +65,25 @@ fixed (that fd is what crashed GTK).
   no tearing-control module exists in vendored smithay-0.7.0 (only content-type's tearing *hint* is
   available); revisit on a smithay bump. Entirely behind `DD_DISPLAY_SMITHAY` (the flag that execs this
   compositor); the legacy default path is unchanged.
+- **Present-path robustness: structured delivery, retained callbacks, gated accelerated import**
+  (codex-rendering §11 ledger rows `presenter_reports_structured_delivery_and_propagates_output_errors`,
+  `compositor_failed_present_does_not_advance_frame_callbacks`,
+  `compositor_rejects_accelerated_import_without_a_healthy_executor_and_surface`). Three coupled fixes to
+  the present/delivery path: (1) `Presenter::present` now returns
+  `Result<PresentOutcome, PresentError>` — `Delivered{serial,timing}` / `Offscreen` on success, a real
+  output/device/filesystem error on failure — replacing the `bool` that conflated "rendered offscreen"
+  with "visibly delivered" and swallowed output errors (`PngPresenter`/`MetalPngPresenter` now propagate
+  their PNG-write failure instead of `let _ =`-dropping it). (2) The compositor paces on a three-state
+  `FramePacing` (`Presented`/`Skipped`/`Failed`): a FAILED present RETAINS the surface's
+  `wl_surface.frame` callbacks (fired on the next accepted present) instead of completing them, with a
+  bounded terminal policy (`MAX_RETAINED_CALLBACKS`) so a dead presenter cannot grow the queue forever; a
+  clean Skip still fires callbacks (no client stall) but discards feedback. (3) Accelerated dmabuf import
+  now REJECTS a dd-tagged buffer (`notifier.failed()`) unless a healthy host executor is running
+  (`crate::gpu::executor_healthy`, the actionable successor to the interim warn-only check) AND the
+  referenced IOSurface validates (`validate_iosurface`: non-zero id + representable size/format;
+  re-checked live at present time via `PresentError::Device`). Proven by the three tracked
+  `rendering_wayland` gates (all pass) plus the full dd-compositor (9/9) and dd-display (56/56, incl.
+  `failed_present_holds_buffer_release_and_frame_callbacks`) suites. Behind `DD_DISPLAY_SMITHAY`.
 
 This document is a source-read + unit-test + build audit. No live Chrome/GTK session was run (that is
 the coordinated validation step, driven separately).

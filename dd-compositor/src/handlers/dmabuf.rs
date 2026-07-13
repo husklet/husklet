@@ -78,11 +78,34 @@ impl DmabufHandler for DdState {
     fn dmabuf_imported(&mut self, _global: &DmabufGlobal, dmabuf: Dmabuf, notifier: ImportNotifier) {
         let modifier: u64 = dmabuf.format().modifier.into();
         match dd_iosurface_from_modifier(modifier) {
-            Some(_) => {
-                // Phase 6.2 health check: this is an accelerated client — it wants the host GPU to
-                // render/present its frames into a dd IOSurface. If no dd-gpu executor is running,
-                // FAIL VISIBLY (once) rather than accepting the buffer and letting it render white.
-                crate::gpu::warn_if_accel_client_without_executor();
+            Some((iosurface_id, _gpu_render)) => {
+                // Accelerated-import readiness gate (supersedes the interim warn-only check). A dd-tagged
+                // dmabuf means the client expects the host GPU to render/present into a dd IOSurface, so
+                // REJECT the import up front unless BOTH hold:
+                //   (a) a healthy host executor is running (crate::gpu::executor_healthy) — otherwise the
+                //       frames have nowhere to render and the window shows white; and
+                //   (b) the referenced IOSurface validates (non-zero id + representable dimensions/format,
+                //       via validate_iosurface) — otherwise we would accept a handle nothing can resolve.
+                // Rejecting (`notifier.failed()`) makes the client fall back to wl_shm instead of
+                // rendering into a surface the compositor can never present.
+                if !crate::gpu::executor_healthy() {
+                    // Keep the once-only human diagnostic (also asserted by the source gate) alongside the
+                    // now-actionable rejection.
+                    crate::gpu::warn_if_accel_client_without_executor();
+                    notifier.failed();
+                    return;
+                }
+                if !self.validate_iosurface(&dmabuf, iosurface_id) {
+                    eprintln!(
+                        "dd-compositor: rejecting accelerated dmabuf import: IOSurface id \
+                         {iosurface_id} failed validation ({}x{}, code {:?})",
+                        dmabuf.width(),
+                        dmabuf.height(),
+                        dmabuf.format().code
+                    );
+                    notifier.failed();
+                    return;
+                }
                 let _ = notifier.successful::<DdState>();
             }
             None => notifier.failed(),
@@ -91,6 +114,24 @@ impl DmabufHandler for DdState {
 }
 
 impl DdState {
+    /// Validate a dd IOSurface-backed dmabuf at IMPORT time, before the buffer is accepted. Offline this
+    /// proves the reference is structurally sound — a non-zero IOSurface id and a representable
+    /// size/format — so a malformed or zero handle is rejected instead of accepted and later presented as
+    /// white. The deep host check (the IOSurface actually exists in the Metal registry at these
+    /// dimensions) needs the live GPU bridge and is revalidated at present time: the Metal presenter
+    /// resolves the id and returns a `PresentError::Device` if it is gone, which the compositor then
+    /// paces as a failed present. Returns `false` to reject the import.
+    pub(crate) fn validate_iosurface(&self, dmabuf: &Dmabuf, iosurface_id: u32) -> bool {
+        if iosurface_id == 0 {
+            return false;
+        }
+        let (w, h) = (dmabuf.width() as i32, dmabuf.height() as i32);
+        if w <= 0 || h <= 0 {
+            return false;
+        }
+        matches!(dmabuf.format().code, Fourcc::Argb8888 | Fourcc::Xrgb8888)
+    }
+
     /// Build a [`SurfaceBuffer`] from a committed dmabuf `wl_buffer`: no CPU pixels, just the host
     /// IOSurface id decoded from the modifier plus the viewport-resolved logical size / sample rect.
     /// The `Presenter` wraps the IOSurface as an `MTLTexture` and composites it zero-copy. Returns

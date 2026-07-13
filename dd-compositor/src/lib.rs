@@ -54,7 +54,7 @@ use smithay::{
         wayland_protocols::xdg::shell::server::xdg_toplevel::WmCapabilities,
         wayland_server::{
             backend::{ClientData, ClientId, DisconnectReason},
-            protocol::{wl_buffer::WlBuffer, wl_surface::WlSurface},
+            protocol::{wl_buffer::WlBuffer, wl_callback::WlCallback, wl_surface::WlSurface},
             DisplayHandle, Resource,
         },
     },
@@ -260,6 +260,12 @@ pub struct DdState {
     /// (FPS mouselook). Tracked so the compositor un-hides exactly the cursor it hid when the lock releases
     /// or focus leaves — without clobbering a cursor a client hid deliberately (`set_cursor(null)`).
     pub(crate) cursor_hidden_by_lock: bool,
+
+    /// `wl_surface.frame` callbacks retained per surface across a FAILED present (the frame did not reach
+    /// the screen, so the client must NOT be told it can draw again). Fired on the next accepted present
+    /// of that surface; bounded (see `MAX_RETAINED_CALLBACKS`) so a permanently-dead presenter cannot grow
+    /// the queue without limit. See `handlers::compositor::{pace_surface, retain_frame_callbacks}`.
+    pub(crate) retained_callbacks: HashMap<u32, VecDeque<WlCallback>>,
 }
 
 impl DdState {
@@ -416,6 +422,7 @@ impl DdState {
             pending_host_copy: None,
             cursor_surface: None,
             cursor_hidden_by_lock: false,
+            retained_callbacks: HashMap::new(),
         }
     }
 

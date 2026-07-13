@@ -15,7 +15,7 @@
 //! deterministic.
 
 use dd_compositor::{ClientState, DdState};
-use dd_display::present::{Presenter, SurfaceBuffer};
+use dd_display::present::{PresentError, PresentOutcome, Presenter, SurfaceBuffer};
 use dd_display::wire::{Conn, Message};
 use smithay::reexports::wayland_server::Display;
 use std::os::unix::io::{FromRawFd, RawFd};
@@ -34,12 +34,15 @@ struct RecordingPresenter {
     last_popup: LastPopup,
 }
 impl Presenter for RecordingPresenter {
-    fn present(&mut self, surf: &SurfaceBuffer) -> bool {
+    fn present(&mut self, surf: &SurfaceBuffer) -> Result<PresentOutcome, PresentError> {
         self.frames += 1;
         if surf.popup.is_some() {
             *self.last_popup.lock().unwrap() = Some((surf.sid, surf.popup));
         }
-        true
+        Ok(PresentOutcome::Delivered {
+            serial: self.frames as u64,
+            timing: None,
+        })
     }
     fn frame_count(&self) -> u32 {
         self.frames

@@ -52,6 +52,23 @@ pub fn is_running() -> bool {
     EXECUTOR_RUNNING.load(Ordering::SeqCst)
 }
 
+/// Readiness health handle for accelerated (dmabuf/IOSurface) imports: whether a host GPU executor is
+/// up and able to render/present dd IOSurface-backed buffers. This is the ACTIONABLE successor to
+/// [`warn_if_accel_client_without_executor`] (which only logs): [`crate::DdState::dmabuf_imported`]
+/// REJECTS a dd-tagged dmabuf when this returns `false`, instead of accepting the buffer and letting the
+/// client render into a surface nothing can present (a white window). Currently the executor being
+/// running IS the health signal; a future supervisor can widen this to a bind/ready result + exit watch.
+pub fn executor_healthy() -> bool {
+    is_running()
+}
+
+/// Record the host GPU executor's health/readiness. Set to `true` once the executor thread is up (see
+/// [`start`]) and `false` if it exits or is known-unavailable. Also the seam a test/supervisor uses to
+/// assert executor readiness for the accelerated-import path without spawning a real Metal executor.
+pub fn set_executor_health(healthy: bool) {
+    EXECUTOR_RUNNING.store(healthy, Ordering::SeqCst);
+}
+
 /// Start the dd-gpu IR executor (and the IOSurface mach bridge) for the Smithay compositor, once.
 ///
 /// `disp_socket` is the Wayland socket path; the executor socket is derived beside it (or taken from

@@ -14,7 +14,7 @@
 //! process-global `Display` state with `client_roundtrip.rs`. Runs headlessly on Linux + macOS.
 
 use dd_compositor::{ClientState, DdState};
-use dd_display::present::{Presenter, SurfaceBuffer};
+use dd_display::present::{PresentError, PresentOutcome, Presenter, SurfaceBuffer};
 use dd_display::wire::{Conn, Message};
 use smithay::reexports::wayland_server::Display;
 use std::os::unix::io::{FromRawFd, RawFd};
@@ -116,8 +116,8 @@ impl Client {
 /// keep their default no-ops.
 struct Scale2Presenter;
 impl Presenter for Scale2Presenter {
-    fn present(&mut self, _surf: &SurfaceBuffer) -> bool {
-        true
+    fn present(&mut self, _surf: &SurfaceBuffer) -> Result<PresentOutcome, PresentError> {
+        Ok(PresentOutcome::Delivered { serial: 0, timing: None })
     }
     fn output_scale(&self) -> i32 {
         2

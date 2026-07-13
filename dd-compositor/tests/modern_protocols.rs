@@ -17,7 +17,7 @@
 //! state. Runs headlessly on Linux (libxkbcommon present) and macOS.
 
 use dd_compositor::{ClientState, DdState};
-use dd_display::present::{Presenter, SurfaceBuffer};
+use dd_display::present::{PresentError, PresentOutcome, Presenter, SurfaceBuffer};
 use dd_display::wire::{Conn, Message};
 use smithay::reexports::wayland_server::Display;
 use std::collections::HashMap;
@@ -30,9 +30,9 @@ struct CountingPresenter {
     frames: u32,
 }
 impl Presenter for CountingPresenter {
-    fn present(&mut self, _surf: &SurfaceBuffer) -> bool {
+    fn present(&mut self, _surf: &SurfaceBuffer) -> Result<PresentOutcome, PresentError> {
         self.frames += 1;
-        true
+        Ok(PresentOutcome::Delivered { serial: self.frames as u64, timing: None })
     }
     fn frame_count(&self) -> u32 {
         self.frames

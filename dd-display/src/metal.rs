@@ -606,7 +606,10 @@ impl crate::present::Presenter for MetalPngPresenter {
     fn frame_count(&self) -> u32 {
         self.frames
     }
-    fn present(&mut self, surf: &crate::present::SurfaceBuffer) -> bool {
+    fn present(
+        &mut self,
+        surf: &crate::present::SurfaceBuffer,
+    ) -> Result<crate::present::PresentOutcome, crate::present::PresentError> {
         let (w, h) = (surf.width as u32, surf.height as u32);
         let dump = self.frames % self.png_every == 0; // sample: only some frames pay readback+PNG
                                                       // GPU rung 2: an IOSurface-backed dmabuf composites zero-copy (wrap → GPU-blit → readback); an
@@ -616,8 +619,9 @@ impl crate::present::Presenter for MetalPngPresenter {
             Some(id) => {
                 let surface = unsafe { resolve_iosurface(id) };
                 if surface.is_null() {
-                    eprintln!("[dd-display/metal] IOSurface id {id} not found");
-                    return false;
+                    return Err(crate::present::PresentError::Device(format!(
+                        "IOSurface id {id} not found"
+                    )));
                 }
                 let src = self.ctx.texture_from_iosurface(surface, w, h);
                 if surf.gpu_render && std::env::var_os("DD_DISPLAY_TEST_TRIANGLE").is_some() {
@@ -640,7 +644,11 @@ impl crate::present::Presenter for MetalPngPresenter {
                 unsafe { cfrelease(surface) };
                 if !dump {
                     self.frames += 1;
-                    return true; // composited on-GPU; skip the CPU readback+PNG this frame
+                    // Composited on-GPU (fenced blit encoded); skip the CPU readback+PNG this frame.
+                    return Ok(crate::present::PresentOutcome::Delivered {
+                        serial: self.frames as u64,
+                        timing: None,
+                    });
                 }
                 let bgra = self.ctx.readback_bgra(&dst, w, h);
                 let mut out = vec![0u8; bgra.len()];
@@ -655,18 +663,21 @@ impl crate::present::Presenter for MetalPngPresenter {
             None => {
                 if !dump {
                     self.frames += 1;
-                    return true;
+                    return Ok(crate::present::PresentOutcome::Delivered {
+                        serial: self.frames as u64,
+                        timing: None,
+                    });
                 }
                 self.ctx.composite_to_rgba(&surf.bgra, w, h)
             }
         };
         let png = dd_term_core::png::encode_rgba(w, h, &rgba);
-        let _ = std::fs::create_dir_all(&self.dir);
+        std::fs::create_dir_all(&self.dir).map_err(crate::present::PresentError::Output)?;
         // Frame-indexed so an animated client's successive frames are all captured (not overwritten).
         let path = self
             .dir
             .join(format!("surface-{}-{:03}.png", surf.sid, self.frames));
-        let _ = std::fs::write(&path, png);
+        std::fs::write(&path, png).map_err(crate::present::PresentError::Output)?;
         self.frames += 1;
         self.last = Some((surf.sid, w, h, rgba));
         if display_debug() {
@@ -678,7 +689,10 @@ impl crate::present::Presenter for MetalPngPresenter {
                 path.display()
             );
         }
-        true
+        Ok(crate::present::PresentOutcome::Delivered {
+            serial: self.frames as u64,
+            timing: None,
+        })
     }
 }
 

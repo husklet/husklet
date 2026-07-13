@@ -13,7 +13,7 @@
 #![cfg(target_os = "macos")]
 
 use crate::metal::MetalCtx;
-use crate::present::{Presenter, SurfaceBuffer};
+use crate::present::{PresentError, PresentOutcome, Presenter, SurfaceBuffer};
 use crate::server::{ExternalLogicalCrop, Server};
 use objc2::rc::Retained;
 use objc2::runtime::AnyObject;
@@ -332,7 +332,7 @@ impl CocoaPresenter {
 }
 
 impl Presenter for CocoaPresenter {
-    fn present(&mut self, surf: &SurfaceBuffer) -> bool {
+    fn present(&mut self, surf: &SurfaceBuffer) -> Result<PresentOutcome, PresentError> {
         let rgba = surf.to_rgba();
         let (w, h) = (surf.width, surf.height);
 
@@ -382,7 +382,13 @@ impl Presenter for CocoaPresenter {
             win.size = (w, h);
         }
         unsafe { win.image_view.setImage(Some(&image)) };
-        true
+        // The NSBitmap blit into the CALayer is synchronous — by the time it returns the frame is on the
+        // layer. This presenter keeps no frame serial (it has no `frames` counter), so report Delivered
+        // with serial 0; the Metal presenter carries the real pacing serial.
+        Ok(PresentOutcome::Delivered {
+            serial: 0,
+            timing: None,
+        })
     }
 
     fn surface_size(&self, sid: u32) -> Option<(i32, i32)> {
@@ -855,9 +861,12 @@ fragment float4 fmain(VOut in [[stage_in]], texture2d<float> src [[texture(0)]],
 }
 
 impl Presenter for MetalPresenter {
-    fn present(&mut self, surf: &SurfaceBuffer) -> bool {
+    fn present(&mut self, surf: &SurfaceBuffer) -> Result<PresentOutcome, PresentError> {
         if surf.width <= 0 || surf.height <= 0 || surf.texture_width <= 0 || surf.texture_height <= 0 {
-            return false;
+            return Err(PresentError::Device(format!(
+                "invalid surface dimensions {}x{} (texture {}x{})",
+                surf.width, surf.height, surf.texture_width, surf.texture_height
+            )));
         }
         let (w, h) = (surf.width as u32, surf.height as u32);
         let (tex_w, tex_h) = (surf.texture_width as u32, surf.texture_height as u32);
@@ -867,8 +876,11 @@ impl Presenter for MetalPresenter {
             Some(id) => {
                 let surface = unsafe { crate::metal::resolve_iosurface(id) };
                 if surface.is_null() {
-                    eprintln!("dd-display[metal]: IOSurface id {id} not found; skipping frame");
-                    return false;
+                    // The referenced IOSurface could not be resolved to a live host texture — a real
+                    // device error, propagated so the compositor retains the frame instead of pacing it.
+                    return Err(PresentError::Device(format!(
+                        "IOSurface id {id} not found; cannot present accelerated frame"
+                    )));
                 }
                 let tex = self.ctx.texture_from_iosurface(surface, tex_w, tex_h);
                 if surf.gpu_render && std::env::var_os("DD_DISPLAY_TEST_TRIANGLE").is_some() {
@@ -1099,7 +1111,14 @@ impl Presenter for MetalPresenter {
                 }
             }
         }
-        true
+        // The command buffer was committed (and `presentDrawable` scheduled the flip); the frame is on
+        // its way to the display. Report Delivered with the pacing serial; hardware present-time evidence
+        // (a CAMetalLayer/`MTLDrawable` presented-handler timestamp) is not plumbed here yet, so timing is
+        // left `None` and the compositor falls back to its monotonic clock for feedback.
+        Ok(PresentOutcome::Delivered {
+            serial: self.frames as u64,
+            timing: None,
+        })
     }
 
     fn frame_count(&self) -> u32 {

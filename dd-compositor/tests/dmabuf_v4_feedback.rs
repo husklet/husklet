@@ -17,7 +17,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use dd_compositor::{ClientState, DdState};
-use dd_display::present::{Presenter, SurfaceBuffer};
+use dd_display::present::{PresentError, PresentOutcome, Presenter, SurfaceBuffer};
 use dd_display::wire::{Conn, Message};
 use smithay::reexports::wayland_server::Display;
 
@@ -26,8 +26,8 @@ const WL_DISPLAY: u32 = 1;
 /// A presenter that records nothing — this test only inspects the registry, never commits a frame.
 struct NullPresenter;
 impl Presenter for NullPresenter {
-    fn present(&mut self, _surf: &SurfaceBuffer) -> bool {
-        true
+    fn present(&mut self, _surf: &SurfaceBuffer) -> Result<PresentOutcome, PresentError> {
+        Ok(PresentOutcome::Delivered { serial: 0, timing: None })
     }
     fn frame_count(&self) -> u32 {
         0

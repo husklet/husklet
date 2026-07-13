@@ -14,7 +14,7 @@ use smithay::{
     reexports::{
         wayland_protocols::wp::presentation_time::server::wp_presentation_feedback,
         wayland_server::{
-            protocol::{wl_buffer::WlBuffer, wl_shm, wl_surface::WlSurface},
+            protocol::{wl_buffer::WlBuffer, wl_callback::WlCallback, wl_shm, wl_surface::WlSurface},
             Client,
         },
     },
@@ -33,6 +33,31 @@ use smithay::{
 };
 
 use crate::{surface_id, ClientState, DdState, OUTPUT_REFRESH_MHZ};
+
+/// How a presented tree should advance its per-surface frame pacing, derived from what actually
+/// happened to the frame. Replaces the old `did_present: bool` that conflated "nothing to present"
+/// (a clean tree) with "present FAILED" — two cases that must pace differently:
+///   - [`FramePacing::Presented`]: a new frame reached the screen → fire `wl_surface.frame` callbacks
+///     and answer `wp_presentation` feedback with `presented`.
+///   - [`FramePacing::Skipped`]: the tree was clean (a no-damage / frame-callback-only commit); the
+///     previously delivered frame still stands → fire frame callbacks (the client may draw again) but
+///     `discard` the feedback (no NEW content was shown this cycle).
+///   - [`FramePacing::Failed`]: the present was attempted but did not reach the screen (the presenter
+///     returned `Offscreen` or an error) → RETAIN the frame callbacks (the client must not be told its
+///     frame shipped and recycle a buffer we still need to retry) and `discard` the feedback.
+#[derive(Clone, Copy, PartialEq)]
+pub(crate) enum FramePacing {
+    Presented,
+    Skipped,
+    Failed,
+}
+
+/// Bounded terminal policy for callbacks retained across failed presents: a permanently-dead presenter
+/// must not grow a surface's retained-callback queue without limit. Once a surface has this many
+/// callbacks retained (never delivered because every present kept failing), the oldest are dropped —
+/// their `wl_callback` is released without `done`, which is the correct terminal signal for a frame that
+/// will never be presented.
+const MAX_RETAINED_CALLBACKS: usize = 16;
 
 impl CompositorHandler for DdState {
     fn compositor_state(&mut self) -> &mut CompositorState {
@@ -126,7 +151,10 @@ impl DdState {
         // the tree dirty and forces the present below instead. Presentation feedback is `discarded` because
         // no new content reached the screen this cycle.
         if !self.tree_dirty(&root) {
-            self.pace_tree(&root, false);
+            // Nothing changed: the previously presented frame still stands. Fire frame callbacks (so a
+            // frame-callback-only commit never stalls) but discard feedback — this is a Skip, not a
+            // failed present.
+            self.pace_tree(&root, FramePacing::Skipped);
             return;
         }
         self.present_render_root(&root);
@@ -364,7 +392,7 @@ impl DdState {
     /// model `server.rs` uses); a GPU/IOSurface root is presented as a single zero-copy texture and its
     /// children are not blended (documented limitation). Returns whether the frame reached the screen.
     pub(crate) fn present_render_root(&mut self, root: &WlSurface) -> bool {
-        let did_present = match self.snapshot_surface(root) {
+        let pacing = match self.snapshot_surface(root) {
             Some(mut base) => {
                 if base.iosurface_id.is_none() && !base.bgra.is_empty() {
                     let popups = self.collect_popups_for_root(root);
@@ -387,16 +415,36 @@ impl DdState {
                         self.blend_subtree(&mut base, &popup, ox, oy);
                     }
                 }
-                self.presenter.present(&base)
+                // Map the presenter's structured outcome onto frame pacing. Only a visibly Delivered
+                // frame advances callbacks/feedback; an Offscreen present or a real output/device error
+                // (both previously hidden behind a `false`) is a FAILED present — pacing is retained.
+                let sid = base.sid;
+                match self.presenter.present(&base) {
+                    Ok(dd_display::present::PresentOutcome::Delivered { .. }) => {
+                        FramePacing::Presented
+                    }
+                    Ok(dd_display::present::PresentOutcome::Offscreen) => {
+                        eprintln!(
+                            "dd-compositor: present sid {sid} rendered offscreen but not delivered; \
+                             retaining frame for retry"
+                        );
+                        FramePacing::Failed
+                    }
+                    Err(e) => {
+                        eprintln!("dd-compositor: present sid {sid} failed: {e}");
+                        FramePacing::Failed
+                    }
+                }
             }
-            None => false,
+            None => FramePacing::Failed,
         };
+        let did_present = pacing == FramePacing::Presented;
         // The tree reached the screen — every surface in it is now clean. On a FAILED present we keep the
         // dirty flags so the next commit retries the repaint rather than skipping it.
         if did_present {
             self.clear_tree_dirty(root);
         }
-        self.pace_tree(root, did_present);
+        self.pace_tree(root, pacing);
         did_present
     }
 
@@ -559,14 +607,14 @@ impl DdState {
     /// its `wp_presentation` feedback. On a failed present the feedback is `discarded`. Draining is
     /// idempotent — a surface with no queued callback fires nothing — so re-presenting a tree that only
     /// partly changed does not double-fire.
-    fn pace_tree(&mut self, root: &WlSurface, did_present: bool) {
+    fn pace_tree(&mut self, root: &WlSurface, pacing: FramePacing) {
         let mut surfaces = Vec::new();
         self.collect_tree_surfaces(root, &mut surfaces);
         for (popup, _, _) in self.collect_popups_for_root(root) {
             self.collect_tree_surfaces(&popup, &mut surfaces);
         }
         for s in surfaces {
-            self.pace_surface(&s, did_present);
+            self.pace_surface(&s, pacing);
         }
     }
 
@@ -574,7 +622,7 @@ impl DdState {
     /// feedback (`presented` on success, `discarded` otherwise). Draining is idempotent — a surface with
     /// no queued callback fires nothing. Split out of [`Self::pace_tree`] so the skip-present path can
     /// pace the committed surface (firing its frame callback so it never stalls) without re-compositing.
-    fn pace_surface(&mut self, surface: &WlSurface, did_present: bool) {
+    fn pace_surface(&mut self, surface: &WlSurface, pacing: FramePacing) {
         let (callbacks, feedback) = with_states(surface, |states| {
             let callbacks: Vec<_> = std::mem::take(
                 &mut states
@@ -592,11 +640,54 @@ impl DdState {
             );
             (callbacks, feedback)
         });
+        let sid = surface_id(surface);
         let t = self.now_ms();
-        for cb in callbacks {
-            cb.done(t);
+        // A frame callback tells the client "your frame is on screen, draw the next one". Fire it only
+        // when the surface's content actually reached (or still stands on) the screen — a fresh Present
+        // or a clean Skip. On a FAILED present the client's frame did NOT ship, so its callbacks are
+        // RETAINED (re-fired on the next accepted present) instead of completed; completing them here
+        // would let the client recycle a buffer the compositor still needs to retry.
+        let did_present = pacing != FramePacing::Failed;
+        if did_present {
+            // Fire any callbacks retained from a prior failed present of this surface, then this cycle's.
+            for cb in self.take_retained_callbacks(sid) {
+                cb.done(t);
+            }
+            for cb in callbacks {
+                cb.done(t);
+            }
+        } else {
+            self.retain_frame_callbacks(sid, callbacks);
         }
-        self.send_presentation_feedback(feedback, did_present);
+        // Presentation feedback is `presented` ONLY for a real new delivery; a Skip or a Failed present
+        // both `discard` it (no new content reached the screen this cycle).
+        self.send_presentation_feedback(feedback, pacing == FramePacing::Presented);
+    }
+
+    /// Retain a surface's `wl_surface.frame` callbacks across a FAILED present so they can be fired on the
+    /// next accepted present (the client is not told its frame shipped). Bounded by
+    /// [`MAX_RETAINED_CALLBACKS`]: under a permanently-dead presenter the oldest retained callbacks are
+    /// dropped (released without `done`) rather than growing the queue without limit.
+    fn retain_frame_callbacks(&mut self, sid: u32, callbacks: Vec<WlCallback>) {
+        if callbacks.is_empty() {
+            return;
+        }
+        let q = self.retained_callbacks.entry(sid).or_default();
+        for cb in callbacks {
+            q.push_back(cb);
+            while q.len() > MAX_RETAINED_CALLBACKS {
+                q.pop_front(); // terminal policy: drop the oldest undeliverable callback
+            }
+        }
+    }
+
+    /// Take (and clear) the callbacks retained for `sid` across earlier failed presents — fired by the
+    /// next accepted present.
+    fn take_retained_callbacks(&mut self, sid: u32) -> Vec<WlCallback> {
+        self.retained_callbacks
+            .remove(&sid)
+            .map(|q| q.into_iter().collect())
+            .unwrap_or_default()
     }
 
     /// `surface` and every subsurface descendant, depth-first.

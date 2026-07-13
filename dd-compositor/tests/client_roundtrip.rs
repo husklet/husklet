@@ -1008,10 +1008,16 @@ struct RecordingPresenter {
     last_damage: Arc<Mutex<Option<Option<(i32, i32, i32, i32)>>>>,
 }
 impl dd_display::present::Presenter for RecordingPresenter {
-    fn present(&mut self, surf: &dd_display::present::SurfaceBuffer) -> bool {
+    fn present(
+        &mut self,
+        surf: &dd_display::present::SurfaceBuffer,
+    ) -> Result<dd_display::present::PresentOutcome, dd_display::present::PresentError> {
         self.frames += 1;
         *self.last_damage.lock().unwrap() = Some(surf.damage);
-        true
+        Ok(dd_display::present::PresentOutcome::Delivered {
+            serial: self.frames as u64,
+            timing: None,
+        })
     }
     fn frame_count(&self) -> u32 {
         self.frames

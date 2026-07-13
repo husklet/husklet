@@ -56,6 +56,67 @@ pub struct PopupPlacement {
     pub y: i32,
 }
 
+/// Presentation timing evidence for a delivered frame — the host's monotonic present time and the
+/// output's refresh interval, both in nanoseconds. Carried by [`PresentOutcome::Delivered`] so the
+/// compositor can answer `wp_presentation` feedback with real (not invented) timing when the backend
+/// knows it. `None` timing on `Delivered` means the frame reached the screen but the backend did not
+/// report a hardware present time (the compositor then falls back to its own monotonic clock).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PresentTiming {
+    /// Host monotonic time the frame became visible, in nanoseconds.
+    pub present_ns: u64,
+    /// Output refresh interval in nanoseconds (`0` = unknown / variable).
+    pub refresh_ns: u64,
+}
+
+/// The structured result of a [`Presenter::present`] call. Replaces the old `bool` that conflated
+/// "rendered somewhere" with "visibly on screen" and silently swallowed output errors: a presenter now
+/// says exactly what happened to the frame, and real output/device/filesystem failures propagate as the
+/// `Err` half of [`Presenter::present`]'s `Result` instead of masquerading as success.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PresentOutcome {
+    /// The frame was visibly delivered to the display. `serial` is a monotonically increasing per-frame
+    /// pacing counter (the compositor uses it to order/track delivered frames); `timing` is the optional
+    /// hardware present-time evidence.
+    Delivered {
+        serial: u64,
+        timing: Option<PresentTiming>,
+    },
+    /// The frame was rendered into an offscreen / backing target (e.g. a GPU IOSurface render pass) but
+    /// was NOT visibly presented this cycle. Not an error — but the client's frame did not reach the
+    /// screen, so the compositor must not advance that surface's frame pacing as if it had.
+    Offscreen,
+}
+
+/// An output/device/filesystem error from a presenter — the failures the old `bool` return hid. Carried
+/// up as the `Err` half of [`Presenter::present`]'s `Result` so the compositor can log/retry instead of
+/// treating a dropped frame as a successful present.
+#[derive(Debug)]
+pub enum PresentError {
+    /// The presenter's output sink failed (a PNG/file write, an I/O error).
+    Output(std::io::Error),
+    /// The host display/device rejected the frame: no drawable acquired, device lost, or a referenced
+    /// IOSurface could not be resolved to a live host texture.
+    Device(String),
+}
+
+impl std::fmt::Display for PresentError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            PresentError::Output(e) => write!(f, "present output error: {e}"),
+            PresentError::Device(m) => write!(f, "present device error: {m}"),
+        }
+    }
+}
+
+impl std::error::Error for PresentError {}
+
+impl From<std::io::Error> for PresentError {
+    fn from(e: std::io::Error) -> Self {
+        PresentError::Output(e)
+    }
+}
+
 impl SurfaceBuffer {
     /// Convert to RGBA (swap B/R, force opaque alpha for XRGB) for PNG encoding / inspection.
     pub fn to_rgba(&self) -> Vec<u8> {
@@ -75,11 +136,14 @@ impl SurfaceBuffer {
 }
 
 pub trait Presenter {
-    /// A surface has committed a new frame. `surf` aliases nothing — it's a fresh snapshot. Returns
-    /// `true` if the frame actually reached the screen; `false` if the present was skipped (e.g. an
-    /// IOSurface lookup or drawable acquisition failed). The compositor uses this to decide whether to
-    /// release the buffer and fire frame callbacks — a failed present must NOT advance frame pacing.
-    fn present(&mut self, surf: &SurfaceBuffer) -> bool;
+    /// A surface has committed a new frame. `surf` aliases nothing — it's a fresh snapshot. Returns a
+    /// structured [`PresentOutcome`] on success (`Delivered` with a pacing serial + optional timing when
+    /// the frame reached the screen, `Offscreen` when it was rendered to a backing target but not shown),
+    /// or a [`PresentError`] when the output/device/filesystem failed. The compositor uses this to decide
+    /// whether to advance frame pacing: only a `Delivered` frame fires `wl_surface.frame` callbacks and a
+    /// `presented` feedback; an `Offscreen`/`Err` present must NOT advance pacing (the client would think
+    /// its frame shipped and recycle a buffer the compositor still needs to retry).
+    fn present(&mut self, surf: &SurfaceBuffer) -> Result<PresentOutcome, PresentError>;
     /// Number of frames presented so far (for a generic multiplexer's disconnect log). Default 0.
     fn frame_count(&self) -> u32 {
         0
@@ -216,12 +280,15 @@ impl Presenter for PngPresenter {
     fn frame_count(&self) -> u32 {
         self.frames
     }
-    fn present(&mut self, surf: &SurfaceBuffer) -> bool {
+    fn present(&mut self, surf: &SurfaceBuffer) -> Result<PresentOutcome, PresentError> {
         let rgba = surf.to_rgba();
         let png = dd_term_core::png::encode_rgba(surf.width as u32, surf.height as u32, &rgba);
-        let _ = std::fs::create_dir_all(&self.dir);
+        // Propagate a real output failure rather than reporting a phantom success: if the directory
+        // cannot be created or the PNG cannot be written, the frame did NOT reach this presenter's sink,
+        // and the compositor must learn that (so it does not fire frame callbacks / release the buffer).
+        std::fs::create_dir_all(&self.dir).map_err(PresentError::Output)?;
         let path = self.dir.join(format!("surface-{}.png", surf.sid));
-        let _ = std::fs::write(&path, png);
+        std::fs::write(&path, png).map_err(PresentError::Output)?;
         self.frames += 1;
         self.last = Some((surf.sid, surf.width, surf.height, rgba));
         eprintln!(
@@ -232,6 +299,9 @@ impl Presenter for PngPresenter {
             surf.title,
             path.display()
         );
-        true
+        Ok(PresentOutcome::Delivered {
+            serial: self.frames as u64,
+            timing: None,
+        })
     }
 }
