@@ -198,16 +198,37 @@ pub extern "C" fn vkGetPhysicalDeviceQueueFamilyProperties(
     }
 }
 
+/// Broad format capabilities so apps' format-support checks pass (vkcube probes linear/optimal tiling
+/// + buffer features for its texture/depth/vertex formats before choosing a path; all-zero features
+/// sent it down a broken branch). A Metal-class device supports these across the common formats.
+pub fn format_features() -> vk::FormatProperties {
+    use vk::FormatFeatureFlags as F;
+    let img = F::SAMPLED_IMAGE
+        | F::STORAGE_IMAGE
+        | F::COLOR_ATTACHMENT
+        | F::COLOR_ATTACHMENT_BLEND
+        | F::DEPTH_STENCIL_ATTACHMENT
+        | F::BLIT_SRC
+        | F::BLIT_DST
+        | F::SAMPLED_IMAGE_FILTER_LINEAR
+        | F::TRANSFER_SRC
+        | F::TRANSFER_DST;
+    vk::FormatProperties {
+        linear_tiling_features: img,
+        optimal_tiling_features: img,
+        buffer_features: F::VERTEX_BUFFER | F::UNIFORM_TEXEL_BUFFER | F::STORAGE_TEXEL_BUFFER,
+    }
+}
+
 #[no_mangle]
 pub extern "C" fn vkGetPhysicalDeviceFormatProperties(
     _physical_device: VkPhysicalDevice,
     _format: i32,
     p_props: *mut vk::FormatProperties,
 ) {
-    // Foundation: report no format capabilities yet (all-zero). Refined against Metal's pixel-format
-    // table (MVKPixelFormats) in a later increment.
+    crate::reg::trace("vkGetPhysicalDeviceFormatProperties");
     if let Some(out) = unsafe { p_props.as_mut() } {
-        *out = vk::FormatProperties::default();
+        *out = format_features();
     }
 }
 
@@ -310,7 +331,7 @@ pub extern "C" fn vkGetPhysicalDeviceFormatProperties2(
     p_props: *mut vk::FormatProperties2,
 ) {
     if let Some(out) = unsafe { p_props.as_mut() } {
-        out.format_properties = vk::FormatProperties::default();
+        out.format_properties = format_features();
     }
 }
 

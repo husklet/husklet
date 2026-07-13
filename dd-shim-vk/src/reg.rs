@@ -188,3 +188,11 @@ pub fn take_ir() -> Vec<Cmd> {
 pub fn reset() {
     *lock() = VkState::default();
 }
+
+/// DD_SHIM_DEBUG entry-point tracer (localizes which real body an app is in). Cheap when off.
+#[inline]
+pub fn trace(name: &str) {
+    if std::env::var_os("DD_SHIM_DEBUG").is_some() {
+        eprintln!("[dd-shim-vk] -> {name}");
+    }
+}

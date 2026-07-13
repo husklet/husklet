@@ -219,6 +219,7 @@ pub extern "C" fn vkGetSwapchainImagesKHR(
     p_count: *mut u32,
     p_images: *mut u64,
 ) -> VkResult {
+    crate::reg::trace("vkGetSwapchainImagesKHR");
     let s = reg::lock();
     let Some(sc) = s.swapchains.get(&swapchain) else {
         return VK_ERROR_INITIALIZATION_FAILED;
@@ -238,6 +239,7 @@ pub extern "C" fn vkAcquireNextImageKHR(
     _fence: VkFence,
     p_image_index: *mut u32,
 ) -> VkResult {
+    crate::reg::trace("vkAcquireNextImageKHR");
     let mut s = reg::lock();
     let Some(sc) = s.swapchains.get_mut(&swapchain) else {
         return VK_ERROR_INITIALIZATION_FAILED;

@@ -122,6 +122,7 @@ pub extern "C" fn vkGetImageMemoryRequirements(
     image: VkImage,
     p_reqs: *mut vk::MemoryRequirements,
 ) {
+    crate::reg::trace("vkGetImageMemoryRequirements");
     let size = reg::lock()
         .images
         .get(&image)
@@ -145,6 +146,7 @@ pub extern "C" fn vkAllocateMemory(
     _p_allocator: *const c_void,
     p_memory: *mut VkDeviceMemory,
 ) -> VkResult {
+    crate::reg::trace("vkAllocateMemory");
     let (Some(ai), Some(out)) = (unsafe { p_alloc_info.as_ref() }, unsafe { p_memory.as_mut() })
     else {
         return VK_ERROR_INITIALIZATION_FAILED;
@@ -201,6 +203,7 @@ pub extern "C" fn vkMapMemory(
     _flags: u32,
     pp_data: *mut *mut c_void,
 ) -> VkResult {
+    crate::reg::trace("vkMapMemory");
     let Some(out) = (unsafe { pp_data.as_mut() }) else {
         return VK_ERROR_INITIALIZATION_FAILED;
     };
@@ -264,6 +267,7 @@ pub extern "C" fn vkCreateImage(
     _p_allocator: *const c_void,
     p_image: *mut VkImage,
 ) -> VkResult {
+    crate::reg::trace("vkCreateImage");
     let (Some(ci), Some(out)) = (unsafe { p_create_info.as_ref() }, unsafe { p_image.as_mut() })
     else {
         return VK_ERROR_INITIALIZATION_FAILED;
@@ -338,6 +342,7 @@ pub extern "C" fn vkCreateImageView(
     _p_allocator: *const c_void,
     p_view: *mut VkImageView,
 ) -> VkResult {
+    crate::reg::trace("vkCreateImageView");
     let (Some(ci), Some(out)) = (unsafe { p_create_info.as_ref() }, unsafe { p_view.as_mut() })
     else {
         return VK_ERROR_INITIALIZATION_FAILED;

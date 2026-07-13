@@ -169,6 +169,7 @@ pub extern "C" fn vkCreateGraphicsPipelines(
     _p_allocator: *const c_void,
     p_pipelines: *mut VkPipeline,
 ) -> VkResult {
+    crate::reg::trace("vkCreateGraphicsPipelines");
     if p_create_infos.is_null() || p_pipelines.is_null() {
         return VK_ERROR_INITIALIZATION_FAILED;
     }
@@ -296,6 +297,7 @@ pub extern "C" fn vkCreateRenderPass(
     _p_allocator: *const c_void,
     p_render_pass: *mut VkRenderPass,
 ) -> VkResult {
+    crate::reg::trace("vkCreateRenderPass");
     let (Some(ci), Some(out)) =
         (unsafe { p_create_info.as_ref() }, unsafe { p_render_pass.as_mut() })
     else {
