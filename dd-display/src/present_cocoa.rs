@@ -1005,21 +1005,22 @@ impl Presenter for MetalPresenter {
         // but this surface hidden behind another window), so we additionally require occlusionState=Visible.
         // When we withhold the drawable we still composite offscreen (below): the guest keeps producing frames,
         // frame pacing keeps advancing, and the window catches up the instant it is refocused/revealed.
-        // Ask for a drawable whenever the window is genuinely on-screen: either dd-display is frontmost, OR
-        // this specific window is visible (not occluded/minimised). The earlier `app_active && window_visible`
-        // AND-gate withheld the drawable whenever dd-display was NOT the frontmost app — i.e. any time the
-        // user looks at the guest window while another app holds focus — so the on-screen `CAMetalLayer`
-        // never received the composited frame and the window stayed blank/white even though `present()` ran
-        // and composited correctly offscreen. Requiring only that the window be visible (or the app active)
-        // paints it in exactly that common case. Core Animation still throttles a truly backgrounded/occluded
-        // layer, but `allowsNextDrawableTimeout(true)` + `maximumDrawableCount(3)` bound the wait (nextDrawable
-        // returns nil rather than blocking the loop), and when the window is not visible we withhold below.
-        let app_active = unsafe { NSApplication::sharedApplication(mtm).isActive() };
+        // Gate the drawable request on `occlusionState == Visible` ALONE — the precise "this window is really
+        // on screen" signal. NOT on `NSApplication.isActive()`: the app activates (activateIgnoringOtherApps)
+        // the instant the window is created, BEFORE the window server has composited it, so an
+        // `app_active || visible` gate calls `nextDrawable` on a not-yet-on-screen layer that Core Animation
+        // throttles — blocking this single present/input loop up to `allowsNextDrawableTimeout` PER TURN for
+        // the first seconds (the "~5s before it becomes interactive" lag). `Visible` is false during that
+        // appearing window and true once the layer is actually on screen, where nextDrawable vends at the
+        // display rate. When it is not yet visible we withhold here and `refresh_onscreen()` flushes the
+        // composited frame the moment it becomes visible, so nothing is lost and input never stalls. This
+        // also fixes the "blank while another app is focused" case: a visible window paints regardless of
+        // which app is frontmost.
         let window_visible = win
             .window
             .occlusionState()
             .contains(NSWindowOcclusionState::Visible);
-        let drawable = if app_active || window_visible {
+        let drawable = if window_visible {
             unsafe { win.layer.nextDrawable() }
         } else {
             None
@@ -1101,13 +1102,14 @@ impl Presenter for MetalPresenter {
             cmd.presentDrawable(objc2::runtime::ProtocolObject::from_ref(&**drawable));
         }
         cmd.commit();
-        // The objc2 build does not enable block2's addPresentedHandler API. Keep the retained drawable
-        // owned on this presenter/main thread and wait for this command buffer before reading the actual
-        // MTLDrawable.presentedTime. This is synchronous but makes lifetime/thread ownership explicit and
-        // never reports submission time as presentation time.
-        if drawable.is_some() {
-            unsafe { cmd.waitUntilCompleted() };
-        }
+        // DO NOT block the present/input loop on GPU completion here. This is the single main-thread loop
+        // that also drains NSEvents; a per-frame `cmd.waitUntilCompleted()` serialised CPU on the GPU and,
+        // with a heavy first frame (Chrome's ~20 MB initial IR), stalled input for seconds before the window
+        // became interactive. Present is fire-and-forget (`presentDrawable` already scheduled the flip); the
+        // guest is paced by the wl frame callback, not by us waiting. We therefore read `presentedTime()`
+        // best-effort WITHOUT waiting: if the flip hasn't happened yet it reports 0 and we emit no device
+        // timing (the compositor falls back to its monotonic present clock), which is the correct behaviour
+        // rather than blocking to obtain a measured timestamp.
         win.last_tex = Some(composite); // keep opaque compositor output for SIGUSR1 readback
         // If no drawable was vended (window not visible yet at commit time), this composited frame is NOT on
         // screen. Mark it so `refresh_onscreen()` flushes it once the window becomes visible — otherwise a
@@ -1179,19 +1181,22 @@ impl Presenter for MetalPresenter {
     }
 
     fn refresh_onscreen(&mut self) {
-        let mtm = self.mtm;
-        let app_active = unsafe { NSApplication::sharedApplication(mtm).isActive() };
         // Borrow the shared context and the windows disjointly.
         let ctx = &self.ctx;
         for win in self.wins.values_mut() {
             if !win.onscreen_dirty {
                 continue; // already on screen (or nothing composited yet)
             }
+            // Only touch `nextDrawable` for a window that is actually on screen (occlusionState == Visible),
+            // NOT merely because the app is active: this runs every live-loop turn, and requesting a drawable
+            // for an appearing/not-yet-composited layer blocks the loop up to allowsNextDrawableTimeout each
+            // turn — the startup interactivity stall. While not visible we keep the frame pending (dirty) and
+            // flush it the instant the window becomes visible.
             let window_visible = win
                 .window
                 .occlusionState()
                 .contains(NSWindowOcclusionState::Visible);
-            if !(app_active || window_visible) {
+            if !window_visible {
                 continue; // still not on screen — keep the frame pending until it is
             }
             let Some(tex) = win.composite_tex.clone() else {

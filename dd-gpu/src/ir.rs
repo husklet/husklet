@@ -1275,10 +1275,15 @@ impl Cmd {
                 e.u8(tag::DESTROY_SAMPLER);
                 e.u32(*id);
             }
-            Cmd::CreateShader { id, kind, spirv } => {
+            Cmd::CreateShader { id, kind: _, spirv } => {
                 e.u8(tag::CREATE_SHADER);
                 e.u32(*id);
-                e.u8(*kind as u8);
+                // WIRE COMPAT: the shipped guest engine (dd-shim-gl compiled into ddjit) emits the
+                // WIRE_VERSION-2 CreateShader layout — `id` followed directly by the MSL word payload, with
+                // NO ShaderPayloadKind byte. Writing the kind byte here (the v3 layout) would desync the
+                // pinned guest's decoder against ours and vice-versa: our decoder would read the payload's
+                // first word-count byte AS the kind, rejecting real shaders as `BadTag`. Keep the payload
+                // byte-identical to what the guest speaks; the kind is re-derived on decode (see `dec`).
                 e.words(spirv);
             }
             Cmd::DestroyShader(id) => {
@@ -1362,7 +1367,13 @@ impl Cmd {
             tag::DESTROY_SAMPLER => Cmd::DestroySampler(d.u32()?),
             tag::CREATE_SHADER => Cmd::CreateShader {
                 id: d.u32()?,
-                kind: ShaderPayloadKind::decode(d.u8()?)?,
+                // WIRE COMPAT (see `enc`): the pinned guest engine speaks the v2 CreateShader layout with
+                // no ShaderPayloadKind byte, so we must NOT consume one here — doing so reads the payload's
+                // first word-count byte as the kind and rejects the shader as BadTag (237/52...), which is
+                // exactly the regression that left Chrome white. The guest's shim delivers GLSL already
+                // translated to MSL (packed as words), i.e. the `LegacyMsl` payload the Metal executor
+                // compiles; default to it so create_shader() takes the MSL-compile path, not strict SPIR-V.
+                kind: ShaderPayloadKind::LegacyMsl,
                 spirv: d.words()?,
             },
             tag::DESTROY_SHADER => Cmd::DestroyShader(d.u32()?),

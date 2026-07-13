@@ -228,8 +228,18 @@ impl ExecutorBudget {
         let mut next = self.totals;
         for cmd in cmds {
             if let Some((kind, id, bytes)) = create_charge(cmd)? {
-                if next_live.insert((kind, id), bytes).is_some() {
-                    return Err(GpuError::Invalid("duplicate budget object id"));
+                // Guests legitimately RE-CREATE an object under a stable id every frame without an explicit
+                // Destroy (create-or-replace: the shim re-emits CreateShader/CreateBuffer/… for the same id,
+                // and the backend replaces it — see the L3 id-hash cache). Treat a create over a still-live
+                // id as a residency SWAP (drop the old charge, add the new) rather than a fatal "duplicate":
+                // erroring here rejected the whole frame and left real apps (Chrome) unable to render, while
+                // the residency ceiling is still enforced because only the delta is charged.
+                if let Some(old) = next_live.insert((kind, id), bytes) {
+                    next.bytes = next.bytes.saturating_sub(old);
+                    if kind == KIND_PIPELINE {
+                        next.compiled_bytes = next.compiled_bytes.saturating_sub(old);
+                    }
+                    next.objects = next.objects.saturating_sub(1);
                 }
                 next.bytes = next.bytes.checked_add(bytes).ok_or(GpuError::ResourceLimit("residency overflow"))?;
                 next.objects = next.objects.checked_add(1).ok_or(GpuError::ResourceLimit("object count overflow"))?;
