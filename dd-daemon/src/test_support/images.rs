@@ -682,3 +682,19 @@ async fn stats_num_procs_agrees_with_pids_and_memory_shape() {
     assert!(mem.contains_key("max_usage"), "memory_stats must carry max_usage");
     assert!(mem.contains_key("failcnt"), "memory_stats must carry failcnt");
 }
+
+// ---- C27: /distribution/:name/json returns an honest 404, never a fabricated descriptor ----------
+#[tokio::test]
+async fn distribution_inspect_is_honest_not_fabricated() {
+    // dd cannot resolve remote registry manifests, so it must NOT invent a descriptor. The response is
+    // a Docker-shaped 404 error, and its body carries no fabricated `Descriptor`/`Digest`.
+    let resp = crate::images::distribution_inspect(Path("busybox:latest".into())).await;
+    assert_eq!(resp.status(), StatusCode::NOT_FOUND, "no truthful descriptor -> honest 404");
+    let v = to_body_json(resp).await;
+    assert!(v.get("message").and_then(|m| m.as_str()).is_some(), "Docker-shaped error body");
+    assert!(v.get("Descriptor").is_none(), "must not fabricate a manifest descriptor");
+    assert!(
+        !v.to_string().contains("sha256:"),
+        "must not fabricate a content digest: {v}"
+    );
+}

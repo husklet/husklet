@@ -123,20 +123,22 @@ pub(crate) async fn images_prune(State(a): State<App>) -> Json<PruneReport> {
     })
 }
 
-/// `GET /distribution/{name}/json` — registry manifest probe. Minimal conformant descriptor.
+/// `GET /distribution/{name}/json` — `docker manifest inspect` / `buildx imagetools inspect`. This
+/// endpoint resolves the image's manifest DESCRIPTOR (real content digest + size + platforms) from the
+/// registry. dd does not perform remote manifest resolution and stores no registry digest locally, so it
+/// cannot produce a truthful descriptor. Returning an invented `sha256:<hash-of-name>` with size 0 (the
+/// former behavior) misleads any client that trusts the digest, so return an honest Docker-shaped 404
+/// instead — never fabricated metadata.
 pub(crate) async fn distribution_inspect(Path(name): Path<String>) -> Response {
-    Json(DistributionInspect {
-        descriptor: Descriptor {
-            media_type: "application/vnd.docker.distribution.manifest.v2+json",
-            digest: format!("sha256:{}", fake_id(&name)),
-            size: 0,
-        },
-        platforms: vec![PlatformDesc {
-            architecture: "arm64",
-            os: "linux",
-        }],
-    })
-    .into_response()
+    (
+        StatusCode::NOT_FOUND,
+        Json(ErrorMessage {
+            message: format!(
+                "no distribution descriptor for {name}: dd does not resolve remote registry manifests"
+            ),
+        }),
+    )
+        .into_response()
 }
 
 /// GET /images/:name/json — `docker image inspect` / `docker run`'s local-image probe. Returns the

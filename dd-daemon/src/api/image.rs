@@ -56,29 +56,9 @@ pub(crate) struct PruneReport {
     pub space_reclaimed: i64,
 }
 
-/// `GET /distribution/{name}/json` — minimal conformant manifest descriptor.
-#[derive(Serialize)]
-#[serde(rename_all = "PascalCase")]
-pub(crate) struct DistributionInspect {
-    pub descriptor: Descriptor,
-    pub platforms: Vec<PlatformDesc>,
-}
-
-/// The `Descriptor` sub-object — its keys are camelCase (`mediaType`), not PascalCase.
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-pub(crate) struct Descriptor {
-    pub media_type: &'static str,
-    pub digest: String,
-    pub size: i64,
-}
-
-/// One entry of the distribution `Platforms` array (lowercase keys).
-#[derive(Serialize)]
-pub(crate) struct PlatformDesc {
-    pub architecture: &'static str,
-    pub os: &'static str,
-}
+// `GET /distribution/{name}/json` returns an honest Docker-shaped 404 (dd does not resolve remote
+// registry manifests, so it has no truthful descriptor to serialize) — see `images::distribution_inspect`.
+// Its former fabricated `DistributionInspect`/`Descriptor`/`PlatformDesc` response types were removed.
 
 /// `GET /images/{name}/json` (`docker image inspect`). `RootFS` needs an explicit rename (PascalCase
 /// would yield `RootFs`, dropping the capital `S`).
