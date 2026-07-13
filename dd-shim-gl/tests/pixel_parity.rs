@@ -416,6 +416,157 @@ fn full_frame_mat3_uniform_is_byte_identical() {
     }
 }
 
+/// Phase-4.1 gate: the textured triangle but with the promoted families — **immutable texture storage**
+/// (`glTexStorage2D` + `glTexSubImage2D`) and **buffer mapping** (`glBufferData(NULL)` +
+/// `glMapBufferRange`/`glUnmapBuffer` to fill the VBO). Compiled against BOTH shims; the emitted IR must
+/// be byte-identical, proving the new real bodies produce exactly gl_shim.c's texture + buffer bytes.
+#[test]
+fn full_frame_texstorage_and_mapbuffer_is_byte_identical() {
+    let dir = std::env::temp_dir().join(format!("dd-shim-ts-{}", std::process::id()));
+    let _ = std::fs::create_dir_all(&dir);
+    let gl_shim_so = match build_gl_shim_so(&dir) {
+        Some(s) => s,
+        None => {
+            eprintln!("[parity] SKIP texstorage/mapbuffer: gl_shim.c toolchain unavailable");
+            return;
+        }
+    };
+    let rust_so = match dd_shim_gl_so() {
+        Some(s) => s,
+        None => {
+            eprintln!("[parity] SKIP texstorage/mapbuffer: dd-shim-gl cdylib not found");
+            return;
+        }
+    };
+    let c_ir = match run_workload_against(&gl_shim_so, TEXSTORAGE_MAP_WORKLOAD, "ts-c") {
+        Some(b) => b,
+        None => return,
+    };
+    let rust_ir = match run_workload_against(&rust_so, TEXSTORAGE_MAP_WORKLOAD, "ts-rust") {
+        Some(b) => b,
+        None => return,
+    };
+    let _ = std::fs::remove_dir_all(&dir);
+    match diff_ir(&c_ir, &rust_ir) {
+        Ok(()) => eprintln!("[parity] PASS texstorage/mapbuffer: byte-identical ({} bytes)", c_ir.len()),
+        Err(e) => panic!("texstorage/mapbuffer parity FAILED:\n{e}"),
+    }
+}
+
+const TEXSTORAGE_MAP_WORKLOAD: &str = r#"
+extern void* eglGetDisplay(void*);
+extern unsigned eglInitialize(void*, int*, int*);
+extern unsigned eglChooseConfig(void*, const int*, void**, int, int*);
+extern void* eglCreateContext(void*, void*, void*, const int*);
+extern void* eglCreateWindowSurface(void*, void*, void*, const int*);
+extern unsigned eglMakeCurrent(void*, void*, void*, void*);
+extern unsigned eglSwapBuffers(void*, void*);
+extern unsigned glCreateShader(unsigned);
+extern void glShaderSource(unsigned, int, const char* const*, const int*);
+extern void glCompileShader(unsigned);
+extern unsigned glCreateProgram(void);
+extern void glAttachShader(unsigned, unsigned);
+extern void glLinkProgram(unsigned);
+extern void glUseProgram(unsigned);
+extern void glGenBuffers(int, unsigned*);
+extern void glBindBuffer(unsigned, unsigned);
+extern void glBufferData(unsigned, long, const void*, unsigned);
+extern void* glMapBufferRange(unsigned, long, long, unsigned);
+extern unsigned char glUnmapBuffer(unsigned);
+extern int glGetAttribLocation(unsigned, const char*);
+extern void glEnableVertexAttribArray(unsigned);
+extern void glVertexAttribPointer(unsigned, int, unsigned, unsigned char, int, const void*);
+extern void glGenTextures(int, unsigned*);
+extern void glActiveTexture(unsigned);
+extern void glBindTexture(unsigned, unsigned);
+extern void glTexStorage2D(unsigned, int, unsigned, int, int);
+extern void glTexSubImage2D(unsigned, int, int, int, int, int, unsigned, unsigned, const void*);
+extern void glTexParameteri(unsigned, unsigned, int);
+extern int glGetUniformLocation(unsigned, const char*);
+extern void glUniformMatrix4fv(int, int, unsigned char, const float*);
+extern void glUniform1i(int, int);
+extern void glDrawArrays(unsigned, int, int);
+
+static const char* VS =
+  "attribute vec2 aPos;\n"
+  "attribute vec2 aTex;\n"
+  "uniform mat4 uMVP;\n"
+  "varying vec2 vTex;\n"
+  "void main(){\n"
+  "  gl_Position = uMVP * vec4(aPos, 0.0, 1.0);\n"
+  "  vTex = aTex;\n"
+  "}\n";
+static const char* FS =
+  "precision mediump float;\n"
+  "uniform sampler2D uTex;\n"
+  "varying vec2 vTex;\n"
+  "void main(){\n"
+  "  gl_FragColor = texture2D(uTex, vTex);\n"
+  "}\n";
+
+int main(void) {
+    void* d = eglGetDisplay(0);
+    eglInitialize(d, 0, 0);
+    int cfgattr[] = { 0x3038 };
+    void* cfg; int n;
+    eglChooseConfig(d, cfgattr, &cfg, 1, &n);
+    int ctxattr[] = { 0x3098, 2, 0x3038 };
+    void* ctx = eglCreateContext(d, cfg, 0, ctxattr);
+    int win[2] = { 256, 256 };
+    void* s = eglCreateWindowSurface(d, cfg, win, 0);
+    eglMakeCurrent(d, s, s, ctx);
+
+    unsigned vs = glCreateShader(0x8B31);
+    glShaderSource(vs, 1, &VS, 0);
+    glCompileShader(vs);
+    unsigned fs = glCreateShader(0x8B30);
+    glShaderSource(fs, 1, &FS, 0);
+    glCompileShader(fs);
+    unsigned prog = glCreateProgram();
+    glAttachShader(prog, vs);
+    glAttachShader(prog, fs);
+    glLinkProgram(prog);
+    glUseProgram(prog);
+
+    /* Fill the VBO through a mapped range instead of glBufferData(data). */
+    float verts[] = { 0,0, 0,0,  1,0, 1,0,  0,1, 0,1 };
+    unsigned vbo; glGenBuffers(1, &vbo);
+    glBindBuffer(0x8892, vbo);
+    glBufferData(0x8892, (long)sizeof(verts), 0, 0x88E4);
+    unsigned char* mp = (unsigned char*)glMapBufferRange(0x8892, 0, (long)sizeof(verts), 0x0002);
+    const unsigned char* vp = (const unsigned char*)verts;
+    for (unsigned i = 0; i < sizeof(verts); i++) mp[i] = vp[i];
+    glUnmapBuffer(0x8892);
+
+    int aPos = glGetAttribLocation(prog, "aPos");
+    int aTex = glGetAttribLocation(prog, "aTex");
+    glEnableVertexAttribArray((unsigned)aPos);
+    glVertexAttribPointer((unsigned)aPos, 2, 0x1406, 0, 16, (const void*)0);
+    glEnableVertexAttribArray((unsigned)aTex);
+    glVertexAttribPointer((unsigned)aTex, 2, 0x1406, 0, 16, (const void*)8);
+
+    /* Immutable storage + sub-image upload instead of glTexImage2D. */
+    unsigned char pix[16] = { 255,0,0,255, 0,255,0,255, 0,0,255,255, 255,255,0,255 };
+    unsigned tex; glGenTextures(1, &tex);
+    glActiveTexture(0x84C0);
+    glBindTexture(0x0DE1, tex);
+    glTexStorage2D(0x0DE1, 1, 0x8058, 2, 2);
+    glTexSubImage2D(0x0DE1, 0, 0, 0, 2, 2, 0x1908, 0x1401, pix);
+    glTexParameteri(0x0DE1, 0x2801, 0x2601);
+    glTexParameteri(0x0DE1, 0x2800, 0x2601);
+
+    float mvp[16] = { 1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1 };
+    int uMVP = glGetUniformLocation(prog, "uMVP");
+    glUniformMatrix4fv(uMVP, 1, 0, mvp);
+    int uTex = glGetUniformLocation(prog, "uTex");
+    glUniform1i(uTex, 0);
+
+    glDrawArrays(0x0004, 0, 3);
+    eglSwapBuffers(d, s);
+    return 0;
+}
+"#;
+
 const MAT3_UNIFORM_WORKLOAD: &str = r#"
 extern void* eglGetDisplay(void*);
 extern unsigned eglInitialize(void*, int*, int*);

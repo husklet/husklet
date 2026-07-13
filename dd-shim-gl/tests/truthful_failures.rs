@@ -29,7 +29,7 @@ fn stub_raises_error_and_initializes_outputs() {
 
     // --- stub with an out array: raises GL_INVALID_OPERATION and zeroes every handle ---
     let mut ids: [u32; 2] = [0xAAAA_AAAA, 0xBBBB_BBBB];
-    dd_shim_gl::glGenQueries(2, ids.as_mut_ptr());
+    dd_shim_gl::glGenProgramPipelines(2, ids.as_mut_ptr());
     assert_eq!(ids, [0, 0], "stub must initialize its out handles to 0 (no garbage)");
     assert_eq!(
         glGetError(),
@@ -40,8 +40,8 @@ fn stub_raises_error_and_initializes_outputs() {
     assert_eq!(glGetError(), GL_NO_ERROR);
 
     // --- stub with a pointer return: returns null AND raises the error ---
-    let mapped = dd_shim_gl::glMapBufferRange(GL_ARRAY_BUFFER, 0, 16, 0);
-    assert!(mapped.is_null(), "an unsupported map must return null, not a fake buffer");
+    let sync = dd_shim_gl::glFenceSync(0x9117 /* GL_SYNC_GPU_COMMANDS_COMPLETE */, 0);
+    assert!(sync.is_null(), "an unsupported sync create must return null, not a fake handle");
     assert_eq!(glGetError(), GL_INVALID_OPERATION);
     let _ = glGetError();
 
@@ -82,8 +82,20 @@ fn advertised_gl_version_matches_inventory_profile() {
     // The extension string advertises only host-backed extensions, and its count is consistent.
     let ext_ptr = glGetString(0x1F03); // GL_EXTENSIONS
     let ext = unsafe { std::ffi::CStr::from_ptr(ext_ptr as *const core::ffi::c_char) }.to_str().unwrap();
-    let count = if ext.is_empty() { 0 } else { ext.split_whitespace().count() };
-    assert_eq!(count, dd_shim_gl::ADVERTISED_GL_EXTENSION_COUNT);
+    let tokens: Vec<&str> = ext.split_whitespace().collect();
+    assert_eq!(tokens.len(), dd_shim_gl::ADVERTISED_GL_EXTENSION_COUNT);
+
+    // The indexed enumeration (glGetStringi) must return EXACTLY the same tokens, in order — the two
+    // extension queries can never disagree (both come from the one inventory list).
+    for (i, tok) in tokens.iter().enumerate() {
+        let p = dd_shim_gl::gles::glGetStringi(0x1F03, i as u32);
+        let s = unsafe { std::ffi::CStr::from_ptr(p as *const core::ffi::c_char) }.to_str().unwrap();
+        assert_eq!(&s, tok, "glGetStringi({i}) must match token {i} of GL_EXTENSIONS");
+    }
+    // Out-of-range index returns the empty string, never garbage.
+    let oob = dd_shim_gl::gles::glGetStringi(0x1F03, tokens.len() as u32);
+    let oob = unsafe { std::ffi::CStr::from_ptr(oob as *const core::ffi::c_char) }.to_str().unwrap();
+    assert_eq!(oob, "");
 }
 
 // ---- (b) DD_SHIM_STRICT aborts on the first stub call ------------------------------------------
@@ -101,7 +113,7 @@ fn strict_child_aborts_on_stub() {
         return;
     }
     // In the child (DD_SHIM_STRICT=1): the first stub call must abort before we reach the line after it.
-    dd_shim_gl::glTexStorage2D(0x0DE1, 1, GL_RGBA, 4, 4);
+    dd_shim_gl::glDispatchCompute(1, 1, 1);
     // If strict mode did NOT abort, exit 0 so the parent's `!success()` assertion fails loudly.
     std::process::exit(0);
 }

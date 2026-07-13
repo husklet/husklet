@@ -7,114 +7,143 @@ truthfulness. It is emitted by `build.rs` from the SAME `IMPLEMENTED`/`PARTIAL` 
 runtime uses, so it can never drift from the exported surface — the `inventory_covers_every_exported_
 symbol` test asserts a 1:1 correspondence and that every level's invariants hold.
 
-## Capability levels (Phase-0 truthfulness model)
+## Capability levels
 
 | Level | Count | Behavior | Error state |
 |---|---|---|---|
-| **full** | 166 | Real hand-written body at gl_shim.c parity (byte-identical IR / faithful state). | none |
-| **partial** | 110 | Spec-legitimate no-op / default query that matches gl_shim.c's own degraded behavior. ALWAYS initializes its outputs; returns the spec default or the correct not-found sentinel. | none (a no-op is the correct answer) |
-| **stub** | 126 | An operation a conforming driver performs and the shim does NOT: it FAILS truthfully — sets the API-correct GL/EGL error, zero-initializes every output, returns the spec failure value, and aborts under `DD_SHIM_STRICT`. | `glGetError`/`eglGetError` raised |
+| **full** | 182 | Real hand-written body at gl_shim.c parity (byte-identical IR / faithful state). | none |
+| **partial** | 137 | Spec-legitimate no-op / default query matching gl_shim.c's own degraded behavior. ALWAYS initializes outputs; returns the spec default / correct not-found sentinel. | none (a no-op is the correct answer) |
+| **stub** | 83 | An operation a conforming driver performs and the shim does NOT: FAILS truthfully — sets the API-correct GL/EGL error, zeroes outputs, returns the spec failure value, aborts under `DD_SHIM_STRICT`. | `glGetError`/`eglGetError` raised |
 
-By lib: GL = 138 full / 109 partial / 111 stub; EGL = 28 full / 1 partial / 15 stub.
+By lib: GL = 153 full / 136 partial / 69 stub; EGL = 29 full / 1 partial / 14 stub.
 
-**The Phase-0 exit gate holds:** no unsupported entry point can silently report success. A `stub` never
-returns a success-by-default — it raises an API-correct error and initializes outputs; a `partial`
-never claims to have done work it didn't. The old behavior (236 generated stubs returning benign
-zero/null with no error) is gone.
+**The Phase-0 exit gate holds and the profile is now more complete (Phase 4.1):** no unsupported entry
+point can silently report success, and the previously-stubbed high-use GLES2/ES3 families now have real
+bodies at gl_shim.c byte-parity.
+
+## Phase 4.1 promotions (this pass)
+
+Promoted **stub -> full** (real bodies ported from gl_shim.c, byte-parity gated by
+`full_frame_texstorage_and_mapbuffer_is_byte_identical`):
+
+- **Immutable texture storage & 3D/array upload:** `glTexStorage2D`/`glTexStorage3D`, `glTexImage3D`/
+  `glTexSubImage3D`, and copy-from-framebuffer `glCopyTexImage2D`/`glCopyTexSubImage2D`.
+- **Buffer mapping:** `glMapBufferRange` (a real pointer into the buffer's storage) + `glUnmapBuffer`
+  (dirties the buffer so the swap re-uploads) + `glCopyBufferSubData`.
+- **Integer vertex arrays:** `glVertexAttribIPointer`. **Range draws:** `glDrawRangeElements`.
+- **Indexed extension enumeration:** `glGetStringi` (served from the same inventory list as
+  `glGetString(GL_EXTENSIONS)`). **Object-name allocators:** `glGenQueries`/`glGenSamplers`/
+  `glGenTransformFeedbacks` (monotonic ids). **EGL:** `eglGetPlatformDisplay` (modern display open).
+
+Reclassified **stub -> partial** to match gl_shim.c's *deliberate* no-ops (an error would DIVERGE from
+the oracle, breaking apps that query `glGetError` after these): UBO binding (`glBindBufferBase`/`Range`,
+`glUniformBlockBinding`, `glFlushMappedBufferRange`), `glDrawBuffers`/`glReadBuffer`, integer/depth
+`glClearBuffer{iv,uiv,fi}`, `glVertexAttribDivisor`, compressed/3D-copy texture uploads, sampler-object
+params (`glBindSampler`/`glSamplerParameter*`), query/transform-feedback begin/end/bind, and
+`glProgramBinary`/`glShaderBinary`.
 
 ## Truthful-failure & debugging controls
 
 - **Default (lenient):** stubs raise the GL/EGL error and initialize outputs, then return; execution
-  continues. `DD_SHIM_DEBUG=1` additionally logs each unimplemented/`partial` entry point once, the
-  first time an app calls it (exploratory "what does this app actually use").
-- **`DD_SHIM_STRICT=1`:** aborts at the FIRST `stub` call, printing the command, thread, advertised
-  context, and the recent call history — an unsupported call fails loudly instead of degrading.
+  continues. `DD_SHIM_DEBUG=1` additionally logs each unimplemented/`partial` entry point once.
+- **`DD_SHIM_STRICT=1`:** aborts at the FIRST `stub` call, printing command, thread, advertised context,
+  and recent call history.
 
-## Truthful advertisement (Phase 1.1 slice)
+## Truthful advertisement (inventory-driven)
 
-`glGetString(GL_VERSION/GL_SHADING_LANGUAGE_VERSION/GL_EXTENSIONS)` and `glGetIntegerv` version/extension
-reporting are driven from the inventory's advertisement constants (`ADVERTISED_GL_VERSION`, …). The shim
-advertises the **lowest coherent GLES profile the real bodies actually back — OpenGL ES 2.0** — and does
-NOT claim ES 3.x merely because the ES3 symbols exist: the ES3 core additions (UBO binding, transform
-feedback, fence sync, sampler objects, immutable/3D textures, MRT) are all `stub`s. ES3 remains an
-explicit `DD_SHIM_ES3` opt-in (which advertises the ES3 identity strings on a context created with
-major>=3). The extension string lists only host-backed extensions (`GL_OES_element_index_uint`,
-`GL_OES_texture_npot`), and `GL_NUM_EXTENSIONS` is derived from that list.
+`glGetString(GL_VERSION/GL_SHADING_LANGUAGE_VERSION/GL_EXTENSIONS)`, `glGetStringi`, and `glGetIntegerv`
+version/extension reporting are driven from the inventory's advertisement constants. The shim advertises
+the coherent **OpenGL ES 2.0** profile (ES3 stays a `DD_SHIM_ES3` opt-in; ES3-only mandatory features
+like sync objects / UBO-bound blocks remain stubs). The extension string is the gl_shim.c oracle set
+(**9 extensions**: BGRA8888 x2, texture_storage, rgb8_rgba8, texture_npot, sRGB x2,
+ANGLE_framebuffer_multisample, texture_usage), each backed by a real body; `glGetString(GL_EXTENSIONS)`,
+`glGetStringi`, and `GL_NUM_EXTENSIONS` all derive from this one list and cannot disagree.
 
 ## Per-symbol census
 
-The tables below are generated from the SAME source of truth as the runtime (build.rs `IMPLEMENTED`/`PARTIAL` sets over `registry/gles2_egl.manifest`), emitted into `CAPABILITIES`. Regenerate with `dd-shim-gl/registry` tooling; the `inventory_covers_every_exported_symbol` test fails if this drifts from the exported surface.
+Generated from build.rs `IMPLEMENTED`/`PARTIAL` over `registry/gles2_egl.manifest` (emitted into `CAPABILITIES`); the `inventory_covers_every_exported_symbol` test fails if this drifts.
 
-### full — real hand-written body at gl_shim.c parity (166)
+### full — real hand-written body at gl_shim.c parity (182)
 
-EGL lifecycle/present + GLES state/buffers/textures/shaders/uniforms/VAOs/FBOs/draw-recording. ES3-tagged members: `glBindVertexArray`, `glBlitFramebuffer`, `glClearBufferfv`, `glDeleteVertexArrays`, `glDrawArraysInstanced`, `glDrawElementsInstanced`, `glFramebufferTextureLayer`, `glGenVertexArrays`, `glIsVertexArray`, `glRenderbufferStorageMultisample`, `glUniform1ui`, `glUniform1uiv`, `glUniform2ui`, `glUniform2uiv`, `glUniform3ui`, `glUniform3uiv`, `glUniform4ui`, `glUniform4uiv`, `glUniformMatrix2x3fv`, `glUniformMatrix2x4fv`, `glUniformMatrix3x2fv`, `glUniformMatrix3x4fv`, `glUniformMatrix4x2fv`, `glUniformMatrix4x3fv`.
+ES3-tagged members (`since`=GLES 3.0): `glBindVertexArray`, `glBlitFramebuffer`, `glClearBufferfv`, `glCopyBufferSubData`, `glDeleteVertexArrays`, `glDrawArraysInstanced`, `glDrawElementsInstanced`, `glDrawRangeElements`, `glFramebufferTextureLayer`, `glGenQueries`, `glGenSamplers`, `glGenTransformFeedbacks`, `glGenVertexArrays`, `glGetStringi`, `glIsVertexArray`, `glMapBufferRange`, `glRenderbufferStorageMultisample`, `glTexImage3D`, `glTexStorage3D`, `glTexSubImage3D`, `glUniform1ui`, `glUniform1uiv`, `glUniform2ui`, `glUniform2uiv`, `glUniform3ui`, `glUniform3uiv`, `glUniform4ui`, `glUniform4uiv`, `glUniformMatrix2x3fv`, `glUniformMatrix2x4fv`, `glUniformMatrix3x2fv`, `glUniformMatrix3x4fv`, `glUniformMatrix4x2fv`, `glUniformMatrix4x3fv`, `glUnmapBuffer`, `glVertexAttribIPointer`.
 
 `eglBindAPI` | `eglChooseConfig` | `eglCreateContext`
 `eglCreatePbufferSurface` | `eglCreateWindowSurface` | `eglDestroyContext`
 `eglDestroySurface` | `eglGetConfigAttrib` | `eglGetConfigs`
 `eglGetCurrentContext` | `eglGetCurrentDisplay` | `eglGetCurrentSurface`
-`eglGetDisplay` | `eglGetError` | `eglGetProcAddress`
-`eglInitialize` | `eglMakeCurrent` | `eglQueryAPI`
-`eglQueryContext` | `eglQueryString` | `eglQuerySurface`
-`eglReleaseThread` | `eglSwapBuffers` | `eglSwapInterval`
-`eglTerminate` | `eglWaitClient` | `eglWaitGL`
-`eglWaitNative` | `glActiveTexture` | `glAttachShader`
-`glBindBuffer` | `glBindFramebuffer` | `glBindRenderbuffer`
-`glBindTexture` | `glBindVertexArray` | `glBlendColor`
-`glBlendEquation` | `glBlendEquationSeparate` | `glBlendEquationSeparatei`
-`glBlendEquationi` | `glBlendFunc` | `glBlendFuncSeparate`
-`glBlendFuncSeparatei` | `glBlendFunci` | `glBlitFramebuffer`
-`glBufferData` | `glBufferSubData` | `glCheckFramebufferStatus`
-`glClear` | `glClearBufferfv` | `glClearColor`
-`glClearDepthf` | `glClearStencil` | `glColorMask`
-`glCompileShader` | `glCreateProgram` | `glCreateShader`
-`glCullFace` | `glDeleteBuffers` | `glDeleteFramebuffers`
-`glDeleteProgram` | `glDeleteRenderbuffers` | `glDeleteShader`
-`glDeleteTextures` | `glDeleteVertexArrays` | `glDepthFunc`
-`glDepthMask` | `glDepthRangef` | `glDetachShader`
-`glDisable` | `glDisableVertexAttribArray` | `glDrawArrays`
-`glDrawArraysInstanced` | `glDrawElements` | `glDrawElementsInstanced`
-`glEnable` | `glEnableVertexAttribArray` | `glFinish`
-`glFlush` | `glFramebufferRenderbuffer` | `glFramebufferTexture2D`
-`glFramebufferTextureLayer` | `glFrontFace` | `glGenBuffers`
-`glGenFramebuffers` | `glGenRenderbuffers` | `glGenTextures`
-`glGenVertexArrays` | `glGenerateMipmap` | `glGetAttribLocation`
-`glGetBooleanv` | `glGetError` | `glGetFloatv`
-`glGetFramebufferAttachmentParameteriv` | `glGetIntegerv` | `glGetProgramInfoLog`
-`glGetProgramiv` | `glGetRenderbufferParameteriv` | `glGetShaderInfoLog`
-`glGetShaderiv` | `glGetString` | `glGetUniformLocation`
+`eglGetDisplay` | `eglGetError` | `eglGetPlatformDisplay`
+`eglGetProcAddress` | `eglInitialize` | `eglMakeCurrent`
+`eglQueryAPI` | `eglQueryContext` | `eglQueryString`
+`eglQuerySurface` | `eglReleaseThread` | `eglSwapBuffers`
+`eglSwapInterval` | `eglTerminate` | `eglWaitClient`
+`eglWaitGL` | `eglWaitNative` | `glActiveTexture`
+`glAttachShader` | `glBindBuffer` | `glBindFramebuffer`
+`glBindRenderbuffer` | `glBindTexture` | `glBindVertexArray`
+`glBlendColor` | `glBlendEquation` | `glBlendEquationSeparate`
+`glBlendEquationSeparatei` | `glBlendEquationi` | `glBlendFunc`
+`glBlendFuncSeparate` | `glBlendFuncSeparatei` | `glBlendFunci`
+`glBlitFramebuffer` | `glBufferData` | `glBufferSubData`
+`glCheckFramebufferStatus` | `glClear` | `glClearBufferfv`
+`glClearColor` | `glClearDepthf` | `glClearStencil`
+`glColorMask` | `glCompileShader` | `glCopyBufferSubData`
+`glCopyTexImage2D` | `glCopyTexSubImage2D` | `glCreateProgram`
+`glCreateShader` | `glCullFace` | `glDeleteBuffers`
+`glDeleteFramebuffers` | `glDeleteProgram` | `glDeleteRenderbuffers`
+`glDeleteShader` | `glDeleteTextures` | `glDeleteVertexArrays`
+`glDepthFunc` | `glDepthMask` | `glDepthRangef`
+`glDetachShader` | `glDisable` | `glDisableVertexAttribArray`
+`glDrawArrays` | `glDrawArraysInstanced` | `glDrawElements`
+`glDrawElementsInstanced` | `glDrawRangeElements` | `glEnable`
+`glEnableVertexAttribArray` | `glFinish` | `glFlush`
+`glFramebufferRenderbuffer` | `glFramebufferTexture2D` | `glFramebufferTextureLayer`
+`glFrontFace` | `glGenBuffers` | `glGenFramebuffers`
+`glGenQueries` | `glGenRenderbuffers` | `glGenSamplers`
+`glGenTextures` | `glGenTransformFeedbacks` | `glGenVertexArrays`
+`glGenerateMipmap` | `glGetAttribLocation` | `glGetBooleanv`
+`glGetError` | `glGetFloatv` | `glGetFramebufferAttachmentParameteriv`
+`glGetIntegerv` | `glGetProgramInfoLog` | `glGetProgramiv`
+`glGetRenderbufferParameteriv` | `glGetShaderInfoLog` | `glGetShaderiv`
+`glGetString` | `glGetStringi` | `glGetUniformLocation`
 `glHint` | `glIsBuffer` | `glIsEnabled`
 `glIsFramebuffer` | `glIsProgram` | `glIsRenderbuffer`
 `glIsShader` | `glIsTexture` | `glIsVertexArray`
-`glLineWidth` | `glLinkProgram` | `glPixelStorei`
-`glPolygonOffset` | `glReadPixels` | `glRenderbufferStorage`
-`glRenderbufferStorageMultisample` | `glSampleCoverage` | `glScissor`
-`glShaderSource` | `glStencilFunc` | `glStencilMask`
-`glStencilOp` | `glTexImage2D` | `glTexParameterf`
-`glTexParameterfv` | `glTexParameteri` | `glTexParameteriv`
-`glTexSubImage2D` | `glUniform1f` | `glUniform1fv`
-`glUniform1i` | `glUniform1iv` | `glUniform1ui`
-`glUniform1uiv` | `glUniform2f` | `glUniform2fv`
-`glUniform2i` | `glUniform2iv` | `glUniform2ui`
-`glUniform2uiv` | `glUniform3f` | `glUniform3fv`
-`glUniform3i` | `glUniform3iv` | `glUniform3ui`
-`glUniform3uiv` | `glUniform4f` | `glUniform4fv`
-`glUniform4i` | `glUniform4iv` | `glUniform4ui`
-`glUniform4uiv` | `glUniformMatrix2fv` | `glUniformMatrix2x3fv`
-`glUniformMatrix2x4fv` | `glUniformMatrix3fv` | `glUniformMatrix3x2fv`
-`glUniformMatrix3x4fv` | `glUniformMatrix4fv` | `glUniformMatrix4x2fv`
-`glUniformMatrix4x3fv` | `glUseProgram` | `glVertexAttribPointer`
-`glViewport`
+`glLineWidth` | `glLinkProgram` | `glMapBufferRange`
+`glPixelStorei` | `glPolygonOffset` | `glReadPixels`
+`glRenderbufferStorage` | `glRenderbufferStorageMultisample` | `glSampleCoverage`
+`glScissor` | `glShaderSource` | `glStencilFunc`
+`glStencilMask` | `glStencilOp` | `glTexImage2D`
+`glTexImage3D` | `glTexParameterf` | `glTexParameterfv`
+`glTexParameteri` | `glTexParameteriv` | `glTexStorage2D`
+`glTexStorage3D` | `glTexSubImage2D` | `glTexSubImage3D`
+`glUniform1f` | `glUniform1fv` | `glUniform1i`
+`glUniform1iv` | `glUniform1ui` | `glUniform1uiv`
+`glUniform2f` | `glUniform2fv` | `glUniform2i`
+`glUniform2iv` | `glUniform2ui` | `glUniform2uiv`
+`glUniform3f` | `glUniform3fv` | `glUniform3i`
+`glUniform3iv` | `glUniform3ui` | `glUniform3uiv`
+`glUniform4f` | `glUniform4fv` | `glUniform4i`
+`glUniform4iv` | `glUniform4ui` | `glUniform4uiv`
+`glUniformMatrix2fv` | `glUniformMatrix2x3fv` | `glUniformMatrix2x4fv`
+`glUniformMatrix3fv` | `glUniformMatrix3x2fv` | `glUniformMatrix3x4fv`
+`glUniformMatrix4fv` | `glUniformMatrix4x2fv` | `glUniformMatrix4x3fv`
+`glUnmapBuffer` | `glUseProgram` | `glVertexAttribIPointer`
+`glVertexAttribPointer` | `glViewport`
 
-### partial — spec-legitimate no-op / default query, NO error, outputs initialized (110)
+### partial — spec-legitimate no-op / default query, NO error, outputs initialized (137)
 
-Matches gl_shim.c's degraded behavior. Introspection getters return spec defaults (0/empty); `glIs*`/location/index queries return the correct not-found sentinel (`GL_FALSE` / `-1` / `GL_INVALID_INDEX`); optional state (constant vertex attribs, separate-stencil, debug labels, hints) no-ops; `glDelete*` of never-issued objects is silently ignored per spec. Sentinel-returning members: .
+Matches gl_shim.c's degraded behavior. Sentinel-returning members: .
 
-`eglSurfaceAttrib` | `glBindAttribLocation` | `glBlendBarrier`
-`glColorMaski` | `glDebugMessageCallback` | `glDebugMessageControl`
-`glDebugMessageInsert` | `glDeleteProgramPipelines` | `glDeleteQueries`
-`glDeleteSamplers` | `glDeleteSync` | `glDeleteTransformFeedbacks`
-`glDisablei` | `glEnablei` | `glGetActiveAttrib`
+`eglSurfaceAttrib` | `glBeginQuery` | `glBeginTransformFeedback`
+`glBindAttribLocation` | `glBindBufferBase` | `glBindBufferRange`
+`glBindSampler` | `glBindTransformFeedback` | `glBlendBarrier`
+`glClearBufferfi` | `glClearBufferiv` | `glClearBufferuiv`
+`glColorMaski` | `glCompressedTexImage2D` | `glCompressedTexImage3D`
+`glCompressedTexSubImage2D` | `glCompressedTexSubImage3D` | `glCopyTexSubImage3D`
+`glDebugMessageCallback` | `glDebugMessageControl` | `glDebugMessageInsert`
+`glDeleteProgramPipelines` | `glDeleteQueries` | `glDeleteSamplers`
+`glDeleteSync` | `glDeleteTransformFeedbacks` | `glDisablei`
+`glDrawBuffers` | `glEnablei` | `glEndQuery`
+`glEndTransformFeedback` | `glFlushMappedBufferRange` | `glGetActiveAttrib`
 `glGetActiveUniform` | `glGetActiveUniformBlockName` | `glGetActiveUniformBlockiv`
 `glGetActiveUniformsiv` | `glGetAttachedShaders` | `glGetBooleani_v`
 `glGetBufferParameteri64v` | `glGetBufferParameteriv` | `glGetBufferPointerv`
@@ -139,83 +168,65 @@ Matches gl_shim.c's degraded behavior. Introspection getters return spec default
 `glIsSampler` | `glIsSync` | `glIsTransformFeedback`
 `glMemoryBarrier` | `glMemoryBarrierByRegion` | `glMinSampleShading`
 `glObjectLabel` | `glObjectPtrLabel` | `glPatchParameteri`
-`glPopDebugGroup` | `glPrimitiveBoundingBox` | `glProgramParameteri`
-`glPushDebugGroup` | `glReleaseShaderCompiler` | `glSampleMaski`
-`glStencilFuncSeparate` | `glStencilMaskSeparate` | `glStencilOpSeparate`
-`glValidateProgram` | `glValidateProgramPipeline` | `glVertexAttrib1f`
-`glVertexAttrib1fv` | `glVertexAttrib2f` | `glVertexAttrib2fv`
-`glVertexAttrib3f` | `glVertexAttrib3fv` | `glVertexAttrib4f`
-`glVertexAttrib4fv` | `glVertexAttribI4i` | `glVertexAttribI4iv`
+`glPopDebugGroup` | `glPrimitiveBoundingBox` | `glProgramBinary`
+`glProgramParameteri` | `glPushDebugGroup` | `glReadBuffer`
+`glReleaseShaderCompiler` | `glSampleMaski` | `glSamplerParameterf`
+`glSamplerParameterfv` | `glSamplerParameteri` | `glSamplerParameteriv`
+`glShaderBinary` | `glStencilFuncSeparate` | `glStencilMaskSeparate`
+`glStencilOpSeparate` | `glUniformBlockBinding` | `glValidateProgram`
+`glValidateProgramPipeline` | `glVertexAttrib1f` | `glVertexAttrib1fv`
+`glVertexAttrib2f` | `glVertexAttrib2fv` | `glVertexAttrib3f`
+`glVertexAttrib3fv` | `glVertexAttrib4f` | `glVertexAttrib4fv`
+`glVertexAttribDivisor` | `glVertexAttribI4i` | `glVertexAttribI4iv`
 `glVertexAttribI4ui` | `glVertexAttribI4uiv`
 
-### stub — unsupported operation: raises API-correct error, zeroes outputs, returns failure value, aborts under DD_SHIM_STRICT (126)
+### stub — unsupported: raises API-correct error, zeroes outputs, aborts under DD_SHIM_STRICT (83)
 
-These do real work in a conforming driver; the shim does NOT implement them, so they FAIL truthfully instead of silently degrading. GL stubs raise `GL_INVALID_OPERATION` (`glShaderBinary`: `GL_INVALID_ENUM`); EGL stubs raise `EGL_BAD_ACCESS`. Families: transform feedback, occlusion/sync objects, sampler objects, program pipelines/separable `glProgramUniform*`, compute/indirect draws, immutable/3D/compressed/copy textures, buffer mapping, UBO binding (`glBindBufferBase/Range`, `glUniformBlockBinding`), MRT clears, instanced-vertex/format-binding attribs, and the EGL image/sync/platform-surface family.
-
-**GL stubs (111):**
-
-`glActiveShaderProgram` | `glBeginQuery` | `glBeginTransformFeedback`
-`glBindBufferBase` | `glBindBufferRange` | `glBindImageTexture`
-`glBindProgramPipeline` | `glBindSampler` | `glBindTransformFeedback`
-`glBindVertexBuffer` | `glClearBufferfi` | `glClearBufferiv`
-`glClearBufferuiv` | `glClientWaitSync` | `glCompressedTexImage2D`
-`glCompressedTexImage3D` | `glCompressedTexSubImage2D` | `glCompressedTexSubImage3D`
-`glCopyBufferSubData` | `glCopyImageSubData` | `glCopyTexImage2D`
-`glCopyTexSubImage2D` | `glCopyTexSubImage3D` | `glCreateShaderProgramv`
-`glDispatchCompute` | `glDispatchComputeIndirect` | `glDrawArraysIndirect`
-`glDrawBuffers` | `glDrawElementsBaseVertex` | `glDrawElementsIndirect`
-`glDrawElementsInstancedBaseVertex` | `glDrawRangeElements` | `glDrawRangeElementsBaseVertex`
-`glEndQuery` | `glEndTransformFeedback` | `glFenceSync`
-`glFlushMappedBufferRange` | `glFramebufferParameteri` | `glFramebufferTexture`
-`glGenProgramPipelines` | `glGenQueries` | `glGenSamplers`
-`glGenTransformFeedbacks` | `glGetStringi` | `glMapBufferRange`
-`glPauseTransformFeedback` | `glProgramBinary` | `glProgramUniform1f`
-`glProgramUniform1fv` | `glProgramUniform1i` | `glProgramUniform1iv`
-`glProgramUniform1ui` | `glProgramUniform1uiv` | `glProgramUniform2f`
-`glProgramUniform2fv` | `glProgramUniform2i` | `glProgramUniform2iv`
-`glProgramUniform2ui` | `glProgramUniform2uiv` | `glProgramUniform3f`
-`glProgramUniform3fv` | `glProgramUniform3i` | `glProgramUniform3iv`
-`glProgramUniform3ui` | `glProgramUniform3uiv` | `glProgramUniform4f`
-`glProgramUniform4fv` | `glProgramUniform4i` | `glProgramUniform4iv`
-`glProgramUniform4ui` | `glProgramUniform4uiv` | `glProgramUniformMatrix2fv`
-`glProgramUniformMatrix2x3fv` | `glProgramUniformMatrix2x4fv` | `glProgramUniformMatrix3fv`
-`glProgramUniformMatrix3x2fv` | `glProgramUniformMatrix3x4fv` | `glProgramUniformMatrix4fv`
-`glProgramUniformMatrix4x2fv` | `glProgramUniformMatrix4x3fv` | `glReadBuffer`
-`glReadnPixels` | `glResumeTransformFeedback` | `glSamplerParameterIiv`
-`glSamplerParameterIuiv` | `glSamplerParameterf` | `glSamplerParameterfv`
-`glSamplerParameteri` | `glSamplerParameteriv` | `glShaderBinary`
-`glTexBuffer` | `glTexBufferRange` | `glTexImage3D`
-`glTexParameterIiv` | `glTexParameterIuiv` | `glTexStorage2D`
-`glTexStorage2DMultisample` | `glTexStorage3D` | `glTexStorage3DMultisample`
-`glTexSubImage3D` | `glTransformFeedbackVaryings` | `glUniformBlockBinding`
-`glUnmapBuffer` | `glUseProgramStages` | `glVertexAttribBinding`
-`glVertexAttribDivisor` | `glVertexAttribFormat` | `glVertexAttribIFormat`
-`glVertexAttribIPointer` | `glVertexBindingDivisor` | `glWaitSync`
-
-**EGL stubs (15):**
+GL stubs raise `GL_INVALID_OPERATION`; EGL stubs raise `EGL_BAD_ACCESS`. Remaining families: transform-feedback results, occlusion/sync objects (ES3, host-unbacked), program pipelines / separable `glProgramUniform*`, compute/indirect draws, image load/store, memory barriers, and the EGL image/sync/pixmap-surface family (reported as a lower coherent surface per the audit).
 
 `eglBindTexImage` | `eglClientWaitSync` | `eglCopyBuffers`
 `eglCreateImage` | `eglCreatePbufferFromClientBuffer` | `eglCreatePixmapSurface`
 `eglCreatePlatformPixmapSurface` | `eglCreatePlatformWindowSurface` | `eglCreateSync`
-`eglDestroyImage` | `eglDestroySync` | `eglGetPlatformDisplay`
-`eglGetSyncAttrib` | `eglReleaseTexImage` | `eglWaitSync`
+`eglDestroyImage` | `eglDestroySync` | `eglGetSyncAttrib`
+`eglReleaseTexImage` | `eglWaitSync` | `glActiveShaderProgram`
+`glBindImageTexture` | `glBindProgramPipeline` | `glBindVertexBuffer`
+`glClientWaitSync` | `glCopyImageSubData` | `glCreateShaderProgramv`
+`glDispatchCompute` | `glDispatchComputeIndirect` | `glDrawArraysIndirect`
+`glDrawElementsBaseVertex` | `glDrawElementsIndirect` | `glDrawElementsInstancedBaseVertex`
+`glDrawRangeElementsBaseVertex` | `glFenceSync` | `glFramebufferParameteri`
+`glFramebufferTexture` | `glGenProgramPipelines` | `glPauseTransformFeedback`
+`glProgramUniform1f` | `glProgramUniform1fv` | `glProgramUniform1i`
+`glProgramUniform1iv` | `glProgramUniform1ui` | `glProgramUniform1uiv`
+`glProgramUniform2f` | `glProgramUniform2fv` | `glProgramUniform2i`
+`glProgramUniform2iv` | `glProgramUniform2ui` | `glProgramUniform2uiv`
+`glProgramUniform3f` | `glProgramUniform3fv` | `glProgramUniform3i`
+`glProgramUniform3iv` | `glProgramUniform3ui` | `glProgramUniform3uiv`
+`glProgramUniform4f` | `glProgramUniform4fv` | `glProgramUniform4i`
+`glProgramUniform4iv` | `glProgramUniform4ui` | `glProgramUniform4uiv`
+`glProgramUniformMatrix2fv` | `glProgramUniformMatrix2x3fv` | `glProgramUniformMatrix2x4fv`
+`glProgramUniformMatrix3fv` | `glProgramUniformMatrix3x2fv` | `glProgramUniformMatrix3x4fv`
+`glProgramUniformMatrix4fv` | `glProgramUniformMatrix4x2fv` | `glProgramUniformMatrix4x3fv`
+`glReadnPixels` | `glResumeTransformFeedback` | `glSamplerParameterIiv`
+`glSamplerParameterIuiv` | `glTexBuffer` | `glTexBufferRange`
+`glTexParameterIiv` | `glTexParameterIuiv` | `glTexStorage2DMultisample`
+`glTexStorage3DMultisample` | `glTransformFeedbackVaryings` | `glUseProgramStages`
+`glVertexAttribBinding` | `glVertexAttribFormat` | `glVertexAttribIFormat`
+`glVertexBindingDivisor` | `glWaitSync`
 
-## (b) Real bodies still needed (highest app impact, currently `stub`)
+## Remaining `stub` families (next promotions / honest gaps)
 
-These do meaningful work in gl_shim.c; today they fail truthfully (raise `GL_INVALID_OPERATION`).
-Ordered by app impact — these are the next `stub`->`full` ports:
+- **ES3 sync & queries** (`glFenceSync`/`glClientWaitSync`/`glWaitSync`, occlusion `glBeginQuery` result
+  path): host-unbacked; kept as truthful stubs rather than gl_shim.c's fake-signaled returns, since ES3
+  is a `DD_SHIM_ES3` opt-in and advertising working sync would be false.
+- **Transform feedback capture, program pipelines / separable `glProgramUniform*`, compute / indirect
+  dispatch, image load/store, memory barriers.**
+- **EGL image / sync / pixmap-surface family** (`eglCreateImage`, `eglCreateSync`,
+  `eglCreatePixmapSurface`, `eglBindTexImage`, …): reported as a *lower coherent EGL surface* (truthful
+  failure) per audit section 2.1, rather than gl_shim.c's fake success handles.
 
-1. **Texture storage / 3D / compressed** — `glTexStorage2D`/`3D`, `glTexImage3D`/`glTexSubImage3D`,
-   `glCompressedTexImage2D`/`…`. Used by GTK4 / Chrome for immutable textures.
-2. **Pixel readback** — `glReadnPixels` (bounded `glReadPixels`); needs a synchronous round-trip.
-3. **Buffer mapping / UBO binding** — `glMapBufferRange`/`glUnmapBuffer`/`glFlushMappedBufferRange`,
-   `glBindBufferRange`/`glBindBufferBase`/`glUniformBlockBinding` (GTK4/Chrome ES3 path).
+## GLES 3.0 assessment (cross-cutting)
 
-## GLES 3.0 assessment (cross-cutting, not implemented)
-
-GTK4's `GskGLRenderer`/`GskNglRenderer` take the GPU path only against an **ES 3.0** context and upload
-**half-float** vertex data. Making ES3 real is a three-layer change (guest gl_shim.c + guest dd-shim-gl
-+ host dd-gpu/Metal): advertise ES3 (guest, gated by `DD_SHIM_ES3`), then real UBO binding + the
-half-float vertex format (a coordinated guest+host change to `wireenc` + the dd-gpu `VertexFormat` enum
-+ Metal descriptor). Until those land, the shim advertises ES2 by default (GTK falls back to software,
-correctly) rather than claiming ES3 the host can't back — see the advertisement section above.
+GTK4's `GskGLRenderer` needs an ES3 context + half-float vertex data. The guest advertises ES3 under
+`DD_SHIM_ES3`; making it real still requires host-side work (a coordinated dd-gpu `VertexFormat`
+half-float addition + Metal descriptor) and the remaining ES3 stub families above. Until then the shim
+advertises ES2 by default (GTK falls back to software, correctly).

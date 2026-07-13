@@ -55,6 +55,14 @@ pub extern "C" fn eglGetDisplay(_native_display: *mut c_void) -> *mut c_void {
     1 as *mut c_void
 }
 
+/// `eglGetPlatformDisplay` (EGL 1.5 / EGL_EXT_platform_base) — the modern display-open entry point most
+/// toolkits (GTK4, Qt, SDL) use instead of `eglGetDisplay`. Resolves to the same single display handle
+/// (gl_shim.c parity), so the rest of the display/config/context lifecycle proceeds unchanged.
+#[no_mangle]
+pub extern "C" fn eglGetPlatformDisplay(_platform: u32, _native: *mut c_void, _attrib_list: *const isize) -> *mut c_void {
+    1 as *mut c_void
+}
+
 /// `eglInitialize` — succeeds, reporting EGL 1.4.
 #[no_mangle]
 pub extern "C" fn eglInitialize(_dpy: *mut c_void, major: *mut i32, minor: *mut i32) -> u32 {

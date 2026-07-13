@@ -22,9 +22,23 @@
 use std::fmt::Write as _;
 use std::path::PathBuf;
 
-/// Backed GL extensions the shim advertises via `glGetString(GL_EXTENSIONS)` — only ones the real
-/// bodies + host executor actually implement (capability honesty; see the advertisement block below).
-const BACKED_GL_EXTENSIONS: &[&str] = &["GL_OES_element_index_uint", "GL_OES_texture_npot"];
+/// Backed GL extensions the shim advertises via `glGetString(GL_EXTENSIONS)` / `glGetStringi` — the
+/// exact set the gl_shim.c oracle advertises, each backed by a real body: BGRA8888 texture upload
+/// (`tex_store_pixels`), immutable texture storage (`glTexStorage2D`, now full), RGBA8 renderbuffer
+/// storage, NPOT textures, and multisample renderbuffers (`glRenderbufferStorageMultisample`). Driving
+/// both string queries from this one list keeps `glGetString`/`glGetStringi`/`GL_NUM_EXTENSIONS`
+/// mutually consistent (capability honesty; the audit flagged ad-hoc extension reporting).
+const BACKED_GL_EXTENSIONS: &[&str] = &[
+    "GL_EXT_texture_format_BGRA8888",
+    "GL_APPLE_texture_format_BGRA8888",
+    "GL_EXT_texture_storage",
+    "GL_OES_rgb8_rgba8",
+    "GL_OES_texture_npot",
+    "GL_EXT_sRGB",
+    "GL_EXT_sRGB_write_control",
+    "GL_ANGLE_framebuffer_multisample",
+    "GL_ANGLE_texture_usage",
+];
 
 /// The lowest coherent GLES profile the real bodies back. NOT ES3: the ES3 core additions (UBO
 /// binding, transform feedback, fence sync, sampler objects, immutable/3D textures, MRT) are all
@@ -143,6 +157,13 @@ fn main() {
     writeln!(out, "pub const ADVERTISED_GL_EXTENSIONS_STR: &str = {ext_join:?};").unwrap();
     writeln!(out, "/// Number of advertised extensions (`glGetIntegerv(GL_NUM_EXTENSIONS)`).").unwrap();
     writeln!(out, "pub const ADVERTISED_GL_EXTENSION_COUNT: usize = {};", BACKED_GL_EXTENSIONS.len()).unwrap();
+    writeln!(out, "/// The advertised extensions as individual NUL-terminated byte strings, for the indexed").unwrap();
+    writeln!(out, "/// `glGetStringi(GL_EXTENSIONS, i)` query (kept in lockstep with the space-joined string above).").unwrap();
+    write!(out, "pub const ADVERTISED_GL_EXTENSIONS_LIST: &[&[u8]] = &[").unwrap();
+    for e in BACKED_GL_EXTENSIONS {
+        write!(out, "b\"{e}\\0\", ").unwrap();
+    }
+    writeln!(out, "];").unwrap();
     writeln!(out, "/// Advertised GLES major version (the coherent profile).").unwrap();
     writeln!(out, "pub const ADVERTISED_GL_MAJOR: i32 = {ADVERTISED_GL_MAJOR};").unwrap();
     writeln!(out, "/// Advertised GLES minor version.").unwrap();
@@ -190,12 +211,7 @@ fn stub_error(lib: &str, name: &str, level: Level) -> u32 {
     if level != Level::Stub {
         return 0;
     }
-    // Per-symbol overrides where a specific error is unambiguously correct.
-    match name {
-        // No shader-binary formats are advertised -> GL_INVALID_ENUM (spec).
-        "glShaderBinary" => return 0x0500, // GL_INVALID_ENUM
-        _ => {}
-    }
+    let _ = name;
     if lib == "EGL" {
         0x3002 // EGL_BAD_ACCESS
     } else {
@@ -641,6 +657,30 @@ const IMPLEMENTED: &[&str] = &[
     "glBlitFramebuffer",
     "glReadPixels",
     "glClearBufferfv",
+    // ---- Phase 4.1: coherent-GLES2 promotions (real bodies ported from gl_shim.c) ----
+    // texture: immutable storage + 3D/array upload + copy-from-framebuffer
+    "glTexStorage2D",
+    "glTexStorage3D",
+    "glTexImage3D",
+    "glTexSubImage3D",
+    "glCopyTexImage2D",
+    "glCopyTexSubImage2D",
+    // buffer: mapping (functional pointer into buffer storage) + copy
+    "glMapBufferRange",
+    "glUnmapBuffer",
+    "glCopyBufferSubData",
+    // vertex: integer attribute arrays
+    "glVertexAttribIPointer",
+    // strings: indexed extension enumeration (served from the same inventory list)
+    "glGetStringi",
+    // draw: range-elements delegates to glDrawElements
+    "glDrawRangeElements",
+    // ES3 object-name allocators (monotonic ids; objects are documented partial no-ops)
+    "glGenQueries",
+    "glGenSamplers",
+    "glGenTransformFeedbacks",
+    // EGL: modern platform-display open (delegates to the eglGetDisplay lifecycle)
+    "eglGetPlatformDisplay",
 ];
 
 /// Subset of `IMPLEMENTED` whose real body targets an ES 3.0 core feature (for the inventory's `since`
@@ -670,6 +710,19 @@ const ES3_FULL: &[&str] = &[
     "glUniformMatrix4x2fv",
     "glUniformMatrix3x4fv",
     "glUniformMatrix4x3fv",
+    // Phase 4.1 ES3-core promotions (glTexStorage2D/glCopyTex*2D are ES2-reachable via extensions).
+    "glTexStorage3D",
+    "glTexImage3D",
+    "glTexSubImage3D",
+    "glMapBufferRange",
+    "glUnmapBuffer",
+    "glCopyBufferSubData",
+    "glVertexAttribIPointer",
+    "glGetStringi",
+    "glDrawRangeElements",
+    "glGenQueries",
+    "glGenSamplers",
+    "glGenTransformFeedbacks",
 ];
 
 /// Generated entry points that are a `partial`: a spec-legitimate no-op or default-return that matches
@@ -793,6 +846,43 @@ const PARTIAL: &[&str] = &[
     "glDeleteTransformFeedbacks",
     // --- EGL: benign attribute set (swap behavior / mip hint) ---
     "eglSurfaceAttrib",
+    // --- Phase 4.1: reclassified stub->partial to match gl_shim.c's deliberate no-ops (byte-parity;
+    //     these raise no error because the oracle performs no work either — an error would DIVERGE) ---
+    // UBO binding: uniforms flow through the translator's default `[[buffer(1)]]` block, so the explicit
+    // binding calls are correct no-ops (gl_shim.c).
+    "glBindBufferBase",
+    "glBindBufferRange",
+    "glUniformBlockBinding",
+    "glFlushMappedBufferRange",
+    // single color target / no MRT: draw-buffer + integer/depth-stencil clears no-op (glClearBufferfv is full)
+    "glDrawBuffers",
+    "glReadBuffer",
+    "glClearBufferiv",
+    "glClearBufferuiv",
+    "glClearBufferfi",
+    // instancing collapses to one instance, so the per-attribute divisor is a no-op (as in gl_shim.c)
+    "glVertexAttribDivisor",
+    // compressed / 3D-copy texture upload is not decoded (gl_shim.c no-ops; leaves the RGBA8 plane)
+    "glCompressedTexImage2D",
+    "glCompressedTexImage3D",
+    "glCompressedTexSubImage2D",
+    "glCompressedTexSubImage3D",
+    "glCopyTexSubImage3D",
+    // sampler objects carry no state; filtering uses the texture's own params (gl_shim.c no-ops these)
+    "glBindSampler",
+    "glSamplerParameteri",
+    "glSamplerParameterf",
+    "glSamplerParameteriv",
+    "glSamplerParameterfv",
+    // queries / transform feedback: begin/end/bind are no-ops (the object names come from the full glGen*)
+    "glBeginQuery",
+    "glEndQuery",
+    "glBindTransformFeedback",
+    "glBeginTransformFeedback",
+    "glEndTransformFeedback",
+    // program binary + shader binary: no binary formats advertised, so load is a no-op (gl_shim.c)
+    "glProgramBinary",
+    "glShaderBinary",
 ];
 
 /// `partial` queries whose "not found" answer is a non-zero sentinel (returning 0 would be a false

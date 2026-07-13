@@ -49,6 +49,8 @@ pub const GL_SCISSOR_TEST: u32 = 0x0C11;
 
 // texture
 pub const GL_TEXTURE_2D: u32 = 0x0DE1;
+pub const GL_TEXTURE_3D: u32 = 0x806F;
+pub const GL_TEXTURE_2D_ARRAY: u32 = 0x8C1A;
 pub const GL_TEXTURE0: u32 = 0x84C0;
 pub const GL_RGBA: u32 = 0x1908;
 pub const GL_RGB: u32 = 0x1907;

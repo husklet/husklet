@@ -251,6 +251,11 @@ pub struct GlState {
     pub vao: Vec<Vao>,
     pub cur_vao: u32,
     pub vao_seq: u32,
+    /// Monotonic name allocators for objects the shim tracks by id only (no backing state), matching
+    /// gl_shim.c's `g_samp_seq`/`g_query_seq`/`g_xfb_seq` (all start at 1).
+    pub samp_seq: u32,
+    pub query_seq: u32,
+    pub xfb_seq: u32,
 
     pub tex_unit: [u32; 8], // texture bound per active unit (GL_TEXTURE_2D)
     pub active_unit: usize,
@@ -323,6 +328,9 @@ impl Default for GlState {
             vao: vec![Vao::default(); MAXVAO],
             cur_vao: 0,
             vao_seq: 1,
+            samp_seq: 1,
+            query_seq: 1,
+            xfb_seq: 1,
             tex_unit: [0; 8],
             active_unit: 0,
             unpack_alignment: 4,
@@ -535,6 +543,23 @@ impl GlState {
             }
         }
         self.tex[t].gen += 1;
+    }
+
+    /// Allocate zeroed RGBA8 storage for a live texture (gl_shim.c `tex_alloc_rgba`) — returns whether
+    /// storage was (re)allocated. Used by immutable storage (`glTexStorage*`), 3D/array upload
+    /// (`glTexImage3D`), and copy-from-framebuffer (`glCopyTexImage2D`).
+    pub fn tex_alloc_rgba(&mut self, id: u32, w: i32, h: i32) -> bool {
+        let i = id as usize;
+        if id == 0 || i >= MAXTEX || !self.tex[i].used || w <= 0 || h <= 0 {
+            return false;
+        }
+        let sz = (w as usize) * (h as usize) * 4;
+        let t = &mut self.tex[i];
+        t.data = vec![0u8; sz];
+        t.w = w;
+        t.h = h;
+        t.gen += 1;
+        true
     }
 
     /// CPU-side textured rect blit (gl_shim.c `copy_texture_rect`) — for `glBlitFramebuffer`.

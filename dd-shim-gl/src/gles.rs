@@ -67,6 +67,19 @@ pub extern "C" fn glGetString(name: u32) -> *const u8 {
     s as *const u8
 }
 
+/// `glGetStringi(GL_EXTENSIONS, i)` — the indexed extension query (ES3 / GL_NUM_EXTENSIONS path). Served
+/// from the SAME inventory list as `glGetString(GL_EXTENSIONS)` (gl_shim.c parity), so the two never
+/// disagree. Out-of-range / non-EXTENSIONS queries return the empty string.
+#[no_mangle]
+pub extern "C" fn glGetStringi(name: u32, index: u32) -> *const u8 {
+    if name == 0x1F03 {
+        if let Some(ext) = crate::ADVERTISED_GL_EXTENSIONS_LIST.get(index as usize) {
+            return ext.as_ptr();
+        }
+    }
+    cstr!("") as *const u8
+}
+
 // ===================================================================================================
 // scalar state + queries
 // ===================================================================================================
@@ -385,6 +398,111 @@ pub extern "C" fn glIsBuffer(b: u32) -> u8 {
     (b != 0 && (b as usize) < MAXBUF && s.buf[b as usize].used) as u8
 }
 
+/// `glMapBufferRange` — FUNCTIONAL, byte-identical to gl_shim.c: hand back a pointer INTO the bound
+/// buffer's storage (growing it to `offset+length` if needed). The app writes through the pointer; the
+/// matching `glUnmapBuffer` bumps the buffer's `gen` so the swap-time upload re-ships the new bytes.
+/// The pointer stays valid until the buffer's `Vec` reallocates (same fragile contract as the C shim).
+#[no_mangle]
+pub extern "C" fn glMapBufferRange(target: u32, offset: isize, length: isize, _access: u32) -> *mut c_void {
+    if offset < 0 || length < 0 {
+        return core::ptr::null_mut();
+    }
+    let mut s = gl();
+    let b = if target == GL_ELEMENT_ARRAY_BUFFER { s.elem_buf } else { s.arr_buf } as usize;
+    if b >= MAXBUF || !s.buf[b].used {
+        return core::ptr::null_mut();
+    }
+    let need = (offset + length) as usize;
+    if s.buf[b].data.len() < need {
+        s.buf[b].data.resize(need, 0);
+    }
+    unsafe { s.buf[b].data.as_mut_ptr().add(offset as usize) as *mut c_void }
+}
+
+/// `glUnmapBuffer` — mark the bound buffer dirty (gl_shim.c bumps `gen`, returns GL_TRUE).
+#[no_mangle]
+pub extern "C" fn glUnmapBuffer(target: u32) -> u8 {
+    let mut s = gl();
+    let b = if target == GL_ELEMENT_ARRAY_BUFFER { s.elem_buf } else { s.arr_buf } as usize;
+    if b < MAXBUF && s.buf[b].used {
+        s.buf[b].gen += 1;
+    }
+    GL_TRUE
+}
+
+/// `glCopyBufferSubData` — memmove between (possibly the same) bound buffers (gl_shim.c parity).
+#[no_mangle]
+pub extern "C" fn glCopyBufferSubData(read_target: u32, write_target: u32, read_off: isize, write_off: isize, size: isize) {
+    if read_off < 0 || write_off < 0 || size < 0 {
+        return;
+    }
+    let mut s = gl();
+    let rb = if read_target == GL_ELEMENT_ARRAY_BUFFER { s.elem_buf } else { s.arr_buf } as usize;
+    let wb = if write_target == GL_ELEMENT_ARRAY_BUFFER { s.elem_buf } else { s.arr_buf } as usize;
+    let (ro, wo, n) = (read_off as usize, write_off as usize, size as usize);
+    if rb >= MAXBUF || wb >= MAXBUF || s.buf[rb].data.is_empty() || s.buf[wb].data.is_empty() {
+        return;
+    }
+    if ro + n > s.buf[rb].data.len() || wo + n > s.buf[wb].data.len() {
+        return;
+    }
+    if rb == wb {
+        s.buf[wb].data.copy_within(ro..ro + n, wo);
+    } else {
+        let src = s.buf[rb].data[ro..ro + n].to_vec();
+        s.buf[wb].data[wo..wo + n].copy_from_slice(&src);
+    }
+    s.buf[wb].gen += 1;
+}
+
+// ===================================================================================================
+// ES3 object-name allocators (samplers / queries / transform feedbacks)
+//
+// gl_shim.c hands out monotonic names from `g_samp_seq`/`g_query_seq`/`g_xfb_seq` (all from 1). The
+// objects themselves carry no backing state — their bind/param/begin/end entry points are documented
+// no-ops (`partial`) — but returning REAL names (not 0) is what lets an app's bookkeeping proceed, so
+// these allocators are full bodies at gl_shim.c parity.
+// ===================================================================================================
+
+#[no_mangle]
+pub extern "C" fn glGenSamplers(n: i32, out: *mut u32) {
+    if out.is_null() || n < 0 {
+        return;
+    }
+    let mut s = gl();
+    for k in 0..n as usize {
+        let id = s.samp_seq;
+        s.samp_seq += 1;
+        unsafe { *out.add(k) = id };
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn glGenQueries(n: i32, out: *mut u32) {
+    if out.is_null() || n < 0 {
+        return;
+    }
+    let mut s = gl();
+    for k in 0..n as usize {
+        let id = s.query_seq;
+        s.query_seq += 1;
+        unsafe { *out.add(k) = id };
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn glGenTransformFeedbacks(n: i32, out: *mut u32) {
+    if out.is_null() || n < 0 {
+        return;
+    }
+    let mut s = gl();
+    for k in 0..n as usize {
+        let id = s.xfb_seq;
+        s.xfb_seq += 1;
+        unsafe { *out.add(k) = id };
+    }
+}
+
 // ===================================================================================================
 // textures
 // ===================================================================================================
@@ -485,6 +603,100 @@ pub extern "C" fn glTexSubImage2D(
     let src = unsafe { pixels_slice(pixels, w, h, fmt, &s) };
     s.tex_store_pixels(t, xo, yo, w, h, fmt, src.as_deref());
     s.tex[t as usize].gen += 1;
+}
+
+/// `glTexStorage2D` — immutable-storage allocation. gl_shim.c mirrors glTexImage2D's RGBA8 alloc so a
+/// later glTexSubImage2D has a target; format/levels are not otherwise backed.
+#[no_mangle]
+pub extern "C" fn glTexStorage2D(target: u32, _levels: i32, _ifmt: u32, w: i32, h: i32) {
+    let mut s = gl();
+    let t = s.bound_tex();
+    if target == GL_TEXTURE_2D && (t as usize) < MAXTEX && t != 0 && s.tex[t as usize].used && w > 0 && h > 0 {
+        let size = (w as usize) * (h as usize) * 4;
+        let tex = &mut s.tex[t as usize];
+        tex.w = w;
+        tex.h = h;
+        tex.data = vec![0u8; size];
+        tex.gen += 1;
+    }
+}
+
+/// `glTexStorage3D` — 2D-array / 3D immutable storage; gl_shim.c allocates the layer-0 RGBA8 plane.
+#[no_mangle]
+pub extern "C" fn glTexStorage3D(target: u32, _levels: i32, _ifmt: u32, w: i32, h: i32, _d: i32) {
+    let mut s = gl();
+    let t = s.bound_tex();
+    if (target == GL_TEXTURE_2D_ARRAY || target == GL_TEXTURE_3D) && s.tex.get(t as usize).map(|x| x.used).unwrap_or(false) {
+        s.tex_alloc_rgba(t, w, h);
+    }
+}
+
+/// `glTexImage3D` — 2D-array / 3D upload; gl_shim.c allocates RGBA8 and stores the layer-0 plane.
+#[no_mangle]
+#[allow(clippy::too_many_arguments)]
+pub extern "C" fn glTexImage3D(target: u32, level: i32, _ifmt: i32, w: i32, h: i32, d: i32, _border: i32, fmt: u32, _typ: u32, pixels: *const c_void) {
+    let mut s = gl();
+    let t = s.bound_tex();
+    if level != 0 || (target != GL_TEXTURE_2D_ARRAY && target != GL_TEXTURE_3D) || !s.tex.get(t as usize).map(|x| x.used).unwrap_or(false) {
+        return;
+    }
+    if !s.tex_alloc_rgba(t, w, h) {
+        return;
+    }
+    if !pixels.is_null() && d > 0 {
+        let src = unsafe { pixels_slice(pixels, w, h, fmt, &s) };
+        s.tex_store_pixels(t, 0, 0, w, h, fmt, src.as_deref());
+    }
+}
+
+/// `glTexSubImage3D` — layer-0 sub-image update for a 2D-array / 3D texture (gl_shim.c parity).
+#[no_mangle]
+#[allow(clippy::too_many_arguments)]
+pub extern "C" fn glTexSubImage3D(target: u32, level: i32, xo: i32, yo: i32, zo: i32, w: i32, h: i32, d: i32, fmt: u32, _typ: u32, pixels: *const c_void) {
+    let mut s = gl();
+    let t = s.bound_tex();
+    if level != 0 || zo != 0 || d <= 0 || (target != GL_TEXTURE_2D_ARRAY && target != GL_TEXTURE_3D) {
+        return;
+    }
+    if !s.tex.get(t as usize).map(|x| x.used && !x.data.is_empty()).unwrap_or(false) {
+        return;
+    }
+    let src = unsafe { pixels_slice(pixels, w, h, fmt, &s) };
+    s.tex_store_pixels(t, xo, yo, w, h, fmt, src.as_deref());
+    s.tex[t as usize].gen += 1;
+}
+
+/// `glCopyTexImage2D` — allocate the bound texture and copy a rect from the read framebuffer's color
+/// texture into it (gl_shim.c parity; CPU-side blit).
+#[no_mangle]
+#[allow(clippy::too_many_arguments)]
+pub extern "C" fn glCopyTexImage2D(target: u32, level: i32, _ifmt: u32, x: i32, y: i32, w: i32, h: i32, border: i32) {
+    if target != GL_TEXTURE_2D || level != 0 || border != 0 {
+        return;
+    }
+    let mut s = gl();
+    let dst = s.bound_tex();
+    let src = s.fbo_color_texture(s.read_fbo);
+    if src == 0 || !s.tex_alloc_rgba(dst, w, h) {
+        return;
+    }
+    s.copy_texture_rect(src, dst, x, y, x + w, y + h, 0, 0, w, h);
+}
+
+/// `glCopyTexSubImage2D` — copy a rect from the read framebuffer into an existing bound texture.
+#[no_mangle]
+#[allow(clippy::too_many_arguments)]
+pub extern "C" fn glCopyTexSubImage2D(target: u32, level: i32, xo: i32, yo: i32, x: i32, y: i32, w: i32, h: i32) {
+    if target != GL_TEXTURE_2D || level != 0 || w <= 0 || h <= 0 {
+        return;
+    }
+    let mut s = gl();
+    let dst = s.bound_tex();
+    let src = s.fbo_color_texture(s.read_fbo);
+    if src == 0 || !s.tex.get(dst as usize).map(|t| t.used && !t.data.is_empty()).unwrap_or(false) {
+        return;
+    }
+    s.copy_texture_rect(src, dst, x, y, x + w, y + h, xo, yo, xo + w, yo + h);
 }
 
 /// Reconstruct a bounded read-only copy for a texture upload (row-stride aware), so the state code
@@ -1005,6 +1217,26 @@ pub extern "C" fn glVertexAttribPointer(index: u32, size: i32, kind: u32, normal
     s.vao_store_current();
 }
 
+/// `glVertexAttribIPointer` — integer vertex attribute array (gl_shim.c parity: like
+/// `glVertexAttribPointer` but `integer=1`, `normalized=0`).
+#[no_mangle]
+pub extern "C" fn glVertexAttribIPointer(index: u32, size: i32, kind: u32, stride: i32, ptr: *const c_void) {
+    if (index as usize) >= MAXATTR {
+        return;
+    }
+    let mut s = gl();
+    let arr_buf = s.arr_buf;
+    let a = &mut s.attr[index as usize];
+    a.size = size;
+    a.kind = kind;
+    a.normalized = false;
+    a.integer = true;
+    a.stride = stride;
+    a.offset = ptr as usize;
+    a.buffer = arr_buf;
+    s.vao_store_current();
+}
+
 #[no_mangle]
 pub extern "C" fn glEnableVertexAttribArray(index: u32) {
     if (index as usize) < MAXATTR {
@@ -1075,6 +1307,12 @@ pub extern "C" fn glDrawElements(mode: u32, count: i32, typ: u32, indices: *cons
     s.attr_snap = s.attr;
     s.have_draw_snap = true;
     s.record_draw_call(mode, 0, count, true, typ, indices as usize);
+}
+
+/// `glDrawRangeElements` — the `start`/`end` bounds are advisory; gl_shim.c delegates to glDrawElements.
+#[no_mangle]
+pub extern "C" fn glDrawRangeElements(mode: u32, _start: u32, _end: u32, count: i32, typ: u32, indices: *const c_void) {
+    glDrawElements(mode, count, typ, indices);
 }
 
 // Instanced draws collapse to a single instance (gl_shim.c drops the instance count and delegates).
