@@ -820,3 +820,25 @@ C	vkWaitSemaphores	VkResult	VkDevice|device;const VkSemaphoreWaitInfo*|pWaitInfo
 C	vkWaitSemaphoresKHR	VkResult	VkDevice|device;const VkSemaphoreWaitInfo*|pWaitInfo;uint64_t|timeout
 C	vkWriteAccelerationStructuresPropertiesKHR	VkResult	VkDevice|device;uint32_t|accelerationStructureCount;const VkAccelerationStructureKHR*|pAccelerationStructures;VkQueryType|queryType;size_t|dataSize;void*|pData;size_t|stride
 C	vkWriteMicromapsPropertiesEXT	VkResult	VkDevice|device;uint32_t|micromapCount;const VkMicromapEXT*|pMicromaps;VkQueryType|queryType;size_t|dataSize;void*|pData;size_t|stride
+# --- Vulkan 1.4 promoted-core commands (VK_VERSION_1_4), from the pinned Khronos vk.xml
+#     (registry/vk_command_origins.manifest already tags these core:1.4). All by-value param
+#     types are already classified in the T-table above; no new T-records required.
+C	vkCmdBindDescriptorSets2	void	VkCommandBuffer|commandBuffer;const VkBindDescriptorSetsInfo*|pBindDescriptorSetsInfo
+C	vkCmdBindIndexBuffer2	void	VkCommandBuffer|commandBuffer;VkBuffer|buffer;VkDeviceSize|offset;VkDeviceSize|size;VkIndexType|indexType
+C	vkCmdPushConstants2	void	VkCommandBuffer|commandBuffer;const VkPushConstantsInfo*|pPushConstantsInfo
+C	vkCmdPushDescriptorSet	void	VkCommandBuffer|commandBuffer;VkPipelineBindPoint|pipelineBindPoint;VkPipelineLayout|layout;uint32_t|set;uint32_t|descriptorWriteCount;const VkWriteDescriptorSet*|pDescriptorWrites
+C	vkCmdPushDescriptorSet2	void	VkCommandBuffer|commandBuffer;const VkPushDescriptorSetInfo*|pPushDescriptorSetInfo
+C	vkCmdPushDescriptorSetWithTemplate	void	VkCommandBuffer|commandBuffer;VkDescriptorUpdateTemplate|descriptorUpdateTemplate;VkPipelineLayout|layout;uint32_t|set;const void*|pData
+C	vkCmdPushDescriptorSetWithTemplate2	void	VkCommandBuffer|commandBuffer;const VkPushDescriptorSetWithTemplateInfo*|pPushDescriptorSetWithTemplateInfo
+C	vkCmdSetLineStipple	void	VkCommandBuffer|commandBuffer;uint32_t|lineStippleFactor;uint16_t|lineStipplePattern
+C	vkCmdSetRenderingAttachmentLocations	void	VkCommandBuffer|commandBuffer;const VkRenderingAttachmentLocationInfo*|pLocationInfo
+C	vkCmdSetRenderingInputAttachmentIndices	void	VkCommandBuffer|commandBuffer;const VkRenderingInputAttachmentIndexInfo*|pInputAttachmentIndexInfo
+C	vkCopyImageToImage	VkResult	VkDevice|device;const VkCopyImageToImageInfo*|pCopyImageToImageInfo
+C	vkCopyImageToMemory	VkResult	VkDevice|device;const VkCopyImageToMemoryInfo*|pCopyImageToMemoryInfo
+C	vkCopyMemoryToImage	VkResult	VkDevice|device;const VkCopyMemoryToImageInfo*|pCopyMemoryToImageInfo
+C	vkGetDeviceImageSubresourceLayout	void	VkDevice|device;const VkDeviceImageSubresourceInfo*|pInfo;VkSubresourceLayout2*|pLayout
+C	vkGetImageSubresourceLayout2	void	VkDevice|device;VkImage|image;const VkImageSubresource2*|pSubresource;VkSubresourceLayout2*|pLayout
+C	vkGetRenderingAreaGranularity	void	VkDevice|device;const VkRenderingAreaInfo*|pRenderingAreaInfo;VkExtent2D*|pGranularity
+C	vkMapMemory2	VkResult	VkDevice|device;const VkMemoryMapInfo*|pMemoryMapInfo;void**|ppData
+C	vkTransitionImageLayout	VkResult	VkDevice|device;uint32_t|transitionCount;const VkHostImageLayoutTransitionInfo*|pTransitions
+C	vkUnmapMemory2	VkResult	VkDevice|device;const VkMemoryUnmapInfo*|pMemoryUnmapInfo

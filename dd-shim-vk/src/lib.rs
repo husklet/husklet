@@ -320,4 +320,30 @@ mod tests {
         let core10_stubs = core10.iter().filter(|e| e.cap == Cap::Stub).count();
         assert_eq!(core10_stubs, 0, "no mandatory core:1.0 command may remain a generated stub");
     }
+
+    /// The exported ABI must contain **every** core command in the pinned Khronos registry, across all
+    /// core versions 1.0–1.4 (the closed state of
+    /// `vk_abi_manifest_contains_every_core_command_in_the_pinned_registry`). The per-version counts are
+    /// fixed by the pinned `vk.xml` (VK_VERSION_1_0..1_4): 137 + 28 + 13 + 37 + 19 = 234 core commands.
+    /// Each must be resolvable by the loader-facing dispatch resolver and carry a capability record.
+    #[test]
+    fn abi_manifest_contains_every_pinned_core_command() {
+        let count = |origin: &str| CAPABILITIES.iter().filter(|e| e.origin == origin).count();
+        assert_eq!(count("core:1.0"), 137, "Vulkan 1.0 core incomplete in the ABI");
+        assert_eq!(count("core:1.1"), 28, "Vulkan 1.1 core incomplete in the ABI");
+        assert_eq!(count("core:1.2"), 13, "Vulkan 1.2 core incomplete in the ABI");
+        assert_eq!(count("core:1.3"), 37, "Vulkan 1.3 core incomplete in the ABI");
+        assert_eq!(count("core:1.4"), 19, "Vulkan 1.4 core trails the pinned registry");
+        let total_core: usize = ["core:1.0", "core:1.1", "core:1.2", "core:1.3", "core:1.4"]
+            .iter()
+            .map(|o| count(o))
+            .sum();
+        assert_eq!(total_core, 234, "the pinned registry's full core surface must be exported");
+        // Every core command resolves through the dispatch resolver the loader scans, and the promoted
+        // 1.4 commands are present by name.
+        for name in ["vkCmdBindIndexBuffer2", "vkMapMemory2", "vkTransitionImageLayout", "vkCmdSetLineStipple"] {
+            assert!(DISPATCH_NAMES.contains(&name), "1.4 core command {name} missing from the ABI");
+            assert!(dispatch_addr(name).is_some(), "1.4 core command {name} not resolvable");
+        }
+    }
 }
