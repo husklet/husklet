@@ -56,7 +56,9 @@ fn texture_usage(u: vk::ImageUsageFlags) -> u32 {
     if u.contains(vk::ImageUsageFlags::STORAGE) {
         out |= tu::STORAGE;
     }
-    if u.contains(vk::ImageUsageFlags::COLOR_ATTACHMENT) {
+    if u.contains(vk::ImageUsageFlags::COLOR_ATTACHMENT)
+        || u.contains(vk::ImageUsageFlags::DEPTH_STENCIL_ATTACHMENT)
+    {
         out |= tu::RENDER_TARGET;
     }
     if u.contains(vk::ImageUsageFlags::TRANSFER_SRC) {
@@ -76,7 +78,32 @@ pub fn tex_format(f: vk::Format) -> dd_shim_common::ir::TextureFormat {
         vk::Format::R8G8B8A8_SRGB => T::Rgba8Srgb,
         vk::Format::B8G8R8A8_UNORM => T::Bgra8Unorm,
         vk::Format::B8G8R8A8_SRGB => T::Bgra8Srgb,
+        // Depth/stencil (VK_KHR_dynamic_rendering / most graphics pipelines need a depth attachment).
+        vk::Format::D32_SFLOAT | vk::Format::D16_UNORM => T::Depth32Float,
+        vk::Format::D24_UNORM_S8_UINT | vk::Format::D32_SFLOAT_S8_UINT => T::Depth24PlusStencil8,
         _ => T::Rgba8Unorm,
+    }
+}
+
+/// Whether a `VkFormat` is a depth/stencil format this ICD materializes (D16/D32 depth, D24S8/D32S8).
+pub fn is_depth_format(f: vk::Format) -> bool {
+    matches!(
+        f,
+        vk::Format::D32_SFLOAT
+            | vk::Format::D16_UNORM
+            | vk::Format::D24_UNORM_S8_UINT
+            | vk::Format::D32_SFLOAT_S8_UINT
+    )
+}
+
+/// The `VkImageAspectFlags` (raw) for a format: COLOR for color, DEPTH (+STENCIL for combined) for depth.
+fn format_aspect(f: vk::Format) -> u32 {
+    match f {
+        vk::Format::D24_UNORM_S8_UINT | vk::Format::D32_SFLOAT_S8_UINT => {
+            (vk::ImageAspectFlags::DEPTH | vk::ImageAspectFlags::STENCIL).as_raw()
+        }
+        vk::Format::D32_SFLOAT | vk::Format::D16_UNORM => vk::ImageAspectFlags::DEPTH.as_raw(),
+        _ => vk::ImageAspectFlags::COLOR.as_raw(),
     }
 }
 
@@ -403,25 +430,27 @@ pub extern "C" fn vkCreateImage(
     else {
         return VK_ERROR_INITIALIZATION_FAILED;
     };
+    let color = matches!(
+        ci.format,
+        vk::Format::R8G8B8A8_UNORM
+            | vk::Format::R8G8B8A8_SRGB
+            | vk::Format::B8G8R8A8_UNORM
+            | vk::Format::B8G8R8A8_SRGB
+    );
     if ci.image_type != vk::ImageType::TYPE_2D
         || ci.extent.depth != 1
-        || !matches!(
-            ci.format,
-            vk::Format::R8G8B8A8_UNORM
-                | vk::Format::R8G8B8A8_SRGB
-                | vk::Format::B8G8R8A8_UNORM
-                | vk::Format::B8G8R8A8_SRGB
-        )
+        || !(color || is_depth_format(ci.format))
     {
         return VK_ERROR_FEATURE_NOT_PRESENT;
     }
     let mut s = reg::lock();
     let ir_id = s.alloc_ir();
     let handle = s.alloc_handle();
-    let is_rt = ci.usage.contains(vk::ImageUsageFlags::COLOR_ATTACHMENT);
+    let is_rt = ci.usage.contains(vk::ImageUsageFlags::COLOR_ATTACHMENT)
+        || ci.usage.contains(vk::ImageUsageFlags::DEPTH_STENCIL_ATTACHMENT);
     let mip_levels = ci.mip_levels.max(1);
     let array_layers = ci.array_layers.max(1);
-    let aspect_mask = vk::ImageAspectFlags::COLOR.as_raw();
+    let aspect_mask = format_aspect(ci.format);
     let initial = ImageSubresourceState {
         layout: ci.initial_layout.as_raw(),
         last_access: 0,

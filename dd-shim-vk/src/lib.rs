@@ -532,6 +532,79 @@ mod tests {
         vkDestroyImage(core::ptr::null_mut(), img, core::ptr::null());
     }
 
+    // ---- increment 8: wgpu device-creation blockers (limits / depth / per-format) ----
+
+    /// Blocker 1: the physical-device limits are a full Metal-class set (no zero long tail wgpu would
+    /// reject). Spot-check the per-stage / descriptor-set / vertex / framebuffer limits.
+    #[test]
+    fn physical_device_limits_are_a_full_metal_class_set() {
+        let l = state::physical_device_properties().limits;
+        assert!(l.max_per_stage_descriptor_samplers >= 16);
+        assert!(l.max_per_stage_descriptor_uniform_buffers >= 12);
+        assert!(l.max_per_stage_descriptor_storage_buffers >= 8);
+        assert!(l.max_per_stage_descriptor_sampled_images >= 16);
+        assert!(l.max_per_stage_descriptor_storage_images >= 4);
+        assert!(l.max_per_stage_resources >= 128);
+        assert!(l.max_descriptor_set_uniform_buffers >= 12);
+        assert!(l.max_vertex_input_attributes >= 16);
+        assert!(l.max_vertex_input_bindings >= 8);
+        assert!(l.max_vertex_output_components >= 64);
+        assert!(l.max_fragment_input_components >= 60);
+        assert!(l.max_fragment_output_attachments >= 4);
+        assert!(l.max_framebuffer_width >= 8192 && l.max_framebuffer_height >= 8192);
+        assert!(l.max_viewports >= 1 && l.max_viewport_dimensions[0] >= 8192);
+        assert!(l.max_sampler_allocation_count >= 4000);
+        assert!(l.max_draw_indexed_index_value == u32::MAX);
+        assert_eq!(l.min_uniform_buffer_offset_alignment, 256);
+        assert!(l.non_coherent_atom_size >= 1);
+    }
+
+    /// Blocker 2: depth/stencil images are creatable (D32_SFLOAT + D24_UNORM_S8), with the right aspect —
+    /// wgpu needs a depth attachment for most pipelines.
+    #[test]
+    fn depth_stencil_images_are_creatable() {
+        let _g = reg::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        use ash::vk;
+        let mk = |format: vk::Format| -> u64 {
+            let ci = vk::ImageCreateInfo::default()
+                .image_type(vk::ImageType::TYPE_2D).format(format)
+                .extent(vk::Extent3D { width: 16, height: 16, depth: 1 }).mip_levels(1).array_layers(1)
+                .samples(vk::SampleCountFlags::TYPE_1).tiling(vk::ImageTiling::OPTIMAL)
+                .usage(vk::ImageUsageFlags::DEPTH_STENCIL_ATTACHMENT).initial_layout(vk::ImageLayout::UNDEFINED);
+            let mut img = 0u64;
+            assert_eq!(vkCreateImage(core::ptr::null_mut(), &ci, core::ptr::null(), &mut img), types::VK_SUCCESS, "format {} must be creatable", format.as_raw());
+            img
+        };
+        let d32 = mk(vk::Format::D32_SFLOAT);
+        let d24 = mk(vk::Format::D24_UNORM_S8_UINT);
+        {
+            let s = reg::lock();
+            assert_eq!(s.images[&d32].aspect_mask, vk::ImageAspectFlags::DEPTH.as_raw());
+            assert_eq!(s.images[&d24].aspect_mask, (vk::ImageAspectFlags::DEPTH | vk::ImageAspectFlags::STENCIL).as_raw());
+        }
+        vkDestroyImage(core::ptr::null_mut(), d32, core::ptr::null());
+        vkDestroyImage(core::ptr::null_mut(), d24, core::ptr::null());
+    }
+
+    /// Blocker 3: format properties are per-format — a color format advertises COLOR_ATTACHMENT (not
+    /// DEPTH_STENCIL), a depth format advertises DEPTH_STENCIL_ATTACHMENT (not COLOR).
+    #[test]
+    fn format_properties_are_per_format() {
+        use ash::vk;
+        use vk::FormatFeatureFlags as F;
+        let feats = |fmt: vk::Format| {
+            let mut p = vk::FormatProperties::default();
+            vkGetPhysicalDeviceFormatProperties(core::ptr::null_mut(), fmt.as_raw(), &mut p);
+            p.optimal_tiling_features
+        };
+        let color = feats(vk::Format::B8G8R8A8_UNORM);
+        assert!(color.contains(F::COLOR_ATTACHMENT) && color.contains(F::SAMPLED_IMAGE) && color.contains(F::BLIT_DST));
+        assert!(!color.contains(F::DEPTH_STENCIL_ATTACHMENT), "color must NOT claim depth-stencil");
+        let depth = feats(vk::Format::D32_SFLOAT);
+        assert!(depth.contains(F::DEPTH_STENCIL_ATTACHMENT) && depth.contains(F::SAMPLED_IMAGE));
+        assert!(!depth.contains(F::COLOR_ATTACHMENT), "depth must NOT claim color attachment");
+    }
+
     // ---- increment 7: 1.2 feature reporting + descriptor indexing ----
 
     /// `vkGetPhysicalDeviceFeatures2` fills the promoted-feature structs a modern app (wgpu-hal) chains

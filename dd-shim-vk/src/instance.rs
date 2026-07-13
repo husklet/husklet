@@ -209,22 +209,51 @@ pub extern "C" fn vkGetPhysicalDeviceQueueFamilyProperties(
 /// Broad format capabilities so apps' format-support checks pass (vkcube probes linear/optimal tiling
 /// + buffer features for its texture/depth/vertex formats before choosing a path; all-zero features
 /// sent it down a broken branch). A Metal-class device supports these across the common formats.
-pub fn format_features() -> vk::FormatProperties {
+/// Truthful **per-format** `VkFormatProperties` (blocker 3). A color format advertises color-attachment /
+/// blend / sampled / blit / transfer; a depth/stencil format advertises DEPTH_STENCIL_ATTACHMENT + sampled
+/// + transfer (never color-attachment, and vice-versa) — reporting the same flags for every format made
+/// wgpu-hal build wrong per-format capabilities. Vertex-attribute float formats advertise VERTEX_BUFFER.
+/// Ported from `MVKPixelFormats::getVkFormatProperties`.
+pub fn per_format_features(format: vk::Format) -> vk::FormatProperties {
     use vk::FormatFeatureFlags as F;
-    let img = F::SAMPLED_IMAGE
-        | F::STORAGE_IMAGE
-        | F::COLOR_ATTACHMENT
-        | F::COLOR_ATTACHMENT_BLEND
-        | F::DEPTH_STENCIL_ATTACHMENT
-        | F::BLIT_SRC
-        | F::BLIT_DST
-        | F::SAMPLED_IMAGE_FILTER_LINEAR
-        | F::TRANSFER_SRC
-        | F::TRANSFER_DST;
+    let color = matches!(
+        format,
+        vk::Format::R8G8B8A8_UNORM
+            | vk::Format::R8G8B8A8_SRGB
+            | vk::Format::B8G8R8A8_UNORM
+            | vk::Format::B8G8R8A8_SRGB
+    );
+    let depth = crate::memory::is_depth_format(format);
+    let optimal = if color {
+        F::SAMPLED_IMAGE
+            | F::STORAGE_IMAGE
+            | F::COLOR_ATTACHMENT
+            | F::COLOR_ATTACHMENT_BLEND
+            | F::BLIT_SRC
+            | F::BLIT_DST
+            | F::SAMPLED_IMAGE_FILTER_LINEAR
+            | F::TRANSFER_SRC
+            | F::TRANSFER_DST
+    } else if depth {
+        F::SAMPLED_IMAGE | F::DEPTH_STENCIL_ATTACHMENT | F::TRANSFER_SRC | F::TRANSFER_DST
+    } else {
+        F::empty()
+    };
+    // Vertex-attribute float formats (wgpu vertex buffers).
+    let buffer = match format {
+        vk::Format::R32_SFLOAT
+        | vk::Format::R32G32_SFLOAT
+        | vk::Format::R32G32B32_SFLOAT
+        | vk::Format::R32G32B32A32_SFLOAT => F::VERTEX_BUFFER,
+        _ if color => F::UNIFORM_TEXEL_BUFFER | F::STORAGE_TEXEL_BUFFER,
+        _ => F::empty(),
+    };
     vk::FormatProperties {
-        linear_tiling_features: img,
-        optimal_tiling_features: img,
-        buffer_features: F::VERTEX_BUFFER | F::UNIFORM_TEXEL_BUFFER | F::STORAGE_TEXEL_BUFFER,
+        // Depth is never linear-tileable; color's linear tiling is a reduced set but we report the same
+        // materializable features (the bring-up path treats tiling uniformly).
+        linear_tiling_features: if depth { F::empty() } else { optimal },
+        optimal_tiling_features: optimal,
+        buffer_features: buffer,
     }
 }
 
@@ -236,7 +265,7 @@ pub extern "C" fn vkGetPhysicalDeviceFormatProperties(
 ) {
     crate::reg::trace("vkGetPhysicalDeviceFormatProperties");
     if let Some(out) = unsafe { p_props.as_mut() } {
-        *out = format_features();
+        *out = per_format_features(vk::Format::from_raw(_format));
     }
 }
 
@@ -277,6 +306,14 @@ pub extern "C" fn vkGetPhysicalDeviceProperties2(
                     subminor: 0,
                     patch: 0,
                 };
+            }
+        } else if s_type == vk::StructureType::PHYSICAL_DEVICE_MAINTENANCE_3_PROPERTIES.as_raw() {
+            // wgpu-hal reads maxPerSetDescriptors to bound its descriptor-set sizing; a zero here would
+            // make it refuse to build any descriptor set. Report a large Metal-class ceiling + our budget.
+            let mp = node as *mut vk::PhysicalDeviceMaintenance3Properties;
+            if let Some(m) = unsafe { mp.as_mut() } {
+                m.max_per_set_descriptors = 1_000_000;
+                m.max_memory_allocation_size = 1 << 31; // 2 GiB (matches the executor residency budget)
             }
         }
         node = unsafe { (*node).p_next };
@@ -392,7 +429,7 @@ pub extern "C" fn vkGetPhysicalDeviceFormatProperties2(
     p_props: *mut vk::FormatProperties2,
 ) {
     if let Some(out) = unsafe { p_props.as_mut() } {
-        out.format_properties = format_features();
+        out.format_properties = per_format_features(vk::Format::from_raw(_format));
     }
 }
 
