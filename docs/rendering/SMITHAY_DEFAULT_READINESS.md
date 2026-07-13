@@ -46,6 +46,25 @@ fixed (that fd is what crashed GTK).
   `present_cocoa` presenter that already opens the child NSWindow) instead of clipping it into the parent
   frame. Covered by a new `dd-compositor` test. Left behind the flag pending the live menu validation;
   the default (composite-into-parent) is byte-for-byte unchanged.
+- **Modern GUI protocol groups composed from vendored smithay (codex-rendering §5.2 / §9.4, ledger row
+  `modern_gui_protocol_groups_are_composed_from_vendored_smithay`).** `dd-compositor` now COMPOSES six
+  protocol groups the vendored `third_party/smithay-0.7.0` already implemented but dd did not advertise —
+  each as a vertical slice (state + `delegate_*!` + dd host policy + per-protocol client roundtrip):
+  `zwp_pointer_gestures_v1`, `zwp_tablet_manager_v2`, `zwp_idle_inhibit_manager_v1`,
+  `wp_content_type_manager_v1`, `zxdg_exporter_v2`/`zxdg_importer_v2` (xdg-foreign) and
+  `zwp_keyboard_shortcuts_inhibit_manager_v1`. Host policy honours "dd has no real tablet/touch device and
+  one Cocoa window": idle-inhibit **records intent** (`idle_inhibited()`), content-type **stores the hint**
+  (`content_type(sid)`), xdg-foreign **issues real export handles**, keyboard-shortcuts-inhibit is
+  **honoured/activated** (dd owns no conflicting chords), and pointer-gestures / tablet advertise + accept
+  with a proven hot-plug/injection seam (`inject_swipe_gesture` / `add_tablet`) but generate nothing by
+  default (no host device). Policy lives one-file-per-protocol under `dd-compositor/src/handlers/`
+  (`pointer_gestures.rs`, `tablet.rs`, `idle_inhibit.rs`, `content_type.rs`, `xdg_foreign.rs`,
+  `keyboard_shortcuts_inhibit.rs`); state fields + construction + delegates are in clearly-marked blocks in
+  `lib.rs` / `handlers/mod.rs`. Proven by `tests/modern_protocols.rs` (one client binds every global +
+  completes a request/event exchange per protocol). **`wp_tearing_control_manager_v1` is NOT composed** —
+  no tearing-control module exists in vendored smithay-0.7.0 (only content-type's tearing *hint* is
+  available); revisit on a smithay bump. Entirely behind `DD_DISPLAY_SMITHAY` (the flag that execs this
+  compositor); the legacy default path is unchanged.
 
 This document is a source-read + unit-test + build audit. No live Chrome/GTK session was run (that is
 the coordinated validation step, driven separately).
@@ -106,6 +125,13 @@ advertises it and legacy does not.
 | `zwp_relative_pointer_v1` (games/3D) | **no** | **yes** (superset) | |
 | `zwp_pointer_constraints_v1` (lock/confine) | **no** | **yes** (superset) | cursor-hide synced to lock |
 | `zwp_text_input_v3` (IME / marked text) | **no** | **yes** (superset) | compositor IS the input method (host macOS IME bridge) |
+| `zwp_pointer_gestures_v1` (touchpad swipe/pinch/hold) | **no** | **yes** (superset) | composed from vendored smithay; no host gesture device → no events by default; `inject_swipe_gesture` seam proven (§5.2) |
+| `zwp_tablet_manager_v2` (graphics tablet/stylus) | **no** | **yes** (superset) | composed from vendored smithay; no host tablet → seat advertises zero tablets; `add_tablet` hot-plug seam proven (§5.2) |
+| `zwp_idle_inhibit_manager_v1` (keep session awake) | **no** | **yes** (superset) | composed from vendored smithay; host records the keep-awake intent (`idle_inhibited()`) (§5.2) |
+| `wp_content_type_manager_v1` (photo/video/game hint) | **no** | **yes** (superset) | composed from vendored smithay; host stores the committed hint per surface (`content_type(sid)`) (§5.2) |
+| `zxdg_exporter_v2` / `zxdg_importer_v2` (xdg-foreign) | **no** | **yes** (superset) | composed from vendored smithay; real export handles + cross-client `set_parent_of` into the xdg-shell parent model (§5.2) |
+| `zwp_keyboard_shortcuts_inhibit_manager_v1` (forward all keys) | **no** | **yes** (superset) | composed from vendored smithay; dd owns no conflicting chords → honoured/activated on request (§5.2) |
+| `wp_tearing_control_manager_v1` (tearing hints) | **no** | **NOT composed** | module absent from vendored `third_party/smithay-0.7.0` — skipped, revisit on a smithay bump (§5.2) |
 | `surface_augmenter` (ChromeOS exo) | off by default (`DD_DISPLAY_AUGMENTER`) | n/a | not needed (stock Weston never advertises it) |
 
 **Bottom line:** for the **software (`wl_shm`) render** — the path that today renders Chrome/GTK4 UI
@@ -123,13 +149,17 @@ Built + tested via the `mac` bridge with
 
 - `cargo build -p dd-compositor` — **green** (only pre-existing `dd-display` warnings + benign
   vendored-smithay warnings).
-- `cargo test -p dd-compositor` — **8/8 pass**:
+- `cargo test -p dd-compositor` — **9/9 pass**:
   - `handlers::dmabuf::tests::dmabuf_feedback_format_table_builds_under_pshmnamlen` (Gap 1 — the v4
     feedback format-table builds on macOS with no PSHMNAMLEN/ENXIO failure)
   - `client_roundtrip::globals_advertise_frame_presents_feedback_and_cursor_shape_wire`
   - `dmabuf_present::dmabuf_global_and_iosurface_commit_presents`
   - `dmabuf_v4_feedback::dmabuf_global_advertises_v4_feedback` (Gap 1 — the global advertises version
     >= 4)
+  - `modern_protocols::modern_protocols_bind_and_roundtrip` (§5.2 — a client binds + roundtrips all six
+    newly composed modern protocol groups: pointer-gestures swipe begin/end, tablet hot-plug
+    `tablet_added`, idle-inhibit intent record/clear, content-type stored hint, xdg-foreign real
+    export→import handle, keyboard-shortcuts-inhibit `active`)
   - `popup_placement` (Gap 2)
   - `robustness::compositor_survives_stress_disconnect_and_bogus_requests`
   - `scale_outputs::fractional_scale_xdg_output_single_pixel_and_multi_output`

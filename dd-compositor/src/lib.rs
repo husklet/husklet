@@ -61,19 +61,25 @@ use smithay::{
     utils::{Serial, Size, SERIAL_COUNTER},
     wayland::{
         compositor::{CompositorClientState, CompositorState},
+        content_type::ContentTypeState,
         cursor_shape::CursorShapeManagerState,
         dmabuf::DmabufState,
         fractional_scale::FractionalScaleManagerState,
+        idle_inhibit::IdleInhibitManagerState,
+        keyboard_shortcuts_inhibit::KeyboardShortcutsInhibitState,
         output::OutputManagerState,
         pointer_constraints::PointerConstraintsState,
+        pointer_gestures::PointerGesturesState,
         presentation::PresentationState,
         relative_pointer::RelativePointerManagerState,
         selection::{data_device::DataDeviceState, primary_selection::PrimarySelectionState},
         shell::xdg::{decoration::XdgDecorationState, PopupSurface, XdgShellState},
         shm::ShmState,
         single_pixel_buffer::SinglePixelBufferState,
+        tablet_manager::TabletManagerState,
         viewporter::ViewporterState,
         xdg_activation::XdgActivationState,
+        xdg_foreign::XdgForeignState,
     },
 };
 
@@ -146,6 +152,28 @@ pub struct DdState {
     /// `wp_single_pixel_buffer_v1` — the 1×1 solid-color buffer optimization (backgrounds/solid surfaces).
     /// Smithay decodes the RGBA and stores it on the `wl_buffer`; the commit path reads it back.
     pub single_pixel_buffer: SinglePixelBufferState,
+
+    // ---- Modern GUI protocol groups composed from the vendored Smithay tree (codex-rendering §5.2/§9.4) ----
+    // Each state holds a global advertised behind DD_DISPLAY_SMITHAY (the whole binary is gated on it).
+    // Policy + delegates live in the same-named `handlers::*` submodules. tearing-control is absent from
+    // vendored smithay-0.7.0 and is therefore NOT composed.
+    /// `zwp_pointer_gestures_v1` — touchpad swipe/pinch/hold (see [`handlers::pointer_gestures`]).
+    pub pointer_gestures: PointerGesturesState,
+    /// `zwp_tablet_manager_v2` — graphics-tablet/stylus (see [`handlers::tablet`]).
+    pub tablet_manager: TabletManagerState,
+    /// `zwp_idle_inhibit_manager_v1` — keep-session-awake intent (see [`handlers::idle_inhibit`]).
+    pub idle_inhibit: IdleInhibitManagerState,
+    /// `wp_content_type_manager_v1` — per-surface photo/video/game hint (see [`handlers::content_type`]).
+    pub content_type: ContentTypeState,
+    /// `zxdg_exporter_v2`/`zxdg_importer_v2` — cross-client toplevel parenting (see [`handlers::xdg_foreign`]).
+    pub xdg_foreign: XdgForeignState,
+    /// `zwp_keyboard_shortcuts_inhibit_manager_v1` — forward-all-keys (see [`handlers::keyboard_shortcuts_inhibit`]).
+    pub keyboard_shortcuts_inhibit: KeyboardShortcutsInhibitState,
+    /// Surfaces that currently hold a `zwp_idle_inhibitor_v1` (host records intent; keyed by surface id).
+    pub(crate) idle_inhibitors: HashSet<u32>,
+    /// Per-surface committed `wp_content_type` (sid → wire enum value: photo=1/video=2/game=3).
+    pub(crate) content_types: HashMap<u32, u32>,
+
     pub seat: Seat<Self>,
     pub keyboard: KeyboardHandle<Self>,
     pub pointer: PointerHandle<Self>,
@@ -289,6 +317,22 @@ impl DdState {
         let fractional_scale = FractionalScaleManagerState::new::<Self>(&dh);
         // wp_single_pixel_buffer_v1: the 1×1 solid-color buffer fast path (backgrounds/solid surfaces).
         let single_pixel_buffer = SinglePixelBufferState::new::<Self>(&dh);
+
+        // ---- Modern GUI protocol groups composed from the vendored Smithay tree (codex-rendering §5.2/§9.4).
+        // Advertise + supply host policy for protocols the vendored smithay-0.7.0 implements but dd did not
+        // compose. Policy lives in the same-named handlers::* submodules; see each module's docs.
+        // zwp_pointer_gestures_v1: touchpad swipe/pinch/hold; no host gesture device, so no events by default.
+        let pointer_gestures = PointerGesturesState::new::<Self>(&dh);
+        // zwp_tablet_manager_v2: graphics tablet/stylus; dd has no tablet hardware, so the seat exposes none.
+        let tablet_manager = Self::new_tablet_manager(&dh);
+        // zwp_idle_inhibit_manager_v1: keep-session-awake; dd records the intent (handlers::idle_inhibit).
+        let idle_inhibit = IdleInhibitManagerState::new::<Self>(&dh);
+        // wp_content_type_manager_v1: per-surface photo/video/game hint; stored on commit (handlers::content_type).
+        let content_type = ContentTypeState::new::<Self>(&dh);
+        // zxdg_exporter_v2 + zxdg_importer_v2: cross-client toplevel parenting; Smithay issues real handles.
+        let xdg_foreign = XdgForeignState::new::<Self>(&dh);
+        // zwp_keyboard_shortcuts_inhibit_manager_v1: forward all keys; dd honours it (handlers::keyboard_shortcuts_inhibit).
+        let keyboard_shortcuts_inhibit = KeyboardShortcutsInhibitState::new::<Self>(&dh);
         // zwp_text_input_manager_v3: text-input for editors/forms + the host IME (marked-text) bridge.
         // Advertised here; the compositor owns the text-input instances directly (see handlers/text_input.rs).
         let text_input = handlers::text_input::TextInputState::new(&dh);
@@ -340,6 +384,15 @@ impl DdState {
             pointer_constraints,
             fractional_scale,
             single_pixel_buffer,
+            // ---- Modern GUI protocol groups (codex-rendering §5.2/§9.4) ----
+            pointer_gestures,
+            tablet_manager,
+            idle_inhibit,
+            content_type,
+            xdg_foreign,
+            keyboard_shortcuts_inhibit,
+            idle_inhibitors: HashSet::new(),
+            content_types: HashMap::new(),
             seat,
             keyboard,
             pointer,

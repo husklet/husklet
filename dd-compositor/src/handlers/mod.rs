@@ -17,14 +17,26 @@ pub mod seat;
 pub mod text_input;
 pub mod xdg;
 
+// ---- Modern GUI protocol groups composed from the vendored Smithay tree (codex-rendering §5.2/§9.4) ----
+// Each module supplies dd host policy (state + delegate below + handler/query methods) for a protocol
+// the vendored `third_party/smithay-0.7.0` already implements but dd-compositor did not previously compose.
+pub mod content_type;
+pub mod idle_inhibit;
+pub mod keyboard_shortcuts_inhibit;
+pub mod pointer_gestures;
+pub mod tablet;
+pub mod xdg_foreign;
+
 use crate::DdState;
 
 use smithay::{
-    delegate_compositor, delegate_cursor_shape, delegate_data_device, delegate_dmabuf,
-    delegate_fractional_scale, delegate_output, delegate_pointer_constraints,
-    delegate_presentation, delegate_primary_selection, delegate_relative_pointer, delegate_seat,
-    delegate_shm, delegate_single_pixel_buffer, delegate_viewporter, delegate_xdg_activation,
-    delegate_xdg_decoration, delegate_xdg_shell,
+    delegate_compositor, delegate_content_type, delegate_cursor_shape, delegate_data_device,
+    delegate_dmabuf, delegate_fractional_scale, delegate_idle_inhibit,
+    delegate_keyboard_shortcuts_inhibit, delegate_output, delegate_pointer_constraints,
+    delegate_pointer_gestures, delegate_presentation, delegate_primary_selection,
+    delegate_relative_pointer, delegate_seat, delegate_shm, delegate_single_pixel_buffer,
+    delegate_tablet_manager, delegate_viewporter, delegate_xdg_activation, delegate_xdg_decoration,
+    delegate_xdg_foreign, delegate_xdg_shell,
 };
 
 delegate_compositor!(DdState); // wl_compositor + wl_subcompositor
@@ -44,3 +56,13 @@ delegate_data_device!(DdState); // wl_data_device_manager + wl_data_device/sourc
 delegate_primary_selection!(DdState); // zwp_primary_selection_v1 (X11-style middle-click paste)
 delegate_relative_pointer!(DdState); // zwp_relative_pointer_v1 (game/3D relative motion)
 delegate_pointer_constraints!(DdState); // zwp_pointer_constraints_v1 (pointer lock/confine)
+
+// ---- Modern GUI protocol groups composed from the vendored Smithay tree (codex-rendering §5.2/§9.4) ----
+// Policy + state/query methods live in the same-named handlers::* submodules above. tearing-control
+// (wp_tearing_control_manager_v1) is NOT in vendored smithay-0.7.0 and is therefore not composed here.
+delegate_content_type!(DdState); // wp_content_type_manager_v1 + wp_content_type_v1 (photo/video/game hint)
+delegate_idle_inhibit!(DdState); // zwp_idle_inhibit_manager_v1 + zwp_idle_inhibitor_v1 (keep session awake)
+delegate_keyboard_shortcuts_inhibit!(DdState); // zwp_keyboard_shortcuts_inhibit_manager_v1 (forward all keys)
+delegate_pointer_gestures!(DdState); // zwp_pointer_gestures_v1 (touchpad swipe/pinch/hold)
+delegate_tablet_manager!(DdState); // zwp_tablet_manager_v2 (graphics tablet/stylus; TabletSeatHandler in seat.rs)
+delegate_xdg_foreign!(DdState); // zxdg_exporter_v2 + zxdg_importer_v2 (cross-client toplevel parenting)

@@ -71,6 +71,10 @@ impl DdState {
     /// parent within the same transaction). Every other commit (toplevel, popup, or a *desynchronized*
     /// subsurface) presents the composited window root.
     pub(crate) fn on_commit(&mut self, surface: &WlSurface) {
+        // Snapshot the surface's committed wp_content_type hint (photo/video/game) — composed from the
+        // vendored Smithay content_type module; stored for the present/tearing policy to read.
+        self.record_content_type(surface);
+
         // Ingest this commit's buffer + damage into the per-surface repack cache and mark the surface
         // dirty if its pixels changed. This is the CPU half of damage tracking: only the damaged rows of
         // a re-attached buffer are copied, instead of repacking the whole buffer on every commit.
