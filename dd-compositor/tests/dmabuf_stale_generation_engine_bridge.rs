@@ -1,3 +1,4 @@
+#![cfg(target_os = "macos")] // drives the real macOS GPU mach bridge (dd_display::metal::*); no-op on Linux
 //! End-to-end proof with a REAL (engine-format, not test-forced) allocation generation. Row 3 wants a
 //! genuinely-recycled id rejected; this wires the real pieces together on macOS:
 //!

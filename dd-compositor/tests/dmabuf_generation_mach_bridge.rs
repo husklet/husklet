@@ -1,3 +1,4 @@
+#![cfg(target_os = "macos")] // drives the real macOS GPU mach bridge (dd_display::metal::*); no-op on Linux
 //! Engine→compositor allocation-generation channel proof. The generation the engine stamps on an
 //! IOSurface (dd-jit-darwin vfs.c `dd_gpu_alloc`/`dd_gpu_send_port`) must reach the compositor over the
 //! GPU mach bridge and become the id's authenticated `IOSurfaceMetadata::generation`. This starts the
