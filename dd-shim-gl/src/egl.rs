@@ -330,15 +330,28 @@ pub extern "C" fn eglMakeCurrent(_dpy: *mut c_void, draw: *mut c_void, read: *mu
 
 /// `eglQueryContext` — client type/version of the given context handle.
 #[no_mangle]
-pub extern "C" fn eglQueryContext(_dpy: *mut c_void, ctx: *mut c_void, attribute: i32, value: *mut i32) -> u32 {
+pub extern "C" fn eglQueryContext(dpy: *mut c_void, ctx: *mut c_void, attribute: i32, value: *mut i32) -> u32 {
     if value.is_null() {
+        return EGL_FALSE;
+    }
+    if dpy as usize != 1 {
+        crate::state::egl_set_error(EGL_BAD_DISPLAY);
+        return EGL_FALSE;
+    }
+    if !crate::state::egl_ctx_is_live(ctx) {
+        crate::state::egl_set_error(EGL_BAD_CONTEXT);
         return EGL_FALSE;
     }
     let v = match attribute {
         EGL_CONTEXT_CLIENT_TYPE => EGL_OPENGL_ES_API as i32,
         EGL_CONTEXT_CLIENT_VERSION => crate::state::egl_ctx_major(ctx),
         EGL_CONTEXT_MINOR_VERSION_KHR => crate::state::egl_ctx_minor(ctx),
-        _ => 0,
+        EGL_CONFIG_ID => CONFIG_ID,
+        EGL_RENDER_BUFFER => EGL_BACK_BUFFER,
+        _ => {
+            crate::state::egl_set_error(EGL_BAD_ATTRIBUTE);
+            return EGL_FALSE;
+        }
     };
     unsafe { *value = v };
     EGL_TRUE

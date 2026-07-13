@@ -253,6 +253,8 @@ pub const EGL_OPENGL_ES3_BIT_KHR: i32 = 0x0040;
 pub const EGL_CONTEXT_CLIENT_VERSION: i32 = 0x3098; // == EGL_CONTEXT_MAJOR_VERSION_KHR
 pub const EGL_CONTEXT_MINOR_VERSION_KHR: i32 = 0x30FB;
 pub const EGL_CONTEXT_CLIENT_TYPE: i32 = 0x3097;
+pub const EGL_RENDER_BUFFER: i32 = 0x3086;
+pub const EGL_BACK_BUFFER: i32 = 0x3084;
 pub const EGL_OPENGL_ES_API: u32 = 0x30A0;
 
 /// dma-buf DRM format the config advertises as its native visual (matches gl_shim.c).

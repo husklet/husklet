@@ -7,8 +7,32 @@ use core::ffi::c_void;
 use dd_shim_gl::glconst::*;
 use dd_shim_gl::{egl, gles};
 
+fn serial_guard() -> std::sync::MutexGuard<'static, ()> {
+    static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    LOCK.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+#[test]
+fn egl_query_context_validates_lifetime_and_preserves_output() {
+    let _serial = serial_guard();
+    let dpy=egl::eglGetDisplay(core::ptr::null_mut());
+    let attrs=[EGL_CONTEXT_CLIENT_VERSION,2,EGL_NONE];
+    let ctx=egl::eglCreateContext(dpy,1usize as *mut c_void,core::ptr::null_mut(),attrs.as_ptr());
+    for (attr,want) in [(EGL_CONTEXT_CLIENT_VERSION,2),(EGL_CONTEXT_CLIENT_TYPE,EGL_OPENGL_ES_API as i32),(EGL_CONFIG_ID,1),(EGL_RENDER_BUFFER,EGL_BACK_BUFFER)] {
+        let mut value=-1;assert_eq!(egl::eglQueryContext(dpy,ctx,attr,&mut value),EGL_TRUE);assert_eq!(value,want);
+    }
+    let mut sentinel=0x1234;
+    assert_eq!(egl::eglQueryContext(99usize as *mut c_void,ctx,EGL_CONTEXT_CLIENT_VERSION,&mut sentinel),EGL_FALSE);assert_eq!(sentinel,0x1234);assert_eq!(egl::eglGetError(),EGL_BAD_DISPLAY);
+    assert_eq!(egl::eglQueryContext(dpy,ctx,0x7fff,&mut sentinel),EGL_FALSE);assert_eq!(sentinel,0x1234);assert_eq!(egl::eglGetError(),EGL_BAD_ATTRIBUTE);
+    assert_eq!(egl::eglMakeCurrent(dpy,core::ptr::null_mut(),core::ptr::null_mut(),ctx),EGL_TRUE);
+    assert_eq!(egl::eglDestroyContext(dpy,ctx),EGL_TRUE);
+    assert_eq!(egl::eglQueryContext(dpy,ctx,EGL_CONTEXT_CLIENT_VERSION,&mut sentinel),EGL_FALSE);assert_eq!(sentinel,0x1234);assert_eq!(egl::eglGetError(),EGL_BAD_CONTEXT);
+    assert_eq!(egl::eglReleaseThread(),EGL_TRUE);
+}
+
 #[test]
 fn sync_objects_track_submission_completion_and_stale_handles() {
+    let _serial = serial_guard();
     while gles::glGetError()!=GL_NO_ERROR{}
     let sync=gles::glFenceSync(GL_SYNC_GPU_COMMANDS_COMPLETE,0); assert!(!sync.is_null()); assert_eq!(gles::glIsSync(sync),GL_TRUE);
     let mut status=-1;let mut len=0;gles::glGetSynciv(sync,GL_SYNC_STATUS,1,&mut len,&mut status);assert_eq!(status,GL_UNSIGNALED);
@@ -22,6 +46,7 @@ fn sync_objects_track_submission_completion_and_stale_handles() {
 
 #[test]
 fn texture_upload_validation_is_atomic_and_honors_padded_rows() {
+    let _serial = serial_guard();
     while gles::glGetError() != GL_NO_ERROR {}
     let mut tex=0; gles::glGenTextures(1,&mut tex); gles::glBindTexture(GL_TEXTURE_2D,tex);
     let base=[7u8;16]; gles::glTexImage2D(GL_TEXTURE_2D,0,GL_RGBA as i32,2,2,0,GL_RGBA,GL_UNSIGNED_BYTE,base.as_ptr().cast());
@@ -51,6 +76,7 @@ fn texture_upload_validation_is_atomic_and_honors_padded_rows() {
 
 #[test]
 fn readpixels_validates_pack_layout_and_preserves_output() {
+    let _serial = serial_guard();
     while gles::glGetError() != GL_NO_ERROR {}
     let mut tex = 0;
     gles::glGenTextures(1, &mut tex);
@@ -138,6 +164,7 @@ fn linked_test_program() -> u32 {
 
 #[test]
 fn draw_validation_rejects_inputs_before_recording() {
+    let _serial = serial_guard();
     while gles::glGetError() != GL_NO_ERROR {}
     gles::glBindFramebuffer(GL_FRAMEBUFFER, 0);
 
@@ -189,6 +216,7 @@ fn draw_validation_rejects_inputs_before_recording() {
 
 #[test]
 fn framebuffer_completeness_tracks_color_attachment_and_blocks_draws() {
+    let _serial = serial_guard();
     while gles::glGetError() != GL_NO_ERROR {}
 
     let mut fbo = 0;
@@ -244,6 +272,7 @@ fn framebuffer_completeness_tracks_color_attachment_and_blocks_draws() {
 
 #[test]
 fn generated_names_bind_lazily_and_deletion_detaches_every_binding() {
+    let _serial = serial_guard();
     while gles::glGetError() != GL_NO_ERROR {}
     let mut buffer = 0;
     gles::glGenBuffers(1, &mut buffer);
@@ -282,6 +311,7 @@ fn generated_names_bind_lazily_and_deletion_detaches_every_binding() {
 
 #[test]
 fn shader_program_detach_and_delete_pending_follow_reference_lifetimes() {
+    let _serial = serial_guard();
     while gles::glGetError() != GL_NO_ERROR {}
     let vertex = gles::glCreateShader(GL_VERTEX_SHADER);
     let fragment = gles::glCreateShader(GL_FRAGMENT_SHADER);
@@ -315,6 +345,7 @@ fn shader_program_detach_and_delete_pending_follow_reference_lifetimes() {
 
 #[test]
 fn shader_compile_link_status_and_logs_are_truthful() {
+    let _serial = serial_guard();
     let shader = gles::glCreateShader(GL_VERTEX_SHADER);
     assert_ne!(shader, 0);
     // Syntactically invalid GLSL (unbalanced parenthesis after `main`).
@@ -361,6 +392,7 @@ fn shader_compile_link_status_and_logs_are_truthful() {
 
 #[test]
 fn egl_config_selection_and_invalid_attributes_are_truthful() {
+    let _serial = serial_guard();
     let display = egl::eglGetDisplay(core::ptr::null_mut());
     assert!(!display.is_null());
     assert_eq!(egl::eglInitialize(display, core::ptr::null_mut(), core::ptr::null_mut()), EGL_TRUE);
@@ -402,6 +434,7 @@ fn egl_config_selection_and_invalid_attributes_are_truthful() {
 
 #[test]
 fn egl_surfaces_have_distinct_lifetimes_dimensions_and_types() {
+    let _serial = serial_guard();
     // Host-tool mode avoids opening renderd/Wayland connections.
     std::env::set_var("DD_IR_DUMP", std::env::temp_dir().join("dd-egl-surface-mirror.ir"));
     let display = egl::eglGetDisplay(core::ptr::null_mut());
@@ -446,6 +479,7 @@ fn egl_surfaces_have_distinct_lifetimes_dimensions_and_types() {
 
 #[test]
 fn egl_swap_of_a_stale_surface_reports_bad_surface() {
+    let _serial = serial_guard();
     // The transactional-submit ordering (present before draw-list reset; retained frame on failure) is
     // enforced by the source-shape gate. Here we exercise the observable surface-validation path.
     std::env::set_var("DD_IR_DUMP", std::env::temp_dir().join("dd-egl-swap-mirror.ir"));
@@ -465,6 +499,7 @@ fn egl_swap_of_a_stale_surface_reports_bad_surface() {
 
 #[test]
 fn egl_release_thread_clears_the_current_context() {
+    let _serial = serial_guard();
     let display = egl::eglGetDisplay(core::ptr::null_mut());
     assert_eq!(egl::eglInitialize(display, core::ptr::null_mut(), core::ptr::null_mut()), EGL_TRUE);
     let attrs = [EGL_CONTEXT_CLIENT_VERSION, 2, EGL_NONE];
@@ -484,6 +519,7 @@ fn egl_release_thread_clears_the_current_context() {
 
 #[test]
 fn mandatory_gles2_queries_return_real_values() {
+    let _serial = serial_guard();
     // Pure queries (no bound state) — always safe.
     let (mut range, mut precision) = ([-1i32; 2], -1i32);
     gles::glGetShaderPrecisionFormat(GL_VERTEX_SHADER, 0x8DF2 /* HIGH_FLOAT */, range.as_mut_ptr(), &mut precision);
@@ -530,6 +566,7 @@ fn mandatory_gles2_queries_return_real_values() {
 
 #[test]
 fn egl14_mandatory_tail_is_truthful() {
+    let _serial = serial_guard();
     std::env::set_var("DD_IR_DUMP", std::env::temp_dir().join("dd-egl14-mirror.ir"));
     let display = egl::eglGetDisplay(core::ptr::null_mut());
     assert_eq!(egl::eglInitialize(display, core::ptr::null_mut(), core::ptr::null_mut()), EGL_TRUE);
@@ -560,6 +597,7 @@ fn egl14_mandatory_tail_is_truthful() {
 
 #[test]
 fn flush_submits_and_finish_waits_for_completion() {
+    let _serial = serial_guard();
     let (sub_before, _) = gles::submission_serials();
     gles::glFlush(); // nonblocking submit
     let (sub_after_flush, _) = gles::submission_serials();
