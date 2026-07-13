@@ -300,15 +300,18 @@ Important gaps and incorrect simplifications:
   signed endpoints, `bufferImageHeight` matters only once depth/layer copies exist, and resolve has no distinct IR
   command. Multisample resolve, 3D, compressed, depth/stencil/multiplane, multi-mip/layer clears and synchronization2
   transfer variants stay unsupported rather than silently flattened.
-- Shader module creation performs no SPIR-V validation: `codeSize` is truncated to words, null code becomes an empty
-  successful module, and arbitrary bytes are recorded before any structural check. Pipeline creation substitutes
-  entry name `main`, ignores specialization constants, and performs no reflection/interface validation for stages,
-  descriptors, push constants, vertex inputs or fragment outputs. Parse and validate SPIR-V into an immutable module
-  record at creation (checked header/version/bounds/instruction stream); reflect entry points and interfaces; apply
-  specialization constants to a pipeline-local module; then validate stage linkage and pipeline-layout/render-target
-  compatibility before emitting IR. Preserve exact diagnostics internally and return a pipeline-creation error with
-  the failed output handle left null. `vk_shader_modules_validate_spirv_entries_specialization_and_interfaces` pins
-  validation rather than mere byte forwarding.
+- Shader modules now validate aligned nonempty SPIR-V 1.0-1.6 framing, magic/version/bound/schema, every instruction
+  word count, the supported Shader/Matrix capability subset, logical memory model, execution model, ids and entry
+  names before allocating a handle or emitting `CreateShader`. Immutable reflection retains structurally resolved
+  scalar/vector/matrix stage IO by location, descriptor set/binding pairs, push-constant presence and typed SpecIds.
+  Pipeline creation requires an exact `(stage,pName)` entry, validates specialization ids/types/sizes/data bounds,
+  descriptor declarations and push-constant presence against the retained pipeline layout, and rejects mismatched
+  vertex-output/fragment-input types before pipeline allocation. The Rust public-ABI negative corpus
+  `spirv_modules_entries_specialization_and_interfaces_validate_before_ir_mutation` covers malformed instruction
+  bounds, unsupported capability, missing entry, specialization OOB/type size, and incompatible vs compatible stage
+  interfaces. This remains partial: the dependency-free parser deliberately rejects unsupported type/capability
+  vocabulary and does not yet perform full SPIR-V validation, execution-mode validation, descriptor type/array
+  reflection, push-constant byte-range reflection, specialization rewriting or complete vertex-format linkage.
 - The shared shader payload has no provenance. Both host graphics backends deliberately treat translation failure or
   missing modules as permission to select built-in flat/textured shaders: wgpu caches naga failures and returns
   `Ok(())`, while bespoke Metal cannot consume real SPIR-V and substitutes its built-in library. This makes a Vulkan
@@ -1081,7 +1084,7 @@ pixels, and fails against the broken behavior. Do not add tests that read implem
 | `vk_present_reports_failures_without_consuming_unsent_frame_state` | implemented | Present validates atomically, maps delivery errors, fills `pResults`, and commits waits/IR/ownership only on success | Rust ABI delivery-fault/retry regression green; retain as regression |
 | `vk_image_layout_barriers_track_subresources_and_queue_ownership` | partial | Legacy color-image barriers and render uses have atomic per-mip/layer state on the single queue; sync2, cross-queue and backend hazards remain | Extend the green Rust ABI lifecycle gate across aspects/queues and both backend barrier models |
 | `vk_transfer_commands_preserve_every_region_subresource_and_layout` | partial | Vulkan lowers validated 2D color buffer/image copies, image copies, forward blits and base clears with exact representable fields; resolve and broader dimensions remain | Extend the green ABI/software gates with rich buffer-texture origins/layers and distinct resolve across both hardware executors |
-| `vk_shader_modules_validate_spirv_entries_specialization_and_interfaces` | missing | malformed SPIR-V and incompatible interfaces are forwarded unchecked | Validated/reflected module records and negative pipeline corpus |
+| `vk_shader_modules_validate_spirv_entries_specialization_and_interfaces` | partial | Modules validate structure and retain entry/resource/IO/spec reflection; pipelines reject bad entry/spec/layout/interface combinations before allocation | Expand the green ABI corpus to full supported SPIR-V/type/descriptor/push-constant vocabulary and translation diagnostics |
 | `vk_robust_buffer_access_is_advertised_only_with_zeroing_and_bounds_guarantees` | contradictory | robustBufferAccess is true without complete zero/discard bounds semantics | Disable now or prove every access path across all executors |
 | `opt_in_gles3_has_real_implementations_for_every_mandatory_command` | partial | opt-in GLES3 has 112/246 mandatory stubs | Complete mandatory ES3 groups and relevant CTS |
 | `dmabuf_feedback_serializes_an_explicit_linux_u64_device_id` | partial | explicit Linux-u64 LE serialization and real-wire Rust/C mmap parsers are implemented; the macOS/guest runtime gates have not yet run on this host | Run the Rust recvmsg+mmap regression and C guest probe through the macOS compositor/engine, then retain both green |

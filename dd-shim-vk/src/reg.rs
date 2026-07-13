@@ -51,9 +51,35 @@ pub struct MemRec {
     pub mapped_range: Option<(u64, u64)>,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ShaderType {
+    Bool,
+    Int { width: u32, signed: bool },
+    Float { width: u32 },
+    Vector { component: Box<ShaderType>, count: u32 },
+    Matrix { column: Box<ShaderType>, count: u32 },
+    Other,
+}
+
+#[derive(Clone, Debug)]
+pub struct ShaderEntry {
+    pub stage: u32,
+    pub inputs: HashMap<u32, ShaderType>,
+    pub outputs: HashMap<u32, ShaderType>,
+}
+
+#[derive(Clone, Debug)]
+pub struct SpecConstantRec {
+    pub ty: ShaderType,
+}
+
 pub struct ShaderRec {
     pub ir_id: u32,
     pub spirv: Vec<u32>,
+    pub entries: HashMap<String, ShaderEntry>,
+    pub descriptors: Vec<(u32, u32)>,
+    pub push_constant: bool,
+    pub spec_constants: HashMap<u32, SpecConstantRec>,
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -65,6 +91,11 @@ pub enum PipeKind {
 pub struct PipelineRec {
     pub ir_id: u32,
     pub kind: PipeKind,
+}
+
+pub struct PipelineLayoutRec {
+    pub set_layouts: Vec<u64>,
+    pub push_ranges: Vec<(u32, u32, u32)>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -352,6 +383,7 @@ pub struct VkState {
     pub memories: HashMap<u64, MemRec>,
     pub shaders: HashMap<u64, ShaderRec>,
     pub pipelines: HashMap<u64, PipelineRec>,
+    pub pipeline_layouts: HashMap<u64, PipelineLayoutRec>,
     pub images: HashMap<u64, ImageRec>,
     pub image_views: HashMap<u64, ImageViewRec>,
     pub dsets: HashMap<u64, DsetRec>,

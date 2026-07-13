@@ -107,6 +107,12 @@ fn partial_note(name: &str) -> Option<&'static str> {
             "2D uncompressed color regions; blits reject reversed coordinates and aliasing"
         }
         "vkCmdClearColorImage" => "base color subresource only; no mip/layer range clear lowering",
+        "vkCreateShaderModule" => {
+            "validated SPIR-V 1.0-1.6 Shader/Matrix subset with entry/interface/resource reflection"
+        }
+        "vkCreateComputePipelines" | "vkCreateGraphicsPipelines" => {
+            "validated entry/spec/interface/layout subset; unsupported SPIR-V vocabulary is rejected"
+        }
         // submit + synchronization: the bring-up dependency model
         "vkQueueSubmit" => "records + ships IR; ignores wait/signal semaphores beyond the bring-up model",
         "vkCreateSemaphore" | "vkDestroySemaphore" => {
